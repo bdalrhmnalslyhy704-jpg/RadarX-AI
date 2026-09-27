@@ -2096,7 +2096,7 @@ function renderResultsCenterWithContinuous(){
   function addPost(){const input=$('postInput'),v=input.value.trim();if(!v)return;const a=readJSON(KEYS.community,[]);a.unshift({name:state.profile.name,text:v,ts:Date.now()});writeJSON(KEYS.community,a.slice(0,50));input.value='';renderCommunity();toast(t('post'));}
 
   // ---------- PWA / events ----------
-  function installPWA(){window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();state.deferredInstall=e;$('upgradeMini').classList.remove('hidden')});if('serviceWorker' in navigator && /^https:\/\//i.test(location.protocol)){navigator.serviceWorker.register('./radarx-sw-5.1.js').then(reg=>{try{reg.active?.postMessage({type:'RADARX_READY'});}catch{}}).catch(()=>{});}}
+  function installPWA(){window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();state.deferredInstall=e;if($('upgradeMini'))$('upgradeMini').classList.remove('hidden');});/* Service Worker intentionally disabled in the web runtime. The app must never depend on SW cache state for startup. */}
   async function promptInstall(){if(state.deferredInstall){await state.deferredInstall.prompt();state.deferredInstall=null;}}
   function bind(){
     // Hard UI gate: when expired, only the Paywall and its checkout/demo controls are interactive.
