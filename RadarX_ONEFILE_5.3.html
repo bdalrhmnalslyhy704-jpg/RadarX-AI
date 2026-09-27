@@ -527,7 +527,7 @@ body.rx-subscription-locked #toast{z-index:9200}
     els('[data-i18n]').forEach(el=>{ el.textContent=t(el.dataset.i18n); });
     els('[data-i18n-placeholder]').forEach(el=>{ el.placeholder=t(el.dataset.i18nPlaceholder); });
     $('langToggle').textContent=state.lang==='ar'?'EN':'AR';
-    $('connText').textContent=t('localConnected');
+    $('connText').textContent=t('localConnected'); renderDataHealth();
     renderMembership(); const currentSub=$('subcontent')?.dataset.kind; if(currentSub) renderSub(currentSub); else renderMore(); renderAlerts(); renderResultsCenter();
     if(state.deepRows.length) renderRadarTable(state.deepRows); renderMultiRadar(); renderSymbolSelectionHighlights();
     renderSentiment(); renderStructurePanel(state.structure||null); renderBriefing(); renderPsychologyGuardian(); if(state.currentSymbol) renderActiveAssetHeader(state.currentSymbol,'language'); if(state.smartScan.lastUpdated || state.smartScan.error || state.smartScan.running) renderSmartOutput(state.smartScan.results,state.smartScan); if($('calendarPreview'))renderRiskCalendar(state.calendar||[]); if(state.selected) { $('analysisOutput').innerHTML=analysisHTML(state.selected); drawChart(state.selected.rows); const sw=$('analysisSim');if(sw)renderSimulatorInto('analysisSim',state.selected); const sb=$('analysisSimBtn');if(sb)sb.onclick=()=>{goTab('more');renderSub('simulator');}; const pb=$('analysisPaperBtn');if(pb)pb.onclick=()=>openPaperTrade(state.selected); }
@@ -1474,7 +1474,7 @@ body.rx-subscription-locked #toast{z-index:9200}
     const btns=[$('smartScanBtn'),$('quickScan')].filter(Boolean);btns.forEach(b=>b.disabled=true);
     $('smartOpportunityOutput').innerHTML=''; smartStage(t('smartReady'),2,'busy');
     try{
-      const tickers=await fetchAllTickers('binance');
+      const tickers=await fetchAllTickersResilient('binance');
       const universe=tickers.filter(x=>/USDT$/.test(x.symbol)&&x.last>0); state.smartScan.universe=universe.length; state.markets=universe.slice(); state.marketsBySymbol={}; universe.forEach(x=>state.marketsBySymbol[x.symbol]=x); renderMarkets();
       if(!universe.length)throw new Error('EMPTY_LIVE_UNIVERSE');
       smartStage(smartText('smartScanningUniverse',{n:universe.length}),12,'busy');
@@ -2206,6 +2206,44 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
   function drawChart(rows){const c=$('signalCanvas');if(!c||!rows?.length)return;const ctx=c.getContext('2d'),w=c.width,h=c.height;ctx.clearRect(0,0,w,h);ctx.fillStyle='#071018';ctx.fillRect(0,0,w,h);const data=rows.slice(-70),hi=Math.max(...data.map(r=>r.h)),lo=Math.min(...data.map(r=>r.l)),scaleY=v=>h-25-(v-lo)/(hi-lo||1)*(h-55);ctx.strokeStyle='#142832';ctx.lineWidth=1;for(let i=1;i<5;i++){const y=20+i*(h-50)/5;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}const cw=w/data.length;data.forEach((r,i)=>{const x=i*cw+cw*.5,yo=scaleY(r.o),yc=scaleY(r.c),yh=scaleY(r.h),yl=scaleY(r.l);ctx.strokeStyle=r.c>=r.o?'#27e89a':'#ff5d6c';ctx.beginPath();ctx.moveTo(x,yh);ctx.lineTo(x,yl);ctx.stroke();ctx.fillStyle=r.c>=r.o?'#27e89a':'#ff5d6c';const body=Math.max(2,Math.abs(yc-yo));ctx.fillRect(x-cw*.26,Math.min(yo,yc),cw*.52,body);});}
 
 
+  // ---------- Provider health + deterministic failover ----------
+  const DATA_PROVIDER_ORDER=['binance','okx','bybit','gate'];
+  const DATA_HEALTH_TTL=30000;
+  function healthStore(){
+    if(!state.dataHealth||typeof state.dataHealth!=='object')state.dataHealth={ts:0,running:false,results:{},online:0,total:0,best:null,error:'',lastGoodAt:0};
+    return state.dataHealth;
+  }
+  function providerHealth(id){const h=healthStore().results&&healthStore().results[id];return h&&h.ok===true?(1000/Math.max(1,num(h.latencyMs,999))):-100;}
+  function orderedProviders(preferred='binance'){
+    const base=[preferred,...DATA_PROVIDER_ORDER.filter(x=>x!==preferred)],seen=new Set();
+    return base.filter(x=>!seen.has(x)&&seen.add(x)).sort((a,b)=>{if(a===preferred&&b!==preferred)return -1;if(b===preferred&&a!==preferred)return 1;return providerHealth(b)-providerHealth(a);});
+  }
+  async function fetchDataHealth(force=false){
+    const h=healthStore(); if(h.running)return h; if(!force&&h.ts&&Date.now()-h.ts<DATA_HEALTH_TTL)return h; h.running=true;
+    try{
+      const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),5000);
+      const r=await fetch('/api/health?ts='+Date.now(),{method:'GET',headers:{Accept:'application/json'},credentials:'omit',cache:'no-store',signal:ctrl.signal});
+      clearTimeout(timer); if(!r.ok)throw new Error('HEALTH_HTTP_'+r.status);
+      const d=await r.json(),rows=Array.isArray(d.results)?d.results:[];
+      h.ts=Date.now();h.total=rows.length;h.online=rows.filter(x=>x.ok).length;h.results=Object.fromEntries(rows.map(x=>[x.id,x]));
+      h.best=rows.filter(x=>x.ok).sort((a,b)=>num(a.latencyMs,99999)-num(b.latencyMs,99999))[0]?.id||null;h.error='';h.lastGoodAt=Date.now();
+    }catch(e){h.error=String(e?.message||e);h.ts=Date.now();}finally{h.running=false;renderDataHealth();}
+    return h;
+  }
+  function renderDataHealth(){
+    let host=$('rxDataHealth');
+    if(!host){host=document.createElement('div');host.id='rxDataHealth';host.style.cssText='margin:8px 12px;padding:9px 10px;border:1px solid rgba(84,213,255,.16);border-radius:12px;background:rgba(7,16,24,.78);font:600 11px/1.45 system-ui,sans-serif;direction:rtl;display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap';const strip=document.querySelector('.status-strip');if(strip?.parentNode)strip.parentNode.insertBefore(host,strip.nextSibling);else document.body.prepend(host);}
+    const h=healthStore(),ar=state.lang==='ar',names={binance:'Binance',okx:'OKX',bybit:'Bybit',gate:'Gate',coinbase:'Coinbase',coingecko:'CoinGecko',binanceFutures:'Futures',yahoo:'Gold/Public'};
+    const all=Object.values(h.results||{}),items=all.map(x=>{const dot=x.ok?'#27e89a':'#ff5d6c';const v=x.ok?(String(num(x.latencyMs,0))+'ms'):'DOWN';return '<span style="display:inline-flex;align-items:center;gap:4px;margin:2px 5px 2px 0"><i style="width:7px;height:7px;border-radius:50%;background:'+dot+'"></i>'+String(names[x.id]||x.id)+'<b style="opacity:.65">'+v+'</b></span>';}).join('');
+    host.innerHTML='<div><span style="opacity:.7">'+(ar?'صحة المصادر':'SOURCE HEALTH')+'</span> <b>'+h.online+'/'+h.total+'</b> · <span style="opacity:.7">'+(ar?'أفضل مسار':'best route')+':</span> <b>'+(h.best?(names[h.best]||h.best):'—')+'</b></div><div>'+(items||'<span style="opacity:.7">'+(ar?'جارٍ فحص المصادر…':'Checking providers…')+'</span>')+'</div>';
+  }
+  async function fetchAllTickersResilient(preferred='binance'){
+    const providers=orderedProviders(preferred);let last=null;
+    for(const p of providers){try{const data=await fetchAllTickers(p),usable=(data||[]).filter(x=>x?.symbol&&x.last>0);if(usable.length>=20)return usable.map(x=>({...x,requestedProvider:preferred,actualProvider:p,fallbackFor:p!==preferred?preferred:undefined,dataSource:p!==preferred?'fallback-exchange':'market'}));}catch(e){last=e;}}
+    throw last||new Error('NO_MARKET_PROVIDER');
+  }
+  setTimeout(()=>fetchDataHealth(true).catch(()=>{}),250);
+  setInterval(()=>{if(document.visibilityState==='visible')fetchDataHealth(true).catch(()=>{});},60000);
   // ---------- Resilient live market heartbeat ----------
   let resilientPollTimer=null, resilientBusy=false;
   async function resilientMarketRefresh(){
@@ -2213,7 +2251,7 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
     const selected=$('exchangeSelect')?.value||'binance';
     resilientBusy=true;
     try{
-      const live=await fetchAllTickers(selected);
+      const live=await fetchAllTickersResilient(selected);
       if(Array.isArray(live)&&live.length){
         const usable=live.filter(x=>x.last>0 && (x.quoteAsset==='USDT'||x.quoteAsset==='USD'));
         if(usable.length){
@@ -2730,9 +2768,7 @@ function renderResultsCenterWithContinuous(){
   };
   document.addEventListener('DOMContentLoaded',init);
 })();
-
-</script><script>
-(() => {
+</script><script>(() => {
   'use strict';
 
   // RadarX Pro Intelligence Engine 5.1
@@ -3474,5 +3510,4 @@ function renderResultsCenterWithContinuous(){
 
   document.addEventListener('DOMContentLoaded',start,{once:true});
 })();
-
 </script></body></html>
