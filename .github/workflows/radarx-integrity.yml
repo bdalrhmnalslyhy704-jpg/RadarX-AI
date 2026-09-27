@@ -16,8 +16,8 @@ jobs:
       - name: Check JavaScript files
         run: |
           set -e
-          node --check RadarX_Ultimate_5.8.js
-          node --check RadarX_ProEngine_5.8.js
+          node --check RadarX_Ultimate_5.9.js
+          node --check RadarX_ProEngine_5.9.js
           for f in api/*.js; do
             node --check "$f"
           done
@@ -26,7 +26,7 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           import re, subprocess, tempfile
-          s=Path("RadarX_ONEFILE_5.8.html").read_text(encoding="utf-8")
+          s=Path("RadarX_ONEFILE_5.9.html").read_text(encoding="utf-8")
           scripts=re.findall(r"<script\b[^>]*>([\s\S]*?)</script>", s, flags=re.I)
           if len(scripts) != 3:
               raise SystemExit(f"Expected 3 script blocks, found {len(scripts)}")
