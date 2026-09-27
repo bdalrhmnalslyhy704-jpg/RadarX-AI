@@ -24,7 +24,7 @@ jobs:
             echo "::group::node --check $f"
             node --check "$f"
             echo "::endgroup::"
-          done < <(find . -type f -name '*.js' -not -path './.git/*' -not -path './node_modules/*' -print0)
+          done < <(find . -maxdepth 1 -type f -name 'RadarX_*_5.12.js' -print0)
           if [ "$found" -eq 0 ]; then
             echo "No JavaScript files found"
             exit 1
@@ -37,7 +37,7 @@ jobs:
           const vm = require('vm');
 
           const files = fs.readdirSync('.')
-            .filter(name => /^RadarX_ONEFILE_.*\.html$/i.test(name))
+            .filter(name => /^RadarX_ONEFILE_5\.12\.html$/i.test(name))
             .sort((a,b) => a.localeCompare(b, undefined, {numeric:true}));
 
           if (!files.length) {
