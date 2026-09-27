@@ -1,0 +1,9 @@
+{
+  "cleanUrls": true,
+  "rewrites": [
+    {
+      "source": "/",
+      "destination": "/RadarX_ONEFILE_5.3.html"
+    }
+  ]
+}
