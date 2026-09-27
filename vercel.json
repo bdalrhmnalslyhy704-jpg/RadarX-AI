@@ -8,16 +8,10 @@
       ]
     },
     {
-      "source": "/RadarX_ONEFILE_5.11.html",
+      "source": "/index.html",
       "headers": [
         {"key": "Cache-Control", "value": "no-store, no-cache, must-revalidate"}
       ]
-    }
-  ],
-  "rewrites": [
-    {
-      "source": "/",
-      "destination": "/RadarX_ONEFILE_5.11.html"
     }
   ]
 }
