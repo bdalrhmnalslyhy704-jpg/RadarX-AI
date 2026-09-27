@@ -1773,7 +1773,7 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
   function renderMarkets(){
     const sort=state.sort; let arr=[...state.markets];
     if(sort==='gain')arr.sort((a,b)=>b.priceChangePercent-a.priceChangePercent); else if(sort==='volume')arr.sort((a,b)=>b.quoteVolume-a.quoteVolume); else if(sort==='score'&&state.deepRows.length){const score={};state.deepRows.forEach(x=>score[x.symbol]=x.score);arr.sort((a,b)=>(score[b.symbol]||0)-(score[a.symbol]||0));} else arr.sort((a,b)=>(Math.abs(b.priceChangePercent)*1.8+b.quoteVolume/5e6)-(Math.abs(a.priceChangePercent)*1.8+a.quoteVolume/5e6));
-    $('marketGrid').innerHTML=arr.slice(0,30).map(x=>`<article class="asset-card ${x.symbol===state.currentSymbol?'selected':''}" data-symbol="${esc(x.symbol)}" role="button" tabindex="0"><div class="asset-top"><b>${esc(x.symbol.replace(/USDT$/,''))}</b><span class="${x.priceChangePercent>=0?'gain':'loss'}">${pct(x.priceChangePercent)}</span></div><div class="asset-price">${fmt(x.last)}</div><div class="sparkline">${sparklineHTML(x.symbol)}</div><div class="asset-meta"><span>${t('volume')}: ${fmt(x.quoteVolume)}</span><span>${x.quoteVolume>10000000?'💧':''}</span></div></article>`).join('') || `<div class="empty-state">${t('noData')}</div>`;
+    $('marketGrid').innerHTML=arr.slice(0,30).map(x=>`<article class="asset-card ${x.symbol===state.currentSymbol?'selected':''}" data-symbol="${esc(x.symbol)}" role="button" tabindex="0"><div class="asset-top"><b>${esc(x.symbol.replace(/USDT$/,''))}</b><span class="${x.priceChangePercent>=0?'gain':'loss'}">${pct(x.priceChangePercent)}</span></div><div class="asset-price">${fmt(x.last)}</div><div class="sparkline">${sparklineHTML(x.symbol)}</div><div class="asset-meta"><span>${t('volume')}: ${fmt(x.quoteVolume)}</span><span>${x.provider?esc(String(x.provider).toUpperCase()):''}${x.fallbackFor?' · FALLBACK':''}</span></div></article>`).join('') || `<div class="empty-state">${t('noData')}</div>`;
     renderMultiRadar();
     renderSymbolSelectionHighlights();
   }
@@ -1786,6 +1786,82 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
 
   function drawChart(rows){const c=$('signalCanvas');if(!c||!rows?.length)return;const ctx=c.getContext('2d'),w=c.width,h=c.height;ctx.clearRect(0,0,w,h);ctx.fillStyle='#071018';ctx.fillRect(0,0,w,h);const data=rows.slice(-70),hi=Math.max(...data.map(r=>r.h)),lo=Math.min(...data.map(r=>r.l)),scaleY=v=>h-25-(v-lo)/(hi-lo||1)*(h-55);ctx.strokeStyle='#142832';ctx.lineWidth=1;for(let i=1;i<5;i++){const y=20+i*(h-50)/5;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}const cw=w/data.length;data.forEach((r,i)=>{const x=i*cw+cw*.5,yo=scaleY(r.o),yc=scaleY(r.c),yh=scaleY(r.h),yl=scaleY(r.l);ctx.strokeStyle=r.c>=r.o?'#27e89a':'#ff5d6c';ctx.beginPath();ctx.moveTo(x,yh);ctx.lineTo(x,yl);ctx.stroke();ctx.fillStyle=r.c>=r.o?'#27e89a':'#ff5d6c';const body=Math.max(2,Math.abs(yc-yo));ctx.fillRect(x-cw*.26,Math.min(yo,yc),cw*.52,body);});}
 
+
+  // ---------- Resilient live market heartbeat ----------
+  let resilientPollTimer=null, resilientBusy=false;
+  async function resilientMarketRefresh(){
+    if(resilientBusy||document.visibilityState==='hidden')return;
+    const selected=$('exchangeSelect')?.value||'binance';
+    resilientBusy=true;
+    try{
+      const live=await fetchAllTickers(selected);
+      if(Array.isArray(live)&&live.length){
+        const usable=live.filter(x=>x.last>0 && (x.quoteAsset==='USDT'||x.quoteAsset==='USD'));
+        if(usable.length){
+          state.marketsBySymbol=state.marketsBySymbol||{};
+          usable.forEach(x=>{state.marketsBySymbol[x.symbol]={...(state.marketsBySymbol[x.symbol]||{}),...x,receivedAt:num(x.receivedAt,Date.now())};});
+          const preferred=usable[0]?.provider||selected;
+          const current=usable.slice().sort((a,b)=>num(b.quoteVolume)-num(a.quoteVolume));
+          state.markets=current;
+          state.exchangeLiveProvider=preferred;
+          state.exchangeFallback=preferred!==selected;
+          markLiveData('live_rest',t('liveRest')+' · '+String(preferred).toUpperCase()+(preferred!==selected?' fallback':'')+' · '+current.length.toLocaleString('en-US'));
+          renderMarkets();
+          renderSentiment(computeSentimentFromMarkets(current,null));
+          renderRadarMetrics(current.length,state.deepRows||[]);
+          if($('dataMode'))$('dataMode').textContent=preferred===selected?'LIVE '+String(preferred).toUpperCase():'FALLBACK '+String(preferred).toUpperCase();
+          appHealthy();
+        }
+      }
+    }catch(e){
+      markLiveData(state.markets.length?'cached':'offline',state.markets.length?t('dataAge'):t('liveFailed'));
+    }finally{resilientBusy=false;}
+  }
+  function startResilientMarketHeartbeat(){
+    clearInterval(resilientPollTimer);
+    resilientMarketRefresh().catch(()=>{});
+    resilientPollTimer=setInterval(()=>resilientMarketRefresh().catch(()=>{}),9000);
+  }
+
+  // ---------- Global Markets / Metals ----------
+  const GLOBAL_ASSETS=[
+    {symbol:'XAU/USD',label:'Gold',icon:'🥇'},
+    {symbol:'XAG/USD',label:'Silver',icon:'🥈'},
+    {symbol:'WTI/USD',label:'WTI',icon:'🛢️'},
+    {symbol:'EUR/USD',label:'EUR/USD',icon:'💱'}
+  ];
+  async function fetchGlobalAsset(asset){
+    const u='/api/metals?symbol='+encodeURIComponent(asset.symbol);
+    const d=await fetchJSON(u,{timeout:6000,retries:0});
+    return {...asset,...d};
+  }
+  function ensureGlobalMarketsPanel(){
+    if($('rxGlobalMarkets'))return;
+    const dash=$('dashboard');if(!dash)return;
+    const wrap=document.createElement('section');wrap.id='rxGlobalMarkets';wrap.className='intel-panel';wrap.style.marginBottom='12px';
+    wrap.innerHTML='<div class="intel-head"><div><div class="eyebrow">GLOBAL MARKETS DATA</div><h3>الأسواق العالمية والذهب</h3><p class="muted" style="margin:5px 0 0">البيانات تمر عبر بوابة خادم RadarX مع ختم المصدر والزمن؛ عند غياب المصدر تظهر N/A بدل رقم مصطنع.</p></div><button class="btn ghost" id="rxGlobalRefresh">↻ تحديث</button></div><div id="rxGlobalGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;margin-top:10px"></div><div id="rxGlobalFoot" class="small muted" style="margin-top:8px"></div>';
+    const anchor=dash.querySelector('.hero-dashboard')||dash.firstElementChild;
+    if(anchor)anchor.after(wrap);else dash.prepend(wrap);
+    $('rxGlobalRefresh').onclick=()=>refreshGlobalMarkets(true);
+  }
+  async function refreshGlobalMarkets(force=false){
+    ensureGlobalMarketsPanel();
+    const grid=$('rxGlobalGrid'),foot=$('rxGlobalFoot');if(!grid)return;
+    if(!force&&state.globalMarkets?.ts&&Date.now()-state.globalMarkets.ts<30000)return state.globalMarkets;
+    grid.innerHTML=GLOBAL_ASSETS.map(a=>'<div class="kpi"><div class="kpi-label">'+a.icon+' '+esc(a.label)+'</div><div class="kpi-value" data-global="'+esc(a.symbol)+'">—</div><div class="kpi-foot" data-global-meta="'+esc(a.symbol)+'">جارٍ التحديث…</div></div>').join('');
+    const rr=await Promise.allSettled(GLOBAL_ASSETS.map(fetchGlobalAsset));
+    const rows=rr.map((r,i)=>r.status==='fulfilled'?r.value:{...GLOBAL_ASSETS[i],ok:false,error:'unavailable'});
+    state.globalMarkets={ts:Date.now(),rows};
+    rows.forEach(x=>{
+      const ps=[...document.querySelectorAll('[data-global]')].find(e=>e.getAttribute('data-global')===x.symbol);
+      const ms=[...document.querySelectorAll('[data-global-meta]')].find(e=>e.getAttribute('data-global-meta')===x.symbol);
+      if(ps)ps.textContent=x.ok?fmt(x.price):'N/A';
+      if(ms)ms.textContent=x.ok?((x.source||'').toUpperCase()+(x.delayed?' · delayed':' · '+(x.quality==='provider-key'?'live':'indicative'))):'مصدر غير متاح';
+    });
+    if(foot)foot.textContent='آخر تحديث: '+new Date(state.globalMarkets.ts).toLocaleTimeString();
+    return state.globalMarkets;
+  }
+
   // ---------- Scan ----------
   async function scan(){
     if(state.busy)return; state.busy=true; appHealthy(); markLiveData('waiting'); const provider=$('exchangeSelect').value,tf=$('scanTf').value,minV=num($('minVolume').value,1e6),depthCount=Math.max(6,Math.min(20,num($('depthCount').value,12)));
@@ -1794,9 +1870,10 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
       const live=await fetchAllTickers(provider); if(!live.length)throw new Error('NO_TICKERS');
       const filtered=live.filter(x=>x.baseAsset&&x.baseAsset.length>1&&(provider==='coinbase'?x.quoteAsset==='USD':x.quoteAsset==='USDT')&&x.quoteVolume>=minV&&!/(UP|DOWN|BULL|BEAR|3L|3S|5L|5S)$/.test(x.baseAsset));
       filtered.sort((a,b)=>b.quoteVolume-a.quoteVolume); state.markets=filtered;state.marketsBySymbol={};filtered.forEach(x=>state.marketsBySymbol[x.symbol]=x);writeJSON('radarx_live_snapshot_v43',{ts:Date.now(),items:filtered.slice(0,3000)});markLiveData('live_rest',`${t('liveRest')} · ${filtered.length.toLocaleString('en-US')} pairs`);$('scanProgress').style.width='28%';renderMarkets();renderSentiment(computeSentimentFromMarkets(filtered,null));
-      const candidates=filtered.slice(0,depthCount),results=[]; for(let i=0;i<candidates.length;i+=3){const batch=candidates.slice(i,i+3);const r=await Promise.allSettled(batch.map(x=>deepAnalyze(provider,x.symbol,tf,{withFlow:true})));r.forEach(v=>{if(v.status==='fulfilled')results.push(v.value);});$('scanProgress').style.width=`${28+Math.round((Math.min(i+3,candidates.length)/candidates.length)*66)}%`;await sleep(40);}
+      const actualProvider=live[0]?.provider||provider;
+      const candidates=filtered.slice(0,depthCount),results=[]; for(let i=0;i<candidates.length;i+=3){const batch=candidates.slice(i,i+3);const r=await Promise.allSettled(batch.map(x=>deepAnalyze(x.provider||actualProvider,x.symbol,tf,{withFlow:true})));r.forEach(v=>{if(v.status==='fulfilled')results.push(v.value);});$('scanProgress').style.width=`${28+Math.round((Math.min(i+3,candidates.length)/candidates.length)*66)}%`;await sleep(40);}
       state.deepRows=results.sort((a,b)=>b.score-a.score);const activeScan=state.currentSymbol&&state.deepRows.find(x=>x.symbol===state.currentSymbol);state.structure=activeScan?.structure||state.deepRows[0]?.structure||null;state.fakeout=activeScan?.fakeout||state.deepRows[0]?.fakeout||null;if(activeScan){state.selected=activeScan;}renderStructurePanel(state.structure);renderRadarMetrics(filtered.length,state.deepRows);renderRadarTable(state.deepRows);renderMarkets();updatePaperFromMarkets(filtered);renderBriefing();renderPsychologyGuardian();saveLiveSnapshot();$('scanStatusText').textContent=t('liveUpdated');$('scanStatusSub').textContent=`${filtered.length.toLocaleString('en-US')} pairs · ${results.length} deep`;$('scanProgress').style.width='100%';state.deepRows.filter(x=>x.signal==='EARLY_ALERT').forEach(saveAlert);renderAlerts();toast(t('liveUpdated'));
-      if(provider==='binance')openTickerWS(0);
+      if(provider==='binance' && live.every(x=>x.provider==='binance'))openTickerWS(0);
     }catch(e){
       const cached=loadLiveSnapshot(); if(cached){renderMarkets();renderSentiment(computeSentimentFromMarkets(state.markets,null));renderRadarTable(state.deepRows||[]);$('scanStatusText').textContent=t('liveFailed');$('scanStatusSub').textContent=`${t('liveCached')} · ${formatDataAge(readJSON('radarx_live_snapshot_v43',{}).ts||0)}`;$('scanProgress').style.width='100%';}else{state.markets=[];state.deepRows=[];renderMarkets();renderRadarTable([]);renderSentiment();markLiveData('offline');$('scanStatusText').textContent=t('liveFailed');$('scanStatusSub').textContent=t('noApi');$('scanProgress').style.width='100%';toast(t('liveFailed'));}
     } finally {state.busy=false;renderBriefing();renderPsychologyGuardian();}
@@ -2209,7 +2286,7 @@ function renderResultsCenterWithContinuous(){
       if(restored){state.selected={...restored};state.structure=restored.structure||((restored.rows?.length>=8)?detectStructure(restored.rows):null);renderStructurePanel(state.structure);renderActiveAssetHeader(state.currentSymbol,'restored');}
       else if(state.marketsBySymbol?.[state.currentSymbol])renderActiveAssetHeader(state.currentSymbol,'restored');
     }
-    heartbeat();startWSStaleMonitor();loadLiveSnapshot();if(premiumIsUnlocked()){startMultiRadar();startContinuousRadar();}else{pausePremiumEngines();}
+    heartbeat();startWSStaleMonitor();loadLiveSnapshot();startResilientMarketHeartbeat();ensureGlobalMarketsPanel();refreshGlobalMarkets().catch(()=>{});if(premiumIsUnlocked()){startMultiRadar();startContinuousRadar();}else{pausePremiumEngines();}
     $('dashUniverse').textContent=state.markets.length?state.markets.length.toLocaleString('en-US'):'—';$('dashCandidates').textContent='—';$('dashEarly').textContent='—';$('dashTop').textContent='—';
     if(state.markets.length){renderMarkets();renderSentiment(computeSentimentFromMarkets(state.markets,null));renderRadarMetrics(state.markets.length,state.deepRows||[]);}
     $('briefingRefresh').onclick=()=>{refreshSentiment(true).finally(()=>renderBriefing());toast(state.markets.length?t('briefingUpdated'):t('noApi'));};
