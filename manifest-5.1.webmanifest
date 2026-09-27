@@ -1,8 +1,8 @@
 {
   "name": "RadarX Ultimate",
   "short_name": "RadarX",
-  "id": "./RadarX_ONEFILE_5.4.html",
-  "start_url": "./RadarX_ONEFILE_5.4.html?v=5.4.0",
+  "id": "./RadarX_ONEFILE_5.5.html",
+  "start_url": "./RadarX_ONEFILE_5.5.html?v=5.5.0",
   "scope": "./",
   "display": "standalone",
   "background_color": "#050a0f",
