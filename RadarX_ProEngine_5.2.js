@@ -611,20 +611,30 @@
     }
   }
 
-  async function historicalKlines(symbol,tf,limit=4000){
+  async function historicalKlines(symbol,tf,limit=4000,provider='binance'){
     const target=Math.min(12000,Math.max(500,limit)); const out=[]; let endTime=Date.now(), pages=0;
+    // Historical research must use the same provider family as the live candidate.
+    // Binance supports deep pagination; other public spot providers are intentionally
+    // limited to their documented candle windows rather than silently mixing sources.
+    if(provider!=='binance'){
+      try{
+        const rows=await fetchKlines(provider,symbol,tf,Math.min(1000,target));
+        return Array.isArray(rows)?rows.slice(-target):[];
+      }catch{return [];}
+    }
     while(out.length<target && pages<13){
       const take=Math.min(1000,target-out.length);
-      const urls=[
-        `/api/binance?path=${encodeURIComponent(`/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(tf)}&limit=${take}&endTime=${endTime}`)}`,
-        `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(tf)}&limit=${take}&endTime=${endTime}`
-      ];
-      let d; try{d=await CORE.firstJSONRace(urls,{timeout:5000,retries:0,maxUrls:2});}catch{break;}
+      const path=`/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(tf)}&limit=${take}&endTime=${endTime}`;
+      const urls=binanceUrlsForResearch(path);
+      let d; try{d=await CORE.firstJSONRace(urls,{timeout:5000,retries:0,maxUrls:Math.min(4,urls.length)});}catch{break;}
       const page=(Array.isArray(d)?d:[]).map(r=>({t:num(r[0]),o:num(r[1]),h:num(r[2]),l:num(r[3]),c:num(r[4]),v:num(r[5]),q:num(r[7]),trades:num(r[8]),tb:num(r[9]),closed:true})).filter(r=>r.t>0);
       if(!page.length)break;
       out.unshift(...page); const firstTs=page[0].t; if(!(firstTs<endTime))break; endTime=firstTs-1; pages++; if(page.length<take)break;
     }
     const map=new Map(); out.sort((a,b)=>a.t-b.t).forEach(r=>map.set(r.t,r)); return [...map.values()].slice(-target);
+  }
+  function binanceUrlsForResearch(path){
+    return [`/api/binance?path=${encodeURIComponent(path)}`,...['https://data-api.binance.vision','https://api.binance.com','https://api-gcp.binance.com'].map(base=>base+path)];
   }
   function historicalLiquidityScore(rows,i){
     const vals=rows.slice(Math.max(0,i-35),i+1).map(x=>num(x.q??x.v,NaN)).filter(finite);
@@ -680,7 +690,7 @@
     ps.research={running:true,startedAt:now(),tf,symbols:list,results:[],ablation:[],walkForward:[],error:''};renderResearch();
     try{
       const rowsMap=new Map();
-      for(let i=0;i<list.length;i+=3){const rr=await Promise.allSettled(list.slice(i,i+3).map(s=>historicalKlines(s,tf,4000)));rr.forEach((r,j)=>{if(r.status==='fulfilled'&&r.value?.length)rowsMap.set(list[i+j],r.value);});}
+      for(let i=0;i<list.length;i+=3){const rr=await Promise.allSettled(list.slice(i,i+3).map(s=>historicalKlines(s,tf,4000,(ps.candidates.find(x=>x.symbol===s)?.provider)||'binance')));rr.forEach((r,j)=>{if(r.status==='fulfilled'&&r.value?.length)rowsMap.set(list[i+j],r.value);});}
       const all=Array.from(rowsMap.entries()); const reports=[];
       for(const [symbol,rows] of all){
         const pred=[];for(let i=70;i<rows.length-PRO.targetWindowBars;i+=2){const s=backtestSignalAt(rows,i);pred.push({signal:s&&s.score>=PRO.baseThreshold,target:evaluateForward(rows,i),score:s?.score||0});}
