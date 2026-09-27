@@ -1,0 +1,11 @@
+{
+  "name": "RadarX Ultimate",
+  "short_name": "RadarX",
+  "start_url": "./RadarX_Ultimate_5.1_ROBUST.html",
+  "display": "standalone",
+  "background_color": "#050a0f",
+  "theme_color": "#071018",
+  "lang": "ar",
+  "dir": "rtl",
+  "description": "RadarX Ultimate live crypto market radar"
+}
