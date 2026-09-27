@@ -612,7 +612,7 @@
     while(out.length<target && pages<13){
       const take=Math.min(1000,target-out.length);
       const urls=[
-        `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(tf)}&limit=${take}&endTime=${endTime}`,
+        `/api/binance?path=${encodeURIComponent(`/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(tf)}&limit=${take}&endTime=${endTime}`)}`,
         `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(tf)}&limit=${take}&endTime=${endTime}`
       ];
       let d; try{d=await CORE.firstJSONRace(urls,{timeout:5000,retries:0,maxUrls:2});}catch{break;}
