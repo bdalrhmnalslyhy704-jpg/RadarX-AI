@@ -13,26 +13,72 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Check JavaScript files
+
+      - name: Check every JavaScript source
+        shell: bash
         run: |
-          set -e
-          node --check RadarX_Ultimate_5.11.js
-          node --check RadarX_ProEngine_5.11.js
-          for f in api/*.js; do
+          set -euo pipefail
+          found=0
+          while IFS= read -r -d '' f; do
+            found=1
+            echo "::group::node --check $f"
             node --check "$f"
-          done
-      - name: Check embedded One-File scripts
+            echo "::endgroup::"
+          done < <(find . -type f -name '*.js' -not -path './.git/*' -not -path './node_modules/*' -print0)
+          if [ "$found" -eq 0 ]; then
+            echo "No JavaScript files found"
+            exit 1
+          fi
+
+      - name: Check every RadarX One-File script
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          import re, subprocess, tempfile
-          s=Path("RadarX_ONEFILE_5.11.html").read_text(encoding="utf-8")
-          scripts=re.findall(r"<script\b[^>]*>([\s\S]*?)</script>", s, flags=re.I)
-          if len(scripts) != 3:
-              raise SystemExit(f"Expected 3 script blocks, found {len(scripts)}")
-          for i,code in enumerate(scripts[1:], 2):
-              p=Path(tempfile.gettempdir())/f"radarx_script_{i}.js"
-              p.write_text(code,encoding="utf-8")
-              subprocess.run(["node","--check",str(p)],check=True)
-          print("One-File script syntax OK")
-          PY
+          node <<'NODE'
+          const fs = require('fs');
+          const vm = require('vm');
+
+          const files = fs.readdirSync('.')
+            .filter(name => /^RadarX_ONEFILE_.*\.html$/i.test(name))
+            .sort((a,b) => a.localeCompare(b, undefined, {numeric:true}));
+
+          if (!files.length) {
+            throw new Error('No RadarX_ONEFILE_*.html files found');
+          }
+
+          const scriptRe = /<script\b[^>]*>([\s\S]*?)<\/script>/gi;
+          const regressionRe = /\bversion\s*:\s*['"][^'"]+['"]\s*\r?\n\s*cycleMs\s*:/;
+
+          for (const file of files) {
+            const html = fs.readFileSync(file, 'utf8');
+            const scripts = [...html.matchAll(scriptRe)].map(m => m[1]);
+
+            if (scripts.length < 2) {
+              throw new Error(`${file}: expected at least 2 script blocks, found ${scripts.length}`);
+            }
+
+            for (let i = 0; i < scripts.length; i++) {
+              try {
+                new vm.Script(scripts[i], {filename: `${file}#script${i + 1}`});
+              } catch (err) {
+                throw new Error(`${file}#script${i + 1}: ${err.message}`);
+              }
+            }
+
+            if (regressionRe.test(html)) {
+              throw new Error(`${file}: detected missing comma before cycleMs (version -> cycleMs regression)`);
+            }
+
+            console.log(`OK: ${file} (${scripts.length} scripts)`);
+          }
+          NODE
+
+      - name: Verify deployed entry points stay on one version
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const index = fs.readFileSync('index.html', 'utf8');
+          const refs = [...index.matchAll(/RadarX_(?:Ultimate|ProEngine)_(\d+(?:\.\d+)*)/g)].map(m => m[1]);
+          const unique = [...new Set(refs)];
+          if (!unique.length) throw new Error('index.html does not reference a RadarX versioned entry point');
+          if (unique.length !== 1) throw new Error(`index.html references multiple RadarX versions: ${unique.join(', ')}`);
+          console.log(`index.html version: ${unique[0]}`);
+          NODE
