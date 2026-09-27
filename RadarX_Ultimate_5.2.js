@@ -450,7 +450,7 @@
   }
   async function fetchTicker(provider,symbol){
     const sym=symbolFor(provider,symbol);
-    if(provider==='binance'){const d=await firstJSON(binanceUrls(`/api/v3/ticker/24hr?symbol=${encodeURIComponent(symbol)}`),{timeout:5000,retries:1,maxUrls:4});return normalizeTicker(d,provider);}
+    if(provider==='binance'){const d=await firstJSONRace(binanceUrls(`/api/v3/ticker/24hr?symbol=${encodeURIComponent(symbol)}`),{timeout:4500,retries:0,maxUrls:4});return normalizeTicker(d,provider);}
     if(provider==='okx'){const d=await fetchJSON(`https://www.okx.com/api/v5/market/ticker?instId=${encodeURIComponent(sym)}`);return d.data?.[0]?normalizeTicker(d.data[0],provider):null}
     if(provider==='bybit'){const d=await fetchJSON(`https://api.bybit.com/v5/market/tickers?category=spot&symbol=${encodeURIComponent(symbol)}`);return d.result?.list?.[0]?normalizeTicker(d.result.list[0],provider):null}
     if(provider==='gate'){const d=await fetchJSON(`https://api.gateio.ws/api/v4/spot/tickers?currency_pair=${encodeURIComponent(sym)}`);return d?.[0]?normalizeTicker(d[0],provider):null}
@@ -459,7 +459,7 @@
   function parseBinanceKlines(rows){return (rows||[]).map(r=>({t:num(r[0]),o:num(r[1]),h:num(r[2]),l:num(r[3]),c:num(r[4]),v:num(r[5]),q:num(r[7]),trades:num(r[8]),tb:num(r[9]),closed:true}));}
   async function fetchKlines(provider,symbol,tf,limit=180){
     const sym=symbolFor(provider,symbol), iv=intervalFor(provider,tf);
-    if(provider==='binance') return parseBinanceKlines(await firstJSON(binanceUrls(`/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(iv)}&limit=${Math.min(1000,limit)}`),{timeout:6000,retries:1,maxUrls:3}));
+    if(provider==='binance') return parseBinanceKlines(await firstJSONRace(binanceUrls(`/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(iv)}&limit=${Math.min(1000,limit)}`),{timeout:4500,retries:0,maxUrls:4}));
     if(provider==='okx'){const d=await fetchJSON(`https://www.okx.com/api/v5/market/candles?instId=${encodeURIComponent(sym)}&bar=${encodeURIComponent(iv)}&limit=${Math.min(300,limit)}`);return (d.data||[]).reverse().map(r=>({t:num(r[0]),o:num(r[1]),h:num(r[2]),l:num(r[3]),c:num(r[4]),v:num(r[5]),q:num(r[6]),closed:true}));}
     if(provider==='bybit'){const d=await fetchJSON(`https://api.bybit.com/v5/market/kline?category=spot&symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(iv)}&limit=${Math.min(1000,limit)}`);return (d.result?.list||[]).reverse().map(r=>({t:num(r[0]),o:num(r[1]),h:num(r[2]),l:num(r[3]),c:num(r[4]),v:num(r[5]),q:num(r[6]),closed:true}));}
     if(provider==='gate'){const d=await fetchJSON(`https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=${encodeURIComponent(sym)}&interval=${encodeURIComponent(tf)}&limit=${Math.min(1000,limit)}`);return (d||[]).reverse().map(r=>({t:num(r[0])*1000,v:num(r[1]),c:num(r[2]),h:num(r[3]),l:num(r[4]),o:num(r[5]),q:num(r[1])*num(r[2]),closed:true}));}
@@ -468,14 +468,14 @@
   }
   async function fetchDepth(provider,symbol,limit=50){
     const sym=symbolFor(provider,symbol);
-    if(provider==='binance') return firstJSON(binanceUrls(`/api/v3/depth?symbol=${encodeURIComponent(symbol)}&limit=${Math.min(1000,limit)}`),{timeout:5000,retries:1,maxUrls:3});
+    if(provider==='binance') return firstJSONRace(binanceUrls(`/api/v3/depth?symbol=${encodeURIComponent(symbol)}&limit=${Math.min(1000,limit)}`),{timeout:4500,retries:0,maxUrls:4});
     if(provider==='okx'){const d=await fetchJSON(`https://www.okx.com/api/v5/market/books?instId=${encodeURIComponent(sym)}&sz=${Math.min(60,limit)}`),x=d.data?.[0]||{};return {bids:(x.bids||[]).map(r=>[r[0],r[1]]),asks:(x.asks||[]).map(r=>[r[0],r[1]])};}
     if(provider==='bybit'){const d=await fetchJSON(`https://api.bybit.com/v5/market/orderbook?category=spot&symbol=${encodeURIComponent(symbol)}&limit=${Math.min(50,limit)}`),x=d.result||{};return {bids:x.b||[],asks:x.a||[]};}
     throw new Error('Depth unavailable');
   }
   async function fetchTrades(provider,symbol,limit=100){
     const sym=symbolFor(provider,symbol);
-    if(provider==='binance'){const d=await firstJSON(binanceUrls(`/api/v3/aggTrades?symbol=${encodeURIComponent(symbol)}&limit=${Math.min(1000,limit)}`),{timeout:5000,retries:1,maxUrls:3});return (d||[]).map(x=>({id:num(x.a),price:num(x.p),amount:num(x.q),buy:!x.m,t:num(x.T)}));}
+    if(provider==='binance'){const d=await firstJSONRace(binanceUrls(`/api/v3/aggTrades?symbol=${encodeURIComponent(symbol)}&limit=${Math.min(1000,limit)}`),{timeout:4500,retries:0,maxUrls:4});return (d||[]).map(x=>({id:num(x.a),price:num(x.p),amount:num(x.q),buy:!x.m,t:num(x.T)}));}
     if(provider==='okx'){const d=await fetchJSON(`https://www.okx.com/api/v5/market/trades?instId=${encodeURIComponent(sym)}&limit=${Math.min(100,limit)}`);return (d.data||[]).map(x=>({id:x.tradeId,price:num(x.px),amount:num(x.sz),buy:x.side==='buy',t:num(x.ts)}));}
     if(provider==='bybit'){const d=await fetchJSON(`https://api.bybit.com/v5/market/recent-trade?category=spot&symbol=${encodeURIComponent(symbol)}&limit=${Math.min(60,limit)}`);return (d.result?.list||[]).map(x=>({id:x.execId,price:num(x.price),amount:num(x.size),buy:x.side==='Buy',t:num(x.time)}));}
     throw new Error('Trades unavailable');
@@ -1834,7 +1834,7 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
   }
   async function fetchAllTickersResilient(preferred='binance'){
     const providers=orderedProviders(preferred);let last=null;
-    for(const p of providers){try{const data=await fetchAllTickers(p),usable=(data||[]).filter(x=>x?.symbol&&x.last>0);if(usable.length>=20)return usable.map(x=>({...x,requestedProvider:preferred,actualProvider:p,fallbackFor:p!==preferred?preferred:undefined,dataSource:p!==preferred?'fallback-exchange':'market'}));}catch(e){last=e;}}
+    for(const p of providers){try{const data=await fetchAllTickers(p),usable=(data||[]).filter(x=>x?.symbol&&x.last>0);if(usable.length>=20){const fresh=usable.filter(x=>{const age=Date.now()-num(x.eventTime,Date.now());return age>=0&&age<=120000;});if(fresh.length>=20)return fresh.map(x=>({...x,requestedProvider:preferred,actualProvider:p,fallbackFor:p!==preferred?preferred:undefined,dataSource:p!==preferred?'fallback-exchange':'market',dataAgeMs:Date.now()-num(x.eventTime,Date.now())}));}}catch(e){last=e;}}
     throw last||new Error('NO_MARKET_PROVIDER');
   }
   setTimeout(()=>fetchDataHealth(true).catch(()=>{}),250);
@@ -2358,7 +2358,7 @@ function renderResultsCenterWithContinuous(){
   // RadarX 5.1 integration surface: expose only existing, verified core primitives.
   window.RadarXCore={
     state,$,els,num,clamp,t,sleep,
-    fetchJSON,firstJSONRace,fetchAllTickers,fetchTicker,fetchKlines,fetchDepth,fetchTrades,
+    fetchJSON,firstJSONRace,fetchAllTickers,fetchAllTickersResilient,fetchDataHealth,fetchTicker,fetchKlines,fetchDepth,fetchTrades,
     notifyUser,premiumIsUnlocked,selectActiveAsset,renderMultiRadar,toast
   };
   document.addEventListener('DOMContentLoaded',init);
