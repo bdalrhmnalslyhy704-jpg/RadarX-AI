@@ -2013,10 +2013,18 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
     }
     state.multiRadar.running=true;multiRadarSetBusy(true,'rest');
     try{
-      const data=await fetchBinanceTickerUniverseResilient();
-      const tickers=Array.isArray(data)?data.map(x=>normalizeTicker(x,'binance')):[];
+      // Use the same resilient provider layer as the main scanner. Do not relabel
+      // fallback rows as Binance: the actual provider must survive into deep analysis.
+      const preferred=$('exchangeSelect')?.value||'binance';
+      const result=await resilientTickers(preferred);
+      const tickers=(result?.rows||[]).filter(x=>x?.symbol&&x.last>0);
+      const actualProvider=result?.provider||preferred;
       if(!tickers.length)throw new Error('EMPTY_TICKER_RESPONSE');
-      for(const x of tickers){if(x.symbol&&x.quoteAsset==='USDT'&&x.last>0)mergeTicker(x);}
+      for(const x of tickers){
+        if(x.symbol&&(x.quoteAsset==='USDT'||x.quoteAsset==='USD')) {
+          mergeTicker({...x,provider:actualProvider,requestedProvider:preferred,actualProvider});
+        }
+      }
       const receivedAt=Date.now();
       state.multiRadar.lastUpdated=receivedAt;
       state.multiRadar.restLastSuccess=receivedAt;
@@ -2024,7 +2032,7 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
       state.multiRadar.restFailures=0;
       state.multiRadar.error='';
       state.multiRadar.dirty=true;
-      markLiveData('live_rest',`${t('liveRest')} · multi-radar fallback`);
+      markLiveData('live_rest',`${t('liveRest')} · ${String(actualProvider).toUpperCase()}${actualProvider!==preferred?' fallback':''} · multi-radar`);
       saveLiveSnapshot();
       renderMarkets();
       scheduleMultiRadarPaint();
