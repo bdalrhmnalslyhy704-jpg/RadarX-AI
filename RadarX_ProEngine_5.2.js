@@ -312,10 +312,10 @@
     return {available:true,score,imbalance:imb,cvd,buySell:bs,deltaImbalance:deltaImb,bid:num(flow.bid),ask:num(flow.ask),whales:flow.whales||null};
   }
 
-  async function fetchFlow(symbol){
+  async function fetchFlow(symbol,provider='binance'){
     const c=ps.flow.get(symbol); if(c?.ts && now()-c.ts<CACHE_TTL.flow)return c.data;
     try{
-      const [d,tr]=await Promise.all([fetchDepth('binance',symbol,80),fetchTrades('binance',symbol,220)]);
+      const [d,tr]=await Promise.all([fetchDepth(provider,symbol,80),fetchTrades(provider,symbol,220)]);
       const b=(d.bids||[]).reduce((s,a)=>s+num(a[0])*num(a[1]),0), a=(d.asks||[]).reduce((s,z)=>s+num(z[0])*num(z[1]),0), den=b+a||1;
       const buy=tr.filter(z=>z.buy).reduce((s,z)=>s+num(z.price)*num(z.amount),0), sell=tr.filter(z=>!z.buy).reduce((s,z)=>s+num(z.price)*num(z.amount),0), td=buy+sell||1;
       const mid=(num(d.bids?.[0]?.[0])+num(d.asks?.[0]?.[0]))/2, spreadPct=mid>0?Math.abs(num(d.asks?.[0]?.[0])-num(d.bids?.[0]?.[0]))/mid*100:null;
@@ -464,8 +464,8 @@
   }
 
   async function buildCandidate(x,marketCtx,globalCtx,cross){
-    const symbol=x.symbol, start=performance.now();
-    const f5=await getKlines(symbol,'5m'); if(!f5?.length)return null;
+    const symbol=x.symbol, provider=x.provider||'binance', start=performance.now();
+    const f5=await getKlines(symbol,'5m',provider); if(!f5?.length)return null;
     f5.__ticker24h=num(x.priceChangePercent); const f=technicalFeatures(f5); f.symbol=symbol;
     const secName=sectorFor(symbol); const sec=secName?marketCtx.sectors?.[secName]:null;
     const relative=relativeStrength(x,f5,marketCtx,sec?{name:secName,...sec}:null);
@@ -475,23 +475,24 @@
   }
 
   const klineCache = new Map();
-  async function getKlines(symbol,tf){
-    const key=`${symbol}|${tf}`, c=klineCache.get(key);if(c?.ts&&now()-c.ts<CACHE_TTL.kline)return c.rows;
-    const rows=await fetchKlines('binance',symbol,tf,PRO.klineLimit[tf]||100);
+  async function getKlines(symbol,tf,provider='binance'){
+    const key=`${provider}|${symbol}|${tf}`, c=klineCache.get(key);if(c?.ts&&now()-c.ts<CACHE_TTL.kline)return c.rows;
+    const rows=await fetchKlines(provider,symbol,tf,PRO.klineLimit[tf]||100);
     if(rows?.length){klineCache.set(key,{ts:now(),rows}); ps.klines.set(key,{ts:now(),rows}); return rows;} return c?.rows||null;
   }
 
   async function enrichCandidate(x,idx){
     const symbol=x.symbol;
     const frameKeys=['4h','1h','15m','5m'];
-    const other=await Promise.all(frameKeys.slice(0,3).map(async tf=>[tf,await getKlines(symbol,tf).catch(()=>null)]));
-    const frames={ '5m': x.features ? x.features.last ? await getKlines(symbol,'5m').catch(()=>null) : null : null };
+    const provider=x.provider||'binance';
+    const other=await Promise.all(frameKeys.slice(0,3).map(async tf=>[tf,await getKlines(symbol,tf,provider).catch(()=>null)]));
+    const frames={ '5m': x.features ? x.features.last ? await getKlines(symbol,'5m',provider).catch(()=>null) : null : null };
     for(const [k,r] of other)frames[k]=r;
-    if(!frames['5m'])frames['5m']=await getKlines(symbol,'5m').catch(()=>null);
+    if(!frames['5m'])frames['5m']=await getKlines(symbol,'5m',provider).catch(()=>null);
     x.mtf=mtfScore(frames);
     const useFlow=idx<PRO.flowCandidates;
     if(useFlow){
-      const flow=await fetchFlow(symbol); x.flow=flow; x.orderBook=orderBookDynamic(symbol,flow); x.flowScore=flowScore(flow,ps.flow.get(symbol)?.prev); 
+      const flow=await fetchFlow(symbol,provider); x.flow=flow; x.orderBook=orderBookDynamic(symbol,flow); x.flowScore=flowScore(flow,ps.flow.get(symbol)?.prev); 
     }
     if(idx<PRO.derivativeCandidates)x.derivatives=await fetchDerivatives(symbol);
     const context={ticker:x,market:x.market,global:x.global,relative:x.relative,sector:x.sector?{available:true,name:x.sector,score:clamp(50+(num(x.market?.sectors?.[x.sector]?.avg24)-num(x.market?.median24))*8)}:null,mtf:x.mtf,flow:x.flowScore,orderBook:x.orderBook,derivatives:x.derivatives,cross:x.cross};
@@ -548,7 +549,10 @@
     ps.running=true; ps.lastCycleAt=now(); ps.source='running'; const started=performance.now();
     try{
       let markets=state.marketsBySymbol&&Object.keys(state.marketsBySymbol).length?Object.values(state.marketsBySymbol):[];
-      if(markets.length<50){ try{markets=await fetchAllTickers('binance');}catch{} }
+      if(markets.length<50){
+        try{markets=await fetchAllTickers('binance');}catch{}
+        if(markets.length<50) for(const p of ['okx','bybit','gate']){try{const alt=await fetchAllTickers(p);if(alt.length){markets=alt;break;}}catch{}}
+      }
       if(!markets?.length)throw new Error('NO_MARKET_DATA');
       const normalized=markets.filter(eligibleTicker); if(!normalized.length)throw new Error('NO_ELIGIBLE_TICKERS');
       const [btcRows,ethRows,global]=await Promise.all([
