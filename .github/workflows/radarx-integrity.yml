@@ -27,7 +27,7 @@ jobs:
           from pathlib import Path
           import re, subprocess, tempfile
           s=Path("RadarX_ONEFILE_5.3.html").read_text(encoding="utf-8")
-          scripts=re.findall(r"<script\\b[^>]*>([\\s\\S]*?)</script>", s, flags=re.I)
+          scripts=re.findall(r"<script\b[^>]*>([\s\S]*?)</script>", s, flags=re.I)
           if len(scripts) != 3:
               raise SystemExit(f"Expected 3 script blocks, found {len(scripts)}")
           for i,code in enumerate(scripts[1:], 2):
