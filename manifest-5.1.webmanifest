@@ -1,13 +1,13 @@
 {
   "name": "RadarX Ultimate",
   "short_name": "RadarX",
-  "id": "./RadarX_Ultimate_5.1_STABLE.html",
-  "start_url":"./RadarX_START_5.2.html?v=5.2.0",
+  "id": "./RadarX_ONEFILE_5.3.html",
+  "start_url": "./RadarX_ONEFILE_5.3.html?v=5.3.1",
   "scope": "./",
   "display": "standalone",
   "background_color": "#050a0f",
   "theme_color": "#071018",
   "lang": "ar",
   "dir": "rtl",
-  "description": "RadarX Ultimate live crypto market radar — self-contained stable runtime"
+  "description": "RadarX Ultimate live market radar — synchronized one-file runtime"
 }
