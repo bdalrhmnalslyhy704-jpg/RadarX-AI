@@ -416,7 +416,7 @@
   }
   function normalizeBinanceTicker(x){return normalizeTicker({symbol:x.s,lastPrice:x.c,priceChangePercent:x.P,quoteVolume:x.q,b:x.b,a:x.a,B:x.B,A:x.A,E:x.E,o:x.o,h:x.h,l:x.l,v:x.v},'binance');}
   async function fetchAllTickers(provider){
-    if(provider==='binance'){const d=await firstJSON(binanceUrls('/api/v3/ticker/24hr'),{timeout:5000,retries:1,maxUrls:3});return (Array.isArray(d)?d:[]).map(x=>normalizeTicker(x,provider));}
+    if(provider==='binance'){const d=await firstJSONRace(binanceUrls('/api/v3/ticker/24hr'),{timeout:4500,retries:0,maxUrls:4});return (Array.isArray(d)?d:[]).map(x=>normalizeTicker(x,provider));}
     if(provider==='okx'){ const d=await fetchJSON('https://www.okx.com/api/v5/market/tickers?instType=SPOT'); return (d.data||[]).map(x=>normalizeTicker(x,provider)); }
     if(provider==='bybit'){ const d=await fetchJSON('https://api.bybit.com/v5/market/tickers?category=spot'); return (d.result?.list||[]).map(x=>normalizeTicker(x,provider)); }
     if(provider==='gate'){ const d=await fetchJSON('https://api.gateio.ws/api/v4/spot/tickers'); return (d||[]).map(x=>normalizeTicker(x,provider)); }
@@ -2154,10 +2154,31 @@ function renderResultsCenterWithContinuous(){
     if($('paperOutput')&&$('subcontent')?.dataset.kind==='paper'&&state.paper.positions.length)renderPaper();
     setTimeout(heartbeat,1200);
   }
+  function showBootError(err,stage='startup'){
+    try{
+      const host=document.body||document.documentElement;
+      if(!host)return;
+      let box=document.getElementById('radarxBootError');
+      if(!box){
+        box=document.createElement('div');
+        box.id='radarxBootError';
+        box.dir='rtl';
+        box.style.cssText='position:fixed;inset:18px;z-index:2147483647;padding:18px;border:1px solid rgba(255,120,120,.45);border-radius:16px;background:rgba(5,10,15,.97);color:#fff;font:14px/1.7 system-ui,sans-serif;overflow:auto;box-shadow:0 18px 60px rgba(0,0,0,.45)';
+        host.appendChild(box);
+      }
+      const msg=err?.message||String(err||'Unknown error');
+      box.innerHTML='<b>RadarX: تعذر إكمال التشغيل</b><br>المرحلة: '+String(stage).replace(/[<>&\"']/g,'')+'<br><small>'+String(msg).replace(/[<>&\"']/g,'')+'</small><br><br><button id="radarxBootReload" style="padding:10px 14px;border-radius:10px;border:0;cursor:pointer">إعادة المحاولة</button>';
+      document.getElementById('radarxBootReload')?.addEventListener('click',()=>location.reload());
+    }catch{}
+  }
+  window.addEventListener('error',e=>showBootError(e.error||e.message,'runtime'));
+  window.addEventListener('unhandledrejection',e=>showBootError(e.reason,'promise'));
+
   async function init(){
-    loadState();applyLanguage();renderProfile();renderMembership();bind();installPWA();appHealthy();
-    await consumeNativeEntitlement();
-    await checkSubscriptionStatus('startup');window.addEventListener('online',()=>{appHealthy();if(!premiumIsUnlocked()){applySubscriptionGate('EXPIRED','expired');return;}state.continuous.mode='waiting';state.multiRadar.wsAttempt=0;connectMultiRadarWS();openTickerWS(0);clearTimeout(state.multiRadar.pollTimer);state.multiRadar.pollTimer=setTimeout(multiRadarPoll,200);continuousRadarCycle().catch(()=>{});if(state.markets.length&&!state.busy)scan();});window.addEventListener('offline',()=>{state.continuous.mode='offline';try{if(state.multiRadar.ws)state.multiRadar.ws.close(1000,'offline')}catch{}try{if(state.ws.ticker)state.ws.ticker.close(1000,'offline')}catch{}multiRadarSetBusy(false,state.markets.length?'cached':'offline');markLiveData(state.markets.length?'cached':'offline',t('dataAge'));renderResultsCenter();});markLiveData('waiting');renderMarkets();renderAlerts();if($('exchangeSelect')?.value==='binance')openTickerWS(0);renderSentiment();renderRiskCalendar([]);renderBriefing();renderPsychologyGuardian();renderResultsCenter();
+    try{
+      loadState();applyLanguage();renderProfile();renderMembership();bind();installPWA();appHealthy();
+      Promise.resolve(consumeNativeEntitlement()).catch(()=>{});
+      Promise.resolve(checkSubscriptionStatus('startup')).catch(()=>{});window.addEventListener('online',()=>{appHealthy();if(!premiumIsUnlocked()){applySubscriptionGate('EXPIRED','expired');return;}state.continuous.mode='waiting';state.multiRadar.wsAttempt=0;connectMultiRadarWS();openTickerWS(0);clearTimeout(state.multiRadar.pollTimer);state.multiRadar.pollTimer=setTimeout(multiRadarPoll,200);continuousRadarCycle().catch(()=>{});if(state.markets.length&&!state.busy)scan();});window.addEventListener('offline',()=>{state.continuous.mode='offline';try{if(state.multiRadar.ws)state.multiRadar.ws.close(1000,'offline')}catch{}try{if(state.ws.ticker)state.ws.ticker.close(1000,'offline')}catch{}multiRadarSetBusy(false,state.markets.length?'cached':'offline');markLiveData(state.markets.length?'cached':'offline',t('dataAge'));renderResultsCenter();});markLiveData('waiting');renderMarkets();renderAlerts();if($('exchangeSelect')?.value==='binance')openTickerWS(0);renderSentiment();renderRiskCalendar([]);renderBriefing();renderPsychologyGuardian();renderResultsCenter();
     if(state.currentSymbol){
       const restored=state.deepRows.find(x=>x.symbol===state.currentSymbol)||state.smartScan.results.find(x=>x.symbol===state.currentSymbol)||null;
       if(restored){state.selected={...restored};state.structure=restored.structure||((restored.rows?.length>=8)?detectStructure(restored.rows):null);renderStructurePanel(state.structure);renderActiveAssetHeader(state.currentSymbol,'restored');}
@@ -2168,8 +2189,12 @@ function renderResultsCenterWithContinuous(){
     if(state.markets.length){renderMarkets();renderSentiment(computeSentimentFromMarkets(state.markets,null));renderRadarMetrics(state.markets.length,state.deepRows||[]);}
     $('briefingRefresh').onclick=()=>{refreshSentiment(true).finally(()=>renderBriefing());toast(state.markets.length?t('briefingUpdated'):t('noApi'));};
     refreshSentiment();loadRiskCalendar();
-    try{await scan();}catch{}
+    setTimeout(()=>scan().catch(e=>showBootError(e,'initial-scan')),180);
     if($('analysisSymbol').value&&$('analysisSymbol').value.trim()){}
+    }catch(e){
+      showBootError(e,'init');
+      try{markLiveData('error','startup');}catch{}
+    }
   }
 
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){warmAlertAudio();openTickerWS(0);connectMultiRadarWS();renderMultiRadar(false);continuousRadarCycle().catch(()=>{});}});
