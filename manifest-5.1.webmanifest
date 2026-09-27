@@ -2,7 +2,7 @@
   "name": "RadarX Ultimate",
   "short_name": "RadarX",
   "id": "./RadarX_Ultimate_5.1_STABLE.html",
-  "start_url": "./RadarX_Ultimate_5.1_STABLE.html?v=5.2.0",
+  "start_url":"./RadarX_START_5.2.html?v=5.2.0",
   "scope": "./",
   "display": "standalone",
   "background_color": "#050a0f",
