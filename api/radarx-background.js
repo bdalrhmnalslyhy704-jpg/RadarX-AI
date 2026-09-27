@@ -257,12 +257,26 @@ async function kv(cmd,args=[]){
   const d=await r.json(); if(d.error)throw new Error(String(d.error)); return d.result;
 }
 async function kvSet(key,value,ttlSec=600){ return kv('set',[key,JSON.stringify(value),'EX',String(ttlSec)]); }
+async function ensureVapid(){
+  const envPub=String(process.env.RADARX_VAPID_PUBLIC_KEY||'').trim();
+  const envPriv=String(process.env.RADARX_VAPID_PRIVATE_KEY||'').trim();
+  if(envPub&&envPriv)return {publicKey:envPub,privateKey:envPriv};
+  if(!kvConfig())return null;
+  try{
+    const cached=JSON.parse(await kv('get',['radarx:vapid'])||'null');
+    if(cached?.publicKey&&cached?.privateKey)return cached;
+  }catch{}
+  try{
+    const wp=(await import('web-push')).default || (await import('web-push'));
+    const generated=wp.generateVAPIDKeys();
+    await kvSet('radarx:vapid',generated,31536000);
+    return generated;
+  }catch{return null;}
+}
 async function sendWebPush(payload){
-  if(!kvConfig())return 0;
-  const pub=String(process.env.RADARX_VAPID_PUBLIC_KEY||'').trim(), priv=String(process.env.RADARX_VAPID_PRIVATE_KEY||'').trim();
-  if(!pub||!priv)return 0;
+  const vapid=await ensureVapid(); if(!vapid)return 0;
   const wp=(await import('web-push')).default || (await import('web-push'));
-  wp.setVapidDetails('mailto:alerts@radarx.app',pub,priv);
+  wp.setVapidDetails('mailto:alerts@radarx.app',vapid.publicKey,vapid.privateKey);
   const subs=await kv('smembers',['radarx:push:subs']);
   if(!Array.isArray(subs)||!subs.length)return 0;
   let sent=0;
@@ -294,7 +308,7 @@ async function sendAlert(x){
 async function status(){
   let last=memory.lastResult;
   if(!last&&kvConfig())try{last=JSON.parse(await kv('get',['radarx:last-scan'])||'null')}catch{}
-  return {ok:true,engine:'RadarX Background Intelligence 5.13',schedule:'5-minute GitHub Actions + foreground WebSocket',ntfyTopic:NTFY_TOPIC,ntfyUrl:NTFY_URL,webPushConfigured:!!(kvConfig()&&process.env.RADARX_VAPID_PUBLIC_KEY&&process.env.RADARX_VAPID_PRIVATE_KEY),kvConfigured:!!kvConfig(),lastScan:last?{checkedAt:last.checkedAt,universe:last.universe,deepScanned:last.deepScanned,alerts:last.alerts?.length||0,top:last.top?.[0]||null}:null,limits:{minQuoteVolume:CONFIG.minQuoteVolume,alertScore:CONFIG.alertScore,alertTrap:CONFIG.alertTrap}};
+  return {ok:true,engine:'RadarX Background Intelligence 5.13',schedule:'5-minute GitHub Actions + foreground WebSocket',ntfyTopic:NTFY_TOPIC,ntfyUrl:NTFY_URL,webPushConfigured:!!(kvConfig()&&(process.env.RADARX_VAPID_PUBLIC_KEY&&process.env.RADARX_VAPID_PRIVATE_KEY||true)),kvConfigured:!!kvConfig(),lastScan:last?{checkedAt:last.checkedAt,universe:last.universe,deepScanned:last.deepScanned,alerts:last.alerts?.length||0,top:last.top?.[0]||null}:null,limits:{minQuoteVolume:CONFIG.minQuoteVolume,alertScore:CONFIG.alertScore,alertTrap:CONFIG.alertTrap}};
 }
 export default async function handler(req,res){
   res.setHeader('Access-Control-Allow-Origin','*');
