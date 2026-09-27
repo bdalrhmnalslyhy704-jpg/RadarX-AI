@@ -8,7 +8,7 @@
 
   const CORE = window.RadarXCore;
   if (!CORE?.state) return;
-  const {state, $, num, clamp, t, fetchAllTickers, fetchTicker, fetchKlines, fetchDepth, fetchTrades, fetchJSON, notifyUser, toast, premiumIsUnlocked} = CORE;
+  const {state, $, num, clamp, t, fetchAllTickers, fetchAllTickersResilient, fetchTicker, fetchKlines, fetchDepth, fetchTrades, fetchJSON, notifyUser, toast, premiumIsUnlocked} = CORE;
 
   const PERSIST_KEY = 'radarx_pro_engine_50';
   const LOG_KEY = 'radarx_pro_logs_50';
@@ -550,7 +550,7 @@
     try{
       let markets=state.marketsBySymbol&&Object.keys(state.marketsBySymbol).length?Object.values(state.marketsBySymbol):[];
       if(markets.length<50){
-        try{markets=await fetchAllTickers('binance');}catch{}
+        try{markets=await (fetchAllTickersResilient?fetchAllTickersResilient('binance'):fetchAllTickers('binance'));}catch{}
         if(markets.length<50) for(const p of ['okx','bybit','gate']){try{const alt=await fetchAllTickers(p);if(alt.length){markets=alt;break;}}catch{}}
       }
       if(!markets?.length)throw new Error('NO_MARKET_DATA');
