@@ -993,20 +993,34 @@
     return {score,quality,signal,reasons,conflicts,entry,entryLow:Math.max(sl,entry-risk*.35),entryHigh:entry+risk*.25,sl,tp1,tp2,tp3,rr,rr2,rr3,horizon,tradeType,confidence,fakeout};
   }
   async function deepAnalyze(provider,symbol,tf,{withFlow=true}={}){
-    const cachedTicker=state.marketsBySymbol?.[symbol]||null;
-    let ticker=cachedTicker;
-    const jobs=[fetchKlines(provider,symbol,tf,180)];
-    if(!ticker){jobs.push(fetchTicker(provider,symbol).catch(()=>null));}
-    const result=await Promise.all(jobs);
-    const rows=result[0], fetchedTicker=ticker||result[1]||null;
-    if(!rows?.length)throw new Error('EMPTY_KLINES');
-    ticker=fetchedTicker;
+    const requestedProvider=provider||'binance';
+    const providers=typeof orderedProviders==='function'?orderedProviders(requestedProvider):[requestedProvider,'okx','bybit','gate'];
+    let actualProvider=requestedProvider,rows=null,ticker=null,lastError=null;
+    const cached=state.marketsBySymbol?.[symbol]||null;
+    if(cached?.last>0&&(!cached.provider||cached.provider===requestedProvider)){ticker=cached;}
+    for(const p of providers){
+      try{
+        const r=await fetchKlines(p,symbol,tf,180);
+        if(Array.isArray(r)&&r.length){rows=r;actualProvider=p;break;}
+      }catch(e){lastError=e;}
+    }
+    if(!rows)throw lastError||new Error('EMPTY_KLINES');
+    if(!ticker||ticker.provider!==actualProvider){
+      try{ticker=await fetchTicker(actualProvider,symbol);}catch{}
+    }
     state.klinesCache[symbol]=state.klinesCache[symbol]||{}; state.klinesCache[symbol][tf]=rows.slice(-250);
-    let flow=null;
-    if(withFlow){const [d,tr]=await Promise.all([fetchDepth(provider,symbol,50),fetchTrades(provider,symbol,180)]);flow=flowFromData(d,tr);state.streamTrades[symbol]=tr.slice(-300);}
+    let flow=null,flowProvider=actualProvider;
+    if(withFlow){
+      for(const p of [actualProvider,...providers.filter(x=>x!==actualProvider)]){
+        try{
+          const [d,tr]=await Promise.all([fetchDepth(p,symbol,50),fetchTrades(p,symbol,180)]);
+          if(d?.bids?.length&&d?.asks?.length&&Array.isArray(tr)){flow=flowFromData(d,tr);state.streamTrades[symbol]=tr.slice(-300);flowProvider=p;break;}
+        }catch{}
+      }
+    }
     const f=coreFeatures(rows),structure=detectStructure(rows),fakeout=detectFakeout(rows,f,flow,structure),forensic=deepDiveAnalysis(rows,f,flow,structure,fakeout),score=scoreFeatures(f,flow,structure,fakeout,forensic);
     const lastPrice=num(ticker?.last,f.last.c);
-    return {...f,...score,flow,flowWhales:flow?.whales||null,structure,fakeout,forensic,symbol,exchange:provider,timeframe:tf,mode:'live_rest',rows,price:lastPrice,priceChangePercent:num(ticker?.priceChangePercent,0),quoteVolume:num(ticker?.quoteVolume,0),bidPrice:num(ticker?.bidPrice,0),askPrice:num(ticker?.askPrice,0),bidQty:num(ticker?.bidQty,0),askQty:num(ticker?.askQty,0),eventTime:num(ticker?.eventTime,Date.now()),liveAt:Date.now()};
+    return {...f,...score,flow,flowWhales:flow?.whales||null,structure,fakeout,forensic,symbol,requestedProvider,exchange:actualProvider,flowProvider,timeframe:tf,mode:'live_rest',fallbackUsed:actualProvider!==requestedProvider,rows,price:lastPrice,priceChangePercent:num(ticker?.priceChangePercent,0),quoteVolume:num(ticker?.quoteVolume,0),bidPrice:num(ticker?.bidPrice,0),askPrice:num(ticker?.askPrice,0),bidQty:num(ticker?.bidQty,0),askQty:num(ticker?.askQty,0),eventTime:num(ticker?.eventTime,Date.now()),liveAt:Date.now()};
   }
 
   // ---------- Auto-Pilot Smart Scanner ----------
