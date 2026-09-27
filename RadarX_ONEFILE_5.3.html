@@ -417,7 +417,8 @@ body.rx-subscription-locked #toast{z-index:9200}
 
 
 
-<script>(() => {
+<script>
+(() => {
   'use strict';
 
   // RadarX Ultimate 5.1 — Performance + Robust Live Radar Edition
@@ -846,20 +847,8 @@ body.rx-subscription-locked #toast{z-index:9200}
   function normalizeBinanceTicker(x){return normalizeTicker({symbol:x.s,lastPrice:x.c,priceChangePercent:x.P,quoteVolume:x.q,b:x.b,a:x.a,B:x.B,A:x.A,E:x.E,o:x.o,h:x.h,l:x.l,v:x.v},'binance');}
   async function fetchAllTickers(provider){
     if(provider==='binance'){
-      try{
-        const d=await firstJSONRace(binanceUrls('/api/v3/ticker/24hr'),{timeout:4500,retries:0,maxUrls:4});
-        return (Array.isArray(d)?d:[]).map(x=>normalizeTicker(x,provider));
-      }catch(primaryErr){
-        for(const fallback of ['okx','bybit','gate']){
-          try{
-            const data=await fetchAllTickers(fallback);
-            if(Array.isArray(data)&&data.length){
-              return data.map(x=>({...x,fallbackFor:'binance',dataSource:'fallback-exchange'}));
-            }
-          }catch{}
-        }
-        throw primaryErr;
-      }
+      const d=await firstJSONRace(binanceUrls('/api/v3/ticker/24hr'),{timeout:4500,retries:0,maxUrls:4});
+      return (Array.isArray(d)?d:[]).map(x=>normalizeTicker(x,provider));
     }
     if(provider==='okx'){ const d=await fetchJSON('https://www.okx.com/api/v5/market/tickers?instType=SPOT'); return (d.data||[]).map(x=>normalizeTicker(x,provider)); }
     if(provider==='bybit'){ const d=await fetchJSON('https://api.bybit.com/v5/market/tickers?category=spot'); return (d.result?.list||[]).map(x=>normalizeTicker(x,provider)); }
@@ -899,6 +888,39 @@ body.rx-subscription-locked #toast{z-index:9200}
     if(provider==='bybit'){const d=await fetchJSON(`https://api.bybit.com/v5/market/recent-trade?category=spot&symbol=${encodeURIComponent(symbol)}&limit=${Math.min(60,limit)}`);return (d.result?.list||[]).map(x=>({id:x.execId,price:num(x.price),amount:num(x.size),buy:x.side==='Buy',t:num(x.time)}));}
     throw new Error('Trades unavailable');
   }
+
+  // ---------- Resilient multi-provider data layer ----------
+  const PROVIDER_ORDER=['binance','okx','bybit','gate'];
+  const providerHealth=Object.fromEntries(PROVIDER_ORDER.map(p=>[p,{ok:0,fail:0,lastOk:0,lastFail:0,latency:0,streak:0}]));
+  function noteProvider(provider,ok,latency=0){
+    const h=providerHealth[provider]||(providerHealth[provider]={ok:0,fail:0,lastOk:0,lastFail:0,latency:0,streak:0});
+    if(ok){h.ok++;h.lastOk=Date.now();h.latency=latency||h.latency;h.streak=Math.min(20,h.streak+1);}
+    else{h.fail++;h.lastFail=Date.now();h.streak=Math.max(-20,h.streak-2);}
+  }
+  function providerRank(){
+    return [...PROVIDER_ORDER].sort((a,b)=>{
+      const A=providerHealth[a],B=providerHealth[b];
+      const sa=A.streak*20+(A.lastOk?Math.max(0,30000-(Date.now()-A.lastOk))/1000:0)-(A.latency||0)/100;
+      const sb=B.streak*20+(B.lastOk?Math.max(0,30000-(Date.now()-B.lastOk))/1000:0)-(B.latency||0)/100;
+      return sb-sa;
+    });
+  }
+  async function resilientTickers(preferred='binance'){
+    const order=[preferred,...providerRank().filter(p=>p!==preferred)];
+    let lastErr=null;
+    for(const p of order){
+      const t0=performance.now();
+      try{const rows=await fetchAllTickers(p);if(Array.isArray(rows)&&rows.length){noteProvider(p,true,performance.now()-t0);return {rows,provider:p};}}
+      catch(e){lastErr=e;noteProvider(p,false,performance.now()-t0);}
+    }
+    throw lastErr||new Error('No market provider available');
+  }
+  function dataFresh(ts,maxAge=20000){return Number.isFinite(Number(ts))&&Date.now()-Number(ts)>=0&&Date.now()-Number(ts)<=maxAge;}
+  function exposeProviderHealth(){
+    try{window.RadarXDataHealth={providers:JSON.parse(JSON.stringify(providerHealth)),rank:providerRank(),at:Date.now()};}catch{}
+  }
+  exposeProviderHealth();
+  setInterval(exposeProviderHealth,5000);
 
   // ---------- Binance live WebSocket engine ----------
   function mergeTicker(t){ if(!t?.symbol||!(t.last>0))return; state.marketsBySymbol[t.symbol]={...(state.marketsBySymbol[t.symbol]||{}),...t,eventTime:t.eventTime||Date.now(),receivedAt:num(t.receivedAt,Date.now()),dataSource:t.dataSource||'market'}; recordContinuousTicker(state.marketsBySymbol[t.symbol]); }
@@ -1961,8 +1983,16 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
     }
   }
   async function fetchBinanceTickerUniverseResilient(){
-    const urls=binanceUrls('/api/v3/ticker/24hr').slice(0,MULTI_RADAR.restMaxUrls);
-    return firstJSONRace(urls,{timeout:MULTI_RADAR.restTimeout,retries:0,maxUrls:urls.length});
+    const t0=performance.now();
+    try{
+      const urls=binanceUrls('/api/v3/ticker/24hr').slice(0,MULTI_RADAR.restMaxUrls);
+      const d=await firstJSONRace(urls,{timeout:MULTI_RADAR.restTimeout,retries:0,maxUrls:urls.length});
+      noteProvider('binance',true,performance.now()-t0); return d;
+    }catch(e){
+      noteProvider('binance',false,performance.now()-t0);
+      const r=await resilientTickers('binance');
+      return (r.rows||[]).map(x=>({...x,dataSource:r.provider==='binance'?'market':'fallback-exchange',fallbackFor:r.provider==='binance'?undefined:'binance'}));
+    }
   }
   async function multiRadarPoll(){
     if(state.multiRadar.running)return;
@@ -2338,10 +2368,10 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
     if(state.busy)return; state.busy=true; appHealthy(); markLiveData('waiting'); const provider=$('exchangeSelect').value,tf=$('scanTf').value,minV=num($('minVolume').value,1e6),depthCount=Math.max(6,Math.min(20,num($('depthCount').value,12)));
     $('scanStatusText').textContent=t('scanReady');$('scanStatusSub').textContent=t('noData');$('scanProgress').style.width='8%';
     try{
-      const live=await fetchAllTickers(provider); if(!live.length)throw new Error('NO_TICKERS');
+      const liveResult=await resilientTickers(provider); const live=liveResult.rows; if(!live.length)throw new Error('NO_TICKERS');
       const filtered=live.filter(x=>x.baseAsset&&x.baseAsset.length>1&&(provider==='coinbase'?x.quoteAsset==='USD':x.quoteAsset==='USDT')&&x.quoteVolume>=minV&&!/(UP|DOWN|BULL|BEAR|3L|3S|5L|5S)$/.test(x.baseAsset));
       filtered.sort((a,b)=>b.quoteVolume-a.quoteVolume); state.markets=filtered;state.marketsBySymbol={};filtered.forEach(x=>state.marketsBySymbol[x.symbol]=x);writeJSON('radarx_live_snapshot_v43',{ts:Date.now(),items:filtered.slice(0,3000)});markLiveData('live_rest',`${t('liveRest')} · ${filtered.length.toLocaleString('en-US')} pairs`);$('scanProgress').style.width='28%';renderMarkets();renderSentiment(computeSentimentFromMarkets(filtered,null));
-      const actualProvider=live[0]?.provider||provider;
+      const actualProvider=liveResult.provider||live[0]?.provider||provider;
       const candidates=filtered.slice(0,depthCount),results=[]; for(let i=0;i<candidates.length;i+=3){const batch=candidates.slice(i,i+3);const r=await Promise.allSettled(batch.map(x=>deepAnalyze(x.provider||actualProvider,x.symbol,tf,{withFlow:true})));r.forEach(v=>{if(v.status==='fulfilled')results.push(v.value);});$('scanProgress').style.width=`${28+Math.round((Math.min(i+3,candidates.length)/candidates.length)*66)}%`;await sleep(40);}
       state.deepRows=results.sort((a,b)=>b.score-a.score);const activeScan=state.currentSymbol&&state.deepRows.find(x=>x.symbol===state.currentSymbol);state.structure=activeScan?.structure||state.deepRows[0]?.structure||null;state.fakeout=activeScan?.fakeout||state.deepRows[0]?.fakeout||null;if(activeScan){state.selected=activeScan;}renderStructurePanel(state.structure);renderRadarMetrics(filtered.length,state.deepRows);renderRadarTable(state.deepRows);renderMarkets();updatePaperFromMarkets(filtered);renderBriefing();renderPsychologyGuardian();saveLiveSnapshot();$('scanStatusText').textContent=t('liveUpdated');$('scanStatusSub').textContent=`${filtered.length.toLocaleString('en-US')} pairs · ${results.length} deep`;$('scanProgress').style.width='100%';state.deepRows.filter(x=>x.signal==='EARLY_ALERT').forEach(saveAlert);renderAlerts();toast(t('liveUpdated'));
       if(provider==='binance' && live.every(x=>x.provider==='binance'))openTickerWS(0);
@@ -2782,7 +2812,9 @@ function renderResultsCenterWithContinuous(){
   };
   document.addEventListener('DOMContentLoaded',init);
 })();
-</script><script>(() => {
+
+</script><script>
+(() => {
   'use strict';
 
   // RadarX Pro Intelligence Engine 5.1
@@ -3524,4 +3556,5 @@ function renderResultsCenterWithContinuous(){
 
   document.addEventListener('DOMContentLoaded',start,{once:true});
 })();
+
 </script></body></html>
