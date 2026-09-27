@@ -1,5 +1,19 @@
 {
   "cleanUrls": true,
+  "headers": [
+    {
+      "source": "/",
+      "headers": [
+        {"key": "Cache-Control", "value": "no-store, no-cache, must-revalidate"}
+      ]
+    },
+    {
+      "source": "/RadarX_ONEFILE_5.3.html",
+      "headers": [
+        {"key": "Cache-Control", "value": "no-store, no-cache, must-revalidate"}
+      ]
+    }
+  ],
   "rewrites": [
     {
       "source": "/",
