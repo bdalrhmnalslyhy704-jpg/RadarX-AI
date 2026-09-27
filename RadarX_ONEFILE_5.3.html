@@ -891,15 +891,15 @@ body.rx-subscription-locked #toast{z-index:9200}
 
   // ---------- Resilient multi-provider data layer ----------
   const PROVIDER_ORDER=['binance','okx','bybit','gate'];
-  const providerHealth=Object.fromEntries(PROVIDER_ORDER.map(p=>[p,{ok:0,fail:0,lastOk:0,lastFail:0,latency:0,streak:0}]));
+  const providerHealthStats=Object.fromEntries(PROVIDER_ORDER.map(p=>[p,{ok:0,fail:0,lastOk:0,lastFail:0,latency:0,streak:0}]));
   function noteProvider(provider,ok,latency=0){
-    const h=providerHealth[provider]||(providerHealth[provider]={ok:0,fail:0,lastOk:0,lastFail:0,latency:0,streak:0});
+    const h=providerHealthStats[provider]||(providerHealthStats[provider]={ok:0,fail:0,lastOk:0,lastFail:0,latency:0,streak:0});
     if(ok){h.ok++;h.lastOk=Date.now();h.latency=latency||h.latency;h.streak=Math.min(20,h.streak+1);}
     else{h.fail++;h.lastFail=Date.now();h.streak=Math.max(-20,h.streak-2);}
   }
   function providerRank(){
     return [...PROVIDER_ORDER].sort((a,b)=>{
-      const A=providerHealth[a],B=providerHealth[b];
+      const A=providerHealthStats[a],B=providerHealthStats[b];
       const sa=A.streak*20+(A.lastOk?Math.max(0,30000-(Date.now()-A.lastOk))/1000:0)-(A.latency||0)/100;
       const sb=B.streak*20+(B.lastOk?Math.max(0,30000-(Date.now()-B.lastOk))/1000:0)-(B.latency||0)/100;
       return sb-sa;
@@ -917,7 +917,7 @@ body.rx-subscription-locked #toast{z-index:9200}
   }
   function dataFresh(ts,maxAge=20000){return Number.isFinite(Number(ts))&&Date.now()-Number(ts)>=0&&Date.now()-Number(ts)<=maxAge;}
   function exposeProviderHealth(){
-    try{window.RadarXDataHealth={providers:JSON.parse(JSON.stringify(providerHealth)),rank:providerRank(),at:Date.now()};}catch{}
+    try{window.RadarXDataHealth={providers:JSON.parse(JSON.stringify(providerHealthStats)),rank:providerRank(),at:Date.now()};}catch{}
   }
   exposeProviderHealth();
   setInterval(exposeProviderHealth,5000);
