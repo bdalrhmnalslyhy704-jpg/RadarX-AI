@@ -283,7 +283,7 @@ async function sendNtfy(x){
     'وقت الفحص: '+new Date(x.checkedAt).toLocaleString('en-US',{timeZone:'UTC'})+' UTC'
   ].join('\n');
   try{
-    const r=await fetch(NTFY_URL,{method:'POST',headers:{Title:'RadarX '+x.symbol,Priority:'high',Tags:'rocket,chart_with_upwards_trend',Click:'https://radar-x-ai.vercel.app/',Content-Type:'text/plain; charset=utf-8'},body});
+    const r=await fetch(NTFY_URL,{method:'POST',headers:{Title:'RadarX '+x.symbol,Priority:'high',Tags:'rocket,chart_with_upwards_trend',Click:'https://radar-x-ai.vercel.app/','Content-Type':'text/plain; charset=utf-8'},body});
     return r.ok;
   }catch{return false;}
 }
