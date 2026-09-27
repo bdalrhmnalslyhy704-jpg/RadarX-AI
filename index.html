@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#071018"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="mobile-web-app-capable" content="yes"/>
-<meta name="application-version" content="RadarX Ultimate 5.11 — Continuous Background Radar Robust"/>
+<meta name="application-version" content="RadarX Ultimate 5.13 — Continuous Background Intelligence"/>
 <title>RadarX Ultimate 5.11 — Continuous Background Radar — Robust Live Interaction Radar</title>
 <style id="radarx-stable-boot">
 #rxEarlyBoot{position:fixed;left:12px;right:12px;top:12px;z-index:2147483646;padding:10px 12px;border:1px solid rgba(84,213,255,.3);border-radius:12px;background:rgba(5,15,22,.94);color:#bfefff;font:700 12px/1.5 system-ui,sans-serif;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,.35);direction:rtl}
@@ -37,7 +37,7 @@
   function cleanLegacySW(){
     if(!('serviceWorker' in navigator))return Promise.resolve();
     return navigator.serviceWorker.getRegistrations().then(function(regs){
-      return Promise.all(regs.map(function(r){return r.unregister().catch(function(){});}));
+      return Promise.all(regs.filter(function(r){var u=(r.active&&r.active.scriptURL)||(r.waiting&&r.waiting.scriptURL)||(r.installing&&r.installing.scriptURL)||'';return u.indexOf('radarx-sw-5.13.js')===-1;}).map(function(r){return r.unregister().catch(function(){});}));
     }).then(function(){
       if(!window.caches||!caches.keys)return;
       return caches.keys().then(function(keys){
@@ -428,5 +428,6 @@ body.rx-subscription-locked #toast{z-index:9200}
   window.addEventListener('error',function(e){if(e.filename&&/RadarX_(Ultimate_5.1|ProEngine_5.1).js/.test(e.filename))set('خطأ تحميل المحرك: '+(e.message||'script error'),true);});
 })();
 </script>
+<script defer src="./radarx-background-client.js?v=5.13-bg-1"></script>
 <script defer src="./RadarX_Ultimate_5.11.js?v=5.11-stable-2"></script>
 <script defer src="./RadarX_ProEngine_5.11.js?v=5.11-stable-2"></script></body></html>
