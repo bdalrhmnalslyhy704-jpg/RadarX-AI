@@ -3129,23 +3129,25 @@ function renderResultsCenterWithContinuous(){
   }
 
   async function fetchFlow(symbol,provider='binance'){
-    const c=ps.flow.get(symbol); if(c?.ts && now()-c.ts<CACHE_TTL.flow)return c.data;
+    const cacheKey=provider+'|'+symbol;
+    const c=ps.flow.get(cacheKey); if(c?.ts && now()-c.ts<CACHE_TTL.flow)return c.data;
     try{
       const [d,tr]=await Promise.all([fetchDepth(provider,symbol,80),fetchTrades(provider,symbol,220)]);
       const b=(d.bids||[]).reduce((s,a)=>s+num(a[0])*num(a[1]),0), a=(d.asks||[]).reduce((s,z)=>s+num(z[0])*num(z[1]),0), den=b+a||1;
       const buy=tr.filter(z=>z.buy).reduce((s,z)=>s+num(z.price)*num(z.amount),0), sell=tr.filter(z=>!z.buy).reduce((s,z)=>s+num(z.price)*num(z.amount),0), td=buy+sell||1;
       const mid=(num(d.bids?.[0]?.[0])+num(d.asks?.[0]?.[0]))/2, spreadPct=mid>0?Math.abs(num(d.asks?.[0]?.[0])-num(d.bids?.[0]?.[0]))/mid*100:null;
       const wallBid=Math.max(0,...(d.bids||[]).slice(0,20).map(q=>num(q[0])*num(q[1]))),wallAsk=Math.max(0,...(d.asks||[]).slice(0,20).map(q=>num(q[0])*num(q[1])));
-      const data={ts:now(),imbalance:(b-a)/den*100,bid:b,ask:a,cvm:0,cvd:(buy-sell)/td*100,buySell:sell?buy/sell:0,spreadPct,depthUsd:b+a,wallBid,wallAsk};
-      const prior=ps.flow.get(symbol)?.data||null;
-      ps.flow.set(symbol,{ts:now(),data,prev:prior});
-      const hist=ps.orderbookHistory.get(symbol)||[];hist.push({ts:now(),imbalance:data.imbalance,wallBid,wallAsk,buySell:data.buySell});while(hist.length>12)hist.shift();ps.orderbookHistory.set(symbol,hist);
+      const data={ts:now(),provider,symbol,imbalance:(b-a)/den*100,bid:b,ask:a,cvm:0,cvd:(buy-sell)/td*100,buySell:sell?buy/sell:0,spreadPct,depthUsd:b+a,wallBid,wallAsk};
+      const prior=ps.flow.get(cacheKey)?.data||null;
+      ps.flow.set(cacheKey,{ts:now(),data,prev:prior});
+      const hist=ps.orderbookHistory.get(cacheKey)||[];hist.push({ts:now(),imbalance:data.imbalance,wallBid,wallAsk,buySell:data.buySell});while(hist.length>12)hist.shift();ps.orderbookHistory.set(cacheKey,hist);
       return data;
     }catch(e){saveLog('flow_error',{symbol,error:String(e?.message||e)});return null;}
   }
 
-  function orderBookDynamic(symbol,flow){
-    const h=ps.orderbookHistory.get(symbol)||[]; if(!flow||h.length<2)return {available:false};
+  function orderBookDynamic(symbol,flow,provider='binance'){
+    const cacheKey=provider+'|'+symbol;
+    const h=ps.orderbookHistory.get(cacheKey)||[]; if(!flow||h.length<2)return {available:false};
     const prev=h.at(-2), first=h[0]; const dImb=flow.imbalance-prev.imbalance, windowImb=flow.imbalance-first.imbalance, dWall=(flow.wallBid-flow.wallAsk)-(prev.wallBid-prev.wallAsk), speed=dImb;
     const pressure=clamp(50+flow.imbalance*.42+windowImb*.18+speed*.48+(dWall>0?5:dWall<0?-5:0)+(flow.wallBid>flow.wallAsk?7:-7));
     const spreadPenalty=flow.spreadPct==null?0:clamp(flow.spreadPct*18,0,18);
@@ -3308,7 +3310,7 @@ function renderResultsCenterWithContinuous(){
     x.mtf=mtfScore(frames);
     const useFlow=idx<PRO.flowCandidates;
     if(useFlow){
-      const flow=await fetchFlow(symbol,provider); x.flow=flow; x.orderBook=orderBookDynamic(symbol,flow); x.flowScore=flowScore(flow,ps.flow.get(symbol)?.prev); 
+      const flow=await fetchFlow(symbol,provider); x.flow=flow; x.orderBook=orderBookDynamic(symbol,flow,provider); x.flowScore=flowScore(flow,ps.flow.get(provider+'|'+symbol)?.prev); 
     }
     if(idx<PRO.derivativeCandidates)x.derivatives=await fetchDerivatives(symbol);
     const context={ticker:x,market:x.market,global:x.global,relative:x.relative,sector:x.sector?{available:true,name:x.sector,score:clamp(50+(num(x.market?.sectors?.[x.sector]?.avg24)-num(x.market?.median24))*8)}:null,mtf:x.mtf,flow:x.flowScore,orderBook:x.orderBook,derivatives:x.derivatives,cross:x.cross};
