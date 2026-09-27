@@ -51,7 +51,7 @@
   },{once:true});
 })();
 </script></head>
-<body><div id="rxEarlyBoot">RadarX — جارٍ تشغيل الواجهة الآمنة…</div>
+<body><div id="rxEarlyBoot">RadarX — جارٍ تشغيل الواجهة…</div><div id="radarx-progressive-loader" style="position:fixed;left:12px;right:12px;bottom:12px;z-index:2147483645;padding:7px 10px;border:1px solid rgba(84,213,255,.18);border-radius:10px;background:rgba(5,10,15,.82);color:#8ea5b3;font:600 10px/1.4 system-ui,sans-serif;text-align:center">واجهة RadarX جاهزة، جاري تحميل محرك التحليل…</div>
 <div class="app-shell">
 <header class="topbar">
   <div class="brand-block">
@@ -3358,4 +3358,14 @@ function renderResultsCenterWithContinuous(){
   document.addEventListener('DOMContentLoaded',start,{once:true});
 })();
 </script>
-</body></html>
+<script>
+(function(){
+  var loader=document.getElementById('radarx-progressive-loader');
+  function set(t,err){if(!loader)return;loader.textContent=t;loader.style.color=err?'#ff8f9b':'#8ea5b3';}
+  window.addEventListener('radarx:ready',function(){set('RadarX — المحرك جاهز');setTimeout(function(){loader&&loader.remove();},900);});
+  setTimeout(function(){if(window.RadarXCore){set('RadarX — المحرك متصل');}else{set('RadarX — المحرك لم يبدأ بعد؛ اضغط إعادة التحميل.',true);}},12000);
+  window.addEventListener('error',function(e){if(e.filename&&/RadarX_(Ultimate_5.1|ProEngine_5.1).js/.test(e.filename))set('خطأ تحميل المحرك: '+(e.message||'script error'),true);});
+})();
+</script>
+<script defer src="./RadarX_Ultimate_5.1.js?v=5.3.0"></script>
+<script defer src="./RadarX_ProEngine_5.1.js?v=5.3.0"></script></body></html>
