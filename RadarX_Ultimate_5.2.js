@@ -339,6 +339,11 @@
     const isInternalProxy=typeof url==='string' && url.startsWith('/api/binance?');
     if(!isAbsolute && !isInternalProxy) throw new Error('Only HTTPS URLs or the RadarX Binance proxy are allowed');
     const requestUrl=isAbsolute?url:new URL(url,location.href).toString();
+    const proxiedUrl=(()=>{try{
+      const u=new URL(requestUrl,location.href),h=u.hostname,p=u.pathname+u.search;
+      const map=h==='www.okx.com'?'okx':h==='api.bybit.com'?'bybit':(h==='api.gateio.ws'||h==='api.gate.us')?'gate':h==='api.exchange.coinbase.com'?'coinbase':h==='api.coingecko.com'?'coingecko':h==='fapi.binance.com'?'binanceFutures':null;
+      return map?('/api/market?provider='+encodeURIComponent(map)+'&path='+encodeURIComponent(p)):requestUrl;
+    }catch{return requestUrl;}})();
     if(!/^https:\/\//i.test(url)) throw new Error('Only absolute HTTPS URLs are allowed');
     if(navigator.onLine===false) throw new Error('OFFLINE');
     let last=null;
@@ -347,7 +352,7 @@
       const timer=setTimeout(()=>ctrl.abort(),timeout);
       const started=performance.now();
       try{
-        const r=await fetch(requestUrl,{method:'GET',headers:{Accept:'application/json'},credentials:'omit',cache:'no-store',redirect:'follow',signal:ctrl.signal});
+        const r=await fetch(proxiedUrl,{method:'GET',headers:{Accept:'application/json'},credentials:'omit',cache:'no-store',redirect:'follow',signal:ctrl.signal});
         const latency=Math.round(performance.now()-started); if($('apiLatency'))$('apiLatency').textContent=`${latency} ms`;
         if(r.status===429) throw new Error('RATE_LIMIT_429');
         if(!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -421,7 +426,22 @@
   }
   function normalizeBinanceTicker(x){return normalizeTicker({symbol:x.s,lastPrice:x.c,priceChangePercent:x.P,quoteVolume:x.q,b:x.b,a:x.a,B:x.B,A:x.A,E:x.E,o:x.o,h:x.h,l:x.l,v:x.v},'binance');}
   async function fetchAllTickers(provider){
-    if(provider==='binance'){const d=await firstJSONRace(binanceUrls('/api/v3/ticker/24hr'),{timeout:4500,retries:0,maxUrls:4});return (Array.isArray(d)?d:[]).map(x=>normalizeTicker(x,provider));}
+    if(provider==='binance'){
+      try{
+        const d=await firstJSONRace(binanceUrls('/api/v3/ticker/24hr'),{timeout:4500,retries:0,maxUrls:4});
+        return (Array.isArray(d)?d:[]).map(x=>normalizeTicker(x,provider));
+      }catch(primaryErr){
+        for(const fallback of ['okx','bybit','gate']){
+          try{
+            const data=await fetchAllTickers(fallback);
+            if(Array.isArray(data)&&data.length){
+              return data.map(x=>({...x,fallbackFor:'binance',dataSource:'fallback-exchange'}));
+            }
+          }catch{}
+        }
+        throw primaryErr;
+      }
+    }
     if(provider==='okx'){ const d=await fetchJSON('https://www.okx.com/api/v5/market/tickers?instType=SPOT'); return (d.data||[]).map(x=>normalizeTicker(x,provider)); }
     if(provider==='bybit'){ const d=await fetchJSON('https://api.bybit.com/v5/market/tickers?category=spot'); return (d.result?.list||[]).map(x=>normalizeTicker(x,provider)); }
     if(provider==='gate'){ const d=await fetchJSON('https://api.gateio.ws/api/v4/spot/tickers'); return (d||[]).map(x=>normalizeTicker(x,provider)); }
@@ -1028,7 +1048,7 @@
     }
     out.innerHTML=smart.map((x,i)=>smartOpportunityCard(x,i)).join('')+`<div class="smart-stats" style="grid-column:1/-1"><div class="smart-stat"><span>${esc(t('smartUniverse'))}</span><b>${Number(meta.universe||0).toLocaleString('en-US')}</b></div><div class="smart-stat"><span>${esc(t('smartStage1'))}</span><b>${Number(meta.stage1||0).toLocaleString('en-US')}</b></div><div class="smart-stat"><span>${esc(t('smartDeep'))}</span><b>${Number(meta.deepVerified||0).toLocaleString('en-US')}</b></div><div class="smart-stat"><span>${esc(t('smartGold'))}</span><b>${smart.length}</b></div></div>`;
   }
-  async function fetchSmartKlines(symbol,tf='5m'){ return fetchKlines('binance',symbol,tf,80); }
+  async function fetchSmartKlines(symbol,tf='5m',provider='binance'){ return fetchKlines(provider,symbol,tf,80); }
   async function smartScan(){
     if(state.smartScan.running)return;
     state.smartScan={...state.smartScan,running:true,results:[],universe:0,stage1:0,deepVerified:0,startedAt:Date.now(),error:'',lastUpdated:0};
@@ -1044,7 +1064,7 @@
       const verified=[];
       for(let i=0;i<initial.length;i+=3){
         const batch=initial.slice(i,i+3);
-        const rr=await Promise.allSettled(batch.map(async x=>{const rows=await fetchSmartKlines(x.symbol,'5m');if(!rows?.length)return null;const f=coreFeatures(rows);return smartGatePassFeatures(f,x)?{ticker:x,rows,f}:null;}));
+        const rr=await Promise.allSettled(batch.map(async x=>{const rows=await fetchSmartKlines(x.symbol,'5m',x.provider||'binance');if(!rows?.length)return null;const f=coreFeatures(rows);return smartGatePassFeatures(f,x)?{ticker:x,rows,f}:null;}));
         rr.forEach(v=>{if(v.status==='fulfilled'&&v.value)verified.push(v.value);});
         smartStage(smartText('smartKlineStage',{n:verified.length}),24+Math.round(((Math.min(i+3,initial.length)/initial.length)||1)*30),'busy');
         await sleep(70);
@@ -1054,7 +1074,7 @@
       const deep=[];
       for(let i=0;i<top.length;i+=SMART_SCAN.maxDeep){
         const batch=top.slice(i,i+SMART_SCAN.maxDeep);
-        const rr=await Promise.allSettled(batch.map(x=>deepAnalyze('binance',x.ticker.symbol,'5m',{withFlow:true})));
+        const rr=await Promise.allSettled(batch.map(x=>deepAnalyze(x.ticker.provider||'binance',x.ticker.symbol,'5m',{withFlow:true})));
         rr.forEach(v=>{if(v.status==='fulfilled')deep.push(v.value);});
         smartStage(t('smartDeepStage'),56+Math.round(((Math.min(i+SMART_SCAN.maxDeep,top.length)/Math.max(top.length,1))||1)*38),'busy');
       }
