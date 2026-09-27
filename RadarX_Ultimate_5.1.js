@@ -2191,6 +2191,7 @@ function renderResultsCenterWithContinuous(){
     refreshSentiment();loadRiskCalendar();
     setTimeout(()=>scan().catch(e=>showBootError(e,'initial-scan')),180);
     if($('analysisSymbol').value&&$('analysisSymbol').value.trim()){}
+    window.dispatchEvent(new CustomEvent('radarx:ready',{detail:{version:'5.1-stable',at:Date.now()}}));
     }catch(e){
       showBootError(e,'init');
       try{markLiveData('error','startup');}catch{}
