@@ -755,15 +755,15 @@ body.rx-subscription-locked #toast{z-index:9200}
   }
   async function fetchJSON(url,{timeout=6000,retries=1,backoff=450}={}){
     const isAbsolute=/^https:\/\//i.test(url);
-    const isInternalProxy=typeof url==='string' && url.startsWith('/api/binance?');
-    if(!isAbsolute && !isInternalProxy) throw new Error('Only HTTPS URLs or the RadarX Binance proxy are allowed');
+    const isInternalRoute=typeof url==='string' && url.startsWith('/api/');
+    if(!isAbsolute && !isInternalRoute) throw new Error('Only HTTPS URLs or same-origin RadarX API routes are allowed');
     const requestUrl=isAbsolute?url:new URL(url,location.href).toString();
     const proxiedUrl=(()=>{try{
       const u=new URL(requestUrl,location.href),h=u.hostname,p=u.pathname+u.search;
+      if(new URL(requestUrl,location.href).origin===location.origin && u.pathname.startsWith('/api/')) return requestUrl;
       const map=h==='www.okx.com'?'okx':h==='api.bybit.com'?'bybit':(h==='api.gateio.ws'||h==='api.gate.us')?'gate':h==='api.exchange.coinbase.com'?'coinbase':h==='api.coingecko.com'?'coingecko':h==='fapi.binance.com'?'binanceFutures':null;
       return map?('/api/market?provider='+encodeURIComponent(map)+'&path='+encodeURIComponent(p)):requestUrl;
     }catch{return requestUrl;}})();
-    if(!/^https:\/\//i.test(url)) throw new Error('Only absolute HTTPS URLs are allowed');
     if(navigator.onLine===false) throw new Error('OFFLINE');
     let last=null;
     for(let attempt=0; attempt<=Math.max(0,retries); attempt++){
