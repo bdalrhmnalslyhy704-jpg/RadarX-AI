@@ -48,7 +48,8 @@ export default async function handler(req,res){
   // Best-effort public fallback for visibility only. Yahoo explicitly states its
   // finance data is informational; therefore this is never labeled as a
   // trading-grade real-time source.
-  const yahooSymbol=symbol==='XAU/USD'?'GC=F':symbol==='XAG/USD'?'SI=F':'GC=F';
+  const yahooMap={'XAU/USD':'GC=F','XAG/USD':'SI=F','WTI/USD':'CL=F','BRENT/USD':'BZ=F','EUR/USD':'EURUSD=X','USD/JPY':'JPY=X','DXY':'DX-Y.NYB'};
+  const yahooSymbol=yahooMap[symbol]||'GC=F';
   try{
     const d=await getJSON(YAHOO+'/'+encodeURIComponent(yahooSymbol)+'?range=1d&interval=1m');
     const r=d?.chart?.result?.[0], q=r?.meta?.regularMarketPrice;
