@@ -417,8 +417,7 @@ body.rx-subscription-locked #toast{z-index:9200}
 
 
 
-<script>
-(() => {
+<script>(() => {
   'use strict';
 
   // RadarX Ultimate 5.1 — Performance + Robust Live Radar Edition
@@ -755,6 +754,10 @@ body.rx-subscription-locked #toast{z-index:9200}
     return tf;
   }
   async function fetchJSON(url,{timeout=6000,retries=1,backoff=450}={}){
+    const isAbsolute=/^https:\/\//i.test(url);
+    const isInternalProxy=typeof url==='string' && url.startsWith('/api/binance?');
+    if(!isAbsolute && !isInternalProxy) throw new Error('Only HTTPS URLs or the RadarX Binance proxy are allowed');
+    const requestUrl=isAbsolute?url:new URL(url,location.href).toString();
     if(!/^https:\/\//i.test(url)) throw new Error('Only absolute HTTPS URLs are allowed');
     if(navigator.onLine===false) throw new Error('OFFLINE');
     let last=null;
@@ -763,7 +766,7 @@ body.rx-subscription-locked #toast{z-index:9200}
       const timer=setTimeout(()=>ctrl.abort(),timeout);
       const started=performance.now();
       try{
-        const r=await fetch(url,{method:'GET',headers:{Accept:'application/json'},credentials:'omit',cache:'no-store',redirect:'follow',signal:ctrl.signal});
+        const r=await fetch(requestUrl,{method:'GET',headers:{Accept:'application/json'},credentials:'omit',cache:'no-store',redirect:'follow',signal:ctrl.signal});
         const latency=Math.round(performance.now()-started); if($('apiLatency'))$('apiLatency').textContent=`${latency} ms`;
         if(r.status===429) throw new Error('RATE_LIMIT_429');
         if(!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -825,7 +828,8 @@ body.rx-subscription-locked #toast{z-index:9200}
 
   const BINANCE_REST_BASES=['https://data-api.binance.vision','https://api.binance.com','https://api-gcp.binance.com','https://api1.binance.com','https://api2.binance.com','https://api3.binance.com','https://api4.binance.com']; let binanceRestPreferred=0;
   const BINANCE_WS_BASES=['wss://data-stream.binance.vision/stream','wss://stream.binance.com:9443/stream','wss://stream.binance.com/stream'];
-  function binanceUrls(path){const preferred=BINANCE_REST_BASES[binanceRestPreferred]||BINANCE_REST_BASES[0];return [preferred,...BINANCE_REST_BASES.filter((_,i)=>i!==binanceRestPreferred)].map(base=>base+path);}
+  function binanceProxyUrl(path){return '/api/binance?path='+encodeURIComponent(path);}
+  function binanceUrls(path){const preferred=BINANCE_REST_BASES[binanceRestPreferred]||BINANCE_REST_BASES[0];return [binanceProxyUrl(path),preferred,...BINANCE_REST_BASES.filter((_,i)=>i!==binanceRestPreferred)].map(base=>base.startsWith('/api/binance?')?base:base+path);}
   function saveLiveSnapshot(){ try{const items=Object.values(state.marketsBySymbol||{}).filter(x=>x&&x.symbol).sort((a,b)=>(b.quoteVolume||0)-(a.quoteVolume||0)).slice(0,3000);if(items.length){const ts=Date.now();state.multiRadar.cacheAt=ts;writeJSON('radarx_live_snapshot_v43',{ts,items});}}catch{} }
   function loadLiveSnapshot(){ try{const d=readJSON('radarx_live_snapshot_v43',null);if(!d?.items?.length)return false;const age=Date.now()-num(d.ts,0);if(age<0||age>RADAR_FILTERS.cachedMarketMaxAgeMs)return false;const cachedAt=num(d.ts,Date.now());state.multiRadar.cacheAt=cachedAt;state.marketsBySymbol={};d.items.forEach(raw=>{const x={...raw,receivedAt:num(raw.receivedAt,cachedAt),dataSource:'cache'};if(x.symbol)state.marketsBySymbol[x.symbol]=x;});state.markets=Object.values(state.marketsBySymbol);markLiveData('cached',`${t('liveCached')} · ${formatDataAge(cachedAt)}`);return true;}catch{return false;} }
   function normalizeTicker(x, provider){
@@ -845,7 +849,7 @@ body.rx-subscription-locked #toast{z-index:9200}
   }
   async function fetchTicker(provider,symbol){
     const sym=symbolFor(provider,symbol);
-    if(provider==='binance') return normalizeTicker(await firstJSON(binanceUrls(`/api/v3/ticker/24hr?symbol=${encodeURIComponent(symbol)}`),{timeout:5000,retries:1,maxUrls:3}).then(data=>normalizeTicker(data,provider)));
+    if(provider==='binance'){const d=await firstJSON(binanceUrls(`/api/v3/ticker/24hr?symbol=${encodeURIComponent(symbol)}`),{timeout:5000,retries:1,maxUrls:4});return normalizeTicker(d,provider);}
     if(provider==='okx'){const d=await fetchJSON(`https://www.okx.com/api/v5/market/ticker?instId=${encodeURIComponent(sym)}`);return d.data?.[0]?normalizeTicker(d.data[0],provider):null}
     if(provider==='bybit'){const d=await fetchJSON(`https://api.bybit.com/v5/market/tickers?category=spot&symbol=${encodeURIComponent(symbol)}`);return d.result?.list?.[0]?normalizeTicker(d.result.list[0],provider):null}
     if(provider==='gate'){const d=await fetchJSON(`https://api.gateio.ws/api/v4/spot/tickers?currency_pair=${encodeURIComponent(sym)}`);return d?.[0]?normalizeTicker(d[0],provider):null}
