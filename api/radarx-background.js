@@ -233,9 +233,21 @@ async function scan(){
   for(const x of rows){
     if(x.score<CONFIG.alertScore||x.trapRisk>=CONFIG.alertTrap)continue;
     if(!['PRE-BREAKOUT','BREAKOUT'].includes(x.phase))continue;
-    const key=x.symbol, prior=memory.alertMap.get(key)||0;
-    if(now-prior<CONFIG.alertCooldownMs)continue;
-    memory.alertMap.set(key,now);
+    const key='radarx:alert:'+x.symbol;
+    let recent=false;
+    if(kvConfig()){
+      try{
+        const raw=await kv('get',[key]);
+        const ts=n(raw,0);
+        recent=ts>0&&now-ts<CONFIG.alertCooldownMs;
+      }catch{}
+    }else{
+      const prior=memory.alertMap.get(x.symbol)||0;
+      recent=now-prior<CONFIG.alertCooldownMs;
+    }
+    if(recent)continue;
+    if(kvConfig())await kvSet(key,String(now),Math.ceil(CONFIG.alertCooldownMs/1000)).catch(()=>{});
+    memory.alertMap.set(x.symbol,now);
     alerts.push(x);
     await sendAlert(x).catch(()=>{});
     if(alerts.length>=3)break;
