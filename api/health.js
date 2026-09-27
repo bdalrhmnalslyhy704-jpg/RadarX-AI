@@ -36,8 +36,13 @@ export default async function handler(req,res){
   res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');
   if(req.method==='OPTIONS')return res.status(204).end();
   if(req.method!=='GET')return res.status(405).json({ok:false,error:'METHOD_NOT_ALLOWED'});
+  const checks=CHECKS.slice();
+  const twelveKey=String(process.env.TWELVEDATA_API_KEY||'').trim();
+  const metalsKey=String(process.env.METALS_API_KEY||'').trim();
+  if(twelveKey)checks.push({id:'twelvedata',label:'Twelve Data',url:'https://api.twelvedata.com/price?symbol=XAU/USD&apikey='+encodeURIComponent(twelveKey),family:'metals'});
+  if(metalsKey)checks.push({id:'metalsapi',label:'Metals-API',url:'https://api.metals-api.com/api/latest?access_key='+encodeURIComponent(metalsKey)+'&base=USD&symbols=XAU',family:'metals'});
   const started=Date.now();
-  const results=await Promise.all(CHECKS.map(probe));
+  const results=await Promise.all(checks.map(probe));
   const crypto=results.filter(x=>x.family==='crypto');
   const summary={
     checkedAt:Date.now(),
