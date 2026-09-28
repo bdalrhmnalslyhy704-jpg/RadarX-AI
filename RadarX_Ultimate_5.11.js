@@ -379,12 +379,11 @@
     return firstJSON(list,{timeout,retries,maxUrls:list.length});
   }
 
-  const BINANCE_REST_BASES=['/api/binance','/api/bn','/api/bn2','/api/bn3']; let binanceRestPreferred=0;
+  const BINANCE_REST_BASES=['/api/binance']; let binanceRestPreferred=0;
   const BINANCE_WS_BASES=['wss://data-stream.binance.vision/stream','wss://stream.binance.com:9443/stream','wss://stream.binance.com/stream'];
-  // All Binance REST traffic stays same-origin. Relay first; rewrites are fallbacks.
+  // Browser REST uses one same-origin RadarX relay. The server relay owns upstream failover/cache.
   function binanceProxyUrl(path){return '/api/binance?path='+encodeURIComponent(path);}
-  function binanceRewriteUrl(base,path){return base+path.replace(/^\/api\//,'/');}
-  function binanceUrls(path){return [binanceProxyUrl(path),binanceRewriteUrl('/api/bn',path),binanceRewriteUrl('/api/bn2',path),binanceRewriteUrl('/api/bn3',path)];}
+  function binanceUrls(path){return [binanceProxyUrl(path)];}
 
   async function ensureBinanceRelay(){
     const urls=binanceUrls('/api/v3/ping');
