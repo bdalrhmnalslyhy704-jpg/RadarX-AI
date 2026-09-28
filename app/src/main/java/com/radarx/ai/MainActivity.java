@@ -15,6 +15,7 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -209,13 +210,13 @@ public final class MainActivity extends Activity {
     }
 
     private void hideLoading() {
-        if (statusView != null) statusView.setVisibility(TextView.GONE);
+        if (statusView != null) statusView.setVisibility(View.GONE);
         View parent = statusView == null ? null : (View) statusView.getParent();
         if (parent instanceof FrameLayout) {
             FrameLayout frame = (FrameLayout) parent;
             if (frame.getChildCount() > 0) {
                 View last = frame.getChildAt(frame.getChildCount() - 1);
-                if (last instanceof ProgressBar) last.setVisibility(ProgressBar.GONE);
+                if (last instanceof ProgressBar) last.setVisibility(View.GONE);
             }
         }
     }
@@ -224,7 +225,7 @@ public final class MainActivity extends Activity {
         if (statusView == null) return;
         statusView.setText(message + "\n\nأعد تشغيل التطبيق للمحاولة مرة أخرى.");
         statusView.setTextColor(Color.rgb(255, 150, 165));
-        statusView.setVisibility(TextView.VISIBLE);
+        statusView.setVisibility(View.VISIBLE);
     }
 
     @Override public void onBackPressed() {
