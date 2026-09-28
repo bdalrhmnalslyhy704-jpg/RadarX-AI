@@ -2,7 +2,9 @@
 (function(){
   'use strict';
   const KEY='radarx_pulse_calibration_v2';
-  const CFG={horizonBars:6,minMoveATR:.22,maxPending:18,minSamples:6};
+  const CFG={horizonBars:6,minMoveATR:.22,maxPending:18,minSamples:6,cacheMs:350};
+  let lastEval={key:'',at:0,value:null};
+  let cachedCalibration=null;
   const clamp=(x,a=0,b=100)=>Math.max(a,Math.min(b,Number.isFinite(Number(x))?Number(x):50));
   const num=(x,d=0)=>Number.isFinite(Number(x))?Number(x):d;
   const sma=(a,p)=>{const x=a.slice(-p);return x.length?x.reduce((s,v)=>s+num(v),0)/x.length:0;};
@@ -19,9 +21,10 @@
   const obv=rows=>{let v=0;const out=[];for(let i=1;i<rows.length;i++){if(num(rows[i].c)>num(rows[i-1].c))v+=num(rows[i].v);else if(num(rows[i].c)<num(rows[i-1].c))v-=num(rows[i].v);out.push(v);}return out;};
   const macd=a=>{const m=[];for(let i=0;i<a.length;i++)m.push(ema(a.slice(0,i+1),12)-ema(a.slice(0,i+1),26));const line=m.at(-1)||0,sig=ema(m.slice(-60),9);return{line,signal:sig,hist:line-sig,slope:slope(m,5)};};
   const getStore=()=>{try{return JSON.parse(localStorage.getItem(KEY)||'{}');}catch{return{};}};
-  const putStore=x=>{try{localStorage.setItem(KEY,JSON.stringify(x));}catch{}};
+  const putStore=x=>{try{localStorage.setItem(KEY,JSON.stringify(x));}catch{}cachedCalibration=x;};
   const emptyCal=()=>{const names=['trend','structure','compression','volume','momentum','flow','whale','mtf','relative','liquidity','wyckoff'];return Object.fromEntries(names.map(k=>[k,{a:4,b:4,n:0}]))};
-  const calibration=()=>{const x=getStore();if(!x.components)x.components=emptyCal();if(!Array.isArray(x.pending))x.pending=[];return x;};
+  const calibration=()=>{if(cachedCalibration)return cachedCalibration;const x=getStore();if(!x.components)x.components=emptyCal();if(!Array.isArray(x.pending))x.pending=[];cachedCalibration=x;return x;};
+  const invalidateCalibration=()=>{cachedCalibration=null;};
   const reliability=(x)=>clamp((num(x.a,4)/(num(x.a,4)+num(x.b,4)))*100,25,75);
   function resolveCalibration(symbol,tf,closedRows,dir){
     if(!symbol||!closedRows?.length)return;
@@ -97,6 +100,29 @@
     const m=st.selected?.mtf;if(!m?.rows?.length)return{score:50,agreement:0};
     return{score:clamp(num(m.consensusScore,50)),agreement:clamp(num(m.agreement,0))};
   }
+  function efficiencySignal(rows,p=20){
+    const c=rows.map(r=>num(r.c));if(c.length<p+1)return{score:50,er:0};
+    const net=Math.abs(c.at(-1)-c.at(-1-p)),noise=c.slice(-p-0).reduce(function(s,v,i,a){return i?s+Math.abs(v-a[i-1]):s;},0)||1;
+    const er=clamp(net/noise*100);
+    const dir=c.at(-1)>c.at(-1-p)?1:-1;
+    return{score:clamp(50+dir*(er-35)*1.15),er:er};
+  }
+  function donchianSignal(rows,p=20){
+    if(rows.length<p+2)return{score:50,breakout:0};
+    const x=rows.slice(-p-1,-1),hi=Math.max(...x.map(r=>num(r.h))),lo=Math.min(...x.map(r=>num(r.l))),last=rows.at(-1),a=atr(rows,14)||num(last.c)*.004;
+    const pos=hi>lo?(num(last.c)-lo)/(hi-lo):.5;
+    const breakout=hi?(num(last.c)-hi)/Math.max(a,hi*.001)*100:0;
+    return{score:clamp(45+pos*40+(breakout>0?20:breakout>-1?8:0)),breakout:breakout};
+  }
+  function priceVolumeDivergence(rows){
+    if(rows.length<25)return{score:50,div:0};
+    const c=rows.map(r=>num(r.c)),v=rows.map(r=>num(r.v));
+    const priceSlope=slope(c,10),volSlope=slope(v,10);
+    const priceNorm=priceSlope/Math.max(1,atr(rows,14)||c.at(-1)*.004),volNorm=volSlope/Math.max(1,sma(v.slice(-10),10));
+    const same=priceNorm*volNorm,div=same<0?Math.abs(priceNorm-volNorm):0;
+    return{score:clamp(50+(same>0?Math.sign(priceNorm)*Math.min(30,Math.abs(priceNorm)*8):0)-Math.sign(priceNorm)*Math.min(18,div*6)),div:div};
+  }
+
   function relativeSignal(st,mom){
     const s=st.selected||{},btc=st.marketsBySymbol?.BTCUSDT,price=s.priceChangePercent,btc24=btc?.priceChangePercent;
     const edge=Number.isFinite(Number(price))&&Number.isFinite(Number(btc24))?num(price)-num(btc24):mom.rr15;
@@ -131,14 +157,17 @@
     return w;
   }
   function evaluate(rows,st){
+    const symbol=st.selected?.symbol||'',tf=st.selected?.timeframe||'5m',lastRow=rows.at(-1),cacheKey=symbol+'|'+tf+'|'+String(lastRow?.t||0)+'|'+String(lastRow?.c||0)+'|'+String(lastRow?.v||0);
+    if(lastEval.key===cacheKey&&performance.now()-lastEval.at<CFG.cacheMs)return lastEval.value;
     const closed=rows.filter(r=>r.closed!==false&&n(r.c)>0);if(closed.length<28)return{score:50,confidence:0,coverage:0,label:'INSUFFICIENT',parts:{}};
     const symbol=st.selected?.symbol,tf=st.selected?.timeframe||'5m';resolveCalibration(symbol,tf,closed,1);
-    const reg=marketRegime(closed,st),mom=momentumSignal(closed),vol=volumeSignal(closed),comp=compressionSignal(closed,reg),fl=flowSignal(st),mtf=mtfSignal(st),rel=relativeSignal(st,mom),liq=liquiditySignal(st),wy=wyckoffSignal(closed,vol),str=structureSignal(closed);
+    const reg=marketRegime(closed,st),mom=momentumSignal(closed),vol=volumeSignal(closed),comp=compressionSignal(closed,reg),fl=flowSignal(st),mtf=mtfSignal(st),rel=relativeSignal(st,mom),liq=liquiditySignal(st),wy=wyckoffSignal(closed,vol),str=structureSignal(closed),eff=efficiencySignal(closed),don=donchianSignal(closed),pvd=priceVolumeDivergence(closed);
     const last=closed.at(-1),a=atr(closed,14)||num(last.c)*.004,e20=ema(closed.map(r=>num(r.c)).slice(-100),20),e50=ema(closed.map(r=>num(r.c)).slice(-120),50),adxV=reg.adx;
     const trend=clamp(50+(e20-e50)/Math.max(a,num(last.c)*.001)*22+(adxV-20)*.8);
-    const comps={trend,structure:str,compression:comp.score,volume:vol.score,momentum:mom.score,flow:fl.score,whale:fl.whale,mtf:mtf.score,relative:rel.score,liquidity:liq.score,wyckoff:wy.score};
-    const w=weights(reg),cal=calibration();
-    let totalW=0,score=0;Object.entries(comps).forEach(([k,v])=>{const reli=reliability(cal.components?.[k]||{a:4,b:4});const factor=.75+reli/200;totalW+=w[k]*factor;score+=v*w[k]*factor;});score/=Math.max(.001,totalW);
+    const comps={trend,structure:str,compression:comp.score,volume:vol.score,momentum:mom.score,flow:fl.score,whale:fl.whale,mtf:mtf.score,relative:rel.score,liquidity:liq.score,wyckoff:wy.score,efficiency:eff.score,donchian:don.score,priceVolume:pvd.score};
+    const w=Object.assign(weights(reg),{efficiency:.05,donchian:.05,priceVolume:.04});
+    const cal=calibration();
+    let totalW=0,score=0;Object.entries(comps).forEach(([k,v])=>{const baseW=num(w[k],.03),reli=reliability(cal.components?.[k]||{a:4,b:4}),factor=.75+reli/200;totalW+=baseW*factor;score+=v*baseW*factor;});score/=Math.max(.001,totalW);
     const signs=Object.values(comps).map(v=>v>58?1:v<42?-1:0).filter(Boolean),bull=signs.filter(x=>x>0).length,bear=signs.filter(x=>x<0).length,conflict=signs.length?Math.min(bull,bear)/signs.length*100:0;
     const trap=trapPenalty(st),breadth=reg.breadth;
     const breadthGate=reg.type==='BROAD_MOVE'?((breadth-50)*.10):0;
@@ -146,7 +175,7 @@
     const readinessBoost=(reg.type==='SQUEEZE'&&vol.rv>1.35&&comp.near>62)?7:0;
     score=clamp(score+breadthGate+readinessBoost-trap-conflictPenalty);
     const reliabilityAvg=Object.keys(comps).reduce((a,k)=>a+reliability(cal.components?.[k]||{a:4,b:4}),0)/Object.keys(comps).length;
-    const coverage=[st.selected?.flow,st.selected?.mtf,st.markets?.length,rows.length>=60,st.selected?.fakeout].filter(Boolean).length/5*100;
+    const coverage=[st.selected?.flow,st.selected?.mtf,st.markets?.length,rows.length>=60,st.selected?.fakeout,eff.score,don.score,pvd.score].filter(v=>v!==null&&v!==undefined).length/8*100;
     const confidence=clamp(coverage*.42+reliabilityAvg*.23+Math.abs(score-50)*.72-conflict*.08-trap*.25);
     let label='NEUTRAL';if(score>=82&&confidence>=68)label='PRE-BREAKOUT';else if(score>=72&&confidence>=56)label='BUILDING';else if(score<=30)label='HIGH RISK / WEAK';else if(score<=42)label='WEAK';
     const dir=score>=50?1:-1;
@@ -165,9 +194,13 @@
     if(fl.whale>=68)reasons.push('Whale-flow confirmation');
     if(mtf.score>=68&&mtf.agreement>=60)reasons.push('MTF consensus');
     if(wy.spring||wy.obvUp)reasons.push('Wyckoff accumulation proxy');
+    if(eff.er>55)reasons.push('High market efficiency / directed move');
+    if(don.score>70)reasons.push('Donchian breakout pressure');
+    if(pvd.score>60)reasons.push('Price/volume confirmation');
     if(trap>0)reasons.push('⚠ Trap penalty applied');
     const conflictsList=[];Object.entries(comps).forEach(([k,v])=>{if(v<35&&score>65)conflictsList.push(k+' conflict');if(v>72&&score<45)conflictsList.push(k+' bullish vs regime');});
-    return{score,confidence,coverage,label,direction:dir>0?'BULLISH':'BEARISH',regime:reg.type,regimeStats:reg,parts:comps,weights:w,calibration:Object.fromEntries(Object.entries(cal.components||{}).map(([k,v])=>[k,{reliability:reliability(v),samples:num(v.n)}])),conflict:conflict,trapPenalty:trap,reasons,reasonsText:reasons.slice(0,6),conflicts:conflictsList,metrics:{rsi:mom.rsi,rv:vol.rv,accel2:mom.accel2,bw:comp.bw,bwPercentile:comp.bwP,adx:adxV,whale:fl.whale,mtf:mtf.score,mtfAgreement:mtf.agreement,breadth:breadth,relative:rel.edge,spread:liq.spread,vwapDistance:((num(last.c)-vwap(closed))/Math.max(a,num(last.c)*.001))*100};
+    const result={score,confidence,coverage,label,direction:dir>0?'BULLISH':'BEARISH',regime:reg.type,regimeStats:reg,parts:comps,weights:w,calibration:Object.fromEntries(Object.entries(cal.components||{}).map(([k,v])=>[k,{reliability:reliability(v),samples:num(v.n)}])),conflict:conflict,trapPenalty:trap,reasons,reasonsText:reasons.slice(0,8),conflicts:conflictsList,metrics:{rsi:mom.rsi,rv:vol.rv,accel2:mom.accel2,bw:comp.bw,bwPercentile:comp.bwP,adx:adxV,whale:fl.whale,mtf:mtf.score,mtfAgreement:mtf.agreement,breadth:breadth,relative:rel.edge,spread:liq.spread,vwapDistance:((num(last.c)-vwap(closed))/Math.max(a,num(last.c)*.001))*100,efficiency:eff.er,donchian:don.score,priceVolume:pvd.score}};
+    lastEval={key:cacheKey,at:performance.now(),value:result};return result;
   }
-  window.RadarXPulseFusion={evaluate,calibration,clearCalibration:function(){try{localStorage.removeItem(KEY);}catch{}},version:'2.0-regime-adaptive'};
+  window.RadarXPulseFusion={evaluate,calibration,clearCalibration:function(){try{localStorage.removeItem(KEY);}catch{}invalidateCalibration();lastEval={key:'',at:0,value:null};},version:'3.0-fusion-adaptive'};
 })();
