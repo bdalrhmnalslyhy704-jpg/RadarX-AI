@@ -1396,14 +1396,14 @@
   function smartPreflightRank(x){
     return x?num(x.score,50)*.58+num(x.smartTickerScore,50)*.24+num(x.proximity,50)*.08+num(x.volume,50)*.10:-Infinity;
   }
-  async function fetchSmartMTFConsensus(symbol,r1,r5){
+  async function fetchSmartMTFConsensus(symbol,r1,r5,bulk={}){
     const tfs=['1m','5m','15m','1h'],weights={"1m":0.10,"5m":0.20,"15m":0.30,"1h":0.40};
     const seed=[r1,r5];
     const settled=await Promise.allSettled([
       Promise.resolve(seed[0]),
       Promise.resolve(seed[1]),
-      fetchKlines('binance',symbol,'15m',90),
-      fetchKlines('binance',symbol,'1h',90)
+      (Array.isArray(bulk.rows15m)&&bulk.rows15m.length)?Promise.resolve(bulk.rows15m):fetchKlines('binance',symbol,'15m',90),
+      (Array.isArray(bulk.rows1h)&&bulk.rows1h.length)?Promise.resolve(bulk.rows1h):fetchKlines('binance',symbol,'1h',90)
     ]);
     const rows=[];
     settled.forEach(function(r,i){
@@ -1428,9 +1428,13 @@
       const r5=(Array.isArray(x.rows)&&x.rows.length)?x.rows:(Array.isArray(x.rows5m)&&x.rows5m.length?x.rows5m:await fetchKlines('binance',symbol,'5m',144));
       const pre=smartPreflight(r1,r5,x);
       if(!pre)return null;
+      const bulk=x._deepBulk||{};
+      const flowPromise=(bulk.depth&&bulk.trades)
+        ? Promise.resolve([bulk.depth,bulk.trades])
+        : Promise.all([fetchDepth('binance',symbol,100),fetchTrades('binance',symbol,500)]).catch(function(){return null;});
       const pack=await Promise.all([
-        Promise.all([fetchDepth('binance',symbol,100),fetchTrades('binance',symbol,500)]).catch(function(){return null;}),
-        fetchSmartMTFConsensus(symbol,r1,r5).catch(function(){return null;})
+        flowPromise,
+        fetchSmartMTFConsensus(symbol,r1,r5,bulk).catch(function(){return null;})
       ]);
       const fp=pack[0],mtf=pack[1],rows=r5.filter(function(r){return r.closed!==false;});
       const f=pre.f5,structure=detectStructure(rows),flow=fp?flowFromData(fp[0],fp[1]):null;
@@ -1550,7 +1554,17 @@
       }
       mid.sort(function(a,b){return smartPreflightRank(b)-smartPreflightRank(a);});
       const topMid=mid.slice(0,SMART_SCAN.maxDeep);
-      smartStage('مرحلة 3: تحقيق جنائي سريع للـ '+topMid.length+' الأقوى — MTF + Order Flow + Whales + Traps…',56,'busy');
+      // Fast deep path: fetch all Order Flow + 15m/1h evidence for the top
+      // candidates in one server-side batch, then keep the exact same local
+      // scoring/trap/fusion code. Missing symbols transparently fall back to
+      // the original per-symbol requests.
+      try{
+        const symbols=topMid.map(x=>x.symbol).join(',');
+        const bulk=await fetchJSON('/api/radarx-smart-deep?symbols='+encodeURIComponent(symbols),{timeout:16000,retries:0});
+        const bySymbol=bulk?.ok?bulk.bySymbol||{}:{};
+        topMid.forEach(function(x){if(bySymbol[x.symbol])x._deepBulk=bySymbol[x.symbol];});
+        smartStage('مرحلة 3 السريعة: بوابة الأدلة جمعت العمق لـ '+Object.keys(bySymbol).length+'/'+topMid.length+' مرشحين…',58,'busy');
+      }catch{}
 
       const deep=[];
       for(let i=0;i<topMid.length;i+=SMART_SCAN.deepBatchSize){
