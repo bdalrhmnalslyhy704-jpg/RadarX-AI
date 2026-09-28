@@ -9,6 +9,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
+import android.view.Gravity;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -59,7 +60,7 @@ public final class MainActivity extends Activity {
         retryView.setText("إعادة الاتصال");
         retryView.setTextColor(Color.WHITE);
         retryView.setTextSize(13);
-        retryView.setGravity(View.TEXT_ALIGNMENT_CENTER);
+        retryView.setGravity(Gravity.CENTER);
         retryView.setPadding(18, 18, 18, 18);
         retryView.setVisibility(View.GONE);
         retryView.setOnClickListener(v -> loadApp(true));
