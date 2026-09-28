@@ -19,6 +19,78 @@
   const esc = (x) => String(x ?? '').replace(/[&<>'"]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[m]));
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+  // Native Android HTTP transport for Binance REST.
+  // This runs before the rest of the RadarX engine and intercepts only the
+  // local /api/binance route. All other fetch calls keep their original path.
+  (function installNativeBinanceHttp(){
+    try{
+      if(window.__RadarXNativeBinanceHttpInstalled)return;
+      if(!window.RadarXAndroid||!window.RadarXAndroid.startBinanceHttp)return;
+      window.__RadarXNativeBinanceHttpInstalled=true;
+      const originalFetch=window.fetch.bind(window);
+      const pending=new Map();
+      let pollTimer=null;
+
+      function decodeB64(b64){
+        if(!b64)return '';
+        try{
+          const raw=atob(String(b64));
+          const bytes=new Uint8Array(raw.length);
+          for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);
+          return new TextDecoder('utf-8').decode(bytes);
+        }catch{return '';}
+      }
+
+      function pump(){
+        try{
+          const raw=window.RadarXAndroid.pollBinanceHttp();
+          const rows=JSON.parse(raw||'[]');
+          rows.forEach(row=>{
+            const job=pending.get(String(row.id));
+            if(!job)return;
+            pending.delete(String(row.id));
+            const body=decodeB64(row.bodyB64||'');
+            const response=new Response(body,{
+              status:Number(row.status)||502,
+              headers:{
+                'Content-Type':String(row.mime||'application/json; charset=utf-8'),
+                'X-RadarX-Native-Route':String(row.route||'none'),
+                'Access-Control-Allow-Origin':'*'
+              }
+            });
+            job.resolve(response);
+          });
+        }catch{}
+        if(pending.size)pollTimer=setTimeout(pump,80);
+        else pollTimer=null;
+      }
+
+      function nativeEligible(input){
+        try{
+          const raw=typeof input==='string'?input:(input&&input.url);
+          const u=new URL(String(raw||''),location.href);
+          return u.origin===location.origin && u.pathname==='/api/binance';
+        }catch{return false;}
+      }
+
+      window.fetch=function(input,init){
+        if(!nativeEligible(input))return originalFetch(input,init);
+        try{
+          const raw=typeof input==='string'?input:(input&&input.url);
+          const u=new URL(String(raw||''),location.href);
+          const path=u.searchParams.get('path')||'';
+          const id=window.RadarXAndroid.startBinanceHttp(path);
+          if(!id)return Promise.reject(new Error('NATIVE_BINANCE_BRIDGE_UNAVAILABLE'));
+          const promise=new Promise((resolve,reject)=>pending.set(String(id),{resolve,reject}));
+          if(!pollTimer)pump();
+          return promise;
+        }catch(e){
+          return Promise.reject(e);
+        }
+      };
+    }catch{}
+  })();
+
   const KEYS = {
     settings: 'radarx2_settings',
     alerts: 'radarx2_alerts',
@@ -389,10 +461,9 @@
   function cloudBinanceProxyUrl(path){return RADARX_CLOUD_BINANCE_RELAY+'?path='+encodeURIComponent(path);}
   function binanceUrls(path){
     const local=binanceProxyUrl(path);
-    // Native APK: try the deployed RadarX cloud gateway first, then local
-    // Android relay/direct Binance failover. This minimizes regional DNS/blocking
-    // delays and keeps the WebView data path CORS-safe.
-    return isNativeRadarX()?[cloudBinanceProxyUrl(path),local]:[local];
+    // Native APK: the local URL is handled by the Native HTTP bridge. That
+    // bridge itself tries cloud relay first, then direct Binance endpoints.
+    return [local];
   }
 
   // Native WebSocket bridge. One Android OkHttp hub owns the sockets; JS only
