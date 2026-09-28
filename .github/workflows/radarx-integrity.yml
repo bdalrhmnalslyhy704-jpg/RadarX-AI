@@ -97,7 +97,7 @@ jobs:
           const core=fs.readFileSync('RadarX_Ultimate_5.11.js','utf8');
           const pro=fs.readFileSync('RadarX_ProEngine_5.11.js','utf8');
           const runtime=fs.readFileSync('radarx-runtime-6.0.js','utf8');
-          for(const x of ['const SMART_SCAN=','/api/radarx-smart?symbols=','fetchSmartMTFConsensus(','deepBatchSize']){
+          for(const x of ['const SMART_SCAN=','/api/radarx-smart?symbols=','/api/radarx-smart-deep?symbols=','fetchSmartMTFConsensus(','deepBatchSize']){
             if(!core.includes(x))throw new Error('smart-scan acceleration guard missing: '+x);
           }
           for(const x of ['cycleMs:7000','maxDeepPerCycle:1','await Promise.allSettled(selected.map']){
@@ -121,6 +121,7 @@ jobs:
           curl --fail --silent --show-error --retry 2 --max-time 25 "$BASE/api/radarx-onchain?symbols=BTCUSDT" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(j.ok!==true||!j.onchainBySymbol)process.exit(1);console.log('On-chain endpoint OK');})"
           curl --fail --silent --show-error --retry 2 --max-time 25 "$BASE/api/radarx-social?symbols=BTCUSDT" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(j.ok!==true||!j.socialBySymbol)process.exit(1);console.log('Social endpoint OK');})"
           curl --fail --silent --show-error --retry 2 --max-time 30 "$BASE/api/radarx-smart?symbols=BTCUSDT%2CETHUSDT" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(j.ok!==true||!j.bySymbol?.BTCUSDT||!j.bySymbol?.ETHUSDT)process.exit(1);console.log('Smart bulk endpoint OK',j.returned,'symbols',j.latencyMs+'ms');})"
+          curl --fail --silent --show-error --retry 2 --max-time 35 "$BASE/api/radarx-smart-deep?symbols=BTCUSDT%2CETHUSDT" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(j.ok!==true||!j.bySymbol?.BTCUSDT||!j.bySymbol?.ETHUSDT||!j.bySymbol.BTCUSDT.rows15m||!j.bySymbol.BTCUSDT.rows1h)process.exit(1);console.log('Smart deep bulk endpoint OK',j.returned,'symbols',j.latencyMs+'ms');})"
 
       - name: Live health endpoint smoke test
         shell: bash
