@@ -2577,8 +2577,21 @@ function renderResultsCenterWithContinuous(){
       document.getElementById('radarxBootReload')?.addEventListener('click',()=>location.reload());
     }catch{}
   }
-  window.addEventListener('error',e=>showBootError(e.error||e.message,'runtime'));
-  window.addEventListener('unhandledrejection',e=>showBootError(e.reason,'promise'));
+  let bootFatalGate=true;
+  setTimeout(()=>{bootFatalGate=false;},15000);
+  window.addEventListener('error',e=>{
+    if(!bootFatalGate||window.RadarXCore)return;
+    const file=String(e.filename||'');
+    if(file && !/RadarX_(Ultimate_5\.1|ProEngine_5\.1)|radarx-runtime-6\.0/.test(file))return;
+    showBootError(e.error||e.message,'runtime');
+  });
+  window.addEventListener('unhandledrejection',e=>{
+    if(!bootFatalGate||window.RadarXCore)return;
+    const reason=e.reason;
+    const msg=String(reason?.message||reason||'');
+    if(/HTTP (429|502|503|504)|OFFLINE|RATE_LIMIT|AbortError|API unavailable|fetch/i.test(msg))return;
+    showBootError(reason,'promise');
+  });
 
   async function init(){
     try{
