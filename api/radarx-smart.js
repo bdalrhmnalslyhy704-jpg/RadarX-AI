@@ -60,8 +60,8 @@ export default async function handler(req,res){
   const started=Date.now();
   const rows=await mapLimit(unique,8,async symbol=>{
     const [one,five]=await Promise.all([
-      fetchOne('/api/v3/klines?symbol='+encodeURIComponent(symbol)+'&interval=1m&limit=144'),
-      fetchOne('/api/v3/klines?symbol='+encodeURIComponent(symbol)+'&interval=5m&limit=96')
+      fetchOne('/api/v3/klines?symbol='+encodeURIComponent(symbol)+'&interval=1m&limit=96'),
+      fetchOne('/api/v3/klines?symbol='+encodeURIComponent(symbol)+'&interval=5m&limit=144')
     ]);
     return {symbol,rows1m:normalize(one),rows5m:normalize(five)};
   });
