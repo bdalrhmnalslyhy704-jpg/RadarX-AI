@@ -188,7 +188,7 @@
     ctx.strokeStyle='rgba(90,130,145,.18)';ctx.lineWidth=1;
     for(let j=1;j<6;j++){const y=pad.t+j*priceH/6;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(W-pad.r,y);ctx.stroke();}
     for(let j=0;j<5;j++){const x=pad.l+j*(W-pad.l-pad.r)/4;ctx.beginPath();ctx.moveTo(x,pad.t);ctx.lineTo(x,H-pad.b);ctx.stroke();}
-    const con=adaptiveConfluence(rows,st);
+    const con=window.RadarXPulseFusion?.evaluate(rows,st)||adaptiveConfluence(rows,st);
     const ema20=rows.map((_,i)=>ema(rows.slice(0,i+1).map(r=>n(r.c)).slice(-100),20));
     const ema50=rows.map((_,i)=>ema(rows.slice(0,i+1).map(r=>n(r.c)).slice(-120),50));
     const vw=vwap(rows),closes=rows.map(r=>n(r.c)),bbmid=sma(closes.slice(-20),20),bbs=std(closes.slice(-20)),bbu=bbmid+bbs*2,bbl=bbmid-bbs*2,vp=con.vp||volumeProfile(rows);
@@ -237,8 +237,8 @@
     const stateBadge=$('rxLiveState'),pulse=$('rxLivePulse'),ps=$('rxPulseScore'),mode=$('rxChartMode');
     if(stateBadge){stateBadge.textContent='● LIVE CANDLE';stateBadge.classList.add('on');}
     if(pulse){pulse.textContent='●';pulse.classList.add('pulse');}
-    if(ps)ps.textContent='RX Pulse '+Math.round(con.score)+' · '+con.label;
-    if(mode)mode.textContent='Binance WebSocket · '+(st.selected.timeframe||'5m')+' · '+Math.round(con.coverage)+'% evidence';
+    if(ps){ps.textContent='RX Pulse '+Math.round(con.score)+' · '+con.label;ps.dataset.regime=con.regime||'';ps.title=(con.reasonsText||[]).join(' · ')||('Regime: '+(con.regime||'NEUTRAL'));}
+    if(mode)mode.textContent='Binance WebSocket · '+(st.selected.timeframe||'5m')+' · '+(con.regime||'')+' · '+Math.round(con.coverage||0)+'% evidence';
     if(ps&&con.parts)ps.title='Trend '+Math.round(con.parts.trend)+' · Momentum '+Math.round(con.parts.momentum)+' · Volume '+Math.round(con.parts.volume)+' · ADX '+Math.round(con.parts.adx)+' · Microprice '+Math.round(con.parts.micro);
     syncTfButtons();
   }
