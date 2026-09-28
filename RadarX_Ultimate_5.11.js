@@ -2579,31 +2579,103 @@ function renderResultsCenterWithContinuous(){
     showBootError(reason,'promise');
   });
 
-  async function init(){
+  function rxSchedule(fn,delay=0){
+    if(typeof fn!=='function')return;
+    window.setTimeout(function(){
+      try{
+        if(window.requestIdleCallback)requestIdleCallback(()=>{try{fn();}catch{}},{timeout:Math.max(300,delay+350)});
+        else fn();
+      }catch{}
+    },Math.max(0,delay));
+  }
+  function rxCloseLiveSockets(){
+    try{if(state.ws?.ticker)state.ws.ticker.close(1000,'background');}catch{}
+    try{if(state.ws?.symbol)state.ws.symbol.close(1000,'background');}catch{}
+    if(state.multiRadar?.ws&&state.multiRadar.ws!==state.ws?.ticker){try{state.multiRadar.ws.close(1000,'background')}catch{}}
+    state.multiRadar.ws=null;
+  }
+
+  function init(){
     try{
       loadState();applyLanguage();renderProfile();renderMembership();bind();installPWA();appHealthy();
       Promise.resolve(consumeNativeEntitlement()).catch(()=>{});
-      Promise.resolve(checkSubscriptionStatus('startup')).catch(()=>{});window.addEventListener('online',()=>{appHealthy();if(!premiumIsUnlocked()){applySubscriptionGate('EXPIRED','expired');return;}state.continuous.mode='waiting';state.multiRadar.wsAttempt=0;connectMultiRadarWS();openTickerWS(0);clearTimeout(state.multiRadar.pollTimer);state.multiRadar.pollTimer=setTimeout(multiRadarPoll,200);continuousRadarCycle().catch(()=>{});if(state.markets.length&&!state.busy)scan();});window.addEventListener('offline',()=>{state.continuous.mode='offline';try{if(state.multiRadar.ws)state.multiRadar.ws.close(1000,'offline')}catch{}try{if(state.ws.ticker)state.ws.ticker.close(1000,'offline')}catch{}multiRadarSetBusy(false,state.markets.length?'cached':'offline');markLiveData(state.markets.length?'cached':'offline',t('dataAge'));renderResultsCenter();});markLiveData('waiting');renderMarkets();renderAlerts();if($('exchangeSelect')?.value==='binance')openTickerWS(0);renderSentiment();renderRiskCalendar([]);renderBriefing();renderPsychologyGuardian();renderResultsCenter();
-    if(state.currentSymbol){
-      const restored=state.deepRows.find(x=>x.symbol===state.currentSymbol)||state.smartScan.results.find(x=>x.symbol===state.currentSymbol)||null;
-      if(restored){state.selected={...restored};state.structure=restored.structure||((restored.rows?.length>=8)?detectStructure(restored.rows):null);renderStructurePanel(state.structure);renderActiveAssetHeader(state.currentSymbol,'restored');}
-      else if(state.marketsBySymbol?.[state.currentSymbol])renderActiveAssetHeader(state.currentSymbol,'restored');
-    }
-    heartbeat();startWSStaleMonitor();loadLiveSnapshot();startResilientMarketHeartbeat();ensureGlobalMarketsPanel();refreshGlobalMarkets().catch(()=>{});if(premiumIsUnlocked()){startMultiRadar();startContinuousRadar();}else{pausePremiumEngines();}
-    $('dashUniverse').textContent=state.markets.length?state.markets.length.toLocaleString('en-US'):'—';$('dashCandidates').textContent='—';$('dashEarly').textContent='—';$('dashTop').textContent='—';
-    if(state.markets.length){renderMarkets();renderSentiment(computeSentimentFromMarkets(state.markets,null));renderRadarMetrics(state.markets.length,state.deepRows||[]);}
-    $('briefingRefresh').onclick=()=>{refreshSentiment(true).finally(()=>renderBriefing());toast(state.markets.length?t('briefingUpdated'):t('noApi'));};
-    refreshSentiment();loadRiskCalendar();
-    setTimeout(()=>{try{renderMarkets();renderMultiRadar(false);}catch(e){}} ,350);
-    if($('analysisSymbol').value&&$('analysisSymbol').value.trim()){}
-    window.dispatchEvent(new CustomEvent('radarx:ready',{detail:{version:'6.0',at:Date.now()}}));
+      Promise.resolve(checkSubscriptionStatus('startup')).catch(()=>{});
+
+      window.addEventListener('online',()=>{
+        appHealthy();
+        if(!premiumIsUnlocked()){applySubscriptionGate('EXPIRED','expired');return;}
+        state.continuous.mode='waiting';
+        state.multiRadar.wsAttempt=0;
+        connectMultiRadarWS();
+        clearTimeout(state.multiRadar.pollTimer);
+        state.multiRadar.pollTimer=setTimeout(()=>multiRadarPoll().catch(()=>{}),450);
+        if(state.markets.length&&!state.busy)resilientMarketRefresh().catch(()=>{});
+      });
+      window.addEventListener('offline',()=>{
+        state.continuous.mode='offline';
+        rxCloseLiveSockets();
+        clearTimeout(state.multiRadar.pollTimer);
+        multiRadarSetBusy(false,state.markets.length?'cached':'offline');
+        markLiveData(state.markets.length?'cached':'offline',t('dataAge'));
+        renderResultsCenter();
+      });
+
+      markLiveData('waiting');
+      loadLiveSnapshot();
+      renderMarkets();
+      renderAlerts();
+      if($('exchangeSelect')?.value==='binance')openTickerWS(0);
+
+      if(state.currentSymbol){
+        const restored=state.deepRows.find(x=>x.symbol===state.currentSymbol)||state.smartScan.results.find(x=>x.symbol===state.currentSymbol)||null;
+        if(restored){
+          state.selected={...restored};
+          state.structure=restored.structure||((restored.rows?.length>=8)?detectStructure(restored.rows):null);
+          renderStructurePanel(state.structure);
+          renderActiveAssetHeader(state.currentSymbol,'restored');
+        }else if(state.marketsBySymbol?.[state.currentSymbol])renderActiveAssetHeader(state.currentSymbol,'restored');
+      }
+
+      heartbeat();
+      startWSStaleMonitor();
+      startResilientMarketHeartbeat();
+
+      $('dashUniverse').textContent=state.markets.length?state.markets.length.toLocaleString('en-US'):'—';
+      $('dashCandidates').textContent='—';
+      $('dashEarly').textContent='—';
+      $('dashTop').textContent='—';
+      $('briefingRefresh').onclick=()=>{refreshSentiment(true).finally(()=>renderBriefing());toast(state.markets.length?t('briefingUpdated'):t('noApi'));};
+
+      rxSchedule(()=>{
+        renderSentiment(state.markets.length?computeSentimentFromMarkets(state.markets,null):null);
+        renderRadarMetrics(state.markets.length,state.deepRows||[]);
+        renderBriefing();
+        renderPsychologyGuardian();
+        renderResultsCenter();
+      },120);
+
+      rxSchedule(()=>{
+        ensureGlobalMarketsPanel();
+        refreshGlobalMarkets().catch(()=>{});
+        refreshSentiment().catch(()=>{});
+        loadRiskCalendar().catch(()=>{});
+      },900);
+
+      rxSchedule(()=>{
+        if(premiumIsUnlocked()){startMultiRadar();startContinuousRadar();}
+        else{pausePremiumEngines();}
+        renderMultiRadar(true);
+      },450);
+
+      rxSchedule(()=>{renderMarkets();renderMultiRadar(false);},700);
+
+      window.dispatchEvent(new CustomEvent('radarx:ready',{detail:{version:'6.1',at:Date.now()}}));
     }catch(e){
       showBootError(e,'init');
       try{markLiveData('error','startup');}catch{}
     }
   }
-
-  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){warmAlertAudio();openTickerWS(0);connectMultiRadarWS();renderMultiRadar(false);continuousRadarCycle().catch(()=>{});}});
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){warmAlertAudio();openTickerWS(0);connectMultiRadarWS();renderMultiRadar(false);continuousRadarCycle().catch(()=>{});}else{rxCloseLiveSockets();state.continuous.mode='paused';multiRadarSetBusy(false,state.markets.length?'cached':'offline');}});
 
 
   // RadarX 5.1 integration surface: expose only existing, verified core primitives.
