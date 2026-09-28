@@ -95,9 +95,13 @@ jobs:
           node <<'NODE'
           const fs=require('fs');
           const core=fs.readFileSync('RadarX_Ultimate_5.11.js','utf8');
+          const pro=fs.readFileSync('RadarX_ProEngine_5.11.js','utf8');
           const runtime=fs.readFileSync('radarx-runtime-6.0.js','utf8');
-          for(const x of ['cycleMs:7000','maxDeepPerCycle:1','await Promise.allSettled(selected.map','/api/radarx-news?symbols=','/api/radarx-onchain?symbols=','/api/radarx-social?symbols=']){
-            if(!core.includes(x))throw new Error('core performance/feature guard missing: '+x);
+          for(const x of ['cycleMs:7000','maxDeepPerCycle:1','await Promise.allSettled(selected.map']){
+            if(!core.includes(x))throw new Error('core performance guard missing: '+x);
+          }
+          for(const x of ['/api/radarx-news?symbols=','/api/radarx-onchain?symbols=','/api/radarx-social?symbols=']){
+            if(!core.includes(x) && !pro.includes(x))throw new Error('feature route guard missing: '+x);
           }
           for(const x of ['LIMIT=isMobile?2:6','news:60000','onchain:90000','social:120000']){
             if(!runtime.includes(x))throw new Error('runtime performance guard missing: '+x);
