@@ -163,7 +163,7 @@
 
   const state = {
     lang: 'ar', busy:false, selectionToken:0, scanTimer:null, markets:[], deepRows:[], selected:null, lastFlow:null, deferredInstall:null, sort:'activity', live:false,
-    settings:{theme:'dark'}, sentiment:{score:null,label:null,source:'waiting',fg:null,breadth:null,bthPrice:null,updatedAt:0}, structure:null, fakeout:null, briefing:null, simulator:{running:false,step:0,price:0,outcome:'WAITING',timer:null,logs:[]}, calendar:[], marketsBySymbol:{}, klinesCache:{}, streamTrades:{}, selectedStream:null, ws:{ticker:null,symbol:null,attempt:0,reconnectTimer:null,staleTimer:null,lastMessage:0,mode:'offline',paintTimer:null,lastPersist:0,generation:0}, profile:{name:'Guest Trader',email:'guest@radarx.local'}, membership:{status:'TRIAL', trialStart:Date.now(), trialGrantedAt:Date.now(), plan:null, expiresAt:null, source:'local', userId:null, demo:false, lastVerifiedAt:0}, psychology:{lossStreak:0,dailyLossPct:0,rapidEntries:0,status:'HEALTHY',cooldownUntil:0}, paper:{balance:10000,equity:10000,realized:0,unrealized:0,positions:[],history:[],nextId:1,updatedAt:0}, deepDive:null, currentSymbol:null, smartScan:{running:false,results:[],watch:[],universe:0,stage1:0,midVerified:0,deepVerified:0,startedAt:0,error:'',lastUpdated:0,latencyMs:0}, multiRadar:{count:8,mode:'gainers',leaders:[],lastUpdated:0,running:false,error:'',pollTimer:null,pulseTimer:null,renderKey:'',dirty:false,ws:null,wsAttempt:0,wsReconnectTimer:null,wsLastMessage:0,wsOpenedAt:0,wsGeneration:0,restLastSuccess:0,restFailures:0,paintTimer:null,lastPaintPrice:new Map(),cacheAt:0,klineWs:null,klineWsAttempt:0,klineWsReconnectTimer:null,klineWsLastMessage:0,klineWsGeneration:0,klineSymbols:[],klineBars:new Map(),klineBaselineAt:0,klineRefreshTimer:null}, briefingRefreshTimer:null, selectedPaintTimer:null, selectedLiveRecomputeTimer:null, selectedLiveRecomputePending:false, lastMarketDomPaint:0, subscriptionGate:{status:'TRIAL',locked:false,reason:'init',lastCheckedAt:0,checking:false,remote:false}, continuous:{enabled:true,cycleMs:3500,restRefreshMs:15000,cycleBusy:false,lastCycleAt:0,lastLiveTickAt:0,lastRestAt:0,lastError:'',mode:'starting',worker:null,timer:null,watchdogTimer:null,tape:new Map(),pending:new Set(),lastDeepAt:new Map(),lastAlertAt:new Map(),alertCount:0,lastGolden:null}, whaleMonitor:{enabled:false,timer:null,symbol:'',provider:'binance',history:[]}
+    settings:{theme:'dark'}, sentiment:{score:null,label:null,source:'waiting',fg:null,breadth:null,bthPrice:null,updatedAt:0}, structure:null, fakeout:null, briefing:null, simulator:{running:false,step:0,price:0,outcome:'WAITING',timer:null,logs:[]}, calendar:[], marketsBySymbol:{}, klinesCache:{}, streamTrades:{}, selectedStream:null, ws:{ticker:null,symbol:null,attempt:0,reconnectTimer:null,staleTimer:null,lastMessage:0,mode:'offline',paintTimer:null,lastPersist:0,generation:0}, profile:{name:'Guest Trader',email:'guest@radarx.local'}, membership:{status:'TRIAL', trialStart:Date.now(), trialGrantedAt:Date.now(), plan:null, expiresAt:null, source:'local', userId:null, demo:false, lastVerifiedAt:0}, psychology:{lossStreak:0,dailyLossPct:0,rapidEntries:0,status:'HEALTHY',cooldownUntil:0}, paper:{balance:10000,equity:10000,realized:0,unrealized:0,positions:[],history:[],nextId:1,updatedAt:0}, deepDive:null, currentSymbol:null, smartScan:{running:false,results:[],watch:[],universe:0,stage1:0,midVerified:0,deepVerified:0,startedAt:0,error:'',lastUpdated:0,latencyMs:0}, multiRadar:{count:8,mode:'gainers',leaders:[],lastUpdated:0,running:false,error:'',pollTimer:null,pulseTimer:null,renderKey:'',dirty:false,ws:null,wsAttempt:0,wsReconnectTimer:null,wsLastMessage:0,wsOpenedAt:0,wsGeneration:0,restLastSuccess:0,restFailures:0,paintTimer:null,lastPaintPrice:new Map(),cacheAt:0,klineWs:null,klineWsAttempt:0,klineWsReconnectTimer:null,klineWsLastMessage:0,klineWsGeneration:0,klineSymbols:[],klineBars:new Map(),klineBaselineAt:0,klineRefreshTimer:null}, briefingRefreshTimer:null, selectedPaintTimer:null, selectedLiveRecomputeTimer:null, selectedLiveRecomputePending:false, lastMarketDomPaint:0, lastSelectedStructurePaintAt:0, lastSelectedFullRenderAt:0, lastResultsPaintAt:0, subscriptionGate:{status:'TRIAL',locked:false,reason:'init',lastCheckedAt:0,checking:false,remote:false}, continuous:{enabled:true,cycleMs:3500,restRefreshMs:15000,cycleBusy:false,lastCycleAt:0,lastLiveTickAt:0,lastRestAt:0,lastError:'',mode:'starting',worker:null,timer:null,watchdogTimer:null,tape:new Map(),pending:new Set(),lastDeepAt:new Map(),lastAlertAt:new Map(),alertCount:0,lastGolden:null}, whaleMonitor:{enabled:false,timer:null,symbol:'',provider:'binance',history:[]}
   };
 
   function readJSON(key, fallback){ try { const v=JSON.parse(localStorage.getItem(key) || 'null'); return v ?? fallback; } catch { return fallback; } }
@@ -413,12 +413,33 @@
     const requestUrl=isAbsolute?url:new URL(url,location.href).toString();
     const proxiedUrl=(()=>{try{
       const u=new URL(requestUrl,location.href),h=u.hostname,p=u.pathname+u.search;
-      if(new URL(requestUrl,location.href).origin===location.origin && u.pathname.startsWith('/api/')) return requestUrl;
+      const sameOrigin=new URL(requestUrl,location.href).origin===location.origin;
+      if(sameOrigin && u.pathname.startsWith('/api/')){
+        // Binance stays on the native async bridge for regional reliability.
+        // Other RadarX APIs use the normal Chromium HTTPS stack first, which
+        // avoids blocking WebView resource interception on mobile.
+        if(isNativeRadarX() && u.pathname!=='/api/binance') return 'https://radar-x-ai.vercel.app'+p;
+        return requestUrl;
+      }
       const map=h==='www.okx.com'?'okx':h==='api.bybit.com'?'bybit':(h==='api.gateio.ws'||h==='api.gate.us')?'gate':h==='api.exchange.coinbase.com'?'coinbase':h==='api.coingecko.com'?'coingecko':h==='fapi.binance.com'?'binanceFutures':null;
-      return map?('/api/market?provider='+encodeURIComponent(map)+'&path='+encodeURIComponent(p)):requestUrl;
+      if(map){
+        const route='/api/market?provider='+encodeURIComponent(map)+'&path='+encodeURIComponent(p);
+        return isNativeRadarX()?'https://radar-x-ai.vercel.app'+route:route;
+      }
+      return requestUrl;
     }catch{return requestUrl;}})();
     if(navigator.onLine===false) throw new Error('OFFLINE');
-    if(window.RadarXRuntime?.requestJSON) return await window.RadarXRuntime.requestJSON(proxiedUrl,{timeout,retries,backoff});
+    if(window.RadarXRuntime?.requestJSON){
+      try{return await window.RadarXRuntime.requestJSON(proxiedUrl,{timeout,retries,backoff});}
+      catch(e){
+        // Native fallback for secondary intelligence when the cloud route is
+        // unavailable: retry the original local route through the Android relay.
+        if(isNativeRadarX() && requestUrl.startsWith(location.origin+'/api/') && !requestUrl.includes('/api/binance?')){
+          return await window.RadarXRuntime.requestJSON(requestUrl,{timeout:Math.min(4500,timeout),retries:0,backoff});
+        }
+        throw e;
+      }
+    }
     let last=null;
     for(let attempt=0;attempt<=Math.max(0,retries);attempt++){
       const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),timeout),started=performance.now();
@@ -727,8 +748,11 @@
         if(tk.askQty!=null)state.selected.askQty=tk.askQty;
         if(state.selected.last)state.selected.last.c=tk.last;
         renderActiveAssetHeader(tk.symbol,'global-live');
-        renderStructurePanel(state.structure||null);
-        scheduleSelectedLivePaint(220);
+        if(Date.now()-num(state.lastSelectedStructurePaintAt,0)>=2000){
+          state.lastSelectedStructurePaintAt=Date.now();
+          renderStructurePanel(state.structure||null);
+        }
+        scheduleSelectedLivePaint(260);
         touchedSelected=true;
       }
     }
@@ -794,7 +818,7 @@
     }; connect();
   }
     function handleSelectedTicker(tk){mergeTicker(tk);if(state.selected&&state.selected.symbol===tk.symbol){state.selected.price=tk.last;state.selected.last.c=tk.last;state.selected.priceChangePercent=tk.priceChangePercent;state.selected.quoteVolume=tk.quoteVolume;state.selected.bidPrice=tk.bidPrice;state.selected.askPrice=tk.askPrice;state.selected.bidQty=tk.bidQty;state.selected.askQty=tk.askQty;state.selected.eventTime=tk.eventTime||Date.now();state.selected.liveAt=tk.eventTime||Date.now();updatePaperFromMarkets(state.markets);scheduleSelectedLivePaint(160);}}
-  function handleSelectedKline(k){const s=state.selectedStream?.symbol||String(k.s||'').toUpperCase();const tf=k.i||state.selectedStream?.tf||'5m';if(tf==='1m')updateLiveMinuteKline(k);const row={t:num(k.t),o:num(k.o),h:num(k.h),l:num(k.l),c:num(k.c),v:num(k.v),q:num(k.q),trades:num(k.n),tb:num(k.V),closed:!!k.x};state.klinesCache[s]=state.klinesCache[s]||{};state.klinesCache[s][tf]=state.klinesCache[s][tf]||[];const arr=state.klinesCache[s][tf];const idx=arr.findIndex(x=>x.t===row.t);if(idx>=0)arr[idx]=row;else arr.push(row);state.klinesCache[s][tf]=arr.slice(-250);if(state.selected&&state.selected.symbol===s&&state.selected.timeframe===tf){scheduleSelectedLiveRecompute(650);}}
+  function handleSelectedKline(k){const s=state.selectedStream?.symbol||String(k.s||'').toUpperCase();const tf=k.i||state.selectedStream?.tf||'5m';if(tf==='1m')updateLiveMinuteKline(k);const row={t:num(k.t),o:num(k.o),h:num(k.h),l:num(k.l),c:num(k.c),v:num(k.v),q:num(k.q),trades:num(k.n),tb:num(k.V),closed:!!k.x};state.klinesCache[s]=state.klinesCache[s]||{};state.klinesCache[s][tf]=state.klinesCache[s][tf]||[];const arr=state.klinesCache[s][tf];const idx=arr.findIndex(x=>x.t===row.t);if(idx>=0)arr[idx]=row;else arr.push(row);state.klinesCache[s][tf]=arr.slice(-250);if(state.selected&&state.selected.symbol===s&&state.selected.timeframe===tf){scheduleSelectedLiveRecompute(1400);}}
   function handleSelectedDepth(d){if(!state.selected)return;const bids=d.bids||d.b||[],asks=d.asks||d.a||[];if(!bids.length&&!asks.length)return;state.selected.liveDepth={bids,asks,lastUpdateId:num(d.lastUpdateId||d.u),eventTime:num(d.E)||Date.now()};const trades=state.streamTrades[state.selected.symbol]||[];if(trades.length){state.selected.flow=flowFromData(state.selected.liveDepth,trades);state.selected.flowWhales=state.selected.flow.whales;}scheduleSelectedLiveRecompute(650);}
   function handleSelectedTrade(d){const s=String(d.s||state.selected?.symbol||'').toUpperCase();const tr={id:num(d.a),price:num(d.p),amount:num(d.q),buy:!d.m,t:num(d.T)};const arr=state.streamTrades[s]=state.streamTrades[s]||[];if(tr.id && arr.some(x=>x.id===tr.id))return;arr.push(tr);state.streamTrades[s]=arr.slice(-300);if(state.selected&&state.selected.symbol===s){state.selected.flow=flowFromData(state.selected.liveDepth||{bids:[],asks:[]},state.streamTrades[s]);state.selected.flowWhales=state.selected.flow.whales;scheduleSelectedLiveRecompute(650);}}
   function scheduleSelectedLivePaint(delay=250){
@@ -824,9 +848,17 @@
     if(idx>=0)state.deepRows[idx]={...state.deepRows[idx],...state.selected};
     else state.deepRows=[state.selected,...state.deepRows].slice(0,24);
     state.structure=structure;state.fakeout=fakeout;state.deepDive=forensic;
-    renderStructurePanel(structure);
-    renderSelectedLive({full:deepVisible});
-    if(deepVisible)scheduleBriefingRefresh(500);
+    if(Date.now()-num(state.lastSelectedStructurePaintAt,0)>=1200){
+      state.lastSelectedStructurePaintAt=Date.now();
+      renderStructurePanel(structure);
+    }
+    if(deepVisible && Date.now()-num(state.lastSelectedFullRenderAt,0)>=2200){
+      state.lastSelectedFullRenderAt=Date.now();
+      renderSelectedLive({full:true});
+    }else{
+      renderSelectedLive({full:false});
+    }
+    if(deepVisible)scheduleBriefingRefresh(900);
   }
   function renderSelectedLive(opts={}){
     if(!state.selected)return;
@@ -2533,7 +2565,7 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
 // Real Binance live ticker stream -> lightweight early-move detector ->
 // bounded deep verification -> persistent golden-opportunity alert ledger.
 const CONTINUOUS_RADAR = {
-  cycleMs:3500,
+  cycleMs:7000,
   restRefreshMs:15000,
   tapeWindowMs:120000,
   sampleKeep:45,
@@ -2543,11 +2575,12 @@ const CONTINUOUS_RADAR = {
   minPreScore:68,
   minFinalScore:75,
   maxTrapRisk:35,
-  maxDeepPerCycle:2,
+  maxDeepPerCycle:1,
   deepCooldownMs:10*60*1000,
   alertCooldownMs:20*60*1000,
-  staleMs:12000,
-  historyMax:300
+  staleMs:18000,
+  historyMax:300,
+  resultsPaintMs:12000
 };
 
 function warmAlertAudio(){
@@ -2623,7 +2656,10 @@ function continuousCandidates(){
     const x=m.ticker;if(!isRadarSymbolEligible(x,'breakout',multiRadarSource()==='cached'))continue;
     out.push(m);
   }
-  return out.sort((a,b)=>b.preScore-a.preScore).slice(0,8);
+  const result=out.sort((a,b)=>b.preScore-a.preScore).slice(0,8);
+  state.continuous.cachedCandidates=result;
+  state.continuous.cachedCandidatesAt=now;
+  return result;
 }
 function continuousAlertExists(symbol,now=Date.now()){
   const last=state.continuous.lastAlertAt.get(symbol)||0;
@@ -2689,23 +2725,35 @@ async function continuousRadarCycle(){
   if(document.visibilityState==='hidden'){state.continuous.mode='paused';return;}
   if(navigator.onLine===false){state.continuous.mode='offline';return;}
   if(!Object.keys(state.marketsBySymbol||{}).length)return;
-  state.continuous.cycleBusy=true;state.continuous.mode='running';state.continuous.lastCycleAt=Date.now();
+  state.continuous.cycleBusy=true;
+  state.continuous.mode='running';
+  state.continuous.lastCycleAt=Date.now();
   try{
     const candidates=continuousCandidates();
-    let started=0;
+    const selected=[];
     for(const m of candidates){
-      if(started>=CONTINUOUS_RADAR.maxDeepPerCycle)break;
+      if(selected.length>=CONTINUOUS_RADAR.maxDeepPerCycle)break;
       if(state.continuous.pending.has(m.symbol))continue;
-      started++;continuousVerifyCandidate(m).catch(()=>{});
+      selected.push(m);
     }
-    // REST is a validation/watchdog path, not the primary real-time feed.
-    if(Date.now()-num(state.continuous.lastRestAt,0)>=Math.max(CONTINUOUS_RADAR.restRefreshMs,30000) && !state.multiRadar.running && multiRadarSource()!=='ws'){
+    // Hold cycleBusy until deep verification completes so cycles can never
+    // overlap and accumulate network requests on low-end phones.
+    await Promise.allSettled(selected.map(m=>continuousVerifyCandidate(m)));
+    // REST is a validation/watchdog path, never the primary real-time feed.
+    if(Date.now()-num(state.continuous.lastRestAt,0)>=Math.max(CONTINUOUS_RADAR.restRefreshMs,30000)
+      && !state.multiRadar.running && multiRadarSource()!=='ws'){
       state.continuous.lastRestAt=Date.now();
       multiRadarPoll().catch(()=>{});
     }
-    renderResultsCenter();
-  }finally{state.continuous.cycleBusy=false;}
+    if(Date.now()-num(state.continuous.lastResultsPaintAt,0)>=CONTINUOUS_RADAR.resultsPaintMs){
+      state.continuous.lastResultsPaintAt=Date.now();
+      renderResultsCenter();
+    }
+  }finally{
+    state.continuous.cycleBusy=false;
+  }
 }
+
 function createContinuousWorker(){
   if(!('Worker' in window))return null;
   try{
@@ -2734,8 +2782,11 @@ function startContinuousRadar(){
     if(navigator.onLine===false){state.continuous.mode='offline';return;}
     if(age>CONTINUOUS_RADAR.staleMs){state.continuous.mode='offline';if(state.ws.ticker?.readyState!==1)openTickerWS(0);if(state.multiRadar.ws?.readyState!==1)connectMultiRadarWS();}
     else if(!state.continuous.cycleBusy)state.continuous.mode='running';
-    renderResultsCenter();
-  },3000);
+    if(Date.now()-num(state.continuous.lastResultsPaintAt,0)>=CONTINUOUS_RADAR.resultsPaintMs){
+      state.continuous.lastResultsPaintAt=Date.now();
+      renderResultsCenter();
+    }
+  },5000);
   continuousRadarCycle().catch(()=>{});
 }
 function stopContinuousRadar(disable=true){
@@ -2747,6 +2798,7 @@ function stopContinuousRadar(disable=true){
 }
 function renderResultsCenterWithContinuous(){
   const host=$('resultsCenterOutput');if(!host)return;
+  state.continuous.lastResultsPaintAt=Date.now();
   // Preserve the original Results Center and prepend the automatic radar ledger.
   const st=tradeStats(),ev=readJSON(KEYS.events,[]);
   host.innerHTML=`${renderContinuousResults()}<div class="result-stat-grid"><div class="result-stat"><span>${t('totalTrades')}</span><b>${st.total}</b></div><div class="result-stat"><span>${t('winningTrades')}</span><b class="gain">${st.wins}</b></div><div class="result-stat"><span>${t('losingTrades')}</span><b class="loss">${st.losses}</b></div><div class="result-stat"><span>${t('successRate')}</span><b>${st.rate.toFixed(1)}%</b></div></div><div class="result-events">${ev.length?ev.slice(0,40).map(e=>{const icon=e.type==='golden_opportunity'?'🟡':e.type==='recommendation'?'🎯':e.type==='profit_secure'?'🔒':e.type==='closed_profit'?'🟢':e.type==='closed_loss'?'🔴':'⚖️';return `<div class="result-event"><span class="event-icon">${icon}</span><div><b>${esc(e.symbol)} · ${esc(eventMessage(e))}</b><small>${esc(e.exchange)}${e.pnl!==undefined?` · PnL ${e.pnl>=0?'+':''}${num(e.pnl).toFixed(2)} USDT`:''}</small></div><time>${new Date(e.ts).toLocaleString()}</time></div>`}).join(''):`<div class="note">${t('noEvents')}</div>`}</div><div class="source-note" style="margin-top:8px">${t('resultsPaperOnly')}</div>`;
@@ -2820,7 +2872,7 @@ function renderResultsCenterWithContinuous(){
     updatePsychology();
     if(state.markets.length)updatePaperFromMarkets(state.markets);
     if($('paperOutput')&&$('subcontent')?.dataset.kind==='paper'&&state.paper.positions.length)renderPaper();
-    setTimeout(heartbeat,1200);
+    setTimeout(heartbeat,1800);
   }
   function showBootError(err,stage='startup'){
     try{
