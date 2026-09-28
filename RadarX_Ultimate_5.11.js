@@ -418,6 +418,7 @@
         // Binance stays on the native async bridge for regional reliability.
         // Other RadarX APIs use the normal Chromium HTTPS stack first, which
         // avoids blocking WebView resource interception on mobile.
+        if(isNativeRadarX() && (u.pathname==='/api/radarx-smart' || u.pathname==='/api/radarx-smart-deep')) return requestUrl;
         if(isNativeRadarX() && u.pathname!=='/api/binance') return 'https://radar-x-ai.vercel.app'+p;
         return requestUrl;
       }
@@ -435,7 +436,9 @@
         // Native fallback for secondary intelligence when the cloud route is
         // unavailable: retry the original local route through the Android relay.
         if(isNativeRadarX() && requestUrl.startsWith(location.origin+'/api/') && !requestUrl.includes('/api/binance?')){
-          return await window.RadarXRuntime.requestJSON(requestUrl,{timeout:Math.min(4500,timeout),retries:0,backoff});
+          const smartBulk=requestUrl.includes('/api/radarx-smart');
+          const nativeTimeout=smartBulk?(requestUrl.includes('/api/radarx-smart-deep')?14000:15000):Math.min(4500,timeout);
+          return await window.RadarXRuntime.requestJSON(requestUrl,{timeout:nativeTimeout,retries:0,backoff});
         }
         throw e;
       }
