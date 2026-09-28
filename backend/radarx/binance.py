@@ -205,6 +205,15 @@ class BinanceRest:
     async def api_restrictions(self) -> dict[str, Any]:
         return await self.request("/sapi/v1/account/apiRestrictions", signed=True, cache_ttl=30, stale_ttl=90)
 
+    async def exchange_info(self, symbol: str | None = None) -> dict[str, Any]:
+        params = {"symbol": symbol.upper()} if symbol else {}
+        return await self.request(
+            "/api/v3/exchangeInfo",
+            params,
+            cache_ttl=300.0,
+            stale_ttl=900.0,
+        )
+
     async def order(self, params: dict[str, Any]) -> dict[str, Any]:
         return await self.request("/api/v3/order", params, signed=True, method="POST")
 
