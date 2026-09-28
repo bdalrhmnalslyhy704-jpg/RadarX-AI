@@ -1255,7 +1255,7 @@
       if(!uni)throw new Error('EMPTY_LIVE_UNIVERSE');
       smartStage('مسح كامل للكون: '+uni.toLocaleString('en-US')+' أزواج Spot مؤهلة…',10,'busy');
 
-      const ranked=universe.map(function(x){return {...x,smartTickerScore:smartTickerPotential(x);};}).sort(function(a,b){return b.smartTickerScore-a.smartTickerScore;});
+      const ranked=universe.map(function(x){return {...x,smartTickerScore:smartTickerPotential(x)};}).sort(function(a,b){return b.smartTickerScore-a.smartTickerScore;});
       const shortlist=ranked.slice(0,SMART_SCAN.maxTickerShortlist);state.smartScan.stage1=shortlist.length;
       smartStage('مرحلة 1: كل السوق تم مسحه → '+shortlist.length+' مرشح للحساب الزمني.',18,'busy');
 
