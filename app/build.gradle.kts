@@ -1,22 +1,30 @@
 plugins { id("com.android.application") }
 
 android {
-  namespace="com.radarx.ai"
-  compileSdk=37
+  namespace = "com.radarx.ai"
+  compileSdk = 37
 
   defaultConfig {
-    applicationId="com.radarx.ai"
-    minSdk=23
-    targetSdk=37
-    versionCode=61
-    versionName="6.1.0"
+    applicationId = "com.radarx.ai"
+    minSdk = 23
+    targetSdk = 37
+    versionCode = 62
+    versionName = "6.2.0"
+  }
+
+  compileOptions {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
   }
 
   buildTypes {
     release {
-      isMinifyEnabled=false
-      isShrinkResources=false
+      isMinifyEnabled = false
+      isShrinkResources = false
     }
   }
 }
 
+dependencies {
+  implementation("com.squareup.okhttp3:okhttp:5.5.0")
+}
