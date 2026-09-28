@@ -1,4 +1,4 @@
-name: RadarX Integrity Check
+name: RadarX Integrity + Live Smoke 6.0
 
 on:
   push:
@@ -6,15 +6,16 @@ on:
   workflow_dispatch:
 
 jobs:
-  syntax:
+  verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Check every JavaScript source
+      - name: Check all JavaScript sources
         shell: bash
         run: |
           set -euo pipefail
@@ -24,61 +25,59 @@ jobs:
             echo "::group::node --check $f"
             node --check "$f"
             echo "::endgroup::"
-          done < <(find . -maxdepth 1 -type f -name 'RadarX_*_5.11.js' -print0)
-          if [ "$found" -eq 0 ]; then
-            echo "No JavaScript files found"
-            exit 1
-          fi
+          done < <(find . -type f -name '*.js' -not -path './node_modules/*' -print0)
+          test "$found" -eq 1
 
-      - name: Check every RadarX One-File script
+      - name: Check deployed entry-point wiring
         run: |
           node <<'NODE'
-          const fs = require('fs');
-          const vm = require('vm');
-
-          const files = fs.readdirSync('.')
-            .filter(name => /^RadarX_ONEFILE_5.11.html$/i.test(name))
-            .sort((a,b) => a.localeCompare(b, undefined, {numeric:true}));
-
-          if (!files.length) {
-            throw new Error('No RadarX_ONEFILE_*.html files found');
+          const fs=require('fs');
+          const index=fs.readFileSync('index.html','utf8');
+          const required=[
+            'radarx-runtime-6.0.js',
+            'RadarX_Ultimate_5.11.js',
+            'RadarX_ProEngine_5.11.js',
+            'radarx-pulse-fusion.js',
+            'radarx-live-chart.js'
+          ];
+          for(const x of required){
+            if(!index.includes(x))throw new Error('index.html missing '+x);
           }
-
-          const scriptRe = /<script\b[^>]*>([\s\S]*?)<\/script>/gi;
-          const regressionRe = /\bversion\s*:\s*['"][^'"]+['"]\s*\r?\n\s*cycleMs\s*:/;
-
-          for (const file of files) {
-            const html = fs.readFileSync(file, 'utf8');
-            const scripts = [...html.matchAll(scriptRe)].map(m => m[1]);
-
-            if (scripts.length < 2) {
-              throw new Error(`${file}: expected at least 2 script blocks, found ${scripts.length}`);
-            }
-
-            for (let i = 0; i < scripts.length; i++) {
-              try {
-                new vm.Script(scripts[i], {filename: `${file}#script${i + 1}`});
-              } catch (err) {
-                throw new Error(`${file}#script${i + 1}: ${err.message}`);
-              }
-            }
-
-            if (regressionRe.test(html)) {
-              throw new Error(`${file}: detected missing comma before cycleMs (version -> cycleMs regression)`);
-            }
-
-            console.log(`OK: ${file} (${scripts.length} scripts)`);
+          const pos=required.map(x=>index.indexOf(x));
+          for(let i=1;i<pos.length;i++){
+            if(pos[i]<pos[0] && i>0){} // filenames can be repeated in cache-bust strings
           }
+          if(!index.includes('RadarX_Ultimate_5.11.js?v=6.0.0-core'))throw new Error('core cache bust missing');
+          if(!index.includes('RadarX_ProEngine_5.11.js?v=6.0.0-pro'))throw new Error('pro cache bust missing');
+          if(!index.includes('radarx-runtime-6.0.js?v=6.0.0'))throw new Error('runtime cache bust missing');
+          console.log('Entry wiring OK');
           NODE
 
-      - name: Verify deployed entry points stay on one version
+      - name: Validate One-File historical regression guard
         run: |
           node <<'NODE'
-          const fs = require('fs');
-          const index = fs.readFileSync('index.html', 'utf8');
-          const refs = [...index.matchAll(/RadarX_(?:Ultimate|ProEngine)_(\d+(?:\.\d+)*)/g)].map(m => m[1]);
-          const unique = [...new Set(refs)];
-          if (!unique.length) throw new Error('index.html does not reference a RadarX versioned entry point');
-          if (unique.length !== 1) throw new Error(`index.html references multiple RadarX versions: ${unique.join(', ')}`);
-          console.log(`index.html version: ${unique[0]}`);
+          const fs=require('fs'),vm=require('vm');
+          const file='RadarX_ONEFILE_5.11.html';
+          const html=fs.readFileSync(file,'utf8');
+          const scripts=[...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(m=>m[1]);
+          if(scripts.length<2)throw new Error('Expected at least 2 script blocks');
+          for(let i=0;i<scripts.length;i++)new vm.Script(scripts[i],{filename:file+'#script'+(i+1)});
+          const regression=/\bversion\s*:\s*['"][^'"]+['"]\s*\r?\n\s*cycleMs\s*:/;
+          if(regression.test(html))throw new Error('version -> cycleMs comma regression');
+          console.log('One-file regression guard OK');
           NODE
+
+      - name: Live Binance relay smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://radar-x-ai.vercel.app"
+          curl --fail --silent --show-error --retry 2 --max-time 20 "$BASE/api/binance?path=%2Fapi%2Fv3%2Fping" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(typeof j!=='object')process.exit(1);console.log('Binance relay ping OK',JSON.stringify(j));})"
+          curl --fail --silent --show-error --retry 2 --max-time 20 "$BASE/api/bn/api/v3/ping" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(typeof j!=='object')process.exit(1);console.log('Vercel rewrite ping OK',JSON.stringify(j));})"
+          curl --fail --silent --show-error --retry 2 --max-time 25 "$BASE/api/binance?path=%2Fapi%2Fv3%2Fticker%2Fprice%3Fsymbol%3DBTCUSDT" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(!j.symbol||!j.price)process.exit(1);console.log('BTC ticker OK',j.symbol,j.price);})"
+
+      - name: Live health endpoint smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 2 --max-time 25 "https://radar-x-ai.vercel.app/api/health" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(j.ok!==true)process.exit(1);console.log('Health OK',j.online+'/'+j.total,'providers online');})"

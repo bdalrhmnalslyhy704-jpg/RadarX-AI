@@ -6,13 +6,17 @@
 <meta name="theme-color" content="#071018"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="mobile-web-app-capable" content="yes"/>
-<meta name="application-version" content="RadarX Ultimate 5.13 — Continuous Background Intelligence"/>
-<title>RadarX Ultimate 5.11 — Continuous Background Radar — Robust Live Interaction Radar</title>
+<meta name="application-version" content="RadarX Ultimate 6.0 — Stable Runtime + Continuous Intelligence"/>
+<title>RadarX Ultimate 6.0 — Continuous Market Intelligence</title>
 <style id="radarx-stable-boot">
 #rxEarlyBoot{position:fixed;left:12px;right:12px;top:12px;z-index:2147483646;padding:10px 12px;border:1px solid rgba(84,213,255,.3);border-radius:12px;background:rgba(5,15,22,.94);color:#bfefff;font:700 12px/1.5 system-ui,sans-serif;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,.35);direction:rtl}
 #rxEarlyBoot.ok{border-color:rgba(39,232,154,.35);color:#b7f7df}
 #rxEarlyBoot.err{border-color:rgba(255,93,108,.45);color:#ffd7dc}
 #rxEarlyBoot button{margin-top:7px;padding:7px 11px;border:1px solid #31515f;border-radius:9px;background:#0b1921;color:#fff}
+.smart-watch-head{margin-top:10px;padding:9px 10px;border:1px solid #304452;border-radius:10px;background:#09141b;color:#b9d9e5;font-size:10px;font-weight:900}
+.smart-watch-row{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:7px;align-items:center;margin-top:6px;padding:9px 10px;border:1px solid #1b303a;border-radius:10px;background:#08131a;cursor:pointer}
+.smart-watch-row span{font-size:9px;color:#86a1ac}.smart-watch-row b{font-size:10px}
+@media(max-width:620px){.smart-watch-row{grid-template-columns:1.2fr 1fr 1fr}}
 </style><script id="radarx-stable-boot-script">
 (function(){
   'use strict';
@@ -31,8 +35,20 @@
       ? '<b>RadarX — حدث خطأ أثناء الإقلاع</b><br><small>'+String(t||'Unknown error').replace(/[<>&"']/g,'')+'</small><br><button onclick="location.reload()">إعادة المحاولة</button>'
       : '<b>'+String(t||'RadarX جاهز').replace(/[<>&"']/g,'')+'</b>';
   }
-  window.addEventListener('error',function(e){msg(e.error&&e.error.message||e.message||'Runtime error',true);});
-  window.addEventListener('unhandledrejection',function(e){var r=e.reason;msg(r&&r.message||String(r||'Promise error'),true);});
+  var fatalGate=true;
+  setTimeout(function(){fatalGate=false;},12000);
+  window.addEventListener('error',function(e){
+    if(!fatalGate||window.RadarXCore)return;
+    var file=String(e.filename||'');
+    if(file&&!/RadarX_(Ultimate_5\.1|ProEngine_5\.1)|radarx-runtime-6\.0/.test(file))return;
+    msg(e.error&&e.error.message||e.message||'Runtime error',true);
+  });
+  window.addEventListener('unhandledrejection',function(e){
+    if(!fatalGate||window.RadarXCore)return;
+    var r=e.reason,m=String(r&&r.message||r||'');
+    if(/HTTP (429|502|503|504)|OFFLINE|RATE_LIMIT|AbortError|API unavailable|fetch/i.test(m))return;
+    msg(m||'Promise error',true);
+  });
   window.addEventListener('radarx:ready',function(){ready=true; msg('RadarX جاهز — تم تشغيل المحرك بدون الاعتماد على Service Worker.'); setTimeout(function(){var x=document.getElementById('rxEarlyBoot');if(x)x.remove();},700);});
   function cleanLegacySW(){
     if(!('serviceWorker' in navigator))return Promise.resolve();
@@ -443,8 +459,9 @@ body.rx-subscription-locked #toast{z-index:9200}
   window.addEventListener('error',function(e){if(e.filename&&/RadarX_(Ultimate_5.1|ProEngine_5.1).js/.test(e.filename))set('خطأ تحميل المحرك: '+(e.message||'script error'),true);});
 })();
 </script>
-<script defer src="./radarx-background-client.js?v=5.13-bg-1"></script>
-<script defer src="./radarx-pulse-fusion.js?v=3.0-fusion"></script>
-<script defer src="./RadarX_Ultimate_5.11.js?v=5.11-smartrelay-2"></script>
-<script defer src="./RadarX_ProEngine_5.11.js?v=5.11-stable-2"></script><script defer src="./radarx-live-chart.js?v=1.2-fusion"></script>
+<script defer src="./radarx-runtime-6.0.js?v=6.0.0"></script>
+<script defer src="./radarx-background-client.js?v=6.0-bg-1"></script>
+<script defer src="./radarx-pulse-fusion.js?v=3.0-fusion-6"></script>
+<script defer src="./RadarX_Ultimate_5.11.js?v=6.0.0-core"></script>
+<script defer src="./RadarX_ProEngine_5.11.js?v=6.0.0-pro"></script><script defer src="./radarx-live-chart.js?v=1.3-runtime6"></script>
 </body></html>

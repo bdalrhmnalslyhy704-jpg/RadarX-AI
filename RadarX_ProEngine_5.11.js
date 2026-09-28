@@ -14,8 +14,8 @@
   const LOG_KEY = 'radarx_pro_logs_511';
   const CACHE_TTL = {global: 2*60e3, exchange: 180e3, kline: 90e3, flow: 30e3, derivatives: 180e3};
   const PRO = {
-    version: '5.11',
-    cycleMs: 30000,
+    version: '6.0',
+    cycleMs: 60000,
     initialCandidates: 24,
     mtfCandidates: 7,
     flowCandidates: 3,
@@ -32,7 +32,7 @@
     minQuoteVolume: 350000,
     cacheMaxAgeMs: 24*3600e3,
     maxLog: 400,
-    evidenceRefreshMs: 30000,
+    evidenceRefreshMs: 45000,
     researchYieldEvery: 40
   };
 
@@ -292,8 +292,23 @@
   async function fetchGlobalContext(){
     if(ps.global?.ts && now()-ps.global.ts<CACHE_TTL.global)return ps.global;
     try{
+      const d=await fetchJSON('/api/radarx-context',{timeout:6000,retries:0});
+      ps.global={
+        ts:now(),
+        btcDominance:num(d?.btcDominance,NaN),
+        totalMarketCap:num(d?.totalMarketCapUsd,NaN),
+        marketCapChange24h:num(d?.marketCapChange24h,NaN),
+        fearGreed:num(d?.fearGreed,NaN),
+        fearGreedLabel:d?.fearGreedLabel||null,
+        contextSources:d?.availableSources||[],
+        contextSourceStatus:d?.sources||{},
+        available:d?.ok===true
+      };
+      if(ps.global.available)return ps.global;
+    }catch{}
+    try{
       const d=await fetchJSON('https://api.coingecko.com/api/v3/global',{timeout:3500,retries:0});
-      const x=d?.data||{}; ps.global={ts:now(),btcDominance:num(x.market_cap_percentage?.btc,NaN),totalMarketCap:num(x.total_market_cap?.usd,NaN),marketCapChange24h:num(x.market_cap_change_percentage_24h_usd,NaN),available:true};
+      const x=d?.data||{};ps.global={...(ps.global||{}),ts:now(),btcDominance:num(x.market_cap_percentage?.btc,NaN),totalMarketCap:num(x.total_market_cap?.usd,NaN),marketCapChange24h:num(x.market_cap_change_percentage_24h_usd,NaN),available:true,contextSources:['coingecko-fallback']};
     }catch{ps.global={...(ps.global||{}),available:false,ts:now()};}
     return ps.global;
   }

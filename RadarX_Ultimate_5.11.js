@@ -91,7 +91,7 @@
 
   const state = {
     lang: 'ar', busy:false, selectionToken:0, scanTimer:null, markets:[], deepRows:[], selected:null, lastFlow:null, deferredInstall:null, sort:'activity', live:false,
-    settings:{theme:'dark'}, sentiment:{score:null,label:null,source:'waiting',fg:null,breadth:null,bthPrice:null,updatedAt:0}, structure:null, fakeout:null, briefing:null, simulator:{running:false,step:0,price:0,outcome:'WAITING',timer:null,logs:[]}, calendar:[], marketsBySymbol:{}, klinesCache:{}, streamTrades:{}, selectedStream:null, ws:{ticker:null,symbol:null,attempt:0,reconnectTimer:null,staleTimer:null,lastMessage:0,mode:'offline',paintTimer:null,lastPersist:0,generation:0}, profile:{name:'Guest Trader',email:'guest@radarx.local'}, membership:{status:'TRIAL', trialStart:Date.now(), trialGrantedAt:Date.now(), plan:null, expiresAt:null, source:'local', userId:null, demo:false, lastVerifiedAt:0}, psychology:{lossStreak:0,dailyLossPct:0,rapidEntries:0,status:'HEALTHY',cooldownUntil:0}, paper:{balance:10000,equity:10000,realized:0,unrealized:0,positions:[],history:[],nextId:1,updatedAt:0}, deepDive:null, currentSymbol:null, smartScan:{running:false,results:[],universe:0,stage1:0,deepVerified:0,startedAt:0,error:'',lastUpdated:0}, multiRadar:{count:8,mode:'gainers',leaders:[],lastUpdated:0,running:false,error:'',pollTimer:null,pulseTimer:null,renderKey:'',dirty:false,ws:null,wsAttempt:0,wsReconnectTimer:null,wsLastMessage:0,wsOpenedAt:0,wsGeneration:0,restLastSuccess:0,restFailures:0,paintTimer:null,lastPaintPrice:new Map(),cacheAt:0,klineWs:null,klineWsAttempt:0,klineWsReconnectTimer:null,klineWsLastMessage:0,klineWsGeneration:0,klineSymbols:[],klineBars:new Map(),klineBaselineAt:0,klineRefreshTimer:null}, briefingRefreshTimer:null, selectedPaintTimer:null, selectedLiveRecomputeTimer:null, selectedLiveRecomputePending:false, lastMarketDomPaint:0, subscriptionGate:{status:'TRIAL',locked:false,reason:'init',lastCheckedAt:0,checking:false,remote:false}, continuous:{enabled:true,cycleMs:3500,restRefreshMs:15000,cycleBusy:false,lastCycleAt:0,lastLiveTickAt:0,lastRestAt:0,lastError:'',mode:'starting',worker:null,timer:null,watchdogTimer:null,tape:new Map(),pending:new Set(),lastDeepAt:new Map(),lastAlertAt:new Map(),alertCount:0,lastGolden:null}, whaleMonitor:{enabled:false,timer:null,symbol:'',provider:'binance',history:[]}
+    settings:{theme:'dark'}, sentiment:{score:null,label:null,source:'waiting',fg:null,breadth:null,bthPrice:null,updatedAt:0}, structure:null, fakeout:null, briefing:null, simulator:{running:false,step:0,price:0,outcome:'WAITING',timer:null,logs:[]}, calendar:[], marketsBySymbol:{}, klinesCache:{}, streamTrades:{}, selectedStream:null, ws:{ticker:null,symbol:null,attempt:0,reconnectTimer:null,staleTimer:null,lastMessage:0,mode:'offline',paintTimer:null,lastPersist:0,generation:0}, profile:{name:'Guest Trader',email:'guest@radarx.local'}, membership:{status:'TRIAL', trialStart:Date.now(), trialGrantedAt:Date.now(), plan:null, expiresAt:null, source:'local', userId:null, demo:false, lastVerifiedAt:0}, psychology:{lossStreak:0,dailyLossPct:0,rapidEntries:0,status:'HEALTHY',cooldownUntil:0}, paper:{balance:10000,equity:10000,realized:0,unrealized:0,positions:[],history:[],nextId:1,updatedAt:0}, deepDive:null, currentSymbol:null, smartScan:{running:false,results:[],watch:[],universe:0,stage1:0,midVerified:0,deepVerified:0,startedAt:0,error:'',lastUpdated:0,latencyMs:0}, multiRadar:{count:8,mode:'gainers',leaders:[],lastUpdated:0,running:false,error:'',pollTimer:null,pulseTimer:null,renderKey:'',dirty:false,ws:null,wsAttempt:0,wsReconnectTimer:null,wsLastMessage:0,wsOpenedAt:0,wsGeneration:0,restLastSuccess:0,restFailures:0,paintTimer:null,lastPaintPrice:new Map(),cacheAt:0,klineWs:null,klineWsAttempt:0,klineWsReconnectTimer:null,klineWsLastMessage:0,klineWsGeneration:0,klineSymbols:[],klineBars:new Map(),klineBaselineAt:0,klineRefreshTimer:null}, briefingRefreshTimer:null, selectedPaintTimer:null, selectedLiveRecomputeTimer:null, selectedLiveRecomputePending:false, lastMarketDomPaint:0, subscriptionGate:{status:'TRIAL',locked:false,reason:'init',lastCheckedAt:0,checking:false,remote:false}, continuous:{enabled:true,cycleMs:3500,restRefreshMs:15000,cycleBusy:false,lastCycleAt:0,lastLiveTickAt:0,lastRestAt:0,lastError:'',mode:'starting',worker:null,timer:null,watchdogTimer:null,tape:new Map(),pending:new Set(),lastDeepAt:new Map(),lastAlertAt:new Map(),alertCount:0,lastGolden:null}, whaleMonitor:{enabled:false,timer:null,symbol:'',provider:'binance',history:[]}
   };
 
   function readJSON(key, fallback){ try { const v=JSON.parse(localStorage.getItem(key) || 'null'); return v ?? fallback; } catch { return fallback; } }
@@ -346,21 +346,18 @@
       return map?('/api/market?provider='+encodeURIComponent(map)+'&path='+encodeURIComponent(p)):requestUrl;
     }catch{return requestUrl;}})();
     if(navigator.onLine===false) throw new Error('OFFLINE');
+    if(window.RadarXRuntime?.requestJSON) return await window.RadarXRuntime.requestJSON(proxiedUrl,{timeout,retries,backoff});
     let last=null;
-    for(let attempt=0; attempt<=Math.max(0,retries); attempt++){
-      const ctrl=new AbortController();
-      const timer=setTimeout(()=>ctrl.abort(),timeout);
-      const started=performance.now();
+    for(let attempt=0;attempt<=Math.max(0,retries);attempt++){
+      const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),timeout),started=performance.now();
       try{
         const r=await fetch(proxiedUrl,{method:'GET',headers:{Accept:'application/json'},credentials:'omit',cache:'no-store',redirect:'follow',signal:ctrl.signal});
-        const latency=Math.round(performance.now()-started); if($('apiLatency'))$('apiLatency').textContent=`${latency} ms`;
+        const latency=Math.round(performance.now()-started); if($('apiLatency'))$('apiLatency').textContent=latency+' ms';
         if(r.status===429) throw new Error('RATE_LIMIT_429');
-        if(!r.ok) throw new Error(`HTTP ${r.status}`);
+        if(!r.ok) throw new Error('HTTP '+r.status);
         return await r.json();
-      }catch(e){
-        last=e;
-        if(attempt<retries) await sleep(backoff*Math.pow(2,attempt));
-      }finally{clearTimeout(timer);}
+      }catch(err){last=err;if(attempt<retries)await sleep(backoff*Math.pow(2,attempt));}
+      finally{clearTimeout(timer);}
     }
     throw last||new Error('API unavailable');
   }
@@ -376,54 +373,19 @@
     }
     throw last||new Error('API unavailable');
   }
-  // Network-resilient fallback: try several Binance REST origins in parallel and
-  // keep the first valid response. This prevents one dead DNS route from blocking
-  // the whole radar behind a long sequential timeout.
-  async function firstJSONRace(urls,{timeout=4500,retries=0,maxUrls=3}={}){
+  // 6.0: deterministic failover instead of parallel fan-out.
+  async function firstJSONRace(urls,{timeout=4500,retries=0,maxUrls=4}={}){
     const list=(urls||[]).slice(0,Math.max(1,maxUrls));
-    if(!list.length)throw new Error('API unavailable');
-    let settled=false;
-    const controllers=[];
-    const jobs=list.map((u,i)=>new Promise((resolve,reject)=>{
-      const ctrl=new AbortController();controllers.push(ctrl);
-      const timer=setTimeout(()=>ctrl.abort(),timeout);
-      const started=performance.now();
-      fetch(u,{method:'GET',headers:{Accept:'application/json'},credentials:'omit',cache:'no-store',redirect:'follow',signal:ctrl.signal})
-        .then(async r=>{
-          if(r.status===429)throw new Error('RATE_LIMIT_429');
-          if(!r.ok)throw new Error(`HTTP ${r.status}`);
-          const data=await r.json();
-          const latency=Math.round(performance.now()-started);if($('apiLatency'))$('apiLatency').textContent=`${latency} ms`;
-          resolve({data,url:u,index:i});
-        })
-        .catch(reject)
-        .finally(()=>clearTimeout(timer));
-    }));
-    try{
-      const winner=await Promise.any(jobs);
-      settled=true;
-      controllers.forEach((c,i)=>{if(i!==winner.index)try{c.abort()}catch{}});
-      try{const origin=new URL(winner.url).origin;const idx=BINANCE_REST_BASES.indexOf(origin);if(idx>=0)binanceRestPreferred=idx;}catch{}
-      return winner.data;
-    }catch(e){
-      settled=true;
-      throw new AggregateError(e?.errors||[e],'All Binance REST routes failed');
-    }finally{if(!settled)controllers.forEach(c=>{try{c.abort()}catch{}});}
+    return firstJSON(list,{timeout,retries,maxUrls:list.length});
   }
 
-
-  const BINANCE_REST_BASES=['/api/bn','/api/bn2','/api/bn3','/api/binance']; let binanceRestPreferred=0;
+  const BINANCE_REST_BASES=['/api/binance','/api/bn','/api/bn2','/api/bn3']; let binanceRestPreferred=0;
   const BINANCE_WS_BASES=['wss://data-stream.binance.vision/stream','wss://stream.binance.com:9443/stream','wss://stream.binance.com/stream'];
-  // REST is same-origin on the client. Vercel rewrites /api/bn* to official
-  // Binance endpoints; /api/binance remains the server relay fallback.
+  // All Binance REST traffic stays same-origin. Relay first; rewrites are fallbacks.
   function binanceProxyUrl(path){return '/api/binance?path='+encodeURIComponent(path);}
   function binanceRewriteUrl(base,path){return base+path.replace(/^\/api\//,'/');}
-  function binanceUrls(path){
-    const rewriteBases=['/api/bn','/api/bn2','/api/bn3'];
-    const rewrites=rewriteBases.map(b=>binanceRewriteUrl(b,path));
-    const relay=binanceProxyUrl(path);
-    return [...rewrites,relay];
-  }
+  function binanceUrls(path){return [binanceProxyUrl(path),binanceRewriteUrl('/api/bn',path),binanceRewriteUrl('/api/bn2',path),binanceRewriteUrl('/api/bn3',path)];}
+
   async function ensureBinanceRelay(){
     const urls=binanceUrls('/api/v3/ping');
     const d=await firstJSONRace(urls,{timeout:5500,retries:0,maxUrls:4});
@@ -1131,14 +1093,8 @@
 
   // ---------- Auto-Pilot Smart Scanner ----------
   const SMART_SCAN={
-    minQuoteVolume:750000,
-    maxTickerShortlist:160,
-    maxMidScan:64,
-    maxDeep:10,
-    batchSize:6,
-    minTrapRisk:34,
-    minFusionScore:68,
-    minConfidence:55
+    minQuoteVolume:750000, maxTickerShortlist:72, maxMidScan:40, maxDeep:8, batchSize:4,
+    minTrapRisk:34, minFusionScore:68, minConfidence:55, cooldownMs:8000
   };
   function smartText(key, vars={}){ let out=t(key); Object.entries(vars).forEach(function(pair){out=out.replaceAll('{'+pair[0]+'}',String(pair[1]));}); return out; }
   function smartStage(message,pct=0,mood='good'){
@@ -1185,8 +1141,8 @@
     const symbol=x.symbol;
     try{
       const pair=await Promise.all([
-        fetchKlines('binance',symbol,'1m',120),
-        fetchKlines('binance',symbol,'5m',180)
+        fetchKlines('binance',symbol,'1m',96),
+        fetchKlines('binance',symbol,'5m',144)
       ]);
       const r1=pair[0],r5=pair[1],pre=smartPreflight(r1,r5,x);
       if(!pre)return null;
@@ -1217,7 +1173,7 @@
         fusionScore*.46+confidence*.16+quality*.12+breakoutPressure*.10+
         mtfScore*.07+pre.score*.04+(flow?.whales?.score??50)*.05
       );
-      return {...x,...f,...base,symbol:symbol,rows:rows,rows1m:r1,rows15m:mtf,rows1h:mtf,structure:structure,fakeout:fakeout,forensic:forensic,flow:flow,flowWhales:flow?.whales||null,mtf:mtf,
+      return {...x,...f,...base,symbol:symbol,rows:rows,rows1m:r1,rows15m:null,rows1h:null,structure:structure,fakeout:fakeout,forensic:forensic,flow:flow,flowWhales:flow?.whales||null,mtf:mtf,
         fusion:fusion,fusionScore:fusionScore,confidence:confidence,quality:quality,trapRisk:trap,dataCoverage:dataCoverage,
         multiTFScore:mtfScore,multiTFAgree:mtfAgree,breakoutPressure:breakoutPressure,preScore:pre.score,tradeReady:tradeReady,
         compositeScore:compositeScore,mode:'SMART_FUSION_LIVE',liveAt:Date.now(),eventTime:Date.now()};
@@ -1255,11 +1211,15 @@
   }
   async function smartScan(){
     if(state.smartScan.running)return;
+    if(state.smartScan.lastUpdated && Date.now()-state.smartScan.lastUpdated<SMART_SCAN.cooldownMs){
+      toast(state.lang==='ar'?'تم تحديث الرادار قبل لحظات؛ استخدم النتيجة الحالية أو انتظر قليلًا.':'Radar refreshed moments ago; reuse the current result.');
+      return;
+    }
     const started=performance.now();
-    state.smartScan={...state.smartScan,running:true,results:[],universe:0,stage1:0,midVerified:0,deepVerified:0,startedAt:Date.now(),error:'',lastUpdated:0,latencyMs:0};
+    state.smartScan={...state.smartScan,running:true,results:[],watch:[],universe:0,stage1:0,midVerified:0,deepVerified:0,startedAt:Date.now(),error:'',lastUpdated:0,latencyMs:0};
     const btns=[$('smartScanBtn'),$('quickScan')].filter(Boolean);btns.forEach(function(b){b.disabled=true;});
     if($('smartOpportunityOutput'))$('smartOpportunityOutput').innerHTML='';
-    smartStage('تهيئة محرك Auto-Pilot متعدد المراحل…',2,'busy');
+    smartStage('تهيئة Auto-Pilot 6.0 — طبقة بيانات مشتركة + فرز مرحلي…',2,'busy');
     try{
       await ensureBinanceRelay();
        const tickers=await fetchAllTickers('binance');
@@ -1278,7 +1238,7 @@
       for(let i=0;i<shortlist.length;i+=SMART_SCAN.batchSize){
         const batch=shortlist.slice(i,i+SMART_SCAN.batchSize);
         const rr=await Promise.allSettled(batch.map(async function(x){
-          const p=await Promise.all([fetchKlines('binance',x.symbol,'1m',80),fetchKlines('binance',x.symbol,'5m',120)]);
+          const p=await Promise.all([fetchKlines('binance',x.symbol,'1m',64),fetchKlines('binance',x.symbol,'5m',96)]);
           const pre=smartPreflight(p[0],p[1],x);return pre&&pre.score>=46?{...x,...pre,rows:p[1],rows1m:p[0]}:null;
         }));
         rr.forEach(function(v){if(v.status==='fulfilled'&&v.value)mid.push(v.value);});
@@ -1300,10 +1260,12 @@
       }
 
       const eligible=deep.filter(function(x){return x.tradeReady;}).sort(function(a,b){return smartRankFinal(b)-smartRankFinal(a);});
-      state.smartScan.results=eligible.slice(0,3);state.smartScan.lastUpdated=Date.now();state.smartScan.latencyMs=Math.round(performance.now()-started);
+      const watch=deep.filter(function(x){return !x.tradeReady;}).sort(function(a,b){return smartRankFinal(b)-smartRankFinal(a);});
+      state.smartScan.results=eligible.slice(0,3);
+      state.smartScan.watch=watch.slice(0,3);state.smartScan.lastUpdated=Date.now();state.smartScan.latencyMs=Math.round(performance.now()-started);
       const message=state.smartScan.results.length?smartText('smartComplete',{u:uni,g:mid.length,d:deep.length,w:state.smartScan.results.length}):'لم تتجمع أدلة كافية الآن لإصدار فرصة ذهبية. المحرك يفضّل عدم توليد إشارة عند نقص التحقق.';
       smartStage(message,100,state.smartScan.results.length?'good':'bad');
-      renderSmartOutput(state.smartScan.results,{universe:uni,stage1:shortlist.length,midVerified:mid.length,deepVerified:deep.length,message:state.smartScan.results.length?null:message});
+      renderSmartOutput(state.smartScan.results,{universe:uni,stage1:shortlist.length,midVerified:mid.length,deepVerified:deep.length,watch:state.smartScan.watch,message:state.smartScan.results.length?null:message});
 
       if(state.smartScan.results.length){
         const best=state.smartScan.results[0];
@@ -1315,7 +1277,7 @@
       markLiveData('live_rest',t('liveRest')+' · Smart Fusion');appHealthy();
     }catch(e){
       state.smartScan.error=String(e?.message||e);state.smartScan.latencyMs=Math.round(performance.now()-started);
-      smartStage(t('smartNetworkFail'),100,'bad');renderSmartOutput([],{universe:state.smartScan.universe,stage1:state.smartScan.stage1,midVerified:state.smartScan.midVerified,deepVerified:state.smartScan.deepVerified,message:t('smartNetworkFail')});markLiveData(state.markets.length?'cached':'offline');
+      smartStage(t('smartNetworkFail')+' · Runtime 6.0',100,'bad');renderSmartOutput([],{universe:state.smartScan.universe,stage1:state.smartScan.stage1,midVerified:state.smartScan.midVerified,deepVerified:state.smartScan.deepVerified,watch:state.smartScan.watch,message:t('smartNetworkFail')});markLiveData(state.markets.length?'cached':'offline');
     }finally{state.smartScan.running=false;btns.forEach(function(b){b.disabled=false;});}
   }
 
@@ -2615,8 +2577,21 @@ function renderResultsCenterWithContinuous(){
       document.getElementById('radarxBootReload')?.addEventListener('click',()=>location.reload());
     }catch{}
   }
-  window.addEventListener('error',e=>showBootError(e.error||e.message,'runtime'));
-  window.addEventListener('unhandledrejection',e=>showBootError(e.reason,'promise'));
+  let bootFatalGate=true;
+  setTimeout(()=>{bootFatalGate=false;},15000);
+  window.addEventListener('error',e=>{
+    if(!bootFatalGate||window.RadarXCore)return;
+    const file=String(e.filename||'');
+    if(file && !/RadarX_(Ultimate_5\.1|ProEngine_5\.1)|radarx-runtime-6\.0/.test(file))return;
+    showBootError(e.error||e.message,'runtime');
+  });
+  window.addEventListener('unhandledrejection',e=>{
+    if(!bootFatalGate||window.RadarXCore)return;
+    const reason=e.reason;
+    const msg=String(reason?.message||reason||'');
+    if(/HTTP (429|502|503|504)|OFFLINE|RATE_LIMIT|AbortError|API unavailable|fetch/i.test(msg))return;
+    showBootError(reason,'promise');
+  });
 
   async function init(){
     try{
