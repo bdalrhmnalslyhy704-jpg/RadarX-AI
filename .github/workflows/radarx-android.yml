@@ -25,6 +25,22 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Restore stable CI signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: radarx-ci-signing-v1-${{ runner.os }}
+
+      - name: Ensure stable CI signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          if [ ! -s "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -v               -keystore "$HOME/.android/debug.keystore"               -storetype PKCS12               -storepass android               -keypass android               -alias androiddebugkey               -keyalg RSA               -keysize 2048               -validity 10000               -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          keytool -list -v             -keystore "$HOME/.android/debug.keystore"             -storepass android             -alias androiddebugkey | grep -E "Alias name:|SHA256:"
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.7.1"
@@ -32,43 +48,46 @@ jobs:
       - name: Build native debug APK
         run: gradle :app:assembleDebug --stacktrace
 
-      - name: Build native release APK
+      - name: Build native signed release APK
         run: gradle :app:assembleRelease --stacktrace
 
-      - name: Verify APK integrity
+      - name: Verify APK integrity and signature
+        shell: bash
         run: |
           set -euo pipefail
-          test -s app/build/outputs/apk/debug/app-debug.apk
-          test -s app/build/outputs/apk/release/app-release-unsigned.apk
-          unzip -t app/build/outputs/apk/debug/app-debug.apk >/dev/null
-          unzip -t app/build/outputs/apk/release/app-release-unsigned.apk >/dev/null
+          APK="app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          unzip -t "$APK" >/dev/null
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          test -x "$APKSIGNER"
+          "$APKSIGNER" verify --verbose "$APK"
 
       - name: Inspect native package
         run: |
           set -euo pipefail
-          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -E "classes(2)?\.dex|AndroidManifest.xml"
-          echo "RadarX Native 6.4 package assembled successfully."
+          unzip -l app/build/outputs/apk/release/app-release.apk | grep -E "classes(2)?\.dex|AndroidManifest.xml"
+          echo "RadarX Native 6.4.1 signed release package assembled successfully."
 
       - name: Prepare installable APK
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/RadarX-6.4-Native.apk
-          sha256sum dist/RadarX-6.4-Native.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/RadarX-6.4.1-Native.apk
+          sha256sum dist/RadarX-6.4.1-Native.apk
 
       - name: Publish installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: RadarX-6.4-Native-Android-APK
-          path: dist/RadarX-6.4-Native.apk
+          name: RadarX-6.4.1-Native-Android-APK
+          path: dist/RadarX-6.4.1-Native.apk
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish release archive
+      - name: Publish debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: RadarX-6.4-Native-Release-Unsigned
-          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          name: RadarX-6.4.1-Debug-Android-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -78,4 +97,4 @@ jobs:
         run: |
           set -euo pipefail
           TAG="android-v6.4.${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" dist/RadarX-6.4-Native.apk             --repo "${GITHUB_REPOSITORY}"             --title "RadarX 6.4 Native"             --notes "RadarX Native 6.4: native live 1m candle history and incremental updates on the existing managed market WebSocket. Built from commit ${GITHUB_SHA}."             --latest
+          gh release create "$TAG" dist/RadarX-6.4.1-Native.apk             --repo "${GITHUB_REPOSITORY}"             --title "RadarX 6.4.1 Native"             --notes "RadarX Native 6.4.1: stable CI-signed release APK with native live 1m candle history and incremental WebSocket updates. Built from commit ${GITHUB_SHA}."             --latest
