@@ -126,7 +126,7 @@ public final class NativeBinanceHttpQueue {
                     .url(REMOTE_RELAY + "?path=" + Uri.encode(rawPath))
                     .get()
                     .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.6.0")
+                    .header("User-Agent", "RadarX-Android/6.7.0")
                     .build();
 
             try (Response r = cloudClient.newCall(cloud).execute()) {
@@ -155,7 +155,7 @@ public final class NativeBinanceHttpQueue {
                         .url(base + rawPath)
                         .get()
                         .header("Accept", "application/json")
-                        .header("User-Agent", "RadarX-Android/6.6.0")
+                        .header("User-Agent", "RadarX-Android/6.7.0")
                         .build();
 
                 try (Response r = directClient.newCall(direct).execute()) {
