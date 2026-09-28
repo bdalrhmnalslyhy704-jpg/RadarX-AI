@@ -53,14 +53,14 @@ export default async function handler(req,res){
   if(req.method==='OPTIONS')return res.status(204).end();
   if(req.method!=='GET')return res.status(405).json({ok:false,error:'METHOD_NOT_ALLOWED'});
   const symbols=String(req.query?.symbols||'').split(',').map(cleanSymbol).filter(validSymbol);
-  const unique=[...new Set(symbols)].slice(0,32);
+  const unique=[...new Set(symbols)].slice(0,40);
   if(!unique.length)return res.status(400).json({ok:false,error:'NO_SYMBOLS'});
   const key=unique.join(',');
   if(state.data&&state.key===key&&Date.now()-state.ts<5000)return res.status(200).json({...state.data,cache:'HIT',ageMs:Date.now()-state.ts});
   const started=Date.now();
   const rows=await mapLimit(unique,8,async symbol=>{
     const [one,five]=await Promise.all([
-      fetchOne('/api/v3/klines?symbol='+encodeURIComponent(symbol)+'&interval=1m&limit=64'),
+      fetchOne('/api/v3/klines?symbol='+encodeURIComponent(symbol)+'&interval=1m&limit=144'),
       fetchOne('/api/v3/klines?symbol='+encodeURIComponent(symbol)+'&interval=5m&limit=96')
     ]);
     return {symbol,rows1m:normalize(one),rows5m:normalize(five)};
