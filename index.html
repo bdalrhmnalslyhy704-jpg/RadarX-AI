@@ -50,7 +50,22 @@
     setTimeout(function(){if(!ready && !window.RadarXCore)msg('محرك RadarX لم يبدأ. تم عزل الاعتماد على الكاش والشبكة، أعد المحاولة.',true);},12000);
   },{once:true});
 })();
-</script></head>
+</script><style id="radarx-live-chart-css">
+.rx-live-chart-shell{position:relative;overflow:hidden}
+.rx-live-chart-shell #signalCanvas{display:block;width:100%;height:390px;min-height:300px;border-radius:14px;touch-action:none;background:#071018;border:1px solid #152732}
+.rx-live-toolbar{display:flex;align-items:center;justify-content:space-between;gap:9px;flex-wrap:wrap;margin-bottom:9px;padding:7px 8px;border:1px solid #182d37;border-radius:12px;background:#08131a}
+.rx-live-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.rx-tf-buttons{display:inline-flex;gap:4px;padding:3px;border:1px solid #1a2c35;border-radius:9px;background:#061016}
+.rx-tf-buttons button,.rx-chart-refresh{border:1px solid transparent;border-radius:7px;background:transparent;color:#9eb4be;padding:5px 9px;font:800 9px system-ui,sans-serif;cursor:pointer}
+.rx-tf-buttons button:hover,.rx-tf-buttons button.active,.rx-chart-refresh:hover{border-color:#2b6173;background:#0c2029;color:#e9fbff}
+.rx-live-badge{padding:5px 8px;border-radius:999px;border:1px solid #285b4b;background:#091b15;color:#8ef0c0;font-size:8px;font-weight:900}
+.rx-live-pulse{color:#44e4a7;font-size:10px}.rx-live-pulse.pulse{animation:rxLivePulse 1s ease-in-out infinite}
+@keyframes rxLivePulse{50%{opacity:.25;transform:scale(.85)}}
+.rx-chip{padding:5px 8px;border-radius:8px;border:1px solid #1d3540;background:#08131a;color:#91aab5;font-size:8px;font-weight:800}
+.rx-live-tip{position:absolute;z-index:20;min-width:165px;padding:8px 10px;border:1px solid #2b4e5d;border-radius:10px;background:rgba(5,13,18,.96);color:#dcecf3;box-shadow:0 12px 35px rgba(0,0,0,.35);font:700 8px/1.65 system-ui,sans-serif;pointer-events:none}
+@media(max-width:620px){.rx-live-toolbar{align-items:stretch}.rx-live-tools{width:100%}.rx-tf-buttons{flex:1}.rx-tf-buttons button{flex:1}.rx-live-chart-shell #signalCanvas{height:330px}.rx-chip{font-size:7px}}
+</style>
+</head>
 <body><div id="rxEarlyBoot">RadarX — جارٍ تشغيل الواجهة…</div><div id="radarx-progressive-loader" style="position:fixed;left:12px;right:12px;bottom:12px;z-index:2147483645;padding:7px 10px;border:1px solid rgba(84,213,255,.18);border-radius:10px;background:rgba(5,10,15,.82);color:#8ea5b3;font:600 10px/1.4 system-ui,sans-serif;text-align:center">واجهة RadarX جاهزة، جاري تحميل محرك التحليل…</div>
 <div class="app-shell">
 <header class="topbar">
@@ -430,4 +445,5 @@ body.rx-subscription-locked #toast{z-index:9200}
 </script>
 <script defer src="./radarx-background-client.js?v=5.13-bg-1"></script>
 <script defer src="./RadarX_Ultimate_5.11.js?v=5.11-stable-2"></script>
-<script defer src="./RadarX_ProEngine_5.11.js?v=5.11-stable-2"></script></body></html>
+<script defer src="./RadarX_ProEngine_5.11.js?v=5.11-stable-2"></script><script defer src="./radarx-live-chart.js?v=1.0-live-chart"></script>
+</body></html>
