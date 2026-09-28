@@ -317,10 +317,6 @@ public final class BinanceSecureRelay {
         return s == null || s.isEmpty() ? "upstream_unavailable" : s;
     }
 
-    private static String escape(String s) {
-        return safe(s).replace("\\", "\\\\").replace(""", "\\"");
-    }
-
     private static final class CacheEntry {
         final byte[] body;
         final long ts;
