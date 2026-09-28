@@ -8,7 +8,7 @@
   if(window.RadarXRuntime && window.RadarXRuntime.version) return;
 
   var isMobile=/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent||'');
-  var LIMIT=isMobile?3:6;
+  var LIMIT=isMobile?2:6;
   var queue=[],active=0,inflight=new Map(),cache=new Map(),stats={queued:0,started:0,ok:0,failed:0,coalesced:0,cacheHits:0,rateLimited:0,lastError:'',lastLatency:0};
   var CACHE_TTL=Object.freeze({
     ticker:3500, tickerPrice:2500, exchangeInfo:300000, klines:2200, depth:900, trades:900, health:5000, market:5000, default:2500
@@ -31,6 +31,11 @@
     if(/depth/.test(p)) return CACHE_TTL.depth;
     if(/aggTrades|\/trades/.test(p)) return CACHE_TTL.trades;
     if(/\/api\/(health|market)/.test(p)) return /health/.test(p)?CACHE_TTL.health:CACHE_TTL.market;
+    if(/radarx-news/.test(p)) return CACHE_TTL.news;
+    if(/radarx-onchain/.test(p)) return CACHE_TTL.onchain;
+    if(/radarx-social/.test(p)) return CACHE_TTL.social;
+    if(/radarx-context/.test(p)) return CACHE_TTL.context;
+    if(/\/api\/metals/.test(p)) return CACHE_TTL.metals;
     return CACHE_TTL.default;
   }
   function clone(v){
