@@ -128,9 +128,8 @@ public final class BinanceSecureRelay {
             );
         }
 
-        String detail = last == null ? "upstream_unavailable" : safe(last.getMessage());
         String body = "{\"code\":-1,\"msg\":\"Binance Spot relay unavailable\","
-                + "\"detail\":\"" + escape(detail) + "\",\"status\":502}";
+                + "\"detail\":\"native_relay_failed\",\"status\":502}";
         return jsonResponse(502, body);
     }
 
