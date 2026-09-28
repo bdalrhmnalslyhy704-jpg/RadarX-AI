@@ -1506,13 +1506,17 @@
       return;
     }
     const started=performance.now();
+    const deadlineAt=Date.now()+SMART_SCAN.maxScanMs;
+    const timeLeft=()=>Math.max(0,deadlineAt-Date.now());
+    const scanGuard=()=>{if(Date.now()>=deadlineAt)throw new Error('SMART_SCAN_DEADLINE');};
     state.smartScan={...state.smartScan,running:true,results:[],watch:[],universe:0,stage1:0,midVerified:0,deepVerified:0,startedAt:Date.now(),error:'',lastUpdated:0,latencyMs:0};
     const btns=[$('smartScanBtn'),$('quickScan')].filter(Boolean);btns.forEach(function(b){b.disabled=true;});
     if($('smartOpportunityOutput'))$('smartOpportunityOutput').innerHTML='';
     smartStage('تهيئة Auto-Pilot 6.9 — بوابة تجميع سريعة + تحقق مرحلي…',2,'busy');
     try{
-      await ensureBinanceRelay();
+       scanGuard();
        const tickers=await fetchAllTickers('binance');
+       scanGuard();
       const universe=tickers.filter(smartUniverseEligible);
       state.smartScan.universe=universe.length;state.markets=universe.slice();state.marketsBySymbol={};
       universe.forEach(function(x){state.marketsBySymbol[x.symbol]=x;});
@@ -1531,8 +1535,9 @@
       // Fast path: one server-side request collects 1m + 5m candles for the
       // whole Gate-2 pool. The original per-symbol path remains the fallback.
       try{
+        scanGuard();
         const symbols=midPool.map(x=>x.symbol).join(',');
-        const bulk=await fetchJSON('/api/radarx-smart?symbols='+encodeURIComponent(symbols),{timeout:SMART_SCAN.bulkTimeoutMs,retries:0});
+        const bulk=await fetchJSON('/api/radarx-smart?symbols='+encodeURIComponent(symbols),{timeout:Math.min(SMART_SCAN.bulkTimeoutMs,Math.max(3000,timeLeft()-5000)),retries:0});
         const bySymbol=bulk?.ok?bulk.bySymbol||{}:{};
         for(const x of midPool){
           const b=bySymbol[x.symbol];
@@ -1546,6 +1551,7 @@
       }catch{}
       if(!bulkLoaded){
         for(let i=0;i<fastFallbackPool.length;i+=SMART_SCAN.batchSize){
+          scanGuard();
           if(Date.now()>=deadlineAt-45000)break;
           const batch=fastFallbackPool.slice(i,i+SMART_SCAN.batchSize);
           const rr=await Promise.allSettled(batch.map(async function(x){
@@ -1566,8 +1572,9 @@
       // scoring/trap/fusion code. Missing symbols transparently fall back to
       // the original per-symbol requests.
       try{
+        scanGuard();
         const symbols=topMid.map(x=>x.symbol).join(',');
-        const bulk=await fetchJSON('/api/radarx-smart-deep?symbols='+encodeURIComponent(symbols),{timeout:14000,retries:0});
+        const bulk=await fetchJSON('/api/radarx-smart-deep?symbols='+encodeURIComponent(symbols),{timeout:Math.min(14000,Math.max(3000,timeLeft()-5000)),retries:0});
         const bySymbol=bulk?.ok?bulk.bySymbol||{}:{};
         topMid.forEach(function(x){if(bySymbol[x.symbol])x._deepBulk=bySymbol[x.symbol];});
         smartStage('مرحلة 3 السريعة: بوابة الأدلة جمعت العمق لـ '+Object.keys(bySymbol).length+'/'+topMid.length+' مرشحين…',58,'busy');
@@ -1580,7 +1587,7 @@
         rr.forEach(function(v){if(v.status==='fulfilled'&&v.value)deep.push(v.value);});
         state.smartScan.deepVerified=deep.length;
         smartStage('RX Fusion: '+deep.length+'/'+topMid.length+' تحليلات مكتملة',56+Math.round(Math.min(i+SMART_SCAN.batchSize,topMid.length)/Math.max(1,topMid.length)*34),'busy');
-        await sleep(22);
+        await sleep(8);
       }
 
       const eligible=deep.filter(function(x){return x.tradeReady;}).sort(function(a,b){return smartRankFinal(b)-smartRankFinal(a);});
