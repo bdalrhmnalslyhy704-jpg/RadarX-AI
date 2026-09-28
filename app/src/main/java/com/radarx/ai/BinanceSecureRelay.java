@@ -136,75 +136,63 @@ public final class BinanceSecureRelay {
     public WebResourceResponse interceptHealth(Uri uri) {
         if (uri == null || !"/api/health".equals(uri.getPath())) return null;
 
-        JSONObject binance = new JSONObject();
-        try {
-            int idx = preferred;
-            long started = System.currentTimeMillis();
+        int idx = preferred;
+        boolean ok = false;
+        long latency = 0L;
 
+        try {
+            long started = System.currentTimeMillis();
             Request request = new Request.Builder()
                     .url(UPSTREAMS[idx] + "/api/v3/ping")
                     .get()
                     .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.5")
+                    .header("User-Agent", "RadarX-Android/6.5.1")
                     .build();
 
             try (Response r = client.newCall(request).execute()) {
-                boolean ok = r.isSuccessful();
-                long latency = System.currentTimeMillis() - started;
+                latency = System.currentTimeMillis() - started;
+                ok = r.isSuccessful();
                 mark(idx, ok, latency);
-                binance.put("id", "binance");
-                binance.put("label", "Binance Spot");
-                binance.put("family", "crypto");
-                binance.put("ok", ok);
-                binance.put("latencyMs", latency);
-                binance.put("checkedAt", System.currentTimeMillis());
-                binance.put("httpStatus", r.code());
-                binance.put("hasData", ok);
-                if (!ok) binance.put("error", "HTTP " + r.code());
             }
         } catch (Exception e) {
-            binance.put("id", "binance");
-            binance.put("label", "Binance Spot");
-            binance.put("family", "crypto");
-            binance.put("ok", false);
-            binance.put("latencyMs", 0);
-            binance.put("checkedAt", System.currentTimeMillis());
-            binance.put("error", safe(e.getMessage()));
+            latency = 0L;
+            ok = false;
+            mark(idx, false, 0L);
         }
 
-        JSONObject root = new JSONObject();
-        org.json.JSONArray results = new org.json.JSONArray();
-        results.put(binance);
+        long checkedAt = System.currentTimeMillis();
+        StringBuilder results = new StringBuilder();
+        results.append("[");
+        results.append("{\"id\":\"binance\",\"label\":\"Binance Spot\",")
+                .append("\"family\":\"crypto\",\"ok\":").append(ok)
+                .append(",\"latencyMs\":").append(latency)
+                .append(",\"checkedAt\":").append(checkedAt)
+                .append(",\"hasData\":").append(ok).append("}");
 
-        try {
-            String[] others = {"okx", "bybit", "gate", "coinbase", "coingecko", "binanceFutures", "yahoo"};
-            String[] labels = {"OKX", "Bybit", "Gate", "Coinbase", "CoinGecko", "Binance Futures", "Yahoo Finance"};
-            String[] family = {"crypto", "crypto", "crypto", "crypto", "global", "derivatives", "global"};
-            for (int i = 0; i < others.length; i++) {
-                JSONObject x = new JSONObject();
-                x.put("id", others[i]);
-                x.put("label", labels[i]);
-                x.put("family", family[i]);
-                x.put("ok", false);
-                x.put("latencyMs", 0);
-                x.put("checkedAt", System.currentTimeMillis());
-                x.put("error", "native_binance_relay_only");
-                results.put(x);
-            }
-            root.put("ok", true);
-            root.put("checkedAt", System.currentTimeMillis());
-            root.put("durationMs", 0);
-            root.put("total", results.length());
-            root.put("online", binance.optBoolean("ok", false) ? 1 : 0);
-            root.put("cryptoOnline", binance.optBoolean("ok", false) ? 1 : 0);
-            root.put("metalsOnline", 0);
-            root.put("results", results);
-        } catch (Exception ignored) {
+        String[] others = {"okx", "bybit", "gate", "coinbase", "coingecko", "binanceFutures", "yahoo"};
+        String[] labels = {"OKX", "Bybit", "Gate", "Coinbase", "CoinGecko", "Binance Futures", "Yahoo Finance"};
+        String[] families = {"crypto", "crypto", "crypto", "crypto", "global", "derivatives", "global"};
+
+        for (int i = 0; i < others.length; i++) {
+            results.append(",{\"id\":\"").append(others[i])
+                    .append("\",\"label\":\"").append(labels[i])
+                    .append("\",\"family\":\"").append(families[i])
+                    .append("\",\"ok\":false,\"latencyMs\":0,\"checkedAt\":")
+                    .append(checkedAt)
+                    .append(",\"error\":\"native_binance_relay_only\"}");
         }
+        results.append("]");
+
+        String root = "{\"ok\":true,\"checkedAt\":" + checkedAt
+                + ",\"durationMs\":" + latency
+                + ",\"total\":" + (others.length + 1)
+                + ",\"online\":" + (ok ? 1 : 0)
+                + ",\"cryptoOnline\":" + (ok ? 1 : 0)
+                + ",\"metalsOnline\":0,\"results\":" + results + "}";
 
         return response(
                 200, "OK", "application/json; charset=utf-8",
-                root.toString().getBytes(StandardCharsets.UTF_8),
+                root.getBytes(StandardCharsets.UTF_8),
                 headers("LOCAL", "native", 0)
         );
     }
