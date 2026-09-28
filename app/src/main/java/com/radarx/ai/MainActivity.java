@@ -288,11 +288,13 @@ public final class MainActivity extends Activity {
     }
 
     public static final class RadarXAndroidBridge {
+        private final Activity activity;
         private final Context context;
         private final NativeBinanceStreamHub streamHub;
         private final NativeBinanceHttpQueue httpQueue;
 
         RadarXAndroidBridge(Context context, NativeBinanceStreamHub streamHub, NativeBinanceHttpQueue httpQueue) {
+            this.activity = (context instanceof Activity) ? (Activity) context : null;
             this.context = context.getApplicationContext();
             this.streamHub = streamHub;
             this.httpQueue = httpQueue;
@@ -308,12 +310,14 @@ public final class MainActivity extends Activity {
         public boolean requestNativeNotifications() {
             try {
                 if (Build.VERSION.SDK_INT >= 33 &&
-                        checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                        activity != null ? activity.checkSelfPermission("android.permission.POST_NOTIFICATIONS") : PackageManager.PERMISSION_GRANTED
                                 != PackageManager.PERMISSION_GRANTED) {
-                    requestPermissions(
-                            new String[]{"android.permission.POST_NOTIFICATIONS"},
-                            9017
-                    );
+                    if (activity != null) {
+                        activity.requestPermissions(
+                                new String[]{"android.permission.POST_NOTIFICATIONS"},
+                                9017
+                        );
+                    }
                 }
                 return true;
             } catch (Exception ignored) {
@@ -325,7 +329,7 @@ public final class MainActivity extends Activity {
         public boolean postNativeNotification(String title, String body) {
             try {
                 NotificationManager manager =
-                        (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+                        (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
                 if (manager == null) return false;
 
                 final String channelId = "radarx-alerts";
@@ -341,8 +345,8 @@ public final class MainActivity extends Activity {
                 }
 
                 Notification.Builder builder = Build.VERSION.SDK_INT >= 26
-                        ? new Notification.Builder(this, channelId)
-                        : new Notification.Builder(this);
+                        ? new Notification.Builder(context, channelId)
+                        : new Notification.Builder(context);
 
                 builder.setSmallIcon(R.drawable.ic_launcher)
                         .setContentTitle(String.valueOf(title == null ? "RadarX" : title))
@@ -364,7 +368,7 @@ public final class MainActivity extends Activity {
         @android.webkit.JavascriptInterface
         public void vibrate(int milliseconds) {
             try {
-                Vibrator vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+                Vibrator vibrator = (Vibrator) context.getSystemService(Context.VIBRATOR_SERVICE);
                 if (vibrator == null) return;
                 long ms = Math.max(20L, Math.min(1000L, milliseconds));
                 if (Build.VERSION.SDK_INT >= 26) {
