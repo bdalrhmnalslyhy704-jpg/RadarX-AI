@@ -3,11 +3,18 @@ package com.radarx.ai;
 import android.net.Uri;
 import android.webkit.WebResourceResponse;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ConcurrentHashMap;
 
 import okhttp3.OkHttpClient;
@@ -31,11 +38,14 @@ public final class BinanceSecureRelay {
     private static final Map<String, CacheEntry> CACHE = new ConcurrentHashMap<>();
 
     private final OkHttpClient client;
+    private final OkHttpClient bulkClient;
+    private final ExecutorService bulkExecutor = Executors.newFixedThreadPool(24);
     private final EndpointHealth[] health;
     private volatile int preferred = 0;
 
     public BinanceSecureRelay(OkHttpClient client) {
         this.client = client;
+        this.bulkClient = client.newBuilder().callTimeout(3500, TimeUnit.MILLISECONDS).build();
         this.health = new EndpointHealth[UPSTREAMS.length];
         for (int i = 0; i < health.length; i++) health[i] = new EndpointHealth();
         TTL.put("/api/v3/exchangeInfo", 300_000L);
@@ -172,12 +182,206 @@ public final class BinanceSecureRelay {
         if (uri == null) return null;
         String path = uri.getPath();
         if ("/api/market".equals(path)) return interceptMarket(uri);
+        if ("/api/radarx-smart".equals(path)) return interceptSmartBulk(uri, false);
+        if ("/api/radarx-smart-deep".equals(path)) return interceptSmartBulk(uri, true);
         if ("/api/radarx-context".equals(path)) return interceptContext(uri);
         if ("/api/radarx-news".equals(path)) return interceptNews(uri);
         if ("/api/radarx-onchain".equals(path)) return interceptOnchain(uri);
         if ("/api/radarx-social".equals(path)) return interceptSocial(uri);
         if ("/api/metals".equals(path)) return interceptMetals(uri);
         return null;
+    }
+
+    private WebResourceResponse interceptSmartBulk(Uri uri, boolean deep) {
+        String raw = uri.getQueryParameter("symbols");
+        if (raw == null || raw.trim().isEmpty()) {
+            return jsonResponse(400, "{\\"ok\\":false,\\"error\\":\\"NO_SYMBOLS\\"}");
+        }
+        String[] parts = raw.split(",");
+        List<String> symbols = new ArrayList<>();
+        for (String part : parts) {
+            String sym = cleanSymbol(part);
+            if (!sym.isEmpty() && sym.endsWith("USDT") && sym.length() >= 6 && sym.length() <= 24
+                    && !sym.matches("^(USDC|USDP|FDUSD|TUSD|DAI|USDE|USDS|BUSD)USDT$")
+                    && !sym.matches(".*(UP|DOWN|BULL|BEAR)USDT$") && !symbols.contains(sym)) {
+                symbols.add(sym);
+            }
+        }
+        int max = deep ? 8 : 40;
+        if (symbols.size() > max) symbols = new ArrayList<>(symbols.subList(0, max));
+        if (symbols.isEmpty()) {
+            return jsonResponse(400, "{\\"ok\\":false,\\"error\\":\\"NO_VALID_SYMBOLS\\"}");
+        }
+
+        final List<String> finalSymbols = symbols;
+        try {
+            JSONObject root = new JSONObject();
+            root.put("ok", true);
+            root.put("provider", "binance");
+            root.put("source", "native-binance-bulk");
+            root.put("checkedAt", System.currentTimeMillis());
+            JSONObject bySymbol = new JSONObject();
+
+            if (!deep) {
+                List<Future<BulkResult>> futures = new ArrayList<>();
+                for (String sym : finalSymbols) {
+                    futures.add(bulkExecutor.submit(() -> {
+                        byte[] r1 = bulkFetch("/api/v3/klines?symbol=" + Uri.encode(sym) + "&interval=1m&limit=96");
+                        byte[] r5 = bulkFetch("/api/v3/klines?symbol=" + Uri.encode(sym) + "&interval=5m&limit=144");
+                        if (r1 == null || r5 == null) return null;
+                        JSONObject item = new JSONObject();
+                        item.put("symbol", sym);
+                        item.put("rows1m", normalizeKlines(r1));
+                        item.put("rows5m", normalizeKlines(r5));
+                        return new BulkResult(sym, item);
+                    }));
+                }
+                for (Future<BulkResult> future : futures) {
+                    try {
+                        BulkResult result = future.get(5000, TimeUnit.MILLISECONDS);
+                        if (result != null) bySymbol.put(result.symbol, result.value);
+                    } catch (Exception ignored) {
+                    }
+                }
+            } else {
+                List<Future<BulkResult>> futures = new ArrayList<>();
+                for (String sym : finalSymbols) {
+                    futures.add(bulkExecutor.submit(() -> {
+                        Future<byte[]> fd = bulkExecutor.submit(() -> bulkFetch("/api/v3/depth?symbol=" + Uri.encode(sym) + "&limit=100"));
+                        Future<byte[]> ft = bulkExecutor.submit(() -> bulkFetch("/api/v3/aggTrades?symbol=" + Uri.encode(sym) + "&limit=500"));
+                        Future<byte[]> f15 = bulkExecutor.submit(() -> bulkFetch("/api/v3/klines?symbol=" + Uri.encode(sym) + "&interval=15m&limit=90"));
+                        Future<byte[]> f1h = bulkExecutor.submit(() -> bulkFetch("/api/v3/klines?symbol=" + Uri.encode(sym) + "&interval=1h&limit=90"));
+                        byte[] depth = fd.get(4500, TimeUnit.MILLISECONDS);
+                        byte[] trades = ft.get(4500, TimeUnit.MILLISECONDS);
+                        byte[] rows15 = f15.get(4500, TimeUnit.MILLISECONDS);
+                        byte[] rows1h = f1h.get(4500, TimeUnit.MILLISECONDS);
+                        if (depth == null || trades == null || rows15 == null || rows1h == null) return null;
+                        JSONObject item = new JSONObject();
+                        item.put("symbol", sym);
+                        item.put("depth", normalizeDepth(depth));
+                        item.put("trades", normalizeTrades(trades));
+                        item.put("rows15m", normalizeKlines(rows15));
+                        item.put("rows1h", normalizeKlines(rows1h));
+                        return new BulkResult(sym, item);
+                    }));
+                }
+                for (Future<BulkResult> future : futures) {
+                    try {
+                        BulkResult result = future.get(10000, TimeUnit.MILLISECONDS);
+                        if (result != null) bySymbol.put(result.symbol, result.value);
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+
+            root.put("returned", bySymbol.length());
+            root.put("requested", finalSymbols.size());
+            root.put("bySymbol", bySymbol);
+            return response(200, "OK", "application/json; charset=utf-8",
+                    root.toString().getBytes(StandardCharsets.UTF_8),
+                    headers("BULK", "native-binance-bulk", 0));
+        } catch (Exception e) {
+            return jsonResponse(502, "{\\"ok\\":false,\\"error\\":\\"SMART_BULK_FAILED\\"}");
+        }
+    }
+
+    private byte[] bulkFetch(String path) {
+        for (int index : orderedIndexes()) {
+            try {
+                Request req = new Request.Builder()
+                        .url(UPSTREAMS[index] + path)
+                        .get()
+                        .header("Accept", "application/json")
+                        .header("User-Agent", "RadarX-Android/6.9.1")
+                        .build();
+                try (Response r = bulkClient.newCall(req).execute()) {
+                    byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+                    if (r.isSuccessful() && looksLikeJson(body)) {
+                        mark(index, true, 0L);
+                        return body;
+                    }
+                    mark(index, false, 0L);
+                }
+            } catch (Exception ignored) {
+                mark(index, false, 0L);
+            }
+        }
+        return null;
+    }
+
+    private static String cleanSymbol(String s) {
+        return s == null ? "" : s.trim().toUpperCase().replaceAll("[^A-Z0-9]", "");
+    }
+
+    private static JSONArray normalizeKlines(byte[] body) throws Exception {
+        JSONArray raw = new JSONArray(new String(body, StandardCharsets.UTF_8));
+        JSONArray out = new JSONArray();
+        long now = System.currentTimeMillis();
+        for (int i = 0; i < raw.length(); i++) {
+            JSONArray r = raw.optJSONArray(i);
+            if (r == null || r.length() < 10) continue;
+            JSONObject x = new JSONObject();
+            x.put("t", r.optLong(0));
+            x.put("o", r.optDouble(1));
+            x.put("h", r.optDouble(2));
+            x.put("l", r.optDouble(3));
+            x.put("c", r.optDouble(4));
+            x.put("v", r.optDouble(5));
+            x.put("q", r.optDouble(7));
+            x.put("trades", r.optLong(8));
+            x.put("tb", r.optDouble(9));
+            x.put("closed", r.optLong(6) <= now);
+            out.put(x);
+        }
+        return out;
+    }
+
+    private static JSONObject normalizeDepth(byte[] body) throws Exception {
+        JSONObject raw = new JSONObject(new String(body, StandardCharsets.UTF_8));
+        JSONObject out = new JSONObject();
+        out.put("bids", normalizeLevels(raw.optJSONArray("bids")));
+        out.put("asks", normalizeLevels(raw.optJSONArray("asks")));
+        return out;
+    }
+
+    private static JSONArray normalizeLevels(JSONArray raw) {
+        JSONArray out = new JSONArray();
+        if (raw == null) return out;
+        for (int i = 0; i < raw.length(); i++) {
+            JSONArray r = raw.optJSONArray(i);
+            if (r == null || r.length() < 2) continue;
+            JSONArray x = new JSONArray();
+            x.put(r.optDouble(0));
+            x.put(r.optDouble(1));
+            out.put(x);
+        }
+        return out;
+    }
+
+    private static JSONArray normalizeTrades(byte[] body) throws Exception {
+        JSONArray raw = new JSONArray(new String(body, StandardCharsets.UTF_8));
+        JSONArray out = new JSONArray();
+        for (int i = 0; i < raw.length(); i++) {
+            JSONObject r = raw.optJSONObject(i);
+            if (r == null) continue;
+            JSONObject x = new JSONObject();
+            x.put("id", r.optLong("a"));
+            x.put("price", r.optDouble("p"));
+            x.put("amount", r.optDouble("q"));
+            x.put("buy", !r.optBoolean("m"));
+            x.put("t", r.optLong("T"));
+            out.put(x);
+        }
+        return out;
+    }
+
+    private static final class BulkResult {
+        final String symbol;
+        final JSONObject value;
+        BulkResult(String symbol, JSONObject value) {
+            this.symbol = symbol;
+            this.value = value;
+        }
     }
 
     private WebResourceResponse interceptMarket(Uri uri) {
