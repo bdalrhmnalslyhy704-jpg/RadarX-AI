@@ -124,9 +124,33 @@ jobs:
             local url="$1"
             local label="$2"
             local max_time="$3"
-            local body status rc
+            local rc status
             set +e
-            body="$(curl --silent --show-error --retry 2 --max-time "$max_time" -w 
+            status="$(curl --silent --show-error --retry 2 --max-time "$max_time" -o /tmp/radarx-smart-smoke.json -w '%{http_code}' "$url")"
+            rc=$?
+            set -e
+            if [ "$rc" -ne 0 ]; then
+              echo "::warning::$label remote smoke unavailable; native/local fallback remains the supported path."
+              return 0
+            fi
+            if [ "$status" != "200" ]; then
+              echo "::warning::$label remote deployment returned HTTP $status; source and native fallback are still tested."
+              return 0
+            fi
+            LABEL="$label" node -e "
+              const fs=require('fs');
+              const label=process.env.LABEL;
+              const j=JSON.parse(fs.readFileSync('/tmp/radarx-smart-smoke.json','utf8'));
+              if(label==='Smart bulk endpoint'){
+                if(j.ok!==true||!j.bySymbol?.BTCUSDT||!j.bySymbol?.ETHUSDT)process.exit(1);
+              }else{
+                if(j.ok!==true||!j.bySymbol?.BTCUSDT||!j.bySymbol?.ETHUSDT||!j.bySymbol.BTCUSDT.rows15m||!j.bySymbol.BTCUSDT.rows1h)process.exit(1);
+              }
+              console.log(label+' OK',j.returned,'symbols',j.latencyMs+'ms');
+            "
+          }
+          smoke_optional "$BASE/api/radarx-smart?symbols=BTCUSDT%2CETHUSDT" "Smart bulk endpoint" 30
+          smoke_optional "$BASE/api/radarx-smart-deep?symbols=BTCUSDT%2CETHUSDT" "Smart deep bulk endpoint" 35
 
       - name: Live health endpoint smoke test
         shell: bash
