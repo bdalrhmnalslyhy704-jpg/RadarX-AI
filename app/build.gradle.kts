@@ -23,10 +23,10 @@ android {
 
   defaultConfig {
     applicationId = "com.radarx.ai"
-    minSdk = 23
+    minSdk = 24
     targetSdk = 37
-    versionCode = 66
-    versionName = "6.5.0"
+    versionCode = 67
+    versionName = "6.5.1"
   }
 
   compileOptions {
@@ -50,5 +50,6 @@ android {
 }
 
 dependencies {
+  implementation("androidx.webkit:webkit:1.17.1")
   implementation("com.squareup.okhttp3:okhttp:5.5.0")
 }
