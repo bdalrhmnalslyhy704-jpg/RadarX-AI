@@ -8,13 +8,34 @@ android {
     applicationId = "com.radarx.ai"
     minSdk = 23
     targetSdk = 37
-    versionCode = 65
-    versionName = "6.4.1"
+    versionCode = 66
+    versionName = "6.5.0"
   }
 
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
+  }
+
+  sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/radarxWebAssets"))
+
+  tasks.register<Copy>("prepareRadarXWebAssets") {
+    from(rootProject.projectDir) {
+      include(
+        "index.html",
+        "radarx-runtime-6.0.js",
+        "radarx-background-client.js",
+        "radarx-pulse-fusion.js",
+        "RadarX_Ultimate_5.11.js",
+        "RadarX_ProEngine_5.11.js",
+        "radarx-live-chart.js"
+      )
+    }
+    into(layout.buildDirectory.dir("generated/radarxWebAssets"))
+  }
+
+  tasks.named("preBuild") {
+    dependsOn("prepareRadarXWebAssets")
   }
 
   buildTypes {
