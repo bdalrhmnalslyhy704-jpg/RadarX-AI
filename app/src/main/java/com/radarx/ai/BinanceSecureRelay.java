@@ -345,7 +345,7 @@ public final class BinanceSecureRelay {
         return out;
     }
 
-    private static JSONArray normalizeLevels(JSONArray raw) {
+    private static JSONArray normalizeLevels(JSONArray raw) throws Exception {
         JSONArray out = new JSONArray();
         if (raw == null) return out;
         for (int i = 0; i < raw.length(); i++) {
