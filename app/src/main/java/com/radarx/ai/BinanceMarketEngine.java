@@ -4,6 +4,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -11,6 +13,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -90,6 +93,55 @@ public final class BinanceMarketEngine {
         }
     }
 
+    public static final class Candle {
+        public final String symbol;
+        public final String interval;
+        public final long openTimeMs;
+        public final long closeTimeMs;
+        public final double open;
+        public final double high;
+        public final double low;
+        public final double close;
+        public final double volume;
+        public final double quoteVolume;
+        public final double takerBuyVolume;
+        public final double takerBuyQuoteVolume;
+        public final int tradeCount;
+        public final boolean closed;
+
+        public Candle(
+                String symbol,
+                String interval,
+                long openTimeMs,
+                long closeTimeMs,
+                double open,
+                double high,
+                double low,
+                double close,
+                double volume,
+                double quoteVolume,
+                double takerBuyVolume,
+                double takerBuyQuoteVolume,
+                int tradeCount,
+                boolean closed
+        ) {
+            this.symbol = symbol;
+            this.interval = interval;
+            this.openTimeMs = openTimeMs;
+            this.closeTimeMs = closeTimeMs;
+            this.open = open;
+            this.high = high;
+            this.low = low;
+            this.close = close;
+            this.volume = volume;
+            this.quoteVolume = quoteVolume;
+            this.takerBuyVolume = takerBuyVolume;
+            this.takerBuyQuoteVolume = takerBuyQuoteVolume;
+            this.tradeCount = tradeCount;
+            this.closed = closed;
+        }
+    }
+
     private static final class Quote {
         final String symbol;
         volatile double lastTrade;
@@ -108,6 +160,8 @@ public final class BinanceMarketEngine {
     public interface Listener {
         void onSnapshot(Snapshot snapshot);
         void onState(State state, String detail);
+        void onCandleHistory(String symbol, List<Candle> candles);
+        void onCandle(Candle candle);
     }
 
     private static final String REST_URL =
@@ -117,6 +171,7 @@ public final class BinanceMarketEngine {
                     + "%2C%22SUIUSDT%22%2C%22XLMUSDT%22%2C%22STXUSDT%22%2C%22WAXPUSDT%22%5D";
 
     private static final String WS_URL = buildWsUrl();
+    private static final int HISTORY_LIMIT = 240;
 
     private final OkHttpClient client = new OkHttpClient.Builder()
             .connectTimeout(10L, TimeUnit.SECONDS)
@@ -134,10 +189,14 @@ public final class BinanceMarketEngine {
             });
 
     private final ConcurrentHashMap<String, Quote> quotes = new ConcurrentHashMap<>();
+    private final AtomicInteger requestId = new AtomicInteger(100);
 
     private volatile Listener listener;
     private volatile boolean running;
     private volatile boolean networkAvailable = true;
+    private volatile boolean socketReady;
+    private volatile String selectedSymbol = "BTCUSDT";
+    private volatile long historyGeneration;
 
     private final Object socketLock = new Object();
     private WebSocket socket;
@@ -157,9 +216,34 @@ public final class BinanceMarketEngine {
         this.listener = listener;
     }
 
+    public String getSelectedSymbol() {
+        return selectedSymbol;
+    }
+
+    public void setSelectedSymbol(String symbol) {
+        String normalized = symbol == null ? "" : symbol.toUpperCase(Locale.US);
+        if (!quotes.containsKey(normalized)) return;
+        if (normalized.equals(selectedSymbol)) {
+            if (running) loadCandleHistory(normalized);
+            return;
+        }
+
+        String old = selectedSymbol;
+        selectedSymbol = normalized;
+
+        if (socketReady) {
+            sendKlineSubscription("UNSUBSCRIBE", old);
+            sendKlineSubscription("SUBSCRIBE", normalized);
+        }
+        if (running) {
+            loadCandleHistory(normalized);
+        }
+    }
+
     public void setNetworkAvailable(boolean available) {
         networkAvailable = available;
         if (!available) {
+            socketReady = false;
             closeSocket(false);
             emitState(State.OFFLINE, "الشبكة غير متاحة");
             return;
@@ -177,18 +261,25 @@ public final class BinanceMarketEngine {
         updateCount = 0L;
 
         emitState(networkAvailable ? State.CONNECTING : State.OFFLINE,
-                networkAvailable ? "تهيئة 12 زوجًا عبر قناة واحدة..." : "بانتظار الشبكة...");
+                networkAvailable
+                        ? "تهيئة 12 زوجًا + شمعة العملة المختارة..."
+                        : "بانتظار الشبكة...");
 
         bootstrapRest();
         if (networkAvailable) connectNow();
+        if (networkAvailable) loadCandleHistory(selectedSymbol);
     }
 
     public void stop() {
         running = false;
+        socketReady = false;
+        historyGeneration++;
+
         if (reconnectFuture != null) {
             reconnectFuture.cancel(false);
             reconnectFuture = null;
         }
+
         closeSocket(true);
         emitState(State.STOPPED, "تم إيقاف الاتصال");
     }
@@ -222,8 +313,7 @@ public final class BinanceMarketEngine {
                         return;
                     }
 
-                    String body = r.body().string();
-                    JSONArray array = new JSONArray(body);
+                    JSONArray array = new JSONArray(r.body().string());
                     for (int i = 0; i < array.length(); i++) {
                         JSONObject item = array.optJSONObject(i);
                         if (item == null) continue;
@@ -246,12 +336,75 @@ public final class BinanceMarketEngine {
         });
     }
 
+    private void loadCandleHistory(String symbol) {
+        final long generation = ++historyGeneration;
+        final String normalized = symbol.toUpperCase(Locale.US);
+
+        String url = "https://api.binance.com/api/v3/klines"
+                + "?symbol=" + normalized
+                + "&interval=1m"
+                + "&limit=" + HISTORY_LIMIT;
+
+        Request request = new Request.Builder()
+                .url(url)
+                .header("Cache-Control", "no-cache")
+                .get()
+                .build();
+
+        client.newCall(request).enqueue(new Callback() {
+            @Override public void onFailure(Call call, IOException e) {
+                // Keep the last valid chart; the live kline stream may still recover it.
+            }
+
+            @Override public void onResponse(Call call, Response response) throws IOException {
+                try (Response r = response) {
+                    if (!r.isSuccessful() || r.body() == null) return;
+                    if (generation != historyGeneration || !normalized.equals(selectedSymbol)) return;
+
+                    JSONArray array = new JSONArray(r.body().string());
+                    List<Candle> candles = new ArrayList<>(array.length());
+
+                    for (int i = 0; i < array.length(); i++) {
+                        JSONArray k = array.optJSONArray(i);
+                        if (k == null || k.length() < 11) continue;
+
+                        candles.add(new Candle(
+                                normalized,
+                                "1m",
+                                k.optLong(0),
+                                k.optLong(6),
+                                positive(k.optDouble(1)),
+                                positive(k.optDouble(2)),
+                                positive(k.optDouble(3)),
+                                positive(k.optDouble(4)),
+                                positive(k.optDouble(5)),
+                                positive(k.optDouble(7)),
+                                positive(k.optDouble(9)),
+                                positive(k.optDouble(10)),
+                                k.optInt(8),
+                                false
+                        ));
+                    }
+
+                    Listener l = listener;
+                    if (l != null && generation == historyGeneration
+                            && normalized.equals(selectedSymbol)) {
+                        l.onCandleHistory(normalized, candles);
+                    }
+                } catch (Exception ignored) {
+                    // Preserve the connection if a REST history response is malformed.
+                }
+            }
+        });
+    }
+
     private void connectNow() {
         if (!running || !networkAvailable) return;
 
         final long generation;
         synchronized (socketLock) {
             generation = ++socketGeneration;
+            socketReady = false;
             if (socket != null) {
                 socket.cancel();
                 socket = null;
@@ -260,7 +413,7 @@ public final class BinanceMarketEngine {
 
         emitState(State.CONNECTING,
                 reconnectAttempt == 0
-                        ? "فتح WebSocket واحد لـ 12 زوجًا..."
+                        ? "فتح WebSocket واحد للسوق..."
                         : "إعادة فتح قناة السوق...");
 
         Request request = new Request.Builder()
@@ -277,9 +430,12 @@ public final class BinanceMarketEngine {
 
                 synchronized (socketLock) {
                     socket = webSocket;
+                    socketReady = true;
                 }
+
                 reconnectAttempt = 0;
-                emitState(State.LIVE, "12 زوجًا حيًا • WebSocket واحد");
+                subscribeKline(selectedSymbol);
+                emitState(State.LIVE, "12 زوجًا حيًا + شمعة مختارة • WebSocket واحد");
             }
 
             @Override public void onMessage(WebSocket webSocket, String text) {
@@ -289,9 +445,14 @@ public final class BinanceMarketEngine {
 
             @Override public void onFailure(WebSocket webSocket, Throwable t, Response response) {
                 if (!isCurrent(generation) || !running) return;
+
                 synchronized (socketLock) {
-                    if (socket == webSocket) socket = null;
+                    if (socket == webSocket) {
+                        socket = null;
+                        socketReady = false;
+                    }
                 }
+
                 reconnectCount++;
                 emitState(networkAvailable ? State.DEGRADED : State.OFFLINE,
                         networkAvailable
@@ -302,9 +463,14 @@ public final class BinanceMarketEngine {
 
             @Override public void onClosed(WebSocket webSocket, int code, String reason) {
                 if (!isCurrent(generation) || !running) return;
+
                 synchronized (socketLock) {
-                    if (socket == webSocket) socket = null;
+                    if (socket == webSocket) {
+                        socket = null;
+                        socketReady = false;
+                    }
                 }
+
                 reconnectCount++;
                 emitState(networkAvailable ? State.DEGRADED : State.OFFLINE,
                         networkAvailable
@@ -326,10 +492,18 @@ public final class BinanceMarketEngine {
     private void handleMessage(String raw) {
         try {
             JSONObject root = new JSONObject(raw);
-            JSONObject data = root.has("data") && root.opt("data") instanceof JSONObject
-                    ? root.getJSONObject("data") : root;
+            Object wrapped = root.opt("data");
+            JSONObject data = wrapped instanceof JSONObject
+                    ? (JSONObject) wrapped
+                    : root;
 
             String eventType = data.optString("e", "");
+
+            if ("kline".equals(eventType)) {
+                handleKline(data);
+                return;
+            }
+
             String symbol = data.optString("s", "").toUpperCase(Locale.US);
             Quote q = quotes.get(symbol);
             if (q == null) return;
@@ -358,11 +532,66 @@ public final class BinanceMarketEngine {
         }
     }
 
+    private void handleKline(JSONObject data) {
+        JSONObject k = data.optJSONObject("k");
+        if (k == null) return;
+
+        String symbol = k.optString("s", data.optString("s", ""))
+                .toUpperCase(Locale.US);
+        if (!symbol.equals(selectedSymbol)) return;
+
+        Candle candle = new Candle(
+                symbol,
+                k.optString("i", "1m"),
+                k.optLong("t"),
+                k.optLong("T"),
+                positive(k.optDouble("o")),
+                positive(k.optDouble("h")),
+                positive(k.optDouble("l")),
+                positive(k.optDouble("c")),
+                positive(k.optDouble("v")),
+                positive(k.optDouble("q")),
+                positive(k.optDouble("V")),
+                positive(k.optDouble("Q")),
+                k.optInt("n"),
+                k.optBoolean("x", false)
+        );
+
+        Listener l = listener;
+        if (l != null) l.onCandle(candle);
+    }
+
+    private void subscribeKline(String symbol) {
+        sendKlineSubscription("SUBSCRIBE", symbol);
+    }
+
+    private void sendKlineSubscription(String method, String symbol) {
+        WebSocket current;
+        synchronized (socketLock) {
+            if (!socketReady || socket == null) return;
+            current = socket;
+        }
+
+        try {
+            JSONObject request = new JSONObject();
+            request.put("method", method);
+
+            JSONArray params = new JSONArray();
+            params.put(symbol.toLowerCase(Locale.US) + "@kline_1m");
+            request.put("params", params);
+            request.put("id", requestId.incrementAndGet());
+
+            current.send(request.toString());
+        } catch (Exception ignored) {
+            // The next reconnect restores the selected stream.
+        }
+    }
+
     private void emitSnapshot(boolean bootstrap, Quote q) {
         Listener l = listener;
         if (l == null) return;
 
-        Snapshot snapshot = new Snapshot(
+        l.onSnapshot(new Snapshot(
                 q.symbol,
                 finite(q.lastTrade),
                 finite(q.bid),
@@ -374,8 +603,7 @@ public final class BinanceMarketEngine {
                 updateCount,
                 reconnectCount,
                 bootstrap
-        );
-        l.onSnapshot(snapshot);
+        ));
     }
 
     private void scheduleReconnect(long requestedDelayMs) {
@@ -400,6 +628,7 @@ public final class BinanceMarketEngine {
     private void closeSocket(boolean userStop) {
         synchronized (socketLock) {
             socketGeneration++;
+            socketReady = false;
             if (socket != null) {
                 socket.close(1000, userStop ? "user_stop" : "network_lost");
                 socket = null;
