@@ -38,6 +38,8 @@ class RadarScanner:
         self.last_scan_at = 0.0
         self.lock = asyncio.Lock()
         self.on_alert: Callable[[Signal], Awaitable[None]] | None = None
+        # Only freshly computed signals may be submitted to the execution layer.
+        self.latest_signals: dict[str, Signal] = {}
 
     def universe(self) -> list[Ticker]:
         now_ms = int(time.time() * 1000)
@@ -110,6 +112,7 @@ class RadarScanner:
 
             results = await asyncio.gather(*(analyze_one(t) for t in stage1[: self.settings.stage2_limit]))
             rows = sorted((x for x in results if x), key=lambda x: x.score, reverse=True)
+            self.latest_signals = {x.symbol.upper(): x for x in rows[: self.settings.stage2_limit]}
 
             alerts = []
             for signal in rows:
@@ -287,3 +290,7 @@ class RadarScanner:
             if item["c"] > 0 and item["h"] >= max(item["o"], item["c"]) and item["l"] <= min(item["o"], item["c"]):
                 result.append(item)
         return result
+
+
+    def latest_signal(self, symbol: str) -> Signal | None:
+        return self.latest_signals.get(str(symbol or "").upper())
