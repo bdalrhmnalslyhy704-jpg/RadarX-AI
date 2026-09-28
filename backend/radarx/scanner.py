@@ -92,13 +92,37 @@ class RadarScanner:
             stage1 = universe[: self.settings.stage1_limit]
             await self.streams.set_candidates([x.symbol for x in stage1[: self.settings.stage2_limit]])
 
-            btc = next((x for x in universe if x.symbol == "BTCUSDT"), None)
-            eth = next((x for x in universe if x.symbol == "ETHUSDT"), None)
-            btc15 = btc.change_24h / 4 if btc else 0
-            btc60 = btc.change_24h if btc else 0
-            eth15 = eth.change_24h / 4 if eth else 0
+            # Regime is computed from closed short-term candles, not a division of
+            # the 24h percentage. This makes the market context responsive to the
+            # same intraday horizon used by the candidate engine.
+            try:
+                btc_5m, btc_1h, eth_5m = await asyncio.gather(
+                    self.rest.klines("BTCUSDT", "5m", 80),
+                    self.rest.klines("BTCUSDT", "1h", 50),
+                    self.rest.klines("ETHUSDT", "5m", 80),
+                )
+                b5, b60, e5 = map(self._bars, (btc_5m, btc_1h, eth_5m))
+                if len(b5) >= 16 and len(b60) >= 3 and len(e5) >= 16:
+                    btc15 = pct_change(b5[-4]["c"], b5[-1]["c"])
+                    btc60 = pct_change(b60[-2]["c"], b60[-1]["c"])
+                    eth15 = pct_change(e5[-4]["c"], e5[-1]["c"])
+                else:
+                    raise ValueError("INSUFFICIENT_REGIME_HISTORY")
+            except Exception:
+                btc = next((x for x in universe if x.symbol == "BTCUSDT"), None)
+                eth = next((x for x in universe if x.symbol == "ETHUSDT"), None)
+                btc15 = btc.change_24h / 4 if btc else 0
+                btc60 = btc.change_24h if btc else 0
+                eth15 = eth.change_24h / 4 if eth else 0
+
             breadth = sum(1 for x in universe if x.change_24h > 0) / len(universe) * 100
-            regime_score = clamp(50 + (10 if btc15 > 0 else -10) + (15 if btc60 > 0 else -12) + (6 if eth15 > 0 else -5) + (breadth - 50) * 0.25)
+            regime_score = clamp(
+                50
+                + (10 if btc15 > 0 else -10)
+                + (15 if btc60 > 0 else -12)
+                + (6 if eth15 > 0 else -5)
+                + (breadth - 50) * 0.25
+            )
 
             semaphore = asyncio.Semaphore(self.settings.max_concurrent_rest)
 
