@@ -1,4 +1,4 @@
-name: RadarX Android APK 6.0
+name: RadarX Android APK 6.1
 on:
   workflow_dispatch:
   push:
@@ -52,21 +52,21 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/RadarX-6.0.apk
-          unzip -t dist/RadarX-6.0.apk >/dev/null
+          cp app/build/outputs/apk/debug/app-debug.apk dist/RadarX-6.1.apk
+          unzip -t dist/RadarX-6.1.apk >/dev/null
 
       - name: Publish installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: RadarX-6.0-Android-Installable-APK
-          path: dist/RadarX-6.0.apk
+          name: RadarX-6.1-Android-Installable-APK
+          path: dist/RadarX-6.1.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Publish release archive
         uses: actions/upload-artifact@v4
         with:
-          name: RadarX-6.0-Android-Release-Unsigned
+          name: RadarX-6.1-Android-Release-Unsigned
           path: app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
           retention-days: 30
@@ -76,9 +76,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="android-v6.0.${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" dist/RadarX-6.0.apk \
+          TAG="android-v6.1.${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" dist/RadarX-6.1.apk \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "RadarX 6.0 Android" \
-            --notes "RadarX 6.0 installable Android APK. Built from commit ${GITHUB_SHA}." \
+            --title "RadarX 6.1 Android" \
+            --notes "RadarX 6.1 installable Android APK. Built from commit ${GITHUB_SHA}." \
             --latest
