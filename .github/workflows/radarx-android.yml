@@ -52,6 +52,9 @@ jobs:
         with:
           gradle-version: "9.7.1"
 
+      - name: Validate RadarX JavaScript syntax
+        run: node --check RadarX_Ultimate_5.11.js
+
       - name: Build native debug APK
         run: gradle :app:assembleDebug --stacktrace
 
@@ -82,7 +85,7 @@ jobs:
         run: |
           set -euo pipefail
           unzip -l app/build/outputs/apk/release/app-release.apk | grep -E "classes(2)?\.dex|AndroidManifest.xml|assets/(index\.html|RadarX_Ultimate_5\.11\.js)"
-          echo "RadarX 6.6.0 full-core release package assembled successfully."
+          echo "RadarX 6.6.0 native REST + native WebSocket full-core package assembled successfully."
 
       - name: Prepare installable APK
         run: |
