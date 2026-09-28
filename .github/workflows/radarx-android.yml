@@ -3,11 +3,10 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "android/**"
+      - "app/**"
       - "settings.gradle.kts"
       - "build.gradle.kts"
       - "gradle.properties"
-      - "app/**"
       - ".github/workflows/radarx-android.yml"
       - "index.html"
       - "RadarX_Ultimate_5.11.js"
@@ -28,18 +27,28 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.6"
-      - name: Build release APK
+      - name: Build installable debug APK
+        run: gradle :app:assembleDebug --stacktrace
+      - name: Build release APK (unsigned archive)
         run: gradle :app:assembleRelease --stacktrace
-      - name: Verify APK
+      - name: Verify APKs
         run: |
           set -euo pipefail
-          APK="app/build/outputs/apk/release/app-release-unsigned.apk"
-          test -s "$APK"
-          unzip -t "$APK" >/dev/null
-      - name: Publish install package
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          test -s app/build/outputs/apk/release/app-release-unsigned.apk
+          unzip -t app/build/outputs/apk/debug/app-debug.apk >/dev/null
+          unzip -t app/build/outputs/apk/release/app-release-unsigned.apk >/dev/null
+      - name: Publish installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: RadarX-6.0-Android-APK
+          name: RadarX-6.0-Android-Installable-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: RadarX-6.0-Android-Release-Unsigned
           path: app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
           retention-days: 30
