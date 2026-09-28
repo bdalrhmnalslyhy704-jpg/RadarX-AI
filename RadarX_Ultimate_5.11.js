@@ -2609,7 +2609,7 @@ function renderResultsCenterWithContinuous(){
     refreshSentiment();loadRiskCalendar();
     setTimeout(()=>{try{renderMarkets();renderMultiRadar(false);}catch(e){}} ,350);
     if($('analysisSymbol').value&&$('analysisSymbol').value.trim()){}
-    window.dispatchEvent(new CustomEvent('radarx:ready',{detail:{version:'5.1-stable',at:Date.now()}}));
+    window.dispatchEvent(new CustomEvent('radarx:ready',{detail:{version:'6.0',at:Date.now()}}));
     }catch(e){
       showBootError(e,'init');
       try{markLiveData('error','startup');}catch{}
