@@ -1,5 +1,22 @@
 plugins { id("com.android.application") }
 
+val radarxWebAssetsDir = layout.buildDirectory.dir("generated/radarxWebAssets").get().asFile
+
+tasks.register<Copy>("prepareRadarXWebAssets") {
+  from(rootProject.projectDir) {
+    include(
+      "index.html",
+      "radarx-runtime-6.0.js",
+      "radarx-background-client.js",
+      "radarx-pulse-fusion.js",
+      "RadarX_Ultimate_5.11.js",
+      "RadarX_ProEngine_5.11.js",
+      "radarx-live-chart.js"
+    )
+  }
+  into(radarxWebAssetsDir)
+}
+
 android {
   namespace = "com.radarx.ai"
   compileSdk = 37
@@ -17,22 +34,7 @@ android {
     targetCompatibility = JavaVersion.VERSION_17
   }
 
-  sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/radarxWebAssets"))
-
-  tasks.register<Copy>("prepareRadarXWebAssets") {
-    from(rootProject.projectDir) {
-      include(
-        "index.html",
-        "radarx-runtime-6.0.js",
-        "radarx-background-client.js",
-        "radarx-pulse-fusion.js",
-        "RadarX_Ultimate_5.11.js",
-        "RadarX_ProEngine_5.11.js",
-        "radarx-live-chart.js"
-      )
-    }
-    into(layout.buildDirectory.dir("generated/radarxWebAssets"))
-  }
+  sourceSets["main"].assets.srcDir(radarxWebAssetsDir)
 
   tasks.named("preBuild") {
     dependsOn("prepareRadarXWebAssets")
