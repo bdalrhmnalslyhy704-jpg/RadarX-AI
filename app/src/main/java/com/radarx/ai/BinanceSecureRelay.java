@@ -39,7 +39,8 @@ public final class BinanceSecureRelay {
 
     private final OkHttpClient client;
     private final OkHttpClient bulkClient;
-    private final ExecutorService bulkExecutor = Executors.newFixedThreadPool(24);
+    private final ExecutorService bulkExecutor = Executors.newFixedThreadPool(8);
+    private final ExecutorService bulkHttpExecutor = Executors.newFixedThreadPool(32);
     private final EndpointHealth[] health;
     private volatile int preferred = 0;
 
@@ -247,10 +248,10 @@ public final class BinanceSecureRelay {
                 List<Future<BulkResult>> futures = new ArrayList<>();
                 for (String sym : finalSymbols) {
                     futures.add(bulkExecutor.submit(() -> {
-                        Future<byte[]> fd = bulkExecutor.submit(() -> bulkFetch("/api/v3/depth?symbol=" + Uri.encode(sym) + "&limit=100"));
-                        Future<byte[]> ft = bulkExecutor.submit(() -> bulkFetch("/api/v3/aggTrades?symbol=" + Uri.encode(sym) + "&limit=500"));
-                        Future<byte[]> f15 = bulkExecutor.submit(() -> bulkFetch("/api/v3/klines?symbol=" + Uri.encode(sym) + "&interval=15m&limit=90"));
-                        Future<byte[]> f1h = bulkExecutor.submit(() -> bulkFetch("/api/v3/klines?symbol=" + Uri.encode(sym) + "&interval=1h&limit=90"));
+                        Future<byte[]> fd = bulkHttpExecutor.submit(() -> bulkFetch("/api/v3/depth?symbol=" + Uri.encode(sym) + "&limit=100"));
+                        Future<byte[]> ft = bulkHttpExecutor.submit(() -> bulkFetch("/api/v3/aggTrades?symbol=" + Uri.encode(sym) + "&limit=500"));
+                        Future<byte[]> f15 = bulkHttpExecutor.submit(() -> bulkFetch("/api/v3/klines?symbol=" + Uri.encode(sym) + "&interval=15m&limit=90"));
+                        Future<byte[]> f1h = bulkHttpExecutor.submit(() -> bulkFetch("/api/v3/klines?symbol=" + Uri.encode(sym) + "&interval=1h&limit=90"));
                         byte[] depth = fd.get(4500, TimeUnit.MILLISECONDS);
                         byte[] trades = ft.get(4500, TimeUnit.MILLISECONDS);
                         byte[] rows15 = f15.get(4500, TimeUnit.MILLISECONDS);
