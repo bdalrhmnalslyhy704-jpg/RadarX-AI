@@ -1352,8 +1352,9 @@
 
   // ---------- Auto-Pilot Smart Scanner ----------
   const SMART_SCAN={
-    minQuoteVolume:750000, maxTickerShortlist:72, maxMidScan:40, maxDeep:8, batchSize:4, deepBatchSize:8,
-    minTrapRisk:34, minFusionScore:68, minConfidence:55, cooldownMs:8000
+    minQuoteVolume:750000, maxTickerShortlist:72, maxMidScan:40, maxDeep:8, fallbackMidScan:16, fallbackDeep:5,
+    batchSize:4, deepBatchSize:8, minTrapRisk:34, minFusionScore:68, minConfidence:55,
+    cooldownMs:8000, maxScanMs:150000, bulkTimeoutMs:10000
   };
   function smartText(key, vars={}){ let out=t(key); Object.entries(vars).forEach(function(pair){out=out.replaceAll('{'+pair[0]+'}',String(pair[1]));}); return out; }
   function smartStage(message,pct=0,mood='good'){
@@ -1522,12 +1523,13 @@
 
       const mid=[];
       const midPool=shortlist.slice(0,SMART_SCAN.maxMidScan);
+      const fastFallbackPool=shortlist.slice(0,SMART_SCAN.fallbackMidScan);
       let bulkLoaded=false;
       // Fast path: one server-side request collects 1m + 5m candles for the
       // whole Gate-2 pool. The original per-symbol path remains the fallback.
       try{
         const symbols=midPool.map(x=>x.symbol).join(',');
-        const bulk=await fetchJSON('/api/radarx-smart?symbols='+encodeURIComponent(symbols),{timeout:12000,retries:0});
+        const bulk=await fetchJSON('/api/radarx-smart?symbols='+encodeURIComponent(symbols),{timeout:SMART_SCAN.bulkTimeoutMs,retries:0});
         const bySymbol=bulk?.ok?bulk.bySymbol||{}:{};
         for(const x of midPool){
           const b=bySymbol[x.symbol];
@@ -1540,27 +1542,29 @@
         smartStage('مرحلة 2 السريعة: بوابة RadarX جمعت 1m/5m لـ '+Object.keys(bySymbol).length+'/'+midPool.length+' · '+mid.length+' مرشح متحقق',54,'busy');
       }catch{}
       if(!bulkLoaded){
-        for(let i=0;i<midPool.length;i+=SMART_SCAN.batchSize){
-          const batch=midPool.slice(i,i+SMART_SCAN.batchSize);
+        for(let i=0;i<fastFallbackPool.length;i+=SMART_SCAN.batchSize){
+          if(Date.now()>=deadlineAt-45000)break;
+          const batch=fastFallbackPool.slice(i,i+SMART_SCAN.batchSize);
           const rr=await Promise.allSettled(batch.map(async function(x){
             const p=await Promise.all([fetchKlines('binance',x.symbol,'1m',96),fetchKlines('binance',x.symbol,'5m',144)]);
             const pre=smartPreflight(p[0],p[1],x);return pre&&pre.score>=46?{...x,...pre,rows:p[1],rows1m:p[0],rows5m:p[1]}:null;
           }));
           rr.forEach(function(v){if(v.status==='fulfilled'&&v.value)mid.push(v.value);});
           state.smartScan.midVerified=mid.length;
-          smartStage('مرحلة 2 الاحتياطية: 1m/5m تحقق '+mid.length+'/'+midPool.length,20+Math.round(Math.min(i+SMART_SCAN.batchSize,midPool.length)/Math.max(1,midPool.length)*34),'busy');
-          await sleep(8);
+          smartStage('مرحلة 2 السريعة الاحتياطية: '+mid.length+'/'+fastFallbackPool.length+' — منع تكديس الطلبات',32,'busy');
+          await sleep(5);
         }
       }
       mid.sort(function(a,b){return smartPreflightRank(b)-smartPreflightRank(a);});
-      const topMid=mid.slice(0,SMART_SCAN.maxDeep);
+      const deepLimit=bulkLoaded?SMART_SCAN.maxDeep:SMART_SCAN.fallbackDeep;
+      const topMid=mid.slice(0,deepLimit);
       // Fast deep path: fetch all Order Flow + 15m/1h evidence for the top
       // candidates in one server-side batch, then keep the exact same local
       // scoring/trap/fusion code. Missing symbols transparently fall back to
       // the original per-symbol requests.
       try{
         const symbols=topMid.map(x=>x.symbol).join(',');
-        const bulk=await fetchJSON('/api/radarx-smart-deep?symbols='+encodeURIComponent(symbols),{timeout:16000,retries:0});
+        const bulk=await fetchJSON('/api/radarx-smart-deep?symbols='+encodeURIComponent(symbols),{timeout:14000,retries:0});
         const bySymbol=bulk?.ok?bulk.bySymbol||{}:{};
         topMid.forEach(function(x){if(bySymbol[x.symbol])x._deepBulk=bySymbol[x.symbol];});
         smartStage('مرحلة 3 السريعة: بوابة الأدلة جمعت العمق لـ '+Object.keys(bySymbol).length+'/'+topMid.length+' مرشحين…',58,'busy');
@@ -1568,6 +1572,7 @@
 
       const deep=[];
       for(let i=0;i<topMid.length;i+=SMART_SCAN.deepBatchSize){
+        if(Date.now()>=deadlineAt-8000)break;
         const rr=await Promise.allSettled(topMid.slice(i,i+SMART_SCAN.deepBatchSize).map(smartDeepOne));
         rr.forEach(function(v){if(v.status==='fulfilled'&&v.value)deep.push(v.value);});
         state.smartScan.deepVerified=deep.length;
@@ -1579,7 +1584,10 @@
       const watch=deep.filter(function(x){return !x.tradeReady;}).sort(function(a,b){return smartRankFinal(b)-smartRankFinal(a);});
       state.smartScan.results=eligible.slice(0,3);
       state.smartScan.watch=watch.slice(0,3);state.smartScan.lastUpdated=Date.now();state.smartScan.latencyMs=Math.round(performance.now()-started);
-      const message=state.smartScan.results.length?smartText('smartComplete',{u:uni,g:mid.length,d:deep.length,w:state.smartScan.results.length}):'لم تتجمع أدلة كافية الآن لإصدار فرصة ذهبية. المحرك يفضّل عدم توليد إشارة عند نقص التحقق.';
+      const timeoutNote=Date.now()>=deadlineAt?' · انتهت نافذة الفحص الآمنة واعتمد المحرك فقط على الأدلة المكتملة.':'';
+      const message=state.smartScan.results.length
+        ? smartText('smartComplete',{u:uni,g:mid.length,d:deep.length,w:state.smartScan.results.length})+timeoutNote
+        : 'لم تتجمع أدلة كافية الآن لإصدار فرصة ذهبية. المحرك يفضّل عدم توليد إشارة عند نقص التحقق.'+timeoutNote;
       smartStage(message,100,state.smartScan.results.length?'good':'bad');
       renderSmartOutput(state.smartScan.results,{universe:uni,stage1:shortlist.length,midVerified:mid.length,deepVerified:deep.length,watch:state.smartScan.watch,message:state.smartScan.results.length?null:message});
 
