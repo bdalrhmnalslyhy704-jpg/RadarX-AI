@@ -313,6 +313,29 @@
     return ps.global;
   }
 
+
+  async function refreshNews(symbols){
+    try{
+      const q=(symbols||[]).slice(0,32).map(encodeURIComponent).join(',');
+      const d=await fetchJSON('/api/radarx-news?symbols='+q,{timeout:6500,retries:0});
+      if(d?.ok){
+        ps.news={ok:true,items:Array.isArray(d.items)?d.items:[],checkedAt:num(d.checkedAt,now()),catalystBySymbol:d.catalystBySymbol||{}};
+        for(const [symbol,data] of Object.entries(ps.news.catalystBySymbol||{})){
+          if(data?.available===true&&finite(data.score)){
+            ps.external.catalyst.set(symbol,{...data,available:true,source:'CoinDesk RSS'});
+          }else{
+            ps.external.catalyst.delete(symbol);
+          }
+        }
+        return ps.news;
+      }
+    }catch{}
+    ps.news={...(ps.news||{}),ok:false};
+    return ps.news;
+  }
+  function newsCatalyst(symbol){
+    return ps.news?.catalystBySymbol?.[symbol]||{available:false};
+  }
   function sectorFor(symbol){for(const [k,v] of Object.entries(SECTORS))if(v.includes(symbol))return k;return null;}
   function relativeStrength(x,rows,market,sector){
     const tf=technicalFeatures(rows), ret1h=tf?.ret60??null, ret24=num(x.priceChangePercent), btc1h=market?.btc1h, btc24=num(market?.btc24);
@@ -653,6 +676,7 @@
       ]);
       const regime=marketRegime(normalized,btcRows,ethRows,global); ps.regime=regime; ps.global=global;
       const symbols=chooseCandidates(normalized).map(x=>x.symbol);
+      await refreshNews(symbols).catch(()=>{});
       const fingerprint=symbols.slice(0,PRO.mtfCandidates).join('|'), crossAge=now()-num(ps.lastCrossAt,0); const cross=crossAge<150000&&ps.crossExchange?.data?ps.crossExchange:await fetchCrossExchange(symbols).catch(()=>({available:false,data:{}})); if(cross?.available)ps.lastCrossAt=now();
       const candidates=[];
       for(let i=0;i<symbols.length;i+=3){
@@ -931,7 +955,7 @@
 
   function expose(){
     window.RadarXPro={
-      state:ps, runCycle, runResearch, render, getCandidates:()=>ps.candidates||[], getRegime:()=>ps.regime,
+      state:ps, runCycle, runResearch, render, getCandidates:()=>ps.candidates||[], getRegime:()=>ps.regime, getNews:()=>ps.news, refreshNews,
       setExternalSignal:(kind,symbol,data)=>{if(!['catalyst','social','onchain','tokenomics'].includes(kind))return false;ps.external[kind].set(symbol,{...data,available:true});return true;},
       setWeights:(w)=>{for(const k of Object.keys(ps.weights))if(finite(w?.[k]))ps.weights[k]=Math.max(0,num(w[k]));return {...ps.weights};},
       clearExternal:(kind,symbol)=>{ps.external[kind]?.delete(symbol);},
