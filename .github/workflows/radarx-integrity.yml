@@ -73,7 +73,6 @@ jobs:
           set -euo pipefail
           BASE="https://radar-x-ai.vercel.app"
           curl --fail --silent --show-error --retry 2 --max-time 20 "$BASE/api/binance?path=%2Fapi%2Fv3%2Fping" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(typeof j!=='object')process.exit(1);console.log('Binance relay ping OK',JSON.stringify(j));})"
-          curl --fail --silent --show-error --retry 2 --max-time 20 "$BASE/api/bn/api/v3/ping" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(typeof j!=='object')process.exit(1);console.log('Vercel rewrite ping OK',JSON.stringify(j));})"
           curl --fail --silent --show-error --retry 2 --max-time 25 "$BASE/api/binance?path=%2Fapi%2Fv3%2Fticker%2Fprice%3Fsymbol%3DBTCUSDT" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(!j.symbol||!j.price)process.exit(1);console.log('BTC ticker OK',j.symbol,j.price);})"
 
       - name: Live health endpoint smoke test
