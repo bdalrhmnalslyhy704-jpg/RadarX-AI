@@ -87,7 +87,7 @@ public final class BinanceSecureRelay {
                     .url(REMOTE_RELAY + "?path=" + Uri.encode(rawPath))
                     .get()
                     .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.6.0")
+                    .header("User-Agent", "RadarX-Android/6.7.0")
                     .build();
             long started = System.currentTimeMillis();
             try (Response upstream = client.newCall(cloud).execute()) {
@@ -178,7 +178,7 @@ public final class BinanceSecureRelay {
                     .url(REMOTE_RELAY + "?path=%2Fapi%2Fv3%2Fping")
                     .get()
                     .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.6.0")
+                    .header("User-Agent", "RadarX-Android/6.7.0")
                     .build();
             try (Response r = client.newCall(cloud).execute()) {
                 latency = System.currentTimeMillis() - started;
@@ -196,7 +196,7 @@ public final class BinanceSecureRelay {
                     .url(UPSTREAMS[idx] + "/api/v3/ping")
                     .get()
                     .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.5.1")
+                    .header("User-Agent", "RadarX-Android/6.7.0")
                     .build();
 
             try (Response r = client.newCall(request).execute()) {
