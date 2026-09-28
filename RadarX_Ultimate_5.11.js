@@ -2471,8 +2471,29 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
   function saveAlert(x){if(!x||x.signal==='NO_SIGNAL')return;const a=readJSON(KEYS.alerts,[]),key=`${x.exchange}|${x.symbol}|${x.signal}`;if(a.some(y=>y.key===key&&Date.now()-y.ts<15*60e3))return;a.unshift({key,ts:Date.now(),symbol:x.symbol,exchange:x.exchange,signal:x.signal,score:x.score,quality:x.quality,reasons:x.reasons.slice(0,8),entry:x.entry,sl:x.sl,tp1:x.tp1,tp2:x.tp2,tp3:x.tp3,mode:x.mode});writeJSON(KEYS.alerts,a.slice(0,200));pushEvent('recommendation',x);if(x.signal==='EARLY_ALERT')notifyUser(`${x.symbol} ${t('signalEarly')}`,`${t('strength')}: ${Math.round(x.score)}/100 · ${t('entry')}: ${fmt(x.entry)}`);renderResultsCenter();}
   function renderAlerts(){const a=readJSON(KEYS.alerts,[]);const target=$('moreAlerts');if(target){target.innerHTML=a.length?a.map(x=>`<div class="alert-item ${x.score>=83?'high':''}"><h4>${esc(x.exchange)} · ${esc(x.symbol)} · ${Math.round(x.score)}/100</h4><div class="small muted">${new Date(x.ts).toLocaleString()} · ${x.mode}</div><div class="tags">${x.reasons.map(r=>`<span class="tag">${esc(r)}</span>`).join('')}</div><div class="small" style="margin-top:7px">${t('entry')}: ${fmt(x.entry)} · SL: ${fmt(x.sl)} · TP1: ${fmt(x.tp1)} · TP2: ${fmt(x.tp2)} · TP3: ${fmt(x.tp3)}</div></div>`).join(''):`<div class="note">${t('noAlerts')}</div>`;}}
 
-  async function requestNotifications(){if(!('Notification' in window))return toast('Notification API unavailable');const p=await Notification.requestPermission();toast(p==='granted'?t('permissionGranted'):t('permissionBlocked'));}
-  function notifyUser(title,body){try{if('Notification' in window&&Notification.permission==='granted')new Notification(title,{body});}catch{}}
+  async function requestNotifications(){
+    try{
+      if(window.RadarXAndroid?.requestNativeNotifications){
+        const ok=!!window.RadarXAndroid.requestNativeNotifications();
+        toast(ok?t('permissionGranted'):t('permissionBlocked'));
+        return ok;
+      }
+    }catch{}
+    if(!('Notification' in window))return toast('Notification API unavailable');
+    const p=await Notification.requestPermission();
+    toast(p==='granted'?t('permissionGranted'):t('permissionBlocked'));
+    return p==='granted';
+  }
+  function notifyUser(title,body){
+    try{
+      if(window.RadarXAndroid?.postNativeNotification){
+        const ok=!!window.RadarXAndroid.postNativeNotification(String(title||'RadarX'),String(body||''));
+        if(ok){try{window.RadarXAndroid.vibrate(220);}catch{};return true;}
+      }
+    }catch{}
+    try{if('Notification' in window&&Notification.permission==='granted'){new Notification(title,{body});return true;}}catch{}
+    return false;
+  }
 
 
 // ---------- Continuous Background Radar 4.11 ----------
