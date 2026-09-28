@@ -310,7 +310,8 @@ public final class MainActivity extends Activity {
         public boolean requestNativeNotifications() {
             try {
                 if (Build.VERSION.SDK_INT >= 33 &&
-                        activity != null ? activity.checkSelfPermission("android.permission.POST_NOTIFICATIONS") : PackageManager.PERMISSION_GRANTED
+                        activity != null &&
+                        activity.checkSelfPermission("android.permission.POST_NOTIFICATIONS")
                                 != PackageManager.PERMISSION_GRANTED) {
                     if (activity != null) {
                         activity.requestPermissions(
