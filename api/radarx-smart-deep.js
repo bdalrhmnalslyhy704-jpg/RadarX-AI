@@ -4,7 +4,7 @@
 const UPSTREAMS=['https://data-api.binance.vision','https://api.binance.com','https://api-gcp.binance.com','https://api1.binance.com','https://api2.binance.com'];
 const state=globalThis.__RADARX_SMART_DEEP_69__||(globalThis.__RADARX_SMART_DEEP_69__={ts:0,key:'',data:null});
 function clean(s){return String(s||'').trim().toUpperCase().replace(/[^A-Z0-9]/g,'');}
-function valid(s){return /^[A-Z0-9]{4,24}USDT$/.test(s)&&!/^(USDC|USDP|FDUSD|TUSD|DAI|USDE|USDS|BUSD)USDT$/.test(s)&&!/(UP|DOWN|BULL|BEAR)USDT$/.test(s);}
+function valid(s){return /^[A-Z0-9]{2,20}USDT$/.test(s)&&!/^(USDC|USDP|FDUSD|TUSD|DAI|USDE|USDS|BUSD)USDT$/.test(s)&&!/(UP|DOWN|BULL|BEAR)USDT$/.test(s);}
 function timeoutSignal(ms){const c=new AbortController(),tm=setTimeout(()=>c.abort(),ms);return{signal:c.signal,clear:()=>clearTimeout(tm)};}
 async function get(path){
   let last=null;
