@@ -37,9 +37,9 @@ jobs:
           set -euo pipefail
           mkdir -p "$HOME/.android"
           if [ ! -s "$HOME/.android/debug.keystore" ]; then
-            keytool -genkeypair -v               -keystore "$HOME/.android/debug.keystore"               -storetype PKCS12               -storepass android               -keypass android               -alias androiddebugkey               -keyalg RSA               -keysize 2048               -validity 10000               -dname "CN=Android Debug,O=Android,C=US"
+            keytool -genkeypair -v -J-Djava.security.egd=file:/dev/./urandom -keystore "$HOME/.android/debug.keystore" -storetype PKCS12 -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
-          keytool -list -v             -keystore "$HOME/.android/debug.keystore"             -storepass android             -alias androiddebugkey | grep -E "Alias name:|SHA256:"
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey
 
       - uses: gradle/actions/setup-gradle@v4
         with:
@@ -97,4 +97,4 @@ jobs:
         run: |
           set -euo pipefail
           TAG="android-v6.4.${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" dist/RadarX-6.4.1-Native.apk             --repo "${GITHUB_REPOSITORY}"             --title "RadarX 6.4.1 Native"             --notes "RadarX Native 6.4.1: stable CI-signed release APK with native live 1m candle history and incremental WebSocket updates. Built from commit ${GITHUB_SHA}."             --latest
+          gh release create "$TAG" "dist/RadarX-6.4.1-Native.apk" --repo "${GITHUB_REPOSITORY}" --title "RadarX 6.4.1 Native" --notes "RadarX Native 6.4.1: stable CI-signed release APK with native live 1m candle history and incremental WebSocket updates. Built from commit ${GITHUB_SHA}." --latest
