@@ -27,6 +27,10 @@ public final class NativeBinanceStreamHub {
     private final OkHttpClient client;
     private final Map<String, Slot> slots = new ConcurrentHashMap<>();
     private final ConcurrentLinkedQueue<Event> events = new ConcurrentLinkedQueue<>();
+    // !miniTicker@arr is a full-market snapshot. Keeping every snapshot in the
+    // queue causes large JSON bursts on mobile. Retain only the newest ticker
+    // snapshot; selected-symbol streams keep their event-by-event semantics.
+    private final Map<String, Event> latestSnapshots = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler;
 
     public NativeBinanceStreamHub(OkHttpClient client) {
@@ -55,6 +59,7 @@ public final class NativeBinanceStreamHub {
             if (ws != null) {
                 try { ws.close(1000, "RadarX stop"); } catch (Exception ignored) {}
             }
+            latestSnapshots.remove(id);
             emit(id, "stopped", "");
         }
     }
@@ -63,10 +68,11 @@ public final class NativeBinanceStreamHub {
         for (String id : slots.keySet()) stop(id);
         scheduler.shutdownNow();
         events.clear();
+        latestSnapshots.clear();
     }
 
     public String pollJson(int max) {
-        int limit = Math.max(1, Math.min(80, max));
+        int limit = Math.max(1, Math.min(40, max));
         StringBuilder out = new StringBuilder("[");
         int count = 0;
         while (count < limit) {
@@ -79,6 +85,18 @@ public final class NativeBinanceStreamHub {
                     .append(",\"message\":");
             out.append('"').append(escape(e.payload)).append('"');
             out.append('}');
+        }
+        // A market-wide ticker snapshot is a replaceable state, not an event
+        // stream. Emit at most one latest snapshot per poll cycle.
+        if (count < limit) {
+            Event snapshot = latestSnapshots.remove("ticker");
+            if (snapshot != null) {
+                if (count++ > 0) out.append(',');
+                out.append("{\"id\":\"").append(escape(snapshot.id))
+                        .append("\",\"type\":\"").append(escape(snapshot.type))
+                        .append("\",\"ts\":").append(snapshot.ts)
+                        .append(",\"message\":\"").append(escape(snapshot.payload)).append("\"}");
+            }
         }
         out.append(']');
         return out.toString();
@@ -114,7 +132,11 @@ public final class NativeBinanceStreamHub {
                     if (!isCurrent(slot)) return;
                     slot.open = true;
                     slot.lastMessage = System.currentTimeMillis();
-                    emit(slot.id, "message", text);
+                    if ("ticker".equals(slot.id)) {
+                        latestSnapshots.put("ticker", new Event(slot.id, "message", text));
+                    } else {
+                        emit(slot.id, "message", text);
+                    }
                 }
 
                 @Override public void onClosing(WebSocket webSocket, int code, String reason) {
