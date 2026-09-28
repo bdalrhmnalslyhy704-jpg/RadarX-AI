@@ -1177,12 +1177,10 @@
       const r1=pair[0],r5=pair[1],pre=smartPreflight(r1,r5,x);
       if(!pre)return null;
       const pack=await Promise.all([
-        fetchKlines('binance',symbol,'15m',120),
-        fetchKlines('binance',symbol,'1h',120),
         Promise.all([fetchDepth('binance',symbol,100),fetchTrades('binance',symbol,500)]).catch(function(){return null;}),
         fetchMTFConsensus('binance',symbol).catch(function(){return null;})
       ]);
-      const r15=pack[0],r1h=pack[1],fp=pack[2],mtf=pack[3],rows=r5.filter(function(r){return r.closed!==false;});
+      const fp=pack[0],mtf=pack[1],rows=r5.filter(function(r){return r.closed!==false;});
       const f=pre.f5,structure=detectStructure(rows),flow=fp?flowFromData(fp[0],fp[1]):null;
       const fakeout=detectFakeout(rows,f,flow,structure);
       const forensic=deepDiveAnalysis(rows,f,flow,structure,fakeout);
@@ -1196,16 +1194,16 @@
       const mtfScore=mtf?.consensusScore??50,mtfAgree=mtf?.agreement??0;
       const breakoutPressure=clamp((f5.breakout>=-.9?68:38)+(f5.compression>=35?18:0)+(f5.volumeRatio>=1.35?12:0)+(fusionScore-50)*.35);
       const evidence=[
-        r1?.length>=50,r5?.length>=100,r15?.length>=60,r1h?.length>=60,!!flow,!!flow?.whales,
-        !!mtf,!!structure,forensic?.score!=null,fakeout?.score!=null
+        r1?.length>=50,r5?.length>=100,!!flow,!!flow?.whales,!!mtf,
+        !!structure,forensic?.score!=null,fakeout?.score!=null
       ].filter(Boolean).length;
-      const dataCoverage=evidence/10*100;
+      const dataCoverage=evidence/8*100;
       const tradeReady=trap<SMART_SCAN.minTrapRisk&&fusionScore>=SMART_SCAN.minFusionScore&&confidence>=SMART_SCAN.minConfidence&&quality>=58&&dataCoverage>=60;
       const compositeScore=clamp(
         fusionScore*.46+confidence*.16+quality*.12+breakoutPressure*.10+
         mtfScore*.07+pre.score*.04+(flow?.whales?.score??50)*.05
       );
-      return {...x,...f,...base,symbol:symbol,rows:rows,rows1m:r1,rows15m:r15,rows1h:r1h,structure:structure,fakeout:fakeout,forensic:forensic,flow:flow,flowWhales:flow?.whales||null,mtf:mtf,
+      return {...x,...f,...base,symbol:symbol,rows:rows,rows1m:r1,rows15m:mtf,rows1h:mtf,structure:structure,fakeout:fakeout,forensic:forensic,flow:flow,flowWhales:flow?.whales||null,mtf:mtf,
         fusion:fusion,fusionScore:fusionScore,confidence:confidence,quality:quality,trapRisk:trap,dataCoverage:dataCoverage,
         multiTFScore:mtfScore,multiTFAgree:mtfAgree,breakoutPressure:breakoutPressure,preScore:pre.score,tradeReady:tradeReady,
         compositeScore:compositeScore,mode:'SMART_FUSION_LIVE',liveAt:Date.now(),eventTime:Date.now()};
