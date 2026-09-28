@@ -14,8 +14,8 @@
   const LOG_KEY = 'radarx_pro_logs_511';
   const CACHE_TTL = {global: 2*60e3, exchange: 180e3, kline: 90e3, flow: 30e3, derivatives: 180e3};
   const PRO = {
-    version: '5.11',
-    cycleMs: 30000,
+    version: '6.0',
+    cycleMs: 60000,
     initialCandidates: 24,
     mtfCandidates: 7,
     flowCandidates: 3,
@@ -32,7 +32,7 @@
     minQuoteVolume: 350000,
     cacheMaxAgeMs: 24*3600e3,
     maxLog: 400,
-    evidenceRefreshMs: 30000,
+    evidenceRefreshMs: 45000,
     researchYieldEvery: 40
   };
 
