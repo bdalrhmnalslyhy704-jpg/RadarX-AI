@@ -16,6 +16,7 @@ import android.widget.TextView;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -33,7 +34,8 @@ public final class MainActivity extends Activity implements BinanceMarketEngine.
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final BinanceMarketEngine engine = new BinanceMarketEngine();
-    private final Map<String, BinanceMarketEngine.Snapshot> latestBySymbol = new ConcurrentHashMap<>();
+    private final Map<String, BinanceMarketEngine.Snapshot> latestBySymbol =
+            new ConcurrentHashMap<>();
     private final Map<String, TextView> priceRows = new ConcurrentHashMap<>();
     private final Map<String, TextView> changeRows = new ConcurrentHashMap<>();
 
@@ -54,11 +56,9 @@ public final class MainActivity extends Activity implements BinanceMarketEngine.
     private TextView cacheView;
     private TextView selectedSymbolView;
     private Button actionButton;
-    private PulseChartView chartView;
+    private CandleChartView chartView;
 
     private String selectedSymbol = "BTCUSDT";
-    private long lastChartUpdateCount = -1L;
-    private String lastChartSymbol = "";
     private boolean renderQueued;
     private boolean userStopped;
     private boolean destroyed;
@@ -102,14 +102,14 @@ public final class MainActivity extends Activity implements BinanceMarketEngine.
         brand.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         header.addView(brand, new LinearLayout.LayoutParams(0, dp(48), 1));
 
-        TextView badge = text("NATIVE 6.3", 10, LIVE, true);
+        TextView badge = text("NATIVE 6.4", 10, LIVE, true);
         badge.setGravity(Gravity.CENTER);
         badge.setPadding(dp(10), dp(6), dp(10), dp(6));
         badge.setBackground(round(PANEL_2, dp(14)));
         header.addView(badge, new LinearLayout.LayoutParams(dp(96), dp(34)));
         root.addView(header);
 
-        root.addView(text("Multi-Symbol Live Radar • Binance Spot", 12, MUTED, false),
+        root.addView(text("Live Trading Core • Binance Spot", 12, MUTED, false),
                 new LinearLayout.LayoutParams(-1, dp(24)));
 
         LinearLayout statusCard = panel(PANEL);
@@ -120,7 +120,7 @@ public final class MainActivity extends Activity implements BinanceMarketEngine.
         statusCard.addView(connectionDetailView, new LinearLayout.LayoutParams(-1, dp(22)));
         root.addView(statusCard, marginTop(10));
 
-        cacheView = text("12 زوج • WebSocket واحد • REST bootstrap واحد", 10, MUTED, false);
+        cacheView = text("12 زوجًا • WebSocket واحد • REST bootstrap واحد", 10, MUTED, false);
         cacheView.setPadding(dp(4), dp(6), dp(4), dp(2));
         root.addView(cacheView);
 
@@ -152,9 +152,16 @@ public final class MainActivity extends Activity implements BinanceMarketEngine.
         askView = quoteCard(quotes, "ASK", DOWN);
         root.addView(quotes, marginTop(10));
 
-        chartView = new PulseChartView(this);
-        root.addView(chartView, marginTop(10, -1, dp(180)));
-        chartView.setBackground(round(PANEL, dp(14)));
+        LinearLayout chartHeader = panel(PANEL);
+        chartHeader.setPadding(dp(12), dp(8), dp(12), dp(8));
+        TextView chartTitle = text("PRICE CHART", 12, LIVE, true);
+        TextView chartInfo = text("شموع 1m حقيقية • التاريخ من REST • التحديث من WebSocket", 10, MUTED, false);
+        chartHeader.addView(chartTitle, new LinearLayout.LayoutParams(-1, dp(20)));
+        chartHeader.addView(chartInfo, new LinearLayout.LayoutParams(-1, dp(20)));
+        root.addView(chartHeader, marginTop(10));
+
+        chartView = new CandleChartView(this);
+        root.addView(chartView, marginTop(4, -1, dp(250)));
 
         LinearLayout metricsRow1 = new LinearLayout(this);
         metricsRow1.setOrientation(LinearLayout.HORIZONTAL);
@@ -209,8 +216,8 @@ public final class MainActivity extends Activity implements BinanceMarketEngine.
         root.addView(actionButton, marginTop(12, -1, dp(48)));
 
         TextView source = text(
-                "مصدر الأسعار: Binance Spot WebSocket + REST bootstrap • لا توجد أسعار وهمية • "
-                        + "واجهة Native خفيفة ولا تعيد تحميل صفحة ويب عند كل تحديث.",
+                "السوق: Binance Spot فقط • لا Futures ولا Leverage • لا أسعار وهمية. "
+                        + "النواة مفصولة عن واجهة التحليل لتبقى الاستجابة مستقرة.",
                 10, MUTED, false
         );
         source.setGravity(Gravity.CENTER);
@@ -228,7 +235,6 @@ public final class MainActivity extends Activity implements BinanceMarketEngine.
         row.setBackground(round(PANEL, dp(12)));
 
         TextView pair = text(displaySymbol(symbol), 13, TEXT, true);
-        pair.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
         row.addView(pair, new LinearLayout.LayoutParams(dp(86), dp(42)));
 
         LinearLayout values = new LinearLayout(this);
@@ -266,11 +272,11 @@ public final class MainActivity extends Activity implements BinanceMarketEngine.
     private void selectSymbol(String symbol) {
         selectedSymbol = symbol;
         selectedSymbolView.setText(displaySymbol(symbol));
-        chartView.clearValues();
-        lastChartUpdateCount = -1L;
-        lastChartSymbol = "";
+        chartView.setHistory(null);
+        engine.setSelectedSymbol(symbol);
+
         BinanceMarketEngine.Snapshot s = latestBySymbol.get(symbol);
-        if (s != null) renderFocus(s, true);
+        if (s != null) renderFocus(s);
     }
 
     private TextView quoteCard(LinearLayout parent, String title, int accent) {
@@ -346,6 +352,20 @@ public final class MainActivity extends Activity implements BinanceMarketEngine.
         }, 120L);
     }
 
+    @Override public void onCandleHistory(String symbol, List<BinanceMarketEngine.Candle> candles) {
+        main.post(() -> {
+            if (destroyed || !selectedSymbol.equals(symbol)) return;
+            chartView.setHistory(candles);
+        });
+    }
+
+    @Override public void onCandle(BinanceMarketEngine.Candle candle) {
+        main.post(() -> {
+            if (destroyed || !selectedSymbol.equals(candle.symbol)) return;
+            chartView.updateCandle(candle);
+        });
+    }
+
     private void renderAll() {
         for (String symbol : BinanceMarketEngine.SYMBOLS) {
             BinanceMarketEngine.Snapshot s = latestBySymbol.get(symbol);
@@ -369,10 +389,10 @@ public final class MainActivity extends Activity implements BinanceMarketEngine.
         }
 
         BinanceMarketEngine.Snapshot selected = latestBySymbol.get(selectedSymbol);
-        if (selected != null) renderFocus(selected, false);
+        if (selected != null) renderFocus(selected);
     }
 
-    private void renderFocus(BinanceMarketEngine.Snapshot s, boolean forced) {
+    private void renderFocus(BinanceMarketEngine.Snapshot s) {
         selectedSymbolView.setText(displaySymbol(s.symbol));
 
         if (s.lastTrade > 0.0) {
@@ -392,21 +412,6 @@ public final class MainActivity extends Activity implements BinanceMarketEngine.
         reconnectView.setText(Integer.toString(s.reconnectCount));
         if (s.quoteVolume > 0.0) volumeView.setText(compact(s.quoteVolume));
         updateTimeView.setText("آخر تحديث: " + time(s.receivedAtMs));
-
-        if (forced) {
-            chartView.clearValues();
-            lastChartUpdateCount = -1L;
-            lastChartSymbol = "";
-        }
-
-        if (s.lastTrade > 0.0
-                && (forced
-                    || !s.symbol.equals(lastChartSymbol)
-                    || s.updateCount != lastChartUpdateCount)) {
-            chartView.addValue(s.lastTrade);
-            lastChartSymbol = s.symbol;
-            lastChartUpdateCount = s.updateCount;
-        }
     }
 
     @Override public void onState(BinanceMarketEngine.State state, String detail) {
@@ -443,7 +448,7 @@ public final class MainActivity extends Activity implements BinanceMarketEngine.
             connectionDetailView.setText(detail == null ? "" : detail);
 
             if (state == BinanceMarketEngine.State.LIVE) {
-                cacheView.setText("12 زوجًا • WebSocket واحد • تحديثات تدريجية");
+                cacheView.setText("12 زوجًا • WebSocket واحد • 1m kline للعملة المختارة");
                 cacheView.setTextColor(LIVE);
             } else if (state == BinanceMarketEngine.State.OFFLINE) {
                 cacheView.setText("بلا شبكة • لن نعرض سعرًا مصطنعًا");
