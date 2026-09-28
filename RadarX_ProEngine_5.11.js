@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  // RadarX Pro Intelligence Engine 5.11
+  // RadarX Pro Intelligence Engine 6.8
   // This module extends RadarX 4.15 without replacing its existing engines.
   // It never invents market data. Missing providers are marked unavailable and
   // their weight is excluded from the evidence average, while coverage reduces confidence.
@@ -14,7 +14,7 @@
   const LOG_KEY = 'radarx_pro_logs_511';
   const CACHE_TTL = {global: 2*60e3, exchange: 180e3, kline: 90e3, flow: 30e3, derivatives: 180e3};
   const PRO = {
-    version: '6.0',
+    version: '6.8',
     cycleMs: 60000,
     initialCandidates: 24,
     mtfCandidates: 7,
