@@ -67,6 +67,7 @@ public final class NativeBinanceHttpQueue {
                 .readTimeout(6_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
                 .writeTimeout(6_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
                 .retryOnConnectionFailure(true)
+                .dns(new RadarXDohDns())
                 .build();
 
         this.executor = Executors.newFixedThreadPool(3, new DaemonFactory());
