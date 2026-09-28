@@ -50,7 +50,7 @@ jobs:
           if(!index.includes('RadarX_Ultimate_5.11.js?v=6.8.1-core'))throw new Error('core cache bust missing');
           if(!index.includes('RadarX_ProEngine_5.11.js?v=6.8.1-pro'))throw new Error('pro cache bust missing');
           if(!index.includes('radarx-runtime-6.0.js?v=6.8.1'))throw new Error('runtime cache bust missing');
-          if(!index.includes('radarx-pulse-fusion.js?v=3.1-fusion-6.8'))throw new Error('pulse cache bust missing');
+          if(!index.includes('radarx-pulse-fusion.js?v=3.1-fusion-6.8.1'))throw new Error('pulse cache bust missing');
           console.log('Entry wiring OK');
           NODE
 
