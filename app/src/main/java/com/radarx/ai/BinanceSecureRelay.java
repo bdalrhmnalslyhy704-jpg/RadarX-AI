@@ -362,11 +362,10 @@ public final class BinanceSecureRelay {
     private static String jsonEscape(String value) {
         return String.valueOf(value)
                 .replace("\\", "\\\\")
-                .replace(""", "\\"")
+                .replace("\"", "\\\"")
                 .replace("\r", "\\r")
                 .replace("\n", "\\n");
     }
-
     private static String safe(String s) {
         return s == null || s.isEmpty() ? "upstream_unavailable" : s;
     }
