@@ -31,10 +31,12 @@ public final class MainActivity extends Activity {
     private static final int BG = Color.rgb(5, 10, 15);
     private static final String APP_URL =
             "https://appassets.androidplatform.net/assets/index.html";
+    private static final String VERSION = "6.6.0";
 
     private WebView webView;
     private TextView statusView;
     private BinanceSecureRelay binanceRelay;
+    private NativeBinanceStreamHub streamHub;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -48,6 +50,15 @@ public final class MainActivity extends Activity {
                 .retryOnConnectionFailure(true)
                 .build();
         binanceRelay = new BinanceSecureRelay(relayClient);
+
+        OkHttpClient wsClient = new OkHttpClient.Builder()
+                .connectTimeout(8_000L, TimeUnit.MILLISECONDS)
+                .readTimeout(0L, TimeUnit.MILLISECONDS)
+                .writeTimeout(8_000L, TimeUnit.MILLISECONDS)
+                .pingInterval(20L, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(true)
+                .build();
+        streamHub = new NativeBinanceStreamHub(wsClient);
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(BG);
@@ -84,7 +95,7 @@ public final class MainActivity extends Activity {
         root.addView(progress, progressLp);
         setContentView(root);
 
-        webView.addJavascriptInterface(new RadarXAndroidBridge(this), "RadarXAndroid");
+        webView.addJavascriptInterface(new RadarXAndroidBridge(this, streamHub), "RadarXAndroid");
         webView.loadUrl(APP_URL);
     }
 
@@ -200,7 +211,7 @@ public final class MainActivity extends Activity {
                 "(function(){try{" +
                 "window.RadarXAndroidHost={" +
                 "native:true," +
-                "version:'6.5.1'," +
+                "version:'6.6.0'," +
                 "shell:'native-web-core'," +
                 "localAssets:true," +
                 "binanceRelay:'native-failover'," +
@@ -245,6 +256,10 @@ public final class MainActivity extends Activity {
             webView.destroy();
             webView = null;
         }
+        if (streamHub != null) {
+            streamHub.stopAll();
+            streamHub = null;
+        }
         if (binanceRelay != null) binanceRelay = null;
         super.onDestroy();
     }
@@ -255,19 +270,36 @@ public final class MainActivity extends Activity {
 
     public static final class RadarXAndroidBridge {
         private final Context context;
+        private final NativeBinanceStreamHub streamHub;
 
-        RadarXAndroidBridge(Context context) {
+        RadarXAndroidBridge(Context context, NativeBinanceStreamHub streamHub) {
             this.context = context.getApplicationContext();
+            this.streamHub = streamHub;
         }
 
         @android.webkit.JavascriptInterface
         public String getVersion() {
-            return "6.5.1";
+            return VERSION;
         }
 
         @android.webkit.JavascriptInterface
         public boolean isNativeShell() {
             return true;
+        }
+
+        @android.webkit.JavascriptInterface
+        public boolean startMarketStream(String id, String streams) {
+            return streamHub != null && streamHub.start(id, streams);
+        }
+
+        @android.webkit.JavascriptInterface
+        public void stopMarketStream(String id) {
+            if (streamHub != null) streamHub.stop(id);
+        }
+
+        @android.webkit.JavascriptInterface
+        public String pollMarketStreams() {
+            return streamHub == null ? "[]" : streamHub.pollJson(80);
         }
 
         @android.webkit.JavascriptInterface
