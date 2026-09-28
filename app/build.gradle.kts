@@ -25,8 +25,8 @@ android {
     applicationId = "com.radarx.ai"
     minSdk = 24
     targetSdk = 37
-    versionCode = 73
-    versionName = "6.9.0"
+    versionCode = 74
+    versionName = "6.9.1"
   }
 
   compileOptions {
