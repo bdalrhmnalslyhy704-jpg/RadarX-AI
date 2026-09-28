@@ -509,87 +509,64 @@ public final class BinanceSecureRelay {
     public WebResourceResponse interceptHealth(Uri uri) {
         if (uri == null || !"/api/health".equals(uri.getPath())) return null;
 
+        // Ask the deployed gateway first so the native health panel reports the
+        // same real provider status used by the browser deployment.
+        try {
+            Request cloud = new Request.Builder()
+                    .url("https://radar-x-ai.vercel.app/api/health")
+                    .get()
+                    .header("Accept", "application/json")
+                    .header("User-Agent", "RadarX-Android/6.8.0")
+                    .build();
+            try (Response r = client.newCall(cloud).execute()) {
+                byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+                if (r.isSuccessful() && looksLikeJson(body)) {
+                    return response(
+                            200, "OK", "application/json; charset=utf-8",
+                            body, headers("MISS", "radarx-health-cloud", 0)
+                    );
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
         int idx = preferred;
         boolean ok = false;
         long latency = 0L;
         String route = "none";
-
-        // Probe the cloud relay first because this is the regional fallback
-        // used by the native REST transport.
         try {
-            long started = System.currentTimeMillis();
-            Request cloud = new Request.Builder()
-                    .url(REMOTE_RELAY + "?path=%2Fapi%2Fv3%2Fping")
-                    .get()
-                    .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.7.0")
-                    .build();
-            try (Response r = client.newCall(cloud).execute()) {
-                latency = System.currentTimeMillis() - started;
-                byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
-                ok = r.isSuccessful() && looksLikeJson(body);
-                if (ok) route = "radarx-cloud-relay";
-            }
-        } catch (Exception ignored) {
-            ok = false;
-        }
-
-        if (!ok) try {
             long started = System.currentTimeMillis();
             Request request = new Request.Builder()
                     .url(UPSTREAMS[idx] + "/api/v3/ping")
                     .get()
                     .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.7.0")
+                    .header("User-Agent", "RadarX-Android/6.8.0")
                     .build();
-
             try (Response r = client.newCall(request).execute()) {
                 latency = System.currentTimeMillis() - started;
                 ok = r.isSuccessful();
                 if (ok) route = UPSTREAMS[idx];
                 mark(idx, ok, latency);
             }
-        } catch (Exception e) {
-            latency = 0L;
-            ok = false;
+        } catch (Exception ignored) {
             mark(idx, false, 0L);
         }
 
         long checkedAt = System.currentTimeMillis();
-        StringBuilder results = new StringBuilder();
-        results.append("[");
-        results.append("{\"id\":\"binance\",\"label\":\"Binance Spot\",")
-                .append("\"family\":\"crypto\",\"ok\":").append(ok)
-                .append(",\"latencyMs\":").append(latency)
-                .append(",\"checkedAt\":").append(checkedAt)
-                .append(",\"hasData\":").append(ok)
-                .append(",\"route\":\"").append(jsonEscape(route)).append("\"}");
-
-        String[] others = {"okx", "bybit", "gate", "coinbase", "coingecko", "binanceFutures", "yahoo"};
-        String[] labels = {"OKX", "Bybit", "Gate", "Coinbase", "CoinGecko", "Binance Futures", "Yahoo Finance"};
-        String[] families = {"crypto", "crypto", "crypto", "crypto", "global", "derivatives", "global"};
-
-        for (int i = 0; i < others.length; i++) {
-            results.append(",{\"id\":\"").append(others[i])
-                    .append("\",\"label\":\"").append(labels[i])
-                    .append("\",\"family\":\"").append(families[i])
-                    .append("\",\"ok\":false,\"latencyMs\":0,\"checkedAt\":")
-                    .append(checkedAt)
-                    .append(",\"error\":\"native_binance_relay_only\"}");
-        }
-        results.append("]");
-
         String root = "{\"ok\":true,\"checkedAt\":" + checkedAt
                 + ",\"durationMs\":" + latency
-                + ",\"total\":" + (others.length + 1)
-                + ",\"online\":" + (ok ? 1 : 0)
+                + ",\"total\":1,\"online\":" + (ok ? 1 : 0)
                 + ",\"cryptoOnline\":" + (ok ? 1 : 0)
-                + ",\"metalsOnline\":0,\"results\":" + results + "}";
-
+                + ",\"results\":[{\"id\":\"binance\",\"label\":\"Binance Spot\","
+                + "\"family\":\"crypto\",\"ok\":" + ok
+                + ",\"latencyMs\":" + latency
+                + ",\"checkedAt\":" + checkedAt
+                + ",\"hasData\":" + ok
+                + ",\"route\":\"" + jsonEscape(route) + "\"}]}";
         return response(
                 200, "OK", "application/json; charset=utf-8",
                 root.getBytes(StandardCharsets.UTF_8),
-                headers("LOCAL", "native", 0)
+                headers("LOCAL", "native-binance-ping", 0)
         );
     }
 
