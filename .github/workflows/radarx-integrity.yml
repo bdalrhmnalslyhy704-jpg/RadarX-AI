@@ -2,7 +2,7 @@ name: RadarX Integrity + Live Smoke 6.0
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main","radarx-6.1-performance"]
   workflow_dispatch:
 
 jobs:
@@ -47,9 +47,10 @@ jobs:
           for(let i=1;i<pos.length;i++){
             if(pos[i]<pos[0] && i>0){} // filenames can be repeated in cache-bust strings
           }
-          if(!index.includes('RadarX_Ultimate_5.11.js?v=6.0.0-core'))throw new Error('core cache bust missing');
-          if(!index.includes('RadarX_ProEngine_5.11.js?v=6.0.0-pro'))throw new Error('pro cache bust missing');
-          if(!index.includes('radarx-runtime-6.0.js?v=6.0.0'))throw new Error('runtime cache bust missing');
+          if(!index.includes('RadarX_Ultimate_5.11.js?v=6.1.0-core'))throw new Error('core cache bust missing');
+          if(!index.includes('RadarX_ProEngine_5.11.js?v=6.1.0-pro'))throw new Error('pro cache bust missing');
+          if(!index.includes('radarx-runtime-6.0.js?v=6.1.0'))throw new Error('runtime cache bust missing');
+          if(!index.includes('radarx-pulse-fusion.js?v=3.1-fusion-6.1'))throw new Error('pulse cache bust missing');
           console.log('Entry wiring OK');
           NODE
 
@@ -65,6 +66,20 @@ jobs:
           const regression=/\bversion\s*:\s*['"][^'"]+['"]\s*\r?\n\s*cycleMs\s*:/;
           if(regression.test(html))throw new Error('version -> cycleMs comma regression');
           console.log('One-file regression guard OK');
+          NODE
+
+
+      - name: Check 6.1 live-stream consolidation
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const core=fs.readFileSync('RadarX_Ultimate_5.11.js','utf8');
+          const pulse=fs.readFileSync('radarx-pulse-fusion.js','utf8');
+          if(!core.includes("!miniTicker@arr"))throw new Error('miniTicker stream missing');
+          if(core.includes("encodeURIComponent('!ticker@arr')"))throw new Error('duplicate full ticker stream remains');
+          if(pulse.includes('n(r.c)'))throw new Error('Pulse Fusion n(r.c) typo remains');
+          if(!core.includes('share the global miniTicker socket'))throw new Error('shared socket guard missing');
+          console.log('6.1 consolidation checks OK');
           NODE
 
       - name: Live Binance relay smoke test
