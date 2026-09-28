@@ -2607,7 +2607,7 @@ function renderResultsCenterWithContinuous(){
     if(state.markets.length){renderMarkets();renderSentiment(computeSentimentFromMarkets(state.markets,null));renderRadarMetrics(state.markets.length,state.deepRows||[]);}
     $('briefingRefresh').onclick=()=>{refreshSentiment(true).finally(()=>renderBriefing());toast(state.markets.length?t('briefingUpdated'):t('noApi'));};
     refreshSentiment();loadRiskCalendar();
-    setTimeout(()=>scan().catch(e=>showBootError(e,'initial-scan')),180);
+    setTimeout(()=>{try{renderMarkets();renderMultiRadar(false);}catch(e){}} ,350);
     if($('analysisSymbol').value&&$('analysisSymbol').value.trim()){}
     window.dispatchEvent(new CustomEvent('radarx:ready',{detail:{version:'5.1-stable',at:Date.now()}}));
     }catch(e){
