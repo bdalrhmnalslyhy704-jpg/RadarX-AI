@@ -1116,84 +1116,194 @@
   }
 
   // ---------- Auto-Pilot Smart Scanner ----------
-  const SMART_SCAN = { minQuoteVolume: 10_000_000, minVolumeRatio: 1.8, minRet5: 0.25, minRet15: 0.50, maxTrapRisk: 34, maxInitial: 18, maxDeep: 4 };
-  function smartText(key, vars={}){ let s=t(key); for(const [k,v] of Object.entries(vars))s=s.replaceAll(`{${k}}`,String(v)); return s; }
-  function smartStage(text, pct=0, mood='good'){
-    const bar=$('smartScanProgress'), out=$('smartScanStage'); if(bar)bar.style.width=`${clamp(pct,0,100)}%`;
-    if(out){out.innerHTML=`<span class="smart-pulse ${mood==='busy'?'busy':mood==='bad'?'bad':''}"></span>${esc(text)}`;}
+  const SMART_SCAN={
+    minQuoteVolume:750000,
+    maxTickerShortlist:160,
+    maxMidScan:64,
+    maxDeep:10,
+    batchSize:6,
+    minTrapRisk:34,
+    minFusionScore:68,
+    minConfidence:55
+  };
+  function smartText(key, vars={}){ let out=t(key); Object.entries(vars).forEach(function(pair){out=out.replaceAll('{'+pair[0]+'}',String(pair[1]));}); return out; }
+  function smartStage(message,pct=0,mood='good'){
+    const bar=$('smartScanProgress'),out=$('smartScanStage');
+    if(bar)bar.style.width=clamp(pct,0,100)+'%';
+    if(out)out.innerHTML='<span class="smart-pulse '+(mood==='busy'?'busy':mood==='bad'?'bad':'')+'"></span>'+esc(message);
   }
-  function smartGatePassQuickTicker(x){ return x && /USDT$/.test(x.symbol) && x.last>0 && x.quoteVolume>=SMART_SCAN.minQuoteVolume && x.priceChangePercent>=0.65; }
-  function smartGatePassFeatures(f,x){
-    if(!f||!x) return false;
-    return x.quoteVolume>=SMART_SCAN.minQuoteVolume && f.volumeRatio>=SMART_SCAN.minVolumeRatio && f.ret5>=SMART_SCAN.minRet5 && f.ret15>=SMART_SCAN.minRet15 && f.last.c>f.e20 && f.e20>f.e50 && f.rsi>=52 && f.rsi<=92;
+  function smartUniverseEligible(x){
+    return !!(x&&/USDT$/.test(x.symbol)&&x.last>0&&num(x.quoteVolume)>=SMART_SCAN.minQuoteVolume&&
+      !/^(USDC|USDP|FDUSD|TUSD|DAI|USDE|USDS|BUSD)USDT$/.test(x.symbol)&&
+      !/(UP|DOWN|BULL|BEAR)USDT$/.test(x.symbol));
   }
-  function smartRankPre(x){
-    const liq=clamp((Math.log10(Math.max(10_000,x.quoteVolume))-7)*28+50,0,100), mom=clamp(50+x.priceChangePercent*10,0,100);
-    return liq*.58+mom*.42;
+  function smartTickerPotential(x){
+    if(!smartUniverseEligible(x))return -Infinity;
+    const liq=clamp((Math.log10(Math.max(1e6,num(x.quoteVolume)))-6)*20,0,100);
+    const move=clamp(58+num(x.priceChangePercent)*6,0,100);
+    const absChange=Math.abs(num(x.priceChangePercent));
+    const notExtended=clamp(100-Math.max(0,absChange-7)*7,0,100);
+    const spreadProxy=(num(x.bidPrice)>0&&num(x.askPrice)>0)?clamp(100-(x.askPrice/x.bidPrice-1)*10000*3):55;
+    const preBonus=(absChange>=0.15&&absChange<=4.5)?12:(absChange<0.15?8:-8);
+    return liq*.34+move*.21+notExtended*.18+spreadProxy*.15+preBonus;
+  }
+  function smartPreflight(rows1m,rows5m,x){
+    if(!rows5m||!rows5m.length)return null;
+    const f5=coreFeatures(rows5m),f1=rows1m&&rows1m.length?coreFeatures(rows1m):null;
+    const proximity=f5.hi?clamp(100-Math.max(0,(f5.hi-f5.last.c)/Math.max(f5.atr,f5.last.c*.001))*28):50;
+    const volume=clamp(50+(f5.volumeRatio-1)*26+(f5.ret5>0?6:0));
+    const acceleration=f1?clamp(50+f1.ret5*12+f1.momentum*35):50;
+    const trend=f5.e20>f5.e50?68:32;
+    const energy=clamp(proximity*.55+f5.compression*.45);
+    const squeezeBonus=f5.compression>=45&&proximity>=55?12:(f5.compression>=30&&proximity>=60?7:0);
+    const overextPenalty=Math.max(0,Math.abs(f5.ret15)-3)*4;
+    const score=clamp(
+      smartTickerPotential(x)*.20+energy*.27+volume*.16+acceleration*.12+
+      trend*.12+clamp(50+f5.bodyRatio*35)*.08+
+      Math.min(100,50+Math.max(0,f5.obvSlope)*4)*.05+squeezeBonus-overextPenalty
+    );
+    return {f5:f5,f1:f1,score:score,compression:f5.compression,proximity:proximity,volume:volume,acceleration:acceleration,trend:trend,energy:energy};
+  }
+  function smartPreflightRank(x){
+    return x?num(x.score,50)*.58+num(x.smartTickerScore,50)*.24+num(x.proximity,50)*.08+num(x.volume,50)*.10:-Infinity;
+  }
+  async function smartDeepOne(x){
+    const symbol=x.symbol;
+    try{
+      const pair=await Promise.all([
+        fetchKlines('binance',symbol,'1m',120),
+        fetchKlines('binance',symbol,'5m',180)
+      ]);
+      const r1=pair[0],r5=pair[1],pre=smartPreflight(r1,r5,x);
+      if(!pre)return null;
+      const pack=await Promise.all([
+        fetchKlines('binance',symbol,'15m',120),
+        fetchKlines('binance',symbol,'1h',120),
+        Promise.all([fetchDepth('binance',symbol,100),fetchTrades('binance',symbol,500)]).catch(function(){return null;}),
+        fetchMTFConsensus('binance',symbol).catch(function(){return null;})
+      ]);
+      const r15=pack[0],r1h=pack[1],fp=pack[2],mtf=pack[3],rows=r5.filter(function(r){return r.closed!==false;});
+      const f=pre.f5,structure=detectStructure(rows),flow=fp?flowFromData(fp[0],fp[1]):null;
+      const fakeout=detectFakeout(rows,f,flow,structure);
+      const forensic=deepDiveAnalysis(rows,f,flow,structure,fakeout);
+      const base=scoreFeatures(f,flow,structure,fakeout,forensic);
+      const tempState={...state,selected:{...base,...f,symbol:symbol,timeframe:'5m',flow:flow,flowWhales:flow?.whales||null,mtf:mtf,structure:structure,fakeout:fakeout,forensic:forensic,price:num(x.last,f.last.c),priceChangePercent:num(x.priceChangePercent),quoteVolume:num(x.quoteVolume),liveAt:Date.now(),eventTime:Date.now()},marketsBySymbol:state.marketsBySymbol,markets:state.markets};
+      const fusion=window.RadarXPulseFusion?.evaluate(rows,tempState)||null;
+      const fusionScore=clamp(fusion?.score??base.score);
+      const confidence=clamp(fusion?.confidence??base.confidence??base.quality);
+      const trap=Math.round(fakeout?.score||100);
+      const quality=Math.round(clamp(base.quality*.42+(fusion?.coverage||65)*.18+confidence*.40));
+      const mtfScore=mtf?.consensusScore??50,mtfAgree=mtf?.agreement??0;
+      const breakoutPressure=clamp((f5.breakout>=-.9?68:38)+(f5.compression>=35?18:0)+(f5.volumeRatio>=1.35?12:0)+(fusionScore-50)*.35);
+      const evidence=[
+        r1?.length>=50,r5?.length>=100,r15?.length>=60,r1h?.length>=60,!!flow,!!flow?.whales,
+        !!mtf,!!structure,forensic?.score!=null,fakeout?.score!=null
+      ].filter(Boolean).length;
+      const dataCoverage=evidence/10*100;
+      const tradeReady=trap<SMART_SCAN.minTrapRisk&&fusionScore>=SMART_SCAN.minFusionScore&&confidence>=SMART_SCAN.minConfidence&&quality>=58&&dataCoverage>=60;
+      const compositeScore=clamp(
+        fusionScore*.46+confidence*.16+quality*.12+breakoutPressure*.10+
+        mtfScore*.07+pre.score*.04+(flow?.whales?.score??50)*.05
+      );
+      return {...x,...f,...base,symbol:symbol,rows:rows,rows1m:r1,rows15m:r15,rows1h:r1h,structure:structure,fakeout:fakeout,forensic:forensic,flow:flow,flowWhales:flow?.whales||null,mtf:mtf,
+        fusion:fusion,fusionScore:fusionScore,confidence:confidence,quality:quality,trapRisk:trap,dataCoverage:dataCoverage,
+        multiTFScore:mtfScore,multiTFAgree:mtfAgree,breakoutPressure:breakoutPressure,preScore:pre.score,tradeReady:tradeReady,
+        compositeScore:compositeScore,mode:'SMART_FUSION_LIVE',liveAt:Date.now(),eventTime:Date.now()};
+    }catch(e){return null;}
+  }
+  function smartRankFinal(x){
+    if(!x)return -Infinity;
+    const freshness=x.fusion?.freshness!=null?num(x.fusion.freshness):88;
+    const trapPenalty=Math.max(0,num(x.trapRisk)-12)*.55;
+    return num(x.compositeScore,x.fusionScore||x.score)*.78+num(x.breakoutPressure,50)*.08+
+      num(x.dataCoverage,0)*.06+num(x.multiTFScore,50)*.04+freshness*.04-trapPenalty;
   }
   function smartOpportunityCard(x,index){
-    const trap=Math.round(x.fakeout?.score||0), spike=Number(x.volumeRatio||0), mom5=Number(x.ret5||0), mom15=Number(x.ret15||0), d=x.forensic||{};
-    const explanation=state.lang==='ar'
-      ? `السيولة اليومية قوية عند ${fmt(x.quoteVolume)} USDT، والحجم الحالي أعلى من متوسطه بنحو ${spike.toFixed(2)}×. الزخم القصير ${pct(mom5)} و${pct(mom15)} على 5m/15m، بينما Trap Risk عند ${trap}/100.`
-      : `24h quote liquidity is ${fmt(x.quoteVolume)} USDT and current volume is about ${spike.toFixed(2)}× its recent average. Short momentum is ${pct(mom5)} / ${pct(mom15)} on 5m/15m, while Trap Risk is ${trap}/100.`;
-    return `<article class="golden-card ${index===0?'best':''}" data-symbol="${esc(x.symbol)}" role="button" tabindex="0" aria-label="${esc(x.symbol)}">
-      <div class="golden-top"><div><div class="golden-label">🟡 ${esc(t('goldenOpportunity'))}${index===0?` · ${esc(t('goldenBest'))}`:''}</div><div class="golden-symbol">${esc(x.symbol)}</div></div><div class="golden-score">${Math.round(x.score)}/100</div></div>
-      <div class="golden-explain"><b>${esc(t('goldenWhy'))}</b><br>${esc(explanation)}</div>
-      <div class="golden-reasons"><div class="golden-reason"><span>${esc(t('goldenLiquidity'))}</span><b>${fmt(x.quoteVolume)}</b></div><div class="golden-reason"><span>${esc(t('goldenVolumeSpike'))}</span><b>${spike.toFixed(2)}×</b></div><div class="golden-reason"><span>${esc(t('goldenMomentum'))}</span><b>${pct(mom5)}</b></div><div class="golden-reason"><span>${esc(t('goldenTrap'))}</span><b class="${trap<20?'gain':''}">${trap}/100</b></div></div>
-      <div class="golden-plan"><div class="golden-metric"><span>${esc(t('goldenEntry'))}</span><b>${fmt(x.entry)}</b></div><div class="golden-metric"><span>${esc(t('goldenSL'))}</span><b>${fmt(x.sl)}</b></div><div class="golden-metric"><span>${esc(t('goldenTP'))}</span><b>${fmt(x.tp1)}</b></div><div class="golden-metric"><span>${esc(t('goldenTP2'))}</span><b>${fmt(x.tp2)}</b></div><div class="golden-metric"><span>TP3</span><b>${fmt(x.tp3||x.tp2)}</b></div><div class="golden-metric"><span>${esc(t('goldenRR'))}</span><b>${Number(x.rr3||x.rr||d.rr2||0).toFixed(2)}×</b></div></div><div class="plan-meta-row"><span class="plan-meta">${esc(t('confidence'))}: <b>${Math.round(x.confidence||x.quality||0)}%</b></span><span class="plan-meta">${esc(t('tradeType'))}: <b>${x.tradeType==='SHORT_TERM'?esc(t('shortType')):esc(t('mediumType'))}</b></span></div>
-      <div class="golden-actions"><button class="btn primary" data-smart-analysis="${esc(x.symbol)}">🔬 ${esc(t('goldenOpenAnalysis'))}</button><button class="btn ghost" data-smart-paper="${esc(x.symbol)}">🧪 ${esc(t('goldenPaper'))}</button></div>
-      <div class="golden-note">${esc(t('goldenNoChase'))} · ${esc(t('disclaimer'))}</div>
-    </article>`;
+    const fusion=Math.round(x.fusionScore??x.score??0),trap=Math.round(x.trapRisk??x.fakeout?.score??0),confidence=Math.round(x.confidence??x.quality??0);
+    const reasons=(x.fusion?.reasonsText||x.reasons||[]).slice(0,6);
+    const explain=state.lang==='ar'
+      ? 'RX Fusion '+fusion+'/100 · ثقة '+confidence+'% · السوق '+(x.fusion?.regime||'—')+' · تغطية الأدلة '+Math.round(x.dataCoverage||0)+'%.'
+      : 'RX Fusion '+fusion+'/100 · confidence '+confidence+'% · regime '+(x.fusion?.regime||'—')+' · evidence '+Math.round(x.dataCoverage||0)+'%.';
+    return '<article class="golden-card '+(index===0?'best':'')+'" data-symbol="'+esc(x.symbol)+'" role="button" tabindex="0">'+
+      '<div class="golden-top"><div><div class="golden-label">🟡 '+esc(t('goldenOpportunity'))+(index===0?' · '+esc(t('goldenBest')):'')+'</div><div class="golden-symbol">'+esc(x.symbol)+'</div></div><div class="golden-score">'+fusion+'/100</div></div>'+
+      '<div class="golden-explain"><b>'+esc(t('goldenWhy'))+'</b><br>'+esc(explain)+'</div>'+
+      '<div class="golden-reasons"><div class="golden-reason"><span>Fusion</span><b>'+fusion+'</b></div><div class="golden-reason"><span>'+esc(t('goldenVolumeSpike'))+'</span><b>'+num(x.volumeRatio).toFixed(2)+'×</b></div><div class="golden-reason"><span>'+esc(t('goldenMomentum'))+'</span><b>'+pct(num(x.ret5))+'</b></div><div class="golden-reason"><span>'+esc(t('goldenTrap'))+'</span><b>'+trap+'/100</b></div><div class="golden-reason"><span>'+esc(t('confidence'))+'</span><b>'+confidence+'%</b></div><div class="golden-reason"><span>MTF</span><b>'+Math.round(x.multiTFScore||50)+'</b></div></div>'+
+      '<div class="golden-plan"><div class="golden-metric"><span>'+esc(t('goldenEntry'))+'</span><b>'+fmt(x.entry)+'</b></div><div class="golden-metric"><span>'+esc(t('goldenSL'))+'</span><b>'+fmt(x.sl)+'</b></div><div class="golden-metric"><span>'+esc(t('goldenTP'))+'</span><b>'+fmt(x.tp1)+'</b></div><div class="golden-metric"><span>'+esc(t('goldenTP2'))+'</span><b>'+fmt(x.tp2)+'</b></div><div class="golden-metric"><span>TP3</span><b>'+fmt(x.tp3||x.tp2)+'</b></div><div class="golden-metric"><span>'+esc(t('goldenRR'))+'</span><b>'+num(x.rr3||x.rr).toFixed(2)+'×</b></div></div>'+
+      '<div class="golden-reasons">'+reasons.map(function(r){return '<span class="reason">'+esc(r)+'</span>';}).join('')+'</div>'+
+      '<div class="plan-meta-row"><span class="plan-meta">'+esc(t('confidence'))+': <b>'+confidence+'%</b></span><span class="plan-meta">Evidence: <b>'+Math.round(x.dataCoverage||0)+'%</b></span></div>'+
+      '<div class="golden-actions"><button class="btn primary" data-smart-analysis="'+esc(x.symbol)+'">🔬 '+esc(t('goldenOpenAnalysis'))+'</button><button class="btn ghost" data-smart-paper="'+esc(x.symbol)+'">🧪 '+esc(t('goldenPaper'))+'</button></div>'+
+      '<div class="golden-note">'+esc(t('goldenNoChase'))+' · '+esc(t('disclaimer'))+'</div></article>';
   }
   function renderSmartOutput(results=[],meta={}){
-    const out=$('smartOpportunityOutput'); if(!out)return;
-    const smart=results.slice(0,2);
-    if(!smart.length){
-      out.innerHTML=`<div class="smart-empty">🛡️ ${esc(meta.message||smartText('smartNoOpportunity'))}<div class="smart-stats"><div class="smart-stat"><span>${esc(t('smartUniverse'))}</span><b>${Number(meta.universe||0).toLocaleString('en-US')}</b></div><div class="smart-stat"><span>${esc(t('smartStage1'))}</span><b>${Number(meta.stage1||0).toLocaleString('en-US')}</b></div><div class="smart-stat"><span>${esc(t('smartDeep'))}</span><b>${Number(meta.deepVerified||0).toLocaleString('en-US')}</b></div><div class="smart-stat"><span>${esc(t('smartGold'))}</span><b>0</b></div></div></div>`;
-      return;
-    }
-    out.innerHTML=smart.map((x,i)=>smartOpportunityCard(x,i)).join('')+`<div class="smart-stats" style="grid-column:1/-1"><div class="smart-stat"><span>${esc(t('smartUniverse'))}</span><b>${Number(meta.universe||0).toLocaleString('en-US')}</b></div><div class="smart-stat"><span>${esc(t('smartStage1'))}</span><b>${Number(meta.stage1||0).toLocaleString('en-US')}</b></div><div class="smart-stat"><span>${esc(t('smartDeep'))}</span><b>${Number(meta.deepVerified||0).toLocaleString('en-US')}</b></div><div class="smart-stat"><span>${esc(t('smartGold'))}</span><b>${smart.length}</b></div></div>`;
+    const out=$('smartOpportunityOutput');if(!out)return;
+    const smart=results.slice(0,3);
+    const stats='<div class="smart-stats"><div class="smart-stat"><span>'+esc(t('smartUniverse'))+'</span><b>'+Number(meta.universe||0).toLocaleString('en-US')+'</b></div><div class="smart-stat"><span>'+esc(t('smartStage1'))+'</span><b>'+Number(meta.stage1||0).toLocaleString('en-US')+'</b></div><div class="smart-stat"><span>1m/5m</span><b>'+Number(meta.midVerified||0).toLocaleString('en-US')+'</b></div><div class="smart-stat"><span>'+esc(t('smartDeep'))+'</span><b>'+Number(meta.deepVerified||0).toLocaleString('en-US')+'</b></div><div class="smart-stat"><span>'+esc(t('smartGold'))+'</span><b>'+smart.length+'</b></div></div>';
+    if(!smart.length){out.innerHTML='<div class="smart-empty">🛡️ '+esc(meta.message||smartText('smartNoOpportunity'))+stats+'</div>';return;}
+    out.innerHTML=smart.map(function(x,i){return smartOpportunityCard(x,i);}).join()+stats+'<div class="paper-notice" style="margin-top:9px">النتيجة مبنية على RX Fusion متعدد العوامل مع بوابات جودة وحداثة وتعارض أدلة. لا توجد ضمانات للتنبؤ بالمستقبل.</div>';
   }
-  async function fetchSmartKlines(symbol,tf='5m',provider='binance'){ return fetchKlines(provider,symbol,tf,80); }
   async function smartScan(){
     if(state.smartScan.running)return;
-    state.smartScan={...state.smartScan,running:true,results:[],universe:0,stage1:0,deepVerified:0,startedAt:Date.now(),error:'',lastUpdated:0};
-    const btns=[$('smartScanBtn'),$('quickScan')].filter(Boolean);btns.forEach(b=>b.disabled=true);
-    $('smartOpportunityOutput').innerHTML=''; smartStage(t('smartReady'),2,'busy');
+    const started=performance.now();
+    state.smartScan={...state.smartScan,running:true,results:[],universe:0,stage1:0,midVerified:0,deepVerified:0,startedAt:Date.now(),error:'',lastUpdated:0,latencyMs:0};
+    const btns=[$('smartScanBtn'),$('quickScan')].filter(Boolean);btns.forEach(function(b){b.disabled=true;});
+    if($('smartOpportunityOutput'))$('smartOpportunityOutput').innerHTML='';
+    smartStage('تهيئة محرك Auto-Pilot متعدد المراحل…',2,'busy');
     try{
       const tickers=await fetchAllTickersResilient('binance');
-      const universe=tickers.filter(x=>/USDT$/.test(x.symbol)&&x.last>0); state.smartScan.universe=universe.length; state.markets=universe.slice(); state.marketsBySymbol={}; universe.forEach(x=>state.marketsBySymbol[x.symbol]=x); renderMarkets();
-      if(!universe.length)throw new Error('EMPTY_LIVE_UNIVERSE');
-      smartStage(smartText('smartScanningUniverse',{n:universe.length}),12,'busy');
-      const initial=universe.filter(smartGatePassQuickTicker).sort((a,b)=>smartRankPre(b)-smartRankPre(a)).slice(0,SMART_SCAN.maxInitial);
-      state.smartScan.stage1=initial.length; smartStage(smartText('smartGateFiltering',{n:initial.length}),24,'busy');
-      const verified=[];
-      for(let i=0;i<initial.length;i+=3){
-        const batch=initial.slice(i,i+3);
-        const rr=await Promise.allSettled(batch.map(async x=>{const rows=await fetchSmartKlines(x.symbol,'5m',x.provider||'binance');if(!rows?.length)return null;const f=coreFeatures(rows);return smartGatePassFeatures(f,x)?{ticker:x,rows,f}:null;}));
-        rr.forEach(v=>{if(v.status==='fulfilled'&&v.value)verified.push(v.value);});
-        smartStage(smartText('smartKlineStage',{n:verified.length}),24+Math.round(((Math.min(i+3,initial.length)/initial.length)||1)*30),'busy');
-        await sleep(70);
+      const universe=tickers.filter(smartUniverseEligible);
+      state.smartScan.universe=universe.length;state.markets=universe.slice();state.marketsBySymbol={};
+      universe.forEach(function(x){state.marketsBySymbol[x.symbol]=x;});
+      const uni=universe.length;$('dashUniverse').textContent=uni.toLocaleString('en-US');
+      if(!uni)throw new Error('EMPTY_LIVE_UNIVERSE');
+      smartStage('مسح كامل للكون: '+uni.toLocaleString('en-US')+' أزواج Spot مؤهلة…',10,'busy');
+
+      const ranked=universe.map(function(x){return {...x,smartTickerScore:smartTickerPotential(x);};}).sort(function(a,b){return b.smartTickerScore-a.smartTickerScore;});
+      const shortlist=ranked.slice(0,SMART_SCAN.maxTickerShortlist);state.smartScan.stage1=shortlist.length;
+      smartStage('مرحلة 1: كل السوق تم مسحه → '+shortlist.length+' مرشح للحساب الزمني.',18,'busy');
+
+      const mid=[];
+      for(let i=0;i<shortlist.length;i+=SMART_SCAN.batchSize){
+        const batch=shortlist.slice(i,i+SMART_SCAN.batchSize);
+        const rr=await Promise.allSettled(batch.map(async function(x){
+          const p=await Promise.all([fetchKlines('binance',x.symbol,'1m',80),fetchKlines('binance',x.symbol,'5m',120)]);
+          const pre=smartPreflight(p[0],p[1],x);return pre&&pre.score>=46?{...x,...pre,rows:p[1],rows1m:p[0]}:null;
+        }));
+        rr.forEach(function(v){if(v.status==='fulfilled'&&v.value)mid.push(v.value);});
+        state.smartScan.midVerified=mid.length;
+        smartStage('مرحلة 2: 1m/5m تحقق '+mid.length+'/'+shortlist.length,20+Math.round(Math.min(i+SMART_SCAN.batchSize,shortlist.length)/shortlist.length*34),'busy');
+        await sleep(18);
       }
-      verified.sort((a,b)=>((b.f.volumeRatio*.45)+(b.f.ret5*7*.25)+(b.f.ret15*4*.20)+(smartRankPre(b.ticker)*.10))-((a.f.volumeRatio*.45)+(a.f.ret5*7*.25)+(a.f.ret15*4*.20)+(smartRankPre(a.ticker)*.10)));
-      const top=verified.slice(0,Math.min(8,verified.length)); smartStage(t('smartDeepStage'),56,'busy');
+      mid.sort(function(a,b){return smartPreflightRank(b)-smartPreflightRank(a);});
+      const topMid=mid.slice(0,SMART_SCAN.maxDeep);
+      smartStage('مرحلة 3: تحقيق جنائي للـ '+topMid.length+' الأقوى — MTF + Order Flow + Whales + Traps…',56,'busy');
+
       const deep=[];
-      for(let i=0;i<top.length;i+=SMART_SCAN.maxDeep){
-        const batch=top.slice(i,i+SMART_SCAN.maxDeep);
-        const rr=await Promise.allSettled(batch.map(x=>deepAnalyze(x.ticker.provider||'binance',x.ticker.symbol,'5m',{withFlow:true})));
-        rr.forEach(v=>{if(v.status==='fulfilled')deep.push(v.value);});
-        smartStage(t('smartDeepStage'),56+Math.round(((Math.min(i+SMART_SCAN.maxDeep,top.length)/Math.max(top.length,1))||1)*38),'busy');
+      for(let i=0;i<topMid.length;i+=SMART_SCAN.batchSize){
+        const rr=await Promise.allSettled(topMid.slice(i,i+SMART_SCAN.batchSize).map(smartDeepOne));
+        rr.forEach(function(v){if(v.status==='fulfilled'&&v.value)deep.push(v.value);});
+        state.smartScan.deepVerified=deep.length;
+        smartStage('RX Fusion: '+deep.length+'/'+topMid.length+' تحليلات مكتملة',56+Math.round(Math.min(i+SMART_SCAN.batchSize,topMid.length)/Math.max(1,topMid.length)*34),'busy');
+        await sleep(22);
       }
-      state.smartScan.deepVerified=deep.length;
-      const eligible=deep.filter(x=>smartGatePassFeatures(x,x) && Number(x.fakeout?.score||100)<SMART_SCAN.maxTrapRisk && x.signal!=='NO_SIGNAL' && Number(x.quality||0)>=62 && Number(x.forensic?.flowScore||0)>=52).map(x=>({...x,smartEligible:true})).sort((a,b)=>((b.score*.45)+(b.forensic?.score||0)*.30+(Math.min(5,b.volumeRatio||0)*8*.15)+(Math.max(0,b.ret5||0)*4*.10))-((a.score*.45)+(a.forensic?.score||0)*.30+(Math.min(5,a.volumeRatio||0)*8*.15)+(Math.max(0,a.ret5||0)*4*.10)));
-      state.smartScan.results=eligible.slice(0,2);state.smartScan.lastUpdated=Date.now();
-      const msg=state.smartScan.results.length?smartText('smartComplete',{u:universe.length,g:verified.length,d:deep.length,w:state.smartScan.results.length}):smartText('smartNoOpportunity');
-      smartStage(msg,100,state.smartScan.results.length?'good':'bad'); renderSmartOutput(state.smartScan.results,{universe:universe.length,stage1:initial.length,deepVerified:deep.length,message:state.smartScan.results.length?null:msg});
-      if(state.smartScan.results.length){state.selected=state.smartScan.results[0];state.deepRows=[...state.smartScan.results,...state.deepRows.filter(x=>!state.smartScan.results.some(y=>y.symbol===x.symbol))].slice(0,20);renderRadarTable(state.deepRows);saveAlert(state.smartScan.results[0]);notifyUser(`${state.smartScan.results[0].symbol} · ${t('goldenOpportunity')}`,`${t('strength')}: ${Math.round(state.smartScan.results[0].score)}/100 · Trap ${Math.round(state.smartScan.results[0].fakeout?.score||0)}/100`);}
-      markLiveData('live_rest',`${t('liveRest')} · Smart Scan`);appHealthy();
+
+      const eligible=deep.filter(function(x){return x.tradeReady;}).sort(function(a,b){return smartRankFinal(b)-smartRankFinal(a);});
+      state.smartScan.results=eligible.slice(0,3);state.smartScan.lastUpdated=Date.now();state.smartScan.latencyMs=Math.round(performance.now()-started);
+      const message=state.smartScan.results.length?smartText('smartComplete',{u:uni,g:mid.length,d:deep.length,w:state.smartScan.results.length}):'لم تتجمع أدلة كافية الآن لإصدار فرصة ذهبية. المحرك يفضّل عدم توليد إشارة عند نقص التحقق.';
+      smartStage(message,100,state.smartScan.results.length?'good':'bad');
+      renderSmartOutput(state.smartScan.results,{universe:uni,stage1:shortlist.length,midVerified:mid.length,deepVerified:deep.length,message:state.smartScan.results.length?null:message});
+
+      if(state.smartScan.results.length){
+        const best=state.smartScan.results[0];
+        state.selected=best;state.currentSymbol=best.symbol;writeJSON(KEYS.currentSymbol,best.symbol);
+        state.deepRows=[best,...state.deepRows.filter(function(x){return x.symbol!==best.symbol;})].slice(0,24);
+        renderRadarTable(state.deepRows);renderRadarMetrics(Math.max(1,state.markets.length),state.deepRows);
+        saveAlert(best);notifyUser(best.symbol+' · '+t('goldenOpportunity'),'RX Fusion '+Math.round(best.fusionScore)+'/100 · Confidence '+Math.round(best.confidence)+'% · Trap '+Math.round(best.trapRisk)+'/100');
+      }
+      markLiveData('live_rest',t('liveRest')+' · Smart Fusion');appHealthy();
     }catch(e){
-      state.smartScan.error=String(e?.message||e); smartStage(t('smartNetworkFail'),100,'bad'); renderSmartOutput([],{universe:state.smartScan.universe,stage1:state.smartScan.stage1,deepVerified:state.smartScan.deepVerified,message:t('smartNetworkFail')}); markLiveData('offline');
-    }finally{state.smartScan.running=false;btns.forEach(b=>b.disabled=false);}
+      state.smartScan.error=String(e?.message||e);state.smartScan.latencyMs=Math.round(performance.now()-started);
+      smartStage(t('smartNetworkFail'),100,'bad');renderSmartOutput([],{universe:state.smartScan.universe,stage1:state.smartScan.stage1,midVerified:state.smartScan.midVerified,deepVerified:state.smartScan.deepVerified,message:t('smartNetworkFail')});markLiveData(state.markets.length?'cached':'offline');
+    }finally{state.smartScan.running=false;btns.forEach(function(b){b.disabled=false;});}
   }
 
   // ---------- 4.10 Multi-Symbol Live Radar Dashboard ----------
