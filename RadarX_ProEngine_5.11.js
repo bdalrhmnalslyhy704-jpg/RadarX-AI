@@ -292,8 +292,23 @@
   async function fetchGlobalContext(){
     if(ps.global?.ts && now()-ps.global.ts<CACHE_TTL.global)return ps.global;
     try{
+      const d=await fetchJSON('/api/radarx-context',{timeout:6000,retries:0});
+      ps.global={
+        ts:now(),
+        btcDominance:num(d?.btcDominance,NaN),
+        totalMarketCap:num(d?.totalMarketCapUsd,NaN),
+        marketCapChange24h:num(d?.marketCapChange24h,NaN),
+        fearGreed:num(d?.fearGreed,NaN),
+        fearGreedLabel:d?.fearGreedLabel||null,
+        contextSources:d?.availableSources||[],
+        contextSourceStatus:d?.sources||{},
+        available:d?.ok===true
+      };
+      if(ps.global.available)return ps.global;
+    }catch{}
+    try{
       const d=await fetchJSON('https://api.coingecko.com/api/v3/global',{timeout:3500,retries:0});
-      const x=d?.data||{}; ps.global={ts:now(),btcDominance:num(x.market_cap_percentage?.btc,NaN),totalMarketCap:num(x.total_market_cap?.usd,NaN),marketCapChange24h:num(x.market_cap_change_percentage_24h_usd,NaN),available:true};
+      const x=d?.data||{};ps.global={...(ps.global||{}),ts:now(),btcDominance:num(x.market_cap_percentage?.btc,NaN),totalMarketCap:num(x.total_market_cap?.usd,NaN),marketCapChange24h:num(x.market_cap_change_percentage_24h_usd,NaN),available:true,contextSources:['coingecko-fallback']};
     }catch{ps.global={...(ps.global||{}),available:false,ts:now()};}
     return ps.global;
   }
