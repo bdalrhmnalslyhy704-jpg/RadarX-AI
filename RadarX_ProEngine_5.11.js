@@ -83,7 +83,7 @@
     alerts:new Map(),
     research:null,
     weights:{...WEIGHTS},
-    config:{...PRO}, lastEnrichFingerprint:'', lastEnrichAt:0, lastCrossAt:0, lastOnchainAt:0,
+    config:{...PRO}, lastEnrichFingerprint:'', lastEnrichAt:0, lastCrossAt:0, lastOnchainAt:0, lastSocialAt:0,
   };
 
   const old = window.__RadarXProState;
@@ -314,6 +314,26 @@
   }
 
 
+
+
+  async function refreshSocial(symbols){
+    if(ps.lastSocialAt&&now()-ps.lastSocialAt<180000) return {ok:true,cached:true};
+    try{
+      const q=(symbols||[]).slice(0,8).map(encodeURIComponent).join(',');
+      const d=await fetchJSON('/api/radarx-social?symbols='+q,{timeout:9000,retries:0});
+      if(d?.ok){
+        for(const [symbol,data] of Object.entries(d.socialBySymbol||{})){
+          if(data?.available===true&&finite(data.score)){
+            ps.external.social.set(symbol,{...data,available:true,source:data.source||'Reddit public RSS'});
+          }else ps.external.social.delete(symbol);
+        }
+        ps.lastSocialAt=now(); ps.socialStatus={ok:true,checkedAt:now(),source:d.source||'Reddit public RSS'};
+        return ps.socialStatus;
+      }
+    }catch{}
+    ps.socialStatus={ok:false,checkedAt:now()};
+    return ps.socialStatus;
+  }
 
   async function refreshOnchain(symbols){
     if(ps.lastOnchainAt&&now()-ps.lastOnchainAt<300000) return {ok:true,cached:true};
@@ -702,6 +722,7 @@
       const symbols=chooseCandidates(normalized).map(x=>x.symbol);
       await refreshNews(symbols).catch(()=>{});
       await refreshOnchain(symbols).catch(()=>{});
+      await refreshSocial(symbols).catch(()=>{});
       const fingerprint=symbols.slice(0,PRO.mtfCandidates).join('|'), crossAge=now()-num(ps.lastCrossAt,0); const cross=crossAge<150000&&ps.crossExchange?.data?ps.crossExchange:await fetchCrossExchange(symbols).catch(()=>({available:false,data:{}})); if(cross?.available)ps.lastCrossAt=now();
       const candidates=[];
       for(let i=0;i<symbols.length;i+=3){
@@ -980,7 +1001,7 @@
 
   function expose(){
     window.RadarXPro={
-      state:ps, runCycle, runResearch, render, getCandidates:()=>ps.candidates||[], getRegime:()=>ps.regime, getNews:()=>ps.news, refreshNews, refreshOnchain,
+      state:ps, runCycle, runResearch, render, getCandidates:()=>ps.candidates||[], getRegime:()=>ps.regime, getNews:()=>ps.news, refreshNews, refreshOnchain, refreshSocial,
       setExternalSignal:(kind,symbol,data)=>{if(!['catalyst','social','onchain','tokenomics'].includes(kind))return false;ps.external[kind].set(symbol,{...data,available:true});return true;},
       setWeights:(w)=>{for(const k of Object.keys(ps.weights))if(finite(w?.[k]))ps.weights[k]=Math.max(0,num(w[k]));return {...ps.weights};},
       clearExternal:(kind,symbol)=>{ps.external[kind]?.delete(symbol);},
