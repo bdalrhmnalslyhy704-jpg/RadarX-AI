@@ -1,10 +1,13 @@
 package com.radarx.ai;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.IOException;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.Locale;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
@@ -18,6 +21,12 @@ import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 
 public final class BinanceMarketEngine {
+    public static final String[] SYMBOLS = {
+            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT",
+            "XRPUSDT", "DOGEUSDT", "ADAUSDT", "LINKUSDT",
+            "SUIUSDT", "XLMUSDT", "STXUSDT", "WAXPUSDT"
+    };
+
     public enum State {
         STOPPED,
         CONNECTING,
@@ -81,16 +90,33 @@ public final class BinanceMarketEngine {
         }
     }
 
+    private static final class Quote {
+        final String symbol;
+        volatile double lastTrade;
+        volatile double bid;
+        volatile double ask;
+        volatile double dayChangePercent;
+        volatile double quoteVolume;
+        volatile long eventTimeMs;
+        volatile long receivedAtMs;
+
+        Quote(String symbol) {
+            this.symbol = symbol;
+        }
+    }
+
     public interface Listener {
         void onSnapshot(Snapshot snapshot);
         void onState(State state, String detail);
     }
 
-    private static final String SYMBOL = "BTCUSDT";
     private static final String REST_URL =
-            "https://api.binance.com/api/v3/ticker/24hr?symbol=" + SYMBOL;
-    private static final String WS_URL =
-            "wss://stream.binance.com:9443/stream?streams=btcusdt@trade/btcusdt@bookTicker";
+            "https://api.binance.com/api/v3/ticker/24hr"
+                    + "?symbols=%5B%22BTCUSDT%22%2C%22ETHUSDT%22%2C%22BNBUSDT%22%2C%22SOLUSDT%22"
+                    + "%2C%22XRPUSDT%22%2C%22DOGEUSDT%22%2C%22ADAUSDT%22%2C%22LINKUSDT%22"
+                    + "%2C%22SUIUSDT%22%2C%22XLMUSDT%22%2C%22STXUSDT%22%2C%22WAXPUSDT%22%5D";
+
+    private static final String WS_URL = buildWsUrl();
 
     private final OkHttpClient client = new OkHttpClient.Builder()
             .connectTimeout(10L, TimeUnit.SECONDS)
@@ -107,6 +133,8 @@ public final class BinanceMarketEngine {
                 return t;
             });
 
+    private final ConcurrentHashMap<String, Quote> quotes = new ConcurrentHashMap<>();
+
     private volatile Listener listener;
     private volatile boolean running;
     private volatile boolean networkAvailable = true;
@@ -119,14 +147,11 @@ public final class BinanceMarketEngine {
     private long updateCount;
     private ScheduledFuture<?> reconnectFuture;
 
-    private volatile double lastTrade;
-    private volatile double bid;
-    private volatile double ask;
-    private volatile double dayChangePercent;
-    private volatile double quoteVolume;
-    private volatile long eventTimeMs;
-    private volatile long receivedAtMs;
-    private volatile long lastRestSnapshotAt;
+    public BinanceMarketEngine() {
+        for (String symbol : SYMBOLS) {
+            quotes.put(symbol, new Quote(symbol));
+        }
+    }
 
     public void setListener(Listener listener) {
         this.listener = listener;
@@ -150,12 +175,12 @@ public final class BinanceMarketEngine {
         reconnectAttempt = 0;
         reconnectCount = 0;
         updateCount = 0L;
+
         emitState(networkAvailable ? State.CONNECTING : State.OFFLINE,
-                networkAvailable ? "تهيئة تغذية السوق..." : "بانتظار الشبكة...");
+                networkAvailable ? "تهيئة 12 زوجًا عبر قناة واحدة..." : "بانتظار الشبكة...");
+
         bootstrapRest();
-        if (networkAvailable) {
-            connectNow();
-        }
+        if (networkAvailable) connectNow();
     }
 
     public void stop() {
@@ -186,33 +211,36 @@ public final class BinanceMarketEngine {
             @Override public void onFailure(Call call, IOException e) {
                 if (running) {
                     emitState(networkAvailable ? State.DEGRADED : State.OFFLINE,
-                            "تعذر تحميل لقطة البداية؛ نتابع انتظار البث الحي");
+                            "لقطة البداية تعذرت؛ ننتظر القناة الحية");
                 }
             }
 
             @Override public void onResponse(Call call, Response response) throws IOException {
                 try (Response r = response) {
                     if (!r.isSuccessful() || r.body() == null) {
-                        if (running) {
-                            emitState(State.DEGRADED, "لقطة البداية غير متاحة مؤقتًا");
-                        }
+                        if (running) emitState(State.DEGRADED, "تعذر الحصول على لقطة السوق");
                         return;
                     }
 
                     String body = r.body().string();
-                    JSONObject json = new JSONObject(body);
+                    JSONArray array = new JSONArray(body);
+                    for (int i = 0; i < array.length(); i++) {
+                        JSONObject item = array.optJSONObject(i);
+                        if (item == null) continue;
 
-                    lastTrade = positive(json.optDouble("lastPrice", lastTrade));
-                    dayChangePercent = finite(json.optDouble("priceChangePercent", dayChangePercent));
-                    quoteVolume = positive(json.optDouble("quoteVolume", quoteVolume));
-                    lastRestSnapshotAt = System.currentTimeMillis();
-                    receivedAtMs = lastRestSnapshotAt;
+                        String symbol = item.optString("symbol", "").toUpperCase(Locale.US);
+                        Quote q = quotes.get(symbol);
+                        if (q == null) continue;
 
-                    emitSnapshot(true);
-                } catch (Exception e) {
-                    if (running) {
-                        emitState(State.DEGRADED, "لقطة البداية غير قابلة للقراءة");
+                        q.lastTrade = positive(item.optDouble("lastPrice", 0.0));
+                        q.dayChangePercent = finite(item.optDouble("priceChangePercent", 0.0));
+                        q.quoteVolume = positive(item.optDouble("quoteVolume", 0.0));
+                        q.receivedAtMs = System.currentTimeMillis();
+
+                        emitSnapshot(true, q);
                     }
+                } catch (Exception e) {
+                    if (running) emitState(State.DEGRADED, "لقطة السوق غير قابلة للقراءة");
                 }
             }
         });
@@ -231,8 +259,9 @@ public final class BinanceMarketEngine {
         }
 
         emitState(State.CONNECTING,
-                reconnectAttempt == 0 ? "الاتصال بـ Binance..." :
-                        "إعادة الاتصال بـ Binance...");
+                reconnectAttempt == 0
+                        ? "فتح WebSocket واحد لـ 12 زوجًا..."
+                        : "إعادة فتح قناة السوق...");
 
         Request request = new Request.Builder()
                 .url(WS_URL)
@@ -245,11 +274,12 @@ public final class BinanceMarketEngine {
                     webSocket.close(1000, "stale");
                     return;
                 }
+
                 synchronized (socketLock) {
                     socket = webSocket;
                 }
                 reconnectAttempt = 0;
-                emitState(State.LIVE, "تغذية السوق الحية متصلة");
+                emitState(State.LIVE, "12 زوجًا حيًا • WebSocket واحد");
             }
 
             @Override public void onMessage(WebSocket webSocket, String text) {
@@ -263,11 +293,10 @@ public final class BinanceMarketEngine {
                     if (socket == webSocket) socket = null;
                 }
                 reconnectCount++;
-                String msg = t != null && t.getMessage() != null
-                        ? t.getMessage() : "انقطاع اتصال";
                 emitState(networkAvailable ? State.DEGRADED : State.OFFLINE,
-                        networkAvailable ? "البث انقطع؛ إعادة اتصال تلقائية" :
-                                "البث متوقف حتى عودة الشبكة");
+                        networkAvailable
+                                ? "انقطاع القناة؛ إعادة اتصال تلقائية"
+                                : "القناة متوقفة حتى عودة الشبكة");
                 scheduleReconnect(networkAvailable ? backoffMs() : 0L);
             }
 
@@ -278,8 +307,9 @@ public final class BinanceMarketEngine {
                 }
                 reconnectCount++;
                 emitState(networkAvailable ? State.DEGRADED : State.OFFLINE,
-                        networkAvailable ? "الاتصال أغلق؛ إعادة اتصال تلقائية" :
-                                "الاتصال مغلق حتى عودة الشبكة");
+                        networkAvailable
+                                ? "القناة أُغلقت؛ إعادة اتصال تلقائية"
+                                : "القناة مغلقة حتى عودة الشبكة");
                 scheduleReconnect(networkAvailable ? backoffMs() : 0L);
             }
         });
@@ -300,43 +330,47 @@ public final class BinanceMarketEngine {
                     ? root.getJSONObject("data") : root;
 
             String eventType = data.optString("e", "");
+            String symbol = data.optString("s", "").toUpperCase(Locale.US);
+            Quote q = quotes.get(symbol);
+            if (q == null) return;
+
             long received = System.currentTimeMillis();
             long event = data.optLong("E", received);
 
             if ("trade".equals(eventType)) {
                 double price = positive(data.optDouble("p", 0.0));
-                if (price > 0.0) lastTrade = price;
+                if (price > 0.0) q.lastTrade = price;
             } else if ("bookTicker".equals(eventType)) {
                 double nextBid = positive(data.optDouble("b", 0.0));
                 double nextAsk = positive(data.optDouble("a", 0.0));
-                if (nextBid > 0.0) bid = nextBid;
-                if (nextAsk > 0.0) ask = nextAsk;
+                if (nextBid > 0.0) q.bid = nextBid;
+                if (nextAsk > 0.0) q.ask = nextAsk;
             } else {
                 return;
             }
 
-            eventTimeMs = event;
-            receivedAtMs = received;
+            q.eventTimeMs = event;
+            q.receivedAtMs = received;
             updateCount++;
-            emitSnapshot(false);
+            emitSnapshot(false, q);
         } catch (Exception ignored) {
-            // Malformed frames are ignored; the socket stays alive.
+            // A malformed market frame is ignored without touching the socket.
         }
     }
 
-    private void emitSnapshot(boolean bootstrap) {
+    private void emitSnapshot(boolean bootstrap, Quote q) {
         Listener l = listener;
         if (l == null) return;
 
         Snapshot snapshot = new Snapshot(
-                SYMBOL,
-                finite(lastTrade),
-                finite(bid),
-                finite(ask),
-                finite(dayChangePercent),
-                finite(quoteVolume),
-                eventTimeMs,
-                receivedAtMs,
+                q.symbol,
+                finite(q.lastTrade),
+                finite(q.bid),
+                finite(q.ask),
+                finite(q.dayChangePercent),
+                finite(q.quoteVolume),
+                q.eventTimeMs,
+                q.receivedAtMs,
                 updateCount,
                 reconnectCount,
                 bootstrap
@@ -351,6 +385,7 @@ public final class BinanceMarketEngine {
         reconnectAttempt = Math.min(reconnectAttempt + 1, 8);
         long delay = Math.max(requestedDelayMs, backoffMs());
         long jitter = ThreadLocalRandom.current().nextLong(0L, 350L);
+
         reconnectFuture = scheduler.schedule(() -> {
             reconnectFuture = null;
             if (running && networkAvailable) connectNow();
@@ -381,6 +416,17 @@ public final class BinanceMarketEngine {
     private void emitState(State state, String detail) {
         Listener l = listener;
         if (l != null) l.onState(state, detail);
+    }
+
+    private static String buildWsUrl() {
+        StringBuilder streams = new StringBuilder();
+        for (String symbol : SYMBOLS) {
+            if (streams.length() > 0) streams.append("/");
+            String lower = symbol.toLowerCase(Locale.US);
+            streams.append(lower).append("@trade/");
+            streams.append(lower).append("@bookTicker");
+        }
+        return "wss://stream.binance.com:9443/stream?streams=" + streams;
     }
 
     private static double positive(double value) {
