@@ -353,6 +353,20 @@ public final class BinanceSecureRelay {
         );
     }
 
+    private static boolean looksLikeJson(byte[] body) {
+        if (body == null || body.length == 0) return false;
+        String s = new String(body, StandardCharsets.UTF_8).trim();
+        return s.startsWith("{") || s.startsWith("[");
+    }
+
+    private static String jsonEscape(String value) {
+        return String.valueOf(value)
+                .replace("\\", "\\\\")
+                .replace(""", "\\"")
+                .replace("\r", "\\r")
+                .replace("\n", "\\n");
+    }
+
     private static String safe(String s) {
         return s == null || s.isEmpty() ? "upstream_unavailable" : s;
     }
