@@ -1,0 +1,13 @@
+# RadarX local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+backend/.venv/
