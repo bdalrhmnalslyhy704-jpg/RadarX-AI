@@ -41,5 +41,19 @@
         }
       ]
     }
+  ],
+  "rewrites": [
+    {
+      "source": "/api/bn/:path*",
+      "destination": "https://data-api.binance.vision/api/:path*"
+    },
+    {
+      "source": "/api/bn2/:path*",
+      "destination": "https://api.binance.com/api/:path*"
+    },
+    {
+      "source": "/api/bn3/:path*",
+      "destination": "https://api-gcp.binance.com/api/:path*"
+    }
   ]
 }
