@@ -163,7 +163,7 @@
 
   const state = {
     lang: 'ar', busy:false, selectionToken:0, scanTimer:null, markets:[], deepRows:[], selected:null, lastFlow:null, deferredInstall:null, sort:'activity', live:false,
-    settings:{theme:'dark'}, sentiment:{score:null,label:null,source:'waiting',fg:null,breadth:null,bthPrice:null,updatedAt:0}, structure:null, fakeout:null, briefing:null, simulator:{running:false,step:0,price:0,outcome:'WAITING',timer:null,logs:[]}, calendar:[], marketsBySymbol:{}, klinesCache:{}, streamTrades:{}, selectedStream:null, ws:{ticker:null,symbol:null,attempt:0,reconnectTimer:null,staleTimer:null,lastMessage:0,mode:'offline',paintTimer:null,lastPersist:0,generation:0}, profile:{name:'Guest Trader',email:'guest@radarx.local'}, membership:{status:'TRIAL', trialStart:Date.now(), trialGrantedAt:Date.now(), plan:null, expiresAt:null, source:'local', userId:null, demo:false, lastVerifiedAt:0}, psychology:{lossStreak:0,dailyLossPct:0,rapidEntries:0,status:'HEALTHY',cooldownUntil:0}, paper:{balance:10000,equity:10000,realized:0,unrealized:0,positions:[],history:[],nextId:1,updatedAt:0}, deepDive:null, currentSymbol:null, smartScan:{running:false,results:[],watch:[],universe:0,stage1:0,midVerified:0,deepVerified:0,startedAt:0,error:'',lastUpdated:0,latencyMs:0}, multiRadar:{count:8,mode:'gainers',leaders:[],lastUpdated:0,running:false,error:'',pollTimer:null,pulseTimer:null,renderKey:'',dirty:false,ws:null,wsAttempt:0,wsReconnectTimer:null,wsLastMessage:0,wsOpenedAt:0,wsGeneration:0,restLastSuccess:0,restFailures:0,paintTimer:null,lastPaintPrice:new Map(),cacheAt:0,klineWs:null,klineWsAttempt:0,klineWsReconnectTimer:null,klineWsLastMessage:0,klineWsGeneration:0,klineSymbols:[],klineBars:new Map(),klineBaselineAt:0,klineRefreshTimer:null}, briefingRefreshTimer:null, selectedPaintTimer:null, selectedLiveRecomputeTimer:null, selectedLiveRecomputePending:false, lastMarketDomPaint:0, lastSelectedStructurePaintAt:0, lastSelectedFullRenderAt:0, lastResultsPaintAt:0, subscriptionGate:{status:'TRIAL',locked:false,reason:'init',lastCheckedAt:0,checking:false,remote:false}, continuous:{enabled:true,cycleMs:3500,restRefreshMs:15000,cycleBusy:false,lastCycleAt:0,lastLiveTickAt:0,lastRestAt:0,lastError:'',mode:'starting',worker:null,timer:null,watchdogTimer:null,tape:new Map(),pending:new Set(),lastDeepAt:new Map(),lastAlertAt:new Map(),alertCount:0,lastGolden:null,cachedCandidates:null,cachedCandidatesAt:0}, whaleMonitor:{enabled:false,timer:null,symbol:'',provider:'binance',history:[]}
+    settings:{theme:'dark'}, sentiment:{score:null,label:null,source:'waiting',fg:null,breadth:null,bthPrice:null,updatedAt:0}, structure:null, fakeout:null, briefing:null, simulator:{running:false,step:0,price:0,outcome:'WAITING',timer:null,logs:[]}, calendar:[], marketsBySymbol:{}, klinesCache:{}, streamTrades:{}, selectedStream:null, ws:{ticker:null,symbol:null,attempt:0,reconnectTimer:null,staleTimer:null,lastMessage:0,mode:'offline',paintTimer:null,lastPersist:0,generation:0}, profile:{name:'Guest Trader',email:'guest@radarx.local'}, membership:{status:'TRIAL', trialStart:Date.now(), trialGrantedAt:Date.now(), plan:null, expiresAt:null, source:'local', userId:null, demo:false, lastVerifiedAt:0}, psychology:{lossStreak:0,dailyLossPct:0,rapidEntries:0,status:'HEALTHY',cooldownUntil:0}, paper:{balance:10000,equity:10000,realized:0,unrealized:0,positions:[],history:[],nextId:1,updatedAt:0}, deepDive:null, currentSymbol:null, smartScan:{running:false,results:[],watch:[],universe:0,stage1:0,midVerified:0,deepVerified:0,startedAt:0,error:'',lastUpdated:0,latencyMs:0}, multiRadar:{count:8,mode:'gainers',leaders:[],lastUpdated:0,running:false,error:'',pollTimer:null,pulseTimer:null,renderKey:'',dirty:false,monitorUniverse:[],monitorUniverseAt:0,ws:null,wsAttempt:0,wsReconnectTimer:null,wsLastMessage:0,wsOpenedAt:0,wsGeneration:0,restLastSuccess:0,restFailures:0,paintTimer:null,lastPaintPrice:new Map(),cacheAt:0,klineWs:null,klineWsAttempt:0,klineWsReconnectTimer:null,klineWsLastMessage:0,klineWsGeneration:0,klineSymbols:[],klineBars:new Map(),klineBaselineAt:0,klineRefreshTimer:null}, briefingRefreshTimer:null, selectedPaintTimer:null, selectedLiveRecomputeTimer:null, selectedLiveRecomputePending:false, lastMarketDomPaint:0, lastSelectedStructurePaintAt:0, lastSelectedFullRenderAt:0, lastResultsPaintAt:0, subscriptionGate:{status:'TRIAL',locked:false,reason:'init',lastCheckedAt:0,checking:false,remote:false}, continuous:{enabled:true,cycleMs:3500,restRefreshMs:15000,cycleBusy:false,lastCycleAt:0,lastLiveTickAt:0,lastRestAt:0,lastError:'',mode:'starting',worker:null,timer:null,watchdogTimer:null,tape:new Map(),pending:new Set(),lastDeepAt:new Map(),lastAlertAt:new Map(),alertCount:0,lastGolden:null,cachedCandidates:null,cachedCandidatesAt:0}, whaleMonitor:{enabled:false,timer:null,symbol:'',provider:'binance',history:[]}
   };
 
   function readJSON(key, fallback){ try { const v=JSON.parse(localStorage.getItem(key) || 'null'); return v ?? fallback; } catch { return fallback; } }
@@ -717,6 +717,7 @@
     if(now-state.lastMarketDomPaint<1200 && !force){ patchVisibleMarketCards(); return; }
     const arr=Object.values(state.marketsBySymbol).filter(x=>x?.symbol&&x.last>0&&x.quoteAsset==='USDT'&&x.quoteVolume>=0);
     arr.sort((a,b)=>b.quoteVolume-a.quoteVolume); state.markets=arr;
+    state.multiRadar.monitorUniverseAt=0;
     if(arr.length){
       state.multiRadar.lastUpdated=now;
       markLiveData('live_ws',`${t('liveWs')} · ${arr.length.toLocaleString('en-US')} symbols`);
@@ -1632,6 +1633,10 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
     return {bars,cur,baselineCount:closed.length,spike:liveMinuteVolumeSpike(symbol)};
   }
   function breakoutMonitorUniverse(){
+    const now=Date.now();
+    if(state.multiRadar.monitorUniverseAt&&now-state.multiRadar.monitorUniverseAt<5000&&Array.isArray(state.multiRadar.monitorUniverse)){
+      return state.multiRadar.monitorUniverse;
+    }
     const all=Object.values(state.marketsBySymbol||{}).filter(x=>isRadarSymbolEligible(x,'breakout',multiRadarSource()==='cached'));
     const byVolume=[...all].sort((a,b)=>num(b.quoteVolume)-num(a.quoteVolume));
     const byMove=[...all].sort((a,b)=>Math.abs(num(b.priceChangePercent))-Math.abs(num(a.priceChangePercent)));
@@ -1639,7 +1644,9 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
     const half=Math.max(10,Math.floor(MULTI_RADAR.volumeMonitorSymbols/2));
     for(const x of byVolume.slice(0,half))set.add(x.symbol);
     for(const x of byMove.slice(0,half))set.add(x.symbol);
-    return [...set].slice(0,MULTI_RADAR.volumeMonitorSymbols);
+    state.multiRadar.monitorUniverse=[...set].slice(0,MULTI_RADAR.volumeMonitorSymbols);
+    state.multiRadar.monitorUniverseAt=now;
+    return state.multiRadar.monitorUniverse;
   }
   async function fetchBinanceKlinesFast(symbol,limit){
     const urls=binanceUrls(`/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=1m&limit=${Math.min(1000,limit)}`);
@@ -1799,7 +1806,7 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
   }
   function multiRadarBreakoutLeaders(){
     const rows=[];
-    for(const x of Object.values(state.marketsBySymbol||{})){
+    for(const x of breakoutMonitorUniverse()){
       if(!isRadarSymbolEligible(x,'breakout',multiRadarSource()==='cached'))continue;
       const deep=state.deepRows.find(r=>r.symbol===x.symbol)||state.smartScan.results.find(r=>r.symbol===x.symbol)||null;
       const m=multiRadarBreakoutMetrics(x,deep);
