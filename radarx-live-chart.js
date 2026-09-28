@@ -244,23 +244,32 @@
     syncTfButtons();
   }
 
-  function loop(){
+  function loop(ts){
     if(!document.body.contains(canvas||document.body))return;
     ensureUI();
     const core=window.RadarXCore,st=core?.state;
     if(st?.selected){
       const rows=liveRows(st);
-      if(rows.length>1)draw(false);
+      const last=rows.at(-1);
+      const key=st.selected.symbol+'|'+(st.selected.timeframe||'5m')+'|'+String(last?.t||0)+'|'+String(last?.c||0)+'|'+String(last?.v||0)+'|'+String(st.selected.price||0);
+      // Recompute the expensive Fusion/chart only when market state changes, with a
+      // small hard ceiling of ~4 FPS for fast live price updates.
+      if(rows.length>1&&(key!==lastRenderKey&&ts-lastRenderAt>=140)){
+        lastRenderKey=key;lastRenderAt=ts;draw(false);
+      }
     }
     raf=requestAnimationFrame(loop);
   }
-
   function init(){
     if(!window.ResizeObserver)return;
-    const mo=new MutationObserver(()=>{ensureUI();draw(true);});
-    mo.observe(document.documentElement,{childList:true,subtree:true});
+    const mo=new MutationObserver(()=>{
+      clearTimeout(mutationTimer);
+      mutationTimer=setTimeout(()=>{ensureUI();lastRenderKey='';if(document.visibilityState==='visible')draw(true);},120);
+    });
+    const target=document.getElementById('signal')||document.querySelector('main')||document.body;
+    mo.observe(target,{childList:true,subtree:true});
     const tfSel=$('analysisTf');
-    if(tfSel&&!tfSel.dataset.rxLiveBound){tfSel.dataset.rxLiveBound='1';tfSel.addEventListener('change',function(){switchTf(tfSel.value);});}
+    if(tfSel&&!tfSel.dataset.rxLiveBound){tfSel.dataset.rxLiveBound='1';tfSel.addEventListener('change',function(){switchTf(tfSel.value);lastRenderKey='';});}
     ensureUI();
     if(raf)cancelAnimationFrame(raf);
     raf=requestAnimationFrame(loop);
