@@ -412,15 +412,22 @@
   }
 
 
-  const BINANCE_REST_BASES=['/api/binance']; let binanceRestPreferred=0;
+  const BINANCE_REST_BASES=['/api/bn','/api/bn2','/api/bn3','/api/binance']; let binanceRestPreferred=0;
   const BINANCE_WS_BASES=['wss://data-stream.binance.vision/stream','wss://stream.binance.com:9443/stream','wss://stream.binance.com/stream'];
-  // Binance REST always goes through the same-origin RadarX relay. This avoids
-  // mobile CORS/DNS failures and prevents request multiplication across hosts.
+  // REST is same-origin on the client. Vercel rewrites /api/bn* to official
+  // Binance endpoints; /api/binance remains the server relay fallback.
   function binanceProxyUrl(path){return '/api/binance?path='+encodeURIComponent(path);}
-  function binanceUrls(path){return [binanceProxyUrl(path)];}
+  function binanceRewriteUrl(base,path){return base+path.replace(/^\/api\//,'/');}
+  function binanceUrls(path){
+    const rewriteBases=['/api/bn','/api/bn2','/api/bn3'];
+    const rewrites=rewriteBases.map(b=>binanceRewriteUrl(b,path));
+    const relay=binanceProxyUrl(path);
+    return [...rewrites,relay];
+  }
   async function ensureBinanceRelay(){
-    const d=await fetchJSON(binanceProxyUrl('/api/v3/ping'),{timeout:5500,retries:1,backoff:350});
-    if(d===null||typeof d==='undefined')throw new Error('BINANCE_RELAY_EMPTY');
+    const urls=binanceUrls('/api/v3/ping');
+    const d=await firstJSONRace(urls,{timeout:5500,retries:0,maxUrls:4});
+    if(d===null||typeof d==='undefined')throw new Error('BINANCE_PUBLIC_DATA_EMPTY');
     return true;
   }
   function saveLiveSnapshot(){ try{const items=Object.values(state.marketsBySymbol||{}).filter(x=>x&&x.symbol).sort((a,b)=>(b.quoteVolume||0)-(a.quoteVolume||0)).slice(0,3000);if(items.length){const ts=Date.now();state.multiRadar.cacheAt=ts;writeJSON('radarx_live_snapshot_v55',{ts,items});}}catch{} }
