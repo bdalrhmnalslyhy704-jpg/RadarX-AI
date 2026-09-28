@@ -1,4 +1,5 @@
-name: RadarX Android APK 6.1
+name: RadarX Android Native 6.2
+
 on:
   workflow_dispatch:
   push:
@@ -8,20 +9,14 @@ on:
       - "build.gradle.kts"
       - "gradle.properties"
       - ".github/workflows/radarx-android.yml"
-      - "index.html"
-      - "RadarX_Ultimate_5.11.js"
-      - "radarx-runtime-6.0.js"
-      - "RadarX_ProEngine_5.11.js"
-      - "radarx-pulse-fusion.js"
-      - "radarx-live-chart.js"
 
 permissions:
   contents: write
 
 jobs:
-  build-apk:
+  build-native:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -34,13 +29,13 @@ jobs:
         with:
           gradle-version: "9.7.1"
 
-      - name: Build installable debug APK
+      - name: Build native debug APK
         run: gradle :app:assembleDebug --stacktrace
 
-      - name: Build release APK (unsigned archive)
+      - name: Build native release APK
         run: gradle :app:assembleRelease --stacktrace
 
-      - name: Verify APKs
+      - name: Verify APK integrity
         run: |
           set -euo pipefail
           test -s app/build/outputs/apk/debug/app-debug.apk
@@ -48,37 +43,39 @@ jobs:
           unzip -t app/build/outputs/apk/debug/app-debug.apk >/dev/null
           unzip -t app/build/outputs/apk/release/app-release-unsigned.apk >/dev/null
 
-      - name: Prepare direct-download APK
+      - name: Inspect native package
+        run: |
+          set -euo pipefail
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -E "classes(2)?\.dex|AndroidManifest.xml"
+          echo "Native APK assembled successfully."
+
+      - name: Prepare installable APK
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/RadarX-6.1.apk
-          unzip -t dist/RadarX-6.1.apk >/dev/null
+          cp app/build/outputs/apk/debug/app-debug.apk dist/RadarX-6.2-Native.apk
+          sha256sum dist/RadarX-6.2-Native.apk
 
       - name: Publish installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: RadarX-6.1-Android-Installable-APK
-          path: dist/RadarX-6.1.apk
+          name: RadarX-6.2-Native-Android-APK
+          path: dist/RadarX-6.2-Native.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Publish release archive
         uses: actions/upload-artifact@v4
         with:
-          name: RadarX-6.1-Android-Release-Unsigned
+          name: RadarX-6.2-Native-Release-Unsigned
           path: app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish stable GitHub Release download
+      - name: Publish stable GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="android-v6.1.${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" dist/RadarX-6.1.apk \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "RadarX 6.1 Android" \
-            --notes "RadarX 6.1 installable Android APK. Built from commit ${GITHUB_SHA}." \
-            --latest
+          TAG="android-v6.2.${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" dist/RadarX-6.2-Native.apk             --repo "${GITHUB_REPOSITORY}"             --title "RadarX 6.2 Native"             --notes "RadarX Native 6.2: native Android shell + Binance WebSocket market engine. Built from commit ${GITHUB_SHA}."             --latest
