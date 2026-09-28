@@ -1352,7 +1352,7 @@
 
   // ---------- Auto-Pilot Smart Scanner ----------
   const SMART_SCAN={
-    minQuoteVolume:750000, maxTickerShortlist:72, maxMidScan:40, maxDeep:8, batchSize:4,
+    minQuoteVolume:750000, maxTickerShortlist:72, maxMidScan:40, maxDeep:8, batchSize:4, deepBatchSize:8,
     minTrapRisk:34, minFusionScore:68, minConfidence:55, cooldownMs:8000
   };
   function smartText(key, vars={}){ let out=t(key); Object.entries(vars).forEach(function(pair){out=out.replaceAll('{'+pair[0]+'}',String(pair[1]));}); return out; }
@@ -1396,18 +1396,41 @@
   function smartPreflightRank(x){
     return x?num(x.score,50)*.58+num(x.smartTickerScore,50)*.24+num(x.proximity,50)*.08+num(x.volume,50)*.10:-Infinity;
   }
+  async function fetchSmartMTFConsensus(symbol,r1,r5){
+    const tfs=['1m','5m','15m','1h'],weights={"1m":0.10,"5m":0.20,"15m":0.30,"1h":0.40};
+    const seed=[r1,r5];
+    const settled=await Promise.allSettled([
+      Promise.resolve(seed[0]),
+      Promise.resolve(seed[1]),
+      fetchKlines('binance',symbol,'15m',90),
+      fetchKlines('binance',symbol,'1h',90)
+    ]);
+    const rows=[];
+    settled.forEach(function(r,i){
+      if(r.status!=='fulfilled'||!r.value?.length)return;
+      const f=coreFeatures(r.value),sc=scoreFeatures(f);
+      rows.push({tf:tfs[i],score:sc.score,direction:mtfDirection(sc)});
+    });
+    if(!rows.length)throw new Error('MTF unavailable');
+    const totalWeight=rows.reduce((a,r)=>a+(weights[r.tf]||0),0)||1;
+    const consensusScore=rows.reduce((a,r)=>a+r.score*(weights[r.tf]||0),0)/totalWeight;
+    const consensusLabel=mtfDirection({score:consensusScore});
+    const agreement=rows.reduce((a,r)=>a+(r.direction===consensusLabel?(weights[r.tf]||0):0),0)/totalWeight*100;
+    return {rows,consensusScore,agreement,consensusLabel};
+  }
   async function smartDeepOne(x){
     const symbol=x.symbol;
     try{
-      const pair=await Promise.all([
-        fetchKlines('binance',symbol,'1m',96),
-        fetchKlines('binance',symbol,'5m',144)
-      ]);
-      const r1=pair[0],r5=pair[1],pre=smartPreflight(r1,r5,x);
+      // Reuse the 1m/5m evidence already collected by Gate 2. This removes
+      // a second round-trip for every deep candidate without changing the
+      // downstream scoring or validation path.
+      const r1=(Array.isArray(x.rows1m)&&x.rows1m.length)?x.rows1m:await fetchKlines('binance',symbol,'1m',96);
+      const r5=(Array.isArray(x.rows)&&x.rows.length)?x.rows:(Array.isArray(x.rows5m)&&x.rows5m.length?x.rows5m:await fetchKlines('binance',symbol,'5m',144));
+      const pre=smartPreflight(r1,r5,x);
       if(!pre)return null;
       const pack=await Promise.all([
         Promise.all([fetchDepth('binance',symbol,100),fetchTrades('binance',symbol,500)]).catch(function(){return null;}),
-        fetchMTFConsensus('binance',symbol).catch(function(){return null;})
+        fetchSmartMTFConsensus(symbol,r1,r5).catch(function(){return null;})
       ]);
       const fp=pack[0],mtf=pack[1],rows=r5.filter(function(r){return r.closed!==false;});
       const f=pre.f5,structure=detectStructure(rows),flow=fp?flowFromData(fp[0],fp[1]):null;
@@ -1478,7 +1501,7 @@
     state.smartScan={...state.smartScan,running:true,results:[],watch:[],universe:0,stage1:0,midVerified:0,deepVerified:0,startedAt:Date.now(),error:'',lastUpdated:0,latencyMs:0};
     const btns=[$('smartScanBtn'),$('quickScan')].filter(Boolean);btns.forEach(function(b){b.disabled=true;});
     if($('smartOpportunityOutput'))$('smartOpportunityOutput').innerHTML='';
-    smartStage('تهيئة Auto-Pilot 6.0 — طبقة بيانات مشتركة + فرز مرحلي…',2,'busy');
+    smartStage('تهيئة Auto-Pilot 6.9 — بوابة تجميع سريعة + تحقق مرحلي…',2,'busy');
     try{
       await ensureBinanceRelay();
        const tickers=await fetchAllTickers('binance');
@@ -1494,24 +1517,44 @@
       smartStage('مرحلة 1: كل السوق تم مسحه → '+shortlist.length+' مرشح للحساب الزمني.',18,'busy');
 
       const mid=[];
-      for(let i=0;i<shortlist.length;i+=SMART_SCAN.batchSize){
-        const batch=shortlist.slice(i,i+SMART_SCAN.batchSize);
-        const rr=await Promise.allSettled(batch.map(async function(x){
-          const p=await Promise.all([fetchKlines('binance',x.symbol,'1m',64),fetchKlines('binance',x.symbol,'5m',96)]);
-          const pre=smartPreflight(p[0],p[1],x);return pre&&pre.score>=46?{...x,...pre,rows:p[1],rows1m:p[0]}:null;
-        }));
-        rr.forEach(function(v){if(v.status==='fulfilled'&&v.value)mid.push(v.value);});
+      const midPool=shortlist.slice(0,SMART_SCAN.maxMidScan);
+      let bulkLoaded=false;
+      // Fast path: one server-side request collects 1m + 5m candles for the
+      // whole Gate-2 pool. The original per-symbol path remains the fallback.
+      try{
+        const symbols=midPool.map(x=>x.symbol).join(',');
+        const bulk=await fetchJSON('/api/radarx-smart?symbols='+encodeURIComponent(symbols),{timeout:12000,retries:0});
+        const bySymbol=bulk?.ok?bulk.bySymbol||{}:{};
+        for(const x of midPool){
+          const b=bySymbol[x.symbol];
+          if(!b?.rows5m?.length)continue;
+          const pre=smartPreflight(b.rows1m,b.rows5m,x);
+          if(pre&&pre.score>=46)mid.push({...x,...pre,rows:b.rows5m,rows1m:b.rows1m,rows5m:b.rows5m});
+        }
+        bulkLoaded=Object.keys(bySymbol).length>0;
         state.smartScan.midVerified=mid.length;
-        smartStage('مرحلة 2: 1m/5m تحقق '+mid.length+'/'+shortlist.length,20+Math.round(Math.min(i+SMART_SCAN.batchSize,shortlist.length)/shortlist.length*34),'busy');
-        await sleep(18);
+        smartStage('مرحلة 2 السريعة: بوابة RadarX جمعت 1m/5m لـ '+Object.keys(bySymbol).length+'/'+midPool.length+' · '+mid.length+' مرشح متحقق',54,'busy');
+      }catch{}
+      if(!bulkLoaded){
+        for(let i=0;i<midPool.length;i+=SMART_SCAN.batchSize){
+          const batch=midPool.slice(i,i+SMART_SCAN.batchSize);
+          const rr=await Promise.allSettled(batch.map(async function(x){
+            const p=await Promise.all([fetchKlines('binance',x.symbol,'1m',64),fetchKlines('binance',x.symbol,'5m',96)]);
+            const pre=smartPreflight(p[0],p[1],x);return pre&&pre.score>=46?{...x,...pre,rows:p[1],rows1m:p[0],rows5m:p[1]}:null;
+          }));
+          rr.forEach(function(v){if(v.status==='fulfilled'&&v.value)mid.push(v.value);});
+          state.smartScan.midVerified=mid.length;
+          smartStage('مرحلة 2 الاحتياطية: 1m/5m تحقق '+mid.length+'/'+midPool.length,20+Math.round(Math.min(i+SMART_SCAN.batchSize,midPool.length)/Math.max(1,midPool.length)*34),'busy');
+          await sleep(8);
+        }
       }
       mid.sort(function(a,b){return smartPreflightRank(b)-smartPreflightRank(a);});
       const topMid=mid.slice(0,SMART_SCAN.maxDeep);
-      smartStage('مرحلة 3: تحقيق جنائي للـ '+topMid.length+' الأقوى — MTF + Order Flow + Whales + Traps…',56,'busy');
+      smartStage('مرحلة 3: تحقيق جنائي سريع للـ '+topMid.length+' الأقوى — MTF + Order Flow + Whales + Traps…',56,'busy');
 
       const deep=[];
-      for(let i=0;i<topMid.length;i+=SMART_SCAN.batchSize){
-        const rr=await Promise.allSettled(topMid.slice(i,i+SMART_SCAN.batchSize).map(smartDeepOne));
+      for(let i=0;i<topMid.length;i+=SMART_SCAN.deepBatchSize){
+        const rr=await Promise.allSettled(topMid.slice(i,i+SMART_SCAN.deepBatchSize).map(smartDeepOne));
         rr.forEach(function(v){if(v.status==='fulfilled'&&v.value)deep.push(v.value);});
         state.smartScan.deepVerified=deep.length;
         smartStage('RX Fusion: '+deep.length+'/'+topMid.length+' تحليلات مكتملة',56+Math.round(Math.min(i+SMART_SCAN.batchSize,topMid.length)/Math.max(1,topMid.length)*34),'busy');
@@ -1536,7 +1579,7 @@
       markLiveData('live_rest',t('liveRest')+' · Smart Fusion');appHealthy();
     }catch(e){
       state.smartScan.error=String(e?.message||e);state.smartScan.latencyMs=Math.round(performance.now()-started);
-      smartStage(t('smartNetworkFail')+' · Runtime 6.0',100,'bad');renderSmartOutput([],{universe:state.smartScan.universe,stage1:state.smartScan.stage1,midVerified:state.smartScan.midVerified,deepVerified:state.smartScan.deepVerified,watch:state.smartScan.watch,message:t('smartNetworkFail')});markLiveData(state.markets.length?'cached':'offline');
+      smartStage(t('smartNetworkFail')+' · Runtime 6.9',100,'bad');renderSmartOutput([],{universe:state.smartScan.universe,stage1:state.smartScan.stage1,midVerified:state.smartScan.midVerified,deepVerified:state.smartScan.deepVerified,watch:state.smartScan.watch,message:t('smartNetworkFail')});markLiveData(state.markets.length?'cached':'offline');
     }finally{state.smartScan.running=false;btns.forEach(function(b){b.disabled=false;});}
   }
 
