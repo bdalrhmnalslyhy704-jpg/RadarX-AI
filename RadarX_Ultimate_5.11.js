@@ -2432,7 +2432,40 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
     else if(kind==='community'){out.innerHTML=`<div class="subpanel"><h3>${t('community')}</h3><div class="note">${t('communityHint')}</div><div class="two-col" style="margin-top:10px"><input id="postInput" placeholder="${t('message')}"><button class="btn primary" id="postBtn">${t('post')}</button></div><div id="communityOutput" class="list-stack" style="margin-top:10px"></div></div>`;$('postBtn').onclick=addPost;renderCommunity();}
   }
   async function compareExchanges(){const s=$('compareSymbol').value.trim().toUpperCase().replace(/[\s/_-]/g,'');const out=[];for(const p of Object.keys(PROVIDERS)){try{const x=await Promise.race([fetchTicker(p,s),sleep(2500).then(()=>{throw new Error('timeout')})]);if(x)out.push({p,x});}catch(e){out.push({p,error:e.message});}}$('compareOutput').innerHTML=out.map(r=>`<div class="compare-item"><b>${esc(PROVIDERS[r.p].name)}</b><div class="small muted">${r.x?`${fmt(r.x.last)} · ${pct(r.x.priceChangePercent)} · ${fmt(r.x.quoteVolume)}`:t('noApi')}</div></div>`).join('');}
-  function loadNews(){$('newsOutput').innerHTML=`<div class="empty-state">${t('noData')}<br><span class="small muted">${t('liveSource')}</span></div>`;}
+  async function loadNews(){
+    const out=$('newsOutput');if(!out)return;
+    out.innerHTML='<div class="empty-state">📰 '+t('liveSource')+'…</div>';
+    try{
+      const symbol=String(state.selected?.symbol||'').trim().toUpperCase();
+      const d=await fetchJSON('/api/radarx-news?symbols='+(symbol?encodeURIComponent(symbol):''),{timeout:7000,retries:0});
+      if(!d?.ok)throw new Error('NEWS_UNAVAILABLE');
+      const items=Array.isArray(d.items)?d.items.slice(0,20):[];
+      const c=d.catalystBySymbol?.[symbol];
+      if(symbol&&c?.available){
+        psNewsCacheForUI(symbol,c);
+      }
+      if(!items.length){
+        out.innerHTML='<div class="empty-state">📰 '+t('noData')+'<br><span class="small muted">CoinDesk RSS</span></div>';
+        return;
+      }
+      out.innerHTML=items.map(x=>{
+        const ts=Date.parse(x.publishedAt),when=Number.isFinite(ts)?new Date(ts).toLocaleString():String(x.publishedAt||'');
+        return '<article class="news-item"><h4>'+esc(x.title||'—')+'</h4><div class="small muted" style="margin-top:5px">'+esc(x.source||'CoinDesk')+' · '+esc(when)+'</div><a href="'+esc(x.url||'#')+'" target="_blank" rel="noopener" class="small" style="display:inline-block;margin-top:6px;color:var(--cyan)">'+(state.lang==='ar'?'فتح الخبر':'Open article')+'</a></article>';
+      }).join('');
+      if(symbol&&c?.available){
+        out.insertAdjacentHTML('afterbegin','<div class="note" style="margin-bottom:8px">⚡ '+(state.lang==='ar'?'Catalyst للعملة':'Catalyst for')+' '+esc(symbol)+': <b>'+Math.round(c.score)+'/100</b> · '+esc(String(c.samples||0))+' '+(state.lang==='ar'?'خبر مطابق':'matched headlines')+'</div>');
+      }
+    }catch(e){
+      out.innerHTML='<div class="empty-state">📰 '+t('noData')+'<br><span class="small muted">CoinDesk RSS unavailable right now.</span></div>';
+    }
+  }
+  function psNewsCacheForUI(symbol,data){
+    try{
+      if(window.RadarXPro?.state?.external?.catalyst?.set){
+        window.RadarXPro.state.external.catalyst.set(symbol,{...data,available:true,source:'CoinDesk RSS'});
+      }
+    }catch{}
+  }
 
   // ---------- 4.1 Trap / Psychology / Briefing / Paper Trading ----------
   function paperDayStart(){const d=new Date();d.setHours(0,0,0,0);return d.getTime();}
