@@ -389,7 +389,10 @@
   function cloudBinanceProxyUrl(path){return RADARX_CLOUD_BINANCE_RELAY+'?path='+encodeURIComponent(path);}
   function binanceUrls(path){
     const local=binanceProxyUrl(path);
-    return isNativeRadarX()?[local,cloudBinanceProxyUrl(path)]:[local];
+    // Native APK: try the deployed RadarX cloud gateway first, then local
+    // Android relay/direct Binance failover. This minimizes regional DNS/blocking
+    // delays and keeps the WebView data path CORS-safe.
+    return isNativeRadarX()?[cloudBinanceProxyUrl(path),local]:[local];
   }
 
   // Native WebSocket bridge. One Android OkHttp hub owns the sockets; JS only
