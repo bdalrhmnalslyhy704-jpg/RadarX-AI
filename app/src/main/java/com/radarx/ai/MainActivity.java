@@ -58,6 +58,7 @@ public final class MainActivity extends Activity {
                 .writeTimeout(8_000L, TimeUnit.MILLISECONDS)
                 .pingInterval(20L, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(true)
+                .dns(new RadarXDohDns())
                 .build();
         streamHub = new NativeBinanceStreamHub(wsClient);
         httpQueue = new NativeBinanceHttpQueue(relayClient);
