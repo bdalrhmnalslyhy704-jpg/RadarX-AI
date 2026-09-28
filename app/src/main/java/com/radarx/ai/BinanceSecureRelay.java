@@ -174,6 +174,7 @@ public final class BinanceSecureRelay {
         if ("/api/market".equals(path)) return interceptMarket(uri);
         if ("/api/radarx-context".equals(path)) return interceptContext(uri);
         if ("/api/radarx-news".equals(path)) return interceptNews(uri);
+        if ("/api/radarx-onchain".equals(path)) return interceptOnchain(uri);
         if ("/api/metals".equals(path)) return interceptMetals(uri);
         return null;
     }
@@ -305,6 +306,31 @@ public final class BinanceSecureRelay {
         }
     }
 
+
+    private WebResourceResponse interceptOnchain(Uri uri) {
+        String q = uri.getQuery();
+        String url = "https://radar-x-ai.vercel.app/api/radarx-onchain" + (q == null || q.isEmpty() ? "" : "?" + q);
+        try {
+            Request req = new Request.Builder()
+                    .url(url)
+                    .get()
+                    .header("Accept", "application/json")
+                    .header("User-Agent", "RadarX-Android/6.8.0")
+                    .build();
+            try (Response r = client.newCall(req).execute()) {
+                byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+                if (r.isSuccessful() && looksLikeJson(body)) {
+                    return response(200, "OK", "application/json; charset=utf-8",
+                            body, headers("MISS", "radarx-onchain-cloud", 0));
+                }
+                return jsonResponse(r.code(), body.length == 0
+                        ? "{\"error\":\"ONCHAIN_SOURCE_UNAVAILABLE\"}"
+                        : new String(body, StandardCharsets.UTF_8));
+            }
+        } catch (Exception ignored) {
+            return jsonResponse(502, "{\"error\":\"ONCHAIN_SOURCE_UNAVAILABLE\"}");
+        }
+    }
 
     private WebResourceResponse interceptNews(Uri uri) {
         String q = uri.getQuery();
