@@ -126,7 +126,7 @@
       wrap.classList.add('rx-live-chart-shell');
       let old=wrap.querySelector('.rx-live-toolbar');if(old)old.remove();
       toolbar=document.createElement('div');toolbar.className='rx-live-toolbar';
-      toolbar.innerHTML='<div class="rx-live-tools"><div class="rx-tf-buttons">'+['1m','5m','15m','1h'].map(tf=>'<button type="button" data-rx-tf="'+tf+'">'+tf+'</button>').join('')+'</div><span class="rx-live-badge" id="rxLiveState">LIVE CANDLE</span><span class="rx-live-pulse" id="rxLivePulse">●</span></div><div class="rx-live-tools"><span class="rx-chip" id="rxPulseScore">RX Pulse —</span><span class="rx-chip" id="rxChartMode">Live Binance feed</span><button type="button" class="rx-chart-refresh" id="rxChartRefresh">↻ مزامنة</button></div>';
+      toolbar.innerHTML='<div class="rx-live-tools"><div class="rx-tf-buttons">'+['1m','5m','15m','1h'].map(tf=>'<button type="button" data-rx-tf="'+tf+'">'+tf+'</button>').join('')+'</div><span class="rx-live-badge" id="rxLiveState">LIVE CANDLE</span><span class="rx-live-pulse" id="rxLivePulse">●</span></div><div class="rx-live-tools"><span class="rx-chip" id="rxPulseScore">RX Fusion —</span><span class="rx-chip" id="rxPulseMeta">Regime — · Conf —</span><span class="rx-chip" id="rxChartMode">Live Binance feed</span><button type="button" class="rx-chart-refresh" id="rxChartRefresh">↻ مزامنة</button></div>';
       wrap.insertBefore(toolbar,canvas);
       tip=document.createElement('div');tip.className='rx-live-tip';tip.hidden=true;wrap.appendChild(tip);
       toolbar.querySelectorAll('[data-rx-tf]').forEach(btn=>btn.onclick=()=>switchTf(btn.dataset.rxTf));
@@ -234,12 +234,13 @@
       const when=new Date(n(rr.t));tip.innerHTML='<b>'+esc(st.selected.symbol)+' · '+esc(st.selected.timeframe||'')+'</b><br>O '+fmt(rr.o)+' · H '+fmt(rr.h)+'<br>L '+fmt(rr.l)+' · C '+fmt(rr.c)+'<br>V '+fmt(rr.v)+'<br>'+when.toLocaleString();
       tip.hidden=false;const x=Math.min(Math.max(8,cx-70),Math.max(8,W-180));const y=Math.min(Math.max(8,sy-86),H-110);tip.style.left=x+'px';tip.style.top=y+'px';
     }
-    const stateBadge=$('rxLiveState'),pulse=$('rxLivePulse'),ps=$('rxPulseScore'),mode=$('rxChartMode');
+    const stateBadge=$('rxLiveState'),pulse=$('rxLivePulse'),ps=$('rxPulseScore'),pm=$('rxPulseMeta'),mode=$('rxChartMode');
     if(stateBadge){stateBadge.textContent='● LIVE CANDLE';stateBadge.classList.add('on');}
     if(pulse){pulse.textContent='●';pulse.classList.add('pulse');}
-    if(ps){ps.textContent='RX Pulse '+Math.round(con.score)+' · '+con.label;ps.dataset.regime=con.regime||'';ps.title=(con.reasonsText||[]).join(' · ')||('Regime: '+(con.regime||'NEUTRAL'));}
+    if(ps){ps.textContent='RX Fusion '+Math.round(con.score)+' · '+con.label;ps.dataset.regime=con.regime||'';ps.title=(con.reasonsText||[]).join(' · ')||('Regime: '+(con.regime||'NEUTRAL'));}
+    if(pm)pm.textContent='Regime '+(con.regime||'—')+' · Conf '+Math.round(con.confidence||0)+'% · Fresh '+Math.round(con.freshness||0)+'%';
     if(mode)mode.textContent='Binance WebSocket · '+(st.selected.timeframe||'5m')+' · '+(con.regime||'')+' · '+Math.round(con.coverage||0)+'% evidence';
-    if(ps&&con.parts)ps.title='Trend '+Math.round(con.parts.trend)+' · Momentum '+Math.round(con.parts.momentum)+' · Volume '+Math.round(con.parts.volume)+' · ADX '+Math.round(con.parts.adx)+' · Microprice '+Math.round(con.parts.micro);
+    if(ps&&con.parts)ps.title='Trend '+Math.round(con.parts.trend)+' · Structure '+Math.round(con.parts.structure)+' · Compression '+Math.round(con.parts.compression)+' · Volume '+Math.round(con.parts.volume)+' · Flow '+Math.round(con.parts.flow)+' · Whale '+Math.round(con.parts.whale)+' · MTF '+Math.round(con.parts.mtf);
     syncTfButtons();
   }
 
