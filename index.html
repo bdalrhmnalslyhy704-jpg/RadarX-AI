@@ -455,7 +455,7 @@ body.rx-subscription-locked #toast{z-index:9200}
   var loader=document.getElementById('radarx-progressive-loader');
   function set(t,err){if(!loader)return;loader.textContent=t;loader.style.color=err?'#ff8f9b':'#8ea5b3';}
   window.addEventListener('radarx:ready',function(){set('RadarX — المحرك جاهز');setTimeout(function(){loader&&loader.remove();},900);});
-  setTimeout(function(){if(window.RadarXCore){set('RadarX — المحرك متصل');}else{set('RadarX — المحرك يتأخر قليلًا؛ ستستمر محاولة الاتصال تلقائيًا.',true);}},12000);
+  setTimeout(function(){if(window.RadarXCore){set('RadarX — المحرك متصل');}else{set('RadarX — ما زال يجهّز الاتصال؛ ستستمر المحاولة تلقائيًا.');}},20000);
   window.addEventListener('error',function(e){if(e.filename&&/RadarX_(Ultimate_5.1|ProEngine_5.1).js/.test(e.filename))set('خطأ تحميل المحرك: '+(e.message||'script error'),true);});
 })();
 </script>
