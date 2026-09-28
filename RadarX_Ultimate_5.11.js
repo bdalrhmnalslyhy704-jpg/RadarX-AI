@@ -380,10 +380,115 @@
   }
 
   const BINANCE_REST_BASES=['/api/binance']; let binanceRestPreferred=0;
-  const BINANCE_WS_BASES=['wss://data-stream.binance.vision/stream','wss://stream.binance.com:9443/stream','wss://stream.binance.com/stream'];
-  // Browser REST uses one same-origin RadarX relay. The server relay owns upstream failover/cache.
+  const BINANCE_WS_BASES=['wss://data-stream.binance.vision/stream','wss://stream.binance.com:9443/stream','wss://stream.binance.com:443/stream','wss://stream.binance.com/stream'];
+  const RADARX_CLOUD_BINANCE_RELAY='https://radar-x-ai.vercel.app/api/binance';
+  // Native APK: local native relay first, deployed RadarX cloud relay second.
+  // Web/PWA: same-origin relay only.
+  function isNativeRadarX(){try{return !!window.RadarXAndroid&&window.RadarXAndroid.isNativeShell&&window.RadarXAndroid.isNativeShell();}catch{return false;}}
   function binanceProxyUrl(path){return '/api/binance?path='+encodeURIComponent(path);}
-  function binanceUrls(path){return [binanceProxyUrl(path)];}
+  function cloudBinanceProxyUrl(path){return RADARX_CLOUD_BINANCE_RELAY+'?path='+encodeURIComponent(path);}
+  function binanceUrls(path){
+    const local=binanceProxyUrl(path);
+    return isNativeRadarX()?[local,cloudBinanceProxyUrl(path)]:[local];
+  }
+
+  // Native WebSocket bridge. One Android OkHttp hub owns the sockets; JS only
+  // consumes a tiny event queue. This avoids WebView WebSocket/CORS/URL-origin
+  // limitations and gives the native layer its own ping + reconnect watchdog.
+  let nativeStreamPollTimer=null;
+  let nativeStreamPollStarted=false;
+  function ensureNativeMarketStreamPoller(){
+    if(!isNativeRadarX()||nativeStreamPollStarted)return;
+    nativeStreamPollStarted=true;
+    const pump=()=>{
+      try{
+        const raw=window.RadarXAndroid.pollMarketStreams();
+        const events=JSON.parse(raw||'[]');
+        events.forEach(onNativeMarketStreamEvent);
+      }catch{}
+      nativeStreamPollTimer=setTimeout(pump,120);
+    };
+    pump();
+  }
+  function nativeStreamHandle(id){
+    return {native:true,readyState:1,close:function(){
+      try{window.RadarXAndroid.stopMarketStream(id);}catch{}
+      this.readyState=3;
+    }};
+  }
+  function startNativeMarketStream(id,streams){
+    if(!isNativeRadarX())return null;
+    ensureNativeMarketStreamPoller();
+    try{
+      const ok=window.RadarXAndroid.startMarketStream(id,streams);
+      return ok?nativeStreamHandle(id):null;
+    }catch{return null;}
+  }
+  function onNativeMarketStreamEvent(ev){
+    if(!ev||!ev.id)return;
+    const id=String(ev.id), type=String(ev.type||'');
+    if(type==='open'){
+      if(id==='ticker'){
+        state.ws.lastMessage=Number(ev.ts)||Date.now();
+        if(state.ws.ticker)state.ws.ticker.readyState=1;
+        state.multiRadar.ws=state.ws.ticker;
+        state.multiRadar.wsOpenedAt=Date.now();
+        state.multiRadar.wsLastMessage=state.ws.lastMessage;
+        multiRadarSetBusy(false,'ws');
+        markLiveData('live_ws',t('liveSource'));
+        appHealthy();
+      }else if(id==='selected'){
+        if(state.ws.symbol)state.ws.symbol.readyState=1;
+        state.ws.lastMessage=Number(ev.ts)||Date.now();
+        appHealthy();
+      }else if(id==='breakout-kline'){
+        if(state.multiRadar.klineWs)state.multiRadar.klineWs.readyState=1;
+        state.multiRadar.klineWsLastMessage=Number(ev.ts)||Date.now();
+        state.multiRadar.dirty=true;
+        appHealthy();
+      }
+      return;
+    }
+    if(type==='message'){
+      const raw=String(ev.message||'');
+      if(!raw)return;
+      try{
+        const msg=JSON.parse(raw);
+        if(id==='ticker'){
+          state.ws.lastMessage=Number(ev.ts)||Date.now();
+          state.multiRadar.wsLastMessage=state.ws.lastMessage;
+          consumeTickerPayload(msg);
+          state.multiRadar.dirty=true;
+          scheduleMultiRadarPaint();
+        }else if(id==='selected'){
+          const d=msg.data&&msg.stream?msg.data:msg;
+          if(d?.e==='24hrTicker')handleSelectedTicker(normalizeBinanceTicker(d));
+          else if(d?.e==='kline')handleSelectedKline(d.k);
+          else if(d?.e==='depthUpdate')handleSelectedDepth(d);
+          else if(d?.e==='aggTrade')handleSelectedTrade(d);
+        }else if(id==='breakout-kline'){
+          state.multiRadar.klineWsLastMessage=Number(ev.ts)||Date.now();
+          const d=msg.data&&msg.stream?msg.data:msg;
+          if(d?.e==='kline')updateLiveMinuteKline(d.k);
+          state.multiRadar.dirty=true;
+        }
+      }catch{}
+      return;
+    }
+    if(type==='error'||type==='close'||type==='watchdog'){
+      if(id==='ticker'){
+        state.ws.lastMessage=Number(ev.ts)||state.ws.lastMessage;
+        if(state.ws.ticker)state.ws.ticker.readyState=0;
+        state.multiRadar.wsLastMessage=0;
+        state.multiRadar.wsOpenedAt=0;
+      }else if(id==='selected'){
+        if(state.ws.symbol)state.ws.symbol.readyState=0;
+      }else if(id==='breakout-kline'){
+        if(state.multiRadar.klineWs)state.multiRadar.klineWs.readyState=0;
+      }
+      if(state.markets.length)markLiveData('cached',t('dataAge'));
+    }
+  }
 
   async function ensureBinanceRelay(){
     const urls=binanceUrls('/api/v3/ping');
@@ -558,12 +663,29 @@
   }
   function wsUrl(stream){return `${stream.base}?streams=${encodeURIComponent(stream.name)}`;}
   function openTickerWS(attempt=0){
+    if(isNativeRadarX()){
+      if(state.ws.ticker?.native&&state.ws.ticker.readyState===1&&attempt===0)return;
+      if(state.ws.ticker?.native){try{state.ws.ticker.close();}catch{}}
+      const handle=startNativeMarketStream('ticker','!miniTicker@arr');
+      if(handle){
+        state.ws.ticker=handle;
+        state.multiRadar.ws=handle;
+        state.multiRadar.wsOpenedAt=0;
+        state.ws.attempt=0;
+        multiRadarSetBusy(true,'rest');
+        return;
+      }
+    }
     if(state.ws.ticker&&state.ws.ticker.readyState===1&&attempt===0)return;
     if(state.ws.ticker){try{state.ws.ticker.close(1000,'reconnect')}catch{}}
-    const baseIndex=Math.min(attempt, BINANCE_WS_BASES.length-1); const bases=[BINANCE_WS_BASES[baseIndex],...BINANCE_WS_BASES.filter((_,i)=>i!==baseIndex)];
+    const baseIndex=Math.min(attempt,BINANCE_WS_BASES.length-1);
+    const bases=[BINANCE_WS_BASES[baseIndex],...BINANCE_WS_BASES.filter((_,i)=>i!==baseIndex)];
     const streamName='!miniTicker@arr';
     let i=0;
-    const connectNext=()=>{ if(i>=bases.length){ scheduleTickerReconnect(); return; } const base=bases[i++]; let ws; try{ws=new WebSocket(`${base}?streams=${encodeURIComponent(streamName)}`);}catch{connectNext();return;} state.ws.ticker=ws;
+    const connectNext=()=>{ if(i>=bases.length){scheduleTickerReconnect();return;}
+      const base=bases[i++];let ws;
+      try{ws=new WebSocket(`${base}?streams=${encodeURIComponent(streamName)}`);}catch{connectNext();return;}
+      state.ws.ticker=ws;
       ws.onopen=()=>{state.ws.attempt=0;state.ws.lastMessage=Date.now();state.multiRadar.ws=ws;state.multiRadar.wsOpenedAt=Date.now();multiRadarSetBusy(false,'ws');markLiveData('live_ws',t('liveSource'));appHealthy();};
       ws.onmessage=e=>{state.ws.lastMessage=Date.now();state.multiRadar.wsLastMessage=state.ws.lastMessage;try{consumeTickerPayload(JSON.parse(e.data));state.multiRadar.dirty=true;scheduleMultiRadarPaint();}catch{}};
       ws.onerror=()=>{};
@@ -571,18 +693,33 @@
     };
     connectNext();
   }
-  function scheduleTickerReconnect(){clearTimeout(state.ws.reconnectTimer); const delay=Math.min(60000,Math.max(2500,Math.pow(2,state.ws.attempt||1)*1000));state.ws.attempt=Math.min((state.ws.attempt||0)+1,6);markLiveData('offline',t('wsReconnect'));state.ws.reconnectTimer=setTimeout(()=>openTickerWS(state.ws.attempt),delay);}
-  function startWSStaleMonitor(){clearInterval(state.ws.staleTimer);state.ws.staleTimer=setInterval(()=>{if(!state.ws.lastMessage)return;const age=Date.now()-state.ws.lastMessage;if(age>15000){markLiveData(state.markets.length?'cached':'offline',`${t('dataAge')}: ${formatDataAge(state.ws.lastMessage)}`);if(state.ws.ticker&&state.ws.ticker.readyState===1)try{state.ws.ticker.close();}catch{}}},5000);}
+    function scheduleTickerReconnect(){clearTimeout(state.ws.reconnectTimer); const delay=Math.min(60000,Math.max(2500,Math.pow(2,state.ws.attempt||1)*1000));state.ws.attempt=Math.min((state.ws.attempt||0)+1,6);markLiveData('offline',t('wsReconnect'));state.ws.reconnectTimer=setTimeout(()=>openTickerWS(state.ws.attempt),delay);}
+  function startWSStaleMonitor(){clearInterval(state.ws.staleTimer);state.ws.staleTimer=setInterval(()=>{if(!state.ws.lastMessage)return;const age=Date.now()-state.ws.lastMessage;if(age>15000){markLiveData(state.markets.length?'cached':'offline',`${t('dataAge')}: ${formatDataAge(state.ws.lastMessage)}`);if(state.ws.ticker&&state.ws.ticker.readyState===1&&!state.ws.ticker.native)try{state.ws.ticker.close();}catch{}}},5000);}
   function selectedWsUrl(symbol,tf,base){const streams=[`${symbol.toLowerCase()}@ticker`,`${symbol.toLowerCase()}@kline_${tf}`,`${symbol.toLowerCase()}@depth20@100ms`,`${symbol.toLowerCase()}@aggTrade`].join('/');return `${base}?streams=${encodeURIComponent(streams)}`;}
-  function closeSelectedWS(){if(state.ws.symbol){try{state.ws.symbol.close(1000,'replace')}catch{}state.ws.symbol=null;}}
+  function closeSelectedWS(){
+    if(state.ws.symbol){
+      try{
+        if(state.ws.symbol.native)state.ws.symbol.close();
+        else state.ws.symbol.close(1000,'replace');
+      }catch{}
+      state.ws.symbol=null;
+    }
+  }
   function connectSelectedWS(symbol,tf){
-    closeSelectedWS(); state.selectedStream={symbol,tf}; const streamBases=[...BINANCE_WS_BASES]; let idx=0; const connect=()=>{if(idx>=streamBases.length)return;const base=streamBases[idx++];let ws;try{ws=new WebSocket(selectedWsUrl(symbol,tf,base));}catch{connect();return;}state.ws.symbol=ws;
+    closeSelectedWS(); state.selectedStream={symbol,tf};
+    const streams=[`${symbol.toLowerCase()}@ticker`,`${symbol.toLowerCase()}@kline_${tf}`,`${symbol.toLowerCase()}@depth20@100ms`,`${symbol.toLowerCase()}@aggTrade`].join('/');
+    if(isNativeRadarX()){
+      const handle=startNativeMarketStream('selected',streams);
+      if(handle){state.ws.symbol=handle;return;}
+    }
+    const streamBases=[...BINANCE_WS_BASES]; let idx=0;
+    const connect=()=>{if(idx>=streamBases.length)return;const base=streamBases[idx++];let ws;try{ws=new WebSocket(`${base}?streams=${encodeURIComponent(streams)}`);}catch{connect();return;}state.ws.symbol=ws;
       ws.onopen=()=>{appHealthy();};
-      ws.onmessage=e=>{try{const msg=JSON.parse(e.data),d=msg.data&&msg.stream?msg.data:msg;if(d?.e==='24hrTicker')handleSelectedTicker(normalizeBinanceTicker(d)); else if(d?.e==='kline')handleSelectedKline(d.k); else if(d?.e==='depthUpdate')handleSelectedDepth(d); else if(d?.e==='aggTrade')handleSelectedTrade(d);}catch{}};
-      ws.onerror=()=>{}; ws.onclose=()=>{if(state.ws.symbol===ws){state.ws.symbol=null;if(state.selectedStream?.symbol===symbol){setTimeout(()=>connect(),3500);}}};
+      ws.onmessage=e=>{try{const msg=JSON.parse(e.data),d=msg.data&&msg.stream?msg.data:msg;if(d?.e==='24hrTicker')handleSelectedTicker(normalizeBinanceTicker(d));else if(d?.e==='kline')handleSelectedKline(d.k);else if(d?.e==='depthUpdate')handleSelectedDepth(d);else if(d?.e==='aggTrade')handleSelectedTrade(d);}catch{}};
+      ws.onerror=()=>{};ws.onclose=()=>{if(state.ws.symbol===ws){state.ws.symbol=null;if(state.selectedStream?.symbol===symbol){setTimeout(()=>connect(),3500);}}};
     }; connect();
   }
-  function handleSelectedTicker(tk){mergeTicker(tk);if(state.selected&&state.selected.symbol===tk.symbol){state.selected.price=tk.last;state.selected.last.c=tk.last;state.selected.priceChangePercent=tk.priceChangePercent;state.selected.quoteVolume=tk.quoteVolume;state.selected.bidPrice=tk.bidPrice;state.selected.askPrice=tk.askPrice;state.selected.bidQty=tk.bidQty;state.selected.askQty=tk.askQty;state.selected.eventTime=tk.eventTime||Date.now();state.selected.liveAt=tk.eventTime||Date.now();updatePaperFromMarkets(state.markets);scheduleSelectedLivePaint(160);}}
+    function handleSelectedTicker(tk){mergeTicker(tk);if(state.selected&&state.selected.symbol===tk.symbol){state.selected.price=tk.last;state.selected.last.c=tk.last;state.selected.priceChangePercent=tk.priceChangePercent;state.selected.quoteVolume=tk.quoteVolume;state.selected.bidPrice=tk.bidPrice;state.selected.askPrice=tk.askPrice;state.selected.bidQty=tk.bidQty;state.selected.askQty=tk.askQty;state.selected.eventTime=tk.eventTime||Date.now();state.selected.liveAt=tk.eventTime||Date.now();updatePaperFromMarkets(state.markets);scheduleSelectedLivePaint(160);}}
   function handleSelectedKline(k){const s=state.selectedStream?.symbol||String(k.s||'').toUpperCase();const tf=k.i||state.selectedStream?.tf||'5m';if(tf==='1m')updateLiveMinuteKline(k);const row={t:num(k.t),o:num(k.o),h:num(k.h),l:num(k.l),c:num(k.c),v:num(k.v),q:num(k.q),trades:num(k.n),tb:num(k.V),closed:!!k.x};state.klinesCache[s]=state.klinesCache[s]||{};state.klinesCache[s][tf]=state.klinesCache[s][tf]||[];const arr=state.klinesCache[s][tf];const idx=arr.findIndex(x=>x.t===row.t);if(idx>=0)arr[idx]=row;else arr.push(row);state.klinesCache[s][tf]=arr.slice(-250);if(state.selected&&state.selected.symbol===s&&state.selected.timeframe===tf){scheduleSelectedLiveRecompute(650);}}
   function handleSelectedDepth(d){if(!state.selected)return;const bids=d.bids||d.b||[],asks=d.asks||d.a||[];if(!bids.length&&!asks.length)return;state.selected.liveDepth={bids,asks,lastUpdateId:num(d.lastUpdateId||d.u),eventTime:num(d.E)||Date.now()};const trades=state.streamTrades[state.selected.symbol]||[];if(trades.length){state.selected.flow=flowFromData(state.selected.liveDepth,trades);state.selected.flowWhales=state.selected.flow.whales;}scheduleSelectedLiveRecompute(650);}
   function handleSelectedTrade(d){const s=String(d.s||state.selected?.symbol||'').toUpperCase();const tr={id:num(d.a),price:num(d.p),amount:num(d.q),buy:!d.m,t:num(d.T)};const arr=state.streamTrades[s]=state.streamTrades[s]||[];if(tr.id && arr.some(x=>x.id===tr.id))return;arr.push(tr);state.streamTrades[s]=arr.slice(-300);if(state.selected&&state.selected.symbol===s){state.selected.flow=flowFromData(state.selected.liveDepth||{bids:[],asks:[]},state.streamTrades[s]);state.selected.flowWhales=state.selected.flow.whales;scheduleSelectedLiveRecompute(650);}}
@@ -1443,6 +1580,15 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
     closeBreakoutKlineWS();
     const generation=++state.multiRadar.klineWsGeneration;
     const streams=list.map(s=>`${s.toLowerCase()}@kline_1m`).join('/');
+    if(isNativeRadarX()){
+      const handle=startNativeMarketStream('breakout-kline',streams);
+      if(handle){
+        state.multiRadar.klineWs=handle;
+        state.multiRadar.klineWsLastMessage=0;
+        state.multiRadar.dirty=true;
+        return;
+      }
+    }
     const bases=[...BINANCE_WS_BASES];
     let idx=state.multiRadar.klineWsAttempt%BINANCE_WS_BASES.length;
     const openNext=()=>{
@@ -1458,7 +1604,7 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
     };
     openNext();
   }
-  function refreshBreakoutKlineMonitor(force=false){
+    function refreshBreakoutKlineMonitor(force=false){
     const universe=breakoutMonitorUniverse();
     const prev=[...state.multiRadar.klineSymbols].sort(),next=[...universe].sort();
     const same=prev.length===next.length&&prev.every((s,i)=>s===next[i]);
@@ -1690,8 +1836,8 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
   function multiRadarWatchdog(){
     const now=Date.now();
     if(state.multiRadar.ws && state.multiRadar.ws.readyState===1 && state.multiRadar.wsOpenedAt && (!state.multiRadar.wsLastMessage || now-state.multiRadar.wsLastMessage>MULTI_RADAR.wsStaleMs)){
-      try{state.multiRadar.ws.close(4000,'stale-watchdog')}catch{}
-      state.multiRadar.ws=null;
+      if(!state.multiRadar.ws.native){try{state.multiRadar.ws.close(4000,'stale-watchdog')}catch{}}
+      if(!state.multiRadar.ws.native)state.multiRadar.ws=null;
       state.multiRadar.wsLastMessage=0;
       scheduleMultiRadarWSReconnect();
       if(!state.multiRadar.restLastSuccess || now-state.multiRadar.restLastSuccess>10000){
@@ -1701,7 +1847,7 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
       multiRadarSetBusy(false,state.markets.length?'cached':'offline');
     }
     if(state.multiRadar.mode==='breakout' && state.multiRadar.klineWs && state.multiRadar.klineWs.readyState===1 && state.multiRadar.klineWsLastMessage && now-state.multiRadar.klineWsLastMessage>MULTI_RADAR.klineWsStaleMs){
-      closeBreakoutKlineWS();scheduleKlineMonitorReconnect();
+      if(!state.multiRadar.klineWs?.native){closeBreakoutKlineWS();scheduleKlineMonitorReconnect();}
     }
   }
   async function fetchBinanceTickerUniverseResilient(){
