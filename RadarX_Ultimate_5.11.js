@@ -400,6 +400,7 @@
     return {symbol:s,last:num(x.last??x.lastPrice??x.c),priceChangePercent:num(x.priceChangePercent??(x.price24hPcnt!=null?num(x.price24hPcnt)*100:undefined)??x.change_percentage??x.P??(x.sodUtc0&&x.last?((num(x.last)/num(x.sodUtc0)-1)*100):0)),quoteVolume:num(x.quoteVolume??x.quote_volume??x.volCcy24h??x.turnover24h??x.q),baseAsset:s.replace(/USDT$|USDC$|USD$/,''),quoteAsset:provider==='coinbase'?'USD':'USDT',provider,bidPrice:num(x.bidPrice??x.b),askPrice:num(x.askPrice??x.a),bidQty:num(x.bidQty??x.B),askQty:num(x.askQty??x.A),eventTime,receivedAt,dataSource:provider==='binance'?'market':'market',open:num(x.open??x.o),high:num(x.high??x.h),low:num(x.low??x.l),baseVolume:num(x.volume??x.v)};
   }
   function normalizeBinanceTicker(x){return normalizeTicker({symbol:x.s,lastPrice:x.c,priceChangePercent:x.P,quoteVolume:x.q,b:x.b,a:x.a,B:x.B,A:x.A,E:x.E,o:x.o,h:x.h,l:x.l,v:x.v},'binance');}
+  function normalizeBinanceMiniTicker(x){const symbol=String(x?.s||'').toUpperCase(),last=num(x?.c),open=num(x?.o);if(!symbol||!(last>0))return null;return {symbol,last,priceChangePercent:open>0?(last/open-1)*100:0,quoteVolume:num(x?.q),baseAsset:symbol.replace(/USDT$/,''),quoteAsset:'USDT',provider:'binance',open,high:num(x?.h),low:num(x?.l),baseVolume:num(x?.v),eventTime:num(x?.E,Date.now()),receivedAt:Date.now(),dataSource:'market'};}
   async function fetchAllTickers(provider){
     if(provider==='binance'){
       const d=await firstJSONRace(binanceUrls('/api/v3/ticker/24hr'),{timeout:4500,retries:0,maxUrls:4});
@@ -536,10 +537,15 @@
       if(!x||typeof x!=='object')continue;
       const d=x.data&&x.stream?x.data:x;
       if(!d?.s)continue;
-      const tk=normalizeBinanceTicker(d);
+      const tk=d.e==='24hrMiniTicker'?normalizeBinanceMiniTicker(d):normalizeBinanceTicker(d);
+      if(!tk)continue;
       mergeTicker(tk);
       if(state.currentSymbol===tk.symbol&&state.selected?.symbol===tk.symbol&&tk.last>0){
-        state.selected={...state.selected,price:tk.last,priceChangePercent:tk.priceChangePercent,quoteVolume:tk.quoteVolume,bidPrice:tk.bidPrice,askPrice:tk.askPrice,bidQty:tk.bidQty,askQty:tk.askQty,eventTime:tk.eventTime||Date.now(),liveAt:tk.eventTime||Date.now()};
+        state.selected={...state.selected,price:tk.last,priceChangePercent:tk.priceChangePercent,quoteVolume:tk.quoteVolume,eventTime:tk.eventTime||Date.now(),liveAt:tk.eventTime||Date.now()};
+        if(tk.bidPrice!=null)state.selected.bidPrice=tk.bidPrice;
+        if(tk.askPrice!=null)state.selected.askPrice=tk.askPrice;
+        if(tk.bidQty!=null)state.selected.bidQty=tk.bidQty;
+        if(tk.askQty!=null)state.selected.askQty=tk.askQty;
         if(state.selected.last)state.selected.last.c=tk.last;
         renderActiveAssetHeader(tk.symbol,'global-live');
         renderStructurePanel(state.structure||null);
@@ -555,13 +561,13 @@
     if(state.ws.ticker&&state.ws.ticker.readyState===1&&attempt===0)return;
     if(state.ws.ticker){try{state.ws.ticker.close(1000,'reconnect')}catch{}}
     const baseIndex=Math.min(attempt, BINANCE_WS_BASES.length-1); const bases=[BINANCE_WS_BASES[baseIndex],...BINANCE_WS_BASES.filter((_,i)=>i!==baseIndex)];
-    const streamName='!ticker@arr';
+    const streamName='!miniTicker@arr';
     let i=0;
     const connectNext=()=>{ if(i>=bases.length){ scheduleTickerReconnect(); return; } const base=bases[i++]; let ws; try{ws=new WebSocket(`${base}?streams=${encodeURIComponent(streamName)}`);}catch{connectNext();return;} state.ws.ticker=ws;
-      ws.onopen=()=>{state.ws.attempt=0;state.ws.lastMessage=Date.now();markLiveData('live_ws',t('liveSource'));appHealthy();};
-      ws.onmessage=e=>{state.ws.lastMessage=Date.now();try{consumeTickerPayload(JSON.parse(e.data));}catch{}};
+      ws.onopen=()=>{state.ws.attempt=0;state.ws.lastMessage=Date.now();state.multiRadar.ws=ws;state.multiRadar.wsOpenedAt=Date.now();multiRadarSetBusy(false,'ws');markLiveData('live_ws',t('liveSource'));appHealthy();};
+      ws.onmessage=e=>{state.ws.lastMessage=Date.now();state.multiRadar.wsLastMessage=state.ws.lastMessage;try{consumeTickerPayload(JSON.parse(e.data));state.multiRadar.dirty=true;scheduleMultiRadarPaint();}catch{}};
       ws.onerror=()=>{};
-      ws.onclose=()=>{if(state.ws.ticker===ws){state.ws.ticker=null;scheduleTickerReconnect();}};
+      ws.onclose=()=>{if(state.ws.ticker===ws){state.ws.ticker=null;if(state.multiRadar.ws===ws){state.multiRadar.ws=null;state.multiRadar.wsOpenedAt=0;}scheduleTickerReconnect();}};
     };
     connectNext();
   }
@@ -1670,35 +1676,16 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
     state.multiRadar.wsReconnectTimer=setTimeout(()=>connectMultiRadarWS(),delay);
   }
   function connectMultiRadarWS(){
+    // 6.1: share the global miniTicker socket; never open a duplicate full-market stream.
     clearTimeout(state.multiRadar.wsReconnectTimer);
-    const generation=++state.multiRadar.wsGeneration;
-    const current=state.multiRadar.ws;
-    if(current){try{current.close(1000,'replace')}catch{}state.multiRadar.ws=null;}
-    const offset=(state.multiRadar.wsAttempt||0)%BINANCE_WS_BASES.length;
-    const bases=[...BINANCE_WS_BASES.slice(offset),...BINANCE_WS_BASES.slice(0,offset)];
-    let idx=0;
-    const openNext=()=>{
-      if(generation!==state.multiRadar.wsGeneration)return;
-      if(navigator.onLine===false){multiRadarSetBusy(false,'offline');scheduleMultiRadarWSReconnect();return;}
-      if(idx>=bases.length){multiRadarSetBusy(false,state.markets.length?'cached':'offline');scheduleMultiRadarWSReconnect();return;}
-      const base=bases[idx++];let ws;
-      try{ws=new WebSocket(`${base}?streams=${encodeURIComponent('!ticker@arr')}`);}catch{openNext();return;}
-      state.multiRadar.ws=ws;
-      ws.onopen=()=>{
-        if(generation!==state.multiRadar.wsGeneration||state.multiRadar.ws!==ws)return;
-        state.multiRadar.wsAttempt=0;state.multiRadar.wsOpenedAt=Date.now();multiRadarSetBusy(false,'ws');
-      };
-      ws.onmessage=e=>{
-        if(generation!==state.multiRadar.wsGeneration||state.multiRadar.ws!==ws)return;
-        try{multiRadarConsumeWS(JSON.parse(e.data));}catch{}
-      };
-      ws.onerror=()=>{};
-      ws.onclose=()=>{
-        if(generation!==state.multiRadar.wsGeneration||state.multiRadar.ws!==ws)return;
-        state.multiRadar.ws=null;state.multiRadar.wsOpenedAt=0;scheduleMultiRadarWSReconnect();
-      };
-    };
-    openNext();
+    if(navigator.onLine===false){multiRadarSetBusy(false,'offline');return;}
+    openTickerWS(0);
+    state.multiRadar.ws=state.ws.ticker||null;
+    if(state.ws.ticker&&state.ws.ticker.readyState===1){
+      state.multiRadar.wsOpenedAt=state.multiRadar.wsOpenedAt||Date.now();
+      state.multiRadar.wsLastMessage=state.ws.lastMessage||Date.now();
+      multiRadarSetBusy(false,'ws');
+    }
   }
   function multiRadarWatchdog(){
     const now=Date.now();
@@ -2425,6 +2412,7 @@ async function continuousVerifyCandidate(m){
 }
 async function continuousRadarCycle(){
   if(!state.continuous.enabled||state.continuous.cycleBusy)return;
+  if(document.visibilityState==='hidden'){state.continuous.mode='paused';return;}
   if(navigator.onLine===false){state.continuous.mode='offline';return;}
   if(!Object.keys(state.marketsBySymbol||{}).length)return;
   state.continuous.cycleBusy=true;state.continuous.mode='running';state.continuous.lastCycleAt=Date.now();
@@ -2467,6 +2455,7 @@ function startContinuousRadar(){
   if(!w)startContinuousTimerFallback();
   clearInterval(state.continuous.watchdogTimer);
   state.continuous.watchdogTimer=setInterval(()=>{
+    if(document.visibilityState==='hidden'){state.continuous.mode='paused';return;}
     const age=state.continuous.lastLiveTickAt?Date.now()-state.continuous.lastLiveTickAt:Infinity;
     if(navigator.onLine===false){state.continuous.mode='offline';return;}
     if(age>CONTINUOUS_RADAR.staleMs){state.continuous.mode='offline';if(state.ws.ticker?.readyState!==1)openTickerWS(0);if(state.multiRadar.ws?.readyState!==1)connectMultiRadarWS();}
@@ -2592,31 +2581,106 @@ function renderResultsCenterWithContinuous(){
     showBootError(reason,'promise');
   });
 
-  async function init(){
+  function rxSchedule(fn,delay=0){
+    if(typeof fn!=='function')return;
+    window.setTimeout(function(){
+      try{
+        if(window.requestIdleCallback)requestIdleCallback(()=>{try{fn();}catch{}},{timeout:Math.max(300,delay+350)});
+        else fn();
+      }catch{}
+    },Math.max(0,delay));
+  }
+  function rxCloseLiveSockets(){
+    clearTimeout(state.ws?.reconnectTimer);state.ws.reconnectTimer=null;
+    clearTimeout(state.multiRadar?.wsReconnectTimer);state.multiRadar.wsReconnectTimer=null;
+    clearTimeout(state.multiRadar?.klineWsReconnectTimer);state.multiRadar.klineWsReconnectTimer=null;
+    try{if(state.ws?.ticker)state.ws.ticker.close(1000,'background');}catch{}
+    try{if(state.ws?.symbol)state.ws.symbol.close(1000,'background');}catch{}
+    if(state.multiRadar?.ws&&state.multiRadar.ws!==state.ws?.ticker){try{state.multiRadar.ws.close(1000,'background')}catch{}}
+    state.multiRadar.ws=null;
+  }
+
+  function init(){
     try{
       loadState();applyLanguage();renderProfile();renderMembership();bind();installPWA();appHealthy();
       Promise.resolve(consumeNativeEntitlement()).catch(()=>{});
-      Promise.resolve(checkSubscriptionStatus('startup')).catch(()=>{});window.addEventListener('online',()=>{appHealthy();if(!premiumIsUnlocked()){applySubscriptionGate('EXPIRED','expired');return;}state.continuous.mode='waiting';state.multiRadar.wsAttempt=0;connectMultiRadarWS();openTickerWS(0);clearTimeout(state.multiRadar.pollTimer);state.multiRadar.pollTimer=setTimeout(multiRadarPoll,200);continuousRadarCycle().catch(()=>{});if(state.markets.length&&!state.busy)scan();});window.addEventListener('offline',()=>{state.continuous.mode='offline';try{if(state.multiRadar.ws)state.multiRadar.ws.close(1000,'offline')}catch{}try{if(state.ws.ticker)state.ws.ticker.close(1000,'offline')}catch{}multiRadarSetBusy(false,state.markets.length?'cached':'offline');markLiveData(state.markets.length?'cached':'offline',t('dataAge'));renderResultsCenter();});markLiveData('waiting');renderMarkets();renderAlerts();if($('exchangeSelect')?.value==='binance')openTickerWS(0);renderSentiment();renderRiskCalendar([]);renderBriefing();renderPsychologyGuardian();renderResultsCenter();
-    if(state.currentSymbol){
-      const restored=state.deepRows.find(x=>x.symbol===state.currentSymbol)||state.smartScan.results.find(x=>x.symbol===state.currentSymbol)||null;
-      if(restored){state.selected={...restored};state.structure=restored.structure||((restored.rows?.length>=8)?detectStructure(restored.rows):null);renderStructurePanel(state.structure);renderActiveAssetHeader(state.currentSymbol,'restored');}
-      else if(state.marketsBySymbol?.[state.currentSymbol])renderActiveAssetHeader(state.currentSymbol,'restored');
-    }
-    heartbeat();startWSStaleMonitor();loadLiveSnapshot();startResilientMarketHeartbeat();ensureGlobalMarketsPanel();refreshGlobalMarkets().catch(()=>{});if(premiumIsUnlocked()){startMultiRadar();startContinuousRadar();}else{pausePremiumEngines();}
-    $('dashUniverse').textContent=state.markets.length?state.markets.length.toLocaleString('en-US'):'—';$('dashCandidates').textContent='—';$('dashEarly').textContent='—';$('dashTop').textContent='—';
-    if(state.markets.length){renderMarkets();renderSentiment(computeSentimentFromMarkets(state.markets,null));renderRadarMetrics(state.markets.length,state.deepRows||[]);}
-    $('briefingRefresh').onclick=()=>{refreshSentiment(true).finally(()=>renderBriefing());toast(state.markets.length?t('briefingUpdated'):t('noApi'));};
-    refreshSentiment();loadRiskCalendar();
-    setTimeout(()=>{try{renderMarkets();renderMultiRadar(false);}catch(e){}} ,350);
-    if($('analysisSymbol').value&&$('analysisSymbol').value.trim()){}
-    window.dispatchEvent(new CustomEvent('radarx:ready',{detail:{version:'6.0',at:Date.now()}}));
+      Promise.resolve(checkSubscriptionStatus('startup')).catch(()=>{});
+
+      window.addEventListener('online',()=>{
+        appHealthy();
+        if(!premiumIsUnlocked()){applySubscriptionGate('EXPIRED','expired');return;}
+        state.continuous.mode='waiting';
+        state.multiRadar.wsAttempt=0;
+        connectMultiRadarWS();
+        clearTimeout(state.multiRadar.pollTimer);
+        state.multiRadar.pollTimer=setTimeout(()=>multiRadarPoll().catch(()=>{}),450);
+        if(state.markets.length&&!state.busy)resilientMarketRefresh().catch(()=>{});
+      });
+      window.addEventListener('offline',()=>{
+        state.continuous.mode='offline';
+        rxCloseLiveSockets();
+        clearTimeout(state.multiRadar.pollTimer);
+        multiRadarSetBusy(false,state.markets.length?'cached':'offline');
+        markLiveData(state.markets.length?'cached':'offline',t('dataAge'));
+        renderResultsCenter();
+      });
+
+      markLiveData('waiting');
+      loadLiveSnapshot();
+      renderMarkets();
+      renderAlerts();
+      if($('exchangeSelect')?.value==='binance')openTickerWS(0);
+
+      if(state.currentSymbol){
+        const restored=state.deepRows.find(x=>x.symbol===state.currentSymbol)||state.smartScan.results.find(x=>x.symbol===state.currentSymbol)||null;
+        if(restored){
+          state.selected={...restored};
+          state.structure=restored.structure||((restored.rows?.length>=8)?detectStructure(restored.rows):null);
+          renderStructurePanel(state.structure);
+          renderActiveAssetHeader(state.currentSymbol,'restored');
+        }else if(state.marketsBySymbol?.[state.currentSymbol])renderActiveAssetHeader(state.currentSymbol,'restored');
+      }
+
+      heartbeat();
+      startWSStaleMonitor();
+      startResilientMarketHeartbeat();
+
+      $('dashUniverse').textContent=state.markets.length?state.markets.length.toLocaleString('en-US'):'—';
+      $('dashCandidates').textContent='—';
+      $('dashEarly').textContent='—';
+      $('dashTop').textContent='—';
+      $('briefingRefresh').onclick=()=>{refreshSentiment(true).finally(()=>renderBriefing());toast(state.markets.length?t('briefingUpdated'):t('noApi'));};
+
+      rxSchedule(()=>{
+        renderSentiment(state.markets.length?computeSentimentFromMarkets(state.markets,null):null);
+        renderRadarMetrics(state.markets.length,state.deepRows||[]);
+        renderBriefing();
+        renderPsychologyGuardian();
+        renderResultsCenter();
+      },120);
+
+      rxSchedule(()=>{
+        ensureGlobalMarketsPanel();
+        refreshGlobalMarkets().catch(()=>{});
+        refreshSentiment().catch(()=>{});
+        loadRiskCalendar().catch(()=>{});
+      },900);
+
+      rxSchedule(()=>{
+        if(premiumIsUnlocked()){startMultiRadar();startContinuousRadar();}
+        else{pausePremiumEngines();}
+        renderMultiRadar(true);
+      },450);
+
+      rxSchedule(()=>{renderMarkets();renderMultiRadar(false);},700);
+
+      window.dispatchEvent(new CustomEvent('radarx:ready',{detail:{version:'6.1',at:Date.now()}}));
     }catch(e){
       showBootError(e,'init');
       try{markLiveData('error','startup');}catch{}
     }
   }
-
-  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){warmAlertAudio();openTickerWS(0);connectMultiRadarWS();renderMultiRadar(false);continuousRadarCycle().catch(()=>{});}});
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){warmAlertAudio();openTickerWS(0);connectMultiRadarWS();renderMultiRadar(false);continuousRadarCycle().catch(()=>{});}else{rxCloseLiveSockets();state.continuous.mode='paused';multiRadarSetBusy(false,state.markets.length?'cached':'offline');}});
 
 
   // RadarX 5.1 integration surface: expose only existing, verified core primitives.

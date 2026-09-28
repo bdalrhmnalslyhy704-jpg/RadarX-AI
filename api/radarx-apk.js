@@ -1,7 +1,7 @@
 /**
- * RadarX 6.0 APK direct-download proxy.
+ * RadarX 6.1 APK direct-download proxy.
  * Streams the latest public GitHub Release APK through the RadarX domain
- * with an Android-friendly Content-Type/Disposition.
+ * with Android-friendly headers and Range support.
  */
 module.exports = async function handler(req, res) {
   try {
@@ -11,7 +11,7 @@ module.exports = async function handler(req, res) {
       return res.end('Method Not Allowed');
     }
 
-    const assetUrl = 'https://github.com/bdalrhmnalslyhy704-jpg/RadarX-AI/releases/latest/download/RadarX-6.0.apk';
+    const assetUrl = 'https://github.com/bdalrhmnalslyhy704-jpg/RadarX-AI/releases/latest/download/RadarX-6.1.apk';
     const headers = {};
     if (req.headers && req.headers.range) headers.Range = req.headers.range;
 
@@ -28,7 +28,7 @@ module.exports = async function handler(req, res) {
 
     res.statusCode = upstream.status;
     res.setHeader('Content-Type', 'application/vnd.android.package-archive');
-    res.setHeader('Content-Disposition', 'attachment; filename="RadarX-6.0.apk"');
+    res.setHeader('Content-Disposition', 'attachment; filename="RadarX-6.1.apk"');
     res.setHeader('Cache-Control', 'public, max-age=300, must-revalidate');
     res.setHeader('Accept-Ranges', upstream.headers.get('accept-ranges') || 'bytes');
 
@@ -38,7 +38,6 @@ module.exports = async function handler(req, res) {
     }
 
     if (req.method === 'HEAD') return res.end();
-
     const body = Buffer.from(await upstream.arrayBuffer());
     if (!res.getHeader('Content-Length')) res.setHeader('Content-Length', String(body.length));
     return res.end(body);
