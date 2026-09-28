@@ -1,4 +1,5 @@
 name: RadarX Android Native 6.8.0
+# Full-core release CI: rebuild after every native/web integration change.
 
 on:
   workflow_dispatch:
