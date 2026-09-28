@@ -24,7 +24,39 @@
   function tr(rows,i){if(i<1)return Math.max(0,n(rows[i]?.h)-n(rows[i]?.l));return Math.max(n(rows[i].h)-n(rows[i].l),Math.abs(n(rows[i].h)-n(rows[i-1].c)),Math.abs(n(rows[i].l)-n(rows[i-1].c)));}
   function atr(rows,p=14){if(rows.length<2)return 0;const a=[];for(let i=Math.max(1,rows.length-p);i<rows.length;i++)a.push(tr(rows,i));return sma(a,a.length);}
   function rsi(a,p=14){if(a.length<p+1)return 50;let g=0,l=0;for(let i=a.length-p;i<a.length;i++){const d=n(a[i])-n(a[i-1]);if(d>=0)g+=d;else l-=d;}if(!l)return 100;const rs=g/l;return 100-(100/(1+rs));}
-  function macd(a){const e12=ema(a.slice(-80),12),e26=ema(a.slice(-100),26),m=e12-e26;const hist=m-ema(a.slice(-40).map((v)=>n(v)),9);return{line:m,hist:hist};}
+  function macd(a){
+    const src=a.slice(-140).map(n),fast=[],slow=[],mac=[];
+    for(let i=0;i<src.length;i++){
+      fast.push(ema(src.slice(0,i+1),12)); slow.push(ema(src.slice(0,i+1),26)); mac.push(fast[i]-slow[i]);
+    }
+    const signal=ema(mac.slice(-60),9);
+    const line=mac.at(-1)||0;
+    return{line:line,signal:signal,hist:line-signal};
+  }
+  function adx(rows,p=14){
+    if(rows.length<p*2)return 20;
+    const plus=[],minus=[],trs=[];
+    for(let i=1;i<rows.length;i++){
+      const up=n(rows[i].h)-n(rows[i-1].h),down=n(rows[i-1].l)-n(rows[i].l);
+      plus.push(up>down&&up>0?up:0);minus.push(down>up&&down>0?down:0);trs.push(tr(rows,i));
+    }
+    const at=sma(trs.slice(-p),p)||1,diP=sma(plus.slice(-p),p)/at*100,diM=sma(minus.slice(-p),p)/at*100;
+    return 100*Math.abs(diP-diM)/Math.max(1,diP+diM);
+  }
+  function volumeProfile(rows,bins=24){
+    if(!rows.length)return{poc:0,vah:0,val:0};
+    const lo=Math.min(...rows.map(r=>n(r.l))),hi=Math.max(...rows.map(r=>n(r.h))),span=hi-lo||1, step=span/bins;
+    const vol=Array(bins).fill(0);
+    rows.forEach(function(r){
+      const px=(n(r.h)+n(r.l)+n(r.c))/3,idx=Math.max(0,Math.min(bins-1,Math.floor((px-lo)/step)));
+      vol[idx]+=n(r.v);
+    });
+    const pocIdx=vol.indexOf(Math.max(...vol)),target=vol.reduce((a,b)=>a+b,0)*.70;
+    let left=pocIdx,right=pocIdx,sum=vol[pocIdx]||0;
+    while(sum<target&&(left>0||right<bins-1)){const lv=left>0?vol[left-1]:-1,rv=right<bins-1?vol[right+1]:-1;if(rv>lv&&right<bins-1){right++;sum+=vol[right];}else if(left>0){left--;sum+=vol[left];}else break;}
+    const priceAt=i=>lo+(i+.5)*step;
+    return{poc:priceAt(pocIdx),vah:priceAt(right),val:priceAt(left)};
+  }
   function obv(rows){let v=0;const out=[];for(let i=1;i<rows.length;i++){if(n(rows[i].c)>n(rows[i-1].c))v+=n(rows[i].v);else if(n(rows[i].c)<n(rows[i-1].c))v-=n(rows[i].v);out.push(v);}return out;}
   function vwap(rows){let pv=0,v=0;for(const r of rows){const q=n(r.v),typ=(n(r.h)+n(r.l)+n(r.c))/3;pv+=typ*q;v+=q;}return v?pv/v:0;}
   function rollingHigh(rows,p,field='h'){const x=rows.slice(-p);return x.length?Math.max(...x.map(r=>n(r[field]))):0;}
@@ -65,6 +97,10 @@
     const book=flow?clamp(50+n(flow.imbalance)*.5):50;
     const cvd=flow?clamp(50+n(flow.cvd)*.5):50;
     const whaleScore=whale?clamp(n(whale.score,50)):50;
+    const adxVal=adx(rows);
+    const depth=st.selected.liveDepth||null,db=depth?.bids?.[0],da=depth?.asks?.[0];
+    const micro=(db&&da)?((n(da[0])*n(db[1])+n(db[0])*n(da[1]))/Math.max(1,n(db[1])+n(da[1]))):0;
+    const microBias=micro?clamp(50+(micro-last.c)/(a||last.c*.001)*18):50;
     const bullTrend=e20>e50?72:28;
     const trendSlope=e20>e100?68:32;
     const momentum=clamp(50+rr5*13+rr15*5+Math.tanh(m.hist/(a||1))*18);
@@ -73,12 +109,13 @@
     const squeeze=clamp(50+compression*.5+(last.c>=hi?25:0));
     const score=clamp(
       bullTrend*.14+trendSlope*.10+momentum*.16+volume*.14+structure*.12+
-      squeeze*.08+vwapScore*.08+book*.07+cvd*.06+whaleScore*.05
+      squeeze*.07+vwapScore*.08+book*.065+cvd*.055+whaleScore*.05+clamp(adxVal*1.15)*.065+microBias*.035
     );
     const available=[e20,e50,m.hist,rv,hi,lo,vw,flow?.imbalance,flow?.cvd,whale?.score];
     const coverage=available.filter(v=>Number.isFinite(Number(v))).length/available.length*100;
     const label=score>=78?'HIGH CONFLUENCE':score>=65?'BUILDING':score<=38?'WEAK / RISK':'NEUTRAL';
-    return{score,coverage,label,parts:{trend:bullTrend,slope:trendSlope,momentum,volume,structure,squeeze,vwap:vwapScore,book,cvd,whale:whaleScore},e20,e50,vwap:vw,bb:{mid:sma(closes.slice(-20),20),std:std(closes.slice(-20)),upper:0,lower:0},atr:a,rsi:rsi(closes),macd:m,rv,hi,lo};
+    const vp=volumeProfile(rows);
+    return{score,coverage,label,parts:{trend:bullTrend,slope:trendSlope,momentum,volume,structure,squeeze,vwap:vwapScore,book,cvd,whale:whaleScore,adx:clamp(adxVal),micro:microBias},e20,e50,vwap:vw,vp:vp,bb:{mid:sma(closes.slice(-20),20),std:std(closes.slice(-20),20),upper:0,lower:0},atr:a,rsi:rsi(closes),adx:adxVal,macd:m,rv,hi,lo};
   }
 
   function ensureUI(){
@@ -154,7 +191,7 @@
     const con=adaptiveConfluence(rows,st);
     const ema20=rows.map((_,i)=>ema(rows.slice(0,i+1).map(r=>n(r.c)).slice(-100),20));
     const ema50=rows.map((_,i)=>ema(rows.slice(0,i+1).map(r=>n(r.c)).slice(-120),50));
-    const vw=vwap(rows),closes=rows.map(r=>n(r.c)),bbmid=sma(closes.slice(-20),20),bbs=std(closes.slice(-20)),bbu=bbmid+bbs*2,bbl=bbmid-bbs*2;
+    const vw=vwap(rows),closes=rows.map(r=>n(r.c)),bbmid=sma(closes.slice(-20),20),bbs=std(closes.slice(-20)),bbu=bbmid+bbs*2,bbl=bbmid-bbs*2,vp=con.vp||volumeProfile(rows);
     const volumeMax=Math.max(1,...rows.map(r=>n(r.v)));
     rows.forEach((r,i)=>{
       const x=vx(i),o=py(n(r.o)),c=py(n(r.c)),h=py(n(r.h)),l=py(n(r.l)),up=n(r.c)>=n(r.o);
@@ -167,6 +204,7 @@
     line(ema50,'#c9a6ff',1.2);
     if(vw)line(rows.map(()=>vw),'#ffd36b',1.2,[5,4]);
     if(Number.isFinite(bbu)&&Number.isFinite(bbl)){line(rows.map(()=>bbu),'rgba(145,190,205,.42)',1);line(rows.map(()=>bbl),'rgba(145,190,205,.42)',1);}
+    if(vp?.poc){line(rows.map(()=>vp.poc),'rgba(255,190,95,.72)',1.1,[3,3]);line(rows.map(()=>vp.vah),'rgba(255,190,95,.28)',1,[2,5]);line(rows.map(()=>vp.val),'rgba(255,190,95,.28)',1,[2,5]);}
     const last=rows.at(-1),lastPrice=n(last.c),yLast=py(lastPrice);
     ctx.strokeStyle='rgba(84,213,255,.65)';ctx.setLineDash([4,5]);ctx.beginPath();ctx.moveTo(pad.l,yLast);ctx.lineTo(W-pad.r,yLast);ctx.stroke();ctx.setLineDash([]);
     ctx.fillStyle='#9feaff';ctx.font='700 11px system-ui,sans-serif';ctx.fillText(fmt(lastPrice),W-pad.r+8,yLast+4);
@@ -201,6 +239,7 @@
     if(pulse){pulse.textContent='●';pulse.classList.add('pulse');}
     if(ps)ps.textContent='RX Pulse '+Math.round(con.score)+' · '+con.label;
     if(mode)mode.textContent='Binance WebSocket · '+(st.selected.timeframe||'5m')+' · '+Math.round(con.coverage)+'% evidence';
+    if(ps&&con.parts)ps.title='Trend '+Math.round(con.parts.trend)+' · Momentum '+Math.round(con.parts.momentum)+' · Volume '+Math.round(con.parts.volume)+' · ADX '+Math.round(con.parts.adx)+' · Microprice '+Math.round(con.parts.micro);
     syncTfButtons();
   }
 
@@ -219,6 +258,8 @@
     if(!window.ResizeObserver)return;
     const mo=new MutationObserver(()=>{ensureUI();draw(true);});
     mo.observe(document.documentElement,{childList:true,subtree:true});
+    const tfSel=$('analysisTf');
+    if(tfSel&&!tfSel.dataset.rxLiveBound){tfSel.dataset.rxLiveBound='1';tfSel.addEventListener('change',function(){switchTf(tfSel.value);});}
     ensureUI();
     if(raf)cancelAnimationFrame(raf);
     raf=requestAnimationFrame(loop);
