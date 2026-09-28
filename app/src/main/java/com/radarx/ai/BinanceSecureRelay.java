@@ -1,7 +1,6 @@
 package com.radarx.ai;
 
 import android.net.Uri;
-import android.net.Uri;
 import android.webkit.WebResourceResponse;
 
 import org.json.JSONObject;
@@ -16,6 +15,8 @@ import okhttp3.Request;
 import okhttp3.Response;
 
 public final class BinanceSecureRelay {
+    private static final String REMOTE_RELAY = "https://radar-x-ai.vercel.app/api/binance";
+
     private static final String[] UPSTREAMS = {
             "https://data-api.binance.vision",
             "https://api.binance.com",
@@ -79,6 +80,33 @@ public final class BinanceSecureRelay {
             );
         }
 
+        // Regional/cloud fallback: the deployed RadarX relay can reach Binance
+        // even when the handset cannot resolve or route to Binance directly.
+        try {
+            Request cloud = new Request.Builder()
+                    .url(REMOTE_RELAY + "?path=" + Uri.encode(rawPath))
+                    .get()
+                    .header("Accept", "application/json")
+                    .header("User-Agent", "RadarX-Android/6.6.0")
+                    .build();
+            long started = System.currentTimeMillis();
+            try (Response upstream = client.newCall(cloud).execute()) {
+                long latency = System.currentTimeMillis() - started;
+                byte[] body = upstream.body() == null ? new byte[0] : upstream.body().bytes();
+                if (upstream.isSuccessful() && looksLikeJson(body)) {
+                    CACHE.put(key, new CacheEntry(body, System.currentTimeMillis()));
+                    trimCache();
+                    return response(
+                            200, "OK", "application/json; charset=utf-8",
+                            body,
+                            headers("MISS", "radarx-cloud-relay", latency)
+                    );
+                }
+            }
+        } catch (Exception ignored) {
+            // Continue with direct Binance upstreams.
+        }
+
         Exception last = null;
         for (int index : orderedIndexes()) {
             try {
@@ -140,8 +168,29 @@ public final class BinanceSecureRelay {
         int idx = preferred;
         boolean ok = false;
         long latency = 0L;
+        String route = "none";
 
+        // Probe the cloud relay first because this is the regional fallback
+        // used by the native REST transport.
         try {
+            long started = System.currentTimeMillis();
+            Request cloud = new Request.Builder()
+                    .url(REMOTE_RELAY + "?path=%2Fapi%2Fv3%2Fping")
+                    .get()
+                    .header("Accept", "application/json")
+                    .header("User-Agent", "RadarX-Android/6.6.0")
+                    .build();
+            try (Response r = client.newCall(cloud).execute()) {
+                latency = System.currentTimeMillis() - started;
+                byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+                ok = r.isSuccessful() && looksLikeJson(body);
+                if (ok) route = "radarx-cloud-relay";
+            }
+        } catch (Exception ignored) {
+            ok = false;
+        }
+
+        if (!ok) try {
             long started = System.currentTimeMillis();
             Request request = new Request.Builder()
                     .url(UPSTREAMS[idx] + "/api/v3/ping")
@@ -153,6 +202,7 @@ public final class BinanceSecureRelay {
             try (Response r = client.newCall(request).execute()) {
                 latency = System.currentTimeMillis() - started;
                 ok = r.isSuccessful();
+                if (ok) route = UPSTREAMS[idx];
                 mark(idx, ok, latency);
             }
         } catch (Exception e) {
@@ -168,7 +218,8 @@ public final class BinanceSecureRelay {
                 .append("\"family\":\"crypto\",\"ok\":").append(ok)
                 .append(",\"latencyMs\":").append(latency)
                 .append(",\"checkedAt\":").append(checkedAt)
-                .append(",\"hasData\":").append(ok).append("}");
+                .append(",\"hasData\":").append(ok)
+                .append(",\"route\":\"").append(jsonEscape(route)).append("\"}");
 
         String[] others = {"okx", "bybit", "gate", "coinbase", "coingecko", "binanceFutures", "yahoo"};
         String[] labels = {"OKX", "Bybit", "Gate", "Coinbase", "CoinGecko", "Binance Futures", "Yahoo Finance"};
