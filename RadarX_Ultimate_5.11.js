@@ -2412,6 +2412,7 @@ async function continuousVerifyCandidate(m){
 }
 async function continuousRadarCycle(){
   if(!state.continuous.enabled||state.continuous.cycleBusy)return;
+  if(document.visibilityState==='hidden'){state.continuous.mode='paused';return;}
   if(navigator.onLine===false){state.continuous.mode='offline';return;}
   if(!Object.keys(state.marketsBySymbol||{}).length)return;
   state.continuous.cycleBusy=true;state.continuous.mode='running';state.continuous.lastCycleAt=Date.now();
@@ -2454,6 +2455,7 @@ function startContinuousRadar(){
   if(!w)startContinuousTimerFallback();
   clearInterval(state.continuous.watchdogTimer);
   state.continuous.watchdogTimer=setInterval(()=>{
+    if(document.visibilityState==='hidden'){state.continuous.mode='paused';return;}
     const age=state.continuous.lastLiveTickAt?Date.now()-state.continuous.lastLiveTickAt:Infinity;
     if(navigator.onLine===false){state.continuous.mode='offline';return;}
     if(age>CONTINUOUS_RADAR.staleMs){state.continuous.mode='offline';if(state.ws.ticker?.readyState!==1)openTickerWS(0);if(state.multiRadar.ws?.readyState!==1)connectMultiRadarWS();}
@@ -2589,6 +2591,9 @@ function renderResultsCenterWithContinuous(){
     },Math.max(0,delay));
   }
   function rxCloseLiveSockets(){
+    clearTimeout(state.ws?.reconnectTimer);state.ws.reconnectTimer=null;
+    clearTimeout(state.multiRadar?.wsReconnectTimer);state.multiRadar.wsReconnectTimer=null;
+    clearTimeout(state.multiRadar?.klineWsReconnectTimer);state.multiRadar.klineWsReconnectTimer=null;
     try{if(state.ws?.ticker)state.ws.ticker.close(1000,'background');}catch{}
     try{if(state.ws?.symbol)state.ws.symbol.close(1000,'background');}catch{}
     if(state.multiRadar?.ws&&state.multiRadar.ws!==state.ws?.ticker){try{state.multiRadar.ws.close(1000,'background')}catch{}}
