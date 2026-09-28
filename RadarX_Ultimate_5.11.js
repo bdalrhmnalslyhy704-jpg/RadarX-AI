@@ -1539,7 +1539,7 @@
         for(let i=0;i<midPool.length;i+=SMART_SCAN.batchSize){
           const batch=midPool.slice(i,i+SMART_SCAN.batchSize);
           const rr=await Promise.allSettled(batch.map(async function(x){
-            const p=await Promise.all([fetchKlines('binance',x.symbol,'1m',64),fetchKlines('binance',x.symbol,'5m',96)]);
+            const p=await Promise.all([fetchKlines('binance',x.symbol,'1m',96),fetchKlines('binance',x.symbol,'5m',144)]);
             const pre=smartPreflight(p[0],p[1],x);return pre&&pre.score>=46?{...x,...pre,rows:p[1],rows1m:p[0],rows5m:p[1]}:null;
           }));
           rr.forEach(function(v){if(v.status==='fulfilled'&&v.value)mid.push(v.value);});
