@@ -24,8 +24,8 @@ public final class NativeBinanceHttpQueue {
             "https://radar-x-ai.vercel.app/api/binance";
 
     private static final String[] UPSTREAMS = {
-            "https://data-api.binance.vision",
             "https://api.binance.com",
+            "https://data-api.binance.vision",
             "https://api-gcp.binance.com",
             "https://api1.binance.com",
             "https://api2.binance.com",
@@ -56,16 +56,16 @@ public final class NativeBinanceHttpQueue {
 
     public NativeBinanceHttpQueue(OkHttpClient baseClient) {
         this.cloudClient = baseClient.newBuilder()
-                .connectTimeout(4_500L, java.util.concurrent.TimeUnit.MILLISECONDS)
-                .readTimeout(4_500L, java.util.concurrent.TimeUnit.MILLISECONDS)
-                .writeTimeout(4_500L, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .connectTimeout(6_500L, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .readTimeout(6_500L, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .writeTimeout(6_500L, java.util.concurrent.TimeUnit.MILLISECONDS)
                 .retryOnConnectionFailure(true)
                 .build();
 
         this.directClient = baseClient.newBuilder()
-                .connectTimeout(1_600L, java.util.concurrent.TimeUnit.MILLISECONDS)
-                .readTimeout(2_400L, java.util.concurrent.TimeUnit.MILLISECONDS)
-                .writeTimeout(2_400L, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .connectTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .readTimeout(6_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .writeTimeout(6_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
                 .retryOnConnectionFailure(true)
                 .build();
 
@@ -146,7 +146,9 @@ public final class NativeBinanceHttpQueue {
         }
 
         Throwable last = null;
+        int attempts = 0;
         for (String base : UPSTREAMS) {
+            if (++attempts > UPSTREAMS.length) break;
             try {
                 Request direct = new Request.Builder()
                         .url(base + rawPath)
