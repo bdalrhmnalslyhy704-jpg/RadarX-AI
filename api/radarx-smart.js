@@ -35,7 +35,7 @@ async function mapLimit(items,limit,worker){
       try{out[i]=await worker(items[i],i);}catch{out[i]=null;}
     }
   }
-  const n=Math.min(limit,items.length);
+  const n=Math.min(12,items.length);
   await Promise.all(Array.from({length:n},run));
   return out;
 }
