@@ -5,6 +5,7 @@ import org.json.JSONObject;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -46,7 +47,7 @@ public final class RadarXDohDns implements okhttp3.Dns {
                 "https://dns.google/resolve?name=" + encode(hostname) + "&type=A"
         )) {
             try {
-                Request request = new Request.Builder()
+                okhttp3.Request request = new okhttp3.Request.Builder()
                         .url(endpoint)
                         .get()
                         .header("Accept", "application/dns-json")
