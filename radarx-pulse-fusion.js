@@ -100,6 +100,23 @@
     const m=st.selected?.mtf;if(!m?.rows?.length)return{score:50,agreement:0};
     return{score:clamp(num(m.consensusScore,50)),agreement:clamp(num(m.agreement,0))};
   }
+  function volatilityForecast(rows){
+    const c=rows.map(function(r){return num(r.c);}),rets=[];
+    for(let i=1;i<c.length;i++)if(c[i-1]>0&&c[i]>0)rets.push(Math.log(c[i]/c[i-1]));
+    if(rets.length<20)return{score:50,sigma:0,shortLong:1,skew:0,p80:0,p95:0};
+    const lam=.94;let v=0;rets.forEach(function(r){v=lam*v+(1-lam)*r*r;});
+    const sigma=Math.sqrt(Math.max(v,1e-12)),short=Math.sqrt(sma(rets.slice(-5).map(function(x){return x*x;}),5)||v),long=Math.sqrt(sma(rets.slice(-30).map(function(x){return x*x;}),30)||v);
+    const shortLong=short/Math.max(long,1e-12),recent=rets.slice(-30),m=sma(recent,recent.length);
+    const mu3=recent.reduce(function(a,x){return a+Math.pow(x-m,3);},0)/recent.length,skew=mu3/Math.pow(long||1e-9,3);
+    return{score:clamp(50+(shortLong-1)*42-skew*6),sigma:sigma,shortLong:shortLong,skew:skew,p80:sigma*1.28,p95:sigma*1.96};
+  }
+  function changePointSignal(rows){
+    const c=rows.map(function(r){return num(r.c);}),a=atr(rows,14)||num(c.at(-1))*.004,re=[];
+    for(let i=1;i<c.length;i++)re.push((c[i]-c[i-1])/Math.max(a,1e-12));
+    let pos=0,neg=0;
+    re.slice(-30).forEach(function(x){pos=Math.max(0,pos+x-.35);neg=Math.min(0,neg+x+.35);});
+    return{score:clamp(50+(Math.max(0,pos)-Math.abs(neg))*7),positive:pos,negative:neg};
+  }
   function efficiencySignal(rows,p=20){
     const c=rows.map(r=>num(r.c));if(c.length<p+1)return{score:50,er:0};
     const net=Math.abs(c.at(-1)-c.at(-1-p)),noise=c.slice(-p-0).reduce(function(s,v,i,a){return i?s+Math.abs(v-a[i-1]):s;},0)||1;
@@ -161,11 +178,11 @@
     if(lastEval.key===cacheKey&&performance.now()-lastEval.at<CFG.cacheMs)return lastEval.value;
     const closed=rows.filter(r=>r.closed!==false&&n(r.c)>0);if(closed.length<28)return{score:50,confidence:0,coverage:0,label:'INSUFFICIENT',parts:{}};
     resolveCalibration(symbol,tf,closed,1);
-    const reg=marketRegime(closed,st),mom=momentumSignal(closed),vol=volumeSignal(closed),comp=compressionSignal(closed,reg),fl=flowSignal(st),mtf=mtfSignal(st),rel=relativeSignal(st,mom),liq=liquiditySignal(st),wy=wyckoffSignal(closed,vol),str=structureSignal(closed),eff=efficiencySignal(closed),don=donchianSignal(closed),pvd=priceVolumeDivergence(closed);
+    const reg=marketRegime(closed,st),mom=momentumSignal(closed),vol=volumeSignal(closed),comp=compressionSignal(closed,reg),fl=flowSignal(st),mtf=mtfSignal(st),rel=relativeSignal(st,mom),liq=liquiditySignal(st),wy=wyckoffSignal(closed,vol),str=structureSignal(closed),eff=efficiencySignal(closed),don=donchianSignal(closed),pvd=priceVolumeDivergence(closed),vf=volatilityForecast(closed),cp=changePointSignal(closed);
     const last=closed.at(-1),a=atr(closed,14)||num(last.c)*.004,e20=ema(closed.map(r=>num(r.c)).slice(-100),20),e50=ema(closed.map(r=>num(r.c)).slice(-120),50),adxV=reg.adx;
     const trend=clamp(50+(e20-e50)/Math.max(a,num(last.c)*.001)*22+(adxV-20)*.8);
-    const comps={trend,structure:str,compression:comp.score,volume:vol.score,momentum:mom.score,flow:fl.score,whale:fl.whale,mtf:mtf.score,relative:rel.score,liquidity:liq.score,wyckoff:wy.score,efficiency:eff.score,donchian:don.score,priceVolume:pvd.score};
-    const w=Object.assign(weights(reg),{efficiency:.05,donchian:.05,priceVolume:.04});
+    const comps={trend,structure:str,compression:comp.score,volume:vol.score,momentum:mom.score,flow:fl.score,whale:fl.whale,mtf:mtf.score,relative:rel.score,liquidity:liq.score,wyckoff:wy.score,efficiency:eff.score,donchian:don.score,priceVolume:pvd.score,volForecast:vf.score,changePoint:cp.score};
+    const w=Object.assign(weights(reg),{efficiency:.045,donchian:.045,priceVolume:.035,volForecast:.055,changePoint:.04});
     const cal=calibration();
     let totalW=0,score=0;Object.entries(comps).forEach(([k,v])=>{const baseW=num(w[k],.03),reli=reliability(cal.components?.[k]||{a:4,b:4}),factor=.75+reli/200;totalW+=baseW*factor;score+=v*baseW*factor;});score/=Math.max(.001,totalW);
     const signs=Object.values(comps).map(v=>v>58?1:v<42?-1:0).filter(Boolean),bull=signs.filter(x=>x>0).length,bear=signs.filter(x=>x<0).length,conflict=signs.length?Math.min(bull,bear)/signs.length*100:0;
@@ -199,9 +216,11 @@
     if(eff.er>55)reasons.push('High market efficiency / directed move');
     if(don.score>70)reasons.push('Donchian breakout pressure');
     if(pvd.score>60)reasons.push('Price/volume confirmation');
+    if(vf.shortLong>1.2)reasons.push('Volatility expansion is accelerating');
+    if(cp.score>68)reasons.push('Change-point / regime-shift evidence');
     if(trap>0)reasons.push('⚠ Trap penalty applied');
     const conflictsList=[];Object.entries(comps).forEach(([k,v])=>{if(v<35&&score>65)conflictsList.push(k+' conflict');if(v>72&&score<45)conflictsList.push(k+' bullish vs regime');});
-    const result={score,confidence,coverage,freshness,ageMs,label,direction:dir>0?'BULLISH':'BEARISH',regime:reg.type,regimeStats:reg,parts:comps,weights:w,calibration:Object.fromEntries(Object.entries(cal.components||{}).map(([k,v])=>[k,{reliability:reliability(v),samples:num(v.n)}])),conflict:conflict,trapPenalty:trap,reasons,reasonsText:reasons.slice(0,8),conflicts:conflictsList,metrics:{rsi:mom.rsi,rv:vol.rv,accel2:mom.accel2,bw:comp.bw,bwPercentile:comp.bwP,adx:adxV,whale:fl.whale,mtf:mtf.score,mtfAgreement:mtf.agreement,breadth:breadth,relative:rel.edge,spread:liq.spread,vwapDistance:((num(last.c)-vwap(closed))/Math.max(a,num(last.c)*.001))*100,efficiency:eff.er,donchian:don.score,priceVolume:pvd.score}};
+    const result={score,confidence,coverage,freshness,ageMs,label,direction:dir>0?'BULLISH':'BEARISH',regime:reg.type,regimeStats:reg,parts:comps,weights:w,calibration:Object.fromEntries(Object.entries(cal.components||{}).map(([k,v])=>[k,{reliability:reliability(v),samples:num(v.n)}])),conflict:conflict,trapPenalty:trap,reasons,reasonsText:reasons.slice(0,8),conflicts:conflictsList,metrics:{rsi:mom.rsi,rv:vol.rv,accel2:mom.accel2,bw:comp.bw,bwPercentile:comp.bwP,adx:adxV,whale:fl.whale,mtf:mtf.score,mtfAgreement:mtf.agreement,breadth:breadth,relative:rel.edge,spread:liq.spread,vwapDistance:((num(last.c)-vwap(closed))/Math.max(a,num(last.c)*.001))*100,efficiency:eff.er,donchian:don.score,priceVolume:pvd.score,volSigma:vf.sigma,volShortLong:vf.shortLong,volSkew:vf.skew,changePoint:cp.score}};
     lastEval={key:cacheKey,at:performance.now(),value:result};return result;
   }
   window.RadarXPulseFusion={evaluate,calibration,clearCalibration:function(){try{localStorage.removeItem(KEY);}catch{}invalidateCalibration();lastEval={key:'',at:0,value:null};},version:'3.0-fusion-adaptive'};
