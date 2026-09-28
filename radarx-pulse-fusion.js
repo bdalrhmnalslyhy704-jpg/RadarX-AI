@@ -176,7 +176,7 @@
   function evaluate(rows,st){
     const symbol=st.selected?.symbol||'',tf=st.selected?.timeframe||'5m',lastRow=rows.at(-1),cacheKey=symbol+'|'+tf+'|'+String(lastRow?.t||0)+'|'+String(lastRow?.c||0)+'|'+String(lastRow?.v||0);
     if(lastEval.key===cacheKey&&performance.now()-lastEval.at<CFG.cacheMs)return lastEval.value;
-    const closed=rows.filter(r=>r.closed!==false&&n(r.c)>0);if(closed.length<28)return{score:50,confidence:0,coverage:0,label:'INSUFFICIENT',parts:{}};
+    const closed=rows.filter(r=>r.closed!==false&&num(r.c)>0);if(closed.length<28)return{score:50,confidence:0,coverage:0,label:'INSUFFICIENT',parts:{}};
     resolveCalibration(symbol,tf,closed,1);
     const reg=marketRegime(closed,st),mom=momentumSignal(closed),vol=volumeSignal(closed),comp=compressionSignal(closed,reg),fl=flowSignal(st),mtf=mtfSignal(st),rel=relativeSignal(st,mom),liq=liquiditySignal(st),wy=wyckoffSignal(closed,vol),str=structureSignal(closed),eff=efficiencySignal(closed),don=donchianSignal(closed),pvd=priceVolumeDivergence(closed),vf=volatilityForecast(closed),cp=changePointSignal(closed);
     const last=closed.at(-1),a=atr(closed,14)||num(last.c)*.004,e20=ema(closed.map(r=>num(r.c)).slice(-100),20),e50=ema(closed.map(r=>num(r.c)).slice(-120),50),adxV=reg.adx;
