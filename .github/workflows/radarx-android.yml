@@ -97,13 +97,13 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           cp app/build/outputs/apk/release/app-release.apk dist/RadarX-6.9.0-Native.apk
-          sha256sum dist/RadarX-6.8.1-Native.apk
+          sha256sum dist/RadarX-6.9.0-Native.apk
 
       - name: Publish installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: RadarX-6.8.1-Native-Android-APK
-          path: dist/RadarX-6.8.1-Native.apk
+          name: RadarX-6.9.0-Native-Android-APK
+          path: dist/RadarX-6.9.0-Native.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -121,4 +121,4 @@ jobs:
         run: |
           set -euo pipefail
           TAG="android-v6.9.0.${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" "dist/RadarX-6.8.1-Native.apk" --repo "${GITHUB_REPOSITORY}" --title "RadarX 6.8.1 Native — Binance Secure Relay" --notes "RadarX 6.8.1: full original RadarX web UI and analysis engines bundled inside the Native APK. The native shell is a thin host; the original web core remains intact and ready for incremental native data integration, plus native Binance REST failover. Built from commit ${GITHUB_SHA}." --latest
+          gh release create "$TAG" "dist/RadarX-6.9.0-Native.apk" --repo "${GITHUB_REPOSITORY}" --title "RadarX 6.9.0 Native — Binance Secure Relay" --notes "RadarX 6.9.0: full original RadarX web UI and analysis engines bundled inside the Native APK. The native shell is a thin host; the original web core remains intact and ready for incremental native data integration, plus native Binance REST failover. Built from commit ${GITHUB_SHA}." --latest
