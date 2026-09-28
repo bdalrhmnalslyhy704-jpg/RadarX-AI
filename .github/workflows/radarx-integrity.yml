@@ -157,42 +157,6 @@ jobs:
         run: |
           set -euo pipefail
           curl --fail --silent --show-error --retry 2 --max-time 25 "https://radar-x-ai.vercel.app/api/health" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(j.ok!==true)process.exit(1);console.log('Health OK',j.online+'/'+j.total,'providers online');})"
-\n__STATUS:%{http_code}' "$url" 2>&1)"
-            rc=$?
-            set -e
-            if [ "$rc" -ne 0 ]; then
-              echo "::warning::$label remote smoke unavailable; native/local fallback remains the supported path."
-              return 0
-            fi
-            status="${body##*__STATUS:}"
-            body="${body%
-
-      - name: Live health endpoint smoke test
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl --fail --silent --show-error --retry 2 --max-time 25 "https://radar-x-ai.vercel.app/api/health" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(j.ok!==true)process.exit(1);console.log('Health OK',j.online+'/'+j.total,'providers online');})"
-\n__STATUS:'*}"
-            if [ "$status" != "200" ]; then
-              echo "::warning::$label remote deployment returned HTTP $status; source and native fallback are still tested."
-              return 0
-            fi
-            printf '%s' "$body" | LABEL="$label" node -e "
-          let s='';
-          process.stdin.on('data',d=>s+=d).on('end',()=>{
-            const label=process.env.LABEL;
-            const j=JSON.parse(s);
-            if(label==='Smart bulk endpoint'){
-              if(j.ok!==true||!j.bySymbol?.BTCUSDT||!j.bySymbol?.ETHUSDT)process.exit(1);
-            } else {
-              if(j.ok!==true||!j.bySymbol?.BTCUSDT||!j.bySymbol?.ETHUSDT||!j.bySymbol.BTCUSDT.rows15m||!j.bySymbol.BTCUSDT.rows1h)process.exit(1);
-            }
-            console.log(label+' OK',j.returned,'symbols',j.latencyMs+'ms');
-          });"
-          }
-          smoke_optional "$BASE/api/radarx-smart?symbols=BTCUSDT%2CETHUSDT" "Smart bulk endpoint" 30
-          smoke_optional "$BASE/api/radarx-smart-deep?symbols=BTCUSDT%2CETHUSDT" "Smart deep bulk endpoint" 35
-
       - name: Live health endpoint smoke test
         shell: bash
         run: |
