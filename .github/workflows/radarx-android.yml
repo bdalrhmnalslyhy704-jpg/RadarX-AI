@@ -1,10 +1,17 @@
-name: RadarX Android Native 6.4
+name: RadarX Android Native 6.5
 
 on:
   workflow_dispatch:
   push:
     paths:
       - "app/**"
+      - "index.html"
+      - "radarx-runtime-6.0.js"
+      - "radarx-background-client.js"
+      - "radarx-pulse-fusion.js"
+      - "RadarX_Ultimate_5.11.js"
+      - "RadarX_ProEngine_5.11.js"
+      - "radarx-live-chart.js"
       - "settings.gradle.kts"
       - "build.gradle.kts"
       - "gradle.properties"
@@ -51,7 +58,7 @@ jobs:
       - name: Build native signed release APK
         run: gradle :app:assembleRelease --stacktrace
 
-      - name: Verify APK integrity and signature
+      - name: Verify APK integrity, signature and original web core
         shell: bash
         run: |
           set -euo pipefail
@@ -62,31 +69,40 @@ jobs:
           test -x "$APKSIGNER"
           "$APKSIGNER" verify --verbose "$APK"
 
+          echo "Checking bundled RadarX web core..."
+          unzip -l "$APK" | grep -F "assets/index.html"
+          unzip -l "$APK" | grep -F "assets/RadarX_Ultimate_5.11.js"
+          unzip -l "$APK" | grep -F "assets/RadarX_ProEngine_5.11.js"
+          unzip -l "$APK" | grep -F "assets/radarx-live-chart.js"
+          unzip -l "$APK" | grep -F "assets/radarx-pulse-fusion.js"
+          unzip -l "$APK" | grep -F "assets/radarx-runtime-6.0.js"
+          unzip -l "$APK" | grep -F "assets/radarx-background-client.js"
+
       - name: Inspect native package
         run: |
           set -euo pipefail
-          unzip -l app/build/outputs/apk/release/app-release.apk | grep -E "classes(2)?\.dex|AndroidManifest.xml"
-          echo "RadarX Native 6.4.1 signed release package assembled successfully."
+          unzip -l app/build/outputs/apk/release/app-release.apk | grep -E "classes(2)?\.dex|AndroidManifest.xml|assets/(index\.html|RadarX_Ultimate_5\.11\.js)"
+          echo "RadarX 6.5.0 full-core release package assembled successfully."
 
       - name: Prepare installable APK
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk dist/RadarX-6.4.1-Native.apk
-          sha256sum dist/RadarX-6.4.1-Native.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/RadarX-6.5.0-Native.apk
+          sha256sum dist/RadarX-6.5.0-Native.apk
 
       - name: Publish installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: RadarX-6.4.1-Native-Android-APK
-          path: dist/RadarX-6.4.1-Native.apk
+          name: RadarX-6.5.0-Native-Android-APK
+          path: dist/RadarX-6.5.0-Native.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Publish debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: RadarX-6.4.1-Debug-Android-APK
+          name: RadarX-6.5.0-Debug-Android-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
@@ -96,5 +112,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="android-v6.4.${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" "dist/RadarX-6.4.1-Native.apk" --repo "${GITHUB_REPOSITORY}" --title "RadarX 6.4.1 Native" --notes "RadarX Native 6.4.1: stable CI-signed release APK with native live 1m candle history and incremental WebSocket updates. Built from commit ${GITHUB_SHA}." --latest
+          TAG="android-v6.5.${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" "dist/RadarX-6.5.0-Native.apk" --repo "${GITHUB_REPOSITORY}" --title "RadarX 6.5.0 Native — Full Core Restore" --notes "RadarX 6.5.0: full original RadarX web UI and analysis engines bundled inside the Native APK. The native shell is a thin host; the original web core remains intact and ready for incremental native data integration. Built from commit ${GITHUB_SHA}." --latest
