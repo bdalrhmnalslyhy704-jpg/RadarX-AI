@@ -5,6 +5,8 @@
   <application
       android:allowBackup="true"
       android:label="RadarX"
+      android:icon="@drawable/ic_launcher"
+      android:roundIcon="@drawable/ic_launcher"
       android:usesCleartextTraffic="false"
       android:theme="@style/Theme.RadarX">
     <activity
