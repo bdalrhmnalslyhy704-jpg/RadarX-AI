@@ -57,6 +57,7 @@ public final class MainActivity extends Activity {
         s.setSupportMultipleWindows(false);
         s.setLoadWithOverviewMode(false);
         s.setUseWideViewPort(false);
+        // RadarX Android 6.0: live production WebView shell.
         s.setUserAgentString(s.getUserAgentString() + " RadarXAndroid/6.0.0");
 
         webView.setWebChromeClient(new WebChromeClient());
