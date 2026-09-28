@@ -195,7 +195,7 @@ public final class BinanceSecureRelay {
     private WebResourceResponse interceptSmartBulk(Uri uri, boolean deep) {
         String raw = uri.getQueryParameter("symbols");
         if (raw == null || raw.trim().isEmpty()) {
-            return jsonResponse(400, "{\\"ok\\":false,\\"error\\":\\"NO_SYMBOLS\\"}");
+            return jsonResponse(400, "{\"ok\":false,\"error\":\"NO_SYMBOLS\"}");
         }
         String[] parts = raw.split(",");
         List<String> symbols = new ArrayList<>();
@@ -210,7 +210,7 @@ public final class BinanceSecureRelay {
         int max = deep ? 8 : 40;
         if (symbols.size() > max) symbols = new ArrayList<>(symbols.subList(0, max));
         if (symbols.isEmpty()) {
-            return jsonResponse(400, "{\\"ok\\":false,\\"error\\":\\"NO_VALID_SYMBOLS\\"}");
+            return jsonResponse(400, "{\"ok\":false,\"error\":\"NO_VALID_SYMBOLS\"}");
         }
 
         final List<String> finalSymbols = symbols;
@@ -281,7 +281,7 @@ public final class BinanceSecureRelay {
                     root.toString().getBytes(StandardCharsets.UTF_8),
                     headers("BULK", "native-binance-bulk", 0));
         } catch (Exception e) {
-            return jsonResponse(502, "{\\"ok\\":false,\\"error\\":\\"SMART_BULK_FAILED\\"}");
+            return jsonResponse(502, "{\"ok\":false,\"error\":\"SMART_BULK_FAILED\"}");
         }
     }
 
