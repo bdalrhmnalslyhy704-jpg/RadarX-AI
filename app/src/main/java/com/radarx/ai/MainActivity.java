@@ -37,6 +37,7 @@ public final class MainActivity extends Activity {
     private TextView statusView;
     private BinanceSecureRelay binanceRelay;
     private NativeBinanceStreamHub streamHub;
+    private NativeBinanceHttpQueue httpQueue;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -59,6 +60,7 @@ public final class MainActivity extends Activity {
                 .retryOnConnectionFailure(true)
                 .build();
         streamHub = new NativeBinanceStreamHub(wsClient);
+        httpQueue = new NativeBinanceHttpQueue(relayClient);
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(BG);
@@ -95,7 +97,7 @@ public final class MainActivity extends Activity {
         root.addView(progress, progressLp);
         setContentView(root);
 
-        webView.addJavascriptInterface(new RadarXAndroidBridge(this, streamHub), "RadarXAndroid");
+        webView.addJavascriptInterface(new RadarXAndroidBridge(this, streamHub, httpQueue), "RadarXAndroid");
         webView.loadUrl(APP_URL);
     }
 
@@ -260,6 +262,10 @@ public final class MainActivity extends Activity {
             streamHub.stopAll();
             streamHub = null;
         }
+        if (httpQueue != null) {
+            httpQueue.shutdown();
+            httpQueue = null;
+        }
         if (binanceRelay != null) binanceRelay = null;
         super.onDestroy();
     }
@@ -271,10 +277,12 @@ public final class MainActivity extends Activity {
     public static final class RadarXAndroidBridge {
         private final Context context;
         private final NativeBinanceStreamHub streamHub;
+        private final NativeBinanceHttpQueue httpQueue;
 
-        RadarXAndroidBridge(Context context, NativeBinanceStreamHub streamHub) {
+        RadarXAndroidBridge(Context context, NativeBinanceStreamHub streamHub, NativeBinanceHttpQueue httpQueue) {
             this.context = context.getApplicationContext();
             this.streamHub = streamHub;
+            this.httpQueue = httpQueue;
         }
 
         @android.webkit.JavascriptInterface
@@ -300,6 +308,16 @@ public final class MainActivity extends Activity {
         @android.webkit.JavascriptInterface
         public String pollMarketStreams() {
             return streamHub == null ? "[]" : streamHub.pollJson(80);
+        }
+
+        @android.webkit.JavascriptInterface
+        public String startBinanceHttp(String path) {
+            return httpQueue == null ? "" : httpQueue.start(path);
+        }
+
+        @android.webkit.JavascriptInterface
+        public String pollBinanceHttp() {
+            return httpQueue == null ? "[]" : httpQueue.pollJson(12);
         }
 
         @android.webkit.JavascriptInterface
