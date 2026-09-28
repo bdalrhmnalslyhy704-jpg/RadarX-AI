@@ -153,20 +153,18 @@ jobs:
               echo "::warning::$label remote deployment returned HTTP $status; source and native fallback are still tested."
               return 0
             fi
-            echo "$body" | node - "$label" <<'NODE'
-          const chunks=[];
-          process.stdin.on('data',d=>chunks.push(d));
-          process.stdin.on('end',()=>{
-            const label=process.argv[2];
-            const j=JSON.parse(Buffer.concat(chunks).toString());
+            printf '%s' "$body" | LABEL="$label" node -e "
+          let s='';
+          process.stdin.on('data',d=>s+=d).on('end',()=>{
+            const label=process.env.LABEL;
+            const j=JSON.parse(s);
             if(label==='Smart bulk endpoint'){
               if(j.ok!==true||!j.bySymbol?.BTCUSDT||!j.bySymbol?.ETHUSDT)process.exit(1);
             } else {
               if(j.ok!==true||!j.bySymbol?.BTCUSDT||!j.bySymbol?.ETHUSDT||!j.bySymbol.BTCUSDT.rows15m||!j.bySymbol.BTCUSDT.rows1h)process.exit(1);
             }
             console.log(label+' OK',j.returned,'symbols',j.latencyMs+'ms');
-          });
-          NODE
+          });"
           }
           smoke_optional "$BASE/api/radarx-smart?symbols=BTCUSDT%2CETHUSDT" "Smart bulk endpoint" 30
           smoke_optional "$BASE/api/radarx-smart-deep?symbols=BTCUSDT%2CETHUSDT" "Smart deep bulk endpoint" 35
