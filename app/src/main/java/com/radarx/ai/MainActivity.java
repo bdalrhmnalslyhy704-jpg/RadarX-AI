@@ -1,6 +1,12 @@
 package com.radarx.ai;
 
 import android.app.Activity;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.Notification;
+import android.content.pm.PackageManager;
+import android.os.Build;
+import android.os.Vibrator;
 import android.content.Context;
 import android.graphics.Color;
 import android.net.ConnectivityManager;
@@ -151,6 +157,9 @@ public final class MainActivity extends Activity {
                 WebResourceResponse relay = binanceRelay.intercept(uri);
                 if (relay != null) return relay;
 
+                WebResourceResponse secondary = binanceRelay.interceptSecondary(uri);
+                if (secondary != null) return secondary;
+
                 WebResourceResponse health = binanceRelay.interceptHealth(uri);
                 if (health != null) return health;
 
@@ -170,6 +179,9 @@ public final class MainActivity extends Activity {
 
                 WebResourceResponse relay = binanceRelay.intercept(uri);
                 if (relay != null) return relay;
+
+                WebResourceResponse secondary = binanceRelay.interceptSecondary(uri);
+                if (secondary != null) return secondary;
 
                 WebResourceResponse health = binanceRelay.interceptHealth(uri);
                 if (health != null) return health;
@@ -289,6 +301,80 @@ public final class MainActivity extends Activity {
         @android.webkit.JavascriptInterface
         public String getVersion() {
             return VERSION;
+        }
+
+
+        @android.webkit.JavascriptInterface
+        public boolean requestNativeNotifications() {
+            try {
+                if (Build.VERSION.SDK_INT >= 33 &&
+                        checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                                != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(
+                            new String[]{"android.permission.POST_NOTIFICATIONS"},
+                            9017
+                    );
+                }
+                return true;
+            } catch (Exception ignored) {
+                return false;
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        public boolean postNativeNotification(String title, String body) {
+            try {
+                NotificationManager manager =
+                        (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+                if (manager == null) return false;
+
+                final String channelId = "radarx-alerts";
+                if (Build.VERSION.SDK_INT >= 26) {
+                    NotificationChannel channel = new NotificationChannel(
+                            channelId,
+                            "RadarX Alerts",
+                            NotificationManager.IMPORTANCE_HIGH
+                    );
+                    channel.setDescription("RadarX early-move and risk alerts");
+                    channel.enableVibration(true);
+                    manager.createNotificationChannel(channel);
+                }
+
+                Notification.Builder builder = Build.VERSION.SDK_INT >= 26
+                        ? new Notification.Builder(this, channelId)
+                        : new Notification.Builder(this);
+
+                builder.setSmallIcon(R.drawable.ic_launcher)
+                        .setContentTitle(String.valueOf(title == null ? "RadarX" : title))
+                        .setContentText(String.valueOf(body == null ? "" : body))
+                        .setAutoCancel(true)
+                        .setCategory(Notification.CATEGORY_ALARM)
+                        .setPriority(Notification.PRIORITY_HIGH)
+                        .setVibrate(new long[]{0, 120, 80, 180});
+
+                manager.notify((int) (System.currentTimeMillis() & 0x7fffffff), builder.build());
+                return true;
+            } catch (SecurityException ignored) {
+                return false;
+            } catch (Exception ignored) {
+                return false;
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        public void vibrate(int milliseconds) {
+            try {
+                Vibrator vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+                if (vibrator == null) return;
+                long ms = Math.max(20L, Math.min(1000L, milliseconds));
+                if (Build.VERSION.SDK_INT >= 26) {
+                    vibrator.vibrate(android.os.VibrationEffect.createOneShot(
+                            ms, android.os.VibrationEffect.DEFAULT_AMPLITUDE));
+                } else {
+                    vibrator.vibrate(ms);
+                }
+            } catch (Exception ignored) {
+            }
         }
 
         @android.webkit.JavascriptInterface
