@@ -31,7 +31,7 @@ public final class MainActivity extends Activity {
     private static final int BG = Color.rgb(5, 10, 15);
     private static final String APP_URL =
             "https://appassets.androidplatform.net/assets/index.html";
-    private static final String VERSION = "6.6.0";
+    private static final String VERSION = "6.7.0";
 
     private WebView webView;
     private TextView statusView;
@@ -214,7 +214,7 @@ public final class MainActivity extends Activity {
                 "(function(){try{" +
                 "window.RadarXAndroidHost={" +
                 "native:true," +
-                "version:'6.6.0'," +
+                "version:'6.7.0'," +
                 "shell:'native-web-core'," +
                 "localAssets:true," +
                 "binanceRelay:'native-failover'," +
