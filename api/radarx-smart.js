@@ -11,7 +11,7 @@ const UPSTREAMS = [
 ];
 const state = globalThis.__RADARX_SMART_69__ || (globalThis.__RADARX_SMART_69__ = {ts:0,key:'',data:null});
 function cleanSymbol(s){return String(s||'').trim().toUpperCase().replace(/[^A-Z0-9]/g,'');}
-function validSymbol(s){return /^[A-Z0-9]{4,24}USDT$/.test(s) && !/^(USDC|USDP|FDUSD|TUSD|DAI|USDE|USDS|BUSD)USDT$/.test(s) && !/(UP|DOWN|BULL|BEAR)USDT$/.test(s);}
+function validSymbol(s){return /^[A-Z0-9]{2,20}USDT$/.test(s) && !/^(USDC|USDP|FDUSD|TUSD|DAI|USDE|USDS|BUSD)USDT$/.test(s) && !/(UP|DOWN|BULL|BEAR)USDT$/.test(s);}
 function timeoutSignal(ms){const c=new AbortController();const timer=setTimeout(()=>c.abort(),ms);return{signal:c.signal,clear:()=>clearTimeout(timer)};}
 async function fetchOne(pathname){
   let last=null;
