@@ -95,7 +95,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: RadarX-6.5.1-Native-Android-APK
-          path: dist/RadarX-6.5.0-Native.apk
+          path: dist/RadarX-6.5.1-Native.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -113,4 +113,4 @@ jobs:
         run: |
           set -euo pipefail
           TAG="android-v6.5.1.${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" "dist/RadarX-6.5.0-Native.apk" --repo "${GITHUB_REPOSITORY}" --title "RadarX 6.5.1 Native — Binance Secure Relay" --notes "RadarX 6.5.1: full original RadarX web UI and analysis engines bundled inside the Native APK. The native shell is a thin host; the original web core remains intact and ready for incremental native data integration, plus native Binance REST failover. Built from commit ${GITHUB_SHA}." --latest
+          gh release create "$TAG" "dist/RadarX-6.5.1-Native.apk" --repo "${GITHUB_REPOSITORY}" --title "RadarX 6.5.1 Native — Binance Secure Relay" --notes "RadarX 6.5.1: full original RadarX web UI and analysis engines bundled inside the Native APK. The native shell is a thin host; the original web core remains intact and ready for incremental native data integration, plus native Binance REST failover. Built from commit ${GITHUB_SHA}." --latest
