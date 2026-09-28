@@ -175,14 +175,16 @@
     const readinessBoost=(reg.type==='SQUEEZE'&&vol.rv>1.35&&comp.near>62)?7:0;
     score=clamp(score+breadthGate+readinessBoost-trap-conflictPenalty);
     const reliabilityAvg=Object.keys(comps).reduce((a,k)=>a+reliability(cal.components?.[k]||{a:4,b:4}),0)/Object.keys(comps).length;
+    const liveAt=num(st.selected?.liveAt||st.selected?.eventTime,0),ageMs=liveAt?Math.max(0,Date.now()-liveAt):999999;
+    const freshness=ageMs<=2500?100:ageMs<=5000?90:ageMs<=10000?72:ageMs<=20000?48:20;
     const coverage=[st.selected?.flow,st.selected?.mtf,st.markets?.length,rows.length>=60,st.selected?.fakeout,eff.score,don.score,pvd.score].filter(v=>v!==null&&v!==undefined).length/8*100;
-    const confidence=clamp(coverage*.42+reliabilityAvg*.23+Math.abs(score-50)*.72-conflict*.08-trap*.25);
+    const confidence=clamp(coverage*.36+freshness*.18+reliabilityAvg*.21+Math.abs(score-50)*.70-conflict*.10-trap*.30);
+    if(freshness<48)score=50+(score-50)*.60;
     let label='NEUTRAL';if(score>=82&&confidence>=68)label='PRE-BREAKOUT';else if(score>=72&&confidence>=56)label='BUILDING';else if(score<=30)label='HIGH RISK / WEAK';else if(score<=42)label='WEAK';
     const dir=score>=50?1:-1;
     if(closed.length>=CFG.horizonBars+2&&score>=68&&confidence>=55){
       const pending=cal.pending||[],exists=pending.some(p=>p.symbol===symbol&&p.tf===tf&&p.createdT===last.t);
-      if(!exists)pending.push({symbol,tf,createdT:last.t,price:num(last.c),atr:a,dir,parts:Object.fromEntries(Object.entries(comps).map(([k,v])=>[k,(v-50)/50])),horizon:CFG.horizonBars});
-      cal.pending=pending.slice(-CFG.maxPending);putStore(cal);
+      if(!exists){pending.push({symbol,tf,createdT:last.t,price:num(last.c),atr:a,dir,parts:Object.fromEntries(Object.entries(comps).map(([k,v])=>[k,(v-50)/50])),horizon:CFG.horizonBars});cal.pending=pending.slice(-CFG.maxPending);putStore(cal);}
     }
     const reasons=[];
     if(reg.type==='SQUEEZE')reasons.push('Volatility squeeze / compression');
@@ -199,7 +201,7 @@
     if(pvd.score>60)reasons.push('Price/volume confirmation');
     if(trap>0)reasons.push('⚠ Trap penalty applied');
     const conflictsList=[];Object.entries(comps).forEach(([k,v])=>{if(v<35&&score>65)conflictsList.push(k+' conflict');if(v>72&&score<45)conflictsList.push(k+' bullish vs regime');});
-    const result={score,confidence,coverage,label,direction:dir>0?'BULLISH':'BEARISH',regime:reg.type,regimeStats:reg,parts:comps,weights:w,calibration:Object.fromEntries(Object.entries(cal.components||{}).map(([k,v])=>[k,{reliability:reliability(v),samples:num(v.n)}])),conflict:conflict,trapPenalty:trap,reasons,reasonsText:reasons.slice(0,8),conflicts:conflictsList,metrics:{rsi:mom.rsi,rv:vol.rv,accel2:mom.accel2,bw:comp.bw,bwPercentile:comp.bwP,adx:adxV,whale:fl.whale,mtf:mtf.score,mtfAgreement:mtf.agreement,breadth:breadth,relative:rel.edge,spread:liq.spread,vwapDistance:((num(last.c)-vwap(closed))/Math.max(a,num(last.c)*.001))*100,efficiency:eff.er,donchian:don.score,priceVolume:pvd.score}};
+    const result={score,confidence,coverage,freshness,ageMs,label,direction:dir>0?'BULLISH':'BEARISH',regime:reg.type,regimeStats:reg,parts:comps,weights:w,calibration:Object.fromEntries(Object.entries(cal.components||{}).map(([k,v])=>[k,{reliability:reliability(v),samples:num(v.n)}])),conflict:conflict,trapPenalty:trap,reasons,reasonsText:reasons.slice(0,8),conflicts:conflictsList,metrics:{rsi:mom.rsi,rv:vol.rv,accel2:mom.accel2,bw:comp.bw,bwPercentile:comp.bwP,adx:adxV,whale:fl.whale,mtf:mtf.score,mtfAgreement:mtf.agreement,breadth:breadth,relative:rel.edge,spread:liq.spread,vwapDistance:((num(last.c)-vwap(closed))/Math.max(a,num(last.c)*.001))*100,efficiency:eff.er,donchian:don.score,priceVolume:pvd.score}};
     lastEval={key:cacheKey,at:performance.now(),value:result};return result;
   }
   window.RadarXPulseFusion={evaluate,calibration,clearCalibration:function(){try{localStorage.removeItem(KEY);}catch{}invalidateCalibration();lastEval={key:'',at:0,value:null};},version:'3.0-fusion-adaptive'};
