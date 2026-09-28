@@ -117,7 +117,7 @@ public final class BinanceSecureRelay {
                         .url(target.toString())
                         .get()
                         .header("Accept", "application/json")
-                        .header("User-Agent", "RadarX-Android/6.5")
+                        .header("User-Agent", "RadarX-Android/6.7.0")
                         .build();
 
                 try (Response upstream = client.newCall(request).execute()) {
@@ -160,6 +160,323 @@ public final class BinanceSecureRelay {
         String body = "{\"code\":-1,\"msg\":\"Binance Spot relay unavailable\","
                 + "\"detail\":\"native_relay_failed\",\"status\":502}";
         return jsonResponse(502, body);
+    }
+
+
+    /**
+     * Native gateway for every secondary public market source used by the web
+     * core. Relative /api/market and /api/radarx-context routes would otherwise
+     * resolve to appassets.androidplatform.net inside the native shell.
+     */
+    public WebResourceResponse interceptSecondary(Uri uri) {
+        if (uri == null) return null;
+        String path = uri.getPath();
+        if ("/api/market".equals(path)) return interceptMarket(uri);
+        if ("/api/radarx-context".equals(path)) return interceptContext(uri);
+        if ("/api/metals".equals(path)) return interceptMetals(uri);
+        return null;
+    }
+
+    private WebResourceResponse interceptMarket(Uri uri) {
+        final String provider = safe(uri.getQueryParameter("provider")).trim();
+        final String raw = safe(uri.getQueryParameter("path"));
+        if (provider.isEmpty() || raw.isEmpty()) {
+            return jsonResponse(400, "{\"error\":\"UNKNOWN_PROVIDER\"}");
+        }
+
+        String path;
+        try {
+            path = Uri.decode(raw);
+        } catch (Exception e) {
+            path = raw;
+        }
+        if (!path.startsWith("/") || path.contains("://") || path.contains("\\\\")) {
+            return jsonResponse(400, "{\"error\":\"BAD_PATH\"}");
+        }
+
+        final String base;
+        if ("okx".equals(provider)) {
+            if (!path.startsWith("/api/v5/market/") && !path.startsWith("/api/v5/public/")) {
+                return jsonResponse(403, "{\"error\":\"PATH_NOT_ALLOWED\"}");
+            }
+            base = "https://www.okx.com";
+        } else if ("bybit".equals(provider)) {
+            if (!path.startsWith("/v5/market/")) {
+                return jsonResponse(403, "{\"error\":\"PATH_NOT_ALLOWED\"}");
+            }
+            base = "https://api.bybit.com";
+        } else if ("gate".equals(provider)) {
+            if (!path.startsWith("/api/v4/spot/")) {
+                return jsonResponse(403, "{\"error\":\"PATH_NOT_ALLOWED\"}");
+            }
+            base = "https://api.gateio.ws";
+        } else if ("coinbase".equals(provider)) {
+            if (!path.startsWith("/products")) {
+                return jsonResponse(403, "{\"error\":\"PATH_NOT_ALLOWED\"}");
+            }
+            base = "https://api.exchange.coinbase.com";
+        } else if ("coingecko".equals(provider)) {
+            if (!path.startsWith("/api/v3/")) {
+                return jsonResponse(403, "{\"error\":\"PATH_NOT_ALLOWED\"}");
+            }
+            base = "https://api.coingecko.com";
+        } else if ("binanceFutures".equals(provider)) {
+            if (!path.startsWith("/fapi/v1/") && !path.startsWith("/futures/data/")) {
+                return jsonResponse(403, "{\"error\":\"PATH_NOT_ALLOWED\"}");
+            }
+            base = "https://fapi.binance.com";
+        } else {
+            return jsonResponse(400, "{\"error\":\"UNKNOWN_PROVIDER\"}");
+        }
+
+        final String key = "secondary:" + provider + ":" + path;
+        CacheEntry fresh = getSecondaryCache(key, provider, false);
+        if (fresh != null) {
+            return response(
+                    200, "OK", "application/json; charset=utf-8",
+                    fresh.body,
+                    headers("HIT", provider, fresh.ageMs)
+            );
+        }
+
+        // Cloud gateway first: useful on restricted/regional mobile networks.
+        try {
+            Request cloud = new Request.Builder()
+                    .url(REMOTE_RELAY.replace("/api/binance", "/api/market")
+                            + "?provider=" + Uri.encode(provider)
+                            + "&path=" + Uri.encode(path))
+                    .get()
+                    .header("Accept", "application/json")
+                    .header("User-Agent", "RadarX-Android/6.7.0")
+                    .build();
+            long started = System.currentTimeMillis();
+            try (Response r = client.newCall(cloud).execute()) {
+                long latency = System.currentTimeMillis() - started;
+                byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+                if (r.isSuccessful() && looksLikeJson(body)) {
+                    CacheEntry entry = new CacheEntry(body, System.currentTimeMillis());
+                    SECONDARY_CACHE.put(key, entry);
+                    trimSecondaryCache();
+                    return response(
+                            200, "OK", "application/json; charset=utf-8",
+                            body, headers("MISS", "radarx-cloud-market", latency)
+                    );
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        // Direct provider fallback.
+        try {
+            long started = System.currentTimeMillis();
+            Request request = new Request.Builder()
+                    .url(base + path)
+                    .get()
+                    .header("Accept", "application/json")
+                    .header("User-Agent", "RadarX-Android/6.7.0")
+                    .build();
+            try (Response r = client.newCall(request).execute()) {
+                long latency = System.currentTimeMillis() - started;
+                byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+                if (r.isSuccessful() && looksLikeJson(body)) {
+                    CacheEntry entry = new CacheEntry(body, System.currentTimeMillis());
+                    SECONDARY_CACHE.put(key, entry);
+                    trimSecondaryCache();
+                    return response(
+                            200, "OK", "application/json; charset=utf-8",
+                            body, headers("MISS", base, latency)
+                    );
+                }
+                return jsonResponse(r.code(), body.length == 0
+                        ? "{\"error\":\"UPSTREAM_UNAVAILABLE\"}"
+                        : new String(body, StandardCharsets.UTF_8));
+            }
+        } catch (Exception e) {
+            CacheEntry stale = getSecondaryCache(key, provider, true);
+            if (stale != null) {
+                return response(
+                        200, "OK", "application/json; charset=utf-8",
+                        stale.body, headers("STALE", provider, stale.ageMs)
+                );
+            }
+            return jsonResponse(502, "{\"error\":\"UPSTREAM_UNAVAILABLE\",\"provider\":\""
+                    + jsonEscape(provider) + "\"}");
+        }
+    }
+
+    private WebResourceResponse interceptContext(Uri uri) {
+        final String key = "context";
+        CacheEntry fresh = getSecondaryCache(key, "context", false);
+        if (fresh != null) {
+            return response(200, "OK", "application/json; charset=utf-8",
+                    fresh.body, headers("HIT", "context-cache", fresh.ageMs));
+        }
+
+        // Prefer the deployed RadarX context aggregator because it already
+        // normalizes global market data and Fear & Greed sources.
+        try {
+            Request req = new Request.Builder()
+                    .url("https://radar-x-ai.vercel.app/api/radarx-context")
+                    .get()
+                    .header("Accept", "application/json")
+                    .header("User-Agent", "RadarX-Android/6.7.0")
+                    .build();
+            try (Response r = client.newCall(req).execute()) {
+                byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+                if (r.isSuccessful() && looksLikeJson(body)) {
+                    SECONDARY_CACHE.put(key, new CacheEntry(body, System.currentTimeMillis()));
+                    trimSecondaryCache();
+                    return response(200, "OK", "application/json; charset=utf-8",
+                            body, headers("MISS", "radarx-context-cloud", 0));
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        // Minimal no-key fallback: CoinGecko global + Alternative.me F&G.
+        Double btcDominance = null;
+        Double marketCap = null;
+        Double marketCapChange = null;
+        Double fearGreed = null;
+        String fearGreedLabel = null;
+        boolean cgOk = false;
+        boolean fgOk = false;
+
+        try {
+            Request req = new Request.Builder()
+                    .url("https://api.coingecko.com/api/v3/global")
+                    .get()
+                    .header("Accept", "application/json")
+                    .header("User-Agent", "RadarX-Android/6.7.0")
+                    .build();
+            try (Response r = client.newCall(req).execute()) {
+                byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+                if (r.isSuccessful() && looksLikeJson(body)) {
+                    JSONObject root = new JSONObject(new String(body, StandardCharsets.UTF_8));
+                    JSONObject data = root.optJSONObject("data");
+                    if (data != null) {
+                        JSONObject pct = data.optJSONObject("market_cap_percentage");
+                        JSONObject cap = data.optJSONObject("total_market_cap");
+                        btcDominance = pct == null ? null : nullableDouble(pct, "btc");
+                        marketCap = cap == null ? null : nullableDouble(cap, "usd");
+                        marketCapChange = nullableDouble(data, "market_cap_change_percentage_24h_usd");
+                        cgOk = true;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        try {
+            Request req = new Request.Builder()
+                    .url("https://api.alternative.me/fng/?limit=1")
+                    .get()
+                    .header("Accept", "application/json")
+                    .header("User-Agent", "RadarX-Android/6.7.0")
+                    .build();
+            try (Response r = client.newCall(req).execute()) {
+                byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+                if (r.isSuccessful() && looksLikeJson(body)) {
+                    JSONObject root = new JSONObject(new String(body, StandardCharsets.UTF_8));
+                    org.json.JSONArray data = root.optJSONArray("data");
+                    if (data != null && data.length() > 0) {
+                        JSONObject row = data.optJSONObject(0);
+                        if (row != null) {
+                            fearGreed = nullableDouble(row, "value");
+                            fearGreedLabel = row.optString("value_classification", null);
+                            fgOk = fearGreed != null;
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        try {
+            JSONObject out = new JSONObject();
+            out.put("ok", cgOk || fgOk);
+            out.put("btcDominance", btcDominance == null ? JSONObject.NULL : btcDominance);
+            out.put("totalMarketCapUsd", marketCap == null ? JSONObject.NULL : marketCap);
+            out.put("marketCapChange24h", marketCapChange == null ? JSONObject.NULL : marketCapChange);
+            out.put("fearGreed", fearGreed == null ? JSONObject.NULL : fearGreed);
+            out.put("fearGreedLabel", fearGreedLabel == null ? JSONObject.NULL : fearGreedLabel);
+            out.put("availableSources", new org.json.JSONArray()
+                    .put(cgOk ? "coingecko" : JSONObject.NULL)
+                    .put(fgOk ? "alternative.me" : JSONObject.NULL));
+            out.put("sources", new JSONObject()
+                    .put("coingecko", cgOk)
+                    .put("fearGreed", fgOk));
+            byte[] body = out.toString().getBytes(StandardCharsets.UTF_8);
+            if (cgOk || fgOk) SECONDARY_CACHE.put(key, new CacheEntry(body, System.currentTimeMillis()));
+            return response(200, "OK", "application/json; charset=utf-8",
+                    body, headers("MISS", "native-context-fallback", 0));
+        } catch (Exception e) {
+            return jsonResponse(502, "{\"error\":\"CONTEXT_UNAVAILABLE\"}");
+        }
+    }
+
+    private WebResourceResponse interceptMetals(Uri uri) {
+        final String cloudUrl = "https://radar-x-ai.vercel.app/api/metals"
+                + (uri.getQuery() == null ? "" : "?" + uri.getQuery());
+        try {
+            Request req = new Request.Builder()
+                    .url(cloudUrl)
+                    .get()
+                    .header("Accept", "application/json")
+                    .header("User-Agent", "RadarX-Android/6.7.0")
+                    .build();
+            try (Response r = client.newCall(req).execute()) {
+                byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+                if (r.isSuccessful() && looksLikeJson(body)) {
+                    return response(200, "OK", "application/json; charset=utf-8",
+                            body, headers("MISS", "radarx-metals-cloud", 0));
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return jsonResponse(502, "{\"error\":\"METALS_SOURCE_UNAVAILABLE\"}");
+    }
+
+    private static Double nullableDouble(JSONObject object, String key) {
+        if (object == null || !object.has(key) || object.isNull(key)) return null;
+        try {
+            return object.getDouble(key);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static final Map<String, Long> SECONDARY_TTLS = new ConcurrentHashMap<>();
+    private static final Map<String, CacheEntry> SECONDARY_CACHE = new ConcurrentHashMap<>();
+
+    private static long secondaryTtl(String provider) {
+        if ("coingecko".equals(provider)) return 15_000L;
+        if ("binanceFutures".equals(provider)) return 2_500L;
+        if ("context".equals(provider)) return 12_000L;
+        return 3_500L;
+    }
+
+    private static CacheEntry getSecondaryCache(String key, String provider, boolean allowStale) {
+        CacheEntry entry = SECONDARY_CACHE.get(key);
+        if (entry == null) return null;
+        long age = System.currentTimeMillis() - entry.ts;
+        long ttl = secondaryTtl(provider);
+        long staleTtl = Math.max(ttl * 8L, 5_000L);
+        if (age <= ttl || (allowStale && age <= staleTtl)) {
+            entry.ageMs = age;
+            return entry;
+        }
+        SECONDARY_CACHE.remove(key);
+        return null;
+    }
+
+    private static void trimSecondaryCache() {
+        if (SECONDARY_CACHE.size() <= 240) return;
+        int remove = 60;
+        for (String key : SECONDARY_CACHE.keySet()) {
+            SECONDARY_CACHE.remove(key);
+            if (--remove <= 0) break;
+        }
     }
 
     public WebResourceResponse interceptHealth(Uri uri) {
