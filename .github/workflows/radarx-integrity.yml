@@ -47,10 +47,10 @@ jobs:
           for(let i=1;i<pos.length;i++){
             if(pos[i]<pos[0] && i>0){} // filenames can be repeated in cache-bust strings
           }
-          if(!index.includes('RadarX_Ultimate_5.11.js?v=6.9.0-core'))throw new Error('core cache bust missing');
-          if(!index.includes('RadarX_ProEngine_5.11.js?v=6.9.0-pro'))throw new Error('pro cache bust missing');
-          if(!index.includes('radarx-runtime-6.0.js?v=6.9.0'))throw new Error('runtime cache bust missing');
-          if(!index.includes('radarx-pulse-fusion.js?v=3.1-fusion-6.9.0'))throw new Error('pulse cache bust missing');
+          if(!index.includes('RadarX_Ultimate_5.11.js?v=6.9.1-core'))throw new Error('core cache bust missing');
+          if(!index.includes('RadarX_ProEngine_5.11.js?v=6.9.1-pro'))throw new Error('pro cache bust missing');
+          if(!index.includes('radarx-runtime-6.0.js?v=6.9.1'))throw new Error('runtime cache bust missing');
+          if(!index.includes('radarx-pulse-fusion.js?v=3.1-fusion-6.9.1'))throw new Error('pulse cache bust missing');
           console.log('Entry wiring OK');
           NODE
 
