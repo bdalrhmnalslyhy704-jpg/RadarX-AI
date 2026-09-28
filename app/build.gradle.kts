@@ -8,8 +8,8 @@ android {
     applicationId = "com.radarx.ai"
     minSdk = 23
     targetSdk = 37
-    versionCode = 64
-    versionName = "6.4.0"
+    versionCode = 65
+    versionName = "6.4.1"
   }
 
   compileOptions {
@@ -21,6 +21,7 @@ android {
     release {
       isMinifyEnabled = false
       isShrinkResources = false
+      signingConfig = signingConfigs.getByName("debug")
     }
   }
 }
