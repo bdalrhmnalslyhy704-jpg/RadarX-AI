@@ -83,7 +83,7 @@
     alerts:new Map(),
     research:null,
     weights:{...WEIGHTS},
-    config:{...PRO}, lastEnrichFingerprint:'', lastEnrichAt:0, lastCrossAt:0,
+    config:{...PRO}, lastEnrichFingerprint:'', lastEnrichAt:0, lastCrossAt:0, lastOnchainAt:0,
   };
 
   const old = window.__RadarXProState;
@@ -313,6 +313,30 @@
     return ps.global;
   }
 
+
+
+  async function refreshOnchain(symbols){
+    if(ps.lastOnchainAt&&now()-ps.lastOnchainAt<300000) return {ok:true,cached:true};
+    try{
+      const q=(symbols||[]).slice(0,8).map(encodeURIComponent).join(',');
+      const d=await fetchJSON('/api/radarx-onchain?symbols='+q,{timeout:9000,retries:0});
+      if(d?.ok){
+        for(const [symbol,data] of Object.entries(d.onchainBySymbol||{})){
+          if(data?.available===true&&finite(data.score)) ps.external.onchain.set(symbol,{...data,available:true,source:data.source||'GeckoTerminal'});
+          else ps.external.onchain.delete(symbol);
+        }
+        for(const [symbol,data] of Object.entries(d.tokenomicsBySymbol||{})){
+          if(data?.available===true&&finite(data.score)) ps.external.tokenomics.set(symbol,{...data,available:true,source:data.source||'GeckoTerminal'});
+          else ps.external.tokenomics.delete(symbol);
+        }
+        ps.lastOnchainAt=now();
+        ps.onchainStatus={ok:true,checkedAt:now(),source:d.source||'GeckoTerminal'};
+        return ps.onchainStatus;
+      }
+    }catch{}
+    ps.onchainStatus={ok:false,checkedAt:now()};
+    return ps.onchainStatus;
+  }
 
   async function refreshNews(symbols){
     try{
@@ -677,6 +701,7 @@
       const regime=marketRegime(normalized,btcRows,ethRows,global); ps.regime=regime; ps.global=global;
       const symbols=chooseCandidates(normalized).map(x=>x.symbol);
       await refreshNews(symbols).catch(()=>{});
+      await refreshOnchain(symbols).catch(()=>{});
       const fingerprint=symbols.slice(0,PRO.mtfCandidates).join('|'), crossAge=now()-num(ps.lastCrossAt,0); const cross=crossAge<150000&&ps.crossExchange?.data?ps.crossExchange:await fetchCrossExchange(symbols).catch(()=>({available:false,data:{}})); if(cross?.available)ps.lastCrossAt=now();
       const candidates=[];
       for(let i=0;i<symbols.length;i+=3){
@@ -955,7 +980,7 @@
 
   function expose(){
     window.RadarXPro={
-      state:ps, runCycle, runResearch, render, getCandidates:()=>ps.candidates||[], getRegime:()=>ps.regime, getNews:()=>ps.news, refreshNews,
+      state:ps, runCycle, runResearch, render, getCandidates:()=>ps.candidates||[], getRegime:()=>ps.regime, getNews:()=>ps.news, refreshNews, refreshOnchain,
       setExternalSignal:(kind,symbol,data)=>{if(!['catalyst','social','onchain','tokenomics'].includes(kind))return false;ps.external[kind].set(symbol,{...data,available:true});return true;},
       setWeights:(w)=>{for(const k of Object.keys(ps.weights))if(finite(w?.[k]))ps.weights[k]=Math.max(0,num(w[k]));return {...ps.weights};},
       clearExternal:(kind,symbol)=>{ps.external[kind]?.delete(symbol);},
