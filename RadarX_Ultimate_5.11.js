@@ -2071,6 +2071,44 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
       (warns?'<div class="trap-evidence" style="margin-top:8px">'+warns+'</div>':'')+
       (top.length?'<div class="table-wrap"><table class="whale-table"><thead><tr><th>#</th><th>'+t('side')+'</th><th>'+t('notional')+'</th><th>Price</th><th>Time</th></tr></thead><tbody>'+top.map(function(x,i){return '<tr><td>#'+(i+1)+'</td><td>'+(x.buy?'BUY':'SELL')+'</td><td>'+fmt(x.notional)+'</td><td>'+fmt(x.price)+'</td><td>'+new Date(num(x.t)).toLocaleTimeString()+'</td></tr>';}).join('')+'</tbody></table></div>':'');
   }
+  async function scanWhalesOnce(){
+    const provider=$('flowExchange').value;
+    const symbol=$('flowSymbol').value.trim().toUpperCase().replace(/[\s\/_-]/g,'');
+    const limit=num($('whaleWindow').value,500),depth=num($('whaleDepth').value,100),minN=num($('whaleMin').value,25000);
+    state.lastFlowSymbol=symbol;
+    const providers=Array.from(new Set(provider==='binance'?['binance','okx','bybit']:[provider,'binance','okx']));
+    const results=(await Promise.all(providers.map(function(p){
+      return Promise.all([fetchDepth(p,symbol,depth),fetchTrades(p,symbol,limit)]).then(function(v){
+        const tp=whaleTradeProfile(v[1],minN);
+        return {provider:p,depth:v[0],trades:v[1],bias:tp.whaleBias,sample:tp.ts.length};
+      }).catch(function(){return null;});
+    }))).filter(Boolean);
+    const main=results.find(function(x){return x.provider===provider;})||results[0];
+    if(!main)throw new Error('WHale_DATA_UNAVAILABLE');
+    const history=state.whaleMonitor.history||[],previous=history.at(-1)||null;
+    const w=detectWhales(main.depth,main.trades,minN,{previous:previous,venues:results,sources:results.map(function(x){return x.provider.toUpperCase()+' Spot';}),dataAgeMs:0});
+    w.symbol=symbol;w.provider=main.provider;w.checkedAt=Date.now();w.venueCount=results.length;
+    state.whaleMonitor.symbol=symbol;state.whaleMonitor.provider=main.provider;
+    state.whaleMonitor.history=history.concat([{ts:w.checkedAt,nearBid:w.nearBid,nearAsk:w.nearAsk}]).slice(-12);
+    state.lastFlow={...flowFromData(main.depth,main.trades),whales:w};
+    renderWhaleOutput(w,'live');markLiveData('live_rest',t('liveRest')+' · '+symbol+' · Whale Forensics');
+    return w;
+  }
+  function stopWhaleMonitoring(){
+    const wm=state.whaleMonitor;if(!wm)return;
+    wm.enabled=false;clearInterval(wm.timer);wm.timer=null;
+  }
+  function toggleWhaleMonitoring(){
+    const wm=state.whaleMonitor,btn=$('whaleWatchBtn');
+    if(wm.enabled){
+      stopWhaleMonitoring();
+      if(btn)btn.textContent=state.lang==='ar'?'🛰️ مراقبة مستمرة':'🛰️ Continuous monitor';
+      return;
+    }
+    wm.enabled=true;clearInterval(wm.timer);
+    wm.timer=setInterval(function(){if(document.visibilityState==='visible'&&wm.symbol)scanWhalesOnce().catch(function(){});},20000);
+    if(btn)btn.textContent=state.lang==='ar'?'⏹ إيقاف مراقبة الحيتان':'⏹ Stop whale monitoring';
+  }
   async function analyzeWhales(){
     try{await scanWhalesOnce();state.whaleMonitor.enabled=true;clearInterval(state.whaleMonitor.timer);state.whaleMonitor.timer=setInterval(function(){if(document.visibilityState==='visible')scanWhalesOnce().catch(function(){});},20000);const btn=$('whaleWatchBtn');if(btn){btn.textContent=state.lang==='ar'?'⏹ إيقاف مراقبة الحيتان':'⏹ Stop whale monitoring';}toast(t('liveUpdated'));}
     catch(e){renderWhaleOutput({score:50,confidence:0,dataQuality:0,bigBuys:0,bigSells:0,buyValue:0,sellValue:0,net:0,buyPressure:0,sellPressure:0,direction:'BALANCED',threshold:num($('whaleMin').value,25000),biggest:null,top:[],warnings:['لا تتوفر بيانات موثوقة الآن']},'offline');markLiveData(state.markets.length?'cached':'offline');toast(t('liveFailed'));}
