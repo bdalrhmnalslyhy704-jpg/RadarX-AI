@@ -27,3 +27,28 @@ test('TEST_FIXTURE: subscription/settings API requires auth and never returns pu
   const del=await fetch(base+'/v1/subscriptions/'+rows.subscriptions[0].id,{method:'DELETE',headers:{Authorization:'Bearer '+token}});
   assert.equal(del.status,200);await new Promise(r=>server.close(r));
 });
+
+test('TEST_FIXTURE: authenticated config exposes only the VAPID public key and signal detail is retrievable',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-api-detail-')),store=await new DurableStore({dir}).init();
+  const secret='TEST_FIXTURE_AUTH_SECRET',config={auth:{secret,allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100},
+    symbols:['BTCUSDT'],timeframes:['4h','1h','15m'],push:{vapidPublicKey:'TEST_FIXTURE_PUBLIC',vapidPrivateKey:'TEST_FIXTURE_PRIVATE'}};
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const provider=new NoopPushProvider();
+  await store.appendSignalAudit({signal_id:'TEST_FIXTURE_SIGNAL_DETAIL',user_id:'u1',source_time:1700000000000,processed_at:1700000001000,
+    symbol:'BTCUSDT',timeframe:'15m',price:100,strategy:'CONFIRMED_BREAKOUT',data_quality:95,liquidity_quality:90,
+    signal_snapshot:{signal_id:'TEST_FIXTURE_SIGNAL_DETAIL',symbol:'BTCUSDT',direction:'LONG',market:'SPOT',
+      strategy:'CONFIRMED_BREAKOUT',signal_type:'CONFIRMED',candle:{timeframe:'15m',open_time:1699999100000,close_time:1700000000000,closed:true},
+      scores:{data_quality:95,liquidity_quality:90,confidence_score:'UNKNOWN'},risk_filter:'PASS',
+      data_status:{source:'TEST_FIXTURE',stale:false,gaps:false,future_data_detected:false},
+      paper_trade:{enabled:true,real_order_execution:false},reason_codes:['TEST_FIXTURE_REASON']}
+  });
+  const server=createApiServer({config,store,monitor,pushProvider:provider});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const port=server.address().port,base='http://127.0.0.1:'+port,token=createSessionToken({userId:'u1',secret,ttlSec:3600});
+  const h={Authorization:'Bearer '+token};
+  const cfgRes=await fetch(base+'/v1/config',{headers:h});assert.equal(cfgRes.status,200);const cfg=await cfgRes.json();
+  assert.equal(cfg.push.vapidPublicKey,'TEST_FIXTURE_PUBLIC');assert.equal('vapidPrivateKey' in cfg.push,false);assert.equal('vapidPrivateKey' in JSON.stringify(cfg),false);
+  const detail=await fetch(base+'/v1/signals/TEST_FIXTURE_SIGNAL_DETAIL',{headers:h});assert.equal(detail.status,200);const d=await detail.json();
+  assert.equal(d.event.signal_snapshot.scores.confidence_score,'UNKNOWN');assert.equal(d.event.signal_snapshot.paper_trade.real_order_execution,false);
+  await new Promise(resolve=>server.close(resolve));
+});
