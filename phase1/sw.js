@@ -4,10 +4,10 @@ const SHELL = [
   './radarx-phase1-engine.mjs',
   './manifest.json',
   './sw.js',
-  './icons/icon-192.png',
-  './icons/icon-512.png',
-  './icons/icon-512-maskable.png',
-  './icons/apple-touch-icon.png'
+  './icons/icon-192.svg',
+  './icons/icon-512.svg',
+  './icons/icon-512-maskable.svg',
+  './icons/apple-touch-icon.svg'
 ];
 
 self.addEventListener('install', event => {
