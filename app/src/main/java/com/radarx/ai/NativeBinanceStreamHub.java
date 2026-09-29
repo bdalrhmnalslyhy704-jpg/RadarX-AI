@@ -9,6 +9,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -27,6 +28,7 @@ public final class NativeBinanceStreamHub {
     private final OkHttpClient client;
     private final Map<String, Slot> slots = new ConcurrentHashMap<>();
     private final ConcurrentLinkedQueue<Event> events = new ConcurrentLinkedQueue<>();
+    private final AtomicInteger eventCount = new AtomicInteger(0);
     // !miniTicker@arr is a full-market snapshot. Keeping every snapshot in the
     // queue causes large JSON bursts on mobile. Retain only the newest ticker
     // snapshot; selected-symbol streams keep their event-by-event semantics.
@@ -68,6 +70,7 @@ public final class NativeBinanceStreamHub {
         for (String id : slots.keySet()) stop(id);
         scheduler.shutdownNow();
         events.clear();
+        eventCount.set(0);
         latestSnapshots.clear();
     }
 
@@ -78,6 +81,7 @@ public final class NativeBinanceStreamHub {
         while (count < limit) {
             Event e = events.poll();
             if (e == null) break;
+            eventCount.decrementAndGet();
             if (count++ > 0) out.append(',');
             out.append("{\"id\":\"").append(escape(e.id))
                     .append("\",\"type\":\"").append(escape(e.type))
@@ -199,8 +203,14 @@ public final class NativeBinanceStreamHub {
     }
 
     private void emit(String id, String type, String payload) {
-        if (events.size() >= 400) events.poll();
-        events.offer(new Event(id, type, payload == null ? "" : payload));
+        Event next = new Event(id, type, payload == null ? "" : payload);
+        while (eventCount.get() >= 400) {
+            Event dropped = events.poll();
+            if (dropped == null) break;
+            eventCount.decrementAndGet();
+        }
+        events.offer(next);
+        eventCount.incrementAndGet();
     }
 
     private static String escape(String value) {
