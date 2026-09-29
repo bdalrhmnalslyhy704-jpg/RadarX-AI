@@ -24,7 +24,7 @@ jobs:
           echo "ci_exit_code=$?" >> ci-output.log
           npm audit --omit=dev --audit-level=critical > audit-output.log 2>&1
           echo "audit_exit_code=$?" >> audit-output.log
-          npm test > test-output.log 2>&1
+          timeout 25s npm test > test-output.log 2>&1
           echo "test_exit_code=$?" >> test-output.log
       - name: Upload diagnostics
         if: always()
