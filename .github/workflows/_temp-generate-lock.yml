@@ -14,18 +14,39 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Install lockfile and capture output
+      - name: Generate and validate lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --package-lock-only --ignore-scripts
+          git diff --exit-code -- package-lock.json
+      - name: Clean install with npm ci and retries
         shell: bash
         run: |
           set +e
-          npm install --package-lock-only --ignore-scripts > install-output.log 2>&1
-          echo "install_exit_code=$?" >> install-output.log
-          npm ci --ignore-scripts > ci-output.log 2>&1
-          echo "ci_exit_code=$?" >> ci-output.log
-          npm audit --omit=dev --audit-level=critical > audit-output.log 2>&1
-          echo "audit_exit_code=$?" >> audit-output.log
-          timeout 25s npm test > test-output.log 2>&1
-          echo "test_exit_code=$?" >> test-output.log
+          rc=1
+          for attempt in 1 2 3; do
+            rm -rf node_modules
+            npm cache clean --force >/dev/null 2>&1 || true
+            npm ci --ignore-scripts --prefer-online --fetch-retries=5 --fetch-retry-factor=2 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=30000 > "ci-output-${attempt}.log" 2>&1
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              break
+            fi
+          done
+          cat ci-output-1.log ci-output-2.log ci-output-3.log 2>/dev/null || true
+          echo "ci_exit_code=$rc" > ci-result.log
+          exit 0
+      - name: Audit production dependencies (critical threshold)
+        run: npm audit --omit=dev --audit-level=critical
+      - name: Run test suite with captured log
+        shell: bash
+        run: |
+          set +e
+          timeout 60s npm test 2>&1 | tee test-output.log
+          rc=${PIPESTATUS[0]}
+          echo "test_exit_code=$rc" >> test-output.log
+          exit 0
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -33,8 +54,9 @@ jobs:
           name: runtime-compat-diagnostics
           path: |
             package-lock.json
-            install-output.log
-            ci-output.log
-            audit-output.log
+            ci-output-1.log
+            ci-output-2.log
+            ci-output-3.log
+            ci-result.log
             test-output.log
           if-no-files-found: error
