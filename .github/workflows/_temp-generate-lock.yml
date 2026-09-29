@@ -20,6 +20,8 @@ jobs:
         run: |
           rm -rf node_modules
           npm ci --ignore-scripts
+      - name: Audit production dependencies (critical threshold)
+        run: npm audit --omit=dev --audit-level=critical
       - name: Run test suite with captured log
         shell: bash
         run: |
