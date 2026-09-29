@@ -1,4 +1,4 @@
-const CACHE_NAME = 'radarx-phase2-shell-v2';
+const CACHE_NAME = 'radarx-phase2-shell-v3';
 const SHELL = [
   './app.html',
   './settings.html',
@@ -62,6 +62,9 @@ self.addEventListener('fetch', event => {
 });
 
 function notificationText(p) {
+  if(p.event_class==='TEST_PUSH_ONLY'||p.type==='TEST_PUSH_ONLY'){
+    return 'اختبار إشعار فقط — ليس تحليلًا للسوق';
+  }
   const price=p.price==null?'UNKNOWN':String(p.price);
   const dq=p.data_quality==null?'UNKNOWN':String(p.data_quality);
   const lq=p.liquidity_quality==null?'UNKNOWN':String(p.liquidity_quality);
@@ -76,11 +79,12 @@ self.addEventListener('push', event => {
     let payload = {};
     try { payload = event.data ? event.data.json() : {}; } catch { payload = {}; }
     const receivedAt = Date.now();
-    const title = 'RadarX • '+String(payload.symbol||'UNKNOWN')+' '+String(payload.direction||'UNKNOWN');
-    const body = notificationText(payload)+'\nهذه إشارة تحليلية وليست ضمانًا للربح.';
+    const isTest = payload.event_class==='TEST_PUSH_ONLY'||payload.type==='TEST_PUSH_ONLY';
+    const title = isTest ? 'RadarX • TEST_PUSH_ONLY' : 'RadarX • '+String(payload.symbol||'UNKNOWN')+' '+String(payload.direction||'UNKNOWN');
+    const body = isTest ? 'اختبار إشعار فقط — ليس تحليلًا للسوق' : notificationText(payload)+'\nهذه إشارة تحليلية وليست ضمانًا للربح.';
     await self.registration.showNotification(title, {
       body,
-      tag: 'radarx-signal-'+String(payload.signal_id||receivedAt),
+      tag: 'radarx-'+(isTest?'test-':'signal-')+String(payload.event_id||payload.signal_id||receivedAt),
       renotify: false,
       data: {...payload, received_at: receivedAt},
       icon: './icons/icon-192.svg',
@@ -93,18 +97,26 @@ self.addEventListener('notificationclick', event => {
   event.notification.close();
   event.waitUntil((async() => {
     const p = event.notification.data || {};
-    const id = p.signal_id;
     const receivedAt = Number(p.received_at || Date.now());
+    if(p.event_class==='TEST_PUSH_ONLY'||p.type==='TEST_PUSH_ONLY'){
+      const testTarget = new URL('./settings.html', self.registration.scope);
+      testTarget.searchParams.set('test_push','1');
+      testTarget.searchParams.set('event_id',String(p.event_id||''));
+      testTarget.searchParams.set('received_at',String(receivedAt));
+      const windows = await self.clients.matchAll({type:'window', includeUncontrolled:true});
+      for (const client of windows) {
+        try { await client.navigate(testTarget.href); await client.focus(); return; } catch {}
+      }
+      await self.clients.openWindow(testTarget.href);
+      return;
+    }
+    const id = p.signal_id;
     const target = new URL('./signal.html', self.registration.scope);
     if (id) target.searchParams.set('signal_id', id);
     target.searchParams.set('received_at', String(receivedAt));
     const windows = await self.clients.matchAll({type:'window', includeUncontrolled:true});
     for (const client of windows) {
-      try {
-        await client.navigate(target.href);
-        await client.focus();
-        return;
-      } catch {}
+      try { await client.navigate(target.href); await client.focus(); return; } catch {}
     }
     await self.clients.openWindow(target.href);
   })());
