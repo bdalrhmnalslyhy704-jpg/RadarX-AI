@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#071018"><link rel="manifest" href="./manifest.json"><title>RadarX — الإعدادات والتنبيهات</title>
+<style>
+:root{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#eaf5f8;background:#071018;color-scheme:dark}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#071018,#091721)}main{width:min(760px,100%);margin:auto;padding:20px 14px 36px}
+.top{display:flex;justify-content:space-between;gap:10px;align-items:center}.brand{font-size:22px;font-weight:950}.muted{color:#8da7b1;font-size:12px;line-height:1.55}
+.panel{background:#0b1820;border:1px solid #1d3944;border-radius:16px;padding:14px;margin-top:12px}.row{display:flex;gap:8px;flex-wrap:wrap}.field{flex:1;min-width:180px}
+label{display:block;font-size:12px;font-weight:800;margin-bottom:6px}.input,.btn{width:100%;min-height:46px;border-radius:11px;border:1px solid #2a4c58;background:#08131a;color:#fff;padding:0 12px;font:inherit}.btn{font-weight:900;cursor:pointer}.btn:active{transform:translateY(1px)}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.check{display:flex;align-items:center;gap:8px;padding:10px;border:1px solid #17313a;border-radius:10px;background:#08131a}.check input{width:18px;height:18px}
+.status{padding:9px 11px;border-radius:999px;border:1px solid #31515f;font-size:11px;font-weight:900}.ok{border-color:#268c68;color:#b5f5da}.bad{border-color:#9b4651;color:#ffc4ca}.warn{border-color:#90713a;color:#ffe0a0}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.danger{border-color:#8d3b45}
+.notice{padding:10px;border-radius:11px;background:#08131a;border:1px solid #17313a;margin-top:10px}.hidden{display:none}
+@media(max-width:520px){.grid{grid-template-columns:1fr}.actions{grid-template-columns:1fr}.field{min-width:100%}}
+</style>
+</head>
+<body><main>
+<div class="top"><div><div class="brand">RadarX</div><div class="muted">إعدادات المراقبة والتنبيهات</div></div><a class="btn" style="display:block;width:auto;padding:0 14px;text-decoration:none;line-height:46px" href="./app.html">العودة</a></div>
+
+<section class="panel">
+  <div class="row">
+    <div class="field"><label for="base">عنوان خدمة Phase 2</label><input id="base" class="input" placeholder="https://your-domain.example"></div>
+    <div class="field"><label for="token">Session Token</label><input id="token" class="input" type="password" autocomplete="off" placeholder="Bearer token بدون كلمة Bearer"></div>
+  </div>
+  <div class="actions" style="margin-top:10px"><button id="saveConn" class="btn">حفظ الاتصال</button><button id="load" class="btn">اختبار الاتصال</button></div>
+  <div id="connStatus" class="notice muted">لم يتم الاختبار بعد.</div>
+</section>
+
+<section class="panel">
+  <h3 style="margin:0 0 8px">التنبيهات</h3>
+  <div class="actions">
+    <button id="enablePush" class="btn">تشغيل التنبيهات</button>
+    <button id="disablePush" class="btn danger">إيقاف/إلغاء الاشتراك</button>
+  </div>
+  <div id="pushStatus" class="notice muted">الإشعارات غير مفعلة بعد.</div>
+</section>
+
+<section class="panel">
+  <h3 style="margin:0 0 8px">العملات</h3><div id="symbols" class="grid"></div>
+  <h3 style="margin:14px 0 8px">الأطر الزمنية</h3><div id="timeframes" class="grid"></div>
+  <h3 style="margin:14px 0 8px">أنواع الإشارات</h3><div id="signalTypes" class="grid"></div>
+</section>
+
+<section class="panel">
+  <div class="row">
+    <div class="field"><label for="dq">الحد الأدنى لجودة البيانات</label><input id="dq" class="input" type="number" min="0" max="100" step="1"></div>
+    <div class="field"><label for="lq">الحد الأدنى لجودة السيولة</label><input id="lq" class="input" type="number" min="0" max="100" step="1"></div>
+  </div>
+  <label class="check" style="margin-top:10px"><input id="enabled" type="checkbox"><span>السماح بإرسال التنبيهات لهذا الحساب</span></label>
+  <button id="saveSettings" class="btn" style="margin-top:10px">حفظ الإعدادات</button>
+  <div id="saveStatus" class="notice muted">—</div>
+</section>
+
+<script type="module">
+import {getBaseUrl,setBaseUrl,getSessionToken,setSessionToken,apiConfig,apiHealth,apiReady,apiSettings,apiSaveSettings,apiSubscriptions,apiAddSubscription,apiDeleteSubscription} from './phase2-api.mjs';
+
+const $=id=>document.getElementById(id);
+const fields={
+ symbols:$('symbols'),timeframes:$('timeframes'),signalTypes:$('signalTypes')
+};
+const signalOptions=['ENTRY_CANDIDATE','CONFIRMED'];
+let config=null,settings=null;
+
+function b64ToBytes(base64){
+  const padded=base64.replace(/-/g,'+').replace(/_/g,'/')+'==='.slice((base64.length+3)%4);
+  const raw=atob(padded);return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));
+}
+function setMsg(el,text,kind=''){el.textContent=text;el.className='notice '+kind}
+function renderChecks(container,values,selected,prefix){
+  container.innerHTML=values.map(v=>'<label class="check"><input type="checkbox" data-group="'+prefix+'" value="'+v+'" '+(selected.includes(v)?'checked':'')+'><span>'+v+'</span></label>').join('');
+}
+function selected(prefix){return [...document.querySelectorAll('input[data-group="'+prefix+'"]:checked')].map(x=>x.value)}
+async function connect(){
+  try{
+    const [h,r,c,s]=await Promise.all([apiHealth(),apiReady(),apiConfig(),apiSettings()]);
+    config=c;settings=s.settings;
+    setMsg($('connStatus'),'Health: '+h.websocket.state+' • Ready: '+r.ready+' • REST: '+h.rest.state+' • DB: '+h.database.state,'ok');
+    renderChecks(fields.symbols,c.symbols,s.settings.symbols,'symbol');
+    renderChecks(fields.timeframes,c.timeframes,s.settings.timeframes,'timeframe');
+    renderChecks(fields.signalTypes,signalOptions,s.settings.signalTypes,'signal');
+    $('dq').value=s.settings.minDataQuality;$('lq').value=s.settings.minLiquidityQuality;$('enabled').checked=s.settings.enabled;
+    $('pushStatus').textContent='Push provider: '+c.push.provider+' • '+(c.push.enabled?'مفعّل بالخادم':'غير مفعّل بالخادم');
+  }catch(e){setMsg($('connStatus'),'فشل الاتصال: '+e.message,'bad')}
+}
+async function saveSettings(){
+  try{
+    const body={enabled:$('enabled').checked,symbols:selected('symbol'),timeframes:selected('timeframe'),
+      signalTypes:selected('signal'),minDataQuality:Number($('dq').value),minLiquidityQuality:Number($('lq').value)};
+    settings=(await apiSaveSettings(body)).settings;setMsg($('saveStatus'),'تم حفظ الإعدادات على الخادم.','ok');
+  }catch(e){setMsg($('saveStatus'),'فشل الحفظ: '+e.message,'bad')}
+}
+async function enablePush(){
+  try{
+    if(!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window)){
+      setMsg($('pushStatus'),'المتصفح لا يدعم Web Push في هذه البيئة.','bad');return;
+    }
+    const perm=await Notification.requestPermission();
+    if(perm!=='granted'){setMsg($('pushStatus'),'تم رفض إذن الإشعارات؛ لم يتم إنشاء اشتراك.','bad');return;}
+    const reg=await navigator.serviceWorker.register('./sw.js');
+    const c=await apiConfig();
+    if(c.push.provider!=='webpush'||!c.push.vapidPublicKey){setMsg($('pushStatus'),'VAPID Public Key غير مضبوط على الخادم أو Push معطل.','bad');return;}
+    let subscription=await reg.pushManager.getSubscription();
+    if(!subscription)subscription=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64ToBytes(c.push.vapidPublicKey)});
+    const saved=await apiAddSubscription(subscription.toJSON());
+    await apiSaveSettings({...settings,enabled:true});
+    setMsg($('pushStatus'),'تم تسجيل Push Subscription بنجاح. المعرّف: '+saved.subscription.id,'ok');
+  }catch(e){
+    setMsg($('pushStatus'),'فشل تفعيل Push: '+e.message,'bad');
+  }
+}
+async function disablePush(){
+  try{
+    const list=await apiSubscriptions();
+    const reg=await navigator.serviceWorker.getRegistration('./');
+    const local=reg?await reg.pushManager.getSubscription():null;
+    for(const row of list.subscriptions){
+      if(!local||row.endpoint===local.endpoint)await apiDeleteSubscription(row.id);
+    }
+    if(local)await local.unsubscribe();
+    setMsg($('pushStatus'),'تم إلغاء الاشتراك وإزالة subscription من الخادم.','ok');
+  }catch(e){setMsg($('pushStatus'),'فشل إلغاء الاشتراك: '+e.message,'bad')}
+}
+$('base').value=getBaseUrl();$('token').value=getSessionToken();
+$('saveConn').onclick=()=>{setBaseUrl($('base').value);setSessionToken($('token').value);setMsg($('connStatus'),'تم حفظ إعدادات الاتصال محليًا لهذه الجلسة.','ok')};
+$('load').onclick=connect;$('saveSettings').onclick=saveSettings;$('enablePush').onclick=enablePush;$('disablePush').onclick=disablePush;
+if(getSessionToken())connect(); else setMsg($('connStatus'),'أدخل عنوان الخدمة وSession Token ثم اختبر الاتصال.','warn');
+</script>
+</body></html>
