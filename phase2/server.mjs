@@ -15,11 +15,11 @@ export async function startServer({config=CONFIG,logger=console}={}){
   const rest=new RestClient(config.rest);
   const dedup=new SignalDeduplicator({store,windowMs:15*60*1000});
   const provider=createPushProvider(config.push);
-  const push=new PushManager({provider,store,retryBaseMs:config.monitoring.pushRetryMs});
+  const push=new PushManager({provider,store,deduplicator:dedup,retryBaseMs:config.monitoring.pushRetryMs});
   const service=new SignalService({deduplicator:dedup,store,pushManager:push,config});
   const monitor=new MarketMonitor({config,rest,wsFactory:opts=>new BinanceStreamClient(opts),signalService:service,store,pushManager:push,logger});
   await monitor.start();
-  const api=createApiServer({config,store,monitor,pushProvider:provider});
+  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
