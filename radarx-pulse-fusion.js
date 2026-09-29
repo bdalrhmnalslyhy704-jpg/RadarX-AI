@@ -5,6 +5,7 @@
   const CFG={horizonBars:6,minMoveATR:.22,maxPending:18,minSamples:6,cacheMs:350};
   let lastEval={key:'',at:0,value:null};
   let cachedCalibration=null;
+  let breadthCache={key:'',value:50};
   const clamp=(x,a=0,b=100)=>Math.max(a,Math.min(b,Number.isFinite(Number(x))?Number(x):50));
   const num=(x,d=0)=>Number.isFinite(Number(x))?Number(x):d;
   const sma=(a,p)=>{const x=a.slice(-p);return x.length?x.reduce((s,v)=>s+num(v),0)/x.length:0;};
@@ -53,7 +54,14 @@
     const widths=[];for(let i=20;i<closes.length;i++){const z=stdev(closes.slice(i-20,i)),m=sma(closes.slice(i-20,i),20)||1;widths.push(z*4/m*100);}
     const bw=widths.at(-1)||0,bwp=percentile(widths,bw),rangePct=clamp(sma(ranges.slice(-20),20)/Math.max(1,closes.at(-1))*100,0,20);
     const trend=Math.abs(e20-e50)/Math.max(a,closes.at(-1)*.001);
-    const breadth=st.markets?.length?st.markets.filter(x=>num(x.priceChangePercent)>0).length/st.markets.length*100:50;
+    const markets=st.markets||[];
+    const breadthKey=String(markets.length)+'|'+String(num(st.multiRadar?.lastUpdated||st.multiRadar?.cacheAt,0));
+    let breadth=50;
+    if(breadthCache.key===breadthKey) breadth=breadthCache.value;
+    else{
+      breadth=markets.length?markets.filter(x=>num(x.priceChangePercent)>0).length/markets.length*100:50;
+      breadthCache={key:breadthKey,value:breadth};
+    }
     let type='RANGE';
     if(adxV>=28&&trend>=1.2)type='TREND';
     else if(bwp<=22)type='SQUEEZE';
@@ -224,5 +232,5 @@
     const result={score,confidence,coverage,freshness,ageMs,label,direction:dir>0?'BULLISH':'BEARISH',regime:reg.type,regimeStats:reg,parts:comps,weights:w,calibration:Object.fromEntries(Object.entries(cal.components||{}).map(([k,v])=>[k,{reliability:reliability(v),samples:num(v.n)}])),conflict:conflict,trapPenalty:trap,reasons,reasonsText:reasons.slice(0,8),conflicts:conflictsList,metrics:{rsi:mom.rsi,rv:vol.rv,accel2:mom.accel2,bw:comp.bw,bwPercentile:comp.bwP,adx:adxV,whale:fl.whale,mtf:mtf.score,mtfAgreement:mtf.agreement,breadth:breadth,relative:rel.edge,spread:liq.spread,vwapDistance:((num(last.c)-vwap(closed))/Math.max(a,num(last.c)*.001))*100,efficiency:eff.er,donchian:don.score,priceVolume:pvd.score,volSigma:vf.sigma,volShortLong:vf.shortLong,volSkew:vf.skew,changePoint:cp.score}};
     lastEval={key:cacheKey,at:performance.now(),value:result};return result;
   }
-  window.RadarXPulseFusion={evaluate,calibration,clearCalibration:function(){try{localStorage.removeItem(KEY);}catch{}invalidateCalibration();lastEval={key:'',at:0,value:null};},version:'3.0-fusion-adaptive'};
+  window.RadarXPulseFusion={evaluate,calibration,clearCalibration:function(){try{localStorage.removeItem(KEY);}catch{}invalidateCalibration();lastEval={key:'',at:0,value:null};breadthCache={key:'',value:50};},version:'3.0-fusion-adaptive'};
 })();
