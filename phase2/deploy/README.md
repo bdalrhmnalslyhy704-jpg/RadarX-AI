@@ -1,3 +1,7 @@
+# Render scope note
+
+This document is legacy VPS/systemd documentation; Render settings are defined in `MANAGED_STAGING_RUNBOOK.md`.
+
 # RadarX Phase 2 — Staging Deployment Ready
 
 This directory contains deployment templates only. No public deployment is performed by committing these files.

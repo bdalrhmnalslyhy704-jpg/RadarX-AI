@@ -25,12 +25,12 @@ async function setup(){
     auth:{secret,allowedOrigins:['https://staging.example.test']},
     api:{maxBodyBytes:65536,rateLimitPerMinute:100},
     symbols:['BTCUSDT'],timeframes:['4h','1h','15m'],
-    push:{vapidPublicKey:'TEST_FIXTURE_PUBLIC'}
+    push:{vapidPublicKey:'TEST_FIXTURE_PUBLIC'},api:{publicOrigin:'https://api.example.test',maxBodyBytes:65536,rateLimitPerMinute:100}
   };
   const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
   const provider=new TestWebPushProvider();
   const dedup=new SignalDeduplicator({store,windowMs:900000});
-  const pushManager=new PushManager({provider,store,deduplicator:dedup,retryBaseMs:1});
+  const pushManager=new PushManager({provider,store,deduplicator:dedup,retryBaseMs:1,config});
   const server=createApiServer({config,store,monitor,pushProvider:provider,pushManager});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const port=server.address().port,base='http://127.0.0.1:'+port;
@@ -97,3 +97,8 @@ test('TEST_FIXTURE: staging test endpoint is disabled outside the explicit stagi
   assert.equal(r.status,404);assert.equal(provider.calls.length,0);
   await new Promise(resolve=>server.close(resolve));
 });
+
+
+test('TEST_FIXTURE: HTTP 202/provider SENT does not validate physical delivery',async()=>{const x=await setup();assert.equal((await x.store.getStagingPushValidationStatus()).status,'NOT_VALIDATED');await new Promise(r=>x.server.close(r));});
+
+test('TEST_FIXTURE: validation requires exact subscription, event, device token and one-time ack token',async()=>{const x=await setup(),sub=(await x.store.getSubscriptions('staging-android'))[0],deviceToken='TEST_FIXTURE_DEVICE_TOKEN_123456789012345678901234',ackToken='TEST_FIXTURE_ACK_TOKEN_REAL',eventId='TEST_PUSH_ONLY:staging-android:ack-proof';await x.store.createStagingPushValidationChallenge({userId:'staging-android',subscriptionId:sub.id,testEventId:eventId,deviceToken,ackToken});await x.store.recordStagingPushValidationDelivery({subscriptionId:sub.id,testEventId:eventId,status:'SENT'});const bad=await x.store.acknowledgeStagingPushValidation({subscriptionId:sub.id,testEventId:eventId,deviceToken:'wrong',ackToken,deliveredAt:Date.now()});assert.equal(bad.accepted,false);assert.equal((await x.store.getStagingPushValidationStatus()).status,'NOT_VALIDATED');const good=await x.store.acknowledgeStagingPushValidation({subscriptionId:sub.id,testEventId:eventId,deviceToken,ackToken,deliveredAt:Date.now()});assert.equal(good.accepted,true);assert.equal(good.validation.status,'VALIDATED');assert.equal(good.validation.subscription_id,sub.id);assert.equal(good.validation.test_event_id,eventId);assert.ok(good.validation.acknowledgment.audit_record_id);await new Promise(r=>x.server.close(r));});

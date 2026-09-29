@@ -1,3 +1,7 @@
+# Render scope note
+
+This document describes the legacy VPS/systemd topology and is not the Render configuration. For Render use `phase2/deploy/MANAGED_STAGING_RUNBOOK.md` with `npm ci --omit=dev`, `npm start`, `RADARX_HOST=0.0.0.0`, the platform `PORT`, and `/var/data/radarx`.
+
 # RadarX Phase 2 — Real Push Staging Deployment
 
 ## Purpose

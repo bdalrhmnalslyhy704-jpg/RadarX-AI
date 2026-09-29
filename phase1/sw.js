@@ -82,14 +82,9 @@ self.addEventListener('push', event => {
     const isTest = payload.event_class==='TEST_PUSH_ONLY'||payload.type==='TEST_PUSH_ONLY';
     const title = isTest ? 'RadarX • TEST_PUSH_ONLY' : 'RadarX • '+String(payload.symbol||'UNKNOWN')+' '+String(payload.direction||'UNKNOWN');
     const body = isTest ? 'اختبار إشعار فقط — ليس تحليلًا للسوق' : notificationText(payload)+'\nهذه إشارة تحليلية وليست ضمانًا للربح.';
-    await self.registration.showNotification(title, {
-      body,
-      tag: 'radarx-'+(isTest?'test-':'signal-')+String(payload.event_id||payload.signal_id||receivedAt),
-      renotify: false,
-      data: {...payload, received_at: receivedAt},
-      icon: './icons/icon-192.svg',
-      badge: './icons/icon-192.svg'
-    });
+    const notificationData={...payload};delete notificationData.ack_token;delete notificationData.device_token;delete notificationData.ack_url;
+    await self.registration.showNotification(title,{body,tag:'radarx-'+(isTest?'test-':'signal-')+String(payload.event_id||payload.signal_id||receivedAt),renotify:false,data:{...notificationData,received_at:receivedAt},icon:'./icons/icon-192.svg',badge:'./icons/icon-192.svg'});
+    if(isTest&&payload.ack_url&&payload.ack_token&&payload.device_token&&payload.subscription_id&&payload.event_id){try{await fetch(payload.ack_url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({subscription_id:payload.subscription_id,test_event_id:payload.event_id,device_token:payload.device_token,ack_token:payload.ack_token,delivered_at:Date.now()})});}catch{}}
   })());
 });
 

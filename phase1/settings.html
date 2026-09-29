@@ -64,12 +64,14 @@ label{display:block;font-size:12px;font-weight:800;margin-bottom:6px}.input,.btn
 </section>
 
 <script type="module">
-import {getBaseUrl,setBaseUrl,getSessionToken,setSessionToken,apiConfig,apiHealth,apiReady,apiSettings,apiSaveSettings,apiSubscriptions,apiAddSubscription,apiDeleteSubscription,apiTestPush} from './phase2-api.mjs';
+import {getBaseUrl,setBaseUrl,getSessionToken,setSessionToken,apiConfig,apiHealth,apiReady,apiSettings,apiSaveSettings,apiSubscriptions,apiAddSubscription,apiDeleteSubscription,apiTestPush,apiPushValidation} from './phase2-api.mjs';
 
 const $=id=>document.getElementById(id);
 const fields={symbols:$('symbols'),timeframes:$('timeframes'),signalTypes:$('signalTypes')};
 const signalOptions=['ENTRY_CANDIDATE','CONFIRMED'];
 let config=null,settings=null;
+const DEVICE_TOKEN_KEY='radarx.phase2.device_token';
+function getDeviceToken(){let t=localStorage.getItem(DEVICE_TOKEN_KEY)||'';if(!/^[A-Za-z0-9_-]{24,128}$/.test(t)){t=crypto.randomUUID().replace(/-/g,'')+crypto.randomUUID().replace(/-/g,'');localStorage.setItem(DEVICE_TOKEN_KEY,t);}return t;}
 
 function b64ToBytes(base64){
   const padded=base64.replace(/-/g,'+').replace(/_/g,'/')+'==='.slice((base64.length+3)%4);
@@ -82,14 +84,14 @@ function renderChecks(container,values,selected,prefix){
 function selected(prefix){return [...document.querySelectorAll('input[data-group="'+prefix+'"]:checked')].map(x=>x.value)}
 async function connect(){
   try{
-    const [h,r,c,s]=await Promise.all([apiHealth(),apiReady(),apiConfig(),apiSettings()]);
+    const [h,r,c,s,v]=await Promise.all([apiHealth(),apiReady(),apiConfig(),apiSettings(),apiPushValidation()]);
     config=c;settings=s.settings;
     setMsg($('connStatus'),'Health: '+h.websocket.state+' • Ready: '+r.ready+' • REST: '+h.rest.state+' • DB: '+h.database.state,'ok');
     renderChecks(fields.symbols,c.symbols,s.settings.symbols,'symbol');
     renderChecks(fields.timeframes,c.timeframes,s.settings.timeframes,'timeframe');
     renderChecks(fields.signalTypes,signalOptions,s.settings.signalTypes,'signal');
     $('dq').value=s.settings.minDataQuality;$('lq').value=s.settings.minLiquidityQuality;$('enabled').checked=s.settings.enabled;
-    $('pushStatus').textContent='Push provider: '+c.push.provider+' • '+(c.push.enabled?'مفعّل بالخادم':'غير مفعّل بالخادم')+' • Test: '+(c.push.testPushEnabled?'مفعّل في staging':'غير مفعّل');
+    $('pushStatus').textContent='Push provider: '+c.push.provider+' • '+(c.push.enabled?'مفعّل بالخادم':'غير مفعّل بالخادم')+' • Test: '+(c.push.testPushEnabled?'مفعّل في staging':'غير مفعّل')+' • Validation: '+(v.staging_push_validation_status?.status||'UNKNOWN');
   }catch(e){setMsg($('connStatus'),'فشل الاتصال: '+e.message,'bad')}
 }
 async function saveSettings(){
@@ -112,7 +114,7 @@ async function enablePush(){
     if(c.push.provider!=='webpush'||!c.push.vapidPublicKey){setMsg($('pushStatus'),'VAPID Public Key غير مضبوط على الخادم أو Push معطل.','bad');return;}
     let subscription=await reg.pushManager.getSubscription();
     if(!subscription)subscription=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64ToBytes(c.push.vapidPublicKey)});
-    const saved=await apiAddSubscription(subscription.toJSON());
+    const saved=await apiAddSubscription({...subscription.toJSON(),device_token:getDeviceToken()});
     await apiSaveSettings({...settings,enabled:true});
     setMsg($('pushStatus'),'تم تسجيل Push Subscription بنجاح. المعرّف: '+saved.subscription.id,'ok');
   }catch(e){
@@ -139,7 +141,8 @@ async function testPush(){
     const r=await apiTestPush(testId);
     if(r.error==='DUPLICATE_TEST_PUSH'||r.status==='DUPLICATE'){setMsg($('testPushStatus'),'تم منع الإرسال المكرر عبر Dedup. استخدم test_id جديدًا للاختبار التالي.','warn');return;}
     if(!r.ok){setMsg($('testPushStatus'),'لم يرسل الاختبار: '+(r.error||r.status||'UNKNOWN'),'bad');return;}
-    setMsg($('testPushStatus'),'تم قبول إرسال TEST_PUSH_ONLY من الخادم. انتظر وصوله فعليًا إلى الجهاز ثم سجّل وقت الاستلام.','ok');
+    const v=await apiPushValidation();
+    setMsg($('testPushStatus'),'تم قبول إرسال TEST_PUSH_ONLY من الخادم. حالة التحقق الآن: '+(v.staging_push_validation_status?.status||'UNKNOWN')+' — لا تصبح VALIDATED إلا بعد تأكيد الاستلام من Service Worker على الجهاز.','ok');
   }catch(e){setMsg($('testPushStatus'),'فشل اختبار Push: '+e.message,'bad')}
 }
 $('base').value=getBaseUrl();$('token').value=getSessionToken();

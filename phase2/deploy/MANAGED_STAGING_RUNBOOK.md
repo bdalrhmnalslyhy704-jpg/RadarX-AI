@@ -17,7 +17,7 @@
 
 ## 1. Final managed architecture
 
-Render Web Services must listen on `0.0.0.0` and use the platform-provided `PORT`. This branch explicitly supports that combination only when `RADARX_ENV=staging` or `production` and `RADARX_HOST=0.0.0.0` is set. Local defaults remain loopback-only (`127.0.0.1`). The runtime gives `PORT` precedence over `RADARX_PORT` when `PORT` is present. citeturn980726search1
+Render Web Services must listen on `0.0.0.0` and use the platform-provided `PORT`. This branch explicitly supports that combination only when `RADARX_ENV=staging` or `production` and `RADARX_HOST=0.0.0.0` is set. Local defaults remain loopback-only (`127.0.0.1`). The runtime gives `PORT` precedence over `RADARX_PORT` (local fallback only) when `PORT` is present. citeturn980726search1
 
 **Do not deploy until all environment variables below are present and the Render service configuration matches this runbook.**
 
@@ -33,7 +33,7 @@ In the Render Dashboard:
 4. Select repository:
    `bdalrhmnalslyhy704-jpg/RadarX-AI`
 5. Select the branch:
-   `phase2-render-runtime-compatibility`
+   `phase2-predeploy-safety-fixes`
 6. Do **not** select `main`.
 7. Choose the Node.js runtime.
 8. Select a small paid Web Service for the first continuous staging test.
@@ -69,7 +69,7 @@ npm start
 The persistent-storage hard gate can be expressed operationally as:
 
 ```text
-test -n "$RADARX_DATA_DIR" && test -d "$RADARX_DATA_DIR" && test -w "$RADARX_DATA_DIR" || { echo "ERROR: persistent storage unavailable"; exit 1; }; node phase2/server.mjs
+test -n "$RADARX_DATA_DIR" && test -d "$RADARX_DATA_DIR" && test -w "$RADARX_DATA_DIR" || { echo "ERROR: persistent storage unavailable"; exit 1; }; npm start
 ```
 
 Use this guard as an optional pre-start check when a deployment platform does not already enforce the configured persistent disk.
@@ -179,18 +179,16 @@ Required Web Push variable names:
 Operational variables needed by this current deployment shape:
 
 - `RADARX_HOST`
-- `RADARX_PORT`
 - `RADARX_DATA_DIR`
 
 For the intended managed-host configuration, the values are planned as:
 
 ```text
 RADARX_HOST=0.0.0.0
-RADARX_PORT=10000
 RADARX_DATA_DIR=/var/data/radarx
 ```
 
-**These values are supported by the runtime-compatibility branch only when `RADARX_HOST=0.0.0.0` is explicitly set in staging/production.** Local development remains on `127.0.0.1` by default.
+**These values are supported by the predeploy safety branch only when `RADARX_HOST=0.0.0.0` is explicitly set in staging/production.** Local development remains on `127.0.0.1` by default.
 
 Render supports adding environment variables and secrets in the Dashboard and redeploying with the saved configuration. citeturn114003search7
 
@@ -222,6 +220,7 @@ Then set:
 
 ```text
 RADARX_ALLOWED_ORIGINS=https://radarx-staging.example.com
+RADARX_PUBLIC_API_ORIGIN=https://radarx-api-staging.example.com
 ```
 
 If you use Render's temporary `onrender.com` hostname during initial verification, substitute that exact HTTPS origin instead. When a custom staging domain is added, update the variable to the custom-domain origin and redeploy.
@@ -248,7 +247,7 @@ For a Render-only managed topology, use:
 The Static Site may use the same branch:
 
 ```text
-phase2-staging-deployment-ready
+phase2-predeploy-safety-fixes
 ```
 
 The PWA's final URL becomes the exact value used in `RADARX_ALLOWED_ORIGINS`.
@@ -279,7 +278,7 @@ The final execution order is:
 1. Confirm the approved code supports Render's `0.0.0.0` host binding and Render port.
 2. Create the paid Web Service.
 3. Connect GitHub repository.
-4. Select `phase2-staging-deployment-ready`.
+4. Select `phase2-predeploy-safety-fixes`.
 5. Set Node 24 LTS.
 6. Set build command.
 7. Attach the persistent disk.
@@ -542,22 +541,20 @@ Repository:
   bdalrhmnalslyhy704-jpg/RadarX-AI
 
 Branch:
-  phase2-staging-deployment-ready
+  phase2-predeploy-safety-fixes
 
 Runtime:
   Node.js 24 LTS
 
 Build:
-  npm install --omit=dev
+  npm ci --omit=dev
 
 Start:
-  node phase2/server.mjs
-  (with the persistent-storage guard shown above when the approved
-   Render host-binding patch is available)
+  npm start
+  (the Persistent Disk pre-start guard shown above may be used as an additional fail-closed check)
 
 Planned Render bind:
   RADARX_HOST=0.0.0.0
-  RADARX_PORT=10000
 
 Persistent data:
   RADARX_DATA_DIR=/var/data/radarx
@@ -571,7 +568,7 @@ Readiness:
 
 Mandatory:
   RADARX_ENV=staging
-  RADARX_STAGING_TEST_PUSH_ENABLED=true  (test window only)
+  RADARX_STAGING_TEST_PUSH_ENABLED=false  (set true only for the validated physical test window)
   RADARX_PUSH_PROVIDER=webpush
   RADARX_PAPER_TRADING=true
   RADARX_REAL_ORDER_EXECUTION=false
@@ -579,6 +576,7 @@ Mandatory:
 
 Origin:
   RADARX_ALLOWED_ORIGINS=<exact HTTPS PWA origin>
+  RADARX_PUBLIC_API_ORIGIN=<exact HTTPS API origin>
 
 Secrets (Dashboard/secret store only):
   RADARX_AUTH_SECRET
@@ -586,3 +584,12 @@ Secrets (Dashboard/secret store only):
   VAPID_PUBLIC_KEY
   VAPID_PRIVATE_KEY
 ```
+
+
+## 19. Pre-deploy safety validation gate
+
+Staging persists `staging_push_validation_status` inside DurableStore and starts at `NOT_VALIDATED`. HTTP 202 from TEST_PUSH_ONLY, CI, TEST_FIXTURE, or an automated provider response does not validate the device.
+
+The only transition to `VALIDATED` is a server-accepted Service Worker receipt acknowledgment bound to the exact `subscription_id`, `test_event_id`, one-time `ack_token`, per-device `device_token`, and `delivered_at`. The server records an audit ID and persists the validated subscription ID. The capability tokens are not returned by API responses and are removed from notification data before display/click handling.
+
+Until a valid acknowledgment is accepted, staging continues market monitoring, Paper Signal evaluation, and internal audit, but blocks LIVE_MARKET_SIGNAL Push. TEST_PUSH_ONLY remains allowed. TEST_FIXTURE is never validation evidence. Physical observation on the test phone is still required; the server-side gate only records the Service Worker receipt acknowledgment.

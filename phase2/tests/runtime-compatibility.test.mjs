@@ -55,6 +55,7 @@ async function startAndCheck({host,port}){
     VAPID_PUBLIC_KEY:'TEST_FIXTURE_VAPID_PUBLIC',
     VAPID_PRIVATE_KEY:'TEST_FIXTURE_VAPID_PRIVATE',
     RADARX_ALLOWED_ORIGINS:'https://staging.example.test',
+    RADARX_PUBLIC_API_ORIGIN:'https://api.example.test',
     RADARX_HOST:host,
     PORT:String(port),
     RADARX_DATA_DIR:dataDir,
@@ -114,4 +115,17 @@ test('server binds locally on 127.0.0.1 and health/readiness succeed',async()=>{
 
 test('server binds on 0.0.0.0 with staging PORT and health/readiness succeed',async()=>{
   await startAndCheck({host:'0.0.0.0',port:await freePort()});
+});
+
+
+test('async store health is awaited and rendered as JSON object in /readyz',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-readyz-async-'));const port=await freePort();
+  await startAndCheck({host:'127.0.0.1',port,storeHealth:async()=>{await new Promise(r=>setTimeout(r,5));return{state:'LIVE',path:dir,last_write_at:123};}});
+});
+
+test('/readyz returns 503 with JSON database state when storage is not ready',async()=>{
+  const port=await freePort(),dataDir=await mkdtemp(join(tmpdir(),'radarx-readyz-fail-'));const restore=withEnv({RADARX_ENV:'staging',RADARX_STAGING_TEST_PUSH_ENABLED:'false',RADARX_PUSH_PROVIDER:'webpush',RADARX_AUTH_SECRET:'TEST_FIXTURE_AUTH_SECRET_12345678901234567890',VAPID_SUBJECT:'mailto:operator@example.test',VAPID_PUBLIC_KEY:'TEST_FIXTURE_VAPID_PUBLIC',VAPID_PRIVATE_KEY:'TEST_FIXTURE_VAPID_PRIVATE',RADARX_ALLOWED_ORIGINS:'https://staging.example.test',RADARX_PUBLIC_API_ORIGIN:'https://api.example.test',RADARX_HOST:'127.0.0.1',PORT:String(port),RADARX_DATA_DIR:dataDir,RADARX_PAPER_TRADING:'true',RADARX_REAL_ORDER_EXECUTION:'false',RADARX_CONFIDENCE_MODE:'UNKNOWN'});
+  try{const started=await startServer({config:safeStagingConfig('127.0.0.1',port,dataDir),monitorFactory:()=>({async start(){},async stop(){},health:async()=>({database:{state:'ERROR',error:'STORAGE_DOWN'},websocket:{state:'LIVE'},rest:{state:'LIVE'},monitoring:{running:true},bootstrap_done:true})}),logger:{info(){},warn(){},error(){}}});
+    const r=await fetch('http://127.0.0.1:'+port+'/readyz'),raw=await r.text(),json=JSON.parse(raw);assert.equal(r.status,503);assert.equal(json.ready,false);assert.equal(json.health.database.state,'ERROR');assert.equal(typeof json.health.database,'object');assert.equal(raw.includes('{}'),false);await started.close();
+  }finally{restore();}
 });

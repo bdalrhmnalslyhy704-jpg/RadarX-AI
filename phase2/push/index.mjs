@@ -27,19 +27,27 @@ const payload=(s,processedAt=Date.now())=>({type:'RADARX_SIGNAL',event_class:mar
   risk_filter:s.risk_filter,risk_reasons:s.risk_reasons,reason_codes:s.reason_codes,source:s.data_status?.source??'UNKNOWN',
   source_time:s.candle?.close_time??null,server_processed_at:processedAt,confidence_score:'UNKNOWN',paper_trading:true,real_order_execution:false});
 
-const testPayload=(eventId,testId,processedAt=Date.now())=>({
+const testPayload=(eventId,testId,processedAt=Date.now(),ack={})=>({
   type:EVENT_CLASS.TEST_PUSH_ONLY,event_class:EVENT_CLASS.TEST_PUSH_ONLY,event_id:eventId,test_id:testId,
-  title:'RadarX • TEST_PUSH_ONLY',
-  message:'اختبار إشعار فقط — ليس تحليلًا للسوق',
-  server_processed_at:processedAt,confidence_score:'UNKNOWN',paper_trading:true,real_order_execution:false
+  title:'RadarX • TEST_PUSH_ONLY',message:'اختبار إشعار فقط — ليس تحليلًا للسوق',
+  server_processed_at:processedAt,confidence_score:'UNKNOWN',paper_trading:true,real_order_execution:false,
+  subscription_id:ack.subscriptionId??null,device_token:ack.deviceToken??null,ack_token:ack.ackToken??null,ack_url:ack.ackUrl??null
 });
 
 export class PushManager{
-  constructor({provider,store,deduplicator=null,retryBaseMs=15000}){this.provider=provider;this.store=store;this.deduplicator=deduplicator;this.retryBaseMs=retryBaseMs;this.retryQueue=new Map();}
+  constructor({provider,store,deduplicator=null,retryBaseMs=15000,config={environment:'development',api:{publicOrigin:''}}}){this.provider=provider;this.store=store;this.deduplicator=deduplicator;this.retryBaseMs=retryBaseMs;this.retryQueue=new Map();this.config=config;}
   status(){return this.provider.status();}
   async notifySignal(signal){
+    let validation=null;
+    if(this.config.environment==='staging'){
+      validation=await this.store.getStagingPushValidationStatus();
+      if(validation.status!=='VALIDATED')return{status:'BLOCKED_STAGING_PUSH_VALIDATION',notifications:[],validation};
+      const active=await this.store.getSubscriptions();
+      if(!active.some(x=>x.id===validation.subscription_id))return{status:'BLOCKED_STAGING_PUSH_VALIDATION_STALE',notifications:[],validation};
+    }
     const rows=await this.store.getSubscriptions(),cache=new Map(),out=[];
     for(const sub of rows){
+      if(this.config.environment==='staging'&&sub.id!==validation.subscription_id)continue;
       let settings=cache.get(sub.user_id);if(!settings){settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();cache.set(sub.user_id,settings);}
       if(!settings.enabled||!settings.symbols.includes(signal.symbol)||!settings.timeframes.includes(signal.candle?.timeframe)||!settings.signalTypes.includes(signal.signal_type))continue;
       if(Number(signal.scores?.data_quality)<settings.minDataQuality||Number(signal.scores?.liquidity_quality)<settings.minLiquidityQuality)continue;
@@ -50,7 +58,8 @@ export class PushManager{
       if(r.status==='GONE')await this.store.disableSubscription(sub.id);
       if(!r.ok&&r.status==='FAILED')this.retryQueue.set(sub.id+'|'+signal.signal_id,{subscription:sub,signal,nextAt:Date.now()+this.retryBaseMs,attempt:1});
     }
-    return out;
+    const status=out.some(x=>x.status==='SENT')?'SENT_OR_ATTEMPTED':out.length?'FAILED_OR_DISABLED':'NO_SUBSCRIBERS';
+    return{status,notifications:out,validation};
   }
   async notifyTestPush({userId,testId}) {
     const clean=String(testId||'').trim()||randomUUID();
@@ -76,7 +85,12 @@ export class PushManager{
     if(!rows.length)return{status:'NO_SUBSCRIPTIONS',event_id:eventId,test_id:clean,notifications:[]};
     const notifications=[];
     for(const sub of rows){
-      const attemptedAt=Date.now(),r=await this.provider.send(sub,testPayload(eventId,clean,attemptedAt));
+      if(!sub.device_token)continue;
+      const ackToken=randomUUID(),ackRequestedAt=Date.now();
+      await this.store.createStagingPushValidationChallenge({userId,subscriptionId:sub.id,testEventId:eventId,deviceToken:sub.device_token,ackToken,requestedAt:ackRequestedAt});
+      const ackUrl=(this.config.api?.publicOrigin||'')+'/v1/push/ack';
+      const attemptedAt=Date.now(),r=await this.provider.send(sub,testPayload(eventId,clean,attemptedAt,{subscriptionId:sub.id,deviceToken:sub.device_token,ackToken,ackUrl}));
+      await this.store.recordStagingPushValidationDelivery({subscriptionId:sub.id,testEventId:eventId,status:r.status,sentAt:Date.now()});
       const audit={event:'NOTIFICATION_ATTEMPT',event_class:EVENT_CLASS.TEST_PUSH_ONLY,event_id:eventId,test_id:clean,
         signal_id:null,subscription_id:sub.id,user_id:String(userId),status:r.status,provider:this.provider.status().provider,
         attempted_at:attemptedAt,reason:r.reason??null,http_status:r.httpStatus??null};
@@ -87,7 +101,7 @@ export class PushManager{
     await this.store.appendSignalAudit({event:'TEST_PUSH_ONLY_RESULT',event_class:EVENT_CLASS.TEST_PUSH_ONLY,event_id:eventId,test_id:clean,
       user_id:String(userId),status,source:'TEST_PUSH_ONLY',source_time:null,processed_at:Date.now(),
       confidence_score:'UNKNOWN',paper_trading:true,real_order_execution:false});
-    return{status,event_id:eventId,test_id:clean,notifications};
+    return{status,event_id:eventId,test_id:clean,notifications,validation:await this.store.getStagingPushValidationStatus()};
   }
   async flushRetries(now=Date.now()){
     for(const [k,j] of [...this.retryQueue.entries()]){

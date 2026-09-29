@@ -29,7 +29,8 @@ function validSettings(x,allowedSymbols){
 function subscriptionValid(x){
   if(typeof x?.endpoint!=='string'||!x.endpoint.startsWith('https://'))throw new Error('INVALID_PUSH_ENDPOINT');
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
-  return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
+  if(typeof x?.device_token!=='string'||!/^[A-Za-z0-9_-]{24,128}$/.test(x.device_token))throw new Error('INVALID_DEVICE_TOKEN');
+  return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,device_token:x.device_token,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
 export function createApiServer({config,store,monitor,pushProvider,pushManager=null}){
   const counters=new Map();
@@ -57,15 +58,29 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(!rateOk(key))return send(res,429,{error:'RATE_LIMITED'});
     try{
       const u=new URL(req.url,'http://localhost');
-      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,monitor.health());
+      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,await monitor.health());
       if(u.pathname==='/readyz'&&req.method==='GET'){
-        const h=monitor.health(),ok=h.database.state==='LIVE'&&(h.websocket.state==='LIVE'||h.rest.state==='LIVE');return send(res,ok?200:503,{ready:ok,health:h});
+        const h=await monitor.health(),ok=h.database?.state==='LIVE'&&(h.websocket?.state==='LIVE'||h.rest?.state==='LIVE');return send(res,ok?200:503,{ready:ok,health:h});
       }
       if(!u.pathname.startsWith('/v1/'))return send(res,404,{error:'NOT_FOUND'});
+
+      // TEST_PUSH_ONLY receipt acknowledgments authenticate with the one-time challenge capability,
+      // device token, exact subscription/event binding, and trusted HTTPS Origin; no general session token is needed in the Service Worker.
+      if(u.pathname==='/v1/push/ack'&&req.method==='POST'){
+        if(config.environment!=='staging')return send(res,404,{error:'STAGING_ONLY'});
+        if(!requireTrustedBrowser(req))return send(res,403,{error:'TRUSTED_ORIGIN_REQUIRED'});
+        const p=await body(req,config.api.maxBodyBytes);
+        if(!p||typeof p.subscription_id!=='string'||typeof p.test_event_id!=='string'||typeof p.device_token!=='string'||typeof p.ack_token!=='string')return send(res,401,{error:'PUSH_ACK_AUTH_REQUIRED'});
+        const result=await store.acknowledgeStagingPushValidation({subscriptionId:p.subscription_id,testEventId:p.test_event_id,deviceToken:p.device_token,ackToken:p.ack_token,deliveredAt:p.delivered_at});
+        if(result.accepted){await store.appendNotificationAudit({event:'STAGING_PUSH_VALIDATION_ACK',event_class:'TEST_PUSH_ONLY',audit_record_id:result.audit_record_id,test_event_id:p.test_event_id,subscription_id:p.subscription_id,user_id:result.user_id,status:'ACKNOWLEDGED',delivered_at:Number(p.delivered_at),acknowledged_at:Date.now()});return send(res,200,{ok:true,status:'VALIDATED',staging_push_validation_status:result.validation});}
+        return send(res,result.reason==='ALREADY_VALIDATED'?409:401,{ok:false,error:result.reason,staging_push_validation_status:result.validation||await store.getStagingPushValidationStatus()});
+      }
+
       const user=authUser(req);if(!user)return send(res,401,{error:'UNAUTHORIZED'});
       if(u.pathname==='/v1/config'&&req.method==='GET')return send(res,200,{environment:config.environment??'unknown',symbols:config.symbols,timeframes:config.timeframes,
         push:{provider:pushProvider.status().provider,enabled:pushProvider.status().enabled,vapidPublicKey:config.push.vapidPublicKey||null,testPushEnabled:Boolean(config.staging?.testPushEnabled)}});
 
+      if(u.pathname==='/v1/push/validation'&&req.method==='GET')return send(res,200,{staging_push_validation_status:await store.getStagingPushValidationStatus()});
       if(u.pathname==='/v1/push/test'&&req.method==='POST'){
         if(config.environment!=='staging'||config.staging?.testPushEnabled!==true)return send(res,404,{error:'STAGING_TEST_PUSH_DISABLED'});
         if(!requireTrustedBrowser(req))return send(res,403,{error:'TRUSTED_ORIGIN_REQUIRED'});
