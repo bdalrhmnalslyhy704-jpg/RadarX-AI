@@ -19,7 +19,7 @@ test('manifest is valid PWA metadata',async()=>{
   assert.equal(m.theme_color,'#071018');
   assert.equal(m.background_color,'#071018');
   assert.ok(Array.isArray(m.icons)&&m.icons.length>=3);
-  for(const icon of m.icons){assert.match(icon.src,/^\.\/icons\/.+\.png$/);assert.match(icon.type,/image\/png/)}
+  for(const icon of m.icons){assert.match(icon.src,/^\.\/icons\/.+\.svg$/);assert.match(icon.type,/image\/svg\+xml/)}
 });
 
 test('app registers service worker and exposes connection semantics',async()=>{
@@ -43,7 +43,7 @@ test('service worker caches shell but does not cache exchange API responses',asy
 test('offline mode clears live cards and keeps historical metadata separated',async()=>{
   const a=await read('phase1/app.html');
   assert.match(a,/clearLiveView\(\)/);
-  assert.match(a,/statusMode\s*=\s*['"]DISCONNECTED['"]/);
+  assert.match(a,/setStatus\('DISCONNECTED','Disconnected'\)/);
   assert.match(a,/last_successful_update/);
   assert.match(a,/LIVE_DATA/);
 });
