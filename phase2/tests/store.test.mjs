@@ -17,3 +17,9 @@ test('TEST_FIXTURE: durable settings subscriptions and audit jsonl survive a fre
   const rows=await store.readRecent('notifications',10);
   assert.equal(rows[0].signal_id,'TEST_FIXTURE');assert.equal(rows[0].status,'SENT');
 });
+
+
+test('DurableStore.health is asynchronous and reports LIVE after init',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-health-'));const store=await new DurableStore({dir}).init();
+  const pending=store.health();assert.equal(typeof pending.then,'function');const health=await pending;assert.equal(health.state,'LIVE');assert.equal(health.path,dir);assert.equal(typeof health,'object');
+});
