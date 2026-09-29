@@ -19,10 +19,11 @@ export class WebPushProvider extends PushProvider{
 }
 export function createPushProvider(c){return c?.provider==='webpush'?new WebPushProvider({subject:c.vapidSubject,publicKey:c.vapidPublicKey,privateKey:c.vapidPrivateKey}):new NoopPushProvider();}
 
-const payload=s=>({type:'RADARX_SIGNAL',signal_id:s.signal_id,symbol:s.symbol,market:s.market,strategy:s.strategy,direction:s.direction,
-  signal_type:s.signal_type,timeframe:s.candle?.timeframe,candle_close_time:s.candle?.close_time,price:s.price?.reference??null,
-  data_quality:s.scores?.data_quality,liquidity_quality:s.scores?.liquidity_quality,reason_codes:s.reason_codes,
-  confidence_score:'UNKNOWN',paper_trading:true,real_order_execution:false});
+const payload=(s,processedAt=Date.now())=>({type:'RADARX_SIGNAL',signal_id:s.signal_id,symbol:s.symbol,market:s.market,strategy:s.strategy,direction:s.direction,
+  signal_type:s.signal_type,timeframe:s.candle?.timeframe,candle_open_time:s.candle?.open_time,candle_close_time:s.candle?.close_time,
+  price:s.price?.reference??null,data_quality:s.scores?.data_quality,liquidity_quality:s.scores?.liquidity_quality,
+  risk_filter:s.risk_filter,risk_reasons:s.risk_reasons,reason_codes:s.reason_codes,source:s.data_status?.source??'UNKNOWN',
+  source_time:s.candle?.close_time??null,server_processed_at:processedAt,confidence_score:'UNKNOWN',paper_trading:true,real_order_execution:false});
 
 export class PushManager{
   constructor({provider,store,retryBaseMs=15000}){this.provider=provider;this.store=store;this.retryBaseMs=retryBaseMs;this.retryQueue=new Map();}
@@ -33,7 +34,7 @@ export class PushManager{
       let settings=cache.get(sub.user_id);if(!settings){settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();cache.set(sub.user_id,settings);}
       if(!settings.enabled||!settings.symbols.includes(signal.symbol)||!settings.timeframes.includes(signal.candle?.timeframe)||!settings.signalTypes.includes(signal.signal_type))continue;
       if(Number(signal.scores?.data_quality)<settings.minDataQuality||Number(signal.scores?.liquidity_quality)<settings.minLiquidityQuality)continue;
-      const r=await this.provider.send(sub,payload(signal)),audit={signal_id:signal.signal_id,subscription_id:sub.id,user_id:sub.user_id,status:r.status,
+      const r=await this.provider.send(sub,payload(signal,Date.now())),audit={signal_id:signal.signal_id,subscription_id:sub.id,user_id:sub.user_id,status:r.status,
         provider:this.provider.status().provider,attempted_at:Date.now(),reason:r.reason??null,http_status:r.httpStatus??null};
       await this.store.appendNotificationAudit(audit);out.push(audit);
       if(r.status==='GONE')await this.store.disableSubscription(sub.id);
@@ -43,7 +44,7 @@ export class PushManager{
   }
   async flushRetries(now=Date.now()){
     for(const [k,j] of [...this.retryQueue.entries()]){
-      if(j.nextAt>now)continue;const r=await this.provider.send(j.subscription,payload(j.signal));
+      if(j.nextAt>now)continue;const r=await this.provider.send(j.subscription,payload(j.signal,now));
       await this.store.appendNotificationAudit({signal_id:j.signal.signal_id,subscription_id:j.subscription.id,user_id:j.subscription.user_id,status:r.status,
         provider:this.provider.status().provider,attempted_at:now,reason:r.reason??null,http_status:r.httpStatus??null,retry_attempt:j.attempt});
       if(r.ok||r.status==='GONE')this.retryQueue.delete(k);else{j.attempt++;j.nextAt=now+Math.min(this.retryBaseMs*(2**j.attempt),10*60*1000);}
