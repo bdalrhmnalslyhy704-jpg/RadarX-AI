@@ -58,7 +58,15 @@ jobs:
           set -euo pipefail
           node --check RadarX_Ultimate_5.11.js
           node --check RadarX_ProEngine_5.11.js
+          node --check radarx-runtime-6.0.js
+          node --check radarx-pulse-fusion.js
+          node --check radarx-live-chart.js
           node --check api/radarx-news.js
+
+      - name: Validate backend Python syntax
+        run: |
+          set -euo pipefail
+          python -m compileall -q backend
 
       - name: Build native debug APK
         run: gradle :app:assembleDebug --stacktrace
@@ -116,6 +124,7 @@ jobs:
           retention-days: 30
 
       - name: Publish stable GitHub Release
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
