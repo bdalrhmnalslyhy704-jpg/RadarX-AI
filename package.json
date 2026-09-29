@@ -1,14 +1,20 @@
 {
-  "name":"radarx-phase2-backend-monitoring",
-  "version":"0.1.0",
-  "private":true,
-  "type":"module",
-  "engines":{"node":">=20"},
-  "scripts":{
-    "start":"node phase2/server.mjs",
-    "test:all":"node --test phase1/tests/*.test.mjs phase2/tests/*.test.mjs",
-    "test:phase2":"node --test phase2/tests/*.test.mjs",
-    "issue-token":"node phase2/tools/issue-token.mjs"
+  "name": "radarx-phase2-backend-monitoring",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
   },
-  "dependencies":{"web-push":"^3.6.7","ws":"^8.18.3"}
+  "scripts": {
+    "start": "node phase2/server.mjs",
+    "test:all": "node --test phase1/tests/*.test.mjs phase2/tests/*.test.mjs",
+    "test:phase2": "node --test phase2/tests/*.test.mjs",
+    "issue-token": "node phase2/tools/issue-token.mjs",
+    "test": "node --test phase1/tests/*.test.mjs phase2/tests/*.test.mjs"
+  },
+  "dependencies": {
+    "web-push": "^3.6.7",
+    "ws": "^8.18.3"
+  }
 }
