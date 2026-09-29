@@ -1,3 +1,5 @@
+import {resolvePort,resolveHost} from './runtime.mjs';
+
 const int = (v, d) => Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : d;
 const float = (v, d) => Number.isFinite(Number(v)) ? Number(v) : d;
 const list = (v, d) => {
@@ -7,8 +9,9 @@ const list = (v, d) => {
 
 export const CONFIG = Object.freeze({
   environment: (process.env.RADARX_ENV ?? 'development').toLowerCase(),
-  host: process.env.RADARX_HOST ?? '127.0.0.1',
-  port: int(process.env.RADARX_PORT, 8787),
+  confidenceMode: String(process.env.RADARX_CONFIDENCE_MODE ?? 'UNKNOWN').toUpperCase(),
+  host: resolveHost(process.env),
+  port: resolvePort(process.env),
   symbols: list(process.env.RADARX_SYMBOLS, ['BTCUSDT','ETHUSDT']).map(x => x.toUpperCase()),
   timeframes: ['4h','1h','15m'],
   websocket: {
