@@ -80,8 +80,44 @@ public final class BinanceSecureRelay {
             );
         }
 
-        // Regional/cloud fallback: the deployed RadarX relay can reach Binance
-        // even when the handset cannot resolve or route to Binance directly.
+        final int[] order = orderedIndexes();
+        Exception last = null;
+
+        // Fast path: try the currently healthiest Binance endpoint first.
+        if (order.length > 0) {
+            int index = order[0];
+            try {
+                Uri target = Uri.parse(UPSTREAMS[index] + rawPath);
+                long started = System.currentTimeMillis();
+                Request request = new Request.Builder()
+                        .url(target.toString())
+                        .get()
+                        .header("Accept", "application/json")
+                        .header("User-Agent", "RadarX-Android/6.8.1")
+                        .build();
+
+                try (Response upstream = client.newCall(request).execute()) {
+                    long latency = System.currentTimeMillis() - started;
+                    byte[] body = upstream.body() == null ? new byte[0] : upstream.body().bytes();
+                    if (upstream.isSuccessful() && looksLikeJson(body)) {
+                        mark(index, true, latency);
+                        CACHE.put(key, new CacheEntry(body, System.currentTimeMillis()));
+                        trimCache();
+                        return response(200, "OK", "application/json; charset=utf-8",
+                                body, headers("MISS", UPSTREAMS[index], latency));
+                    }
+                    mark(index, false, latency);
+                    last = new Exception("HTTP " + upstream.code());
+                }
+            } catch (Exception e) {
+                last = e;
+                mark(index, false, 0L);
+            }
+        }
+
+        // Regional fallback: move to the deployed relay immediately after the
+        // preferred direct endpoint fails, instead of waiting through all DNS
+        // and regional Binance mirrors.
         try {
             Request cloud = new Request.Builder()
                     .url(REMOTE_RELAY + "?path=" + Uri.encode(rawPath))
@@ -96,23 +132,22 @@ public final class BinanceSecureRelay {
                 if (upstream.isSuccessful() && looksLikeJson(body)) {
                     CACHE.put(key, new CacheEntry(body, System.currentTimeMillis()));
                     trimCache();
-                    return response(
-                            200, "OK", "application/json; charset=utf-8",
-                            body,
-                            headers("MISS", "radarx-cloud-relay", latency)
-                    );
+                    return response(200, "OK", "application/json; charset=utf-8",
+                            body, headers("MISS", "radarx-cloud-relay", latency));
                 }
             }
-        } catch (Exception ignored) {
-            // Continue with direct Binance upstreams.
+        } catch (Exception e) {
+            last = e;
         }
 
-        Exception last = null;
-        for (int index : orderedIndexes()) {
+        // Bounded direct fallback: use only the next three healthy Binance
+        // mirrors to keep outages bounded and preserve UI responsiveness.
+        int remaining = 0;
+        for (int p = 1; p < order.length && remaining < 3; p++, remaining++) {
+            int index = order[p];
             try {
                 Uri target = Uri.parse(UPSTREAMS[index] + rawPath);
                 long started = System.currentTimeMillis();
-
                 Request request = new Request.Builder()
                         .url(target.toString())
                         .get()
@@ -122,29 +157,26 @@ public final class BinanceSecureRelay {
 
                 try (Response upstream = client.newCall(request).execute()) {
                     long latency = System.currentTimeMillis() - started;
-                    byte[] body = upstream.body() == null
-                            ? new byte[0]
-                            : upstream.body().bytes();
-
+                    byte[] body = upstream.body() == null ? new byte[0] : upstream.body().bytes();
                     if (!upstream.isSuccessful()) {
                         mark(index, false, latency);
                         last = new Exception("HTTP " + upstream.code());
                         continue;
                     }
-
+                    if (!looksLikeJson(body)) {
+                        mark(index, false, latency);
+                        last = new Exception("INVALID_JSON");
+                        continue;
+                    }
                     mark(index, true, latency);
-                    CacheEntry entry = new CacheEntry(body, System.currentTimeMillis());
-                    CACHE.put(key, entry);
+                    CACHE.put(key, new CacheEntry(body, System.currentTimeMillis()));
                     trimCache();
-                    return response(
-                            200, "OK", "application/json; charset=utf-8",
-                            body,
-                            headers("MISS", UPSTREAMS[index], 0)
-                    );
+                    return response(200, "OK", "application/json; charset=utf-8",
+                            body, headers("MISS", UPSTREAMS[index], latency));
                 }
             } catch (Exception e) {
                 last = e;
-                mark(index, false, 0);
+                mark(index, false, 0L);
             }
         }
 
@@ -157,11 +189,13 @@ public final class BinanceSecureRelay {
             );
         }
 
-        String body = "{\"code\":-1,\"msg\":\"Binance Spot relay unavailable\","
-                + "\"detail\":\"native_relay_failed\",\"status\":502}";
-        return jsonResponse(502, body);
+        String detail = last == null || last.getMessage() == null
+                ? "native_relay_failed"
+                : jsonEscape(last.getMessage());
+        return jsonResponse(502,
+                "{\"code\":-1,\"msg\":\"Binance Spot relay unavailable\","
+                        + "\"detail\":\"" + detail + "\",\"status\":502}");
     }
-
 
     /**
      * Native gateway for every secondary public market source used by the web
