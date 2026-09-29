@@ -52,15 +52,18 @@ test('TEST_FIXTURE: staging preflight requires an explicit test-push flag',async
 });
 
 test('TEST_FIXTURE: staging preflight blocks attempts to turn on real order execution',async()=>{
-  assert.throws(()=>assertDeploymentEnvironment(await validEnv({RADARX_REAL_ORDER_EXECUTION:'true'})),/REAL_ORDER_EXECUTION_MUST_REMAIN_FALSE/);
+  const env=await validEnv({RADARX_REAL_ORDER_EXECUTION:'true'});
+  assert.throws(()=>assertDeploymentEnvironment(env),/REAL_ORDER_EXECUTION_MUST_REMAIN_FALSE/);
 });
 
 test('TEST_FIXTURE: staging preflight blocks disabling paper trading',async()=>{
-  assert.throws(()=>assertDeploymentEnvironment(await validEnv({RADARX_PAPER_TRADING:'false'})),/PAPER_TRADING_MUST_REMAIN_TRUE/);
+  const env=await validEnv({RADARX_PAPER_TRADING:'false'});
+  assert.throws(()=>assertDeploymentEnvironment(env),/PAPER_TRADING_MUST_REMAIN_TRUE/);
 });
 
 test('TEST_FIXTURE: staging preflight blocks changing confidence mode',async()=>{
-  assert.throws(()=>assertDeploymentEnvironment(await validEnv({RADARX_CONFIDENCE_MODE:'70'})),/CONFIDENCE_MODE_MUST_REMAIN_UNKNOWN/);
+  const env=await validEnv({RADARX_CONFIDENCE_MODE:'70'});
+  assert.throws(()=>assertDeploymentEnvironment(env),/CONFIDENCE_MODE_MUST_REMAIN_UNKNOWN/);
 });
 
 test('TEST_FIXTURE: invalid PORT is rejected',async()=>{
