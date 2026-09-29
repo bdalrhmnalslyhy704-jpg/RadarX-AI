@@ -39,7 +39,7 @@ test('TEST_FIXTURE: market monitor remains server-side and runs without a PWA cl
   await monitor.start();
   assert.equal(monitor.running,true);
   assert.equal(monitor.bootstrapDone,true);
-  assert.equal(monitor.health().monitoring.running,true);
+  assert.equal((await monitor.health()).monitoring.running,true);
   assert.equal(wsOpts!=null,true);
 
   const next=now-2*step['15m'];
@@ -55,5 +55,5 @@ test('TEST_FIXTURE: market monitor remains server-side and runs without a PWA cl
   } finally {
     await monitor.stop();
   }
-  assert.equal(monitor.health().monitoring.running,false);
+  assert.equal((await monitor.health()).monitoring.running,false);
 });

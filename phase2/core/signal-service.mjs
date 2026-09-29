@@ -38,10 +38,10 @@ export class SignalService{
     const d=await this.deduplicator.canEmit(signal,now);
     if(!d.allowed){audit.blocked_reasons=[...blocked,d.reason];await this.store.appendSignalAudit(audit);return{emitted:false,signal,blocked:audit.blocked_reasons,audit,dataGate:dg,liquidity:liq,strategies:r.strategies};}
     await this.deduplicator.markEmitted(signal,now);audit.emitted=true;audit.notification_status='QUEUED';await this.store.appendSignalAudit(audit);
-    const notifications=this.pushManager?await this.pushManager.notifySignal(signal):[];
-    const status=notifications.some(x=>x.status==='SENT')?'SENT_OR_ATTEMPTED':notifications.length?'FAILED_OR_DISABLED':'NO_SUBSCRIBERS';
-    await this.store.appendSignalAudit({...audit,event:'SIGNAL_NOTIFICATION_RESULT',notification_status:status});
-    return{emitted:true,signal,blocked:[],audit,notificationStatus:status,notifications,dataGate:dg,liquidity:liq,strategies:r.strategies};
+    const pushResult=this.pushManager?await this.pushManager.notifySignal(signal):{status:'NO_PUSH_MANAGER',notifications:[]};
+    const status=pushResult.status||'NO_SUBSCRIBERS';
+    await this.store.appendSignalAudit({...audit,event:'SIGNAL_NOTIFICATION_RESULT',notification_status:status,push_validation_status:pushResult.validation?.status??null});
+    return{emitted:true,signal,blocked:[],audit,notificationStatus:status,notifications:pushResult.notifications||[],pushValidation:pushResult.validation||null,dataGate:dg,liquidity:liq,strategies:r.strategies};
   }
 }
 export function assertReadOnlySignal(s){if(s?.paper_trade?.real_order_execution!==false)throw new Error('READ_ONLY_POLICY_VIOLATION');if(s?.paper_trade?.enabled!==true)throw new Error('PAPER_TRADING_POLICY_VIOLATION');}

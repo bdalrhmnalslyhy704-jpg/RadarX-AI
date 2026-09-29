@@ -10,6 +10,10 @@
 - No order, cancellation, withdrawal, or trading endpoint is permitted.
 - TEST_PUSH_ONLY is a notification transport test, never a market signal.
 
+## Deployment topology note
+
+The loopback/`127.0.0.1` and `/var/lib/radarx/phase2` examples below are for the legacy VPS/systemd reverse-proxy topology, not Render. Render uses `RADARX_HOST=0.0.0.0`, the platform-provided `PORT`, and `/var/data/radarx` for the Persistent Disk.
+
 ## Secret handling
 
 Required server-side secrets:

@@ -25,7 +25,7 @@ export async function startServer({
   const rest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
   const dedup=new SignalDeduplicator({store,windowMs:15*60*1000});
   const provider=createPushProvider(config.push);
-  const push=new PushManager({provider,store,deduplicator:dedup,retryBaseMs:config.monitoring.pushRetryMs});
+  const push=new PushManager({provider,store,deduplicator:dedup,retryBaseMs:config.monitoring.pushRetryMs,config});
   const service=new SignalService({deduplicator:dedup,store,pushManager:push,config});
   const monitor=monitorFactory({config,rest,signalService:service,store,pushManager:push,logger});
   await monitor.start();

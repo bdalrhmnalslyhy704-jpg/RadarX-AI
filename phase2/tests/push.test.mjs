@@ -22,7 +22,7 @@ test('TEST_FIXTURE: failed push is queued and succeeds after provider recovery',
   await store.upsertSubscription('u1',pushSubscription());
   assert.equal((await store.getUserSettings('u1')).enabled,true);assert.equal((await store.getSubscriptions('u1')).length,1);
   const p=new ToggleProvider(),m=new PushManager({provider:p,store,retryBaseMs:1});
-  const first=await m.notifySignal(signal());assert.equal(first[0].status,'FAILED');
+  const first=await m.notifySignal(signal());assert.equal(first.notifications[0].status,'FAILED');
   p.fail=false;await m.flushRetries(Date.now()+100);
   const events=await store.readRecent('notifications',10);
   assert.ok(events.some(x=>x.status==='SENT'));assert.ok(p.calls>=2);
@@ -35,5 +35,5 @@ test('TEST_FIXTURE: low data quality prevents push attempt',async()=>{
   const p=new ToggleProvider(),m=new PushManager({provider:p,store});
   const s={...signal(),scores:{data_quality:50,liquidity_quality:95}};
   const out=await m.notifySignal(s);
-  assert.equal(out.length,0);assert.equal(p.calls,0);
+  assert.equal(out.notifications.length,0);assert.equal(p.calls,0);
 });

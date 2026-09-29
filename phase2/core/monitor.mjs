@@ -146,14 +146,15 @@ export class MarketMonitor{
     this.lastAnalysisAt=now;
     return out;
   }
-  health(){
+  async health(){
+    const database=await this.store.health();
     const latest=[...this.lastComplete.entries()].sort((a,b)=>Number(a[1].closeTime)-Number(b[1].closeTime)).at(-1)?.[1]||null;
     return {
       websocket:this.ws?.health?.()||{state:this.wsState,last_message_at:null,last_connected_at:null,reconnect_attempts:0,url:null},
       last_complete_candle:latest?{symbol:latest.symbol||'UNKNOWN',timeframe:latest.timeframe||'UNKNOWN',open_time:latest.openTime,close_time:latest.closeTime}:null,
       last_analysis_at:this.lastAnalysisAt,
       rest:this.rest.health(),
-      database:this.store.health?this.store.health():{state:'UNKNOWN'},
+      database,
       monitoring:{running:this.running,bootstrap_done:this.bootstrapDone,unresolved_gaps:[...this.unresolved.entries()].filter(([,v])=>v.length).map(([k,v])=>({key:k,count:v.length}))}
     };
   }

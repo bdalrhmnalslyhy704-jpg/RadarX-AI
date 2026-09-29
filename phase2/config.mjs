@@ -70,6 +70,7 @@ export const CONFIG = Object.freeze({
     testPushEnabled: String(process.env.RADARX_STAGING_TEST_PUSH_ENABLED ?? 'false').toLowerCase() === 'true'
   },
   api: {
+    publicOrigin: String(process.env.RADARX_PUBLIC_API_ORIGIN ?? '').trim().replace(/\/+$/,''),
     maxBodyBytes: int(process.env.RADARX_MAX_BODY_BYTES, 64 * 1024),
     rateLimitPerMinute: int(process.env.RADARX_API_RATE_LIMIT_PER_MINUTE, 60)
   }

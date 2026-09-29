@@ -14,6 +14,7 @@ const base={
   VAPID_PUBLIC_KEY:'TEST_FIXTURE_VAPID_PUBLIC',
   VAPID_PRIVATE_KEY:'TEST_FIXTURE_VAPID_PRIVATE',
   RADARX_ALLOWED_ORIGINS:'https://staging.example.test',
+  RADARX_PUBLIC_API_ORIGIN:'https://api.example.test',
   RADARX_HOST:'127.0.0.1',
   RADARX_PAPER_TRADING:'true',
   RADARX_REAL_ORDER_EXECUTION:'false',
@@ -100,3 +101,10 @@ test('TEST_FIXTURE: read-only runtime flags include UNKNOWN confidence',()=>{
   assert.throws(()=>assertReadOnlyStagingConfig({paper:{paperTrading:false,realOrderExecution:false},confidenceMode:'UNKNOWN'}),/PAPER_TRADING_MUST_REMAIN_TRUE/);
   assert.throws(()=>assertReadOnlyStagingConfig({paper:{paperTrading:true,realOrderExecution:false},confidenceMode:'70'}),/CONFIDENCE_MODE_MUST_REMAIN_UNKNOWN/);
 });
+
+
+test('TEST_FIXTURE: staging requires explicit Render persistent data directory',async()=>{const env=await validEnv();delete env.RADARX_DATA_DIR;assert.throws(()=>assertDeploymentEnvironment(env),/RADARX_DATA_DIR_REQUIRED/);});
+
+test('TEST_FIXTURE: production cannot enable the staging-only test endpoint',async()=>{const env=await validEnv({RADARX_ENV:'production'});assert.throws(()=>assertDeploymentEnvironment(env),/TEST_PUSH_ONLY_STAGING_ONLY/);});
+
+test('TEST_FIXTURE: staging public API origin must be exact HTTPS',async()=>{const env=await validEnv({RADARX_PUBLIC_API_ORIGIN:'http://api.example.test'});assert.throws(()=>assertDeploymentEnvironment(env),/RADARX_PUBLIC_API_ORIGIN_MUST_BE_EXACT_HTTPS_ORIGIN/);});
