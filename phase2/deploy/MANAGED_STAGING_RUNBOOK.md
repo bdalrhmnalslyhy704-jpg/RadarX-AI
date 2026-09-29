@@ -17,29 +17,9 @@
 
 ## 1. Final managed architecture
 
-The current repository separates the Node monitoring/API process from the static PWA files. For a Render-style managed deployment, the clean target is:
+Render Web Services must listen on `0.0.0.0` and use the platform-provided `PORT`. This branch explicitly supports that combination only when `RADARX_ENV=staging` or `production` and `RADARX_HOST=0.0.0.0` is set. Local defaults remain loopback-only (`127.0.0.1`). The runtime gives `PORT` precedence over `RADARX_PORT` when `PORT` is present. citeturn980726search1
 
-| Component | Managed target | Purpose | Expected cost |
-|---|---|---|---:|
-| Backend | **Paid Web Service** | Node.js monitor, REST API, outbound Binance WSS, Web Push | **$7/month starting tier** |
-| Durable store | **Persistent Disk attached to Web Service** | subscriptions, settings, dedup, signal/notification audit | **$0.25/GB/month** |
-| PWA | **Static Site** (recommended) | Serves `phase1/app.html` and service worker over HTTPS | $0 on Render's current Free Static Site offering |
-| HTTPS/TLS | Managed by Render | Public HTTPS for Web Service/Static Site/custom domains | Included |
-| Domain | Your registrar | Stable staging hostname | Registrar price varies |
-
-Render currently lists a 0.5 CPU/512 MB paid Web Service at $7/month and persistent disks at $0.25/GB/month. Managed TLS and custom domains are supported. Free Web Services are not suitable for this field test because they can spin down after 15 minutes of inactivity and their local filesystem is ephemeral. citeturn114003search2turn114003search0turn980726search5
-
-**Budget example:** a $7/month backend plus a 1 GB persistent disk would be approximately **$7.25/month**, before any separately purchased domain, taxes, or other usage that Render may bill. The **current cost is $0** because this runbook does not create or activate anything.
-
-### Important current-code compatibility gate
-
-Render Web Services must listen on `0.0.0.0` and a Render web-service port (the platform defaults to `PORT=10000`). The current RadarX staging preflight on this branch deliberately requires a loopback bind address. Therefore:
-
-**Do not create the Render service or deploy this branch yet.**
-
-A small, separately approved code change is required to support managed-host binding safely while preserving the staging/read-only invariants. The required change is not part of this documentation-only task.
-
-The runtime now gives `PORT` precedence over `RADARX_PORT` when the hosting platform provides `PORT`. Render's web-service requirement for `0.0.0.0` is satisfied only when `RADARX_HOST=0.0.0.0` is explicitly configured for staging/production. citeturn980726search1
+**Do not deploy until all environment variables below are present and the Render service configuration matches this runbook.**
 
 ## 2. Render service creation — planned steps only
 
@@ -53,7 +33,7 @@ In the Render Dashboard:
 4. Select repository:
    `bdalrhmnalslyhy704-jpg/RadarX-AI`
 5. Select the branch:
-   `phase2-staging-deployment-ready`
+   `phase2-render-runtime-compatibility`
 6. Do **not** select `main`.
 7. Choose the Node.js runtime.
 8. Select a small paid Web Service for the first continuous staging test.
