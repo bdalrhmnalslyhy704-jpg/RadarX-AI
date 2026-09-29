@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {assertStagingEnvironment,assertReadOnlyStagingConfig} from '../deploy/preflight.mjs';
+import {mkdtemp} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {assertDeploymentEnvironment,assertReadOnlyStagingConfig} from '../deploy/preflight.mjs';
 
 const base={
   RADARX_ENV:'staging',
@@ -17,39 +20,75 @@ const base={
   RADARX_CONFIDENCE_MODE:'UNKNOWN'
 };
 
-test('TEST_FIXTURE: staging preflight accepts complete safe configuration',()=>{
-  const out=assertStagingEnvironment({...base});
+async function validEnv(overrides={}){
+  return {...base,RADARX_DATA_DIR:await mkdtemp(join(tmpdir(),'radarx-preflight-')),PORT:'18087',...overrides};
+}
+
+test('TEST_FIXTURE: staging preflight accepts complete safe configuration and storage',async()=>{
+  const env=await validEnv();
+  const out=assertDeploymentEnvironment(env);
   assert.deepEqual(out,{environment:'staging',pushProvider:'webpush',testPushEnabled:true,allowedOrigins:['https://staging.example.test'],
-    paperTrading:true,realOrderExecution:false,confidenceMode:'UNKNOWN'});
+    host:'127.0.0.1',port:18087,dataDir:env.RADARX_DATA_DIR,paperTrading:true,realOrderExecution:false,confidenceMode:'UNKNOWN'});
 });
 
-test('TEST_FIXTURE: staging preflight fails when required secret is missing',()=>{
-  const env={...base};delete env.RADARX_AUTH_SECRET;
-  assert.throws(()=>assertStagingEnvironment(env),/RADARX_AUTH_SECRET_REQUIRED/);
+test('TEST_FIXTURE: staging preflight accepts explicit 0.0.0.0 for managed runtime',async()=>{
+  const out=assertDeploymentEnvironment(await validEnv({RADARX_HOST:'0.0.0.0'}));
+  assert.equal(out.host,'0.0.0.0');
 });
 
-test('TEST_FIXTURE: staging preflight fails on non-HTTPS origin',()=>{
-  const env={...base,RADARX_ALLOWED_ORIGINS:'http://staging.example.test'};
-  assert.throws(()=>assertStagingEnvironment(env),/STAGING_ALLOWED_ORIGINS_MUST_USE_HTTPS/);
+test('TEST_FIXTURE: staging preflight fails when required secret is missing',async()=>{
+  const env=await validEnv();delete env.RADARX_AUTH_SECRET;
+  assert.throws(()=>assertDeploymentEnvironment(env),/RADARX_AUTH_SECRET_REQUIRED/);
 });
 
-test('TEST_FIXTURE: staging preflight requires an explicit test-push flag',()=>{
-  const env={...base};delete env.RADARX_STAGING_TEST_PUSH_ENABLED;
-  assert.throws(()=>assertStagingEnvironment(env),/RADARX_STAGING_TEST_PUSH_ENABLED_MUST_BE_EXPLICIT_TRUE_OR_FALSE/);
+test('TEST_FIXTURE: staging preflight fails on non-HTTPS origin',async()=>{
+  const env=await validEnv({RADARX_ALLOWED_ORIGINS:'http://staging.example.test'});
+  assert.throws(()=>assertDeploymentEnvironment(env),/STAGING_ALLOWED_ORIGINS_MUST_USE_HTTPS/);
 });
 
-test('TEST_FIXTURE: staging preflight blocks attempts to turn on real order execution',()=>{
-  const env={...base,RADARX_REAL_ORDER_EXECUTION:'true'};
-  assert.throws(()=>assertStagingEnvironment(env),/REAL_ORDER_EXECUTION_MUST_REMAIN_FALSE/);
+test('TEST_FIXTURE: staging preflight requires an explicit test-push flag',async()=>{
+  const env=await validEnv();delete env.RADARX_STAGING_TEST_PUSH_ENABLED;
+  assert.throws(()=>assertDeploymentEnvironment(env),/RADARX_STAGING_TEST_PUSH_ENABLED_MUST_BE_EXPLICIT_TRUE_OR_FALSE/);
 });
 
-test('TEST_FIXTURE: staging preflight rejects non-loopback application bind',()=>{
-  const env={...base,RADARX_HOST:'0.0.0.0'};
-  assert.throws(()=>assertStagingEnvironment(env),/STAGING_HOST_MUST_BE_LOOPBACK/);
+test('TEST_FIXTURE: staging preflight blocks attempts to turn on real order execution',async()=>{
+  assert.throws(()=>assertDeploymentEnvironment(await validEnv({RADARX_REAL_ORDER_EXECUTION:'true'})),/REAL_ORDER_EXECUTION_MUST_REMAIN_FALSE/);
 });
 
-test('TEST_FIXTURE: read-only runtime flags are enforced',()=>{
-  assert.equal(assertReadOnlyStagingConfig({paper:{paperTrading:true,realOrderExecution:false}}),true);
-  assert.throws(()=>assertReadOnlyStagingConfig({paper:{paperTrading:true,realOrderExecution:true}}),/REAL_ORDER_EXECUTION_MUST_REMAIN_FALSE/);
-  assert.throws(()=>assertReadOnlyStagingConfig({paper:{paperTrading:false,realOrderExecution:false}}),/PAPER_TRADING_MUST_REMAIN_TRUE/);
+test('TEST_FIXTURE: staging preflight blocks disabling paper trading',async()=>{
+  assert.throws(()=>assertDeploymentEnvironment(await validEnv({RADARX_PAPER_TRADING:'false'})),/PAPER_TRADING_MUST_REMAIN_TRUE/);
+});
+
+test('TEST_FIXTURE: staging preflight blocks changing confidence mode',async()=>{
+  assert.throws(()=>assertDeploymentEnvironment(await validEnv({RADARX_CONFIDENCE_MODE:'70'})),/CONFIDENCE_MODE_MUST_REMAIN_UNKNOWN/);
+});
+
+test('TEST_FIXTURE: invalid PORT is rejected',async()=>{
+  assert.throws(()=>assertDeploymentEnvironment(await validEnv({PORT:'not-a-port'})),/PORT_MUST_BE_INTEGER/);
+  assert.throws(()=>assertDeploymentEnvironment(await validEnv({PORT:'0'})),/PORT_OUT_OF_RANGE/);
+  assert.throws(()=>assertDeploymentEnvironment(await validEnv({PORT:'65536'})),/PORT_OUT_OF_RANGE/);
+});
+
+test('TEST_FIXTURE: disallowed host is rejected',async()=>{
+  assert.throws(()=>assertDeploymentEnvironment(await validEnv({RADARX_HOST:'192.168.1.5'})),/HOST_NOT_ALLOWED/);
+});
+
+test('TEST_FIXTURE: wildcard host is rejected outside staging/production',async()=>{
+  const env=await validEnv({RADARX_ENV:'development',RADARX_HOST:'0.0.0.0'});
+  assert.throws(()=>assertDeploymentEnvironment(env),/STAGING_OR_PRODUCTION_ENV_REQUIRED/);
+});
+
+test('TEST_FIXTURE: missing data directory is created, but unwritable data directory is rejected',async()=>{
+  const env=await validEnv({RADARX_DATA_DIR:join(await mkdtemp(join(tmpdir(),'radarx-data-')),'new-data')});
+  const out=assertDeploymentEnvironment(env);
+  assert.equal(out.dataDir,env.RADARX_DATA_DIR);
+  assert.throws(()=>assertDeploymentEnvironment({...env,RADARX_DATA_DIR:'/proc/radarx-phase2-cannot-create'}),/RADARX_DATA_DIR_NOT_WRITABLE_OR_CREATABLE/);
+});
+
+test('TEST_FIXTURE: read-only runtime flags include UNKNOWN confidence',()=>{
+  const cfg={paper:{paperTrading:true,realOrderExecution:false},confidenceMode:'UNKNOWN'};
+  assert.equal(assertReadOnlyStagingConfig(cfg),true);
+  assert.throws(()=>assertReadOnlyStagingConfig({paper:{paperTrading:true,realOrderExecution:true},confidenceMode:'UNKNOWN'}),/REAL_ORDER_EXECUTION_MUST_REMAIN_FALSE/);
+  assert.throws(()=>assertReadOnlyStagingConfig({paper:{paperTrading:false,realOrderExecution:false},confidenceMode:'UNKNOWN'}),/PAPER_TRADING_MUST_REMAIN_TRUE/);
+  assert.throws(()=>assertReadOnlyStagingConfig({paper:{paperTrading:true,realOrderExecution:false},confidenceMode:'70'}),/CONFIDENCE_MODE_MUST_REMAIN_UNKNOWN/);
 });
