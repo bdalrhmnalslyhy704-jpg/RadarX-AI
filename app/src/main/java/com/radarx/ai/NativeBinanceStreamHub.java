@@ -109,23 +109,40 @@ public final class NativeBinanceStreamHub {
     private void connect(final Slot slot, final int attempt) {
         if (slot.stopped || slots.get(slot.id) != slot) return;
 
-        int baseIndex = Math.floorMod(attempt, BASES.length);
-        String url = BASES[baseIndex] + "?streams=" + Uri.encode(slot.streams);
+        final int primary = Math.floorMod(slot.preferredBase, BASES.length);
+        final int secondary = Math.floorMod(primary + 1, BASES.length);
+        final java.util.concurrent.atomic.AtomicBoolean winner = new java.util.concurrent.atomic.AtomicBoolean(false);
+        final java.util.concurrent.atomic.AtomicInteger pending = new java.util.concurrent.atomic.AtomicInteger(2);
+        slot.lastConnectAttempt = System.currentTimeMillis();
 
+        openCandidate(slot, primary, winner, pending);
+        if (secondary != primary) openCandidate(slot, secondary, winner, pending);
+    }
+
+    private void openCandidate(
+            final Slot slot,
+            final int baseIndex,
+            final java.util.concurrent.atomic.AtomicBoolean winner,
+            final java.util.concurrent.atomic.AtomicInteger pending
+    ) {
+        if (slot.stopped || slots.get(slot.id) != slot) return;
+
+        String url = BASES[baseIndex] + "?streams=" + Uri.encode(slot.streams);
         Request request = new Request.Builder()
                 .url(url)
                 .header("Accept", "application/json")
-                .header("User-Agent", "RadarX-Android/6.8.2")
+                .header("User-Agent", "RadarX-Android/6.8.3")
                 .build();
 
         try {
-            slot.lastConnectAttempt = System.currentTimeMillis();
-            slot.ws = client.newWebSocket(request, new WebSocketListener() {
+            client.newWebSocket(request, new WebSocketListener() {
                 @Override public void onOpen(WebSocket webSocket, Response response) {
-                    if (!isCurrent(slot)) {
-                        webSocket.close(1000, "stale");
+                    if (!isCurrent(slot) || !winner.compareAndSet(false, true)) {
+                        webSocket.close(1000, "non-winning route");
                         return;
                     }
+                    slot.ws = webSocket;
+                    slot.preferredBase = baseIndex;
                     slot.attempt = 0;
                     slot.lastMessage = System.currentTimeMillis();
                     slot.open = true;
@@ -133,22 +150,21 @@ public final class NativeBinanceStreamHub {
                 }
 
                 @Override public void onMessage(WebSocket webSocket, String text) {
-                    if (!isCurrent(slot)) return;
+                    if (!isCurrent(slot) || !winner.get() || slot.ws != webSocket) return;
                     slot.open = true;
                     slot.lastMessage = System.currentTimeMillis();
-                    if ("ticker".equals(slot.id)) {
-                        latestSnapshots.put("ticker", new Event(slot.id, "message", text));
-                    } else {
-                        emit(slot.id, "message", text);
-                    }
+                    if ("ticker".equals(slot.id)) latestSnapshots.put("ticker", new Event(slot.id, "message", text));
+                    else emit(slot.id, "message", text);
                 }
 
                 @Override public void onClosing(WebSocket webSocket, int code, String reason) {
-                    if (isCurrent(slot)) emit(slot.id, "closing", reason == null ? "" : reason);
+                    if (isCurrent(slot) && winner.get() && slot.ws == webSocket) {
+                        emit(slot.id, "closing", reason == null ? "" : reason);
+                    }
                 }
 
                 @Override public void onClosed(WebSocket webSocket, int code, String reason) {
-                    if (!isCurrent(slot)) return;
+                    if (!isCurrent(slot) || !winner.get() || slot.ws != webSocket) return;
                     slot.open = false;
                     slot.ws = null;
                     emit(slot.id, "close", "code=" + code + ";reason=" + (reason == null ? "" : reason));
@@ -156,20 +172,20 @@ public final class NativeBinanceStreamHub {
                 }
 
                 @Override public void onFailure(WebSocket webSocket, Throwable t, Response response) {
-                    if (!isCurrent(slot)) return;
-                    slot.open = false;
-                    slot.ws = null;
-                    String message = t == null ? "WS_FAILURE"
-                            : String.valueOf(t.getMessage());
-                    emit(slot.id, "error", message == null ? "WS_FAILURE" : message);
-                    scheduleReconnect(slot);
+                    if (!isCurrent(slot) || winner.get()) return;
+                    if (pending.decrementAndGet() == 0) {
+                        slot.open = false;
+                        String message = t == null ? "WS_FAILURE" : String.valueOf(t.getMessage());
+                        emit(slot.id, "error", message == null ? "WS_FAILURE" : message);
+                        scheduleReconnect(slot);
+                    }
                 }
             });
         } catch (Exception e) {
-            slot.ws = null;
-            slot.open = false;
-            emit(slot.id, "error", String.valueOf(e.getMessage()));
-            scheduleReconnect(slot);
+            if (!winner.get() && pending.decrementAndGet() == 0) {
+                emit(slot.id, "error", String.valueOf(e.getMessage()));
+                scheduleReconnect(slot);
+            }
         }
     }
 
@@ -230,10 +246,12 @@ public final class NativeBinanceStreamHub {
         volatile long lastMessage;
         volatile long lastConnectAttempt;
         volatile int attempt;
+        volatile int preferredBase;
 
         Slot(String id, String streams) {
             this.id = id;
             this.streams = streams;
+            this.preferredBase = 0;
         }
     }
 

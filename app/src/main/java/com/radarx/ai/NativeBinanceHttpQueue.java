@@ -81,7 +81,8 @@ public final class NativeBinanceHttpQueue {
                 .dns(new RadarXDohDns())
                 .build();
 
-        this.executor = Executors.newFixedThreadPool(3, new DaemonFactory("RadarX-Binance-HTTP"));
+        int ioThreads = Math.max(3, Math.min(4, Runtime.getRuntime().availableProcessors()));
+        this.executor = Executors.newFixedThreadPool(ioThreads, new DaemonFactory("RadarX-Binance-HTTP"));
         this.probeExecutor = Executors.newFixedThreadPool(4, new DaemonFactory("RadarX-Binance-Probe"));
     }
 

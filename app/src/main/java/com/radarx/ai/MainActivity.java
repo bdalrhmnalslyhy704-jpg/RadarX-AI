@@ -62,10 +62,10 @@ public final class MainActivity extends Activity {
         binanceRelay = new BinanceSecureRelay(relayClient);
 
         OkHttpClient wsClient = new OkHttpClient.Builder()
-                .connectTimeout(8_000L, TimeUnit.MILLISECONDS)
+                .connectTimeout(5_000L, TimeUnit.MILLISECONDS)
                 .readTimeout(0L, TimeUnit.MILLISECONDS)
-                .writeTimeout(8_000L, TimeUnit.MILLISECONDS)
-                .pingInterval(20L, TimeUnit.SECONDS)
+                .writeTimeout(5_000L, TimeUnit.MILLISECONDS)
+                .pingInterval(15L, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(true)
                 .dns(sharedDns)
                 .build();
