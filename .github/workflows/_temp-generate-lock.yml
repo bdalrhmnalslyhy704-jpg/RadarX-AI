@@ -5,7 +5,7 @@ on:
     branches: [phase2-render-runtime-compatibility]
 
 jobs:
-  generate-lock:
+  verify:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -14,32 +14,27 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Generate package-lock with npm install
-        run: npm install --package-lock-only --ignore-scripts
-      - name: Verify npm ci against generated lock
-        run: |
-          rm -rf node_modules
-          npm ci --ignore-scripts
-      - name: Audit production dependencies (critical threshold)
-        run: npm audit --omit=dev --audit-level=critical
-      - name: Run test suite with captured log
+      - name: Install lockfile and capture output
         shell: bash
         run: |
           set +e
-          npm test 2>&1 | tee test-output.log
-          rc=${PIPESTATUS[0]}
-          echo "test_exit_code=$rc" >> test-output.log
-          exit "$rc"
-        continue-on-error: true
-      - name: Upload test log
+          npm install --package-lock-only --ignore-scripts > install-output.log 2>&1
+          echo "install_exit_code=$?" >> install-output.log
+          npm ci --ignore-scripts > ci-output.log 2>&1
+          echo "ci_exit_code=$?" >> ci-output.log
+          npm audit --omit=dev --audit-level=critical > audit-output.log 2>&1
+          echo "audit_exit_code=$?" >> audit-output.log
+          npm test > test-output.log 2>&1
+          echo "test_exit_code=$?" >> test-output.log
+      - name: Upload diagnostics
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-output
-          path: test-output.log
-          if-no-files-found: error
-      - name: Upload package-lock
-        uses: actions/upload-artifact@v4
-        with:
-          name: generated-package-lock
-          path: package-lock.json
+          name: runtime-compat-diagnostics
+          path: |
+            package-lock.json
+            install-output.log
+            ci-output.log
+            audit-output.log
+            test-output.log
           if-no-files-found: error
