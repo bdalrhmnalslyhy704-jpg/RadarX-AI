@@ -334,3 +334,256 @@ Use a small x86 VPS such as Hetzner CX23 when Oracle capacity/account constraint
 ## No Render
 
 This provider-neutral path intentionally does not use Render APIs, Render Disks, Render-specific configuration, or Render deployment commands.
+
+
+## مقارنة خيارات الاستضافة
+
+| الخيار | التكلفة الحالية | 24/7 | HTTPS | تخزين دائم | WebSocket | صعوبة الإعداد | مسؤولية الأمان | المخاطر/الحدود |
+|---|---|---|---|---|---|---|---|---|
+| التشغيل المحلي | $0 | فقط ما دام الجهاز والخدمة يعملان | ممكن مع Caddy محليًا؛ ليس بديلًا عامًا عمليًا | نعم على قرص الجهاز | نعم | منخفضة | أنت مسؤول بالكامل | انقطاع الكهرباء/الإنترنت والنوم/إغلاق الجهاز |
+| Oracle Cloud Always Free | $0 داخل حدود Always Free | نعم، مع قيود Oracle | نعم عبر Caddy | نعم | نعم | متوسطة | أنت + Oracle controls | A1 capacity قد لا تكون متاحة مؤقتًا؛ قد تُستعاد موارد compute الخاملة وفق سياسة Oracle؛ التسجيل قد يتطلب بطاقة |
+| VPS اقتصادي (مثال Hetzner CX23) | نحو $6.49/شهر + $0.60 IPv4 = $7.09 قبل VAT | نعم | نعم عبر Caddy | نعم | نعم | متوسطة | أنت + مزود البنية | رسوم إضافية محتملة لـIPv4/VAT والموارد؛ الإدارة والنسخ الاحتياطي عليك |
+| Render | Free متاح بقيود؛ Web Service المدفوع يبدأ من نحو $7/شهر + $0.25/GB للقرص | Free لا يصلح لمراقبة 24/7 لأنه يدخل sleep؛ المدفوع نعم | نعم | نعم على Persistent Disk | نعم | منخفضة | جزء كبير لدى المنصة | تكلفة مستمرة؛ هذه المرحلة لا تستخدم Render |
+
+مصادر الأسعار/القيود الحالية:
+- Oracle Always Free: https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm
+- Oracle Free Tier signup: https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier.htm
+- Hetzner June 2026 pricing: https://docs.hetzner.com/general/infrastructure-and-availability/price-adjustment/
+- Hetzner Primary IPv4: https://docs.hetzner.com/cloud/servers/primary-ips/overview/
+- Render pricing: https://render.com/pricing
+- Render compute plans: https://render.com/docs/compute-plans
+
+## Runbook موحّد للخادم
+
+### 1. تجهيز Ubuntu
+
+```bash
+sudo apt update
+sudo apt full-upgrade -y
+sudo apt install -y curl ca-certificates git ufw tar gzip
+```
+
+### 2. تثبيت Node.js 24 LTS
+
+Node.js v24.21.0 هو إصدار 24.x LTS الحالي وقت إعداد هذه الوثيقة، وتتوفر له Linux x64 وLinux arm64 binaries. تحقق من الإصدار بعد التثبيت:
+
+```bash
+node --version
+npm --version
+```
+
+المصدر الرسمي: https://nodejs.org/en/download/archive/v24.21.0
+
+### 3. إنشاء المستخدم والمسارات
+
+```bash
+sudo useradd --system --create-home --home-dir /home/radarx --shell /usr/sbin/nologin radarx
+sudo install -d -o radarx -g radarx -m 750 /opt/radarx
+sudo install -d -o radarx -g radarx -m 750 /var/lib/radarx
+sudo install -d -o root -g root -m 700 /etc/radarx
+```
+
+### 4. وضع الكود
+
+استخدم Commit معروفًا وسليمًا. في هذا الإصدار:
+
+```text
+fe6db929e62ce9bf179f829e2b2bf7f28566f6a4
+```
+
+ثم:
+
+```bash
+sudo -u radarx git clone <REPOSITORY_URL> /opt/radarx
+sudo -u radarx git -C /opt/radarx checkout fe6db929e62ce9bf179f829e2b2bf7f28566f6a4
+sudo -u radarx -H bash -lc 'cd /opt/radarx && npm ci --omit=dev'
+```
+
+### 5. ملف الأسرار
+
+أنشئ:
+
+```text
+/etc/radarx/radarx.env
+```
+
+ثم:
+
+```bash
+sudo chown root:root /etc/radarx/radarx.env
+sudo chmod 600 /etc/radarx/radarx.env
+```
+
+الحد الأدنى:
+
+```text
+RADARX_ENV=staging
+RADARX_STAGING_TEST_PUSH_ENABLED=false
+RADARX_HOST=0.0.0.0
+PORT=8787
+RADARX_PUSH_PROVIDER=webpush
+RADARX_ALLOWED_ORIGINS=https://radarx.example.com
+RADARX_PUBLIC_API_ORIGIN=https://radarx.example.com
+RADARX_DATA_DIR=/var/lib/radarx
+RADARX_AUTH_SECRET=<secret>
+VAPID_SUBJECT=<secret>
+VAPID_PUBLIC_KEY=<secret>
+VAPID_PRIVATE_KEY=<secret>
+RADARX_PAPER_TRADING=true
+RADARX_REAL_ORDER_EXECUTION=false
+RADARX_CONFIDENCE_MODE=UNKNOWN
+```
+
+### 6. التحقق قبل التشغيل
+
+```bash
+sudo -u radarx -H bash -lc 'cd /opt/radarx && npm ci'
+sudo -u radarx -H bash -lc 'cd /opt/radarx && npm test'
+sudo -u radarx -H bash -lc 'cd /opt/radarx && npm audit --omit=dev --audit-level=critical'
+```
+
+يجب ألا يبدأ اختبار الهاتف قبل نجاح هذه الخطوة.
+
+### 7. systemd
+
+انسخ:
+
+```text
+phase2/deploy/systemd/radarx.service.example
+```
+
+إلى:
+
+```text
+/etc/systemd/system/radarx.service
+```
+
+ثم:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable radarx
+sudo systemctl start radarx
+sudo systemctl status radarx --no-pager
+```
+
+للسجلات:
+
+```bash
+sudo journalctl -u radarx -n 100 --no-pager
+```
+
+### 8. Firewall
+
+```bash
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow 22/tcp
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw enable
+sudo ufw status verbose
+```
+
+يجب ألا يكون منفذ Node الداخلي مكشوفًا للعامة.
+
+### 9. Caddy وHTTPS
+
+ثبّت Caddy من الحزمة الرسمية لنظام Ubuntu. بعد وضع hostname الحقيقي في Caddyfile:
+
+```bash
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+```
+
+يجب أن تشير DNS A/AAAA إلى الخادم وأن تكون 80/443 متاحتين خارجيًا قبل طلب الشهادة العامة.
+
+### 10. Health / Readiness
+
+```bash
+curl -fsS https://radarx.example.com/healthz
+curl -fsS https://radarx.example.com/readyz
+```
+
+إذا فشل `/readyz`، لا تبدأ اختبار Push.
+
+### 11. TEST_PUSH_ONLY
+
+فقط على staging:
+
+```text
+RADARX_STAGING_TEST_PUSH_ENABLED=true
+```
+
+ثم:
+
+```bash
+sudo systemctl restart radarx
+```
+
+شغّل الاختبار من PWA على هاتف حقيقي.
+
+**المعيار النهائي للنجاح:** الإشعار يظهر فعليًا على الهاتف، ثم يتم receipt acknowledgment الصحيح ويرتفع `staging_push_validation_status` إلى `VALIDATED`.
+
+`HTTP 202` أو `status=SENT` وحدهما لا يكفيان.
+
+### 12. بعد اختبار الهاتف
+
+أعد:
+
+```text
+RADARX_STAGING_TEST_PUSH_ENABLED=false
+```
+
+ثم:
+
+```bash
+sudo systemctl restart radarx
+```
+
+### 13. LIVE_MARKET_SIGNAL
+
+قبل `VALIDATED`:
+
+```text
+Paper Signal = مستمر
+Audit = مستمر
+LIVE_MARKET_SIGNAL Push = محجوب
+```
+
+لا يجوز تخطي البوابة بناءً على نجاح مزود Push فقط.
+
+### 14. Rollback
+
+سجل Commit الحالي وCommit سابق معروف.
+
+```bash
+sudo systemctl stop radarx
+sudo -u radarx git -C /opt/radarx fetch --all
+sudo -u radarx git -C /opt/radarx checkout <KNOWN_GOOD_COMMIT>
+sudo -u radarx -H bash -lc 'cd /opt/radarx && npm ci --omit=dev'
+sudo systemctl start radarx
+curl -fsS https://radarx.example.com/healthz
+curl -fsS https://radarx.example.com/readyz
+```
+
+### 15. Backup / Restore
+
+Backup:
+
+```bash
+sudo install -d -m 700 /var/backups/radarx
+sudo tar -C /var/lib -czf /var/backups/radarx/radarx-$(date +%Y%m%d-%H%M%S).tar.gz radarx
+sudo chmod 600 /var/backups/radarx/*.tar.gz
+```
+
+Restore:
+
+```bash
+sudo systemctl stop radarx
+sudo tar -C /var/lib -xzf /var/backups/radarx/<KNOWN-BACKUP>.tar.gz
+sudo chown -R radarx:radarx /var/lib/radarx
+sudo systemctl start radarx
+```
+
+أرشيف الأسرار لا يوضع في Git؛ يُخزن منفصلًا ومشفرًا.
