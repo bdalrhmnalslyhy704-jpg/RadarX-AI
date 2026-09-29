@@ -12,7 +12,8 @@ import {PushManager} from '../push/index.mjs';
 const TEST_FIXTURE='TEST_FIXTURE';
 const step=tf=>tf==='4h'?14400000:tf==='1h'?3600000:900000;
 
-function series(tf,count,start=1700000000000){
+function series(tf,count,now=1700054000000){
+  const start=now-count*step(tf)+1;
   const s=step(tf);
   return Array.from({length:count},(_,i)=>{
     const o=100+i*.02,c=o+.02;
@@ -21,7 +22,7 @@ function series(tf,count,start=1700000000000){
       closed:true,source:TEST_FIXTURE,sourceTime:start+i*s+s-1};
   });
 }
-function breakout(start=1700000000000){
+function breakout(start=1700054000000-60*900000+1){
   const s=900000;
   const a=Array.from({length:59},(_,i)=>({symbol:'BTCUSDT',timeframe:'15m',openTime:start+i*s,closeTime:start+i*s+s-1,
     open:100,high:101,low:99,close:100.1,volume:1000,quoteVolume:100000,tradeCount:1000,
@@ -31,8 +32,8 @@ function breakout(start=1700000000000){
     closed:true,source:TEST_FIXTURE,sourceTime:start+60*s-1});
   return a;
 }
-function snap(){
-  return {symbol:'BTCUSDT',series4h:series('4h'),series1h:series('1h'),series15m:breakout(),
+function snap(now=1700054000000){
+  return {symbol:'BTCUSDT',series4h:series('4h',250,now),series1h:series('1h',250,now),series15m:breakout(now-60*900000+1),
     bookRaw:{bids:[['102.99','1000']],asks:[['103.01','1000']]},ticker24hRaw:{quoteVolume:'100000000',count:10000},
     wsState:'LIVE',restLastSuccessAt:1700054000000,source:'BINANCE_PUBLIC_WS',unresolvedGap:false};
 }
