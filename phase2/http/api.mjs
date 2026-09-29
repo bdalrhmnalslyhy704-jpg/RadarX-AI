@@ -12,13 +12,14 @@ async function body(req,max){
   let raw='';for await(const chunk of req){raw+=chunk;if(Buffer.byteLength(raw)>max){throw new Error('BODY_TOO_LARGE');}}
   try{return raw?JSON.parse(raw):{};}catch{throw new Error('INVALID_JSON');}
 }
-function validSettings(x){
+function validSettings(x,allowedSymbols){
   const out={...defaultSettings(),...x};
   out.enabled=Boolean(out.enabled);
   if(!Array.isArray(out.symbols)||!out.symbols.length)throw new Error('INVALID_SYMBOLS');
-  if(!Array.isArray(out.timeframes)||!out.timeframes.length||out.timeframes.some(x=>!['5m','15m','1h','4h'].includes(x)))throw new Error('INVALID_TIMEFRAMES');
+  if(!Array.isArray(out.timeframes)||!out.timeframes.length||out.timeframes.some(x=>!['15m','1h','4h'].includes(x)))throw new Error('INVALID_TIMEFRAMES');
   if(!Array.isArray(out.signalTypes)||!out.signalTypes.length||out.signalTypes.some(x=>!['ENTRY_CANDIDATE','CONFIRMED'].includes(x)))throw new Error('INVALID_SIGNAL_TYPES');
   out.symbols=out.symbols.map(x=>String(x).toUpperCase()).filter(x=>/^[A-Z0-9]{5,20}$/.test(x));
+  if(Array.isArray(allowedSymbols)&&out.symbols.some(x=>!allowedSymbols.includes(x)))throw new Error('SYMBOL_NOT_MONITORED');
   out.minDataQuality=Math.max(0,Math.min(100,Number(out.minDataQuality)));
   out.minLiquidityQuality=Math.max(0,Math.min(100,Number(out.minLiquidityQuality)));
   if(!Number.isFinite(out.minDataQuality)||!Number.isFinite(out.minLiquidityQuality))throw new Error('INVALID_QUALITY_THRESHOLDS');
@@ -61,7 +62,7 @@ export function createApiServer({config,store,monitor,pushProvider}){
       const user=authUser(req);if(!user)return send(res,401,{error:'UNAUTHORIZED'});
       if(u.pathname==='/v1/settings'&&req.method==='GET')return send(res,200,{settings:await store.getUserSettings(user)||defaultSettings()});
       if(u.pathname==='/v1/settings'&&req.method==='PUT'){
-        const s=validSettings(await body(req,config.api.maxBodyBytes));return send(res,200,{settings:await store.putUserSettings(user,s)});
+        const s=validSettings(await body(req,config.api.maxBodyBytes),config.symbols);return send(res,200,{settings:await store.putUserSettings(user,s)});
       }
       if(u.pathname==='/v1/subscriptions'&&req.method==='GET'){
         const list=await store.getSubscriptions(user);return send(res,200,{subscriptions:list.map(DurableStore.publicSubscription)});
