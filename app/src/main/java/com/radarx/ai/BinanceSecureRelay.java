@@ -293,7 +293,7 @@ public final class BinanceSecureRelay {
                     .url(base + path)
                     .get()
                     .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.8.1")
+                    .header("User-Agent", "RadarX-Android/6.8.2")
                     .build();
             try (Response r = client.newCall(request).execute()) {
                 long latency = System.currentTimeMillis() - started;
@@ -333,7 +333,7 @@ public final class BinanceSecureRelay {
                     .url(url)
                     .get()
                     .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.8.1")
+                    .header("User-Agent", "RadarX-Android/6.8.2")
                     .build();
             try (Response r = client.newCall(req).execute()) {
                 byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
@@ -358,7 +358,7 @@ public final class BinanceSecureRelay {
                     .url(url)
                     .get()
                     .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.8.1")
+                    .header("User-Agent", "RadarX-Android/6.8.2")
                     .build();
             try (Response r = client.newCall(req).execute()) {
                 byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
@@ -383,7 +383,7 @@ public final class BinanceSecureRelay {
                     .url(url)
                     .get()
                     .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.8.1")
+                    .header("User-Agent", "RadarX-Android/6.8.2")
                     .build();
             try (Response r = client.newCall(req).execute()) {
                 byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
@@ -415,7 +415,7 @@ public final class BinanceSecureRelay {
                     .url("https://radar-x-ai.vercel.app/api/radarx-context")
                     .get()
                     .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.8.1")
+                    .header("User-Agent", "RadarX-Android/6.8.2")
                     .build();
             try (Response r = client.newCall(req).execute()) {
                 byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
@@ -443,7 +443,7 @@ public final class BinanceSecureRelay {
                     .url("https://api.coingecko.com/api/v3/global")
                     .get()
                     .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.8.1")
+                    .header("User-Agent", "RadarX-Android/6.8.2")
                     .build();
             try (Response r = client.newCall(req).execute()) {
                 byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
@@ -468,7 +468,7 @@ public final class BinanceSecureRelay {
                     .url("https://api.alternative.me/fng/?limit=1")
                     .get()
                     .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.8.1")
+                    .header("User-Agent", "RadarX-Android/6.8.2")
                     .build();
             try (Response r = client.newCall(req).execute()) {
                 byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
@@ -519,7 +519,7 @@ public final class BinanceSecureRelay {
                     .url(cloudUrl)
                     .get()
                     .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.8.1")
+                    .header("User-Agent", "RadarX-Android/6.8.2")
                     .build();
             try (Response r = client.newCall(req).execute()) {
                 byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
