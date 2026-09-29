@@ -220,6 +220,52 @@ public final class NativeBinanceHttpQueue {
         return out;
     }
 
+    private Result requestDirect(String rawPath, int index) {
+        String base = UPSTREAMS[Math.floorMod(index, UPSTREAMS.length)];
+        Request direct = new Request.Builder()
+                .url(base + rawPath)
+                .get()
+                .header("Accept", "application/json")
+                .header("User-Agent", "RadarX-Android/6.8.3")
+                .build();
+        try (Response r = directClient.newCall(direct).execute()) {
+            byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+            if (r.isSuccessful() && looksLikeJson(body)) {
+                preferredIndex.set(Math.floorMod(index, UPSTREAMS.length));
+                return new Result(r.code(), "OK", "application/json; charset=utf-8", body, base);
+            }
+            return new Result(r.code(), "HTTP_" + r.code(), "application/json; charset=utf-8", body, base);
+        } catch (Exception e) {
+            return new Result(599, "ROUTE_FAILED", "application/json; charset=utf-8",
+                    ("{\"error\":\"ROUTE_FAILED\",\"detail\":\"" +
+                            escape(e.getMessage() == null ? "network" : e.getMessage()) + "\"}")
+                            .getBytes(StandardCharsets.UTF_8), base);
+        }
+    }
+
+    private Result requestCloud(String rawPath) {
+        Request cloud = new Request.Builder()
+                .url(REMOTE_RELAY + "?path=" + Uri.encode(rawPath))
+                .get()
+                .header("Accept", "application/json")
+                .header("User-Agent", "RadarX-Android/6.8.3")
+                .build();
+        try (Response r = cloudClient.newCall(cloud).execute()) {
+            byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+            if (r.isSuccessful() && looksLikeJson(body)) {
+                return new Result(r.code(), "OK", "application/json; charset=utf-8",
+                        body, "radarx-cloud-relay");
+            }
+            return new Result(r.code(), "HTTP_" + r.code(), "application/json; charset=utf-8",
+                    body, "radarx-cloud-relay");
+        } catch (Exception e) {
+            return new Result(599, "CLOUD_ROUTE_FAILED", "application/json; charset=utf-8",
+                    ("{\"error\":\"CLOUD_ROUTE_FAILED\",\"detail\":\"" +
+                            escape(e.getMessage() == null ? "network" : e.getMessage()) + "\"}")
+                            .getBytes(StandardCharsets.UTF_8), "radarx-cloud-relay");
+        }
+    }
+
     private boolean isValidPath(String rawPath) {
         if (!rawPath.startsWith("/api/v3/")) return false;
         int q = rawPath.indexOf('?');
