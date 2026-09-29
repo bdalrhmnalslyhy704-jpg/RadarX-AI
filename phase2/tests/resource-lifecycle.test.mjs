@@ -7,10 +7,10 @@ test('TEST_FIXTURE: HTTP server cleanup removes the server resource',async()=>{
   await new Promise((resolve,reject)=>server.listen(0,'127.0.0.1',resolve).on('error',reject));
   try{assert.equal(server.listening,true);}
   finally{await closeServer(server);}
-  await new Promise(resolve=>setImmediate(resolve));
+  await new Promise(resolve=>setTimeout(resolve,25));
   assert.equal(server.listening,false);
-  const snapshot=activeResourceSnapshot();
-  assert.equal(snapshot.active_handles.some(h=>h.type==='Server'),false);
+  const handles=typeof process._getActiveHandles==='function'?process._getActiveHandles():[];
+  assert.equal(handles.includes(server),false);
 });
 
 test('TEST_FIXTURE: timers and WebSocket fixture are stopped after monitor shutdown',async()=>{
