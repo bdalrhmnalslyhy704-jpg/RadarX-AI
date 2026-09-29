@@ -62,6 +62,16 @@
       stats.queued++; pump();
     });
   }
+  function touchCache(key,entry){
+    try{cache.delete(key);cache.set(key,entry);}catch(_){}
+  }
+
+  function trimCache(){
+    if(cache.size<=240)return;
+    var removeCount=Math.min(60,cache.size-180),it=cache.keys();
+    while(removeCount-->0){var k=it.next();if(k.done)break;cache.delete(k.value);}
+  }
+
   async function requestJSON(url,opts){
     opts=opts||{};
     var target=String(url||'');
@@ -70,7 +80,7 @@
     var backoff=Number(opts.backoff)||350;
     var key=keyOf(target),ttl=ttlOf(target);
     var cached=cache.get(key);
-    if(cached && now()-cached.ts<=ttl){stats.cacheHits++;return clone(cached.data);}
+    if(cached && now()-cached.ts<=ttl){stats.cacheHits++;touchCache(key,cached);return clone(cached.data);}
     if(inflight.has(key)){stats.coalesced++;return clone(await inflight.get(key));}
 
     var promise=enqueue(async function(){
@@ -90,11 +100,9 @@
             throw new Error('HTTP '+r.status);
           }
           stats.ok++; stats.lastLatency=Math.round(performance.now()-started); stats.lastError='';
-          cache.set(key,{ts:now(),data:clone(data),ttl:ttl});
-          if(cache.size>240){
-            var oldest=Array.from(cache.entries()).sort(function(a,b){return a[1].ts-b[1].ts;}).slice(0,60);
-            oldest.forEach(function(x){cache.delete(x[0]);});
-          }
+          var entry={ts:now(),data:clone(data),ttl:ttl};
+          touchCache(key,entry);
+          trimCache();
           return clone(data);
         }catch(e){
           last=e;stats.failed++;stats.lastError=String(e&&e.message||e);
