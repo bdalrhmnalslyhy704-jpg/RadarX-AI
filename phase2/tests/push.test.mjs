@@ -18,7 +18,9 @@ function signal(){return{signal_id:'TEST_FIXTURE_SIGNAL',symbol:'BTCUSDT',market
 
 test('TEST_FIXTURE: failed push is queued and succeeds after provider recovery',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-push-')),store=await new DurableStore({dir}).init();
-  await store.putUserSettings('u1',defaultSettings());await store.upsertSubscription('u1',pushSubscription());
+  await store.putUserSettings('u1',{enabled:true,symbols:['BTCUSDT'],timeframes:['15m'],minDataQuality:70,minLiquidityQuality:60,signalTypes:['CONFIRMED']});
+  await store.upsertSubscription('u1',pushSubscription());
+  assert.equal((await store.getUserSettings('u1')).enabled,true);assert.equal((await store.getSubscriptions('u1')).length,1);
   const p=new ToggleProvider(),m=new PushManager({provider:p,store,retryBaseMs:1});
   const first=await m.notifySignal(signal());assert.equal(first[0].status,'FAILED');
   p.fail=false;await m.flushRetries(Date.now()+100);
