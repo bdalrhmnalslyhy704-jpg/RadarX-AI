@@ -34,7 +34,7 @@ function breakout(start=1700054000000-60*900000+1){
 }
 function snap(now=1700054000000){
   return {symbol:'BTCUSDT',series4h:series('4h',250,now),series1h:series('1h',250,now),series15m:breakout(now-60*900000+1),
-    bookRaw:{bids:[['102.99','1000']],asks:[['103.01','1000']]},ticker24hRaw:{quoteVolume:'100000000',count:10000},
+    bookRaw:{bids:[['102.99','2000']],asks:[['103.01','1000']]},ticker24hRaw:{quoteVolume:'100000000',count:10000},
     wsState:'LIVE',restLastSuccessAt:1700054000000,source:'BINANCE_PUBLIC_WS',unresolvedGap:false};
 }
 class TestPush{constructor(){this.calls=[]}status(){return{provider:TEST_FIXTURE,enabled:true}}async send(sub,payload){this.calls.push({sub,payload});return{ok:true,status:'SENT',httpStatus:201}}}
