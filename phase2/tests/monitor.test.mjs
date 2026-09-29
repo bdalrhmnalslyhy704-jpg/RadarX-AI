@@ -36,3 +36,13 @@ test('TEST_FIXTURE: websocket disconnect is reflected and REST remains available
   await store.init();const rest=new Rest(),m=new MarketMonitor({config:cfg,rest,wsFactory:()=>new WS(),signalService:{evaluateSnapshot:async()=>({})},store,pushManager:null,logger:{info(){},warn(){},error(){}}});
   m.running=true;m.wsState='BACKING_OFF';await m.repairOne('BTCUSDT','15m');assert.ok(rest.calls>0);assert.equal(m.isGap('BTCUSDT','15m'),false);
 });
+
+test('TEST_FIXTURE: missing websocket candle triggers REST repair before analysis',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-gap-')),store=new (await import('../core/store.mjs')).DurableStore({dir});
+  await store.init();const rest=new Rest(),m=new MarketMonitor({config:cfg,rest,wsFactory:()=>new WS(),
+    signalService:{evaluateSnapshot:async()=>({})},store,pushManager:null,logger:{info(){},warn(){},error(){}}});
+  m.running=true;m.wsState='LIVE';const t=1700000000000,step=900000;
+  m.getSeries('BTCUSDT','15m').merge([candle(t,{tf:'15m',closed:true})]);
+  await m.onCandle({...candle(t+2*step,{tf:'15m',closed:true,price:102}),symbol:'BTCUSDT',timeframe:'15m'});
+  assert.ok(rest.calls>0);assert.equal(m.isGap('BTCUSDT','15m'),false);
+});

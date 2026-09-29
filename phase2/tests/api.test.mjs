@@ -21,7 +21,7 @@ test('TEST_FIXTURE: subscription/settings API requires auth and never returns pu
   const save=await fetch(base+'/v1/settings',{method:'PUT',headers:h,body:JSON.stringify({enabled:true,symbols:['BTCUSDT'],timeframes:['15m'],minDataQuality:80,minLiquidityQuality:70,signalTypes:['CONFIRMED']})});
   assert.equal(save.status,200);
   const add=await fetch(base+'/v1/subscriptions',{method:'POST',headers:h,body:JSON.stringify(pushSubscription())});assert.equal(add.status,201);
-  const got=await add.json();assert.equal(got.subscription.endpoint,pushSubscription().endpoint);assert.equal('keys' in JSON.stringify(got),false);
+  const got=await add.json();assert.equal(got.subscription.endpoint,pushSubscription().endpoint);assert.equal(Object.hasOwn(got.subscription,'keys'),false);
   const list=await fetch(base+'/v1/subscriptions',{headers:{Authorization:'Bearer '+token}});assert.equal(list.status,200);
   const rows=await list.json();assert.equal(rows.subscriptions.length,1);
   const del=await fetch(base+'/v1/subscriptions/'+rows.subscriptions[0].id,{method:'DELETE',headers:{Authorization:'Bearer '+token}});

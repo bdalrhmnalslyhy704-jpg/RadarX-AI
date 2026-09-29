@@ -67,6 +67,7 @@ export class RestClient {
         if(e?.name==='RestRateLimitError') break;
       }finally{clearTimeout(tm);}
     }
+    if(error?.name==='RestRateLimitError') throw error;
     this.state='ERROR'; throw error??new Error('REST_REQUEST_FAILED');
   }
   async klines(symbol,interval,opts={}) {

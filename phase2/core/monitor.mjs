@@ -38,7 +38,9 @@ export class MarketMonitor{
   isGap(symbol,tf){return Boolean(this.unresolved.get(this.key(symbol,tf))?.length);}
   markGap(symbol,tf,gaps){const k=this.key(symbol,tf);if(gaps.length)this.unresolved.set(k,[...new Set(gaps)]);else this.unresolved.delete(k);}
   mergeCandles(symbol,tf,candles){
-    const buf=this.getSeries(symbol,tf);const old=buf.lastClosed();buf.merge(candles);const latest=buf.lastClosed();
+    const buf=this.getSeries(symbol,tf);const old=buf.lastClosed();
+    const normalized=candles.map(x=>({...x,symbol,timeframe:tf}));
+    buf.merge(normalized);const latest=buf.lastClosed();
     if(old&&latest){
       const gaps=expectedGap(old,latest,tf);
       this.markGap(symbol,tf,gaps);
