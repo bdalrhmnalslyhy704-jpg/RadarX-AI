@@ -9,177 +9,150 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icons/apple-touch-icon.svg">
-<title>RadarX Phase 1 — Read Only</title>
+<title>RadarX — Phase 2 Integration</title>
 <style>
 :root{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color-scheme:dark;background:#071018;color:#eaf5f8}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{margin:0;background:linear-gradient(180deg,#071018,#091721);min-height:100vh}
-main{width:min(1100px,100%);margin:auto;padding:env(safe-area-inset-top) 14px calc(24px + env(safe-area-inset-bottom))}
+main{width:min(1100px,100%);margin:auto;padding:env(safe-area-inset-top) 14px calc(28px + env(safe-area-inset-bottom))}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0;position:sticky;top:0;background:rgba(7,16,24,.94);backdrop-filter:blur(10px);z-index:5}
-.brand{font-size:22px;font-weight:950;letter-spacing:.2px}.muted{color:#8da7b1;font-size:12px;line-height:1.55}
-.status{padding:9px 11px;border:1px solid #31515f;border-radius:999px;font-size:11px;font-weight:900;white-space:nowrap}.status.live{border-color:#268c68;color:#b5f5da}.status.off{border-color:#9b4651;color:#ffc4ca}.status.warn{border-color:#90713a;color:#ffe0a0}
-.panel{background:#0b1820;border:1px solid #1d3944;border-radius:17px;padding:14px;margin-top:12px;box-shadow:0 8px 30px rgba(0,0,0,.12)}
-.controls{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(110px,.8fr) minmax(110px,.8fr) 1fr;gap:9px}
+.brand{font-size:22px;font-weight:950}.muted{color:#8da7b1;font-size:12px;line-height:1.55}
+.status{padding:9px 11px;border:1px solid #31515f;border-radius:999px;font-size:11px;font-weight:900;white-space:nowrap}.live{border-color:#268c68;color:#b5f5da}.off{border-color:#9b4651;color:#ffc4ca}.warn{border-color:#90713a;color:#ffe0a0}
+.panel{background:#0b1820;border:1px solid #1d3944;border-radius:17px;padding:14px;margin-top:12px}
+.controls{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(110px,.8fr) minmax(110px,.8fr) 1fr;gap:9px}
 .input,.btn{width:100%;min-height:48px;border-radius:12px;border:1px solid #2a4c58;background:#08131a;color:#fff;padding:0 13px;font:inherit}
-.btn{font-weight:950;cursor:pointer;touch-action:manipulation}.btn:active{transform:translateY(1px)}
-.banner{display:flex;align-items:flex-start;gap:10px}.dot{width:10px;height:10px;border-radius:50%;background:#d96f78;flex:0 0 10px;margin-top:5px}.banner h2{font-size:15px;margin:0 0 3px}.banner p{margin:0}
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin-top:12px}
-.card{background:#0b1820;border:1px solid #1d3944;border-radius:16px;padding:14px;min-height:126px}
-.card .name{font-size:12px;color:#9bb3bd;font-weight:800}.score{font-size:31px;font-weight:950;margin-top:5px}.state{font-size:11px;font-weight:900;margin-top:4px}
-.scorebar{height:7px;background:#102932;border-radius:99px;overflow:hidden;margin-top:10px}.scorebar>i{display:block;height:100%;background:#54d5ff;border-radius:99px}
-.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:11px}
-.metric{background:#08131a;border:1px solid #17313a;border-radius:12px;padding:11px}.metric b{display:block;font-size:17px;margin-top:3px}
-.kv{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:11px}.kv div{padding:10px 11px;border-radius:11px;background:#08131a;border:1px solid #17313a}.kv b{display:block;margin-top:3px}
-pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-radius:11px;font-size:10px;max-height:520px;margin:10px 0 0}
-.footer{padding:18px 4px;text-align:center}.install{margin-top:10px;display:none}
-@media(max-width:760px){.controls,.grid,.metrics{grid-template-columns:1fr 1fr}.controls .wide{grid-column:1/-1}.kv{grid-template-columns:1fr}}
-@media(max-width:470px){.grid,.metrics{grid-template-columns:1fr}.top{align-items:flex-start}.status{margin-top:2px}}
+.btn{font-weight:950;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}.btn:active{transform:translateY(1px)}
+.banner{display:flex;align-items:flex-start;gap:10px}.dot{width:10px;height:10px;border-radius:50%;background:#d96f78;flex:0 0 10px;margin-top:5px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin-top:12px}.card{background:#0b1820;border:1px solid #1d3944;border-radius:16px;padding:14px;min-height:126px}
+.name{font-size:12px;color:#9bb3bd;font-weight:800}.score{font-size:31px;font-weight:950;margin-top:5px}.state{font-size:11px;font-weight:900;margin-top:4px}
+.bar{height:7px;background:#102932;border-radius:99px;overflow:hidden;margin-top:10px}.bar>i{display:block;height:100%;background:#54d5ff;border-radius:99px}
+.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:11px}.metric{background:#08131a;border:1px solid #17313a;border-radius:12px;padding:11px}.metric b{display:block;font-size:17px;margin-top:3px}
+.kv{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:11px}.kv div{padding:10px 11px;border-radius:11px;background:#08131a;border:1px solid #17313a}.kv b{display:block;margin-top:3px}
+.list{display:grid;gap:7px;margin-top:10px}.item{background:#08131a;border:1px solid #17313a;border-radius:11px;padding:10px;font-size:11px}.item a{color:#b5f5da;text-decoration:none}
+pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-radius:11px;font-size:10px;max-height:420px;margin:10px 0 0}
+.footer{padding:18px 4px;text-align:center}
+@media(max-width:760px){.controls,.grid,.metrics,.kv{grid-template-columns:1fr 1fr}.wide{grid-column:1/-1}}
+@media(max-width:470px){.grid,.metrics,.kv{grid-template-columns:1fr}.top{align-items:flex-start}}
 </style>
 </head>
-<body>
-<main>
+<body><main>
 <header class="top">
-  <div><div class="brand">RadarX Phase 1</div><div class="muted">تحليل العملات • قراءة فقط • Paper Trading</div></div>
-  <div id="status" class="status warn" aria-live="polite">جاري التهيئة</div>
+  <div><div class="brand">RadarX</div><div class="muted">Phase 2 • Read Only • Paper Trading</div></div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <a class="btn" href="./settings.html" style="min-height:40px;padding:0 12px">الإعدادات</a>
+    <div id="status" class="status warn">جاري التهيئة</div>
+  </div>
 </header>
 
 <section id="offlineBanner" class="panel banner" hidden>
-  <div class="dot"></div>
-  <div><h2>Disconnected — لا يوجد اتصال بالبيانات الآن</h2><p class="muted">تم تحميل واجهة التطبيق من الذاكرة المحلية. لا يتم عرض قيم سوق قديمة على أنها بيانات مباشرة.</p></div>
+  <div class="dot"></div><div><h3 style="margin:0 0 3px">لا توجد بيانات سوق مباشرة الآن</h3>
+  <p class="muted" style="margin:0">لن يتم اعتبار بيانات قديمة أو مخزنة مؤقتًا على أنها لحظية.</p></div>
 </section>
 
 <section class="panel">
   <div class="controls">
     <input id="symbol" class="input" value="BTCUSDT" spellcheck="false" autocapitalize="characters" aria-label="رمز العملة">
-    <input id="fee" class="input" inputmode="decimal" placeholder="Fee rate: 0.001" aria-label="رسوم">
-    <input id="slip" class="input" inputmode="decimal" placeholder="Slippage bps: 5" aria-label="انزلاق">
+    <input id="fee" class="input" inputmode="decimal" placeholder="Fee rate: 0.001">
+    <input id="slip" class="input" inputmode="decimal" placeholder="Slippage bps: 5">
     <button id="scan" class="btn wide">فحص السوق</button>
   </div>
-  <div class="muted" style="margin-top:9px">المصدر: بيانات عامة. لا توجد مفاتيح تداول ولا أوامر حقيقية. الإشارات الهابطة للمراقبة/الخروج/التجنب وليست Short execution.</div>
-  <button id="install" class="btn install" type="button">تثبيت RadarX على الهاتف</button>
+  <div class="muted" style="margin-top:9px">مصدر السوق العام • لا توجد مفاتيح تداول • لا توجد أوامر حقيقية.</div>
 </section>
 
 <section id="cards" class="grid" aria-live="polite"></section>
 
 <section class="panel">
+  <b>المراقبة الخلفية</b>
+  <div class="kv">
+    <div><span class="muted">WebSocket</span><b id="ws">UNKNOWN</b></div>
+    <div><span class="muted">REST</span><b id="rest">UNKNOWN</b></div>
+    <div><span class="muted">Database</span><b id="db">UNKNOWN</b></div>
+    <div><span class="muted">آخر رسالة WS</span><b id="wsMsg">UNKNOWN</b></div>
+    <div><span class="muted">آخر شمعة مكتملة</span><b id="candle">UNKNOWN</b></div>
+    <div><span class="muted">آخر تحليل</span><b id="analysis">UNKNOWN</b></div>
+  </div>
   <div class="metrics">
     <div class="metric"><span class="muted">Data Quality</span><b id="dq">UNKNOWN</b></div>
     <div class="metric"><span class="muted">Liquidity Quality</span><b id="lq">UNKNOWN</b></div>
     <div class="metric"><span class="muted">Risk Filter</span><b id="risk">UNKNOWN</b></div>
   </div>
-  <div class="kv">
-    <div><span class="muted">الثقة</span><b id="confidence">UNKNOWN — UNCALIBRATED</b></div>
-    <div><span class="muted">حالة البيانات</span><b id="dataState">UNKNOWN</b></div>
-    <div><span class="muted">آخر تحديث ناجح</span><b id="last_successful_update">UNKNOWN</b></div>
-    <div><span class="muted">مصدر آخر تحديث</span><b id="source">UNKNOWN</b></div>
-  </div>
-  <div id="riskReasons" class="muted" style="margin-top:10px"></div>
+  <div style="margin-top:10px"><span class="muted">confidence_score</span><b style="display:block;margin-top:3px">UNKNOWN</b></div>
+  <div id="backendMsg" class="muted" style="margin-top:10px">اضبط عنوان الخادم وSession Token من الإعدادات لعرض السجل.</div>
 </section>
 
 <section class="panel">
-  <b>Continuous monitoring</b>
-  <p class="muted">المراقبة المستمرة في البنية الإنتاجية تكون من الخادم الخلفي. هذا التطبيق لا يعتمد على إبقاء WebSocket مفتوحًا في الهاتف، وهو جاهز لمسار Push Notifications لاحقًا.</p>
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>آخر الإشارات</b><button id="refreshLogs" class="btn" style="width:auto;min-height:40px;padding:0 12px">تحديث</button></div>
+  <div id="signals" class="list"></div>
 </section>
 
 <section class="panel">
-  <b>Unified JSON Signal</b>
+  <div><b>آخر التنبيهات</b></div>
+  <div id="notifications" class="list"></div>
+</section>
+
+<section class="panel">
+  <b>الإشارة الموحدة الأخيرة</b>
   <pre id="json">UNKNOWN</pre>
 </section>
 
-<div class="footer muted">RadarX Phase 1 • Read Only • real_order_execution = false</div>
+<div class="footer muted">RadarX • Read Only • Paper Trading • real_order_execution = false</div>
 </main>
 
 <script type="module">
 import {BinancePublicData,evaluateSymbolSnapshot,CONFIG} from './radarx-phase1-engine.mjs';
+import {apiHealth,apiReady,apiSignals,apiNotifications,getSessionToken} from './phase2-api.mjs';
 
-const api=new BinancePublicData({timeoutMs:9000});
 const $=id=>document.getElementById(id);
-const META_KEY='radarx.phase1.last_success_metadata';
-let statusMode='UNKNOWN';
-let deferredInstallPrompt=null;
+const api=new BinancePublicData({timeoutMs:9000});
+const fmt=ts=>ts?new Intl.DateTimeFormat('ar',{dateStyle:'medium',timeStyle:'medium'}).format(new Date(ts)):'UNKNOWN';
+const n=v=>Number.isFinite(Number(v))?Number(v):null;
 
-const toNum=v=>{const x=Number(v);return Number.isFinite(x)?x:null};
-const fmtTime=ts=>ts?new Intl.DateTimeFormat('ar',{dateStyle:'medium',timeStyle:'medium'}).format(new Date(ts)):'UNKNOWN';
-function setStatus(mode,text){
-  statusMode=mode;
-  const el=$('status');
-  el.textContent=text;
-  el.className='status '+(mode==='LIVE_DATA'?'live':mode==='DISCONNECTED'?'off':'warn');
-}
-function readMetadata(){
-  try{return JSON.parse(localStorage.getItem(META_KEY)||'null')}catch{return null}
-}
-function saveMetadata(meta){
-  try{localStorage.setItem(META_KEY,JSON.stringify(meta))}catch{}
-}
-function renderHistoricalMetadata(){
-  const m=readMetadata();
-  $('last_successful_update').textContent=m?.last_successful_update?fmtTime(m.last_successful_update):'UNKNOWN';
-  $('source').textContent=m?.source||'UNKNOWN';
-}
-function clearLiveView(){
-  $('cards').innerHTML='<div class="card" style="grid-column:1/-1"><div class="state bad">DISCONNECTED</div><div style="margin-top:7px">لا توجد بيانات سوق مباشرة متاحة.</div><div class="muted" style="margin-top:5px">الواجهة تعمل من الذاكرة المحلية فقط.</div></div>';
-  $('dq').textContent='UNKNOWN';$('lq').textContent='UNKNOWN';$('risk').textContent='FAIL';
-  $('confidence').textContent='UNKNOWN — UNCALIBRATED';$('dataState').textContent='DISCONNECTED';
-  $('riskReasons').textContent='لا يمكن اعتماد إشارة جديدة أثناء انقطاع البيانات.';
-  $('json').textContent='UNKNOWN';
-}
-function scoreCard(name,score,state,direction){
-  const n=Number.isFinite(score)?score:0;
-  const cls=state==='CONFIRMED'?'live':state==='REJECTED'?'off':'warn';
-  return '<article class="card"><div class="name">'+name+'</div><div class="score">'+n.toFixed(1)+'</div><div class="scorebar"><i style="width:'+Math.max(0,Math.min(100,n))+'%"></i></div><div class="state '+cls+'">'+state+' · '+direction+'</div></article>';
-}
-function renderLive(r){
-  const x=r.strategies;
+function status(mode,text){$('status').textContent=text;$('status').className='status '+(mode==='live'?'live':mode==='off'?'off':'warn')}
+function card(title,score,state,dir){const s=n(score)||0;return '<article class="card"><div class="name">'+title+'</div><div class="score">'+s.toFixed(1)+'</div><div class="bar"><i style="width:'+Math.max(0,Math.min(100,s))+'%"></i></div><div class="state">'+String(state||'UNKNOWN')+' · '+String(dir||'NONE')+'</div></article>'}
+function renderEngine(r){
+  const s=r.strategies;
   $('cards').innerHTML=[
-    scoreCard('Multi-Timeframe Trend',x.trend.score?.trendScore,x.trend.state,x.trend.direction),
-    scoreCard('Confirmed Breakout',x.breakout.score?.breakoutScore,x.breakout.state,x.breakout.direction),
-    scoreCard('Filtered Mean Reversion',x.meanReversion.score?.meanReversionScore,x.meanReversion.state,x.meanReversion.direction)
+    card('Multi-Timeframe Trend',s.trend.score?.trendScore,s.trend.state,s.trend.direction),
+    card('Confirmed Breakout',s.breakout.score?.breakoutScore,s.breakout.state,s.breakout.direction),
+    card('Filtered Mean Reversion',s.meanReversion.score?.meanReversionScore,s.meanReversion.state,s.meanReversion.direction)
   ].join('');
-  $('dq').textContent=String(r.signal.scores.data_quality);
-  $('lq').textContent=String(r.signal.scores.liquidity_quality);
-  $('risk').textContent=String(r.signal.risk_filter);
-  $('confidence').textContent='UNKNOWN — UNCALIBRATED';
-  $('dataState').textContent='LIVE_DATA';
-  $('riskReasons').textContent=(r.signal.risk_reasons||[]).join(' · ')||'لا توجد ملاحظات مخاطر إضافية.';
-  $('json').textContent=JSON.stringify(r.signal,null,2);
-  $('offlineBanner').hidden=true;
+  $('dq').textContent=String(r.signal.scores.data_quality);$('lq').textContent=String(r.signal.scores.liquidity_quality);
+  $('risk').textContent=String(r.signal.risk_filter);$('json').textContent=JSON.stringify(r.signal,null,2);
 }
 async function scan(){
-  if(!navigator.onLine){setStatus('DISCONNECTED','Disconnected');$('offlineBanner').hidden=false;clearLiveView();renderHistoricalMetadata();return}
-  const symbol=$('symbol').value.trim().toUpperCase();
-  if(!/^[A-Z0-9]{5,20}$/.test(symbol)){setStatus('UNKNOWN','رمز غير صالح');return}
-  setStatus('UNKNOWN','جلب بيانات السوق…');
-  $('dataState').textContent='FETCHING';
+  if(!navigator.onLine){status('off','Disconnected');$('offlineBanner').hidden=false;return}
+  const symbol=$('symbol').value.trim().toUpperCase();status('warn','جلب البيانات…');
   try{
-    const [h4,h1,m15,depth,ticker]=await Promise.all([
-      api.klines(symbol,'4h',250),api.klines(symbol,'1h',250),api.klines(symbol,'15m',250),api.depth(symbol,100),api.ticker24h(symbol)
-    ]);
-    if(!navigator.onLine)throw new Error('DISCONNECTED_DURING_FETCH');
-    const fee=toNum($('fee').value),slip=toNum($('slip').value);
-    const config={...CONFIG,costs:{feeRate:fee,slippageBps:slip}};
-    const now=Date.now();
-    const r=evaluateSymbolSnapshot({symbol,series4h:h4.candles,series1h:h1.candles,series15m:m15.candles,bookRaw:depth.data,ticker24hRaw:ticker.data,source:'BINANCE_PUBLIC_REST',now},{config});
-    saveMetadata({last_successful_update:now,source:'BINANCE_PUBLIC_REST'});
-    renderLive(r);renderHistoricalMetadata();setStatus('LIVE_DATA','LIVE DATA');
-  }catch(e){
-    const offline=!navigator.onLine||/DISCONNECTED|TIMEOUT|ALL_DATA_SOURCES_FAILED/.test(String(e?.message||e));
-    if(offline){setStatus('DISCONNECTED','Disconnected');$('offlineBanner').hidden=false;clearLiveView();renderHistoricalMetadata()}
-    else{setStatus('UNKNOWN','البيانات غير متاحة');$('dataState').textContent='DATA_UNAVAILABLE';$('json').textContent='UNKNOWN'}
-  }
+    const [h4,h1,m15,depth,ticker]=await Promise.all([api.klines(symbol,'4h',250),api.klines(symbol,'1h',250),api.klines(symbol,'15m',250),api.depth(symbol,100),api.ticker24h(symbol)]);
+    const fee=n($('fee').value),slip=n($('slip').value),now=Date.now();
+    const cfg={...CONFIG,costs:{feeRate:fee,slippageBps:slip}};
+    const r=evaluateSymbolSnapshot({symbol,series4h:h4.candles,series1h:h1.candles,series15m:m15.candles,bookRaw:depth.data,ticker24hRaw:ticker.data,source:'BINANCE_PUBLIC_REST',now},{config:cfg});
+    renderEngine(r);status('live','LIVE DATA');$('offlineBanner').hidden=true;
+  }catch(e){status('off','Data unavailable');$('offlineBanner').hidden=false;$('dq').textContent='UNKNOWN';$('lq').textContent='UNKNOWN';$('risk').textContent='FAIL';}
 }
-window.addEventListener('online',()=>{setStatus('UNKNOWN','عاد الاتصال — اضغط فحص السوق');$('offlineBanner').hidden=true;renderHistoricalMetadata()});
-window.addEventListener('offline',()=>{setStatus('DISCONNECTED','Disconnected');$('offlineBanner').hidden=false;clearLiveView();renderHistoricalMetadata()});
-
-if('serviceWorker' in navigator){
-  navigator.serviceWorker.register('./sw.js').catch(()=>{});
+async function refreshBackend(){
+  try{
+    const [h,r]=await Promise.all([apiHealth(),apiReady()]);
+    $('ws').textContent=h.websocket.state;$('rest').textContent=h.rest.state;$('db').textContent=h.database.state;
+    $('wsMsg').textContent=fmt(h.websocket.last_message_at);$('analysis').textContent=fmt(h.last_analysis_at);
+    const c=h.last_complete_candle;$('candle').textContent=c?c.symbol+' '+c.timeframe+' '+fmt(c.close_time):'UNKNOWN';
+    $('backendMsg').textContent='Ready: '+String(r.ready)+' • gaps: '+String(h.monitoring?.unresolved_gaps?.length||0);
+    status(r.ready?'live':'warn',r.ready?'BACKEND READY':'BACKEND DEGRADED');
+    if(!getSessionToken())return;
+    const [sig,notes]=await Promise.all([apiSignals(20),apiNotifications(20)]);
+    const events=sig.events||[];
+    $('signals').innerHTML=events.length?events.slice(0,8).map(e=>{
+      const s=e.signal_snapshot||{};return '<div class="item"><b>'+String(e.symbol||s.symbol||'UNKNOWN')+' · '+String(s.direction||'NONE')+'</b><div class="muted">'+String(e.strategy||s.strategy||'UNKNOWN')+' · '+fmt(e.source_time)+'</div><a href="./signal.html?signal_id='+encodeURIComponent(e.signal_id||'')+'">التفاصيل</a></div>'
+    }).join(''):'<div class="muted">لا توجد إشارات مسجلة.</div>';
+    $('notifications').innerHTML=notes.events?.length?notes.events.slice(0,8).map(e=>'<div class="item"><b>'+String(e.status||'UNKNOWN')+'</b><div class="muted">'+String(e.provider||'UNKNOWN')+' · '+fmt(e.attempted_at)+'</div></div>').join(''):'<div class="muted">لا توجد محاولات تنبيه.</div>';
+    const latest=events.find(e=>e.signal_snapshot)?.signal_snapshot;
+    if(latest){$('dq').textContent=String(latest.scores?.data_quality??'UNKNOWN');$('lq').textContent=String(latest.scores?.liquidity_quality??'UNKNOWN');$('risk').textContent=String(latest.risk_filter??'UNKNOWN');$('json').textContent=JSON.stringify(latest,null,2);}
+  }catch(e){$('backendMsg').textContent='تعذر الوصول إلى خدمة Phase 2: '+e.message;status('off','BACKEND OFFLINE')}
 }
-window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstallPrompt=e;$('install').style.display='block'});
-$('install').addEventListener('click',async()=>{if(!deferredInstallPrompt)return;deferredInstallPrompt.prompt();await deferredInstallPrompt.userChoice;deferredInstallPrompt=null;$('install').style.display='none'});
-
-$('scan').addEventListener('click',scan);
-renderHistoricalMetadata();
-if(navigator.onLine)scan();else{setStatus('DISCONNECTED','Disconnected');$('offlineBanner').hidden=false;clearLiveView()}
+window.addEventListener('online',()=>{status('warn','ONLINE');refreshBackend()});
+window.addEventListener('offline',()=>{status('off','Disconnected');$('offlineBanner').hidden=false});
+$('scan').onclick=scan;$('refreshLogs').onclick=refreshBackend;
+if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
+scan();refreshBackend();setInterval(refreshBackend,15000);
 </script>
-</body>
-</html>
+</body></html>
