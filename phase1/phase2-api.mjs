@@ -48,4 +48,5 @@ export const apiSignal=id=>request('/v1/signals/'+encodeURIComponent(id));
 export const apiNotifications=limit=>request('/v1/notifications?limit='+(limit||50));
 export const apiPushStatus=()=>request('/v1/push/status');
 export const apiTestPush=testId=>request('/v1/push/test',{method:'POST',body:{test_id:String(testId||'android-manual')}});
+export const apiPushValidation=()=>request('/v1/push/validation');
 export {request};

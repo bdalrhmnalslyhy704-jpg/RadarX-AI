@@ -39,6 +39,8 @@ export function assertDeploymentEnvironment(env=process.env){
 
   const origins=String(env.RADARX_ALLOWED_ORIGINS??'').split(',').map(x=>x.trim()).filter(Boolean);
   if(!origins.length) throw new Error('RADARX_ALLOWED_ORIGINS_REQUIRED');
+  if(runtime==='staging'&&origins.some(x=>!x.startsWith('https://')||x.endsWith('/'))) throw new Error('STAGING_ALLOWED_ORIGINS_MUST_BE_EXACT_HTTPS_ORIGINS');
+  if(runtime==='staging'){const publicApiOrigin=required('RADARX_PUBLIC_API_ORIGIN',env.RADARX_PUBLIC_API_ORIGIN);if(!publicApiOrigin.startsWith('https://')||publicApiOrigin.endsWith('/'))throw new Error('RADARX_PUBLIC_API_ORIGIN_MUST_BE_EXACT_HTTPS_ORIGIN');}
   if(origins.some(x=>!x.startsWith('https://')||x.length<10)) throw new Error('STAGING_ALLOWED_ORIGINS_MUST_USE_HTTPS');
 
   if(String(env.RADARX_REAL_ORDER_EXECUTION??'false').trim().toLowerCase()!==FALSE)
@@ -53,7 +55,8 @@ export function assertDeploymentEnvironment(env=process.env){
   const hostRaw=String(env.RADARX_HOST??'').trim();
   const host=assertAllowedHost(hostRaw||'127.0.0.1',runtime,{explicit:Boolean(hostRaw)});
   const port=resolvePort(env);
-  const dataDir=verifyDataDir(env);
+  const dataDir=required('RADARX_DATA_DIR',env.RADARX_DATA_DIR);verifyDataDir({...env,RADARX_DATA_DIR:dataDir});
+  if(runtime==='production'&&testFlag===TRUE)throw new Error('TEST_PUSH_ONLY_STAGING_ONLY');
 
   return {environment:runtime,pushProvider:provider,testPushEnabled:testFlag===TRUE,allowedOrigins:origins,
     host,port,dataDir,paperTrading:true,realOrderExecution:false,confidenceMode:'UNKNOWN'};
