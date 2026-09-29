@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#071018"><title>RadarX Phase 1 — Read Only</title>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color-scheme:dark}*{box-sizing:border-box}
+body{margin:0;background:#071018;color:#eaf5f8}main{max-width:1050px;margin:auto;padding:18px}.top{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
+.brand{font-weight:900;font-size:24px}.muted{color:#88a3ad;font-size:12px}.panel,.card{background:#0b1820;border:1px solid #1d3944;border-radius:16px;padding:14px;margin-top:14px}
+.controls{display:grid;grid-template-columns:1.2fr 1fr 1fr auto;gap:9px}.controls input,.controls button{min-height:44px;border-radius:10px;border:1px solid #2a4c58;background:#08131a;color:#fff;padding:0 12px}.controls button{font-weight:900;cursor:pointer}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.card{margin-top:0}.score{font-size:32px;font-weight:950}.state{font-size:12px;font-weight:900;margin-top:5px}.ok{color:#9af0cb}.bad{color:#ffb8bf}.warn{color:#ffd98a}
+pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-radius:10px;font-size:11px;max-height:620px}
+@media(max-width:760px){.controls,.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body><main>
+<div class="top"><div><div class="brand">RadarX Phase 1</div><div class="muted">قراءة فقط • بيانات عامة حقيقية • Paper Trading فقط</div></div><div id="status">جاهز</div></div>
+<div class="panel"><div class="controls"><input id="symbol" value="BTCUSDT" spellcheck="false"><input id="fee" placeholder="Fee rate: مثال 0.001"><input id="slip" placeholder="Slippage bps: مثال 5"><button id="scan">افحص</button></div><div class="muted" style="margin-top:9px">لا توجد مفاتيح تداول ولا أوامر حقيقية. الإشارات الهابطة هنا للمراقبة/الخروج/التجنب وليست Short execution.</div></div>
+<div id="cards" class="grid"></div>
+<div id="meta" class="panel">لم يتم الفحص بعد.</div>
+<div class="panel"><b>Unified JSON Signal</b><pre id="json">UNKNOWN</pre></div>
+</main>
+<script type="module">
+import {BinancePublicData,evaluateSymbolSnapshot,CONFIG} from './radarx-phase1-engine.mjs';
+const api=new BinancePublicData({timeoutMs:9000});
+const $=id=>document.getElementById(id), toNum=v=>{const x=Number(v);return Number.isFinite(x)?x:null};
+function status(t){$('status').textContent=t}
+async function scan(){
+  const symbol=$('symbol').value.trim().toUpperCase();
+  if(!/^[A-Z0-9]{5,20}$/.test(symbol)){status('رمز غير صالح');return}
+  status('جلب بيانات السوق…');
+  try{
+    const [h4,h1,m15,depth,ticker]=await Promise.all([api.klines(symbol,'4h',250),api.klines(symbol,'1h',250),api.klines(symbol,'15m',250),api.depth(symbol,100),api.ticker24h(symbol)]);
+    const fee=toNum($('fee').value),slip=toNum($('slip').value);
+    const config={...CONFIG,costs:{feeRate:fee,slippageBps:slip}};
+    const r=evaluateSymbolSnapshot({symbol,series4h:h4.candles,series1h:h1.candles,series15m:m15.candles,bookRaw:depth.data,ticker24hRaw:ticker.data,source:'BINANCE_PUBLIC_REST',now:Date.now()},{config});
+    const x=r.strategies;
+    const rows=[['Trend',x.trend.score?.trendScore,x.trend.state,x.trend.direction],['Breakout',x.breakout.score?.breakoutScore,x.breakout.state,x.breakout.direction],['Mean Reversion',x.meanReversion.score?.meanReversionScore,x.meanReversion.state,x.meanReversion.direction]];
+    $('cards').innerHTML=rows.map(a=>'<div class="card"><div class="muted">'+a[0]+'</div><div class="score">'+(Number.isFinite(a[1])?a[1].toFixed(1):'0')+'</div><div class="state '+(a[2]==='REJECTED'?'bad':a[2]==='CONFIRMED'?'ok':'warn')+'">'+a[2]+' · '+a[3]+'</div></div>').join('');
+    $('meta').innerHTML='<b>Data Quality:</b> '+r.signal.scores.data_quality+' &nbsp; <b>Liquidity:</b> '+r.signal.scores.liquidity_quality+' &nbsp; <b>Risk:</b> '+r.signal.risk_filter+'<br><span class="muted">'+(r.signal.risk_reasons||[]).join(' · ')+'</span><br><span class="muted">Source: '+r.diagnostics.source+' · Last closed 15m: '+(r.diagnostics.latestClosed15m??'UNKNOWN')+'</span>';
+    $('json').textContent=JSON.stringify(r.signal,null,2); status('تم الفحص');
+  }catch(e){status('فشل جلب البيانات');$('meta').textContent='DATA_ERROR: '+(e?.message||e);$('json').textContent='UNKNOWN'}
+}
+$('scan').addEventListener('click',scan);scan();
+</script>
+</body></html>
