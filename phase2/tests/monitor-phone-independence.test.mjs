@@ -10,7 +10,7 @@ function candle(symbol,tf,openTime){
 }
 class FakeRest{
   constructor(now){this.now=now;this.lastSuccessAt=now;}
-  async klines(symbol,tf){this.lastSuccessAt=this.now;return{source:'TEST_FIXTURE',candles:[candle(symbol,tf,this.now-step[tf])]};}
+  async klines(symbol,tf){this.lastSuccessAt=this.now;return{source:'TEST_FIXTURE',candles:[candle(symbol,tf,this.now-3*step[tf])]};}
   async depth(){return{source:'TEST_FIXTURE',data:{bids:[['100','200']],asks:[['101','200']]}};}
   async ticker24h(){return{source:'TEST_FIXTURE',data:{quoteVolume:'1000000',count:1000}};}
   health(){return{state:'LIVE',last_success_at:this.lastSuccessAt};}
@@ -35,13 +35,14 @@ test('TEST_FIXTURE: market monitor remains server-side and runs without a PWA cl
       async evaluateSnapshot(input){analyses.push(input);return{emitted:false};}
     },store:{init:async()=>{},health:()=>({state:'LIVE'})},pushManager:null,clock:()=>now,logger:{info(){},warn(){},error(){}}
   });
+  try {
   await monitor.start();
   assert.equal(monitor.running,true);
   assert.equal(monitor.bootstrapDone,true);
   assert.equal(monitor.health().monitoring.running,true);
   assert.equal(wsOpts!=null,true);
 
-  const next=now-step['15m'];
+  const next=now-2*step['15m'];
   await monitor.onCandle(candle('BTCUSDT','15m',next));
   assert.equal(analyses.length>=1,true);
   assert.equal(monitor.health().monitoring.running,true);
@@ -51,6 +52,8 @@ test('TEST_FIXTURE: market monitor remains server-side and runs without a PWA cl
   await monitor.onCandle(candle('BTCUSDT','15m',next+step['15m']));
   assert.equal(analyses.length>=2,true);
   assert.equal(monitor.health().monitoring.running,true);
-  await monitor.stop();
+  } finally {
+    await monitor.stop();
+  }
   assert.equal(monitor.health().monitoring.running,false);
 });
