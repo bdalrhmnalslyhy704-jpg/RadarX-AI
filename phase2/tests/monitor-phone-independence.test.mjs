@@ -33,7 +33,7 @@ test('TEST_FIXTURE: market monitor remains server-side and runs without a PWA cl
   const monitor=new MarketMonitor({
     config,rest,wsFactory:opts=>{wsOpts=opts;return new FakeWs(opts)},signalService:{
       async evaluateSnapshot(input){analyses.push(input);return{emitted:false};}
-    },store:{init:async()=>{},health:()=>({state:'LIVE'})},pushManager:null,clock:()=>now,logger:{info(){},warn(){},error(){}}
+    },store:{init:async()=>{},health:async()=>({state:'LIVE'})},pushManager:null,clock:()=>now,logger:{info(){},warn(){},error(){}}
   });
   try {
   await monitor.start();
@@ -51,7 +51,7 @@ test('TEST_FIXTURE: market monitor remains server-side and runs without a PWA cl
   // The server continues monitoring and can process the next candle on its own.
   await monitor.onCandle(candle('BTCUSDT','15m',next+step['15m']));
   assert.equal(analyses.length>=2,true);
-  assert.equal(monitor.health().monitoring.running,true);
+  assert.equal((await monitor.health()).monitoring.running,true);
   } finally {
     await monitor.stop();
   }
