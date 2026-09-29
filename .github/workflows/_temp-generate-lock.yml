@@ -1,0 +1,28 @@
+name: TEMP Generate package lock
+
+on:
+  push:
+    branches: [phase2-render-runtime-compatibility]
+
+jobs:
+  generate-lock:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Generate package-lock with npm install
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Verify npm ci against generated lock
+        run: |
+          rm -rf node_modules
+          npm ci --ignore-scripts
+      - name: Upload package-lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-package-lock
+          path: package-lock.json
+          if-no-files-found: error
