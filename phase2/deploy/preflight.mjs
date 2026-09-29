@@ -39,7 +39,6 @@ export function assertDeploymentEnvironment(env=process.env){
 
   const origins=String(env.RADARX_ALLOWED_ORIGINS??'').split(',').map(x=>x.trim()).filter(Boolean);
   if(!origins.length) throw new Error('RADARX_ALLOWED_ORIGINS_REQUIRED');
-  if(runtime==='staging'&&origins.some(x=>!x.startsWith('https://')||x.endsWith('/'))) throw new Error('STAGING_ALLOWED_ORIGINS_MUST_BE_EXACT_HTTPS_ORIGINS');
   if(runtime==='staging'){const publicApiOrigin=required('RADARX_PUBLIC_API_ORIGIN',env.RADARX_PUBLIC_API_ORIGIN);if(!publicApiOrigin.startsWith('https://')||publicApiOrigin.endsWith('/'))throw new Error('RADARX_PUBLIC_API_ORIGIN_MUST_BE_EXACT_HTTPS_ORIGIN');}
   if(origins.some(x=>!x.startsWith('https://')||x.length<10)) throw new Error('STAGING_ALLOWED_ORIGINS_MUST_USE_HTTPS');
 
