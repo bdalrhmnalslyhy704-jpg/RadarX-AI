@@ -29,3 +29,18 @@ Node.js 20+:
 ```bash
 node --test phase1/tests/*.test.mjs
 ```
+
+
+## PWA Mobile Install
+
+The Phase 1 dashboard is installable as a Progressive Web App from HTTPS hosting.
+
+- Manifest: phase1/manifest.json
+- Service worker: phase1/sw.js
+- Mobile dashboard: phase1/app.html
+- Installation guide: phase1/INSTALL_ON_PHONE.md
+- Architecture notes: phase1/ARCHITECTURE.md
+- Test command: node --test phase1/tests/*.test.mjs
+- Current CI result for the latest branch commit: test execution passed.
+
+Offline behavior is shell-only: exchange API responses are not cached. The UI shows DISCONNECTED, clears the live market cards, and keeps only historical last-success metadata.
