@@ -38,6 +38,7 @@ async function setup(){
   await store.upsertSubscription('staging-android',{
     endpoint:'https://push.example.test/staging',
     expirationTime:null,
+    device_token:'TEST_FIXTURE_DEVICE_TOKEN_123456789012345678901234',
     keys:{p256dh:'TEST_FIXTURE_P256DH',auth:'TEST_FIXTURE_AUTH'}
   });
   return {server,store,provider,base,token};

@@ -72,3 +72,28 @@ test('TEST_FIXTURE: incomplete candle and stale data cannot send push',async()=>
     config:{...CONFIG,paper:{feeRate:0,slippageBps:0},monitoring:{...CONFIG.monitoring,maxStaleTriggerMs:60000}},clock:()=>1701000000000});
   const stale=await staleService.evaluateSnapshot(snap());assert.equal(stale.emitted,false);assert.equal(b.provider.calls.length,0);
 });
+
+
+test('TEST_FIXTURE: staging emits Paper Signal and audit but blocks LIVE_MARKET_SIGNAL Push before validation',async()=>{
+  const {store,provider}=await serviceCase();
+  const cfg={...CONFIG,environment:'staging',
+    api:{...CONFIG.api,publicOrigin:'https://api.example.test'},
+    monitoring:{...CONFIG.monitoring,maxStaleTriggerMs:1800000},
+    paper:{feeRate:0,slippageBps:0}
+  };
+  const service=new SignalService({
+    deduplicator:new SignalDeduplicator({store,windowMs:900000}),
+    store,
+    pushManager:new PushManager({provider,store,retryBaseMs:1,config:cfg}),
+    config:cfg,clock:()=>1700054000000
+  });
+  const out=await service.evaluateSnapshot(snap());
+  assert.equal(out.emitted,true);
+  assert.equal(out.notificationStatus,'BLOCKED_STAGING_PUSH_VALIDATION');
+  assert.equal(provider.calls.length,0);
+  assert.ok((await store.readRecent('signals',20)).some(x=>x.signal_id===out.signal.signal_id&&x.event==='SIGNAL_EVALUATION'));
+  assert.equal((await store.getStagingPushValidationStatus()).status,'NOT_VALIDATED');
+  assert.equal(out.signal.paper_trade.enabled,true);
+  assert.equal(out.signal.paper_trade.real_order_execution,false);
+  assert.equal(out.signal.scores.confidence_score,'UNKNOWN');
+});

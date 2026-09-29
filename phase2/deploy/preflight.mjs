@@ -53,7 +53,8 @@ export function assertDeploymentEnvironment(env=process.env){
   const hostRaw=String(env.RADARX_HOST??'').trim();
   const host=assertAllowedHost(hostRaw||'127.0.0.1',runtime,{explicit:Boolean(hostRaw)});
   const port=resolvePort(env);
-  const dataDir=verifyDataDir(env);
+  const dataDir=required('RADARX_DATA_DIR',env.RADARX_DATA_DIR);verifyDataDir({...env,RADARX_DATA_DIR:dataDir});
+  if(runtime==='production'&&testFlag===TRUE)throw new Error('TEST_PUSH_ONLY_STAGING_ONLY');
 
   return {environment:runtime,pushProvider:provider,testPushEnabled:testFlag===TRUE,allowedOrigins:origins,
     host,port,dataDir,paperTrading:true,realOrderExecution:false,confidenceMode:'UNKNOWN'};
