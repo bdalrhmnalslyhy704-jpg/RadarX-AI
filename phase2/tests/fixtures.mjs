@@ -13,4 +13,4 @@ export function series(tf,count=30,start=1700000000000){
 export function incompleteSeries(tf,count=30,start=1700000000000){
   const a=series(tf,count,start);a.push(candle(start+count*(tf==='4h'?14400000:tf==='1h'?3600000:900000),{tf,closed:false,price:105}));return a;
 }
-export function pushSubscription(){return{endpoint:'https://push.example.test/subscription',expirationTime:null,keys:{p256dh:'TEST_FIXTURE_P256DH',auth:'TEST_FIXTURE_AUTH'}};}
+export function pushSubscription(){return{endpoint:'https://push.example.test/subscription',expirationTime:null,device_token:'TEST_FIXTURE_DEVICE_TOKEN_123456789012345678901234',keys:{p256dh:'TEST_FIXTURE_P256DH',auth:'TEST_FIXTURE_AUTH'}};}
