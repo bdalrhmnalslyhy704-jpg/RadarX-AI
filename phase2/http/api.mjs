@@ -70,9 +70,11 @@ export function createApiServer({config,store,monitor,pushProvider}){
         const s=subscriptionValid(await body(req,config.api.maxBodyBytes));const row=await store.upsertSubscription(user,s);
         return send(res,201,{subscription:DurableStore.publicSubscription(row),provider:pushProvider.status()});
       }
-      const match=u.pathname.match(/^\\/v1\\/subscriptions\\/([^/]+)$/);
-      if(match&&req.method==='DELETE'){
-        const ok=await store.deleteSubscription(user,match[1]);return send(res,ok?200:404,{deleted:ok});
+          const prefix='/v1/subscriptions/';
+      if(u.pathname.startsWith(prefix)&&req.method==='DELETE'){
+        const id=decodeURIComponent(u.pathname.slice(prefix.length));
+        if(!id||id.includes('/'))return send(res,400,{error:'INVALID_SUBSCRIPTION_ID'});
+        const ok=await store.deleteSubscription(user,id);return send(res,ok?200:404,{deleted:ok});
       }
       if(u.pathname==='/v1/signals'&&req.method==='GET')return send(res,200,{events:await store.readRecent('signals',Math.min(200,Number(u.searchParams.get('limit')||50)))});
       if(u.pathname==='/v1/notifications'&&req.method==='GET')return send(res,200,{events:await store.readRecent('notifications',Math.min(200,Number(u.searchParams.get('limit')||50)))});
