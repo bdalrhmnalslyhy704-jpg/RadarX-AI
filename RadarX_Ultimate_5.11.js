@@ -1396,18 +1396,30 @@
   function smartPreflightRank(x){
     return x?num(x.score,50)*.58+num(x.smartTickerScore,50)*.24+num(x.proximity,50)*.08+num(x.volume,50)*.10:-Infinity;
   }
+  async function fetchSmartMTFConsensus(symbol,r1,r5){
+    const tfs=['15m','1h'],weights={'15m':0.30,'1h':0.40},rows=[];
+    const settled=await Promise.allSettled(tfs.map(tf=>fetchKlines('binance',symbol,tf,90)));
+    const packs=[{tf:'1m',data:r1,weight:.10},{tf:'5m',data:r5,weight:.20}];
+    settled.forEach(function(v,i){packs.push({tf:tfs[i],data:v.status==='fulfilled'?v.value:null,weight:weights[tfs[i]]});});
+    packs.forEach(function(p){if(!p.data?.length)return;try{const f=coreFeatures(p.data),sc=scoreFeatures(f),direction=mtfDirection(sc);rows.push({tf:p.tf,score:sc.score,direction,weight:p.weight});}catch{}});
+    if(!rows.length)throw new Error('MTF unavailable');
+    const total=rows.reduce((a,x)=>a+x.weight,0)||1;
+    const score=rows.reduce((a,x)=>a+x.score*x.weight,0)/total;
+    const label=mtfDirection({score});
+    const agreement=rows.reduce((a,x)=>a+(x.direction===label?x.weight:0),0)/total*100;
+    return{rows:rows.map(({weight,...x})=>x),consensusScore:score,agreement,consensusLabel:label};
+  }
+
   async function smartDeepOne(x){
     const symbol=x.symbol;
     try{
-      const pair=await Promise.all([
-        fetchKlines('binance',symbol,'1m',96),
-        fetchKlines('binance',symbol,'5m',144)
-      ]);
-      const r1=pair[0],r5=pair[1],pre=smartPreflight(r1,r5,x);
+      const r1=x.rows1m,r5=x.rows5m||x.rows;
+      if(!r1?.length||!r5?.length)return null;
+      const pre=x.f5?x:smartPreflight(r1,r5,x);
       if(!pre)return null;
       const pack=await Promise.all([
-        Promise.all([fetchDepth('binance',symbol,100),fetchTrades('binance',symbol,500)]).catch(function(){return null;}),
-        fetchMTFConsensus('binance',symbol).catch(function(){return null;})
+        smartWithTimeout(Promise.all([fetchDepth('binance',symbol,100),fetchTrades('binance',symbol,500)]),SMART_SCAN.perSymbolTimeoutMs).catch(function(){return null;}),
+        smartWithTimeout(fetchSmartMTFConsensus(symbol,r1,r5),SMART_SCAN.perSymbolTimeoutMs).catch(function(){return null;})
       ]);
       const fp=pack[0],mtf=pack[1],rows=r5.filter(function(r){return r.closed!==false;});
       const f=pre.f5,structure=detectStructure(rows),flow=fp?flowFromData(fp[0],fp[1]):null;
@@ -1416,26 +1428,18 @@
       const base=scoreFeatures(f,flow,structure,fakeout,forensic);
       const tempState={...state,selected:{...base,...f,symbol:symbol,timeframe:'5m',flow:flow,flowWhales:flow?.whales||null,mtf:mtf,structure:structure,fakeout:fakeout,forensic:forensic,price:num(x.last,f.last.c),priceChangePercent:num(x.priceChangePercent),quoteVolume:num(x.quoteVolume),liveAt:Date.now(),eventTime:Date.now()},marketsBySymbol:state.marketsBySymbol,markets:state.markets};
       const fusion=window.RadarXPulseFusion?.evaluate(rows,tempState)||null;
-      const fusionScore=clamp(fusion?.score??base.score);
-      const confidence=clamp(fusion?.confidence??base.confidence??base.quality);
+      const fusionScore=clamp(fusion?.score??base.score),confidence=clamp(fusion?.confidence??base.confidence??base.quality);
       const trap=Math.round(fakeout?.score||100);
       const quality=Math.round(clamp(base.quality*.42+(fusion?.coverage||65)*.18+confidence*.40));
       const mtfScore=mtf?.consensusScore??50,mtfAgree=mtf?.agreement??0;
       const breakoutPressure=clamp((f5.breakout>=-.9?68:38)+(f5.compression>=35?18:0)+(f5.volumeRatio>=1.35?12:0)+(fusionScore-50)*.35);
-      const evidence=[
-        r1?.length>=50,r5?.length>=100,!!flow,!!flow?.whales,!!mtf,
-        !!structure,forensic?.score!=null,fakeout?.score!=null
-      ].filter(Boolean).length;
+      const evidence=[r1?.length>=50,r5?.length>=100,!!flow,!!flow?.whales,!!mtf,!!structure,forensic?.score!=null,fakeout?.score!=null].filter(Boolean).length;
       const dataCoverage=evidence/8*100;
       const tradeReady=trap<SMART_SCAN.minTrapRisk&&fusionScore>=SMART_SCAN.minFusionScore&&confidence>=SMART_SCAN.minConfidence&&quality>=58&&dataCoverage>=60;
-      const compositeScore=clamp(
-        fusionScore*.46+confidence*.16+quality*.12+breakoutPressure*.10+
-        mtfScore*.07+pre.score*.04+(flow?.whales?.score??50)*.05
-      );
-      return {...x,...f,...base,symbol:symbol,rows:rows,rows1m:r1,rows15m:null,rows1h:null,structure:structure,fakeout:fakeout,forensic:forensic,flow:flow,flowWhales:flow?.whales||null,mtf:mtf,
-        fusion:fusion,fusionScore:fusionScore,confidence:confidence,quality:quality,trapRisk:trap,dataCoverage:dataCoverage,
-        multiTFScore:mtfScore,multiTFAgree:mtfAgree,breakoutPressure:breakoutPressure,preScore:pre.score,tradeReady:tradeReady,
-        compositeScore:compositeScore,mode:'SMART_FUSION_LIVE',liveAt:Date.now(),eventTime:Date.now()};
+      const compositeScore=clamp(fusionScore*.46+confidence*.16+quality*.12+breakoutPressure*.10+mtfScore*.07+pre.score*.04+(flow?.whales?.score??50)*.05);
+      return {...x,...f,...base,symbol,rows,rows1m:r1,rows5m:r5,rows15m:null,rows1h:null,structure,fakeout,forensic,flow,flowWhales:flow?.whales||null,mtf,
+        fusion,fusionScore,confidence,quality,trapRisk:trap,dataCoverage,multiTFScore:mtfScore,multiTFAgree:mtfAgree,
+        breakoutPressure,preScore:pre.score,tradeReady,compositeScore,mode:'SMART_FUSION_LIVE',liveAt:Date.now(),eventTime:Date.now()};
     }catch(e){return null;}
   }
   function smartRankFinal(x){
@@ -1481,7 +1485,7 @@
     smartStage('تهيئة Auto-Pilot 6.0 — طبقة بيانات مشتركة + فرز مرحلي…',2,'busy');
     try{
       await ensureBinanceRelay();
-       const tickers=await fetchAllTickers('binance');
+      const tickers=await smartWithTimeout(fetchAllTickers('binance'),SMART_SCAN.perSymbolTimeoutMs);
       const universe=tickers.filter(smartUniverseEligible);
       state.smartScan.universe=universe.length;state.markets=universe.slice();state.marketsBySymbol={};
       universe.forEach(function(x){state.marketsBySymbol[x.symbol]=x;});
@@ -1493,17 +1497,21 @@
       const shortlist=ranked.slice(0,SMART_SCAN.maxTickerShortlist);state.smartScan.stage1=shortlist.length;
       smartStage('مرحلة 1: كل السوق تم مسحه → '+shortlist.length+' مرشح للحساب الزمني.',18,'busy');
 
+      const deadlineAt=Date.now()+SMART_SCAN.maxScanMs;
+      const guard=()=>{if(Date.now()>=deadlineAt)throw new Error('SMART_SCAN_DEADLINE');};
       const mid=[];
-      for(let i=0;i<shortlist.length;i+=SMART_SCAN.batchSize){
-        const batch=shortlist.slice(i,i+SMART_SCAN.batchSize);
+      const midPool=shortlist.slice(0,SMART_SCAN.maxMidScan);
+      for(let i=0;i<midPool.length;i+=SMART_SCAN.batchSize){
+        guard();
+        const batch=midPool.slice(i,i+SMART_SCAN.batchSize);
         const rr=await Promise.allSettled(batch.map(async function(x){
-          const p=await Promise.all([fetchKlines('binance',x.symbol,'1m',64),fetchKlines('binance',x.symbol,'5m',96)]);
+          const p=await smartWithTimeout(Promise.all([fetchKlines('binance',x.symbol,'1m',96),fetchKlines('binance',x.symbol,'5m',144)]),SMART_SCAN.perSymbolTimeoutMs);
           const pre=smartPreflight(p[0],p[1],x);return pre&&pre.score>=46?{...x,...pre,rows:p[1],rows1m:p[0]}:null;
         }));
         rr.forEach(function(v){if(v.status==='fulfilled'&&v.value)mid.push(v.value);});
         state.smartScan.midVerified=mid.length;
-        smartStage('مرحلة 2: 1m/5m تحقق '+mid.length+'/'+shortlist.length,20+Math.round(Math.min(i+SMART_SCAN.batchSize,shortlist.length)/shortlist.length*34),'busy');
-        await sleep(18);
+        smartStage('مرحلة 2: 1m/5m تحقق '+mid.length+'/'+midPool.length,20+Math.round(Math.min(i+SMART_SCAN.batchSize,midPool.length)/Math.max(1,midPool.length)*34),'busy');
+        await sleep(8);
       }
       mid.sort(function(a,b){return smartPreflightRank(b)-smartPreflightRank(a);});
       const topMid=mid.slice(0,SMART_SCAN.maxDeep);
@@ -1511,11 +1519,12 @@
 
       const deep=[];
       for(let i=0;i<topMid.length;i+=SMART_SCAN.batchSize){
+        guard();
         const rr=await Promise.allSettled(topMid.slice(i,i+SMART_SCAN.batchSize).map(smartDeepOne));
         rr.forEach(function(v){if(v.status==='fulfilled'&&v.value)deep.push(v.value);});
         state.smartScan.deepVerified=deep.length;
         smartStage('RX Fusion: '+deep.length+'/'+topMid.length+' تحليلات مكتملة',56+Math.round(Math.min(i+SMART_SCAN.batchSize,topMid.length)/Math.max(1,topMid.length)*34),'busy');
-        await sleep(22);
+        await sleep(8);
       }
 
       const eligible=deep.filter(function(x){return x.tradeReady;}).sort(function(a,b){return smartRankFinal(b)-smartRankFinal(a);});
