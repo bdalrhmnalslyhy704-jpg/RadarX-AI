@@ -70,7 +70,7 @@ Caddy is recommended for the staging edge because it can provision and renew pub
 Example Caddyfile:
 
 radarx-staging.example.com {
-    handle_path /phase1/* {
+    handle /phase1/* {
         root * /opt/radarx
         file_server
     }
@@ -80,7 +80,7 @@ radarx-api-staging.example.com {
     reverse_proxy 127.0.0.1:8787
 }
 
-With this layout, PWA files live under /opt/radarx/phase1/ and the API stays behind the HTTPS edge. Node remains private on loopback.
+With this layout, /phase1/... maps to /opt/radarx/phase1/... and the API stays behind the HTTPS edge. Node remains private on loopback.
 
 Validate:
 curl -fsS https://radarx-api-staging.example.com/healthz
