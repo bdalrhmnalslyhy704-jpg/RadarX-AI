@@ -9,6 +9,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -17,6 +19,7 @@ import okhttp3.Response;
 public final class RadarXDohDns implements okhttp3.Dns {
     private final okhttp3.Dns system = okhttp3.Dns.SYSTEM;
     private final OkHttpClient dohClient;
+    private final Map<String, CacheEntry> dnsCache = new ConcurrentHashMap<>();
 
     public RadarXDohDns() {
         dohClient = new OkHttpClient.Builder()
@@ -33,10 +36,21 @@ public final class RadarXDohDns implements okhttp3.Dns {
             throw new UnknownHostException("empty hostname");
         }
 
+        CacheEntry cached = dnsCache.get(hostname);
+        long now = System.currentTimeMillis();
+        if (cached != null && now - cached.at < (cached.negative ? 5_000L : 60_000L)) {
+            if (cached.negative) throw new UnknownHostException("cached DNS failure for " + hostname);
+            return cached.addresses;
+        }
+
         // Fast path: Android's normal resolver.
         try {
             List<InetAddress> local = system.lookup(hostname);
-            if (local != null && !local.isEmpty()) return local;
+            if (local != null && !local.isEmpty()) {
+                List<InetAddress> copy = new ArrayList<>(local);
+                dnsCache.put(hostname, new CacheEntry(copy, now, false));
+                return copy;
+            }
         } catch (Exception ignored) {
             // Continue with DoH.
         }
@@ -72,14 +86,30 @@ public final class RadarXDohDns implements okhttp3.Dns {
                             } catch (Exception ignored) {}
                         }
                     }
-                    if (!addresses.isEmpty()) return addresses;
+                    if (!addresses.isEmpty()) {
+                        List<InetAddress> copy = new ArrayList<>(addresses);
+                        dnsCache.put(hostname, new CacheEntry(copy, System.currentTimeMillis(), false));
+                        return copy;
+                    }
                 }
             } catch (Exception ignored) {
                 // Try the next public DoH provider.
             }
         }
 
+        dnsCache.put(hostname, new CacheEntry(new ArrayList<>(), System.currentTimeMillis(), true));
         throw new UnknownHostException("DNS resolution failed for " + hostname);
+    }
+
+    private static final class CacheEntry {
+        final List<InetAddress> addresses;
+        final long at;
+        final boolean negative;
+        CacheEntry(List<InetAddress> addresses, long at, boolean negative) {
+            this.addresses = addresses == null ? new ArrayList<>() : addresses;
+            this.at = at;
+            this.negative = negative;
+        }
     }
 
     private static String encode(String value) {
