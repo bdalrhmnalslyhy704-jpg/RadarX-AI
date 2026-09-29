@@ -98,7 +98,8 @@ async function enablePush(){
     }
     const perm=await Notification.requestPermission();
     if(perm!=='granted'){setMsg($('pushStatus'),'تم رفض إذن الإشعارات؛ لم يتم إنشاء اشتراك.','bad');return;}
-    const reg=await navigator.serviceWorker.register('./sw.js');
+    await navigator.serviceWorker.register('./sw.js');
+    const reg=await navigator.serviceWorker.ready;
     const c=await apiConfig();
     if(c.push.provider!=='webpush'||!c.push.vapidPublicKey){setMsg($('pushStatus'),'VAPID Public Key غير مضبوط على الخادم أو Push معطل.','bad');return;}
     let subscription=await reg.pushManager.getSubscription();
