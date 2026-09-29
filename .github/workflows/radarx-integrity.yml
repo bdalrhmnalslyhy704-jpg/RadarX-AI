@@ -2,7 +2,7 @@ name: RadarX Integrity + Live Smoke 6.0
 
 on:
   push:
-    branches: ["main","radarx-6.1-performance"]
+    branches: ["main","radarx-6.1-performance","radarx-full-performance-hardening"]
   workflow_dispatch:
 
 jobs:
@@ -78,6 +78,9 @@ jobs:
           if(!core.includes("!miniTicker@arr"))throw new Error('miniTicker stream missing');
           if(core.includes("encodeURIComponent('!ticker@arr')"))throw new Error('duplicate full ticker stream remains');
           if(pulse.includes('n(r.c)'))throw new Error('Pulse Fusion n(r.c) typo remains');
+          if(!pulse.includes('const emaSeries='))throw new Error('Pulse linear EMA optimization missing');
+          if(!core.includes('const emaSeries='))throw new Error('Chart linear EMA optimization missing');
+          if(/slice\\(0,i\\+1\\)/.test(pulse)||/slice\\(0,i\\+1\\)/.test(core))throw new Error('Quadratic prefix-EMA loop remains');
           if(!core.includes('share the global miniTicker socket'))throw new Error('shared socket guard missing');
           console.log('6.1 consolidation checks OK');
           NODE
