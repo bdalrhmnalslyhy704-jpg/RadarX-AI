@@ -67,13 +67,17 @@ test('TEST_FIXTURE: staging preflight blocks changing confidence mode',async()=>
 });
 
 test('TEST_FIXTURE: invalid PORT is rejected',async()=>{
-  assert.throws(()=>assertDeploymentEnvironment(await validEnv({PORT:'not-a-port'})),/PORT_MUST_BE_INTEGER/);
-  assert.throws(()=>assertDeploymentEnvironment(await validEnv({PORT:'0'})),/PORT_OUT_OF_RANGE/);
-  assert.throws(()=>assertDeploymentEnvironment(await validEnv({PORT:'65536'})),/PORT_OUT_OF_RANGE/);
+  const badInteger=await validEnv({PORT:'not-a-port'});
+  const zero=await validEnv({PORT:'0'});
+  const tooHigh=await validEnv({PORT:'65536'});
+  assert.throws(()=>assertDeploymentEnvironment(badInteger),/PORT_MUST_BE_INTEGER/);
+  assert.throws(()=>assertDeploymentEnvironment(zero),/PORT_OUT_OF_RANGE/);
+  assert.throws(()=>assertDeploymentEnvironment(tooHigh),/PORT_OUT_OF_RANGE/);
 });
 
 test('TEST_FIXTURE: disallowed host is rejected',async()=>{
-  assert.throws(()=>assertDeploymentEnvironment(await validEnv({RADARX_HOST:'192.168.1.5'})),/HOST_NOT_ALLOWED/);
+  const env=await validEnv({RADARX_HOST:'192.168.1.5'});
+  assert.throws(()=>assertDeploymentEnvironment(env),/HOST_NOT_ALLOWED/);
 });
 
 test('TEST_FIXTURE: wildcard host is rejected outside staging/production',async()=>{
