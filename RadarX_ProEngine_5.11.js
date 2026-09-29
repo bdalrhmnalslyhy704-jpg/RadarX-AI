@@ -720,10 +720,20 @@
       ]);
       const regime=marketRegime(normalized,btcRows,ethRows,global); ps.regime=regime; ps.global=global;
       const symbols=chooseCandidates(normalized).map(x=>x.symbol);
-      await refreshNews(symbols).catch(()=>{});
-      await refreshOnchain(symbols).catch(()=>{});
-      await refreshSocial(symbols).catch(()=>{});
-      const fingerprint=symbols.slice(0,PRO.mtfCandidates).join('|'), crossAge=now()-num(ps.lastCrossAt,0); const cross=crossAge<150000&&ps.crossExchange?.data?ps.crossExchange:await fetchCrossExchange(symbols).catch(()=>({available:false,data:{}})); if(cross?.available)ps.lastCrossAt=now();
+      // External evidence is independent. Refresh it concurrently so a slow
+      // provider never serializes the entire intelligence cycle.
+      const fingerprint=symbols.slice(0,PRO.mtfCandidates).join('|');
+      const crossAge=now()-num(ps.lastCrossAt,0);
+      const crossPromise=crossAge<150000&&ps.crossExchange?.data
+        ?Promise.resolve(ps.crossExchange)
+        :fetchCrossExchange(symbols).catch(()=>({available:false,data:{}}));
+      const [newsResult,onchainResult,socialResult,cross]=await Promise.all([
+        refreshNews(symbols).catch(()=>null),
+        refreshOnchain(symbols).catch(()=>null),
+        refreshSocial(symbols).catch(()=>null),
+        crossPromise
+      ]);
+      if(cross?.available)ps.lastCrossAt=now();
       const candidates=[];
       for(let i=0;i<symbols.length;i+=3){
         const batch=symbols.slice(i,i+3).map(s=>normalized.find(x=>x.symbol===s)).filter(Boolean);
