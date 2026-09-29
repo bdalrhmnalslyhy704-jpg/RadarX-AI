@@ -48,7 +48,9 @@ export const CONFIG = Object.freeze({
   },
   paper: {
     feeRate: float(process.env.RADARX_PAPER_FEE_RATE, 0.001),
-    slippageBps: float(process.env.RADARX_PAPER_SLIPPAGE_BPS, 5)
+    slippageBps: float(process.env.RADARX_PAPER_SLIPPAGE_BPS, 5),
+    paperTrading: true,
+    realOrderExecution: false
   },
   push: {
     provider: (process.env.RADARX_PUSH_PROVIDER ?? 'none').toLowerCase(),
