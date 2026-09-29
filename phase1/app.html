@@ -127,7 +127,7 @@ async function scan(){
     const fee=n($('fee').value),slip=n($('slip').value),now=Date.now();
     const cfg={...CONFIG,costs:{feeRate:fee,slippageBps:slip}};
     const r=evaluateSymbolSnapshot({symbol,series4h:h4.candles,series1h:h1.candles,series15m:m15.candles,bookRaw:depth.data,ticker24hRaw:ticker.data,source:'BINANCE_PUBLIC_REST',now},{config:cfg});
-    renderEngine(r);status('live','LIVE DATA');$('offlineBanner').hidden=true;
+    renderEngine(r);status('live','LIVE_DATA');$('offlineBanner').hidden=true;
   }catch(e){status('off','Data unavailable');$('offlineBanner').hidden=false;$('dq').textContent='UNKNOWN';$('lq').textContent='UNKNOWN';$('risk').textContent='FAIL';}
 }
 async function refreshBackend(){
