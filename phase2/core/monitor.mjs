@@ -6,7 +6,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 class SeriesBuffer{
   constructor(maxLength=300){this.maxLength=maxLength;this.map=new Map();}
   merge(candles){
-    const byTime=new Map((this.map.size?this.map.values():[]));
+    const byTime=new Map(this.map);
     for(const c of candles){
       if(!Number.isFinite(Number(c.openTime)))continue;
       byTime.set(Number(c.openTime),{...c});

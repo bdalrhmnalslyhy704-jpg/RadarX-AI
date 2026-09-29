@@ -29,6 +29,7 @@ test('TEST_FIXTURE: failed push is queued and succeeds after provider recovery',
 test('TEST_FIXTURE: low data quality prevents push attempt',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-lowdq-')),store=await new DurableStore({dir}).init();
   await store.putUserSettings('u1',defaultSettings());await store.upsertSubscription('u1',pushSubscription());
+  assert.equal((await store.getSubscriptions()).length,1);
   const p=new ToggleProvider(),m=new PushManager({provider:p,store});
   const s={...signal(),scores:{data_quality:50,liquidity_quality:95}};
   const out=await m.notifySignal(s);

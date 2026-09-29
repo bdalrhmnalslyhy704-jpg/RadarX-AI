@@ -3,7 +3,7 @@ import {randomUUID} from 'node:crypto';
 export class SignalDeduplicator {
   constructor({store=null,windowMs=15*60*1000}={}){this.store=store;this.windowMs=windowMs;this.seen=new Map();}
   key(signal,now=Date.now()){
-    const c=signal?.candle||{},t=Number(c.close_time||now),w=Math.floor(t/this.windowMs)*this.windowMs;
+    const c=signal?.candle||{},w=Math.floor(Number(now)/this.windowMs)*this.windowMs;
     const reasons=Array.isArray(signal?.reason_codes)?signal.reason_codes.map(String).sort().join(','):'';
     return [signal?.symbol||'UNKNOWN',signal?.direction||'NONE',c.timeframe||'UNKNOWN',reasons,w].join('|');
   }
