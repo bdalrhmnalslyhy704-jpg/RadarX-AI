@@ -62,8 +62,6 @@ public final class NativeBinanceHttpQueue {
     private final AtomicLong sequence = new AtomicLong(0);
     private final AtomicInteger preferredIndex = new AtomicInteger(0);
     private final Map<String, Result> completed = new ConcurrentHashMap<>();
-    private final java.util.concurrent.atomic.AtomicInteger preferredIndex =
-            new java.util.concurrent.atomic.AtomicInteger(0);
 
     public NativeBinanceHttpQueue(OkHttpClient baseClient) {
         this.cloudClient = baseClient.newBuilder()
@@ -78,7 +76,7 @@ public final class NativeBinanceHttpQueue {
                 .readTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
                 .writeTimeout(6_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
                 .retryOnConnectionFailure(true)
-                .dns(new RadarXDohDns())
+                // Inherit the shared DoH-enabled DNS from baseClient.
                 .build();
 
         int ioThreads = Math.max(3, Math.min(4, Runtime.getRuntime().availableProcessors()));
