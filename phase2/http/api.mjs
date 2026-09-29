@@ -26,7 +26,7 @@ function validSettings(x){
     minDataQuality:out.minDataQuality,minLiquidityQuality:out.minLiquidityQuality,signalTypes:[...new Set(out.signalTypes)]};
 }
 function subscriptionValid(x){
-  if(typeof x?.endpoint!=='string'||!/^https:\\/\\//.test(x.endpoint))throw new Error('INVALID_PUSH_ENDPOINT');
+  if(typeof x?.endpoint!=='string'||!x.endpoint.startsWith('https://'))throw new Error('INVALID_PUSH_ENDPOINT');
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
