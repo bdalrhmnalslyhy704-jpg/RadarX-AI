@@ -31,11 +31,14 @@ function subscriptionValid(x){
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
-export function createApiServer({config,store,monitor,pushProvider}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null}){
   const counters=new Map();
   const originList=config.auth.allowedOrigins;
   function allowedOrigin(req){
     const o=req.headers.origin;if(!o||!originList.length)return null;return originList.includes(o)?o:null;
+  }
+  function requireTrustedBrowser(req){
+    const o=allowedOrigin(req);return o&&o===req.headers.origin?o:null;
   }
   function authUser(req){
     const header=req.headers.authorization||'';if(!header.startsWith('Bearer '))return null;
@@ -60,8 +63,21 @@ export function createApiServer({config,store,monitor,pushProvider}){
       }
       if(!u.pathname.startsWith('/v1/'))return send(res,404,{error:'NOT_FOUND'});
       const user=authUser(req);if(!user)return send(res,401,{error:'UNAUTHORIZED'});
-      if(u.pathname==='/v1/config'&&req.method==='GET')return send(res,200,{symbols:config.symbols,timeframes:config.timeframes,
-        push:{provider:pushProvider.status().provider,enabled:pushProvider.status().enabled,vapidPublicKey:config.push.vapidPublicKey||null}});
+      if(u.pathname==='/v1/config'&&req.method==='GET')return send(res,200,{environment:config.environment??'unknown',symbols:config.symbols,timeframes:config.timeframes,
+        push:{provider:pushProvider.status().provider,enabled:pushProvider.status().enabled,vapidPublicKey:config.push.vapidPublicKey||null,testPushEnabled:Boolean(config.staging?.testPushEnabled)}});
+
+      if(u.pathname==='/v1/push/test'&&req.method==='POST'){
+        if(config.environment!=='staging'||config.staging?.testPushEnabled!==true)return send(res,404,{error:'STAGING_TEST_PUSH_DISABLED'});
+        if(!requireTrustedBrowser(req))return send(res,403,{error:'TRUSTED_ORIGIN_REQUIRED'});
+        const status=pushProvider.status();
+        if(status.provider!=='webpush'||!status.enabled)return send(res,503,{error:'WEB_PUSH_NOT_ENABLED'});
+        if(!pushManager)return send(res,503,{error:'PUSH_MANAGER_UNAVAILABLE'});
+        const result=await pushManager.notifyTestPush({userId:user,testId:(await body(req,config.api.maxBodyBytes)).test_id});
+        if(result.status==='DUPLICATE')return send(res,409,{error:'DUPLICATE_TEST_PUSH',...result});
+        if(result.status==='NO_SUBSCRIPTIONS')return send(res,409,{error:'NO_ACTIVE_PUSH_SUBSCRIPTIONS',...result});
+        return send(res,result.status==='SENT'?202:502,{ok:result.status==='SENT',...result});
+      }
+
       if(u.pathname==='/v1/settings'&&req.method==='GET')return send(res,200,{settings:await store.getUserSettings(user)||defaultSettings()});
       if(u.pathname==='/v1/settings'&&req.method==='PUT'){
         const s=validSettings(await body(req,config.api.maxBodyBytes),config.symbols);return send(res,200,{settings:await store.putUserSettings(user,s)});
