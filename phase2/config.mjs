@@ -6,6 +6,7 @@ const list = (v, d) => {
 };
 
 export const CONFIG = Object.freeze({
+  environment: (process.env.RADARX_ENV ?? 'development').toLowerCase(),
   host: process.env.RADARX_HOST ?? '127.0.0.1',
   port: int(process.env.RADARX_PORT, 8787),
   symbols: list(process.env.RADARX_SYMBOLS, ['BTCUSDT','ETHUSDT']).map(x => x.toUpperCase()),
@@ -59,6 +60,9 @@ export const CONFIG = Object.freeze({
     secret: process.env.RADARX_AUTH_SECRET ?? '',
     ttlSec: int(process.env.RADARX_AUTH_TOKEN_TTL_SEC, 86400),
     allowedOrigins: list(process.env.RADARX_ALLOWED_ORIGINS, [])
+  },
+  staging: {
+    testPushEnabled: String(process.env.RADARX_STAGING_TEST_PUSH_ENABLED ?? 'false').toLowerCase() === 'true'
   },
   api: {
     maxBodyBytes: int(process.env.RADARX_MAX_BODY_BYTES, 64 * 1024),
