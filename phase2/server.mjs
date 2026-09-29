@@ -9,8 +9,13 @@ import {SignalService} from './core/signal-service.mjs';
 import {createPushProvider,PushManager} from './push/index.mjs';
 import {MarketMonitor} from './core/monitor.mjs';
 import {createApiServer} from './http/api.mjs';
+import {assertStagingEnvironment,assertReadOnlyStagingConfig} from './deploy/preflight.mjs';
 
 export async function startServer({config=CONFIG,logger=console}={}){
+  if(config.environment==='staging'){
+    assertStagingEnvironment(process.env);
+    assertReadOnlyStagingConfig(config);
+  }
   const store=await new DurableStore({dir:process.env.RADARX_DATA_DIR||'./.radarx-data'}).init();
   const rest=new RestClient(config.rest);
   const dedup=new SignalDeduplicator({store,windowMs:15*60*1000});
