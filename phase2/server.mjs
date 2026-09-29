@@ -22,7 +22,7 @@ export async function startServer({
     assertReadOnlyStagingConfig(config);
   }
   const store=await new DurableStore({dir:process.env.RADARX_DATA_DIR||'./.radarx-data'}).init();
-  const rest=new RestClient(config.rest);
+  const rest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
   const dedup=new SignalDeduplicator({store,windowMs:15*60*1000});
   const provider=createPushProvider(config.push);
   const push=new PushManager({provider,store,deduplicator:dedup,retryBaseMs:config.monitoring.pushRetryMs});
