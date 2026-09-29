@@ -30,7 +30,7 @@ export class DurableStore {
   async getDedupKey(k){const a=await this.readJson(this.files.dedup);return a[k]||null;}
   async putDedupKey(k,v){return this.lock(async()=>{const a=await this.readJson(this.files.dedup);a[k]=v;await this.writeJson(this.files.dedup,a);});}
   async appendSignalAudit(v){return this.lock(async()=>{await appendFile(this.files.signals,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
-  async appendNotificationAudit(v){return this.lock(async()=>{await appendFile(this.files.notifications,JSON.stringify(v)+'\\n');this.lastWriteAt=Date.now();});}
+  async appendNotificationAudit(v){return this.lock(async()=>{await appendFile(this.files.notifications,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readRecent(kind,limit=100){let s='';try{s=await readFile(this.files[kind],'utf8');}catch{return[];}
     return s.split('\n').filter(Boolean).slice(-limit).reverse().map(x=>JSON.parse(x));}
   async health(){try{await mkdir(this.dir,{recursive:true});return{state:this.ready?'LIVE':'INIT',path:this.dir,last_write_at:this.lastWriteAt};}
