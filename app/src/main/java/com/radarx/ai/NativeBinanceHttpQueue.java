@@ -13,6 +13,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
 
 import okhttp3.OkHttpClient;
@@ -52,6 +54,10 @@ public final class NativeBinanceHttpQueue {
     private final OkHttpClient directClient;
     private final ExecutorService executor;
     private final AtomicLong sequence = new AtomicLong(0);
+    private final AtomicInteger preferredIndex = new AtomicInteger(0);
+    private final AtomicIntegerArray failures = new AtomicIntegerArray(UPSTREAMS.length);
+    private final long[] lastSuccessMs = new long[UPSTREAMS.length];
+    private final Object healthLock = new Object();
     private final Map<String, Result> completed = new ConcurrentHashMap<>();
 
     public NativeBinanceHttpQueue(OkHttpClient baseClient) {
@@ -120,52 +126,26 @@ public final class NativeBinanceHttpQueue {
     }
 
     private Result perform(String rawPath) {
-        // Prefer a direct Spot endpoint with resilient DoH DNS. Use the
-        // deployed relay only when direct Binance access is unavailable.
+        // Keep the fastest successful Binance route sticky and bound retries.
+        // This avoids walking all seven endpoints on every mobile request.
         Throwable last = null;
+        int[] order = orderedIndexes(preferredIndex.get());
 
-        for (int pass = 0; pass < 2; pass++) {
-            if (pass == 0) {
-                for (String base : UPSTREAMS) {
-                    try {
-                        Request direct = new Request.Builder()
-                                .url(base + rawPath)
-                                .get()
-                                .header("Accept", "application/json")
-                                .header("User-Agent", "RadarX-Android/6.8.1")
-                                .build();
+        if (order.length > 0) {
+            Result direct = tryDirect(order[0], rawPath);
+            if (direct != null) return direct;
+            last = new RuntimeException("Preferred Binance route unavailable");
+        }
 
-                        try (Response r = directClient.newCall(direct).execute()) {
-                            byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
-                            if (r.isSuccessful() && looksLikeJson(body)) {
-                                return new Result(r.code(), "OK", "application/json; charset=utf-8", body, base);
-                            }
-                            last = new RuntimeException("HTTP " + r.code());
-                        }
-                    } catch (Throwable t) {
-                        last = t;
-                    }
-                }
-            } else {
-                try {
-                    Request cloud = new Request.Builder()
-                            .url(REMOTE_RELAY + "?path=" + Uri.encode(rawPath))
-                            .get()
-                            .header("Accept", "application/json")
-                            .header("User-Agent", "RadarX-Android/6.8.1")
-                            .build();
+        // Regional escape hatch after one direct failure.
+        Result cloud = tryCloud(rawPath);
+        if (cloud != null) return cloud;
+        last = new RuntimeException("RadarX cloud relay unavailable");
 
-                    try (Response r = cloudClient.newCall(cloud).execute()) {
-                        byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
-                        if (r.isSuccessful() && looksLikeJson(body)) {
-                            return new Result(r.code(), "OK", "application/json; charset=utf-8", body, "radarx-cloud-relay");
-                        }
-                        last = new RuntimeException("Cloud HTTP " + r.code());
-                    }
-                } catch (Throwable t) {
-                    last = t;
-                }
-            }
+        // Only three additional mirrors are attempted to preserve responsiveness.
+        for (int i = 1, tried = 0; i < order.length && tried < 3; i++, tried++) {
+            Result direct = tryDirect(order[i], rawPath);
+            if (direct != null) return direct;
         }
 
         String message = last == null || last.getMessage() == null
@@ -175,6 +155,90 @@ public final class NativeBinanceHttpQueue {
                 + "\"detail\":\"" + escape(message) + "\",\"status\":502}";
         return new Result(502, "BAD_GATEWAY", "application/json; charset=utf-8",
                 body.getBytes(StandardCharsets.UTF_8), "none");
+    }
+
+    private Result tryDirect(int index, String rawPath) {
+        if (index < 0 || index >= UPSTREAMS.length) return null;
+        final String base = UPSTREAMS[index];
+        try {
+            Request direct = new Request.Builder()
+                    .url(base + rawPath)
+                    .get()
+                    .header("Accept", "application/json")
+                    .header("User-Agent", "RadarX-Android/6.8.1")
+                    .build();
+
+            try (Response r = directClient.newCall(direct).execute()) {
+                byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+                if (r.isSuccessful() && looksLikeJson(body)) {
+                    markSuccess(index);
+                    return new Result(r.code(), "OK", "application/json; charset=utf-8", body, base);
+                }
+                markFailure(index);
+            }
+        } catch (Throwable t) {
+            markFailure(index);
+        }
+        return null;
+    }
+
+    private Result tryCloud(String rawPath) {
+        try {
+            Request cloud = new Request.Builder()
+                    .url(REMOTE_RELAY + "?path=" + Uri.encode(rawPath))
+                    .get()
+                    .header("Accept", "application/json")
+                    .header("User-Agent", "RadarX-Android/6.8.1")
+                    .build();
+
+            try (Response r = cloudClient.newCall(cloud).execute()) {
+                byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+                if (r.isSuccessful() && looksLikeJson(body)) {
+                    return new Result(r.code(), "OK", "application/json; charset=utf-8", body, "radarx-cloud-relay");
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    private int[] orderedIndexes(int preferred) {
+        Integer[] boxed = new Integer[UPSTREAMS.length];
+        for (int i = 0; i < boxed.length; i++) boxed[i] = i;
+        java.util.Arrays.sort(boxed, (a, b) -> {
+            if (a == preferred && b != preferred) return -1;
+            if (b == preferred && a != preferred) return 1;
+            int fa = failures.get(a), fb = failures.get(b);
+            if (fa != fb) return Integer.compare(fa, fb);
+            double sa = routeScore(a), sb = routeScore(b);
+            return Double.compare(sb, sa);
+        });
+        int[] out = new int[boxed.length];
+        for (int i = 0; i < boxed.length; i++) out[i] = boxed[i];
+        return out;
+    }
+
+    private double routeScore(int index) {
+        long last;
+        synchronized (healthLock) {
+            last = lastSuccessMs[index];
+        }
+        long age = last == 0L ? Long.MAX_VALUE : Math.max(0L, System.currentTimeMillis() - last);
+        if (age < 20_000L) return 20.0 - index * 0.01;
+        if (age < 120_000L) return 8.0 - index * 0.01;
+        return -index * 0.01;
+    }
+
+    private void markSuccess(int index) {
+        failures.set(index, 0);
+        synchronized (healthLock) {
+            lastSuccessMs[index] = System.currentTimeMillis();
+        }
+        preferredIndex.set(index);
+    }
+
+    private void markFailure(int index) {
+        failures.updateAndGet(index, value -> Math.min(8, value + 1));
     }
 
     private boolean isValidPath(String rawPath) {
