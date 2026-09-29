@@ -1,0 +1,39 @@
+[Unit]
+Description=RadarX Phase 2
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=radarx
+Group=radarx
+WorkingDirectory=/opt/radarx
+
+# The real values live outside Git.
+EnvironmentFile=/etc/radarx/radarx.env
+
+# Keep a normal system PATH so the Node.js 24 installation can be found.
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+ExecStart=/usr/bin/env node /opt/radarx/phase2/server.mjs
+
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+
+ReadWritePaths=/var/lib/radarx
+
+[Install]
+WantedBy=multi-user.target
