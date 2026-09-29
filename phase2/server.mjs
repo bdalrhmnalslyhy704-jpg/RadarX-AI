@@ -9,11 +9,16 @@ import {SignalService} from './core/signal-service.mjs';
 import {createPushProvider,PushManager} from './push/index.mjs';
 import {MarketMonitor} from './core/monitor.mjs';
 import {createApiServer} from './http/api.mjs';
-import {assertStagingEnvironment,assertReadOnlyStagingConfig} from './deploy/preflight.mjs';
+import {assertDeploymentEnvironment,assertReadOnlyStagingConfig} from './deploy/preflight.mjs';
+import {sanitizeLogMessage} from './runtime.mjs';
 
-export async function startServer({config=CONFIG,logger=console}={}){
-  if(config.environment==='staging'){
-    assertStagingEnvironment(process.env);
+export async function startServer({
+  config=CONFIG,
+  logger=console,
+  monitorFactory=opts=>new MarketMonitor({...opts,wsFactory:wsOpts=>new BinanceStreamClient(wsOpts)})
+}={}){
+  if(['staging','production'].includes(config.environment)){
+    assertDeploymentEnvironment(process.env);
     assertReadOnlyStagingConfig(config);
   }
   const store=await new DurableStore({dir:process.env.RADARX_DATA_DIR||'./.radarx-data'}).init();
@@ -22,7 +27,7 @@ export async function startServer({config=CONFIG,logger=console}={}){
   const provider=createPushProvider(config.push);
   const push=new PushManager({provider,store,deduplicator:dedup,retryBaseMs:config.monitoring.pushRetryMs});
   const service=new SignalService({deduplicator:dedup,store,pushManager:push,config});
-  const monitor=new MarketMonitor({config,rest,wsFactory:opts=>new BinanceStreamClient(opts),signalService:service,store,pushManager:push,logger});
+  const monitor=monitorFactory({config,rest,signalService:service,store,pushManager:push,logger});
   await monitor.start();
   const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
@@ -32,5 +37,5 @@ export async function startServer({config=CONFIG,logger=console}={}){
 }
 
 if(process.argv[1]&&resolve(fileURLToPath(import.meta.url))===resolve(process.argv[1])){
-  startServer().catch(error=>{console.error(error);process.exitCode=1;});
+  startServer().catch(error=>{console.error(sanitizeLogMessage(error?.stack??error,process.env));process.exitCode=1;});
 }
