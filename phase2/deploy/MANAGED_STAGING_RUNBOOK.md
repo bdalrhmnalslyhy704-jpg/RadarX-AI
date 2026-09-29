@@ -70,20 +70,20 @@ Do not choose Node 20 merely because it is the current application minimum.
 
 ### 2.3 Build Command
 
-The branch includes a committed `package-lock.json`, so use:
+The branch includes a committed `package-lock.json`; production/staging installs must use:
 
 ```text
 npm ci --omit=dev
 ```
 
-The repository includes `package-lock.json`; production/staging installs must use `npm ci` so dependency resolution follows the committed lockfile.
+The committed lockfile is the source of truth for reproducible installs; do not replace `npm ci` with `npm install` on the production/staging build path.
 
 ### 2.4 Start Command
 
 For the managed target, use the committed package script:
 
 ```text
-node phase2/server.mjs
+npm start
 ```
 
 The persistent-storage hard gate can be expressed operationally as:
@@ -92,7 +92,7 @@ The persistent-storage hard gate can be expressed operationally as:
 test -n "$RADARX_DATA_DIR" && test -d "$RADARX_DATA_DIR" && test -w "$RADARX_DATA_DIR" || { echo "ERROR: persistent storage unavailable"; exit 1; }; node phase2/server.mjs
 ```
 
-Use the guarded form only after the required managed-host binding patch is approved.
+Use this guard as an optional pre-start check when a deployment platform does not already enforce the configured persistent disk.
 
 The application's own deployment preflight rejects missing/unsafe auth, Web Push, origin, port, data directory, and read-only safety settings before the monitor starts.
 
