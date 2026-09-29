@@ -22,7 +22,8 @@ const phase2=[
   'phase2/tests/source-policy.test.mjs',
   'phase2/tests/staging-preflight.test.mjs',
   'phase2/tests/store.test.mjs',
-  'phase2/tests/ws.test.mjs'
+  'phase2/tests/ws.test.mjs',
+  'phase2/tests/resource-lifecycle.test.mjs'
 ];
 
 const scope=process.argv[2]||'all';
@@ -47,12 +48,15 @@ async function runFile(file){
   });
   clearTimeout(watchdog);
   console.error('[TEST FILE END] '+file+' exit_code='+code+(timedOut?' timeout=true':''));
+  lastEnded=file;
   return code===0&&!timedOut;
 }
 
-let ok=true;
+let ok=true;let passed=0;let failed=0;let lastStarted=null;let lastEnded=null;
 for(const file of files){
-  if(!(await runFile(file))){ok=false;}
+  lastStarted=file;
+  const fileOk=await runFile(file);
+  if(fileOk)passed++;else{failed++;ok=false;}
 }
-console.error('[TEST SUITE END] scope='+scope+' status='+(ok?'success':'failure'));
+console.error('[TEST SUITE END] scope='+scope+' status='+(ok?'success':'failure')+' files_passed='+passed+' files_failed='+failed+' last_file_started='+lastStarted+' last_file_ended='+lastEnded);
 process.exitCode=ok?0:1;
