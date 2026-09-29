@@ -8,10 +8,11 @@
   },
   "scripts": {
     "start": "node phase2/server.mjs",
-    "test:all": "node --test phase1/tests/*.test.mjs phase2/tests/*.test.mjs",
-    "test:phase2": "node --test phase2/tests/*.test.mjs",
+    "test:all": "node phase2/tests/run-tests.mjs",
+    "test:phase2": "node phase2/tests/run-tests.mjs phase2",
     "issue-token": "node phase2/tools/issue-token.mjs",
-    "test": "node --test phase1/tests/*.test.mjs phase2/tests/*.test.mjs"
+    "test": "node phase2/tests/run-tests.mjs",
+    "test:phase1": "node phase2/tests/run-tests.mjs phase1"
   },
   "dependencies": {
     "web-push": "^3.6.7",

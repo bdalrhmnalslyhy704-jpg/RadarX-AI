@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test,{fetchWithTimeout,closeServer} from './test-helpers.mjs';
 import assert from 'node:assert/strict';
 import {mkdtemp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -16,7 +16,7 @@ class TestWebPushProvider{
   async send(subscription,payload){this.calls.push({subscription,payload});return{ok:true,status:'SENT',httpStatus:201};}
 }
 
-async function setup(){
+async function setup(t){
   const dir=await mkdtemp(join(tmpdir(),'radarx-real-push-')),store=await new DurableStore({dir}).init();
   const secret='TEST_FIXTURE_AUTH_SECRET';
   const config={
@@ -38,25 +38,27 @@ async function setup(){
   await store.upsertSubscription('staging-android',{
     endpoint:'https://push.example.test/staging',
     expirationTime:null,
+    device_token:'TEST_FIXTURE_DEVICE_TOKEN_123456789012345678901234',
     keys:{p256dh:'TEST_FIXTURE_P256DH',auth:'TEST_FIXTURE_AUTH'}
   });
+  t.after(async()=>{await closeServer(server);});
   return {server,store,provider,base,token};
 }
 
-test('TEST_FIXTURE: TEST_PUSH_ONLY requires auth and a trusted browser Origin',async()=>{
-  const x=await setup();
-  const noAuth=await fetch(x.base+'/v1/push/test',{method:'POST',headers:{Origin:'https://staging.example.test'},body:JSON.stringify({test_id:'android-auth'})});
+test('TEST_FIXTURE: TEST_PUSH_ONLY requires auth and a trusted browser Origin',async(t)=>{
+  const x=await setup(t);
+  const noAuth=await fetchWithTimeout(x.base+'/v1/push/test',{method:'POST',headers:{Origin:'https://staging.example.test'},body:JSON.stringify({test_id:'android-auth'})});
   assert.equal(noAuth.status,401);
-  const noOrigin=await fetch(x.base+'/v1/push/test',{method:'POST',headers:{Authorization:'Bearer '+x.token},body:JSON.stringify({test_id:'android-origin'})});
+  const noOrigin=await fetchWithTimeout(x.base+'/v1/push/test',{method:'POST',headers:{Authorization:'Bearer '+x.token},body:JSON.stringify({test_id:'android-origin'})});
   assert.equal(noOrigin.status,403);
-  const evil=await fetch(x.base+'/v1/push/test',{method:'POST',headers:{Authorization:'Bearer '+x.token,Origin:'https://evil.example.test'},body:JSON.stringify({test_id:'android-evil'})});
+  const evil=await fetchWithTimeout(x.base+'/v1/push/test',{method:'POST',headers:{Authorization:'Bearer '+x.token,Origin:'https://evil.example.test'},body:JSON.stringify({test_id:'android-evil'})});
   assert.equal(evil.status,403);
   await new Promise(resolve=>x.server.close(resolve));
 });
 
-test('TEST_FIXTURE: TEST_PUSH_ONLY is deduplicated, audited, and never masquerades as a market signal',async()=>{
-  const x=await setup(),headers={Authorization:'Bearer '+x.token,Origin:'https://staging.example.test','content-type':'application/json'};
-  const first=await fetch(x.base+'/v1/push/test',{method:'POST',headers,body:JSON.stringify({test_id:'android-manual-01'})});
+test('TEST_FIXTURE: TEST_PUSH_ONLY is deduplicated, audited, and never masquerades as a market signal',async(t)=>{
+  const x=await setup(t),headers={Authorization:'Bearer '+x.token,Origin:'https://staging.example.test','content-type':'application/json'};
+  const first=await fetchWithTimeout(x.base+'/v1/push/test',{method:'POST',headers,body:JSON.stringify({test_id:'android-manual-01'})});
   assert.equal(first.status,202);
   const firstBody=await first.json();
   assert.equal(firstBody.ok,true);assert.equal(firstBody.status,'SENT');assert.equal(x.provider.calls.length,1);
@@ -70,7 +72,7 @@ test('TEST_FIXTURE: TEST_PUSH_ONLY is deduplicated, audited, and never masquerad
   assert.equal('signal_id' in x.provider.calls[0].payload,false);
   assert.equal('source_time' in x.provider.calls[0].payload,false);
 
-  const duplicate=await fetch(x.base+'/v1/push/test',{method:'POST',headers,body:JSON.stringify({test_id:'android-manual-01'})});
+  const duplicate=await fetchWithTimeout(x.base+'/v1/push/test',{method:'POST',headers,body:JSON.stringify({test_id:'android-manual-01'})});
   assert.equal(duplicate.status,409);assert.equal((await duplicate.json()).error,'DUPLICATE_TEST_PUSH');assert.equal(x.provider.calls.length,1);
 
   const signals=await x.store.readRecent('signals',20),notes=await x.store.readRecent('notifications',20);
@@ -83,7 +85,7 @@ test('TEST_FIXTURE: TEST_PUSH_ONLY is deduplicated, audited, and never masquerad
   await new Promise(resolve=>x.server.close(resolve));
 });
 
-test('TEST_FIXTURE: staging test endpoint is disabled outside the explicit staging gate',async()=>{
+test('TEST_FIXTURE: staging test endpoint is disabled outside the explicit staging gate',async(t)=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-real-push-disabled-')),store=await new DurableStore({dir}).init();
   const provider=new TestWebPushProvider(),dedup=new SignalDeduplicator({store});
   const pushManager=new PushManager({provider,store,deduplicator:dedup});
@@ -93,12 +95,12 @@ test('TEST_FIXTURE: staging test endpoint is disabled outside the explicit stagi
   const server=createApiServer({config,store,monitor,pushProvider:provider,pushManager});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const token=createSessionToken({userId:'u1',secret:config.auth.secret,ttlSec:3600}),h={Authorization:'Bearer '+token,Origin:'https://staging.example.test','content-type':'application/json'};
-  const r=await fetch('http://127.0.0.1:'+server.address().port+'/v1/push/test',{method:'POST',headers:h,body:JSON.stringify({test_id:'prod-block'})});
+  const r=await fetchWithTimeout('http://127.0.0.1:'+server.address().port+'/v1/push/test',{method:'POST',headers:h,body:JSON.stringify({test_id:'prod-block'})});
   assert.equal(r.status,404);assert.equal(provider.calls.length,0);
   await new Promise(resolve=>server.close(resolve));
 });
 
 
-test('TEST_FIXTURE: HTTP 202/provider SENT does not validate physical delivery',async()=>{const x=await setup();assert.equal((await x.store.getStagingPushValidationStatus()).status,'NOT_VALIDATED');await new Promise(r=>x.server.close(r));});
+test('TEST_FIXTURE: HTTP 202/provider SENT does not validate physical delivery',async(t)=>{const x=await setup(t);assert.equal((await x.store.getStagingPushValidationStatus()).status,'NOT_VALIDATED');await new Promise(r=>x.server.close(r));});
 
-test('TEST_FIXTURE: validation requires exact subscription, event, device token and one-time ack token',async()=>{const x=await setup(),sub=(await x.store.getSubscriptions('staging-android'))[0],deviceToken='TEST_FIXTURE_DEVICE_TOKEN_123456789012345678901234',ackToken='TEST_FIXTURE_ACK_TOKEN_REAL',eventId='TEST_PUSH_ONLY:staging-android:ack-proof';await x.store.createStagingPushValidationChallenge({userId:'staging-android',subscriptionId:sub.id,testEventId:eventId,deviceToken,ackToken});await x.store.recordStagingPushValidationDelivery({subscriptionId:sub.id,testEventId:eventId,status:'SENT'});const bad=await x.store.acknowledgeStagingPushValidation({subscriptionId:sub.id,testEventId:eventId,deviceToken:'wrong',ackToken,deliveredAt:Date.now()});assert.equal(bad.accepted,false);assert.equal((await x.store.getStagingPushValidationStatus()).status,'NOT_VALIDATED');const good=await x.store.acknowledgeStagingPushValidation({subscriptionId:sub.id,testEventId:eventId,deviceToken,ackToken,deliveredAt:Date.now()});assert.equal(good.accepted,true);assert.equal(good.validation.status,'VALIDATED');assert.equal(good.validation.subscription_id,sub.id);assert.equal(good.validation.test_event_id,eventId);assert.ok(good.validation.acknowledgment.audit_record_id);await new Promise(r=>x.server.close(r));});
+test('TEST_FIXTURE: validation requires exact subscription, event, device token and one-time ack token',async(t)=>{const x=await setup(t),sub=(await x.store.getSubscriptions('staging-android'))[0],deviceToken='TEST_FIXTURE_DEVICE_TOKEN_123456789012345678901234',ackToken='TEST_FIXTURE_ACK_TOKEN_REAL',eventId='TEST_PUSH_ONLY:staging-android:ack-proof';await x.store.createStagingPushValidationChallenge({userId:'staging-android',subscriptionId:sub.id,testEventId:eventId,deviceToken,ackToken});await x.store.recordStagingPushValidationDelivery({subscriptionId:sub.id,testEventId:eventId,status:'SENT'});const bad=await x.store.acknowledgeStagingPushValidation({subscriptionId:sub.id,testEventId:eventId,deviceToken:'wrong',ackToken,deliveredAt:Date.now()});assert.equal(bad.accepted,false);assert.equal((await x.store.getStagingPushValidationStatus()).status,'NOT_VALIDATED');const good=await x.store.acknowledgeStagingPushValidation({subscriptionId:sub.id,testEventId:eventId,deviceToken,ackToken,deliveredAt:Date.now()});assert.equal(good.accepted,true);assert.equal(good.validation.status,'VALIDATED');assert.equal(good.validation.subscription_id,sub.id);assert.equal(good.validation.test_event_id,eventId);assert.ok(good.validation.acknowledgment.audit_record_id);await new Promise(r=>x.server.close(r));});
