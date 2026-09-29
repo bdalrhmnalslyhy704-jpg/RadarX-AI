@@ -47,10 +47,10 @@ jobs:
           for(let i=1;i<pos.length;i++){
             if(pos[i]<pos[0] && i>0){} // filenames can be repeated in cache-bust strings
           }
-          if(!index.includes('RadarX_Ultimate_5.11.js?v=6.8.2-core'))throw new Error('core cache bust missing');
-          if(!index.includes('RadarX_ProEngine_5.11.js?v=6.8.2-pro'))throw new Error('pro cache bust missing');
-          if(!index.includes('radarx-runtime-6.0.js?v=6.8.2'))throw new Error('runtime cache bust missing');
-          if(!index.includes('radarx-pulse-fusion.js?v=3.1-fusion-6.8.2'))throw new Error('pulse cache bust missing');
+          if(!index.includes('RadarX_Ultimate_5.11.js?v=6.8.3-core'))throw new Error('core cache bust missing');
+          if(!index.includes('RadarX_ProEngine_5.11.js?v=6.8.3-pro'))throw new Error('pro cache bust missing');
+          if(!index.includes('radarx-runtime-6.0.js?v=6.8.3'))throw new Error('runtime cache bust missing');
+          if(!index.includes('radarx-pulse-fusion.js?v=3.1-fusion-6.8.3'))throw new Error('pulse cache bust missing');
           console.log('Entry wiring OK');
           NODE
 
@@ -100,10 +100,17 @@ jobs:
           for(const x of ['cycleMs:7000','maxDeepPerCycle:1','await Promise.allSettled(selected.map']){
             if(!core.includes(x))throw new Error('core performance guard missing: '+x);
           }
+          const nativeQueue=fs.readFileSync('app/src/main/java/com/radarx/ai/NativeBinanceHttpQueue.java','utf8');
+          const doh=fs.readFileSync('app/src/main/java/com/radarx/ai/RadarXDohDns.java','utf8');
+          for(const x of ['requestDirect(rawPath, firstDirect[0])','requestDirect(rawPath, firstDirect[1])','requestDirect(rawPath, firstDirect[2])','requestCloud(rawPath)','newFixedThreadPool(4']){
+            if(!nativeQueue.includes(x))throw new Error('native Binance multi-route guard missing: '+x);
+          }
+          if(!doh.includes('Prefer independent public DoH answers'))throw new Error('DoH priority guard missing');
+
           for(const x of ['/api/radarx-news?symbols=','/api/radarx-onchain?symbols=','/api/radarx-social?symbols=']){
             if(!core.includes(x) && !pro.includes(x))throw new Error('feature route guard missing: '+x);
           }
-          for(const x of ['LIMIT=isMobile?3:6','news:60000','onchain:90000','social:120000']){
+          for(const x of ['LIMIT=isMobile?(navigator.hardwareConcurrency>=6?4:3):6','news:60000','onchain:90000','social:120000']){
             if(!runtime.includes(x))throw new Error('runtime performance guard missing: '+x);
           }
           console.log('Performance guards OK');
