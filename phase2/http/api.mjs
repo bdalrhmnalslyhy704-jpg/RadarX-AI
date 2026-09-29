@@ -73,7 +73,7 @@ export function createApiServer({config,store,monitor,pushProvider}){
         const s=subscriptionValid(await body(req,config.api.maxBodyBytes));const row=await store.upsertSubscription(user,s);
         return send(res,201,{subscription:DurableStore.publicSubscription(row),provider:pushProvider.status()});
       }
-          const prefix='/v1/subscriptions/';
+      const prefix='/v1/subscriptions/';
       if(u.pathname.startsWith(prefix)&&req.method==='DELETE'){
         const id=decodeURIComponent(u.pathname.slice(prefix.length));
         if(!id||id.includes('/'))return send(res,400,{error:'INVALID_SUBSCRIPTION_ID'});
@@ -86,7 +86,10 @@ export function createApiServer({config,store,monitor,pushProvider}){
         return send(res,hit?200:404,hit?{event:hit}:{error:'SIGNAL_NOT_FOUND'});
       }
       if(u.pathname==='/v1/signals'&&req.method==='GET')return send(res,200,{events:await store.readRecent('signals',Math.min(200,Number(u.searchParams.get('limit')||50)))});
-      if(u.pathname==='/v1/notifications'&&req.method==='GET')return send(res,200,{events:await store.readRecent('notifications',Math.min(200,Number(u.searchParams.get('limit')||50)))});
+      if(u.pathname==='/v1/notifications'&&req.method==='GET'){
+        const events=await store.readRecent('notifications',Math.min(200,Number(u.searchParams.get('limit')||50)));
+        return send(res,200,{events:events.filter(x=>x.user_id===user)});
+      }
       if(u.pathname==='/v1/push/status'&&req.method==='GET')return send(res,200,pushProvider.status());
       return send(res,404,{error:'NOT_FOUND'});
     }catch(e){
