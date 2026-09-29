@@ -2528,10 +2528,37 @@ const MULTI_RADAR={pollMs:12000,paintMs:120,metaMs:900,minQuoteVolume:RADAR_FILT
   // ---------- 4.1 Trap / Psychology / Briefing / Paper Trading ----------
   function paperDayStart(){const d=new Date();d.setHours(0,0,0,0);return d.getTime();}
   function paperState(){const p=state.paper;if(!Number.isFinite(p.balance))p.balance=10000;if(!Array.isArray(p.positions))p.positions=[];if(!Array.isArray(p.history))p.history=[];return p;}
-  function paperPersist(){state.paper.updatedAt=Date.now();writeJSON(KEYS.paper,state.paper);writeJSON(KEYS.psychology,state.psychology);}
+  let lastPaperStorageAt=0;
+  function paperPersist(force=true){
+    const now=Date.now();
+    state.paper.updatedAt=now;
+    if(!force&&now-lastPaperStorageAt<7000)return;
+    lastPaperStorageAt=now;
+    writeJSON(KEYS.paper,state.paper);
+    writeJSON(KEYS.psychology,state.psychology);
+  }
   function paperCurrentPrice(pos){const m=(state.markets||[]).find(x=>x.symbol===pos.symbol);if(m&&m.last>0)return m.last;if(state.selected?.symbol===pos.symbol&&state.selected.price>0)return state.selected.price;return pos.entry;}
+  let lastGuardianRenderAt=0;
+  let lastGuardianStatus='';
   function updatePaperFromMarkets(markets){
-    const p=paperState();let unreal=0;for(const pos of p.positions){pos.mark=paperCurrentPrice(pos);pos.unrealized=(pos.mark-pos.entry)*pos.qty;unreal+=pos.unrealized;if(!pos.secured&&num(pos.tp1)>0&&pos.mark>=pos.tp1){pos.secured=true;pushEvent('profit_secure',pos,{message:t('profitSecureEvent')});}}p.unrealized=unreal;p.equity=p.balance+p.positions.reduce((a,pos)=>a+pos.qty*pos.mark,0);paperPersist();updatePsychology();if($('guardianHome'))renderPsychologyGuardian();renderResultsCenter();
+    const p=paperState();let unreal=0;
+    for(const pos of p.positions){
+      const nextMark=paperCurrentPrice(pos);
+      pos.mark=nextMark;pos.unrealized=(pos.mark-pos.entry)*pos.qty;unreal+=pos.unrealized;
+      if(!pos.secured&&num(pos.tp1)>0&&pos.mark>=pos.tp1){
+        pos.secured=true;pushEvent('profit_secure',pos,{message:t('profitSecureEvent')});
+      }
+    }
+    p.unrealized=unreal;
+    p.equity=p.balance+p.positions.reduce((a,pos)=>a+pos.qty*pos.mark,0);
+    const psych=updatePsychology();
+    paperPersist(false);
+    if($('guardianHome')){
+      const now=Date.now(),status=String(psych.status||'');
+      if(status!==lastGuardianStatus||now-lastGuardianRenderAt>=5000){
+        lastGuardianStatus=status;lastGuardianRenderAt=now;renderPsychologyGuardian();
+      }
+    }
   }
 
   function pushEvent(type,x={},meta={}){try{const ev=readJSON(KEYS.events,[]);const message=meta.message|| (type==='golden_opportunity'?t('backgroundGolden'):type==='recommendation'?t('recommendationEvent'):type==='profit_secure'?t('profitSecureEvent'):type==='closed_profit'?t('profitCloseEvent'):type==='closed_loss'?t('lossCloseEvent'):t('breakEvenEvent'));ev.unshift({type,ts:Date.now(),symbol:x.symbol||state.currentSymbol||'—',exchange:x.exchange||state.selected?.exchange||$('exchangeSelect')?.value||'binance',message,pnl:(meta.pnl!==undefined&&Number.isFinite(Number(meta.pnl)))?Number(meta.pnl):undefined});writeJSON(KEYS.events,ev.slice(0,300));renderResultsCenter();}catch{}}
@@ -2902,7 +2929,7 @@ function renderResultsCenterWithContinuous(){
     updatePsychology();
     if(state.markets.length)updatePaperFromMarkets(state.markets);
     if($('paperOutput')&&$('subcontent')?.dataset.kind==='paper'&&state.paper.positions.length)renderPaper();
-    setTimeout(heartbeat,1800);
+    setTimeout(heartbeat,2400);
   }
   function showBootError(err,stage='startup'){
     try{
