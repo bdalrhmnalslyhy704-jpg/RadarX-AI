@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp} from 'node:fs/promises';
+import {mkdtemp,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {assertDeploymentEnvironment,assertReadOnlyStagingConfig} from '../deploy/preflight.mjs';
@@ -85,11 +85,12 @@ test('TEST_FIXTURE: wildcard host is rejected outside staging/production',async(
   assert.throws(()=>assertDeploymentEnvironment(env),/STAGING_OR_PRODUCTION_ENV_REQUIRED/);
 });
 
-test('TEST_FIXTURE: missing data directory is created, but unwritable data directory is rejected',async()=>{
+test('TEST_FIXTURE: missing data directory is created, but a file path is rejected',async()=>{
   const env=await validEnv({RADARX_DATA_DIR:join(await mkdtemp(join(tmpdir(),'radarx-data-')),'new-data')});
   const out=assertDeploymentEnvironment(env);
   assert.equal(out.dataDir,env.RADARX_DATA_DIR);
-  assert.throws(()=>assertDeploymentEnvironment({...env,RADARX_DATA_DIR:'/proc/radarx-phase2-cannot-create'}),/RADARX_DATA_DIR_NOT_WRITABLE_OR_CREATABLE/);
+  const root=await mkdtemp(join(tmpdir(),'radarx-file-'));const filePath=join(root,'not-a-directory');await writeFile(filePath,'TEST_FIXTURE');
+  assert.throws(()=>assertDeploymentEnvironment({...env,RADARX_DATA_DIR:filePath}),/RADARX_DATA_DIR_NOT_WRITABLE_OR_CREATABLE/);
 });
 
 test('TEST_FIXTURE: read-only runtime flags include UNKNOWN confidence',()=>{
