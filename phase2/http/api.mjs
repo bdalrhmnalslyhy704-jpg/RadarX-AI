@@ -60,6 +60,8 @@ export function createApiServer({config,store,monitor,pushProvider}){
       }
       if(!u.pathname.startsWith('/v1/'))return send(res,404,{error:'NOT_FOUND'});
       const user=authUser(req);if(!user)return send(res,401,{error:'UNAUTHORIZED'});
+      if(u.pathname==='/v1/config'&&req.method==='GET')return send(res,200,{symbols:config.symbols,timeframes:config.timeframes,
+        push:{provider:pushProvider.status().provider,enabled:pushProvider.status().enabled,vapidPublicKey:config.push.vapidPublicKey||null}});
       if(u.pathname==='/v1/settings'&&req.method==='GET')return send(res,200,{settings:await store.getUserSettings(user)||defaultSettings()});
       if(u.pathname==='/v1/settings'&&req.method==='PUT'){
         const s=validSettings(await body(req,config.api.maxBodyBytes),config.symbols);return send(res,200,{settings:await store.putUserSettings(user,s)});
@@ -76,6 +78,12 @@ export function createApiServer({config,store,monitor,pushProvider}){
         const id=decodeURIComponent(u.pathname.slice(prefix.length));
         if(!id||id.includes('/'))return send(res,400,{error:'INVALID_SUBSCRIPTION_ID'});
         const ok=await store.deleteSubscription(user,id);return send(res,ok?200:404,{deleted:ok});
+      }
+      const signalPrefix='/v1/signals/';
+      if(u.pathname.startsWith(signalPrefix)&&req.method==='GET'){
+        const id=decodeURIComponent(u.pathname.slice(signalPrefix.length));
+        const events=await store.readRecent('signals',200);const hit=events.find(x=>x.signal_id===id&&x.signal_snapshot);
+        return send(res,hit?200:404,hit?{event:hit}:{error:'SIGNAL_NOT_FOUND'});
       }
       if(u.pathname==='/v1/signals'&&req.method==='GET')return send(res,200,{events:await store.readRecent('signals',Math.min(200,Number(u.searchParams.get('limit')||50)))});
       if(u.pathname==='/v1/notifications'&&req.method==='GET')return send(res,200,{events:await store.readRecent('notifications',Math.min(200,Number(u.searchParams.get('limit')||50)))});
