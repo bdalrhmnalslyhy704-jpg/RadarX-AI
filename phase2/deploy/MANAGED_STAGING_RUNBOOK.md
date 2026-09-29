@@ -39,7 +39,7 @@ Render Web Services must listen on `0.0.0.0` and a Render web-service port (the 
 
 A small, separately approved code change is required to support managed-host binding safely while preserving the staging/read-only invariants. The required change is not part of this documentation-only task.
 
-The application currently reads `RADARX_PORT`, not Render's `PORT`, so the managed target should use `RADARX_PORT=10000` while the host-binding compatibility patch is prepared. Render's documented requirement for `0.0.0.0` is a hard deployment requirement. citeturn980726search1
+The runtime now gives `PORT` precedence over `RADARX_PORT` when the hosting platform provides `PORT`. Render's web-service requirement for `0.0.0.0` is satisfied only when `RADARX_HOST=0.0.0.0` is explicitly configured for staging/production. citeturn980726search1
 
 ## 2. Render service creation — planned steps only
 
@@ -64,23 +64,23 @@ Render's Web Service form includes the repository, branch, runtime, build comman
 
 Use **Node.js 24 LTS** for staging.
 
-The repository's package engine currently permits Node `>=20`, but Node 20 reached EOL on March 24, 2026. Node 24 is an active LTS line as of September 2026. citeturn114003search3turn114003search4
+The repository now requires Node `>=22`. Node 20 reached EOL on March 24, 2026; use Node 24 LTS on Render. citeturn114003search3turn114003search4
 
 Do not choose Node 20 merely because it is the current application minimum.
 
 ### 2.3 Build Command
 
-Current branch has `package.json` but no committed `package-lock.json`, so use:
+The branch includes a committed `package-lock.json`, so use:
 
 ```text
-npm install --omit=dev
+npm ci --omit=dev
 ```
 
-Do **not** use `npm ci` until a lockfile is intentionally committed and maintained.
+The repository includes `package-lock.json`; production/staging installs must use `npm ci` so dependency resolution follows the committed lockfile.
 
 ### 2.4 Start Command
 
-For the managed target, the intended application command is:
+For the managed target, use the committed package script:
 
 ```text
 node phase2/server.mjs
@@ -94,7 +94,7 @@ test -n "$RADARX_DATA_DIR" && test -d "$RADARX_DATA_DIR" && test -w "$RADARX_DAT
 
 Use the guarded form only after the required managed-host binding patch is approved.
 
-The application's own staging preflight already rejects missing/unsafe auth, Web Push, origin, and read-only safety settings before the monitor starts.
+The application's own deployment preflight rejects missing/unsafe auth, Web Push, origin, port, data directory, and read-only safety settings before the monitor starts.
 
 ## 3. Health Check
 
@@ -210,7 +210,7 @@ RADARX_PORT=10000
 RADARX_DATA_DIR=/var/data/radarx
 ```
 
-**These three values cannot be applied to the current branch as-is because its staging preflight intentionally rejects a non-loopback host.** This is the blocker described in Section 1.
+**These values are supported by the runtime-compatibility branch only when `RADARX_HOST=0.0.0.0` is explicitly set in staging/production.** Local development remains on `127.0.0.1` by default.
 
 Render supports adding environment variables and secrets in the Dashboard and redeploying with the saved configuration. citeturn114003search7
 
