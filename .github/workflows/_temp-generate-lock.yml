@@ -20,6 +20,21 @@ jobs:
         run: |
           rm -rf node_modules
           npm ci --ignore-scripts
+      - name: Run test suite with captured log
+        shell: bash
+        run: |
+          set +e
+          npm test 2>&1 | tee test-output.log
+          rc=${PIPESTATUS[0]}
+          echo "test_exit_code=$rc" >> test-output.log
+          exit "$rc"
+        continue-on-error: true
+      - name: Upload test log
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output
+          path: test-output.log
+          if-no-files-found: error
       - name: Upload package-lock
         uses: actions/upload-artifact@v4
         with:
