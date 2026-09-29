@@ -62,11 +62,13 @@ self.addEventListener('fetch', event => {
 });
 
 function notificationText(p) {
-  const price = p.price == null ? 'UNKNOWN' : String(p.price);
-  const dq = p.data_quality == null ? 'UNKNOWN' : String(p.data_quality);
-  const lq = p.liquidity_quality == null ? 'UNKNOWN' : String(p.liquidity_quality);
-  return 'السعر: '+price+' • DQ: '+dq+' • LQ: '+lq+' • Risk: '+String(p.risk_filter||'UNKNOWN')+
-    ' • '+String(p.strategy||'UNKNOWN')+' • confidence_score: UNKNOWN';
+  const price=p.price==null?'UNKNOWN':String(p.price);
+  const dq=p.data_quality==null?'UNKNOWN':String(p.data_quality);
+  const lq=p.liquidity_quality==null?'UNKNOWN':String(p.liquidity_quality);
+  const sourceTime=p.source_time?new Date(Number(p.source_time)).toISOString():'UNKNOWN';
+  const reason=Array.isArray(p.reason_codes)?p.reason_codes.join(', '):String(p.reason_codes||'UNKNOWN');
+  return 'السعر: '+price+' • وقت المصدر: '+sourceTime+' • DQ: '+dq+' • LQ: '+lq+' • Risk: '+String(p.risk_filter||'UNKNOWN')+
+    ' • '+String(p.strategy||'UNKNOWN')+' • السبب: '+reason+' • confidence_score: UNKNOWN';
 }
 
 self.addEventListener('push', event => {
