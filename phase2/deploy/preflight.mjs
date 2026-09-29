@@ -1,3 +1,6 @@
+import {mkdirSync,accessSync,constants} from 'node:fs';
+import {resolvePort,assertAllowedHost} from '../runtime.mjs';
+
 const TRUE='true';
 const FALSE='false';
 
@@ -6,9 +9,20 @@ function required(name,value){
   return String(value).trim();
 }
 
-export function assertStagingEnvironment(env=process.env){
+function verifyDataDir(env){
+  const dir=String(env.RADARX_DATA_DIR??'./.radarx-data').trim()||'./.radarx-data';
+  try{
+    mkdirSync(dir,{recursive:true});
+    accessSync(dir,constants.W_OK);
+    return dir;
+  }catch{
+    throw new Error('RADARX_DATA_DIR_NOT_WRITABLE_OR_CREATABLE');
+  }
+}
+
+export function assertDeploymentEnvironment(env=process.env){
   const runtime=String(env.RADARX_ENV??'').trim().toLowerCase();
-  if(runtime!=='staging') throw new Error('STAGING_ENV_REQUIRED');
+  if(!['staging','production'].includes(runtime)) throw new Error('STAGING_OR_PRODUCTION_ENV_REQUIRED');
 
   const testFlag=String(env.RADARX_STAGING_TEST_PUSH_ENABLED??'').trim().toLowerCase();
   if(testFlag!==TRUE&&testFlag!==FALSE) throw new Error('RADARX_STAGING_TEST_PUSH_ENABLED_MUST_BE_EXPLICIT_TRUE_OR_FALSE');
@@ -36,15 +50,20 @@ export function assertStagingEnvironment(env=process.env){
   if(String(env.RADARX_CONFIDENCE_MODE??'UNKNOWN').trim().toUpperCase()!=='UNKNOWN')
     throw new Error('CONFIDENCE_MODE_MUST_REMAIN_UNKNOWN');
 
-  const host=String(env.RADARX_HOST??'127.0.0.1').trim();
-  if(!['127.0.0.1','localhost','::1'].includes(host)) throw new Error('STAGING_HOST_MUST_BE_LOOPBACK');
+  const hostRaw=String(env.RADARX_HOST??'').trim();
+  const host=assertAllowedHost(hostRaw||'127.0.0.1',runtime,{explicit:Boolean(hostRaw)});
+  const port=resolvePort(env);
+  const dataDir=verifyDataDir(env);
 
-  return {environment:'staging',pushProvider:provider,testPushEnabled:testFlag===TRUE,allowedOrigins:origins,
-    paperTrading:true,realOrderExecution:false,confidenceMode:'UNKNOWN'};
+  return {environment:runtime,pushProvider:provider,testPushEnabled:testFlag===TRUE,allowedOrigins:origins,
+    host,port,dataDir,paperTrading:true,realOrderExecution:false,confidenceMode:'UNKNOWN'};
 }
+
+export const assertStagingEnvironment=assertDeploymentEnvironment;
 
 export function assertReadOnlyStagingConfig(config){
   if(config?.paper?.paperTrading!==true) throw new Error('PAPER_TRADING_MUST_REMAIN_TRUE');
   if(config?.paper?.realOrderExecution!==false) throw new Error('REAL_ORDER_EXECUTION_MUST_REMAIN_FALSE');
+  if(config?.confidenceMode!=='UNKNOWN') throw new Error('CONFIDENCE_MODE_MUST_REMAIN_UNKNOWN');
   return true;
 }
