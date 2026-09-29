@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {MarketMonitor} from '../core/monitor.mjs';
 
-const step={4h:14400000,1h:3600000,15m:900000};
+const step={'4h':14400000,'1h':3600000,'15m':900000};
 function candle(symbol,tf,openTime){
   const closeTime=openTime+step[tf]-1;
   return {symbol,timeframe:tf,openTime,closeTime,open:100,high:101,low:99,close:100.5,volume:1000,quoteVolume:100500,
