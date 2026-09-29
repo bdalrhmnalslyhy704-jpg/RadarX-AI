@@ -595,50 +595,67 @@ public final class BinanceSecureRelay {
     public WebResourceResponse interceptHealth(Uri uri) {
         if (uri == null || !"/api/health".equals(uri.getPath())) return null;
 
-        // Ask the deployed gateway first so the native health panel reports the
-        // same real provider status used by the browser deployment.
-        try {
-            Request cloud = new Request.Builder()
-                    .url("https://radar-x-ai.vercel.app/api/health")
-                    .get()
-                    .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.8.1")
-                    .build();
-            try (Response r = client.newCall(cloud).execute()) {
-                byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
-                if (r.isSuccessful() && looksLikeJson(body)) {
-                    return response(
-                            200, "OK", "application/json; charset=utf-8",
-                            body, headers("MISS", "radarx-health-cloud", 0)
-                    );
-                }
-            }
-        } catch (Exception ignored) {
-        }
-
-        int idx = preferred;
+        final int[] order = orderedIndexes();
         boolean ok = false;
         long latency = 0L;
         String route = "none";
-        try {
-            long started = System.currentTimeMillis();
-            Request request = new Request.Builder()
-                    .url(UPSTREAMS[idx] + "/api/v3/ping")
-                    .get()
-                    .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.8.1")
-                    .build();
-            try (Response r = client.newCall(request).execute()) {
-                latency = System.currentTimeMillis() - started;
-                ok = r.isSuccessful();
-                if (ok) route = UPSTREAMS[idx];
-                mark(idx, ok, latency);
+        long checkedAt = System.currentTimeMillis();
+
+        // Health reflects real Binance Spot connectivity first. The cloud
+        // relay is only a fallback and cannot mask a healthy direct route.
+        for (int p = 0; p < Math.min(order.length, 3); p++) {
+            int idx = order[p];
+            try {
+                long started = System.currentTimeMillis();
+                Request request = new Request.Builder()
+                        .url(UPSTREAMS[idx] + "/api/v3/ping")
+                        .get()
+                        .header("Accept", "application/json")
+                        .header("User-Agent", "RadarX-Android/6.8.1")
+                        .build();
+                try (Response r = client.newCall(request).execute()) {
+                    latency = System.currentTimeMillis() - started;
+                    if (r.isSuccessful()) {
+                        ok = true;
+                        route = UPSTREAMS[idx];
+                        mark(idx, true, latency);
+                        break;
+                    }
+                    mark(idx, false, latency);
+                }
+            } catch (Exception ignored) {
+                mark(idx, false, 0L);
             }
-        } catch (Exception ignored) {
-            mark(idx, false, 0L);
         }
 
-        long checkedAt = System.currentTimeMillis();
+        if (!ok) {
+            try {
+                Request cloud = new Request.Builder()
+                        .url(REMOTE_RELAY.replace("/api/binance", "/api/health"))
+                        .get()
+                        .header("Accept", "application/json")
+                        .header("User-Agent", "RadarX-Android/6.8.1")
+                        .build();
+                long started = System.currentTimeMillis();
+                try (Response r = client.newCall(cloud).execute()) {
+                    latency = System.currentTimeMillis() - started;
+                    byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+                    if (r.isSuccessful() && looksLikeJson(body)) {
+                        try {
+                            JSONObject cloudJson = new JSONObject(new String(body, StandardCharsets.UTF_8));
+                            if (cloudJson.optBoolean("ok", false)) {
+                                ok = cloudJson.optInt("online", 0) > 0;
+                                route = "radarx-cloud-health";
+                            }
+                        } catch (Exception ignored) {
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
+        checkedAt = System.currentTimeMillis();
         String root = "{\"ok\":true,\"checkedAt\":" + checkedAt
                 + ",\"durationMs\":" + latency
                 + ",\"total\":1,\"online\":" + (ok ? 1 : 0)
@@ -652,7 +669,7 @@ public final class BinanceSecureRelay {
         return response(
                 200, "OK", "application/json; charset=utf-8",
                 root.getBytes(StandardCharsets.UTF_8),
-                headers("LOCAL", "native-binance-ping", 0)
+                headers("LOCAL", route, latency)
         );
     }
 
