@@ -103,7 +103,7 @@ jobs:
           for(const x of ['/api/radarx-news?symbols=','/api/radarx-onchain?symbols=','/api/radarx-social?symbols=']){
             if(!core.includes(x) && !pro.includes(x))throw new Error('feature route guard missing: '+x);
           }
-          for(const x of ['LIMIT=isMobile?2:6','news:60000','onchain:90000','social:120000']){
+          for(const x of ['LIMIT=isMobile?3:6','news:60000','onchain:90000','social:120000']){
             if(!runtime.includes(x))throw new Error('runtime performance guard missing: '+x);
           }
           console.log('Performance guards OK');
