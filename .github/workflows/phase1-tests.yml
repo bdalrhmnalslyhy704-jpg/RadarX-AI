@@ -9,6 +9,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: radarx-phase1-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   phase1-tests:
     runs-on: ubuntu-latest
