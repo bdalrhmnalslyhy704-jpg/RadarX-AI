@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test from '../../phase2/tests/test-helpers.mjs';
 import assert from 'node:assert/strict';
 import {makeCandle,upSeries,downSeries,breakoutSeries,oversoldSeries} from './fixtures.mjs';
 import {ema,rsi,bollinger,atr,rvol,macd,validateCandle,validateSeries,rejectFutureData,liquidityQuality,spreadBps,obi,evaluateBreakout,evaluateMeanReversion,evaluateMTFTrend,riskFilter,makeSignal,shouldEmitSignal,roundTripNetRR} from '../radarx-phase1-engine.mjs';

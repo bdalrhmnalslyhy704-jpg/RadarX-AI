@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test from './test-helpers.mjs';
 import assert from 'node:assert/strict';
 import {mkdtemp,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
