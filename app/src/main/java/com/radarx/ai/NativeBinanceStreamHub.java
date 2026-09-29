@@ -193,6 +193,9 @@ public final class NativeBinanceStreamHub {
         if (!isCurrent(slot)) return;
         int attempt = Math.min(slot.attempt + 1, 12);
         slot.attempt = attempt;
+        // Rotate the preferred pair after a failed/closed connection so a
+        // regionally blocked endpoint cannot trap the app in the same loop.
+        slot.preferredBase = Math.floorMod(slot.preferredBase + 1, BASES.length);
         long delay = Math.min(60_000L, 1_500L + (long) Math.pow(2, Math.min(attempt, 6)) * 500L);
         scheduler.schedule(() -> connect(slot, attempt), delay, TimeUnit.MILLISECONDS);
     }
