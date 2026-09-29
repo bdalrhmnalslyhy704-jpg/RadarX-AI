@@ -1483,13 +1483,18 @@
       return;
     }
     const started=performance.now();
+    const deadlineAt=Date.now()+SMART_SCAN.maxScanMs;
+    const guard=()=>{if(Date.now()>=deadlineAt)throw new Error('SMART_SCAN_DEADLINE');};
     state.smartScan={...state.smartScan,running:true,results:[],watch:[],universe:0,stage1:0,midVerified:0,deepVerified:0,startedAt:Date.now(),error:'',lastUpdated:0,latencyMs:0};
     const btns=[$('smartScanBtn'),$('quickScan')].filter(Boolean);btns.forEach(function(b){b.disabled=true;});
     if($('smartOpportunityOutput'))$('smartOpportunityOutput').innerHTML='';
     smartStage('تهيئة Auto-Pilot 6.0 — طبقة بيانات مشتركة + فرز مرحلي…',2,'busy');
     try{
-      await ensureBinanceRelay();
+      guard();
+      // The live ticker request is already a real Binance connectivity test.
+      // Do not spend an extra round-trip on /ping before the actual scan.
       const tickers=await smartWithTimeout(fetchAllTickers('binance'),SMART_SCAN.perSymbolTimeoutMs);
+      guard();
       const universe=tickers.filter(smartUniverseEligible);
       state.smartScan.universe=universe.length;state.markets=universe.slice();state.marketsBySymbol={};
       universe.forEach(function(x){state.marketsBySymbol[x.symbol]=x;});
@@ -1501,8 +1506,7 @@
       const shortlist=ranked.slice(0,SMART_SCAN.maxTickerShortlist);state.smartScan.stage1=shortlist.length;
       smartStage('مرحلة 1: كل السوق تم مسحه → '+shortlist.length+' مرشح للحساب الزمني.',18,'busy');
 
-      const deadlineAt=Date.now()+SMART_SCAN.maxScanMs;
-      const guard=()=>{if(Date.now()>=deadlineAt)throw new Error('SMART_SCAN_DEADLINE');};
+
       const mid=[];
       const midPool=shortlist.slice(0,SMART_SCAN.maxMidScan);
       for(let i=0;i<midPool.length;i+=SMART_SCAN.batchSize){

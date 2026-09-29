@@ -8,7 +8,7 @@
   if(window.RadarXRuntime && window.RadarXRuntime.version) return;
 
   var isMobile=/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent||'');
-  var LIMIT=isMobile?3:6;
+  var LIMIT=isMobile?(navigator.hardwareConcurrency>=6?4:3):6;
   var queue=[],active=0,inflight=new Map(),cache=new Map(),stats={queued:0,started:0,ok:0,failed:0,coalesced:0,cacheHits:0,rateLimited:0,lastError:'',lastLatency:0};
   var CACHE_TTL=Object.freeze({
     ticker:3500, tickerPrice:2500, exchangeInfo:300000, klines:2200, depth:900, trades:900, health:5000, market:5000, news:60000, onchain:90000, social:120000, context:12000, metals:20000, default:2500
@@ -126,7 +126,7 @@
   window.RadarXRuntime={
     version:'6.0.0',
     requestJSON:requestJSON,
-    getStats:function(){return Object.assign({},stats,{active:active,queued:queue.length,cache:cache.size,concurrency:LIMIT,mobile:isMobile});},
+    getStats:function(){return Object.assign({},stats,{active:active,queued:queue.length,cache:cache.size,concurrency:LIMIT,mobile:isMobile,hardwareConcurrency:Number(navigator.hardwareConcurrency||0)});},
     clearCache:function(){cache.clear();},
     isBusy:function(){return active>0||queue.length>0;},
     flush:function(){

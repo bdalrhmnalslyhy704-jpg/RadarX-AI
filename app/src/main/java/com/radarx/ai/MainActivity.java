@@ -37,7 +37,7 @@ public final class MainActivity extends Activity {
     private static final int BG = Color.rgb(5, 10, 15);
     private static final String APP_URL =
             "https://appassets.androidplatform.net/assets/index.html";
-    private static final String VERSION = "6.8.2";
+    private static final String VERSION = "6.8.3";
 
     private WebView webView;
     private TextView statusView;
@@ -50,12 +50,14 @@ public final class MainActivity extends Activity {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
 
+        RadarXDohDns sharedDns = new RadarXDohDns();
+
         OkHttpClient relayClient = new OkHttpClient.Builder()
                 .connectTimeout(5_200L, TimeUnit.MILLISECONDS)
                 .readTimeout(5_200L, TimeUnit.MILLISECONDS)
                 .writeTimeout(5_200L, TimeUnit.MILLISECONDS)
                 .retryOnConnectionFailure(true)
-                .dns(new RadarXDohDns())
+                .dns(sharedDns)
                 .build();
         binanceRelay = new BinanceSecureRelay(relayClient);
 
@@ -65,7 +67,7 @@ public final class MainActivity extends Activity {
                 .writeTimeout(8_000L, TimeUnit.MILLISECONDS)
                 .pingInterval(20L, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(true)
-                .dns(new RadarXDohDns())
+                .dns(sharedDns)
                 .build();
         streamHub = new NativeBinanceStreamHub(wsClient);
         httpQueue = new NativeBinanceHttpQueue(relayClient);
@@ -119,6 +121,7 @@ public final class MainActivity extends Activity {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
+        s.setSaveFormData(false);
         s.setDatabaseEnabled(true);
         s.setLoadsImagesAutomatically(true);
         s.setBlockNetworkImage(false);

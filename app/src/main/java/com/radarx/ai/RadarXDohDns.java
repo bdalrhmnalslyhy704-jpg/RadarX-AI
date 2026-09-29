@@ -23,9 +23,9 @@ public final class RadarXDohDns implements okhttp3.Dns {
 
     public RadarXDohDns() {
         dohClient = new OkHttpClient.Builder()
-                .connectTimeout(2_500L, java.util.concurrent.TimeUnit.MILLISECONDS)
-                .readTimeout(2_500L, java.util.concurrent.TimeUnit.MILLISECONDS)
-                .writeTimeout(2_500L, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .connectTimeout(1_800L, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .readTimeout(1_800L, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .writeTimeout(1_800L, java.util.concurrent.TimeUnit.MILLISECONDS)
                 .retryOnConnectionFailure(true)
                 .build();
     }
@@ -43,18 +43,8 @@ public final class RadarXDohDns implements okhttp3.Dns {
             return cached.addresses;
         }
 
-        // Fast path: Android's normal resolver.
-        try {
-            List<InetAddress> local = system.lookup(hostname);
-            if (local != null && !local.isEmpty()) {
-                List<InetAddress> copy = new ArrayList<>(local);
-                dnsCache.put(hostname, new CacheEntry(copy, now, false));
-                return copy;
-            }
-        } catch (Exception ignored) {
-            // Continue with DoH.
-        }
-
+        // Prefer independent public DoH answers. A locally supplied DNS answer
+        // can resolve correctly yet still point to a regionally unreachable path.
         List<InetAddress> addresses = new ArrayList<>();
         for (String endpoint : Arrays.asList(
                 "https://cloudflare-dns.com/dns-query?name=" + encode(hostname) + "&type=A",
@@ -65,7 +55,7 @@ public final class RadarXDohDns implements okhttp3.Dns {
                         .url(endpoint)
                         .get()
                         .header("Accept", "application/dns-json")
-                        .header("User-Agent", "RadarX-Android/6.8.2")
+                        .header("User-Agent", "RadarX-Android/6.8.3")
                         .build();
 
                 try (Response response = dohClient.newCall(request).execute()) {
@@ -95,6 +85,17 @@ public final class RadarXDohDns implements okhttp3.Dns {
             } catch (Exception ignored) {
                 // Try the next public DoH provider.
             }
+        }
+
+        // If DoH is itself restricted, fall back to Android's resolver.
+        try {
+            List<InetAddress> local = system.lookup(hostname);
+            if (local != null && !local.isEmpty()) {
+                List<InetAddress> copy = new ArrayList<>(local);
+                dnsCache.put(hostname, new CacheEntry(copy, System.currentTimeMillis(), false));
+                return copy;
+            }
+        } catch (Exception ignored) {
         }
 
         dnsCache.put(hostname, new CacheEntry(new ArrayList<>(), System.currentTimeMillis(), true));

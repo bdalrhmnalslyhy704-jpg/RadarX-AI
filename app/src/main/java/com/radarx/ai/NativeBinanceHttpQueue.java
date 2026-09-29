@@ -10,9 +10,16 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CompletionService;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import okhttp3.OkHttpClient;
@@ -51,7 +58,9 @@ public final class NativeBinanceHttpQueue {
     private final OkHttpClient cloudClient;
     private final OkHttpClient directClient;
     private final ExecutorService executor;
+    private final ExecutorService probeExecutor;
     private final AtomicLong sequence = new AtomicLong(0);
+    private final AtomicInteger preferredIndex = new AtomicInteger(0);
     private final Map<String, Result> completed = new ConcurrentHashMap<>();
     private final java.util.concurrent.atomic.AtomicInteger preferredIndex =
             new java.util.concurrent.atomic.AtomicInteger(0);
@@ -65,14 +74,15 @@ public final class NativeBinanceHttpQueue {
                 .build();
 
         this.directClient = baseClient.newBuilder()
-                .connectTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
-                .readTimeout(6_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .connectTimeout(3_200L, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .readTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
                 .writeTimeout(6_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
                 .retryOnConnectionFailure(true)
                 .dns(new RadarXDohDns())
                 .build();
 
-        this.executor = Executors.newFixedThreadPool(3, new DaemonFactory());
+        this.executor = Executors.newFixedThreadPool(3, new DaemonFactory("RadarX-Binance-HTTP"));
+        this.probeExecutor = Executors.newFixedThreadPool(4, new DaemonFactory("RadarX-Binance-Probe"));
     }
 
     public String start(String rawPath) {
@@ -118,104 +128,97 @@ public final class NativeBinanceHttpQueue {
 
     public void shutdown() {
         executor.shutdownNow();
+        probeExecutor.shutdownNow();
         completed.clear();
     }
 
     private Result perform(String rawPath) {
-        Throwable last = null;
         int preferred = Math.floorMod(preferredIndex.get(), UPSTREAMS.length);
+        int[] firstDirect = nextDistinct(preferred, 3);
 
-        // One fast direct attempt first. This is the normal path and keeps
-        // the UI out of a long mirror cascade on healthy networks.
-        int[] order = new int[3];
-        order[0] = preferred;
-        int k = 1;
-        for (int step = 1; step <= UPSTREAMS.length && k < order.length; step++) {
-            int idx = (preferred + step) % UPSTREAMS.length;
-            boolean duplicate = false;
-            for (int j = 0; j < k; j++) if (order[j] == idx) duplicate = true;
-            if (!duplicate) order[k++] = idx;
-        }
+        // Fast race: several Binance routes and the RadarX relay are tested
+        // together. A healthy path wins without waiting for blocked routes.
+        List<Callable<Result>> firstWave = new ArrayList<>();
+        firstWave.add(() -> requestDirect(rawPath, firstDirect[0]));
+        firstWave.add(() -> requestDirect(rawPath, firstDirect[1]));
+        firstWave.add(() -> requestDirect(rawPath, firstDirect[2]));
+        firstWave.add(() -> requestCloud(rawPath));
 
-        try {
-            Result direct = requestDirect(rawPath, order[0]);
-            if (direct != null && direct.status < 300) return direct;
-            last = new RuntimeException("DIRECT_HTTP_" + (direct == null ? "FAILED" : direct.status));
-        } catch (Throwable t) {
-            last = t;
-        }
+        Result winner = race(firstWave, 5_800L);
+        if (winner != null) return winner;
 
-        // Regional escape hatch. Do this before trying more Binance mirrors,
-        // because it is often faster on restricted mobile networks.
-        try {
-            Result cloud = requestCloud(rawPath);
-            if (cloud != null && cloud.status < 300) return cloud;
-            last = new RuntimeException("CLOUD_HTTP_" + (cloud == null ? "FAILED" : cloud.status));
-        } catch (Throwable t) {
-            last = t;
-        }
-
-        // Only two additional direct mirrors: bounded latency and much less
-        // connection churn on low-end phones.
-        for (int i = 1; i < order.length; i++) {
-            try {
-                Result direct = requestDirect(rawPath, order[i]);
-                if (direct != null && direct.status < 300) return direct;
-                last = new RuntimeException("DIRECT_HTTP_" + (direct == null ? "FAILED" : direct.status));
-            } catch (Throwable t) {
-                last = t;
+        // Only on a total first-wave failure do we probe the remaining mirrors.
+        List<Callable<Result>> secondWave = new ArrayList<>();
+        for (int i = 0; i < UPSTREAMS.length; i++) {
+            boolean used = false;
+            for (int direct : firstDirect) if (direct == i) { used = true; break; }
+            if (!used) {
+                final int index = i;
+                secondWave.add(() -> requestDirect(rawPath, index));
             }
         }
+        winner = race(secondWave, 5_600L);
+        if (winner != null) return winner;
 
-        String message = last == null || last.getMessage() == null
-                ? "Binance Spot unavailable"
-                : last.getMessage();
         String body = "{\"code\":-1,\"msg\":\"Binance Spot unavailable\","
-                + "\"detail\":\"" + escape(message) + "\",\"status\":502}";
-        return new Result(502, "BAD_GATEWAY", "application/json; charset=utf-8",
-                body.getBytes(StandardCharsets.UTF_8), "none");
+                + "\"detail\":\"ALL_BINANCE_ROUTES_FAILED\",\"status\":502}";
+        return new Result(
+                502,
+                "BAD_GATEWAY",
+                "application/json; charset=utf-8",
+                body.getBytes(StandardCharsets.UTF_8),
+                "none"
+        );
     }
 
-    private Result requestDirect(String rawPath, int index) {
-        String base = UPSTREAMS[index];
-        Request direct = new Request.Builder()
-                .url(base + rawPath)
-                .get()
-                .header("Accept", "application/json")
-                .header("User-Agent", "RadarX-Android/6.8.2")
-                .build();
+    private Result race(List<Callable<Result>> jobs, long timeoutMs) {
+        if (jobs == null || jobs.isEmpty()) return null;
+        CompletionService<Result> completion = new ExecutorCompletionService<>(probeExecutor);
+        List<Future<Result>> futures = new ArrayList<>(jobs.size());
+        for (Callable<Result> job : jobs) futures.add(completion.submit(job));
 
-        try (Response r = directClient.newCall(direct).execute()) {
-            byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
-            if (r.isSuccessful() && looksLikeJson(body)) {
-                preferredIndex.set(index);
-                return new Result(r.code(), "OK", "application/json; charset=utf-8", body, base);
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        try {
+            for (int done = 0; done < futures.size(); done++) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) break;
+                Future<Result> future = completion.poll(remaining, TimeUnit.NANOSECONDS);
+                if (future == null) break;
+                try {
+                    Result result = future.get();
+                    if (result != null && result.status < 300 && looksLikeJson(result.body)) {
+                        cancelAll(futures);
+                        return result;
+                    }
+                } catch (ExecutionException ignored) {
+                    // A single failed route must never block the remaining routes.
+                }
             }
-            return new Result(r.code(), "HTTP_" + r.code(), "application/json; charset=utf-8",
-                    body, base);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            cancelAll(futures);
+        }
+        return null;
+    }
+
+    private void cancelAll(List<Future<Result>> futures) {
+        for (Future<Result> f : futures) {
+            if (f != null && !f.isDone()) f.cancel(true);
         }
     }
 
-    private Result requestCloud(String rawPath) {
-        Request cloud = new Request.Builder()
-                .url(REMOTE_RELAY + "?path=" + Uri.encode(rawPath))
-                .get()
-                .header("Accept", "application/json")
-                .header("User-Agent", "RadarX-Android/6.8.2")
-                .build();
-        try (Response r = cloudClient.newCall(cloud).execute()) {
-            byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
-            if (r.isSuccessful() && looksLikeJson(body)) {
-                return new Result(r.code(), "OK", "application/json; charset=utf-8",
-                        body, "radarx-cloud-relay");
-            }
-            return new Result(r.code(), "HTTP_" + r.code(), "application/json; charset=utf-8",
-                    body, "radarx-cloud-relay");
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+    private int[] nextDistinct(int preferred, int count) {
+        int n = Math.max(1, Math.min(count, UPSTREAMS.length));
+        int[] out = new int[n];
+        int size = 0;
+        for (int step = 0; step < UPSTREAMS.length && size < n; step++) {
+            int idx = Math.floorMod(preferred + step, UPSTREAMS.length);
+            boolean duplicate = false;
+            for (int j = 0; j < size; j++) if (out[j] == idx) duplicate = true;
+            if (!duplicate) out[size++] = idx;
         }
+        return out;
     }
 
     private boolean isValidPath(String rawPath) {
@@ -267,8 +270,10 @@ public final class NativeBinanceHttpQueue {
     }
 
     private static final class DaemonFactory implements ThreadFactory {
+        private final String name;
+        DaemonFactory(String name) { this.name = name; }
         @Override public Thread newThread(Runnable r) {
-            Thread t = new Thread(r, "RadarX-Binance-HTTP");
+            Thread t = new Thread(r, name);
             t.setDaemon(true);
             return t;
         }
