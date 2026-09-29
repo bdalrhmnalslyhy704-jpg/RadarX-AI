@@ -63,3 +63,5 @@ export function installDiagnostics(){
   process.on('uncaughtException',error=>console.error('[TEST UNCAUGHT EXCEPTION]',error?.stack??error));
   return dump;
 }
+
+installDiagnostics();
