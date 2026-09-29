@@ -47,7 +47,7 @@ test('TEST_FIXTURE: authenticated config exposes only the VAPID public key and s
   const port=server.address().port,base='http://127.0.0.1:'+port,token=createSessionToken({userId:'u1',secret,ttlSec:3600});
   const h={Authorization:'Bearer '+token};
   const cfgRes=await fetch(base+'/v1/config',{headers:h});assert.equal(cfgRes.status,200);const cfg=await cfgRes.json();
-  assert.equal(cfg.push.vapidPublicKey,'TEST_FIXTURE_PUBLIC');assert.equal('vapidPrivateKey' in cfg.push,false);assert.equal('vapidPrivateKey' in JSON.stringify(cfg),false);
+  assert.equal(cfg.push.vapidPublicKey,'TEST_FIXTURE_PUBLIC');assert.equal('vapidPrivateKey' in cfg.push,false);assert.equal(Object.hasOwn(cfg.push,'vapidPrivateKey'),false);assert.doesNotMatch(JSON.stringify(cfg),/TEST_FIXTURE_PRIVATE/);
   const detail=await fetch(base+'/v1/signals/TEST_FIXTURE_SIGNAL_DETAIL',{headers:h});assert.equal(detail.status,200);const d=await detail.json();
   assert.equal(d.event.signal_snapshot.scores.confidence_score,'UNKNOWN');assert.equal(d.event.signal_snapshot.paper_trade.real_order_execution,false);
   await new Promise(resolve=>server.close(resolve));
