@@ -115,7 +115,7 @@ public final class NativeBinanceStreamHub {
         Request request = new Request.Builder()
                 .url(url)
                 .header("Accept", "application/json")
-                .header("User-Agent", "RadarX-Android/6.8.1")
+                .header("User-Agent", "RadarX-Android/6.8.2")
                 .build();
 
         try {
