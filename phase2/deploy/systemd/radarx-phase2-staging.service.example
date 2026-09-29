@@ -1,0 +1,35 @@
+# Example only. Install on the staging host after replacing paths as needed.
+# The EnvironmentFile must exist on the host and contain real secrets outside Git.
+
+[Unit]
+Description=RadarX Phase 2 Staging Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=radarx
+Group=radarx
+WorkingDirectory=/opt/radarx
+EnvironmentFile=/etc/radarx/phase2-staging.env
+ExecStart=/usr/bin/node phase2/server.mjs
+
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+UMask=0027
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/radarx/phase2
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

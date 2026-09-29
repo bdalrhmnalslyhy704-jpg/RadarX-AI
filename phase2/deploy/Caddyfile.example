@@ -1,0 +1,18 @@
+# Example Caddyfile for staging.
+# Replace both hostnames with real DNS names that point to this server.
+# Caddy will obtain/renew public TLS certificates automatically when DNS
+# and external ports 80/443 are correct.
+
+radarx-staging.example.com {
+    encode gzip
+
+    # Static PWA. /phase1/app.html maps to /opt/radarx/phase1/app.html.
+    root * /opt/radarx
+    header /phase1/sw.js Cache-Control "no-store"
+    file_server
+}
+
+radarx-api-staging.example.com {
+    # Node stays private on 127.0.0.1:8787.
+    reverse_proxy 127.0.0.1:8787
+}

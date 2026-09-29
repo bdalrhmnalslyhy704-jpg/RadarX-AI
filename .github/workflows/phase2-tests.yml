@@ -1,0 +1,23 @@
+name: RadarX Phase 2 Tests
+on:
+  push:
+    branches: ['phase2-*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  all-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install dependencies
+        run: npm ci
+      - name: Audit production dependencies (critical threshold)
+        run: npm audit --omit=dev --audit-level=critical
+      - name: Run Phase 1 and Phase 2 tests
+        run: npm test
