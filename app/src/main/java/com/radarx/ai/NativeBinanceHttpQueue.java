@@ -120,75 +120,61 @@ public final class NativeBinanceHttpQueue {
     }
 
     private Result perform(String rawPath) {
-        // First use the deployed RadarX relay. This is the regional path.
-        try {
-            Request cloud = new Request.Builder()
-                    .url(REMOTE_RELAY + "?path=" + Uri.encode(rawPath))
-                    .get()
-                    .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.8.1")
-                    .build();
-
-            try (Response r = cloudClient.newCall(cloud).execute()) {
-                byte[] body = r.body() == null
-                        ? new byte[0]
-                        : r.body().bytes();
-
-                if (r.isSuccessful() && looksLikeJson(body)) {
-                    return new Result(
-                            r.code(), "OK",
-                            "application/json; charset=utf-8",
-                            body, "radarx-cloud-relay"
-                    );
-                }
-            }
-        } catch (Exception ignored) {
-            // Continue with direct Spot endpoints.
-        }
-
+        // Prefer a direct Spot endpoint with resilient DoH DNS. Use the
+        // deployed relay only when direct Binance access is unavailable.
         Throwable last = null;
-        int attempts = 0;
-        for (String base : UPSTREAMS) {
-            if (++attempts > UPSTREAMS.length) break;
-            try {
-                Request direct = new Request.Builder()
-                        .url(base + rawPath)
-                        .get()
-                        .header("Accept", "application/json")
-                        .header("User-Agent", "RadarX-Android/6.8.1")
-                        .build();
 
-                try (Response r = directClient.newCall(direct).execute()) {
-                    byte[] body = r.body() == null
-                            ? new byte[0]
-                            : r.body().bytes();
+        for (int pass = 0; pass < 2; pass++) {
+            if (pass == 0) {
+                for (String base : UPSTREAMS) {
+                    try {
+                        Request direct = new Request.Builder()
+                                .url(base + rawPath)
+                                .get()
+                                .header("Accept", "application/json")
+                                .header("User-Agent", "RadarX-Android/6.8.1")
+                                .build();
 
-                    if (r.isSuccessful() && looksLikeJson(body)) {
-                        return new Result(
-                                r.code(), "OK",
-                                "application/json; charset=utf-8",
-                                body, base
-                        );
+                        try (Response r = directClient.newCall(direct).execute()) {
+                            byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+                            if (r.isSuccessful() && looksLikeJson(body)) {
+                                return new Result(r.code(), "OK", "application/json; charset=utf-8", body, base);
+                            }
+                            last = new RuntimeException("HTTP " + r.code());
+                        }
+                    } catch (Throwable t) {
+                        last = t;
                     }
-                    last = new RuntimeException("HTTP " + r.code());
                 }
-            } catch (Throwable t) {
-                last = t;
+            } else {
+                try {
+                    Request cloud = new Request.Builder()
+                            .url(REMOTE_RELAY + "?path=" + Uri.encode(rawPath))
+                            .get()
+                            .header("Accept", "application/json")
+                            .header("User-Agent", "RadarX-Android/6.8.1")
+                            .build();
+
+                    try (Response r = cloudClient.newCall(cloud).execute()) {
+                        byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+                        if (r.isSuccessful() && looksLikeJson(body)) {
+                            return new Result(r.code(), "OK", "application/json; charset=utf-8", body, "radarx-cloud-relay");
+                        }
+                        last = new RuntimeException("Cloud HTTP " + r.code());
+                    }
+                } catch (Throwable t) {
+                    last = t;
+                }
             }
         }
 
         String message = last == null || last.getMessage() == null
                 ? "Binance Spot unavailable"
                 : last.getMessage();
-
         String body = "{\"code\":-1,\"msg\":\"Binance Spot unavailable\","
                 + "\"detail\":\"" + escape(message) + "\",\"status\":502}";
-        return new Result(
-                502, "BAD_GATEWAY",
-                "application/json; charset=utf-8",
-                body.getBytes(StandardCharsets.UTF_8),
-                "none"
-        );
+        return new Result(502, "BAD_GATEWAY", "application/json; charset=utf-8",
+                body.getBytes(StandardCharsets.UTF_8), "none");
     }
 
     private boolean isValidPath(String rawPath) {
