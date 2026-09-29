@@ -44,7 +44,7 @@ test('TEST_FIXTURE: service worker push displays analytical warning and notifica
   const payload={type:'RADARX_SIGNAL',signal_id:'TEST_FIXTURE_SIGNAL',symbol:'BTCUSDT',direction:'LONG',strategy:'CONFIRMED_BREAKOUT',
     price:100,data_quality:95,liquidity_quality:90,risk_filter:'PASS',source_time:1700000000000};
   let pushPromise;handlers.push({data:{json:()=>payload},waitUntil:p=>{pushPromise=p}});await pushPromise;
-  assert.match(shown.title,/BTCUSDT LONG/);assert.match(shown.options.body,/هذه إشارة تحليلية وليست ضمانًا للربح/);
+  assert.match(shown.title,/BTCUSDT LONG/);assert.match(shown.options.body,/وقت المصدر/);assert.match(shown.options.body,/سبب/);assert.match(shown.options.body,/هذه إشارة تحليلية وليست ضمانًا للربح/);
   let clickPromise;handlers.notificationclick({notification:{data:{...payload,received_at:1700000005000},close(){}},waitUntil:p=>{clickPromise=p}});await clickPromise;
   assert.match(opened,/signal\.html/);assert.match(opened,/signal_id=TEST_FIXTURE_SIGNAL/);assert.match(opened,/received_at=1700000005000/);
 });
