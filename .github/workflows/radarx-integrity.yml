@@ -75,6 +75,7 @@ jobs:
           const fs=require('fs');
           const core=fs.readFileSync('RadarX_Ultimate_5.11.js','utf8');
           const pulse=fs.readFileSync('radarx-pulse-fusion.js','utf8');
+          const chart=fs.readFileSync('radarx-live-chart.js','utf8');
           if(!core.includes("!miniTicker@arr"))throw new Error('miniTicker stream missing');
           if(core.includes("encodeURIComponent('!ticker@arr')"))throw new Error('duplicate full ticker stream remains');
           if(pulse.includes('n(r.c)'))throw new Error('Pulse Fusion n(r.c) typo remains');
