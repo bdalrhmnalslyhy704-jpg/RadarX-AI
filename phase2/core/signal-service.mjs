@@ -1,4 +1,4 @@
-import {evaluateSymbolSnapshot} from '../../phase1/radarx-phase1-engine.mjs';
+import {CONFIG as PHASE1_CONFIG,evaluateSymbolSnapshot} from '../../phase1/radarx-phase1-engine.mjs';
 import {assessDataGate,assessLiquidity,sourceIsLive} from './data-quality.mjs';
 
 export const READ_ONLY_POLICY=Object.freeze({
@@ -19,7 +19,7 @@ export class SignalService{
       unresolvedGap:Boolean(input.unresolvedGap),minDataQuality:this.config.monitoring.minDataQuality,maxStaleTriggerMs:this.config.monitoring.maxStaleTriggerMs
     });
     const liq=assessLiquidity({book:input.bookRaw,ticker24h:input.ticker24hRaw,minQuality:this.config.monitoring.minLiquidityQuality});
-    const engineConfig={...this.config,costs:{feeRate:this.config.paper.feeRate,slippageBps:this.config.paper.slippageBps}};
+    const engineConfig={...PHASE1_CONFIG,costs:{...PHASE1_CONFIG.costs,feeRate:this.config.paper.feeRate,slippageBps:this.config.paper.slippageBps}};
     const r=evaluateSymbolSnapshot({symbol:input.symbol,series4h:input.series4h,series1h:input.series1h,series15m:input.series15m,
       bookRaw:input.bookRaw,ticker24hRaw:input.ticker24hRaw,source:input.source||'UNKNOWN',now},{config:engineConfig});
     const signal={...r.signal,scores:{...r.signal.scores,data_quality:dg.quality,liquidity_quality:liq.quality,confidence_score:'UNKNOWN'},
