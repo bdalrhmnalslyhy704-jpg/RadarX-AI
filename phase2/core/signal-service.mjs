@@ -1,5 +1,6 @@
 import {CONFIG as PHASE1_CONFIG,evaluateSymbolSnapshot} from '../../phase1/radarx-phase1-engine.mjs';
 import {assessDataGate,assessLiquidity,sourceIsLive} from './data-quality.mjs';
+import {EVENT_CLASS,marketEventClass} from './event-types.mjs';
 
 export const READ_ONLY_POLICY=Object.freeze({
   market:'SPOT',paper_trading:true,real_order_execution:false,allows_trade_endpoints:false,
@@ -13,7 +14,7 @@ export const defaultSettings=()=>({
 export class SignalService{
   constructor({deduplicator,store,pushManager,config,clock=()=>Date.now()}){this.deduplicator=deduplicator;this.store=store;this.pushManager=pushManager;this.config=config;this.clock=clock;}
   async evaluateSnapshot(input){
-    const now=this.clock(),dg=assessDataGate({
+    const now=this.clock(),eventClass=marketEventClass(input.source),dg=assessDataGate({
       series4h:input.series4h,series1h:input.series1h,series15m:input.series15m,now,
       sourceLive:sourceIsLive({wsState:input.wsState,restLastSuccessAt:input.restLastSuccessAt,now,maxStaleMs:this.config.monitoring.maxStaleTriggerMs}),
       unresolvedGap:Boolean(input.unresolvedGap),minDataQuality:this.config.monitoring.minDataQuality,maxStaleTriggerMs:this.config.monitoring.maxStaleTriggerMs
@@ -22,12 +23,12 @@ export class SignalService{
     const engineConfig={...PHASE1_CONFIG,costs:{...PHASE1_CONFIG.costs,feeRate:this.config.paper.feeRate,slippageBps:this.config.paper.slippageBps}};
     const r=evaluateSymbolSnapshot({symbol:input.symbol,series4h:input.series4h,series1h:input.series1h,series15m:input.series15m,
       bookRaw:input.bookRaw,ticker24hRaw:input.ticker24hRaw,source:input.source||'UNKNOWN',now},{config:engineConfig});
-    const signal={...r.signal,scores:{...r.signal.scores,data_quality:dg.quality,liquidity_quality:liq.quality,confidence_score:'UNKNOWN'},
+    const signal={...r.signal,event_class:eventClass,scores:{...r.signal.scores,data_quality:dg.quality,liquidity_quality:liq.quality,confidence_score:'UNKNOWN'},
       data_status:{...r.signal.data_status,source:input.source||'UNKNOWN',stale:dg.staleMs>this.config.monitoring.maxStaleTriggerMs,
         gaps:Boolean(input.unresolvedGap)||!dg.series.v4.valid||!dg.series.v1.valid||!dg.series.v15.valid,future_data_detected:dg.futureIssues.length>0},
       paper_trade:{enabled:true,real_order_execution:false}};
     const blocked=[...dg.blocked,...(liq.allowed?[]:liq.reasons),...(signal.risk_filter==='FAIL'?['RISK_FILTER_FAIL']:[])];
-    const audit={event:'SIGNAL_EVALUATION',source_time:signal.candle?.close_time??null,processed_at:now,symbol:input.symbol,
+    const audit={event:'SIGNAL_EVALUATION',event_class:eventClass,source_time:signal.candle?.close_time??null,processed_at:now,symbol:input.symbol,
       timeframe:signal.candle?.timeframe||'15m',price:signal.price?.reference??null,strategy:signal.strategy,
       reason:Array.isArray(signal.reason_codes)?signal.reason_codes.join(','):'UNKNOWN',data_quality:dg.quality,
       liquidity_quality:liq.quality,notification_status:'NOT_ATTEMPTED',emitted:false,blocked_reasons:blocked,
@@ -44,3 +45,4 @@ export class SignalService{
   }
 }
 export function assertReadOnlySignal(s){if(s?.paper_trade?.real_order_execution!==false)throw new Error('READ_ONLY_POLICY_VIOLATION');if(s?.paper_trade?.enabled!==true)throw new Error('PAPER_TRADING_POLICY_VIOLATION');}
+export {EVENT_CLASS};
