@@ -2,7 +2,7 @@ name: RadarX Integrity + Live Smoke 6.0
 
 on:
   push:
-    branches: ["main","radarx-6.1-performance"]
+    branches: ["main","radarx-6.1-performance","radarx-full-performance-hardening"]
   workflow_dispatch:
 
 jobs:
@@ -47,10 +47,10 @@ jobs:
           for(let i=1;i<pos.length;i++){
             if(pos[i]<pos[0] && i>0){} // filenames can be repeated in cache-bust strings
           }
-          if(!index.includes('RadarX_Ultimate_5.11.js?v=6.8.1-core'))throw new Error('core cache bust missing');
-          if(!index.includes('RadarX_ProEngine_5.11.js?v=6.8.1-pro'))throw new Error('pro cache bust missing');
-          if(!index.includes('radarx-runtime-6.0.js?v=6.8.1'))throw new Error('runtime cache bust missing');
-          if(!index.includes('radarx-pulse-fusion.js?v=3.1-fusion-6.8.1'))throw new Error('pulse cache bust missing');
+          if(!index.includes('RadarX_Ultimate_5.11.js?v=6.8.2-core'))throw new Error('core cache bust missing');
+          if(!index.includes('RadarX_ProEngine_5.11.js?v=6.8.2-pro'))throw new Error('pro cache bust missing');
+          if(!index.includes('radarx-runtime-6.0.js?v=6.8.2'))throw new Error('runtime cache bust missing');
+          if(!index.includes('radarx-pulse-fusion.js?v=3.1-fusion-6.8.2'))throw new Error('pulse cache bust missing');
           console.log('Entry wiring OK');
           NODE
 
@@ -103,7 +103,7 @@ jobs:
           for(const x of ['/api/radarx-news?symbols=','/api/radarx-onchain?symbols=','/api/radarx-social?symbols=']){
             if(!core.includes(x) && !pro.includes(x))throw new Error('feature route guard missing: '+x);
           }
-          for(const x of ['LIMIT=isMobile?2:6','news:60000','onchain:90000','social:120000']){
+          for(const x of ['LIMIT=isMobile?3:6','news:60000','onchain:90000','social:120000']){
             if(!runtime.includes(x))throw new Error('runtime performance guard missing: '+x);
           }
           console.log('Performance guards OK');
