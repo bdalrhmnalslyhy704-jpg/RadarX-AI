@@ -38,6 +38,16 @@ label{display:block;font-size:12px;font-weight:800;margin-bottom:6px}.input,.btn
 </section>
 
 <section class="panel">
+  <h3 style="margin:0 0 8px">اختبار الإشعار الميداني</h3>
+  <div class="row">
+    <div class="field"><label for="testId">TEST_PUSH_ONLY test_id</label><input id="testId" class="input" value="android-manual-01" maxlength="64" pattern="[A-Za-z0-9_-]{1,64}" autocomplete="off"></div>
+  </div>
+  <button id="testPush" class="btn" style="margin-top:10px">إرسال TEST_PUSH_ONLY</button>
+  <div class="notice muted">هذا الاختبار لا يمثل إشارة سوق ولا يدخل في إشارات التداول. الرسالة يجب أن تقول: اختبار إشعار فقط — ليس تحليلًا للسوق.</div>
+  <div id="testPushStatus" class="notice muted">غير منفذ.</div>
+</section>
+
+<section class="panel">
   <h3 style="margin:0 0 8px">العملات</h3><div id="symbols" class="grid"></div>
   <h3 style="margin:14px 0 8px">الأطر الزمنية</h3><div id="timeframes" class="grid"></div>
   <h3 style="margin:14px 0 8px">أنواع الإشارات</h3><div id="signalTypes" class="grid"></div>
@@ -54,12 +64,10 @@ label{display:block;font-size:12px;font-weight:800;margin-bottom:6px}.input,.btn
 </section>
 
 <script type="module">
-import {getBaseUrl,setBaseUrl,getSessionToken,setSessionToken,apiConfig,apiHealth,apiReady,apiSettings,apiSaveSettings,apiSubscriptions,apiAddSubscription,apiDeleteSubscription} from './phase2-api.mjs';
+import {getBaseUrl,setBaseUrl,getSessionToken,setSessionToken,apiConfig,apiHealth,apiReady,apiSettings,apiSaveSettings,apiSubscriptions,apiAddSubscription,apiDeleteSubscription,apiTestPush} from './phase2-api.mjs';
 
 const $=id=>document.getElementById(id);
-const fields={
- symbols:$('symbols'),timeframes:$('timeframes'),signalTypes:$('signalTypes')
-};
+const fields={symbols:$('symbols'),timeframes:$('timeframes'),signalTypes:$('signalTypes')};
 const signalOptions=['ENTRY_CANDIDATE','CONFIRMED'];
 let config=null,settings=null;
 
@@ -81,7 +89,7 @@ async function connect(){
     renderChecks(fields.timeframes,c.timeframes,s.settings.timeframes,'timeframe');
     renderChecks(fields.signalTypes,signalOptions,s.settings.signalTypes,'signal');
     $('dq').value=s.settings.minDataQuality;$('lq').value=s.settings.minLiquidityQuality;$('enabled').checked=s.settings.enabled;
-    $('pushStatus').textContent='Push provider: '+c.push.provider+' • '+(c.push.enabled?'مفعّل بالخادم':'غير مفعّل بالخادم');
+    $('pushStatus').textContent='Push provider: '+c.push.provider+' • '+(c.push.enabled?'مفعّل بالخادم':'غير مفعّل بالخادم')+' • Test: '+(c.push.testPushEnabled?'مفعّل في staging':'غير مفعّل');
   }catch(e){setMsg($('connStatus'),'فشل الاتصال: '+e.message,'bad')}
 }
 async function saveSettings(){
@@ -123,9 +131,22 @@ async function disablePush(){
     setMsg($('pushStatus'),'تم إلغاء الاشتراك وإزالة subscription من الخادم.','ok');
   }catch(e){setMsg($('pushStatus'),'فشل إلغاء الاشتراك: '+e.message,'bad')}
 }
+async function testPush(){
+  try{
+    const testId=$('testId').value.trim()||'android-manual-01';
+    if(!/^[A-Za-z0-9_-]{1,64}$/.test(testId)){setMsg($('testPushStatus'),'test_id غير صالح. استخدم أحرفًا وأرقامًا و- و_ فقط.','bad');return;}
+    setMsg($('testPushStatus'),'جاري إرسال TEST_PUSH_ONLY...','warn');
+    const r=await apiTestPush(testId);
+    if(r.error==='DUPLICATE_TEST_PUSH'||r.status==='DUPLICATE'){setMsg($('testPushStatus'),'تم منع الإرسال المكرر عبر Dedup. استخدم test_id جديدًا للاختبار التالي.','warn');return;}
+    if(!r.ok){setMsg($('testPushStatus'),'لم يرسل الاختبار: '+(r.error||r.status||'UNKNOWN'),'bad');return;}
+    setMsg($('testPushStatus'),'تم قبول إرسال TEST_PUSH_ONLY من الخادم. انتظر وصوله فعليًا إلى الجهاز ثم سجّل وقت الاستلام.','ok');
+  }catch(e){setMsg($('testPushStatus'),'فشل اختبار Push: '+e.message,'bad')}
+}
 $('base').value=getBaseUrl();$('token').value=getSessionToken();
 $('saveConn').onclick=()=>{setBaseUrl($('base').value);setSessionToken($('token').value);setMsg($('connStatus'),'تم حفظ إعدادات الاتصال محليًا لهذه الجلسة.','ok')};
-$('load').onclick=connect;$('saveSettings').onclick=saveSettings;$('enablePush').onclick=enablePush;$('disablePush').onclick=disablePush;
+$('load').onclick=connect;$('saveSettings').onclick=saveSettings;$('enablePush').onclick=enablePush;$('disablePush').onclick=disablePush;$('testPush').onclick=testPush;
+const q=new URLSearchParams(location.search);
+if(q.get('test_push')==='1')setMsg($('testPushStatus'),'تم فتح صفحة الإعدادات من إشعار TEST_PUSH_ONLY. هذا ليس إشعار سوق.','ok');
 if(getSessionToken())connect(); else setMsg($('connStatus'),'أدخل عنوان الخدمة وSession Token ثم اختبر الاتصال.','warn');
 </script>
 </body></html>
