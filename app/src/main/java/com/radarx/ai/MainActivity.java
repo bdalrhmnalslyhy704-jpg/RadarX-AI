@@ -55,6 +55,7 @@ public final class MainActivity extends Activity {
                 .readTimeout(5_200L, TimeUnit.MILLISECONDS)
                 .writeTimeout(5_200L, TimeUnit.MILLISECONDS)
                 .retryOnConnectionFailure(true)
+                .dns(new RadarXDohDns())
                 .build();
         binanceRelay = new BinanceSecureRelay(relayClient);
 
