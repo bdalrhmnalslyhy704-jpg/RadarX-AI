@@ -9,14 +9,17 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
 
 public final class RadarXDohDns implements okhttp3.Dns {
+    private static final long CACHE_TTL_MS = 60_000L;
     private final okhttp3.Dns system = okhttp3.Dns.SYSTEM;
     private final OkHttpClient dohClient;
+    private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
 
     public RadarXDohDns() {
         dohClient = new OkHttpClient.Builder()
@@ -33,10 +36,20 @@ public final class RadarXDohDns implements okhttp3.Dns {
             throw new UnknownHostException("empty hostname");
         }
 
+        final String key = hostname.trim().toLowerCase(java.util.Locale.US);
+        final long now = System.currentTimeMillis();
+        CacheEntry cached = cache.get(key);
+        if (cached != null && now - cached.createdAtMs <= CACHE_TTL_MS && !cached.addresses.isEmpty()) {
+            return new ArrayList<>(cached.addresses);
+        }
+
         // Fast path: Android's normal resolver.
         try {
             List<InetAddress> local = system.lookup(hostname);
-            if (local != null && !local.isEmpty()) return local;
+            if (local != null && !local.isEmpty()) {
+                cache.put(key, new CacheEntry(new ArrayList<>(local), now));
+                return local;
+            }
         } catch (Exception ignored) {
             // Continue with DoH.
         }
@@ -72,7 +85,10 @@ public final class RadarXDohDns implements okhttp3.Dns {
                             } catch (Exception ignored) {}
                         }
                     }
-                    if (!addresses.isEmpty()) return addresses;
+                    if (!addresses.isEmpty()) {
+                        cache.put(key, new CacheEntry(new ArrayList<>(addresses), System.currentTimeMillis()));
+                        return addresses;
+                    }
                 }
             } catch (Exception ignored) {
                 // Try the next public DoH provider.
@@ -80,6 +96,15 @@ public final class RadarXDohDns implements okhttp3.Dns {
         }
 
         throw new UnknownHostException("DNS resolution failed for " + hostname);
+    }
+
+    private static final class CacheEntry {
+        final List<InetAddress> addresses;
+        final long createdAtMs;
+        CacheEntry(List<InetAddress> addresses, long createdAtMs) {
+            this.addresses = addresses;
+            this.createdAtMs = createdAtMs;
+        }
     }
 
     private static String encode(String value) {
