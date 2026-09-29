@@ -39,21 +39,21 @@ test('TEST_FIXTURE: market monitor remains server-side and runs without a PWA cl
   await monitor.start();
   assert.equal(monitor.running,true);
   assert.equal(monitor.bootstrapDone,true);
-  assert.equal(monitor.health().monitoring.running,true);
+  assert.equal((await monitor.health()).monitoring.running,true);
   assert.equal(wsOpts!=null,true);
 
   const next=now-2*step['15m'];
   await monitor.onCandle(candle('BTCUSDT','15m',next));
   assert.equal(analyses.length>=1,true);
-  assert.equal(monitor.health().monitoring.running,true);
+  assert.equal((await monitor.health()).monitoring.running,true);
 
   // There is deliberately no browser/PWA client in this test.
   // The server continues monitoring and can process the next candle on its own.
   await monitor.onCandle(candle('BTCUSDT','15m',next+step['15m']));
   assert.equal(analyses.length>=2,true);
-  assert.equal(monitor.health().monitoring.running,true);
+  assert.equal((await monitor.health()).monitoring.running,true);
   } finally {
     await monitor.stop();
   }
-  assert.equal(monitor.health().monitoring.running,false);
+  assert.equal((await monitor.health()).monitoring.running,false);
 });
