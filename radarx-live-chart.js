@@ -9,7 +9,7 @@
     chartHeight:390,
     tfMs:{'1m':60000,'5m':300000,'15m':900000,'1h':3600000}
   };
-  let canvas=null,wrap=null,tip=null,resizeObs=null,raf=0,lastDraw=0,lastSig='',pointer=null,toolbar=null;
+  let canvas=null,wrap=null,tip=null,resizeObs=null,loopTimer=0,pointerTimer=0,lastDraw=0,lastSig='',pointer=null,toolbar=null;
 
   const $=id=>document.getElementById(id);
   const n=(x,d=0)=>Number.isFinite(Number(x))?Number(x):d;
@@ -24,13 +24,20 @@
   function tr(rows,i){if(i<1)return Math.max(0,n(rows[i]?.h)-n(rows[i]?.l));return Math.max(n(rows[i].h)-n(rows[i].l),Math.abs(n(rows[i].h)-n(rows[i-1].c)),Math.abs(n(rows[i].l)-n(rows[i-1].c)));}
   function atr(rows,p=14){if(rows.length<2)return 0;const a=[];for(let i=Math.max(1,rows.length-p);i<rows.length;i++)a.push(tr(rows,i));return sma(a,a.length);}
   function rsi(a,p=14){if(a.length<p+1)return 50;let g=0,l=0;for(let i=a.length-p;i<a.length;i++){const d=n(a[i])-n(a[i-1]);if(d>=0)g+=d;else l-=d;}if(!l)return 100;const rs=g/l;return 100-(100/(1+rs));}
+  function emaSeries(a,p){
+    const src=a.map(n);
+    if(!src.length)return[];
+    const k=2/(p+1),out=new Array(src.length);
+    let e=n(src[0]);out[0]=e;
+    for(let i=1;i<src.length;i++){e=n(src[i])*k+e*(1-k);out[i]=e;}
+    return out;
+  }
   function macd(a){
-    const src=a.slice(-140).map(n),fast=[],slow=[],mac=[];
-    for(let i=0;i<src.length;i++){
-      fast.push(ema(src.slice(0,i+1),12)); slow.push(ema(src.slice(0,i+1),26)); mac.push(fast[i]-slow[i]);
-    }
-    const signal=ema(mac.slice(-60),9);
-    const line=mac.at(-1)||0;
+    const src=a.slice(-140).map(n);
+    if(!src.length)return{line:0,signal:0,hist:0};
+    const fast=emaSeries(src,12),slow=emaSeries(src,26);
+    const mac=fast.map((v,i)=>v-slow[i]);
+    const signal=ema(mac.slice(-60),9),line=mac.at(-1)||0;
     return{line:line,signal:signal,hist:line-signal};
   }
   function adx(rows,p=14){
@@ -189,9 +196,9 @@
     for(let j=1;j<6;j++){const y=pad.t+j*priceH/6;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(W-pad.r,y);ctx.stroke();}
     for(let j=0;j<5;j++){const x=pad.l+j*(W-pad.l-pad.r)/4;ctx.beginPath();ctx.moveTo(x,pad.t);ctx.lineTo(x,H-pad.b);ctx.stroke();}
     const con=window.RadarXPulseFusion?.evaluate(rows,st)||adaptiveConfluence(rows,st);
-    const ema20=rows.map((_,i)=>ema(rows.slice(0,i+1).map(r=>n(r.c)).slice(-100),20));
-    const ema50=rows.map((_,i)=>ema(rows.slice(0,i+1).map(r=>n(r.c)).slice(-120),50));
-    const vw=vwap(rows),closes=rows.map(r=>n(r.c)),bbmid=sma(closes.slice(-20),20),bbs=std(closes.slice(-20)),bbu=bbmid+bbs*2,bbl=bbmid-bbs*2,vp=con.vp||volumeProfile(rows);
+    const closes=rows.map(r=>n(r.c));
+    const ema20=emaSeries(closes,20),ema50=emaSeries(closes,50);
+    const vw=vwap(rows),bbmid=sma(closes.slice(-20),20),bbs=std(closes.slice(-20)),bbu=bbmid+bbs*2,bbl=bbmid-bbs*2,vp=con.vp||volumeProfile(rows);
     const volumeMax=Math.max(1,...rows.map(r=>n(r.v)));
     rows.forEach((r,i)=>{
       const x=vx(i),o=py(n(r.o)),c=py(n(r.c)),h=py(n(r.h)),l=py(n(r.l)),up=n(r.c)>=n(r.o);
@@ -244,21 +251,18 @@
     syncTfButtons();
   }
 
-  function loop(ts){
+  function loop(){
     if(!document.body.contains(canvas||document.body))return;
     ensureUI();
-    const core=window.RadarXCore,st=core?.state;
-    if(st?.selected){
-      const rows=liveRows(st);
-      const last=rows.at(-1);
+    const ts=performance.now(),core=window.RadarXCore,st=core?.state;
+    if(document.visibilityState==='visible'&&st?.selected){
+      const rows=liveRows(st),last=rows.at(-1);
       const key=st.selected.symbol+'|'+(st.selected.timeframe||'5m')+'|'+String(last?.t||0)+'|'+String(last?.c||0)+'|'+String(last?.v||0)+'|'+String(st.selected.price||0);
-      // Recompute the expensive Fusion/chart only when market state changes, with a
-      // small hard ceiling of ~4 FPS for fast live price updates.
-      if(rows.length>1&&(key!==lastRenderKey&&ts-lastRenderAt>=140)){
+      if(rows.length>1&&(key!==lastRenderKey&&ts-lastRenderAt>=120)){
         lastRenderKey=key;lastRenderAt=ts;draw(false);
       }
     }
-    raf=requestAnimationFrame(loop);
+    loopTimer=setTimeout(loop,180);
   }
   function init(){
     if(!window.ResizeObserver)return;
@@ -271,8 +275,12 @@
     const tfSel=$('analysisTf');
     if(tfSel&&!tfSel.dataset.rxLiveBound){tfSel.dataset.rxLiveBound='1';tfSel.addEventListener('change',function(){switchTf(tfSel.value);lastRenderKey='';});}
     ensureUI();
-    if(raf)cancelAnimationFrame(raf);
-    raf=requestAnimationFrame(loop);
+    clearTimeout(loopTimer);
+    loopTimer=setTimeout(loop,180);
+    document.addEventListener('visibilitychange',()=>{
+      clearTimeout(loopTimer);
+      if(document.visibilityState==='visible')loop();
+    },{passive:true});
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
   window.RadarXLiveChart={draw:()=>draw(true),resync:resync,switchTf:switchTf,adaptiveConfluence:adaptiveConfluence};
