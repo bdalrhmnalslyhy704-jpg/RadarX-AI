@@ -51,7 +51,7 @@ public final class RadarXDohDns implements okhttp3.Dns {
                         .url(endpoint)
                         .get()
                         .header("Accept", "application/dns-json")
-                        .header("User-Agent", "RadarX-Android/6.6.0")
+                        .header("User-Agent", "RadarX-Android/6.8.2")
                         .build();
 
                 try (Response response = dohClient.newCall(request).execute()) {
