@@ -496,12 +496,16 @@
     if(!isNativeRadarX()||nativeStreamPollStarted)return;
     nativeStreamPollStarted=true;
     const pump=()=>{
+      if(document.visibilityState==='hidden'){
+        nativeStreamPollTimer=null;
+        return;
+      }
       try{
         const raw=window.RadarXAndroid.pollMarketStreams();
         const events=JSON.parse(raw||'[]');
         events.forEach(onNativeMarketStreamEvent);
       }catch{}
-      nativeStreamPollTimer=setTimeout(pump,120);
+      nativeStreamPollTimer=setTimeout(pump,160);
     };
     pump();
   }
@@ -3063,7 +3067,17 @@ function renderResultsCenterWithContinuous(){
       try{markLiveData('error','startup');}catch{}
     }
   }
-  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){warmAlertAudio();openTickerWS(0);connectMultiRadarWS();renderMultiRadar(false);continuousRadarCycle().catch(()=>{});}else{rxCloseLiveSockets();state.continuous.mode='paused';multiRadarSetBusy(false,state.markets.length?'cached':'offline');}});
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='visible'){
+      warmAlertAudio();
+      ensureNativeMarketStreamPoller();
+      openTickerWS(0);connectMultiRadarWS();renderMultiRadar(false);continuousRadarCycle().catch(()=>{});
+    }else{
+      rxCloseLiveSockets();
+      clearTimeout(nativeStreamPollTimer);nativeStreamPollTimer=null;
+      state.continuous.mode='paused';multiRadarSetBusy(false,state.markets.length?'cached':'offline');
+    }
+  });
 
 
   // RadarX 5.1 integration surface: expose only existing, verified core primitives.
