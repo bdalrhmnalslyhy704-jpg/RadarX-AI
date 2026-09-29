@@ -29,10 +29,11 @@ const phase2=[
 const scope=process.argv[2]||'all';
 const files=scope==='phase1'?phase1:scope==='phase2'?phase2:[...phase1,...phase2];
 const FILE_TIMEOUT_MS=30000;
+const TEST_TIMEOUT_MS=15000;
 
 async function runFile(file){
   console.error('[TEST FILE START] '+file);
-  const child=spawn(process.execPath,['--test',file],{stdio:['ignore','pipe','pipe'],env:{...process.env}});
+  const child=spawn(process.execPath,['--test','--test-timeout='+TEST_TIMEOUT_MS,file],{stdio:['ignore','pipe','pipe'],env:{...process.env}});
   child.stdout.on('data',b=>process.stdout.write(b));
   child.stderr.on('data',b=>process.stderr.write(b));
   let timedOut=false;
@@ -48,15 +49,12 @@ async function runFile(file){
   });
   clearTimeout(watchdog);
   console.error('[TEST FILE END] '+file+' exit_code='+code+(timedOut?' timeout=true':''));
-  lastEnded=file;
   return code===0&&!timedOut;
 }
 
-let ok=true;let passed=0;let failed=0;let lastStarted=null;let lastEnded=null;
+let ok=true;
 for(const file of files){
-  lastStarted=file;
-  const fileOk=await runFile(file);
-  if(fileOk)passed++;else{failed++;ok=false;}
+  if(!(await runFile(file)))ok=false;
 }
-console.error('[TEST SUITE END] scope='+scope+' status='+(ok?'success':'failure')+' files_passed='+passed+' files_failed='+failed+' last_file_started='+lastStarted+' last_file_ended='+lastEnded);
+console.error('[TEST SUITE END] scope='+scope+' status='+(ok?'success':'failure'));
 process.exitCode=ok?0:1;
