@@ -8,7 +8,7 @@
   if(window.RadarXRuntime && window.RadarXRuntime.version) return;
 
   var isMobile=/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent||'');
-  var LIMIT=isMobile?2:6;
+  var LIMIT=isMobile?3:6;
   var queue=[],active=0,inflight=new Map(),cache=new Map(),stats={queued:0,started:0,ok:0,failed:0,coalesced:0,cacheHits:0,rateLimited:0,lastError:'',lastLatency:0};
   var CACHE_TTL=Object.freeze({
     ticker:3500, tickerPrice:2500, exchangeInfo:300000, klines:2200, depth:900, trades:900, health:5000, market:5000, news:60000, onchain:90000, social:120000, context:12000, metals:20000, default:2500
@@ -53,13 +53,27 @@
   }
   function pump(){
     while(active<LIMIT && queue.length){
-      var job=queue.shift(); active++; job.run().finally(function(){active--;pump();});
+      var job=queue.shift();
+      active++;
+      job.startedAt=now();
+      Promise.resolve().then(job.run).then(job.resolve,job.reject).finally(function(){
+        active--;
+        pump();
+      });
     }
   }
-  function enqueue(run){
+  function enqueue(run,label){
     return new Promise(function(resolve,reject){
-      queue.push({run:function(){return run().then(resolve,reject);}});
-      stats.queued++; pump();
+      var job={
+        run:run,
+        resolve:resolve,
+        reject:reject,
+        label:String(label||'request'),
+        startedAt:0
+      };
+      queue.push(job);
+      stats.queued++;
+      pump();
     });
   }
   async function requestJSON(url,opts){
@@ -104,7 +118,7 @@
       var stale=cache.get(key);
       if(stale && now()-stale.ts<=Math.max(12000,ttl*8)) return clone(stale.data);
       throw last||new Error('API_UNAVAILABLE');
-    });
+    },key);
     inflight.set(key,promise);
     try{return await promise;}finally{inflight.delete(key);}
   }
@@ -115,6 +129,12 @@
     getStats:function(){return Object.assign({},stats,{active:active,queued:queue.length,cache:cache.size,concurrency:LIMIT,mobile:isMobile});},
     clearCache:function(){cache.clear();},
     isBusy:function(){return active>0||queue.length>0;},
-    flush:function(){queue.length=0;}
+    flush:function(){
+      var err=new Error('RUNTIME_QUEUE_FLUSHED');
+      while(queue.length){
+        var job=queue.shift();
+        try{job.reject(err);}catch(_){}
+      }
+    }
   };
 })();
