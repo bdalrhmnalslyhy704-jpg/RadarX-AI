@@ -73,95 +73,112 @@ public final class BinanceSecureRelay {
         final String key = parsed.toString();
         CacheEntry fresh = getCache(key, endpoint, false);
         if (fresh != null) {
-            return response(
-                    200, "OK", "application/json; charset=utf-8",
-                    fresh.body,
-                    headers("HIT", "cache", fresh.ageMs)
-            );
+            return response(200, "OK", "application/json; charset=utf-8",
+                    fresh.body, headers("HIT", "cache", fresh.ageMs));
         }
 
-        // Regional/cloud fallback: the deployed RadarX relay can reach Binance
-        // even when the handset cannot resolve or route to Binance directly.
+        final int[] order = orderedIndexes();
+        Exception last = null;
+
+        // Fast path: one preferred direct request.
+        if (order.length > 0) {
+            int index = order[0];
+            try {
+                long started = System.currentTimeMillis();
+                Request request = new Request.Builder()
+                        .url(UPSTREAMS[index] + rawPath)
+                        .get()
+                        .header("Accept", "application/json")
+                        .header("User-Agent", "RadarX-Android/6.8.2")
+                        .build();
+                try (Response upstream = client.newCall(request).execute()) {
+                    long latency = System.currentTimeMillis() - started;
+                    byte[] body = upstream.body() == null ? new byte[0] : upstream.body().bytes();
+                    if (upstream.isSuccessful() && looksLikeJson(body)) {
+                        mark(index, true, latency);
+                        preferred = index;
+                        CACHE.put(key, new CacheEntry(body, System.currentTimeMillis()));
+                        trimCache();
+                        return response(200, "OK", "application/json; charset=utf-8",
+                                body, headers("MISS", UPSTREAMS[index], latency));
+                    }
+                    mark(index, false, latency);
+                    last = new Exception("HTTP " + upstream.code());
+                }
+            } catch (Exception e) {
+                last = e;
+                mark(index, false, 0L);
+            }
+        }
+
+        // Regional fallback before additional direct mirrors.
         try {
+            long started = System.currentTimeMillis();
             Request cloud = new Request.Builder()
                     .url(REMOTE_RELAY + "?path=" + Uri.encode(rawPath))
                     .get()
                     .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.8.1")
+                    .header("User-Agent", "RadarX-Android/6.8.2")
                     .build();
-            long started = System.currentTimeMillis();
             try (Response upstream = client.newCall(cloud).execute()) {
                 long latency = System.currentTimeMillis() - started;
                 byte[] body = upstream.body() == null ? new byte[0] : upstream.body().bytes();
                 if (upstream.isSuccessful() && looksLikeJson(body)) {
                     CACHE.put(key, new CacheEntry(body, System.currentTimeMillis()));
                     trimCache();
-                    return response(
-                            200, "OK", "application/json; charset=utf-8",
-                            body,
-                            headers("MISS", "radarx-cloud-relay", latency)
-                    );
+                    return response(200, "OK", "application/json; charset=utf-8",
+                            body, headers("MISS", "radarx-cloud-relay", latency));
                 }
+                last = new Exception("Cloud HTTP " + upstream.code());
             }
-        } catch (Exception ignored) {
-            // Continue with direct Binance upstreams.
+        } catch (Exception e) {
+            last = e;
         }
 
-        Exception last = null;
-        for (int index : orderedIndexes()) {
+        // Bounded mirror fallback: two more endpoints only.
+        for (int p = 1, tried = 0; p < order.length && tried < 2; p++, tried++) {
+            int index = order[p];
             try {
-                Uri target = Uri.parse(UPSTREAMS[index] + rawPath);
                 long started = System.currentTimeMillis();
-
                 Request request = new Request.Builder()
-                        .url(target.toString())
+                        .url(UPSTREAMS[index] + rawPath)
                         .get()
                         .header("Accept", "application/json")
-                        .header("User-Agent", "RadarX-Android/6.8.1")
+                        .header("User-Agent", "RadarX-Android/6.8.2")
                         .build();
-
                 try (Response upstream = client.newCall(request).execute()) {
                     long latency = System.currentTimeMillis() - started;
-                    byte[] body = upstream.body() == null
-                            ? new byte[0]
-                            : upstream.body().bytes();
-
-                    if (!upstream.isSuccessful()) {
-                        mark(index, false, latency);
-                        last = new Exception("HTTP " + upstream.code());
-                        continue;
+                    byte[] body = upstream.body() == null ? new byte[0] : upstream.body().bytes();
+                    if (upstream.isSuccessful() && looksLikeJson(body)) {
+                        mark(index, true, latency);
+                        preferred = index;
+                        CACHE.put(key, new CacheEntry(body, System.currentTimeMillis()));
+                        trimCache();
+                        return response(200, "OK", "application/json; charset=utf-8",
+                                body, headers("MISS", UPSTREAMS[index], latency));
                     }
-
-                    mark(index, true, latency);
-                    CacheEntry entry = new CacheEntry(body, System.currentTimeMillis());
-                    CACHE.put(key, entry);
-                    trimCache();
-                    return response(
-                            200, "OK", "application/json; charset=utf-8",
-                            body,
-                            headers("MISS", UPSTREAMS[index], 0)
-                    );
+                    mark(index, false, latency);
+                    last = new Exception("HTTP " + upstream.code());
                 }
             } catch (Exception e) {
                 last = e;
-                mark(index, false, 0);
+                mark(index, false, 0L);
             }
         }
 
         CacheEntry stale = getCache(key, endpoint, true);
         if (stale != null) {
-            return response(
-                    200, "OK", "application/json; charset=utf-8",
-                    stale.body,
-                    headers("STALE", "cache", stale.ageMs)
-            );
+            return response(200, "OK", "application/json; charset=utf-8",
+                    stale.body, headers("STALE", "cache", stale.ageMs));
         }
 
-        String body = "{\"code\":-1,\"msg\":\"Binance Spot relay unavailable\","
-                + "\"detail\":\"native_relay_failed\",\"status\":502}";
-        return jsonResponse(502, body);
+        String detail = last == null || last.getMessage() == null
+                ? "native_relay_failed"
+                : jsonEscape(last.getMessage());
+        return jsonResponse(502,
+                "{\"code\":-1,\"msg\":\"Binance Spot relay unavailable\","
+                        + "\"detail\":\"" + detail + "\",\"status\":502}");
     }
-
 
     /**
      * Native gateway for every secondary public market source used by the web
@@ -250,7 +267,7 @@ public final class BinanceSecureRelay {
                             + "&path=" + Uri.encode(path))
                     .get()
                     .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.8.1")
+                    .header("User-Agent", "RadarX-Android/6.8.2")
                     .build();
             long started = System.currentTimeMillis();
             try (Response r = client.newCall(cloud).execute()) {
@@ -561,47 +578,51 @@ public final class BinanceSecureRelay {
     public WebResourceResponse interceptHealth(Uri uri) {
         if (uri == null || !"/api/health".equals(uri.getPath())) return null;
 
-        // Ask the deployed gateway first so the native health panel reports the
-        // same real provider status used by the browser deployment.
-        try {
-            Request cloud = new Request.Builder()
-                    .url("https://radar-x-ai.vercel.app/api/health")
-                    .get()
-                    .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.8.1")
-                    .build();
-            try (Response r = client.newCall(cloud).execute()) {
-                byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
-                if (r.isSuccessful() && looksLikeJson(body)) {
-                    return response(
-                            200, "OK", "application/json; charset=utf-8",
-                            body, headers("MISS", "radarx-health-cloud", 0)
-                    );
-                }
-            }
-        } catch (Exception ignored) {
-        }
-
-        int idx = preferred;
+        int[] order = orderedIndexes();
         boolean ok = false;
         long latency = 0L;
         String route = "none";
-        try {
-            long started = System.currentTimeMillis();
-            Request request = new Request.Builder()
-                    .url(UPSTREAMS[idx] + "/api/v3/ping")
-                    .get()
-                    .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.8.1")
-                    .build();
-            try (Response r = client.newCall(request).execute()) {
-                latency = System.currentTimeMillis() - started;
-                ok = r.isSuccessful();
-                if (ok) route = UPSTREAMS[idx];
-                mark(idx, ok, latency);
+
+        for (int p = 0; p < order.length && p < 2; p++) {
+            int idx = order[p];
+            try {
+                long started = System.currentTimeMillis();
+                Request request = new Request.Builder()
+                        .url(UPSTREAMS[idx] + "/api/v3/ping")
+                        .get()
+                        .header("Accept", "application/json")
+                        .header("User-Agent", "RadarX-Android/6.8.2")
+                        .build();
+                try (Response r = client.newCall(request).execute()) {
+                    latency = System.currentTimeMillis() - started;
+                    ok = r.isSuccessful();
+                    mark(idx, ok, latency);
+                    if (ok) { preferred = idx; route = UPSTREAMS[idx]; break; }
+                }
+            } catch (Exception ignored) {
+                mark(idx, false, 0L);
             }
-        } catch (Exception ignored) {
-            mark(idx, false, 0L);
+        }
+
+        if (!ok) {
+            try {
+                long started = System.currentTimeMillis();
+                Request cloud = new Request.Builder()
+                        .url("https://radar-x-ai.vercel.app/api/health")
+                        .get()
+                        .header("Accept", "application/json")
+                        .header("User-Agent", "RadarX-Android/6.8.2")
+                        .build();
+                try (Response r = client.newCall(cloud).execute()) {
+                    latency = System.currentTimeMillis() - started;
+                    byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+                    if (r.isSuccessful() && looksLikeJson(body)) {
+                        return response(200, "OK", "application/json; charset=utf-8",
+                                body, headers("MISS", "radarx-health-cloud", latency));
+                    }
+                }
+            } catch (Exception ignored) {
+            }
         }
 
         long checkedAt = System.currentTimeMillis();
@@ -615,102 +636,9 @@ public final class BinanceSecureRelay {
                 + ",\"checkedAt\":" + checkedAt
                 + ",\"hasData\":" + ok
                 + ",\"route\":\"" + jsonEscape(route) + "\"}]}";
-        return response(
-                200, "OK", "application/json; charset=utf-8",
+        return response(200, "OK", "application/json; charset=utf-8",
                 root.getBytes(StandardCharsets.UTF_8),
-                headers("LOCAL", "native-binance-ping", 0)
-        );
-    }
-
-    private int[] orderedIndexes() {
-        int[] out = new int[UPSTREAMS.length];
-        int p = 0;
-        out[p++] = preferred;
-        EndpointScore[] scores = new EndpointScore[UPSTREAMS.length - 1];
-        int s = 0;
-        for (int i = 0; i < UPSTREAMS.length; i++) {
-            if (i == preferred) continue;
-            scores[s++] = new EndpointScore(i, health[i].score());
-        }
-        java.util.Arrays.sort(scores, (a, b) -> Double.compare(b.score, a.score));
-        for (EndpointScore x : scores) out[p++] = x.index;
-        return out;
-    }
-
-    private void mark(int index, boolean ok, long latencyMs) {
-        EndpointHealth h = health[index];
-        synchronized (h) {
-            if (ok) {
-                h.ok++;
-                h.lastOk = System.currentTimeMillis();
-                if (latencyMs > 0) h.latencyMs = latencyMs;
-                preferred = index;
-            } else {
-                h.fail++;
-                h.lastFail = System.currentTimeMillis();
-            }
-        }
-    }
-
-    private CacheEntry getCache(String key, String endpoint, boolean allowStale) {
-        CacheEntry entry = CACHE.get(key);
-        if (entry == null) return null;
-        long age = System.currentTimeMillis() - entry.ts;
-        long ttl = TTL.getOrDefault(endpoint, 1_000L);
-        long staleTtl = Math.max(ttl * 12L, 3_000L);
-        if (age <= ttl || (allowStale && age <= staleTtl)) {
-            entry.ageMs = age;
-            return entry;
-        }
-        CACHE.remove(key);
-        return null;
-    }
-
-    private void trimCache() {
-        if (CACHE.size() <= 350) return;
-        int remove = 80;
-        for (String key : CACHE.keySet()) {
-            CACHE.remove(key);
-            if (--remove <= 0) break;
-        }
-    }
-
-    private boolean isAllowed(String path) {
-        return "/api/v3/ping".equals(path)
-                || "/api/v3/time".equals(path)
-                || "/api/v3/exchangeInfo".equals(path)
-                || "/api/v3/ticker".equals(path)
-                || "/api/v3/ticker/24hr".equals(path)
-                || "/api/v3/ticker/bookTicker".equals(path)
-                || "/api/v3/ticker/price".equals(path)
-                || "/api/v3/klines".equals(path)
-                || "/api/v3/uiKlines".equals(path)
-                || "/api/v3/depth".equals(path)
-                || "/api/v3/aggTrades".equals(path)
-                || "/api/v3/trades".equals(path);
-    }
-
-    private WebResourceResponse jsonResponse(int status, String body) {
-        return response(
-                status,
-                status == 200 ? "OK" : "BAD_GATEWAY",
-                "application/json; charset=utf-8",
-                body.getBytes(StandardCharsets.UTF_8),
-                headers("MISS", "native", 0)
-        );
-    }
-
-    private Map<String, String> headers(String cache, String upstream, long age) {
-        Map<String, String> h = new java.util.HashMap<>();
-        h.put("Access-Control-Allow-Origin", "*");
-        h.put("Access-Control-Allow-Methods", "GET, OPTIONS");
-        h.put("Access-Control-Allow-Headers", "Content-Type, Accept");
-        h.put("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-        h.put("X-RadarX-Relay", "binance-spot-native");
-        h.put("X-RadarX-Cache", cache);
-        h.put("X-RadarX-Upstream", upstream);
-        h.put("X-RadarX-Data-Age-Ms", Long.toString(age));
-        return h;
+                headers("LOCAL", "native-binance-ping", 0));
     }
 
     private WebResourceResponse response(
