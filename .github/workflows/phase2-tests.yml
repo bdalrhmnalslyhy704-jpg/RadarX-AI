@@ -5,6 +5,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: radarx-phase2-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   all-tests:
     runs-on: ubuntu-latest
