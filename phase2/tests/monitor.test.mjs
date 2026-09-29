@@ -46,3 +46,13 @@ test('TEST_FIXTURE: missing websocket candle triggers REST repair before analysi
   await m.onCandle({...candle(t+2*step,{tf:'15m',closed:true,price:102}),symbol:'BTCUSDT',timeframe:'15m'});
   assert.ok(rest.calls>0);assert.equal(m.isGap('BTCUSDT','15m'),false);
 });
+
+test('TEST_FIXTURE: REST repair can advance the completed 15m candle while WebSocket is unavailable',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-rest-analysis-')),store=new (await import('../core/store.mjs')).DurableStore({dir});
+  await store.init();const rest=new Rest(),analyzed=[];
+  const m=new MarketMonitor({config:cfg,rest,wsFactory:()=>new WS(),
+    signalService:{evaluateSnapshot:async x=>{analyzed.push(x);return{};}},store,pushManager:null,logger:{info(){},warn(){},error(){}}});
+  m.running=true;m.wsState='BACKING_OFF';
+  await m.repairAll();
+  assert.ok(rest.calls>0);assert.ok(analyzed.length>0);
+});

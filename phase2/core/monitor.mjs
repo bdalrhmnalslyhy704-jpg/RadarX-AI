@@ -98,7 +98,12 @@ export class MarketMonitor{
     if(!this.running)return;
     for(const symbol of this.config.symbols){
       for(const tf of this.config.timeframes){
-        try{await this.repairOne(symbol,tf);}catch(e){this.logger.warn('REST repair failed',symbol,tf,String(e?.message??e));}
+        const before=this.getSeries(symbol,tf).lastClosed()?.closeTime??null;
+        try{
+          await this.repairOne(symbol,tf);
+          const after=this.getSeries(symbol,tf).lastClosed()?.closeTime??null;
+          if(tf==='15m'&&after!=null&&after!==before) await this.analyzeSymbol(symbol);
+        }catch(e){this.logger.warn('REST repair failed',symbol,tf,String(e?.message??e));}
       }
     }
   }
