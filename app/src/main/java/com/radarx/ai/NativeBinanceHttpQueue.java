@@ -218,7 +218,7 @@ public final class NativeBinanceHttpQueue {
         }
     }
 
-(String rawPath) {
+    private boolean isValidPath(String rawPath) {
         if (!rawPath.startsWith("/api/v3/")) return false;
         int q = rawPath.indexOf('?');
         String pathname = q >= 0 ? rawPath.substring(0, q) : rawPath;
