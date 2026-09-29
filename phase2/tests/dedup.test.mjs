@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test from './test-helpers.mjs';
 import assert from 'node:assert/strict';
 import {SignalDeduplicator} from '../core/dedup.mjs';
 

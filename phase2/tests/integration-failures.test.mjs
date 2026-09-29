@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test from './test-helpers.mjs';
 import assert from 'node:assert/strict';
 import {mkdtemp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -24,14 +24,17 @@ class GoneProvider{
 test('TEST_FIXTURE: no user subscription produces no push attempt',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-nosub-')),store=await new DurableStore({dir}).init();
   const p=new GoneProvider(),m=new PushManager({provider:p,store});
-  assert.deepEqual(await m.notifySignal(sig()),[]);
+  const out=await m.notifySignal(sig());
+  assert.equal(out.status,'NO_SUBSCRIBERS');
+  assert.deepEqual(out.notifications,[]);
 });
 
 test('TEST_FIXTURE: expired push endpoint is disabled after provider returns 410',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-gone-')),store=await new DurableStore({dir}).init();
   await store.putUserSettings('u1',defaultSettings());await store.upsertSubscription('u1',sub());
   const m=new PushManager({provider:new GoneProvider(),store}),out=await m.notifySignal(sig());
-  assert.equal(out[0].status,'GONE');
+  assert.equal(out.status,'FAILED_OR_DISABLED');
+  assert.equal(out.notifications[0].status,'GONE');
   assert.equal((await store.getSubscriptions('u1')).length,0);
 });
 

@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test from './test-helpers.mjs';
 import assert from 'node:assert/strict';
 import {MarketMonitor} from '../core/monitor.mjs';
 
@@ -45,7 +45,7 @@ test('TEST_FIXTURE: market monitor remains server-side and runs without a PWA cl
   const next=now-2*step['15m'];
   await monitor.onCandle(candle('BTCUSDT','15m',next));
   assert.equal(analyses.length>=1,true);
-  assert.equal(monitor.health().monitoring.running,true);
+  assert.equal((await monitor.health()).monitoring.running,true);
 
   // There is deliberately no browser/PWA client in this test.
   // The server continues monitoring and can process the next candle on its own.

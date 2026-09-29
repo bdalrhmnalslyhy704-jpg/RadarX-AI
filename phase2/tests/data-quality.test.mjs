@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test from './test-helpers.mjs';
 import assert from 'node:assert/strict';
 import {assessDataGate,assessLiquidity,latestClosed} from '../core/data-quality.mjs';
 import {series,incompleteSeries,TEST_FIXTURE} from './fixtures.mjs';

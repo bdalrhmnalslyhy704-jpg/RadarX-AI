@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test from './test-helpers.mjs';
 import assert from 'node:assert/strict';
 import {assertReadOnlySignal,READ_ONLY_POLICY} from '../core/signal-service.mjs';
 
