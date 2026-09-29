@@ -115,3 +115,36 @@ test('server binds locally on 127.0.0.1 and health/readiness succeed',async()=>{
 test('server binds on 0.0.0.0 with staging PORT and health/readiness succeed',async()=>{
   await startAndCheck({host:'0.0.0.0',port:await freePort()});
 });
+
+
+test('readyz awaits an async monitor health result',async()=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'radarx-readyz-release-')),port=await freePort();
+  const restore=withEnv({
+    RADARX_ENV:'staging',RADARX_STAGING_TEST_PUSH_ENABLED:'false',RADARX_PUSH_PROVIDER:'webpush',
+    RADARX_AUTH_SECRET:'TEST_FIXTURE_AUTH_SECRET_12345678901234567890',
+    VAPID_SUBJECT:'mailto:operator@example.test',VAPID_PUBLIC_KEY:'TEST_FIXTURE_VAPID_PUBLIC',
+    VAPID_PRIVATE_KEY:'TEST_FIXTURE_VAPID_PRIVATE',RADARX_ALLOWED_ORIGINS:'https://staging.example.test',
+    RADARX_HOST:'127.0.0.1',PORT:String(port),RADARX_DATA_DIR:dataDir,
+    RADARX_PAPER_TRADING:'true',RADARX_REAL_ORDER_EXECUTION:'false',RADARX_CONFIDENCE_MODE:'UNKNOWN'
+  });
+  try{
+    const started=await startServer({
+      config:safeStagingConfig('127.0.0.1',port,dataDir),
+      monitorFactory:()=>({
+        async start(){},async stop(){},
+        async health(){await new Promise(r=>setTimeout(r,5));return{
+          database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'},
+          monitoring:{running:true,bootstrap_done:true}
+        };}
+      }),
+      logger:{info(){},warn(){},error(){}}
+    });
+    try{
+      const r=await fetch('http://127.0.0.1:'+port+'/readyz');
+      const json=await r.json();
+      assert.equal(r.status,200);
+      assert.equal(json.ready,true);
+      assert.equal(json.health.database.state,'LIVE');
+    }finally{await started.close();}
+  }finally{restore();}
+});
