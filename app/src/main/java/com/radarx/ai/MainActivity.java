@@ -37,7 +37,7 @@ public final class MainActivity extends Activity {
     private static final int BG = Color.rgb(5, 10, 15);
     private static final String APP_URL =
             "https://appassets.androidplatform.net/assets/index.html";
-    private static final String VERSION = "6.8.1";
+    private static final String VERSION = "6.8.2";
 
     private WebView webView;
     private TextView statusView;
@@ -77,7 +77,7 @@ public final class MainActivity extends Activity {
 
         statusView = new TextView(this);
         statusView.setText(
-                "RadarX\nجاري تشغيل الواجهة الأصلية وتهيئة اتصال Binance الآمن…"
+                "RadarX\nجاري تشغيل الواجهة وتهيئة اتصال Binance…"
         );
         statusView.setTextColor(Color.rgb(190, 220, 232));
         statusView.setTextSize(13);
@@ -117,6 +117,7 @@ public final class MainActivity extends Activity {
         WebSettings s = view.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
+        s.setCacheMode(WebSettings.LOAD_DEFAULT);
         s.setDatabaseEnabled(true);
         s.setLoadsImagesAutomatically(true);
         s.setBlockNetworkImage(false);
