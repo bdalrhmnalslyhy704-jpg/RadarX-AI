@@ -8,7 +8,7 @@ export class DurableStore {
       signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl')};}
   async init(){await mkdir(this.dir,{recursive:true});
     for(const [k,p] of Object.entries(this.files)){try{await readFile(p,'utf8');}catch{
-      await writeFile(p,k.endsWith('jsonl')?'{}\\n':'{}',{flag:'wx'}).catch(()=>{});
+      await writeFile(p,p.endsWith('.jsonl')?'':'{}',{flag:'wx'}).catch(()=>{});
     }}this.ready=true;return this;}
   async lock(fn){const p=this.queue.then(fn);this.queue=p.catch(()=>{});return p;}
   async readJson(p){try{return JSON.parse(await readFile(p,'utf8'));}catch{return{};}}
