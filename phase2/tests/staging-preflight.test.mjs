@@ -44,7 +44,7 @@ test('TEST_FIXTURE: staging preflight fails when required secret is missing',asy
 
 test('TEST_FIXTURE: staging preflight fails on non-HTTPS origin',async()=>{
   const env=await validEnv({RADARX_ALLOWED_ORIGINS:'http://staging.example.test'});
-  assert.throws(()=>assertDeploymentEnvironment(env),/STAGING_ALLOWED_ORIGINS_MUST_USE_HTTPS/);
+  assert.throws(()=>assertDeploymentEnvironment(env),/STAGING_ALLOWED_ORIGINS_MUST_BE_EXACT_HTTPS_ORIGINS/);
 });
 
 test('TEST_FIXTURE: staging preflight requires an explicit test-push flag',async()=>{
