@@ -53,6 +53,8 @@ public final class NativeBinanceHttpQueue {
     private final ExecutorService executor;
     private final AtomicLong sequence = new AtomicLong(0);
     private final Map<String, Result> completed = new ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicInteger preferredIndex =
+            new java.util.concurrent.atomic.AtomicInteger(0);
 
     public NativeBinanceHttpQueue(OkHttpClient baseClient) {
         this.cloudClient = baseClient.newBuilder()
@@ -120,58 +122,46 @@ public final class NativeBinanceHttpQueue {
     }
 
     private Result perform(String rawPath) {
-        // First use the deployed RadarX relay. This is the regional path.
-        try {
-            Request cloud = new Request.Builder()
-                    .url(REMOTE_RELAY + "?path=" + Uri.encode(rawPath))
-                    .get()
-                    .header("Accept", "application/json")
-                    .header("User-Agent", "RadarX-Android/6.8.1")
-                    .build();
+        Throwable last = null;
+        int preferred = Math.floorMod(preferredIndex.get(), UPSTREAMS.length);
 
-            try (Response r = cloudClient.newCall(cloud).execute()) {
-                byte[] body = r.body() == null
-                        ? new byte[0]
-                        : r.body().bytes();
-
-                if (r.isSuccessful() && looksLikeJson(body)) {
-                    return new Result(
-                            r.code(), "OK",
-                            "application/json; charset=utf-8",
-                            body, "radarx-cloud-relay"
-                    );
-                }
-            }
-        } catch (Exception ignored) {
-            // Continue with direct Spot endpoints.
+        // One fast direct attempt first. This is the normal path and keeps
+        // the UI out of a long mirror cascade on healthy networks.
+        int[] order = new int[3];
+        order[0] = preferred;
+        int k = 1;
+        for (int step = 1; step <= UPSTREAMS.length && k < order.length; step++) {
+            int idx = (preferred + step) % UPSTREAMS.length;
+            boolean duplicate = false;
+            for (int j = 0; j < k; j++) if (order[j] == idx) duplicate = true;
+            if (!duplicate) order[k++] = idx;
         }
 
-        Throwable last = null;
-        int attempts = 0;
-        for (String base : UPSTREAMS) {
-            if (++attempts > UPSTREAMS.length) break;
+        try {
+            Result direct = requestDirect(rawPath, order[0]);
+            if (direct != null && direct.status < 300) return direct;
+            last = new RuntimeException("DIRECT_HTTP_" + (direct == null ? "FAILED" : direct.status));
+        } catch (Throwable t) {
+            last = t;
+        }
+
+        // Regional escape hatch. Do this before trying more Binance mirrors,
+        // because it is often faster on restricted mobile networks.
+        try {
+            Result cloud = requestCloud(rawPath);
+            if (cloud != null && cloud.status < 300) return cloud;
+            last = new RuntimeException("CLOUD_HTTP_" + (cloud == null ? "FAILED" : cloud.status));
+        } catch (Throwable t) {
+            last = t;
+        }
+
+        // Only two additional direct mirrors: bounded latency and much less
+        // connection churn on low-end phones.
+        for (int i = 1; i < order.length; i++) {
             try {
-                Request direct = new Request.Builder()
-                        .url(base + rawPath)
-                        .get()
-                        .header("Accept", "application/json")
-                        .header("User-Agent", "RadarX-Android/6.8.1")
-                        .build();
-
-                try (Response r = directClient.newCall(direct).execute()) {
-                    byte[] body = r.body() == null
-                            ? new byte[0]
-                            : r.body().bytes();
-
-                    if (r.isSuccessful() && looksLikeJson(body)) {
-                        return new Result(
-                                r.code(), "OK",
-                                "application/json; charset=utf-8",
-                                body, base
-                        );
-                    }
-                    last = new RuntimeException("HTTP " + r.code());
-                }
+                Result direct = requestDirect(rawPath, order[i]);
+                if (direct != null && direct.status < 300) return direct;
+                last = new RuntimeException("DIRECT_HTTP_" + (direct == null ? "FAILED" : direct.status));
             } catch (Throwable t) {
                 last = t;
             }
@@ -180,18 +170,55 @@ public final class NativeBinanceHttpQueue {
         String message = last == null || last.getMessage() == null
                 ? "Binance Spot unavailable"
                 : last.getMessage();
-
         String body = "{\"code\":-1,\"msg\":\"Binance Spot unavailable\","
                 + "\"detail\":\"" + escape(message) + "\",\"status\":502}";
-        return new Result(
-                502, "BAD_GATEWAY",
-                "application/json; charset=utf-8",
-                body.getBytes(StandardCharsets.UTF_8),
-                "none"
-        );
+        return new Result(502, "BAD_GATEWAY", "application/json; charset=utf-8",
+                body.getBytes(StandardCharsets.UTF_8), "none");
     }
 
-    private boolean isValidPath(String rawPath) {
+    private Result requestDirect(String rawPath, int index) {
+        String base = UPSTREAMS[index];
+        Request direct = new Request.Builder()
+                .url(base + rawPath)
+                .get()
+                .header("Accept", "application/json")
+                .header("User-Agent", "RadarX-Android/6.8.2")
+                .build();
+
+        try (Response r = directClient.newCall(direct).execute()) {
+            byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+            if (r.isSuccessful() && looksLikeJson(body)) {
+                preferredIndex.set(index);
+                return new Result(r.code(), "OK", "application/json; charset=utf-8", body, base);
+            }
+            return new Result(r.code(), "HTTP_" + r.code(), "application/json; charset=utf-8",
+                    body, base);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private Result requestCloud(String rawPath) {
+        Request cloud = new Request.Builder()
+                .url(REMOTE_RELAY + "?path=" + Uri.encode(rawPath))
+                .get()
+                .header("Accept", "application/json")
+                .header("User-Agent", "RadarX-Android/6.8.2")
+                .build();
+        try (Response r = cloudClient.newCall(cloud).execute()) {
+            byte[] body = r.body() == null ? new byte[0] : r.body().bytes();
+            if (r.isSuccessful() && looksLikeJson(body)) {
+                return new Result(r.code(), "OK", "application/json; charset=utf-8",
+                        body, "radarx-cloud-relay");
+            }
+            return new Result(r.code(), "HTTP_" + r.code(), "application/json; charset=utf-8",
+                    body, "radarx-cloud-relay");
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+(String rawPath) {
         if (!rawPath.startsWith("/api/v3/")) return false;
         int q = rawPath.indexOf('?');
         String pathname = q >= 0 ? rawPath.substring(0, q) : rawPath;
