@@ -31,7 +31,7 @@ export class SignalService{
       timeframe:signal.candle?.timeframe||'15m',price:signal.price?.reference??null,strategy:signal.strategy,
       reason:Array.isArray(signal.reason_codes)?signal.reason_codes.join(','):'UNKNOWN',data_quality:dg.quality,
       liquidity_quality:liq.quality,notification_status:'NOT_ATTEMPTED',emitted:false,blocked_reasons:blocked,
-      signal_id:signal.signal_id,confidence_score:'UNKNOWN',paper_trading:true,real_order_execution:false};
+      signal_id:signal.signal_id,confidence_score:'UNKNOWN',paper_trading:true,real_order_execution:false,signal_snapshot:signal};
     const eligible=dg.allowed&&liq.allowed&&signal.direction!=='NONE'&&signal.risk_filter!=='FAIL';
     if(!eligible){await this.store.appendSignalAudit(audit);return{emitted:false,signal,blocked,audit,dataGate:dg,liquidity:liq,strategies:r.strategies};}
     const d=await this.deduplicator.canEmit(signal,now);
