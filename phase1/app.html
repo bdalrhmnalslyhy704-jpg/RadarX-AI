@@ -179,6 +179,7 @@ async function scan(){
     },{config:cfg});
     renderEngine(r);
     lastLiveAt=Date.now();
+    localStorage.setItem(LAST_LIVE_KEY,String(lastLiveAt));
     $('lastConnection').textContent=fmt(lastLiveAt);
     $('sourceState').textContent='Binance Public API';
     $('liveState').textContent='Live while app is open';
@@ -232,6 +233,7 @@ function startForeground(){
   $('pushState').textContent='Not configured';
   $('sourceState').textContent='Binance Public API';
   $('apiBaseLabel').textContent=getBaseUrl();
+  $('lastConnection').textContent=fmt(lastLiveAt);
   status('warn','Starting foreground scan…');
   if(foregroundTimer)clearInterval(foregroundTimer);
   if(backendTimer)clearInterval(backendTimer);
