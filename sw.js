@@ -21,7 +21,8 @@ self.addEventListener('activate', event => {
 });
 
 function isAppShellRequest(request) {
-  return request.mode === 'navigate' || new URL(request.url).pathname.endsWith('/phase1/app.html');
+  const pathname = new URL(request.url).pathname;
+  return request.mode === 'navigate' || pathname.endsWith('/app.html');
 }
 
 self.addEventListener('fetch', event => {
@@ -34,9 +35,10 @@ self.addEventListener('fetch', event => {
     event.respondWith(
       fetch(request).then(response => {
         const copy = response.clone();
-        caches.open(CACHE_NAME).then(cache => cache.put('./index.html', copy));
+        const cacheKey = new URL(request.url).pathname.endsWith('/app.html') ? './app.html' : './index.html';
+        caches.open(CACHE_NAME).then(cache => cache.put(cacheKey, copy));
         return response;
-      }).catch(() => caches.match('./index.html'))
+      }).catch(() => caches.match(request).then(hit => hit || caches.match('./app.html')))
     );
     return;
   }
