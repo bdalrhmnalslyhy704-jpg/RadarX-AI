@@ -29,7 +29,6 @@ export async function startServer({
   const service=new SignalService({deduplicator:dedup,store,pushManager:push,config});
   const monitor=monitorFactory({config,rest,signalService:service,store,pushManager:push,logger});
   if(config.backgroundMonitorEnabled) await monitor.start();
-  else await store.init();
   const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
