@@ -22,7 +22,7 @@ main{width:min(1100px,100%);margin:auto;padding:env(safe-area-inset-top) 14px ca
 .controls{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(110px,.8fr) minmax(110px,.8fr) 1fr;gap:9px}
 .input,.btn{width:100%;min-height:48px;border-radius:12px;border:1px solid #2a4c58;background:#08131a;color:#fff;padding:0 13px;font:inherit}
 .btn{font-weight:950;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}.btn:active{transform:translateY(1px)}
-.banner{display:flex;align-items:flex-start;gap:10px}.dot{width:10px;height:10px;border-radius:50%;background:#d96f78;flex:0 0 10px;margin-top:5px}
+.banner{display:flex;align-items:flex-start;gap:10px}.dot{width:10px;height:10px;border-radius:50%;background:#d96f78;flex:0 0 10px;margin-top:5px}.modeGrid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.modeItem{padding:10px;border:1px solid #17313a;border-radius:11px;background:#08131a}.modeItem b{display:block;margin-top:4px;font-size:12px}.modeItem .muted{font-size:10px}@media(max-width:900px){.modeGrid{grid-template-columns:repeat(2,1fr)}}@media(max-width:470px){.modeGrid{grid-template-columns:1fr}}
 .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin-top:12px}.card{background:#0b1820;border:1px solid #1d3944;border-radius:16px;padding:14px;min-height:126px}
 .name{font-size:12px;color:#9bb3bd;font-weight:800}.score{font-size:31px;font-weight:950;margin-top:5px}.state{font-size:11px;font-weight:900;margin-top:4px}
 .bar{height:7px;background:#102932;border-radius:99px;overflow:hidden;margin-top:10px}.bar>i{display:block;height:100%;background:#54d5ff;border-radius:99px}
@@ -49,6 +49,18 @@ pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-ra
   <p class="muted" style="margin:0">لن يتم اعتبار بيانات قديمة أو مخزنة مؤقتًا على أنها لحظية.</p></div>
 </section>
 
+<section class="panel" aria-label="RadarX operating mode">
+  <div class="modeGrid">
+    <div class="modeItem"><span class="muted">Mode</span><b id="modeStatus">Local Foreground Mode</b></div>
+    <div class="modeItem"><span class="muted">Live state</span><b id="liveState">Live while app is open</b></div>
+    <div class="modeItem"><span class="muted">Background monitoring</span><b id="backgroundState">Not enabled</b></div>
+    <div class="modeItem"><span class="muted">Push notifications</span><b id="pushState">Not configured</b></div>
+    <div class="modeItem"><span class="muted">Data source</span><b id="sourceState">Binance Public API</b></div>
+  </div>
+  <div class="muted" style="margin-top:9px">Paper Trading only • Foreground analysis pauses when this page is hidden or closed. Future 24/7 monitoring requires the separate server background mode.</div>
+  <div class="muted" style="margin-top:5px">Local Phase 2 API: <span id="apiBaseLabel">http://127.0.0.1:8787</span> • Last live connection: <span id="lastConnection">UNKNOWN</span></div>
+</section>
+
 <section class="panel">
   <div class="controls">
     <input id="symbol" class="input" value="BTCUSDT" spellcheck="false" autocapitalize="characters" aria-label="رمز العملة">
@@ -62,7 +74,7 @@ pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-ra
 <section id="cards" class="grid" aria-live="polite"></section>
 
 <section class="panel">
-  <b>المراقبة الخلفية</b>
+  <b>Backend المحلي — Health فقط</b>
   <div class="kv">
     <div><span class="muted">WebSocket</span><b id="ws">UNKNOWN</b></div>
     <div><span class="muted">REST</span><b id="rest">UNKNOWN</b></div>
@@ -81,12 +93,13 @@ pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-ra
 </section>
 
 <section class="panel">
-  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>آخر الإشارات</b><button id="refreshLogs" class="btn" style="width:auto;min-height:40px;padding:0 12px">تحديث</button></div>
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>Paper Signals — Foreground only</b><button id="refreshLogs" class="btn" style="width:auto;min-height:40px;padding:0 12px">تحديث حالة Backend</button></div>
   <div id="signals" class="list"></div>
 </section>
 
 <section class="panel">
-  <div><b>آخر التنبيهات</b></div>
+  <div><b>Push notifications: Not configured</b></div>
+  <div class="muted" style="margin-top:7px">لا توجد تنبيهات خلفية في الوضع المحلي الحالي. هذه المنطقة لا تعرض أي إشعارات على أنها مستمرة بعد إغلاق التطبيق.</div>
   <div id="notifications" class="list"></div>
 </section>
 
@@ -100,16 +113,36 @@ pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-ra
 
 <script type="module">
 import {BinancePublicData,evaluateSymbolSnapshot,CONFIG} from './radarx-phase1-engine.mjs';
-import {apiHealth,apiReady,apiSignals,apiNotifications,getSessionToken} from './phase2-api.mjs';
+import {apiHealth,apiReady,getBaseUrl} from './phase2-api.mjs';
 
-const $=id=>document.getElementById(id); // clearLiveView() / DISCONNECTED / LIVE_DATA / last_successful_update
-// setStatus('DISCONNECTED','Disconnected') is the offline contract retained for Phase 1.
+const $=id=>document.getElementById(id);
 const api=new BinancePublicData({timeoutMs:9000});
 const fmt=ts=>ts?new Intl.DateTimeFormat('ar',{dateStyle:'medium',timeStyle:'medium'}).format(new Date(ts)):'UNKNOWN';
 const n=v=>Number.isFinite(Number(v))?Number(v):null;
+let foregroundActive=false;
+let foregroundTimer=null;
+let backendTimer=null;
+let lastLiveAt=null;
+let scanGeneration=0;
 
 function status(mode,text){$('status').textContent=text;$('status').className='status '+(mode==='live'?'live':mode==='off'?'off':'warn')}
 function card(title,score,state,dir){const s=n(score)||0;return '<article class="card"><div class="name">'+title+'</div><div class="score">'+s.toFixed(1)+'</div><div class="bar"><i style="width:'+Math.max(0,Math.min(100,s))+'%"></i></div><div class="state">'+String(state||'UNKNOWN')+' · '+String(dir||'NONE')+'</div></article>'}
+
+function clearLiveView(){
+  $('cards').innerHTML='';
+  $('dq').textContent='UNKNOWN';$('lq').textContent='UNKNOWN';$('risk').textContent='UNKNOWN';$('json').textContent='UNKNOWN';
+  $('wsMsg').textContent='UNKNOWN';$('candle').textContent='UNKNOWN';$('analysis').textContent='UNKNOWN';
+}
+
+function renderPaperSignal(signal){
+  const s=signal||{};
+  const scores=s.scores||{};
+  $('signals').innerHTML='<div class="item"><b>'+String(s.symbol||'UNKNOWN')+' · '+String(s.direction||'NONE')+' · '+String(s.strategy||'NO_SIGNAL')+'</b>'+
+    '<div class="muted">SPOT • '+String(s.signal_type||'ENTRY_CANDIDATE')+' • DQ '+String(scores.data_quality??'UNKNOWN')+
+    ' • LQ '+String(scores.liquidity_quality??'UNKNOWN')+' • Risk '+String(s.risk_filter??'UNKNOWN')+
+    ' • confidence_score UNKNOWN</div><div class="muted" style="margin-top:4px">Foreground Paper Signal only • '+fmt(s.decision_timestamp)+'</div></div>';
+}
+
 function renderEngine(r){
   const s=r.strategies;
   $('cards').innerHTML=[
@@ -117,43 +150,109 @@ function renderEngine(r){
     card('Confirmed Breakout',s.breakout.score?.breakoutScore,s.breakout.state,s.breakout.direction),
     card('Filtered Mean Reversion',s.meanReversion.score?.meanReversionScore,s.meanReversion.state,s.meanReversion.direction)
   ].join('');
-  $('dq').textContent=String(r.signal.scores.data_quality);$('lq').textContent=String(r.signal.scores.liquidity_quality);
-  $('risk').textContent=String(r.signal.risk_filter);$('json').textContent=JSON.stringify(r.signal,null,2);
+  $('dq').textContent=String(r.signal.scores.data_quality);
+  $('lq').textContent=String(r.signal.scores.liquidity_quality);
+  $('risk').textContent=String(r.signal.risk_filter);
+  $('json').textContent=JSON.stringify(r.signal,null,2);
+  renderPaperSignal(r.signal);
 }
+
 async function scan(){
-  if(!navigator.onLine){status('off','Disconnected');$('offlineBanner').hidden=false;return}
-  const symbol=$('symbol').value.trim().toUpperCase();status('warn','جلب البيانات…');
+  if(!foregroundActive||document.visibilityState!=='visible')return;
+  if(!navigator.onLine){
+    clearLiveView();status('off','Disconnected');$('offlineBanner').hidden=false;return;
+  }
+  const generation=++scanGeneration;
+  const symbol=$('symbol').value.trim().toUpperCase();
+  status('warn','Fetching Binance public data…');
   try{
-    const [h4,h1,m15,depth,ticker]=await Promise.all([api.klines(symbol,'4h',250),api.klines(symbol,'1h',250),api.klines(symbol,'15m',250),api.depth(symbol,100),api.ticker24h(symbol)]);
+    const [h4,h1,m15,depth,ticker]=await Promise.all([
+      api.klines(symbol,'4h',250),api.klines(symbol,'1h',250),api.klines(symbol,'15m',250),
+      api.depth(symbol,100),api.ticker24h(symbol)
+    ]);
+    if(!foregroundActive||generation!==scanGeneration||document.visibilityState!=='visible')return;
     const fee=n($('fee').value),slip=n($('slip').value),now=Date.now();
     const cfg={...CONFIG,costs:{feeRate:fee,slippageBps:slip}};
-    const r=evaluateSymbolSnapshot({symbol,series4h:h4.candles,series1h:h1.candles,series15m:m15.candles,bookRaw:depth.data,ticker24hRaw:ticker.data,source:'BINANCE_PUBLIC_REST',now},{config:cfg});
-    renderEngine(r);status('live','LIVE_DATA');$('offlineBanner').hidden=true;
-  }catch(e){status('off','Data unavailable');$('offlineBanner').hidden=false;$('dq').textContent='UNKNOWN';$('lq').textContent='UNKNOWN';$('risk').textContent='FAIL';}
+    const r=evaluateSymbolSnapshot({
+      symbol,series4h:h4.candles,series1h:h1.candles,series15m:m15.candles,
+      bookRaw:depth.data,ticker24hRaw:ticker.data,source:'BINANCE_PUBLIC_REST',now
+    },{config:cfg});
+    renderEngine(r);
+    lastLiveAt=Date.now();
+    $('lastConnection').textContent=fmt(lastLiveAt);
+    $('sourceState').textContent='Binance Public API';
+    $('liveState').textContent='Live while app is open';
+    status('live','LIVE_DATA');
+    $('offlineBanner').hidden=true;
+  }catch(e){
+    if(!foregroundActive)return;
+    clearLiveView();
+    status('off','Data unavailable');
+    $('offlineBanner').hidden=false;
+    $('backendMsg').textContent='Binance public data unavailable: '+e.message;
+  }
 }
+
 async function refreshBackend(){
+  if(!foregroundActive||document.visibilityState!=='visible')return;
   try{
     const [h,r]=await Promise.all([apiHealth(),apiReady()]);
-    $('ws').textContent=h.websocket.state;$('rest').textContent=h.rest.state;$('db').textContent=h.database.state;
-    $('wsMsg').textContent=fmt(h.websocket.last_message_at);$('analysis').textContent=fmt(h.last_analysis_at);
-    const c=h.last_complete_candle;$('candle').textContent=c?c.symbol+' '+c.timeframe+' '+fmt(c.close_time):'UNKNOWN';
-    $('backendMsg').textContent='Ready: '+String(r.ready)+' • gaps: '+String(h.monitoring?.unresolved_gaps?.length||0);
-    status(r.ready?'live':'warn',r.ready?'BACKEND READY':'BACKEND DEGRADED');
-    if(!getSessionToken())return;
-    const [sig,notes]=await Promise.all([apiSignals(20),apiNotifications(20)]);
-    const events=sig.events||[];
-    $('signals').innerHTML=events.length?events.slice(0,8).map(e=>{
-      const s=e.signal_snapshot||{};return '<div class="item"><b>'+String(e.symbol||s.symbol||'UNKNOWN')+' · '+String(s.direction||'NONE')+'</b><div class="muted">'+String(e.strategy||s.strategy||'UNKNOWN')+' · '+fmt(e.source_time)+'</div><a href="./signal.html?signal_id='+encodeURIComponent(e.signal_id||'')+'">التفاصيل</a></div>'
-    }).join(''):'<div class="muted">لا توجد إشارات مسجلة.</div>';
-    $('notifications').innerHTML=notes.events?.length?notes.events.slice(0,8).map(e=>'<div class="item"><b>'+String(e.status||'UNKNOWN')+'</b><div class="muted">'+String(e.provider||'UNKNOWN')+' · '+fmt(e.attempted_at)+'</div></div>').join(''):'<div class="muted">لا توجد محاولات تنبيه.</div>';
-    const latest=events.find(e=>e.signal_snapshot)?.signal_snapshot;
-    if(latest){$('dq').textContent=String(latest.scores?.data_quality??'UNKNOWN');$('lq').textContent=String(latest.scores?.liquidity_quality??'UNKNOWN');$('risk').textContent=String(latest.risk_filter??'UNKNOWN');$('json').textContent=JSON.stringify(latest,null,2);}
-  }catch(e){$('backendMsg').textContent='تعذر الوصول إلى خدمة Phase 2: '+e.message;status('off','BACKEND OFFLINE')}
+    $('ws').textContent=h.websocket?.state??'UNKNOWN';
+    $('rest').textContent=h.rest?.state??'UNKNOWN';
+    $('db').textContent=h.database?.state??'UNKNOWN';
+    $('backendMsg').textContent='Local API: '+getBaseUrl()+' • Ready: '+String(r.ready)+' • Background monitoring: Not enabled in Local Foreground Mode';
+    $('backgroundState').textContent='Not enabled';
+    $('pushState').textContent='Not configured';
+    if(h.last_analysis_at&&h.background_monitor?.enabled) $('analysis').textContent=fmt(h.last_analysis_at);
+  }catch(e){
+    $('backendMsg').textContent='Local API unavailable: '+e.message+' • Foreground market scan can still use Binance Public API';
+    $('backgroundState').textContent='Not enabled';
+    $('pushState').textContent='Not configured';
+  }
 }
-window.addEventListener('online',()=>{status('warn','ONLINE');refreshBackend()});
-window.addEventListener('offline',()=>{status('off','Disconnected');$('offlineBanner').hidden=false});
-$('scan').onclick=scan;$('refreshLogs').onclick=refreshBackend;
+
+function stopForeground(reason='PAGE_HIDDEN'){
+  foregroundActive=false;
+  scanGeneration++;
+  if(foregroundTimer){clearInterval(foregroundTimer);foregroundTimer=null}
+  if(backendTimer){clearInterval(backendTimer);backendTimer=null}
+  clearLiveView();
+  $('liveState').textContent='Paused — app not active';
+  $('backgroundState').textContent='Not enabled';
+  status('off',reason==='PAGE_HIDDEN'?'PAUSED':'Disconnected');
+  $('offlineBanner').hidden=false;
+  if(lastLiveAt)$('lastConnection').textContent=fmt(lastLiveAt);
+}
+
+function startForeground(){
+  foregroundActive=true;
+  $('modeStatus').textContent='Local Foreground Mode';
+  $('liveState').textContent='Live while app is open';
+  $('backgroundState').textContent='Not enabled';
+  $('pushState').textContent='Not configured';
+  $('sourceState').textContent='Binance Public API';
+  $('apiBaseLabel').textContent=getBaseUrl();
+  status('warn','Starting foreground scan…');
+  if(foregroundTimer)clearInterval(foregroundTimer);
+  if(backendTimer)clearInterval(backendTimer);
+  foregroundTimer=setInterval(scan,15000);
+  backendTimer=setInterval(refreshBackend,15000);
+  scan();
+  refreshBackend();
+}
+
+window.addEventListener('online',()=>{if(document.visibilityState==='visible'){startForeground()}});
+window.addEventListener('offline',()=>{stopForeground('OFFLINE')});
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible')startForeground();
+  else stopForeground('PAGE_HIDDEN');
+});
+window.addEventListener('pagehide',()=>stopForeground('PAGE_HIDDEN'),{once:true});
+window.addEventListener('beforeunload',()=>stopForeground('PAGE_HIDDEN'),{once:true});
+
+$('scan').onclick=scan;
+$('refreshLogs').onclick=refreshBackend;
 if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
-scan();refreshBackend();setInterval(refreshBackend,15000);
+startForeground();
 </script>
 </body></html>
