@@ -58,9 +58,21 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(!rateOk(key))return send(res,429,{error:'RATE_LIMITED'});
     try{
       const u=new URL(req.url,'http://localhost');
-      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,await monitor.health());
+      if(u.pathname==='/healthz'&&req.method==='GET'){
+        const h=await monitor.health();
+        return send(res,200,{...h,background_monitor:{
+          enabled:Boolean(config.backgroundMonitorEnabled),
+          mode:config.backgroundMonitorEnabled?'SERVER_BACKGROUND':'FOREGROUND_API_ONLY'
+        }});
+      }
       if(u.pathname==='/readyz'&&req.method==='GET'){
-        const h=await monitor.health(),ok=h.database?.state==='LIVE'&&(h.websocket?.state==='LIVE'||h.rest?.state==='LIVE');return send(res,ok?200:503,{ready:ok,health:h});
+        const h=await monitor.health();
+        const backgroundReady=!config.backgroundMonitorEnabled || h.websocket?.state==='LIVE' || h.rest?.state==='LIVE';
+        const ok=h.database?.state==='LIVE'&&backgroundReady;
+        return send(res,ok?200:503,{ready:ok,health:{...h,background_monitor:{
+          enabled:Boolean(config.backgroundMonitorEnabled),
+          mode:config.backgroundMonitorEnabled?'SERVER_BACKGROUND':'FOREGROUND_API_ONLY'
+        }}});
       }
       if(!u.pathname.startsWith('/v1/'))return send(res,404,{error:'NOT_FOUND'});
 
