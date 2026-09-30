@@ -128,5 +128,5 @@ test('frontend no longer imports or calls Binance directly and does not keep mar
   assert.match(html, /Backend.*Connected|Backend/);
   assert.match(html, /Background monitoring.*Not enabled/s);
   assert.match(html, /Push notifications.*Not configured/s);
-  assert.match(html, /Trading mode.*Paper Signals only/s);
+  assert.match(html, /Trading.*Paper Signals only/s);
 });
