@@ -7,7 +7,7 @@ import {
   fetchBackendState,
   isFreshLiveSignal,
   classifySignalResponse
-} from '../radarx-backend-client.mjs';
+} from '../../radarx-backend-client.mjs';
 
 const freshSignal = {
   status: 200,
