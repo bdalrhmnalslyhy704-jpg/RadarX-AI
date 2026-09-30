@@ -45,3 +45,7 @@ export function buildDataStatus({ base = {}, latestSuccessAt = 0, latestDataVali
     last_error: freshness.lastError
   };
 }
+
+export function buildLiveMeta(freshness) {
+  return { live: freshness?.live === true };
+}
