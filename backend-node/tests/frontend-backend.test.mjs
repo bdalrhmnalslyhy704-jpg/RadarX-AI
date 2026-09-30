@@ -124,9 +124,9 @@ test('frontend uses the Railway Backend and never calls Binance directly', async
   assert.ok(html.includes("from './radarx-backend-client.mjs'"));
   assert.ok(client.includes("https://radarx-ai-production.up.railway.app"));
   assert.ok(html.includes('fetchBackendState(base,symbol)'));
-  assert.ok(html.includes("'/healthz'"));
-  assert.ok(html.includes("'/readyz'"));
-  assert.ok(html.includes("'/api/signal?symbol='"));
+  assert.ok(client.includes("'/healthz'"));
+  assert.ok(client.includes("'/readyz'"));
+  assert.ok(client.includes("'/api/signal?symbol='"));
 
   assert.equal(html.includes('BinancePublicData'), false);
   assert.equal(html.includes('https://api.binance.com'), false);
