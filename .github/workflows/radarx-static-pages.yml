@@ -25,6 +25,13 @@ jobs:
         run: |
           git fetch --depth=1 origin phase1-pwa-mobile-installable:refs/remotes/origin/phase1-pwa-mobile-installable
           git checkout origin/phase1-pwa-mobile-installable -- package.json package-lock.json phase1
+          cp app.html phase1/app.html
+          cp manifest.json phase1/manifest.json
+          cp sw.js phase1/sw.js
+          cp radarx-phase1-engine.mjs phase1/radarx-phase1-engine.mjs
+          rm -rf phase1/icons
+          mkdir -p phase1/icons
+          cp icons/*.svg phase1/icons/
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
