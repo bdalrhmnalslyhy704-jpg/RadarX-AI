@@ -21,6 +21,7 @@ jobs:
     steps:
       - name: Checkout static branch
         uses: actions/checkout@v4
+
       - name: Fetch Phase 1 source for validation only
         run: |
           git fetch --depth=1 origin phase1-pwa-mobile-installable:refs/remotes/origin/phase1-pwa-mobile-installable
@@ -32,16 +33,21 @@ jobs:
           rm -rf phase1/icons
           mkdir -p phase1/icons
           cp icons/*.svg phase1/icons/
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
+
       - name: Generate temporary lockfile
         run: npm install --package-lock-only --ignore-scripts
+
       - name: Install dependencies from lockfile
         run: npm ci --ignore-scripts
+
       - name: Frontend integration tests
         run: node --test pages-tests/*.test.mjs
+
       - name: npm audit
         run: npm audit --audit-level=high
 
@@ -51,22 +57,59 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
+      deployment: true
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout static branch
         uses: actions/checkout@v4
+
       - name: Prepare static site only
         run: |
           rm -rf _site
           mkdir -p _site/icons
-          cp index.html app.html manifest.json sw.js radarx-phase1-engine.mjs .nojekyll _site/
+
+          cp index.html _site/index.html
+          cp manifest.json _site/manifest.json
+          cp sw.js _site/sw.js
+          cp radarx-backend-client.mjs _site/radarx-backend-client.mjs
+          cp .nojekyll _site/.nojekyll
           cp icons/*.svg _site/icons/
+
+          test -f _site/index.html
+          test -f _site/manifest.json
+          test -f _site/sw.js
+          test -f _site/radarx-backend-client.mjs
+          test -d _site/icons
+          test ! -e _site/app.html
+          test ! -e _site/radarx-phase1-engine.mjs
+
+          echo "Pages artifact root:"
+          find _site -maxdepth 1 -type f -printf '%f\n' | sort
+          echo "Pages artifact icons:"
+          find _site/icons -maxdepth 1 -type f -printf '%f\n' | sort
+
+      - name: Verify PWA entrypoint references
+        run: |
+          grep -F '"start_url":"./index.html"' manifest.json
+          grep -F '"scope":"./"' manifest.json
+          grep -F "navigator.serviceWorker.register('./sw.js')" index.html
+          grep -F "from './radarx-backend-client.mjs'" index.html
+
+      - name: Check artifact for secrets
+        run: |
+          if grep -RInE '(^|/)(\.env|\.env\.|secrets?\b|.*_API_KEY\b|.*PRIVATE_KEY\b)' _site; then
+            echo "Potential secret material found in Pages artifact"
+            exit 1
+          fi
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4
         with:
           path: _site
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
