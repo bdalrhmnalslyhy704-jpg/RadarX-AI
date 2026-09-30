@@ -27,7 +27,7 @@ function withEnv(values){
 
 function safeStagingConfig(host,port,dataDir){
   return {...CONFIG,
-    environment:'staging',host,port,confidenceMode:'UNKNOWN',
+    environment:'staging',backgroundMonitorEnabled:true,host,port,confidenceMode:'UNKNOWN',
     paper:{...CONFIG.paper,paperTrading:true,realOrderExecution:false},
     push:{...CONFIG.push,provider:'webpush',vapidSubject:'mailto:operator@example.test',vapidPublicKey:'TEST_FIXTURE_VAPID_PUBLIC',vapidPrivateKey:'TEST_FIXTURE_VAPID_PRIVATE'},
     auth:{...CONFIG.auth,secret:'TEST_FIXTURE_AUTH_SECRET_12345678901234567890',allowedOrigins:['https://staging.example.test']},
@@ -169,7 +169,7 @@ test('readyz awaits an async monitor health result',async()=>{
   });
   try{
     const started=await startServer({
-      config:safeStagingConfig('127.0.0.1',port,dataDir),
+      config:{...safeStagingConfig('127.0.0.1',port,dataDir),backgroundMonitorEnabled:true},
       monitorFactory:()=>({
         async start(){},async stop(){},
         async health(){await new Promise(r=>setTimeout(r,5));return{
