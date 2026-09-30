@@ -29,7 +29,8 @@ label{display:block;font-size:12px;font-weight:800;margin-bottom:6px}.input,.btn
 </section>
 
 <section class="panel">
-  <h3 style="margin:0 0 8px">التنبيهات</h3>
+  <h3 style="margin:0 0 8px">التنبيهات — Push notifications</h3>
+  <div class="notice muted">Local Foreground Mode: Push notifications are Not configured. لا يتم طلب إذن الإشعارات أو تشغيل TEST_PUSH_ONLY محليًا؛ تجهيز Push محفوظ للوضع المستقبلي على خادم HTTPS.</div>
   <div class="actions">
     <button id="enablePush" class="btn">تشغيل التنبيهات</button>
     <button id="disablePush" class="btn danger">إيقاف/إلغاء الاشتراك</button>
@@ -103,6 +104,10 @@ async function saveSettings(){
 }
 async function enablePush(){
   try{
+    if(config?.environment==='development'){
+      setMsg($('pushStatus'),'Push notifications: Not configured in Local Foreground Mode. فعّلها لاحقًا من خادم HTTPS.','warn');
+      return;
+    }
     if(!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window)){
       setMsg($('pushStatus'),'المتصفح لا يدعم Web Push في هذه البيئة.','bad');return;
     }
@@ -135,6 +140,10 @@ async function disablePush(){
 }
 async function testPush(){
   try{
+    if(config?.environment==='development'){
+      setMsg($('testPushStatus'),'TEST_PUSH_ONLY محجوب في Local Foreground Mode. لا يتم إرسال أي Push محليًا.','warn');
+      return;
+    }
     const testId=$('testId').value.trim()||'android-manual-01';
     if(!/^[A-Za-z0-9_-]{1,64}$/.test(testId)){setMsg($('testPushStatus'),'test_id غير صالح. استخدم أحرفًا وأرقامًا و- و_ فقط.','bad');return;}
     setMsg($('testPushStatus'),'جاري إرسال TEST_PUSH_ONLY...','warn');
@@ -150,6 +159,9 @@ $('saveConn').onclick=()=>{setBaseUrl($('base').value);setSessionToken($('token'
 $('load').onclick=connect;$('saveSettings').onclick=saveSettings;$('enablePush').onclick=enablePush;$('disablePush').onclick=disablePush;$('testPush').onclick=testPush;
 const q=new URLSearchParams(location.search);
 if(q.get('test_push')==='1')setMsg($('testPushStatus'),'تم فتح صفحة الإعدادات من إشعار TEST_PUSH_ONLY. هذا ليس إشعار سوق.','ok');
-if(getSessionToken())connect(); else setMsg($('connStatus'),'أدخل عنوان الخدمة وSession Token ثم اختبر الاتصال.','warn');
+if(getSessionToken())connect(); else {
+  setMsg($('connStatus'),'Local Foreground Mode جاهز. عنوان API الافتراضي: http://127.0.0.1:8787. لا تحتاج Session Token لفحص السوق العام أو healthz/readyz.','warn');
+  $('pushStatus').textContent='Push notifications: Not configured';
+}
 </script>
 </body></html>
