@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import { computeFreshness, buildDataStatus } from '../freshness.mjs';
+import { computeFreshness, buildDataStatus, buildLiveMeta } from '../freshness.mjs';
 import { getReadyState } from '../readiness.mjs';
 
 const now = 1_000_000;
@@ -95,8 +95,8 @@ test('signal stale -> data_status stale and live false', () => {
   });
   assert.equal(status.stale, true);
   assert.equal(status.data_stale, true);
-  const metaLive = !status.stale && status.data_valid === true && status.last_error === null;
-  assert.equal(metaLive, false);
+  const freshness = computeFreshness({latestSuccessAt:now-120_001,latestDataValid:true,latestClosedCandle:now-600_000,source:'https://data-api.binance.vision',lastError:null}, now);
+  assert.deepEqual(buildLiveMeta(freshness), {live:false});
 });
 
 test('signal fresh -> data_status fresh and live true', () => {
@@ -111,8 +111,8 @@ test('signal fresh -> data_status fresh and live true', () => {
   });
   assert.equal(status.stale, false);
   assert.equal(status.data_stale, false);
-  const metaLive = !status.stale && status.data_valid === true && status.last_error === null;
-  assert.equal(metaLive, true);
+  const freshness = computeFreshness({latestSuccessAt:now-1_000,latestDataValid:true,latestClosedCandle:now-600_000,source:'https://data-api.binance.vision',lastError:null}, now);
+  assert.deepEqual(buildLiveMeta(freshness), {live:true});
 });
 
 test('invalid data is never live', () => {
