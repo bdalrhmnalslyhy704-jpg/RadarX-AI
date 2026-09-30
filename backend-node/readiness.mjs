@@ -15,9 +15,11 @@ export function getReadyState(state, now = Date.now(), staleMs = 120000) {
     ? null
     : freshness.lastError
       ? 'LIVE_DATA_UNAVAILABLE'
-      : freshness.dataValid === false
-        ? 'INVALID_MARKET_DATA'
-        : 'SNAPSHOT_STALE';
+      : freshness.latestSuccessfulUpdate == null
+        ? 'LIVE_DATA_NOT_READY'
+        : freshness.dataValid === false
+          ? 'INVALID_MARKET_DATA'
+          : 'SNAPSHOT_STALE';
 
   return {
     statusCode,
