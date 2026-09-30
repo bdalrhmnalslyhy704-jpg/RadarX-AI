@@ -31,6 +31,31 @@ test('app registers service worker and exposes connection semantics',async()=>{
   assert.match(a,/window\.addEventListener\(['"]offline['"]/);
 });
 
+test('local foreground mode is explicit and stops on hidden/closed page',async()=>{
+  const a=await read('phase1/app.html');
+  assert.match(a,/Local Foreground Mode/);
+  assert.match(a,/Live while app is open/);
+  assert.match(a,/Background monitoring/);
+  assert.match(a,/Not enabled/);
+  assert.match(a,/Push notifications/);
+  assert.match(a,/Not configured/);
+  assert.match(a,/Binance Public API/);
+  assert.match(a,/foregroundActive=false/);
+  assert.match(a,/visibilitychange/);
+  assert.match(a,/pagehide/);
+  assert.match(a,/clearLiveView\(\)/);
+  assert.match(a,/lastConnection/);
+  assert.doesNotMatch(a,/apiSignals\(/);
+  assert.doesNotMatch(a,/apiNotifications\(/);
+});
+
+test('local API defaults to loopback while remaining configurable',async()=>{
+  const a=await read('phase1/phase2-api.mjs');
+  assert.match(a,/LOCAL_API_ORIGIN='http:\/\/127\.0\.0\.1:8787'/);
+  assert.match(a,/localStorage\.getItem\(BASE_KEY\)\|\|defaultBaseUrl\(\)/);
+  assert.match(a,/export function setBaseUrl/);
+});
+
 test('service worker caches shell but does not cache exchange API responses',async()=>{
   const sw=await read('phase1/sw.js');
   assert.match(sw,/caches\.open\(CACHE_NAME\)/);
