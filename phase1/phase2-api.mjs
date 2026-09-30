@@ -18,7 +18,7 @@ export function getBaseUrl(){
 }
 export function setBaseUrl(v){
   const clean=String(v||'').trim().replace(/\/+$/,'');
-  if(typeof localStorage!=='undefined')localStorage.setItem(BASE_KEY,clean||window.location.origin);
+  if(typeof localStorage!=='undefined')localStorage.setItem(BASE_KEY,clean||defaultBaseUrl());
   return getBaseUrl();
 }
 export function getSessionToken(){
