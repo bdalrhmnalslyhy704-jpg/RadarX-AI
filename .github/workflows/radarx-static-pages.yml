@@ -1,0 +1,65 @@
+name: RadarX Static PWA — Pages + Validation
+
+on:
+  push:
+    branches:
+      - pages-static-pwa
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "radarx-pages"
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: npm test + npm audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout static branch
+        uses: actions/checkout@v4
+      - name: Fetch Phase 1 source for validation only
+        run: |
+          git fetch --depth=1 origin phase1-pwa-mobile-installable:refs/remotes/origin/phase1-pwa-mobile-installable
+          git checkout origin/phase1-pwa-mobile-installable -- package.json package-lock.json phase1
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies from lockfile
+        run: npm ci --ignore-scripts
+      - name: npm test
+        run: |
+          npm pkg set scripts.test="node --test phase1/tests/*.test.mjs"
+          npm test
+      - name: npm audit
+        run: npm audit --audit-level=high
+
+  deploy:
+    name: Deploy static frontend to GitHub Pages
+    needs: validate
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout static branch
+        uses: actions/checkout@v4
+      - name: Prepare static site only
+        run: |
+          rm -rf _site
+          mkdir -p _site/icons
+          cp index.html app.html manifest.json sw.js radarx-phase1-engine.mjs .nojekyll _site/
+          cp icons/*.svg _site/icons/
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
