@@ -90,3 +90,28 @@ test('real order execution stays disabled',async()=>{
   assert.doesNotMatch(a,/real_order_execution\s*[:=]\s*true/);
   assert.doesNotMatch(a,/createOrder|placeOrder|order\/cancel/i);
 });
+
+test('local foreground UI declares non-background mode and configurable local API',async()=>{
+  const a=await read('phase1/app.html');
+  assert.ok(a.includes('Local Foreground Mode'));
+  assert.ok(a.includes('Live while app is open'));
+  assert.ok(a.includes('Not enabled'));
+  assert.ok(a.includes('Not configured'));
+  assert.ok(a.includes('Binance Public API'));
+  assert.ok(a.includes('Paper Trading only'));
+  assert.ok(a.includes('visibilitychange'));
+  assert.ok(a.includes('http://127.0.0.1:8787'));
+  assert.ok(a.includes('radarx.local.last_live_connection'));
+});
+
+test('local environment disables background monitoring and push',async()=>{
+  const e=await read('phase2/deploy/local.env.example');
+  assert.match(e,/RADARX_ENV=development/);
+  assert.match(e,/RADARX_HOST=127\.0\.0\.1/);
+  assert.match(e,/RADARX_BACKGROUND_MONITOR_ENABLED=false/);
+  assert.match(e,/RADARX_PUSH_PROVIDER=none/);
+  assert.match(e,/RADARX_STAGING_TEST_PUSH_ENABLED=false/);
+  assert.match(e,/RADARX_PAPER_TRADING=true/);
+  assert.match(e,/RADARX_REAL_ORDER_EXECUTION=false/);
+  assert.match(e,/RADARX_CONFIDENCE_MODE=UNKNOWN/);
+});
