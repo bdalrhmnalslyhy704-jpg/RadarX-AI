@@ -117,16 +117,24 @@ test('fetchBackendState uses only Backend health, readiness, and signal endpoint
   assert.equal(isFreshLiveSignal(result.signal), true);
 });
 
-test('frontend no longer imports or calls Binance directly and does not keep market-data cache fallback', async () => {
+test('frontend uses the Railway Backend and never calls Binance directly', async () => {
   const html = await fs.readFile(new URL('../../index.html', import.meta.url), 'utf8');
-  assert.match(html, /radarx-backend-client\.mjs/);
-  assert.match(html, /radarx-ai-production\.up\.railway\.app/);
-  assert.doesNotMatch(html, /BinancePublicData/);
-  assert.doesNotMatch(html, /api\.binance\.com/);
-  assert.doesNotMatch(html, /data-api\.binance\.vision/);
-  assert.doesNotMatch(html, /META_KEY|radarx\.phase1\.last_success_metadata/);
-  assert.match(html, /Backend.*Connected|Backend/);
-  assert.match(html, /Background monitoring.*Not enabled/s);
-  assert.match(html, /Push notifications.*Not configured/s);
-  assert.match(html, /Trading.*Paper Signals only/s);
+
+  assert.ok(html.includes("from './radarx-backend-client.mjs'"));
+  assert.ok(html.includes('https://radarx-ai-production.up.railway.app'));
+  assert.ok(html.includes('fetchBackendState(base,symbol)'));
+  assert.ok(html.includes("'/healthz'"));
+  assert.ok(html.includes("'/readyz'"));
+  assert.ok(html.includes("'/api/signal?symbol='"));
+
+  assert.equal(html.includes('BinancePublicData'), false);
+  assert.equal(html.includes('https://api.binance.com'), false);
+  assert.equal(html.includes('https://data-api.binance.vision'), false);
+  assert.equal(html.includes('radarx.phase1.last_success_metadata'), false);
+  assert.ok(html.includes('Backend'));
+  assert.ok(html.includes('Background monitoring'));
+  assert.ok(html.includes('Not enabled'));
+  assert.ok(html.includes('Push notifications'));
+  assert.ok(html.includes('Not configured'));
+  assert.ok(html.includes('Paper Signals only'));
 });
