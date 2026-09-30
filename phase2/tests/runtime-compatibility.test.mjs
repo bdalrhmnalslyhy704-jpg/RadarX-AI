@@ -215,3 +215,42 @@ test('development foreground mode does not start the background market monitor',
     assert.equal(calls.stop,1);
   }finally{restore()}
 });
+
+
+test('local foreground backend does not start the background market monitor',async()=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'radarx-foreground-only-')),port=await freePort();
+  const restore=withEnv({
+    RADARX_ENV:'development',
+    RADARX_BACKGROUND_MONITOR_ENABLED:'false',
+    RADARX_HOST:'127.0.0.1',
+    PORT:String(port),
+    RADARX_DATA_DIR:dataDir,
+    RADARX_PAPER_TRADING:'true',
+    RADARX_REAL_ORDER_EXECUTION:'false',
+    RADARX_CONFIDENCE_MODE:'UNKNOWN'
+  });
+  let started=false, stopped=false;
+  try{
+    const server=await startServer({
+      config:{...CONFIG,environment:'development',backgroundMonitorEnabled:false,host:'127.0.0.1',port,
+        push:{...CONFIG.push,provider:'none'},
+        auth:{...CONFIG.auth,allowedOrigins:['http://127.0.0.1:5500']},
+        paper:{...CONFIG.paper,paperTrading:true,realOrderExecution:false},
+        confidenceMode:'UNKNOWN'},
+      monitorFactory:()=>({async start(){started=true},async stop(){stopped=true},health:()=>({
+        database:{state:'LIVE'},websocket:{state:'STOPPED'},rest:{state:'INIT'},monitoring:{running:false,bootstrap_done:false}
+      })}),
+      logger:{info(){},warn(){},error(){}}
+    });
+    const base='http://127.0.0.1:'+port;
+    const health=await (await fetch(base+'/healthz')).json();
+    const ready=await fetch(base+'/readyz');
+    assert.equal(started,false);
+    assert.equal(health.background_monitor.enabled,false);
+    assert.equal(health.background_monitor.mode,'FOREGROUND_API_ONLY');
+    assert.equal(ready.status,200);
+    assert.equal((await ready.json()).ready,true);
+    await server.close();
+    assert.equal(stopped,true);
+  }finally{restore();}
+});
