@@ -79,8 +79,8 @@ async function marketSnapshot(symbol) {
   const snapshotAt = Date.now();
   const [h4, h1, m15, depth, ticker] = await Promise.all([
     fetchJson('/api/v3/klines', {symbol, interval:'4h', limit:'250'}),
-    fetchJson('/api/v3/klines', {symbol, interval:'15m', limit:'250'}),
     fetchJson('/api/v3/klines', {symbol, interval:'1h', limit:'250'}),
+    fetchJson('/api/v3/klines', {symbol, interval:'15m', limit:'250'}),
     fetchJson('/api/v3/depth', {symbol, limit:'100'}),
     fetchJson('/api/v3/ticker/24hr', {symbol})
   ]);
@@ -198,7 +198,7 @@ const server = http.createServer(async (req, res) => {
       const payload = publicResult(snapshot);
       if (!payload.meta.live) {
         return json(res, 503, {
-          error: payload.signal?.data_status?.data_stale ? 'DATA_STALE' : 'DATA_SOURCE_UNAVAILABLE',
+          error: payload.signal?.data_status?.data_stale && payload.signal?.data_status?.data_valid !== false ? 'DATA_STALE' : 'DATA_SOURCE_UNAVAILABLE',
           ...payload
         });
       }
