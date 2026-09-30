@@ -53,6 +53,7 @@ Caddy يخدم PWA من `/opt/radarx/phase1/`، ويمرر API/health/readiness 
 
 ```text
 RADARX_HOST=0.0.0.0
+RADARX_BACKGROUND_MONITOR_ENABLED=true
 PORT=<operator-selected-port-from-environment>
 RADARX_DATA_DIR=/var/lib/radarx
 ```
@@ -60,6 +61,17 @@ RADARX_DATA_DIR=/var/lib/radarx
 لا تستخدم `RADARX_PORT` كمنفذ إنتاج ثابت.
 
 المنفذ الداخلي ليس واجهة عامة؛ الجدار الناري يجب أن يمنع الوصول الخارجي إليه. Caddy فقط هو الواجهة العامة.
+
+## Background Monitor Mode
+
+يُفصل تشغيل التحليل الأمامي عن مراقبة الخادم عبر:
+
+```text
+RADARX_BACKGROUND_MONITOR_ENABLED=false   # Local Foreground Mode
+RADARX_BACKGROUND_MONITOR_ENABLED=true    # Future Server Background Mode
+```
+
+في Local Foreground Mode لا يبدأ `MarketMonitor` داخل الخدمة المحلية؛ الواجهة تجلب Public REST وتحلل البيانات أثناء فتح الصفحة. في Server Background Mode يبدأ `MarketMonitor` ويستخدم Binance Public REST/WebSocket ويستمر مستقلًا عن المتصفح.
 
 ## Build / Start
 
@@ -182,6 +194,7 @@ root:root 0600
 ```text
 RADARX_ENV=staging
 RADARX_HOST=0.0.0.0
+RADARX_BACKGROUND_MONITOR_ENABLED=true
 PORT=8787
 RADARX_PUSH_PROVIDER=webpush
 RADARX_ALLOWED_ORIGINS=https://radarx.example.com
