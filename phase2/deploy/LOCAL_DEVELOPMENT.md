@@ -103,6 +103,7 @@ Copy-Item phase2/deploy/local.env.example .env.local
 ~~~text
 RADARX_ENV=development
 RADARX_HOST=127.0.0.1
+RADARX_BACKGROUND_MONITOR_ENABLED=false
 PORT=8787
 RADARX_SYMBOLS=BTCUSDT,ETHUSDT
 RADARX_PUSH_PROVIDER=none
@@ -169,14 +170,14 @@ curl.exe -fsS http://127.0.0.1:8787/readyz
 التفسير:
 
 - /healthz يعرض حالة المراقبة وDurableStore وREST/WebSocket.
-- /readyz يصبح 200 عندما تكون قاعدة البيانات LIVE ويكون Binance WebSocket أو REST في حالة LIVE.
+- في Local Foreground Mode يكون /readyz جاهزًا عندما تكون قاعدة البيانات المحلية LIVE؛ لا يشترط تشغيل MarketMonitor الخلفي.
 - عند التشغيل الأول قد تحتاج بضع ثوانٍ حتى يكتمل الاتصال بالسوق.
 
 إذا كان ready=false، تحقق من الإنترنت ثم راجع نافذة npm start.
 
 ## 7) فتح واجهة RadarX محليًا
 
-خدمة Node هي backend فقط؛ واجهة phase1 تحتاج static server منفصلًا.
+خدمة Node هنا هي Local API فقط؛ MarketMonitor الخلفي غير مفعّل في development. واجهة phase1 تشغّل التحليل الأمامي مباشرة وتحتاج static server منفصلًا.
 
 افتح نافذة طرفية ثانية:
 
