@@ -3,7 +3,7 @@ import { URL } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { evaluateSymbolSnapshot } from './engine.mjs';
 import { getReadyState } from './readiness.mjs';
-import { buildDataStatus, computeFreshness } from './freshness.mjs';
+import { buildDataStatus, buildLiveMeta, computeFreshness } from './freshness.mjs';
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = '0.0.0.0';
@@ -137,7 +137,7 @@ function publicResult(snapshot, now = Date.now()) {
     },
     meta: {
       backend:'radarx-public-backend',
-      live:freshness.live,
+      ...buildLiveMeta(freshness),
       paper_trading:true,
       real_order_execution:false,
       confidence_score:'UNKNOWN'
