@@ -30,6 +30,8 @@ jobs:
         run: npm ci
       - name: npm test
         run: npm test
+      - name: npm audit high
+        run: npm audit --omit=dev --audit-level=high
       - name: npm audit critical
         run: npm audit --omit=dev --audit-level=critical
       - name: Syntax check server.mjs
