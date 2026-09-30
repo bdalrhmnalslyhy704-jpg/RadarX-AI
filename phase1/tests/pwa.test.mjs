@@ -27,7 +27,7 @@ test('app registers service worker and exposes connection semantics',async()=>{
   assert.match(a,/navigator\.serviceWorker\.register\(['"]\.\/sw\.js['"]\)/);
   assert.match(a,/LIVE_DATA/);
   assert.match(a,/DISCONNECTED/);
-  assert.match(a,/last_successful_update/);
+  assert.match(a,/lastConnection/);
   assert.match(a,/window\.addEventListener\(['"]offline['"]/);
 });
 
@@ -65,12 +65,14 @@ test('service worker caches shell but does not cache exchange API responses',asy
   assert.doesNotMatch(sw,/\/api\/v3\/klines|\/api\/v3\/depth|ticker\/24hr/);
 });
 
-test('offline mode clears live cards and keeps historical metadata separated',async()=>{
+test('offline and page-hidden mode clears live cards and keeps last connection historical',async()=>{
   const a=await read('phase1/app.html');
   assert.match(a,/clearLiveView\(\)/);
-  assert.match(a,/setStatus\('DISCONNECTED','Disconnected'\)/);
-  assert.match(a,/last_successful_update/);
+  assert.match(a,/status\('off','Disconnected'\)/);
+  assert.match(a,/lastConnection/);
   assert.match(a,/LIVE_DATA/);
+  assert.match(a,/pagehide/);
+  assert.match(a,/visibilitychange/);
 });
 
 test('incomplete candle policy remains enforced by the engine',async()=>{
