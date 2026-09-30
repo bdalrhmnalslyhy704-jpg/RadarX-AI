@@ -1,0 +1,31 @@
+name: RadarX Public Runtime Validation
+
+on:
+  push:
+    branches:
+      - phase3-public-runtime-node-ws
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend-node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+      - name: npm test
+        run: npm test
+      - name: npm audit
+        run: npm audit --audit-level=high
+      - name: Syntax checks
+        run: |
+          node --check server.mjs
+          node --check engine.mjs
