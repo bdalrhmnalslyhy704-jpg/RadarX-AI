@@ -13,7 +13,7 @@ test('public backend is Node/WebSocket, read-only, Binance REST fallback, and ne
   assert.match(s, /\/healthz/);
   assert.match(s, /\/readyz/);
   assert.match(s, /BINANCE_BASES/);
-  assert.match(s, /https:\/\/data-api\\.binance\\.vision/);
+  assert.match(s, /https:\/\/data-api\.binance\.vision/);
   assert.match(s, /paper_trading:true/);
   assert.match(s, /real_order_execution:false/);
   assert.match(s, /confidence_score:'UNKNOWN'/);
