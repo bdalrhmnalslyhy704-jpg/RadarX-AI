@@ -2,6 +2,7 @@ import http from 'node:http';
 import { URL } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { evaluateSymbolSnapshot } from './engine.mjs';
+import { getReadyState } from './readiness.mjs';
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = '0.0.0.0';
@@ -150,14 +151,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/readyz') {
-    const ready = state.latestSuccessAt > 0 && Date.now()-state.latestSuccessAt < STALE_MS;
-    return json(res, ready ? 200 : 503, {
-      status:ready ? 'ready':'not_ready',
-      live_data_ready:ready,
-      latest_successful_update:state.latestSuccessAt || null,
-      source:state.latestSource,
-      last_error:state.lastError
-    });
+    const readiness = getReadyState(state, Date.now(), STALE_MS);
+    return json(res, readiness.statusCode, readiness.body);
   }
 
   if (url.pathname === '/api/signal') {
