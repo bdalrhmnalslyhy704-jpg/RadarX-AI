@@ -1,9 +1,16 @@
 const BASE_KEY='radarx.phase2.base_url';
 const TOKEN_KEY='radarx.phase2.session_token';
+const LOCAL_API_ORIGIN='http://127.0.0.1:8787';
+
+function defaultBaseUrl(){
+  if(typeof window==='undefined')return LOCAL_API_ORIGIN;
+  const origin=String(window.location.origin||'');
+  return /^https?:\/\/(127\\.0\\.0\\.1|localhost)(?::\\d+)?$/i.test(origin) ? LOCAL_API_ORIGIN : origin;
+}
 
 export function getBaseUrl(){
-  if(typeof localStorage==='undefined')return '';
-  return (localStorage.getItem(BASE_KEY)||window.location.origin).replace(/\/+$/,'');
+  if(typeof localStorage==='undefined')return LOCAL_API_ORIGIN;
+  return (localStorage.getItem(BASE_KEY)||defaultBaseUrl()).replace(/\/+$/,'');
 }
 export function setBaseUrl(v){
   const clean=String(v||'').trim().replace(/\/+$/,'');
