@@ -4,7 +4,7 @@
   "lang":"ar",
   "dir":"rtl",
   "display":"standalone",
-  "id":"./app.html","start_url":"./app.html",
+  "id":"./index.html","start_url":"./index.html",
   "scope":"./",
   "theme_color":"#071018",
   "background_color":"#071018",
