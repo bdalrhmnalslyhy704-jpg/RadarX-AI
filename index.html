@@ -34,7 +34,7 @@ pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-ra
 .footer{padding:18px 4px;text-align:center}.install{margin-top:10px;display:none}
 @media(max-width:760px){.controls,.grid,.metrics{grid-template-columns:1fr 1fr}.controls .wide{grid-column:1/-1}.kv{grid-template-columns:1fr}}
 @media(max-width:470px){.grid,.metrics{grid-template-columns:1fr}.top{align-items:flex-start}.status{margin-top:2px}}
-</style>
+.settings{margin-top:10px}.settings summary{cursor:pointer;font-weight:950}.settings-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px;margin-top:10px}.settings-help{margin-top:7px}@media(max-width:470px){.settings-row{grid-template-columns:1fr}}\n</style>
 </head>
 <body>
 <main>
@@ -59,7 +59,7 @@ pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-ra
   <button id="install" class="btn install" type="button">تثبيت RadarX على الهاتف</button>
 </section>
 
-<section id="cards" class="grid" aria-live="polite"></section>
+<details class="panel settings">\n  <summary>إعدادات Backend</summary>\n  <div class="settings-row">\n    <input id="apiBase" class="input" inputmode="url" aria-label="Backend Base URL">\n    <button id="saveApi" class="btn" type="button">حفظ</button>\n  </div>\n  <div class="settings-help muted">لا توجد مفاتيح سرية هنا. يجب أن يشير العنوان إلى Backend موثوق يعيد عقد RadarX نفسه.</div>\n</details>\n\n<section id="cards" class="grid" aria-live="polite"></section>
 
 <section class="panel">
   <div class="metrics">
@@ -78,12 +78,13 @@ pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-ra
 
 <section class="panel">
   <div class="kv">
+    <div><span class="muted">Backend</span><b id="backendStatus">Checking…</b></div>
+    <div><span class="muted">Data source</span><b id="dataSource">Binance Public REST via RadarX Backend</b></div>
     <div><span class="muted">Background monitoring</span><b>Not enabled</b></div>
     <div><span class="muted">Push notifications</span><b>Not configured</b></div>
-    <div><span class="muted">Trading mode</span><b>Paper Signals only</b></div>
-    <div><span class="muted">Backend status</span><b>Local backend required</b></div>
+    <div><span class="muted">Trading</span><b>Paper Signals only</b></div>
   </div>
-  <p class="muted" style="margin:10px 0 0">عند فتح الصفحة يمكن للفحص اليدوي قراءة بيانات Binance العامة مباشرة من المتصفح. لا توجد مراقبة خلفية 24/7 ولا Push في هذا الإصدار، ولا توجد أوامر تداول حقيقية.</p>
+  <p class="muted" style="margin:10px 0 0">واجهة RadarX لا تتصل بـBinance مباشرة. جميع بيانات السوق والإشارات في هذه المرحلة تمر عبر Backend Railway المحدد في الإعدادات.</p>
 </section>
 
 <section class="panel">
@@ -100,46 +101,73 @@ pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-ra
 </main>
 
 <script type="module">
-import {BinancePublicData,evaluateSymbolSnapshot,CONFIG} from './radarx-phase1-engine.mjs';
+import {
+  DEFAULT_BACKEND_BASE_URL,
+  normalizeBackendBaseUrl,
+  fetchBackendState,
+  isFreshLiveSignal,
+  classifySignalResponse
+} from './radarx-backend-client.mjs';
 
-const api=new BinancePublicData({timeoutMs:9000});
 const $=id=>document.getElementById(id);
-const META_KEY='radarx.phase1.last_success_metadata';
-let statusMode='UNKNOWN';
+const API_BASE_KEY='radarx.backend.base_url';
+let backendBaseUrl=DEFAULT_BACKEND_BASE_URL;
 let deferredInstallPrompt=null;
 
-const toNum=v=>{const x=Number(v);return Number.isFinite(x)?x:null};
-const fmtTime=ts=>ts?new Intl.DateTimeFormat('ar',{dateStyle:'medium',timeStyle:'medium'}).format(new Date(ts)):'UNKNOWN';
+function readBackendBaseUrl(){
+  try{
+    return normalizeBackendBaseUrl(localStorage.getItem(API_BASE_KEY)||DEFAULT_BACKEND_BASE_URL);
+  }catch{
+    return DEFAULT_BACKEND_BASE_URL;
+  }
+}
+function saveBackendBaseUrl(value){
+  try{localStorage.setItem(API_BASE_KEY,value)}catch{}
+}
 function setStatus(mode,text){
-  statusMode=mode;
   const el=$('status');
   el.textContent=text;
   el.className='status '+(mode==='LIVE_DATA'?'live':mode==='DISCONNECTED'?'off':'warn');
 }
-function readMetadata(){
-  try{return JSON.parse(localStorage.getItem(META_KEY)||'null')}catch{return null}
+function setBackendStatus(connected){
+  $('backendStatus').textContent=connected?'Connected':'Disconnected';
 }
-function saveMetadata(meta){
-  try{localStorage.setItem(META_KEY,JSON.stringify(meta))}catch{}
-}
-function renderHistoricalMetadata(){
-  const m=readMetadata();
-  $('last_successful_update').textContent=m?.last_successful_update?fmtTime(m.last_successful_update):'UNKNOWN';
-  $('source').textContent=m?.source||'UNKNOWN';
-}
-function clearLiveView(){
-  $('cards').innerHTML='<div class="card" style="grid-column:1/-1"><div class="state bad">DISCONNECTED</div><div style="margin-top:7px">لا توجد بيانات سوق مباشرة متاحة.</div><div class="muted" style="margin-top:5px">الواجهة تعمل من الذاكرة المحلية فقط.</div></div>';
-  $('dq').textContent='UNKNOWN';$('lq').textContent='UNKNOWN';$('risk').textContent='FAIL';
-  $('confidence').textContent='UNKNOWN — UNCALIBRATED';$('dataState').textContent='DISCONNECTED';
-  $('riskReasons').textContent='لا يمكن اعتماد إشارة جديدة أثناء انقطاع البيانات.';
+function clearLiveView(message='لا توجد بيانات سوق مباشرة متاحة.'){
+  $('cards').innerHTML='<div class="card" style="grid-column:1/-1"><div class="state off">DISCONNECTED</div><div style="margin-top:7px">'+message+'</div><div class="muted" style="margin-top:5px">لا يتم استخدام بيانات السوق المخزنة كبيانات LIVE.</div></div>';
+  $('dq').textContent='UNKNOWN';
+  $('lq').textContent='UNKNOWN';
+  $('risk').textContent='FAIL';
+  $('confidence').textContent='UNKNOWN';
+  $('dataState').textContent='DISCONNECTED';
+  $('last_successful_update').textContent='UNKNOWN';
+  $('source').textContent='UNKNOWN';
+  $('riskReasons').textContent='لا يمكن اعتماد إشارة جديدة دون Backend وبيانات حديثة صالحة.';
   $('json').textContent='UNKNOWN';
+}
+function renderDataStale(reason='SNAPSHOT_STALE'){
+  $('cards').innerHTML='<div class="card" style="grid-column:1/-1"><div class="state warn">DATA_STALE</div><div style="margin-top:7px">آخر snapshot غير صالح للعرض كبيانات مباشرة.</div><div class="muted" style="margin-top:5px">'+String(reason)+'</div></div>';
+  $('dq').textContent='UNKNOWN';
+  $('lq').textContent='UNKNOWN';
+  $('risk').textContent='UNKNOWN';
+  $('confidence').textContent='UNKNOWN';
+  $('dataState').textContent='DATA_STALE';
+  $('last_successful_update').textContent='UNKNOWN';
+  $('source').textContent='UNKNOWN';
+  $('riskReasons').textContent='يتم رفض عرض snapshot قديم كبيانات LIVE.';
+  $('json').textContent=JSON.stringify({status:'DATA_STALE',reason},null,2);
+  $('offlineBanner').hidden=false;
 }
 function scoreCard(name,score,state,direction){
   const n=Number.isFinite(score)?score:0;
   const cls=state==='CONFIRMED'?'live':state==='REJECTED'?'off':'warn';
   return '<article class="card"><div class="name">'+name+'</div><div class="score">'+n.toFixed(1)+'</div><div class="scorebar"><i style="width:'+Math.max(0,Math.min(100,n))+'%"></i></div><div class="state '+cls+'">'+state+' · '+direction+'</div></article>';
 }
-function renderLive(r){
+function renderLive(response){
+  if(!isFreshLiveSignal(response)){
+    renderDataStale(response?.body?.signal?.data_status?.last_error||'LIVE_DATA_REJECTED');
+    return;
+  }
+  const r=response.body;
   const x=r.strategies;
   $('cards').innerHTML=[
     scoreCard('Multi-Timeframe Trend',x.trend.score?.trendScore,x.trend.state,x.trend.direction),
@@ -149,47 +177,110 @@ function renderLive(r){
   $('dq').textContent=String(r.signal.scores.data_quality);
   $('lq').textContent=String(r.signal.scores.liquidity_quality);
   $('risk').textContent=String(r.signal.risk_filter);
-  $('confidence').textContent='UNKNOWN — UNCALIBRATED';
+  $('confidence').textContent='UNKNOWN';
   $('dataState').textContent='LIVE_DATA';
+  $('last_successful_update').textContent=r.signal.data_status?.latest_successful_update?new Intl.DateTimeFormat('ar',{dateStyle:'medium',timeStyle:'medium'}).format(new Date(r.signal.data_status.latest_successful_update)):'UNKNOWN';
+  $('source').textContent=r.signal.data_status?.source||'UNKNOWN';
+  $('dataSource').textContent='Binance Public REST via RadarX Backend';
   $('riskReasons').textContent=(r.signal.risk_reasons||[]).join(' · ')||'لا توجد ملاحظات مخاطر إضافية.';
   $('json').textContent=JSON.stringify(r.signal,null,2);
   $('offlineBanner').hidden=true;
+  setStatus('LIVE_DATA','LIVE DATA');
 }
 async function scan(){
-  if(!navigator.onLine){setStatus('DISCONNECTED','Disconnected');$('offlineBanner').hidden=false;clearLiveView();renderHistoricalMetadata();return}
   const symbol=$('symbol').value.trim().toUpperCase();
-  if(!/^[A-Z0-9]{5,20}$/.test(symbol)){setStatus('UNKNOWN','رمز غير صالح');return}
-  setStatus('UNKNOWN','جلب بيانات السوق…');
-  $('dataState').textContent='FETCHING';
-  try{
-    const [h4,h1,m15,depth,ticker]=await Promise.all([
-      api.klines(symbol,'4h',250),api.klines(symbol,'1h',250),api.klines(symbol,'15m',250),api.depth(symbol,100),api.ticker24h(symbol)
-    ]);
-    if(!navigator.onLine)throw new Error('DISCONNECTED_DURING_FETCH');
-    const fee=toNum($('fee').value),slip=toNum($('slip').value);
-    const config={...CONFIG,costs:{feeRate:fee,slippageBps:slip}};
-    const now=Date.now();
-    const r=evaluateSymbolSnapshot({symbol,series4h:h4.candles,series1h:h1.candles,series15m:m15.candles,bookRaw:depth.data,ticker24hRaw:ticker.data,source:'BINANCE_PUBLIC_REST',now},{config});
-    saveMetadata({last_successful_update:now,source:'BINANCE_PUBLIC_REST'});
-    renderLive(r);renderHistoricalMetadata();setStatus('LIVE_DATA','LIVE DATA');
-  }catch(e){
-    const offline=!navigator.onLine||/DISCONNECTED|TIMEOUT|ALL_DATA_SOURCES_FAILED/.test(String(e?.message||e));
-    if(offline){setStatus('DISCONNECTED','Disconnected');$('offlineBanner').hidden=false;clearLiveView();renderHistoricalMetadata()}
-    else{setStatus('UNKNOWN','البيانات غير متاحة');$('dataState').textContent='DATA_UNAVAILABLE';$('json').textContent='UNKNOWN'}
+  if(!/^[A-Z0-9]{5,20}$/.test(symbol)){
+    setStatus('UNKNOWN','رمز غير صالح');
+    return;
   }
+
+  const base=readBackendBaseUrl();
+  backendBaseUrl=base;
+  $('apiBase').value=base;
+  setStatus('UNKNOWN','الاتصال بـBackend…');
+  $('dataState').textContent='FETCHING';
+  $('offlineBanner').hidden=true;
+
+  const state=await fetchBackendState(base,symbol);
+
+  setBackendStatus(state.health.status===200);
+
+  const readinessStale=state.readiness.status===503 ||
+    state.readiness.body?.data_stale===true ||
+    state.readiness.body?.reason==='SNAPSHOT_STALE';
+
+  const mode=classifySignalResponse(state.signal);
+
+  if(mode==='LIVE_DATA'){
+    renderLive(state.signal);
+    return;
+  }
+
+  if(mode==='DATA_STALE' || readinessStale){
+    setStatus('UNKNOWN','DATA STALE');
+    renderDataStale(
+      state.signal.body?.signal?.data_status?.last_error ||
+      state.readiness.body?.reason ||
+      'SNAPSHOT_STALE'
+    );
+    return;
+  }
+
+  setStatus('DISCONNECTED','Disconnected');
+  clearLiveView(
+    state.signal.status===0
+      ? 'تعذر الوصول إلى Backend Railway.'
+      : 'لم يتم استلام استجابة Backend صالحة للعرض المباشر.'
+  );
 }
-window.addEventListener('online',()=>{setStatus('UNKNOWN','عاد الاتصال — اضغط فحص السوق');$('offlineBanner').hidden=true;renderHistoricalMetadata()});
-window.addEventListener('offline',()=>{setStatus('DISCONNECTED','Disconnected');$('offlineBanner').hidden=false;clearLiveView();renderHistoricalMetadata()});
+$('saveApi').addEventListener('click',()=>{
+  try{
+    const normalized=normalizeBackendBaseUrl($('apiBase').value);
+    backendBaseUrl=normalized;
+    saveBackendBaseUrl(normalized);
+    $('apiBase').value=normalized;
+    setStatus('UNKNOWN','تم حفظ Backend — جارِ الفحص…');
+    scan();
+  }catch{
+    setStatus('UNKNOWN','Backend URL غير صالح');
+  }
+});
+window.addEventListener('online',()=>scan());
+window.addEventListener('offline',()=>{
+  setBackendStatus(false);
+  setStatus('DISCONNECTED','Disconnected');
+  $('offlineBanner').hidden=false;
+  clearLiveView();
+});
 
 if('serviceWorker' in navigator){
   navigator.serviceWorker.register('./sw.js').catch(()=>{});
 }
-window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstallPrompt=e;$('install').style.display='block'});
-$('install').addEventListener('click',async()=>{if(!deferredInstallPrompt)return;deferredInstallPrompt.prompt();await deferredInstallPrompt.userChoice;deferredInstallPrompt=null;$('install').style.display='none'});
+window.addEventListener('beforeinstallprompt',e=>{
+  e.preventDefault();
+  deferredInstallPrompt=e;
+  $('install').style.display='block';
+});
+$('install').addEventListener('click',async()=>{
+  if(!deferredInstallPrompt)return;
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt=null;
+  $('install').style.display='none';
+});
 
+backendBaseUrl=readBackendBaseUrl();
+$('apiBase').value=backendBaseUrl;
 $('scan').addEventListener('click',scan);
-renderHistoricalMetadata();
-if(navigator.onLine)scan();else{setStatus('DISCONNECTED','Disconnected');$('offlineBanner').hidden=false;clearLiveView()}
+
+if(navigator.onLine){
+  scan();
+}else{
+  setBackendStatus(false);
+  setStatus('DISCONNECTED','Disconnected');
+  $('offlineBanner').hidden=false;
+  clearLiveView();
+}
 </script>
 </body>
 </html>
