@@ -132,7 +132,7 @@ function card(title,score,state,dir){const s=n(score)||0;return '<article class=
 function clearLiveView(){
   $('cards').innerHTML='';
   $('dq').textContent='UNKNOWN';$('lq').textContent='UNKNOWN';$('risk').textContent='UNKNOWN';$('json').textContent='UNKNOWN';
-  $('wsMsg').textContent='UNKNOWN';$('candle').textContent='UNKNOWN';$('analysis').textContent='UNKNOWN';
+  $('wsMsg').textContent='UNKNOWN';$('candle').textContent='UNKNOWN';$('analysis').textContent='UNKNOWN';$('signals').innerHTML='';
 }
 
 function renderPaperSignal(signal){
@@ -235,7 +235,6 @@ function startForeground(){
   $('sourceState').textContent='Binance Public API';
   $('apiBaseLabel').textContent=getBaseUrl();
   $('lastConnection').textContent=lastLiveAt?fmt(lastLiveAt):'UNKNOWN';
-  $('lastConnection').textContent=fmt(lastLiveAt);
   status('warn','Starting foreground scan…');
   if(foregroundTimer)clearInterval(foregroundTimer);
   if(backendTimer)clearInterval(backendTimer);
