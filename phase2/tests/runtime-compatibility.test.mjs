@@ -112,6 +112,46 @@ test('server binds locally on 127.0.0.1 and health/readiness succeed',async()=>{
   await startAndCheck({host:'127.0.0.1',port:await freePort()});
 });
 
+test('development local mode does not start background monitor and readyz remains available',async()=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'radarx-foreground-only-')),port=await freePort();
+  const restore=withEnv({
+    RADARX_ENV:'development',
+    RADARX_BACKGROUND_MONITOR_ENABLED:'false',
+    RADARX_HOST:'127.0.0.1',
+    PORT:String(port),
+    RADARX_DATA_DIR:dataDir,
+    RADARX_PAPER_TRADING:'true',
+    RADARX_REAL_ORDER_EXECUTION:'false',
+    RADARX_CONFIDENCE_MODE:'UNKNOWN'
+  });
+  let started;
+  try{
+    const localConfig={...CONFIG,environment:'development',backgroundMonitorEnabled:false,host:'127.0.0.1',port,
+      paper:{...CONFIG.paper,paperTrading:true,realOrderExecution:false},
+      push:{...CONFIG.push,provider:'none'},
+      auth:{...CONFIG.auth,secret:'',allowedOrigins:[]},
+      staging:{...CONFIG.staging,testPushEnabled:false}};
+    const fake={
+      start(){throw new Error('BACKGROUND_MONITOR_MUST_NOT_START_IN_LOCAL_MODE');},
+      async stop(){},
+      async health(){return{database:{state:'LIVE'},websocket:{state:'STOPPED'},rest:{state:'INIT'},monitoring:{running:false,bootstrap_done:false}};}
+    };
+    started=await startServer({config:localConfig,monitorFactory:()=>fake,logger:{info(){},warn(){},error(){}}});
+    const health=await fetch('http://127.0.0.1:'+port+'/healthz');
+    const ready=await fetch('http://127.0.0.1:'+port+'/readyz');
+    assert.equal(health.status,200);
+    assert.equal(ready.status,200);
+    const hj=await health.json(),rj=await ready.json();
+    assert.equal(hj.background_monitor.enabled,false);
+    assert.equal(hj.background_monitor.mode,'FOREGROUND_API_ONLY');
+    assert.equal(rj.ready,true);
+    assert.equal(rj.health.monitoring.running,false);
+  }finally{
+    await started?.close();
+    restore();
+  }
+});
+
 test('server binds on 0.0.0.0 with staging PORT and health/readiness succeed',async()=>{
   await startAndCheck({host:'0.0.0.0',port:await freePort()});
 });
