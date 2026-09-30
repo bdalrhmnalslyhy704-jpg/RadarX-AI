@@ -3,6 +3,7 @@ import { URL } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { evaluateSymbolSnapshot } from './engine.mjs';
 import { getReadyState } from './readiness.mjs';
+import { buildDataStatus, computeFreshness } from './freshness.mjs';
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = '0.0.0.0';
@@ -22,6 +23,8 @@ const BINANCE_BASES = [
 const state = {
   startedAt: Date.now(),
   latestSuccessAt: 0,
+  latestDataValid: false,
+  latestClosedCandle: null,
   latestSource: null,
   lastError: null
 };
@@ -55,7 +58,6 @@ async function fetchJson(path, query) {
         });
         if (!response.ok) throw new Error('HTTP_' + response.status);
         const data = await response.json();
-        state.latestSource = base;
         return { data, source: base };
       } finally {
         clearTimeout(timer);
@@ -74,14 +76,17 @@ const normalizeKline = (x) => ({
 });
 
 async function marketSnapshot(symbol) {
+  const snapshotAt = Date.now();
   const [h4, h1, m15, depth, ticker] = await Promise.all([
     fetchJson('/api/v3/klines', {symbol, interval:'4h', limit:'250'}),
-    fetchJson('/api/v3/klines', {symbol, interval:'1h', limit:'250'}),
     fetchJson('/api/v3/klines', {symbol, interval:'15m', limit:'250'}),
+    fetchJson('/api/v3/klines', {symbol, interval:'1h', limit:'250'}),
     fetchJson('/api/v3/depth', {symbol, limit:'100'}),
     fetchJson('/api/v3/ticker/24hr', {symbol})
   ]);
 
+  const uniqueSources = [...new Set([h4.source, h1.source, m15.source, depth.source, ticker.source])];
+  const snapshotSource = uniqueSources.length === 1 ? uniqueSources[0] : 'MULTIPLE_BINANCE_REST';
   const result = evaluateSymbolSnapshot({
     symbol,
     series4h:h4.data.map(normalizeKline),
@@ -89,33 +94,63 @@ async function marketSnapshot(symbol) {
     series15m:m15.data.map(normalizeKline),
     bookRaw:depth.data,
     ticker24hRaw:ticker.data,
-    source:'BINANCE_PUBLIC_REST',
-    now:Date.now()
+    source:snapshotSource,
+    now:snapshotAt
   });
+  const dataValid = result.diagnostics?.dataValid === true;
+  const latestClosedCandle = result.diagnostics?.latestClosed15m ?? null;
+  const lastError = dataValid ? null : 'INVALID_MARKET_DATA';
 
-  state.latestSuccessAt = Date.now();
-  state.lastError = null;
-  return result;
+  state.latestSuccessAt = snapshotAt;
+  state.latestDataValid = dataValid;
+  state.latestClosedCandle = latestClosedCandle;
+  state.latestSource = snapshotSource;
+  state.lastError = lastError;
+
+  return { result, snapshotAt, dataValid, latestClosedCandle, source:snapshotSource, lastError };
 }
 
-function publicResult(result) {
-  return {
+function publicResult(snapshot, now = Date.now()) {
+  const result = snapshot.result;
+  const freshness = computeFreshness({
+    latestSuccessAt: snapshot.snapshotAt,
+    latestDataValid: snapshot.dataValid,
+    latestClosedCandle: snapshot.latestClosedCandle,
+    source: snapshot.source,
+    lastError: snapshot.lastError
+  }, now, STALE_MS);
+  const signalDataStatus = buildDataStatus({
+    base: result.signal?.data_status ?? {},
+    latestSuccessAt: snapshot.snapshotAt,
+    latestDataValid: snapshot.dataValid,
+    latestClosedCandle: snapshot.latestClosedCandle,
+    source: snapshot.source,
+    lastError: snapshot.lastError,
+    now,
+    staleMs: STALE_MS
+  });
+  const payload = {
     ...result,
+    signal: {
+      ...result.signal,
+      data_status: signalDataStatus
+    },
     meta: {
       backend:'radarx-public-backend',
-      live:true,
+      live:freshness.live,
       paper_trading:true,
       real_order_execution:false,
       confidence_score:'UNKNOWN'
     }
   };
+  return payload;
 }
 
 async function refreshForSocket(ws, symbol) {
   try {
     ws.send(JSON.stringify({type:'status',status:'FETCHING',symbol,live:false}));
-    const result = await marketSnapshot(symbol);
-    ws.send(JSON.stringify({type:'signal', payload:publicResult(result)}));
+    const snapshot = await marketSnapshot(symbol);
+    ws.send(JSON.stringify({type:'signal', payload:publicResult(snapshot)}));
   } catch (error) {
     state.lastError = String(error?.message || error);
     ws.send(JSON.stringify({
@@ -159,10 +194,21 @@ const server = http.createServer(async (req, res) => {
     const symbol = normalizeSymbol(url.searchParams.get('symbol'));
     if (!symbol) return json(res, 400, {error:'INVALID_SYMBOL'});
     try {
-      return json(res, 200, publicResult(await marketSnapshot(symbol)));
+      const snapshot = await marketSnapshot(symbol);
+      const payload = publicResult(snapshot);
+      if (!payload.meta.live) {
+        return json(res, 503, {
+          error: payload.signal?.data_status?.data_stale ? 'DATA_STALE' : 'DATA_SOURCE_UNAVAILABLE',
+          ...payload
+        });
+      }
+      return json(res, 200, payload);
     } catch (error) {
       state.lastError = String(error?.message || error);
-      return json(res, 503, {error:'LIVE_DATA_UNAVAILABLE', live:false});
+      return json(res, 503, {
+        error:'DATA_SOURCE_UNAVAILABLE',
+        meta:{backend:'radarx-public-backend',live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}
+      });
     }
   }
 
