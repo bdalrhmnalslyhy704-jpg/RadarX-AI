@@ -34,7 +34,8 @@ pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-ra
 .footer{padding:18px 4px;text-align:center}.install{margin-top:10px;display:none}
 @media(max-width:760px){.controls,.grid,.metrics{grid-template-columns:1fr 1fr}.controls .wide{grid-column:1/-1}.kv{grid-template-columns:1fr}}
 @media(max-width:470px){.grid,.metrics{grid-template-columns:1fr}.top{align-items:flex-start}.status{margin-top:2px}}
-.settings{margin-top:10px}.settings summary{cursor:pointer;font-weight:950}.settings-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px;margin-top:10px}.settings-help{margin-top:7px}@media(max-width:470px){.settings-row{grid-template-columns:1fr}}\n</style>
+.settings{margin-top:10px}.settings summary{cursor:pointer;font-weight:950}.settings-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px;margin-top:10px}.settings-help{margin-top:7px}@media(max-width:470px){.settings-row{grid-template-columns:1fr}}
+</style>
 </head>
 <body>
 <main>
@@ -59,7 +60,16 @@ pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-ra
   <button id="install" class="btn install" type="button">تثبيت RadarX على الهاتف</button>
 </section>
 
-<details class="panel settings">\n  <summary>إعدادات Backend</summary>\n  <div class="settings-row">\n    <input id="apiBase" class="input" inputmode="url" aria-label="Backend Base URL">\n    <button id="saveApi" class="btn" type="button">حفظ</button>\n  </div>\n  <div class="settings-help muted">لا توجد مفاتيح سرية هنا. يجب أن يشير العنوان إلى Backend موثوق يعيد عقد RadarX نفسه.</div>\n</details>\n\n<section id="cards" class="grid" aria-live="polite"></section>
+<details class="panel settings">
+  <summary>إعدادات Backend</summary>
+  <div class="settings-row">
+    <input id="apiBase" class="input" inputmode="url" aria-label="Backend Base URL">
+    <button id="saveApi" class="btn" type="button">حفظ</button>
+  </div>
+  <div class="settings-help muted">لا توجد مفاتيح سرية هنا. يجب أن يشير العنوان إلى Backend موثوق يعيد عقد RadarX نفسه.</div>
+</details>
+
+<section id="cards" class="grid" aria-live="polite"></section>
 
 <section class="panel">
   <div class="metrics">
