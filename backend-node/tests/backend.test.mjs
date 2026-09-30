@@ -138,7 +138,7 @@ test('readiness contract has no HTTP 503 + ready combination', () => {
     {latestSuccessAt:0,latestDataValid:false,lastError:null}
   ]) {
     const r = getReadyState(state, now);
-    assert.equal(r.status === 'ready', r.statusCode === 200);
+    assert.equal(r.body.status === 'ready', r.statusCode === 200);
     assert.equal(r.statusCode === 503 ? r.body.status : r.body.status, r.body.status);
     assert.notEqual(r.statusCode === 503 && r.body.status === 'ready', true);
   }
