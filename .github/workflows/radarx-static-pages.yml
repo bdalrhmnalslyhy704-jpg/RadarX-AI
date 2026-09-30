@@ -24,7 +24,7 @@ jobs:
       - name: Fetch Phase 1 source for validation only
         run: |
           git fetch --depth=1 origin phase1-pwa-mobile-installable:refs/remotes/origin/phase1-pwa-mobile-installable
-          git checkout origin/phase1-pwa-mobile-installable -- package.json package-lock.json phase1
+          git checkout origin/phase1-pwa-mobile-installable -- package.json phase1
           cp app.html phase1/app.html
           cp manifest.json phase1/manifest.json
           cp sw.js phase1/sw.js
@@ -36,6 +36,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Generate temporary lockfile
+        run: npm install --package-lock-only --ignore-scripts
       - name: Install dependencies from lockfile
         run: npm ci --ignore-scripts
       - name: npm test
