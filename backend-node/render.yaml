@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: radarx-public-backend
+    runtime: node
+    rootDir: backend-node
+    buildCommand: npm ci
+    startCommand: npm start
+    plan: free
+    healthCheckPath: /healthz
