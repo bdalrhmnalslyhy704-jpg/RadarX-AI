@@ -9,6 +9,7 @@ const list = (v, d) => {
 
 export const CONFIG = Object.freeze({
   environment: (process.env.RADARX_ENV ?? 'development').toLowerCase(),
+  backgroundMonitorEnabled: String(process.env.RADARX_BACKGROUND_MONITOR_ENABLED ?? ((process.env.RADARX_ENV ?? 'development').toLowerCase() !== 'development')).toLowerCase() === 'true',
   confidenceMode: String(process.env.RADARX_CONFIDENCE_MODE ?? 'UNKNOWN').toUpperCase(),
   host: resolveHost(process.env),
   port: resolvePort(process.env),

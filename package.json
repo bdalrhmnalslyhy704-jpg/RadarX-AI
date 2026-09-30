@@ -7,7 +7,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "start": "node phase2/server.mjs",
+    "start": "node --env-file-if-exists=.env.local phase2/server.mjs",
     "test:all": "node --test phase1/tests/*.test.mjs phase2/tests/*.test.mjs",
     "test:phase2": "node --test phase2/tests/*.test.mjs",
     "issue-token": "node phase2/tools/issue-token.mjs",

@@ -27,8 +27,33 @@ test('app registers service worker and exposes connection semantics',async()=>{
   assert.match(a,/navigator\.serviceWorker\.register\(['"]\.\/sw\.js['"]\)/);
   assert.match(a,/LIVE_DATA/);
   assert.match(a,/DISCONNECTED/);
-  assert.match(a,/last_successful_update/);
+  assert.match(a,/lastConnection/);
   assert.match(a,/window\.addEventListener\(['"]offline['"]/);
+});
+
+test('local foreground mode is explicit and stops on hidden/closed page',async()=>{
+  const a=await read('phase1/app.html');
+  assert.match(a,/Local Foreground Mode/);
+  assert.match(a,/Live while app is open/);
+  assert.match(a,/Background monitoring/);
+  assert.match(a,/Not enabled/);
+  assert.match(a,/Push notifications/);
+  assert.match(a,/Not configured/);
+  assert.match(a,/Binance Public API/);
+  assert.match(a,/foregroundActive=false/);
+  assert.match(a,/visibilitychange/);
+  assert.match(a,/pagehide/);
+  assert.match(a,/clearLiveView\(\)/);
+  assert.match(a,/lastConnection/);
+  assert.doesNotMatch(a,/apiSignals\(/);
+  assert.doesNotMatch(a,/apiNotifications\(/);
+});
+
+test('local API defaults to loopback while remaining configurable',async()=>{
+  const a=await read('phase1/phase2-api.mjs');
+  assert.match(a,/LOCAL_API_ORIGIN='http:\/\/127\.0\.0\.1:8787'/);
+  assert.match(a,/localStorage\.getItem\(BASE_KEY\)\|\|defaultBaseUrl\(\)/);
+  assert.match(a,/export function setBaseUrl/);
 });
 
 test('service worker caches shell but does not cache exchange API responses',async()=>{
@@ -40,12 +65,14 @@ test('service worker caches shell but does not cache exchange API responses',asy
   assert.doesNotMatch(sw,/\/api\/v3\/klines|\/api\/v3\/depth|ticker\/24hr/);
 });
 
-test('offline mode clears live cards and keeps historical metadata separated',async()=>{
+test('offline and page-hidden mode clears live cards and keeps last connection historical',async()=>{
   const a=await read('phase1/app.html');
   assert.match(a,/clearLiveView\(\)/);
-  assert.match(a,/setStatus\('DISCONNECTED','Disconnected'\)/);
-  assert.match(a,/last_successful_update/);
+  assert.match(a,/status\('off','DISCONNECTED'\)/);
+  assert.match(a,/lastConnection/);
   assert.match(a,/LIVE_DATA/);
+  assert.match(a,/pagehide/);
+  assert.match(a,/visibilitychange/);
 });
 
 test('incomplete candle policy remains enforced by the engine',async()=>{
@@ -62,4 +89,29 @@ test('real order execution stays disabled',async()=>{
   assert.match(e,/allowsTradeEndpoints:false/);
   assert.doesNotMatch(a,/real_order_execution\s*[:=]\s*true/);
   assert.doesNotMatch(a,/createOrder|placeOrder|order\/cancel/i);
+});
+
+test('local foreground UI declares non-background mode and configurable local API',async()=>{
+  const a=await read('phase1/app.html');
+  assert.ok(a.includes('Local Foreground Mode'));
+  assert.ok(a.includes('Live while app is open'));
+  assert.ok(a.includes('Not enabled'));
+  assert.ok(a.includes('Not configured'));
+  assert.ok(a.includes('Binance Public API'));
+  assert.ok(a.includes('Paper Trading only'));
+  assert.ok(a.includes('visibilitychange'));
+  assert.ok(a.includes('http://127.0.0.1:8787'));
+  assert.ok(a.includes('radarx.local.last_live_connection'));
+});
+
+test('local environment disables background monitoring and push',async()=>{
+  const e=await read('phase2/deploy/local.env.example');
+  assert.match(e,/RADARX_ENV=development/);
+  assert.match(e,/RADARX_HOST=127\.0\.0\.1/);
+  assert.match(e,/RADARX_BACKGROUND_MONITOR_ENABLED=false/);
+  assert.match(e,/RADARX_PUSH_PROVIDER=none/);
+  assert.match(e,/RADARX_STAGING_TEST_PUSH_ENABLED=false/);
+  assert.match(e,/RADARX_PAPER_TRADING=true/);
+  assert.match(e,/RADARX_REAL_ORDER_EXECUTION=false/);
+  assert.match(e,/RADARX_CONFIDENCE_MODE=UNKNOWN/);
 });

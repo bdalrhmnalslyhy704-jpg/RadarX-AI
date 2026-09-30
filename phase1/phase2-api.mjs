@@ -1,13 +1,24 @@
 const BASE_KEY='radarx.phase2.base_url';
 const TOKEN_KEY='radarx.phase2.session_token';
+const LOCAL_API_ORIGIN='http://127.0.0.1:8787';
+
+function defaultBaseUrl(){
+  if(typeof window==='undefined')return LOCAL_API_ORIGIN;
+  const origin=String(window.location.origin||'');
+  try{
+    const u=new URL(origin);
+    if(u.hostname==='127.0.0.1'||u.hostname==='localhost'||u.hostname==='::1') return LOCAL_API_ORIGIN;
+  }catch{}
+  return origin;
+}
 
 export function getBaseUrl(){
-  if(typeof localStorage==='undefined')return '';
-  return (localStorage.getItem(BASE_KEY)||window.location.origin).replace(/\/+$/,'');
+  if(typeof localStorage==='undefined')return LOCAL_API_ORIGIN;
+  return (localStorage.getItem(BASE_KEY)||defaultBaseUrl()).replace(/\/+$/,'');
 }
 export function setBaseUrl(v){
   const clean=String(v||'').trim().replace(/\/+$/,'');
-  if(typeof localStorage!=='undefined')localStorage.setItem(BASE_KEY,clean||window.location.origin);
+  if(typeof localStorage!=='undefined')localStorage.setItem(BASE_KEY,clean||defaultBaseUrl());
   return getBaseUrl();
 }
 export function getSessionToken(){

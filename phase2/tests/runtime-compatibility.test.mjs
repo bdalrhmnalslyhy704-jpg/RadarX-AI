@@ -27,7 +27,7 @@ function withEnv(values){
 
 function safeStagingConfig(host,port,dataDir){
   return {...CONFIG,
-    environment:'staging',host,port,confidenceMode:'UNKNOWN',
+    environment:'staging',backgroundMonitorEnabled:true,host,port,confidenceMode:'UNKNOWN',
     paper:{...CONFIG.paper,paperTrading:true,realOrderExecution:false},
     push:{...CONFIG.push,provider:'webpush',vapidSubject:'mailto:operator@example.test',vapidPublicKey:'TEST_FIXTURE_VAPID_PUBLIC',vapidPrivateKey:'TEST_FIXTURE_VAPID_PRIVATE'},
     auth:{...CONFIG.auth,secret:'TEST_FIXTURE_AUTH_SECRET_12345678901234567890',allowedOrigins:['https://staging.example.test']},
@@ -112,6 +112,46 @@ test('server binds locally on 127.0.0.1 and health/readiness succeed',async()=>{
   await startAndCheck({host:'127.0.0.1',port:await freePort()});
 });
 
+test('development local mode does not start background monitor and readyz remains available',async()=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'radarx-foreground-only-')),port=await freePort();
+  const restore=withEnv({
+    RADARX_ENV:'development',
+    RADARX_BACKGROUND_MONITOR_ENABLED:'false',
+    RADARX_HOST:'127.0.0.1',
+    PORT:String(port),
+    RADARX_DATA_DIR:dataDir,
+    RADARX_PAPER_TRADING:'true',
+    RADARX_REAL_ORDER_EXECUTION:'false',
+    RADARX_CONFIDENCE_MODE:'UNKNOWN'
+  });
+  let started;
+  try{
+    const localConfig={...CONFIG,environment:'development',backgroundMonitorEnabled:false,host:'127.0.0.1',port,
+      paper:{...CONFIG.paper,paperTrading:true,realOrderExecution:false},
+      push:{...CONFIG.push,provider:'none'},
+      auth:{...CONFIG.auth,secret:'',allowedOrigins:[]},
+      staging:{...CONFIG.staging,testPushEnabled:false}};
+    const fake={
+      start(){throw new Error('BACKGROUND_MONITOR_MUST_NOT_START_IN_LOCAL_MODE');},
+      async stop(){},
+      async health(){return{database:{state:'LIVE'},websocket:{state:'STOPPED'},rest:{state:'INIT'},monitoring:{running:false,bootstrap_done:false}};}
+    };
+    started=await startServer({config:localConfig,monitorFactory:()=>fake,logger:{info(){},warn(){},error(){}}});
+    const health=await fetch('http://127.0.0.1:'+port+'/healthz');
+    const ready=await fetch('http://127.0.0.1:'+port+'/readyz');
+    assert.equal(health.status,200);
+    assert.equal(ready.status,200);
+    const hj=await health.json(),rj=await ready.json();
+    assert.equal(hj.background_monitor.enabled,false);
+    assert.equal(hj.background_monitor.mode,'FOREGROUND_API_ONLY');
+    assert.equal(rj.ready,true);
+    assert.equal(rj.health.monitoring.running,false);
+  }finally{
+    await started?.close();
+    restore();
+  }
+});
+
 test('server binds on 0.0.0.0 with staging PORT and health/readiness succeed',async()=>{
   await startAndCheck({host:'0.0.0.0',port:await freePort()});
 });
@@ -129,7 +169,7 @@ test('readyz awaits an async monitor health result',async()=>{
   });
   try{
     const started=await startServer({
-      config:safeStagingConfig('127.0.0.1',port,dataDir),
+      config:{...safeStagingConfig('127.0.0.1',port,dataDir),backgroundMonitorEnabled:true},
       monitorFactory:()=>({
         async start(){},async stop(){},
         async health(){await new Promise(r=>setTimeout(r,5));return{
@@ -146,5 +186,71 @@ test('readyz awaits an async monitor health result',async()=>{
       assert.equal(json.ready,true);
       assert.equal(json.health.database.state,'LIVE');
     }finally{await started.close();}
+  }finally{restore();}
+});
+
+
+test('development foreground mode does not start the background market monitor',async()=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'radarx-foreground-only-')),port=await freePort();
+  const calls={start:0,stop:0};
+  const restore=withEnv({
+    RADARX_ENV:'development',RADARX_HOST:'127.0.0.1',PORT:String(port),RADARX_DATA_DIR:dataDir,
+    RADARX_PAPER_TRADING:'true',RADARX_REAL_ORDER_EXECUTION:'false',RADARX_CONFIDENCE_MODE:'UNKNOWN'
+  });
+  const config={...CONFIG,environment:'development',backgroundMonitorEnabled:false,host:'127.0.0.1',port,
+    auth:{...CONFIG.auth,allowedOrigins:[]},push:{...CONFIG.push,provider:'none'},paper:{...CONFIG.paper,paperTrading:true,realOrderExecution:false}};
+  try{
+    const started=await startServer({config,monitorFactory:()=>({
+      async start(){calls.start++},async stop(){calls.stop++},
+      health(){return{database:{state:'LIVE'},websocket:{state:'STOPPED'},rest:{state:'INIT'},monitoring:{running:false,bootstrap_done:false}}}
+    }),logger:{info(){},warn(){},error(){}}});
+    try{
+      assert.equal(calls.start,0);
+      const h=await fetch('http://127.0.0.1:'+port+'/healthz');
+      const j=await h.json();
+      assert.equal(h.status,200);
+      assert.equal(j.background_monitor.enabled,false);
+      assert.equal(j.background_monitor.mode,'FOREGROUND_API_ONLY');
+    }finally{await started.close()}
+    assert.equal(calls.stop,1);
+  }finally{restore()}
+});
+
+
+test('local foreground backend does not start the background market monitor',async()=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'radarx-foreground-only-')),port=await freePort();
+  const restore=withEnv({
+    RADARX_ENV:'development',
+    RADARX_BACKGROUND_MONITOR_ENABLED:'false',
+    RADARX_HOST:'127.0.0.1',
+    PORT:String(port),
+    RADARX_DATA_DIR:dataDir,
+    RADARX_PAPER_TRADING:'true',
+    RADARX_REAL_ORDER_EXECUTION:'false',
+    RADARX_CONFIDENCE_MODE:'UNKNOWN'
+  });
+  let started=false, stopped=false;
+  try{
+    const server=await startServer({
+      config:{...CONFIG,environment:'development',backgroundMonitorEnabled:false,host:'127.0.0.1',port,
+        push:{...CONFIG.push,provider:'none'},
+        auth:{...CONFIG.auth,allowedOrigins:['http://127.0.0.1:5500']},
+        paper:{...CONFIG.paper,paperTrading:true,realOrderExecution:false},
+        confidenceMode:'UNKNOWN'},
+      monitorFactory:()=>({async start(){started=true},async stop(){stopped=true},health:()=>({
+        database:{state:'LIVE'},websocket:{state:'STOPPED'},rest:{state:'INIT'},monitoring:{running:false,bootstrap_done:false}
+      })}),
+      logger:{info(){},warn(){},error(){}}
+    });
+    const base='http://127.0.0.1:'+port;
+    const health=await (await fetch(base+'/healthz')).json();
+    const ready=await fetch(base+'/readyz');
+    assert.equal(started,false);
+    assert.equal(health.background_monitor.enabled,false);
+    assert.equal(health.background_monitor.mode,'FOREGROUND_API_ONLY');
+    assert.equal(ready.status,200);
+    assert.equal((await ready.json()).ready,true);
+    await server.close();
+    assert.equal(stopped,true);
   }finally{restore();}
 });

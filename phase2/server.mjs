@@ -28,10 +28,11 @@ export async function startServer({
   const push=new PushManager({provider,store,deduplicator:dedup,retryBaseMs:config.monitoring.pushRetryMs,config});
   const service=new SignalService({deduplicator:dedup,store,pushManager:push,config});
   const monitor=monitorFactory({config,rest,signalService:service,store,pushManager:push,logger});
-  await monitor.start();
+  if(config.backgroundMonitorEnabled) await monitor.start();
   const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
+  logger.info('Background monitor enabled='+String(Boolean(config.backgroundMonitorEnabled)));
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
   return {server:api,monitor,store,rest,push,close:async()=>{await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
 }

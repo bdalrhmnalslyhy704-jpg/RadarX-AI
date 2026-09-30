@@ -1,18 +1,26 @@
-# Example Caddyfile for staging.
-# Replace both hostnames with real DNS names that point to this server.
-# Caddy will obtain/renew public TLS certificates automatically when DNS
-# and external ports 80/443 are correct.
+# Provider-neutral Caddy configuration for RadarX.
+# Replace the hostname only when a real deployment is ready.
+# Public edge: TCP 80/443.
+# RadarX Node: PORT supplied through /etc/radarx/radarx.env.
+# The example below assumes PORT=8787 in that environment file.
+#
+# Do not expose 8787 (or the selected PORT) through the public firewall.
+# Caddy is the only public HTTP/HTTPS entry point.
 
-radarx-staging.example.com {
-    encode gzip
+radarx.example.com {
+    encode gzip zstd
 
-    # Static PWA. /phase1/app.html maps to /opt/radarx/phase1/app.html.
-    root * /opt/radarx
-    header /phase1/sw.js Cache-Control "no-store"
-    file_server
-}
+    # PWA static files. /phase1/app.html -> /opt/radarx/phase1/app.html
+    @pwa path /phase1/*
+    handle @pwa {
+        root * /opt/radarx
+        file_server
+    }
 
-radarx-api-staging.example.com {
-    # Node stays private on 127.0.0.1:8787.
+    # Optional convenience redirect.
+    redir / /phase1/ 308
+
+    # API, /healthz, /readyz, and WebSocket traffic all use the same
+    # backend service port. reverse_proxy supports WebSocket upgrade.
     reverse_proxy 127.0.0.1:8787
 }

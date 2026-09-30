@@ -1,4 +1,4 @@
-const CACHE_NAME = 'radarx-phase2-shell-v3';
+const CACHE_NAME = 'radarx-phase2-shell-v4';
 const SHELL = [
   './app.html',
   './settings.html',
