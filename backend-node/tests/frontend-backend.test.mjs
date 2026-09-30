@@ -119,9 +119,10 @@ test('fetchBackendState uses only Backend health, readiness, and signal endpoint
 
 test('frontend uses the Railway Backend and never calls Binance directly', async () => {
   const html = await fs.readFile(new URL('../../index.html', import.meta.url), 'utf8');
+  const client = await fs.readFile(new URL('../../radarx-backend-client.mjs', import.meta.url), 'utf8');
 
   assert.ok(html.includes("from './radarx-backend-client.mjs'"));
-  assert.ok(html.includes('https://radarx-ai-production.up.railway.app'));
+  assert.ok(client.includes("https://radarx-ai-production.up.railway.app"));
   assert.ok(html.includes('fetchBackendState(base,symbol)'));
   assert.ok(html.includes("'/healthz'"));
   assert.ok(html.includes("'/readyz'"));
