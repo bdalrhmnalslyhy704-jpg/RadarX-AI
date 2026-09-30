@@ -5,7 +5,11 @@ const LOCAL_API_ORIGIN='http://127.0.0.1:8787';
 function defaultBaseUrl(){
   if(typeof window==='undefined')return LOCAL_API_ORIGIN;
   const origin=String(window.location.origin||'');
-  return /^https?:\/\/(127\\.0\\.0\\.1|localhost)(?::\\d+)?$/i.test(origin) ? LOCAL_API_ORIGIN : origin;
+  try{
+    const u=new URL(origin);
+    if(u.hostname==='127.0.0.1'||u.hostname==='localhost'||u.hostname==='::1') return LOCAL_API_ORIGIN;
+  }catch{}
+  return origin;
 }
 
 export function getBaseUrl(){
