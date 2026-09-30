@@ -40,10 +40,8 @@ jobs:
         run: npm install --package-lock-only --ignore-scripts
       - name: Install dependencies from lockfile
         run: npm ci --ignore-scripts
-      - name: npm test
-        run: |
-          npm pkg set scripts.test="node --test phase1/tests/*.test.mjs"
-          npm test
+      - name: Frontend integration tests
+        run: node --test pages-tests/*.test.mjs
       - name: npm audit
         run: npm audit --audit-level=high
 
