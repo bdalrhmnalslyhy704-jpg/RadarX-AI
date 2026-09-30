@@ -116,13 +116,14 @@ import {BinancePublicData,evaluateSymbolSnapshot,CONFIG} from './radarx-phase1-e
 import {apiHealth,apiReady,getBaseUrl} from './phase2-api.mjs';
 
 const $=id=>document.getElementById(id);
+const LAST_LIVE_KEY='radarx.local.last_live_connection';
 const api=new BinancePublicData({timeoutMs:9000});
 const fmt=ts=>ts?new Intl.DateTimeFormat('ar',{dateStyle:'medium',timeStyle:'medium'}).format(new Date(ts)):'UNKNOWN';
 const n=v=>Number.isFinite(Number(v))?Number(v):null;
 let foregroundActive=false;
 let foregroundTimer=null;
 let backendTimer=null;
-let lastLiveAt=null;
+let lastLiveAt=Number(localStorage.getItem(LAST_LIVE_KEY)||0)||null;
 let scanGeneration=0;
 
 function status(mode,text){$('status').textContent=text;$('status').className='status '+(mode==='live'?'live':mode==='off'?'off':'warn')}
@@ -233,6 +234,7 @@ function startForeground(){
   $('pushState').textContent='Not configured';
   $('sourceState').textContent='Binance Public API';
   $('apiBaseLabel').textContent=getBaseUrl();
+  $('lastConnection').textContent=lastLiveAt?fmt(lastLiveAt):'UNKNOWN';
   $('lastConnection').textContent=fmt(lastLiveAt);
   status('warn','Starting foreground scan…');
   if(foregroundTimer)clearInterval(foregroundTimer);
