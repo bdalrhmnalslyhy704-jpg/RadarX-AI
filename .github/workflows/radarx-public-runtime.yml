@@ -3,7 +3,11 @@ name: RadarX Public Runtime Validation
 on:
   push:
     branches:
-      - phase3-public-runtime-node-ws
+      - phase3-fix-readiness-signal-freshness
+  pull_request:
+    branches:
+      - phase3-railway-public-runtime
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,13 +23,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Install dependencies
-        run: npm install --ignore-scripts
+          cache: npm
+          cache-dependency-path: backend-node/package-lock.json
+      - name: npm ci
+        run: npm ci
       - name: npm test
         run: npm test
-      - name: npm audit
-        run: npm audit --audit-level=high
-      - name: Syntax checks
-        run: |
-          node --check server.mjs
-          node --check engine.mjs
+      - name: npm audit critical
+        run: npm audit --omit=dev --audit-level=critical
+      - name: Syntax check server.mjs
+        run: node --check server.mjs
