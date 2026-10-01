@@ -123,15 +123,30 @@ jobs:
         run: |
           set -euo pipefail
           echo "Setting up Android emulator on the same runner filesystem."
-          yes | sdkmanager --licenses >/dev/null
-          sdkmanager --install 'build-tools;37.0.0' platform-tools emulator 'platforms;android-29' 'system-images;android-29;default;x86_64' >/dev/null
-          echo no | avdmanager create avd --force -n radarx-ci --package 'system-images;android-29;default;x86_64'
+          export ANDROID_SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_HOME="$ANDROID_SDK_ROOT"
+          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$PATH"
+          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          AVDMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager"
+          ADB="$ANDROID_SDK_ROOT/platform-tools/adb"
+          EMULATOR="$ANDROID_SDK_ROOT/emulator/emulator"
+          for tool in "$SDKMANAGER" "$AVDMANAGER" "$ADB" "$EMULATOR"; do
+            test -x "$tool" || { echo "ERROR: required Android SDK tool missing: $tool"; exit 1; }
+          done
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "SDKMANAGER=$SDKMANAGER"
+          echo "AVDMANAGER=$AVDMANAGER"
+          echo "ADB=$ADB"
+          echo "EMULATOR=$EMULATOR"
+          yes | "$SDKMANAGER" --licenses >/dev/null
+          "$SDKMANAGER" --install 'build-tools;37.0.0' platform-tools emulator 'platforms;android-29' 'system-images;android-29;default;x86_64' >/dev/null
+          echo no | "$AVDMANAGER" create avd --force -n radarx-ci --package 'system-images;android-29;default;x86_64'
           printf 'hw.cpu.ncore=2\n' >> "$HOME/.android/avd/radarx-ci.avd/config.ini"
-          adb start-server >/dev/null
-          "$ANDROID_HOME/emulator/emulator" -avd radarx-ci -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -accel off > /tmp/radarx-emulator.log 2>&1 &
+          "$ADB" start-server >/dev/null
+          "$EMULATOR" -avd radarx-ci -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -accel off > /tmp/radarx-emulator.log 2>&1 &
           EMU_PID=$!
-          trap 'adb -s emulator-5554 emu kill >/dev/null 2>&1 || true; kill "$EMU_PID" >/dev/null 2>&1 || true' EXIT
-          adb wait-for-device
+          trap '"$ADB" -s emulator-5554 emu kill >/dev/null 2>&1 || true; kill "$EMU_PID" >/dev/null 2>&1 || true' EXIT
+          "$ADB" wait-for-device
           booted=0
           for i in $(seq 1 180); do
             if [ "$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\\r')" = "1" ]; then booted=1; break; fi
