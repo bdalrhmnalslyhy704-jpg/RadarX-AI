@@ -2,11 +2,6 @@ plugins {
     id "com.android.application"
 }
 
-def ciKeystore = System.getenv("RADARX_KEYSTORE")
-def ciStorePassword = System.getenv("RADARX_KEYSTORE_PASSWORD")
-def ciKeyAlias = System.getenv("RADARX_KEY_ALIAS")
-def ciKeyPassword = System.getenv("RADARX_KEY_PASSWORD")
-
 android {
     namespace "com.radarx.app"
     compileSdk 35
@@ -19,24 +14,11 @@ android {
         versionName "1.0.0"
     }
 
-    signingConfigs {
-        ci {
-            if (ciKeystore) {
-                storeFile file(ciKeystore)
-                storePassword ciStorePassword
-                keyAlias ciKeyAlias
-                keyPassword ciKeyPassword
-            }
-        }
-    }
-
     buildTypes {
         release {
             minifyEnabled false
             shrinkResources false
-            if (ciKeystore) {
-                signingConfig signingConfigs.ci
-            }
+            signingConfig signingConfigs.debug
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
     }
