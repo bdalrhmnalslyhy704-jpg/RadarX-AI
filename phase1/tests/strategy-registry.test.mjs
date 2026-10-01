@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { STRATEGY_REGISTRY, getStrategyDefinition, listActiveStrategies, normalizeStrategyResult } from '../strategy-registry.mjs';
 
-test('registry contains exactly the three implemented strategies as ACTIVE',()=>{
-  assert.deepEqual(listActiveStrategies().map(x=>x.id).sort(),['CONFIRMED_BREAKOUT','MEAN_REVERSION','MTF_TREND']);
-  assert.equal(Object.keys(STRATEGY_REGISTRY).length,3); for (const s of listActiveStrategies()) assert.equal(s.status,'ACTIVE');
+test('registry contains the ten implemented strategies as ACTIVE',()=>{
+  assert.deepEqual(listActiveStrategies().map(x=>x.id).sort(),['ADX_TREND_STRENGTH','ATR_EXPANSION','BOLLINGER_BAND_REVERSION','CONFIRMED_BREAKOUT','EMA_RIBBON_ALIGNMENT','MACD_TREND_CONTINUATION','MEAN_REVERSION','MTF_TREND','RELATIVE_VOLUME_SURGE','VWAP_REVERSION']);
+  assert.equal(Object.keys(STRATEGY_REGISTRY).length,10); for (const s of listActiveStrategies()) assert.equal(s.status,'ACTIVE');
 });
 test('every active strategy has evaluator',()=>{ for (const s of listActiveStrategies()) assert.equal(typeof s.evaluator,'function'); });
 test('every active strategy has requiredData',()=>{ for (const s of listActiveStrategies()) assert.ok(s.requiredData.length>0); });
@@ -34,6 +34,7 @@ test('failed hard gate suppresses score even with a high evaluator score',()=>{
 test('unimplemented strategy cannot be marked ACTIVE or normalized',()=>{
   assert.throws(()=>getStrategyDefinition('FUTURE_STRATEGY'),/STRATEGY_NOT_ACTIVE/); assert.equal(listActiveStrategies().some(x=>x.id==='FUTURE_STRATEGY'),false);
 });
+
 test('common contract preserves paper-only invariants',()=>{
   const o=normalizeStrategyResult('MTF_TREND',{direction:'LONG',state:'CANDIDATE',score:{trendScore:70},evidence:{},reasonCodes:['TREND_OK']},{coverage:1,hardGatesPassed:true,dataQuality:88});
   assert.equal(o.paper_trading,true); assert.equal(o.real_order_execution,false); assert.equal(o.confidence_score,'UNKNOWN');
