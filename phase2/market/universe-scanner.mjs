@@ -244,6 +244,7 @@ export function buildCandidateContract({
   if (future) hardGateReasons.push('FUTURE_DATA');
   if (stale) hardGateReasons.push('STALE_DATA');
   if (!v4.valid || !v1.valid || !v15.valid) hardGateReasons.push('CANDLE_INTEGRITY_FAILURE');
+  if (!liquidity.allowed) hardGateReasons.push('LIQUIDITY_GATE_FAILED');
   if (liquidity.quality < minLiquidityQuality) hardGateReasons.push('LOW_LIQUIDITY');
   if (!deep.success) hardGateReasons.push('DEEP_SCAN_FAILED');
 
@@ -251,6 +252,7 @@ export function buildCandidateContract({
     seriesComplete &&
     !future &&
     !stale &&
+    liquidity.allowed === true &&
     liquidity.quality >= minLiquidityQuality &&
     dataQuality >= minDataQuality;
 
@@ -543,8 +545,9 @@ export class MarketUniverseScanner {
     const liquidity = this.computeLiquidity(depthRaw, ticker);
     let evaluation = null;
     if (deepSuccess) {
-      const engineConfig = this.strategyConfig;
-      evaluation = this.strategyEvaluator({
+      try {
+        const engineConfig = this.strategyConfig;
+        evaluation = this.strategyEvaluator({
         symbol: ticker.symbol,
         series4h: series['4h'],
         series1h: series['1h'],
@@ -556,7 +559,10 @@ export class MarketUniverseScanner {
         },
         source: 'BINANCE_PUBLIC_REST',
         now: completedAt
-      }, engineConfig ? { config: engineConfig } : undefined);
+        }, engineConfig ? { config: engineConfig } : undefined);
+      } catch (e) {
+        error = e;
+      }
     }
 
     const fetchAges = ['4h', '1h', '15m']

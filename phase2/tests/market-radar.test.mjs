@@ -68,8 +68,8 @@ function makeRest({wideSpread=false}={}) {
     depth:async(symbol)=>{
       calls.push({type:'depth',symbol});
       return {source:'TEST',data:{
-        bids:[['100','10000']],
-        asks:[[wideSpread?'100.5':'100.01','10000']]
+        bids:[['100',wideSpread?'10':'10000']],
+        asks:[[wideSpread?'100.5':'100.01',wideSpread?'10':'10000']]
       }};
     }
   };
@@ -190,6 +190,7 @@ test('candidate contract preserves paper-only policy and evidence',async()=>{
   assert.ok(c.reason_codes.length>0);
   assert.ok(c.invalidation.length>0);
   assert.equal(c.data_status.data_valid,true);
+  assert.equal(result.meta.live,true);
 });
 
 test('scanner exposes no execution fields and uses no synthetic fallback values',()=>{
