@@ -142,7 +142,7 @@ public final class MainActivity extends Activity {
                 + "button{width:100%;min-height:50px;border:1px solid #2a4c58;border-radius:12px;background:#08131a;color:#fff;font:inherit;font-weight:900;margin-top:14px}</style>"
                 + "<div class='card'><h2>RadarX</h2><p>" + message + "</p>"
                 + "<p>تعذر الاتصال بالخادم، تحقق من الإنترنت</p>"
-                + "<button onclick="location.href='" + APP_URL + "'">إعادة المحاولة</button></div></html>";
+                + "<button onclick=\"location.href='" + APP_URL + "'\">إعادة المحاولة</button></div></html>";
         webView.loadDataWithBaseURL(APP_URL, html, "text/html", "UTF-8", null);
     }
 
