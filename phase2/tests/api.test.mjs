@@ -76,6 +76,7 @@ async function startTestApi(store,extraConfig={}){
   const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
   const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider()});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  server.unref();
   return {server,base:'http://127.0.0.1:'+server.address().port};
 }
 
