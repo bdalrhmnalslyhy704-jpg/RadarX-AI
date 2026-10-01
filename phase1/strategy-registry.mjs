@@ -3,6 +3,15 @@ import {
   evaluateBreakout,
   evaluateMeanReversion
 } from './radarx-phase1-engine.mjs';
+import {
+  evaluateEMARibbonAlignment,
+  evaluateADXTrendStrength,
+  evaluateMACDTrendContinuation,
+  evaluateBollingerBandReversion,
+  evaluateVWAPReversion,
+  evaluateRelativeVolumeSurge,
+  evaluateATRExpansion
+} from './strategy-batch1.mjs';
 
 const ACTIVE = 'ACTIVE';
 
@@ -33,6 +42,69 @@ const STRATEGY_REGISTRY = Object.freeze({
     reasonCodes: Object.freeze(['OVERSOLD','OVERBOUGHT','LOWER_BAND','UPPER_BAND','REGIME_FILTER_OK','REVERSAL_OK','BEARISH_REVERSAL','PANIC_SELL_FILTER','MEAN_REVERSION_FILTER_NOT_MET','INSUFFICIENT_CLOSED_DATA']),
     invalidationRules: Object.freeze(['CLOSED_TRIGGER_CANDLE_REQUIRED','FRESH_VALID_MARKET_DATA_REQUIRED','PANIC_SELL_FILTER','PRICE_STOP_LOSS']),
     testReference: 'phase1/tests/engine.test.mjs'
+  }),
+  EMA_RIBBON_ALIGNMENT: Object.freeze({
+    id: 'EMA_RIBBON_ALIGNMENT', name: 'EMA Ribbon Alignment', family: 'TREND_FOLLOWING', status: ACTIVE,
+    requiredData: Object.freeze(['1h', 'EMA20', 'EMA50', 'EMA100', 'EMA200']), evaluator: evaluateEMARibbonAlignment,
+    scoreDimensions: Object.freeze(['alignment','separation','priceLocation']),
+    hardGates: Object.freeze(['CLOSED_1H_DATA','VALID_SERIES','FRESH_DATA','NO_FUTURE_DATA','MIN_HISTORY','RIBBON_SEPARATION']),
+    reasonCodes: Object.freeze(['BULLISH_RIBBON','BEARISH_RIBBON','EMA20_ABOVE_50_ABOVE_100_ABOVE_200','EMA20_BELOW_50_BELOW_100_BELOW_200','PRICE_ABOVE_RIBBON','PRICE_BELOW_RIBBON','RIBBON_SEPARATION_TOO_SMALL','RIBBON_ALIGNMENT_NOT_MET','INSUFFICIENT_DATA']),
+    invalidationRules: Object.freeze(['CLOSED_CANDLE_REQUIRED','RIBBON_ALIGNMENT_LOST','FRESH_DATA_REQUIRED']),
+    testReference: 'phase1/tests/strategy-batch1.test.mjs'
+  }),
+  ADX_TREND_STRENGTH: Object.freeze({
+    id: 'ADX_TREND_STRENGTH', name: 'ADX Trend Strength', family: 'TREND_FILTER', status: ACTIVE,
+    requiredData: Object.freeze(['1h', 'ADX14', '+DI14', '-DI14', 'EMA50']), evaluator: evaluateADXTrendStrength,
+    scoreDimensions: Object.freeze(['adxStrength','diSeparation','priceTrend']),
+    hardGates: Object.freeze(['CLOSED_1H_DATA','VALID_SERIES','FRESH_DATA','NO_FUTURE_DATA','MIN_HISTORY','MIN_ADX','DIRECTION_CONFIRMATION']),
+    reasonCodes: Object.freeze(['ADX_STRONG','PLUS_DI_DOMINANT','MINUS_DI_DOMINANT','PRICE_ABOVE_EMA50','PRICE_BELOW_EMA50','ADX_TOO_WEAK','ADX_IS_CONFIRMATION_NOT_ENTRY','ADX_DIRECTION_CONFIRMATION_NOT_MET','INSUFFICIENT_DATA']),
+    invalidationRules: Object.freeze(['CLOSED_CANDLE_REQUIRED','ADX_LOSES_STRENGTH','DI_DIRECTION_FLIPS','FRESH_DATA_REQUIRED']),
+    testReference: 'phase1/tests/strategy-batch1.test.mjs'
+  }),
+  MACD_TREND_CONTINUATION: Object.freeze({
+    id: 'MACD_TREND_CONTINUATION', name: 'MACD Trend Continuation', family: 'MOMENTUM', status: ACTIVE,
+    requiredData: Object.freeze(['1h','4h','MACD12_26_9']), evaluator: evaluateMACDTrendContinuation,
+    scoreDimensions: Object.freeze(['macdAlignment','histogram','higherTimeframeConfirmation']),
+    hardGates: Object.freeze(['CLOSED_1H_4H_DATA','VALID_SERIES','FRESH_DATA','NO_FUTURE_DATA','MIN_HISTORY','HIGHER_TF_CONFIRMATION']),
+    reasonCodes: Object.freeze(['MACD_BULLISH_CONTINUATION','MACD_BEARISH_CONTINUATION','HIGHER_TF_CONFIRMATION','MACD_WEAKENING_OR_DIVERGENCE','MACD_CONFIRMATION_NOT_MET','INSUFFICIENT_DATA']),
+    invalidationRules: Object.freeze(['CLOSED_CANDLE_REQUIRED','MACD_CROSS_FAILURE','MACD_WEAKENING_OR_DIVERGENCE','FRESH_DATA_REQUIRED']),
+    testReference: 'phase1/tests/strategy-batch1.test.mjs'
+  }),
+  BOLLINGER_BAND_REVERSION: Object.freeze({
+    id: 'BOLLINGER_BAND_REVERSION', name: 'Bollinger Band Reversion', family: 'MEAN_REVERSION', status: ACTIVE,
+    requiredData: Object.freeze(['1h','BB20_2','RSI14']), evaluator: evaluateBollingerBandReversion,
+    scoreDimensions: Object.freeze(['bandLocation','rsi','reversal','regimeFilter']),
+    hardGates: Object.freeze(['CLOSED_1H_DATA','VALID_SERIES','FRESH_DATA','NO_FUTURE_DATA','MIN_HISTORY','REGIME_FILTER','PANIC_VOLUME_FILTER']),
+    reasonCodes: Object.freeze(['LOWER_BAND_TOUCH','UPPER_BAND_TOUCH','RSI_OVERSOLD','RSI_OVERBOUGHT','BULLISH_CANDLE_REVERSAL','BEARISH_CANDLE_REVERSAL','REGIME_FILTER_OK','PANIC_VOLUME_REJECTION','BOLLINGER_REVERSION_FILTER_NOT_MET','INSUFFICIENT_DATA']),
+    invalidationRules: Object.freeze(['CLOSED_CANDLE_REQUIRED','REGIME_TREND_TOO_STRONG','PANIC_VOLUME_REJECTION','FRESH_DATA_REQUIRED']),
+    testReference: 'phase1/tests/strategy-batch1.test.mjs'
+  }),
+  VWAP_REVERSION: Object.freeze({
+    id: 'VWAP_REVERSION', name: 'VWAP Reversion', family: 'MEAN_REVERSION', status: ACTIVE,
+    requiredData: Object.freeze(['15m','DAILY_VWAP']), evaluator: evaluateVWAPReversion,
+    scoreDimensions: Object.freeze(['vwapDeviation','returnToVwap','candleConfirmation','liquidity']),
+    hardGates: Object.freeze(['CLOSED_15M_DATA','VALID_SERIES','FRESH_DATA','NO_FUTURE_DATA','MIN_HISTORY','LIQUIDITY_GATE','RETURN_CONFIRMATION']),
+    reasonCodes: Object.freeze(['VWAP_UNDERSHOOT','VWAP_OVERSHOOT','RETURN_TOWARD_VWAP','BULLISH_REVERSAL_CANDLE','BEARISH_REVERSAL_CANDLE','LOW_LIQUIDITY','VWAP_DEVIATION_TOO_SMALL','VWAP_RETURN_CONFIRMATION_NOT_MET','INSUFFICIENT_DATA']),
+    invalidationRules: Object.freeze(['CLOSED_CANDLE_REQUIRED','LIQUIDITY_LOST','RETURN_TO_VWAP_FAILS','FRESH_DATA_REQUIRED']),
+    testReference: 'phase1/tests/strategy-batch1.test.mjs'
+  }),
+  RELATIVE_VOLUME_SURGE: Object.freeze({
+    id: 'RELATIVE_VOLUME_SURGE', name: 'Relative Volume Surge', family: 'VOLUME', status: ACTIVE,
+    requiredData: Object.freeze(['15m','RVOL20','PRICE_ACTION']), evaluator: evaluateRelativeVolumeSurge,
+    scoreDimensions: Object.freeze(['rvol','priceAction','trendContext']),
+    hardGates: Object.freeze(['CLOSED_15M_DATA','VALID_SERIES','FRESH_DATA','NO_FUTURE_DATA','MIN_HISTORY','RVOL_THRESHOLD','PRICE_ACTION_CONFIRMATION']),
+    reasonCodes: Object.freeze(['RVOL_SURGE','BULLISH_PRICE_ACTION','BEARISH_PRICE_ACTION','EMA20_CONTEXT','RVOL_THRESHOLD_NOT_MET','PRICE_ACTION_TOO_WEAK','PRICE_DIRECTION_CONTEXT_NOT_MET','INSUFFICIENT_DATA']),
+    invalidationRules: Object.freeze(['CLOSED_CANDLE_REQUIRED','RVOL_NORMALIZES','PRICE_ACTION_FAILS','FRESH_DATA_REQUIRED']),
+    testReference: 'phase1/tests/strategy-batch1.test.mjs'
+  }),
+  ATR_EXPANSION: Object.freeze({
+    id: 'ATR_EXPANSION', name: 'ATR Expansion', family: 'VOLATILITY', status: ACTIVE,
+    requiredData: Object.freeze(['15m','ATR14','ATR_BASELINE20','PRICE_CONFIRMATION']), evaluator: evaluateATRExpansion,
+    scoreDimensions: Object.freeze(['expansionRatio','priceConfirmation','liquidity']),
+    hardGates: Object.freeze(['CLOSED_15M_DATA','VALID_SERIES','FRESH_DATA','NO_FUTURE_DATA','MIN_HISTORY','ATR_EXPANSION','LIQUIDITY_GATE','PRICE_CONFIRMATION']),
+    reasonCodes: Object.freeze(['ATR_EXPANDING','BULLISH_PRICE_CONFIRMATION','BEARISH_PRICE_CONFIRMATION','LIQUIDITY_OK','LOW_LIQUIDITY','ATR_EXPANSION_NOT_MET','PRICE_CONFIRMATION_WEAK','PRICE_DIRECTION_CONTEXT_NOT_MET','INSUFFICIENT_DATA']),
+    invalidationRules: Object.freeze(['CLOSED_CANDLE_REQUIRED','ATR_CONTRACTION','LIQUIDITY_LOST','FRESH_DATA_REQUIRED']),
+    testReference: 'phase1/tests/strategy-batch1.test.mjs'
   })
 });
 
@@ -73,9 +145,11 @@ export function getStrategyDefinition(id) {
   const key = String(id ?? '').trim().toUpperCase(); const strategy = STRATEGY_REGISTRY[key];
   if (!strategy || strategy.status !== ACTIVE) throw new Error('STRATEGY_NOT_ACTIVE'); return strategy;
 }
-export function normalizeStrategyResult(id, result, { coverage = 1, hardGatesPassed = true, dataQuality = 0 } = {}) {
+export function normalizeStrategyResult(id, result, { coverage = 1, hardGatesPassed = undefined, dataQuality = undefined } = {}) {
   const strategy = getStrategyDefinition(id); const c = coverageInfo(coverage);
-  const quality = Math.max(0, Math.min(100, Number(dataQuality) || 0)); const gatesPassed = hardGatesPassed === true;
+  const gatesPassed = hardGatesPassed === undefined ? result?.hardGatesPassed !== false : hardGatesPassed === true;
+  const qualitySource = dataQuality === undefined ? result?.dataQuality : dataQuality;
+  const quality = Math.max(0, Math.min(100, Number(qualitySource) || 0));
   const state = normalizeState(result, c.value, gatesPassed); const rawScore = numericScore(result);
   const scoreValue = gatesPassed && c.value >= 1 && !['REJECTED','INSUFFICIENT_DATA'].includes(state) ? Math.max(0, Math.min(100, rawScore ?? 0)) : null;
   const resultReasons = Array.isArray(result?.reasonCodes) ? result.reasonCodes : (Array.isArray(result?.reason_codes) ? result.reason_codes : []);
@@ -90,9 +164,11 @@ export function normalizeStrategyResult(id, result, { coverage = 1, hardGatesPas
   };
 }
 function validateRegistry() {
-  const entries = Object.values(STRATEGY_REGISTRY); if (entries.length !== 3) throw new Error('REGISTRY_ACTIVE_SET_MUST_BE_THREE');
+  const entries = Object.values(STRATEGY_REGISTRY);
+  const allowedActive = new Set(['MTF_TREND','CONFIRMED_BREAKOUT','MEAN_REVERSION','EMA_RIBBON_ALIGNMENT','ADX_TREND_STRENGTH','MACD_TREND_CONTINUATION','BOLLINGER_BAND_REVERSION','VWAP_REVERSION','RELATIVE_VOLUME_SURGE','ATR_EXPANSION']);
+  if (entries.length !== allowedActive.size) throw new Error('REGISTRY_ACTIVE_SET_SIZE_MISMATCH');
   for (const strategy of entries) {
-    if (strategy.status !== ACTIVE) throw new Error('STRATEGY_NOT_ACTIVE:' + strategy.id);
+    if (strategy.status !== ACTIVE || !allowedActive.has(strategy.id)) throw new Error('STRATEGY_NOT_ACTIVE:' + strategy.id);
     if (typeof strategy.evaluator !== 'function') throw new Error('MISSING_EVALUATOR:' + strategy.id);
     if (!Array.isArray(strategy.requiredData) || !strategy.requiredData.length) throw new Error('MISSING_REQUIRED_DATA:' + strategy.id);
     if (!Array.isArray(strategy.hardGates) || !strategy.hardGates.length) throw new Error('MISSING_HARD_GATES:' + strategy.id);
