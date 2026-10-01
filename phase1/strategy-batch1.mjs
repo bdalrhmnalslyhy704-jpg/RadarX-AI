@@ -37,16 +37,16 @@ function reject(strategy, reasonCodes, evidence = {}, extra = {}) {
 }
 
 function prepare(series, timeframe, minBars, now) {
-  if (!Array.isArray(series)) return { result: reject(null, ['INSUFFICIENT_DATA']), candles: [] };
+  if (!Array.isArray(series)) return { result: reject(null, ['INSUFFICIENT_DATA'], {}, {state:'INSUFFICIENT_DATA'}), candles: [] };
   const i = lastClosedIndex(series);
-  if (i < 0) return { result: reject(null, ['INSUFFICIENT_CLOSED_DATA']), candles: [] };
+  if (i < 0) return { result: reject(null, ['INSUFFICIENT_CLOSED_DATA'], {}, {state:'INSUFFICIENT_DATA'}), candles: [] };
 
   const future = series.some(c => c?.closed === true && (Number(c.openTime) > now || Number(c.closeTime) > now));
   if (future) return { result: reject(null, ['FUTURE_DATA']), candles: [] };
 
   const candles = series.slice(0, i + 1);
   if (candles.some(c => c?.closed !== true)) return { result: reject(null, ['INCOMPLETE_CANDLE']), candles };
-  if (candles.length < minBars) return { result: reject(null, ['INSUFFICIENT_DATA']), candles };
+  if (candles.length < minBars) return { result: reject(null, ['INSUFFICIENT_DATA'], {}, {state:'INSUFFICIENT_DATA'}), candles };
 
   const valid = validateSeries(candles, timeframe);
   if (!valid.valid) return { result: reject(null, ['INVALID_DATA', ...valid.issues.slice(0, 4)]), candles };
