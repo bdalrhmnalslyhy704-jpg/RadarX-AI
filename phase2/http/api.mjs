@@ -178,7 +178,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       }
       if(u.pathname==='/api/signal'&&req.method==='GET'){
         const rawSymbol=String(u.searchParams.get('symbol')||'').trim().toUpperCase();
-        if(!PUBLIC_SIGNAL_SYMBOL_RE.test(rawSymbol))return send(res,400,{status:'unavailable',symbol:rawSymbol||null,meta:publicSignalMeta({live:false,source:'Binance Public REST',asOfMs:null,now:Date.now(),maxFreshnessMs:DEFAULT_SIGNAL_FRESHNESS_MS}),signal:emptyPublicSignal(rawSymbol||null,{source:'Binance Public REST',dataValid:false,lastError:'INVALID_SYMBOL'}),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',error:'INVALID_SYMBOL'});
+        if(!PUBLIC_SIGNAL_SYMBOL_RE.test(rawSymbol))return send(res,400,{status:'bad_request',symbol:rawSymbol||null,meta:publicSignalMeta({live:false,source:'Binance Public REST',asOfMs:null,now:Date.now(),maxFreshnessMs:DEFAULT_SIGNAL_FRESHNESS_MS}),signal:emptyPublicSignal(rawSymbol||null,{source:'Binance Public REST',dataValid:false,lastError:'INVALID_SYMBOL'}),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',error:'INVALID_SYMBOL'});
         const now=Date.now();
         try{
           const snapshot=typeof store.getSignalSnapshot==='function'?await store.getSignalSnapshot(rawSymbol):null;
