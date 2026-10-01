@@ -3,7 +3,6 @@ name: RadarX Android APK Release
 on:
   push:
     branches:
-      - android-apk-release
       - android-apk-embedded-v1
   workflow_dispatch:
 
@@ -13,11 +12,9 @@ permissions:
 concurrency:
   group: radarx-android-embedded-final-v2
   cancel-in-progress: true
-  cancel-in-progress: true
 
 jobs:
   build-release:
-    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip ci]')
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
