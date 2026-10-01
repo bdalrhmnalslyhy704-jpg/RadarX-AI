@@ -7,3 +7,5 @@ paper_trading=true
 real_order_execution=false
 confidence_score=UNKNOWN
 Emulator smoke: Ubuntu 22.04 + KVM + Android API 29
+
+Final validation trigger: embedded Android 1.2.0
