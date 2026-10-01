@@ -70,48 +70,6 @@ jobs:
           test "$radar" = "200" -o "$radar" = "503"
           case "$signal" in 200|404) ;; *) exit 1 ;; esac
 
-      - name: Android-device endpoint probe (online)
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat > /tmp/EndpointProbe.java <<'JAVA'
-          import java.io.*;
-          import java.net.*;
-          import javax.net.ssl.HttpsURLConnection;
-          public class EndpointProbe {
-            static void probe(String path) throws Exception {
-              URL u = new URL("https://radarx-ai-production.up.railway.app" + path);
-              HttpsURLConnection c = (HttpsURLConnection)u.openConnection();
-              c.setRequestMethod("GET"); c.setConnectTimeout(10000); c.setReadTimeout(30000);
-              int s = c.getResponseCode();
-              InputStream in = s >= 400 ? c.getErrorStream() : c.getInputStream();
-              java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-              if (in != null) {
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
-              }
-              String body = new String(out.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
-              System.out.println("DEVICE_HTTP path=" + path + " status=" + s);
-              System.out.println("DEVICE_JSON path=" + path + " body=" + body);
-              c.disconnect();
-            }
-            public static void main(String[] args) throws Exception {
-              for (String p : args) probe(p);
-            }
-          }
-          JAVA
-          javac -source 8 -target 8 -cp "$ANDROID_HOME/platforms/android-29/android.jar" /tmp/EndpointProbe.java
-          jar cf /tmp/endpoint-probe.jar -C /tmp EndpointProbe.class
-          adb push /tmp/endpoint-probe.jar /data/local/tmp/endpoint-probe.jar >/dev/null
-          CLASSPATH=/data/local/tmp/endpoint-probe.jar adb shell app_process /data/local/tmp EndpointProbe \
-            /healthz /readyz '/api/market-radar?quote=USDT&limit=20' '/api/signal?symbol=BTCUSDT' \
-            | tee /tmp/device-endpoints.txt
-          grep -Fq 'DEVICE_HTTP path=/healthz status=200' /tmp/device-endpoints.txt
-          grep -Eq 'DEVICE_HTTP path=/readyz status=(200|503)' /tmp/device-endpoints.txt
-          grep -Eq 'DEVICE_HTTP path=/api/market-radar\?quote=USDT&limit=20 status=(200|503)' /tmp/device-endpoints.txt
-          grep -Fq 'DEVICE_HTTP path=/api/signal?symbol=BTCUSDT status=404' /tmp/device-endpoints.txt
-
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -137,13 +95,94 @@ jobs:
           "$BT/aapt2" dump badging "$APK" | grep -E "package: name=|application-label:"
           "$BT/apksigner" verify --verbose "$APK"
 
-      - name: Android emulator online/offline smoke
+      - name: Android emulator Market Radar online/offline smoke
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 29
           target: default
           arch: x86_64
-          script: bash android/smoke-test.sh
+          script: |
+            set -euo pipefail
+            APK="android/app/build/outputs/apk/release/app-release.apk"
+            adb install -r "$APK"
+            adb logcat -c
+            adb shell am force-stop com.radarx.app || true
+            adb shell am start -n com.radarx.app/.MainActivity >/dev/null
+
+            cat > /tmp/EndpointProbe.java <<'JAVA'
+            import java.io.*;
+            import java.net.*;
+            import javax.net.ssl.HttpsURLConnection;
+            public class EndpointProbe {
+              static void probe(String path) throws Exception {
+                URL u = new URL("https://radarx-ai-production.up.railway.app" + path);
+                HttpsURLConnection c = (HttpsURLConnection) u.openConnection();
+                c.setRequestMethod("GET");
+                c.setConnectTimeout(10000);
+                c.setReadTimeout(30000);
+                int s = c.getResponseCode();
+                InputStream in = s >= 400 ? c.getErrorStream() : c.getInputStream();
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                if (in != null) { byte[] b = new byte[8192]; int n; while ((n=in.read(b))!=-1) out.write(b,0,n); }
+                String body = new String(out.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+                System.out.println("DEVICE_HTTP path=" + path + " status=" + s);
+                System.out.println("DEVICE_JSON path=" + path + " body=" + body);
+                c.disconnect();
+              }
+              public static void main(String[] args) throws Exception { for (String p : args) probe(p); }
+            }
+            JAVA
+            javac -source 8 -target 8 -cp "$ANDROID_HOME/platforms/android-29/android.jar" /tmp/EndpointProbe.java
+            jar cf /tmp/endpoint-probe.jar -C /tmp EndpointProbe.class
+            adb push /tmp/endpoint-probe.jar /data/local/tmp/endpoint-probe.jar >/dev/null
+            CLASSPATH=/data/local/tmp/endpoint-probe.jar adb shell app_process /data/local/tmp EndpointProbe \
+              /healthz /readyz '/api/market-radar?quote=USDT&limit=20' '/api/signal?symbol=BTCUSDT' | tee /tmp/device-endpoints.txt
+
+            grep -Fq 'DEVICE_HTTP path=/healthz status=200' /tmp/device-endpoints.txt
+            grep -Eq 'DEVICE_HTTP path=/readyz status=(200|503)' /tmp/device-endpoints.txt
+            grep -Eq 'DEVICE_HTTP path=/api/market-radar\?quote=USDT&limit=20 status=(200|503)' /tmp/device-endpoints.txt
+            grep -Fq 'DEVICE_HTTP path=/api/signal?symbol=BTCUSDT status=404' /tmp/device-endpoints.txt
+
+            for i in $(seq 1 12); do
+              sleep 2
+              LOGS="$(adb logcat -d -s RadarXSmoke:I '*:S' 2>/dev/null || true)"
+              printf '%s\n' "$LOGS"
+              if printf '%s\n' "$LOGS" | grep -Fq "UI_READY" &&
+                 printf '%s\n' "$LOGS" | grep -Fq "BACKEND_CONNECTED" &&
+                 printf '%s\n' "$LOGS" | grep -Fq "SCAN_COMPLETE"; then
+                break
+              fi
+            done
+            LOGS="$(adb logcat -d -s RadarXSmoke:I RadarXWeb:I '*:S' 2>/dev/null || true)"
+            printf '%s\n' "$LOGS"
+            printf '%s\n' "$LOGS" | grep -Fq "UI_READY"
+            printf '%s\n' "$LOGS" | grep -Fq "BACKEND_CONNECTED"
+            printf '%s\n' "$LOGS" | grep -Fq "SCAN_COMPLETE"
+            ! printf '%s\n' "$LOGS" | grep -Fq "ReferenceError"
+
+            adb shell cmd connectivity airplane-mode enable >/dev/null 2>&1 || true
+            adb shell settings put global airplane_mode_on 1 >/dev/null 2>&1 || true
+            adb shell svc wifi disable >/dev/null 2>&1 || true
+            adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true >/dev/null 2>&1 || true
+            sleep 3
+            adb logcat -c
+            adb shell am force-stop com.radarx.app || true
+            adb shell am start -n com.radarx.app/.MainActivity >/dev/null
+
+            for i in $(seq 1 8); do
+              sleep 2
+              LOGS="$(adb logcat -d -s RadarXSmoke:I '*:S' 2>/dev/null || true)"
+              if printf '%s\n' "$LOGS" | grep -Fq "UI_READY" &&
+                 printf '%s\n' "$LOGS" | grep -Fq "BACKEND_DISCONNECTED"; then
+                break
+              fi
+            done
+            LOGS="$(adb logcat -d -s RadarXSmoke:I RadarXWeb:I '*:S' 2>/dev/null || true)"
+            printf '%s\n' "$LOGS"
+            printf '%s\n' "$LOGS" | grep -Fq "UI_READY"
+            printf '%s\n' "$LOGS" | grep -Fq "BACKEND_DISCONNECTED"
+            ! printf '%s\n' "$LOGS" | grep -Fq "ReferenceError"
+            echo "Android emulator Market Radar online/offline smoke passed."
 
       - name: Prepare APK
         shell: bash
