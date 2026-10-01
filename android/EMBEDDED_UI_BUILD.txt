@@ -9,3 +9,5 @@ confidence_score=UNKNOWN
 Emulator smoke: Ubuntu 22.04 + KVM + Android API 29
 
 Final validation trigger: embedded Android 1.2.0
+
+Final smoke: online/offline screenshots must contain multiple pixels/colors; runtime logs must report UI_READY plus backend state.
