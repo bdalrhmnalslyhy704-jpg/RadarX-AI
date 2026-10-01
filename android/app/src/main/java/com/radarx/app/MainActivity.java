@@ -6,8 +6,10 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.View;
 import android.webkit.SslErrorHandler;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -63,6 +65,7 @@ public final class MainActivity extends Activity {
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
 
+        webView.addJavascriptInterface(new RadarXSmokeBridge(), "RadarXSmoke");
         webView.setWebChromeClient(new WebChromeClient());
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -144,6 +147,13 @@ public final class MainActivity extends Activity {
                 + "<p>تعذر الاتصال بالخادم، تحقق من الإنترنت</p>"
                 + "<button onclick=\"location.href='" + APP_URL + "'\">إعادة المحاولة</button></div></html>";
         webView.loadDataWithBaseURL(APP_URL, html, "text/html", "UTF-8", null);
+    }
+
+    private static final class RadarXSmokeBridge {
+        @JavascriptInterface
+        public void state(String value) {
+            Log.i("RadarXSmoke", String.valueOf(value));
+        }
     }
 
     @Override
