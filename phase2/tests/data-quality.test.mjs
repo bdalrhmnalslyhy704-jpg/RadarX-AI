@@ -40,7 +40,7 @@ test('TEST_FIXTURE: current open candle is not future data and is not the analys
   const g=assessDataGate({
     series4h:series('4h',30,now-30*14400000),
     series1h:series('1h',30,now-30*3600000),
-    series15m:[...series('15m',31,now-900000),open],
+    series15m:[...series('15m',31,1),open],
     now,sourceLive:true
   });
   assert.equal(g.allowed,true);
