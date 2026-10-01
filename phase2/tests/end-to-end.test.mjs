@@ -60,6 +60,13 @@ test('TEST_FIXTURE: market -> closed candle -> gate -> Phase1 engine -> Unified 
   const sig=await store.readRecent('signals',20),note=await store.readRecent('notifications',20);
   assert.ok(sig.some(x=>x.signal_id===first.signal.signal_id&&x.signal_snapshot));
   assert.ok(note.some(x=>x.signal_id===first.signal.signal_id&&x.status==='SENT'));
+  const latest=await store.getSignalSnapshot('BTCUSDT');
+  assert.equal(latest.symbol,'BTCUSDT');
+  assert.equal(latest.signal.paper_trade.real_order_execution,false);
+  assert.equal(latest.signal.scores.confidence_score,'UNKNOWN');
+  assert.equal(latest.strategies.trend.strategy,'MTF_TREND');
+  assert.equal(latest.strategies.breakout.strategy,'CONFIRMED_BREAKOUT');
+  assert.equal(latest.strategies.meanReversion.strategy,'MEAN_REVERSION');
   const second=await service.evaluateSnapshot(snap());
   assert.equal(second.emitted,false);assert.ok(second.blocked.includes('DUPLICATE_SIGNAL'));assert.equal(provider.calls.length,1);
 });
