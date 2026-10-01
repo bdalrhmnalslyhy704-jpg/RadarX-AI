@@ -204,15 +204,12 @@ jobs:
             } | awk '/not found/{print $1}' | sort -u
           )"
           if [ -n "$MISSING_LIBS" ]; then
-            echo "Missing emulator host libraries:"
+            echo "Missing emulator host libraries reported by ldd:"
             printf '%s\\n' "$MISSING_LIBS"
-            APT_PACKAGES=()
-            if printf '%s\\n' "$MISSING_LIBS" | grep -Fq 'libpulse.so.0'; then APT_PACKAGES+=("libpulse0"); fi
-            if [ "${#APT_PACKAGES[@]}" -gt 0 ]; then
-              sudo apt-get update
-              sudo apt-get install -y "${APT_PACKAGES[@]}"
-            fi
           fi
+          echo "Installing required Ubuntu emulator host runtime: libpulse0"
+          sudo apt-get update
+          sudo apt-get install -y libpulse0
           MISSING_LIBS="$(
             {
               ldd "$EMULATOR" 2>/dev/null || true
