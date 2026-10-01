@@ -123,25 +123,88 @@ jobs:
         run: |
           set -euo pipefail
           echo "Setting up Android emulator on the same runner filesystem."
-          export ANDROID_SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          export ANDROID_HOME="$ANDROID_SDK_ROOT"
-          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$PATH"
-          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-          AVDMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager"
-          ADB="$ANDROID_SDK_ROOT/platform-tools/adb"
-          EMULATOR="$ANDROID_SDK_ROOT/emulator/emulator"
-          for tool in "$SDKMANAGER" "$AVDMANAGER" "$ADB" "$EMULATOR"; do
-            test -x "$tool" || { echo "ERROR: required Android SDK tool missing: $tool"; exit 1; }
+
+          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
+          echo "which emulator:"
+          which emulator || true
+          echo "emulator files under runner SDK roots:"
+          if [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME" ]; then find "$ANDROID_HOME" -type f -name emulator 2>/dev/null || true; fi
+          if [ -n "${ANDROID_SDK_ROOT:-}" ] && [ -d "$ANDROID_SDK_ROOT" ] && [ "${ANDROID_SDK_ROOT:-}" != "${ANDROID_HOME:-}" ]; then find "$ANDROID_SDK_ROOT" -type f -name emulator 2>/dev/null || true; fi
+
+          SDKMANAGER="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMANAGER" ]; then
+            for ROOT in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}"; do
+              [ -n "$ROOT" ] && [ -d "$ROOT" ] || continue
+              FOUND="$(find "$ROOT" -type f -name sdkmanager -perm -111 2>/dev/null | head -n 1 || true)"
+              if [ -n "$FOUND" ]; then SDKMANAGER="$FOUND"; break; fi
+            done
+          fi
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager is not available on PATH or inside ANDROID_HOME/ANDROID_SDK_ROOT."
+            exit 1
+          fi
+
+          SDK_ROOT="$(dirname "$SDKMANAGER")"
+          while [ "$(dirname "$SDK_ROOT")" != "$SDK_ROOT" ]; do
+            if [ -d "$SDK_ROOT/platform-tools" ] || [ -d "$SDK_ROOT/platforms" ] || [ -d "$SDK_ROOT/cmdline-tools" ]; then
+              break
+            fi
+            SDK_ROOT="$(dirname "$SDK_ROOT")"
           done
+          export ANDROID_HOME="$SDK_ROOT"
+          export ANDROID_SDK_ROOT="$SDK_ROOT"
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/cmdline-tools/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+
+          AVDMANAGER="$(command -v avdmanager || true)"
+          if [ -z "$AVDMANAGER" ]; then
+            AVDMANAGER="$(find "$ANDROID_HOME" -type f -name avdmanager -perm -111 2>/dev/null | head -n 1 || true)"
+          fi
+          ADB="$(command -v adb || true)"
+          if [ -z "$ADB" ] && [ -x "$ANDROID_HOME/platform-tools/adb" ]; then
+            ADB="$ANDROID_HOME/platform-tools/adb"
+          fi
+
+          echo "Discovered Android SDK:"
           echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
           echo "SDKMANAGER=$SDKMANAGER"
-          echo "AVDMANAGER=$AVDMANAGER"
-          echo "ADB=$ADB"
-          echo "EMULATOR=$EMULATOR"
-          yes | "$SDKMANAGER" --licenses >/dev/null
-          "$SDKMANAGER" --install 'build-tools;37.0.0' platform-tools emulator 'platforms;android-29' 'system-images;android-29;default;x86_64' >/dev/null
-          echo no | "$AVDMANAGER" create avd --force -n radarx-ci --package 'system-images;android-29;default;x86_64'
+          echo "AVDMANAGER=${AVDMANAGER:-}"
+          echo "ADB=${ADB:-}"
+          if [ -z "$AVDMANAGER" ]; then echo "ERROR: avdmanager not found."; exit 1; fi
+          if [ -z "$ADB" ] || [ ! -x "$ADB" ]; then echo "ERROR: adb not found or not executable."; exit 1; fi
+
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install platform-tools emulator 'platforms;android-29' 'system-images;android-29;default;x86_64' >/dev/null
+          if [ ! -x "$ANDROID_HOME/emulator/emulator" ]; then
+            EMULATOR="$(find "$ANDROID_HOME" -type f -name emulator -perm -111 2>/dev/null | head -n 1 || true)"
+          else
+            EMULATOR="$ANDROID_HOME/emulator/emulator"
+          fi
+          if [ -z "$EMULATOR" ] || [ ! -x "$EMULATOR" ]; then
+            echo "ERROR: emulator executable is still unavailable after sdkmanager installation."
+            exit 1
+          fi
+          if [ ! -d "$ANDROID_HOME/system-images/android-29/default/x86_64" ]; then
+            echo "ERROR: required system image system-images;android-29;default;x86_64 is not installed."
+            exit 1
+          fi
+
+          echo "which emulator after installation:"
+          which emulator || true
+          echo "emulator files after installation:"
+          find "$ANDROID_HOME" -type f -name emulator 2>/dev/null || true
+          echo "emulator -version:"
+          "$EMULATOR" -version
+          echo "adb version:"
+          "$ADB" version
+
+          if ! "$AVDMANAGER" list avd | grep -Fq "Name: radarx-ci"; then
+            echo no | "$AVDMANAGER" create avd --force -n radarx-ci --package 'system-images;android-29;default;x86_64'
+          fi
+          test -d "$HOME/.android/avd/radarx-ci.avd" || { echo "ERROR: AVD radarx-ci does not exist."; exit 1; }
           printf 'hw.cpu.ncore=2\n' >> "$HOME/.android/avd/radarx-ci.avd/config.ini"
+
           "$ADB" start-server >/dev/null
           "$EMULATOR" -avd radarx-ci -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -accel off > /tmp/radarx-emulator.log 2>&1 &
           EMU_PID=$!
