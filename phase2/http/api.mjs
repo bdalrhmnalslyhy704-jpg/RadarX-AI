@@ -82,6 +82,7 @@ function inspectPublicSignal(snapshot,now,maxFreshnessMs,minDataQuality){
   else if(stale)reason='STALE_SNAPSHOT';
   else if(gaps)reason='DATA_GAPS';
   else if(!sourceAllowed)reason='SOURCE_UNAVAILABLE';
+  else if(!sourceAllowed)reason='SOURCE_UNAVAILABLE';
   else if(dq===null||dq<minDataQuality)reason='LOW_DATA_QUALITY';
   else if(!completeStrategies)reason='PARTIAL_ANALYSIS';
   else if(signal.paper_trade?.enabled!==true||signal.paper_trade?.real_order_execution!==false)reason='READ_ONLY_POLICY_VIOLATION';
