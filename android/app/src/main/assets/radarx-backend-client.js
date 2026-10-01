@@ -37,7 +37,7 @@ export async function requestJson(baseUrl, path, fetchImpl = globalThis.fetch) {
       status: 0,
       ok: false,
       body: null,
-      error: String(error?.message || error)
+      error: String(error && error.message || error)
     };
   }
 }
@@ -63,17 +63,17 @@ export async function fetchBackendState(baseUrl, symbol, fetchImpl = globalThis.
 export function isFreshLiveSignal(response) {
   if (!response || response.status !== 200) return false;
 
-  const status = response.body?.signal?.data_status;
-  const meta = response.body?.meta;
+  const status = response && response.body && response.body.signal && response.body.signal.data_status;
+  const meta = response && response.body && response.body.meta;
 
   return (
-    status?.data_stale === false &&
-    status?.data_valid === true &&
-    status?.last_error == null &&
-    meta?.live === true &&
-    meta?.paper_trading === true &&
-    meta?.real_order_execution === false &&
-    meta?.confidence_score === 'UNKNOWN'
+    status && status.data_stale === false &&
+    status && status.data_valid === true &&
+    status && status.last_error == null &&
+    meta && meta.live === true &&
+    meta && meta.paper_trading === true &&
+    meta && meta.real_order_execution === false &&
+    meta && meta.confidence_score === 'UNKNOWN'
   );
 }
 
@@ -81,32 +81,32 @@ export function isFreshLiveState(state) {
   if (!state) return false;
   const readiness = state.readiness;
   return (
-    state.health?.status === 200 &&
-    readiness?.status === 200 &&
-    readiness?.body?.data_stale === false &&
-    readiness?.body?.data_valid === true &&
-    readiness?.body?.last_error == null &&
+    state.health && state.health.status === 200 &&
+    readiness && readiness.status === 200 &&
+    readiness && readiness.body && readiness.body.data_stale === false &&
+    readiness && readiness.body && readiness.body.data_valid === true &&
+    readiness && readiness.body && readiness.body.last_error == null &&
     isFreshLiveSignal(state.signal)
   );
 }
 
 export function classifyBackendState(state) {
-  if (!state || state.health?.status === 0 || state.readiness?.status === 0 || state.signal?.status === 0) {
+  if (!state || state.health && state.health.status === 0 || state.readiness && readiness.status === 0 || state.signal && state.signal.status === 0) {
     return 'DISCONNECTED';
   }
 
   if (isFreshLiveState(state)) return 'LIVE_DATA';
 
   const stale =
-    state.readiness?.body?.data_stale === true ||
-    state.readiness?.body?.reason === 'SNAPSHOT_STALE' ||
-    state.signal?.body?.signal?.data_status?.data_stale === true;
+    state.readiness && readiness.body && readiness.body.data_stale === true ||
+    state.readiness && state.readiness.body && state.readiness.body.reason === 'SNAPSHOT_STALE' ||
+    state.signal?.body?.signal?.data_status && status.data_stale === true;
 
-  if (stale || state.readiness?.status === 503 || state.signal?.status === 503) {
+  if (stale || state.readiness && readiness.status === 503 || state.signal && state.signal.status === 503) {
     return 'DATA_STALE';
   }
 
-  return state.health?.status >= 500 || state.readiness?.status >= 500 || state.signal?.status >= 500
+  return state.health && state.health.status >= 500 || state.readiness && readiness.status >= 500 || state.signal && state.signal.status >= 500
     ? 'DISCONNECTED'
     : 'DATA_UNAVAILABLE';
 }
