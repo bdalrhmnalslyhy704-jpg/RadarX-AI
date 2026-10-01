@@ -77,6 +77,7 @@ jobs:
           cat > /tmp/EndpointProbe.java <<'JAVA'
           import java.io.*;
           import java.net.*;
+          import javax.net.ssl.HttpsURLConnection;
           public class EndpointProbe {
             static void probe(String path) throws Exception {
               URL u = new URL("https://radarx-ai-production.up.railway.app" + path);
@@ -84,8 +85,13 @@ jobs:
               c.setRequestMethod("GET"); c.setConnectTimeout(10000); c.setReadTimeout(30000);
               int s = c.getResponseCode();
               InputStream in = s >= 400 ? c.getErrorStream() : c.getInputStream();
-              String body = "";
-              if (in != null) { body = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8); }
+              java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+              if (in != null) {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+              }
+              String body = new String(out.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
               System.out.println("DEVICE_HTTP path=" + path + " status=" + s);
               System.out.println("DEVICE_JSON path=" + path + " body=" + body);
               c.disconnect();
