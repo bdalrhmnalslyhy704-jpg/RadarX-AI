@@ -1,0 +1,141 @@
+name: RadarX Android One-Time Build
+
+on:
+  push:
+    branches:
+      - apk-build-c75aaf79150cedec
+
+permissions:
+  contents: write
+
+env:
+  SOURCE_SHA: c75aaf79150cedec0a44c8a309f3d454cd6e6064
+  BACKEND_BASE_URL: https://radarx-ai-production.up.railway.app
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact Android source SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 1
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Android/backend client regression tests
+        run: node android/backend-client-regression.mjs
+
+      - name: Market Radar integration tests
+        run: node --test android/app/src/main/assets/tests/market-radar-integration.test.mjs
+
+      - name: Assert required Android contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq "https://radarx-ai-production.up.railway.app" android/app/src/main/java/com/radarx/app/MainActivity.java
+          grep -Fq "https://radarx-ai-production.up.railway.app" android/app/src/main/assets/radarx-backend-client.mjs
+          grep -Fq "'/api/market-radar?quote=' + encodeURIComponent(safeQuote) + '&limit=' + encodeURIComponent(String(safeLimit))" android/app/src/main/assets/radarx-backend-client.mjs
+          for state in LIVE_DATA PARTIAL_DATA DATA_STALE DATA_UNAVAILABLE RETRY FETCHING; do
+            grep -Fq "$state" android/app/src/main/assets/radarx-market-radar-screen.mjs
+          done
+          grep -Fq "OFFLINE" android/app/src/main/assets/radarx-market-radar-screen.mjs
+          ! grep -RIn --exclude-dir=build -E 'github\.io/RadarX-AI|binance\.com|binance\.com/' android/app/src/main
+          grep -RIn -E 'paper_trading=true' android/app/src/main/assets
+          grep -RIn -E 'real_order_execution=false' android/app/src/main/assets
+          grep -RIn -E 'confidence_score.*UNKNOWN' android/app/src/main/assets
+
+      - name: Backend external endpoint smoke from runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${BACKEND_BASE_URL}"
+          health=$(curl --silent --show-error --retry 2 --max-time 20 -o /tmp/healthz.json -w "%{http_code}" "${base}/healthz")
+          ready=$(curl --silent --show-error --retry 2 --max-time 20 -o /tmp/readyz.json -w "%{http_code}" "${base}/readyz")
+          radar=$(curl --silent --show-error --retry 2 --max-time 40 -o /tmp/market-radar.json -w "%{http_code}" "${base}/api/market-radar?quote=USDT&limit=20")
+          signal=$(curl --silent --show-error --retry 2 --max-time 30 -o /tmp/signal.json -w "%{http_code}" "${base}/api/signal?symbol=BTCUSDT")
+          echo "healthz=$health readyz=$ready radar=$radar signal=$signal"
+          cat /tmp/healthz.json
+          cat /tmp/readyz.json
+          cat /tmp/market-radar.json
+          cat /tmp/signal.json
+          test "$health" = "200"
+          case "$ready" in 200|503) ;; *) exit 1 ;; esac
+          test "$radar" = "200" -o "$radar" = "503"
+          test "$signal" = "200"
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Build release APK
+        working-directory: android
+        run: gradle :app:assembleRelease --no-daemon
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          BT="$(ls -d "$ANDROID_HOME/build-tools/"* | sort -V | tail -1)"
+          "$BT/aapt2" dump badging "$APK" | grep -E "package: name=|application-label:"
+          "$BT/apksigner" verify --verbose "$APK"
+
+      - name: Android emulator online/offline smoke
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          target: default
+          arch: x86_64
+          script: bash android/smoke-test.sh
+
+      - name: Prepare APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          OUT="dist/RadarX-Android-v1.2.0-source-c75aaf-build-${GITHUB_RUN_NUMBER}.apk"
+          cp "$APK" "$OUT"
+          sha256sum "$OUT" | tee "${OUT}.sha256"
+          stat -c "APK_SIZE_BYTES=%s" "$OUT"
+
+      - name: Publish direct HTTPS release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="radarx-android-v1.2.0-c75aaf-${GITHUB_RUN_NUMBER}"
+          APK="dist/RadarX-Android-v1.2.0-source-c75aaf-build-${GITHUB_RUN_NUMBER}.apk"
+          SHA="${APK}.sha256"
+          gh release create "$TAG" "$APK" "$SHA" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${SOURCE_SHA}" \
+            --title "RadarX Android v1.2.0 — source c75aaf — build ${GITHUB_RUN_NUMBER}" \
+            --notes "APK built from exact source SHA ${SOURCE_SHA}. Android uses Railway Backend only; no direct Binance connection; paper trading only; real_order_execution=false; confidence_score=UNKNOWN."
+
+      - name: Verify direct APK download
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="radarx-android-v1.2.0-c75aaf-${GITHUB_RUN_NUMBER}"
+          APK="dist/RadarX-Android-v1.2.0-source-c75aaf-build-${GITHUB_RUN_NUMBER}.apk"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/$(basename "$APK")"
+          curl --fail --location --retry 3 --retry-delay 2 --silent --show-error "$URL" --output /tmp/radarx-direct.apk
+          test "$(stat -c %s /tmp/radarx-direct.apk)" = "$(stat -c %s "$APK")"
+          test "$(sha256sum /tmp/radarx-direct.apk | awk '{print $1}')" = "$(sha256sum "$APK" | awk '{print $1}')"
+          echo "DIRECT_APK_URL=$URL"
