@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#071018">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.svg">
+<title>RadarX — Paper Signals</title>
+<style>
+:root{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color-scheme:dark;background:#071018;color:#eaf5f8}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:linear-gradient(180deg,#071018,#091721);min-height:100vh}
+main{width:min(1100px,100%);margin:auto;padding:env(safe-area-inset-top) 14px calc(24px + env(safe-area-inset-bottom))}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0;position:sticky;top:0;background:rgba(7,16,24,.94);backdrop-filter:blur(10px);z-index:5}
+.brand{font-size:22px;font-weight:950;letter-spacing:.2px}.muted{color:#8da7b1;font-size:12px;line-height:1.55}
+.status{padding:9px 11px;border:1px solid #31515f;border-radius:999px;font-size:11px;font-weight:900;white-space:nowrap}.status.live{border-color:#268c68;color:#b5f5da}.status.off{border-color:#9b4651;color:#ffc4ca}.status.warn{border-color:#90713a;color:#ffe0a0}
+.panel{background:#0b1820;border:1px solid #1d3944;border-radius:17px;padding:14px;margin-top:12px;box-shadow:0 8px 30px rgba(0,0,0,.12)}
+.controls{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(110px,.8fr) minmax(110px,.8fr) 1fr;gap:9px}
+.input,.btn{width:100%;min-height:48px;border-radius:12px;border:1px solid #2a4c58;background:#08131a;color:#fff;padding:0 13px;font:inherit}
+.btn{font-weight:950;cursor:pointer;touch-action:manipulation}.btn:active{transform:translateY(1px)}
+.banner{display:flex;align-items:flex-start;gap:10px}.dot{width:10px;height:10px;border-radius:50%;background:#d96f78;flex:0 0 10px;margin-top:5px}.banner h2{font-size:15px;margin:0 0 3px}.banner p{margin:0}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin-top:12px}
+.card{background:#0b1820;border:1px solid #1d3944;border-radius:16px;padding:14px;min-height:126px}
+.card .name{font-size:12px;color:#9bb3bd;font-weight:800}.score{font-size:31px;font-weight:950;margin-top:5px}.state{font-size:11px;font-weight:900;margin-top:4px}
+.scorebar{height:7px;background:#102932;border-radius:99px;overflow:hidden;margin-top:10px}.scorebar>i{display:block;height:100%;background:#54d5ff;border-radius:99px}
+.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:11px}
+.metric{background:#08131a;border:1px solid #17313a;border-radius:12px;padding:11px}.metric b{display:block;font-size:17px;margin-top:3px}
+.kv{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:11px}.kv div{padding:10px 11px;border-radius:11px;background:#08131a;border:1px solid #17313a}.kv b{display:block;margin-top:3px}
+pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-radius:11px;font-size:10px;max-height:520px;margin:10px 0 0}
+.footer{padding:18px 4px;text-align:center}.install{margin-top:10px;display:none}
+@media(max-width:760px){.controls,.grid,.metrics{grid-template-columns:1fr 1fr}.controls .wide{grid-column:1/-1}.kv{grid-template-columns:1fr}}
+@media(max-width:470px){.grid,.metrics{grid-template-columns:1fr}.top{align-items:flex-start}.status{margin-top:2px}}
+.settings{margin-top:10px}.settings summary{cursor:pointer;font-weight:950}.settings-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px;margin-top:10px}.settings-help{margin-top:7px}@media(max-width:470px){.settings-row{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+<section id="appError" class="panel" hidden style="border-color:#9b4651">
+  <div class="banner">
+    <div class="dot"></div>
+    <div>
+      <h2>تعذر تشغيل الواجهة</h2>
+      <p class="muted">تعذر تحميل واجهة RadarX. اضغط إعادة المحاولة.</p>
+      <button id="retryApp" class="btn" type="button" style="margin-top:10px">إعادة المحاولة</button>
+    </div>
+  </div>
+</section>
+<header class="top">
+  <div><div class="brand">RadarX Phase 1</div><div class="muted">تحليل العملات • قراءة فقط • Paper Trading</div></div>
+  <div id="status" class="status warn" aria-live="polite">جاري التهيئة</div>
+</header>
+
+<section id="offlineBanner" class="panel banner" hidden>
+  <div class="dot"></div>
+  <div><h2>Disconnected — لا يوجد اتصال بالبيانات الآن</h2><p class="muted">تم تحميل واجهة التطبيق من الذاكرة المحلية. لا يتم عرض قيم سوق قديمة على أنها بيانات مباشرة.</p></div>
+</section>
+
+<section class="panel">
+  <div class="controls">
+    <input id="symbol" class="input" value="BTCUSDT" spellcheck="false" autocapitalize="characters" aria-label="رمز العملة">
+    <input id="fee" class="input" inputmode="decimal" placeholder="Fee rate: 0.001" aria-label="رسوم">
+    <input id="slip" class="input" inputmode="decimal" placeholder="Slippage bps: 5" aria-label="انزلاق">
+    <button id="scan" class="btn wide">فحص السوق</button>
+  </div>
+  <div class="muted" style="margin-top:9px">المصدر: بيانات عامة. لا توجد مفاتيح تداول ولا أوامر حقيقية. الإشارات الهابطة للمراقبة/الخروج/التجنب وليست Short execution.</div>
+  <button id="install" class="btn install" type="button">تثبيت RadarX على الهاتف</button>
+</section>
+
+<details class="panel settings">
+  <summary>إعدادات Backend</summary>
+  <div class="settings-row">
+    <input id="apiBase" class="input" inputmode="url" aria-label="Backend Base URL" readonly>
+    <button id="saveApi" class="btn" type="button" disabled>Backend ثابت</button>
+  </div>
+  <div class="settings-help muted">لا توجد مفاتيح سرية هنا. يجب أن يشير العنوان إلى Backend موثوق يعيد عقد RadarX نفسه.</div>
+</details>
+
+<section id="cards" class="grid" aria-live="polite"></section>
+
+<section class="panel">
+  <div class="metrics">
+    <div class="metric"><span class="muted">Data Quality</span><b id="dq">UNKNOWN</b></div>
+    <div class="metric"><span class="muted">Liquidity Quality</span><b id="lq">UNKNOWN</b></div>
+    <div class="metric"><span class="muted">Risk Filter</span><b id="risk">UNKNOWN</b></div>
+  </div>
+  <div class="kv">
+    <div><span class="muted">الثقة</span><b id="confidence">UNKNOWN — UNCALIBRATED</b></div>
+    <div><span class="muted">حالة البيانات</span><b id="dataState">UNKNOWN</b></div>
+    <div><span class="muted">آخر تحديث ناجح</span><b id="last_successful_update">UNKNOWN</b></div>
+    <div><span class="muted">مصدر آخر تحديث</span><b id="source">UNKNOWN</b></div>
+  </div>
+  <div id="riskReasons" class="muted" style="margin-top:10px"></div>
+</section>
+
+<section class="panel">
+  <div class="kv">
+    <div><span class="muted">Backend</span><b id="backendStatus">Checking…</b></div>
+    <div><span class="muted">Data source</span><b id="dataSource">Binance Public REST via RadarX Backend</b></div>
+    <div><span class="muted">Background monitoring</span><b>Not enabled</b></div>
+    <div><span class="muted">Push notifications</span><b>Not configured</b></div>
+    <div><span class="muted">Trading</span><b>Paper Signals only</b></div>
+  </div>
+  <p class="muted" style="margin:10px 0 0">واجهة RadarX لا تتصل بـBinance مباشرة. جميع بيانات السوق والإشارات في هذه المرحلة تمر عبر Backend Railway المحدد في الإعدادات.</p>
+</section>
+
+<section class="panel">
+  <b>Continuous monitoring</b>
+  <p class="muted">المراقبة المستمرة في البنية الإنتاجية تكون من الخادم الخلفي. هذا التطبيق لا يعتمد على إبقاء WebSocket مفتوحًا في الهاتف، وهو جاهز لمسار Push Notifications لاحقًا.</p>
+</section>
+
+<section class="panel">
+  <b>Unified JSON Signal</b>
+  <pre id="json">UNKNOWN</pre>
+</section>
+
+<div class="footer muted">RadarX Phase 1 • Read Only • paper_trading=true • real_order_execution=false • confidence_score=UNKNOWN</div>
+</main>
+
+<script>
+window.__RADARX_BOOT_OK = false;
+window.__RADARX_SHOW_BOOT_ERROR = function(){
+  if (window.__RADARX_BOOT_OK) return;
+  const panel=document.getElementById('appError');
+  if(panel) panel.hidden=false;
+};
+setTimeout(window.__RADARX_SHOW_BOOT_ERROR, 3500);
+</script>
+
+<script type="module">
+import {
+  DEFAULT_BACKEND_BASE_URL,
+  normalizeBackendBaseUrl,
+  fetchBackendState,
+  isFreshLiveSignal,
+  classifyBackendState
+} from './radarx-backend-client.mjs';
+
+const $=id=>document.getElementById(id);
+const API_BASE_KEY='radarx.backend.base_url';
+let backendBaseUrl=DEFAULT_BACKEND_BASE_URL;
+let deferredInstallPrompt=null;
+
+function readBackendBaseUrl(){
+  try{
+    return normalizeBackendBaseUrl(localStorage.getItem(API_BASE_KEY)||DEFAULT_BACKEND_BASE_URL);
+  }catch{
+    return DEFAULT_BACKEND_BASE_URL;
+  }
+}
+function saveBackendBaseUrl(value){
+  try{localStorage.setItem(API_BASE_KEY,value)}catch{}
+}
+function setStatus(mode,text){
+  const el=$('status');
+  el.textContent=text;
+  el.className='status '+(mode==='LIVE_DATA'?'live':mode==='DISCONNECTED'?'off':'warn');
+}
+function setBackendStatus(connected){
+  $('backendStatus').textContent=connected?'Connected':'Disconnected';
+}
+function clearLiveView(message='تعذر الاتصال بالخادم، تحقق من الإنترنت'){
+  $('cards').innerHTML='<div class="card" style="grid-column:1/-1"><div class="state off">DISCONNECTED</div><div style="margin-top:7px">'+message+'</div><div class="muted" style="margin-top:5px">لا يتم استخدام بيانات السوق المخزنة كبيانات LIVE.</div><button id="retryBackend" class="btn" type="button" style="margin-top:10px">إعادة المحاولة</button></div>';
+  const retry=$('retryBackend');
+  if(retry) retry.addEventListener('click',()=>scan(),{once:true});
+  $('dq').textContent='UNKNOWN';
+  $('lq').textContent='UNKNOWN';
+  $('risk').textContent='FAIL';
+  $('confidence').textContent='UNKNOWN';
+  $('dataState').textContent='DISCONNECTED';
+  $('last_successful_update').textContent='UNKNOWN';
+  $('source').textContent='UNKNOWN';
+  $('riskReasons').textContent='لا يمكن اعتماد إشارة جديدة دون Backend وبيانات حديثة صالحة.';
+  $('json').textContent='UNKNOWN';
+}
+function renderDataStale(reason='SNAPSHOT_STALE'){
+  $('cards').innerHTML='<div class="card" style="grid-column:1/-1"><div class="state warn">DATA_STALE</div><div style="margin-top:7px">آخر snapshot غير صالح للعرض كبيانات مباشرة.</div><div class="muted" style="margin-top:5px">'+String(reason)+'</div></div>';
+  $('dq').textContent='UNKNOWN';
+  $('lq').textContent='UNKNOWN';
+  $('risk').textContent='UNKNOWN';
+  $('confidence').textContent='UNKNOWN';
+  $('dataState').textContent='DATA_STALE';
+  $('last_successful_update').textContent='UNKNOWN';
+  $('source').textContent='UNKNOWN';
+  $('riskReasons').textContent='يتم رفض عرض snapshot قديم كبيانات LIVE.';
+  $('json').textContent=JSON.stringify({status:'DATA_STALE',reason},null,2);
+  $('offlineBanner').hidden=false;
+}
+function scoreCard(name,score,state,direction){
+  const n=Number.isFinite(score)?score:0;
+  const cls=state==='CONFIRMED'?'live':state==='REJECTED'?'off':'warn';
+  return '<article class="card"><div class="name">'+name+'</div><div class="score">'+n.toFixed(1)+'</div><div class="scorebar"><i style="width:'+Math.max(0,Math.min(100,n))+'%"></i></div><div class="state '+cls+'">'+state+' · '+direction+'</div></article>';
+}
+function renderLive(response){
+  if(!isFreshLiveSignal(response)){
+    renderDataStale(response?.body?.signal?.data_status?.last_error||'LIVE_DATA_REJECTED');
+    return;
+  }
+  const r=response.body;
+  const x=r.strategies;
+  $('cards').innerHTML=[
+    scoreCard('Multi-Timeframe Trend',x.trend.score?.trendScore,x.trend.state,x.trend.direction),
+    scoreCard('Confirmed Breakout',x.breakout.score?.breakoutScore,x.breakout.state,x.breakout.direction),
+    scoreCard('Filtered Mean Reversion',x.meanReversion.score?.meanReversionScore,x.meanReversion.state,x.meanReversion.direction)
+  ].join('');
+  $('dq').textContent=String(r.signal.scores.data_quality);
+  $('lq').textContent=String(r.signal.scores.liquidity_quality);
+  $('risk').textContent=String(r.signal.risk_filter);
+  $('confidence').textContent='UNKNOWN';
+  $('dataState').textContent='LIVE_DATA';
+  $('last_successful_update').textContent=r.signal.data_status?.latest_successful_update?new Intl.DateTimeFormat('ar',{dateStyle:'medium',timeStyle:'medium'}).format(new Date(r.signal.data_status.latest_successful_update)):'UNKNOWN';
+  $('source').textContent=r.signal.data_status?.source||'UNKNOWN';
+  $('dataSource').textContent='Binance Public REST via RadarX Backend';
+  $('riskReasons').textContent=(r.signal.risk_reasons||[]).join(' · ')||'لا توجد ملاحظات مخاطر إضافية.';
+  $('json').textContent=JSON.stringify(r.signal,null,2);
+  $('offlineBanner').hidden=true;
+  setStatus('LIVE_DATA','LIVE DATA');
+}
+async function scan(){
+  const symbol=$('symbol').value.trim().toUpperCase();
+  if(!/^[A-Z0-9]{5,20}$/.test(symbol)){
+    setStatus('UNKNOWN','رمز غير صالح');
+    return;
+  }
+
+  const base=readBackendBaseUrl();
+  backendBaseUrl=base;
+  $('apiBase').value=base;
+  setStatus('UNKNOWN','الاتصال بـBackend…');
+  $('dataState').textContent='FETCHING';
+  $('offlineBanner').hidden=true;
+
+  let state;
+  try{
+    state=await fetchBackendState(base,symbol);
+  }catch(error){
+    setBackendStatus(false);
+    setStatus('DISCONNECTED','Disconnected');
+    clearLiveView('تعذر الاتصال بالخادم، تحقق من الإنترنت');
+    return;
+  }
+
+  setBackendStatus(state.health.status===200);
+
+  const mode=classifyBackendState(state);
+
+  if(mode==='LIVE_DATA'){
+    renderLive(state.signal);
+    return;
+  }
+
+  if(mode==='DATA_STALE'){
+    setStatus('UNKNOWN','DATA STALE');
+    renderDataStale(
+      state.signal.body?.signal?.data_status?.last_error ||
+      state.readiness.body?.reason ||
+      'SNAPSHOT_STALE'
+    );
+    return;
+  }
+
+  setStatus('DISCONNECTED','Disconnected');
+  clearLiveView(
+    state.signal.status===0
+      ? 'تعذر الوصول إلى Backend Railway.'
+      : 'لم يتم استلام استجابة Backend صالحة للعرض المباشر.'
+  );
+}
+$('saveApi').addEventListener('click',()=>scan());
+window.addEventListener('online',()=>scan());
+window.addEventListener('offline',()=>{
+  setBackendStatus(false);
+  setStatus('DISCONNECTED','Disconnected');
+  $('offlineBanner').hidden=false;
+  clearLiveView();
+});
+
+window.addEventListener('beforeinstallprompt',e=>{
+  e.preventDefault();
+  deferredInstallPrompt=e;
+  $('install').style.display='block';
+});
+$('install').addEventListener('click',async()=>{
+  if(!deferredInstallPrompt)return;
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt=null;
+  $('install').style.display='none';
+});
+
+backendBaseUrl=readBackendBaseUrl();
+$('apiBase').value=backendBaseUrl;
+$('scan').addEventListener('click',scan);
+$('retryApp').addEventListener('click',()=>window.location.reload());
+window.__RADARX_BOOT_OK=true;
+$('appError').hidden=true;
+
+if(navigator.onLine){
+  scan();
+}else{
+  setBackendStatus(false);
+  setStatus('DISCONNECTED','Disconnected');
+  $('offlineBanner').hidden=false;
+  clearLiveView();
+}
+</script>
+</body>
+</html>
