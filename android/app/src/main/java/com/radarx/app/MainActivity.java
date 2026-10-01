@@ -72,7 +72,15 @@ public final class MainActivity extends Activity {
         settings.setAllowContentAccess(false);
 
         webView.addJavascriptInterface(new RadarXSmokeBridge(), "RadarXSmoke");
-        webView.setWebChromeClient(new WebChromeClient());
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
+                Log.i("RadarXWeb", consoleMessage.messageLevel() + ":"
+                        + consoleMessage.message() + "@" + consoleMessage.sourceId()
+                        + ":" + consoleMessage.lineNumber());
+                return true;
+            }
+        });
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
