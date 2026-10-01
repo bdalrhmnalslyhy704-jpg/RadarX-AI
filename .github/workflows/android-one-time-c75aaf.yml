@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 env:
   SOURCE_SHA: c75aaf79150cedec0a44c8a309f3d454cd6e6064
@@ -106,6 +107,14 @@ jobs:
           echo "STAGED_APK=$RUNNER_TEMP/RadarX-c75aaf.apk"
           stat -c "STAGED_APK_SIZE_BYTES=%s" "$RUNNER_TEMP/RadarX-c75aaf.apk"
 
+      - name: Upload APK for emulator
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-apk-for-emulator
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Android emulator Market Radar online/offline smoke
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -114,7 +123,9 @@ jobs:
           arch: x86_64
           script: |
             set -eu
-            APK="$RUNNER_TEMP/RadarX-c75aaf.apk"
+            mkdir -p "$HOME/radarx-emulator-apk"
+            gh run download "$GITHUB_RUN_ID" --name radarx-apk-for-emulator --dir "$HOME/radarx-emulator-apk"
+            APK="$HOME/radarx-emulator-apk/app-release.apk"
             test -s "$APK"
             echo "DEVICE_APK=$APK"
             ls -lh "$APK"
