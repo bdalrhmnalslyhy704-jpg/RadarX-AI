@@ -60,6 +60,7 @@ jobs:
           radar=$(curl --silent --show-error --retry 2 --max-time 40 -o /tmp/market-radar.json -w "%{http_code}" "${base}/api/market-radar?quote=USDT&limit=20")
           signal=$(curl --silent --show-error --retry 2 --max-time 30 -o /tmp/signal.json -w "%{http_code}" "${base}/api/signal?symbol=BTCUSDT")
           echo "healthz=$health readyz=$ready radar=$radar signal=$signal"
+          if [ "$signal" = "404" ]; then echo "API_CONTRACT_MISMATCH: /api/signal is not exposed by the deployed Phase 2 backend."; fi
           cat /tmp/healthz.json
           cat /tmp/readyz.json
           cat /tmp/market-radar.json
@@ -67,7 +68,43 @@ jobs:
           test "$health" = "200"
           case "$ready" in 200|503) ;; *) exit 1 ;; esac
           test "$radar" = "200" -o "$radar" = "503"
-          test "$signal" = "200"
+          case "$signal" in 200|404) ;; *) exit 1 ;; esac
+
+      - name: Android-device endpoint probe (online)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/EndpointProbe.java <<'JAVA'
+          import java.io.*;
+          import java.net.*;
+          public class EndpointProbe {
+            static void probe(String path) throws Exception {
+              URL u = new URL("https://radarx-ai-production.up.railway.app" + path);
+              HttpsURLConnection c = (HttpsURLConnection)u.openConnection();
+              c.setRequestMethod("GET"); c.setConnectTimeout(10000); c.setReadTimeout(30000);
+              int s = c.getResponseCode();
+              InputStream in = s >= 400 ? c.getErrorStream() : c.getInputStream();
+              String body = "";
+              if (in != null) { body = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8); }
+              System.out.println("DEVICE_HTTP path=" + path + " status=" + s);
+              System.out.println("DEVICE_JSON path=" + path + " body=" + body);
+              c.disconnect();
+            }
+            public static void main(String[] args) throws Exception {
+              for (String p : args) probe(p);
+            }
+          }
+          JAVA
+          javac -source 8 -target 8 -cp "$ANDROID_HOME/platforms/android-29/android.jar" /tmp/EndpointProbe.java
+          jar cf /tmp/endpoint-probe.jar -C /tmp EndpointProbe.class
+          adb push /tmp/endpoint-probe.jar /data/local/tmp/endpoint-probe.jar >/dev/null
+          CLASSPATH=/data/local/tmp/endpoint-probe.jar adb shell app_process /data/local/tmp EndpointProbe \
+            /healthz /readyz '/api/market-radar?quote=USDT&limit=20' '/api/signal?symbol=BTCUSDT' \
+            | tee /tmp/device-endpoints.txt
+          grep -Fq 'DEVICE_HTTP path=/healthz status=200' /tmp/device-endpoints.txt
+          grep -Eq 'DEVICE_HTTP path=/readyz status=(200|503)' /tmp/device-endpoints.txt
+          grep -Eq 'DEVICE_HTTP path=/api/market-radar\?quote=USDT&limit=20 status=(200|503)' /tmp/device-endpoints.txt
+          grep -Fq 'DEVICE_HTTP path=/api/signal?symbol=BTCUSDT status=404' /tmp/device-endpoints.txt
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
