@@ -67,18 +67,21 @@ function inspectPublicSignal(snapshot,now,maxFreshnessMs,minDataQuality){
   const stale=Boolean(ds.stale) || fetchAgeMs>maxFreshnessMs || candleAgeMs>maxFreshnessMs;
   const gaps=Boolean(ds.gaps);
   const dq=finiteOrNull(signal.scores?.data_quality);
-  const source=publicSource(ds.source);
+  const sourceKey=String(ds.source||'').trim().toUpperCase();
+  const sourceAllowed=sourceKey==='BINANCE_PUBLIC_REST'||sourceKey==='BINANCE_PUBLIC_WS';
+  const source=publicSource(sourceKey);
   const strategies=snapshot.strategies;
   const trend=strategyById(strategies,'MTF_TREND');
   const breakout=strategyById(strategies,'CONFIRMED_BREAKOUT');
   const meanReversion=strategyById(strategies,'MEAN_REVERSION');
   const completeStrategies=Boolean(trend&&breakout&&meanReversion);
-  const invalid=future||gaps||dq===null||dq<minDataQuality||!completeStrategies||
+  const invalid=future||gaps||!sourceAllowed||dq===null||dq<minDataQuality||!completeStrategies||
     signal.paper_trade?.enabled!==true||signal.paper_trade?.real_order_execution!==false;
   let reason=null;
   if(future)reason='FUTURE_DATA';
   else if(stale)reason='STALE_SNAPSHOT';
   else if(gaps)reason='DATA_GAPS';
+  else if(!sourceAllowed)reason='SOURCE_UNAVAILABLE';
   else if(dq===null||dq<minDataQuality)reason='LOW_DATA_QUALITY';
   else if(!completeStrategies)reason='PARTIAL_ANALYSIS';
   else if(signal.paper_trade?.enabled!==true||signal.paper_trade?.real_order_execution!==false)reason='READ_ONLY_POLICY_VIOLATION';
