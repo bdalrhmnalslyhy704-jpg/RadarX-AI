@@ -21,3 +21,11 @@ jobs:
         run: npm audit --omit=dev --audit-level=critical
       - name: Run Phase 1 and Phase 2 tests
         run: npm test
+      - name: Check required Phase 2 modules
+        run: |
+          node --check phase2/server.mjs
+          node --check phase2/runtime.mjs
+          node --check phase2/http/api.mjs
+          node --check phase2/market/universe-scanner.mjs
+      - name: Build Docker image
+        run: docker build -t radarx-phase4-test .
