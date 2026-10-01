@@ -103,7 +103,10 @@ jobs:
           arch: x86_64
           script: |
             set -eu
-            APK="android/app/build/outputs/apk/release/app-release.apk"
+            APK="$GITHUB_WORKSPACE/android/app/build/outputs/apk/release/app-release.apk"
+            test -s "$APK"
+            echo "DEVICE_APK=$APK"
+            ls -lh "$APK"
             adb install -r "$APK"
             adb logcat -c
             adb shell am force-stop com.radarx.app || true
@@ -112,7 +115,6 @@ jobs:
             cat > /tmp/EndpointProbe.java <<'JAVA'
             import java.io.*;
             import java.net.*;
-          import javax.net.ssl.HttpsURLConnection;
             import javax.net.ssl.HttpsURLConnection;
             public class EndpointProbe {
               static void probe(String path) throws Exception {
