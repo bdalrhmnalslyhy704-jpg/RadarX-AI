@@ -21,7 +21,13 @@ import android.webkit.WebViewClient;
 import androidx.webkit.WebViewAssetLoader;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
 
 @SuppressLint("SetJavaScriptEnabled")
 public final class MainActivity extends Activity {
@@ -82,7 +88,7 @@ public final class MainActivity extends Activity {
                     return local;
                 }
                 if (isAllowedBackendUri(uri)) {
-                    return super.shouldInterceptRequest(view, request);
+                    return fetchBackend(request);
                 }
                 return blockedResponse("Network destination blocked");
             }
@@ -124,6 +130,79 @@ public final class MainActivity extends Activity {
                 && "https".equalsIgnoreCase(uri.getScheme())
                 && BACKEND_ORIGIN.equalsIgnoreCase(uri.getScheme() + "://" + uri.getHost())
                 && (uri.getPort() == -1 || uri.getPort() == 443);
+    }
+
+    private static WebResourceResponse fetchBackend(WebResourceRequest request) {
+        HttpURLConnection connection = null;
+        try {
+            URL url = new URL(request.getUrl().toString());
+            if (!BACKEND_ORIGIN.equalsIgnoreCase(url.getProtocol() + "://" + url.getHost())) {
+                return blockedResponse("Backend destination blocked");
+            }
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(8000);
+            connection.setReadTimeout(8000);
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("Accept-Encoding", "identity");
+
+            int status = connection.getResponseCode();
+            InputStream source = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
+            byte[] body = source == null ? new byte[0] : readAll(source);
+            if (source != null) source.close();
+
+            String contentType = connection.getContentType();
+            String mime = "application/json";
+            String charset = "UTF-8";
+            if (contentType != null && !contentType.isEmpty()) {
+                String[] parts = contentType.split(";");
+                if (parts.length > 0 && parts[0].contains("/")) mime = parts[0].trim();
+                for (String part : parts) {
+                    String p = part.trim();
+                    if (p.toLowerCase().startsWith("charset=")) charset = p.substring(8).trim();
+                }
+            }
+
+            Map<String, String> headers = new HashMap<>();
+            headers.put("Access-Control-Allow-Origin", APP_ORIGIN);
+            headers.put("Access-Control-Allow-Methods", "GET, OPTIONS");
+            headers.put("Cache-Control", "no-store");
+            headers.put("Vary", "Origin");
+            return new WebResourceResponse(
+                    mime,
+                    charset,
+                    status,
+                    connection.getResponseMessage() == null ? "HTTP " + status : connection.getResponseMessage(),
+                    headers,
+                    new ByteArrayInputStream(body)
+            );
+        } catch (Exception error) {
+            String body = "{\"status\":503,\"error\":\"BACKEND_CONNECTION_FAILED\"}";
+            Map<String, String> headers = new HashMap<>();
+            headers.put("Access-Control-Allow-Origin", APP_ORIGIN);
+            headers.put("Cache-Control", "no-store");
+            return new WebResourceResponse(
+                    "application/json",
+                    "UTF-8",
+                    503,
+                    "Backend Unavailable",
+                    headers,
+                    new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8))
+            );
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
+    private static byte[] readAll(InputStream input) throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int count;
+        while ((count = input.read(buffer)) != -1) {
+            output.write(buffer, 0, count);
+        }
+        return output.toByteArray();
     }
 
     private static WebResourceResponse blockedResponse(String message) {
