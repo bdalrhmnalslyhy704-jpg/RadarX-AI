@@ -2,6 +2,7 @@ import http from 'node:http';
 import {verifySessionToken} from '../core/auth.mjs';
 import {defaultSettings} from '../core/signal-service.mjs';
 import {DurableStore} from '../core/store.mjs';
+import {MarketUniverseScanner} from '../market/universe-scanner.mjs';
 
 function send(res,status,body,extra={}){
   const data=JSON.stringify(body);
@@ -34,6 +35,10 @@ function subscriptionValid(x){
 export function createApiServer({config,store,monitor,pushProvider,pushManager=null}){
   const counters=new Map();
   const originList=config.auth.allowedOrigins;
+  const marketRadar = monitor?.rest ? new MarketUniverseScanner({
+    rest: monitor.rest,
+    config: config.marketRadar ?? {}
+  }) : null;
   function allowedOrigin(req){
     const o=req.headers.origin;if(!o||!originList.length)return null;return originList.includes(o)?o:null;
   }
@@ -60,6 +65,18 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,monitor.health());
       if(u.pathname==='/readyz'&&req.method==='GET'){
         const h=monitor.health(),ok=h.database.state==='LIVE'&&(h.websocket.state==='LIVE'||h.rest.state==='LIVE');return send(res,ok?200:503,{ready:ok,health:h});
+      }
+      if(u.pathname==='/api/market-radar'&&req.method==='GET'){
+        if(!marketRadar)return send(res,503,{error:'MARKET_RADAR_UNAVAILABLE'});
+        const quote=String(u.searchParams.get('quote')||'USDT').trim().toUpperCase();
+        const limit=u.searchParams.get('limit')||'20';
+        try{
+          return send(res,200,await marketRadar.scan({quote,limit}));
+        }catch(e){
+          const m=String(e?.message??e);
+          const status=/INVALID_QUOTE|INVALID_EXCHANGE_INFO/.test(m)?400:/RATE_LIMIT|TIMEOUT|UNAVAILABLE|FAILED/.test(m)?502:500;
+          return send(res,status,{error:m,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},source:'Binance Public REST',candidates:[]});
+        }
       }
       if(!u.pathname.startsWith('/v1/'))return send(res,404,{error:'NOT_FOUND'});
       const user=authUser(req);if(!user)return send(res,401,{error:'UNAUTHORIZED'});
