@@ -39,6 +39,16 @@ pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-ra
 </head>
 <body>
 <main>
+<section id="appError" class="panel" hidden style="border-color:#9b4651">
+  <div class="banner">
+    <div class="dot"></div>
+    <div>
+      <h2>تعذر تشغيل الواجهة</h2>
+      <p class="muted">تعذر تحميل واجهة RadarX. اضغط إعادة المحاولة.</p>
+      <button id="retryApp" class="btn" type="button" style="margin-top:10px">إعادة المحاولة</button>
+    </div>
+  </div>
+</section>
 <header class="top">
   <div><div class="brand">RadarX Phase 1</div><div class="muted">تحليل العملات • قراءة فقط • Paper Trading</div></div>
   <div id="status" class="status warn" aria-live="polite">جاري التهيئة</div>
@@ -63,8 +73,8 @@ pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-ra
 <details class="panel settings">
   <summary>إعدادات Backend</summary>
   <div class="settings-row">
-    <input id="apiBase" class="input" inputmode="url" aria-label="Backend Base URL">
-    <button id="saveApi" class="btn" type="button">حفظ</button>
+    <input id="apiBase" class="input" inputmode="url" aria-label="Backend Base URL" readonly>
+    <button id="saveApi" class="btn" type="button" disabled>Backend ثابت</button>
   </div>
   <div class="settings-help muted">لا توجد مفاتيح سرية هنا. يجب أن يشير العنوان إلى Backend موثوق يعيد عقد RadarX نفسه.</div>
 </details>
@@ -107,8 +117,18 @@ pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-ra
   <pre id="json">UNKNOWN</pre>
 </section>
 
-<div class="footer muted">RadarX Phase 1 • Read Only • real_order_execution = false</div>
+<div class="footer muted">RadarX Phase 1 • Read Only • paper_trading=true • real_order_execution=false • confidence_score=UNKNOWN</div>
 </main>
+
+<script>
+window.__RADARX_BOOT_OK = false;
+window.__RADARX_SHOW_BOOT_ERROR = function(){
+  if (window.__RADARX_BOOT_OK) return;
+  const panel=document.getElementById('appError');
+  if(panel) panel.hidden=false;
+};
+setTimeout(window.__RADARX_SHOW_BOOT_ERROR, 3500);
+</script>
 
 <script type="module">
 import {
@@ -142,8 +162,10 @@ function setStatus(mode,text){
 function setBackendStatus(connected){
   $('backendStatus').textContent=connected?'Connected':'Disconnected';
 }
-function clearLiveView(message='لا توجد بيانات سوق مباشرة متاحة.'){
-  $('cards').innerHTML='<div class="card" style="grid-column:1/-1"><div class="state off">DISCONNECTED</div><div style="margin-top:7px">'+message+'</div><div class="muted" style="margin-top:5px">لا يتم استخدام بيانات السوق المخزنة كبيانات LIVE.</div></div>';
+function clearLiveView(message='تعذر الاتصال بالخادم، تحقق من الإنترنت'){
+  $('cards').innerHTML='<div class="card" style="grid-column:1/-1"><div class="state off">DISCONNECTED</div><div style="margin-top:7px">'+message+'</div><div class="muted" style="margin-top:5px">لا يتم استخدام بيانات السوق المخزنة كبيانات LIVE.</div><button id="retryBackend" class="btn" type="button" style="margin-top:10px">إعادة المحاولة</button></div>';
+  const retry=$('retryBackend');
+  if(retry) retry.addEventListener('click',()=>scan(),{once:true});
   $('dq').textContent='UNKNOWN';
   $('lq').textContent='UNKNOWN';
   $('risk').textContent='FAIL';
@@ -211,7 +233,15 @@ async function scan(){
   $('dataState').textContent='FETCHING';
   $('offlineBanner').hidden=true;
 
-  const state=await fetchBackendState(base,symbol);
+  let state;
+  try{
+    state=await fetchBackendState(base,symbol);
+  }catch(error){
+    setBackendStatus(false);
+    setStatus('DISCONNECTED','Disconnected');
+    clearLiveView('تعذر الاتصال بالخادم، تحقق من الإنترنت');
+    return;
+  }
 
   setBackendStatus(state.health.status===200);
 
@@ -239,18 +269,7 @@ async function scan(){
       : 'لم يتم استلام استجابة Backend صالحة للعرض المباشر.'
   );
 }
-$('saveApi').addEventListener('click',()=>{
-  try{
-    const normalized=normalizeBackendBaseUrl($('apiBase').value);
-    backendBaseUrl=normalized;
-    saveBackendBaseUrl(normalized);
-    $('apiBase').value=normalized;
-    setStatus('UNKNOWN','تم حفظ Backend — جارِ الفحص…');
-    scan();
-  }catch{
-    setStatus('UNKNOWN','Backend URL غير صالح');
-  }
-});
+$('saveApi').addEventListener('click',()=>scan());
 window.addEventListener('online',()=>scan());
 window.addEventListener('offline',()=>{
   setBackendStatus(false);
@@ -259,9 +278,6 @@ window.addEventListener('offline',()=>{
   clearLiveView();
 });
 
-if('serviceWorker' in navigator){
-  navigator.serviceWorker.register('./sw.js').catch(()=>{});
-}
 window.addEventListener('beforeinstallprompt',e=>{
   e.preventDefault();
   deferredInstallPrompt=e;
@@ -278,6 +294,9 @@ $('install').addEventListener('click',async()=>{
 backendBaseUrl=readBackendBaseUrl();
 $('apiBase').value=backendBaseUrl;
 $('scan').addEventListener('click',scan);
+$('retryApp').addEventListener('click',()=>window.location.reload());
+window.__RADARX_BOOT_OK=true;
+$('appError').hidden=true;
 
 if(navigator.onLine){
   scan();
