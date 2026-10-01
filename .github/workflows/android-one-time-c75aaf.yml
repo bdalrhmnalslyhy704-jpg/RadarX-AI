@@ -95,6 +95,17 @@ jobs:
           "$BT/aapt2" dump badging "$APK" | grep -E "package: name=|application-label:"
           "$BT/apksigner" verify --verbose "$APK"
 
+      - name: Stage APK for emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          cp "$APK" "$RUNNER_TEMP/RadarX-c75aaf.apk"
+          test -s "$RUNNER_TEMP/RadarX-c75aaf.apk"
+          echo "STAGED_APK=$RUNNER_TEMP/RadarX-c75aaf.apk"
+          stat -c "STAGED_APK_SIZE_BYTES=%s" "$RUNNER_TEMP/RadarX-c75aaf.apk"
+
       - name: Android emulator Market Radar online/offline smoke
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -103,7 +114,7 @@ jobs:
           arch: x86_64
           script: |
             set -eu
-            APK="$GITHUB_WORKSPACE/android/app/build/outputs/apk/release/app-release.apk"
+            APK="$RUNNER_TEMP/RadarX-c75aaf.apk"
             test -s "$APK"
             echo "DEVICE_APK=$APK"
             ls -lh "$APK"
@@ -130,6 +141,32 @@ jobs:
                 String body = new String(out.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
                 System.out.println("DEVICE_HTTP path=" + path + " status=" + s);
                 System.out.println("DEVICE_JSON path=" + path + " body=" + body);
+                if (path.startsWith("/api/market-radar")) {
+                  try {
+                    org.json.JSONObject root = new org.json.JSONObject(body);
+                    org.json.JSONArray candidates = root.optJSONArray("candidates");
+                    if (candidates == null) throw new IllegalStateException("candidates missing");
+                    int count = candidates.length();
+                    int minStrategies = Integer.MAX_VALUE;
+                    int maxStrategies = Integer.MIN_VALUE;
+                    for (int i = 0; i < count; i++) {
+                      org.json.JSONObject candidate = candidates.optJSONObject(i);
+                      if (candidate == null) throw new IllegalStateException("candidate[" + i + "] invalid");
+                      org.json.JSONArray strategies = candidate.optJSONArray("strategies");
+                      int n = strategies == null ? 0 : strategies.length();
+                      minStrategies = Math.min(minStrategies, n);
+                      maxStrategies = Math.max(maxStrategies, n);
+                      if (n != 10) throw new IllegalStateException("candidate[" + i + "] strategies=" + n);
+                    }
+                    if (count == 0) { minStrategies = 0; maxStrategies = 0; }
+                    System.out.println("DEVICE_MARKET_RADAR_CANDIDATES=" + count);
+                    System.out.println("DEVICE_MARKET_RADAR_STRATEGIES_MIN=" + minStrategies);
+                    System.out.println("DEVICE_MARKET_RADAR_STRATEGIES_MAX=" + maxStrategies);
+                  } catch (Exception jsonError) {
+                    System.out.println("DEVICE_MARKET_RADAR_CONTRACT_ERROR=" + jsonError.getMessage());
+                    throw jsonError;
+                  }
+                }
                 c.disconnect();
               }
               public static void main(String[] args) throws Exception { for (String p : args) probe(p); }
@@ -145,6 +182,9 @@ jobs:
             grep -Eq 'DEVICE_HTTP path=/readyz status=(200|503)' /tmp/device-endpoints.txt
             grep -Eq 'DEVICE_HTTP path=/api/market-radar\?quote=USDT&limit=20 status=(200|503)' /tmp/device-endpoints.txt
             grep -Fq 'DEVICE_HTTP path=/api/signal?symbol=BTCUSDT status=404' /tmp/device-endpoints.txt
+            grep -Eq 'DEVICE_MARKET_RADAR_CANDIDATES=[1-9][0-9]*' /tmp/device-endpoints.txt
+            grep -Fq 'DEVICE_MARKET_RADAR_STRATEGIES_MIN=10' /tmp/device-endpoints.txt
+            grep -Fq 'DEVICE_MARKET_RADAR_STRATEGIES_MAX=10' /tmp/device-endpoints.txt
 
             for i in $(seq 1 12); do
               sleep 2
