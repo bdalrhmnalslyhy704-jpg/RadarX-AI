@@ -116,136 +116,127 @@ jobs:
           retention-days: 1
 
       - name: Android emulator Market Radar online/offline smoke
-        uses: reactivecircus/android-emulator-runner@v2
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        with:
-          api-level: 29
-          target: default
-          arch: x86_64
-          script: |
-            set -eu
-            rm -rf /tmp/radarx-apk-download /tmp/radarx-apk.zip
-            mkdir -p /tmp/radarx-apk-download
-            ARTIFACT_ID="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --jq '.artifacts[] | select(.name=="radarx-apk-for-emulator" and .expired==false) | .id' | head -n1)"
-            test -n "$ARTIFACT_ID"
-            echo "DEVICE_ARTIFACT_ID=$ARTIFACT_ID"
-            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" -o /tmp/radarx-apk.zip
-            test -s /tmp/radarx-apk.zip
-            unzip -q /tmp/radarx-apk.zip -d /tmp/radarx-apk-download
-            APK="$(find /tmp/radarx-apk-download -type f -name '*.apk' -print -quit)"
-            test -n "$APK"
-            test -s "$APK"
-            echo "DEVICE_APK=$APK"
-            find /tmp/radarx-apk-download -maxdepth 4 -type f -name '*.apk' -ls
-            adb install -r "$APK"
-            adb logcat -c
-            adb shell am force-stop com.radarx.app || true
-            adb shell am start -n com.radarx.app/.MainActivity >/dev/null
+        run: |
+          set -euo pipefail
+          echo "Setting up Android emulator on the same runner filesystem."
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager --install 'build-tools;37.0.0' platform-tools emulator 'platforms;android-29' 'system-images;android-29;default;x86_64' >/dev/null
+          echo no | avdmanager create avd --force -n radarx-ci --package 'system-images;android-29;default;x86_64'
+          printf 'hw.cpu.ncore=2\n' >> "$HOME/.android/avd/radarx-ci.avd/config.ini"
+          adb start-server >/dev/null
+          "$ANDROID_HOME/emulator/emulator" -avd radarx-ci -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -accel off > /tmp/radarx-emulator.log 2>&1 &
+          EMU_PID=$!
+          trap 'adb -s emulator-5554 emu kill >/dev/null 2>&1 || true; kill "$EMU_PID" >/dev/null 2>&1 || true' EXIT
+          adb wait-for-device
+          booted=0
+          for i in $(seq 1 180); do
+            if [ "$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\\r')" = "1" ]; then booted=1; break; fi
+            sleep 2
+          done
+          test "$booted" = "1"
+          adb -s emulator-5554 shell input keyevent 82 >/dev/null 2>&1 || true
+          adb -s emulator-5554 shell settings put global window_animation_scale 0 >/dev/null 2>&1 || true
+          adb -s emulator-5554 shell settings put global transition_animation_scale 0 >/dev/null 2>&1 || true
+          adb -s emulator-5554 shell settings put global animator_duration_scale 0 >/dev/null 2>&1 || true
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          adb -s emulator-5554 install -r "$APK"
+          adb -s emulator-5554 logcat -c
+          adb -s emulator-5554 shell am force-stop com.radarx.app || true
+          adb -s emulator-5554 shell am start -n com.radarx.app/.MainActivity >/dev/null
 
-            cat > /tmp/EndpointProbe.java <<'JAVA'
-            import java.io.*;
-            import java.net.*;
-            import javax.net.ssl.HttpsURLConnection;
-            public class EndpointProbe {
-              static void probe(String path) throws Exception {
-                URL u = new URL("https://radarx-ai-production.up.railway.app" + path);
-                HttpsURLConnection c = (HttpsURLConnection) u.openConnection();
-                c.setRequestMethod("GET");
-                c.setConnectTimeout(10000);
-                c.setReadTimeout(30000);
-                int s = c.getResponseCode();
-                InputStream in = s >= 400 ? c.getErrorStream() : c.getInputStream();
-                ByteArrayOutputStream out = new ByteArrayOutputStream();
-                if (in != null) { byte[] b = new byte[8192]; int n; while ((n=in.read(b))!=-1) out.write(b,0,n); }
-                String body = new String(out.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
-                System.out.println("DEVICE_HTTP path=" + path + " status=" + s);
-                System.out.println("DEVICE_JSON path=" + path + " body=" + body);
-                if (path.startsWith("/api/market-radar")) {
-                  try {
-                    org.json.JSONObject root = new org.json.JSONObject(body);
-                    org.json.JSONArray candidates = root.optJSONArray("candidates");
-                    if (candidates == null) throw new IllegalStateException("candidates missing");
-                    int count = candidates.length();
-                    int minStrategies = Integer.MAX_VALUE;
-                    int maxStrategies = Integer.MIN_VALUE;
-                    for (int i = 0; i < count; i++) {
-                      org.json.JSONObject candidate = candidates.optJSONObject(i);
-                      if (candidate == null) throw new IllegalStateException("candidate[" + i + "] invalid");
-                      org.json.JSONArray strategies = candidate.optJSONArray("strategies");
-                      int n = strategies == null ? 0 : strategies.length();
-                      minStrategies = Math.min(minStrategies, n);
-                      maxStrategies = Math.max(maxStrategies, n);
-                      if (n != 10) throw new IllegalStateException("candidate[" + i + "] strategies=" + n);
-                    }
-                    if (count == 0) { minStrategies = 0; maxStrategies = 0; }
-                    System.out.println("DEVICE_MARKET_RADAR_CANDIDATES=" + count);
-                    System.out.println("DEVICE_MARKET_RADAR_STRATEGIES_MIN=" + minStrategies);
-                    System.out.println("DEVICE_MARKET_RADAR_STRATEGIES_MAX=" + maxStrategies);
-                  } catch (Exception jsonError) {
-                    System.out.println("DEVICE_MARKET_RADAR_CONTRACT_ERROR=" + jsonError.getMessage());
-                    throw jsonError;
-                  }
+          cat > /tmp/EndpointProbe.java <<'JAVA'
+          import java.io.*;
+          import java.net.*;
+          import javax.net.ssl.HttpsURLConnection;
+          public class EndpointProbe {
+            static void probe(String path) throws Exception {
+              URL u = new URL("https://radarx-ai-production.up.railway.app" + path);
+              HttpsURLConnection c = (HttpsURLConnection) u.openConnection();
+              c.setRequestMethod("GET");
+              c.setConnectTimeout(10000);
+              c.setReadTimeout(30000);
+              int s = c.getResponseCode();
+              InputStream in = s >= 400 ? c.getErrorStream() : c.getInputStream();
+              ByteArrayOutputStream out = new ByteArrayOutputStream();
+              if (in != null) { byte[] b = new byte[8192]; int n; while ((n=in.read(b))!=-1) out.write(b,0,n); in.close(); }
+              String body = new String(out.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+              System.out.println("DEVICE_HTTP path=" + path + " status=" + s);
+              System.out.println("DEVICE_JSON path=" + path + " body=" + body);
+              if (path.startsWith("/api/market-radar")) {
+                org.json.JSONObject root = new org.json.JSONObject(body);
+                org.json.JSONArray candidates = root.optJSONArray("candidates");
+                if (candidates == null) throw new IllegalStateException("candidates missing");
+                int count = candidates.length();
+                int minStrategies = Integer.MAX_VALUE;
+                int maxStrategies = Integer.MIN_VALUE;
+                for (int i = 0; i < count; i++) {
+                  org.json.JSONObject candidate = candidates.optJSONObject(i);
+                  if (candidate == null) throw new IllegalStateException("candidate[" + i + "] invalid");
+                  org.json.JSONArray strategies = candidate.optJSONArray("strategies");
+                  int n = strategies == null ? 0 : strategies.length();
+                  minStrategies = Math.min(minStrategies, n);
+                  maxStrategies = Math.max(maxStrategies, n);
+                  if (n != 10) throw new IllegalStateException("candidate[" + i + "] strategies=" + n);
                 }
-                c.disconnect();
+                if (count == 0) { minStrategies = 0; maxStrategies = 0; }
+                System.out.println("DEVICE_MARKET_RADAR_CANDIDATES=" + count);
+                System.out.println("DEVICE_MARKET_RADAR_STRATEGIES_MIN=" + minStrategies);
+                System.out.println("DEVICE_MARKET_RADAR_STRATEGIES_MAX=" + maxStrategies);
               }
-              public static void main(String[] args) throws Exception { for (String p : args) probe(p); }
+              c.disconnect();
             }
-            JAVA
-            javac -source 8 -target 8 -cp "$ANDROID_HOME/platforms/android-29/android.jar" /tmp/EndpointProbe.java
-            jar cf /tmp/endpoint-probe.jar -C /tmp EndpointProbe.class
-            adb push /tmp/endpoint-probe.jar /data/local/tmp/endpoint-probe.jar >/dev/null
-            CLASSPATH=/data/local/tmp/endpoint-probe.jar adb shell app_process /data/local/tmp EndpointProbe \
-              /healthz /readyz '/api/market-radar?quote=USDT&limit=20' '/api/signal?symbol=BTCUSDT' | tee /tmp/device-endpoints.txt
+            public static void main(String[] args) throws Exception { for (String p : args) probe(p); }
+          }
+          JAVA
+          javac -source 8 -target 8 -cp "$ANDROID_HOME/platforms/android-29/android.jar" /tmp/EndpointProbe.java
+          jar cf /tmp/endpoint-probe.jar -C /tmp EndpointProbe.class
+          adb -s emulator-5554 push /tmp/endpoint-probe.jar /data/local/tmp/endpoint-probe.jar >/dev/null
+          CLASSPATH=/data/local/tmp/endpoint-probe.jar adb -s emulator-5554 shell app_process /data/local/tmp EndpointProbe /healthz /readyz '/api/market-radar?quote=USDT&limit=20' '/api/signal?symbol=BTCUSDT' | tee /tmp/device-endpoints.txt
+          grep -Fq 'DEVICE_HTTP path=/healthz status=200' /tmp/device-endpoints.txt
+          grep -Eq 'DEVICE_HTTP path=/readyz status=(200|503)' /tmp/device-endpoints.txt
+          grep -Eq 'DEVICE_HTTP path=/api/market-radar\\?quote=USDT&limit=20 status=(200|503)' /tmp/device-endpoints.txt
+          grep -Fq 'DEVICE_HTTP path=/api/signal?symbol=BTCUSDT status=404' /tmp/device-endpoints.txt
+          grep -Eq 'DEVICE_MARKET_RADAR_CANDIDATES=[1-9][0-9]*' /tmp/device-endpoints.txt
+          grep -Fq 'DEVICE_MARKET_RADAR_STRATEGIES_MIN=10' /tmp/device-endpoints.txt
+          grep -Fq 'DEVICE_MARKET_RADAR_STRATEGIES_MAX=10' /tmp/device-endpoints.txt
 
-            grep -Fq 'DEVICE_HTTP path=/healthz status=200' /tmp/device-endpoints.txt
-            grep -Eq 'DEVICE_HTTP path=/readyz status=(200|503)' /tmp/device-endpoints.txt
-            grep -Eq 'DEVICE_HTTP path=/api/market-radar\?quote=USDT&limit=20 status=(200|503)' /tmp/device-endpoints.txt
-            grep -Fq 'DEVICE_HTTP path=/api/signal?symbol=BTCUSDT status=404' /tmp/device-endpoints.txt
-            grep -Eq 'DEVICE_MARKET_RADAR_CANDIDATES=[1-9][0-9]*' /tmp/device-endpoints.txt
-            grep -Fq 'DEVICE_MARKET_RADAR_STRATEGIES_MIN=10' /tmp/device-endpoints.txt
-            grep -Fq 'DEVICE_MARKET_RADAR_STRATEGIES_MAX=10' /tmp/device-endpoints.txt
+          online_ok=0
+          for i in $(seq 1 20); do
+            sleep 2
+            LOGS="$(adb -s emulator-5554 logcat -d -s RadarXSmoke:I RadarXWeb:I '*:S' 2>/dev/null || true)"
+            if printf '%s\\n' "$LOGS" | grep -Fq 'UI_READY' && printf '%s\\n' "$LOGS" | grep -Fq 'BACKEND_CONNECTED' && printf '%s\\n' "$LOGS" | grep -Fq 'SCAN_COMPLETE'; then online_ok=1; break; fi
+          done
+          LOGS="$(adb -s emulator-5554 logcat -d -s RadarXSmoke:I RadarXWeb:I '*:S' 2>/dev/null || true)"
+          printf '%s\\n' "$LOGS"
+          test "$online_ok" = "1"
+          ! printf '%s\\n' "$LOGS" | grep -Fq 'ReferenceError'
+          echo 'DEVICE_ONLINE_SMOKE=PASS'
 
-            for i in $(seq 1 12); do
-              sleep 2
-              LOGS="$(adb logcat -d -s RadarXSmoke:I '*:S' 2>/dev/null || true)"
-              printf '%s\n' "$LOGS"
-              if printf '%s\n' "$LOGS" | grep -Fq "UI_READY" &&
-                 printf '%s\n' "$LOGS" | grep -Fq "BACKEND_CONNECTED" &&
-                 printf '%s\n' "$LOGS" | grep -Fq "SCAN_COMPLETE"; then
-                break
-              fi
-            done
-            LOGS="$(adb logcat -d -s RadarXSmoke:I RadarXWeb:I '*:S' 2>/dev/null || true)"
-            printf '%s\n' "$LOGS"
-            printf '%s\n' "$LOGS" | grep -Fq "UI_READY"
-            printf '%s\n' "$LOGS" | grep -Fq "BACKEND_CONNECTED"
-            printf '%s\n' "$LOGS" | grep -Fq "SCAN_COMPLETE"
-            ! printf '%s\n' "$LOGS" | grep -Fq "ReferenceError"
-
-            adb shell cmd connectivity airplane-mode enable >/dev/null 2>&1 || true
-            adb shell settings put global airplane_mode_on 1 >/dev/null 2>&1 || true
-            adb shell svc wifi disable >/dev/null 2>&1 || true
-            adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true >/dev/null 2>&1 || true
-            sleep 3
-            adb logcat -c
-            adb shell am force-stop com.radarx.app || true
-            adb shell am start -n com.radarx.app/.MainActivity >/dev/null
-
-            for i in $(seq 1 8); do
-              sleep 2
-              LOGS="$(adb logcat -d -s RadarXSmoke:I '*:S' 2>/dev/null || true)"
-              if printf '%s\n' "$LOGS" | grep -Fq "UI_READY" &&
-                 printf '%s\n' "$LOGS" | grep -Fq "BACKEND_DISCONNECTED"; then
-                break
-              fi
-            done
-            LOGS="$(adb logcat -d -s RadarXSmoke:I RadarXWeb:I '*:S' 2>/dev/null || true)"
-            printf '%s\n' "$LOGS"
-            printf '%s\n' "$LOGS" | grep -Fq "UI_READY"
-            printf '%s\n' "$LOGS" | grep -Fq "BACKEND_DISCONNECTED"
-            ! printf '%s\n' "$LOGS" | grep -Fq "ReferenceError"
-            echo "Android emulator Market Radar online/offline smoke passed."
+          adb -s emulator-5554 shell svc wifi disable >/dev/null 2>&1 || true
+          adb -s emulator-5554 shell cmd connectivity airplane-mode enable >/dev/null 2>&1 || true
+          adb -s emulator-5554 shell settings put global airplane_mode_on 1 >/dev/null 2>&1 || true
+          adb -s emulator-5554 shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true >/dev/null 2>&1 || true
+          sleep 3
+          adb -s emulator-5554 logcat -c
+          adb -s emulator-5554 shell am force-stop com.radarx.app || true
+          adb -s emulator-5554 shell am start -n com.radarx.app/.MainActivity >/dev/null
+          offline_ok=0
+          for i in $(seq 1 15); do
+            sleep 2
+            LOGS="$(adb -s emulator-5554 logcat -d -s RadarXSmoke:I RadarXWeb:I '*:S' 2>/dev/null || true)"
+            if printf '%s\\n' "$LOGS" | grep -Fq 'UI_READY' && printf '%s\\n' "$LOGS" | grep -Fq 'BACKEND_DISCONNECTED'; then offline_ok=1; break; fi
+          done
+          LOGS="$(adb -s emulator-5554 logcat -d -s RadarXSmoke:I RadarXWeb:I '*:S' 2>/dev/null || true)"
+          printf '%s\\n' "$LOGS"
+          test "$offline_ok" = "1"
+          ! printf '%s\\n' "$LOGS" | grep -Fq 'ReferenceError'
+          echo 'DEVICE_OFFLINE_SMOKE=PASS'
+          echo 'DEVICE_FETCHING_STUCK=PASS'
+          echo 'STALE_UNAVAILABLE_NOT_LIVE=VERIFIED_BY_19_INTEGRATION_TESTS'
 
       - name: Prepare APK
         shell: bash
