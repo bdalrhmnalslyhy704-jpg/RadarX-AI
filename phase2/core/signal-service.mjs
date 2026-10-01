@@ -27,6 +27,9 @@ export class SignalService{
       data_status:{...r.signal.data_status,source:input.source||'UNKNOWN',stale:dg.staleMs>this.config.monitoring.maxStaleTriggerMs,
         gaps:Boolean(input.unresolvedGap)||!dg.series.v4.valid||!dg.series.v1.valid||!dg.series.v15.valid,future_data_detected:dg.futureIssues.length>0},
       paper_trade:{enabled:true,real_order_execution:false}};
+    if(typeof this.store.putSignalSnapshot==='function'){
+      try{await this.store.putSignalSnapshot(input.symbol,{symbol:input.symbol,processed_at:now,source_time:signal.candle?.close_time??null,signal,strategies:r.strategies});}catch{}
+    }
     const blocked=[...dg.blocked,...(liq.allowed?[]:liq.reasons),...(signal.risk_filter==='FAIL'?['RISK_FILTER_FAIL']:[])];
     const audit={event:'SIGNAL_EVALUATION',event_class:eventClass,source_time:signal.candle?.close_time??null,processed_at:now,symbol:input.symbol,
       timeframe:signal.candle?.timeframe||'15m',price:signal.price?.reference??null,strategy:signal.strategy,

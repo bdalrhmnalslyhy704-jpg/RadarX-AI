@@ -27,6 +27,104 @@ function validSettings(x,allowedSymbols){
   return {enabled:out.enabled,symbols:[...new Set(out.symbols)],timeframes:[...new Set(out.timeframes)],
     minDataQuality:out.minDataQuality,minLiquidityQuality:out.minLiquidityQuality,signalTypes:[...new Set(out.signalTypes)]};
 }
+
+const PUBLIC_SIGNAL_SYMBOL_RE=/^[A-Z0-9]{5,20}$/;
+const DEFAULT_SIGNAL_FRESHNESS_MS=30*60*1000;
+
+function finiteOrNull(value){const n=Number(value);return Number.isFinite(n)?n:null;}
+function publicSource(value){return String(value||'').toUpperCase()==='BINANCE_PUBLIC_WS'?'Binance Public WebSocket':'Binance Public REST';}
+function strategyById(strategies,id){
+  if(Array.isArray(strategies))return strategies.find(x=>String(x?.strategy||x?.id||'').toUpperCase()===id)||null;
+  const key=({MTF_TREND:'trend',CONFIRMED_BREAKOUT:'breakout',MEAN_REVERSION:'meanReversion'})[id];
+  return key&&strategies&&typeof strategies==='object'?strategies[key]||null:null;
+}
+function signalScore(strategy,key){return finiteOrNull(strategy?.score?.[key]);}
+function emptyPublicSignal(symbol,{source='Binance Public REST',stale=false,gaps=false,future=false,dataValid=false,lastError=null}={}){
+  return {
+    price:{reference:null,entry:null,stop_loss:null,tp1:null,tp2:null,tp3:null},
+    scores:{trend_score:null,breakout_score:null,mean_reversion_score:null,data_quality:null,liquidity_quality:null,confidence_score:'UNKNOWN'},
+    risk_filter:'UNKNOWN',risk_reasons:[],
+    data_status:{source,stale,gaps,future_data_detected:future,data_valid:dataValid,last_error:lastError},
+    strategies:{trend:null,breakout:null,meanReversion:null},
+    reason_codes:[]
+  };
+}
+function publicSignalMeta({live=false,source='Binance Public REST',asOfMs=null,now,maxFreshnessMs}){
+  const fetchAgeMs=Number.isFinite(asOfMs)?Math.max(0,now-asOfMs):null;
+  return {live,source,as_of:Number.isFinite(asOfMs)?new Date(asOfMs).toISOString():null,fetch_age_ms:fetchAgeMs,
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'};
+}
+function inspectPublicSignal(snapshot,now,maxFreshnessMs,minDataQuality){
+  const signal=snapshot?.signal;
+  const symbol=String(snapshot?.symbol||signal?.symbol||'').trim().toUpperCase();
+  if(!snapshot||!signal||!PUBLIC_SIGNAL_SYMBOL_RE.test(symbol))return{kind:'unavailable',reason:'SNAPSHOT_INVALID'};
+  if(String(signal.symbol||'').toUpperCase()!==symbol)return{kind:'unavailable',reason:'SYMBOL_MISMATCH'};
+  const asOfMs=finiteOrNull(snapshot.processed_at);
+  if(asOfMs===null)return{kind:'unavailable',reason:'SNAPSHOT_TIMESTAMP_MISSING'};
+  const ds=signal.data_status&&typeof signal.data_status==='object'?signal.data_status:{};
+  const candleCloseMs=finiteOrNull(signal.candle?.close_time);
+  const future=Boolean(ds.future_data_detected) ||
+    (candleCloseMs!==null && candleCloseMs>now+5000) ||
+    asOfMs>now+5000;
+  const fetchAgeMs=Math.max(0,now-asOfMs);
+  const candleAgeMs=candleCloseMs===null?Infinity:Math.max(0,now-candleCloseMs);
+  const stale=Boolean(ds.stale) || fetchAgeMs>maxFreshnessMs || candleAgeMs>maxFreshnessMs;
+  const gaps=Boolean(ds.gaps);
+  const dq=finiteOrNull(signal.scores?.data_quality);
+  const sourceKey=String(ds.source||'').trim().toUpperCase();
+  const sourceAllowed=sourceKey==='BINANCE_PUBLIC_REST'||sourceKey==='BINANCE_PUBLIC_WS';
+  const source=publicSource(sourceKey);
+  const strategies=snapshot.strategies;
+  const trend=strategyById(strategies,'MTF_TREND');
+  const breakout=strategyById(strategies,'CONFIRMED_BREAKOUT');
+  const meanReversion=strategyById(strategies,'MEAN_REVERSION');
+  const completeStrategies=Boolean(trend&&breakout&&meanReversion);
+  const invalid=future||stale||gaps||!sourceAllowed||dq===null||dq<minDataQuality||!completeStrategies||
+    signal.paper_trade?.enabled!==true||signal.paper_trade?.real_order_execution!==false;
+  let reason=null;
+  if(future)reason='FUTURE_DATA';
+  else if(stale)reason='STALE_SNAPSHOT';
+  else if(gaps)reason='DATA_GAPS';
+  else if(!sourceAllowed)reason='SOURCE_UNAVAILABLE';
+  else if(!sourceAllowed)reason='SOURCE_UNAVAILABLE';
+  else if(dq===null||dq<minDataQuality)reason='LOW_DATA_QUALITY';
+  else if(!completeStrategies)reason='PARTIAL_ANALYSIS';
+  else if(signal.paper_trade?.enabled!==true||signal.paper_trade?.real_order_execution!==false)reason='READ_ONLY_POLICY_VIOLATION';
+  const dataValid=!future&&!stale&&!gaps&&dq!==null&&dq>=minDataQuality;
+  return {kind:invalid?'not_ready':'ok',symbol,signal,trend,breakout,meanReversion,source,asOfMs,fetchAgeMs,stale,gaps,future,dataValid,reason};
+}
+function buildPublicSignalBody(result,now,maxFreshnessMs){
+  const {symbol,signal,trend,breakout,meanReversion,source,asOfMs,fetchAgeMs,stale,gaps,future,dataValid,reason}=result;
+  const baseSignal=emptyPublicSignal(symbol,{source,stale,gaps,future,dataValid,lastError:reason});
+  baseSignal.price={
+    reference:finiteOrNull(signal.price?.reference),entry:finiteOrNull(signal.price?.entry),stop_loss:finiteOrNull(signal.price?.stop_loss),
+    tp1:finiteOrNull(signal.price?.tp1),tp2:finiteOrNull(signal.price?.tp2),tp3:finiteOrNull(signal.price?.tp3)
+  };
+  baseSignal.scores={
+    trend_score:signalScore(trend,'trendScore'),
+    breakout_score:signalScore(breakout,'breakoutScore'),
+    mean_reversion_score:signalScore(meanReversion,'meanReversionScore'),
+    data_quality:finiteOrNull(signal.scores?.data_quality),
+    liquidity_quality:finiteOrNull(signal.scores?.liquidity_quality),
+    confidence_score:'UNKNOWN'
+  };
+  baseSignal.risk_filter=['PASS','FAIL'].includes(signal.risk_filter)?signal.risk_filter:'UNKNOWN';
+  baseSignal.risk_reasons=Array.isArray(signal.risk_reasons)?signal.risk_reasons:[];
+  baseSignal.data_status.source=source;
+  baseSignal.data_status.stale=stale;
+  baseSignal.data_status.gaps=gaps;
+  baseSignal.data_status.future_data_detected=future;
+  baseSignal.data_status.data_valid=dataValid;
+  baseSignal.data_status.last_error=reason;
+  baseSignal.strategies={trend:trend||null,breakout:breakout||null,meanReversion:meanReversion||null};
+  baseSignal.reason_codes=Array.isArray(signal.reason_codes)?signal.reason_codes:[];
+  const live=result.kind==='ok';
+  const status=live?'ok':'not_ready';
+  return {status,symbol,meta:publicSignalMeta({live,source,asOfMs,now,maxFreshnessMs}),signal:baseSignal,
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+    ...(live?{}:{error:reason||'SIGNAL_NOT_READY'})};
+}
+
 function subscriptionValid(x){
   if(typeof x?.endpoint!=='string'||!x.endpoint.startsWith('https://'))throw new Error('INVALID_PUSH_ENDPOINT');
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
@@ -76,6 +174,24 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           const m=String(e?.message??e);
           const status=/INVALID_QUOTE|INVALID_EXCHANGE_INFO/.test(m)?400:/RATE_LIMIT|TIMEOUT|UNAVAILABLE|FAILED/.test(m)?502:500;
           return send(res,status,{error:m,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},source:'Binance Public REST',candidates:[]});
+        }
+      }
+      if(u.pathname==='/api/signal'&&req.method==='GET'){
+        const rawSymbol=String(u.searchParams.get('symbol')||'').trim().toUpperCase();
+        if(!PUBLIC_SIGNAL_SYMBOL_RE.test(rawSymbol))return send(res,400,{status:'bad_request',symbol:rawSymbol||null,meta:publicSignalMeta({live:false,source:'Binance Public REST',asOfMs:null,now:Date.now(),maxFreshnessMs:DEFAULT_SIGNAL_FRESHNESS_MS}),signal:emptyPublicSignal(rawSymbol||null,{source:'Binance Public REST',dataValid:false,lastError:'INVALID_SYMBOL'}),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',error:'INVALID_SYMBOL'});
+        const now=Date.now();
+        try{
+          const snapshot=typeof store.getSignalSnapshot==='function'?await store.getSignalSnapshot(rawSymbol):null;
+          if(!snapshot)return send(res,503,{status:'unavailable',symbol:rawSymbol,meta:publicSignalMeta({live:false,source:'Binance Public REST',asOfMs:null,now,maxFreshnessMs:DEFAULT_SIGNAL_FRESHNESS_MS}),signal:emptyPublicSignal(rawSymbol,{source:'Binance Public REST',dataValid:false,lastError:'DATA_UNAVAILABLE'}),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',error:'DATA_UNAVAILABLE'});
+          const maxFreshnessMs=Math.max(1,Number(config.monitoring?.maxStaleTriggerMs??DEFAULT_SIGNAL_FRESHNESS_MS));
+          const minDataQuality=Math.max(0,Number(config.monitoring?.minDataQuality??70));
+          const result=inspectPublicSignal(snapshot,now,maxFreshnessMs,minDataQuality);
+          if(result.kind==='unavailable')return send(res,503,{status:'unavailable',symbol:rawSymbol,meta:publicSignalMeta({live:false,source:result.source||'Binance Public REST',asOfMs:result.asOfMs??null,now,maxFreshnessMs}),signal:emptyPublicSignal(rawSymbol,{source:result.source||'Binance Public REST',dataValid:false,lastError:result.reason}),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',error:result.reason});
+          const payload=buildPublicSignalBody(result,now,maxFreshnessMs);
+          return send(res,result.kind==='ok'?200:503,payload);
+        }catch(e){
+          const m=String(e?.message??e);
+          return send(res,503,{status:'unavailable',symbol:rawSymbol,meta:publicSignalMeta({live:false,source:'Binance Public REST',asOfMs:null,now, maxFreshnessMs:DEFAULT_SIGNAL_FRESHNESS_MS}),signal:emptyPublicSignal(rawSymbol,{source:'Binance Public REST',dataValid:false,lastError:m}),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',error:'DATA_UNAVAILABLE'});
         }
       }
       if(!u.pathname.startsWith('/v1/'))return send(res,404,{error:'NOT_FOUND'});
