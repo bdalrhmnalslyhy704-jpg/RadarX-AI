@@ -9,10 +9,6 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: radarx-android-embedded-final-v2
-  cancel-in-progress: true
-
 jobs:
   build-release:
     runs-on: ubuntu-22.04
