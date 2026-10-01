@@ -1,15 +1,16 @@
 import WebSocket from 'ws';
 import {randomUUID} from 'node:crypto';
+import {normalizeEpochMs} from '../core/data-quality.mjs';
 
 const toCandle = payload => {
   const k=payload?.k;
   if(payload?.e!=='kline'||!k) return null;
   return {
-    symbol:String(k.s||'').toUpperCase(), openTime:Number(k.t), closeTime:Number(k.T),
+    symbol:String(k.s||'').toUpperCase(), openTime:normalizeEpochMs(k.t, 'openTime'), closeTime:normalizeEpochMs(k.T, 'closeTime'),
     open:Number(k.o),high:Number(k.h),low:Number(k.l),close:Number(k.c),volume:Number(k.v),
     quoteVolume:Number(k.q),tradeCount:Number(k.n),takerBuyBaseVolume:Number(k.V),
     takerBuyQuoteVolume:Number(k.Q),closed:Boolean(k.x),source:'BINANCE_PUBLIC_WS',
-    sourceTime:Number(payload.E)||Date.now(),timeframe:String(k.i||'')
+    sourceTime:normalizeEpochMs(Number(payload.E)||Date.now(), 'eventTime'),timeframe:String(k.i||'')
   };
 };
 

@@ -1,3 +1,5 @@
+import {normalizeEpochMs} from '../core/data-quality.mjs';
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 export function retryAfterMs(headers) {
@@ -76,8 +78,8 @@ export class RestClient {
     });
     const now=Date.now();
     return {source:r.source,receivedAt:now,candles:r.data.map(x=>({
-      openTime:Number(x[0]),open:Number(x[1]),high:Number(x[2]),low:Number(x[3]),close:Number(x[4]),
-      volume:Number(x[5]),closeTime:Number(x[6]),quoteVolume:Number(x[7]),tradeCount:Number(x[8]),
+      openTime:normalizeEpochMs(x[0], 'openTime'),open:Number(x[1]),high:Number(x[2]),low:Number(x[3]),close:Number(x[4]),
+      volume:Number(x[5]),closeTime:normalizeEpochMs(x[6], 'closeTime'),quoteVolume:Number(x[7]),tradeCount:Number(x[8]),
       takerBuyBaseVolume:Number(x[9]),takerBuyQuoteVolume:Number(x[10]),
       closed:Number(x[6])<now,source:'BINANCE_PUBLIC_REST',sourceTime:now
     }))};
