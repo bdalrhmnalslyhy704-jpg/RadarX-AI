@@ -64,13 +64,22 @@ jobs:
           sha256sum "$APK" | tee "dist/RadarX-Android-v1.2.0-build-${GITHUB_RUN_NUMBER}.apk.sha256"
           stat -c "APK_SIZE_BYTES=%s" "$APK"
 
-      - name: Verify Railway backend
+      - name: Verify Railway backend connectivity
         shell: bash
         run: |
           set -euo pipefail
           BASE="https://radarx-ai-production.up.railway.app"
-          curl --fail --location --retry 3 --retry-delay 2 --max-time 15 --silent --show-error "$BASE/healthz" -o "$RUNNER_TEMP/healthz.json"
-          curl --fail --location --retry 3 --retry-delay 2 --max-time 15 --silent --show-error "$BASE/readyz" -o "$RUNNER_TEMP/readyz.json"
+          HEALTH="$(curl --fail --location --retry 3 --retry-delay 2 --max-time 15 --silent --show-error -o "$RUNNER_TEMP/healthz.json" -w "%{http_code}" "$BASE/healthz")"
+          SIGNAL="$(curl --fail --location --retry 3 --retry-delay 2 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/signal.json" -w "%{http_code}" "$BASE/api/signal?symbol=BTCUSDT")"
+          READY="$(curl --location --retry 3 --retry-delay 2 --max-time 15 --silent --show-error -o "$RUNNER_TEMP/readyz.json" -w "%{http_code}" "$BASE/readyz")"
+          test "$HEALTH" = "200"
+          test "$SIGNAL" = "200"
+          case "$READY" in
+            200|503) ;;
+            *) echo "Unexpected readyz status: $READY"; exit 1 ;;
+          esac
+          echo "Railway healthz=$HEALTH signal=$SIGNAL readyz=$READY"
+          echo "A 503 readyz is treated as data-not-ready, not as a network disconnect."
 
       - name: Enable KVM for Android Emulator
         shell: bash
