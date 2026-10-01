@@ -33,7 +33,11 @@ const DEFAULT_SIGNAL_FRESHNESS_MS=30*60*1000;
 
 function finiteOrNull(value){const n=Number(value);return Number.isFinite(n)?n:null;}
 function publicSource(value){return String(value||'').toUpperCase()==='BINANCE_PUBLIC_WS'?'Binance Public WebSocket':'Binance Public REST';}
-function strategyById(strategies,id){return Array.isArray(strategies)?strategies.find(x=>String(x?.strategy||x?.id||'').toUpperCase()===id)||null:null;}
+function strategyById(strategies,id){
+  if(Array.isArray(strategies))return strategies.find(x=>String(x?.strategy||x?.id||'').toUpperCase()===id)||null;
+  const key=({MTF_TREND:'trend',CONFIRMED_BREAKOUT:'breakout',MEAN_REVERSION:'meanReversion'})[id];
+  return key&&strategies&&typeof strategies==='object'?strategies[key]||null:null;
+}
 function signalScore(strategy,key){return finiteOrNull(strategy?.score?.[key]);}
 function emptyPublicSignal(symbol,{source='Binance Public REST',stale=false,gaps=false,future=false,dataValid=false,lastError=null}={}){
   return {
