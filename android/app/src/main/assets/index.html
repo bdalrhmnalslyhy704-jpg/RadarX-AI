@@ -79,6 +79,7 @@ pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-ra
   <div class="settings-help muted">لا توجد مفاتيح سرية هنا. يجب أن يشير العنوان إلى Backend موثوق يعيد عقد RadarX نفسه.</div>
 </details>
 
+<section id="marketRadarPanel" class="panel" aria-label="Market Radar"></section>
 <section id="cards" class="grid" aria-live="polite"></section>
 
 <section class="panel">
@@ -139,6 +140,7 @@ import {
   isFreshLiveSignal,
   classifyBackendState
 } from './radarx-backend-client.js';
+import {mountMarketRadarScreen} from './radarx-market-radar-screen.mjs';
 
 const $=id=>document.getElementById(id);
 const API_BASE_KEY='radarx.backend.base_url';
@@ -335,6 +337,7 @@ backendBaseUrl=readBackendBaseUrl();
 $('apiBase').value=backendBaseUrl;
 $('scan').addEventListener('click',scan);
 $('retryApp').addEventListener('click',()=>window.location.reload());
+mountMarketRadarScreen($('marketRadarPanel'));
 window.__RADARX_BOOT_OK=true;
 $('appError').hidden=true;
 if(window.RadarXSmoke) window.RadarXSmoke.state('UI_READY');
