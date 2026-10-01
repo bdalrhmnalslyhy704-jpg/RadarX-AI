@@ -6,4 +6,4 @@ Binance direct API from APK: none
 paper_trading=true
 real_order_execution=false
 confidence_score=UNKNOWN
-Emulator smoke: WebView runtime Logcat bridge; AVD profile optional
+Emulator smoke: Ubuntu 22.04 + KVM + Android API 29
