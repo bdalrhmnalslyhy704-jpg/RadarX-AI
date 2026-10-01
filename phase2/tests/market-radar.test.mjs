@@ -210,8 +210,9 @@ test('current open candle with future closeTime does not block live candidate qu
     const r=await original(symbol,tf);
     if(tf==='15m'){
       const step=900000;
-      const open=Math.floor(now/step)*step;
-      r.candles=[...r.candles.slice(0,-1),{
+      const previous=r.candles.at(-1);
+      const open=previous.closeTime+1;
+      r.candles=[...r.candles,{
         openTime:open,closeTime:open+step-1,open:100,high:102,low:99,close:101,volume:2500,
         quoteVolume:100000,tradeCount:1000,closed:false,source:'BINANCE_PUBLIC_REST',sourceTime:now
       }];
