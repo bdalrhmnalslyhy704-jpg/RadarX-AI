@@ -161,6 +161,9 @@ function setStatus(mode,text){
 }
 function setBackendStatus(connected){
   $('backendStatus').textContent=connected?'Connected':'Disconnected';
+  if(window.RadarXSmoke){
+    window.RadarXSmoke.state(connected?'BACKEND_CONNECTED':'BACKEND_DISCONNECTED');
+  }
 }
 function clearLiveView(message='تعذر الاتصال بالخادم، تحقق من الإنترنت'){
   $('cards').innerHTML='<div class="card" style="grid-column:1/-1"><div class="state off">DISCONNECTED</div><div style="margin-top:7px">'+message+'</div><div class="muted" style="margin-top:5px">لا يتم استخدام بيانات السوق المخزنة كبيانات LIVE.</div><button id="retryBackend" class="btn" type="button" style="margin-top:10px">إعادة المحاولة</button></div>';
@@ -297,6 +300,7 @@ $('scan').addEventListener('click',scan);
 $('retryApp').addEventListener('click',()=>window.location.reload());
 window.__RADARX_BOOT_OK=true;
 $('appError').hidden=true;
+if(window.RadarXSmoke) window.RadarXSmoke.state('UI_READY');
 
 if(navigator.onLine){
   scan();
