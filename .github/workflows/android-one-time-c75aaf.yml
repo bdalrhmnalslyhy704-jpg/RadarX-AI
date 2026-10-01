@@ -127,10 +127,11 @@ jobs:
             set -eu
             mkdir -p "$HOME/radarx-emulator-apk"
             gh run download "$GITHUB_RUN_ID" --name radarx-apk-for-emulator --dir "$HOME/radarx-emulator-apk"
-            APK="$HOME/radarx-emulator-apk/app-release.apk"
+            APK="$(find "$HOME/radarx-emulator-apk" -type f -name '*.apk' -print -quit)"
+            test -n "$APK"
             test -s "$APK"
             echo "DEVICE_APK=$APK"
-            ls -lh "$APK"
+            find "$HOME/radarx-emulator-apk" -maxdepth 4 -type f -name '*.apk' -ls
             adb install -r "$APK"
             adb logcat -c
             adb shell am force-stop com.radarx.app || true
