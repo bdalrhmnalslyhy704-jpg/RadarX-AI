@@ -34,9 +34,15 @@ jobs:
 
       - name: Build release APK
         shell: bash
+        working-directory: android
         run: |
           set -euo pipefail
           gradle :app:assembleRelease --no-daemon
+
+      - name: Prepare APK
+        shell: bash
+        run: |
+          set -euo pipefail
           mkdir -p dist
           cp android/app/build/outputs/apk/release/app-release.apk "dist/RadarX-Android-v1.0.0-build-${GITHUB_RUN_NUMBER}.apk"
 
@@ -67,4 +73,8 @@ jobs:
           TAG="radarx-android-v1.0.0.${GITHUB_RUN_NUMBER}"
           APK="dist/RadarX-Android-v1.0.0-build-${GITHUB_RUN_NUMBER}.apk"
           SHA="dist/RadarX-Android-v1.0.0-build-${GITHUB_RUN_NUMBER}.apk.sha256"
-          gh release create "$TAG" "$APK" "$SHA"             --repo "$GITHUB_REPOSITORY"             --target "$GITHUB_SHA"             --title "RadarX Android v1.0.0 (Build ${GITHUB_RUN_NUMBER})"             --notes "RadarX Android release wrapper for the current PWA. Paper Trading only; real_order_execution=false; confidence_score=UNKNOWN; no Binance API keys; no 24/7 monitoring or Push."
+          gh release create "$TAG" "$APK" "$SHA" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "RadarX Android v1.0.0 (Build ${GITHUB_RUN_NUMBER})" \
+            --notes "RadarX Android release wrapper for the current RadarX public PWA. Paper Trading only; real_order_execution=false; confidence_score=UNKNOWN; no Binance API keys; no 24/7 monitoring or Push."
