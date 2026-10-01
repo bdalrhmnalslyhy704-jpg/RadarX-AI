@@ -141,7 +141,7 @@ test('TEST_FIXTURE: missing snapshot returns DATA_UNAVAILABLE and does not fabri
 test('TEST_FIXTURE: invalid symbol returns HTTP 400',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-public-signal-symbol-')),store=await new DurableStore({dir}).init();
   const {server,base}=await startTestApi(store); const res=await fetch(base+'/api/signal?symbol=BAD!'); const body=await res.json();
-  assert.equal(res.status,400); assert.equal(body.error,'INVALID_SYMBOL'); assert.equal(body.meta.live,false);
+  assert.equal(res.status,400); assert.equal(body.status,'bad_request'); assert.equal(body.error,'INVALID_SYMBOL'); assert.equal(body.meta.live,false);
   await new Promise(resolve=>server.close(resolve));
 });
 
