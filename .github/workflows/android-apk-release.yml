@@ -92,47 +92,7 @@ jobs:
           api-level: 29
           target: default
           arch: x86_64
-          script: |
-            set -eu
-            APK="android/app/build/outputs/apk/release/app-release.apk"
-            adb install -r "$APK"
-            adb logcat -c
-            adb shell am force-stop com.radarx.app || true
-            adb shell am start -n com.radarx.app/.MainActivity
-            ready=0
-            connected=0
-            for i in $(seq 1 12); do
-              sleep 3
-              LOGS="$(adb logcat -d -s RadarXSmoke:I '*:S' 2>/dev/null || true)"
-              if printf '%s\n' "$LOGS" | grep -Fq "UI_READY"; then ready=1; fi
-              if printf '%s\n' "$LOGS" | grep -Fq "BACKEND_CONNECTED"; then connected=1; fi
-              if [ "$ready" = "1" ] && [ "$connected" = "1" ]; then break; fi
-            done
-            test "$ready" = "1"
-            test "$connected" = "1"
-            adb shell cmd connectivity airplane-mode enable || true
-            adb shell settings put global airplane_mode_on 1 || true
-            adb shell svc wifi disable || true
-            adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true || true
-            sleep 3
-            adb logcat -c
-            adb shell am force-stop com.radarx.app
-            adb shell am start -n com.radarx.app/.MainActivity
-            ready_offline=0
-            disconnected=0
-            for i in $(seq 1 8); do
-              sleep 2
-              LOGS="$(adb logcat -d -s RadarXSmoke:I '*:S' 2>/dev/null || true)"
-              if printf '%s\n' "$LOGS" | grep -Fq "UI_READY"; then ready_offline=1; fi
-              if printf '%s\n' "$LOGS" | grep -Fq "BACKEND_DISCONNECTED"; then disconnected=1; fi
-              if [ "$ready_offline" = "1" ] && [ "$disconnected" = "1" ]; then break; fi
-            done
-            test "$ready_offline" = "1"
-            test "$disconnected" = "1"
-            adb shell cmd connectivity airplane-mode disable || true
-            adb shell settings put global airplane_mode_on 0 || true
-            adb shell svc wifi enable || true
-            echo "Android emulator online/offline smoke tests passed."
+          script: bash android/smoke-test.sh
 
       - name: Verify embedded assets are present inside APK source
         shell: bash
