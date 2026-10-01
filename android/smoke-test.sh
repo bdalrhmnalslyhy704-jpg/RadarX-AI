@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+debug_on_error() {
+  rc=$?
+  echo "Smoke test failed with exit code $rc"
+  adb logcat -d -s RadarXSmoke:I RadarXWeb:I '*:S' 2>/dev/null || true
+  exit "$rc"
+}
+trap debug_on_error ERR
+
 APK="android/app/build/outputs/apk/release/app-release.apk"
 
 cleanup() {
