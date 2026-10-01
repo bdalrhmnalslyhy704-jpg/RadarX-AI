@@ -1,5 +1,11 @@
 export const DEFAULT_BACKEND_BASE_URL = 'https://radarx-ai-production.up.railway.app';
 
+function assertAllowedBackend(url) {
+  if (url.origin !== DEFAULT_BACKEND_BASE_URL || url.pathname !== '/' || url.username || url.password) {
+    throw new Error('BACKEND_ORIGIN_NOT_ALLOWED');
+  }
+}
+
 export function normalizeBackendBaseUrl(raw = DEFAULT_BACKEND_BASE_URL) {
   const value = String(raw || '').trim().replace(/\/+$/, '');
   if (!value) return DEFAULT_BACKEND_BASE_URL;
@@ -7,12 +13,14 @@ export function normalizeBackendBaseUrl(raw = DEFAULT_BACKEND_BASE_URL) {
   if (!['http:', 'https:'].includes(url.protocol)) {
     throw new Error('BACKEND_BASE_URL_MUST_USE_HTTP_OR_HTTPS');
   }
-  return url.toString().replace(/\/$/, '');
+  assertAllowedBackend(url);
+  return DEFAULT_BACKEND_BASE_URL;
 }
 
 export async function requestJson(baseUrl, path, fetchImpl = globalThis.fetch) {
   try {
-    const response = await fetchImpl(normalizeBackendBaseUrl(baseUrl) + path, {
+    const base = normalizeBackendBaseUrl(baseUrl);
+    const response = await fetchImpl(base + path, {
       method: 'GET',
       cache: 'no-store',
       headers: { Accept: 'application/json' }
