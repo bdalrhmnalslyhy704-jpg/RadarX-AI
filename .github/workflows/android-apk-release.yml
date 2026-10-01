@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: radarx-android-release-embedded-v3
+  group: radarx-android-release-embedded-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
