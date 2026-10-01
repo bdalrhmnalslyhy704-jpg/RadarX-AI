@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   build-release:
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip ci]')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -64,20 +65,76 @@ jobs:
           sha256sum "$APK" | tee "dist/RadarX-Android-v1.0.0-build-${GITHUB_RUN_NUMBER}.apk.sha256"
           stat -c "APK_SIZE_BYTES=%s" "$APK"
 
+      - name: Android emulator smoke test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: Pixel_2
+          script: |
+            set -euo pipefail
+            APK="android/app/build/outputs/apk/release/app-release.apk"
+            adb install -r "$APK"
+            adb shell am force-stop com.radarx.app || true
+            adb shell am start -n com.radarx.app/.MainActivity
+            connected=0
+            for i in $(seq 1 12); do
+              sleep 3
+              adb shell uiautomator dump /sdcard/window.xml >/dev/null 2>&1 || true
+              adb shell cat /sdcard/window.xml > "$RUNNER_TEMP/radarx-window.xml" 2>/dev/null || true
+              if grep -Fq "RadarX Phase 1" "$RUNNER_TEMP/radarx-window.xml" &&                  grep -Fq "Connected" "$RUNNER_TEMP/radarx-window.xml"; then
+                connected=1
+                break
+              fi
+            done
+            test "$connected" = "1"
+            grep -Fq "RadarX Phase 1" "$RUNNER_TEMP/radarx-window.xml"
+            grep -Fq "Connected" "$RUNNER_TEMP/radarx-window.xml"
+            adb shell cmd connectivity airplane-mode enable || true
+            adb shell settings put global airplane_mode_on 1 || true
+            adb shell svc wifi disable || true
+            adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true || true
+            sleep 3
+            adb shell am force-stop com.radarx.app
+            adb shell am start -n com.radarx.app/.MainActivity
+            sleep 5
+            adb shell uiautomator dump /sdcard/window-offline.xml >/dev/null 2>&1 || true
+            adb shell cat /sdcard/window-offline.xml > "$RUNNER_TEMP/radarx-offline-window.xml" 2>/dev/null || true
+            grep -Fq "RadarX Phase 1" "$RUNNER_TEMP/radarx-offline-window.xml"
+            grep -Fq "Disconnected" "$RUNNER_TEMP/radarx-offline-window.xml"
+            grep -Fq "تعذر الاتصال بالخادم، تحقق من الإنترنت" "$RUNNER_TEMP/radarx-offline-window.xml"
+            adb shell cmd connectivity airplane-mode disable || true
+            adb shell settings put global airplane_mode_on 0 || true
+            adb shell svc wifi enable || true
+            echo "Android emulator online/offline smoke tests passed."
+
+      - name: Verify embedded shell has no GitHub Pages dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android
+          grep -RIn "appassets.androidplatform.net/assets/index.html" android/app/src/main
+          grep -RIn "radarx-ai-production.up.railway.app" android/app/src/main
+          grep -RIn "real_order_execution=false" android/app/src/main/assets
+          grep -RIn "paper_trading=true" android/app/src/main/assets
+          grep -RIn "confidence_score.*UNKNOWN" android/app/src/main/assets
+
       - name: Publish HTTPS release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          TAG="radarx-android-v1.0.0.${GITHUB_RUN_NUMBER}"
-          APK="dist/RadarX-Android-v1.0.0-build-${GITHUB_RUN_NUMBER}.apk"
+          VERSION="1.1.0"
+          TAG="radarx-android-v${VERSION}.${GITHUB_RUN_NUMBER}"
+          APK="dist/RadarX-Android-v${VERSION}-build-${GITHUB_RUN_NUMBER}.apk"
           SHA="dist/RadarX-Android-v1.0.0-build-${GITHUB_RUN_NUMBER}.apk.sha256"
           gh release create "$TAG" "$APK" "$SHA" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "RadarX Android v1.0.0 (Build ${GITHUB_RUN_NUMBER})" \
-            --notes "RadarX Android release wrapper for the current RadarX public PWA. Paper Trading only; real_order_execution=false; confidence_score=UNKNOWN; no Binance API keys; no 24/7 monitoring or Push."
+            --title "RadarX Android v1.1.0 (Embedded UI, Build ${GITHUB_RUN_NUMBER})" \
+            --notes "RadarX Android 1.1.0 with embedded local UI via WebViewAssetLoader. Runtime network allowlist: appassets.androidplatform.net and RadarX Railway backend only. Paper Trading only; real_order_execution=false; confidence_score=UNKNOWN; no Binance API keys; no real trading."
 
       - name: Verify published HTTPS download
         shell: bash
