@@ -66,6 +66,10 @@ jobs:
           sha256sum "$APK" | tee "dist/RadarX-Android-v1.1.0-build-${GITHUB_RUN_NUMBER}.apk.sha256"
           stat -c "APK_SIZE_BYTES=%s" "$APK"
 
+      - name: Install screenshot test dependency
+        shell: bash
+        run: python3 -m pip install --user --quiet pillow
+
       - name: Enable KVM for Android Emulator
         shell: bash
         run: |
@@ -109,7 +113,8 @@ jobs:
             adb shell am start -n com.radarx.app/.MainActivity
             ready_offline=0
             disconnected=0
-            for i in $(seq 1 6); do
+            adb exec-out screencap -p > "$RUNNER_TEMP/radarx-offline.png"
+            for i in $(seq 1 8); do
               sleep 2
               LOGS="$(adb logcat -d -s RadarXSmoke:I '*:S' 2>/dev/null || true)"
               if printf '%s\n' "$LOGS" | grep -Fq "UI_READY"; then ready_offline=1; fi
@@ -152,15 +157,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="1.1.1"
+          VERSION="1.2.0"
           TAG="radarx-android-v${VERSION}.${GITHUB_RUN_NUMBER}"
           APK="dist/RadarX-Android-v${VERSION}-build-${GITHUB_RUN_NUMBER}.apk"
           SHA="dist/RadarX-Android-v1.1.0-build-${GITHUB_RUN_NUMBER}.apk.sha256"
           gh release create "$TAG" "$APK" "$SHA" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "RadarX Android v1.1.1 (Embedded UI, Build ${GITHUB_RUN_NUMBER})" \
-            --notes "RadarX Android 1.1.1 with embedded local UI via WebViewAssetLoader. Runtime network allowlist: appassets.androidplatform.net and RadarX Railway backend only. Paper Trading only; real_order_execution=false; confidence_score=UNKNOWN; no Binance API keys; no real trading."
+            --title "RadarX Android v1.2.0 (Embedded UI, Build ${GITHUB_RUN_NUMBER})" \
+            --notes "RadarX Android 1.2.0 with embedded local UI via WebViewAssetLoader. Runtime network allowlist: appassets.androidplatform.net and RadarX Railway backend only. Paper Trading only; real_order_execution=false; confidence_score=UNKNOWN; no Binance API keys; no real trading."
 
       - name: Verify published HTTPS download
         shell: bash
