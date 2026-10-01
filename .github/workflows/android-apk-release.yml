@@ -78,3 +78,16 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "RadarX Android v1.0.0 (Build ${GITHUB_RUN_NUMBER})" \
             --notes "RadarX Android release wrapper for the current RadarX public PWA. Paper Trading only; real_order_execution=false; confidence_score=UNKNOWN; no Binance API keys; no 24/7 monitoring or Push."
+
+      - name: Verify published HTTPS download
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="radarx-android-v1.0.0.${GITHUB_RUN_NUMBER}"
+          APK="dist/RadarX-Android-v1.0.0-build-${GITHUB_RUN_NUMBER}.apk"
+          DOWNLOADED="$RUNNER_TEMP/radarx-download.apk"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/RadarX-Android-v1.0.0-build-${GITHUB_RUN_NUMBER}.apk"
+          curl --fail --location --retry 3 --retry-delay 2 --silent --show-error "$URL" --output "$DOWNLOADED"
+          test -s "$DOWNLOADED"
+          test "$(stat -c %s "$DOWNLOADED")" = "$(stat -c %s "$APK")"
+          test "$(sha256sum "$DOWNLOADED" | awk '{print $1}')" = "$(sha256sum "$APK" | awk '{print $1}')"
