@@ -195,18 +195,32 @@ jobs:
           echo "emulator files after installation:"
           find "$ANDROID_HOME" -type f -name emulator 2>/dev/null || true
           echo "Checking emulator host libraries:"
-          MISSING_LIBS="$(ldd "$EMULATOR" 2>/dev/null | awk '/not found/{print $1}' | sort -u || true)"
+          QEMU_BIN="$(find "$(dirname "$EMULATOR")" -type f -name 'qemu-system-*' -perm -111 2>/dev/null | head -n 1 || true)"
+          echo "QEMU_BIN=${QEMU_BIN:-}"
+          MISSING_LIBS="$(
+            {
+              ldd "$EMULATOR" 2>/dev/null || true
+              if [ -n "$QEMU_BIN" ]; then ldd "$QEMU_BIN" 2>/dev/null || true; fi
+            } | awk '/not found/{print $1}' | sort -u
+          )"
           if [ -n "$MISSING_LIBS" ]; then
             echo "Missing emulator host libraries:"
             printf '%s\\n' "$MISSING_LIBS"
-            if printf '%s\\n' "$MISSING_LIBS" | grep -Fq 'libpulse.so.0'; then
+            APT_PACKAGES=()
+            if printf '%s\\n' "$MISSING_LIBS" | grep -Fq 'libpulse.so.0'; then APT_PACKAGES+=("libpulse0"); fi
+            if [ "${#APT_PACKAGES[@]}" -gt 0 ]; then
               sudo apt-get update
-              sudo apt-get install -y libpulse0
+              sudo apt-get install -y "${APT_PACKAGES[@]}"
             fi
           fi
-          MISSING_LIBS="$(ldd "$EMULATOR" 2>/dev/null | awk '/not found/{print $1}' | sort -u || true)"
+          MISSING_LIBS="$(
+            {
+              ldd "$EMULATOR" 2>/dev/null || true
+              if [ -n "$QEMU_BIN" ]; then ldd "$QEMU_BIN" 2>/dev/null || true; fi
+            } | awk '/not found/{print $1}' | sort -u
+          )"
           if [ -n "$MISSING_LIBS" ]; then
-            echo "ERROR: emulator has unresolved host libraries after dependency installation:"
+            echo "ERROR: emulator host libraries remain unresolved:"
             printf '%s\\n' "$MISSING_LIBS"
             exit 1
           fi
