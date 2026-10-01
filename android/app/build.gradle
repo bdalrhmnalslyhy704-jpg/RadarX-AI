@@ -1,0 +1,52 @@
+plugins {
+    id "com.android.application"
+}
+
+def ciKeystore = System.getenv("RADARX_KEYSTORE")
+def ciStorePassword = System.getenv("RADARX_KEYSTORE_PASSWORD")
+def ciKeyAlias = System.getenv("RADARX_KEY_ALIAS")
+def ciKeyPassword = System.getenv("RADARX_KEY_PASSWORD")
+
+android {
+    namespace "com.radarx.app"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.radarx.app"
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName "1.0.0"
+    }
+
+    signingConfigs {
+        ci {
+            if (ciKeystore) {
+                storeFile file(ciKeystore)
+                storePassword ciStorePassword
+                keyAlias ciKeyAlias
+                keyPassword ciKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+            if (ciKeystore) {
+                signingConfig signingConfigs.ci
+            }
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation "androidx.webkit:webkit:1.13.0"
+}
