@@ -36,8 +36,7 @@ test('TEST_FIXTURE: websocket kline timestamps are milliseconds; seconds are rej
     k:{t:1700000000,T:1700000899,s:'BTCUSDT',o:'100',h:'101',l:'99',c:'100',v:'10',q:'1000',n:10,V:'5',Q:'500',x:true,i:'15m'}
   };
   Socket.instances[0].emit('open');
-  let threw=false;
-  try { Socket.instances[0].emit('message',Buffer.from(JSON.stringify(payload))); } catch { threw=true; }
+  Socket.instances[0].emit('message',Buffer.from(JSON.stringify(payload)));
   c.stop();
-  assert.equal(threw,true);
+  assert.ok(errors.some(x=>/INVALID_WS_JSON:openTime_TIMESTAMP_UNIT_SECONDS/.test(x)));
 });
