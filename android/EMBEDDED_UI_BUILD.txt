@@ -19,3 +19,5 @@ Final workflow syntax fixed; release gate ready.
 Final gate uses Android runtime logs: UI_READY, BACKEND_CONNECTED, BACKEND_DISCONNECTED.
 
 Railway release gate: healthz=200 and signal=200; readyz 503 is accepted as data-stale.
+
+Final release run is intentionally independent of previous diagnostic runs.
