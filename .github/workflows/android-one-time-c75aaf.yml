@@ -306,7 +306,7 @@ jobs:
           javac -source 8 -target 8 -cp "$ANDROID_HOME/platforms/android-29/android.jar" /tmp/EndpointProbe.java
           jar cf /tmp/endpoint-probe.jar -C /tmp EndpointProbe.class
           adb -s emulator-5554 push /tmp/endpoint-probe.jar /data/local/tmp/endpoint-probe.jar >/dev/null
-          CLASSPATH=/data/local/tmp/endpoint-probe.jar adb -s emulator-5554 shell app_process /data/local/tmp EndpointProbe /healthz /readyz '/api/market-radar?quote=USDT&limit=20' '/api/signal?symbol=BTCUSDT' | tee /tmp/device-endpoints.txt
+          CLASSPATH=/data/local/tmp/endpoint-probe.jar adb -s emulator-5554 shell app_process /data/local/tmp EndpointProbe /healthz /readyz '/api/market-radar?quote=USDT\&limit=20' '/api/signal?symbol=BTCUSDT' | tee /tmp/device-endpoints.txt
           grep -Fq 'DEVICE_HTTP path=/healthz status=200' /tmp/device-endpoints.txt
           grep -Eq 'DEVICE_HTTP path=/readyz status=(200|503)' /tmp/device-endpoints.txt
           grep -Eq 'DEVICE_HTTP path=/api/market-radar\\?quote=USDT&limit=20 status=(200|503)' /tmp/device-endpoints.txt
