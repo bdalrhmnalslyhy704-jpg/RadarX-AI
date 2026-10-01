@@ -4,6 +4,7 @@ import {
   liquidityQuality as scoreLiquidity
 } from '../../phase1/radarx-phase1-engine.mjs';
 import {listActiveStrategies, normalizeStrategyResult} from '../../phase1/strategy-registry.mjs';
+import {FUTURE_DATA_CLOCK_SKEW_MS, futureIssues, timestampUnit} from '../core/data-quality.mjs';
 
 export const MARKET_RADAR_DEFAULTS = Object.freeze({
   quote: 'USDT',
@@ -75,6 +76,7 @@ export function normalizeTickerRow(ticker, quote) {
   const quoteVolume = Number(ticker.quoteVolume);
   const count = Number(ticker.count);
   const change = Number(ticker.priceChangePercent);
+  const tickerTime = ['closeTime','eventTime','openTime'].map(key => Number(ticker[key])).find(Number.isFinite) ?? null;
   if (!Number.isFinite(lastPrice) || lastPrice <= 0) return null;
   if (!Number.isFinite(quoteVolume) || quoteVolume < 0) return null;
   if (!Number.isFinite(count) || count < 0) return null;
@@ -85,7 +87,8 @@ export function normalizeTickerRow(ticker, quote) {
     lastPrice,
     quoteVolume24h: quoteVolume,
     tradeCount24h: count,
-    priceChange24h: change
+    priceChange24h: change,
+    tickerTime
   };
 }
 
@@ -143,7 +146,30 @@ function normalizeRawKlines(rows, source, now) {
 }
 
 function futureData(candles, now) {
-  return candles.some(c => Number(c.openTime) > now || Number(c.closeTime) > now);
+  return futureIssues(candles, now).length > 0;
+}
+
+function emitTimeDiagnostics({symbol, series, ticker, completedAt, sources}) {
+  if (process.env.RADARX_TIME_DIAGNOSTICS !== '1') return;
+  const trigger = Array.isArray(series['15m']) ? series['15m'] : [];
+  const latestKline = trigger.at(-1) ?? null;
+  const latestClosedKline = latestClosed(trigger);
+  const units = [...new Set(['4h','1h','15m'].flatMap(tf => (series[tf] || []).slice(-2).flatMap(c => [timestampUnit(c.openTime), timestampUnit(c.closeTime)])))];
+  const all = ['4h','1h','15m'].flatMap(tf => series[tf] || []);
+  console.info('RADARX_TIME_DIAGNOSTIC', JSON.stringify({
+    symbol,
+    serverNowMs: completedAt,
+    latestKlineOpenTime: latestKline?.openTime ?? null,
+    latestKlineCloseTime: latestKline?.closeTime ?? null,
+    latestClosedKlineOpenTime: latestClosedKline?.openTime ?? null,
+    latestClosedKlineCloseTime: latestClosedKline?.closeTime ?? null,
+    latestTickerTime: Number.isFinite(Number(ticker?.tickerTime)) ? Number(ticker.tickerTime) : null,
+    timestampUnit: units.length === 1 ? units[0] : units,
+    source: [...new Set(sources.filter(Boolean))].join(' | ') || 'UNKNOWN',
+    currentOpenCandle: Boolean(latestKline && latestKline.openTime <= completedAt && latestKline.closeTime > completedAt && latestKline.closed === false),
+    futureIssues: futureIssues(all, completedAt),
+    clockSkewToleranceMs: FUTURE_DATA_CLOCK_SKEW_MS
+  }));
 }
 
 function latestClosed(candles) {
@@ -579,6 +605,8 @@ export class MarketUniverseScanner {
       .map(tf => series[tf])
       .filter(Array.isArray)
       .map(c => Number(c?.at?.(-1)?.sourceTime));
+
+    emitTimeDiagnostics({symbol:ticker.symbol,series,ticker,completedAt,sources:[...klinesSources,depthSource]});
 
     const candidate = buildCandidateContract({
       ticker,
