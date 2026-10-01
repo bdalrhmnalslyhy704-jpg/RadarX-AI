@@ -102,7 +102,7 @@ jobs:
           target: default
           arch: x86_64
           script: |
-            set -euo pipefail
+            set -eu
             APK="android/app/build/outputs/apk/release/app-release.apk"
             adb install -r "$APK"
             adb logcat -c
