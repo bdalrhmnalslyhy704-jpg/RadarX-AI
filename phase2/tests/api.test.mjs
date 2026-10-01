@@ -153,7 +153,12 @@ test('TEST_FIXTURE: public signal lookup is symbol-isolated',async()=>{
   await new Promise(resolve=>server.close(resolve));
 });
 
-test('TEST_FIXTURE: public signal route has no execution capabilities and preserves the other API paths',async()=>{
-  const api=await (await tools??Promise.resolve(null));
-  assert.ok(true);
+test('TEST_FIXTURE: public signal route is read-only and existing API paths remain present',async()=>{
+  const apiSource=await readFile(new URL('../http/api.mjs',import.meta.url),'utf8');
+  assert.equal((apiSource.match(/u\.pathname==='\/api\/market-radar'/g)||[]).length,1);
+  assert.equal((apiSource.match(/u\.pathname==='\/v1\/signals'/g)||[]).length,1);
+  assert.equal((apiSource.match(/const signalPrefix='\/v1\/signals\/'/g)||[]).length,1);
+  const route=apiSource.slice(apiSource.indexOf("u.pathname==='/api/signal'"),apiSource.indexOf("if(!u.pathname.startsWith('/v1/'))"));
+  assert.doesNotMatch(route,/createOrder|placeOrder|withdraw|account/i);
+  assert.match(route,/req\.method==='GET'/);
 });
