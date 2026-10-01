@@ -32,15 +32,23 @@ test('TEST_FIXTURE: low liquidity prevents notification eligibility',()=>{
 
 
 test('TEST_FIXTURE: current open candle is not future data and is not the analysis candle',()=>{
-  const now=Date.now();
-  const closed={openTime:now-900000,closeTime:now-1,open:100,high:101,low:99,close:100,volume:1000,closed:true};
+  const now=1700000000000;
+  const makeSeries=(tf,count,lastClose)=>{
+    const step=tf==='4h'?14400000:tf==='1h'?3600000:900000;
+    const lastOpen=lastClose-step+1;
+    return Array.from({length:count},(_,i)=>{
+      const openTime=lastOpen-(count-1-i)*step;
+      return {openTime,closeTime:openTime+step-1,open:100,high:101,low:99,close:100,volume:1000,closed:true};
+    });
+  };
+  const closed15m={openTime:now-900000,closeTime:now-1,open:100,high:101,low:99,close:100,volume:1000,closed:true};
   const open={openTime:now,closeTime:now+899999,open:100,high:102,low:98,close:101,volume:2000,closed:false};
-  assert.deepEqual(futureIssues([closed,open],now),[]);
-  assert.equal(latestClosed([closed,open]),closed);
+  assert.deepEqual(futureIssues([closed15m,open],now),[]);
+  assert.equal(latestClosed([closed15m,open]),closed15m);
   const g=assessDataGate({
-    series4h:series('4h',30,60000),
-    series1h:series('1h',30,60000),
-    series15m:[...series('15m',31,1),open],
+    series4h:makeSeries('4h',30,now-1),
+    series1h:makeSeries('1h',30,now-1),
+    series15m:[...makeSeries('15m',30,now-1),open],
     now,sourceLive:true
   });
   assert.equal(g.allowed,true);
