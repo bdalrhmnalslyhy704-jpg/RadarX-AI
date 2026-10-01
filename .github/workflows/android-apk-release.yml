@@ -72,43 +72,59 @@ jobs:
           api-level: 35
           target: google_apis
           arch: x86_64
-          profile: pixel_7_pro
           script: |
             set -euo pipefail
             APK="android/app/build/outputs/apk/release/app-release.apk"
             adb install -r "$APK"
+            adb logcat -c
             adb shell am force-stop com.radarx.app || true
             adb shell am start -n com.radarx.app/.MainActivity
+            ready=0
             connected=0
             for i in $(seq 1 12); do
               sleep 3
-              adb shell uiautomator dump /sdcard/window.xml >/dev/null 2>&1 || true
-              adb shell cat /sdcard/window.xml > "$RUNNER_TEMP/radarx-window.xml" 2>/dev/null || true
-              if grep -Fq "RadarX Phase 1" "$RUNNER_TEMP/radarx-window.xml" &&                  grep -Fq "Connected" "$RUNNER_TEMP/radarx-window.xml"; then
-                connected=1
-                break
-              fi
+              LOGS="$(adb logcat -d -s RadarXSmoke:I '*:S' 2>/dev/null || true)"
+              if printf '%s\n' "$LOGS" | grep -Fq "UI_READY"; then ready=1; fi
+              if printf '%s\n' "$LOGS" | grep -Fq "BACKEND_CONNECTED"; then connected=1; fi
+              if [ "$ready" = "1" ] && [ "$connected" = "1" ]; then break; fi
             done
+            test "$ready" = "1"
             test "$connected" = "1"
-            grep -Fq "RadarX Phase 1" "$RUNNER_TEMP/radarx-window.xml"
-            grep -Fq "Connected" "$RUNNER_TEMP/radarx-window.xml"
             adb shell cmd connectivity airplane-mode enable || true
             adb shell settings put global airplane_mode_on 1 || true
             adb shell svc wifi disable || true
             adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true || true
             sleep 3
+            adb logcat -c
             adb shell am force-stop com.radarx.app
             adb shell am start -n com.radarx.app/.MainActivity
-            sleep 5
-            adb shell uiautomator dump /sdcard/window-offline.xml >/dev/null 2>&1 || true
-            adb shell cat /sdcard/window-offline.xml > "$RUNNER_TEMP/radarx-offline-window.xml" 2>/dev/null || true
-            grep -Fq "RadarX Phase 1" "$RUNNER_TEMP/radarx-offline-window.xml"
-            grep -Fq "Disconnected" "$RUNNER_TEMP/radarx-offline-window.xml"
-            grep -Fq "تعذر الاتصال بالخادم، تحقق من الإنترنت" "$RUNNER_TEMP/radarx-offline-window.xml"
+            ready_offline=0
+            disconnected=0
+            for i in $(seq 1 6); do
+              sleep 2
+              LOGS="$(adb logcat -d -s RadarXSmoke:I '*:S' 2>/dev/null || true)"
+              if printf '%s\n' "$LOGS" | grep -Fq "UI_READY"; then ready_offline=1; fi
+              if printf '%s\n' "$LOGS" | grep -Fq "BACKEND_DISCONNECTED"; then disconnected=1; fi
+              if [ "$ready_offline" = "1" ] && [ "$disconnected" = "1" ]; then break; fi
+            done
+            test "$ready_offline" = "1"
+            test "$disconnected" = "1"
             adb shell cmd connectivity airplane-mode disable || true
             adb shell settings put global airplane_mode_on 0 || true
             adb shell svc wifi enable || true
             echo "Android emulator online/offline smoke tests passed."
+
+      - name: Verify embedded assets are present inside APK source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s android/app/src/main/assets/index.html
+          test -s android/app/src/main/assets/radarx-backend-client.mjs
+          test -s android/app/src/main/assets/radarx-backend-client.js
+          test -s android/app/src/main/assets/manifest.json
+          test -s android/app/src/main/assets/icons/icon-192.svg
+          test -s android/app/src/main/assets/icons/icon-512.svg
+          ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
 
       - name: Verify embedded shell has no GitHub Pages dependency
         shell: bash
