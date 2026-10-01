@@ -1,9 +1,9 @@
 import {
-  evaluateSymbolSnapshot,
   validateSeries,
   lastClosedIndex,
   liquidityQuality as scoreLiquidity
 } from '../../phase1/radarx-phase1-engine.mjs';
+import {listActiveStrategies, normalizeStrategyResult} from '../../phase1/strategy-registry.mjs';
 
 export const MARKET_RADAR_DEFAULTS = Object.freeze({
   quote: 'USDT',
@@ -157,39 +157,72 @@ function freshnessMs(candles, fetchedAt) {
   return Math.max(0, fetchedAt - Number(last.closeTime));
 }
 
-function describeStrategy(strategy) {
-  if (!strategy) return null;
-  const score = Object.values(strategy.score || {}).find(v => Number.isFinite(Number(v)));
-  return {
-    id: strategy.strategy || 'UNKNOWN',
-    state: strategy.state || 'REJECTED',
-    direction: strategy.direction || 'NONE',
-    score: Number.isFinite(Number(score)) ? Number(score) : null,
-    reason_codes: Array.isArray(strategy.reasonCodes) ? strategy.reasonCodes : [],
-    evidence: strategy.evidence && typeof strategy.evidence === 'object' ? strategy.evidence : {},
-    invalidation: [
-      Number.isFinite(Number(strategy.stopLoss)) ? 'PRICE_STOP_LOSS:' + Number(strategy.stopLoss) : null,
-      'CLOSED_TRIGGER_CANDLE_REQUIRED',
-      'FRESH_VALID_MARKET_DATA_REQUIRED'
-    ].filter(Boolean)
-  };
+const REQUIRED_DATA_TIMEFRAMES=Object.freeze({'4h':'4h','1h':'1h','15m':'15m',EMA20:'1h',EMA50:'1h',EMA100:'1h',EMA200:'1h',ADX14:'1h','+DI14':'1h','-DI14':'1h',MACD12_26_9:'MACD',BB20_2:'1h',RSI14:'1h',DAILY_VWAP:'15m',RVOL20:'15m',PRICE_ACTION:'15m',ATR14:'15m',ATR_BASELINE20:'15m',PRICE_CONFIRMATION:'15m'});
+const TIMEFRAME_MS=Object.freeze({'15m':900000,'1h':3600000,'4h':14400000});
+function requirementAvailable(required,context){
+  const tf=REQUIRED_DATA_TIMEFRAMES[required];
+  if(tf==='MACD')return Array.isArray(context.series['1h'])&&context.series['1h'].length>0&&Array.isArray(context.series['4h'])&&context.series['4h'].length>0;
+  if(tf)return Array.isArray(context.series[tf])&&context.series[tf].length>0;
+  if(required==='depth')return Boolean(context.depth?.bids?.length&&context.depth?.asks?.length);
+  if(required==='ticker24h')return Number.isFinite(Number(context.ticker?.quoteVolume24h))&&Number.isFinite(Number(context.ticker?.tradeCount24h));
+  return false;
 }
-
-function strategyResults(result) {
-  return [
-    describeStrategy(result.strategies?.trend),
-    describeStrategy(result.strategies?.breakout),
-    describeStrategy(result.strategies?.meanReversion)
-  ].filter(Boolean);
+function requiredDataStatus(strategy,context){
+  const required=[...strategy.requiredData],available=required.filter(x=>requirementAvailable(x,context)),missing=required.filter(x=>!available.includes(x));
+  return {required,available,missing,ratio:required.length?available.length/required.length:0};
 }
-
-function chooseStrategy(strategies) {
-  return [...strategies]
-    .filter(x => x.state === 'CONFIRMED' || x.state === 'CANDIDATE')
-    .filter(x => Number.isFinite(x.score))
-    .sort((a, b) => b.score - a.score)[0] || null;
+function makeInsufficientStrategyResult(strategy,status){
+  return {strategy:strategy.id,direction:'NONE',state:'INSUFFICIENT_DATA',score:{},evidence:{required_data:status.required,available_data:status.available,missing_data:status.missing},reasonCodes:['INSUFFICIENT_DATA','MISSING_REQUIRED_DATA'],hardGatesPassed:false,dataQuality:0};
 }
-
+function buildStrategyBook(depth,liquidity){
+  if(!depth?.bids?.length||!depth?.asks?.length)return null;
+  const totalDepth=Number(liquidity?.totalDepth),bidDepth=Number(liquidity?.bidDepth),askDepth=Number(liquidity?.askDepth);
+  const obi=Number.isFinite(totalDepth)&&totalDepth>0&&Number.isFinite(bidDepth)&&Number.isFinite(askDepth)?(bidDepth-askDepth)/totalDepth:null;
+  return {bid:Number(liquidity?.bid),ask:Number(liquidity?.ask),spreadBps:Number.isFinite(Number(liquidity?.spreadBps))?Number(liquidity.spreadBps):null,obi,liquidityQuality:Number(liquidity?.quality)||0};
+}
+function strategyHardGateStatus(strategy,status,context,liquidity,rawResult){
+  const failed=[];
+  if(status.missing.length)failed.push('MISSING_REQUIRED_DATA');
+  for(const tf of ['4h','1h','15m'])if(status.required.includes(tf)&&(!Array.isArray(context.series[tf])||!context.validSeries[tf]))failed.push('CANDLE_INTEGRITY_FAILURE:'+tf);
+  if(context.future)failed.push('FUTURE_DATA');
+  if(context.staleTimeframes.some(tf=>status.required.includes(tf)))failed.push('STALE_DATA');
+  if(strategy.hardGates.includes('LIQUIDITY_GATE')&&liquidity.allowed!==true)failed.push('LIQUIDITY_GATE_FAILED');
+  if(rawResult?.hardGatesPassed===false)failed.push('STRATEGY_HARD_GATE_FAILED');
+  return {passed:failed.length===0&&rawResult?.state!=='INSUFFICIENT_DATA',failed:[...new Set(failed)]};
+}
+function chooseStrategy(strategies){
+  return [...strategies].filter(function(x){return (x.signal_state==='CONFIRMED'||x.signal_state==='CANDIDATE')&&Number.isFinite(Number(x.score?.value));}).sort(function(a,b){return Number(b.score.value)-Number(a.score.value);})[0]||null;
+}
+function evaluateRegisteredStrategies(args){
+  const strategies=args.strategies,series=args.series,depth=args.depth,ticker=args.ticker,liquidity=args.liquidity,context={series,depth,ticker,future:args.future,staleTimeframes:args.staleTimeframes,validSeries:args.validSeries};
+  const book=buildStrategyBook(depth,liquidity);
+  let overrideResults=null;
+  if(typeof args.overrideEvaluator==='function'){
+    const legacy=args.overrideEvaluator({symbol:ticker.symbol,series4h:series['4h'],series1h:series['1h'],series15m:series['15m'],book,bookRaw:depth,ticker24hRaw:{quoteVolume:String(ticker.quoteVolume24h),count:String(ticker.tradeCount24h)},source:'BINANCE_PUBLIC_REST',now:args.now},args.config?{config:args.config}:undefined);
+    overrideResults=new Map(Object.values(legacy?.strategies||{}).map(function(result){return [result?.strategy,result];}));
+  }
+  return strategies.map(function(strategy){
+    const status=requiredDataStatus(strategy,context);
+    let raw;
+    if(status.missing.length){
+      raw=makeInsufficientStrategyResult(strategy,status);
+    }else{
+      try{
+        if(overrideResults?.has(strategy.id)){
+          raw=overrideResults.get(strategy.id);
+        }else{
+          raw=strategy.evaluator({symbol:ticker.symbol,series4h:series['4h'],series1h:series['1h'],series15m:series['15m'],book,bookRaw:depth,ticker24hRaw:{quoteVolume:String(ticker.quoteVolume24h),count:String(ticker.tradeCount24h)},liquidityQuality:liquidity.quality,config:args.config,source:'BINANCE_PUBLIC_REST',now:args.now});
+        }
+      }catch(error){
+        raw={strategy:strategy.id,direction:'NONE',state:'REJECTED',score:{},evidence:{error:String(error?.message||error)},reasonCodes:['STRATEGY_EVALUATION_ERROR'],hardGatesPassed:false,dataQuality:0};
+      }
+    }
+    const gates=strategyHardGateStatus(strategy,status,context,liquidity,raw);
+    const normalized=normalizeStrategyResult(strategy.id,raw,{coverage:{required:status.required,available:status.available,ratio:status.ratio},hardGatesPassed:gates.passed,dataQuality:gates.passed?100:0});
+    const accepted=gates.passed&&(normalized.signal_state==='CANDIDATE'||normalized.signal_state==='CONFIRMED')&&normalized.score.value!==null;
+    return Object.assign({},normalized,{state:normalized.signal_state,accepted,hard_gates_passed:gates.passed,hard_gate_status:gates,missing_required_data:status.missing});
+  });
+}
 function decisionBand(score) {
   if (!Number.isFinite(score)) return 'insufficient';
   if (score >= 80) return 'strong';
@@ -237,8 +270,12 @@ export function buildCandidateContract({
     reasons: ['LIQUIDITY_DATA_UNAVAILABLE'],
     spreadBps: null
   };
-  const strategies = strategyResults(deep.evaluation || {});
+  const strategies = Array.isArray(deep.evaluation) ? deep.evaluation : [];
   const best = chooseStrategy(strategies);
+  const acceptedStrategies=strategies.filter(function(s){return s.accepted;}).map(function(s){return s.id;});
+  const rejectedStrategies=strategies.filter(function(s){return s.signal_state==='REJECTED';});
+  const insufficientStrategies=strategies.filter(function(s){return s.signal_state==='INSUFFICIENT_DATA';});
+
   const hardGateReasons = [];
   if (!seriesComplete) hardGateReasons.push('INSUFFICIENT_CLOSED_DATA');
   if (future) hardGateReasons.push('FUTURE_DATA');
@@ -256,7 +293,7 @@ export function buildCandidateContract({
     liquidity.quality >= minLiquidityQuality &&
     dataQuality >= minDataQuality;
 
-  const overallScore = gatePass && best ? Math.round(best.score * 100) / 100 : null;
+  const overallScore = gatePass && best && Number.isFinite(Number(best.score?.value)) ? Math.round(Number(best.score.value) * 100) / 100 : null;
   const signalState = !gatePass
     ? 'INSUFFICIENT_DATA'
     : best?.state === 'CONFIRMED'
@@ -299,13 +336,8 @@ export function buildCandidateContract({
     })))
   ];
 
-  const coverage = {
-    required_timeframes: ['4h', '1h', '15m'],
-    available_timeframes: ['4h', '1h', '15m'].filter(tf => Array.isArray(series[tf]) && series[tf].length > 0),
-    strategy_count: 3,
-    evaluated_strategy_count: strategies.length,
-    ratio: strategies.length / 3
-  };
+  const activeStrategyCount=listActiveStrategies().length;
+  const coverage={required_timeframes:['4h','1h','15m'],available_timeframes:['4h','1h','15m'].filter(function(tf){return Array.isArray(series[tf])&&series[tf].length>0;}),strategy_count:activeStrategyCount,evaluated_strategy_count:strategies.length,ratio:activeStrategyCount?strategies.length/activeStrategyCount:0};
 
   const lastError = deep.error ? String(deep.error?.message || deep.error) : null;
   const source = combineSource([
@@ -323,22 +355,18 @@ export function buildCandidateContract({
     quote_volume_24h: ticker.quoteVolume24h,
     liquidity_quality: Math.round(Number(liquidity.quality) * 100) / 100,
     data_quality: dataQuality,
+    confidence_score: 'UNKNOWN',
     market_regime: 'UNKNOWN',
-    overall_score: overallScore,
+    overall_score: gatePass && best && Number.isFinite(Number(best.score?.value)) ? Math.round(Number(best.score.value) * 100) / 100 : null,
     coverage,
     decision_band: gatePass ? decisionBand(overallScore) : 'insufficient',
     signal_state: signalState,
     direction: best?.direction || 'NONE',
     best_strategy: best?.id || null,
-    strategies: strategies.map(s => ({
-      id: s.id,
-      state: s.state,
-      direction: s.direction,
-      score: s.score,
-      reason_codes: s.reason_codes,
-      evidence: s.evidence,
-      invalidation: s.invalidation
-    })),
+    strategies,
+    accepted_strategies: acceptedStrategies,
+    rejected_strategies: rejectedStrategies,
+    insufficient_strategies: insufficientStrategies,
     evidence,
     reason_codes: [...new Set(reasonCodes)],
     invalidation,
@@ -403,7 +431,7 @@ export class MarketUniverseScanner {
     config = {},
     clock = () => Date.now(),
     sleepFn = sleepDefault,
-    strategyEvaluator = evaluateSymbolSnapshot
+    strategyEvaluator = null
   } = {}) {
     if (!rest || typeof rest.request !== 'function') throw new Error('REST_CLIENT_REQUIRED');
     this.rest = rest;
@@ -540,32 +568,13 @@ export class MarketUniverseScanner {
       error = e;
     }
 
-    const completedAt = this.clock();
-    let deepSuccess = !error && ['4h', '1h', '15m'].every(tf => Array.isArray(series[tf]) && series[tf].length > 0);
-    const liquidity = this.computeLiquidity(depthRaw, ticker);
-    let evaluation = null;
-    if (deepSuccess) {
-      try {
-        const engineConfig = this.strategyConfig;
-        evaluation = this.strategyEvaluator({
-        symbol: ticker.symbol,
-        series4h: series['4h'],
-        series1h: series['1h'],
-        series15m: series['15m'],
-        bookRaw: depthRaw,
-        ticker24hRaw: {
-          quoteVolume: String(ticker.quoteVolume24h),
-          count: String(ticker.tradeCount24h)
-        },
-        source: 'BINANCE_PUBLIC_REST',
-        now: completedAt
-        }, engineConfig ? { config: engineConfig } : undefined);
-      } catch (e) {
-        error = e;
-        deepSuccess = false;
-      }
-    }
-
+    const completedAt=this.clock();
+    const deepSuccess=!error&&['4h','1h','15m'].every(function(tf){return Array.isArray(series[tf])&&series[tf].length>0;});
+    const liquidity=this.computeLiquidity(depthRaw,ticker);
+    const validSeries={'4h':Array.isArray(series['4h'])&&validateSeries(series['4h'],'4h').valid,'1h':Array.isArray(series['1h'])&&validateSeries(series['1h'],'1h').valid,'15m':Array.isArray(series['15m'])&&validateSeries(series['15m'],'15m').valid};
+    const future=futureData(['4h','1h','15m'].flatMap(function(tf){return Array.isArray(series[tf])?series[tf]:[];}),completedAt);
+    const staleTimeframes=['4h','1h','15m'].filter(function(tf){const last=latestClosed(series[tf]||[]);return !last||completedAt-Number(last.closeTime)>TIMEFRAME_MS[tf]*2;});
+    const evaluation=evaluateRegisteredStrategies({strategies:listActiveStrategies(),series,depth:depthRaw,ticker,liquidity,future,staleTimeframes,validSeries,now:completedAt,config:this.strategyConfig,overrideEvaluator:this.strategyEvaluator});
     const fetchAges = ['4h', '1h', '15m']
       .map(tf => series[tf])
       .filter(Array.isArray)
@@ -655,7 +664,8 @@ export class MarketUniverseScanner {
         live: returned.some(x => x.data_status.data_valid === true),
         paper_trading: true,
         real_order_execution: false,
-        confidence_score: 'UNKNOWN'
+        confidence_score: 'UNKNOWN',
+        strategy_count: listActiveStrategies().length
       },
       as_of: new Date(this.clock()).toISOString(),
       source: 'Binance Public REST',
