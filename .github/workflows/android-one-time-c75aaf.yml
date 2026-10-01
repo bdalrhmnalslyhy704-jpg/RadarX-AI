@@ -125,13 +125,19 @@ jobs:
           arch: x86_64
           script: |
             set -eu
-            mkdir -p "$HOME/radarx-emulator-apk"
-            gh run download "$GITHUB_RUN_ID" --name radarx-apk-for-emulator --dir "$HOME/radarx-emulator-apk"
-            APK="$(find "$HOME/radarx-emulator-apk" -type f -name '*.apk' -print -quit)"
+            rm -rf /tmp/radarx-apk-download /tmp/radarx-apk.zip
+            mkdir -p /tmp/radarx-apk-download
+            ARTIFACT_ID="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --jq '.artifacts[] | select(.name=="radarx-apk-for-emulator" and .expired==false) | .id' | head -n1)"
+            test -n "$ARTIFACT_ID"
+            echo "DEVICE_ARTIFACT_ID=$ARTIFACT_ID"
+            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" -o /tmp/radarx-apk.zip
+            test -s /tmp/radarx-apk.zip
+            unzip -q /tmp/radarx-apk.zip -d /tmp/radarx-apk-download
+            APK="$(find /tmp/radarx-apk-download -type f -name '*.apk' -print -quit)"
             test -n "$APK"
             test -s "$APK"
             echo "DEVICE_APK=$APK"
-            find "$HOME/radarx-emulator-apk" -maxdepth 4 -type f -name '*.apk' -ls
+            find /tmp/radarx-apk-download -maxdepth 4 -type f -name '*.apk' -ls
             adb install -r "$APK"
             adb logcat -c
             adb shell am force-stop com.radarx.app || true
