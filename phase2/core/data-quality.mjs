@@ -2,11 +2,31 @@ import {timeframeMs} from '../../phase1/radarx-phase1-engine.mjs';
 
 export const finite = v => Number.isFinite(Number(v));
 
+export const FUTURE_DATA_CLOCK_SKEW_MS = 5000;
+const EPOCH_MS_MIN = 100_000_000_000;
+
+export function timestampUnit(value){
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 'INVALID';
+  return n < EPOCH_MS_MIN ? 'SECONDS' : 'MILLISECONDS';
+}
+
+export function normalizeEpochMs(value, field='timestamp'){
+  const unit = timestampUnit(value);
+  if (unit === 'MILLISECONDS') return Math.trunc(Number(value));
+  if (unit === 'SECONDS') throw new Error(field + '_TIMESTAMP_UNIT_SECONDS');
+  throw new Error(field + '_TIMESTAMP_INVALID');
+}
+
 export function validateCandle(c){
-  const ok=Boolean(c)&&[c.openTime,c.closeTime,c.open,c.high,c.low,c.close,c.volume].every(finite)&&
+  const timestampOk = timestampUnit(c?.openTime)==='MILLISECONDS' && timestampUnit(c?.closeTime)==='MILLISECONDS';
+  const ok=Boolean(c)&&timestampOk&&[c.openTime,c.closeTime,c.open,c.high,c.low,c.close,c.volume].every(finite)&&
     c.openTime<c.closeTime&&c.high>=Math.max(c.open,c.close)&&c.low<=Math.min(c.open,c.close)&&
     c.high>=c.low&&c.volume>=0;
-  return {valid:ok,issues:ok?[]:['INVALID_CANDLE']};
+  const issues=[];
+  if(!timestampOk) issues.push('INVALID_TIMESTAMP_UNIT');
+  if(!ok && !issues.length) issues.push('INVALID_CANDLE');
+  return {valid:ok,issues};
 }
 
 export function validateSeries(a,tf){
@@ -23,8 +43,14 @@ export function validateSeries(a,tf){
 }
 
 export function latestClosed(a){return [...a].reverse().find(x=>x?.closed===true)||null;}
-export function futureIssues(a,now=Date.now()){
-  return a.flatMap((x,i)=>Number(x?.openTime)>now||Number(x?.closeTime)>now?['FUTURE_'+i]:[]);
+export function futureIssues(a,now=Date.now(),skewMs=FUTURE_DATA_CLOCK_SKEW_MS){
+  return a.flatMap((x,i)=>{
+    const open=Number(x?.openTime), close=Number(x?.closeTime), closed=x?.closed===true;
+    if(timestampUnit(open)!=='MILLISECONDS'||timestampUnit(close)!=='MILLISECONDS') return [];
+    if(open>now+skewMs) return ['FUTURE_OPEN_'+i];
+    if(closed && close>now+skewMs) return ['FUTURE_CLOSED_CLOSE_'+i];
+    return [];
+  });
 }
 export function expectedGap(previous,current,tf){
   const step=timeframeMs(tf);if(!previous||!current||!step)return[];
