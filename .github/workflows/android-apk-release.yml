@@ -11,8 +11,9 @@ permissions:
   contents: write
 
 concurrency:
-  group: radarx-android-release-embedded-final
-  cancel-in-progress: false
+  group: radarx-android-embedded-final-v2
+  cancel-in-progress: true
+  cancel-in-progress: true
 
 jobs:
   build-release:
@@ -66,6 +67,20 @@ jobs:
           sha256sum "$APK" | tee "dist/RadarX-Android-v1.2.0-build-${GITHUB_RUN_NUMBER}.apk.sha256"
           stat -c "APK_SIZE_BYTES=%s" "$APK"
 
+      - name: Verify Railway backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://radarx-ai-production.up.railway.app"
+          curl --fail --location --retry 3 --retry-delay 2 --max-time 15 --silent --show-error "$BASE/healthz" -o "$RUNNER_TEMP/healthz.json"
+          curl --fail --location --retry 3 --retry-delay 2 --max-time 15 --silent --show-error "$BASE/readyz" -o "$RUNNER_TEMP/readyz.json"
+          python3 - "$RUNNER_TEMP/healthz.json" "$RUNNER_TEMP/readyz.json" <<'PY'
+import json, sys
+for path in sys.argv[1:]:
+    data=json.load(open(path, encoding="utf-8"))
+    print(path, data)
+PY
+
       - name: Install screenshot test dependency
         shell: bash
         run: python3 -m pip install --user --quiet pillow
@@ -86,7 +101,7 @@ jobs:
           target: default
           arch: x86_64
           script: |
-            set -euo pipefail
+            set -eu
             APK="android/app/build/outputs/apk/release/app-release.apk"
             adb install -r "$APK"
             adb logcat -c
