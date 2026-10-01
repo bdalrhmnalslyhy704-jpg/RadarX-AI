@@ -75,7 +75,7 @@ function inspectPublicSignal(snapshot,now,maxFreshnessMs,minDataQuality){
   const breakout=strategyById(strategies,'CONFIRMED_BREAKOUT');
   const meanReversion=strategyById(strategies,'MEAN_REVERSION');
   const completeStrategies=Boolean(trend&&breakout&&meanReversion);
-  const invalid=future||gaps||!sourceAllowed||dq===null||dq<minDataQuality||!completeStrategies||
+  const invalid=future||stale||gaps||!sourceAllowed||dq===null||dq<minDataQuality||!completeStrategies||
     signal.paper_trade?.enabled!==true||signal.paper_trade?.real_order_execution!==false;
   let reason=null;
   if(future)reason='FUTURE_DATA';
