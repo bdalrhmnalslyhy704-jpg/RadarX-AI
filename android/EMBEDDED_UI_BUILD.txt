@@ -15,3 +15,5 @@ Final smoke: online/offline screenshots must contain multiple pixels/colors; run
 Final release gate: direct Railway health/readiness preflight plus Android online/offline emulator smoke.
 
 Final workflow syntax fixed; release gate ready.
+
+Final gate uses Android runtime logs: UI_READY, BACKEND_CONNECTED, BACKEND_DISCONNECTED.
