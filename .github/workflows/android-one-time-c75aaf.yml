@@ -112,6 +112,7 @@ jobs:
             cat > /tmp/EndpointProbe.java <<'JAVA'
             import java.io.*;
             import java.net.*;
+          import javax.net.ssl.HttpsURLConnection;
             import javax.net.ssl.HttpsURLConnection;
             public class EndpointProbe {
               static void probe(String path) throws Exception {
