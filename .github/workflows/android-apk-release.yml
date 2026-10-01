@@ -46,13 +46,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp android/app/build/outputs/apk/release/app-release.apk "dist/RadarX-Android-v1.1.0-build-${GITHUB_RUN_NUMBER}.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "dist/RadarX-Android-v1.2.0-build-${GITHUB_RUN_NUMBER}.apk"
 
       - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
-          APK="dist/RadarX-Android-v1.1.0-build-${GITHUB_RUN_NUMBER}.apk"
+          APK="dist/RadarX-Android-v1.2.0-build-${GITHUB_RUN_NUMBER}.apk"
           BT="$(ls -d "$ANDROID_HOME/build-tools/"* | sort -V | tail -1)"
           "$BT/aapt2" dump badging "$APK" | grep -E "package: name=|application-label:"
           "$BT/apksigner" verify --verbose "$APK"
@@ -62,8 +62,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APK="dist/RadarX-Android-v1.1.0-build-${GITHUB_RUN_NUMBER}.apk"
-          sha256sum "$APK" | tee "dist/RadarX-Android-v1.1.0-build-${GITHUB_RUN_NUMBER}.apk.sha256"
+          APK="dist/RadarX-Android-v1.2.0-build-${GITHUB_RUN_NUMBER}.apk"
+          sha256sum "$APK" | tee "dist/RadarX-Android-v1.2.0-build-${GITHUB_RUN_NUMBER}.apk.sha256"
           stat -c "APK_SIZE_BYTES=%s" "$APK"
 
       - name: Install screenshot test dependency
@@ -160,7 +160,7 @@ jobs:
           VERSION="1.2.0"
           TAG="radarx-android-v${VERSION}.${GITHUB_RUN_NUMBER}"
           APK="dist/RadarX-Android-v${VERSION}-build-${GITHUB_RUN_NUMBER}.apk"
-          SHA="dist/RadarX-Android-v1.1.0-build-${GITHUB_RUN_NUMBER}.apk.sha256"
+          SHA="dist/RadarX-Android-v1.2.0-build-${GITHUB_RUN_NUMBER}.apk.sha256"
           gh release create "$TAG" "$APK" "$SHA" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
@@ -171,10 +171,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TAG="radarx-android-v1.1.0.${GITHUB_RUN_NUMBER}"
-          APK="dist/RadarX-Android-v1.1.0-build-${GITHUB_RUN_NUMBER}.apk"
+          TAG="radarx-android-v1.2.0.${GITHUB_RUN_NUMBER}"
+          APK="dist/RadarX-Android-v1.2.0-build-${GITHUB_RUN_NUMBER}.apk"
           DOWNLOADED="$RUNNER_TEMP/radarx-download.apk"
-          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/RadarX-Android-v1.1.0-build-${GITHUB_RUN_NUMBER}.apk"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/RadarX-Android-v1.2.0-build-${GITHUB_RUN_NUMBER}.apk"
           curl --fail --location --retry 3 --retry-delay 2 --silent --show-error "$URL" --output "$DOWNLOADED"
           test -s "$DOWNLOADED"
           test "$(stat -c %s "$DOWNLOADED")" = "$(stat -c %s "$APK")"
