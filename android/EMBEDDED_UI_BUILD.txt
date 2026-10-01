@@ -1,4 +1,4 @@
-RadarX Android 1.1.0
+RadarX Android 1.1.1
 UI: embedded inside APK via WebViewAssetLoader
 Backend: https://radarx-ai-production.up.railway.app
 GitHub Pages runtime dependency: none
