@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: radarx-android-release-embedded-${{ github.run_id }}
+  group: radarx-android-release-embedded-final
   cancel-in-progress: false
 
 jobs:
@@ -38,7 +38,7 @@ jobs:
         shell: bash
         working-directory: android
         run: |
-          set -euo pipefail
+          set -eu
           gradle :app:assembleRelease --no-daemon
 
       - name: Prepare APK
@@ -103,6 +103,14 @@ jobs:
             done
             test "$ready" = "1"
             test "$connected" = "1"
+            adb exec-out screencap -p > "$RUNNER_TEMP/radarx-online.png"
+            python3 - "$RUNNER_TEMP/radarx-online.png" <<'PY'
+import sys
+from PIL import Image
+img = Image.open(sys.argv[1]).convert("RGB")
+colors = img.getcolors(maxcolors=1_000_000)
+assert colors and len(colors) > 5, "online screenshot is effectively blank"
+PY
             adb shell cmd connectivity airplane-mode enable || true
             adb shell settings put global airplane_mode_on 1 || true
             adb shell svc wifi disable || true
@@ -113,7 +121,6 @@ jobs:
             adb shell am start -n com.radarx.app/.MainActivity
             ready_offline=0
             disconnected=0
-            adb exec-out screencap -p > "$RUNNER_TEMP/radarx-offline.png"
             for i in $(seq 1 8); do
               sleep 2
               LOGS="$(adb logcat -d -s RadarXSmoke:I '*:S' 2>/dev/null || true)"
@@ -123,6 +130,14 @@ jobs:
             done
             test "$ready_offline" = "1"
             test "$disconnected" = "1"
+            adb exec-out screencap -p > "$RUNNER_TEMP/radarx-offline.png"
+            python3 - "$RUNNER_TEMP/radarx-offline.png" <<'PY'
+import sys
+from PIL import Image
+img = Image.open(sys.argv[1]).convert("RGB")
+colors = img.getcolors(maxcolors=1_000_000)
+assert colors and len(colors) > 5, "offline screenshot is effectively blank"
+PY
             adb shell cmd connectivity airplane-mode disable || true
             adb shell settings put global airplane_mode_on 0 || true
             adb shell svc wifi enable || true
