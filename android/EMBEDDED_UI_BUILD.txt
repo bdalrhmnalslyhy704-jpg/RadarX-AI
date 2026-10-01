@@ -1,0 +1,8 @@
+RadarX Android 1.1.0
+UI: embedded inside APK via WebViewAssetLoader
+Backend: https://radarx-ai-production.up.railway.app
+GitHub Pages runtime dependency: none
+Binance direct API from APK: none
+paper_trading=true
+real_order_execution=false
+confidence_score=UNKNOWN
