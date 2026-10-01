@@ -23,16 +23,63 @@ export function normalizeMarketRadarResponse(response, requestedLimit = 20) {
   };
 }
 
+function hasClearStaleReason(response) {
+  const body = response?.body && typeof response.body === 'object' ? response.body : {};
+  const values = [body.error, body.reason, body.code, body.message]
+    .filter(value => typeof value === 'string')
+    .map(value => value.trim().toUpperCase());
+  return values.some(value =>
+    value === 'DATA_STALE' ||
+    value === 'SNAPSHOT_STALE' ||
+    value === 'STALE_SNAPSHOT' ||
+    /(?:SNAPSHOT|DATA|CACHE).*(?:STALE|OUTDATED)|(?:STALE|OUTDATED).*(?:SNAPSHOT|DATA|CACHE)/.test(value)
+  ) || Array.isArray(body.candidates) && body.candidates.some(candidate => candidate?.data_status?.data_stale === true);
+}
+
+export function candidateDataState(candidate) {
+  if (isCandidateFresh(candidate)) return 'LIVE_DATA';
+  if (candidate?.data_status?.data_stale === true) return 'DATA_STALE';
+  return 'DATA_INVALID';
+}
+
+export function normalizeCandidateForDisplay(candidate) {
+  if (candidateDataState(candidate) !== 'DATA_STALE') return {...candidate};
+  return {
+    ...candidate,
+    signal_state: 'DATA_STALE',
+    overall_score: null,
+    data_status: {
+      ...(candidate?.data_status || {}),
+      data_stale: true
+    }
+  };
+}
+
+export function classifyCandidateOverallState(candidates) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  const freshCount = list.filter(isCandidateFresh).length;
+  if (list.length > 0 && freshCount === list.length) return 'LIVE_DATA';
+  if (freshCount > 0) return 'PARTIAL_DATA';
+  return 'DATA_STALE';
+}
+
 export function classifyMarketRadarResponse(response, online = true) {
   if (!online) return 'OFFLINE';
   if (!response || Number(response.status) === 0) return 'RETRY';
+
   const normalized = normalizeMarketRadarResponse(response);
-  if (normalized.status === 200 && normalized.live) return 'LIVE_DATA';
-  const stale = normalized.status === 503 ||
-    response?.body?.reason === 'SNAPSHOT_STALE' ||
-    normalized.candidates.some(c => c?.data_status?.data_stale === true);
-  if (stale) return 'DATA_STALE';
-  if (normalized.status === 200 && normalized.candidates.length === 0) return 'NO_CANDIDATES';
+  const status = normalized.status;
+
+  if (status === 503) {
+    return hasClearStaleReason(response) ? 'DATA_STALE' : 'DATA_UNAVAILABLE';
+  }
+
+  if (status === 200 && normalized.ok) {
+    const body = response?.body && typeof response.body === 'object' ? response.body : {};
+    if (body.error) return 'DATA_UNAVAILABLE';
+    return classifyCandidateOverallState(normalized.candidates);
+  }
+
   return 'DATA_UNAVAILABLE';
 }
 
@@ -54,16 +101,19 @@ export function filterCandidates(candidates, filters = {}) {
 
 export function sortCandidates(candidates, sort = 'strongest') {
   const list = [...(Array.isArray(candidates) ? candidates : [])];
+  const fresh = list.filter(isCandidateFresh);
+  const nonFresh = list.filter(candidate => !isCandidateFresh(candidate));
   const value = (candidate, key) => {
     if (key === 'liquidity') return numeric(candidate?.liquidity_quality) ?? -1;
     if (key === 'volume') return numeric(candidate?.quote_volume_24h) ?? -1;
     if (key === 'strongest') return numeric(candidate?.overall_score) ?? -1;
     return -1;
   };
-  return list.sort((a, b) => {
+  fresh.sort((a, b) => {
     const delta = value(b, sort) - value(a, sort);
     return delta || String(a?.symbol || '').localeCompare(String(b?.symbol || ''));
   });
+  return fresh.concat(nonFresh);
 }
 
 export function getStrategyOptions(candidates) {

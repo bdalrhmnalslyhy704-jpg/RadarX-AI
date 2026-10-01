@@ -8,7 +8,9 @@ import {
   isCandidateFresh,
   candidateReason,
   normalizeStrategyRows,
-  fetchMarketRadarWithRetry
+  fetchMarketRadarWithRetry,
+  candidateDataState,
+  normalizeCandidateForDisplay
 } from './radarx-market-radar-ui.mjs';
 
 const STYLE_ID = 'radarx-market-radar-style';
@@ -16,6 +18,7 @@ const STATUS_LABELS = Object.freeze({
   FETCHING: 'FETCHING',
   RETRY: 'RETRY',
   LIVE_DATA: 'LIVE DATA',
+  PARTIAL_DATA: 'PARTIAL_DATA',
   DATA_STALE: 'DATA_STALE',
   DATA_UNAVAILABLE: 'DATA_UNAVAILABLE',
   NO_CANDIDATES: 'NO_CANDIDATES',
@@ -55,8 +58,9 @@ export function validateMarketRadarContract(response) {
 }
 
 export function buildCandidateMarkup(candidate, index) {
-  const fresh = isCandidateFresh(candidate);
-  const state = candidate?.signal_state || 'UNKNOWN';
+  const dataState = candidateDataState(candidate);
+  const state = dataState === 'DATA_STALE' ? 'DATA_STALE' : (candidate?.signal_state || 'UNKNOWN');
+  const dataChip = dataState === 'LIVE_DATA' ? 'FRESH' : dataState;
   const score = Number.isFinite(Number(candidate?.overall_score)) ? num(candidate.overall_score, 2) : 'UNKNOWN';
   const coverage = candidate?.coverage?.ratio !== undefined ? pct(candidate.coverage.ratio) : 'UNKNOWN';
   return '<article class="rxmr-candidate" data-index="' + index + '">' +
@@ -71,7 +75,7 @@ export function buildCandidateMarkup(candidate, index) {
       '<div><span>Best strategy</span><b>' + esc(candidate.best_strategy || 'UNKNOWN') + '</b></div>' +
       '<div><span>Direction</span><b>' + esc(candidate.direction || 'NONE') + '</b></div>' +
     '</div>' +
-    '<div class="rxmr-chips"><span>' + esc(state) + '</span><span>' + (fresh ? 'FRESH' : 'DATA_STALE') + '</span></div>' +
+    '<div class="rxmr-chips"><span>' + esc(state) + '</span><span>' + esc(dataChip) + '</span></div>' +
     '<div class="rxmr-muted">سبب الظهور: ' + esc(candidateReason(candidate)) + '</div>' +
     '<div class="rxmr-muted">المخاطر: ' + esc((candidate.risk_flags || []).join(' · ') || 'لا توجد') + '</div>' +
     '<div class="rxmr-muted">الإبطال: ' + esc((candidate.invalidation || []).join(' · ') || 'لا توجد') + '</div>' +
@@ -161,8 +165,8 @@ export function mountMarketRadarScreen(root, options = {}) {
 
   function setStatus(mode) {
     nodes.status.textContent = STATUS_LABELS[mode] || mode;
-    nodes.status.className = 'rxmr-status ' + (mode === 'LIVE_DATA' ? 'rxmr-live' : mode === 'DATA_STALE' || mode === 'DATA_UNAVAILABLE' || mode === 'NO_CANDIDATES' ? 'rxmr-warn' : 'rxmr-offline');
-    nodes.backend.textContent = mode === 'LIVE_DATA' || mode === 'DATA_STALE' || mode === 'NO_CANDIDATES' ? 'Connected' : mode;
+    nodes.status.className = 'rxmr-status ' + (mode === 'LIVE_DATA' ? 'rxmr-live' : mode === 'PARTIAL_DATA' || mode === 'DATA_STALE' || mode === 'DATA_UNAVAILABLE' || mode === 'NO_CANDIDATES' ? 'rxmr-warn' : 'rxmr-offline');
+    nodes.backend.textContent = mode === 'LIVE_DATA' || mode === 'PARTIAL_DATA' || mode === 'DATA_STALE' || mode === 'NO_CANDIDATES' ? 'Connected' : mode;
   }
   function renderList() {
     const filtered = filterCandidates(state.candidates, {
@@ -207,45 +211,62 @@ export function mountMarketRadarScreen(root, options = {}) {
     if (!navigator.onLine) { fail('OFFLINE', 'لا يوجد اتصال بالإنترنت.'); return; }
     setStatus('FETCHING');
     nodes.updated.textContent = 'UNKNOWN';
+
     try {
       const result = await fetchMarketRadarWithRetry(client, {
-      quote: 'USDT',
-      limit: 20,
-      attempts: 2,
-      sleepFn: async ms => { setStatus('RETRY'); await new Promise(resolve => setTimeout(resolve, ms)); }
-    });
-    if (state.destroyed) return;
-    const response = result.response;
-    let mode = classifyMarketRadarResponse(response, navigator.onLine);
-    const normalized = normalizeMarketRadarResponse(response, 20);
-    if (mode === 'RETRY') {
-      mode = navigator.onLine ? 'DATA_UNAVAILABLE' : 'OFFLINE';
-    }
-    if (mode === 'LIVE_DATA') {
-      const contract = validateMarketRadarContract(response);
-      if (!contract.valid) { fail('DATA_UNAVAILABLE', contract.reason); return; }
-      state.candidates = normalized.candidates;
-      state.response = response;
-      state.lastUpdate = normalized.updatedAt || new Date().toISOString();
-      nodes.updated.textContent = time(state.lastUpdate);
-      nodes.requested.textContent = String(normalized.requestedPairs);
-      nodes.scanned.textContent = String(normalized.scannedPairs);
-      nodes.count.textContent = String(normalized.candidateCount);
-      renderFilters();
-      renderList();
-      setStatus('LIVE_DATA');
-      return;
-    }
-    if (mode === 'NO_CANDIDATES') {
-      nodes.requested.textContent = String(normalized.requestedPairs);
-      nodes.scanned.textContent = String(normalized.scannedPairs);
-      fail('NO_CANDIDATES', 'Backend متصل لكن لم يتم إرجاع Candidates.');
-      return;
-    }
-      fail(mode, response?.error || 'تعذر الحصول على Market Radar.');
+        quote: 'USDT',
+        limit: 20,
+        attempts: 2,
+        sleepFn: async ms => {
+          setStatus('RETRY');
+          await new Promise(resolve => setTimeout(resolve, ms));
+        }
+      });
+      if (state.destroyed) return;
+
+      const response = result.response;
+      let mode = classifyMarketRadarResponse(response, navigator.onLine);
+      const normalized = normalizeMarketRadarResponse(response, 20);
+
+      if (mode === 'RETRY') {
+        mode = navigator.onLine ? 'DATA_UNAVAILABLE' : 'OFFLINE';
+      }
+
+      if (mode === 'LIVE_DATA' || mode === 'PARTIAL_DATA' || mode === 'DATA_STALE') {
+        const contract = validateMarketRadarContract(response);
+        if (!contract.valid) {
+          fail('DATA_UNAVAILABLE', contract.reason);
+          return;
+        }
+
+        const displayCandidates = normalized.candidates.map(normalizeCandidateForDisplay);
+        state.candidates = displayCandidates;
+        state.response = response;
+        state.lastUpdate = normalized.updatedAt || new Date().toISOString();
+        nodes.updated.textContent = time(state.lastUpdate);
+        nodes.requested.textContent = String(normalized.requestedPairs);
+        nodes.scanned.textContent = String(normalized.scannedPairs);
+        nodes.count.textContent = String(normalized.candidateCount);
+        renderFilters();
+        renderList();
+        setStatus(mode);
+
+        if (mode === 'DATA_STALE' && displayCandidates.length === 0) {
+          nodes.list.innerHTML = '<div class="rxmr-candidate"><b>DATA_STALE</b><div class="rxmr-muted">لم توجد نتائج صالحة حديثة من الاستجابة الحالية.</div></div>';
+          const retry = document.createElement('button');
+          retry.type = 'button';
+          retry.className = 'rxmr-button';
+          retry.textContent = 'إعادة المحاولة';
+          retry.addEventListener('click', load);
+          nodes.list.appendChild(retry);
+        }
+        return;
+      }
+
+      fail(mode, response?.error || response?.body?.error || 'تعذر الحصول على Market Radar.');
     } catch (error) {
-    console.error('RadarX Market Radar UI error:', error);
-    fail(navigator.onLine ? 'DATA_UNAVAILABLE' : 'OFFLINE', String(error?.message || error || 'UNKNOWN_ERROR'));
+      console.error('RadarX Market Radar UI error:', error);
+      fail(navigator.onLine ? 'DATA_UNAVAILABLE' : 'OFFLINE', String(error?.message || error || 'UNKNOWN_ERROR'));
     }
   }
 
