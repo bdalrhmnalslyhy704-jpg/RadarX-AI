@@ -1,5 +1,5 @@
 const DIRECTION_VALUES = new Set(['ALL','LONG','BEARISH']);
-const STATUS_VALUES = new Set(['ALL','CONFIRMED','CANDIDATE','NO_SIGNAL','INSUFFICIENT_DATA','REJECTED','DATA_STALE']);
+const STATUS_VALUES = new Set(['ALL','CONFIRMED','CANDIDATE']);
 
 export function normalizeMarketRadarResponse(response, requestedLimit = 20) {
   const body = response?.body && typeof response.body === 'object' ? response.body : null;
@@ -7,6 +7,8 @@ export function normalizeMarketRadarResponse(response, requestedLimit = 20) {
   const requested = Number(requestedLimit);
   const requestedPairs = Number.isInteger(requested) && requested > 0 ? requested : 20;
   const universe = body?.universe && typeof body.universe === 'object' ? body.universe : {};
+  const freshValidCount = candidates.filter(isCandidateEligible).length;
+  const excludedCount = Math.max(0, candidates.length - freshValidCount);
   return {
     status: Number(response?.status) || 0,
     ok: response?.ok === true,
@@ -17,8 +19,10 @@ export function normalizeMarketRadarResponse(response, requestedLimit = 20) {
     confidenceScore: body?.meta?.confidence_score === 'UNKNOWN',
     updatedAt: body?.as_of || null,
     requestedPairs,
-    scannedPairs: Number(universe.scanned ?? body?.meta?.scanned ?? candidates.length),
-    candidateCount: Number(universe.candidates ?? body?.meta?.candidates ?? candidates.length),
+    scannedPairs: Number(universe.scanned ?? body?.meta?.scanned ?? 0),
+    candidateCount: Number(universe.returned ?? universe.candidates ?? body?.meta?.candidates ?? candidates.length),
+    freshValidCount,
+    excludedCount,
     candidates
   };
 }
@@ -36,31 +40,53 @@ function hasClearStaleReason(response) {
   ) || Array.isArray(body.candidates) && body.candidates.some(candidate => candidate?.data_status?.data_stale === true);
 }
 
+export function hasValidSignalState(candidate) {
+  return candidate?.signal_state === 'CANDIDATE' || candidate?.signal_state === 'CONFIRMED';
+}
+
+export function isCandidateFresh(candidate) {
+  return candidate?.data_status?.data_stale === false &&
+    candidate?.data_status?.data_valid === true;
+}
+
+export function isCandidateEligible(candidate) {
+  return isCandidateFresh(candidate) &&
+    hasValidSignalState(candidate) &&
+    Number(candidate?.data_quality) > 0 &&
+    Number(candidate?.coverage?.ratio) >= 1 &&
+    Number.isFinite(Number(candidate?.overall_score)) &&
+    Array.isArray(candidate?.accepted_strategies) &&
+    candidate.accepted_strategies.length > 0 &&
+    Array.isArray(candidate?.strategies) &&
+    candidate.strategies.some(strategy => strategy?.hard_gates_passed === true);
+}
+
 export function candidateDataState(candidate) {
-  if (isCandidateFresh(candidate)) return 'LIVE_DATA';
+  if (isCandidateEligible(candidate)) return 'LIVE_DATA';
   if (candidate?.data_status?.data_stale === true) return 'DATA_STALE';
   return 'DATA_INVALID';
 }
 
 export function normalizeCandidateForDisplay(candidate) {
-  if (candidateDataState(candidate) !== 'DATA_STALE') return {...candidate};
+  if (isCandidateEligible(candidate)) return {...candidate};
   return {
     ...candidate,
-    signal_state: 'DATA_STALE',
+    raw_overall_score: candidate?.overall_score ?? null,
+    raw_direction: candidate?.direction ?? null,
+    raw_signal_state: candidate?.signal_state ?? null,
     overall_score: null,
-    data_status: {
-      ...(candidate?.data_status || {}),
-      data_stale: true
-    }
+    direction: null,
+    best_strategy: null,
+    signal_state: candidateDataState(candidate)
   };
 }
 
 export function classifyCandidateOverallState(candidates) {
   const list = Array.isArray(candidates) ? candidates : [];
-  const freshCount = list.filter(isCandidateFresh).length;
-  if (list.length > 0 && freshCount === list.length) return 'LIVE_DATA';
-  if (freshCount > 0) return 'PARTIAL_DATA';
-  return 'DATA_STALE';
+  const eligible = list.filter(isCandidateEligible).length;
+  if (eligible === 0) return list.length ? 'DATA_STALE' : 'NO_VALID_CANDIDATES';
+  if (eligible === list.length) return 'LIVE_DATA';
+  return 'PARTIAL_DATA';
 }
 
 export function classifyMarketRadarResponse(response, online = true) {
@@ -68,13 +94,11 @@ export function classifyMarketRadarResponse(response, online = true) {
   if (!response || Number(response.status) === 0) return 'RETRY';
 
   const normalized = normalizeMarketRadarResponse(response);
-  const status = normalized.status;
-
-  if (status === 503) {
+  if (normalized.status === 503) {
     return hasClearStaleReason(response) ? 'DATA_STALE' : 'DATA_UNAVAILABLE';
   }
 
-  if (status === 200 && normalized.ok) {
+  if (normalized.status === 200 && normalized.ok) {
     const body = response?.body && typeof response.body === 'object' ? response.body : {};
     if (body.error) return 'DATA_UNAVAILABLE';
     return classifyCandidateOverallState(normalized.candidates);
@@ -92,28 +116,44 @@ export function filterCandidates(candidates, filters = {}) {
   const strategy = String(filters.strategy || 'ALL');
   const signalState = STATUS_VALUES.has(filters.signalState) ? filters.signalState : 'ALL';
   return (Array.isArray(candidates) ? candidates : []).filter(candidate => {
+    if (!isCandidateEligible(candidate)) return false;
     if (direction !== 'ALL' && candidate?.direction !== direction) return false;
-    if (strategy !== 'ALL' && !candidate?.strategies?.some(s => s?.id === strategy)) return false;
+    if (strategy !== 'ALL' && !candidate?.strategies?.some(s => s?.id === strategy && s?.hard_gates_passed === true)) return false;
     if (signalState !== 'ALL' && candidate?.signal_state !== signalState) return false;
     return true;
   });
 }
 
 export function sortCandidates(candidates, sort = 'strongest') {
-  const list = [...(Array.isArray(candidates) ? candidates : [])];
-  const fresh = list.filter(isCandidateFresh);
-  const nonFresh = list.filter(candidate => !isCandidateFresh(candidate));
+  const list = (Array.isArray(candidates) ? candidates : []).filter(isCandidateEligible);
   const value = (candidate, key) => {
     if (key === 'liquidity') return numeric(candidate?.liquidity_quality) ?? -1;
     if (key === 'volume') return numeric(candidate?.quote_volume_24h) ?? -1;
     if (key === 'strongest') return numeric(candidate?.overall_score) ?? -1;
     return -1;
   };
-  fresh.sort((a, b) => {
+  return list.sort((a, b) => {
     const delta = value(b, sort) - value(a, sort);
     return delta || String(a?.symbol || '').localeCompare(String(b?.symbol || ''));
   });
-  return fresh.concat(nonFresh);
+}
+
+export function sortExcludedCandidates(candidates) {
+  return (Array.isArray(candidates) ? candidates : [])
+    .filter(candidate => !isCandidateEligible(candidate))
+    .sort((a, b) => {
+      const sa = candidateDataState(a) === 'DATA_STALE' ? 0 : 1;
+      const sb = candidateDataState(b) === 'DATA_STALE' ? 0 : 1;
+      return sa - sb || String(a?.symbol || '').localeCompare(String(b?.symbol || ''));
+    });
+}
+
+export function splitCandidates(candidates) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  return {
+    valid: list.filter(isCandidateEligible),
+    excluded: sortExcludedCandidates(list)
+  };
 }
 
 export function getStrategyOptions(candidates) {
@@ -126,15 +166,10 @@ export function getStrategyOptions(candidates) {
   return [...ids].sort();
 }
 
-export function isCandidateFresh(candidate) {
-  return candidate?.data_status?.data_stale === false &&
-    candidate?.data_status?.data_valid === true;
-}
-
 export function candidateReason(candidate) {
   const accepted = Array.isArray(candidate?.accepted_strategies) ? candidate.accepted_strategies : [];
   const reasons = Array.isArray(candidate?.reason_codes) ? candidate.reason_codes : [];
-  if (accepted.length) return 'Accepted strategies: ' + accepted.join(', ');
+  if (accepted.length) return accepted.join(', ');
   return reasons.length ? reasons.join(' · ') : 'No qualifying strategy';
 }
 
@@ -159,7 +194,9 @@ export function normalizeStrategyRows(candidate) {
 
 export async function fetchMarketRadarWithRetry(client, options = {}) {
   const attempts = Number.isInteger(options.attempts) ? Math.max(0, options.attempts) : 2;
-  const sleep = typeof options.sleepFn === 'function' ? options.sleepFn : (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const sleep = typeof options.sleepFn === 'function'
+    ? options.sleepFn
+    : (ms => new Promise(resolve => setTimeout(resolve, ms)));
   let last = null;
   for (let attempt = 0; attempt <= attempts; attempt += 1) {
     last = await client.getMarketRadar({

@@ -1,0 +1,35 @@
+name: RadarX Android Dashboard Tests
+
+on:
+  push:
+    branches:
+      - android-market-radar-integration
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  ui-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Backend client regression
+        run: node android/backend-client-regression.mjs
+      - name: Market Radar Dashboard tests
+        run: node --test android/app/src/main/assets/tests/market-radar-integration.test.mjs
+      - name: Static safety guards
+        run: |
+          set -euo pipefail
+          ! grep -RIn --exclude-dir=build "github.io" android/app/src/main
+          ! grep -RIn --exclude-dir=build "https://api.binance.com\|https://data-api.binance.vision\|wss://stream.binance.com" android/app/src/main
+          grep -RIn "radarx-ai-production.up.railway.app" android/app/src/main/assets
+          grep -RIn "paper_trading=true" android/app/src/main/assets
+          grep -RIn "real_order_execution=false" android/app/src/main/assets
+          grep -RIn "confidence_score=UNKNOWN" android/app/src/main/assets
