@@ -4,7 +4,7 @@ import {
   liquidityQuality as scoreLiquidity
 } from '../../phase1/radarx-phase1-engine.mjs';
 import {listActiveStrategies, normalizeStrategyResult} from '../../phase1/strategy-registry.mjs';
-import {FUTURE_DATA_CLOCK_SKEW_MS, futureIssues, timestampUnit} from '../core/data-quality.mjs';
+import {FUTURE_DATA_CLOCK_SKEW_MS, futureIssues, normalizeEpochMs, timestampUnit} from '../core/data-quality.mjs';
 
 export const MARKET_RADAR_DEFAULTS = Object.freeze({
   quote: 'USDT',
@@ -127,13 +127,13 @@ function normalizeRawKlines(rows, source, now) {
   return rows.map(row => {
     if (!Array.isArray(row) || row.length < 11) return null;
     return {
-      openTime: Number(row[0]),
+      openTime: normalizeEpochMs(row[0], 'openTime'),
       open: Number(row[1]),
       high: Number(row[2]),
       low: Number(row[3]),
       close: Number(row[4]),
       volume: Number(row[5]),
-      closeTime: Number(row[6]),
+      closeTime: normalizeEpochMs(row[6], 'closeTime'),
       quoteVolume: Number(row[7]),
       tradeCount: Number(row[8]),
       takerBuyBaseVolume: Number(row[9]),
