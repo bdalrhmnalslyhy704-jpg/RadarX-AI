@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  actions: read
 
 env:
   SOURCE_SHA: c75aaf79150cedec0a44c8a309f3d454cd6e6064
@@ -100,20 +99,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APK="android/app/build/outputs/apk/release/app-release.apk"
-          test -s "$APK"
-          cp "$APK" "$RUNNER_TEMP/RadarX-c75aaf.apk"
-          test -s "$RUNNER_TEMP/RadarX-c75aaf.apk"
-          echo "STAGED_APK=$RUNNER_TEMP/RadarX-c75aaf.apk"
-          stat -c "STAGED_APK_SIZE_BYTES=%s" "$RUNNER_TEMP/RadarX-c75aaf.apk"
-
-      - name: Upload APK for emulator
-        uses: actions/upload-artifact@v4
-        with:
-          name: radarx-apk-for-emulator
-          path: android/app/build/outputs/apk/release/app-release.apk
-          if-no-files-found: error
-          retention-days: 1
+          APK_SOURCE="$GITHUB_WORKSPACE/android/app/build/outputs/apk/release/app-release.apk"
+          APK_DIR="$GITHUB_WORKSPACE/.ci-apk"
+          APK="$APK_DIR/RadarX-c75aaf.apk"
+          echo "APK_SOURCE=$APK_SOURCE"
+          echo "APK_DIR=$APK_DIR"
+          echo "APK_OUTPUT_FILES:"
+          find "$GITHUB_WORKSPACE/android/app/build/outputs" -maxdepth 6 -type f -print | sort
+          test -f "$APK_SOURCE" || { echo "ERROR: source APK path is empty or missing: $APK_SOURCE"; exit 1; }
+          test -s "$APK_SOURCE" || { echo "ERROR: source APK is zero bytes: $APK_SOURCE"; exit 1; }
+          mkdir -p "$APK_DIR"
+          cp "$APK_SOURCE" "$APK"
+          test -f "$APK" || { echo "ERROR: staged APK path is empty or missing: $APK"; exit 1; }
+          test -s "$APK" || { echo "ERROR: staged APK is zero bytes: $APK"; exit 1; }
+          ls -lh "$APK_SOURCE" "$APK"
+          stat -c "APK_SIZE_BYTES=%s" "$APK"
+          sha256sum "$APK"
 
       - name: Android emulator Market Radar online/offline smoke
         shell: bash
@@ -141,8 +142,12 @@ jobs:
           adb -s emulator-5554 shell settings put global window_animation_scale 0 >/dev/null 2>&1 || true
           adb -s emulator-5554 shell settings put global transition_animation_scale 0 >/dev/null 2>&1 || true
           adb -s emulator-5554 shell settings put global animator_duration_scale 0 >/dev/null 2>&1 || true
-          APK="android/app/build/outputs/apk/release/app-release.apk"
-          test -s "$APK"
+          APK="$GITHUB_WORKSPACE/.ci-apk/RadarX-c75aaf.apk"
+          echo "EMULATOR_APK=$APK"
+          echo "EMULATOR_APK_FILES:"
+          find "$GITHUB_WORKSPACE/.ci-apk" -maxdepth 2 -type f -print -ls
+          test -f "$APK" || { echo "ERROR: Emulator APK path is empty or missing: $APK"; exit 1; }
+          test -s "$APK" || { echo "ERROR: Emulator APK is zero bytes: $APK"; exit 1; }
           adb -s emulator-5554 install -r "$APK"
           adb -s emulator-5554 logcat -c
           adb -s emulator-5554 shell am force-stop com.radarx.app || true
