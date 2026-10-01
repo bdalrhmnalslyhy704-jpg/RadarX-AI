@@ -199,23 +199,23 @@ function scoreCard(name,score,state,direction){
 }
 function renderLive(response){
   if(!isFreshLiveSignal(response)){
-    renderDataStale(response?.body?.signal?.data_status?.last_error||'LIVE_DATA_REJECTED');
+    renderDataStale(response && response.body && response.body.signal && response.body.signal.data_status && response.body.signal.data_status.last_error||'LIVE_DATA_REJECTED');
     return;
   }
   const r=response.body;
   const x=r.strategies;
   $('cards').innerHTML=[
-    scoreCard('Multi-Timeframe Trend',x.trend.score?.trendScore,x.trend.state,x.trend.direction),
-    scoreCard('Confirmed Breakout',x.breakout.score?.breakoutScore,x.breakout.state,x.breakout.direction),
-    scoreCard('Filtered Mean Reversion',x.meanReversion.score?.meanReversionScore,x.meanReversion.state,x.meanReversion.direction)
+    scoreCard('Multi-Timeframe Trend',x.trend.score && x.trend.score.trendScore,x.trend.state,x.trend.direction),
+    scoreCard('Confirmed Breakout',x.breakout.score && x.breakout.score.breakoutScore,x.breakout.state,x.breakout.direction),
+    scoreCard('Filtered Mean Reversion',x.meanReversion.score && x.meanReversion.score.meanReversionScore,x.meanReversion.state,x.meanReversion.direction)
   ].join('');
   $('dq').textContent=String(r.signal.scores.data_quality);
   $('lq').textContent=String(r.signal.scores.liquidity_quality);
   $('risk').textContent=String(r.signal.risk_filter);
   $('confidence').textContent='UNKNOWN';
   $('dataState').textContent='LIVE_DATA';
-  $('last_successful_update').textContent=r.signal.data_status?.latest_successful_update?new Intl.DateTimeFormat('ar',{dateStyle:'medium',timeStyle:'medium'}).format(new Date(r.signal.data_status.latest_successful_update)):'UNKNOWN';
-  $('source').textContent=r.signal.data_status?.source||'UNKNOWN';
+  $('last_successful_update').textContent=r.signal.data_status && r.signal.data_status.latest_successful_update?new Intl.DateTimeFormat('ar',{dateStyle:'medium',timeStyle:'medium'}).format(new Date(r.signal.data_status.latest_successful_update)):'UNKNOWN';
+  $('source').textContent=r.signal.data_status && r.signal.data_status.source||'UNKNOWN';
   $('dataSource').textContent='Binance Public REST via RadarX Backend';
   $('riskReasons').textContent=(r.signal.risk_reasons||[]).join(' · ')||'لا توجد ملاحظات مخاطر إضافية.';
   $('json').textContent=JSON.stringify(r.signal,null,2);
@@ -258,8 +258,8 @@ async function scan(){
   if(mode==='DATA_STALE'){
     setStatus('UNKNOWN','DATA STALE');
     renderDataStale(
-      state.signal.body?.signal?.data_status?.last_error ||
-      state.readiness.body?.reason ||
+      state.signal.body && state.signal.body.signal && state.signal.body.signal.data_status && state.signal.body.signal.data_status.last_error ||
+      state.readiness.body && state.readiness.body.reason ||
       'SNAPSHOT_STALE'
     );
     return;
