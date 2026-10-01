@@ -100,7 +100,7 @@ export function classifyBackendState(state) {
   const stale =
     state.readiness && readiness.body && readiness.body.data_stale === true ||
     state.readiness && state.readiness.body && state.readiness.body.reason === 'SNAPSHOT_STALE' ||
-    state.signal?.body?.signal?.data_status && status.data_stale === true;
+    state.signal && state.signal.body && state.signal.body.signal && state.signal.body.signal.data_status && state.signal.body.signal.data_status.data_stale === true;
 
   if (stale || state.readiness && readiness.status === 503 || state.signal && state.signal.status === 503) {
     return 'DATA_STALE';
