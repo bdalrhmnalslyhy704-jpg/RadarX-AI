@@ -29,20 +29,23 @@ function trendValues(n,start,delta) { return Array.from({length:n},(_,i)=>start+
 function fixtures(id, direction) {
   if (id==='EMA_RIBBON_ALIGNMENT') return {series1h:makeSeries('1h',trendValues(220,direction==='LONG'?100:300,direction==='LONG'?1:-1))};
   if (id==='ADX_TREND_STRENGTH') return {series1h:makeSeries('1h',trendValues(100,direction==='LONG'?100:200,direction==='LONG'?1.2:-1.2))};
-  if (id==='MACD_TREND_CONTINUATION') return {
-    series1h:makeSeries('1h',trendValues(100,direction==='LONG'?100:200,direction==='LONG'?1:-1)),
-    series4h:makeSeries('4h',trendValues(60,direction==='LONG'?100:200,direction==='LONG'?2:-2))
-  };
+  if (id==='MACD_TREND_CONTINUATION') {
+    const v1=trendValues(95,direction==='LONG'?100:200,direction==='LONG'?1:-1);
+    const v4=trendValues(55,direction==='LONG'?100:200,direction==='LONG'?2:-2);
+    const tail1=direction==='LONG'?[196,199,203,208,214]:[104,101,97,92,86];
+    const tail4=direction==='LONG'?[210,214,219,225,232]:[90,86,81,75,68];
+    return {series1h:makeSeries('1h',v1.concat(tail1)),series4h:makeSeries('4h',v4.concat(tail4))};
+  }
   if (id==='BOLLINGER_BAND_REVERSION') {
     const base=Array(40).fill(100);
-    const tail=direction==='LONG'?[96,94,92,90,88,86,84,82,80,83]:[104,106,108,110,112,114,116,118,120,117];
+    const tail=direction==='LONG'?[96,94,92,90,88,86,84,82,80,76]:[104,106,108,110,112,114,116,118,120,124];
     const s=makeSeries('1h',[...base,...tail]);
     const x=s.at(-1);
-    s[s.length-1]={...x,open:direction==='LONG'?80:120,close:direction==='LONG'?83:117,high:direction==='LONG'?86:120,low:direction==='LONG'?76:114};
+    s[s.length-1]={...x,open:direction==='LONG'?74:126,close:direction==='LONG'?76:124,high:direction==='LONG'?78:130,low:direction==='LONG'?70:122};
     return {series1h:s};
   }
   if (id==='VWAP_REVERSION') {
-    const vals=Array(28).fill(100);
+    const vals=Array(29).fill(100);
     if(direction==='LONG') vals[27]=90;
     vals.push(direction==='LONG'?98.5:101.5);
     const s=makeSeries('15m',vals,1000);
