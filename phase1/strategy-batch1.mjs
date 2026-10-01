@@ -145,7 +145,7 @@ export function evaluateMACDTrendContinuation({series1h, series4h, config = {min
   const p1 = prepare(series1h,'1h',60,now), p4 = prepare(series4h,'4h',35,now);
   if (p1.result || p4.result) {
     const reasons=[...(p1.result?.reasonCodes ?? []),...(p4.result?.reasonCodes ?? [])];
-    const insufficient=reasons.includes('INSUFFICIENT_DATA')||reasons.includes('INSUFFICIENT_CLOSED_DATA')||p1.candles.length<60||p4.candles.length<35;
+    const insufficient=reasons.includes('INSUFFICIENT_DATA')||reasons.includes('INSUFFICIENT_CLOSED_DATA')||(!p1.result&&p1.candles.length<60)||(!p4.result&&p4.candles.length<35);
     return reject('MACD_TREND_CONTINUATION',[...new Set(reasons.length?reasons:[insufficient?'INSUFFICIENT_DATA':'INVALID_DATA'])],{}, {state:insufficient?'INSUFFICIENT_DATA':'REJECTED'});
   }
   const c1=p1.candles,c4=p4.candles,v1=c1.map(c=>c.close),v4=c4.map(c=>c.close),i1=v1.length-1,i4=v4.length-1,m1=macd(v1,12,26,9),m4=macd(v4,12,26,9);
