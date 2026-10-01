@@ -194,6 +194,23 @@ jobs:
           which emulator || true
           echo "emulator files after installation:"
           find "$ANDROID_HOME" -type f -name emulator 2>/dev/null || true
+          echo "Checking emulator host libraries:"
+          MISSING_LIBS="$(ldd "$EMULATOR" 2>/dev/null | awk '/not found/{print $1}' | sort -u || true)"
+          if [ -n "$MISSING_LIBS" ]; then
+            echo "Missing emulator host libraries:"
+            printf '%s\\n' "$MISSING_LIBS"
+            if printf '%s\\n' "$MISSING_LIBS" | grep -Fq 'libpulse.so.0'; then
+              sudo apt-get update
+              sudo apt-get install -y libpulse0
+            fi
+          fi
+          MISSING_LIBS="$(ldd "$EMULATOR" 2>/dev/null | awk '/not found/{print $1}' | sort -u || true)"
+          if [ -n "$MISSING_LIBS" ]; then
+            echo "ERROR: emulator has unresolved host libraries after dependency installation:"
+            printf '%s\\n' "$MISSING_LIBS"
+            exit 1
+          fi
+
           echo "emulator -version:"
           "$EMULATOR" -version
           echo "adb version:"
