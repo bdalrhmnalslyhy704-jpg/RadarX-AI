@@ -47,11 +47,11 @@ function fixtures(id, direction) {
   if (id==='VWAP_REVERSION') {
     const vals=Array(29).fill(100);
     if(direction==='LONG') vals[27]=90;
-    vals.push(direction==='LONG'?98.5:101.5);
+    vals.push(direction==='LONG'?97.5:101.5);
     const s=makeSeries('15m',vals,1000);
     const x=s.at(-1);
     s[s.length-2]={...s.at(-2),close:direction==='LONG'?95:105,open:direction==='LONG'?95:105,high:direction==='LONG'?96:106,low:direction==='LONG'?94:104};
-    s[s.length-1]={...x,open:direction==='LONG'?95:105,close:direction==='LONG'?98:102,high:direction==='LONG'?101:108,low:direction==='LONG'?94:99};
+    s[s.length-1]={...x,open:direction==='LONG'?95:105,close:direction==='LONG'?97.5:102,high:direction==='LONG'?101:108,low:direction==='LONG'?94:99};
     return {series15m:s,liquidityQuality:100};
   }
   if (id==='RELATIVE_VOLUME_SURGE') {
