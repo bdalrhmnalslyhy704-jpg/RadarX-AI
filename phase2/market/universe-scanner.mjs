@@ -541,7 +541,7 @@ export class MarketUniverseScanner {
     }
 
     const completedAt = this.clock();
-    const deepSuccess = !error && ['4h', '1h', '15m'].every(tf => Array.isArray(series[tf]) && series[tf].length > 0);
+    let deepSuccess = !error && ['4h', '1h', '15m'].every(tf => Array.isArray(series[tf]) && series[tf].length > 0);
     const liquidity = this.computeLiquidity(depthRaw, ticker);
     let evaluation = null;
     if (deepSuccess) {
@@ -562,6 +562,7 @@ export class MarketUniverseScanner {
         }, engineConfig ? { config: engineConfig } : undefined);
       } catch (e) {
         error = e;
+        deepSuccess = false;
       }
     }
 

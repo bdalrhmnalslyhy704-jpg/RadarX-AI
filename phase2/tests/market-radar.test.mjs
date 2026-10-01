@@ -155,6 +155,7 @@ test('timeout is retried with backoff and still returns fresh data',async()=>{
   const scanner=new MarketUniverseScanner({rest,config:{minQuoteVolume24h:750000,scanLimit:1,returnLimit:1,retryAttempts:1,retryBaseMs:1},sleepFn:async()=>{},strategyEvaluator:evaluator});
   const result=await scanner.scan({quote:'USDT',limit:1});
   assert.equal(result.candidates[0].data_status.data_valid,true);
+  assert.equal(failed,true);
   assert.ok(rest.calls.filter(x=>x.type==='klines'&&x.symbol==='BTCUSDT'&&x.tf==='4h').length>=1);
 });
 
@@ -194,7 +195,8 @@ test('candidate contract preserves paper-only policy and evidence',async()=>{
 });
 
 test('scanner exposes no execution fields and uses no synthetic fallback values',()=>{
-  const source = String(new MarketUniverseScanner({rest:makeRest()}.scan));
+  const scanner = new MarketUniverseScanner({rest:makeRest()});
+  const source = String(scanner.scan);
   assert.doesNotMatch(source,/createOrder|placeOrder|withdraw/i);
   assert.doesNotMatch(source,/mock|synthetic|fakePrice/i);
 });
