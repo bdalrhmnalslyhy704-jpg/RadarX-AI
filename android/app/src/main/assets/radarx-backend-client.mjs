@@ -117,3 +117,17 @@ export function classifyBackendState(state) {
     ? 'DISCONNECTED'
     : 'DATA_UNAVAILABLE';
 }
+
+
+export async function getMarketRadar({ quote = 'USDT', limit = 20 } = {}, fetchImpl = globalThis.fetch) {
+  const safeQuote = String(quote || 'USDT').trim().toUpperCase();
+  if (!/^[A-Z]{2,10}$/.test(safeQuote)) throw new Error('INVALID_QUOTE');
+  const safeLimit = Number(limit);
+  if (!Number.isInteger(safeLimit) || safeLimit < 1 || safeLimit > 50) throw new Error('INVALID_LIMIT');
+  const base = normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  return requestJson(
+    base,
+    '/api/market-radar?quote=' + encodeURIComponent(safeQuote) + '&limit=' + encodeURIComponent(String(safeLimit)),
+    fetchImpl
+  );
+}
