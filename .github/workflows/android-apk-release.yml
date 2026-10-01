@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - android-apk-embedded-v1
+      - android-apk-fix-signal-client
   workflow_dispatch:
 
 permissions:
@@ -27,6 +28,12 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
+
+      - name: Backend client regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node android/backend-client-regression.mjs
 
       - name: Build release APK
         shell: bash

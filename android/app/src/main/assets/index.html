@@ -27,7 +27,7 @@ main{width:min(1100px,100%);margin:auto;padding:env(safe-area-inset-top) 14px ca
 .card{background:#0b1820;border:1px solid #1d3944;border-radius:16px;padding:14px;min-height:126px}
 .card .name{font-size:12px;color:#9bb3bd;font-weight:800}.score{font-size:31px;font-weight:950;margin-top:5px}.state{font-size:11px;font-weight:900;margin-top:4px}
 .scorebar{height:7px;background:#102932;border-radius:99px;overflow:hidden;margin-top:10px}.scorebar>i{display:block;height:100%;background:#54d5ff;border-radius:99px}
-.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:11px}
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:11px}
 .metric{background:#08131a;border:1px solid #17313a;border-radius:12px;padding:11px}.metric b{display:block;font-size:17px;margin-top:3px}
 .kv{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:11px}.kv div{padding:10px 11px;border-radius:11px;background:#08131a;border:1px solid #17313a}.kv b{display:block;margin-top:3px}
 pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-radius:11px;font-size:10px;max-height:520px;margin:10px 0 0}
@@ -83,6 +83,7 @@ pre{white-space:pre-wrap;overflow:auto;background:#061016;padding:12px;border-ra
 
 <section class="panel">
   <div class="metrics">
+    <div class="metric"><span class="muted">السعر</span><b id="price">UNKNOWN</b></div>
     <div class="metric"><span class="muted">Data Quality</span><b id="dq">UNKNOWN</b></div>
     <div class="metric"><span class="muted">Liquidity Quality</span><b id="lq">UNKNOWN</b></div>
     <div class="metric"><span class="muted">Risk Filter</span><b id="risk">UNKNOWN</b></div>
@@ -143,6 +144,8 @@ const $=id=>document.getElementById(id);
 const API_BASE_KEY='radarx.backend.base_url';
 let backendBaseUrl=DEFAULT_BACKEND_BASE_URL;
 let deferredInstallPrompt=null;
+let scanInFlight=false;
+let retryTimer=0;
 
 function readBackendBaseUrl(){
   try{
@@ -169,6 +172,8 @@ function clearLiveView(message='تعذر الاتصال بالخادم، تحق�
   $('cards').innerHTML='<div class="card" style="grid-column:1/-1"><div class="state off">DISCONNECTED</div><div style="margin-top:7px">'+message+'</div><div class="muted" style="margin-top:5px">لا يتم استخدام بيانات السوق المخزنة كبيانات LIVE.</div><button id="retryBackend" class="btn" type="button" style="margin-top:10px">إعادة المحاولة</button></div>';
   const retry=$('retryBackend');
   if(retry) retry.addEventListener('click',()=>scan(),{once:true});
+  if(window.RadarXSmoke) window.RadarXSmoke.state('UI_ERROR');
+  $('price').textContent='UNKNOWN';
   $('dq').textContent='UNKNOWN';
   $('lq').textContent='UNKNOWN';
   $('risk').textContent='FAIL';
@@ -197,6 +202,19 @@ function scoreCard(name,score,state,direction){
   const cls=state==='CONFIRMED'?'live':state==='REJECTED'?'off':'warn';
   return '<article class="card"><div class="name">'+name+'</div><div class="score">'+n.toFixed(1)+'</div><div class="scorebar"><i style="width:'+Math.max(0,Math.min(100,n))+'%"></i></div><div class="state '+cls+'">'+state+' · '+direction+'</div></article>';
 }
+function formatPrice(value){
+  const n=Number(value);
+  return Number.isFinite(n)?n.toLocaleString('en-US',{maximumFractionDigits:8}):'UNKNOWN';
+}
+function extractLivePrice(body){
+  const signal=body && body.signal ? body.signal : {};
+  const market=signal.market_data || signal.market || (body && body.market) || {};
+  const candidates=[signal.price,signal.last_price,signal.current_price,signal.mark_price,signal.market_price,market.price,market.last_price,market.current_price,body && body.price];
+  for(let i=0;i<candidates.length;i++){
+    if(candidates[i]!==undefined && candidates[i]!==null && candidates[i]!=='' && Number.isFinite(Number(candidates[i]))) return candidates[i];
+  }
+  return null;
+}
 function renderLive(response){
   if(!isFreshLiveSignal(response)){
     renderDataStale(response && response.body && response.body.signal && response.body.signal.data_status && response.body.signal.data_status.last_error||'LIVE_DATA_REJECTED');
@@ -204,6 +222,9 @@ function renderLive(response){
   }
   const r=response.body;
   const x=r.strategies;
+  const livePrice=extractLivePrice(r);
+  if(livePrice===null) throw new Error('LIVE_PRICE_MISSING');
+  $('price').textContent=formatPrice(livePrice);
   $('cards').innerHTML=[
     scoreCard('Multi-Timeframe Trend',x.trend.score && x.trend.score.trendScore,x.trend.state,x.trend.direction),
     scoreCard('Confirmed Breakout',x.breakout.score && x.breakout.score.breakoutScore,x.breakout.state,x.breakout.direction),
@@ -221,14 +242,28 @@ function renderLive(response){
   $('json').textContent=JSON.stringify(r.signal,null,2);
   $('offlineBanner').hidden=true;
   setStatus('LIVE_DATA','LIVE DATA');
+  if(window.RadarXSmoke) window.RadarXSmoke.state('SIGNAL_LIVE');
+  if($('price').textContent!=='UNKNOWN' && $('dq').textContent!=='UNKNOWN' && $('lq').textContent!=='UNKNOWN' && $('risk').textContent!=='UNKNOWN' && $('json').textContent!=='UNKNOWN'){
+    if(window.RadarXSmoke) window.RadarXSmoke.state('SIGNAL_FIELDS_READY');
+  }
+}
+function scheduleRetry(){
+  if(retryTimer) clearTimeout(retryTimer);
+  retryTimer=window.setTimeout(()=>{
+    retryTimer=0;
+    if(!document.hidden && navigator.onLine) scan(); else scheduleRetry();
+  },15000);
 }
 async function scan(){
+  if(scanInFlight) return;
   const symbol=$('symbol').value.trim().toUpperCase();
   if(!/^[A-Z0-9]{5,20}$/.test(symbol)){
     setStatus('UNKNOWN','رمز غير صالح');
+    scheduleRetry();
     return;
   }
 
+  scanInFlight=true;
   const base=readBackendBaseUrl();
   backendBaseUrl=base;
   $('apiBase').value=base;
@@ -236,41 +271,42 @@ async function scan(){
   $('dataState').textContent='FETCHING';
   $('offlineBanner').hidden=true;
 
-  let state;
+  let state=null;
   try{
     state=await fetchBackendState(base,symbol);
-  }catch(error){
-    setBackendStatus(false);
+    setBackendStatus(!!(state.health && state.health.status===200));
+    const mode=classifyBackendState(state);
+    if(mode==='LIVE_DATA'){
+      renderLive(state.signal);
+      return;
+    }
+    if(mode==='DATA_STALE'){
+      setStatus('UNKNOWN','DATA STALE');
+      renderDataStale(
+        state.signal && state.signal.body && state.signal.body.signal && state.signal.body.signal.data_status && state.signal.body.signal.data_status.last_error ||
+        state.readiness && state.readiness.body && state.readiness.body.reason ||
+        'SNAPSHOT_STALE'
+      );
+      return;
+    }
     setStatus('DISCONNECTED','Disconnected');
-    clearLiveView('تعذر الاتصال بالخادم، تحقق من الإنترنت');
-    return;
-  }
-
-  setBackendStatus(state.health.status===200);
-
-  const mode=classifyBackendState(state);
-
-  if(mode==='LIVE_DATA'){
-    renderLive(state.signal);
-    return;
-  }
-
-  if(mode==='DATA_STALE'){
-    setStatus('UNKNOWN','DATA STALE');
-    renderDataStale(
-      state.signal.body && state.signal.body.signal && state.signal.body.signal.data_status && state.signal.body.signal.data_status.last_error ||
-      state.readiness.body && state.readiness.body.reason ||
-      'SNAPSHOT_STALE'
+    clearLiveView(
+      state.signal && state.signal.status===0
+        ? 'تعذر الوصول إلى Backend Railway.'
+        : 'لم يتم استلام استجابة Backend صالحة للعرض المباشر.'
     );
-    return;
+  }catch(error){
+    const detail=String(error && error.message || error || 'UNKNOWN_ERROR');
+    console.error('RadarX scan error: '+detail);
+    setBackendStatus(!!(state && state.health && state.health.status===200));
+    setStatus('DISCONNECTED','Disconnected');
+    clearLiveView('حدث خطأ أثناء فحص البيانات: '+detail+' — اضغط إعادة المحاولة.');
+  }finally{
+    if($('dataState').textContent==='FETCHING') $('dataState').textContent='DISCONNECTED';
+    if(window.RadarXSmoke) window.RadarXSmoke.state('SCAN_COMPLETE');
+    scanInFlight=false;
+    scheduleRetry();
   }
-
-  setStatus('DISCONNECTED','Disconnected');
-  clearLiveView(
-    state.signal.status===0
-      ? 'تعذر الوصول إلى Backend Railway.'
-      : 'لم يتم استلام استجابة Backend صالحة للعرض المباشر.'
-  );
 }
 $('saveApi').addEventListener('click',()=>scan());
 window.addEventListener('online',()=>scan());
@@ -278,7 +314,8 @@ window.addEventListener('offline',()=>{
   setBackendStatus(false);
   setStatus('DISCONNECTED','Disconnected');
   $('offlineBanner').hidden=false;
-  clearLiveView();
+  clearLiveView('لا يوجد اتصال بالإنترنت. اضغط إعادة المحاولة بعد عودة الاتصال.');
+  scheduleRetry();
 });
 
 window.addEventListener('beforeinstallprompt',e=>{

@@ -79,34 +79,41 @@ export function isFreshLiveSignal(response) {
 
 export function isFreshLiveState(state) {
   if (!state) return false;
-  const readiness = state.readiness;
-  return (
-    state.health && state.health.status === 200 &&
-    readiness && readiness.status === 200 &&
-    readiness && readiness.body && readiness.body.data_stale === false &&
-    readiness && readiness.body && readiness.body.data_valid === true &&
-    readiness && readiness.body && readiness.body.last_error == null &&
-    isFreshLiveSignal(state.signal)
-  );
+  const health = state.health;
+  const signal = state.signal;
+  return health && health.status === 200 && isFreshLiveSignal(signal);
 }
 
 export function classifyBackendState(state) {
-  if (!state || state.health && state.health.status === 0 || state.readiness && readiness.status === 0 || state.signal && state.signal.status === 0) {
+  const readiness = state && state.readiness;
+  const health = state && state.health;
+  const signal = state && state.signal;
+
+  if (!state ||
+      (health && health.status === 0) ||
+      (readiness && readiness.status === 0) ||
+      (signal && signal.status === 0)) {
     return 'DISCONNECTED';
   }
 
   if (isFreshLiveState(state)) return 'LIVE_DATA';
 
+  const readinessBody = readiness && readiness.body;
+  const signalStatus = signal && signal.body && signal.body.signal && signal.body.signal.data_status;
   const stale =
-    state.readiness && readiness.body && readiness.body.data_stale === true ||
-    state.readiness && state.readiness.body && state.readiness.body.reason === 'SNAPSHOT_STALE' ||
-    state.signal && state.signal.body && state.signal.body.signal && state.signal.body.signal.data_status && state.signal.body.signal.data_status.data_stale === true;
+    (readinessBody && readinessBody.data_stale === true) ||
+    (readinessBody && readinessBody.reason === 'SNAPSHOT_STALE') ||
+    (signalStatus && signalStatus.data_stale === true);
 
-  if (stale || state.readiness && readiness.status === 503 || state.signal && state.signal.status === 503) {
+  if (stale ||
+      (readiness && readiness.status === 503) ||
+      (signal && signal.status === 503)) {
     return 'DATA_STALE';
   }
 
-  return state.health && state.health.status >= 500 || state.readiness && readiness.status >= 500 || state.signal && state.signal.status >= 500
+  return (health && health.status >= 500) ||
+         (readiness && readiness.status >= 500) ||
+         (signal && signal.status >= 500)
     ? 'DISCONNECTED'
     : 'DATA_UNAVAILABLE';
 }
