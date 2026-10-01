@@ -33,7 +33,7 @@ test('TEST_FIXTURE: low liquidity prevents notification eligibility',()=>{
 
 test('TEST_FIXTURE: current open candle is not future data and is not the analysis candle',()=>{
   const now=1700000000000;
-  const closed={openTime:now-899999,closeTime:now-1,open:100,high:101,low:99,close:100,volume:1000,closed:true};
+  const closed={openTime:now-900000,closeTime:now-1,open:100,high:101,low:99,close:100,volume:1000,closed:true};
   const open={openTime:now,closeTime:now+899999,open:100,high:102,low:98,close:101,volume:2000,closed:false};
   assert.deepEqual(futureIssues([closed,open],now),[]);
   assert.equal(latestClosed([closed,open]),closed);
