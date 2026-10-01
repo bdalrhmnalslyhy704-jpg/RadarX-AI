@@ -209,7 +209,7 @@ function formatPrice(value){
 function extractLivePrice(body){
   const signal=body && body.signal ? body.signal : {};
   const market=signal.market_data || signal.market || (body && body.market) || {};
-  const candidates=[signal.price,signal.last_price,signal.current_price,signal.mark_price,signal.market_price,market.price,market.last_price,market.current_price,body && body.price];
+  const candidates=[signal.price && signal.price.reference,signal.last_price,signal.current_price,signal.mark_price,signal.market_price,signal.price,market.price,market.last_price,market.current_price,body && body.price];
   for(let i=0;i<candidates.length;i++){
     if(candidates[i]!==undefined && candidates[i]!==null && candidates[i]!=='' && Number.isFinite(Number(candidates[i]))) return candidates[i];
   }
