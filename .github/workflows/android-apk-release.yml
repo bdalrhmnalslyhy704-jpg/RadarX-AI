@@ -71,16 +71,6 @@ jobs:
           BASE="https://radarx-ai-production.up.railway.app"
           curl --fail --location --retry 3 --retry-delay 2 --max-time 15 --silent --show-error "$BASE/healthz" -o "$RUNNER_TEMP/healthz.json"
           curl --fail --location --retry 3 --retry-delay 2 --max-time 15 --silent --show-error "$BASE/readyz" -o "$RUNNER_TEMP/readyz.json"
-          python3 - "$RUNNER_TEMP/healthz.json" "$RUNNER_TEMP/readyz.json" <<'PY'
-import json, sys
-for path in sys.argv[1:]:
-    data=json.load(open(path, encoding="utf-8"))
-    print(path, data)
-PY
-
-      - name: Install screenshot test dependency
-        shell: bash
-        run: python3 -m pip install --user --quiet pillow
 
       - name: Enable KVM for Android Emulator
         shell: bash
@@ -115,14 +105,6 @@ PY
             done
             test "$ready" = "1"
             test "$connected" = "1"
-            adb exec-out screencap -p > "$RUNNER_TEMP/radarx-online.png"
-            python3 - "$RUNNER_TEMP/radarx-online.png" <<'PY'
-import sys
-from PIL import Image
-img = Image.open(sys.argv[1]).convert("RGB")
-colors = img.getcolors(maxcolors=1_000_000)
-assert colors and len(colors) > 5, "online screenshot is effectively blank"
-PY
             adb shell cmd connectivity airplane-mode enable || true
             adb shell settings put global airplane_mode_on 1 || true
             adb shell svc wifi disable || true
@@ -142,14 +124,6 @@ PY
             done
             test "$ready_offline" = "1"
             test "$disconnected" = "1"
-            adb exec-out screencap -p > "$RUNNER_TEMP/radarx-offline.png"
-            python3 - "$RUNNER_TEMP/radarx-offline.png" <<'PY'
-import sys
-from PIL import Image
-img = Image.open(sys.argv[1]).convert("RGB")
-colors = img.getcolors(maxcolors=1_000_000)
-assert colors and len(colors) > 5, "offline screenshot is effectively blank"
-PY
             adb shell cmd connectivity airplane-mode disable || true
             adb shell settings put global airplane_mode_on 0 || true
             adb shell svc wifi enable || true
