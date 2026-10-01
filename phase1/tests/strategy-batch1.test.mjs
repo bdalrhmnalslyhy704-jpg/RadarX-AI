@@ -50,8 +50,8 @@ function fixtures(id, direction) {
     vals.push(direction==='LONG'?98.5:101.5);
     const s=makeSeries('15m',vals,1000);
     const x=s.at(-1);
-    s[s.length-2]={...s.at(-2),close:direction==='LONG'?90:110,open:direction==='LONG'?90:110,high:direction==='LONG'?91:111,low:direction==='LONG'?89:109};
-    s[s.length-1]={...x,open:direction==='LONG'?90:110,close:direction==='LONG'?98.5:101.5,high:direction==='LONG'?101:113,low:direction==='LONG'?89:99};
+    s[s.length-2]={...s.at(-2),close:direction==='LONG'?95:105,open:direction==='LONG'?95:105,high:direction==='LONG'?96:106,low:direction==='LONG'?94:104};
+    s[s.length-1]={...x,open:direction==='LONG'?95:105,close:direction==='LONG'?98:102,high:direction==='LONG'?101:108,low:direction==='LONG'?94:99};
     return {series15m:s,liquidityQuality:100};
   }
   if (id==='RELATIVE_VOLUME_SURGE') {
