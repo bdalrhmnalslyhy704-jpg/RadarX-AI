@@ -13,3 +13,5 @@ Final validation trigger: embedded Android 1.2.0
 Final smoke: online/offline screenshots must contain multiple pixels/colors; runtime logs must report UI_READY plus backend state.
 
 Final release gate: direct Railway health/readiness preflight plus Android online/offline emulator smoke.
+
+Final workflow syntax fixed; release gate ready.
