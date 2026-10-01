@@ -23,3 +23,20 @@ test('TEST_FIXTURE: websocket disconnect enters backoff and reconnects with anot
   assert.equal(Socket.instances.length,2);assert.match(Socket.instances[1].url,/one|two/);
   c.stop();assert.equal(c.state,'STOPPED');assert.ok(states.includes('BACKING_OFF'));
 });
+
+
+test('TEST_FIXTURE: websocket kline timestamps are milliseconds; seconds are rejected',async()=>{
+  Socket.instances.length=0;
+  const errors=[];
+  const c=new BinanceStreamClient({urls:['wss://one.test/stream'],streams:['btcusdt@kline_15m'],
+    WebSocketImpl:Socket,heartbeatTimeoutMs:1000,maxConnectionMs:1000,onState:(s,r)=>{if(r)errors.push(r)}});
+  c.start();
+  const payload={
+    e:'kline',E:1700000000,s:'BTCUSDT',
+    k:{t:1700000000,T:1700000899,s:'BTCUSDT',o:'100',h:'101',l:'99',c:'100',v:'10',q:'1000',n:10,V:'5',Q:'500',x:true,i:'15m'}
+  };
+  Socket.instances[0].emit('open');
+  Socket.instances[0].emit('message',Buffer.from(JSON.stringify(payload)));
+  c.stop();
+  assert.ok(errors.some(x=>/INVALID_WS_JSON:openTime_TIMESTAMP_UNIT_SECONDS/.test(x)));
+});

@@ -200,3 +200,53 @@ test('scanner exposes no execution fields and uses no synthetic fallback values'
   assert.doesNotMatch(source,/createOrder|placeOrder|withdraw/i);
   assert.doesNotMatch(source,/mock|synthetic|fakePrice/i);
 });
+
+
+test('current open candle with future closeTime does not block live candidate quality',async()=>{
+  const rest=makeRest();
+  const now=Date.now();
+  const original=rest.klines;
+  rest.klines=async(symbol,tf)=>{
+    const r=await original(symbol,tf);
+    if(tf==='15m'){
+      const step=900000;
+      const previous=r.candles.at(-1);
+      const open=previous.closeTime+1;
+      r.candles=[...r.candles,{
+        openTime:open,closeTime:open+step-1,open:100,high:102,low:99,close:101,volume:2500,
+        quoteVolume:100000,tradeCount:1000,closed:false,source:'BINANCE_PUBLIC_REST',sourceTime:now
+      }];
+    }
+    return r;
+  };
+  const scanner=new MarketUniverseScanner({rest,config:{minQuoteVolume24h:750000,scanLimit:1,returnLimit:1},strategyEvaluator:evaluator});
+  const result=await scanner.scan({quote:'USDT',limit:1});
+  const candidate=result.candidates[0];
+  assert.equal(candidate.data_status.data_valid,true);
+  assert.equal(candidate.data_status.data_stale,false);
+  assert.equal(Number.isFinite(candidate.overall_score),true);
+  assert.ok(candidate.overall_score>0);
+  assert.equal(result.meta.live,true);
+  assert.ok(!candidate.reason_codes.includes('FUTURE_DATA'));
+});
+
+test('genuinely future candle remains hard-blocked',async()=>{
+  const rest=makeRest();
+  const now=Date.now();
+  const original=rest.klines;
+  rest.klines=async(symbol,tf)=>{
+    const r=await original(symbol,tf);
+    if(tf==='15m')r.candles=[...r.candles.slice(0,-1),{
+      openTime:now+900000,closeTime:now+1799999,open:100,high:101,low:99,close:100,volume:1000,
+      quoteVolume:100000,tradeCount:1000,closed:false,source:'BINANCE_PUBLIC_REST',sourceTime:now
+    }];
+    return r;
+  };
+  const scanner=new MarketUniverseScanner({rest,config:{minQuoteVolume24h:750000,scanLimit:1,returnLimit:1},strategyEvaluator:evaluator});
+  const result=await scanner.scan({quote:'USDT',limit:1});
+  const candidate=result.candidates[0];
+  assert.equal(candidate.data_status.data_valid,false);
+  assert.equal(candidate.overall_score,null);
+  assert.ok(candidate.reason_codes.includes('FUTURE_DATA'));
+  assert.equal(result.meta.live,false);
+});

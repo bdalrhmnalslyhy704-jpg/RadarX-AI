@@ -13,3 +13,25 @@ test('TEST_FIXTURE: HTTP 429 records rate limit and retry-after without spamming
 test('TEST_FIXTURE: retry-after header is parsed in milliseconds',()=>{
   const h=new Map([['retry-after','2']]);assert.equal(retryAfterMs(h),2000);
 });
+
+
+test('TEST_FIXTURE: Binance kline timestamps are milliseconds; seconds are rejected clearly',async()=>{
+  const fetchImpl=async()=>({status:200,ok:true,headers:new Map(),json:async()=>[
+    [1700000000,'100','101','99','100','1000',1700000899,100000,10,500,50000,'0']
+  ]});
+  const client=new RestClient({baseUrls:['https://test.binance'],fetchImpl,timeoutMs:100,minIntervalMs:0,maxRequestsPerMinute:100});
+  await assert.rejects(()=>client.klines('BTCUSDT','15m'),/openTime_TIMESTAMP_UNIT_SECONDS/);
+});
+
+test('TEST_FIXTURE: Binance millisecond kline timestamps normalize and current open candle stays open',async()=>{
+  const now=Date.now();
+  const open=Math.floor((now-5000)/900000)*900000;
+  const fetchImpl=async()=>({status:200,ok:true,headers:new Map(),json:async()=>[
+    [open,'100','101','99','100','1000',open+899999,100000,10,500,50000,'0']
+  ]});
+  const client=new RestClient({baseUrls:['https://test.binance'],fetchImpl,timeoutMs:100,minIntervalMs:0,maxRequestsPerMinute:100});
+  const result=await client.klines('BTCUSDT','15m');
+  assert.equal(result.candles[0].openTime,open);
+  assert.equal(result.candles[0].closeTime,open+899999);
+  assert.equal(result.candles[0].closed,false);
+});
