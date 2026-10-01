@@ -7,7 +7,7 @@ import {join} from 'node:path';
 test('TEST_FIXTURE: phase2 exposes only the allowlisted public market-data API surface',async()=>{
   const root=new URL('..',import.meta.url);
   const dir=root.pathname;
-  const allowed=new Set(['klines','depth','ticker/24hr']);
+  const allowed=new Set(['exchangeInfo','klines','depth','ticker/24hr']);
   const check=async(file)=>{
     const text=await readFile(file,'utf8');
     assert.equal(/\/sapi\//i.test(text),false,'restricted API namespace in '+file);
