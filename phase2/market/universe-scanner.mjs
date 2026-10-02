@@ -660,6 +660,174 @@ export function buildBottomMarketContext(series, ticker, now, {book=null, liquid
   };
 }
 
+function currentAdenMorningStartMs(now){
+  const offsetMs=3*60*60*1000;
+  const local=new Date(now+offsetMs);
+  local.setUTCHours(4,0,0,0);
+  let start=local.getTime()-offsetMs;
+  if(start>now) start-=24*60*60*1000;
+  return start;
+}
+
+export function buildPreMoveContext(series,ticker,now,bottomContext=null,{marketMedianReturn=null,btcReturn=null}={}){
+  const raw15=Array.isArray(series?.['15m'])?series['15m']:[];
+  const closed15=raw15.filter(c=>c?.closed!==false&&Number.isFinite(Number(c?.closeTime))&&Number(c.closeTime)<=now&&
+    Number.isFinite(Number(c?.open))&&Number.isFinite(Number(c?.close))&&Number.isFinite(Number(c?.high))&&Number.isFinite(Number(c?.low))&&
+    Number.isFinite(Number(c?.volume)));
+  const sessionStartMs=currentAdenMorningStartMs(now);
+  const session=closed15.filter(c=>Number(c.closeTime)>=sessionStartMs);
+  const first=session[0]||null;
+  const current=Number(ticker?.lastPrice);
+  const sessionOpen=Number(first?.open);
+  const sessionHigh=session.length?Math.max(...session.map(x=>Number(x.high))):null;
+  const sessionLow=session.length?Math.min(...session.map(x=>Number(x.low))):null;
+  const sessionRange=Number.isFinite(sessionHigh)&&Number.isFinite(sessionLow)&&sessionHigh>sessionLow?sessionHigh-sessionLow:null;
+  const sessionReturn=Number.isFinite(current)&&sessionOpen>0?(current-sessionOpen)/sessionOpen*100:null;
+  const sessionPosition=Number.isFinite(current)&&Number.isFinite(sessionLow)&&sessionRange>0?(current-sessionLow)/sessionRange*100:null;
+
+  const early4=session.slice(0,4), late4=session.slice(-4), base8=session.slice(-12,-4);
+  const avgVol=rows=>rows.length?mean(rows.map(x=>Number(x.volume))):null;
+  const earlyVol=avgVol(early4), lateVol=avgVol(late4), baseVol=avgVol(base8);
+  const volumeAccel=Number.isFinite(lateVol)&&Number.isFinite(baseVol)&&baseVol>0?lateVol/baseVol:null;
+  const takerRatio=rows=>{
+    const vol=rows.reduce((s,x)=>s+Math.max(0,Number(x.volume)||0),0);
+    const buy=rows.reduce((s,x)=>s+Math.max(0,Number(x.takerBuyBaseVolume)||0),0);
+    return vol>0?buy/vol:null;
+  };
+  const earlyBuy=takerRatio(early4),lateBuy=takerRatio(late4),baseBuy=takerRatio(base8);
+  const takerAcceleration=Number.isFinite(lateBuy)&&Number.isFinite(baseBuy)?lateBuy-baseBuy:null;
+
+  const earlyClose=Number(early4.at(-1)?.close);
+  const lateClose=Number(late4.at(-1)?.close);
+  const earlyReturn=Number.isFinite(earlyClose)&&sessionOpen>0?(earlyClose-sessionOpen)/sessionOpen*100:null;
+  const lateWindowReturn=Number.isFinite(lateClose)&&Number.isFinite(earlyClose)&&earlyClose>0?(lateClose-earlyClose)/earlyClose*100:null;
+  const priceAcceleration=Number.isFinite(lateWindowReturn)&&Number.isFinite(earlyReturn)?lateWindowReturn-earlyReturn:null;
+
+  const calmScore=Number.isFinite(sessionReturn)
+    ? sessionReturn<=3?100
+      : sessionReturn<=6?88
+      : sessionReturn<=9?68
+      : sessionReturn<=12?45
+      : sessionReturn<=18?20
+      : 5
+    : 30;
+  const accelerationScore=avgDefined([
+    Number.isFinite(volumeAccel)?clamp(50+(volumeAccel-1)*75):null,
+    Number.isFinite(takerAcceleration)?clamp(50+takerAcceleration*520):null,
+    Number.isFinite(priceAcceleration)?clamp(50+priceAcceleration*28):null
+  ],45);
+  const relativeReturn=Number.isFinite(sessionReturn)&&Number.isFinite(marketMedianReturn)?sessionReturn-marketMedianReturn:null;
+  const relativeStrengthScore=Number.isFinite(relativeReturn)
+    ? clamp(50+relativeReturn*18) : Number.isFinite(btcReturn)&&Number.isFinite(sessionReturn) ? clamp(50+(sessionReturn-btcReturn)*18) : 50;
+  const lowReclaimScore=Number.isFinite(sessionPosition)
+    ? sessionPosition>=15&&sessionPosition<=70 ? 78
+      : sessionPosition<15 ? 58
+      : sessionPosition<=85 ? 70
+      : 40
+    : 45;
+  const resistance=Number(bottomContext?.last_rise?.high);
+  const resistanceDistancePct=Number.isFinite(current)&&current>0&&resistance>current
+    ? (resistance-current)/current*100 : resistance>0&&current>=resistance ? 0 : null;
+  const resistanceProximityScore=Number.isFinite(resistanceDistancePct)
+    ? resistanceDistancePct<=2?92
+      : resistanceDistancePct<=5?82
+      : resistanceDistancePct<=9?65
+      : 42
+    : 48;
+  const squeeze=Number(bottomContext?.metrics?.compression);
+  const structure=Number(bottomContext?.metrics?.structure);
+  const buyPressure=Number(bottomContext?.metrics?.buying_pressure);
+  const whalePressure=Number(bottomContext?.metrics?.whale_pressure);
+  const dataQuality=Number(ticker?.dataQuality);
+
+  const preMoveScore=avgDefined([
+    calmScore,
+    accelerationScore,
+    relativeStrengthScore,
+    lowReclaimScore,
+    resistanceProximityScore,
+    Number.isFinite(squeeze)?squeeze:null,
+    Number.isFinite(structure)?structure:null,
+    Number.isFinite(buyPressure)?buyPressure:null,
+    Number.isFinite(whalePressure)?whalePressure:null
+  ],45);
+
+  const alreadyMoved=(Number.isFinite(sessionReturn)&&sessionReturn>12)||(Number(ticker?.priceChange24h)>20);
+  const stage=alreadyMoved?'ALREADY_MOVED':
+    preMoveScore>=82&&Number.isFinite(sessionReturn)&&sessionReturn<=6?'READY':
+    preMoveScore>=72?'EARLY_WAKE':
+    preMoveScore>=62?'QUIET_BUILD':
+    'NO_SETUP';
+
+  const reasons=[];
+  if(Number.isFinite(volumeAccel)&&volumeAccel>=1.25) reasons.push('VOLUME_ACCELERATING');
+  if(Number.isFinite(takerAcceleration)&&takerAcceleration>=0.025) reasons.push('TAKER_BUY_ACCELERATING');
+  if(Number.isFinite(relativeReturn)&&relativeReturn>=1) reasons.push('RELATIVE_STRENGTH');
+  if(Number.isFinite(squeeze)&&squeeze>=65) reasons.push('COMPRESSION');
+  if(structure>=65) reasons.push('STRUCTURE_IMPROVING');
+  if(Number.isFinite(whalePressure)&&whalePressure>=70) reasons.push('BID_WALL_PRESSURE');
+  if(Number.isFinite(sessionReturn)&&sessionReturn<=6) reasons.push('NOT_EXTENDED');
+  if(alreadyMoved) reasons.push('ALREADY_EXTENDED');
+  if(Number.isFinite(resistanceDistancePct)&&resistanceDistancePct<=5) reasons.push('RESISTANCE_NEAR');
+
+  return {
+    timezone:'Asia/Aden',
+    window:'04:00–12:00 local session',
+    session_start:new Date(sessionStartMs).toISOString(),
+    session_close:lastOrNull(session)?.closeTime ?? null,
+    current_price:Number.isFinite(current)?current:null,
+    session_open:Number.isFinite(sessionOpen)?sessionOpen:null,
+    session_high:Number.isFinite(sessionHigh)?sessionHigh:null,
+    session_low:Number.isFinite(sessionLow)?sessionLow:null,
+    session_return_pct:Number.isFinite(sessionReturn)?sessionReturn:null,
+    session_position_pct:Number.isFinite(sessionPosition)?clamp(sessionPosition):null,
+    early_return_pct:Number.isFinite(earlyReturn)?earlyReturn:null,
+    late_window_return_pct:Number.isFinite(lateWindowReturn)?lateWindowReturn:null,
+    price_acceleration_pct:Number.isFinite(priceAcceleration)?priceAcceleration:null,
+    volume_acceleration:Number.isFinite(volumeAccel)?volumeAccel:null,
+    taker_buy_ratio:Number.isFinite(lateBuy)?lateBuy:null,
+    taker_buy_acceleration:Number.isFinite(takerAcceleration)?takerAcceleration:null,
+    market_median_return_pct:Number.isFinite(marketMedianReturn)?marketMedianReturn:null,
+    relative_strength_vs_market_pct:Number.isFinite(relativeReturn)?relativeReturn:null,
+    relative_strength_vs_btc_pct:Number.isFinite(btcReturn)&&Number.isFinite(sessionReturn)?sessionReturn-btcReturn:null,
+    resistance_distance_pct:Number.isFinite(resistanceDistancePct)?resistanceDistancePct:null,
+    score:Number.isFinite(preMoveScore)?Math.round(clamp(preMoveScore)*10)/10:null,
+    stage,
+    already_moved:alreadyMoved,
+    reasons:[...new Set(reasons)],
+    components:{
+      calm:Number.isFinite(calmScore)?calmScore:null,
+      acceleration:Number.isFinite(accelerationScore)?accelerationScore:null,
+      relative_strength:Number.isFinite(relativeStrengthScore)?relativeStrengthScore:null,
+      low_reclaim:lowReclaimScore,
+      resistance_proximity:resistanceProximityScore,
+      squeeze:Number.isFinite(squeeze)?squeeze:null,
+      structure:Number.isFinite(structure)?structure:null,
+      buying_pressure:Number.isFinite(buyPressure)?buyPressure:null,
+      whale_pressure:Number.isFinite(whalePressure)?whalePressure:null
+    },
+    closed_candles_only:true
+  };
+}
+
+export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_RADAR_DEFAULTS.minQuoteVolume24h,limit=30}={}){
+  const allowed=new Set(symbols.map(x=>x.symbol));
+  return (Array.isArray(tickers)?tickers:[])
+    .map(x=>normalizeTickerRow(x,symbols[0]?.quoteAsset||'USDT'))
+    .filter(Boolean)
+    .filter(x=>allowed.has(x.symbol)&&x.quoteVolume24h>=minQuoteVolume24h)
+    .map(x=>{
+      const change=Math.abs(x.priceChange24h);
+      const calm=change<=3?100:change<=6?88:change<=10?68:change<=15?45:change<=20?20:5;
+      return {...x,pre_move_discovery_score:
+        logNorm(x.quoteVolume24h,minQuoteVolume24h,Math.max(minQuoteVolume24h*1000,x.quoteVolume24h))*0.45+
+        logNorm(x.tradeCount24h,100,Math.max(1000000,x.tradeCount24h))*0.25+
+        calm*0.30};
+    })
+    .sort((a,b)=>b.pre_move_discovery_score-a.pre_move_discovery_score||b.quoteVolume24h-a.quoteVolume24h||a.symbol.localeCompare(b.symbol))
+    .slice(0,Math.max(1,Math.trunc(limit)));
+}
+
 export function buildCandidateContract({
   ticker,
   deep,
@@ -779,6 +947,7 @@ export function buildCandidateContract({
     low_price_24h: ticker.lowPrice24h,
     quote_volume_24h: ticker.quoteVolume24h,
     bottom_context: buildBottomMarketContext(series, ticker, deep.completedAt, {book: deep.depth, liquidity}),
+    pre_move_context: buildPreMoveContext(series, ticker, deep.completedAt, buildBottomMarketContext(series, ticker, deep.completedAt, {book: deep.depth, liquidity})),
     liquidity_quality: Math.round(Number(liquidity.quality) * 100) / 100,
     data_quality: dataQuality,
     confidence_score: 'UNKNOWN',
