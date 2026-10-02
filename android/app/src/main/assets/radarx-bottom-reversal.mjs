@@ -37,17 +37,10 @@ export const BOTTOM_STRATEGIES=Object.freeze([
 
 function bottomAlgorithmScore(c){
   const ctx=bottomContextOf(c);
-  const m=ctx.metrics||{};
+  const composite=Number(ctx.metrics?.composite_algorithm_score);
+  if(Number.isFinite(composite)) return clamp(composite);
   const a=ctx.algorithms||{};
-  const values=[
-    Number(m.composite_algorithm_score),
-    Number(m.buying_pressure),
-    Number(m.selling_exhaustion),
-    Number(m.compression),
-    Number(m.momentum),
-    Number(m.structure),
-    Number(m.whale_pressure),
-    Number(m.orderbook_imbalance),
+  return avgDefined([
     Number(a.rsi14?.score),
     Number(a.stochastic14?.score),
     Number(a.obv_accumulation?.score),
@@ -63,10 +56,8 @@ function bottomAlgorithmScore(c){
     Number(a.squeeze?.score),
     Number(a.momentum_awaken?.score),
     Number(a.mtf_alignment?.score)
-  ];
-  return avgDefined(values,45);
+  ],45);
 }
-
 function bottomContextEvidence(c){
   const ctx=bottomContextOf(c);
   const a=ctx.algorithms||{};
@@ -167,18 +158,18 @@ export function scoreBottomCandidate(c){
   const dataQuality=clamp(c?.data_quality,0,100);
 
   let raw=
-    drawdown*0.13+
-    sellingExhaustion*0.13+
-    buyingPressure*0.20+
-    momentumAwakening*0.17+
+    drawdown*0.10+
+    sellingExhaustion*0.12+
+    buyingPressure*0.18+
+    momentumAwakening*0.14+
     compression*0.10+
-    structure*0.08+
-    confirmation*0.06+
-    trapQuality*0.04+
-    bottomAlgorithms*0.10+
+    structure*0.09+
+    confirmation*0.05+
+    trapQuality*0.05+
+    bottomAlgorithms*0.09+
     whalePressure*0.10+
-    liquidity*0.03+
-    dataQuality*0.03;
+    liquidity*0.04+
+    dataQuality*0.04;
 
   const hardReject =
     dataQuality<70 ||
