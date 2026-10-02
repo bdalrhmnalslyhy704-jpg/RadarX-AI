@@ -168,6 +168,8 @@ assert.match(client,/\/api\/market-radar\?quote=/);
 assert.match(screenSource,/Paper Trading فقط/);
 assert.match(index,/UI_READY/);
 assert.match(index,/openBottomRadarBtn/);
+assert.match(index,/openPreMoveRadarBtn/);
+assert.match(index,/pre-move-radar.html/);
 assert.match(index,/openBottomRadar\(\)/);
 const indexHtml=index;
 const bgControl=await readFile(new URL('../radarx-background-control.mjs',import.meta.url),'utf8');
@@ -189,6 +191,19 @@ assert.match(manifest,/FOREGROUND_SERVICE_DATA_SYNC/);
 assert.match(manifest,/RadarXBackgroundMonitorService/);
 assert.match(manifest,/foregroundServiceType="dataSync"/);
 assert.equal(backgroundService.includes('/api/v3/order'),false);
+const preMovePage=await readFile(new URL('../pre-move-radar.html',import.meta.url),'utf8');
+const preMoveEngine=await readFile(new URL('../radarx-pre-move.mjs',import.meta.url),'utf8');
+assert.match(preMovePage,/Pre‑Move Radar/);
+assert.match(preMovePage,/قبل الحركة/);
+assert.match(preMovePage,/04:00/);
+assert.match(preMovePage,/Taker Buy/);
+assert.match(preMovePage,/تسارع الحجم/);
+assert.match(preMovePage,/القوة النسبية/);
+assert.match(preMovePage,/ضغط الحيتان/);
+assert.match(preMovePage,/لا يوجد توقع مضمون/);
+assert.match(preMoveEngine,/rankPreMoveCandidates/);
+assert.match(preMoveEngine,/ALREADY_MOVED/);
+assert.match(preMoveEngine,/VOLUME_ACCELERATING/);
 const bottomPage=await readFile(new URL('../bottom-radar.html',import.meta.url),'utf8');
 const bottomSample={candidates:[{
   symbol:'TESTUSDT',last_price:1.25,price_change_24h:-6,liquidity_quality:88,data_quality:95,
