@@ -39,7 +39,8 @@ const STRATEGY_AR = Object.freeze({
   PRE_BREAKOUT_FINGERPRINT: 'بصمة ما قبل الاختراق',
   BOLLINGER_BAND_COMPRESSION: 'ضغط بولينجر',
   VWAP_POSITION: 'موقع VWAP',
-  RELATIVE_VOLUME_AWAKENING: 'استيقاظ الحجم'
+  RELATIVE_VOLUME_AWAKENING: 'استيقاظ الحجم',
+  VCP_PRE_BREAKOUT: 'نمط انكماش التذبذب VCP'
 });
 
 const REASON_AR = Object.freeze({
@@ -124,7 +125,7 @@ export function validateMarketRadarContract(response) {
   if (counts.some(count => count !== 10)) {
     return {valid:false, reason:'STRATEGY_COUNT_NOT_10', strategiesPerCandidate:Math.max(0, ...counts)};
   }
-  return {valid:true, reason:null, strategiesPerCandidate:10};
+  return {valid:true, reason:null, strategiesPerCandidate:11};
 }
 
 function fingerprintBadgeMarkup(candidate) {
