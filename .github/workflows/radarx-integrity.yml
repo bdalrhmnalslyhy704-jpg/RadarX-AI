@@ -1,0 +1,132 @@
+name: RadarX Integrity + Live Smoke 6.0
+
+on:
+  push:
+    branches: ["main","radarx-6.1-performance","radarx-full-performance-hardening"]
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check all JavaScript sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS= read -r -d '' f; do
+            found=1
+            echo "::group::node --check $f"
+            node --check "$f"
+            echo "::endgroup::"
+          done < <(find . -type f -name '*.js' -not -path './node_modules/*' -print0)
+          test "$found" -eq 1
+
+      - name: Check deployed entry-point wiring
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const index=fs.readFileSync('index.html','utf8');
+          const required=[
+            'radarx-runtime-6.0.js',
+            'RadarX_Ultimate_5.11.js',
+            'RadarX_ProEngine_5.11.js',
+            'radarx-pulse-fusion.js',
+            'radarx-live-chart.js'
+          ];
+          for(const x of required){
+            if(!index.includes(x))throw new Error('index.html missing '+x);
+          }
+          const pos=required.map(x=>index.indexOf(x));
+          for(let i=1;i<pos.length;i++){
+            if(pos[i]<pos[0] && i>0){} // filenames can be repeated in cache-bust strings
+          }
+          if(!index.includes('RadarX_Ultimate_5.11.js?v=6.8.3-core'))throw new Error('core cache bust missing');
+          if(!index.includes('RadarX_ProEngine_5.11.js?v=6.8.3-pro'))throw new Error('pro cache bust missing');
+          if(!index.includes('radarx-runtime-6.0.js?v=6.8.3'))throw new Error('runtime cache bust missing');
+          if(!index.includes('radarx-pulse-fusion.js?v=3.1-fusion-6.8.3'))throw new Error('pulse cache bust missing');
+          console.log('Entry wiring OK');
+          NODE
+
+      - name: Validate One-File historical regression guard
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),vm=require('vm');
+          const file='RadarX_ONEFILE_5.11.html';
+          const html=fs.readFileSync(file,'utf8');
+          const scripts=[...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(m=>m[1]);
+          if(scripts.length<2)throw new Error('Expected at least 2 script blocks');
+          for(let i=0;i<scripts.length;i++)new vm.Script(scripts[i],{filename:file+'#script'+(i+1)});
+          const regression=/\bversion\s*:\s*['"][^'"]+['"]\s*\r?\n\s*cycleMs\s*:/;
+          if(regression.test(html))throw new Error('version -> cycleMs comma regression');
+          console.log('One-file regression guard OK');
+          NODE
+
+
+      - name: Check 6.1 live-stream consolidation
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const core=fs.readFileSync('RadarX_Ultimate_5.11.js','utf8');
+          const pulse=fs.readFileSync('radarx-pulse-fusion.js','utf8');
+          if(!core.includes("!miniTicker@arr"))throw new Error('miniTicker stream missing');
+          if(core.includes("encodeURIComponent('!ticker@arr')"))throw new Error('duplicate full ticker stream remains');
+          if(pulse.includes('n(r.c)'))throw new Error('Pulse Fusion n(r.c) typo remains');
+          if(!core.includes('share the global miniTicker socket'))throw new Error('shared socket guard missing');
+          console.log('6.1 consolidation checks OK');
+          NODE
+
+      - name: Live Binance relay smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://radar-x-ai.vercel.app"
+          curl --fail --silent --show-error --retry 2 --max-time 20 "$BASE/api/binance?path=%2Fapi%2Fv3%2Fping" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(typeof j!=='object')process.exit(1);console.log('Binance relay ping OK',JSON.stringify(j));})"
+          curl --fail --silent --show-error --retry 2 --max-time 25 "$BASE/api/binance?path=%2Fapi%2Fv3%2Fticker%2Fprice%3Fsymbol%3DBTCUSDT" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(!j.symbol||!j.price)process.exit(1);console.log('BTC ticker OK',j.symbol,j.price);})"
+
+      - name: Performance and feature wiring guard
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const core=fs.readFileSync('RadarX_Ultimate_5.11.js','utf8');
+          const pro=fs.readFileSync('RadarX_ProEngine_5.11.js','utf8');
+          const runtime=fs.readFileSync('radarx-runtime-6.0.js','utf8');
+          for(const x of ['cycleMs:7000','maxDeepPerCycle:1','await Promise.allSettled(selected.map']){
+            if(!core.includes(x))throw new Error('core performance guard missing: '+x);
+          }
+          const nativeQueue=fs.readFileSync('app/src/main/java/com/radarx/ai/NativeBinanceHttpQueue.java','utf8');
+          const doh=fs.readFileSync('app/src/main/java/com/radarx/ai/RadarXDohDns.java','utf8');
+          for(const x of ['requestDirect(rawPath, firstDirect[0])','requestDirect(rawPath, firstDirect[1])','requestDirect(rawPath, firstDirect[2])','requestCloud(rawPath)','newFixedThreadPool(4']){
+            if(!nativeQueue.includes(x))throw new Error('native Binance multi-route guard missing: '+x);
+          }
+          if(!doh.includes('Prefer independent public DoH answers'))throw new Error('DoH priority guard missing');
+
+          for(const x of ['/api/radarx-news?symbols=','/api/radarx-onchain?symbols=','/api/radarx-social?symbols=']){
+            if(!core.includes(x) && !pro.includes(x))throw new Error('feature route guard missing: '+x);
+          }
+          for(const x of ['LIMIT=isMobile?(navigator.hardwareConcurrency>=6?4:3):6','news:60000','onchain:90000','social:120000']){
+            if(!runtime.includes(x))throw new Error('runtime performance guard missing: '+x);
+          }
+          console.log('Performance guards OK');
+          NODE
+
+      - name: Live intelligence endpoints smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://radar-x-ai.vercel.app"
+          curl --fail --silent --show-error --retry 2 --max-time 20 "$BASE/api/radarx-news?symbols=BTCUSDT" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(j.ok!==true||!Array.isArray(j.items))process.exit(1);console.log('News endpoint OK',j.items.length);})"
+          curl --fail --silent --show-error --retry 2 --max-time 25 "$BASE/api/radarx-onchain?symbols=BTCUSDT" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(j.ok!==true||!j.onchainBySymbol)process.exit(1);console.log('On-chain endpoint OK');})"
+          curl --fail --silent --show-error --retry 2 --max-time 25 "$BASE/api/radarx-social?symbols=BTCUSDT" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(j.ok!==true||!j.socialBySymbol)process.exit(1);console.log('Social endpoint OK');})"
+
+      - name: Live health endpoint smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 2 --max-time 25 "https://radar-x-ai.vercel.app/api/health" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(j.ok!==true)process.exit(1);console.log('Health OK',j.online+'/'+j.total,'providers online');})"
