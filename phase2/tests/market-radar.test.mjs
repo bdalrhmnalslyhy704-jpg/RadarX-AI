@@ -118,6 +118,33 @@ test('market scanner deduplicates symbols and only deep-scans selected rows',asy
   assert.equal(rest.calls.filter(x=>x.type==='request'&&x.path==='/api/v3/ticker/24hr').length,1);
   assert.equal(rest.calls.filter(x=>x.type==='request'&&x.path==='/api/v3/exchangeInfo').length,1);
   assert.equal(rest.calls.filter(x=>x.type==='depth').length,2);
+  assert.ok(rest.maxActive >= 3, 'timeframes should be fetched concurrently per symbol');
+});
+
+test('open candle is excluded from strategy analysis',async()=>{
+  const rest=makeRest();
+  const original=rest.klines;
+  rest.klines=async(symbol,tf)=>{
+    const out=await original(symbol,tf);
+    const step=tf==='4h'?14_400_000:tf==='1h'?3_600_000:900_000;
+    const now=Date.now();
+    out.candles.push({...out.candles.at(-1),openTime:now-1000,closeTime:now+step-1,closed:false});
+    return out;
+  };
+  let observed=null;
+  const scanner=new MarketUniverseScanner({
+    rest,
+    config:{minQuoteVolume24h:750000,scanLimit:1,returnLimit:1,deepConcurrency:1},
+    strategyEvaluator:({series15m})=>{observed=series15m;return evaluator();},
+  });
+  const result=await scanner.scan({quote:'USDT',limit:1});
+  const candidate=result.candidates[0];
+  assert.equal(candidate.data_status.closed_candle_only,true);
+  assert.equal(candidate.data_status.analysis_candle.closed,true);
+  assert.equal(candidate.data_status.analysis_candle.timeframe,'15m');
+  assert.equal(candidate.data_status.excluded_open_candle_count,1);
+  assert.equal(observed.some(c=>c.closed!==true),false);
+  assert.ok(Number(candidate.data_status.analysis_candle.close_time)<=Date.now());
 });
 
 test('missing ticker prevents symbol from being deep-scanned',async()=>{
