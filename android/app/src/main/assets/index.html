@@ -39,7 +39,7 @@ footer{padding:18px 4px;text-align:center;color:#8fa8b2;font-size:12px}
 </section>
 <section class="rx-nav-card">
   <div><b>🧠 TRADLI Intelligence</b><small>صفحة مستقلة للتحليل المتقدم: Chart Lab • Verify • Advisor • Signals Hub • Supply/Demand • Order Desk</small></div>
-  <a class="rx-nav-link" href="./tradli.html">فتح TRADLI</a>
+  <a id="openTradliBtn" class="rx-nav-link" href="./tradli.html">فتح TRADLI</a>
 </section>
 <div id="marketRadarPanel" aria-label="RadarX Dashboard"></div>
 <div id="backgroundMonitorPanel" aria-label="RadarX Background Monitor"></div>
@@ -84,6 +84,12 @@ try{
   if(panelError)panelError.hidden=false;
 }
 document.getElementById('retryApp').addEventListener('click',()=>window.location.reload());
+document.getElementById('openTradliBtn').addEventListener('click',event=>{
+  if(window.RadarXNative && typeof window.RadarXNative.openTradli==='function'){
+    event.preventDefault();
+    window.RadarXNative.openTradli();
+  }
+});
 </script>
 </body>
 </html>
