@@ -3,6 +3,7 @@ name: RadarX Android Release APK
 on:
   push:
     branches:
+      - android-fix-6.8.7-latest-strategies
       - android-icon-6.8.8-release
       - tradli-feature-integration
       - premium-ui-manual-execution-safe
@@ -25,7 +26,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          ref: android-icon-6.8.8-release
+          ref: ${{ github.ref_name }}
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
