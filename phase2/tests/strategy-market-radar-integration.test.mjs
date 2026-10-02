@@ -141,7 +141,7 @@ test('Integration 3: Candidate Contract strategy count is 15', async () => {
   const candidate = result.candidates[0];
   assert.equal(candidate.coverage.strategy_count, 15);
   assert.equal(candidate.coverage.evaluated_strategy_count, 15);
-  assert.equal(candidate.strategies.length, 14);
+  assert.equal(candidate.strategies.length, 15);
 });
 
 test('Integration 4: Rejected strategies preserve reason_codes, evidence, invalidation and hard-gate status', async () => {
@@ -163,7 +163,7 @@ test('Integration 5: Missing required data yields INSUFFICIENT_DATA without drop
     config: scanConfig
   }).scan({quote: 'USDT', limit: 1});
   const candidate = result.candidates[0];
-  assert.equal(candidate.strategies.length, 14);
+  assert.equal(candidate.strategies.length, 15);
   const insufficient = candidate.strategies.filter(s => s.signal_state === 'INSUFFICIENT_DATA');
   assert.ok(insufficient.length > 0);
   for (const strategy of insufficient) {
