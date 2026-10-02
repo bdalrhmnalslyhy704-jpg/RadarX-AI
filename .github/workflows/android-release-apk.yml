@@ -7,6 +7,7 @@ on:
       - premium-ui-manual-execution-safe
       - background-prebreakout-engine
       - tradli-separate-page-ui
+      - tradli-connectivity-native-screen
   workflow_dispatch:
 
 permissions:
@@ -22,7 +23,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          ref: tradli-separate-page-ui
+          ref: tradli-connectivity-native-screen
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -143,6 +144,7 @@ jobs:
           test -f android/app/src/main/assets/radarx-background-control.mjs
           node --check android/app/src/main/assets/radarx-background-control.mjs
           test -f android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java
+          test -f android/app/src/main/java/com/radarx/app/TradliActivity.java
           test -f android/app/src/main/java/com/radarx/app/MainActivity.java
           test -f android/app/src/main/assets/tradli.html
 
@@ -195,12 +197,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="android-v6.8.5-tradli-${GITHUB_RUN_NUMBER}"
+          TAG="android-v6.8.6-connectivity-${GITHUB_RUN_NUMBER}"
           APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "RadarX 6.8.5 Native — TRADLI Intelligence ${GITHUB_RUN_NUMBER}" \
+            --title "RadarX 6.8.6 Native — TRADLI Connectivity ${GITHUB_RUN_NUMBER}" \
             --notes "Signed universal APK built from android-release-signing-secure at commit ${GITHUB_SHA}. Includes the latest Market Radar integration. Paper Trading only; real_order_execution=false."
 
       - name: Remove signing keystore before artifact upload
