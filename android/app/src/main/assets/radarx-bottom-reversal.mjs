@@ -90,7 +90,12 @@ function bottomContextEvidence(c){
     emaReclaimScore:Number.isFinite(Number(a.ema20_50_reclaim?.score))?Number(a.ema20_50_reclaim.score):null,
     wyckoffScore:Number.isFinite(Number(a.wyckoff_spring?.score))?Number(a.wyckoff_spring.score):null,
     springConfirmed:a.wyckoff_spring?.spring_confirmed===true,
-    vwap:Number.isFinite(Number(a.vwap_position?.vwap))?Number(a.vwap_position.vwap):null
+    vwap:Number.isFinite(Number(a.vwap_position?.vwap))?Number(a.vwap_position.vwap):null,
+    whaleHeuristic:a.whale_pressure?.heuristic===true,
+    whaleBidShare:Number.isFinite(Number(a.whale_pressure?.bid_wall_share))?Number(a.whale_pressure.bid_wall_share):null,
+    whaleAskShare:Number.isFinite(Number(a.whale_pressure?.ask_wall_share))?Number(a.whale_pressure.ask_wall_share):null,
+    squeezeScore:Number.isFinite(Number(a.squeeze?.score))?Number(a.squeeze.score):null,
+    sellExhaustionScore:Number.isFinite(Number(a.sell_exhaustion?.score))?Number(a.sell_exhaustion.score):null
   };
 }
 
