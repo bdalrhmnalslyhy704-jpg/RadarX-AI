@@ -113,8 +113,8 @@ public final class RadarXBackgroundMonitorService extends Service {
             JSONObject monitoring = root.optJSONObject("monitoring");
             int universe = monitoring == null ? 0 : monitoring.optInt("universe", 0);
             updateStatus(count > 0
-                ? "Move Radar 24/7 • " + count + " تنبيه جديد • " + universe + " عملة"
-                : "Move Radar 24/7 • لا تنبيهات جديدة • " + universe + " عملة");
+                ? "Pre-Explosion Radar 24/7 • " + count + " تنبيه مبكر • " + universe + " عملة"
+                : "Pre-Explosion Radar 24/7 • لا تنبيهات مبكرة • " + universe + " عملة");
         } catch (Throwable error) {
             Log.w(TAG, "Background move-radar fetch failed", error);
             updateStatus("Move Radar • لا يوجد اتصال الآن؛ سيُستكمل التنبيه عند عودة الإنترنت");
@@ -148,8 +148,13 @@ public final class RadarXBackgroundMonitorService extends Service {
         for (int i = alerts.length() - 1; i >= 0; i--) {
             JSONObject alert = alerts.optJSONObject(i);
             if (alert == null) continue;
-            String id = alert.optString("id", "");
+            String event = alert.optString("event", "");
             long at = alert.optLong("processed_at", 0L);
+            if (!"PRE_EXPLOSION_ALERT".equals(event)) {
+                if (at > maxAt) maxAt = at;
+                continue;
+            }
+            String id = alert.optString("id", "");
             if (at > maxAt) maxAt = at;
             if (id.isEmpty() || seen.contains(id)) continue;
             notifyMoveAlert(alert);
@@ -189,10 +194,11 @@ public final class RadarXBackgroundMonitorService extends Service {
         );
 
         String title = "UP_MOVE".equals(direction)
-            ? "RadarX • حركة مبكرة"
-            : "RadarX • هبوط + احتمال ارتداد";
-        String body = symbol + " • " + scoreFmt.format(move) + "% • Score " +
-            scoreFmt.format(score) + " • " + label;
+            ? "RadarX • قبل الانفجار"
+            : "RadarX • قبل الانفجار (اتجاه غير صاعد)";
+        String body = symbol + " • حركة 24h " + scoreFmt.format(move) + "% • Score " +
+            scoreFmt.format(score) + " • " + label + " • " +
+            alert.optInt("pre_explosion_confirmation_count", alert.optInt("confirmation_count", 0)) + " تأكيد";
         String timing = "وقت اكتشاف الخادم: " + detectedText +
             " • وقت إرسال الإشعار: " + sentText;
 
@@ -204,7 +210,8 @@ public final class RadarXBackgroundMonitorService extends Service {
                 body + " • Expansion " + scoreFmt.format(potential) +
                 " • " + (reasonText.length() > 0 ? reasonText : "توافق متعدد العوامل") +
                 " • " + timing +
-                " • حالة الانقطاع: أُنشئ التنبيه سابقًا وحُفظ على الخادم ثم أُرسل عند عودة الاتصال" +
+                " • الحالة: فحص ما قبل الانفجار فقط؛ العملات الممتدة تُستبعد" +
+                " • عند انقطاع الإنترنت: حُفظ التنبيه على الخادم ثم أُرسل عند عودة الاتصال" +
                 " • ليس توقعًا مضمونًا"
             ))
             .setContentIntent(pending)
