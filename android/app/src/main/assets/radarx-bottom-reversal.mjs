@@ -11,6 +11,7 @@ const evidenceScore=(c,key,fallback=50)=>{
   return Number.isFinite(Number(x?.score))?clamp(x.score):fallback;
 };
 const evidenceStatus=(c,key)=>String(fpOf(c)?.evidence?.[key]?.status||'').toUpperCase();
+const bottomContextOf=c=>c?.bottom_context||{};
 
 function minDefined(values,fallback=50){
   const xs=values.filter(Number.isFinite);
@@ -34,6 +35,48 @@ export const BOTTOM_STRATEGIES=Object.freeze([
   {id:'MTF_TREND',name:'Multi-Timeframe Trend',role:'يربط الإطار 4h و1h و15m حتى لا يعتمد القرار على إطار واحد'}
 ]);
 
+function bottomAlgorithmScore(c){
+  const a=bottomContextOf(c)?.algorithms||{};
+  const values=[
+    Number(a.rsi14?.score),
+    Number(a.stochastic14?.score),
+    Number(a.obv_accumulation?.score),
+    Number(a.volume_price_divergence?.score),
+    Number(a.ema20_50_reclaim?.score),
+    Number(a.wyckoff_spring?.score),
+    Number(a.vwap_position?.score),
+    Number(a.price_structure?.score)
+  ];
+  return avgDefined(values,45);
+}
+
+function bottomContextEvidence(c){
+  const ctx=bottomContextOf(c);
+  const a=ctx.algorithms||{};
+  const rise=ctx.last_rise||{};
+  return {
+    currentPrice:Number.isFinite(Number(ctx.current_price))?Number(ctx.current_price):null,
+    high24h:Number.isFinite(Number(ctx.high_24h))?Number(ctx.high_24h):null,
+    low24h:Number.isFinite(Number(ctx.low_24h))?Number(ctx.low_24h):null,
+    lastRiseHigh:Number.isFinite(Number(rise.high))?Number(rise.high):null,
+    lastRiseLow:Number.isFinite(Number(rise.low))?Number(rise.low):null,
+    lastRisePct:Number.isFinite(Number(rise.rise_pct))?Number(rise.rise_pct):null,
+    drawdownFromLastRiseHighPct:Number.isFinite(Number(rise.drawdown_from_high_pct))?Number(rise.drawdown_from_high_pct):null,
+    recoveryFromLastRiseLowPct:Number.isFinite(Number(rise.recovery_from_low_pct))?Number(rise.recovery_from_low_pct):null,
+    rangePositionPct:Number.isFinite(Number(ctx.range_position_pct))?Number(ctx.range_position_pct):null,
+    algorithmScore:bottomAlgorithmScore(c),
+    rsi:Number.isFinite(Number(a.rsi14?.value))?Number(a.rsi14.value):null,
+    bullishDivergence:a.rsi14?.bullish_divergence===true,
+    stochasticK:Number.isFinite(Number(a.stochastic14?.k))?Number(a.stochastic14.k):null,
+    obvScore:Number.isFinite(Number(a.obv_accumulation?.score))?Number(a.obv_accumulation.score):null,
+    rvolRatio:Number.isFinite(Number(a.volume_price_divergence?.rvol_ratio))?Number(a.volume_price_divergence.rvol_ratio):null,
+    emaReclaimScore:Number.isFinite(Number(a.ema20_50_reclaim?.score))?Number(a.ema20_50_reclaim.score):null,
+    wyckoffScore:Number.isFinite(Number(a.wyckoff_spring?.score))?Number(a.wyckoff_spring.score):null,
+    springConfirmed:a.wyckoff_spring?.spring_confirmed===true,
+    vwap:Number.isFinite(Number(a.vwap_position?.vwap))?Number(a.vwap_position.vwap):null
+  };
+}
+
 function strategySignal(c,id){
   const s=scoreOf(c,id);
   const accepted=['CANDIDATE','CONFIRMED'].includes(stateOf(c,id));
@@ -42,6 +85,8 @@ function strategySignal(c,id){
 
 export function scoreBottomCandidate(c){
   const change=Number(c?.price_change_24h);
+  const bottomEvidence=bottomContextEvidence(c);
+  const bottomAlgorithms=bottomEvidence.algorithmScore;
   const drawdown = Number.isFinite(change)
     ? clamp(50 - change*6 + (change<0 ? 18 : change<=2 ? 6 : 0))
     : 35;
@@ -96,9 +141,10 @@ export function scoreBottomCandidate(c){
     buyingPressure*0.20+
     momentumAwakening*0.17+
     compression*0.10+
-    structure*0.10+
-    confirmation*0.07+
-    trapQuality*0.05+
+    structure*0.08+
+    confirmation*0.06+
+    trapQuality*0.04+
+    bottomAlgorithms*0.14+
     liquidity*0.03+
     dataQuality*0.02;
 
@@ -119,6 +165,7 @@ export function scoreBottomCandidate(c){
     ['انكماش قبل الحركة',compression],
     ['تحسن الهيكل',structure],
     ['تأكيد VWAP/الزخم',confirmation],
+    ['خوارزميات القاع الإضافية',bottomAlgorithms],
     ['جودة ضد فخ',trapQuality]
   ];
 
@@ -168,6 +215,8 @@ export function scoreBottomCandidate(c){
     compression:Math.round(compression*10)/10,
     structure:Math.round(structure*10)/10,
     trapQuality:Math.round(trapQuality*10)/10,
+    bottomAlgorithms:Math.round(bottomAlgorithms*10)/10,
+    bottomEvidence,
     liquidity,
     dataQuality,
     priceZoneNote:'مناطق المراقبة مبنية على شروط السوق الحالية وليست أسعارًا مستقبلية مضمونة.'
