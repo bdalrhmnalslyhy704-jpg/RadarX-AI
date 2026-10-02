@@ -126,9 +126,11 @@ test('open candle is excluded from strategy analysis',async()=>{
   const original=rest.klines;
   rest.klines=async(symbol,tf)=>{
     const out=await original(symbol,tf);
-    const step=tf==='4h'?14_400_000:tf==='1h'?3_600_000:900_000;
-    const now=Date.now();
-    out.candles.push({...out.candles.at(-1),openTime:now-1000,closeTime:now+step-1,closed:false});
+    if(tf==='15m'){
+      const step=900_000;
+      const now=Date.now();
+      out.candles.push({...out.candles.at(-1),openTime:now-1000,closeTime:now+step-1,closed:false});
+    }
     return out;
   };
   let observed=null;
