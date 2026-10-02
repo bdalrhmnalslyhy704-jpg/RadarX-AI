@@ -725,6 +725,7 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
       : sessionPosition<=85 ? 70
       : 40
     : 45;
+  const bottomSnapshot=bottomContext || {};
   const resistance=Number(bottomSnapshot?.last_rise?.high);
   const resistanceDistancePct=Number.isFinite(current)&&current>0&&resistance>current
     ? (resistance-current)/current*100 : resistance>0&&current>=resistance ? 0 : null;
@@ -740,7 +741,6 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
   const whalePressure=Number(bottomSnapshot?.metrics?.whale_pressure);
   const dataQuality=Number(ticker?.dataQuality);
 
-  const bottomSnapshot=bottomContext || {};
   const preMoveScore=avgDefined([
     calmScore,
     accelerationScore,
