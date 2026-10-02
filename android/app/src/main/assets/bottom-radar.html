@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#06111f">
+<title>RadarX — Bottom Reversal Radar</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;min-height:100vh;background:radial-gradient(circle at 85% -10%,rgba(53,201,255,.17),transparent 32%),radial-gradient(circle at 8% 8%,rgba(111,104,255,.14),transparent 28%),linear-gradient(180deg,#06111f,#07101a 50%,#050a12);color:#eaf5ff;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+main{width:min(1050px,100%);margin:auto;padding:10px 14px 34px}
+header{position:sticky;top:0;z-index:20;margin:0 -14px;padding:calc(9px + env(safe-area-inset-top)) 14px 10px;background:rgba(5,12,22,.92);backdrop-filter:blur(18px);border-bottom:1px solid #1b3851}
+.top{display:flex;align-items:center;justify-content:space-between;gap:10px}.brand{display:flex;align-items:center;gap:9px}.logo{width:41px;height:41px;border-radius:13px;background:linear-gradient(135deg,#35c9ff,#6f68ff);display:grid;place-items:center;color:#04101b;font-weight:1000}.brand b{font-size:16px}.brand small{display:block;color:#8ca5ba;font-size:10px;margin-top:2px}
+.back{display:inline-flex;min-height:42px;align-items:center;padding:0 11px;border:1px solid #2b4e6c;border-radius:11px;text-decoration:none;color:#dff5ff;background:#0b1b2b;font-size:11px;font-weight:950}
+.hero{margin:13px 0;padding:17px;border:1px solid #264864;border-radius:20px;background:linear-gradient(145deg,#0c1d31,#091524);box-shadow:0 18px 42px rgba(0,0,0,.22)}
+h1{margin:0;font-size:21px}.hero p{margin:7px 0 0;color:#8fa8bd;line-height:1.7;font-size:12px}.pill{display:inline-flex;align-items:center;gap:6px;margin-top:11px;padding:7px 10px;border:1px solid #2c8065;border-radius:999px;background:#0d251f;color:#b8f3dd;font-size:10px;font-weight:950}.dot{width:7px;height:7px;border-radius:50%;background:#43e0a3;box-shadow:0 0 10px #43e0a3}
+.toolbar{display:flex;gap:8px;position:sticky;top:61px;z-index:10;padding:8px 0;background:linear-gradient(180deg,#07111d 75%,transparent)}button,select{font:inherit}#scan{flex:1;min-height:46px;border:1px solid #36b4e6;border-radius:13px;background:linear-gradient(135deg,#35c9ff,#6f68ff);color:#04111d;font-weight:1000}#limit{width:105px;min-height:46px;border:1px solid #294c69;border-radius:13px;background:#0b1c2d;color:#eaf5ff;padding:0 9px;font-weight:900}
+.status{padding:11px 12px;border:1px solid #1d3e58;border-radius:14px;background:#091624;margin:8px 0;font-size:11px;color:#94abc0;line-height:1.6}.status b{color:#fff}
+.cards{display:grid;gap:10px}
+.card{border:1px solid #20425c;border-radius:17px;padding:13px;background:linear-gradient(145deg,#0b1928,#08121e);animation:rise .35s ease both}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.cardhead{display:flex;align-items:center;justify-content:space-between;gap:8px}.symbol{font-size:16px;font-weight:1000}.badge{padding:6px 8px;border-radius:999px;border:1px solid #2d536d;font-size:10px;font-weight:950}.green{border-color:#2f8b6a;color:#b8f4dc;background:#0e251f}.yellow{border-color:#8c7138;color:#ffe0a0;background:#211b0d}.gray{color:#a0b1c0}
+.price{margin-top:3px;color:#91a8bd;font-size:11px}.score{font-size:22px;font-weight:1000}
+.bars{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}.bar{padding:8px;border:1px solid #17364d;border-radius:11px;background:#07111c}.bar span{display:block;color:#718ba2;font-size:9px}.bar b{display:block;margin-top:4px;font-size:14px}.meter{height:5px;margin-top:6px;border-radius:99px;background:#132a3b;overflow:hidden}.meter i{display:block;height:100%;background:linear-gradient(90deg,#35c9ff,#6f68ff)}
+.path{margin-top:9px;padding:9px;border:1px solid #17364d;border-radius:11px;background:#07111c;color:#d5e7f4;font-size:11px;line-height:1.7}
+.horizon{margin-top:8px;display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.h{padding:8px;border:1px solid #17364d;border-radius:10px;background:#07111c}.h span{display:block;color:#718ba2;font-size:9px}.h b{display:block;margin-top:3px;font-size:12px}.h small{display:block;color:#8ea6ba;line-height:1.5;margin-top:4px;font-size:9px}
+details{margin-top:8px;border:1px solid #17364d;border-radius:10px;background:#07111c;padding:8px}summary{cursor:pointer;font-size:10px;font-weight:950}details .row{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid rgba(30,65,90,.45);font-size:9px}details .row:last-child{border-bottom:0}
+.empty{padding:22px;border:1px dashed #29485f;border-radius:16px;color:#8fa6ba;text-align:center;line-height:1.8}
+.note{margin-top:10px;color:#6f879b;font-size:9px;line-height:1.7}
+@media(max-width:650px){.horizon{grid-template-columns:1fr}.bars{grid-template-columns:1fr}.toolbar{top:59px}#limit{width:92px}.score{font-size:20px}}
+</style>
+</head>
+<body>
+<main>
+<header><div class="top"><div class="brand"><div class="logo">BR</div><div><b>Bottom Reversal Radar</b><small>القاع • الضغط البيعي • الشراء • الزخم</small></div></div><a class="back" href="./index.html">← RadarX</a></div></header>
+
+<section class="hero">
+  <h1>رادار انعكاس القاع</h1>
+  <p>يفحص العملات السائلة التي تظهر عليها دلائل هبوط/استنفاد بيع ثم يبحث عن تراكم شرائي، استيقاظ حجم، تحسن هيكل، وانكماش قبل حركة محتملة. النتائج «مراقبة» وليست وعدًا بالسعر أو اتجاهًا مضمونًا.</p>
+  <span class="pill"><span class="dot"></span> LIVE MARKET • SPOT • PAPER ONLY</span>
+</section>
+
+<div class="toolbar"><button id="scan">فحص القيعان الآن</button><select id="limit"><option value="20">20 عملة</option><option value="30">30 عملة</option><option value="40">40 عملة</option><option value="50">50 عملة</option></select></div>
+<div id="status" class="status"><b>جاهز</b> — اضغط «فحص القيعان الآن» لتحليل السوق.</div>
+<div id="cards" class="cards"><div class="empty">لم يبدأ الفحص بعد.</div></div>
+<div class="note">الأدوات العشر المستخدمة: Mean Reversion، Bollinger+RSI، VCP، Relative Volume، VWAP، MACD، EMA Ribbon، ADX، ATR Expansion، Multi‑Timeframe Trend. الضغط الشرائي هنا تقدير تحليلي مشتق من بيانات السوق وبصمة التدفق، وليس عدد أوامر شراء منفصلًا إلا عندما يوفّر المصدر ذلك.</div>
+
+<script type="module">
+import {getMarketRadar} from './radarx-backend-client.mjs';
+import {rankBottomCandidates} from './radarx-bottom-reversal.mjs';
+
+const scan=document.getElementById('scan');
+const limit=document.getElementById('limit');
+const status=document.getElementById('status');
+const cards=document.getElementById('cards');
+let busy=false;
+let timer=null;
+
+function fmt(n){
+  if(!Number.isFinite(Number(n)))return '—';
+  const x=Number(n);
+  return x>=1000?x.toLocaleString('en-US',{maximumFractionDigits:2}):x>=1?x.toFixed(4):x.toPrecision(5);
+}
+function pct(n){return Number.isFinite(Number(n))?Number(n).toFixed(1)+'%':'—'}
+function bar(label,value){
+  return '<div class="bar"><span>'+label+'</span><b>'+Number(value||0).toFixed(0)+'</b><div class="meter"><i style="width:'+Math.max(0,Math.min(100,Number(value)||0))+'%"></i></div></div>';
+}
+function render(rows){
+  if(!rows.length){cards.innerHTML='<div class="empty">لا توجد عملات تحقق بوابات جودة البيانات والسيولة في هذا الفحص.</div>';return;}
+  cards.innerHTML=rows.map((x,i)=>{
+    const cls=x.stage==='EARLY-BUILD'?'green':x.stage==='REVERSAL-WATCH'?'green':x.stage==='BOTTOMING-WATCH'?'yellow':'gray';
+    return '<article class="card" style="animation-delay:'+Math.min(i,9)*35+'ms">'+
+      '<div class="cardhead"><div><div class="symbol">'+(i+1)+'. '+x.symbol+'</div><div class="price">'+fmt(x.price)+' • 24h '+pct(x.change24h)+'</div></div><div style="text-align:left"><div class="score">'+x.score.toFixed(1)+'</div><span class="badge '+cls+'">'+x.stage+'</span></div></div>'+
+      '<div class="bars">'+bar('الشراء',x.buyingPressure)+bar('الزخم',x.momentumAwakening)+bar('انحسار البيع',x.sellingExhaustion)+bar('الضغط/الانكماش',x.compression)+bar('الهيكل',x.structure)+bar('مقاومة/تأكيد',x.trapQuality)+'</div>'+
+      '<div class="path"><b>المسار للمراقبة:</b><br>'+x.path+'</div>'+
+      '<div class="horizon">'+x.horizons.map(h=>'<div class="h"><span>'+h.window+'</span><b>مؤشر '+h.watch.toFixed(0)+'</b><small>'+h.condition+'</small></div>').join('')+'</div>'+
+      '<details><summary>الاستراتيجيات العشر</summary>'+x.strategyRows.map(s=>'<div class="row"><span>'+s.name+'</span><b>'+ (s.used?s.signal_state+' • '+Number(s.score).toFixed(0):'لا يوجد score صالح') +'</b></div>').join('')+'</details>'+
+      '<div class="note">Liquidity '+Number(x.liquidity).toFixed(0)+' • Data '+Number(x.dataQuality).toFixed(0)+' • جودة ضد الفخ '+Number(x.trapQuality).toFixed(0)+'</div>'+
+      '</article>';
+  }).join('');
+}
+async function scanMarket(){
+  if(busy)return;
+  busy=true;scan.disabled=true;scan.textContent='جاري فحص القيعان…';
+  status.innerHTML='<b>فحص حي</b> — نجمع المرشحين ونقارن عشرة عوامل لكل عملة…';
+  try{
+    let lastErr=null;
+    for(let attempt=0;attempt<3;attempt++){
+      try{
+        const r=await getMarketRadar({quote:'USDT',limit:Number(limit.value)});
+        if(r.ok&&r.body){
+          const rows=rankBottomCandidates(r.body);
+          status.innerHTML='<b>تم التحديث</b> — '+rows.length+' مرشحًا صالحًا من '+Number(r.body?.universe?.scanned||0)+' عملة مفحوصة.';
+          render(rows);
+          return;
+        }
+        lastErr=new Error('HTTP_'+(r.status||0));
+      }catch(e){lastErr=e}
+      await new Promise(resolve=>setTimeout(resolve,1000*(attempt+1)));
+    }
+    throw lastErr||new Error('MARKET_RADAR_UNAVAILABLE');
+  }catch(e){
+    status.innerHTML='<b>تعذر الفحص الآن</b> — '+String(e.message||e)+' • أعد المحاولة.';
+    cards.innerHTML='<div class="empty">لا توجد بيانات حية صالحة في هذه المحاولة.</div>';
+  }finally{
+    busy=false;scan.disabled=false;scan.textContent='فحص القيعان الآن';
+  }
+}
+scan.addEventListener('click',scanMarket);
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){clearInterval(timer);timer=null;return}
+  clearInterval(timer);
+  timer=setInterval(()=>{if(!busy)scanMarket()},90000);
+});
+timer=setInterval(()=>{if(!busy)scanMarket()},90000);
+setTimeout(scanMarket,250);
+</script>
+</main>
+</body>
+</html>
