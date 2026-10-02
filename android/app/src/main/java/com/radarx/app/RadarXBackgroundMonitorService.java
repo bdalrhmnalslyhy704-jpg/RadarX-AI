@@ -35,13 +35,13 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     private static final String TAG = "RadarXBackground";
     private static final String BACKEND =
-            "https://radarx-ai-production.up.railway.app/api/market-radar?quote=USDT&limit=10";
+            "https://radarx-ai-production.up.railway.app/api/move-radar?quote=USDT&limit=50";
 
     private static final String CHANNEL_STATUS = "radarx_background_status";
-    private static final String CHANNEL_ALERTS = "radarx_prebreakout_alerts";
+    private static final String CHANNEL_ALERTS = "radarx_move_alerts";
     private static final int STATUS_NOTIFICATION_ID = 41001;
     private static final int ALERT_NOTIFICATION_BASE = 42000;
-    private static final long SCAN_MS = 90_000L;
+    private static final long SCAN_MS = 60_000L;
     private static final long ALERT_COOLDOWN_MS = 30 * 60_000L;
     private static final double ALERT_THRESHOLD = 78.0;
 
