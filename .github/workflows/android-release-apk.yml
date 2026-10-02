@@ -5,6 +5,7 @@ on:
     branches:
       - tradli-feature-integration
       - premium-ui-manual-execution-safe
+      - background-prebreakout-engine
   workflow_dispatch:
 
 permissions:
@@ -20,7 +21,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          ref: premium-ui-manual-execution-safe
+          ref: background-prebreakout-engine
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -138,6 +139,10 @@ jobs:
           node --check android/app/src/main/assets/radarx-market-radar-ui.mjs
           node --check android/app/src/main/assets/radarx-market-radar-screen.mjs
           node --check android/app/src/main/assets/radarx-tradli-feature-suite.mjs
+          test -f android/app/src/main/assets/radarx-background-control.mjs
+          node --check android/app/src/main/assets/radarx-background-control.mjs
+          test -f android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java
+          test -f android/app/src/main/java/com/radarx/app/MainActivity.java
 
       - name: Build signed universal Release APK
         working-directory: android
