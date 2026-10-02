@@ -24,6 +24,7 @@ export const MARKET_RADAR_DEFAULTS = Object.freeze({
 
 const sleepDefault = ms => new Promise(resolve => setTimeout(resolve, ms));
 const unique = a => [...new Set(a)];
+const clamp = (x, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, Number(x)));
 
 export function normalizeRadarLimit(raw, defaults = MARKET_RADAR_DEFAULTS) {
   const n = Number(raw);
