@@ -35,7 +35,11 @@ const STRATEGY_AR = Object.freeze({
   BOLLINGER_BAND_REVERSION: 'ارتداد بولينجر',
   VWAP_REVERSION: 'ارتداد VWAP',
   RELATIVE_VOLUME_SURGE: 'اندفاع الحجم',
-  ATR_EXPANSION: 'اتساع التذبذب'
+  ATR_EXPANSION: 'اتساع التذبذب',
+  PRE_BREAKOUT_FINGERPRINT: 'بصمة ما قبل الاختراق',
+  BOLLINGER_BAND_COMPRESSION: 'ضغط بولينجر',
+  VWAP_POSITION: 'موقع VWAP',
+  RELATIVE_VOLUME_AWAKENING: 'استيقاظ الحجم'
 });
 
 const REASON_AR = Object.freeze({
@@ -49,7 +53,17 @@ const REASON_AR = Object.freeze({
   MISSING_REQUIRED_DATA: 'بيانات مطلوبة غير متوفرة',
   INSUFFICIENT_DATA: 'البيانات غير كافية',
   FALSE_BREAKOUT: 'اشتباه باختراق كاذب',
-  STRATEGY_HARD_GATE_FAILED: 'لم تجتز الاستراتيجية بواباتها'
+  STRATEGY_HARD_GATE_FAILED: 'لم تجتز الاستراتيجية بواباتها',
+  HL_EMERGING: 'قاع أعلى بدأ بالتكوّن HL',
+  COMPRESSION: 'ضغط/تجميع وتضييق في النطاق',
+  VOLUME_AWAKENING: 'استيقاظ وتسارع الحجم',
+  RELATIVE_POWER_INCREASING: 'القوة النسبية تتحسن مقابل BTC',
+  SELL_PRESSURE_DECLINING: 'ضغط البيع يتراجع',
+  BOS_CONFIRMED: 'كسر هيكل مؤكد BOS',
+  RETEST_HOLDING: 'إعادة الاختبار محافظة على المستوى',
+  FALSE_BREAKOUT_RISK: 'خطر اختراق كاذب',
+  FINGERPRINT_TRAP_RISK_HIGH: 'خطر المصيدة في البصمة مرتفع',
+  FINGERPRINT_GATE_NOT_MET: 'لم تكتمل بصمة ما قبل الاختراق'
 });
 
 function esc(value) {
@@ -113,6 +127,73 @@ export function validateMarketRadarContract(response) {
   return {valid:true, reason:null, strategiesPerCandidate:10};
 }
 
+function fingerprintBadgeMarkup(candidate) {
+  const fp = candidate?.pre_breakout_fingerprint;
+  if (!fp || typeof fp !== 'object') return '';
+  const score = Number(fp.score);
+  const trap = Number(fp.trapRisk);
+  const evidence = Number(fp.evidenceCount);
+  const stage = String(fp.stage || 'NORMAL');
+  const detected = fp.detected === true;
+  const cls = stage === 'FALSE_BREAKOUT' ? 'is-danger' : detected ? 'is-live' : 'is-warn';
+  const reasons = Array.isArray(fp.reasonCodes) ? fp.reasonCodes.slice(0,4).map(friendlyReason).join(' · ') : '';
+  return '<div class="rx-fingerprint" style="margin-top:10px;padding:11px;border:1px solid #31515f;border-radius:13px;background:#08131a">' +
+    '<div class="rx-meta-row"><span class="rx-chip ' + cls + '">🟡 ' + esc(stage.replace(/-/g,' ')) + '</span>' +
+    '<span class="rx-chip is-info">Fingerprint ' + esc(Number.isFinite(score) ? safeNum(score,1) : '—') + '</span>' +
+    '<span class="rx-chip ' + (trap <= 30 ? 'is-live' : trap <= 55 ? 'is-warn' : 'is-danger') + '">Trap ' + esc(Number.isFinite(trap) ? safeNum(trap,0) + '%' : '—') + '</span></div>' +
+    '<div class="rx-grid rx-grid--3" style="margin-top:8px">' +
+      '<div><span>Evidence</span><b>' + esc(Number.isFinite(evidence) ? evidence + ' / 8' : '—') + '</b></div>' +
+      '<div><span>Structure</span><b>' + esc(fp.evidence?.structure?.status || 'UNKNOWN') + '</b></div>' +
+      '<div><span>Volume</span><b>' + esc(fp.evidence?.volume?.status || 'UNKNOWN') + '</b></div>' +
+    '</div>' +
+    '<div class="rx-muted" style="margin-top:8px">' + esc(reasons || 'تتبع البصمة السلوكية قبل الحركة.') + '</div>' +
+  '</div>';
+}
+
+function fingerprintDetailMarkup(candidate) {
+  const fp = candidate?.pre_breakout_fingerprint;
+  if (!fp || typeof fp !== 'object') {
+    return '<section class="rx-section"><h4>🟡 Pre-Breakout Fingerprint</h4><div class="rx-empty-inline">لا تتوفر بصمة ما قبل الاختراق لهذه النتيجة.</div></section>';
+  }
+  const e = fp.evidence || {};
+  const row = (label, data, extra='') =>
+    '<div class="rx-evidence-row"><span>' + esc(label) + '</span><b>' + esc(String(data ?? 'غير متاح')) + '</b>' + (extra ? '<div class="rx-muted" style="margin-top:3px">' + esc(extra) + '</div>' : '') + '</div>';
+  const evidenceHtml = [
+    row('Structure', e.structure?.status, 'Score: ' + safeNum(e.structure?.score,0)),
+    row('Compression', e.compression?.status, 'ATR ratio: ' + safeNum(e.compression?.atr_ratio,2) + ' · BB width ratio: ' + safeNum(e.compression?.bb_width_ratio,2)),
+    row('Volume', e.volume?.status, 'RVOL: ' + safeNum(e.volume?.rvol,2) + ' · acceleration: ' + safeNum(e.volume?.acceleration,2)),
+    row('Relative Power', e.relative_power?.status, 'Excess 20: ' + safeNum(e.relative_power?.excess_20,2) + '% · Excess 40: ' + safeNum(e.relative_power?.excess_40,2) + '%'),
+    row('Resistance', e.resistance?.status, 'Tests: ' + safeNum(e.resistance?.tests,0) + ' · remaining: ' + safeNum(fp.resistance?.remainingTests,0)),
+    row('Order Flow', e.order_flow?.status, 'OBI: ' + safeNum(e.order_flow?.obi,2) + ' · taker buy: ' + (Number.isFinite(Number(e.order_flow?.taker_buy_ratio)) ? safeNum(Number(e.order_flow.taker_buy_ratio)*100,1) + '%' : 'غير متاح')),
+    row('BTC / Market Regime', e.regime?.status, 'Regime score: ' + safeNum(e.regime?.score,0)),
+    row('Trigger', e.trigger?.status, 'BOS: ' + (fp.context?.breakout ? 'YES' : 'NO') + ' · Retest: ' + (fp.context?.retest ? 'YES' : 'NO'))
+  ].join('');
+  const journey = Array.isArray(fp.journey) && fp.journey.length
+    ? fp.journey.map(x => '<span class="rx-chip is-info" style="margin:3px">' + esc(String(x.stage || '').replace(/-/g,' ')) + '</span>').join(' → ')
+    : '<span class="rx-muted">لا توجد انتقالات تاريخية كافية.</span>';
+  const analogs = Array.isArray(fp.historical?.analogs) && fp.historical.analogs.length
+    ? fp.historical.analogs.map(a =>
+        '<div class="rx-evidence-row"><span>' + esc(time(new Date(Number(a.at)).toISOString())) + '</span><b>Similarity ' + safeNum(a.similarity,1) + '%</b><div class="rx-muted" style="margin-top:3px">Forward max: ' + safeNum(a.forwardMaxReturnPct,2) + '% · Drawdown: ' + safeNum(a.forwardMaxDrawdownPct,2) + '% · ' + (a.successful ? 'Historical follow-through' : 'No follow-through') + '</div></div>'
+      ).join('')
+    : '<div class="rx-empty-inline">لا توجد analogs تاريخية مشابهة داخل البيانات المحمّلة.</div>';
+  return '<section class="rx-section" open>' +
+    '<div class="rx-section__title"><h4>🟡 Pre-Breakout Fingerprint</h4><span class="rx-chip is-warn">' + esc(fp.stage || 'NORMAL') + '</span></div>' +
+    '<div class="rx-grid rx-grid--3">' +
+      '<div><span>Fingerprint Score</span><b>' + safeNum(fp.score,1) + '</b></div>' +
+      '<div><span>Trap Risk</span><b>' + safeNum(fp.trapRisk,0) + '%</b></div>' +
+      '<div><span>Evidence</span><b>' + safeNum(fp.evidenceCount,0) + ' / 8</b></div>' +
+    '</div>' +
+    '<div class="rx-evidence-stack" style="margin-top:10px">' + evidenceHtml + '</div>' +
+    '<div class="rx-muted" style="margin-top:10px"><b>Journey:</b><br>' + journey + '</div>' +
+    '<details class="rx-tech" style="margin-top:10px"><summary>History Engine</summary>' +
+      '<div class="rx-code-line">samples: ' + esc(fp.historical?.samples ?? 0) + '</div>' +
+      '<div class="rx-code-line">lookaheadBars: ' + esc(fp.historical?.lookaheadBars ?? 0) + '</div>' +
+      '<div class="rx-code-line">descriptiveSuccessRatePct: ' + esc(fp.historical?.descriptiveSuccessRatePct ?? 'UNKNOWN') + '</div>' +
+      '<div class="rx-code-line" style="margin-top:6px">' + analogs + '</div>' +
+    '</details>' +
+  '</section>';
+}
+
 export function buildCandidateMarkup(candidate, index) {
   const eligible = isCandidateEligible(candidate);
   if (!eligible) {
@@ -138,6 +219,7 @@ export function buildCandidateMarkup(candidate, index) {
       '<div><span>جودة السيولة</span><b>' + esc(safeNum(candidate.liquidity_quality, 0)) + '</b></div>' +
     '</div>' +
     '<div class="rx-muted rx-volume">حجم 24h: ' + esc(safeNum(candidate.quote_volume_24h,0)) + '</div>' +
+    fingerprintBadgeMarkup(candidate) +
     '<button type="button" class="rx-btn rx-btn--primary rx-detail-button" data-detail-index="' + index + '">عرض التفاصيل</button>' +
   '</article>';
 }
@@ -197,6 +279,7 @@ export function buildCandidateDetailMarkup(candidate) {
     '<details class="rx-section" open><summary>لماذا ظهر؟</summary><div class="rx-muted">ظهر بعد اجتياز بوابات البيانات والسيولة ووجود استراتيجية مقبولة. القيم المعروضة تحليلية وليست وعدًا بالنتيجة.</div>' +
       '<div class="rx-tag-list">' + (candidate.accepted_strategies || []).map(id => '<span class="rx-chip is-live">' + esc(friendlyStrategy(id)) + '</span>').join('') + '</div>' +
     '</details>' +
+    fingerprintDetailMarkup(candidate) +
     strategyGroup('الاستراتيجيات المقبولة', accepted, 'is-live') +
     strategyGroup('الاستراتيجيات المرفوضة', rejected, 'is-danger') +
     strategyGroup('الاستراتيجيات ذات البيانات الناقصة', insufficient, 'is-warn') +
