@@ -9,7 +9,7 @@ permissions:
 jobs:
   release-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout exact release-signing branch
@@ -24,14 +24,64 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK 35 and build-tools
+      - name: Install pinned Android command-line tools 16.0
+        timeout-minutes: 8
+        env:
+          ANDROID_CMDLINE_TOOLS_ZIP: commandlinetools-linux-12266719_latest.zip
+          ANDROID_CMDLINE_TOOLS_URL: https://dl.google.com/android/repository/commandlinetools-linux-12266719_latest.zip
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" >/dev/null
+
+          SDK_ROOT="$RUNNER_TEMP/radarx-android-sdk"
+          rm -rf "$SDK_ROOT"
+          mkdir -p "$SDK_ROOT/cmdline-tools"
+
+          curl --fail --location --retry 4 --retry-delay 2 --connect-timeout 15 --max-time 120 \
+            "$ANDROID_CMDLINE_TOOLS_URL" \
+            --output "$RUNNER_TEMP/$ANDROID_CMDLINE_TOOLS_ZIP"
+
+          unzip -q "$RUNNER_TEMP/$ANDROID_CMDLINE_TOOLS_ZIP" -d "$SDK_ROOT/cmdline-tools"
+          mv "$SDK_ROOT/cmdline-tools/cmdline-tools" "$SDK_ROOT/cmdline-tools/16.0"
+
+          if [[ ! -x "$SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager" ]]; then
+            echo "::error::Pinned Android command-line tools 16.0 sdkmanager was not installed."
+            exit 1
+          fi
+
+          {
+            echo "ANDROID_HOME=$SDK_ROOT"
+            echo "ANDROID_SDK_ROOT=$SDK_ROOT"
+          } >> "$GITHUB_ENV"
+
+          {
+            echo "$SDK_ROOT/cmdline-tools/16.0/bin"
+            echo "$SDK_ROOT/platform-tools"
+          } >> "$GITHUB_PATH"
+
+          rm -f "$RUNNER_TEMP/$ANDROID_CMDLINE_TOOLS_ZIP"
+
+      - name: Verify pinned sdkmanager
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          command -v sdkmanager
+          SDKMANAGER_VERSION="$(sdkmanager --version | head -n 1)"
+          echo "sdkmanager version: $SDKMANAGER_VERSION"
+          [[ "$SDKMANAGER_VERSION" == 16.0* ]]
+
+      - name: Install required Android SDK packages
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses < <(yes) >/dev/null
+          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+          test -x "$ANDROID_SDK_ROOT/platform-tools/adb"
+          test -x "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner"
+          test -d "$ANDROID_SDK_ROOT/platforms/android-35"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -47,7 +97,11 @@ jobs:
         run: |
           set -euo pipefail
           missing=()
-          for name in             ANDROID_RELEASE_KEYSTORE_BASE64             ANDROID_RELEASE_STORE_PASSWORD             ANDROID_RELEASE_KEY_ALIAS             ANDROID_RELEASE_KEY_PASSWORD
+          for name in \
+            ANDROID_RELEASE_KEYSTORE_BASE64 \
+            ANDROID_RELEASE_STORE_PASSWORD \
+            ANDROID_RELEASE_KEY_ALIAS \
+            ANDROID_RELEASE_KEY_PASSWORD
           do
             if [[ -z "${!name:-}" ]]; then
               missing+=("$name")
@@ -95,8 +149,8 @@ jobs:
             exit 1
           fi
 
-          APKSIGNER="${ANDROID_HOME}/build-tools/35.0.0/apksigner"
-          AAPT="${ANDROID_HOME}/build-tools/35.0.0/aapt"
+          APKSIGNER="${ANDROID_SDK_ROOT}/build-tools/35.0.0/apksigner"
+          AAPT="${ANDROID_SDK_ROOT}/build-tools/35.0.0/aapt"
 
           "$APKSIGNER" verify --verbose "${APKS[0]}"
 
