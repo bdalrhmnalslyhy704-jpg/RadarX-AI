@@ -973,24 +973,26 @@ export class MarketUniverseScanner {
     let error = null;
 
     try {
-      const tfResults = await Promise.all(
-        ['4h','1h','15m'].map(async tf => {
-          const r = await this.fetchSeries(ticker.symbol, tf);
-          const fetchedAt = Number(r.receivedAt) || this.clock();
-          return {
-            tf,
-            source: r.source ?? null,
-            candles: Array.isArray(r.candles)
-              ? r.candles.map(c => ({ ...c, symbol: ticker.symbol, timeframe: tf }))
-              : normalizeRawKlines(r.data, r.source, fetchedAt)
-          };
-        })
-      );
+      const [tfResults, depth] = await Promise.all([
+        Promise.all(
+          ['4h','1h','15m'].map(async tf => {
+            const r = await this.fetchSeries(ticker.symbol, tf);
+            const fetchedAt = Number(r.receivedAt) || this.clock();
+            return {
+              tf,
+              source: r.source ?? null,
+              candles: Array.isArray(r.candles)
+                ? r.candles.map(c => ({ ...c, symbol: ticker.symbol, timeframe: tf }))
+                : normalizeRawKlines(r.data, r.source, fetchedAt)
+            };
+          })
+        ),
+        this.fetchDepth(ticker.symbol)
+      ]);
       for (const r of tfResults) {
         series[r.tf] = r.candles;
         if (r.source) klinesSources.push(r.source);
       }
-      const depth = await this.fetchDepth(ticker.symbol);
       depthRaw = depth?.data ?? depth;
       depthSource = depth?.source ?? null;
     } catch (e) {
