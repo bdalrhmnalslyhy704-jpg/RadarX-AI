@@ -141,7 +141,7 @@ test('Integration 3: Candidate Contract strategy count is 14', async () => {
   const candidate = result.candidates[0];
   assert.equal(candidate.coverage.strategy_count, 14);
   assert.equal(candidate.coverage.evaluated_strategy_count, 14);
-  assert.equal(candidate.strategies.length, 11);
+  assert.equal(candidate.strategies.length, 14);
 });
 
 test('Integration 4: Rejected strategies preserve reason_codes, evidence, invalidation and hard-gate status', async () => {
