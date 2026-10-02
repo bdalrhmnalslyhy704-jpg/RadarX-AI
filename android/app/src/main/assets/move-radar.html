@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07121e">
+<title>RadarX — 24H Move Radar</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:linear-gradient(180deg,#06111c,#070b12);color:#eaf5ff;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+main{width:min(960px,100%);margin:auto;padding:10px 14px 30px}.top{position:sticky;top:0;z-index:5;padding:calc(10px + env(safe-area-inset-top)) 0 10px;background:rgba(6,12,20,.94);backdrop-filter:blur(12px);border-bottom:1px solid #1d3b53}
+.head{display:flex;align-items:center;justify-content:space-between;gap:10px}.brand b{font-size:17px}.brand small{display:block;color:#8fa8bc;font-size:10px;margin-top:2px}.back{padding:10px 12px;border:1px solid #2a4b67;border-radius:11px;background:#0b1a29;color:#dff4ff;text-decoration:none;font-size:11px;font-weight:900}
+.hero{margin:12px 0;padding:15px;border:1px solid #21455f;border-radius:17px;background:linear-gradient(145deg,#0d2032,#091520)}h1{margin:0;font-size:21px}.hero p{margin:6px 0 0;color:#91a9bc;font-size:11px;line-height:1.8}.live{display:inline-flex;margin-top:9px;padding:6px 9px;border-radius:999px;border:1px solid #2f8066;color:#b6f0dc;background:#0e241e;font-size:9px;font-weight:900}
+.toolbar{display:flex;gap:8px;margin:10px 0}.toolbar button{flex:1;min-height:45px;border:1px solid #2e86a9;border-radius:12px;background:linear-gradient(135deg,#35c9ff,#6b68ff);font:inherit;font-weight:1000;color:#04111c}
+.status{padding:10px 12px;border:1px solid #1b3b54;border-radius:13px;background:#091621;color:#98aec0;font-size:10px;line-height:1.7}.status b{color:#fff}
+.cards{display:grid;gap:10px;margin-top:10px}.empty{padding:22px;border:1px dashed #2b455a;border-radius:15px;color:#90a6b8;text-align:center;line-height:1.8}
+.card{padding:13px;border:1px solid #21445e;border-radius:16px;background:linear-gradient(145deg,#0b1a28,#08121d)}.row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.sym{font-weight:1000;font-size:17px}.muted{color:#8ca5ba;font-size:10px;margin-top:3px}.score{font-size:24px;font-weight:1000}.tag{display:inline-block;margin-top:5px;padding:5px 8px;border-radius:999px;background:#102a39;border:1px solid #35637a;font-size:9px;font-weight:900}.tag.up{color:#baf4dd;border-color:#2f8a68;background:#0e251f}.tag.down{color:#ffd0a2;border-color:#8b693a;background:#231b0d}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:7px;margin-top:9px}.box{padding:8px;border:1px solid #17364b;border-radius:10px;background:#07111a}.box span{display:block;color:#718ba1;font-size:8px}.box b{display:block;margin-top:4px;font-size:12px}.reasons{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}.reason{padding:5px 7px;border-radius:999px;border:1px solid #294a61;color:#c8d9e5;background:#07111a;font-size:8px}.note{margin-top:10px;color:#70899e;font-size:9px;line-height:1.8}
+@media(max-width:620px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+<div class="top"><div class="head"><div class="brand"><b>🚨 24H Move Radar</b><small>مراقبة الحركة من ±1% • Spot • 24/7 Backend</small></div><a class="back" href="./index.html">← RadarX</a></div></div>
+<section class="hero"><h1>رادار الحركة المبكرة</h1><p>لا يطارد +30%. يلتقط أول عبور حقيقي لعتبة الحركة، ثم يفحص العملة بترابط الاستراتيجيات وعوامل الحجم والسيولة والهيكل والانكماش والتدفق قبل إصدار التنبيه.</p><span class="live">● LIVE MARKET • PAPER ONLY</span></section>
+<div class="toolbar"><button id="refresh">تحديث التنبيهات</button></div>
+<div id="status" class="status"><b>جاري الاتصال</b> — تحميل حالة مراقبة السوق.</div>
+<div id="cards" class="cards"><div class="empty">لا توجد تنبيهات جديدة.</div></div>
+<div class="note">الرادار الخلفي يعمل على الخادم حتى عندما يكون التطبيق مغلقًا. عند انقطاع الإنترنت عن الهاتف لا يمكن استقبال حركة جديدة لحظيًا، لكن التنبيهات التي أنشأها الخادم تُحفظ وتُسترجع عند عودة الاتصال. «تهيؤ التوسع» مؤشر تحليلي وليس ضمانًا لوصول العملة إلى +30%.</div>
+<script type="module">
+import {getMoveRadar} from './radarx-backend-client.mjs';
+import {normalizeMoveAlerts,moveLabel,potentialLabel} from './radarx-move-radar.mjs';
+
+const status=document.getElementById('status');
+const cards=document.getElementById('cards');
+const refresh=document.getElementById('refresh');
+let busy=false;
+function n(v){return Number.isFinite(Number(v))?Number(v).toFixed(1):'—'}
+function pct(v){return Number.isFinite(Number(v))?Number(v).toFixed(2)+'%':'—'}
+function render(rows){
+ if(!rows.length){cards.innerHTML='<div class="empty">لا توجد تنبيهات محفوظة منذ آخر تحديث.</div>';return}
+ cards.innerHTML=rows.map(a=>{
+  const up=a.direction==='UP_MOVE';
+  return '<article class="card"><div class="row"><div><div class="sym">'+a.symbol+'</div><div class="muted">السعر '+n(a.price)+' • حركة 24h '+pct(a.movePct)+'</div></div><div style="text-align:left"><div class="score">'+n(a.setupScore)+'</div><span class="tag '+(up?'up':'down')+'">'+moveLabel(a.direction)+'</span></div></div>'+
+  '<div class="grid"><div class="box"><span>درجة الفرصة</span><b>'+n(a.setupScore)+'</b></div><div class="box"><span>تهيؤ التوسع</span><b>'+n(a.expansionPotential)+'</b></div><div class="box"><span>توافق الاستراتيجيات</span><b>'+n(a.strategy_confluence?.accepted_count)+' مؤكدة</b></div><div class="box"><span>أفضل استراتيجية</span><b>'+n(a.strategy_confluence?.best_score)+'</b></div></div>'+
+  '<div class="reasons">'+a.reasons.slice(0,8).map(x=>'<span class="reason">'+x+'</span>').join('')+'</div>'+
+  '<div class="note">'+potentialLabel(a.potential_label)+' • '+(a.strategy_confluence?.accepted_ids||[]).join(', ')+' • '+new Date(a.processed_at||Date.now()).toLocaleString('ar-YE')+'</div></article>'
+ }).join('')
+}
+async function load(){
+ if(busy)return;busy=true;refresh.disabled=true;
+ try{
+  const since=Number(localStorage.getItem('radarx_move_cursor')||0);
+  const r=await getMoveRadar({limit:50,since});
+  if(!r.ok||!r.body)throw new Error(r.body?.error||'MOVE_RADAR_UNAVAILABLE');
+  const rows=normalizeMoveAlerts(r.body);
+  if(rows.length){
+   const newest=Math.max(...rows.map(x=>Number(x.processed_at)||0));
+   if(newest) localStorage.setItem('radarx_move_cursor',String(newest));
+  }
+  const m=r.body.monitoring||{};
+  status.innerHTML='<b>مباشر</b> — الخادم يراقب '+(m.universe||0)+' عملة • WebSocket '+(m.websocket?.state||'UNKNOWN')+' • تنبيهات مستلمة '+rows.length;
+  render(rows);
+ }catch(e){
+  status.innerHTML='<b>لا يوجد اتصال حاليًا</b> — '+String(e.message||e);
+  cards.innerHTML='<div class="empty">البيانات الجديدة ستُسترجع عند عودة الإنترنت.</div>';
+ }finally{busy=false;refresh.disabled=false}
+}
+refresh.onclick=load;load();setInterval(load,15000);
+</script>
+</main>
+</body></html>
