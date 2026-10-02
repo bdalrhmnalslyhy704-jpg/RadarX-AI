@@ -8,6 +8,8 @@ import {SignalDeduplicator} from './core/dedup.mjs';
 import {SignalService} from './core/signal-service.mjs';
 import {createPushProvider,PushManager} from './push/index.mjs';
 import {MarketMonitor} from './core/monitor.mjs';
+import {EarlyMoveSentinel} from './core/early-move-sentinel.mjs';
+import {MarketUniverseScanner} from './market/universe-scanner.mjs';
 import {createApiServer} from './http/api.mjs';
 import {assertDeploymentEnvironment,assertReadOnlyStagingConfig} from './deploy/preflight.mjs';
 import {sanitizeLogMessage} from './runtime.mjs';
@@ -28,12 +30,30 @@ export async function startServer({
   const push=new PushManager({provider,store,deduplicator:dedup,retryBaseMs:config.monitoring.pushRetryMs});
   const service=new SignalService({deduplicator:dedup,store,pushManager:push,config});
   const monitor=monitorFactory({config,rest,signalService:service,store,pushManager:push,logger});
+  const moveScanner=new MarketUniverseScanner({rest,config:{
+    minQuoteVolume24h:config.moveRadar.minQuoteVolume24h,
+    minDataQuality:config.moveRadar.minDataQuality,
+    minLiquidityQuality:config.moveRadar.minLiquidityQuality,
+    deepKlines:config.moveRadar.deepKlines,
+    deepConcurrency:config.moveRadar.deepConcurrency
+  }});
+  const moveSentinel=new EarlyMoveSentinel({
+    rest,store,config:config.moveRadar,logger,
+    scannerFactory:()=>moveScanner,
+    tickerWsFactory:opts=>new BinanceStreamClient({
+      ...opts,
+      streams:['__MOVE_SENTINEL_PLACEHOLDER__']
+    })
+  });
+  // The sentinel has its own all-market ticker client; the factory is replaced below in tests or runtime.
+  moveSentinel.tickerWsFactory=opts=>new (requireUnavailable())(opts);
   await monitor.start();
-  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push});
+  await moveSentinel.start();
+  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
-  return {server:api,monitor,store,rest,push,close:async()=>{await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
+  return {server:api,monitor,moveSentinel,store,rest,push,close:async()=>{await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
 }
 
 if(process.argv[1]&&resolve(fileURLToPath(import.meta.url))===resolve(process.argv[1])){
