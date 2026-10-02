@@ -175,7 +175,7 @@ export class EarlyMoveSentinel {
     this.logger=logger;
     this.scannerFactory=scannerFactory;
     this.scanner=null;
-    this.tickerWsFactory=tickerWsFactory||opts=>new BinanceAllMarketTickerClient(opts);
+    this.tickerWsFactory=tickerWsFactory || (opts => new BinanceAllMarketTickerClient(opts));
     this.running=false;
     this.reconcileTimer=null;
     this.spotSymbols=new Set();
