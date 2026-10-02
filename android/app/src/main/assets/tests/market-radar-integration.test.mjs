@@ -172,6 +172,6 @@ assert.match(suite,/data-tab="desk"/);
 assert.match(suite,/orderDesk/);
 assert.match(suite,/NO EXECUTION/);
 assert.equal(suite.includes('/api/v3/order'),false);
-assert.doesNotMatch(suite,/real_order_execution\\s*[:=]\\s*true/);
+assert.equal(/real_order_execution\\s*[:=]\\s*true/.test(suite),false);
 
 console.log('RadarX Android Dashboard regression tests passed: 30 assertions');
