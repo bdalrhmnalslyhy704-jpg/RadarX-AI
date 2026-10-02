@@ -32,11 +32,11 @@ const IDS=['MTF_TREND','CONFIRMED_BREAKOUT','MEAN_REVERSION','VCP_PRE_BREAKOUT',
 
 function strategies(accepted=true){
   return IDS.map((id,i)=>({
-    id,name:id,signal_state:accepted && i===0?'CONFIRMED':'REJECTED',direction:accepted && i===0?'LONG':'NONE',
-    score:{value:accepted && i===0?82:null,coverage:accepted && i===0?1:0.5},
+    id,name:id,signal_state:accepted && i===0?'CONFIRMED':accepted && i===3?'CANDIDATE':'REJECTED',direction:accepted && (i===0||i===3)?'LONG':'NONE',
+    score:{value:accepted && i===0?82:accepted && i===3?79:null,coverage:accepted && (i===0||i===3)?1:0.5},
     evidence:{test:i},reason_codes:accepted && i===0?['BULLISH_TEST']:['TEST_REJECTED'],
     invalidation:['TEST_INVALIDATION'],required_data:['1h'],missing_required_data:[],
-    hard_gates_passed:accepted && i===0,hard_gate_status:{passed:accepted && i===0,failed:accepted && i===0?[]:['TEST_GATE']},
+    hard_gates_passed:accepted && (i===0||i===3),hard_gate_status:{passed:accepted && (i===0||i===3),failed:accepted && (i===0||i===3)?[]:['TEST_GATE']},
     confidence_score:'UNKNOWN',paper_trading:true,real_order_execution:false
   }));
 }
@@ -48,9 +48,10 @@ function candidate(kind='fresh',index=0){
     liquidity_quality:index?50:90,data_quality:stale?55:invalid?0:95,overall_score:stale||invalid||rejected?99:(index?60:90),
     coverage:{ratio:1},best_strategy:rejected||invalid?null:'MTF_TREND',direction:rejected||invalid?'NONE':'LONG',
     signal_state:rejected||invalid?'REJECTED':'CONFIRMED',
-    accepted_strategies:rejected||invalid?[]:['MTF_TREND'],
+    accepted_strategies:rejected||invalid?[]:['MTF_TREND','VCP_PRE_BREAKOUT'],
     reason_codes:rejected||invalid?['TEST_REJECTED']:['BULLISH_TEST'],risk_flags:['TEST_RISK'],invalidation:['TEST_INVALIDATION'],
     data_status:stale?{data_stale:true,data_valid:false,source:'TEST',fetch_age_ms:999999}:{data_stale:false,data_valid:!invalid&&!rejected,source:'TEST',fetch_age_ms:1000},
+    best_strategy:rejected||invalid?null:'VCP_PRE_BREAKOUT',
     pre_breakout_fingerprint:{version:'prebreakout-fingerprint.v1',detected:!stale&&!invalid&&!rejected,stage:'PRE-BREAKOUT',score:82,trapRisk:18,evidenceCount:6,reasonCodes:['HL_EMERGING','COMPRESSION','VOLUME_AWAKENING','RELATIVE_POWER_INCREASING','SELL_PRESSURE_DECLINING'],evidence:{structure:{score:90,status:'HL_EMERGING'},compression:{score:80,status:'TIGHT'},volume:{score:75,status:'ACCELERATING'},relative_power:{score:78,status:'INCREASING'},resistance:{score:70,status:'TESTING',tests:2},order_flow:{score:72,status:'BUYING_PRESSURE'},regime:{score:75,status:'SUPPORTIVE'},trigger:{score:60,status:'NEAR_RESISTANCE'}},resistance:{remainingTests:1},context:{breakout:false,retest:false,falseBreakout:false},journey:[{stage:'BUILDING',at:1727827200000,score:60},{stage:'PRE-BREAKOUT',at:1727830800000,score:82}],historical:{samples:8,lookaheadBars:16,successfulSamples:4,descriptiveSuccessRatePct:50,analogs:[]}},
     strategies:stale||invalid||rejected?strategies(false):strategies(true)
   };
@@ -105,6 +106,7 @@ assert.match(validMarkup,/Score/);
 assert.match(validMarkup,/PRE BREAKOUT/);
 assert.match(validMarkup,/Trap/);
 assert.match(validMarkup,/6 \/ 8/);
+assert.match(validMarkup,/PRE BREAKOUT/);
 
 const invalidMarkup=buildCandidateMarkup(invalid,2);
 assert.match(invalidMarkup,/غير متاح بسبب جودة البيانات/);
