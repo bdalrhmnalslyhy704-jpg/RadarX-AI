@@ -122,8 +122,8 @@ export function validateMarketRadarContract(response) {
   const counts = Array.isArray(body.candidates)
     ? body.candidates.map(candidate => Array.isArray(candidate?.strategies) ? candidate.strategies.length : 0)
     : [];
-  if (counts.some(count => count !== 10)) {
-    return {valid:false, reason:'STRATEGY_COUNT_NOT_10', strategiesPerCandidate:Math.max(0, ...counts)};
+  if (counts.some(count => count !== 11)) {
+    return {valid:false, reason:'STRATEGY_COUNT_NOT_11', strategiesPerCandidate:Math.max(0, ...counts)};
   }
   return {valid:true, reason:null, strategiesPerCandidate:11};
 }
