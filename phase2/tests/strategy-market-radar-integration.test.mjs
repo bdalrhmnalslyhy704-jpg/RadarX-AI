@@ -112,12 +112,12 @@ const scanConfig = {
   maxTriggerAgeMs: 30 * 60 * 1000
 };
 
-test('Integration 1: Registry exposes exactly 14 ACTIVE strategies', () => {
+test('Integration 1: Registry exposes exactly 15 ACTIVE strategies', () => {
   assert.equal(ACTIVE.length, 14);
   assert.ok(ACTIVE.every(s => s.status === 'ACTIVE' && typeof s.evaluator === 'function'));
 });
 
-test('Integration 2: Market Radar evaluates all 14 Registry strategies', async () => {
+test('Integration 2: Market Radar evaluates all 15 Registry strategies', async () => {
   const result = await new MarketUniverseScanner({
     rest: makeRest(),
     config: scanConfig
@@ -136,7 +136,7 @@ test('Integration 2: Market Radar evaluates all 14 Registry strategies', async (
   }));
 });
 
-test('Integration 3: Candidate Contract strategy count is 14', async () => {
+test('Integration 3: Candidate Contract strategy count is 15', async () => {
   const result = await new MarketUniverseScanner({rest: makeRest(), config: scanConfig}).scan({quote: 'USDT', limit: 1});
   const candidate = result.candidates[0];
   assert.equal(candidate.coverage.strategy_count, 14);
