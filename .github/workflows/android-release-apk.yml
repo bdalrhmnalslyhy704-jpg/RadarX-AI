@@ -10,8 +10,6 @@ jobs:
   release-apk:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      ANDROID_RELEASE_KEYSTORE_FILE: ${{ runner.temp }}/radarx-release.keystore
 
     steps:
       - name: Checkout exact release-signing branch
@@ -66,8 +64,8 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          printf '%s' "${ANDROID_RELEASE_KEYSTORE_BASE64}" | base64 --decode > "${ANDROID_RELEASE_KEYSTORE_FILE}"
-          test -s "${ANDROID_RELEASE_KEYSTORE_FILE}"
+          printf '%s' "${ANDROID_RELEASE_KEYSTORE_BASE64}" | base64 --decode > "${RUNNER_TEMP}/radarx-release.keystore"
+          test -s "${RUNNER_TEMP}/radarx-release.keystore"
 
       - name: Build signed universal Release APK
         working-directory: android
@@ -75,6 +73,7 @@ jobs:
           ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
           ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
           ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+          ANDROID_RELEASE_KEYSTORE_FILE: ${{ runner.temp }}/radarx-release.keystore
         run: |
           set -euo pipefail
           gradle --no-daemon --no-parallel :app:assembleRelease
@@ -116,8 +115,8 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          rm -f "${ANDROID_RELEASE_KEYSTORE_FILE}"
-          test ! -e "${ANDROID_RELEASE_KEYSTORE_FILE}"
+          rm -f "${RUNNER_TEMP}/radarx-release.keystore"
+          test ! -e "${RUNNER_TEMP}/radarx-release.keystore"
 
       - name: Upload verified APK only
         uses: actions/upload-artifact@v4
