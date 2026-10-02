@@ -531,19 +531,19 @@ export function buildBottomMarketContext(series, ticker, now, {book=null, liquid
     const bbWidths=[];
     for(let i=19;i<bbVals.length;i++){
       const w=bbVals.slice(i-19,i+1);
-      const mu=mean(w);
-      const sd=Math.sqrt(mean(w.map(v=>(v-mu)**2)));
+      const mu=avgDefined(w,null);
+      const sd=Math.sqrt(avgDefined(w.map(v=>(v-mu)**2),null));
       bbWidths.push(mu>0?4*sd/mu:null);
     }
     const validWidths=bbWidths.filter(Number.isFinite);
     bbWidthNow=validWidths.at(-1)??null;
     const baseWidths=validWidths.slice(-21,-1);
-    bbWidthBase=baseWidths.length?mean(baseWidths):null;
+    bbWidthBase=baseWidths.length?avgDefined(baseWidths,null):null;
     bbWidthRatio=Number.isFinite(bbWidthNow)&&Number.isFinite(bbWidthBase)&&bbWidthBase>0?bbWidthNow/bbWidthBase:null;
   }
   const atrRanges=last24.map(x=>Number(x.high)-Number(x.low)).filter(Number.isFinite);
-  const atrRecent=atrRanges.slice(-8).length?mean(atrRanges.slice(-8)):null;
-  const atrBase=atrRanges.slice(-40,-8).length?mean(atrRanges.slice(-40,-8)):null;
+  const atrRecent=atrRanges.slice(-8).length?avgDefined(atrRanges.slice(-8),null):null;
+  const atrBase=atrRanges.slice(-40,-8).length?avgDefined(atrRanges.slice(-40,-8),null):null;
   const atrContractionRatio=Number.isFinite(atrRecent)&&Number.isFinite(atrBase)&&atrBase>0?atrRecent/atrBase:null;
   const dryUpRatio=Number.isFinite(rvolRatio)?rvolRatio:null;
   const squeezeScore=avgDefined([
