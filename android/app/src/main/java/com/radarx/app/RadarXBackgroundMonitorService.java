@@ -196,9 +196,11 @@ public final class RadarXBackgroundMonitorService extends Service {
         String title = "UP_MOVE".equals(direction)
             ? "RadarX • قبل الانفجار"
             : "RadarX • قبل الانفجار (اتجاه غير صاعد)";
+        JSONObject preExplosion = alert.optJSONObject("pre_explosion");
+        int confirmationCount = preExplosion == null ? 0 : preExplosion.optInt("confirmation_count", 0);
         String body = symbol + " • حركة 24h " + scoreFmt.format(move) + "% • Score " +
             scoreFmt.format(score) + " • " + label + " • " +
-            alert.optJSONObject("pre_explosion")?.optInt("confirmation_count", 0) + " تأكيد";
+            confirmationCount + " تأكيد";
         String timing = "وقت اكتشاف الخادم: " + detectedText +
             " • وقت إرسال الإشعار: " + sentText;
 
