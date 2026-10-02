@@ -22,12 +22,15 @@ h1{margin:0;font-size:21px}.hero p{margin:7px 0 0;color:#8fa8bd;line-height:1.7;
 .cardhead{display:flex;align-items:center;justify-content:space-between;gap:8px}.symbol{font-size:16px;font-weight:1000}.badge{padding:6px 8px;border-radius:999px;border:1px solid #2d536d;font-size:10px;font-weight:950}.green{border-color:#2f8b6a;color:#b8f4dc;background:#0e251f}.yellow{border-color:#8c7138;color:#ffe0a0;background:#211b0d}.gray{color:#a0b1c0}
 .price{margin-top:3px;color:#91a8bd;font-size:11px}.score{font-size:22px;font-weight:1000}
 .bars{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}.bar{padding:8px;border:1px solid #17364d;border-radius:11px;background:#07111c}.bar span{display:block;color:#718ba2;font-size:9px}.bar b{display:block;margin-top:4px;font-size:14px}.meter{height:5px;margin-top:6px;border-radius:99px;background:#132a3b;overflow:hidden}.meter i{display:block;height:100%;background:linear-gradient(90deg,#35c9ff,#6f68ff)}
+.market-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:7px;margin-top:9px}.market-box{padding:9px;border:1px solid #17364d;border-radius:11px;background:#07111c}.market-box span{display:block;color:#718ba2;font-size:9px}.market-box b{display:block;margin-top:4px;font-size:13px}.market-box small{display:block;color:#89a2b6;margin-top:3px;font-size:9px}
+.algo-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:8px}.algo{padding:7px;border:1px solid #17364d;border-radius:10px;background:#06111a}.algo span{display:block;color:#718ba2;font-size:8px}.algo b{display:block;margin-top:3px;font-size:11px}
 .path{margin-top:9px;padding:9px;border:1px solid #17364d;border-radius:11px;background:#07111c;color:#d5e7f4;font-size:11px;line-height:1.7}
 .horizon{margin-top:8px;display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.h{padding:8px;border:1px solid #17364d;border-radius:10px;background:#07111c}.h span{display:block;color:#718ba2;font-size:9px}.h b{display:block;margin-top:3px;font-size:12px}.h small{display:block;color:#8ea6ba;line-height:1.5;margin-top:4px;font-size:9px}
 details{margin-top:8px;border:1px solid #17364d;border-radius:10px;background:#07111c;padding:8px}summary{cursor:pointer;font-size:10px;font-weight:950}details .row{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid rgba(30,65,90,.45);font-size:9px}details .row:last-child{border-bottom:0}
 .empty{padding:22px;border:1px dashed #29485f;border-radius:16px;color:#8fa6ba;text-align:center;line-height:1.8}
 .note{margin-top:10px;color:#6f879b;font-size:9px;line-height:1.7}
-@media(max-width:650px){.horizon{grid-template-columns:1fr}.bars{grid-template-columns:1fr}.toolbar{top:59px}#limit{width:92px}.score{font-size:20px}}
+@media(max-width:650px){.market-grid,.algo-grid{grid-template-columns:1fr}.horizon{grid-template-columns:1fr}.bars{grid-template-columns:1fr}.toolbar{top:59px}#limit{width:92px}.score{font-size:20px}}
+
 </style>
 </head>
 <body>
@@ -70,8 +73,24 @@ function render(rows){
   cards.innerHTML=rows.map((x,i)=>{
     const cls=x.stage==='EARLY-BUILD'?'green':x.stage==='REVERSAL-WATCH'?'green':x.stage==='BOTTOMING-WATCH'?'yellow':'gray';
     return '<article class="card" style="animation-delay:'+Math.min(i,9)*35+'ms">'+
-      '<div class="cardhead"><div><div class="symbol">'+(i+1)+'. '+x.symbol+'</div><div class="price">'+fmt(x.price)+' • 24h '+pct(x.change24h)+'</div></div><div style="text-align:left"><div class="score">'+x.score.toFixed(1)+'</div><span class="badge '+cls+'">'+x.stage+'</span></div></div>'+
-      '<div class="bars">'+bar('الشراء',x.buyingPressure)+bar('الزخم',x.momentumAwakening)+bar('انحسار البيع',x.sellingExhaustion)+bar('الضغط/الانكماش',x.compression)+bar('الهيكل',x.structure)+bar('مقاومة/تأكيد',x.trapQuality)+'</div>'+
+      '<div class="cardhead"><div><div class="symbol">'+(i+1)+'. '+x.symbol+'</div><div class="price">السعر الحالي: <b>'+fmt(x.price)+'</b> • 24h '+pct(x.change24h)+'</div></div><div style="text-align:left"><div class="score">'+x.score.toFixed(1)+'</div><span class="badge '+cls+'">'+x.stage+'</span></div></div>'+
+      '<div class="market-grid">'+
+        '<div class="market-box"><span>السعر الحالي</span><b>'+fmt(x.bottomEvidence.currentPrice)+'</b><small>آخر تحديث من Backend</small></div>'+
+        '<div class="market-box"><span>آخر قمة ارتفاع</span><b>'+fmt(x.bottomEvidence.lastRiseHigh)+'</b><small>'+ (Number.isFinite(x.bottomEvidence.drawdownFromLastRiseHighPct)?'هبوط من القمة '+pct(x.bottomEvidence.drawdownFromLastRiseHighPct):'—') +'</small></div>'+
+        '<div class="market-box"><span>قاع بداية آخر ارتفاع</span><b>'+fmt(x.bottomEvidence.lastRiseLow)+'</b><small>'+ (Number.isFinite(x.bottomEvidence.lastRisePct)?'ارتفاع سابق '+pct(x.bottomEvidence.lastRisePct):'—') +'</small></div>'+
+        '<div class="market-box"><span>موقع السعر داخل نطاق 24h</span><b>'+ (Number.isFinite(x.bottomEvidence.rangePositionPct)?Number(x.bottomEvidence.rangePositionPct).toFixed(1)+'%':'—') +'</b><small>من القاع 24h إلى القمة 24h</small></div>'+
+      '</div>'+
+      '<div class="bars">'+bar('الشراء',x.buyingPressure)+bar('الزخم',x.momentumAwakening)+bar('انحسار البيع',x.sellingExhaustion)+bar('الضغط/الانكماش',x.compression)+bar('الهيكل',x.structure)+bar('قوة الخوارزميات',x.bottomAlgorithms)+'</div>'+
+      '<details><summary>الخوارزميات الإضافية للقاع</summary><div class="algo-grid">'+
+        '<div class="algo"><span>RSI 14</span><b>'+(Number.isFinite(x.bottomEvidence.rsi)?x.bottomEvidence.rsi.toFixed(1):'—')+(x.bottomEvidence.bullishDivergence?' • Divergence صاعد':'')+'</b></div>'+
+        '<div class="algo"><span>Stochastic 14</span><b>'+(Number.isFinite(x.bottomEvidence.stochasticK)?x.bottomEvidence.stochasticK.toFixed(1):'—')+'</b></div>'+
+        '<div class="algo"><span>OBV / تراكم</span><b>'+(Number.isFinite(x.bottomEvidence.obvScore)?x.bottomEvidence.obvScore.toFixed(0):'—')+'</b></div>'+
+        '<div class="algo"><span>Volume-Price</span><b>'+(Number.isFinite(x.bottomEvidence.rvolRatio)?'RVOL '+x.bottomEvidence.rvolRatio.toFixed(2):'—')+'</b></div>'+
+        '<div class="algo"><span>EMA20/50 reclaim</span><b>'+(Number.isFinite(x.bottomEvidence.emaReclaimScore)?x.bottomEvidence.emaReclaimScore.toFixed(0):'—')+'</b></div>'+
+        '<div class="algo"><span>Wyckoff Spring</span><b>'+(x.bottomEvidence.springConfirmed?'SPRING مؤكد':'مراقبة')+'</b></div>'+
+        '<div class="algo"><span>VWAP</span><b>'+fmt(x.bottomEvidence.vwap)+'</b></div>'+
+        '<div class="algo"><span>خوارزمية القاع المركبة</span><b>'+Number(x.bottomAlgorithms).toFixed(1)+'</b></div>'+
+      '</div></details>'+
       '<div class="path"><b>المسار للمراقبة:</b><br>'+x.path+'</div>'+
       '<div class="horizon">'+x.horizons.map(h=>'<div class="h"><span>'+h.window+'</span><b>مؤشر '+h.watch.toFixed(0)+'</b><small>'+h.condition+'</small></div>').join('')+'</div>'+
       '<details><summary>الاستراتيجيات العشر</summary>'+x.strategyRows.map(s=>'<div class="row"><span>'+s.name+'</span><b>'+ (s.used?s.signal_state+' • '+Number(s.score).toFixed(0):'لا يوجد score صالح') +'</b></div>').join('')+'</details>'+
