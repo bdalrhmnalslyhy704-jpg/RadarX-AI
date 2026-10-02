@@ -35,7 +35,7 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     private static final String TAG = "RadarXBackground";
     private static final String BACKEND =
-            "https://radarx-ai-production.up.railway.app/api/market-radar?quote=USDT&limit=20";
+            "https://radarx-ai-production.up.railway.app/api/market-radar?quote=USDT&limit=10";
 
     private static final String CHANNEL_STATUS = "radarx_background_status";
     private static final String CHANNEL_ALERTS = "radarx_prebreakout_alerts";
@@ -114,49 +114,102 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     private ScanResult scanMarket() throws Exception {
+        Exception lastError = null;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                byte[] body = fetchBackendBytes();
+                JSONObject root = new JSONObject(new String(body, StandardCharsets.UTF_8));
+                JSONObject meta = root.optJSONObject("meta");
+                if (meta == null ||
+                    !meta.optBoolean("live", false) ||
+                    !meta.optBoolean("paper_trading", true) ||
+                    meta.optBoolean("real_order_execution", false)) {
+                    throw new IllegalStateException("PAPER_ONLY_CONTRACT_INVALID");
+                }
+
+                JSONArray candidates = root.optJSONArray("candidates");
+                if (candidates == null) throw new IllegalStateException("NO_CANDIDATES");
+                saveLastGoodMarket(root);
+
+                ScanResult best = scoreCandidates(candidates);
+                return best;
+            } catch (Exception error) {
+                lastError = error;
+                try {
+                    Thread.sleep(1500L * (attempt + 1));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("BACKGROUND_SCAN_INTERRUPTED");
+                }
+            }
+        }
+
+        JSONObject cached = loadLastGoodMarket();
+        if (cached != null) {
+            JSONArray candidates = cached.optJSONArray("candidates");
+            ScanResult best = scoreCandidates(candidates);
+            if (best.bestSymbol != null) {
+                updateStatus("مراقبة الخلفية • بيانات محفوظة مؤقتًا • " +
+                    best.bestSymbol + " • Early " + scoreFmt.format(best.bestScore));
+                return best;
+            }
+        }
+        throw lastError != null ? lastError : new IllegalStateException("MARKET_RADAR_UNAVAILABLE");
+    }
+
+    private byte[] fetchBackendBytes() throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(BACKEND).openConnection();
         try {
             connection.setRequestMethod("GET");
-            connection.setConnectTimeout(10_000);
-            connection.setReadTimeout(15_000);
+            connection.setConnectTimeout(12_000);
+            connection.setReadTimeout(30_000);
             connection.setInstanceFollowRedirects(false);
             connection.setRequestProperty("Accept", "application/json");
             connection.setRequestProperty("Accept-Encoding", "identity");
-
             int status = connection.getResponseCode();
             if (status != 200) throw new IllegalStateException("HTTP_" + status);
-
-            byte[] body = readAll(connection.getInputStream());
-            JSONObject root = new JSONObject(new String(body, StandardCharsets.UTF_8));
-            JSONObject meta = root.optJSONObject("meta");
-            if (meta == null ||
-                !meta.optBoolean("live", false) ||
-                !meta.optBoolean("paper_trading", true) ||
-                meta.optBoolean("real_order_execution", false)) {
-                throw new IllegalStateException("PAPER_ONLY_CONTRACT_INVALID");
-            }
-
-            JSONArray candidates = root.optJSONArray("candidates");
-            if (candidates == null) throw new IllegalStateException("NO_CANDIDATES");
-
-            ScanResult best = new ScanResult();
-            for (int i = 0; i < candidates.length(); i++) {
-                JSONObject c = candidates.optJSONObject(i);
-                if (c == null) continue;
-                CandidateScore scored = scoreCandidate(c);
-                if (!scored.eligible) continue;
-
-                if (scored.score > best.bestScore) {
-                    best.bestScore = scored.score;
-                    best.bestSymbol = scored.symbol;
-                }
-                if (scored.score >= ALERT_THRESHOLD) {
-                    notifyEarlyAlert(scored);
-                }
-            }
-            return best;
+            return readAll(connection.getInputStream());
         } finally {
             connection.disconnect();
+        }
+    }
+
+    private ScanResult scoreCandidates(JSONArray candidates) {
+        ScanResult best = new ScanResult();
+        if (candidates == null) return best;
+        for (int i = 0; i < candidates.length(); i++) {
+            JSONObject c = candidates.optJSONObject(i);
+            if (c == null) continue;
+            CandidateScore scored = scoreCandidate(c);
+            if (!scored.eligible) continue;
+            if (scored.score > best.bestScore) {
+                best.bestScore = scored.score;
+                best.bestSymbol = scored.symbol;
+            }
+            if (scored.score >= ALERT_THRESHOLD) notifyEarlyAlert(scored);
+        }
+        return best;
+    }
+
+    private void saveLastGoodMarket(JSONObject root) {
+        try {
+            prefs().edit()
+                .putString("last_market_json", root.toString())
+                .putLong("last_market_at", System.currentTimeMillis())
+                .apply();
+        } catch (Exception error) {
+            Log.w(TAG, "Unable to persist last market snapshot", error);
+        }
+    }
+
+    private JSONObject loadLastGoodMarket() {
+        try {
+            long savedAt = prefs().getLong("last_market_at", 0L);
+            if (savedAt <= 0L || System.currentTimeMillis() - savedAt > 10 * 60_000L) return null;
+            String raw = prefs().getString("last_market_json", null);
+            return raw == null ? null : new JSONObject(raw);
+        } catch (Exception error) {
+            return null;
         }
     }
 
