@@ -18,12 +18,12 @@ export function mountBackgroundMonitorControl(root){
   addStyle();
   root.innerHTML=
     '<section class="rx-bg-card" aria-label="Background Monitor">'+
-      '<div class="rx-bg-head"><div><div class="rx-bg-title">🛰️ مراقبة الخلفية • Pre-Breakout Guard</div>'+
-      '<div class="rx-bg-sub">يفحص المرشحين دوريًا ويطلق تنبيهًا عندما تتوافق بصمة ما قبل الاختراق مع سيولة وجودة بيانات كافيتين.</div></div>'+
+      '<div class="rx-bg-head"><div><div class="rx-bg-title">🛰️ Move Radar 24/7 • مراقبة الخلفية</div>'+
+      '<div class="rx-bg-sub">يتابع السوق على الخادم 24/7، ثم ينبه الهاتف عندما تتجاوز عملة ±1% وتظهر توافقات قوية من محركات التحليل.</div></div>'+
       '<div id="rx-bg-state" class="rx-bg-state"><span id="rx-bg-dot" class="rx-bg-dot"></span><span id="rx-bg-label">متوقفة</span></div></div>'+
       '<div class="rx-bg-actions"><button id="rx-bg-start" class="rx-bg-btn primary" type="button">تشغيل في الخلفية</button>'+
       '<button id="rx-bg-stop" class="rx-bg-btn stop" type="button">إيقاف</button></div>'+
-      '<div class="rx-bg-note">المراقبة تستخدم بيانات السوق والتحليل فقط. لا ترسل أوامر تداول. في إصدارات Android الحديثة قد يفرض النظام حدودًا على مدة خدمة المراقبة.</div>'+
+      '<div class="rx-bg-note">المراقبة للتحليل فقط ولا ترسل أوامر تداول. الخادم يستمر 24/7؛ الهاتف يحتفظ بمؤشر التنبيهات ويستأنف استقبالها عند عودة الإنترنت.</div>'+
     '</section>';
 
   const start=root.querySelector('#rx-bg-start');
