@@ -177,6 +177,21 @@ function latestClosed(candles) {
   return index >= 0 ? candles[index] : null;
 }
 
+function closedOnlySeries(series, now) {
+  const out = {};
+  const excluded = {};
+  for (const tf of ['4h','1h','15m']) {
+    const rows = Array.isArray(series?.[tf]) ? series[tf] : [];
+    out[tf] = rows.filter(c => {
+      const closeTime = Number(c?.closeTime);
+      const closed = c?.closed === true && Number.isFinite(closeTime) && closeTime <= now;
+      return closed;
+    });
+    excluded[tf] = Math.max(0, rows.length - out[tf].length);
+  }
+  return {series:out, excluded};
+}
+
 function freshnessMs(candles, fetchedAt) {
   const last = latestClosed(candles);
   if (!last) return Infinity;
@@ -274,13 +289,15 @@ export function buildCandidateContract({
 }) {
   const symbol = ticker.symbol;
   const series = deep.series || {};
+  const rawSeries = deep.rawSeries || series;
   const v4 = validateSeries(series['4h'] || [], '4h');
   const v1 = validateSeries(series['1h'] || [], '1h');
   const v15 = validateSeries(series['15m'] || [], '15m');
-  const allCandles = [...(series['4h'] || []), ...(series['1h'] || []), ...(series['15m'] || [])];
+  const allCandles = [...(rawSeries['4h'] || []), ...(rawSeries['1h'] || []), ...(rawSeries['15m'] || [])];
   const last15 = latestClosed(series['15m'] || []);
   const triggerAgeMs = freshnessMs(series['15m'] || [], deep.completedAt);
-  const future = futureData(allCandles, deep.completedAt);
+  const future = deep.future === true || futureData(allCandles, deep.completedAt);
+  const excludedOpenCandleCount = Object.values(deep.excludedOpenCandles || {}).reduce((sum, n) => sum + Number(n || 0), 0);
   const integrityIssues = v4.issues.length + v1.issues.length + v15.issues.length;
   const seriesComplete = Boolean(last15) && v4.valid && v1.valid && v15.valid;
   const stale = !Number.isFinite(triggerAgeMs) || triggerAgeMs > maxTriggerAgeMs;
@@ -402,7 +419,17 @@ export function buildCandidateContract({
       data_valid: gatePass,
       last_error: lastError,
       source,
-      fetch_age_ms: Number.isFinite(deep.minFetchAgeMs) ? Math.max(0, Math.trunc(deep.minFetchAgeMs)) : null
+      fetch_age_ms: Number.isFinite(deep.minFetchAgeMs) ? Math.max(0, Math.trunc(deep.minFetchAgeMs)) : null,
+      analysis_candle: {
+        timeframe: '15m',
+        open_time: last15?.openTime ?? null,
+        close_time: last15?.closeTime ?? null,
+        closed: last15?.closed === true,
+        closed_only: true
+      },
+      closed_candle_only: true,
+      excluded_open_candle_count: excludedOpenCandleCount,
+      server_now_ms: deep.completedAt
     },
     paper_trading: true,
     real_order_execution: false
@@ -595,12 +622,14 @@ export class MarketUniverseScanner {
     }
 
     const completedAt=this.clock();
-    const deepSuccess=!error&&['4h','1h','15m'].every(function(tf){return Array.isArray(series[tf])&&series[tf].length>0;});
+    const rawSeries=series;
+    const {series:analysisSeries,excluded:excludedOpenCandles}=closedOnlySeries(rawSeries,completedAt);
+    const deepSuccess=!error&&['4h','1h','15m'].every(function(tf){return Array.isArray(analysisSeries[tf])&&analysisSeries[tf].length>0;});
     const liquidity=this.computeLiquidity(depthRaw,ticker);
-    const validSeries={'4h':Array.isArray(series['4h'])&&validateSeries(series['4h'],'4h').valid,'1h':Array.isArray(series['1h'])&&validateSeries(series['1h'],'1h').valid,'15m':Array.isArray(series['15m'])&&validateSeries(series['15m'],'15m').valid};
-    const future=futureData(['4h','1h','15m'].flatMap(function(tf){return Array.isArray(series[tf])?series[tf]:[];}),completedAt);
-    const staleTimeframes=['4h','1h','15m'].filter(function(tf){const last=latestClosed(series[tf]||[]);return !last||completedAt-Number(last.closeTime)>TIMEFRAME_MS[tf]*2;});
-    const evaluation=evaluateRegisteredStrategies({strategies:listActiveStrategies(),series,depth:depthRaw,ticker,liquidity,future,staleTimeframes,validSeries,now:completedAt,config:this.strategyConfig,overrideEvaluator:this.strategyEvaluator});
+    const validSeries={'4h':Array.isArray(analysisSeries['4h'])&&validateSeries(analysisSeries['4h'],'4h').valid,'1h':Array.isArray(analysisSeries['1h'])&&validateSeries(analysisSeries['1h'],'1h').valid,'15m':Array.isArray(analysisSeries['15m'])&&validateSeries(analysisSeries['15m'],'15m').valid};
+    const future=futureData(['4h','1h','15m'].flatMap(function(tf){return Array.isArray(rawSeries[tf])?rawSeries[tf]:[];}),completedAt);
+    const staleTimeframes=['4h','1h','15m'].filter(function(tf){const last=latestClosed(analysisSeries[tf]||[]);return !last||completedAt-Number(last.closeTime)>TIMEFRAME_MS[tf]*2;});
+    const evaluation=evaluateRegisteredStrategies({strategies:listActiveStrategies(),series:analysisSeries,depth:depthRaw,ticker,liquidity,future,staleTimeframes,validSeries,now:completedAt,config:this.strategyConfig,overrideEvaluator:this.strategyEvaluator});
     const fetchAges = ['4h', '1h', '15m']
       .map(tf => series[tf])
       .filter(Array.isArray)
@@ -612,7 +641,10 @@ export class MarketUniverseScanner {
       ticker,
       deep: {
         success: deepSuccess,
-        series,
+        series: analysisSeries,
+        rawSeries,
+        excludedOpenCandles,
+        future,
         evaluation,
         liquidity,
         sources: {
