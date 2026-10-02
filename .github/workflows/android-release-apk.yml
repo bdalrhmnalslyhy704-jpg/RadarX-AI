@@ -146,7 +146,9 @@ jobs:
           node --check android/app/src/main/assets/radarx-background-control.mjs
           node --check android/app/src/main/assets/radarx-bottom-reversal.mjs
           node --check android/app/src/main/assets/radarx-pre-move.mjs
+          node --check android/app/src/main/assets/radarx-move-radar.mjs
           test -f android/app/src/main/assets/pre-move-radar.html
+          test -f android/app/src/main/assets/move-radar.html
           test -f android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java
           test -f android/app/src/main/java/com/radarx/app/TradliActivity.java
           test -f android/app/src/main/java/com/radarx/app/MainActivity.java
