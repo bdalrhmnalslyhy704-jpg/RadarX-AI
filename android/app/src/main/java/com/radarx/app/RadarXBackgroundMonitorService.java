@@ -128,9 +128,6 @@ public final class RadarXBackgroundMonitorService extends Service {
 
             byte[] body = readAll(connection.getInputStream());
             JSONObject root = new JSONObject(new String(body, StandardCharsets.UTF_8));
-            if (root.optBoolean("meta", false)) {
-                // no-op: retained for compatibility with malformed payloads.
-            }
             JSONObject meta = root.optJSONObject("meta");
             if (meta == null ||
                 !meta.optBoolean("live", false) ||
@@ -282,7 +279,7 @@ public final class RadarXBackgroundMonitorService extends Service {
             open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
-        Notification.Builder builder = new Notification.Builder(this, CHANNEL_ALERTS)
+        Notification.Builder builder = notificationBuilder(CHANNEL_ALERTS)
             .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
             .setContentTitle("RadarX • إنذار ما قبل الاختراق")
             .setContentText(
@@ -305,8 +302,15 @@ public final class RadarXBackgroundMonitorService extends Service {
         }
     }
 
+
+    private Notification.Builder notificationBuilder(String channel) {
+        return Build.VERSION.SDK_INT >= 26
+            ? new Notification.Builder(this, channel)
+            : new Notification.Builder(this);
+    }
+
     private void startAsForeground() {
-        Notification.Builder builder = new Notification.Builder(this, CHANNEL_STATUS)
+        Notification.Builder builder = notificationBuilder(CHANNEL_STATUS)
             .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
             .setContentTitle("RadarX • مراقبة الخلفية")
             .setContentText("يفحص السوق بحثًا عن بصمات ما قبل الاختراق")
