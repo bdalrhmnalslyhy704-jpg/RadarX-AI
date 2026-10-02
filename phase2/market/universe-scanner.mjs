@@ -648,7 +648,8 @@ export function buildBottomMarketContext(series, ticker, now, {book=null, liquid
       taker_buy_ratio:Number.isFinite(recentBuyRatio)?recentBuyRatio:null,
       mtf_alignment:Number.isFinite(mtfAlignmentScore)?mtfAlignmentScore:null,
       bos_up:bosUp,
-      higher_low:hl
+      higher_low:hl,
+      composite_algorithm_score:Number.isFinite(bottomAlgorithmScore)?bottomAlgorithmScore:null
     }
   };
 }
