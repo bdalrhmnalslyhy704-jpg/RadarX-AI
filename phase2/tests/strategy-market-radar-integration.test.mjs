@@ -112,18 +112,18 @@ const scanConfig = {
   maxTriggerAgeMs: 30 * 60 * 1000
 };
 
-test('Integration 1: Registry exposes exactly 11 ACTIVE strategies', () => {
-  assert.equal(ACTIVE.length, 11);
+test('Integration 1: Registry exposes exactly 14 ACTIVE strategies', () => {
+  assert.equal(ACTIVE.length, 14);
   assert.ok(ACTIVE.every(s => s.status === 'ACTIVE' && typeof s.evaluator === 'function'));
 });
 
-test('Integration 2: Market Radar evaluates all 11 Registry strategies', async () => {
+test('Integration 2: Market Radar evaluates all 14 Registry strategies', async () => {
   const result = await new MarketUniverseScanner({
     rest: makeRest(),
     config: scanConfig
   }).scan({quote: 'USDT', limit: 1});
   const candidate = result.candidates[0];
-  assert.equal(candidate.strategies.length, 11);
+  assert.equal(candidate.strategies.length, 14);
   assert.deepEqual(candidate.strategies.map(s => s.id), ACTIVE.map(s => s.id));
   console.log('INTEGRATION_CANDIDATE', JSON.stringify({
     symbol: candidate.symbol,
@@ -136,12 +136,12 @@ test('Integration 2: Market Radar evaluates all 11 Registry strategies', async (
   }));
 });
 
-test('Integration 3: Candidate Contract strategy count is 11', async () => {
+test('Integration 3: Candidate Contract strategy count is 14', async () => {
   const result = await new MarketUniverseScanner({rest: makeRest(), config: scanConfig}).scan({quote: 'USDT', limit: 1});
   const candidate = result.candidates[0];
-  assert.equal(candidate.coverage.strategy_count, 11);
-  assert.equal(candidate.coverage.evaluated_strategy_count, 11);
-  assert.equal(candidate.strategies.length, 11);
+  assert.equal(candidate.coverage.strategy_count, 14);
+  assert.equal(candidate.coverage.evaluated_strategy_count, 14);
+  assert.equal(candidate.strategies.length, 14);
 });
 
 test('Integration 4: Rejected strategies preserve reason_codes, evidence, invalidation and hard-gate status', async () => {
@@ -163,7 +163,7 @@ test('Integration 5: Missing required data yields INSUFFICIENT_DATA without drop
     config: scanConfig
   }).scan({quote: 'USDT', limit: 1});
   const candidate = result.candidates[0];
-  assert.equal(candidate.strategies.length, 11);
+  assert.equal(candidate.strategies.length, 14);
   const insufficient = candidate.strategies.filter(s => s.signal_state === 'INSUFFICIENT_DATA');
   assert.ok(insufficient.length > 0);
   for (const strategy of insufficient) {
