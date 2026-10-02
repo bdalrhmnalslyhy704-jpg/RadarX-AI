@@ -24,6 +24,11 @@ export const MARKET_RADAR_DEFAULTS = Object.freeze({
 
 const sleepDefault = ms => new Promise(resolve => setTimeout(resolve, ms));
 const unique = a => [...new Set(a)];
+const mean = a => a.length ? a.reduce((s, x) => s + Number(x), 0) / a.length : null;
+const avgDefined = (values, fallback = 50) => {
+  const xs = values.filter(Number.isFinite);
+  return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : fallback;
+};
 const clamp = (x, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, Number(x)));
 
 export function normalizeRadarLimit(raw, defaults = MARKET_RADAR_DEFAULTS) {
