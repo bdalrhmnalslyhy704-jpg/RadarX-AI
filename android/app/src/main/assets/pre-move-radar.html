@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#06111f">
+<title>RadarX — Pre‑Move Radar</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;min-height:100vh;background:radial-gradient(circle at 85% -10%,rgba(53,201,255,.16),transparent 32%),linear-gradient(180deg,#06111f,#050a12);color:#eaf5ff;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+main{width:min(1050px,100%);margin:auto;padding:10px 14px 34px}
+header{position:sticky;top:0;z-index:20;margin:0 -14px;padding:calc(9px + env(safe-area-inset-top)) 14px 10px;background:rgba(5,12,22,.94);backdrop-filter:blur(16px);border-bottom:1px solid #1b3851}
+.top{display:flex;align-items:center;justify-content:space-between;gap:10px}.brand{display:flex;align-items:center;gap:9px}.logo{width:41px;height:41px;border-radius:13px;background:linear-gradient(135deg,#35c9ff,#6f68ff);display:grid;place-items:center;color:#04101b;font-weight:1000}.brand b{font-size:16px}.brand small{display:block;color:#8ca5ba;font-size:10px;margin-top:2px}
+.back{display:inline-flex;min-height:42px;align-items:center;padding:0 11px;border:1px solid #2b4e6c;border-radius:11px;text-decoration:none;color:#dff5ff;background:#0b1b2b;font-size:11px;font-weight:950}
+.hero{margin:13px 0;padding:17px;border:1px solid #264864;border-radius:20px;background:linear-gradient(145deg,#0c1d31,#091524)}h1{margin:0;font-size:21px}.hero p{margin:7px 0 0;color:#8fa8bd;line-height:1.7;font-size:12px}
+.pill{display:inline-flex;align-items:center;gap:6px;margin-top:11px;padding:7px 10px;border:1px solid #2c8065;border-radius:999px;background:#0d251f;color:#b8f3dd;font-size:10px;font-weight:950}.dot{width:7px;height:7px;border-radius:50%;background:#43e0a3;box-shadow:0 0 10px #43e0a3}
+.toolbar{display:flex;gap:8px;position:sticky;top:61px;z-index:10;padding:8px 0;background:linear-gradient(180deg,#07111d 75%,transparent)}button,select{font:inherit}#scan{flex:1;min-height:46px;border:1px solid #36b4e6;border-radius:13px;background:linear-gradient(135deg,#35c9ff,#6f68ff);color:#04111d;font-weight:1000}#limit{width:105px;min-height:46px;border:1px solid #294c69;border-radius:13px;background:#0b1c2d;color:#eaf5ff;padding:0 9px;font-weight:900}
+.status{padding:11px 12px;border:1px solid #1d3e58;border-radius:14px;background:#091624;margin:8px 0;font-size:11px;color:#94abc0;line-height:1.6}.status b{color:#fff}
+.cards{display:grid;gap:10px}.empty{padding:22px;border:1px dashed #29485f;border-radius:16px;color:#8fa6ba;text-align:center;line-height:1.8}
+.card{border:1px solid #20425c;border-radius:17px;padding:13px;background:linear-gradient(145deg,#0b1928,#08121e)}.head{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}.sym{font-size:17px;font-weight:1000}.price{color:#90a7ba;font-size:10px;margin-top:3px}.score{font-size:23px;font-weight:1000}.badge{display:inline-flex;margin-top:4px;padding:5px 8px;border-radius:999px;border:1px solid #335670;font-size:9px;font-weight:950}.good{color:#baf4dc;border-color:#2f8b6a;background:#0e251f}.watch{color:#ffe0a0;border-color:#8c7138;background:#211b0d}.late{color:#ffb1b1;border-color:#88454d;background:#241114}.muted{color:#afc0cd}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:7px;margin-top:10px}.box{padding:9px;border:1px solid #17364d;border-radius:11px;background:#07111c}.box span{display:block;color:#718ba2;font-size:9px}.box b{display:block;margin-top:4px;font-size:13px}.box small{display:block;color:#89a2b6;margin-top:3px;font-size:9px}
+.reasons{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}.reason{padding:5px 7px;border:1px solid #294b63;border-radius:999px;background:#07111c;color:#c9d9e5;font-size:8px}
+.meters{margin-top:9px;display:grid;grid-template-columns:1fr 1fr;gap:7px}.meter{padding:8px;border:1px solid #17364d;border-radius:11px;background:#07111c}.meter span{display:block;color:#718ba2;font-size:8px}.track{height:5px;margin-top:6px;border-radius:99px;background:#132a3b;overflow:hidden}.track i{display:block;height:100%;background:linear-gradient(90deg,#35c9ff,#6f68ff)}.meter b{display:block;margin-top:3px;font-size:12px}
+.note{margin-top:10px;color:#70879b;font-size:9px;line-height:1.7}
+@media(max-width:650px){.grid,.meters{grid-template-columns:1fr}.toolbar{top:59px}#limit{width:92px}}
+</style>
+</head>
+<body>
+<main>
+<header><div class="top"><div class="brand"><div class="logo">PM</div><div><b>Pre‑Move Radar</b><small>قبل الحركة • الفجر → الظهر • Spot</small></div></div><a class="back" href="./index.html">← RadarX</a></div></header>
+<section class="hero">
+  <h1>رادار ما قبل الحركة</h1>
+  <p>لا يطارد العملات التي ارتفعت بالفعل. يقارن قوة العملة بالسوق منذ بداية جلسة الصباح في اليمن، ويراقب تسارع الحجم وتدفق الشراء والانكماش والهيكل والسيولة، ثم يرتب «الاستعداد» للمراقبة.</p>
+  <span class="pill"><span class="dot"></span> LIVE • ASIA/ADEN • PAPER ONLY</span>
+</section>
+<div class="toolbar"><button id="scan">افحص من قد يستيقظ مبكرًا</button><select id="limit"><option value="20">20</option><option value="30" selected>30</option><option value="40">40</option><option value="50">50</option></select></div>
+<div id="status" class="status"><b>جاهز</b> — هذا الرادار يبحث عن الاستيقاظ قبل الاندفاع، وليس عن أعلى العملات ارتفاعًا.</div>
+<div id="cards" class="cards"><div class="empty">لم يبدأ الفحص بعد.</div></div>
+<div class="note">النتيجة مؤشر مراقبة مبني على بيانات السوق الحالية وشموع مغلقة فقط. «ضغط الحيتان» الموجود ضمن المكونات استدلال من دفتر الأوامر وليس معرفة بهوية أي حوت، ولا يوجد توقع مضمون للسعر.</div>
+<script type="module">
+import {getPreMoveRadar} from './radarx-backend-client.mjs';
+import {rankPreMoveCandidates,stageLabel,stageClass} from './radarx-pre-move.mjs';
+
+const scan=document.getElementById('scan');
+const limit=document.getElementById('limit');
+const status=document.getElementById('status');
+const cards=document.getElementById('cards');
+let busy=false;
+function fmt(n){if(!Number.isFinite(Number(n)))return '—';const x=Number(n);return x>=1?x.toFixed(4):x.toPrecision(5)}
+function pct(n){return Number.isFinite(Number(n))?Number(n).toFixed(2)+'%':'—'}
+function num(n,d='—'){return Number.isFinite(Number(n))?Number(n).toFixed(1):d}
+function meter(label,v){const x=Math.max(0,Math.min(100,Number(v)||0));return '<div class="meter"><span>'+label+'</span><b>'+x.toFixed(0)+'</b><div class="track"><i style="width:'+x+'%"></i></div></div>'}
+function render(rows,meta){
+ if(!rows.length){cards.innerHTML='<div class="empty">لم يصل أي مرشح صالح بجودة بيانات كافية.</div>';return;}
+ cards.innerHTML=rows.map((x,i)=>{
+   const p=x;
+   const comp=p.components||{};
+   return '<article class="card">'+
+    '<div class="head"><div><div class="sym">'+(i+1)+'. '+p.symbol+'</div><div class="price">السعر '+fmt(p.price)+' • 24h '+pct(p.change24h)+'</div></div><div style="text-align:left"><div class="score">'+p.score.toFixed(1)+'</div><span class="badge '+stageClass(p.stage)+'">'+stageLabel(p.stage)+'</span></div></div>'+
+    '<div class="grid">'+
+      '<div class="box"><span>حركة جلسة الصباح</span><b>'+pct(p.sessionReturn)+'</b><small>من 04:00 بتوقيت اليمن</small></div>'+
+      '<div class="box"><span>قوة نسبية للسوق</span><b>'+pct(p.relativeStrength)+'</b><small>فوق/تحت متوسط السوق</small></div>'+
+      '<div class="box"><span>تسارع الحجم</span><b>'+num(p.volumeAcceleration, '—')+'×</b><small>آخر نافذة مقابل خط الأساس</small></div>'+
+      '<div class="box"><span>Taker Buy</span><b>'+pct((p.takerBuyRatio||0)*100)+'</b><small>نسبة الشراء في آخر النوافذ</small></div>'+
+      '<div class="box"><span>تسارع تدفق الشراء</span><b>'+pct((p.takerAcceleration||0)*100)+'</b><small>التغير في النسبة</small></div>'+
+      '<div class="box"><span>المسافة للمقاومة</span><b>'+pct(p.resistanceDistance)+'</b><small>كلما اقتربت زاد احتياج التأكيد</small></div>'+
+    '</div>'+
+    '<div class="meters">'+
+      meter('الهدوء / عدم المبالغة',comp.calm)+meter('التسارع الجديد',comp.acceleration)+
+      meter('القوة النسبية',comp.relative_strength)+meter('الانكماش',comp.squeeze)+
+      meter('الهيكل',comp.structure)+meter('ضغط الحيتان',comp.whale_pressure)+
+    '</div>'+
+    '<div class="reasons">'+p.reasons.map(r=>'<span class="reason">'+r+'</span>').join('')+'</div>'+
+    '<div class="note">موقع السعر في الجلسة '+num(p.sessionPosition)+'% • ضد BTC '+pct(p.relativeStrengthBtc)+' • 4h/1h/15m مغلقة: '+(p.closedCandlesOnly?'نعم':'لا')+'</div>'+
+   '</article>';
+ }).join('');
+}
+async function run(){
+ if(busy)return;busy=true;scan.disabled=true;scan.textContent='جاري الفحص…';
+ status.innerHTML='<b>فحص حي</b> — نبحث عن عملات هادئة بدأ حجمها وتدفقها وهيكلها يتحسن…';
+ try{
+   const r=await getPreMoveRadar({quote:'USDT',limit:Number(limit.value)||30});
+   if(!r.ok||!r.body)throw new Error(r.body?.error||'PRE_MOVE_RADAR_UNAVAILABLE');
+   const rows=rankPreMoveCandidates(r.body);
+   const s=r.body.session||{};
+   status.innerHTML='<b>تم التحديث</b> — '+rows.length+' مرشحًا • قوة السوق الصباحية '+num(s.positive_breadth_pct)+'% موجبة • متوسط الجلسة '+pct(s.market_median_return_pct)+' • BTC '+pct(s.btc_return_pct);
+   render(rows,r.body);
+ }catch(e){
+   status.innerHTML='<b>تعذر الفحص</b> — '+String(e.message||e)+' • تحقق من الإنترنت ثم أعد المحاولة.';
+   cards.innerHTML='<div class="empty">لم تصل بيانات صالحة من Backend.</div>';
+ }finally{busy=false;scan.disabled=false;scan.textContent='افحص من قد يستيقظ مبكرًا';}
+}
+scan.addEventListener('click',run);
+setTimeout(run,350);
+</script>
+</main>
+</body>
+</html>
