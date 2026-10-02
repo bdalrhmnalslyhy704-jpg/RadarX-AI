@@ -130,7 +130,7 @@ function subscriptionValid(x){
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null}){
   const counters=new Map();
   const originList=config.auth.allowedOrigins;
   const marketRadar = monitor?.rest ? new MarketUniverseScanner({
@@ -160,9 +160,29 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(!rateOk(key))return send(res,429,{error:'RATE_LIMITED'});
     try{
       const u=new URL(req.url,'http://localhost');
-      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,monitor.health());
+      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false}});
       if(u.pathname==='/readyz'&&req.method==='GET'){
         const h=monitor.health(),ok=h.database.state==='LIVE'&&(h.websocket.state==='LIVE'||h.rest.state==='LIVE');return send(res,ok?200:503,{ready:ok,health:h});
+      }
+      if(u.pathname==='/api/move-radar'&&req.method==='GET'){
+        if(!moveSentinel)return send(res,503,{error:'MOVE_RADAR_UNAVAILABLE'});
+        const sinceRaw=Number(u.searchParams.get('since')||0);
+        const limit=Math.max(1,Math.min(100,Math.trunc(Number(u.searchParams.get('limit')||50))));
+        try{
+          const alerts=typeof store.readMoveAlerts==='function'
+            ? await store.readMoveAlerts({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit})
+            : [];
+          return send(res,200,{
+            meta:{live:moveSentinel.health().running===true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MOVE_RADAR'},
+            source:'Binance Public REST/WS',
+            as_of:new Date(Date.now()).toISOString(),
+            monitoring:moveSentinel.health(),
+            thresholds:{move_pct:config.moveRadar.thresholdPct,market:'SPOT'},
+            alerts
+          });
+        }catch(e){
+          return send(res,503,{error:String(e?.message??e),alerts:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MOVE_RADAR'}});
+        }
       }
       if(u.pathname==='/api/pre-move-radar'&&req.method==='GET'){
         if(!marketRadar)return send(res,503,{error:'PRE_MOVE_RADAR_UNAVAILABLE'});
