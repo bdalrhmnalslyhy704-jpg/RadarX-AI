@@ -1,4 +1,4 @@
-import test from 'node:test';
+// Support/resistance validation: closed 15m candles only.\nimport test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   evaluateSupportResistanceConfirmation
