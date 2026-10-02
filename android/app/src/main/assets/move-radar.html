@@ -20,8 +20,8 @@ main{width:min(960px,100%);margin:auto;padding:10px 14px 30px}.top{position:stic
 </head>
 <body>
 <main>
-<div class="top"><div class="head"><div class="brand"><b>🚨 24H Move Radar</b><small>مراقبة الحركة من ±1% • Spot • 24/7 Backend</small></div><a class="back" href="./index.html">← RadarX</a></div></div>
-<section class="hero"><h1>رادار الحركة المبكرة</h1><p>لا يطارد +30%. يلتقط أول عبور حقيقي لعتبة الحركة، ثم يفحص العملة بترابط الاستراتيجيات وعوامل الحجم والسيولة والهيكل والانكماش والتدفق قبل إصدار التنبيه.</p><span class="live">● LIVE MARKET • PAPER ONLY</span></section>
+<div class="top"><div class="head"><div class="brand"><b>🚨 Pre-Explosion Radar</b><small>اكتشاف ما قبل الانفجار • Spot • 24/7 Backend</small></div><a class="back" href="./index.html">← RadarX</a></div></div>
+<section class="hero"><h1>رادار ما قبل الانفجار</h1><p>لا ينتظر +1%. يبحث أولًا عن العملات التي لم تتمدد، ثم يفحصها بعمق عبر الزخم والحجم والشراء وTaker Flow والهيكل والانكماش والسيولة وتوافق الاستراتيجيات قبل إرسال التنبيه.</p><span class="live">● LIVE MARKET • PAPER ONLY</span></section>
 <div class="toolbar"><button id="refresh">تحديث التنبيهات</button></div>
 <div id="status" class="status"><b>جاري الاتصال</b> — تحميل حالة مراقبة السوق.</div>
 <div id="cards" class="cards"><div class="empty">لا توجد تنبيهات جديدة.</div></div>
@@ -52,13 +52,13 @@ async function load(){
   const since=Number(localStorage.getItem('radarx_move_cursor')||0);
   const r=await getMoveRadar({limit:50,since});
   if(!r.ok||!r.body)throw new Error(r.body?.error||'MOVE_RADAR_UNAVAILABLE');
-  const rows=normalizeMoveAlerts(r.body);
+  const rows=normalizeMoveAlerts(r.body).filter(a=>a.event==='PRE_EXPLOSION_ALERT' && Number(a.movePct)<=1.25);
   if(rows.length){
    const newest=Math.max(...rows.map(x=>Number(x.processed_at)||0));
    if(newest) localStorage.setItem('radarx_move_cursor',String(newest));
   }
   const m=r.body.monitoring||{};
-  status.innerHTML='<b>مباشر</b> — الخادم يراقب '+(m.universe||0)+' عملة • WebSocket '+(m.websocket?.state||'UNKNOWN')+' • تنبيهات مستلمة '+rows.length;
+  status.innerHTML='<b>مباشر</b> — الخادم يفحص المرشحين الهادئين ثم يرسل '+(m.universe||0)+' عملة • WebSocket '+(m.websocket?.state||'UNKNOWN')+' • تنبيهات مستلمة '+rows.length;
   render(rows);
  }catch(e){
   status.innerHTML='<b>لا يوجد اتصال حاليًا</b> — '+String(e.message||e);
