@@ -310,6 +310,19 @@ public final class MainActivity extends Activity {
                 }
             });
         }
+
+        @JavascriptInterface
+        public void openBottomRadar() {
+            runOnUiThread(() -> {
+                try {
+                    Intent intent = new Intent(MainActivity.this, BottomRadarActivity.class);
+                    startActivity(intent);
+                } catch (Exception error) {
+                    Log.e("RadarXBottomRadar", "Unable to open Bottom Radar", error);
+                    Toast.makeText(MainActivity.this, "تعذر فتح Bottom Radar", Toast.LENGTH_LONG).show();
+                }
+            });
+        }
     }
 
     private static final class RadarXSmokeBridge {
