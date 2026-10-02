@@ -127,8 +127,8 @@ public final class RadarXBackgroundMonitorService extends Service {
     private void startAsForeground() {
         Notification.Builder builder = notificationBuilder(CHANNEL_STATUS)
             .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
-            .setContentTitle("RadarX • مراقبة الخلفية")
-            .setContentText("يفحص السوق بحثًا عن بصمات ما قبل الاختراق")
+            .setContentTitle("RadarX • Move Radar 24/7")
+            .setContentText("يتابع تنبيهات حركة السوق من Backend حتى عند إغلاق التطبيق")
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .setColor(Color.rgb(53, 201, 255))
@@ -167,13 +167,13 @@ public final class RadarXBackgroundMonitorService extends Service {
         NotificationChannel status = new NotificationChannel(
             CHANNEL_STATUS, "RadarX Background Monitor", NotificationManager.IMPORTANCE_LOW
         );
-        status.setDescription("حالة مراقبة السوق في الخلفية");
+        status.setDescription("حالة متابعة رادار الحركة في الخلفية");
         manager.createNotificationChannel(status);
 
         NotificationChannel alerts = new NotificationChannel(
-            CHANNEL_ALERTS, "RadarX Pre-Breakout Alerts", NotificationManager.IMPORTANCE_HIGH
+            CHANNEL_ALERTS, "RadarX Move Alerts", NotificationManager.IMPORTANCE_HIGH
         );
-        alerts.setDescription("تنبيهات إنذار مبكر قبل اختراق محتمل");
+        alerts.setDescription("تنبيهات الحركة المبكرة الناتجة عن الفحص متعدد الاستراتيجيات");
         manager.createNotificationChannel(alerts);
     }
 
