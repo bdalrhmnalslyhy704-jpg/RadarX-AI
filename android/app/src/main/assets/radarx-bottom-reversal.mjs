@@ -106,13 +106,6 @@ export function scoreBottomCandidate(c){
     ? clamp(50 - change*6 + (change<0 ? 18 : change<=2 ? 6 : 0))
     : 35;
 
-  const sellingExhaustion=avgDefined([
-    evidenceScore(c,'structure'),
-    evidenceScore(c,'compression'),
-    scoreOf(c,'MEAN_REVERSION'),
-    scoreOf(c,'BOLLINGER_BAND_REVERSION')
-  ],45);
-
   const buyingPressure=avgDefined([
     Number(metrics.buying_pressure),
     Number(metrics.orderbook_imbalance),
