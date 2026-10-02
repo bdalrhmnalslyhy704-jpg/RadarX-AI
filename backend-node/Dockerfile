@@ -5,7 +5,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-COPY server.mjs engine.mjs ./
+COPY server.mjs engine.mjs readiness.mjs freshness.mjs ./
 
 ENV NODE_ENV=production
 
