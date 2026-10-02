@@ -914,6 +914,9 @@ export function buildCandidateContract({
     ...(deep.evaluation?.signal?.risk_reasons || [])
   ].filter(Boolean);
 
+  const bottomContext=buildBottomMarketContext(series, ticker, deep.completedAt, {book: deep.depth, liquidity});
+  const preMoveContext=buildPreMoveContext(series, ticker, deep.completedAt, bottomContext);
+
   const evidence = [
     { type: 'market', code: 'QUOTE_VOLUME_24H', value: ticker.quoteVolume24h },
     { type: 'market', code: 'TRADE_COUNT_24H', value: ticker.tradeCount24h },
@@ -947,7 +950,8 @@ export function buildCandidateContract({
     high_price_24h: ticker.highPrice24h,
     low_price_24h: ticker.lowPrice24h,
     quote_volume_24h: ticker.quoteVolume24h,
-    bottom_context: buildBottomMarketContext(series, ticker, deep.completedAt, {book: deep.depth, liquidity}),
+    bottom_context: bottomContext,
+    pre_move_context: preMoveContext,
     liquidity_quality: Math.round(Number(liquidity.quality) * 100) / 100,
     data_quality: dataQuality,
     confidence_score: 'UNKNOWN',
@@ -1216,6 +1220,64 @@ export class MarketUniverseScanner {
     });
 
     return candidate;
+  }
+
+  async scanPreMove({ quote = this.config.quote, limit = 30 } = {}) {
+    const startedAt=this.clock();
+    const normalizedQuote=String(quote||this.config.quote).trim().toUpperCase();
+    if(!/^[A-Z]{2,10}$/.test(normalizedQuote)) throw new Error('INVALID_QUOTE');
+    this._requests=new Map();
+
+    const info=await this.exchangeInfo(normalizedQuote);
+    const universe=buildSpotUniverse(info.data,normalizedQuote);
+    const tickerResponse=await this.ticker24h();
+    const normalizedLimit=Math.min(50,Math.max(10,normalizeRadarLimit(limit,{...this.config,maxScanLimit:50,scanLimit:30})));
+    const discovery=rankPreMoveTickerRows(tickerResponse.data,universe,{
+      minQuoteVolume24h:this.config.minQuoteVolume24h,
+      limit:Math.min(40,normalizedLimit+10)
+    });
+    const scanned=await boundedMap(
+      discovery,
+      this.config.deepConcurrency,
+      (ticker,i)=>this.scanSymbol(ticker,i+1,{exchangeInfo:info.source,ticker:tickerResponse.source})
+    );
+    const valid=scanned.filter(Boolean).filter(x=>x.data_status?.data_valid===true&&Number.isFinite(Number(x.pre_move_context?.session_return_pct)));
+    const returns=valid.map(x=>Number(x.pre_move_context.session_return_pct)).filter(Number.isFinite);
+    const marketMedianReturn=returns.length?([...returns].sort((a,b)=>a-b)[Math.floor(returns.length/2)]):null;
+    const btcReturn=Number(valid.find(x=>x.symbol==='BTCUSDT')?.pre_move_context?.session_return_pct);
+    const positiveCount=returns.filter(x=>x>0).length;
+    const enriched=valid.map(x=>{
+      const ctx=x.pre_move_context;
+      const relReturn=Number.isFinite(marketMedianReturn)?Number(ctx.session_return_pct)-marketMedianReturn:null;
+      const relScore=Number.isFinite(relReturn)?clamp(50+relReturn*18):Number.isFinite(btcReturn)?clamp(50+(Number(ctx.session_return_pct)-btcReturn)*18):50;
+      const components={...ctx.components,relative_strength:relScore};
+      const score=avgDefined(Object.values(components),45);
+      const alreadyMoved=ctx.already_moved===true;
+      const stage=alreadyMoved?'ALREADY_MOVED':
+        score>=82&&Number(ctx.session_return_pct)<=6?'READY':
+        score>=72?'EARLY_WAKE':
+        score>=62?'QUIET_BUILD':'NO_SETUP';
+      const reasons=[...(ctx.reasons||[])];
+      if(Number.isFinite(relReturn)&&relReturn>=1&&!reasons.includes('RELATIVE_STRENGTH'))reasons.push('RELATIVE_STRENGTH');
+      return {...x,pre_move_context:{
+        ...ctx,
+        market_median_return_pct:Number.isFinite(marketMedianReturn)?marketMedianReturn:null,
+        relative_strength_vs_market_pct:Number.isFinite(relReturn)?relReturn:null,
+        relative_strength_vs_btc_pct:Number.isFinite(btcReturn)?Number(ctx.session_return_pct)-btcReturn:null,
+        score:Math.round(clamp(score)*10)/10,
+        stage,
+        reasons:[...new Set(reasons)]
+      }};
+    }).sort((a,b)=>Number(b.pre_move_context.score)-Number(a.pre_move_context.score)||Number(a.pre_move_context.session_return_pct)-Number(b.pre_move_context.session_return_pct));
+    const returned=enriched.slice(0,Math.min(10,normalizedLimit));
+    return {
+      meta:{live:returned.length>0,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PRE_MOVE'},
+      as_of:new Date(this.clock()).toISOString(),
+      source:'Binance Public REST',
+      session:{timezone:'Asia/Aden',window:'04:00–12:00 local',market_median_return_pct:marketMedianReturn,btc_return_pct:Number.isFinite(btcReturn)?btcReturn:null,positive_breadth_pct:returns.length?positiveCount/returns.length*100:null},
+      universe:{requested:normalizedLimit,discovered:discovery.length,scanned:valid.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,elapsed_ms:Math.max(0,this.clock()-startedAt)},
+      candidates:returned
+    };
   }
 
   async scan({ quote = this.config.quote, limit = this.config.scanLimit } = {}) {
