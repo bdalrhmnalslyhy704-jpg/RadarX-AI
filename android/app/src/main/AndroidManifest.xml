@@ -23,6 +23,12 @@
             android:foregroundServiceType="dataSync" />
 
         <activity
+            android:name=".TradliActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:exported="true"
