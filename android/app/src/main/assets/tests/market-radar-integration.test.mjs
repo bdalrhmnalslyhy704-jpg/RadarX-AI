@@ -102,7 +102,7 @@ const validMarkup=buildCandidateMarkup(fresh,0);
 assert.match(validMarkup,/BTCUSDT/);
 assert.match(validMarkup,/عرض التفاصيل/);
 assert.match(validMarkup,/Score/);
-assert.match(validMarkup,/Pre-Breakout Fingerprint/);
+assert.match(validMarkup,/PRE BREAKOUT/);
 assert.match(validMarkup,/Trap/);
 assert.match(validMarkup,/6 \/ 8/);
 
