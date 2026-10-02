@@ -382,3 +382,5 @@ test('Pre-Move Radar detects quiet early acceleration instead of chasing large 2
   assert.ok(ctx.reasons.includes('NOT_EXTENDED'));
   assert.ok(ctx.components.acceleration>=50);
 });
+
+// PRE_MOVE_RADAR_CI_TRIGGER
