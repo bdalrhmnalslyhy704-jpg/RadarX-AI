@@ -6,6 +6,7 @@ import {
 import {listActiveStrategies, normalizeStrategyResult} from '../../phase1/strategy-registry.mjs';
 import {FUTURE_DATA_CLOCK_SKEW_MS, futureIssues, normalizeEpochMs, timestampUnit} from '../core/data-quality.mjs';
 
+// Market Radar hardening: parallel fetches + closed-candle-only analysis.
 export const MARKET_RADAR_DEFAULTS = Object.freeze({
   quote: 'USDT',
   scanLimit: 20,
