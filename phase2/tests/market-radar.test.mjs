@@ -1,7 +1,7 @@
 /* Bottom Radar v2 regression coverage: live flow, squeeze, structure, whale heuristic. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {MarketUniverseScanner, buildSpotUniverse, rankTickerRows, boundedMap, normalizeRadarLimit, normalizeTickerRow, buildBottomMarketContext} from '../market/universe-scanner.mjs';
+import {MarketUniverseScanner, buildSpotUniverse, rankTickerRows, boundedMap, normalizeRadarLimit, normalizeTickerRow, buildBottomMarketContext, buildPreMoveContext, rankPreMoveTickerRows} from '../market/universe-scanner.mjs';
 
 function candle(t, close=100, tfMs=900000) {
   return {
