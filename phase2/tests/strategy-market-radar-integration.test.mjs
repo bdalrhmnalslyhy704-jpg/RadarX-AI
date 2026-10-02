@@ -163,7 +163,7 @@ test('Integration 5: Missing required data yields INSUFFICIENT_DATA without drop
     config: scanConfig
   }).scan({quote: 'USDT', limit: 1});
   const candidate = result.candidates[0];
-  assert.equal(candidate.strategies.length, 11);
+  assert.equal(candidate.strategies.length, 14);
   const insufficient = candidate.strategies.filter(s => s.signal_state === 'INSUFFICIENT_DATA');
   assert.ok(insufficient.length > 0);
   for (const strategy of insufficient) {
