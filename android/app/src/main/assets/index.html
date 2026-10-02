@@ -22,6 +22,7 @@ header{position:sticky;top:0;z-index:10;margin:0 -14px 10px;padding:calc(10px + 
 .rx-nav-card{margin:12px 0;padding:14px;border:1px solid #244766;border-radius:18px;background:linear-gradient(145deg,#0d2034,#0a1523);display:flex;align-items:center;justify-content:space-between;gap:12px}
 .rx-nav-card b{font-size:14px}.rx-nav-card small{display:block;color:#8ea7bd;line-height:1.6;margin-top:3px;font-size:10px}
 .rx-nav-link{display:inline-flex;align-items:center;justify-content:center;min-width:132px;min-height:44px;border-radius:12px;text-decoration:none;background:linear-gradient(135deg,#35c9ff,#6c68ff);color:#04111d;font-size:11px;font-weight:1000}
+.rx-nav-link.secondary{background:linear-gradient(135deg,#172a42,#22385d);color:#dff5ff;border-color:#345a7a}
 @media(max-width:560px){.rx-nav-card{align-items:stretch;flex-direction:column}.rx-nav-link{width:100%}}
 
 main{width:min(980px,100%);margin:auto;padding:env(safe-area-inset-top) 14px calc(28px + env(safe-area-inset-bottom))}
@@ -37,10 +38,8 @@ footer{padding:18px 4px;text-align:center;color:#8fa8b2;font-size:12px}
 <p style="color:#8fa8b2">تعذر تحميل الواجهة. أعد المحاولة.</p>
 <button id="retryApp" type="button">إعادة المحاولة</button>
 </section>
-<section class="rx-nav-card">
-  <div><b>🧠 TRADLI Intelligence</b><small>صفحة مستقلة للتحليل المتقدم: Chart Lab • Verify • Advisor • Signals Hub • Supply/Demand • Order Desk</small></div>
-  <a id="openTradliBtn" class="rx-nav-link" href="./tradli.html">فتح TRADLI</a>
-</section>
+<div class="rx-nav-card"><div><b>🧠 TRADLI Intelligence</b><small>صفحة مستقلة للتحليل المتقدم: Chart Lab • Verify • Advisor • Signals Hub • Supply/Demand • Order Desk</small></div><a id="openTradliBtn" class="rx-nav-link" href="./tradli.html">فتح TRADLI</a></div>
+<section class="rx-nav-card"><div><b>🎯 Bottom Reversal Radar</b><small>يفحص العملات الهابطة ويقارن الضغط البيعي والشراء والزخم والانكماش والهيكل عبر 10 عوامل.</small></div><a id="openBottomRadarBtn" class="rx-nav-link secondary" href="./bottom-radar.html">فحص القيعان</a></section>
 <div id="marketRadarPanel" aria-label="RadarX Dashboard"></div>
 <div id="backgroundMonitorPanel" aria-label="RadarX Background Monitor"></div>
 <div id="tradliSuitePanel" aria-label="RadarX Intelligence Suite"></div>
