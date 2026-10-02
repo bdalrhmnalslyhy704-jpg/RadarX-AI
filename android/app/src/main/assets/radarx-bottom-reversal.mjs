@@ -1,3 +1,4 @@
+// Bottom Radar release hardening: fast native entry + fallback scan.
 const clamp=(n,min=0,max=100)=>Math.max(min,Math.min(max,Number(n)||0));
 const scoreOf=(c,id)=> {
   const row=(c?.strategies||[]).find(x=>String(x.id).toUpperCase()===id);
