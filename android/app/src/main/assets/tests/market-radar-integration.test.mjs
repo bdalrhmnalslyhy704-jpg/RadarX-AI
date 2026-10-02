@@ -182,7 +182,7 @@ assert.match(indexHtml,/mountBackgroundMonitorControl/);
 assert.match(bgControl,/تشغيل في الخلفية/);
 assert.match(bgControl,/Pre-Breakout Guard/);
 assert.match(mainActivity,/startBackgroundMonitor/);
-assert.equal(mainActivity.includes('setReadTimeout(30000)'),true);
+assert.equal(mainActivity.includes('setReadTimeout(60000)'),true);
 assert.match(tradliActivity,/TRADLI — AI Trading Analysis/);
 assert.equal(tradliActivity.includes('setReadTimeout(30000)'),true);
 assert.match(manifest,/TradliActivity/);
