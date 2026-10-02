@@ -177,6 +177,24 @@ function latestClosed(candles) {
   return index >= 0 ? candles[index] : null;
 }
 
+function closedOnlySeries(series, now) {
+  const out = {};
+  const excluded = {};
+  for (const tf of ['4h','1h','15m']) {
+    const rows = Array.isArray(series?.[tf]) ? series[tf] : [];
+    out[tf] = rows
+      .filter(c => {
+        const openTime = Number(c?.openTime);
+        const closeTime = Number(c?.closeTime);
+        return Number.isFinite(openTime) && Number.isFinite(closeTime) &&
+          openTime < closeTime && closeTime <= now;
+      })
+      .map(c => ({...c, closed: true}));
+    excluded[tf] = Math.max(0, rows.length - out[tf].length);
+  }
+  return {series:out, excluded};
+}
+
 function freshnessMs(candles, fetchedAt) {
   const last = latestClosed(candles);
   if (!last) return Infinity;
@@ -579,15 +597,25 @@ export class MarketUniverseScanner {
     let error = null;
 
     try {
-      for (const tf of ['4h', '1h', '15m']) {
-        const r = await this.fetchSeries(ticker.symbol, tf);
-        const fetchedAt = Number(r.receivedAt) || this.clock();
-        series[tf] = Array.isArray(r.candles)
-          ? r.candles.map(c => ({ ...c, symbol: ticker.symbol, timeframe: tf }))
-          : normalizeRawKlines(r.data, r.source, fetchedAt);
-        if (r.source) klinesSources.push(r.source);
+      const timeframes = ['4h', '1h', '15m'];
+      const [seriesRows, depth] = await Promise.all([
+        Promise.all(timeframes.map(async tf => {
+          const r = await this.fetchSeries(ticker.symbol, tf);
+          const fetchedAt = Number(r.receivedAt) || this.clock();
+          return {
+            tf,
+            source: r.source || null,
+            candles: Array.isArray(r.candles)
+              ? r.candles.map(c => ({ ...c, symbol: ticker.symbol, timeframe: tf }))
+              : normalizeRawKlines(r.data, r.source, fetchedAt)
+          };
+        })),
+        this.fetchDepth(ticker.symbol)
+      ]);
+      for (const row of seriesRows) {
+        series[row.tf] = row.candles;
+        if (row.source) klinesSources.push(row.source);
       }
-      const depth = await this.fetchDepth(ticker.symbol);
       depthRaw = depth?.data ?? depth;
       depthSource = depth?.source ?? null;
     } catch (e) {
@@ -595,12 +623,14 @@ export class MarketUniverseScanner {
     }
 
     const completedAt=this.clock();
-    const deepSuccess=!error&&['4h','1h','15m'].every(function(tf){return Array.isArray(series[tf])&&series[tf].length>0;});
+    const rawSeries=series;
+    const {series:analysisSeries,excluded:excludedOpenCandles}=closedOnlySeries(rawSeries,completedAt);
+    const deepSuccess=!error&&['4h','1h','15m'].every(function(tf){return Array.isArray(analysisSeries[tf])&&analysisSeries[tf].length>0;});
     const liquidity=this.computeLiquidity(depthRaw,ticker);
-    const validSeries={'4h':Array.isArray(series['4h'])&&validateSeries(series['4h'],'4h').valid,'1h':Array.isArray(series['1h'])&&validateSeries(series['1h'],'1h').valid,'15m':Array.isArray(series['15m'])&&validateSeries(series['15m'],'15m').valid};
-    const future=futureData(['4h','1h','15m'].flatMap(function(tf){return Array.isArray(series[tf])?series[tf]:[];}),completedAt);
-    const staleTimeframes=['4h','1h','15m'].filter(function(tf){const last=latestClosed(series[tf]||[]);return !last||completedAt-Number(last.closeTime)>TIMEFRAME_MS[tf]*2;});
-    const evaluation=evaluateRegisteredStrategies({strategies:listActiveStrategies(),series,depth:depthRaw,ticker,liquidity,future,staleTimeframes,validSeries,now:completedAt,config:this.strategyConfig,overrideEvaluator:this.strategyEvaluator});
+    const validSeries={'4h':Array.isArray(analysisSeries['4h'])&&validateSeries(analysisSeries['4h'],'4h').valid,'1h':Array.isArray(analysisSeries['1h'])&&validateSeries(analysisSeries['1h'],'1h').valid,'15m':Array.isArray(analysisSeries['15m'])&&validateSeries(analysisSeries['15m'],'15m').valid};
+    const future=futureData(['4h','1h','15m'].flatMap(function(tf){return Array.isArray(rawSeries[tf])?rawSeries[tf]:[];}),completedAt);
+    const staleTimeframes=['4h','1h','15m'].filter(function(tf){const last=latestClosed(analysisSeries[tf]||[]);return !last||completedAt-Number(last.closeTime)>TIMEFRAME_MS[tf]*2;});
+    const evaluation=evaluateRegisteredStrategies({strategies:listActiveStrategies(),series:analysisSeries,depth:depthRaw,ticker,liquidity,future,staleTimeframes,validSeries,now:completedAt,config:this.strategyConfig,overrideEvaluator:this.strategyEvaluator});
     const fetchAges = ['4h', '1h', '15m']
       .map(tf => series[tf])
       .filter(Array.isArray)
@@ -612,7 +642,9 @@ export class MarketUniverseScanner {
       ticker,
       deep: {
         success: deepSuccess,
-        series,
+        series: analysisSeries,
+        rawSeries,
+        excludedOpenCandles,
         evaluation,
         liquidity,
         sources: {
