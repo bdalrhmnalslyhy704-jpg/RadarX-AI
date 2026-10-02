@@ -157,8 +157,8 @@ public final class MainActivity extends Activity {
             }
             connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("GET");
-            connection.setConnectTimeout(8000);
-            connection.setReadTimeout(8000);
+            connection.setConnectTimeout(12000);
+            connection.setReadTimeout(30000);
             connection.setInstanceFollowRedirects(false);
             connection.setRequestProperty("Accept", "application/json");
             connection.setRequestProperty("Accept-Encoding", "identity");
@@ -296,6 +296,19 @@ public final class MainActivity extends Activity {
         @JavascriptInterface
         public boolean isBackgroundMonitorRunning() {
             return RadarXBackgroundMonitorService.isRunning(MainActivity.this);
+        }
+
+        @JavascriptInterface
+        public void openTradli() {
+            runOnUiThread(() -> {
+                try {
+                    Intent intent = new Intent(MainActivity.this, TradliActivity.class);
+                    startActivity(intent);
+                } catch (Exception error) {
+                    Log.e("RadarXTradli", "Unable to open TRADLI", error);
+                    Toast.makeText(MainActivity.this, "تعذر فتح TRADLI", Toast.LENGTH_LONG).show();
+                }
+            });
         }
     }
 
