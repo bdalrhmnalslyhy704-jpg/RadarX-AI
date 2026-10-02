@@ -36,8 +36,18 @@ export const BOTTOM_STRATEGIES=Object.freeze([
 ]);
 
 function bottomAlgorithmScore(c){
-  const a=bottomContextOf(c)?.algorithms||{};
+  const ctx=bottomContextOf(c);
+  const m=ctx.metrics||{};
+  const a=ctx.algorithms||{};
   const values=[
+    Number(m.composite_algorithm_score),
+    Number(m.buying_pressure),
+    Number(m.selling_exhaustion),
+    Number(m.compression),
+    Number(m.momentum),
+    Number(m.structure),
+    Number(m.whale_pressure),
+    Number(m.orderbook_imbalance),
     Number(a.rsi14?.score),
     Number(a.stochastic14?.score),
     Number(a.obv_accumulation?.score),
@@ -45,7 +55,14 @@ function bottomAlgorithmScore(c){
     Number(a.ema20_50_reclaim?.score),
     Number(a.wyckoff_spring?.score),
     Number(a.vwap_position?.score),
-    Number(a.price_structure?.score)
+    Number(a.price_structure?.score),
+    Number(a.taker_flow?.score),
+    Number(a.orderbook_pressure?.score),
+    Number(a.whale_pressure?.score),
+    Number(a.sell_exhaustion?.score),
+    Number(a.squeeze?.score),
+    Number(a.momentum_awaken?.score),
+    Number(a.mtf_alignment?.score)
   ];
   return avgDefined(values,45);
 }
@@ -86,7 +103,9 @@ function strategySignal(c,id){
 export function scoreBottomCandidate(c){
   const change=Number(c?.price_change_24h);
   const bottomEvidence=bottomContextEvidence(c);
-  const bottomAlgorithms=bottomEvidence.algorithmScore;
+  const metrics=bottomContextOf(c)?.metrics||{};
+  const bottomAlgorithms=bottomAlgorithmScore(c);
+  const whalePressure=avgDefined([Number(metrics.whale_pressure),Number(bottomContextOf(c)?.algorithms?.whale_pressure?.score)],50);
   const drawdown = Number.isFinite(change)
     ? clamp(50 - change*6 + (change<0 ? 18 : change<=2 ? 6 : 0))
     : 35;
@@ -99,26 +118,32 @@ export function scoreBottomCandidate(c){
   ],45);
 
   const buyingPressure=avgDefined([
-    evidenceScore(c,'order_flow'),
-    evidenceScore(c,'relative_power'),
-    evidenceScore(c,'volume'),
-    scoreOf(c,'RELATIVE_VOLUME_SURGE')
+    Number(metrics.buying_pressure),
+    Number(metrics.orderbook_imbalance),
+    Number(metrics.taker_buy_ratio)*100
   ],45);
 
   const momentumAwakening=avgDefined([
+    Number(metrics.momentum),
     scoreOf(c,'MACD_TREND_CONTINUATION'),
-    scoreOf(c,'ADX_TREND_STRENGTH'),
-    scoreOf(c,'ATR_EXPANSION'),
-    scoreOf(c,'MTF_TREND')
+    scoreOf(c,'ATR_EXPANSION')
   ],40);
 
+  const sellingExhaustion=avgDefined([
+    Number(metrics.selling_exhaustion),
+    Number(bottomContextOf(c)?.algorithms?.sell_exhaustion?.score),
+    scoreOf(c,'MEAN_REVERSION')
+  ],45);
+
   const compression=avgDefined([
-    scoreOf(c,'VCP_PRE_BREAKOUT'),
-    evidenceScore(c,'compression')
+    Number(metrics.compression),
+    Number(bottomContextOf(c)?.algorithms?.squeeze?.score),
+    scoreOf(c,'VCP_PRE_BREAKOUT')
   ],45);
 
   const structure=avgDefined([
-    evidenceScore(c,'structure'),
+    Number(metrics.structure),
+    Number(metrics.mtf_alignment),
     scoreOf(c,'EMA_RIBBON_ALIGNMENT'),
     scoreOf(c,'MTF_TREND')
   ],45);
@@ -131,7 +156,8 @@ export function scoreBottomCandidate(c){
     evidenceScore(c,'resistance')
   ],45);
 
-  const trapQuality=100-clamp(fpOf(c)?.trapRisk,100);
+  const trapRisk=Number(fpOf(c)?.trapRisk);
+  const trapQuality=Number.isFinite(trapRisk)?100-clamp(trapRisk):50;
   const liquidity=clamp(c?.liquidity_quality,0,100);
   const dataQuality=clamp(c?.data_quality,0,100);
 
@@ -144,9 +170,10 @@ export function scoreBottomCandidate(c){
     structure*0.08+
     confirmation*0.06+
     trapQuality*0.04+
-    bottomAlgorithms*0.14+
+    bottomAlgorithms*0.10+
+    whalePressure*0.10+
     liquidity*0.03+
-    dataQuality*0.02;
+    dataQuality*0.03;
 
   const hardReject =
     dataQuality<70 ||
@@ -160,13 +187,14 @@ export function scoreBottomCandidate(c){
   const supporting=[
     ['ضغط سعري/قرب من القاع',drawdown],
     ['انحسار ضغط البيع',sellingExhaustion],
-    ['كمية/قوة الشراء',buyingPressure],
+    ['قوة الشراء الفعلية',buyingPressure],
     ['استيقاظ الزخم',momentumAwakening],
-    ['انكماش قبل الحركة',compression],
+    ['الضغط/الانكماش',compression],
     ['تحسن الهيكل',structure],
     ['تأكيد VWAP/الزخم',confirmation],
-    ['خوارزميات القاع الإضافية',bottomAlgorithms],
-    ['جودة ضد فخ',trapQuality]
+    ['قوة خوارزميات القاع',bottomAlgorithms],
+    ['ضغط الحيتان/جدران السيولة',whalePressure],
+    ['جودة ضد الفخ',trapQuality]
   ];
 
   const strategyRows=BOTTOM_STRATEGIES.map(s=>{
@@ -216,6 +244,12 @@ export function scoreBottomCandidate(c){
     structure:Math.round(structure*10)/10,
     trapQuality:Math.round(trapQuality*10)/10,
     bottomAlgorithms:Math.round(bottomAlgorithms*10)/10,
+    whalePressure:Math.round(whalePressure*10)/10,
+    takerBuyRatio:Number.isFinite(Number(metrics.taker_buy_ratio))?Number(metrics.taker_buy_ratio):null,
+    orderbookImbalance:Number.isFinite(Number(metrics.orderbook_imbalance))?Number(metrics.orderbook_imbalance):null,
+    mtfAlignment:Number.isFinite(Number(metrics.mtf_alignment))?Number(metrics.mtf_alignment):null,
+    bosUp:metrics.bos_up===true,
+    higherLow:metrics.higher_low===true,
     bottomEvidence,
     liquidity,
     dataQuality,
