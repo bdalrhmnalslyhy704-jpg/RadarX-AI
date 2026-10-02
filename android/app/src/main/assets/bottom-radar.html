@@ -40,7 +40,7 @@ details{margin-top:8px;border:1px solid #17364d;border-radius:10px;background:#0
   <span class="pill"><span class="dot"></span> LIVE MARKET • SPOT • PAPER ONLY</span>
 </section>
 
-<div class="toolbar"><button id="scan">فحص القيعان الآن</button><select id="limit"><option value="20">20 عملة</option><option value="30">30 عملة</option><option value="40">40 عملة</option><option value="50">50 عملة</option></select></div>
+<div class="toolbar"><button id="scan">فحص القيعان الآن</button><select id="limit"><option value="10" selected>10 عملات</option><option value="20">20 عملة</option><option value="30">30 عملة</option><option value="40">40 عملة</option><option value="50">50 عملة</option></select></div>
 <div id="status" class="status"><b>جاهز</b> — اضغط «فحص القيعان الآن» لتحليل السوق.</div>
 <div id="cards" class="cards"><div class="empty">لم يبدأ الفحص بعد.</div></div>
 <div class="note">الأدوات العشر المستخدمة: Mean Reversion، Bollinger+RSI، VCP، Relative Volume، VWAP، MACD، EMA Ribbon، ADX، ATR Expansion، Multi‑Timeframe Trend. الضغط الشرائي هنا تقدير تحليلي مشتق من بيانات السوق وبصمة التدفق، وليس عدد أوامر شراء منفصلًا إلا عندما يوفّر المصدر ذلك.</div>
@@ -82,26 +82,31 @@ function render(rows){
 async function scanMarket(){
   if(busy)return;
   busy=true;scan.disabled=true;scan.textContent='جاري فحص القيعان…';
-  status.innerHTML='<b>فحص حي</b> — نجمع المرشحين ونقارن عشرة عوامل لكل عملة…';
+  const requestedLimit=Number(limit.value)||10;
+  const scanLimits=[requestedLimit];
+  if(requestedLimit>10) scanLimits.push(10);
+  status.innerHTML='<b>فحص حي</b> — نبدأ بحزمة سريعة ثم نستخدم الحزمة المطلوبة عند الحاجة…';
   try{
     let lastErr=null;
-    for(let attempt=0;attempt<3;attempt++){
-      try{
-        const r=await getMarketRadar({quote:'USDT',limit:Number(limit.value)});
-        if(r.ok&&r.body){
-          const rows=rankBottomCandidates(r.body);
-          status.innerHTML='<b>تم التحديث</b> — '+rows.length+' مرشحًا صالحًا من '+Number(r.body?.universe?.scanned||0)+' عملة مفحوصة.';
-          render(rows);
-          return;
-        }
-        lastErr=new Error('HTTP_'+(r.status||0));
-      }catch(e){lastErr=e}
-      await new Promise(resolve=>setTimeout(resolve,1000*(attempt+1)));
+    for(const scanLimit of [...new Set(scanLimits)]){
+      for(let attempt=0;attempt<2;attempt++){
+        try{
+          const r=await getMarketRadar({quote:'USDT',limit:scanLimit});
+          if(r.ok&&r.body){
+            const rows=rankBottomCandidates(r.body);
+            status.innerHTML='<b>تم التحديث</b> — '+rows.length+' مرشحًا صالحًا من '+Number(r.body?.universe?.scanned||0)+' عملة مفحوصة • فحص '+scanLimit;
+            render(rows);
+            return;
+          }
+          lastErr=new Error('HTTP_'+(r.status||0));
+        }catch(e){lastErr=e}
+        if(attempt===0) await new Promise(resolve=>setTimeout(resolve,800));
+      }
     }
     throw lastErr||new Error('MARKET_RADAR_UNAVAILABLE');
   }catch(e){
     status.innerHTML='<b>تعذر الفحص الآن</b> — '+String(e.message||e)+' • أعد المحاولة.';
-    cards.innerHTML='<div class="empty">لا توجد بيانات حية صالحة في هذه المحاولة.</div>';
+    cards.innerHTML='<div class="empty">لم تصل استجابة صالحة من Backend. تأكد من الاتصال ثم أعد الفحص.</div>';
   }finally{
     busy=false;scan.disabled=false;scan.textContent='فحص القيعان الآن';
   }
