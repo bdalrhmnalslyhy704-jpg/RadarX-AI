@@ -1,3 +1,4 @@
+import { evaluateVCP } from '../vcp-strategy.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { evaluatePreBreakoutFingerprint } from '../prebreakout-fingerprint.mjs';
@@ -61,4 +62,15 @@ test('snapshot exposes the fingerprint without changing the paper-only signal co
   assert.equal(result.signal.scores.confidence_score,'UNKNOWN');
   assert.ok(result.fingerprint);
   assert.equal(result.signal.pre_breakout_fingerprint.version,'prebreakout-fingerprint.v1');
+});
+
+test('VCP strategy detects a pre-breakout contraction or safely rejects it',()=>{
+  const series=candles(180);
+  const result=evaluateVCP({series15m:series,series4h:series});
+  assert.equal(result.strategy,'VCP_PRE_BREAKOUT');
+  assert.ok(['CANDIDATE','CONFIRMED','REJECTED'].includes(result.state));
+  assert.ok(Object.hasOwn(result.evidence,'contractions'));
+  assert.ok(Object.hasOwn(result.evidence,'volume'));
+  assert.ok(Object.hasOwn(result.evidence,'pivot'));
+  assert.equal(result.confidence_score,'UNKNOWN');
 });
