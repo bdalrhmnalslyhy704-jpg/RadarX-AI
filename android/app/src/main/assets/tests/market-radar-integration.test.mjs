@@ -193,10 +193,24 @@ const bottomPage=await readFile(new URL('../bottom-radar.html',import.meta.url),
 const bottomSample={candidates:[{
   symbol:'TESTUSDT',last_price:1.25,price_change_24h:-6,liquidity_quality:88,data_quality:95,
   data_status:{data_valid:true},
-  pre_breakout_fingerprint:{stage:'PRE-BREAKOUT',trapRisk:18,evidenceCount:6,evidence:{
-    structure:{score:84,status:'HL_EMERGING'},compression:{score:82,status:'TIGHT'},volume:{score:79,status:'ACCELERATING'},
-    relative_power:{score:81,status:'INCREASING'},order_flow:{score:83,status:'BUYING_PRESSURE'},resistance:{score:74,status:'TESTING'}
-  }},
+  bottom_context:{
+    metrics:{
+      buying_pressure:82,selling_exhaustion:76,compression:72,momentum:71,structure:78,
+      whale_pressure:84,orderbook_imbalance:81,taker_buy_ratio:.67,mtf_alignment:79,
+      bos_up:true,higher_low:true,composite_algorithm_score:78
+    },
+    algorithms:{
+      rsi14:{value:29,score:84,bullish_divergence:true},
+      stochastic14:{k:18,score:90},obv_accumulation:{score:78},
+      volume_price_divergence:{score:80,rvol_ratio:1.42},ema20_50_reclaim:{score:74},
+      wyckoff_spring:{score:88,spring_confirmed:true},vwap_position:{score:76,vwap:1.21},
+      price_structure:{score:82},taker_flow:{score:84},orderbook_pressure:{score:81},
+      whale_pressure:{score:84,heuristic:true},sell_exhaustion:{score:76},
+      squeeze:{score:72},momentum_awaken:{score:71},mtf_alignment:{score:79}
+    },
+    current_price:1.25,high_24h:1.42,low_24h:1.18,range_position_pct:29,
+    last_rise:{high:1.34,low:1.16,rise_pct:15.5,drawdown_from_high_pct:6.7,recovery_from_low_pct:7.8}
+  },
   strategies:[
     {id:'MEAN_REVERSION',score:{value:78},signal_state:'CANDIDATE'},
     {id:'BOLLINGER_BAND_REVERSION',score:{value:82},signal_state:'CANDIDATE'},
@@ -216,6 +230,12 @@ assert.equal(bottomRows[0].symbol,'TESTUSDT');
 assert.ok(bottomRows[0].score>65);
 assert.ok(bottomRows[0].buyingPressure>70);
 assert.ok(bottomRows[0].momentumAwakening>60);
+assert.ok(bottomRows[0].sellingExhaustion>60);
+assert.ok(bottomRows[0].compression>60);
+assert.ok(bottomRows[0].structure>60);
+assert.ok(bottomRows[0].whalePressure>60);
+assert.equal(bottomRows[0].bosUp,true);
+assert.equal(bottomRows[0].higherLow,true);
 
 const bottomEngine=await readFile(new URL('../radarx-bottom-reversal.mjs',import.meta.url),'utf8');
 assert.match(bottomPage,/Bottom Reversal Radar/);
@@ -236,6 +256,12 @@ assert.match(bottomEngine,/ATR_EXPANSION/);
 assert.match(bottomEngine,/MTF_TREND/);
 assert.match(bottomEngine,/bottomContextOf/);
 assert.match(bottomEngine,/bottomAlgorithms/);
+assert.match(bottomEngine,/taker_flow/);
+assert.match(bottomEngine,/orderbook_pressure/);
+assert.match(bottomEngine,/whale_pressure/);
+assert.match(bottomEngine,/sell_exhaustion/);
+assert.match(bottomEngine,/squeeze/);
+assert.match(bottomEngine,/mtf_alignment/);
 assert.match(bottomPage,/السعر الحالي/);
 assert.match(bottomPage,/آخر قمة ارتفاع/);
 assert.match(bottomPage,/قاع بداية آخر ارتفاع/);
@@ -243,6 +269,10 @@ assert.match(bottomPage,/RSI 14/);
 assert.match(bottomPage,/Stochastic 14/);
 assert.match(bottomPage,/Wyckoff Spring/);
 assert.match(bottomPage,/Volume-Price/);
+assert.match(bottomPage,/ضغط الحيتان/);
+assert.match(bottomPage,/Order Book Imbalance/);
+assert.match(bottomPage,/Taker Buy/);
+assert.match(bottomPage,/Squeeze/);
 assert.match(mainActivity,/openBottomRadar/);
 assert.match(manifest,/BottomRadarActivity/);
 const tradliPage=await readFile(new URL('../tradli.html',import.meta.url),'utf8');
