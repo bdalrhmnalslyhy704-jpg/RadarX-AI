@@ -38,7 +38,7 @@ test('pre-breakout fingerprint returns an auditable 8-part evidence contract',()
   for(const key of ['structure','compression','volume','relative_power','resistance','order_flow','regime','trigger']){
     assert.ok(Object.hasOwn(result.evidence,key));
   }
-  assert.equal(result.evidenceCount, result.evidenceCount);
+  assert.equal(typeof result.evidenceCount,'number');
   assert.ok(Array.isArray(result.sequence));
   assert.ok(result.historical && Array.isArray(result.historical.analogs));
 });
@@ -58,7 +58,7 @@ test('snapshot exposes the fingerprint without changing the paper-only signal co
   });
   assert.equal(result.signal.paper_trading,true);
   assert.equal(result.signal.paper_trade.real_order_execution,false);
-  assert.equal(result.signal.confidence_state,'UNCALIBRATED');
+  assert.equal(result.signal.scores.confidence_score,'UNKNOWN');
   assert.ok(result.fingerprint);
   assert.equal(result.signal.pre_breakout_fingerprint.version,'prebreakout-fingerprint.v1');
 });
