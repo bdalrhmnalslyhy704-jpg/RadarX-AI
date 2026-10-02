@@ -348,3 +348,37 @@ test('Bottom Radar range position and flow metrics are symbol-specific and bound
   assert.notEqual(ca.metrics.buying_pressure,cb.metrics.buying_pressure);
   assert.notEqual(ca.metrics.whale_pressure,cb.metrics.whale_pressure);
 });
+
+test('Pre-Move Radar detects quiet early acceleration instead of chasing large 24h movers',()=>{
+  const now=Date.UTC(2026,9,2,7,30);
+  const step=15*60*1000;
+  const start=Date.UTC(2026,9,2,1,0);
+  const make=(base,boost)=>Array.from({length:28},(_,i)=>{
+    const t=start+i*step;
+    const p=base+i*(i<20?.01:.18)+boost*(i>22?i-22:0);
+    return {openTime:t,closeTime:t+step-1,open:p-.03,high:p+.05,low:p-.05,close:p,volume:i<22?900:i%2?1700:2200,takerBuyBaseVolume:i<22?430:(i%2?1250:1600),closed:true};
+  });
+  const a=make(100,0.0);
+  const b=make(100,0.0).map((x,i)=>({...x,close:x.close+(i<22?2.5:2.5),open:x.open+2.5,high:x.high+2.5,low:x.low+2.5,volume:i<22?800:(i%2?2400:2800),takerBuyBaseVolume:i<22?380:(i%2?1750:2200)}));
+  const btc=make(100,0);
+  const lowChange={symbol:'CALMUSDT',lastPrice:103,priceChangePercent:3,quoteVolume:9000000,count:80000,highPrice:106,lowPrice:95};
+  const hotChange={symbol:'HOTUSDT',lastPrice:125,priceChangePercent:25,quoteVolume:9000000,count:90000,highPrice:130,lowPrice:90};
+  const discovery=rankPreMoveTickerRows([lowChange,hotChange],[
+    {symbol:'CALMUSDT',quoteAsset:'USDT',baseAsset:'CALM',status:'TRADING'},
+    {symbol:'HOTUSDT',quoteAsset:'USDT',baseAsset:'HOT',status:'TRADING'}
+  ],{limit:2,minQuoteVolume24h:750000});
+  assert.equal(discovery[0].symbol,'CALMUSDT');
+  const bottom={
+    metrics:{compression:75,structure:74,buying_pressure:73,whale_pressure:76},
+    last_rise:{high:106}
+  };
+  const ctx=buildPreMoveContext({'15m':b},lowChange,now,bottom);
+  assert.ok(Number.isFinite(ctx.score));
+  assert.ok(Number.isFinite(ctx.volume_acceleration));
+  assert.ok(Number.isFinite(ctx.taker_buy_acceleration));
+  assert.equal(ctx.closed_candles_only,true);
+  assert.equal(ctx.timezone,'Asia/Aden');
+  assert.ok(ctx.session_return_pct<=6);
+  assert.ok(ctx.reasons.includes('NOT_EXTENDED'));
+  assert.ok(ctx.components.acceleration>=50);
+});
