@@ -725,7 +725,7 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
       : sessionPosition<=85 ? 70
       : 40
     : 45;
-  const resistance=Number(bottomContext?.last_rise?.high);
+  const resistance=Number(bottomSnapshot?.last_rise?.high);
   const resistanceDistancePct=Number.isFinite(current)&&current>0&&resistance>current
     ? (resistance-current)/current*100 : resistance>0&&current>=resistance ? 0 : null;
   const resistanceProximityScore=Number.isFinite(resistanceDistancePct)
@@ -734,12 +734,13 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
       : resistanceDistancePct<=9?65
       : 42
     : 48;
-  const squeeze=Number(bottomContext?.metrics?.compression);
-  const structure=Number(bottomContext?.metrics?.structure);
-  const buyPressure=Number(bottomContext?.metrics?.buying_pressure);
-  const whalePressure=Number(bottomContext?.metrics?.whale_pressure);
+  const squeeze=Number(bottomSnapshot?.metrics?.compression);
+  const structure=Number(bottomSnapshot?.metrics?.structure);
+  const buyPressure=Number(bottomSnapshot?.metrics?.buying_pressure);
+  const whalePressure=Number(bottomSnapshot?.metrics?.whale_pressure);
   const dataQuality=Number(ticker?.dataQuality);
 
+  const bottomSnapshot=bottomContext || {};
   const preMoveScore=avgDefined([
     calmScore,
     accelerationScore,
@@ -774,7 +775,7 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
     timezone:'Asia/Aden',
     window:'04:00–12:00 local session',
     session_start:new Date(sessionStartMs).toISOString(),
-    session_close:lastOrNull(session)?.closeTime ?? null,
+    session_close:Number.isFinite(Number(session.at(-1)?.closeTime))?Number(session.at(-1).closeTime):null,
     current_price:Number.isFinite(current)?current:null,
     session_open:Number.isFinite(sessionOpen)?sessionOpen:null,
     session_high:Number.isFinite(sessionHigh)?sessionHigh:null,
@@ -947,7 +948,6 @@ export function buildCandidateContract({
     low_price_24h: ticker.lowPrice24h,
     quote_volume_24h: ticker.quoteVolume24h,
     bottom_context: buildBottomMarketContext(series, ticker, deep.completedAt, {book: deep.depth, liquidity}),
-    pre_move_context: buildPreMoveContext(series, ticker, deep.completedAt, buildBottomMarketContext(series, ticker, deep.completedAt, {book: deep.depth, liquidity})),
     liquidity_quality: Math.round(Number(liquidity.quality) * 100) / 100,
     data_quality: dataQuality,
     confidence_score: 'UNKNOWN',
