@@ -124,6 +124,14 @@ jobs:
           printf '%s' "${ANDROID_RELEASE_KEYSTORE_BASE64}" | base64 --decode > "${RUNNER_TEMP}/radarx-release.keystore"
           test -s "${RUNNER_TEMP}/radarx-release.keystore"
 
+      - name: Validate embedded RadarX JavaScript syntax
+        run: |
+          set -euo pipefail
+          node --check android/app/src/main/assets/radarx-backend-client.mjs
+          node --check android/app/src/main/assets/radarx-market-radar-ui.mjs
+          node --check android/app/src/main/assets/radarx-market-radar-screen.mjs
+          node --check android/app/src/main/assets/radarx-tradli-feature-suite.mjs
+
       - name: Build signed universal Release APK
         working-directory: android
         env:
