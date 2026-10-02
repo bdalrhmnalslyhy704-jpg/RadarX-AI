@@ -164,6 +164,18 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       if(u.pathname==='/readyz'&&req.method==='GET'){
         const h=monitor.health(),ok=h.database.state==='LIVE'&&(h.websocket.state==='LIVE'||h.rest.state==='LIVE');return send(res,ok?200:503,{ready:ok,health:h});
       }
+      if(u.pathname==='/api/pre-move-radar'&&req.method==='GET'){
+        if(!marketRadar)return send(res,503,{error:'PRE_MOVE_RADAR_UNAVAILABLE'});
+        const quote=String(u.searchParams.get('quote')||'USDT').trim().toUpperCase();
+        const limit=u.searchParams.get('limit')||'30';
+        try{
+          return send(res,200,await marketRadar.scanPreMove({quote,limit}));
+        }catch(e){
+          const m=String(e?.message??e);
+          const status=/INVALID_QUOTE|INVALID_EXCHANGE_INFO/.test(m)?400:/RATE_LIMIT|TIMEOUT|UNAVAILABLE|FAILED/.test(m)?502:500;
+          return send(res,status,{error:m,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PRE_MOVE'},source:'Binance Public REST',candidates:[]});
+        }
+      }
       if(u.pathname==='/api/market-radar'&&req.method==='GET'){
         if(!marketRadar)return send(res,503,{error:'MARKET_RADAR_UNAVAILABLE'});
         const quote=String(u.searchParams.get('quote')||'USDT').trim().toUpperCase();
