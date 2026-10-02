@@ -39,10 +39,17 @@ function addStyle() {
   document.head.appendChild(s);
 }
 
+let marketCache = null;
+let marketCacheAt = 0;
+const MARKET_CACHE_MS = 5000;
 async function market() {
+  const now = Date.now();
+  if (marketCache && now - marketCacheAt < MARKET_CACHE_MS) return marketCache;
   const r = await getMarketRadar({quote:'USDT',limit:20});
   if (!r.ok || !r.body) throw Error('MARKET_RADAR_UNAVAILABLE');
-  return r.body;
+  marketCache = r.body;
+  marketCacheAt = Date.now();
+  return marketCache;
 }
 function findCandidate(body,symbol) {
   return (body.candidates || []).find(x => String(x.symbol).toUpperCase() === symbol.toUpperCase());
@@ -156,6 +163,7 @@ function advisorPanel(root) {
 function hubPanel(root) {
   root.innerHTML='<div class="rxsuite-actions"><button id="rx-hr" class="rxsuite-btn primary">تحديث مركز الإشارات</button></div>' +
     '<p class="rxsuite-row">هذه الوحدة تعرض مصادر RadarX. لا يتم اختلاق وصول إلى 200 قناة Telegram خارجية بدون API أو تفويض رسمي.</p><div id="rx-ho"></div>';
+  root.querySelector('#rx-ho').innerHTML='<p class="rxsuite-row">اضغط "تحديث مركز الإشارات" لبدء الفحص. لن يتم تشغيل فحص سوق إضافي عند فتح التطبيق.</p>';
   root.querySelector('#rx-hr').onclick=async()=>{
     const o=root.querySelector('#rx-ho');o.innerHTML='<p class="rxsuite-row">تحديث…</p>';
     try{
@@ -165,8 +173,8 @@ function hubPanel(root) {
       ).join('')||'<p class="rxsuite-row">لا توجد نتائج.</p>';
     }catch(e){o.innerHTML='<div class="rxsuite-row"><b>DATA UNAVAILABLE</b><small>'+esc(e.message)+'</small></div>';}
   };
-  root.querySelector('#rx-hr').click();
 }
+
 
 function supplyPanel(root) {
   root.innerHTML='<div class="rxsuite-form"><div class="rxsuite-field"><label>الرمز</label><input id="rx-sds" class="rxsuite-input" value="BTCUSDT"></div></div>' +
