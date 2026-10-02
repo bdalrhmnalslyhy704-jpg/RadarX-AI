@@ -76,14 +76,18 @@ function makeRest({wideSpread=false}={}) {
   return rest;
 }
 
-const evaluator = () => ({
+let observedEvaluationSeries = null;
+const evaluator = ({series}) => {
+  observedEvaluationSeries = series;
+  return {
   signal:{risk_reasons:[]},
   strategies:{
     trend:{strategy:'MTF_TREND',state:'CANDIDATE',direction:'LONG',score:{trendScore:72},reasonCodes:['TREND_OK'],evidence:{alignment:90}},
     breakout:{strategy:'CONFIRMED_BREAKOUT',state:'REJECTED',direction:'NONE',score:{},reasonCodes:['BREAKOUT_NOT_MET'],evidence:{}},
     meanReversion:{strategy:'MEAN_REVERSION',state:'REJECTED',direction:'NONE',score:{},reasonCodes:['MR_NOT_MET'],evidence:{}}
   }
-});
+  };
+};
 
 test('exchangeInfo filters Spot + TRADING + USDT and rejects invalid symbols',()=>{
   const rows=buildSpotUniverse(exchangeInfo(),'USDT');
@@ -202,7 +206,7 @@ test('scanner exposes no execution fields and uses no synthetic fallback values'
 });
 
 
-test('current open candle with future closeTime does not block live candidate quality',async()=>{
+test('current open candle is excluded from analysis but closed data remains live',async()=>{
   const rest=makeRest();
   const now=Date.now();
   const original=rest.klines;
@@ -219,6 +223,7 @@ test('current open candle with future closeTime does not block live candidate qu
     }
     return r;
   };
+  observedEvaluationSeries=null;
   const scanner=new MarketUniverseScanner({rest,config:{minQuoteVolume24h:750000,scanLimit:1,returnLimit:1},strategyEvaluator:evaluator});
   const result=await scanner.scan({quote:'USDT',limit:1});
   const candidate=result.candidates[0];
@@ -227,6 +232,13 @@ test('current open candle with future closeTime does not block live candidate qu
   assert.equal(Number.isFinite(candidate.overall_score),true);
   assert.ok(candidate.overall_score>0);
   assert.equal(result.meta.live,true);
+  assert.equal(candidate.data_status.closed_candle_only,true);
+  assert.equal(candidate.data_status.analysis_candle.closed,true);
+  assert.equal(candidate.data_status.analysis_candle.timeframe,'15m');
+  assert.equal(candidate.data_status.excluded_open_candle_count,1);
+  assert.ok(observedEvaluationSeries);
+  assert.equal(observedEvaluationSeries['15m'].some(c=>c.closed!==true),false);
+  assert.equal(observedEvaluationSeries['15m'].at(-1).closeTime <= now,true);
   assert.ok(!candidate.reason_codes.includes('FUTURE_DATA'));
 });
 
