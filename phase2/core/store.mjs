@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto';
 export class DurableStore {
   constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.ready=false;this.lastWriteAt=null;
     this.files={subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
-      signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl')};}
+      signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl')};}
   async init(){await mkdir(this.dir,{recursive:true});
     for(const [k,p] of Object.entries(this.files)){try{await readFile(p,'utf8');}catch{
       await writeFile(p,p.endsWith('.jsonl')?'':'{}',{flag:'wx'}).catch(()=>{});
