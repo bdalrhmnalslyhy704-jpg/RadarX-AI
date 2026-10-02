@@ -54,7 +54,6 @@ setTimeout(window.__RADARX_SHOW_BOOT_ERROR,3500);
 </script>
 <script type="module">
 import {mountMarketRadarScreen} from './radarx-market-radar-screen.mjs';
-import {mountTradliFeatureSuite} from './radarx-tradli-feature-suite.mjs';
 import {mountBackgroundMonitorControl} from './radarx-background-control.mjs';
 
 const panel=document.getElementById('marketRadarPanel');
@@ -75,7 +74,6 @@ installButton.addEventListener('click',async()=>{
 try{
   mountMarketRadarScreen(panel);
   mountBackgroundMonitorControl(document.getElementById('backgroundMonitorPanel'));
-  if(window.RadarXSmoke)window.RadarXSmoke.state('TRADLI_SUITE_SMOKE_OK');
   window.__RADARX_BOOT_OK=true;
   const error=document.getElementById('appError');
   if(error)error.hidden=true;
