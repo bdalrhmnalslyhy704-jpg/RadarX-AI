@@ -31,15 +31,16 @@ export async function startServer({
   const push=new PushManager({provider,store,deduplicator:dedup,retryBaseMs:config.monitoring.pushRetryMs});
   const service=new SignalService({deduplicator:dedup,store,pushManager:push,config});
   const monitor=monitorFactory({config,rest,signalService:service,store,pushManager:push,logger});
+  const moveConfig={...(config.moveRadar||{})};
   const moveScanner=new MarketUniverseScanner({rest,config:{
-    minQuoteVolume24h:config.moveRadar.minQuoteVolume24h,
-    minDataQuality:config.moveRadar.minDataQuality,
-    minLiquidityQuality:config.moveRadar.minLiquidityQuality,
-    deepKlines:config.moveRadar.deepKlines,
-    deepConcurrency:config.moveRadar.deepConcurrency
+    minQuoteVolume24h:moveConfig.minQuoteVolume24h,
+    minDataQuality:moveConfig.minDataQuality,
+    minLiquidityQuality:moveConfig.minLiquidityQuality,
+    deepKlines:moveConfig.deepKlines,
+    deepConcurrency:moveConfig.deepConcurrency
   }});
   const moveSentinel=new EarlyMoveSentinel({
-    rest,store,config:config.moveRadar,logger,
+    rest,store,config:moveConfig,logger,
     scannerFactory:()=>moveScanner,
     tickerWsFactory:opts=>new BinanceAllMarketTickerClient(opts)
   });
