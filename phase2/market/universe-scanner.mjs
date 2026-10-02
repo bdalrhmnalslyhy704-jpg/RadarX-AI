@@ -1073,9 +1073,10 @@ export class MarketUniverseScanner {
     return { data: r.data, source: r.source, receivedAt: this.clock() };
   }
 
-  async fetchSeries(symbol, interval) {
+  async fetchSeries(symbol, interval, limit = this.config.deepKlines) {
+    const safeLimit = Math.max(50, Math.trunc(Number(limit) || this.config.deepKlines));
     return withRetry(
-      () => this.rest.klines(symbol, interval, { limit: this.config.deepKlines }),
+      () => this.rest.klines(symbol, interval, { limit: safeLimit }),
       {
         attempts: this.config.retryAttempts,
         baseMs: this.config.retryBaseMs,
@@ -1143,7 +1144,8 @@ export class MarketUniverseScanner {
     };
   }
 
-  async scanSymbol(ticker, rank, sources = {}) {
+  async scanSymbol(ticker, rank, sources = {}, options = {}) {
+    const klinesLimit = Math.max(50, Math.trunc(Number(options.klinesLimit) || this.config.deepKlines));
     const startedAt = this.clock();
     const series = {};
     const klinesSources = [];
@@ -1155,7 +1157,7 @@ export class MarketUniverseScanner {
       const [tfResults, depth] = await Promise.all([
         Promise.all(
           ['4h','1h','15m'].map(async tf => {
-            const r = await this.fetchSeries(ticker.symbol, tf);
+            const r = await this.fetchSeries(ticker.symbol, tf, klinesLimit);
             const fetchedAt = Number(r.receivedAt) || this.clock();
             return {
               tf,
@@ -1232,14 +1234,24 @@ export class MarketUniverseScanner {
     const universe=buildSpotUniverse(info.data,normalizedQuote);
     const tickerResponse=await this.ticker24h();
     const normalizedLimit=Math.min(50,Math.max(10,normalizeRadarLimit(limit,{...this.config,maxScanLimit:50,scanLimit:30})));
+    // Pre-Move is an interactive screen: keep enough liquid symbols for breadth,
+    // but do not make the phone wait on a 40-symbol deep scan.
+    const discoveryLimit=Math.min(24,Math.max(20,normalizedLimit));
     const discovery=rankPreMoveTickerRows(tickerResponse.data,universe,{
       minQuoteVolume24h:this.config.minQuoteVolume24h,
-      limit:Math.min(40,normalizedLimit+10)
+      limit:discoveryLimit
     });
+    const preMoveConcurrency=Math.max(this.config.deepConcurrency,8);
+    const preMoveKlines=Math.min(this.config.deepKlines,220);
     const scanned=await boundedMap(
       discovery,
-      this.config.deepConcurrency,
-      (ticker,i)=>this.scanSymbol(ticker,i+1,{exchangeInfo:info.source,ticker:tickerResponse.source})
+      preMoveConcurrency,
+      (ticker,i)=>this.scanSymbol(
+        ticker,
+        i+1,
+        {exchangeInfo:info.source,ticker:tickerResponse.source},
+        {klinesLimit:preMoveKlines}
+      )
     );
     const valid=scanned.filter(Boolean).filter(x=>x.data_status?.data_valid===true&&Number.isFinite(Number(x.pre_move_context?.session_return_pct)));
     const returns=valid.map(x=>Number(x.pre_move_context.session_return_pct)).filter(Number.isFinite);
