@@ -328,7 +328,7 @@ function pivotHighs(candles, left = 2, right = 2) {
   return out;
 }
 
-function buildBottomMarketContext(series, ticker, now) {
+export function buildBottomMarketContext(series, ticker, now) {
   const raw15 = Array.isArray(series?.['15m']) ? series['15m'] : [];
   const closed15 = raw15.filter(c =>
     c?.closed !== false &&
