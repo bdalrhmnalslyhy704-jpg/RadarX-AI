@@ -200,7 +200,7 @@ const movePage=await readFile(new URL('../move-radar.html',import.meta.url),'utf
 const moveEngine=await readFile(new URL('../radarx-move-radar.mjs',import.meta.url),'utf8');
 assert.match(movePage,/24H Move Radar/);
 assert.match(movePage,/±1%/);
-assert.match(movePage,/24/7 Backend/);
+assert.match(movePage,/24\/7 Backend/);
 assert.match(movePage,/التنبيهات/);
 assert.match(moveEngine,/normalizeMoveAlerts/);
 assert.match(moveEngine,/HIGH_EXPANSION_SETUP/);
