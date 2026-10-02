@@ -180,7 +180,7 @@ const backgroundServiceSourceForMove=await readFile(new URL('../../java/com/rada
 assert.match(backgroundServiceSourceForMove,/fetchMoveFeed/);
 assert.match(backgroundServiceSourceForMove,/notifyNewMoveAlerts/);
 assert.match(backgroundServiceSourceForMove,/api\/move-radar/);
-assert.match(backgroundServiceSourceForMove,/setReadTimeout\(60000\)/);
+assert.match(backgroundServiceSourceForMove,/setReadTimeout\(60_000\)/);
 const backgroundService=await readFile(new URL('../../java/com/radarx/app/RadarXBackgroundMonitorService.java',import.meta.url),'utf8');
 assert.match(indexHtml,/backgroundMonitorPanel/);
 assert.match(indexHtml,/mountBackgroundMonitorControl/);
