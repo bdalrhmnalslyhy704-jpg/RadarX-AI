@@ -28,7 +28,7 @@ import {
   buildCandidateDetailMarkup
 } from '../radarx-market-radar-screen.mjs';
 
-const IDS=['MTF_TREND','CONFIRMED_BREAKOUT','MEAN_REVERSION','EMA_RIBBON_ALIGNMENT','ADX_TREND_STRENGTH','MACD_TREND_CONTINUATION','BOLLINGER_BAND_REVERSION','VWAP_REVERSION','RELATIVE_VOLUME_SURGE','ATR_EXPANSION'];
+const IDS=['MTF_TREND','CONFIRMED_BREAKOUT','MEAN_REVERSION','PRE_BREAKOUT_FINGERPRINT','EMA_RIBBON_ALIGNMENT','ADX_TREND_STRENGTH','MACD_TREND_CONTINUATION','BOLLINGER_BAND_COMPRESSION','VWAP_POSITION','RELATIVE_VOLUME_AWAKENING'];
 
 function strategies(accepted=true){
   return IDS.map((id,i)=>({
@@ -51,6 +51,7 @@ function candidate(kind='fresh',index=0){
     accepted_strategies:rejected||invalid?[]:['MTF_TREND'],
     reason_codes:rejected||invalid?['TEST_REJECTED']:['BULLISH_TEST'],risk_flags:['TEST_RISK'],invalidation:['TEST_INVALIDATION'],
     data_status:stale?{data_stale:true,data_valid:false,source:'TEST',fetch_age_ms:999999}:{data_stale:false,data_valid:!invalid&&!rejected,source:'TEST',fetch_age_ms:1000},
+    pre_breakout_fingerprint:{version:'prebreakout-fingerprint.v1',detected:!stale&&!invalid&&!rejected,stage:'PRE-BREAKOUT',score:82,trapRisk:18,evidenceCount:6,reasonCodes:['HL_EMERGING','COMPRESSION','VOLUME_AWAKENING','RELATIVE_POWER_INCREASING','SELL_PRESSURE_DECLINING'],evidence:{structure:{score:90,status:'HL_EMERGING'},compression:{score:80,status:'TIGHT'},volume:{score:75,status:'ACCELERATING'},relative_power:{score:78,status:'INCREASING'},resistance:{score:70,status:'TESTING',tests:2},order_flow:{score:72,status:'BUYING_PRESSURE'},regime:{score:75,status:'SUPPORTIVE'},trigger:{score:60,status:'NEAR_RESISTANCE'}},resistance:{remainingTests:1},context:{breakout:false,retest:false,falseBreakout:false},journey:[{stage:'BUILDING',at:1727827200000,score:60},{stage:'PRE-BREAKOUT',at:1727830800000,score:82}],historical:{samples:8,lookaheadBars:16,successfulSamples:4,descriptiveSuccessRatePct:50,analogs:[]}},
     strategies:stale||invalid||rejected?strategies(false):strategies(true)
   };
 }
@@ -101,6 +102,9 @@ const validMarkup=buildCandidateMarkup(fresh,0);
 assert.match(validMarkup,/BTCUSDT/);
 assert.match(validMarkup,/عرض التفاصيل/);
 assert.match(validMarkup,/Score/);
+assert.match(validMarkup,/Pre-Breakout Fingerprint/);
+assert.match(validMarkup,/Trap/);
+assert.match(validMarkup,/6 \/ 8/);
 
 const invalidMarkup=buildCandidateMarkup(invalid,2);
 assert.match(invalidMarkup,/غير متاح بسبب جودة البيانات/);
@@ -113,6 +117,10 @@ assert.match(detail,/الاستراتيجيات المقبولة/);
 assert.match(detail,/الاستراتيجيات المرفوضة/);
 assert.match(detail,/الاستراتيجيات ذات البيانات الناقصة/);
 assert.match(detail,/التفاصيل الفنية/);
+assert.match(detail,/Pre-Breakout Fingerprint/);
+assert.match(detail,/History Engine/);
+assert.match(detail,/Relative Power/);
+assert.match(detail,/Journey:/);
 
 const retry=await fetchMarketRadarWithRetry({getMarketRadar:async()=>({status:0,ok:false,body:null,error:'NETWORK_DOWN'})},{attempts:2,sleepFn:async()=>{}});
 assert.equal(retry.attempts,3);
