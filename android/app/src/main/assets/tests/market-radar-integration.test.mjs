@@ -28,7 +28,7 @@ import {
   buildCandidateDetailMarkup
 } from '../radarx-market-radar-screen.mjs';
 
-const IDS=['MTF_TREND','CONFIRMED_BREAKOUT','MEAN_REVERSION','VCP_PRE_BREAKOUT','PRE_BREAKOUT_FINGERPRINT','EMA_RIBBON_ALIGNMENT','ADX_TREND_STRENGTH','MACD_TREND_CONTINUATION','BOLLINGER_BAND_COMPRESSION','VWAP_POSITION','RELATIVE_VOLUME_AWAKENING'];
+const IDS=['MTF_TREND','CONFIRMED_BREAKOUT','MEAN_REVERSION','VCP_PRE_BREAKOUT','EMA_RIBBON_ALIGNMENT','ADX_TREND_STRENGTH','MACD_TREND_CONTINUATION','BOLLINGER_BAND_REVERSION','VWAP_REVERSION','RELATIVE_VOLUME_SURGE','ATR_EXPANSION','FRACTAL_MA_BOTTOM_REVERSAL','FRACTAL_MA_BREAKOUT','FRACTAL_MA_TREND_SHIFT'];
 
 function strategies(accepted=true){
   return IDS.map((id,i)=>({
@@ -88,8 +88,8 @@ assert.equal(sortExcludedCandidates([invalid,stale])[0].symbol,'ETHUSDT');
 
 assert.equal(filterCandidates([fresh,stale],{direction:'LONG'}).length,1);
 assert.equal(filterCandidates([fresh],{signalState:'CONFIRMED'}).length,1);
-assert.equal(getStrategyOptions([fresh]).length,11);
-assert.equal(normalizeStrategyRows(fresh).length,11);
+assert.equal(getStrategyOptions([fresh]).length,14);
+assert.equal(normalizeStrategyRows(fresh).length,14);
 
 const shell=buildDashboardShell();
 assert.match(shell,/RadarX/);
@@ -114,7 +114,7 @@ assert.doesNotMatch(invalidMarkup,/99/);
 assert.doesNotMatch(invalidMarkup,/NONE/);
 
 const detail=buildCandidateDetailMarkup(fresh);
-assert.equal((detail.match(/<article class="rx-strategy">/g)||[]).length,11);
+assert.equal((detail.match(/<article class="rx-strategy">/g)||[]).length,14);
 assert.match(detail,/الاستراتيجيات المقبولة/);
 assert.match(detail,/الاستراتيجيات المرفوضة/);
 assert.match(detail,/الاستراتيجيات ذات البيانات الناقصة/);
@@ -151,7 +151,20 @@ assert.deepEqual(endpointCalls.slice(1),[
   DEFAULT_BACKEND_BASE_URL+'/api/signal?symbol=BTCUSDT'
 ]);
 assert.equal(state.health.status,200);
-assert.equal(validateMarketRadarContract(response(body(['fresh']))).strategiesPerCandidate,11);
+assert.equal(validateMarketRadarContract(response(body(['fresh']))).strategiesPerCandidate,14);
+const fifteen=body(['fresh']);
+fifteen.candidates[0].strategies.push({
+  id:'SUPPORT_RESISTANCE_CONFIRMATION',name:'SUPPORT_RESISTANCE_CONFIRMATION',signal_state:'CANDIDATE',direction:'LONG',
+  score:{value:78,coverage:1},evidence:{test:'support-resistance'},reason_codes:['SUPPORT_BOUNCE_CONFIRMATION'],
+  invalidation:['SUPPORT_LOST'],required_data:['15m'],missing_required_data:[],
+  hard_gates_passed:true,hard_gate_status:{passed:true,failed:[]},confidence_score:'UNKNOWN',
+  paper_trading:true,real_order_execution:false
+});
+assert.equal(validateMarketRadarContract(response(fifteen)).strategiesPerCandidate,15);
+const eleven=body(['fresh']);
+eleven.candidates[0].strategies=eleven.candidates[0].strategies.slice(0,11);
+assert.equal(validateMarketRadarContract(response(eleven)).valid,false);
+assert.equal(validateMarketRadarContract(response(eleven)).reason,'STRATEGY_COUNT_UNSUPPORTED');
 
 const index=await readFile(new URL('../index.html',import.meta.url),'utf8');
 const client=await readFile(new URL('../radarx-backend-client.mjs',import.meta.url),'utf8');

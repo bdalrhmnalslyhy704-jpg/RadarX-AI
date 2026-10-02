@@ -40,7 +40,11 @@ const STRATEGY_AR = Object.freeze({
   BOLLINGER_BAND_COMPRESSION: 'ضغط بولينجر',
   VWAP_POSITION: 'موقع VWAP',
   RELATIVE_VOLUME_AWAKENING: 'استيقاظ الحجم',
-  VCP_PRE_BREAKOUT: 'نمط انكماش التذبذب VCP'
+  VCP_PRE_BREAKOUT: 'نمط انكماش التذبذب VCP',
+  FRACTAL_MA_BOTTOM_REVERSAL: 'انعكاس القاع Fractal + EMA',
+  FRACTAL_MA_BREAKOUT: 'اختراق Fractal + EMA',
+  FRACTAL_MA_TREND_SHIFT: 'تحول الاتجاه Fractal + EMA',
+  SUPPORT_RESISTANCE_CONFIRMATION: 'تأكيد الدعم والمقاومة'
 });
 
 const REASON_AR = Object.freeze({
@@ -64,7 +68,17 @@ const REASON_AR = Object.freeze({
   RETEST_HOLDING: 'إعادة الاختبار محافظة على المستوى',
   FALSE_BREAKOUT_RISK: 'خطر اختراق كاذب',
   FINGERPRINT_TRAP_RISK_HIGH: 'خطر المصيدة في البصمة مرتفع',
-  FINGERPRINT_GATE_NOT_MET: 'لم تكتمل بصمة ما قبل الاختراق'
+  FINGERPRINT_GATE_NOT_MET: 'لم تكتمل بصمة ما قبل الاختراق',
+  FRACTAL_MA_BOTTOM_NOT_CONFIRMED: 'لم يتأكد انعكاس القاع عبر Fractal + EMA',
+  FRACTAL_BREAKOUT_NOT_CONFIRMED: 'لم يتأكد اختراق Fractal + EMA',
+  FRACTAL_MA_TREND_SHIFT_NOT_CONFIRMED: 'لم يكتمل تحول الاتجاه متعدد الأطر',
+  SUPPORT_RESISTANCE_NOT_CONFIRMED: 'لم يتأكد ارتداد الدعم أو اختراق المقاومة',
+  SUPPORT_BOUNCE_CONFIRMATION: 'تأكيد ارتداد الدعم',
+  RESISTANCE_BREAKOUT: 'اختراق المقاومة',
+  EMA20_EMA50_ALIGNMENT: 'توافق EMA20 وEMA50',
+  RVOL_BOUNCE_SUPPORT: 'الحجم يدعم الارتداد',
+  RVOL_BREAKOUT_CONFIRMATION: 'الحجم يؤكد الاختراق',
+  BULLISH_CANDLE_CONFIRMATION: 'شمعة صاعدة مؤكدة'
 });
 
 function esc(value) {
@@ -122,10 +136,22 @@ export function validateMarketRadarContract(response) {
   const counts = Array.isArray(body.candidates)
     ? body.candidates.map(candidate => Array.isArray(candidate?.strategies) ? candidate.strategies.length : 0)
     : [];
-  if (counts.some(count => count !== 11)) {
-    return {valid:false, reason:'STRATEGY_COUNT_NOT_11', strategiesPerCandidate:Math.max(0, ...counts)};
+  const supportedCounts = new Set([14, 15]);
+  const invalidCount = counts.find(count => !supportedCounts.has(count));
+  if (invalidCount !== undefined) {
+    return {
+      valid:false,
+      reason:'STRATEGY_COUNT_UNSUPPORTED',
+      strategiesPerCandidate:Math.max(0, ...counts)
+    };
   }
-  return {valid:true, reason:null, strategiesPerCandidate:11};
+  const distinctCounts = [...new Set(counts)];
+  return {
+    valid:true,
+    reason:null,
+    strategiesPerCandidate:distinctCounts.length === 1 ? distinctCounts[0] : null,
+    supportedStrategyCounts:distinctCounts
+  };
 }
 
 function fingerprintBadgeMarkup(candidate) {
