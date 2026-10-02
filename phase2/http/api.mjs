@@ -132,6 +132,7 @@ function subscriptionValid(x){
 }
 export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null}){
   const counters=new Map();
+  const moveConfig=config.moveRadar||{thresholdPct:1};
   const originList=config.auth.allowedOrigins;
   const marketRadar = monitor?.rest ? new MarketUniverseScanner({
     rest: monitor.rest,
@@ -177,7 +178,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             source:'Binance Public REST/WS',
             as_of:new Date(Date.now()).toISOString(),
             monitoring:moveSentinel.health(),
-            thresholds:{move_pct:config.moveRadar.thresholdPct,market:'SPOT'},
+            thresholds:{move_pct:moveConfig.thresholdPct??1,market:'SPOT'},
             alerts
           });
         }catch(e){
