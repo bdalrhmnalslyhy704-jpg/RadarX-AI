@@ -46,7 +46,7 @@ details{margin-top:8px;border:1px solid #17364d;border-radius:10px;background:#0
 <div class="toolbar"><button id="scan">فحص القيعان الآن</button><select id="limit"><option value="10" selected>10 عملات</option><option value="20">20 عملة</option><option value="30">30 عملة</option><option value="40">40 عملة</option><option value="50">50 عملة</option></select></div>
 <div id="status" class="status"><b>جاهز</b> — اضغط «فحص القيعان الآن» لتحليل السوق.</div>
 <div id="cards" class="cards"><div class="empty">لم يبدأ الفحص بعد.</div></div>
-<div class="note">الأدوات العشر المستخدمة: Mean Reversion، Bollinger+RSI، VCP، Relative Volume، VWAP، MACD، EMA Ribbon، ADX، ATR Expansion، Multi‑Timeframe Trend. الضغط الشرائي هنا تقدير تحليلي مشتق من بيانات السوق وبصمة التدفق، وليس عدد أوامر شراء منفصلًا إلا عندما يوفّر المصدر ذلك.</div>
+<div class="note">المؤشرات الجديدة تُحسب من شموع 15m المغلقة ودفتر Spot العام: Taker Buy/Sell، Order-Book Imbalance، امتصاص البيع، Squeeze، BOS/HL وتوافق 4H/1H. «ضغط الحيتان» استدلال من تمركز أكبر جدران السيولة في دفتر الأوامر وليس تعريفًا لهوية حيتان فعلية. لا توجد أسعار مستقبلية مضمونة ولا تنفيذ أو تداول حقيقي.</div>
 
 <script type="module">
 import {getMarketRadar} from './radarx-backend-client.mjs';
@@ -80,7 +80,7 @@ function render(rows){
         '<div class="market-box"><span>قاع بداية آخر ارتفاع</span><b>'+fmt(x.bottomEvidence.lastRiseLow)+'</b><small>'+ (Number.isFinite(x.bottomEvidence.lastRisePct)?'ارتفاع سابق '+pct(x.bottomEvidence.lastRisePct):'—') +'</small></div>'+
         '<div class="market-box"><span>موقع السعر داخل نطاق 24h</span><b>'+ (Number.isFinite(x.bottomEvidence.rangePositionPct)?Number(x.bottomEvidence.rangePositionPct).toFixed(1)+'%':'—') +'</b><small>من القاع 24h إلى القمة 24h</small></div>'+
       '</div>'+
-      '<div class="bars">'+bar('الشراء',x.buyingPressure)+bar('الزخم',x.momentumAwakening)+bar('انحسار البيع',x.sellingExhaustion)+bar('الضغط/الانكماش',x.compression)+bar('الهيكل',x.structure)+bar('قوة الخوارزميات',x.bottomAlgorithms)+'</div>'+
+      '<div class="bars">'+bar('قوة الشراء الفعلية',x.buyingPressure)+bar('استيقاظ الزخم',x.momentumAwakening)+bar('انحسار البيع',x.sellingExhaustion)+bar('الضغط/الانكماش',x.compression)+bar('الهيكل',x.structure)+bar('ضغط الحيتان',x.whalePressure)+bar('قوة الخوارزميات',x.bottomAlgorithms)+'</div>'+
       '<details><summary>الخوارزميات الإضافية للقاع</summary><div class="algo-grid">'+
         '<div class="algo"><span>RSI 14</span><b>'+(Number.isFinite(x.bottomEvidence.rsi)?x.bottomEvidence.rsi.toFixed(1):'—')+(x.bottomEvidence.bullishDivergence?' • Divergence صاعد':'')+'</b></div>'+
         '<div class="algo"><span>Stochastic 14</span><b>'+(Number.isFinite(x.bottomEvidence.stochasticK)?x.bottomEvidence.stochasticK.toFixed(1):'—')+'</b></div>'+
@@ -89,6 +89,12 @@ function render(rows){
         '<div class="algo"><span>EMA20/50 reclaim</span><b>'+(Number.isFinite(x.bottomEvidence.emaReclaimScore)?x.bottomEvidence.emaReclaimScore.toFixed(0):'—')+'</b></div>'+
         '<div class="algo"><span>Wyckoff Spring</span><b>'+(x.bottomEvidence.springConfirmed?'SPRING مؤكد':'مراقبة')+'</b></div>'+
         '<div class="algo"><span>VWAP</span><b>'+fmt(x.bottomEvidence.vwap)+'</b></div>'+
+        '<div class="algo"><span>Taker Buy</span><b>'+(Number.isFinite(x.takerBuyRatio)?(x.takerBuyRatio*100).toFixed(1)+'% شراء':'—')+'</b></div>'+
+        '<div class="algo"><span>Order Book Imbalance</span><b>'+(Number.isFinite(x.orderbookImbalance)?x.orderbookImbalance.toFixed(0):'—')+'</b></div>'+
+        '<div class="algo"><span>ضغط الحيتان</span><b>'+Number(x.whalePressure).toFixed(1)+' • '+(x.bottomEvidence.whaleHeuristic?'Heuristic':'—')+'</b></div>'+
+        '<div class="algo"><span>MTF Alignment</span><b>'+(Number.isFinite(x.mtfAlignment)?x.mtfAlignment.toFixed(0):'—')+'</b></div>'+
+        '<div class="algo"><span>Structure</span><b>'+(x.bosUp?'BOS صاعد • ':'')+(x.higherLow?'HL • ':'')+(x.bosUp||x.higherLow?'تحسن':'مراقبة')+'</b></div>'+
+        '<div class="algo"><span>Squeeze</span><b>'+(Number.isFinite(x.bottomEvidence.squeezeScore)?x.bottomEvidence.squeezeScore.toFixed(0):'—')+'</b></div>'+
         '<div class="algo"><span>خوارزمية القاع المركبة</span><b>'+Number(x.bottomAlgorithms).toFixed(1)+'</b></div>'+
       '</div></details>'+
       '<div class="path"><b>المسار للمراقبة:</b><br>'+x.path+'</div>'+
