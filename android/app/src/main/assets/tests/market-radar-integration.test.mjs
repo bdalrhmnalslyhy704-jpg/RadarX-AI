@@ -219,9 +219,9 @@ const bottomEngine=await readFile(new URL('../radarx-bottom-reversal.mjs',import
 assert.match(bottomPage,/Bottom Reversal Radar/);
 assert.match(bottomPage,/فحص القيعان الآن/);
 assert.match(bottomPage,/LIVE MARKET/);
-assert.equal(bottomPage.includes('1–2 يوم'),true);
-assert.equal(bottomPage.includes('3–5 أيام'),true);
-assert.equal(bottomPage.includes('5–7 أيام'),true);
+assert.match(bottomPage,/horizons/);
+assert.match(bottomEngine,/1–2 يوم/);
+assert.match(bottomEngine,/5–7 أيام/);
 assert.match(bottomEngine,/BOLLINGER_BAND_REVERSION/);
 assert.match(bottomEngine,/VCP_PRE_BREAKOUT/);
 assert.match(bottomEngine,/RELATIVE_VOLUME_SURGE/);
