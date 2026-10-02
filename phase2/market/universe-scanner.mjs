@@ -328,7 +328,7 @@ function pivotHighs(candles, left = 2, right = 2) {
   return out;
 }
 
-export function buildBottomMarketContext(series, ticker, now) {
+export function buildBottomMarketContext(series, ticker, now, {book=null, liquidity=null}={}) {
   const raw15 = Array.isArray(series?.['15m']) ? series['15m'] : [];
   const closed15 = raw15.filter(c =>
     c?.closed !== false &&
@@ -369,7 +369,7 @@ export function buildBottomMarketContext(series, ticker, now) {
     ? (currentPrice-lastRiseLow.price)/lastRiseLow.price*100 : null;
 
   const range = Number.isFinite(high24h)&&Number.isFinite(low24h)&&high24h>low24h ? high24h-low24h : null;
-  const rangePositionPct = range && Number.isFinite(currentPrice) ? (currentPrice-low24h+range)/range*100 : null;
+  const rangePositionPct = range && Number.isFinite(currentPrice) ? (currentPrice-low24h)/range*100 : null;
 
   const rsi = rsiSeries(closes,14);
   const currentRsi = rsi.at(-1) ?? null;
@@ -458,6 +458,151 @@ export function buildBottomMarketContext(series, ticker, now) {
     ? currentPrice>=vwap ? 76 : Math.max(25,76-Math.min(45,(vwap-currentPrice)/vwap*250))
     : null;
 
+  const recent8=last24.slice(-8);
+  const prev8=last24.slice(-16,-8);
+  const sumFinite=(rows,field)=>rows.reduce((s,x)=>{const v=Number(x?.[field]);return s+(Number.isFinite(v)&&v>0?v:0)},0);
+  const recentVolume=sumFinite(recent8,'volume');
+  const recentTakerBuy=sumFinite(recent8,'takerBuyBaseVolume');
+  const prevTakerBuy=sumFinite(prev8,'takerBuyBaseVolume');
+  const recentBuyRatio=recentVolume>0?recentTakerBuy/recentVolume:null;
+  const prevVolume=sumFinite(prev8,'volume');
+  const prevBuyRatio=prevVolume>0?prevTakerBuy/prevVolume:null;
+  const buyRatioScore=Number.isFinite(recentBuyRatio)
+    ? clamp(50+(recentBuyRatio-.5)*220+(Number.isFinite(prevBuyRatio)?(recentBuyRatio-prevBuyRatio)*180:0))
+    : null;
+
+  const mid=Number.isFinite(Number(liquidity?.bid))&&Number.isFinite(Number(liquidity?.ask))
+    ? (Number(liquidity.bid)+Number(liquidity.ask))/2
+    : Number.isFinite(currentPrice)?currentPrice:null;
+  const depthBand=.005;
+  const levels=Array.isArray(book?.bids)&&Array.isArray(book?.asks)
+    ? {bids:book.bids.filter(x=>Array.isArray(x)&&Number(x[0])>0&&Number(x[1])>=0),
+       asks:book.asks.filter(x=>Array.isArray(x)&&Number(x[0])>0&&Number(x[1])>=0)}
+    : {bids:[],asks:[]};
+  const bandBids=mid>0?levels.bids.filter(x=>Number(x[0])>=mid*(1-depthBand)):[];
+  const bandAsks=mid>0?levels.asks.filter(x=>Number(x[0])<=mid*(1+depthBand)):[];
+  const bidNotionals=bandBids.map(x=>Number(x[0])*Number(x[1])).filter(Number.isFinite);
+  const askNotionals=bandAsks.map(x=>Number(x[0])*Number(x[1])).filter(Number.isFinite);
+  const bidDepthBook=bidNotionals.reduce((a,b)=>a+b,0);
+  const askDepthBook=askNotionals.reduce((a,b)=>a+b,0);
+  const orderbookImbalance=bidDepthBook+askDepthBook>0
+    ? (bidDepthBook-askDepthBook)/(bidDepthBook+askDepthBook) : null;
+  const orderbookImbalanceScore=Number.isFinite(orderbookImbalance)
+    ? clamp(50+orderbookImbalance*180) : null;
+  const largestBid=Math.max(0,...bidNotionals);
+  const largestAsk=Math.max(0,...askNotionals);
+  const largestBidShare=bidDepthBook>0?largestBid/bidDepthBook:null;
+  const largestAskShare=askDepthBook>0?largestAsk/askDepthBook:null;
+  const whaleScore=Number.isFinite(largestBidShare)&&Number.isFinite(largestAskShare)
+    ? clamp(50+(largestBidShare-largestAskShare)*220+
+      (Number.isFinite(orderbookImbalance)?orderbookImbalance*60:0))
+    : null;
+  const largestBidLevel=bandBids.find(x=>Number(x[0])*Number(x[1])===largestBid);
+  const largestAskLevel=bandAsks.find(x=>Number(x[0])*Number(x[1])===largestAsk);
+  const nearestBidWallPct=largestBid>0&&mid>0&&largestBidLevel
+    ? ((mid-Number(largestBidLevel[0]))/mid)*100 : null;
+  const nearestAskWallPct=largestAsk>0&&mid>0&&largestAskLevel
+    ? ((Number(largestAskLevel[0])-mid)/mid)*100 : null;
+
+  const downVolRecent=recent8.reduce((s,x)=>s+(Number(x.close)<Number(x.open)?Number(x.volume)||0:0),0);
+  const downVolPrev=prev8.reduce((s,x)=>s+(Number(x.close)<Number(x.open)?Number(x.volume)||0:0),0);
+  const downVolTrend=downVolPrev>0?downVolRecent/downVolPrev:null;
+  const lowerWickRecent=recent8.map(x=>{
+    const h=Number(x.high),l=Number(x.low),o=Number(x.open),cl=Number(x.close),r=h-l;
+    return r>0?Math.max(0,(Math.min(o,cl)-l)/r):0;
+  }).filter(Number.isFinite);
+  const avgLowerWick=lowerWickRecent.length?mean(lowerWickRecent):null;
+  const localLow=last24.length?Math.min(...last24.map(x=>Number(x.low)).filter(Number.isFinite)):null;
+  const lastClose=Number(closes.at(-1));
+  const lastRange=Number(latestClosed?.high)-Number(latestClosed?.low);
+  const holdLow=Number.isFinite(localLow)&&Number.isFinite(lastClose)&&Number.isFinite(lastRange)
+    ? (lastClose-localLow)/Math.max(lastRange,1e-12) : null;
+  const exhaustionScore=avgDefined([
+    Number.isFinite(recentBuyRatio)?clamp(50+(recentBuyRatio-.5)*220):null,
+    Number.isFinite(downVolTrend)?clamp(60+(1-downVolTrend)*100):null,
+    Number.isFinite(avgLowerWick)?clamp(40+avgLowerWick*100):null,
+    bullishDivergence?92:null,
+    spring?94:null
+  ],null);
+
+  const bbVals=closes.slice(-60);
+  let bbWidthNow=null,bbWidthBase=null,bbWidthRatio=null;
+  if(bbVals.length>=40){
+    const bbWidths=[];
+    for(let i=19;i<bbVals.length;i++){
+      const w=bbVals.slice(i-19,i+1);
+      const mu=mean(w);
+      const sd=Math.sqrt(mean(w.map(v=>(v-mu)**2)));
+      bbWidths.push(mu>0?4*sd/mu:null);
+    }
+    const validWidths=bbWidths.filter(Number.isFinite);
+    bbWidthNow=validWidths.at(-1)??null;
+    const baseWidths=validWidths.slice(-21,-1);
+    bbWidthBase=baseWidths.length?mean(baseWidths):null;
+    bbWidthRatio=Number.isFinite(bbWidthNow)&&Number.isFinite(bbWidthBase)&&bbWidthBase>0?bbWidthNow/bbWidthBase:null;
+  }
+  const atrRanges=last24.map(x=>Number(x.high)-Number(x.low)).filter(Number.isFinite);
+  const atrRecent=atrRanges.slice(-8).length?mean(atrRanges.slice(-8)):null;
+  const atrBase=atrRanges.slice(-40,-8).length?mean(atrRanges.slice(-40,-8)):null;
+  const atrContractionRatio=Number.isFinite(atrRecent)&&Number.isFinite(atrBase)&&atrBase>0?atrRecent/atrBase:null;
+  const dryUpRatio=Number.isFinite(rvolRatio)?rvolRatio:null;
+  const squeezeScore=avgDefined([
+    Number.isFinite(bbWidthRatio)?clamp(100-(bbWidthRatio*85)):null,
+    Number.isFinite(atrContractionRatio)?clamp(100-(atrContractionRatio*85)):null,
+    Number.isFinite(dryUpRatio)?clamp(100-(dryUpRatio*70)):null
+  ],null);
+
+  const roc4=closes.length>=5&&Number.isFinite(Number(closes.at(-5))) && Number(closes.at(-5))>0
+    ? (lastClose-Number(closes.at(-5)))/Number(closes.at(-5))*100 : null;
+  const rocPrev4=closes.length>=9&&Number.isFinite(Number(closes.at(-9))) && Number(closes.at(-9))>0
+    ? (Number(closes.at(-5))-Number(closes.at(-9)))/Number(closes.at(-9))*100 : null;
+  const rsiSlope=Number.isFinite(currentRsi)&&Number.isFinite(prevRsi)?currentRsi-prevRsi:null;
+  const atrExpansionRatio=Number.isFinite(atrRecent)&&Number.isFinite(atrBase)&&atrBase>0?atrRecent/atrBase:null;
+  const momentumScore=avgDefined([
+    Number.isFinite(roc4)?clamp(50+roc4*12):null,
+    Number.isFinite(rsiSlope)?clamp(50+rsiSlope*4):null,
+    Number.isFinite(atrExpansionRatio)?clamp(50+(atrExpansionRatio-1)*80):null,
+    Number.isFinite(buyRatioScore)?buyRatioScore:null
+  ],null);
+
+  const pivHigh=latestHigh?.price??null;
+  const bosUp=Number.isFinite(pivHigh)&&Number.isFinite(currentPrice)&&currentPrice>pivHigh;
+  const hl=Number.isFinite(lastRiseLow?.price)&&Number.isFinite(currentPrice)&&currentPrice>lastRiseLow.price;
+  const structureScore=avgDefined([
+    Number.isFinite(pivHigh)&&Number.isFinite(currentPrice)?clamp(50+(currentPrice-pivHigh)/Math.max(Math.abs(pivHigh),1e-12)*500):null,
+    hl?72:null,
+    bullishDivergence?84:null,
+    bosUp?95:null
+  ],50);
+
+  const mtfScores=[];
+  for(const tf of ['4h','1h']){
+    const xs=(series?.[tf]||[]).filter(c=>c?.closed!==false&&Number.isFinite(Number(c?.close))).map(c=>Number(c.close));
+    if(xs.length>=55){
+      const e20v=ema(xs,20),e50v=ema(xs,50),p=xs.at(-1);
+      mtfScores.push(p>e20v&&e20v>=e50v?90:p>e20v?72:p>e50v?58:28);
+    }
+  }
+  if(Number.isFinite(structureScore))mtfScores.push(structureScore);
+  const mtfAlignmentScore=avgDefined(mtfScores,null);
+
+  const bottomAlgorithmScore=avgDefined([
+    Number.isFinite(rsiScore)?rsiScore:null,
+    Number.isFinite(stochasticScore)?stochasticScore:null,
+    Number.isFinite(obvScore)?obvScore:null,
+    Number.isFinite(volumePriceDivergence)?volumePriceDivergence:null,
+    Number.isFinite(emaReclaim)?emaReclaim:null,
+    Number.isFinite(wyckoffScore)?wyckoffScore:null,
+    Number.isFinite(vwapScore)?vwapScore:null,
+    Number.isFinite(structureScore)?structureScore:null,
+    Number.isFinite(buyRatioScore)?buyRatioScore:null,
+    Number.isFinite(orderbookImbalanceScore)?orderbookImbalanceScore:null,
+    Number.isFinite(whaleScore)?whaleScore:null,
+    Number.isFinite(exhaustionScore)?exhaustionScore:null,
+    Number.isFinite(squeezeScore)?squeezeScore:null,
+    Number.isFinite(momentumScore)?momentumScore:null,
+    Number.isFinite(mtfAlignmentScore)?mtfAlignmentScore:null
+  ],null);
   return {
     source:'BINANCE_PUBLIC_REST',
     closed_candles_only:true,
@@ -483,7 +628,27 @@ export function buildBottomMarketContext(series, ticker, now) {
       ema20_50_reclaim:{score:Number.isFinite(emaReclaim)?emaReclaim:null,ema20:Number.isFinite(ema20_1h)?ema20_1h:null,ema50:Number.isFinite(ema50_1h)?ema50_1h:null},
       wyckoff_spring:{score:wyckoffScore,spring_confirmed:spring},
       vwap_position:{score:Number.isFinite(vwapScore)?vwapScore:null,vwap:Number.isFinite(vwap)?vwap:null},
-      price_structure:{score:Number.isFinite(lastRiseHigh?.price)&&Number.isFinite(lastRiseLow?.price)?Math.max(0,Math.min(100,(Number(currentPrice)-lastRiseLow.price)/(lastRiseHigh.price-lastRiseLow.price)*100)):null}
+      price_structure:{score:Number.isFinite(structureScore)?structureScore:null,break_of_structure:bosUp,higher_low:hl},
+      taker_flow:{buy_ratio:Number.isFinite(recentBuyRatio)?recentBuyRatio:null,previous_buy_ratio:Number.isFinite(prevBuyRatio)?prevBuyRatio:null,score:Number.isFinite(buyRatioScore)?buyRatioScore:null},
+      orderbook_pressure:{imbalance:Number.isFinite(orderbookImbalance)?orderbookImbalance:null,score:Number.isFinite(orderbookImbalanceScore)?orderbookImbalanceScore:null,bid_depth:Number.isFinite(bidDepthBook)?bidDepthBook:null,ask_depth:Number.isFinite(askDepthBook)?askDepthBook:null},
+      whale_pressure:{score:Number.isFinite(whaleScore)?whaleScore:null,bid_wall_share:Number.isFinite(largestBidShare)?largestBidShare:null,ask_wall_share:Number.isFinite(largestAskShare)?largestAskShare:null,bid_wall_distance_pct:Number.isFinite(nearestBidWallPct)?nearestBidWallPct:null,ask_wall_distance_pct:Number.isFinite(nearestAskWallPct)?nearestAskWallPct:null,heuristic:true},
+      sell_exhaustion:{score:Number.isFinite(exhaustionScore)?exhaustionScore:null,down_volume_ratio:Number.isFinite(downVolTrend)?downVolTrend:null,lower_wick_avg:Number.isFinite(avgLowerWick)?avgLowerWick:null,hold_low_ratio:Number.isFinite(holdLow)?holdLow:null},
+      squeeze:{score:Number.isFinite(squeezeScore)?squeezeScore:null,bb_width_ratio:Number.isFinite(bbWidthRatio)?bbWidthRatio:null,atr_contraction_ratio:Number.isFinite(atrContractionRatio)?atrContractionRatio:null,volume_dry_ratio:Number.isFinite(dryUpRatio)?dryUpRatio:null},
+      momentum_awaken:{score:Number.isFinite(momentumScore)?momentumScore:null,roc4:Number.isFinite(roc4)?roc4:null,roc_prev4:Number.isFinite(rocPrev4)?rocPrev4:null,rsi_slope:Number.isFinite(rsiSlope)?rsiSlope:null,atr_ratio:Number.isFinite(atrExpansionRatio)?atrExpansionRatio:null},
+      mtf_alignment:{score:Number.isFinite(mtfAlignmentScore)?mtfAlignmentScore:null}
+    },
+    metrics:{
+      buying_pressure:Number.isFinite(buyRatioScore)?buyRatioScore:null,
+      selling_exhaustion:Number.isFinite(exhaustionScore)?exhaustionScore:null,
+      compression:Number.isFinite(squeezeScore)?squeezeScore:null,
+      momentum:Number.isFinite(momentumScore)?momentumScore:null,
+      structure:Number.isFinite(structureScore)?structureScore:null,
+      whale_pressure:Number.isFinite(whaleScore)?whaleScore:null,
+      orderbook_imbalance:Number.isFinite(orderbookImbalanceScore)?orderbookImbalanceScore:null,
+      taker_buy_ratio:Number.isFinite(recentBuyRatio)?recentBuyRatio:null,
+      mtf_alignment:Number.isFinite(mtfAlignmentScore)?mtfAlignmentScore:null,
+      bos_up:bosUp,
+      higher_low:hl
     }
   };
 }
@@ -606,7 +771,7 @@ export function buildCandidateContract({
     high_price_24h: ticker.highPrice24h,
     low_price_24h: ticker.lowPrice24h,
     quote_volume_24h: ticker.quoteVolume24h,
-    bottom_context: buildBottomMarketContext(series, ticker, deep.completedAt),
+    bottom_context: buildBottomMarketContext(series, ticker, deep.completedAt, {book: deep.depth, liquidity}),
     liquidity_quality: Math.round(Number(liquidity.quality) * 100) / 100,
     data_quality: dataQuality,
     confidence_score: 'UNKNOWN',
@@ -807,12 +972,21 @@ export class MarketUniverseScanner {
     let error = null;
 
     try {
-      for (const tf of ['4h', '1h', '15m']) {
-        const r = await this.fetchSeries(ticker.symbol, tf);
-        const fetchedAt = Number(r.receivedAt) || this.clock();
-        series[tf] = Array.isArray(r.candles)
-          ? r.candles.map(c => ({ ...c, symbol: ticker.symbol, timeframe: tf }))
-          : normalizeRawKlines(r.data, r.source, fetchedAt);
+      const tfResults = await Promise.all(
+        ['4h','1h','15m'].map(async tf => {
+          const r = await this.fetchSeries(ticker.symbol, tf);
+          const fetchedAt = Number(r.receivedAt) || this.clock();
+          return {
+            tf,
+            source: r.source ?? null,
+            candles: Array.isArray(r.candles)
+              ? r.candles.map(c => ({ ...c, symbol: ticker.symbol, timeframe: tf }))
+              : normalizeRawKlines(r.data, r.source, fetchedAt)
+          };
+        })
+      );
+      for (const r of tfResults) {
+        series[r.tf] = r.candles;
         if (r.source) klinesSources.push(r.source);
       }
       const depth = await this.fetchDepth(ticker.symbol);
@@ -843,6 +1017,7 @@ export class MarketUniverseScanner {
         series,
         evaluation,
         liquidity,
+        depth: depthRaw,
         sources: {
           exchangeInfo: sources.exchangeInfo,
           ticker: sources.ticker,
