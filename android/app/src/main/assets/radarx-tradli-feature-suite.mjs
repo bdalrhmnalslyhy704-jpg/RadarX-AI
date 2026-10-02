@@ -195,7 +195,7 @@ export function mountTradliFeatureSuite(container) {
     '<div class="rxsuite-row">وظائف مستقلة من فئة TRADLI مدمجة داخل RadarX. التداول الحقيقي غير مفعّل.</div>' +
     '<div class="rxsuite-tabs">' +
     '<button class="rxsuite-tab active" data-tab="chart">Chart Lab</button><button class="rxsuite-tab" data-tab="verify">Verify</button>' +
-    '<button class="rxsuite-tab" data-tab="advisor">Advisor</button><button class="rxsuite-tab" data-tab="hub">Signals Hub</button><button class="rxsuite-tab" data-tab="sd">Supply / Demand</button></div>' +
+    '<button class="rxsuite-tab" data-tab="advisor">Advisor</button><button class="rxsuite-tab" data-tab="hub">Signals Hub</button><button class="rxsuite-tab" data-tab="sd">Supply / Demand</button><button class="rxsuite-tab" data-tab="desk">Order Desk</button></div>' +
     '<div class="rxsuite-live"><div><div class="rxsuite-title"><b>RadarX Live Data</b><span class="rxsuite-tag rxsuite-safe">PAPER ONLY</span></div><div class="rxsuite-sub">بيانات السوق عبر Backend RadarX • التنفيذ الحقيقي غير متاح داخل التطبيق</div></div><span class="rxsuite-live-dot"></span></div>' +'<div id="rx-p-chart" class="rxsuite-pane active"></div><div id="rx-p-verify" class="rxsuite-pane"></div><div id="rx-p-advisor" class="rxsuite-pane"></div><div id="rx-p-hub" class="rxsuite-pane"></div><div id="rx-p-sd" class="rxsuite-pane"></div><div id="rx-p-desk" class="rxsuite-pane"></div></section>';
   const tabs=[...container.querySelectorAll('.rxsuite-tab')];
   const keys=['chart','verify','advisor','hub','sd','desk'];
