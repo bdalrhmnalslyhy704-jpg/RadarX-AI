@@ -2,6 +2,35 @@ plugins {
     id "com.android.application"
 }
 
+def isReleaseBuildRequested = gradle.startParameter.taskNames.any { taskName ->
+    taskName.toLowerCase().contains("release") || taskName.toLowerCase().contains("bundle")
+}
+
+def requiredReleaseSigningEnv = [
+    "ANDROID_RELEASE_STORE_PASSWORD",
+    "ANDROID_RELEASE_KEY_ALIAS",
+    "ANDROID_RELEASE_KEY_PASSWORD"
+]
+
+def missingReleaseSigningEnv = requiredReleaseSigningEnv.findAll { name ->
+    !(System.getenv(name) ?: "").trim()
+}
+
+def releaseKeystoreFile = System.getenv("ANDROID_RELEASE_KEYSTORE_FILE")
+def releaseKeystoreReady = releaseKeystoreFile && file(releaseKeystoreFile).isFile()
+
+if (isReleaseBuildRequested && (!missingReleaseSigningEnv.isEmpty() || !releaseKeystoreReady)) {
+    def missing = new ArrayList(missingReleaseSigningEnv)
+    if (!releaseKeystoreReady) {
+        missing.add("ANDROID_RELEASE_KEYSTORE_FILE (temporary Runner path)")
+    }
+    throw new GradleException(
+        "Secure Release signing is required. Missing signing inputs: " +
+        missing.join(", ") +
+        ". Configure the four GitHub Actions Secrets and let the Release workflow create the temporary keystore file."
+    )
+}
+
 android {
     namespace "com.radarx.app"
     compileSdk 35
@@ -14,11 +43,22 @@ android {
         versionName "1.2.0"
     }
 
+    signingConfigs {
+        release {
+            if (releaseKeystoreReady && missingReleaseSigningEnv.isEmpty()) {
+                storeFile file(releaseKeystoreFile)
+                storePassword System.getenv("ANDROID_RELEASE_STORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_RELEASE_KEY_ALIAS")
+                keyPassword System.getenv("ANDROID_RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             shrinkResources false
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
     }

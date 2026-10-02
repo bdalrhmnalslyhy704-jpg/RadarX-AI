@@ -1,0 +1,7 @@
+# Android release-signing material must never be committed.
+*.jks
+*.keystore
+*.p12
+*.key
+*.pem
+keystore.properties

@@ -1,0 +1,128 @@
+name: RadarX Android Release APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact release-signing branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          ref: android-release-signing-secure
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 35 and build-tools
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" >/dev/null
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Verify Release signing secrets are present
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in             ANDROID_RELEASE_KEYSTORE_BASE64             ANDROID_RELEASE_STORE_PASSWORD             ANDROID_RELEASE_KEY_ALIAS             ANDROID_RELEASE_KEY_PASSWORD
+          do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error::Missing required Release signing secret(s): ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Materialize signing keystore in runner temp only
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "${ANDROID_RELEASE_KEYSTORE_BASE64}" | base64 --decode > "${RUNNER_TEMP}/radarx-release.keystore"
+          test -s "${RUNNER_TEMP}/radarx-release.keystore"
+
+      - name: Build signed universal Release APK
+        working-directory: android
+        env:
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+          ANDROID_RELEASE_KEYSTORE_FILE: ${{ runner.temp }}/radarx-release.keystore
+        run: |
+          set -euo pipefail
+          gradle --no-daemon --no-parallel :app:assembleRelease
+
+      - name: Verify APK signature, package, and universal output
+        run: |
+          set -euo pipefail
+          APK_DIR="android/app/build/outputs/apk/release"
+          mapfile -t APKS < <(find "$APK_DIR" -maxdepth 1 -type f -name '*.apk' -print | sort)
+
+          if (( ${#APKS[@]} != 1 )); then
+            echo "::error::Expected exactly one Release APK; found ${#APKS[@]}."
+            printf '%s\n' "${APKS[@]}" || true
+            exit 1
+          fi
+
+          if [[ "${APKS[0]}" != "$APK_DIR/app-release.apk" ]]; then
+            echo "::error::Expected the universal Release APK at $APK_DIR/app-release.apk."
+            exit 1
+          fi
+
+          APKSIGNER="${ANDROID_HOME}/build-tools/35.0.0/apksigner"
+          AAPT="${ANDROID_HOME}/build-tools/35.0.0/aapt"
+
+          "$APKSIGNER" verify --verbose "${APKS[0]}"
+
+          PACKAGE="$("$AAPT" dump badging "${APKS[0]}" | sed -n "s/^package: name='\\([^']*\\)'.*$/\\1/p" | head -n 1)"
+          if [[ "$PACKAGE" != "com.radarx.app" ]]; then
+            echo "::error::Unexpected package: $PACKAGE"
+            exit 1
+          fi
+
+          mkdir -p "${RUNNER_TEMP}/radarx-release"
+          cp "${APKS[0]}" "${RUNNER_TEMP}/radarx-release/radarx-release.apk"
+
+          sha256sum "${RUNNER_TEMP}/radarx-release/radarx-release.apk"
+
+      - name: Remove signing keystore before artifact upload
+        if: always()
+        run: |
+          set -euo pipefail
+          rm -f "${RUNNER_TEMP}/radarx-release.keystore"
+          test ! -e "${RUNNER_TEMP}/radarx-release.keystore"
+
+      - name: Upload verified APK only
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-release-apk
+          path: ${{ runner.temp }}/radarx-release/radarx-release.apk
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
