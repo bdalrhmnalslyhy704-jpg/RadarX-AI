@@ -24,3 +24,6 @@ export function potentialLabel(label){
     EARLY_MOVE:'بداية حركة'
   })[label]||label||'مراقبة';
 }
+
+
+// RELEASE_VALIDATION_24H_MOVE_RADAR
