@@ -292,10 +292,12 @@ export function buildCandidateContract({
 }) {
   const symbol = ticker.symbol;
   const series = deep.series || {};
+  const rawSeries = deep.rawSeries || series;
   const v4 = validateSeries(series['4h'] || [], '4h');
   const v1 = validateSeries(series['1h'] || [], '1h');
   const v15 = validateSeries(series['15m'] || [], '15m');
-  const allCandles = [...(series['4h'] || []), ...(series['1h'] || []), ...(series['15m'] || [])];
+  const allCandles = [...(rawSeries['4h'] || []), ...(rawSeries['1h'] || []), ...(rawSeries['15m'] || [])];
+  const excludedOpenCandleCount = Object.values(deep.excludedOpenCandles || {}).reduce((sum, n) => sum + Number(n || 0), 0);
   const last15 = latestClosed(series['15m'] || []);
   const triggerAgeMs = freshnessMs(series['15m'] || [], deep.completedAt);
   const future = futureData(allCandles, deep.completedAt);
@@ -420,7 +422,17 @@ export function buildCandidateContract({
       data_valid: gatePass,
       last_error: lastError,
       source,
-      fetch_age_ms: Number.isFinite(deep.minFetchAgeMs) ? Math.max(0, Math.trunc(deep.minFetchAgeMs)) : null
+      fetch_age_ms: Number.isFinite(deep.minFetchAgeMs) ? Math.max(0, Math.trunc(deep.minFetchAgeMs)) : null,
+      analysis_candle: {
+        timeframe: '15m',
+        open_time: last15?.openTime ?? null,
+        close_time: last15?.closeTime ?? null,
+        closed: last15?.closed === true,
+        closed_only: true
+      },
+      closed_candle_only: true,
+      excluded_open_candle_count: excludedOpenCandleCount,
+      server_now_ms: deep.completedAt
     },
     paper_trading: true,
     real_order_execution: false
