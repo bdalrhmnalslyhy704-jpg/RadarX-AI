@@ -1,3 +1,4 @@
+import {rankBottomCandidates} from '../radarx-bottom-reversal.mjs';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {
@@ -187,6 +188,33 @@ assert.match(manifest,/RadarXBackgroundMonitorService/);
 assert.match(manifest,/foregroundServiceType="dataSync"/);
 assert.equal(backgroundService.includes('/api/v3/order'),false);
 const bottomPage=await readFile(new URL('../bottom-radar.html',import.meta.url),'utf8');
+const bottomSample={candidates:[{
+  symbol:'TESTUSDT',last_price:1.25,price_change_24h:-6,liquidity_quality:88,data_quality:95,
+  data_status:{data_valid:true},
+  pre_breakout_fingerprint:{stage:'PRE-BREAKOUT',trapRisk:18,evidenceCount:6,evidence:{
+    structure:{score:84,status:'HL_EMERGING'},compression:{score:82,status:'TIGHT'},volume:{score:79,status:'ACCELERATING'},
+    relative_power:{score:81,status:'INCREASING'},order_flow:{score:83,status:'BUYING_PRESSURE'},resistance:{score:74,status:'TESTING'}
+  }},
+  strategies:[
+    {id:'MEAN_REVERSION',score:{value:78},signal_state:'CANDIDATE'},
+    {id:'BOLLINGER_BAND_REVERSION',score:{value:82},signal_state:'CANDIDATE'},
+    {id:'VCP_PRE_BREAKOUT',score:{value:80},signal_state:'CANDIDATE'},
+    {id:'RELATIVE_VOLUME_SURGE',score:{value:79},signal_state:'CANDIDATE'},
+    {id:'VWAP_REVERSION',score:{value:76},signal_state:'CANDIDATE'},
+    {id:'MACD_TREND_CONTINUATION',score:{value:72},signal_state:'CANDIDATE'},
+    {id:'EMA_RIBBON_ALIGNMENT',score:{value:68},signal_state:'CANDIDATE'},
+    {id:'ADX_TREND_STRENGTH',score:{value:70},signal_state:'CANDIDATE'},
+    {id:'ATR_EXPANSION',score:{value:74},signal_state:'CANDIDATE'},
+    {id:'MTF_TREND',score:{value:73},signal_state:'CANDIDATE'}
+  ]
+}]};
+const bottomRows=rankBottomCandidates(bottomSample);
+assert.equal(bottomRows.length,1);
+assert.equal(bottomRows[0].symbol,'TESTUSDT');
+assert.ok(bottomRows[0].score>65);
+assert.ok(bottomRows[0].buyingPressure>70);
+assert.ok(bottomRows[0].momentumAwakening>60);
+
 const bottomEngine=await readFile(new URL('../radarx-bottom-reversal.mjs',import.meta.url),'utf8');
 assert.match(bottomPage,/Bottom Reversal Radar/);
 assert.match(bottomPage,/فحص القيعان الآن/);
