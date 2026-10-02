@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - android-market-radar-integration
+      - android-fix-*
   pull_request:
     branches:
       - main
