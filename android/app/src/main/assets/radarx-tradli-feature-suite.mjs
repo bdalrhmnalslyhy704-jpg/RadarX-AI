@@ -42,15 +42,65 @@ function addStyle() {
 let marketCache = null;
 let marketCacheAt = 0;
 const MARKET_CACHE_MS = 5000;
+const MARKET_STORAGE_KEY = 'radarx.tradli.lastMarket.v1';
+const MARKET_FALLBACK_MAX_AGE_MS = 10 * 60 * 1000;
+
+function readStoredMarket() {
+  try {
+    const raw = localStorage.getItem(MARKET_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.body || !Number.isFinite(parsed.savedAt)) return null;
+    if (Date.now() - parsed.savedAt > MARKET_FALLBACK_MAX_AGE_MS) return null;
+    return Object.assign({}, parsed.body, {
+      __transportFallback: true,
+      __transportAgeMs: Date.now() - parsed.savedAt
+    });
+  } catch {
+    return null;
+  }
+}
+
+function storeMarket(body) {
+  try {
+    localStorage.setItem(MARKET_STORAGE_KEY, JSON.stringify({
+      savedAt: Date.now(),
+      body
+    }));
+  } catch {}
+}
+
 async function market() {
   const now = Date.now();
   if (marketCache && now - marketCacheAt < MARKET_CACHE_MS) return marketCache;
-  const r = await getMarketRadar({quote:'USDT',limit:20});
-  if (!r.ok || !r.body) throw Error('MARKET_RADAR_UNAVAILABLE');
-  marketCache = r.body;
-  marketCacheAt = Date.now();
-  return marketCache;
+
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const r = await getMarketRadar({quote:'USDT',limit:20});
+      if (r.ok && r.body && Array.isArray(r.body.candidates)) {
+        marketCache = r.body;
+        marketCacheAt = Date.now();
+        storeMarket(r.body);
+        return marketCache;
+      }
+      lastError = new Error('MARKET_RADAR_HTTP_' + String(r.status || 0));
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 900 * (attempt + 1)));
+  }
+
+  const stored = readStoredMarket();
+  if (stored) {
+    marketCache = stored;
+    marketCacheAt = Date.now();
+    return stored;
+  }
+
+  throw lastError || new Error('MARKET_RADAR_UNAVAILABLE');
 }
+
 function findCandidate(body,symbol) {
   return (body.candidates || []).find(x => String(x.symbol).toUpperCase() === symbol.toUpperCase());
 }
