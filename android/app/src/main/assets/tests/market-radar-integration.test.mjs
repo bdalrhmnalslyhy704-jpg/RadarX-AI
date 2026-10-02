@@ -186,6 +186,10 @@ assert.match(tradliPage,/TRADLI — AI Trading Analysis/);
 assert.match(tradliPage,/mountTradliFeatureSuite/);
 assert.match(tradliPage,/expected=\['chart','verify','advisor','hub','sd','desk'\]/);
 assert.match(tradliPage,/TRADLI_PAGE_READY/);
+assert.match(tradliPage,/اتصال بيانات TRADLI/);
+assert.match(tradliPage,/فحص بيانات السوق الآن/);
+assert.match(tradliPage,/requestJson/);
+
 assert.equal(index.includes("mountTradliFeatureSuite"),false);
 const suite=await readFile(new URL('../radarx-tradli-feature-suite.mjs',import.meta.url),'utf8');
 assert.match(suite,/rxsuite-tab/);
