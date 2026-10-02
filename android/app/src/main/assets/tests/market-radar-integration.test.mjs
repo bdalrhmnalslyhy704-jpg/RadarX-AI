@@ -166,5 +166,12 @@ assert.match(client,/\/api\/signal\?symbol=/);
 assert.match(client,/\/api\/market-radar\?quote=/);
 assert.match(screenSource,/Paper Trading فقط/);
 assert.match(index,/UI_READY/);
+const suite=await readFile(new URL('../radarx-tradli-feature-suite.mjs',import.meta.url),'utf8');
+assert.match(suite,/rxsuite-tab/);
+assert.match(suite,/data-tab="desk"/);
+assert.match(suite,/orderDesk/);
+assert.match(suite,/NO EXECUTION/);
+assert.doesNotMatch(suite,/api\\/v3\\/order/);
+assert.doesNotMatch(suite,/real_order_execution\\s*[:=]\\s*true/);
 
 console.log('RadarX Android Dashboard regression tests passed: 30 assertions');
