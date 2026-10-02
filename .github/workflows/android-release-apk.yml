@@ -1,10 +1,13 @@
 name: RadarX Android Release APK
 
 on:
+  push:
+    branches:
+      - android-release-signing-secure
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   release-apk:
@@ -164,6 +167,19 @@ jobs:
           cp "${APKS[0]}" "${RUNNER_TEMP}/radarx-release/radarx-release.apk"
 
           sha256sum "${RUNNER_TEMP}/radarx-release/radarx-release.apk"
+
+      - name: Publish signed APK GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="android-v6.8.3-secure-${GITHUB_RUN_NUMBER}"
+          APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
+          gh release create "$TAG" "$APK" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "RadarX 6.8.3 Native — Secure Update ${GITHUB_RUN_NUMBER}" \
+            --notes "Signed universal APK built from android-release-signing-secure at commit ${GITHUB_SHA}. Includes the latest Market Radar integration. Paper Trading only; real_order_execution=false."
 
       - name: Remove signing keystore before artifact upload
         if: always()
