@@ -33,6 +33,8 @@ const candidate={
 
 const alert=buildMoveAlert(candidate,{movePct:1.2,previousMovePct:.7},{now:1710000000000});
 assert.equal(alert.event,'EARLY_MOVE_ALERT');
+assert.equal(alert.detected_at,1710000000000);
+assert.equal(alert.processed_at,1710000000000);
 assert.equal(alert.direction,'UP_MOVE');
 assert.ok(alert.opportunity_score>=70);
 assert.equal(alert.strategy_confluence.accepted_count,2);

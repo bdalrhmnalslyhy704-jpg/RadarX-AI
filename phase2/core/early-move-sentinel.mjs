@@ -155,6 +155,7 @@ export function buildMoveAlert(candidate,trigger,{now=Date.now()}={}) {
     risk_flags:[...new Set(riskFlags)],
     data_status:candidate?.data_status||{},
     source:'Binance Public REST/WS',
+    detected_at:now,
     processed_at:now,
     paper_trading:true,
     real_order_execution:false,
