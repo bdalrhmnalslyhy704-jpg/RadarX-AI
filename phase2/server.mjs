@@ -3,6 +3,7 @@ import {resolve} from 'node:path';
 import {CONFIG} from './config.mjs';
 import {RestClient} from './market/binance-rest.mjs';
 import {BinanceStreamClient} from './market/binance-ws.mjs';
+import {BinanceAllMarketTickerClient} from './market/binance-market-ticker-ws.mjs';
 import {DurableStore} from './core/store.mjs';
 import {SignalDeduplicator} from './core/dedup.mjs';
 import {SignalService} from './core/signal-service.mjs';
@@ -40,13 +41,8 @@ export async function startServer({
   const moveSentinel=new EarlyMoveSentinel({
     rest,store,config:config.moveRadar,logger,
     scannerFactory:()=>moveScanner,
-    tickerWsFactory:opts=>new BinanceStreamClient({
-      ...opts,
-      streams:['__MOVE_SENTINEL_PLACEHOLDER__']
-    })
+    tickerWsFactory:opts=>new BinanceAllMarketTickerClient(opts)
   });
-  // The sentinel has its own all-market ticker client; the factory is replaced below in tests or runtime.
-  moveSentinel.tickerWsFactory=opts=>new (requireUnavailable())(opts);
   await monitor.start();
   await moveSentinel.start();
   const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel});
