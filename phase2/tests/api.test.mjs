@@ -163,3 +163,18 @@ test('TEST_FIXTURE: public signal route is read-only and existing API paths rema
   assert.doesNotMatch(route,/createOrder|placeOrder|withdraw|account/i);
   assert.match(route,/req\.method==='GET'/);
 });
+
+
+test('TEST_FIXTURE: public move radar feed returns persisted early-move alerts',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-move-radar-feed-')),store=await new DurableStore({dir}).init();
+  await store.appendMoveAlert({id:'MOVE:TEST:1',symbol:'TESTUSDT',direction:'UP_MOVE',opportunity_score:84,expansion_potential:81,processed_at:Date.now(),paper_trading:true,real_order_execution:false});
+  const config={auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100},moveRadar:{thresholdPct:1}};
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const moveSentinel={health:()=>({running:true,universe:123,websocket:{state:'LIVE'}})};
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),moveSentinel});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const base='http://127.0.0.1:'+server.address().port;
+  const res=await fetch(base+'/api/move-radar?limit=50'); const body=await res.json();
+  assert.equal(res.status,200); assert.equal(body.meta.live,true); assert.equal(body.thresholds.move_pct,1); assert.equal(body.alerts.length,1); assert.equal(body.alerts[0].symbol,'TESTUSDT');
+  await new Promise(resolve=>server.close(resolve));
+});
