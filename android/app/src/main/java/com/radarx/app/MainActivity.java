@@ -6,6 +6,9 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Bundle;
+import android.os.Build;
+import android.Manifest;
+import android.widget.Toast;
 import android.util.Log;
 import android.view.View;
 import android.webkit.SslErrorHandler;
@@ -38,6 +41,8 @@ public final class MainActivity extends Activity {
             "https://appassets.androidplatform.net";
     private static final String BACKEND_ORIGIN =
             "https://radarx-ai-production.up.railway.app";
+    private static final int REQUEST_POST_NOTIFICATIONS = 7301;
+    private boolean pendingBackgroundStart;
 
     private WebView webView;
     private WebViewAssetLoader assetLoader;
@@ -73,6 +78,7 @@ public final class MainActivity extends Activity {
         settings.setAllowContentAccess(false);
 
         webView.addJavascriptInterface(new RadarXSmokeBridge(), "RadarXSmoke");
+        webView.addJavascriptInterface(new RadarXNativeBridge(), "RadarXNative");
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
@@ -237,10 +243,82 @@ public final class MainActivity extends Activity {
         webView.loadDataWithBaseURL(APP_URL, html, "text/html", "UTF-8", null);
     }
 
+
+    private void startBackgroundMonitor() {
+        try {
+            Intent intent = new Intent(this, RadarXBackgroundMonitorService.class);
+            intent.setAction(RadarXBackgroundMonitorService.ACTION_START);
+            if (Build.VERSION.SDK_INT >= 26) {
+                startForegroundService(intent);
+            } else {
+                startService(intent);
+            }
+            Toast.makeText(this, "تم تشغيل مراقبة RadarX في الخلفية", Toast.LENGTH_SHORT).show();
+        } catch (Exception error) {
+            Log.e("RadarXBackground", "Unable to start background monitor", error);
+            Toast.makeText(this, "تعذر تشغيل المراقبة الخلفية", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void requestNotificationPermissionAndStart() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            pendingBackgroundStart = true;
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_POST_NOTIFICATIONS);
+            return;
+        }
+        startBackgroundMonitor();
+    }
+
+    private void stopBackgroundMonitor() {
+        Intent intent = new Intent(this, RadarXBackgroundMonitorService.class);
+        intent.setAction(RadarXBackgroundMonitorService.ACTION_STOP);
+        if (Build.VERSION.SDK_INT >= 26) {
+            startService(intent);
+        } else {
+            startService(intent);
+        }
+        Toast.makeText(this, "تم إيقاف مراقبة RadarX في الخلفية", Toast.LENGTH_SHORT).show();
+    }
+
+    private final class RadarXNativeBridge {
+        @JavascriptInterface
+        public void startBackgroundMonitor() {
+            runOnUiThread(() -> requestNotificationPermissionAndStart());
+        }
+
+        @JavascriptInterface
+        public void stopBackgroundMonitor() {
+            runOnUiThread(() -> stopBackgroundMonitor());
+        }
+
+        @JavascriptInterface
+        public boolean isBackgroundMonitorRunning() {
+            return RadarXBackgroundMonitorService.isRunning(MainActivity.this);
+        }
+    }
+
     private static final class RadarXSmokeBridge {
         @JavascriptInterface
         public void state(String value) {
             Log.i("RadarXSmoke", String.valueOf(value));
+        }
+    }
+
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_POST_NOTIFICATIONS) {
+            boolean granted = grantResults.length > 0 &&
+                    grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED;
+            if (pendingBackgroundStart && granted) {
+                pendingBackgroundStart = false;
+                startBackgroundMonitor();
+            } else if (pendingBackgroundStart) {
+                pendingBackgroundStart = false;
+                Toast.makeText(this, "تم رفض إشعارات المراقبة؛ لم يتم تشغيلها", Toast.LENGTH_LONG).show();
+            }
         }
     }
 
