@@ -310,3 +310,5 @@ assert.equal(suite.includes('/api/v3/order'),false);
 assert.equal(/real_order_execution\\s*[:=]\\s*true/.test(suite),false);
 
 console.log('RadarX Android Dashboard/background regression tests passed');
+
+// PRE_MOVE_RADAR_RELEASE_TRIGGER
