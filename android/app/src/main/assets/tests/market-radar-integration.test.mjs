@@ -191,6 +191,16 @@ assert.match(manifest,/FOREGROUND_SERVICE_DATA_SYNC/);
 assert.match(manifest,/RadarXBackgroundMonitorService/);
 assert.match(manifest,/foregroundServiceType="dataSync"/);
 assert.equal(backgroundService.includes('/api/v3/order'),false);
+const movePage=await readFile(new URL('../move-radar.html',import.meta.url),'utf8');
+const moveEngine=await readFile(new URL('../radarx-move-radar.mjs',import.meta.url),'utf8');
+assert.match(movePage,/24H Move Radar/);
+assert.match(movePage,/±1%/);
+assert.match(movePage,/24/7 Backend/);
+assert.match(movePage,/التنبيهات/);
+assert.match(moveEngine,/normalizeMoveAlerts/);
+assert.match(moveEngine,/HIGH_EXPANSION_SETUP/);
+assert.match(client,/\/api\/move-radar\?quote=/);
+
 const preMovePage=await readFile(new URL('../pre-move-radar.html',import.meta.url),'utf8');
 const preMoveEngine=await readFile(new URL('../radarx-pre-move.mjs',import.meta.url),'utf8');
 assert.match(preMovePage,/Pre‑Move Radar/);
