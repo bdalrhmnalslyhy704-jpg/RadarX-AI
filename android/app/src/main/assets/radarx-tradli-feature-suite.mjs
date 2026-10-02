@@ -35,7 +35,7 @@ function addStyle() {
     '.rxsuite-row{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:9px;border:1px solid #17313a;border-radius:10px;background:#071018;margin-top:7px}' +
     '.rxsuite-row small{display:block;color:#8da7b1;margin-top:2px}.rxsuite-images{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:7px}.rxsuite-thumb{width:100%;aspect-ratio:16/10;object-fit:cover;border-radius:8px;border:1px solid #244550}' +
     '@media(max-width:700px){.rxsuite-tabs{grid-template-columns:1fr 1fr}.rxsuite-form{grid-template-columns:1fr}.rxsuite-full{grid-column:auto}.rxsuite-grid,.rxsuite-agents{grid-template-columns:1fr 1fr}}' +
-    '@media(max-width:450px){.rxsuite-grid,.rxsuite-agents,.rxsuite-images{grid-template-columns:1fr}}';
+    '.rxsuite-live{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:linear-gradient(135deg,#0f2031,#101a2b);border:1px solid #294d6a;border-radius:12px;margin:9px 0}' +'.rxsuite-live-dot{width:9px;height:9px;border-radius:50%;background:#43e0a3;box-shadow:0 0 12px #43e0a3}' +'.rxsuite-title{display:flex;align-items:center;justify-content:space-between;gap:10px}.rxsuite-sub{font-size:11px;color:#8ea6b8;margin-top:3px}' +'.rxsuite-copy{min-height:38px;padding:0 11px;border-radius:9px;border:1px solid #355977;background:#0e2131;color:#e8f5ff;font:inherit;font-weight:900}' +'.rxsuite-danger{border-color:#7b4653;background:#2a1720}.rxsuite-safe{border-color:#2e7f65;background:#10261f}' +'@media(max-width:450px){.rxsuite-grid,.rxsuite-agents,.rxsuite-images{grid-template-columns:1fr}}';
   document.head.appendChild(s);
 }
 
@@ -196,12 +196,61 @@ export function mountTradliFeatureSuite(container) {
     '<div class="rxsuite-tabs">' +
     '<button class="rxsuite-tab active" data-tab="chart">Chart Lab</button><button class="rxsuite-tab" data-tab="verify">Verify</button>' +
     '<button class="rxsuite-tab" data-tab="advisor">Advisor</button><button class="rxsuite-tab" data-tab="hub">Signals Hub</button><button class="rxsuite-tab" data-tab="sd">Supply / Demand</button></div>' +
-    '<div id="rx-p-chart" class="rxsuite-pane active"></div><div id="rx-p-verify" class="rxsuite-pane"></div><div id="rx-p-advisor" class="rxsuite-pane"></div><div id="rx-p-hub" class="rxsuite-pane"></div><div id="rx-p-sd" class="rxsuite-pane"></div></section>';
+    '<div class="rxsuite-live"><div><div class="rxsuite-title"><b>RadarX Live Data</b><span class="rxsuite-tag rxsuite-safe">PAPER ONLY</span></div><div class="rxsuite-sub">بيانات السوق عبر Backend RadarX • التنفيذ الحقيقي غير متاح داخل التطبيق</div></div><span class="rxsuite-live-dot"></span></div>' +'<div id="rx-p-chart" class="rxsuite-pane active"></div><div id="rx-p-verify" class="rxsuite-pane"></div><div id="rx-p-advisor" class="rxsuite-pane"></div><div id="rx-p-hub" class="rxsuite-pane"></div><div id="rx-p-sd" class="rxsuite-pane"></div><div id="rx-p-desk" class="rxsuite-pane"></div></section>';
   const tabs=[...container.querySelectorAll('.rxsuite-tab')];
-  tabs.forEach(t=>t.onclick=()=>{tabs.forEach(x=>x.classList.toggle('active',x===t));['chart','verify','advisor','hub','sd'].forEach(k=>container.querySelector('#rx-p-'+k).classList.toggle('active',k===t.dataset.tab));});
+  const keys=['chart','verify','advisor','hub','sd','desk'];
+  tabs.forEach(t=>t.onclick=()=>{tabs.forEach(x=>x.classList.toggle('active',x===t));keys.forEach(k=>container.querySelector('#rx-p-'+k).classList.toggle('active',k===t.dataset.tab));});
   chartPanel(container.querySelector('#rx-p-chart'));
   verifyPanel(container.querySelector('#rx-p-verify'));
   advisorPanel(container.querySelector('#rx-p-advisor'));
   hubPanel(container.querySelector('#rx-p-hub'));
   supplyPanel(container.querySelector('#rx-p-sd'));
+  orderDesk(container.querySelector('#rx-p-desk'));
+}
+
+function orderDesk(root) {
+  root.innerHTML =
+    '<div class="rxsuite-form">' +
+    '<div class="rxsuite-field"><label>الرمز</label><input id="rx-os" class="rxsuite-input" value="BTCUSDT"></div>' +
+    '<div class="rxsuite-field"><label>الاتجاه</label><select id="rx-od" class="rxsuite-select"><option value="LONG">LONG / شراء</option><option value="SHORT">SHORT / بيع (تحليل فقط)</option></select></div>' +
+    '<div class="rxsuite-field"><label>الدخول</label><input id="rx-oe" class="rxsuite-input" inputmode="decimal"></div>' +
+    '<div class="rxsuite-field"><label>وقف الخسارة</label><input id="rx-ol" class="rxsuite-input" inputmode="decimal"></div>' +
+    '<div class="rxsuite-field"><label>الهدف 1</label><input id="rx-ot" class="rxsuite-input" inputmode="decimal"></div>' +
+    '<div class="rxsuite-field"><label>المبلغ</label><input id="rx-oq" class="rxsuite-input" inputmode="decimal" placeholder="اختياري"></div>' +
+    '</div>' +
+    '<div class="rxsuite-actions"><button id="rx-og" class="rxsuite-btn primary">تحقق وجهّز الأمر</button></div>' +
+    '<div id="rx-oo"><p class="rxsuite-row">هذه الشاشة لا ترسل أي أمر إلى منصة تداول. تستخدم فقط للتحقق من المدخلات وتجهيز تفاصيل صفقة قابلة للنسخ.</p></div>';
+  root.querySelector('#rx-og').onclick = async () => {
+    const o=root.querySelector('#rx-oo');
+    const symbol=root.querySelector('#rx-os').value.trim().toUpperCase();
+    const side=root.querySelector('#rx-od').value;
+    const entry=Number(root.querySelector('#rx-oe').value);
+    const sl=Number(root.querySelector('#rx-ol').value);
+    const tp=Number(root.querySelector('#rx-ot').value);
+    const qty=Number(root.querySelector('#rx-oq').value);
+    o.innerHTML='<p class="rxsuite-row">جاري التحقق من السعر والاتجاه…</p>';
+    try {
+      const b=await market(),c=findCandidate(b,symbol);
+      if(!c) throw Error('NO_CURRENT_CANDIDATE');
+      const p=Number(c.last_price);
+      const valid=[entry,sl,tp].every(Number.isFinite) && entry>0 && sl>0 && tp>0;
+      if(!valid) throw Error('INVALID_ORDER_FIELDS');
+      const dirOk=side==='LONG' ? sl<entry && tp>entry : sl>entry && tp<entry;
+      const rr=Math.abs(tp-entry)/Math.max(Math.abs(entry-sl),1e-12);
+      const distance=Math.abs(p-entry)/entry*100;
+      const riskAmount=Number.isFinite(qty)&&qty>0 ? Math.abs(entry-sl)*qty : null;
+      if(!dirOk) throw Error('INVALID_ORDER_DIRECTION_LEVELS');
+      const textOrder=(side==='LONG'?'BUY':'SELL')+' '+symbol+' @ '+entry+' | SL '+sl+' | TP1 '+tp+(Number.isFinite(qty)?' | QTY '+qty:'');
+      o.innerHTML=
+        '<div class="rxsuite-grid">'+box('Current',num(p,8))+box('Entry',num(entry,8))+box('SL',num(sl,8))+box('TP1',num(tp,8))+box('R:R',num(rr,2))+box('Entry distance',percent(distance))+'</div>'+
+        '<div class="rxsuite-row"><div><b>Prepared order</b><small>'+esc(textOrder)+'</small></div><button id="rx-oc" class="rxsuite-copy">نسخ</button></div>'+
+        '<div class="rxsuite-row"><div><b>Risk amount</b><small>'+ (riskAmount===null?'لم يُدخل حجم كمية.':num(riskAmount,8)) +'</small></div><span class="rxsuite-tag rxsuite-safe">NO EXECUTION</span></div>';
+      root.querySelector('#rx-oc').onclick=async()=>{
+        try{await navigator.clipboard.writeText(textOrder);root.querySelector('#rx-oc').textContent='تم النسخ';}
+        catch{root.querySelector('#rx-oc').textContent='انسخ يدويًا';}
+      };
+    } catch(e) {
+      o.innerHTML='<div class="rxsuite-row"><div><b>ORDER NOT READY</b><small>'+esc(e.message)+'</small></div><span class="rxsuite-tag rxsuite-danger">CHECK INPUT</span></div>';
+    }
+  };
 }
