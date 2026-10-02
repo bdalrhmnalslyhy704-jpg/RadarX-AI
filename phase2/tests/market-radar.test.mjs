@@ -77,8 +77,8 @@ function makeRest({wideSpread=false}={}) {
 }
 
 let observedEvaluationSeries = null;
-const evaluator = ({series}) => {
-  observedEvaluationSeries = series;
+const evaluator = ({series4h,series1h,series15m}) => {
+  observedEvaluationSeries = { '4h':series4h, '1h':series1h, '15m':series15m };
   return {
   signal:{risk_reasons:[]},
   strategies:{
