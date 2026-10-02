@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {MarketUniverseScanner, buildSpotUniverse, rankTickerRows, boundedMap, normalizeRadarLimit} from '../market/universe-scanner.mjs';
+import {MarketUniverseScanner, buildSpotUniverse, rankTickerRows, boundedMap, normalizeRadarLimit, normalizeTickerRow, buildBottomMarketContext} from '../market/universe-scanner.mjs';
 
 function candle(t, close=100, tfMs=900000) {
   return {
@@ -39,9 +39,9 @@ function exchangeInfo() {
 
 function tickers() {
   return [
-    {symbol:'BTCUSDT',lastPrice:'100',quoteVolume:'100000000',count:500000,priceChangePercent:'2'},
-    {symbol:'ETHUSDT',lastPrice:'50',quoteVolume:'40000000',count:250000,priceChangePercent:'5'},
-    {symbol:'LOWUSDT',lastPrice:'2',quoteVolume:'100',count:10,priceChangePercent:'50'}
+    {symbol:'BTCUSDT',lastPrice:'100',highPrice:'112',lowPrice:'92',quoteVolume:'100000000',count:500000,priceChangePercent:'2'},
+    {symbol:'ETHUSDT',lastPrice:'50',highPrice:'56',lowPrice:'44',quoteVolume:'40000000',count:250000,priceChangePercent:'5'},
+    {symbol:'LOWUSDT',lastPrice:'2',highPrice:'3',lowPrice:'1',quoteVolume:'100',count:10,priceChangePercent:'50'}
   ];
 }
 
@@ -94,6 +94,49 @@ test('ticker ranking prioritizes liquid rows and enforces minimum volume',()=>{
   const symbols=buildSpotUniverse(exchangeInfo(),'USDT');
   const rows=rankTickerRows(tickers(),symbols,{minQuoteVolume24h:750000,limit:2});
   assert.deepEqual(rows.map(x=>x.symbol),['BTCUSDT','ETHUSDT']);
+});
+
+test('ticker rows preserve 24h high and low for Bottom Radar',()=>{
+  const row=normalizeTickerRow(tickers()[0],'USDT');
+  assert.equal(row.highPrice24h,112);
+  assert.equal(row.lowPrice24h,92);
+});
+
+test('Bottom Radar derives current price, last rise, range position and closed-candle algorithms',()=>{
+  const now=2_000_000_000_000;
+  const prices=[
+    [100,101,97,98],[98,99,95,96],[96,98,94,97],
+    [97,100,96,99],[99,103,98,102],[102,106,101,105],
+    [105,104,100,101],[101,103,99,102],[102,107,100,106],
+    [106,105,101,104]
+  ];
+  const candles=prices.map((p,i)=>({
+    openTime:now-(prices.length-i)*900000,
+    closeTime:now-(prices.length-i)*900000+899999,
+    open:p[0],high:p[1],low:p[2],close:p[3],volume:1000+i*120,
+    tradeCount:100,closed:true
+  }));
+  const ctx=buildBottomMarketContext(
+    {'15m':candles,'1h':candles.map((x,i)=>({...x,closeTime:x.closeTime,closed:true}))},
+    {lastPrice:104,highPrice24h:110,lowPrice24h:92},
+    now
+  );
+  assert.equal(ctx.closed_candles_only,true);
+  assert.equal(ctx.current_price,104);
+  assert.equal(ctx.high_24h,110);
+  assert.equal(ctx.low_24h,92);
+  assert.ok(Number.isFinite(ctx.last_rise.high));
+  assert.ok(Number.isFinite(ctx.last_rise.low));
+  assert.ok(Number.isFinite(ctx.last_rise.rise_pct));
+  assert.ok(Number.isFinite(ctx.last_rise.drawdown_from_high_pct));
+  assert.ok(ctx.algorithms.rsi14);
+  assert.ok(ctx.algorithms.stochastic14);
+  assert.ok(ctx.algorithms.obv_accumulation);
+  assert.ok(ctx.algorithms.volume_price_divergence);
+  assert.ok(ctx.algorithms.ema20_50_reclaim);
+  assert.ok(ctx.algorithms.wyckoff_spring);
+  assert.ok(ctx.algorithms.vwap_position);
+  assert.ok(ctx.algorithms.price_structure);
 });
 
 test('limit normalization is bounded',()=>{
