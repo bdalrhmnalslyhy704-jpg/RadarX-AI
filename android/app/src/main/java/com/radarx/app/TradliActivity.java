@@ -244,7 +244,7 @@ public final class TradliActivity extends Activity {
         if (webView == null) return;
         webView.loadDataWithBaseURL(APP_URL,
                 "<!doctype html><html lang='ar' dir='rtl'><meta name='viewport' content='width=device-width,initial-scale=1'><body style='margin:0;background:#050c16;color:#fff;font-family:system-ui;padding:22px'><div style='margin-top:18vh;background:#0b1826;border:1px solid #6f4751;border-radius:18px;padding:18px'><h2>TRADLI</h2><p>" +
-                message + "</p><button onclick="location.href='" + APP_URL + "'" style='width:100%;min-height:48px;border-radius:12px;background:#35c9ff;border:0;font:inherit;font-weight:900'>إعادة المحاولة</button></div></body></html>",
+                message + "</p><button onclick='location.reload()' style='width:100%;min-height:48px;border-radius:12px;background:#35c9ff;border:0;font:inherit;font-weight:900'>إعادة المحاولة</button></div></body></html>",
                 "text/html", "UTF-8", null);
     }
 
