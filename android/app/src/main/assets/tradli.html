@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07111f">
+<title>RadarX — TRADLI Intelligence</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{scroll-behavior:smooth}
+body{margin:0;min-height:100vh;background:
+  radial-gradient(circle at 85% -15%,rgba(53,201,255,.18),transparent 35%),
+  radial-gradient(circle at 10% 0%,rgba(103,93,255,.16),transparent 30%),
+  linear-gradient(180deg,#07111f 0,#08111d 48%,#050b13 100%);
+color:#eaf5ff;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{width:min(1040px,100%);margin:auto;padding:12px 14px calc(28px + env(safe-area-inset-bottom))}
+header{position:sticky;top:0;z-index:20;margin:0 -14px 12px;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;background:rgba(5,12,22,.88);backdrop-filter:blur(18px);border-bottom:1px solid #1a3550}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.brand{display:flex;align-items:center;gap:10px}.logo{width:42px;height:42px;border-radius:13px;background:linear-gradient(135deg,#35c9ff,#6b68ff);display:grid;place-items:center;color:#04111d;font-weight:1000}
+.brand b{font-size:17px}.brand small{display:block;color:#92a8bd;font-size:11px;margin-top:2px}
+.back{display:inline-flex;align-items:center;gap:7px;text-decoration:none;color:#dff4ff;border:1px solid #2b4e6c;border-radius:12px;padding:9px 11px;background:#0b1b2b;font-size:11px;font-weight:950}
+.hero{margin:14px 0;padding:18px;border:1px solid #244766;border-radius:20px;background:linear-gradient(145deg,rgba(13,30,49,.98),rgba(8,17,29,.98));box-shadow:0 18px 40px rgba(0,0,0,.22)}
+.hero h1{margin:0;font-size:22px}.hero p{margin:8px 0 0;color:#8fa8bf;line-height:1.7;font-size:12px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:13px}
+.stat{padding:11px;border:1px solid #1d3953;border-radius:14px;background:#091624}.stat span{display:block;color:#7890a6;font-size:10px}.stat b{display:block;margin-top:4px;font-size:14px}
+.pill{display:inline-flex;align-items:center;gap:6px;margin-top:12px;padding:7px 10px;border:1px solid #2c7c61;border-radius:999px;background:#0e251e;color:#b8f4dc;font-size:10px;font-weight:950}
+.dot{width:7px;height:7px;border-radius:50%;background:#43e0a3;box-shadow:0 0 10px #43e0a3}
+#tradliSuitePanel{margin-top:12px}
+footer{padding:18px 4px;text-align:center;color:#70869b;font-size:10px;line-height:1.7}
+@media(max-width:650px){.grid{grid-template-columns:1fr}.hero h1{font-size:19px}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div class="topbar">
+    <div class="brand"><div class="logo">RX</div><div><b>TRADLI Intelligence</b><small>تحليل متقدم • Spot • Paper Only</small></div></div>
+    <a class="back" href="./index.html">← RadarX</a>
+  </div>
+</header>
+
+<section class="hero">
+  <h1>TRADLI — AI Trading Analysis</h1>
+  <p>صفحة مستقلة لوظائف TRADLI المدمجة داخل RadarX. كل وحدة تعمل على بيانات RadarX الحالية، ولا يوجد تنفيذ أو إرسال أوامر تداول من هذه الصفحة.</p>
+  <span class="pill"><span class="dot"></span> LIVE DATA • PAPER ONLY</span>
+  <div class="grid">
+    <div class="stat"><span>الوحدات</span><b>6 Modules</b></div>
+    <div class="stat"><span>مصدر البيانات</span><b>RadarX Backend</b></div>
+    <div class="stat"><span>التنفيذ</span><b>NO EXECUTION</b></div>
+  </div>
+</section>
+
+<div id="tradliSuitePanel" aria-label="TRADLI Intelligence Suite"></div>
+<footer>TRADLI داخل RadarX • قراءة وتحليل فقط • البيانات الحية من Backend RadarX • paper_trading=true • real_order_execution=false</footer>
+</main>
+
+<script>
+window.RadarXSmoke=window.RadarXSmoke||{state:function(value){try{console.log(value)}catch(e){}}};
+window.__TRADLI_PAGE_READY=false;
+</script>
+<script type="module">
+import {mountTradliFeatureSuite} from './radarx-tradli-feature-suite.mjs';
+
+const panel=document.getElementById('tradliSuitePanel');
+try{
+  mountTradliFeatureSuite(panel);
+  const tabs=[...panel.querySelectorAll('.rxsuite-tab')];
+  const panes=[...panel.querySelectorAll('.rxsuite-pane')];
+  const expected=['chart','verify','advisor','hub','sd','desk'];
+  if(tabs.length!==6 || panes.length!==6) throw new Error('TRADLI_PAGE_CONTRACT_INVALID');
+  expected.forEach((key,i)=>{
+    const tab=tabs.find(x=>x.dataset.tab===key);
+    const pane=panel.querySelector('#rx-p-'+key);
+    if(!tab || !pane) throw new Error('TRADLI_MODULE_MISSING_'+key);
+    tab.click();
+    if(!pane.classList.contains('active')) throw new Error('TRADLI_TAB_NOT_ACTIVE_'+key);
+    if(panes.filter(x=>x.classList.contains('active')).length!==1) throw new Error('TRADLI_MULTI_ACTIVE_PANES');
+  });
+  tabs[0].click();
+  window.__TRADLI_PAGE_READY=true;
+  window.RadarXSmoke.state('TRADLI_PAGE_READY');
+}catch(error){
+  console.error('TRADLI page boot error:',error);
+  panel.innerHTML='<section style="padding:16px;border:1px solid #7c4550;border-radius:16px;background:#151018"><b>تعذر تشغيل TRADLI</b><p style="color:#9eb0c1">'+String(error.message||error)+'</p></section>';
+}
+</script>
+</body>
+</html>
