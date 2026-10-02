@@ -28,6 +28,7 @@ footer{padding:18px 4px;text-align:center;color:#8fa8b2;font-size:12px}
 <button id="retryApp" type="button">إعادة المحاولة</button>
 </section>
 <div id="marketRadarPanel" aria-label="RadarX Dashboard"></div>
+<div id="tradliSuitePanel" aria-label="RadarX Intelligence Suite"></div>
 <footer>RadarX • SPOT • قراءة فقط • paper_trading=true • real_order_execution=false • confidence_score=UNKNOWN</footer>
 </main>
 <script>
@@ -38,6 +39,7 @@ setTimeout(window.__RADARX_SHOW_BOOT_ERROR,3500);
 </script>
 <script type="module">
 import {mountMarketRadarScreen} from './radarx-market-radar-screen.mjs';
+import {mountTradliFeatureSuite} from './radarx-tradli-feature-suite.mjs';
 
 const panel=document.getElementById('marketRadarPanel');
 const installButton=document.createElement('button');
@@ -56,6 +58,7 @@ installButton.addEventListener('click',async()=>{
 
 try{
   mountMarketRadarScreen(panel);
+  mountTradliFeatureSuite(document.getElementById('tradliSuitePanel'));
   window.__RADARX_BOOT_OK=true;
   const error=document.getElementById('appError');
   if(error)error.hidden=true;
