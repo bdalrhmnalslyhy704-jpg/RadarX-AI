@@ -137,10 +137,10 @@ for (const [id,evaluator] of cases) {
   });
 }
 
-test('first strategy batch has exactly seven ACTIVE implementations in the registry',()=>{
+test('first strategy batch keeps all implemented ACTIVE strategies in the registry',()=>{
   const ids=listActiveStrategies().map(x=>x.id);
   for(const id of cases.map(x=>x[0])) assert.ok(ids.includes(id),id);
-  assert.equal(ids.length,10);
+  assert.equal(ids.length,11);
 });
 
 test('each first-batch evaluator has a real function and metadata',()=>{
