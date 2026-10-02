@@ -17,7 +17,16 @@ export const MOVE_RADAR_DEFAULTS=Object.freeze({
   minDataQuality:70,
   minLiquidityQuality:60,
   deepKlines:220,
-  deepConcurrency:4
+  deepConcurrency:4,
+  earlyMax24hMovePct:1.25,
+  earlyMin24hMovePct:-8,
+  earlyScanCooldownMs:5*60*1000,
+  maxEarlyDiscovery:18,
+  earlyMinPreMoveScore:78,
+  earlyMinExpansionScore:78,
+  earlyMinStrategyScore:72,
+  earlyMinAcceptedStrategies:2,
+  earlyMinConfirmations:6
 });
 
 function strategyScore(candidate) {
@@ -165,6 +174,177 @@ export function buildMoveAlert(candidate,trigger,{now=Date.now()}={}) {
   };
 }
 
+export function rankPreExplosionTickerRows(tickers,symbols,{
+  minQuoteVolume24h=MOVE_RADAR_DEFAULTS.minQuoteVolume24h,
+  max24hMovePct=MOVE_RADAR_DEFAULTS.earlyMax24hMovePct,
+  min24hMovePct=MOVE_RADAR_DEFAULTS.earlyMin24hMovePct,
+  limit=MOVE_RADAR_DEFAULTS.maxEarlyDiscovery
+}={}){
+  const allowed=new Set(symbols.map(x=>x.symbol));
+  return (Array.isArray(tickers)?tickers:[])
+    .map(x=>normalizeTickerRow(x,symbols[0]?.quoteAsset||MOVE_RADAR_DEFAULTS.quote))
+    .filter(Boolean)
+    .filter(x=>allowed.has(x.symbol))
+    .filter(x=>x.quoteVolume24h>=minQuoteVolume24h)
+    .filter(x=>x.priceChange24h>=min24hMovePct&&x.priceChange24h<=max24hMovePct)
+    .map(x=>{
+      const calm=clamp(100-Math.abs(x.priceChange24h)*9);
+      const volumeRank=clamp(50+Math.log10(Math.max(1,x.quoteVolume24h/minQuoteVolume24h))*25);
+      const tradeRank=clamp(50+Math.log10(Math.max(1,x.tradeCount24h/100))*12);
+      const notPumped=clamp(100-Math.max(0,x.priceChange24h)*22);
+      return {
+        ...x,
+        pre_explosion_discovery_score:
+          calm*0.35+volumeRank*0.30+tradeRank*0.15+notPumped*0.20
+      };
+    })
+    .sort((a,b)=>b.pre_explosion_discovery_score-a.pre_explosion_discovery_score||b.quoteVolume24h-a.quoteVolume24h||a.symbol.localeCompare(b.symbol))
+    .slice(0,Math.max(1,Math.trunc(limit)));
+}
+
+export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
+  const ctx=candidate?.pre_move_context||{};
+  const bottom=candidate?.bottom_context||{};
+  const strategies=strategyScore(candidate);
+  const dataQuality=finite(candidate?.data_quality,0);
+  const liquidity=finite(candidate?.liquidity_quality,0);
+  const priceChange=finite(candidate?.price_change_24h,0);
+  const preMove=component(candidate,['pre_move_context.score'],45);
+  const momentum=component(candidate,['bottom_context.metrics.momentum','bottom_context.algorithms.momentum_awaken.score'],45);
+  const volume=component(candidate,['bottom_context.algorithms.volume_price_divergence.score','bottom_context.algorithms.momentum_awaken.score'],45);
+  const buying=component(candidate,['bottom_context.metrics.buying_pressure','bottom_context.algorithms.orderbook_pressure.score'],45);
+  const structure=component(candidate,['bottom_context.metrics.structure','bottom_context.algorithms.price_structure.score'],45);
+  const squeeze=component(candidate,['bottom_context.metrics.compression','bottom_context.algorithms.squeeze.score'],45);
+  const relative=component(candidate,['pre_move_context.components.relative_strength','bottom_context.algorithms.mtf_alignment.score'],45);
+  const mtf=component(candidate,['bottom_context.metrics.mtf_alignment','bottom_context.algorithms.mtf_alignment.score'],45);
+  const whale=component(candidate,['bottom_context.metrics.whale_pressure','bottom_context.algorithms.whale_pressure.score'],45);
+  const exhaustion=component(candidate,['bottom_context.metrics.selling_exhaustion','bottom_context.algorithms.sell_exhaustion.score'],45);
+  const takerRatio=finite(bottom?.algorithms?.taker_flow?.buy_ratio,null);
+  const acceptedConfluence=clamp(strategies.acceptedCount*24+strategies.bestScore*0.35);
+  const alreadyMoved=Boolean(ctx.already_moved)||priceChange>MOVE_RADAR_DEFAULTS.earlyMax24hMovePct||priceChange>20;
+  const sessionReturn=finite(ctx.session_return_pct,null);
+  const calmEnough=priceChange<=MOVE_RADAR_DEFAULTS.earlyMax24hMovePct &&
+    priceChange>=MOVE_RADAR_DEFAULTS.earlyMin24hMovePct &&
+    (!Number.isFinite(sessionReturn)||sessionReturn<=6);
+
+  const confirmations=[
+    strategies.bestScore>=MOVE_RADAR_DEFAULTS.earlyMinStrategyScore,
+    strategies.acceptedCount>=MOVE_RADAR_DEFAULTS.earlyMinAcceptedStrategies,
+    preMove>=MOVE_RADAR_DEFAULTS.earlyMinPreMoveScore,
+    momentum>=68,
+    volume>=70,
+    buying>=68,
+    structure>=65,
+    squeeze>=65,
+    relative>=60,
+    mtf>=65,
+    liquidity>=70,
+    Number.isFinite(takerRatio)&&takerRatio>=0.53
+  ];
+  const confirmationCount=confirmations.filter(Boolean).length;
+
+  const explosionScore=clamp(
+    strategies.bestScore*0.17+
+    acceptedConfluence*0.13+
+    preMove*0.15+
+    momentum*0.12+
+    volume*0.10+
+    buying*0.10+
+    structure*0.08+
+    squeeze*0.06+
+    relative*0.03+
+    mtf*0.03+
+    liquidity*0.03
+  );
+
+  const eligible=!alreadyMoved&&calmEnough&&
+    dataQuality>=80&&
+    liquidity>=70&&
+    strategies.bestScore>=MOVE_RADAR_DEFAULTS.earlyMinStrategyScore&&
+    strategies.acceptedCount>=MOVE_RADAR_DEFAULTS.earlyMinAcceptedStrategies&&
+    preMove>=MOVE_RADAR_DEFAULTS.earlyMinPreMoveScore&&
+    explosionScore>=MOVE_RADAR_DEFAULTS.earlyMinExpansionScore&&
+    confirmationCount>=MOVE_RADAR_DEFAULTS.earlyMinConfirmations;
+
+  const reasons=[];
+  const push=(ok,text)=>{if(ok)reasons.push(text)};
+  push(strategies.bestScore>=72,'استراتيجية أساسية مؤكدة');
+  push(strategies.acceptedCount>=2,'توافق عدة استراتيجيات');
+  push(preMove>=78,'بصمة ما قبل الحركة');
+  push(momentum>=68,'الزخم يبدأ بالتسارع');
+  push(volume>=70,'الحجم يستيقظ قبل القفزة');
+  push(buying>=68,'ضغط شراء متزايد');
+  push(structure>=65,'الهيكل يتحسن');
+  push(squeeze>=65,'انكماش قابل للتوسع');
+  push(relative>=60,'قوة نسبية');
+  push(mtf>=65,'توافق زمني متعدد');
+  push(Number.isFinite(takerRatio)&&takerRatio>=0.53,'Taker Buy يؤكد الطلب');
+  push(liquidity>=70,'سيولة قابلة للتنفيذ');
+  if(alreadyMoved)reasons.push('رفض: العملة تحركت مسبقًا');
+  if(!calmEnough)reasons.push('رفض: الحركة الحالية أعلى من نطاق ما قبل الانفجار');
+
+  const potentialLabel=explosionScore>=86?'PRE_EXPLOSION_HIGH':explosionScore>=80?'PRE_EXPLOSION_CONFIRMED':'PRE_EXPLOSION_WATCH';
+  const riskFlags=[];
+  const resistanceDistance=finite(ctx.resistance_distance_pct,null);
+  if(alreadyMoved)riskFlags.push('ALREADY_MOVED');
+  if(Number.isFinite(resistanceDistance)&&resistanceDistance<=1)riskFlags.push('RESISTANCE_TOO_NEAR');
+  if(dataQuality<90)riskFlags.push('DATA_QUALITY_ATTENTION');
+  if(liquidity<75)riskFlags.push('LIQUIDITY_ATTENTION');
+
+  return {
+    id:'PREEXP:'+candidate.symbol+':'+Number(priceChange).toFixed(3)+':'+now,
+    event:'PRE_EXPLOSION_ALERT',
+    symbol:candidate.symbol,
+    market:'SPOT',
+    direction:'UP_MOVE',
+    trigger:{
+      type:'QUIET_PRE_EXPLOSION_DISCOVERY',
+      source:'24H_LOW_MOVE_SCAN',
+      max_24h_move_pct:MOVE_RADAR_DEFAULTS.earlyMax24hMovePct,
+      move_pct:priceChange,
+      discovery_score:finite(trigger?.discoveryScore,null)
+    },
+    price:finite(candidate?.last_price),
+    price_change_24h:priceChange,
+    setup_score:Math.round(explosionScore*10)/10,
+    expansion_potential:Math.round(clamp(
+      momentum*0.22+volume*0.20+buying*0.18+structure*0.15+squeeze*0.12+relative*0.06+mtf*0.07
+    )*10)/10,
+    reversal_potential:null,
+    opportunity_score:Math.round(explosionScore*10)/10,
+    potential_label:potentialLabel,
+    pre_explosion:{
+      eligible,
+      confirmation_count:confirmationCount,
+      confirmation_total:confirmations.length,
+      calm_enough:calmEnough,
+      already_moved:alreadyMoved,
+      session_return_pct:sessionReturn,
+      price_change_cap_pct:MOVE_RADAR_DEFAULTS.earlyMax24hMovePct
+    },
+    strategy_confluence:{
+      active_count:Array.isArray(candidate?.strategies)?candidate.strategies.length:0,
+      accepted_count:strategies.acceptedCount,
+      best_score:strategies.bestScore,
+      accepted_mean:Math.round(strategies.acceptedMean*10)/10,
+      accepted_ids:(candidate?.accepted_strategies||[]).slice(0,8)
+    },
+    components:{pre_move:preMove,momentum,volume,buying_pressure:buying,structure,squeeze,relative_strength:relative,mtf_alignment:mtf,whale_pressure:whale,selling_exhaustion:exhaustion,liquidity,data_quality:dataQuality},
+    taker_flow:{buy_ratio:takerRatio},
+    reasons:[...new Set(reasons)].slice(0,12),
+    risk_flags:[...new Set(riskFlags)],
+    data_status:candidate?.data_status||{},
+    source:'Binance Public REST/WS',
+    detected_at:now,
+    processed_at:now,
+    paper_trading:true,
+    real_order_execution:false,
+    confidence_score:'UNKNOWN',
+    eligible,
+    disclaimer:'رادار ما قبل الانفجار يرصد توافق إشارات مبكر؛ لا يضمن ارتفاعًا بنسبة +30% أو أي نسبة مستقبلية.'
+  };
+}
+
 export class EarlyMoveSentinel {
   constructor({rest,store,config={},clock=()=>Date.now(),logger=console,tickerWsFactory=null,scannerFactory=null}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
@@ -183,6 +363,7 @@ export class EarlyMoveSentinel {
     this.lastTicker=new Map();
     this.lastAlertAt=new Map();
     this.lastAlertScore=new Map();
+    this.lastEarlyScanAt=new Map();
     this.deepQueue=[];
     this.deepActive=0;
     this.ws=null;
@@ -244,6 +425,7 @@ export class EarlyMoveSentinel {
       last_error:this.lastError,
       queued_deep_scans:this.deepQueue.length,
       active_deep_scans:this.deepActive,
+      pre_explosion_scans_tracked:this.lastEarlyScanAt.size,
       alerts_emitted:this.alertCount
     };
   }
@@ -264,6 +446,7 @@ export class EarlyMoveSentinel {
       const row=normalizeTickerRow(raw,this.config.quote);
       if(row&&this.eligibleSymbol(row.symbol))this.processTicker(row,initial);
     }
+    this.queuePreExplosionDiscovery(rows);
   }
 
   onTicker(ticker){
@@ -280,6 +463,33 @@ export class EarlyMoveSentinel {
       quoteAsset:this.config.quote
     };
     this.processTicker(row,false);
+  }
+
+  queuePreExplosionDiscovery(rows){
+    const discovery=rankPreExplosionTickerRows(rows,[...this.spotSymbols].map(symbol=>({symbol})),{
+      minQuoteVolume24h:this.config.minQuoteVolume24h,
+      max24hMovePct:this.config.earlyMax24hMovePct,
+      min24hMovePct:this.config.earlyMin24hMovePct,
+      limit:this.config.maxEarlyDiscovery
+    });
+    const now=this.clock();
+    for(const row of discovery){
+      const last=this.lastEarlyScanAt.get(row.symbol)||0;
+      if(now-last<this.config.earlyScanCooldownMs)continue;
+      if(this.deepQueue.some(x=>x.symbol===row.symbol&&x.mode==='PRE_EXPLOSION'))continue;
+      this.lastEarlyScanAt.set(row.symbol,now);
+      this.deepQueue.push({
+        symbol:row.symbol,
+        row,
+        trigger:{movePct:row.priceChange24h,discoveryScore:row.pre_explosion_discovery_score},
+        queuedAt:now,
+        mode:'PRE_EXPLOSION'
+      });
+    }
+    this.drainDeepQueue().catch(e=>{
+      this.lastError=String(e?.message??e);
+      this.logger.warn?.('PRE_EXPLOSION_DEEP',this.lastError);
+    });
   }
 
   processTicker(row,initial=false){
@@ -317,7 +527,9 @@ export class EarlyMoveSentinel {
       this.deepActive++;
       try{
         const candidate=await this.scanner.scanSymbol(job.row,1,{exchangeInfo:'Binance Public REST',ticker:'Binance Public REST'},{klinesLimit:this.config.deepKlines});
-        const alert=buildMoveAlert(candidate,job.trigger,{now:this.clock()});
+        const alert=job.mode==='PRE_EXPLOSION'
+          ? buildPreExplosionAlert(candidate,job.trigger,{now:this.clock()})
+          : buildMoveAlert(candidate,job.trigger,{now:this.clock()});
         if(!alert.eligible)continue;
         const recent=this.lastAlertScore.get(job.symbol)||0;
         if(alert.opportunity_score<recent+5&&this.clock()-(this.lastAlertAt.get(job.symbol)||0)<this.config.cooldownMs)continue;
