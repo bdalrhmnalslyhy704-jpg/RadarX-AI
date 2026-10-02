@@ -89,6 +89,12 @@ document.getElementById('openTradliBtn').addEventListener('click',event=>{
     window.RadarXNative.openTradli();
   }
 });
+document.getElementById('openBottomRadarBtn').addEventListener('click',event=>{
+  if(window.RadarXNative && typeof window.RadarXNative.openBottomRadar==='function'){
+    event.preventDefault();
+    window.RadarXNative.openBottomRadar();
+  }
+});
 </script>
 </body>
 </html>
