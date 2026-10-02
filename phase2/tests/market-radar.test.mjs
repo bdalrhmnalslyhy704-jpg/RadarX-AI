@@ -114,12 +114,17 @@ test('Bottom Radar derives current price, last rise, range position and closed-c
     openTime:now-(prices.length-i)*900000,
     closeTime:now-(prices.length-i)*900000+899999,
     open:p[0],high:p[1],low:p[2],close:p[3],volume:1000+i*120,
+    takerBuyBaseVolume:(1000+i*120)*(i%3===0?.42:i%3===1?.55:.64),
     tradeCount:100,closed:true
   }));
   const ctx=buildBottomMarketContext(
     {'15m':candles,'1h':candles.map((x,i)=>({...x,closeTime:x.closeTime,closed:true}))},
     {lastPrice:104,highPrice24h:110,lowPrice24h:92},
-    now
+    now,
+    {book:{
+      bids:[['103.9','120'],['103.5','80'],['103','60']],
+      asks:[['104.1','30'],['104.5','20'],['105','10']]
+    },liquidity:{bid:103.9,ask:104.1,bidDepth:22000,askDepth:6000,totalDepth:28000}}
   );
   assert.equal(ctx.closed_candles_only,true);
   assert.equal(ctx.current_price,104);
@@ -137,6 +142,24 @@ test('Bottom Radar derives current price, last rise, range position and closed-c
   assert.ok(ctx.algorithms.wyckoff_spring);
   assert.ok(ctx.algorithms.vwap_position);
   assert.ok(ctx.algorithms.price_structure);
+  assert.ok(ctx.algorithms.taker_flow);
+  assert.ok(ctx.algorithms.orderbook_pressure);
+  assert.ok(ctx.algorithms.whale_pressure);
+  assert.ok(ctx.algorithms.sell_exhaustion);
+  assert.ok(ctx.algorithms.squeeze);
+  assert.ok(ctx.algorithms.momentum_awaken);
+  assert.ok(ctx.algorithms.mtf_alignment);
+  assert.ok(ctx.metrics);
+  assert.equal(ctx.closed_candles_only,true);
+  assert.ok(Number.isFinite(ctx.metrics.buying_pressure));
+  assert.ok(Number.isFinite(ctx.metrics.selling_exhaustion));
+  assert.ok(Number.isFinite(ctx.metrics.compression));
+  assert.ok(Number.isFinite(ctx.metrics.momentum));
+  assert.ok(Number.isFinite(ctx.metrics.structure));
+  assert.ok(Number.isFinite(ctx.metrics.whale_pressure));
+  assert.ok(Number.isFinite(ctx.metrics.orderbook_imbalance));
+  assert.ok(Number.isFinite(ctx.metrics.mtf_alignment));
+  assert.equal(Math.round(ctx.range_position_pct),67);
 });
 
 test('limit normalization is bounded',()=>{
@@ -292,4 +315,35 @@ test('genuinely future candle remains hard-blocked',async()=>{
   assert.equal(candidate.overall_score,null);
   assert.ok(candidate.reason_codes.includes('FUTURE_DATA'));
   assert.equal(result.meta.live,false);
+});
+
+test('Bottom Radar range position and flow metrics are symbol-specific and bounded',()=>{
+  const now=2_000_000_000_000;
+  const a=Array.from({length:60},(_,i)=>({
+    openTime:now-(60-i)*900000,closeTime:now-(60-i)*900000+899999,
+    open:100+i%2,high:102+i%3,low:98-i%2,close:100+i*.02,
+    volume:1000+i*10,takerBuyBaseVolume:i%5===0?200:700,tradeCount:50,closed:true
+  }));
+  const b=a.map((x,i)=>({...x,open:x.open+2,high:x.high+5,low:x.low+1,close:x.close+4,
+    takerBuyBaseVolume:i%2?900:300}));
+  const ca=buildBottomMarketContext(
+    {'15m':a,'1h':a,'4h':a},
+    {lastPrice:101,highPrice24h:110,lowPrice24h:90},now,
+    {book:{bids:[['100.9','200']],asks:[['101.1','100']]},liquidity:{bid:100.9,ask:101.1}}
+  );
+  const cb=buildBottomMarketContext(
+    {'15m':b,'1h':b,'4h':b},
+    {lastPrice:105,highPrice24h:110,lowPrice24h:90},now,
+    {book:{bids:[['104.9','50']],asks:[['105.1','300']]},liquidity:{bid:104.9,ask:105.1}}
+  );
+  for(const ctx of [ca,cb]){
+    for(const key of ['buying_pressure','selling_exhaustion','compression','momentum','structure','whale_pressure','orderbook_imbalance']){
+      assert.ok(Number.isFinite(ctx.metrics[key]),key);
+      assert.ok(ctx.metrics[key]>=0&&ctx.metrics[key]<=100,key);
+    }
+    assert.ok(ctx.metrics.taker_buy_ratio>=0&&ctx.metrics.taker_buy_ratio<=1);
+    assert.ok(ctx.range_position_pct>=0&&ctx.range_position_pct<=100);
+  }
+  assert.notEqual(ca.metrics.buying_pressure,cb.metrics.buying_pressure);
+  assert.notEqual(ca.metrics.whale_pressure,cb.metrics.whale_pressure);
 });
