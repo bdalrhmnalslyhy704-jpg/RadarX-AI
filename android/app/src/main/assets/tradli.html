@@ -50,6 +50,13 @@ footer{padding:18px 4px;text-align:center;color:#70869b;font-size:10px;line-heig
   </div>
 </section>
 
+<section id="tradliConnection" style="margin:12px 0;padding:14px;border:1px solid #234766;border-radius:18px;background:#091624">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+    <div><b style="font-size:14px">اتصال بيانات TRADLI</b><small id="tradliConnectionText" style="display:block;color:#8ea7bd;margin-top:4px;line-height:1.6">جاري فحص الخادم…</small></div>
+    <span id="tradliConnectionBadge" style="padding:6px 8px;border:1px solid #7d6b3b;border-radius:999px;color:#ffe0a0;font-size:10px;font-weight:900">CHECK</span>
+  </div>
+  <button id="tradliRefreshData" type="button" style="width:100%;min-height:44px;margin-top:10px;border-radius:12px;border:1px solid #2b5675;background:#102941;color:#eaf5ff;font:inherit;font-weight:900">فحص بيانات السوق الآن</button>
+</section>
 <div id="tradliSuitePanel" aria-label="TRADLI Intelligence Suite"></div>
 <footer>TRADLI داخل RadarX • قراءة وتحليل فقط • البيانات الحية من Backend RadarX • paper_trading=true • real_order_execution=false</footer>
 </main>
@@ -60,8 +67,43 @@ window.__TRADLI_PAGE_READY=false;
 </script>
 <script type="module">
 import {mountTradliFeatureSuite} from './radarx-tradli-feature-suite.mjs';
+import {DEFAULT_BACKEND_BASE_URL,requestJson} from './radarx-backend-client.mjs';
 
 const panel=document.getElementById('tradliSuitePanel');
+const badge=document.getElementById('tradliConnectionBadge');
+const statusText=document.getElementById('tradliConnectionText');
+const refresh=document.getElementById('tradliRefreshData');
+
+async function diagnoseBackend(){
+  badge.textContent='CHECK';
+  badge.style.borderColor='#7d6b3b';
+  badge.style.color='#ffe0a0';
+  statusText.textContent='جاري فحص الخادم…';
+  try{
+    const [health,ready]=await Promise.all([
+      requestJson(DEFAULT_BACKEND_BASE_URL,'/healthz'),
+      requestJson(DEFAULT_BACKEND_BASE_URL,'/readyz')
+    ]);
+    if(health.status===200 && (ready.status===200 || ready.status===503)){
+      badge.textContent=ready.status===503?'SLOW / STALE':'CONNECTED';
+      badge.style.borderColor=ready.status===503?'#8b7440':'#2c8667';
+      badge.style.color=ready.status===503?'#ffe0a0':'#b8f4dc';
+      statusText.textContent=ready.status===503
+        ? 'الخادم متصل لكن جاهزية البيانات ليست كاملة؛ سيُعاد المحاولة عند تشغيل أي وحدة.'
+        : 'الخادم متصل. بيانات TRADLI تُجلب من Backend RadarX عبر اتصال HTTPS.';
+    }else{
+      throw new Error('HEALTH_HTTP_'+health.status);
+    }
+  }catch(error){
+    badge.textContent='OFFLINE';
+    badge.style.borderColor='#7d4650';
+    badge.style.color='#ffd0d5';
+    statusText.textContent='تعذر الوصول للخادم حاليًا. أعد الفحص؛ TRADLI يحتفظ بآخر بيانات سليمة محليًا.';
+  }
+}
+refresh.addEventListener('click',diagnoseBackend);
+diagnoseBackend();
+
 try{
   mountTradliFeatureSuite(panel);
   const tabs=[...panel.querySelectorAll('.rxsuite-tab')];
