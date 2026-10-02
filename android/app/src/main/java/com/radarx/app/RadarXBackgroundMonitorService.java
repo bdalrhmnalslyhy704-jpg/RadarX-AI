@@ -198,7 +198,7 @@ public final class RadarXBackgroundMonitorService extends Service {
             : "RadarX • قبل الانفجار (اتجاه غير صاعد)";
         String body = symbol + " • حركة 24h " + scoreFmt.format(move) + "% • Score " +
             scoreFmt.format(score) + " • " + label + " • " +
-            alert.optInt("pre_explosion_confirmation_count", alert.optInt("confirmation_count", 0)) + " تأكيد";
+            alert.optJSONObject("pre_explosion")?.optInt("confirmation_count", 0) + " تأكيد";
         String timing = "وقت اكتشاف الخادم: " + detectedText +
             " • وقت إرسال الإشعار: " + sentText;
 
