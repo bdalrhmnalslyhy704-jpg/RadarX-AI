@@ -239,7 +239,7 @@ function buildRadarCandidate(snapshot) {
     direction,
     signal_state:state,
     overall_score:Math.round(overall*10)/10,
-    coverage:{ratio:Number(fp?.evidenceCount || 0)/8},
+    coverage:{ratio:fp?.data?.closed15m>=80?1:0,evidence_ratio:Number(fp?.evidenceCount || 0)/8},
     data_quality:Number(result.signal?.scores?.data_quality || 0),
     liquidity_quality:Number(result.signal?.scores?.liquidity_quality || 0),
     accepted_strategies:accepted,
@@ -247,7 +247,7 @@ function buildRadarCandidate(snapshot) {
     evidence:{pre_breakout_fingerprint:fp},
     pre_breakout_fingerprint:fp,
     risk_flags:riskFlags,
-    invalidation:Array.isArray(fp?.context?.falseBreakout) && fp.context.falseBreakout ? ['FALSE_BREAKOUT'] : [],
+    invalidation:fp?.context?.falseBreakout ? ['FALSE_BREAKOUT'] : [],
     reason_codes:[...(fp?.reasonCodes || []),...(result.signal?.reason_codes || [])].slice(0,16),
     data_status:result.signal?.data_status || {},
     as_of:new Date(snapshot.snapshotAt).toISOString()
