@@ -13,6 +13,11 @@ import {
   evaluateATRExpansion
 } from './strategy-batch1.mjs';
 import { evaluateVCP } from './vcp-strategy.mjs';
+import {
+  evaluateFractalMABottomReversal,
+  evaluateFractalMABreakout,
+  evaluateFractalMATrendShift
+} from './strategy-fractal-ma.mjs';
 
 const ACTIVE = 'ACTIVE';
 
@@ -115,6 +120,33 @@ const STRATEGY_REGISTRY = Object.freeze({
     reasonCodes: Object.freeze(['ATR_EXPANDING','BULLISH_PRICE_CONFIRMATION','BEARISH_PRICE_CONFIRMATION','LIQUIDITY_OK','LOW_LIQUIDITY','ATR_EXPANSION_NOT_MET','PRICE_CONFIRMATION_WEAK','PRICE_DIRECTION_CONTEXT_NOT_MET','INSUFFICIENT_DATA']),
     invalidationRules: Object.freeze(['CLOSED_CANDLE_REQUIRED','ATR_CONTRACTION','LIQUIDITY_LOST','FRESH_DATA_REQUIRED']),
     testReference: 'phase1/tests/strategy-batch1.test.mjs'
+  }),
+  FRACTAL_MA_BOTTOM_REVERSAL: Object.freeze({
+    id: 'FRACTAL_MA_BOTTOM_REVERSAL', name: 'Fractal + EMA Bottom Reversal', family: 'BOTTOM_REVERSAL', status: ACTIVE,
+    requiredData: Object.freeze(['1h','EMA20','EMA50']), evaluator: evaluateFractalMABottomReversal,
+    scoreDimensions: Object.freeze(['higherLow','emaReclaim','maSlope','rvol']),
+    hardGates: Object.freeze(['CLOSED_1H_DATA','VALID_SERIES','FRESH_DATA','NO_FUTURE_DATA','MIN_HISTORY','FRACTAL_STRUCTURE','EMA20_RECLAIM']),
+    reasonCodes: Object.freeze(['HIGHER_LOW','EMA20_RECLAIM_OR_NEAR_RECLAIM','PRICE_ABOVE_EMA50','RVOL_SUPPORT','FRACTAL_MA_BOTTOM_NOT_CONFIRMED','INSUFFICIENT_DATA']),
+    invalidationRules: Object.freeze(['CLOSED_CANDLE_REQUIRED','FRACTAL_STRUCTURE_LOST','EMA20_RECLAIM_LOST','FRESH_DATA_REQUIRED']),
+    testReference: 'phase1/tests/strategy-fractal-ma.test.mjs'
+  }),
+  FRACTAL_MA_BREAKOUT: Object.freeze({
+    id: 'FRACTAL_MA_BREAKOUT', name: 'Fractal + EMA Breakout', family: 'BREAKOUT', status: ACTIVE,
+    requiredData: Object.freeze(['15m','EMA20','EMA50']), evaluator: evaluateFractalMABreakout,
+    scoreDimensions: Object.freeze(['fractalBreak','maAlignment','higherLow','rvol']),
+    hardGates: Object.freeze(['CLOSED_15M_DATA','VALID_SERIES','FRESH_DATA','NO_FUTURE_DATA','MIN_HISTORY','FRACTAL_BREAKOUT','MA_ALIGNMENT']),
+    reasonCodes: Object.freeze(['FRACTAL_HIGH_BREAKOUT_OR_NEAR_BREAKOUT','EMA20_ABOVE_OR_NEAR_EMA50','HIGHER_LOW_STRUCTURE','RVOL_BREAKOUT','FRACTAL_BREAKOUT_NOT_CONFIRMED','INSUFFICIENT_DATA']),
+    invalidationRules: Object.freeze(['CLOSED_CANDLE_REQUIRED','FRACTAL_BREAKOUT_FAILURE','MA_ALIGNMENT_LOST','FRESH_DATA_REQUIRED']),
+    testReference: 'phase1/tests/strategy-fractal-ma.test.mjs'
+  }),
+  FRACTAL_MA_TREND_SHIFT: Object.freeze({
+    id: 'FRACTAL_MA_TREND_SHIFT', name: 'Fractal + EMA Multi-Timeframe Trend Shift', family: 'TREND_TRANSITION', status: ACTIVE,
+    requiredData: Object.freeze(['1h','15m','EMA20','EMA50']), evaluator: evaluateFractalMATrendShift,
+    scoreDimensions: Object.freeze(['multiTfStructure','maShift','priceConfirm','momentum']),
+    hardGates: Object.freeze(['CLOSED_1H_15M_DATA','VALID_SERIES','FRESH_DATA','NO_FUTURE_DATA','MIN_HISTORY','FRACTAL_STRUCTURE','MA_SHIFT']),
+    reasonCodes: Object.freeze(['MULTI_TIMEFRAME_FRACTAL_STRUCTURE','EMA20_EMA50_TREND_SHIFT','PRICE_ABOVE_EMA50','15M_MOMENTUM_CONFIRMATION','FRACTAL_MA_TREND_SHIFT_NOT_CONFIRMED','INSUFFICIENT_DATA']),
+    invalidationRules: Object.freeze(['CLOSED_CANDLE_REQUIRED','FRACTAL_STRUCTURE_LOST','MA_SHIFT_REVERSED','FRESH_DATA_REQUIRED']),
+    testReference: 'phase1/tests/strategy-fractal-ma.test.mjs'
   })
 });
 
@@ -175,7 +207,7 @@ export function normalizeStrategyResult(id, result, { coverage = 1, hardGatesPas
 }
 function validateRegistry() {
   const entries = Object.values(STRATEGY_REGISTRY);
-  const allowedActive = new Set(['MTF_TREND','CONFIRMED_BREAKOUT','MEAN_REVERSION','VCP_PRE_BREAKOUT','EMA_RIBBON_ALIGNMENT','ADX_TREND_STRENGTH','MACD_TREND_CONTINUATION','BOLLINGER_BAND_REVERSION','VWAP_REVERSION','RELATIVE_VOLUME_SURGE','ATR_EXPANSION']);
+  const allowedActive = new Set(['MTF_TREND','CONFIRMED_BREAKOUT','MEAN_REVERSION','VCP_PRE_BREAKOUT','EMA_RIBBON_ALIGNMENT','ADX_TREND_STRENGTH','MACD_TREND_CONTINUATION','BOLLINGER_BAND_REVERSION','VWAP_REVERSION','RELATIVE_VOLUME_SURGE','ATR_EXPANSION','FRACTAL_MA_BOTTOM_REVERSAL','FRACTAL_MA_BREAKOUT','FRACTAL_MA_TREND_SHIFT']);
   if (entries.length !== allowedActive.size) throw new Error('REGISTRY_ACTIVE_SET_SIZE_MISMATCH');
   for (const strategy of entries) {
     if (strategy.status !== ACTIVE || !allowedActive.has(strategy.id)) throw new Error('STRATEGY_NOT_ACTIVE:' + strategy.id);
