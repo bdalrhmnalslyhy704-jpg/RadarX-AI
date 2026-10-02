@@ -98,18 +98,23 @@ public final class RadarXBackgroundMonitorService extends Service {
     private void scanOnceSafe() {
         if (stopping) return;
         try {
-            ScanResult result = scanMarket();
-            if (result.bestSymbol != null) {
-                updateStatus(
-                    "مراقبة الخلفية • " + result.bestSymbol +
-                    " • Early " + scoreFmt.format(result.bestScore)
-                );
-            } else {
-                updateStatus("مراقبة الخلفية • لا يوجد مرشح مبكر صالح");
+            JSONObject root = fetchMoveFeed();
+            JSONObject meta = root.optJSONObject("meta");
+            if (meta == null || !meta.optBoolean("live", false) ||
+                !meta.optBoolean("paper_trading", true) ||
+                meta.optBoolean("real_order_execution", false)) {
+                throw new IllegalStateException("MOVE_RADAR_NOT_LIVE");
             }
+            JSONArray alerts = root.optJSONArray("alerts");
+            int count = notifyNewMoveAlerts(alerts == null ? new JSONArray() : alerts);
+            JSONObject monitoring = root.optJSONObject("monitoring");
+            int universe = monitoring == null ? 0 : monitoring.optInt("universe", 0);
+            updateStatus(count > 0
+                ? "Move Radar 24/7 • " + count + " تنبيه جديد • " + universe + " عملة"
+                : "Move Radar 24/7 • لا تنبيهات جديدة • " + universe + " عملة");
         } catch (Throwable error) {
-            Log.w(TAG, "Background scan failed", error);
-            updateStatus("مراقبة الخلفية • تعذر الاتصال، إعادة المحاولة");
+            Log.w(TAG, "Background move-radar fetch failed", error);
+            updateStatus("Move Radar • لا يوجد اتصال الآن؛ سيُستكمل التنبيه عند عودة الإنترنت");
         }
     }
 
@@ -157,20 +162,91 @@ public final class RadarXBackgroundMonitorService extends Service {
         throw lastError != null ? lastError : new IllegalStateException("MARKET_RADAR_UNAVAILABLE");
     }
 
-    private byte[] fetchBackendBytes() throws Exception {
-        HttpURLConnection connection = (HttpURLConnection) new URL(BACKEND).openConnection();
+    private JSONObject fetchMoveFeed() throws Exception {
+        long cursor = prefs().getLong("move_alert_cursor_at", 0L);
+        String url = BACKEND + (cursor > 0L ? "&since=" + cursor : "");
+        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
         try {
             connection.setRequestMethod("GET");
             connection.setConnectTimeout(12_000);
-            connection.setReadTimeout(30_000);
+            connection.setReadTimeout(60_000);
             connection.setInstanceFollowRedirects(false);
             connection.setRequestProperty("Accept", "application/json");
             connection.setRequestProperty("Accept-Encoding", "identity");
             int status = connection.getResponseCode();
             if (status != 200) throw new IllegalStateException("HTTP_" + status);
-            return readAll(connection.getInputStream());
+            return new JSONObject(new String(readAll(connection.getInputStream()), StandardCharsets.UTF_8));
         } finally {
             connection.disconnect();
+        }
+    }
+
+    private int notifyNewMoveAlerts(JSONArray alerts) {
+        Set<String> seen = new HashSet<>(prefs().getStringSet("move_alert_seen_ids", new HashSet<>()));
+        long cursor = prefs().getLong("move_alert_cursor_at", 0L);
+        long maxAt = cursor;
+        int count = 0;
+        for (int i = alerts.length() - 1; i >= 0; i--) {
+            JSONObject alert = alerts.optJSONObject(i);
+            if (alert == null) continue;
+            String id = alert.optString("id", "");
+            long at = alert.optLong("processed_at", 0L);
+            if (at > maxAt) maxAt = at;
+            if (id.isEmpty() || seen.contains(id)) continue;
+            notifyMoveAlert(alert);
+            seen.add(id);
+            count++;
+        }
+        while (seen.size() > 200) seen.remove(seen.iterator().next());
+        prefs().edit()
+            .putLong("move_alert_cursor_at", maxAt)
+            .putStringSet("move_alert_seen_ids", seen)
+            .apply();
+        return count;
+    }
+
+    private void notifyMoveAlert(JSONObject alert) {
+        String symbol = alert.optString("symbol", "UNKNOWN");
+        String direction = alert.optString("direction", "UP_MOVE");
+        double move = alert.optDouble("price_change_24h", 0.0);
+        double score = alert.optDouble("opportunity_score", 0.0);
+        double potential = alert.optDouble("expansion_potential", 0.0);
+        String label = alert.optString("potential_label", "EARLY_MOVE");
+        JSONArray reasons = alert.optJSONArray("reasons");
+        StringBuilder reasonText = new StringBuilder();
+        if (reasons != null) {
+            for (int i = 0; i < Math.min(4, reasons.length()); i++) {
+                if (i > 0) reasonText.append(" • ");
+                reasonText.append(reasons.optString(i, ""));
+            }
+        }
+        Intent open = new Intent(this, MainActivity.class);
+        PendingIntent pending = PendingIntent.getActivity(
+            this, ALERT_NOTIFICATION_BASE + Math.abs(symbol.hashCode()),
+            open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+        String title = "UP_MOVE".equals(direction)
+            ? "RadarX • حركة مبكرة"
+            : "RadarX • هبوط + ارتداد محتمل";
+        String body = symbol + " • " + scoreFmt.format(move) + "% • Score " +
+            scoreFmt.format(score) + " • " + label;
+        Notification.Builder builder = notificationBuilder(CHANNEL_ALERTS)
+            .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(new Notification.BigTextStyle().bigText(
+                body + " • Expansion " + scoreFmt.format(potential) +
+                " • " + (reasonText.length() > 0 ? reasonText : "توافق متعدد العوامل") +
+                " • ليس توقعًا مضمونًا"
+            ))
+            .setContentIntent(pending)
+            .setAutoCancel(true)
+            .setCategory(Notification.CATEGORY_EVENT)
+            .setPriority(Notification.PRIORITY_HIGH);
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (manager != null) {
+            manager.notify(ALERT_NOTIFICATION_BASE +
+                Math.abs(symbol.hashCode() % 10000), builder.build());
         }
     }
 
