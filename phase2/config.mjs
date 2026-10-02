@@ -49,6 +49,31 @@ export const CONFIG = Object.freeze({
     minDataQuality: int(process.env.RADARX_MIN_DATA_QUALITY, 70),
     minLiquidityQuality: int(process.env.RADARX_MIN_LIQUIDITY_QUALITY, 60)
   },
+  moveRadar: {
+    quote: 'USDT',
+    thresholdPct: float(process.env.RADARX_MOVE_THRESHOLD_PCT, 1),
+    fastRealertDeltaPct: float(process.env.RADARX_MOVE_FAST_REALERT_DELTA_PCT, 0.8),
+    pollMs: int(process.env.RADARX_MOVE_POLL_MS, 5000),
+    reconcileMs: int(process.env.RADARX_MOVE_RECONCILE_MS, 15000),
+    cooldownMs: int(process.env.RADARX_MOVE_ALERT_COOLDOWN_MS, 30 * 60 * 1000),
+    maxDeepPerCycle: int(process.env.RADARX_MOVE_MAX_DEEP, 3),
+    minQuoteVolume24h: int(process.env.RADARX_MOVE_MIN_QUOTE_VOLUME_24H, 750000),
+    minDataQuality: int(process.env.RADARX_MIN_DATA_QUALITY, 70),
+    minLiquidityQuality: int(process.env.RADARX_MIN_LIQUIDITY_QUALITY, 60),
+    deepKlines: int(process.env.RADARX_MOVE_DEEP_KLINES, 220),
+    deepConcurrency: int(process.env.RADARX_MOVE_DEEP_CONCURRENCY, 4),
+    websocket: {
+      urls: list(process.env.BINANCE_WS_URLS, [
+        'wss://stream.binance.com:9443/stream',
+        'wss://stream.binance.com:443/stream'
+      ]),
+      initialBackoffMs: int(process.env.RADARX_WS_BACKOFF_MS, 1000),
+      maxBackoffMs: int(process.env.RADARX_WS_MAX_BACKOFF_MS, 60000),
+      jitterRatio: float(process.env.RADARX_WS_JITTER, 0.2),
+      heartbeatTimeoutMs: int(process.env.RADARX_WS_HEARTBEAT_TIMEOUT_MS, 90000),
+      maxConnectionMs: int(process.env.RADARX_WS_MAX_CONNECTION_MS, 23 * 60 * 60 * 1000)
+    }
+  },
   paper: {
     feeRate: float(process.env.RADARX_PAPER_FEE_RATE, 0.001),
     slippageBps: float(process.env.RADARX_PAPER_SLIPPAGE_BPS, 5),
