@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { STRATEGY_REGISTRY, getStrategyDefinition, listActiveStrategies, normalizeStrategyResult } from '../strategy-registry.mjs';
 
-test('registry contains the ten implemented strategies as ACTIVE',()=>{
+test('registry contains the implemented strategies as ACTIVE',()=>{
   assert.deepEqual(listActiveStrategies().map(x=>x.id).sort(),['ADX_TREND_STRENGTH','ATR_EXPANSION','BOLLINGER_BAND_REVERSION','CONFIRMED_BREAKOUT','EMA_RIBBON_ALIGNMENT','MACD_TREND_CONTINUATION','MEAN_REVERSION','MTF_TREND','RELATIVE_VOLUME_SURGE','VWAP_REVERSION']);
-  assert.equal(Object.keys(STRATEGY_REGISTRY).length,10); for (const s of listActiveStrategies()) assert.equal(s.status,'ACTIVE');
+  assert.equal(Object.keys(STRATEGY_REGISTRY).length,11); for (const s of listActiveStrategies()) assert.equal(s.status,'ACTIVE');
 });
 test('every active strategy has evaluator',()=>{ for (const s of listActiveStrategies()) assert.equal(typeof s.evaluator,'function'); });
 test('every active strategy has requiredData',()=>{ for (const s of listActiveStrategies()) assert.ok(s.requiredData.length>0); });
