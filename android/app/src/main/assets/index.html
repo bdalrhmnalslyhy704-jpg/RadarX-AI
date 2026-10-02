@@ -39,6 +39,7 @@ footer{padding:18px 4px;text-align:center;color:#8fa8b2;font-size:12px}
 <button id="retryApp" type="button">إعادة المحاولة</button>
 </section>
 <div class="rx-nav-card"><div><b>🧠 TRADLI Intelligence</b><small>صفحة مستقلة للتحليل المتقدم: Chart Lab • Verify • Advisor • Signals Hub • Supply/Demand • Order Desk</small></div><a id="openTradliBtn" class="rx-nav-link" href="./tradli.html">فتح TRADLI</a></div>
+<section class="rx-nav-card"><div><b>⚡ Pre‑Move Radar</b><small>يبحث عن العملة وهي ما زالت هادئة: تسارع الحجم، تدفق الشراء، القوة النسبية، الانكماش والهيكل قبل الاندفاع.</small></div><a id="openPreMoveRadarBtn" class="rx-nav-link" href="./pre-move-radar.html">رادار قبل الحركة</a></section>
 <section class="rx-nav-card"><div><b>🎯 Bottom Reversal Radar</b><small>يفحص العملات الهابطة ويقارن الضغط البيعي والشراء والزخم والانكماش والهيكل عبر 10 عوامل.</small></div><a id="openBottomRadarBtn" class="rx-nav-link secondary" href="./bottom-radar.html">فحص القيعان</a></section>
 <div id="marketRadarPanel" aria-label="RadarX Dashboard"></div>
 <div id="backgroundMonitorPanel" aria-label="RadarX Background Monitor"></div>
@@ -89,6 +90,7 @@ document.getElementById('openTradliBtn').addEventListener('click',event=>{
     window.RadarXNative.openTradli();
   }
 });
+document.getElementById('openPreMoveRadarBtn').addEventListener('click',event=>{});
 document.getElementById('openBottomRadarBtn').addEventListener('click',event=>{
   if(window.RadarXNative && typeof window.RadarXNative.openBottomRadar==='function'){
     event.preventDefault();
