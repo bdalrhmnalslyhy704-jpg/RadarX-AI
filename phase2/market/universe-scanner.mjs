@@ -182,11 +182,14 @@ function closedOnlySeries(series, now) {
   const excluded = {};
   for (const tf of ['4h','1h','15m']) {
     const rows = Array.isArray(series?.[tf]) ? series[tf] : [];
-    out[tf] = rows.filter(c => {
-      const closeTime = Number(c?.closeTime);
-      const closed = c?.closed === true && Number.isFinite(closeTime) && closeTime <= now;
-      return closed;
-    });
+    out[tf] = rows
+      .filter(c => {
+        const openTime = Number(c?.openTime);
+        const closeTime = Number(c?.closeTime);
+        return Number.isFinite(openTime) && Number.isFinite(closeTime) &&
+          openTime < closeTime && closeTime <= now;
+      })
+      .map(c => ({...c, closed: true}));
     excluded[tf] = Math.max(0, rows.length - out[tf].length);
   }
   return {series:out, excluded};
