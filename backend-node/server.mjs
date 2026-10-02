@@ -174,7 +174,8 @@ function buildRadarStrategies(result, dataQualityValue, liquidityQualityValue) {
   const base = [
     ['MTF_TREND','تتبّع الاتجاه متعدد الأطر',result.strategies?.trend],
     ['CONFIRMED_BREAKOUT','اختراق مؤكد',result.strategies?.breakout],
-    ['MEAN_REVERSION','ارتداد من مناطق التشبع',result.strategies?.meanReversion]
+    ['MEAN_REVERSION','ارتداد من مناطق التشبع',result.strategies?.meanReversion],
+    ['VCP_PRE_BREAKOUT','Volatility Contraction Pattern',result.vcp]
   ].map(([id,name,s]) => {
     const score = numericScore(s);
     const pass = s?.state !== 'REJECTED' && dataQualityValue >= 70 && liquidityQualityValue >= 60 && score != null;
@@ -210,7 +211,7 @@ function buildRadarStrategies(result, dataQualityValue, liquidityQualityValue) {
     const pass=Number.isFinite(n) && n>=60 && dataQualityValue>=70 && liquidityQualityValue>=60;
     base.push(radarStrategy(id,name,Number.isFinite(n)?n:null,Number.isFinite(n)?1:0,pass,direction,pass?'CANDIDATE':'REJECTED',{score:n},[]));
   }
-  return base.slice(0,10);
+  return base.slice(0,11);
 }
 
 function buildRadarCandidate(snapshot) {
@@ -223,7 +224,8 @@ function buildRadarCandidate(snapshot) {
   const fpScore = Number(fp?.score);
   const overall = Math.max(0, ...baseScores, Number.isFinite(fpScore) ? fpScore : 0);
   const fpLeading = fp?.detected === true && Number.isFinite(fpScore) && fpScore >= Math.max(...baseScores,0);
-  const best = fpLeading ? 'PRE_BREAKOUT_FINGERPRINT' : (strategies.slice(0,3).sort((a,b)=>(numericScore(b)??-1)-(numericScore(a)??-1))[0]?.id || 'NO_SIGNAL');
+  const vcpLeading = result.vcp?.state !== 'REJECTED' && Number.isFinite(Number(result.vcp?.score?.vcpScore)) && Number(result.vcp.score.vcpScore) >= Math.max(...baseScores, Number.isFinite(fpScore)?fpScore:0);
+  const best = vcpLeading ? 'VCP_PRE_BREAKOUT' : fpLeading ? 'PRE_BREAKOUT_FINGERPRINT' : (strategies.slice(0,3).sort((a,b)=>(numericScore(b)??-1)-(numericScore(a)??-1))[0]?.id || 'NO_SIGNAL');
   const state = fp?.stage === 'BREAKOUT' || fp?.stage === 'RETEST'
     ? 'CONFIRMED'
     : accepted.length ? 'CANDIDATE' : 'NO_SIGNAL';
