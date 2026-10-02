@@ -1,0 +1,31 @@
+name: RadarX Android Pre-Breakout Fingerprint Validation
+
+on:
+  push:
+    branches:
+      - phase5-prebreakout-fingerprint-android
+
+permissions:
+  contents: read
+
+jobs:
+  ui-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Backend client regression
+        run: node android/backend-client-regression.mjs
+      - name: Market Radar dashboard tests
+        run: node --test android/app/src/main/assets/tests/market-radar-integration.test.mjs
+      - name: Fingerprint UI safety guards
+        run: |
+          set -euo pipefail
+          grep -RIn "PRE_BREAKOUT_FINGERPRINT" android/app/src/main/assets
+          grep -RIn "prebreakout-fingerprint.v1" android/app/src/main/assets
+          grep -RIn "History Engine" android/app/src/main/assets
+          grep -RIn "paper_trading=true" android/app/src/main/assets
+          grep -RIn "real_order_execution=false" android/app/src/main/assets
