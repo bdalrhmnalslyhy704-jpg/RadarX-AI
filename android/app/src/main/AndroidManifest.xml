@@ -33,6 +33,12 @@
         </receiver>
 
         <activity
+            android:name=".BottomRadarActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <activity
             android:name=".TradliActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:exported="false"
