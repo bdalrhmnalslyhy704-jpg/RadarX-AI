@@ -185,7 +185,7 @@ const backgroundService=await readFile(new URL('../../java/com/radarx/app/RadarX
 assert.match(indexHtml,/backgroundMonitorPanel/);
 assert.match(indexHtml,/mountBackgroundMonitorControl/);
 assert.match(bgControl,/تشغيل في الخلفية/);
-assert.match(bgControl,/Pre-Breakout Guard/);
+assert.match(bgControl,/Move Radar 24\/7/);
 assert.match(mainActivity,/startBackgroundMonitor/);
 assert.equal(mainActivity.includes('setReadTimeout(60000)'),true);
 assert.match(tradliActivity,/TRADLI — AI Trading Analysis/);
