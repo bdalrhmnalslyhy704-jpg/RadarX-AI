@@ -76,6 +76,8 @@ export function normalizeTickerRow(ticker, quote) {
   const quoteVolume = Number(ticker.quoteVolume);
   const count = Number(ticker.count);
   const change = Number(ticker.priceChangePercent);
+  const highPrice24h = Number(ticker.highPrice);
+  const lowPrice24h = Number(ticker.lowPrice);
   const tickerTime = ['closeTime','eventTime','openTime'].map(key => Number(ticker[key])).find(Number.isFinite) ?? null;
   if (!Number.isFinite(lastPrice) || lastPrice <= 0) return null;
   if (!Number.isFinite(quoteVolume) || quoteVolume < 0) return null;
@@ -88,6 +90,8 @@ export function normalizeTickerRow(ticker, quote) {
     quoteVolume24h: quoteVolume,
     tradeCount24h: count,
     priceChange24h: change,
+    highPrice24h: Number.isFinite(highPrice24h) && highPrice24h > 0 ? highPrice24h : null,
+    lowPrice24h: Number.isFinite(lowPrice24h) && lowPrice24h > 0 ? lowPrice24h : null,
     tickerTime
   };
 }
@@ -263,6 +267,227 @@ function combineSource(sources) {
   return clean.length === 1 ? clean[0] : clean.join(' | ') || 'Binance Public REST';
 }
 
+function ema(values, period) {
+  const xs = values.filter(Number.isFinite);
+  if (!xs.length) return null;
+  const p = Math.max(2, Math.trunc(period));
+  const seed = xs.slice(0, Math.min(p, xs.length)).reduce((a,b)=>a+b,0) / Math.min(p, xs.length);
+  let out = seed;
+  const alpha = 2 / (p + 1);
+  for (const value of xs.slice(Math.min(p, xs.length))) out = alpha * value + (1 - alpha) * out;
+  return out;
+}
+
+function rsiSeries(values, period = 14) {
+  const xs = values.map(Number).filter(Number.isFinite);
+  if (xs.length < period + 1) return [];
+  let gain = 0, loss = 0;
+  for (let i = 1; i <= period; i++) {
+    const d = xs[i] - xs[i - 1];
+    if (d >= 0) gain += d;
+    else loss -= d;
+  }
+  let avgGain = gain / period;
+  let avgLoss = loss / period;
+  const out = Array(period).fill(null);
+  out.push(avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss)));
+  for (let i = period + 1; i < xs.length; i++) {
+    const d = xs[i] - xs[i - 1];
+    const g = Math.max(0, d);
+    const l = Math.max(0, -d);
+    avgGain = (avgGain * (period - 1) + g) / period;
+    avgLoss = (avgLoss * (period - 1) + l) / period;
+    out.push(avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss)));
+  }
+  return out;
+}
+
+function pivotLows(candles, left = 2, right = 2) {
+  const out = [];
+  for (let i = left; i < candles.length - right; i++) {
+    const low = Number(candles[i]?.low);
+    if (!Number.isFinite(low)) continue;
+    let ok = true;
+    for (let j = 1; j <= left; j++) if (!(low <= Number(candles[i-j]?.low))) ok = false;
+    for (let j = 1; j <= right; j++) if (!(low <= Number(candles[i+j]?.low))) ok = false;
+    if (ok) out.push({index:i, price:low, time:Number(candles[i]?.closeTime)||null});
+  }
+  return out;
+}
+
+function pivotHighs(candles, left = 2, right = 2) {
+  const out = [];
+  for (let i = left; i < candles.length - right; i++) {
+    const high = Number(candles[i]?.high);
+    if (!Number.isFinite(high)) continue;
+    let ok = true;
+    for (let j = 1; j <= left; j++) if (!(high >= Number(candles[i-j]?.high))) ok = false;
+    for (let j = 1; j <= right; j++) if (!(high >= Number(candles[i+j]?.high))) ok = false;
+    if (ok) out.push({index:i, price:high, time:Number(candles[i]?.closeTime)||null});
+  }
+  return out;
+}
+
+function buildBottomMarketContext(series, ticker, now) {
+  const raw15 = Array.isArray(series?.['15m']) ? series['15m'] : [];
+  const closed15 = raw15.filter(c =>
+    c?.closed !== false &&
+    Number.isFinite(Number(c?.closeTime)) &&
+    Number(c.closeTime) <= now &&
+    Number.isFinite(Number(c?.close)) &&
+    Number.isFinite(Number(c?.high)) &&
+    Number.isFinite(Number(c?.low))
+  );
+  const last24 = closed15.slice(-96);
+  const closes = last24.map(c=>Number(c.close));
+  const highs = last24.map(c=>Number(c.high));
+  const lows = last24.map(c=>Number(c.low));
+  const volumes = last24.map(c=>Number(c.volume)).filter(Number.isFinite);
+  const currentPrice = Number(ticker?.lastPrice);
+
+  const candleHigh = highs.length ? Math.max(...highs) : null;
+  const candleLow = lows.length ? Math.min(...lows) : null;
+  const high24h = Number.isFinite(Number(ticker?.highPrice24h)) && Number(ticker.highPrice24h)>0
+    ? Number(ticker.highPrice24h) : candleHigh;
+  const low24h = Number.isFinite(Number(ticker?.lowPrice24h)) && Number(ticker.lowPrice24h)>0
+    ? Number(ticker.lowPrice24h) : candleLow;
+
+  const highsPivots = pivotHighs(last24);
+  const lowsPivots = pivotLows(last24);
+  const latestHigh = highsPivots.at(-1) || null;
+  const priorLowBeforeHigh = latestHigh
+    ? [...lowsPivots].reverse().find(x=>x.index < latestHigh.index) || null
+    : lowsPivots.at(-1) || null;
+  const lastRiseHigh = latestHigh || (Number.isFinite(high24h) ? {price:high24h,time:null,index:null} : null);
+  const lastRiseLow = priorLowBeforeHigh || (Number.isFinite(low24h) ? {price:low24h,time:null,index:null} : null);
+
+  const lastRisePct = lastRiseLow && lastRiseHigh && lastRiseLow.price>0
+    ? (lastRiseHigh.price-lastRiseLow.price)/lastRiseLow.price*100 : null;
+  const drawdownFromLastRiseHighPct = lastRiseHigh && lastRiseHigh.price>0 && Number.isFinite(currentPrice)
+    ? (lastRiseHigh.price-currentPrice)/lastRiseHigh.price*100 : null;
+  const recoveryFromLastRiseLowPct = lastRiseLow && lastRiseLow.price>0 && Number.isFinite(currentPrice)
+    ? (currentPrice-lastRiseLow.price)/lastRiseLow.price*100 : null;
+
+  const range = Number.isFinite(high24h)&&Number.isFinite(low24h)&&high24h>low24h ? high24h-low24h : null;
+  const rangePositionPct = range && Number.isFinite(currentPrice) ? (currentPrice-low24h+range)/range*100 : null;
+
+  const rsi = rsiSeries(closes,14);
+  const currentRsi = rsi.at(-1) ?? null;
+  const prevRsi = rsi.at(-2) ?? null;
+  const lowPivots = lowsPivots.slice(-3);
+  let bullishDivergence = false;
+  if (lowPivots.length >= 2) {
+    const a=lowPivots.at(-2), b=lowPivots.at(-1);
+    const ra=Number(rsi[a.index]), rb=Number(rsi[b.index]);
+    bullishDivergence = Number.isFinite(ra)&&Number.isFinite(rb)&&b.price<a.price&&rb>ra+1.5;
+  }
+  const rsiScore = Number.isFinite(currentRsi)
+    ? bullishDivergence ? 90 : currentRsi<=30 ? 82 : currentRsi<=40 ? 72 : currentRsi<=50 ? 58 : currentRsi<=60 ? 45 : 30
+    : null;
+
+  const stochWindow=last24.slice(-14);
+  const stHigh=Math.max(...stochWindow.map(c=>Number(c.high)).filter(Number.isFinite));
+  const stLow=Math.min(...stochWindow.map(c=>Number(c.low)).filter(Number.isFinite));
+  const stochK=Number.isFinite(currentPrice)&&stHigh>stLow ? (currentPrice-stLow)/(stHigh-stLow)*100 : null;
+  const prev14=last24.slice(-15,-1);
+  const prevHigh=Math.max(...prev14.map(c=>Number(c.high)).filter(Number.isFinite));
+  const prevLow=Math.min(...prev14.map(c=>Number(c.low)).filter(Number.isFinite));
+  const prevClose=Number(closes.at(-2));
+  const prevStoch=Number.isFinite(prevClose)&&prevHigh>prevLow ? (prevClose-prevLow)/(prevHigh-prevLow)*100 : null;
+  const stochasticScore = Number.isFinite(stochK)
+    ? stochK<=20 && Number.isFinite(prevStoch) && stochK>prevStoch ? 92
+      : stochK<=30 ? 76
+      : stochK<=50 ? 58
+      : 35
+    : null;
+
+  const obvWindow=last24.slice(-32);
+  let obv=0;
+  for(let i=1;i<obvWindow.length;i++){
+    const a=Number(obvWindow[i-1]?.close),b=Number(obvWindow[i]?.close),v=Number(obvWindow[i]?.volume);
+    if(!Number.isFinite(a)||!Number.isFinite(b)||!Number.isFinite(v)) continue;
+    if(b>a) obv+=v; else if(b<a) obv-=v;
+  }
+  const upVol=obvWindow.slice(-8).reduce((s,c)=>s+(Number(c.close)>Number(c.open)?Number(c.volume):0),0);
+  const downVol=obvWindow.slice(-8).reduce((s,c)=>s+(Number(c.close)<Number(c.open)?Number(c.volume):0),0);
+  const obvScore = upVol+downVol>0 ? Math.max(0,Math.min(100,50+(upVol-downVol)/(upVol+downVol)*50)) : null;
+
+  const volShort=last24.slice(-8).map(c=>Number(c.volume)).filter(Number.isFinite);
+  const volBase=last24.slice(-40,-8).map(c=>Number(c.volume)).filter(Number.isFinite);
+  const avgShort=volShort.length?volShort.reduce((a,b)=>a+b,0)/volShort.length:null;
+  const avgBase=volBase.length?volBase.reduce((a,b)=>a+b,0)/volBase.length:null;
+  const rvolRatio=Number.isFinite(avgShort)&&Number.isFinite(avgBase)&&avgBase>0?avgShort/avgBase:null;
+  const priceShort=Number(closes.at(-1))-Number(closes[Math.max(0,closes.length-9)]);
+  const priceBase=Number(closes[Math.max(0,closes.length-17)])-Number(closes[Math.max(0,closes.length-25)]);
+  const volumePriceDivergence = Number.isFinite(rvolRatio)
+    ? rvolRatio>=1.35 && priceShort<=0 ? 84
+      : rvolRatio>=1.15 && priceShort>0 ? 78
+      : rvolRatio<0.8 && priceShort<=0 ? 64
+      : 45
+    : null;
+
+  const ema20_1h=ema((series?.['1h']||[]).filter(c=>c?.closed!==false).map(c=>Number(c.close)).filter(Number.isFinite),20);
+  const ema50_1h=ema((series?.['1h']||[]).filter(c=>c?.closed!==false).map(c=>Number(c.close)).filter(Number.isFinite),50);
+  const emaReclaim = Number.isFinite(currentPrice)&&Number.isFinite(ema20_1h)&&Number.isFinite(ema50_1h)
+    ? currentPrice>ema20_1h && ema20_1h>=ema50_1h ? 88
+      : currentPrice>ema20_1h ? 68
+      : currentPrice>ema50_1h ? 55
+      : 28
+    : null;
+
+  const recentRange=last24.slice(-24);
+  const rangeLow=Math.min(...recentRange.map(c=>Number(c.low)).filter(Number.isFinite));
+  const rangeHigh=Math.max(...recentRange.map(c=>Number(c.high)).filter(Number.isFinite));
+  const latestClosed=recentRange.at(-1);
+  const priorLows=recentRange.slice(0,-1).map(c=>Number(c.low)).filter(Number.isFinite);
+  const priorRangeLow=priorLows.length?Math.min(...priorLows):null;
+  const spring = latestClosed && Number.isFinite(priorRangeLow)
+    ? Number(latestClosed.low)<priorRangeLow && Number(latestClosed.close)>priorRangeLow
+    : false;
+  const avgRangeVol = recentRange.map(c=>Number(c.volume)).filter(Number.isFinite);
+  const avgRv=avgRangeVol.length?avgRangeVol.reduce((a,b)=>a+b,0)/avgRangeVol.length:null;
+  const springVol=Number(latestClosed?.volume);
+  const wyckoffScore = spring
+    ? Number.isFinite(avgRv)&&springVol>avgRv*1.2 ? 94 : 82
+    : Number.isFinite(rvolRatio)&&rvolRatio<0.85 && Number.isFinite(rangeLow)&&Number.isFinite(rangeHigh) ? 58 : 38;
+
+  const vwapDen=last24.reduce((s,c)=>s+(Number(c.volume)||0),0);
+  const vwapNum=last24.reduce((s,c)=>s+(((Number(c.high)+Number(c.low)+Number(c.close))/3)*(Number(c.volume)||0)),0);
+  const vwap= vwapDen>0 ? vwapNum/vwapDen : null;
+  const vwapScore=Number.isFinite(currentPrice)&&Number.isFinite(vwap)
+    ? currentPrice>=vwap ? 76 : Math.max(25,76-Math.min(45,(vwap-currentPrice)/vwap*250))
+    : null;
+
+  return {
+    source:'BINANCE_PUBLIC_REST',
+    closed_candles_only:true,
+    window_candles_15m:last24.length,
+    current_price:Number.isFinite(currentPrice)?currentPrice:null,
+    high_24h:Number.isFinite(high24h)?high24h:null,
+    low_24h:Number.isFinite(low24h)?low24h:null,
+    range_position_pct:Number.isFinite(rangePositionPct)?Math.max(0,Math.min(100,rangePositionPct)):null,
+    last_rise:{
+      high:Number.isFinite(lastRiseHigh?.price)?lastRiseHigh.price:null,
+      high_time:Number.isFinite(lastRiseHigh?.time)?lastRiseHigh.time:null,
+      low:Number.isFinite(lastRiseLow?.price)?lastRiseLow.price:null,
+      low_time:Number.isFinite(lastRiseLow?.time)?lastRiseLow.time:null,
+      rise_pct:Number.isFinite(lastRisePct)?lastRisePct:null,
+      drawdown_from_high_pct:Number.isFinite(drawdownFromLastRiseHighPct)?drawdownFromLastRiseHighPct:null,
+      recovery_from_low_pct:Number.isFinite(recoveryFromLastRiseLowPct)?recoveryFromLastRiseLowPct:null
+    },
+    algorithms:{
+      rsi14:{value:Number.isFinite(currentRsi)?currentRsi:null,score:Number.isFinite(rsiScore)?rsiScore:null,bullish_divergence:bullishDivergence},
+      stochastic14:{k:Number.isFinite(stochK)?stochK:null,score:Number.isFinite(stochasticScore)?stochasticScore:null},
+      obv_accumulation:{score:Number.isFinite(obvScore)?obvScore:null},
+      volume_price_divergence:{score:Number.isFinite(volumePriceDivergence)?volumePriceDivergence:null,rvol_ratio:Number.isFinite(rvolRatio)?rvolRatio:null},
+      ema20_50_reclaim:{score:Number.isFinite(emaReclaim)?emaReclaim:null,ema20:Number.isFinite(ema20_1h)?ema20_1h:null,ema50:Number.isFinite(ema50_1h)?ema50_1h:null},
+      wyckoff_spring:{score:wyckoffScore,spring_confirmed:spring},
+      vwap_position:{score:Number.isFinite(vwapScore)?vwapScore:null,vwap:Number.isFinite(vwap)?vwap:null},
+      price_structure:{score:Number.isFinite(lastRiseHigh?.price)&&Number.isFinite(lastRiseLow?.price)?Math.max(0,Math.min(100,(Number(currentPrice)-lastRiseLow.price)/(lastRiseHigh.price-lastRiseLow.price)*100)):null}
+    }
+  };
+}
+
 export function buildCandidateContract({
   ticker,
   deep,
@@ -378,7 +603,10 @@ export function buildCandidateContract({
     rank,
     last_price: deep.success ? ticker.lastPrice : null,
     price_change_24h: ticker.priceChange24h,
+    high_price_24h: ticker.highPrice24h,
+    low_price_24h: ticker.lowPrice24h,
     quote_volume_24h: ticker.quoteVolume24h,
+    bottom_context: buildBottomMarketContext(series, ticker, deep.completedAt),
     liquidity_quality: Math.round(Number(liquidity.quality) * 100) / 100,
     data_quality: dataQuality,
     confidence_score: 'UNKNOWN',
