@@ -23,11 +23,14 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.text.DecimalFormat;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.Locale;
 
 public final class RadarXBackgroundMonitorService extends Service {
     public static final String ACTION_START = "com.radarx.app.action.START_BACKGROUND_MONITOR";
@@ -167,6 +170,10 @@ public final class RadarXBackgroundMonitorService extends Service {
         double potential = alert.optDouble("expansion_potential", 0.0);
         String label = alert.optString("potential_label", "EARLY_MOVE");
         JSONArray reasons = alert.optJSONArray("reasons");
+        long detectedAt = alert.optLong("detected_at", alert.optLong("processed_at", 0L));
+        long sentAt = System.currentTimeMillis();
+        String detectedText = detectedAt > 0L ? formatTimestamp(detectedAt) : "غير متوفر";
+        String sentText = formatTimestamp(sentAt);
         StringBuilder reasonText = new StringBuilder();
         if (reasons != null) {
             for (int i = 0; i < Math.min(4, reasons.length()); i++) {
@@ -186,6 +193,8 @@ public final class RadarXBackgroundMonitorService extends Service {
             : "RadarX • هبوط + احتمال ارتداد";
         String body = symbol + " • " + scoreFmt.format(move) + "% • Score " +
             scoreFmt.format(score) + " • " + label;
+        String timing = "وقت اكتشاف الخادم: " + detectedText +
+            " • وقت إرسال الإشعار: " + sentText;
 
         Notification.Builder builder = notificationBuilder(CHANNEL_ALERTS)
             .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
@@ -194,6 +203,8 @@ public final class RadarXBackgroundMonitorService extends Service {
             .setStyle(new Notification.BigTextStyle().bigText(
                 body + " • Expansion " + scoreFmt.format(potential) +
                 " • " + (reasonText.length() > 0 ? reasonText : "توافق متعدد العوامل") +
+                " • " + timing +
+                " • حالة الانقطاع: أُنشئ التنبيه سابقًا وحُفظ على الخادم ثم أُرسل عند عودة الاتصال" +
                 " • ليس توقعًا مضمونًا"
             ))
             .setContentIntent(pending)
@@ -206,6 +217,13 @@ public final class RadarXBackgroundMonitorService extends Service {
             manager.notify(ALERT_NOTIFICATION_BASE +
                 Math.abs(symbol.hashCode() % 10000), builder.build());
         }
+    }
+
+    private static String formatTimestamp(long epochMs) {
+        if (epochMs <= 0L) return "غير متوفر";
+        SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
+        format.setTimeZone(java.util.TimeZone.getDefault());
+        return format.format(new Date(epochMs));
     }
 
     private Notification.Builder notificationBuilder(String channel) {
