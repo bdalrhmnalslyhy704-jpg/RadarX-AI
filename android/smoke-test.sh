@@ -27,18 +27,21 @@ adb shell am start -n com.radarx.app/.MainActivity >/dev/null
 ready=0
 connected=0
 signal_fields=0
+suite_ok=0
 for i in $(seq 1 12); do
   sleep 3
   LOGS="$(adb logcat -d -s RadarXSmoke:I '*:S' 2>/dev/null || true)"
   if printf '%s\n' "$LOGS" | grep -Fq "UI_READY"; then ready=1; fi
   if printf '%s\n' "$LOGS" | grep -Fq "BACKEND_CONNECTED"; then connected=1; fi
   if printf '%s\n' "$LOGS" | grep -Fq "SIGNAL_FIELDS_READY"; then signal_fields=1; fi
+  if printf '%s\n' "$LOGS" | grep -Fq "TRADLI_SUITE_SMOKE_OK"; then suite_ok=1; fi
   if printf '%s\n' "$LOGS" | grep -Fq "ReferenceError"; then echo "ReferenceError detected"; exit 1; fi
-  if [ "$ready" = "1" ] && [ "$connected" = "1" ] && [ "$signal_fields" = "1" ]; then break; fi
+  if [ "$ready" = "1" ] && [ "$connected" = "1" ] && [ "$signal_fields" = "1" ] && [ "$suite_ok" = "1" ]; then break; fi
 done
 test "$ready" = "1"
 test "$connected" = "1"
 test "$signal_fields" = "1"
+test "$suite_ok" = "1"
 LOGS="$(adb logcat -d -s RadarXSmoke:I RadarXWeb:I '*:S' 2>/dev/null || true)"
 ! printf '%s\n' "$LOGS" | grep -Fq "ReferenceError"
 printf '%s\n' "$LOGS" | grep -Fq "SIGNAL_LIVE"
