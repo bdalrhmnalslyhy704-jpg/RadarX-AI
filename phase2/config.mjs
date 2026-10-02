@@ -62,6 +62,15 @@ export const CONFIG = Object.freeze({
     minLiquidityQuality: int(process.env.RADARX_MIN_LIQUIDITY_QUALITY, 60),
     deepKlines: int(process.env.RADARX_MOVE_DEEP_KLINES, 220),
     deepConcurrency: int(process.env.RADARX_MOVE_DEEP_CONCURRENCY, 4),
+    earlyMax24hMovePct: float(process.env.RADARX_MOVE_EARLY_MAX_24H_PCT, 1.25),
+    earlyMin24hMovePct: float(process.env.RADARX_MOVE_EARLY_MIN_24H_PCT, -8),
+    earlyScanCooldownMs: int(process.env.RADARX_MOVE_EARLY_SCAN_COOLDOWN_MS, 300000),
+    maxEarlyDiscovery: int(process.env.RADARX_MOVE_MAX_EARLY_DISCOVERY, 18),
+    earlyMinPreMoveScore: int(process.env.RADARX_MOVE_EARLY_MIN_PREMOVE, 78),
+    earlyMinExpansionScore: int(process.env.RADARX_MOVE_EARLY_MIN_EXPANSION, 78),
+    earlyMinStrategyScore: int(process.env.RADARX_MOVE_EARLY_MIN_STRATEGY, 72),
+    earlyMinAcceptedStrategies: int(process.env.RADARX_MOVE_EARLY_MIN_ACCEPTED, 2),
+    earlyMinConfirmations: int(process.env.RADARX_MOVE_EARLY_MIN_CONFIRMATIONS, 6),
     websocket: {
       urls: list(process.env.BINANCE_WS_URLS, [
         'wss://stream.binance.com:9443/stream',
