@@ -176,6 +176,11 @@ const bgControl=await readFile(new URL('../radarx-background-control.mjs',import
 const manifest=await readFile(new URL('../../AndroidManifest.xml',import.meta.url),'utf8');
 const mainActivity=await readFile(new URL('../../java/com/radarx/app/MainActivity.java',import.meta.url),'utf8');
 const tradliActivity=await readFile(new URL('../../java/com/radarx/app/TradliActivity.java',import.meta.url),'utf8');
+const backgroundServiceSourceForMove=await readFile(new URL('../../java/com/radarx/app/RadarXBackgroundMonitorService.java',import.meta.url),'utf8');
+assert.match(backgroundServiceSourceForMove,/fetchMoveFeed/);
+assert.match(backgroundServiceSourceForMove,/notifyNewMoveAlerts/);
+assert.match(backgroundServiceSourceForMove,/api\/move-radar/);
+assert.match(backgroundServiceSourceForMove,/setReadTimeout\(60000\)/);
 const backgroundService=await readFile(new URL('../../java/com/radarx/app/RadarXBackgroundMonitorService.java',import.meta.url),'utf8');
 assert.match(indexHtml,/backgroundMonitorPanel/);
 assert.match(indexHtml,/mountBackgroundMonitorControl/);
