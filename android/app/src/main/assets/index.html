@@ -58,7 +58,15 @@ installButton.addEventListener('click',async()=>{
 
 try{
   mountMarketRadarScreen(panel);
-  mountTradliFeatureSuite(document.getElementById('tradliSuitePanel'));
+  const suite=document.getElementById('tradliSuitePanel');
+  mountTradliFeatureSuite(suite);
+  const tabs=Array.from(suite.querySelectorAll('.rxsuite-tab'));
+  const panes=Array.from(suite.querySelectorAll('.rxsuite-pane'));
+  if(tabs.length!==5 || panes.length!==5) throw new Error('TRADLI_SUITE_CONTRACT_INVALID');
+  tabs.forEach(tab=>tab.click());
+  if(panes.filter(p=>p.classList.contains('active')).length!==1) throw new Error('TRADLI_SUITE_TAB_STATE_INVALID');
+  tabs[0].click();
+  if(window.RadarXSmoke)window.RadarXSmoke.state('TRADLI_SUITE_SMOKE_OK');
   window.__RADARX_BOOT_OK=true;
   const error=document.getElementById('appError');
   if(error)error.hidden=true;
