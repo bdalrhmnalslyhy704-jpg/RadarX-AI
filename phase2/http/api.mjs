@@ -137,6 +137,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     rest: monitor.rest,
     config: config.marketRadar ?? {}
   }) : null;
+  const marketRadarCache = new Map();
+  const MARKET_RADAR_CACHE_MS = 15000;
   function allowedOrigin(req){
     const o=req.headers.origin;if(!o||!originList.length)return null;return originList.includes(o)?o:null;
   }
@@ -169,7 +171,23 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         const quote=String(u.searchParams.get('quote')||'USDT').trim().toUpperCase();
         const limit=u.searchParams.get('limit')||'20';
         try{
-          return send(res,200,await marketRadar.scan({quote,limit}));
+          const key=quote+'|'+String(limit);
+          const now=Date.now();
+          const cached=marketRadarCache.get(key);
+          if(cached && cached.expiresAt>now){
+            const payload=await cached.promise;
+            return send(res,200,payload);
+          }
+          const promise=marketRadar.scan({quote,limit});
+          marketRadarCache.set(key,{promise,expiresAt:now+MARKET_RADAR_CACHE_MS});
+          try{
+            const payload=await promise;
+            marketRadarCache.set(key,{promise:Promise.resolve(payload),expiresAt:Date.now()+MARKET_RADAR_CACHE_MS});
+            return send(res,200,payload);
+          }catch(error){
+            marketRadarCache.delete(key);
+            throw error;
+          }
         }catch(e){
           const m=String(e?.message??e);
           const status=/INVALID_QUOTE|INVALID_EXCHANGE_INFO/.test(m)?400:/RATE_LIMIT|TIMEOUT|UNAVAILABLE|FAILED/.test(m)?502:500;
