@@ -10,6 +10,7 @@ on:
       - phase5-fix-bottom-radar-enable-deep-scan
       - phase5-ci-runtime-timeout-hardening
       - phase6-radar4-independent-microstructure
+      - fix-four-radars-runtime
   workflow_dispatch:
 
 permissions:
