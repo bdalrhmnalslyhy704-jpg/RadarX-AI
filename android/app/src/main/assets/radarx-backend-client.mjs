@@ -1,7 +1,11 @@
 export const DEFAULT_BACKEND_BASE_URL = 'https://radarx-ai-triple-production.up.railway.app';
+export const BACKEND_FALLBACK_URLS = Object.freeze([
+  'https://radarx-ai-production.up.railway.app'
+]);
 
 function assertAllowedBackend(url) {
-  if (url.origin !== DEFAULT_BACKEND_BASE_URL || url.pathname !== '/' || url.username || url.password) {
+  const allowed = new Set([DEFAULT_BACKEND_BASE_URL, ...BACKEND_FALLBACK_URLS]);
+  if (!allowed.has(url.origin) || url.pathname !== '/' || url.username || url.password) {
     throw new Error('BACKEND_ORIGIN_NOT_ALLOWED');
   }
 }
@@ -18,28 +22,36 @@ export function normalizeBackendBaseUrl(raw = DEFAULT_BACKEND_BASE_URL) {
 }
 
 export async function requestJson(baseUrl, path, fetchImpl = globalThis.fetch) {
-  try {
-    const base = normalizeBackendBaseUrl(baseUrl);
-    const response = await fetchImpl(base + path, {
-      method: 'GET',
-      cache: 'no-store',
-      headers: { Accept: 'application/json' }
-    });
-    let body = null;
+  let firstError = null;
+  const candidates = [normalizeBackendBaseUrl(baseUrl), ...BACKEND_FALLBACK_URLS];
+  for (const base of candidates) {
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 12000) : null;
     try {
-      body = await response.json();
-    } catch {
-      body = null;
+      const response = await fetchImpl(base + path, {
+        method: 'GET',
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+        ...(controller ? {signal: controller.signal} : {})
+      });
+      let body = null;
+      try { body = await response.json(); } catch { body = null; }
+      if (response.ok || (response.status >= 400 && response.status < 500)) {
+        return { status: response.status, ok: response.ok, body, error: null, base };
+      }
+      firstError = new Error('HTTP_'+response.status);
+    } catch (error) {
+      firstError ||= error;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
-    return { status: response.status, ok: response.ok, body, error: null };
-  } catch (error) {
-    return {
-      status: 0,
-      ok: false,
-      body: null,
-      error: String(error?.message || error)
-    };
   }
+  return {
+    status: 0,
+    ok: false,
+    body: null,
+    error: String(firstError?.message || firstError || 'BACKEND_CONNECTION_FAILED')
+  };
 }
 
 export async function fetchBackendState(baseUrl, symbol, fetchImpl = globalThis.fetch) {
@@ -202,14 +214,20 @@ export async function setRadarState(radar, action, fetchImpl = globalThis.fetch)
   const safeAction=String(action||'').trim().toLowerCase();
   if(!/^[A-Z0-9_]{2,40}$/.test(safeRadar)) throw new Error('INVALID_RADAR');
   if(!['start','stop'].includes(safeAction)) throw new Error('INVALID_RADAR_ACTION');
-  const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
-  try {
-    const response=await fetchImpl(base+'/api/radar-control?radar='+encodeURIComponent(safeRadar)+'&action='+encodeURIComponent(safeAction),{
-      method:'POST',cache:'no-store',headers:{Accept:'application/json'}
-    });
-    let body=null;try{body=await response.json();}catch{}
-    return {status:response.status,ok:response.ok,body,error:null};
-  } catch(error) {
-    return {status:0,ok:false,body:null,error:String(error?.message||error)};
+  const bases=[normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL),...BACKEND_FALLBACK_URLS];
+  let lastError=null;
+  for(const base of bases){
+    const controller=typeof AbortController==='function'?new AbortController():null;
+    const timer=controller?setTimeout(()=>controller.abort(),12000):null;
+    try{
+      const response=await fetchImpl(base+'/api/radar-control?radar='+encodeURIComponent(safeRadar)+'&action='+encodeURIComponent(safeAction),{
+        method:'POST',cache:'no-store',headers:{Accept:'application/json'},...(controller?{signal:controller.signal}:{})
+      });
+      let body=null;try{body=await response.json();}catch{}
+      if(response.status===404 && base!==bases.at(-1)) continue;
+      return {status:response.status,ok:response.ok,body,error:null,base};
+    }catch(error){lastError=error;}
+    finally{if(timer)clearTimeout(timer);}
   }
+  return {status:0,ok:false,body:null,error:String(lastError?.message||lastError||'BACKEND_CONNECTION_FAILED')};
 }
