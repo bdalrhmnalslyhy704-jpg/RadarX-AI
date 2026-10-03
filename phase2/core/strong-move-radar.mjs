@@ -241,13 +241,13 @@ export class StrongMoveRadar {
     };
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
     this.lastTickerMap=new Map();this.lastScanAt=new Map();this.lastAlertAt=new Map();
-    this.alertCount=0;this.lastError=null;this.scans=0;this.lastScanAtMs=null;
+    this.alertCount=0;this.lastError=null;this.scans=0;this.lastScanAtMs=null;this.busy=false;
   }
   async start(){
     if(this.running)return;
     this.running=true;
     await this.refreshUniverse();
-    await this.tick();
+    this.tick().catch(e=>{this.lastError=String(e?.message??e);this.logger.warn?.('STRONG_MOVE',this.lastError)});
     this.timer=setInterval(()=>this.tick().catch(e=>{this.lastError=String(e?.message??e);this.logger.warn?.('STRONG_MOVE',this.lastError)}),this.config.pollMs);
   }
   async stop(){this.running=false;if(this.timer)clearInterval(this.timer);this.timer=null;}
@@ -295,14 +295,19 @@ export class StrongMoveRadar {
     return alert;
   }
   async tick(){
-    if(!this.running)return;
-    if(this.clock()-this.universeAt>this.config.universeRefreshMs)await this.refreshUniverse();
-    const rows=await this.tickerRows();
-    const selected=this.selectBatch(rows);
-    this.lastScanAtMs=this.clock();
-    for(const row of selected){
-      if(!this.running)break;
-      try{await this.scanRow(row);}catch(e){this.lastError=String(e?.message??e);}
+    if(!this.running||this.busy)return;
+    this.busy=true;
+    try{
+      if(this.clock()-this.universeAt>this.config.universeRefreshMs)await this.refreshUniverse();
+      const rows=await this.tickerRows();
+      const selected=this.selectBatch(rows);
+      this.lastScanAtMs=this.clock();
+      for(const row of selected){
+        if(!this.running)break;
+        try{await this.scanRow(row);}catch(e){this.lastError=String(e?.message??e);}
+      }
+    }finally{
+      this.busy=false;
     }
   }
   health(){
@@ -315,6 +320,8 @@ export class StrongMoveRadar {
       scans:this.scans,
       alerts_emitted:this.alertCount,
       last_error:this.lastError,
+      busy:this.busy,
+      rest:this.rest?.health?.()||null,
       algorithms:['MOMENTUM_BURST','VOLUME_CLIMAX','TRADE_COUNT_SURGE','TAKER_FLOW_ACCELERATION','DONCHIAN_BREAKOUT','EMA_BURST','VWAP_DISPLACEMENT','BOLLINGER_EXPANSION','EFFICIENCY_RATIO','ATR_EXPANSION'],
       source:'Binance Public REST',
       closed_candles_only:true,
