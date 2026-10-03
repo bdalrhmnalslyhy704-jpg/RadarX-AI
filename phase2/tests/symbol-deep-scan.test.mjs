@@ -57,7 +57,8 @@ test('TEST_FIXTURE: deep symbol scan normalizes symbols and uses closed candles 
 test('TEST_FIXTURE: deep symbol scan API is public GET-only and does not create orders',async()=>{
   const monitor={rest:mockRest(),health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
   const config={auth:{secret:'',allowedOrigins:[]},api:{rateLimitPerMinute:1000,maxBodyBytes:65536}};
-  const server=createApiServer({config,store:{},monitor,pushProvider:{status:()=>({})}});
+  const analyzer=new SymbolDeepAnalyzer({rest:mockRest()});
+  const server=createApiServer({config,store:{},monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},pushProvider:{status:()=>({})},symbolDeepAnalyzer:analyzer});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base='http://127.0.0.1:'+server.address().port;
   const res=await fetch(base+'/api/symbol-deep-scan?symbol=SAND');
