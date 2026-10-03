@@ -1,0 +1,5 @@
+RadarX production deployment marker.
+Production source branch: phase3-railway-public-runtime.
+Promoted source: phase3-triple-radar.
+Triple-radar commit: 250c20f44fde0420e540de8c45a5cf422c03ea4b.
+Paper trading only; real_order_execution=false.
