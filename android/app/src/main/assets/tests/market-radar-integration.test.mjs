@@ -1,3 +1,4 @@
+import test from 'node:test';
 import {rankBottomCandidates} from '../radarx-bottom-reversal.mjs';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
