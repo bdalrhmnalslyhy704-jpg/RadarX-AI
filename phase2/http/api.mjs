@@ -3,6 +3,7 @@ import {verifySessionToken} from '../core/auth.mjs';
 import {defaultSettings} from '../core/signal-service.mjs';
 import {DurableStore} from '../core/store.mjs';
 import {MarketUniverseScanner} from '../market/universe-scanner.mjs';
+import {SymbolDeepAnalyzer,normalizeDeepScanSymbol} from '../core/symbol-deep-analyzer.mjs';
 
 function send(res,status,body,extra={}){
   const data=JSON.stringify(body);
@@ -130,7 +131,7 @@ function subscriptionValid(x){
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,symbolDeepAnalyzer=null}= {}){
   const counters=new Map();
   const moveConfig=config.moveRadar||{thresholdPct:1};
   const originList=config.auth.allowedOrigins;
@@ -138,6 +139,10 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     rest: monitor.rest,
     config: config.marketRadar ?? {}
   }) : null;
+  const deepSymbolScanner = symbolDeepAnalyzer || (monitor?.rest ? new SymbolDeepAnalyzer({
+    rest: monitor.rest,
+    config: config.symbolDeepScan ?? {}
+  }) : null);
   function allowedOrigin(req){
     const o=req.headers.origin;if(!o||!originList.length)return null;return originList.includes(o)?o:null;
   }
@@ -251,6 +256,25 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           const m=String(e?.message??e);
           const status=/INVALID_QUOTE|INVALID_EXCHANGE_INFO/.test(m)?400:/RATE_LIMIT|TIMEOUT|UNAVAILABLE|FAILED/.test(m)?502:500;
           return send(res,status,{error:m,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},source:'Binance Public REST',candidates:[]});
+        }
+      }
+      if(u.pathname==='/api/symbol-deep-scan'&&req.method==='GET'){
+        if(!deepSymbolScanner)return send(res,503,{error:'SYMBOL_DEEP_SCAN_UNAVAILABLE'});
+        const rawSymbol=String(u.searchParams.get('symbol')||'').trim().toUpperCase();
+        try{
+          const symbol=normalizeDeepScanSymbol(rawSymbol,config.symbolDeepScan?.quote||'USDT');
+          const result=await deepSymbolScanner.scan(symbol);
+          return send(res,200,result);
+        }catch(e){
+          const m=String(e?.message??e);
+          const status=/INVALID_SYMBOL|INVALID_QUOTE/.test(m)?400:/INSUFFICIENT_CLOSED_CANDLES/.test(m)?503:/BINANCE_|HTTP_|TIMEOUT|RATE_LIMIT|REST_REQUEST/.test(m)?502:500;
+          return send(res,status,{
+            status:'not_ready',
+            symbol:rawSymbol||null,
+            meta:{live:false,source:'Binance Public REST',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
+            paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+            error:m
+          });
         }
       }
       if(u.pathname==='/api/signal'&&req.method==='GET'){

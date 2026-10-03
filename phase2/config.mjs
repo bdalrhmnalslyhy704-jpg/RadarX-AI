@@ -103,6 +103,10 @@ export const CONFIG = Object.freeze({
     alertCooldownMs: int(process.env.RADARX_STRONG_MOVE_ALERT_COOLDOWN_MS, 5 * 60 * 1000),
     minScore: int(process.env.RADARX_STRONG_MOVE_MIN_SCORE, 76)
   },
+  symbolDeepScan: {
+    quote: 'USDT',
+    klineLimit: int(process.env.RADARX_SYMBOL_DEEP_KLINES, 240)
+  },
   rotationRadar: {
     quote: 'USDT',
     pollMs: int(process.env.RADARX_ROTATION_RADAR_POLL_MS, 30000),

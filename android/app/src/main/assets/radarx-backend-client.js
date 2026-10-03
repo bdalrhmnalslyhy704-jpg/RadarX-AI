@@ -131,3 +131,13 @@ export async function getMarketRadar({ quote = 'USDT', limit = 20 } = {}, fetchI
     fetchImpl
   );
 }
+export async function getSymbolDeepScan(symbol, fetchImpl = globalThis.fetch) {
+  const raw = String(symbol || '').trim().toUpperCase();
+  if (!/^[A-Z0-9_\/-]{2,20}$/.test(raw)) throw new Error('INVALID_SYMBOL');
+  const base = normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  return requestJson(
+    base,
+    '/api/symbol-deep-scan?symbol=' + encodeURIComponent(raw),
+    fetchImpl
+  );
+}
