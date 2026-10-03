@@ -82,4 +82,15 @@ const radar=new StrongMoveRadar({
 assert.equal(radar.health().radar,'STRONG_MOVE_RADAR');
 assert.equal(radar.health().closed_candles_only,true);
 
+const originalTick=radar.tick;
+let tickCalled=false;
+radar.tick=async()=>{tickCalled=true;};
+radar.refreshUniverse=async()=>{radar.universe=['BURSTUSDT'];radar.universeAt=NOW;};
+await radar.start();
+assert.equal(radar.running,true);
+assert.equal(tickCalled,true);
+await radar.stop();
+assert.equal(radar.running,false);
+radar.tick=originalTick;
+
 // CI trigger: independent radar regression coverage stays on this branch.\nconsole.log('Strong Move Radar tests passed');
