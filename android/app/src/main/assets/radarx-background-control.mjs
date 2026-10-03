@@ -18,8 +18,8 @@ export function mountBackgroundMonitorControl(root){
   addStyle();
   root.innerHTML=
     '<section class="rx-bg-card" aria-label="Background Monitor">'+
-      '<div class="rx-bg-head"><div><div class="rx-bg-title">🛰️ Move Radar 24/7 • راداران RadarX مستقلان</div>'+
-      '<div class="rx-bg-sub">يشغّل رادارين مستقلين في الخلفية: الأول Early-Wake/Pre-Explosion، والثاني Strong-Move/Burst لاكتشاف الحركة القوية التي بدأت فعليًا.</div></div>'+
+      '<div class="rx-bg-head"><div><div class="rx-bg-title">🛰️ Move Radar 24/7 • 3 رادارات RadarX مستقلة</div>'+
+      '<div class="rx-bg-sub">يشغّل 3 رادارات مستقلة في الخلفية: Early-Wake/Pre-Explosion، Strong-Move/Burst، وRotation/Lag لاكتشاف العملات المتأخرة التي تبدأ تلحق بالسوق.</div></div>'+
       '<div id="rx-bg-state" class="rx-bg-state"><span id="rx-bg-dot" class="rx-bg-dot"></span><span id="rx-bg-label">متوقفة</span></div></div>'+
       '<div class="rx-bg-actions"><button id="rx-bg-start" class="rx-bg-btn primary" type="button">تشغيل في الخلفية</button>'+
       '<button id="rx-bg-stop" class="rx-bg-btn stop" type="button">إيقاف</button></div>'+
