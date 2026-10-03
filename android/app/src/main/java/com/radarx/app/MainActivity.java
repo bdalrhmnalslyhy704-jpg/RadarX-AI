@@ -41,7 +41,7 @@ public final class MainActivity extends Activity {
     private static final String APP_ORIGIN =
             "https://appassets.androidplatform.net";
     private static final String BACKEND_ORIGIN =
-            "https://radarx-ai-production.up.railway.app";
+            "https://radarx-ai-triple-production.up.railway.app";
     private static final int REQUEST_POST_NOTIFICATIONS = 7301;
     private boolean pendingBackgroundStart;
 
