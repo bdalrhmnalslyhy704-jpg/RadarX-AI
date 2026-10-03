@@ -10,9 +10,17 @@ function candle(i,{price=100,move=0,volume=100000,span=0.4}={}){
 
 function makeSeries(n,base,{tailMove=0,tailVolume=100000,tailSpan=0.4}={}){
   const out=[];
+  let price=base;
   for(let i=0;i<n;i++){
     const tail=i>=n-5;
-    out.push(candle(i,{price:base,move:tail?tailMove:0,volume:tail?tailVolume:100000,span:tail?tailSpan:0.4}));
+    const move=tail?tailMove:0;
+    out.push(candle(i,{
+      price,
+      move,
+      volume:tail?tailVolume:100000,
+      span:tail?tailSpan:0.4
+    }));
+    price*=1+move;
   }
   return out;
 }
