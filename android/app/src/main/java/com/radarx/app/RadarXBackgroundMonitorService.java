@@ -37,17 +37,14 @@ public final class RadarXBackgroundMonitorService extends Service {
     public static final String ACTION_STOP = "com.radarx.app.action.STOP_BACKGROUND_MONITOR";
 
     private static final String TAG = "RadarXBackground";
-    private static final String BACKEND_MOVE =
-            "https://radarx-ai-production.up.railway.app/api/move-radar?quote=USDT&limit=50";
-    private static final String BACKEND_STRONG =
-            "https://radarx-ai-production.up.railway.app/api/strong-move-radar?quote=USDT&limit=50";
-    private static final String BACKEND_ROTATION =
-            "https://radarx-ai-production.up.railway.app/api/rotation-radar?quote=USDT&limit=50";
+    private static final String BACKEND_RADAR_ALERTS =
+            "https://radarx-ai-triple-production.up.railway.app/api/radar-alerts?radar=ALL&limit=50";
 
     private static final String CHANNEL_STATUS = "radarx_background_status";
     private static final String CHANNEL_ALERTS = "radarx_move_alerts";
     private static final String CHANNEL_STRONG_ALERTS = "radarx_strong_move_alerts";
     private static final String CHANNEL_ROTATION_ALERTS = "radarx_rotation_alerts";
+    private static final String CHANNEL_RADAR_ALERTS = "radarx_radar_alerts";
     private static final int STATUS_NOTIFICATION_ID = 41001;
     private static final int ALERT_NOTIFICATION_BASE = 42000;
     private static final int STRONG_ALERT_NOTIFICATION_BASE = 43000;
@@ -107,69 +104,135 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     private void scanOnceSafe() {
         if (stopping) return;
-        int moveCount = 0;
-        int strongCount = 0;
-        int rotationCount = 0;
-        int universe = 0;
-        boolean moveOk = false;
-        boolean strongOk = false;
-        boolean rotationOk = false;
         try {
-            JSONObject root = fetchMoveFeed();
+            long cursor = prefs().getLong("radar_alert_cursor_at", 0L);
+            JSONObject root = fetchRadarAlertsFeed(cursor);
             JSONObject meta = root.optJSONObject("meta");
-            if (meta != null && meta.optBoolean("live", false) &&
-                meta.optBoolean("paper_trading", true) &&
-                !meta.optBoolean("real_order_execution", false)) {
+            boolean live = meta != null && meta.optBoolean("paper_trading", true)
+                && !meta.optBoolean("real_order_execution", false);
+            if (live) {
                 JSONArray alerts = root.optJSONArray("alerts");
-                moveCount = notifyNewMoveAlerts(alerts == null ? new JSONArray() : alerts);
-                JSONObject monitoring = root.optJSONObject("monitoring");
-                universe = monitoring == null ? 0 : monitoring.optInt("universe", 0);
-                moveOk = true;
+                int count = notifyNewRadarAlerts(alerts == null ? new JSONArray() : alerts);
+                JSONArray radars = root.optJSONArray("radars");
+                updateStatus("رادارات مستقلة • " + (radars == null ? 4 : radars.length()) +
+                    " • اكتشافات جديدة: " + count);
+            } else {
+                updateStatus("الرادارات المستقلة غير متاحة حاليًا؛ لا يتم توليد بيانات صناعية");
             }
         } catch (Throwable error) {
-            Log.w(TAG, "Background move-radar fetch failed", error);
+            Log.w(TAG, "Background unified radar fetch failed", error);
+            updateStatus("الرادارات المستقلة • لا يوجد اتصال الآن؛ ستُستكمل القراءة عند عودة الإنترنت");
         }
+    }
+
+    private JSONObject fetchRadarAlertsFeed(long cursor) throws Exception {
+        String url = BACKEND_RADAR_ALERTS + (cursor > 0L ? "&since=" + cursor : "");
+        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
         try {
-            JSONObject root = fetchStrongMoveFeed();
-            JSONObject meta = root.optJSONObject("meta");
-            if (meta != null && meta.optBoolean("live", false) &&
-                meta.optBoolean("paper_trading", true) &&
-                !meta.optBoolean("real_order_execution", false)) {
-                JSONArray alerts = root.optJSONArray("alerts");
-                strongCount = notifyNewStrongMoveAlerts(alerts == null ? new JSONArray() : alerts);
-                JSONObject monitoring = root.optJSONObject("monitoring");
-                if (monitoring != null) universe = Math.max(universe, monitoring.optInt("universe", 0));
-                strongOk = true;
-            }
-        } catch (Throwable error) {
-            Log.w(TAG, "Background strong-move radar fetch failed", error);
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(12_000);
+            connection.setReadTimeout(30_000);
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("Accept-Encoding", "identity");
+            int status = connection.getResponseCode();
+            if (status != 200) throw new IllegalStateException("HTTP_" + status);
+            return new JSONObject(new String(readAll(connection.getInputStream()), StandardCharsets.UTF_8));
+        } finally {
+            connection.disconnect();
         }
-        try {
-            JSONObject root = fetchRotationFeed();
-            JSONObject meta = root.optJSONObject("meta");
-            if (meta != null && meta.optBoolean("live", false) &&
-                meta.optBoolean("paper_trading", true) &&
-                !meta.optBoolean("real_order_execution", false)) {
-                JSONArray alerts = root.optJSONArray("alerts");
-                rotationCount = notifyNewRotationAlerts(alerts == null ? new JSONArray() : alerts);
-                JSONObject monitoring = root.optJSONObject("monitoring");
-                if (monitoring != null) universe = Math.max(universe, monitoring.optInt("universe", 0));
-                rotationOk = true;
+    }
+
+    private int notifyNewRadarAlerts(JSONArray alerts) {
+        Set<String> seen = new HashSet<>(prefs().getStringSet("radar_alert_seen_ids", new HashSet<>()));
+        long cursor = prefs().getLong("radar_alert_cursor_at", 0L);
+        long maxAt = cursor;
+        int count = 0;
+        for (int i = alerts.length() - 1; i >= 0; i--) {
+            JSONObject alert = alerts.optJSONObject(i);
+            if (alert == null) continue;
+            long at = alert.optLong("processed_at", alert.optLong("detected_at", 0L));
+            if (at > maxAt) maxAt = at;
+            if (!alert.optBoolean("eligible", true)) continue;
+            String id = alert.optString("id", "");
+            if (id.isEmpty() || seen.contains(id)) continue;
+            notifyRadarAlert(alert);
+            seen.add(id);
+            count++;
+        }
+        while (seen.size() > 300) seen.remove(seen.iterator().next());
+        prefs().edit().putLong("radar_alert_cursor_at", maxAt)
+            .putStringSet("radar_alert_seen_ids", seen).apply();
+        return count;
+    }
+
+    private void notifyRadarAlert(JSONObject alert) {
+        String radar = alert.optString("radar", "UNKNOWN_RADAR");
+        String radarName = alert.optString("radar_name", radarNameFor(radar));
+        String symbol = alert.optString("symbol", "UNKNOWN");
+        double score = alert.has("opportunity_score")
+            ? alert.optDouble("opportunity_score", 0.0)
+            : alert.optDouble("setup_score", 0.0);
+        String stage = alert.optString("potential_label", alert.optString("event", "RADAR_ALERT"));
+        long detectedAt = alert.optLong("detected_at", alert.optLong("processed_at", 0L));
+        String detectedText = alert.optString("detected_time_12h", "");
+        if (detectedText.isEmpty()) detectedText = formatTimestamp12h(detectedAt);
+
+        JSONArray reasons = alert.optJSONArray("reasons");
+        StringBuilder reasonText = new StringBuilder();
+        if (reasons != null) {
+            for (int i = 0; i < Math.min(4, reasons.length()); i++) {
+                if (i > 0) reasonText.append(" • ");
+                reasonText.append(reasons.optString(i, ""));
             }
-        } catch (Throwable error) {
-            Log.w(TAG, "Background rotation-radar fetch failed", error);
         }
 
-        if (moveOk || strongOk || rotationOk) {
-            updateStatus(
-                "Radar 1 Early-Wake: " + moveCount +
-                " • Radar 2 Strong-Move: " + strongCount +
-                " • Radar 3 Rotation/Lag: " + rotationCount +
-                " • " + universe + " عملة"
-            );
-        } else {
-            updateStatus("3 رادارات • لا يوجد اتصال الآن؛ سيُستكمل التنبيه عند عودة الإنترنت");
+        String title = "RadarX • " + radarName + " • " + symbol;
+        String body = "الرادار: " + radarName + " • " + symbol +
+            " • Score " + scoreFmt.format(score) + " • " + stage;
+        String timing = "وقت اكتشاف العملة: " + detectedText + " • Asia/Aden • 12h";
+
+        Intent open = new Intent(this, MainActivity.class);
+        PendingIntent pending = PendingIntent.getActivity(
+            this, 45000 + Math.abs(symbol.hashCode()),
+            open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+        Notification.Builder builder = notificationBuilder(CHANNEL_RADAR_ALERTS)
+            .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(new Notification.BigTextStyle().bigText(
+                body + " • " + (reasonText.length() > 0 ? reasonText : "إشعار من رادار مستقل") +
+                " • " + timing +
+                " • شموع مغلقة فقط • Paper Trading فقط • لا يوجد أمر تداول حقيقي"
+            ))
+            .setContentIntent(pending)
+            .setAutoCancel(true)
+            .setCategory(Notification.CATEGORY_EVENT)
+            .setPriority(Notification.PRIORITY_HIGH);
+
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (manager != null) {
+            manager.notify(45000 + Math.abs(symbol.hashCode() % 10000), builder.build());
         }
+    }
+
+    private static String radarNameFor(String radar) {
+        switch (radar) {
+            case "EARLY_MOVE_RADAR": return "Radar 1 — Early-Wake";
+            case "STRONG_MOVE_RADAR": return "Radar 2 — Strong-Move";
+            case "ROTATION_LAG_RADAR": return "Radar 3 — Rotation/Lag";
+            case "LIQUIDITY_ABSORPTION_RADAR": return "Radar 4 — Liquidity Absorption";
+            default: return "RadarX";
+        }
+    }
+
+    private static String formatTimestamp12h(long epochMs) {
+        if (epochMs <= 0L) return "غير متوفر";
+        SimpleDateFormat format = new SimpleDateFormat("dd/MM/yyyy h:mm:ss a", Locale.US);
+        format.setTimeZone(java.util.TimeZone.getTimeZone("Asia/Aden"));
+        return format.format(new Date(epochMs));
     }
 
     private JSONObject fetchRotationFeed() throws Exception {
@@ -533,8 +596,8 @@ public final class RadarXBackgroundMonitorService extends Service {
     private void startAsForeground() {
         Notification.Builder builder = notificationBuilder(CHANNEL_STATUS)
             .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
-            .setContentTitle("RadarX • Move Radar 24/7")
-            .setContentText("3 رادارات مستقلة: Early-Wake + Strong-Move + Rotation/Lag تعمل في الخلفية")
+            .setContentTitle("RadarX • الرادارات المستقلة")
+            .setContentText("4 رادارات مستقلة • إشعار واحد من الخلاصة الموحدة")
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .setColor(Color.rgb(53, 201, 255))
@@ -593,6 +656,12 @@ public final class RadarXBackgroundMonitorService extends Service {
         );
         rotationAlerts.setDescription("تنبيهات الرادار الثالث لاكتشاف دوران السوق والعملات المتأخرة");
         manager.createNotificationChannel(rotationAlerts);
+
+        NotificationChannel radarAlerts = new NotificationChannel(
+            CHANNEL_RADAR_ALERTS, "RadarX Independent Radar Alerts", NotificationManager.IMPORTANCE_HIGH
+        );
+        radarAlerts.setDescription("تنبيهات موحدة للرادارات الأربعة المستقلة");
+        manager.createNotificationChannel(radarAlerts);
     }
 
     private void stopMonitoring() {
