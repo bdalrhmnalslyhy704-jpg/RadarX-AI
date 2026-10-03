@@ -361,11 +361,12 @@ export class RotationLagRadar {
     this.alertCount=0;this.scans=0;this.lastError=null;this.lastScanAtMs=null;this.busy=false;
   }
 
-  async start(){
+  start(){
     if(this.running)return;
     this.running=true;
-    this.refreshUniverse().catch(e=>this.noteError(e));
-    this.tick().catch(e=>this.noteError(e));
+    this.refreshUniverse()
+      .then(()=>this.tick())
+      .catch(e=>this.noteError(e));
     this.timer=setInterval(()=>this.tick().catch(e=>this.noteError(e)),this.config.pollMs);
   }
 
