@@ -55,6 +55,7 @@ setTimeout(window.__RADARX_SHOW_BOOT_ERROR,3500);
 <script type="module">
 import {mountMarketRadarScreen} from './radarx-market-radar-screen.mjs';
 import {mountBackgroundMonitorControl} from './radarx-background-control.mjs';
+import {mountSymbolDeepScan} from './radarx-symbol-deep-scan.mjs';
 
 const panel=document.getElementById('marketRadarPanel');
 const installButton=document.createElement('button');
@@ -72,6 +73,7 @@ installButton.addEventListener('click',async()=>{
 });
 
 try{
+  mountSymbolDeepScan(document.getElementById('symbolDeepScanPanel'));
   mountMarketRadarScreen(panel);
   mountBackgroundMonitorControl(document.getElementById('backgroundMonitorPanel'));
   window.__RADARX_BOOT_OK=true;
