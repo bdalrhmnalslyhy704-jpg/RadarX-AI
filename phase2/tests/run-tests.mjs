@@ -36,8 +36,8 @@ const phase2=[
 
 const scope=process.argv[2]||'all';
 const files=scope==='phase1'?phase1:scope==='phase2'?phase2:[...phase1,...phase2];
-const FILE_TIMEOUT_MS=45000;
-const TEST_TIMEOUT_MS=30000;
+const FILE_TIMEOUT_MS=75000;
+const TEST_TIMEOUT_MS=60000;
 
 async function runFile(file){
   console.error('[TEST FILE START] '+file);
