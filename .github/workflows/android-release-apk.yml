@@ -150,7 +150,6 @@ jobs:
           node --check android/app/src/main/assets/radarx-tradli-feature-suite.mjs
           test -f android/app/src/main/assets/radarx-background-control.mjs
           node --check android/app/src/main/assets/radarx-background-control.mjs
-          node --check android/app/src/main/assets/radarx-radar4-control.mjs || true
           node --check android/app/src/main/assets/radarx-bottom-reversal.mjs
           node --check android/app/src/main/assets/radarx-pre-move.mjs
           node --check android/app/src/main/assets/radarx-move-radar.mjs
