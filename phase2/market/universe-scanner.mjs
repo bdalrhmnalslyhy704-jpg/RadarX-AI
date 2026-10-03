@@ -1388,7 +1388,7 @@ export class MarketUniverseScanner {
     const requested = normalizeRadarLimit(limit, {...this.config, maxScanLimit:50});
     const discoveryLimit = Math.min(
       Math.max(10, requested),
-      Math.max(10, Math.min(30, Number(this.config.bottomDiscoveryPool) || 18))
+      Math.max(10, Math.min(50, Number(this.config.bottomDiscoveryPool) || 50))
     );
     const discovery = rankBottomTickerRows(tickerResponse.data, universe, {
       minQuoteVolume24h: this.config.minQuoteVolume24h,
@@ -1427,7 +1427,7 @@ export class MarketUniverseScanner {
           a.symbol.localeCompare(b.symbol);
       });
 
-    const returned = valid.slice(0, Math.min(10, requested));
+    const returned = valid.slice(0, requested);
     return {
       meta: {
         live: returned.length > 0,
