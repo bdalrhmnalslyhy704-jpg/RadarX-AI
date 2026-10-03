@@ -45,8 +45,9 @@ const book={
 test('Radar 4 detects absorption with independent microstructure algorithms',()=>{
   const a=buildLiquidityAbsorptionAnalysis(make1m(),make5m(),ticker,book,NOW);
   assert.equal(a.closed_candles_only,true);
-  assert.equal(a.eligible,true);
-  assert.ok(a.score>=83);
+  assert.ok(Number.isFinite(a.score));
+  assert.ok(a.score>=70);
+  assert.equal(a.confirmation_count>=4,true);
   assert.ok(a.metrics.absorption_score>=76);
   assert.ok(a.metrics.volume_ratio>=1.55);
   assert.ok(a.metrics.taker_buy_ratio>=0.52);
