@@ -254,7 +254,7 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
 
   const rotationTrigger=score>=78&&confirmations.length>=4&&(
     (direction==='UP_ROTATION'&&Number.isFinite(market30)&&market30>=0.25&&Number.isFinite(rs30)&&rs30>=0.20&&activation>=64) ||
-    (direction==='DOWN'&&Number.isFinite(market30)&&market30<=-0.25&&Number.isFinite(rs30)&&rs30>=0.20&&activation>=64)
+    (direction==='DOWN_ROTATION'&&Number.isFinite(market30)&&market30<=-0.25&&Number.isFinite(rs30)&&rs30>=0.20&&activation>=64)
   );
 
   const stage=rotationTrigger
