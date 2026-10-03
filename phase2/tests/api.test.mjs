@@ -194,5 +194,9 @@ test('TEST_FIXTURE: independent radar status/control and unified alerts preserve
   assert.equal('detected_time_12h' in alerts.alerts[0],true);
   const stop=await (await fetch(base+'/api/radar-control?radar=LIQUIDITY_ABSORPTION_RADAR&action=stop',{method:'POST'})).json();
   assert.equal(stop.running,false);assert.equal(r4.running,false);
+  const startViaGet=await (await fetch(base+'/api/radar-control?radar=LIQUIDITY_ABSORPTION_RADAR&action=start')).json();
+  assert.equal(startViaGet.running,true);assert.equal(r4.running,true);
+  const stopViaGet=await (await fetch(base+'/api/radar-control?radar=LIQUIDITY_ABSORPTION_RADAR&action=stop')).json();
+  assert.equal(stopViaGet.running,false);assert.equal(r4.running,false);
   await new Promise(resolve=>server.close(resolve));
 });
