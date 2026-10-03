@@ -20,9 +20,9 @@ export const MARKET_RADAR_DEFAULTS = Object.freeze({
   retryAttempts: 2,
   retryBaseMs: 200,
   maxBackoffMs: 2000,
-  bottomDiscoveryPool: 18,
+  bottomDiscoveryPool: 50,
   bottomDeepConcurrency: 8,
-  bottomDeepKlines: 220
+  bottomDeepKlines: 180
 });
 
 const sleepDefault = ms => new Promise(resolve => setTimeout(resolve, ms));
