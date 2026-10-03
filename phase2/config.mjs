@@ -72,6 +72,8 @@ export const CONFIG = Object.freeze({
     earlyWakeAlertCooldownMs: int(process.env.RADARX_MOVE_EARLY_WAKE_ALERT_COOLDOWN_MS, 600000),
     earlyWakeMinScore: int(process.env.RADARX_MOVE_EARLY_WAKE_MIN_SCORE, 68),
     earlyWakeMinLeaders: int(process.env.RADARX_MOVE_EARLY_WAKE_MIN_LEADERS, 3),
+    fastInterval: process.env.RADARX_MOVE_FAST_INTERVAL ?? '5m',
+    fastKlines: int(process.env.RADARX_MOVE_FAST_KLINES, 96),
     earlyScanCooldownMs: int(process.env.RADARX_MOVE_EARLY_SCAN_COOLDOWN_MS, 120000),
     maxEarlyDiscovery: int(process.env.RADARX_MOVE_MAX_EARLY_DISCOVERY, 36),
     earlyMinPreMoveScore: int(process.env.RADARX_MOVE_EARLY_MIN_PREMOVE, 78),

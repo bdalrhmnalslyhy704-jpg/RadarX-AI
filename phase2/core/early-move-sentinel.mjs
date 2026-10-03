@@ -28,6 +28,8 @@ export const MOVE_RADAR_DEFAULTS=Object.freeze({
   earlyWakeAlertCooldownMs:10*60*1000,
   earlyWakeMinScore:68,
   earlyWakeMinLeaders:3,
+  fastInterval:'5m',
+  fastKlines:96,
   earlyScanCooldownMs:2*60*1000,
   maxEarlyDiscovery:36,
   earlyMinPreMoveScore:78,
@@ -238,6 +240,16 @@ export function buildEarlyWakeAlert(candidate,trigger,{now=Date.now()}={}) {
   const obv=component(candidate,['bottom_context.algorithms.obv_accumulation.score'],45);
   const wyckoff=component(candidate,['bottom_context.algorithms.wyckoff_spring.score'],45);
   const mtf=component(candidate,['bottom_context.metrics.mtf_alignment','bottom_context.algorithms.mtf_alignment.score'],45);
+  const fast=candidate?.fast_impulse_context||{};
+  const fastScore=component(candidate,['fast_impulse_context.score'],45);
+  const fastMomentum=component(candidate,['fast_impulse_context.scores.momentum'],45);
+  const fastVolume=component(candidate,['fast_impulse_context.scores.volume'],45);
+  const fastTaker=component(candidate,['fast_impulse_context.scores.taker_buy'],45);
+  const fastBreakout=component(candidate,['fast_impulse_context.scores.breakout'],45);
+  const fastEma=component(candidate,['fast_impulse_context.scores.ema'],45);
+  const fastRange=component(candidate,['fast_impulse_context.scores.range_expansion'],45);
+  const fastBody=component(candidate,['fast_impulse_context.scores.body'],45);
+  const fastAcceleration=finite(fast?.acceleration_pct,null);
   const takerRatio=finite(alg?.taker_flow?.buy_ratio,null);
   const takerAccel=finite(ctx?.taker_buy_acceleration,null);
   const alreadyMoved=Boolean(ctx.already_moved)||priceChange>MOVE_RADAR_DEFAULTS.earlyWakeMax24hMovePct;
@@ -246,6 +258,14 @@ export function buildEarlyWakeAlert(candidate,trigger,{now=Date.now()}={}) {
     (!Number.isFinite(sessionReturn)||sessionReturn<=5);
 
   const leaderChecks=[
+    ['FAST_IMPULSE',fastScore>=65],
+    ['FAST_VOLUME_AWAKENING',fastVolume>=62],
+    ['FAST_TAKER_PRESSURE',fastTaker>=62],
+    ['FAST_BREAKOUT_PRESSURE',fastBreakout>=68],
+    ['FAST_EMA_ALIGNMENT',fastEma>=68],
+    ['FAST_RANGE_EXPANSION',fastRange>=60],
+    ['FAST_BULLISH_BODY',fastBody>=62],
+    ['FAST_PRICE_ACCELERATION',Number.isFinite(fastAcceleration)&&fastAcceleration>0.15],
     ['MOMENTUM_AWAKENING',momentum>=60],
     ['VOLUME_AWAKENING',volume>=60],
     ['TAKER_BUY_PRESSURE',(Number.isFinite(takerRatio)&&takerRatio>=0.515)||buying>=60],
@@ -261,6 +281,24 @@ export function buildEarlyWakeAlert(candidate,trigger,{now=Date.now()}={}) {
     ['MTF_ALIGNMENT',mtf>=58]
   ];
   const leaders=leaderChecks.filter(([,ok])=>ok).map(([name])=>name);
+  const hardLeader=fastScore>=70||fastMomentum>=68||fastVolume>=68||fastTaker>=68||momentum>=65||volume>=65||(Number.isFinite(takerRatio)&&takerRatio>=0.53)||orderbook>=65;
+  const leaderScore=clamp(
+    fastScore*0.30+
+    momentum*0.10+
+    volume*0.10+
+    buying*0.08+
+    orderbook*0.06+
+    relative*0.06+
+    resistance*0.05+
+    structure*0.05+
+    squeeze*0.05+
+    emaReclaim*0.04+
+    rsiScore*0.03+
+    obv*0.02+
+    wyckoff*0.01+
+    mtf*0.01+
+    preMove*0.04
+  );
   const hardLeader=momentum>=65||volume>=65||(Number.isFinite(takerRatio)&&takerRatio>=0.53)||orderbook>=65;
   const leaderScore=clamp(
     momentum*0.16+
@@ -351,6 +389,7 @@ export function buildEarlyWakeAlert(candidate,trigger,{now=Date.now()}={}) {
       accepted_ids:(candidate?.accepted_strategies||[]).slice(0,8)
     },
     components:{
+      fast_impulse:fastScore,fast_momentum:fastMomentum,fast_volume:fastVolume,fast_taker_buy:fastTaker,fast_breakout:fastBreakout,fast_ema:fastEma,fast_range_expansion:fastRange,fast_body:fastBody,
       pre_move:preMove,momentum,volume,buying_pressure:buying,orderbook_pressure:orderbook,
       structure,squeeze,relative_strength:relative,resistance_proximity:resistance,
       ema_reclaim:emaReclaim,rsi_score:rsiScore,obv_accumulation:obv,wyckoff_spring:wyckoff,mtf_alignment:mtf
@@ -700,7 +739,7 @@ export class EarlyMoveSentinel {
       const job=this.deepQueue.shift();
       this.deepActive++;
       try{
-        const candidate=await this.scanner.scanSymbol(job.row,1,{exchangeInfo:'Binance Public REST',ticker:'Binance Public REST'},{klinesLimit:this.config.deepKlines});
+        const candidate=await this.scanner.scanSymbol(job.row,1,{exchangeInfo:'Binance Public REST',ticker:'Binance Public REST'},{klinesLimit:this.config.deepKlines,fastInterval:this.config.fastInterval,fastKlines:this.config.fastKlines});
         const wakeAlert=buildEarlyWakeAlert(candidate,job.trigger,{now:this.clock()});
         const preAlert=buildPreExplosionAlert(candidate,job.trigger,{now:this.clock()});
         const alert=preAlert.eligible?preAlert:wakeAlert.eligible?wakeAlert:(job.mode==='MOVE'?buildMoveAlert(candidate,job.trigger,{now:this.clock()}):null);

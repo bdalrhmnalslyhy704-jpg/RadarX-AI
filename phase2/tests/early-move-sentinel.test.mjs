@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {buildMoveAlert,buildEarlyWakeAlert,buildPreExplosionAlert,rankPreExplosionTickerRows,EarlyMoveSentinel} from '../core/early-move-sentinel.mjs';
+import {buildFastImpulseContext} from '../market/universe-scanner.mjs';
 
 const candidate={
   symbol:'TESTUSDT',
@@ -183,3 +184,35 @@ const tooLate=buildEarlyWakeAlert({...wakeCandidate,price_change_24h:1.2},{
 },{now:1710000011000});
 assert.equal(tooLate.eligible,false);
 assert.equal(tooLate.early_wake.already_moved,true);
+
+
+const fastCandles=[];
+for(let i=0;i<60;i++){
+  const accelerating=i>=54;
+  const open=100+i*0.03;
+  const close=accelerating?open*(1+0.006*(i-53)):open;
+  const high=accelerating?close*1.004:open*1.001;
+  const low=accelerating?open*0.998:open*0.999;
+  const volume=accelerating?500000:100000;
+  const takerBuyBaseVolume=accelerating?340000:51000;
+  fastCandles.push({
+    openTime:i*300000,
+    closeTime:(i+1)*300000,
+    open,high,low,close,volume,takerBuyBaseVolume,
+    closed:true
+  });
+}
+const fastContext=buildFastImpulseContext(fastCandles,{lastPrice:fastCandles.at(-1).close},20*60*60*1000);
+assert.equal(fastContext.available,true);
+assert.equal(fastContext.closed_candles_only,true);
+assert.ok(fastContext.score>=68);
+assert.ok(['EARLY_IMPULSE','IMPULSE_START'].includes(fastContext.stage));
+assert.ok(fastContext.leaders.includes('FAST_VOLUME_AWAKENING'));
+assert.ok(fastContext.leaders.includes('FAST_TAKER_BUY_PRESSURE'));
+assert.ok(fastContext.leaders.includes('FAST_PRICE_ACCELERATION'));
+
+const openLast=[...fastCandles];
+openLast[openLast.length-1]={...openLast[openLast.length-1],closed:false};
+const closedOnlyContext=buildFastImpulseContext(openLast,{lastPrice:openLast.at(-1).close},20*60*60*1000);
+assert.equal(closedOnlyContext.closed_candles_only,true);
+assert.equal(closedOnlyContext.last_closed_time,openLast.at(-2).closeTime);

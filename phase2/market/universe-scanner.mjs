@@ -829,6 +829,89 @@ export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_
     .slice(0,Math.max(1,Math.trunc(limit)));
 }
 
+export function buildFastImpulseContext(candles,ticker,now){
+  const closed=(Array.isArray(candles)?candles:[])
+    .filter(c=>c?.closed!==false&&Number.isFinite(Number(c?.closeTime))&&Number(c.closeTime)<=now&&
+      Number.isFinite(Number(c?.open))&&Number.isFinite(Number(c?.high))&&
+      Number.isFinite(Number(c?.low))&&Number.isFinite(Number(c?.close))&&
+      Number.isFinite(Number(c?.volume)));
+  if(closed.length<30)return{available:false,closed_candles_only:true,candle_count:closed.length,score:null,stage:'INSUFFICIENT'};
+  const closes=closed.map(c=>Number(c.close));
+  const recent=closed.slice(-3),prev3=closed.slice(-6,-3),base=closed.slice(-27,-6);
+  const avg=(rows,field)=>{const xs=rows.map(x=>Number(x?.[field])).filter(Number.isFinite);return xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:null};
+  const sum=(rows,field)=>rows.reduce((s,x)=>{const v=Number(x?.[field]);return s+(Number.isFinite(v)&&v>0?v:0)},0);
+  const avgRange=rows=>{const xs=rows.map(x=>Number(x.high)-Number(x.low)).filter(Number.isFinite);return xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:null};
+  const avgBodyStrength=rows=>{const xs=rows.map(x=>{const h=Number(x.high),l=Number(x.low),o=Number(x.open),cl=Number(x.close),r=h-l;return r>0?Math.max(0,(cl-o)/r):0}).filter(Number.isFinite);return xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:null};
+  const last=closed.at(-1),previous=closed.at(-2),currentClose=Number(last.close),lastRange=Math.max(Number(last.high)-Number(last.low),1e-12);
+  const closeLocation=clamp((currentClose-Number(last.low))/lastRange*100);
+  const recentVol=avg(recent,'volume'),baseVol=avg(base,'volume');
+  const volumeRatio=Number.isFinite(recentVol)&&Number.isFinite(baseVol)&&baseVol>0?recentVol/baseVol:null;
+  const recentBuyVol=sum(recent,'takerBuyBaseVolume'),recentVolSum=sum(recent,'volume');
+  const prevBuyVol=sum(prev3,'takerBuyBaseVolume'),prevVolSum=sum(prev3,'volume');
+  const buyRatio=recentVolSum>0?recentBuyVol/recentVolSum:null;
+  const prevBuyRatio=prevVolSum>0?prevBuyVol/prevVolSum:null;
+  const buyDelta=Number.isFinite(buyRatio)&&Number.isFinite(prevBuyRatio)?buyRatio-prevBuyRatio:null;
+  const roc15=closes.length>=4&&closes.at(-4)>0?(currentClose-closes.at(-4))/closes.at(-4)*100:null;
+  const roc30=closes.length>=7&&closes.at(-7)>0?(currentClose-closes.at(-7))/closes.at(-7)*100:null;
+  const roc60=closes.length>=13&&closes.at(-13)>0?(currentClose-closes.at(-13))/closes.at(-13)*100:null;
+  const acceleration=Number.isFinite(roc15)&&Number.isFinite(roc30)?roc15-(roc30/2):null;
+  const ema9=ema(closes,9),ema21=ema(closes,21);
+  const emaAlignment=Number.isFinite(ema9)&&Number.isFinite(ema21)?currentClose>ema9&&ema9>=ema21?92:currentClose>ema9?72:currentClose>ema21?55:30:null;
+  const prior20=closed.slice(-21,-1);
+  const priorHigh=Math.max(...prior20.map(x=>Number(x.high)).filter(Number.isFinite));
+  const breakout=Number.isFinite(priorHigh)&&currentClose>=priorHigh;
+  const breakoutDistance=Number.isFinite(priorHigh)&&priorHigh>0?(currentClose-priorHigh)/priorHigh*100:null;
+  const breakoutScore=breakout?95:Number.isFinite(breakoutDistance)&&breakoutDistance>=-0.5?82:Number.isFinite(breakoutDistance)&&breakoutDistance>=-1.5?68:42;
+  const recentRange=avgRange(recent),baseRange=avgRange(base);
+  const rangeRatio=Number.isFinite(recentRange)&&Number.isFinite(baseRange)&&baseRange>0?recentRange/baseRange:null;
+  const rangeExpansionScore=Number.isFinite(rangeRatio)?clamp(50+(rangeRatio-1)*85):50;
+  const volumeScore=Number.isFinite(volumeRatio)?clamp(50+(volumeRatio-1)*80):45;
+  const buyScore=Number.isFinite(buyRatio)?clamp(50+(buyRatio-.5)*300+(Number.isFinite(buyDelta)?buyDelta*240:0)):45;
+  const momentumScore=clamp(
+    (Number.isFinite(roc15)?clamp(50+roc15*20):45)*0.45+
+    (Number.isFinite(roc30)?clamp(50+roc30*12):45)*0.25+
+    (Number.isFinite(acceleration)?clamp(50+acceleration*35):45)*0.30
+  );
+  const bodyStrength=avgBodyStrength(recent);
+  const bodyScore=Number.isFinite(bodyStrength)?clamp(50+bodyStrength*90):45;
+  const fastScore=clamp(momentumScore*0.24+volumeScore*0.20+buyScore*0.16+breakoutScore*0.14+emaAlignment*0.10+rangeExpansionScore*0.07+bodyScore*0.05+closeLocation*0.04);
+  const leaders=[
+    volumeScore>=62?'FAST_VOLUME_AWAKENING':null,
+    momentumScore>=62?'FAST_MOMENTUM_AWAKENING':null,
+    buyScore>=62?'FAST_TAKER_BUY_PRESSURE':null,
+    breakoutScore>=68?'FAST_BREAKOUT_PRESSURE':null,
+    emaAlignment>=68?'FAST_EMA_ALIGNMENT':null,
+    rangeExpansionScore>=60?'FAST_RANGE_EXPANSION':null,
+    bodyScore>=62?'FAST_BULLISH_BODY':null,
+    closeLocation>=70?'FAST_CLOSE_NEAR_HIGH':null,
+    Number.isFinite(buyDelta)&&buyDelta>=0.015?'FAST_TAKER_ACCELERATION':null,
+    Number.isFinite(acceleration)&&acceleration>0.15?'FAST_PRICE_ACCELERATION':null
+  ].filter(Boolean);
+  const stage=fastScore>=78?'IMPULSE_START':fastScore>=68?'EARLY_IMPULSE':fastScore>=60?'WATCH':'NEUTRAL';
+  return {
+    available:true,closed_candles_only:true,interval:'5m',candle_count:closed.length,
+    last_closed_time:Number(last.closeTime),previous_closed_time:Number(previous?.closeTime)||null,
+    current_close:currentClose,roc_15m:roc15,roc_30m:roc30,roc_60m:roc60,
+    acceleration_pct:Number.isFinite(acceleration)?acceleration:null,
+    volume_ratio:Number.isFinite(volumeRatio)?volumeRatio:null,
+    taker_buy_ratio:Number.isFinite(buyRatio)?buyRatio:null,
+    taker_buy_delta:Number.isFinite(buyDelta)?buyDelta:null,
+    ema9:Number.isFinite(ema9)?ema9:null,ema21:Number.isFinite(ema21)?ema21:null,
+    breakout_of_20:breakout,breakout_distance_pct:Number.isFinite(breakoutDistance)?breakoutDistance:null,
+    close_location_pct:closeLocation,range_ratio:Number.isFinite(rangeRatio)?rangeRatio:null,
+    scores:{
+      momentum:Number.isFinite(momentumScore)?Math.round(momentumScore*10)/10:null,
+      volume:Number.isFinite(volumeScore)?Math.round(volumeScore*10)/10:null,
+      taker_buy:Number.isFinite(buyScore)?Math.round(buyScore*10)/10:null,
+      breakout:Number.isFinite(breakoutScore)?Math.round(breakoutScore*10)/10:null,
+      ema:Number.isFinite(emaAlignment)?Math.round(emaAlignment*10)/10:null,
+      range_expansion:Number.isFinite(rangeExpansionScore)?Math.round(rangeExpansionScore*10)/10:null,
+      body:Number.isFinite(bodyScore)?Math.round(bodyScore*10)/10:null
+    },
+    score:Math.round(fastScore*10)/10,stage,leaders
+  };
+}
+
 export function buildCandidateContract({
   ticker,
   deep,
@@ -840,6 +923,7 @@ export function buildCandidateContract({
 }) {
   const symbol = ticker.symbol;
   const series = deep.series || {};
+  const fastImpulseContext = buildFastImpulseContext(deep.fast?.candles || [], ticker, deep.completedAt);
   const v4 = validateSeries(series['4h'] || [], '4h');
   const v1 = validateSeries(series['1h'] || [], '1h');
   const v15 = validateSeries(series['15m'] || [], '15m');
@@ -939,6 +1023,7 @@ export function buildCandidateContract({
     deep.sources?.exchangeInfo,
     deep.sources?.ticker,
     ...(deep.sources?.klines || []),
+    deep.sources?.fastKlines,
     deep.sources?.depth
   ]);
 
@@ -970,6 +1055,7 @@ export function buildCandidateContract({
     reason_codes: [...new Set(reasonCodes)],
     invalidation,
     risk_flags: [...new Set(riskFlags)],
+    fast_impulse_context: fastImpulseContext,
     data_status: {
       data_stale: stale,
       data_valid: gatePass,
@@ -1151,10 +1237,13 @@ export class MarketUniverseScanner {
     const klinesSources = [];
     let depthRaw = null;
     let depthSource = null;
+    let fastDeep = {interval:null,candles:[],source:null};
     let error = null;
 
     try {
-      const [tfResults, depth] = await Promise.all([
+      const fastInterval=String(options.fastInterval||'').trim();
+      const fastLimit=Math.max(40,Math.trunc(Number(options.fastKlines)||96));
+      const [tfResults, depth, fastResult] = await Promise.all([
         Promise.all(
           ['4h','1h','15m'].map(async tf => {
             const r = await this.fetchSeries(ticker.symbol, tf, klinesLimit);
@@ -1168,12 +1257,19 @@ export class MarketUniverseScanner {
             };
           })
         ),
-        this.fetchDepth(ticker.symbol)
+        this.fetchDepth(ticker.symbol),
+        fastInterval ? this.fetchSeries(ticker.symbol, fastInterval, fastLimit) : Promise.resolve(null)
       ]);
       for (const r of tfResults) {
         series[r.tf] = r.candles;
         if (r.source) klinesSources.push(r.source);
       }
+      const fastCandles=fastResult
+        ? Array.isArray(fastResult.candles)
+          ? fastResult.candles.map(c=>({...c,symbol:ticker.symbol,timeframe:fastInterval}))
+          : normalizeRawKlines(fastResult.data,fastResult.source,Number(fastResult.receivedAt)||this.clock())
+        : [];
+      fastDeep={interval:fastInterval||null,candles:fastCandles,source:fastResult?.source??null};
       depthRaw = depth?.data ?? depth;
       depthSource = depth?.source ?? null;
     } catch (e) {
@@ -1199,6 +1295,7 @@ export class MarketUniverseScanner {
       deep: {
         success: deepSuccess,
         series,
+        fast: fastDeep,
         evaluation,
         liquidity,
         depth: depthRaw,
@@ -1206,6 +1303,7 @@ export class MarketUniverseScanner {
           exchangeInfo: sources.exchangeInfo,
           ticker: sources.ticker,
           klines: klinesSources,
+          fastKlines: fastDeep.source,
           depth: depthSource
         },
         completedAt,
