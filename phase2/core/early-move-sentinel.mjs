@@ -1,5 +1,6 @@
 import {MarketUniverseScanner,buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {BinanceAllMarketTickerClient} from '../market/binance-market-ticker-ws.mjs';
+import {decorateRadarAlert} from './radar-alert-meta.mjs';
 
 const clamp=(n,min=0,max=100)=>Math.max(min,Math.min(max,Number(n)||0));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -578,7 +579,6 @@ export class EarlyMoveSentinel {
         deepConcurrency:this.config.deepConcurrency
       }
     });
-    await this.reconcile(true);
     this.ws=this.tickerWsFactory({
       urls:this.config.websocket.urls,
       heartbeatTimeoutMs:this.config.websocket.heartbeatTimeoutMs,
@@ -594,6 +594,12 @@ export class EarlyMoveSentinel {
       this.lastError=String(e?.message??e);
       this.logger.warn?.('MOVE_RECONCILE',this.lastError);
     }),this.config.reconcileMs);
+    try{
+      await this.reconcile(true);
+    }catch(e){
+      this.lastError=String(e?.message??e);
+      this.logger.warn?.('MOVE_BOOTSTRAP',this.lastError);
+    }
   }
 
   async stop(){
