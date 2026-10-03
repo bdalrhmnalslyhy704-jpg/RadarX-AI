@@ -274,6 +274,12 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
     activation_score:Math.round(activation*10)/10,
     confirmations:confirmations.length,
     market_regime:marketRegime,
+    counts:{
+      fifteen_min:m15.length,
+      one_hour:h1.length,
+      btc15:btc15.length,
+      eth15:eth15.length
+    },
     metrics:{
       return_15m:r15,return_30m:r30,return_60m:r60,return_2h:r2h,return_1h:hr,
       market_return_15m:market15,market_return_30m:market30,market_return_60m:market60,
