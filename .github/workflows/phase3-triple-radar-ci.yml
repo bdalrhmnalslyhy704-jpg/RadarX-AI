@@ -6,6 +6,7 @@ on:
       - phase3-triple-radar
       - phase4-symbol-deep-scan
       - phase4-symbol-deep-scan-testfix
+      - phase5-fix-bottom-radar-enable-deep-scan
   workflow_dispatch:
 
 permissions:
@@ -38,6 +39,7 @@ jobs:
         run: |
           set -euo pipefail
           node --check phase2/core/rotation-lag-radar.mjs
+          node --check phase2/market/universe-scanner.mjs
           node --check phase2/core/strong-move-radar.mjs
           node --check phase2/core/early-move-sentinel.mjs
           node --check phase2/core/symbol-deep-analyzer.mjs
