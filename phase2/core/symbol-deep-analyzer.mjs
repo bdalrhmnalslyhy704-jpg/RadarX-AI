@@ -543,7 +543,7 @@ export class SymbolDeepAnalyzer {
       data_quality:quality(fetched.map(x=>x.closed),ticker,depth,'Binance Public REST'),
       algorithms:[
         'EMA 20/50/100/200',
-        'RSI 14 + divergence-ready turns',
+        'RSI 14 + turn detection',
         'MACD 12/26/9',
         'ADX 14 + directional movement',
         'ATR 14',
