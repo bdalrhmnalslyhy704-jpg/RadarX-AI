@@ -234,6 +234,18 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           return send(res,503,{error:String(e?.message??e),alerts:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'ROTATION_LAG_RADAR'}});
         }
       }
+      if(u.pathname==='/api/bottom-radar'&&req.method==='GET'){
+        if(!marketRadar)return send(res,503,{error:'BOTTOM_RADAR_UNAVAILABLE'});
+        const quote=String(u.searchParams.get('quote')||'USDT').trim().toUpperCase();
+        const limit=u.searchParams.get('limit')||'10';
+        try{
+          return send(res,200,await marketRadar.scanBottom({quote,limit}));
+        }catch(e){
+          const m=String(e?.message??e);
+          const status=/INVALID_QUOTE|INVALID_EXCHANGE_INFO/.test(m)?400:/RATE_LIMIT|TIMEOUT|UNAVAILABLE|FAILED|NETWORK|FETCH|ECONN|ENOTFOUND|ETIMEDOUT/.test(m)?502:500;
+          return send(res,status,{error:m,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'BOTTOM_REVERSAL'},source:'Binance Public REST',candidates:[]});
+        }
+      }
       if(u.pathname==='/api/pre-move-radar'&&req.method==='GET'){
         if(!marketRadar)return send(res,503,{error:'PRE_MOVE_RADAR_UNAVAILABLE'});
         const quote=String(u.searchParams.get('quote')||'USDT').trim().toUpperCase();
