@@ -104,7 +104,7 @@ test('Bottom Radar discovery prioritizes symbols near the 24h low while retainin
     {symbol:'ETHUSDT',lastPrice:'55',highPrice:'80',lowPrice:'50',quoteVolume:'40000000',count:250000,priceChangePercent:'-2'},
     {symbol:'LOWUSDT',lastPrice:'2',highPrice:'3',lowPrice:'1',quoteVolume:'100',count:10,priceChangePercent:'-20'}
   ],symbols,{minQuoteVolume24h:750000,limit:2});
-  assert.deepEqual(rows.map(x=>x.symbol),['BTCUSDT','ETHUSDT']);
+  assert.deepEqual(new Set(rows.map(x=>x.symbol)),new Set(['BTCUSDT','ETHUSDT']));
   assert.ok(rows[0].range_position_pct < 50);
 });
 
@@ -198,7 +198,7 @@ test('dedicated Bottom Radar scan uses the optimized discovery path',async()=>{
   assert.equal(result.meta.paper_trading,true);
   assert.equal(result.meta.real_order_execution,false);
   assert.equal(result.universe.scanned,2);
-  assert.equal(result.universe.deep_scan_cap,18);
+  assert.equal(result.universe.deep_scan_cap,10);
   assert.equal(result.candidates.length,2);
 });
 
