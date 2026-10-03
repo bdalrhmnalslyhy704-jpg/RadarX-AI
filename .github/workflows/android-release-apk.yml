@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - android-early-wake-6.8.9
+      - android-dual-radars-6.8.10
       - android-icon-6.8.8-release
       - tradli-feature-integration
       - premium-ui-manual-execution-safe
@@ -26,7 +27,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          ref: android-icon-6.8.8-release
+          ref: android-dual-radars-6.8.10
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
