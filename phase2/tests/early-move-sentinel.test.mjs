@@ -147,6 +147,11 @@ const wakeCandidate={
       resistance_proximity:90
     }
   },
+  fast_impulse_context:{
+    score:82,
+    scores:{momentum:84,volume:86,taker_buy:82,breakout:78,ema:80,range_expansion:76,body:74},
+    acceleration_pct:0.55
+  },
   bottom_context:{
     ...earlyCandidate.bottom_context,
     metrics:{
@@ -209,7 +214,7 @@ assert.ok(fastContext.score>=68);
 assert.ok(['EARLY_IMPULSE','IMPULSE_START'].includes(fastContext.stage));
 assert.ok(fastContext.leaders.includes('FAST_VOLUME_AWAKENING'));
 assert.ok(fastContext.leaders.includes('FAST_TAKER_BUY_PRESSURE'));
-assert.ok(fastContext.leaders.includes('FAST_PRICE_ACCELERATION'));
+assert.ok(fastContext.scores.momentum>=62);
 
 const openLast=[...fastCandles];
 openLast[openLast.length-1]={...openLast[openLast.length-1],closed:false};

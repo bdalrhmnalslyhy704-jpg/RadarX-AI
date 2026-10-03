@@ -130,7 +130,7 @@ function subscriptionValid(x){
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null}){
   const counters=new Map();
   const moveConfig=config.moveRadar||{thresholdPct:1};
   const originList=config.auth.allowedOrigins;
@@ -161,7 +161,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(!rateOk(key))return send(res,429,{error:'RATE_LIMITED'});
     try{
       const u=new URL(req.url,'http://localhost');
-      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false}});
+      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false}});
       if(u.pathname==='/readyz'&&req.method==='GET'){
         const h=monitor.health(),ok=h.database.state==='LIVE'&&(h.websocket.state==='LIVE'||h.rest.state==='LIVE');return send(res,ok?200:503,{ready:ok,health:h});
       }
@@ -183,6 +183,28 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           });
         }catch(e){
           return send(res,503,{error:String(e?.message??e),alerts:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MOVE_RADAR'}});
+        }
+      }
+      if(u.pathname==='/api/strong-move-radar'&&req.method==='GET'){
+        if(!strongMoveRadar)return send(res,503,{error:'STRONG_MOVE_RADAR_UNAVAILABLE'});
+        const sinceRaw=Number(u.searchParams.get('since')||0);
+        const limit=Math.max(1,Math.min(100,Math.trunc(Number(u.searchParams.get('limit')||50))));
+        try{
+          const alerts=typeof store.readStrongMoveAlerts==='function'
+            ? await store.readStrongMoveAlerts({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit})
+            : [];
+          const health=strongMoveRadar.health();
+          return send(res,200,{
+            meta:{live:health.running===true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'STRONG_MOVE_RADAR'},
+            source:'Binance Public REST',
+            as_of:new Date(Date.now()).toISOString(),
+            monitoring:health,
+            thresholds:{min_score:Number(config.strongMoveRadar?.minScore??76),market:'SPOT',fast_timeframe:'1m',confirmation_timeframe:'5m'},
+            algorithms:health.algorithms||[],
+            alerts
+          });
+        }catch(e){
+          return send(res,503,{error:String(e?.message??e),alerts:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'STRONG_MOVE_RADAR'}});
         }
       }
       if(u.pathname==='/api/pre-move-radar'&&req.method==='GET'){
