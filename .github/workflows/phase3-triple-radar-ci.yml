@@ -1,0 +1,40 @@
+name: RadarX Triple Radar CI
+
+on:
+  push:
+    branches:
+      - phase3-triple-radar
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run full test suite
+        run: npm test
+
+      - name: Audit critical vulnerabilities
+        run: npm audit --audit-level=critical
+
+      - name: Validate Triple Radar source
+        run: |
+          set -euo pipefail
+          node --check phase2/core/rotation-lag-radar.mjs
+          node --check phase2/core/strong-move-radar.mjs
+          node --check phase2/core/early-move-sentinel.mjs
