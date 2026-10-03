@@ -20,23 +20,23 @@ export const MOVE_RADAR_DEFAULTS=Object.freeze({
   deepConcurrency:4,
   earlyMax24hMovePct:1.25,
   earlyMin24hMovePct:-8,
-  earlyWakeTriggerPct:0.45,
-  earlyWakeDeltaPct:0.25,
-  earlyWakeMax24hMovePct:0.90,
+  earlyWakeTriggerPct:0.65,
+  earlyWakeDeltaPct:0.35,
+  earlyWakeMax24hMovePct:1.10,
   earlyWakeMin24hMovePct:-2,
   earlyWakeScanCooldownMs:90*1000,
-  earlyWakeAlertCooldownMs:10*60*1000,
-  earlyWakeMinScore:68,
-  earlyWakeMinLeaders:3,
+  earlyWakeAlertCooldownMs:15*60*1000,
+  earlyWakeMinScore:76,
+  earlyWakeMinLeaders:4,
   fastInterval:'5m',
   fastKlines:96,
   earlyScanCooldownMs:2*60*1000,
   maxEarlyDiscovery:36,
-  earlyMinPreMoveScore:78,
-  earlyMinExpansionScore:78,
-  earlyMinStrategyScore:72,
-  earlyMinAcceptedStrategies:2,
-  earlyMinConfirmations:6
+  earlyMinPreMoveScore:82,
+  earlyMinExpansionScore:82,
+  earlyMinStrategyScore:75,
+  earlyMinAcceptedStrategies:3,
+  earlyMinConfirmations:8
 });
 
 function strategyScore(candidate) {
@@ -536,11 +536,12 @@ export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
 }
 
 export class EarlyMoveSentinel {
-  constructor({rest,store,config={},clock=()=>Date.now(),logger=console,tickerWsFactory=null,scannerFactory=null}){
+  constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console,tickerWsFactory=null,scannerFactory=null}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
     this.rest=rest;
     this.store=store;
+    this.pushManager=pushManager;
     this.config={...MOVE_RADAR_DEFAULTS,...config};
     this.clock=clock;
     this.logger=logger;
@@ -734,7 +735,9 @@ export class EarlyMoveSentinel {
         if(lastAt>0&&this.clock()-lastAt<cooldown&&alert.opportunity_score<recent+5)continue;
         this.lastAlertAt.set(alertKey,this.clock());
         this.lastAlertScore.set(alertKey,alert.opportunity_score);
-        await this.store.appendMoveAlert(alert);
+        const decorated=decorateRadarAlert(alert,alert?.event==='PRE_EXPLOSION_ALERT'?'Radar 1 — Early-Wake / Pre-Explosion':'Radar 1 — Early-Wake');
+        await this.store.appendMoveAlert(decorated);
+        if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
         this.alertCount++;
       }catch(error){
         this.lastError=String(error?.message??error);

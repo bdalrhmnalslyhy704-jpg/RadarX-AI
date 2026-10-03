@@ -1,4 +1,5 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
+import {decorateRadarAlert} from './radar-alert-meta.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -346,14 +347,14 @@ export function buildRotationAlert(candidate,now=Date.now()){
 const STABLE_BASES=new Set(['USDC','BUSD','FDUSD','TUSD','USDP','DAI','USDE','USD1']);
 
 export class RotationLagRadar {
-  constructor({rest,store,config={},clock=()=>Date.now(),logger=console}={}){
+  constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
-    this.rest=rest;this.store=store;this.clock=clock;this.logger=logger;
+    this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={
-      quote:'USDT',pollMs:30000,universeRefreshMs:5*60*1000,minQuoteVolume24h:750000,
-      rotationBatchSize:7,topLaggers:3,maxAbs24hMovePct:8,alertCooldownMs:10*60*1000,
-      minScore:78,minConfirmations:4,...config
+      quote:'USDT',pollMs:45000,universeRefreshMs:5*60*1000,minQuoteVolume24h:1000000,
+      rotationBatchSize:5,topLaggers:2,maxAbs24hMovePct:6,alertCooldownMs:15*60*1000,
+      minScore:82,minConfirmations:5,...config
     };
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
     this.lastScanAt=new Map();this.lastAlertAt=new Map();
@@ -437,7 +438,9 @@ export class RotationLagRadar {
     const lastAlert=this.lastAlertAt.get(row.symbol)||0;
     if(this.clock()-lastAlert<this.config.alertCooldownMs)return alert;
     this.lastAlertAt.set(row.symbol,this.clock());
-    await this.store.appendRotationAlert(alert);
+    const decorated=decorateRadarAlert(alert,'Radar 3 — Rotation/Lag');
+    await this.store.appendRotationAlert(decorated);
+    if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
     this.alertCount++;
     return alert;
   }

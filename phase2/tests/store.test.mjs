@@ -17,3 +17,13 @@ test('TEST_FIXTURE: durable settings subscriptions and audit jsonl survive a fre
   const rows=await store.readRecent('notifications',10);
   assert.equal(rows[0].signal_id,'TEST_FIXTURE');assert.equal(rows[0].status,'SENT');
 });
+
+
+test('TEST_FIXTURE: Radar 4 alert log survives fresh reads',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-radar4-store-'));
+  const store=await new DurableStore({dir}).init();
+  const alert={id:'TEST_RADAR4',event:'LIQUIDITY_ABSORPTION_ALERT',radar:'LIQUIDITY_ABSORPTION_RADAR',symbol:'TESTUSDT',processed_at:Date.now(),detected_time_12h:'12:00:01 ص'};
+  await store.appendLiquidityAbsorptionAlert(alert);
+  const rows=await store.readLiquidityAbsorptionAlerts({sinceMs:0,limit:10});
+  assert.equal(rows.length,1);assert.equal(rows[0].radar,'LIQUIDITY_ABSORPTION_RADAR');assert.equal(rows[0].symbol,'TESTUSDT');
+});
