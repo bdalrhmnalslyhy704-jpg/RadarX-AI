@@ -121,7 +121,7 @@ public final class RadarXBackgroundMonitorService extends Service {
             }
         } catch (Throwable error) {
             Log.w(TAG, "Background unified radar fetch failed", error);
-            updateStatus("الرادارات المستقلة • لا يوجد اتصال الآن؛ ستُستكمل القراءة عند عودة الإنترنت");
+            updateStatus("الرادارات المستقلة • لا يوجد اتصال الآن؛ عند انقطاع الإنترنت: حُفظ التنبيه على الخادم ثم أُرسل عند عودة الاتصال؛ ستُستكمل القراءة عند عودة الإنترنت");
         }
     }
 
