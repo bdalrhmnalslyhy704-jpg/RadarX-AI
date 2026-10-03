@@ -299,23 +299,6 @@ export function buildEarlyWakeAlert(candidate,trigger,{now=Date.now()}={}) {
     mtf*0.01+
     preMove*0.04
   );
-  const hardLeader=momentum>=65||volume>=65||(Number.isFinite(takerRatio)&&takerRatio>=0.53)||orderbook>=65;
-  const leaderScore=clamp(
-    momentum*0.16+
-    volume*0.16+
-    buying*0.10+
-    orderbook*0.10+
-    relative*0.10+
-    resistance*0.10+
-    structure*0.08+
-    squeeze*0.08+
-    emaReclaim*0.04+
-    rsiScore*0.03+
-    obv*0.02+
-    wyckoff*0.01+
-    mtf*0.02+
-    preMove*0.08
-  );
   const eligible=!alreadyMoved&&calmEnough&&
     dataQuality>=75&&
     liquidity>=65&&
