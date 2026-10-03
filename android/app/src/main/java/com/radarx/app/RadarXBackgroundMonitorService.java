@@ -44,9 +44,8 @@ public final class RadarXBackgroundMonitorService extends Service {
     private static final String CHANNEL_ALERTS = "radarx_move_alerts";
     private static final int STATUS_NOTIFICATION_ID = 41001;
     private static final int ALERT_NOTIFICATION_BASE = 42000;
-    private static final long SCAN_MS = 60_000L;
+    private static final long SCAN_MS = 15_000L;
     private static final long ALERT_COOLDOWN_MS = 30 * 60_000L;
-    private static final double ALERT_THRESHOLD = 78.0;
 
     private ScheduledExecutorService executor;
     private volatile boolean stopping;
@@ -114,7 +113,7 @@ public final class RadarXBackgroundMonitorService extends Service {
             int universe = monitoring == null ? 0 : monitoring.optInt("universe", 0);
             updateStatus(count > 0
                 ? "Pre-Explosion Radar 24/7 • " + count + " تنبيه مبكر • " + universe + " عملة"
-                : "Pre-Explosion Radar 24/7 • لا تنبيهات مبكرة • " + universe + " عملة");
+                : "Early-Wake + Pre-Explosion Radar 24/7 • لا تنبيهات مبكرة • " + universe + " عملة");
         } catch (Throwable error) {
             Log.w(TAG, "Background move-radar fetch failed", error);
             updateStatus("Move Radar • لا يوجد اتصال الآن؛ سيُستكمل التنبيه عند عودة الإنترنت");
@@ -150,7 +149,14 @@ public final class RadarXBackgroundMonitorService extends Service {
             if (alert == null) continue;
             String event = alert.optString("event", "");
             long at = alert.optLong("processed_at", 0L);
-            if (!"PRE_EXPLOSION_ALERT".equals(event)) {
+            boolean supportedEarlyEvent =
+                "EARLY_WAKE_ALERT".equals(event) ||
+                "PRE_EXPLOSION_ALERT".equals(event);
+            if (!supportedEarlyEvent) {
+                if (at > maxAt) maxAt = at;
+                continue;
+            }
+            if (!alert.optBoolean("eligible", false)) {
                 if (at > maxAt) maxAt = at;
                 continue;
             }
@@ -193,14 +199,27 @@ public final class RadarXBackgroundMonitorService extends Service {
             open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
-        String title = "UP_MOVE".equals(direction)
-            ? "RadarX • قبل الانفجار"
-            : "RadarX • قبل الانفجار (اتجاه غير صاعد)";
-        JSONObject preExplosion = alert.optJSONObject("pre_explosion");
-        int confirmationCount = preExplosion == null ? 0 : preExplosion.optInt("confirmation_count", 0);
+        String title;
+        int confirmationCount = 0;
+        int leaderCount = 0;
+        if ("EARLY_WAKE_ALERT".equals(event)) {
+            title = "UP_MOVE".equals(direction)
+                ? "RadarX • بداية حركة مبكرة"
+                : "RadarX • تنبيه حركة مبكرة";
+            JSONObject earlyWake = alert.optJSONObject("early_wake");
+            leaderCount = earlyWake == null ? 0 : earlyWake.optInt("leader_count", 0);
+        } else {
+            title = "UP_MOVE".equals(direction)
+                ? "RadarX • قبل الانفجار"
+                : "RadarX • قبل الانفجار (اتجاه غير صاعد)";
+            JSONObject preExplosion = alert.optJSONObject("pre_explosion");
+            confirmationCount = preExplosion == null ? 0 : preExplosion.optInt("confirmation_count", 0);
+        }
+        String stageText = "EARLY_WAKE_ALERT".equals(event)
+            ? leaderCount + " عوامل قيادة"
+            : confirmationCount + " تأكيد";
         String body = symbol + " • حركة 24h " + scoreFmt.format(move) + "% • Score " +
-            scoreFmt.format(score) + " • " + label + " • " +
-            confirmationCount + " تأكيد";
+            scoreFmt.format(score) + " • " + label + " • " + stageText;
         String timing = "وقت اكتشاف الخادم: " + detectedText +
             " • وقت إرسال الإشعار: " + sentText;
 
@@ -212,7 +231,7 @@ public final class RadarXBackgroundMonitorService extends Service {
                 body + " • Expansion " + scoreFmt.format(potential) +
                 " • " + (reasonText.length() > 0 ? reasonText : "توافق متعدد العوامل") +
                 " • " + timing +
-                " • الحالة: فحص ما قبل الانفجار فقط؛ العملات الممتدة تُستبعد" +
+                " • الحالة: رادار مبكر متعدد المراحل؛ العملات الممتدة تُستبعد" +
                 " • عند انقطاع الإنترنت: حُفظ التنبيه على الخادم ثم أُرسل عند عودة الاتصال" +
                 " • ليس توقعًا مضمونًا"
             ))
