@@ -21,7 +21,7 @@ export function normalizeBackendBaseUrl(raw = DEFAULT_BACKEND_BASE_URL) {
   return DEFAULT_BACKEND_BASE_URL;
 }
 
-export async function requestJson(baseUrl, path, fetchImpl = globalThis.fetch) {
+export async function requestJson(baseUrl, path, fetchImpl = globalThis.fetch, timeoutMs = 65000) {
   let firstError = null;
   const bases = [normalizeBackendBaseUrl(baseUrl), ...BACKEND_FALLBACK_URLS];
   for (const base of bases) {
@@ -32,7 +32,7 @@ export async function requestJson(baseUrl, path, fetchImpl = globalThis.fetch) {
           cache: 'no-store',
           headers: { Accept: 'application/json' }
         }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('BACKEND_TIMEOUT')), 65000))
+        new Promise((_, reject) => setTimeout(() => reject(new Error('BACKEND_TIMEOUT')), timeoutMs))
       ]);
       let body = null;
       try { body = await response.json(); } catch {}
@@ -151,7 +151,8 @@ export async function getBottomRadar({quote = 'USDT', limit = 10} = {}, fetchImp
   return requestJson(
     base,
     '/api/bottom-radar?quote=' + encodeURIComponent(safeQuote) + '&limit=' + encodeURIComponent(String(safeLimit)),
-    fetchImpl
+    fetchImpl,
+    180000
   );
 }
 
