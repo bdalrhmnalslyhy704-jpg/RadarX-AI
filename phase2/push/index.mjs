@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {defaultSettings} from '../core/signal-service.mjs';
 import {EVENT_CLASS,marketEventClass} from '../core/event-types.mjs';
+import {formatRadarTime12h} from '../core/radar-alert-meta.mjs';
 
 export class PushProvider{async send(){throw new Error('PUSH_PROVIDER_NOT_IMPLEMENTED');}status(){return{provider:'unknown',enabled:false};}}
 export class NoopPushProvider extends PushProvider{
@@ -22,11 +23,6 @@ export class WebPushProvider extends PushProvider{
 export function createPushProvider(c){return c?.provider==='webpush'?new WebPushProvider({subject:c.vapidSubject,publicKey:c.vapidPublicKey,privateKey:c.vapidPrivateKey}):new NoopPushProvider();}
 
 
-function radarTime12h(ms, timeZone='Asia/Aden'){
-  const d=new Date(Number(ms));
-  if(!Number.isFinite(d.getTime()))return 'غير متاح';
-  return new Intl.DateTimeFormat('ar-YE',{timeZone,hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true}).format(d);
-}
 const radarTitle=s=>s?.radar_name||({
   EARLY_MOVE_RADAR:'Radar 1 — Early-Wake',
   STRONG_MOVE_RADAR:'Radar 2 — Strong-Move',
@@ -49,7 +45,7 @@ const radarPayload=(alert,processedAt=Date.now())=>({
   reasons:Array.isArray(alert.reasons)?alert.reasons.slice(0,8):[],
   detected_at:Number(alert.detected_at)||processedAt,
   detected_at_iso:alert.detected_at_iso||new Date(Number(alert.detected_at)||processedAt).toISOString(),
-  detected_time_12h:alert.detected_time_12h||radarTime12h(alert.detected_at||processedAt),
+  detected_time_12h:alert.detected_time_12h||formatRadarTime12h(alert.detected_at||processedAt),
   detected_timezone:'Asia/Aden',
   source:alert.source||'Binance Public REST',
   confidence_score:'UNKNOWN',
