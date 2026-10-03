@@ -1,4 +1,4 @@
-export const DEFAULT_BACKEND_BASE_URL = 'https://radarx-ai-production.up.railway.app';
+export const DEFAULT_BACKEND_BASE_URL = 'https://radarx-ai-triple-production.up.railway.app';
 
 function assertAllowedBackend(url) {
   if (url.origin !== DEFAULT_BACKEND_BASE_URL || url.pathname !== '/' || url.username || url.password) {
