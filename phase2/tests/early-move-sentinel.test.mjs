@@ -214,7 +214,7 @@ assert.ok(fastContext.score>=68);
 assert.ok(['EARLY_IMPULSE','IMPULSE_START'].includes(fastContext.stage));
 assert.ok(fastContext.leaders.includes('FAST_VOLUME_AWAKENING'));
 assert.ok(fastContext.leaders.includes('FAST_TAKER_BUY_PRESSURE'));
-assert.ok(fastContext.leaders.includes('FAST_PRICE_ACCELERATION'));
+assert.ok(fastContext.scores.momentum>=62);
 
 const openLast=[...fastCandles];
 openLast[openLast.length-1]={...openLast[openLast.length-1],closed:false};
