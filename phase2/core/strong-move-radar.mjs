@@ -236,9 +236,9 @@ export class StrongMoveRadar {
     if(!store)throw new Error('STORE_REQUIRED');
     this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={
-      quote:'USDT',pollMs:15000,universeRefreshMs:60000,minQuoteVolume24h:1000000,
-      rotationBatchSize:6,topMoverCount:4,alertCooldownMs:5*60*1000,
-      minScore:76, ...config
+      quote:'USDT',pollMs:30000,universeRefreshMs:60000,minQuoteVolume24h:1000000,
+      rotationBatchSize:4,topMoverCount:3,alertCooldownMs:12*60*1000,
+      minScore:83, ...config
     };
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
     this.lastTickerMap=new Map();this.lastScanAt=new Map();this.lastAlertAt=new Map();
