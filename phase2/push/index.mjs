@@ -21,6 +21,43 @@ export class WebPushProvider extends PushProvider{
 }
 export function createPushProvider(c){return c?.provider==='webpush'?new WebPushProvider({subject:c.vapidSubject,publicKey:c.vapidPublicKey,privateKey:c.vapidPrivateKey}):new NoopPushProvider();}
 
+
+function radarTime12h(ms, timeZone='Asia/Aden'){
+  const d=new Date(Number(ms));
+  if(!Number.isFinite(d.getTime()))return 'غير متاح';
+  return new Intl.DateTimeFormat('ar-YE',{timeZone,hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true}).format(d);
+}
+const radarTitle=s=>s?.radar_name||({
+  EARLY_MOVE_RADAR:'Radar 1 — Early-Wake',
+  STRONG_MOVE_RADAR:'Radar 2 — Strong-Move',
+  ROTATION_LAG_RADAR:'Radar 3 — Rotation/Lag',
+  LIQUIDITY_ABSORPTION_RADAR:'Radar 4 — Liquidity Absorption'
+}[String(s?.radar||'').toUpperCase()]||'RadarX');
+const radarPayload=(alert,processedAt=Date.now())=>({
+  type:'RADARX_RADAR_ALERT',
+  event_class:EVENT_CLASS.RADAR_ALERT??'RADAR_ALERT',
+  event:alert.event||'RADAR_ALERT',
+  radar:alert.radar||'UNKNOWN_RADAR',
+  radar_name:radarTitle(alert),
+  symbol:alert.symbol,
+  market:alert.market||'SPOT',
+  direction:alert.direction||'NONE',
+  price:alert.price??null,
+  opportunity_score:alert.opportunity_score??null,
+  potential_label:alert.potential_label||null,
+  price_change_24h:alert.price_change_24h??null,
+  reasons:Array.isArray(alert.reasons)?alert.reasons.slice(0,8):[],
+  detected_at:Number(alert.detected_at)||processedAt,
+  detected_at_iso:alert.detected_at_iso||new Date(Number(alert.detected_at)||processedAt).toISOString(),
+  detected_time_12h:alert.detected_time_12h||radarTime12h(alert.detected_at||processedAt),
+  detected_timezone:'Asia/Aden',
+  source:alert.source||'Binance Public REST',
+  confidence_score:'UNKNOWN',
+  paper_trading:true,
+  real_order_execution:false,
+  title:radarTitle(alert)+' • '+String(alert.symbol||'UNKNOWN')
+});
+
 const payload=(s,processedAt=Date.now())=>({type:'RADARX_SIGNAL',event_class:marketEventClass(s.data_status?.source??s.source),signal_id:s.signal_id,symbol:s.symbol,market:s.market,strategy:s.strategy,direction:s.direction,
   signal_type:s.signal_type,timeframe:s.candle?.timeframe,candle_open_time:s.candle?.open_time,candle_close_time:s.candle?.close_time,
   price:s.price?.reference??null,data_quality:s.scores?.data_quality,liquidity_quality:s.scores?.liquidity_quality,
@@ -52,6 +89,24 @@ export class PushManager{
     }
     return out;
   }
+
+  async notifyRadarAlert(alert){
+    const rows=await this.store.getSubscriptions(),out=[];
+    for(const sub of rows){
+      const settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();
+      if(!settings.enabled)continue;
+      const dq=Number(alert?.data_quality??alert?.strong_move?.data_quality??alert?.liquidity_absorption?.data_quality??100);
+      if(Number.isFinite(dq)&&dq<Number(settings.minDataQuality))continue;
+      const r=await this.provider.send(sub,radarPayload(alert,Date.now()));
+      const audit={event:'RADAR_ALERT_NOTIFICATION',event_class:'RADAR_ALERT',radar:alert.radar||'UNKNOWN_RADAR',radar_name:radarTitle(alert),
+        symbol:alert.symbol,alert_id:alert.id||null,subscription_id:sub.id,user_id:sub.user_id,status:r.status,
+        attempted_at:Date.now(),reason:r.reason??null,http_status:r.httpStatus??null};
+      await this.store.appendNotificationAudit(audit);out.push(audit);
+      if(r.status==='GONE')await this.store.disableSubscription(sub.id);
+    }
+    return out;
+  }
+
   async notifyTestPush({userId,testId}) {
     const clean=String(testId||'').trim()||randomUUID();
     if(!/^[A-Za-z0-9_-]{1,64}$/.test(clean))throw new Error('INVALID_TEST_ID');
