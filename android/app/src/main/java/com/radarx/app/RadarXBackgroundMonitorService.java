@@ -37,13 +37,17 @@ public final class RadarXBackgroundMonitorService extends Service {
     public static final String ACTION_STOP = "com.radarx.app.action.STOP_BACKGROUND_MONITOR";
 
     private static final String TAG = "RadarXBackground";
-    private static final String BACKEND =
+    private static final String BACKEND_MOVE =
             "https://radarx-ai-production.up.railway.app/api/move-radar?quote=USDT&limit=50";
+    private static final String BACKEND_STRONG =
+            "https://radarx-ai-production.up.railway.app/api/strong-move-radar?quote=USDT&limit=50";
 
     private static final String CHANNEL_STATUS = "radarx_background_status";
     private static final String CHANNEL_ALERTS = "radarx_move_alerts";
+    private static final String CHANNEL_STRONG_ALERTS = "radarx_strong_move_alerts";
     private static final int STATUS_NOTIFICATION_ID = 41001;
     private static final int ALERT_NOTIFICATION_BASE = 42000;
+    private static final int STRONG_ALERT_NOTIFICATION_BASE = 43000;
     private static final long SCAN_MS = 15_000L;
     private static final long ALERT_COOLDOWN_MS = 30 * 60_000L;
 
@@ -99,30 +103,75 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     private void scanOnceSafe() {
         if (stopping) return;
+        int moveCount = 0;
+        int strongCount = 0;
+        int universe = 0;
+        boolean moveOk = false;
+        boolean strongOk = false;
         try {
             JSONObject root = fetchMoveFeed();
             JSONObject meta = root.optJSONObject("meta");
-            if (meta == null || !meta.optBoolean("live", false) ||
-                !meta.optBoolean("paper_trading", true) ||
-                meta.optBoolean("real_order_execution", false)) {
-                throw new IllegalStateException("MOVE_RADAR_NOT_LIVE");
+            if (meta != null && meta.optBoolean("live", false) &&
+                meta.optBoolean("paper_trading", true) &&
+                !meta.optBoolean("real_order_execution", false)) {
+                JSONArray alerts = root.optJSONArray("alerts");
+                moveCount = notifyNewMoveAlerts(alerts == null ? new JSONArray() : alerts);
+                JSONObject monitoring = root.optJSONObject("monitoring");
+                universe = monitoring == null ? 0 : monitoring.optInt("universe", 0);
+                moveOk = true;
             }
-            JSONArray alerts = root.optJSONArray("alerts");
-            int count = notifyNewMoveAlerts(alerts == null ? new JSONArray() : alerts);
-            JSONObject monitoring = root.optJSONObject("monitoring");
-            int universe = monitoring == null ? 0 : monitoring.optInt("universe", 0);
-            updateStatus(count > 0
-                ? "Pre-Explosion Radar 24/7 • " + count + " تنبيه مبكر • " + universe + " عملة"
-                : "Early-Wake + Pre-Explosion Radar 24/7 • لا تنبيهات مبكرة • " + universe + " عملة");
         } catch (Throwable error) {
             Log.w(TAG, "Background move-radar fetch failed", error);
-            updateStatus("Move Radar • لا يوجد اتصال الآن؛ سيُستكمل التنبيه عند عودة الإنترنت");
+        }
+        try {
+            JSONObject root = fetchStrongMoveFeed();
+            JSONObject meta = root.optJSONObject("meta");
+            if (meta != null && meta.optBoolean("live", false) &&
+                meta.optBoolean("paper_trading", true) &&
+                !meta.optBoolean("real_order_execution", false)) {
+                JSONArray alerts = root.optJSONArray("alerts");
+                strongCount = notifyNewStrongMoveAlerts(alerts == null ? new JSONArray() : alerts);
+                JSONObject monitoring = root.optJSONObject("monitoring");
+                if (monitoring != null) universe = Math.max(universe, monitoring.optInt("universe", 0));
+                strongOk = true;
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "Background strong-move radar fetch failed", error);
+        }
+
+        if (moveOk || strongOk) {
+            updateStatus(
+                "Radar 1 Early-Wake/Pre-Explosion: " + moveCount +
+                " • Radar 2 Strong-Move: " + strongCount +
+                " • " + universe + " عملة"
+            );
+        } else {
+            updateStatus("الراداران • لا يوجد اتصال الآن؛ سيُستكمل التنبيه عند عودة الإنترنت");
+        }
+    }
+
+    private JSONObject fetchStrongMoveFeed() throws Exception {
+        long cursor = prefs().getLong("strong_move_alert_cursor_at", 0L);
+        String url = BACKEND_STRONG + (cursor > 0L ? "&since=" + cursor : "");
+        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+        try {
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(12_000);
+            connection.setReadTimeout(60_000);
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("Accept-Encoding", "identity");
+            int status = connection.getResponseCode();
+            if (status != 200) throw new IllegalStateException("HTTP_" + status);
+            return new JSONObject(new String(readAll(connection.getInputStream()), StandardCharsets.UTF_8));
+        } finally {
+            connection.disconnect();
         }
     }
 
     private JSONObject fetchMoveFeed() throws Exception {
         long cursor = prefs().getLong("move_alert_cursor_at", 0L);
-        String url = BACKEND + (cursor > 0L ? "&since=" + cursor : "");
+        String url = BACKEND_MOVE + (cursor > 0L ? "&since=" + cursor : "");
         HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
         try {
             connection.setRequestMethod("GET");
@@ -171,6 +220,95 @@ public final class RadarXBackgroundMonitorService extends Service {
         prefs().edit().putLong("move_alert_cursor_at", maxAt)
             .putStringSet("move_alert_seen_ids", seen).apply();
         return count;
+    }
+
+    private int notifyNewStrongMoveAlerts(JSONArray alerts) {
+        Set<String> seen = new HashSet<>(prefs().getStringSet("strong_move_alert_seen_ids", new HashSet<>()));
+        long cursor = prefs().getLong("strong_move_alert_cursor_at", 0L);
+        long maxAt = cursor;
+        int count = 0;
+        for (int i = alerts.length() - 1; i >= 0; i--) {
+            JSONObject alert = alerts.optJSONObject(i);
+            if (alert == null) continue;
+            if (!"STRONG_MOVE_ALERT".equals(alert.optString("event", ""))) {
+                long at = alert.optLong("processed_at", 0L);
+                if (at > maxAt) maxAt = at;
+                continue;
+            }
+            if (!alert.optBoolean("eligible", false)) {
+                long at = alert.optLong("processed_at", 0L);
+                if (at > maxAt) maxAt = at;
+                continue;
+            }
+            String id = alert.optString("id", "");
+            long at = alert.optLong("processed_at", 0L);
+            if (at > maxAt) maxAt = at;
+            if (id.isEmpty() || seen.contains(id)) continue;
+            notifyStrongMoveAlert(alert);
+            seen.add(id);
+            count++;
+        }
+        while (seen.size() > 200) seen.remove(seen.iterator().next());
+        prefs().edit().putLong("strong_move_alert_cursor_at", maxAt)
+            .putStringSet("strong_move_alert_seen_ids", seen).apply();
+        return count;
+    }
+
+    private void notifyStrongMoveAlert(JSONObject alert) {
+        String symbol = alert.optString("symbol", "UNKNOWN");
+        String direction = alert.optString("direction", "UP_SURGE");
+        double move = alert.optDouble("price_change_24h", 0.0);
+        double score = alert.optDouble("opportunity_score", 0.0);
+        String stage = alert.optString("potential_label", "STRONG_MOVE");
+        JSONObject strong = alert.optJSONObject("strong_move");
+        JSONArray reasons = alert.optJSONArray("reasons");
+        long detectedAt = alert.optLong("detected_at", alert.optLong("processed_at", 0L));
+        long sentAt = System.currentTimeMillis();
+
+        StringBuilder reasonText = new StringBuilder();
+        if (reasons != null) {
+            for (int i = 0; i < Math.min(4, reasons.length()); i++) {
+                if (i > 0) reasonText.append(" • ");
+                reasonText.append(reasons.optString(i, ""));
+            }
+        }
+
+        String title = "UP_SURGE".equals(direction)
+            ? "RadarX • ⚡ حركة قوية بدأت"
+            : "RadarX • ⚡ حركة هابطة قوية";
+        String body = symbol + " • 24h " + scoreFmt.format(move) + "% • Burst Score " +
+            scoreFmt.format(score) + " • " + stage;
+        String timing = "اكتشاف: " + formatTimestamp(detectedAt) +
+            " • إشعار: " + formatTimestamp(sentAt);
+
+        Intent open = new Intent(this, MainActivity.class);
+        PendingIntent pending = PendingIntent.getActivity(
+            this, STRONG_ALERT_NOTIFICATION_BASE + Math.abs(symbol.hashCode()),
+            open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+        Notification.Builder builder = notificationBuilder(CHANNEL_STRONG_ALERTS)
+            .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(new Notification.BigTextStyle().bigText(
+                body + " • " + (reasonText.length() > 0 ? reasonText : "توسع زخم وحجم") +
+                " • " + timing +
+                " • رادار مستقل عن رادار Early-Wake" +
+                " • شموع مغلقة فقط • Paper Trading فقط • ليس ضمانًا لاستمرار الحركة"
+            ))
+            .setContentIntent(pending)
+            .setAutoCancel(true)
+            .setCategory(Notification.CATEGORY_EVENT)
+            .setPriority(Notification.PRIORITY_HIGH);
+
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (manager != null) {
+            manager.notify(
+                STRONG_ALERT_NOTIFICATION_BASE + Math.abs(symbol.hashCode() % 10000),
+                builder.build()
+            );
+        }
     }
 
     private void notifyMoveAlert(JSONObject alert) {
@@ -264,7 +402,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         Notification.Builder builder = notificationBuilder(CHANNEL_STATUS)
             .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
             .setContentTitle("RadarX • Move Radar 24/7")
-            .setContentText("يتابع تنبيهات حركة السوق من Backend حتى عند إغلاق التطبيق")
+            .setContentText("راداران مستقلان: Early-Wake + Strong-Move يعملان في الخلفية")
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .setColor(Color.rgb(53, 201, 255))
@@ -307,10 +445,16 @@ public final class RadarXBackgroundMonitorService extends Service {
         manager.createNotificationChannel(status);
 
         NotificationChannel alerts = new NotificationChannel(
-            CHANNEL_ALERTS, "RadarX Move Alerts", NotificationManager.IMPORTANCE_HIGH
+            CHANNEL_ALERTS, "RadarX Early-Wake Alerts", NotificationManager.IMPORTANCE_HIGH
         );
-        alerts.setDescription("تنبيهات الحركة المبكرة الناتجة عن الفحص متعدد الاستراتيجيات");
+        alerts.setDescription("تنبيهات الرادار الأول: Early-Wake وPre-Explosion");
         manager.createNotificationChannel(alerts);
+
+        NotificationChannel strongAlerts = new NotificationChannel(
+            CHANNEL_STRONG_ALERTS, "RadarX Strong-Move Alerts", NotificationManager.IMPORTANCE_HIGH
+        );
+        strongAlerts.setDescription("تنبيهات الرادار الثاني للحركة القوية والانفجار اللحظي");
+        manager.createNotificationChannel(strongAlerts);
     }
 
     private void stopMonitoring() {
