@@ -42,6 +42,8 @@ public final class MainActivity extends Activity {
             "https://appassets.androidplatform.net";
     private static final String BACKEND_ORIGIN =
             "https://radarx-ai-triple-production.up.railway.app";
+    private static final String BACKEND_FALLBACK_ORIGIN =
+            "https://radarx-ai-production.up.railway.app";
     private static final int REQUEST_POST_NOTIFICATIONS = 7301;
     private boolean pendingBackgroundStart;
 
@@ -92,21 +94,14 @@ public final class MainActivity extends Activity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                Uri uri = request.getUrl();
-                return !(isAllowedAppUri(uri) || isAllowedBackendUri(uri));
+                return !isAllowedAppUri(request.getUrl());
             }
 
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                Uri uri = request.getUrl();
-                WebResourceResponse local = assetLoader.shouldInterceptRequest(uri);
-                if (local != null) {
-                    return local;
-                }
-                if (isAllowedBackendUri(uri)) {
-                    return fetchBackend(request);
-                }
-                return blockedResponse("Network destination blocked");
+                WebResourceResponse local = assetLoader.shouldInterceptRequest(request.getUrl());
+                if (local != null) return local;
+                return null;
             }
 
             @Override
@@ -142,9 +137,9 @@ public final class MainActivity extends Activity {
     }
 
     private static boolean isAllowedBackendUri(Uri uri) {
-        return uri != null
-                && "https".equalsIgnoreCase(uri.getScheme())
-                && BACKEND_ORIGIN.equalsIgnoreCase(uri.getScheme() + "://" + uri.getHost())
+        if (uri == null || !"https".equalsIgnoreCase(uri.getScheme())) return false;
+        String origin = uri.getScheme() + "://" + uri.getHost();
+        return (BACKEND_ORIGIN.equalsIgnoreCase(origin) || BACKEND_FALLBACK_ORIGIN.equalsIgnoreCase(origin))
                 && (uri.getPort() == -1 || uri.getPort() == 443);
     }
 
