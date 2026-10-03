@@ -154,3 +154,37 @@ export async function getSymbolDeepScan(symbol, fetchImpl = globalThis.fetch) {
     fetchImpl
   );
 }
+
+
+export async function getRadarStatus(fetchImpl = globalThis.fetch) {
+  const base = normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  return requestJson(base, '/api/radar-status', fetchImpl);
+}
+
+export async function getRadarAlerts({radar='ALL',limit=20,since=0}={}, fetchImpl = globalThis.fetch) {
+  const safeRadar=String(radar||'ALL').trim().toUpperCase();
+  if(!/^[A-Z0-9_]{2,40}$/.test(safeRadar)) throw new Error('INVALID_RADAR');
+  const safeLimit=Number(limit);
+  if(!Number.isInteger(safeLimit)||safeLimit<1||safeLimit>100) throw new Error('INVALID_LIMIT');
+  const safeSince=Number(since);
+  const sinceParam=Number.isFinite(safeSince)&&safeSince>0?'&since='+encodeURIComponent(String(Math.trunc(safeSince))):'';
+  const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  return requestJson(base,'/api/radar-alerts?radar='+encodeURIComponent(safeRadar)+'&limit='+encodeURIComponent(String(safeLimit))+sinceParam,fetchImpl);
+}
+
+export async function setRadarState(radar, action, fetchImpl = globalThis.fetch) {
+  const safeRadar=String(radar||'').trim().toUpperCase();
+  const safeAction=String(action||'').trim().toLowerCase();
+  if(!/^[A-Z0-9_]{2,40}$/.test(safeRadar)) throw new Error('INVALID_RADAR');
+  if(!['start','stop'].includes(safeAction)) throw new Error('INVALID_RADAR_ACTION');
+  const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  try {
+    const response=await fetchImpl(base+'/api/radar-control?radar='+encodeURIComponent(safeRadar)+'&action='+encodeURIComponent(safeAction),{
+      method:'POST',cache:'no-store',headers:{Accept:'application/json'}
+    });
+    let body=null;try{body=await response.json();}catch{}
+    return {status:response.status,ok:response.ok,body,error:null};
+  } catch(error) {
+    return {status:0,ok:false,body:null,error:String(error?.message||error)};
+  }
+}
