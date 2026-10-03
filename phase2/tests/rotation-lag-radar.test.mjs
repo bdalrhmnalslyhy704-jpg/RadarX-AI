@@ -41,8 +41,8 @@ assert.equal(result.closed_candles_only,true);
 assert.equal(result.direction,'UP_ROTATION');
 assert.ok(result.metrics.relative_30m_pct>0);
 assert.ok(result.component_scores.silent_volume>60);
-console.log('ROTATION_DEBUG', JSON.stringify({direction:result.direction,confirmations:result.confirmations,metrics:result.metrics,components:result.component_scores}));
-assert.ok(result.confirmations>=4);
+const confirmationCount = Array.isArray(result.confirmations) ? result.confirmations.length : Number(result.confirmations);
+assert.ok(confirmationCount>=4);
 assert.ok(result.score>=70);
 
 const alert=buildRotationAlert({
