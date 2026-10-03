@@ -18,12 +18,12 @@ export function mountBackgroundMonitorControl(root){
   addStyle();
   root.innerHTML=
     '<section class="rx-bg-card" aria-label="Background Monitor">'+
-      '<div class="rx-bg-head"><div><div class="rx-bg-title">🛰️ Move Radar 24/7 • مراقبة الخلفية</div>'+
-      '<div class="rx-bg-sub">يتابع السوق على الخادم 24/7، ويرصد بداية الحركة قبل الارتفاع ثم يرسل تنبيهًا عند توافق إشارات الاستيقاظ أو ما قبل الانفجار.</div></div>'+
+      '<div class="rx-bg-head"><div><div class="rx-bg-title">🛰️ راداران RadarX 24/7 • مراقبة الخلفية</div>'+
+      '<div class="rx-bg-sub">يشغّل رادارين مستقلين في الخلفية: الأول Early-Wake/Pre-Explosion، والثاني Strong-Move/Burst لاكتشاف الحركة القوية التي بدأت فعليًا.</div></div>'+
       '<div id="rx-bg-state" class="rx-bg-state"><span id="rx-bg-dot" class="rx-bg-dot"></span><span id="rx-bg-label">متوقفة</span></div></div>'+
       '<div class="rx-bg-actions"><button id="rx-bg-start" class="rx-bg-btn primary" type="button">تشغيل في الخلفية</button>'+
       '<button id="rx-bg-stop" class="rx-bg-btn stop" type="button">إيقاف</button></div>'+
-      '<div class="rx-bg-note">المراقبة للتحليل فقط ولا ترسل أوامر تداول. الخادم يستمر 24/7؛ الهاتف يحتفظ بمؤشر التنبيهات ويستأنف استقبالها عند عودة الإنترنت.</div>'+
+      '<div class="rx-bg-note">الراداران للتحليل فقط ولا يرسلان أوامر تداول. الخادم يستمر 24/7؛ لكل رادار سجل تنبيهات مستقل، والهاتف يستأنف استقبالها عند عودة الإنترنت.</div>'+
     '</section>';
 
   const start=root.querySelector('#rx-bg-start');
