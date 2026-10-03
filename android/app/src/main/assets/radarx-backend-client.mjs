@@ -156,3 +156,13 @@ export async function getMoveRadar({quote='USDT',limit=50,since=0}={},fetchImpl=
   const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
   return requestJson(base,'/api/move-radar?quote='+encodeURIComponent(safeQuote)+'&limit='+encodeURIComponent(String(safeLimit))+sinceParam,fetchImpl);
 }
+export async function getSymbolDeepScan(symbol, fetchImpl = globalThis.fetch) {
+  const raw = String(symbol || '').trim().toUpperCase();
+  if (!/^[A-Z0-9_\/-]{2,20}$/.test(raw)) throw new Error('INVALID_SYMBOL');
+  const base = normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  return requestJson(
+    base,
+    '/api/symbol-deep-scan?symbol=' + encodeURIComponent(raw),
+    fetchImpl
+  );
+}
