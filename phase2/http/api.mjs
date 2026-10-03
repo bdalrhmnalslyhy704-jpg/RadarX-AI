@@ -181,13 +181,15 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       const u=new URL(req.url,'http://localhost');
       if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false}});
       if(u.pathname==='/api/radar-status'&&req.method==='GET')return send(res,200,{radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
-      if(u.pathname==='/api/radar-control'&&req.method==='POST'){
+      if(u.pathname==='/api/radar-control'&&(req.method==='POST'||req.method==='GET')){
         const radar=String(u.searchParams.get('radar')||'').trim().toUpperCase();
         const action=String(u.searchParams.get('action')||'').trim().toLowerCase();
         const entry=radarEntries[radar];
         if(!entry?.instance)return send(res,404,{error:'RADAR_NOT_AVAILABLE',radar});
         if(!['start','stop'].includes(action))return send(res,400,{error:'INVALID_RADAR_ACTION',radar});
-        if(action==='start')await entry.instance.start();else await entry.instance.stop();
+        try{
+          if(action==='start')await Promise.resolve(entry.instance.start());else await Promise.resolve(entry.instance.stop());
+        }catch(e){return send(res,503,{error:'RADAR_CONTROL_FAILED',message:String(e?.message??e),radar,action});}
         const health=entry.instance.health?.()||{running:false};
         return send(res,200,{ok:true,radar,radar_name:entry.name,running:Boolean(health.running),status:health,meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
       }
