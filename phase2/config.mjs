@@ -120,7 +120,7 @@ export const CONFIG = Object.freeze({
     minConfirmations: int(process.env.RADARX_ROTATION_RADAR_MIN_CONFIRMATIONS, 4)
   },
   radarControl: {
-    autostart: String(process.env.RADARX_RADARS_AUTOSTART ?? 'true').toLowerCase() === 'true'
+    autostart: String(process.env.RADARX_RADARS_AUTOSTART ?? ((process.env.RADARX_ENV ?? 'development').toLowerCase() === 'production' ? 'true' : 'false')).toLowerCase() === 'true'
   },
   liquidityAbsorptionRadar: {
     quote: 'USDT',
