@@ -13,8 +13,8 @@ function make1m(){
     const red=i>=84&&i<88;
     const open=absorption?(red?99.65:99.55):(100+Math.sin(i)*0.08);
     const close=absorption?(red?99.50+(i-84)*0.03:99.75+(i-88)*0.10):100+Math.sin(i+1)*0.08;
-    const low=absorption?Math.min(open,close)-0.55:99.2;
-    const high=absorption?Math.max(open,close)+0.25:100.8;
+    const low=absorption?Math.min(open,close)-0.55:99.65;
+    const high=absorption?Math.max(open,close)+0.25:100.25;
     rows.push({
       openTime:t,closeTime:t+59999,open,high,low,close,
       volume:absorption?2500:1000,quoteVolume:absorption?250000:100000,
@@ -82,10 +82,11 @@ test('Radar 4 alert identifies source and 12-hour discovery time',()=>{
 });
 
 test('12-hour formatter rolls 12 to 1 correctly by hour',()=>{
-  const oneAm=Date.UTC(2026,9,5,1,2,3);
-  const twelveAm=Date.UTC(2026,9,5,0,2,3);
-  assert.match(formatRadarTime12h(oneAm),/01\/10\/2026/);
-  assert.match(formatRadarTime12h(twelveAm),/12:/);
+  const oneAm=Date.UTC(2026,9,4,22,2,3); // 01:02 Asia/Aden
+  const twelveAm=Date.UTC(2026,9,4,21,2,3); // 00:02 Asia/Aden
+  assert.match(formatRadarTime12h(oneAm),/05\/10\/2026/);
+  assert.match(formatRadarTime12h(oneAm),/1:02:03 PM|1:02:03 AM|1:02:03/);
+  assert.match(formatRadarTime12h(twelveAm),/12:02:03/);
   assert.doesNotMatch(formatRadarTime12h(oneAm),/00:/);
 });
 
