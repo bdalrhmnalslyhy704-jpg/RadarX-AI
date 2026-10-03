@@ -199,8 +199,13 @@ assert.match(backgroundServiceSourceForMove,/setReadTimeout\(60_000\)/);
 const backgroundService=await readFile(new URL('../../java/com/radarx/app/RadarXBackgroundMonitorService.java',import.meta.url),'utf8');
 assert.match(indexHtml,/backgroundMonitorPanel/);
 assert.match(indexHtml,/mountBackgroundMonitorControl/);
-assert.match(bgControl,/تشغيل في الخلفية/);
-assert.match(bgControl,/Move Radar 24\/7/);
+assert.match(bgControl,/الرادارات المستقلة/);
+assert.match(bgControl,/Radar 1 — Early-Wake/);
+assert.match(bgControl,/Radar 2 — Strong-Move/);
+assert.match(bgControl,/Radar 3 — Rotation\/Lag/);
+assert.match(bgControl,/Radar 4 — Liquidity Absorption/);
+assert.match(bgControl,/تشغيل هذا الرادار/);
+assert.match(bgControl,/إيقاف هذا الرادار/);
 assert.match(mainActivity,/startBackgroundMonitor/);
 assert.equal(mainActivity.includes('setReadTimeout(60000)'),true);
 assert.match(tradliActivity,/TRADLI — AI Trading Analysis/);
@@ -344,3 +349,13 @@ assert.equal(/real_order_execution\\s*[:=]\\s*true/.test(suite),false);
 console.log('RadarX Android Dashboard/background regression tests passed');
 
 // PRE_MOVE_RADAR_RELEASE_TRIGGER
+
+test('Radar 4 dedicated Android page exposes independent control and alert time source',async()=>{
+  const page=await readFile(new URL('../radar4-liquidity-absorption.html',import.meta.url),'utf8');
+  assert.match(page,/Radar 4 — Liquidity Absorption/);
+  assert.match(page,/تشغيل Radar 4 فقط/);
+  assert.match(page,/إيقاف Radar 4/);
+  assert.match(page,/LIQUIDITY_ABSORPTION_RADAR/);
+  assert.match(page,/detected_time_12h/);
+  assert.match(page,/12h/);
+});
