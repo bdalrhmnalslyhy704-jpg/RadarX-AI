@@ -190,7 +190,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         String title = "RadarX • " + radarName + " • " + symbol;
         String body = "الرادار: " + radarName + " • " + symbol +
             " • Score " + scoreFmt.format(score) + " • " + stage;
-        String timing = "وقت اكتشاف العملة: " + detectedText + " • Asia/Aden • 12h";
+        String timing = "وقت اكتشاف الخادم/العملة: " + detectedText + " • Asia/Aden • 12h";
 
         Intent open = new Intent(this, MainActivity.class);
         PendingIntent pending = PendingIntent.getActivity(
