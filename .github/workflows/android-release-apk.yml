@@ -3,6 +3,7 @@ name: RadarX Android Release APK
 on:
   push:
     branches:
+      - android-early-wake-6.8.9
       - android-icon-6.8.8-release
       - tradli-feature-integration
       - premium-ui-manual-execution-safe
@@ -206,12 +207,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="android-v6.8.8-icon-refresh-${GITHUB_RUN_NUMBER}"
+          TAG="android-v6.8.9-early-wake-${GITHUB_RUN_NUMBER}"
           APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "RadarX 6.8.8 Native — Icon Refresh ${GITHUB_RUN_NUMBER}" \
+            --title "RadarX 6.8.9 Native — Early Wake Radar ${GITHUB_RUN_NUMBER}" \
             --notes "Signed universal APK built from android-release-signing-secure at commit ${GITHUB_SHA}. Includes the latest Market Radar integration. Paper Trading only; real_order_execution=false."
 
       - name: Remove signing keystore before artifact upload
