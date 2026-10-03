@@ -53,17 +53,25 @@ export async function startServer({
   const rotationLagRadar=new RotationLagRadar({rest:rotationRadarRest,store,pushManager:push,config:config.rotationRadar||{},logger});
   const liquidityRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
   const liquidityAbsorptionRadar=new LiquidityAbsorptionRadar({rest:liquidityRadarRest,store,pushManager:push,config:config.liquidityAbsorptionRadar||{},logger});
-  await monitor.start();
-  const autoStart=config.radarControl?.autostart===true;
-  if(autoStart){
-    await moveSentinel.start();
-    await strongMoveRadar.start();
-    await rotationLagRadar.start();
-    await liquidityAbsorptionRadar.start();
-  }
   const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
+  const safeStart=(name,instance)=>{
+    try{
+      const result=instance.start();
+      Promise.resolve(result).catch(error=>logger.warn?.(name+' start failed: '+String(error?.message??error)));
+    }catch(error){
+      logger.warn?.(name+' start failed: '+String(error?.message??error));
+    }
+  };
+  safeStart('MONITOR',monitor);
+  const autoStart=config.radarControl?.autostart!==false;
+  if(autoStart){
+    safeStart('RADAR1',moveSentinel);
+    safeStart('RADAR2',strongMoveRadar);
+    safeStart('RADAR3',rotationLagRadar);
+    safeStart('RADAR4',liquidityAbsorptionRadar);
+  }
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
   return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,store,rest,strongRadarRest,rotationRadarRest,liquidityRadarRest,push,close:async()=>{await liquidityAbsorptionRadar.stop();await rotationLagRadar.stop();await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
 }
