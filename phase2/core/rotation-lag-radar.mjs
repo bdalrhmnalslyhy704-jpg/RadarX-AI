@@ -155,8 +155,8 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
   const mid20=(hi20+lo20)/2;
   const valueAcceptance=hi20>lo20?clamp(50+(last-mid20)/(hi20-lo20)*90):50;
 
-  const rs30=direction==='UP'?market30-r30:r30-market30;
-  const rs2h=direction==='UP'?market2h-r2h:r2h-market2h;
+  const rs30=direction==='UP_ROTATION'?market30-r30:r30-market30;
+  const rs2h=direction==='UP_ROTATION'?market2h-r2h:r2h-market2h;
   const lagScore=clamp(50+(Number.isFinite(rs30)?rs30*34:0)+(Number.isFinite(rs2h)?rs2h*11:0));
 
   const silentDislocation=Number.isFinite(volumeRatio)
@@ -181,24 +181,24 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
   const stochNow=stoch(m15,14);
   const stochPrev=stoch(m15.slice(0,-1),14);
   const stochTurn=Number.isFinite(stochNow)&&Number.isFinite(stochPrev)
-    ?(direction==='UP'
+    ?(direction==='UP_ROTATION'
       ?clamp(50+(stochNow-stochPrev)*2+(stochNow>=20&&stochNow<=65?18:0))
       :clamp(50+(stochPrev-stochNow)*2+(stochNow>=35&&stochNow<=80?18:0)))
     :45;
 
   const loc=closeLocation(m15,20);
   const pathPersistence=persistence(m15,8);
-  const persistenceScore=clamp(35+pathPersistence*80+(direction==='UP'&&loc>=65?8:direction==='DOWN'&&loc<=35?8:0));
+  const persistenceScore=clamp(35+pathPersistence*80+(direction==='UP_ROTATION'&&loc>=65?8:direction==='DOWN'&&loc<=35?8:0));
 
   const compressionScore=Number.isFinite(rangeRatio)
     ?clamp(rangeRatio<=0.9?82+(0.9-rangeRatio)*80:68-(rangeRatio-0.9)*80)
     :45;
 
-  const reclaimOrReject=direction==='UP'
+  const reclaimOrReject=direction==='UP_ROTATION'
     ?clamp(45+(loc-50)*0.9+(Number.isFinite(vwapDistance)&&vwapDistance>0?15:0))
     :clamp(45+(50-loc)*0.9+(Number.isFinite(vwapDistance)&&vwapDistance<0?15:0));
 
-  const resilience=direction==='UP'
+  const resilience=direction==='UP_ROTATION'
     ?makeRelativeComponent(r2h,market2h,'UP')
     :makeRelativeComponent(r2h,market2h,'DOWN');
 
@@ -206,8 +206,8 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
     silentDislocation*.22+
     reclaimOrReject*.18+
     valueAcceptance*.18+
-    (direction==='UP'?rsiTurn:mfiTurn)*.12+
-    (direction==='UP'?mfiTurn:rsiTurn)*.10+
+    (direction==='UP_ROTATION'?rsiTurn:mfiTurn)*.12+
+    (direction==='UP_ROTATION'?mfiTurn:rsiTurn)*.10+
     stochTurn*.08+
     persistenceScore*.07+
     compressionScore*.05
@@ -228,7 +228,7 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
 
   const confirmations=[];
   const push=(ok,label)=>{if(ok)confirmations.push(label)};
-  if(direction==='UP'){
+  if(direction==='UP_ROTATION'){
     push(Number.isFinite(market30)&&market30>=0.25,'MARKET_UPSHIFT');
     push(Number.isFinite(rs30)&&rs30>=0.25,'LAG_TO_MARKET');
     push(Number.isFinite(volumeRatio)&&volumeRatio>=1.25,'SILENT_VOLUME');
@@ -253,7 +253,7 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
   }
 
   const rotationTrigger=score>=78&&confirmations.length>=4&&(
-    (direction==='UP'&&Number.isFinite(market30)&&market30>=0.25&&Number.isFinite(rs30)&&rs30>=0.20&&activation>=64) ||
+    (direction==='UP_ROTATION'&&Number.isFinite(market30)&&market30>=0.25&&Number.isFinite(rs30)&&rs30>=0.20&&activation>=64) ||
     (direction==='DOWN'&&Number.isFinite(market30)&&market30<=-0.25&&Number.isFinite(rs30)&&rs30>=0.20&&activation>=64)
   );
 
