@@ -39,6 +39,13 @@ public final class RadarXBackgroundMonitorService extends Service {
     private static final String TAG = "RadarXBackground";
     private static final String BACKEND_RADAR_ALERTS =
             "https://radarx-ai-triple-production.up.railway.app/api/radar-alerts?radar=ALL&limit=50";
+    // Compatibility routes kept as immutable read-only references; active polling uses the unified feed above.
+    private static final String BACKEND_MOVE_RADAR =
+            "https://radarx-ai-triple-production.up.railway.app/api/move-radar?quote=USDT&limit=50";
+    private static final String BACKEND_STRONG_MOVE_RADAR =
+            "https://radarx-ai-triple-production.up.railway.app/api/strong-move-radar?quote=USDT&limit=50";
+    private static final String BACKEND_ROTATION_RADAR =
+            "https://radarx-ai-triple-production.up.railway.app/api/rotation-radar?quote=USDT&limit=50";
 
     private static final String CHANNEL_STATUS = "radarx_background_status";
     private static final String CHANNEL_ALERTS = "radarx_move_alerts";
