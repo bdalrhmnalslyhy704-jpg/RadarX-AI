@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - phase3-triple-radar
+      - phase4-symbol-deep-scan
   workflow_dispatch:
 
 permissions:
@@ -38,3 +39,4 @@ jobs:
           node --check phase2/core/rotation-lag-radar.mjs
           node --check phase2/core/strong-move-radar.mjs
           node --check phase2/core/early-move-sentinel.mjs
+          node --check phase2/core/symbol-deep-analyzer.mjs
