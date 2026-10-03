@@ -19,7 +19,7 @@ export function mountBackgroundMonitorControl(root){
   root.innerHTML=
     '<section class="rx-bg-card" aria-label="Background Monitor">'+
       '<div class="rx-bg-head"><div><div class="rx-bg-title">🛰️ Move Radar 24/7 • مراقبة الخلفية</div>'+
-      '<div class="rx-bg-sub">يتابع السوق على الخادم 24/7، ثم ينبه الهاتف عندما تتجاوز عملة ±1% وتظهر توافقات قوية من محركات التحليل.</div></div>'+
+      '<div class="rx-bg-sub">يتابع السوق على الخادم 24/7، ويرصد بداية الحركة قبل الارتفاع ثم يرسل تنبيهًا عند توافق إشارات الاستيقاظ أو ما قبل الانفجار.</div></div>'+
       '<div id="rx-bg-state" class="rx-bg-state"><span id="rx-bg-dot" class="rx-bg-dot"></span><span id="rx-bg-label">متوقفة</span></div></div>'+
       '<div class="rx-bg-actions"><button id="rx-bg-start" class="rx-bg-btn primary" type="button">تشغيل في الخلفية</button>'+
       '<button id="rx-bg-stop" class="rx-bg-btn stop" type="button">إيقاف</button></div>'+
