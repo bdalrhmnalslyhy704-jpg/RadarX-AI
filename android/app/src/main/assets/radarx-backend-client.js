@@ -131,6 +131,19 @@ export async function getMarketRadar({ quote = 'USDT', limit = 20 } = {}, fetchI
     fetchImpl
   );
 }
+export async function getBottomRadar({quote = 'USDT', limit = 10} = {}, fetchImpl = globalThis.fetch) {
+  const safeQuote = String(quote || 'USDT').trim().toUpperCase();
+  if (!/^[A-Z]{2,10}$/.test(safeQuote)) throw new Error('INVALID_QUOTE');
+  const safeLimit = Number(limit);
+  if (!Number.isInteger(safeLimit) || safeLimit < 1 || safeLimit > 50) throw new Error('INVALID_LIMIT');
+  const base = normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  return requestJson(
+    base,
+    '/api/bottom-radar?quote=' + encodeURIComponent(safeQuote) + '&limit=' + encodeURIComponent(String(safeLimit)),
+    fetchImpl
+  );
+}
+
 export async function getSymbolDeepScan(symbol, fetchImpl = globalThis.fetch) {
   const raw = String(symbol || '').trim().toUpperCase();
   if (!/^[A-Z0-9_\/-]{2,20}$/.test(raw)) throw new Error('INVALID_SYMBOL');
