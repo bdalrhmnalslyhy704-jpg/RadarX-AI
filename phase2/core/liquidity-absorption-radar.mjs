@@ -274,9 +274,14 @@ export class LiquidityAbsorptionRadar{
   async start(){
     if(this.running)return;
     this.running=true;
-    await this.refreshUniverse();
-    await this.tick();
     this.timer=setInterval(()=>this.tick().catch(e=>{this.lastError=String(e?.message??e);this.logger.warn?.('LIQUIDITY_ABSORPTION',this.lastError)}),this.config.pollMs);
+    try{
+      await this.refreshUniverse();
+      await this.tick();
+    }catch(e){
+      this.lastError=String(e?.message??e);
+      this.logger.warn?.('LIQUIDITY_ABSORPTION_BOOTSTRAP',this.lastError);
+    }
   }
   async stop(){this.running=false;if(this.timer)clearInterval(this.timer);this.timer=null;}
   async refreshUniverse(){
