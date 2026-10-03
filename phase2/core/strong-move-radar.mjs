@@ -244,12 +244,20 @@ export class StrongMoveRadar {
     this.lastTickerMap=new Map();this.lastScanAt=new Map();this.lastAlertAt=new Map();
     this.alertCount=0;this.lastError=null;this.scans=0;this.lastScanAtMs=null;this.busy=false;
   }
-  async start(){
+  start(){
     if(this.running)return;
     this.running=true;
-    await this.refreshUniverse();
-    this.tick().catch(e=>{this.lastError=String(e?.message??e);this.logger.warn?.('STRONG_MOVE',this.lastError)});
-    this.timer=setInterval(()=>this.tick().catch(e=>{this.lastError=String(e?.message??e);this.logger.warn?.('STRONG_MOVE',this.lastError)}),this.config.pollMs);
+    this.lastError=null;
+    this.refreshUniverse()
+      .then(()=>this.tick())
+      .catch(e=>{
+        this.lastError=String(e?.message??e);
+        this.logger.warn?.('STRONG_MOVE_BOOTSTRAP',this.lastError);
+      });
+    this.timer=setInterval(()=>this.tick().catch(e=>{
+      this.lastError=String(e?.message??e);
+      this.logger.warn?.('STRONG_MOVE',this.lastError);
+    }),this.config.pollMs);
   }
   async stop(){this.running=false;if(this.timer)clearInterval(this.timer);this.timer=null;}
   async refreshUniverse(){

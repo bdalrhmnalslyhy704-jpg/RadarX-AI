@@ -11,6 +11,10 @@ on:
       - phase5-ci-runtime-timeout-hardening
       - phase6-radar4-independent-microstructure
       - fix-four-radars-runtime
+      - fix-radar-runtime-return-market-data
+  pull_request:
+    branches:
+      - phase3-triple-radar
   workflow_dispatch:
 
 permissions:
