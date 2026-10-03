@@ -148,7 +148,7 @@ export const CONFIG = Object.freeze({
   auth: {
     secret: process.env.RADARX_AUTH_SECRET ?? '',
     ttlSec: int(process.env.RADARX_AUTH_TOKEN_TTL_SEC, 86400),
-    allowedOrigins: list(process.env.RADARX_ALLOWED_ORIGINS, [])
+    allowedOrigins: list(process.env.RADARX_ALLOWED_ORIGINS, ['https://appassets.androidplatform.net'])
   },
   staging: {
     testPushEnabled: String(process.env.RADARX_STAGING_TEST_PUSH_ENABLED ?? 'false').toLowerCase() === 'true'
