@@ -12,7 +12,7 @@ export const MOVE_RADAR_DEFAULTS=Object.freeze({
   pollMs:5000,
   reconcileMs:15000,
   cooldownMs:30*60*1000,
-  maxDeepPerCycle:3,
+  maxDeepPerCycle:4,
   minQuoteVolume24h:750000,
   minDataQuality:70,
   minLiquidityQuality:60,
@@ -20,8 +20,16 @@ export const MOVE_RADAR_DEFAULTS=Object.freeze({
   deepConcurrency:4,
   earlyMax24hMovePct:1.25,
   earlyMin24hMovePct:-8,
-  earlyScanCooldownMs:5*60*1000,
-  maxEarlyDiscovery:18,
+  earlyWakeTriggerPct:0.45,
+  earlyWakeDeltaPct:0.25,
+  earlyWakeMax24hMovePct:0.90,
+  earlyWakeMin24hMovePct:-2,
+  earlyWakeScanCooldownMs:90*1000,
+  earlyWakeAlertCooldownMs:10*60*1000,
+  earlyWakeMinScore:68,
+  earlyWakeMinLeaders:3,
+  earlyScanCooldownMs:2*60*1000,
+  maxEarlyDiscovery:36,
   earlyMinPreMoveScore:78,
   earlyMinExpansionScore:78,
   earlyMinStrategyScore:72,
@@ -192,14 +200,174 @@ export function rankPreExplosionTickerRows(tickers,symbols,{
       const volumeRank=clamp(50+Math.log10(Math.max(1,x.quoteVolume24h/minQuoteVolume24h))*25);
       const tradeRank=clamp(50+Math.log10(Math.max(1,x.tradeCount24h/100))*12);
       const notPumped=clamp(100-Math.max(0,x.priceChange24h)*22);
+      const range=x.highPrice24h>x.lowPrice24h?x.highPrice24h-x.lowPrice24h:null;
+      const rangePosition=Number.isFinite(range)&&range>0?clamp((x.lastPrice-x.lowPrice24h)/range*100):50;
+      const highProximity=rangePosition>=75?90:rangePosition>=60?78:rangePosition>=45?62:38;
       return {
         ...x,
+        discovery_factors:{calm,volume_rank:volumeRank,trade_rank:tradeRank,not_pumped:notPumped,range_position:rangePosition,high_proximity:highProximity},
         pre_explosion_discovery_score:
-          calm*0.35+volumeRank*0.30+tradeRank*0.15+notPumped*0.20
+          calm*0.28+volumeRank*0.30+tradeRank*0.14+notPumped*0.16+highProximity*0.12
       };
     })
     .sort((a,b)=>b.pre_explosion_discovery_score-a.pre_explosion_discovery_score||b.quoteVolume24h-a.quoteVolume24h||a.symbol.localeCompare(b.symbol))
     .slice(0,Math.max(1,Math.trunc(limit)));
+}
+
+export function buildEarlyWakeAlert(candidate,trigger,{now=Date.now()}={}) {
+  const ctx=candidate?.pre_move_context||{};
+  const bottom=candidate?.bottom_context||{};
+  const alg=bottom?.algorithms||{};
+  const metrics=bottom?.metrics||{};
+  const strategies=strategyScore(candidate);
+  const dataQuality=finite(candidate?.data_quality,0);
+  const liquidity=finite(candidate?.liquidity_quality,0);
+  const priceChange=finite(candidate?.price_change_24h,0);
+  const sessionReturn=finite(ctx.session_return_pct,null);
+  const preMove=component(candidate,['pre_move_context.score'],45);
+  const momentum=component(candidate,['bottom_context.metrics.momentum','bottom_context.algorithms.momentum_awaken.score'],45);
+  const volume=component(candidate,['bottom_context.algorithms.volume_price_divergence.score','bottom_context.algorithms.momentum_awaken.score'],45);
+  const buying=component(candidate,['bottom_context.metrics.buying_pressure','bottom_context.algorithms.taker_flow.score'],45);
+  const orderbook=component(candidate,['bottom_context.metrics.orderbook_imbalance','bottom_context.algorithms.orderbook_pressure.score'],45);
+  const structure=component(candidate,['bottom_context.metrics.structure','bottom_context.algorithms.price_structure.score'],45);
+  const squeeze=component(candidate,['bottom_context.metrics.compression','bottom_context.algorithms.squeeze.score'],45);
+  const relative=component(candidate,['pre_move_context.components.relative_strength','pre_move_context.components.relative_strength_vs_market'],45);
+  const resistance=component(candidate,['pre_move_context.components.resistance_proximity'],45);
+  const emaReclaim=component(candidate,['bottom_context.algorithms.ema20_50_reclaim.score'],45);
+  const rsiScore=component(candidate,['bottom_context.algorithms.rsi14.score'],45);
+  const obv=component(candidate,['bottom_context.algorithms.obv_accumulation.score'],45);
+  const wyckoff=component(candidate,['bottom_context.algorithms.wyckoff_spring.score'],45);
+  const mtf=component(candidate,['bottom_context.metrics.mtf_alignment','bottom_context.algorithms.mtf_alignment.score'],45);
+  const takerRatio=finite(alg?.taker_flow?.buy_ratio,null);
+  const takerAccel=finite(ctx?.taker_buy_acceleration,null);
+  const alreadyMoved=Boolean(ctx.already_moved)||priceChange>MOVE_RADAR_DEFAULTS.earlyWakeMax24hMovePct;
+  const calmEnough=priceChange>=MOVE_RADAR_DEFAULTS.earlyWakeMin24hMovePct &&
+    priceChange<=MOVE_RADAR_DEFAULTS.earlyWakeMax24hMovePct &&
+    (!Number.isFinite(sessionReturn)||sessionReturn<=5);
+
+  const leaderChecks=[
+    ['MOMENTUM_AWAKENING',momentum>=60],
+    ['VOLUME_AWAKENING',volume>=60],
+    ['TAKER_BUY_PRESSURE',(Number.isFinite(takerRatio)&&takerRatio>=0.515)||buying>=60],
+    ['ORDERBOOK_PRESSURE',orderbook>=58],
+    ['RELATIVE_STRENGTH',relative>=58],
+    ['RESISTANCE_PROXIMITY',resistance>=60],
+    ['STRUCTURE_IMPROVING',structure>=58],
+    ['SQUEEZE_BUILDING',squeeze>=58],
+    ['EMA_RECLAIM',emaReclaim>=60],
+    ['RSI_TURN_OR_DIVERGENCE',rsiScore>=72],
+    ['OBV_ACCUMULATION',obv>=60],
+    ['WYCKOFF_SPRING',wyckoff>=60],
+    ['MTF_ALIGNMENT',mtf>=58]
+  ];
+  const leaders=leaderChecks.filter(([,ok])=>ok).map(([name])=>name);
+  const hardLeader=momentum>=65||volume>=65||(Number.isFinite(takerRatio)&&takerRatio>=0.53)||orderbook>=65;
+  const leaderScore=clamp(
+    momentum*0.16+
+    volume*0.16+
+    buying*0.10+
+    orderbook*0.10+
+    relative*0.10+
+    resistance*0.10+
+    structure*0.08+
+    squeeze*0.08+
+    emaReclaim*0.04+
+    rsiScore*0.03+
+    obv*0.02+
+    wyckoff*0.01+
+    mtf*0.02+
+    preMove*0.08
+  );
+  const eligible=!alreadyMoved&&calmEnough&&
+    dataQuality>=75&&
+    liquidity>=65&&
+    leaders.length>=MOVE_RADAR_DEFAULTS.earlyWakeMinLeaders&&
+    (leaders.length>=4||leaderScore>=MOVE_RADAR_DEFAULTS.earlyWakeMinScore)&&
+    hardLeader&&leaderScore>=MOVE_RADAR_DEFAULTS.earlyWakeMinScore;
+
+  const reasons=[];
+  const push=(ok,text)=>{if(ok)reasons.push(text)};
+  push(momentum>=60,'الزخم يستيقظ');
+  push(volume>=60,'الحجم يبدأ بالاستيقاظ');
+  push(Number.isFinite(takerRatio)&&takerRatio>=0.515,'Taker Buy يميل للشراء');
+  push(orderbook>=58,'ضغط دفتر الأوامر يتحسن');
+  push(relative>=58,'قوة نسبية');
+  push(resistance>=60,'اقتراب من مقاومة/قمة محلية');
+  push(structure>=58,'هيكل صاعد يتشكل');
+  push(squeeze>=58,'انكماش يسبق التوسع');
+  push(emaReclaim>=60,'استعادة EMA');
+  push(rsiScore>=72,'RSI انعكاس/تباعد');
+  push(obv>=60,'تراكم OBV');
+  push(wyckoff>=60,'بصمة Wyckoff');
+  push(mtf>=58,'توافق زمني');
+  if(alreadyMoved)reasons.push('رفض: تجاوزت مرحلة الاستيقاظ');
+  if(!calmEnough)reasons.push('رفض: الحركة أصبحت متقدمة');
+
+  const potentialLabel=leaderScore>=82?'EARLY_WAKE_HIGH':leaderScore>=74?'EARLY_WAKE':'EARLY_WAKE_WATCH';
+  const riskFlags=[];
+  if(priceChange>0.75)riskFlags.push('MOVING_FAST');
+  if(Number.isFinite(sessionReturn)&&sessionReturn>4)riskFlags.push('SESSION_EXTENDING');
+  if(dataQuality<85)riskFlags.push('DATA_QUALITY_ATTENTION');
+  if(liquidity<72)riskFlags.push('LIQUIDITY_ATTENTION');
+
+  return {
+    id:'WAKE:'+candidate.symbol+':'+Math.round(priceChange*1000)+':'+now,
+    event:'EARLY_WAKE_ALERT',
+    symbol:candidate.symbol,
+    market:'SPOT',
+    direction:'UP_MOVE',
+    trigger:{
+      type:'LEADING_IMPULSE_DETECTION',
+      source:'ALL_MARKET_TICKER_WS',
+      move_pct:priceChange,
+      previous_move_pct:finite(trigger?.previousMovePct,null),
+      delta_pct:finite(trigger?.deltaPct,null)
+    },
+    price:finite(candidate?.last_price),
+    price_change_24h:priceChange,
+    setup_score:Math.round(leaderScore*10)/10,
+    expansion_potential:Math.round(clamp(
+      momentum*0.24+volume*0.22+buying*0.16+orderbook*0.12+structure*0.10+squeeze*0.08+relative*0.08
+    )*10)/10,
+    reversal_potential:null,
+    opportunity_score:Math.round(leaderScore*10)/10,
+    potential_label:potentialLabel,
+    early_wake:{
+      eligible,
+      leader_count:leaders.length,
+      leaders,
+      hard_leader:hardLeader,
+      calm_enough:calmEnough,
+      already_moved:alreadyMoved,
+      trigger_delta_pct:finite(trigger?.deltaPct,null),
+      max_24h_move_pct:MOVE_RADAR_DEFAULTS.earlyWakeMax24hMovePct,
+      session_return_pct:sessionReturn
+    },
+    strategy_confluence:{
+      active_count:Array.isArray(candidate?.strategies)?candidate.strategies.length:0,
+      accepted_count:strategies.acceptedCount,
+      best_score:strategies.bestScore,
+      accepted_mean:Math.round(strategies.acceptedMean*10)/10,
+      accepted_ids:(candidate?.accepted_strategies||[]).slice(0,8)
+    },
+    components:{
+      pre_move:preMove,momentum,volume,buying_pressure:buying,orderbook_pressure:orderbook,
+      structure,squeeze,relative_strength:relative,resistance_proximity:resistance,
+      ema_reclaim:emaReclaim,rsi_score:rsiScore,obv_accumulation:obv,wyckoff_spring:wyckoff,mtf_alignment:mtf
+    },
+    taker_flow:{buy_ratio:takerRatio,buy_acceleration:takerAccel},
+    reasons:[...new Set(reasons)].slice(0,10),
+    risk_flags:[...new Set(riskFlags)],
+    data_status:candidate?.data_status||{},
+    source:'Binance Public REST/WS',
+    detected_at:now,
+    processed_at:now,
+    paper_trading:true,
+    real_order_execution:false,
+    confidence_score:'UNKNOWN',
+    eligible,
+    disclaimer:'تنبيه استيقاظ مبكر لرصد بداية الحركة؛ لا يضمن ارتفاعًا مستقبليًا أو نسبة محددة.'
+  };
 }
 
 export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
@@ -500,21 +668,27 @@ export class EarlyMoveSentinel {
     if(initial||!prev)return;
     const previous=Number(prev.priceChange24h), current=Number(row.priceChange24h);
     if(!Number.isFinite(previous)||!Number.isFinite(current))return;
+    const delta=current-previous;
+    const wakeCross=previous<this.config.earlyWakeTriggerPct&&current>=this.config.earlyWakeTriggerPct&&current<=this.config.earlyWakeMax24hMovePct;
+    const wakeImpulse=delta>=this.config.earlyWakeDeltaPct&&current>=0&&current<=this.config.earlyWakeMax24hMovePct;
+    if(wakeCross||wakeImpulse){
+      this.queueDeep(symbol,row,{movePct:current,previousMovePct:previous,deltaPct:delta,type:'EARLY_WAKE_TICKER_PULSE'},'EARLY_WAKE');
+    }
     const crossedUp=previous<this.config.thresholdPct&&current>=this.config.thresholdPct;
     const crossedDown=previous>-this.config.thresholdPct&&current<=-this.config.thresholdPct;
-    const rapid=Math.abs(current-previous)>=this.config.fastRealertDeltaPct;
-    const trigger= crossedUp||crossedDown ? {movePct:current,previousMovePct:previous} :
-      rapid&&Math.abs(current)>=this.config.thresholdPct ? {movePct:current,previousMovePct:previous}:null;
-    if(!trigger)return;
-    this.queueDeep(symbol,row,trigger);
+    const rapid=Math.abs(delta)>=this.config.fastRealertDeltaPct;
+    const trigger= crossedUp||crossedDown ? {movePct:current,previousMovePct:previous,deltaPct:delta} :
+      rapid&&Math.abs(current)>=this.config.thresholdPct ? {movePct:current,previousMovePct:previous,deltaPct:delta}:null;
+    if(trigger)this.queueDeep(symbol,row,trigger,'MOVE');
   }
 
-  queueDeep(symbol,row,trigger){
+  queueDeep(symbol,row,trigger,mode='MOVE'){
     const now=this.clock();
-    const last=this.lastAlertAt.get(symbol)||0;
-    if(now-last<this.config.cooldownMs)return;
+    const last=this.lastAlertAt.get(`${symbol}:${mode==='EARLY_WAKE'?'EARLY_WAKE_ALERT':'EARLY_MOVE_ALERT'}`)||0;
+    const cooldown=mode==='EARLY_WAKE'?this.config.earlyWakeAlertCooldownMs:this.config.cooldownMs;
+    if(now-last<cooldown)return;
     if(this.deepQueue.some(x=>x.symbol===symbol))return;
-    this.deepQueue.push({symbol,row,trigger,queuedAt:now});
+    this.deepQueue.push({symbol,row,trigger,queuedAt:now,mode});
     this.drainDeepQueue().catch(e=>{
       this.lastError=String(e?.message??e);
       this.logger.warn?.('MOVE_DEEP',this.lastError);
@@ -527,14 +701,17 @@ export class EarlyMoveSentinel {
       this.deepActive++;
       try{
         const candidate=await this.scanner.scanSymbol(job.row,1,{exchangeInfo:'Binance Public REST',ticker:'Binance Public REST'},{klinesLimit:this.config.deepKlines});
-        const alert=job.mode==='PRE_EXPLOSION'
-          ? buildPreExplosionAlert(candidate,job.trigger,{now:this.clock()})
-          : buildMoveAlert(candidate,job.trigger,{now:this.clock()});
-        if(!alert.eligible)continue;
-        const recent=this.lastAlertScore.get(job.symbol)||0;
-        if(alert.opportunity_score<recent+5&&this.clock()-(this.lastAlertAt.get(job.symbol)||0)<this.config.cooldownMs)continue;
-        this.lastAlertAt.set(job.symbol,this.clock());
-        this.lastAlertScore.set(job.symbol,alert.opportunity_score);
+        const wakeAlert=buildEarlyWakeAlert(candidate,job.trigger,{now:this.clock()});
+        const preAlert=buildPreExplosionAlert(candidate,job.trigger,{now:this.clock()});
+        const alert=preAlert.eligible?preAlert:wakeAlert.eligible?wakeAlert:(job.mode==='MOVE'?buildMoveAlert(candidate,job.trigger,{now:this.clock()}):null);
+        if(!alert?.eligible)continue;
+        const alertKey=`${job.symbol}:${alert.event}`;
+        const recent=this.lastAlertScore.get(alertKey)||0;
+        const lastAt=this.lastAlertAt.get(alertKey)||0;
+        const cooldown=alert.event==='EARLY_WAKE_ALERT'?this.config.earlyWakeAlertCooldownMs:this.config.cooldownMs;
+        if(lastAt>0&&this.clock()-lastAt<cooldown&&alert.opportunity_score<recent+5)continue;
+        this.lastAlertAt.set(alertKey,this.clock());
+        this.lastAlertScore.set(alertKey,alert.opportunity_score);
         await this.store.appendMoveAlert(alert);
         this.alertCount++;
       }catch(error){

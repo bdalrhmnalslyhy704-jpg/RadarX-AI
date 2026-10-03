@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {buildMoveAlert,buildPreExplosionAlert,rankPreExplosionTickerRows,EarlyMoveSentinel} from '../core/early-move-sentinel.mjs';
+import {buildMoveAlert,buildEarlyWakeAlert,buildPreExplosionAlert,rankPreExplosionTickerRows,EarlyMoveSentinel} from '../core/early-move-sentinel.mjs';
 
 const candidate={
   symbol:'TESTUSDT',
@@ -127,3 +127,59 @@ assert.equal(discovery.some(x=>x.symbol==='SANDUSDT'),false);
 assert.equal(discovery.some(x=>x.symbol==='NIGHTUSDT'),false);
 assert.ok(discovery.some(x=>x.symbol==='TESTUSDT'));
 assert.ok(discovery.some(x=>x.symbol==='DIPUSDT'));
+
+
+const wakeCandidate={
+  ...earlyCandidate,
+  price_change_24h:0.55,
+  data_quality:88,
+  liquidity_quality:86,
+  pre_move_context:{
+    ...earlyCandidate.pre_move_context,
+    score:72,
+    session_return_pct:0.7,
+    already_moved:false,
+    resistance_distance_pct:1.8,
+    components:{
+      ...earlyCandidate.pre_move_context.components,
+      relative_strength:72,
+      resistance_proximity:90
+    }
+  },
+  bottom_context:{
+    ...earlyCandidate.bottom_context,
+    metrics:{
+      ...earlyCandidate.bottom_context.metrics,
+      momentum:74,
+      structure:67,
+      buying_pressure:70,
+      compression:72,
+      orderbook_imbalance:70,
+      mtf_alignment:62
+    },
+    algorithms:{
+      ...earlyCandidate.bottom_context.algorithms,
+      volume_price_divergence:{score:76,rvol_ratio:1.4},
+      momentum_awaken:{score:74,atr_ratio:1.08},
+      taker_flow:{buy_ratio:0.545,previous_buy_ratio:0.518,score:78},
+      orderbook_pressure:{score:70,imbalance:0.11},
+      ema20_50_reclaim:{score:72},
+      rsi14:{score:84,value:46,bullish_divergence:true},
+      obv_accumulation:{score:67},
+      wyckoff_spring:{score:62}
+    }
+  },
+  strategies:[]
+};
+const wake=buildEarlyWakeAlert(wakeCandidate,{movePct:0.55,previousMovePct:0.30,deltaPct:0.25},{now:1710000010000});
+assert.equal(wake.event,'EARLY_WAKE_ALERT');
+assert.equal(wake.direction,'UP_MOVE');
+assert.equal(wake.eligible,true);
+assert.ok(wake.early_wake.leader_count>=3);
+assert.ok(wake.opportunity_score>=68);
+
+const tooLate=buildEarlyWakeAlert({...wakeCandidate,price_change_24h:1.2},{
+  movePct:1.2,previousMovePct:0.8,deltaPct:0.4
+},{now:1710000011000});
+assert.equal(tooLate.eligible,false);
+assert.equal(tooLate.early_wake.already_moved,true);
