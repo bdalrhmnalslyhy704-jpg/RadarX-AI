@@ -32,7 +32,8 @@ const result=buildRotationAnalysis(symbol,oneHour,{
 
 assert.equal(result.closed_candles_only,true);
 assert.equal(result.direction,'UP_ROTATION');
-assert.ok(result.metrics.relative_30m_pct>0);
+assert.ok(result.metrics.relative_30m_pct<0);
+assert.ok(result.component_scores.lag>50);
 assert.ok(result.component_scores.silent_volume>60);
 assert.ok(result.confirmations>=4);
 assert.ok(result.score>=70);
