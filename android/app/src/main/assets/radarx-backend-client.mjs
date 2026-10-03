@@ -132,6 +132,19 @@ export async function getMarketRadar({ quote = 'USDT', limit = 20 } = {}, fetchI
   );
 }
 
+export async function getBottomRadar({quote = 'USDT', limit = 10} = {}, fetchImpl = globalThis.fetch) {
+  const safeQuote = String(quote || 'USDT').trim().toUpperCase();
+  if (!/^[A-Z]{2,10}$/.test(safeQuote)) throw new Error('INVALID_QUOTE');
+  const safeLimit = Number(limit);
+  if (!Number.isInteger(safeLimit) || safeLimit < 1 || safeLimit > 50) throw new Error('INVALID_LIMIT');
+  const base = normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  return requestJson(
+    base,
+    '/api/bottom-radar?quote=' + encodeURIComponent(safeQuote) + '&limit=' + encodeURIComponent(String(safeLimit)),
+    fetchImpl
+  );
+}
+
 export async function getPreMoveRadar({quote = 'USDT', limit = 30 } = {}, fetchImpl = globalThis.fetch) {
   const safeQuote = String(quote || 'USDT').trim().toUpperCase();
   if (!/^[A-Z]{2,10}$/.test(safeQuote)) throw new Error('INVALID_QUOTE');
