@@ -205,6 +205,19 @@ function localLevels(candles, atrValue) {
   return {highs:cluster(highs), lows:cluster(lows)};
 }
 
+function swingStructure(levels) {
+  const highs = levels.highs.slice().sort((a,b)=>a.mean-b.mean).slice(-4);
+  const lows = levels.lows.slice().sort((a,b)=>a.mean-b.mean).slice(-4);
+  const hh = highs.length >= 2 && highs.at(-1).mean > highs.at(-2).mean;
+  const hl = lows.length >= 2 && lows.at(-1).mean > lows.at(-2).mean;
+  const lh = highs.length >= 2 && highs.at(-1).mean < highs.at(-2).mean;
+  const ll = lows.length >= 2 && lows.at(-1).mean < lows.at(-2).mean;
+  return {
+    label: hh && hl ? 'HH_HL_BULLISH' : lh && ll ? 'LH_LL_BEARISH' : hh ? 'HH' : ll ? 'LL' : hl ? 'HL' : lh ? 'LH' : 'MIXED',
+    higher_high:hh, higher_low:hl, lower_high:lh, lower_low:ll
+  };
+}
+
 function nearestLevels(close, levels) {
   const lower = levels.filter(x=>x < close).sort((a,b)=>b-a);
   const upper = levels.filter(x=>x > close).sort((a,b)=>a-b);
@@ -246,6 +259,7 @@ function analyzeTimeframe(candles, timeframe) {
   const bullishRejection = Boolean(recent && body != null && lowerWick != null && recent.close >= recent.open && lowerWick > Math.max(body * 1.15, (atr14 || 0) * 0.12));
   const bearishRejection = Boolean(recent && body != null && upperWick != null && recent.close <= recent.open && upperWick > Math.max(body * 1.15, (atr14 || 0) * 0.12));
   const levels = localLevels(candles, atr14 || recent?.close * 0.005 || 1);
+  const structure = swingStructure(levels);
   const pivots = [...levels.lows.map(x=>x.mean), ...levels.highs.map(x=>x.mean)];
   const nearest = nearestLevels(recent?.close ?? 0, pivots);
   const trendSignals = [];
@@ -293,7 +307,7 @@ function analyzeTimeframe(candles, timeframe) {
     trend_score:Number(directionScore.toFixed(1)),
     momentum_score:Number(clamp(50 + 50 * momentum).toFixed(1)),
     reversal_score:Number(reversalScore.toFixed(1)),
-    structure:{support_levels:levels.lows.slice(0,5).map(x=>({price:x.mean,touches:x.values.length})),resistance_levels:levels.highs.slice(0,5).map(x=>({price:x.mean,touches:x.values.length}))},
+    structure:{status:structure.label,higher_high:structure.higher_high,higher_low:structure.higher_low,lower_high:structure.lower_high,lower_low:structure.lower_low,support_levels:levels.lows.slice(0,5).map(x=>({price:x.mean,touches:x.values.length})),resistance_levels:levels.highs.slice(0,5).map(x=>({price:x.mean,touches:x.values.length}))},
     nearest_support:nearest.lower,
     nearest_resistance:nearest.upper
   };
@@ -332,7 +346,7 @@ function pressureScore(ticker, depth) {
 function liquidityScore(ticker, depth, price) {
   const quoteVolume = finite(ticker?.quoteVolume);
   const nearDepth = (finite(depth?.near_bid_notional)||0) + (finite(depth?.near_ask_notional)||0);
-  const volComponent = quoteVolume == null ? 0 : clamp((Math.log10(Math.max(quoteVolume,1)) - 5) * 18);
+  const volComponent = quoteVolume == null ? 0 : clamp((Math.log10(Math.max(quoteVolume,1)) - 4) * 20);
   const depthComponent = nearDepth <= 0 ? 0 : clamp((Math.log10(Math.max(nearDepth,1)) - Math.log10(Math.max(price,1)) - 2) * 17);
   const score = clamp(volComponent * 0.72 + depthComponent * 0.28);
   return {score:Number(score.toFixed(1)),quote_volume_24h:quoteVolume,near_book_notional:nearDepth};
@@ -541,7 +555,8 @@ export class SymbolDeepAnalyzer {
         'Fractal swing support/resistance clustering',
         'Multi-timeframe weighted regime',
         'Rejection / retest logic',
-        'Trap-risk heuristic'
+        'Trap-risk heuristic',
+    'Market structure HH/HL/LH/LL'
       ]
     };
   }
