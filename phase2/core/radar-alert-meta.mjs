@@ -7,10 +7,11 @@ export const RADAR_NAMES=Object.freeze({
 export function formatRadarTime12h(ms,timeZone='Asia/Aden'){
   const d=new Date(Number(ms));
   if(!Number.isFinite(d.getTime()))return 'غير متاح';
-  const parts=new Intl.DateTimeFormat('ar-YE',{timeZone,hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true}).formatToParts(d);
-  const map=Object.fromEntries(parts.map(x=>[x.type,x.value]));
-  const day=String(map.day||'').padStart(2,'0'),month=String(map.month||'').padStart(2,'0'),year=map.year||'';
-  return `${day}/${month}/${year} • ${map.hour||'12'}:${map.minute||'00'}:${map.second||'00'} ${map.dayPeriod||''}`.trim();
+  const dateParts=new Intl.DateTimeFormat('en-GB',{timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(d);
+  const timeParts=new Intl.DateTimeFormat('en-US',{timeZone,hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true}).formatToParts(d);
+  const date=Object.fromEntries(dateParts.map(x=>[x.type,x.value]));
+  const time=Object.fromEntries(timeParts.map(x=>[x.type,x.value]));
+  return `${date.day||'00'}/${date.month||'00'}/${date.year||''} • ${time.hour||'12'}:${time.minute||'00'}:${time.second||'00'} ${time.dayPeriod||''}`.trim();
 }
 export function decorateRadarAlert(alert,radarName){
   const now=Number(alert?.detected_at);
