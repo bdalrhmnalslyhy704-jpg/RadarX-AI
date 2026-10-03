@@ -119,6 +119,20 @@ export const CONFIG = Object.freeze({
     minScore: int(process.env.RADARX_ROTATION_RADAR_MIN_SCORE, 78),
     minConfirmations: int(process.env.RADARX_ROTATION_RADAR_MIN_CONFIRMATIONS, 4)
   },
+  radarControl: {
+    autostart: String(process.env.RADARX_RADARS_AUTOSTART ?? 'true').toLowerCase() === 'true'
+  },
+  liquidityAbsorptionRadar: {
+    quote: 'USDT',
+    pollMs: int(process.env.RADARX_LIQUIDITY_ABSORPTION_POLL_MS, 45000),
+    universeRefreshMs: int(process.env.RADARX_LIQUIDITY_ABSORPTION_UNIVERSE_REFRESH_MS, 5 * 60 * 1000),
+    minQuoteVolume24h: int(process.env.RADARX_LIQUIDITY_ABSORPTION_MIN_QUOTE_VOLUME_24H, 1500000),
+    rotationBatchSize: int(process.env.RADARX_LIQUIDITY_ABSORPTION_BATCH, 4),
+    topLiquidityCount: int(process.env.RADARX_LIQUIDITY_ABSORPTION_TOP, 3),
+    alertCooldownMs: int(process.env.RADARX_LIQUIDITY_ABSORPTION_ALERT_COOLDOWN_MS, 20 * 60 * 1000),
+    minScore: int(process.env.RADARX_LIQUIDITY_ABSORPTION_MIN_SCORE, 83),
+    minConfirmations: int(process.env.RADARX_LIQUIDITY_ABSORPTION_MIN_CONFIRMATIONS, 6)
+  },
   paper: {
     feeRate: float(process.env.RADARX_PAPER_FEE_RATE, 0.001),
     slippageBps: float(process.env.RADARX_PAPER_SLIPPAGE_BPS, 5),
