@@ -163,3 +163,36 @@ test('TEST_FIXTURE: public signal route is read-only and existing API paths rema
   assert.doesNotMatch(route,/createOrder|placeOrder|withdraw|account/i);
   assert.match(route,/req\.method==='GET'/);
 });
+
+
+test('TEST_FIXTURE: independent radar status/control and unified alerts preserve radar source/time',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-independent-radar-api-')),store=await new DurableStore({dir}).init();
+  const makeRadar=(id,name)=>({
+    running:false,
+    async start(){this.running=true;},
+    async stop(){this.running=false;},
+    health(){return{running:this.running,radar:id,radar_name:name,closed_candles_only:true};}
+  });
+  const early=makeRadar('EARLY_MOVE_RADAR','Radar 1 — Early-Wake');
+  const strong=makeRadar('STRONG_MOVE_RADAR','Radar 2 — Strong-Move');
+  const rotation=makeRadar('ROTATION_LAG_RADAR','Radar 3 — Rotation/Lag');
+  const r4=makeRadar('LIQUIDITY_ABSORPTION_RADAR','Radar 4 — Liquidity Absorption');
+  await store.appendMoveAlert({id:'R1',radar:'EARLY_MOVE_RADAR',symbol:'R1USDT',processed_at:Date.now()-1000,detected_at:Date.now()-1000,price:1});
+  await store.appendLiquidityAbsorptionAlert({id:'R4',radar:'LIQUIDITY_ABSORPTION_RADAR',radar_name:'Radar 4 — Liquidity Absorption',symbol:'R4USDT',processed_at:Date.now(),detected_at:Date.now(),price:2});
+  const server=createApiServer({config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},store,
+    monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},
+    pushProvider:new NoopPushProvider(),moveSentinel:early,strongMoveRadar:strong,rotationLagRadar:rotation,liquidityAbsorptionRadar:r4});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const base='http://127.0.0.1:'+server.address().port;
+  const status=await (await fetch(base+'/api/radar-status')).json();
+  assert.equal(status.radars.length,4);assert.equal(status.radars.every(x=>x.running===false),true);
+  const start=await (await fetch(base+'/api/radar-control?radar=LIQUIDITY_ABSORPTION_RADAR&action=start',{method:'POST'})).json();
+  assert.equal(start.running,true);assert.equal(early.running,false);assert.equal(strong.running,false);assert.equal(rotation.running,false);assert.equal(r4.running,true);
+  const alerts=await (await fetch(base+'/api/radar-alerts?radar=ALL&limit=10')).json();
+  assert.equal(alerts.meta.time_format,'12h');assert.equal(alerts.meta.detected_timezone,'Asia/Aden');
+  assert.equal(alerts.alerts[0].radar_name,'Radar 4 — Liquidity Absorption');
+  assert.equal('detected_time_12h' in alerts.alerts[0],true);
+  const stop=await (await fetch(base+'/api/radar-control?radar=LIQUIDITY_ABSORPTION_RADAR&action=stop',{method:'POST'})).json();
+  assert.equal(stop.running,false);assert.equal(r4.running,false);
+  await new Promise(resolve=>server.close(resolve));
+});
