@@ -45,7 +45,8 @@ export async function startServer({
     scannerFactory:()=>moveScanner,
     tickerWsFactory:opts=>new BinanceAllMarketTickerClient(opts)
   });
-  const strongMoveRadar=new StrongMoveRadar({rest,store,config:config.strongMoveRadar||{},logger});
+  const strongRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  const strongMoveRadar=new StrongMoveRadar({rest:strongRadarRest,store,config:config.strongMoveRadar||{},logger});
   await monitor.start();
   await moveSentinel.start();
   await strongMoveRadar.start();
@@ -53,7 +54,7 @@ export async function startServer({
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
-  return {server:api,monitor,moveSentinel,strongMoveRadar,store,rest,push,close:async()=>{await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
+  return {server:api,monitor,moveSentinel,strongMoveRadar,store,rest,strongRadarRest,push,close:async()=>{await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
 }
 
 if(process.argv[1]&&resolve(fileURLToPath(import.meta.url))===resolve(process.argv[1])){
