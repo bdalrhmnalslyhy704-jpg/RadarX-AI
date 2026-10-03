@@ -47,6 +47,9 @@ public final class RadarXBackgroundMonitorService extends Service {
     private static final String BACKEND_ROTATION_RADAR =
             "https://radarx-ai-triple-production.up.railway.app/api/rotation-radar?quote=USDT&limit=50";
 
+    // Legacy per-radar cursor key retained for migration/backward-compatible local state.
+    private static final String ROTATION_ALERT_CURSOR_KEY = "rotation_alert_cursor_at";
+
     private static final String CHANNEL_STATUS = "radarx_background_status";
     private static final String CHANNEL_ALERTS = "radarx_move_alerts";
     private static final String CHANNEL_STRONG_ALERTS = "radarx_strong_move_alerts";
