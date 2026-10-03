@@ -26,7 +26,7 @@ function makeSeries(n,base,{tailMove=0,tailVolume=100000,tailSpan=0.4}={}){
 }
 
 const n=90;
-const symbol=makeSeries(n,100,{tailMove:0,tailVolume:220000,tailSpan:0.55});
+const symbol=makeSeries(n,100,{tailMove:0.0005,tailVolume:220000,tailSpan:0.55});
 const btc=makeSeries(n,100,{tailMove:0.02,tailVolume:180000,tailSpan:0.6});
 const eth=makeSeries(n,100,{tailMove:0.015,tailVolume:160000,tailSpan:0.6});
 const oneHour=Array.from({length:40},(_,i)=>candle(i,{price:100}));
