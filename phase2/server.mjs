@@ -43,7 +43,7 @@ export async function startServer({
     deepConcurrency:moveConfig.deepConcurrency
   }});
   const moveSentinel=new EarlyMoveSentinel({
-    rest,store,config:moveConfig,logger,
+    rest,store,pushManager:push,config:moveConfig,logger,
     scannerFactory:()=>moveScanner,
     tickerWsFactory:opts=>new BinanceAllMarketTickerClient(opts)
   });
