@@ -536,11 +536,12 @@ export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
 }
 
 export class EarlyMoveSentinel {
-  constructor({rest,store,config={},clock=()=>Date.now(),logger=console,tickerWsFactory=null,scannerFactory=null}){
+  constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console,tickerWsFactory=null,scannerFactory=null}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
     this.rest=rest;
     this.store=store;
+    this.pushManager=pushManager;
     this.config={...MOVE_RADAR_DEFAULTS,...config};
     this.clock=clock;
     this.logger=logger;
@@ -734,7 +735,9 @@ export class EarlyMoveSentinel {
         if(lastAt>0&&this.clock()-lastAt<cooldown&&alert.opportunity_score<recent+5)continue;
         this.lastAlertAt.set(alertKey,this.clock());
         this.lastAlertScore.set(alertKey,alert.opportunity_score);
-        await this.store.appendMoveAlert(alert);
+        const decorated=decorateRadarAlert(alert,alert?.event==='PRE_EXPLOSION_ALERT'?'Radar 1 — Early-Wake / Pre-Explosion':'Radar 1 — Early-Wake');
+        await this.store.appendMoveAlert(decorated);
+        if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
         this.alertCount++;
       }catch(error){
         this.lastError=String(error?.message??error);
