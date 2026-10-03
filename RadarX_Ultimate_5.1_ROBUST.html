@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<meta name="theme-color" content="#071018"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<link rel="manifest" href="./manifest-5.1.webmanifest"/>
+<link rel="stylesheet" href="./RadarX_Ultimate_5.1.css?v=5.1.2"/>
+<meta name="application-version" content="RadarX Ultimate 5.1 — Continuous Background Radar Robust"/>
+<title>RadarX Ultimate 5.1 — Continuous Background Radar — Robust Live Interaction Radar</title>
+</head>
+<body>
+<div class="app-shell">
+<header class="topbar">
+  <div class="brand-block">
+    <div class="brand-mark">⚡</div>
+    <div>
+      <div class="brand-title">RadarX <span>Ultimate</span></div>
+      <div class="brand-sub"><i id="connDot" class="dot ok"></i><span id="connText">متصل محلياً</span><span class="sep">•</span><span id="dataMode">LIVE WAITING</span></div>
+    </div>
+  </div>
+  <div class="top-actions">
+    <button class="icon-btn" id="langToggle" title="Language">EN</button>
+    <button class="icon-btn" id="notifyBtn" title="Notifications">🔔</button>
+    <button class="icon-btn" id="refreshBtn" title="Refresh">↻</button>
+    <button class="profile-pill" id="profileBtn"><span id="profileAvatar">R</span><span id="profileName">Guest</span></button>
+  </div>
+</header>
+
+<section class="status-strip">
+  <div class="status-left">
+    <span class="live-badge"><i class="dot ok"></i><span data-i18n="localConnected">متصل محلياً</span></span>
+    <span class="mini-badge" id="liveBadge">LIVE READY</span>
+    <span class="mini-badge muted" id="apiLatency">— ms</span>
+  </div>
+  <div class="status-right">
+    <span id="trialMini" class="trial-chip">TRIAL — 3 DAYS</span>
+    <button id="upgradeMini" class="upgrade-link">ترقية</button>
+  </div>
+</section>
+
+<nav class="tabbar" id="tabbar">
+  <button class="tab-btn active" data-tab="dashboard">⌂<span data-i18n="navDashboard">الرئيسية</span></button>
+  <button class="tab-btn" data-tab="radar">🚨<span data-i18n="navRadar">الرادار</span></button>
+  <button class="tab-btn" data-tab="markets">◌<span data-i18n="navMarkets">السوق</span></button>
+  <button class="tab-btn" data-tab="signal">◎<span data-i18n="navSignals">الإشارات</span></button>
+  <button class="tab-btn" data-tab="flow">◈<span data-i18n="navFlow">السيولة</span></button>
+  <button class="tab-btn" data-tab="account">◉<span data-i18n="navAccount">الحساب</span></button>
+  <button class="tab-btn more-tab" data-tab="more">＋<span data-i18n="navMore">المزيد</span></button>
+</nav>
+
+<main>
+<section class="screen active" id="dashboard">
+  <div class="hero hero-dashboard">
+    <div>
+      <div class="eyebrow" data-i18n="heroEyebrow">EARLY-MOVE INTELLIGENCE</div>
+      <h1 data-i18n="heroTitle">رادار الحركة قبل الزحام</h1>
+      <p data-i18n="heroText">يفحص آلاف الأزواج، ثم يركز التحليل العميق على المرشحين الأقوى. لا توجد إشارة مضمونة؛ كل نتيجة تعرض الأدلة والمخاطر بوضوح.</p>
+      <div class="hero-actions">
+        <button class="btn primary big" id="quickScan">🟡 <span data-i18n="smartScanBtn">افحص السوق واقترح أفضل صفقة فورية</span></button>
+        <button class="btn ghost big" id="openSignals">◎ <span data-i18n="viewSignals">الإشارات الحالية</span></button>
+      </div>
+    </div>
+    <div class="hero-orb"><div class="orb-core">RX</div><div class="orb-ring r1"></div><div class="orb-ring r2"></div><div class="orb-ring r3"></div></div>
+  </div>
+
+  <section class="autopilot-shell" aria-label="RadarX Auto-Pilot Scanner">
+    <div class="autopilot-head">
+      <div class="autopilot-title">
+        <div class="autopilot-icon">🧭</div>
+        <div><div class="eyebrow">AUTO-PILOT SCANNER</div><h2 data-i18n="autopilotTitle">وضع المتداول الذكي</h2><p data-i18n="autopilotSubtitle">زر واحد للمبتدئ: يمسح الكون الحي أولاً ثم يتحقق من الحجم والزخم وخطر الفخ قبل عرض فرصة ذهبية مشروطة.</p></div>
+      </div>
+      <span class="auto-badge"><span class="pulse"></span><span data-i18n="autopilotBadge">تصفية Binance الحية</span></span>
+    </div>
+    <div class="auto-actions">
+      <button class="btn auto-gold big" id="smartScanBtn">🟡 <span data-i18n="smartScanBtn">افحص السوق واقترح أفضل صفقة فورية</span></button>
+      <div class="auto-meta"><span class="auto-chip" data-i18n="smartGate1">سيولة 24h مرتفعة</span><span class="auto-chip" data-i18n="smartGate2">Volume Spike ≥ 1.8×</span><span class="auto-chip" data-i18n="smartGate3">زخم صعودي قوي</span><span class="auto-chip" data-i18n="smartGate4">Trap Risk &lt; 35</span></div>
+    </div>
+    <div class="autopilot-progress"><div class="progress"><div id="smartScanProgress" class="progress-fill" style="width:0%"></div></div><div id="smartScanStage" class="autopilot-stage"><span class="smart-pulse"></span><span data-i18n="smartReady">جاهز — لا يتم عرض فرصة ذهبية قبل تحقق الشروط الحية.</span></div></div>
+    <div id="smartOpportunityOutput" class="golden-output"></div>
+  </section>
+
+  <section class="multi-radar-shell" aria-label="RadarX Multi-Symbol Live Radar Dashboard">
+    <div class="multi-radar-head">
+      <div class="multi-radar-title">
+        <div class="multi-radar-icon">📡</div>
+        <div><div class="eyebrow">MULTI-SYMBOL LIVE RADAR</div><h2 data-i18n="multiRadarTitle">لوحة المراقبة المتعددة الذكية</h2><p data-i18n="multiRadarSubtitle">أقوى 5–10 عملات نشطة الآن، مرتبة تلقائياً من السيولة والزخم والتدفق الذكي. اضغط أي بطاقة لتحويلها فوراً إلى العملة النشطة.</p></div>
+      </div>
+      <div class="multi-radar-tools"><span class="multi-live-pill"><i id="multiRadarDot" class="multi-live-dot"></i><span id="multiRadarLiveState" data-i18n="multiRadarLive">LIVE RADAR</span></span><span class="multi-rank">RX 5.1</span></div>
+    </div>
+    <div class="multi-toolbar">
+      <div class="multi-toolbar-left">
+        <span class="multi-meta" data-i18n="multiRadarModeLabel">وضع الرادار</span>
+        <div class="multi-mode-tabs" role="tablist" aria-label="Radar mode">
+          <button type="button" class="multi-mode-tab active" data-multi-mode="gainers" role="tab" aria-selected="true"><span>📈</span><span data-i18n="multiRadarModeGainers">الارتفاع الحالي</span></button>
+          <button type="button" class="multi-mode-tab" data-multi-mode="breakout" role="tab" aria-selected="false"><span>🚀</span><span data-i18n="multiRadarModeBreakout">الانفجار الوشيك</span></button>
+        </div>
+        <label class="multi-meta" for="multiRadarCount" data-i18n="multiRadarCountLabel">عدد البطاقات</label>
+        <select id="multiRadarCount" class="multi-select" aria-label="Multi radar count"><option value="5">5</option><option value="8" selected>8</option><option value="10">10</option></select>
+        <span id="multiRadarMeta" class="multi-meta">—</span>
+      </div>
+      <div class="multi-toolbar-right"><button class="btn ghost" id="multiRadarRefresh">↻ <span data-i18n="multiRadarRefresh">تحديث الرادار</span></button><button class="btn primary" id="multiRadarScan">🎯 <span data-i18n="multiRadarScan">حلّل الأقوى</span></button></div>
+    </div>
+    <div id="multiRadarGrid" class="multi-grid"></div>
+    <div class="multi-mode-hint" id="multiRadarModeHint">📡 <span data-i18n="multiRadarLiveNote">السعر والتغير 24h من Binance WebSocket، وVolume Spike من Kline 1m الحي؛ عند غياب البث لا تُعرض بيانات قديمة على أنها حية.</span></div>
+    <div class="multi-footnote"><span data-i18n="multiRadarFoot">التصنيف لحظي واستدلالي: السيولة والزخم والتدفق تُقاس من بيانات السوق العامة المتاحة. لا يعني ترتيب البطاقة ضماناً لحركة السعر، ولا يتم إنشاء بيانات اصطناعية عند غياب السوق الحي.</span></div>
+  </section>
+
+  <section class="pro-radar-shell" id="proRadarShell" aria-label="RadarX Pro Early Intelligence Engine">
+    <div class="pro-radar-head">
+      <div class="pro-radar-title">
+        <div class="pro-radar-icon">🧠</div>
+        <div>
+          <div class="eyebrow">PROBABILISTIC EARLY-MOVE ENGINE</div>
+          <h2>RadarX Pro Intelligence</h2>
+          <p>محرك متعدد الطبقات: Market Regime → Candidate Filter → Feature Engine → Confluence → Scoring → False-Signal Filter → Ranking → Alert.</p>
+        </div>
+      </div>
+      <div class="pro-radar-meta-wrap">
+        <span class="pro-meta-pill" id="proRadarDominance">BTC.D N/A</span>
+        <span class="pro-meta-pill" id="proRadarSector">Sector: N/A</span>
+        <span class="pro-meta-pill" id="proRadarMeta">WAITING</span>
+      </div>
+    </div>
+    <div class="pro-radar-actions">
+      <div class="pro-radar-actions-left">
+        <button class="btn primary" id="proRadarRun">⚡ تشغيل التحليل الاحترافي</button>
+        <button class="btn ghost" id="proResearchBtn">🧪 Backtest / Walk-Forward</button>
+      </div>
+      <div class="pro-data-contract"><b>DATA CONTRACT</b><span>Unavailable ≠ 0</span><span>Current data never backfills history</span><span>No synthetic market values</span></div>
+    </div>
+    <div id="proRadarGrid" class="pro-radar-grid"></div>
+    <div id="proResearchOutput" class="pro-research"></div>
+    <div class="pro-radar-foot">عوامل الأخبار/السوشيال/On-chain/Tokenomics لا تدخل في Score إلا عند تزويد RadarX ببيانات زمنية موثوقة من مصدر معتمد؛ عدم توفر المصدر يظهر N/A ويخفض تغطية الأدلة بدل اختلاق درجة.</div>
+  </section>
+
+  <div class="grid-4 kpi-grid">
+    <div class="kpi"><div class="kpi-label" data-i18n="kpiUniverse">الكون السوقي</div><div class="kpi-value" id="dashUniverse">—</div><div class="kpi-foot" id="dashUniverseFoot">Pairs</div></div>
+    <div class="kpi"><div class="kpi-label" data-i18n="kpiCandidates">مرشحون</div><div class="kpi-value" id="dashCandidates">—</div><div class="kpi-foot" id="dashCandidatesFoot">Deep scan</div></div>
+    <div class="kpi"><div class="kpi-label" data-i18n="kpiEarly">تنبيهات مبكرة</div><div class="kpi-value accent" id="dashEarly">—</div><div class="kpi-foot" id="dashEarlyFoot">Score ≥ 82</div></div>
+    <div class="kpi"><div class="kpi-label" data-i18n="kpiTop">أعلى فرصة</div><div class="kpi-value" id="dashTop">—</div><div class="kpi-foot" id="dashTopFoot">—</div></div>
+  </div>
+
+  <div class="intel-grid">
+    <div class="intel-panel">
+      <div class="intel-head"><div><div class="eyebrow">MARKET SENTIMENT</div><h3 data-i18n="sentimentTitle">مؤشر مشاعر السوق</h3></div><span class="radar4-badge" id="sentimentSource">LIVE</span></div>
+      <div class="gauge-wrap">
+        <div class="gauge"><div class="gauge-needle" id="sentimentNeedle"></div><div class="gauge-center"><div class="gauge-score" id="sentimentScore">50</div><div class="gauge-label" id="sentimentLabel">محايد</div></div></div>
+        <div><div class="sentiment-bar"><div class="sentiment-pin" id="sentimentPin"></div></div><div class="sentiment-meta"><span data-i18n="extremeFear">خوف شديد</span><span data-i18n="neutral">محايد</span><span data-i18n="extremeGreed">طمع شديد</span></div><div class="sentiment-stats"><div class="tiny-stat"><span>BTC</span><b id="sentimentBTC">—</b></div><div class="tiny-stat"><span data-i18n="breadth">اتساع السوق</span><b id="sentimentBreadth">—</b></div><div class="tiny-stat"><span>F&G</span><b id="sentimentFG">—</b></div></div><div class="source-note" id="sentimentSourceNote">Data may combine a daily Fear & Greed baseline with live market breadth. Source: <a href="https://alternative.me/crypto/fear-and-greed-index/" target="_blank" rel="noopener" style="color:var(--cyan)">Alternative.me</a>.</div></div>
+      </div>
+    </div>
+    <div class="intel-panel">
+      <div class="intel-head"><div><div class="eyebrow">MARKET STRUCTURE</div><h3 data-i18n="structureTitle">رادار الهيكلة السعرية</h3></div><span id="structureBadge" class="signal-chip neutral">—</span></div>
+      <div class="structure-grid"><div class="structure-card"><span data-i18n="structureBias">التحيز</span><b id="structureBias">—</b></div><div class="structure-card"><span data-i18n="lastStructure">آخر حدث</span><b id="structureEvent">—</b></div><div class="structure-card"><span data-i18n="swingLevels">القمم/القيعان</span><b id="structureLevels">—</b></div></div>
+      <div id="structureExplain" class="structure-event"><span data-i18n="structureHint">شغّل الفحص لبناء هيكل السوق تلقائياً.</span></div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel featured-card">
+      <div class="section-head"><div><span class="eyebrow" data-i18n="bestSetup">BEST SETUP</span><h2 id="featuredSymbol">—</h2></div><span id="featuredSignal" class="signal-chip neutral">—</span></div>
+      <div id="activeAssetHome"></div>
+      <div id="featuredBody" class="empty-state" data-i18n="runScanHint">شغّل الفحص لرؤية أفضل إعداد.</div>
+    </div>
+    <div class="panel market-health">
+      <div class="section-head"><div><span class="eyebrow" data-i18n="marketPulse">MARKET PULSE</span><h2 data-i18n="marketRegime">حالة السوق</h2></div><span id="regimeChip" class="signal-chip neutral">—</span></div>
+      <div class="regime-meter"><div id="regimeFill" class="regime-fill"></div></div>
+      <div class="regime-row"><span>BTC</span><b id="btcRegime">—</b><span>Alt</span><b id="altRegime">—</b></div>
+      <div id="marketWarnings" class="note-list"></div>
+    </div>
+  </div>
+
+  <div class="dash-mini-row">
+    <div class="intel-panel">
+      <div class="intel-head"><div><div class="eyebrow">AI DAILY BRIEFING</div><h3 data-i18n="briefingTitle">الملخص الصباحي الذكي</h3></div><div><span id="briefingRegimeBadge" class="briefing-chip">—</span> <button class="btn ghost" id="briefingRefresh">↻</button></div></div>
+      <div id="dailyBriefing" class="briefing-list"></div>
+    </div>
+    <div class="intel-panel">
+      <div class="intel-head"><div><div class="eyebrow">PSYCHOLOGY GUARDIAN</div><h3 data-i18n="psychologyTitle">حارس الصحة النفسية</h3></div><span id="guardianState" class="guardian-state healthy">—</span></div>
+      <div id="guardianHome" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+  <div class="section-title"><div><span class="eyebrow" data-i18n="quickTools">QUICK TOOLS</span><h2 data-i18n="toolsTitle">الوصول السريع</h2></div></div>
+  <div class="quick-grid" style="margin-bottom:10px">
+    <button class="quick-card" data-goto="more" data-more="simulator"><span>⚡</span><b data-i18n="toolSimulator">محاكي الصفقة</b><small data-i18n="toolSimulatorDesc">جرّب الإشارة بدون أموال حقيقية</small></button>
+    <button class="quick-card" data-goto="more" data-more="structure"><span>◫</span><b data-i18n="toolStructure">هيكلة السوق</b><small data-i18n="toolStructureDesc">BOS + CHoCH + Swing levels</small></button>
+    <button class="quick-card" data-goto="more" data-more="calendar"><span>⏰</span><b data-i18n="toolCalendar">مفكرة المخاطر</b><small data-i18n="toolCalendarDesc">أخبار عالية التأثير + نافذة خطر</small></button>
+    <button class="quick-card feature-card" data-goto="more" data-more="paper"><span>🏆</span><b data-i18n="paperNav">متسابق المحفظة الوهمية</b><small data-i18n="paperHintShort">محفظة افتراضية + متصدرين</small></button>
+  </div>
+  <div class="quick-grid">
+    <button class="quick-card" data-goto="radar"><span>🚨</span><b data-i18n="toolRadar">الرادار الشامل</b><small data-i18n="toolRadarDesc">Volume + Momentum + Breakout</small></button>
+    <button class="quick-card" data-goto="signal"><span>◎</span><b data-i18n="toolSignals">الإشارات</b><small data-i18n="toolSignalsDesc">Entry • SL • TP1 • TP2</small></button>
+    <button class="quick-card" data-goto="flow"><span>◈</span><b data-i18n="toolFlow">Order Flow</b><small data-i18n="toolFlowDesc">Book • CVD • Buy/Sell</small></button>
+    <button class="quick-card" data-goto="more" data-more="lab"><span>🧪</span><b data-i18n="toolLab">المختبر</b><small data-i18n="toolLabDesc">Backtest + Risk</small></button>
+  </div>
+  <div class="intel-panel" style="margin-top:12px"><div class="intel-head"><div><div class="eyebrow">RISK AGENDA</div><h3 data-i18n="calendarTitle">مفكرة المخاطر والأخبار</h3></div><div><span id="riskNowBadge" class="radar4-badge">—</span> <button class="btn ghost" id="calendarHomeRefresh">↻</button></div></div><div id="calendarPreview"></div></div>
+  <div class="intel-panel results-center"><div class="intel-head"><div><div class="eyebrow">RESULTS & NOTIFICATIONS CENTER</div><h3 data-i18n="resultsTitle">النتائج والإشعارات الذكية</h3></div><button class="btn ghost" id="resultsRefresh">↻</button></div><div id="resultsCenterOutput"></div></div>
+</section>
+
+<section class="screen" id="radar">
+  <div class="page-head"><div><span class="eyebrow">MARKET SCANNER ENGINE</span><h1 data-i18n="radarTitle">الفحص الشامل</h1><p data-i18n="radarDesc">فرز واسع أولاً، ثم تحليل عميق لأقوى المرشحين.</p></div><button class="btn primary" id="scanBtn">🚀 <span data-i18n="scanNow">افحص الآن</span></button></div>
+  <div class="filters panel">
+    <div class="field"><label data-i18n="exchange">المنصة</label><select id="exchangeSelect"><option value="binance">Binance</option><option value="okx">OKX</option><option value="bybit">Bybit</option><option value="gate">Gate</option><option value="coinbase">Coinbase</option></select></div>
+    <div class="field"><label data-i18n="timeframe">الإطار</label><select id="scanTf"><option>1m</option><option selected>5m</option><option>15m</option><option>1h</option></select></div>
+    <div class="field"><label data-i18n="minVolume">أقل حجم 24h</label><select id="minVolume"><option value="250000">$250K+</option><option value="1000000" selected>$1M+</option><option value="5000000">$5M+</option><option value="25000000">$25M+</option></select></div>
+    <div class="field"><label data-i18n="candidateCount">عمق الفحص</label><select id="depthCount"><option value="8">8</option><option value="12" selected>12</option><option value="20">20</option></select></div>
+    <div class="field"><label data-i18n="signalMin">أقل Score</label><input id="signalMin" type="number" value="60" min="0" max="95"/></div>
+    <div class="toggle-row"><label class="switch"><input id="autoScan" type="checkbox"><span></span></label><span data-i18n="autoMode">مراقبة كل دقيقة</span></div>
+  </div>
+  <div class="scanner-status panel"><div><span id="scanStateDot" class="status-dot good"></span><b id="scanStatusText" data-i18n="readyToScan">جاهز للفحص</b><span id="scanStatusSub" class="muted-text">لن ننتظر Backend.</span></div><div class="progress"><div id="scanProgress" class="progress-fill"></div></div></div>
+  <div class="table-wrap" id="radarTable"><div class="empty-state" data-i18n="scanHint">اضغط «افحص الآن» لعرض النتائج فوراً.</div></div>
+</section>
+
+<section class="screen" id="markets">
+  <div class="page-head"><div><span class="eyebrow">MARKET MAP</span><h1 data-i18n="marketsTitle">خريطة السوق</h1><p data-i18n="marketsDesc">رتّب العملات حسب النشاط أو الزخم أو السيولة.</p></div><button class="btn ghost" id="marketsRefresh">↻</button></div>
+  <div class="chips-row" id="marketFilters"><button class="filter-chip active" data-sort="activity">⚡ <span data-i18n="activity">النشاط</span></button><button class="filter-chip" data-sort="gain">↗ <span data-i18n="gainers">الأعلى</span></button><button class="filter-chip" data-sort="volume">◈ <span data-i18n="volume">الحجم</span></button><button class="filter-chip" data-sort="score">◎ Score</button></div>
+  <div id="marketGrid" class="asset-grid"></div>
+</section>
+
+<section class="screen" id="signal">
+  <div class="page-head"><div><span class="eyebrow">AI SIGNALS & RISK</span><h1 data-i18n="signalsTitle">الإشارات والتحليل</h1><p data-i18n="signalsDesc">تجميع قابل للتفسير لعوامل الزخم والحجم والبنية والسيولة والمخاطر.</p></div><div class="inline-actions"><button class="btn ghost" id="searchSignalBtn">⌕</button><button class="btn primary" id="analyzeBtn">◎ <span data-i18n="fullAnalysis">تحليل كامل</span></button></div></div>
+  <div class="search-bar panel"><input id="assetSearchInput" data-i18n-placeholder="searchPlaceholder" placeholder="ابحث: BTC أو SUI أو WAXP..."/><button class="btn ghost" id="searchBtn">🔎</button></div>
+  <div id="signalMatches" class="match-list"></div>
+  <div class="analysis-select panel"><div class="field"><label data-i18n="symbol">الرمز</label><input id="analysisSymbol" value="BTCUSDT"/></div><div class="field"><label data-i18n="exchange">المنصة</label><select id="analysisExchange"><option value="binance">Binance</option><option value="okx">OKX</option><option value="bybit">Bybit</option><option value="gate">Gate</option></select></div><div class="field"><label data-i18n="timeframe">الإطار</label><select id="analysisTf"><option>1m</option><option selected>5m</option><option>15m</option><option>1h</option></select></div></div>
+  <div id="analysisOutput"><div class="empty-state" data-i18n="analysisHint">اختر عملة أو استخدم BTCUSDT ثم اضغط تحليل كامل.</div></div>
+</section>
+
+<section class="screen" id="flow">
+  <div class="page-head"><div><span class="eyebrow">ORDER FLOW INTELLIGENCE</span><h1 data-i18n="flowTitle">السيولة والتدفق</h1><p data-i18n="flowDesc">دفتر أوامر + صفقات حديثة + CVD مشتق من تدفق الصفقات الحقيقية. لا تُعرض بيانات وهمية.</p></div><button class="btn primary" id="flowBtn">◈ <span data-i18n="scanFlow">حلل السيولة</span></button></div>
+  <div class="analysis-select panel"><div class="field"><label data-i18n="symbol">الرمز</label><input id="flowSymbol" value="BTCUSDT"/></div><div class="field"><label data-i18n="exchange">المنصة</label><select id="flowExchange"><option value="binance">Binance</option><option value="okx">OKX</option><option value="bybit">Bybit</option></select></div></div>
+  <div id="flowOutput"><div class="empty-state" data-i18n="flowHint">اضغط «حلل السيولة» لعرض Bid/Ask/Imbalance/CVD.</div></div>
+  <div class="panel whale-wrap">
+    <div class="section-head"><div><span class="eyebrow" data-i18n="whaleEyebrow">WHALE FLOW RADAR</span><h2 data-i18n="whaleTitle">رادار الحيتان والسيولة</h2></div><button class="btn ghost" id="whaleBtn">🐋 <span data-i18n="scanWhales">فحص الحيتان</span></button></div>
+    <div class="analysis-select" style="margin-top:10px"><div class="field"><label data-i18n="whaleMin">أقل قيمة للأمر الكبير (USDT)</label><input id="whaleMin" type="number" value="25000" min="0" step="1000"></div><div class="field"><label data-i18n="whaleWindow">عدد الصفقات</label><select id="whaleWindow"><option value="60">60</option><option value="100" selected>100</option><option value="200">200</option></select></div><div class="field"><label data-i18n="whaleDepth">عمق الدفتر</label><select id="whaleDepth"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option></select></div></div>
+    <div id="whaleOutput"><div class="empty-state" data-i18n="whaleHint">اضغط «فحص الحيتان» لرؤية الأوامر الكبيرة واتجاه التدفق.</div></div>
+  </div>
+</section>
+
+<section class="screen" id="account">
+  <div class="page-head"><div><span class="eyebrow">ACCOUNT & MEMBERSHIP</span><h1 data-i18n="accountTitle">حسابي واشتراكي</h1><p data-i18n="accountDesc">تجربة محلية 3 أيام في وضع الملف. الدفع الحقيقي يحتاج ربط متجر/بوابة دفع آمنة في نسخة النشر.</p></div><span id="planBadge" class="plan-badge">TRIAL</span></div>
+  <div class="account-hero panel"><div class="account-user"><div class="avatar big" id="accountAvatar">R</div><div><h2 id="accountName">Guest Trader</h2><p id="accountEmail">guest@radarx.local</p></div></div><div class="trial-box"><div class="trial-title" data-i18n="trialRemaining">المتبقي في التجربة</div><div id="trialCountdown" class="trial-countdown">72:00:00</div><div class="progress"><div id="trialFill" class="progress-fill" style="width:100%"></div></div></div></div>
+  <div class="plan-grid" id="plans">
+    <article class="plan-card" data-plan="weekly"><div class="plan-head"><b data-i18n="weekly">أسبوعي</b><span>$3</span></div><div class="plan-price">$3 <small data-i18n="perWeek">/ أسبوع</small></div><ul><li data-i18n="featureRadar">الرادار الشامل</li><li data-i18n="featureSignals">الإشارات + Entry/SL/TP</li><li data-i18n="featureFlow">Order Flow</li></ul><button class="btn ghost plan-btn" data-plan="weekly" data-i18n="choosePlan">اختيار</button></article>
+    <article class="plan-card featured-plan" data-plan="monthly"><div class="best-pill" data-i18n="popular">الأكثر استخداماً</div><div class="plan-head"><b data-i18n="monthly">شهري</b><span>$10</span></div><div class="plan-price">$10 <small data-i18n="perMonth">/ شهر</small></div><ul><li data-i18n="featureRadar">الرادار الشامل</li><li data-i18n="featureSignals">الإشارات + Entry/SL/TP</li><li data-i18n="featureFlow">Order Flow</li></ul><button class="btn primary plan-btn" data-plan="monthly" data-i18n="choosePlan">اختيار</button></article>
+    <article class="plan-card" data-plan="yearly"><div class="plan-head"><b data-i18n="yearly">سنوي</b><span>$100</span></div><div class="plan-price">$100 <small data-i18n="perYear">/ سنة</small></div><ul><li data-i18n="featureRadar">الرادار الشامل</li><li data-i18n="featureSignals">الإشارات + Entry/SL/TP</li><li data-i18n="featureFlow">Order Flow</li></ul><button class="btn ghost plan-btn" data-plan="yearly" data-i18n="choosePlan">اختيار</button></article>
+  </div>
+  <div class="panel commerce-note"><b data-i18n="commerceTitle">الدفع الآمن</b><p data-i18n="commerceText">في نسخة الويب المحلية، لن نخدعك بزر دفع وهمي. هذا الوضع يدير التجربة والخطة محلياً. عند النشر التجاري استخدم Google Play Billing داخل Android أو مزود Web يستوفي بلدك، وتحقق من المشتريات على خادم آمن.</p><div class="commerce-actions"><button class="btn ghost" id="demoUpgrade" data-i18n="demoUpgrade">تجربة تفعيل Premium</button><button class="btn ghost" id="manageSub" data-i18n="manageSub">إدارة الاشتراك</button></div></div>
+  <div class="panel account-form"><div class="section-head"><h2 data-i18n="profileSettings">بيانات الحساب</h2></div><div class="analysis-select"><div class="field"><label data-i18n="name">الاسم</label><input id="nameInput" placeholder="Abdulrahman"/></div><div class="field"><label>Email</label><input id="emailInput" type="email" placeholder="you@example.com"/></div></div><div class="commerce-actions"><button class="btn primary" id="saveProfile" data-i18n="save">حفظ</button><button class="btn danger" id="resetProfile" data-i18n="reset">إعادة ضبط الحساب المحلي</button></div></div>
+</section>
+
+<section class="screen" id="more">
+  <div class="page-head"><div><span class="eyebrow">TOOLS & INTELLIGENCE</span><h1 data-i18n="moreTitle">المزيد</h1><p data-i18n="moreDesc">أدوات إضافية للحساب والاختبار وإدارة التنبيهات.</p></div></div>
+  <div class="more-grid">
+    <button class="more-card" data-subtab="compare"><span>🔀</span><b data-i18n="compare">مقارنة المنصات</b><small>Price • Volume • Spread</small></button>
+    <button class="more-card" data-subtab="sentiment"><span>🧭</span><b data-i18n="sentimentNav">مشاعر السوق</b><small>Fear/Greed + Breadth</small></button>
+    <button class="more-card" data-subtab="simulator"><span>⚡</span><b data-i18n="simulatorNav">محاكي الصفقات</b><small>One-click paper simulation</small></button>
+    <button class="more-card" data-subtab="structure"><span>◫</span><b data-i18n="structureNav">هيكلة السوق</b><small>BOS • CHoCH • Swings</small></button>
+    <button class="more-card" data-subtab="calendar"><span>⏰</span><b data-i18n="calendarNav">مفكرة المخاطر</b><small>Macro risk windows</small></button>
+    <button class="more-card" data-subtab="trap"><span>🪤</span><b data-i18n="trapNav">كاشف الفخاخ</b><small>Fakeout • sweep • rejection</small></button>
+    <button class="more-card" data-subtab="deepdive"><span>🔬</span><b data-i18n="deepDiveNav">التحليل الجنائي</b><small>Forensic • Liquidity • Plan</small></button>
+    <button class="more-card" data-subtab="psychology"><span>🛡</span><b data-i18n="psychologyNav">حارس الصحة النفسية</b><small>Loss streak • cooldown</small></button>
+    <button class="more-card" data-subtab="briefing"><span>☀️</span><b data-i18n="briefingNav">الملخص الصباحي</b><small>Market regime • watchlist</small></button>
+    <button class="more-card" data-subtab="paper"><span>🏆</span><b data-i18n="paperNav">المحفظة الوهمية</b><small>Paper trading • leaderboard</small></button>
+    <button class="more-card" data-subtab="news"><span>📰</span><b data-i18n="news">الأخبار</b><small>Live feed when available</small></button>
+    <button class="more-card" data-subtab="alerts"><span>🔔</span><b data-i18n="alerts">التنبيهات</b><small>Local alert ledger</small></button>
+    <button class="more-card" data-subtab="lab"><span>🧪</span><b data-i18n="lab">المختبر</b><small>Backtest + risk</small></button>
+    <button class="more-card" data-subtab="chart"><span>🖼</span><b data-i18n="chart">تحليل الشارت</b><small>On-device preview</small></button>
+    <button class="more-card" data-subtab="settings"><span>⚙️</span><b data-i18n="settings">الإعدادات</b><small>Language • Data • Cache</small></button>
+    <button class="more-card" data-subtab="community"><span>👥</span><b data-i18n="community">المجتمع</b><small>Local community demo</small></button>
+  </div>
+  <div id="subcontent" class="subcontent"></div>
+</section>
+</main>
+
+<div id="rxSubscriptionPaywall" class="rx-paywall" style="display:none"></div>
+<div id="toast" class="toast"></div>
+<div id="modal" class="modal hidden"><div class="modal-card"><button class="modal-close" id="modalClose">×</button><div id="modalBody"></div></div></div>
+</div>
+<script src="./RadarX_Ultimate_5.1.js?v=5.1.2" defer></script>
+<script src="./RadarX_ProEngine_5.1.js?v=5.1.2" defer></script>
+</body>
+</html>

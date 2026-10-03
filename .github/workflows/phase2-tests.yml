@@ -1,0 +1,31 @@
+name: RadarX Phase 2 Tests
+on:
+  push:
+    branches: ['phase2-*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  all-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install dependencies
+        run: npm ci
+      - name: Audit production dependencies (critical threshold)
+        run: npm audit --omit=dev --audit-level=critical
+      - name: Run Phase 1 and Phase 2 tests
+        run: npm test
+      - name: Check required Phase 2 modules
+        run: |
+          node --check phase2/server.mjs
+          node --check phase2/runtime.mjs
+          node --check phase2/http/api.mjs
+          node --check phase2/market/universe-scanner.mjs
+      - name: Build Docker image
+        run: docker build -t radarx-phase4-test .

@@ -1,0 +1,4 @@
+.radarx-data/
+.env
+.env.*
+!.env.example

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#071018"><link rel="manifest" href="./manifest.json"><title>RadarX — تفاصيل الإشارة</title>
+<style>
+:root{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#eaf5f8;background:#071018;color-scheme:dark}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#071018,#091721)}main{width:min(760px,100%);margin:auto;padding:20px 14px 36px}
+.top{display:flex;justify-content:space-between;gap:10px;align-items:center}.brand{font-size:22px;font-weight:950}.muted{color:#8da7b1;font-size:12px;line-height:1.55}
+.panel{background:#0b1820;border:1px solid #1d3944;border-radius:16px;padding:14px;margin-top:12px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.metric{padding:11px;border-radius:11px;background:#08131a;border:1px solid #17313a}.metric b{display:block;margin-top:3px}
+.badge{display:inline-block;padding:6px 9px;border-radius:999px;border:1px solid #2a4c58;font-size:11px;font-weight:900}.live{border-color:#268c68;color:#b5f5da}.bad{border-color:#9b4651;color:#ffc4ca}.warn{border-color:#90713a;color:#ffe0a0}
+.reason{padding:10px;border-radius:11px;background:#08131a;border:1px solid #17313a;margin-top:8px}.btn{display:block;min-height:46px;border-radius:11px;border:1px solid #2a4c58;background:#08131a;color:#fff;padding:12px;font:inherit;font-weight:900;text-decoration:none;text-align:center}
+@media(max-width:520px){.grid{grid-template-columns:1fr}}
+</style>
+</head><body><main>
+<div class="top"><div><div class="brand">RadarX</div><div class="muted">تفاصيل إشارة تحليلية</div></div><a class="btn" style="width:auto;padding:0 14px" href="./app.html">العودة</a></div>
+
+<section id="state" class="panel">جاري تحميل الإشارة…</section>
+<section id="summary" class="panel" hidden></section>
+<section id="details" class="panel" hidden></section>
+<section id="notice" class="panel" hidden></section>
+
+<script type="module">
+import {apiSignal,getSessionToken} from './phase2-api.mjs';
+const $=id=>document.getElementById(id);
+const fmt=ts=>ts?new Intl.DateTimeFormat('ar',{dateStyle:'medium',timeStyle:'medium'}).format(new Date(ts)):'UNKNOWN';
+const params=new URLSearchParams(location.search),id=params.get('signal_id'),received=Number(params.get('received_at')||0);
+const render=(e)=>{
+  const s=e.signal_snapshot||{},now=Date.now(),sourceTime=Number(e.source_time||s.candle?.close_time||0);
+  const stale=Boolean(s.data_status?.stale)||!sourceTime||now-sourceTime>30*60*1000;
+  $('state').innerHTML='<div class="badge '+(stale?'bad':'live')+'">'+(stale?'إشارة قديمة/متأخرة — ليست جديدة':'بيانات حديثة ضمن حد المراقبة')+'</div><h2 style="margin:10px 0 3px">'+(s.symbol||e.symbol)+' · '+(s.direction||'UNKNOWN')+'</h2><div class="muted">'+(s.strategy||e.strategy||'UNKNOWN')+' · '+(s.signal_type||'UNKNOWN')+'</div>';
+  $('summary').hidden=false;
+  $('summary').innerHTML='<div class="grid">'+
+  '<div class="metric"><span class="muted">السعر المرجعي</span><b>'+(s.price?.reference??e.price??'UNKNOWN')+'</b></div>'+
+  '<div class="metric"><span class="muted">Timeframe</span><b>'+(s.candle?.timeframe||e.timeframe||'UNKNOWN')+'</b></div>'+
+  '<div class="metric"><span class="muted">وقت المصدر</span><b>'+fmt(sourceTime)+'</b></div>'+
+  '<div class="metric"><span class="muted">وقت المعالجة بالخادم</span><b>'+fmt(e.processed_at)+'</b></div>'+
+  '<div class="metric"><span class="muted">وقت الاستلام في الهاتف</span><b>'+(received?fmt(received):'غير متاح')+'</b></div>'+
+  '<div class="metric"><span class="muted">مصدر البيانات</span><b>'+(s.data_status?.source||'UNKNOWN')+'</b></div>'+
+  '<div class="metric"><span class="muted">Data Quality</span><b>'+(s.scores?.data_quality??e.data_quality??'UNKNOWN')+'</b></div>'+
+  '<div class="metric"><span class="muted">Liquidity Quality</span><b>'+(s.scores?.liquidity_quality??e.liquidity_quality??'UNKNOWN')+'</b></div>'+
+  '<div class="metric"><span class="muted">Risk Filter</span><b>'+(s.risk_filter||'UNKNOWN')+'</b></div>'+
+  '<div class="metric"><span class="muted">confidence_score</span><b>UNKNOWN</b></div>'+
+  '</div>';
+  $('details').hidden=false;
+  $('details').innerHTML='<div class="reason"><b>سبب الإشارة</b><div class="muted" style="margin-top:4px">'+((s.reason_codes||[]).join(' · ')||'UNKNOWN')+'</div></div>'+
+    '<div class="reason"><b>حالة البيانات</b><div class="muted" style="margin-top:4px">stale='+(Boolean(s.data_status?.stale))+' · gaps='+(Boolean(s.data_status?.gaps))+' · future_data='+(Boolean(s.data_status?.future_data_detected))+'</div></div>';
+  $('notice').hidden=false;$('notice').innerHTML='<div class="warn badge">هذه إشارة تحليلية وليست ضمانًا للربح.</div><p class="muted" style="margin-bottom:0">Paper Trading فقط · real_order_execution = false · confidence_score = UNKNOWN.</p>';
+};
+(async()=>{
+  if(!id){$('state').textContent='لم يتم تحديد signal_id.';return;}
+  if(!getSessionToken()){$('state').innerHTML='<div class="bad badge">لا توجد جلسة مصادق عليها.</div><p class="muted">افتح الإعدادات وأدخل Session Token.</p>';return;}
+  try{const r=await apiSignal(id);render(r.event);}
+  catch(e){$('state').innerHTML='<div class="bad badge">تعذر تحميل الإشارة</div><p class="muted">'+e.message+'</p>';}
+})();
+</script>
+</body></html>
