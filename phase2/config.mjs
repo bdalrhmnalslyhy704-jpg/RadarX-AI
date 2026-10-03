@@ -103,6 +103,18 @@ export const CONFIG = Object.freeze({
     alertCooldownMs: int(process.env.RADARX_STRONG_MOVE_ALERT_COOLDOWN_MS, 5 * 60 * 1000),
     minScore: int(process.env.RADARX_STRONG_MOVE_MIN_SCORE, 76)
   },
+  rotationRadar: {
+    quote: 'USDT',
+    pollMs: int(process.env.RADARX_ROTATION_RADAR_POLL_MS, 30000),
+    universeRefreshMs: int(process.env.RADARX_ROTATION_RADAR_UNIVERSE_REFRESH_MS, 5 * 60 * 1000),
+    minQuoteVolume24h: int(process.env.RADARX_ROTATION_RADAR_MIN_QUOTE_VOLUME_24H, 750000),
+    rotationBatchSize: int(process.env.RADARX_ROTATION_RADAR_BATCH, 7),
+    topLaggers: int(process.env.RADARX_ROTATION_RADAR_TOP_LAGGERS, 3),
+    maxAbs24hMovePct: float(process.env.RADARX_ROTATION_RADAR_MAX_24H_MOVE_PCT, 8),
+    alertCooldownMs: int(process.env.RADARX_ROTATION_RADAR_ALERT_COOLDOWN_MS, 10 * 60 * 1000),
+    minScore: int(process.env.RADARX_ROTATION_RADAR_MIN_SCORE, 78),
+    minConfirmations: int(process.env.RADARX_ROTATION_RADAR_MIN_CONFIRMATIONS, 4)
+  },
   paper: {
     feeRate: float(process.env.RADARX_PAPER_FEE_RATE, 0.001),
     slippageBps: float(process.env.RADARX_PAPER_SLIPPAGE_BPS, 5),

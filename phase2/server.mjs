@@ -11,6 +11,7 @@ import {createPushProvider,PushManager} from './push/index.mjs';
 import {MarketMonitor} from './core/monitor.mjs';
 import {EarlyMoveSentinel} from './core/early-move-sentinel.mjs';
 import {StrongMoveRadar} from './core/strong-move-radar.mjs';
+import {RotationLagRadar} from './core/rotation-lag-radar.mjs';
 import {MarketUniverseScanner} from './market/universe-scanner.mjs';
 import {createApiServer} from './http/api.mjs';
 import {assertDeploymentEnvironment,assertReadOnlyStagingConfig} from './deploy/preflight.mjs';
@@ -47,14 +48,17 @@ export async function startServer({
   });
   const strongRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
   const strongMoveRadar=new StrongMoveRadar({rest:strongRadarRest,store,config:config.strongMoveRadar||{},logger});
+  const rotationRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  const rotationLagRadar=new RotationLagRadar({rest:rotationRadarRest,store,config:config.rotationRadar||{},logger});
   await monitor.start();
   await moveSentinel.start();
   await strongMoveRadar.start();
-  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar});
+  await rotationLagRadar.start();
+  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
-  return {server:api,monitor,moveSentinel,strongMoveRadar,store,rest,strongRadarRest,push,close:async()=>{await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
+  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,store,rest,strongRadarRest,rotationRadarRest,push,close:async()=>{await rotationLagRadar.stop();await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
 }
 
 if(process.argv[1]&&resolve(fileURLToPath(import.meta.url))===resolve(process.argv[1])){
