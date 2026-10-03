@@ -41,13 +41,17 @@ public final class RadarXBackgroundMonitorService extends Service {
             "https://radarx-ai-production.up.railway.app/api/move-radar?quote=USDT&limit=50";
     private static final String BACKEND_STRONG =
             "https://radarx-ai-production.up.railway.app/api/strong-move-radar?quote=USDT&limit=50";
+    private static final String BACKEND_ROTATION =
+            "https://radarx-ai-production.up.railway.app/api/rotation-radar?quote=USDT&limit=50";
 
     private static final String CHANNEL_STATUS = "radarx_background_status";
     private static final String CHANNEL_ALERTS = "radarx_move_alerts";
     private static final String CHANNEL_STRONG_ALERTS = "radarx_strong_move_alerts";
+    private static final String CHANNEL_ROTATION_ALERTS = "radarx_rotation_alerts";
     private static final int STATUS_NOTIFICATION_ID = 41001;
     private static final int ALERT_NOTIFICATION_BASE = 42000;
     private static final int STRONG_ALERT_NOTIFICATION_BASE = 43000;
+    private static final int ROTATION_ALERT_NOTIFICATION_BASE = 44000;
     private static final long SCAN_MS = 15_000L;
     private static final long ALERT_COOLDOWN_MS = 30 * 60_000L;
 
@@ -105,9 +109,11 @@ public final class RadarXBackgroundMonitorService extends Service {
         if (stopping) return;
         int moveCount = 0;
         int strongCount = 0;
+        int rotationCount = 0;
         int universe = 0;
         boolean moveOk = false;
         boolean strongOk = false;
+        boolean rotationOk = false;
         try {
             JSONObject root = fetchMoveFeed();
             JSONObject meta = root.optJSONObject("meta");
@@ -138,15 +144,50 @@ public final class RadarXBackgroundMonitorService extends Service {
         } catch (Throwable error) {
             Log.w(TAG, "Background strong-move radar fetch failed", error);
         }
+        try {
+            JSONObject root = fetchRotationFeed();
+            JSONObject meta = root.optJSONObject("meta");
+            if (meta != null && meta.optBoolean("live", false) &&
+                meta.optBoolean("paper_trading", true) &&
+                !meta.optBoolean("real_order_execution", false)) {
+                JSONArray alerts = root.optJSONArray("alerts");
+                rotationCount = notifyNewRotationAlerts(alerts == null ? new JSONArray() : alerts);
+                JSONObject monitoring = root.optJSONObject("monitoring");
+                if (monitoring != null) universe = Math.max(universe, monitoring.optInt("universe", 0));
+                rotationOk = true;
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "Background rotation-radar fetch failed", error);
+        }
 
-        if (moveOk || strongOk) {
+        if (moveOk || strongOk || rotationOk) {
             updateStatus(
-                "Radar 1 Early-Wake/Pre-Explosion: " + moveCount +
+                "Radar 1 Early-Wake: " + moveCount +
                 " • Radar 2 Strong-Move: " + strongCount +
+                " • Radar 3 Rotation/Lag: " + rotationCount +
                 " • " + universe + " عملة"
             );
         } else {
-            updateStatus("الراداران • لا يوجد اتصال الآن؛ سيُستكمل التنبيه عند عودة الإنترنت");
+            updateStatus("3 رادارات • لا يوجد اتصال الآن؛ سيُستكمل التنبيه عند عودة الإنترنت");
+        }
+    }
+
+    private JSONObject fetchRotationFeed() throws Exception {
+        long cursor = prefs().getLong("rotation_alert_cursor_at", 0L);
+        String url = BACKEND_ROTATION + (cursor > 0L ? "&since=" + cursor : "");
+        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+        try {
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(12_000);
+            connection.setReadTimeout(60_000);
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("Accept-Encoding", "identity");
+            int status = connection.getResponseCode();
+            if (status != 200) throw new IllegalStateException("HTTP_" + status);
+            return new JSONObject(new String(readAll(connection.getInputStream()), StandardCharsets.UTF_8));
+        } finally {
+            connection.disconnect();
         }
     }
 
@@ -254,7 +295,97 @@ public final class RadarXBackgroundMonitorService extends Service {
         return count;
     }
 
-    private void notifyStrongMoveAlert(JSONObject alert) {
+    private int notifyNewRotationAlerts(JSONArray alerts) {
+        Set<String> seen = new HashSet<>(prefs().getStringSet("rotation_alert_seen_ids", new HashSet<>()));
+        long cursor = prefs().getLong("rotation_alert_cursor_at", 0L);
+        long maxAt = cursor;
+        int count = 0;
+        for (int i = alerts.length() - 1; i >= 0; i--) {
+            JSONObject alert = alerts.optJSONObject(i);
+            if (alert == null) continue;
+            if (!"ROTATION_LAG_ALERT".equals(alert.optString("event", ""))) {
+                long at = alert.optLong("processed_at", 0L);
+                if (at > maxAt) maxAt = at;
+                continue;
+            }
+            if (!alert.optBoolean("eligible", false)) {
+                long at = alert.optLong("processed_at", 0L);
+                if (at > maxAt) maxAt = at;
+                continue;
+            }
+            String id = alert.optString("id", "");
+            long at = alert.optLong("processed_at", 0L);
+            if (at > maxAt) maxAt = at;
+            if (id.isEmpty() || seen.contains(id)) continue;
+            notifyRotationAlert(alert);
+            seen.add(id);
+            count++;
+        }
+        while (seen.size() > 200) seen.remove(seen.iterator().next());
+        prefs().edit().putLong("rotation_alert_cursor_at", maxAt)
+            .putStringSet("rotation_alert_seen_ids", seen).apply();
+        return count;
+    }
+
+    private void notifyRotationAlert(JSONObject alert) {
+        String symbol = alert.optString("symbol", "UNKNOWN");
+        String direction = alert.optString("direction", "UP_ROTATION");
+        double move = alert.optDouble("price_change_24h", 0.0);
+        double score = alert.optDouble("opportunity_score", 0.0);
+        String stage = alert.optString("potential_label", "ROTATION_READY");
+        JSONObject rotation = alert.optJSONObject("rotation");
+        int confirmations = rotation == null ? 0 : rotation.optInt("confirmations", 0);
+        JSONArray reasons = alert.optJSONArray("reasons");
+        long detectedAt = alert.optLong("detected_at", alert.optLong("processed_at", 0L));
+        long sentAt = System.currentTimeMillis();
+
+        StringBuilder reasonText = new StringBuilder();
+        if (reasons != null) {
+            for (int i = 0; i < Math.min(4, reasons.length()); i++) {
+                if (i > 0) reasonText.append(" • ");
+                reasonText.append(reasons.optString(i, ""));
+            }
+        }
+
+        String title = "UP_ROTATION".equals(direction)
+            ? "RadarX • 🧭 دوران/لحاق مبكر"
+            : "RadarX • 🧭 دوران هابط";
+        String body = symbol + " • 24h " + scoreFmt.format(move) + "% • Rotation Score " +
+            scoreFmt.format(score) + " • " + stage + " • " + confirmations + " تأكيد";
+        String timing = "اكتشاف: " + formatTimestamp(detectedAt) +
+            " • إشعار: " + formatTimestamp(sentAt);
+
+        Intent open = new Intent(this, MainActivity.class);
+        PendingIntent pending = PendingIntent.getActivity(
+            this, ROTATION_ALERT_NOTIFICATION_BASE + Math.abs(symbol.hashCode()),
+            open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+        Notification.Builder builder = notificationBuilder(CHANNEL_ROTATION_ALERTS)
+            .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(new Notification.BigTextStyle().bigText(
+                body + " • " + (reasonText.length() > 0 ? reasonText : "لحاق نسبي + تحول سلوكي") +
+                " • " + timing +
+                " • رادار مستقل عن Early-Wake وStrong-Move" +
+                " • شموع مغلقة فقط • Paper Trading فقط • ليس ضمانًا لاستمرار الحركة"
+            ))
+            .setContentIntent(pending)
+            .setAutoCancel(true)
+            .setCategory(Notification.CATEGORY_EVENT)
+            .setPriority(Notification.PRIORITY_HIGH);
+
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (manager != null) {
+            manager.notify(
+                ROTATION_ALERT_NOTIFICATION_BASE + Math.abs(symbol.hashCode() % 10000),
+                builder.build()
+            );
+        }
+    }
+
+    private void notifyStrongMoveAlert(JSONObject alert)
         String symbol = alert.optString("symbol", "UNKNOWN");
         String direction = alert.optString("direction", "UP_SURGE");
         double move = alert.optDouble("price_change_24h", 0.0);
@@ -403,7 +534,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         Notification.Builder builder = notificationBuilder(CHANNEL_STATUS)
             .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
             .setContentTitle("RadarX • Move Radar 24/7")
-            .setContentText("راداران مستقلان: Early-Wake + Strong-Move يعملان في الخلفية")
+            .setContentText("3 رادارات مستقلة: Early-Wake + Strong-Move + Rotation/Lag تعمل في الخلفية")
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .setColor(Color.rgb(53, 201, 255))
@@ -456,6 +587,12 @@ public final class RadarXBackgroundMonitorService extends Service {
         );
         strongAlerts.setDescription("تنبيهات الرادار الثاني للحركة القوية والانفجار اللحظي");
         manager.createNotificationChannel(strongAlerts);
+
+        NotificationChannel rotationAlerts = new NotificationChannel(
+            CHANNEL_ROTATION_ALERTS, "RadarX Rotation-Lag Alerts", NotificationManager.IMPORTANCE_HIGH
+        );
+        rotationAlerts.setDescription("تنبيهات الرادار الثالث لاكتشاف دوران السوق والعملات المتأخرة");
+        manager.createNotificationChannel(rotationAlerts);
     }
 
     private void stopMonitoring() {
