@@ -131,7 +131,7 @@ function subscriptionValid(x){
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,symbolDeepAnalyzer:null}= {}){
   const counters=new Map();
   const moveConfig=config.moveRadar||{thresholdPct:1};
   const originList=config.auth.allowedOrigins;
@@ -139,10 +139,10 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     rest: monitor.rest,
     config: config.marketRadar ?? {}
   }) : null;
-  const symbolDeepAnalyzer = monitor?.rest ? new SymbolDeepAnalyzer({
+  const deepSymbolScanner = symbolDeepAnalyzer || (monitor?.rest ? new SymbolDeepAnalyzer({
     rest: monitor.rest,
     config: config.symbolDeepScan ?? {}
-  }) : null;
+  }) : null);
   function allowedOrigin(req){
     const o=req.headers.origin;if(!o||!originList.length)return null;return originList.includes(o)?o:null;
   }
@@ -259,11 +259,11 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         }
       }
       if(u.pathname==='/api/symbol-deep-scan'&&req.method==='GET'){
-        if(!symbolDeepAnalyzer)return send(res,503,{error:'SYMBOL_DEEP_SCAN_UNAVAILABLE'});
+        if(!deepSymbolScanner)return send(res,503,{error:'SYMBOL_DEEP_SCAN_UNAVAILABLE'});
         const rawSymbol=String(u.searchParams.get('symbol')||'').trim().toUpperCase();
         try{
           const symbol=normalizeDeepScanSymbol(rawSymbol,config.symbolDeepScan?.quote||'USDT');
-          const result=await symbolDeepAnalyzer.scan(symbol);
+          const result=await deepSymbolScanner.scan(symbol);
           return send(res,200,result);
         }catch(e){
           const m=String(e?.message??e);
