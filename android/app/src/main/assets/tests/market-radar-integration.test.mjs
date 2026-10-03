@@ -63,7 +63,7 @@ function body(kinds=['fresh','fresh'],live=true){
 }
 function response(b=body(),status=200){return{status,ok:status>=200&&status<300,body:b,error:null};}
 
-assert.equal(DEFAULT_BACKEND_BASE_URL,'https://radarx-ai-production.up.railway.app');
+assert.equal(DEFAULT_BACKEND_BASE_URL,'https://radarx-ai-triple-production.up.railway.app');
 assert.equal(classifyMarketRadarResponse(response(body(['fresh','fresh'],false))), 'LIVE_DATA');
 assert.equal(classifyMarketRadarResponse(response(body(['fresh','stale'],true))), 'PARTIAL_DATA');
 assert.equal(classifyMarketRadarResponse(response(body(['stale','rejected'],true))), 'DATA_STALE');
