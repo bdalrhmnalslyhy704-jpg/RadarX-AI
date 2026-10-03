@@ -312,6 +312,7 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     private void notifyMoveAlert(JSONObject alert) {
+        String event = alert.optString("event", "");
         String symbol = alert.optString("symbol", "UNKNOWN");
         String direction = alert.optString("direction", "UP_MOVE");
         double move = alert.optDouble("price_change_24h", 0.0);
