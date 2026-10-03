@@ -55,7 +55,7 @@ function injectStyle(){
 .rxd-chiprow{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}.rxd-chip{padding:5px 8px;border-radius:999px;background:#130e21;border:1px solid #33234a;color:#cfc4df;font-size:10px}
 .rxd-algos{display:flex;flex-wrap:wrap;gap:6px}.rxd-algos span{padding:6px 8px;border-radius:999px;background:#120d20;border:1px solid #392752;color:#c9bed7;font-size:10px}
 .rxd-foot{padding:11px;color:#8e839d;font-size:10px;line-height:1.6}
-@media(min-width:680px){.rxd-form{grid-template-columns:1fr 170px}.rxd-grid{grid-template-columns:repeat(4,1fr)}.rxd-zonegrid{grid-template-columns:repeat(2,1fr)}.rxd-tf{grid-template-columns:repeat(3,1fr)}}';
+@media(min-width:680px){.rxd-form{grid-template-columns:1fr 170px}.rxd-grid{grid-template-columns:repeat(4,1fr)}.rxd-zonegrid{grid-template-columns:repeat(2,1fr)}.rxd-tf{grid-template-columns:repeat(3,1fr)}}`;
   document.head.appendChild(style);
 }
 
