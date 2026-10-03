@@ -144,6 +144,18 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     rest: monitor.rest,
     config: config.symbolDeepScan ?? {}
   }) : null);
+  const radarEntries = Object.freeze({
+    EARLY_MOVE_RADAR:{name:RADAR_NAMES.EARLY_MOVE_RADAR,instance:moveSentinel,read:'readMoveAlerts'},
+    STRONG_MOVE_RADAR:{name:RADAR_NAMES.STRONG_MOVE_RADAR,instance:strongMoveRadar,read:'readStrongMoveAlerts'},
+    ROTATION_LAG_RADAR:{name:RADAR_NAMES.ROTATION_LAG_RADAR,instance:rotationLagRadar,read:'readRotationAlerts'},
+    LIQUIDITY_ABSORPTION_RADAR:{name:RADAR_NAMES.LIQUIDITY_ABSORPTION_RADAR,instance:liquidityAbsorptionRadar,read:'readLiquidityAbsorptionAlerts'}
+  });
+  function radarStatus(){
+    return Object.entries(radarEntries).map(([id,x])=>{
+      const health=typeof x.instance?.health==='function'?x.instance.health():{running:false,radar:id,radar_name:x.name};
+      return {radar:id,radar_name:x.name,running:Boolean(health.running),health};
+    });
+  }
   function allowedOrigin(req){
     const o=req.headers.origin;if(!o||!originList.length)return null;return originList.includes(o)?o:null;
   }
@@ -167,7 +179,33 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(!rateOk(key))return send(res,429,{error:'RATE_LIMITED'});
     try{
       const u=new URL(req.url,'http://localhost');
-      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false}});
+      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false}});
+      if(u.pathname==='/api/radar-status'&&req.method==='GET')return send(res,200,{radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+      if(u.pathname==='/api/radar-control'&&req.method==='POST'){
+        const radar=String(u.searchParams.get('radar')||'').trim().toUpperCase();
+        const action=String(u.searchParams.get('action')||'').trim().toLowerCase();
+        const entry=radarEntries[radar];
+        if(!entry?.instance)return send(res,404,{error:'RADAR_NOT_AVAILABLE',radar});
+        if(!['start','stop'].includes(action))return send(res,400,{error:'INVALID_RADAR_ACTION',radar});
+        if(action==='start')await entry.instance.start();else await entry.instance.stop();
+        const health=entry.instance.health?.()||{running:false};
+        return send(res,200,{ok:true,radar,radar_name:entry.name,running:Boolean(health.running),status:health,meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+      }
+      if(u.pathname==='/api/radar-alerts'&&req.method==='GET'){
+        const radar=String(u.searchParams.get('radar')||'ALL').trim().toUpperCase();
+        const sinceRaw=Number(u.searchParams.get('since')||0);
+        const limit=Math.max(1,Math.min(100,Math.trunc(Number(u.searchParams.get('limit')||20))));
+        const entries=radar==='ALL'?Object.values(radarEntries):radarEntries[radar]?[radarEntries[radar]]:null;
+        if(!entries)return send(res,400,{error:'INVALID_RADAR',radar});
+        const alerts=[];
+        for(const entry of entries){
+          if(typeof store?.[entry.read]!=='function')continue;
+          const rows=await store[entry.read]({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit});
+          for(const row of rows)alerts.push(decorateRadarAlert(row,entry.name));
+        }
+        alerts.sort((a,b)=>Number(b.processed_at||b.detected_at||0)-Number(a.processed_at||a.detected_at||0));
+        return send(res,200,{alerts:alerts.slice(0,limit),radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',detected_timezone:'Asia/Aden',time_format:'12h'}});
+      }
       if(u.pathname==='/readyz'&&req.method==='GET'){
         const h=monitor.health(),ok=h.database.state==='LIVE'&&(h.websocket.state==='LIVE'||h.rest.state==='LIVE');return send(res,ok?200:503,{ready:ok,health:h});
       }
