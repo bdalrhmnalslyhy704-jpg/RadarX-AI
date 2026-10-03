@@ -1,4 +1,5 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
+import {decorateRadarAlert} from './radar-alert-meta.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -230,10 +231,10 @@ export function buildStrongMoveAlert(candidate,now=Date.now()){
 }
 
 export class StrongMoveRadar {
-  constructor({rest,store,config={},clock=()=>Date.now(),logger=console}={}){
+  constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
-    this.rest=rest;this.store=store;this.clock=clock;this.logger=logger;
+    this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={
       quote:'USDT',pollMs:15000,universeRefreshMs:60000,minQuoteVolume24h:1000000,
       rotationBatchSize:6,topMoverCount:4,alertCooldownMs:5*60*1000,
@@ -290,7 +291,9 @@ export class StrongMoveRadar {
     const lastAlert=this.lastAlertAt.get(row.symbol)||0;
     if(this.clock()-lastAlert<this.config.alertCooldownMs)return alert;
     this.lastAlertAt.set(row.symbol,this.clock());
-    await this.store.appendStrongMoveAlert(alert);
+    const decorated=decorateRadarAlert(alert,'Radar 2 — Strong-Move');
+    await this.store.appendStrongMoveAlert(decorated);
+    if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
     this.alertCount++;
     return alert;
   }
