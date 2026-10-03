@@ -12,6 +12,7 @@ import {MarketMonitor} from './core/monitor.mjs';
 import {EarlyMoveSentinel} from './core/early-move-sentinel.mjs';
 import {StrongMoveRadar} from './core/strong-move-radar.mjs';
 import {RotationLagRadar} from './core/rotation-lag-radar.mjs';
+import {LiquidityAbsorptionRadar} from './core/liquidity-absorption-radar.mjs';
 import {MarketUniverseScanner} from './market/universe-scanner.mjs';
 import {createApiServer} from './http/api.mjs';
 import {assertDeploymentEnvironment,assertReadOnlyStagingConfig} from './deploy/preflight.mjs';
@@ -47,14 +48,20 @@ export async function startServer({
     tickerWsFactory:opts=>new BinanceAllMarketTickerClient(opts)
   });
   const strongRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
-  const strongMoveRadar=new StrongMoveRadar({rest:strongRadarRest,store,config:config.strongMoveRadar||{},logger});
+  const strongMoveRadar=new StrongMoveRadar({rest:strongRadarRest,store,pushManager:push,config:config.strongMoveRadar||{},logger});
   const rotationRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
-  const rotationLagRadar=new RotationLagRadar({rest:rotationRadarRest,store,config:config.rotationRadar||{},logger});
+  const rotationLagRadar=new RotationLagRadar({rest:rotationRadarRest,store,pushManager:push,config:config.rotationRadar||{},logger});
+  const liquidityRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  const liquidityAbsorptionRadar=new LiquidityAbsorptionRadar({rest:liquidityRadarRest,store,pushManager:push,config:config.liquidityAbsorptionRadar||{},logger});
   await monitor.start();
-  await moveSentinel.start();
-  await strongMoveRadar.start();
-  await rotationLagRadar.start();
-  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar});
+  const autoStart=config.radarControl?.autostart===true;
+  if(autoStart){
+    await moveSentinel.start();
+    await strongMoveRadar.start();
+    await rotationLagRadar.start();
+    await liquidityAbsorptionRadar.start();
+  }
+  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
