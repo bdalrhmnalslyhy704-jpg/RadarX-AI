@@ -12,7 +12,8 @@ function makeSeries(n,base,{tailMove=0,tailVolume=100000,tailSpan=0.4}={}){
   const out=[];
   for(let i=0;i<n;i++){
     const tail=i>=n-5;
-    out.push(candle(i,{price:base,move:tail?tailMove:0,volume:tail?tailVolume:100000,span:tail?tailSpan:0.4}));
+    const step=i-(n-5)+1;
+    out.push(candle(i,{price:base,move:tail?tailMove*step:0,volume:tail?tailVolume:100000,span:tail?tailSpan:0.4}));
   }
   return out;
 }
@@ -61,6 +62,6 @@ const extended=buildRotationAlert({
   fifteen_min:symbol,one_hour:oneHour,
   benchmarks:{BTCUSDT:{fifteen_min:btc,one_hour:oneHour},ETHUSDT:{fifteen_min:eth,one_hour:oneHour}}
 },now);
-assert.ok(!extended.risk_flags.includes('24H_ALREADY_EXTENDED')||extended.price_change_24h>=10);
+assert.ok(extended.risk_flags.includes('24H_ALREADY_EXTENDED'));
 
 console.log('Rotation Lag Radar tests passed');
