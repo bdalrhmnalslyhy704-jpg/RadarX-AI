@@ -271,17 +271,19 @@ export class LiquidityAbsorptionRadar{
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
     this.lastScanAt=new Map();this.lastAlertAt=new Map();this.alertCount=0;this.scans=0;this.lastError=null;this.lastScanAtMs=null;this.busy=false;
   }
-  async start(){
+  start(){
     if(this.running)return;
     this.running=true;
-    this.timer=setInterval(()=>this.tick().catch(e=>{this.lastError=String(e?.message??e);this.logger.warn?.('LIQUIDITY_ABSORPTION',this.lastError)}),this.config.pollMs);
-    try{
-      await this.refreshUniverse();
-      await this.tick();
-    }catch(e){
+    this.timer=setInterval(()=>this.tick().catch(e=>{
       this.lastError=String(e?.message??e);
-      this.logger.warn?.('LIQUIDITY_ABSORPTION_BOOTSTRAP',this.lastError);
-    }
+      this.logger.warn?.('LIQUIDITY_ABSORPTION',this.lastError);
+    }),this.config.pollMs);
+    this.refreshUniverse()
+      .then(()=>this.tick())
+      .catch(e=>{
+        this.lastError=String(e?.message??e);
+        this.logger.warn?.('LIQUIDITY_ABSORPTION_BOOTSTRAP',this.lastError);
+      });
   }
   async stop(){this.running=false;if(this.timer)clearInterval(this.timer);this.timer=null;}
   async refreshUniverse(){
