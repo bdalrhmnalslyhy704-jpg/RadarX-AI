@@ -1,4 +1,5 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
+import {formatRadarTime12h} from './radar-alert-meta.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -248,6 +249,7 @@ export function buildLiquidityAbsorptionAlert(candidate,now=Date.now()){
     source:a.source,
     detected_at:now,processed_at:now,
     detected_at_iso:new Date(now).toISOString(),
+    detected_time_12h:formatRadarTime12h(now),
     detected_timezone:'Asia/Aden',
     paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
     eligible:a.eligible,
