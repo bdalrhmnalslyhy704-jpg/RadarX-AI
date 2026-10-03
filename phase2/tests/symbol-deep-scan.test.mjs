@@ -60,14 +60,16 @@ test('TEST_FIXTURE: deep symbol scan API is public GET-only and does not create 
   const analyzer=new SymbolDeepAnalyzer({rest:mockRest()});
   const server=createApiServer({config,store:{},monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},pushProvider:{status:()=>({})},symbolDeepAnalyzer:analyzer});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
-  const base='http://127.0.0.1:'+server.address().port;
+  const closeServer=()=>new Promise(resolve=>server.close(resolve));
+  // Always release the test server, even when an assertion fails.
+  t.after(async()=>{if(server.listening)await closeServer();});
   const res=await fetch(base+'/api/symbol-deep-scan?symbol=SAND');
   assert.equal(res.status,200);
   const body=await res.json();
   assert.equal(body.status,'ok');
   assert.equal(body.symbol,'SANDUSDT');
-  assert.equal(body.paper_trading,true);
-  assert.equal(body.real_order_execution,false);
+  assert.equal(body.meta?.paper_trading,true);
+  assert.equal(body.meta?.real_order_execution,false);
   assert.doesNotMatch(JSON.stringify(body),/createOrder|placeOrder|withdraw|apiKey|secret/i);
   await new Promise(resolve=>server.close(resolve));
 });
