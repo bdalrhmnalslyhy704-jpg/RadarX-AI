@@ -82,4 +82,4 @@ const radar=new StrongMoveRadar({
 assert.equal(radar.health().radar,'STRONG_MOVE_RADAR');
 assert.equal(radar.health().closed_candles_only,true);
 
-console.log('Strong Move Radar tests passed');
+// CI trigger: independent radar regression coverage stays on this branch.\nconsole.log('Strong Move Radar tests passed');
