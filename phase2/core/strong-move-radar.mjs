@@ -28,7 +28,7 @@ function stdev(xs){
   const m=mean(a);return Math.sqrt(mean(a.map(x=>(x-m)**2)));
 }
 
-function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
+export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
   const a=closedCandles(oneM,now),b=closedCandles(fiveM,now);
   if(a.length<40||b.length<20){
     return {eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true,one_minute_count:a.length,five_minute_count:b.length};
