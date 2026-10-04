@@ -294,15 +294,19 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         const limit=Math.max(1,Math.min(50,Math.trunc(Number(u.searchParams.get('limit')||20))));
         try{
           const runNow=String(u.searchParams.get('scan')||'').trim()==='1';
+          let immediateScanError=null;
           if(runNow && kahirRadar.health().running===true && !kahirRadar.health().busy) {
-            await kahirRadar.tick();
+            try{ await kahirRadar.tick(); }
+            catch(e){ immediateScanError=String(e?.message??e); }
           }
           const alerts=typeof store.readKahirAlerts==='function'
             ? await store.readKahirAlerts({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit})
             : [];
           const health=kahirRadar.health();
           const snapshot=kahirRadar.snapshot(limit);
-          return send(res,200,{...snapshot,monitoring:health,alerts,meta:{...(snapshot.meta||{}),live:health.running===true,radar:'KAHIR_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+          return send(res,200,{...snapshot,monitoring:health,alerts,
+            scan:{requested:runNow,completed:immediateScanError===null&&health.last_scan_at!=null,error:immediateScanError||health.last_error||null},
+            meta:{...(snapshot.meta||{}),live:health.running===true,radar:'KAHIR_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         }catch(e){
           return send(res,503,{error:String(e?.message??e),candidates:[],alerts:[],monitoring:kahirRadar.health(),meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'KAHIR_RADAR'}});
         }
