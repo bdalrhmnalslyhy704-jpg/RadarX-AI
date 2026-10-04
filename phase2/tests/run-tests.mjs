@@ -17,6 +17,7 @@ const phase2=[
   'phase2/tests/frontend-contract.test.mjs',
   'phase2/tests/integration-failures.test.mjs',
   'phase2/tests/liquidity-absorption-radar.test.mjs',
+  'phase2/tests/radar-suite-v2.test.mjs',
   'phase2/tests/kahir-radar.test.mjs',
   'phase2/tests/market-radar.test.mjs',
   'phase2/tests/monitor-phone-independence.test.mjs',
