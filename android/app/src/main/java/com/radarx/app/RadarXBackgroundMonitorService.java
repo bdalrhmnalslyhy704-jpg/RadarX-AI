@@ -275,7 +275,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         Notification.Builder builder = notificationBuilder(CHANNEL_STATUS)
             .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
             .setContentTitle("RadarX • الرادارات المستقلة")
-            .setContentText("4 رادارات مستقلة • إشعار واحد من الخلاصة الموحدة")
+            .setContentText("5 رادارات مستقلة • إشعار واحد من الخلاصة الموحدة")
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .setColor(Color.rgb(53, 201, 255))
