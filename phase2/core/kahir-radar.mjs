@@ -119,7 +119,7 @@ export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHis
   const currentSelfReturn=prevSelf?.price>0?((price/prevSelf.price)-1)*100:0;
   const previousSelfReturn=selfHistory.at(-2)?.price>0&&prevSelf?.price>0?((prevSelf.price/selfHistory.at(-2).price)-1)*100:0;
   const selfAccelerationPct=currentSelfReturn-previousSelfReturn;
-  const relativeAccelerationBps=selfAccelerationPct*100-selfCurrentMedian(selfHistory);
+  const relativeAccelerationBps=selfAccelerationPct*100-(finite(marketVelocityBps,0));
 
   const participationScore=clamp(50+(volumeRatio-1)*28+(tradeRatio-1)*22);
   const impulseScore=clamp(50+z1*15+z5*18);
@@ -206,11 +206,6 @@ export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHis
     source:'Binance Public REST',detected_at:now,processed_at:now,
     paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
   };
-}
-
-function selfCurrentMedian(history){
-  const v=(history||[]).map(x=>finite(x?.velocity_bps,null)).filter(Number.isFinite);
-  return median(v)??0;
 }
 
 function buildKahirAlert(candidate,analysis,now=Date.now()){
@@ -321,7 +316,7 @@ export class KahirRadar{
     const u=row._kahir||{};
     const history=(this.selfSnapshots.get(row.symbol)||[]).filter(x=>Number.isFinite(x?.price));
     return buildKahirAnalysis({
-      oneMinute:m1.candles,fiveMinute:m5.candles,ticker:row,selfHistory:history,
+      oneMinute:m1.candles,fiveMinute:m5.candles,ticker:row,selfHistory:history.slice(0,-1),
       marketVelocityBps:this.lastMarketVelocityBps,now:this.clock()
     });
   }
