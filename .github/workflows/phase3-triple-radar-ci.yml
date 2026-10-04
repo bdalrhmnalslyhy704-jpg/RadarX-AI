@@ -10,6 +10,7 @@ on:
       - phase5-fix-bottom-radar-enable-deep-scan
       - phase5-ci-runtime-timeout-hardening
       - phase6-radar4-independent-microstructure
+      - phase5-kahir-independent-radar
       - fix-four-radars-runtime
       - fix-radar-runtime-return-market-data
   pull_request:
