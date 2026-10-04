@@ -177,15 +177,16 @@ test('TEST_FIXTURE: independent radar status/control and unified alerts preserve
   const strong=makeRadar('STRONG_MOVE_RADAR','Radar 2 — Strong-Move');
   const rotation=makeRadar('ROTATION_LAG_RADAR','Radar 3 — Rotation/Lag');
   const r4=makeRadar('LIQUIDITY_ABSORPTION_RADAR','Radar 4 — Liquidity Absorption');
+  const r5=makeRadar('KAHIR_RADAR','Radar 5 — القاهر');
   await store.appendMoveAlert({id:'R1',radar:'EARLY_MOVE_RADAR',symbol:'R1USDT',processed_at:Date.now()-1000,detected_at:Date.now()-1000,price:1});
   await store.appendLiquidityAbsorptionAlert({id:'R4',radar:'LIQUIDITY_ABSORPTION_RADAR',radar_name:'Radar 4 — Liquidity Absorption',symbol:'R4USDT',processed_at:Date.now(),detected_at:Date.now(),price:2});
   const server=createApiServer({config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},store,
     monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},
-    pushProvider:new NoopPushProvider(),moveSentinel:early,strongMoveRadar:strong,rotationLagRadar:rotation,liquidityAbsorptionRadar:r4});
+    pushProvider:new NoopPushProvider(),moveSentinel:early,strongMoveRadar:strong,rotationLagRadar:rotation,liquidityAbsorptionRadar:r4,kahirRadar:r5});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base='http://127.0.0.1:'+server.address().port;
   const status=await (await fetch(base+'/api/radar-status')).json();
-  assert.equal(status.radars.length,4);assert.equal(status.radars.every(x=>x.running===false),true);
+  assert.equal(status.radars.length,5);assert.equal(status.radars.every(x=>x.running===false),true);
   const start=await (await fetch(base+'/api/radar-control?radar=LIQUIDITY_ABSORPTION_RADAR&action=start',{method:'POST'})).json();
   assert.equal(start.running,true);assert.equal(early.running,false);assert.equal(strong.running,false);assert.equal(rotation.running,false);assert.equal(r4.running,true);
   const alerts=await (await fetch(base+'/api/radar-alerts?radar=ALL&limit=10')).json();
