@@ -99,3 +99,21 @@ test('Kahir scans a full Spot universe before selecting a bounded deep set',asyn
   assert.equal(radar.health().closed_candles_only,true);
   await radar.stop();
 });
+
+
+test('Kahir keeps its loop alive when a transient market request fails',async()=>{
+  let calls=0;
+  const rest={
+    async request(){calls++; throw new Error('TRANSIENT_BINANCE_FAILURE');},
+    async klines(){throw new Error('TRANSIENT_BINANCE_FAILURE');},
+    health(){return{state:'ERROR'};}
+  };
+  const radar=new KahirRadar({rest,store:{appendKahirAlert:async()=>{}},config:{pollMs:60000},logger:{warn(){}}});
+  radar.running=true;
+  const ok=await radar.tick();
+  assert.equal(ok,false);
+  assert.equal(radar.health().running,true);
+  assert.match(radar.health().last_error,/TRANSIENT_BINANCE_FAILURE/);
+  assert.ok(calls>=1);
+  await radar.stop();
+});
