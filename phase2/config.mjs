@@ -152,6 +152,21 @@ export const CONFIG = Object.freeze({
     minRelativeAccelerationBps: float(process.env.RADARX_KAHIR_MIN_RELATIVE_ACCEL_BPS, 1.5),
     maxAbs24hMovePct: float(process.env.RADARX_KAHIR_MAX_24H_MOVE_PCT, 15)
   },
+  professorRadar: {
+    quote: 'USDT',
+    pollMs: int(process.env.RADARX_PROFESSOR_POLL_MS, 120000),
+    universeRefreshMs: int(process.env.RADARX_PROFESSOR_UNIVERSE_REFRESH_MS, 15 * 60 * 1000),
+    liveSearchLimit: int(process.env.RADARX_PROFESSOR_LIVE_SEARCH_LIMIT, 8),
+    transcriptStreams: int(process.env.RADARX_PROFESSOR_TRANSCRIPT_STREAMS, 2),
+    newsLimit: int(process.env.RADARX_PROFESSOR_NEWS_LIMIT, 35),
+    deepCandidates: int(process.env.RADARX_PROFESSOR_DEEP_CANDIDATES, 5),
+    deepConcurrency: int(process.env.RADARX_PROFESSOR_DEEP_CONCURRENCY, 2),
+    alertCooldownMs: int(process.env.RADARX_PROFESSOR_ALERT_COOLDOWN_MS, 30 * 60 * 1000),
+    minEntryScore: int(process.env.RADARX_PROFESSOR_MIN_ENTRY_SCORE, 78),
+    minWatchScore: int(process.env.RADARX_PROFESSOR_MIN_WATCH_SCORE, 66),
+    webTimeoutMs: int(process.env.RADARX_PROFESSOR_WEB_TIMEOUT_MS, 7000),
+    transcriptTimeoutMs: int(process.env.RADARX_PROFESSOR_TRANSCRIPT_TIMEOUT_MS, 6000)
+  },
   paper: {
     feeRate: float(process.env.RADARX_PAPER_FEE_RATE, 0.001),
     slippageBps: float(process.env.RADARX_PAPER_SLIPPAGE_BPS, 5),
