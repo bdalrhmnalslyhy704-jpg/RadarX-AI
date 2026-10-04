@@ -135,10 +135,11 @@ jobs:
           test -s "${RUNNER_TEMP}/radarx-release.keystore"
 
       - name: Run Android dashboard regression tests
+        timeout-minutes: 3
         run: |
           set -euo pipefail
-          node android/backend-client-regression.mjs
-          node --test android/app/src/main/assets/tests/market-radar-integration.test.mjs
+          timeout 75s node android/backend-client-regression.mjs
+          timeout 75s node --test android/app/src/main/assets/tests/market-radar-integration.test.mjs
 
       - name: Validate embedded RadarX JavaScript syntax
         run: |
