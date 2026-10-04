@@ -118,7 +118,7 @@ async function scanMarket(){
         try{
           const r=await getBottomRadar({quote:'USDT',limit:scanLimit});
           if(r.ok&&r.body){
-            const rows=rankBottomCandidates(r.body);
+            const rows=rankBottomCandidates(r.body, requestedLimit);
             status.innerHTML='<b>تم التحديث</b> — '+rows.length+' مرشحًا صالحًا من '+Number(r.body?.universe?.scanned||0)+' عملة مفحوصة بعمق • اكتشاف '+Number(r.body?.universe?.discovered||0)+' • فحص '+scanLimit;
             render(rows);
             return;
