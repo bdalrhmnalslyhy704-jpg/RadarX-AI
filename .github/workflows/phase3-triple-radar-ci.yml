@@ -52,6 +52,7 @@ jobs:
           node --check phase2/core/early-move-sentinel.mjs
           node --check phase2/core/symbol-deep-analyzer.mjs
           node --check phase2/core/liquidity-absorption-radar.mjs
+          node --check phase2/core/kahir-radar.mjs
           node --check phase2/core/radar-alert-meta.mjs
           node --check android/app/src/main/assets/radarx-symbol-deep-scan.mjs
           node --check android/app/src/main/assets/radarx-backend-client.mjs
