@@ -54,7 +54,7 @@ export const RADAR_PROFILES=Object.freeze({
     timeframes:['15m','1h','4h'],
     algorithms:['Public Live Discovery','Trade-Claim Extraction','Caption Evidence','News Clustering','News Tone','Market Structure','EMA/RSI/MACD/ADX/VWAP','Support/Resistance','Trap Risk','Spot Paper Decision'],
     guardrails:['مصادر عامة فقط','الشموع المغلقة فقط','لا تنفيذ أوامر حقيقية','لا أسعار أو صفقات وهمية']
-
+  })
 });
 function clamp100(v){return Math.max(0,Math.min(100,Number.isFinite(Number(v))?Number(v):50));}
 function meanNumbers(values){
