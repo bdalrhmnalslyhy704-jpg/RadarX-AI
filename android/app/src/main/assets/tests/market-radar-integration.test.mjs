@@ -198,6 +198,7 @@ assert.match(backgroundServiceSourceForMove,/KAHIR_RADAR/);
 assert.match(backgroundServiceSourceForMove,/detected_time_12h/);
 assert.match(backgroundServiceSourceForMove,/formatTimestamp12h/);
 assert.match(backgroundServiceSourceForMove,/setReadTimeout\(30_000\)/);
+assert.match(backgroundServiceSourceForMove,/KAHIR_RADAR/);
 const backgroundService=await readFile(new URL('../../java/com/radarx/app/RadarXBackgroundMonitorService.java',import.meta.url),'utf8');
 assert.match(indexHtml,/backgroundMonitorPanel/);
 assert.match(indexHtml,/mountBackgroundMonitorControl/);
