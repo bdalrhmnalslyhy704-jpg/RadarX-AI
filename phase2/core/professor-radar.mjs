@@ -137,13 +137,13 @@ async function mapLimit(items,limit,fn){
   const worker=async()=>{while(true){const i=next++;if(i>=items.length)return;try{out[i]=await fn(items[i],i);}catch(error){out[i]={error:String(error?.message??error)};}}};
   await Promise.all(Array.from({length:Math.max(1,Math.min(limit,items.length))},worker));return out;
 }
-function buildOpinion(candidate,deep,now){
+function buildOpinion(candidate,deep,now,entryThreshold=75,watchThreshold=66){
   const tech=finite(deep?.assessment?.direction_score,50);const trap=finite(deep?.assessment?.trap_risk,50);
   const technical=clamp(tech-(trap>65?(trap-65)*0.6:0));const stream=finite(candidate.stream_score,50);const news=finite(candidate.news_score,50);
   const evidenceTypes=[candidate.stream_mentions>0,candidate.news_mentions>0,deep].filter(Boolean).length;const score=clamp(technical*.48+stream*.30+news*.22);
   let action='WAIT_CONFIRMATION',stance='رأيي: انتظار';
-  if(score>=75&&technical>=68&&stream>=60&&news>=50){action='PAPER_ENTRY_CANDIDATE';stance='رأيي: أميل للشراء الورقي المشروط';}
-  else if(score>=66){action='PAPER_WATCH';stance='رأيي: أميل للصعود لكن أحتاج تأكيدًا قبل الدخول الورقي';}
+  if(score>=entryThreshold&&technical>=68&&stream>=60&&news>=50){action='PAPER_ENTRY_CANDIDATE';stance='رأيي: أميل للشراء الورقي المشروط';}
+  else if(score>=watchThreshold){action='PAPER_WATCH';stance='رأيي: أميل للصعود لكن أحتاج تأكيدًا قبل الدخول الورقي';}
   else if(score<48){action='SPOT_AVOID';stance='رأيي: أتجنب الشراء Spot حاليًا';}
   const px=finite(deep?.price?.last,finite(deep?.price?.last_closed_15m));const support=finite(deep?.zones?.support);const resistance=finite(deep?.zones?.resistance);
   let paperTrade=null;
@@ -158,7 +158,7 @@ function buildAlert(candidate,opinion,now){
   return {id:'PROFESSOR:'+candidate.symbol+':'+now,event:'PROFESSOR_LIVE_TRADE_INTELLIGENCE',radar:'PROFESSOR_RADAR',radar_name:'Radar 6 — البروفيسور',symbol:candidate.symbol,market:'SPOT',direction:opinion.action==='PAPER_ENTRY_CANDIDATE'?'UP_BIAS':opinion.action==='SPOT_AVOID'?'DOWN_OR_RISK':'NEUTRAL',opportunity_score:opinion.score,potential_label:opinion.action,professor_opinion:opinion,trade_claims:candidate.trade_claims.slice(0,12),news_items:candidate.news_items.slice(0,12),stream_mentions:candidate.stream_mentions,news_mentions:candidate.news_mentions,source:'YouTube Public Search + GDELT DOC 2.0 + Binance Public REST',detected_at:now,processed_at:now,detected_at_iso:new Date(now).toISOString(),detected_time_12h:formatRadarTime12h(now),detected_timezone:'Asia/Aden',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true,disclaimer:opinion.disclaimer};
 }
 export function classifyStreamClaim(text){return streamClaim(text);}
-export function calculateProfessorOpinion(input){return buildOpinion(input.candidate||input,input.deep||null,input.now||Date.now());}
+export function calculateProfessorOpinion(input){return buildOpinion(input.candidate||input,input.deep||null,input.now||Date.now(),input.entryThreshold??75,input.watchThreshold??66);}
 
 export class ProfessorRadar{
   constructor({rest,store,pushManager=null,deepAnalyzer=null,config={},clock=()=>Date.now(),logger=console,fetchImpl=globalThis.fetch}={}){
@@ -204,7 +204,7 @@ export class ProfessorRadar{
       const mentions=aggregateMentions({streams:this.latestStreams,news:this.latestNews,index}).sort((a,b)=>(b.stream_mentions+b.news_mentions)-(a.stream_mentions+a.news_mentions)).slice(0,Math.max(1,this.config.deepCandidates));
       const deep=await mapLimit(mentions,this.config.deepConcurrency,async c=>({candidate:c,deep:this.deepAnalyzer?await this.deepAnalyzer.scan(c.symbol):null}));const enriched=[];
       for(const row of deep){
-        if(row?.error)continue;const opinion=buildOpinion(row.candidate,row.deep,now);const result={...row.candidate,deep_scan:row.deep,opinion};enriched.push(result);this.scans++;
+        if(row?.error)continue;const opinion=buildOpinion(row.candidate,row.deep,now,this.config.minEntryScore,this.config.minWatchScore);const result={...row.candidate,deep_scan:row.deep,opinion};enriched.push(result);this.scans++;
         if(opinion.action==='PAPER_ENTRY_CANDIDATE'&&opinion.evidence_types>=2&&now-(this.lastAlertAt.get(result.symbol)||0)>=this.config.alertCooldownMs){
           const alert=buildAlert(result,opinion,now);this.lastAlertAt.set(result.symbol,now);await this.store.appendProfessorAlert(alert);if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(alert);this.alertCount++;
         }
