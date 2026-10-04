@@ -132,7 +132,7 @@ function subscriptionValid(x){
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,symbolDeepAnalyzer=null}= {}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null, kahirRadar=null,symbolDeepAnalyzer=null}= {}){
   const counters=new Map();
   const moveConfig=config.moveRadar||{thresholdPct:1};
   const originList=config.auth.allowedOrigins;
@@ -179,7 +179,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(!rateOk(key))return send(res,429,{error:'RATE_LIMITED'});
     try{
       const u=new URL(req.url,'http://localhost');
-      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false}});
+      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false},kahir_radar:kahirRadar?.health?.()||{running:false}});
       if(u.pathname==='/api/radar-status'&&req.method==='GET')return send(res,200,{radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
       if(u.pathname==='/api/radar-control'&&(req.method==='POST'||req.method==='GET')){
         const radar=String(u.searchParams.get('radar')||'').trim().toUpperCase();
@@ -285,6 +285,21 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           const m=String(e?.message??e);
           const status=/INVALID_QUOTE|INVALID_EXCHANGE_INFO/.test(m)?400:/RATE_LIMIT|TIMEOUT|UNAVAILABLE|FAILED|NETWORK|FETCH|ECONN|ENOTFOUND|ETIMEDOUT/.test(m)?502:500;
           return send(res,status,{error:m,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'BOTTOM_REVERSAL'},source:'Binance Public REST',candidates:[]});
+        }
+      }
+      if(u.pathname==='/api/kahir-radar'&&req.method==='GET'){
+        if(!kahirRadar)return send(res,503,{error:'KAHIR_RADAR_UNAVAILABLE',meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'KAHIR_RADAR'},candidates:[]});
+        const sinceRaw=Number(u.searchParams.get('since')||0);
+        const limit=Math.max(1,Math.min(50,Math.trunc(Number(u.searchParams.get('limit')||20))));
+        try{
+          const alerts=typeof store.readKahirAlerts==='function'
+            ? await store.readKahirAlerts({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit})
+            : [];
+          const health=kahirRadar.health();
+          const snapshot=kahirRadar.snapshot(limit);
+          return send(res,200,{...snapshot,monitoring:health,alerts,meta:{...(snapshot.meta||{}),live:health.running===true,radar:'KAHIR_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        }catch(e){
+          return send(res,503,{error:String(e?.message??e),candidates:[],alerts:[],monitoring:kahirRadar.health(),meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'KAHIR_RADAR'}});
         }
       }
       if(u.pathname==='/api/pre-move-radar'&&req.method==='GET'){
