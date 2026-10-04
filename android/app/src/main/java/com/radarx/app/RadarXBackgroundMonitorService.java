@@ -135,7 +135,7 @@ public final class RadarXBackgroundMonitorService extends Service {
                 JSONArray alerts = root.optJSONArray("alerts");
                 int count = notifyNewRadarAlerts(alerts == null ? new JSONArray() : alerts);
                 JSONArray radars = root.optJSONArray("radars");
-                updateStatus("رادارات مستقلة • " + (radars == null ? 4 : radars.length()) +
+                updateStatus("رادارات مستقلة • " + (radars == null ? 5 : radars.length()) +
                     " • اكتشافات جديدة: " + count);
             } else {
                 updateStatus("الرادارات المستقلة غير متاحة حاليًا؛ لا يتم توليد بيانات صناعية");
@@ -253,6 +253,7 @@ public final class RadarXBackgroundMonitorService extends Service {
             case "STRONG_MOVE_RADAR": return "Radar 2 — Strong-Move";
             case "ROTATION_LAG_RADAR": return "Radar 3 — Rotation/Lag";
             case "LIQUIDITY_ABSORPTION_RADAR": return "Radar 4 — Liquidity Absorption";
+            case "KAHIR_RADAR": return "Radar 5 — القاهر";
             default: return "RadarX";
         }
     }
@@ -274,7 +275,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         Notification.Builder builder = notificationBuilder(CHANNEL_STATUS)
             .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
             .setContentTitle("RadarX • الرادارات المستقلة")
-            .setContentText("4 رادارات مستقلة • إشعار واحد من الخلاصة الموحدة")
+            .setContentText("5 رادارات مستقلة • إشعار واحد من الخلاصة الموحدة")
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .setColor(Color.rgb(53, 201, 255))

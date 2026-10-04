@@ -151,6 +151,7 @@ jobs:
           test -f android/app/src/main/assets/radarx-background-control.mjs
           node --check android/app/src/main/assets/radarx-background-control.mjs
           node --check android/app/src/main/assets/radarx-bottom-reversal.mjs
+          node --check phase2/core/kahir-radar.mjs
           node --check android/app/src/main/assets/radarx-pre-move.mjs
           node --check android/app/src/main/assets/radarx-move-radar.mjs
           test -f android/app/src/main/assets/pre-move-radar.html
@@ -161,6 +162,7 @@ jobs:
           test -f android/app/src/main/assets/radar4-liquidity-absorption.html
           test -f android/app/src/main/assets/tradli.html
           test -f android/app/src/main/assets/bottom-radar.html
+          test -f android/app/src/main/assets/kahir-radar.html
           test -f android/app/src/main/java/com/radarx/app/BottomRadarActivity.java
 
       - name: Build signed universal Release APK
@@ -226,8 +228,8 @@ jobs:
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "RadarX 6.8.12 Native — Four Independent Radars ${GITHUB_RUN_NUMBER}" \
-            --notes "Signed universal APK built from ${GITHUB_REF_NAME} at commit ${GITHUB_SHA}. Includes four independently controlled radars: Early-Wake, Strong-Move, Rotation/Lag, and Liquidity Absorption, plus Symbol Deep Scan. Alerts identify the producing radar and detection time in 12-hour Asia/Aden format. Paper Trading only; real_order_execution=false."
+            --title "RadarX Native — Five Independent Radars ${GITHUB_RUN_NUMBER}" \
+            --notes "Signed universal APK built from ${GITHUB_REF_NAME} at commit ${GITHUB_SHA}. Includes five independently controlled radars: Early-Wake, Strong-Move, Rotation/Lag, Liquidity Absorption, and Kahir (القاهر), plus Symbol Deep Scan. Alerts identify the producing radar and detection time in 12-hour Asia/Aden format. Paper Trading only; real_order_execution=false."
 
       - name: Remove signing keystore before artifact upload
         if: always()
