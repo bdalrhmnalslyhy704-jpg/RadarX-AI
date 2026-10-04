@@ -32,5 +32,8 @@ assert.match(background,/api\/rotation-radar\?quote=USDT&limit=50/);
 assert.match(background,/rotation_alert_cursor_at/);
 assert.match(background,/CHANNEL_ROTATION_ALERTS/);
 
-assert.match(background,/foregroundServiceType=\"dataSync\\|specialUse\"/);
+const manifest = await readFile(new URL('./app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
+const mainActivity = await readFile(new URL('./app/src/main/java/com/radarx/app/MainActivity.java', import.meta.url), 'utf8');
+assert.match(manifest,/android:foregroundServiceType="dataSync\\|specialUse"/);
+assert.match(manifest,/android:process=":radar_background"/);
 assert.match(mainActivity,/BACKGROUND_START_DELAY_MS/);
