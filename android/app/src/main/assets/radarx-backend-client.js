@@ -140,15 +140,16 @@ export async function getBottomRadar({quote = 'USDT', limit = 10} = {}, fetchImp
   );
 }
 
-export async function getKahirRadar({quote = 'USDT', limit = 20, since = 0} = {}, fetchImpl = globalThis.fetch) {
+export async function getKahirRadar({quote = 'USDT', limit = 20, since = 0, scan = true} = {}, fetchImpl = globalThis.fetch) {
   const safeQuote = String(quote || 'USDT').trim().toUpperCase();
   const safeLimit = Number(limit);
   if (!/^[A-Z]{2,10}$/.test(safeQuote)) throw new Error('INVALID_QUOTE');
   if (!Number.isInteger(safeLimit) || safeLimit < 1 || safeLimit > 50) throw new Error('INVALID_LIMIT');
   const safeSince = Number(since);
   const sinceParam = Number.isFinite(safeSince) && safeSince > 0 ? '&since=' + encodeURIComponent(String(Math.trunc(safeSince))) : '';
+  const scanParam = scan ? '&scan=1' : '';
   const base = normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
-  return requestJson(base, '/api/kahir-radar?quote=' + encodeURIComponent(safeQuote) + '&limit=' + encodeURIComponent(String(safeLimit)) + sinceParam, fetchImpl, 180000);
+  return requestJson(base, '/api/kahir-radar?quote=' + encodeURIComponent(safeQuote) + '&limit=' + encodeURIComponent(String(safeLimit)) + sinceParam + scanParam, fetchImpl, 180000);
 }
 
 export async function getSymbolDeepScan(symbol, fetchImpl = globalThis.fetch) {

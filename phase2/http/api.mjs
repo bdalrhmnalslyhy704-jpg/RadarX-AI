@@ -293,6 +293,10 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         const sinceRaw=Number(u.searchParams.get('since')||0);
         const limit=Math.max(1,Math.min(50,Math.trunc(Number(u.searchParams.get('limit')||20))));
         try{
+          const runNow=String(u.searchParams.get('scan')||'').trim()==='1';
+          if(runNow && kahirRadar.health().running===true && !kahirRadar.health().busy) {
+            await kahirRadar.tick();
+          }
           const alerts=typeof store.readKahirAlerts==='function'
             ? await store.readKahirAlerts({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit})
             : [];
