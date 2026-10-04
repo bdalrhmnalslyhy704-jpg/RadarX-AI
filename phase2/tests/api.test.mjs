@@ -225,3 +225,24 @@ test('TEST_FIXTURE: Kahir route can trigger an immediate scan without requiring 
   assert.equal(body.meta.radar,'KAHIR_RADAR');
   await new Promise(resolve=>server2.close(resolve));
 });
+
+
+test('TEST_FIXTURE: Kahir immediate scan failure returns resilient status instead of HTTP 503',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-kahir-api-failure-')),store=await new DurableStore({dir}).init();
+  const kahir={
+    health:()=>({running:true,busy:false,last_scan_at:null,last_error:'TRANSIENT_BINANCE_FAILURE',radar:'KAHIR_RADAR',radar_name:'Radar 5 — القاهر'}),
+    tick:async()=>{throw new Error('TRANSIENT_BINANCE_FAILURE');},
+    snapshot:()=>({radar:'KAHIR_RADAR',radar_name:'Radar 5 — القاهر',as_of:null,universe:{scanned:0,deep_scanned:0,eligible_spot_symbols:0},candidates:[],meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}})
+  };
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'},monitoring:{running:true}})};
+  const server=createApiServer({config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},store,monitor,pushProvider:new NoopPushProvider(),kahirRadar:kahir});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const res=await fetch('http://127.0.0.1:'+server.address().port+'/api/kahir-radar?limit=20&scan=1');
+    assert.equal(res.status,200);
+    const body=await res.json();
+    assert.equal(body.meta.radar,'KAHIR_RADAR');
+    assert.equal(body.scan.requested,true);
+    assert.match(String(body.scan.error),/TRANSIENT_BINANCE_FAILURE/);
+  }finally{await new Promise(resolve=>server.close(resolve));}
+});
