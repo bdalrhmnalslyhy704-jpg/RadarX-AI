@@ -132,8 +132,9 @@ public final class MainActivity extends Activity {
 
         setContentView(webView);
         webView.loadUrl(APP_URL);
-        // Background monitoring is started only after the embedded UI reports UI_READY.
-        // This prevents the foreground-service launch from racing the Activity/WebView startup.
+        // Start the monitor shortly after the Activity is visible. The service does not depend
+        // on WebView/module readiness, so a UI-side script error cannot prevent background monitoring.
+        webView.postDelayed(backgroundStartRunnable, 1200L);
     }
 
     private static boolean isAllowedAppUri(Uri uri) {

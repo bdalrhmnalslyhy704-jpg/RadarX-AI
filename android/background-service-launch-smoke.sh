@@ -7,7 +7,7 @@ adb install -r "$APK" >/dev/null
 adb shell am force-stop com.radarx.app || true
 adb logcat -c
 adb shell am start -W -n com.radarx.app/.MainActivity >/dev/null
-for _ in $(seq 1 15); do
+for _ in $(seq 1 30); do
   PID="$(adb shell pidof com.radarx.app | tr -d '\r' || true)"
   if [ -n "$PID" ]; then break; fi
   sleep 1
@@ -19,7 +19,7 @@ if printf '%s\n' "$LOGS" | grep -Eq 'FATAL EXCEPTION|Process com\.radarx\.app.*h
   printf '%s\n' "$LOGS" | tail -250
   exit 1
 fi
-SERVICE="$(adb shell dumpsys activity services com.radarx.app/.RadarXBackgroundMonitorService 2>/dev/null || true)"
+SERVICE="$(adb shell dumpsys activity services 2>/dev/null | grep -A12 -B3 -F 'RadarXBackgroundMonitorService' || true)"
 if ! printf '%s\n' "$SERVICE" | grep -q 'RadarXBackgroundMonitorService'; then
   echo "Background service was not registered"
   printf '%s\n' "$SERVICE"
