@@ -148,7 +148,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     EARLY_MOVE_RADAR:{name:RADAR_NAMES.EARLY_MOVE_RADAR,instance:moveSentinel,read:'readMoveAlerts'},
     STRONG_MOVE_RADAR:{name:RADAR_NAMES.STRONG_MOVE_RADAR,instance:strongMoveRadar,read:'readStrongMoveAlerts'},
     ROTATION_LAG_RADAR:{name:RADAR_NAMES.ROTATION_LAG_RADAR,instance:rotationLagRadar,read:'readRotationAlerts'},
-    LIQUIDITY_ABSORPTION_RADAR:{name:RADAR_NAMES.LIQUIDITY_ABSORPTION_RADAR,instance:liquidityAbsorptionRadar,read:'readLiquidityAbsorptionAlerts'}
+    LIQUIDITY_ABSORPTION_RADAR:{name:RADAR_NAMES.LIQUIDITY_ABSORPTION_RADAR,instance:liquidityAbsorptionRadar,read:'readLiquidityAbsorptionAlerts'},
+    KAHIR_RADAR:{name:RADAR_NAMES.KAHIR_RADAR,instance:kahirRadar,read:'readKahirAlerts'}
   });
   function radarStatus(){
     return Object.entries(radarEntries).map(([id,x])=>{
