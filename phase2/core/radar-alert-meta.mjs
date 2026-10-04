@@ -3,7 +3,8 @@ export const RADAR_NAMES=Object.freeze({
   STRONG_MOVE_RADAR:'Radar 2 — ملك الظلام',
   ROTATION_LAG_RADAR:'Radar 3 — الجوكر',
   LIQUIDITY_ABSORPTION_RADAR:'Radar 4 — الكاسح',
-  KAHIR_RADAR:'Radar 5 — القاهر'
+  KAHIR_RADAR:'Radar 5 — القاهر',
+  PROFESSOR_RADAR:'Radar 6 — البروفيسور'
 });
 export const RADAR_PROFILES=Object.freeze({
   EARLY_MOVE_RADAR:Object.freeze({
@@ -44,8 +45,16 @@ export const RADAR_PROFILES=Object.freeze({
     strength:'الأقوى في ترتيب السوق كاملًا والبحث عن تحولات مبكرة غير عادية.',
     strategy:'Self-Baseline Z + Participation Regime + Volatility Shift + Kaufman Efficiency + Range Acceptance',
     timeframes:['1m','5m'],algorithms:['Self-Baseline Z','Participation Regime','Volatility Regime Shift','Kaufman Efficiency','Range Acceptance','Impulse Persistence','Market Speed Spread'],
-    guardrails:['Spot فقط','Paper فقط','لا أسعار مستقبلية صناعية']
-  })
+    guardrails:['Spot فقط','Paper فقط','لا أسعار مستقبلية صناعية']  }),
+  PROFESSOR_RADAR:Object.freeze({
+    name:RADAR_NAMES.PROFESSOR_RADAR,icon:'🧠',color:'#ec4899',
+    mission:'استخبارات البثوث والأسواق: يجمع ادعاءات الصفقات من مصادر عامة، الأخبار، ثم يطلب تأكيدًا فنيًا حقيقيًا قبل إصدار رأي ورقي.',
+    strength:'يصل بين ما يتحدث عنه المتداولون وما تؤكده الأخبار والسوق بدل نسخ صفقة شخص آخر مباشرة.',
+    strategy:'Live-Trade Claim Fusion + News Catalyst + Binance Technical Confirmation',
+    timeframes:['15m','1h','4h'],
+    algorithms:['Public Live Discovery','Trade-Claim Extraction','Caption Evidence','News Clustering','News Tone','Market Structure','EMA/RSI/MACD/ADX/VWAP','Support/Resistance','Trap Risk','Spot Paper Decision'],
+    guardrails:['مصادر عامة فقط','الشموع المغلقة فقط','لا تنفيذ أوامر حقيقية','لا أسعار أو صفقات وهمية']
+
 });
 function clamp100(v){return Math.max(0,Math.min(100,Number.isFinite(Number(v))?Number(v):50));}
 function meanNumbers(values){
@@ -76,7 +85,7 @@ export function radarPowerScore(alert){
   let power=base*.60+(componentMean??base)*.25+dataQuality*.15;
   if(riskCount)power-=Math.min(12,riskCount*2);
   const thresholds={
-    EARLY_MOVE_RADAR:72,STRONG_MOVE_RADAR:76,ROTATION_LAG_RADAR:78,LIQUIDITY_ABSORPTION_RADAR:82,KAHIR_RADAR:84
+    EARLY_MOVE_RADAR:72,STRONG_MOVE_RADAR:76,ROTATION_LAG_RADAR:78,LIQUIDITY_ABSORPTION_RADAR:82,KAHIR_RADAR:84,PROFESSOR_RADAR:80
   };
   const gate=power>=Number(thresholds[id]??80);
   return {
