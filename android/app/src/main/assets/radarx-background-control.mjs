@@ -7,6 +7,7 @@ const RADARS=[
   {id:'ROTATION_LAG_RADAR',name:'Radar 3 — الجوكر',icon:'🃏',color:'#f59e0b',desc:'يبحث عن العملات المتأخرة عن BTC/ETH عندما يبدأ فرق القوة بالتقلص لصالحها.',algos:'Cross-Market Lead/Lag • Relative Spread • Silent Volume/Price Dislocation'},
   {id:'LIQUIDITY_ABSORPTION_RADAR',name:'Radar 4 — الكاسح',icon:'🧹',color:'#06b6d4',desc:'رادار مختلف: يراقب امتصاص البيع، اختلال دفتر الطلب، البائعين العالقين وتوازن المزاد قبل القفزة.',algos:'Seller Absorption • Depth Imbalance/Vacuum • Trapped Sellers • Microstructure Dislocation • Auction Balance'},
   {id:'KAHIR_RADAR',name:'Radar 5 — القاهر',icon:'👑',desc:'يفحص كامل سوق Spot ويقارن كل عملة بسلوكها السابق، ثم يلتقط التسارع غير المعتاد وجودة الاندفاع قبل أن يصبح مجرد حركة ممتدة.',algos:'Self-Baseline Z • Participation Regime • Volatility Shift • Kaufman Efficiency • Range Acceptance • Impulse Persistence'}
+  ,{id:'DOOMSDAY_RADAR',name:'Radar 6 — يوم القيامة',icon:'☄️',color:'#ff4d3d',desc:'صياد الانفجار المفاجئ: يراقب الشرارة قبل أن تصبح حركة يومية ممتدة، مع مراقبة خاصة لفجائية التسارع.',algos:'1m/3m/5m Momentum • Self Acceleration • RVOL • Trade Surge • Taker Flow • Squeeze Release • Donchian • EMA/VWAP • ATR • BTC Relative Strength'}
 ];
 
 function addStyle(){
@@ -47,7 +48,8 @@ export function mountBackgroundMonitorControl(root){
  STRONG_MOVE_RADAR:'./radar2-dark-king.html',
  ROTATION_LAG_RADAR:'./radar3-joker.html',
  LIQUIDITY_ABSORPTION_RADAR:'./radar4-sweeper.html',
- KAHIR_RADAR:'./kahir-radar.html'
+ KAHIR_RADAR:'./kahir-radar.html',
+ DOOMSDAY_RADAR:'./doomsday-radar.html'
  }[spec.id]||'#')+'">فتح نافذة الرادار</a></div>'+
       '<div class="rx-radar-alerts"><b>آخر اكتشافات هذا الرادار</b>'+ (sourceAlerts.length?sourceAlerts.map(a=>'<div class="rx-radar-alert"><b>'+esc(a.symbol||'—')+'</b> • '+esc(a.potential_label||a.event||'اكتشاف')+' • '+esc(fmt(a.price))+'<small>'+esc(a.radar_name||spec.name)+' • وقت الاكتشاف: '+esc(a.detected_time_12h||'غير متاح')+'</small></div>').join(''):'<div class="rx-radar-empty">لا يوجد اكتشاف محفوظ في المدة المعروضة.</div>')+'</div>'+
       '</article>';
