@@ -39,6 +39,8 @@ public final class RadarXBackgroundMonitorService extends Service {
     private static final String TAG = "RadarXBackground";
     private static final String BACKEND_RADAR_ALERTS =
             "https://radarx-ai-triple-production.up.railway.app/api/radar-alerts?radar=ALL&limit=50";
+    private static final String BACKEND_RADAR_ALERTS_FALLBACK =
+            "https://radarx-ai-production.up.railway.app/api/radar-alerts?radar=ALL&limit=50";
     // Compatibility routes kept as immutable read-only references; active polling uses the unified feed above.
     private static final String BACKEND_MOVE_RADAR =
             "https://radarx-ai-triple-production.up.railway.app/api/move-radar?quote=USDT&limit=50";
@@ -54,7 +56,7 @@ public final class RadarXBackgroundMonitorService extends Service {
     private static final String CHANNEL_ALERTS = "radarx_move_alerts";
     private static final String CHANNEL_STRONG_ALERTS = "radarx_strong_move_alerts";
     private static final String CHANNEL_ROTATION_ALERTS = "radarx_rotation_alerts";
-    private static final String CHANNEL_RADAR_ALERTS = "radarx_radar_alerts";
+    private static final String CHANNEL_RADAR_ALERTS = "radarx_radar_alerts_v2";
     private static final int STATUS_NOTIFICATION_ID = 41001;
     private static final int ALERT_NOTIFICATION_BASE = 42000;
     private static final int STRONG_ALERT_NOTIFICATION_BASE = 43000;
@@ -136,21 +138,29 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     private JSONObject fetchRadarAlertsFeed(long cursor) throws Exception {
-        String url = BACKEND_RADAR_ALERTS + (cursor > 0L ? "&since=" + cursor : "");
-        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
-        try {
-            connection.setRequestMethod("GET");
-            connection.setConnectTimeout(12_000);
-            connection.setReadTimeout(30_000);
-            connection.setInstanceFollowRedirects(false);
-            connection.setRequestProperty("Accept", "application/json");
-            connection.setRequestProperty("Accept-Encoding", "identity");
-            int status = connection.getResponseCode();
-            if (status != 200) throw new IllegalStateException("HTTP_" + status);
-            return new JSONObject(new String(readAll(connection.getInputStream()), StandardCharsets.UTF_8));
-        } finally {
-            connection.disconnect();
+        Exception last = null;
+        String[] bases = {BACKEND_RADAR_ALERTS, BACKEND_RADAR_ALERTS_FALLBACK};
+        for (String base : bases) {
+            HttpURLConnection connection = null;
+            try {
+                String target = base + (base.contains("?") ? "&since=" : "?since=") + cursor;
+                connection = (HttpURLConnection) new URL(target).openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(12_000);
+                connection.setReadTimeout(30_000);
+                connection.setInstanceFollowRedirects(false);
+                connection.setRequestProperty("Accept", "application/json");
+                connection.setRequestProperty("Accept-Encoding", "identity");
+                int status = connection.getResponseCode();
+                if (status != 200) throw new IllegalStateException("HTTP_" + status);
+                return new JSONObject(new String(readAll(connection.getInputStream()), StandardCharsets.UTF_8));
+            } catch (Exception e) {
+                last = e;
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
         }
+        throw last == null ? new IllegalStateException("BACKEND_UNAVAILABLE") : last;
     }
 
     private int notifyNewRadarAlerts(JSONArray alerts) {
@@ -262,11 +272,19 @@ public final class RadarXBackgroundMonitorService extends Service {
             .setPriority(Notification.PRIORITY_LOW);
 
         if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(
-                STATUS_NOTIFICATION_ID,
-                builder.build(),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            );
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(
+                    STATUS_NOTIFICATION_ID,
+                    builder.build(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                );
+            } else {
+                startForeground(
+                    STATUS_NOTIFICATION_ID,
+                    builder.build(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                );
+            }
         } else {
             startForeground(STATUS_NOTIFICATION_ID, builder.build());
         }
