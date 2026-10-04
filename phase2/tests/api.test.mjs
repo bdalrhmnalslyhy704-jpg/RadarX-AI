@@ -203,6 +203,26 @@ test('TEST_FIXTURE: independent radar status/control and unified alerts preserve
 });
 
 
+test('TEST_FIXTURE: Professor route exposes fused live intelligence and is independently controllable',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-professor-api-')),store=await new DurableStore({dir}).init(); let ticked=0;
+  await store.appendProfessorAlert({id:'P1',radar:'PROFESSOR_RADAR',radar_name:'Radar 6 — البروفيسور',symbol:'BTCUSDT',processed_at:Date.now(),detected_at:Date.now()});
+  const professor={
+    health:()=>({running:true,busy:false,last_scan_at:Date.now(),radar:'PROFESSOR_RADAR',radar_name:'Radar 6 — البروفيسور'}),
+    tick:async()=>{ticked++;},
+    snapshot:()=>({radar:'PROFESSOR_RADAR',radar_name:'Radar 6 — البروفيسور',as_of:new Date().toISOString(),universe:{eligible_spot_symbols:100,mentioned_symbols:2,deep_scanned:2},streams:{count:3,live_count:2,source_status:'LIVE',items:[]},news:{count:8,source_status:'LIVE',items:[]},candidates:[],meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}})
+  };
+  const server=createApiServer({config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},store,
+    monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},pushProvider:new NoopPushProvider(),professorRadar:professor});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const status=await (await fetch('http://127.0.0.1:'+server.address().port+'/api/radar-status')).json();
+    assert.equal(status.radars.length,6);assert.equal(status.radars.at(-1).radar_name,'Radar 6 — البروفيسور');
+    const res=await fetch('http://127.0.0.1:'+server.address().port+'/api/professor-radar?scan=1&limit=10');
+    assert.equal(res.status,200);const body=await res.json();assert.equal(ticked,1);assert.equal(body.meta.radar,'PROFESSOR_RADAR');assert.equal(body.alerts.length,1);assert.equal(body.alerts[0].radar_name,'Radar 6 — البروفيسور');
+    assert.equal(body.meta.real_order_execution,false);
+  }finally{await new Promise(resolve=>server.close(resolve));}
+});
+
 test('TEST_FIXTURE: Kahir route can trigger an immediate scan without requiring prior alerts',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-kahir-api-')),store=await new DurableStore({dir}).init();
   let ticked=0;
