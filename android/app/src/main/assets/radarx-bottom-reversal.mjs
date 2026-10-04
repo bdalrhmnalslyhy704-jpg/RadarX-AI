@@ -246,11 +246,12 @@ export function scoreBottomCandidate(c){
   };
 }
 
-export function rankBottomCandidates(body){
+export function rankBottomCandidates(body, limit=10){
+  const safeLimit=Math.max(1,Math.min(50,Number(limit)||10));
   const candidates=Array.isArray(body?.candidates)?body.candidates:[];
   return candidates
     .filter(c=>c?.data_status?.data_valid===true && Number.isFinite(Number(c?.last_price)))
     .map(scoreBottomCandidate)
     .sort((a,b)=>b.score-a.score||b.buyingPressure-a.buyingPressure)
-    .slice(0,10);
+    .slice(0,safeLimit);
 }
