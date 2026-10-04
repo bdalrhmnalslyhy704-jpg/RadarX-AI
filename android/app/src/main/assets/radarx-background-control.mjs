@@ -2,10 +2,10 @@ import {getRadarStatus,getRadarAlerts,setRadarState} from './radarx-backend-clie
 
 const STYLE_ID='radarx-independent-radars-style';
 const RADARS=[
-  {id:'EARLY_MOVE_RADAR',name:'Radar 1 — المدمر',icon:'🌅',desc:'يرصد الاستيقاظ المبكر قبل الحركة الكبيرة، ويمنع مطاردة العملة بعد تمددها.',algos:'Pre-Move Fingerprint • Relative Strength • Compression • Strategy Confluence'},
-  {id:'STRONG_MOVE_RADAR',name:'Radar 2 — ملك الظلام',icon:'⚡',desc:'يرصد توسع الحركة الفعلية فقط بعد تسارع واضح، حجم أعلى وتأكيد تدفق.',algos:'Momentum Burst • Volume Climax • Donchian • ATR/BB Expansion'},
-  {id:'ROTATION_LAG_RADAR',name:'Radar 3 — الجوكر',icon:'🔄',desc:'يبحث عن العملات المتأخرة عن BTC/ETH عندما يبدأ فرق القوة بالتقلص لصالحها.',algos:'Cross-Market Lead/Lag • Relative Spread • Silent Volume/Price Dislocation'},
-  {id:'LIQUIDITY_ABSORPTION_RADAR',name:'Radar 4 — الكاسح',icon:'🧲',desc:'رادار مختلف: يراقب امتصاص البيع، اختلال دفتر الطلب، البائعين العالقين وتوازن المزاد قبل القفزة.',algos:'Seller Absorption • Depth Imbalance/Vacuum • Trapped Sellers • Microstructure Dislocation • Auction Balance'},
+  {id:'EARLY_MOVE_RADAR',name:'Radar 1 — المدمر',icon:'☠️',color:'#ff3b30',desc:'يرصد الاستيقاظ المبكر قبل الحركة الكبيرة، ويمنع مطاردة العملة بعد تمددها.',algos:'Pre-Move Fingerprint • Relative Strength • Compression • Strategy Confluence'},
+  {id:'STRONG_MOVE_RADAR',name:'Radar 2 — ملك الظلام',icon:'🌑',color:'#7c3aed',desc:'يرصد توسع الحركة الفعلية فقط بعد تسارع واضح، حجم أعلى وتأكيد تدفق.',algos:'Momentum Burst • Volume Climax • Donchian • ATR/BB Expansion'},
+  {id:'ROTATION_LAG_RADAR',name:'Radar 3 — الجوكر',icon:'🃏',color:'#f59e0b',desc:'يبحث عن العملات المتأخرة عن BTC/ETH عندما يبدأ فرق القوة بالتقلص لصالحها.',algos:'Cross-Market Lead/Lag • Relative Spread • Silent Volume/Price Dislocation'},
+  {id:'LIQUIDITY_ABSORPTION_RADAR',name:'Radar 4 — الكاسح',icon:'🧹',color:'#06b6d4',desc:'رادار مختلف: يراقب امتصاص البيع، اختلال دفتر الطلب، البائعين العالقين وتوازن المزاد قبل القفزة.',algos:'Seller Absorption • Depth Imbalance/Vacuum • Trapped Sellers • Microstructure Dislocation • Auction Balance'},
   {id:'KAHIR_RADAR',name:'Radar 5 — القاهر',icon:'👑',desc:'يفحص كامل سوق Spot ويقارن كل عملة بسلوكها السابق، ثم يلتقط التسارع غير المعتاد وجودة الاندفاع قبل أن يصبح مجرد حركة ممتدة.',algos:'Self-Baseline Z • Participation Regime • Volatility Shift • Kaufman Efficiency • Range Acceptance • Impulse Persistence'}
 ];
 
@@ -39,7 +39,7 @@ export function mountBackgroundMonitorControl(root){
   function cardHtml(spec,status,alerts){
     const live=status?.running===true;
     const sourceAlerts=(alerts||[]).filter(x=>x.radar===spec.id).slice(0,3);
-    return '<article class="rx-radar-card '+(live?'live':'')+'" data-radar="'+spec.id+'">'+
+    return '<article class="rx-radar-card '+(live?'live':'')+'" style="border-color:'+esc(spec.color||'#1e3b52')+'66" data-radar="'+spec.id+'">'+
       '<div class="rx-radar-card-top"><div><div class="rx-radar-name">'+spec.icon+' '+esc(spec.name)+'</div><div class="rx-radar-desc">'+esc(spec.desc)+'</div><div class="rx-radar-algos">'+esc(spec.algos)+'</div></div>'+
       '<span class="rx-radar-badge"><span class="rx-radar-dot '+(live?'live':'')+'"></span>'+(live?'يعمل':'متوقف')+'</span></div>'+
       '<div class="rx-radar-actions"><button class="rx-radar-btn on" data-action="start" '+(live?'disabled':'')+'>تشغيل هذا الرادار</button><button class="rx-radar-btn off" data-action="stop" '+(live?'':'disabled')+'>إيقاف هذا الرادار</button><a class="rx-radar-btn" href="'+({
