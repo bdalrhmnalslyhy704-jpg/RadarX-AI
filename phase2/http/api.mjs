@@ -132,7 +132,7 @@ function subscriptionValid(x){
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null, kahirRadar=null,symbolDeepAnalyzer=null}= {}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null, kahirRadar=null,professorRadar=null,symbolDeepAnalyzer=null}= {}){
   const counters=new Map();
   const moveConfig=config.moveRadar||{thresholdPct:1};
   const originList=config.auth.allowedOrigins;
@@ -149,7 +149,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     STRONG_MOVE_RADAR:{name:RADAR_NAMES.STRONG_MOVE_RADAR,instance:strongMoveRadar,read:'readStrongMoveAlerts'},
     ROTATION_LAG_RADAR:{name:RADAR_NAMES.ROTATION_LAG_RADAR,instance:rotationLagRadar,read:'readRotationAlerts'},
     LIQUIDITY_ABSORPTION_RADAR:{name:RADAR_NAMES.LIQUIDITY_ABSORPTION_RADAR,instance:liquidityAbsorptionRadar,read:'readLiquidityAbsorptionAlerts'},
-    KAHIR_RADAR:{name:RADAR_NAMES.KAHIR_RADAR,instance:kahirRadar,read:'readKahirAlerts'}
+    KAHIR_RADAR:{name:RADAR_NAMES.KAHIR_RADAR,instance:kahirRadar,read:'readKahirAlerts'},
+    ...(professorRadar?{PROFESSOR_RADAR:{name:RADAR_NAMES.PROFESSOR_RADAR,instance:professorRadar,read:'readProfessorAlerts'}}:{})
   });
   function radarStatus(){
     return Object.entries(radarEntries).map(([id,x])=>{
@@ -180,7 +181,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(!rateOk(key))return send(res,429,{error:'RATE_LIMITED'});
     try{
       const u=new URL(req.url,'http://localhost');
-      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false},kahir_radar:kahirRadar?.health?.()||{running:false}});
+      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false},kahir_radar:kahirRadar?.health?.()||{running:false},professor_radar:professorRadar?.health?.()||{running:false}});
       if(u.pathname==='/api/radar-status'&&req.method==='GET')return send(res,200,{radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
       if(u.pathname==='/api/radar-control'&&(req.method==='POST'||req.method==='GET')){
         const radar=String(u.searchParams.get('radar')||'').trim().toUpperCase();
@@ -332,6 +333,29 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             meta:{...(snapshot.meta||{}),live:health.running===true,radar:'KAHIR_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         }catch(e){
           return send(res,503,{error:String(e?.message??e),candidates:[],alerts:[],monitoring:kahirRadar.health(),meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'KAHIR_RADAR'}});
+        }
+      }
+      if(u.pathname==='/api/professor-radar'&&req.method==='GET'){
+        if(!professorRadar)return send(res,503,{error:'PROFESSOR_RADAR_UNAVAILABLE',candidates:[],streams:{items:[]},news:{items:[]},meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PROFESSOR_RADAR'}});
+        const sinceRaw=Number(u.searchParams.get('since')||0);
+        const limit=Math.max(1,Math.min(50,Math.trunc(Number(u.searchParams.get('limit')||10))));
+        try{
+          const runNow=String(u.searchParams.get('scan')||'').trim()==='1';
+          let immediateScanError=null;
+          const healthBefore=professorRadar.health();
+          if(runNow&&healthBefore.running===true&&!healthBefore.busy){
+            try{await professorRadar.tick();}catch(e){immediateScanError=String(e?.message??e);}
+          }
+          const alerts=typeof store.readProfessorAlerts==='function'
+            ? await store.readProfessorAlerts({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit})
+            : [];
+          const health=professorRadar.health();
+          const snapshot=professorRadar.snapshot(limit);
+          return send(res,200,{...snapshot,monitoring:health,alerts,
+            scan:{requested:runNow,completed:immediateScanError===null&&health.last_scan_at!=null,error:immediateScanError||health.last_error||null},
+            meta:{...(snapshot.meta||{}),live:health.running===true,radar:'PROFESSOR_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        }catch(e){
+          return send(res,503,{error:String(e?.message??e),candidates:[],alerts:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PROFESSOR_RADAR'}});
         }
       }
       if(u.pathname==='/api/pre-move-radar'&&req.method==='GET'){
