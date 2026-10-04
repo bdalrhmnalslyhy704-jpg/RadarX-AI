@@ -133,6 +133,25 @@ export const CONFIG = Object.freeze({
     minScore: int(process.env.RADARX_LIQUIDITY_ABSORPTION_MIN_SCORE, 83),
     minConfirmations: int(process.env.RADARX_LIQUIDITY_ABSORPTION_MIN_CONFIRMATIONS, 6)
   },
+  kahirRadar: {
+    quote: 'USDT',
+    pollMs: int(process.env.RADARX_KAHIR_POLL_MS, 30000),
+    universeRefreshMs: int(process.env.RADARX_KAHIR_UNIVERSE_REFRESH_MS, 5 * 60 * 1000),
+    minQuoteVolume24h: int(process.env.RADARX_KAHIR_MIN_QUOTE_VOLUME_24H, 500000),
+    baselineHistory: int(process.env.RADARX_KAHIR_BASELINE_HISTORY, 8),
+    deepCandidates: int(process.env.RADARX_KAHIR_DEEP_CANDIDATES, 14),
+    deepConcurrency: int(process.env.RADARX_KAHIR_DEEP_CONCURRENCY, 4),
+    deepOneMinuteKlines: int(process.env.RADARX_KAHIR_1M_KLINES, 150),
+    deepFiveMinuteKlines: int(process.env.RADARX_KAHIR_5M_KLINES, 100),
+    alertCooldownMs: int(process.env.RADARX_KAHIR_ALERT_COOLDOWN_MS, 20 * 60 * 1000),
+    minScore: int(process.env.RADARX_KAHIR_MIN_SCORE, 84),
+    minOneMinuteZ: float(process.env.RADARX_KAHIR_MIN_1M_Z, 1.8),
+    minFiveMinuteZ: float(process.env.RADARX_KAHIR_MIN_5M_Z, 1.6),
+    minVolumeRatio: float(process.env.RADARX_KAHIR_MIN_VOLUME_RATIO, 1.35),
+    minEfficiency: float(process.env.RADARX_KAHIR_MIN_EFFICIENCY, 0.52),
+    minRelativeAccelerationBps: float(process.env.RADARX_KAHIR_MIN_RELATIVE_ACCEL_BPS, 1.5),
+    maxAbs24hMovePct: float(process.env.RADARX_KAHIR_MAX_24H_MOVE_PCT, 15)
+  },
   paper: {
     feeRate: float(process.env.RADARX_PAPER_FEE_RATE, 0.001),
     slippageBps: float(process.env.RADARX_PAPER_SLIPPAGE_BPS, 5),
