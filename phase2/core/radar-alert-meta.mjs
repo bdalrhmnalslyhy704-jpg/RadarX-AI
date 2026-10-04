@@ -3,7 +3,6 @@ export const RADAR_NAMES=Object.freeze({
   STRONG_MOVE_RADAR:'Radar 2 — Strong-Move',
   ROTATION_LAG_RADAR:'Radar 3 — Rotation/Lag',
   LIQUIDITY_ABSORPTION_RADAR:'Radar 4 — Liquidity Absorption',
-  KAHIR_RADAR:'Radar 5 — القاهر',
   KAHIR_RADAR:'Radar 5 — القاهر'
 });
 export function formatRadarTime12h(ms,timeZone='Asia/Aden'){
