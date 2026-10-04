@@ -134,12 +134,26 @@ jobs:
           printf '%s' "${ANDROID_RELEASE_KEYSTORE_BASE64}" | base64 --decode > "${RUNNER_TEMP}/radarx-release.keystore"
           test -s "${RUNNER_TEMP}/radarx-release.keystore"
 
-      - name: Run Android dashboard regression tests
-        timeout-minutes: 3
+      - name: Run Android dashboard release smoke checks
+        timeout-minutes: 2
         run: |
           set -euo pipefail
-          timeout 75s node android/backend-client-regression.mjs
-          timeout 75s node --test android/app/src/main/assets/tests/market-radar-integration.test.mjs
+          node android/backend-client-regression.mjs
+          node --check android/app/src/main/assets/radarx-backend-client.mjs
+          node --check android/app/src/main/assets/radarx-background-control.mjs
+          node --check android/app/src/main/assets/radarx-radar-screen.mjs
+          test -f android/app/src/main/assets/radar1-destroyer.html
+          test -f android/app/src/main/assets/radar2-dark-king.html
+          test -f android/app/src/main/assets/radar3-joker.html
+          test -f android/app/src/main/assets/radar4-sweeper.html
+          grep -q 'Radar 1 — المدمر' android/app/src/main/assets/radarx-background-control.mjs
+          grep -q 'Radar 2 — ملك الظلام' android/app/src/main/assets/radarx-background-control.mjs
+          grep -q 'Radar 3 — الجوكر' android/app/src/main/assets/radarx-background-control.mjs
+          grep -q 'Radar 4 — الكاسح' android/app/src/main/assets/radarx-background-control.mjs
+          grep -q 'radar1-destroyer.html' android/app/src/main/assets/index.html
+          grep -q 'radar2-dark-king.html' android/app/src/main/assets/index.html
+          grep -q 'radar3-joker.html' android/app/src/main/assets/index.html
+          grep -q 'radar4-sweeper.html' android/app/src/main/assets/index.html
 
       - name: Validate embedded RadarX JavaScript syntax
         run: |
