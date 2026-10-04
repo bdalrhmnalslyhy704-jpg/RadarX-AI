@@ -10,6 +10,8 @@ import android.os.Bundle;
 import android.os.Build;
 import android.Manifest;
 import android.widget.Toast;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 import android.view.View;
 import android.webkit.SslErrorHandler;
@@ -254,7 +256,14 @@ public final class MainActivity extends Activity {
             } else {
                 startService(intent);
             }
-            Toast.makeText(this, "تم تشغيل مراقبة RadarX في الخلفية", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "جاري تشغيل مراقبة RadarX في الخلفية…", Toast.LENGTH_SHORT).show();
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                if (RadarXBackgroundMonitorService.isRunning(MainActivity.this)) {
+                    Toast.makeText(MainActivity.this, "تم تشغيل مراقبة RadarX في الخلفية", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(MainActivity.this, "تعذر تشغيل المراقبة الخلفية؛ التطبيق سيبقى مفتوحًا", Toast.LENGTH_LONG).show();
+                }
+            }, 1200L);
         } catch (Exception error) {
             Log.e("RadarXBackground", "Unable to start background monitor", error);
             Toast.makeText(this, "تعذر تشغيل المراقبة الخلفية", Toast.LENGTH_LONG).show();
@@ -274,11 +283,7 @@ public final class MainActivity extends Activity {
     private void stopBackgroundMonitor() {
         Intent intent = new Intent(this, RadarXBackgroundMonitorService.class);
         intent.setAction(RadarXBackgroundMonitorService.ACTION_STOP);
-        if (Build.VERSION.SDK_INT >= 26) {
-            startService(intent);
-        } else {
-            startService(intent);
-        }
+        stopService(intent);
         Toast.makeText(this, "تم إيقاف مراقبة RadarX في الخلفية", Toast.LENGTH_SHORT).show();
     }
 
