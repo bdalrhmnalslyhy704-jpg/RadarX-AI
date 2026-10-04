@@ -45,8 +45,17 @@ export class DurableStore {
   async appendKahirAlert(v){return this.lock(async()=>{await appendFile(this.files.kahirAlerts,JSON.stringify(v)+'\\n');this.lastWriteAt=Date.now();});}
   async readKahirAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('kahirAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
 
-  async readRecent(kind,limit=100){let s='';try{s=await readFile(this.files[kind],'utf8');}catch{return[];}
-    return s.split('\n').filter(Boolean).slice(-limit).reverse().map(x=>JSON.parse(x));}
+  async readRecent(kind,limit=100){
+    const file=this.files[kind];
+    if(!file)return[];
+    let s='';
+    try{s=await readFile(file,'utf8');}catch{return[];}
+    const rows=[];
+    for(const line of s.split('\n').filter(Boolean).slice(-Math.max(1,Number(limit)||100))){
+      try{rows.push(JSON.parse(line));}catch{}
+    }
+    return rows.reverse();
+  }
   async health(){try{await mkdir(this.dir,{recursive:true});return{state:this.ready?'LIVE':'INIT',path:this.dir,last_write_at:this.lastWriteAt};}
     catch(e){return{state:'ERROR',path:this.dir,error:String(e?.message??e),last_write_at:this.lastWriteAt};}}
   static publicSubscription(s){return{id:s.id,endpoint:s.endpoint,expirationTime:s.expirationTime,created_at:s.created_at,updated_at:s.updated_at,disabled:Boolean(s.disabled)};}
