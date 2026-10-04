@@ -201,3 +201,27 @@ test('TEST_FIXTURE: independent radar status/control and unified alerts preserve
   assert.equal(stopViaGet.running,false);assert.equal(r4.running,false);
   await new Promise(resolve=>server.close(resolve));
 });
+
+
+test('TEST_FIXTURE: Kahir route can trigger an immediate scan without requiring prior alerts',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-kahir-api-')),store=await new DurableStore({dir}).init();
+  let ticked=0;
+  const kahir={
+    health:()=>({running:true,busy:false,radar:'KAHIR_RADAR',radar_name:'Radar 5 — القاهر'}),
+    tick:async()=>{ticked++;},
+    snapshot:()=>({radar:'KAHIR_RADAR',radar_name:'Radar 5 — القاهر',as_of:new Date().toISOString(),universe:{scanned:0,deep_scanned:0,eligible_spot_symbols:0},candidates:[],meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}})
+  };
+  const {server,base}=await startTestApi(store,{});
+  // Recreate with the Kahir dependency because startTestApi has no Kahir instance.
+  await new Promise(resolve=>server.close(resolve));
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server2=createApiServer({config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},
+    store,monitor,pushProvider:new NoopPushProvider(),kahirRadar:kahir});
+  await new Promise(resolve=>server2.listen(0,'127.0.0.1',resolve));
+  const res=await fetch('http://127.0.0.1:'+server2.address().port+'/api/kahir-radar?limit=20&scan=1');
+  assert.equal(res.status,200);
+  assert.equal(ticked,1);
+  const body=await res.json();
+  assert.equal(body.meta.radar,'KAHIR_RADAR');
+  await new Promise(resolve=>server2.close(resolve));
+});
