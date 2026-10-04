@@ -150,6 +150,8 @@ jobs:
           test -f android/app/src/main/assets/radar2-dark-king.html
           test -f android/app/src/main/assets/radar3-joker.html
           test -f android/app/src/main/assets/radar4-sweeper.html
+          test -f android/app/src/main/assets/professor-radar.html
+          test -f android/app/src/main/assets/radarx-professor-radar.mjs
           grep -q 'Radar 1 — المدمر' android/app/src/main/assets/radarx-background-control.mjs
           grep -q 'Radar 2 — ملك الظلام' android/app/src/main/assets/radarx-background-control.mjs
           grep -q 'Radar 3 — الجوكر' android/app/src/main/assets/radarx-background-control.mjs
@@ -174,6 +176,8 @@ jobs:
           test -f android/app/src/main/assets/radar2-dark-king.html
           test -f android/app/src/main/assets/radar3-joker.html
           test -f android/app/src/main/assets/radar4-sweeper.html
+          test -f android/app/src/main/assets/professor-radar.html
+          node --check android/app/src/main/assets/radarx-professor-radar.mjs
           node --check android/app/src/main/assets/radarx-bottom-reversal.mjs
           node --check phase2/core/kahir-radar.mjs
           node --check android/app/src/main/assets/radarx-pre-move.mjs
@@ -250,8 +254,8 @@ jobs:
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "RadarX Native — Five Independent Radars ${GITHUB_RUN_NUMBER}" \
-            --notes "Signed universal APK built from ${GITHUB_REF_NAME} at commit ${GITHUB_SHA}. Includes five independently controlled radars: Early-Wake, Strong-Move, Rotation/Lag, Liquidity Absorption, and Kahir (القاهر), plus Symbol Deep Scan. Alerts identify the producing radar and detection time in 12-hour Asia/Aden format. Paper Trading only; real_order_execution=false."
+            --title "RadarX Native — Six Independent Radars ${GITHUB_RUN_NUMBER}" \
+            --notes "Signed universal APK built from ${GITHUB_REF_NAME} at commit ${GITHUB_SHA}. Includes six independently controlled radars: المدمر, ملك الظلام, الجوكر, الكاسح, القاهر, and البروفيسور. Professor fuses public live-trade claims, realtime public news, and Binance public technical confirmation. Symbol Deep Scan is also included. Alerts identify the producing radar and detection time in 12-hour Asia/Aden format. Paper Trading only; real_order_execution=false."
 
       - name: Remove signing keystore before artifact upload
         if: always()
