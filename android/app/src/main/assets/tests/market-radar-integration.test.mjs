@@ -221,7 +221,7 @@ assert.match(manifest,/TradliActivity/);
 assert.match(mainActivity,/stopBackgroundMonitor/);
 assert.match(manifest,/FOREGROUND_SERVICE_DATA_SYNC/);
 assert.match(manifest,/RadarXBackgroundMonitorService/);
-assert.match(manifest,/foregroundServiceType="specialUse"/);
+assert.match(manifest,/foregroundServiceType="dataSync\|specialUse"/);
 assert.match(manifest,/PROPERTY_SPECIAL_USE_FGS_SUBTYPE/);
 assert.match(manifest,/continuous RadarX market alert monitoring/);
 assert.equal(backgroundService.includes('/api/v3/order'),false);
