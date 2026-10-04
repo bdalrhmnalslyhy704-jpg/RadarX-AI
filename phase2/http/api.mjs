@@ -367,9 +367,10 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           return send(res,200,result);
         }catch(e){
           const m=String(e?.message??e);
-          const status=/INVALID_SYMBOL|INVALID_QUOTE/.test(m)?400:/INSUFFICIENT_CLOSED_CANDLES/.test(m)?503:/BINANCE_|HTTP_|TIMEOUT|RATE_LIMIT|REST_REQUEST/.test(m)?502:500;
+          const status=/INVALID_SYMBOL|INVALID_QUOTE/.test(m)?400:/INSUFFICIENT_CLOSED_CANDLES|BINANCE_|HTTP_(?:418|429|500|502|503|504)|TIMEOUT|RATE_LIMIT|REST_REQUEST|NETWORK|FETCH|ECONN|ENOTFOUND|ETIMEDOUT|ABORT/i.test(m)?503:500;
           return send(res,status,{
             status:'not_ready',
+            code:status===503?'BINANCE_TEMPORARY_UNAVAILABLE':'SYMBOL_DEEP_SCAN_FAILED',
             symbol:rawSymbol||null,
             meta:{live:false,source:'Binance Public REST',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
             paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
