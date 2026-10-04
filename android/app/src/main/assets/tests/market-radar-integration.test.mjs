@@ -203,10 +203,10 @@ const backgroundService=await readFile(new URL('../../java/com/radarx/app/RadarX
 assert.match(indexHtml,/backgroundMonitorPanel/);
 assert.match(indexHtml,/mountBackgroundMonitorControl/);
 assert.match(bgControl,/الرادارات المستقلة/);
-assert.match(bgControl,/Radar 1 — Early-Wake/);
-assert.match(bgControl,/Radar 2 — Strong-Move/);
-assert.match(bgControl,/Radar 3 — Rotation\/Lag/);
-assert.match(bgControl,/Radar 4 — Liquidity Absorption/);
+assert.match(bgControl,/Radar 1 — المدمر/);
+assert.match(bgControl,/Radar 2 — ملك الظلام/);
+assert.match(bgControl,/Radar 3 — الجوكر/);
+assert.match(bgControl,/Radar 4 — الكاسح/);
 assert.match(bgControl,/Radar 5 — القاهر/);
 assert.match(bgControl,/تشغيل هذا الرادار/);
 assert.match(bgControl,/إيقاف هذا الرادار/);
