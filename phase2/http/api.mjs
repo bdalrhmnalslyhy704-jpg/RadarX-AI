@@ -3,7 +3,7 @@ import {verifySessionToken} from '../core/auth.mjs';
 import {defaultSettings} from '../core/signal-service.mjs';
 import {DurableStore} from '../core/store.mjs';
 import {MarketUniverseScanner} from '../market/universe-scanner.mjs';
-import {RADAR_NAMES,formatRadarTime12h,decorateRadarAlert} from '../core/radar-alert-meta.mjs';
+import {RADAR_NAMES,RADAR_PROFILES,formatRadarTime12h,decorateRadarAlert} from '../core/radar-alert-meta.mjs';
 import {SymbolDeepAnalyzer,normalizeDeepScanSymbol} from '../core/symbol-deep-analyzer.mjs';
 
 function send(res,status,body,extra={}){
@@ -154,7 +154,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
   function radarStatus(){
     return Object.entries(radarEntries).map(([id,x])=>{
       const health=typeof x.instance?.health==='function'?x.instance.health():{running:false,radar:id,radar_name:x.name};
-      return {radar:id,radar_name:x.name,running:Boolean(health.running),health};
+      return {radar:id,radar_name:x.name,running:Boolean(health.running),profile:RADAR_PROFILES[id]||null,health};
     });
   }
   function allowedOrigin(req){
@@ -274,6 +274,29 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           });
         }catch(e){
           return send(res,503,{error:String(e?.message??e),alerts:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'ROTATION_LAG_RADAR'}});
+        }
+      }
+      if(u.pathname==='/api/liquidity-absorption-radar'&&req.method==='GET'){
+        if(!liquidityAbsorptionRadar)return send(res,503,{error:'LIQUIDITY_ABSORPTION_RADAR_UNAVAILABLE'});
+        const sinceRaw=Number(u.searchParams.get('since')||0);
+        const limit=Math.max(1,Math.min(100,Math.trunc(Number(u.searchParams.get('limit')||50))));
+        try{
+          const alerts=typeof store.readLiquidityAbsorptionAlerts==='function'
+            ? await store.readLiquidityAbsorptionAlerts({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit})
+            : [];
+          const health=liquidityAbsorptionRadar.health();
+          return send(res,200,{
+            meta:{live:health.running===true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'LIQUIDITY_ABSORPTION_RADAR'},
+            source:'Binance Public REST',
+            as_of:new Date(Date.now()).toISOString(),
+            monitoring:health,
+            profile:RADAR_PROFILES.LIQUIDITY_ABSORPTION_RADAR,
+            thresholds:{min_score:Number(config.liquidityAbsorptionRadar?.minScore??83),min_confirmations:Number(config.liquidityAbsorptionRadar?.minConfirmations??6),market:'SPOT',fast_timeframe:'1m',confirmation_timeframe:'5m'},
+            algorithms:health.algorithms||[],
+            alerts
+          });
+        }catch(e){
+          return send(res,503,{error:String(e?.message??e),alerts:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'LIQUIDITY_ABSORPTION_RADAR'}});
         }
       }
       if(u.pathname==='/api/bottom-radar'&&req.method==='GET'){
