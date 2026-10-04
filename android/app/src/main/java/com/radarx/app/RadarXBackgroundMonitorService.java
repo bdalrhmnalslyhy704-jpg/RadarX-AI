@@ -138,7 +138,6 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     private JSONObject fetchRadarAlertsFeed(long cursor) throws Exception {
-        String url = BACKEND_RADAR_ALERTS;
         Exception last = null;
         String[] bases = {BACKEND_RADAR_ALERTS, BACKEND_RADAR_ALERTS_FALLBACK};
         for (String base : bases) {
