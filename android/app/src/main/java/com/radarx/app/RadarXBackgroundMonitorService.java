@@ -409,7 +409,13 @@ public final class RadarXBackgroundMonitorService extends Service {
             .setColor(Color.rgb(53, 201, 255))
             .setPriority(Notification.PRIORITY_LOW);
 
-        if (Build.VERSION.SDK_INT >= 29) {
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(
+                STATUS_NOTIFICATION_ID,
+                builder.build(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            );
+        } else if (Build.VERSION.SDK_INT >= 29) {
             startForeground(
                 STATUS_NOTIFICATION_ID,
                 builder.build(),
