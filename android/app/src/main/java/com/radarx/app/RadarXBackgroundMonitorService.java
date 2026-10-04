@@ -346,7 +346,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         NotificationChannel radarAlerts = new NotificationChannel(
             CHANNEL_RADAR_ALERTS, "RadarX Independent Radar Alerts", NotificationManager.IMPORTANCE_HIGH
         );
-        radarAlerts.setDescription("تنبيهات موحدة للرادارات الأربعة المستقلة");
+        radarAlerts.setDescription("تنبيهات موحدة للرادارات الخمسة المستقلة");
         manager.createNotificationChannel(radarAlerts);
     }
 
