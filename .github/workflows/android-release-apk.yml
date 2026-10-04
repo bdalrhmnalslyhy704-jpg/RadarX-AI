@@ -152,6 +152,8 @@ jobs:
           test -f android/app/src/main/assets/radar4-sweeper.html
           test -f android/app/src/main/assets/professor-radar.html
           test -f android/app/src/main/assets/radarx-professor-radar.mjs
+          test -f android/app/src/main/assets/doomsday-radar.html
+          node --check android/app/src/main/assets/radarx-doomsday-radar.mjs
           grep -q 'Radar 1 — المدمر' android/app/src/main/assets/radarx-background-control.mjs
           grep -q 'Radar 2 — ملك الظلام' android/app/src/main/assets/radarx-background-control.mjs
           grep -q 'Radar 3 — الجوكر' android/app/src/main/assets/radarx-background-control.mjs
@@ -160,6 +162,8 @@ jobs:
           grep -q 'radar2-dark-king.html' android/app/src/main/assets/index.html
           grep -q 'radar3-joker.html' android/app/src/main/assets/index.html
           grep -q 'radar4-sweeper.html' android/app/src/main/assets/index.html
+          grep -q 'doomsday-radar.html' android/app/src/main/assets/index.html
+          grep -q 'doomsday-radar.html' android/app/src/main/assets/index.html
 
       - name: Validate embedded RadarX JavaScript syntax
         run: |
@@ -179,6 +183,7 @@ jobs:
           test -f android/app/src/main/assets/professor-radar.html
           node --check android/app/src/main/assets/radarx-professor-radar.mjs
           node --check android/app/src/main/assets/radarx-bottom-reversal.mjs
+          node --check phase2/core/doomsday-radar.mjs
           node --check phase2/core/kahir-radar.mjs
           node --check android/app/src/main/assets/radarx-pre-move.mjs
           node --check android/app/src/main/assets/radarx-move-radar.mjs
@@ -255,7 +260,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "RadarX Native — Six Independent Radars ${GITHUB_RUN_NUMBER}" \
-            --notes "Signed universal APK built from ${GITHUB_REF_NAME} at commit ${GITHUB_SHA}. Includes six independently controlled radars: المدمر, ملك الظلام, الجوكر, الكاسح, القاهر, and البروفيسور. Professor fuses public live-trade claims, realtime public news, and Binance public technical confirmation. Symbol Deep Scan is also included. Alerts identify the producing radar and detection time in 12-hour Asia/Aden format. Paper Trading only; real_order_execution=false."
+            --notes "Signed universal APK built from ${GITHUB_REF_NAME} at commit ${GITHUB_SHA}. Includes six numbered radars: المدمر, ملك الظلام, الجوكر, الكاسح, القاهر, and يوم القيامة. البروفيسور is an additional public-intelligence radar. Professor fuses public live-trade claims, realtime public news, and Binance public technical confirmation. Symbol Deep Scan is also included. Alerts identify the producing radar and detection time in 12-hour Asia/Aden format. Paper Trading only; real_order_execution=false."
 
       - name: Remove signing keystore before artifact upload
         if: always()
