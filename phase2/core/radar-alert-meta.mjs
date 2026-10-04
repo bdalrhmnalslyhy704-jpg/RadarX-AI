@@ -99,7 +99,14 @@ export function formatRadarTime12h(ms,timeZone='Asia/Aden'){
 export function decorateRadarAlert(alert,radarName){
   const now=Number(alert?.detected_at);
   const at=Number.isFinite(now)?now:Date.now();
-  return {...alert,radar_name:alert?.radar_name||radarName||RADAR_NAMES[alert?.radar]||'RadarX',detected_at:at,
+  const radar=String(alert?.radar||'').toUpperCase();
+  const radar_v2=radarPowerScore(alert);
+  const profile=RADAR_PROFILES[radar]||null;
+  return {...alert,radar_name:alert?.radar_name||radarName||RADAR_NAMES[radar]||'RadarX',
+    radar_profile:profile,
+    radar_v2,
+    radar_power_score:radar_v2.score,
+    detected_at:at,
     detected_at_iso:alert?.detected_at_iso||new Date(at).toISOString(),
     detected_time_12h:alert?.detected_time_12h||formatRadarTime12h(at),
     detected_timezone:'Asia/Aden',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'};
