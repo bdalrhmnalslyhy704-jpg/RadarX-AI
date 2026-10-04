@@ -313,7 +313,7 @@ function analyzeTimeframe(candles, timeframe) {
   };
 }
 
-const TRANSIENT_SOURCE_ERROR=/HTTP_(?:418|429|500|502|503|504)\\b|TIMEOUT|RATE_LIMIT|REST_REQUEST|NETWORK|FETCH|ECONN|ENOTFOUND|ETIMEDOUT|ABORT/i;
+const TRANSIENT_SOURCE_ERROR=/HTTP_(?:418|429|500|502|503|504)\b|TIMEOUT|RATE_LIMIT|REST_REQUEST|NETWORK|FETCH|ECONN|ENOTFOUND|ETIMEDOUT|ABORT/i;
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function retrySource(fn,{attempts=3,baseDelayMs=450}={}){
   let lastError;
