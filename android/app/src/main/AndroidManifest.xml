@@ -22,6 +22,7 @@
             android:enabled="true"
             android:exported="false"
             android:stopWithTask="false"
+            android:process=":radar_background"
             android:foregroundServiceType="dataSync|specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
