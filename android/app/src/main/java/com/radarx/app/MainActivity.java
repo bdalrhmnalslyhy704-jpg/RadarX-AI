@@ -45,7 +45,13 @@ public final class MainActivity extends Activity {
     private static final String BACKEND_FALLBACK_ORIGIN =
             "https://radarx-ai-production.up.railway.app";
     private static final int REQUEST_POST_NOTIFICATIONS = 7301;
+    private static final long BACKGROUND_START_DELAY_MS = 2500L;
     private boolean pendingBackgroundStart;
+    private final Runnable backgroundStartRunnable = () -> {
+        if (!isFinishing() && (Build.VERSION.SDK_INT < 17 || !isDestroyed())) {
+            requestNotificationPermissionAndStart();
+        }
+    };
 
     private WebView webView;
     private WebViewAssetLoader assetLoader;
@@ -129,7 +135,7 @@ public final class MainActivity extends Activity {
         webView.loadUrl(APP_URL);
         // Start the user-requested background alert channel automatically.
         // On Android 13+ this first requests POST_NOTIFICATIONS when needed.
-        webView.postDelayed(this::requestNotificationPermissionAndStart, 1200L);
+        webView.postDelayed(backgroundStartRunnable, BACKGROUND_START_DELAY_MS);
     }
 
     private static boolean isAllowedAppUri(Uri uri) {
@@ -359,6 +365,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         if (webView != null) {
+            webView.removeCallbacks(backgroundStartRunnable);
             webView.loadUrl("about:blank");
             webView.stopLoading();
             webView.setWebChromeClient(null);
