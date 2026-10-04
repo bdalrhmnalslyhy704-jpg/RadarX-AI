@@ -31,3 +31,6 @@ const background = await readFile(new URL('./app/src/main/java/com/radarx/app/Ra
 assert.match(background,/api\/rotation-radar\?quote=USDT&limit=50/);
 assert.match(background,/rotation_alert_cursor_at/);
 assert.match(background,/CHANNEL_ROTATION_ALERTS/);
+
+assert.match(background,/foregroundServiceType=\"dataSync\\|specialUse\"/);
+assert.match(mainActivity,/BACKGROUND_START_DELAY_MS/);

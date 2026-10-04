@@ -207,6 +207,15 @@ jobs:
 
           sha256sum "${RUNNER_TEMP}/radarx-release/radarx-release.apk"
 
+      - name: Android 11 launch and background-service smoke
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          target: default
+          arch: x86_64
+          force-avd-creation: true
+          script: bash android/background-service-launch-smoke.sh
+
       - name: Publish signed APK GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

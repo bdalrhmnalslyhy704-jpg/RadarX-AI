@@ -99,7 +99,16 @@ public final class RadarXBackgroundMonitorService extends Service {
             return START_NOT_STICKY;
         }
 
-        scheduleScan();
+        try {
+            scheduleScan();
+        } catch (Throwable error) {
+            Log.e(TAG, "Background scheduler failed; keeping foreground service alive", error);
+            try {
+                updateStatus("تم تشغيل خدمة الخلفية؛ تعذر بدء جدولة الفحص وستتم إعادة المحاولة.");
+            } catch (Throwable ignored) {
+                Log.e(TAG, "Unable to publish scheduler failure status", ignored);
+            }
+        }
         return START_STICKY;
     }
 
