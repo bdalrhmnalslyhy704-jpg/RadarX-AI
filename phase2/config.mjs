@@ -98,8 +98,8 @@ export const CONFIG = Object.freeze({
     pollMs: int(process.env.RADARX_STRONG_MOVE_POLL_MS, 15000),
     universeRefreshMs: int(process.env.RADARX_STRONG_MOVE_UNIVERSE_REFRESH_MS, 60000),
     minQuoteVolume24h: int(process.env.RADARX_STRONG_MOVE_MIN_QUOTE_VOLUME_24H, 1000000),
-    rotationBatchSize: int(process.env.RADARX_STRONG_MOVE_ROTATION_BATCH, 6),
-    topMoverCount: int(process.env.RADARX_STRONG_MOVE_TOP_MOVERS, 4),
+    rotationBatchSize: int(process.env.RADARX_STRONG_MOVE_ROTATION_BATCH, 7),
+    topMoverCount: int(process.env.RADARX_STRONG_MOVE_TOP_MOVERS, 6),
     alertCooldownMs: int(process.env.RADARX_STRONG_MOVE_ALERT_COOLDOWN_MS, 5 * 60 * 1000),
     minScore: int(process.env.RADARX_STRONG_MOVE_MIN_SCORE, 76)
   },
