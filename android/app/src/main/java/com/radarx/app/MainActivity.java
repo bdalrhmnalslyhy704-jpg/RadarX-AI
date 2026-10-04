@@ -45,7 +45,6 @@ public final class MainActivity extends Activity {
     private static final String BACKEND_FALLBACK_ORIGIN =
             "https://radarx-ai-production.up.railway.app";
     private static final int REQUEST_POST_NOTIFICATIONS = 7301;
-    private static final long BACKGROUND_START_DELAY_MS = 2500L;
     private boolean pendingBackgroundStart;
     private final Runnable backgroundStartRunnable = () -> {
         if (!isFinishing() && (Build.VERSION.SDK_INT < 17 || !isDestroyed())) {
@@ -133,9 +132,8 @@ public final class MainActivity extends Activity {
 
         setContentView(webView);
         webView.loadUrl(APP_URL);
-        // Start the user-requested background alert channel automatically.
-        // On Android 13+ this first requests POST_NOTIFICATIONS when needed.
-        webView.postDelayed(backgroundStartRunnable, BACKGROUND_START_DELAY_MS);
+        // Background monitoring is started only after the embedded UI reports UI_READY.
+        // This prevents the foreground-service launch from racing the Activity/WebView startup.
     }
 
     private static boolean isAllowedAppUri(Uri uri) {
@@ -250,6 +248,7 @@ public final class MainActivity extends Activity {
 
 
     private void startBackgroundMonitor() {
+        if (RadarXBackgroundMonitorService.isRunning(this)) return;
         try {
             Intent intent = new Intent(this, RadarXBackgroundMonitorService.class);
             intent.setAction(RadarXBackgroundMonitorService.ACTION_START);
@@ -329,10 +328,13 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private static final class RadarXSmokeBridge {
+    private final class RadarXSmokeBridge {
         @JavascriptInterface
         public void state(String value) {
             Log.i("RadarXSmoke", String.valueOf(value));
+            if ("UI_READY".equals(String.valueOf(value))) {
+                webView.postDelayed(backgroundStartRunnable, 400L);
+            }
         }
     }
 
