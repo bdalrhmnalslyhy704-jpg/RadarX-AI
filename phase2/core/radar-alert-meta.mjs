@@ -1,10 +1,92 @@
 export const RADAR_NAMES=Object.freeze({
-  EARLY_MOVE_RADAR:'Radar 1 — Early-Wake',
-  STRONG_MOVE_RADAR:'Radar 2 — Strong-Move',
-  ROTATION_LAG_RADAR:'Radar 3 — Rotation/Lag',
-  LIQUIDITY_ABSORPTION_RADAR:'Radar 4 — Liquidity Absorption',
+  EARLY_MOVE_RADAR:'Radar 1 — المدمر',
+  STRONG_MOVE_RADAR:'Radar 2 — ملك الظلام',
+  ROTATION_LAG_RADAR:'Radar 3 — الجوكر',
+  LIQUIDITY_ABSORPTION_RADAR:'Radar 4 — الكاسح',
   KAHIR_RADAR:'Radar 5 — القاهر'
 });
+export const RADAR_PROFILES=Object.freeze({
+  EARLY_MOVE_RADAR:Object.freeze({
+    name:RADAR_NAMES.EARLY_MOVE_RADAR,icon:'☠️',color:'#ff3b30',
+    mission:'صياد ما قبل الانفجار: يلتقط العملة وهي هادئة قبل تمدد الحركة.',
+    strength:'الأفضل لاكتشاف الاستيقاظ المبكر بدل مطاردة الارتفاع بعد حدوثه.',
+    strategy:'Pre-Breakout Fingerprint + Relative Strength + Compression + Strategy Confluence',
+    timeframes:['1m','5m','15m'],algorithms:['Fast Impulse','RVOL Awakening','Taker Flow','EMA Reclaim','S/R Proximity','RSI Turn','OBV Accumulation','Wyckoff Spring','MTF Alignment'],
+    guardrails:['يمنع العملة الممتدة','يرفض ضعف جودة البيانات','لا يدخل الشمعة غير المغلقة']
+  }),
+  STRONG_MOVE_RADAR:Object.freeze({
+    name:RADAR_NAMES.STRONG_MOVE_RADAR,icon:'🌑',color:'#7c3aed',
+    mission:'كشف الانفجار الجاري: يقيس تسارع السعر والحجم والتداول والاتساع في الدقيقة مع تأكيد 5m.',
+    strength:'الأقوى عندما تكون الحركة قد بدأت فعلًا ويظهر توسع حقيقي وليس مجرد شمعة منفردة.',
+    strategy:'Momentum Burst + Flash Acceleration + Volume/Trade Climax + Breakout + VWAP/BB/ATR',
+    timeframes:['1m','5m'],algorithms:['Momentum Burst','Flash Acceleration','Volume Climax','Trade Count Surge','Taker Flow Acceleration','Donchian Breakout','EMA Burst','VWAP Displacement','Bollinger Expansion','Efficiency Ratio','ATR Expansion'],
+    guardrails:['يغلق شموعًا فقط','يمنع الحركة المتطرفة جدًا','يحتاج أكثر من دليل قبل التنبيه']
+  }),
+  ROTATION_LAG_RADAR:Object.freeze({
+    name:RADAR_NAMES.ROTATION_LAG_RADAR,icon:'🃏',color:'#f59e0b',
+    mission:'صائد الدوران: يبحث عن عملة متأخرة عن BTC/ETH ثم تبدأ في استعادة القوة النسبية.',
+    strength:'يفيد قبل انتقال السيولة من القادة إلى العملات المتأخرة.',
+    strategy:'Cross-Market Lead/Lag + Relative Spread + Value Acceptance + Momentum Turn',
+    timeframes:['15m','1h'],algorithms:['BTC/ETH Lead-Lag','Relative Strength Spread','Silent Volume Dislocation','VWAP Reclaim/Rejection','Value Acceptance','RSI/MFI Turn','Stochastic Turn','Price Persistence','Range Compression'],
+    guardrails:['يرفض الحركة اليومية الممتدة','يحتاج توافق السوق والعملة','لا يعتبر التأخر وحده إشارة']
+  }),
+  LIQUIDITY_ABSORPTION_RADAR:Object.freeze({
+    name:RADAR_NAMES.LIQUIDITY_ABSORPTION_RADAR,icon:'🧹',color:'#06b6d4',
+    mission:'كاسح السيولة: يلتقط امتصاص البيع واختلال دفتر الأوامر وتحرر البائعين قبل التحول.',
+    strength:'الأقوى عند القيعان والنطاقات عندما يكون الحجم مرتفعًا لكن الحركة الصافية ما زالت صغيرة.',
+    strategy:'Seller Absorption + Depth Imbalance/Vacuum + Trapped Sellers + Auction Balance',
+    timeframes:['1m','5m'],algorithms:['Seller Absorption','Depth Imbalance/Vacuum','Trapped Seller Release','Microstructure Dislocation','Local Auction Balance','Fractal Micro-Structure','5m Confirmation'],
+    guardrails:['يرفض السبريد الواسع','يرفض الحركة اليومية الممتدة','يشترط حجمًا وامتصاصًا حقيقيين']
+  }),
+  KAHIR_RADAR:Object.freeze({
+    name:RADAR_NAMES.KAHIR_RADAR,icon:'👑',color:'#22c55e',
+    mission:'مسح السوق الكامل ومقارنة كل عملة بخط أساسها الذاتي لاكتشاف التسارع غير المعتاد.',
+    strength:'الأقوى في ترتيب السوق كاملًا والبحث عن تحولات مبكرة غير عادية.',
+    strategy:'Self-Baseline Z + Participation Regime + Volatility Shift + Kaufman Efficiency + Range Acceptance',
+    timeframes:['1m','5m'],algorithms:['Self-Baseline Z','Participation Regime','Volatility Regime Shift','Kaufman Efficiency','Range Acceptance','Impulse Persistence','Market Speed Spread'],
+    guardrails:['Spot فقط','Paper فقط','لا أسعار مستقبلية صناعية']
+  })
+});
+function clamp100(v){return Math.max(0,Math.min(100,Number.isFinite(Number(v))?Number(v):50));}
+function meanNumbers(values){
+  const a=values.map(Number).filter(Number.isFinite);
+  return a.length?a.reduce((s,x)=>s+x,0)/a.length:null;
+}
+function collectObjectScores(obj){
+  if(!obj||typeof obj!=='object')return [];
+  const out=[];
+  for(const [k,v] of Object.entries(obj)){
+    if(typeof v==='number'&&Number.isFinite(v)&&/(score|strength|potential)/i.test(k)&&!/(min|max|threshold|count|total)/i.test(k))out.push(v);
+    else if(v&&typeof v==='object')out.push(...collectObjectScores(v));
+  }
+  return out;
+}
+export function radarPowerScore(alert){
+  const id=String(alert?.radar||'').toUpperCase();
+  const base=clamp100(alert?.opportunity_score);
+  const blocks={
+    EARLY_MOVE_RADAR:alert?.early_wake,
+    STRONG_MOVE_RADAR:alert?.strong_move,
+    ROTATION_LAG_RADAR:alert?.rotation,
+    LIQUIDITY_ABSORPTION_RADAR:alert?.liquidity_absorption
+  };
+  const componentMean=meanNumbers(collectObjectScores(blocks[id]));
+  const dataQuality=clamp100(alert?.data_quality??alert?.data_status?.data_quality??100);
+  const riskCount=Array.isArray(alert?.risk_flags)?alert.risk_flags.length:0;
+  let power=base*.60+(componentMean??base)*.25+dataQuality*.15;
+  if(riskCount)power-=Math.min(12,riskCount*2);
+  const thresholds={
+    EARLY_MOVE_RADAR:72,STRONG_MOVE_RADAR:76,ROTATION_LAG_RADAR:78,LIQUIDITY_ABSORPTION_RADAR:82,KAHIR_RADAR:84
+  };
+  const gate=power>=Number(thresholds[id]??80);
+  return {
+    score:Number(clamp100(power).toFixed(1)),
+    gate,
+    threshold:Number(thresholds[id]??80),
+    component_mean:componentMean==null?null:Number(componentMean.toFixed(1)),
+    risk_penalty:Math.min(12,riskCount*2)
+  };
+}
 export function formatRadarTime12h(ms,timeZone='Asia/Aden'){
   const d=new Date(Number(ms));
   if(!Number.isFinite(d.getTime()))return 'غير متاح';
@@ -17,7 +99,14 @@ export function formatRadarTime12h(ms,timeZone='Asia/Aden'){
 export function decorateRadarAlert(alert,radarName){
   const now=Number(alert?.detected_at);
   const at=Number.isFinite(now)?now:Date.now();
-  return {...alert,radar_name:alert?.radar_name||radarName||RADAR_NAMES[alert?.radar]||'RadarX',detected_at:at,
+  const radar=String(alert?.radar||'').toUpperCase();
+  const radar_v2=radarPowerScore(alert);
+  const profile=RADAR_PROFILES[radar]||null;
+  return {...alert,radar_name:alert?.radar_name||radarName||RADAR_NAMES[radar]||'RadarX',
+    radar_profile:profile,
+    radar_v2,
+    radar_power_score:radar_v2.score,
+    detected_at:at,
     detected_at_iso:alert?.detected_at_iso||new Date(at).toISOString(),
     detected_time_12h:alert?.detected_time_12h||formatRadarTime12h(at),
     detected_timezone:'Asia/Aden',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'};
