@@ -5,7 +5,8 @@ const RADARS=[
   {id:'EARLY_MOVE_RADAR',name:'Radar 1 — Early-Wake',icon:'🌅',desc:'يرصد الاستيقاظ المبكر قبل الحركة الكبيرة، ويمنع مطاردة العملة بعد تمددها.',algos:'Pre-Move Fingerprint • Relative Strength • Compression • Strategy Confluence'},
   {id:'STRONG_MOVE_RADAR',name:'Radar 2 — Strong-Move',icon:'⚡',desc:'يرصد توسع الحركة الفعلية فقط بعد تسارع واضح، حجم أعلى وتأكيد تدفق.',algos:'Momentum Burst • Volume Climax • Donchian • ATR/BB Expansion'},
   {id:'ROTATION_LAG_RADAR',name:'Radar 3 — Rotation/Lag',icon:'🔄',desc:'يبحث عن العملات المتأخرة عن BTC/ETH عندما يبدأ فرق القوة بالتقلص لصالحها.',algos:'Cross-Market Lead/Lag • Relative Spread • Silent Volume/Price Dislocation'},
-  {id:'LIQUIDITY_ABSORPTION_RADAR',name:'Radar 4 — Liquidity Absorption',icon:'🧲',desc:'رادار مختلف: يراقب امتصاص البيع، اختلال دفتر الطلب، البائعين العالقين وتوازن المزاد قبل القفزة.',algos:'Seller Absorption • Depth Imbalance/Vacuum • Trapped Sellers • Microstructure Dislocation • Auction Balance'}
+  {id:'LIQUIDITY_ABSORPTION_RADAR',name:'Radar 4 — Liquidity Absorption',icon:'🧲',desc:'رادار مختلف: يراقب امتصاص البيع، اختلال دفتر الطلب، البائعين العالقين وتوازن المزاد قبل القفزة.',algos:'Seller Absorption • Depth Imbalance/Vacuum • Trapped Sellers • Microstructure Dislocation • Auction Balance'},
+  {id:'KAHIR_RADAR',name:'Radar 5 — القاهر',icon:'👑',desc:'يفحص كامل سوق Spot ويقارن كل عملة بسلوكها السابق، ثم يلتقط التسارع غير المعتاد وجودة الاندفاع قبل أن يصبح مجرد حركة ممتدة.',algos:'Self-Baseline Z • Participation Regime • Volatility Shift • Kaufman Efficiency • Range Acceptance • Impulse Persistence'}
 ];
 
 function addStyle(){
