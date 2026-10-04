@@ -86,7 +86,9 @@ export function radarPowerScore(alert){
     EARLY_MOVE_RADAR:alert?.early_wake,
     STRONG_MOVE_RADAR:alert?.strong_move,
     ROTATION_LAG_RADAR:alert?.rotation,
-    LIQUIDITY_ABSORPTION_RADAR:alert?.liquidity_absorption
+    LIQUIDITY_ABSORPTION_RADAR:alert?.liquidity_absorption,
+    DOOMSDAY_RADAR:alert?.doomsday,
+    PROFESSOR_RADAR:alert?.professor
   };
   const componentMean=meanNumbers(collectObjectScores(blocks[id]));
   const dataQuality=clamp100(alert?.data_quality??alert?.data_status?.data_quality??100);
