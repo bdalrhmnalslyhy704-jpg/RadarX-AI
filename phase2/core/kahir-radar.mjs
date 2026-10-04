@@ -343,7 +343,7 @@ export class KahirRadar{
     return result;
   }
   async tick(){
-    if(!this.running||this.busy)return;
+    if(!this.running||this.busy)return false;
     this.busy=true;
     try{
       if(this.clock()-this.universeAt>this.config.universeRefreshMs)await this.refreshUniverse();
@@ -356,6 +356,7 @@ export class KahirRadar{
       await Promise.all(Array.from({length:Math.min(limit,selected.length)},worker));
       this.latestCandidates=out.filter(Boolean).sort((a,b)=>b.score-a.score).slice(0,20);
       this.lastScanAtMs=this.clock();
+      this.lastError=null;
       this.lastResult={
         radar:'KAHIR_RADAR',radar_name:'Radar 5 — القاهر',as_of:new Date(this.lastScanAtMs).toISOString(),
         universe:{eligible_spot_symbols:this.universe.length,scanned:rows.length,deep_scanned:selected.length},
@@ -363,6 +364,23 @@ export class KahirRadar{
         candidates:this.latestCandidates,
         meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}
       };
+      return true;
+    }catch(e){
+      this.lastScanAtMs=this.clock();
+      this.noteError(e,'tick');
+      if(!this.lastResult){
+        this.lastResult={
+          radar:'KAHIR_RADAR',radar_name:'Radar 5 — القاهر',as_of:new Date(this.lastScanAtMs).toISOString(),
+          universe:{eligible_spot_symbols:this.universe.length,scanned:0,deep_scanned:0},
+          market:{velocity_bps:this.lastMarketVelocityBps},
+          candidates:this.latestCandidates||[],
+          scan_error:this.lastError,
+          meta:{live:Boolean(this.running),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}
+        };
+      }else{
+        this.lastResult={...this.lastResult,scan_error:this.lastError,as_of:new Date(this.lastScanAtMs).toISOString()};
+      }
+      return false;
     }finally{this.busy=false;}
   }
   snapshot(limit=20){
