@@ -57,3 +57,9 @@ jobs:
           node --check phase2/core/radar-alert-meta.mjs
           node --check android/app/src/main/assets/radarx-symbol-deep-scan.mjs
           node --check android/app/src/main/assets/radarx-backend-client.mjs
+          node --check android/app/src/main/assets/radarx-background-control.mjs
+          node --check android/app/src/main/assets/radarx-radar-screen.mjs
+          test -f android/app/src/main/assets/radar1-destroyer.html
+          test -f android/app/src/main/assets/radar2-dark-king.html
+          test -f android/app/src/main/assets/radar3-joker.html
+          test -f android/app/src/main/assets/radar4-sweeper.html
