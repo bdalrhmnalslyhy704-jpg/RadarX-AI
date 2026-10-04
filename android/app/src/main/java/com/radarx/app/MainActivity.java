@@ -127,6 +127,9 @@ public final class MainActivity extends Activity {
 
         setContentView(webView);
         webView.loadUrl(APP_URL);
+        // Start the user-requested background alert channel automatically.
+        // On Android 13+ this first requests POST_NOTIFICATIONS when needed.
+        webView.postDelayed(this::requestNotificationPermissionAndStart, 1200L);
     }
 
     private static boolean isAllowedAppUri(Uri uri) {
