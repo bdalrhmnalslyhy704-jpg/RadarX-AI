@@ -152,6 +152,26 @@ export const CONFIG = Object.freeze({
     minRelativeAccelerationBps: float(process.env.RADARX_KAHIR_MIN_RELATIVE_ACCEL_BPS, 1.5),
     maxAbs24hMovePct: float(process.env.RADARX_KAHIR_MAX_24H_MOVE_PCT, 15)
   },
+  doomsdayRadar: {
+    quote: 'USDT',
+    pollMs: int(process.env.RADARX_DOOMSDAY_POLL_MS, 15000),
+    universeRefreshMs: int(process.env.RADARX_DOOMSDAY_UNIVERSE_REFRESH_MS, 5 * 60 * 1000),
+    minQuoteVolume24h: int(process.env.RADARX_DOOMSDAY_MIN_QUOTE_VOLUME_24H, 500000),
+    deepCandidates: int(process.env.RADARX_DOOMSDAY_DEEP_CANDIDATES, 10),
+    deepConcurrency: int(process.env.RADARX_DOOMSDAY_DEEP_CONCURRENCY, 4),
+    oneMinuteKlines: int(process.env.RADARX_DOOMSDAY_1M_KLINES, 120),
+    fiveMinuteKlines: int(process.env.RADARX_DOOMSDAY_5M_KLINES, 80),
+    alertCooldownMs: int(process.env.RADARX_DOOMSDAY_ALERT_COOLDOWN_MS, 8 * 60 * 1000),
+    minEarlyScore: int(process.env.RADARX_DOOMSDAY_MIN_EARLY_SCORE, 78),
+    minIgnitionScore: int(process.env.RADARX_DOOMSDAY_MIN_IGNITION_SCORE, 82),
+    minPowerScore: int(process.env.RADARX_DOOMSDAY_MIN_POWER_SCORE, 90),
+    minVolumeRatio: float(process.env.RADARX_DOOMSDAY_MIN_VOLUME_RATIO, 1.35),
+    minTradeRatio: float(process.env.RADARX_DOOMSDAY_MIN_TRADE_RATIO, 1.25),
+    minTakerRatio: float(process.env.RADARX_DOOMSDAY_MIN_TAKER_RATIO, 0.515),
+    max24hMovePct: float(process.env.RADARX_DOOMSDAY_MAX_24H_MOVE_PCT, 18),
+    retryAttempts: int(process.env.RADARX_DOOMSDAY_RETRY_ATTEMPTS, 1),
+    watchlist: ['FETUSDT','SCRUSDT','CHIPUSDT','ORCAUSDT','TSTUSDT','GTCUSDT']
+  },
   professorRadar: {
     quote: 'USDT',
     pollMs: int(process.env.RADARX_PROFESSOR_POLL_MS, 120000),
