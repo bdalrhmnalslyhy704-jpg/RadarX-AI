@@ -99,9 +99,9 @@ test('TEST_FIXTURE: deep symbol scan tolerates transient ticker/depth outages wi
 test('TEST_FIXTURE: deep symbol scan API maps transient source failure to 503, not a gateway error',async(t)=>{
   const candles=fixtureCandles();
   const deadRest={
-    async klines(){throw new Error('HTTP_502');},
-    async ticker24h(){throw new Error('HTTP_502');},
-    async depth(){throw new Error('HTTP_502');}
+    async klines(){throw new Error('HTTP_451');},
+    async ticker24h(){throw new Error('HTTP_451');},
+    async depth(){throw new Error('HTTP_451');}
   };
   const analyzer=new SymbolDeepAnalyzer({rest:deadRest});
   const config={auth:{secret:'',allowedOrigins:[]},api:{rateLimitPerMinute:1000,maxBodyBytes:65536}};
