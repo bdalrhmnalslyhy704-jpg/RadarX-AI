@@ -51,7 +51,7 @@ test('TEST_PROFESSOR: scan fuses public stream + news + Binance technical confir
     if(u.includes('api.gdeltproject.org'))return new Response(JSON.stringify(gdelt),{status:200,headers:{'content-type':'application/json'}});
     throw new Error('UNEXPECTED_URL');
   };
-  const radar=new ProfessorRadar({rest,store,deepAnalyzer,fetchImpl,config:{liveSearchLimit:8,transcriptStreams:1,newsLimit:10,deepCandidates:5,deepConcurrency:1,alertCooldownMs:0,minEntryScore:78,minWatchScore:66},clock:()=>1700000000000,logger:{warn(){}}});
+  const radar=new ProfessorRadar({rest,store,deepAnalyzer,fetchImpl,config:{liveSearchLimit:8,transcriptStreams:1,newsLimit:10,deepCandidates:5,deepConcurrency:1,alertCooldownMs:0,minEntryScore:78,minWatchScore:66},clock:()=>Date.parse('2026-10-05T18:30:00Z'),logger:{warn(){}}});
   radar.running=true;
   const ok=await radar.tick();
   radar.running=false;
