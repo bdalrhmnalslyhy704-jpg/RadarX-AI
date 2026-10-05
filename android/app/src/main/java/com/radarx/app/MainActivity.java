@@ -45,13 +45,6 @@ public final class MainActivity extends Activity {
     private static final String BACKEND_FALLBACK_ORIGIN =
             "https://radarx-ai-production.up.railway.app";
     private static final int REQUEST_POST_NOTIFICATIONS = 7301;
-    private boolean pendingBackgroundStart;
-    private final Runnable backgroundStartRunnable = () -> {
-        if (!isFinishing() && (Build.VERSION.SDK_INT < 17 || !isDestroyed())) {
-            requestNotificationPermissionAndStart();
-        }
-    };
-
     private WebView webView;
     private WebViewAssetLoader assetLoader;
 
@@ -132,9 +125,6 @@ public final class MainActivity extends Activity {
 
         setContentView(webView);
         webView.loadUrl(APP_URL);
-        // Start the monitor shortly after the Activity is visible. The service does not depend
-        // on WebView/module readiness, so a UI-side script error cannot prevent background monitoring.
-        webView.postDelayed(backgroundStartRunnable, 1200L);
     }
 
     private static boolean isAllowedAppUri(Uri uri) {
@@ -334,7 +324,7 @@ public final class MainActivity extends Activity {
         public void state(String value) {
             Log.i("RadarXSmoke", String.valueOf(value));
             if ("UI_READY".equals(String.valueOf(value))) {
-                webView.postDelayed(backgroundStartRunnable, 400L);
+                // Background monitoring is intentionally user-controlled; UI readiness never starts it automatically.
             }
         }
     }
@@ -346,11 +336,9 @@ public final class MainActivity extends Activity {
         if (requestCode == REQUEST_POST_NOTIFICATIONS) {
             boolean granted = grantResults.length > 0 &&
                     grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED;
-            if (pendingBackgroundStart && granted) {
-                pendingBackgroundStart = false;
+            if (granted) {
                 startBackgroundMonitor();
-            } else if (pendingBackgroundStart) {
-                pendingBackgroundStart = false;
+            } else {
                 Toast.makeText(this, "تم رفض إشعارات المراقبة؛ لم يتم تشغيلها", Toast.LENGTH_LONG).show();
             }
         }
@@ -368,7 +356,6 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         if (webView != null) {
-            webView.removeCallbacks(backgroundStartRunnable);
             webView.loadUrl("about:blank");
             webView.stopLoading();
             webView.setWebChromeClient(null);
