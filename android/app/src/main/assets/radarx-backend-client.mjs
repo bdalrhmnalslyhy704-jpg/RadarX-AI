@@ -228,7 +228,7 @@ export async function getKingMarket({limit=5,deep=false}={},fetchImpl=globalThis
   const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
   return requestJson(base,'/api/king-market?limit='+encodeURIComponent(String(safeLimit))+'&deep='+(deep?'1':'0'),fetchImpl,120000);
 }
-export async function getRadarStatus(fetchImpl = globalThis.fetch) {
+export async function getAgentHub({symbol}={},fetchImpl=globalThis.fetch){const raw=String(symbol||'').trim().toUpperCase();if(!/^[A-Z0-9]{5,20}$/.test(raw))throw new Error('INVALID_SYMBOL');const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);return requestJson(base,'/api/ai-agents?symbol='+encodeURIComponent(raw),fetchImpl,180000);}\nexport async function getRadarStatus(fetchImpl = globalThis.fetch) {
   const base = normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
   return requestJson(base, '/api/radar-status', fetchImpl);
 }
