@@ -20,6 +20,10 @@ on:
       - phase3-triple-radar
   workflow_dispatch:
 
+concurrency:
+  group: radarx-triple-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
