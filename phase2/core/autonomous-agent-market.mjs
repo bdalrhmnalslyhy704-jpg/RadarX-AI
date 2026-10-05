@@ -1,5 +1,6 @@
 import {buildSpotUniverse, normalizeTickerRow, boundedMap} from '../market/universe-scanner.mjs';
 import {collectAgentEvidence, buildAgentVerdict, evaluateMemory, createMemoryEntries} from './ai-agent-hub.mjs';
+import {buildSurgeFingerprint, rankMeaningfulCandidates, selectSurgeSurface} from './market-surge-gate.mjs';
 
 const clamp=(v,a=0,b=100)=>Math.max(a,Math.min(b,Number.isFinite(Number(v))?Number(v):50));
 const num=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -8,14 +9,14 @@ const wait=ms=>new Promise(r=>setTimeout(r,ms));
 
 export const AUTONOMOUS_AGENT_DEFAULTS=Object.freeze({
   quote:'USDT',
-  pollMs:90000,
+  pollMs:60000,
   universeRefreshMs:300000,
   minQuoteVolume24h:750000,
-  deepCandidates:6,
-  deepPool:60,
+  deepCandidates:12,
+  deepPool:120,
   deepConcurrency:3,
   deepKlines:220,
-  webCandidates:2,
+  webCandidates:3,
   memoryDays:30,
   resultLimit:20,
   learningLimit:2000
@@ -39,34 +40,42 @@ export function rankAgentDiscovery(tickers,symbols,{minQuoteVolume24h=750000}={}
   return rows.map(x=>{
     const volume=logNorm(x.quoteVolume24h,Math.max(1,minQuoteVolume24h),maxVol);
     const activity=logNorm(x.tradeCount24h,100,maxTrades);
-    const move=clamp(Math.abs(x.priceChange24h)*4);
-    const quietBuild=x.priceChange24h<=6&&x.priceChange24h>=-10?clamp(92-Math.abs(x.priceChange24h)*5):35;
-    const unusual=clamp(50+Math.abs(x.priceChange24h-med)*7);
-    return {...x,discovery_score:Number((volume*.30+activity*.20+move*.15+quietBuild*.20+unusual*.15).toFixed(2)),
+    const upsideMove=x.priceChange24h>=0?clamp(x.priceChange24h*7):clamp(x.priceChange24h*-2);
+    const movePressure=x.priceChange24h>=12?100:x.priceChange24h>=9?94:x.priceChange24h>=6?88:x.priceChange24h>=4?76:x.priceChange24h>=2?60:x.priceChange24h>=0.7?48:30;
+    const quietBuild=x.priceChange24h<=6&&x.priceChange24h>=-8?clamp(92-Math.abs(x.priceChange24h)*5):30;
+    const unusual=clamp(50+Math.abs(x.priceChange24h-med)*8);
+    const score=volume*.22+activity*.13+movePressure*.34+quietBuild*.16+unusual*.10+upsideMove*.05;
+    return {...x,discovery_score:Number(score.toFixed(2)),move_pressure_score:Number(movePressure.toFixed(1)),
       discovery_reasons:[
+        movePressure>=85?'MEANINGFUL_MOVE_PRESSURE':null,
         volume>=65?'LIQUIDITY_BREADTH':null,
         activity>=65?'HIGH_ACTIVITY':null,
-        quietBuild>=75?'NOT_OVEREXTENDED':null,
+        quietBuild>=75?'PRE_MOVE_WINDOW':null,
         unusual>=70?'MARKET_OUTLIER':null,
-        x.priceChange24h>=3?'POSITIVE_MOMENTUM':null,
-        x.priceChange24h<=-3?'DOWNSIDE_REVERSAL_WATCH':null
+        x.priceChange24h>=4?'MOMENTUM_BUILD':null,
+        x.priceChange24h<=-4?'DOWNSIDE_REVERSAL_WATCH':null
       ].filter(Boolean)};
-  }).sort((a,b)=>b.discovery_score-a.discovery_score||b.quoteVolume24h-a.quoteVolume24h||a.symbol.localeCompare(b.symbol));
+  }).sort((a,b)=>b.discovery_score-a.discovery_score||b.move_pressure_score-a.move_pressure_score||b.quoteVolume24h-a.quoteVolume24h||a.symbol.localeCompare(b.symbol));
 }
 
-export function selectAgentDeepTargets(ranked,{deepCandidates=6,deepPool=60,cursor=0}={}){
+export function selectAgentDeepTargets(ranked,{deepCandidates=12,deepPool=120,cursor=0}={}){
   const list=Array.isArray(ranked)?ranked:[], pool=list.slice(0,Math.max(1,Math.min(200,deepPool)));
-  const n=Math.max(1,Math.min(20,Math.trunc(deepCandidates)||6));
-  if(!pool.length)return {targets:[],nextCursor:0,poolSize:0};
-  const priority=pool.slice(0,Math.min(3,n));
-  const seen=new Set(priority.map(x=>x.symbol));
+  const n=Math.max(1,Math.min(24,Math.trunc(deepCandidates)||12));
+  if(!pool.length)return {targets:[],nextCursor:0,poolSize:0,buckets:{surge:0,early:0,rotation:0}};
+  const surge=pool.filter(x=>Number(x.priceChange24h)>=4).sort((a,b)=>Number(b.priceChange24h)-Number(a.priceChange24h)||Number(b.move_pressure_score)-Number(a.move_pressure_score));
+  const early=pool.filter(x=>Number(x.priceChange24h)<4&&Number(x.priceChange24h)>-6&&x.discovery_reasons?.includes('PRE_MOVE_WINDOW'))
+    .sort((a,b)=>Number(b.discovery_score)-Number(a.discovery_score));
+  const targets=[],seen=new Set();
+  const add=(row)=>{if(row&&!seen.has(row.symbol)&&targets.length<n){seen.add(row.symbol);targets.push(row)}};
+  surge.slice(0,Math.min(5,n)).forEach(add);
+  early.slice(0,Math.min(4,n-targets.length)).forEach(add);
   const rotating=[];
-  for(let i=0;i<pool.length&&rotating.length<n-priority.length;i++){
+  for(let i=0;i<pool.length&&rotating.length<n-targets.length;i++){
     const idx=(Math.max(0,Math.trunc(cursor))+i)%pool.length;
-    const row=pool[idx];
-    if(!seen.has(row.symbol)){seen.add(row.symbol);rotating.push(row);}
+    const row=pool[idx];if(!seen.has(row.symbol)){seen.add(row.symbol);rotating.push(row)}
   }
-  return {targets:[...priority,...rotating].slice(0,n),nextCursor:(Math.max(0,Math.trunc(cursor))+Math.max(1,n-priority.length))%pool.length,poolSize:pool.length};
+  rotating.forEach(add);
+  return {targets, nextCursor:(Math.max(0,Math.trunc(cursor))+Math.max(1,rotating.length+1))%pool.length,poolSize:pool.length,buckets:{surge:surge.length,early:early.length,rotation:rotating.length}};
 }
 
 function makeMarketDeep(candidate){
@@ -126,7 +135,7 @@ export class AutonomousAgentMarket {
     this.running=true;
     this.nextCycleAt=this.clock();
     await this.cycle().catch(e=>this.logger.warn?.('AI_AGENT_MARKET initial cycle failed',String(e?.message??e)));
-    this.timer=setInterval(()=>this.cycle().catch(e=>this.logger.warn?.('AI_AGENT_MARKET cycle failed',String(e?.message??e))),Math.max(30000,Number(this.config.pollMs)||90000));
+    this.timer=setInterval(()=>this.cycle().catch(e=>this.logger.warn?.('AI_AGENT_MARKET cycle failed',String(e?.message??e))),Math.max(30000,Number(this.config.pollMs)||60000));
   }
 
   async stop(){
@@ -169,17 +178,12 @@ export class AutonomousAgentMarket {
         {klinesLimit:this.config.deepKlines,fastInterval:'5m',fastKlines:96}
       ));
 
-      const webCount=Math.max(0,Math.min(scanned.length,Number(this.config.webCandidates)||2));
-      const rankedScanned=[...scanned].filter(Boolean).sort((a,b)=>Number(b.overall_score??0)-Number(a.overall_score??0)||Number(b.discovery_score??0)-Number(a.discovery_score??0));
-      const webTargetSymbols=new Set();
-      if(webCount>0&&rankedScanned[0])webTargetSymbols.add(rankedScanned[0].symbol);
-      for(let i=0;webTargetSymbols.size<webCount&&i<rankedScanned.length;i++){
-        const idx=(this.webCursor+i)%rankedScanned.length;
-        webTargetSymbols.add(rankedScanned[idx].symbol);
-      }
-      if(rankedScanned.length)this.webCursor=(this.webCursor+1)%rankedScanned.length;
+      const rankedScanned=rankMeaningfulCandidates(scanned.filter(Boolean));
+      const meaningful=rankedScanned.filter(x=>x.surge_fingerprint?.meaningful);
+      const webCount=Math.max(0,Math.min(meaningful.length,Number(this.config.webCandidates)||3));
+      const webTargetSymbols=new Set(meaningful.slice(0,webCount).map(x=>x.symbol));
       const decisions=[];
-      for(const candidate of scanned.filter(Boolean)){
+      for(const candidate of meaningful){
         let evidence={news:[],official:[],social:[],all:[],independent_domains:0,comment_count:0,corroboration:{verified:0,unverified:0},source_coverage:{gdelt:0,google_news:0,reddit_posts:0,reddit_comments:0}};
         if(webTargetSymbols.has(candidate.symbol)){
           try{evidence=await collectAgentEvidence({symbol:candidate.symbol});}catch(e){this.logger.warn?.('AI_AGENT_WEB '+candidate.symbol,String(e?.message??e));}
@@ -190,7 +194,7 @@ export class AutonomousAgentMarket {
         const newEntries=createMemoryEntries({symbol:candidate.symbol,price:candidate.last_price,agents:verdict.agents,now:startedAt});
         const recent=memory.some(x=>Number(x.created_at||0)>startedAt-15*60*1000);
         if(!recent&&typeof this.store?.appendAgentMemory==='function'){
-          for(const row of newEntries)await this.store.appendAgentMemory({...row,discovery_score:candidate.discovery_score,source:'AUTONOMOUS_MARKET'});
+          for(const row of newEntries)await this.store.appendAgentMemory({...row,discovery_score:candidate.discovery_score,surge_tier:candidate.surge_fingerprint.tier,source:'AUTONOMOUS_MARKET'});
           pendingMemory.push(...newEntries);
         }
         const action=verdict.decision?.action||'WAIT_CONFIRMATION';
@@ -202,34 +206,43 @@ export class AutonomousAgentMarket {
           signal_state:candidate.signal_state,best_strategy:candidate.best_strategy,
           pre_move_score:candidate.pre_move_context?.score??null,
           data_quality:candidate.data_quality,liquidity_quality:candidate.liquidity_quality,
+          surge_score:candidate.surge_fingerprint.score,surge_early_score:candidate.surge_fingerprint.early_score,
+          surge_ignition_score:candidate.surge_fingerprint.ignition_score,surge_tier:candidate.surge_fingerprint.tier,
+          surge_reasons:candidate.surge_fingerprint.reasons||[],
           top_agents:(verdict.agents||[]).filter(x=>x.id!=='CHIEF_DECIDER').sort((a,b)=>b.score-a.score).slice(0,4).map(x=>({id:x.id,name:x.name,score:x.score,direction:x.direction,weight:x.weight})),
           reasons:[...(candidate.reason_codes||[]).slice(0,4),...(verdict.decision?.stance?[verdict.decision.stance]:[])],
           source_coverage:evidence.source_coverage||{},
           observed_at:startedAt
         });
       }
-      const sorted=[...decisions].sort((a,b)=>Number(b.score??-1)-Number(a.score??-1)||Number(b.discovery_score??-1)-Number(a.discovery_score??-1));
+      const sorted=[...decisions].sort((a,b)=>Number(b.surge_score??-1)-Number(a.surge_score??-1)||Number(b.score??-1)-Number(a.score??-1)||Number(b.discovery_score??-1)-Number(a.discovery_score??-1));
+      const surface=selectSurgeSurface(scanned.filter(Boolean),{limit:Number(this.config.resultLimit)||20});
       const learning=profile(pendingMemory);
       const state={
-        engine:'AUTONOMOUS_TEN_AGENT_MARKET',
-        engine_name:'🧠 عقل السوق الذاتي',
+        engine:'AUTONOMOUS_TEN_AGENT_MARKET_V2',
+        engine_name:'🧠 عقل السوق الذاتي — موجات حقيقية',
         running:this.running,
         as_of:new Date(startedAt).toISOString(),
         universe:{quote:this.config.quote,eligible_spot_symbols:universe.length,ticker_rows:Array.isArray(tickers.data)?tickers.data.length:0,observed_symbols:ranked.length,liquid_symbols:ranked.filter(x=>x.quoteVolume24h>=Number(this.config.minQuoteVolume24h)).length},
-        rotation:{pool_size:targetInfo.poolSize,next_cursor:this.cursor,deep_targets:targetInfo.targets.map(x=>x.symbol),deep_scanned:scanned.filter(Boolean).length},
-        discovery:{top:ranked.slice(0,Math.min(30,Number(this.config.resultLimit)||20)).map(x=>({symbol:x.symbol,price:x.lastPrice,change_24h:x.priceChange24h,quote_volume_24h:x.quoteVolume24h,trade_count_24h:x.tradeCount24h,score:x.discovery_score,reasons:x.discovery_reasons}))},
+        rotation:{pool_size:targetInfo.poolSize,next_cursor:this.cursor,deep_targets:targetInfo.targets.map(x=>x.symbol),deep_scanned:scanned.filter(Boolean).length,buckets:targetInfo.buckets},
+        discovery:{top:ranked.slice(0,Math.min(30,Number(this.config.resultLimit)||20)).map(x=>({symbol:x.symbol,price:x.lastPrice,change_24h:x.priceChange24h,quote_volume_24h:x.quoteVolume24h,trade_count_24h:x.tradeCount24h,score:x.discovery_score,move_pressure:x.move_pressure_score,reasons:x.discovery_reasons}))},
+        surge_surface:{
+          meaningful:surface.meaningful.map(x=>({symbol:x.symbol,price:x.last_price,change_24h:x.price_change_24h,surge_score:x.surge_fingerprint.score,early_score:x.surge_fingerprint.early_score,ignition_score:x.surge_fingerprint.ignition_score,tier:x.surge_fingerprint.tier,reasons:x.surge_fingerprint.reasons,fast_score:x.fast_impulse_context?.score??null})),
+          explosive_6p:surface.explosive.map(x=>({symbol:x.symbol,price:x.last_price,change_24h:x.price_change_24h,surge_score:x.surge_fingerprint.score,ignition_score:x.surge_fingerprint.ignition_score,reasons:x.surge_fingerprint.reasons})),
+          early_breakout:surface.early.map(x=>({symbol:x.symbol,price:x.last_price,change_24h:x.price_change_24h,surge_score:x.surge_fingerprint.score,early_score:x.surge_fingerprint.early_score,ignition_score:x.surge_fingerprint.ignition_score,reasons:x.surge_fingerprint.reasons}))
+        },
         decisions:sorted.slice(0,Math.min(Number(this.config.resultLimit)||20,20)),
         learning,
-        policy:{spot_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true,no_synthetic_prices:true},
+        policy:{spot_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true,no_synthetic_prices:true,meaningful_moves_only:true},
         diagnostics:{elapsed_ms:Math.max(0,this.clock()-startedAt),web_candidates:[...webTargetSymbols],last_error:null}
       };
       this.lastCycle=state;
-      this.nextCycleAt=this.clock()+Math.max(30000,Number(this.config.pollMs)||90000);
+      this.nextCycleAt=this.clock()+Math.max(30000,Number(this.config.pollMs)||60000);
       if(typeof this.store?.putAgentMarketState==='function')await this.store.putAgentMarketState(state);
       return state;
     }catch(error){
       const m=String(error?.message??error);
-      this.lastCycle={engine:'AUTONOMOUS_TEN_AGENT_MARKET',running:this.running,as_of:new Date(this.clock()).toISOString(),error:m,universe:{eligible_spot_symbols:0,observed_symbols:0},decisions:[],learning:profile([]),policy:{spot_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};
+      this.lastCycle={engine:'AUTONOMOUS_TEN_AGENT_MARKET_V2',engine_name:'🧠 عقل السوق الذاتي — موجات حقيقية',running:this.running,as_of:new Date(this.clock()).toISOString(),error:m,universe:{eligible_spot_symbols:0,observed_symbols:0},decisions:[],learning:profile([]),policy:{spot_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};
       throw error;
     }finally{this.cycleBusy=false;}
   }
@@ -237,7 +250,7 @@ export class AutonomousAgentMarket {
   async readState(){
     if(this.lastCycle)return this.lastCycle;
     const stored=await this.store?.getAgentMarketState?.();
-    return stored||{engine:'AUTONOMOUS_TEN_AGENT_MARKET',engine_name:'🧠 عقل السوق الذاتي',running:this.running,decisions:[],discovery:{top:[]},learning:profile([])};
+    return stored||{engine:'AUTONOMOUS_TEN_AGENT_MARKET_V2',engine_name:'🧠 عقل السوق الذاتي — موجات حقيقية',running:this.running,decisions:[],discovery:{top:[]},surge_surface:{meaningful:[],explosive_6p:[],early_breakout:[]},learning:profile([])};
   }
 
   async learning(){
