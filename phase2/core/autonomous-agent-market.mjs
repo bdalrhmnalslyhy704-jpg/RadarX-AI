@@ -67,14 +67,18 @@ export function selectAgentDeepTargets(ranked,{deepCandidates=12,deepPool=120,cu
     .sort((a,b)=>Number(b.discovery_score)-Number(a.discovery_score));
   const targets=[],seen=new Set();
   const add=(row)=>{if(row&&!seen.has(row.symbol)&&targets.length<n){seen.add(row.symbol);targets.push(row)}};
-  surge.slice(0,Math.min(5,n)).forEach(add);
-  early.slice(0,Math.min(4,n-targets.length)).forEach(add);
+  // Preserve the highest-priority surge/early symbols, but reserve one slot when
+  // there is a larger pool so the cursor can actually rotate coverage between cycles.
+  const rotationReserve=pool.length>n?1:0;
+  const fixedBudget=Math.max(0,n-rotationReserve);
+  surge.slice(0,Math.min(5,fixedBudget)).forEach(add);
+  early.slice(0,Math.min(4,fixedBudget-targets.length)).forEach(add);
   const rotating=[];
-  for(let i=0;i<pool.length&&rotating.length<n-targets.length;i++){
+  for(let i=0;i<pool.length&&rotating.length<rotationReserve+(n-targets.length-rotationReserve);i++){
     const idx=(Math.max(0,Math.trunc(cursor))+i)%pool.length;
     const row=pool[idx];if(!seen.has(row.symbol)){seen.add(row.symbol);rotating.push(row)}
   }
-  rotating.forEach(add);
+  rotating.slice(0,n-targets.length).forEach(add);
   return {targets, nextCursor:(Math.max(0,Math.trunc(cursor))+Math.max(1,rotating.length+1))%pool.length,poolSize:pool.length,buckets:{surge:surge.length,early:early.length,rotation:rotating.length}};
 }
 
