@@ -166,6 +166,8 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
   const categoryHits=categoryHitsOf(alert);
   const risks=criticalRisk(alert);
   const failures=[...radarSpecificChecks(alert,p),...risks.map(x=>'RISK:'+x)];
+  if(alert?.eligible===false)failures.push('BASE_ALERT_NOT_ELIGIBLE');
+  if(alert?.elite_gate&&alert.elite_gate.eligible===false)failures.push('ELITE_GATE_NOT_ELIGIBLE');
   const symbol=String(alert?.symbol||'').toUpperCase();
   const previous=symbol?recentBySymbol.get(symbol):null;
   const elapsed=previous?Math.max(0,Number(now)-previous.at):Infinity;
