@@ -5,6 +5,7 @@ on:
     branches:
       - android-early-wake-6.8.9
       - phase3-triple-radar
+      - radarx-build185-foundation
       - phase4-symbol-deep-scan
       - android-icon-6.8.8-release
       - tradli-feature-integration
