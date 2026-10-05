@@ -1,5 +1,6 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
+import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -335,7 +336,28 @@ export class StrongMoveRadar {
       Number(alert?.strong_move?.score)||0,
       Number(alert?.strong_move?.component_scores?.flash)||0
     );
-    if(!alert.eligible||alertScore<this.config.minScore)return alert;
+    const a=alert?.strong_move||{};
+    const cs=a.component_scores||{};
+    const m=a.metrics||{};
+    const gate=evaluateEliteGate({
+      radar:'STRONG_MOVE_RADAR',
+      direction:a.direction,
+      baseScore:alertScore,
+      priceChange24h:row.priceChange24h,
+      liquidityScore:clamp(70+Math.log10(Math.max(1,row.quoteVolume24h/this.config.minQuoteVolume24h))*30),
+      dataQualityScore:90,
+      triggerScore:Math.max(Number(cs.flash)||0,Number(cs.breakout)||0),
+      structureScore:Math.max(Number(cs.breakout)||0,Number(cs.ema)||0),
+      participationScore:mean([Number(cs.volume),Number(cs.trades)])||50,
+      flowScore:Number(cs.taker)||50,
+      relativeScore:Number(m.five_min_trend)||50,
+      momentumScore:Math.max(Number(cs.velocity)||0,Number(cs.flash)||0),
+      compressionScore:Math.max(Number(cs.bollinger)||0,Number(cs.range)||0),
+      confirmations:Number(m.flash_confirmations)||0,
+      minConfirmations:4,minScore:86,max24hMovePct:8,requireTrigger:true,minCategoryHits:5
+    });
+    alert.elite_gate=gate;
+    if(!alert.eligible||alertScore<this.config.minScore||!gate.eligible)return alert;
     const lastAlert=this.lastAlertAt.get(row.symbol)||0;
     if(this.clock()-lastAlert<this.config.alertCooldownMs)return alert;
     this.lastAlertAt.set(row.symbol,this.clock());

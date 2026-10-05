@@ -1,5 +1,6 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
+import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number.isFinite(Number(x))?Number(x):0));
 const finite=(x,d=null)=>Number.isFinite(Number(x))?Number(x):d;
@@ -334,7 +335,30 @@ export class DoomsdayRadar{
     ]);
     const analysis=buildDoomsdayAnalysis({oneMinute:one.candles,fiveMinute:five.candles,btcFiveMinute,ticker:row,instantChangePct:row.instantChangePct,now:this.clock(),max24hMovePct:this.config.max24hMovePct});
     this.scans++;
-    if(analysis.eligible){
+    const cs=analysis.component_scores||{};
+    const gate=evaluateEliteGate({
+      radar:'DOOMSDAY_RADAR',
+      direction:analysis.direction||'UP',
+      baseScore:analysis.score,
+      priceChange24h:row.priceChange24h,
+      liquidityScore:Math.min(100,60+Math.log10(Math.max(1,row.quoteVolume24h/500000))*32),
+      dataQualityScore:90,
+      triggerScore:Math.max(Number(cs.acceleration)||0,Number(cs.breakout)||0,Number(cs.impulse)||0),
+      structureScore:Math.max(Number(cs.breakout)||0,Number(cs.ema)||0,Number(cs.acceptance)||0),
+      participationScore:Math.max(Number(cs.volume)||0,Number(cs.trades)||0),
+      flowScore:Number(cs.taker)||50,
+      relativeScore:Number(cs.relative_strength)||50,
+      momentumScore:Math.max(Number(cs.impulse)||0,Number(cs.acceleration)||0),
+      compressionScore:Math.max(Number(cs.squeeze)||0,Number(cs.atr)||0),
+      confirmations:Math.max(Number(analysis.confirmation_count)||0,Number(analysis.ignition_confirmations)||0),
+      minConfirmations:analysis.stage==='POWER_SURGE'?7:6,
+      minScore:analysis.stage==='POWER_SURGE'?93:analysis.stage==='IGNITION'?89:84,
+      max24hMovePct:analysis.stage==='PRE_BREAKOUT'?5:10,
+      requireTrigger:true,
+      minCategoryHits:5
+    });
+    analysis.elite_gate=gate;
+    if(analysis.eligible&&gate.eligible){
       const last=this.lastAlertAt.get(row.symbol)||0;
       if(this.clock()-last>=this.config.alertCooldownMs){
         const alert=decorateRadarAlert(buildAlert(row,analysis,this.clock()),'Radar 6 — يوم القيامة');
@@ -366,7 +390,7 @@ export class DoomsdayRadar{
       const width=Math.max(1,Math.min(12,Number(this.config.deepConcurrency)||4));
       const worker=async()=>{while(true){const i=next++;if(i>=merged.length)return;try{out[i]=await this.deepScan(merged[i],btcFive||[]);}catch(e){this.noteError(e,'row');}}};
       await Promise.all(Array.from({length:Math.min(width,merged.length||1)},worker));
-      this.latestCandidates=out.filter(Boolean).sort((a,b)=>Number(b.score||0)-Number(a.score||0)).slice(0,30);
+      this.latestCandidates=out.filter(x=>x?.eligible&&x?.analysis?.elite_gate?.eligible).sort((a,b)=>Number(b.analysis?.elite_gate?.score||0)-Number(a.analysis?.elite_gate?.score||0)).slice(0,3);
       this.lastScanAtMs=this.clock();this.lastError=null;
       return true;
     }finally{this.busy=false;}

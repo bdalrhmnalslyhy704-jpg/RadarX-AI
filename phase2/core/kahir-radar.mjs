@@ -1,5 +1,6 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {formatRadarTime12h} from './radar-alert-meta.mjs';
+import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)||0));
 const finite=(x,d=null)=>Number.isFinite(Number(x))?Number(x):d;
@@ -330,10 +331,29 @@ export class KahirRadar{
       marketVelocityBps:u.marketVelocityBps||0,relativeVelocityBps:u.relativeVelocityBps||0
     };
     const result={...candidate,score:finite(analysis.score,0),stage:analysis.stage,eligible:analysis.eligible,analysis};
-    if(analysis.eligible){
+    const gate=evaluateEliteGate({
+      radar:'KAHIR_RADAR',
+      direction:analysis.direction,
+      baseScore:analysis.score,
+      priceChange24h:row.priceChange24h,
+      liquidityScore:clamp(70+Math.log10(Math.max(1,row.quoteVolume24h/this.config.minQuoteVolume24h))*30),
+      dataQualityScore:90,
+      triggerScore:clamp(50+Math.max(Number(analysis.metrics?.one_minute_z)||0,Number(analysis.metrics?.five_minute_z)||0)*14),
+      structureScore:analysis.algorithms?.RANGE_ACCEPTANCE?.score||50,
+      participationScore:analysis.algorithms?.PARTICIPATION_REGIME?.score||50,
+      flowScore:clamp(50+(Number(analysis.metrics?.volume_ratio||1)-1)*25),
+      relativeScore:clamp(50+(Number(analysis.metrics?.relative_acceleration_bps)||0)*9),
+      momentumScore:clamp(50+(Number(analysis.metrics?.one_minute_z)||0)*14),
+      compressionScore:analysis.algorithms?.VOLATILITY_REGIME_TRANSITION?.score||50,
+      confirmations:analysis.confirmation_count,
+      minConfirmations:7,minScore:88,max24hMovePct:6,requireTrigger:true,minCategoryHits:4
+    });
+    result.elite_gate=gate;
+    if(analysis.eligible&&gate.eligible){
       const lastAlert=this.lastAlertAt.get(row.symbol)||0;
       if(this.clock()-lastAlert>=this.config.alertCooldownMs){
         const alert=buildKahirAlert(candidate,analysis,this.clock());
+        alert.elite_gate=gate;
         this.lastAlertAt.set(row.symbol,alert.detected_at);
         await this.store.appendKahirAlert(alert);
         if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(alert);
@@ -354,7 +374,7 @@ export class KahirRadar{
       const out=Array(selected.length);let next=0;
       const worker=async()=>{while(true){const i=next++;if(i>=selected.length)return;try{out[i]=await this.scanRow(selected[i]);}catch(e){this.noteError(e,'row');out[i]=null;}}};
       await Promise.all(Array.from({length:Math.min(limit,selected.length)},worker));
-      this.latestCandidates=out.filter(Boolean).sort((a,b)=>b.score-a.score).slice(0,20);
+      this.latestCandidates=out.filter(x=>x?.eligible&&x?.elite_gate?.eligible).sort((a,b)=>Number(b.elite_gate.score||0)-Number(a.elite_gate.score||0)).slice(0,3);
       this.lastScanAtMs=this.clock();
       this.lastError=null;
       this.lastResult={
