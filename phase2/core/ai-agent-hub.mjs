@@ -9,11 +9,11 @@ export const AGENT_REGISTRY=Object.freeze([
 {id:'SOCIAL_PULSE',name:'💬 نبض المجتمع',role:'تحليل المنشورات والتعليقات وتقليل الضجيج'},
 {id:'CATALYST_HUNTER',name:'⚡ صائد المحفزات',role:'اكتشاف الإدراجات والترقيات والشراكات والمخاطر'},
 {id:'NARRATIVE_ENGINE',name:'🧠 محلل السرد',role:'كشف تغير السرد والتوافق بين المصادر'},
-{id:'MARKET_STRUCTURE',name:'📐 محلل الهيكل',role:'دمج الأخبار مع الاتجاه والزخم والهيكل'},
-{id:'FLOW_LIQUIDITY',name:'🌊 وكيل التدفق',role:'السيولة والضغط وRVOL والامتصاص'},
-{id:'RISK_GUARDIAN',name:'🛡️ حارس المخاطر',role:'الفخاخ والتمدد والشطب والاختراقات'},
-{id:'HISTORY_LEARNER',name:'📚 المتعلم التاريخي',role:'تعديل الأوزان من النتائج السابقة'},
-{id:'CHIEF_DECIDER',name:'👑 كبير المحللين',role:'تجميع الحكم النهائي من الوكلاء التسعة'}
+{id:'MARKET_STRUCTURE',name:'📐 المتداول الفني',role:'اتجاه وزخم وهيكل ودخول مبكر مثل متداول Spot منضبط'},
+{id:'FLOW_LIQUIDITY',name:'🌊 متداول التدفق',role:'السيولة والضغط وRVOL والامتصاص وتأكيد قابلية الدخول'},
+{id:'RISK_GUARDIAN',name:'🛡️ مدير المخاطر',role:'الفخاخ والتمدد والشطب والاختراقات وحدود الخسارة قبل أي قرار ورقي'},
+{id:'HISTORY_LEARNER',name:'📚 متداول التعلّم',role:'يسجل صفقات ورقية ونتائج الصعود والهبوط ويعدل الأوزان تدريجيًا'},
+{id:'CHIEF_DECIDER',name:'👑 مدير غرفة التداول',role:'تجميع الحكم النهائي وإدارة قرار Spot ورقي مشروط من الوكلاء التسعة'}
 ]);
 
 const OFFICIAL=['binance.com','coinbase.com','kraken.com','okx.com','bybit.com','kucoin.com','circle.com','tether.to','ripple.com','solana.com','ethereum.org','chain.link','sec.gov','cftc.gov','bis.org'];
