@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {ProfessorRadar,calculateProfessorOpinion,classifyStreamClaim} from '../core/professor-radar.mjs';
+import {resetRadarNotificationGateForTests} from '../core/radar-notification-gate.mjs';
 
 test('TEST_PROFESSOR: stream claim classifier separates buy and sell language',()=>{
   assert.equal(classifyStreamClaim('BTC buy long breakout entry').action,'BUY_BIAS');
@@ -26,6 +27,7 @@ test('TEST_PROFESSOR: weak technical/news evidence avoids paper entry',()=>{
 });
 
 test('TEST_PROFESSOR: scan fuses public stream + news + Binance technical confirmation',async()=>{
+  resetRadarNotificationGateForTests();
   const alerts=[];
   const store={appendProfessorAlert:async x=>alerts.push(x)};
   const rest={request:async path=>{
@@ -43,7 +45,7 @@ test('TEST_PROFESSOR: scan fuses public stream + news + Binance technical confir
     {videoRenderer:{videoId:'abc123',title:{simpleText:'BTC buy long breakout LIVE'},descriptionSnippet:{runs:[{text:'BTC entry now'}]},ownerText:{simpleText:'Test Trader'},viewCountText:{simpleText:'1K'},badges:[{metadataBadgeRenderer:{label:{simpleText:'LIVE NOW'}}}],thumbnailOverlays:[]}}
   ]}}]}}}}};
   const player={};
-  const gdelt={articles:[{title:'Bitcoin partnership boosts market growth',url:'https://example.com/news/1',domain:'example.com',datetime:'2026-10-04T18:00:00Z',tone:4}]};
+  const gdelt={articles:[{title:'BTC partnership boosts market growth',url:'https://example.com/news/1',domain:'example.com',datetime:'2026-10-04T18:00:00Z',tone:4}]};
   const fetchImpl=async url=>{
     const u=String(url);
     if(u.includes('youtube.com/results?search_query='))return new Response('var ytInitialData = '+JSON.stringify(ytData)+';',{status:200});
