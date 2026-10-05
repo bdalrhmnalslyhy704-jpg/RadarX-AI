@@ -192,6 +192,19 @@ export const CONFIG = Object.freeze({
     retryAttempts: int(process.env.RADARX_DOOMSDAY_RETRY_ATTEMPTS, 1),
     watchlist: ['FETUSDT','SCRUSDT','CHIPUSDT','ORCAUSDT','TSTUSDT','GTCUSDT']
   },
+  aiAgents: {
+    quote: 'USDT',
+    pollMs: int(process.env.RADARX_AI_AGENTS_POLL_MS, 90000),
+    minQuoteVolume24h: int(process.env.RADARX_AI_AGENTS_MIN_QUOTE_VOLUME_24H, 750000),
+    deepCandidates: int(process.env.RADARX_AI_AGENTS_DEEP_CANDIDATES, 6),
+    deepPool: int(process.env.RADARX_AI_AGENTS_DEEP_POOL, 60),
+    deepConcurrency: int(process.env.RADARX_AI_AGENTS_DEEP_CONCURRENCY, 3),
+    deepKlines: int(process.env.RADARX_AI_AGENTS_DEEP_KLINES, 220),
+    webCandidates: int(process.env.RADARX_AI_AGENTS_WEB_CANDIDATES, 2),
+    memoryDays: int(process.env.RADARX_AI_AGENTS_MEMORY_DAYS, 30),
+    resultLimit: int(process.env.RADARX_AI_AGENTS_RESULT_LIMIT, 20),
+    learningLimit: int(process.env.RADARX_AI_AGENTS_LEARNING_LIMIT, 2000)
+  },
   professorRadar: {
     quote: 'USDT',
     pollMs: int(process.env.RADARX_PROFESSOR_POLL_MS, 120000),
