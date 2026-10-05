@@ -15,6 +15,7 @@ const phase2=[
   'phase2/tests/data-quality.test.mjs',
   'phase2/tests/elite-confluence-gate.test.mjs',
   'phase2/tests/radar-advanced-confluence.test.mjs',
+  'phase2/tests/radar-prebreakout-engine.test.mjs',
   'phase2/tests/radar-notification-gate.test.mjs',
   'phase2/tests/dedup.test.mjs',
   'phase2/tests/early-move-sentinel.test.mjs',

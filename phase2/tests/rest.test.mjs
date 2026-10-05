@@ -25,7 +25,7 @@ test('TEST_FIXTURE: Binance kline timestamps are milliseconds; seconds are rejec
 
 test('TEST_FIXTURE: Binance millisecond kline timestamps normalize and current open candle stays open',async()=>{
   const now=Date.now();
-  const open=Math.floor((now-5000)/900000)*900000;
+  const open=Math.floor(now/900000)*900000;
   const fetchImpl=async()=>({status:200,ok:true,headers:new Map(),json:async()=>[
     [open,'100','101','99','100','1000',open+899999,100000,10,500,50000,'0']
   ]});

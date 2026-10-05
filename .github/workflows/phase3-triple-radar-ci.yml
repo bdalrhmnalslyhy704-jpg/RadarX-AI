@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - phase3-triple-radar
+      - development-v191-base-20261005
       - phase4-symbol-deep-scan
       - phase4-symbol-deep-scan-testfix
       - phase5-fix-bottom-radar-enable-deep-scan
@@ -18,6 +19,10 @@ on:
     branches:
       - phase3-triple-radar
   workflow_dispatch:
+
+concurrency:
+  group: radarx-triple-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
