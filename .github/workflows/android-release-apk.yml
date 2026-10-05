@@ -21,7 +21,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: radarx-android-release-${{ github.ref }}
+  group: radarx-android-release-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
