@@ -1,3 +1,5 @@
+import {evaluateAdvancedConfluence,buildAdvancedRiskFlags} from './radar-advanced-confluence.mjs';
+
 const clamp=(v,min=0,max=100)=>Math.max(min,Math.min(max,Number.isFinite(Number(v))?Number(v):0));
 
 function hit(v,threshold=70){return Number.isFinite(Number(v))&&Number(v)>=threshold;}
@@ -39,7 +41,7 @@ export function evaluateEliteGate({
   const missingTrigger=requireTrigger&&!hit(triggerScore,72);
   const volumeWithoutFollowThrough=clamp(participationScore)>=86&&clamp(structureScore)<58&&clamp(momentumScore)<60;
   const flowWithoutRelativeSupport=clamp(flowScore)>=88&&clamp(relativeScore)<45;
-  const score=clamp(
+  const legacyScore=clamp(
     clamp(baseScore)*0.28+
     categories.trigger*0.18+
     categories.structure*0.13+
@@ -49,6 +51,10 @@ export function evaluateEliteGate({
     categories.momentum*0.06+
     categories.compression*0.04
   );
+  const advanced=evaluateAdvancedConfluence({
+    categories,priceChange24h,confirmations,minConfirmations,baseScore:legacyScore
+  });
+  const score=clamp(legacyScore*0.58+advanced.score*0.42);
   const eligible=
     String(direction).startsWith('UP') &&
     !extended &&
@@ -59,7 +65,8 @@ export function evaluateEliteGate({
     !flowWithoutRelativeSupport &&
     score>=minScore &&
     Number(confirmations)>=minConfirmations &&
-    hits.length>=minCategoryHits;
+    hits.length>=minCategoryHits &&
+    advanced.eligible;
 
   const stage=!eligible
     ? 'REJECT'
@@ -78,6 +85,7 @@ export function evaluateEliteGate({
   if(hit(momentumScore,70))reasons.push('الزخم يتسارع');
   if(hit(compressionScore,70))reasons.push('انكماش/تحول تذبذب قبل التوسع');
   const riskFlags=[];
+  riskFlags.push(...buildAdvancedRiskFlags(advanced));
   if(extended)riskFlags.push('ALREADY_EXTENDED_24H');
   if(weakLiquidity)riskFlags.push('LIQUIDITY_TOO_WEAK');
   if(weakData)riskFlags.push('DATA_QUALITY_TOO_WEAK');
@@ -95,6 +103,8 @@ export function evaluateEliteGate({
     min_confirmations:minConfirmations,
     category_hits:hits.length,
     categories,
+    legacy_score:Number(legacyScore.toFixed(1)),
+    advanced,
     reasons,
     risk_flags:riskFlags,
     pre_expansion_window:eligible,

@@ -2,6 +2,7 @@ import {MarketUniverseScanner,buildSpotUniverse,normalizeTickerRow} from '../mar
 import {BinanceAllMarketTickerClient} from '../market/binance-market-ticker-ws.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
+import {evaluateRadarNotificationGate,rememberRadarAlert} from './radar-notification-gate.mjs';
 
 const clamp=(n,min=0,max=100)=>Math.max(min,Math.min(max,Number(n)||0));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -755,7 +756,9 @@ export class EarlyMoveSentinel {
           minConfirmations:7,minScore:88,max24hMovePct:2.5,requireTrigger:true,minCategoryHits:5
         });
         alert.elite_gate=gate;
-        if(!gate.eligible)continue;
+        const notificationGate=evaluateRadarNotificationGate(alert,{now:this.clock()});
+        alert.notification_gate=notificationGate;
+        if(!gate.eligible||!notificationGate.eligible)continue;
         const alertKey=`${job.symbol}:${alert.event}`;
         const recent=this.lastAlertScore.get(alertKey)||0;
         const lastAt=this.lastAlertAt.get(alertKey)||0;
@@ -766,6 +769,7 @@ export class EarlyMoveSentinel {
         const decorated=decorateRadarAlert(alert,alert?.event==='PRE_EXPLOSION_ALERT'?'Radar 1 — Early-Wake / Pre-Explosion':'Radar 1 — Early-Wake');
         await this.store.appendMoveAlert(decorated);
         if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
+        rememberRadarAlert(decorated,this.clock());
         this.alertCount++;
       }catch(error){
         this.lastError=String(error?.message??error);

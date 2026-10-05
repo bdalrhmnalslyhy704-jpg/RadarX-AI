@@ -1,6 +1,7 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
+import {evaluateRadarNotificationGate,rememberRadarAlert} from './radar-notification-gate.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number.isFinite(Number(x))?Number(x):0));
 const finite=(x,d=null)=>Number.isFinite(Number(x))?Number(x):d;
@@ -362,8 +363,12 @@ export class DoomsdayRadar{
       const last=this.lastAlertAt.get(row.symbol)||0;
       if(this.clock()-last>=this.config.alertCooldownMs){
         const alert=decorateRadarAlert(buildAlert(row,analysis,this.clock()),'Radar 6 — يوم القيامة');
+        const notificationGate=evaluateRadarNotificationGate(alert,{now:this.clock()});
+        alert.notification_gate=notificationGate;
+        if(!notificationGate.eligible)return {symbol:row.symbol,lastPrice:row.lastPrice,priceChange24h:row.priceChange24h,instantChangePct:row.instantChangePct,stage:analysis.stage,score:analysis.score,early_score:analysis.early_score,ignition_score:analysis.ignition_score,eligible:false,analysis};
         await this.store.appendDoomsdayAlert(alert);
         if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(alert);
+        rememberRadarAlert(alert,this.clock());
         this.lastAlertAt.set(row.symbol,this.clock());this.alertCount++;
       }
     }

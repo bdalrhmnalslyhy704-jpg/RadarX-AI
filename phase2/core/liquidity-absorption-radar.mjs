@@ -1,6 +1,7 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {formatRadarTime12h} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
+import {evaluateRadarNotificationGate,rememberRadarAlert} from './radar-notification-gate.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -340,12 +341,15 @@ export class LiquidityAbsorptionRadar{
       minConfirmations:7,minScore:90,max24hMovePct:5.5,requireTrigger:true,minCategoryHits:5
     });
     analysis.elite_gate=gate;
-    if(!analysis.eligible||Number(analysis.opportunity_score)<this.config.minScore||!gate.eligible)return analysis;
+    const notificationGate=evaluateRadarNotificationGate(analysis,{now:this.clock()});
+    analysis.notification_gate=notificationGate;
+    if(!analysis.eligible||Number(analysis.opportunity_score)<this.config.minScore||!gate.eligible||!notificationGate.eligible)return analysis;
     const lastAlert=this.lastAlertAt.get(row.symbol)||0;
     if(this.clock()-lastAlert<this.config.alertCooldownMs)return analysis;
     this.lastAlertAt.set(row.symbol,this.clock());
     await this.store.appendLiquidityAbsorptionAlert(analysis);
     if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(analysis);
+    rememberRadarAlert(analysis,this.clock());
     this.alertCount++;
     return analysis;
   }
