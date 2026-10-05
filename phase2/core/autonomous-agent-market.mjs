@@ -92,6 +92,10 @@ function makeMarketDeep(candidate){
   return {
     price:{last:num(candidate?.last_price)},
     assessment:{direction_score:dirScore,trap_risk:trap},
+    fast_impulse_score:num(f.score,50),
+    fast_momentum_score:num(f.scores?.momentum,50),
+    fast_volume_score:num(f.scores?.volume,50),
+    fast_taker_score:num(f.scores?.taker_buy,50),
     liquidity:{score:num(candidate?.liquidity_quality,50)},
     pressure:{score:num(m.buying_pressure,num(f.scores?.taker_buy,50))},
     data_quality:{score:num(candidate?.data_quality,0)},
