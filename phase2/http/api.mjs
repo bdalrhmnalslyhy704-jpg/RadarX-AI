@@ -5,6 +5,7 @@ import {DurableStore} from '../core/store.mjs';
 import {MarketUniverseScanner} from '../market/universe-scanner.mjs';
 import {RADAR_NAMES,RADAR_PROFILES,formatRadarTime12h,decorateRadarAlert} from '../core/radar-alert-meta.mjs';
 import {SymbolDeepAnalyzer,normalizeDeepScanSymbol} from '../core/symbol-deep-analyzer.mjs';
+import {buildKingVerdict,rankKingMarket} from '../core/king-intelligence.mjs';
 
 function send(res,status,body,extra={}){
   const data=JSON.stringify(body);
@@ -126,6 +127,8 @@ function buildPublicSignalBody(result,now,maxFreshnessMs){
     paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
     ...(live?{}:{error:reason||'SIGNAL_NOT_READY'})};
 }
+
+function alertSymbolSafe(row){const s=String(row?.symbol||'').trim().toUpperCase();return /^[A-Z0-9]{5,20}$/.test(s)?s:null;}
 
 function subscriptionValid(x){
   if(typeof x?.endpoint!=='string'||!x.endpoint.startsWith('https://'))throw new Error('INVALID_PUSH_ENDPOINT');
@@ -428,6 +431,54 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
             error:m
           });
+        }
+      }
+      if(u.pathname==='/api/king'&&req.method==='GET'){
+        const rawSymbol=String(u.searchParams.get('symbol')||'').trim().toUpperCase();
+        if(!/^[A-Z0-9]{5,20}$/.test(rawSymbol))return send(res,400,{error:'INVALID_SYMBOL',engine:'KING_INTELLIGENCE',engine_name:'👑 الكنق'});
+        const deepRequested=String(u.searchParams.get('deep')??'1')!=='0';
+        try{
+          const all=[];
+          for(const entry of Object.values(radarEntries)){
+            if(typeof store?.[entry.read]!=='function')continue;
+            const rows=await store[entry.read]({sinceMs:Date.now()-90*60*1000,limit:20});
+            for(const row of rows)all.push(decorateRadarAlert(row,entry.name));
+          }
+          const professorAlerts=all.filter(x=>String(x?.radar||'').toUpperCase()==='PROFESSOR_RADAR'&&alertSymbolSafe(x)===rawSymbol);
+          let deepScan=null;
+          if(deepRequested){
+            if(!deepSymbolScanner)return send(res,503,{error:'KING_DEEP_SCAN_UNAVAILABLE',status:'not_ready',symbol:rawSymbol,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+            deepScan=await deepSymbolScanner.scan(rawSymbol);
+          }
+          const verdict=buildKingVerdict({symbol:rawSymbol,alerts:all,deepScan,professorAlerts,now:Date.now()});
+          return send(res,200,{...verdict,meta:{live:true,deep_scan_requested:deepRequested,source:'RadarX evidence + Binance Public REST',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        }catch(e){
+          const m=String(e?.message??e);
+          const status=/INVALID_SYMBOL|INVALID_QUOTE/.test(m)?400:/BINANCE_|HTTP_(?:418|429|451|500|502|503|504)|TIMEOUT|NETWORK|FETCH|ECONN|ENOTFOUND|ETIMEDOUT|ABORT/i.test(m)?503:500;
+          return send(res,status,{status:'not_ready',engine:'KING_INTELLIGENCE',engine_name:'👑 الكنق',symbol:rawSymbol,error:m,data_policy:{spot_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true,no_synthetic_prices:true}});
+        }
+      }
+      if(u.pathname==='/api/king-market'&&req.method==='GET'){
+        const limit=Math.max(1,Math.min(10,Math.trunc(Number(u.searchParams.get('limit')||5))));
+        const deepRequested=String(u.searchParams.get('deep')||'0')==='1';
+        try{
+          const all=[];
+          for(const entry of Object.values(radarEntries)){
+            if(typeof store?.[entry.read]!=='function')continue;
+            const rows=await store[entry.read]({sinceMs:Date.now()-60*60*1000,limit:30});
+            for(const row of rows)all.push(decorateRadarAlert(row,entry.name));
+          }
+          let candidates=rankKingMarket({alerts:all,limit:Math.max(limit,3),now:Date.now()});
+          const deepBySymbol={};
+          if(deepRequested&&deepSymbolScanner){
+            for(const row of candidates.slice(0,Math.min(3,candidates.length))){
+              try{deepBySymbol[row.symbol]=await deepSymbolScanner.scan(row.symbol);}catch{}
+            }
+            candidates=rankKingMarket({alerts:all,deepBySymbol,limit,now:Date.now()});
+          }else candidates=candidates.slice(0,limit);
+          return send(res,200,{engine:'KING_INTELLIGENCE',engine_name:'👑 الكنق',candidates,meta:{live:true,deep_scan_requested:deepRequested,deep_scan_cap:deepRequested?Math.min(3,candidates.length):0,source:'RadarX evidence',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        }catch(e){
+          return send(res,503,{status:'not_ready',engine:'KING_INTELLIGENCE',engine_name:'👑 الكنق',candidates:[],error:String(e?.message??e),meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         }
       }
       if(u.pathname==='/api/signal'&&req.method==='GET'){
