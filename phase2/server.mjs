@@ -59,7 +59,15 @@ export async function startServer({
   const liquidityAbsorptionRadar=new LiquidityAbsorptionRadar({rest:liquidityRadarRest,store,pushManager:push,config:config.liquidityAbsorptionRadar||{},logger});
   const kahirRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
   const kahirRadar=new KahirRadar({rest:kahirRadarRest,store,pushManager:push,config:config.kahirRadar||{},logger});
-  const symbolDeepAnalyzer=new SymbolDeepAnalyzer({rest,config:config.symbolDeepScan||{}});
+  // The deep symbol scanner gets its own REST client so background radar traffic cannot
+  // race its endpoint selection. Prefer Binance's market-data-only mirror first; it is
+  // explicitly documented to serve depth, klines and 24h ticker without authentication.
+  const deepRestUrls=[
+    'https://data-api.binance.vision',
+    ...(config.rest.baseUrls??config.rest.urls??[])
+  ].filter((url,index,arr)=>arr.indexOf(url)===index);
+  const deepScanRest=new RestClient({...config.rest,baseUrls:deepRestUrls});
+  const symbolDeepAnalyzer=new SymbolDeepAnalyzer({rest:deepScanRest,config:config.symbolDeepScan||{}});
   const professorRadar=new ProfessorRadar({rest,store,pushManager:push,deepAnalyzer:symbolDeepAnalyzer,config:config.professorRadar||{},logger});
   const doomsdayRadar=new DoomsdayRadar({rest,store,pushManager:push,config:config.doomsdayRadar||{},logger});
   const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,symbolDeepAnalyzer});
