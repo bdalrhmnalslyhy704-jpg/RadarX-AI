@@ -1,3 +1,4 @@
+import {isPreBreakoutNotificationEligible} from './radar-prebreakout-engine.mjs';
 const clamp=(v,min=0,max=100)=>Math.max(min,Math.min(max,Number.isFinite(Number(v))?Number(v):0));
 const num=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
 const arr=v=>Array.isArray(v)?v:[];
@@ -13,6 +14,7 @@ const PROFILES=Object.freeze({
 });
 
 const recentBySymbol=new Map();
+const preBreakoutStreakBySymbol=new Map();
 
 function radarId(alert){return String(alert?.radar||'').toUpperCase();}
 function profileFor(alert){return PROFILES[radarId(alert)]||PROFILES.PROFESSOR_RADAR;}
@@ -74,8 +76,22 @@ function criticalRisk(alert){
   return all.filter(x=>/ALREADY_MOVED|ALREADY_EXTENDED|EXTENDED_CHASE|DATA_QUALITY|NO_PRIMARY_TRIGGER|LOW_CONFLUENCE|DISJOINTED|FLOW_WITHOUT|VOLUME_WITHOUT|LIQUIDITY_TOO_WEAK|RESISTANCE_TOO_NEAR|CHAS(E|ING)/.test(x));
 }
 
+function updatePreBreakoutStreak(alert,now){
+  const symbol=String(alert?.symbol||'').toUpperCase();
+  const fp=alert?.pre_breakout_fingerprint;
+  if(!symbol||!fp)return null;
+  const valid=Boolean(fp.ready)&&!Boolean(fp.late)&&!Boolean(fp.micro_move)&&Number(fp.score)>=72;
+  const prev=preBreakoutStreakBySymbol.get(symbol);
+  const within=prev&&Number(now)-Number(prev.lastAt)<=8*60*1000;
+  const streak=valid?(within?Number(prev.streak||0)+1:1):0;
+  const next={streak,lastAt:Number(now)||Date.now(),score:Number(fp.score)||0};
+  preBreakoutStreakBySymbol.set(symbol,next);
+  return next;
+}
+
 function radarSpecificChecks(alert,p){
   const r=radarId(alert);
+  const fingerprint=alert?.pre_breakout_fingerprint||null;
   const failures=[];
   const confirmations=confirmationsOf(alert);
   const score=scoreOf(alert);
@@ -86,16 +102,21 @@ function radarSpecificChecks(alert,p){
   if(score<p.minScore)failures.push('SCORE_BELOW_STRICT_THRESHOLD');
   if(data<p.minData)failures.push('DATA_QUALITY_BELOW_STRICT_THRESHOLD');
   if(p.minLiquidity&&liq<p.minLiquidity)failures.push('LIQUIDITY_BELOW_STRICT_THRESHOLD');
+  if(fingerprint?.micro_move)failures.push('MICRO_MOVE_NOISE');
+  if(fingerprint?.late&&r!=='STRONG_MOVE_RADAR')failures.push('LATE_SETUP_CHASE_GUARD');
   if(p.minConfirmations&&confirmations<p.minConfirmations)failures.push('CONFIRMATION_BREADTH_LOW');
   if(p.minCategoryHits&&categories<p.minCategoryHits)failures.push('CATEGORY_DIVERSITY_LOW');
 
   if(r==='EARLY_MOVE_RADAR'){
     const accepted=acceptedStrategiesOf(alert);
+    const streak=updatePreBreakoutStreak(alert,Date.now());
     const pre=alert?.pre_explosion;
     const wake=alert?.early_wake;
     const hasPreConfirm=num(pre?.confirmation_count,0)>=8 && accepted>=p.minAcceptedStrategies;
     const hasWakeConfirm=num(wake?.leader_count,0)>=8 && num(alert?.opportunity_score,0)>=p.minScore;
     if(!hasPreConfirm&&!hasWakeConfirm)failures.push('EARLY_SETUP_NOT_ENOUGH_INDEPENDENT_CONFIRMATIONS');
+    if(fingerprint&&!isPreBreakoutNotificationEligible(fingerprint,{requireConfirmed:true})&&!(Number(fingerprint.impulse_quality_score)>=84&&Number(fingerprint.score)>=90))failures.push('PRE_BREAKOUT_FINGERPRINT_NOT_CONFIRMED');
+    if(fingerprint&&streak&&Number(streak.streak)<2&&!(Number(fingerprint.impulse_quality_score)>=84&&Number(fingerprint.score)>=90))failures.push('PRE_BREAKOUT_PERSISTENCE_LOW');
     if(Boolean(pre?.already_moved)||Boolean(wake?.already_moved))failures.push('EARLY_SETUP_ALREADY_MOVED');
     if(num(pre?.calm_enough,1)===0||num(wake?.calm_enough,1)===0)failures.push('EARLY_SETUP_NOT_CALM');
   }
@@ -144,6 +165,8 @@ function radarSpecificChecks(alert,p){
     if(Math.max(ignition,early)<8)failures.push('DOOMSDAY_CONFIRMATION_BREADTH_LOW');
     if(ignitionScore<82)failures.push('IGNITION_SCORE_NOT_CONFIRMED');
   }
+
+  if(r!=='EARLY_MOVE_RADAR'&&r!=='PROFESSOR_RADAR'&&fingerprint&&!fingerprint.late&&!fingerprint.micro_move&&Number(fingerprint.score)>0&&Number(fingerprint.score)<68)failures.push('PRE_BREAKOUT_QUALITY_WEAK');
 
   if(r==='PROFESSOR_RADAR'){
     const opinion=alert?.professor_opinion||{};
@@ -205,7 +228,7 @@ export function rememberRadarAlert(alert,now=Date.now()){
   }
 }
 
-export function resetRadarNotificationGateForTests(){recentBySymbol.clear();}
+export function resetRadarNotificationGateForTests(){recentBySymbol.clear();preBreakoutStreakBySymbol.clear();}
 
 export function notificationGateHealth(){
   return {tracked_symbols:recentBySymbol.size,mode:'STRICT_NOTIFICATION_ONLY',cross_radar_suppression:true,no_extra_network_calls:true};
