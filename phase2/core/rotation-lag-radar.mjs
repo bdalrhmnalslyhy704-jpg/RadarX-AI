@@ -1,5 +1,6 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
+import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -435,7 +436,28 @@ export class RotationLagRadar {
       ticker:row,fifteen_min:f.candles,one_hour:h.candles,benchmarks
     },this.clock());
     this.scans++;
-    if(!alert.eligible||alert.rotation.score<this.config.minScore||alert.rotation.confirmations<this.config.minConfirmations)return alert;
+    const a=alert.rotation||{};
+    const cs=a.component_scores||{};
+    const m=a.metrics||{};
+    const gate=evaluateEliteGate({
+      radar:'ROTATION_LAG_RADAR',
+      direction:a.direction,
+      baseScore:a.score,
+      priceChange24h:row.priceChange24h,
+      liquidityScore:clamp(70+Math.log10(Math.max(1,row.quoteVolume24h/this.config.minQuoteVolume24h))*30),
+      dataQualityScore:90,
+      triggerScore:a.activation_score||50,
+      structureScore:Math.max(Number(cs.reclaim_or_reject)||0,Number(cs.value_acceptance)||0),
+      participationScore:Number(cs.silent_volume)||50,
+      flowScore:Math.max(Number(cs.mfi_turn)||0,Number(cs.rsi_turn)||0),
+      relativeScore:Math.max(Number(cs.lag)||0,Number(cs.resilience)||0),
+      momentumScore:Number(cs.stochastic_turn)||Number(cs.persistence)||50,
+      compressionScore:Number(cs.compression)||50,
+      confirmations:a.confirmations,
+      minConfirmations:6,minScore:86,max24hMovePct:5,requireTrigger:true,minCategoryHits:5
+    });
+    alert.elite_gate=gate;
+    if(!alert.eligible||a.score<this.config.minScore||a.confirmations<this.config.minConfirmations||!gate.eligible)return alert;
     const lastAlert=this.lastAlertAt.get(row.symbol)||0;
     if(this.clock()-lastAlert<this.config.alertCooldownMs)return alert;
     this.lastAlertAt.set(row.symbol,this.clock());
