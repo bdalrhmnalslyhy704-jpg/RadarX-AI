@@ -313,6 +313,22 @@ function analyzeTimeframe(candles, timeframe) {
   };
 }
 
+const TRANSIENT_SOURCE_ERROR=/HTTP_(?:418|429|500|502|503|504)\b|TIMEOUT|RATE_LIMIT|REST_REQUEST|NETWORK|FETCH|ECONN|ENOTFOUND|ETIMEDOUT|ABORT/i;
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function retrySource(fn,{attempts=3,baseDelayMs=450}={}){
+  let lastError;
+  for(let attempt=0;attempt<attempts;attempt++){
+    try{return await fn();}
+    catch(error){
+      lastError=error;
+      const message=String(error?.message??error);
+      if(!TRANSIENT_SOURCE_ERROR.test(message)||attempt>=attempts-1)throw error;
+      await sleep(Math.min(1800,baseDelayMs*(2**attempt)));
+    }
+  }
+  throw lastError||new Error('SOURCE_UNAVAILABLE');
+}
+
 function depthPressure(book, price) {
   const bids = Array.isArray(book?.bids) ? book.bids : [];
   const asks = Array.isArray(book?.asks) ? book.asks : [];
@@ -438,7 +454,8 @@ function quality(candles, ticker, depth, source) {
   const coverage = counts.every(x=>x>=180);
   const closeOk = counts.every(x=>x>0);
   const complete = closeOk && candles.every(arr=>arr.every(c=>c.closeTime < Date.now()));
-  const score = clamp((coverage?75:55) + (complete?20:0) + (ticker?5:0));
+  const depthOk = Boolean(depth && ((depth.bid_levels||0)+(depth.ask_levels||0)>0));
+  const score = clamp((coverage?70:50) + (complete?20:0) + (ticker?7:0) + (depthOk?3:0));
   return {
     score:Number(score.toFixed(1)),
     closed_candles:counts.reduce((a,b)=>a+b,0),
@@ -471,21 +488,34 @@ export class SymbolDeepAnalyzer {
     const symbol = normalizeDeepScanSymbol(rawSymbol, this.config.quote);
     const now = Date.now();
     const intervals = ['15m','1h','4h'];
-    const fetched = [];
-    for (const interval of intervals) {
-      const result = await this.rest.klines(symbol, interval, {limit:this.config.klineLimit});
+    const fetched = await Promise.all(intervals.map(async interval=>{
+      const result = await retrySource(()=>this.rest.klines(symbol, interval, {limit:this.config.klineLimit}),{attempts:3});
       const closed = cleanClosed(result.candles, now);
       if (closed.length < 120) throw new Error('INSUFFICIENT_CLOSED_CANDLES');
-      fetched.push({interval, closed, source:result.source || 'Binance Public REST'});
+      return {interval, closed, source:result.source || 'Binance Public REST'};
+    }));
+    let ticker=null;
+    let tickerError=null;
+    try{
+      const tickerResult=await retrySource(()=>this.rest.ticker24h(symbol),{attempts:3});
+      ticker=tickerResult?.data||null;
+    }catch(error){
+      tickerError=String(error?.message??error);
     }
-    const tickerResult = await this.rest.ticker24h(symbol);
-    const ticker = tickerResult?.data || null;
-    const depthResult = await this.rest.depth(symbol, 100);
-    const depth = depthPressure(depthResult?.data, Number(ticker?.lastPrice));
+    const referencePrice=finite(ticker?.lastPrice) ?? finite(fetched.find(x=>x.interval==='15m')?.closed?.at(-1)?.close);
+    let depthData=null;
+    let depthError=null;
+    try{
+      const depthResult=await retrySource(()=>this.rest.depth(symbol,100),{attempts:3});
+      depthData=depthResult?.data||null;
+    }catch(error){
+      depthError=String(error?.message??error);
+    }
+    const depth = depthPressure(depthData, Number(referencePrice));
     const rows = fetched.map(x=>analyzeTimeframe(x.closed,x.interval));
     const zones = analyzeZones(rows);
     const pressure = pressureScore(ticker, depth);
-    const liquidity = liquidityScore(ticker, depth, Number(ticker?.lastPrice || rows[0]?.price || 1));
+    const liquidity = liquidityScore(ticker, depth, Number(referencePrice || rows[0]?.price || 1));
     const momentum = assessMomentum(rows);
     const direction = combineTimeframes(rows,pressure,zones);
     const trapRisk = assessTrapRisk(rows,pressure,zones);
@@ -500,15 +530,21 @@ export class SymbolDeepAnalyzer {
       symbol,
       market:'SPOT',
       meta:{
-        live:true,
+        live:Boolean(ticker?.lastPrice),
+        live_price_available:Boolean(ticker?.lastPrice),
         source:'Binance Public REST',
         as_of:new Date(Date.now()).toISOString(),
         paper_trading:true,
         real_order_execution:false,
-        confidence_score:'UNKNOWN'
+        confidence_score:'UNKNOWN',
+        source_warnings:[
+          tickerError?'24H_TICKER_TEMPORARILY_UNAVAILABLE':null,
+          depthError?'ORDER_BOOK_TEMPORARILY_UNAVAILABLE':null
+        ].filter(Boolean)
       },
       price:{
-        last:finite(ticker?.lastPrice) ?? rows.find(x=>x.timeframe==='15m')?.price ?? null,
+        last:finite(ticker?.lastPrice),
+        last_closed_15m:finite(rows.find(x=>x.timeframe==='15m')?.price),
         change_24h_pct:finite(ticker?.priceChangePercent),
         high_24h:finite(ticker?.highPrice),
         low_24h:finite(ticker?.lowPrice)

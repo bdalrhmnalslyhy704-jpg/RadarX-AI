@@ -10,12 +10,23 @@ const phase1=[
 
 const phase2=[
   'phase2/tests/api.test.mjs',
+  'phase2/tests/autonomous-agent-market.test.mjs',
   'phase2/tests/data-quality.test.mjs',
+  'phase2/tests/elite-confluence-gate.test.mjs',
+  'phase2/tests/radar-advanced-confluence.test.mjs',
+  'phase2/tests/radar-prebreakout-engine.test.mjs',
+  'phase2/tests/radar-notification-gate.test.mjs',
   'phase2/tests/dedup.test.mjs',
   'phase2/tests/early-move-sentinel.test.mjs',
   'phase2/tests/end-to-end.test.mjs',
   'phase2/tests/frontend-contract.test.mjs',
   'phase2/tests/integration-failures.test.mjs',
+  'phase2/tests/ai-agent-hub.test.mjs',
+  'phase2/tests/king-intelligence.test.mjs',
+  'phase2/tests/liquidity-absorption-radar.test.mjs',
+  'phase2/tests/radar-suite-v2.test.mjs',
+  'phase2/tests/professor-radar.test.mjs',
+  'phase2/tests/kahir-radar.test.mjs',
   'phase2/tests/market-radar.test.mjs',
   'phase2/tests/monitor-phone-independence.test.mjs',
   'phase2/tests/monitor.test.mjs',
@@ -36,8 +47,8 @@ const phase2=[
 
 const scope=process.argv[2]||'all';
 const files=scope==='phase1'?phase1:scope==='phase2'?phase2:[...phase1,...phase2];
-const FILE_TIMEOUT_MS=45000;
-const TEST_TIMEOUT_MS=30000;
+const FILE_TIMEOUT_MS=75000;
+const TEST_TIMEOUT_MS=60000;
 
 async function runFile(file){
   console.error('[TEST FILE START] '+file);

@@ -1,11 +1,28 @@
 name: RadarX Triple Radar CI
+# Bottom Radar repair validation
 
 on:
   push:
     branches:
       - phase3-triple-radar
+      - development-v191-base-20261005
       - phase4-symbol-deep-scan
+      - phase4-symbol-deep-scan-testfix
+      - phase5-fix-bottom-radar-enable-deep-scan
+      - phase5-ci-runtime-timeout-hardening
+      - phase6-radar4-independent-microstructure
+      - phase5-kahir-independent-radar
+      - fix-four-radars-runtime
+      - fix-radar-runtime-return-market-data
+      - radar6-doomsday-20261005
+  pull_request:
+    branches:
+      - phase3-triple-radar
   workflow_dispatch:
+
+concurrency:
+  group: radarx-triple-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -37,8 +54,29 @@ jobs:
         run: |
           set -euo pipefail
           node --check phase2/core/rotation-lag-radar.mjs
+          node --check phase2/market/universe-scanner.mjs
           node --check phase2/core/strong-move-radar.mjs
           node --check phase2/core/early-move-sentinel.mjs
           node --check phase2/core/symbol-deep-analyzer.mjs
+          node --check phase2/core/liquidity-absorption-radar.mjs
+          node --check phase2/core/kahir-radar.mjs
+          node --check phase2/core/doomsday-radar.mjs
+          node --check phase2/core/elite-confluence-gate.mjs
+          node --check phase2/core/autonomous-agent-market.mjs
+          node --check phase2/core/ai-agent-hub.mjs
+          node --check phase2/core/radar-alert-meta.mjs
           node --check android/app/src/main/assets/radarx-symbol-deep-scan.mjs
+          node --check android/app/src/main/assets/radarx-backend-client.mjs
+          node --check android/app/src/main/assets/radarx-backend-client.mjs
+          node --check android/app/src/main/assets/radarx-doomsday-radar.mjs
+          node --check android/app/src/main/assets/radarx-background-control.mjs
+          node --check android/app/src/main/assets/radarx-radar-screen.mjs
+          test -f android/app/src/main/assets/radar1-destroyer.html
+          test -f android/app/src/main/assets/radar2-dark-king.html
+          test -f android/app/src/main/assets/radar3-joker.html
+          test -f android/app/src/main/assets/radar4-sweeper.html
+          test -f android/app/src/main/assets/doomsday-radar.html
+          test -f android/app/src/main/assets/ai-agent-hub.html
+          test -f android/app/src/main/assets/ai-market.html
+          test -f android/app/src/main/assets/ai-learning.html
           node --check android/app/src/main/assets/radarx-backend-client.mjs

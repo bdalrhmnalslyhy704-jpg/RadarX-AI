@@ -1,7 +1,7 @@
 /* Bottom Radar v2 regression coverage: live flow, squeeze, structure, whale heuristic. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {MarketUniverseScanner, buildSpotUniverse, rankTickerRows, boundedMap, normalizeRadarLimit, normalizeTickerRow, buildBottomMarketContext, buildPreMoveContext, rankPreMoveTickerRows} from '../market/universe-scanner.mjs';
+import {MarketUniverseScanner, buildSpotUniverse, rankTickerRows, rankBottomTickerRows, boundedMap, normalizeRadarLimit, normalizeTickerRow, buildBottomMarketContext, buildPreMoveContext, rankPreMoveTickerRows} from '../market/universe-scanner.mjs';
 
 function candle(t, close=100, tfMs=900000) {
   return {
@@ -97,6 +97,17 @@ test('ticker ranking prioritizes liquid rows and enforces minimum volume',()=>{
   assert.deepEqual(rows.map(x=>x.symbol),['BTCUSDT','ETHUSDT']);
 });
 
+test('Bottom Radar discovery prioritizes symbols near the 24h low while retaining liquidity',()=>{
+  const symbols=buildSpotUniverse(exchangeInfo(),'USDT');
+  const rows=rankBottomTickerRows([
+    {symbol:'BTCUSDT',lastPrice:'93',highPrice:'100',lowPrice:'90',quoteVolume:'5000000',count:50000,priceChangePercent:'-4'},
+    {symbol:'ETHUSDT',lastPrice:'55',highPrice:'80',lowPrice:'50',quoteVolume:'40000000',count:250000,priceChangePercent:'-2'},
+    {symbol:'LOWUSDT',lastPrice:'2',highPrice:'3',lowPrice:'1',quoteVolume:'100',count:10,priceChangePercent:'-20'}
+  ],symbols,{minQuoteVolume24h:750000,limit:2});
+  assert.deepEqual(new Set(rows.map(x=>x.symbol)),new Set(['BTCUSDT','ETHUSDT']));
+  assert.ok(rows[0].range_position_pct < 50);
+});
+
 test('ticker rows preserve 24h high and low for Bottom Radar',()=>{
   const row=normalizeTickerRow(tickers()[0],'USDT');
   assert.equal(row.highPrice24h,112);
@@ -173,6 +184,22 @@ test('boundedMap never exceeds requested concurrency',async()=>{
   let active=0,max=0;
   await boundedMap([1,2,3,4,5,6],2,async()=>{active++;max=Math.max(max,active);await new Promise(r=>setTimeout(r,10));active--;});
   assert.equal(max,2);
+});
+
+test('dedicated Bottom Radar scan uses the optimized discovery path',async()=>{
+  const rest=makeRest();
+  const scanner=new MarketUniverseScanner({
+    rest,
+    config:{minQuoteVolume24h:750000,scanLimit:2,returnLimit:2,bottomDiscoveryPool:18,bottomDeepConcurrency:2,bottomDeepKlines:180},
+    strategyEvaluator:evaluator
+  });
+  const result=await scanner.scanBottom({quote:'USDT',limit:2});
+  assert.equal(result.meta.radar,'BOTTOM_REVERSAL');
+  assert.equal(result.meta.paper_trading,true);
+  assert.equal(result.meta.real_order_execution,false);
+  assert.equal(result.universe.scanned,2);
+  assert.equal(result.universe.deep_scan_cap,10);
+  assert.equal(result.candidates.length,2);
 });
 
 test('market scanner deduplicates symbols and only deep-scans selected rows',async()=>{

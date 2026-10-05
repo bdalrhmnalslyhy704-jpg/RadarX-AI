@@ -98,8 +98,8 @@ export const CONFIG = Object.freeze({
     pollMs: int(process.env.RADARX_STRONG_MOVE_POLL_MS, 15000),
     universeRefreshMs: int(process.env.RADARX_STRONG_MOVE_UNIVERSE_REFRESH_MS, 60000),
     minQuoteVolume24h: int(process.env.RADARX_STRONG_MOVE_MIN_QUOTE_VOLUME_24H, 1000000),
-    rotationBatchSize: int(process.env.RADARX_STRONG_MOVE_ROTATION_BATCH, 6),
-    topMoverCount: int(process.env.RADARX_STRONG_MOVE_TOP_MOVERS, 4),
+    rotationBatchSize: int(process.env.RADARX_STRONG_MOVE_ROTATION_BATCH, 7),
+    topMoverCount: int(process.env.RADARX_STRONG_MOVE_TOP_MOVERS, 6),
     alertCooldownMs: int(process.env.RADARX_STRONG_MOVE_ALERT_COOLDOWN_MS, 5 * 60 * 1000),
     minScore: int(process.env.RADARX_STRONG_MOVE_MIN_SCORE, 76)
   },
@@ -119,6 +119,107 @@ export const CONFIG = Object.freeze({
     minScore: int(process.env.RADARX_ROTATION_RADAR_MIN_SCORE, 78),
     minConfirmations: int(process.env.RADARX_ROTATION_RADAR_MIN_CONFIRMATIONS, 4)
   },
+  radarControl: {
+    autostart: String(process.env.RADARX_RADARS_AUTOSTART ?? ((process.env.RADARX_ENV ?? 'development').toLowerCase() === 'production' ? 'true' : 'false')).toLowerCase() === 'true'
+  },
+  liquidityAbsorptionRadar: {
+    quote: 'USDT',
+    pollMs: int(process.env.RADARX_LIQUIDITY_ABSORPTION_POLL_MS, 45000),
+    universeRefreshMs: int(process.env.RADARX_LIQUIDITY_ABSORPTION_UNIVERSE_REFRESH_MS, 5 * 60 * 1000),
+    minQuoteVolume24h: int(process.env.RADARX_LIQUIDITY_ABSORPTION_MIN_QUOTE_VOLUME_24H, 1500000),
+    rotationBatchSize: int(process.env.RADARX_LIQUIDITY_ABSORPTION_BATCH, 4),
+    topLiquidityCount: int(process.env.RADARX_LIQUIDITY_ABSORPTION_TOP, 3),
+    alertCooldownMs: int(process.env.RADARX_LIQUIDITY_ABSORPTION_ALERT_COOLDOWN_MS, 20 * 60 * 1000),
+    minScore: int(process.env.RADARX_LIQUIDITY_ABSORPTION_MIN_SCORE, 83),
+    minConfirmations: int(process.env.RADARX_LIQUIDITY_ABSORPTION_MIN_CONFIRMATIONS, 6)
+  },
+  kahirRadar: {
+    quote: 'USDT',
+    pollMs: int(process.env.RADARX_KAHIR_POLL_MS, 30000),
+    universeRefreshMs: int(process.env.RADARX_KAHIR_UNIVERSE_REFRESH_MS, 5 * 60 * 1000),
+    minQuoteVolume24h: int(process.env.RADARX_KAHIR_MIN_QUOTE_VOLUME_24H, 500000),
+    baselineHistory: int(process.env.RADARX_KAHIR_BASELINE_HISTORY, 8),
+    deepCandidates: int(process.env.RADARX_KAHIR_DEEP_CANDIDATES, 14),
+    deepConcurrency: int(process.env.RADARX_KAHIR_DEEP_CONCURRENCY, 4),
+    deepOneMinuteKlines: int(process.env.RADARX_KAHIR_1M_KLINES, 150),
+    deepFiveMinuteKlines: int(process.env.RADARX_KAHIR_5M_KLINES, 100),
+    alertCooldownMs: int(process.env.RADARX_KAHIR_ALERT_COOLDOWN_MS, 20 * 60 * 1000),
+    minScore: int(process.env.RADARX_KAHIR_MIN_SCORE, 84),
+    minOneMinuteZ: float(process.env.RADARX_KAHIR_MIN_1M_Z, 1.8),
+    minFiveMinuteZ: float(process.env.RADARX_KAHIR_MIN_5M_Z, 1.6),
+    minVolumeRatio: float(process.env.RADARX_KAHIR_MIN_VOLUME_RATIO, 1.35),
+    minEfficiency: float(process.env.RADARX_KAHIR_MIN_EFFICIENCY, 0.52),
+    minRelativeAccelerationBps: float(process.env.RADARX_KAHIR_MIN_RELATIVE_ACCEL_BPS, 1.5),
+    maxAbs24hMovePct: float(process.env.RADARX_KAHIR_MAX_24H_MOVE_PCT, 15)
+  },
+  doomsdayRadar: {
+    quote: 'USDT',
+    pollMs: int(process.env.RADARX_DOOMSDAY_POLL_MS, 15000),
+    universeRefreshMs: int(process.env.RADARX_DOOMSDAY_UNIVERSE_REFRESH_MS, 5 * 60 * 1000),
+    minQuoteVolume24h: int(process.env.RADARX_DOOMSDAY_MIN_QUOTE_VOLUME_24H, 500000),
+    deepCandidates: int(process.env.RADARX_DOOMSDAY_DEEP_CANDIDATES, 10),
+    deepConcurrency: int(process.env.RADARX_DOOMSDAY_DEEP_CONCURRENCY, 4),
+    oneMinuteKlines: int(process.env.RADARX_DOOMSDAY_1M_KLINES, 120),
+    fiveMinuteKlines: int(process.env.RADARX_DOOMSDAY_5M_KLINES, 80),
+    alertCooldownMs: int(process.env.RADARX_DOOMSDAY_ALERT_COOLDOWN_MS, 8 * 60 * 1000),
+    minEarlyScore: int(process.env.RADARX_DOOMSDAY_MIN_EARLY_SCORE, 78),
+    minIgnitionScore: int(process.env.RADARX_DOOMSDAY_MIN_IGNITION_SCORE, 82),
+    minPowerScore: int(process.env.RADARX_DOOMSDAY_MIN_POWER_SCORE, 90),
+    minVolumeRatio: float(process.env.RADARX_DOOMSDAY_MIN_VOLUME_RATIO, 1.35),
+    minTradeRatio: float(process.env.RADARX_DOOMSDAY_MIN_TRADE_RATIO, 1.25),
+    minTakerRatio: float(process.env.RADARX_DOOMSDAY_MIN_TAKER_RATIO, 0.515),
+    max24hMovePct: float(process.env.RADARX_DOOMSDAY_MAX_24H_MOVE_PCT, 18),
+    retryAttempts: int(process.env.RADARX_DOOMSDAY_RETRY_ATTEMPTS, 1),
+    watchlist: ['FETUSDT','SCRUSDT','CHIPUSDT','ORCAUSDT','TSTUSDT','GTCUSDT']
+  },
+  doomsdayRadar: {
+    quote: 'USDT',
+    pollMs: int(process.env.RADARX_DOOMSDAY_POLL_MS, 15000),
+    universeRefreshMs: int(process.env.RADARX_DOOMSDAY_UNIVERSE_REFRESH_MS, 5 * 60 * 1000),
+    minQuoteVolume24h: int(process.env.RADARX_DOOMSDAY_MIN_QUOTE_VOLUME_24H, 500000),
+    deepCandidates: int(process.env.RADARX_DOOMSDAY_DEEP_CANDIDATES, 10),
+    deepConcurrency: int(process.env.RADARX_DOOMSDAY_DEEP_CONCURRENCY, 4),
+    oneMinuteKlines: int(process.env.RADARX_DOOMSDAY_1M_KLINES, 120),
+    fiveMinuteKlines: int(process.env.RADARX_DOOMSDAY_5M_KLINES, 80),
+    alertCooldownMs: int(process.env.RADARX_DOOMSDAY_ALERT_COOLDOWN_MS, 8 * 60 * 1000),
+    minEarlyScore: int(process.env.RADARX_DOOMSDAY_MIN_EARLY_SCORE, 78),
+    minIgnitionScore: int(process.env.RADARX_DOOMSDAY_MIN_IGNITION_SCORE, 82),
+    minPowerScore: int(process.env.RADARX_DOOMSDAY_MIN_POWER_SCORE, 90),
+    minVolumeRatio: float(process.env.RADARX_DOOMSDAY_MIN_VOLUME_RATIO, 1.35),
+    minTradeRatio: float(process.env.RADARX_DOOMSDAY_MIN_TRADE_RATIO, 1.25),
+    minTakerRatio: float(process.env.RADARX_DOOMSDAY_MIN_TAKER_RATIO, 0.515),
+    max24hMovePct: float(process.env.RADARX_DOOMSDAY_MAX_24H_MOVE_PCT, 18),
+    retryAttempts: int(process.env.RADARX_DOOMSDAY_RETRY_ATTEMPTS, 1),
+    watchlist: ['FETUSDT','SCRUSDT','CHIPUSDT','ORCAUSDT','TSTUSDT','GTCUSDT']
+  },
+  aiAgents: {
+    quote: 'USDT',
+    pollMs: int(process.env.RADARX_AI_AGENTS_POLL_MS, 90000),
+    minQuoteVolume24h: int(process.env.RADARX_AI_AGENTS_MIN_QUOTE_VOLUME_24H, 750000),
+    deepCandidates: int(process.env.RADARX_AI_AGENTS_DEEP_CANDIDATES, 6),
+    deepPool: int(process.env.RADARX_AI_AGENTS_DEEP_POOL, 60),
+    deepConcurrency: int(process.env.RADARX_AI_AGENTS_DEEP_CONCURRENCY, 3),
+    deepKlines: int(process.env.RADARX_AI_AGENTS_DEEP_KLINES, 220),
+    webCandidates: int(process.env.RADARX_AI_AGENTS_WEB_CANDIDATES, 2),
+    memoryDays: int(process.env.RADARX_AI_AGENTS_MEMORY_DAYS, 30),
+    resultLimit: int(process.env.RADARX_AI_AGENTS_RESULT_LIMIT, 20),
+    learningLimit: int(process.env.RADARX_AI_AGENTS_LEARNING_LIMIT, 2000)
+  },
+  professorRadar: {
+    quote: 'USDT',
+    pollMs: int(process.env.RADARX_PROFESSOR_POLL_MS, 120000),
+    universeRefreshMs: int(process.env.RADARX_PROFESSOR_UNIVERSE_REFRESH_MS, 15 * 60 * 1000),
+    liveSearchLimit: int(process.env.RADARX_PROFESSOR_LIVE_SEARCH_LIMIT, 8),
+    transcriptStreams: int(process.env.RADARX_PROFESSOR_TRANSCRIPT_STREAMS, 2),
+    newsLimit: int(process.env.RADARX_PROFESSOR_NEWS_LIMIT, 35),
+    deepCandidates: int(process.env.RADARX_PROFESSOR_DEEP_CANDIDATES, 5),
+    deepConcurrency: int(process.env.RADARX_PROFESSOR_DEEP_CONCURRENCY, 2),
+    alertCooldownMs: int(process.env.RADARX_PROFESSOR_ALERT_COOLDOWN_MS, 30 * 60 * 1000),
+    minEntryScore: int(process.env.RADARX_PROFESSOR_MIN_ENTRY_SCORE, 78),
+    minWatchScore: int(process.env.RADARX_PROFESSOR_MIN_WATCH_SCORE, 66),
+    webTimeoutMs: int(process.env.RADARX_PROFESSOR_WEB_TIMEOUT_MS, 7000),
+    transcriptTimeoutMs: int(process.env.RADARX_PROFESSOR_TRANSCRIPT_TIMEOUT_MS, 6000)
+  },
   paper: {
     feeRate: float(process.env.RADARX_PAPER_FEE_RATE, 0.001),
     slippageBps: float(process.env.RADARX_PAPER_SLIPPAGE_BPS, 5),
@@ -134,7 +235,7 @@ export const CONFIG = Object.freeze({
   auth: {
     secret: process.env.RADARX_AUTH_SECRET ?? '',
     ttlSec: int(process.env.RADARX_AUTH_TOKEN_TTL_SEC, 86400),
-    allowedOrigins: list(process.env.RADARX_ALLOWED_ORIGINS, [])
+    allowedOrigins: list(process.env.RADARX_ALLOWED_ORIGINS, ['https://appassets.androidplatform.net'])
   },
   staging: {
     testPushEnabled: String(process.env.RADARX_STAGING_TEST_PUSH_ENABLED ?? 'false').toLowerCase() === 'true'

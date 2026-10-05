@@ -42,8 +42,15 @@ public final class MainActivity extends Activity {
             "https://appassets.androidplatform.net";
     private static final String BACKEND_ORIGIN =
             "https://radarx-ai-triple-production.up.railway.app";
+    private static final String BACKEND_FALLBACK_ORIGIN =
+            "https://radarx-ai-production.up.railway.app";
     private static final int REQUEST_POST_NOTIFICATIONS = 7301;
     private boolean pendingBackgroundStart;
+    private final Runnable backgroundStartRunnable = () -> {
+        if (!isFinishing() && (Build.VERSION.SDK_INT < 17 || !isDestroyed())) {
+            requestNotificationPermissionAndStart();
+        }
+    };
 
     private WebView webView;
     private WebViewAssetLoader assetLoader;
@@ -92,21 +99,14 @@ public final class MainActivity extends Activity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                Uri uri = request.getUrl();
-                return !(isAllowedAppUri(uri) || isAllowedBackendUri(uri));
+                return !isAllowedAppUri(request.getUrl());
             }
 
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                Uri uri = request.getUrl();
-                WebResourceResponse local = assetLoader.shouldInterceptRequest(uri);
-                if (local != null) {
-                    return local;
-                }
-                if (isAllowedBackendUri(uri)) {
-                    return fetchBackend(request);
-                }
-                return blockedResponse("Network destination blocked");
+                WebResourceResponse local = assetLoader.shouldInterceptRequest(request.getUrl());
+                if (local != null) return local;
+                return null;
             }
 
             @Override
@@ -132,6 +132,9 @@ public final class MainActivity extends Activity {
 
         setContentView(webView);
         webView.loadUrl(APP_URL);
+        // Start the monitor shortly after the Activity is visible. The service does not depend
+        // on WebView/module readiness, so a UI-side script error cannot prevent background monitoring.
+        webView.postDelayed(backgroundStartRunnable, 1200L);
     }
 
     private static boolean isAllowedAppUri(Uri uri) {
@@ -142,9 +145,9 @@ public final class MainActivity extends Activity {
     }
 
     private static boolean isAllowedBackendUri(Uri uri) {
-        return uri != null
-                && "https".equalsIgnoreCase(uri.getScheme())
-                && BACKEND_ORIGIN.equalsIgnoreCase(uri.getScheme() + "://" + uri.getHost())
+        if (uri == null || !"https".equalsIgnoreCase(uri.getScheme())) return false;
+        String origin = uri.getScheme() + "://" + uri.getHost();
+        return (BACKEND_ORIGIN.equalsIgnoreCase(origin) || BACKEND_FALLBACK_ORIGIN.equalsIgnoreCase(origin))
                 && (uri.getPort() == -1 || uri.getPort() == 443);
     }
 
@@ -246,6 +249,7 @@ public final class MainActivity extends Activity {
 
 
     private void startBackgroundMonitor() {
+        if (RadarXBackgroundMonitorService.isRunning(this)) return;
         try {
             Intent intent = new Intent(this, RadarXBackgroundMonitorService.class);
             intent.setAction(RadarXBackgroundMonitorService.ACTION_START);
@@ -325,10 +329,13 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private static final class RadarXSmokeBridge {
+    private final class RadarXSmokeBridge {
         @JavascriptInterface
         public void state(String value) {
             Log.i("RadarXSmoke", String.valueOf(value));
+            if ("UI_READY".equals(String.valueOf(value))) {
+                webView.postDelayed(backgroundStartRunnable, 400L);
+            }
         }
     }
 
@@ -361,6 +368,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         if (webView != null) {
+            webView.removeCallbacks(backgroundStartRunnable);
             webView.loadUrl("about:blank");
             webView.stopLoading();
             webView.setWebChromeClient(null);

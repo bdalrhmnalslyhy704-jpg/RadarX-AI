@@ -49,7 +49,7 @@ details{margin-top:8px;border:1px solid #17364d;border-radius:10px;background:#0
 <div class="note">المؤشرات الجديدة تُحسب من شموع 15m المغلقة ودفتر Spot العام: Taker Buy/Sell، Order-Book Imbalance، امتصاص البيع، Squeeze، BOS/HL وتوافق 4H/1H. «ضغط الحيتان» استدلال من تمركز أكبر جدران السيولة في دفتر الأوامر وليس تعريفًا لهوية حيتان فعلية. لا توجد أسعار مستقبلية مضمونة ولا تنفيذ أو تداول حقيقي.</div>
 
 <script type="module">
-import {getMarketRadar} from './radarx-backend-client.mjs';
+import {getBottomRadar} from './radarx-backend-client.mjs';
 import {rankBottomCandidates} from './radarx-bottom-reversal.mjs';
 
 const scan=document.getElementById('scan');
@@ -116,14 +116,14 @@ async function scanMarket(){
     for(const scanLimit of [...new Set(scanLimits)]){
       for(let attempt=0;attempt<2;attempt++){
         try{
-          const r=await getMarketRadar({quote:'USDT',limit:scanLimit});
+          const r=await getBottomRadar({quote:'USDT',limit:scanLimit});
           if(r.ok&&r.body){
-            const rows=rankBottomCandidates(r.body);
-            status.innerHTML='<b>تم التحديث</b> — '+rows.length+' مرشحًا صالحًا من '+Number(r.body?.universe?.scanned||0)+' عملة مفحوصة • فحص '+scanLimit;
+            const rows=rankBottomCandidates(r.body, requestedLimit);
+            status.innerHTML='<b>تم التحديث</b> — '+rows.length+' مرشحًا صالحًا من '+Number(r.body?.universe?.scanned||0)+' عملة مفحوصة بعمق • اكتشاف '+Number(r.body?.universe?.discovered||0)+' • فحص '+scanLimit;
             render(rows);
             return;
           }
-          lastErr=new Error('HTTP_'+(r.status||0));
+          lastErr=new Error(r.body?.error||'HTTP_'+(r.status||0));
         }catch(e){lastErr=e}
         if(attempt===0) await new Promise(resolve=>setTimeout(resolve,800));
       }

@@ -1,4 +1,7 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
+import {decorateRadarAlert} from './radar-alert-meta.mjs';
+import {evaluateEliteGate} from './elite-confluence-gate.mjs';
+import {evaluateRadarNotificationGate,rememberRadarAlert} from './radar-notification-gate.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -41,8 +44,14 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
   const r3=pct(lastClose,Number(a.at(-4)?.close));
   const r5=pct(lastClose,Number(a.at(-6)?.close));
   const r10=pct(lastClose,Number(a.at(-11)?.close));
+  const r20=pct(lastClose,Number(a.at(-21)?.close));
   const prev3=pct(Number(a.at(-4)?.close),Number(a.at(-7)?.close));
   const accel=Number.isFinite(r3)&&Number.isFinite(prev3)?r3-prev3:null;
+  const priorMicroHigh=Math.max(...a.slice(-21,-1).map(x=>Number(x.high)).filter(Number.isFinite));
+  const microBreak=Number.isFinite(priorMicroHigh)&&lastClose>=priorMicroHigh;
+  const closeLocation=Number(last.high)>Number(last.low)
+    ? (lastClose-Number(last.low))/(Number(last.high)-Number(last.low))*100
+    : 50;
 
   const recent3=a.slice(-3),recent5=a.slice(-5),base30=a.slice(-35,-5);
   const recentVol=mean(recent3.map(x=>Number(x.volume))),baseMedianVol=median(base30.map(x=>Number(x.volume)));
@@ -124,6 +133,16 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
   const bbScore=Number.isFinite(bbExpansion)?clamp(48+(bbExpansion-1)*75):45;
   const efficiencyScore=Number.isFinite(efficiency)?clamp(35+efficiency*80):45;
   const atrScore=Number.isFinite(atrRatio)?clamp(50+(atrRatio-1)*70):45;
+  const flashScore=clamp(
+    (Number.isFinite(r1)?clamp(50+r1*80):45)*.18+
+    (Number.isFinite(r3)?clamp(50+r3*42):45)*.22+
+    (Number.isFinite(accel)?clamp(50+accel*46):45)*.14+
+    (Number.isFinite(volumeRatio)?clamp(45+(volumeRatio-1)*34):45)*.16+
+    (Number.isFinite(tradeRatio)?clamp(45+(tradeRatio-1)*28):45)*.08+
+    (Number.isFinite(buyRatio)?clamp(50+(buyRatio-.5)*300):45)*.10+
+    (microBreak?92:breakoutScore*.45)+
+    (Number.isFinite(closeLocation)&&closeLocation>=70?8:0)
+  );
 
   const upScore=clamp(
     velocityScore*.24+volumeScore*.17+tradeScore*.08+takerScore*.14+
@@ -138,12 +157,27 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
     rangeScore*.07+breakoutScore*.06+bbScore*.03+atrScore*.02
   );
   const direction=upScore>=downScore?'UP_SURGE':'DOWN_SURGE';
-  const score=Math.max(upScore,downScore);
+  const compositeScore=Math.max(upScore,downScore);
   const shortReturn=direction==='UP_SURGE'?r3:(Number.isFinite(r3)?-r3:null);
-  const strongTrigger=score>=76 &&
+  const flashConfirmations=[
+    Number.isFinite(r1)&&r1>=0.20,
+    Number.isFinite(r3)&&r3>=0.45,
+    Number.isFinite(volumeRatio)&&volumeRatio>=1.50,
+    Number.isFinite(tradeRatio)&&tradeRatio>=1.35,
+    Number.isFinite(buyRatio)&&buyRatio>=0.53,
+    Number.isFinite(buyDelta)&&buyDelta>=0.010,
+    microBreak||breakUp,
+    Number.isFinite(closeLocation)&&closeLocation>=68
+  ].filter(Boolean).length;
+  const flashTrigger=direction==='UP_SURGE'&&flashScore>=74&&flashConfirmations>=3&&
+    ((Number.isFinite(r3)&&r3>=0.45) ||
+     (Number.isFinite(volumeRatio)&&volumeRatio>=1.50) ||
+     microBreak);
+  const score=Math.max(compositeScore,flashScore);
+  const strongTrigger=score>=74 && (flashTrigger ||
     ((Number.isFinite(shortReturn)&&shortReturn>=0.65) ||
-     (Number.isFinite(volumeRatio)&&volumeRatio>=2.5&&score>=72) ||
-     (Number.isFinite(accel)&&accel>=0.45&&score>=72));
+     (Number.isFinite(volumeRatio)&&volumeRatio>=2.5&&compositeScore>=72) ||
+     (Number.isFinite(accel)&&accel>=0.45&&compositeScore>=72)));
   const stage=strongTrigger?(score>=88?'EXPLOSIVE':'STRONG_MOVE'):score>=68?'BUILDING':'WATCH';
 
   const reasons=[];
@@ -170,7 +204,9 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
     up_score:Math.round(upScore*10)/10,
     down_score:Math.round(downScore*10)/10,
     metrics:{
-      return_1m:r1,return_3m:r3,return_5m:r5,return_10m:r10,acceleration:accel,
+      return_1m:r1,return_3m:r3,return_5m:r5,return_10m:r10,return_20m:r20,acceleration:accel,
+      flash_score:flashScore,flash_trigger:flashTrigger,flash_confirmations:flashConfirmations,
+      micro_breakout:microBreak,close_location_pct:closeLocation,
       volume_ratio:volumeRatio,trade_ratio:tradeRatio,taker_buy_ratio:buyRatio,taker_buy_delta:buyDelta,
       range_ratio:rangeRatio,breakout_up:breakUp,breakout_down:breakDown,breakout_distance_up_pct:breakoutDistanceUp,
       breakout_distance_down_pct:breakoutDistanceDown,ema9,ema21,ema55,vwap,vwap_distance_pct:vwapDistance,
@@ -179,11 +215,14 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
     },
     component_scores:{
       velocity:velocityScore,volume:volumeScore,trades:tradeScore,taker:takerScore,range:rangeScore,
+      flash:flashScore,
       breakout:breakoutScore,ema:emaBurst,vwap:vwapImpulse,bollinger:bbScore,efficiency:efficiencyScore,atr:atrScore
     },
     trigger:{
-      min_3m_move_pct:0.65,
-      min_score:76,
+      min_3m_move_pct:0.45,
+      min_score:74,
+      flash_score_trigger:74,
+      flash_confirmations:3,
       volume_ratio_trigger:2.5,
       acceleration_trigger_pct:0.45
     },
@@ -230,25 +269,33 @@ export function buildStrongMoveAlert(candidate,now=Date.now()){
 }
 
 export class StrongMoveRadar {
-  constructor({rest,store,config={},clock=()=>Date.now(),logger=console}={}){
+  constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
-    this.rest=rest;this.store=store;this.clock=clock;this.logger=logger;
+    this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={
-      quote:'USDT',pollMs:15000,universeRefreshMs:60000,minQuoteVolume24h:1000000,
-      rotationBatchSize:6,topMoverCount:4,alertCooldownMs:5*60*1000,
+      quote:'USDT',pollMs:30000,universeRefreshMs:60000,minQuoteVolume24h:1000000,
+      rotationBatchSize:4,topMoverCount:3,alertCooldownMs:12*60*1000,
       minScore:76, ...config
     };
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
     this.lastTickerMap=new Map();this.lastScanAt=new Map();this.lastAlertAt=new Map();
     this.alertCount=0;this.lastError=null;this.scans=0;this.lastScanAtMs=null;this.busy=false;
   }
-  async start(){
+  start(){
     if(this.running)return;
     this.running=true;
-    await this.refreshUniverse();
-    this.tick().catch(e=>{this.lastError=String(e?.message??e);this.logger.warn?.('STRONG_MOVE',this.lastError)});
-    this.timer=setInterval(()=>this.tick().catch(e=>{this.lastError=String(e?.message??e);this.logger.warn?.('STRONG_MOVE',this.lastError)}),this.config.pollMs);
+    this.lastError=null;
+    this.refreshUniverse()
+      .then(()=>this.tick())
+      .catch(e=>{
+        this.lastError=String(e?.message??e);
+        this.logger.warn?.('STRONG_MOVE_BOOTSTRAP',this.lastError);
+      });
+    this.timer=setInterval(()=>this.tick().catch(e=>{
+      this.lastError=String(e?.message??e);
+      this.logger.warn?.('STRONG_MOVE',this.lastError);
+    }),this.config.pollMs);
   }
   async stop(){this.running=false;if(this.timer)clearInterval(this.timer);this.timer=null;}
   async refreshUniverse(){
@@ -286,11 +333,41 @@ export class StrongMoveRadar {
       ticker:row,one_minute:one.candles,five_minute:five.candles
     },this.clock());
     this.scans++;
-    if(!alert.eligible||alert.strong_move.score<this.config.minScore)return alert;
+    const alertScore=Math.max(
+      Number(alert?.strong_move?.score)||0,
+      Number(alert?.strong_move?.component_scores?.flash)||0
+    );
+    const a=alert?.strong_move||{};
+    const cs=a.component_scores||{};
+    const m=a.metrics||{};
+    const gate=evaluateEliteGate({
+      radar:'STRONG_MOVE_RADAR',
+      direction:a.direction,
+      baseScore:alertScore,
+      priceChange24h:row.priceChange24h,
+      liquidityScore:clamp(70+Math.log10(Math.max(1,row.quoteVolume24h/this.config.minQuoteVolume24h))*30),
+      dataQualityScore:90,
+      triggerScore:Math.max(Number(cs.flash)||0,Number(cs.breakout)||0),
+      structureScore:Math.max(Number(cs.breakout)||0,Number(cs.ema)||0),
+      participationScore:mean([Number(cs.volume),Number(cs.trades)])||50,
+      flowScore:Number(cs.taker)||50,
+      relativeScore:Number(m.five_min_trend)||50,
+      momentumScore:Math.max(Number(cs.velocity)||0,Number(cs.flash)||0),
+      compressionScore:Math.max(Number(cs.bollinger)||0,Number(cs.range)||0),
+      confirmations:Number(m.flash_confirmations)||0,
+      minConfirmations:4,minScore:86,max24hMovePct:8,requireTrigger:true,minCategoryHits:5
+    });
+    alert.elite_gate=gate;
+    const notificationGate=evaluateRadarNotificationGate(alert,{now:this.clock()});
+    alert.notification_gate=notificationGate;
+    if(!alert.eligible||alertScore<this.config.minScore||!gate.eligible||!notificationGate.eligible)return alert;
     const lastAlert=this.lastAlertAt.get(row.symbol)||0;
     if(this.clock()-lastAlert<this.config.alertCooldownMs)return alert;
     this.lastAlertAt.set(row.symbol,this.clock());
-    await this.store.appendStrongMoveAlert(alert);
+    const decorated=decorateRadarAlert(alert,'Radar 2 — Strong-Move');
+    await this.store.appendStrongMoveAlert(decorated);
+    if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
+    rememberRadarAlert(decorated,this.clock());
     this.alertCount++;
     return alert;
   }
@@ -322,7 +399,7 @@ export class StrongMoveRadar {
       last_error:this.lastError,
       busy:this.busy,
       rest:this.rest?.health?.()||null,
-      algorithms:['MOMENTUM_BURST','VOLUME_CLIMAX','TRADE_COUNT_SURGE','TAKER_FLOW_ACCELERATION','DONCHIAN_BREAKOUT','EMA_BURST','VWAP_DISPLACEMENT','BOLLINGER_EXPANSION','EFFICIENCY_RATIO','ATR_EXPANSION'],
+      algorithms:['MOMENTUM_BURST','FLASH_ACCELERATION','VOLUME_CLIMAX','TRADE_COUNT_SURGE','TAKER_FLOW_ACCELERATION','DONCHIAN_BREAKOUT','MICRO_BREAKOUT','EMA_BURST','VWAP_DISPLACEMENT','BOLLINGER_EXPANSION','EFFICIENCY_RATIO','ATR_EXPANSION'],
       source:'Binance Public REST',
       closed_candles_only:true,
       paper_trading:true,
