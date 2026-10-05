@@ -74,11 +74,11 @@ export function selectAgentDeepTargets(ranked,{deepCandidates=12,deepPool=120,cu
   surge.slice(0,Math.min(5,fixedBudget)).forEach(add);
   early.slice(0,Math.min(4,fixedBudget-targets.length)).forEach(add);
   const rotating=[];
-  for(let i=0;i<pool.length&&rotating.length<rotationReserve+(n-targets.length-rotationReserve);i++){
+  for(let i=0;i<pool.length&&rotating.length<n-targets.length;i++){
     const idx=(Math.max(0,Math.trunc(cursor))+i)%pool.length;
-    const row=pool[idx];if(!seen.has(row.symbol)){seen.add(row.symbol);rotating.push(row)}
+    const row=pool[idx];if(!seen.has(row.symbol))rotating.push(row);
   }
-  rotating.slice(0,n-targets.length).forEach(add);
+  rotating.forEach(add);
   return {targets, nextCursor:(Math.max(0,Math.trunc(cursor))+Math.max(1,rotating.length+1))%pool.length,poolSize:pool.length,buckets:{surge:surge.length,early:early.length,rotation:rotating.length}};
 }
 
