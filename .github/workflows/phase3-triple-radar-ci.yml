@@ -57,6 +57,7 @@ jobs:
           node --check phase2/core/kahir-radar.mjs
           node --check phase2/core/doomsday-radar.mjs
           node --check phase2/core/elite-confluence-gate.mjs
+          node --check phase2/core/ai-agent-hub.mjs
           node --check phase2/core/radar-alert-meta.mjs
           node --check android/app/src/main/assets/radarx-symbol-deep-scan.mjs
           node --check android/app/src/main/assets/radarx-backend-client.mjs
@@ -68,3 +69,5 @@ jobs:
           test -f android/app/src/main/assets/radar3-joker.html
           test -f android/app/src/main/assets/radar4-sweeper.html
           test -f android/app/src/main/assets/doomsday-radar.html
+          test -f android/app/src/main/assets/ai-agent-hub.html
+          node --check android/app/src/main/assets/radarx-backend-client.mjs
