@@ -216,6 +216,18 @@ export async function getProfessorRadar({quote='USDT',limit=10,since=0,scan=true
   return requestJson(base,'/api/professor-radar?quote='+encodeURIComponent(safeQuote)+'&limit='+encodeURIComponent(String(safeLimit))+sinceParam+scanParam,fetchImpl,180000);
 }
 
+export async function getKingIntelligence({symbol,deep=true}={},fetchImpl=globalThis.fetch){
+  const raw=String(symbol||'').trim().toUpperCase();
+  if(!/^[A-Z0-9]{5,20}$/.test(raw))throw new Error('INVALID_SYMBOL');
+  const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  return requestJson(base,'/api/king?symbol='+encodeURIComponent(raw)+'&deep='+(deep?'1':'0'),fetchImpl,120000);
+}
+export async function getKingMarket({limit=5,deep=false}={},fetchImpl=globalThis.fetch){
+  const safeLimit=Number(limit);
+  if(!Number.isInteger(safeLimit)||safeLimit<1||safeLimit>10)throw new Error('INVALID_LIMIT');
+  const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  return requestJson(base,'/api/king-market?limit='+encodeURIComponent(String(safeLimit))+'&deep='+(deep?'1':'0'),fetchImpl,120000);
+}
 export async function getRadarStatus(fetchImpl = globalThis.fetch) {
   const base = normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
   return requestJson(base, '/api/radar-status', fetchImpl);
