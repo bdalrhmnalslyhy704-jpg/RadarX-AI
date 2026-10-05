@@ -6,6 +6,7 @@ import {MarketUniverseScanner} from '../market/universe-scanner.mjs';
 import {RADAR_NAMES,RADAR_PROFILES,formatRadarTime12h,decorateRadarAlert} from '../core/radar-alert-meta.mjs';
 import {SymbolDeepAnalyzer,normalizeDeepScanSymbol} from '../core/symbol-deep-analyzer.mjs';
 import {buildKingVerdict,rankKingMarket} from '../core/king-intelligence.mjs';
+import {collectAgentEvidence,buildAgentVerdict,evaluateMemory,createMemoryEntries} from '../core/ai-agent-hub.mjs';
 
 function send(res,status,body,extra={}){
   const data=JSON.stringify(body);
@@ -479,6 +480,32 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           return send(res,200,{engine:'KING_INTELLIGENCE',engine_name:'👑 الكنق',candidates,meta:{live:true,deep_scan_requested:deepRequested,deep_scan_cap:deepRequested?Math.min(3,candidates.length):0,source:'RadarX evidence',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         }catch(e){
           return send(res,503,{status:'not_ready',engine:'KING_INTELLIGENCE',engine_name:'👑 الكنق',candidates:[],error:String(e?.message??e),meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        }
+      }
+      if(u.pathname==='/api/ai-agents'&&req.method==='GET'){
+        const rawSymbol=String(u.searchParams.get('symbol')||'').trim().toUpperCase();
+        if(!/^[A-Z0-9]{5,20}$/.test(rawSymbol))return send(res,400,{error:'INVALID_SYMBOL',engine:'TEN_AI_AGENTS'});
+        const now=Date.now();
+        try{
+          if(!deepSymbolScanner)return send(res,503,{error:'AI_AGENTS_DEEP_SCAN_UNAVAILABLE',symbol:rawSymbol,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+          const deepScan=await deepSymbolScanner.scan(rawSymbol);
+          const memory=typeof store.readAgentMemory==='function'?await store.readAgentMemory({sinceMs:now-30*24*60*60*1000,limit:1000}):[];
+          const evaluated=evaluateMemory(memory,{symbol:rawSymbol,currentPrice:deepScan?.price?.last,now});
+          if(evaluated.length&&typeof store.appendAgentMemory==='function')for(const row of evaluated)await store.appendAgentMemory(row);
+          const memoryForVerdict=[...memory,...evaluated];
+          const evidence=await collectAgentEvidence({symbol:rawSymbol});
+          const verdict=buildAgentVerdict({symbol:rawSymbol,evidence,deepScan,memory:memoryForVerdict});
+          const price=Number(deepScan?.price?.last);
+          const recent=memory.filter(x=>String(x?.symbol||'').toUpperCase()===rawSymbol&&Number(x?.created_at||0)>now-10*60*1000);
+          if(!recent.length&&Number.isFinite(price)&&typeof store.appendAgentMemory==='function'){
+            const entries=createMemoryEntries({symbol:rawSymbol,price,agents:verdict.agents,now});
+            for(const row of entries)await store.appendAgentMemory(row);
+          }
+          return send(res,200,{...verdict,deep_snapshot:{price:deepScan?.price||null,assessment:deepScan?.assessment||null,liquidity:deepScan?.liquidity||null,pressure:deepScan?.pressure||null,zones:deepScan?.zones||null,data_quality:deepScan?.data_quality||deepScan?.scores||null},evidence_items:{news:(evidence.news||[]).slice(0,20),official:(evidence.official||[]).slice(0,15),social:(evidence.social||[]).slice(0,15)},meta:{live:true,source:'GDELT + Google News + Reddit + RadarX/Binance Public REST',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        }catch(e){
+          const m=String(e?.message??e);
+          const status=/INVALID_SYMBOL/.test(m)?400:/BINANCE_|HTTP_(?:408|418|429|451|500|502|503|504)|TIMEOUT|NETWORK|FETCH|ECONN|ENOTFOUND|ETIMEDOUT|ABORT/i.test(m)?503:500;
+          return send(res,status,{status:'not_ready',engine:'TEN_AI_AGENTS',engine_name:'🧠 مركز 10 وكلاء ذكاء',symbol:rawSymbol,error:m,meta:{live:false,source:'Public web + Binance Public REST',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         }
       }
       if(u.pathname==='/api/signal'&&req.method==='GET'){
