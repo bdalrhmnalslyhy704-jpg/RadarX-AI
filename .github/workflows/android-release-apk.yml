@@ -172,6 +172,9 @@ jobs:
           node --check android/app/src/main/assets/radarx-symbol-deep-scan.mjs
           node --check android/app/src/main/assets/radarx-king.mjs
           test -f android/app/src/main/assets/ai-agent-hub.html
+          test -f android/app/src/main/assets/surge-radar.html
+          test -f android/app/src/main/assets/ai-market.html
+          test -f android/app/src/main/assets/ai-learning.html
           node --check android/app/src/main/assets/radarx-market-radar-ui.mjs
           node --check android/app/src/main/assets/radarx-market-radar-screen.mjs
           node --check android/app/src/main/assets/radarx-tradli-feature-suite.mjs
@@ -186,6 +189,7 @@ jobs:
           node --check android/app/src/main/assets/radarx-professor-radar.mjs
           node --check android/app/src/main/assets/radarx-bottom-reversal.mjs
           node --check phase2/core/doomsday-radar.mjs
+          node --check phase2/core/market-surge-gate.mjs
           node --check phase2/core/kahir-radar.mjs
           node --check android/app/src/main/assets/radarx-pre-move.mjs
           node --check android/app/src/main/assets/radarx-move-radar.mjs
