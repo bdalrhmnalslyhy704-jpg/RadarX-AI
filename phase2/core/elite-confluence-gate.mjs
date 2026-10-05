@@ -37,6 +37,8 @@ export function evaluateEliteGate({
   const weakLiquidity=clamp(liquidityScore)<60;
   const weakData=clamp(dataQualityScore)<80;
   const missingTrigger=requireTrigger&&!hit(triggerScore,72);
+  const volumeWithoutFollowThrough=clamp(participationScore)>=86&&clamp(structureScore)<58&&clamp(momentumScore)<60;
+  const flowWithoutRelativeSupport=clamp(flowScore)>=88&&clamp(relativeScore)<45;
   const score=clamp(
     clamp(baseScore)*0.28+
     categories.trigger*0.18+
@@ -53,6 +55,8 @@ export function evaluateEliteGate({
     !weakLiquidity &&
     !weakData &&
     !missingTrigger &&
+    !volumeWithoutFollowThrough &&
+    !flowWithoutRelativeSupport &&
     score>=minScore &&
     Number(confirmations)>=minConfirmations &&
     hits.length>=minCategoryHits;
@@ -78,6 +82,8 @@ export function evaluateEliteGate({
   if(weakLiquidity)riskFlags.push('LIQUIDITY_TOO_WEAK');
   if(weakData)riskFlags.push('DATA_QUALITY_TOO_WEAK');
   if(missingTrigger)riskFlags.push('NO_PRIMARY_TRIGGER');
+  if(volumeWithoutFollowThrough)riskFlags.push('VOLUME_WITHOUT_PRICE_FOLLOW_THROUGH');
+  if(flowWithoutRelativeSupport)riskFlags.push('FLOW_WITHOUT_RELATIVE_SUPPORT');
   if(Number(confirmations)<minConfirmations)riskFlags.push('LOW_CONFLUENCE');
   if(hits.length<minCategoryHits)riskFlags.push('LOW_CATEGORY_DIVERSITY');
 
