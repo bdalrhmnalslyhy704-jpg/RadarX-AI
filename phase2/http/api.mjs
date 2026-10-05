@@ -136,7 +136,7 @@ function subscriptionValid(x){
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null, kahirRadar=null,professorRadar=null,doomsdayRadar=null,symbolDeepAnalyzer=null}= {}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null, kahirRadar=null,professorRadar=null,doomsdayRadar=null,symbolDeepAnalyzer=null,agentMarket=null}= {} ){
   const counters=new Map();
   const moveConfig=config.moveRadar||{thresholdPct:1};
   const originList=config.auth.allowedOrigins;
@@ -186,7 +186,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(!rateOk(key))return send(res,429,{error:'RATE_LIMITED'});
     try{
       const u=new URL(req.url,'http://localhost');
-      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false},kahir_radar:kahirRadar?.health?.()||{running:false},doomsday_radar:doomsdayRadar?.health?.()||{running:false},professor_radar:professorRadar?.health?.()||{running:false}});
+      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false},kahir_radar:kahirRadar?.health?.()||{running:false},doomsday_radar:doomsdayRadar?.health?.()||{running:false},professor_radar:professorRadar?.health?.()||{running:false},autonomous_ai_market:agentMarket?.health?.()||{running:false}});
       if(u.pathname==='/api/radar-status'&&req.method==='GET')return send(res,200,{radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
       if(u.pathname==='/api/radar-control'&&(req.method==='POST'||req.method==='GET')){
         const radar=String(u.searchParams.get('radar')||'').trim().toUpperCase();
@@ -481,6 +481,27 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         }catch(e){
           return send(res,503,{status:'not_ready',engine:'KING_INTELLIGENCE',engine_name:'👑 الكنق',candidates:[],error:String(e?.message??e),meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         }
+      }
+      if(u.pathname==='/api/ai-market-control'&&(req.method==='GET'||req.method==='POST')){
+        if(!agentMarket)return send(res,503,{error:'AI_MARKET_UNAVAILABLE'});
+        const action=String(u.searchParams.get('action')||'').trim().toLowerCase();
+        if(!['start','stop'].includes(action))return send(res,400,{error:'INVALID_AI_MARKET_ACTION'});
+        try{if(action==='start')await agentMarket.start();else await agentMarket.stop();}
+        catch(e){return send(res,503,{error:'AI_MARKET_CONTROL_FAILED',message:String(e?.message??e)});}
+        return send(res,200,{ok:true,action,status:agentMarket.health(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+      }
+      if(u.pathname==='/api/ai-market'&&req.method==='GET'){
+        if(!agentMarket)return send(res,503,{error:'AI_MARKET_UNAVAILABLE'});
+        try{
+          if(String(u.searchParams.get('run')||'')==='1'&&agentMarket.health().running)await agentMarket.cycle();
+          const state=await agentMarket.readState();
+          return send(res,200,{...state,monitoring:agentMarket.health(),meta:{live:agentMarket.health().running===true,source:'Binance Public REST + public web intelligence',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true}});
+        }catch(e){return send(res,503,{status:'not_ready',engine:'AUTONOMOUS_TEN_AGENT_MARKET',error:String(e?.message??e),monitoring:agentMarket.health(),meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});}
+      }
+      if(u.pathname==='/api/ai-market/learning'&&req.method==='GET'){
+        if(!agentMarket)return send(res,503,{error:'AI_MARKET_UNAVAILABLE'});
+        try{return send(res,200,await agentMarket.learning());}
+        catch(e){return send(res,503,{status:'not_ready',engine:'TEN_AI_AGENTS_LEARNING',error:String(e?.message??e),meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});}
       }
       if(u.pathname==='/api/ai-agents'&&req.method==='GET'){
         const rawSymbol=String(u.searchParams.get('symbol')||'').trim().toUpperCase();

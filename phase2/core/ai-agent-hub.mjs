@@ -9,11 +9,11 @@ export const AGENT_REGISTRY=Object.freeze([
 {id:'SOCIAL_PULSE',name:'💬 نبض المجتمع',role:'تحليل المنشورات والتعليقات وتقليل الضجيج'},
 {id:'CATALYST_HUNTER',name:'⚡ صائد المحفزات',role:'اكتشاف الإدراجات والترقيات والشراكات والمخاطر'},
 {id:'NARRATIVE_ENGINE',name:'🧠 محلل السرد',role:'كشف تغير السرد والتوافق بين المصادر'},
-{id:'MARKET_STRUCTURE',name:'📐 محلل الهيكل',role:'دمج الأخبار مع الاتجاه والزخم والهيكل'},
-{id:'FLOW_LIQUIDITY',name:'🌊 وكيل التدفق',role:'السيولة والضغط وRVOL والامتصاص'},
-{id:'RISK_GUARDIAN',name:'🛡️ حارس المخاطر',role:'الفخاخ والتمدد والشطب والاختراقات'},
-{id:'HISTORY_LEARNER',name:'📚 المتعلم التاريخي',role:'تعديل الأوزان من النتائج السابقة'},
-{id:'CHIEF_DECIDER',name:'👑 كبير المحللين',role:'تجميع الحكم النهائي من الوكلاء التسعة'}
+{id:'MARKET_STRUCTURE',name:'📐 المتداول الفني',role:'اتجاه وزخم وهيكل ودخول مبكر مثل متداول Spot منضبط'},
+{id:'FLOW_LIQUIDITY',name:'🌊 متداول التدفق',role:'السيولة والضغط وRVOL والامتصاص وتأكيد قابلية الدخول'},
+{id:'RISK_GUARDIAN',name:'🛡️ مدير المخاطر',role:'الفخاخ والتمدد والشطب والاختراقات وحدود الخسارة قبل أي قرار ورقي'},
+{id:'HISTORY_LEARNER',name:'📚 متداول التعلّم',role:'يسجل صفقات ورقية ونتائج الصعود والهبوط ويعدل الأوزان تدريجيًا'},
+{id:'CHIEF_DECIDER',name:'👑 مدير غرفة التداول',role:'تجميع الحكم النهائي وإدارة قرار Spot ورقي مشروط من الوكلاء التسعة'}
 ]);
 
 const OFFICIAL=['binance.com','coinbase.com','kraken.com','okx.com','bybit.com','kucoin.com','circle.com','tether.to','ripple.com','solana.com','ethereum.org','chain.link','sec.gov','cftc.gov','bis.org'];
@@ -37,7 +37,7 @@ export function classifyEvidence(x,now=Date.now()){const s=sig(x.text||x.title||
 function dedupe(items){const m=new Map();for(const x of items){const k=host(x.url)+'|'+clean(x.title||x.text).toLowerCase().replace(/[^a-z0-9\u0600-\u06ff]+/gi,' ').slice(0,160);if(!m.has(k))m.set(k,x)}return[...m.values()]}
 function corroborate(items){const b=new Map();for(const x of items){const k=clean(x.title||x.text).toLowerCase().replace(/[^a-z0-9\u0600-\u06ff]+/gi,' ').split(' ').filter(w=>w.length>3).slice(0,5).join('|');if(!b.has(k))b.set(k,[]);b.get(k).push(x)}let v=0,u=0;for(const a of b.values()){const ds=new Set(a.map(x=>host(x.url)).filter(Boolean));const official=a.some(x=>x.class==='OFFICIAL');if(ds.size>=2&&(official||a.length>=2))v++;else u++}return{verified:v,unverified:u}}
 function avg(a,d=50){const x=(a||[]).map(Number).filter(Number.isFinite);return x.length?x.reduce((s,v)=>s+v,0)/x.length:d}
-function weights(memory){const st={};for(const x of memory||[]){const id=String(x.agent_id||'');if(!id)continue;st[id]??={wins:0,losses:0,neutral:0};if(x.outcome==='WIN')st[id].wins++;else if(x.outcome==='LOSS')st[id].losses++;else if(x.outcome==='NEUTRAL')st[id].neutral++}const w={};for(const a of AGENT_REGISTRY){const s=st[a.id]||{wins:0,losses:0,neutral:0},n=s.wins+s.losses,rate=n>=3?(s.wins+2)/(n+4):.5;w[a.id]=Number(Math.max(.82,Math.min(1.18,.82+rate*.36)).toFixed(3))}return{stats:st,weights:w}}
+function weights(memory){const latest=new Map();for(const x of memory||[]){const id=String(x?.id||'');if(id&&!latest.has(id))latest.set(id,x)}const st={};for(const x of latest.values()){const id=String(x.agent_id||'');if(!id)continue;st[id]??={wins:0,losses:0,neutral:0};if(x.outcome==='WIN')st[id].wins++;else if(x.outcome==='LOSS')st[id].losses++;else if(x.outcome==='NEUTRAL')st[id].neutral++;}const w={};for(const a of AGENT_REGISTRY){const s=st[a.id]||{wins:0,losses:0,neutral:0},n=s.wins+s.losses,rate=n>=3?(s.wins+2)/(n+4):.5;w[a.id]=Number(Math.max(.82,Math.min(1.18,.82+rate*.36)).toFixed(3))}return{stats:st,weights:w}}
 function adj(v,w){return C(50+(v-50)*w)}
 function makeAgents(e,d,learning){const news=e.news||[],off=e.official||[],soc=e.social||[],a=d?.assessment||{},liq=d?.liquidity||{},pr=d?.pressure||{},rvol=avg([d?.timeframes?.['15m']?.rvol,d?.timeframes?.['1h']?.rvol],1),trend=avg([d?.timeframes?.['15m']?.trend_score,d?.timeframes?.['1h']?.trend_score,d?.timeframes?.['4h']?.trend_score]),mom=avg([d?.timeframes?.['15m']?.momentum_score,d?.timeframes?.['1h']?.momentum_score,d?.timeframes?.['4h']?.momentum_score]),sent=avg((e.all||[]).map(x=>x.sentiment)),risk=avg((e.all||[]).map(x=>x.risk_score),0),cat=avg((e.all||[]).map(x=>x.catalyst_score),0),ver=e.corroboration?.verified||0,dom=e.independent_domains||0,trap=N(a.trap_risk,50),dir=N(a.direction_score,50),raw={
 NEWS_SCOUT:C(sent*.55+Math.min(20,news.length)*1.4+Math.min(15,dom*.8)-risk*.25),

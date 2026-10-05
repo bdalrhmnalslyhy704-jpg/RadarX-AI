@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto';
 export class DurableStore {
   constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.ready=false;this.lastWriteAt=null;
     this.files={subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
-      signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),strongMoveAlerts:join(dir,'strong-move-alerts.jsonl'),rotationAlerts:join(dir,'rotation-alerts.jsonl'),liquidityAbsorptionAlerts:join(dir,'liquidity-absorption-alerts.jsonl'),kahirAlerts:join(dir,'kahir-alerts.jsonl'),doomsdayAlerts:join(dir,'doomsday-alerts.jsonl'),professorAlerts:join(dir,'professor-alerts.jsonl'),agentMemory:join(dir,'agent-memory.jsonl')};}
+      signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),strongMoveAlerts:join(dir,'strong-move-alerts.jsonl'),rotationAlerts:join(dir,'rotation-alerts.jsonl'),liquidityAbsorptionAlerts:join(dir,'liquidity-absorption-alerts.jsonl'),kahirAlerts:join(dir,'kahir-alerts.jsonl'),doomsdayAlerts:join(dir,'doomsday-alerts.jsonl'),professorAlerts:join(dir,'professor-alerts.jsonl'),agentMemory:join(dir,'agent-memory.jsonl'),agentMarketState:join(dir,'agent-market-state.json')};}
   async init(){await mkdir(this.dir,{recursive:true});
     for(const [k,p] of Object.entries(this.files)){try{await readFile(p,'utf8');}catch{
       await writeFile(p,p.endsWith('.jsonl')?'':'{}',{flag:'wx'}).catch(()=>{});
@@ -48,6 +48,8 @@ export class DurableStore {
   async readProfessorAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('professorAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
   async appendAgentMemory(v){return this.lock(async()=>{await appendFile(this.files.agentMemory,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readAgentMemory({sinceMs=0,limit=1000}={}){const rows=await this.readRecent('agentMemory',Math.min(2000,Math.max(1,Number(limit)||1000)));return rows.filter(x=>Number(x?.created_at||x?.evaluated_at)>Number(sinceMs||0)).slice(0,Math.min(1000,Math.max(1,Number(limit)||1000)));}
+  async getAgentMarketState(){return this.readJson(this.files.agentMarketState);}
+  async putAgentMarketState(v){return this.lock(async()=>{await this.writeJson(this.files.agentMarketState,{...v,updated_at:Date.now()});return v;});}
   async appendKahirAlert(v){return this.lock(async()=>{await appendFile(this.files.kahirAlerts,JSON.stringify(v)+'\\n');this.lastWriteAt=Date.now();});}
   async readKahirAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('kahirAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
 
