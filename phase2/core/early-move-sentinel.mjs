@@ -1,6 +1,7 @@
 import {MarketUniverseScanner,buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {BinanceAllMarketTickerClient} from '../market/binance-market-ticker-ws.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
+import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 
 const clamp=(n,min=0,max=100)=>Math.max(min,Math.min(max,Number(n)||0));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -734,6 +735,27 @@ export class EarlyMoveSentinel {
         const preAlert=buildPreExplosionAlert(candidate,job.trigger,{now:this.clock()});
         const alert=preAlert.eligible?preAlert:wakeAlert.eligible?wakeAlert:(job.mode==='MOVE'?buildMoveAlert(candidate,job.trigger,{now:this.clock()}):null);
         if(!alert?.eligible)continue;
+        const cc=alert.components||{};
+        const sc=alert.strategy_confluence||{};
+        const gate=evaluateEliteGate({
+          radar:'EARLY_MOVE_SENTINEL',
+          direction:alert.direction,
+          baseScore:alert.opportunity_score,
+          priceChange24h:alert.price_change_24h,
+          liquidityScore:cc.liquidity||0,
+          dataQualityScore:cc.data_quality||0,
+          triggerScore:Math.max(Number(cc.pre_move)||0,Number(alert.expansion_potential)||0),
+          structureScore:Number(cc.structure)||50,
+          participationScore:Math.max(Number(cc.volume)||0,Number(sc.accepted_mean)||0),
+          flowScore:Number(cc.buying_pressure)||50,
+          relativeScore:Math.max(Number(cc.relative_strength)||0,Number(cc.mtf_alignment)||0),
+          momentumScore:Number(cc.momentum)||50,
+          compressionScore:Number(cc.squeeze)||50,
+          confirmations:Number(alert.pre_explosion?.confirmation_count||alert.confirmation_count||0),
+          minConfirmations:7,minScore:88,max24hMovePct:2.5,requireTrigger:true,minCategoryHits:5
+        });
+        alert.elite_gate=gate;
+        if(!gate.eligible)continue;
         const alertKey=`${job.symbol}:${alert.event}`;
         const recent=this.lastAlertScore.get(alertKey)||0;
         const lastAt=this.lastAlertAt.get(alertKey)||0;
