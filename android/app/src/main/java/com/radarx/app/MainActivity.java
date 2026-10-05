@@ -258,7 +258,6 @@ public final class MainActivity extends Activity {
     private void requestNotificationPermissionAndStart() {
         if (Build.VERSION.SDK_INT >= 33 &&
                 checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            pendingBackgroundStart = true;
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_POST_NOTIFICATIONS);
             return;
         }
