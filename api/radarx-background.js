@@ -14,10 +14,17 @@ const CONFIG = {
   alertTrap: 35,
   alertCooldownMs: 30 * 60 * 1000,
   maxAgeMs: 45 * 1000,
-  cacheTtlMs: 25 * 1000
+  cacheTtlMs: 25 * 1000,
+  explosionUniverseLimit: 60,
+  explosionResultLimit: 10,
+  explosionMajorMoveLimit: 8,
+  explosionMinQuoteVolume: 25000,
+  explosionAlertScore: 78,
+  explosionAlertTrap: 45,
+  explosionAlertCooldownMs: 15 * 60 * 1000
 };
 
-let memory = { lastScanAt: 0, lastResult: null, alertMap: new Map() };
+let memory = { lastScanAt: 0, lastResult: null, alertMap: new Map(), explosionAlertMap: new Map() };
 
 function n(v,d=0){ const x=Number(v); return Number.isFinite(x)?x:d; }
 function clamp(v,a=0,b=100){ return Math.max(a,Math.min(b,n(v,a))); }
@@ -216,12 +223,142 @@ function candidateTickerSort(a){
   const up=Math.max(0,n(a.priceChangePercent))*2.2;
   return vol+move+up;
 }
+
+function explosionTickerPriority(t){
+  const move=Math.max(0,n(t?.priceChangePercent));
+  const volume=Math.log10(Math.max(1,n(t?.quoteVolume)/Math.max(1,CONFIG.explosionMinQuoteVolume)))*8;
+  const range=n(t?.highPrice)>0&&n(t?.lowPrice)>0&&n(t?.lastPrice)>0
+    ?Math.max(0,(n(t.lastPrice)/n(t.lowPrice)-1)*1.2-Math.max(0,(n(t.highPrice)-n(t.lastPrice))/n(t.lastPrice)*.35))
+    :0;
+  return move*4.2+volume+range;
+}
+function closedExplosionRows(rows,intervalMs){
+  const now=Date.now();
+  return validKlines(rows).filter(x=>x.t+intervalMs<=now);
+}
+function explosionAvg(values){return values.length?values.reduce((s,x)=>s+n(x),0)/values.length:0}
+function explosionPct(a,b){return a>0&&b>0?(b/a-1)*100:0}
+function explosionRangeRatio(bars){
+  if(bars.length<26)return null;
+  const recent=explosionAvg(bars.slice(-5).map(x=>(x.h-x.l)/Math.max(x.c,1e-12)));
+  const base=explosionAvg(bars.slice(-21,-5).map(x=>(x.h-x.l)/Math.max(x.c,1e-12)));
+  return base>0?recent/base:null;
+}
+function explosionBbRatio(bars){
+  if(bars.length<42)return null;
+  function width(xs){
+    const c=xs.slice(-20).map(x=>x.c),m=explosionAvg(c);
+    if(!m)return 0;
+    const s=Math.sqrt(explosionAvg(c.map(v=>(v-m)*(v-m))));
+    return 4*s/m;
+  }
+  const cur=width(bars),prior=[];
+  for(let i=Math.max(20,bars.length-45);i<bars.length-5;i++){
+    const w=width(bars.slice(0,i+1));if(w>0)prior.push(w);
+  }
+  if(!prior.length||cur<=0)return null;
+  prior.sort((a,b)=>a-b);
+  return cur/(prior[Math.floor((prior.length-1)*.2)]||cur);
+}
+function explosionState(f){
+  if((f.move24h>=25||f.r30>=10||f.r60>=18)&&!(f.move24h>=15&&f.r15<.35&&f.accel5<0))
+    return f.move24h>=60?'MAJOR_MOVE':'STRONG_MOVE';
+  if(f.move24h>=15&&f.r15<.35&&f.accel5<0)return 'EXTENDED_LATE';
+  if((f.r15>=2.5||f.r30>=5)&&((f.volumeRatio??0)>=1.35||f.accel5>.15))return 'EXPLOSION';
+  if((f.r5>=.8||f.r15>=1.6||f.r30>=3)&&((f.volumeRatio??0)>=1.25||f.accel5>.15))return 'ACCELERATING';
+  if(f.score>=70&&f.move24h<=12)return 'EARLY';
+  if(f.score>=58)return 'BUILDING';
+  return 'WATCH';
+}
+function scoreExplosionFeatures(ticker,bars1,bars5){
+  if(bars5.length<30)return {available:false,state:'NO_DATA',score:0,reason:'INSUFFICIENT_CLOSED_5M'};
+  const last=bars5.at(-1),prev=bars5.at(-2);
+  const move24=n(ticker?.priceChangePercent),lastPrice=n(ticker?.lastPrice)||last.c;
+  const r1=explosionPct(bars1.at(-2)?.c,bars1.at(-1)?.c);
+  const r5=explosionPct(prev.c,last.c),r15=explosionPct(bars5.at(-4)?.c,last.c),r30=explosionPct(bars5.at(-7)?.c,last.c),r60=explosionPct(bars5.at(-13)?.c,last.c);
+  const prevR5=explosionPct(bars5.at(-3)?.c,prev.c),accel5=r5-prevR5;
+  const baseVol=explosionAvg(bars5.slice(-21,-1).map(x=>x.v)),prevBaseVol=explosionAvg(bars5.slice(-22,-2).map(x=>x.v));
+  const vr=baseVol>0?last.v/baseVol:null,prevVr=prevBaseVol>0?prev.v/prevBaseVol:null,volAccel=vr!=null&&prevVr!=null?vr-prevVr:0;
+  const rr=explosionRangeRatio(bars5),squeeze=explosionBbRatio(bars5);
+  const prior=bars5.length>=22?Math.max(...bars5.slice(-21,-1).map(x=>x.h)):last.h;
+  const breakoutPct=prior>0?(last.c/prior-1)*100:0;
+  const hi=n(ticker?.highPrice),lo=n(ticker?.lowPrice);
+  const hiDist=hi>0&&last.c>0?(hi-last.c)/last.c*100:null;
+  const fromLow=lo>0&&last.c>0?(last.c/lo-1)*100:null;
+  const closePos=(last.c-last.l)/Math.max(last.h-last.l,1e-12);
+  const rangeNow=(last.h-last.l)/Math.max(last.c,1e-12)*100;
+  const momentum=clamp(50+r5*34+r15*10+r30*4+Math.max(0,accel5)*30);
+  const volume=clamp(45+(vr==null?0:(vr-1)*30)+Math.max(0,volAccel)*25);
+  const expansion=clamp(45+(rr==null?0:(rr-1)*34)+(breakoutPct>0?24:0)+(rangeNow>1.8?7:0));
+  const pressure=clamp(52+(hiDist==null?0:Math.max(0,3-hiDist)*16)+(squeeze!=null&&squeeze<1?14:0)+(closePos>.72?10:0));
+  const persistence=clamp(50+(r15>0?Math.min(20,r15*8):0)+(r30>0?Math.min(14,r30*3):0)+(move24>0?Math.min(16,move24*.35):0));
+  let score=clamp(momentum*.34+volume*.28+expansion*.16+pressure*.12+persistence*.10);
+  const cooling=move24>=15&&r15<.35&&accel5<0;
+  if(cooling)score=clamp(score-12);
+  const trap=clamp((cooling?28:0)+(hiDist!=null&&hiDist>4?8:0)+(r15<0&&r30<0?18:0)+(vr!=null&&vr<.85&&r5>.6?14:0)+(closePos<.35&&r5>0?10:0));
+  const reasons=[];
+  if(r5>=.8)reasons.push('5m momentum acceleration');
+  if(r15>=1.6)reasons.push('15m expansion');
+  if(vr!=null&&vr>=1.4)reasons.push('relative volume surge');
+  if(volAccel>.15)reasons.push('volume rate accelerating');
+  if(breakoutPct>0)reasons.push('fresh local range break');
+  if(squeeze!=null&&squeeze<1)reasons.push('compression releasing');
+  if(hiDist!=null&&hiDist<=1.2)reasons.push('near 24h high');
+  if(move24>=25)reasons.push('major 24h move');
+  const f={available:true,symbol:String(ticker?.symbol||''),price:lastPrice,move24h:+move24.toFixed(2),
+    r1:+r1.toFixed(3),r5:+r5.toFixed(3),r15:+r15.toFixed(3),r30:+r30.toFixed(3),r60:+r60.toFixed(3),accel5:+accel5.toFixed(3),
+    volumeRatio:vr==null?null:+vr.toFixed(2),volumeAccel:+volAccel.toFixed(3),rangeRatio:rr==null?null:+rr.toFixed(2),
+    squeezeRatio:squeeze==null?null:+squeeze.toFixed(2),breakoutPct:+breakoutPct.toFixed(2),
+    distanceToHigh24h:hiDist==null?null:+hiDist.toFixed(2),moveFromLow24h:fromLow==null?null:+fromLow.toFixed(2),
+    closePosition:+closePos.toFixed(3),score:+score.toFixed(1),trapRisk:Math.round(trap),reasons};
+  f.state=explosionState(f);return f;
+}
+async function scanExplosionUniverse(universe){
+  const majorMoves=universe.filter(x=>n(x.priceChangePercent)>=25)
+    .sort((a,b)=>n(b.priceChangePercent)-n(a.priceChangePercent)).slice(0,CONFIG.explosionMajorMoveLimit)
+    .map(x=>({symbol:String(x.symbol),price:n(x.lastPrice),move24h:+n(x.priceChangePercent).toFixed(2),quoteVolume:n(x.quoteVolume),
+      moveFromLow24h:n(x.lowPrice)>0?+(n(x.lastPrice)/n(x.lowPrice)-1)*100:null,
+      distanceToHigh24h:n(x.highPrice)>0&&n(x.lastPrice)>0?+(n(x.highPrice)-n(x.lastPrice))/n(x.lastPrice)*100:null,
+      state:n(x.priceChangePercent)>=60?'MAJOR_MOVE':'STRONG_MOVE',source:'BINANCE_PUBLIC_24H_TICKER'}));
+  const pool=universe.filter(x=>n(x.quoteVolume)>=CONFIG.explosionMinQuoteVolume&&n(x.lastPrice)>0)
+    .sort((a,b)=>explosionTickerPriority(b)-explosionTickerPriority(a)).slice(0,CONFIG.explosionUniverseLimit);
+  const rows=[];
+  for(let i=0;i<pool.length;i+=8){
+    const batch=pool.slice(i,i+8);
+    const settled=await Promise.allSettled(batch.map(async t=>{
+      const [m1,m5]=await Promise.all([
+        binance('/api/v3/klines?symbol='+t.symbol+'&interval=1m&limit=120'),
+        binance('/api/v3/klines?symbol='+t.symbol+'&interval=5m&limit=80')
+      ]);
+      return scoreExplosionFeatures(t,closedExplosionRows(m1,60000),closedExplosionRows(m5,300000));
+    }));
+    settled.forEach(x=>{if(x.status==='fulfilled'&&x.value?.available)rows.push(x.value);});
+  }
+  rows.sort((a,b)=>b.score-a.score);
+  const candidates=rows.slice(0,CONFIG.explosionResultLimit),alerts=[],now=Date.now();
+  for(const x of rows){
+    if(!['EARLY','ACCELERATING','EXPLOSION'].includes(x.state)||x.score<CONFIG.explosionAlertScore||x.trapRisk>=CONFIG.explosionAlertTrap)continue;
+    const key='radarx:explosion:'+x.symbol;let recent=false;
+    if(kvConfig()){try{const raw=await kv('get',[key]);const ts=n(raw,0);recent=ts>0&&now-ts<CONFIG.explosionAlertCooldownMs;}catch{}}
+    else{const prior=memory.explosionAlertMap.get(x.symbol)||0;recent=now-prior<CONFIG.explosionAlertCooldownMs;}
+    if(recent)continue;
+    if(kvConfig())await kvSet(key,String(now),Math.ceil(CONFIG.explosionAlertCooldownMs/1000)).catch(()=>{});
+    memory.explosionAlertMap.set(x.symbol,now);
+    alerts.push({...x,alertKind:'MARKET_EXPLOSION'});
+    await sendAlert({...x,phase:x.state,score:x.score,trapRisk:x.trapRisk}).catch(()=>{});
+    if(alerts.length>=3)break;
+  }
+  return {engine:'RadarX Market Explosion / Anomaly 1.0',universe:universe.length,lightScanned:pool.length,candidates,majorMoves,alerts,asOf:new Date().toISOString(),
+    rules:{minQuoteVolume:CONFIG.explosionMinQuoteVolume,universeLimit:CONFIG.explosionUniverseLimit,resultLimit:CONFIG.explosionResultLimit,alertScore:CONFIG.explosionAlertScore,alertTrap:CONFIG.explosionAlertTrap}};
+}
 async function scan(){
   const now=Date.now();
   if(memory.lastResult&&now-memory.lastScanAt<CONFIG.cacheTtlMs)return memory.lastResult;
   const tickers=await binance('/api/v3/ticker/24hr');
   if(!Array.isArray(tickers))throw new Error('INVALID_TICKER_RESPONSE');
-  const universe=tickers.filter(x=>x&&/USDT$/.test(String(x.symbol||''))&&!EXCLUDED.test(String(x.symbol||''))&&n(x.lastPrice)>0&&n(x.quoteVolume)>=CONFIG.minQuoteVolume);
+  const allSpotUniverse=tickers.filter(x=>x&&/USDT$/.test(String(x.symbol||''))&&!EXCLUDED.test(String(x.symbol||''))&&n(x.lastPrice)>0);
+  const universe=allSpotUniverse.filter(x=>n(x.quoteVolume)>=CONFIG.minQuoteVolume);
+  const explosionPromise=scanExplosionUniverse(allSpotUniverse).catch(e=>({engine:'RadarX Market Explosion / Anomaly 1.0',universe:allSpotUniverse.length,lightScanned:0,candidates:[],majorMoves:[],alerts:[],error:String(e?.message||e),asOf:new Date().toISOString()}));
   const regime=await marketRegime(universe);
   const candidates=universe.sort((a,b)=>candidateTickerSort(b)-candidateTickerSort(a)).slice(0,CONFIG.universeLimit);
   const selected=candidates.slice(0,CONFIG.deepLimit);
@@ -252,7 +389,8 @@ async function scan(){
     await sendAlert(x).catch(()=>{});
     if(alerts.length>=3)break;
   }
-  const result={ok:true,engine:'RadarX Background Intelligence 5.13',checkedAt:now,universe:universe.length,deepScanned:rows.length,regime,alerts,top:rows.slice(0,8),freshness:{maxAgeMs:CONFIG.maxAgeMs,serverTs:now}};
+  const explosion=await explosionPromise;
+  const result={ok:true,engine:'RadarX Background Intelligence 5.13',checkedAt:now,universe:universe.length,spotUniverse:allSpotUniverse.length,deepScanned:rows.length,regime,alerts,top:rows.slice(0,8),explosion,freshness:{maxAgeMs:CONFIG.maxAgeMs,serverTs:now}};
   memory.lastScanAt=now; memory.lastResult=result;
   await kvSet('radarx:last-scan',result,600).catch(()=>{});
   return result;
@@ -320,7 +458,7 @@ async function sendAlert(x){
 async function status(){
   let last=memory.lastResult;
   if(!last&&kvConfig())try{last=JSON.parse(await kv('get',['radarx:last-scan'])||'null')}catch{}
-  return {ok:true,engine:'RadarX Background Intelligence 5.13',schedule:'5-minute GitHub Actions + foreground WebSocket',ntfyTopic:NTFY_TOPIC,ntfyUrl:NTFY_URL,webPushConfigured:!!(kvConfig()&&(process.env.RADARX_VAPID_PUBLIC_KEY&&process.env.RADARX_VAPID_PRIVATE_KEY||true)),kvConfigured:!!kvConfig(),lastScan:last?{checkedAt:last.checkedAt,universe:last.universe,deepScanned:last.deepScanned,alerts:last.alerts?.length||0,top:last.top?.[0]||null}:null,limits:{minQuoteVolume:CONFIG.minQuoteVolume,alertScore:CONFIG.alertScore,alertTrap:CONFIG.alertTrap}};
+  return {ok:true,engine:'RadarX Background Intelligence 5.13',schedule:'5-minute GitHub Actions + foreground WebSocket',ntfyTopic:NTFY_TOPIC,ntfyUrl:NTFY_URL,webPushConfigured:!!(kvConfig()&&(process.env.RADARX_VAPID_PUBLIC_KEY&&process.env.RADARX_VAPID_PRIVATE_KEY||true)),kvConfigured:!!kvConfig(),lastScan:last?{checkedAt:last.checkedAt,universe:last.universe,spotUniverse:last.spotUniverse||null,deepScanned:last.deepScanned,alerts:last.alerts?.length||0,explosionAlerts:last.explosion?.alerts?.length||0,majorMoves:last.explosion?.majorMoves?.length||0,top:last.top?.[0]||null}:null,limits:{minQuoteVolume:CONFIG.minQuoteVolume,alertScore:CONFIG.alertScore,alertTrap:CONFIG.alertTrap,explosionMinQuoteVolume:CONFIG.explosionMinQuoteVolume,explosionUniverseLimit:CONFIG.explosionUniverseLimit,explosionAlertScore:CONFIG.explosionAlertScore}};
 }
 export default async function handler(req,res){
   res.setHeader('Access-Control-Allow-Origin','*');

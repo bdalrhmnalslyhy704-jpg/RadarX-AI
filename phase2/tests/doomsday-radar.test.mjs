@@ -33,6 +33,16 @@ test('Doomsday rejects an already extreme 24h extension',()=>{
   assert.equal(a.closed_candles_only,true);
 });
 
+test('Doomsday audits a +80% major move without treating it as an early entry',()=>{
+  const now=1_700_000_000_000+119*60_000;
+  const one=series(120),five=series(80),btc=series(80);
+  const a=buildDoomsdayAnalysis({oneMinute:one,fiveMinute:five,btcFiveMinute:btc,ticker:{lastPrice:180,priceChange24h:80},now});
+  assert.equal(a.major_move_audit,true);
+  assert.equal(a.stage,'MAJOR_MOVE_AUDIT');
+  assert.equal(a.eligible,false);
+  assert.equal(a.closed_candles_only,true);
+});
+
 test('Doomsday class is paper-only and can select forced watchlist rows',async()=>{
   const candles={};
   const rows=[
