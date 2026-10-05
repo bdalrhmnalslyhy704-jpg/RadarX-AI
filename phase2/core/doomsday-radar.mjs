@@ -87,6 +87,8 @@ export const DOOMSDAY_RADAR_DEFAULTS=Object.freeze({
   minRelativeStrengthPct:0.08,
   max24hMovePct:18,
   breakoutProximityPct:1.5,
+  majorMoveCandidatePct:15,
+  majorMoveAuditPct:25,
   retryAttempts:1
 });
 
@@ -146,6 +148,8 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
 
   const dailyMove=Math.abs(finite(ticker.priceChange24h,0));
   const extended=Number.isFinite(dailyMove)&&dailyMove>=max24hMovePct;
+  const majorMoveAudit=(Number.isFinite(dailyMove)&&dailyMove>=25)||
+    (Number.isFinite(dailyMove)&&dailyMove>=max24hMovePct&&((Number.isFinite(r3)&&r3>=3)||(Number.isFinite(r5)&&r5>=2)));
   const volumeScore=normRatio(volumeRatio,1);
   const tradeScore=normRatio(tradeRatio,1);
   const takerScore=clamp(50+(currentBuy-0.5)*420+buyDelta*320);
@@ -204,7 +208,7 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
     ((Number.isFinite(r3)&&r3>=0.45)||microBreakout||volumeRatio>=2);
 
   const eligible=earlyTrigger||ignitionTrigger;
-  const stage=!eligible?'WATCH':ignitionScore>=DOOMSDAY_RADAR_DEFAULTS.minPowerScore?'POWER_SURGE':ignitionTrigger?'IGNITION':'PRE_BREAKOUT';
+  const stage=majorMoveAudit?'MAJOR_MOVE_AUDIT':!eligible?'WATCH':ignitionScore>=DOOMSDAY_RADAR_DEFAULTS.minPowerScore?'POWER_SURGE':ignitionTrigger?'IGNITION':'PRE_BREAKOUT';
   const reasons=[];
   const push=(ok,s)=>{if(ok)reasons.push(s)};
   push(volumeRatio>=1.35,'تسارع الحجم مقارنة بخط العملة');
@@ -222,10 +226,11 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
   push(Number.isFinite(rangeRatio)&&rangeRatio>=1.3,'اتساع النطاق');
   push(Number.isFinite(atrRatio)&&atrRatio>=1.08,'انتقال ATR إلى نظام أعلى');
   push(accelerationScore>=65,'تسارع فوري فوق خط الأساس');
-  if(extended)reasons.push('رفض: الحركة اليومية ممتدة');
+  if(extended)reasons.push('الحركة اليومية ممتدة — لا تُعامل كإشارة دخول مبكرة');
+  if(majorMoveAudit)reasons.push('تدقيق مستقل: الحركة الكبيرة دخلت سوق المراقبة حتى بعد تجاوز بوابة ما قبل الانفجار');
 
   return {
-    eligible,stage,score:Number(score.toFixed(1)),early_score:Number(earlyScore.toFixed(1)),ignition_score:Number(ignitionScore.toFixed(1)),
+    eligible,major_move_audit:majorMoveAudit,stage,score:Number(score.toFixed(1)),early_score:Number(earlyScore.toFixed(1)),ignition_score:Number(ignitionScore.toFixed(1)),
     direction:ignitionScore>=earlyScore?'UP':'WATCH',closed_candles_only:true,
     confirmation_count:earlyEvidence,ignition_confirmations:ignitionEvidence,confirmation_total:9,
     metrics:{
@@ -258,7 +263,7 @@ function buildAlert(candidate,analysis,now){
   const symbol=String(candidate.symbol).toUpperCase();
   return {
     id:'DOOMSDAY:'+symbol+':'+now,
-    event:analysis.stage==='PRE_BREAKOUT'?'DOOMSDAY_EARLY_WARNING':analysis.stage==='IGNITION'?'DOOMSDAY_IGNITION':'DOOMSDAY_POWER_SURGE',
+    event:analysis.stage==='MAJOR_MOVE_AUDIT'?'DOOMSDAY_MAJOR_MOVE_AUDIT':analysis.stage==='PRE_BREAKOUT'?'DOOMSDAY_EARLY_WARNING':analysis.stage==='IGNITION'?'DOOMSDAY_IGNITION':'DOOMSDAY_POWER_SURGE',
     radar:'DOOMSDAY_RADAR',
     radar_name:'Radar 6 — يوم القيامة',
     symbol,market:'SPOT',direction:'UP_MOVE',
@@ -267,12 +272,14 @@ function buildAlert(candidate,analysis,now){
     doomsday:analysis,reasons:analysis.reasons,
     risk_flags:[
       Math.abs(finite(candidate.priceChange24h,0))>=12?'DAILY_EXTENSION_ATTENTION':null,
+      analysis.major_move_audit?'MAJOR_MOVE_AUDIT_NO_EARLY_ENTRY':null,
       analysis.metrics.taker_buy_ratio<0.50?'TAKER_BALANCE_WEAK':null,
       analysis.component_scores.relative_strength<45?'BTC_RELATIVE_STRENGTH_WEAK':null
     ].filter(Boolean),
     source:analysis.source,detected_at:now,processed_at:now,
     paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
-    eligible:true,
+    eligible:Boolean(analysis.eligible),
+    audit_only:Boolean(analysis.major_move_audit),
     disclaimer:'رادار يوم القيامة يلتقط بصمة توسع/استيقاظ قصيرة المدى؛ لا يضمن استمرار السعر، وكل الإشارات ورقية فقط.'
   };
 }
@@ -312,7 +319,7 @@ export class DoomsdayRadar{
     const r=await this.rest.request('/api/v3/ticker/24hr');
     return (Array.isArray(r.data)?r.data:[])
       .map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
-      .filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h&&this.universe.includes(x.symbol));
+      .filter(x=>(x.quoteVolume24h>=this.config.minQuoteVolume24h || Math.max(0,Number(x.priceChange24h)||0)>=Number(this.config.majorMoveCandidatePct||15))&&this.universe.includes(x.symbol));
   }
   selectCandidates(rows){
     const updates=[];
@@ -324,9 +331,11 @@ export class DoomsdayRadar{
     }
     const watchSet=new Set((this.config.watchlist||[]).map(s=>String(s).toUpperCase()));
     const watch=updates.filter(x=>watchSet.has(x.symbol));
+    const major=updates.filter(x=>Math.max(0,Number(x.priceChange24h)||0)>=Number(this.config.majorMoveCandidatePct||15))
+      .sort((a,b)=>Number(b.priceChange24h||0)-Number(a.priceChange24h||0)).slice(0,4);
     const ranked=[...updates].sort((a,b)=>discoveryScore(b,b.instantChangePct)-discoveryScore(a,a.instantChangePct));
-    const merged=[...watch,...ranked].filter((x,i,a)=>a.findIndex(y=>y.symbol===x.symbol)===i);
-    return merged.slice(0,Math.max(Number(this.config.deepCandidates)||10,watch.length));
+    const merged=[...watch,...major,...ranked].filter((x,i,a)=>a.findIndex(y=>y.symbol===x.symbol)===i);
+    return merged.slice(0,Math.max(Number(this.config.deepCandidates)||10,watch.length,major.length));
   }
   async deepScan(row,btcFiveMinute){
     const [one,five]=await Promise.all([
@@ -358,7 +367,7 @@ export class DoomsdayRadar{
       minCategoryHits:5
     });
     analysis.elite_gate=gate;
-    if(analysis.eligible&&gate.eligible){
+    if((analysis.eligible&&gate.eligible)||analysis.major_move_audit){
       const last=this.lastAlertAt.get(row.symbol)||0;
       if(this.clock()-last>=this.config.alertCooldownMs){
         const alert=decorateRadarAlert(buildAlert(row,analysis,this.clock()),'Radar 6 — يوم القيامة');
@@ -390,7 +399,8 @@ export class DoomsdayRadar{
       const width=Math.max(1,Math.min(12,Number(this.config.deepConcurrency)||4));
       const worker=async()=>{while(true){const i=next++;if(i>=merged.length)return;try{out[i]=await this.deepScan(merged[i],btcFive||[]);}catch(e){this.noteError(e,'row');}}};
       await Promise.all(Array.from({length:Math.min(width,merged.length||1)},worker));
-      this.latestCandidates=out.filter(x=>x?.eligible&&x?.analysis?.elite_gate?.eligible).sort((a,b)=>Number(b.analysis?.elite_gate?.score||0)-Number(a.analysis?.elite_gate?.score||0)).slice(0,3);
+      this.latestCandidates=out.filter(x=>x?.analysis?.major_move_audit || (x?.eligible&&x?.analysis?.elite_gate?.eligible))
+        .sort((a,b)=>Number(Boolean(b?.analysis?.major_move_audit))-Number(Boolean(a?.analysis?.major_move_audit)) || Number(b.analysis?.score||0)-Number(a.analysis?.score||0) || Number(b.analysis?.elite_gate?.score||0)-Number(a.analysis?.elite_gate?.score||0)).slice(0,5);
       this.lastScanAtMs=this.clock();this.lastError=null;
       return true;
     }finally{this.busy=false;}
