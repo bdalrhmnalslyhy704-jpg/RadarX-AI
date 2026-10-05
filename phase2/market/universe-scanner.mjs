@@ -5,6 +5,7 @@ import {
 } from '../../phase1/radarx-phase1-engine.mjs';
 import {listActiveStrategies, normalizeStrategyResult} from '../../phase1/strategy-registry.mjs';
 import {FUTURE_DATA_CLOCK_SKEW_MS, futureIssues, normalizeEpochMs, timestampUnit} from '../core/data-quality.mjs';
+import {buildPreBreakoutFingerprint} from '../core/radar-prebreakout-engine.mjs';
 
 export const MARKET_RADAR_DEFAULTS = Object.freeze({
   quote: 'USDT',
@@ -1053,6 +1054,17 @@ export function buildCandidateContract({
 
   const bottomContext=buildBottomMarketContext(series, ticker, deep.completedAt, {book: deep.depth, liquidity});
   const preMoveContext=buildPreMoveContext(series, ticker, deep.completedAt, bottomContext);
+  const preBreakoutFingerprint=buildPreBreakoutFingerprint({
+    ticker,
+    bottom:bottomContext,
+    preMove:preMoveContext,
+    fast:fastImpulseContext,
+    strategies,
+    dataQuality,
+    liquidity:liquidity.quality,
+    radar:'MARKET_UNIVERSE_SCANNER',
+    now:deep.completedAt
+  });
 
   const evidence = [
     { type: 'market', code: 'QUOTE_VOLUME_24H', value: ticker.quoteVolume24h },
@@ -1090,6 +1102,7 @@ export function buildCandidateContract({
     quote_volume_24h: ticker.quoteVolume24h,
     bottom_context: bottomContext,
     pre_move_context: preMoveContext,
+    pre_breakout_fingerprint: preBreakoutFingerprint,
     liquidity_quality: Math.round(Number(liquidity.quality) * 100) / 100,
     data_quality: dataQuality,
     confidence_score: 'UNKNOWN',
