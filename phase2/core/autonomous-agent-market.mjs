@@ -78,7 +78,7 @@ function makeMarketDeep(candidate){
   const dirScore=Number.isFinite(best)?(direction==='BUY'?best:direction==='SELL'?100-best:50):clamp(
     (Number(m.structure)||50)*.35+(Number(m.momentum)||50)*.35+(Number(candidate?.pre_move_context?.score)||50)*.30
   );
-  const trap=clamp(35+(candidate?.risk_flags?.length||0)*9+Math.max(0,Number(candidate?.price_change_24h)||0)-10)*2);
+  const trap=clamp((35+(candidate?.risk_flags?.length||0)*9+Math.max(0,Number(candidate?.price_change_24h)||0)-10)*2);
   const rvol=num(f.volume_ratio,1);
   return {
     price:{last:num(candidate?.last_price)},
