@@ -14,6 +14,7 @@ on:
       - fix-four-radars-runtime
       - fix-radar-runtime-return-market-data
       - radar6-doomsday-20261005
+      - phase4-market-explosion-radar-build185
   pull_request:
     branches:
       - phase3-triple-radar

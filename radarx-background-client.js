@@ -33,6 +33,10 @@ function style(){
  '#rxBgRadar .rxbg-row small{display:block;color:#7b949f;font-size:8px;margin-top:3px}'+
  '#rxBgRadar .rxbg-score{font-weight:900}'+
  '#rxBgRadar .rxbg-good{color:#7deab7}.rxbg-warn{color:#ffd77a}.rxbg-risk{color:#ff8d9b}'+
+ ' #rxBgRadar .rxbg-explosion{margin-top:12px;border:1px solid #5b4630;border-radius:14px;background:linear-gradient(135deg,#1a1309,#0b1115);padding:11px}'+
+ ' #rxBgRadar .rxbg-explosion-head{display:flex;justify-content:space-between;gap:8px;align-items:center}'+
+ ' #rxBgRadar .rxbg-explosion-head b{font-size:12px}'+
+ ' #rxBgRadar .rxbg-hot{color:#ffb454;font-weight:900}'+
  '@media(max-width:760px){#rxBgRadar .rxbg-head{flex-direction:column}#rxBgRadar .rxbg-badges{justify-content:flex-start}#rxBgRadar .rxbg-grid{grid-template-columns:repeat(2,1fr)}#rxBgRadar .rxbg-row{grid-template-columns:1.2fr 1fr 1fr}}';
  document.head.appendChild(s);
 }
@@ -57,6 +61,9 @@ function makePanel(){
  '<button class="btn ghost" id="rxBgTest">🧪 اختبار التنبيه</button>'+
  '<button class="btn ghost" id="rxBgNtfy">📲 قناة التنبيه الخارجية</button></div>'+
  '<div id="rxBgNote" class="rxbg-note">جاري التحقق من الرادار الخلفي…</div>'+
+ '<div id="rxBgExplosion" class="rxbg-explosion">'+
+ '<div class="rxbg-explosion-head"><b>⚡ كاشف انفجار السوق</b><span id="rxBgExplosionMeta" class="rxbg-hot">بانتظار الفحص</span></div>'+
+ '<div id="rxBgExplosionRows" class="rxbg-cands"></div></div>'+
  '<div id="rxBgCandidates" class="rxbg-cands"></div>';
  if(anchor)anchor.insertAdjacentElement('afterend',el);else q('dashboard').prepend(el);
  q('rxBgRun').onclick=runScan;
@@ -74,9 +81,35 @@ function render(d){
  q('rxBgTop').textContent=last.top&&last.top[0]?last.top[0].symbol:'—';
  q('rxBgState').textContent=last.alerts&&last.alerts.length?'ALERT READY':'BACKGROUND ON';
  q('rxBgState').classList.add('on');
+ var ex=last.explosion||{};
+ var exRows=Array.isArray(ex.candidates)?ex.candidates:[];
+ var majors=Array.isArray(ex.majorMoves)?ex.majorMoves:[];
+ var exAlerts=Array.isArray(ex.alerts)?ex.alerts:[];
+ q('rxBgExplosionMeta').textContent=(exAlerts.length?'🚨 '+exAlerts.length+' تنبيه':'فحص '+Number(ex.lightScanned||0)+' مرشح')+' · حركات كبيرة '+majors.length;
+ var exHtml='';
+ exAlerts.slice(0,3).forEach(function(x){
+   exHtml+='<div class="rxbg-row"><div><b>🚨 '+esc(x.symbol)+'</b><small>'+esc(x.state)+'</small></div>'+
+   '<div><b class="rxbg-score rxbg-hot">EXP '+Number(x.score||0)+'</b><small>Trap '+Number(x.trapRisk||0)+'</small></div>'+
+   '<div><b>+'+Number(x.move24h||0).toFixed(2)+'%</b><small>15m '+Number(x.r15||0).toFixed(2)+'%</small></div>'+
+   '<div><b>'+(x.volumeRatio==null?'—':Number(x.volumeRatio).toFixed(2)+'×')+'</b><small>Accel '+Number(x.accel5||0).toFixed(2)+'</small></div></div>';
+ });
+ exRows.slice(0,6).forEach(function(x){
+   var hot=x.state==='EXPLOSION'||x.state==='ACCELERATING'||x.state==='EARLY';
+   exHtml+='<div class="rxbg-row"><div><b>'+(hot?'⚡ ':'')+esc(x.symbol)+'</b><small>'+esc(x.state)+'</small></div>'+
+   '<div><b class="rxbg-score '+(hot?'rxbg-hot':'rxbg-warn')+'">'+Number(x.score||0)+'/100</b><small>Trap '+Number(x.trapRisk||0)+'</small></div>'+
+   '<div><b>+'+Number(x.move24h||0).toFixed(2)+'%</b><small>30m '+Number(x.r30||0).toFixed(2)+'%</small></div>'+
+   '<div><b>'+(x.volumeRatio==null?'—':Number(x.volumeRatio).toFixed(2)+'×')+'</b><small>Break '+Number(x.breakoutPct||0).toFixed(2)+'%</small></div></div>';
+ });
+ majors.slice(0,4).forEach(function(x){
+   exHtml+='<div class="rxbg-row"><div><b>🔥 '+esc(x.symbol)+'</b><small>حركة كبيرة 24h</small></div>'+
+   '<div><b class="rxbg-hot">+'+Number(x.move24h||0).toFixed(2)+'%</b><small>'+esc(x.state)+'</small></div>'+
+   '<div><b>'+ (x.moveFromLow24h==null?'—': '+'+Number(x.moveFromLow24h).toFixed(1)+'%')+'</b><small>من قاع 24h</small></div>'+
+   '<div><b>'+Number(x.quoteVolume||0).toLocaleString()+'</b><small>Quote Vol</small></div></div>';
+ });
+ q('rxBgExplosionRows').innerHTML=exHtml||'<div class="rxbg-note">لا توجد حركة شاذة مؤكدة في آخر دورة.</div>';
  var note=q('rxBgNote');
- note.textContent=(last.alerts&&last.alerts.length?'⚡ تم رصد '+last.alerts.length+' تنبيه جديد. آخرها '+last.alerts[0].symbol+' · '+last.alerts[0].phase+' · Score '+last.alerts[0].score+'/100.':'✅ لا يوجد تنبيه جديد في آخر دورة.')+
- ' · الجدولة المستقلة كل 5 دقائق من GitHub Actions؛ وطبقة Vercel Pro يمكن تشغيلها بالدقيقة.';
+ note.textContent=(last.alerts&&last.alerts.length?'⚡ تم رصد '+last.alerts.length+' تنبيه جديد. آخرها '+last.alerts[0].symbol+' · '+last.alerts[0].phase+' · Score '+last.alerts[0].score+'/100.':'✅ الرادار التقليدي لم يطلق تنبيهًا جديدًا في آخر دورة.')+
+ ' · كاشف الانفجار يعمل بطبقة مستقلة واسعة، ويعرض الحركات الكبيرة حتى لو لم تدخل الرادارات التقليدية.';
  var rows=last.top||[],html='';
  rows.slice(0,8).forEach(function(x,i){
    html+='<div class="rxbg-row"><div><b>'+(i+1)+'. '+esc(x.symbol)+'</b><small>'+esc(x.phase)+'</small></div>'+
