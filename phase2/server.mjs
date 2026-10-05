@@ -17,6 +17,7 @@ import {KahirRadar} from './core/kahir-radar.mjs';
 import {ProfessorRadar} from './core/professor-radar.mjs';
 import {DoomsdayRadar} from './core/doomsday-radar.mjs';
 import {SymbolDeepAnalyzer} from './core/symbol-deep-analyzer.mjs';
+import {AutonomousAgentMarket} from './core/autonomous-agent-market.mjs';
 import {MarketUniverseScanner} from './market/universe-scanner.mjs';
 import {createApiServer} from './http/api.mjs';
 import {assertDeploymentEnvironment,assertReadOnlyStagingConfig} from './deploy/preflight.mjs';
@@ -70,7 +71,10 @@ export async function startServer({
   const symbolDeepAnalyzer=new SymbolDeepAnalyzer({rest:deepScanRest,config:config.symbolDeepScan||{}});
   const professorRadar=new ProfessorRadar({rest,store,pushManager:push,deepAnalyzer:symbolDeepAnalyzer,config:config.professorRadar||{},logger});
   const doomsdayRadar=new DoomsdayRadar({rest,store,pushManager:push,config:config.doomsdayRadar||{},logger});
-  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,symbolDeepAnalyzer});
+  const agentMarketRest=new RestClient({...config.rest,baseUrls:deepRestUrls});
+  const agentMarketScanner=new MarketUniverseScanner({rest:agentMarketRest,config:{quote:config.aiAgents?.quote||'USDT',minQuoteVolume24h:Number(config.aiAgents?.minQuoteVolume24h??750000),deepCandidates:Number(config.aiAgents?.deepCandidates??6),deepConcurrency:Number(config.aiAgents?.deepConcurrency??3),deepKlines:Number(config.aiAgents?.deepKlines??220),scanLimit:Math.max(10,Number(config.aiAgents?.deepCandidates??6)),returnLimit:Math.max(10,Number(config.aiAgents?.resultLimit??20))}});
+  const agentMarket=new AutonomousAgentMarket({scanner:agentMarketScanner,store,config:config.aiAgents||{},logger});
+  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,symbolDeepAnalyzer,agentMarket});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
   const safeStart=(name,instance)=>{
@@ -91,9 +95,10 @@ export async function startServer({
     safeStart('RADAR5',kahirRadar);
     safeStart('RADAR6',doomsdayRadar);
     safeStart('PROFESSOR_INTELLIGENCE',professorRadar);
+    safeStart('AUTONOMOUS_AI_MARKET',agentMarket);
   }
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
-  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,symbolDeepAnalyzer,store,rest,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,push,close:async()=>{await professorRadar.stop();await doomsdayRadar.stop();await kahirRadar.stop();await liquidityAbsorptionRadar.stop();await rotationLagRadar.stop();await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
+  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,symbolDeepAnalyzer,agentMarket,agentMarketRest,store,rest,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,push,close:async()=>{await agentMarket.stop();await professorRadar.stop();await doomsdayRadar.stop();await kahirRadar.stop();await liquidityAbsorptionRadar.stop();await rotationLagRadar.stop();await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
 }
 
 if(process.argv[1]&&resolve(fileURLToPath(import.meta.url))===resolve(process.argv[1])){
