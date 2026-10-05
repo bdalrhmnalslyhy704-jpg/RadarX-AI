@@ -229,6 +229,9 @@ export async function getKingMarket({limit=5,deep=false}={},fetchImpl=globalThis
   return requestJson(base,'/api/king-market?limit='+encodeURIComponent(String(safeLimit))+'&deep='+(deep?'1':'0'),fetchImpl,120000);
 }
 export async function getAgentHub({symbol}={},fetchImpl=globalThis.fetch){const raw=String(symbol||'').trim().toUpperCase();if(!/^[A-Z0-9]{5,20}$/.test(raw))throw new Error('INVALID_SYMBOL');const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);return requestJson(base,'/api/ai-agents?symbol='+encodeURIComponent(raw),fetchImpl,180000);}
+export async function getAgentMarket({run=false}={},fetchImpl=globalThis.fetch){const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);return requestJson(base,'/api/ai-market'+(run?'?run=1':''),fetchImpl,180000);}
+export async function controlAgentMarket(action,fetchImpl=globalThis.fetch){const safe=String(action||'').toLowerCase();if(!['start','stop'].includes(safe))throw new Error('INVALID_AI_MARKET_ACTION');const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);return requestJson(base,'/api/ai-market-control?action='+encodeURIComponent(safe),fetchImpl,30000);}
+export async function getAgentLearning(fetchImpl=globalThis.fetch){const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);return requestJson(base,'/api/ai-market/learning',fetchImpl,60000);}
 export async function getRadarStatus(fetchImpl = globalThis.fetch) {
   const base = normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
   return requestJson(base, '/api/radar-status', fetchImpl);
