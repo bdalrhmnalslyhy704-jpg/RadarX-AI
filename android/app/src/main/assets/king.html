@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b1220">
+<title>RadarX — 👑 الكنق</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% -10%,#3a2b13 0,#0b1220 42%,#070c15 100%);color:#eaf6ff;font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+main{width:min(920px,100%);margin:auto;padding:18px 14px 36px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0 16px}
+.brand b{font-size:22px}.brand small{display:block;color:#93aabd;margin-top:4px}
+.card{border:1px solid #4d4022;border-radius:18px;background:linear-gradient(145deg,#171a1f,#0c121b);padding:16px;margin:12px 0;box-shadow:0 12px 32px rgba(0,0,0,.22)}
+form{display:flex;gap:10px;flex-wrap:wrap}input,button{min-height:46px;border-radius:12px;border:1px solid #3a4c60;background:#0d1825;color:#eef8ff;padding:0 14px;font-weight:800}input{flex:1;min-width:180px;text-transform:uppercase}button{cursor:pointer;background:linear-gradient(135deg,#f7c948,#ff9f43);color:#261a00;border:0}
+.hero{display:grid;grid-template-columns:1fr 1fr;gap:10px}.metric{padding:13px;border-radius:14px;background:#101b27;border:1px solid #263b50}.metric small{display:block;color:#8ea6b9}.metric b{font-size:22px;display:block;margin-top:4px}
+.badge{display:inline-block;border-radius:999px;padding:7px 11px;background:#17273a;color:#dff4ff;font-size:11px;font-weight:900}
+.row{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}.reason{padding:10px 12px;border-radius:12px;background:#0e1b28;margin-top:8px;color:#d8e8f3}.neg{border-color:#5e3030}.muted{color:#8da3b5}
+a{color:#cdefff}.back{display:inline-block;margin-top:8px;text-decoration:none;color:#9fc7dd}
+@media(max-width:650px){.hero{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+<header><div class="brand"><b>👑 الكنق</b><small>King Intelligence • SPOT • Paper • Read Only</small></div><span id="status" class="badge">جاهز</span></header>
+<section class="card">
+  <form id="kingForm">
+    <input id="symbol" aria-label="رمز العملة" placeholder="مثال: SANDUSDT" autocomplete="off" spellcheck="false">
+    <button type="submit">حلّل بعمق</button>
+    <button id="marketBtn" type="button">أفضل فرص السوق</button>
+  </form>
+  <p class="muted">الكنق يجمع أدلة الرادارات الموجودة ويضيف فحصًا عميقًا عند الطلب. لا ينفذ أي أمر.</p>
+</section>
+<section id="output" class="card"><div class="muted">اكتب رمز العملة لبدء الحكم.</div></section>
+<a class="back" href="./index.html">← العودة إلى RadarX</a>
+</main>
+<script type="module" src="./radarx-king.mjs"></script>
+</body>
+</html>
