@@ -5,6 +5,7 @@ on:
     branches:
       - android-early-wake-6.8.9
       - phase3-triple-radar
+      - fix/android-no-autostart-background-latest-features-20261006
       - phase4-symbol-deep-scan
       - android-icon-6.8.8-release
       - tradli-feature-integration
@@ -33,7 +34,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          ref: ${{ github.ref_name == 'phase4-symbol-deep-scan' && 'phase4-symbol-deep-scan' || github.ref_name == 'phase6-radar4-independent-microstructure' && 'phase6-radar4-independent-microstructure' || 'phase3-triple-radar' }}
+          ref: ${{ github.ref_name == 'phase4-symbol-deep-scan' && 'phase4-symbol-deep-scan' || github.ref_name == 'phase6-radar4-independent-microstructure' && 'phase6-radar4-independent-microstructure' || github.ref_name == 'fix/android-no-autostart-background-latest-features-20261006' && 'fix/android-no-autostart-background-latest-features-20261006' || 'phase3-triple-radar' }}
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
