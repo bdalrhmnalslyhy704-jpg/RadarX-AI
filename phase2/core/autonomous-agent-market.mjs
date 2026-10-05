@@ -97,8 +97,10 @@ function makeMarketDeep(candidate){
 }
 
 function profile(memory){
+  const latest=new Map();
+  for(const x of memory||[]){const id=String(x?.id||'');if(id&&!latest.has(id))latest.set(id,x);}
   const byAgent={};
-  for(const x of memory||[]){
+  for(const x of latest.values()){
     const id=String(x?.agent_id||'');if(!id)continue;
     const s=byAgent[id]??={wins:0,losses:0,neutral:0,pending:0};
     if(x.outcome==='WIN')s.wins++;else if(x.outcome==='LOSS')s.losses++;else if(x.outcome==='NEUTRAL')s.neutral++;else s.pending++;
@@ -107,7 +109,7 @@ function profile(memory){
     const resolved=s.wins+s.losses,rate=resolved?(s.wins/resolved*100):null;
     return {agent_id,...s,win_rate_pct:rate===null?null:Number(rate.toFixed(1)),score_weight:Number(Math.max(.82,Math.min(1.18,.82+((resolved>=3?(s.wins+2)/(resolved+4):.5))*.36)).toFixed(3))};
   }).sort((a,b)=>Number(b.win_rate_pct??-1)-Number(a.win_rate_pct??-1));
-  return {total_predictions:(memory||[]).length,resolved:agents.reduce((s,x)=>s+x.wins+x.losses+x.neutral,0),agents};
+  return {total_predictions:latest.size,resolved:agents.reduce((s,x)=>s+x.wins+x.losses+x.neutral,0),agents};
 }
 
 export class AutonomousAgentMarket {
