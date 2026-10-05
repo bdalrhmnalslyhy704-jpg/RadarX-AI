@@ -21,18 +21,18 @@ function candidate(overrides={}){
     },
     preMove:{
       session_return_pct:2.1,
-      price_acceleration_pct:.32,
-      relative_strength_vs_market_pct:2.2,
-      relative_strength_vs_btc_pct:2.8,
+      price_acceleration_pct:.45,
+      relative_strength_vs_market_pct:3,
+      relative_strength_vs_btc_pct:3.5,
       taker_buy_acceleration:.028,
       components:{compression:82,structure:78,buying_pressure:76,whale_pressure:72,resistance_proximity:78,relative_strength:76}
     },
     fast:{
       score:81,
-      acceleration_pct:.28,
-      volume_ratio:1.42,
-      taker_buy_ratio:.54,
-      taker_buy_delta:.022,
+      acceleration_pct:.5,
+      volume_ratio:1.6,
+      taker_buy_ratio:.56,
+      taker_buy_delta:.04,
       breakout_distance_pct:-.25,
       scores:{momentum:78,volume:79,taker_buy:82,breakout:84,ema:80,range_expansion:74,body:77}
     },
