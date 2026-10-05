@@ -117,7 +117,7 @@ export class AutonomousAgentMarket {
     if(!scanner)throw new Error('SCANNER_REQUIRED');
     this.scanner=scanner;this.store=store;this.config={...AUTONOMOUS_AGENT_DEFAULTS,...config};
     this.clock=clock;this.logger=logger;this.running=false;this.timer=null;this.cycleBusy=false;
-    this.lastCycle=null;this.nextCycleAt=null;this.cursor=0;this.universeCache=null;
+    this.lastCycle=null;this.nextCycleAt=null;this.cursor=0;this.webCursor=0;this.universeCache=null;
   }
 
   async start(){
@@ -169,7 +169,15 @@ export class AutonomousAgentMarket {
         {klinesLimit:this.config.deepKlines,fastInterval:'5m',fastKlines:96}
       ));
 
-      const webTargetSymbols=new Set(scanned.filter(Boolean).sort((a,b)=>Number(b.overall_score??0)-Number(a.overall_score??0)).slice(0,Math.max(0,Number(this.config.webCandidates)||2)).map(x=>x.symbol));
+      const webCount=Math.max(0,Math.min(scanned.length,Number(this.config.webCandidates)||2));
+      const rankedScanned=[...scanned].filter(Boolean).sort((a,b)=>Number(b.overall_score??0)-Number(a.overall_score??0)||Number(b.discovery_score??0)-Number(a.discovery_score??0));
+      const webTargetSymbols=new Set();
+      if(webCount>0&&rankedScanned[0])webTargetSymbols.add(rankedScanned[0].symbol);
+      for(let i=0;webTargetSymbols.size<webCount&&i<rankedScanned.length;i++){
+        const idx=(this.webCursor+i)%rankedScanned.length;
+        webTargetSymbols.add(rankedScanned[idx].symbol);
+      }
+      if(rankedScanned.length)this.webCursor=(this.webCursor+1)%rankedScanned.length;
       const decisions=[];
       for(const candidate of scanned.filter(Boolean)){
         let evidence={news:[],official:[],social:[],all:[],independent_domains:0,comment_count:0,corroboration:{verified:0,unverified:0},source_coverage:{gdelt:0,google_news:0,reddit_posts:0,reddit_comments:0}};
