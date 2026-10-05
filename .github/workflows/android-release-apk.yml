@@ -170,6 +170,7 @@ jobs:
           set -euo pipefail
           node --check android/app/src/main/assets/radarx-backend-client.mjs
           node --check android/app/src/main/assets/radarx-symbol-deep-scan.mjs
+          node --check android/app/src/main/assets/radarx-king.mjs
           node --check android/app/src/main/assets/radarx-market-radar-ui.mjs
           node --check android/app/src/main/assets/radarx-market-radar-screen.mjs
           node --check android/app/src/main/assets/radarx-tradli-feature-suite.mjs
@@ -196,6 +197,7 @@ jobs:
           test -f android/app/src/main/assets/tradli.html
           test -f android/app/src/main/assets/bottom-radar.html
           test -f android/app/src/main/assets/kahir-radar.html
+          test -f android/app/src/main/assets/king.html
           test -f android/app/src/main/java/com/radarx/app/BottomRadarActivity.java
 
       - name: Build signed universal Release APK
