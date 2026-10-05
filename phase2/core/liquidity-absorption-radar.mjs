@@ -1,5 +1,6 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {formatRadarTime12h} from './radar-alert-meta.mjs';
+import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -318,7 +319,28 @@ export class LiquidityAbsorptionRadar{
       ticker:row,one_minute:one.candles,five_minute:five.candles,book:depth.data
     },this.clock());
     this.scans++;
-    if(!analysis.eligible||Number(analysis.opportunity_score)<this.config.minScore)return analysis;
+    const a=analysis.liquidity_absorption||analysis.liquidityAbsorption||{};
+    const cs=a.component_scores||a.algorithms||{};
+    const m=a.metrics||{};
+    const gate=evaluateEliteGate({
+      radar:'LIQUIDITY_ABSORPTION_RADAR',
+      direction:a.direction||'UP_ROTATION',
+      baseScore:Number(analysis.opportunity_score)||0,
+      priceChange24h:row.priceChange24h,
+      liquidityScore:Math.min(100,60+Math.log10(Math.max(1,row.quoteVolume24h/1500000))*35),
+      dataQualityScore:90,
+      triggerScore:Math.max(Number(cs.absorption)||0,Number(cs.absorption_score)||0),
+      structureScore:Math.max(Number(cs.structure)||0,Number(cs.structure_score)||0,Number(cs.local_structure)||0),
+      participationScore:Number(cs.silent_volume)||Number(cs.absorption)||Number(m.volume_score)||50,
+      flowScore:Math.max(Number(cs.depth)||0,Number(cs.depth_imbalance)||0,Number(m.depth_score)||0),
+      relativeScore:Number(cs.five_minute_confirmation)||Number(m.five_bias)||50,
+      momentumScore:Math.max(Number(cs.trapped_seller)||0,Number(cs.dislocation)||0),
+      compressionScore:Math.max(Number(cs.auction)||0,Number(cs.compression)||0),
+      confirmations:Number(analysis.liquidity_absorption?.confirmation_count ?? analysis.confirmation_count)||0,
+      minConfirmations:7,minScore:90,max24hMovePct:5.5,requireTrigger:true,minCategoryHits:5
+    });
+    analysis.elite_gate=gate;
+    if(!analysis.eligible||Number(analysis.opportunity_score)<this.config.minScore||!gate.eligible)return analysis;
     const lastAlert=this.lastAlertAt.get(row.symbol)||0;
     if(this.clock()-lastAlert<this.config.alertCooldownMs)return analysis;
     this.lastAlertAt.set(row.symbol,this.clock());
