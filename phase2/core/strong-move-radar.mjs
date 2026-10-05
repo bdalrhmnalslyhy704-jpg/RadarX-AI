@@ -1,6 +1,7 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
+import {evaluateRadarNotificationGate,rememberRadarAlert} from './radar-notification-gate.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -357,13 +358,16 @@ export class StrongMoveRadar {
       minConfirmations:4,minScore:86,max24hMovePct:8,requireTrigger:true,minCategoryHits:5
     });
     alert.elite_gate=gate;
-    if(!alert.eligible||alertScore<this.config.minScore||!gate.eligible)return alert;
+    const notificationGate=evaluateRadarNotificationGate(alert,{now:this.clock()});
+    alert.notification_gate=notificationGate;
+    if(!alert.eligible||alertScore<this.config.minScore||!gate.eligible||!notificationGate.eligible)return alert;
     const lastAlert=this.lastAlertAt.get(row.symbol)||0;
     if(this.clock()-lastAlert<this.config.alertCooldownMs)return alert;
     this.lastAlertAt.set(row.symbol,this.clock());
     const decorated=decorateRadarAlert(alert,'Radar 2 — Strong-Move');
     await this.store.appendStrongMoveAlert(decorated);
     if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
+    rememberRadarAlert(decorated,this.clock());
     this.alertCount++;
     return alert;
   }
