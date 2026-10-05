@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - phase3-triple-radar
+      - fix/android-no-autostart-background-latest-features-20261006
+      - fix/android-no-autostart-background-20261005
       - phase4-symbol-deep-scan
       - phase4-symbol-deep-scan-testfix
       - phase5-fix-bottom-radar-enable-deep-scan
@@ -14,6 +16,7 @@ on:
       - fix-four-radars-runtime
       - fix-radar-runtime-return-market-data
       - radar6-doomsday-20261005
+      - phase4-market-explosion-radar-build185
   pull_request:
     branches:
       - phase3-triple-radar
