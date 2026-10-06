@@ -61,18 +61,3 @@ export class DurableStore {
     catch(e){return{state:'ERROR',path:this.dir,error:String(e?.message??e),last_write_at:this.lastWriteAt};}}
   static publicSubscription(s){return{id:s.id,endpoint:s.endpoint,expirationTime:s.expirationTime,created_at:s.created_at,updated_at:s.updated_at,disabled:Boolean(s.disabled)};}
 }
-  async readRecent(kind,limit=100){
-    const file=this.files[kind];
-    if(!file)return[];
-    let s='';
-    try{s=await readFile(file,'utf8');}catch{return[];}
-    const rows=[];
-    for(const line of s.split('\n').filter(Boolean).slice(-Math.max(1,Number(limit)||100))){
-      try{rows.push(JSON.parse(line));}catch{}
-    }
-    return rows.reverse();
-  }
-  async health(){try{await mkdir(this.dir,{recursive:true});return{state:this.ready?'LIVE':'INIT',path:this.dir,last_write_at:this.lastWriteAt};}
-    catch(e){return{state:'ERROR',path:this.dir,error:String(e?.message??e),last_write_at:this.lastWriteAt};}}
-  static publicSubscription(s){return{id:s.id,endpoint:s.endpoint,expirationTime:s.expirationTime,created_at:s.created_at,updated_at:s.updated_at,disabled:Boolean(s.disabled)};}
-}
