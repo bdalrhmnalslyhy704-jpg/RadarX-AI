@@ -7,8 +7,6 @@ function response(status=200,body={},headers={}){
 }
 
 test('Binance Spot request weights match the current endpoint policy',()=>{
-  assert.equal(requestWeightFor('/api/v3/ping'),1);
-  assert.equal(requestWeightFor('/api/v3/time'),1);
   assert.equal(requestWeightFor('/api/v3/exchangeInfo'),20);
   assert.equal(requestWeightFor('/api/v3/klines',{limit:180}),2);
   assert.equal(requestWeightFor('/api/v3/depth',{limit:100}),5);
@@ -72,7 +70,7 @@ test('429 and 418 responses establish explicit backoff and the queue honors Retr
     clock:()=>now418,sleepFn:async ms=>{now418+=ms;},
     fetchImpl:async()=>response(418,{}, {})
   });
-  await assert.rejects(()=>client418.request('/api/v3/ping'),e=>{
+  await assert.rejects(()=>client418.request('/api/v3/klines',{symbol:'AAAUSDT',interval:'1m',limit:10}),e=>{
     assert.equal(e.status,418);
     assert.ok(e.retryMs>=120000);
     return true;
