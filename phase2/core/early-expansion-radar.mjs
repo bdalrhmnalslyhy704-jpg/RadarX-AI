@@ -271,7 +271,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   const r5_3=returns(s['5m'],3),r15_3=returns(s['15m'],3);
   const rv1=rvol(s['1m'],30),rv5=rvol(s['5m'],20),rv15=rvol(s['15m'],20);
   const qrv5=quoteRvol(s['5m'],20);
-  const p=pressureScore(s['1m']);
+  const pressure=pressureScore(s['1m']);
   const bb=bbExpansion(s['5m']);
   const atrx=atrExpansion(s['5m']);
   const vwap5=vwap(s['5m'],20),vwapDistance=Number.isFinite(vwap5)&&vwap5>0?(p/vwap5-1)*100:null;
@@ -297,7 +297,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     ((rv5??1)>=1.20?18:0)+
     ((rv15??1)>=1.15?10:0)
   );
-  const pressure=clamp(p.score);
+  const pressureScoreValue=clamp(pressure.score);
   const breakout=clamp(br5.score*.65+br15.score*.35);
   const compressionExpansion=clamp(bb.score*.60+comp.score*.40);
   const volatilityExpansion=clamp(atrx.score*.75+clamp(50+Math.max(0,Number(fastContext.price_acceleration_pct||0))*120)*.25);
@@ -413,7 +413,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
       price_change_5m_15m_agg_pct:r5_3,price_change_15m_45m_agg_pct:r15_3,
       fast_price_change_pct:instant,fast_price_acceleration_pct:accel,
       rvol_1m:rv1,rvol_5m:rv5,rvol_15m:rv15,quote_rvol_5m:qrv5,
-      taker_buy_ratio:p.buy_ratio,taker_buy_delta:p.buy_delta,
+      taker_buy_ratio:pressure.buy_ratio,taker_buy_delta:pressure.buy_delta,
       bb_width:bb.width,bb_width_ratio:bb.ratio,compression_ratio:comp.ratio,
       atr_ratio:atrx.ratio,current_atr:atrx.current_atr,
       vwap:vwap5,vwap_distance_pct:vwapDistance,
@@ -431,7 +431,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
       fast_scan:fastContext,
       rvol_persistence:{rvol_1m:rv1,rvol_5m:rv5,rvol_15m:rv15,quote_rvol_5m:qrv5},
       volatility:{bb,atr:atrx},
-      pressure:p,
+      pressure,
       indicators:{vwap_distance_pct:vwapDistance,adx:adxv,macd:mac,rsi_1h:rsi1h,obv_slope:obv},
       mtf_alignment:mtf,
       market_regime:market,
@@ -442,7 +442,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
         compression_score:compressionExpansion,
         acceleration_score:volumeAccel,
         participation_score:rvolPersistence,
-        pressure_score:pressure,
+        pressure_score:pressureScoreValue,
         structure_score:hl.score,
         breakout_score:breakout,
         relative_strength_score:market.score,
@@ -618,7 +618,6 @@ export class EarlyExpansionRadar{
     const tradeRatio=Number.isFinite(tBase)&&tBase>0?Math.max(0,tDelta)/tBase:null;
     const fast={price_change_pct:priceChange,price_acceleration_pct:acceleration,volume_delta_quote:qDelta,trade_delta:tDelta,volume_accel_ratio:volumeRatio,trade_accel_ratio:tradeRatio,at:now,warmed_up:Boolean(prev)};
     history.push({price:row.lastPrice,quote:row.quoteVolume24h,trades:row.tradeCount24h,qDelta,tDelta,priceChange,at:now});
-    while(history.length<20?history.length:20)break;
     while(history.length>20)history.shift();
     this.fastState.set(row.symbol,history);
     return fast;
