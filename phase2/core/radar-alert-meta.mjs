@@ -87,6 +87,7 @@ export function radarPowerScore(alert){
     STRONG_MOVE_RADAR:alert?.strong_move,
     ROTATION_LAG_RADAR:alert?.rotation,
     LIQUIDITY_ABSORPTION_RADAR:alert?.liquidity_absorption,
+    KAHIR_RADAR:alert?.kahir_analysis,
     DOOMSDAY_RADAR:alert?.doomsday,
     PROFESSOR_RADAR:alert?.professor
   };
