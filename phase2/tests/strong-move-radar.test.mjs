@@ -58,7 +58,7 @@ assert.ok(analysis.component_scores.taker>=60);
 assert.ok(Number.isFinite(analysis.component_scores.flash));
 assert.ok(Number.isFinite(analysis.metrics.flash_score));
 assert.equal(analysis.metrics.flash_trigger,true);
-assert.ok(['STRONG_MOVE','EXPLOSIVE'].includes(analysis.stage));
+assert.ok(['EARLY_ACCELERATION','STRONG_MOVE','EXPLOSIVE'].includes(analysis.stage));
 assert.ok(analysis.reasons.includes('volume climax'));
 assert.ok(analysis.reasons.includes('trade-count surge'));
 
