@@ -51,7 +51,7 @@ export class DurableStore {
   async appendKahirAlert(v){return this.lock(async()=>{await appendFile(this.files.kahirAlerts,JSON.stringify(v)+'\\n');this.lastWriteAt=Date.now();});}
   async readKahirAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('kahirAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
 
-  async appendCoinHunterAlert(v){return this.lock(async()=>{await appendFile(this.files.coinHunterAlerts,JSON.stringify(v)+'\\n');this.lastWriteAt=Date.now();});}
+  async appendCoinHunterAlert(v){return this.lock(async()=>{await appendFile(this.files.coinHunterAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readCoinHunterAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('coinHunterAlerts',Math.min(1000,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at||x?.detected_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
   async appendEarlyExpansionAlert(v){return this.lock(async()=>{await appendFile(this.files.earlyExpansionAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readEarlyExpansionAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('earlyExpansionAlerts',Math.min(1000,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at||x?.detected_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
