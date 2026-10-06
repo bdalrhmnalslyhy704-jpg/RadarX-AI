@@ -284,7 +284,9 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     '1h':closed(series['1h']||[],now),
     '4h':closed(series['4h']||[],now)
   };
-  const gate=dataGate(s,now,cfg,{historicalReplay,allowMissingDepth:historicalReplay});
+  // Pass the raw series to the gate so future timestamps are rejected before
+  // the closed-candle filter removes them.
+  const gate=dataGate(series,now,cfg,{historicalReplay,allowMissingDepth:historicalReplay});
   const p=finite(ticker.lastPrice,null);
   if(!(p>0))return {score:null,decision_band:'DATA_INSUFFICIENT',data_quality:0,liquidity_quality:null,data_stale:true,risk_flags:['INVALID_PRICE'],reason_codes:['INVALID_PRICE'],gates:gate};
   const r1=returns(s['1m'],1),r5=returns(s['5m'],1),r15=returns(s['15m'],1),r1h=returns(s['1h'],1),r4h=returns(s['4h'],1);
