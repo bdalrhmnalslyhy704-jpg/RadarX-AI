@@ -28,6 +28,7 @@ header{position:sticky;top:0;z-index:10;margin:0 -14px 10px;padding:calc(10px + 
 main{width:min(980px,100%);margin:auto;padding:env(safe-area-inset-top) 14px calc(28px + env(safe-area-inset-bottom))}
 #marketRadarPanel{margin-top:10px}
 footer{padding:18px 4px;text-align:center;color:#8fa8b2;font-size:12px}
+.rx-health{border-color:#2a5a76;background:linear-gradient(145deg,#091b2b,#0b1520)}.rx-health-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px}.rx-h{padding:8px 9px;border:1px solid #234b63;border-radius:12px;font-size:10px;background:#08131d;display:flex;justify-content:space-between;gap:7px}.rx-h b{font-size:10px}.rx-h i{font-style:normal;color:#91a9ba}.rx-h.live{border-color:#267b61}.rx-h.live b{color:#63e6b4}.rx-h.off b{color:#ffd27c}.rx-h.err{border-color:#703844}.rx-h.err b{color:#ff8998}@media(max-width:560px){.rx-health-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -109,6 +110,26 @@ document.getElementById('openBottomRadarBtn').addEventListener('click',event=>{
     window.RadarXNative.openBottomRadar();
   }
 });
+</script>
+
+<script type="module">
+import {getRadarStatus} from './radarx-backend-client.mjs';
+const healthEl=document.getElementById('radarHealth');
+const radarOrder=['EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR','LIQUIDITY_ABSORPTION_RADAR','KAHIR_RADAR','DOOMSDAY_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR','PROFESSOR_RADAR'];
+const labels={'EARLY_MOVE_RADAR':'1 • المدمر','STRONG_MOVE_RADAR':'2 • ملك الظلام','ROTATION_LAG_RADAR':'3 • الجوكر','LIQUIDITY_ABSORPTION_RADAR':'4 • الكاسح','KAHIR_RADAR':'5 • القاهر','DOOMSDAY_RADAR':'6 • يوم القيامة','ALMUQAWIM_RADAR':'7 • المقاوم','EARLY_EXPANSION_RADAR':'8 • البرق','PROFESSOR_RADAR':'البروفيسور'};
+function esc(v){return String(v??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
+async function loadRadarHealth(){
+  try{
+    const r=await getRadarStatus();
+    if(r.status!==200)throw new Error('HTTP_'+r.status);
+    const map=new Map((r.body?.radars||[]).map(x=>[x.radar,x]));
+    healthEl.innerHTML=radarOrder.map(id=>{
+      const x=map.get(id), live=x?.running===true;
+      return '<div class="rx-h '+(x?(live?'live':'off'):'err')+'"><b>'+esc(labels[id]||id)+'</b><i>'+esc(live?'يعمل':x?'متوقف':'غير متاح')+'</i></div>';
+    }).join('');
+  }catch(e){healthEl.innerHTML='<div class="rx-h err"><b>Backend</b><i>'+esc(e?.message||e)+'</i></div>';}
+}
+loadRadarHealth();setInterval(loadRadarHealth,20000);
 </script>
 </body>
 </html>
