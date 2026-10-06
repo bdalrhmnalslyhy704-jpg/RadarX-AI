@@ -7,7 +7,8 @@ export const RADAR_NAMES=Object.freeze({
   DOOMSDAY_RADAR:'Radar 6 — يوم القيامة',
   PROFESSOR_RADAR:'البروفيسور — استخبارات عامة',
   ALMUQAWIM_RADAR:'Radar 7 — المقاوم',
-  EARLY_EXPANSION_RADAR:'Radar 8 — البرق'
+  EARLY_EXPANSION_RADAR:'Radar 8 — البرق',
+  COIN_HUNTER_RADAR:'🎯 صائد العملات'
 });
 export const RADAR_PROFILES=Object.freeze({
   EARLY_MOVE_RADAR:Object.freeze({
@@ -66,6 +67,15 @@ export const RADAR_PROFILES=Object.freeze({
     algorithms:['Price Acceleration','RVOL Acceleration','Trade Count','ATR/Bollinger','VWAP/EMA','ADX/MACD/RSI/OBV','Higher Lows','Resistance Pressure','BTC Relative Strength','Taker Divergence','Absorption/Reversal','Bid/Ask Depth'],
     guardrails:['Closed candles only','Reject stale/future/gap data','Anti-chase extension gate','Cooldown and duplicate suppression']
   }),
+  COIN_HUNTER_RADAR:Object.freeze({
+    name:RADAR_NAMES.COIN_HUNTER_RADAR,icon:'🎯',color:'#ffb703',
+    mission:'قناص انتقائي: يتعلم بصمة أقوى العملات التي تحركت اليوم ثم يبحث عن عملة أخرى ما زالت قبل التمدد وتحمل شروط القنص.',
+    strength:'لا يطارد العملة التي انفجرت؛ يعزل المرشحين الهادئين ويقارنهم ببصمة القادة اليومية.',
+    strategy:'Daily Mover Fingerprint + Adaptive Pattern Similarity + Pre-Breakout Confluence',
+    timeframes:['1h'],
+    algorithms:['Daily Mover Learning','Adaptive Leader Fingerprint','Volume Acceleration','Trade-Count Acceleration','Taker Buy Pressure','Higher-Low Structure','EMA20/EMA50','Bollinger Compression','Resistance Room','Relative Strength vs BTC','Anti-Chase Extension Gate','Liquidity Filter'],
+    guardrails:['Spot فقط','Paper فقط','شموع مغلقة فقط','يرفض التمدد','لا يضمن الربح أو الارتفاع','لا أسعار أو صفقات وهمية']
+  }),
   ALMUQAWIM_RADAR:Object.freeze({
     name:RADAR_NAMES.ALMUQAWIM_RADAR,icon:'🛡️',color:'#38bdf8',
     mission:'حارس اتجاه السوق: لا يطارد الحركة؛ يحدد الاتجاه من هيكل القمم والقيعان وخط الاتجاه والمتوسط وتوافق الإطارات.',
@@ -116,7 +126,7 @@ export function radarPowerScore(alert){
   let power=base*.60+(componentMean??base)*.25+dataQuality*.15;
   if(riskCount)power-=Math.min(12,riskCount*2);
   const thresholds={
-    EARLY_MOVE_RADAR:72,STRONG_MOVE_RADAR:76,ROTATION_LAG_RADAR:78,LIQUIDITY_ABSORPTION_RADAR:82,KAHIR_RADAR:84,DOOMSDAY_RADAR:82,PROFESSOR_RADAR:80,ALMUQAWIM_RADAR:82
+    EARLY_MOVE_RADAR:72,STRONG_MOVE_RADAR:76,ROTATION_LAG_RADAR:78,LIQUIDITY_ABSORPTION_RADAR:82,KAHIR_RADAR:84,DOOMSDAY_RADAR:82,PROFESSOR_RADAR:80,ALMUQAWIM_RADAR:82,COIN_HUNTER_RADAR:86
   };
   const gate=power>=Number(thresholds[id]??80);
   return {
