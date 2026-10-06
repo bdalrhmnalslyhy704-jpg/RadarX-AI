@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto';
 export class DurableStore {
   constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.ready=false;this.lastWriteAt=null;
     this.files={subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
-      signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl')};}
+      signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),earlyExpansionEvents:join(dir,'early-expansion-events.jsonl')};}
   async init(){await mkdir(this.dir,{recursive:true});
     for(const [k,p] of Object.entries(this.files)){try{await readFile(p,'utf8');}catch{
       await writeFile(p,p.endsWith('.jsonl')?'':'{}',{flag:'wx'}).catch(()=>{});
@@ -33,6 +33,10 @@ export class DurableStore {
   async putSignalSnapshot(symbol,snapshot){const key=String(symbol||'').trim().toUpperCase();if(!key)throw new Error('INVALID_SIGNAL_SNAPSHOT_SYMBOL');return this.lock(async()=>{const a=await this.readJson(this.files.signalSnapshots);a[key]={...snapshot,symbol:key,updated_at:Date.now()};await this.writeJson(this.files.signalSnapshots,a);return a[key];});}
   async appendSignalAudit(v){return this.lock(async()=>{await appendFile(this.files.signals,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async appendNotificationAudit(v){return this.lock(async()=>{await appendFile(this.files.notifications,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendEarlyExpansionAlert(v){return this.lock(async()=>{await appendFile(this.files.earlyExpansionAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async readEarlyExpansionAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('earlyExpansionAlerts',Math.min(1000,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at||x?.detected_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
+  async appendEarlyExpansionEvent(v){return this.lock(async()=>{await appendFile(this.files.earlyExpansionEvents,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async readEarlyExpansionEvents({sinceMs=0,limit=200}={}){const rows=await this.readRecent('earlyExpansionEvents',Math.min(2000,Math.max(1,Number(limit)||200)));return rows.filter(x=>Number(x?.processed_at||x?.detected_at)>Number(sinceMs||0)).slice(0,Math.min(500,Math.max(1,Number(limit)||200)));}
   async readRecent(kind,limit=100){let s='';try{s=await readFile(this.files[kind],'utf8');}catch{return[];}
     return s.split('\n').filter(Boolean).slice(-limit).reverse().map(x=>JSON.parse(x));}
   async health(){try{await mkdir(this.dir,{recursive:true});return{state:this.ready?'LIVE':'INIT',path:this.dir,last_write_at:this.lastWriteAt};}
