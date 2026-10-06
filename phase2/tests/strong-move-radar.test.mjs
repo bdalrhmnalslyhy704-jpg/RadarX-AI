@@ -62,6 +62,19 @@ assert.ok(['STRONG_MOVE','EXPLOSIVE'].includes(analysis.stage));
 assert.ok(analysis.reasons.includes('volume climax'));
 assert.ok(analysis.reasons.includes('trade-count surge'));
 
+const earlyTicker={...ticker,priceChange24h:2.2,quoteVolume24h:8_000_000,tradeCount24h:250_000};
+const earlyAnalysis=buildStrongMoveAnalysis(make1m(),make5m(),earlyTicker,NOW);
+assert.equal(earlyAnalysis.closed_candles_only,true);
+assert.equal(earlyAnalysis.direction,'UP_SURGE');
+assert.equal(earlyAnalysis.early_eligible,true);
+assert.equal(earlyAnalysis.stage,'EARLY_ACCELERATION');
+assert.ok(earlyAnalysis.metrics.early_confirmations>=5);
+assert.ok(earlyAnalysis.metrics.early_score>=72);
+
+const lateTicker={...ticker,priceChange24h:17};
+const lateAnalysis=buildStrongMoveAnalysis(make1m(),make5m(),lateTicker,NOW);
+assert.equal(lateAnalysis.early_eligible,false);
+
 const alert=buildStrongMoveAlert({one_minute:make1m(),five_minute:make5m(),ticker},NOW);
 assert.equal(alert.event,'STRONG_MOVE_ALERT');
 assert.equal(alert.radar,'STRONG_MOVE_RADAR');
