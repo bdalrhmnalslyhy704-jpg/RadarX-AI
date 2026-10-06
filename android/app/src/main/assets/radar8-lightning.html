@@ -47,10 +47,7 @@ header{position:sticky;top:0;z-index:5;margin:-18px -14px 14px;padding:calc(12px
 </main>
 
 <script type="module">
-const BASES=[
-  'https://radarx-ai-production.up.railway.app',
-  'https://radarx-ai-triple-production.up.railway.app'
-];
+const BASES=['https://radarx-ai-triple-production.up.railway.app','https://radarx-ai-production.up.railway.app'];
 const $=id=>document.getElementById(id);
 let timer=null;
 let busy=false;
@@ -129,8 +126,8 @@ async function control(action){
 $('start').onclick=()=>control('start');
 $('stop').onclick=()=>control('stop');
 $('scan').onclick=()=>refresh({scan:true});
-refresh({scan:true});
-timer=setInterval(()=>refresh(),15000);
+refresh();
+timer=setInterval(()=>refresh(),20000);
 </script>
 </body>
 </html>
