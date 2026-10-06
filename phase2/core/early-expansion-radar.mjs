@@ -734,6 +734,10 @@ function microTradeRvol(rows,n=20){
   const now=Number(rows.at(-1)?.tradeCount),base=median(rows.slice(-n-1,-1).map(x=>Number(x.tradeCount)));
   return Number.isFinite(now)&&Number.isFinite(base)&&base>0?now/base:null;
 }
+function microRelativeStrength(m5,btc5){
+  const a=returns(m5,1),b=returns(btc5,1);
+  return Number.isFinite(a)&&Number.isFinite(b)?a-b:null;
+}
 function microTaker(rows,n=5){
   const a=rows.slice(-n);
   const vol=a.reduce((s,x)=>s+Math.max(0,Number(x.volume)||0),0);
