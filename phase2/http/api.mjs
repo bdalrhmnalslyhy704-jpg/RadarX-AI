@@ -372,11 +372,14 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         if(!earlyExpansionRadar)return send(res,503,{error:'EARLY_EXPANSION_RADAR_UNAVAILABLE',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'EARLY_EXPANSION_RADAR'}});
         const sinceRaw=Number(u.searchParams.get('since')||0);
         const limit=Math.max(1,Math.min(100,Math.trunc(Number(u.searchParams.get('limit')||100))));
+        const requestedQuote=String(u.searchParams.get('quote')||'USDT').trim().toUpperCase();
         try{
+          const configuredQuote=String(earlyExpansionRadar.health()?.coverage?.quote||earlyExpansionRadar.config?.quote||'USDT').toUpperCase();
+          if(requestedQuote!==configuredQuote)return send(res,400,{error:'QUOTE_NOT_CONFIGURED',quote:requestedQuote,configured_quote:configuredQuote});
           const runNow=String(u.searchParams.get('scan')||'').trim()==='1';
           let immediateScanError=null;
           const before=earlyExpansionRadar.health();
-          if(runNow&&before.running===true&&!before.busy){try{await earlyExpansionRadar.tick();}catch(e){immediateScanError=String(e?.message??e);}}
+          if(runNow&&before.running===true&&!before.busy){try{await earlyExpansionRadar.tick({quote:requestedQuote});}catch(e){immediateScanError=String(e?.message??e);}}
           const alerts=typeof store.readEarlyExpansionAlerts==='function'
             ? await store.readEarlyExpansionAlerts({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit})
             : [];
@@ -384,7 +387,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             ? await store.readEarlyExpansionEvents({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit:Math.min(200,limit*2)})
             : [];
           const health=earlyExpansionRadar.health();
-          const snapshot=earlyExpansionRadar.snapshot(limit);
+          const snapshot=earlyExpansionRadar.snapshot(limit,requestedQuote);
           return send(res,200,{...snapshot,monitoring:health,alerts,events,
             scan:{requested:runNow,completed:immediateScanError===null&&health.last_scan_at!=null,error:immediateScanError||health.last_error||null},
             thresholds:{min_alert_score:Number(config.earlyExpansionRadar?.minAlertScore??82),min_pre_expansion_score:Number(config.earlyExpansionRadar?.preExpansionScore??72),min_breakout_developing_score:Number(config.earlyExpansionRadar?.breakoutDevelopingScore??82)},
