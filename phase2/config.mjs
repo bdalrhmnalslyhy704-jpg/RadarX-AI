@@ -119,6 +119,16 @@ export const CONFIG = Object.freeze({
     minScore: int(process.env.RADARX_ROTATION_RADAR_MIN_SCORE, 78),
     minConfirmations: int(process.env.RADARX_ROTATION_RADAR_MIN_CONFIRMATIONS, 4)
   },
+  alMuqawimRadar: {
+    quote: 'USDT',
+    pollMs: int(process.env.RADARX_ALMUQAWIM_POLL_MS, 60000),
+    universeRefreshMs: int(process.env.RADARX_ALMUQAWIM_UNIVERSE_REFRESH_MS, 5 * 60 * 1000),
+    minQuoteVolume24h: int(process.env.RADARX_ALMUQAWIM_MIN_QUOTE_VOLUME_24H, 750000),
+    batchSize: int(process.env.RADARX_ALMUQAWIM_BATCH_SIZE, 5),
+    alertCooldownMs: int(process.env.RADARX_ALMUQAWIM_ALERT_COOLDOWN_MS, 20 * 60 * 1000),
+    minScore: int(process.env.RADARX_ALMUQAWIM_MIN_SCORE, 82),
+    maPeriod: int(process.env.RADARX_ALMUQAWIM_MA_PERIOD, 50)
+  },
   radarControl: {
     autostart: String(process.env.RADARX_RADARS_AUTOSTART ?? ((process.env.RADARX_ENV ?? 'development').toLowerCase() === 'production' ? 'true' : 'false')).toLowerCase() === 'true'
   },
