@@ -37,6 +37,8 @@ for i in $(seq 1 18); do
   if printf '%s
 ' "$LOGS" | grep -Fq "SCAN_COMPLETE"; then scan_complete=1; fi
   if printf '%s
+' "$LOGS" | grep -Fq "BACKGROUND_START_REQUEST"; then background_start=1; fi
+  if printf '%s
 ' "$LOGS" | grep -Fq "BACKGROUND_SERVICE_READY"; then background_ready=1; fi
   if printf '%s
 ' "$LOGS" | grep -Eqi "RadarXWeb: ERROR:Uncaught (ReferenceError|SyntaxError|TypeError)"; then web_errors=1; fi
