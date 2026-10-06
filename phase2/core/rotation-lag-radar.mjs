@@ -508,3 +508,5 @@ export class RotationLagRadar {
     };
   }
 }
+
+// 2026-10-07: backend deployment trigger after Radar 3 live-watch fix.
