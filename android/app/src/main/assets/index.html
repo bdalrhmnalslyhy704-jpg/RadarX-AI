@@ -53,6 +53,13 @@ footer{padding:18px 4px;text-align:center;color:#8fa8b2;font-size:12px}
 <section class="rx-nav-card"><div><b>🛡️ المقاوم</b><small>حارس اتجاه السوق: هيكل HH/HL أو LH/LL، خط الاتجاه، المتوسط المتحرك وتوافق 4H + 1H، مع تحذير عند مخالفة اتجاه الإطار الكبير.</small></div><a class="rx-nav-link secondary" href="./al-muqawim-radar.html">فتح المقاوم</a></section>
 <section class="rx-nav-card"><div><b>👑 القاهر</b><small>ماسح السوق الكامل الحالي، مستقل عن الأربعة ويستمر كالرادار الخامس.</small></div><a id="openKahirBtn" class="rx-nav-link" href="./kahir-radar.html">فتح القاهر</a></section>
 <section class="rx-nav-card"><div><b>👑 الكنق</b><small>طبقة ذكاء تجمع أدلة الرادارات، الفحص العميق، الاتجاه، السيولة، الضغط وخطر الفخ قبل إصدار الحكم.</small></div><a class="rx-nav-link" href="./king.html">فتح الكنق</a></section>
+<section class="rx-nav-card" style="display:block">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+    <div><b>📡 حالة الرادارات</b><small>لوحة خفيفة: لا توقف الواجهة إذا تعذر الاتصال، وتعرض حالة 1–8 + البروفيسور.</small></div>
+    <span class="rx-nav-link secondary" style="min-width:110px;cursor:default">LIVE STATUS</span>
+  </div>
+  <div id="radarHealth" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px"></div>
+</section>
 <div id="symbolDeepScanPanel" aria-label="فحص العملة الشامل"></div>
 <div id="marketRadarPanel" aria-label="RadarX Dashboard"></div>
 <div id="backgroundMonitorPanel" aria-label="RadarX Background Monitor"></div>
@@ -124,11 +131,12 @@ async function loadRadarHealth(){
     const r=await getRadarStatus();
     if(r.status!==200)throw new Error('HTTP_'+r.status);
     const map=new Map(((r.body && r.body.radars)||[]).map(x=>[x.radar,x]));
+    if(!healthEl)return;
     healthEl.innerHTML=radarOrder.map(id=>{
       const x=map.get(id), live=x && x.running===true;
       return '<div class="rx-h '+(x?(live?'live':'off'):'err')+'"><b>'+esc(labels[id]||id)+'</b><i>'+esc(live?'يعمل':x?'متوقف':'غير متاح')+'</i></div>';
     }).join('');
-  }catch(e){healthEl.innerHTML='<div class="rx-h err"><b>Backend</b><i>'+esc((e && e.message)||e)+'</i></div>';}
+  }catch(e){if(!healthEl)return;healthEl.innerHTML='<div class="rx-h err"><b>Backend</b><i>'+esc((e && e.message)||e)+'</i></div>';}
 }
 loadRadarHealth();setInterval(loadRadarHealth,20000);
 </script>
