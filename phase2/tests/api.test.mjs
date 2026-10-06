@@ -206,7 +206,7 @@ test('TEST_FIXTURE: independent radar status/control and unified alerts preserve
 
 test('TEST_FIXTURE: Professor route exposes fused live intelligence and is independently controllable',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-professor-api-')),store=await new DurableStore({dir}).init(); let ticked=0;
-  await store.appendProfessorAlert({id:'P1',radar:'PROFESSOR_RADAR',radar_name:'البروفيسور — استخبارات عامة',symbol:'BTCUSDT',processed_at:Date.now(),detected_at:Date.now()});
+  await store.appendProfessorAlert({id:'P1',radar:'PROFESSOR_RADAR',radar_name:'Radar 7 — البروفيسور',symbol:'BTCUSDT',processed_at:Date.now(),detected_at:Date.now()});
   const professor={
     health:()=>({running:true,busy:false,last_scan_at:Date.now(),radar:'PROFESSOR_RADAR',radar_name:'البروفيسور — استخبارات عامة'}),
     tick:async()=>{ticked++;},
