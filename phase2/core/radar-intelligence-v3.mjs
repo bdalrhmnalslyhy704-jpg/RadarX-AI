@@ -50,6 +50,85 @@ function bucketScores(alert,rootRows){
     quality:keywordScore(all,[/data_quality/i,/quality/i,/liquidity/i])
   };
 }
+function roleScore(radar,alert,rows,scores){
+  const pick=(patterns,fallback=50)=>{
+    const v=keywordScore(rows,patterns);
+    return Number.isFinite(v)?v:fallback;
+  };
+  const avg=values=>{
+    const a=values.filter(Number.isFinite);
+    return a.length?a.reduce((s,x)=>s+x,0)/a.length:50;
+  };
+  switch(radar){
+    case 'EARLY_MOVE_RADAR':
+      return avg([
+        scores.trigger,scores.structure,scores.participation,scores.flow,
+        scores.relative,scores.momentum,scores.compression,scores.trend,
+        pick([/pre_move/i,/early/i,/wake/i,/explosion/i],70),
+        pick([/buying_pressure/i,/taker/i],65)
+      ]);
+    case 'STRONG_MOVE_RADAR':
+      return avg([
+        pick([/flash/i],50),pick([/velocity/i,/momentum/i],50),
+        pick([/volume/i],50),pick([/trades/i,/trade/i],50),
+        pick([/taker/i,/buy/i],50),pick([/breakout/i],50),
+        pick([/ema/i],50),pick([/vwap/i],50),
+        pick([/bollinger/i],50),pick([/atr/i],50),
+        pick([/five_min_trend/i,/confirmation/i],60)
+      ]);
+    case 'ROTATION_LAG_RADAR':
+      return avg([
+        pick([/lag/i,/lead/i],50),pick([/resilience/i],50),
+        pick([/silent_volume/i,/volume/i],50),pick([/reclaim_or_reject/i,/reclaim/i],50),
+        pick([/value_acceptance/i,/acceptance/i],50),pick([/rsi_turn/i],50),
+        pick([/mfi_turn/i],50),pick([/stochastic_turn/i],50),
+        pick([/persistence/i],50),pick([/compression/i],50)
+      ]);
+    case 'LIQUIDITY_ABSORPTION_RADAR':
+      return avg([
+        pick([/absorption_score/i,/absorption/i],50),pick([/depth_score/i,/depth_imbalance/i],50),
+        pick([/trapped_seller/i,/trapped/i],50),pick([/dislocation_score/i,/dislocation/i],50),
+        pick([/auction_score/i,/auction/i],50),pick([/structure_score/i,/micro.?structure/i],50),
+        pick([/five_minute_confirmation/i,/5m/i],60)
+      ]);
+    case 'KAHIR_RADAR':
+      return avg([
+        pick([/one_minute_z/i],50),pick([/five_minute_z/i],50),
+        pick([/participation_regime/i,/participation/i],50),
+        pick([/volatility_regime_transition/i,/volatility.*score/i],50),
+        pick([/efficiency/i,/kaufman/i],50),pick([/range_acceptance/i,/acceptance/i],50),
+        pick([/impulse_persistence/i,/persistence/i],50),
+        pick([/relative_acceleration/i,/market_speed/i],50)
+      ]);
+    case 'DOOMSDAY_RADAR':
+      return avg([
+        pick([/early_score/i],50),pick([/ignition_score/i],50),
+        pick([/impulse/i],50),pick([/acceleration/i],50),
+        pick([/volume/i],50),pick([/trades/i,/trade/i],50),
+        pick([/taker/i],50),pick([/breakout/i],50),
+        pick([/ema/i],50),pick([/vwap/i],50),pick([/squeeze/i],50),
+        pick([/relative_strength/i],50),pick([/acceptance/i],50)
+      ]);
+    case 'ALMUQAWIM_RADAR':
+      return avg([
+        pick([/market_structure/i,/structure/i],50),
+        pick([/higher_timeframe_alignment/i,/4h.*1h/i],50),
+        pick([/lower_timeframe_agreement/i,/15m/i],50),
+        pick([/trendline/i],50),
+        pick([/moving_average/i,/ema/i],50),
+        pick([/strong_trend/i,/score/i],70)
+      ]);
+    case 'PROFESSOR_RADAR':
+      return avg([
+        scores.structure,scores.trend,scores.relative,scores.flow,
+        pick([/news/i,/catalyst/i],50),pick([/technical/i,/confirmation/i],60),
+        pick([/source/i,/evidence/i],60),pick([/trap/i,/risk/i],60)
+      ]);
+    default:
+      return 50;
+  }
+}
+
 function diversity(scores){
   const names=Object.entries(scores).filter(([name,v])=>name!=='quality'&&Number.isFinite(v)&&v>=70).map(([name])=>name);
   return {count:names.length,names};
@@ -93,6 +172,7 @@ export function buildRadarIntelligenceV3(alert){
   const rootRows=root?collectNumbers(alert?.[root],root):[];
   const scores=bucketScores(alert,rootRows);
   const diversityInfo=diversity(scores);
+  const role_score=roleScore(radar,alert,[...rootRows,...collectNumbers(alert?.components)],scores);
   const baseScore=clamp(alert?.opportunity_score??alert?.setup_score??alert?.radar_power_score??0);
   const dataQuality=clamp(alert?.data_quality??alert?.data_status?.data_quality??alert?.components?.data_quality??scores.quality??90);
   const liquidity=clamp(alert?.liquidity_quality??alert?.components?.liquidity??90);
@@ -116,7 +196,7 @@ export function buildRadarIntelligenceV3(alert){
   );
   const gate=Boolean(alert?.eligible!==false)&&alert?.closed_candles_only===true&&isPublicSource(alert?.source)&&
     alert?.paper_trading===true&&alert?.real_order_execution===false&&dataQuality>=75&&liquidity>=60&&
-    diversityInfo.count>=3&&quality>=72&&!riskFlags.includes('AGAINST_HIGHER_TIMEFRAME');
+    diversityInfo.count>=3&&role_score>=65&&quality>=72&&!riskFlags.includes('AGAINST_HIGHER_TIMEFRAME');
   const grade=gate&&quality>=90?'ELITE':gate&&quality>=82?'STRONG':quality>=72?'WATCH':'REJECT';
   const reasons=[];
   const add=(label,value,threshold=70)=>{if(Number.isFinite(value)&&value>=threshold)reasons.push({label,score:Number(value.toFixed(1))});};
