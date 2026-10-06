@@ -1,7 +1,7 @@
 name: RadarX Phase 2 Tests
 on:
   push:
-    branches: ['phase2-*']
+    branches: ['phase2-*', 'radarx-build185-almuqawim-20261006']
   pull_request:
     branches: [main]
   workflow_dispatch:
