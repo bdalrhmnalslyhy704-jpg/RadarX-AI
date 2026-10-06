@@ -1,5 +1,6 @@
 import {buildSpotUniverse} from '../market/universe-scanner.mjs';
 import {formatRadarTime12h,decorateRadarAlert} from './radar-alert-meta.mjs';
+import {evaluateRadarNotificationGate,rememberRadarAlert} from './radar-notification-gate.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)||0));
 const finite=(x,d=null)=>Number.isFinite(Number(x))?Number(x):d;
@@ -240,7 +241,15 @@ export class ProfessorRadar{
         opinion.professor_gate=professorGate;
         const result={...row.candidate,deep_scan:row.deep,opinion,professor_gate:professorGate};enriched.push(result);this.scans++;
         if(professorGate.eligible&&now-(this.lastAlertAt.get(result.symbol)||0)>=this.config.alertCooldownMs){
-          const alert=decorateRadarAlert(buildAlert(result,opinion,now),'Radar 7 — البروفيسور');this.lastAlertAt.set(result.symbol,now);await this.store.appendProfessorAlert(alert);if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(alert);this.alertCount++;
+          const alert=decorateRadarAlert(buildAlert(result,opinion,now),'Radar 7 — البروفيسور');
+          const notificationGate=evaluateRadarNotificationGate(alert,{now});
+          alert.notification_gate=notificationGate;
+          if(!notificationGate.eligible)continue;
+          this.lastAlertAt.set(result.symbol,now);
+          await this.store.appendProfessorAlert(alert);
+          if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(alert);
+          rememberRadarAlert(alert,now);
+          this.alertCount++;
         }
       }
       this.latestCandidates=enriched.sort((a,b)=>b.opinion.score-a.opinion.score).slice(0,20);this.lastScanAtMs=now;
