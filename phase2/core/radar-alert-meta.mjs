@@ -6,7 +6,8 @@ export const RADAR_NAMES=Object.freeze({
   KAHIR_RADAR:'Radar 5 — القاهر',
   DOOMSDAY_RADAR:'Radar 6 — يوم القيامة',
   PROFESSOR_RADAR:'البروفيسور — استخبارات عامة',
-  ALMUQAWIM_RADAR:'Radar 7 — المقاوم'
+  ALMUQAWIM_RADAR:'Radar 7 — المقاوم',
+  EARLY_EXPANSION_RADAR:'Radar 8 — البرق'
 });
 export const RADAR_PROFILES=Object.freeze({
   EARLY_MOVE_RADAR:Object.freeze({
@@ -55,6 +56,15 @@ export const RADAR_PROFILES=Object.freeze({
     strategy:'Sudden-Move Fingerprint + Early Ignition + Self Acceleration + Relative Strength',
     timeframes:['1m','5m'],algorithms:['1m/3m/5m Momentum','Acceleration vs Self Baseline','Relative Volume','Trade Count Surge','Taker Flow','Squeeze Release','Donchian Breakout','EMA9/21 Burst','VWAP Reclaim','ATR Expansion','Relative Strength vs BTC','Range Acceptance'],
     guardrails:['Spot فقط','شموع مغلقة فقط','يمنع الحركة اليومية الممتدة','يشترط عدة أدلة قبل الإشعار','لا تنفيذ حقيقي']
+  }),
+  EARLY_EXPANSION_RADAR:Object.freeze({
+    name:RADAR_NAMES.EARLY_EXPANSION_RADAR,icon:'⚡',color:'#00d9ff',
+    mission:'صائد ما قبل التوسع: يبحث عن بصمة الانفجار قبل ظهوره في السعر.',
+    strength:'يركز على العملات الهادئة التي يبدأ فيها الحجم والصفقات والهيكل والضغط بالتحول قبل الحركة الكبيرة.',
+    strategy:'Rotating 1m/5m Micro Fingerprint + Multi-Family Deep Confirmation',
+    timeframes:['1m','5m','15m','1h','4h'],
+    algorithms:['Price Acceleration','RVOL Acceleration','Trade Count','ATR/Bollinger','VWAP/EMA','ADX/MACD/RSI/OBV','Higher Lows','Resistance Pressure','BTC Relative Strength','Taker Divergence','Absorption/Reversal','Bid/Ask Depth'],
+    guardrails:['Closed candles only','Reject stale/future/gap data','Anti-chase extension gate','Cooldown and duplicate suppression']
   }),
   ALMUQAWIM_RADAR:Object.freeze({
     name:RADAR_NAMES.ALMUQAWIM_RADAR,icon:'🛡️',color:'#38bdf8',
