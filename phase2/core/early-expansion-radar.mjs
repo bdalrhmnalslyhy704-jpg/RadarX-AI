@@ -254,11 +254,13 @@ function dataGate(series,now,config,{historicalReplay=false,allowMissingDepth=fa
   const issues=[],available=[],missing=[];
   const limits={1:config.freshness1mMs,5:config.freshness5mMs,15:config.freshness15mMs,60:config.freshness1hMs,240:config.freshness4hMs};
   for(const [tf,arr] of Object.entries(series)){
-    const rows=closed(arr,now);
+    const raw=Array.isArray(arr)?arr:[];
+    // Inspect future timestamps BEFORE removing the current/open candle.
+    issues.push(...futureIssues(raw,now));
+    const rows=closed(raw,now);
     if(rows.length){available.push(tf);const v=validateSeries(rows,tf);if(!v.valid)issues.push(...v.issues);}
     else missing.push(tf);
     if(rows.length){const age=now-Number(rows.at(-1).closeTime);const key=tf==='1m'?1:tf==='5m'?5:tf==='15m'?15:tf==='1h'?60:240;if(age>Number(limits[key]??config.freshness15mMs))issues.push('STALE_DATA:'+tf);}
-    issues.push(...futureIssues(rows,now));
   }
   const required=['1m','5m','15m','1h','4h'];
   const ratio=available.length/required.length;
@@ -379,6 +381,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     ? Number(clamp(rawScore).toFixed(1)):null;
   let decisionBand='NO_SIGNAL';
   if(!gate.valid||gate.issues.length)decisionBand='DATA_INSUFFICIENT';
+  else if(!historicalReplay&&(gateIssues.includes('LIQUIDITY_INSUFFICIENT')||gateIssues.includes('WIDE_SPREAD')))decisionBand='DATA_INSUFFICIENT';
   else if(highRisk)decisionBand='HIGH_RISK_PUMP';
   else if(extended)decisionBand='ALREADY_EXTENDED';
   else if(!historicalReplay&&gateIssues.includes('RECENT_FAKEOUT'))decisionBand='WATCH_EARLY';
