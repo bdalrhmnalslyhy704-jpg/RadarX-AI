@@ -80,7 +80,7 @@ async function run(){
  status.innerHTML='<b>فحص حي</b> — نبحث عن عملات هادئة بدأ حجمها وتدفقها وهيكلها يتحسن…';
  try{
    const r=await getPreMoveRadar({quote:'USDT',limit:Number(limit.value)||30});
-   if(!r.ok||!r.body)throw new Error(r.body?.error||'PRE_MOVE_RADAR_UNAVAILABLE');
+   if(!r.ok||!r.body)throw new Error(r.body && r.body.error||'PRE_MOVE_RADAR_UNAVAILABLE');
    const rows=rankPreMoveCandidates(r.body);
    const s=r.body.session||{};
    status.innerHTML='<b>تم التحديث</b> — '+rows.length+' مرشحًا • قوة السوق الصباحية '+num(s.positive_breadth_pct)+'% موجبة • متوسط الجلسة '+pct(s.market_median_return_pct)+' • BTC '+pct(s.btc_return_pct);
