@@ -303,7 +303,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   const volatilityExpansion=clamp(atrx.score*.75+clamp(50+Math.max(0,Number(fastContext.price_acceleration_pct||0))*120)*.25);
   const vwapScore=Number.isFinite(vwapDistance)?clamp(50+vwapDistance*110):45;
   const emaRibbonScore=ema15a!=null&&ema15b!=null&&ema1a!=null&&ema1b!=null?
-    clamp((ema15a>ema15b?68:38)*.45+(ema1a>ema1b?72:38)*.35+(p>ema15a?82:42)*.20):45;
+    clamp((ema15a>ema15b?68:38)*.45+(ema1a>ema1b?72:38)*.35+(Number(ticker.lastPrice)>ema15a?82:42)*.20):45;
   const momentumIndicatorScore=clamp(
     (adxv?.adx>=15&&adxv?.pdi>adxv?.mdi?82:45)*.32+
     (mac?.histogram>0?74:42)*.28+
@@ -336,6 +336,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     compression_expansion:compressionExpansion,
     breakout_proximity:breakout,
     higher_low:hl.score,
+    buy_sell_pressure:pressureScoreValue,
     orderbook_imbalance:orderbookScore,
     liquidity_quality:liqQuality??null,
     volatility_expansion:volatilityExpansion,
@@ -344,10 +345,10 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     freshness_data_quality:dataScore
   };
   const weighted=[
-    ['volume_acceleration',.13],['rvol_persistence',.12],['compression_expansion',.12],
-    ['breakout_proximity',.10],['higher_low',.07],['orderbook_imbalance',.09],
-    ['liquidity_quality',.08],['volatility_expansion',.09],['mtf_alignment',.10],
-    ['market_regime',.05],['freshness_data_quality',.05]
+    ['volume_acceleration',.12],['rvol_persistence',.11],['compression_expansion',.12],
+    ['breakout_proximity',.10],['higher_low',.07],['buy_sell_pressure',.08],['orderbook_imbalance',.08],
+    ['liquidity_quality',.08],['volatility_expansion',.09],['mtf_alignment',.09],
+    ['market_regime',.04],['freshness_data_quality',.02]
   ];
   const usable=weighted.filter(([k])=>Number.isFinite(scoreParts[k]));
   const rawScore=usable.reduce((sum,[k,w])=>sum+scoreParts[k]*w,0)/usable.reduce((sum,[,w])=>sum+w,0);
@@ -386,7 +387,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     bb.ratio!=null&&bb.ratio>1.03?'BB_EXPANSION_AFTER_COMPRESSION':null,
     br5.distance_pct!=null&&br5.distance_pct>-1.5?'NEAR_5M_RESISTANCE':null,
     hl.higher_low?'HIGHER_LOW_SEQUENCE':null,
-    p.buy_ratio!=null&&p.buy_ratio>=0.515?'TAKER_BUY_PRESSURE':null,
+    pressure.buy_ratio!=null&&pressure.buy_ratio>=0.515?'TAKER_BUY_PRESSURE':null,
     liq.available&&liq.imbalance>=0.08?'BID_ASK_IMBALANCE':null,
     atrx.ratio!=null&&atrx.ratio>=1.08?'ATR_EXPANSION':null,
     vwapDistance!=null&&vwapDistance>=0?'VWAP_RECLAIM_OR_ABOVE':null,
