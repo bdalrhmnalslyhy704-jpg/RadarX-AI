@@ -30,7 +30,7 @@ test('Concurrent REST calls are serialized by one queue and local REQUEST_WEIGHT
     timeoutMs:1000,minIntervalMs:0,
     maxWeightPerMinute:20,safetyMarginWeight:0,
     clock:()=>now,sleepFn,
-    fetchImpl:async()=>{calls++;active++;maxActive=Math.max(maxActive,active);await Promise.resolve();active--;const used=(calls%10||10)*2;return response(200,{ok:true},{'X-MBX-USED-WEIGHT-1M':String(used)});}
+    fetchImpl:async()=>{calls++;active++;maxActive=Math.max(maxActive,active);await Promise.resolve();active--;const used=(calls%10||10)*2;return response(200,[],{'X-MBX-USED-WEIGHT-1M':String(used)});}
   });
   await Promise.all(Array.from({length:12},()=>client.klines('AAAUSDT','1m',{limit:180})));
   maxWeightSeen=Math.max(maxWeightSeen,...client.usedAt.map(x=>x.weight));
@@ -52,7 +52,7 @@ test('429 and 418 responses establish explicit backoff and the queue honors Retr
     fetchImpl:async()=>{
       attempt++;
       if(attempt===1)return response(429,{}, {'Retry-After':'2'});
-      return response(200,{ok:true},{'X-MBX-USED-WEIGHT-1M':'2'});
+      return response(200,[],{'X-MBX-USED-WEIGHT-1M':'2'});
     }
   });
   await assert.rejects(()=>client.request('/api/v3/klines',{symbol:'AAAUSDT',interval:'1m',limit:10}),e=>{
