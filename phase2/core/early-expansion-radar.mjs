@@ -20,7 +20,7 @@ async function withRetry(fn,{attempts=1,baseMs=150,maxBackoffMs=1500,sleepFn=sle
   }
   throw last||new Error('RADAR8_RETRY_FAILED');
 }
-async function boundedMap(items,concurrency,worker){
+export async function boundedMap(items,concurrency,worker){
   const a=Array.from(items||[]),out=Array(a.length);let next=0;
   const n=Math.max(1,Math.min(Number(concurrency)||1,a.length));
   const run=async()=>{while(true){const i=next++;if(i>=a.length)return;out[i]=await worker(a[i],i);}};
@@ -102,6 +102,7 @@ export function buildEarlyExpansionUniverseCoverage({
 export function decideEarlyExpansionBand({
   gateValid,
   gateIssues=[],
+  policyIssues=[],
   highRiskPump=false,
   extended=false,
   historicalReplay=false,
@@ -111,13 +112,14 @@ export function decideEarlyExpansionBand({
   atrRatio=null,
   cfg=EARLY_EXPANSION_RADAR_DEFAULTS
 }={}){
-  const issues=Array.isArray(gateIssues)?gateIssues:[];
+  const dataIssues=Array.isArray(gateIssues)?gateIssues:[];
+  const policy=Array.isArray(policyIssues)?policyIssues:[];
   const score=Number.isFinite(Number(earlyScore))?Number(earlyScore):null;
-  if(!gateValid||issues.length>0)return 'DATA_INSUFFICIENT';
-  if(issues.includes('LIQUIDITY_INSUFFICIENT')||issues.includes('WIDE_SPREAD'))return 'DATA_INSUFFICIENT';
+  if(!gateValid||dataIssues.length>0)return 'DATA_INSUFFICIENT';
+  if(policy.includes('LIQUIDITY_INSUFFICIENT')||policy.includes('WIDE_SPREAD'))return 'DATA_INSUFFICIENT';
   if(highRiskPump)return 'HIGH_RISK_PUMP';
   if(extended)return 'ALREADY_EXTENDED';
-  if(!historicalReplay&&issues.includes('RECENT_FAKEOUT'))return 'WATCH_EARLY';
+  if(!historicalReplay&&policy.includes('RECENT_FAKEOUT'))return 'WATCH_EARLY';
   if(score!=null&&score>=Number(cfg.breakoutDevelopingScore??82)&&(breakoutBroken||Number(r5_3||0)>=1.5||Number(atrRatio||0)>=1.2))return 'BREAKOUT_DEVELOPING';
   if(score!=null&&score>=Number(cfg.preExpansionScore??72))return 'PRE_EXPANSION';
   if(score!=null&&score>=Number(cfg.watchEarlyScore??60))return 'WATCH_EARLY';
@@ -486,8 +488,9 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   if(fakeoutFlag(s['5m']).flag)gateIssues.push('RECENT_FAKEOUT');
   const earlyScore=gate.valid&&gateIssues.every(x=>!['ALREADY_EXTENDED','LIQUIDITY_INSUFFICIENT','WIDE_SPREAD','RECENT_FAKEOUT'].includes(x))&&!highRisk&&!historicalReplay
     ? Number(clamp(rawScore).toFixed(1)):null;
+  const policyIssues=gateIssues.filter(x=>!gate.issues.includes(x));
   const decisionBand=decideEarlyExpansionBand({
-    gateValid:gate.valid,gateIssues:gateIssues,highRiskPump:highRisk,extended,
+    gateValid:gate.valid,gateIssues:gate.issues,policyIssues,highRiskPump:highRisk,extended,
     historicalReplay,earlyScore,breakoutBroken:br5.broken,r5_3,atrRatio:atrx.ratio,cfg
   });
 
