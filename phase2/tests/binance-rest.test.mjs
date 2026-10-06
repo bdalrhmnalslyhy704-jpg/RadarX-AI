@@ -63,7 +63,7 @@ test('429 and 418 responses establish explicit backoff and the queue honors Retr
   });
   assert.equal(client.health().state,'RATE_LIMITED');
   const ok=await client.request('/api/v3/klines',{symbol:'AAAUSDT',interval:'1m',limit:10});
-  assert.equal(ok.data.ok,true);
+  assert.deepEqual(ok.data,[]);
   assert.ok(slept>=2000);
 
   let now418=3000000;
