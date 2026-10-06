@@ -7,7 +7,7 @@ on:
       - 'radar8-research.json'
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   research:
     runs-on: ubuntu-latest
