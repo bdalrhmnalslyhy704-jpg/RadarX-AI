@@ -55,7 +55,7 @@ export async function requestJson(baseUrl, path, fetchImpl = globalThis.fetch, t
     status: 0,
     ok: false,
     body: null,
-    error: String(firstError?.message || firstError || 'BACKEND_CONNECTION_FAILED')
+    error: String(firstError && firstError.message || firstError || 'BACKEND_CONNECTION_FAILED')
   };
 }
 
@@ -80,17 +80,17 @@ export async function fetchBackendState(baseUrl, symbol, fetchImpl = globalThis.
 export function isFreshLiveSignal(response) {
   if (!response || response.status !== 200) return false;
 
-  const status = response.body?.signal?.data_status;
-  const meta = response.body?.meta;
+  const status = response.body && response.body.signal && signal.data_status;
+  const meta = response.body && response.body.meta;
 
   return (
-    status?.data_stale === false &&
-    status?.data_valid === true &&
-    status?.last_error == null &&
-    meta?.live === true &&
-    meta?.paper_trading === true &&
-    meta?.real_order_execution === false &&
-    meta?.confidence_score === 'UNKNOWN'
+    status && status.data_stale === false &&
+    status && status.data_valid === true &&
+    status && status.last_error == null &&
+    meta && meta.live === true &&
+    meta && meta.paper_trading === true &&
+    meta && meta.real_order_execution === false &&
+    meta && meta.confidence_score === 'UNKNOWN'
   );
 }
 
@@ -280,7 +280,7 @@ export async function setRadarState(radar, action, fetchImpl = globalThis.fetch)
       return {status:response.status,ok:response.ok,body,error:null,base};
     }catch(error){lastError=error;}
   }
-  return {status:0,ok:false,body:null,error:String(lastError?.message||lastError||'BACKEND_CONNECTION_FAILED')};
+  return {status:0,ok:false,body:null,error:String(lastError && lastError.message||lastError||'BACKEND_CONNECTION_FAILED')};
 }
 
 export async function getCoinHunterRadar({quote='USDT',limit=16,scan=false}={},fetchImpl=globalThis.fetch){
