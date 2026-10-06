@@ -80,7 +80,7 @@ export async function fetchBackendState(baseUrl, symbol, fetchImpl = globalThis.
 export function isFreshLiveSignal(response) {
   if (!response || response.status !== 200) return false;
 
-  const status = response.body && response.body.signal && signal.data_status;
+  const status = response.body && response.body.signal && response.body.signal.data_status;
   const meta = response.body && response.body.meta;
 
   return (
