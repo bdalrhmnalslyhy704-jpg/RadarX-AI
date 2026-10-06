@@ -1,4 +1,4 @@
-import {buildSpotUniverse, normalizeTickerRow, boundedMap, withRetry} from '../market/universe-scanner.mjs';
+import {buildSpotUniverse, normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {assessLiquidity, validateSeries, futureIssues} from './data-quality.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notification-gate.mjs';
@@ -9,6 +9,24 @@ const mean=a=>{const x=(Array.isArray(a)?a:[]).map(Number).filter(Number.isFinit
 const median=a=>{const x=(Array.isArray(a)?a:[]).map(Number).filter(Number.isFinite).sort((p,q)=>p-q);if(!x.length)return null;const m=Math.floor(x.length/2);return x.length%2?x[m]:(x[m-1]+x[m])/2;};
 const pct=(a,b)=>Number.isFinite(Number(a))&&Number.isFinite(Number(b))&&Number(b)!==0?(Number(a)/Number(b)-1)*100:null;
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function withRetry(fn,{attempts=1,baseMs=150,maxBackoffMs=1500,sleepFn=sleep}={}){
+  let last;
+  for(let i=0;i<=attempts;i++){
+    try{return await fn();}catch(e){
+      last=e;
+      if(i>=attempts)break;
+      await sleepFn(Math.min(maxBackoffMs,baseMs*Math.pow(2,i)));
+    }
+  }
+  throw last||new Error('RADAR8_RETRY_FAILED');
+}
+async function boundedMap(items,concurrency,worker){
+  const a=Array.from(items||[]),out=Array(a.length);let next=0;
+  const n=Math.max(1,Math.min(Number(concurrency)||1,a.length));
+  const run=async()=>{while(true){const i=next++;if(i>=a.length)return;out[i]=await worker(a[i],i);}};
+  await Promise.all(Array.from({length:n},run));
+  return out;
+}
 
 export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   quote:'USDT',
