@@ -244,6 +244,7 @@ export class ProfessorRadar{
           const alert=decorateRadarAlert(buildAlert(result,opinion,now),'Radar 7 — البروفيسور');
           const notificationGate=evaluateRadarNotificationGate(alert,{now});
           alert.notification_gate=notificationGate;
+          result.notification_gate=notificationGate;
           if(!notificationGate.eligible)continue;
           this.lastAlertAt.set(result.symbol,now);
           await this.store.appendProfessorAlert(alert);
