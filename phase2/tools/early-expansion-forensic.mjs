@@ -85,7 +85,7 @@ function maxForwardReturn(one,index,hours){
 }
 function deriveAnchor(one,expected){
   const w=one.map((c,i)=>({c,i})).filter(x=>Number(x.c.closeTime)>=targetStart&&Number(x.c.closeTime)<=throughMs);
-  if(w.length<120)return {status:'INSUFFICIENT_HISTORICAL_EVIDENCE'};
+  if(w.length<120)return {status:'NOT_VERIFIED',reason:'INSUFFICIENT_HISTORICAL_EVIDENCE'};
   const peak=w.reduce((best,x)=>Number(x.c.high)>Number(best.c.high)?x:best,w[0]);
   const total=(Number(peak.c.high)/Number(w[0].c.close)-1)*100;
   const referenceMove=Number.isFinite(Number(expected))?Math.abs(Number(expected)):Math.abs(total);
@@ -105,7 +105,7 @@ function deriveAnchor(one,expected){
       };
     }
   }
-  return {status:'INSUFFICIENT_HISTORICAL_EVIDENCE',observed_run_pct:total,peak_iso:new Date(Number(peak.c.closeTime)).toISOString()};
+  return {status:'NOT_VERIFIED',reason:'NO_DERIVED_ANCHOR',observed_run_pct:total,peak_iso:new Date(Number(peak.c.closeTime)).toISOString()};
 }
 function snapshotSeries(all,ts){
   return Object.fromEntries(Object.entries(all).map(([tf,rows])=>[tf,at(rows,ts)]));
@@ -115,7 +115,7 @@ function checkpointRows(all,anchorMs,expected,market){
   for(const h of CHECKPOINTS){
     const ts=anchorMs-Math.round(h*60*60*1000);
     const s=snapshotSeries(all,ts),ticker=historicalTicker(all['1m'],ts);
-    if(!ticker){out.push({hours_before:h,status:'INSUFFICIENT_HISTORICAL_EVIDENCE'});continue;}
+    if(!ticker){out.push({hours_before:h,status:'NOT_VERIFIED',reason:'INSUFFICIENT_HISTORICAL_EVIDENCE'});continue;}
     ticker.symbol='UNKNOWN';
     const evidence=buildEarlyExpansionEvidence({
       series:s,ticker,depth:null,marketContext:market,fastContext:fastContext(all['1m'],ts),now:ts,
@@ -188,7 +188,7 @@ async function run(){
       }else row.checkpoints=[];
       cases.push(row);
     }catch(e){
-      cases.push({symbol,expected_move_pct:expected,status:'INSUFFICIENT_HISTORICAL_EVIDENCE',error:String(e?.message??e)});
+      cases.push({symbol,expected_move_pct:expected,status:'NOT_VERIFIED',reason:'HISTORICAL_DATA_FETCH_FAILED',error:String(e?.message??e)});
     }
   }
 
@@ -209,7 +209,7 @@ async function run(){
       cases_with_partial_evidence_lead:detectedPartial,
       mean_partial_forensic_score:allScores.length?Number((allScores.reduce((a,b)=>a+b,0)/allScores.length).toFixed(2)):null,
       precision_recall_status:'INSUFFICIENT_NEGATIVE_CONTROL_SAMPLE_IN_THIS_NAMED-CASE_REPLAY',
-      false_positive_status:'NOT_ESTIMABLE_FROM_SEVEN_POSITIVE_CASES_ONLY',
+      false_positive_status:'NOT_ESTIMABLE_FROM_NAMED_POSITIVE_CASES_ONLY',
       orderbook_history_status:'UNAVAILABLE_FROM_BINANCE_PUBLIC_KLINES'
     }
   };
@@ -244,7 +244,7 @@ async function run(){
   md.push('');
   md.push('## Radar 8 evaluation limits');
   md.push(`Named positive cases with a derived anchor: ${report.aggregate.cases_with_derived_anchor}/${report.aggregate.named_cases}.`);
-  md.push('Precision/recall and false-positive rate are intentionally not claimed from seven positives alone. A larger walk-forward negative/control sample is required before calibration or win-rate claims.');
+  md.push('Precision/recall and false-positive rate are intentionally not claimed from the named positive cases alone. A larger walk-forward negative/control sample is required before calibration or win-rate claims.');
   md.push('');
   md.push('## Structural fix implemented by Radar 8');
   md.push('Fast scan uses the eligible Binance Spot USDT ticker universe every cycle, compares each symbol against its own recent ticker state for short-horizon acceleration, then reserves deep-scan capacity for both fast accelerators and a quiet candidate set. It does not rank deep candidates primarily by 24h gain.');
