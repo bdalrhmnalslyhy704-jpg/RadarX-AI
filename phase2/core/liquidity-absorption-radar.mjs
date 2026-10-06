@@ -1,5 +1,5 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
-import {formatRadarTime12h} from './radar-alert-meta.mjs';
+import {formatRadarTime12h,decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
@@ -232,7 +232,7 @@ function liquiditySafe(ticker){
 export function buildLiquidityAbsorptionAlert(candidate,now=Date.now()){
   const a=buildLiquidityAbsorptionAnalysis(candidate.one_minute,candidate.five_minute,candidate.ticker,candidate.book,now);
   const ticker=candidate.ticker||{};
-  return {
+  const alert={
     id:'LIQ4:'+String(ticker.symbol||'UNKNOWN').toUpperCase()+':'+now,
     event:'LIQUIDITY_ABSORPTION_ALERT',
     radar:'LIQUIDITY_ABSORPTION_RADAR',
@@ -256,6 +256,7 @@ export function buildLiquidityAbsorptionAlert(candidate,now=Date.now()){
     eligible:a.eligible,
     disclaimer:'رادار 4 لا يلاحق القفزة السعرية؛ يبحث عن امتصاص البيع واختلال السيولة وبداية تحسن بنية السوق. النتائج مراقبة فقط وليست ضمانًا.'
   };
+  return decorateRadarAlert(alert,'Radar 4 — الكاسح');
 }
 
 export class LiquidityAbsorptionRadar{
