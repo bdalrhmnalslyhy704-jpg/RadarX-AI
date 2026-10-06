@@ -176,6 +176,28 @@ jobs:
               *) echo "::error::Triple backend returned HTTP $code for $path"; cat "$RUNNER_TEMP/radar-check.json"; exit 1 ;;
             esac
           done
+      - name: Verify Coin Hunter public contract
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          BASE="https://radarx-ai-triple-production.up.railway.app"
+          CODE="$(curl --location --silent --show-error --max-time 60 -o "$RUNNER_TEMP/coin-hunter.json" -w "%{http_code}" "$BASE/api/coin-hunter-radar?quote=USDT&limit=5&scan=0")"
+          case "$CODE" in 200|503) ;; *) echo "::error::Coin Hunter returned HTTP $CODE"; cat "$RUNNER_TEMP/coin-hunter.json"; exit 1 ;; esac
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const code=Number(process.env.CODE||'0');
+          const raw=fs.readFileSync(process.env.RUNNER_TEMP+'/coin-hunter.json','utf8');
+          const body=JSON.parse(raw);
+          if (code===200) {
+            if (body.radar !== 'COIN_HUNTER_RADAR') throw new Error('COIN_HUNTER_RADAR_INVALID');
+            if (body.radar_name !== '🎯 صائد العملات') throw new Error('COIN_HUNTER_NAME_INVALID');
+            if (body.meta?.paper_trading !== true || body.meta?.real_order_execution !== false || body.meta?.confidence_score !== 'UNKNOWN') throw new Error('COIN_HUNTER_POLICY_INVALID');
+            if (body.data_policy?.closed_candles_only !== true) throw new Error('COIN_HUNTER_CLOSED_CANDLE_POLICY_INVALID');
+            if (!Array.isArray(body.candidates)) throw new Error('COIN_HUNTER_CANDIDATES_MISSING');
+            if (!Object.hasOwn(body,'lesson') || !Object.hasOwn(body,'coverage')) throw new Error('COIN_HUNTER_LEARNING_CONTRACT_MISSING');
+          }
+          console.log(JSON.stringify({http:code,radar:body.radar??null,name:body.radar_name??null,candidates:body.candidates?.length??0,learned_samples:body.lesson?.samples??0,coverage:body.coverage??{}}));
+          NODE
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -230,9 +252,7 @@ jobs:
       - name: Validate embedded RadarX JavaScript syntax
         run: |
           set -euo pipefail
-          node --check android/app/src/main/assets/radarx-backend-client.mjs
-          node --check android/app/src/main/assets/radarx-market-radar-ui.mjs
-          node --check android/app/src/main/assets/radarx-market-radar-screen.mjs
+          find android/app/src/main/assets -maxdepth 1 -type f -name '*.mjs' -print0 | xargs -0 -n1 node --check
           node --check android/app/src/main/assets/tests/market-radar-integration.test.mjs
           test -s android/app/src/main/assets/index.html
           test -s android/app/src/main/assets/manifest.json
@@ -290,6 +310,22 @@ jobs:
           cp "${APKS[0]}" "${RUNNER_TEMP}/radarx-release/radarx-release.apk"
 
           sha256sum "${RUNNER_TEMP}/radarx-release/radarx-release.apk"
+
+      - name: Enable KVM for Android Emulator
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm4all"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Android Emulator online/offline smoke test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          target: default
+          arch: x86_64
+          script: bash android/smoke-test.sh
 
       # Native background-service smoke was already validated successfully in APK 162.
       # Keep this release workflow deterministic; native Java service code is unchanged in this release.
