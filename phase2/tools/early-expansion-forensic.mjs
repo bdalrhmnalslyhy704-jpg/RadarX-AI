@@ -5,7 +5,8 @@ import {buildEarlyExpansionEvidence,EARLY_EXPANSION_RADAR_DEFAULTS} from '../cor
 
 const SYMBOLS=[
   ['RLCUSDT',109],['RADUSDT',47],['ORCAUSDT',28],['API3USDT',27],
-  ['DIAUSDT',17],['OGNUSDT',15],['UMAUSDT',10]
+  ['DIAUSDT',17],['OGNUSDT',15],['UMAUSDT',10],
+  ['C98USDT',null],['VTHOUSDT',null]
 ];
 const CHECKPOINTS=[24,12,6,3,1,.25,(5/60)];
 const THROUGH=process.env.RADAR8_FORENSIC_THROUGH||'2026-10-06T14:45:00Z';
@@ -87,8 +88,9 @@ function deriveAnchor(one,expected){
   if(w.length<120)return {status:'INSUFFICIENT_HISTORICAL_EVIDENCE'};
   const peak=w.reduce((best,x)=>Number(x.c.high)>Number(best.c.high)?x:best,w[0]);
   const total=(Number(peak.c.high)/Number(w[0].c.close)-1)*100;
-  const trigger=Math.max(3,Math.min(12,Math.abs(expected)*.18));
-  const sustain=Math.max(trigger,Math.min(18,Math.abs(expected)*.12));
+  const referenceMove=Number.isFinite(Number(expected))?Math.abs(Number(expected)):Math.abs(total);
+  const trigger=Math.max(3,Math.min(12,referenceMove*.18));
+  const sustain=Math.max(trigger,Math.min(18,referenceMove*.12));
   for(const x of w){
     if(x.i>=peak.i)break;
     const f60=maxForwardReturn(one,x.i,1),f240=maxForwardReturn(one,x.i,4);
@@ -194,7 +196,7 @@ async function run(){
   const allScores=cases.flatMap(x=>(x.checkpoints||[]).map(c=>Number(c.score_forensic_only)).filter(Number.isFinite));
   const detectedPartial=cases.filter(x=>x.first_partial_evidence?.status==='PARTIAL_EVIDENCE_ONLY').length;
   const report={
-    report_version:'RADAR8_FORENSIC_V1',
+    report_version:'RADAR8_FORENSIC_V2',
     as_of:THROUGH,
     data_policy:{spot_only:true,closed_candles_only:true,no_lookahead_in_features:true,confidence_score:'UNKNOWN',paper_trading:true,real_order_execution:false},
     event_definition:'major move onset = earliest 1m closed candle before the 24h-window peak with a forward 1h high >= max(3%, 18% of expected move), forward 4h high >= max(3%, 12% of expected move), and no prior 1h move reaching the trigger.',
@@ -213,7 +215,7 @@ async function run(){
   };
   await writeFile('reports/radar8-forensic-2026-10-06.json',JSON.stringify(report,null,2));
   const md=[];
-  md.push('# Radar 8 — البرق: Forensic / Miss Analysis');
+  md.push('# Radar 8 — البرق: Forensic / Miss Analysis — 2026-10-06');
   md.push('');
   md.push(`As-of (UTC): ${THROUGH}`);
   md.push('');
@@ -225,7 +227,7 @@ async function run(){
   md.push('');
   for(const c of cases){
     md.push(`## ${c.symbol}`);
-    md.push(`Expected move from user observation: ~${c.expected_move_pct}%`);
+    md.push(`Expected move reference: ${c.expected_move_pct==null?'DERIVED_FROM_KLINES':('~'+c.expected_move_pct+'%')}`);
     md.push(`Anchor: ${c.anchor?.anchor_iso||'INSUFFICIENT_HISTORICAL_EVIDENCE'}; peak: ${c.anchor?.peak_iso||'UNKNOWN'}`);
     if(c.first_partial_evidence)md.push(`Earliest partial evidence: ${c.first_partial_evidence.first_time||'UNKNOWN'}; lead time: ${c.first_partial_evidence.estimated_lead_time_minutes??'UNKNOWN'} min; status: ${c.first_partial_evidence.status}`);
     md.push('');
