@@ -48,7 +48,7 @@ export async function requestJson(baseUrl, path, fetchImpl = globalThis.fetch, t
       }
       firstError = new Error('HTTP_' + response.status);
     } catch (error) {
-      firstError ||= error;
+      if(!firstError)firstError = error;
     }
   }
   return {
