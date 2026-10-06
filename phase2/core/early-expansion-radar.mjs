@@ -755,7 +755,7 @@ function microSeriesIssues(raw,tf,now,cfg){
   }
   return {rows,issues};
 }
-function microModeAndScore(m){
+export function scoreMicroProfile(m){
   const participation=clamp(50+(Number.isFinite(m.rv1)?Math.max(0,m.rv1-1)*18:0)+(Number.isFinite(m.rv5)?Math.max(0,m.rv5-1)*12:0)+(Number.isFinite(m.tr1)?Math.max(0,m.tr1-1)*12:0));
   const tradeParticipation=clamp(50+(Number.isFinite(m.tr1)?Math.max(0,m.tr1-1)*20:0)+(Number.isFinite(m.tr5)?Math.max(0,m.tr5-1)*12:0));
   const structure=clamp(Math.max(Number(m.hlScore)||45,m.emaStack?92:m.emaReclaim?78:45));
@@ -827,7 +827,7 @@ export function buildMicroFingerprint({oneMinute=[],fiveMinute=[],btcFiveMinute=
   const hl=higherLowScore(m5.slice(-48)),br=breakoutInfo(m5,20),location=closePosition(m5,30);
   const price24Abs=Math.abs(Number(ticker.priceChange24h)||0);
   const m={rv1,rv5,tr1,tr5,takerRatio:taker.ratio,takerDelta:taker.delta,bbRatio,rangeRatio,atrRatio,emaStack,emaReclaim,relativeStrength:rs,r1,r5,r15,accel5,accel1,rsi:rsiNow,rsiSlope,macSlope,adx:adxNow,hlScore:hl.score,resistanceDistance:br.distance_pct,breakoutBroken:br.broken,location,vwapDistance:vwDist,priceChange24hAbs:price24Abs};
-  const prof=microModeAndScore(m);
+  const prof=scoreMicroProfile(m);
   const stage=!prof.antiChase?'ANTI_CHASE':prof.eligible?(prof.mode==='ABSORPTION_IGNITION'?'IGNITION_BUILD':'PRE_BREAK'):(prof.score>=58?'WATCH':'BASE_BUILD');
   return {
     eligible:prof.eligible,stage,score:Number(prof.score.toFixed(1)),mode:prof.mode,confirmation_count:prof.confirmations,confirmation_total:10,closed_candles_only:true,
