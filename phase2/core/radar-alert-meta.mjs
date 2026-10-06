@@ -5,8 +5,9 @@ export const RADAR_NAMES=Object.freeze({
   LIQUIDITY_ABSORPTION_RADAR:'Radar 4 — الكاسح',
   KAHIR_RADAR:'Radar 5 — القاهر',
   DOOMSDAY_RADAR:'Radar 6 — يوم القيامة',
-  PROFESSOR_RADAR:'البروفيسور — استخبارات عامة'
-});
+  PROFESSOR_RADAR:'البروفيسور — استخبارات عامة',
+  ALMUQAWIM_RADAR:'Radar 7 — المقاوم'
+  });
 export const RADAR_PROFILES=Object.freeze({
   EARLY_MOVE_RADAR:Object.freeze({
     name:RADAR_NAMES.EARLY_MOVE_RADAR,icon:'☠️',color:'#ff3b30',
@@ -55,6 +56,14 @@ export const RADAR_PROFILES=Object.freeze({
     timeframes:['1m','5m'],algorithms:['1m/3m/5m Momentum','Acceleration vs Self Baseline','Relative Volume','Trade Count Surge','Taker Flow','Squeeze Release','Donchian Breakout','EMA9/21 Burst','VWAP Reclaim','ATR Expansion','Relative Strength vs BTC','Range Acceptance'],
     guardrails:['Spot فقط','شموع مغلقة فقط','يمنع الحركة اليومية الممتدة','يشترط عدة أدلة قبل الإشعار','لا تنفيذ حقيقي']
   }),
+  ALMUQAWIM_RADAR:Object.freeze({
+    name:RADAR_NAMES.ALMUQAWIM_RADAR,icon:'🛡️',color:'#38bdf8',
+    mission:'حارس اتجاه السوق: يحدد الاتجاه من هيكل القمم والقيعان وخط الاتجاه والمتوسط وتوافق الإطارات.',
+    strength:'يمنع اعتبار الحركة الصغيرة أقوى من الاتجاه الأكبر، ويضع مخالفة 15m كخطر.',
+    strategy:'HH/HL + LH/LL + Trendline + Moving Average + Higher-Timeframe Alignment',
+    timeframes:['4h','1h','15m'],algorithms:['HH/HL Structure','LH/LL Structure','Trendline Direction','EMA Direction Filter','4H/1H Alignment','15m Entry-Risk Guard'],
+    guardrails:['شموع مغلقة فقط','Spot فقط','Paper فقط','لا تنفيذ حقيقي']
+  }),
   PROFESSOR_RADAR:Object.freeze({
     name:RADAR_NAMES.PROFESSOR_RADAR,icon:'🧠',color:'#ec4899',
     mission:'استخبارات البثوث والأسواق: يجمع ادعاءات الصفقات من مصادر عامة، الأخبار، ثم يطلب تأكيدًا فنيًا حقيقيًا قبل إصدار رأي ورقي.',
@@ -88,6 +97,7 @@ export function radarPowerScore(alert){
     ROTATION_LAG_RADAR:alert?.rotation,
     LIQUIDITY_ABSORPTION_RADAR:alert?.liquidity_absorption,
     DOOMSDAY_RADAR:alert?.doomsday,
+    ALMUQAWIM_RADAR:alert?.almuqawim,
     PROFESSOR_RADAR:alert?.professor
   };
   const componentMean=meanNumbers(collectObjectScores(blocks[id]));
@@ -96,7 +106,7 @@ export function radarPowerScore(alert){
   let power=base*.60+(componentMean??base)*.25+dataQuality*.15;
   if(riskCount)power-=Math.min(12,riskCount*2);
   const thresholds={
-    EARLY_MOVE_RADAR:72,STRONG_MOVE_RADAR:76,ROTATION_LAG_RADAR:78,LIQUIDITY_ABSORPTION_RADAR:82,KAHIR_RADAR:84,DOOMSDAY_RADAR:82,PROFESSOR_RADAR:80
+    EARLY_MOVE_RADAR:72,STRONG_MOVE_RADAR:76,ROTATION_LAG_RADAR:78,LIQUIDITY_ABSORPTION_RADAR:82,KAHIR_RADAR:84,DOOMSDAY_RADAR:82,PROFESSOR_RADAR:80,ALMUQAWIM_RADAR:82
   };
   const gate=power>=Number(thresholds[id]??80);
   return {
