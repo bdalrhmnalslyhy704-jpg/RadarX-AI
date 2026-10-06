@@ -26,6 +26,7 @@ adb shell am start -n com.radarx.app/.MainActivity >/dev/null
 
 ready=0
 scan_complete=0
+background_start=0
 background_ready=0
 web_errors=0
 for i in $(seq 1 18); do
@@ -39,11 +40,12 @@ for i in $(seq 1 18); do
 ' "$LOGS" | grep -Fq "BACKGROUND_SERVICE_READY"; then background_ready=1; fi
   if printf '%s
 ' "$LOGS" | grep -Eqi "RadarXWeb: ERROR:Uncaught (ReferenceError|SyntaxError|TypeError)"; then web_errors=1; fi
-  if [ "$ready" = "1" ] && [ "$scan_complete" = "1" ] && [ "$background_ready" = "1" ]; then break; fi
+  if [ "$ready" = "1" ] && [ "$scan_complete" = "1" ] && [ "$background_start" = "1" ] && [ "$background_ready" = "1" ]; then break; fi
 done
 
 test "$ready" = "1"
 test "$scan_complete" = "1"
+test "$background_start" = "1"
 test "$background_ready" = "1"
 test "$web_errors" = "0"
 
