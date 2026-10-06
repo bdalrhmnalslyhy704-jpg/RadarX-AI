@@ -197,68 +197,25 @@ jobs:
         run: |
           set -euo pipefail
           node android/backend-client-regression.mjs
+          node android/app/src/main/assets/tests/market-radar-integration.test.mjs
           grep -Fq "https://radarx-ai-production.up.railway.app" android/app/src/main/assets/radarx-backend-client.mjs
+          ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
+          grep -RInq "Paper Trading" android/app/src/main/assets
           grep -RInq "paper_trading=true" android/app/src/main/assets
           grep -RInq "real_order_execution=false" android/app/src/main/assets
           grep -RInq "confidence_score=UNKNOWN" android/app/src/main/assets
-          node --check android/app/src/main/assets/radarx-backend-client.mjs
-          node --check android/app/src/main/assets/radarx-background-control.mjs
-          node --check android/app/src/main/assets/radarx-radar-screen.mjs
-          test -f android/app/src/main/assets/radar1-destroyer.html
-          test -f android/app/src/main/assets/radar2-dark-king.html
-          test -f android/app/src/main/assets/radar3-joker.html
-          test -f android/app/src/main/assets/radar4-sweeper.html
-          test -f android/app/src/main/assets/professor-radar.html
-          test -f android/app/src/main/assets/radarx-professor-radar.mjs
-          test -f android/app/src/main/assets/doomsday-radar.html
-          node --check android/app/src/main/assets/radarx-doomsday-radar.mjs
-          grep -q 'Radar 1 — المدمر' android/app/src/main/assets/radarx-background-control.mjs
-          grep -q 'Radar 2 — ملك الظلام' android/app/src/main/assets/radarx-background-control.mjs
-          grep -q 'Radar 3 — الجوكر' android/app/src/main/assets/radarx-background-control.mjs
-          grep -q 'Radar 4 — الكاسح' android/app/src/main/assets/radarx-background-control.mjs
-          grep -q 'radar1-destroyer.html' android/app/src/main/assets/index.html
-          grep -q 'radar2-dark-king.html' android/app/src/main/assets/index.html
-          grep -q 'radar3-joker.html' android/app/src/main/assets/index.html
-          grep -q 'radar4-sweeper.html' android/app/src/main/assets/index.html
-          grep -q 'doomsday-radar.html' android/app/src/main/assets/index.html
-          grep -q 'doomsday-radar.html' android/app/src/main/assets/index.html
 
       - name: Validate embedded RadarX JavaScript syntax
         run: |
           set -euo pipefail
           node --check android/app/src/main/assets/radarx-backend-client.mjs
-          node --check android/app/src/main/assets/radarx-symbol-deep-scan.mjs
-          node --check android/app/src/main/assets/radarx-king.mjs
-          test -f android/app/src/main/assets/ai-agent-hub.html
           node --check android/app/src/main/assets/radarx-market-radar-ui.mjs
           node --check android/app/src/main/assets/radarx-market-radar-screen.mjs
-          node --check android/app/src/main/assets/radarx-tradli-feature-suite.mjs
-          test -f android/app/src/main/assets/radarx-background-control.mjs
-          node --check android/app/src/main/assets/radarx-background-control.mjs
-          node --check android/app/src/main/assets/radarx-radar-screen.mjs
-          test -f android/app/src/main/assets/radar1-destroyer.html
-          test -f android/app/src/main/assets/radar2-dark-king.html
-          test -f android/app/src/main/assets/radar3-joker.html
-          test -f android/app/src/main/assets/radar4-sweeper.html
-          test -f android/app/src/main/assets/professor-radar.html
-          node --check android/app/src/main/assets/radarx-professor-radar.mjs
-          node --check android/app/src/main/assets/radarx-bottom-reversal.mjs
-          node --check phase2/core/doomsday-radar.mjs
-          node --check phase2/core/kahir-radar.mjs
-          node --check android/app/src/main/assets/radarx-pre-move.mjs
-          node --check android/app/src/main/assets/radarx-move-radar.mjs
-          test -f android/app/src/main/assets/pre-move-radar.html
-          test -f android/app/src/main/assets/move-radar.html
-          test -f android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java
-          test -f android/app/src/main/java/com/radarx/app/TradliActivity.java
-          test -f android/app/src/main/java/com/radarx/app/MainActivity.java
-          test -f android/app/src/main/assets/radar4-liquidity-absorption.html
-          test -f android/app/src/main/assets/tradli.html
-          test -f android/app/src/main/assets/bottom-radar.html
-          test -f android/app/src/main/assets/kahir-radar.html
-          test -f android/app/src/main/assets/king.html
-          test -f android/app/src/main/assets/ai-agent-hub.html
-          test -f android/app/src/main/java/com/radarx/app/BottomRadarActivity.java
+          node --check android/app/src/main/assets/tests/market-radar-integration.test.mjs
+          test -s android/app/src/main/assets/index.html
+          test -s android/app/src/main/assets/manifest.json
+          test -s android/app/build.gradle
+          test -s android/app/src/main/AndroidManifest.xml
 
       - name: Build signed universal Release APK
         working-directory: android
@@ -324,7 +281,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "RadarX Native — Release Signing Secure ${GITHUB_RUN_NUMBER}" \
-            --notes "Signed universal APK built from android-release-signing-secure. Includes six radars, البروفيسور, 👑 الكنق, autonomous market-wide ten-agent intelligence, and a separate agent learning journal. Spot/paper/read-only only; real_order_execution=false."
+            --notes "Signed universal APK built from android-release-signing-secure. Embedded RadarX dashboard with Market Radar, 14-strategy contract coverage, and Pre-Breakout Fingerprint. Spot/paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
 
       - name: Verify published HTTPS download
         run: |
