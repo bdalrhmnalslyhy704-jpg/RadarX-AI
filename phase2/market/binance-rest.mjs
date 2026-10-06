@@ -28,7 +28,7 @@ function parseSymbolsParam(value) {
 export function requestWeightFor(path,query={}) {
   const p=String(path||'').split('?')[0];
   if(p==='/api/v3/exchangeInfo')return 20;
-  if(p==='/api/v3/klines'||p==='/api/v3/uiKlines')return 2;
+  if(p==='/api/v3/klines')return 2;
   if(p==='/api/v3/depth'){
     const n=Math.trunc(Number(query?.limit??100));
     if(n<=100)return 5;
@@ -43,10 +43,6 @@ export function requestWeightFor(path,query={}) {
     if(symbols.length<=20)return 2;
     if(symbols.length<=100)return 40;
     return 80;
-  }
-  if(p==='/api/v3/ticker/price'||p==='/api/v3/ticker/bookTicker'){
-    if(query?.symbol!=null)return 2;
-    return 4;
   }
   return 1;
 }
