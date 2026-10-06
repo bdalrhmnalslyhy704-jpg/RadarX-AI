@@ -241,7 +241,7 @@ export function buildCandidateMarkup(candidate, index) {
       '<span class="rx-chip is-info">' + esc(signalStateLabel(candidate.signal_state)) + '</span></div>' +
     '<div class="rx-grid rx-grid--4">' +
       '<div><span>Score</span><b>' + esc(safeNum(candidate.overall_score, 1)) + '</b></div>' +
-      '<div><span>التغطية</span><b>' + esc(pct(candidate.coverage?.ratio)) + '</b></div>' +
+      '<div><span>التغطية</span><b>' + esc(pct(candidate && candidate.coverage && candidate.coverage.ratio)) + '</b></div>' +
       '<div><span>جودة البيانات</span><b>' + esc(safeNum(candidate.data_quality, 0)) + '</b></div>' +
       '<div><span>جودة السيولة</span><b>' + esc(safeNum(candidate.liquidity_quality, 0)) + '</b></div>' +
     '</div>' +
@@ -299,7 +299,7 @@ export function buildCandidateDetailMarkup(candidate) {
         '<div><span>الحالة</span><b>' + esc(signalStateLabel(candidate.signal_state)) + '</b></div>' +
         '<div><span>أفضل استراتيجية</span><b>' + esc(friendlyStrategy(candidate.best_strategy)) + '</b></div>' +
         '<div><span>Score</span><b>' + esc(safeNum(candidate.overall_score,1)) + '</b></div>' +
-        '<div><span>التغطية</span><b>' + esc(pct(candidate.coverage?.ratio)) + '</b></div>' +
+        '<div><span>التغطية</span><b>' + esc(pct(candidate && candidate.coverage && candidate.coverage.ratio)) + '</b></div>' +
         '<div><span>تغير 24h</span><b>' + esc((candidate.price_change_24h >= 0 ? '+' : '') + safeNum(candidate.price_change_24h,2)) + '%</b></div>' +
       '</div>' +
     '</details>' +
