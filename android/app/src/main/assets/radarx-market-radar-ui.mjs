@@ -13,14 +13,14 @@ export function normalizeMarketRadarResponse(response, requestedLimit = 20) {
     status: Number(response && response.status) || 0,
     ok: response && response.ok === true,
     error: response && response.error || null,
-    live: body && body.meta && meta.live === true,
-    paperTrading: body && body.meta && meta.paper_trading === true,
-    realOrderExecution: body && body.meta && meta.real_order_execution === false,
-    confidenceScore: body && body.meta && meta.confidence_score === 'UNKNOWN',
+    live: body && body.meta && body.meta.live === true,
+    paperTrading: body && body.meta && body.meta.paper_trading === true,
+    realOrderExecution: body && body.meta && body.meta.real_order_execution === false,
+    confidenceScore: body && body.meta && body.meta.confidence_score === 'UNKNOWN',
     updatedAt: body && body.as_of || null,
     requestedPairs,
-    scannedPairs: Number(universe.scanned || body && body.meta && meta.scanned || 0),
-    candidateCount: Number(universe.returned || universe.candidates || body && body.meta && meta.candidates || candidates.length),
+    scannedPairs: Number(universe.scanned || body && body.meta && body.meta.scanned || 0),
+    candidateCount: Number(universe.returned || universe.candidates || body && body.meta && body.meta.candidates || candidates.length),
     freshValidCount,
     excludedCount,
     candidates
@@ -37,7 +37,7 @@ function hasClearStaleReason(response) {
     value === 'SNAPSHOT_STALE' ||
     value === 'STALE_SNAPSHOT' ||
     /(?:SNAPSHOT|DATA|CACHE).*(?:STALE|OUTDATED)|(?:STALE|OUTDATED).*(?:SNAPSHOT|DATA|CACHE)/.test(value)
-  ) || Array.isArray(body.candidates) && body.candidates.some(candidate => candidate && candidate.data_status && data_status.data_stale === true);
+  ) || Array.isArray(body.candidates) && body.candidates.some(candidate => candidate && candidate.data_status && candidate.data_status.data_stale === true);
 }
 
 export function hasValidSignalState(candidate) {
@@ -45,15 +45,15 @@ export function hasValidSignalState(candidate) {
 }
 
 export function isCandidateFresh(candidate) {
-  return candidate && candidate.data_status && data_status.data_stale === false &&
-    candidate && candidate.data_status && data_status.data_valid === true;
+  return candidate && candidate.data_status && candidate.data_status.data_stale === false &&
+    candidate && candidate.data_status && candidate.data_status.data_valid === true;
 }
 
 export function isCandidateEligible(candidate) {
   return isCandidateFresh(candidate) &&
     hasValidSignalState(candidate) &&
     Number(candidate && candidate.data_quality) > 0 &&
-    Number(candidate && candidate.coverage && coverage.ratio) >= 1 &&
+    Number(candidate && candidate.coverage && candidate.coverage.ratio) >= 1 &&
     Number.isFinite(Number(candidate && candidate.overall_score)) &&
     Array.isArray(candidate && candidate.accepted_strategies) &&
     candidate.accepted_strategies.length > 0 &&
@@ -63,7 +63,7 @@ export function isCandidateEligible(candidate) {
 
 export function candidateDataState(candidate) {
   if (isCandidateEligible(candidate)) return 'LIVE_DATA';
-  if (candidate && candidate.data_status && data_status.data_stale === true) return 'DATA_STALE';
+  if (candidate && candidate.data_status && candidate.data_status.data_stale === true) return 'DATA_STALE';
   return 'DATA_INVALID';
 }
 
@@ -118,7 +118,7 @@ export function filterCandidates(candidates, filters = {}) {
   return (Array.isArray(candidates) ? candidates : []).filter(candidate => {
     if (!isCandidateEligible(candidate)) return false;
     if (direction !== 'ALL' && candidate && candidate.direction !== direction) return false;
-    if (strategy !== 'ALL' && !candidate && candidate.strategies && strategies.some(s => s && s.id === strategy && s && s.hard_gates_passed === true)) return false;
+    if (strategy !== 'ALL' && !candidate && candidate.strategies && candidate.strategies.some(s => s && s.id === strategy && s && s.hard_gates_passed === true)) return false;
     if (signalState !== 'ALL' && candidate && candidate.signal_state !== signalState) return false;
     return true;
   });
@@ -179,8 +179,8 @@ export function normalizeStrategyRows(candidate) {
     name: strategy && strategy.name || strategy && strategy.id || 'UNKNOWN',
     state: strategy && strategy.signal_state || strategy && strategy.state || 'UNKNOWN',
     direction: strategy && strategy.direction || 'NONE',
-    score: numeric(strategy && strategy.score && score.value),
-    coverage: numeric(strategy && strategy.score && score.coverage),
+    score: numeric(strategy && strategy.score && strategy.score.value),
+    coverage: numeric(strategy && strategy.score && strategy.score.coverage),
     hardGatesPassed: strategy && strategy.hard_gates_passed === true,
     hardGateStatus: strategy && strategy.hard_gate_status || {passed: strategy && strategy.hard_gates_passed === true, failed: []},
     reasonCodes: Array.isArray(strategy && strategy.reason_codes) ? strategy.reason_codes : [],
