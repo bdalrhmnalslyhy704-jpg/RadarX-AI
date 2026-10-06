@@ -278,11 +278,20 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         if(!rotationLagRadar)return send(res,503,{error:'ROTATION_LAG_RADAR_UNAVAILABLE'});
         const sinceRaw=Number(u.searchParams.get('since')||0);
         const limit=Math.max(1,Math.min(100,Math.trunc(Number(u.searchParams.get('limit')||50))));
+        const runNow=String(u.searchParams.get('scan')||'').trim()==='1';
         try{
+          let immediateScanError=null;
+          if(runNow){
+            try{
+              if(rotationLagRadar.health().running!==true) await Promise.resolve(rotationLagRadar.start());
+              else if(!rotationLagRadar.health().busy) await rotationLagRadar.tick();
+            }catch(e){immediateScanError=String(e?.message??e);}
+          }
           const alerts=typeof store.readRotationAlerts==='function'
             ? await store.readRotationAlerts({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit})
             : [];
           const health=rotationLagRadar.health();
+          const candidates=typeof rotationLagRadar.snapshot==='function' ? rotationLagRadar.snapshot(Math.min(limit,20)) : [];
           return send(res,200,{
             meta:{live:health.running===true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'ROTATION_LAG_RADAR'},
             source:'Binance Public REST',
@@ -290,6 +299,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             monitoring:health,
             thresholds:{min_score:Number(config.rotationRadar?.minScore??78),min_confirmations:Number(config.rotationRadar?.minConfirmations??4),market:'SPOT',primary_timeframe:'15m',confirmation_timeframe:'1h'},
             algorithms:health.algorithms||[],
+            scan:{requested:runNow,completed:runNow&&immediateScanError===null&&health.last_scan_at!=null,error:immediateScanError||health.last_error||null},
+            candidates,
             alerts
           });
         }catch(e){
