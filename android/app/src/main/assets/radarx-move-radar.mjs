@@ -1,7 +1,7 @@
 const score=v=>Number.isFinite(Number(v))?Math.max(0,Math.min(100,Number(v))):null;
 
 export function normalizeMoveAlerts(body){
-  const alerts=Array.isArray(body?.alerts)?body.alerts:[];
+  const alerts=Array.isArray(body && body.alerts)?body.alerts:[];
   return alerts.map(a=>({
     ...a,
     setupScore:score(a.opportunity_score),
@@ -9,7 +9,7 @@ export function normalizeMoveAlerts(body){
     reversalPotential:score(a.reversal_potential),
     movePct:Number(a.price_change_24h),
     reasons:Array.isArray(a.reasons)?a.reasons:[],
-    acceptedStrategies:Array.isArray(a.strategy_confluence?.accepted_ids)?a.strategy_confluence.accepted_ids:[]
+    acceptedStrategies:Array.isArray(a.strategy_confluence && a.strategy_confluence.accepted_ids)?a.strategy_confluence.accepted_ids:[]
   })).filter(a=>a.symbol);
 }
 
