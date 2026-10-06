@@ -258,6 +258,31 @@ jobs:
             exit 1
           fi
           node --check android/app/src/main/assets/tests/market-radar-integration.test.mjs
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, subprocess, tempfile
+          root = Path("android/app/src/main/assets")
+          scripts = 0
+          for path in sorted(root.glob("*.html")):
+              text = path.read_text(encoding="utf-8")
+              for index, match in enumerate(re.finditer(r"<script(?:[^>]*?)>(.*?)</script>", text, re.IGNORECASE | re.DOTALL), 1):
+                  body = match.group(1).strip()
+                  if not body or "src=" in match.group(0).lower():
+                      continue
+                  scripts += 1
+                  probe = Path(tempfile.gettempdir()) / ("radarx-inline-%d-%d.mjs" % (abs(hash(str(path))) % 100000, index))
+                  probe.write_text(body, encoding="utf-8")
+                  try:
+                      subprocess.run(["node", "--check", str(probe)], check=True, capture_output=True, text=True)
+                  except subprocess.CalledProcessError as exc:
+                      print(exc.stdout)
+                      print(exc.stderr)
+                      raise SystemExit("Inline JavaScript syntax failure: %s script #%d" % (path, index))
+                  finally:
+                      probe.unlink(missing_ok=True)
+          print("Validated", scripts, "inline HTML scripts")
+          PY
+
           test -s android/app/src/main/assets/index.html
           test -s android/app/src/main/assets/manifest.json
           test -s android/app/src/main/assets/radar8-lightning.html
