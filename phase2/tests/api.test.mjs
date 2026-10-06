@@ -178,16 +178,17 @@ test('TEST_FIXTURE: independent radar status/control and unified alerts preserve
   const rotation=makeRadar('ROTATION_LAG_RADAR','Radar 3 — Rotation/Lag');
   const r4=makeRadar('LIQUIDITY_ABSORPTION_RADAR','Radar 4 — Liquidity Absorption');
   const r5=makeRadar('KAHIR_RADAR','Radar 5 — القاهر');
+  const r8=makeRadar('EARLY_EXPANSION_RADAR','Radar 8 — البرق');
   await store.appendMoveAlert({id:'R1',radar:'EARLY_MOVE_RADAR',symbol:'R1USDT',processed_at:Date.now()-1000,detected_at:Date.now()-1000,price:1});
   await store.appendLiquidityAbsorptionAlert({id:'R4',radar:'LIQUIDITY_ABSORPTION_RADAR',radar_name:'Radar 4 — Liquidity Absorption',symbol:'R4USDT',processed_at:Date.now(),detected_at:Date.now(),price:2});
   const server=createApiServer({config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},store,
     monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},
-    pushProvider:new NoopPushProvider(),moveSentinel:early,strongMoveRadar:strong,rotationLagRadar:rotation,liquidityAbsorptionRadar:r4,kahirRadar:r5});
+    pushProvider:new NoopPushProvider(),moveSentinel:early,strongMoveRadar:strong,rotationLagRadar:rotation,liquidityAbsorptionRadar:r4,kahirRadar:r5,earlyExpansionRadar:r8});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base='http://127.0.0.1:'+server.address().port;
   const status=await (await fetch(base+'/api/radar-status')).json();
-  assert.equal(status.radars.length,6);assert.equal(status.radars.every(x=>x.running===false),true);
-  assert.equal(status.radars.at(-1).radar_name,'Radar 6 — يوم القيامة');
+  assert.equal(status.radars.length,7);assert.equal(status.radars.every(x=>x.running===false),true);
+  assert.equal(status.radars.at(-1).radar_name,'Radar 8 — البرق');
   const start=await (await fetch(base+'/api/radar-control?radar=LIQUIDITY_ABSORPTION_RADAR&action=start',{method:'POST'})).json();
   assert.equal(start.running,true);assert.equal(early.running,false);assert.equal(strong.running,false);assert.equal(rotation.running,false);assert.equal(r4.running,true);
   const alerts=await (await fetch(base+'/api/radar-alerts?radar=ALL&limit=10')).json();
@@ -207,17 +208,19 @@ test('TEST_FIXTURE: independent radar status/control and unified alerts preserve
 test('TEST_FIXTURE: Professor route exposes fused live intelligence and is independently controllable',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-professor-api-')),store=await new DurableStore({dir}).init(); let ticked=0;
   await store.appendProfessorAlert({id:'P1',radar:'PROFESSOR_RADAR',radar_name:'Radar 7 — البروفيسور',symbol:'BTCUSDT',processed_at:Date.now(),detected_at:Date.now()});
+  const radar8={health:()=>({running:false,radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',closed_candles_only:true})};
   const professor={
     health:()=>({running:true,busy:false,last_scan_at:Date.now(),radar:'PROFESSOR_RADAR',radar_name:'Radar 7 — البروفيسور'}),
     tick:async()=>{ticked++;},
     snapshot:()=>({radar:'PROFESSOR_RADAR',radar_name:'Radar 7 — البروفيسور',as_of:new Date().toISOString(),universe:{eligible_spot_symbols:100,mentioned_symbols:2,deep_scanned:2},streams:{count:3,live_count:2,source_status:'LIVE',items:[]},news:{count:8,source_status:'LIVE',items:[]},candidates:[],meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}})
   };
   const server=createApiServer({config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},store,
-    monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},pushProvider:new NoopPushProvider(),professorRadar:professor});
+    monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},pushProvider:new NoopPushProvider(),professorRadar:professor,earlyExpansionRadar:radar8});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try{
     const status=await (await fetch('http://127.0.0.1:'+server.address().port+'/api/radar-status')).json();
-    assert.equal(status.radars.length,7);assert.equal(status.radars.at(-1).radar_name,'Radar 7 — البروفيسور');
+    assert.equal(status.radars.length,8);assert.equal(status.radars.find(x=>x.radar==='PROFESSOR_RADAR').radar_name,'Radar 7 — البروفيسور');
+    assert.equal(status.radars.at(-1).radar_name,'Radar 8 — البرق');
     const res=await fetch('http://127.0.0.1:'+server.address().port+'/api/professor-radar?scan=1&limit=10');
     assert.equal(res.status,200);const body=await res.json();assert.equal(ticked,1);assert.equal(body.meta.radar,'PROFESSOR_RADAR');assert.equal(body.alerts.length,1);assert.equal(body.alerts[0].radar_name,'Radar 7 — البروفيسور');
     assert.equal(body.meta.real_order_execution,false);

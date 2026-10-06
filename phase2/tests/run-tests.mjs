@@ -19,6 +19,7 @@ const phase2=[
   'phase2/tests/radar-notification-gate.test.mjs',
   'phase2/tests/dedup.test.mjs',
   'phase2/tests/early-move-sentinel.test.mjs',
+  'phase2/tests/early-expansion-radar.test.mjs',
   'phase2/tests/end-to-end.test.mjs',
   'phase2/tests/frontend-contract.test.mjs',
   'phase2/tests/integration-failures.test.mjs',

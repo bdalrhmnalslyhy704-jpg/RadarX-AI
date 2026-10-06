@@ -5,7 +5,8 @@ export const RADAR_NAMES=Object.freeze({
   LIQUIDITY_ABSORPTION_RADAR:'Radar 4 — الكاسح',
   KAHIR_RADAR:'Radar 5 — القاهر',
   DOOMSDAY_RADAR:'Radar 6 — يوم القيامة',
-  PROFESSOR_RADAR:'Radar 7 — البروفيسور'
+  PROFESSOR_RADAR:'Radar 7 — البروفيسور',
+  EARLY_EXPANSION_RADAR:'Radar 8 — البرق'
 });
 export const RADAR_PROFILES=Object.freeze({
   EARLY_MOVE_RADAR:Object.freeze({
@@ -63,6 +64,15 @@ export const RADAR_PROFILES=Object.freeze({
     timeframes:['15m','1h','4h'],
     algorithms:['Public Live Discovery','Trade-Claim Extraction','Caption Evidence','News Clustering','News Tone','Market Structure','EMA/RSI/MACD/ADX/VWAP','Support/Resistance','Trap Risk','Spot Paper Decision'],
     guardrails:['مصادر عامة فقط','الشموع المغلقة فقط','لا تنفيذ أوامر حقيقية','لا أسعار أو صفقات وهمية']
+  }),
+  EARLY_EXPANSION_RADAR:Object.freeze({
+    name:RADAR_NAMES.EARLY_EXPANSION_RADAR,icon:'⚡',color:'#38bdf8',
+    mission:'اكتشاف التوسع المبكر: يبحث عن تراكم أدلة قابلة للقياس قبل الانفجار بدل مطاردة الارتفاع بعد حدوثه.',
+    strength:'مسح سريع للسوق كاملًا ثم تحليل عميق للمرشحين دون ترتيبهم أساسًا على ارتفاع 24h.',
+    strategy:'Fast Self-Baseline + RVOL Persistence + Compression→Expansion + Structure + Microstructure + MTF',
+    timeframes:['1m','5m','15m','1h','4h'],
+    algorithms:['All-Market Ticker Fast Scan','Self Baseline Acceleration','RVOL Persistence','BB Squeeze/Expansion','ATR Expansion','VWAP','EMA Ribbon','ADX/MACD/RSI','Higher-Low','Breakout Proximity','Bid/Ask Imbalance','Liquidity/Spread Quality','BTC Market Regime','OBV'],
+    guardrails:['لا استبعاد بسبب السعر المنخفض','Spot USDT فقط','شموع مغلقة فقط','لا score مع stale/gap/future data','لا score مع ضعف السيولة أو spread واسع','لا مطاردة للحركة الممتدة','Paper only','لا تنفيذ حقيقي']
   })
 });
 function clamp100(v){return Math.max(0,Math.min(100,Number.isFinite(Number(v))?Number(v):50));}
@@ -89,7 +99,8 @@ export function radarPowerScore(alert){
     LIQUIDITY_ABSORPTION_RADAR:alert?.liquidity_absorption,
     KAHIR_RADAR:alert?.kahir_analysis,
     DOOMSDAY_RADAR:alert?.doomsday,
-    PROFESSOR_RADAR:alert?.professor??alert?.professor_opinion
+    PROFESSOR_RADAR:alert?.professor??alert?.professor_opinion,
+    EARLY_EXPANSION_RADAR:alert?.early_expansion??alert?.early_expansion_score
   };
   const componentMean=meanNumbers(collectObjectScores(blocks[id]));
   const dataQuality=clamp100(alert?.data_quality??alert?.data_status?.data_quality??100);
@@ -97,7 +108,7 @@ export function radarPowerScore(alert){
   let power=base*.60+(componentMean??base)*.25+dataQuality*.15;
   if(riskCount)power-=Math.min(12,riskCount*2);
   const thresholds={
-    EARLY_MOVE_RADAR:72,STRONG_MOVE_RADAR:76,ROTATION_LAG_RADAR:78,LIQUIDITY_ABSORPTION_RADAR:82,KAHIR_RADAR:84,DOOMSDAY_RADAR:82,PROFESSOR_RADAR:80
+    EARLY_MOVE_RADAR:72,STRONG_MOVE_RADAR:76,ROTATION_LAG_RADAR:78,LIQUIDITY_ABSORPTION_RADAR:82,KAHIR_RADAR:84,DOOMSDAY_RADAR:82,PROFESSOR_RADAR:80,EARLY_EXPANSION_RADAR:82
   };
   const gate=power>=Number(thresholds[id]??80);
   return {

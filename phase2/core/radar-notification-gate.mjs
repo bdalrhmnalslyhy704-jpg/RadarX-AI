@@ -10,7 +10,8 @@ const PROFILES=Object.freeze({
   LIQUIDITY_ABSORPTION_RADAR:{minScore:91,minData:88,minConfirmations:8,minCategoryHits:5,minLiquidity:78,globalCooldownMs:18*60*1000,priority:3},
   KAHIR_RADAR:{minScore:91,minData:88,minConfirmations:8,minCategoryHits:5,minLiquidity:78,globalCooldownMs:18*60*1000,priority:4},
   DOOMSDAY_RADAR:{minScore:92,minData:88,minConfirmations:8,minCategoryHits:5,minLiquidity:78,globalCooldownMs:15*60*1000,priority:5},
-  PROFESSOR_RADAR:{minScore:82,minData:85,minConfirmations:0,minCategoryHits:0,minLiquidity:0,globalCooldownMs:30*60*1000,priority:3}
+  PROFESSOR_RADAR:{minScore:82,minData:85,minConfirmations:0,minCategoryHits:0,minLiquidity:0,globalCooldownMs:30*60*1000,priority:3},
+  EARLY_EXPANSION_RADAR:{minScore:82,minData:70,minConfirmations:0,minCategoryHits:0,minLiquidity:60,globalCooldownMs:10*60*1000,priority:4}
 });
 
 const recentBySymbol=new Map();
