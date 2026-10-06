@@ -58,7 +58,7 @@ pre{white-space:pre-wrap;word-break:break-word;color:#9fc0d6;font-size:11px}
 import {getAlMuqawimRadar,setRadarState} from './radarx-backend-client.mjs';
 
 const $=id=>document.getElementById(id); let refreshBusy=false;
-function esc(v){return String(v??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
+function esc(v){return String(v != null ? v : 'x''').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
 function directionLabel(d){
   return d==='UP'?'صاعد':d==='DOWN'?'هابط':d==='CONFLICT'?'متعارض':'مراقبة';
 }
@@ -67,19 +67,19 @@ async function control(action){
   $('status').textContent=action==='start'?'جاري تشغيل المقاوم…':'جاري إيقاف المقاوم…';
   try{
     const r=await setRadarState('ALMUQAWIM_RADAR',action);
-    if(r.status===200){$('status').textContent=r.body?.running?'🟢 المقاوم يعمل الآن':'⚪ المقاوم متوقف الآن';return refresh();}
+    if(r.status===200){$('status').textContent=r.body && r.body.running?'🟢 المقاوم يعمل الآن':'⚪ المقاوم متوقف الآن';return refresh();}
     $('status').textContent='فشل التحكم — HTTP_'+(r.status||0);
-  }catch(e){$('status').textContent='خطأ — '+(e?.message||e)} finally { refreshBusy=false; }
+  }catch(e){$('status').textContent='خطأ — '+(e && e.message||e)} finally { refreshBusy=false; }
 }
 async function refresh(){
   if(refreshBusy)return; refreshBusy=true;
   try{
     const r=await getAlMuqawimRadar({limit:20});
     if(r.status!==200){$('status').textContent='تعذر قراءة المقاوم — HTTP_'+(r.status||0);return}
-    const h=r.body?.monitoring;
-    $('status').textContent=h?.running?'🟢 المقاوم يعمل — شموع مغلقة فقط':'⚪ المقاوم متوقف';
-    $('count').textContent=String((r.body?.alerts||[]).length);
-    const alerts=Array.isArray(r.body?.alerts)?r.body.alerts:[];
+    const h=r.body && r.body.monitoring;
+    $('status').textContent=h && h.running?'🟢 المقاوم يعمل — شموع مغلقة فقط':'⚪ المقاوم متوقف';
+    $('count').textContent=String((r.body && r.body.alerts||[]).length);
+    const alerts=Array.isArray(r.body && r.body.alerts)?r.body.alerts:[];
     if(alerts.length){
       const a=alerts[0];
       $('htf').innerHTML='<span class="'+dirClass(a.direction)+'">'+esc(directionLabel(a.direction))+'</span>';
@@ -90,8 +90,8 @@ async function refresh(){
         return '<div class="signal">'+
           '<b>'+esc(x.symbol)+'</b> <span class="pill '+dirClass(x.direction)+'">'+esc(directionLabel(x.direction))+'</span> <span class="pill">'+esc(x.potential_label||'')+'</span>'+
           '<div class="sub">القوة: '+esc(x.opportunity_score)+' • خطر الدخول: '+esc(c.entry_risk||'—')+
-          '<br>4H: '+esc(directionLabel(t['4h']?.direction))+' • 1H: '+esc(directionLabel(t['1h']?.direction))+' • 15m: '+esc(directionLabel(t['15m']?.direction))+
-          '<br>الهيكل: '+esc(c.components?.market_structure)+' • خط الاتجاه: '+esc(c.components?.trendline)+' • المتوسط: '+esc(c.components?.moving_average)+'</div>'+
+          '<br>4H: '+esc(directionLabel(t['4h'] && t['4h'].direction))+' • 1H: '+esc(directionLabel(t['1h'] && t['1h'].direction))+' • 15m: '+esc(directionLabel(t['15m'] && t['15m'].direction))+
+          '<br>الهيكل: '+esc(c.components && c.components.market_structure)+' • خط الاتجاه: '+esc(c.components && c.components.trendline)+' • المتوسط: '+esc(c.components && c.components.moving_average)+'</div>'+
           '</div>';
       }).join('');
     }else{
@@ -99,7 +99,7 @@ async function refresh(){
       $('score').textContent='—';
       $('list').innerHTML='<div class="sub">المقاوم يعمل ويبحث عن توافق حقيقي قبل إصدار التنبيه.</div>';
     }
-  }catch(e){$('status').textContent='خطأ — '+(e?.message||e)}
+  }catch(e){$('status').textContent='خطأ — '+(e && e.message||e)}
 }
 $('start').onclick=()=>control('start'); $('stop').onclick=()=>control('stop'); $('refresh').onclick=refresh;
 refresh(); setInterval(refresh,45000);
