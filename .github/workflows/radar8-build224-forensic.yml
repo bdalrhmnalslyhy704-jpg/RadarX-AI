@@ -38,9 +38,17 @@ jobs:
           node --check phase2/http/api.mjs
           node --check phase2/tools/early-expansion-forensic.mjs
           node --check phase2/tests/early-expansion-radar.test.mjs
+          node --check phase2/tests/binance-rest.test.mjs
+          node --check phase2/tests/early-expansion-api-contract.test.mjs
+
+      - name: Run Binance REST rate-limit tests
+        run: node --test --test-timeout=60000 phase2/tests/binance-rest.test.mjs
 
       - name: Run Radar 8 unit tests
         run: node --test --test-timeout=60000 phase2/tests/early-expansion-radar.test.mjs
+
+      - name: Run Radar 8 API contract tests
+        run: node --test --test-timeout=60000 phase2/tests/early-expansion-api-contract.test.mjs
 
       - name: Run full Phase 2 test suite
         run: node phase2/tests/run-tests.mjs phase2
