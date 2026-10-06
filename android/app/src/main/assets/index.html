@@ -118,17 +118,17 @@ import {getRadarStatus} from './radarx-backend-client.mjs';
 const healthEl=document.getElementById('radarHealth');
 const radarOrder=['EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR','LIQUIDITY_ABSORPTION_RADAR','KAHIR_RADAR','DOOMSDAY_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR','COIN_HUNTER_RADAR','PROFESSOR_RADAR'];
 const labels={'EARLY_MOVE_RADAR':'1 • المدمر','STRONG_MOVE_RADAR':'2 • ملك الظلام','ROTATION_LAG_RADAR':'3 • الجوكر','LIQUIDITY_ABSORPTION_RADAR':'4 • الكاسح','KAHIR_RADAR':'5 • القاهر','DOOMSDAY_RADAR':'6 • يوم القيامة','ALMUQAWIM_RADAR':'7 • المقاوم','EARLY_EXPANSION_RADAR':'8 • البرق','COIN_HUNTER_RADAR':'🎯 صائد العملات','PROFESSOR_RADAR':'البروفيسور'};
-function esc(v){return String(v??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
+function esc(v){return String(v != null ? v : '').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
 async function loadRadarHealth(){
   try{
     const r=await getRadarStatus();
     if(r.status!==200)throw new Error('HTTP_'+r.status);
-    const map=new Map((r.body?.radars||[]).map(x=>[x.radar,x]));
+    const map=new Map(((r.body && r.body.radars)||[]).map(x=>[x.radar,x]));
     healthEl.innerHTML=radarOrder.map(id=>{
-      const x=map.get(id), live=x?.running===true;
+      const x=map.get(id), live=x && x.running===true;
       return '<div class="rx-h '+(x?(live?'live':'off'):'err')+'"><b>'+esc(labels[id]||id)+'</b><i>'+esc(live?'يعمل':x?'متوقف':'غير متاح')+'</i></div>';
     }).join('');
-  }catch(e){healthEl.innerHTML='<div class="rx-h err"><b>Backend</b><i>'+esc(e?.message||e)+'</i></div>';}
+  }catch(e){healthEl.innerHTML='<div class="rx-h err"><b>Backend</b><i>'+esc((e && e.message)||e)+'</i></div>';}
 }
 loadRadarHealth();setInterval(loadRadarHealth,20000);
 </script>
