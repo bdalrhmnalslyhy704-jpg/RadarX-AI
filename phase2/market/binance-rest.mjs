@@ -27,7 +27,6 @@ function parseSymbolsParam(value) {
 
 export function requestWeightFor(path,query={}) {
   const p=String(path||'').split('?')[0];
-  if(p==='/api/v3/ping'||p==='/api/v3/time')return 1;
   if(p==='/api/v3/exchangeInfo')return 20;
   if(p==='/api/v3/klines'||p==='/api/v3/uiKlines')return 2;
   if(p==='/api/v3/depth'){
