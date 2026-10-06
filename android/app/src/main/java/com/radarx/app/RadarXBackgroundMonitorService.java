@@ -255,6 +255,9 @@ public final class RadarXBackgroundMonitorService extends Service {
             case "LIQUIDITY_ABSORPTION_RADAR": return "Radar 4 — Liquidity Absorption";
             case "KAHIR_RADAR": return "Radar 5 — القاهر";
             case "DOOMSDAY_RADAR": return "Radar 6 — يوم القيامة";
+            case "ALMUQAWIM_RADAR": return "Radar 7 — المقاوم";
+            case "EARLY_EXPANSION_RADAR": return "Radar 8 — البرق";
+            case "COIN_HUNTER_RADAR": return "🎯 صائد العملات";
             default: return "RadarX";
         }
     }
@@ -276,7 +279,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         Notification.Builder builder = notificationBuilder(CHANNEL_STATUS)
             .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
             .setContentTitle("RadarX • الرادارات المستقلة")
-            .setContentText("6 رادارات مستقلة • إشعار واحد من الخلاصة الموحدة")
+            .setContentText("الرادارات المستقلة • إشعار واحد من الخلاصة الموحدة")
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .setColor(Color.rgb(53, 201, 255))
@@ -347,7 +350,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         NotificationChannel radarAlerts = new NotificationChannel(
             CHANNEL_RADAR_ALERTS, "RadarX Independent Radar Alerts", NotificationManager.IMPORTANCE_HIGH
         );
-        radarAlerts.setDescription("تنبيهات موحدة للرادارات الستة المستقلة");
+        radarAlerts.setDescription("تنبيهات موحدة للرادارات المستقلة، بما فيها صائد العملات");
         manager.createNotificationChannel(radarAlerts);
     }
 
