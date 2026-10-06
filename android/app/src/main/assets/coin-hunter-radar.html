@@ -139,7 +139,7 @@ async function control(action){
     const r=await setRadarState('COIN_HUNTER_RADAR',action);
     if(!r.ok)throw new Error(r.body?.error||r.error||'HTTP_'+r.status);
     await refresh(true);
-  }catch(e){$('error').textContent=e?.message||String(e);}
+  }catch(e){$('error').textContent=(e && e.message)||String(e);}
   finally{$('start').disabled=false;$('stop').disabled=false;$('scan').disabled=false;}
 }
 $('start').onclick=()=>control('start');
