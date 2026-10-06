@@ -36,8 +36,15 @@ export async function requestJson(baseUrl, path, fetchImpl = globalThis.fetch, t
       ]);
       let body = null;
       try { body = await response.json(); } catch {}
-      if (response.ok || (response.status >= 400 && response.status < 500)) {
-        return { status: response.status, ok: response.ok, body, error: null, base };
+      if (response.ok) {
+        return { status: response.status, ok: true, body, error: null, base };
+      }
+      if (response.status === 404 && base !== bases.at(-1)) {
+        firstError = new Error('HTTP_404');
+        continue;
+      }
+      if (response.status >= 400 && response.status < 500) {
+        return { status: response.status, ok: false, body, error: 'HTTP_' + response.status, base };
       }
       firstError = new Error('HTTP_' + response.status);
     } catch (error) {
