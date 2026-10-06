@@ -27,7 +27,7 @@ function addStyle(){
   document.head.appendChild(s);
 }
 
-function esc(v){return String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function esc(v){return String(v||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function fmt(v){return Number.isFinite(Number(v))?Number(v).toLocaleString('en-US',{maximumFractionDigits:8}):'—';}
 
 export function mountBackgroundMonitorControl(root){
@@ -39,7 +39,7 @@ export function mountBackgroundMonitorControl(root){
   let destroyed=false,timer=null;
 
   function cardHtml(spec,status,alerts){
-    const live=status?.running===true;
+    const live=status && status.running===true;
     const sourceAlerts=(alerts||[]).filter(x=>x.radar===spec.id).slice(0,3);
     return '<article class="rx-radar-card '+(live?'live':'')+'" style="border-color:'+esc(spec.color||'#1e3b52')+'66" data-radar="'+spec.id+'">'+
       '<div class="rx-radar-card-top"><div><div class="rx-radar-name">'+spec.icon+' '+esc(spec.name)+'</div><div class="rx-radar-desc">'+esc(spec.desc)+'</div><div class="rx-radar-algos">'+esc(spec.algos)+'</div></div>'+
@@ -61,18 +61,18 @@ export function mountBackgroundMonitorControl(root){
     if(destroyed)return;
     try{
       const [s,a]=await Promise.all([getRadarStatus(),getRadarAlerts({radar:'ALL',limit:20})]);
-      const statuses=(s.ok&&Array.isArray(s.body?.radars)?s.body.radars:[]);
-      const alerts=(a.ok&&Array.isArray(a.body?.alerts)?a.body.alerts:[]);
+      const statuses=(s.ok&&Array.isArray(s.body && s.body.radars)?s.body.radars:[]);
+      const alerts=(a.ok&&Array.isArray(a.body && a.body.alerts)?a.body.alerts:[]);
       const active=statuses.filter(x=>x.running).length;
       global.textContent=active?'يعمل '+active+' رادار':'كل الرادارات متوقفة';
-      root.querySelector('#rx-radar-live-dot')?.classList.toggle('live',active>0);
+      (function(){var _q=root.querySelector('#rx-radar-live-dot');if(_q)_q.classList.toggle('live',active>0);})();
       grid.innerHTML=RADARS.map(spec=>cardHtml(spec,statuses.find(x=>x.radar===spec.id),alerts)).join('');
       grid.querySelectorAll('[data-action]').forEach(btn=>btn.addEventListener('click',async()=>{
-        const card=btn.closest('[data-radar]');const radar=card?.dataset.radar;const action=btn.dataset.action;
+        const card=btn.closest('[data-radar]');const radar=card && card.dataset.radar;const action=btn.dataset.action;
         if(!radar)return;
         btn.disabled=true;
         const r=await setRadarState(radar,action);
-        if(!r.ok)global.textContent='تعذر تغيير حالة '+radar+' — '+String(r.body?.error||r.error||r.status);
+        if(!r.ok)global.textContent='تعذر تغيير حالة '+radar+' — '+String(r.body && r.body.error||r.error||r.status);
         await refresh();
       }));
     }catch(e){
