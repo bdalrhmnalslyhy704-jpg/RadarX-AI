@@ -32,9 +32,9 @@ export async function requestJson(baseUrl, path, fetchImpl = globalThis.fetch, t
       try { body = await response.json(); } catch {}
       if (response.ok || (response.status >= 400 && response.status < 500)) return {status:response.status,ok:response.ok,body,error:null,base};
       firstError = new Error('HTTP_'+response.status);
-    } catch(error) { firstError ||= error; }
+    } catch(error) { if(!firstError)firstError = error; }
   }
-  return {status:0,ok:false,body:null,error:String(firstError?.message||firstError||'BACKEND_CONNECTION_FAILED')};
+  return {status:0,ok:false,body:null,error:String(firstError && firstError.message||firstError||'BACKEND_CONNECTION_FAILED')};
 }
 
 export async function fetchBackendState(baseUrl, symbol, fetchImpl = globalThis.fetch) {
@@ -198,5 +198,5 @@ export async function setRadarState(radar, action, fetchImpl = globalThis.fetch)
       return {status:response.status,ok:response.ok,body,error:null,base};
     }catch(error){lastError=error;}
   }
-  return {status:0,ok:false,body:null,error:String(lastError?.message||lastError||'BACKEND_CONNECTION_FAILED')};
+  return {status:0,ok:false,body:null,error:String(lastError && lastError.message||lastError||'BACKEND_CONNECTION_FAILED')};
 }
