@@ -189,6 +189,16 @@ export async function getPreMoveRadar({quote = 'USDT', limit = 30 } = {}, fetchI
 }
 
 
+export async function getRotationRadar({quote='USDT',limit=20,scan=false}={},fetchImpl=globalThis.fetch){
+  const safeQuote=String(quote||'USDT').trim().toUpperCase();
+  const safeLimit=Number(limit);
+  if(!/^[A-Z]{2,10}$/.test(safeQuote))throw new Error('INVALID_QUOTE');
+  if(!Number.isInteger(safeLimit)||safeLimit<1||safeLimit>50)throw new Error('INVALID_LIMIT');
+  const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  const scanParam=scan?'&scan=1':'';
+  return requestJson(base,'/api/rotation-lag-radar?quote='+encodeURIComponent(safeQuote)+'&limit='+encodeURIComponent(String(safeLimit))+scanParam,fetchImpl,90000);
+}
+
 export async function getMoveRadar({quote='USDT',limit=50,since=0}={},fetchImpl=globalThis.fetch){
   const safeQuote=String(quote||'USDT').trim().toUpperCase();
   if(!/^[A-Z]{2,10}$/.test(safeQuote))throw new Error('INVALID_QUOTE');

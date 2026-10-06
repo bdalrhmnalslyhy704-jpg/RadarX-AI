@@ -383,6 +383,10 @@ export function mountMarketRadarScreen(root, options = {}) {
   root.innerHTML = buildDashboardShell();
 
   const client = options.client || {getMarketRadar};
+  const CACHE_KEY='radarx.market.cache.v2';
+  const CACHE_TTL_MS=5*60*1000;
+  function readCache(){try{const raw=sessionStorage.getItem(CACHE_KEY);if(!raw)return null;const x=JSON.parse(raw);return x&&Number.isFinite(Number(x.savedAt))&&x.response&&(Date.now()-Number(x.savedAt)<CACHE_TTL_MS)?x:null;}catch(error){return null;}}
+  function writeCache(response){try{sessionStorage.setItem(CACHE_KEY,JSON.stringify({savedAt:Date.now(),response:response}));}catch(error){}}
   const state = {candidates: [], response:null, lastUpdate:null, mode:'FETCHING', destroyed:false};
 
   const nodes = {
@@ -477,6 +481,7 @@ export function mountMarketRadarScreen(root, options = {}) {
     const mode = classifyMarketRadarResponse(response, navigator.onLine);
     state.candidates = normalized.candidates;
     state.response = response;
+    writeCache(response);
     state.lastUpdate = normalized.updatedAt || new Date().toISOString();
     const split = splitCandidates(state.candidates);
     nodes.updated.textContent = time(state.lastUpdate);
@@ -582,7 +587,13 @@ export function mountMarketRadarScreen(root, options = {}) {
   window.addEventListener('online', online);
   window.addEventListener('offline', offline);
 
-  load();
+  const cached=readCache();
+  if(cached){
+    applyResponse(cached.response);
+    if(window.RadarXSmoke)window.RadarXSmoke.state('SCAN_CACHED');
+  }else{
+    load();
+  }
 
   return {
     refresh: load,

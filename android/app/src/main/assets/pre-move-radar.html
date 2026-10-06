@@ -46,6 +46,10 @@ const limit=document.getElementById('limit');
 const status=document.getElementById('status');
 const cards=document.getElementById('cards');
 let busy=false;
+const CACHE_KEY='radarx.preMove.cache.v1';
+const CACHE_TTL_MS=5*60*1000;
+function readCache(){try{const raw=sessionStorage.getItem(CACHE_KEY);if(!raw)return null;const x=JSON.parse(raw);return x&&Number.isFinite(Number(x.savedAt))&&x.body&&(Date.now()-Number(x.savedAt)<CACHE_TTL_MS)?x:null;}catch(e){return null;}}
+function writeCache(body){try{sessionStorage.setItem(CACHE_KEY,JSON.stringify({savedAt:Date.now(),body:body}));}catch(e){}}
 function fmt(n){if(!Number.isFinite(Number(n)))return '—';const x=Number(n);return x>=1?x.toFixed(4):x.toPrecision(5)}
 function pct(n){return Number.isFinite(Number(n))?Number(n).toFixed(2)+'%':'—'}
 function num(n,d='—'){return Number.isFinite(Number(n))?Number(n).toFixed(1):d}
@@ -75,12 +79,14 @@ function render(rows,meta){
    '</article>';
  }).join('');
 }
-async function run(){
- if(busy)return;busy=true;scan.disabled=true;scan.textContent='جاري الفحص…';
+async function run(force){
+ if(busy)return;
+ if(!force){const cached=readCache();if(cached){const rows=rankPreMoveCandidates(cached.body);const s=cached.body.session||{};status.innerHTML='<b>بيانات محفوظة</b> — '+rows.length+' مرشحًا • لم نُعد مسح السوق بعد الرجوع للرادار. اضغط الفحص لتحديث حي.';render(rows,cached.body);return;}}busy=true;scan.disabled=true;scan.textContent='جاري الفحص…';
  status.innerHTML='<b>فحص حي</b> — نبحث عن عملات هادئة بدأ حجمها وتدفقها وهيكلها يتحسن…';
  try{
    const r=await getPreMoveRadar({quote:'USDT',limit:Number(limit.value)||30});
    if(!r.ok||!r.body)throw new Error(r.body && r.body.error||'PRE_MOVE_RADAR_UNAVAILABLE');
+   writeCache(r.body);
    const rows=rankPreMoveCandidates(r.body);
    const s=r.body.session||{};
    status.innerHTML='<b>تم التحديث</b> — '+rows.length+' مرشحًا • قوة السوق الصباحية '+num(s.positive_breadth_pct)+'% موجبة • متوسط الجلسة '+pct(s.market_median_return_pct)+' • BTC '+pct(s.btc_return_pct);
@@ -90,8 +96,8 @@ async function run(){
    cards.innerHTML='<div class="empty">لم تصل بيانات صالحة من Backend.</div>';
  }finally{busy=false;scan.disabled=false;scan.textContent='افحص من قد يستيقظ مبكرًا';}
 }
-scan.addEventListener('click',run);
-setTimeout(run,350);
+scan.addEventListener('click',()=>run(true));
+setTimeout(()=>run(false),120);
 </script>
 </main>
 </body>
