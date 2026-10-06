@@ -39,10 +39,13 @@ test('TEST_RADAR_SUITE: all seven radar profiles are named and Kahir power scori
   const ids=['EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR','LIQUIDITY_ABSORPTION_RADAR','KAHIR_RADAR','DOOMSDAY_RADAR','PROFESSOR_RADAR'];
   assert.deepEqual(ids.map(id=>RADAR_NAMES[id]),[
     'Radar 1 — المدمر','Radar 2 — ملك الظلام','Radar 3 — الجوكر','Radar 4 — الكاسح',
-    'Radar 5 — القاهر','Radar 6 — يوم القيامة','البروفيسور — استخبارات عامة'
+    'Radar 5 — القاهر','Radar 6 — يوم القيامة','Radar 7 — البروفيسور'
   ]);
   assert.ok(ids.every(id=>RADAR_PROFILES[id]?.mission));
   const kahir=radarPowerScore({radar:'KAHIR_RADAR',opportunity_score:84,kahir_analysis:{score:96},risk_flags:[],data_quality:100});
   assert.equal(kahir.component_mean,96);
   assert.equal(kahir.gate,true);
+  const professor=radarPowerScore({radar:'PROFESSOR_RADAR',opportunity_score:80,professor_opinion:{technical_score:86,stream_score:80,news_score:78},risk_flags:[],data_quality:100});
+  assert.equal(professor.component_mean,81.3);
+  assert.equal(professor.gate,true);
 });
