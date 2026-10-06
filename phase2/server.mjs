@@ -88,15 +88,10 @@ export async function startServer({
   safeStart('MONITOR',monitor);
   const autoStart=config.radarControl?.autostart!==false;
   if(autoStart){
-    safeStart('RADAR1',moveSentinel);
-    safeStart('RADAR2',strongMoveRadar);
-    safeStart('RADAR3',rotationLagRadar);
-    safeStart('RADAR4',liquidityAbsorptionRadar);
-    safeStart('RADAR5',kahirRadar);
-    safeStart('RADAR6',doomsdayRadar);
-    safeStart('RADAR7',alMuqawimRadar);
-    safeStart('PROFESSOR_INTELLIGENCE',professorRadar);
-    safeStart('RADAR8',earlyExpansionRadar);
+    const startup=[['RADAR1',moveSentinel],['RADAR2',strongMoveRadar],['RADAR3',rotationLagRadar],['RADAR4',liquidityAbsorptionRadar],['RADAR5',kahirRadar],['RADAR6',doomsdayRadar],['RADAR7',alMuqawimRadar],['PROFESSOR_INTELLIGENCE',professorRadar],['RADAR8',earlyExpansionRadar]];
+    startup.forEach(([name,instance],index)=>{
+      setTimeout(()=>safeStart(name,instance),index*900);
+    });
   }
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
   return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,symbolDeepAnalyzer,store,rest,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,push,close:async()=>{await earlyExpansionRadar.stop();await professorRadar.stop();await alMuqawimRadar.stop();await doomsdayRadar.stop();await kahirRadar.stop();await liquidityAbsorptionRadar.stop();await rotationLagRadar.stop();await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
