@@ -14,6 +14,7 @@ on:
       - tradli-connectivity-native-screen
       - bottom-reversal-radar-page
       - phase6-radar4-independent-microstructure
+      - radarx-build185-almuqawim-20261006
   workflow_dispatch:
 
 permissions:
@@ -33,7 +34,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          ref: ${{ github.ref_name == 'phase4-symbol-deep-scan' && 'phase4-symbol-deep-scan' || github.ref_name == 'phase6-radar4-independent-microstructure' && 'phase6-radar4-independent-microstructure' || 'phase3-triple-radar' }}
+          ref: ${{ github.ref_name }}
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -145,6 +146,7 @@ jobs:
           node android/backend-client-regression.mjs
           node --check android/app/src/main/assets/radarx-backend-client.mjs
           node --check android/app/src/main/assets/radarx-background-control.mjs
+          node --check android/app/src/main/assets/radarx-backend-client.mjs
           node --check android/app/src/main/assets/radarx-radar-screen.mjs
           test -f android/app/src/main/assets/radar1-destroyer.html
           test -f android/app/src/main/assets/radar2-dark-king.html
@@ -185,6 +187,7 @@ jobs:
           node --check android/app/src/main/assets/radarx-professor-radar.mjs
           node --check android/app/src/main/assets/radarx-bottom-reversal.mjs
           node --check phase2/core/doomsday-radar.mjs
+          node --check phase2/core/al-muqawim-radar.mjs
           node --check phase2/core/kahir-radar.mjs
           node --check android/app/src/main/assets/radarx-pre-move.mjs
           node --check android/app/src/main/assets/radarx-move-radar.mjs
@@ -197,6 +200,7 @@ jobs:
           test -f android/app/src/main/assets/tradli.html
           test -f android/app/src/main/assets/bottom-radar.html
           test -f android/app/src/main/assets/kahir-radar.html
+          test -f android/app/src/main/assets/al-muqawim-radar.html
           test -f android/app/src/main/assets/king.html
           test -f android/app/src/main/java/com/radarx/app/BottomRadarActivity.java
 
