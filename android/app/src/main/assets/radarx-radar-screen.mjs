@@ -1,4 +1,4 @@
-import {getRadarStatus,getRadarAlerts,setRadarState} from './radarx-backend-client.mjs';
+import {getRadarStatus,getRadarAlerts,getRotationRadar,setRadarState} from './radarx-backend-client.mjs';
 
 const P = {
   EARLY_MOVE_RADAR:{n:'المدمر',i:'☠️',c:'#ff3b30',m:'ما قبل الانفجار',s:'Pre-Breakout Fingerprint + Relative Strength + Compression',t:'1m • 5m • 15m',a:['Fast Impulse','RVOL','Taker Flow','EMA Reclaim','S/R','RSI','OBV','Wyckoff','MTF'],g:['يمنع مطاردة الحركة','جودة وسيولة لازمتان','شموع مغلقة فقط']},
@@ -53,6 +53,10 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
   if(!root||!p)return{destroy(){}};
 
   let dead=false,busy=false,timer=null;
+  const CACHE_KEY='radarx.radar.cache.'+id;
+  const CACHE_TTL_MS=5*60*1000;
+  function readRadarCache(){try{const raw=sessionStorage.getItem(CACHE_KEY);if(!raw)return null;const x=JSON.parse(raw);return x&&Number.isFinite(Number(x.savedAt))&&x.body&&(Date.now()-Number(x.savedAt)<CACHE_TTL_MS)?x:null;}catch(error){return null;}}
+  function writeRadarCache(body){try{sessionStorage.setItem(CACHE_KEY,JSON.stringify({savedAt:Date.now(),body:body}));}catch(error){}}
   installTheme(p);
 
   try{
@@ -91,32 +95,57 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
 
     const show=(rows)=>{
       if(!Array.isArray(rows)||!rows.length){
-        box.innerHTML='<div class="muted">لا يوجد اكتشاف محفوظ حاليًا.</div>';
+        box.innerHTML='<div class="muted">لا يوجد مرشح أو اكتشاف محفوظ حاليًا.</div>';
         return;
       }
-      const sorted=[...rows].sort((a,b)=>Number(b.radar_power_score||b.opportunity_score||0)-Number(a.radar_power_score||a.opportunity_score||0));
-      box.innerHTML=sorted.slice(0,20).map(x=>`<article class="alert">
-        <div class="top"><b>${e(x.symbol||'—')}</b><span class="score">${q(x.radar_power_score||x.radar_v2 && x.radar_v2.score||x.opportunity_score)}/100</span></div>
-        <div class="muted">${e(x.potential_label||x.event||'اكتشاف')} • ${e(x.direction||'—')} • ${e(x.detected_time_12h||'—')}</div>
-        <div class="muted">${e(Array.isArray(x.reasons)?x.reasons.slice(0,4).join(' • '):'')}</div>
-      </article>`).join('');
+      const sorted=[...rows].sort((a,b)=>Number(b.radar_power_score||b.opportunity_score||b.score||0)-Number(a.radar_power_score||a.opportunity_score||a.score||0));
+      box.innerHTML=sorted.slice(0,20).map(x=>{
+        const rotation=x.rotation||{};
+        const isJoker=id==='ROTATION_LAG_RADAR';
+        const score=q(x.radar_power_score||x.radar_v2 && x.radar_v2.score||x.opportunity_score||x.score);
+        const label=isJoker?(x.eligible===true?'جاهز للدوران':(x.potential_label||rotation.stage||'مراقبة')):(x.potential_label||x.event||'اكتشاف');
+        const extra=isJoker?' • تأكيدات '+String(x.rotation?.confirmations||x.confirmations||0):'';
+        return '<article class="alert">'+
+          '<div class="top"><b>'+e(x.symbol||'—')+'</b><span class="score">'+score+'/100</span></div>'+
+          '<div class="muted">'+e(label)+' • '+e(x.direction||rotation.direction||'—')+' • '+e(x.detected_time_12h||'—')+extra+'</div>'+
+          '<div class="muted">'+e(Array.isArray(x.reasons)?x.reasons.slice(0,4).join(' • '):Array.isArray(rotation.reasons)?rotation.reasons.slice(0,4).join(' • '):'')+'</div>'+
+        '</article>';
+      }).join('');
     };
 
-    async function refresh(){
+    async function refresh(force=false){
       if(dead||busy)return;
+      if(!force){
+        const cached=readRadarCache();
+        if(cached){
+          const body=cached.body||{};
+          const rows=id==='ROTATION_LAG_RADAR'?(body.candidates||[]).concat(body.alerts||[]):(body.alerts||[]);
+          show(rows);
+          const st=body.monitoring||body.status;
+          if(st)setStatus(st);
+          else stn.textContent='● بيانات محفوظة — بدون إعادة فحص السوق';
+          return;
+        }
+      }
       busy=true;
       try{
-        const [s,a]=await Promise.all([getRadarStatus(),getRadarAlerts({radar:id,limit:50})]);
+        const s=await getRadarStatus();
         if(s.ok)setStatus((s.body && s.body.radars||[]).find(x=>x.radar===id));
         else stn.textContent='تعذر قراءة حالة الرادار — HTTP_'+(s.status||0);
-        if(a.ok)show(a.body && a.body.alerts||[]);
-        else if(a.status===404)box.innerHTML='<div class="muted">لا يوجد مسار تنبيهات لهذا الرادار في الخادم الحالي.</div>';
+        let a;
+        if(id==='ROTATION_LAG_RADAR') a=await getRotationRadar({limit:20,scan:true});
+        else a=await getRadarAlerts({radar:id,limit:50});
+        if(a.ok){
+          writeRadarCache(a.body||{});
+          if(id==='ROTATION_LAG_RADAR')show([].concat(a.body&&a.body.candidates||[],a.body&&a.body.alerts||[]));
+          else show(a.body&&a.body.alerts||[]);
+        }else if(a.status===404)box.innerHTML='<div class="muted">لا يوجد مسار بيانات لهذا الرادار في الخادم الحالي.</div>';
       }catch(x){
         stn.className='status';
         stn.textContent='Backend غير متاح — '+e(x && x.message||x);
         box.innerHTML='<div class="muted">تعذر تحميل النتائج، لكن واجهة الرادار تعمل. أعد التحديث لاحقًا.</div>';
       }finally{busy=false;}
-    }
+    };
 
     async function control(action){
       on.disabled=true;off.disabled=true;
@@ -133,8 +162,8 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
 
     on.onclick=()=>control('start');
     off.onclick=()=>control('stop');
-    ref.onclick=refresh;
-    refresh();
+    ref.onclick=()=>refresh(true);
+    refresh(false);
     timer=setInterval(refresh,20000);
   }catch(error){
     root.innerHTML=`<main class="rxs" dir="rtl"><section class="card hero"><h1>${p.i} ${p.n}</h1><div class="status">تعذر رسم الرادار</div><div class="muted">${e(error && error.message||error)}</div></section></main>`;
