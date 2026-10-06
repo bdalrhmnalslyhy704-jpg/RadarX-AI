@@ -5,6 +5,7 @@ on:
     branches:
       - android-early-wake-6.8.9
       - phase3-triple-radar
+      - android-build224-radar8-v2-20261006
       - phase4-symbol-deep-scan
       - android-icon-6.8.8-release
       - tradli-feature-integration
@@ -14,7 +15,6 @@ on:
       - tradli-connectivity-native-screen
       - bottom-reversal-radar-page
       - phase6-radar4-independent-microstructure
-      - radarx-build185-almuqawim-20261006
   workflow_dispatch:
 
 permissions:
@@ -35,6 +35,14 @@ jobs:
         with:
           fetch-depth: 1
           ref: ${{ github.ref_name }}
+
+      - name: Verify release branch checkout and backend URL
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "android-build224-radar8-v2-20261006"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          grep -Fq "https://radarx-ai-production.up.railway.app" android/app/src/main/assets/radarx-backend-client.mjs
+          ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -101,6 +109,51 @@ jobs:
           test -x "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner"
           test -d "$ANDROID_SDK_ROOT/platforms/android-35"
 
+      - name: Verify Railway backend and Radar 8 public contract
+        timeout-minutes: 3
+        env:
+          RADAR8_JSON: ${{ runner.temp }}/radar8.json
+        run: |
+          set -euo pipefail
+          BASE="https://radarx-ai-production.up.railway.app"
+          HEALTH="$(curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/healthz.json" -w "%{http_code}" "$BASE/healthz")"
+          READY="$(curl --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/readyz.json" -w "%{http_code}" "$BASE/readyz")"
+          RADAR8="$(curl --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 30 --silent --show-error -o "$RADAR8_JSON" -w "%{http_code}" "$BASE/api/early-expansion-radar?quote=USDT&limit=100")"
+          test "$HEALTH" = "200"
+          case "$READY" in 200|503) ;; *) echo "::error::Unexpected readyz status: $READY"; exit 1 ;; esac
+          case "$RADAR8" in 200|503) ;; *) echo "::error::Unexpected Radar 8 status: $RADAR8"; exit 1 ;; esac
+          export READY_STATUS="$READY"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const body = JSON.parse(fs.readFileSync(process.env.RADAR8_JSON, 'utf8'));
+          if (body.schema_version !== 'RADAR8_V2') throw new Error('RADAR8_SCHEMA_VERSION_INVALID');
+          if (body.radar !== 'EARLY_EXPANSION_RADAR') throw new Error('RADAR8_NAME_INVALID');
+          if (!body.meta || typeof body.meta.live !== 'boolean') throw new Error('RADAR8_META_LIVE_MISSING');
+          if (body.meta.paper_trading !== true) throw new Error('PAPER_TRADING_INVARIANT_FAILED');
+          if (body.meta.real_order_execution !== false) throw new Error('REAL_ORDER_EXECUTION_INVARIANT_FAILED');
+          if (body.meta.confidence_score !== 'UNKNOWN') throw new Error('CONFIDENCE_SCORE_INVARIANT_FAILED');
+          for (const key of ['expected_total','received_total','missing_ticker_total','eligible_total','fast_scanned_total','scanned_total','deep_scanned_total','skipped_total','failed_total','coverage_ratio','deep_coverage_ratio']) {
+            if (!Object.hasOwn(body.universe ?? {}, key)) throw new Error('RADAR8_COVERAGE_FIELD_MISSING:'+key);
+          }
+          for (const key of ['running','last_scan_at','failed_total','poll_ms','micro_scan_candidates','micro_concurrency','rotation_reserve','quiet_reserve','deep_candidates','deep_concurrency']) {
+            if (!Object.hasOwn(body.monitoring ?? {}, key)) throw new Error('RADAR8_MONITORING_FIELD_MISSING:'+key);
+          }
+          for (const key of ['requested','completed','error']) {
+            if (!Object.hasOwn(body.scan ?? {}, key)) throw new Error('RADAR8_SCAN_FIELD_MISSING:'+key);
+          }
+          console.log(JSON.stringify({
+            schema_version: body.schema_version,
+            radar: body.radar,
+            meta_live: body.meta.live,
+            meta_paper_trading: body.meta.paper_trading,
+            meta_real_order_execution: body.meta.real_order_execution,
+            meta_confidence_score: body.meta.confidence_score,
+            universe: body.universe,
+            monitoring: body.monitoring,
+            scan: body.scan,
+            readyz_http_status: Number(process.env.READY_STATUS)
+          }, null, 2));
+          NODE
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -144,65 +197,27 @@ jobs:
         run: |
           set -euo pipefail
           node android/backend-client-regression.mjs
-          node --check android/app/src/main/assets/radarx-backend-client.mjs
-          node --check android/app/src/main/assets/radarx-background-control.mjs
-          node --check android/app/src/main/assets/radarx-backend-client.mjs
-          node --check android/app/src/main/assets/radarx-radar-screen.mjs
-          test -f android/app/src/main/assets/radar1-destroyer.html
-          test -f android/app/src/main/assets/radar2-dark-king.html
-          test -f android/app/src/main/assets/radar3-joker.html
-          test -f android/app/src/main/assets/radar4-sweeper.html
-          test -f android/app/src/main/assets/professor-radar.html
-          test -f android/app/src/main/assets/radarx-professor-radar.mjs
-          test -f android/app/src/main/assets/doomsday-radar.html
-          node --check android/app/src/main/assets/radarx-doomsday-radar.mjs
-          grep -q 'Radar 1 — المدمر' android/app/src/main/assets/radarx-background-control.mjs
-          grep -q 'Radar 2 — ملك الظلام' android/app/src/main/assets/radarx-background-control.mjs
-          grep -q 'Radar 3 — الجوكر' android/app/src/main/assets/radarx-background-control.mjs
-          grep -q 'Radar 4 — الكاسح' android/app/src/main/assets/radarx-background-control.mjs
-          grep -q 'radar1-destroyer.html' android/app/src/main/assets/index.html
-          grep -q 'radar2-dark-king.html' android/app/src/main/assets/index.html
-          grep -q 'radar3-joker.html' android/app/src/main/assets/index.html
-          grep -q 'radar4-sweeper.html' android/app/src/main/assets/index.html
-          grep -q 'doomsday-radar.html' android/app/src/main/assets/index.html
-          grep -q 'doomsday-radar.html' android/app/src/main/assets/index.html
+          node android/app/src/main/assets/tests/market-radar-integration.test.mjs
+          grep -Fq "https://radarx-ai-production.up.railway.app" android/app/src/main/assets/radarx-backend-client.mjs
+          ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
+          grep -RInq "Paper Trading" android/app/src/main/assets
+          grep -RInq "paper_trading=true" android/app/src/main/assets
+          grep -RInq "real_order_execution=false" android/app/src/main/assets
+          grep -RInq "confidence_score=UNKNOWN" android/app/src/main/assets
 
       - name: Validate embedded RadarX JavaScript syntax
         run: |
           set -euo pipefail
           node --check android/app/src/main/assets/radarx-backend-client.mjs
-          node --check android/app/src/main/assets/radarx-symbol-deep-scan.mjs
-          node --check android/app/src/main/assets/radarx-king.mjs
           node --check android/app/src/main/assets/radarx-market-radar-ui.mjs
           node --check android/app/src/main/assets/radarx-market-radar-screen.mjs
-          node --check android/app/src/main/assets/radarx-tradli-feature-suite.mjs
-          test -f android/app/src/main/assets/radarx-background-control.mjs
-          node --check android/app/src/main/assets/radarx-background-control.mjs
-          node --check android/app/src/main/assets/radarx-radar-screen.mjs
-          test -f android/app/src/main/assets/radar1-destroyer.html
-          test -f android/app/src/main/assets/radar2-dark-king.html
-          test -f android/app/src/main/assets/radar3-joker.html
-          test -f android/app/src/main/assets/radar4-sweeper.html
-          test -f android/app/src/main/assets/professor-radar.html
-          node --check android/app/src/main/assets/radarx-professor-radar.mjs
-          node --check android/app/src/main/assets/radarx-bottom-reversal.mjs
-          node --check phase2/core/doomsday-radar.mjs
-          node --check phase2/core/al-muqawim-radar.mjs
-          node --check phase2/core/kahir-radar.mjs
-          node --check android/app/src/main/assets/radarx-pre-move.mjs
-          node --check android/app/src/main/assets/radarx-move-radar.mjs
-          test -f android/app/src/main/assets/pre-move-radar.html
-          test -f android/app/src/main/assets/move-radar.html
-          test -f android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java
-          test -f android/app/src/main/java/com/radarx/app/TradliActivity.java
-          test -f android/app/src/main/java/com/radarx/app/MainActivity.java
-          test -f android/app/src/main/assets/radar4-liquidity-absorption.html
-          test -f android/app/src/main/assets/tradli.html
-          test -f android/app/src/main/assets/bottom-radar.html
-          test -f android/app/src/main/assets/kahir-radar.html
-          test -f android/app/src/main/assets/al-muqawim-radar.html
-          test -f android/app/src/main/assets/king.html
-          test -f android/app/src/main/java/com/radarx/app/BottomRadarActivity.java
+          node --check android/app/src/main/assets/tests/market-radar-integration.test.mjs
+          test -s android/app/src/main/assets/index.html
+          test -s android/app/src/main/assets/manifest.json
+          test -s android/app/src/main/assets/radar8-lightning.html
+          grep -Fq 'radar8-lightning.html' android/app/src/main/assets/index.html
+          test -s android/app/build.gradle
+          test -s android/app/src/main/AndroidManifest.xml
 
       - name: Build signed universal Release APK
         working-directory: android
@@ -236,6 +251,9 @@ jobs:
           AAPT="${ANDROID_SDK_ROOT}/build-tools/35.0.0/aapt"
 
           "$APKSIGNER" verify --verbose "${APKS[0]}"
+          CERTS="$($APKSIGNER verify --print-certs "${APKS[0]}")"
+          echo "$CERTS"
+          ! grep -qi "CN=Android Debug" <<<"$CERTS"
 
           PACKAGE="$("$AAPT" dump badging "${APKS[0]}" | sed -n "s/^package: name='\\([^']*\\)'.*$/\\1/p" | head -n 1)"
           if [[ "$PACKAGE" != "com.radarx.app" ]]; then
@@ -255,19 +273,29 @@ jobs:
         run: echo "Native smoke previously validated in APK 162; skipped for asset/backend-only release."
 
       - name: Publish signed APK GitHub Release
-        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="android-v6.8.11-triple-radars-${GITHUB_RUN_NUMBER}"
+          TAG="android-v6.8.11-radar8-v2-${GITHUB_RUN_NUMBER}"
           APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "RadarX Native — Six Independent Radars ${GITHUB_RUN_NUMBER}" \
-            --notes "Signed universal APK built from ${GITHUB_REF_NAME} at commit ${GITHUB_SHA}. Includes six numbered radars: المدمر, ملك الظلام, الجوكر, الكاسح, القاهر, and يوم القيامة. البروفيسور is an additional public-intelligence radar. Professor fuses public live-trade claims, realtime public news, and Binance public technical confirmation. Symbol Deep Scan is also included. Alerts identify the producing radar and detection time in 12-hour Asia/Aden format. Paper Trading only; real_order_execution=false."
+            --title "RadarX Native — Build 224 + Radar 8 V2 ${GITHUB_RUN_NUMBER}" \
+            --notes "Signed universal APK built from android-build224-radar8-v2-20261006, preserving Build 224 radar assets and adding Radar 8 V2 only. Spot/paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
 
+      - name: Verify published HTTPS download
+        run: |
+          set -euo pipefail
+          TAG="android-v6.8.11-radar8-v2-${GITHUB_RUN_NUMBER}"
+          APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
+          DOWNLOADED="${RUNNER_TEMP}/radarx-release-downloaded.apk"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/radarx-release.apk"
+          curl --fail --location --retry 3 --retry-delay 2 --silent --show-error "$URL" --output "$DOWNLOADED"
+          test -s "$DOWNLOADED"
+          test "$(stat -c %s "$DOWNLOADED")" = "$(stat -c %s "$APK")"
+          test "$(sha256sum "$DOWNLOADED" | awk '{print $1}')" = "$(sha256sum "$APK" | awk '{print $1}')"
       - name: Remove signing keystore before artifact upload
         if: always()
         run: |
