@@ -15,6 +15,7 @@ on:
       - tradli-connectivity-native-screen
       - bottom-reversal-radar-page
       - phase6-radar4-independent-microstructure
+      - feature-coin-hunter-20261006-android
   workflow_dispatch:
 
 permissions:
@@ -39,7 +40,7 @@ jobs:
       - name: Verify release branch checkout and backend URL
         run: |
           set -euo pipefail
-          test "$GITHUB_REF_NAME" = "android-build224-radar8-v2-20261006"
+          test "$GITHUB_REF_NAME" = "feature-coin-hunter-20261006-android" || test "$GITHUB_REF_NAME" = "android-build224-radar8-v2-20261006"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           grep -Fq "https://radarx-ai-production.up.railway.app" android/app/src/main/assets/radarx-backend-client.mjs
           ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
@@ -236,6 +237,9 @@ jobs:
           test -s android/app/src/main/assets/index.html
           test -s android/app/src/main/assets/manifest.json
           test -s android/app/src/main/assets/radar8-lightning.html
+          test -s android/app/src/main/assets/coin-hunter-radar.html
+          grep -Fq 'coin-hunter-radar.html' android/app/src/main/assets/index.html
+          node --check android/app/src/main/assets/radarx-radar-screen.mjs
           grep -Fq 'radar8-lightning.html' android/app/src/main/assets/index.html
           test -s android/app/build.gradle
           test -s android/app/src/main/AndroidManifest.xml
@@ -304,7 +308,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "RadarX Native — Build 224 + Radar 8 V2 ${GITHUB_RUN_NUMBER}" \
-            --notes "Signed universal APK built from android-build224-radar8-v2-20261006, preserving Build 224 radar assets and adding Radar 8 V2 only. Spot/paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
+            --notes "Signed universal APK built from feature-coin-hunter-20261006-android, preserving Build 224 radar assets, fixing blank standalone radar screens, and adding 🎯 Coin Hunter." Spot/paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
 
       - name: Verify published HTTPS download
         run: |
