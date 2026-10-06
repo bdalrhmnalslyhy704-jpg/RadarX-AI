@@ -151,8 +151,8 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     private JSONObject fetchRadarAlertsFeed(long cursor) throws Exception {
         Exception last = null;
-        String[] bases = {BACKEND_RADAR_ALERTS, BACKEND_RADAR_ALERTS_FALLBACK};
-        for (String base : bases) {
+        String[] unifiedBases = {BACKEND_RADAR_ALERTS, BACKEND_RADAR_ALERTS_FALLBACK};
+        for (String base : unifiedBases) {
             HttpURLConnection connection = null;
             try {
                 String target = base + (base.contains("?") ? "&since=" : "?since=") + cursor;
@@ -164,6 +164,10 @@ public final class RadarXBackgroundMonitorService extends Service {
                 connection.setRequestProperty("Accept", "application/json");
                 connection.setRequestProperty("Accept-Encoding", "identity");
                 int status = connection.getResponseCode();
+                if (status == 404) {
+                    last = new IllegalStateException("HTTP_404");
+                    continue;
+                }
                 if (status != 200) throw new IllegalStateException("HTTP_" + status);
                 return new JSONObject(new String(readAll(connection.getInputStream()), StandardCharsets.UTF_8));
             } catch (Exception e) {
@@ -172,7 +176,75 @@ public final class RadarXBackgroundMonitorService extends Service {
                 if (connection != null) connection.disconnect();
             }
         }
-        throw last == null ? new IllegalStateException("BACKEND_UNAVAILABLE") : last;
+        return fetchIndividualRadarAlerts(cursor, last);
+    }
+
+    private JSONObject fetchIndividualRadarAlerts(long cursor, Exception prior) throws Exception {
+        String base = "https://radarx-ai-triple-production.up.railway.app";
+        String[] paths = {
+            "/api/move-radar?quote=USDT&limit=50",
+            "/api/strong-move-radar?quote=USDT&limit=50",
+            "/api/rotation-lag-radar?quote=USDT&limit=50",
+            "/api/liquidity-absorption-radar?quote=USDT&limit=50",
+            "/api/kahir-radar?quote=USDT&limit=50",
+            "/api/doomsday-radar?quote=USDT&limit=50",
+            "/api/professor-radar?quote=USDT&limit=50",
+            "/api/almuqawim-radar?quote=USDT&limit=50",
+            "/api/early-expansion-radar?quote=USDT&limit=50",
+            "/api/coin-hunter-radar?quote=USDT&limit=50&scan=0"
+        };
+        JSONArray merged = new JSONArray();
+        JSONArray radarNames = new JSONArray();
+        boolean any200 = false;
+        Exception last = prior;
+        for (String path : paths) {
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(base + path).openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(8_000);
+                connection.setReadTimeout(20_000);
+                connection.setInstanceFollowRedirects(false);
+                connection.setRequestProperty("Accept", "application/json");
+                connection.setRequestProperty("Accept-Encoding", "identity");
+                int status = connection.getResponseCode();
+                if (status != 200 && status != 503) throw new IllegalStateException("HTTP_" + status + "_" + path);
+                if (status == 200) {
+                    any200 = true;
+                    JSONObject body = new JSONObject(new String(readAll(connection.getInputStream()), StandardCharsets.UTF_8));
+                    JSONObject name = body.optJSONObject("meta");
+                    if (name != null) {
+                        String radarName = name.optString("radar", "");
+                        if (!radarName.isEmpty()) radarNames.put(radarName);
+                    }
+                    JSONArray candidates = body.optJSONArray("alerts");
+                    if (candidates == null) candidates = body.optJSONArray("discoveries");
+                    if (candidates == null) candidates = body.optJSONArray("candidates");
+                    if (candidates != null) {
+                        for (int i = 0; i < candidates.length(); i++) {
+                            JSONObject row = candidates.optJSONObject(i);
+                            if (row == null) continue;
+                            long at = row.optLong("processed_at", row.optLong("detected_at", row.optLong("detectedAt", 0L)));
+                            if (at > cursor) merged.put(row);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                last = e;
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        }
+        if (!any200) throw last == null ? new IllegalStateException("BACKEND_UNAVAILABLE") : last;
+        JSONObject root = new JSONObject();
+        JSONObject meta = new JSONObject();
+        meta.put("paper_trading", true);
+        meta.put("real_order_execution", false);
+        meta.put("confidence_score", "UNKNOWN");
+        root.put("meta", meta);
+        root.put("alerts", merged);
+        root.put("radars", radarNames);
+        return root;
     }
 
     private int notifyNewRadarAlerts(JSONArray alerts) {
