@@ -30,7 +30,50 @@ function stdev(xs){
   const m=mean(a);return Math.sqrt(mean(a.map(x=>(x-m)**2)));
 }
 
-export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
+function safePctChange(current,previous){
+  const c=Number(current),p=Number(previous);
+  return Number.isFinite(c)&&Number.isFinite(p)?c-p:null;
+}
+
+function growthPct(current,previous){
+  const c=Number(current),p=Number(previous);
+  return Number.isFinite(c)&&Number.isFinite(p)&&p>0?(c/p-1)*100:null;
+}
+
+export function buildEarlyActivationContext(row,previous,{minQuoteVolume24h=400000}={}){
+  const currentMove=finite(row?.priceChange24h,0);
+  const deltaMove=safePctChange(currentMove,finite(previous?.priceChange24h,null));
+  const qvGrowth=growthPct(row?.quoteVolume24h,previous?.quoteVolume24h);
+  const tradeGrowth=growthPct(row?.tradeCount24h,previous?.tradeCount24h);
+  const priceGrowth=growthPct(row?.lastPrice,previous?.lastPrice);
+  const range=Number(row?.highPrice24h)-Number(row?.lowPrice24h);
+  const rangePos=range>0&&Number.isFinite(Number(row?.lastPrice))?clamp((Number(row.lastPrice)-Number(row.lowPrice24h))/range*100):50;
+  const prevRange=Number(previous?.highPrice24h)-Number(previous?.lowPrice24h);
+  const prevPos=prevRange>0&&Number.isFinite(Number(previous?.lastPrice))?clamp((Number(previous.lastPrice)-Number(previous.lowPrice24h))/prevRange*100):rangePos;
+  const rangeMigration=rangePos-prevPos;
+  const nearUpper=rangePos>=65;
+  const earlyWindow=currentMove>=-4&&currentMove<=8;
+  const activationImpulseScore=clamp(50+Math.max(0,Number(deltaMove)||0)*120+Math.max(0,Number(priceGrowth)||0)*28+Math.max(0,Number(rangeMigration)||0)*4);
+  const participationScore=clamp(50+Math.max(0,Number(qvGrowth)||0)*12+Math.max(0,Number(tradeGrowth)||0)*10);
+  const structureScore=clamp(45+Math.max(0,Number(rangeMigration)||0)*5+(nearUpper?14:0));
+  const quietScore=clamp(100-Math.abs(currentMove)*7);
+  const activationScore=clamp(activationImpulseScore*.42+participationScore*.24+structureScore*.16+quietScore*.10+(Number(row?.quoteVolume24h)>=minQuoteVolume24h?8:0));
+  const confirmations=[
+    Number.isFinite(deltaMove)&&deltaMove>=0.06,
+    Number.isFinite(priceGrowth)&&priceGrowth>=0.03,
+    Number.isFinite(qvGrowth)&&qvGrowth>=0.05,
+    Number.isFinite(tradeGrowth)&&tradeGrowth>=0.05,
+    Number.isFinite(rangeMigration)&&rangeMigration>=1.5,
+    nearUpper,
+    Number.isFinite(currentMove)&&currentMove>=0
+  ].filter(Boolean).length;
+  const participationAwake=(Number(qvGrowth)>=0.04)||(Number(tradeGrowth)>=0.04);
+  const impulseAwake=(Number(deltaMove)>=0.06)||(Number(priceGrowth)>=0.03)||(Number(rangeMigration)>=1.5);
+  const eligible=earlyWindow&&Number(row?.quoteVolume24h)>=minQuoteVolume24h&&activationScore>=66&&impulseAwake&&participationAwake&&confirmations>=3;
+  return {eligible,activation_score:+activationScore.toFixed(1),delta_move_pct:deltaMove==null?null:+deltaMove.toFixed(3),price_growth_pct:priceGrowth==null?null:+priceGrowth.toFixed(3),quote_volume_growth_pct:qvGrowth==null?null:+qvGrowth.toFixed(3),trade_growth_pct:tradeGrowth==null?null:+tradeGrowth.toFixed(3),range_position_pct:+rangePos.toFixed(1),range_migration_pct:+rangeMigration.toFixed(2),current_move_24h_pct:+currentMove.toFixed(3),confirmations,impulse_awake:impulseAwake,participation_awake:participationAwake,early_window:earlyWindow};
+}
+
+export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now,activation={}){
   const a=closedCandles(oneM,now),b=closedCandles(fiveM,now);
   if(a.length<40||b.length<20){
     return {eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true,one_minute_count:a.length,five_minute_count:b.length};
@@ -155,6 +198,18 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
     (Number.isFinite(buyRatio)?clamp(50-(buyRatio-.5)*250):45)*.10+
     rangeScore*.07+breakoutScore*.06+bbScore*.03+atrScore*.02
   );
+  const earlyConfirmations=[
+    Number.isFinite(r1)&&r1>=0.08,Number.isFinite(r3)&&r3>=0.15,Number.isFinite(r5)&&r5>=0.25,
+    Number.isFinite(volumeRatio)&&volumeRatio>=1.15,Number.isFinite(tradeRatio)&&tradeRatio>=1.10,
+    Number.isFinite(buyRatio)&&buyRatio>=0.515,Number.isFinite(buyDelta)&&buyDelta>=0.005,
+    microBreak||breakUp,Number.isFinite(rangeRatio)&&rangeRatio>=1.10,Number.isFinite(efficiency)&&efficiency>=0.35,
+    Number.isFinite(bbExpansion)&&bbExpansion>=1.08,Number.isFinite(atrRatio)&&atrRatio>=1.10,Number.isFinite(closeLocation)&&closeLocation>=0.62
+  ].filter(Boolean).length;
+  const earlyPriceFollowThrough=(Number.isFinite(r3)&&r3>=0.12)||(Number.isFinite(r5)&&r5>=0.25)||(Number.isFinite(accel)&&accel>=0.12)||microBreak;
+  const earlyParticipation=(Number.isFinite(volumeRatio)&&volumeRatio>=1.12)||(Number.isFinite(tradeRatio)&&tradeRatio>=1.10)||(Number.isFinite(buyRatio)&&buyRatio>=0.515);
+  const earlyStructure=breakUp||microBreak||(Number.isFinite(rangeRatio)&&rangeRatio>=1.08)||(Number.isFinite(emaBurst)&&emaBurst>=68);
+  const earlyScore=clamp(velocityScore*.26+volumeScore*.20+tradeScore*.10+takerScore*.12+rangeScore*.08+breakoutScore*.08+emaBurst*.06+bbScore*.04+efficiencyScore*.03+atrScore*.03);
+  const earlyTrigger=activation?.eligible===true&&Number(activation.activation_score)>=66&&earlyScore>=68&&earlyConfirmations>=4&&earlyPriceFollowThrough&&earlyParticipation&&earlyStructure&&upScore>=downScore;
   const direction=upScore>=downScore?'UP_SURGE':'DOWN_SURGE';
   const compositeScore=Math.max(upScore,downScore);
   const shortReturn=direction==='UP_SURGE'?r3:(Number.isFinite(r3)?-r3:null);
@@ -173,11 +228,12 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
      (Number.isFinite(volumeRatio)&&volumeRatio>=1.50) ||
      microBreak);
   const score=Math.max(compositeScore,flashScore);
-  const strongTrigger=score>=74 && (flashTrigger ||
+  const legacyStrongTrigger=score>=74 && (flashTrigger ||
     ((Number.isFinite(shortReturn)&&shortReturn>=0.65) ||
      (Number.isFinite(volumeRatio)&&volumeRatio>=2.5&&compositeScore>=72) ||
      (Number.isFinite(accel)&&accel>=0.45&&compositeScore>=72)));
-  const stage=strongTrigger?(score>=88?'EXPLOSIVE':'STRONG_MOVE'):score>=68?'BUILDING':'WATCH';
+  const strongTrigger=earlyTrigger||legacyStrongTrigger;
+  const stage=earlyTrigger?'EARLY_ACCELERATION':strongTrigger?(score>=88?'EXPLOSIVE':'STRONG_MOVE'):score>=68?'BUILDING':'WATCH';
 
   const reasons=[];
   const push=(ok,s)=>{if(ok)reasons.push(s)};
@@ -205,6 +261,8 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
     metrics:{
       return_1m:r1,return_3m:r3,return_5m:r5,return_10m:r10,return_20m:r20,acceleration:accel,
       flash_score:flashScore,flash_trigger:flashTrigger,flash_confirmations:flashConfirmations,
+      early_activation_score:Number(activation?.activation_score)||0,early_activation_eligible:activation?.eligible===true,
+      early_confirmations:earlyConfirmations,early_price_follow_through:earlyPriceFollowThrough,early_participation:earlyParticipation,early_structure:earlyStructure,early_trigger:earlyTrigger,
       micro_breakout:microBreak,close_location_pct:closeLocation,
       volume_ratio:volumeRatio,trade_ratio:tradeRatio,taker_buy_ratio:buyRatio,taker_buy_delta:buyDelta,
       range_ratio:rangeRatio,breakout_up:breakUp,breakout_down:breakDown,breakout_distance_up_pct:breakoutDistanceUp,
@@ -219,13 +277,21 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
     },
     trigger:{
       min_3m_move_pct:0.45,
+      early_activation_score:66,
+      early_score:68,
+      early_confirmations:4,
       min_score:74,
       flash_score_trigger:74,
       flash_confirmations:3,
       volume_ratio_trigger:2.5,
       acceleration_trigger_pct:0.45
     },
-    reasons:[...new Set(reasons)].slice(0,12),
+    reasons:[...new Set([...reasons,
+      earlyTrigger?'early activation detected':null,
+      earlyTrigger&&Number(activation?.delta_move_pct)>=0.06?'ticker acceleration confirmed':null,
+      earlyTrigger&&Number(activation?.quote_volume_growth_pct)>=0.05?'24h quote-volume activity accelerating':null,
+      earlyTrigger&&Number(activation?.trade_growth_pct)>=0.05?'24h trade activity accelerating':null
+    ].filter(Boolean))].slice(0,12),
     source:'Binance Public REST',
     detected_at:now,
     processed_at:now,
@@ -236,7 +302,7 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
 }
 
 export function buildStrongMoveAlert(candidate,now=Date.now()){
-  const a=buildStrongMoveAnalysis(candidate.one_minute,candidate.five_minute,candidate.ticker,now);
+  const a=buildStrongMoveAnalysis(candidate.one_minute,candidate.five_minute,candidate.ticker,now,candidate.activation||{});
   const ticker=candidate.ticker||{};
   return {
     id:'STRONG:'+String(ticker.symbol||'UNKNOWN').toUpperCase()+':'+a.direction+':'+now,
@@ -273,9 +339,9 @@ export class StrongMoveRadar {
     if(!store)throw new Error('STORE_REQUIRED');
     this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={
-      quote:'USDT',pollMs:30000,universeRefreshMs:60000,minQuoteVolume24h:1000000,
-      rotationBatchSize:4,topMoverCount:3,alertCooldownMs:12*60*1000,
-      minScore:76, ...config
+      quote:'USDT',pollMs:30000,universeRefreshMs:60000,minQuoteVolume24h:400000,
+      rotationBatchSize:4,topMoverCount:3,earlyActivationCount:6,alertCooldownMs:12*60*1000,
+      minScore:76,earlyMinScore:70, ...config
     };
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
     this.lastTickerMap=new Map();this.lastScanAt=new Map();this.lastAlertAt=new Map();
@@ -310,14 +376,21 @@ export class StrongMoveRadar {
       .filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h&&this.universe.includes(x.symbol));
   }
   selectBatch(rows){
-    const byMove=[...rows].sort((a,b)=>Math.abs(b.priceChange24h)-Math.abs(a.priceChange24h)||b.quoteVolume24h-a.quoteVolume24h);
     const selected=[];
-    for(const x of byMove.slice(0,this.config.topMoverCount))selected.push(x);
-    const n=this.config.rotationBatchSize;
-    for(let i=0;i<n&&this.universe.length;i++){
-      const symbol=this.universe[this.cursor%this.universe.length];this.cursor=(this.cursor+1)%this.universe.length;
-      const row=rows.find(x=>x.symbol===symbol);if(row)selected.push(row);
+    const earlyRows=[];
+    for(const row of rows){
+      const activation=buildEarlyActivationContext(row,this.lastTickerMap.get(row.symbol),{minQuoteVolume24h:this.config.minQuoteVolume24h});
+      if(activation.eligible)earlyRows.push({...row,__activation:activation});
     }
+    const byMove=[...rows].sort((a,b)=>Math.abs(b.priceChange24h)-Math.abs(a.priceChange24h)||b.quoteVolume24h-a.quoteVolume24h);
+    for(const x of byMove.slice(0,this.config.topMoverCount))selected.push({...x,__activation:buildEarlyActivationContext(x,this.lastTickerMap.get(x.symbol),{minQuoteVolume24h:this.config.minQuoteVolume24h})});
+    earlyRows.sort((a,b)=>b.__activation.activation_score-a.__activation.activation_score||b.quoteVolume24h-a.quoteVolume24h);
+    for(const x of earlyRows.slice(0,this.config.earlyActivationCount))selected.push(x);
+    for(let i=0;i<this.config.rotationBatchSize&&this.universe.length;i++){
+      const symbol=this.universe[this.cursor%this.universe.length];this.cursor=(this.cursor+1)%this.universe.length;
+      const row=rows.find(x=>x.symbol===symbol);if(row)selected.push({...row,__activation:buildEarlyActivationContext(row,this.lastTickerMap.get(row.symbol),{minQuoteVolume24h:this.config.minQuoteVolume24h})});
+    }
+    for(const row of rows)this.lastTickerMap.set(row.symbol,{...row});
     return [...new Map(selected.map(x=>[x.symbol,x])).values()];
   }
   async scanRow(row){
@@ -328,17 +401,21 @@ export class StrongMoveRadar {
       this.rest.klines(row.symbol,'1m',{limit:120}),
       this.rest.klines(row.symbol,'5m',{limit:60})
     ]);
+    const activation=row.__activation||{};
+    const ticker={...row};delete ticker.__activation;
     const alert=buildStrongMoveAlert({
-      ticker:row,one_minute:one.candles,five_minute:five.candles
+      ticker,one_minute:one.candles,five_minute:five.candles,activation
     },this.clock());
     this.scans++;
+    const a=alert?.strong_move||{};
+    const m= a.metrics||{};
+    const earlyEligible=a.stage==='EARLY_ACCELERATION'&&a.eligible===true;
+    const shortFollowThrough=(Number(m.return_3m)>=0.12)||(Number(m.return_5m)>=0.25)||(Number(m.acceleration)>=0.12)||(m.micro_breakout===true);
     const alertScore=Math.max(
       Number(alert?.strong_move?.score)||0,
       Number(alert?.strong_move?.component_scores?.flash)||0
     );
-    const a=alert?.strong_move||{};
     const cs=a.component_scores||{};
-    const m=a.metrics||{};
     const gate=evaluateEliteGate({
       radar:'STRONG_MOVE_RADAR',
       direction:a.direction,
@@ -353,11 +430,14 @@ export class StrongMoveRadar {
       relativeScore:Number(m.five_min_trend)||50,
       momentumScore:Math.max(Number(cs.velocity)||0,Number(cs.flash)||0),
       compressionScore:Math.max(Number(cs.bollinger)||0,Number(cs.range)||0),
-      confirmations:Number(m.flash_confirmations)||0,
-      minConfirmations:4,minScore:86,max24hMovePct:8,requireTrigger:true,minCategoryHits:5
+      confirmations:Math.max(Number(m.flash_confirmations)||0,Number(m.early_confirmations)||0),
+      minConfirmations:a?.stage==='EARLY_ACCELERATION'?3:4,
+      minScore:a?.stage==='EARLY_ACCELERATION'?78:86,
+      max24hMovePct:8,requireTrigger:true,minCategoryHits:a?.stage==='EARLY_ACCELERATION'?4:5
     });
     alert.elite_gate=gate;
-    if(!alert.eligible||alertScore<this.config.minScore||!gate.eligible)return alert;
+    if(!alert.eligible||alertScore<(earlyEligible?this.config.earlyMinScore:this.config.minScore)||!gate.eligible)return alert;
+    if(!earlyEligible&&!shortFollowThrough)return alert;
     const lastAlert=this.lastAlertAt.get(row.symbol)||0;
     if(this.clock()-lastAlert<this.config.alertCooldownMs)return alert;
     this.lastAlertAt.set(row.symbol,this.clock());
@@ -395,7 +475,7 @@ export class StrongMoveRadar {
       last_error:this.lastError,
       busy:this.busy,
       rest:this.rest?.health?.()||null,
-      algorithms:['MOMENTUM_BURST','FLASH_ACCELERATION','VOLUME_CLIMAX','TRADE_COUNT_SURGE','TAKER_FLOW_ACCELERATION','DONCHIAN_BREAKOUT','MICRO_BREAKOUT','EMA_BURST','VWAP_DISPLACEMENT','BOLLINGER_EXPANSION','EFFICIENCY_RATIO','ATR_EXPANSION'],
+      algorithms:['MOMENTUM_BURST','FLASH_ACCELERATION','EARLY_TICKER_ACTIVATION','VOLUME_ACTIVITY_ACCELERATION','TRADE_ACTIVITY_ACCELERATION','RANGE_MIGRATION','VOLUME_CLIMAX','TRADE_COUNT_SURGE','TAKER_FLOW_ACCELERATION','DONCHIAN_BREAKOUT','MICRO_BREAKOUT','EMA_BURST','VWAP_DISPLACEMENT','BOLLINGER_EXPANSION','EFFICIENCY_RATIO','ATR_EXPANSION'],
       source:'Binance Public REST',
       closed_candles_only:true,
       paper_trading:true,
