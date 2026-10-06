@@ -155,7 +155,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     LIQUIDITY_ABSORPTION_RADAR:{name:RADAR_NAMES.LIQUIDITY_ABSORPTION_RADAR,instance:liquidityAbsorptionRadar,read:'readLiquidityAbsorptionAlerts'},
     KAHIR_RADAR:{name:RADAR_NAMES.KAHIR_RADAR,instance:kahirRadar,read:'readKahirAlerts'},
     DOOMSDAY_RADAR:{name:RADAR_NAMES.DOOMSDAY_RADAR,instance:doomsdayRadar,read:'readDoomsdayAlerts'},
-    ...(professorRadar?{PROFESSOR_RADAR:{name:RADAR_NAMES.PROFESSOR_RADAR,instance:professorRadar,read:'readProfessorAlerts'}}:{})
+    ...(professorRadar?{PROFESSOR_RADAR:{name:RADAR_NAMES.PROFESSOR_RADAR,instance:professorRadar,read:'readProfessorAlerts'}}:{}),
+    EARLY_EXPANSION_RADAR:{name:RADAR_NAMES.EARLY_EXPANSION_RADAR,instance:earlyExpansionRadar,read:'readEarlyExpansionAlerts'}
   });
   function radarStatus(){
     return Object.entries(radarEntries).map(([id,x])=>{
