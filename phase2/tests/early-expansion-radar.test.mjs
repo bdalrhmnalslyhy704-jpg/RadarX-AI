@@ -223,13 +223,41 @@ test('Notification gate has a dedicated Radar 8 cooldown profile',()=>{
   assert.equal(later.eligible,true);
 });
 
-test('Cross-radar cooldown and duplicate alert isolation are symbol-local',()=>{
+test('Cross-radar cooldown blocks same symbol but not a different symbol',()=>{
   resetRadarNotificationGateForTests();
   const a={radar:'EARLY_EXPANSION_RADAR',symbol:'AAAUSDT',opportunity_score:90,data_quality:75,liquidity_quality:65,risk_flags:[]};
-  const other={radar:'KAHIR_RADAR',symbol:'AAAUSDT',opportunity_score:95,data_quality:90,liquidity_quality:80,risk_flags:[]};
+  const other={radar:'KAHIR_RADAR',symbol:'AAAUSDT',opportunity_score:95,data_quality:90,liquidity_quality:80,risk_flags:[],
+    analysis:{metrics:{one_minute_z:2},algorithms:{PARTICIPATION_REGIME:{score:80}}}};
   const differentSymbol={...other,symbol:'BBBUSD'};
   assert.equal(evaluateRadarNotificationGate(a,{now:2000000}).eligible,true);
   rememberRadarAlert(a,2000000);
-  assert.equal(evaluateRadarNotificationGate(other,{now:2000000+2*60*1000}).eligible,false);
-  assert.ok(evaluateRadarNotificationGate(differentSymbol,{now:2000000+2*60*1000}).eligible);
+  const blocked=evaluateRadarNotificationGate(other,{now:2000000+2*60*1000});
+  assert.equal(blocked.eligible,false);
+  assert.ok(blocked.failures.includes('CROSS_RADAR_COOLDOWN'));
+  assert.equal(evaluateRadarNotificationGate(differentSymbol,{now:2000000+2*60*1000}).eligible,true);
+});
+
+test('Radar 8 local cooldown suppresses a stronger repeat until the cooldown expires',async()=>{
+  resetRadarNotificationGateForTests();
+  let nowTick=4000000,score=84,alerts=0;
+  const rest={
+    request:async(path)=>{
+      if(path==='/api/v3/exchangeInfo')return{data:{symbols:[{symbol:'AAAUSDT',baseAsset:'AA',quoteAsset:'USDT',status:'TRADING',isSpotTradingAllowed:true,permissions:['SPOT']}]},source:'TEST'};
+      if(path==='/api/v3/ticker/24hr')return{data:[{symbol:'AAAUSDT',lastPrice:'1',quoteVolume:'5000000',count:50000,priceChangePercent:'1'}],source:'TEST'};
+      throw new Error('UNEXPECTED_REQUEST:'+path);
+    }
+  };
+  const store={appendEarlyExpansionAlert:async()=>{alerts++;},appendEarlyExpansionEvent:async()=>{}};
+  const pushManager={notifyRadarAlert:async()=>{}};
+  const scanner=new EarlyExpansionRadar({rest,store,pushManager,config:{minQuoteVolume24h:1000000,deepCandidates:1,deepConcurrency:1,alertCooldownMs:10*60*1000},clock:()=>nowTick});
+  scanner.deepScan=async()=>({early_expansion_score:score,decision_band:'PRE_EXPANSION',data_quality:100,liquidity_quality:90,data_stale:false,metrics:{rvol_1m:1.6,rvol_5m:1.5,rvol_15m:1.2,quote_rvol_5m:1.3},volume_metrics:{},liquidity_metrics:{},structure_metrics:{},strategy_evidence:{},trigger_evidence:{},risk_flags:[],reason_codes:[],invalidation:[],estimated_lead_time:'UNKNOWN',source:'TEST',forensic_evidence_score:score,market_regime:{}});
+  scanner.running=true;await scanner.refreshUniverse();
+  assert.equal(await scanner.tick(),true);
+  assert.equal(alerts,1);
+  score=90;nowTick+=5*60*1000;
+  assert.equal(await scanner.tick(),true);
+  assert.equal(alerts,1);
+  nowTick+=6*60*1000;
+  assert.equal(await scanner.tick(),true);
+  assert.equal(alerts,2);
 });
