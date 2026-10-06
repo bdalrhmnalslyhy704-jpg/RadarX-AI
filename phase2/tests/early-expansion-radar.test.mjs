@@ -49,7 +49,7 @@ test('Historical replay never fabricates order-book history and keeps live score
   const x=buildEarlyExpansionEvidence({...f,depth:null,historicalReplay:true,now});
   assert.equal(x.early_expansion_score,null);
   assert.equal(x.liquidity_quality,null);
-  assert.match(x.reason_codes.join('|'),'HISTORICAL_ORDERBOOK_UNAVAILABLE');
+  assert.match(x.reason_codes.join('|'),/HISTORICAL_ORDERBOOK_UNAVAILABLE/);
   assert.equal(x.decision_band,'NO_SIGNAL');
 });
 
