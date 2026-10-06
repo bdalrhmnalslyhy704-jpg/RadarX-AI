@@ -42,7 +42,7 @@ let busy=false;
 const num=(v,d=2)=>Number.isFinite(Number(v))?Number(v).toLocaleString('en-US',{maximumFractionDigits:d}):'—';
 const pct=(v)=>Number.isFinite(Number(v))?Number(v).toFixed(2)+'%':'—';
 function render(body){
- const rows=Array.isArray(body?.candidates)?body.candidates:[];
+ const rows=Array.isArray(body && body.candidates)?body.candidates:[];
  if(!rows.length){cards.innerHTML='<div class="status"><b>لا يوجد مرشح جاهز بعد.</b><br>القاهر يحتاج دورة أو أكثر لبناء خط الأساس لكل عملة.</div>';return;}
  cards.innerHTML=rows.map((x,i)=>{
   const a=x.analysis||{},m=a.metrics||{};
@@ -63,7 +63,7 @@ async function load(){
  status.innerHTML='<b>جاري الفحص</b> — مقارنة كل عملة بخطها الذاتي واستخراج أقوى تغيرات السوق.';
  try{
   const r=await getKahirRadar({quote:'USDT',limit:Number(limit.value)||20});
-  if(!r.ok||!r.body)throw new Error(r.body?.error||r.error||'HTTP_'+(r.status||0));
+  if(!r.ok||!r.body)throw new Error(r.body && r.body.error||r.error||'HTTP_'+(r.status||0));
   const u=r.body.universe||{},h=r.body.monitoring||{};
   status.innerHTML='<b>'+(h.running?'القاهر يعمل':'القاهر متوقف')+'</b> — تمت رؤية '+Number(u.scanned||0)+' عملة Spot • فحص عميق '+Number(u.deep_scanned||0)+' • إجمالي الكون '+Number(u.eligible_spot_symbols||0)+' • آخر دورة '+(r.body.as_of?new Date(r.body.as_of).toLocaleString('ar-SA'):'غير متاح');
   render(r.body);
