@@ -249,7 +249,7 @@ public final class MainActivity extends Activity {
 
 
     private void startBackgroundMonitor() {
-        if (RadarXBackgroundMonitorService.isRunning(this)) return;
+        Log.i("RadarXBackground", "BACKGROUND_START_REQUEST");
         try {
             Intent intent = new Intent(this, RadarXBackgroundMonitorService.class);
             intent.setAction(RadarXBackgroundMonitorService.ACTION_START);
@@ -289,11 +289,13 @@ public final class MainActivity extends Activity {
     private final class RadarXNativeBridge {
         @JavascriptInterface
         public void startBackgroundMonitor() {
+            Log.i("RadarXBackground", "BRIDGE_START_BACKGROUND");
             runOnUiThread(() -> requestNotificationPermissionAndStart());
         }
 
         @JavascriptInterface
         public void stopBackgroundMonitor() {
+            Log.i("RadarXBackground", "BRIDGE_STOP_BACKGROUND");
             runOnUiThread(() -> stopBackgroundMonitor());
         }
 
