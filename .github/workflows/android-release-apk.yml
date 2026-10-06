@@ -129,9 +129,9 @@ jobs:
           if (body.schema_version !== 'RADAR8_V1') throw new Error('RADAR8_SCHEMA_VERSION_INVALID');
           if (body.radar !== 'EARLY_EXPANSION_RADAR') throw new Error('RADAR8_NAME_INVALID');
           if (!body.meta || typeof body.meta.live !== 'boolean') throw new Error('RADAR8_META_LIVE_MISSING');
-          if (body.meta.paper_trading !== true || body.paper_trading !== true) throw new Error('PAPER_TRADING_INVARIANT_FAILED');
-          if (body.meta.real_order_execution !== false || body.real_order_execution !== false) throw new Error('REAL_ORDER_EXECUTION_INVARIANT_FAILED');
-          if (body.meta.confidence_score !== 'UNKNOWN' || body.confidence_score !== 'UNKNOWN') throw new Error('CONFIDENCE_SCORE_INVARIANT_FAILED');
+          if (body.meta.paper_trading !== true) throw new Error('PAPER_TRADING_INVARIANT_FAILED');
+          if (body.meta.real_order_execution !== false) throw new Error('REAL_ORDER_EXECUTION_INVARIANT_FAILED');
+          if (body.meta.confidence_score !== 'UNKNOWN') throw new Error('CONFIDENCE_SCORE_INVARIANT_FAILED');
           for (const key of ['expected_total','received_total','missing_ticker_total','eligible_total','fast_scanned_total','scanned_total','deep_scanned_total','skipped_total','failed_total','coverage_ratio','deep_coverage_ratio']) {
             if (!Object.hasOwn(body.universe ?? {}, key)) throw new Error('RADAR8_COVERAGE_FIELD_MISSING:'+key);
           }
