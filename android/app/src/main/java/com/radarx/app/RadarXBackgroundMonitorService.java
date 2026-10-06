@@ -135,7 +135,7 @@ public final class RadarXBackgroundMonitorService extends Service {
                 JSONArray alerts = root.optJSONArray("alerts");
                 int count = notifyNewRadarAlerts(alerts == null ? new JSONArray() : alerts);
                 JSONArray radars = root.optJSONArray("radars");
-                updateStatus("رادارات مستقلة • " + (radars == null ? 6 : radars.length()) +
+                updateStatus("رادارات مستقلة • " + (radars == null ? 7 : radars.length()) +
                     " • اكتشافات جديدة: " + count);
             } else {
                 updateStatus("الرادارات المستقلة غير متاحة حاليًا؛ لا يتم توليد بيانات صناعية");
@@ -255,6 +255,7 @@ public final class RadarXBackgroundMonitorService extends Service {
             case "LIQUIDITY_ABSORPTION_RADAR": return "Radar 4 — Liquidity Absorption";
             case "KAHIR_RADAR": return "Radar 5 — القاهر";
             case "DOOMSDAY_RADAR": return "Radar 6 — يوم القيامة";
+            case "PROFESSOR_RADAR": return "Radar 7 — البروفيسور";
             default: return "RadarX";
         }
     }
@@ -276,7 +277,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         Notification.Builder builder = notificationBuilder(CHANNEL_STATUS)
             .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
             .setContentTitle("RadarX • الرادارات المستقلة")
-            .setContentText("6 رادارات مستقلة • إشعار واحد من الخلاصة الموحدة")
+            .setContentText("7 رادارات مستقلة • إشعار واحد من الخلاصة الموحدة")
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .setColor(Color.rgb(53, 201, 255))
@@ -347,7 +348,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         NotificationChannel radarAlerts = new NotificationChannel(
             CHANNEL_RADAR_ALERTS, "RadarX Independent Radar Alerts", NotificationManager.IMPORTANCE_HIGH
         );
-        radarAlerts.setDescription("تنبيهات موحدة للرادارات الستة المستقلة");
+        radarAlerts.setDescription("تنبيهات موحدة للرادارات السبعة المستقلة");
         manager.createNotificationChannel(radarAlerts);
     }
 
