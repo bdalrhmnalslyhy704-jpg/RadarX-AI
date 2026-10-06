@@ -310,7 +310,7 @@ export function buildStrongMoveAlert(candidate,now=Date.now()){
     strong_move:a,
     reasons:a.reasons,
     risk_flags:[
-      earlyEligible?'EARLY_ACCELERATION_DETECTED':null,
+      a.early_eligible?'EARLY_ACCELERATION_DETECTED':null,
       Math.abs(finite(ticker.priceChange24h,0))>=20?'24H_ALREADY_EXTENDED':null,
       a.component_scores.taker<45?'SELLING_PRESSURE_HIGH':null,
       a.component_scores.range>90?'VOLATILITY_EXTREME':null
