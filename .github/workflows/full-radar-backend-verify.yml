@@ -1,0 +1,42 @@
+name: Full Radar Backend Verification
+on:
+  push:
+    branches:
+      - backend-full-radars-radar8v2-20261006
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Syntax guards
+        run: |
+          set -euo pipefail
+          for f in phase2/server.mjs phase2/http/api.mjs phase2/config.mjs phase2/core/store.mjs phase2/core/early-expansion-radar.mjs phase2/core/radar-prebreakout-engine.mjs phase2/core/radar-notification-gate.mjs phase2/core/al-muqawim-radar.mjs phase2/core/doomsday-radar.mjs phase2/core/professor-radar.mjs phase2/core/kahir-radar.mjs phase2/core/strong-move-radar.mjs phase2/core/liquidity-absorption-radar.mjs phase2/core/rotation-lag-radar.mjs phase2/core/early-move-sentinel.mjs; do node --check "$f"; done
+      - name: Regression tests
+        run: npm test
+      - name: Route presence guard
+        run: |
+          set -euo pipefail
+          grep -Fq "/api/radar-control" phase2/http/api.mjs
+          grep -Fq "/api/radar-alerts" phase2/http/api.mjs
+          grep -Fq "/api/almuqawim-radar" phase2/http/api.mjs
+          grep -Fq "/api/doomsday-radar" phase2/http/api.mjs
+          grep -Fq "/api/professor-radar" phase2/http/api.mjs
+          grep -Fq "/api/kahir-radar" phase2/http/api.mjs
+          grep -Fq "/api/early-expansion-radar" phase2/http/api.mjs
+          grep -Fq "radar:'EARLY_EXPANSION_RADAR'" phase2/http/api.mjs
+      - name: Paper-only guard
+        run: |
+          set -euo pipefail
+          ! grep -RniE 'real_order_execution[=:][[:space:]]*true|paper_trading[=:][[:space:]]*false|/api/(order|withdraw)' phase2/core
