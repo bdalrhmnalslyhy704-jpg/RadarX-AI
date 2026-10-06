@@ -8,7 +8,9 @@ import {
   buildEarlyExpansionUniverseCoverage,
   decideEarlyExpansionBand,
   boundedMap,
-  localAlertCooldown
+  localAlertCooldown,
+  buildMicroFingerprint,
+  scoreMicroProfile
 } from '../core/early-expansion-radar.mjs';
 import {evaluateRadarNotificationGate,rememberRadarAlert,resetRadarNotificationGateForTests} from '../core/radar-notification-gate.mjs';
 
@@ -89,6 +91,25 @@ test('Alert is Radar 8 and carries all required read-only fields',()=>{
   assert.equal(a.confidence_score,'UNKNOWN');
   assert.equal(a.paper_trading,true);
   assert.equal(a.real_order_execution,false);
+});
+
+test('Radar8 V2 catches the seven supplied missed-mover fingerprints',()=>{
+  const cases=[
+    {symbol:'RLCUSDT',r1:.5897,r5:-.7623,r15:-2.3769,rv1:.895,rv5:.532,tr1:.607,tr5:.463,takerRatio:.7864,takerDelta:.2927,bbRatio:.7651,emaReclaim:false,emaStack:false,relativeStrength:1.1915,rsi:48.94,rsiSlope:7.10,adx:20.51,hlScore:66.7,resistanceDistance:-2.00,vwapDistance:-1.19,accel1:null,accel5:null,macSlope:.00054,location:55,priceChange24hAbs:5},
+    {symbol:'RADUSDT',r1:.8427,r5:-2.0290,r15:4.3605,rv1:2.7086,rv5:.6005,tr1:3.5054,tr5:.8394,takerRatio:.3578,takerDelta:-.2835,bbRatio:1.4022,emaReclaim:true,emaStack:true,relativeStrength:null,rsi:68.98,rsiSlope:12.62,adx:45.14,hlScore:66.7,resistanceDistance:-1.67,vwapDistance:2.61,accel1:null,accel5:null,macSlope:.00062,location:70,priceChange24hAbs:5},
+    {symbol:'ORCAUSDT',r1:.0419,r5:.4489,r15:1.4609,rv1:.8533,rv5:.3244,tr1:.7628,tr5:.4589,takerRatio:.5352,takerDelta:.0558,bbRatio:1.1945,emaReclaim:true,emaStack:true,relativeStrength:1.0908,rsi:60.64,rsiSlope:7.02,adx:11.25,hlScore:100,resistanceDistance:-1.24,vwapDistance:1.01,accel1:null,accel5:null,macSlope:.00105,location:70,priceChange24hAbs:5},
+    {symbol:'API3USDT',r1:-.4565,r5:-.8477,r15:-1.5858,rv1:6.4528,rv5:1.0720,tr1:4.1926,tr5:.9930,takerRatio:.2541,takerDelta:-.3369,bbRatio:.2969,emaReclaim:false,emaStack:false,relativeStrength:-1.875,rsi:36.23,rsiSlope:-3.84,adx:22.82,hlScore:45,resistanceDistance:-1.80,vwapDistance:-1.89,accel1:null,accel5:null,macSlope:.000017,location:72,priceChange24hAbs:5},
+    {symbol:'DIAUSDT',r1:-.1193,r5:-.2983,r15:-.3571,rv1:.3079,rv5:1.2677,tr1:.9302,tr5:.2578,takerRatio:.1567,takerDelta:-.4436,bbRatio:.5207,emaReclaim:true,emaStack:true,relativeStrength:-.4904,rsi:46.17,rsiSlope:-1.56,adx:46.77,hlScore:66.7,resistanceDistance:-.72,vwapDistance:.225,accel1:null,accel5:null,macSlope:-.000038,location:55,priceChange24hAbs:5},
+    {symbol:'OGNUSDT',r1:0,r5:-.1830,r15:.0917,rv1:2.6512,rv5:.6166,tr1:3.0282,tr5:.7389,takerRatio:.4630,takerDelta:-.2796,bbRatio:.3963,emaReclaim:true,emaStack:true,relativeStrength:.4170,rsi:50.09,rsiSlope:-2.44,adx:17.38,hlScore:66.7,resistanceDistance:-.41,vwapDistance:.147,accel1:null,accel5:null,macSlope:-.0000047,location:52,priceChange24hAbs:5},
+    {symbol:'C98USDT',r1:-.1783,r5:-.4159,r15:-.5917,rv1:18.5964,rv5:2.6242,tr1:8.7302,tr5:1.8851,takerRatio:.0119,takerDelta:-.4931,bbRatio:.8182,emaReclaim:false,emaStack:false,relativeStrength:-1.538,rsi:23.0,rsiSlope:-.73,adx:47.57,hlScore:66.7,resistanceDistance:-1.85,vwapDistance:-2.59,accel1:null,accel5:null,macSlope:-.0000009,location:70,priceChange24hAbs:5}
+  ];
+  for(const c of cases){
+    const out=scoreMicroProfile(c);
+    assert.notEqual(out.mode,'EARLY_WATCH',c.symbol);
+    assert.equal(out.eligible,true,c.symbol+':'+JSON.stringify(out));
+    assert.ok(out.score>=68,c.symbol+':'+out.score);
+    assert.ok(out.confirmations>=4,c.symbol+':'+out.confirmations);
+  }
 });
 
 test('Radar8 fast state can produce a candidate without 24h ranking chase',async()=>{
