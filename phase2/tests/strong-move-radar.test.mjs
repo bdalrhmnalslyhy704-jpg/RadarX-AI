@@ -83,7 +83,7 @@ assert.equal(earlyAnalysis.eligible,true);
 assert.ok(earlyAnalysis.metrics.early_trigger);
 assert.ok(earlyAnalysis.metrics.early_confirmations>=4);
 
-const flatRows=make1m().map(x=>({...x,volume:500000,tradeCount:5000,takerBuyBaseVolume:250000}));
+const flatRows=make1m().map((x)=>({...x,open:100,high:100.05,low:99.95,close:100,volume:500000,tradeCount:5000,takerBuyBaseVolume:250000}));
 const flatAnalysis=buildStrongMoveAnalysis(
   flatRows,make5m(),
   {symbol:'FLATUSDT',lastPrice:107,priceChange24h:3,quoteVolume24h:8_000_000,tradeCount24h:200_000},
