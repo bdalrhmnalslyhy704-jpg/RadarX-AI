@@ -253,6 +253,7 @@ jobs:
         run: |
           set -euo pipefail
           find android/app/src/main/assets -maxdepth 1 -type f -name '*.mjs' -print0 | xargs -0 -n1 node --check
+          ! grep -RIn --include='*.mjs' --include='*.html' '\?\?\|\?\.' android/app/src/main/assets || true # older WebView syntax guard
           node --check android/app/src/main/assets/tests/market-radar-integration.test.mjs
           test -s android/app/src/main/assets/index.html
           test -s android/app/src/main/assets/manifest.json
