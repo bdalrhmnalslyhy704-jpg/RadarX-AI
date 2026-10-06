@@ -50,7 +50,8 @@ function historicalTicker(one,ts){
   const past=one.filter(c=>Number(c.closeTime)<=ts);
   const last=past.at(-1);
   if(!last)return null;
-  const prior=past.length>1440?past.at(-(1440+1)):past[0];
+  const target=Number(ts)-24*60*60*1000;
+  const prior=[...past].reverse().find(c=>Number(c.closeTime)<=target)||null;
   const move=prior&&Number(prior.close)>0?(Number(last.close)/Number(prior.close)-1)*100:null;
   return {
     symbol:null,lastPrice:Number(last.close),priceChange24h:move??0,
