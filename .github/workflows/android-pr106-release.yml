@@ -27,16 +27,27 @@ jobs:
       - name: Configure Android SDK tools
         run: |
           set -euo pipefail
-          export ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
-          export ANDROID_HOME="$ANDROID_SDK_ROOT"
-          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/16.0/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
-          test -x "$ANDROID_SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager"
-          if [[ ! -f "$ANDROID_SDK_ROOT/platforms/android-35/android.jar" || ! -x "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" ]]; then
-            yes | "$ANDROID_SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager" --licenses || true
-            "$ANDROID_SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [[ -z "$SDK_ROOT" || ! -d "$SDK_ROOT" ]]; then
+            SDK_ROOT="/usr/local/lib/android/sdk"
           fi
-          test -f "$ANDROID_SDK_ROOT/platforms/android-35/android.jar"
-          test -x "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner"
+          echo "SDK_ROOT=$SDK_ROOT"
+          SDKMANAGER="$(find "$SDK_ROOT" -type f -name sdkmanager -path '*/cmdline-tools/*/bin/sdkmanager' -print 2>/dev/null | sort -V | tail -n 1 || true)"
+          echo "SDKMANAGER=$SDKMANAGER"
+          if [[ -z "$SDKMANAGER" ]]; then
+            echo "::error::sdkmanager was not found under $SDK_ROOT"
+            find /usr/local/lib/android /opt/android-sdk /opt/hostedtoolcache -maxdepth 6 -type f -name sdkmanager -print 2>/dev/null | head -n 50 || true
+            exit 1
+          fi
+          export ANDROID_SDK_ROOT="$SDK_ROOT"
+          export ANDROID_HOME="$SDK_ROOT"
+          export PATH="$(dirname "$SDKMANAGER"):$SDK_ROOT/platform-tools:$PATH"
+          if [[ ! -f "$SDK_ROOT/platforms/android-35/android.jar" || ! -x "$SDK_ROOT/build-tools/35.0.0/apksigner" ]]; then
+            yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+            "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
+          fi
+          test -f "$SDK_ROOT/platforms/android-35/android.jar"
+          test -x "$SDK_ROOT/build-tools/35.0.0/apksigner"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
