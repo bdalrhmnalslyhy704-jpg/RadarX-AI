@@ -1,5 +1,5 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
-import {formatRadarTime12h} from './radar-alert-meta.mjs';
+import {formatRadarTime12h,decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)||0));
@@ -352,7 +352,7 @@ export class KahirRadar{
     if(analysis.eligible&&gate.eligible){
       const lastAlert=this.lastAlertAt.get(row.symbol)||0;
       if(this.clock()-lastAlert>=this.config.alertCooldownMs){
-        const alert=buildKahirAlert(candidate,analysis,this.clock());
+        const alert=decorateRadarAlert(buildKahirAlert(candidate,analysis,this.clock()),'Radar 5 — القاهر');
         alert.elite_gate=gate;
         this.lastAlertAt.set(row.symbol,alert.detected_at);
         await this.store.appendKahirAlert(alert);
