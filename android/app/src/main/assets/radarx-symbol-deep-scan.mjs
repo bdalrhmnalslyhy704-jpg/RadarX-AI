@@ -2,7 +2,7 @@ import {getSymbolDeepScan} from './radarx-backend-client.mjs';
 
 const STYLE_ID='radarx-symbol-deep-style';
 
-const esc=value=>String(value??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc=value=>String(value != null ? value : '').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const num=(v,d=2)=>{
   const n=Number(v);
   return Number.isFinite(n)?n.toLocaleString('en-US',{maximumFractionDigits:d}):'—';
@@ -54,12 +54,12 @@ function renderResult(root,data){
     '<div class="rxd-grid">'+metric('السعر الحالي',p.last==null?'غير متاح':num(p.last,8))+metric('تغير 24h',pct(p.change_24h_pct))+metric('السيولة',num(liq.score,0)+'/100')+metric('ضغط الشراء/البيع',num(press.score,0)+'/100')+'</div>' +
     '<section class="rxd-section"><h3>🧠 القراءة المركبة</h3><div class="rxd-row"><span>الزخم</span><b>'+esc(num(mom.score,1))+'/100 • '+esc(mom.state||'MIXED')+'</b></div><div class="rxd-row"><span>ضغط السوق</span><b>'+esc(press.reading||'—')+'</b></div><div class="rxd-row"><span>سياق الحركة</span><b>'+esc(a.signal_context||'WAIT_FOR_CONFIRMATION')+'</b></div><div class="rxd-row"><span>قوة التحليل</span><b>'+esc(num(a.analysis_strength,1))+'/100</b></div></section>' +
     '<section class="rxd-section"><h3>🎯 الدعم والمقاومة ومنطق الارتداد</h3><div class="rxd-zonegrid"><div class="rxd-zone support"><span>أقرب دعم</span><b>'+esc(num(z.support,8))+'</b><small>'+esc(z.distance_to_support_pct==null?'لا يوجد مستوى قريب':num(z.distance_to_support_pct,2)+'% فوق الدعم')+'</small></div><div class="rxd-zone resistance"><span>أقرب مقاومة</span><b>'+esc(num(z.resistance,8))+'</b><small>'+esc(z.distance_to_resistance_pct==null?'لا يوجد مستوى قريب':num(z.distance_to_resistance_pct,2)+'% تحت المقاومة')+'</small></div></div><div class="rxd-row"><span>الموقع</span><b>'+esc(z.position||'UNKNOWN')+'</b></div><div class="rxd-row"><span>الارتداد</span><b>'+esc(z.bounce_signal||'NOT_CONFIRMED')+'</b></div><div class="rxd-row"><span>النتيجة</span><b>'+esc(z.retest||'NO_RETEST')+'</b></div></section>' +
-    '<section class="rxd-section"><h3>⏱️ توافق الأطر الزمنية</h3><div class="rxd-tf">'+timeframeCard(data.timeframes?.['15m'])+timeframeCard(data.timeframes?.['1h'])+timeframeCard(data.timeframes?.['4h'])+'</div></section>' +
+    '<section class="rxd-section"><h3>⏱️ توافق الأطر الزمنية</h3><div class="rxd-tf">'+timeframeCard(data.timeframes && data.timeframes['15m'])+timeframeCard(data.timeframes && data.timeframes['1h'])+timeframeCard(data.timeframes && data.timeframes['4h'])+'</div></section>' +
     '<section class="rxd-section"><h3>💧 عمق السيولة والصفقات</h3><div class="rxd-row"><span>حجم 24h</span><b>'+esc(num(liq.quote_volume_24h,0))+'</b></div><div class="rxd-row"><span>Taker Buy</span><b>'+esc(press.taker_buy_ratio==null?'—':(Number(press.taker_buy_ratio)*100).toFixed(1)+'%')+'</b></div><div class="rxd-row"><span>Order Book Imbalance</span><b>'+esc(num(press.orderbook_imbalance,3))+'</b></div><div class="rxd-row"><span>عمق ±0.5%</span><b>'+esc(num(liq.near_book_notional,0))+'</b></div></section>' +
     '<section class="rxd-section"><h3>🔬 الخوارزميات المستخدمة</h3><div class="rxd-algos">'+(data.algorithms||[]).map(x=>'<span>'+esc(x)+'</span>').join('')+'</div></section>' +
-    '<section class="rxd-section"><h3>✅ جودة البيانات</h3><div class="rxd-row"><span>الدرجة</span><b>'+esc(num(data.data_quality?.score,0))+'/100</b></div><div class="rxd-row"><span>الشموع</span><b>'+esc(num(data.data_quality?.closed_candles,0))+' مغلقة</b></div><div class="rxd-row"><span>المصدر</span><b>'+esc(data.data_quality?.source||'Binance Public REST')+'</b></div></section>';
-  const warnings=Array.isArray(data?.meta?.source_warnings)?data.meta.source_warnings:[];
-  const liveNow=Boolean(data?.meta?.live&&data?.price?.last);
+    '<section class="rxd-section"><h3>✅ جودة البيانات</h3><div class="rxd-row"><span>الدرجة</span><b>'+esc(num(data.data_quality && data.data_quality.score,0))+'/100</b></div><div class="rxd-row"><span>الشموع</span><b>'+esc(num(data.data_quality && data.data_quality.closed_candles,0))+' مغلقة</b></div><div class="rxd-row"><span>المصدر</span><b>'+esc(data.data_quality && data.data_quality.source||'Binance Public REST')+'</b></div></section>';
+  const warnings=Array.isArray(data && data.meta && data.meta.source_warnings)?data.meta.source_warnings:[];
+  const liveNow=Boolean(data && data.meta && data.meta.live&&data && data.price && data.price.last);
   const statusNode=root.querySelector('[data-rxd-status]');
   statusNode.className='rxd-status ok';
   statusNode.textContent=liveNow
@@ -92,14 +92,14 @@ export function mountSymbolDeepScan(root,options={}){
     try{
       const response=await client.getSymbolDeepScan(symbol);
       if(destroyed)return;
-      if(response?.status!==200||!response?.ok||response?.body?.status!=='ok'){
-        const technical=response?.body?.error||response?.error||('HTTP_'+String(response?.status||0));
-        throw new Error(response?.status===503?'BINANCE_TEMPORARY_UNAVAILABLE:'+technical:technical);
+      if(!response||response.status!==200||!response.ok||!response.body||response.body.status!=='ok'){
+        const technical=(response && response.body && response.body.error)||(response && response.error)||('HTTP_'+String((response && response.status)||0));
+        throw new Error(response && response.status===503?'BINANCE_TEMPORARY_UNAVAILABLE:'+technical:technical);
       }
       renderResult(root,response.body);
     }catch(error){
       status.className='rxd-status err';
-      const msg=String(error?.message||error||'تعذر إكمال الفحص.');
+      const msg=String(error && error.message||error||'تعذر إكمال الفحص.');
       status.textContent=msg.includes('BINANCE_TEMPORARY_UNAVAILABLE')
         ? 'مصدر Binance غير متاح مؤقتًا — أعد المحاولة، ولن يتم عرض سعر أو بيانات وهمية.'
         : msg;
