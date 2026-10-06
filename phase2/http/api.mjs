@@ -260,7 +260,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           return send(res,503,{error:String(e?.message??e),alerts:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'STRONG_MOVE_RADAR'}});
         }
       }
-      if(u.pathname==='/api/rotation-radar'&&req.method==='GET'){
+      if((u.pathname==='/api/rotation-radar'||u.pathname==='/api/rotation-lag-radar')&&req.method==='GET'){
         if(!rotationLagRadar)return send(res,503,{error:'ROTATION_LAG_RADAR_UNAVAILABLE'});
         const sinceRaw=Number(u.searchParams.get('since')||0);
         const limit=Math.max(1,Math.min(100,Math.trunc(Number(u.searchParams.get('limit')||50))));
