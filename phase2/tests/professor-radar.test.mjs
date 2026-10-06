@@ -64,6 +64,8 @@ test('TEST_PROFESSOR: scan fuses public stream + news + Binance technical confir
   assert.equal(snap.news.count,1);
   assert.equal(snap.candidates[0].symbol,'BTCUSDT');
   assert.equal(snap.candidates[0].opinion.action,'PAPER_ENTRY_CANDIDATE');
+  assert.equal(snap.candidates[0].professor_gate.eligible,true,JSON.stringify(snap.candidates[0].professor_gate));
+  assert.equal(snap.candidates[0].notification_gate.eligible,true,JSON.stringify(snap.candidates[0].notification_gate));
   assert.equal(alerts.length,1);
   assert.equal(alerts[0].radar_name,'Radar 7 — البروفيسور');
   assert.equal(alerts[0].professor_gate.eligible,true);
