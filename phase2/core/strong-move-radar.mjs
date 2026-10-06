@@ -114,6 +114,10 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
   const fiveReturn=pct(fiveClose,fivePrev);
   const fiveEma20=ema(b.map(x=>Number(x.close)),20);
   const fiveTrend=Number.isFinite(fiveEma20)&&fiveClose>fiveEma20?75:35;
+  const move24h=finite(ticker?.priceChange24h,0);
+  const quoteVolume24h=finite(ticker?.quoteVolume24h,0);
+  const tradeCount24h=finite(ticker?.tradeCount24h,0);
+  const earlyDailyWindow=move24h>=-3&&move24h<=6;
 
   const velocityScore=clamp(
     (Number.isFinite(r1)?clamp(50+r1*55):45)*0.22+
@@ -129,6 +133,8 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
   const breakoutScore=breakUp?96:breakDown?96:
     Number.isFinite(breakoutDistanceUp)&&breakoutDistanceUp>-0.6?82:
     Number.isFinite(breakoutDistanceDown)&&breakoutDistanceDown>-0.6?82:42;
+  const upBreakoutScore=breakUp?96:
+    Number.isFinite(breakoutDistanceUp)&&breakoutDistanceUp>-0.35?82:42;
   const bbScore=Number.isFinite(bbExpansion)?clamp(48+(bbExpansion-1)*75):45;
   const efficiencyScore=Number.isFinite(efficiency)?clamp(35+efficiency*80):45;
   const atrScore=Number.isFinite(atrRatio)?clamp(50+(atrRatio-1)*70):45;
@@ -158,6 +164,46 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
   const direction=upScore>=downScore?'UP_SURGE':'DOWN_SURGE';
   const compositeScore=Math.max(upScore,downScore);
   const shortReturn=direction==='UP_SURGE'?r3:(Number.isFinite(r3)?-r3:null);
+  const earlyConfirmations=[
+    Number.isFinite(r1)&&r1>=0.08,
+    Number.isFinite(r3)&&r3>=0.20,
+    Number.isFinite(accel)&&accel>=0.08,
+    Number.isFinite(volumeRatio)&&volumeRatio>=1.18,
+    Number.isFinite(tradeRatio)&&tradeRatio>=1.08,
+    Number.isFinite(buyRatio)&&buyRatio>=0.505,
+    Number.isFinite(buyDelta)&&buyDelta>=0.006,
+    Number.isFinite(rangeRatio)&&rangeRatio>=1.12,
+    Number.isFinite(bbExpansion)&&bbExpansion>=1.08,
+    Number.isFinite(efficiency)&&efficiency>=0.30,
+    Number.isFinite(ema9)&&Number.isFinite(ema21)&&ema9>ema21,
+    Number.isFinite(closeLocation)&&closeLocation>=55,
+    Number.isFinite(breakoutDistanceUp)&&breakoutDistanceUp>=-0.35
+  ].filter(Boolean).length;
+  const earlyScore=clamp(
+    velocityScore*.18+
+    volumeScore*.15+
+    tradeScore*.12+
+    takerScore*.16+
+    rangeScore*.10+
+    upBreakoutScore*.10+
+    emaBurst*.07+
+    bbScore*.06+
+    efficiencyScore*.04+
+    atrScore*.02
+  );
+  const earlyTrigger=direction==='UP_SURGE'&&earlyDailyWindow&&
+    earlyScore>=72&&earlyConfirmations>=4&&
+    (Number.isFinite(accel)&&accel>=0.08 ||
+     Number.isFinite(r3)&&r3>=0.20 ||
+     Number.isFinite(volumeRatio)&&volumeRatio>=1.18 ||
+     microBreak);
+  const earlyEligible=earlyTrigger&&
+    move24h<=6&&move24h>=-3&&
+    earlyConfirmations>=5&&
+    (!Number.isFinite(tradeRatio)||tradeRatio>=1.08)&&
+    (!Number.isFinite(buyRatio)||buyRatio>=0.505)&&
+    (!Number.isFinite(efficiency)||efficiency>=0.30)&&
+    closeLocation>=55;
   const flashConfirmations=[
     Number.isFinite(r1)&&r1>=0.20,
     Number.isFinite(r3)&&r3>=0.45,
@@ -177,7 +223,9 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
     ((Number.isFinite(shortReturn)&&shortReturn>=0.65) ||
      (Number.isFinite(volumeRatio)&&volumeRatio>=2.5&&compositeScore>=72) ||
      (Number.isFinite(accel)&&accel>=0.45&&compositeScore>=72)));
-  const stage=strongTrigger?(score>=88?'EXPLOSIVE':'STRONG_MOVE'):score>=68?'BUILDING':'WATCH';
+  const effectiveEligible=earlyEligible||strongTrigger;
+  const stage=earlyEligible?'EARLY_ACCELERATION':
+    strongTrigger?(score>=88?'EXPLOSIVE':'STRONG_MOVE'):score>=68?'BUILDING':'WATCH';
 
   const reasons=[];
   const push=(ok,s)=>{if(ok)reasons.push(s)};
@@ -195,7 +243,8 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
   push(Number.isFinite(vwapDistance)&&vwapDistance>=0.5,'VWAP displacement');
 
   return {
-    eligible:strongTrigger,
+    eligible:effectiveEligible,
+    early_eligible:earlyEligible,
     closed_candles_only:true,
     stage,
     direction,
@@ -204,6 +253,8 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
     down_score:Math.round(downScore*10)/10,
     metrics:{
       return_1m:r1,return_3m:r3,return_5m:r5,return_10m:r10,return_20m:r20,acceleration:accel,
+      early_score:earlyScore,early_trigger:earlyTrigger,early_eligible:earlyEligible,early_confirmations:earlyConfirmations,
+      daily_move_24h:move24h,quote_volume_24h:quoteVolume24h,trade_count_24h:tradeCount24h,
       flash_score:flashScore,flash_trigger:flashTrigger,flash_confirmations:flashConfirmations,
       micro_breakout:microBreak,close_location_pct:closeLocation,
       volume_ratio:volumeRatio,trade_ratio:tradeRatio,taker_buy_ratio:buyRatio,taker_buy_delta:buyDelta,
@@ -219,6 +270,13 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
     },
     trigger:{
       min_3m_move_pct:0.45,
+      early_daily_move_max_pct:6,
+      early_min_acceleration_pct:0.08,
+      early_min_volume_ratio:1.18,
+      early_min_trade_ratio:1.08,
+      early_min_buy_ratio:0.505,
+      early_min_confirmations:5,
+      early_min_score:72,
       min_score:74,
       flash_score_trigger:74,
       flash_confirmations:3,
@@ -252,6 +310,7 @@ export function buildStrongMoveAlert(candidate,now=Date.now()){
     strong_move:a,
     reasons:a.reasons,
     risk_flags:[
+      earlyEligible?'EARLY_ACCELERATION_DETECTED':null,
       Math.abs(finite(ticker.priceChange24h,0))>=20?'24H_ALREADY_EXTENDED':null,
       a.component_scores.taker<45?'SELLING_PRESSURE_HIGH':null,
       a.component_scores.range>90?'VOLATILITY_EXTREME':null
@@ -263,7 +322,7 @@ export function buildStrongMoveAlert(candidate,now=Date.now()){
     real_order_execution:false,
     confidence_score:'UNKNOWN',
     eligible:a.eligible,
-    disclaimer:'رادار الحركة القوية يلتقط توسعًا/تسارعًا ظهر فعليًا؛ لا يضمن استمرار الحركة أو اتجاهها لاحقًا.'
+    disclaimer:'الرادار يقدّم الأولوية لتسارع الحركة قبل الامتداد اليومي، مع فحص الحجم والصفقات وتدفق الشراء والهيكل؛ لا يضمن استمرار الحركة.'
   };
 }
 
@@ -273,9 +332,12 @@ export class StrongMoveRadar {
     if(!store)throw new Error('STORE_REQUIRED');
     this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={
-      quote:'USDT',pollMs:30000,universeRefreshMs:60000,minQuoteVolume24h:1000000,
-      rotationBatchSize:4,topMoverCount:3,alertCooldownMs:12*60*1000,
-      minScore:76, ...config
+      quote:'USDT',pollMs:15000,universeRefreshMs:60000,minQuoteVolume24h:500000,minTradeCount24h:5000,
+      rotationBatchSize:3,topMoverCount:4,earlyPulseCount:5,
+      earlyMin24hMovePct:-3,earlyMax24hMovePct:6,earlyMinScore:78,
+      earlyMinAccelerationPct:0.08,earlyMinVolumeRatio:1.18,earlyMinTradeRatio:1.08,
+      earlyMinBuyRatio:0.505,earlyMinConfirmations:5,earlyAlertCooldownMs:10*60*1000,
+      alertCooldownMs:10*60*1000,minScore:80, ...config
     };
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
     this.lastTickerMap=new Map();this.lastScanAt=new Map();this.lastAlertAt=new Map();
@@ -306,13 +368,36 @@ export class StrongMoveRadar {
   }
   async tickerRows(){
     const r=await this.rest.request('/api/v3/ticker/24hr');
-    return (Array.isArray(r.data)?r.data:[]).map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
-      .filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h&&this.universe.includes(x.symbol));
+    const normalized=(Array.isArray(r.data)?r.data:[]).map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean);
+    for(const row of normalized){
+      const previous=this.lastTickerMap.get(row.symbol);
+      const delta=previous&&Number.isFinite(Number(previous.priceChange24h))
+        ?Number(row.priceChange24h)-Number(previous.priceChange24h):0;
+      row.ticker_delta_24h_pct=Number.isFinite(delta)?delta:0;
+      this.lastTickerMap.set(row.symbol,row);
+    }
+    return normalized
+      .filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h&&this.universe.includes(x.symbol))
+      .filter(x=>!Number.isFinite(Number(x.tradeCount24h))||Number(x.tradeCount24h)>=this.config.minTradeCount24h);
+  }
+  earlyPulseScore(row){
+    const move=Number(row?.priceChange24h)||0;
+    const delta=Number(row?.ticker_delta_24h_pct)||0;
+    const high=Number(row?.highPrice24h)||0,low=Number(row?.lowPrice24h)||0,last=Number(row?.lastPrice)||0;
+    const range=high>low&&last>0?clamp((last-low)/(high-low)*100):50;
+    const calm=(move>=this.config.earlyMin24hMovePct&&move<=this.config.earlyMax24hMovePct)?12:0;
+    const nearHigh=range>=55&&range<=92?10:0;
+    const liquidity=Math.min(15,Math.log10(Math.max(1,Number(row?.quoteVolume24h||0)/Math.max(1,this.config.minQuoteVolume24h)))*7);
+    return delta*240+Math.max(0,move)*4+calm+nearHigh+liquidity;
   }
   selectBatch(rows){
     const byMove=[...rows].sort((a,b)=>Math.abs(b.priceChange24h)-Math.abs(a.priceChange24h)||b.quoteVolume24h-a.quoteVolume24h);
+    const earlyPool=rows
+      .filter(x=>Number(x.priceChange24h)>=this.config.earlyMin24hMovePct&&Number(x.priceChange24h)<=this.config.earlyMax24hMovePct)
+      .sort((a,b)=>this.earlyPulseScore(b)-this.earlyPulseScore(a)||b.quoteVolume24h-a.quoteVolume24h);
     const selected=[];
     for(const x of byMove.slice(0,this.config.topMoverCount))selected.push(x);
+    for(const x of earlyPool.slice(0,this.config.earlyPulseCount))selected.push(x);
     const n=this.config.rotationBatchSize;
     for(let i=0;i<n&&this.universe.length;i++){
       const symbol=this.universe[this.cursor%this.universe.length];this.cursor=(this.cursor+1)%this.universe.length;
@@ -346,18 +431,23 @@ export class StrongMoveRadar {
       priceChange24h:row.priceChange24h,
       liquidityScore:clamp(70+Math.log10(Math.max(1,row.quoteVolume24h/this.config.minQuoteVolume24h))*30),
       dataQualityScore:90,
-      triggerScore:Math.max(Number(cs.flash)||0,Number(cs.breakout)||0),
+      triggerScore:Math.max(Number(cs.flash)||0,Number(cs.breakout)||0,Number(m.early_score)||0),
       structureScore:Math.max(Number(cs.breakout)||0,Number(cs.ema)||0),
       participationScore:mean([Number(cs.volume),Number(cs.trades)])||50,
       flowScore:Number(cs.taker)||50,
       relativeScore:Number(m.five_min_trend)||50,
       momentumScore:Math.max(Number(cs.velocity)||0,Number(cs.flash)||0),
       compressionScore:Math.max(Number(cs.bollinger)||0,Number(cs.range)||0),
-      confirmations:Number(m.flash_confirmations)||0,
-      minConfirmations:4,minScore:86,max24hMovePct:8,requireTrigger:true,minCategoryHits:5
+      confirmations:Math.max(Number(m.flash_confirmations)||0,Number(m.early_confirmations)||0),
+      minConfirmations:a.early_eligible?this.config.earlyMinConfirmations:4,
+      minScore:a.early_eligible?80:86,
+      max24hMovePct:a.early_eligible?this.config.earlyMax24hMovePct:8,
+      requireTrigger:true,
+      minCategoryHits:a.early_eligible?4:5
     });
     alert.elite_gate=gate;
-    if(!alert.eligible||alertScore<this.config.minScore||!gate.eligible)return alert;
+    const requiredScore=a.early_eligible?this.config.earlyMinScore:this.config.minScore;
+    if(!alert.eligible||alertScore<requiredScore||!gate.eligible)return alert;
     const lastAlert=this.lastAlertAt.get(row.symbol)||0;
     if(this.clock()-lastAlert<this.config.alertCooldownMs)return alert;
     this.lastAlertAt.set(row.symbol,this.clock());
@@ -395,7 +485,7 @@ export class StrongMoveRadar {
       last_error:this.lastError,
       busy:this.busy,
       rest:this.rest?.health?.()||null,
-      algorithms:['MOMENTUM_BURST','FLASH_ACCELERATION','VOLUME_CLIMAX','TRADE_COUNT_SURGE','TAKER_FLOW_ACCELERATION','DONCHIAN_BREAKOUT','MICRO_BREAKOUT','EMA_BURST','VWAP_DISPLACEMENT','BOLLINGER_EXPANSION','EFFICIENCY_RATIO','ATR_EXPANSION'],
+      algorithms:['EARLY_ACCELERATION','MOMENTUM_BURST','FLASH_ACCELERATION','VOLUME_CLIMAX','TRADE_COUNT_SURGE','TAKER_FLOW_ACCELERATION','DONCHIAN_BREAKOUT','MICRO_BREAKOUT','EMA_BURST','VWAP_DISPLACEMENT','BOLLINGER_EXPANSION','EFFICIENCY_RATIO','ATR_EXPANSION'],
       source:'Binance Public REST',
       closed_candles_only:true,
       paper_trading:true,
