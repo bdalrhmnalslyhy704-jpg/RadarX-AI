@@ -1,0 +1,39 @@
+name: Radar8 External Production Verify
+on:
+  push:
+    branches:
+      - radar8-external-verify-20261006
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify health
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 30 https://radarx-ai-production.up.railway.app/healthz
+      - name: Verify Radar8 V2 production contract
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 60 'https://radarx-ai-production.up.railway.app/api/early-expansion-radar?quote=USDT&limit=10' -o /tmp/radar8.json
+          node <<'NODE'
+          const fs=require('fs');
+          const b=JSON.parse(fs.readFileSync('/tmp/radar8.json','utf8'));
+          const checks={
+            schema_version:b.schema_version==='RADAR8_V2',
+            radar:b.radar==='EARLY_EXPANSION_RADAR',
+            paper:b.meta?.paper_trading===true,
+            real_execution:b.meta?.real_order_execution===false,
+            confidence:b.meta?.confidence_score==='UNKNOWN',
+            closed_only:b.meta?.closed_candles_only===true,
+            scope:b.universe?.scope==='ALL_ELIGIBLE_SPOT_USDT',
+            micro_scan:b.monitoring?.micro_scan_candidates>0,
+            rotation:b.monitoring?.rotation_reserve>0,
+            errors:b.monitoring?.last_error==null,
+            running:b.monitoring?.running===true
+          };
+          console.log(JSON.stringify({checks,coverage:b.universe,monitoring:b.monitoring,scan:b.scan},null,2));
+          for (const [k,v] of Object.entries(checks)) if(!v) { console.error('FAIL '+k); process.exit(1); }
+          NODE
