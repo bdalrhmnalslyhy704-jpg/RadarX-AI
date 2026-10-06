@@ -351,16 +351,10 @@ jobs:
       - name: Android Emulator online/offline smoke test
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 29
+          api-level: 30
           target: default
           arch: x86_64
           script: bash android/smoke-test.sh
-
-      # Native background-service smoke was already validated successfully in APK 162.
-      # Keep this release workflow deterministic; native Java service code is unchanged in this release.
-      - name: Android 11 launch and background-service smoke
-        if: false
-        run: echo "Native smoke previously validated in APK 162; skipped for asset/backend-only release."
 
       - name: Publish signed APK GitHub Release
         env:
