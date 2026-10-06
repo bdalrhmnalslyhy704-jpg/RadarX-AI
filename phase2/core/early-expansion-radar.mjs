@@ -52,7 +52,7 @@ export function emptyEarlyExpansionUniverse(config=EARLY_EXPANSION_RADAR_DEFAULT
 export function emptyEarlyExpansionSnapshot(config=EARLY_EXPANSION_RADAR_DEFAULTS,quote=config.quote,error=null){
   const q=String(quote||config.quote).trim().toUpperCase();
   return {
-    schema_version:'RADAR8_V1',
+    schema_version:'RADAR8_V2',
     radar:'EARLY_EXPANSION_RADAR',
     radar_name:'Radar 8 — البرق',
     as_of:null,
@@ -139,12 +139,15 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   quote:'USDT',
   pollMs:45000,
   universeRefreshMs:15*60*1000,
-  minQuoteVolume24h:750000,
-  minLiquidityQuality:60,
-  maxSpreadBps:20,
+  minQuoteVolume24h:350000,
+  minLiquidityQuality:58,
+  maxSpreadBps:22,
   minDataQuality:70,
+  microScanCandidates:36,
+  rotationReserve:8,
   deepCandidates:10,
-  quietReserve:3,
+  quietReserve:8,
+  microConcurrency:6,
   deepConcurrency:4,
   oneMinuteKlines:180,
   fiveMinuteKlines:180,
@@ -161,9 +164,11 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   hardExtended1hMovePct:8,
   hardExtended15mMovePct:6,
   minAlertScore:82,
-  preExpansionScore:72,
-  breakoutDevelopingScore:82,
-  watchEarlyScore:60,
+  preExpansionScore:70,
+  breakoutDevelopingScore:80,
+  watchEarlyScore:58,
+  minMicroFingerprintScore:68,
+  minMicroConfirmations:4,
   alertCooldownMs:10*60*1000,
   minRealertScoreDelta:5,
   retryAttempts:1,
@@ -713,6 +718,127 @@ export function buildEarlyExpansionAlert(candidate,now=Date.now()){
   },'Radar 8 — البرق');
 }
 
+
+function symbolHash(symbol){
+  let h=2166136261>>>0;
+  for(const ch of String(symbol||'')){h^=ch.charCodeAt(0);h=Math.imul(h,16777619);}
+  return h>>>0;
+}
+function microRvol(rows,n=20){
+  if(rows.length<n+1)return null;
+  const now=Number(rows.at(-1)?.volume),base=median(rows.slice(-n-1,-1).map(x=>Number(x.volume)));
+  return Number.isFinite(now)&&Number.isFinite(base)&&base>0?now/base:null;
+}
+function microTradeRvol(rows,n=20){
+  if(rows.length<n+1)return null;
+  const now=Number(rows.at(-1)?.tradeCount),base=median(rows.slice(-n-1,-1).map(x=>Number(x.tradeCount)));
+  return Number.isFinite(now)&&Number.isFinite(base)&&base>0?now/base:null;
+}
+function microTaker(rows,n=5){
+  const a=rows.slice(-n);
+  const vol=a.reduce((s,x)=>s+Math.max(0,Number(x.volume)||0),0);
+  const buy=a.reduce((s,x)=>s+Math.max(0,Number(x.takerBuyBaseVolume)||0),0);
+  const ratio=vol>0?buy/vol:null;
+  const baseRows=rows.slice(-31,-n);
+  const base=median(baseRows.map(x=>{const v=Number(x.volume),b=Number(x.takerBuyBaseVolume);return v>0?b/v:null;}).filter(Number.isFinite));
+  return {ratio,delta:Number.isFinite(ratio)&&Number.isFinite(base)?ratio-base:null};
+}
+function microSeriesIssues(raw,tf,now,cfg){
+  const a=Array.isArray(raw)?raw:[];
+  const issues=[...futureIssues(a,now)];
+  const rows=closed(a,now);
+  if(!rows.length)issues.push('MISSING_CANDLES:'+tf);
+  else{
+    const v=validateSeries(rows,tf);if(!v.valid)issues.push(...v.issues);
+    const limit=Number(cfg[`freshness${tf==='1m'?'1m':tf==='5m'?'5m':tf==='15m'?'15m':tf==='1h'?'1h':'4h'}Ms`]??900000);
+    if(now-Number(rows.at(-1).closeTime)>limit)issues.push('STALE_DATA:'+tf);
+  }
+  return {rows,issues};
+}
+function microModeAndScore(m){
+  const participation=clamp(50+(Number.isFinite(m.rv1)?Math.max(0,m.rv1-1)*18:0)+(Number.isFinite(m.rv5)?Math.max(0,m.rv5-1)*12:0)+(Number.isFinite(m.tr1)?Math.max(0,m.tr1-1)*12:0));
+  const tradeParticipation=clamp(50+(Number.isFinite(m.tr1)?Math.max(0,m.tr1-1)*20:0)+(Number.isFinite(m.tr5)?Math.max(0,m.tr5-1)*12:0));
+  const structure=clamp(Math.max(Number(m.hlScore)||45,m.emaStack?92:m.emaReclaim?78:45));
+  const resistance=Number.isFinite(m.resistanceDistance)?(m.breakoutBroken?96:m.resistanceDistance>=-1.5?94:m.resistanceDistance>=-3?82:m.resistanceDistance>=-6?66:42):45;
+  const compression=Number.isFinite(m.bbRatio)?clamp(96-Math.max(0,m.bbRatio-.45)*70):45;
+  const ema=m.emaStack?92:m.emaReclaim?78:45;
+  const relative=Number.isFinite(m.relativeStrength)?clamp(50+m.relativeStrength*140):45;
+  const vwapScore=Number.isFinite(m.vwapDistance)?clamp(50+m.vwapDistance*70+(Number.isFinite(m.r5)&&m.r5>0?12:0)):45;
+  const pressure=Number.isFinite(m.takerRatio)?clamp(50+(m.takerRatio-.5)*260+(m.takerDelta||0)*350):45;
+  const adxScore=Number.isFinite(m.adx)?clamp(m.adx*2.2):45;
+  const acceptance=Number.isFinite(m.location)?clamp(m.location*1.05):45;
+  const momentumTurn=clamp(50+(Number(m.accel5)||0)*40+(Number(m.accel1)||0)*80+(Number(m.rsiSlope)||0)*1.8+(Number(m.macSlope)||0)*35);
+  const absorption=(
+    ((Number.isFinite(m.rv1)&&m.rv1>=2)||(Number.isFinite(m.tr1)&&m.tr1>=2)||(Number.isFinite(m.rv5)&&m.rv5>=1.2)) &&
+    Number.isFinite(m.r1)&&Math.abs(m.r1)<=1.2 &&
+    Number.isFinite(m.takerRatio)&&m.takerRatio<.40 &&
+    ((Number.isFinite(m.bbRatio)&&m.bbRatio<=.90)||(Number.isFinite(m.rangeRatio)&&m.rangeRatio<=.78)||Number.isFinite(m.resistanceDistance)&&m.resistanceDistance>=-2.5)
+  );
+  const reversalAccumulation=pressure>=72&&resistance>=78&&(
+    momentumTurn>=55||compression>=70||(Number.isFinite(m.rsi)&&m.rsi>=38&&m.rsi<=56)
+  );
+  const participationBreak=(
+    (participation>=68||tradeParticipation>=68||pressure>=72)&&
+    resistance>=78&&structure>=70&&
+    (relative>=58||vwapScore>=60||compression>=72||ema>=72)
+  );
+  const quietCompression=compression>=82&&structure>=72&&resistance>=78&&(ema>=72||relative>=58||vwapScore>=60);
+  const mode=absorption&&resistance>=72?'ABSORPTION_IGNITION':
+    reversalAccumulation?'REVERSAL_ACCUMULATION':
+    participationBreak?'PARTICIPATION_BREAKOUT_BUILD':
+    quietCompression?'QUIET_COMPRESSION_BUILD':'EARLY_WATCH';
+  const checks=[
+    participation>=65||tradeParticipation>=65,
+    resistance>=78,structure>=70,compression>=72,ema>=72,
+    momentumTurn>=60,relative>=58,vwapScore>=60,pressure>=65||absorption,adxScore>=55
+  ];
+  const confirmations=checks.filter(Boolean).length;
+  const base=(participation*.15+tradeParticipation*.10+structure*.12+resistance*.12+compression*.10+ema*.08+momentumTurn*.08+relative*.08+vwapScore*.06+pressure*.04+adxScore*.04+acceptance*.03);
+  const modeBoost=mode==='ABSORPTION_IGNITION'?11:mode==='REVERSAL_ACCUMULATION'?9:mode==='QUIET_COMPRESSION_BUILD'?8:mode==='PARTICIPATION_BREAKOUT_BUILD'?5:0;
+  const score=clamp(base+modeBoost);
+  const antiChase=Number(m.priceChange24hAbs)<18&&(!Number.isFinite(m.r15)||Math.abs(m.r15)<6);
+  const eligible=antiChase&&score>=68&&confirmations>=4&&mode!=='EARLY_WATCH';
+  return {score,confirmations,mode,eligible,antiChase,absorption,components:{participation,tradeParticipation,structure,resistance,compression,ema,momentumTurn,relativeStrength:relative,vwap:vwapScore,pressure,adx:adxScore,acceptance}};
+}
+export function buildMicroFingerprint({oneMinute=[],fiveMinute=[],btcFiveMinute=[],ticker={},now=Date.now(),config=EARLY_EXPANSION_RADAR_DEFAULTS}={}){
+  const cfg={...EARLY_EXPANSION_RADAR_DEFAULTS,...config};
+  const i1=microSeriesIssues(oneMinute,'1m',now,cfg),i5=microSeriesIssues(fiveMinute,'5m',now,cfg),ib=microSeriesIssues(btcFiveMinute,'5m',now,cfg);
+  const issues=[...i1.issues,...i5.issues,...ib.issues];
+  if(issues.length)return {eligible:false,stage:'DATA_INSUFFICIENT',score:null,confirmation_count:0,confirmation_total:10,mode:'DATA_INSUFFICIENT',closed_candles_only:true,reason_codes:[...new Set(issues)].slice(0,30),risk_flags:[],metrics:{},category_scores:{}};
+  const m1=i1.rows,m5=i5.rows,btc=ib.rows;
+  if(m1.length<80||m5.length<40||btc.length<20)return {eligible:false,stage:'WARMING_UP',score:null,confirmation_count:0,confirmation_total:10,mode:'WARMING_UP',closed_candles_only:true,reason_codes:['MICRO_FINGERPRINT_WARMING_UP'],risk_flags:[],metrics:{},category_scores:{}};
+  const r1=returns(m1,1),r3=returns(m1,3),r5=returns(m5,1),r15=returns(m5,3);
+  const prev5=returns(m5.slice(0,-3),3),prev1=returns(m1.slice(0,-3),3);
+  const accel5=Number.isFinite(r15)&&Number.isFinite(prev5)?r15-prev5:null;
+  const accel1=Number.isFinite(r3)&&Number.isFinite(prev1)?r3-prev1:null;
+  const rv1=microRvol(m1,30),rv5=microRvol(m5,20),tr1=microTradeRvol(m1,30),tr5=microTradeRvol(m5,20),taker=microTaker(m1,5);
+  const b=bollinger(m5,20),hist=bbWidthHistory(m5,20,25),bbBase=median(hist),bbRatio=Number.isFinite(b?.width)&&bbBase>0?b.width/bbBase:null;
+  const rangeNow=(Number(m5.at(-1).high)-Number(m5.at(-1).low))/Math.max(Number(m5.at(-1).close),1e-12)*100;
+  const rangeBase=median(m5.slice(-31,-1).map(x=>(Number(x.high)-Number(x.low))/Math.max(Number(x.close),1e-12)*100));
+  const rangeRatio=rangeBase>0?rangeNow/rangeBase:null;
+  const atrNow=atr(m5,14),atrBase=median(Array.from({length:20},(_,k)=>{const end=m5.length-k;if(end<16)return null;return atr(m5.slice(0,end+1),14);}).filter(Number.isFinite));
+  const atrRatio=Number.isFinite(atrNow)&&atrBase>0?atrNow/atrBase:null;
+  const cs=closes(m5),e9=ema(cs,9),e21=ema(cs,21),e50=ema(cs,50),emaStack=Number.isFinite(e9)&&Number.isFinite(e21)&&Number.isFinite(e50)&&e9>=e21&&e21>=e50,emaReclaim=Number.isFinite(e9)&&Number.isFinite(e21)&&e9>=e21;
+  const vw=vwap(m5,20),vwDist=Number.isFinite(vw)&&vw>0?(Number(m5.at(-1).close)/vw-1)*100:null;
+  const rs=microRelativeStrength(m5,btc);
+  const mac=macd(m5),macPrev=macd(m5.slice(0,-3)),macSlope=mac&&macPrev&&Number.isFinite(mac.histogram)&&Number.isFinite(macPrev.histogram)?mac.histogram-macPrev.histogram:null;
+  const rsiNow=rsi(m5,14),rsiPrev=rsi(m5.slice(0,-3),14),rsiSlope=Number.isFinite(rsiNow)&&Number.isFinite(rsiPrev)?rsiNow-rsiPrev:null;
+  const adxObj=adx(m5,14),adxNow=adxObj?.adx??null;
+  const hl=higherLowScore(m5.slice(-48)),br=breakoutInfo(m5,20),location=closePosition(m5,30);
+  const price24Abs=Math.abs(Number(ticker.priceChange24h)||0);
+  const m={rv1,rv5,tr1,tr5,takerRatio:taker.ratio,takerDelta:taker.delta,bbRatio,rangeRatio,atrRatio,emaStack,emaReclaim,relativeStrength:rs,r1,r5,r15,accel5,accel1,rsi:rsiNow,rsiSlope,macSlope,adx:adxNow,hlScore:hl.score,resistanceDistance:br.distance_pct,breakoutBroken:br.broken,location,vwapDistance:vwDist,priceChange24hAbs:price24Abs};
+  const prof=microModeAndScore(m);
+  const stage=!prof.antiChase?'ANTI_CHASE':prof.eligible?(prof.mode==='ABSORPTION_IGNITION'?'IGNITION_BUILD':'PRE_BREAK'):(prof.score>=58?'WATCH':'BASE_BUILD');
+  return {
+    eligible:prof.eligible,stage,score:Number(prof.score.toFixed(1)),mode:prof.mode,confirmation_count:prof.confirmations,confirmation_total:10,closed_candles_only:true,
+    metrics:{return_1m:r1,return_3m:r3,return_5m:r5,return_15m:r15,acceleration_1m_pct:accel1,acceleration_5m_pct:accel5,rvol_1m:rv1,rvol_5m:rv5,trade_rvol_1m:tr1,trade_rvol_5m:tr5,taker_buy_ratio:taker.ratio,taker_buy_delta:taker.delta,bb_width:b?.width??null,bb_ratio:bbRatio,atr_ratio:atrRatio,ema9:e9,ema21:e21,ema50:e50,vwap:vw,vwap_distance_pct:vwDist,relative_strength_5m_pct:rs,macd_hist:mac?.histogram??null,macd_slope:macSlope,rsi:rsiNow,rsi_slope:rsiSlope,adx:adxNow,higher_low_count:hl.score,resistance_distance_pct:br.distance_pct,resistance:br.resistance,close_location_pct:location,range_compression_ratio:rangeRatio,price_change_24h_abs:price24Abs,absorption:prof.absorption},
+    category_scores:prof.components,
+    reasons:[prof.components.participation>=75?'MICRO_VOLUME_ACCELERATION':null,prof.components.tradeParticipation>=75?'MICRO_TRADE_ACCELERATION':null,prof.absorption?'LIQUIDITY_ABSORPTION_REVERSAL':null,prof.components.compression>=82?'MICRO_COMPRESSION':null,prof.components.structure>=70?'MICRO_STRUCTURE':null,prof.components.ema>=72?'MICRO_EMA_RECLAIM':null,prof.components.resistance>=78?'MICRO_RESISTANCE_PRESSURE':null,prof.components.relativeStrength>=60?'MICRO_RELATIVE_STRENGTH':null,prof.components.vwap>=60?'MICRO_VWAP_RECLAIM':null,prof.components.momentumTurn>=60?'MICRO_MOMENTUM_TURN':null,prof.components.adx>=55?'MICRO_ADX_TREND':null,prof.mode==='REVERSAL_ACCUMULATION'?'MICRO_REVERSAL_ACCUMULATION':null].filter(Boolean),
+    risk_flags:[!prof.antiChase?'MICRO_ANTI_CHASE':null,price24Abs>=12?'MICRO_DAILY_EXTENSION_WARNING':null,Number.isFinite(r15)&&Math.abs(r15)>=5?'MICRO_FAST_EXTENSION_WARNING':null].filter(Boolean),
+    source:'Binance Public REST'
+  };
+}
+
 export class EarlyExpansionRadar{
   constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
@@ -769,128 +895,115 @@ export class EarlyExpansionRadar{
     this.fastState.set(row.symbol,history);
     return fast;
   }
-  selectDeep(rows,fastBySymbol){
-    const candidates=rows.map(row=>{
+  selectMicro(rows,fastBySymbol,cycle=0){
+    const all=rows.map(row=>{
       const fast=fastBySymbol.get(row.symbol)||{};
-      return {...row,fast,_preScore:fastCandidateScore(row,fast,this.config),_quietScore:quietCandidateScore(row,fast,this.config)};
+      const quiet=quietCandidateScore(row,fast,this.config);
+      const fastScore=fastCandidateScore(row,fast,this.config);
+      const rotation=((symbolHash(row.symbol)+Math.imul(cycle,2654435761))>>>0)/4294967296;
+      return {...row,fast,_microPreScore:fastScore*.30+quiet*.25+(50+rotation*50)*.15,_quietScore:quiet,_rotation:rotation};
     });
-    const byFast=[...candidates].sort((a,b)=>b._preScore-a._preScore||a.symbol.localeCompare(b.symbol));
-    const byQuiet=[...candidates].sort((a,b)=>b._quietScore-a._quietScore||Math.abs(a.priceChange24h)-Math.abs(b.priceChange24h)||a.symbol.localeCompare(b.symbol));
-    const n=Math.max(1,Math.trunc(this.config.deepCandidates));
-    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve)),n-1);
-    const selected=[...byFast.slice(0,n-q),...byQuiet.slice(0,q)];
-    const uniq=[...new Map(selected.map(x=>[x.symbol,x])).values()];
-    if(uniq.length<n)for(const x of byFast){if(uniq.length>=n)break;if(!uniq.some(y=>y.symbol===x.symbol))uniq.push(x);}
-    return uniq.slice(0,n);
+    const n=Math.max(1,Math.trunc(this.config.microScanCandidates||36));
+    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve||8)),n-1);
+    const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve||8)),Math.max(0,n-q-1));
+    const byScore=[...all].sort((a,b)=>b._microPreScore-a._microPreScore||a.symbol.localeCompare(b.symbol));
+    const byQuiet=[...all].sort((a,b)=>b._quietScore-a._quietScore||Math.abs(a.priceChange24h)-Math.abs(b.priceChange24h)||a.symbol.localeCompare(b.symbol));
+    const byRotation=[...all].sort((a,b)=>a._rotation-b._rotation||a.symbol.localeCompare(b.symbol));
+    return [...new Map([...byScore.slice(0,n-q-r),...byQuiet.slice(0,q),...byRotation.slice(0,r)].map(x=>[x.symbol,x])).values()].slice(0,n);
   }
-  async deepScan(row,fast,marketContext){
-    const cfg=this.config;
-    const tasks=['1m','5m','15m','1h','4h'];
-    const limits={'1m':cfg.oneMinuteKlines,'5m':cfg.fiveMinuteKlines,'15m':cfg.fifteenMinuteKlines,'1h':cfg.oneHourKlines,'4h':cfg.fourHourKlines};
-    const series={};const sources=[];let depth=null;
-    for(const tf of tasks){
-      const r=await withRetry(()=>this.rest.klines(row.symbol,tf,{limit:limits[tf]}),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep});
-      series[tf]=r.candles;sources.push(r.source);
+  selectDeepFromMicro(results,cycle=0){
+    const valid=(results||[]).filter(x=>x&&!x.failed&&x.micro_fingerprint?.score!=null);
+    const n=Math.max(1,Math.trunc(this.config.deepCandidates||10));
+    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve||8)),n-1);
+    const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve||2)),Math.max(0,n-q-1));
+    const byScore=[...valid].sort((a,b)=>Number(b.micro_fingerprint?.score||-1)-Number(a.micro_fingerprint?.score||-1));
+    const byQuiet=[...valid].sort((a,b)=>Number(b.micro_fingerprint?.metrics?.price_change_24h_abs??999)-Number(a.micro_fingerprint?.metrics?.price_change_24h_abs??999));
+    const byRotation=[...valid].sort((a,b)=>(((symbolHash(a.symbol)+Math.imul(cycle,2654435761))>>>0)-((symbolHash(b.symbol)+Math.imul(cycle,2654435761))>>>0)));
+    return [...new Map([...byScore.slice(0,n-q-r),...byQuiet.slice(0,q),...byRotation.slice(0,r)].map(x=>[x.symbol,x])).values()].slice(0,n);
+  }
+  async microScan(row,fast,btcFiveMinute){
+    const [m1,m5]=await Promise.all([
+      withRetry(()=>this.rest.klines(row.symbol,'1m',{limit:this.config.oneMinuteKlines}),{attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep}),
+      withRetry(()=>this.rest.klines(row.symbol,'5m',{limit:this.config.fiveMinuteKlines}),{attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep})
+    ]);
+    return {row,fast,oneMinute:m1.candles,fiveMinute:m5.candles,micro_fingerprint:buildMicroFingerprint({oneMinute:m1.candles,fiveMinute:m5.candles,btcFiveMinute,ticker:row,now:this.clock(),config:this.config}),source:sourceList([m1.source,m5.source])};
+  }
+
+  async deepScan(row,fast,marketContext,micro){
+    const cfg=this.config,series={'1m':micro.oneMinute,'5m':micro.fiveMinute},sources=[micro.source];
+    for(const tf of ['15m','1h','4h']){
+      const rr=await withRetry(()=>this.rest.klines(row.symbol,tf,{limit:({'15m':cfg.fifteenMinuteKlines,'1h':cfg.oneHourKlines,'4h':cfg.fourHourKlines})[tf]}),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep});
+      series[tf]=rr.candles;sources.push(rr.source);
     }
-    const d=await withRetry(()=>this.rest.depth(row.symbol,100),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep});
-    depth=d.data;sources.push(d.source);
-    return buildEarlyExpansionEvidence({series,ticker:row,depth,marketContext,fastContext:fast,now:this.clock(),config:cfg,historicalReplay:false,sourceList:sources});
+    const dd=await withRetry(()=>this.rest.depth(row.symbol,100),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep});
+    sources.push(dd.source);
+    return buildEarlyExpansionEvidence({series,ticker:row,depth:dd.data,marketContext,fastContext:fast,now:this.clock(),config:cfg,historicalReplay:false,sourceList:sources});
   }
   async tick({quote=this.config.quote}={}){
     if(!this.running||this.busy)return false;
-    this.busy=true;
+    this.busy=true;const scanStartedAt=this.clock();
     try{
-      const q=this.normalizeQuote(quote);
-      const now=this.clock();
+      const q=this.normalizeQuote(quote),now=this.clock();
       if(now-this.universeAt>this.config.universeRefreshMs||!this.universe.length)await this.refreshUniverse(q);
       const {rows:rawRows,source:tickerSource}=await this.tickerRows(q);
-      const universeExpected=[...this.universe];
-      const universeSet=new Set(universeExpected);
-      const receivedSymbols=[...new Set(rawRows.map(x=>x.symbol).filter(x=>universeSet.has(x)))];
-      const all=rawRows.filter(x=>universeSet.has(x.symbol));
-      const eligible=all.filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h);
-      const fastBySymbol=new Map();
-      for(const row of eligible)fastBySymbol.set(row.symbol,this.updateFastState(row));
+      const expected=[...this.universe],set=new Set(expected);
+      const receivedSymbols=[...new Set(rawRows.map(x=>x.symbol).filter(x=>set.has(x)))];
+      const eligible=rawRows.filter(x=>set.has(x.symbol)&&x.quoteVolume24h>=this.config.minQuoteVolume24h);
+      const fastBySymbol=new Map();for(const row of eligible)fastBySymbol.set(row.symbol,this.updateFastState(row));
       this.fastScannedTotal=eligible.length;
-      const selected=this.selectDeep(eligible,fastBySymbol);
-      let marketContext={};
+      const cycle=this.scans+1,selected=this.selectMicro(eligible,fastBySymbol,cycle);
+      let btcFive=[],marketContext={};
       try{
-        const [m5,m1]=await Promise.all([
-          this.rest.klines('BTCUSDT','5m',{limit:80}),
-          this.rest.klines('BTCUSDT','1h',{limit:60})
-        ]);
-        marketContext={fiveMinute:m5.candles,oneHour:m1.candles};
+        const [m5,m1]=await Promise.all([this.rest.klines('BTCUSDT','5m',{limit:Math.max(80,this.config.fiveMinuteKlines||180)}),this.rest.klines('BTCUSDT','1h',{limit:60})]);
+        btcFive=m5.candles||[];marketContext={fiveMinute:m5.candles||[],oneHour:m1.candles||[]};
       }catch(e){this.noteError(e,'market-context');}
-      const scanned=await boundedMap(selected,this.config.deepConcurrency,async row=>{
-        const fast=fastBySymbol.get(row.symbol)||{};
+      const microScanned=await boundedMap(selected,this.config.microConcurrency,async row=>{
+        try{return await this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFive);}
+        catch(e){this.failedTotal++;this.noteError(e,'micro-row');return {symbol:row.symbol,failed:true,error:String(e?.message??e),micro_fingerprint:{score:null,confirmation_count:0,eligible:false,closed_candles_only:true},source:sourceList([tickerSource])};}
+      });
+      const deepTargets=this.selectDeepFromMicro(microScanned,cycle);
+      const scanned=await boundedMap(deepTargets,this.config.deepConcurrency,async micro=>{
+        const row=micro.row,fast=fastBySymbol.get(row.symbol)||{};
         try{
-          const evidence=await this.deepScan(row,fast,marketContext);
-          const candidate={
+          const evidence=await this.deepScan(row,fast,marketContext,micro),fp=micro.micro_fingerprint;
+          const microScore=Number(fp?.score),deepScore=Number(evidence.early_expansion_score);
+          const promoted=Boolean(fp?.eligible)&&Number.isFinite(microScore);
+          const finalScore=promoted?Math.max(Number.isFinite(deepScore)?deepScore:0,microScore):evidence.early_expansion_score;
+          const finalBand=promoted?(fp.mode==='ABSORPTION_IGNITION'||fp.mode==='REVERSAL_ACCUMULATION'?'PRE_EXPANSION':fp.mode==='PARTICIPATION_BREAKOUT_BUILD'?'BREAKOUT_DEVELOPING':'PRE_EXPANSION'):evidence.decision_band;
+          return {
             symbol:row.symbol,last_price:row.lastPrice,price_change_24h:row.priceChange24h,
-            early_expansion_score:evidence.early_expansion_score,decision_band:evidence.decision_band,
+            early_expansion_score:Number.isFinite(finalScore)?Number(finalScore.toFixed(1)):null,decision_band:finalBand,
             data_quality:evidence.data_quality,liquidity_quality:evidence.liquidity_quality,data_stale:evidence.data_stale,
-            metrics:evidence.metrics,volume_metrics:{
-              rvol_1m:evidence.metrics.rvol_1m,rvol_5m:evidence.metrics.rvol_5m,rvol_15m:evidence.metrics.rvol_15m,
-              quote_rvol_5m:evidence.metrics.quote_rvol_5m,fast_volume_acceleration:fast.volume_accel_ratio
-            },
-            liquidity_metrics:{
-              liquidity_quality:evidence.liquidity_quality,spread_bps:evidence.metrics.spread_bps,
-              orderbook_imbalance:evidence.metrics.orderbook_imbalance,depth_notional:evidence.metrics.depth_notional
-            },
-            structure_metrics:evidence.structure_metrics,strategy_evidence:evidence.strategy_evidence,
-            trigger_evidence:evidence.trigger_evidence,risk_flags:evidence.risk_flags,reason_codes:evidence.reason_codes,
-            invalidation:evidence.invalidation,estimated_lead_time:evidence.estimated_lead_time,source:sourceList([evidence.source,tickerSource]),
-            coverage:null,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
-            forensic_evidence_score:evidence.forensic_evidence_score,market_regime:evidence.market_regime
+            metrics:evidence.metrics,micro_fingerprint:fp,
+            volume_metrics:{rvol_1m:evidence.metrics.rvol_1m,rvol_5m:evidence.metrics.rvol_5m,rvol_15m:evidence.metrics.rvol_15m,quote_rvol_5m:evidence.metrics.quote_rvol_5m,fast_volume_acceleration:fast.volume_accel_ratio},
+            liquidity_metrics:{liquidity_quality:evidence.liquidity_quality,spread_bps:evidence.metrics.spread_bps,orderbook_imbalance:evidence.metrics.orderbook_imbalance,depth_notional:evidence.metrics.depth_notional},
+            structure_metrics:evidence.structure_metrics,strategy_evidence:evidence.strategy_evidence,trigger_evidence:evidence.trigger_evidence,
+            risk_flags:[...(evidence.risk_flags||[]),...(fp?.risk_flags||[])],reason_codes:[...(evidence.reason_codes||[]),...(fp?.reasons||[])],
+            invalidation:evidence.invalidation,estimated_lead_time:evidence.estimated_lead_time,source:sourceList([evidence.source,tickerSource,micro.source]),coverage:null,
+            paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',forensic_evidence_score:evidence.forensic_evidence_score,market_regime:evidence.market_regime
           };
-          candidate.coverage={
-            universe_total:this.universe.length,eligible_total:eligible.length,fast_scanned_total:eligible.length,
-            scanned_total:eligible.length,deep_scanned_total:0,skipped_total:0,failed_total:0,coverage_ratio:eligible.length>0?1:0,
-            deep_coverage_ratio:0
-          };
-          return candidate;
-        }catch(e){
-          this.failedTotal++;this.noteError(e,'deep-row');return {symbol:row.symbol,failed:true,error:String(e?.message??e),decision_band:'DATA_INSUFFICIENT',data_quality:0,source:sourceList([tickerSource])};
-        }
+        }catch(e){this.failedTotal++;this.noteError(e,'deep-row');return {symbol:row.symbol,failed:true,error:String(e?.message??e),decision_band:'DATA_INSUFFICIENT',data_quality:0,micro_fingerprint:micro.micro_fingerprint,source:sourceList([tickerSource,micro.source])};}
       });
-      const ok=scanned.filter(x=>x&&!x.failed);
-      const deepFailures=scanned.length-ok.length;
-      const deepScannedTotal=ok.length;
+      const ok=scanned.filter(x=>x&&!x.failed),deepFailures=scanned.length-ok.length,deepScannedTotal=ok.length;
       const failedSymbols=scanned.filter(x=>x?.failed).map(x=>x.symbol);
-      const coverage=buildEarlyExpansionUniverseCoverage({
-        expectedSymbols:universeExpected,
-        receivedSymbols,
-        eligibleTotal:eligible.length,
-        fastScannedTotal:eligible.length,
-        scannedTotal:eligible.length,
-        deepScannedTotal,
-        skippedTotal:Math.max(0,eligible.length-deepScannedTotal),
-        failedTotal:deepFailures,
-        failedSymbols,
-        quote:q,
-        minQuoteVolume24h:this.config.minQuoteVolume24h
-      });
-      this.lastCoverage=coverage;
-      this.failedSymbols=[...new Set(failedSymbols)];
-      for(const c of ok)c.coverage=coverage;
-      ok.sort((a,b)=>(Number.isFinite(Number(b.early_expansion_score))?Number(b.early_expansion_score):-1)-(Number.isFinite(Number(a.early_expansion_score))?Number(a.early_expansion_score):-1)||a.symbol.localeCompare(b.symbol));
+      const coverage=buildEarlyExpansionUniverseCoverage({expectedSymbols:expected,receivedSymbols,eligibleTotal:eligible.length,fastScannedTotal:eligible.length,scannedTotal:eligible.length,deepScannedTotal,skippedTotal:Math.max(0,eligible.length-deepScannedTotal),failedTotal:deepFailures,failedSymbols,quote:q,minQuoteVolume24h:this.config.minQuoteVolume24h});
+      coverage.micro_scanned_total=microScanned.filter(x=>x&&!x.failed).length;coverage.micro_scan_candidates=selected.length;coverage.rotation_cycle=cycle;
+      coverage.micro_scan_coverage_ratio=eligible.length?coverage.micro_scanned_total/eligible.length:0;coverage.discovery_mode='TICKER_ALL + ROTATING_1M_5M_MICRO + DEEP_15M_1H_4H_DEPTH';
+      this.lastCoverage=coverage;this.failedSymbols=[...new Set(failedSymbols)];
+      for(const item of ok)item.coverage=coverage;
+      ok.sort((a,b)=>(Number.isFinite(Number(b.early_expansion_score))?Number(b.early_expansion_score):-1)-(Number.isFinite(Number(a.early_expansion_score))?Number(a.early_expansion_score):-1)||Number(b.micro_fingerprint?.score||-1)-Number(a.micro_fingerprint?.score||-1)||a.symbol.localeCompare(b.symbol));
       this.latestCandidates=ok.slice(0,Math.max(1,Math.min(100,Number(this.config.returnLimit??100))));
       let alertsThisCycle=0;
-      for(const c of ok){
-        const alert=buildEarlyExpansionAlert(c,now);
-        const eligibleAlert=alertEligible(c,this.config);
-        const previousScore=this.lastAlertScore.get(c.symbol)||null;
-        const bandChanged=this.lastBand.get(c.symbol)!==c.decision_band;
-        if(eligibleAlert&&(bandChanged||previousScore==null||c.early_expansion_score-previousScore>=this.config.minRealertScoreDelta)){
-          const last=this.lastAlertAt.get(c.symbol);
-          const localCooldown=localAlertCooldown(last,now,this.config.alertCooldownMs);
-          if(localCooldown.allowed){
-            alert.early_expansion_score=c.early_expansion_score;
-            alert.coverage=c.coverage;
-            const ng=evaluateRadarNotificationGate(alert,{now});
-            alert.notification_gate=ng;
+      for(const candidate of ok){
+        const alert=buildEarlyExpansionAlert(candidate,now),eligibleAlert=alertEligible(candidate,this.config)&&candidate.micro_fingerprint?.eligible===true;
+        const previousScore=this.lastAlertScore.get(candidate.symbol)||null,bandChanged=this.lastBand.get(candidate.symbol)!==candidate.decision_band;
+        if(eligibleAlert&&(bandChanged||previousScore==null||candidate.early_expansion_score-previousScore>=this.config.minRealertScoreDelta)){
+          const last=this.lastAlertAt.get(candidate.symbol),local=localAlertCooldown(last,now,this.config.alertCooldownMs);
+          if(local.allowed){
+            alert.coverage=candidate.coverage;alert.micro_fingerprint=candidate.micro_fingerprint;
+            const ng=evaluateRadarNotificationGate(alert,{now});alert.notification_gate=ng;
             if(ng.eligible){
-              this.lastAlertAt.set(c.symbol,now);this.lastAlertScore.set(c.symbol,c.early_expansion_score);this.lastBand.set(c.symbol,c.decision_band);
+              this.lastAlertAt.set(candidate.symbol,now);this.lastAlertScore.set(candidate.symbol,candidate.early_expansion_score);this.lastBand.set(candidate.symbol,candidate.decision_band);
               await this.store.appendEarlyExpansionAlert(alert);
               if(typeof this.store.appendEarlyExpansionEvent==='function')await this.store.appendEarlyExpansionEvent({...alert,event_type:'EARLY_EXPANSION_ALERT_TRACE'});
               if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(alert);
@@ -898,27 +1011,14 @@ export class EarlyExpansionRadar{
             }
           }
         }
-        if(!this.lastBand.has(c.symbol)||bandChanged)this.lastBand.set(c.symbol,c.decision_band);
+        if(!this.lastBand.has(candidate.symbol)||bandChanged)this.lastBand.set(candidate.symbol,candidate.decision_band);
       }
-      this.scans++;
-      this.lastScanAtMs=now;this.lastError=null;
-      this.lastResult={
-        schema_version:'RADAR8_V1',
-        radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',as_of:new Date(now).toISOString(),quote:q,
-        universe:coverage,
-        candidates:this.latestCandidates,
-        alerts_emitted_this_cycle:alertsThisCycle,
-        meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
-          source:sourceList([tickerSource]),closed_candles_only:true,
-          fast_scan:'ALL_ELIGIBLE_TICKERS_EVERY_CYCLE',
-          deep_scan:'TOP_FAST_ACCELERATION_PLUS_QUIET_RESERVE',
-          universe_scope:'ALL_ELIGIBLE_SPOT_USDT'}
-      };
+      this.scans++;this.lastScanAtMs=now;this.lastError=null;
+      this.lastResult={schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',as_of:new Date(now).toISOString(),quote:q,universe:coverage,candidates:this.latestCandidates,alerts_emitted_this_cycle:alertsThisCycle,meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',source:sourceList([tickerSource]),closed_candles_only:true,fast_scan:'ALL_ELIGIBLE_TICKERS_EVERY_CYCLE',micro_scan:'ROTATING_1M_5M_ACROSS_ELIGIBLE_UNIVERSE',deep_scan:'TOP_MICRO_FINGERPRINT_PLUS_QUIET_PLUS_ROTATION',universe_scope:'ALL_ELIGIBLE_SPOT_USDT'}};
       return true;
     }catch(e){
-      this.lastError=String(e?.message??e);
-      this.lastScanAtMs=now;
-      this.lastResult={...emptyEarlyExpansionSnapshot(this.config,quote,this.lastError),as_of:new Date(now).toISOString()};
+      this.lastError=String(e?.message??e);this.lastScanAtMs=scanStartedAt;
+      this.lastResult={...emptyEarlyExpansionSnapshot(this.config,quote,this.lastError),schema_version:'RADAR8_V2',as_of:new Date(scanStartedAt).toISOString()};
       return false;
     }finally{this.busy=false;}
   }
@@ -927,7 +1027,7 @@ export class EarlyExpansionRadar{
     const base=this.lastResult||emptyEarlyExpansionSnapshot(this.config,q);
     return {
       ...base,
-      schema_version:'RADAR8_V1',
+      schema_version:'RADAR8_V2',
       quote:q,
       universe:{...emptyEarlyExpansionUniverse(this.config,q),...(base.universe||{}),quote:q},
       candidates:(this.latestCandidates||base.candidates||[]).slice(0,Math.max(1,Math.min(100,Number(limit)||100)))
@@ -938,15 +1038,15 @@ export class EarlyExpansionRadar{
       running:this.running,busy:this.busy,radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',
       universe_total:this.universe.length,universe_refreshed_at:this.universeAt||null,
       last_scan_at:this.lastScanAtMs,scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,
-      fast_scanned_total:this.fastScannedTotal,failed_total:this.failedTotal,failed_symbols:this.failedSymbols,
+      fast_scanned_total:this.fastScannedTotal,failed_total:this.failedTotal,failed_symbols:this.failedSymbols,micro_scanned_total:Number(this.lastCoverage?.micro_scanned_total||0),micro_scan_candidates:Number(this.lastCoverage?.micro_scan_candidates||0),rotation_cycle:Number(this.lastCoverage?.rotation_cycle||0),
       coverage:this.lastCoverage,
-      poll_ms:this.config.pollMs,deep_candidates:this.config.deepCandidates,deep_concurrency:this.config.deepConcurrency,
+      poll_ms:this.config.pollMs,micro_scan_candidates:this.config.microScanCandidates,micro_concurrency:this.config.microConcurrency,rotation_reserve:this.config.rotationReserve,quiet_reserve:this.config.quietReserve,deep_candidates:this.config.deepCandidates,deep_concurrency:this.config.deepConcurrency,
       closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
-      algorithms:['All eligible Spot USDT ticker fast scan','45s self-baseline acceleration','RVOL persistence','Compression to expansion','Breakout proximity','Higher-low structure','Bid/ask imbalance','Spread/depth quality','ATR expansion','Bollinger expansion','VWAP','EMA ribbon','ADX/MACD/RSI','OBV','BTC market regime'],
+      algorithms:['ALL eligible Spot USDT ticker fast scan','Rotating 1m/5m micro-fingerprint','Price acceleration','Volume/RVOL acceleration','Trade-count acceleration','ATR/Bollinger compression-release','VWAP/EMA','ADX/MACD/RSI/OBV','Higher lows','Resistance pressure','BTC relative strength','Taker-flow divergence','Absorption/reversal fingerprint','Bid/ask imbalance','Spread/depth quality'],
       source:'Binance Public REST with endpoint rotation/fallback',
       universe_scope:'ALL_ELIGIBLE_SPOT_USDT',
       eligibility_filter:{min_quote_volume_24h:this.config.minQuoteVolume24h},
-      historical_orderbook:'UNAVAILABLE'
+      historical_orderbook:'UNAVAILABLE',version:'RADAR8_V2_MISSED_MOVER_ENGINE',alert_policy:'MICRO_FINGERPRINT + DEEP_CONFIRMATION + ANTI_CHASE'
     };
   }
 }
