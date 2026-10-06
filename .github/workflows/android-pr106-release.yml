@@ -24,14 +24,15 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK 35 and build-tools
+      - name: Configure Android SDK tools
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" >/dev/null
+          export ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
+          export ANDROID_HOME="$ANDROID_SDK_ROOT"
+          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/16.0/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
+          test -x "$ANDROID_SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager"
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" >/dev/null
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -78,8 +79,10 @@ jobs:
           set -euo pipefail
           APK="android/app/build/outputs/apk/release/app-release.apk"
           test -s "$APK"
-          APKSIGNER="${ANDROID_HOME}/build-tools/35.0.0/apksigner"
-          AAPT="${ANDROID_HOME}/build-tools/35.0.0/aapt"
+          export ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
+          export ANDROID_HOME="$ANDROID_SDK_ROOT"
+          APKSIGNER="$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner"
+          AAPT="$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt"
           "$APKSIGNER" verify --verbose "$APK"
           PACKAGE="$("$AAPT" dump badging "$APK" | sed -n "s/^package: name='\\([^']*\\)'.*$/\\1/p" | head -n 1)"
           test "$PACKAGE" = "com.radarx.app"
