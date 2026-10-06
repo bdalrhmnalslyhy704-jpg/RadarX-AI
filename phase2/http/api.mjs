@@ -155,6 +155,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     KAHIR_RADAR:{name:RADAR_NAMES.KAHIR_RADAR,instance:kahirRadar,read:'readKahirAlerts'},
     DOOMSDAY_RADAR:{name:RADAR_NAMES.DOOMSDAY_RADAR,instance:doomsdayRadar,read:'readDoomsdayAlerts'},
     ALMUQAWIM_RADAR:{name:RADAR_NAMES.ALMUQAWIM_RADAR,instance:alMuqawimRadar,read:'readAlMuqawimAlerts'},
+    EARLY_EXPANSION_RADAR:{name:RADAR_NAMES.EARLY_EXPANSION_RADAR,instance:earlyExpansionRadar,read:'readEarlyExpansionAlerts'},
     ...(professorRadar?{PROFESSOR_RADAR:{name:RADAR_NAMES.PROFESSOR_RADAR,instance:professorRadar,read:'readProfessorAlerts'}}:{})
   });
   function radarStatus(){
