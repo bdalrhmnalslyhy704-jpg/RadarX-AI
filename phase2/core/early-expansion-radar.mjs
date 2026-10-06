@@ -486,7 +486,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   if(!historicalReplay&&liq.available&&Number(liq.spread_bps)>cfg.maxSpreadBps)gateIssues.push('WIDE_SPREAD');
   if(extended)gateIssues.push('ALREADY_EXTENDED');
   if(fakeoutFlag(s['5m']).flag)gateIssues.push('RECENT_FAKEOUT');
-  const earlyScore=gate.valid&&gateIssues.every(x=>!['ALREADY_EXTENDED','LIQUIDITY_INSUFFICIENT','WIDE_SPREAD','RECENT_FAKEOUT'].includes(x))&&!highRisk&&!historicalReplay
+  const earlyScore=gate.valid&&gateIssues.every(x=>!['ALREADY_EXTENDED','LIQUIDITY_INSUFFICIENT','WIDE_SPREAD','RECENT_FAKEOUT'].includes(x))&&!highRisk&&!dumpRisk&&!historicalReplay
     ? Number(clamp(rawScore).toFixed(1)):null;
   const policyIssues=gateIssues.filter(x=>!gate.issues.includes(x));
   const decisionBand=decideEarlyExpansionBand({
@@ -497,6 +497,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   const riskFlags=[
     extended?'ALREADY_EXTENDED':null,
     highRisk?'HIGH_RISK_PUMP':null,
+    dumpRisk?'HIGH_RISK_DUMP':null,
     !liq.available&&!historicalReplay?'ORDERBOOK_UNAVAILABLE':null,
     liq.available&&Number(liq.spread_bps)>cfg.maxSpreadBps?'WIDE_SPREAD':null,
     gate.issues.find(x=>x.startsWith('STALE_DATA'))?'STALE_DATA':null,
@@ -598,6 +599,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
       ...gate.issues,
       extended?'ALREADY_EXTENDED':null,
       highRisk?'HIGH_RISK_PUMP':null,
+      dumpRisk?'HIGH_RISK_DUMP':null,
       historicalReplay?'HISTORICAL_ORDERBOOK_UNAVAILABLE':null
     ].filter(Boolean))],
     invalidation:[
