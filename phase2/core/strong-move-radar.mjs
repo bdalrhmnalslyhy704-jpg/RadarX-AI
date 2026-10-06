@@ -70,7 +70,7 @@ export function buildEarlyActivationContext(row,previous,{minQuoteVolume24h=4000
   const participationAwake=(Number(qvGrowth)>=0.04)||(Number(tradeGrowth)>=0.04);
   const impulseAwake=(Number(deltaMove)>=0.06)||(Number(priceGrowth)>=0.03)||(Number(rangeMigration)>=1.5);
   const eligible=earlyWindow&&Number(row?.quoteVolume24h)>=minQuoteVolume24h&&activationScore>=66&&impulseAwake&&participationAwake&&confirmations>=3;
-  return {eligible,activation_score:+activationScore.toFixed(1),delta_move_pct:deltaMove==null?null:+deltaMove.toFixed(3),price_growth_pct:priceGrowth==null?null:+priceGrowth.toFixed(3),quote_volume_growth_pct:qvGrowth==null?null:+qvGrowth.toFixed(3),trade_growth_pct:tradeGrowth==null?null:+tradeGrowth.toFixed(3),range_position_pct:+rangePos.toFixed(1),range_migration_pct:+rangeMigration.toFixed(2),current_move_24h_pct:+currentMove.toFixed(3),confirmations,impulse_awake,participation_awake:participationAwake,early_window:earlyWindow};
+  return {eligible,activation_score:+activationScore.toFixed(1),delta_move_pct:deltaMove==null?null:+deltaMove.toFixed(3),price_growth_pct:priceGrowth==null?null:+priceGrowth.toFixed(3),quote_volume_growth_pct:qvGrowth==null?null:+qvGrowth.toFixed(3),trade_growth_pct:tradeGrowth==null?null:+tradeGrowth.toFixed(3),range_position_pct:+rangePos.toFixed(1),range_migration_pct:+rangeMigration.toFixed(2),current_move_24h_pct:+currentMove.toFixed(3),confirmations,impulse_awake:impulseAwake,participation_awake:participationAwake,early_window:earlyWindow};
 }
 
 export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now,activation={}){
