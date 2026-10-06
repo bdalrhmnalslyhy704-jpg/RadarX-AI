@@ -72,8 +72,8 @@ function trendlineScore(candles,direction){
   return {score:aligned?Math.min(100,78+Math.abs(slopePctPerBar)*180):32,slopePctPerBar};
 }
 
-function timeframeAnalysis(candles,maPeriod=50){
-  const rows=closedCandles(candles,Date.now());
+function timeframeAnalysis(candles,maPeriod=50,now=Date.now()){
+  const rows=closedCandles(candles,now);
   if(rows.length<Math.max(30,maPeriod+5))return {direction:'INSUFFICIENT',score:null,structure:null};
   const closes=rows.map(c=>Number(c.close));
   const current=closes.at(-1);
@@ -109,9 +109,9 @@ function timeframeAnalysis(candles,maPeriod=50){
 
 export function buildAlMuqawimAnalysis(series,ticker,now=Date.now(),config={}){
   const maPeriod=Math.max(10,Math.trunc(Number(config.maPeriod)||50));
-  const m15=timeframeAnalysis(series?.['15m']||[],maPeriod);
-  const h1=timeframeAnalysis(series?.['1h']||[],maPeriod);
-  const h4=timeframeAnalysis(series?.['4h']||[],maPeriod);
+  const m15=timeframeAnalysis(series?.['15m']||[],maPeriod,now);
+  const h1=timeframeAnalysis(series?.['1h']||[],maPeriod,now);
+  const h4=timeframeAnalysis(series?.['4h']||[],maPeriod,now);
   const tfs=[h4,h1,m15];
   if(tfs.some(x=>x.direction==='INSUFFICIENT')){
     return {eligible:false,stage:'INSUFFICIENT_DATA',direction:'NONE',score:null,closed_candles_only:true,timeframes:{'4h':h4,'1h':h1,'15m':m15}};
