@@ -7,7 +7,8 @@ import {
   emptyEarlyExpansionSnapshot,
   buildEarlyExpansionUniverseCoverage,
   decideEarlyExpansionBand,
-  boundedMap
+  boundedMap,
+  localAlertCooldown
 } from '../core/early-expansion-radar.mjs';
 import {evaluateRadarNotificationGate,rememberRadarAlert,resetRadarNotificationGateForTests} from '../core/radar-notification-gate.mjs';
 
@@ -239,27 +240,9 @@ test('Cross-radar cooldown blocks same symbol but not a different symbol',()=>{
   assert.equal(evaluateRadarNotificationGate(differentSymbol,{now:2000000+2*60*1000}).eligible,true);
 });
 
-test('Radar 8 local cooldown suppresses a stronger repeat until the cooldown expires',async()=>{
-  resetRadarNotificationGateForTests();
-  let nowTick=4000000,score=84,alerts=0;
-  const rest={
-    request:async(path)=>{
-      if(path==='/api/v3/exchangeInfo')return{data:{symbols:[{symbol:'AAAUSDT',baseAsset:'AA',quoteAsset:'USDT',status:'TRADING',isSpotTradingAllowed:true,permissions:['SPOT']}]},source:'TEST'};
-      if(path==='/api/v3/ticker/24hr')return{data:[{symbol:'AAAUSDT',lastPrice:'1',quoteVolume:'5000000',count:50000,priceChangePercent:'1'}],source:'TEST'};
-      throw new Error('UNEXPECTED_REQUEST:'+path);
-    }
-  };
-  const store={appendEarlyExpansionAlert:async()=>{alerts++;},appendEarlyExpansionEvent:async()=>{}};
-  const pushManager={notifyRadarAlert:async()=>{}};
-  const scanner=new EarlyExpansionRadar({rest,store,pushManager,config:{minQuoteVolume24h:1000000,deepCandidates:1,deepConcurrency:1,alertCooldownMs:10*60*1000},clock:()=>nowTick});
-  scanner.deepScan=async()=>({early_expansion_score:score,decision_band:'PRE_EXPANSION',data_quality:100,liquidity_quality:90,data_stale:false,metrics:{rvol_1m:1.6,rvol_5m:1.5,rvol_15m:1.2,quote_rvol_5m:1.3},volume_metrics:{},liquidity_metrics:{},structure_metrics:{},strategy_evidence:{},trigger_evidence:{},risk_flags:[],reason_codes:[],invalidation:[],estimated_lead_time:'UNKNOWN',source:'TEST',forensic_evidence_score:score,market_regime:{}});
-  scanner.running=true;await scanner.refreshUniverse();
-  assert.equal(await scanner.tick(),true);
-  assert.equal(alerts,1);
-  score=90;nowTick+=5*60*1000;
-  assert.equal(await scanner.tick(),true);
-  assert.equal(alerts,1);
-  nowTick+=6*60*1000;
-  assert.equal(await scanner.tick(),true);
-  assert.equal(alerts,2);
+test('Radar 8 local cooldown suppresses repeats independently of the cross-radar gate',()=>{
+  assert.deepEqual(localAlertCooldown(undefined,4000000,10*60*1000),{allowed:true,remaining_ms:0});
+  assert.deepEqual(localAlertCooldown(4000000,4000000+5*60*1000,10*60*1000),{allowed:false,remaining_ms:5*60*1000});
+  assert.deepEqual(localAlertCooldown(4000000,4000000+10*60*1000,10*60*1000),{allowed:true,remaining_ms:0});
+  assert.deepEqual(localAlertCooldown(4000000,4000000+11*60*1000,10*60*1000),{allowed:true,remaining_ms:0});
 });
