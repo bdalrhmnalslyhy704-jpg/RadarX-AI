@@ -53,7 +53,7 @@ test('Radar 8 API contract is identical before and after first scan and honors q
 
     assert.deepEqual(keyShape(before),keyShape(after));
     for(const body of [before,after]){
-      assert.equal(body.schema_version,'RADAR8_V1');
+      assert.equal(body.schema_version,'RADAR8_V2');
       assert.equal(body.radar,'EARLY_EXPANSION_RADAR');
       assert.equal(body.quote,'USDT');
       assert.equal(body.meta.paper_trading,true);
@@ -61,7 +61,7 @@ test('Radar 8 API contract is identical before and after first scan and honors q
       assert.equal(body.meta.confidence_score,'UNKNOWN');
       assert.equal(body.universe.scope,'ALL_ELIGIBLE_SPOT_USDT');
       for(const key of ['expected_total','received_total','missing_ticker_total','eligible_total','fast_scanned_total','scanned_total','deep_scanned_total','skipped_total','failed_total','coverage_ratio','deep_coverage_ratio'])assert.ok(Object.hasOwn(body.universe,key),key);
-      for(const key of ['running','last_scan_at','failed_total','poll_ms','deep_candidates','deep_concurrency'])assert.ok(Object.hasOwn(body.monitoring,key),key);
+      for(const key of ['running','last_scan_at','failed_total','poll_ms','micro_scan_candidates','micro_concurrency','rotation_reserve','quiet_reserve','deep_candidates','deep_concurrency'])assert.ok(Object.hasOwn(body.monitoring,key),key);
       for(const key of ['requested','completed','error'])assert.ok(Object.hasOwn(body.scan,key),key);
       for(const key of ['min_alert_score','min_pre_expansion_score','min_breakout_developing_score'])assert.ok(Object.hasOwn(body.thresholds,key),key);
     }
