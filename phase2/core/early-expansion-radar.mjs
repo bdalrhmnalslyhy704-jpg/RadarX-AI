@@ -20,6 +20,15 @@ async function withRetry(fn,{attempts=1,baseMs=150,maxBackoffMs=1500,sleepFn=sle
   }
   throw last||new Error('RADAR8_RETRY_FAILED');
 }
+export function localAlertCooldown(lastAt,now,cooldownMs){
+  const last=Number(lastAt);
+  const current=Number(now);
+  const cd=Math.max(0,Number(cooldownMs)||0);
+  if(!Number.isFinite(last)||!Number.isFinite(current))return {allowed:true,remaining_ms:0};
+  const elapsed=Math.max(0,current-last);
+  return {allowed:elapsed>=cd,remaining_ms:Math.max(0,cd-elapsed)};
+}
+
 export async function boundedMap(items,concurrency,worker){
   const a=Array.from(items||[]),out=Array(a.length);let next=0;
   const n=Math.max(1,Math.min(Number(concurrency)||1,a.length));
@@ -873,8 +882,9 @@ export class EarlyExpansionRadar{
         const previousScore=this.lastAlertScore.get(c.symbol)||null;
         const bandChanged=this.lastBand.get(c.symbol)!==c.decision_band;
         if(eligibleAlert&&(bandChanged||previousScore==null||c.early_expansion_score-previousScore>=this.config.minRealertScoreDelta)){
-          const last=this.lastAlertAt.get(c.symbol)||0;
-          if(now-last>=this.config.alertCooldownMs){
+          const last=this.lastAlertAt.get(c.symbol);
+          const localCooldown=localAlertCooldown(last,now,this.config.alertCooldownMs);
+          if(localCooldown.allowed){
             alert.early_expansion_score=c.early_expansion_score;
             alert.coverage=c.coverage;
             const ng=evaluateRadarNotificationGate(alert,{now});
