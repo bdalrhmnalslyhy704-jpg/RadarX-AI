@@ -50,7 +50,7 @@ export function mountBackgroundMonitorControl(root){
  ROTATION_LAG_RADAR:'./radar3-joker.html',
  LIQUIDITY_ABSORPTION_RADAR:'./radar4-sweeper.html',
  KAHIR_RADAR:'./kahir-radar.html',
- DOOMSDAY_RADAR:'./doomsday-radar.html'
+ DOOMSDAY_RADAR:'./doomsday-radar.html',
   PROFESSOR_RADAR:'./professor-radar.html'
  }[spec.id]||'#')+'">فتح نافذة الرادار</a></div>'+
       '<div class="rx-radar-alerts"><b>آخر اكتشافات هذا الرادار</b>'+ (sourceAlerts.length?sourceAlerts.map(a=>'<div class="rx-radar-alert"><b>'+esc(a.symbol||'—')+'</b> • '+esc(a.potential_label||a.event||'اكتشاف')+' • '+esc(fmt(a.price))+'<small>'+esc(a.radar_name||spec.name)+' • وقت الاكتشاف: '+esc(a.detected_time_12h||'غير متاح')+'</small></div>').join(''):'<div class="rx-radar-empty">لا يوجد اكتشاف محفوظ في المدة المعروضة.</div>')+'</div>'+
