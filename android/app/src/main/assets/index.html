@@ -3,114 +3,192 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#100c08">
+<meta name="theme-color" content="#0b1220">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icons/apple-touch-icon.svg">
-<title>RadarX — AI Market Intelligence</title>
+<title>RadarX — صفحة واحدة</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html{scroll-behavior:smooth}
-body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% -10%,#4b2a17 0,#11151b 40%,#07090d 100%)}
-header{position:sticky;top:0;z-index:10;margin:0 -14px 10px;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;background:rgba(8,15,25,.9);backdrop-filter:blur(14px);border-bottom:1px solid #20354d}
-.rx-topbar{display:flex;align-items:center;justify-content:space-between;gap:10px}
-.rx-brand{display:flex;align-items:center;gap:10px}.rx-logo{width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#e29b5e,#a7583a);display:grid;place-items:center;font-weight:1000;color:#06101b}.rx-brand b{font-size:17px}.rx-brand small{display:block;color:#8ea5b9;font-size:11px;margin-top:2px}
-.rx-status{display:flex;align-items:center;gap:6px;border:1px solid #28506d;border-radius:999px;padding:6px 9px;color:#bfe9ff;font-size:10px;font-weight:900}.rx-dot{width:7px;height:7px;border-radius:50%;background:#43e0a3;box-shadow:0 0 9px #43e0a3}
-.rx-nav-card{margin:12px 0;padding:14px;border:1px solid #3a4046;border-radius:18px;background:linear-gradient(145deg,#171d23,#0c1117);display:flex;align-items:center;justify-content:space-between;gap:12px}
-.rx-nav-card b{font-size:14px}.rx-nav-card small{display:block;color:#8ea7bd;line-height:1.6;margin-top:3px;font-size:10px}
-.rx-page-tabs{display:flex;gap:7px;overflow:auto;position:sticky;top:0;z-index:9;padding:8px 0;background:rgba(8,10,13,.94);backdrop-filter:blur(14px)}.rx-page-tabs a{white-space:nowrap;text-decoration:none;color:#dbe5ec;border:1px solid #333d44;background:#10161d;border-radius:11px;padding:9px 11px;font-size:10px;font-weight:950}.rx-page-tabs a.on{border-color:#d89455;background:#2a180d;color:#fff}.rx-nav-link{display:inline-flex;align-items:center;justify-content:center;min-width:132px;min-height:44px;border-radius:12px;text-decoration:none;background:linear-gradient(135deg,#e19a5c,#b6673e);color:#04111d;font-size:11px;font-weight:1000}
-.rx-nav-link.secondary{background:linear-gradient(135deg,#172a42,#22385d);color:#dff5ff;border-color:#345a7a}
-@media(max-width:560px){.rx-nav-card{align-items:stretch;flex-direction:column}.rx-nav-link{width:100%}}
-
-main{width:min(980px,100%);margin:auto;padding:env(safe-area-inset-top) 14px calc(28px + env(safe-area-inset-bottom))}
-#marketRadarPanel{margin-top:10px}
-footer{padding:18px 4px;text-align:center;color:#8fa8b2;font-size:12px}
+body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% -10%,#4b2a17 0,#11151b 40%,#07090d 100%);color:#eef6fb;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+main{width:min(1040px,100%);margin:auto;padding:env(safe-area-inset-top) 12px calc(24px + env(safe-area-inset-bottom))}
+header{position:sticky;top:0;z-index:20;margin:0 -12px 8px;padding:calc(10px + env(safe-area-inset-top)) 12px 10px;background:rgba(8,15,25,.94);backdrop-filter:blur(16px);border-bottom:1px solid #20354d}
+.top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.brand{display:flex;align-items:center;gap:9px}.logo{width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#e19a5c,#6d68ff);display:grid;place-items:center;font-weight:1000;color:#06101b}.brand b{font-size:18px}.brand small{display:block;color:#90a8bb;font-size:10px;margin-top:2px}
+.status{display:flex;align-items:center;gap:6px;border:1px solid #28506d;border-radius:999px;padding:6px 9px;color:#bfe9ff;font-size:9px;font-weight:900}.dot{width:7px;height:7px;border-radius:50%;background:#43e0a3;box-shadow:0 0 9px #43e0a3}
+.single-note{margin:10px 0;padding:12px 13px;border:1px solid #604028;border-radius:16px;background:linear-gradient(145deg,#20150e,#0e151c);font-size:10px;line-height:1.7;color:#d9c6b6}
+.single-note b{color:#fff;font-size:12px}
+.toolbar{display:flex;gap:7px;overflow:auto;padding:7px 1px 10px;position:sticky;top:61px;z-index:15;background:rgba(7,10,14,.93);backdrop-filter:blur(14px)}
+.toolbar button{flex:0 0 auto;min-height:40px;padding:0 12px;border-radius:11px;border:1px solid #334452;background:#10171e;color:#dceaf2;font:inherit;font-size:10px;font-weight:950}
+.toolbar button.active{border-color:#da9858;background:#2b1a0f;color:#fff;box-shadow:0 0 0 1px #6d4828 inset}
+.toolbar button.home{background:linear-gradient(135deg,#e19a5c,#b6673e);border-color:#e19a5c;color:#0f1113}
+#appError{padding:14px;margin-top:10px;border:1px solid #914553;border-radius:16px;background:#0b151b}
+#homeView,#frameView{margin-top:8px}
+#homeView[hidden],#frameView[hidden]{display:none}
+.section-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:10px 0 7px}.section-title b{font-size:13px}.section-title span{font-size:9px;color:#849bac}
+#radarFrame{display:block;width:100%;height:calc(100vh - 160px);min-height:620px;border:1px solid #28445d;border-radius:18px;background:#050a11;overflow:hidden}
+footer{padding:14px 4px;text-align:center;color:#73899a;font-size:9px;line-height:1.7}
 </style>
 </head>
 <body>
 <main>
-<header><div class="rx-topbar"><div class="rx-brand"><div class="rx-logo">RX</div><div><b>RadarX</b><small>AI Market Intelligence • Spot • Paper</small></div></div><div class="rx-status"><span class="rx-dot"></span>LIVE DATA</div></div></header>
-<nav class="rx-page-tabs"><a class="on" href="./index.html">⌂ الرئيسية</a><a href="./surge-radar.html">🔥 الموجات</a><a href="./ai-market.html">🧠 الوكلاء</a><a href="./ai-learning.html">📚 التعلّم</a><a href="./kahir-radar.html">👑 القاهر</a><a href="./doomsday-radar.html">☄️ يوم القيامة</a></nav>
-<section id="appError" hidden style="padding:14px;border:1px solid #914553;border-radius:16px;background:#0b151b">
-<strong>تعذر تشغيل RadarX</strong>
-<p style="color:#8fa8b2">تعذر تحميل الواجهة. أعد المحاولة.</p>
-<button id="retryApp" type="button">إعادة المحاولة</button>
+<header>
+ <div class="top">
+  <div class="brand"><div class="logo">RX</div><div><b>RadarX</b><small>AI Market Intelligence • Spot • Paper</small></div></div>
+  <div class="status"><span class="dot"></span><span>صفحة واحدة</span></div>
+ </div>
+</header>
+
+<section class="single-note">
+ <b>واجهة RadarX الموحدة</b><br>
+ كل الرادارات والوكلاء والتعلّم والتحليل اليدوي داخل <b>صفحة واحدة فقط</b>. التنقل أدناه يغيّر المحتوى داخل نفس الشاشة ولا يفتح صفحة/Activity جديدة.
 </section>
-<div class="rx-nav-card"><div><b>🔥 مركز الموجات</b><small>ابدأ هنا عندما تريد رؤية العملات التي تتحرك فعلاً أو التي اجتازت بصمة ما قبل الانفجار، بدل إشارات 1% و2%.</small></div><a class="rx-nav-link" href="./surge-radar.html">فتح الموجات</a></div>
-<div class="rx-nav-card"><div><b>🧠 TRADLI Intelligence</b><small>صفحة مستقلة للتحليل المتقدم: Chart Lab • Verify • Advisor • Signals Hub • Supply/Demand • Order Desk</small></div><a id="openTradliBtn" class="rx-nav-link" href="./tradli.html">فتح TRADLI</a></div>
-<section class="rx-nav-card"><div><b>⚡ Pre‑Move Radar</b><small>يبحث عن العملة وهي ما زالت هادئة: تسارع الحجم، تدفق الشراء، القوة النسبية، الانكماش والهيكل قبل الاندفاع.</small></div><a id="openPreMoveRadarBtn" class="rx-nav-link" href="./pre-move-radar.html">رادار قبل الحركة</a></section>
-<section class="rx-nav-card"><div><b>🎯 Bottom Reversal Radar</b><small>يفحص العملات الهابطة ويقارن الضغط البيعي والشراء والزخم والانكماش والهيكل عبر 10 عوامل.</small></div><a id="openBottomRadarBtn" class="rx-nav-link secondary" href="./bottom-radar.html">فحص القيعان</a></section>
-<section class="rx-nav-card"><div><b>☠️ المدمر</b><small>صائد ما قبل الانفجار: بصمة حركة مبكرة، RVOL، تدفق شراء، استعادة EMA، الدعم/المقاومة وتوافق استراتيجيات.</small></div><a class="rx-nav-link" href="./radar1-destroyer.html">فتح المدمر</a></section>
-<section class="rx-nav-card"><div><b>🌑 ملك الظلام</b><small>صائد الانفجار الجاري: تسارع، حجم، عدد صفقات، Taker Flow، اختراق، VWAP وBB وATR مع تأكيد 5m.</small></div><a class="rx-nav-link" href="./radar2-dark-king.html">فتح ملك الظلام</a></section>
-<section class="rx-nav-card"><div><b>🃏 الجوكر</b><small>صائد دوران السيولة: يقارن العملة بـBTC/ETH ويبحث عن التحول في القوة النسبية وقبول القيمة.</small></div><a class="rx-nav-link" href="./radar3-joker.html">فتح الجوكر</a></section>
-<section class="rx-nav-card"><div><b>🧹 الكاسح</b><small>صائد امتصاص البيع: دفتر الأوامر، البائعون العالقون، البنية الدقيقة وتوازن المزاد قبل التحول.</small></div><a class="rx-nav-link" href="./radar4-sweeper.html">فتح الكاسح</a></section>
-<section class="rx-nav-card"><div><b>☄️ يوم القيامة</b><small>رادار الشرارة المفاجئة: يراقب الحركة القصيرة، تسارع الحجم والصفقات، Taker Flow، الانكماش، الاختراق والقوة النسبية ليصدر الإنذار قبل التمدد.</small></div><a class="rx-nav-link" href="./doomsday-radar.html">فتح يوم القيامة</a></section>
-<section class="rx-nav-card"><div><b>🧠 البروفيسور</b><small>استخبارات البثوث العامة: يستخرج الصفقات التي يتحدثون عنها، يطابق الأخبار، ثم يطلب تأكيد السوق الحقيقي ويعطي: «رأيي…».</small></div><a class="rx-nav-link" href="./professor-radar.html">فتح البروفيسور</a></section>
-<section class="rx-nav-card"><div><b>👑 القاهر</b><small>ماسح السوق الكامل الحالي، مستقل عن الأربعة ويستمر كالرادار الخامس.</small></div><a id="openKahirBtn" class="rx-nav-link" href="./kahir-radar.html">فتح القاهر</a></section>
-<section class="rx-nav-card"><div><b>👑 الكنق</b><small>طبقة ذكاء تجمع أدلة الرادارات، الفحص العميق، الاتجاه، السيولة، الضغط وخطر الفخ قبل إصدار الحكم.</small></div><a class="rx-nav-link" href="./king.html">فتح الكنق</a></section>
-<section class="rx-nav-card"><div><b>🧠 وكلاء السوق الذاتيون</b><small>الفريق يراقب كامل Spot/USDT بنفسه، يكتشف العملات، يفرز الفرص، ثم يفتح تشريحًا عميقًا للمرشحين ويصدر حكمًا جماعيًا.</small></div><a class="rx-nav-link" href="./ai-market.html">فتح سوق الوكلاء</a></section>
-<section class="rx-nav-card"><div><b>📚 عقل الوكلاء والتعلّم</b><small>دفتر تعلّم مستقل: يفحص نتائج التنبؤات، يتعلم من صعود وهبوط العملات، ويعدل أوزان الوكلاء تدريجيًا حسب الدقة.</small></div><a class="rx-nav-link" href="./ai-learning.html">فتح عقل الوكلاء</a></section>
-<section class="rx-nav-card"><div><b>🔬 فحص وكيل لعملة محددة</b><small>صفحة اختيارية للتحليل اليدوي المتعمق عندما تريد اختبار عملة بعينها.</small></div><a class="rx-nav-link secondary" href="./ai-agent-hub.html">فحص يدوي</a></section>
-<div id="symbolDeepScanPanel" aria-label="فحص العملة الشامل"></div>
-<div id="marketRadarPanel" aria-label="RadarX Dashboard"></div>
-<div id="backgroundMonitorPanel" aria-label="RadarX Background Monitor"></div>
-<div id="tradliSuitePanel" aria-label="RadarX Intelligence Suite"></div>
+
+<nav class="toolbar" aria-label="RadarX sections">
+ <button class="home active" data-view="home">⌂ الرئيسية</button>
+ <button data-view="./surge-radar.html">🔥 الموجات</button>
+ <button data-view="./ai-market.html">🧠 الوكلاء</button>
+ <button data-view="./ai-learning.html">📚 التعلّم</button>
+ <button data-view="./pre-move-radar.html">⚡ قبل الحركة</button>
+ <button data-view="./bottom-radar.html">🎯 القيعان</button>
+ <button data-view="./radar1-destroyer.html">☠️ المدمر</button>
+ <button data-view="./radar2-dark-king.html">🌑 ملك الظلام</button>
+ <button data-view="./radar3-joker.html">🃏 الجوكر</button>
+ <button data-view="./radar4-sweeper.html">🧹 الكاسح</button>
+ <button data-view="./kahir-radar.html">👑 القاهر</button>
+ <button data-view="./doomsday-radar.html">☄️ يوم القيامة</button>
+ <button data-view="./professor-radar.html">🧠 البروفيسور</button>
+ <button data-view="./king.html">👑 الكنق</button>
+ <button data-view="./tradli.html">🧩 TRADLI</button>
+ <button data-view="./ai-agent-hub.html">🔬 فحص يدوي</button>
+</nav>
+
+<section id="appError" hidden>
+ <strong>تعذر تشغيل RadarX</strong>
+ <p>تعذر تحميل الواجهة. أعد المحاولة.</p>
+ <button id="retryApp" type="button">إعادة المحاولة</button>
+</section>
+
+<section id="homeView">
+ <div class="section-title"><b>📊 لوحة السوق الأساسية</b><span>تعمل داخل الصفحة نفسها</span></div>
+ <div id="symbolDeepScanPanel" aria-label="فحص العملة الشامل"></div>
+ <div id="marketRadarPanel" aria-label="RadarX Dashboard"></div>
+ <div id="backgroundMonitorPanel" aria-label="RadarX Background Monitor"></div>
+</section>
+
+<section id="frameView" hidden>
+ <iframe id="radarFrame" title="RadarX internal single-page view"></iframe>
+</section>
+
 <footer>RadarX • SPOT • قراءة فقط • paper_trading=true • real_order_execution=false • confidence_score=UNKNOWN</footer>
 </main>
+
 <script>
 window.RadarXSmoke=window.RadarXSmoke||{state:function(value){try{console.log(value)}catch(e){}}};
 window.__RADARX_BOOT_OK=false;
 window.__RADARX_SHOW_BOOT_ERROR=function(){if(window.__RADARX_BOOT_OK)return;var p=document.getElementById('appError');if(p)p.hidden=false};
-setTimeout(window.__RADARX_SHOW_BOOT_ERROR,3500);
+setTimeout(window.__RADARX_SHOW_BOOT_ERROR,4000);
 </script>
+
 <script type="module">
 import {mountMarketRadarScreen} from './radarx-market-radar-screen.mjs';
 import {mountBackgroundMonitorControl} from './radarx-background-control.mjs';
 import {mountSymbolDeepScan} from './radarx-symbol-deep-scan.mjs';
 
-const panel=document.getElementById('marketRadarPanel');
-const installButton=document.createElement('button');
-let deferredInstallPrompt=null;
+const homeView=document.getElementById('homeView');
+const frameView=document.getElementById('frameView');
+const frame=document.getElementById('radarFrame');
+const tabs=[...document.querySelectorAll('.toolbar button[data-view]')];
+let frameUrl=null;
+let frameReadyTimer=null;
 
-window.addEventListener('beforeinstallprompt',event=>{
-  event.preventDefault();
-  deferredInstallPrompt=event;
-});
-installButton.addEventListener('click',async()=>{
-  if(!deferredInstallPrompt)return;
-  deferredInstallPrompt.prompt();
-  await deferredInstallPrompt.userChoice;
-  deferredInstallPrompt=null;
-});
+function setActive(button){
+ tabs.forEach(x=>x.classList.toggle('active',x===button));
+}
+
+function resizeFrame(){
+ try{
+   const doc=frame.contentDocument;
+   if(!doc)return;
+   const body=doc.body, html=doc.documentElement;
+   const h=Math.max(body?.scrollHeight||0,html?.scrollHeight||0,620);
+   frame.style.height=Math.min(Math.max(h+10,620),Math.max(900,window.innerHeight*1.8))+'px';
+ }catch(_){}
+}
+
+function wireFrameNavigation(){
+ try{
+   const doc=frame.contentDocument;
+   if(!doc)return;
+   doc.addEventListener('click',event=>{
+     const a=event.target?.closest?.('a[href]');
+     if(!a)return;
+     const href=a.getAttribute('href')||'';
+     if(!href||href.startsWith('#')||/^https?:\/\//i.test(href))return;
+     const clean=new URL(href,frame.contentWindow.location.href).pathname.split('/').pop();
+     if(clean==='index.html'||clean===''){
+       event.preventDefault();
+       showHome();
+       return;
+     }
+     if(/\.html$/i.test(clean)){
+       event.preventDefault();
+       showFrame('./'+clean);
+     }
+   },true);
+   resizeFrame();
+   clearInterval(frameReadyTimer);
+   frameReadyTimer=setInterval(resizeFrame,1500);
+ }catch(_){}
+}
+
+function showHome(){
+ frameUrl=null;
+ frame.src='about:blank';
+ frameView.hidden=true;
+ homeView.hidden=false;
+ const home=tabs.find(x=>x.dataset.view==='home');
+ if(home)setActive(home);
+ window.scrollTo(0,0);
+}
+
+function showFrame(url){
+ if(!url)return;
+ homeView.hidden=true;
+ frameView.hidden=false;
+ const button=tabs.find(x=>x.dataset.view===url);
+ if(button)setActive(button);
+ if(frame.src!==new URL(url,location.href).href)frame.src=url;
+ window.scrollTo(0,0);
+}
+
+frame.addEventListener('load',wireFrameNavigation);
+
+for(const tab of tabs){
+ tab.addEventListener('click',()=>{
+   const view=tab.dataset.view;
+   if(view==='home')showHome(); else showFrame(view);
+ });
+}
 
 try{
-  mountSymbolDeepScan(document.getElementById('symbolDeepScanPanel'));
-  mountMarketRadarScreen(panel);
-  mountBackgroundMonitorControl(document.getElementById('backgroundMonitorPanel'));
-  window.__RADARX_BOOT_OK=true;
-  const error=document.getElementById('appError');
-  if(error)error.hidden=true;
-  if(window.RadarXSmoke)window.RadarXSmoke.state('UI_READY');
+ mountSymbolDeepScan(document.getElementById('symbolDeepScanPanel'));
+ mountMarketRadarScreen(document.getElementById('marketRadarPanel'));
+ mountBackgroundMonitorControl(document.getElementById('backgroundMonitorPanel'));
+ window.__RADARX_BOOT_OK=true;
+ const error=document.getElementById('appError');
+ if(error)error.hidden=true;
+ if(window.RadarXSmoke)window.RadarXSmoke.state('UI_READY_SINGLE_PAGE');
 }catch(error){
-  console.error('RadarX Dashboard boot error:',error);
-  const panelError=document.getElementById('appError');
-  if(panelError)panelError.hidden=false;
+ console.error('RadarX single-page boot error:',error);
+ const panelError=document.getElementById('appError');
+ if(panelError)panelError.hidden=false;
 }
+
 document.getElementById('retryApp').addEventListener('click',()=>window.location.reload());
-document.getElementById('openTradliBtn').addEventListener('click',event=>{
-  if(window.RadarXNative && typeof window.RadarXNative.openTradli==='function'){
-    event.preventDefault();
-    window.RadarXNative.openTradli();
-  }
-});
-document.getElementById('openBottomRadarBtn').addEventListener('click',event=>{
-  if(window.RadarXNative && typeof window.RadarXNative.openBottomRadar==='function'){
-    event.preventDefault();
-    window.RadarXNative.openBottomRadar();
-  }
-});
 </script>
 </body>
 </html>
