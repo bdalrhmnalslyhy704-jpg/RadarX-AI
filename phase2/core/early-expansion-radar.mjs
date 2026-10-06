@@ -740,7 +740,7 @@ export class EarlyExpansionRadar{
   async tickerRows(quote=this.config.quote){
     const q=this.normalizeQuote(quote);
     const r=await this.rest.request('/api/v3/ticker/24hr');
-    return {rows:(Array.isArray(r.data)?r.data).map(x=>normalizeTickerRow(x,q)).filter(Boolean),source:r.source};
+    return {rows:(Array.isArray(r.data)?r.data:[]).map(x=>normalizeTickerRow(x,q)).filter(Boolean),source:r.source};
   }
   updateFastState(row){
     const now=this.clock(),history=this.fastState.get(row.symbol)||[],prev=history.at(-1),prev2=history.at(-2);
