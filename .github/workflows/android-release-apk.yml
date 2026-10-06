@@ -154,6 +154,27 @@ jobs:
             readyz_http_status: Number(process.env.READY_STATUS)
           }, null, 2));
           NODE
+      - name: Verify full-radar Triple backend contract
+        timeout-minutes: 4
+        run: |
+          set -euo pipefail
+          BASE="https://radarx-ai-triple-production.up.railway.app"
+          for path in \
+            "/api/radar-status" \
+            "/api/move-radar?limit=1" \
+            "/api/strong-move-radar?limit=1" \
+            "/api/rotation-lag-radar?limit=1" \
+            "/api/liquidity-absorption-radar?limit=1" \
+            "/api/kahir-radar?limit=1&scan=0" \
+            "/api/doomsday-radar?limit=1&scan=0" \
+            "/api/professor-radar?limit=1&scan=0" \
+            "/api/almuqawim-radar?limit=1&scan=0"; do
+            code="$(curl --location --silent --show-error --max-time 60 -o "$RUNNER_TEMP/radar-check.json" -w "%{http_code}" "$BASE$path")"
+            case "$code" in
+              200|503) ;;
+              *) echo "::error::Triple backend returned HTTP $code for $path"; cat "$RUNNER_TEMP/radar-check.json"; exit 1 ;;
+            esac
+          done
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
