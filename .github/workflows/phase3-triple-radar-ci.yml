@@ -6,6 +6,7 @@ on:
     branches:
       - phase3-triple-radar
       - radarx-build185-foundation
+      - radarx-build185-early-detection-fix-20261006
       - phase4-symbol-deep-scan
       - phase4-symbol-deep-scan-testfix
       - phase5-fix-bottom-radar-enable-deep-scan
