@@ -282,3 +282,13 @@ export async function setRadarState(radar, action, fetchImpl = globalThis.fetch)
   }
   return {status:0,ok:false,body:null,error:String(lastError?.message||lastError||'BACKEND_CONNECTION_FAILED')};
 }
+
+export async function getCoinHunterRadar({quote='USDT',limit=16,scan=false}={},fetchImpl=globalThis.fetch){
+  const safeQuote=String(quote||'USDT').trim().toUpperCase();
+  const safeLimit=Number(limit);
+  if(!/^[A-Z]{2,10}$/.test(safeQuote))throw new Error('INVALID_QUOTE');
+  if(!Number.isInteger(safeLimit)||safeLimit<1||safeLimit>50)throw new Error('INVALID_LIMIT');
+  const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  const scanParam=scan?'&scan=1':'';
+  return requestJson(base,'/api/coin-hunter-radar?quote='+encodeURIComponent(safeQuote)+'&limit='+encodeURIComponent(String(safeLimit))+scanParam,fetchImpl,130000);
+}
