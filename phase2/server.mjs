@@ -18,6 +18,7 @@ import {ProfessorRadar} from './core/professor-radar.mjs';
 import {DoomsdayRadar} from './core/doomsday-radar.mjs';
 import {AlMuqawimRadar} from './core/al-muqawim-radar.mjs';
 import {EarlyExpansionRadar} from './core/early-expansion-radar.mjs';
+import {CoinHunterRadar} from './core/coin-hunter-radar.mjs';
 import {SymbolDeepAnalyzer} from './core/symbol-deep-analyzer.mjs';
 import {MarketUniverseScanner} from './market/universe-scanner.mjs';
 import {createApiServer} from './http/api.mjs';
@@ -74,7 +75,9 @@ export async function startServer({
   const doomsdayRadar=new DoomsdayRadar({rest,store,pushManager:push,config:config.doomsdayRadar||{},logger});
   const alMuqawimRadar=new AlMuqawimRadar({rest,store,pushManager:push,config:config.alMuqawimRadar||{},logger});
   const earlyExpansionRadar=new EarlyExpansionRadar({rest,store,pushManager:push,config:config.earlyExpansionRadar||{},logger});
-  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,earlyExpansionRadar});
+  const coinHunterRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  const coinHunterRadar=new CoinHunterRadar({rest:coinHunterRest,store,pushManager:push,config:config.coinHunterRadar||{},logger});
+  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,earlyExpansionRadar,coinHunterRadar});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
   const safeStart=(name,instance)=>{
@@ -88,13 +91,13 @@ export async function startServer({
   safeStart('MONITOR',monitor);
   const autoStart=config.radarControl?.autostart!==false;
   if(autoStart){
-    const startup=[['RADAR1',moveSentinel],['RADAR2',strongMoveRadar],['RADAR3',rotationLagRadar],['RADAR4',liquidityAbsorptionRadar],['RADAR5',kahirRadar],['RADAR6',doomsdayRadar],['RADAR7',alMuqawimRadar],['PROFESSOR_INTELLIGENCE',professorRadar],['RADAR8',earlyExpansionRadar]];
+    const startup=[['RADAR1',moveSentinel],['RADAR2',strongMoveRadar],['RADAR3',rotationLagRadar],['RADAR4',liquidityAbsorptionRadar],['RADAR5',kahirRadar],['RADAR6',doomsdayRadar],['RADAR7',alMuqawimRadar],['PROFESSOR_INTELLIGENCE',professorRadar],['RADAR8',earlyExpansionRadar],['COIN_HUNTER',coinHunterRadar]];
     startup.forEach(([name,instance],index)=>{
       setTimeout(()=>safeStart(name,instance),index*900);
     });
   }
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
-  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,symbolDeepAnalyzer,store,rest,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,push,close:async()=>{await earlyExpansionRadar.stop();await professorRadar.stop();await alMuqawimRadar.stop();await doomsdayRadar.stop();await kahirRadar.stop();await liquidityAbsorptionRadar.stop();await rotationLagRadar.stop();await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
+  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,coinHunterRadar,symbolDeepAnalyzer,store,rest,strongRadarRest,coinHunterRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,push,close:async()=>{await coinHunterRadar.stop();await earlyExpansionRadar.stop();await professorRadar.stop();await alMuqawimRadar.stop();await doomsdayRadar.stop();await kahirRadar.stop();await liquidityAbsorptionRadar.stop();await rotationLagRadar.stop();await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
 }
 
 if(process.argv[1]&&resolve(fileURLToPath(import.meta.url))===resolve(process.argv[1])){
