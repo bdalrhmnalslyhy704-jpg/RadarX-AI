@@ -74,17 +74,17 @@ let busy=false;
 const nf=(v,d=2)=>{const n=Number(v);return Number.isFinite(n)?n.toFixed(d):'—'};
 const pct=v=>{const n=Number(v);return Number.isFinite(n)?(n>=0?'+':'')+n.toFixed(2)+'%':'—'};
 const time=v=>{try{return new Intl.DateTimeFormat('ar-YE',{timeZone:'Asia/Aden',hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true}).format(new Date(v));}catch{return v||'—'}};
-function esc(v){return String(v??'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));}
+function esc(v){return String(v != null ? v : '').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));}
 
 function render(d){
-  const c=d?.coverage||{}, m=d?.lesson||{};
-  $('universe').textContent=c.universe_total??'—';
-  $('leaders').textContent=c.learned_samples??m.samples??'—';
-  $('scanned').textContent=c.deep_scanned_total??'—';
-  $('hits').textContent=c.hunter_hits??'—';
-  $('updated').textContent='آخر دورة: '+time(d?.as_of);
-  $('error').textContent=d?.last_error?'خطأ: '+d.last_error:'';
-  const live=d?.running===true;
+  const c=(d && d.coverage)||{}, m=(d && d.lesson)||{};
+  $('universe').textContent=(c.universe_total != null ? c.universe_total : '—');
+  $('leaders').textContent=(c.learned_samples != null ? c.learned_samples : (m.samples != null ? m.samples : '—'));
+  $('scanned').textContent=(c.deep_scanned_total != null ? c.deep_scanned_total : '—');
+  $('hits').textContent=(c.hunter_hits != null ? c.hunter_hits : '—');
+  $('updated').textContent='آخر دورة: '+time(d && d.as_of);
+  $('error').textContent=d && d.last_error ? 'خطأ: '+d.last_error : '';
+  const live=!!(d && d.running===true);
   $('state').textContent=live?'LIVE • الصائد يعمل':'متوقف';
   $('state').className='state '+(live?'live':'warn');
 
@@ -94,7 +94,7 @@ function render(d){
     ? factors.slice(0,4).map(x=>'<div>'+esc(x.label)+': <b>'+nf(x.value,2)+'</b></div>').join('')
     : 'يتطلب الصائد عينة قادة يومية قابلة للتحليل.';
 
-  const rows=Array.isArray(d?.candidates)?d.candidates:[];
+  const rows=Array.isArray(d && d.candidates)?d.candidates:[];
   if(!rows.length){$('rows').innerHTML='<div class="empty">لا توجد طريدة صالحة حاليًا. هذا مقصود: الصائد يفضل ألا يصدر إشارة على أن يصطاد عملة ضعيفة.</div>';return;}
   $('rows').innerHTML=rows.slice(0,16).map(x=>{
     const f=x.factors||{};
@@ -130,14 +130,14 @@ async function refresh(scan=false){
   }catch(e){
     $('state').textContent='تعذر الاتصال';
     $('state').className='state bad';
-    $('error').textContent=e?.message||String(e);
+    $('error').textContent=e && e.message||String(e);
   }finally{busy=false;}
 }
 async function control(action){
   $('start').disabled=true;$('stop').disabled=true;$('scan').disabled=true;
   try{
     const r=await setRadarState('COIN_HUNTER_RADAR',action);
-    if(!r.ok)throw new Error(r.body?.error||r.error||'HTTP_'+r.status);
+    if(!r.ok)throw new Error(r.body && r.body.error||r.error||'HTTP_'+r.status);
     await refresh(true);
   }catch(e){$('error').textContent=(e && e.message)||String(e);}
   finally{$('start').disabled=false;$('stop').disabled=false;$('scan').disabled=false;}
