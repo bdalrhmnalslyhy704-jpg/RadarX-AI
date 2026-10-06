@@ -7,7 +7,7 @@ const P = {
   LIQUIDITY_ABSORPTION_RADAR:{n:'الكاسح',i:'🧹',c:'#06b6d4',m:'امتصاص البيع',s:'Seller Absorption + Depth Imbalance + Trapped Sellers',t:'1m • 5m',a:['Seller Absorption','Depth Imbalance','Trapped Sellers','Microstructure','Auction Balance','Fractal Structure','5m Confirm'],g:['سبريد ضيق','حجم وامتصاص حقيقي','رفض التمدد']}
 };
 
-function e(v){return String(v??'').replace(/[&<>"]/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[x]));}
+function e(v){return String(v||'').replace(/[&<>"]/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[x]));}
 function q(v){return Number.isFinite(Number(v))?Number(v).toFixed(1):'—';}
 
 function idFromPath(){
@@ -20,7 +20,7 @@ function idFromPath(){
 
 function installTheme(p){
   const old=document.getElementById('rxs-style');
-  old?.remove();
+  old && old.remove();
   const st=document.createElement('style');
   st.id='rxs-style';
   st.textContent=`
@@ -83,7 +83,7 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
     const ref=root.querySelector('[data-ref]');
 
     const setStatus=(x)=>{
-      const live=x?.running===true;
+      const live=x && x.running===true;
       stn.className='status '+(live?'live':'');
       stn.textContent=live?'● '+p.n+' يعمل مستقلًا':'○ '+p.n+' متوقف';
       on.disabled=live;off.disabled=!live;
@@ -96,7 +96,7 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
       }
       const sorted=[...rows].sort((a,b)=>Number(b.radar_power_score||b.opportunity_score||0)-Number(a.radar_power_score||a.opportunity_score||0));
       box.innerHTML=sorted.slice(0,20).map(x=>`<article class="alert">
-        <div class="top"><b>${e(x.symbol||'—')}</b><span class="score">${q(x.radar_power_score||x.radar_v2?.score||x.opportunity_score)}/100</span></div>
+        <div class="top"><b>${e(x.symbol||'—')}</b><span class="score">${q(x.radar_power_score||x.radar_v2 && x.radar_v2.score||x.opportunity_score)}/100</span></div>
         <div class="muted">${e(x.potential_label||x.event||'اكتشاف')} • ${e(x.direction||'—')} • ${e(x.detected_time_12h||'—')}</div>
         <div class="muted">${e(Array.isArray(x.reasons)?x.reasons.slice(0,4).join(' • '):'')}</div>
       </article>`).join('');
@@ -107,13 +107,13 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
       busy=true;
       try{
         const [s,a]=await Promise.all([getRadarStatus(),getRadarAlerts({radar:id,limit:50})]);
-        if(s.ok)setStatus((s.body?.radars||[]).find(x=>x.radar===id));
+        if(s.ok)setStatus((s.body && s.body.radars||[]).find(x=>x.radar===id));
         else stn.textContent='تعذر قراءة حالة الرادار — HTTP_'+(s.status||0);
-        if(a.ok)show(a.body?.alerts||[]);
+        if(a.ok)show(a.body && a.body.alerts||[]);
         else if(a.status===404)box.innerHTML='<div class="muted">لا يوجد مسار تنبيهات لهذا الرادار في الخادم الحالي.</div>';
       }catch(x){
         stn.className='status';
-        stn.textContent='Backend غير متاح — '+e(x?.message||x);
+        stn.textContent='Backend غير متاح — '+e(x && x.message||x);
         box.innerHTML='<div class="muted">تعذر تحميل النتائج، لكن واجهة الرادار تعمل. أعد التحديث لاحقًا.</div>';
       }finally{busy=false;}
     }
@@ -124,9 +124,9 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
       stn.textContent=action==='start'?'جاري التشغيل…':'جاري الإيقاف…';
       try{
         const x=await setRadarState(id,action);
-        if(!x.ok)throw new Error(x.body?.error||x.error||('HTTP_'+x.status));
+        if(!x.ok)throw new Error(x.body && x.body.error||x.error||('HTTP_'+x.status));
       }catch(x){
-        stn.textContent='فشل تغيير الحالة — '+e(x?.message||x);
+        stn.textContent='فشل تغيير الحالة — '+e(x && x.message||x);
       }
       await refresh();
     }
@@ -137,11 +137,11 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
     refresh();
     timer=setInterval(refresh,20000);
   }catch(error){
-    root.innerHTML=`<main class="rxs" dir="rtl"><section class="card hero"><h1>${p.i} ${p.n}</h1><div class="status">تعذر رسم الرادار</div><div class="muted">${e(error?.message||error)}</div></section></main>`;
+    root.innerHTML=`<main class="rxs" dir="rtl"><section class="card hero"><h1>${p.i} ${p.n}</h1><div class="status">تعذر رسم الرادار</div><div class="muted">${e(error && error.message||error)}</div></section></main>`;
   }
 
   return {
-    refresh:()=>refresh?.(),
-    destroy(){dead=true;if(timer)clearInterval(timer);root.innerHTML='';document.getElementById('rxs-style')?.remove();}
+    refresh:()=>refresh(),
+    destroy(){dead=true;if(timer)clearInterval(timer);root.innerHTML='';(function(){var _n=document.getElementById('rxs-style');if(_n)_n.remove();})();}
   };
 }
