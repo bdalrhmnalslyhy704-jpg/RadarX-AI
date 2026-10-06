@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07111c">
+<title>RadarX — المقاوم</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:#07111c;color:#e8f4ff;font-family:system-ui,-apple-system,Segoe UI,Arial,sans-serif}
+main{width:min(980px,100%);margin:auto;padding:16px 14px 32px}
+.card{border:1px solid #24445e;border-radius:18px;background:linear-gradient(145deg,#0d1b29,#09131f);padding:14px;margin:12px 0}
+h1{margin:0;font-size:22px}.sub{color:#8ca8bb;font-size:12px;line-height:1.7;margin-top:6px}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+button{border:0;border-radius:12px;padding:11px 14px;font-weight:900;background:#38bdf8;color:#04111b}
+button.secondary{background:#1b3044;color:#e6f6ff}
+.status{font-size:12px;font-weight:900}.ok{color:#56e39f}.off{color:#ffb4b4}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+@media(max-width:650px){.grid{grid-template-columns:1fr}}
+.metric{padding:12px;border-radius:14px;background:#0a1622;border:1px solid #1e3a52}
+.metric b{display:block;font-size:17px}.metric small{color:#8ca8bb}
+.signal{border-top:1px solid #173249;padding:12px 0}.signal:first-child{border-top:0}
+.pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#14293a;font-size:10px;font-weight:900;margin-inline-start:5px}
+.up{color:#56e39f}.down{color:#ff8f8f}.warn{color:#ffd27f}
+pre{white-space:pre-wrap;word-break:break-word;color:#9fc0d6;font-size:11px}
+</style>
+</head>
+<body>
+<main>
+<div class="card">
+  <h1>🛡️ المقاوم</h1>
+  <div class="sub">حارس اتجاه السوق قبل التفكير في الدخول: هيكل القمم والقيعان + خط الاتجاه + المتوسط المتحرك + الإطار الزمني الكبير. لا يطارد الحركة ولا يعتبر الفريم الصغير أقوى من الاتجاه الأكبر.</div>
+  <div class="row">
+    <button id="start">تشغيل المقاوم</button>
+    <button id="stop" class="secondary">إيقاف المقاوم</button>
+    <button id="refresh" class="secondary">تحديث</button>
+  </div>
+  <p id="status" class="status">جاري القراءة…</p>
+</div>
+
+<div class="grid">
+  <div class="metric"><small>اتجاه أعلى إطار</small><b id="htf">—</b></div>
+  <div class="metric"><small>آخر قوة رادار</small><b id="score">—</b></div>
+  <div class="metric"><small>آخر تنبيهات</small><b id="count">0</b></div>
+  <div class="metric"><small>المصدر</small><b>Binance Public REST</b></div>
+</div>
+
+<div class="card">
+  <h3>كيف يحكم المقاوم؟</h3>
+  <div class="sub">الصاعد القوي = HH + HL، والهابط القوي = LH + LL. ثم يُفحص ميل خط الاتجاه، موقع السعر بالنسبة إلى EMA، وتوافق 4H مع 1H، مع جعل 15m حارس خطر للدخول عكس الاتجاه.</div>
+</div>
+
+<div class="card">
+  <h3>آخر النتائج</h3>
+  <div id="list"><div class="sub">لا توجد نتائج بعد.</div></div>
+</div>
+<script type="module">
+import {getAlMuqawimRadar,setRadarState} from './radarx-backend-client.mjs';
+
+const $=id=>document.getElementById(id);
+function esc(v){return String(v??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
+function directionLabel(d){
+  return d==='UP'?'صاعد':d==='DOWN'?'هابط':d==='CONFLICT'?'متعارض':'مراقبة';
+}
+function dirClass(d){return d==='UP'?'up':d==='DOWN'?'down':d==='CONFLICT'?'warn':''}
+async function control(action){
+  $('status').textContent=action==='start'?'جاري تشغيل المقاوم…':'جاري إيقاف المقاوم…';
+  try{
+    const r=await setRadarState('ALMUQAWIM_RADAR',action);
+    if(r.status===200){$('status').textContent=r.body?.running?'المقاوم يعمل الآن':'المقاوم متوقف الآن';return refresh();}
+    $('status').textContent='فشل التحكم — HTTP_'+(r.status||0);
+  }catch(e){$('status').textContent='خطأ — '+(e?.message||e)}
+}
+async function refresh(){
+  try{
+    const r=await getAlMuqawimRadar({limit:20});
+    if(r.status!==200){$('status').textContent='تعذر قراءة المقاوم — HTTP_'+(r.status||0);return}
+    const h=r.body?.monitoring;
+    $('status').textContent=h?.running?'🟢 المقاوم يعمل — شموع مغلقة فقط':'⚪ المقاوم متوقف';
+    $('count').textContent=String((r.body?.alerts||[]).length);
+    const alerts=Array.isArray(r.body?.alerts)?r.body.alerts:[];
+    if(alerts.length){
+      const a=alerts[0];
+      $('htf').innerHTML='<span class="'+dirClass(a.direction)+'">'+esc(directionLabel(a.direction))+'</span>';
+      $('score').textContent=Number.isFinite(Number(a.opportunity_score))?Number(a.opportunity_score).toFixed(1):'—';
+      $('list').innerHTML=alerts.map(x=>{
+        const c=x.almuqawim||{};
+        const t=c.timeframes||{};
+        return '<div class="signal">'+
+          '<b>'+esc(x.symbol)+'</b> <span class="pill '+dirClass(x.direction)+'">'+esc(directionLabel(x.direction))+'</span> <span class="pill">'+esc(x.potential_label||'')+'</span>'+
+          '<div class="sub">القوة: '+esc(x.opportunity_score)+' • خطر الدخول: '+esc(c.entry_risk||'—')+
+          '<br>4H: '+esc(directionLabel(t['4h']?.direction))+' • 1H: '+esc(directionLabel(t['1h']?.direction))+' • 15m: '+esc(directionLabel(t['15m']?.direction))+
+          '<br>الهيكل: '+esc(c.components?.market_structure)+' • خط الاتجاه: '+esc(c.components?.trendline)+' • المتوسط: '+esc(c.components?.moving_average)+'</div>'+
+          '</div>';
+      }).join('');
+    }else{
+      $('htf').textContent='لا يوجد تنبيه قوي';
+      $('score').textContent='—';
+      $('list').innerHTML='<div class="sub">المقاوم يعمل ويبحث عن توافق حقيقي قبل إصدار التنبيه.</div>';
+    }
+  }catch(e){$('status').textContent='خطأ — '+(e?.message||e)}
+}
+$('start').onclick=()=>control('start'); $('stop').onclick=()=>control('stop'); $('refresh').onclick=refresh;
+refresh(); setInterval(refresh,30000);
+</script>
+</main>
+</body>
+</html>
