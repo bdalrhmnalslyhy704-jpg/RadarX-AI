@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {ProfessorRadar,calculateProfessorOpinion,classifyStreamClaim} from '../core/professor-radar.mjs';
+import {resetRadarNotificationGateForTests} from '../core/radar-notification-gate.mjs';
 
 test('TEST_PROFESSOR: stream claim classifier separates buy and sell language',()=>{
   assert.equal(classifyStreamClaim('BTC buy long breakout entry').action,'BUY_BIAS');
@@ -26,6 +27,7 @@ test('TEST_PROFESSOR: weak technical/news evidence avoids paper entry',()=>{
 });
 
 test('TEST_PROFESSOR: scan fuses public stream + news + Binance technical confirmation',async()=>{
+  resetRadarNotificationGateForTests();
   const alerts=[];
   const store={appendProfessorAlert:async x=>alerts.push(x)};
   const rest={request:async path=>{
