@@ -415,9 +415,7 @@ export class StrongMoveRadar {
       Number(alert?.strong_move?.score)||0,
       Number(alert?.strong_move?.component_scores?.flash)||0
     );
-    const a=alert?.strong_move||{};
     const cs=a.component_scores||{};
-    const m=a.metrics||{};
     const gate=evaluateEliteGate({
       radar:'STRONG_MOVE_RADAR',
       direction:a.direction,
