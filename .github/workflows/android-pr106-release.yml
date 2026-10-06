@@ -31,8 +31,12 @@ jobs:
           export ANDROID_HOME="$ANDROID_SDK_ROOT"
           export PATH="$ANDROID_SDK_ROOT/cmdline-tools/16.0/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
           test -x "$ANDROID_SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager"
-          yes | "$ANDROID_SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
-          "$ANDROID_SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" >/dev/null
+          if [[ ! -f "$ANDROID_SDK_ROOT/platforms/android-35/android.jar" || ! -x "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" ]]; then
+            yes | "$ANDROID_SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager" --licenses || true
+            "$ANDROID_SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"
+          fi
+          test -f "$ANDROID_SDK_ROOT/platforms/android-35/android.jar"
+          test -x "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
