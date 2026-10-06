@@ -58,7 +58,7 @@ pre{white-space:pre-wrap;word-break:break-word;color:#9fc0d6;font-size:11px}
 import {getAlMuqawimRadar,setRadarState} from './radarx-backend-client.mjs';
 
 const $=id=>document.getElementById(id); let refreshBusy=false;
-function esc(v){return String(v != null ? v : 'x''').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
+function esc(v){return String(v != null ? v : 'x').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
 function directionLabel(d){
   return d==='UP'?'صاعد':d==='DOWN'?'هابط':d==='CONFLICT'?'متعارض':'مراقبة';
 }
