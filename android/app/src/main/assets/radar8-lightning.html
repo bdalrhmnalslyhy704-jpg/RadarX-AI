@@ -52,7 +52,7 @@ const $=id=>document.getElementById(id);
 let timer=null;
 let busy=false;
 
-function esc(v){return String(v??'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));}
+function esc(v){return String(v||'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));}
 function fmt(v,d=2){const n=Number(v);return Number.isFinite(n)?n.toFixed(d):'—';}
 function fmtPct(v){const n=Number(v);return Number.isFinite(n)?(n>=0?'+':'')+n.toFixed(2)+'%':'—';}
 function timeText(iso){try{return new Intl.DateTimeFormat('ar-YE',{timeZone:'Asia/Aden',hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true}).format(new Date(iso));}catch{return iso||'—';}}
@@ -67,24 +67,24 @@ async function req(path,timeout=70000){
       const body=await r.json().catch(()=>null);
       if(r.ok||[400,404,409,429].includes(r.status)) return {ok:r.ok,status:r.status,body,base};
       last='HTTP_'+r.status;
-    }catch(e){last=String(e?.message||e||'BACKEND_CONNECTION_FAILED');}
+    }catch(e){last=String(e && e.message||e||'BACKEND_CONNECTION_FAILED');}
     finally{clearTimeout(t);}
   }
   throw new Error(last||'BACKEND_CONNECTION_FAILED');
 }
 
 function render(data){
-  const u=data?.universe||{}, m=data?.monitoring||{};
-  $('universe').textContent=u.expected_total??m.universe_total??'—';
-  $('eligible').textContent=u.eligible_total??'—';
-  $('micro').textContent=m.micro_scanned_total??u.micro_scanned_total??'—';
-  $('deep').textContent=u.deep_scanned_total??'—';
+  const u=data && data.universe||{}, m=data && data.monitoring||{};
+  $('universe').textContent=u.expected_total||m.universe_total||'—';
+  $('eligible').textContent=u.eligible_total||'—';
+  $('micro').textContent=m.micro_scanned_total||u.micro_scanned_total||'—';
+  $('deep').textContent=u.deep_scanned_total||'—';
   const live=m.running===true;
   $('state').textContent=live?'LIVE • البرق يعمل':'متوقف';
   $('state').className='state '+(live?'ok':'warn');
-  $('updated').textContent='آخر تحديث: '+timeText(data?.as_of);
+  $('updated').textContent='آخر تحديث: '+timeText(data && data.as_of);
   $('error').textContent=m.last_error?'خطأ: '+esc(m.last_error):'';
-  const arr=Array.isArray(data?.candidates)?data.candidates:[];
+  const arr=Array.isArray(data && data.candidates)?data.candidates:[];
   if(!arr.length){$('candidates').innerHTML='<div class="empty">لا توجد بصمات عميقة مؤكدة في هذه الدورة.</div>';return;}
   $('candidates').innerHTML=arr.slice(0,20).map(c=>{
     const fp=c.micro_fingerprint||{};
@@ -93,7 +93,7 @@ function render(data){
     const risk=[...(fp.risk_flags||[]),...(c.risk_flags||[])].slice(0,5);
     return '<article class="coin">'+
       '<div class="coin-top"><b>'+esc(c.symbol)+'</b><span class="score">'+fmt(c.early_expansion_score,1)+'</span></div>'+
-      '<div class="meta"><span class="pill">'+esc(c.decision_band||'—')+'</span><span class="pill">'+esc(fp.mode||'—')+'</span><span class="pill">Micro '+fmt(fp.score,1)+'</span><span class="pill">'+esc(String(fp.confirmation_count??0))+'/'+esc(String(fp.confirmation_total??10))+' تأكيدات</span></div>'+
+      '<div class="meta"><span class="pill">'+esc(c.decision_band||'—')+'</span><span class="pill">'+esc(fp.mode||'—')+'</span><span class="pill">Micro '+fmt(fp.score,1)+'</span><span class="pill">'+esc(String(fp.confirmation_count||0))+'/'+esc(String(fp.confirmation_total||10))+' تأكيدات</span></div>'+
       '<div class="mini">'+
       '<div><b>'+fmt(met.rvol_1m,2)+'x</b><small>RVOL 1m</small></div>'+
       '<div><b>'+fmt(met.trade_rvol_1m,2)+'x</b><small>Trades 1m</small></div>'+
@@ -116,12 +116,12 @@ async function refresh({scan=false}={}){
     const r=await req(q,scan?120000:70000);
     if(r.body)render(r.body);
     if(!r.ok)$('error').textContent='HTTP_'+r.status;
-  }catch(e){$('state').textContent='تعذر الاتصال';$('state').className='state bad';$('error').textContent=String(e?.message||e);}
+  }catch(e){$('state').textContent='تعذر الاتصال';$('state').className='state bad';$('error').textContent=String(e && e.message||e);}
   finally{busy=false;}
 }
 async function control(action){
   try{await req('/api/radar-control?radar=EARLY_EXPANSION_RADAR&action='+encodeURIComponent(action),30000);await refresh({scan:true});}
-  catch(e){$('error').textContent=String(e?.message||e);}
+  catch(e){$('error').textContent=String(e && e.message||e);}
 }
 $('start').onclick=()=>control('start');
 $('stop').onclick=()=>control('stop');
