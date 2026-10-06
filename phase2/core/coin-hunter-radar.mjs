@@ -41,7 +41,7 @@ function closedCandles(rows, now) {
 
 function featureSet(candles, ticker, btcChange = null) {
   const c = closedCandles(candles, Date.now());
-  if (c.length < 24) return null;
+  if (c.length < 16) return null;
 
   const closes = c.map(x => Number(x.close));
   const volumes = c.map(x => Number(x.volume));
@@ -344,12 +344,18 @@ export class CoinHunterRadar {
 
   async refreshUniverse(quote) {
     const now = Date.now();
-    if (this.universe.length && now - this.universeAt < Number(this.config.universeRefreshMs)) return;
-    const [info, ticker] = await Promise.all([
-      this.rest.request('/api/v3/exchangeInfo'),
-      this.rest.request('/api/v3/ticker/24hr')
-    ]);
-    const symbols = (info.data?.symbols || []).filter(x => this.isSpotSymbol(x, quote)).map(x => String(x.symbol).toUpperCase());
+    if (!this.universe.length || now - this.universeAt >= Number(this.config.universeRefreshMs)) {
+      const info = await this.rest.request('/api/v3/exchangeInfo');
+      const symbols = new Set(
+        (info.data?.symbols || [])
+          .filter(x => this.isSpotSymbol(x, quote))
+          .map(x => String(x.symbol).toUpperCase())
+      );
+      this.universe = [...symbols].map(symbol => ({symbol}));
+      this.universeAt = now;
+    }
+    const ticker = await this.rest.request('/api/v3/ticker/24hr');
+    const allowed = new Set(this.universe.map(x => x.symbol));
     const tickers = (Array.isArray(ticker.data) ? ticker.data : [])
       .map(x => ({
         symbol: String(x.symbol || '').toUpperCase(),
@@ -360,10 +366,9 @@ export class CoinHunterRadar {
         highPrice: finite(x.highPrice),
         lowPrice: finite(x.lowPrice)
       }))
-      .filter(x => symbols.includes(x.symbol) && Number.isFinite(x.lastPrice) && Number.isFinite(x.priceChangePercent))
+      .filter(x => allowed.has(x.symbol) && Number.isFinite(x.lastPrice) && Number.isFinite(x.priceChangePercent))
       .filter(x => Number(x.quoteVolume) >= Number(this.config.minQuoteVolume24h));
     this.universe = tickers;
-    this.universeAt = now;
     return tickers;
   }
 
@@ -379,8 +384,14 @@ export class CoinHunterRadar {
       const dayStart = this.dayStartInAden();
       this.dayStartMs = dayStart;
       const btcTicker = q === 'USDT' ? (tickers.find(x => x.symbol === 'BTCUSDT') || null) : null;
-      const leaderCandidates = tickers.filter(x => Number(x.priceChangePercent) >= Number(this.config.minLeaderMovePct))
-        .sort((a,b) => Number(b.priceChangePercent) - Number(a.priceChangePercent))
+      const positive = tickers
+        .filter(x => Number(x.priceChangePercent) > 0)
+        .sort((a,b) => Number(b.priceChangePercent) - Number(a.priceChangePercent));
+      const leaderCandidates = [
+        ...positive.filter(x => Number(x.priceChangePercent) >= Number(this.config.minLeaderMovePct)),
+        ...positive.filter(x => Number(x.priceChangePercent) < Number(this.config.minLeaderMovePct))
+      ]
+        .filter((x,i,a) => a.findIndex(y => y.symbol === x.symbol) === i)
         .slice(0, Number(this.config.leaderCount));
 
       const leaderRows = [];
