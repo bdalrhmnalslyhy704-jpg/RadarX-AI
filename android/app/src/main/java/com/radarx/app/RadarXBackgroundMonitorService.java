@@ -132,6 +132,7 @@ public final class RadarXBackgroundMonitorService extends Service {
             boolean live = meta != null && meta.optBoolean("paper_trading", true)
                 && !meta.optBoolean("real_order_execution", false);
             if (live) {
+                if (!loggedFirstScan) { loggedFirstScan = true; Log.i(TAG, "BACKGROUND_SCAN_OK"); }
                 JSONArray alerts = root.optJSONArray("alerts");
                 int count = notifyNewRadarAlerts(alerts == null ? new JSONArray() : alerts);
                 JSONArray radars = root.optJSONArray("radars");
@@ -141,6 +142,7 @@ public final class RadarXBackgroundMonitorService extends Service {
                 updateStatus("الرادارات المستقلة غير متاحة حاليًا؛ لا يتم توليد بيانات صناعية");
             }
         } catch (Throwable error) {
+            if (!loggedFirstScan) { loggedFirstScan = true; Log.w(TAG, "BACKGROUND_SCAN_ERROR", error); }
             Log.w(TAG, "Background unified radar fetch failed", error);
             updateStatus("الرادارات المستقلة • لا يوجد اتصال الآن؛ عند انقطاع الإنترنت: حُفظ التنبيه على الخادم ثم أُرسل عند عودة الاتصال؛ ستُستكمل القراءة عند عودة الإنترنت");
         }
@@ -303,6 +305,7 @@ public final class RadarXBackgroundMonitorService extends Service {
             startForeground(STATUS_NOTIFICATION_ID, builder.build());
         }
         saveRunning(true);
+        Log.i(TAG, "BACKGROUND_SERVICE_READY");
     }
 
     private void updateStatus(String text) {
