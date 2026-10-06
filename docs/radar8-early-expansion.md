@@ -10,13 +10,17 @@ Optional:
 `scan=1` requests an immediate scan when the background radar is already running.
 
 The response exposes:
-- `universe_total`
+- `expected_total` — symbols expected from exchangeInfo
+- `received_total` — symbols received in ticker/24hr
+- `missing_ticker_total`
 - `eligible_total`
+- `fast_scanned_total`
 - `scanned_total`
+- `deep_scanned_total`
 - `skipped_total`
 - `failed_total`
-- `coverage_ratio`
-- `deep_scanned_total`
+- `coverage_ratio = received_total / expected_total`
+- `eligible_coverage_ratio`
 - `deep_coverage_ratio`
 - ranked candidates
 - alert/event history
@@ -65,3 +69,9 @@ Radar 8 never creates orders, withdrawals or account operations.
 
 ## Backtest discipline
 The forensic replay uses historical closed Klines and explicitly refuses to fabricate historical order-book/news/Futures state. Precision, recall, false positives and lead-time claims require a larger walk-forward control sample before calibration.
+
+
+## REST rate limiting
+Radar 8 uses a serialized REST request queue. Endpoint REQUEST_WEIGHT is accounted for before each request and response headers `X-MBX-USED-WEIGHT-1M` are consumed when available. HTTP 429 and 418 responses establish explicit backoff windows; repeated requests are not fanned out across Binance base URLs after a rate-limit response.
+
+Current Spot REST weights used by the implementation include: exchangeInfo 20, klines/uiKlines 2, depth 5/25/50/250 by limit tier, and ticker/24hr 2 for one symbol or 1–20 symbols, 40 for 21–100, and 80 when no symbol or 101+ symbols are requested. The local client reserves a safety margin under the 6,000 REQUEST_WEIGHT/minute policy.
