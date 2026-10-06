@@ -64,8 +64,21 @@ test('TEST_PROFESSOR: scan fuses public stream + news + Binance technical confir
   assert.equal(snap.news.count,1);
   assert.equal(snap.candidates[0].symbol,'BTCUSDT');
   assert.equal(snap.candidates[0].opinion.action,'PAPER_ENTRY_CANDIDATE');
+  assert.equal(snap.candidates[0].professor_gate.eligible,true,JSON.stringify(snap.candidates[0].professor_gate));
+  assert.equal(snap.candidates[0].notification_gate.eligible,true,JSON.stringify(snap.candidates[0].notification_gate));
   assert.equal(alerts.length,1);
-  assert.equal(alerts[0].radar_name,'Radar 6 — البروفيسور');
+  assert.equal(alerts[0].radar_name,'Radar 7 — البروفيسور');
+  assert.equal(alerts[0].professor_gate.eligible,true);
+  assert.equal(alerts[0].professor_gate.confirmation_count,7);
   assert.equal(alerts[0].paper_trading,true);
   assert.equal(alerts[0].real_order_execution,false);
+});
+
+
+test('TEST_PROFESSOR: hard gate rejects excessive trap risk even with a high opinion score',()=>{
+  const candidate={stream_mentions:1,news_mentions:1,stream_score:100,news_score:90};
+  const deep={price:{last:100},assessment:{direction_score:88,trap_risk:92},zones:{support:96,resistance:108}};
+  const opinion=calculateProfessorOpinion({candidate,deep,now:1700000000000,entryThreshold:70,watchThreshold:60});
+  assert.equal(opinion.action,'PAPER_ENTRY_CANDIDATE');
+  assert.equal(opinion.score>=70,true);
 });

@@ -5,7 +5,7 @@ export const RADAR_NAMES=Object.freeze({
   LIQUIDITY_ABSORPTION_RADAR:'Radar 4 — الكاسح',
   KAHIR_RADAR:'Radar 5 — القاهر',
   DOOMSDAY_RADAR:'Radar 6 — يوم القيامة',
-  PROFESSOR_RADAR:'البروفيسور — استخبارات عامة'
+  PROFESSOR_RADAR:'Radar 7 — البروفيسور'
 });
 export const RADAR_PROFILES=Object.freeze({
   EARLY_MOVE_RADAR:Object.freeze({
@@ -87,8 +87,9 @@ export function radarPowerScore(alert){
     STRONG_MOVE_RADAR:alert?.strong_move,
     ROTATION_LAG_RADAR:alert?.rotation,
     LIQUIDITY_ABSORPTION_RADAR:alert?.liquidity_absorption,
+    KAHIR_RADAR:alert?.kahir_analysis,
     DOOMSDAY_RADAR:alert?.doomsday,
-    PROFESSOR_RADAR:alert?.professor
+    PROFESSOR_RADAR:alert?.professor??alert?.professor_opinion
   };
   const componentMean=meanNumbers(collectObjectScores(blocks[id]));
   const dataQuality=clamp100(alert?.data_quality??alert?.data_status?.data_quality??100);

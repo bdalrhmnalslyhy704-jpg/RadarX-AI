@@ -1,5 +1,5 @@
 import {buildSpotUniverse} from '../market/universe-scanner.mjs';
-import {formatRadarTime12h} from './radar-alert-meta.mjs';
+import {formatRadarTime12h,decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate,rememberRadarAlert} from './radar-notification-gate.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)||0));
@@ -9,6 +9,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 export const PROFESSOR_RADAR_DEFAULTS=Object.freeze({
   quote:'USDT',pollMs:120000,universeRefreshMs:15*60*1000,liveSearchLimit:8,transcriptStreams:2,
   newsLimit:35,deepCandidates:5,deepConcurrency:2,alertCooldownMs:30*60*1000,minEntryScore:78,minWatchScore:66,
+  minTechnicalScore:72,minStreamScore:62,minNewsScore:55,maxTrapRisk:58,minEvidenceTypes:2,
   webTimeoutMs:7000,transcriptTimeoutMs:6000,
   searchQueries:['crypto trading live','bitcoin trading live','altcoin trading live','binance trading live','crypto scalping live']
 });
@@ -155,8 +156,38 @@ function buildOpinion(candidate,deep,now,entryThreshold=75,watchThreshold=66){
   }
   return {score:Number(score.toFixed(1)),stance,action,evidence_types:evidenceTypes,evidence_strength:Number(clamp(candidate.stream_mentions*12+candidate.news_mentions*5+(deep?20:0)).toFixed(1)),technical_score:Number(technical.toFixed(1)),stream_score:Number(stream.toFixed(1)),news_score:Number(news.toFixed(1)),trap_risk:Number(trap.toFixed(1)),paper_trade:paperTrade,as_of:new Date(now).toISOString(),disclaimer:'رأي تحليلي آلي مبني على بيانات عامة؛ ليس ضمانًا للربح. التنفيذ الحقيقي غير متاح في RadarX.'};
 }
+function buildProfessorGate(opinion,deep,config=PROFESSOR_RADAR_DEFAULTS){
+  const direction=finite(deep?.assessment?.direction_score,null);
+  const trap=finite(opinion?.trap_risk,null);
+  const checks={
+    paper_entry:opinion?.action==='PAPER_ENTRY_CANDIDATE',
+    deep_confirmation:Number.isFinite(direction),
+    evidence_types:Number(opinion?.evidence_types||0)>=Number(config.minEvidenceTypes),
+    technical:Number(opinion?.technical_score||0)>=Number(config.minTechnicalScore),
+    stream:Number(opinion?.stream_score||0)>=Number(config.minStreamScore),
+    news:Number(opinion?.news_score||0)>=Number(config.minNewsScore),
+    trap_ok:Number.isFinite(trap)&&trap<=Number(config.maxTrapRisk)
+  };
+  const confirmations=Object.entries(checks).filter(([,ok])=>ok).map(([key])=>key);
+  return {
+    eligible:Object.values(checks).every(Boolean),
+    score:Number(opinion?.score||0),
+    confirmations,
+    confirmation_count:confirmations.length,
+    required_confirmations:7,
+    thresholds:{
+      min_score:Number(config.minEntryScore),
+      min_technical_score:Number(config.minTechnicalScore),
+      min_stream_score:Number(config.minStreamScore),
+      min_news_score:Number(config.minNewsScore),
+      max_trap_risk:Number(config.maxTrapRisk),
+      min_evidence_types:Number(config.minEvidenceTypes)
+    },
+    reason:'تأكيد فني + بث عام + خبر + ضبط خطر الفخ مطلوب قبل التنبيه.'
+  };
+}
 function buildAlert(candidate,opinion,now){
-  return {id:'PROFESSOR:'+candidate.symbol+':'+now,event:'PROFESSOR_LIVE_TRADE_INTELLIGENCE',radar:'PROFESSOR_RADAR',radar_name:'Radar 6 — البروفيسور',symbol:candidate.symbol,market:'SPOT',direction:opinion.action==='PAPER_ENTRY_CANDIDATE'?'UP_BIAS':opinion.action==='SPOT_AVOID'?'DOWN_OR_RISK':'NEUTRAL',opportunity_score:opinion.score,potential_label:opinion.action,professor_opinion:opinion,trade_claims:candidate.trade_claims.slice(0,12),news_items:candidate.news_items.slice(0,12),stream_mentions:candidate.stream_mentions,news_mentions:candidate.news_mentions,source:'YouTube Public Search + GDELT DOC 2.0 + Binance Public REST',detected_at:now,processed_at:now,detected_at_iso:new Date(now).toISOString(),detected_time_12h:formatRadarTime12h(now),detected_timezone:'Asia/Aden',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true,disclaimer:opinion.disclaimer};
+  return {id:'PROFESSOR:'+candidate.symbol+':'+now,event:'PROFESSOR_LIVE_TRADE_INTELLIGENCE',radar:'PROFESSOR_RADAR',radar_name:'Radar 7 — البروفيسور',symbol:candidate.symbol,market:'SPOT',direction:opinion.action==='PAPER_ENTRY_CANDIDATE'?'UP_BIAS':opinion.action==='SPOT_AVOID'?'DOWN_OR_RISK':'NEUTRAL',opportunity_score:opinion.score,potential_label:opinion.action,professor_opinion:opinion,professor_gate:opinion.professor_gate||null,trade_claims:candidate.trade_claims.slice(0,12),news_items:candidate.news_items.slice(0,12),stream_mentions:candidate.stream_mentions,news_mentions:candidate.news_mentions,source:'YouTube Public Search + GDELT DOC 2.0 + Binance Public REST',detected_at:now,processed_at:now,detected_at_iso:new Date(now).toISOString(),detected_time_12h:formatRadarTime12h(now),detected_timezone:'Asia/Aden',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true,disclaimer:opinion.disclaimer};
 }
 export function classifyStreamClaim(text){return streamClaim(text);}
 export function calculateProfessorOpinion(input){return buildOpinion(input.candidate||input,input.deep||null,input.now||Date.now(),input.entryThreshold??75,input.watchThreshold??66);}
@@ -205,19 +236,31 @@ export class ProfessorRadar{
       const mentions=aggregateMentions({streams:this.latestStreams,news:this.latestNews,index}).sort((a,b)=>(b.stream_mentions+b.news_mentions)-(a.stream_mentions+a.news_mentions)).slice(0,Math.max(1,this.config.deepCandidates));
       const deep=await mapLimit(mentions,this.config.deepConcurrency,async c=>({candidate:c,deep:this.deepAnalyzer?await this.deepAnalyzer.scan(c.symbol):null}));const enriched=[];
       for(const row of deep){
-        if(row?.error)continue;const opinion=buildOpinion(row.candidate,row.deep,now,this.config.minEntryScore,this.config.minWatchScore);const result={...row.candidate,deep_scan:row.deep,opinion};enriched.push(result);this.scans++;
-        if(opinion.action==='PAPER_ENTRY_CANDIDATE'&&opinion.evidence_types>=2&&now-(this.lastAlertAt.get(result.symbol)||0)>=this.config.alertCooldownMs){
-          const alert=buildAlert(result,opinion,now);const notificationGate=evaluateRadarNotificationGate(alert,{now});alert.notification_gate=notificationGate;if(!notificationGate.eligible)continue;this.lastAlertAt.set(result.symbol,now);await this.store.appendProfessorAlert(alert);if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(alert);rememberRadarAlert(alert,now);this.alertCount++;
+        if(row?.error)continue;const opinion=buildOpinion(row.candidate,row.deep,now,this.config.minEntryScore,this.config.minWatchScore);
+        const professorGate=buildProfessorGate(opinion,row.deep,this.config);
+        opinion.professor_gate=professorGate;
+        const result={...row.candidate,deep_scan:row.deep,opinion,professor_gate:professorGate};enriched.push(result);this.scans++;
+        if(professorGate.eligible&&now-(this.lastAlertAt.get(result.symbol)||0)>=this.config.alertCooldownMs){
+          const alert=decorateRadarAlert(buildAlert(result,opinion,now),'Radar 7 — البروفيسور');
+          const notificationGate=evaluateRadarNotificationGate(alert,{now});
+          alert.notification_gate=notificationGate;
+          result.notification_gate=notificationGate;
+          if(!notificationGate.eligible)continue;
+          this.lastAlertAt.set(result.symbol,now);
+          await this.store.appendProfessorAlert(alert);
+          if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(alert);
+          rememberRadarAlert(alert,now);
+          this.alertCount++;
         }
       }
       this.latestCandidates=enriched.sort((a,b)=>b.opinion.score-a.opinion.score).slice(0,20);this.lastScanAtMs=now;
       this.lastError=[...streamResult.errors,...newsResult.errors].join(' | ')||null;
-      this.lastResult={radar:'PROFESSOR_RADAR',radar_name:'Radar 6 — البروفيسور',as_of:new Date(now).toISOString(),universe:{eligible_spot_symbols:this.universe.length,mentioned_symbols:mentions.length,deep_scanned:enriched.length},streams:{count:this.latestStreams.length,live_count:this.latestStreams.filter(x=>x.live).length,source_status:streamResult.errors.length?'PARTIAL':'LIVE',items:this.latestStreams},news:{count:this.latestNews.length,source_status:newsResult.errors.length?'PARTIAL':'LIVE',items:this.latestNews},candidates:this.latestCandidates,meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',discovery_scope:'Public YouTube search pages are not exhaustive; news via GDELT realtime coverage.'},errors:this.lastError?this.lastError.split(' | ').slice(0,8):[]};
+      this.lastResult={radar:'PROFESSOR_RADAR',radar_name:'Radar 7 — البروفيسور',as_of:new Date(now).toISOString(),universe:{eligible_spot_symbols:this.universe.length,mentioned_symbols:mentions.length,deep_scanned:enriched.length},streams:{count:this.latestStreams.length,live_count:this.latestStreams.filter(x=>x.live).length,source_status:streamResult.errors.length?'PARTIAL':'LIVE',items:this.latestStreams},news:{count:this.latestNews.length,source_status:newsResult.errors.length?'PARTIAL':'LIVE',items:this.latestNews},candidates:this.latestCandidates,meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',discovery_scope:'Public YouTube search pages are not exhaustive; news via GDELT realtime coverage.'},errors:this.lastError?this.lastError.split(' | ').slice(0,8):[]};
       return true;
     }catch(e){
-      this.lastScanAtMs=now;this.noteError(e,'tick');this.lastResult={...(this.lastResult||{}),radar:'PROFESSOR_RADAR',radar_name:'Radar 6 — البروفيسور',as_of:new Date(now).toISOString(),scan_error:this.lastError,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};return false;
+      this.lastScanAtMs=now;this.noteError(e,'tick');this.lastResult={...(this.lastResult||{}),radar:'PROFESSOR_RADAR',radar_name:'Radar 7 — البروفيسور',as_of:new Date(now).toISOString(),scan_error:this.lastError,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};return false;
     }finally{this.busy=false;}
   }
-  snapshot(limit=10){return {...(this.lastResult||{radar:'PROFESSOR_RADAR',radar_name:'Radar 6 — البروفيسور',as_of:null,universe:{eligible_spot_symbols:this.universe.length,mentioned_symbols:0,deep_scanned:0},streams:{count:0,live_count:0,source_status:'INIT',items:[]},news:{count:0,source_status:'INIT',items:[]},candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}}),candidates:(this.latestCandidates||[]).slice(0,Math.max(1,Math.min(50,Number(limit)||10))) };}
-  health(){return {running:this.running,busy:this.busy,radar:'PROFESSOR_RADAR',radar_name:'Radar 6 — البروفيسور',universe:this.universe.length,last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,stream_count:this.latestStreams.length,news_count:this.latestNews.length,source:'YouTube Public Search + GDELT DOC 2.0 + Binance Public REST',closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',algorithms:['Public live-stream discovery','Trade-claim extraction','Caption-first evidence','GDELT news clustering','News tone fusion','Binance deep technical confirmation','Spot-only paper decision']};}
+  snapshot(limit=10){return {...(this.lastResult||{radar:'PROFESSOR_RADAR',radar_name:'Radar 7 — البروفيسور',as_of:null,universe:{eligible_spot_symbols:this.universe.length,mentioned_symbols:0,deep_scanned:0},streams:{count:0,live_count:0,source_status:'INIT',items:[]},news:{count:0,source_status:'INIT',items:[]},candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}}),candidates:(this.latestCandidates||[]).slice(0,Math.max(1,Math.min(50,Number(limit)||10))) };}
+  health(){return {running:this.running,busy:this.busy,radar:'PROFESSOR_RADAR',radar_name:'Radar 7 — البروفيسور',universe:this.universe.length,last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,stream_count:this.latestStreams.length,news_count:this.latestNews.length,source:'YouTube Public Search + GDELT DOC 2.0 + Binance Public REST',closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',algorithms:['Public live-stream discovery','Trade-claim extraction','Caption-first evidence','GDELT news clustering','News tone fusion','Binance deep technical confirmation','Spot-only paper decision']};}
 }
