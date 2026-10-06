@@ -45,7 +45,7 @@ test('TEST_PROFESSOR: scan fuses public stream + news + Binance technical confir
     {videoRenderer:{videoId:'abc123',title:{simpleText:'BTC buy long breakout LIVE'},descriptionSnippet:{runs:[{text:'BTC entry now'}]},ownerText:{simpleText:'Test Trader'},viewCountText:{simpleText:'1K'},badges:[{metadataBadgeRenderer:{label:{simpleText:'LIVE NOW'}}}],thumbnailOverlays:[]}}
   ]}}]}}}}};
   const player={};
-  const gdelt={articles:[{title:'Bitcoin partnership boosts market growth',url:'https://example.com/news/1',domain:'example.com',datetime:'2026-10-04T18:00:00Z',tone:4}]};
+  const gdelt={articles:[{title:'BTC partnership boosts market growth',url:'https://example.com/news/1',domain:'example.com',datetime:'2026-10-04T18:00:00Z',tone:4}]};
   const fetchImpl=async url=>{
     const u=String(url);
     if(u.includes('youtube.com/results?search_query='))return new Response('var ytInitialData = '+JSON.stringify(ytData)+';',{status:200});
