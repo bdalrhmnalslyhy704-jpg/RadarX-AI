@@ -1,0 +1,28 @@
+name: Radar8 Research on Build224
+on:
+  push:
+    branches:
+      - radar8-build224-enhanced-20261006
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run historical mover fingerprint research
+        run: node phase2/tools/radar8-research.mjs
+      - name: Upload research JSON
+        uses: actions/upload-artifact@v4
+        with:
+          name: radar8-research
+          path: radar8-research.json
+          retention-days: 3
