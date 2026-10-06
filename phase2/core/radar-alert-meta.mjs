@@ -133,6 +133,7 @@ export function decorateRadarAlert(alert,radarName){
   return {...alert,radar_name:alert?.radar_name||radarName||RADAR_NAMES[radar]||'RadarX',
     radar_profile:profile,
     radar_v2,
+    radar_power_score:radar_v2.score,
     radar_v3,
     radar_quality_v3:radar_v3.quality_score,
     radar_grade_v3:radar_v3.grade,
