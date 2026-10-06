@@ -1,0 +1,74 @@
+name: RadarX Radar 8 — Main Transfer Gate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches:
+      - feature/radar8-transfer-to-main-20261006
+
+permissions:
+  contents: read
+
+jobs:
+  radar8-main-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=critical
+      - name: Validate Radar 8 JavaScript
+        run: |
+          set -euo pipefail
+          node --check phase2/core/early-expansion-radar.mjs
+          node --check phase2/core/radar-alert-meta.mjs
+          node --check phase2/core/radar-notification-gate.mjs
+          node --check phase2/core/radar-prebreakout-engine.mjs
+          node --check phase2/config.mjs
+          node --check phase2/http/api.mjs
+          node --check phase2/market/binance-rest.mjs
+          node --check phase2/server.mjs
+          node --check phase2/tools/early-expansion-forensic.mjs
+          node --check phase2/tests/early-expansion-radar.test.mjs
+          node --check phase2/tests/binance-rest.test.mjs
+          node --check phase2/tests/early-expansion-api-contract.test.mjs
+      - name: Run Binance REST tests
+        run: node --test --test-timeout=60000 phase2/tests/binance-rest.test.mjs
+      - name: Run Radar 8 unit tests
+        run: node --test --test-timeout=60000 phase2/tests/early-expansion-radar.test.mjs
+      - name: Run Radar 8 API contract tests
+        run: node --test --test-timeout=60000 phase2/tests/early-expansion-api-contract.test.mjs
+      - name: Run full Phase 2
+        run: npm run test:phase2
+      - name: Run full Phase 1
+        run: node --test --test-timeout=60000 phase1/tests/*.test.mjs
+      - name: Run Radar 8 forensic replay
+        env:
+          RADAR8_FORENSIC_THROUGH: "2026-10-06T14:45:00Z"
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          node phase2/tools/early-expansion-forensic.mjs
+      - name: Upload forensic artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: radar8-main-transfer-forensic
+          path: |
+            reports/radar8-forensic-2026-10-06.json
+            reports/radar8-forensic-2026-10-06.md
+          if-no-files-found: error
+          retention-days: 14
+      - name: No deployment guard
+        run: |
+          echo "Validation-only gate."
+          echo "No Railway deployment, no Android APK build, and no merge are performed by this workflow."
