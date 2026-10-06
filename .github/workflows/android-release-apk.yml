@@ -165,6 +165,7 @@ jobs:
           grep -q 'radar3-joker.html' android/app/src/main/assets/index.html
           grep -q 'radar4-sweeper.html' android/app/src/main/assets/index.html
           grep -q 'doomsday-radar.html' android/app/src/main/assets/index.html
+          grep -q 'al-muqawim-radar.html' android/app/src/main/assets/index.html
           grep -q 'doomsday-radar.html' android/app/src/main/assets/index.html
 
       - name: Validate embedded RadarX JavaScript syntax
@@ -191,6 +192,7 @@ jobs:
           node --check android/app/src/main/assets/radarx-professor-radar.mjs
           node --check android/app/src/main/assets/radarx-bottom-reversal.mjs
           node --check phase2/core/doomsday-radar.mjs
+          node --check phase2/core/al-muqawim-radar.mjs
           node --check phase2/core/market-surge-gate.mjs
           node --check phase2/core/kahir-radar.mjs
           node --check android/app/src/main/assets/radarx-pre-move.mjs
@@ -204,6 +206,7 @@ jobs:
           test -f android/app/src/main/assets/tradli.html
           test -f android/app/src/main/assets/bottom-radar.html
           test -f android/app/src/main/assets/kahir-radar.html
+          test -f android/app/src/main/assets/al-muqawim-radar.html
           test -f android/app/src/main/assets/king.html
           test -f android/app/src/main/assets/ai-agent-hub.html
           test -f android/app/src/main/java/com/radarx/app/BottomRadarActivity.java
