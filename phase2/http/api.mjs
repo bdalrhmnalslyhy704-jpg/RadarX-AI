@@ -130,7 +130,7 @@ function subscriptionValid(x){
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,earlyExpansionRadar=null}){
   const counters=new Map();
   const originList=config.auth.allowedOrigins;
   const marketRadar = monitor?.rest ? new MarketUniverseScanner({
@@ -160,7 +160,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(!rateOk(key))return send(res,429,{error:'RATE_LIMITED'});
     try{
       const u=new URL(req.url,'http://localhost');
-      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,monitor.health());
+      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),early_expansion_radar:earlyExpansionRadar?.health?.()||{running:false,radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق'}});
       if(u.pathname==='/readyz'&&req.method==='GET'){
         const h=monitor.health(),ok=h.database.state==='LIVE'&&(h.websocket.state==='LIVE'||h.rest.state==='LIVE');return send(res,ok?200:503,{ready:ok,health:h});
       }
@@ -174,6 +174,34 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           const m=String(e?.message??e);
           const status=/INVALID_QUOTE|INVALID_EXCHANGE_INFO/.test(m)?400:/RATE_LIMIT|TIMEOUT|UNAVAILABLE|FAILED/.test(m)?502:500;
           return send(res,status,{error:m,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},source:'Binance Public REST',candidates:[]});
+        }
+      }
+      if(u.pathname==='/api/early-expansion-radar'&&req.method==='GET'){
+        if(!earlyExpansionRadar)return send(res,503,{error:'EARLY_EXPANSION_RADAR_UNAVAILABLE',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'EARLY_EXPANSION_RADAR'}});
+        const sinceRaw=Number(u.searchParams.get('since')||0);
+        const limit=Math.max(1,Math.min(100,Math.trunc(Number(u.searchParams.get('limit')||100))));
+        const requestedQuote=String(u.searchParams.get('quote')||'USDT').trim().toUpperCase();
+        try{
+          const configuredQuote=String(earlyExpansionRadar.health()?.coverage?.quote||earlyExpansionRadar.config?.quote||'USDT').toUpperCase();
+          if(requestedQuote!==configuredQuote)return send(res,400,{error:'QUOTE_NOT_CONFIGURED',quote:requestedQuote,configured_quote:configuredQuote});
+          const runNow=String(u.searchParams.get('scan')||'').trim()==='1';
+          let immediateScanError=null;
+          const before=earlyExpansionRadar.health();
+          if(runNow&&before.running===true&&!before.busy){try{await earlyExpansionRadar.tick({quote:requestedQuote});}catch(e){immediateScanError=String(e?.message??e);}}
+          const alerts=typeof store.readEarlyExpansionAlerts==='function'
+            ? await store.readEarlyExpansionAlerts({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit})
+            : [];
+          const events=typeof store.readEarlyExpansionEvents==='function'
+            ? await store.readEarlyExpansionEvents({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit:Math.min(200,limit*2)})
+            : [];
+          const health=earlyExpansionRadar.health();
+          const snapshot=earlyExpansionRadar.snapshot(limit,requestedQuote);
+          return send(res,200,{...snapshot,monitoring:health,alerts,events,
+            scan:{requested:runNow,completed:immediateScanError===null&&health.last_scan_at!=null,error:immediateScanError||health.last_error||null},
+            thresholds:{min_alert_score:Number(config.earlyExpansionRadar?.minAlertScore??82),min_pre_expansion_score:Number(config.earlyExpansionRadar?.preExpansionScore??72),min_breakout_developing_score:Number(config.earlyExpansionRadar?.breakoutDevelopingScore??82)},
+            meta:{...(snapshot.meta||{}),live:health.running===true,radar:'EARLY_EXPANSION_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        }catch(e){
+          return send(res,503,{error:String(e?.message??e),candidates:[],alerts:[],events:[],monitoring:earlyExpansionRadar.health(),meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'EARLY_EXPANSION_RADAR'}});
         }
       }
       if(u.pathname==='/api/signal'&&req.method==='GET'){
