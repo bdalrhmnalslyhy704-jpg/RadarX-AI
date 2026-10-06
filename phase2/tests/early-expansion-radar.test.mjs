@@ -227,6 +227,8 @@ test('Cross-radar cooldown blocks same symbol but not a different symbol',()=>{
   resetRadarNotificationGateForTests();
   const a={radar:'EARLY_EXPANSION_RADAR',symbol:'AAAUSDT',opportunity_score:90,data_quality:75,liquidity_quality:65,risk_flags:[]};
   const other={radar:'KAHIR_RADAR',symbol:'AAAUSDT',opportunity_score:95,data_quality:90,liquidity_quality:80,risk_flags:[],
+    confirmation_count:8,
+    components:{momentum:80,volume:80,trades:80,taker:80,range:80,breakout:80},
     analysis:{metrics:{one_minute_z:2},algorithms:{PARTICIPATION_REGIME:{score:80}}}};
   const differentSymbol={...other,symbol:'BBBUSD'};
   assert.equal(evaluateRadarNotificationGate(a,{now:2000000}).eligible,true);
