@@ -204,6 +204,16 @@ export async function getSymbolDeepScan(symbol, fetchImpl = globalThis.fetch) {
 }
 
 
+export async function getAlMuqawimRadar({limit=20,since=0}={},fetchImpl=globalThis.fetch){
+  const safeLimit=Number(limit);
+  if(!Number.isInteger(safeLimit)||safeLimit<1||safeLimit>50)throw new Error('INVALID_LIMIT');
+  const safeSince=Number(since);
+  const q='?limit='+encodeURIComponent(String(safeLimit))+
+    (Number.isFinite(safeSince)&&safeSince>0?'&since='+encodeURIComponent(String(Math.trunc(safeSince))):'');
+  const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  return requestJson(base,'/api/almuqawim-radar'+q,fetchImpl,65000);
+}
+
 export async function getProfessorRadar({quote='USDT',limit=10,since=0,scan=true}={},fetchImpl=globalThis.fetch){
   const safeQuote=String(quote||'USDT').trim().toUpperCase();
   const safeLimit=Number(limit);
