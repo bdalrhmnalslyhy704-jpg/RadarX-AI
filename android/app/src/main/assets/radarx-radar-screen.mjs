@@ -104,7 +104,7 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
         const isJoker=id==='ROTATION_LAG_RADAR';
         const score=q(x.radar_power_score||x.radar_v2 && x.radar_v2.score||x.opportunity_score||x.score);
         const label=isJoker?(x.eligible===true?'جاهز للدوران':(x.potential_label||rotation.stage||'مراقبة')):(x.potential_label||x.event||'اكتشاف');
-        const extra=isJoker?' • تأكيدات '+String(x.rotation?.confirmations||x.confirmations||0):'';
+        const extra=isJoker?' • تأكيدات '+String((x.rotation && x.rotation.confirmations) || x.confirmations || 0):'';
         return '<article class="alert">'+
           '<div class="top"><b>'+e(x.symbol||'—')+'</b><span class="score">'+score+'/100</span></div>'+
           '<div class="muted">'+e(label)+' • '+e(x.direction||rotation.direction||'—')+' • '+e(x.detected_time_12h||'—')+extra+'</div>'+
