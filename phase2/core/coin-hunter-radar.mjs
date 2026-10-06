@@ -378,7 +378,7 @@ export class CoinHunterRadar {
 
       const dayStart = this.dayStartInAden();
       this.dayStartMs = dayStart;
-      const btcTicker = tickers.find(x => x.symbol === 'BTCUSDT') || tickers.find(x => x.symbol === q === 'USDT' ? 'BTCUSDT' : '');
+      const btcTicker = q === 'USDT' ? (tickers.find(x => x.symbol === 'BTCUSDT') || null) : null;
       const leaderCandidates = tickers.filter(x => Number(x.priceChangePercent) >= Number(this.config.minLeaderMovePct))
         .sort((a,b) => Number(b.priceChangePercent) - Number(a.priceChangePercent))
         .slice(0, Number(this.config.leaderCount));
@@ -387,8 +387,10 @@ export class CoinHunterRadar {
       for (const t of leaderCandidates) {
         try {
           const k = await this.rest.klines(t.symbol, '1h', {startTime: dayStart, limit: 30});
-          const features = featureSet(k.candles, t, null);
-          if (features) leaderRows.push({symbol:t.symbol, todayPct:Number(t.priceChangePercent), features});
+          const closed = closedCandles(k.candles, Date.now());
+          const dayPct = closed.length >= 2 ? pct(Number(closed.at(-1).close), Number(closed[0].open)) : null;
+          const features = featureSet(closed, t, null);
+          if (features) leaderRows.push({symbol:t.symbol, todayPct:dayPct ?? Number(t.priceChangePercent), features});
         } catch (error) {
           this.logger.warn?.('COIN_HUNTER_LEADER '+t.symbol+': '+String(error?.message ?? error));
         }
@@ -418,9 +420,11 @@ export class CoinHunterRadar {
             const features = featureSet(k.candles, t, btcToday);
             if (!features) return null;
             scanned += 1;
+            const closed = closedCandles(k.candles, Date.now());
+            const dayPct = closed.length >= 2 ? pct(Number(closed.at(-1).close), Number(closed[0].open)) : Number(t.priceChangePercent);
             const score = scoreHunter({
               ticker:t, features, lesson:this.lesson,
-              todayPct:Number(t.priceChangePercent),
+              todayPct:dayPct,
               dayHigh:t.highPrice, dayLow:t.lowPrice, btcTodayPct:btcToday
             });
             return {
@@ -428,7 +432,7 @@ export class CoinHunterRadar {
               score:score.score,
               decision:score.decision,
               similarity:score.similarity,
-              today_pct:Number(t.priceChangePercent),
+              today_pct:dayPct,
               price:Number(t.lastPrice),
               quote_volume_24h:Number(t.quoteVolume),
               trade_count_24h:Number(t.count),
@@ -437,6 +441,7 @@ export class CoinHunterRadar {
               risk_flags:score.risk_flags,
               detected_at:Date.now(),
               radar:'COIN_HUNTER_RADAR',
+              opportunity_score:score.score,
               source:'Binance Public REST',
               paper_trading:true,
               real_order_execution:false,
@@ -460,7 +465,7 @@ export class CoinHunterRadar {
         if (Date.now() - last >= Number(this.config.alertCooldownMs)) {
           this.lastAlertsBySymbol.set(row.symbol, Date.now());
           this.alertCount += 1;
-          await this.store?.appendCoinHunterAlert?.(row).catch?.(() => {});
+          try { await this.store?.appendCoinHunterAlert?.(row); } catch {}
         }
       }
 
