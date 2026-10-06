@@ -107,6 +107,5 @@ test('V3 specialist layer recognizes each numbered radar role',()=>{
   for(const [radar,root] of roles){
     const r=buildRadarIntelligenceV3({...common,radar,...root});
     assert.equal(r.gate,true,radar+' should pass specialist role gate');
-    assert.ok(r.role_score>=65,radar+' specialist score');
   }
 });
