@@ -28,6 +28,102 @@ async function boundedMap(items,concurrency,worker){
   return out;
 }
 
+export function emptyEarlyExpansionUniverse(config=EARLY_EXPANSION_RADAR_DEFAULTS,quote=config.quote){
+  return {
+    expected_total:0,received_total:0,missing_ticker_total:0,
+    eligible_total:0,fast_scanned_total:0,scanned_total:0,
+    deep_scanned_total:0,skipped_total:0,failed_total:0,
+    coverage_ratio:0,deep_coverage_ratio:0,eligible_coverage_ratio:0,
+    quote:String(quote||config.quote).toUpperCase(),
+    scope:'ALL_ELIGIBLE_SPOT_USDT',
+    eligibility_filter:{min_quote_volume_24h:Number(config.minQuoteVolume24h)}
+  };
+}
+
+export function emptyEarlyExpansionSnapshot(config=EARLY_EXPANSION_RADAR_DEFAULTS,quote=config.quote,error=null){
+  const q=String(quote||config.quote).trim().toUpperCase();
+  return {
+    schema_version:'RADAR8_V1',
+    radar:'EARLY_EXPANSION_RADAR',
+    radar_name:'Radar 8 — البرق',
+    as_of:null,
+    quote:q,
+    universe:emptyEarlyExpansionUniverse(config,q),
+    candidates:[],
+    alerts_emitted_this_cycle:0,
+    meta:{
+      live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+      source:[],closed_candles_only:true,
+      fast_scan:'ALL_ELIGIBLE_TICKERS_EVERY_CYCLE',
+      deep_scan:'TOP_FAST_ACCELERATION_PLUS_QUIET_RESERVE',
+      universe_scope:'ALL_ELIGIBLE_SPOT_USDT'
+    },
+    error:error??null
+  };
+}
+
+export function buildEarlyExpansionUniverseCoverage({
+  expectedSymbols=[],
+  receivedSymbols=[],
+  eligibleTotal=0,
+  fastScannedTotal=0,
+  scannedTotal=0,
+  deepScannedTotal=0,
+  skippedTotal=0,
+  failedTotal=0,
+  failedSymbols=[],
+  quote='USDT',
+  minQuoteVolume24h=750000
+}={}){
+  const expected=new Set((expectedSymbols||[]).map(x=>String(x).toUpperCase()).filter(Boolean));
+  const received=new Set((receivedSymbols||[]).map(x=>String(x).toUpperCase()).filter(x=>expected.has(x)));
+  const expectedTotal=expected.size,receivedTotal=received.size;
+  const missingTickerTotal=Math.max(0,expectedTotal-receivedTotal);
+  return {
+    expected_total:expectedTotal,
+    received_total:receivedTotal,
+    missing_ticker_total:missingTickerTotal,
+    eligible_total:Math.max(0,Number(eligibleTotal)||0),
+    fast_scanned_total:Math.max(0,Number(fastScannedTotal)||0),
+    scanned_total:Math.max(0,Number(scannedTotal)||0),
+    deep_scanned_total:Math.max(0,Number(deepScannedTotal)||0),
+    skipped_total:Math.max(0,Number(skippedTotal)||0),
+    failed_total:Math.max(0,Number(failedTotal)||0),
+    coverage_ratio:expectedTotal>0?receivedTotal/expectedTotal:0,
+    eligible_coverage_ratio:receivedTotal>0?Math.max(0,Number(eligibleTotal)||0)/receivedTotal:0,
+    deep_coverage_ratio:Number(eligibleTotal)>0?Math.max(0,Number(deepScannedTotal)||0)/Number(eligibleTotal):0,
+    quote:String(quote||'USDT').toUpperCase(),
+    scope:'ALL_ELIGIBLE_SPOT_USDT',
+    eligibility_filter:{min_quote_volume_24h:Number(minQuoteVolume24h)},
+    failed_symbols:[...new Set((failedSymbols||[]).map(x=>String(x).toUpperCase()).filter(Boolean))]
+  };
+}
+
+export function decideEarlyExpansionBand({
+  gateValid,
+  gateIssues=[],
+  highRiskPump=false,
+  extended=false,
+  historicalReplay=false,
+  earlyScore=null,
+  breakoutBroken=false,
+  r5_3=null,
+  atrRatio=null,
+  cfg=EARLY_EXPANSION_RADAR_DEFAULTS
+}={}){
+  const issues=Array.isArray(gateIssues)?gateIssues:[];
+  const score=Number.isFinite(Number(earlyScore))?Number(earlyScore):null;
+  if(!gateValid||issues.length>0)return 'DATA_INSUFFICIENT';
+  if(issues.includes('LIQUIDITY_INSUFFICIENT')||issues.includes('WIDE_SPREAD'))return 'DATA_INSUFFICIENT';
+  if(highRiskPump)return 'HIGH_RISK_PUMP';
+  if(extended)return 'ALREADY_EXTENDED';
+  if(!historicalReplay&&issues.includes('RECENT_FAKEOUT'))return 'WATCH_EARLY';
+  if(score!=null&&score>=Number(cfg.breakoutDevelopingScore??82)&&(breakoutBroken||Number(r5_3||0)>=1.5||Number(atrRatio||0)>=1.2))return 'BREAKOUT_DEVELOPING';
+  if(score!=null&&score>=Number(cfg.preExpansionScore??72))return 'PRE_EXPANSION';
+  if(score!=null&&score>=Number(cfg.watchEarlyScore??60))return 'WATCH_EARLY';
+  return 'NO_SIGNAL';
+}
+
 export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   quote:'USDT',
   pollMs:45000,
@@ -339,14 +435,23 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   const quiet24=clamp(100-Math.max(0,Math.abs(Number(ticker.priceChange24h)||0))*5);
   const instant=finite(fastContext.price_change_pct,0);
   const accel=finite(fastContext.price_acceleration_pct,0);
-  const highRisk=(
-    Math.abs(instant)>=2.5||
-    Math.abs(Number(r5_3)||0)>=5||
-    Math.abs(Number(r15_3)||0)>=8
+  const pumpRisk=(
+    instant>=2.5||
+    Number(r5_3||0)>=5||
+    Number(r15_3||0)>=8
   )&&(
     historicalReplay?false:
-    (liquidityScore<cfg.minLiquidityQuality || Math.abs(Number(ticker.priceChange24h)||0)>=cfg.hardExtended24hMovePct)
+    (liquidityScore<cfg.minLiquidityQuality || Number(ticker.priceChange24h||0)>=cfg.hardExtended24hMovePct)
   );
+  const dumpRisk=(
+    instant<=-2.5||
+    Number(r5_3||0)<=-5||
+    Number(r15_3||0)<=-8
+  )&&(
+    historicalReplay?false:
+    (liquidityScore<cfg.minLiquidityQuality || Number(ticker.priceChange24h||0)<=-cfg.hardExtended24hMovePct)
+  );
+  const highRisk=pumpRisk;
   const extended=(
     Math.abs(Number(ticker.priceChange24h)||0)>=cfg.hardExtended24hMovePct||
     Math.abs(Number(r1h)||0)>=cfg.hardExtended1hMovePct||
@@ -381,16 +486,10 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   if(fakeoutFlag(s['5m']).flag)gateIssues.push('RECENT_FAKEOUT');
   const earlyScore=gate.valid&&gateIssues.every(x=>!['ALREADY_EXTENDED','LIQUIDITY_INSUFFICIENT','WIDE_SPREAD','RECENT_FAKEOUT'].includes(x))&&!highRisk&&!historicalReplay
     ? Number(clamp(rawScore).toFixed(1)):null;
-  let decisionBand='NO_SIGNAL';
-  if(!gate.valid||gate.issues.length)decisionBand='DATA_INSUFFICIENT';
-  else if(!historicalReplay&&(gateIssues.includes('LIQUIDITY_INSUFFICIENT')||gateIssues.includes('WIDE_SPREAD')))decisionBand='DATA_INSUFFICIENT';
-  else if(highRisk)decisionBand='HIGH_RISK_PUMP';
-  else if(extended)decisionBand='ALREADY_EXTENDED';
-  else if(!historicalReplay&&gateIssues.includes('RECENT_FAKEOUT'))decisionBand='WATCH_EARLY';
-  else if(earlyScore!=null&&earlyScore>=cfg.breakoutDevelopingScore&&(br5.broken||Number(r5_3||0)>=1.5||atrx.ratio>=1.2))decisionBand='BREAKOUT_DEVELOPING';
-  else if(earlyScore!=null&&earlyScore>=cfg.preExpansionScore)decisionBand='PRE_EXPANSION';
-  else if(earlyScore!=null&&earlyScore>=cfg.watchEarlyScore)decisionBand='WATCH_EARLY';
-  else if(earlyScore!=null)decisionBand='NO_SIGNAL';
+  const decisionBand=decideEarlyExpansionBand({
+    gateValid:gate.valid,gateIssues:gateIssues,highRiskPump:highRisk,extended,
+    historicalReplay,earlyScore,breakoutBroken:br5.broken,r5_3,atrRatio:atrx.ratio,cfg
+  });
 
   const riskFlags=[
     extended?'ALREADY_EXTENDED':null,
@@ -609,7 +708,8 @@ export class EarlyExpansionRadar{
     this.clock=clock;this.logger=logger;
     this.running=false;this.busy=false;this.timer=null;this.universe=[];this.universeAt=0;
     this.fastState=new Map();this.lastAlertAt=new Map();this.lastAlertScore=new Map();this.lastBand=new Map();
-    this.latestCandidates=[];this.lastResult=null;this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;this.fastScannedTotal=0;this.failedTotal=0;
+    this.latestCandidates=[];this.lastResult=null;this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
+    this.fastScannedTotal=0;this.failedTotal=0;this.failedSymbols=[];this.lastCoverage=emptyEarlyExpansionUniverse(this.config,this.config.quote);
   }
   start(){
     if(this.running)return;
@@ -619,14 +719,23 @@ export class EarlyExpansionRadar{
   }
   async stop(){this.running=false;if(this.timer)clearInterval(this.timer);this.timer=null;}
   noteError(e,where='scan'){this.lastError=String(e?.message??e);this.logger.warn?.('EARLY_EXPANSION_RADAR_'+where,this.lastError);}
-  async refreshUniverse(){
-    const r=await this.rest.request('/api/v3/exchangeInfo');
-    this.universe=buildSpotUniverse(r.data,this.config.quote).map(x=>x.symbol);
-    this.universeAt=this.clock();
+  normalizeQuote(quote=this.config.quote){
+    const q=String(quote||this.config.quote).trim().toUpperCase();
+    if(!/^[A-Z0-9]{2,10}$/.test(q))throw new Error('INVALID_QUOTE');
+    if(q!==String(this.config.quote).toUpperCase())throw new Error('QUOTE_NOT_CONFIGURED');
+    return q;
   }
-  async tickerRows(){
+  async refreshUniverse(quote=this.config.quote){
+    const q=this.normalizeQuote(quote);
+    const r=await this.rest.request('/api/v3/exchangeInfo');
+    this.universe=buildSpotUniverse(r.data,q).map(x=>x.symbol);
+    this.universeAt=this.clock();
+    this.lastCoverage=emptyEarlyExpansionUniverse(this.config,q);
+  }
+  async tickerRows(quote=this.config.quote){
+    const q=this.normalizeQuote(quote);
     const r=await this.rest.request('/api/v3/ticker/24hr');
-    return {rows:(Array.isArray(r.data)?r.data:[]).map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean),source:r.source};
+    return {rows:(Array.isArray(r.data)?r.data).map(x=>normalizeTickerRow(x,q)).filter(Boolean),source:r.source};
   }
   updateFastState(row){
     const now=this.clock(),history=this.fastState.get(row.symbol)||[],prev=history.at(-1),prev2=history.at(-2);
@@ -673,14 +782,17 @@ export class EarlyExpansionRadar{
     depth=d.data;sources.push(d.source);
     return buildEarlyExpansionEvidence({series,ticker:row,depth,marketContext,fastContext:fast,now:this.clock(),config:cfg,historicalReplay:false,sourceList:sources});
   }
-  async tick(){
+  async tick({quote=this.config.quote}={}){
     if(!this.running||this.busy)return false;
     this.busy=true;
     try{
+      const q=this.normalizeQuote(quote);
       const now=this.clock();
-      if(now-this.universeAt>this.config.universeRefreshMs||!this.universe.length)await this.refreshUniverse();
-      const {rows:rawRows,source:tickerSource}=await this.tickerRows();
-      const universeSet=new Set(this.universe);
+      if(now-this.universeAt>this.config.universeRefreshMs||!this.universe.length)await this.refreshUniverse(q);
+      const {rows:rawRows,source:tickerSource}=await this.tickerRows(q);
+      const universeExpected=[...this.universe];
+      const universeSet=new Set(universeExpected);
+      const receivedSymbols=[...new Set(rawRows.map(x=>x.symbol).filter(x=>universeSet.has(x)))];
       const all=rawRows.filter(x=>universeSet.has(x.symbol));
       const eligible=all.filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h);
       const fastBySymbol=new Map();
@@ -730,13 +842,23 @@ export class EarlyExpansionRadar{
       const ok=scanned.filter(x=>x&&!x.failed);
       const deepFailures=scanned.length-ok.length;
       const deepScannedTotal=ok.length;
-      for(const c of ok){
-        c.coverage={
-          universe_total:this.universe.length,eligible_total:eligible.length,fast_scanned_total:eligible.length,
-          scanned_total:eligible.length,deep_scanned_total:deepScannedTotal,skipped_total:Math.max(0,eligible.length-deepScannedTotal),
-          failed_total:deepFailures,coverage_ratio:eligible.length>0?1:0,deep_coverage_ratio:eligible.length>0?deepScannedTotal/eligible.length:0
-        };
-      }
+      const failedSymbols=scanned.filter(x=>x?.failed).map(x=>x.symbol);
+      const coverage=buildEarlyExpansionUniverseCoverage({
+        expectedSymbols:universeExpected,
+        receivedSymbols,
+        eligibleTotal:eligible.length,
+        fastScannedTotal:eligible.length,
+        scannedTotal:eligible.length,
+        deepScannedTotal,
+        skippedTotal:Math.max(0,eligible.length-deepScannedTotal),
+        failedTotal:deepFailures,
+        failedSymbols,
+        quote:q,
+        minQuoteVolume24h:this.config.minQuoteVolume24h
+      });
+      this.lastCoverage=coverage;
+      this.failedSymbols=[...new Set(failedSymbols)];
+      for(const c of ok)c.coverage=coverage;
       ok.sort((a,b)=>(Number.isFinite(Number(b.early_expansion_score))?Number(b.early_expansion_score):-1)-(Number.isFinite(Number(a.early_expansion_score))?Number(a.early_expansion_score):-1)||a.symbol.localeCompare(b.symbol));
       this.latestCandidates=ok.slice(0,Math.max(1,Math.min(100,Number(this.config.returnLimit??100))));
       let alertsThisCycle=0;
@@ -763,41 +885,52 @@ export class EarlyExpansionRadar{
         }
         if(!this.lastBand.has(c.symbol)||bandChanged)this.lastBand.set(c.symbol,c.decision_band);
       }
+      this.scans++;
       this.lastScanAtMs=now;this.lastError=null;
       this.lastResult={
-        radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',as_of:new Date(now).toISOString(),
-        universe:{
-          universe_total:this.universe.length,eligible_total:eligible.length,scanned_total:eligible.length,
-          skipped_total:Math.max(0,eligible.length-deepScannedTotal),failed_total:deepFailures,
-          coverage_ratio:eligible.length>0?1:0,deep_scanned_total:deepScannedTotal,
-          deep_coverage_ratio:eligible.length>0?deepScannedTotal/eligible.length:0,
-          min_quote_volume_24h:this.config.minQuoteVolume24h
-        },
+        schema_version:'RADAR8_V1',
+        radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',as_of:new Date(now).toISOString(),quote:q,
+        universe:coverage,
         candidates:this.latestCandidates,
         alerts_emitted_this_cycle:alertsThisCycle,
         meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
           source:sourceList([tickerSource]),closed_candles_only:true,
           fast_scan:'ALL_ELIGIBLE_TICKERS_EVERY_CYCLE',
-          deep_scan:'TOP_FAST_ACCELERATION_PLUS_QUIET_RESERVE'}
+          deep_scan:'TOP_FAST_ACCELERATION_PLUS_QUIET_RESERVE',
+          universe_scope:'ALL_ELIGIBLE_SPOT_USDT'}
       };
       return true;
-    }catch(e){this.lastError=String(e?.message??e);this.lastScanAtMs=now;this.lastResult={...(this.lastResult||{}),radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',as_of:new Date(now).toISOString(),error:this.lastError,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};return false;
+    }catch(e){
+      this.lastError=String(e?.message??e);
+      this.lastScanAtMs=now;
+      this.lastResult={...emptyEarlyExpansionSnapshot(this.config,quote,this.lastError),as_of:new Date(now).toISOString()};
+      return false;
     }finally{this.busy=false;}
   }
-  snapshot(limit=100){
-    return {...(this.lastResult||{radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',as_of:null,universe:{universe_total:this.universe.length,eligible_total:0,scanned_total:0,skipped_total:0,failed_total:0,coverage_ratio:0},candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}}),
-      candidates:(this.latestCandidates||[]).slice(0,Math.max(1,Math.min(100,Number(limit)||100)))};
+  snapshot(limit=100,quote=this.config.quote){
+    const q=this.normalizeQuote(quote);
+    const base=this.lastResult||emptyEarlyExpansionSnapshot(this.config,q);
+    return {
+      ...base,
+      schema_version:'RADAR8_V1',
+      quote:q,
+      universe:{...emptyEarlyExpansionUniverse(this.config,q),...(base.universe||{}),quote:q},
+      candidates:(this.latestCandidates||base.candidates||[]).slice(0,Math.max(1,Math.min(100,Number(limit)||100)))
+    };
   }
   health(){
     return {
       running:this.running,busy:this.busy,radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',
       universe_total:this.universe.length,universe_refreshed_at:this.universeAt||null,
       last_scan_at:this.lastScanAtMs,scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,
-      fast_scanned_total:this.fastScannedTotal,failed_total:this.failedTotal,
+      fast_scanned_total:this.fastScannedTotal,failed_total:this.failedTotal,failed_symbols:this.failedSymbols,
+      coverage:this.lastCoverage,
       poll_ms:this.config.pollMs,deep_candidates:this.config.deepCandidates,deep_concurrency:this.config.deepConcurrency,
       closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
       algorithms:['All eligible Spot USDT ticker fast scan','45s self-baseline acceleration','RVOL persistence','Compression to expansion','Breakout proximity','Higher-low structure','Bid/ask imbalance','Spread/depth quality','ATR expansion','Bollinger expansion','VWAP','EMA ribbon','ADX/MACD/RSI','OBV','BTC market regime'],
       source:'Binance Public REST with endpoint rotation/fallback',
+      universe_scope:'ALL_ELIGIBLE_SPOT_USDT',
+      eligibility_filter:{min_quote_volume_24h:this.config.minQuoteVolume24h},
       historical_orderbook:'UNAVAILABLE'
     };
   }
