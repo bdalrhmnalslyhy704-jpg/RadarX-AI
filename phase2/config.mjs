@@ -129,6 +129,22 @@ export const CONFIG = Object.freeze({
     minScore: int(process.env.RADARX_ALMUQAWIM_MIN_SCORE, 82),
     maPeriod: int(process.env.RADARX_ALMUQAWIM_MA_PERIOD, 50)
   },
+  coinHunterRadar: {
+    quote: 'USDT',
+    pollMs: int(process.env.RADARX_COIN_HUNTER_POLL_MS, 60000),
+    universeRefreshMs: int(process.env.RADARX_COIN_HUNTER_UNIVERSE_REFRESH_MS, 10 * 60 * 1000),
+    minQuoteVolume24h: int(process.env.RADARX_COIN_HUNTER_MIN_QUOTE_VOLUME_24H, 750000),
+    leaderCount: int(process.env.RADARX_COIN_HUNTER_LEADER_COUNT, 12),
+    candidatePool: int(process.env.RADARX_COIN_HUNTER_CANDIDATE_POOL, 36),
+    deepCount: int(process.env.RADARX_COIN_HUNTER_DEEP_COUNT, 16),
+    deepConcurrency: int(process.env.RADARX_COIN_HUNTER_DEEP_CONCURRENCY, 4),
+    minLeaderMovePct: float(process.env.RADARX_COIN_HUNTER_MIN_LEADER_MOVE_PCT, 6),
+    maxCandidateMovePct: float(process.env.RADARX_COIN_HUNTER_MAX_CANDIDATE_MOVE_PCT, 8),
+    minCandidateMovePct: float(process.env.RADARX_COIN_HUNTER_MIN_CANDIDATE_MOVE_PCT, -3),
+    alertCooldownMs: int(process.env.RADARX_COIN_HUNTER_ALERT_COOLDOWN_MS, 8 * 60 * 1000),
+    minHunterScore: int(process.env.RADARX_COIN_HUNTER_MIN_SCORE, 86),
+    maxHunter24hMovePct: float(process.env.RADARX_COIN_HUNTER_MAX_24H_MOVE_PCT, 8)
+  },
   radarControl: {
     autostart: String(process.env.RADARX_RADARS_AUTOSTART ?? ((process.env.RADARX_ENV ?? 'development').toLowerCase() === 'production' ? 'true' : 'false')).toLowerCase() === 'true'
   },
