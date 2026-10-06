@@ -345,8 +345,11 @@ public final class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (webView != null && webView.canGoBack()) {
-            webView.goBack();
+        if (webView != null) {
+            webView.evaluateJavascript(
+                    "(function(){if(window.RadarXSinglePageHome){window.RadarXSinglePageHome();return true;}return false;})()",
+                    value -> {}
+            );
             return;
         }
         super.onBackPressed();
