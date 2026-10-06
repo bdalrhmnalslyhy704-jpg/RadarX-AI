@@ -10,6 +10,7 @@ const phase1=[
 
 const phase2=[
   'phase2/tests/api.test.mjs',
+  'phase2/tests/al-muqawim-radar.test.mjs',
   'phase2/tests/data-quality.test.mjs',
   'phase2/tests/elite-confluence-gate.test.mjs',
   'phase2/tests/dedup.test.mjs',
