@@ -47,20 +47,20 @@ header{position:sticky;top:0;z-index:20;margin:0 -14px;padding:calc(9px + env(sa
 import {getRadarStatus,getRadarAlerts,setRadarState} from './radarx-backend-client.mjs';
 const ID='LIQUIDITY_ABSORPTION_RADAR',status=document.getElementById('status'),cards=document.getElementById('cards');
 const start=document.getElementById('start'),stop=document.getElementById('stop');
-function esc(v){return String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function esc(v){return String(v||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function fmt(v){return Number.isFinite(Number(v))?Number(v).toLocaleString('en-US',{maximumFractionDigits:8}):'—'}
 async function refresh(){
  try{
   const [s,a]=await Promise.all([getRadarStatus(),getRadarAlerts({radar:ID,limit:20})]);
-  const h=(s.body?.radars||[]).find(x=>x.radar===ID), rows=a.body?.alerts||[];
-  status.innerHTML='<b>'+ (h?.running?'يعمل':'متوقف') +'</b> — '+esc(h?.radar_name||'Radar 4 — Liquidity Absorption')+' • فحص مستقل • '+rows.length+' اكتشافات محفوظة';
-  cards.innerHTML=rows.length?rows.map(x=>'<article class="card"><div class="head"><div><div class="sym">'+esc(x.symbol)+'</div><div class="meta">'+esc(x.event||'LIQUIDITY_ABSORPTION_ALERT')+' • '+esc(x.direction||'UP_SETUP')+'</div></div><div class="score">'+esc(x.opportunity_score??'—')+'</div></div><span class="tag">'+esc(x.potential_label||'WATCH')+'</span><div class="grid"><div class="box"><span>السعر وقت الاكتشاف</span><b>'+esc(fmt(x.price))+'</b></div><div class="box"><span>تغير 24h</span><b>'+esc(x.price_change_24h??'—')+'%</b></div><div class="box"><span>الرادار</span><b>'+esc(x.radar_name||'Radar 4 — Liquidity Absorption')+'</b></div><div class="box"><span>المصدر</span><b>Binance Public REST</b></div></div><div class="time">⏱ وقت الاكتشاف: <b>'+esc(x.detected_time_12h||'غير متاح')+'</b> • Asia/Aden (12h)</div><div class="reason">'+esc((x.reasons||[]).slice(0,6).join(' • ')||'لا يوجد وصف إضافي.')+'</div></article>').join(''):'<div class="empty">لا توجد إشعارات لهذا الرادار حتى الآن.</div>';
- }catch(e){status.innerHTML='<b>تعذر التحديث</b> — '+esc(e?.message||e);}
+  const h=(s.body && s.body.radars||[]).find(x=>x.radar===ID), rows=a.body && a.body.alerts||[];
+  status.innerHTML='<b>'+ (h && h.running?'يعمل':'متوقف') +'</b> — '+esc(h && h.radar_name||'Radar 4 — Liquidity Absorption')+' • فحص مستقل • '+rows.length+' اكتشافات محفوظة';
+  cards.innerHTML=rows.length?rows.map(x=>'<article class="card"><div class="head"><div><div class="sym">'+esc(x.symbol)+'</div><div class="meta">'+esc(x.event||'LIQUIDITY_ABSORPTION_ALERT')+' • '+esc(x.direction||'UP_SETUP')+'</div></div><div class="score">'+esc(x.opportunity_score||'—')+'</div></div><span class="tag">'+esc(x.potential_label||'WATCH')+'</span><div class="grid"><div class="box"><span>السعر وقت الاكتشاف</span><b>'+esc(fmt(x.price))+'</b></div><div class="box"><span>تغير 24h</span><b>'+esc(x.price_change_24h||'—')+'%</b></div><div class="box"><span>الرادار</span><b>'+esc(x.radar_name||'Radar 4 — Liquidity Absorption')+'</b></div><div class="box"><span>المصدر</span><b>Binance Public REST</b></div></div><div class="time">⏱ وقت الاكتشاف: <b>'+esc(x.detected_time_12h||'غير متاح')+'</b> • Asia/Aden (12h)</div><div class="reason">'+esc((x.reasons||[]).slice(0,6).join(' • ')||'لا يوجد وصف إضافي.')+'</div></article>').join(''):'<div class="empty">لا توجد إشعارات لهذا الرادار حتى الآن.</div>';
+ }catch(e){status.innerHTML='<b>تعذر التحديث</b> — '+esc(e && e.message||e);}
 }
 async function setState(action){
  start.disabled=true;stop.disabled=true;
  const r=await setRadarState(ID,action);
- status.innerHTML=r.ok?'<b>'+ (action==='start'?'تم تشغيل':'تم إيقاف') +'</b> — Radar 4 مستقل عن بقية الرادارات.':'<b>تعذر تغيير الحالة</b> — '+esc(r.body?.error||r.error||r.status);
+ status.innerHTML=r.ok?'<b>'+ (action==='start'?'تم تشغيل':'تم إيقاف') +'</b> — Radar 4 مستقل عن بقية الرادارات.':'<b>تعذر تغيير الحالة</b> — '+esc(r.body && r.body.error||r.error||r.status);
  await refresh();start.disabled=false;stop.disabled=false;
 }
 start.onclick=()=>setState('start');stop.onclick=()=>setState('stop');
