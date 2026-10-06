@@ -359,16 +359,15 @@ export class RotationLagRadar {
     };
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
     this.lastScanAt=new Map();this.lastAlertAt=new Map();
-    this.alertCount=0;this.scans=0;this.lastError=null;this.lastScanAtMs=null;this.busy=false;
+    this.alertCount=0;this.scans=0;this.lastError=null;this.lastScanAtMs=null;this.busy=false;this.latestCandidates=new Map();
   }
 
   start(){
-    if(this.running)return;
+    if(this.running)return Promise.resolve();
     this.running=true;
-    this.refreshUniverse()
-      .then(()=>this.tick())
-      .catch(e=>this.noteError(e));
+    const initial=Promise.resolve().then(()=>this.refreshUniverse()).then(()=>this.tick()).catch(e=>{this.noteError(e);});
     this.timer=setInterval(()=>this.tick().catch(e=>this.noteError(e)),this.config.pollMs);
+    return initial;
   }
 
   async stop(){this.running=false;if(this.timer)clearInterval(this.timer);this.timer=null;}
@@ -436,6 +435,11 @@ export class RotationLagRadar {
       ticker:row,fifteen_min:f.candles,one_hour:h.candles,benchmarks
     },this.clock());
     this.scans++;
+    this.latestCandidates.set(row.symbol,alert);
+    while(this.latestCandidates.size>60){
+      const first=this.latestCandidates.keys().next().value;
+      this.latestCandidates.delete(first);
+    }
     const a=alert.rotation||{};
     const cs=a.component_scores||{};
     const m=a.metrics||{};
@@ -483,11 +487,16 @@ export class RotationLagRadar {
     }finally{this.busy=false;}
   }
 
+  snapshot(limit=20){
+    const safeLimit=Math.max(1,Math.min(50,Math.trunc(Number(limit)||20)));
+    return [...this.latestCandidates.values()].sort((a,b)=>Number(b.processed_at||b.detected_at||0)-Number(a.processed_at||a.detected_at||0)||Number(b.opportunity_score||0)-Number(a.opportunity_score||0)).slice(0,safeLimit);
+  }
+
   health(){
     return {
       running:this.running,radar:'ROTATION_LAG_RADAR',universe:this.universe.length,
       last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,
-      scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,busy:this.busy,
+      scans:this.scans,alerts_emitted:this.alertCount,candidate_count:this.latestCandidates.size,last_error:this.lastError,busy:this.busy,
       rest:this.rest?.health?.()||null,
       algorithms:[
         'CROSS_MARKET_LEAD_LAG','RELATIVE_STRENGTH_SPREAD','SILENT_VOLUME_PRICE_DISLOCATION',
