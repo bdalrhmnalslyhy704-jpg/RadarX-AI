@@ -66,6 +66,7 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     private ScheduledExecutorService executor;
     private volatile boolean stopping;
+    private volatile boolean loggedFirstScan;
     private final DecimalFormat scoreFmt = new DecimalFormat("0.0");
 
     @Override
