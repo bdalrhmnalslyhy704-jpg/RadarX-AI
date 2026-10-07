@@ -125,7 +125,7 @@ async function run(){
    if(!r.ok||!r.body)throw new Error(r.error||'MULTI_ANALYST_UNAVAILABLE');
    render(r.body);
    $('status').textContent='● اكتمل التحليل • '+n(r.body.universe?.scanned)+' عملات • 20 محللًا + المحلل النهائي';
- }catch(e){$('status').textContent='تعذر التحليل — '+esc(e?.message||e);$('errors').textContent='قد تكون بيانات السوق غير متاحة الآن؛ لم يتم اختراع نتائج.'}
+ }catch(e){$('status').textContent='تعذر التحليل — '+esc((e&&e.message)||e);$('errors').textContent='قد تكون بيانات السوق غير متاحة الآن؛ لم يتم اختراع نتائج.'}
  finally{busy=false;}
 }
 $('scan').addEventListener('click',run);$('refresh').addEventListener('click',run);
