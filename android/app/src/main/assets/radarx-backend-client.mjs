@@ -21,42 +21,61 @@ export function normalizeBackendBaseUrl(raw = DEFAULT_BACKEND_BASE_URL) {
   return DEFAULT_BACKEND_BASE_URL;
 }
 
+const ACTIVE_BACKEND_CONTROLLERS = new Set();
+
+export function cancelAllBackendRequests() {
+  for (const controller of ACTIVE_BACKEND_CONTROLLERS) {
+    try { controller.abort(); } catch {}
+  }
+  ACTIVE_BACKEND_CONTROLLERS.clear();
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', cancelAllBackendRequests, {capture:true});
+}
+
 export async function requestJson(baseUrl, path, fetchImpl = globalThis.fetch, timeoutMs = 65000) {
   let firstError = null;
   const bases = [normalizeBackendBaseUrl(baseUrl), ...BACKEND_FALLBACK_URLS];
   for (const base of bases) {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    let timeoutHandle = null;
+    if (controller) ACTIVE_BACKEND_CONTROLLERS.add(controller);
     try {
       const response = await Promise.race([
         fetchImpl(base + path, {
           method: 'GET',
           cache: 'no-store',
-          headers: { Accept: 'application/json' }
+          headers: { Accept: 'application/json' },
+          signal: controller ? controller.signal : undefined
         }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('BACKEND_TIMEOUT')), timeoutMs))
+        new Promise((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            try { controller && controller.abort(); } catch {}
+            reject(new Error('BACKEND_TIMEOUT'));
+          }, timeoutMs);
+        })
       ]);
+      clearTimeout(timeoutHandle);
       let body = null;
       try { body = await response.json(); } catch {}
-      if (response.ok) {
-        return { status: response.status, ok: true, body, error: null, base };
-      }
+      if (response.ok) return {status:response.status,ok:true,body,error:null,base};
       if (response.status === 404 && base !== bases.at(-1)) {
         firstError = new Error('HTTP_404');
         continue;
       }
       if (response.status >= 400 && response.status < 500) {
-        return { status: response.status, ok: false, body, error: 'HTTP_' + response.status, base };
+        return {status:response.status,ok:false,body,error:'HTTP_'+response.status,base};
       }
-      firstError = new Error('HTTP_' + response.status);
+      firstError = new Error('HTTP_'+response.status);
     } catch (error) {
-      if(!firstError)firstError = error;
+      if (!firstError) firstError = error;
+    } finally {
+      clearTimeout(timeoutHandle);
+      if (controller) ACTIVE_BACKEND_CONTROLLERS.delete(controller);
     }
   }
-  return {
-    status: 0,
-    ok: false,
-    body: null,
-    error: String(firstError && firstError.message || firstError || 'BACKEND_CONNECTION_FAILED')
-  };
+  return {status:0,ok:false,body:null,error:String(firstError && firstError.message || firstError || 'BACKEND_CONNECTION_FAILED')};
 }
 
 export async function fetchBackendState(baseUrl, symbol, fetchImpl = globalThis.fetch) {
