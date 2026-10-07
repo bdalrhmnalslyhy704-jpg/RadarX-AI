@@ -753,7 +753,7 @@ export class EarlyMoveSentinel {
       Number(pulse.volume_ratio)>=1.7 ||
       Number(pulse.trade_ratio)>=1.55
     )&&current>=-0.5&&current<=this.config.earlyWakeMax24hMovePct;
-    const wakeCross=previous<this.config.earlyWakeTriggerPct&&current>=this.config.earlyWakeTriggerPct&&current<=this.config.earlyWakeMax24hPct;
+    const wakeCross=previous<this.config.earlyWakeTriggerPct&&current>=this.config.earlyWakeTriggerPct&&current<=this.config.earlyWakeMax24hMovePct;
     const wakeImpulse=delta>=this.config.earlyWakeDeltaPct&&current>=0&&current<=this.config.earlyWakeMax24hMovePct;
     if(wakeCross||wakeImpulse||pulseWake){
       this.queueDeep(symbol,row,{movePct:current,previousMovePct:previous,deltaPct:delta,type:pulseWake?'MARKET_PULSE_EARLY_WAKE':'EARLY_WAKE_TICKER_PULSE',pulse},'EARLY_WAKE');
