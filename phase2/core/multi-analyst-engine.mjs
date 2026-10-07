@@ -190,7 +190,7 @@ function specialistAnalysis(candidate, market={}){
   const a=[];
   a.push(analyst('MARKET_REGIME','محلل نظام السوق',avg([htfBias,htfEma,Number.isFinite(trend1)?clamp(50+trend1*8):50]),htfBias>=60?'LONG':'NEUTRAL',{trend4h:trend4,emaBias:htfEma}));
   const mtf=[htfEma,Number.isFinite(ema20&&ema50)?(c1.at(-1)>ema20&&ema20>=ema50?90:c1.at(-1)>ema50?65:30):50,Number.isFinite(ema20_15&&ema50_15)?(price>ema20_15&&ema20_15>=ema50_15?88:price>ema50_15?64:28):50];
-  a.push(analyst('MTF_ALIGNMENT','محلل توافق الأطر الزمنية',avg(mtf),avg(mtf)>=62?'LONG':'NEUTRAL',{4h:mtf[0],1h:mtf[1],15m:mtf[2]}));
+  a.push(analyst('MTF_ALIGNMENT','محلل توافق الأطر الزمنية',avg(mtf),avg(mtf)>=62?'LONG':'NEUTRAL',{'4h':mtf[0],'1h':mtf[1],'15m':mtf[2]}));
   const structureScore=clamp(50+(sm.bull-sm.bear)*25+(sm.headroom!=null?(sm.headroom>=3?10:sm.headroom>=1?4:sm.headroom<0?-10:0):0));
   a.push(analyst('MARKET_STRUCTURE','محلل هيكل القمم والقيعان',structureScore,sm.bull>sm.bear?'LONG':sm.bear>sm.bull?'BEARISH':'NEUTRAL',{higherLows:sm.bull,lowerLows:sm.bear,headroomPct:sm.headroom}));
   const drawdown=safe(candidate?.high_price_24h,null)&&price?Math.max(0,(Number(candidate.high_price_24h)-price)/Number(candidate.high_price_24h)*100):0;
