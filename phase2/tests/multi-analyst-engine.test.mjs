@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {MULTI_ANALYST_NAMES,analyzeMultiAnalystCandidate} from '../core/multi-analyst-engine.mjs';
+import {MULTI_ANALYST_NAMES,analyzeMultiAnalystCandidate,MultiAnalystEngine} from '../core/multi-analyst-engine.mjs';
 
 function candle(i,{tf='15m',base=100,trend=0.001,volume=1000}={}){
   const openTime=i*900000,close=base*(1+trend*i);
@@ -50,3 +50,48 @@ assert.equal(badLiq.final.verdict,'REJECT');
 assert.ok(badLiq.final.hardReasons.includes('LIQUIDITY_TOO_WEAK'));
 
 console.log('multi-analyst-engine.test.mjs: PASS');
+
+
+// Regression: a discovered coin must not disappear before the 19-specialist lab.
+// Invalid data is handled fail-closed by the final judge, but remains visible as a rejected lab result.
+{
+  const engine = new MultiAnalystEngine({
+    rest: {request: async () => ({data: []})},
+    config: {discoveryPool: 1, returnLimit: 1, deepConcurrency: 1}
+  });
+  engine.scanner = {
+    exchangeInfo: async () => ({
+      data: {symbols: [
+        {symbol:'TESTUSDT',baseAsset:'TEST',quoteAsset:'USDT',status:'TRADING',isSpotTradingAllowed:true,permissions:['SPOT']}
+      ]},
+      source: 'TEST'
+    }),
+    ticker24h: async () => ({
+      data: [{
+        symbol:'TESTUSDT',lastPrice:'1',quoteVolume:'1000000',count:'1000',
+        priceChangePercent:'1',highPrice:'1.1',lowPrice:'0.9',closeTime:Date.now()
+      }],
+      source:'TEST'
+    }),
+    scanSymbol: async () => ({
+      symbol:'TESTUSDT',rank:1,last_price:1,price_change_24h:1,
+      quote_volume_24h:1000000,liquidity_quality:0,data_quality:0,
+      accepted_strategies:[],best_strategy:null,risk_flags:['LIQUIDITY_DATA_UNAVAILABLE'],
+      reason_codes:['INSUFFICIENT_CLOSED_DATA','LIQUIDITY_GATE_FAILED'],
+      invalidation:['CANDLE_GAP_OR_INTEGRITY_ERROR'],
+      data_status:{data_valid:false,data_stale:false,last_error:'TEST_INVALID_DATA'},
+      _analysis:{completedAt:Date.now(),series:{'4h':[],'1h':[],'15m':[]},depth:null}
+    })
+  };
+  const out = await engine.scan({quote:'USDT',limit:1});
+  assert.equal(out.universe.discovery_pool, 1);
+  assert.equal(out.universe.scanned, 1);
+  assert.equal(out.summary.rejected, 1);
+  assert.equal(out.candidates.length, 1);
+  assert.equal(out.candidates[0].verdict, 'REJECT');
+  assert.equal(out.diagnostics.attempted_analyses, 1);
+  assert.equal(out.diagnostics.successful_analyses, 0);
+  assert.equal(out.diagnostics.gate_rejected, 1);
+}
+
+console.log('multi-analyst-engine lab-entry regression: PASS');
