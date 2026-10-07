@@ -24,8 +24,8 @@ test('whale analysis detects repeated large buy-side footprint with absorption',
     ...Array.from({length:8},(_,i)=>agg(i+20,70000,true))
   ];
   const book={
-    bids:[['99.9','1500'],['99.8','1400'],['99.7','1350'],['99.6','1200'],['99.5','1100']],
-    asks:[['100.1','500'],['100.2','450'],['100.3','420'],['100.4','400'],['100.5','380']]
+    bids:[['99.98','1500'],['99.97','1400'],['99.96','1350'],['99.95','1200'],['99.94','1100']],
+    asks:[['100.02','500'],['100.03','450'],['100.04','420'],['100.05','400'],['100.06','380']]
   };
   const x=buildWhaleAccumulationAnalysis({
     ticker:{symbol:'TESTUSDT',lastPrice:100,priceChange24h:1.2,quoteVolume24h:15000000},
@@ -45,7 +45,7 @@ test('whale analysis detects repeated large buy-side footprint with absorption',
 test('whale alert never claims trader identity',()=>{
   const candles=Array.from({length:80},(_,i)=>candle(i,100));
   const aggTrades=Array.from({length:12},(_,i)=>agg(i,80000,true));
-  const book={bids:[['99.9','2000']],asks:[['100.1','500']]};
+  const book={bids:[['99.98','2000']],asks:[['100.02','500']]};
   const a=buildWhaleAccumulationAlert({
     ticker:{symbol:'TESTUSDT',lastPrice:100,priceChange24h:0.4,quoteVolume24h:20000000},
     oneMinute:candles,fiveMinute:candles.slice(40),aggTrades,book,previousBook:book
@@ -54,8 +54,8 @@ test('whale alert never claims trader identity',()=>{
   assert.equal(a.paper_trading,true);
   assert.equal(a.real_order_execution,false);
   assert.equal(a.confidence_score,'UNKNOWN');
-  assert.match(a.limitation,'identity');
-  assert.match(a.disclaimer,'هوية');
+  assert.match(a.limitation,/identity/i);
+  assert.match(a.disclaimer,/هوية/);
 });
 
 test('quality V3 rejects explicit stale/invalid data',()=>{
