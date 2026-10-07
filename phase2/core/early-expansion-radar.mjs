@@ -1,4 +1,4 @@
-import {buildSpotUniverse, normalizeTickerRow} from '../market/universe-scanner.mjs';
+import {buildSpotUniverse, normalizeTickerRow, buildHistoricalFollowThrough} from '../market/universe-scanner.mjs';
 import {assessLiquidity, validateSeries, futureIssues} from './data-quality.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notification-gate.mjs';
@@ -420,6 +420,9 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   const liqQuality=historicalReplay?null:(Number.isFinite(depth?.bids?.length)&&Number.isFinite(depth?.asks?.length)?finite(assessLiquidity({book:depth,ticker24h:{quoteVolume:Number(ticker.quoteVolume24h),count:Number(ticker.tradeCount24h)}},cfg.minLiquidityQuality).quality,null):null);
   const market=marketRegime(marketContext);
   const rsi1h=rsi(s['1h'],14);
+  const historicalFollowThrough=buildHistoricalFollowThrough(s['5m'],now,{shortBars:6,longBars:24});
+  const historicalScore=Number(historicalFollowThrough.score)||50;
+  const historicalWeak=Number(historicalFollowThrough.samples)>=5&&historicalScore<48;
   const volumeAccel=clamp(50+
     ((rv1??1)-1)*28+
     ((rv5??1)-1)*18+
@@ -485,13 +488,14 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     volatility_expansion:volatilityExpansion,
     mtf_alignment:mtf.score,
     market_regime:market.score,
-    freshness_data_quality:dataScore
+    freshness_data_quality:dataScore,
+    historical_followthrough:historicalScore
   };
   const weighted=[
     ['volume_acceleration',.12],['rvol_persistence',.11],['compression_expansion',.12],
     ['breakout_proximity',.10],['higher_low',.07],['buy_sell_pressure',.08],['orderbook_imbalance',.08],
     ['liquidity_quality',.08],['volatility_expansion',.09],['mtf_alignment',.09],
-    ['market_regime',.04],['freshness_data_quality',.02]
+    ['market_regime',.04],['freshness_data_quality',.02],['historical_followthrough',.07]
   ];
   const usable=weighted.filter(([k])=>Number.isFinite(scoreParts[k]));
   const rawScore=usable.reduce((sum,[k,w])=>sum+scoreParts[k]*w,0)/usable.reduce((sum,[,w])=>sum+w,0);
@@ -500,7 +504,8 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   if(!historicalReplay&&liq.available&&Number(liq.spread_bps)>cfg.maxSpreadBps)gateIssues.push('WIDE_SPREAD');
   if(extended)gateIssues.push('ALREADY_EXTENDED');
   if(fakeoutFlag(s['5m']).flag)gateIssues.push('RECENT_FAKEOUT');
-  const earlyScore=gate.valid&&gateIssues.every(x=>!['ALREADY_EXTENDED','LIQUIDITY_INSUFFICIENT','WIDE_SPREAD','RECENT_FAKEOUT'].includes(x))&&!highRisk&&!dumpRisk&&!historicalReplay
+  if(historicalWeak)gateIssues.push('HISTORICAL_FOLLOWTHROUGH_WEAK');
+  const earlyScore=gate.valid&&gateIssues.every(x=>!['ALREADY_EXTENDED','LIQUIDITY_INSUFFICIENT','WIDE_SPREAD','RECENT_FAKEOUT','HISTORICAL_FOLLOWTHROUGH_WEAK'].includes(x))&&!highRisk&&!dumpRisk&&!historicalReplay
     ? Number(clamp(rawScore).toFixed(1)):null;
   const policyIssues=gateIssues.filter(x=>!gate.issues.includes(x));
   const decisionBand=decideEarlyExpansionBand({
@@ -517,7 +522,8 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     gate.issues.find(x=>x.startsWith('STALE_DATA'))?'STALE_DATA':null,
     gate.issues.find(x=>x.startsWith('MISSING_TIMEFRAME'))?'MISSING_TIMEFRAME':null,
     fakeoutFlag(s['5m']).flag?'RECENT_FAKEOUT':null,
-    market.label==='BEARISH'?'MARKET_REGIME_BEARISH':null
+    market.label==='BEARISH'?'MARKET_REGIME_BEARISH':null,
+    historicalWeak?'HISTORICAL_FOLLOWTHROUGH_WEAK':null
   ].filter(Boolean);
   const reasons=[
     rv5>=1.2?'RVOL_5M_ACCELERATION':null,
@@ -565,7 +571,11 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
       five_min_resistance:br5.resistance,five_min_breakout_distance_pct:br5.distance_pct,five_min_broken:br5.broken,
       fifteen_min_resistance:br15.resistance,fifteen_min_breakout_distance_pct:br15.distance_pct,
       higher_low:hl.higher_low,close_location_5m:closePosition(s['5m'],30),
-      orderbook_imbalance:liq.imbalance,spread_bps:liq.spread_bps,depth_notional:liq.depth_notional
+      orderbook_imbalance:liq.imbalance,spread_bps:liq.spread_bps,depth_notional:liq.depth_notional,
+      historical_followthrough_score:historicalScore,
+      historical_followthrough_samples:historicalFollowThrough.samples,
+      historical_hit_rate_30m:historicalFollowThrough.hit_rate_short,
+      historical_hit_rate_2h:historicalFollowThrough.hit_rate_long
     },
     structure_metrics:{higher_low:hl,breakout_5m:br5,breakout_15m:br15,compression:comp,fakeout:fakeoutFlag(s['5m'])},
     trigger_evidence:{
@@ -576,7 +586,8 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
       indicators:{vwap_distance_pct:vwapDistance,adx:adxv,macd:mac,rsi_1h:rsi1h,obv_slope:obv},
       mtf_alignment:mtf,
       market_regime:market,
-      historical_orderbook_available:!historicalReplay&&liq.available
+      historical_orderbook_available:!historicalReplay&&liq.available,
+      historical_followthrough:historicalFollowThrough
     },
     strategy_evidence:{
       pre_breakout_fingerprint:{
@@ -587,7 +598,9 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
         structure_score:hl.score,
         breakout_score:breakout,
         relative_strength_score:market.score,
-        orderbook_score:orderbookScore
+        orderbook_score:orderbookScore,
+        historical_followthrough_score:historicalScore,
+        historical_followthrough_samples:historicalFollowThrough.samples
       },
       existing_radar_overlap:{
         radar1_early_move:'CAPABILITY_POSSIBLE',
