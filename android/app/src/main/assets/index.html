@@ -125,7 +125,7 @@ document.getElementById('openBottomRadarBtn').addEventListener('click',event=>{
 import {getRadarStatus} from './radarx-backend-client.mjs';
 const healthEl=document.getElementById('radarHealth');
 const radarOrder=['EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR','LIQUIDITY_ABSORPTION_RADAR','KAHIR_RADAR','DOOMSDAY_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR','COIN_HUNTER_RADAR','PROFESSOR_RADAR'];
-const labels={'EARLY_MOVE_RADAR':'1 • المدمر','STRONG_MOVE_RADAR':'2 • ملك الظلام','ROTATION_LAG_RADAR':'3 • الجوكر','LIQUIDITY_ABSORPTION_RADAR':'4 • الكاسح','KAHIR_RADAR':'5 • القاهر','DOOMSDAY_RADAR':'6 • يوم القيامة','ALMUQAWIM_RADAR':'7 • المقاوم','EARLY_EXPANSION_RADAR':'8 • البرق','COIN_HUNTER_RADAR':'🎯 صائد العملات','PROFESSOR_RADAR':'البروفيسور'};
+const labels={'EARLY_MOVE_RADAR':'1 • المدمر','STRONG_MOVE_RADAR':'2 • ملك الظلام','ROTATION_LAG_RADAR':'3 • الجوكر','LIQUIDITY_ABSORPTION_RADAR':'4 • الكاسح','KAHIR_RADAR':'5 • القاهر','DOOMSDAY_RADAR':'6 • يوم القيامة','ALMUQAWIM_RADAR':'7 • المقاوم','EARLY_EXPANSION_RADAR':'8 • البرق','COIN_HUNTER_RADAR':'🎯 صائد العملات','WHALE_ACCUMULATION_RADAR':'🐋 تجمع الحيتان','PROFESSOR_RADAR':'البروفيسور'};
 function esc(v){return String(v != null ? v : '').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
 async function loadRadarHealth(){
   try{
