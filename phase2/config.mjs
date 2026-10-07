@@ -202,6 +202,17 @@ export const CONFIG = Object.freeze({
     retryAttempts: int(process.env.RADARX_DOOMSDAY_RETRY_ATTEMPTS, 1),
     watchlist: ['FETUSDT','SCRUSDT','CHIPUSDT','ORCAUSDT','TSTUSDT','GTCUSDT']
   },
+  multiAnalyst: {
+    quote: 'USDT',
+    discoveryPool: int(process.env.RADARX_MULTI_ANALYST_DISCOVERY_POOL, 20),
+    returnLimit: int(process.env.RADARX_MULTI_ANALYST_RETURN_LIMIT, 10),
+    deepConcurrency: int(process.env.RADARX_MULTI_ANALYST_DEEP_CONCURRENCY, 3),
+    deepKlines: int(process.env.RADARX_MULTI_ANALYST_DEEP_KLINES, 220),
+    minQuoteVolume24h: int(process.env.RADARX_MULTI_ANALYST_MIN_QUOTE_VOLUME_24H, 300000),
+    minDataQuality: int(process.env.RADARX_MIN_DATA_QUALITY, 70),
+    minLiquidityQuality: int(process.env.RADARX_MIN_LIQUIDITY_QUALITY, 60),
+    ttlMs: int(process.env.RADARX_MULTI_ANALYST_TTL_MS, 45000)
+  },
   professorRadar: {
     quote: 'USDT',
     pollMs: int(process.env.RADARX_PROFESSOR_POLL_MS, 120000),
