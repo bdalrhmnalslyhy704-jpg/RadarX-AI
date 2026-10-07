@@ -52,6 +52,7 @@ button{border:0;border-radius:14px;padding:12px 16px;font-weight:900;font-size:1
     <button class="dark" id="refreshBtn">تحديث من آخر لقطة</button>
   </div>
   <div class="status" id="status">جاهز — لم يبدأ تحليل السوق بعد.</div>
+  <div class="status" id="diagnostics">الخط: اكتشاف السوق → بوابة البيانات → 19 محللًا → المحلل النهائي</div>
   <div class="metricGrid">
     <div class="metric"><b id="analystCount">20</b><span>عدد المحللين</span></div>
     <div class="metric"><b id="scanned">—</b><span>عملات دخلت المختبر</span></div>
@@ -84,7 +85,7 @@ button{border:0;border-radius:14px;padding:12px 16px;font-weight:900;font-size:1
 <script type="module">
 import {getMultiAnalyst} from './radarx-backend-client.mjs';
 const cards=document.getElementById('cards'),status=document.getElementById('status');
-const els={scanned:document.getElementById('scanned'),strong:document.getElementById('strong'),candidate:document.getElementById('candidate'),rejected:document.getElementById('rejected')};
+const els={scanned:document.getElementById('scanned'),strong:document.getElementById('strong'),candidate:document.getElementById('candidate'),rejected:document.getElementById('rejected'),diagnostics:document.getElementById('diagnostics')};
 let latest=null,busy=false;
 const cacheKey='radarx.multiAnalyst.v1',cacheTtl=90*1000;
 function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
@@ -99,10 +100,14 @@ function render(body){
   latest=body||null;
   const list=Array.isArray(body && body.candidates)?body.candidates:[];
   const s=body && body.summary||{};
+  const d=body && body.diagnostics||{};
   els.scanned.textContent=String(n(body && body.universe && body.universe.scanned,0));
   els.strong.textContent=String(n(s.strong_candidates,0));
   els.candidate.textContent=String(n(s.candidates,0));
   els.rejected.textContent=String(n(s.rejected,0));
+  if(els.diagnostics){
+    els.diagnostics.textContent='تشخيص: '+n(d.attempted_analyses,0)+' دخلت المختبر • '+n(d.successful_analyses,0)+' اجتازت بوابة البيانات • '+n(d.gate_rejected,0)+' رفضتها البوابة • '+n(d.failed_analyses,0)+' أخطاء فحص';
+  }
   cards.innerHTML='';
   if(!list.length){cards.innerHTML='<div class="empty">لا توجد نتائج. اضغط «ابدأ التحليل الكامل» لإجراء فحص حي.</div>';return;}
   list.forEach((x,idx)=>{
@@ -177,7 +182,10 @@ async function run(force){
       return;
     }
     const u=r.body.universe||{};
-    status.textContent='● تحليل حي مكتمل • '+n(u.scanned,0)+' عملات دخلت المختبر • '+n(r.body.summary && r.body.summary.strong_candidates,0)+' مرشح قوي';
+    const meta=r.body.meta||{};
+    status.textContent=meta.live
+      ? '● تحليل حي مكتمل • '+n(u.scanned,0)+' عملات دخلت المختبر • '+n(r.body.summary && r.body.summary.strong_candidates,0)+' مرشح قوي'
+      : '● اكتمل الفحص • '+n(u.scanned,0)+' عملات دخلت المختبر • البيانات الحية الموثوقة غير متاحة لبعض/كل العملات؛ راجع التشخيص والرفض.';
   }catch(e){
     status.textContent='تعذر التحليل الآن — '+esc(e && e.message || e);
   }finally{busy=false;}
