@@ -1298,35 +1298,49 @@ export class MarketUniverseScanner {
     try {
       const fastInterval=String(options.fastInterval||'').trim();
       const fastLimit=Math.max(40,Math.trunc(Number(options.fastKlines)||96));
-      const [tfResults, depth, fastResult] = await Promise.all([
-        Promise.all(
-          ['4h','1h','15m'].map(async tf => {
-            const r = await this.fetchSeries(ticker.symbol, tf, klinesLimit);
-            const fetchedAt = Number(r.receivedAt) || this.clock();
-            return {
-              tf,
-              source: r.source ?? null,
-              candles: Array.isArray(r.candles)
-                ? r.candles.map(c => ({ ...c, symbol: ticker.symbol, timeframe: tf }))
-                : normalizeRawKlines(r.data, r.source, fetchedAt)
-            };
-          })
-        ),
-        this.fetchDepth(ticker.symbol),
-        fastInterval ? this.fetchSeries(ticker.symbol, fastInterval, fastLimit) : Promise.resolve(null)
-      ]);
-      for (const r of tfResults) {
-        series[r.tf] = r.candles;
-        if (r.source) klinesSources.push(r.source);
+      // Core candle timeframes are mandatory; depth/fast candles are optional enrichments.
+      // A single 451/429/timeout from an optional endpoint must not collapse the whole 20-analyst run.
+      const tfSettled = await Promise.allSettled(
+        ['4h','1h','15m'].map(async tf => {
+          const r = await this.fetchSeries(ticker.symbol, tf, klinesLimit);
+          const fetchedAt = Number(r.receivedAt) || this.clock();
+          return {
+            tf,
+            source: r.source ?? null,
+            candles: Array.isArray(r.candles)
+              ? r.candles.map(c => ({ ...c, symbol: ticker.symbol, timeframe: tf }))
+              : normalizeRawKlines(r.data, r.source, fetchedAt)
+          };
+        })
+      );
+      for (let i=0;i<tfSettled.length;i++) {
+        const item=tfSettled[i];
+        const tf=['4h','1h','15m'][i];
+        if(item.status==='fulfilled') {
+          series[tf]=item.value.candles;
+          if(item.value.source) klinesSources.push(item.value.source);
+        } else {
+          error = error || item.reason || new Error('KLINES_FETCH_FAILED:'+tf);
+        }
       }
-      const fastCandles=fastResult
-        ? Array.isArray(fastResult.candles)
-          ? fastResult.candles.map(c=>({...c,symbol:ticker.symbol,timeframe:fastInterval}))
-          : normalizeRawKlines(fastResult.data,fastResult.source,Number(fastResult.receivedAt)||this.clock())
-        : [];
-      fastDeep={interval:fastInterval||null,candles:fastCandles,source:fastResult?.source??null};
-      depthRaw = depth?.data ?? depth;
-      depthSource = depth?.source ?? null;
+
+      const depthSettled=await Promise.allSettled([this.fetchDepth(ticker.symbol)]);
+      if(depthSettled[0]?.status==='fulfilled') {
+        const depth=depthSettled[0].value;
+        depthRaw = depth?.data ?? depth;
+        depthSource = depth?.source ?? null;
+      }
+
+      if(fastInterval) {
+        const fastSettled=await Promise.allSettled([this.fetchSeries(ticker.symbol,fastInterval,fastLimit)]);
+        if(fastSettled[0]?.status==='fulfilled') {
+          const fastResult=fastSettled[0].value;
+          const fastCandles=Array.isArray(fastResult?.candles)
+            ? fastResult.candles.map(c=>({...c,symbol:ticker.symbol,timeframe:fastInterval}))
+            : normalizeRawKlines(fastResult?.data,fastResult?.source,Number(fastResult?.receivedAt)||this.clock());
+          fastDeep={interval:fastInterval,candles:fastCandles,source:fastResult?.source??null};
+        }
+      }
     } catch (e) {
       error = e;
     }
