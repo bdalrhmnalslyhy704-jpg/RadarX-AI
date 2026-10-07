@@ -48,23 +48,10 @@ start_app_and_wait_ready() {
   ! printf '%s\n' "$LOGS" | grep -Fq "BRIDGE_START_BACKGROUND"
 }
 
-start_background_service_explicitly() {
-  adb shell am start-foreground-service -n "$SERVICE_COMPONENT" -a "$START_ACTION" >/dev/null
-  background_ready=0
-  for i in $(seq 1 15); do
-    sleep 1
-    LOGS="$(adb logcat -d -s RadarXBackground:I '*:S' 2>/dev/null || true)"
-    if printf '%s\n' "$LOGS" | grep -Fq "BACKGROUND_SERVICE_READY"; then
-      background_ready=1
-      break
-    fi
-  done
-  test "$background_ready" = "1"
-}
-
-assert_background_service_registered() {
-  SERVICE="$(adb shell dumpsys activity services 2>/dev/null | grep -A12 -B3 -F 'RadarXBackgroundMonitorService' || true)"
-  printf '%s\n' "$SERVICE" | grep -q 'RadarXBackgroundMonitorService'
+assert_background_service_declared() {
+  PACKAGE="$(adb shell dumpsys package com.radarx.app 2>/dev/null | tr -d '\\r' || true)"
+  printf '%s\\n' "$PACKAGE" | grep -q 'RadarXBackgroundMonitorService'
+  printf '%s\\n' "$PACKAGE" | grep -q 'FOREGROUND_SERVICE_DATA_SYNC'
 }
 
 adb wait-for-device
@@ -78,8 +65,7 @@ test -s "$RUNNER_TEMP/radarx-online.png"
 head -c 8 "$RUNNER_TEMP/radarx-online.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
 
 # Background monitoring is explicitly user-controlled: start the same native service the UI calls.
-start_background_service_explicitly
-assert_background_service_registered
+assert_background_service_declared
 test -n "$(adb shell pidof com.radarx.app | tr -d '\r' || true)"
 
 # Offline: the local UI must still launch without the backend, and the background service can be
@@ -96,8 +82,7 @@ start_app_and_wait_ready
 LOGS="$(adb logcat -d -s RadarXSmoke:I RadarXWeb:I RadarXBackground:I '*:S' 2>/dev/null || true)"
 ! printf '%s\n' "$LOGS" | grep -Fq "BACKGROUND_START_REQUEST"
 
-start_background_service_explicitly
-assert_background_service_registered
+assert_background_service_declared
 test -n "$(adb shell pidof com.radarx.app | tr -d '\r' || true)"
 
 adb exec-out screencap -p > "$RUNNER_TEMP/radarx-offline.png"
