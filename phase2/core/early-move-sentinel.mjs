@@ -270,9 +270,6 @@ export function buildEarlyWakeAlert(candidate,trigger,{now=Date.now()}={}) {
   const wyckoff=component(candidate,['bottom_context.algorithms.wyckoff_spring.score'],45);
   const mtf=component(candidate,['bottom_context.metrics.mtf_alignment','bottom_context.algorithms.mtf_alignment.score'],45);
   const historicalFollowThrough=candidate?.fast_impulse_context?.historical_followthrough||{};
-  const historicalScore=finite(historicalFollowThrough.score,55);
-  const historicalSamples=finite(historicalFollowThrough.samples,0);
-  const historicalFollowThrough=candidate?.fast_impulse_context?.historical_followthrough||{};
   const historicalScore=finite(historicalFollowThrough.score,50);
   const historicalSamples=finite(historicalFollowThrough.samples,0);
   const fast=candidate?.fast_impulse_context||{};
