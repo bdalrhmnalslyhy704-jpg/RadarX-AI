@@ -33,6 +33,7 @@ const phase2=[
   'phase2/tests/rest.test.mjs',
   'phase2/tests/rotation-lag-radar.test.mjs',
   'phase2/tests/radar-quality-v2.test.mjs',
+  'phase2/tests/whale-accumulation-radar.test.mjs',
   'phase2/tests/runtime-compatibility.test.mjs',
   'phase2/tests/source-policy.test.mjs',
   'phase2/tests/staging-preflight.test.mjs',
