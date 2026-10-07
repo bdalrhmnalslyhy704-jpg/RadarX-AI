@@ -47,8 +47,9 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF_NAME" = "feature-coin-hunter-20261006-android" || test "$GITHUB_REF_NAME" = "android-build224-radar8-v2-20261006" || test "$GITHUB_REF_NAME" = "android-whale-intelligence-v2-build224-20261007" || test "$GITHUB_REF_NAME" = "android-build224-final-stable-20261007" || test "$GITHUB_REF_NAME" = "build224-multi-analyst-20261007"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          grep -Fq "https://radarx-ai-production.up.railway.app" android/app/src/main/assets/radarx-backend-client.mjs
+          grep -Fq "https://radarx-ai-triple-production.up.railway.app" android/app/src/main/assets/radarx-backend-client.mjs
           ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
+          ! grep -Fq "radarx-ai-production.up.railway.app" android/app/src/main/assets/radarx-backend-client.mjs
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -296,7 +297,7 @@ jobs:
           set -euo pipefail
           node android/backend-client-regression.mjs
           node android/app/src/main/assets/tests/market-radar-integration.test.mjs
-          grep -Fq "https://radarx-ai-production.up.railway.app" android/app/src/main/assets/radarx-backend-client.mjs
+          grep -Fq "https://radarx-ai-triple-production.up.railway.app" android/app/src/main/assets/radarx-backend-client.mjs
           ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
           grep -RInq "Paper Trading" android/app/src/main/assets
           grep -RInq "paper_trading=true" android/app/src/main/assets
@@ -338,10 +339,13 @@ jobs:
           PY
 
           test -s android/app/src/main/assets/index.html
+          node --check phase2/core/whale-accumulation-radar.mjs
           test -s android/app/src/main/assets/manifest.json
           test -s android/app/src/main/assets/radar8-lightning.html
           test -s android/app/src/main/assets/coin-hunter-radar.html
           test -s android/app/src/main/assets/whale-accumulation-radar.html
+          test -s android/app/src/main/assets/multi-analyst-center.html
+          grep -Fq 'multi-analyst-center.html' android/app/src/main/assets/index.html
           test -s android/app/src/main/assets/multi-analyst.html
           grep -Fq 'multi-analyst.html' android/app/src/main/assets/index.html
           grep -Fq 'whale-accumulation-radar.html' android/app/src/main/assets/index.html

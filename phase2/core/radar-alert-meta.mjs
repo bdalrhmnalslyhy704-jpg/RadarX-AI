@@ -7,6 +7,9 @@ export const RADAR_NAMES=Object.freeze({
   DOOMSDAY_RADAR:'Radar 6 — يوم القيامة',
   PROFESSOR_RADAR:'البروفيسور — استخبارات عامة',
   ALMUQAWIM_RADAR:'Radar 7 — المقاوم',
+  EARLY_EXPANSION_RADAR:'Radar 8 — البرق',
+  COIN_HUNTER_RADAR:'🎯 صائد العملات',
+  WHALE_CLUSTER_RADAR:'🐋 تجمع الحيتان',
   WHALE_ACCUMULATION_RADAR:'🐋 تجمع الحيتان'
 });
 export const RADAR_PROFILES=Object.freeze({
@@ -115,7 +118,7 @@ export function radarPowerScore(alert){
   let power=base*.60+(componentMean??base)*.25+dataQuality*.15;
   if(riskCount)power-=Math.min(12,riskCount*2);
   const thresholds={
-    EARLY_MOVE_RADAR:72,STRONG_MOVE_RADAR:76,ROTATION_LAG_RADAR:78,LIQUIDITY_ABSORPTION_RADAR:82,KAHIR_RADAR:84,DOOMSDAY_RADAR:82,PROFESSOR_RADAR:80,ALMUQAWIM_RADAR:82
+    EARLY_MOVE_RADAR:72,STRONG_MOVE_RADAR:76,ROTATION_LAG_RADAR:78,LIQUIDITY_ABSORPTION_RADAR:82,KAHIR_RADAR:84,DOOMSDAY_RADAR:82,PROFESSOR_RADAR:80,ALMUQAWIM_RADAR:82,COIN_HUNTER_RADAR:86,WHALE_CLUSTER_RADAR:82
   };
   const gate=power>=Number(thresholds[id]??80);
   return {
