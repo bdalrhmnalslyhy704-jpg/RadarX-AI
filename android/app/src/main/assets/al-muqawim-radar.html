@@ -57,13 +57,14 @@ pre{white-space:pre-wrap;word-break:break-word;color:#9fc0d6;font-size:11px}
 <script type="module">
 import {getAlMuqawimRadar,setRadarState} from './radarx-backend-client.mjs';
 
-const $=id=>document.getElementById(id); let refreshBusy=false;
+const $=id=>document.getElementById(id); let refreshBusy=false,pageDead=false,refreshTimer=null;
 function esc(v){return String(v != null ? v : 'x').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
 function directionLabel(d){
   return d==='UP'?'صاعد':d==='DOWN'?'هابط':d==='CONFLICT'?'متعارض':'مراقبة';
 }
 function dirClass(d){return d==='UP'?'up':d==='DOWN'?'down':d==='CONFLICT'?'warn':''}
 async function control(action){
+  if(pageDead)return;
   $('status').textContent=action==='start'?'جاري تشغيل المقاوم…':'جاري إيقاف المقاوم…';
   try{
     const r=await setRadarState('ALMUQAWIM_RADAR',action);
@@ -72,7 +73,7 @@ async function control(action){
   }catch(e){$('status').textContent='خطأ — '+(e && e.message||e)} finally { refreshBusy=false; }
 }
 async function refresh(){
-  if(refreshBusy)return; refreshBusy=true;
+  if(pageDead||refreshBusy)return; refreshBusy=true;
   try{
     const r=await getAlMuqawimRadar({limit:20});
     if(r.status!==200){$('status').textContent='تعذر قراءة المقاوم — HTTP_'+(r.status||0);return}
@@ -102,7 +103,7 @@ async function refresh(){
   }catch(e){$('status').textContent='خطأ — '+(e && e.message||e)}
 }
 $('start').onclick=()=>control('start'); $('stop').onclick=()=>control('stop'); $('refresh').onclick=refresh;
-refresh(); setInterval(refresh,45000);
+refresh(); refreshTimer=setInterval(refresh,45000); window.addEventListener('pagehide',function(){pageDead=true;if(refreshTimer)clearInterval(refreshTimer);},{once:true,capture:true});
 </script>
 </main>
 </body>
