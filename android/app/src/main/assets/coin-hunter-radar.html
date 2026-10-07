@@ -70,7 +70,7 @@ header{position:sticky;top:0;z-index:10;margin:-12px -14px 14px;padding:calc(11p
 import {getCoinHunterRadar,setRadarState} from './radarx-backend-client.mjs';
 
 const $=id=>document.getElementById(id);
-let busy=false;
+let busy=false,pageDead=false;
 const nf=(v,d=2)=>{const n=Number(v);return Number.isFinite(n)?n.toFixed(d):'—'};
 const pct=v=>{const n=Number(v);return Number.isFinite(n)?(n>=0?'+':'')+n.toFixed(2)+'%':'—'};
 const time=v=>{try{return new Intl.DateTimeFormat('ar-YE',{timeZone:'Asia/Aden',hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true}).format(new Date(v));}catch{return v||'—'}};
@@ -121,7 +121,7 @@ function render(d){
 }
 
 async function refresh(scan=false){
-  if(busy)return;
+  if(pageDead||busy)return;
   busy=true;
   try{
     const r=await getCoinHunterRadar({quote:'USDT',limit:16,scan});
@@ -147,6 +147,7 @@ $('stop').onclick=()=>control('stop');
 $('scan').onclick=()=>refresh(true);
 refresh(false);
 setInterval(()=>refresh(false),30000);
+window.addEventListener('pagehide',function(){pageDead=true;},{once:true,capture:true});
 </script>
 </body>
 </html>
