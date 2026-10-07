@@ -71,7 +71,9 @@ function acceptedStrategiesOf(alert){
 }
 
 function criticalRisk(alert){
-  const risks=arr(alert?.risk_flags).map(x=>String(x).toUpperCase());
+  const quality=alert?.radar_quality_v3||null;
+  const qualityRisks=quality?.hard_fail?['RADAR_QUALITY_HARD_FAIL']:(Number(quality?.historical_followthrough_samples)>=5&&Number(quality?.historical_followthrough_score)<42?['HISTORICAL_FOLLOWTHROUGH_WEAK']:[]);
+  const risks=[...arr(alert?.risk_flags),...qualityRisks].map(x=>String(x).toUpperCase());
   const gateRisks=arr(alert?.elite_gate?.risk_flags).map(x=>String(x).toUpperCase());
   const all=[...risks,...gateRisks];
   return all.filter(x=>/ALREADY_MOVED|ALREADY_EXTENDED|EXTENDED_CHASE|DATA_QUALITY|NO_PRIMARY_TRIGGER|LOW_CONFLUENCE|DISJOINTED|FLOW_WITHOUT|VOLUME_WITHOUT|LIQUIDITY_TOO_WEAK|RESISTANCE_TOO_NEAR|CHAS(E|ING)/.test(x));
