@@ -164,7 +164,7 @@ function relativeContext(ticker,btc){
   };
 }
 
-export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggTrades,book,previousBook=null,now=Date.now(),config={}}={}
+export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggTrades,book,previousBook=null,now=Date.now(),config={}}={}){
   const t=ticker||{},price=finite(t.lastPrice,0);
   const prints=largePrintStats(aggTrades,t,now,config);
   const candles=candleAccumulation(oneMinute,now);
@@ -180,7 +180,7 @@ export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggT
   const recent5m= five.slice(-6);
   const fiveMove=recent5m.length>=2?pct(Number(recent5m.at(-1).close),Number(recent5m[0].open)):null;
   const fiveScore=Number.isFinite(fiveMove)?clamp(52+fiveMove*22):45;
-  const rel=relativeContext(t,config.btcTicker||null);
+  const rel=relativeContext(t,t.btcTicker||null);
   const buyDominance=prints.largeNotionalRatio===null?45:clamp(50+(prints.largeNotionalRatio||0)*100);
   const supportScore=clamp(
     (50+depth.nearImbalance*170)*.48+
