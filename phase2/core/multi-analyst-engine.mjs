@@ -152,6 +152,29 @@ const structureMetrics=(rows)=>{
   const headroom=Number.isFinite(recentHigh)&&last>0?(recentHigh-last)/last*100:null;
   return {lows,highs,bull,bear,last,recentHigh,recentLow,headroom};
 };
+function whaleFlowMetrics(rows,minNotional=25000){
+  const trades=(Array.isArray(rows)?rows:[]).map(x=>{
+    const p=Number(x?.p),q=Number(x?.q);
+    const notional=p>0&&q>=0?p*q:null;
+    return Number.isFinite(notional)&&notional>0?{notional,buy:x?.m!==true,time:Number(x?.T)}:null;
+  }).filter(Boolean);
+  if(!trades.length)return {score:null,buyNotional:0,sellNotional:0,bigBuyNotional:0,bigSellNotional:0,bigCount:0,totalCount:0,threshold:null,ratio:null,net:null};
+  const notionals=trades.map(x=>x.notional).sort((a,b)=>a-b);
+  const p90=notionals[Math.max(0,Math.floor(notionals.length*.9)-1)]||0;
+  const threshold=Math.max(minNotional,p90);
+  const big=trades.filter(x=>x.notional>=threshold);
+  const buyNotional=trades.filter(x=>x.buy).reduce((a,x)=>a+x.notional,0);
+  const sellNotional=trades.filter(x=>!x.buy).reduce((a,x)=>a+x.notional,0);
+  const bigBuyNotional=big.filter(x=>x.buy).reduce((a,x)=>a+x.notional,0);
+  const bigSellNotional=big.filter(x=>!x.buy).reduce((a,x)=>a+x.notional,0);
+  const bigTotal=bigBuyNotional+bigSellNotional;
+  const ratio=bigTotal>0?bigBuyNotional/bigTotal:null;
+  const net=bigTotal>0?(bigBuyNotional-bigSellNotional)/bigTotal:null;
+  const burst=trades.length>0?big.length/trades.length:0;
+  const score=Number.isFinite(net)?clamp(50+net*180+Math.min(15,burst*100)):50;
+  return {score,buyNotional,sellNotional,bigBuyNotional,bigSellNotional,bigCount:big.length,totalCount:trades.length,threshold,ratio,net,burst};
+}
+
 const analyst=(id,name,score,direction='NEUTRAL',evidence={},risks=[])=>({
   id,name,score:Math.round(clamp(score)*10)/10,direction,
   decision:score>=80?'PASS':score>=65?'POSITIVE':score>=50?'WATCH':'FAIL',
@@ -216,8 +239,11 @@ function specialistAnalysis(candidate, market={}){
   a.push(analyst('ORDERBOOK_PRESSURE','محلل دفتر الأوامر',bookScore,bookScore>=62?'LONG':'NEUTRAL',{imbalance:book.imbalance,bidWallShare:book.bidWallShare,askWallShare:book.askWallShare,spreadBps:book.spreadBps}));
   const liquidityScore=clamp(liq);
   a.push(analyst('LIQUIDITY_QUALITY','محلل جودة السيولة',liquidityScore,liquidityScore>=70?'LONG':'NEUTRAL',{liquidityQuality:liq,spreadBps:book.spreadBps}));
-  const whaleProxyScore=avg([bookScore,volumeScore,Number.isFinite(tRatio)?clamp(50+(tRatio-.5)*260):50,structureScore]);
-  a.push(analyst('LARGE_PLAYER_PROXY','محلل سلوك اللاعبين الكبار',whaleProxyScore,whaleProxyScore>=65?'LONG':'NEUTRAL',{bookImbalance:book.imbalance,takerBuyRatio:tRatio,largeDepthBidShare:book.bidWallShare}));
+  const whaleFlow=whaleFlowMetrics(raw?.whaleTrades,25000);
+  const whaleFlowScore=Number.isFinite(whaleFlow.score)
+    ? avg([whaleFlow.score,bookScore,volumeScore])
+    : avg([bookScore,volumeScore]);
+  a.push(analyst('WHALE_FLOW','محلل تدفق الحيتان',whaleFlowScore,whaleFlowScore>=65?'LONG':whaleFlowScore<45?'BEARISH':'NEUTRAL',{largeBuyNotional:whaleFlow.bigBuyNotional,largeSellNotional:whaleFlow.bigSellNotional,largeBuyRatio:whaleFlow.ratio,largeTradeCount:whaleFlow.bigCount,largeThreshold:whaleFlow.threshold},Number.isFinite(whaleFlow.ratio)&&whaleFlow.ratio<.4?['LARGE_PRINT_SELL_DOMINANCE']:[]));
   const range15=s15.at(-1)?Number(s15.at(-1).high)-Number(s15.at(-1).low):null;
   const change15=Number.isFinite(Number(s15.at(-1)?.close))&&Number.isFinite(Number(s15.at(-8)?.close))?Math.abs(Number(s15.at(-1).close)-Number(s15.at(-8).close))/Math.max(1e-12,Number(s15.at(-8).close))*100:null;
   const absorptionScore=avg([Number.isFinite(rv)?clamp(100-Math.abs((rv-1.8))*35):50,Number.isFinite(change15)?clamp(96-change15*20):50,Number.isFinite(uv.bias)?clamp(55+uv.bias*80):50,Number.isFinite(book.imbalance)?clamp(50+book.imbalance*120):50]);
@@ -256,7 +282,7 @@ export function analyzeMultiAnalystCandidate(candidate, market={}){
 const WEIGHTS={
   MARKET_REGIME:.06,MTF_ALIGNMENT:.06,MARKET_STRUCTURE:.07,BOTTOM_TURN:.07,MOMENTUM:.05,
   VOLUME_CONFIRMATION:.06,VOLATILITY_COMPRESSION:.05,PRE_BREAKOUT:.09,SUPPORT_RESISTANCE:.07,
-  RELATIVE_STRENGTH:.05,ORDERBOOK_PRESSURE:.05,LIQUIDITY_QUALITY:.04,LARGE_PLAYER_PROXY:.04,
+  RELATIVE_STRENGTH:.05,ORDERBOOK_PRESSURE:.05,LIQUIDITY_QUALITY:.04,WHALE_FLOW:.05,
   ABSORPTION:.07,RISK_TRAPS:.09,EXTENSION:.04,STRATEGY_CONSENSUS:.05,MARKET_BREADTH:.04,DATA_INTEGRITY:.05
 };
 const finalVerdict=(analysts,features,dataValid)=>{
@@ -352,7 +378,7 @@ export class MultiAnalystEngine {
       const marketMedian24h=validTickerReturns.length?validTickerReturns[Math.floor(validTickerReturns.length/2)]:null;
       const breadthPct=validTickerReturns.length?validTickerReturns.filter(x=>x>0).length/validTickerReturns.length*100:null;
       const scanned=await boundedMap(selected,Math.max(1,Math.min(5,this.config.deepConcurrency)),async(ticker,index)=>{
-        const row=await this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:info.source,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'5m',fastKlines:96,includeAnalysisPayload:true});
+        const row=await this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:info.source,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'5m',fastKlines:96,includeAnalysisPayload:true,includeWhaleFlow:true});
         const analysis=analyzeMultiAnalystCandidate(row,{btc15,btc1,marketMedian24h,breadthPct});
         const specialist=analysis.specialist;
         const final=analysis.final;
@@ -395,6 +421,6 @@ export class MultiAnalystEngine {
 export const MULTI_ANALYST_NAMES=Object.freeze([
   'نظام السوق','توافق الأطر','هيكل القمم والقيعان','القاع والتحول','الزخم','تأكيد الحجم',
   'الانكماش والتجهيز','ما قبل الاختراق','الدعم والمقاومة','القوة النسبية','دفتر الأوامر',
-  'جودة السيولة','سلوك اللاعبين الكبار','امتصاص السيولة','الفخاخ والإرهاق','عدم مطاردة السعر',
+  'جودة السيولة','تدفق الحيتان','امتصاص السيولة','الفخاخ والإرهاق','عدم مطاردة السعر',
   'إجماع الاستراتيجيات','اتساع السوق','سلامة البيانات','المحلل النهائي'
 ]);
