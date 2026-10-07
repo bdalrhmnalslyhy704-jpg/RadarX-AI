@@ -256,9 +256,9 @@ test('Multi-Analyst route exposes the twenty-stage contract',async()=>{
     assert.equal(body.meta.specialist_count,19);
     assert.equal(body.candidates[0].analysts.length,19);
     assert.equal(body.candidates[0].final_judge.totalAnalysts,19);
-    assert.equal(body.paper_trading,true);
-    assert.equal(body.real_order_execution,false);
-    assert.equal(body.confidence_score,'UNKNOWN');
+    assert.equal(body.meta.paper_trading,true);
+    assert.equal(body.meta.real_order_execution,false);
+    assert.equal(body.meta.confidence_score,'UNKNOWN');
   }finally{await new Promise(resolve=>server.close(resolve));}
 });
 
