@@ -19,6 +19,7 @@ on:
       - feature-coin-hunter-20261006-android
       - android-whale-intelligence-v2-build224-20261007
       - android-build224-whale-accumulation-v3-20261007
+      - android-build224-final-stable-20261007
   workflow_dispatch:
 
 permissions:
@@ -43,7 +44,7 @@ jobs:
       - name: Verify release branch checkout and backend URL
         run: |
           set -euo pipefail
-          test "$GITHUB_REF_NAME" = "feature-coin-hunter-20261006-android" || test "$GITHUB_REF_NAME" = "android-build224-radar8-v2-20261006" || test "$GITHUB_REF_NAME" = "android-whale-intelligence-v2-build224-20261007"
+          test "$GITHUB_REF_NAME" = "feature-coin-hunter-20261006-android" || test "$GITHUB_REF_NAME" = "android-build224-radar8-v2-20261006" || test "$GITHUB_REF_NAME" = "android-whale-intelligence-v2-build224-20261007" || test "$GITHUB_REF_NAME" = "android-build224-final-stable-20261007"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           grep -Fq "https://radarx-ai-production.up.railway.app" android/app/src/main/assets/radarx-backend-client.mjs
           ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
@@ -396,7 +397,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "RadarX Native — Build 224 + Radar 8 V2 ${GITHUB_RUN_NUMBER}" \
-            --notes "Signed universal APK built on Build 224 lineage, adding premium Whale Accumulation radar with public large-order footprint analysis, report, and background notification identity. Spot/paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
+            --notes "Signed universal APK built on Build 224 lineage. Includes Radar 8 V2 + Whale Accumulation, user-controlled independent background monitoring (no auto-start), embedded Android UI, Spot/Paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
 
       - name: Verify published HTTPS download
         run: |
