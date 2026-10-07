@@ -4,6 +4,7 @@ name: RadarX Triple Radar CI
 on:
   push:
     branches:
+      - baseline/build224-official
       - phase3-triple-radar
       - development-v191-base-20261005
       - phase4-symbol-deep-scan
