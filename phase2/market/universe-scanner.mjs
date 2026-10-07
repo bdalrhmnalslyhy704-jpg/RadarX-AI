@@ -1038,8 +1038,7 @@ export function buildFastImpulseContext(candles,ticker,now){
   const bodyStrength=avgBodyStrength(recent);
   const bodyScore=Number.isFinite(bodyStrength)?clamp(50+bodyStrength*90):45;
   const historicalQuality=buildHistoricalFollowThrough(closed,now);
-  const historicalFollowThrough=buildHistoricalFollowThrough(closed,now);
-  const fastScore=clamp(momentumScore*0.22+volumeScore*0.18+buyScore*0.15+breakoutScore*0.13+emaAlignment*0.09+rangeExpansionScore*0.07+bodyScore*0.05+closeLocation*0.04+historicalFollowThrough.score*0.08);
+  const fastScore=clamp(momentumScore*0.24+volumeScore*0.20+buyScore*0.16+breakoutScore*0.14+emaAlignment*0.10+rangeExpansionScore*0.07+bodyScore*0.05+closeLocation*0.04);
   const leaders=[
     volumeScore>=62?'FAST_VOLUME_AWAKENING':null,
     momentumScore>=62?'FAST_MOMENTUM_AWAKENING':null,
@@ -1074,7 +1073,7 @@ export function buildFastImpulseContext(candles,ticker,now){
       body:Number.isFinite(bodyScore)?Math.round(bodyScore*10)/10:null,
       historical_followthrough:Number.isFinite(historicalQuality.score)?Number(historicalQuality.score):null
     },
-    score:Math.round(fastScore*10)/10,stage,leaders,historical_followthrough:historicalFollowThrough,historical_followthrough:historicalQuality
+    score:Math.round(fastScore*10)/10,stage,leaders,historical_followthrough:historicalQuality
   };
 }
 
@@ -1531,26 +1530,14 @@ export class MarketUniverseScanner {
     const valid = scanned
       .filter(Boolean)
       .filter(x => x.data_status?.data_valid === true && Number.isFinite(Number(x.last_price)))
-      .map(x => {
-        const baseScore = Number(x.bottom_context?.metrics?.composite_algorithm_score);
-        const hist = x.fast_impulse_context?.historical_followthrough || {};
-        const histScore = Number(hist.score);
-        const histSamples = Number(hist.samples);
-        const empirical = histSamples >= 5 && Number.isFinite(histScore) ? histScore : 50;
-        const reliability = histSamples >= 5 ? clamp(empirical,20,90) : 50;
-        const qualityScore = Number.isFinite(baseScore)
-          ? clamp(baseScore * 0.78 + reliability * 0.22)
-          : reliability;
-        return {...x,bottom_quality_score:Number(qualityScore.toFixed(1)),
-          historical_followthrough:hist};
-      })
-      .sort((a,b) =>
-        Number(b.bottom_quality_score||0)-Number(a.bottom_quality_score||0) ||
-        Number(b.bottom_context?.metrics?.composite_algorithm_score||0)-Number(a.bottom_context?.metrics?.composite_algorithm_score||0) ||
-        Number(b.liquidity_quality||0)-Number(a.liquidity_quality||0) ||
-        Number(b.quote_volume_24h||0)-Number(a.quote_volume_24h||0) ||
-        a.symbol.localeCompare(b.symbol)
-      );
+      .sort((a, b) => {
+        const aa = Number(a.bottom_context?.metrics?.composite_algorithm_score);
+        const bb = Number(b.bottom_context?.metrics?.composite_algorithm_score);
+        return (Number.isFinite(bb) ? bb : -1) - (Number.isFinite(aa) ? aa : -1) ||
+          Number(b.liquidity_quality) - Number(a.liquidity_quality) ||
+          Number(b.quote_volume_24h) - Number(a.quote_volume_24h) ||
+          a.symbol.localeCompare(b.symbol);
+      });
 
     const returned = valid.slice(0, requested);
     return {
@@ -1617,34 +1604,20 @@ export class MarketUniverseScanner {
       const relReturn=Number.isFinite(marketMedianReturn)?Number(ctx.session_return_pct)-marketMedianReturn:null;
       const relScore=Number.isFinite(relReturn)?clamp(50+relReturn*18):Number.isFinite(btcReturn)?clamp(50+(Number(ctx.session_return_pct)-btcReturn)*18):50;
       const components={...ctx.components,relative_strength:relScore};
-      const baseScore=avgDefined(Object.values(components),45);
-      const hist=x.fast_impulse_context?.historical_followthrough||{};
-      const histSamples=Number(hist.samples);
-      const histScore=Number(hist.score);
-      const empiricalScore=histSamples>=5&&Number.isFinite(histScore)?clamp(histScore):50;
-      const reliabilityBoost=histSamples>=5 ? (empiricalScore-50)*0.22 : 0;
-      const score=clamp(baseScore+reliabilityBoost);
+      const score=avgDefined(Object.values(components),45);
       const alreadyMoved=ctx.already_moved===true;
-      const historicalWeak=histSamples>=5&&empiricalScore<46;
       const stage=alreadyMoved?'ALREADY_MOVED':
-        historicalWeak?'HISTORICAL_WEAK':
         score>=82&&Number(ctx.session_return_pct)<=6?'READY':
         score>=72?'EARLY_WAKE':
         score>=62?'QUIET_BUILD':'NO_SETUP';
       const reasons=[...(ctx.reasons||[])];
       if(Number.isFinite(relReturn)&&relReturn>=1&&!reasons.includes('RELATIVE_STRENGTH'))reasons.push('RELATIVE_STRENGTH');
-      if(histSamples>=5&&empiricalScore>=60)reasons.push('HISTORICAL_FOLLOWTHROUGH_POSITIVE');
-      if(historicalWeak)reasons.push('HISTORICAL_FOLLOWTHROUGH_WEAK');
       return {...x,pre_move_context:{
         ...ctx,
         market_median_return_pct:Number.isFinite(marketMedianReturn)?marketMedianReturn:null,
         relative_strength_vs_market_pct:Number.isFinite(relReturn)?relReturn:null,
         relative_strength_vs_btc_pct:Number.isFinite(btcReturn)?Number(ctx.session_return_pct)-btcReturn:null,
-        score:Math.round(score*10)/10,
-        historical_followthrough_score:histSamples>=5&&Number.isFinite(histScore)?Number(histScore.toFixed(1)):null,
-        historical_followthrough_samples:Number.isFinite(histSamples)?histSamples:0,
-        historical_hit_rate_30m:Number.isFinite(Number(hist.hit_rate_short))?Number(hist.hit_rate_short):null,
-        historical_hit_rate_2h:Number.isFinite(Number(hist.hit_rate_long))?Number(hist.hit_rate_long):null,
+        score:Math.round(clamp(score)*10)/10,
         stage,
         reasons:[...new Set(reasons)]
       }};
