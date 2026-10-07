@@ -1,10 +1,8 @@
 export const DEFAULT_BACKEND_BASE_URL = 'https://radarx-ai-triple-production.up.railway.app';
-export const BACKEND_FALLBACK_URLS = Object.freeze([
-  'https://radarx-ai-production.up.railway.app'
-]);
+export const BACKEND_FALLBACK_URLS = Object.freeze([]);
 
 function assertAllowedBackend(url) {
-  const allowed = new Set([DEFAULT_BACKEND_BASE_URL, ...BACKEND_FALLBACK_URLS]);
+  const allowed = new Set([DEFAULT_BACKEND_BASE_URL]);
   if (!allowed.has(url.origin) || url.pathname !== '/' || url.username || url.password) {
     throw new Error('BACKEND_ORIGIN_NOT_ALLOWED');
   }
@@ -23,7 +21,7 @@ export function normalizeBackendBaseUrl(raw = DEFAULT_BACKEND_BASE_URL) {
 
 export async function requestJson(baseUrl, path, fetchImpl = globalThis.fetch, timeoutMs = 65000) {
   let firstError = null;
-  const bases = [normalizeBackendBaseUrl(baseUrl), ...BACKEND_FALLBACK_URLS];
+  const bases = [normalizeBackendBaseUrl(baseUrl)];
   for (const base of bases) {
     try {
       const response = await Promise.race([
@@ -39,10 +37,7 @@ export async function requestJson(baseUrl, path, fetchImpl = globalThis.fetch, t
       if (response.ok) {
         return { status: response.status, ok: true, body, error: null, base };
       }
-      if (response.status === 404 && base !== bases.at(-1)) {
-        firstError = new Error('HTTP_404');
-        continue;
-      }
+
       if (response.status >= 400 && response.status < 500) {
         return { status: response.status, ok: false, body, error: 'HTTP_' + response.status, base };
       }
@@ -294,7 +289,7 @@ export async function setRadarState(radar, action, fetchImpl = globalThis.fetch)
   const safeAction=String(action||'').trim().toLowerCase();
   if(!/^[A-Z0-9_]{2,40}$/.test(safeRadar)) throw new Error('INVALID_RADAR');
   if(!['start','stop'].includes(safeAction)) throw new Error('INVALID_RADAR_ACTION');
-  const bases=[normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL),...BACKEND_FALLBACK_URLS];
+  const bases=[normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL)];
   let lastError=null;
   for(const base of bases){
     try{
@@ -305,7 +300,7 @@ export async function setRadarState(radar, action, fetchImpl = globalThis.fetch)
         new Promise((_,reject)=>setTimeout(()=>reject(new Error('BACKEND_TIMEOUT')),15000))
       ]);
       let body=null;try{body=await response.json();}catch{}
-      if(response.status===404&&base!==bases.at(-1))continue;
+
       return {status:response.status,ok:response.ok,body,error:null,base};
     }catch(error){lastError=error;}
   }
