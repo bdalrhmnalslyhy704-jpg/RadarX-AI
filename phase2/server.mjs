@@ -72,7 +72,11 @@ export async function startServer({
   const symbolDeepAnalyzer=new SymbolDeepAnalyzer({rest:deepScanRest,config:config.symbolDeepScan||{}});
   const professorRadar=new ProfessorRadar({rest,store,pushManager:push,deepAnalyzer:symbolDeepAnalyzer,config:config.professorRadar||{},logger});
   const doomsdayRadar=new DoomsdayRadar({rest,store,pushManager:push,config:config.doomsdayRadar||{},logger});
-  const multiAnalystRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  const multiAnalystRestUrls=[
+    'https://data-api.binance.vision',
+    ...(config.rest.baseUrls??config.rest.urls??[])
+  ].filter((url,index,arr)=>arr.indexOf(url)===index);
+  const multiAnalystRest=new RestClient({...config.rest,baseUrls:multiAnalystRestUrls});
   const multiAnalystRadar=new MultiAnalystEngine({rest:multiAnalystRest,config:config.multiAnalyst||{}});
   const alMuqawimRadar=new AlMuqawimRadar({rest,store,pushManager:push,config:config.alMuqawimRadar||{},logger});
   const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,multiAnalystRadar});
