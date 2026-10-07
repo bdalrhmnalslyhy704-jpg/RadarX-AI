@@ -22,6 +22,7 @@ export function normalizeBackendBaseUrl(raw = DEFAULT_BACKEND_BASE_URL) {
 }
 
 const ACTIVE_BACKEND_CONTROLLERS = new Set();
+let PAGE_HIDDEN = false;
 
 export function cancelAllBackendRequests() {
   for (const controller of ACTIVE_BACKEND_CONTROLLERS) {
@@ -31,10 +32,12 @@ export function cancelAllBackendRequests() {
 }
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('pagehide', cancelAllBackendRequests, {capture:true});
+  window.addEventListener('pagehide', () => { PAGE_HIDDEN = true; cancelAllBackendRequests(); }, {capture:true});
+  window.addEventListener('pageshow', () => { PAGE_HIDDEN = false; }, {capture:true});
 }
 
 export async function requestJson(baseUrl, path, fetchImpl = globalThis.fetch, timeoutMs = 65000) {
+  if (PAGE_HIDDEN) return {status:0,ok:false,body:null,error:'PAGE_HIDDEN',base:normalizeBackendBaseUrl(baseUrl)};
   let firstError = null;
   const bases = [normalizeBackendBaseUrl(baseUrl), ...BACKEND_FALLBACK_URLS];
   for (const base of bases) {
@@ -309,6 +312,7 @@ export async function getRadarAlerts({radar='ALL',limit=20,since=0}={}, fetchImp
 }
 
 export async function setRadarState(radar, action, fetchImpl = globalThis.fetch) {
+  if (PAGE_HIDDEN) return {status:0,ok:false,body:null,error:'PAGE_HIDDEN',base:normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL)};
   const safeRadar=String(radar||'').trim().toUpperCase();
   const safeAction=String(action||'').trim().toLowerCase();
   if(!/^[A-Z0-9_]{2,40}$/.test(safeRadar)) throw new Error('INVALID_RADAR');
