@@ -27,7 +27,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: radarx-android-release-${{ github.ref }}
+  group: radarx-android-release-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -424,6 +424,7 @@ jobs:
           ls -l /dev/kvm
 
       - name: Android Emulator online/offline smoke test (best effort)
+        timeout-minutes: 6
         continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
