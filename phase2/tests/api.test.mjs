@@ -186,8 +186,8 @@ test('TEST_FIXTURE: independent radar status/control and unified alerts preserve
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base='http://127.0.0.1:'+server.address().port;
   const status=await (await fetch(base+'/api/radar-status')).json();
-  assert.equal(status.radars.length,7);assert.equal(status.radars.every(x=>x.running===false),true);
-  assert.equal(status.radars.at(-1).radar_name,'Radar 7 — المقاوم');
+  assert.equal(status.radars.length,12);assert.equal(status.radars.every(x=>x.running===false),true);
+  assert.equal(status.radars.at(-1).radar_name,'البروفيسور — استخبارات عامة');
   const start=await (await fetch(base+'/api/radar-control?radar=LIQUIDITY_ABSORPTION_RADAR&action=start',{method:'POST'})).json();
   assert.equal(start.running,true);assert.equal(early.running,false);assert.equal(strong.running,false);assert.equal(rotation.running,false);assert.equal(r4.running,true);
   const alerts=await (await fetch(base+'/api/radar-alerts?radar=ALL&limit=10')).json();
@@ -217,7 +217,7 @@ test('TEST_FIXTURE: Professor route exposes fused live intelligence and is indep
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try{
     const status=await (await fetch('http://127.0.0.1:'+server.address().port+'/api/radar-status')).json();
-    assert.equal(status.radars.length,8);assert.equal(status.radars.at(-1).radar_name,'البروفيسور — استخبارات عامة');
+    assert.equal(status.radars.length,12);assert.equal(status.radars.at(-1).radar_name,'البروفيسور — استخبارات عامة');
     const res=await fetch('http://127.0.0.1:'+server.address().port+'/api/professor-radar?scan=1&limit=10');
     assert.equal(res.status,200);const body=await res.json();assert.equal(ticked,1);assert.equal(body.meta.radar,'PROFESSOR_RADAR');assert.equal(body.alerts.length,1);assert.equal(body.alerts[0].radar_name,'البروفيسور — استخبارات عامة');
     assert.equal(body.meta.real_order_execution,false);
@@ -230,7 +230,7 @@ test('Whale Accumulation route exposes paper-only public contract',async()=>{
     health:()=>({running:false,busy:false,radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان',universe:100,scanned_successfully:3,confirmed_count:1}),
     start:async()=>{},stop:async()=>{},tick:async()=>{},
     coverage:()=>({universe_total:100,scanned_successfully:3,confirmed_after_persistence:1}),
-    snapshot:()=>[{symbol:'TESTUSDT',eligible:true,opportunity_score:86,whale_accumulation:{stage:'CONFIRMED_ACCUMULATION'},large_prints:{largeBuyRatio:.72,largeNotionalRatio:.18},candle_flow:{volumeRatio:1.7,takerBuyRatio:.62},orderbook:{nearImbalance:.12},radar_quality_v3:{score:90},whale_streak:{count:2,required:2},reasons:['LARGE_PRINT_REPETITION'],paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',processed_at:Date.now(),detected_at:Date.now()}],
+    snapshot:()=>({radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان',quote:'USDT',as_of:new Date().toISOString(),running:false,busy:false,candidates:[{symbol:'TESTUSDT',eligible:true,opportunity_score:86,whale_accumulation:{stage:'CONFIRMED_ACCUMULATION'},large_prints:{largeBuyRatio:.72,largeNotionalRatio:.18},candle_flow:{volumeRatio:1.7,takerBuyRatio:.62},orderbook:{nearImbalance:.12},radar_quality_v3:{score:90},whale_streak:{count:2,required:2},reasons:['LARGE_PRINT_REPETITION'],paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',processed_at:Date.now(),detected_at:Date.now()}],confirmed_count:1,alerts_emitted:0,coverage:{},meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',source:'Binance Public REST'}}),
     report:()=>({thresholds:{minLargeBuyRatio:.6},what_it_measures:['Large Prints'],methodology:'test',source:'Binance Public REST'})
   };
   const server=createApiServer({config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},store,
