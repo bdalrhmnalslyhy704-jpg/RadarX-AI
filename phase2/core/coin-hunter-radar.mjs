@@ -401,12 +401,9 @@ export class CoinHunterRadar {
       const positive = tickers
         .filter(x => Number(x.priceChangePercent) > 0)
         .sort((a,b) => Number(b.priceChangePercent) - Number(a.priceChangePercent));
-      const leaderCandidates = [
-        ...positive.filter(x => Number(x.priceChangePercent) >= Number(this.config.minLeaderMovePct)),
-        ...positive.filter(x => Number(x.priceChangePercent) < Number(this.config.minLeaderMovePct))
-      ]
-        .filter((x,i,a) => a.findIndex(y => y.symbol === x.symbol) === i)
-        .slice(0, Number(this.config.leaderCount));
+      const leaderCandidates = positive
+        .filter((x,i) => i < Math.max(Number(this.config.leaderCount) * 3, 24))
+        .slice(0, Math.max(Number(this.config.leaderCount) * 3, 24));
 
       const leaderRows = [];
       for (const t of leaderCandidates) {
@@ -416,7 +413,8 @@ export class CoinHunterRadar {
           const day = closed.filter(x=>Number(x.openTime)>=Number(dayStart));
           const dayPct = day.length >= 1 ? pct(Number(day.at(-1).close), Number(day[0].open)) : null;
           const checkpoint = findPreMoveCheckpoint(closed, dayStart, 2);
-          const source = checkpoint ? closed.slice(0, closed.findIndex(x=>Number(x.closeTime)===checkpoint.time)) : closed;
+          const sourceIndex = checkpoint ? closed.findIndex(x=>Number(x.closeTime)===checkpoint.time) : closed.length;
+          const source = checkpoint ? closed.slice(0, Math.max(0,sourceIndex)) : closed;
           const refPrice = checkpoint ? checkpoint.price : Number(closed.at(-1)?.close);
           const features = source.length>=16 ? featureSet(source, {...t,referencePrice:refPrice}, null) : featureSet(closed, t, null);
           if (features) leaderRows.push({symbol:t.symbol,todayPct:dayPct ?? Number(t.priceChangePercent),features,checkpoint});
@@ -424,7 +422,9 @@ export class CoinHunterRadar {
           this.logger.warn?.('COIN_HUNTER_LEADER '+t.symbol+': '+String(error?.message ?? error));
         }
       }
-      this.lesson = {...patternLesson(leaderRows), learned_at:new Date(started).toISOString(), max_accepted_24h_move_pct:Number(this.config.maxHunter24hMovePct)};
+      const qualifyingLeaders=leaderRows.filter(x=>Number(x.todayPct)>=Number(this.config.minLeaderMovePct));
+      const trainingLeaders=qualifyingLeaders.length>=3?qualifyingLeaders:leaderRows;
+      this.lesson = {...patternLesson(trainingLeaders), qualifying_leaders:qualifyingLeaders.length, training_samples:trainingLeaders.length, learned_at:new Date(started).toISOString(), max_accepted_24h_move_pct:Number(this.config.maxHunter24hMovePct)};
 
       const btcToday = btcTicker ? Number(btcTicker.priceChangePercent) : null;
       const pool = tickers
@@ -502,6 +502,7 @@ export class CoinHunterRadar {
       this.lastCoverage = {
         universe_total: tickers.length,
         leader_sampled: leaderRows.length,
+        qualifying_leaders: leaderRows.filter(x=>Number(x.todayPct)>=Number(this.config.minLeaderMovePct)).length,
         candidate_pool: pool.length,
         deep_scanned_total: scanned,
         hunter_hits: this.latestCandidates.filter(x => x.decision === 'قنص').length,
