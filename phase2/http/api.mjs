@@ -136,7 +136,7 @@ function subscriptionValid(x){
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null, kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null}= {}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null, kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,whaleAccumulationRadar=null}= {}){
   const counters=new Map();
   const moveConfig=config.moveRadar||{thresholdPct:1};
   const originList=config.auth.allowedOrigins;
@@ -156,7 +156,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     KAHIR_RADAR:{name:RADAR_NAMES.KAHIR_RADAR,instance:kahirRadar,read:'readKahirAlerts'},
     DOOMSDAY_RADAR:{name:RADAR_NAMES.DOOMSDAY_RADAR,instance:doomsdayRadar,read:'readDoomsdayAlerts'},
     ALMUQAWIM_RADAR:{name:RADAR_NAMES.ALMUQAWIM_RADAR,instance:alMuqawimRadar,read:'readAlMuqawimAlerts'},
-    ...(professorRadar?{PROFESSOR_RADAR:{name:RADAR_NAMES.PROFESSOR_RADAR,instance:professorRadar,read:'readProfessorAlerts'}}:{})
+    ...(professorRadar?{PROFESSOR_RADAR:{name:RADAR_NAMES.PROFESSOR_RADAR,instance:professorRadar,read:'readProfessorAlerts'}}:{}),
+    ...(whaleAccumulationRadar?{WHALE_ACCUMULATION_RADAR:{name:RADAR_NAMES.WHALE_ACCUMULATION_RADAR,instance:whaleAccumulationRadar,read:'readWhaleAccumulationAlerts'}}:{})
   });
   function radarStatus(){
     return Object.entries(radarEntries).map(([id,x])=>{
@@ -187,7 +188,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(!rateOk(key))return send(res,429,{error:'RATE_LIMITED'});
     try{
       const u=new URL(req.url,'http://localhost');
-      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false},kahir_radar:kahirRadar?.health?.()||{running:false},doomsday_radar:doomsdayRadar?.health?.()||{running:false},almuqawim_radar:alMuqawimRadar?.health?.()||{running:false},professor_radar:professorRadar?.health?.()||{running:false}});
+      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false},kahir_radar:kahirRadar?.health?.()||{running:false},doomsday_radar:doomsdayRadar?.health?.()||{running:false},almuqawim_radar:alMuqawimRadar?.health?.()||{running:false},professor_radar:professorRadar?.health?.()||{running:false},whale_accumulation_radar:whaleAccumulationRadar?.health?.()||{running:false}});
       if(u.pathname==='/api/radar-status'&&req.method==='GET')return send(res,200,{radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
       if(u.pathname==='/api/radar-control'&&(req.method==='POST'||req.method==='GET')){
         const radar=String(u.searchParams.get('radar')||'').trim().toUpperCase();
@@ -411,6 +412,19 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             meta:{...(snapshot.meta||{}),live:health.running===true,radar:'PROFESSOR_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         }catch(e){
           return send(res,503,{error:String(e?.message??e),candidates:[],alerts:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PROFESSOR_RADAR'}});
+        }
+      }
+      if(u.pathname==='/api/whale-accumulation-radar'&&req.method==='GET'){
+        if(!whaleAccumulationRadar)return send(res,503,{error:'WHALE_ACCUMULATION_RADAR_UNAVAILABLE',candidates:[],coverage:{},meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'WHALE_ACCUMULATION_RADAR'}});
+        const limit=Math.max(1,Math.min(50,Math.trunc(Number(u.searchParams.get('limit')||20))));
+        const runNow=['1','true','yes'].includes(String(u.searchParams.get('scan')||'0').toLowerCase());
+        try{
+          if(runNow&&!whaleAccumulationRadar.health().busy){if(!whaleAccumulationRadar.health().running)await whaleAccumulationRadar.start();else await whaleAccumulationRadar.tick();}
+          const h=whaleAccumulationRadar.health();
+          const report=whaleAccumulationRadar.report();
+          return send(res,200,{radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان',as_of:new Date(Date.now()).toISOString(),source:'Binance Public REST',running:h.running,coverage:whaleAccumulationRadar.coverage(),confirmed_count:h.confirmed,candidates:whaleAccumulationRadar.snapshot(limit),report,methodology:report.methodology,monitoring:h,meta:{live:h.running===true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        }catch(e){
+          return send(res,503,{error:String(e?.message??e),candidates:[],coverage:whaleAccumulationRadar.coverage(),meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'WHALE_ACCUMULATION_RADAR'}});
         }
       }
       if(u.pathname==='/api/multi-analyst'&&req.method==='GET'){
