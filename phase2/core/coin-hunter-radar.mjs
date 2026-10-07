@@ -39,7 +39,21 @@ function closedCandles(rows, now) {
   );
 }
 
-function featureSet(candles, ticker, btcChange = null) {
+export function findPreMoveCheckpoint(closed,dayStart,thresholdPct=2){
+  const day=closed.filter(x=>Number(x.openTime)>=Number(dayStart));
+  if(day.length<3)return null;
+  const base=Number(day[0]?.open);
+  if(!(base>0))return null;
+  for(let i=1;i<day.length;i++){
+    const ret=(Number(day[i].close)-base)/base*100;
+    if(Number.isFinite(ret)&&ret>=thresholdPct){
+      return {index:i,returnPct:ret,price:Number(day[i].close),time:Number(day[i].closeTime)||null};
+    }
+  }
+  return null;
+}
+
+export function featureSet(candles, ticker, btcChange = null) {
   const c = closedCandles(candles, Date.now());
   if (c.length < 16) return null;
 
@@ -48,7 +62,7 @@ function featureSet(candles, ticker, btcChange = null) {
   const trades = c.map(x => Number(x.tradeCount));
   const last = c.at(-1);
   const prev = c.at(-2);
-  const current = Number(ticker.lastPrice);
+  const current = Number(ticker.referencePrice ?? ticker.lastPrice);
 
   const baseVolume = avg(volumes.slice(-12, -4));
   const recentVolume = avg(volumes.slice(-4));
@@ -287,8 +301,8 @@ export const COIN_HUNTER_DEFAULTS = Object.freeze({
   universeRefreshMs: 10 * 60 * 1000,
   minQuoteVolume24h: 750000,
   leaderCount: 12,
-  candidatePool: 36,
-  deepCount: 16,
+  candidatePool: 48,
+  deepCount: 20,
   deepConcurrency: 4,
   minLeaderMovePct: 6,
   maxCandidateMovePct: 8,
@@ -387,26 +401,30 @@ export class CoinHunterRadar {
       const positive = tickers
         .filter(x => Number(x.priceChangePercent) > 0)
         .sort((a,b) => Number(b.priceChangePercent) - Number(a.priceChangePercent));
-      const leaderCandidates = [
-        ...positive.filter(x => Number(x.priceChangePercent) >= Number(this.config.minLeaderMovePct)),
-        ...positive.filter(x => Number(x.priceChangePercent) < Number(this.config.minLeaderMovePct))
-      ]
-        .filter((x,i,a) => a.findIndex(y => y.symbol === x.symbol) === i)
-        .slice(0, Number(this.config.leaderCount));
+      const leaderCandidates = positive
+        .filter((x,i) => i < Math.max(Number(this.config.leaderCount) * 3, 24))
+        .slice(0, Math.max(Number(this.config.leaderCount) * 3, 24));
 
       const leaderRows = [];
       for (const t of leaderCandidates) {
         try {
-          const k = await this.rest.klines(t.symbol, '1h', {startTime: dayStart, limit: 30});
+          const k = await this.rest.klines(t.symbol, '1h', {limit: 72});
           const closed = closedCandles(k.candles, Date.now());
-          const dayPct = closed.length >= 2 ? pct(Number(closed.at(-1).close), Number(closed[0].open)) : null;
-          const features = featureSet(closed, t, null);
-          if (features) leaderRows.push({symbol:t.symbol, todayPct:dayPct ?? Number(t.priceChangePercent), features});
+          const day = closed.filter(x=>Number(x.openTime)>=Number(dayStart));
+          const dayPct = day.length >= 1 ? pct(Number(day.at(-1).close), Number(day[0].open)) : null;
+          const checkpoint = findPreMoveCheckpoint(closed, dayStart, 2);
+          const sourceIndex = checkpoint ? closed.findIndex(x=>Number(x.closeTime)===checkpoint.time) : closed.length;
+          const source = checkpoint ? closed.slice(0, Math.max(0,sourceIndex)) : closed;
+          const refPrice = checkpoint ? checkpoint.price : Number(closed.at(-1)?.close);
+          const features = source.length>=16 ? featureSet(source, {...t,referencePrice:refPrice}, null) : featureSet(closed, t, null);
+          if (features) leaderRows.push({symbol:t.symbol,todayPct:dayPct ?? Number(t.priceChangePercent),features,checkpoint});
         } catch (error) {
           this.logger.warn?.('COIN_HUNTER_LEADER '+t.symbol+': '+String(error?.message ?? error));
         }
       }
-      this.lesson = {...patternLesson(leaderRows), learned_at:new Date(started).toISOString(), max_accepted_24h_move_pct:Number(this.config.maxHunter24hMovePct)};
+      const qualifyingLeaders=leaderRows.filter(x=>Number(x.todayPct)>=Number(this.config.minLeaderMovePct));
+      const trainingLeaders=qualifyingLeaders.length>=3?qualifyingLeaders:leaderRows;
+      this.lesson = {...patternLesson(trainingLeaders), qualifying_leaders:qualifyingLeaders.length, training_samples:trainingLeaders.length, learned_at:new Date(started).toISOString(), max_accepted_24h_move_pct:Number(this.config.maxHunter24hMovePct)};
 
       const btcToday = btcTicker ? Number(btcTicker.priceChangePercent) : null;
       const pool = tickers
@@ -427,12 +445,13 @@ export class CoinHunterRadar {
         const batch = pool.slice(i, i + concurrency);
         const rows = await Promise.all(batch.map(async t => {
           try {
-            const k = await this.rest.klines(t.symbol, '1h', {startTime: dayStart, limit: 30});
-            const features = featureSet(k.candles, t, btcToday);
+            const k = await this.rest.klines(t.symbol, '1h', {limit: 72});
+            const closed = closedCandles(k.candles, Date.now());
+            const features = featureSet(closed, t, btcToday);
             if (!features) return null;
             scanned += 1;
-            const closed = closedCandles(k.candles, Date.now());
-            const dayPct = closed.length >= 2 ? pct(Number(closed.at(-1).close), Number(closed[0].open)) : Number(t.priceChangePercent);
+            const day = closed.filter(x=>Number(x.openTime)>=Number(dayStart));
+            const dayPct = day.length >= 1 ? pct(Number(day.at(-1).close), Number(day[0].open)) : Number(t.priceChangePercent);
             const score = scoreHunter({
               ticker:t, features, lesson:this.lesson,
               todayPct:dayPct,
@@ -483,6 +502,7 @@ export class CoinHunterRadar {
       this.lastCoverage = {
         universe_total: tickers.length,
         leader_sampled: leaderRows.length,
+        qualifying_leaders: leaderRows.filter(x=>Number(x.todayPct)>=Number(this.config.minLeaderMovePct)).length,
         candidate_pool: pool.length,
         deep_scanned_total: scanned,
         hunter_hits: this.latestCandidates.filter(x => x.decision === 'قنص').length,

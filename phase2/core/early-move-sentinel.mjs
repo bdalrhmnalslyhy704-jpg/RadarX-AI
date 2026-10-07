@@ -14,7 +14,7 @@ export const MOVE_RADAR_DEFAULTS=Object.freeze({
   pollMs:5000,
   reconcileMs:15000,
   cooldownMs:30*60*1000,
-  maxDeepPerCycle:4,
+  maxDeepPerCycle:6,
   minQuoteVolume24h:750000,
   minDataQuality:70,
   minLiquidityQuality:60,
@@ -33,7 +33,7 @@ export const MOVE_RADAR_DEFAULTS=Object.freeze({
   fastInterval:'5m',
   fastKlines:96,
   earlyScanCooldownMs:2*60*1000,
-  maxEarlyDiscovery:36,
+  maxEarlyDiscovery:54,
   earlyMinPreMoveScore:82,
   earlyMinExpansionScore:82,
   earlyMinStrategyScore:75,
@@ -57,6 +57,33 @@ function component(candidate,keyPaths,fallback=50){
     if(Number.isFinite(n)) return clamp(n);
   }
   return fallback;
+}
+
+export function buildMarketPulse(prev,row,history=[]){
+  const now=Number(row?.tickerTime)||Date.now();
+  const prevTime=Number(prev?.tickerTime)||0;
+  const dtMs=prevTime>0?Math.max(250,now-prevTime):null;
+  const pricePrev=Number(prev?.lastPrice),priceNow=Number(row?.lastPrice);
+  const priceDelta=Number.isFinite(pricePrev)&&pricePrev>0&&Number.isFinite(priceNow)
+    ?(priceNow-pricePrev)/pricePrev*100:null;
+  const volumeDelta=Number.isFinite(Number(row?.quoteVolume24h))&&Number.isFinite(Number(prev?.quoteVolume24h))
+    ?Math.max(0,Number(row.quoteVolume24h)-Number(prev.quoteVolume24h)):null;
+  const tradeDelta=Number.isFinite(Number(row?.tradeCount24h))&&Number.isFinite(Number(prev?.tradeCount24h))
+    ?Math.max(0,Number(row.tradeCount24h)-Number(prev.tradeCount24h)):null;
+  const sec=Number.isFinite(dtMs)?dtMs/1000:null;
+  const volumeRate=Number.isFinite(volumeDelta)&&sec>0?volumeDelta/sec:null;
+  const tradeRate=Number.isFinite(tradeDelta)&&sec>0?tradeDelta/sec:null;
+  const prior=Array.isArray(history)?history.slice(-8):[];
+  const avg=(xs)=>{const a=xs.map(Number).filter(Number.isFinite);return a.length?a.reduce((s,x)=>s+x,0)/a.length:null;};
+  const baseVol=avg(prior.map(x=>x.volume_rate));
+  const baseTrade=avg(prior.map(x=>x.trade_rate));
+  const volumeRatio=Number.isFinite(volumeRate)&&Number.isFinite(baseVol)&&baseVol>0?volumeRate/baseVol:null;
+  const tradeRatio=Number.isFinite(tradeRate)&&Number.isFinite(baseTrade)&&baseTrade>0?tradeRate/baseTrade:null;
+  const priceScore=Number.isFinite(priceDelta)?clamp(50+priceDelta*95):45;
+  const volumeScore=Number.isFinite(volumeRatio)?clamp(50+(volumeRatio-1)*30):45;
+  const tradeScore=Number.isFinite(tradeRatio)?clamp(50+(tradeRatio-1)*28):45;
+  const acceleration=clamp(priceScore*.42+volumeScore*.34+tradeScore*.24);
+  return {price_delta_pct:priceDelta,volume_rate:volumeRate,trade_rate:tradeRate,volume_ratio:volumeRatio,trade_ratio:tradeRatio,score:Number(acceleration.toFixed(1))};
 }
 
 export function buildMoveAlert(candidate,trigger,{now=Date.now()}={}) {
@@ -242,6 +269,9 @@ export function buildEarlyWakeAlert(candidate,trigger,{now=Date.now()}={}) {
   const obv=component(candidate,['bottom_context.algorithms.obv_accumulation.score'],45);
   const wyckoff=component(candidate,['bottom_context.algorithms.wyckoff_spring.score'],45);
   const mtf=component(candidate,['bottom_context.metrics.mtf_alignment','bottom_context.algorithms.mtf_alignment.score'],45);
+  const historicalFollowThrough=candidate?.fast_impulse_context?.historical_followthrough||{};
+  const historicalScore=finite(historicalFollowThrough.score,50);
+  const historicalSamples=finite(historicalFollowThrough.samples,0);
   const fast=candidate?.fast_impulse_context||{};
   const fastScore=component(candidate,['fast_impulse_context.score'],45);
   const fastMomentum=component(candidate,['fast_impulse_context.scores.momentum'],45);
@@ -299,7 +329,8 @@ export function buildEarlyWakeAlert(candidate,trigger,{now=Date.now()}={}) {
     obv*0.02+
     wyckoff*0.01+
     mtf*0.01+
-    preMove*0.04
+    preMove*0.04+
+    historicalScore*0.06
   );
   const eligible=!alreadyMoved&&calmEnough&&
     dataQuality>=75&&
@@ -377,7 +408,8 @@ export function buildEarlyWakeAlert(candidate,trigger,{now=Date.now()}={}) {
       fast_impulse:fastScore,fast_momentum:fastMomentum,fast_volume:fastVolume,fast_taker_buy:fastTaker,fast_breakout:fastBreakout,fast_ema:fastEma,fast_range_expansion:fastRange,fast_body:fastBody,
       pre_move:preMove,momentum,volume,buying_pressure:buying,orderbook_pressure:orderbook,
       structure,squeeze,relative_strength:relative,resistance_proximity:resistance,
-      ema_reclaim:emaReclaim,rsi_score:rsiScore,obv_accumulation:obv,wyckoff_spring:wyckoff,mtf_alignment:mtf
+      ema_reclaim:emaReclaim,rsi_score:rsiScore,obv_accumulation:obv,wyckoff_spring:wyckoff,mtf_alignment:mtf,
+      historical_followthrough:historicalScore
     },
     taker_flow:{buy_ratio:takerRatio,buy_acceleration:takerAccel},
     reasons:[...new Set(reasons)].slice(0,10),
@@ -412,6 +444,9 @@ export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
   const whale=component(candidate,['bottom_context.metrics.whale_pressure','bottom_context.algorithms.whale_pressure.score'],45);
   const exhaustion=component(candidate,['bottom_context.metrics.selling_exhaustion','bottom_context.algorithms.sell_exhaustion.score'],45);
   const takerRatio=finite(bottom?.algorithms?.taker_flow?.buy_ratio,null);
+  const historicalFollowThrough=candidate?.fast_impulse_context?.historical_followthrough||{};
+  const historicalScore=finite(historicalFollowThrough.score,50);
+  const historicalSamples=finite(historicalFollowThrough.samples,0);
   const acceptedConfluence=clamp(strategies.acceptedCount*24+strategies.bestScore*0.35);
   const alreadyMoved=Boolean(ctx.already_moved)||priceChange>MOVE_RADAR_DEFAULTS.earlyMax24hMovePct||priceChange>20;
   const sessionReturn=finite(ctx.session_return_pct,null);
@@ -431,7 +466,8 @@ export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
     relative>=60,
     mtf>=65,
     liquidity>=70,
-    Number.isFinite(takerRatio)&&takerRatio>=0.53
+    Number.isFinite(takerRatio)&&takerRatio>=0.53,
+    historicalSamples<5||historicalScore>=48
   ];
   const confirmationCount=confirmations.filter(Boolean).length;
 
@@ -446,17 +482,20 @@ export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
     squeeze*0.06+
     relative*0.03+
     mtf*0.03+
-    liquidity*0.03
+    liquidity*0.01+
+    historicalScore*0.07
   );
 
   const eligible=!alreadyMoved&&calmEnough&&
     dataQuality>=80&&
     liquidity>=70&&
+    (historicalSamples<5||historicalScore>=48)&&
     strategies.bestScore>=MOVE_RADAR_DEFAULTS.earlyMinStrategyScore&&
     strategies.acceptedCount>=MOVE_RADAR_DEFAULTS.earlyMinAcceptedStrategies&&
     preMove>=MOVE_RADAR_DEFAULTS.earlyMinPreMoveScore&&
     explosionScore>=MOVE_RADAR_DEFAULTS.earlyMinExpansionScore&&
-    confirmationCount>=MOVE_RADAR_DEFAULTS.earlyMinConfirmations;
+    confirmationCount>=MOVE_RADAR_DEFAULTS.earlyMinConfirmations&&
+    (historicalSamples<5||historicalScore>=48);
 
   const reasons=[];
   const push=(ok,text)=>{if(ok)reasons.push(text)};
@@ -521,8 +560,9 @@ export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
       accepted_mean:Math.round(strategies.acceptedMean*10)/10,
       accepted_ids:(candidate?.accepted_strategies||[]).slice(0,8)
     },
-    components:{pre_move:preMove,momentum,volume,buying_pressure:buying,structure,squeeze,relative_strength:relative,mtf_alignment:mtf,whale_pressure:whale,selling_exhaustion:exhaustion,liquidity,data_quality:dataQuality},
+    components:{pre_move:preMove,momentum,volume,buying_pressure:buying,structure,squeeze,relative_strength:relative,mtf_alignment:mtf,whale_pressure:whale,selling_exhaustion:exhaustion,liquidity,data_quality:dataQuality,historical_followthrough:historicalScore},
     taker_flow:{buy_ratio:takerRatio},
+    historical_followthrough:historicalFollowThrough,
     reasons:[...new Set(reasons)].slice(0,12),
     risk_flags:[...new Set(riskFlags)],
     data_status:candidate?.data_status||{},
@@ -556,6 +596,7 @@ export class EarlyMoveSentinel {
     this.lastTicker=new Map();
     this.lastAlertAt=new Map();
     this.lastAlertScore=new Map();
+    this.pulseHistory=new Map();
     this.lastEarlyScanAt=new Map();
     this.deepQueue=[];
     this.deepActive=0;
@@ -621,6 +662,7 @@ export class EarlyMoveSentinel {
       last_tick_at:this.lastTickAt,
       last_reconcile_at:this.lastReconcileAt,
       last_error:this.lastError,
+      pulse_symbols_tracked:this.pulseHistory.size,
       queued_deep_scans:this.deepQueue.length,
       active_deep_scans:this.deepActive,
       pre_explosion_scans_tracked:this.lastEarlyScanAt.size,
@@ -699,10 +741,22 @@ export class EarlyMoveSentinel {
     const previous=Number(prev.priceChange24h), current=Number(row.priceChange24h);
     if(!Number.isFinite(previous)||!Number.isFinite(current))return;
     const delta=current-previous;
+    const pulse=buildMarketPulse(prev,row,this.pulseHistory.get(symbol)||[]);
+    const history=this.pulseHistory.get(symbol)||[];
+    if(Number.isFinite(pulse.volume_rate)||Number.isFinite(pulse.trade_rate)){
+      history.push({volume_rate:pulse.volume_rate,trade_rate:pulse.trade_rate,at:this.clock()});
+      while(history.length>8)history.shift();
+      this.pulseHistory.set(symbol,history);
+    }
+    const pulseWake=Number(pulse.score)>=74&&(
+      Number(pulse.price_delta_pct)>=0.18 ||
+      Number(pulse.volume_ratio)>=1.7 ||
+      Number(pulse.trade_ratio)>=1.55
+    )&&current>=-0.5&&current<=this.config.earlyWakeMax24hMovePct;
     const wakeCross=previous<this.config.earlyWakeTriggerPct&&current>=this.config.earlyWakeTriggerPct&&current<=this.config.earlyWakeMax24hMovePct;
     const wakeImpulse=delta>=this.config.earlyWakeDeltaPct&&current>=0&&current<=this.config.earlyWakeMax24hMovePct;
-    if(wakeCross||wakeImpulse){
-      this.queueDeep(symbol,row,{movePct:current,previousMovePct:previous,deltaPct:delta,type:'EARLY_WAKE_TICKER_PULSE'},'EARLY_WAKE');
+    if(wakeCross||wakeImpulse||pulseWake){
+      this.queueDeep(symbol,row,{movePct:current,previousMovePct:previous,deltaPct:delta,type:pulseWake?'MARKET_PULSE_EARLY_WAKE':'EARLY_WAKE_TICKER_PULSE',pulse},'EARLY_WAKE');
     }
     const crossedUp=previous<this.config.thresholdPct&&current>=this.config.thresholdPct;
     const crossedDown=previous>-this.config.thresholdPct&&current<=-this.config.thresholdPct;
