@@ -942,7 +942,7 @@ export function buildHistoricalFollowThrough(candles,now=Date.now(),{
       const base=Number(rows[i].close);
       const future=rows.slice(i+1,i+1+longBars);
       const short=future.slice(0,shortBars);
-      const mfe=(xs)=>xs.length?Math.max(...xs.map(x=>(Number(x.high)-base)/base*100):null;
+      const mfe=(xs)=>xs.length?Math.max(...xs.map(x=>(Number(x.high)-base)/base*100)):null;
       const mae=(xs)=>xs.length?Math.min(...xs.map(x=>(Number(x.low)-base)/base*100):null;
       const mfeS=mfe(short),mfeL=mfe(future),maeS=mae(short);
       if(Number.isFinite(mfeS)&&Number.isFinite(mfeL)){
