@@ -253,6 +253,7 @@ public final class RadarXBackgroundMonitorService extends Service {
             case "STRONG_MOVE_RADAR": return "Radar 2 — Strong-Move";
             case "ROTATION_LAG_RADAR": return "Radar 3 — Rotation/Lag";
             case "LIQUIDITY_ABSORPTION_RADAR": return "Radar 4 — Liquidity Absorption";
+            case "WHALE_ACCUMULATION_RADAR": return "🐋 تجمع الحيتان";
             case "KAHIR_RADAR": return "Radar 5 — القاهر";
             case "DOOMSDAY_RADAR": return "Radar 6 — يوم القيامة";
             default: return "RadarX";
@@ -276,7 +277,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         Notification.Builder builder = notificationBuilder(CHANNEL_STATUS)
             .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
             .setContentTitle("RadarX • الرادارات المستقلة")
-            .setContentText("6 رادارات مستقلة • إشعار واحد من الخلاصة الموحدة")
+            .setContentText("رادارات مستقلة • إشعار واحد من الخلاصة الموحدة")
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .setColor(Color.rgb(53, 201, 255))
