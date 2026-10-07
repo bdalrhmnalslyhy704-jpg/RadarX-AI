@@ -270,6 +270,9 @@ export function buildEarlyWakeAlert(candidate,trigger,{now=Date.now()}={}) {
   const wyckoff=component(candidate,['bottom_context.algorithms.wyckoff_spring.score'],45);
   const mtf=component(candidate,['bottom_context.metrics.mtf_alignment','bottom_context.algorithms.mtf_alignment.score'],45);
   const historicalFollowThrough=candidate?.fast_impulse_context?.historical_followthrough||{};
+  const historicalScore=finite(historicalFollowThrough.score,55);
+  const historicalSamples=finite(historicalFollowThrough.samples,0);
+  const historicalFollowThrough=candidate?.fast_impulse_context?.historical_followthrough||{};
   const historicalScore=finite(historicalFollowThrough.score,50);
   const historicalSamples=finite(historicalFollowThrough.samples,0);
   const fast=candidate?.fast_impulse_context||{};
@@ -337,7 +340,8 @@ export function buildEarlyWakeAlert(candidate,trigger,{now=Date.now()}={}) {
     liquidity>=65&&
     leaders.length>=MOVE_RADAR_DEFAULTS.earlyWakeMinLeaders&&
     (leaders.length>=4||leaderScore>=MOVE_RADAR_DEFAULTS.earlyWakeMinScore)&&
-    hardLeader&&leaderScore>=MOVE_RADAR_DEFAULTS.earlyWakeMinScore;
+    hardLeader&&leaderScore>=MOVE_RADAR_DEFAULTS.earlyWakeMinScore&&
+    (historicalSamples<5||historicalScore>=48);
 
   const reasons=[];
   const push=(ok,text)=>{if(ok)reasons.push(text)};
@@ -562,6 +566,7 @@ export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
     },
     components:{pre_move:preMove,momentum,volume,buying_pressure:buying,structure,squeeze,relative_strength:relative,mtf_alignment:mtf,whale_pressure:whale,selling_exhaustion:exhaustion,liquidity,data_quality:dataQuality,historical_followthrough:historicalScore},
     taker_flow:{buy_ratio:takerRatio},
+    historical_followthrough:historicalFollowThrough,
     historical_followthrough:historicalFollowThrough,
     reasons:[...new Set(reasons)].slice(0,12),
     risk_flags:[...new Set(riskFlags)],
