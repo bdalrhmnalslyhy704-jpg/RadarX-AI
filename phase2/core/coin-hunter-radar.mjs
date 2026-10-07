@@ -413,12 +413,10 @@ export class CoinHunterRadar {
           const day = closed.filter(x=>Number(x.openTime)>=Number(dayStart));
           const dayPct = day.length >= 1 ? pct(Number(day.at(-1).close), Number(day[0].open)) : null;
           const checkpoint = findPreMoveCheckpoint(closed, dayStart, 2);
-          const sourceIndex = checkpoint ? closed.findIndex(x=>Number(x.closeTime)===checkpoint.time) : -1;
-          const source = checkpoint ? closed.slice(0, Math.max(0,sourceIndex)) : [];
-          const refPrice = checkpoint ? checkpoint.price : null;
-          const features = source.length>=16 && Number.isFinite(refPrice)
-            ? featureSet(source, {...t,referencePrice:refPrice}, null)
-            : null;
+          const sourceIndex = checkpoint ? closed.findIndex(x=>Number(x.closeTime)===checkpoint.time) : closed.length;
+          const source = checkpoint ? closed.slice(0, Math.max(0,sourceIndex)) : closed;
+          const refPrice = checkpoint ? checkpoint.price : Number(closed.at(-1)?.close);
+          const features = source.length>=16 ? featureSet(source, {...t,referencePrice:refPrice}, null) : featureSet(closed, t, null);
           if (features) leaderRows.push({symbol:t.symbol,todayPct:dayPct ?? Number(t.priceChangePercent),features,checkpoint});
         } catch (error) {
           this.logger.warn?.('COIN_HUNTER_LEADER '+t.symbol+': '+String(error?.message ?? error));
@@ -429,23 +427,16 @@ export class CoinHunterRadar {
       this.lesson = {...patternLesson(trainingLeaders), qualifying_leaders:qualifyingLeaders.length, training_samples:trainingLeaders.length, learned_at:new Date(started).toISOString(), max_accepted_24h_move_pct:Number(this.config.maxHunter24hMovePct)};
 
       const btcToday = btcTicker ? Number(btcTicker.priceChangePercent) : null;
-      const eligiblePool=tickers
+      const pool = tickers
         .filter(x => Number(x.priceChangePercent) >= Number(this.config.minCandidateMovePct))
         .filter(x => Number(x.priceChangePercent) <= Number(this.config.maxCandidateMovePct))
-        .filter(x => x.symbol !== 'BTCUSDT' && x.symbol !== 'ETHUSDT');
-      const rankQuiet=(a,b)=>Number(b.quoteVolume)-Number(a.quoteVolume)||Number(b.count)-Number(a.count);
-      const quiet=eligiblePool.filter(x=>Number(x.priceChangePercent)>=-1&&Number(x.priceChangePercent)<2).sort(rankQuiet);
-      const waking=eligiblePool.filter(x=>Number(x.priceChangePercent)>=2&&Number(x.priceChangePercent)<5).sort(rankQuiet);
-      const recovery=eligiblePool.filter(x=>Number(x.priceChangePercent)>=-3&&Number(x.priceChangePercent)<-1).sort(rankQuiet);
-      const wanted=Math.max(1,Number(this.config.candidatePool));
-      const pool=[];
-      const appendTier=(rows,count)=>{
-        for(const row of rows){if(pool.length>=wanted||count<=0)break;if(!pool.some(x=>x.symbol===row.symbol)){pool.push(row);count--;}}
-      };
-      appendTier(quiet,Math.ceil(wanted*0.55));
-      appendTier(waking,Math.ceil(wanted*0.30));
-      appendTier(recovery,Math.ceil(wanted*0.10));
-      appendTier(eligiblePool.filter(x=>!pool.some(y=>y.symbol===x.symbol)).sort(rankQuiet),wanted-pool.length);
+        .filter(x => x.symbol !== 'BTCUSDT' && x.symbol !== 'ETHUSDT')
+        .sort((a,b) => {
+          const ad = Math.abs(Number(a.priceChangePercent) - Math.min(Number(this.config.maxCandidateMovePct), Number(this.config.minLeaderMovePct) / 2));
+          const bd = Math.abs(Number(b.priceChangePercent) - Math.min(Number(this.config.maxCandidateMovePct), Number(this.config.minLeaderMovePct) / 2));
+          return ad - bd || Number(b.quoteVolume) - Number(a.quoteVolume);
+        })
+        .slice(0, Number(this.config.candidatePool));
 
       const ranked = [];
       let scanned = 0;
