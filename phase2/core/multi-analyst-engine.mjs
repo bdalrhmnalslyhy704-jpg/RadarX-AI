@@ -314,7 +314,7 @@ export class MultiAnalystEngine {
     if(!rest||typeof rest.request!=='function')throw new Error('REST_CLIENT_REQUIRED');
     this.clock=clock;
     this.config={
-      quote:'USDT',discoveryPool:20,returnLimit:10,deepConcurrency:3,deepKlines:220,
+      quote:'USDT',discoveryPool:12,returnLimit:10,deepConcurrency:2,deepKlines:220,
       minQuoteVolume24h:300000,minDataQuality:70,minLiquidityQuality:60,
       ttlMs:45000,...config
     };
@@ -378,7 +378,7 @@ export class MultiAnalystEngine {
       const marketMedian24h=validTickerReturns.length?validTickerReturns[Math.floor(validTickerReturns.length/2)]:null;
       const breadthPct=validTickerReturns.length?validTickerReturns.filter(x=>x>0).length/validTickerReturns.length*100:null;
       const scanned=await boundedMap(selected,Math.max(1,Math.min(5,this.config.deepConcurrency)),async(ticker,index)=>{
-        const row=await this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:info.source,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'5m',fastKlines:96,includeAnalysisPayload:true,includeWhaleFlow:true});
+        const row=await this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:info.source,ticker:tickers.source},{klinesLimit:this.config.deepKlines,includeAnalysisPayload:true,includeWhaleFlow:true});
         const analysis=analyzeMultiAnalystCandidate(row,{btc15,btc1,marketMedian24h,breadthPct});
         const specialist=analysis.specialist;
         const final=analysis.final;
