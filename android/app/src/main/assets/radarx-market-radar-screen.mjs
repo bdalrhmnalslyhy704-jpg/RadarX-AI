@@ -539,7 +539,7 @@ export function mountMarketRadarScreen(root, options = {}) {
     try {
       const result = await fetchMarketRadarWithRetry(client, {
         quote: 'USDT',
-        limit: 10,
+        limit: 6,
         attempts: 1,
         sleepFn: async ms => {
           setStatus('RETRY', 'تتم إعادة المحاولة تلقائيًا عند فشل الاستجابة.');
