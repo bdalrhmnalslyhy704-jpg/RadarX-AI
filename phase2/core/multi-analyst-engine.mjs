@@ -299,9 +299,9 @@ function specialistAnalysis(candidate, market={}){
   return {a,features:{price,priceChange24h:safe(candidate?.price_change_24h,0),high24:safe(candidate?.high_price_24h,null),low24:safe(candidate?.low_price_24h,null),rsi,rsi1,rv,bb,ar,tRatio,structure:sm,book,roc4,roc16,trend4,trend1,rangePos,distanceEma,relativeStrength15:vsBtc15},dataValid:dq>=70&&liq>=60&&s4.length>=50&&s1.length>=50&&s15.length>=80};
 }
 
-export function analyzeMultiAnalystCandidate(candidate, market={}, memory=null){
+export function analyzeMultiAnalystCandidate(candidate, market={}, memory=null, calibration=null){
   const specialist=specialistAnalysis(candidate,market);
-  const final=finalVerdict(specialist.a,specialist.features,specialist.dataValid,market,memory);
+  const final=finalVerdict(specialist.a,specialist.features,specialist.dataValid,market,memory,calibration);
   return {specialist,final};
 }
 
@@ -311,9 +311,52 @@ const WEIGHTS={
   RELATIVE_STRENGTH:.05,ORDERBOOK_PRESSURE:.05,LIQUIDITY_QUALITY:.04,LARGE_PLAYER_PROXY:.04,
   ABSORPTION:.07,RISK_TRAPS:.09,EXTENSION:.04,STRATEGY_CONSENSUS:.05,MARKET_BREADTH:.04,DATA_INTEGRITY:.05
 };
-const finalVerdict=(analysts,features,dataValid,market={},memory=null)=>{
+const CALIBRATION_HORIZONS=Object.freeze([
+  {key:'15m',ms:15*60*1000,target:.010,stop:-.007},
+  {key:'1h',ms:60*60*1000,target:.020,stop:-.012},
+  {key:'4h',ms:4*60*60*1000,target:.040,stop:-.025}
+]);
+const calibrationFactor=(stats,minSamples=30)=>{
+  const wins=Number(stats?.wins)||0,losses=Number(stats?.losses)||0,samples=wins+losses;
+  if(samples<minSamples)return 1;
+  return clamp(1+(wins/Math.max(1,samples)-.5)*.55,.86,1.14);
+};
+class SelfCalibrator{
+  constructor(minSamples=30){
+    this.minSamples=Math.max(10,Number(minSamples)||30);
+    this.stats=new Map();
+  }
+  _get(id){
+    if(!this.stats.has(id))this.stats.set(id,{wins:0,losses:0,neutral:0});
+    return this.stats.get(id);
+  }
+  settle(analysts,ret,horizon){
+    const r=Number(ret),target=Number(horizon?.target??.01),stop=Number(horizon?.stop??-.007);
+    if(!Number.isFinite(r))return;
+    for(const a of Array.isArray(analysts)?analysts:[]){
+      if(a?.direction!=='LONG'||Number(a.score)<60)continue;
+      const s=this._get(a.id);
+      if(r>=target)s.wins++;
+      else if(r<=stop)s.losses++;
+      else s.neutral++;
+    }
+  }
+  factor(id){return calibrationFactor(this.stats.get(id),this.minSamples);}
+  summary(){
+    return [...this.stats.entries()].map(([id,s])=>{
+      const samples=s.wins+s.losses;
+      return {id,samples,wins:s.wins,losses:s.losses,neutral:s.neutral,
+        precision:samples?Math.round(s.wins/samples*1000)/10:null,
+        factor:Math.round(this.factor(id)*1000)/1000};
+    }).sort((a,b)=>b.samples-a.samples).slice(0,8);
+  }
+}
+const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibration=null)=>{
   const regime=marketRegime(market);
   const weights=adaptiveWeights(regime);
+  if(calibration instanceof SelfCalibrator){
+    for(const id of Object.keys(weights))weights[id]*=calibration.factor(id);
+  }
   const weighted=analysts.reduce((sum,x)=>sum+clamp(x.score)*Number(weights[x.id]||0),0);
   const weightSum=Object.values(weights).reduce((sum,x)=>sum+Number(x||0),0)||1;
   const score=clamp(weighted/weightSum);
@@ -361,7 +404,8 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null)=>{
     hardReasons,reasons,risks,agreement:Math.round(agreement*10)/10,
     market_regime:regime,early_score:Math.round(early.score*10)/10,timing,
     temporal_persistence:Math.round(Number(early.persistence||0)*10)/10,
-    decision_gate:{critical_good:criticalGood,early_window_open:!chase,agreement_ok:agreement>=62}
+    decision_gate:{critical_good:criticalGood,early_window_open:!chase,agreement_ok:agreement>=62},
+    self_calibration:calibration instanceof SelfCalibrator?calibration.summary():null
   };
 };
 
@@ -391,6 +435,33 @@ export class MultiAnalystEngine {
     });
     this.cache=null;
     this.busy=null;
+    this.calibration=new SelfCalibrator(30);
+    this.pendingOutcomes=new Map();
+  }
+  _settleOutcome(symbol,currentPrice,now){
+    const list=this.pendingOutcomes.get(symbol);
+    if(!Array.isArray(list)||!list.length)return;
+    const keep=[];
+    for(const item of list){
+      const age=now-item.asOf;
+      const entry=Number(item.entryPrice),current=Number(currentPrice);
+      for(const h of CALIBRATION_HORIZONS){
+        if(item.evaluated[h.key]||age<h.ms)continue;
+        item.evaluated[h.key]=true;
+        if(entry>0&&current>0)this.calibration.settle(item.analysts,(current-entry)/entry,h);
+      }
+      if(now-item.asOf<5*60*60*1000)keep.push(item);
+    }
+    if(keep.length)this.pendingOutcomes.set(symbol,keep.slice(-2));
+    else this.pendingOutcomes.delete(symbol);
+  }
+  _registerOutcome(item,now){
+    if(!item||item.direction!=='LONG'||Number(item.earlyScore)<60||!(Number(item.entryPrice)>0))return;
+    const existing=this.pendingOutcomes.get(item.symbol)||[];
+    const last=existing.at(-1);
+    if(last&&now-last.asOf<30*60*1000)return;
+    existing.push({...item,asOf:now,evaluated:{'15m':false,'1h':false,'4h':false}});
+    this.pendingOutcomes.set(item.symbol,existing.slice(-2));
   }
   async scan({quote=this.config.quote,limit=this.config.returnLimit}={}){
     const now=this.clock();
@@ -439,13 +510,18 @@ export class MultiAnalystEngine {
         try{
           const row=await this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:info.source,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'5m',fastKlines:96,includeAnalysisPayload:true});
           if(!row||row.data_status?.data_valid===false&&row.data_quality<1)throw new Error('SYMBOL_DATA_UNAVAILABLE');
+          this._settleOutcome(ticker.symbol,row?.last_price,this.clock());
           let prior=null;
           try{ prior=await this.store?.getIntelligenceMemory?.(ticker.symbol) || null; }catch{ prior=null; }
-          const analysis=analyzeMultiAnalystCandidate(row,{btc15,btc1,marketMedian24h,breadthPct},prior);
+          const analysis=analyzeMultiAnalystCandidate(row,{btc15,btc1,marketMedian24h,breadthPct},prior,this.calibration);
           const specialist=analysis.specialist;
           const final=analysis.final;
           const publicAnalysts=specialist.a.map(x=>({...x}));
           delete row._analysis;
+          this._registerOutcome({
+            symbol:row.symbol,entryPrice:row.last_price,direction:final.direction,
+            earlyScore:final.early_score,analysts:publicAnalysts
+          },this.clock());
           return {
             symbol:row.symbol,rank:index+1,last_price:row.last_price,price_change_24h:row.price_change_24h,
             quote_volume_24h:row.quote_volume_24h,liquidity_quality:row.liquidity_quality,data_quality:row.data_quality,
