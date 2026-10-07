@@ -1292,13 +1292,15 @@ export class MarketUniverseScanner {
     const klinesSources = [];
     let depthRaw = null;
     let depthSource = null;
+    let whaleTradesRaw = null;
+    let whaleTradesSource = null;
     let fastDeep = {interval:null,candles:[],source:null};
     let error = null;
 
     try {
       const fastInterval=String(options.fastInterval||'').trim();
       const fastLimit=Math.max(40,Math.trunc(Number(options.fastKlines)||96));
-      const [tfResults, depth, fastResult] = await Promise.all([
+      const [tfResults, depth, whaleTrades, fastResult] = await Promise.all([
         Promise.all(
           ['4h','1h','15m'].map(async tf => {
             const r = await this.fetchSeries(ticker.symbol, tf, klinesLimit);
@@ -1313,6 +1315,9 @@ export class MarketUniverseScanner {
           })
         ),
         this.fetchDepth(ticker.symbol),
+        options.includeWhaleFlow
+          ? this.requestOnce('/api/v3/aggTrades',{symbol:ticker.symbol,limit:500})
+          : Promise.resolve(null),
         fastInterval ? this.fetchSeries(ticker.symbol, fastInterval, fastLimit) : Promise.resolve(null)
       ]);
       for (const r of tfResults) {
@@ -1327,6 +1332,8 @@ export class MarketUniverseScanner {
       fastDeep={interval:fastInterval||null,candles:fastCandles,source:fastResult?.source??null};
       depthRaw = depth?.data ?? depth;
       depthSource = depth?.source ?? null;
+      whaleTradesRaw = whaleTrades?.data ?? null;
+      whaleTradesSource = whaleTrades?.source ?? null;
     } catch (e) {
       error = e;
     }
@@ -1354,12 +1361,14 @@ export class MarketUniverseScanner {
         evaluation,
         liquidity,
         depth: depthRaw,
+        whaleTrades: whaleTradesRaw,
         sources: {
           exchangeInfo: sources.exchangeInfo,
           ticker: sources.ticker,
           klines: klinesSources,
           fastKlines: fastDeep.source,
-          depth: depthSource
+          depth: depthSource,
+          whaleTrades: whaleTradesSource
         },
         completedAt,
         minFetchAgeMs: fetchAges.filter(Number.isFinite).length
