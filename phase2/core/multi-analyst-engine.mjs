@@ -351,23 +351,31 @@ export class MultiAnalystEngine {
       const validTickerReturns=selected.map(x=>Number(x.priceChange24h)).filter(Number.isFinite).sort((a,b)=>a-b);
       const marketMedian24h=validTickerReturns.length?validTickerReturns[Math.floor(validTickerReturns.length/2)]:null;
       const breadthPct=validTickerReturns.length?validTickerReturns.filter(x=>x>0).length/validTickerReturns.length*100:null;
+      const scanErrors=[];
       const scanned=await boundedMap(selected,Math.max(1,Math.min(5,this.config.deepConcurrency)),async(ticker,index)=>{
-        const row=await this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:info.source,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'5m',fastKlines:96,includeAnalysisPayload:true});
-        const analysis=analyzeMultiAnalystCandidate(row,{btc15,btc1,marketMedian24h,breadthPct});
-        const specialist=analysis.specialist;
-        const final=analysis.final;
-        const publicAnalysts=specialist.a.map(x=>({...x}));
-        delete row._analysis;
-        return {
-          symbol:row.symbol,rank:index+1,last_price:row.last_price,price_change_24h:row.price_change_24h,
-          quote_volume_24h:row.quote_volume_24h,liquidity_quality:row.liquidity_quality,data_quality:row.data_quality,
-          direction:final.direction,verdict:final.verdict,final_score:final.score,
-          consensus:{positive:final.positiveAnalysts,strong:final.strongAnalysts,total:final.totalAnalysts,ratio:final.positiveAnalysts/final.totalAnalysts},
-          analysts:publicAnalysts,final_judge:final,
-          highlights:specialist.a.filter(x=>x.score>=72).sort((a,b)=>b.score-a.score).slice(0,6),
-          risk_flags:row.risk_flags||[],reason_codes:row.reason_codes||[],
-          data_status:row.data_status,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
-        };
+        try{
+          const row=await this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:info.source,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'5m',fastKlines:96,includeAnalysisPayload:true});
+          if(!row||row.data_status?.data_valid===false&&row.data_quality<1)throw new Error('SYMBOL_DATA_UNAVAILABLE');
+          const analysis=analyzeMultiAnalystCandidate(row,{btc15,btc1,marketMedian24h,breadthPct});
+          const specialist=analysis.specialist;
+          const final=analysis.final;
+          const publicAnalysts=specialist.a.map(x=>({...x}));
+          delete row._analysis;
+          return {
+            symbol:row.symbol,rank:index+1,last_price:row.last_price,price_change_24h:row.price_change_24h,
+            quote_volume_24h:row.quote_volume_24h,liquidity_quality:row.liquidity_quality,data_quality:row.data_quality,
+            direction:final.direction,verdict:final.verdict,final_score:final.score,
+            consensus:{positive:final.positiveAnalysts,strong:final.strongAnalysts,total:final.totalAnalysts,ratio:final.totalAnalysts>0?final.positiveAnalysts/final.totalAnalysts:0},
+            analysts:publicAnalysts,final_judge:final,
+            highlights:specialist.a.filter(x=>x.score>=72).sort((a,b)=>b.score-a.score).slice(0,6),
+            risk_flags:row.risk_flags||[],reason_codes:row.reason_codes||[],
+            data_status:row.data_status,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+          };
+        }catch(error){
+          const message=String(error?.message??error);
+          scanErrors.push({symbol:String(ticker?.symbol||'').toUpperCase(),rank:index+1,error:message});
+          return null;
+        }
       });
       const live=scanned.filter(Boolean);
       live.sort((a,b)=>b.final_score-a.final_score||b.consensus.ratio-a.consensus.ratio||b.liquidity_quality-a.liquidity_quality);
@@ -382,7 +390,14 @@ export class MultiAnalystEngine {
         summary:{strong_candidates:strongCount,candidates:live.filter(x=>x.verdict==='CANDIDATE').length,watch:live.filter(x=>x.verdict==='WATCH').length,rejected:live.filter(x=>x.verdict==='REJECT').length},
         candidates,
         pipeline:['Discovery','Data Gate','19 Specialist Analysts','Chief Analyst'],
-        diagnostics:{duration_ms:Math.max(0,this.clock()-startedAt),deep_concurrency:this.config.deepConcurrency,deep_klines:this.config.deepKlines}
+        diagnostics:{
+          duration_ms:Math.max(0,this.clock()-startedAt),
+          deep_concurrency:this.config.deepConcurrency,
+          deep_klines:this.config.deepKlines,
+          successful_analyses:live.length,
+          failed_analyses:scanErrors.length,
+          scan_errors:scanErrors.slice(0,20)
+        }
       };
       this.cache={quote:q,expiresAt:this.clock()+this.config.ttlMs,value};
       return value;
