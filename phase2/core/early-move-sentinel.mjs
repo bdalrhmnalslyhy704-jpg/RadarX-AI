@@ -242,6 +242,9 @@ export function buildEarlyWakeAlert(candidate,trigger,{now=Date.now()}={}) {
   const obv=component(candidate,['bottom_context.algorithms.obv_accumulation.score'],45);
   const wyckoff=component(candidate,['bottom_context.algorithms.wyckoff_spring.score'],45);
   const mtf=component(candidate,['bottom_context.metrics.mtf_alignment','bottom_context.algorithms.mtf_alignment.score'],45);
+  const historicalFollowThrough=candidate?.fast_impulse_context?.historical_followthrough||{};
+  const historicalScore=finite(historicalFollowThrough.score,50);
+  const historicalSamples=finite(historicalFollowThrough.samples,0);
   const fast=candidate?.fast_impulse_context||{};
   const fastScore=component(candidate,['fast_impulse_context.score'],45);
   const fastMomentum=component(candidate,['fast_impulse_context.scores.momentum'],45);
@@ -431,7 +434,8 @@ export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
     relative>=60,
     mtf>=65,
     liquidity>=70,
-    Number.isFinite(takerRatio)&&takerRatio>=0.53
+    Number.isFinite(takerRatio)&&takerRatio>=0.53,
+    historicalSamples<5||historicalScore>=48
   ];
   const confirmationCount=confirmations.filter(Boolean).length;
 
@@ -446,7 +450,8 @@ export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
     squeeze*0.06+
     relative*0.03+
     mtf*0.03+
-    liquidity*0.03
+    liquidity*0.01+
+    historicalScore*0.07
   );
 
   const eligible=!alreadyMoved&&calmEnough&&
@@ -456,7 +461,8 @@ export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
     strategies.acceptedCount>=MOVE_RADAR_DEFAULTS.earlyMinAcceptedStrategies&&
     preMove>=MOVE_RADAR_DEFAULTS.earlyMinPreMoveScore&&
     explosionScore>=MOVE_RADAR_DEFAULTS.earlyMinExpansionScore&&
-    confirmationCount>=MOVE_RADAR_DEFAULTS.earlyMinConfirmations;
+    confirmationCount>=MOVE_RADAR_DEFAULTS.earlyMinConfirmations&&
+    (historicalSamples<5||historicalScore>=48);
 
   const reasons=[];
   const push=(ok,text)=>{if(ok)reasons.push(text)};
@@ -521,8 +527,9 @@ export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
       accepted_mean:Math.round(strategies.acceptedMean*10)/10,
       accepted_ids:(candidate?.accepted_strategies||[]).slice(0,8)
     },
-    components:{pre_move:preMove,momentum,volume,buying_pressure:buying,structure,squeeze,relative_strength:relative,mtf_alignment:mtf,whale_pressure:whale,selling_exhaustion:exhaustion,liquidity,data_quality:dataQuality},
+    components:{pre_move:preMove,momentum,volume,buying_pressure:buying,structure,squeeze,relative_strength:relative,mtf_alignment:mtf,whale_pressure:whale,selling_exhaustion:exhaustion,liquidity,data_quality:dataQuality,historical_followthrough:historicalScore},
     taker_flow:{buy_ratio:takerRatio},
+    historical_followthrough:historicalFollowThrough,
     reasons:[...new Set(reasons)].slice(0,12),
     risk_flags:[...new Set(riskFlags)],
     data_status:candidate?.data_status||{},
