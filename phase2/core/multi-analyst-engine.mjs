@@ -299,7 +299,7 @@ function specialistAnalysis(candidate, market={}){
   return {a,features:{price,priceChange24h:safe(candidate?.price_change_24h,0),high24:safe(candidate?.high_price_24h,null),low24:safe(candidate?.low_price_24h,null),rsi,rsi1,rv,bb,ar,tRatio,structure:sm,book,roc4,roc16,trend4,trend1,rangePos,distanceEma,relativeStrength15:vsBtc15},dataValid:dq>=70&&liq>=60&&s4.length>=50&&s1.length>=50&&s15.length>=80};
 }
 
-export function analyzeMultiAnalystCandidate(candidate, market={}){
+export function analyzeMultiAnalystCandidate(candidate, market={}, memory=null){
   const specialist=specialistAnalysis(candidate,market);
   const final=finalVerdict(specialist.a,specialist.features,specialist.dataValid,market,memory);
   return {specialist,final};
@@ -439,7 +439,8 @@ export class MultiAnalystEngine {
         try{
           const row=await this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:info.source,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'5m',fastKlines:96,includeAnalysisPayload:true});
           if(!row||row.data_status?.data_valid===false&&row.data_quality<1)throw new Error('SYMBOL_DATA_UNAVAILABLE');
-          const prior=await this.store?.getIntelligenceMemory?.(ticker.symbol).catch?.(()=>null);
+          let prior=null;
+          try{ prior=await this.store?.getIntelligenceMemory?.(ticker.symbol) || null; }catch{ prior=null; }
           const analysis=analyzeMultiAnalystCandidate(row,{btc15,btc1,marketMedian24h,breadthPct},prior);
           const specialist=analysis.specialist;
           const final=analysis.final;
