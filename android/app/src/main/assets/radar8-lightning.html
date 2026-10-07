@@ -51,6 +51,9 @@ const BASES=['https://radarx-ai-triple-production.up.railway.app','https://radar
 const $=id=>document.getElementById(id);
 let timer=null;
 let busy=false;
+let pageDead=false;
+const activeControllers=new Set();
+function disposePage(){pageDead=true;if(timer)clearInterval(timer);for(const ctl of activeControllers){try{ctl.abort();}catch(e){}}activeControllers.clear();}
 
 function esc(v){return String(v||'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));}
 function fmt(v,d=2){const n=Number(v);return Number.isFinite(n)?n.toFixed(d):'—';}
@@ -58,9 +61,11 @@ function fmtPct(v){const n=Number(v);return Number.isFinite(n)?(n>=0?'+':'')+n.t
 function timeText(iso){try{return new Intl.DateTimeFormat('ar-YE',{timeZone:'Asia/Aden',hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true}).format(new Date(iso));}catch{return iso||'—';}}
 
 async function req(path,timeout=70000){
+  if(pageDead)throw new Error('PAGE_DESTROYED');
   let last='';
   for(const base of BASES){
     const ctl=new AbortController();
+    activeControllers.add(ctl);
     const t=setTimeout(()=>ctl.abort(),timeout);
     try{
       const r=await fetch(base+path,{cache:'no-store',headers:{Accept:'application/json'},signal:ctl.signal});
@@ -109,7 +114,7 @@ function render(data){
 }
 
 async function refresh({scan=false}={}){
-  if(busy)return;
+  if(pageDead||busy)return;
   busy=true;
   try{
     const q='/api/early-expansion-radar?quote=USDT&limit=100'+(scan?'&scan=1':'');
@@ -120,6 +125,7 @@ async function refresh({scan=false}={}){
   finally{busy=false;}
 }
 async function control(action){
+  if(pageDead)return;
   try{await req('/api/radar-control?radar=EARLY_EXPANSION_RADAR&action='+encodeURIComponent(action),30000);await refresh({scan:true});}
   catch(e){$('error').textContent=String(e && e.message||e);}
 }
@@ -128,6 +134,7 @@ $('stop').onclick=()=>control('stop');
 $('scan').onclick=()=>refresh({scan:true});
 refresh();
 timer=setInterval(()=>refresh(),20000);
+window.addEventListener('pagehide',disposePage,{once:true,capture:true});
 </script>
 </body>
 </html>
