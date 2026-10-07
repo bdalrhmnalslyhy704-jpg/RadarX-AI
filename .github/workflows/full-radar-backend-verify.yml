@@ -6,6 +6,7 @@ on:
       - radar-quality-v2-build224-20261007
       - radar-quality-v2-1-build224-20261007
       - radarx-build224-whale-accumulation-v3-20261007
+      - radar-quality-v3-build224-whales-20261007
   workflow_dispatch:
 permissions:
   contents: read
