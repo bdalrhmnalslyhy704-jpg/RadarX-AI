@@ -23,6 +23,7 @@ const phase2=[
   'phase2/tests/radar-suite-v2.test.mjs',
   'phase2/tests/professor-radar.test.mjs',
   'phase2/tests/kahir-radar.test.mjs',
+  'phase2/tests/multi-analyst-engine.test.mjs',
   'phase2/tests/market-radar.test.mjs',
   'phase2/tests/monitor-phone-independence.test.mjs',
   'phase2/tests/monitor.test.mjs',
