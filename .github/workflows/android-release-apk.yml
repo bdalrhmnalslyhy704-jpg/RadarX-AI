@@ -209,6 +209,7 @@ jobs:
           set -euo pipefail
           CODE="$(curl --location --silent --show-error --max-time 60 -o "$RUNNER_TEMP/whale.json" -w "%{http_code}" "$BASE/api/whale-accumulation-radar?limit=5&scan=0")"
           case "$CODE" in 200|503) ;; *) echo "::error::Whale Accumulation returned HTTP $CODE"; cat "$RUNNER_TEMP/whale.json"; exit 1 ;; esac
+          export CODE
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           const body=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/whale.json','utf8'));
