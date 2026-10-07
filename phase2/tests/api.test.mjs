@@ -50,6 +50,7 @@ test('TEST_FIXTURE: authenticated config exposes only the VAPID public key and s
   assert.equal(cfg.push.vapidPublicKey,'TEST_FIXTURE_PUBLIC');assert.equal('vapidPrivateKey' in cfg.push,false);assert.equal(Object.hasOwn(cfg.push,'vapidPrivateKey'),false);assert.doesNotMatch(JSON.stringify(cfg),/TEST_FIXTURE_PRIVATE/);
   const detail=await fetch(base+'/v1/signals/TEST_FIXTURE_SIGNAL_DETAIL',{headers:h});assert.equal(detail.status,200);const d=await detail.json();
   assert.equal(d.event.signal_snapshot.scores.confidence_score,'UNKNOWN');assert.equal(d.event.signal_snapshot.paper_trade.real_order_execution,false);
+  server.closeAllConnections?.();
   await new Promise(resolve=>server.close(resolve));
 });
 
@@ -221,7 +222,7 @@ test('TEST_FIXTURE: Professor route exposes fused live intelligence and is indep
     const res=await fetch('http://127.0.0.1:'+server.address().port+'/api/professor-radar?scan=1&limit=10');
     assert.equal(res.status,200);const body=await res.json();assert.equal(ticked,1);assert.equal(body.meta.radar,'PROFESSOR_RADAR');assert.equal(body.alerts.length,1);assert.equal(body.alerts[0].radar_name,'البروفيسور — استخبارات عامة');
     assert.equal(body.meta.real_order_execution,false);
-  }finally{await new Promise(resolve=>server.close(resolve));}
+  }finally{server.closeAllConnections?.();await new Promise(resolve=>server.close(resolve));}
 });
 
 test('Whale Accumulation route exposes paper-only public contract',async()=>{
