@@ -103,6 +103,19 @@ export const CONFIG = Object.freeze({
     alertCooldownMs: int(process.env.RADARX_STRONG_MOVE_ALERT_COOLDOWN_MS, 5 * 60 * 1000),
     minScore: int(process.env.RADARX_STRONG_MOVE_MIN_SCORE, 76)
   },
+  marketRadar: {
+    quote: 'USDT',
+    scanLimit: 6,
+    maxScanLimit: 12,
+    returnLimit: 6,
+    deepConcurrency: 6,
+    deepKlines: 160,
+    minQuoteVolume24h: int(process.env.RADARX_MARKET_RADAR_MIN_QUOTE_VOLUME_24H, 750000),
+    minDataQuality: int(process.env.RADARX_MIN_DATA_QUALITY, 70),
+    minLiquidityQuality: int(process.env.RADARX_MIN_LIQUIDITY_QUALITY, 60),
+    maxTriggerAgeMs: 30 * 60 * 1000,
+    retryAttempts: 1
+  },
   symbolDeepScan: {
     quote: 'USDT',
     klineLimit: int(process.env.RADARX_SYMBOL_DEEP_KLINES, 240)
