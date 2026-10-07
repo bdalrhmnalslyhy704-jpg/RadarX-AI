@@ -80,7 +80,7 @@ export async function startServer({
     ...(config.rest.baseUrls??config.rest.urls??[])
   ].filter((url,index,arr)=>arr.indexOf(url)===index);
   const multiAnalystRest=new RestClient({...config.rest,baseUrls:multiAnalystRestUrls});
-  const multiAnalystRadar=new MultiAnalystEngine({rest:multiAnalystRest,config:config.multiAnalyst||{}});
+  const multiAnalystRadar=new MultiAnalystEngine({rest:multiAnalystRest,store,config:config.multiAnalyst||{}});
   const alMuqawimRadar=new AlMuqawimRadar({rest,store,pushManager:push,config:config.alMuqawimRadar||{},logger});
   const earlyExpansionRadar=new EarlyExpansionRadar({rest,store,pushManager:push,config:config.earlyExpansionRadar||{},logger});
   const coinHunterUrls=['https://data-api.binance.vision',...(config.rest.baseUrls??config.rest.urls??[])].filter((url,index,arr)=>arr.indexOf(url)===index);
