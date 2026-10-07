@@ -14,6 +14,7 @@ on:
       - fix-four-radars-runtime
       - fix-radar-runtime-return-market-data
       - radar6-doomsday-20261005
+      - build224-multi-analyst-20261007
   pull_request:
     branches:
       - phase3-triple-radar
@@ -58,6 +59,7 @@ jobs:
           node --check phase2/core/doomsday-radar.mjs
           node --check phase2/core/elite-confluence-gate.mjs
           node --check phase2/core/radar-alert-meta.mjs
+          node --check phase2/core/multi-analyst-engine.mjs
           node --check android/app/src/main/assets/radarx-symbol-deep-scan.mjs
           node --check android/app/src/main/assets/radarx-backend-client.mjs
           node --check android/app/src/main/assets/radarx-doomsday-radar.mjs
