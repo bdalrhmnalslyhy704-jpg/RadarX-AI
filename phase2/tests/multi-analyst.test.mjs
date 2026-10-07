@@ -15,8 +15,10 @@ function kline(i,tfMs,base=100){
   };
 }
 const seriesFor=tf=>Array.from({length:220},(_,i)=>kline(i,tf,100));
+const requestedPaths=[];
 const rest={
   async request(path){
+    requestedPaths.push(path);
     if(path==='/api/v3/exchangeInfo') return {
       data:{symbols:[{symbol:'TESTUSDT',baseAsset:'TEST',quoteAsset:'USDT',status:'TRADING',isSpotTradingAllowed:true,permissions:['SPOT']}]},
       source:'BINANCE_PUBLIC_REST',receivedAt:now
@@ -57,4 +59,6 @@ assert.ok(typeof c.verdict==='string');
 assert.equal(c.paper_trading,true);
 assert.equal(c.real_order_execution,false);
 assert.equal(c.confidence_score,'UNKNOWN');
+assert.equal(c.data_status.data_valid,true);
+assert.ok(requestedPaths.includes('/api/v3/aggTrades'));
 console.log('multi-analyst.test: ok');
