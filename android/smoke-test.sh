@@ -27,14 +27,34 @@ start_app_and_wait_ready() {
   adb shell am start -W -n com.radarx.app/.MainActivity >/dev/null
   sleep 8
 
-  test -n "$(adb shell pidof com.radarx.app | tr -d '\r' || true)"
+  PID="$(adb shell pidof com.radarx.app | tr -d '\r' || true)"
+  if [[ -z "$PID" ]]; then
+    echo "::error::RadarX process is not alive after launch"
+    adb shell dumpsys activity exit-info com.radarx.app 2>/dev/null | tail -n 120 || true
+    adb logcat -d -b crash 2>/dev/null | tail -n 160 || true
+    return 1
+  fi
 
   TOP="$(adb shell dumpsys activity activities 2>/dev/null | tr -d '\r' || true)"
-  printf '%s\n' "$TOP" | grep -q 'com.radarx.app/.MainActivity'
+  RESUMED="$(printf '%s\n' "$TOP" | grep -E 'mResumedActivity|ResumedActivity' | tail -n 5 || true)"
+  if ! printf '%s\n' "$RESUMED" | grep -q 'com.radarx.app'; then
+    echo "::error::RadarX MainActivity is not resumed after launch"
+    printf '%s\n' "$RESUMED"
+    adb shell dumpsys activity top 2>/dev/null | tail -n 80 || true
+    return 1
+  fi
 
   LOGS="$(adb logcat -d -s RadarXWeb:I RadarXBackground:I '*:S' 2>/dev/null || true)"
-  ! printf '%s\n' "$LOGS" | grep -Eqi 'RadarXWeb: ERROR:Uncaught (ReferenceError|SyntaxError|TypeError)'
-  ! printf '%s\n' "$LOGS" | grep -Fq 'RadarX Dashboard boot error:'
+  if printf '%s\n' "$LOGS" | grep -Eqi 'RadarXWeb: ERROR:Uncaught (ReferenceError|SyntaxError|TypeError)'; then
+    echo "::error::RadarX WebView runtime JavaScript error detected"
+    printf '%s\n' "$LOGS"
+    return 1
+  fi
+  if printf '%s\n' "$LOGS" | grep -Fq 'RadarX Dashboard boot error:'; then
+    echo "::error::RadarX dashboard boot error detected"
+    printf '%s\n' "$LOGS"
+    return 1
+  fi
 
   # The service must not start merely because the Activity was opened.
   ! printf '%s\n' "$LOGS" | grep -Fq "BACKGROUND_START_REQUEST"
