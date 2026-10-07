@@ -180,6 +180,7 @@ export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggT
   const recent5m= five.slice(-6);
   const fiveMove=recent5m.length>=2?pct(Number(recent5m.at(-1).close),Number(recent5m[0].open)):null;
   const fiveScore=Number.isFinite(fiveMove)?clamp(52+fiveMove*22):45;
+  const rel=relativeContext(t,t.btcTicker||null);
   const buyDominance=prints.largeNotionalRatio===null?45:clamp(50+(prints.largeNotionalRatio||0)*100);
   const supportScore=clamp(
     (50+depth.nearImbalance*170)*.48+
@@ -209,7 +210,8 @@ export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggT
     spreadOk,
     quiet24,
     notExtended,
-    fiveScore>=48
+    fiveScore>=48,
+    rel.relativeVsBtc>=-1.5
   ];
   const confirmationCount=confirmations.filter(Boolean).length;
   const score=clamp(
@@ -219,7 +221,8 @@ export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggT
     supportScore*.17+
     stabilityScore*.10+
     fiveScore*.04+
-    relativeNeutrality(quiet24)*.03
+    relativeNeutrality(quiet24)*.02+
+    rel.score*.01
   );
   const eligible=
     price>0&&
@@ -264,7 +267,7 @@ export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggT
     orderbook_persistence:{score:Number(depthPersistence.toFixed(1)),has_previous:Boolean(previousBook),previous_near_imbalance:Number(previous.nearImbalance.toFixed(4)),current_near_imbalance:Number(depth.nearImbalance.toFixed(4))},
     price_context:{price,price_change_24h:finite(t.priceChange24h,0),five_minute_move_pct:fiveMove,quiet_24h:quiet24,not_extended:notExtended},
     support_score:Number(supportScore.toFixed(1)),stability_score:Number(stabilityScore.toFixed(1)),
-    relative:{score:50},
+    relative:rel,
     trigger:{
       min_score:Number(config.minScore||84),min_confirmations:Number(config.minConfirmations||8),
       min_large_buy_ratio:Number(config.minLargeBuyRatio||0.60),
@@ -343,7 +346,7 @@ export class WhaleAccumulationRadar{
     this.rest=rest;this.store=store;this.pushManager=pushManager;this.config={...WHALE_ACCUMULATION_DEFAULTS,...config};
     this.clock=clock;this.logger=logger;this.running=false;this.busy=false;this.timer=null;
     this.universe=[];this.universeAt=0;this.cursor=0;this.scans=0;this.alertCount=0;this.lastError=null;this.lastScanAtMs=null;
-    this.latestCandidates=[];this.previousDepth=new Map();this.lastAlertAt=new Map();this.lastCoverage={};
+    this.latestCandidates=[];this.previousDepth=new Map();this.lastAlertAt=new Map();this.streaks=new Map();this.lastCoverage={};
   }
   start(){
     if(this.running)return Promise.resolve();
@@ -379,18 +382,25 @@ export class WhaleAccumulationRadar{
     }
     return [...new Map(selected.map(x=>[x.symbol,x])).values()];
   }
-  async scanRow(row){
+  async scanRow(row,btcTicker=null){
     const [one,five,agg,depth]=await Promise.all([
       this.rest.klines(row.symbol,'1m',{limit:120}),
       this.rest.klines(row.symbol,'5m',{limit:60}),
-      this.rest.aggTrades(row.symbol,{limit:1000}),
+      this.rest.aggTrades(row.symbol,{startTime:this.clock()-5*60*1000,limit:1000}),
       this.rest.depth(row.symbol,100)
     ]);
     const prev=this.previousDepth.get(row.symbol)||null;
     const alert=buildWhaleAccumulationAlert({
-      ticker:row,oneMinute:one.candles,fiveMinute:five.candles,aggTrades:agg.data,book:depth.data,previousBook:prev
+      ticker:{...row,btcTicker},oneMinute:one.candles,fiveMinute:five.candles,aggTrades:agg.data,book:depth.data,previousBook:prev
     },this.clock());
     this.previousDepth.set(row.symbol,depth.data);
+    const prevStreak=this.streaks.get(row.symbol)||{count:0,lastAt:0};
+    const continuous=this.clock()-Number(prevStreak.lastAt)<=2*60*1000;
+    const strongNow=Number(alert.opportunity_score||0)>=82 && Array.isArray(alert.reasons) && alert.reasons.length>=5;
+    const streak=strongNow?(continuous?Number(prevStreak.count||0)+1:1):0;
+    this.streaks.set(row.symbol,{count:streak,lastAt:this.clock()});
+    alert.whale_streak={count:streak,required:2,strong_now:strongNow};
+    alert.eligible=Boolean(alert.eligible&&streak>=2);
     this.latestCandidates.push(alert);
     this.latestCandidates.sort((a,b)=>Number(b.opportunity_score||0)-Number(a.opportunity_score||0));
     this.latestCandidates=this.latestCandidates.slice(0,60);
@@ -412,15 +422,16 @@ export class WhaleAccumulationRadar{
     try{
       if(!this.universe.length||this.clock()-this.universeAt>=Number(this.config.universeRefreshMs))await this.refreshUniverse();
       const rows=await this.tickerRows();
+      const btc=rows.find(x=>x.symbol==='BTCUSDT')||null;
       const selected=this.selectBatch(rows);
       let success=0,failed=0;
       for(const row of selected){
         if(!this.running)break;
-        try{await this.scanRow(row);success++;}catch(e){failed++;this.lastError=String(e?.message??e);}
+        try{await this.scanRow(row,btc);success++;}catch(e){failed++;this.lastError=String(e?.message??e);}
       }
       this.lastCoverage={
         universe_total:rows.length,batch_size:selected.length,scanned_successfully:success,failed,rotation_cursor:this.cursor,
-        candidates_retained:this.latestCandidates.length,last_scan_at:this.clock()
+        candidates_retained:this.latestCandidates.length,confirmed_after_persistence:this.latestCandidates.filter(x=>x.eligible).length,last_scan_at:this.clock()
       };
       this.lastScanAtMs=this.clock();
       this.lastError=failed?this.lastError:null;

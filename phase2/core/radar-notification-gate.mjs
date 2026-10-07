@@ -1,3 +1,4 @@
+import {evaluateRadarQuality} from './radar-quality-v3.mjs';
 import {isPreBreakoutNotificationEligible} from './radar-prebreakout-engine.mjs';
 const clamp=(v,min=0,max=100)=>Math.max(min,Math.min(max,Number.isFinite(Number(v))?Number(v):0));
 const num=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -193,7 +194,11 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
   const confirmations=confirmationsOf(alert);
   const categoryHits=categoryHitsOf(alert);
   const risks=criticalRisk(alert);
+  const quality=evaluateRadarQuality(alert);
+  const qualityMinimum={EARLY_MOVE_RADAR:74,STRONG_MOVE_RADAR:76,ROTATION_LAG_RADAR:76,LIQUIDITY_ABSORPTION_RADAR:78,KAHIR_RADAR:78,DOOMSDAY_RADAR:80,PROFESSOR_RADAR:72,ALMUQAWIM_RADAR:74,EARLY_EXPANSION_RADAR:76,COIN_HUNTER_RADAR:76,WHALE_ACCUMULATION_RADAR:80}[r]||75;
   const failures=[...radarSpecificChecks(alert,p),...risks.map(x=>'RISK:'+x)];
+  if(quality.hard_fail)failures.push('COMMON_QUALITY_HARD_FAIL');
+  if(quality.score<qualityMinimum)failures.push('COMMON_QUALITY_BELOW_THRESHOLD');
   if(alert?.eligible===false)failures.push('BASE_ALERT_NOT_ELIGIBLE');
   if(alert?.elite_gate&&alert.elite_gate.eligible===false)failures.push('ELITE_GATE_NOT_ELIGIBLE');
   const symbol=String(alert?.symbol||'').toUpperCase();
@@ -214,6 +219,7 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
     category_hits:categoryHits,
     previous_alert:previous?{radar:previous.radar,at:previous.at,score:previous.score}:null,
     cooldown_remaining_ms:crossRadarBlocked?Math.max(0,p.globalCooldownMs-elapsed):0,
+    common_quality:quality,
     failures:[...new Set(failures)],
     mode:'STRICT_NOTIFICATION_ONLY',
     no_extra_network_calls:true

@@ -1038,7 +1038,8 @@ export function buildFastImpulseContext(candles,ticker,now){
   const bodyStrength=avgBodyStrength(recent);
   const bodyScore=Number.isFinite(bodyStrength)?clamp(50+bodyStrength*90):45;
   const historicalQuality=buildHistoricalFollowThrough(closed,now);
-  const fastScore=clamp(momentumScore*0.24+volumeScore*0.20+buyScore*0.16+breakoutScore*0.14+emaAlignment*0.10+rangeExpansionScore*0.07+bodyScore*0.05+closeLocation*0.04);
+  const historicalFollowThrough=buildHistoricalFollowThrough(closed,now);
+  const fastScore=clamp(momentumScore*0.22+volumeScore*0.18+buyScore*0.15+breakoutScore*0.13+emaAlignment*0.09+rangeExpansionScore*0.07+bodyScore*0.05+closeLocation*0.04+historicalFollowThrough.score*0.08);
   const leaders=[
     volumeScore>=62?'FAST_VOLUME_AWAKENING':null,
     momentumScore>=62?'FAST_MOMENTUM_AWAKENING':null,
@@ -1073,7 +1074,7 @@ export function buildFastImpulseContext(candles,ticker,now){
       body:Number.isFinite(bodyScore)?Math.round(bodyScore*10)/10:null,
       historical_followthrough:Number.isFinite(historicalQuality.score)?Number(historicalQuality.score):null
     },
-    score:Math.round(fastScore*10)/10,stage,leaders,historical_followthrough:historicalQuality
+    score:Math.round(fastScore*10)/10,stage,leaders,historical_followthrough:historicalFollowThrough,historical_followthrough:historicalQuality
   };
 }
 
