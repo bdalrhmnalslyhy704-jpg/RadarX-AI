@@ -18,6 +18,7 @@ import {
   evaluateFractalMABreakout,
   evaluateFractalMATrendShift
 } from './strategy-fractal-ma.mjs';
+import { evaluateSupportResistanceConfirmation } from './strategy-support-resistance.mjs';
 
 const ACTIVE = 'ACTIVE';
 
@@ -147,6 +148,15 @@ const STRATEGY_REGISTRY = Object.freeze({
     reasonCodes: Object.freeze(['MULTI_TIMEFRAME_FRACTAL_STRUCTURE','EMA20_EMA50_TREND_SHIFT','PRICE_ABOVE_EMA50','15M_MOMENTUM_CONFIRMATION','FRACTAL_MA_TREND_SHIFT_NOT_CONFIRMED','INSUFFICIENT_DATA']),
     invalidationRules: Object.freeze(['CLOSED_CANDLE_REQUIRED','FRACTAL_STRUCTURE_LOST','MA_SHIFT_REVERSED','FRESH_DATA_REQUIRED']),
     testReference: 'phase1/tests/strategy-fractal-ma.test.mjs'
+  }),
+  SUPPORT_RESISTANCE_CONFIRMATION: Object.freeze({
+    id: 'SUPPORT_RESISTANCE_CONFIRMATION', name: 'Support + Resistance Confirmation', family: 'STRUCTURE', status: ACTIVE,
+    requiredData: Object.freeze(['15m','EMA20','EMA50','PRICE_ACTION','RVOL20']), evaluator: evaluateSupportResistanceConfirmation,
+    scoreDimensions: Object.freeze(['supportBounce','resistanceBreakout','maAlignment','rvol']),
+    hardGates: Object.freeze(['CLOSED_15M_DATA','VALID_SERIES','FRESH_DATA','NO_FUTURE_DATA','MIN_HISTORY','SUPPORT_RESISTANCE_STRUCTURE','CONFIRMATION']),
+    reasonCodes: Object.freeze(['SUPPORT_BOUNCE_CONFIRMATION','RESISTANCE_BREAKOUT','EMA20_EMA50_ALIGNMENT','RVOL_BOUNCE_SUPPORT','RVOL_BREAKOUT_CONFIRMATION','BULLISH_CANDLE_CONFIRMATION','SUPPORT_RESISTANCE_NOT_CONFIRMED','INSUFFICIENT_DATA']),
+    invalidationRules: Object.freeze(['CLOSED_CANDLE_REQUIRED','SUPPORT_LOST','RESISTANCE_BREAKOUT_FAILURE','MA_ALIGNMENT_LOST','FRESH_DATA_REQUIRED']),
+    testReference: 'phase1/tests/strategy-support-resistance.test.mjs'
   })
 });
 
@@ -207,7 +217,7 @@ export function normalizeStrategyResult(id, result, { coverage = 1, hardGatesPas
 }
 function validateRegistry() {
   const entries = Object.values(STRATEGY_REGISTRY);
-  const allowedActive = new Set(['MTF_TREND','CONFIRMED_BREAKOUT','MEAN_REVERSION','VCP_PRE_BREAKOUT','EMA_RIBBON_ALIGNMENT','ADX_TREND_STRENGTH','MACD_TREND_CONTINUATION','BOLLINGER_BAND_REVERSION','VWAP_REVERSION','RELATIVE_VOLUME_SURGE','ATR_EXPANSION','FRACTAL_MA_BOTTOM_REVERSAL','FRACTAL_MA_BREAKOUT','FRACTAL_MA_TREND_SHIFT']);
+  const allowedActive = new Set(['MTF_TREND','CONFIRMED_BREAKOUT','MEAN_REVERSION','VCP_PRE_BREAKOUT','EMA_RIBBON_ALIGNMENT','ADX_TREND_STRENGTH','MACD_TREND_CONTINUATION','BOLLINGER_BAND_REVERSION','VWAP_REVERSION','RELATIVE_VOLUME_SURGE','ATR_EXPANSION','FRACTAL_MA_BOTTOM_REVERSAL','FRACTAL_MA_BREAKOUT','FRACTAL_MA_TREND_SHIFT','SUPPORT_RESISTANCE_CONFIRMATION']);
   if (entries.length !== allowedActive.size) throw new Error('REGISTRY_ACTIVE_SET_SIZE_MISMATCH');
   for (const strategy of entries) {
     if (strategy.status !== ACTIVE || !allowedActive.has(strategy.id)) throw new Error('STRATEGY_NOT_ACTIVE:' + strategy.id);

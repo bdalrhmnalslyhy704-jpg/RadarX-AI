@@ -71,7 +71,7 @@ test('registry exposes the three fractal + moving-average strategies', () => {
   assert.ok(ids.has('FRACTAL_MA_BOTTOM_REVERSAL'));
   assert.ok(ids.has('FRACTAL_MA_BREAKOUT'));
   assert.ok(ids.has('FRACTAL_MA_TREND_SHIFT'));
-  assert.equal(listActiveStrategies().length, 14);
+  assert.equal(listActiveStrategies().length, 15);
 });
 
 test('bottom reversal detects higher-low plus EMA20 reclaim using closed 1h candles', () => {
