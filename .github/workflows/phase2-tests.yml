@@ -1,7 +1,7 @@
 name: RadarX Phase 2 Tests
 on:
   push:
-    branches: ['phase2-*', 'feature-coin-hunter-20261006-backend', 'radar-quality-v2-build224-20261007', 'radar-quality-v2-1-build224-20261007']
+    branches: ['phase2-*', 'feature-coin-hunter-20261006-backend', 'radar-quality-v2-build224-20261007', 'radar-quality-v2-1-build224-20261007', 'radar-quality-v3-build224-whales-20261007']
   pull_request:
     branches: [main]
   workflow_dispatch:
