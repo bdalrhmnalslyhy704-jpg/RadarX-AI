@@ -293,6 +293,13 @@ export async function setRadarState(radar, action, fetchImpl = globalThis.fetch)
   return {status:0,ok:false,body:null,error:String(lastError && lastError.message||lastError||'BACKEND_CONNECTION_FAILED')};
 }
 
+export async function getWhaleAccumulationRadar({limit=20,scan=false}={},fetchImpl=globalThis.fetch){
+  const safeLimit=Number(limit);
+  if(!Number.isInteger(safeLimit)||safeLimit<1||safeLimit>50)throw new Error('INVALID_LIMIT');
+  const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  return requestJson(base,'/api/whale-accumulation-radar?limit='+encodeURIComponent(String(safeLimit))+'&scan='+(scan?'1':'0'),fetchImpl,120000);
+}
+
 export async function getCoinHunterRadar({quote='USDT',limit=16,scan=false}={},fetchImpl=globalThis.fetch){
   const safeQuote=String(quote||'USDT').trim().toUpperCase();
   const safeLimit=Number(limit);

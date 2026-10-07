@@ -328,6 +328,7 @@ public final class RadarXBackgroundMonitorService extends Service {
             case "STRONG_MOVE_RADAR": return "Radar 2 — Strong-Move";
             case "ROTATION_LAG_RADAR": return "Radar 3 — Rotation/Lag";
             case "LIQUIDITY_ABSORPTION_RADAR": return "Radar 4 — Liquidity Absorption";
+            case "WHALE_ACCUMULATION_RADAR": return "🐋 تجمع الحيتان";
             case "KAHIR_RADAR": return "Radar 5 — القاهر";
             case "DOOMSDAY_RADAR": return "Radar 6 — يوم القيامة";
             case "ALMUQAWIM_RADAR": return "Radar 7 — المقاوم";
