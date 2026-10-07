@@ -388,6 +388,7 @@ export function mountMarketRadarScreen(root, options = {}) {
   function readCache(){try{const raw=sessionStorage.getItem(CACHE_KEY);if(!raw)return null;const x=JSON.parse(raw);return x&&Number.isFinite(Number(x.savedAt))&&x.response&&(Date.now()-Number(x.savedAt)<CACHE_TTL_MS)?x:null;}catch(error){return null;}}
   function writeCache(response){try{sessionStorage.setItem(CACHE_KEY,JSON.stringify({savedAt:Date.now(),response:response}));}catch(error){}}
   const state = {candidates: [], response:null, lastUpdate:null, mode:'FETCHING', destroyed:false};
+  const pageHide = () => { state.destroyed = true; };
 
   const nodes = {
     statusText: root.querySelector('[data-rx-status-text]'),
@@ -538,8 +539,8 @@ export function mountMarketRadarScreen(root, options = {}) {
     try {
       const result = await fetchMarketRadarWithRetry(client, {
         quote: 'USDT',
-        limit: 20,
-        attempts: 2,
+        limit: 10,
+        attempts: 1,
         sleepFn: async ms => {
           setStatus('RETRY', 'تتم إعادة المحاولة تلقائيًا عند فشل الاستجابة.');
           await new Promise(resolve => setTimeout(resolve, ms));
@@ -586,6 +587,7 @@ export function mountMarketRadarScreen(root, options = {}) {
   };
   window.addEventListener('online', online);
   window.addEventListener('offline', offline);
+  window.addEventListener('pagehide', pageHide, {once:true,capture:true});
 
   const cached=readCache();
   if(cached){
@@ -601,6 +603,7 @@ export function mountMarketRadarScreen(root, options = {}) {
       state.destroyed = true;
       window.removeEventListener('online', online);
       window.removeEventListener('offline', offline);
+      window.removeEventListener('pagehide', pageHide, true);
       if (root) root.innerHTML = '';
     },
     getState() {
