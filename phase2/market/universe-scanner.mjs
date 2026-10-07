@@ -1069,9 +1069,10 @@ export function buildFastImpulseContext(candles,ticker,now){
       breakout:Number.isFinite(breakoutScore)?Math.round(breakoutScore*10)/10:null,
       ema:Number.isFinite(emaAlignment)?Math.round(emaAlignment*10)/10:null,
       range_expansion:Number.isFinite(rangeExpansionScore)?Math.round(rangeExpansionScore*10)/10:null,
-      body:Number.isFinite(bodyScore)?Math.round(bodyScore*10)/10:null
+      body:Number.isFinite(bodyScore)?Math.round(bodyScore*10)/10:null,
+      historical_followthrough:Number.isFinite(historicalQuality.score)?Number(historicalQuality.score):null
     },
-    score:Math.round(fastScore*10)/10,stage,leaders
+    score:Math.round(fastScore*10)/10,stage,leaders,historical_followthrough:historicalQuality
   };
 }
 
