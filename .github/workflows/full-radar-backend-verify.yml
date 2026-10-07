@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - backend-full-radars-radar8v2-20261006
+      - radar-quality-v2-build224-20261007
   workflow_dispatch:
 permissions:
   contents: read
