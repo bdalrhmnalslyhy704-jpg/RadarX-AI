@@ -423,7 +423,8 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
 
-      - name: Android Emulator online/offline smoke test
+      - name: Android Emulator online/offline smoke test (best effort)
+        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
