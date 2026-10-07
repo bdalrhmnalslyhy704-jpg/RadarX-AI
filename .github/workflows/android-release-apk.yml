@@ -43,7 +43,7 @@ jobs:
       - name: Verify release branch checkout and backend URL
         run: |
           set -euo pipefail
-          test "$GITHUB_REF_NAME" = "feature-coin-hunter-20261006-android" || test "$GITHUB_REF_NAME" = "android-build224-radar8-v2-20261006"
+          test "$GITHUB_REF_NAME" = "feature-coin-hunter-20261006-android" || test "$GITHUB_REF_NAME" = "android-build224-radar8-v2-20261006" || test "$GITHUB_REF_NAME" = "android-whale-intelligence-v2-build224-20261007"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           grep -Fq "https://radarx-ai-production.up.railway.app" android/app/src/main/assets/radarx-backend-client.mjs
           ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
