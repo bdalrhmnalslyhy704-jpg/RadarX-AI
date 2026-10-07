@@ -224,6 +224,29 @@ test('TEST_FIXTURE: Professor route exposes fused live intelligence and is indep
   }finally{await new Promise(resolve=>server.close(resolve));}
 });
 
+test('Whale Accumulation route exposes paper-only public contract',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-whale-api-')),store=await new DurableStore({dir}).init();
+  const whale={
+    health:()=>({running:false,busy:false,radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان',universe:100,scanned_successfully:3,confirmed_count:1}),
+    start:async()=>{},stop:async()=>{},tick:async()=>{},
+    coverage:()=>({universe_total:100,scanned_successfully:3,confirmed_after_persistence:1}),
+    snapshot:()=>[{symbol:'TESTUSDT',eligible:true,opportunity_score:86,whale_accumulation:{stage:'CONFIRMED_ACCUMULATION'},large_prints:{largeBuyRatio:.72,largeNotionalRatio:.18},candle_flow:{volumeRatio:1.7,takerBuyRatio:.62},orderbook:{nearImbalance:.12},radar_quality_v3:{score:90},whale_streak:{count:2,required:2},reasons:['LARGE_PRINT_REPETITION'],paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',processed_at:Date.now(),detected_at:Date.now()}],
+    report:()=>({thresholds:{minLargeBuyRatio:.6},what_it_measures:['Large Prints'],methodology:'test',source:'Binance Public REST'})
+  };
+  const server=createApiServer({config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},store,
+    monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},pushProvider:new NoopPushProvider(),whaleAccumulationRadar:whale});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const res=await fetch('http://127.0.0.1:'+server.address().port+'/api/whale-accumulation-radar?limit=1&scan=0');
+    assert.equal(res.status,200);const body=await res.json();
+    assert.equal(body.radar,'WHALE_ACCUMULATION_RADAR');
+    assert.equal(body.candidates.length,1);
+    assert.equal(body.meta.paper_trading,true);
+    assert.equal(body.meta.real_order_execution,false);
+    assert.equal(body.meta.confidence_score,'UNKNOWN');
+  }finally{await new Promise(resolve=>server.close(resolve));}
+});
+
 test('Multi-Analyst route exposes the twenty-stage contract',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-multi-analyst-api-')),store=await new DurableStore({dir}).init();
   const engine={
