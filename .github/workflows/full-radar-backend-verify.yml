@@ -6,6 +6,7 @@ on:
       - radar-quality-v2-build224-20261007
       - radar-quality-v2-1-build224-20261007
       - radarx-build224-whale-accumulation-v3-20261007
+      - verify-live-whale-radar-20261007
   workflow_dispatch:
 permissions:
   contents: read
@@ -48,6 +49,30 @@ jobs:
           echo "Contract source check only; route must exist in source."
           grep -Fq "/api/whale-accumulation-radar" phase2/http/api.mjs
           grep -Fq "WHALE_ACCUMULATION_RADAR" phase2/core/whale-accumulation-radar.mjs
+      - name: Live Whale Accumulation scan proof
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          BASE="https://radarx-ai-triple-production.up.railway.app"
+          CODE="$(curl --location --silent --show-error --max-time 300 -o "$RUNNER_TEMP/live-whale.json" -w "%{http_code}" "$BASE/api/whale-accumulation-radar?limit=10&scan=1")"
+          case "$CODE" in 200) ;; *) echo "::error::Live Whale Radar returned HTTP $CODE"; cat "$RUNNER_TEMP/live-whale.json"; exit 1 ;; esac
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/live-whale.json','utf8'));
+          const cov=b.coverage||{};
+          if (b.radar!=='WHALE_ACCUMULATION_RADAR') throw new Error('LIVE_WHALE_RADAR_INVALID');
+          if (!Array.isArray(b.candidates)) throw new Error('LIVE_WHALE_CANDIDATES_MISSING');
+          if (Number(cov.scanned_successfully||0)<1) throw new Error('LIVE_WHALE_NO_SUCCESSFUL_SCANS');
+          if (!Number(b.scan?.completed?1:0)) throw new Error('LIVE_WHALE_SCAN_NOT_COMPLETED');
+          console.log(JSON.stringify({
+            candidates:b.candidates.length,
+            confirmed:b.confirmed_count||0,
+            universe:cov.universe_total||0,
+            scanned:cov.scanned_successfully||0,
+            failed:cov.failed||0,
+            top:(b.candidates||[]).slice(0,5).map(x=>({symbol:x.symbol,score:x.opportunity_score,eligible:x.eligible,stage:x.potential_label}))
+          },null,2));
+          NODE
       - name: Paper-only guard
         run: |
           set -euo pipefail
