@@ -350,13 +350,9 @@ public final class MainActivity extends Activity {
     @Override
     public void onBackPressed() {
         if (webView != null) {
-            try {
-                webView.evaluateJavascript(
-                        "(function(){try{window.dispatchEvent(new Event('pagehide'));}catch(e){}})();",
-                        null
-                );
-            } catch (Exception ignored) {
-            }
+            // Let WebView perform the real navigation lifecycle itself.
+            // Do not dispatch a synthetic pagehide: standalone radar pages
+            // use the real pagehide/pageshow events to clean up polling.
             webView.stopLoading();
             if (webView.canGoBack()) {
                 webView.goBack();
