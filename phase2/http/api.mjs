@@ -419,7 +419,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         const limit=Math.max(1,Math.min(50,Math.trunc(Number(u.searchParams.get('limit')||20))));
         const runNow=['1','true','yes'].includes(String(u.searchParams.get('scan')||'0').toLowerCase());
         try{
-          if(runNow&&!whaleAccumulationRadar.health().busy){if(!whaleAccumulationRadar.health().running)await whaleAccumulationRadar.start();else await whaleAccumulationRadar.tick();}
+          if(runNow&&!whaleAccumulationRadar.health().busy)await whaleAccumulationRadar.scanOnce();
           const h=whaleAccumulationRadar.health();
           const report=whaleAccumulationRadar.report();
           return send(res,200,{radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان',as_of:new Date(Date.now()).toISOString(),source:'Binance Public REST',running:h.running,coverage:whaleAccumulationRadar.coverage(),confirmed_count:h.confirmed,candidates:whaleAccumulationRadar.snapshot(limit),report,methodology:report.methodology,monitoring:h,meta:{live:h.running===true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
