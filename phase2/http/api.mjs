@@ -446,7 +446,15 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           if(runNow||!snapshot)snapshot=await multiAnalystRadar.scan({quote,limit});
           return send(res,200,snapshot);
         }catch(e){
-          return send(res,503,{error:String(e?.message??e),candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST'}});
+          const cached=multiAnalystRadar.getCached({quote})||null;
+          return send(res,200,{
+            ...(cached||{}),
+            status:'not_ready',
+            candidates:Array.isArray(cached?.candidates)?cached.candidates:[],
+            error:String(e?.message??e),
+            scan:{requested:runNow,completed:false,error:String(e?.message??e)},
+            meta:{...(cached?.meta||{}),live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST'}
+          });
         }
       }
       if(u.pathname==='/api/pre-move-radar'&&req.method==='GET'){
