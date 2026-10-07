@@ -136,7 +136,7 @@ function subscriptionValid(x){
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null, kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,whaleAccumulationRadar=null}= {}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null, kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleClusterRadar=null,whaleAccumulationRadar=null,multiAnalystRadar=null}= {}){
   const counters=new Map();
   const moveConfig=config.moveRadar||{thresholdPct:1};
   const originList=config.auth.allowedOrigins;
@@ -156,8 +156,11 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     KAHIR_RADAR:{name:RADAR_NAMES.KAHIR_RADAR,instance:kahirRadar,read:'readKahirAlerts'},
     DOOMSDAY_RADAR:{name:RADAR_NAMES.DOOMSDAY_RADAR,instance:doomsdayRadar,read:'readDoomsdayAlerts'},
     ALMUQAWIM_RADAR:{name:RADAR_NAMES.ALMUQAWIM_RADAR,instance:alMuqawimRadar,read:'readAlMuqawimAlerts'},
-    ...(professorRadar?{PROFESSOR_RADAR:{name:RADAR_NAMES.PROFESSOR_RADAR,instance:professorRadar,read:'readProfessorAlerts'}}:{}),
-    ...(whaleAccumulationRadar?{WHALE_ACCUMULATION_RADAR:{name:RADAR_NAMES.WHALE_ACCUMULATION_RADAR,instance:whaleAccumulationRadar,read:'readWhaleAccumulationAlerts'}}:{})
+    EARLY_EXPANSION_RADAR:{name:RADAR_NAMES.EARLY_EXPANSION_RADAR,instance:earlyExpansionRadar,read:'readEarlyExpansionAlerts'},
+    ...(coinHunterRadar?{COIN_HUNTER_RADAR:{name:RADAR_NAMES.COIN_HUNTER_RADAR,instance:coinHunterRadar,read:'readCoinHunterAlerts'}}:{}),
+    ...(whaleClusterRadar?{WHALE_CLUSTER_RADAR:{name:RADAR_NAMES.WHALE_CLUSTER_RADAR,instance:whaleClusterRadar,read:'readWhaleClusterAlerts'}}:{}),
+    ...(whaleAccumulationRadar?{WHALE_ACCUMULATION_RADAR:{name:'🐋 تجمع الحيتان',instance:whaleAccumulationRadar,read:'readWhaleAccumulationAlerts'}}:{}),
+    ...(professorRadar?{PROFESSOR_RADAR:{name:RADAR_NAMES.PROFESSOR_RADAR,instance:professorRadar,read:'readProfessorAlerts'}}:{})
   });
   function radarStatus(){
     return Object.entries(radarEntries).map(([id,x])=>{
@@ -188,7 +191,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(!rateOk(key))return send(res,429,{error:'RATE_LIMITED'});
     try{
       const u=new URL(req.url,'http://localhost');
-      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false},kahir_radar:kahirRadar?.health?.()||{running:false},doomsday_radar:doomsdayRadar?.health?.()||{running:false},almuqawim_radar:alMuqawimRadar?.health?.()||{running:false},professor_radar:professorRadar?.health?.()||{running:false},whale_accumulation_radar:whaleAccumulationRadar?.health?.()||{running:false}});
+      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false},kahir_radar:kahirRadar?.health?.()||{running:false},doomsday_radar:doomsdayRadar?.health?.()||{running:false},almuqawim_radar:alMuqawimRadar?.health?.()||{running:false},professor_radar:professorRadar?.health?.()||{running:false},early_expansion_radar:earlyExpansionRadar?.health?.()||{running:false,radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق'},whale_cluster_radar:whaleClusterRadar?.health?.()||{running:false,radar:'WHALE_CLUSTER_RADAR',radar_name:'🐋 تجمع الحيتان'},whale_accumulation_radar:whaleAccumulationRadar?.health?.()||{running:false,radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان'},coin_hunter_radar:coinHunterRadar?.health?.()||{running:false,radar:'COIN_HUNTER_RADAR',radar_name:'🎯 صائد العملات'}});
       if(u.pathname==='/api/radar-status'&&req.method==='GET')return send(res,200,{radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
       if(u.pathname==='/api/radar-control'&&(req.method==='POST'||req.method==='GET')){
         const radar=String(u.searchParams.get('radar')||'').trim().toUpperCase();
@@ -216,6 +219,56 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         }
         alerts.sort((a,b)=>Number(b.processed_at||b.detected_at||0)-Number(a.processed_at||a.detected_at||0));
         return send(res,200,{alerts:alerts.slice(0,limit),radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',detected_timezone:'Asia/Aden',time_format:'12h'}});
+      }
+      if(u.pathname==='/api/whale-accumulation-radar'&&req.method==='GET'){
+        if(!whaleAccumulationRadar)return send(res,503,{status:'not_ready',candidates:[],confirmed_count:0,coverage:{},error:'WHALE_ACCUMULATION_RADAR_UNAVAILABLE',meta:{live:false,source:'Binance Public REST',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        const limit=Math.max(1,Math.min(50,Math.trunc(Number(u.searchParams.get('limit')||20))));
+        const scan=String(u.searchParams.get('scan')||'0')==='1';
+        try{
+          if(scan){
+            if(!whaleAccumulationRadar.health().running) await whaleAccumulationRadar.start();
+            else await whaleAccumulationRadar.tick();
+          }
+          return send(res,200,whaleAccumulationRadar.snapshot(limit));
+        }catch(e){
+          return send(res,503,{status:'not_ready',candidates:[],confirmed_count:0,coverage:{},error:String(e?.message??e),monitoring:whaleAccumulationRadar.health(),meta:{live:false,source:'Binance Public REST',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'WHALE_ACCUMULATION_RADAR'}});
+        }
+      }
+      if(u.pathname==='/api/multi-analyst'&&req.method==='GET'){
+        if(!multiAnalystRadar)return send(res,503,{error:'MULTI_ANALYST_UNAVAILABLE',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analyst_count:20}});
+        const quote=String(u.searchParams.get('quote')||config.multiAnalyst?.quote||'USDT').trim().toUpperCase();
+        const limit=Math.max(1,Math.min(15,Math.trunc(Number(u.searchParams.get('limit')||config.multiAnalyst?.returnLimit||10))));
+        const runNow=String(u.searchParams.get('scan')||'').trim()==='1';
+        try{
+          let snapshot=multiAnalystRadar.getCached({quote});
+          if(runNow||!snapshot)snapshot=await multiAnalystRadar.scan({quote,limit});
+          return send(res,200,snapshot);
+        }catch(e){
+          return send(res,503,{error:String(e?.message??e),candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analyst_count:20}});
+        }
+      }
+      if(u.pathname==='/api/whale-cluster-radar'&&req.method==='GET'){
+        if(!whaleClusterRadar)return send(res,503,{error:'WHALE_CLUSTER_RADAR_UNAVAILABLE',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        const limit=Math.max(1,Math.min(50,Math.trunc(Number(u.searchParams.get('limit')||20))));
+        const scan=String(u.searchParams.get('scan')||'0')==='1';
+        try{
+          if(scan)await whaleClusterRadar.tick();
+          const candidates=whaleClusterRadar.snapshot(limit);
+          const alerts=typeof store.readWhaleClusterAlerts==='function'?await store.readWhaleClusterAlerts({sinceMs:Number(u.searchParams.get('since')||0),limit}):[];
+          return send(res,200,{status:'ok',candidates,alerts,monitoring:whaleClusterRadar.health(),meta:{live:whaleClusterRadar.health().running===true,source:'Binance Public REST',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'WHALE_CLUSTER_RADAR',detected_timezone:'Asia/Aden',time_format:'12h',method:'ORDERBOOK_CLUSTER_PLUS_FLOW_V1'}});
+        }catch(e){return send(res,503,{status:'not_ready',candidates:[],alerts:[],error:String(e?.message??e),monitoring:whaleClusterRadar.health(),meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'WHALE_CLUSTER_RADAR'}});}
+      }
+      if(u.pathname==='/api/coin-hunter-radar'&&req.method==='GET'){
+        if(!coinHunterRadar)return send(res,503,{error:'COIN_HUNTER_RADAR_UNAVAILABLE',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        const quote=String(u.searchParams.get('quote')||config.coinHunterRadar?.quote||'USDT').trim().toUpperCase();
+        const limit=Math.max(1,Math.min(50,Math.trunc(Number(u.searchParams.get('limit')||16))));
+        const scan=String(u.searchParams.get('scan')||'0')==='1';
+        try{
+          if(scan)await coinHunterRadar.scan(quote);
+          return send(res,200,{...coinHunterRadar.snapshot(limit,quote),meta:{live:coinHunterRadar.health().running===true,source:'Binance Public REST',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',detected_timezone:'Asia/Aden',time_format:'12h'}});
+        }catch(e){
+          return send(res,503,{status:'not_ready',candidates:[],error:String(e?.message??e),meta:{live:false,source:'Binance Public REST',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        }
       }
       if(u.pathname==='/readyz'&&req.method==='GET'){
         const h=monitor.health(),ok=h.database.state==='LIVE'&&(h.websocket.state==='LIVE'||h.rest.state==='LIVE');return send(res,ok?200:503,{ready:ok,health:h});
@@ -266,11 +319,20 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         if(!rotationLagRadar)return send(res,503,{error:'ROTATION_LAG_RADAR_UNAVAILABLE'});
         const sinceRaw=Number(u.searchParams.get('since')||0);
         const limit=Math.max(1,Math.min(100,Math.trunc(Number(u.searchParams.get('limit')||50))));
+        const runNow=String(u.searchParams.get('scan')||'').trim()==='1';
         try{
+          let immediateScanError=null;
+          if(runNow){
+            try{
+              if(rotationLagRadar.health().running!==true) await Promise.resolve(rotationLagRadar.start());
+              else if(!rotationLagRadar.health().busy) await rotationLagRadar.tick();
+            }catch(e){immediateScanError=String(e?.message??e);}
+          }
           const alerts=typeof store.readRotationAlerts==='function'
             ? await store.readRotationAlerts({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit})
             : [];
           const health=rotationLagRadar.health();
+          const candidates=typeof rotationLagRadar.snapshot==='function' ? rotationLagRadar.snapshot(Math.min(limit,20)) : [];
           return send(res,200,{
             meta:{live:health.running===true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'ROTATION_LAG_RADAR'},
             source:'Binance Public REST',
@@ -278,6 +340,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             monitoring:health,
             thresholds:{min_score:Number(config.rotationRadar?.minScore??78),min_confirmations:Number(config.rotationRadar?.minConfirmations??4),market:'SPOT',primary_timeframe:'15m',confirmation_timeframe:'1h'},
             algorithms:health.algorithms||[],
+            scan:{requested:runNow,completed:runNow&&immediateScanError===null&&health.last_scan_at!=null,error:immediateScanError||health.last_error||null},
+            candidates,
             alerts
           });
         }catch(e){
@@ -340,6 +404,34 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             meta:{...(snapshot.meta||{}),live:health.running===true,radar:'KAHIR_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         }catch(e){
           return send(res,503,{error:String(e?.message??e),candidates:[],alerts:[],monitoring:kahirRadar.health(),meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'KAHIR_RADAR'}});
+        }
+      }
+      if(u.pathname==='/api/early-expansion-radar'&&req.method==='GET'){
+        if(!earlyExpansionRadar)return send(res,503,{error:'EARLY_EXPANSION_RADAR_UNAVAILABLE',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'EARLY_EXPANSION_RADAR'}});
+        const sinceRaw=Number(u.searchParams.get('since')||0);
+        const limit=Math.max(1,Math.min(100,Math.trunc(Number(u.searchParams.get('limit')||100))));
+        const requestedQuote=String(u.searchParams.get('quote')||'USDT').trim().toUpperCase();
+        try{
+          const configuredQuote=String(earlyExpansionRadar.health()?.coverage?.quote||earlyExpansionRadar.config?.quote||'USDT').toUpperCase();
+          if(requestedQuote!==configuredQuote)return send(res,400,{error:'QUOTE_NOT_CONFIGURED',quote:requestedQuote,configured_quote:configuredQuote});
+          const runNow=String(u.searchParams.get('scan')||'').trim()==='1';
+          let immediateScanError=null;
+          const before=earlyExpansionRadar.health();
+          if(runNow&&before.running===true&&!before.busy){try{await earlyExpansionRadar.tick({quote:requestedQuote});}catch(e){immediateScanError=String(e?.message??e);}}
+          const alerts=typeof store.readEarlyExpansionAlerts==='function'
+            ? await store.readEarlyExpansionAlerts({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit})
+            : [];
+          const events=typeof store.readEarlyExpansionEvents==='function'
+            ? await store.readEarlyExpansionEvents({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit:Math.min(200,limit*2)})
+            : [];
+          const health=earlyExpansionRadar.health();
+          const snapshot=earlyExpansionRadar.snapshot(limit,requestedQuote);
+          return send(res,200,{...snapshot,monitoring:health,alerts,events,
+            scan:{requested:runNow,completed:immediateScanError===null&&health.last_scan_at!=null,error:immediateScanError||health.last_error||null},
+            thresholds:{min_alert_score:Number(config.earlyExpansionRadar?.minAlertScore??82),min_pre_expansion_score:Number(config.earlyExpansionRadar?.preExpansionScore??72),min_breakout_developing_score:Number(config.earlyExpansionRadar?.breakoutDevelopingScore??82)},
+            meta:{...(snapshot.meta||{}),live:health.running===true,radar:'EARLY_EXPANSION_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        }catch(e){
+          return send(res,503,{error:String(e?.message??e),candidates:[],alerts:[],events:[],monitoring:earlyExpansionRadar.health(),meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'EARLY_EXPANSION_RADAR'}});
         }
       }
       if(u.pathname==='/api/doomsday-radar'&&req.method==='GET'){
@@ -412,32 +504,6 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             meta:{...(snapshot.meta||{}),live:health.running===true,radar:'PROFESSOR_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         }catch(e){
           return send(res,503,{error:String(e?.message??e),candidates:[],alerts:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PROFESSOR_RADAR'}});
-        }
-      }
-      if(u.pathname==='/api/whale-accumulation-radar'&&req.method==='GET'){
-        if(!whaleAccumulationRadar)return send(res,503,{error:'WHALE_ACCUMULATION_RADAR_UNAVAILABLE',candidates:[],coverage:{},meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'WHALE_ACCUMULATION_RADAR'}});
-        const limit=Math.max(1,Math.min(50,Math.trunc(Number(u.searchParams.get('limit')||20))));
-        const runNow=['1','true','yes'].includes(String(u.searchParams.get('scan')||'0').toLowerCase());
-        try{
-          if(runNow&&!whaleAccumulationRadar.health().busy)await whaleAccumulationRadar.scanOnce();
-          const h=whaleAccumulationRadar.health();
-          const report=whaleAccumulationRadar.report();
-          return send(res,200,{radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان',as_of:new Date(Date.now()).toISOString(),source:'Binance Public REST',running:h.running,coverage:whaleAccumulationRadar.coverage(),confirmed_count:h.confirmed,candidates:whaleAccumulationRadar.snapshot(limit),report,methodology:report.methodology,monitoring:h,meta:{live:h.running===true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
-        }catch(e){
-          return send(res,503,{error:String(e?.message??e),candidates:[],coverage:whaleAccumulationRadar.coverage(),meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'WHALE_ACCUMULATION_RADAR'}});
-        }
-      }
-      if(u.pathname==='/api/multi-analyst'&&req.method==='GET'){
-        if(!multiAnalystRadar)return send(res,503,{error:'MULTI_ANALYST_UNAVAILABLE',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST'}});
-        const quote=String(u.searchParams.get('quote')||config.multiAnalyst?.quote||'USDT').trim().toUpperCase();
-        const limit=Math.max(1,Math.min(15,Math.trunc(Number(u.searchParams.get('limit')||config.multiAnalyst?.returnLimit||10))));
-        const runNow=String(u.searchParams.get('scan')||'').trim()==='1';
-        try{
-          let snapshot=multiAnalystRadar.getCached({quote});
-          if(runNow||!snapshot)snapshot=await multiAnalystRadar.scan({quote,limit});
-          return send(res,200,snapshot);
-        }catch(e){
-          return send(res,503,{error:String(e?.message??e),candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST'}});
         }
       }
       if(u.pathname==='/api/pre-move-radar'&&req.method==='GET'){
