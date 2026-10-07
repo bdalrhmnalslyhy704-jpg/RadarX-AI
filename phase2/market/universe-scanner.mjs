@@ -920,7 +920,7 @@ export function buildHistoricalFollowThrough(candles,now=Date.now(),{
     const pos=hi>lo?(close-lo)/(hi-lo)*100:null;
     let hl=0;
     for(let j=Math.max(1,i-6);j<=i;j++)if(Number(rows[j].low)>Number(rows[j-1].low))hl++;
-    return {ret3:pct(close,prev3),ret12:pct(close,prev12),volR,taker,rangeR:rr,pos,hl};
+    return {ret3:Number.isFinite(prev3)&&prev3!==0?(close-prev3)/prev3*100:null,ret12:Number.isFinite(prev12)&&prev12!==0?(close-prev12)/prev12*100:null,volR,taker,rangeR:rr,pos,hl};
   };
   const pctDiff=(a,b,scale)=>Number.isFinite(a)&&Number.isFinite(b)?Math.max(0,Math.min(100,100-Math.abs(a-b)/scale*100)):null;
   const current=vectorAt(rows.length-1);
@@ -1037,6 +1037,7 @@ export function buildFastImpulseContext(candles,ticker,now){
   );
   const bodyStrength=avgBodyStrength(recent);
   const bodyScore=Number.isFinite(bodyStrength)?clamp(50+bodyStrength*90):45;
+  const historicalQuality=buildHistoricalFollowThrough(closed,now);
   const fastScore=clamp(momentumScore*0.24+volumeScore*0.20+buyScore*0.16+breakoutScore*0.14+emaAlignment*0.10+rangeExpansionScore*0.07+bodyScore*0.05+closeLocation*0.04);
   const leaders=[
     volumeScore>=62?'FAST_VOLUME_AWAKENING':null,
