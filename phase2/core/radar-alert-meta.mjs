@@ -6,7 +6,8 @@ export const RADAR_NAMES=Object.freeze({
   KAHIR_RADAR:'Radar 5 — القاهر',
   DOOMSDAY_RADAR:'Radar 6 — يوم القيامة',
   PROFESSOR_RADAR:'البروفيسور — استخبارات عامة',
-  ALMUQAWIM_RADAR:'Radar 7 — المقاوم'
+  ALMUQAWIM_RADAR:'Radar 7 — المقاوم',
+  WHALE_ACCUMULATION_RADAR:'🐋 تجمع الحيتان'
 });
 export const RADAR_PROFILES=Object.freeze({
   EARLY_MOVE_RADAR:Object.freeze({
@@ -63,6 +64,14 @@ export const RADAR_PROFILES=Object.freeze({
     strategy:'HH/HL + LH/LL + Trendline + Moving Average + Higher-Timeframe Alignment',
     timeframes:['4h','1h','15m'],algorithms:['HH/HL Structure','LH/LL Structure','Trendline Direction','EMA Direction Filter','4H/1H Alignment','15m Entry-Risk Guard'],
     guardrails:['شموع مغلقة فقط','Spot فقط','Paper فقط','لا يعتبر الإطار الصغير أقوى من الاتجاه الأكبر']
+  }),
+  WHALE_ACCUMULATION_RADAR:Object.freeze({
+    name:RADAR_NAMES.WHALE_ACCUMULATION_RADAR,icon:'🐋',color:'#ffd166',
+    mission:'رصد بصمة تجميع كبيرة من صفقات عامة وTaker Flow ودفتر الأوامر وامتصاص البيع واستمرارية الدعم.',
+    strength:'لا يعتمد على Print واحدة؛ يشترط تكرارًا وصافي تدفق وبيانات سوق صالحة قبل التأكيد.',
+    strategy:'Large Prints + Taker Flow + Absorption + Orderbook + Support Persistence + Relative Strength',
+    timeframes:['5m','1h'],algorithms:['Large Print Repetition','Large Buy Ratio','Net Large Imbalance','Taker Flow','Seller Absorption','Orderbook Imbalance','Support Persistence','5m Confirmation','Relative Strength','Anti-Chase'],
+    guardrails:['Spot فقط','Paper فقط','شموع مغلقة فقط','يمنع الحركة الممتدة','لا يدعي معرفة هوية المحفظة']
   }),
   PROFESSOR_RADAR:Object.freeze({
     name:RADAR_NAMES.PROFESSOR_RADAR,icon:'🧠',color:'#ec4899',
