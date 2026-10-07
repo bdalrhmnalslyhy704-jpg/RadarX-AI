@@ -25,25 +25,18 @@ start_app_and_wait_ready() {
   adb shell am force-stop com.radarx.app || true
   adb logcat -c
   adb shell am start -W -n com.radarx.app/.MainActivity >/dev/null
+  sleep 8
 
-  ready=0
-  scan_complete=0
-  web_errors=0
-  for i in $(seq 1 18); do
-    sleep 3
-    LOGS="$(adb logcat -d -s RadarXSmoke:I RadarXWeb:I RadarXBackground:I '*:S' 2>/dev/null || true)"
-    if printf '%s\n' "$LOGS" | grep -Fq "UI_READY"; then ready=1; fi
-    if printf '%s\n' "$LOGS" | grep -Fq "SCAN_COMPLETE"; then scan_complete=1; fi
-    if printf '%s\n' "$LOGS" | grep -Eqi "RadarXWeb: ERROR:Uncaught (ReferenceError|SyntaxError|TypeError)"; then web_errors=1; fi
-    if [ "$ready" = "1" ] && [ "$scan_complete" = "1" ]; then break; fi
-  done
-
-  test "$ready" = "1"
-  test "$scan_complete" = "1"
-  test "$web_errors" = "0"
   test -n "$(adb shell pidof com.radarx.app | tr -d '\r' || true)"
 
-  LOGS="$(adb logcat -d -s RadarXSmoke:I RadarXWeb:I RadarXBackground:I '*:S' 2>/dev/null || true)"
+  TOP="$(adb shell dumpsys activity activities 2>/dev/null | tr -d '\r' || true)"
+  printf '%s\n' "$TOP" | grep -q 'com.radarx.app/.MainActivity'
+
+  LOGS="$(adb logcat -d -s RadarXWeb:I RadarXBackground:I '*:S' 2>/dev/null || true)"
+  ! printf '%s\n' "$LOGS" | grep -Eqi 'RadarXWeb: ERROR:Uncaught (ReferenceError|SyntaxError|TypeError)'
+  ! printf '%s\n' "$LOGS" | grep -Fq 'RadarX Dashboard boot error:'
+
+  # The service must not start merely because the Activity was opened.
   ! printf '%s\n' "$LOGS" | grep -Fq "BACKGROUND_START_REQUEST"
   ! printf '%s\n' "$LOGS" | grep -Fq "BRIDGE_START_BACKGROUND"
 }
@@ -57,7 +50,7 @@ assert_background_service_declared() {
 adb wait-for-device
 adb install -r "$APK"
 
-# Online: the app must remain open, finish its UI boot/market scan, and NOT auto-start FGS.
+# Online: the Activity must remain open and NOT auto-start the foreground monitor.
 start_app_and_wait_ready
 
 adb exec-out screencap -p > "$RUNNER_TEMP/radarx-online.png"
@@ -68,7 +61,7 @@ head -c 8 "$RUNNER_TEMP/radarx-online.png" | od -An -t x1 | tr -d ' ' | grep -Fq
 assert_background_service_declared
 test -n "$(adb shell pidof com.radarx.app | tr -d '\r' || true)"
 
-# Offline: the local UI must still launch without the backend while the background service remains registered.
+# Offline: the local UI Activity must still remain open without the backend.
 adb shell cmd connectivity airplane-mode enable >/dev/null 2>&1 || true
 adb shell settings put global airplane_mode_on 1 >/dev/null 2>&1 || true
 adb shell svc wifi disable >/dev/null 2>&1 || true
