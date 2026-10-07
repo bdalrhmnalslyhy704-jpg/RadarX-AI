@@ -15,6 +15,7 @@ on:
       - fix-radar-runtime-return-market-data
       - radar6-doomsday-20261005
       - build224-multi-analyst-20261007
+      - android-build224-final-stable-20261007
   pull_request:
     branches:
       - phase3-triple-radar
