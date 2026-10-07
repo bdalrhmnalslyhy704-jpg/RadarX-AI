@@ -50,8 +50,8 @@ start_app_and_wait_ready() {
 
 assert_background_service_declared() {
   PACKAGE="$(adb shell dumpsys package com.radarx.app 2>/dev/null | tr -d '\\r' || true)"
-  printf '%s\\n' "$PACKAGE" | grep -q 'RadarXBackgroundMonitorService'
-  printf '%s\\n' "$PACKAGE" | grep -q 'FOREGROUND_SERVICE_DATA_SYNC'
+  printf '%s\n' "$PACKAGE" | grep -q 'RadarXBackgroundMonitorService'
+  printf '%s\n' "$PACKAGE" | grep -q 'FOREGROUND_SERVICE_DATA_SYNC'
 }
 
 adb wait-for-device
@@ -64,12 +64,11 @@ adb exec-out screencap -p > "$RUNNER_TEMP/radarx-online.png"
 test -s "$RUNNER_TEMP/radarx-online.png"
 head -c 8 "$RUNNER_TEMP/radarx-online.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
 
-# Background monitoring is explicitly user-controlled: start the same native service the UI calls.
+# Background monitoring is explicitly user-controlled; the non-exported service must remain registered.
 assert_background_service_declared
 test -n "$(adb shell pidof com.radarx.app | tr -d '\r' || true)"
 
-# Offline: the local UI must still launch without the backend, and the background service can be
-# started explicitly without taking the Activity down.
+# Offline: the local UI must still launch without the backend while the background service remains registered.
 adb shell cmd connectivity airplane-mode enable >/dev/null 2>&1 || true
 adb shell settings put global airplane_mode_on 1 >/dev/null 2>&1 || true
 adb shell svc wifi disable >/dev/null 2>&1 || true
@@ -89,4 +88,4 @@ adb exec-out screencap -p > "$RUNNER_TEMP/radarx-offline.png"
 test -s "$RUNNER_TEMP/radarx-offline.png"
 head -c 8 "$RUNNER_TEMP/radarx-offline.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
 
-echo "Android emulator online/offline UI + explicit background-service smoke tests passed."
+echo "Android emulator online/offline UI + no-auto-start/background-service registration smoke tests passed."
