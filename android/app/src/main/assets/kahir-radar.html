@@ -38,7 +38,7 @@ header{position:sticky;top:0;z-index:20;margin:0 -14px;padding:calc(10px + env(s
 <script type="module">
 import {getKahirRadar} from './radarx-backend-client.mjs';
 const scan=document.getElementById('scan'),limit=document.getElementById('limit'),status=document.getElementById('status'),cards=document.getElementById('cards');
-let busy=false;
+let busy=false,pageDead=false,refreshTimer=null;
 const num=(v,d=2)=>Number.isFinite(Number(v))?Number(v).toLocaleString('en-US',{maximumFractionDigits:d}):'—';
 const pct=(v)=>Number.isFinite(Number(v))?Number(v).toFixed(2)+'%':'—';
 function render(body){
@@ -59,7 +59,7 @@ function render(body){
  }).join('');
 }
 async function load(){
- if(busy)return;busy=true;scan.disabled=true;scan.textContent='القاهر يفحص السوق…';
+ if(pageDead||busy)return;busy=true;scan.disabled=true;scan.textContent='القاهر يفحص السوق…';
  status.innerHTML='<b>جاري الفحص</b> — مقارنة كل عملة بخطها الذاتي واستخراج أقوى تغيرات السوق.';
  try{
   const r=await getKahirRadar({quote:'USDT',limit:Number(limit.value)||20});
@@ -70,7 +70,7 @@ async function load(){
  }catch(e){status.innerHTML='<b>تعذر فحص القاهر</b> — '+String(e.message||e);}
  finally{busy=false;scan.disabled=false;scan.textContent='شغّل فحص القاهر';}
 }
-scan.addEventListener('click',load);setTimeout(load,250);setInterval(()=>{if(!busy&&!document.hidden)load()},60000);
+scan.addEventListener('click',load);setTimeout(()=>{if(!pageDead&&!document.hidden)load()},250);refreshTimer=setInterval(()=>{if(!pageDead&&!busy&&!document.hidden)load()},60000);window.addEventListener('pagehide',function(){pageDead=true;if(refreshTimer)clearInterval(refreshTimer);},{once:true,capture:true});
 </script>
 </body>
 </html>
