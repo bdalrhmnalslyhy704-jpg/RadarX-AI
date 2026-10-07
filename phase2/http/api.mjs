@@ -449,6 +449,23 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           return send(res,200,{...snapshot,status:'not_ready',error:String(e?.message??e),alerts:[],monitoring:health,scan:{requested:runNow,completed:false,error:String(e?.message??e)},meta:{...(snapshot.meta||{}),live:false,radar:'WHALE_ACCUMULATION_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         }
       }
+      if(u.pathname==='/api/early-expansion-radar'&&req.method==='GET'){
+        if(!earlyExpansionRadar)return send(res,503,{error:'EARLY_EXPANSION_RADAR_UNAVAILABLE',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        const quote=String(u.searchParams.get('quote')||config.earlyExpansionRadar?.quote||'USDT').trim().toUpperCase();
+        const limit=Math.max(1,Math.min(100,Math.trunc(Number(u.searchParams.get('limit')||100))));
+        const runNow=String(u.searchParams.get('scan')||'')==='1';
+        try{
+          const before=earlyExpansionRadar.health?.()||{};
+          if(runNow&&before.busy!==true&&typeof earlyExpansionRadar.tick==='function')await earlyExpansionRadar.tick();
+          const snapshot=earlyExpansionRadar.snapshot?.(limit,quote)||{schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',candidates:[]};
+          const health=earlyExpansionRadar.health?.()||{running:false};
+          return send(res,200,{...snapshot,monitoring:health,scan:{requested:runNow,completed:health.last_scan_at!=null,error:health.last_error||null},meta:{...(snapshot.meta||{}),live:health.running===true,radar:'EARLY_EXPANSION_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',source:'Binance Public REST'}});
+        }catch(e){
+          const snapshot=earlyExpansionRadar.snapshot?.(limit,quote)||{schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',candidates:[]};
+          const health=earlyExpansionRadar.health?.()||{running:false};
+          return send(res,200,{...snapshot,status:'not_ready',error:String(e?.message??e),monitoring:health,scan:{requested:runNow,completed:false,error:String(e?.message??e)},meta:{...(snapshot.meta||{}),live:false,radar:'EARLY_EXPANSION_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        }
+      }
       if(u.pathname==='/api/multi-analyst'&&req.method==='GET'){
         if(!multiAnalystRadar)return send(res,503,{error:'MULTI_ANALYST_UNAVAILABLE',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST'}});
         const quote=String(u.searchParams.get('quote')||config.multiAnalyst?.quote||'USDT').trim().toUpperCase();
