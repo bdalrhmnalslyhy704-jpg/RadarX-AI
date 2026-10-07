@@ -413,6 +413,16 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           return send(res,503,{error:String(e?.message??e),candidates:[],alerts:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PROFESSOR_RADAR'}});
         }
       }
+      if(u.pathname==='/api/whale-accumulation-radar'&&req.method==='GET'){
+        return send(res,503,{
+          error:'WHALE_ACCUMULATION_RADAR_UNAVAILABLE',
+          radar:'WHALE_ACCUMULATION_RADAR',
+          radar_name:'🐋 تجمع الحيتان',
+          candidates:[],
+          confirmed_count:0,
+          meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}
+        });
+      }
       if(u.pathname==='/api/multi-analyst'&&req.method==='GET'){
         if(!multiAnalystRadar)return send(res,503,{error:'MULTI_ANALYST_UNAVAILABLE',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST'}});
         const quote=String(u.searchParams.get('quote')||config.multiAnalyst?.quote||'USDT').trim().toUpperCase();
