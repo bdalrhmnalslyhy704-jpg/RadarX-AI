@@ -79,7 +79,7 @@ button{border:1px solid #315c6b;border-radius:13px;padding:11px 14px;font-weight
 <script type="module">
 import {getMultiAnalystRadar} from './radarx-backend-client.mjs';
 const $=id=>document.getElementById(id);
-const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const esc=v=>String(v == null ? '' : v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const n=(v,d=0)=>Number.isFinite(Number(v))?Number(v):d;
 let busy=false;
 const analystLabel=id=>{
@@ -88,16 +88,16 @@ const analystLabel=id=>{
 };
 function colorFor(v){return v>=80?'green':v>=60?'yellow':'red'}
 function render(body){
- $('universe').textContent=n(body.universe?.eligible_spot_symbols);
- $('scanned').textContent=n(body.universe?.scanned);
- $('strong').textContent=n(body.summary?.strong_candidates);
- $('candidate').textContent=n(body.summary?.candidates);
- $('watch').textContent=n(body.summary?.watch);
- $('breadth').textContent=body.market_context?.positive_breadth_pct==null?'—':n(body.market_context.positive_breadth_pct).toFixed(1)+'%';
+ $('universe').textContent=n(body.universe && body.universe.eligible_spot_symbols);
+ $('scanned').textContent=n(body.universe && body.universe.scanned);
+ $('strong').textContent=n(body.summary && body.summary.strong_candidates);
+ $('candidate').textContent=n(body.summary && body.summary.candidates);
+ $('watch').textContent=n(body.summary && body.summary.watch);
+ $('breadth').textContent=body.market_context && body.market_context.positive_breadth_pct==null?'—':n(body.market_context.positive_breadth_pct).toFixed(1)+'%';
  const candidates=Array.isArray(body.candidates)?body.candidates:[];
  $('headline').textContent=candidates.length?(n(candidates[0].final_score).toFixed(1)+' / 100 • '+String(candidates[0].verdict||'REJECT')):'لا توجد مرشحات قوية';
- $('headline').className=colorFor(n(candidates[0]?.final_score,0));
- $('headlineSub').textContent=candidates.length?'الأعلى حصل على '+n(candidates[0].consensus?.positive)+' / '+n(candidates[0].consensus?.total)+' محللًا إيجابيًا.':'تم رفض النتائج الضعيفة أو غير المكتملة.';
+ $('headline').className=colorFor(n(candidates[0] && candidates[0].final_score,0));
+ $('headlineSub').textContent=candidates.length?'الأعلى حصل على '+n(candidates[0].consensus && candidates[0].consensus.positive)+' / '+n(candidates[0].consensus && candidates[0].consensus.total)+' محللًا إيجابيًا.':'تم رفض النتائج الضعيفة أو غير المكتملة.';
  $('pool').innerHTML='';
  if(!candidates.length){$('pool').innerHTML='<div class="muted">لا توجد عملات اجتازت البوابات الحالية.</div>';return}
  for(const c of candidates){
@@ -105,15 +105,15 @@ function render(body){
    const analysts=Array.isArray(c.analysts)?c.analysts:[];
    card.innerHTML='<div class="cardTop"><div class="sym">🪙 '+esc(c.symbol)+'</div><div class="score">'+n(c.final_score).toFixed(1)+'/100</div></div>'+
      '<div class="meta"><span class="pill '+(c.verdict==='STRONG_CANDIDATE'||c.verdict==='CANDIDATE'?'pillGood':'')+'">'+esc(c.verdict)+'</span>'+
-     '<span class="pill">إيجابي '+n(c.consensus?.positive)+'/'+n(c.consensus?.total)+'</span>'+
-     '<span class="pill">قوي '+n(c.consensus?.strong)+'</span>'+
+     '<span class="pill">إيجابي '+n(c.consensus && c.consensus.positive)+'/'+n(c.consensus && c.consensus.total)+'</span>'+
+     '<span class="pill">قوي '+n(c.consensus && c.consensus.strong)+'</span>'+
      '<span class="pill">'+esc(c.direction)+'</span>'+
      '<span class="pill">DQ '+n(c.data_quality).toFixed(0)+'</span></div>'+
      '<div class="bar"><div class="fill" style="width:'+Math.max(0,Math.min(100,n(c.final_score)))+'%"></div></div>'+
      '<div class="analysts">'+analysts.map(a=>'<div class="a"><b>'+esc(analystLabel(a.id))+'</b><span class="'+colorFor(n(a.score))+'">'+n(a.score).toFixed(1)+'</span><small>'+esc(a.decision)+' • '+esc(a.direction)+'</small></div>').join('')+'</div>'+
-     '<div class="details"><b>أسباب القوة:</b> '+esc((c.final_judge?.reasons||[]).join(' • ')||'—')+
-     '<br><b>بوابات الرفض:</b> '+esc((c.final_judge?.hardReasons||[]).join(' • ')||'لا توجد')+
-     '<br><b>البيانات:</b> '+esc(c.data_status?.data_valid?'صالحة وحية':'غير مكتملة/مرفوضة')+
+     '<div class="details"><b>أسباب القوة:</b> '+esc((c.final_judge && c.final_judge.reasons||[]).join(' • ')||'—')+
+     '<br><b>بوابات الرفض:</b> '+esc((c.final_judge && c.final_judge.hardReasons||[]).join(' • ')||'لا توجد')+
+     '<br><b>البيانات:</b> '+esc(c.data_status && c.data_status.data_valid?'صالحة وحية':'غير مكتملة/مرفوضة')+
      '</div>';
    $('pool').appendChild(card);
  }
@@ -124,7 +124,7 @@ async function run(){
    const r=await getMultiAnalystRadar({limit:10});
    if(!r.ok||!r.body)throw new Error(r.error||'MULTI_ANALYST_UNAVAILABLE');
    render(r.body);
-   $('status').textContent='● اكتمل التحليل • '+n(r.body.universe?.scanned)+' عملات • 20 محللًا + المحلل النهائي';
+   $('status').textContent='● اكتمل التحليل • '+n(r.body.universe && body.universe.scanned)+' عملات • 20 محللًا + المحلل النهائي';
  }catch(e){$('status').textContent='تعذر التحليل — '+esc((e&&e.message)||e);$('errors').textContent='قد تكون بيانات السوق غير متاحة الآن؛ لم يتم اختراع نتائج.'}
  finally{busy=false;}
 }
