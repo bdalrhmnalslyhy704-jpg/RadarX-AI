@@ -882,6 +882,116 @@ export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_
     .slice(0,Math.max(1,Math.trunc(limit)));
 }
 
+export function buildHistoricalFollowThrough(candles,now=Date.now(),{
+  matchThreshold=68,
+  maxSamples=8,
+  shortBars=6,
+  longBars=24
+}={}){
+  const rows=(Array.isArray(candles)?candles:[]).filter(c=>
+    c?.closed!==false&&Number.isFinite(Number(c?.closeTime))&&Number(c.closeTime)<=now&&
+    Number(c.open)>0&&Number(c.high)>=Number(c.low)&&Number(c.low)>0&&Number(c.close)>0&&
+    Number(c.volume)>=0
+  );
+  if(rows.length<40)return{
+    samples:0,score:50,hit_rate_short:null,hit_rate_long:null,median_mfe_short:null,
+    median_mfe_long:null,median_mae_short:null,similarity:null,method:'HISTORICAL_ANALOG_V1'
+  };
+  const avgRange=(a)=>{
+    const xs=a.map(x=>(Number(x.high)-Number(x.low))/Math.max(Number(x.close),1e-12)).filter(Number.isFinite);
+    return xs.length?xs.reduce((s,x)=>s+x,0)/xs.length:null;
+  };
+  const vectorAt=(i)=>{
+    if(i<20)return null;
+    const close=Number(rows[i].close);
+    const prev3=Number(rows[i-3].close);
+    const prev12=Number(rows[i-12].close);
+    const recent=rows.slice(i-3,i+1);
+    const base=rows.slice(i-15,i-3);
+    const avg=(a,f)=>{const xs=a.map(f).filter(Number.isFinite);return xs.length?xs.reduce((s,x)=>s+x,0)/xs.length:null;};
+    const volR=(avg(recent,x=>Number(x.volume))||0)/(avg(base,x=>Number(x.volume))||1);
+    const takerVol=recent.reduce((s,x)=>s+(Number(x.takerBuyBaseVolume)||0),0);
+    const totalVol=recent.reduce((s,x)=>s+(Number(x.volume)||0),0);
+    const taker=totalVol>0?takerVol/totalVol:null;
+    const rr=(avgRange(recent)||0)/(avgRange(base)||1);
+    const window20=rows.slice(i-19,i+1);
+    const hi=Math.max(...window20.map(x=>Number(x.high)));
+    const lo=Math.min(...window20.map(x=>Number(x.low)));
+    const pos=hi>lo?(close-lo)/(hi-lo)*100:null;
+    let hl=0;
+    for(let j=Math.max(1,i-6);j<=i;j++)if(Number(rows[j].low)>Number(rows[j-1].low))hl++;
+    return {ret3:pct(close,prev3),ret12:pct(close,prev12),volR,taker,rangeR:rr,pos,hl};
+  };
+  const pctDiff=(a,b,scale)=>Number.isFinite(a)&&Number.isFinite(b)?Math.max(0,Math.min(100,100-Math.abs(a-b)/scale*100)):null;
+  const current=vectorAt(rows.length-1);
+  if(!current)return{samples:0,score:50,hit_rate_short:null,hit_rate_long:null,median_mfe_short:null,median_mfe_long:null,median_mae_short:null,similarity:null,method:'HISTORICAL_ANALOG_V1'};
+  const specs=[['ret3',.20,1.2],['ret12',.12,4],['volR',.20,.9],['taker',.16,.10],['rangeR',.12,.45],['pos',.10,28],['hl',.10,4]];
+  const analogs=[];
+  const lastUsable=rows.length-1-longBars;
+  for(let i=20;i<=lastUsable;i++){
+    const v=vectorAt(i);
+    if(!v)continue;
+    let total=0,weight=0;
+    for(const [key,w,scale] of specs){
+      const s=pctDiff(Number(current[key]),Number(v[key]),scale);
+      if(s==null)continue;
+      total+=s*w;weight+=w;
+    }
+    const similarity=weight>0?total/weight:0;
+    if(similarity>=matchThreshold){
+      const base=Number(rows[i].close);
+      const future=rows.slice(i+1,i+1+longBars);
+      const short=future.slice(0,shortBars);
+      const mfe=(xs)=>xs.length?Math.max(...xs.map(x=>(Number(x.high)-base)/base*100):null;
+      const mae=(xs)=>xs.length?Math.min(...xs.map(x=>(Number(x.low)-base)/base*100):null;
+      const mfeS=mfe(short),mfeL=mfe(future),maeS=mae(short);
+      if(Number.isFinite(mfeS)&&Number.isFinite(mfeL)){
+        analogs.push({similarity,mfeS,mfeL,maeS});
+      }
+    }
+  }
+  analogs.sort((a,b)=>b.similarity-a.similarity);
+  const selected=analogs.slice(0,Math.max(1,Math.min(maxSamples,analogs.length)));
+  if(!selected.length)return{
+    samples:0,score:50,hit_rate_short:null,hit_rate_long:null,median_mfe_short:null,
+    median_mfe_long:null,median_mae_short:null,similarity:null,method:'HISTORICAL_ANALOG_V1'
+  };
+  const median=(xs)=>{
+    const a=xs.map(Number).filter(Number.isFinite).sort((x,y)=>x-y);
+    if(!a.length)return null;
+    const m=Math.floor(a.length/2);
+    return a.length%2?a[m]:(a[m-1]+a[m])/2;
+  };
+  const hitS=selected.filter(x=>x.mfeS>=2).length/selected.length;
+  const hitL=selected.filter(x=>x.mfeL>=5).length/selected.length;
+  const medS=median(selected.map(x=>x.mfeS));
+  const medL=median(selected.map(x=>x.mfeL));
+  const medMae=median(selected.map(x=>x.maeS));
+  const sim=median(selected.map(x=>x.similarity));
+  const score=clamp(
+    50+
+    (hitS-.5)*55+
+    (hitL-.5)*35+
+    Math.max(-12,Math.min(12,(Number(medS)||0)-1))*1.5+
+    Math.max(-10,Math.min(10,(Number(medL)||0)-2))*.8-
+    Math.max(0,Math.abs(Number(medMae)||0)-1)*5+
+    ((Number(sim)||50)-68)*.12
+  );
+  return{
+    samples:selected.length,
+    score:Number(score.toFixed(1)),
+    hit_rate_short:Number((hitS*100).toFixed(1)),
+    hit_rate_long:Number((hitL*100).toFixed(1)),
+    median_mfe_short:Number(Number(medS).toFixed(2)),
+    median_mfe_long:Number(Number(medL).toFixed(2)),
+    median_mae_short:Number(Number(medMae).toFixed(2)),
+    similarity:Number(Number(sim).toFixed(1)),
+    method:'HISTORICAL_ANALOG_V1',
+    target_short:'+2% within 30m',
+    target_long:'+5% within 2h'
+  };
+}
+
 export function buildFastImpulseContext(candles,ticker,now){
   const closed=(Array.isArray(candles)?candles:[])
     .filter(c=>c?.closed!==false&&Number.isFinite(Number(c?.closeTime))&&Number(c.closeTime)<=now&&
