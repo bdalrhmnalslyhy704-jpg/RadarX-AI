@@ -17,6 +17,7 @@ on:
       - bottom-reversal-radar-page
       - phase6-radar4-independent-microstructure
       - feature-coin-hunter-20261006-android
+      - android-build224-whale-accumulation-v3-20261007
   workflow_dispatch:
 
 permissions:
@@ -170,7 +171,8 @@ jobs:
             "/api/kahir-radar?limit=1&scan=0" \
             "/api/doomsday-radar?limit=1&scan=0" \
             "/api/professor-radar?limit=1&scan=0" \
-            "/api/almuqawim-radar?limit=1&scan=0"; do
+            "/api/almuqawim-radar?limit=1&scan=0" \
+            "/api/whale-accumulation-radar?limit=1&scan=0"; do
             code="$(curl --location --silent --show-error --max-time 60 -o "$RUNNER_TEMP/radar-check.json" -w "%{http_code}" "$BASE$path")"
             case "$code" in
               200|503) ;;
@@ -198,6 +200,26 @@ jobs:
             if (!Object.hasOwn(body,'lesson') || !Object.hasOwn(body,'coverage')) throw new Error('COIN_HUNTER_LEARNING_CONTRACT_MISSING');
           }
           console.log(JSON.stringify({http:code,radar:body.radar??null,name:body.radar_name??null,candidates:body.candidates?.length??0,learned_samples:body.lesson?.samples??0,coverage:body.coverage??{}}));
+          NODE
+      - name: Verify Whale Accumulation public contract
+        timeout-minutes: 3
+        env:
+          BASE: https://radarx-ai-triple-production.up.railway.app
+        run: |
+          set -euo pipefail
+          CODE="$(curl --location --silent --show-error --max-time 60 -o "$RUNNER_TEMP/whale.json" -w "%{http_code}" "$BASE/api/whale-accumulation-radar?limit=5&scan=0")"
+          case "$CODE" in 200|503) ;; *) echo "::error::Whale Accumulation returned HTTP $CODE"; cat "$RUNNER_TEMP/whale.json"; exit 1 ;; esac
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const body=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/whale.json','utf8'));
+          if (Number(process.env.CODE||'0')===200) {
+            if (body.radar !== 'WHALE_ACCUMULATION_RADAR') throw new Error('WHALE_RADAR_INVALID');
+            if (body.radar_name !== '🐋 تجمع الحيتان') throw new Error('WHALE_NAME_INVALID');
+            if (body.meta?.paper_trading !== true || body.meta?.real_order_execution !== false || body.meta?.confidence_score !== 'UNKNOWN') throw new Error('WHALE_POLICY_INVALID');
+            if (!Array.isArray(body.candidates)) throw new Error('WHALE_CANDIDATES_MISSING');
+            if (!body.report || !body.methodology) throw new Error('WHALE_REPORT_MISSING');
+          }
+          console.log(JSON.stringify({http:Number(process.env.CODE||'0'),radar:body.radar||null,candidates:Array.isArray(body.candidates)?body.candidates.length:0,confirmed:body.confirmed_count||0}));
           NODE
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -291,6 +313,8 @@ jobs:
           grep -Fq 'coin-hunter-radar.html' android/app/src/main/assets/index.html
           node --check android/app/src/main/assets/radarx-radar-screen.mjs
           grep -Fq 'radar8-lightning.html' android/app/src/main/assets/index.html
+          test -s android/app/src/main/assets/whale-accumulation-radar.html
+          grep -Fq 'whale-accumulation-radar.html' android/app/src/main/assets/index.html
           test -s android/app/build.gradle
           test -s android/app/src/main/AndroidManifest.xml
 
@@ -368,7 +392,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "RadarX Native — Build 224 + Radar 8 V2 ${GITHUB_RUN_NUMBER}" \
-            --notes "Signed universal APK built from feature-coin-hunter-20261006-android, preserving Build 224 radar assets, fixing blank standalone radar screens, and adding Coin Hunter. Spot/paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
+            --notes "Signed universal APK built on Build 224 lineage, adding premium Whale Accumulation radar with public large-order footprint analysis, report, and background notification identity. Spot/paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
 
       - name: Verify published HTTPS download
         run: |
