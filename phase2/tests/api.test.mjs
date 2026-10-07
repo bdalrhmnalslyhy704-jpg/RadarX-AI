@@ -165,6 +165,7 @@ test('TEST_FIXTURE: public signal route is read-only and existing API paths rema
 });
 
 
+// Build 224 canonical radar contract: 12 registered radar entries.
 test('TEST_FIXTURE: independent radar status/control and unified alerts preserve radar source/time',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-independent-radar-api-')),store=await new DurableStore({dir}).init();
   const makeRadar=(id,name)=>({
