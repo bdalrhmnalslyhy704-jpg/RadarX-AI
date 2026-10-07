@@ -36,26 +36,19 @@ export async function requestJson(baseUrl, path, fetchImpl = globalThis.fetch, t
       ]);
       let body = null;
       try { body = await response.json(); } catch {}
-      if (response.ok) {
-        return { status: response.status, ok: true, body, error: null, base };
-      }
-      if (response.status === 404 && base !== bases.at(-1)) {
-        firstError = new Error('HTTP_404');
-        continue;
-      }
-      if (response.status >= 400 && response.status < 500) {
-        return { status: response.status, ok: false, body, error: 'HTTP_' + response.status, base };
+      if (response.ok || (response.status >= 400 && response.status < 500)) {
+        return { status: response.status, ok: response.ok, body, error: null, base };
       }
       firstError = new Error('HTTP_' + response.status);
     } catch (error) {
-      if(!firstError)firstError = error;
+      firstError ||= error;
     }
   }
   return {
     status: 0,
     ok: false,
     body: null,
-    error: String(firstError && firstError.message || firstError || 'BACKEND_CONNECTION_FAILED')
+    error: String(firstError?.message || firstError || 'BACKEND_CONNECTION_FAILED')
   };
 }
 
@@ -80,17 +73,17 @@ export async function fetchBackendState(baseUrl, symbol, fetchImpl = globalThis.
 export function isFreshLiveSignal(response) {
   if (!response || response.status !== 200) return false;
 
-  const status = response.body && response.body.signal && response.body.signal.data_status;
-  const meta = response.body && response.body.meta;
+  const status = response.body?.signal?.data_status;
+  const meta = response.body?.meta;
 
   return (
-    status && status.data_stale === false &&
-    status && status.data_valid === true &&
-    status && status.last_error == null &&
-    meta && meta.live === true &&
-    meta && meta.paper_trading === true &&
-    meta && meta.real_order_execution === false &&
-    meta && meta.confidence_score === 'UNKNOWN'
+    status?.data_stale === false &&
+    status?.data_valid === true &&
+    status?.last_error == null &&
+    meta?.live === true &&
+    meta?.paper_trading === true &&
+    meta?.real_order_execution === false &&
+    meta?.confidence_score === 'UNKNOWN'
   );
 }
 
@@ -189,16 +182,6 @@ export async function getPreMoveRadar({quote = 'USDT', limit = 30 } = {}, fetchI
 }
 
 
-export async function getRotationRadar({quote='USDT',limit=20,scan=false}={},fetchImpl=globalThis.fetch){
-  const safeQuote=String(quote||'USDT').trim().toUpperCase();
-  const safeLimit=Number(limit);
-  if(!/^[A-Z]{2,10}$/.test(safeQuote))throw new Error('INVALID_QUOTE');
-  if(!Number.isInteger(safeLimit)||safeLimit<1||safeLimit>50)throw new Error('INVALID_LIMIT');
-  const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
-  const scanParam=scan?'&scan=1':'';
-  return requestJson(base,'/api/rotation-lag-radar?quote='+encodeURIComponent(safeQuote)+'&limit='+encodeURIComponent(String(safeLimit))+scanParam,fetchImpl,90000);
-}
-
 export async function getMoveRadar({quote='USDT',limit=50,since=0}={},fetchImpl=globalThis.fetch){
   const safeQuote=String(quote||'USDT').trim().toUpperCase();
   if(!/^[A-Z]{2,10}$/.test(safeQuote))throw new Error('INVALID_QUOTE');
@@ -254,6 +237,7 @@ export async function getKingMarket({limit=5,deep=false}={},fetchImpl=globalThis
   const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
   return requestJson(base,'/api/king-market?limit='+encodeURIComponent(String(safeLimit))+'&deep='+(deep?'1':'0'),fetchImpl,120000);
 }
+export async function getWhaleClusterRadar({quote='USDT',limit=20,scan=true}={},fetchImpl=globalThis.fetch){return requestJson(BACKEND_BASE_URL,'/api/whale-cluster-radar?quote='+encodeURIComponent(quote)+'&limit='+encodeURIComponent(limit)+'&scan='+(scan?'1':'0'),fetchImpl);}
 export async function getRadarStatus(fetchImpl = globalThis.fetch) {
   const base = normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
   return requestJson(base, '/api/radar-status', fetchImpl);
@@ -290,22 +274,5 @@ export async function setRadarState(radar, action, fetchImpl = globalThis.fetch)
       return {status:response.status,ok:response.ok,body,error:null,base};
     }catch(error){lastError=error;}
   }
-  return {status:0,ok:false,body:null,error:String(lastError && lastError.message||lastError||'BACKEND_CONNECTION_FAILED')};
-}
-
-export async function getWhaleAccumulationRadar({limit=20,scan=false}={},fetchImpl=globalThis.fetch){
-  const safeLimit=Number(limit);
-  if(!Number.isInteger(safeLimit)||safeLimit<1||safeLimit>50)throw new Error('INVALID_LIMIT');
-  const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
-  return requestJson(base,'/api/whale-accumulation-radar?limit='+encodeURIComponent(String(safeLimit))+'&scan='+(scan?'1':'0'),fetchImpl,120000);
-}
-
-export async function getCoinHunterRadar({quote='USDT',limit=16,scan=false}={},fetchImpl=globalThis.fetch){
-  const safeQuote=String(quote||'USDT').trim().toUpperCase();
-  const safeLimit=Number(limit);
-  if(!/^[A-Z]{2,10}$/.test(safeQuote))throw new Error('INVALID_QUOTE');
-  if(!Number.isInteger(safeLimit)||safeLimit<1||safeLimit>50)throw new Error('INVALID_LIMIT');
-  const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
-  const scanParam=scan?'&scan=1':'';
-  return requestJson(base,'/api/coin-hunter-radar?quote='+encodeURIComponent(safeQuote)+'&limit='+encodeURIComponent(String(safeLimit))+scanParam,fetchImpl,130000);
+  return {status:0,ok:false,body:null,error:String(lastError?.message||lastError||'BACKEND_CONNECTION_FAILED')};
 }
