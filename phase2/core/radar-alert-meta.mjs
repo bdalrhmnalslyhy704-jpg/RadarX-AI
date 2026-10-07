@@ -128,7 +128,9 @@ export function radarPowerScore(alert){
     LIQUIDITY_ABSORPTION_RADAR:alert?.liquidity_absorption,
     DOOMSDAY_RADAR:alert?.doomsday,
     ALMUQAWIM_RADAR:alert?.almuqawim,
-    PROFESSOR_RADAR:alert?.professor
+    PROFESSOR_RADAR:alert?.professor,
+    COIN_HUNTER_RADAR:alert?.factors||alert?.coin_hunter||{},
+    WHALE_ACCUMULATION_RADAR:alert?.whale_accumulation||{}
   };
   const componentMean=meanNumbers(collectObjectScores(blocks[id]));
   const dataQuality=clamp100(alert?.data_quality??alert?.data_status?.data_quality??100);
