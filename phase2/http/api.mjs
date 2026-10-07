@@ -135,7 +135,7 @@ function subscriptionValid(x){
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null, kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null}= {}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null, kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null}= {}){
   const counters=new Map();
   const moveConfig=config.moveRadar||{thresholdPct:1};
   const originList=config.auth.allowedOrigins;
@@ -410,6 +410,19 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             meta:{...(snapshot.meta||{}),live:health.running===true,radar:'PROFESSOR_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         }catch(e){
           return send(res,503,{error:String(e?.message??e),candidates:[],alerts:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PROFESSOR_RADAR'}});
+        }
+      }
+      if(u.pathname==='/api/multi-analyst'&&req.method==='GET'){
+        if(!multiAnalystRadar)return send(res,503,{error:'MULTI_ANALYST_UNAVAILABLE',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST'}});
+        const quote=String(u.searchParams.get('quote')||config.multiAnalyst?.quote||'USDT').trim().toUpperCase();
+        const limit=Math.max(1,Math.min(15,Math.trunc(Number(u.searchParams.get('limit')||config.multiAnalyst?.returnLimit||10))));
+        const runNow=String(u.searchParams.get('scan')||'').trim()==='1';
+        try{
+          let snapshot=multiAnalystRadar.getCached({quote});
+          if(runNow||!snapshot)snapshot=await multiAnalystRadar.scan({quote,limit});
+          return send(res,200,snapshot);
+        }catch(e){
+          return send(res,503,{error:String(e?.message??e),candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST'}});
         }
       }
       if(u.pathname==='/api/pre-move-radar'&&req.method==='GET'){
