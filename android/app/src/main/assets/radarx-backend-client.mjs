@@ -230,6 +230,15 @@ export async function getAlMuqawimRadar({limit=20,since=0}={},fetchImpl=globalTh
   return requestJson(base,'/api/almuqawim-radar?limit='+encodeURIComponent(String(safeLimit))+sinceParam,fetchImpl,120000);
 }
 
+export async function getMultiAnalystRadar({quote='USDT',limit=10}={},fetchImpl=globalThis.fetch){
+  const safeQuote=String(quote||'USDT').trim().toUpperCase();
+  const safeLimit=Number(limit);
+  if(!/^[A-Z]{2,10}$/.test(safeQuote))throw new Error('INVALID_QUOTE');
+  if(!Number.isInteger(safeLimit)||safeLimit<1||safeLimit>15)throw new Error('INVALID_LIMIT');
+  const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  return requestJson(base,'/api/multi-analyst?quote='+encodeURIComponent(safeQuote)+'&limit='+encodeURIComponent(String(safeLimit)),fetchImpl,180000);
+}
+
 export async function getProfessorRadar({quote='USDT',limit=10,since=0,scan=true}={},fetchImpl=globalThis.fetch){
   const safeQuote=String(quote||'USDT').trim().toUpperCase();
   const safeLimit=Number(limit);
