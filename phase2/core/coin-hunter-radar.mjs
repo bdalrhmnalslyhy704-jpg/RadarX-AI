@@ -39,7 +39,7 @@ function closedCandles(rows, now) {
   );
 }
 
-function findPreMoveCheckpoint(closed,dayStart,thresholdPct=2){
+export function findPreMoveCheckpoint(closed,dayStart,thresholdPct=2){
   const day=closed.filter(x=>Number(x.openTime)>=Number(dayStart));
   if(day.length<3)return null;
   const base=Number(day[0]?.open);
@@ -53,7 +53,7 @@ function findPreMoveCheckpoint(closed,dayStart,thresholdPct=2){
   return null;
 }
 
-function featureSet(candles, ticker, btcChange = null) {
+export function featureSet(candles, ticker, btcChange = null) {
   const c = closedCandles(candles, Date.now());
   if (c.length < 16) return null;
 
