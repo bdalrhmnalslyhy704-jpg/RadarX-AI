@@ -972,7 +972,8 @@ export function buildCandidateContract({
   now,
   minDataQuality = MARKET_RADAR_DEFAULTS.minDataQuality,
   minLiquidityQuality = MARKET_RADAR_DEFAULTS.minLiquidityQuality,
-  maxTriggerAgeMs = MARKET_RADAR_DEFAULTS.maxTriggerAgeMs
+  maxTriggerAgeMs = MARKET_RADAR_DEFAULTS.maxTriggerAgeMs,
+  includeAnalysisPayload = false
 }) {
   const symbol = ticker.symbol;
   const series = deep.series || {};
@@ -1117,7 +1118,8 @@ export function buildCandidateContract({
       fetch_age_ms: Number.isFinite(deep.minFetchAgeMs) ? Math.max(0, Math.trunc(deep.minFetchAgeMs)) : null
     },
     paper_trading: true,
-    real_order_execution: false
+    real_order_execution: false,
+    ...(includeAnalysisPayload ? {_analysis: Object.freeze({series, depth: deep.depth, fast: deep.fast, liquidity, evaluation, completedAt: deep.completedAt})} : {})
   };
 }
 
@@ -1369,7 +1371,8 @@ export class MarketUniverseScanner {
       now: completedAt,
       minDataQuality: this.config.minDataQuality,
       minLiquidityQuality: this.config.minLiquidityQuality,
-      maxTriggerAgeMs: this.config.maxTriggerAgeMs
+      maxTriggerAgeMs: this.config.maxTriggerAgeMs,
+      includeAnalysisPayload: Boolean(options.includeAnalysisPayload)
     });
 
     return candidate;
