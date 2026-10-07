@@ -202,6 +202,16 @@ export const CONFIG = Object.freeze({
     retryAttempts: int(process.env.RADARX_DOOMSDAY_RETRY_ATTEMPTS, 1),
     watchlist: ['FETUSDT','SCRUSDT','CHIPUSDT','ORCAUSDT','TSTUSDT','GTCUSDT']
   },
+  whaleAccumulationRadar: {
+    quote:'USDT',
+    pollMs:int(process.env.RADARX_WHALE_POLL_MS,60000),
+    discoveryLimit:int(process.env.RADARX_WHALE_DISCOVERY_LIMIT,12),
+    scanLimit:int(process.env.RADARX_WHALE_SCAN_LIMIT,20),
+    minQuoteVolume24h:int(process.env.RADARX_WHALE_MIN_QUOTE_VOLUME_24H,500000),
+    minLargeTradeNotional:int(process.env.RADARX_WHALE_MIN_LARGE_TRADE_NOTIONAL,25000),
+    streakRequired:int(process.env.RADARX_WHALE_STREAK_REQUIRED,2),
+    max24hMovePct:int(process.env.RADARX_WHALE_MAX_24H_MOVE_PCT,10)
+  },
   multiAnalyst: {
     quote: 'USDT',
     discoveryPool: int(process.env.RADARX_MULTI_ANALYST_DISCOVERY_POOL, 20),
