@@ -413,6 +413,16 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           return send(res,503,{error:String(e?.message??e),candidates:[],alerts:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PROFESSOR_RADAR'}});
         }
       }
+      if(u.pathname==='/api/coin-hunter-radar'&&req.method==='GET'){
+        return send(res,503,{
+          error:'COIN_HUNTER_RADAR_UNAVAILABLE',
+          radar:'COIN_HUNTER_RADAR',
+          radar_name:'🎯 صائد العملات',
+          candidates:[],
+          meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
+          data_policy:{closed_candles_only:true,no_fake_data:true,spot_only:true}
+        });
+      }
       if(u.pathname==='/api/whale-accumulation-radar'&&req.method==='GET'){
         return send(res,503,{
           error:'WHALE_ACCUMULATION_RADAR_UNAVAILABLE',
