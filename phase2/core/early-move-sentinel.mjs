@@ -59,6 +59,33 @@ function component(candidate,keyPaths,fallback=50){
   return fallback;
 }
 
+export function buildMarketPulse(prev,row,history=[]){
+  const now=Number(row?.tickerTime)||Date.now();
+  const prevTime=Number(prev?.tickerTime)||0;
+  const dtMs=prevTime>0?Math.max(250,now-prevTime):null;
+  const pricePrev=Number(prev?.lastPrice),priceNow=Number(row?.lastPrice);
+  const priceDelta=Number.isFinite(pricePrev)&&pricePrev>0&&Number.isFinite(priceNow)
+    ?(priceNow-pricePrev)/pricePrev*100:null;
+  const volumeDelta=Number.isFinite(Number(row?.quoteVolume24h))&&Number.isFinite(Number(prev?.quoteVolume24h))
+    ?Math.max(0,Number(row.quoteVolume24h)-Number(prev.quoteVolume24h)):null;
+  const tradeDelta=Number.isFinite(Number(row?.tradeCount24h))&&Number.isFinite(Number(prev?.tradeCount24h))
+    ?Math.max(0,Number(row.tradeCount24h)-Number(prev.tradeCount24h)):null;
+  const sec=Number.isFinite(dtMs)?dtMs/1000:null;
+  const volumeRate=Number.isFinite(volumeDelta)&&sec>0?volumeDelta/sec:null;
+  const tradeRate=Number.isFinite(tradeDelta)&&sec>0?tradeDelta/sec:null;
+  const prior=Array.isArray(history)?history.slice(-8):[];
+  const avg=(xs)=>{const a=xs.map(Number).filter(Number.isFinite);return a.length?a.reduce((s,x)=>s+x,0)/a.length:null;};
+  const baseVol=avg(prior.map(x=>x.volume_rate));
+  const baseTrade=avg(prior.map(x=>x.trade_rate));
+  const volumeRatio=Number.isFinite(volumeRate)&&Number.isFinite(baseVol)&&baseVol>0?volumeRate/baseVol:null;
+  const tradeRatio=Number.isFinite(tradeRate)&&Number.isFinite(baseTrade)&&baseTrade>0?tradeRate/baseTrade:null;
+  const priceScore=Number.isFinite(priceDelta)?clamp(50+priceDelta*95):45;
+  const volumeScore=Number.isFinite(volumeRatio)?clamp(50+(volumeRatio-1)*30):45;
+  const tradeScore=Number.isFinite(tradeRatio)?clamp(50+(tradeRatio-1)*28):45;
+  const acceleration=clamp(priceScore*.42+volumeScore*.34+tradeScore*.24);
+  return {price_delta_pct:priceDelta,volume_rate:volumeRate,trade_rate:tradeRate,volume_ratio:volumeRatio,trade_ratio:tradeRatio,score:Number(acceleration.toFixed(1))};
+}
+
 export function buildMoveAlert(candidate,trigger,{now=Date.now()}={}) {
   const direction=Number(trigger?.movePct)>=0?'UP_MOVE':'DOWN_MOVE';
   const ctx=candidate?.pre_move_context||{};
@@ -569,6 +596,7 @@ export class EarlyMoveSentinel {
     this.lastTicker=new Map();
     this.lastAlertAt=new Map();
     this.lastAlertScore=new Map();
+    this.pulseHistory=new Map();
     this.lastEarlyScanAt=new Map();
     this.deepQueue=[];
     this.deepActive=0;
@@ -634,6 +662,7 @@ export class EarlyMoveSentinel {
       last_tick_at:this.lastTickAt,
       last_reconcile_at:this.lastReconcileAt,
       last_error:this.lastError,
+      pulse_symbols_tracked:this.pulseHistory.size,
       queued_deep_scans:this.deepQueue.length,
       active_deep_scans:this.deepActive,
       pre_explosion_scans_tracked:this.lastEarlyScanAt.size,
@@ -712,10 +741,22 @@ export class EarlyMoveSentinel {
     const previous=Number(prev.priceChange24h), current=Number(row.priceChange24h);
     if(!Number.isFinite(previous)||!Number.isFinite(current))return;
     const delta=current-previous;
-    const wakeCross=previous<this.config.earlyWakeTriggerPct&&current>=this.config.earlyWakeTriggerPct&&current<=this.config.earlyWakeMax24hMovePct;
+    const pulse=buildMarketPulse(prev,row,this.pulseHistory.get(symbol)||[]);
+    const history=this.pulseHistory.get(symbol)||[];
+    if(Number.isFinite(pulse.volume_rate)||Number.isFinite(pulse.trade_rate)){
+      history.push({volume_rate:pulse.volume_rate,trade_rate:pulse.trade_rate,at:this.clock()});
+      while(history.length>8)history.shift();
+      this.pulseHistory.set(symbol,history);
+    }
+    const pulseWake=Number(pulse.score)>=74&&(
+      Number(pulse.price_delta_pct)>=0.18 ||
+      Number(pulse.volume_ratio)>=1.7 ||
+      Number(pulse.trade_ratio)>=1.55
+    )&&current>=-0.5&&current<=this.config.earlyWakeMax24hMovePct;
+    const wakeCross=previous<this.config.earlyWakeTriggerPct&&current>=this.config.earlyWakeTriggerPct&&current<=this.config.earlyWakeMax24hPct;
     const wakeImpulse=delta>=this.config.earlyWakeDeltaPct&&current>=0&&current<=this.config.earlyWakeMax24hMovePct;
-    if(wakeCross||wakeImpulse){
-      this.queueDeep(symbol,row,{movePct:current,previousMovePct:previous,deltaPct:delta,type:'EARLY_WAKE_TICKER_PULSE'},'EARLY_WAKE');
+    if(wakeCross||wakeImpulse||pulseWake){
+      this.queueDeep(symbol,row,{movePct:current,previousMovePct:previous,deltaPct:delta,type:pulseWake?'MARKET_PULSE_EARLY_WAKE':'EARLY_WAKE_TICKER_PULSE',pulse},'EARLY_WAKE');
     }
     const crossedUp=previous<this.config.thresholdPct&&current>=this.config.thresholdPct;
     const crossedDown=previous>-this.config.thresholdPct&&current<=-this.config.thresholdPct;
