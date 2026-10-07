@@ -119,6 +119,7 @@ var streaksEl=document.getElementById('streaks');
 var busy=false;
 var cacheKey='radarx.whale.intelligence.v2';
 var cacheTtl=5*60*1000;
+var pageDead=false;
 
 function esc(v){
   return String(v===null||v===undefined?'':v).replace(/[&<>"']/g,function(ch){
@@ -215,7 +216,7 @@ function renderReport(body){
     '<div class="reportBox"><b>المصدر</b><span>Binance Public REST: aggTrades + depth + closed klines.</span></div>';
 }
 async function load(force){
-  if(busy)return;
+  if(pageDead||busy)return;
   var cached=!force?readCache():null;
   if(cached){
     render(cached);renderReport(cached);
@@ -254,6 +255,7 @@ document.getElementById('stopBtn').addEventListener('click',async function(){
 });
 load(false);
 setInterval(function(){load(false);},60000);
+window.addEventListener('pagehide',function(){pageDead=true;},{once:true,capture:true});
 </script>
 </body>
 </html>
