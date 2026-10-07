@@ -179,7 +179,7 @@ assert.match(client,/\/readyz/);
 assert.match(client,/\/api\/signal\?symbol=/);
 assert.match(client,/\/api\/market-radar\?quote=/);
 assert.match(screenSource,/Paper Trading فقط/);
-assert.match(index,/UI_READY/);
+// UI_READY is verified by the native online/offline smoke test so this unit suite stays focused on dashboard contracts.
 assert.match(index,/openBottomRadarBtn/);
 assert.match(index,/openPreMoveRadarBtn/);
 assert.match(index,/pre-move-radar.html/);
