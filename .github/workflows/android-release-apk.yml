@@ -17,6 +17,7 @@ on:
       - bottom-reversal-radar-page
       - phase6-radar4-independent-microstructure
       - feature-coin-hunter-20261006-android
+      - android-whale-intelligence-v2-build224-20261007
       - android-build224-whale-accumulation-v3-20261007
   workflow_dispatch:
 
@@ -311,6 +312,8 @@ jobs:
           test -s android/app/src/main/assets/manifest.json
           test -s android/app/src/main/assets/radar8-lightning.html
           test -s android/app/src/main/assets/coin-hunter-radar.html
+          test -s android/app/src/main/assets/whale-accumulation-radar.html
+          grep -Fq 'whale-accumulation-radar.html' android/app/src/main/assets/index.html
           grep -Fq 'coin-hunter-radar.html' android/app/src/main/assets/index.html
           node --check android/app/src/main/assets/radarx-radar-screen.mjs
           grep -Fq 'radar8-lightning.html' android/app/src/main/assets/index.html
