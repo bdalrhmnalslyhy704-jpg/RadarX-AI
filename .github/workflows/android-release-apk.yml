@@ -15,6 +15,9 @@ on:
       - tradli-connectivity-native-screen
       - bottom-reversal-radar-page
       - phase6-radar4-independent-microstructure
+  pull_request:
+    branches:
+      - baseline/build224-official
   workflow_dispatch:
 
 permissions:
