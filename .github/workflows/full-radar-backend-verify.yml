@@ -5,6 +5,7 @@ on:
       - backend-full-radars-radar8v2-20261006
       - radar-quality-v2-build224-20261007
       - radar-quality-v2-1-build224-20261007
+      - radarx-build224-whale-accumulation-v3-20261007
   workflow_dispatch:
 permissions:
   contents: read
@@ -24,7 +25,7 @@ jobs:
       - name: Syntax guards
         run: |
           set -euo pipefail
-          for f in phase2/server.mjs phase2/http/api.mjs phase2/config.mjs phase2/core/store.mjs phase2/core/early-expansion-radar.mjs phase2/core/radar-prebreakout-engine.mjs phase2/core/radar-notification-gate.mjs phase2/core/al-muqawim-radar.mjs phase2/core/doomsday-radar.mjs phase2/core/professor-radar.mjs phase2/core/kahir-radar.mjs phase2/core/strong-move-radar.mjs phase2/core/liquidity-absorption-radar.mjs phase2/core/rotation-lag-radar.mjs phase2/core/early-move-sentinel.mjs; do node --check "$f"; done
+          for f in phase2/server.mjs phase2/http/api.mjs phase2/config.mjs phase2/core/store.mjs phase2/core/whale-accumulation-radar.mjs phase2/core/radar-quality-v3.mjs phase2/core/early-expansion-radar.mjs phase2/core/radar-prebreakout-engine.mjs phase2/core/radar-notification-gate.mjs phase2/core/al-muqawim-radar.mjs phase2/core/doomsday-radar.mjs phase2/core/professor-radar.mjs phase2/core/kahir-radar.mjs phase2/core/strong-move-radar.mjs phase2/core/liquidity-absorption-radar.mjs phase2/core/rotation-lag-radar.mjs phase2/core/early-move-sentinel.mjs; do node --check "$f"; done
       - name: Regression tests
         run: npm test
       - name: Route presence guard
@@ -37,7 +38,16 @@ jobs:
           grep -Fq "/api/professor-radar" phase2/http/api.mjs
           grep -Fq "/api/kahir-radar" phase2/http/api.mjs
           grep -Fq "/api/early-expansion-radar" phase2/http/api.mjs
+          grep -Fq "/api/whale-accumulation-radar" phase2/http/api.mjs
           grep -Fq "radar:'EARLY_EXPANSION_RADAR'" phase2/http/api.mjs
+      - name: Verify Whale Accumulation public contract
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          BASE="http://127.0.0.1:8080"
+          echo "Contract source check only; route must exist in source."
+          grep -Fq "/api/whale-accumulation-radar" phase2/http/api.mjs
+          grep -Fq "WHALE_ACCUMULATION_RADAR" phase2/core/whale-accumulation-radar.mjs
       - name: Paper-only guard
         run: |
           set -euo pipefail

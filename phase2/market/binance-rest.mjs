@@ -85,5 +85,6 @@ export class RestClient {
     }))};
   }
   depth(symbol,limit=100){return this.request('/api/v3/depth',{symbol,limit});}
+  aggTrades(symbol,opts={}){return this.request('/api/v3/aggTrades',{symbol,limit:opts.limit??1000,startTime:opts.startTime,endTime:opts.endTime});}
   ticker24h(symbol){return this.request('/api/v3/ticker/24hr',{symbol});}
 }

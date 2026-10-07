@@ -11,7 +11,9 @@ const PROFILES=Object.freeze({
   KAHIR_RADAR:{minScore:91,minData:88,minConfirmations:8,minCategoryHits:5,minLiquidity:78,globalCooldownMs:18*60*1000,priority:4},
   DOOMSDAY_RADAR:{minScore:92,minData:88,minConfirmations:8,minCategoryHits:5,minLiquidity:78,globalCooldownMs:15*60*1000,priority:5},
   PROFESSOR_RADAR:{minScore:82,minData:85,minConfirmations:0,minCategoryHits:0,minLiquidity:0,globalCooldownMs:30*60*1000,priority:3},
-  EARLY_EXPANSION_RADAR:{minScore:82,minData:70,minConfirmations:0,minCategoryHits:0,minLiquidity:60,globalCooldownMs:10*60*1000,priority:4}
+  EARLY_EXPANSION_RADAR:{minScore:82,minData:70,minConfirmations:0,minCategoryHits:0,minLiquidity:60,globalCooldownMs:10*60*1000,priority:4},
+  COIN_HUNTER_RADAR:{minScore:86,minData:80,minConfirmations:0,minCategoryHits:0,minLiquidity:65,globalCooldownMs:12*60*1000,priority:4},
+  WHALE_ACCUMULATION_RADAR:{minScore:88,minData:80,minConfirmations:7,minCategoryHits:5,minLiquidity:70,globalCooldownMs:14*60*1000,priority:5}
 });
 
 const recentBySymbol=new Map();
@@ -71,7 +73,9 @@ function acceptedStrategiesOf(alert){
 }
 
 function criticalRisk(alert){
-  const risks=arr(alert?.risk_flags).map(x=>String(x).toUpperCase());
+  const quality=alert?.radar_quality_v3||null;
+  const qualityRisks=quality?.hard_fail?['RADAR_QUALITY_HARD_FAIL']:(Number(quality?.historical_followthrough_samples)>=5&&Number(quality?.historical_followthrough_score)<42?['HISTORICAL_FOLLOWTHROUGH_WEAK']:[]);
+  const risks=[...arr(alert?.risk_flags),...qualityRisks].map(x=>String(x).toUpperCase());
   const gateRisks=arr(alert?.elite_gate?.risk_flags).map(x=>String(x).toUpperCase());
   const all=[...risks,...gateRisks];
   return all.filter(x=>/ALREADY_MOVED|ALREADY_EXTENDED|EXTENDED_CHASE|DATA_QUALITY|NO_PRIMARY_TRIGGER|LOW_CONFLUENCE|DISJOINTED|FLOW_WITHOUT|VOLUME_WITHOUT|LIQUIDITY_TOO_WEAK|RESISTANCE_TOO_NEAR|CHAS(E|ING)/.test(x));

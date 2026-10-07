@@ -1,3 +1,4 @@
+import {evaluateRadarQuality} from './radar-quality-v3.mjs';
 export const RADAR_NAMES=Object.freeze({
   EARLY_MOVE_RADAR:'Radar 1 — المدمر',
   STRONG_MOVE_RADAR:'Radar 2 — ملك الظلام',
@@ -8,7 +9,8 @@ export const RADAR_NAMES=Object.freeze({
   PROFESSOR_RADAR:'البروفيسور — استخبارات عامة',
   ALMUQAWIM_RADAR:'Radar 7 — المقاوم',
   EARLY_EXPANSION_RADAR:'Radar 8 — البرق',
-  COIN_HUNTER_RADAR:'🎯 صائد العملات'
+  COIN_HUNTER_RADAR:'🎯 صائد العملات',
+  WHALE_ACCUMULATION_RADAR:'🐋 تجمع الحيتان'
 });
 export const RADAR_PROFILES=Object.freeze({
   EARLY_MOVE_RADAR:Object.freeze({
@@ -76,6 +78,14 @@ export const RADAR_PROFILES=Object.freeze({
     algorithms:['Daily Mover Learning','Adaptive Leader Fingerprint','Volume Acceleration','Trade-Count Acceleration','Taker Buy Pressure','Higher-Low Structure','EMA20/EMA50','Bollinger Compression','Resistance Room','Relative Strength vs BTC','Anti-Chase Extension Gate','Liquidity Filter'],
     guardrails:['Spot فقط','Paper فقط','شموع مغلقة فقط','يرفض التمدد','لا يضمن الربح أو الارتفاع','لا أسعار أو صفقات وهمية']
   }),
+  WHALE_ACCUMULATION_RADAR:Object.freeze({
+    name:RADAR_NAMES.WHALE_ACCUMULATION_RADAR,icon:'🐋',color:'#ffd166',
+    mission:'رصد بصمة التجميع الكبير عبر الصفقات الكبيرة، تدفق الشراء، امتصاص البيع وعمق الطلب قبل التوسع.',
+    strength:'يعطي تقريرًا مفصلًا عن Large-Order Footprint؛ لا يدّعي معرفة هوية المتداول.',
+    strategy:'Large Print Flow + Taker Pressure + Absorption + Orderbook Imbalance + Support Persistence',
+    timeframes:['1m','5m'],algorithms:['Large AggTrade Prints','Large Buy/Sell Notional','Repeat Buy Pressure','Print Acceleration','Seller Absorption','Bid/Ask Depth','Support Persistence','Higher Lows','5m Confirmation'],
+    guardrails:['Spot فقط','Closed candles only','Public market data only','No trader identity claim','Anti-chase','Paper only']
+  }),
   ALMUQAWIM_RADAR:Object.freeze({
     name:RADAR_NAMES.ALMUQAWIM_RADAR,icon:'🛡️',color:'#38bdf8',
     mission:'حارس اتجاه السوق: لا يطارد الحركة؛ يحدد الاتجاه من هيكل القمم والقيعان وخط الاتجاه والمتوسط وتوافق الإطارات.',
@@ -118,7 +128,9 @@ export function radarPowerScore(alert){
     LIQUIDITY_ABSORPTION_RADAR:alert?.liquidity_absorption,
     DOOMSDAY_RADAR:alert?.doomsday,
     ALMUQAWIM_RADAR:alert?.almuqawim,
-    PROFESSOR_RADAR:alert?.professor
+    PROFESSOR_RADAR:alert?.professor,
+    COIN_HUNTER_RADAR:alert?.factors||alert?.coin_hunter||{},
+    WHALE_ACCUMULATION_RADAR:alert?.whale_accumulation||{}
   };
   const componentMean=meanNumbers(collectObjectScores(blocks[id]));
   const dataQuality=clamp100(alert?.data_quality??alert?.data_status?.data_quality??100);
@@ -152,10 +164,12 @@ export function decorateRadarAlert(alert,radarName){
   const radar=String(alert?.radar||'').toUpperCase();
   const radar_v2=radarPowerScore(alert);
   const profile=RADAR_PROFILES[radar]||null;
+  const quality_v3=evaluateRadarQuality(alert);
   return {...alert,radar_name:alert?.radar_name||radarName||RADAR_NAMES[radar]||'RadarX',
     radar_profile:profile,
     radar_v2,
     radar_power_score:radar_v2.score,
+    radar_quality_v3:quality_v3,
     detected_at:at,
     detected_at_iso:alert?.detected_at_iso||new Date(at).toISOString(),
     detected_time_12h:alert?.detected_time_12h||formatRadarTime12h(at),
