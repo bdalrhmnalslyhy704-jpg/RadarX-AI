@@ -417,24 +417,37 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         }
       }
       if(u.pathname==='/api/coin-hunter-radar'&&req.method==='GET'){
-        return send(res,503,{
-          error:'COIN_HUNTER_RADAR_UNAVAILABLE',
-          radar:'COIN_HUNTER_RADAR',
-          radar_name:'🎯 صائد العملات',
-          candidates:[],
-          meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
-          data_policy:{closed_candles_only:true,no_fake_data:true,spot_only:true}
-        });
+        if(!coinHunterRadar)return send(res,503,{error:'COIN_HUNTER_RADAR_UNAVAILABLE',radar:'COIN_HUNTER_RADAR',radar_name:'🎯 صائد العملات',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},data_policy:{closed_candles_only:true,no_fake_data:true,spot_only:true}});
+        const quote=String(u.searchParams.get('quote')||config.coinHunterRadar?.quote||'USDT').trim().toUpperCase();
+        const limit=Math.max(1,Math.min(50,Math.trunc(Number(u.searchParams.get('limit')||16))));
+        const runNow=String(u.searchParams.get('scan')||'')==='1';
+        try{
+          if(runNow&&typeof coinHunterRadar.scan==='function')await coinHunterRadar.scan(quote);
+          const snapshot=coinHunterRadar.snapshot(limit,quote);
+          const health=coinHunterRadar.health?.()||{running:false};
+          return send(res,200,{...snapshot,monitoring:health,meta:{...(snapshot.meta||{}),live:health.running===true,radar:'COIN_HUNTER_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},scan:{requested:runNow,completed:health.last_scan_at!=null,error:health.last_error||null}});
+        }catch(e){
+          const snapshot=coinHunterRadar.snapshot?.(limit,quote)||{radar:'COIN_HUNTER_RADAR',radar_name:'🎯 صائد العملات',candidates:[]};
+          const health=coinHunterRadar.health?.()||{running:false};
+          return send(res,200,{...snapshot,status:'not_ready',error:String(e?.message??e),monitoring:health,scan:{requested:runNow,completed:false,error:String(e?.message??e)},meta:{...(snapshot.meta||{}),live:false,radar:'COIN_HUNTER_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        }
       }
       if(u.pathname==='/api/whale-accumulation-radar'&&req.method==='GET'){
-        return send(res,503,{
-          error:'WHALE_ACCUMULATION_RADAR_UNAVAILABLE',
-          radar:'WHALE_ACCUMULATION_RADAR',
-          radar_name:'🐋 تجمع الحيتان',
-          candidates:[],
-          confirmed_count:0,
-          meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}
-        });
+        if(!whaleAccumulationRadar)return send(res,503,{error:'WHALE_ACCUMULATION_RADAR_UNAVAILABLE',radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان',candidates:[],confirmed_count:0,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        const limit=Math.max(1,Math.min(50,Math.trunc(Number(u.searchParams.get('limit')||20))));
+        const runNow=String(u.searchParams.get('scan')||'')==='1';
+        try{
+          const before=whaleAccumulationRadar.health?.()||{};
+          if(runNow&&before.busy!==true&&typeof whaleAccumulationRadar.tick==='function')await whaleAccumulationRadar.tick();
+          const snapshot=whaleAccumulationRadar.snapshot?.(limit)||{radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان',candidates:[],confirmed_count:0};
+          const health=whaleAccumulationRadar.health?.()||{running:false};
+          const alerts=typeof store.readWhaleAccumulationAlerts==='function'?await store.readWhaleAccumulationAlerts({limit}):[];
+          return send(res,200,{...snapshot,alerts,monitoring:health,scan:{requested:runNow,completed:health.last_scan_at!=null,error:health.last_error||null},meta:{...(snapshot.meta||{}),live:health.running===true,radar:'WHALE_ACCUMULATION_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        }catch(e){
+          const snapshot=whaleAccumulationRadar.snapshot?.(limit)||{radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان',candidates:[],confirmed_count:0};
+          const health=whaleAccumulationRadar.health?.()||{running:false};
+          return send(res,200,{...snapshot,status:'not_ready',error:String(e?.message??e),alerts:[],monitoring:health,scan:{requested:runNow,completed:false,error:String(e?.message??e)},meta:{...(snapshot.meta||{}),live:false,radar:'WHALE_ACCUMULATION_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        }
       }
       if(u.pathname==='/api/multi-analyst'&&req.method==='GET'){
         if(!multiAnalystRadar)return send(res,503,{error:'MULTI_ANALYST_UNAVAILABLE',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST'}});
@@ -444,7 +457,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         try{
           let snapshot=multiAnalystRadar.getCached({quote});
           if(runNow||!snapshot)snapshot=await multiAnalystRadar.scan({quote,limit});
-          return send(res,200,snapshot);
+          return send(res,200,{...snapshot,radar:'MULTI_ANALYST'});
         }catch(e){
           const cached=multiAnalystRadar.getCached({quote})||null;
           return send(res,200,{
