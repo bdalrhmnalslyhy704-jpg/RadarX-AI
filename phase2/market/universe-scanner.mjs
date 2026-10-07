@@ -19,7 +19,10 @@ export const MARKET_RADAR_DEFAULTS = Object.freeze({
   maxTriggerAgeMs: 30 * 60 * 1000,
   retryAttempts: 2,
   retryBaseMs: 200,
-  maxBackoffMs: 2000
+  maxBackoffMs: 2000,
+  bottomDiscoveryPool: 50,
+  bottomDeepConcurrency: 8,
+  bottomDeepKlines: 180
 });
 
 const sleepDefault = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -130,6 +133,56 @@ export function rankTickerRows(tickers, symbols, {
       a.symbol.localeCompare(b.symbol)
     )
     .slice(0, Math.max(0, Math.trunc(limit)));
+}
+
+export function rankBottomTickerRows(tickers, symbols, {
+  minQuoteVolume24h = MARKET_RADAR_DEFAULTS.minQuoteVolume24h,
+  limit = MARKET_RADAR_DEFAULTS.bottomDiscoveryPool
+} = {}) {
+  const allowed = new Set(symbols.map(x => x.symbol));
+  const rows = (Array.isArray(tickers) ? tickers : [])
+    .map(x => normalizeTickerRow(x, symbols[0]?.quoteAsset || 'USDT'))
+    .filter(Boolean)
+    .filter(x => allowed.has(x.symbol))
+    .filter(x => x.quoteVolume24h >= minQuoteVolume24h);
+
+  const maxVolume = Math.max(minQuoteVolume24h * 1000, ...rows.map(x => x.quoteVolume24h));
+  const maxTrades = Math.max(1000000, ...rows.map(x => x.tradeCount24h));
+
+  return rows
+    .map(x => {
+      const range = Number.isFinite(x.highPrice24h) && Number.isFinite(x.lowPrice24h) && x.highPrice24h > x.lowPrice24h
+        ? x.highPrice24h - x.lowPrice24h
+        : null;
+      const position = range && Number.isFinite(x.lastPrice)
+        ? clamp((x.lastPrice - x.lowPrice24h) / range * 100)
+        : 50;
+      const drawdownPct = x.highPrice24h > 0
+        ? clamp((x.highPrice24h - x.lastPrice) / x.highPrice24h * 100)
+        : 0;
+      const proximityScore = 100 - position;
+      const drawdownScore = clamp(drawdownPct * 5);
+      const sellOffScore = clamp(50 - x.priceChange24h * 4);
+      const liquidityScore = logNorm(x.quoteVolume24h, minQuoteVolume24h, maxVolume);
+      const activityScore = logNorm(x.tradeCount24h, 100, maxTrades);
+      return {
+        ...x,
+        bottom_discovery_score:
+          proximityScore * 0.38 +
+          drawdownScore * 0.27 +
+          sellOffScore * 0.15 +
+          liquidityScore * 0.12 +
+          activityScore * 0.08,
+        range_position_pct: position,
+        drawdown_from_high_pct: drawdownPct
+      };
+    })
+    .sort((a, b) =>
+      b.bottom_discovery_score - a.bottom_discovery_score ||
+      b.quoteVolume24h - a.quoteVolume24h ||
+      a.symbol.localeCompare(b.symbol)
+    )
+    .slice(0, Math.max(1, Math.trunc(limit)));
 }
 
 function normalizeRawKlines(rows, source, now) {
@@ -919,7 +972,8 @@ export function buildCandidateContract({
   now,
   minDataQuality = MARKET_RADAR_DEFAULTS.minDataQuality,
   minLiquidityQuality = MARKET_RADAR_DEFAULTS.minLiquidityQuality,
-  maxTriggerAgeMs = MARKET_RADAR_DEFAULTS.maxTriggerAgeMs
+  maxTriggerAgeMs = MARKET_RADAR_DEFAULTS.maxTriggerAgeMs,
+  includeAnalysisPayload = false
 }) {
   const symbol = ticker.symbol;
   const series = deep.series || {};
@@ -1064,7 +1118,8 @@ export function buildCandidateContract({
       fetch_age_ms: Number.isFinite(deep.minFetchAgeMs) ? Math.max(0, Math.trunc(deep.minFetchAgeMs)) : null
     },
     paper_trading: true,
-    real_order_execution: false
+    real_order_execution: false,
+    ...(includeAnalysisPayload ? {_analysis: Object.freeze({series, depth: deep.depth, whaleTrades: deep.whaleTrades, fast: deep.fast, liquidity, evaluation, completedAt: deep.completedAt})} : {})
   };
 }
 
@@ -1237,13 +1292,15 @@ export class MarketUniverseScanner {
     const klinesSources = [];
     let depthRaw = null;
     let depthSource = null;
+    let whaleTradesRaw = null;
+    let whaleTradesSource = null;
     let fastDeep = {interval:null,candles:[],source:null};
     let error = null;
 
     try {
       const fastInterval=String(options.fastInterval||'').trim();
       const fastLimit=Math.max(40,Math.trunc(Number(options.fastKlines)||96));
-      const [tfResults, depth, fastResult] = await Promise.all([
+      const [tfResults, depth, whaleTrades, fastResult] = await Promise.all([
         Promise.all(
           ['4h','1h','15m'].map(async tf => {
             const r = await this.fetchSeries(ticker.symbol, tf, klinesLimit);
@@ -1258,6 +1315,9 @@ export class MarketUniverseScanner {
           })
         ),
         this.fetchDepth(ticker.symbol),
+        options.includeWhaleFlow
+          ? this.requestOnce('/api/v3/aggTrades',{symbol:ticker.symbol,limit:500})
+          : Promise.resolve(null),
         fastInterval ? this.fetchSeries(ticker.symbol, fastInterval, fastLimit) : Promise.resolve(null)
       ]);
       for (const r of tfResults) {
@@ -1272,6 +1332,8 @@ export class MarketUniverseScanner {
       fastDeep={interval:fastInterval||null,candles:fastCandles,source:fastResult?.source??null};
       depthRaw = depth?.data ?? depth;
       depthSource = depth?.source ?? null;
+      whaleTradesRaw = whaleTrades?.data ?? null;
+      whaleTradesSource = whaleTrades?.source ?? null;
     } catch (e) {
       error = e;
     }
@@ -1299,12 +1361,14 @@ export class MarketUniverseScanner {
         evaluation,
         liquidity,
         depth: depthRaw,
+        whaleTrades: whaleTradesRaw,
         sources: {
           exchangeInfo: sources.exchangeInfo,
           ticker: sources.ticker,
           klines: klinesSources,
           fastKlines: fastDeep.source,
-          depth: depthSource
+          depth: depthSource,
+          whaleTrades: whaleTradesSource
         },
         completedAt,
         minFetchAgeMs: fetchAges.filter(Number.isFinite).length
@@ -1316,10 +1380,89 @@ export class MarketUniverseScanner {
       now: completedAt,
       minDataQuality: this.config.minDataQuality,
       minLiquidityQuality: this.config.minLiquidityQuality,
-      maxTriggerAgeMs: this.config.maxTriggerAgeMs
+      maxTriggerAgeMs: this.config.maxTriggerAgeMs,
+      includeAnalysisPayload: Boolean(options.includeAnalysisPayload)
     });
 
     return candidate;
+  }
+
+  async scanBottom({ quote = this.config.quote, limit = this.config.scanLimit } = {}) {
+    const startedAt = this.clock();
+    const normalizedQuote = String(quote || this.config.quote).trim().toUpperCase();
+    if (!/^[A-Z]{2,10}$/.test(normalizedQuote)) throw new Error('INVALID_QUOTE');
+
+    this._requests = new Map();
+
+    const info = await this.exchangeInfo(normalizedQuote);
+    const universe = buildSpotUniverse(info.data, normalizedQuote);
+    const tickerResponse = await this.ticker24h();
+    const requested = normalizeRadarLimit(limit, {...this.config, maxScanLimit:50});
+    const discoveryLimit = Math.min(
+      Math.max(10, requested),
+      Math.max(10, Math.min(50, Number(this.config.bottomDiscoveryPool) || 50))
+    );
+    const discovery = rankBottomTickerRows(tickerResponse.data, universe, {
+      minQuoteVolume24h: this.config.minQuoteVolume24h,
+      limit: discoveryLimit
+    });
+
+    const deepConcurrency = Math.max(
+      1,
+      Math.min(12, Math.trunc(Number(this.config.bottomDeepConcurrency) || Math.max(this.config.deepConcurrency || 4, 8)))
+    );
+    const deepKlines = Math.max(
+      160,
+      Math.min(220, Math.trunc(Number(this.config.bottomDeepKlines) || 220))
+    );
+
+    const scanned = await boundedMap(
+      discovery,
+      deepConcurrency,
+      (ticker, i) => this.scanSymbol(
+        ticker,
+        i + 1,
+        {exchangeInfo: info.source, ticker: tickerResponse.source},
+        {klinesLimit: deepKlines}
+      )
+    );
+
+    const valid = scanned
+      .filter(Boolean)
+      .filter(x => x.data_status?.data_valid === true && Number.isFinite(Number(x.last_price)))
+      .sort((a, b) => {
+        const aa = Number(a.bottom_context?.metrics?.composite_algorithm_score);
+        const bb = Number(b.bottom_context?.metrics?.composite_algorithm_score);
+        return (Number.isFinite(bb) ? bb : -1) - (Number.isFinite(aa) ? aa : -1) ||
+          Number(b.liquidity_quality) - Number(a.liquidity_quality) ||
+          Number(b.quote_volume_24h) - Number(a.quote_volume_24h) ||
+          a.symbol.localeCompare(b.symbol);
+      });
+
+    const returned = valid.slice(0, requested);
+    return {
+      meta: {
+        live: returned.length > 0,
+        paper_trading: true,
+        real_order_execution: false,
+        confidence_score: 'UNKNOWN',
+        radar: 'BOTTOM_REVERSAL'
+      },
+      as_of: new Date(this.clock()).toISOString(),
+      source: 'Binance Public REST',
+      universe: {
+        requested,
+        discovered: discovery.length,
+        scanned: scanned.length,
+        returned: returned.length,
+        eligible_spot_symbols: universe.length,
+        ticker_rows: Array.isArray(tickerResponse.data) ? tickerResponse.data.length : 0,
+        min_quote_volume_24h: this.config.minQuoteVolume24h,
+        deep_scan_cap: discoveryLimit,
+        elapsed_ms: Math.max(0, this.clock() - startedAt)
+      },
+      candidates: returned
+    };
   }
 
   async scanPreMove({ quote = this.config.quote, limit = 30 } = {}) {

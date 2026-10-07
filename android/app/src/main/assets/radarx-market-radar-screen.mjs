@@ -82,7 +82,7 @@ const REASON_AR = Object.freeze({
 });
 
 function esc(value) {
-  return String(value ?? '').replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+  return String(value || '').replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
 }
 function safeNum(value, digits = 2) {
   const n = Number(value);
@@ -124,17 +124,17 @@ function directionLabel(direction) {
 }
 
 export function validateMarketRadarContract(response) {
-  const body = response?.body;
+  const body = response && response.body;
   if (!response || response.status !== 200 || response.ok !== true || !body || typeof body !== 'object') {
     return {valid:false, reason:'HTTP_ERROR', strategiesPerCandidate:0};
   }
-  if (body.meta?.paper_trading !== true ||
-      body.meta?.real_order_execution !== false ||
-      body.meta?.confidence_score !== 'UNKNOWN') {
+  if (body.meta && body.meta.paper_trading !== true ||
+      body.meta && body.meta.real_order_execution !== false ||
+      body.meta && body.meta.confidence_score !== 'UNKNOWN') {
     return {valid:false, reason:'PAPER_ONLY_CONTRACT_INVALID', strategiesPerCandidate:0};
   }
   const counts = Array.isArray(body.candidates)
-    ? body.candidates.map(candidate => Array.isArray(candidate?.strategies) ? candidate.strategies.length : 0)
+    ? body.candidates.map(candidate => Array.isArray(candidate && candidate.strategies) ? candidate.strategies.length : 0)
     : [];
   const supportedCounts = new Set([14, 15]);
   const invalidCount = counts.find(count => !supportedCounts.has(count));
@@ -155,7 +155,7 @@ export function validateMarketRadarContract(response) {
 }
 
 function fingerprintBadgeMarkup(candidate) {
-  const fp = candidate?.pre_breakout_fingerprint;
+  const fp = candidate && candidate.pre_breakout_fingerprint;
   if (!fp || typeof fp !== 'object') return '';
   const score = Number(fp.score);
   const trap = Number(fp.trapRisk);
@@ -170,35 +170,35 @@ function fingerprintBadgeMarkup(candidate) {
     '<span class="rx-chip ' + (trap <= 30 ? 'is-live' : trap <= 55 ? 'is-warn' : 'is-danger') + '">Trap ' + esc(Number.isFinite(trap) ? safeNum(trap,0) + '%' : '—') + '</span></div>' +
     '<div class="rx-grid rx-grid--3" style="margin-top:8px">' +
       '<div><span>Evidence</span><b>' + esc(Number.isFinite(evidence) ? evidence + ' / 8' : '—') + '</b></div>' +
-      '<div><span>Structure</span><b>' + esc(fp.evidence?.structure?.status || 'UNKNOWN') + '</b></div>' +
-      '<div><span>Volume</span><b>' + esc(fp.evidence?.volume?.status || 'UNKNOWN') + '</b></div>' +
+      '<div><span>Structure</span><b>' + esc(fp.evidence && fp.evidence.structure && fp.evidence.structure.status || 'UNKNOWN') + '</b></div>' +
+      '<div><span>Volume</span><b>' + esc(fp.evidence && fp.evidence.volume && fp.evidence.volume.status || 'UNKNOWN') + '</b></div>' +
     '</div>' +
     '<div class="rx-muted" style="margin-top:8px">' + esc(reasons || 'تتبع البصمة السلوكية قبل الحركة.') + '</div>' +
   '</div>';
 }
 
 function fingerprintDetailMarkup(candidate) {
-  const fp = candidate?.pre_breakout_fingerprint;
+  const fp = candidate && candidate.pre_breakout_fingerprint;
   if (!fp || typeof fp !== 'object') {
     return '<section class="rx-section"><h4>🟡 Pre-Breakout Fingerprint</h4><div class="rx-empty-inline">لا تتوفر بصمة ما قبل الاختراق لهذه النتيجة.</div></section>';
   }
   const e = fp.evidence || {};
   const row = (label, data, extra='') =>
-    '<div class="rx-evidence-row"><span>' + esc(label) + '</span><b>' + esc(String(data ?? 'غير متاح')) + '</b>' + (extra ? '<div class="rx-muted" style="margin-top:3px">' + esc(extra) + '</div>' : '') + '</div>';
+    '<div class="rx-evidence-row"><span>' + esc(label) + '</span><b>' + esc(String(data || 'غير متاح')) + '</b>' + (extra ? '<div class="rx-muted" style="margin-top:3px">' + esc(extra) + '</div>' : '') + '</div>';
   const evidenceHtml = [
-    row('Structure', e.structure?.status, 'Score: ' + safeNum(e.structure?.score,0)),
-    row('Compression', e.compression?.status, 'ATR ratio: ' + safeNum(e.compression?.atr_ratio,2) + ' · BB width ratio: ' + safeNum(e.compression?.bb_width_ratio,2)),
-    row('Volume', e.volume?.status, 'RVOL: ' + safeNum(e.volume?.rvol,2) + ' · acceleration: ' + safeNum(e.volume?.acceleration,2)),
-    row('Relative Power', e.relative_power?.status, 'Excess 20: ' + safeNum(e.relative_power?.excess_20,2) + '% · Excess 40: ' + safeNum(e.relative_power?.excess_40,2) + '%'),
-    row('Resistance', e.resistance?.status, 'Tests: ' + safeNum(e.resistance?.tests,0) + ' · remaining: ' + safeNum(fp.resistance?.remainingTests,0)),
-    row('Order Flow', e.order_flow?.status, 'OBI: ' + safeNum(e.order_flow?.obi,2) + ' · taker buy: ' + (Number.isFinite(Number(e.order_flow?.taker_buy_ratio)) ? safeNum(Number(e.order_flow.taker_buy_ratio)*100,1) + '%' : 'غير متاح')),
-    row('BTC / Market Regime', e.regime?.status, 'Regime score: ' + safeNum(e.regime?.score,0)),
-    row('Trigger', e.trigger?.status, 'BOS: ' + (fp.context?.breakout ? 'YES' : 'NO') + ' · Retest: ' + (fp.context?.retest ? 'YES' : 'NO'))
+    row('Structure', e.structure && e.structure.status, 'Score: ' + safeNum(e.structure && e.structure.score,0)),
+    row('Compression', e.compression && e.compression.status, 'ATR ratio: ' + safeNum(e.compression && e.compression.atr_ratio,2) + ' · BB width ratio: ' + safeNum(e.compression && e.compression.bb_width_ratio,2)),
+    row('Volume', e.volume && e.volume.status, 'RVOL: ' + safeNum(e.volume && e.volume.rvol,2) + ' · acceleration: ' + safeNum(e.volume && e.volume.acceleration,2)),
+    row('Relative Power', e.relative_power && e.relative_power.status, 'Excess 20: ' + safeNum(e.relative_power && e.relative_power.excess_20,2) + '% · Excess 40: ' + safeNum(e.relative_power && e.relative_power.excess_40,2) + '%'),
+    row('Resistance', e.resistance && e.resistance.status, 'Tests: ' + safeNum(e.resistance && e.resistance.tests,0) + ' · remaining: ' + safeNum(fp.resistance && fp.resistance.remainingTests,0)),
+    row('Order Flow', e.order_flow && e.order_flow.status, 'OBI: ' + safeNum(e.order_flow && e.order_flow.obi,2) + ' · taker buy: ' + (Number.isFinite(Number(e.order_flow && e.order_flow.taker_buy_ratio)) ? safeNum(Number(e.order_flow.taker_buy_ratio)*100,1) + '%' : 'غير متاح')),
+    row('BTC / Market Regime', e.regime && e.regime.status, 'Regime score: ' + safeNum(e.regime && e.regime.score,0)),
+    row('Trigger', e.trigger && e.trigger.status, 'BOS: ' + (fp.context && fp.context.breakout ? 'YES' : 'NO') + ' · Retest: ' + (fp.context && fp.context.retest ? 'YES' : 'NO'))
   ].join('');
   const journey = Array.isArray(fp.journey) && fp.journey.length
     ? fp.journey.map(x => '<span class="rx-chip is-info" style="margin:3px">' + esc(String(x.stage || '').replace(/-/g,' ')) + '</span>').join(' → ')
     : '<span class="rx-muted">لا توجد انتقالات تاريخية كافية.</span>';
-  const analogs = Array.isArray(fp.historical?.analogs) && fp.historical.analogs.length
+  const analogs = Array.isArray(fp.historical && fp.historical.analogs) && fp.historical.analogs.length
     ? fp.historical.analogs.map(a =>
         '<div class="rx-evidence-row"><span>' + esc(time(new Date(Number(a.at)).toISOString())) + '</span><b>Similarity ' + safeNum(a.similarity,1) + '%</b><div class="rx-muted" style="margin-top:3px">Forward max: ' + safeNum(a.forwardMaxReturnPct,2) + '% · Drawdown: ' + safeNum(a.forwardMaxDrawdownPct,2) + '% · ' + (a.successful ? 'Historical follow-through' : 'No follow-through') + '</div></div>'
       ).join('')
@@ -213,9 +213,9 @@ function fingerprintDetailMarkup(candidate) {
     '<div class="rx-evidence-stack" style="margin-top:10px">' + evidenceHtml + '</div>' +
     '<div class="rx-muted" style="margin-top:10px"><b>Journey:</b><br>' + journey + '</div>' +
     '<details class="rx-tech" style="margin-top:10px"><summary>History Engine</summary>' +
-      '<div class="rx-code-line">samples: ' + esc(fp.historical?.samples ?? 0) + '</div>' +
-      '<div class="rx-code-line">lookaheadBars: ' + esc(fp.historical?.lookaheadBars ?? 0) + '</div>' +
-      '<div class="rx-code-line">descriptiveSuccessRatePct: ' + esc(fp.historical?.descriptiveSuccessRatePct ?? 'UNKNOWN') + '</div>' +
+      '<div class="rx-code-line">samples: ' + esc(fp.historical && fp.historical.samples || 0) + '</div>' +
+      '<div class="rx-code-line">lookaheadBars: ' + esc(fp.historical && fp.historical.lookaheadBars || 0) + '</div>' +
+      '<div class="rx-code-line">descriptiveSuccessRatePct: ' + esc(fp.historical && fp.historical.descriptiveSuccessRatePct || 'UNKNOWN') + '</div>' +
       '<div class="rx-code-line" style="margin-top:6px">' + analogs + '</div>' +
     '</details>' +
   '</section>';
@@ -226,7 +226,7 @@ export function buildCandidateMarkup(candidate, index) {
   if (!eligible) {
     const state = candidateDataState(candidate);
     return '<article class="rx-card rx-card--excluded">' +
-      '<div class="rx-card__top"><div><span class="rx-symbol">' + esc(candidate?.symbol) + '</span><span class="rx-chip ' + stateClass(state) + '">' + esc(state === 'DATA_STALE' ? 'DATA STALE' : 'غير متاح') + '</span></div></div>' +
+      '<div class="rx-card__top"><div><span class="rx-symbol">' + esc(candidate && candidate.symbol) + '</span><span class="rx-chip ' + stateClass(state) + '">' + esc(state === 'DATA_STALE' ? 'DATA STALE' : 'غير متاح') + '</span></div></div>' +
       '<div class="rx-unavailable">غير متاح بسبب جودة البيانات</div>' +
       '<div class="rx-muted">لن يظهر هذا الأصل ضمن المرشحين الأقوى حتى تصبح البيانات حديثة وصالحة.</div>' +
       '<button type="button" class="rx-btn rx-btn--secondary rx-detail-button" data-detail-index="' + index + '">التفاصيل الفنية</button>' +
@@ -241,7 +241,7 @@ export function buildCandidateMarkup(candidate, index) {
       '<span class="rx-chip is-info">' + esc(signalStateLabel(candidate.signal_state)) + '</span></div>' +
     '<div class="rx-grid rx-grid--4">' +
       '<div><span>Score</span><b>' + esc(safeNum(candidate.overall_score, 1)) + '</b></div>' +
-      '<div><span>التغطية</span><b>' + esc(pct(candidate.coverage?.ratio)) + '</b></div>' +
+      '<div><span>التغطية</span><b>' + esc(pct(candidate && candidate.coverage && candidate.coverage.ratio)) + '</b></div>' +
       '<div><span>جودة البيانات</span><b>' + esc(safeNum(candidate.data_quality, 0)) + '</b></div>' +
       '<div><span>جودة السيولة</span><b>' + esc(safeNum(candidate.liquidity_quality, 0)) + '</b></div>' +
     '</div>' +
@@ -279,7 +279,7 @@ export function buildCandidateDetailMarkup(candidate) {
   const accepted = rows.filter(s => s.state === 'CONFIRMED' || s.state === 'CANDIDATE');
   const rejected = rows.filter(s => s.state === 'REJECTED');
   const insufficient = rows.filter(s => s.state === 'INSUFFICIENT_DATA');
-  const evidence = Object.entries(candidate?.evidence || {}).map(([key, value]) =>
+  const evidence = Object.entries(candidate && candidate.evidence || {}).map(([key, value]) =>
     '<div class="rx-evidence-row"><span>' + esc(key) + '</span><b>' + esc(typeof value === 'object' ? JSON.stringify(value) : value) + '</b></div>'
   ).join('');
 
@@ -299,7 +299,7 @@ export function buildCandidateDetailMarkup(candidate) {
         '<div><span>الحالة</span><b>' + esc(signalStateLabel(candidate.signal_state)) + '</b></div>' +
         '<div><span>أفضل استراتيجية</span><b>' + esc(friendlyStrategy(candidate.best_strategy)) + '</b></div>' +
         '<div><span>Score</span><b>' + esc(safeNum(candidate.overall_score,1)) + '</b></div>' +
-        '<div><span>التغطية</span><b>' + esc(pct(candidate.coverage?.ratio)) + '</b></div>' +
+        '<div><span>التغطية</span><b>' + esc(pct(candidate && candidate.coverage && candidate.coverage.ratio)) + '</b></div>' +
         '<div><span>تغير 24h</span><b>' + esc((candidate.price_change_24h >= 0 ? '+' : '') + safeNum(candidate.price_change_24h,2)) + '%</b></div>' +
       '</div>' +
     '</details>' +
@@ -317,14 +317,14 @@ export function buildCandidateDetailMarkup(candidate) {
       '<div class="rx-grid rx-grid--3">' +
         '<div><span>جودة البيانات</span><b>' + esc(safeNum(candidate.data_quality,0)) + '</b></div>' +
         '<div><span>جودة السيولة</span><b>' + esc(safeNum(candidate.liquidity_quality,0)) + '</b></div>' +
-        '<div><span>آخر تحديث</span><b>' + esc(time(candidate?.data_status?.updated_at || candidate?.data_status?.last_updated || candidate?.data_status?.source_time || candidate?.as_of)) + '</b></div>' +
+        '<div><span>آخر تحديث</span><b>' + esc(time(candidate && candidate.data_status && candidate.data_status.updated_at || candidate && candidate.data_status && candidate.data_status.last_updated || candidate && candidate.data_status && candidate.data_status.source_time || candidate && candidate.as_of)) + '</b></div>' +
       '</div>' +
     '</details>' +
     '<details class="rx-section"><summary>التفاصيل الفنية</summary>' +
       '<div class="rx-code-line">signal_state: ' + esc(candidate.signal_state) + '</div>' +
       '<div class="rx-code-line">data_status: ' + esc(JSON.stringify(candidate.data_status || {})) + '</div>' +
       '<div class="rx-code-line">reason_codes: ' + esc((candidate.reason_codes || []).join(' · ')) + '</div>' +
-      '<div class="rx-code-line">source: ' + esc(candidate?.data_status?.source || 'UNKNOWN') + '</div>' +
+      '<div class="rx-code-line">source: ' + esc(candidate && candidate.data_status && candidate.data_status.source || 'UNKNOWN') + '</div>' +
     '</details>' +
   '</div>';
 }
@@ -383,6 +383,10 @@ export function mountMarketRadarScreen(root, options = {}) {
   root.innerHTML = buildDashboardShell();
 
   const client = options.client || {getMarketRadar};
+  const CACHE_KEY='radarx.market.cache.v2';
+  const CACHE_TTL_MS=5*60*1000;
+  function readCache(){try{const raw=sessionStorage.getItem(CACHE_KEY);if(!raw)return null;const x=JSON.parse(raw);return x&&Number.isFinite(Number(x.savedAt))&&x.response&&(Date.now()-Number(x.savedAt)<CACHE_TTL_MS)?x:null;}catch(error){return null;}}
+  function writeCache(response){try{sessionStorage.setItem(CACHE_KEY,JSON.stringify({savedAt:Date.now(),response:response}));}catch(error){}}
   const state = {candidates: [], response:null, lastUpdate:null, mode:'FETCHING', destroyed:false};
 
   const nodes = {
@@ -451,10 +455,10 @@ export function mountMarketRadarScreen(root, options = {}) {
         if (!candidate) return;
         nodes.detailWrap.hidden = false;
         nodes.detailContent.innerHTML = buildCandidateDetailMarkup(candidate);
-        nodes.validList.closest('.rx-section')?.setAttribute('hidden','');
-        nodes.excludedList.closest('.rx-section')?.setAttribute('hidden','');
-        nodes.refresh.closest('.rx-action-row')?.setAttribute('hidden','');
-        nodes.detailWrap.scrollIntoView?.({behavior:'smooth',block:'start'});
+        (function(){var n=nodes.validList.closest('.rx-section');if(n)n.setAttribute('hidden','');})();
+        (function(){var n=nodes.excludedList.closest('.rx-section');if(n)n.setAttribute('hidden','');})();
+        (function(){var n=nodes.refresh.closest('.rx-action-row');if(n)n.setAttribute('hidden','');})();
+        nodes.detailWrap.scrollIntoView && nodes.detailWrap.scrollIntoView({behavior:'smooth',block:'start'});
       });
     });
   }
@@ -462,9 +466,9 @@ export function mountMarketRadarScreen(root, options = {}) {
   function closeDetail() {
     nodes.detailWrap.hidden = true;
     nodes.detailContent.innerHTML = '';
-    nodes.validList.closest('.rx-section')?.removeAttribute('hidden');
-    nodes.excludedList.closest('.rx-section')?.removeAttribute('hidden');
-    nodes.refresh.closest('.rx-action-row')?.removeAttribute('hidden');
+    (function(){var n=nodes.validList.closest('.rx-section');if(n)n.removeAttribute('hidden');})();
+    (function(){var n=nodes.excludedList.closest('.rx-section');if(n)n.removeAttribute('hidden');})();
+    (function(){var n=nodes.refresh.closest('.rx-action-row');if(n)n.removeAttribute('hidden');})();
   }
 
   function applyResponse(response) {
@@ -477,6 +481,7 @@ export function mountMarketRadarScreen(root, options = {}) {
     const mode = classifyMarketRadarResponse(response, navigator.onLine);
     state.candidates = normalized.candidates;
     state.response = response;
+    writeCache(response);
     state.lastUpdate = normalized.updatedAt || new Date().toISOString();
     const split = splitCandidates(state.candidates);
     nodes.updated.textContent = time(state.lastUpdate);
@@ -504,7 +509,7 @@ export function mountMarketRadarScreen(root, options = {}) {
   }
 
   function bindInlineRetry() {
-    root.querySelector('[data-rx-inline-retry]')?.addEventListener('click', load, {once:true});
+    (function(){var n=root.querySelector('[data-rx-inline-retry]');if(n)n.addEventListener('click', load, {once:true});})();
   }
 
   function fail(mode, detail) {
@@ -546,7 +551,7 @@ export function mountMarketRadarScreen(root, options = {}) {
       const response = result.response;
       const mode = classifyMarketRadarResponse(response, navigator.onLine);
       if (mode === 'RETRY') {
-        fail(navigator.onLine ? 'DATA_UNAVAILABLE' : 'OFFLINE', response?.error || 'RETRY_EXHAUSTED');
+        fail(navigator.onLine ? 'DATA_UNAVAILABLE' : 'OFFLINE', response && response.error || 'RETRY_EXHAUSTED');
         return;
       }
       if (mode === 'OFFLINE') {
@@ -554,13 +559,13 @@ export function mountMarketRadarScreen(root, options = {}) {
         return;
       }
       if (mode === 'DATA_UNAVAILABLE') {
-        fail('DATA_UNAVAILABLE', response?.error || response?.body?.error || 'تعذر الوصول إلى Market Radar.');
+        fail('DATA_UNAVAILABLE', response && response.error || response && response.body && response.body.error || 'تعذر الوصول إلى Market Radar.');
         return;
       }
       applyResponse(response);
     } catch (error) {
       console.error('RadarX Dashboard error:', error);
-      fail(navigator.onLine ? 'DATA_UNAVAILABLE' : 'OFFLINE', String(error?.message || error || 'UNKNOWN_ERROR'));
+      fail(navigator.onLine ? 'DATA_UNAVAILABLE' : 'OFFLINE', String(error && error.message || error || 'UNKNOWN_ERROR'));
     } finally {
       if (window.RadarXSmoke) {
         window.RadarXSmoke.state('SCAN_COMPLETE');
@@ -571,7 +576,7 @@ export function mountMarketRadarScreen(root, options = {}) {
 
   nodes.refresh.addEventListener('click', load);
   nodes.back.addEventListener('click', closeDetail);
-  nodes.top.addEventListener('click', () => root.scrollIntoView?.({behavior:'smooth',block:'start'}));
+  nodes.top.addEventListener('click', () => root.scrollIntoView && root.scrollIntoView({behavior:'smooth',block:'start'}));
   [nodes.sort, nodes.direction, nodes.signalState, nodes.strategy].forEach(node => node.addEventListener('change', renderLists));
 
   const online = () => load();
@@ -582,7 +587,13 @@ export function mountMarketRadarScreen(root, options = {}) {
   window.addEventListener('online', online);
   window.addEventListener('offline', offline);
 
-  load();
+  const cached=readCache();
+  if(cached){
+    applyResponse(cached.response);
+    if(window.RadarXSmoke)window.RadarXSmoke.state('SCAN_CACHED');
+  }else{
+    load();
+  }
 
   return {
     refresh: load,

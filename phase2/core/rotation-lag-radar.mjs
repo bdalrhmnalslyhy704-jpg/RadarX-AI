@@ -1,4 +1,6 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
+import {decorateRadarAlert} from './radar-alert-meta.mjs';
+import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -346,26 +348,29 @@ export function buildRotationAlert(candidate,now=Date.now()){
 const STABLE_BASES=new Set(['USDC','BUSD','FDUSD','TUSD','USDP','DAI','USDE','USD1']);
 
 export class RotationLagRadar {
-  constructor({rest,store,config={},clock=()=>Date.now(),logger=console}={}){
+  constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
-    this.rest=rest;this.store=store;this.clock=clock;this.logger=logger;
+    this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={
-      quote:'USDT',pollMs:30000,universeRefreshMs:5*60*1000,minQuoteVolume24h:750000,
-      rotationBatchSize:7,topLaggers:3,maxAbs24hMovePct:8,alertCooldownMs:10*60*1000,
-      minScore:78,minConfirmations:4,...config
+      quote:'USDT',pollMs:45000,universeRefreshMs:5*60*1000,minQuoteVolume24h:1000000,
+      rotationBatchSize:5,topLaggers:2,maxAbs24hMovePct:6,alertCooldownMs:15*60*1000,
+      minScore:82,minConfirmations:5,...config
     };
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
     this.lastScanAt=new Map();this.lastAlertAt=new Map();
-    this.alertCount=0;this.scans=0;this.lastError=null;this.lastScanAtMs=null;this.busy=false;
+    this.alertCount=0;this.scans=0;this.lastError=null;this.lastScanAtMs=null;this.busy=false;this.latestCandidates=new Map();
   }
 
-  async start(){
-    if(this.running)return;
+  start(){
+    if(this.running)return Promise.resolve();
     this.running=true;
-    this.refreshUniverse().catch(e=>this.noteError(e));
-    this.tick().catch(e=>this.noteError(e));
+    const initial=Promise.resolve()
+      .then(()=>this.refreshUniverse())
+      .then(()=>this.tick())
+      .catch(e=>{this.noteError(e);});
     this.timer=setInterval(()=>this.tick().catch(e=>this.noteError(e)),this.config.pollMs);
+    return initial;
   }
 
   async stop(){this.running=false;if(this.timer)clearInterval(this.timer);this.timer=null;}
@@ -433,11 +438,39 @@ export class RotationLagRadar {
       ticker:row,fifteen_min:f.candles,one_hour:h.candles,benchmarks
     },this.clock());
     this.scans++;
-    if(!alert.eligible||alert.rotation.score<this.config.minScore||alert.rotation.confirmations<this.config.minConfirmations)return alert;
+    this.latestCandidates.set(row.symbol,alert);
+    while(this.latestCandidates.size>60){
+      const first=this.latestCandidates.keys().next().value;
+      this.latestCandidates.delete(first);
+    }
+    const a=alert.rotation||{};
+    const cs=a.component_scores||{};
+    const m=a.metrics||{};
+    const gate=evaluateEliteGate({
+      radar:'ROTATION_LAG_RADAR',
+      direction:a.direction,
+      baseScore:a.score,
+      priceChange24h:row.priceChange24h,
+      liquidityScore:clamp(70+Math.log10(Math.max(1,row.quoteVolume24h/this.config.minQuoteVolume24h))*30),
+      dataQualityScore:90,
+      triggerScore:a.activation_score||50,
+      structureScore:Math.max(Number(cs.reclaim_or_reject)||0,Number(cs.value_acceptance)||0),
+      participationScore:Number(cs.silent_volume)||50,
+      flowScore:Math.max(Number(cs.mfi_turn)||0,Number(cs.rsi_turn)||0),
+      relativeScore:Math.max(Number(cs.lag)||0,Number(cs.resilience)||0),
+      momentumScore:Number(cs.stochastic_turn)||Number(cs.persistence)||50,
+      compressionScore:Number(cs.compression)||50,
+      confirmations:a.confirmations,
+      minConfirmations:6,minScore:86,max24hMovePct:5,requireTrigger:true,minCategoryHits:5
+    });
+    alert.elite_gate=gate;
+    if(!alert.eligible||a.score<this.config.minScore||a.confirmations<this.config.minConfirmations||!gate.eligible)return alert;
     const lastAlert=this.lastAlertAt.get(row.symbol)||0;
     if(this.clock()-lastAlert<this.config.alertCooldownMs)return alert;
     this.lastAlertAt.set(row.symbol,this.clock());
-    await this.store.appendRotationAlert(alert);
+    const decorated=decorateRadarAlert(alert,'Radar 3 — Rotation/Lag');
+    await this.store.appendRotationAlert(decorated);
+    if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
     this.alertCount++;
     return alert;
   }
@@ -457,11 +490,18 @@ export class RotationLagRadar {
     }finally{this.busy=false;}
   }
 
+  snapshot(limit=20){
+    const safeLimit=Math.max(1,Math.min(50,Math.trunc(Number(limit)||20)));
+    return [...this.latestCandidates.values()]
+      .sort((a,b)=>Number(b.processed_at||b.detected_at||0)-Number(a.processed_at||a.detected_at||0)||Number(b.opportunity_score||0)-Number(a.opportunity_score||0))
+      .slice(0,safeLimit);
+  }
+
   health(){
     return {
       running:this.running,radar:'ROTATION_LAG_RADAR',universe:this.universe.length,
       last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,
-      scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,busy:this.busy,
+      scans:this.scans,alerts_emitted:this.alertCount,candidate_count:this.latestCandidates.size,last_error:this.lastError,busy:this.busy,
       rest:this.rest?.health?.()||null,
       algorithms:[
         'CROSS_MARKET_LEAD_LAG','RELATIVE_STRENGTH_SPREAD','SILENT_VOLUME_PRICE_DISLOCATION',

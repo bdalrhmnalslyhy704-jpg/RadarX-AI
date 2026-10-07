@@ -14,9 +14,9 @@ const reasonMap={
 };
 
 export function rankPreMoveCandidates(body){
-  const rows=Array.isArray(body?.candidates)?body.candidates:[];
+  const rows=Array.isArray(body && body.candidates)?body.candidates:[];
   return rows
-    .filter(c=>c?.data_status?.data_valid===true&&c?.pre_move_context&&Number.isFinite(Number(c.pre_move_context.score)))
+    .filter(c=>c && c.data_status && c.data_status.data_valid===true && c.pre_move_context && Number.isFinite(Number(c.pre_move_context.score)))
     .map(c=>{
       const p=c.pre_move_context;
       const sessionReturn=num(p.session_return_pct,0);

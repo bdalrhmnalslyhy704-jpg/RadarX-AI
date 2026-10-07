@@ -12,10 +12,18 @@ import {MarketMonitor} from './core/monitor.mjs';
 import {EarlyMoveSentinel} from './core/early-move-sentinel.mjs';
 import {StrongMoveRadar} from './core/strong-move-radar.mjs';
 import {RotationLagRadar} from './core/rotation-lag-radar.mjs';
+import {LiquidityAbsorptionRadar} from './core/liquidity-absorption-radar.mjs';
+import {KahirRadar} from './core/kahir-radar.mjs';
+import {ProfessorRadar} from './core/professor-radar.mjs';
+import {DoomsdayRadar} from './core/doomsday-radar.mjs';
+import {AlMuqawimRadar} from './core/al-muqawim-radar.mjs';
+import {SymbolDeepAnalyzer} from './core/symbol-deep-analyzer.mjs';
 import {MarketUniverseScanner} from './market/universe-scanner.mjs';
 import {createApiServer} from './http/api.mjs';
 import {assertDeploymentEnvironment,assertReadOnlyStagingConfig} from './deploy/preflight.mjs';
 import {sanitizeLogMessage} from './runtime.mjs';
+import {MultiAnalystEngine} from './core/multi-analyst-engine.mjs';
+import {WhaleAccumulationRadar} from './core/whale-accumulation-radar.mjs';
 
 export async function startServer({
   config=CONFIG,
@@ -42,23 +50,59 @@ export async function startServer({
     deepConcurrency:moveConfig.deepConcurrency
   }});
   const moveSentinel=new EarlyMoveSentinel({
-    rest,store,config:moveConfig,logger,
+    rest,store,pushManager:push,config:moveConfig,logger,
     scannerFactory:()=>moveScanner,
     tickerWsFactory:opts=>new BinanceAllMarketTickerClient(opts)
   });
   const strongRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
-  const strongMoveRadar=new StrongMoveRadar({rest:strongRadarRest,store,config:config.strongMoveRadar||{},logger});
+  const strongMoveRadar=new StrongMoveRadar({rest:strongRadarRest,store,pushManager:push,config:config.strongMoveRadar||{},logger});
   const rotationRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
-  const rotationLagRadar=new RotationLagRadar({rest:rotationRadarRest,store,config:config.rotationRadar||{},logger});
-  await monitor.start();
-  await moveSentinel.start();
-  await strongMoveRadar.start();
-  await rotationLagRadar.start();
-  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar});
+  const rotationLagRadar=new RotationLagRadar({rest:rotationRadarRest,store,pushManager:push,config:config.rotationRadar||{},logger});
+  const liquidityRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  const liquidityAbsorptionRadar=new LiquidityAbsorptionRadar({rest:liquidityRadarRest,store,pushManager:push,config:config.liquidityAbsorptionRadar||{},logger});
+  const kahirRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  const kahirRadar=new KahirRadar({rest:kahirRadarRest,store,pushManager:push,config:config.kahirRadar||{},logger});
+  // The deep symbol scanner gets its own REST client so background radar traffic cannot
+  // race its endpoint selection. Prefer Binance's market-data-only mirror first; it is
+  // explicitly documented to serve depth, klines and 24h ticker without authentication.
+  const deepRestUrls=[
+    'https://data-api.binance.vision',
+    ...(config.rest.baseUrls??config.rest.urls??[])
+  ].filter((url,index,arr)=>arr.indexOf(url)===index);
+  const deepScanRest=new RestClient({...config.rest,baseUrls:deepRestUrls});
+  const symbolDeepAnalyzer=new SymbolDeepAnalyzer({rest:deepScanRest,config:config.symbolDeepScan||{}});
+  const professorRadar=new ProfessorRadar({rest,store,pushManager:push,deepAnalyzer:symbolDeepAnalyzer,config:config.professorRadar||{},logger});
+  const doomsdayRadar=new DoomsdayRadar({rest,store,pushManager:push,config:config.doomsdayRadar||{},logger});
+  const multiAnalystRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  const multiAnalystRadar=new MultiAnalystEngine({rest:multiAnalystRest,config:config.multiAnalyst||{}});
+  const whaleAccumulationRadar=new WhaleAccumulationRadar({rest,store,pushManager:push,config:config.whaleAccumulationRadar||{},logger});
+  const alMuqawimRadar=new AlMuqawimRadar({rest,store,pushManager:push,config:config.alMuqawimRadar||{},logger});
+  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,multiAnalystRadar,whaleAccumulationRadar});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
+  const safeStart=(name,instance)=>{
+    try{
+      const result=instance.start();
+      Promise.resolve(result).catch(error=>logger.warn?.(name+' start failed: '+String(error?.message??error)));
+    }catch(error){
+      logger.warn?.(name+' start failed: '+String(error?.message??error));
+    }
+  };
+  safeStart('MONITOR',monitor);
+  const autoStart=config.radarControl?.autostart!==false;
+  if(autoStart){
+    safeStart('RADAR1',moveSentinel);
+    safeStart('RADAR2',strongMoveRadar);
+    safeStart('RADAR3',rotationLagRadar);
+    safeStart('RADAR4',liquidityAbsorptionRadar);
+    safeStart('RADAR5',kahirRadar);
+    safeStart('RADAR6',doomsdayRadar);
+    safeStart('RADAR7',alMuqawimRadar);
+    safeStart('PROFESSOR_INTELLIGENCE',professorRadar);
+     safeStart('WHALE_ACCUMULATION',whaleAccumulationRadar);
+  }
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
-  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,store,rest,strongRadarRest,rotationRadarRest,push,close:async()=>{await rotationLagRadar.stop();await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
+  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,multiAnalystRadar,whaleAccumulationRadar,symbolDeepAnalyzer,store,rest,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,multiAnalystRest,push,close:async()=>{await professorRadar.stop();await alMuqawimRadar.stop();await doomsdayRadar.stop();await kahirRadar.stop();await liquidityAbsorptionRadar.stop();await rotationLagRadar.stop();await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
 }
 
 if(process.argv[1]&&resolve(fileURLToPath(import.meta.url))===resolve(process.argv[1])){

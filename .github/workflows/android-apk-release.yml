@@ -5,6 +5,7 @@ on:
     branches:
       - android-apk-embedded-v1
       - android-apk-fix-signal-client
+      - radarx-build185-almuqawim-20261006
   workflow_dispatch:
 
 permissions:

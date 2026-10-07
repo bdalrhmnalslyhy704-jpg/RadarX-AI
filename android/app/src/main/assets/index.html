@@ -28,6 +28,7 @@ header{position:sticky;top:0;z-index:10;margin:0 -14px 10px;padding:calc(10px + 
 main{width:min(980px,100%);margin:auto;padding:env(safe-area-inset-top) 14px calc(28px + env(safe-area-inset-bottom))}
 #marketRadarPanel{margin-top:10px}
 footer{padding:18px 4px;text-align:center;color:#8fa8b2;font-size:12px}
+.rx-health{border-color:#2a5a76;background:linear-gradient(145deg,#091b2b,#0b1520)}.rx-health-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px}.rx-h{padding:8px 9px;border:1px solid #234b63;border-radius:12px;font-size:10px;background:#08131d;display:flex;justify-content:space-between;gap:7px}.rx-h b{font-size:10px}.rx-h i{font-style:normal;color:#91a9ba}.rx-h.live{border-color:#267b61}.rx-h.live b{color:#63e6b4}.rx-h.off b{color:#ffd27c}.rx-h.err{border-color:#703844}.rx-h.err b{color:#ff8998}@media(max-width:560px){.rx-health-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -41,6 +42,27 @@ footer{padding:18px 4px;text-align:center;color:#8fa8b2;font-size:12px}
 <div class="rx-nav-card"><div><b>🧠 TRADLI Intelligence</b><small>صفحة مستقلة للتحليل المتقدم: Chart Lab • Verify • Advisor • Signals Hub • Supply/Demand • Order Desk</small></div><a id="openTradliBtn" class="rx-nav-link" href="./tradli.html">فتح TRADLI</a></div>
 <section class="rx-nav-card"><div><b>⚡ Pre‑Move Radar</b><small>يبحث عن العملة وهي ما زالت هادئة: تسارع الحجم، تدفق الشراء، القوة النسبية، الانكماش والهيكل قبل الاندفاع.</small></div><a id="openPreMoveRadarBtn" class="rx-nav-link" href="./pre-move-radar.html">رادار قبل الحركة</a></section>
 <section class="rx-nav-card"><div><b>🎯 Bottom Reversal Radar</b><small>يفحص العملات الهابطة ويقارن الضغط البيعي والشراء والزخم والانكماش والهيكل عبر 10 عوامل.</small></div><a id="openBottomRadarBtn" class="rx-nav-link secondary" href="./bottom-radar.html">فحص القيعان</a></section>
+<section class="rx-nav-card"><div><b>☠️ المدمر</b><small>صائد ما قبل الانفجار: بصمة حركة مبكرة، RVOL، تدفق شراء، استعادة EMA، الدعم/المقاومة وتوافق استراتيجيات.</small></div><a class="rx-nav-link" href="./radar1-destroyer.html">فتح المدمر</a></section>
+<section class="rx-nav-card"><div><b>🌑 ملك الظلام</b><small>صائد الانفجار الجاري: تسارع، حجم، عدد صفقات، Taker Flow، اختراق، VWAP وBB وATR مع تأكيد 5m.</small></div><a class="rx-nav-link" href="./radar2-dark-king.html">فتح ملك الظلام</a></section>
+<section class="rx-nav-card"><div><b>🃏 الجوكر</b><small>صائد دوران السيولة: يقارن العملة بـBTC/ETH ويبحث عن التحول في القوة النسبية وقبول القيمة.</small></div><a class="rx-nav-link" href="./radar3-joker.html">فتح الجوكر</a></section>
+<section class="rx-nav-card"><div><b>🧹 الكاسح</b><small>صائد امتصاص البيع: دفتر الأوامر، البائعون العالقون، البنية الدقيقة وتوازن المزاد قبل التحول.</small></div><a class="rx-nav-link" href="./radar4-sweeper.html">فتح الكاسح</a></section>
+<section class="rx-nav-card"><div><b>☄️ يوم القيامة</b><small>رادار الشرارة المفاجئة: يراقب الحركة القصيرة، تسارع الحجم والصفقات، Taker Flow، الانكماش، الاختراق والقوة النسبية ليصدر الإنذار قبل التمدد.</small></div><a class="rx-nav-link" href="./doomsday-radar.html">فتح يوم القيامة</a></section>
+<section class="rx-nav-card"><div><b>⚡ البرق 8</b><small>صائد ما قبل الارتفاع: يمسح Spot USDT كاملًا ثم يدور على 1m/5m ويجمع RVOL والصفقات والضغط والانكماش وVWAP/EMA وADX/MACD/RSI/OBV والـHigher-Lows والمقاومة والقوة النسبية والامتصاص.</small></div><a class="rx-nav-link" href="./radar8-lightning.html">فتح البرق</a></section>
+<section class="rx-nav-card"><div><b>🎯 صائد العملات</b><small>قناص انتقائي: يتعلم من أقوى عملات اليوم، يستخرج بصمتها، ثم يبحث عن عملة ما زالت مبكرة وغير ممددة وتطابق الشروط قبل الانطلاقة.</small></div><a class="rx-nav-link" href="./coin-hunter-radar.html">فتح صائد العملات</a></section>
+<section class="rx-nav-card"><div><b>🧠 البروفيسور</b><small>استخبارات البثوث العامة: يستخرج الصفقات التي يتحدثون عنها، يطابق الأخبار، ثم يطلب تأكيد السوق الحقيقي ويعطي: «رأيي…».</small></div><a class="rx-nav-link" href="./professor-radar.html">فتح البروفيسور</a></section>
+<section class="rx-nav-card"><div><b>🛡️ المقاوم</b><small>حارس اتجاه السوق: هيكل HH/HL أو LH/LL، خط الاتجاه، المتوسط المتحرك وتوافق 4H + 1H، مع تحذير عند مخالفة اتجاه الإطار الكبير.</small></div><a class="rx-nav-link secondary" href="./al-muqawim-radar.html">فتح المقاوم</a></section>
+<section class="rx-nav-card"><div><b>🐋 تجمع الحيتان</b><small>صائد بصمة التجميع الكبير: Large Prints، تدفق الشراء، امتصاص البيع، عمق الطلب واستمرارية الدعم مع تقرير تفصيلي.</small></div><a class="rx-nav-link" style="background:linear-gradient(135deg,#ffd166,#ff9f1c)" href="./whale-accumulation-radar.html">فتح تجمع الحيتان</a></section><section class="rx-nav-card"><div><b>🧠 مركز التحليل</b><small>20 محللًا متخصصًا يفلترون كل عملة من الاتجاه والقاع والزخم والحجم والسيولة والحيتان والاختراق والمخاطر، ثم يصدر المحلل النهائي الحكم.</small></div><a class="rx-nav-link" style="background:linear-gradient(135deg,#4ed7ff,#6ef0c0);color:#03202a" href="./multi-analyst-center.html">فتح مركز التحليل</a></section>
+<section class="rx-nav-card"><div><b>🧠 مركز المحللين العشرين</b><small>كل عملة تمر على 19 محللًا متخصصًا ثم المحلل النهائي: الاتجاه، القاع، الهيكل، الزخم، الحجم، الانكماش، الاختراق، الدعم والمقاومة، القوة النسبية، السيولة، سلوك اللاعبين الكبار، الامتصاص ومخاطر الفخ.</small></div><a class="rx-nav-link" style="background:linear-gradient(135deg,#55e6ff,#45b7ff);color:#031017" href="./multi-analyst-center.html">فتح مركز المحللين</a></section>
+<section class="rx-nav-card"><div><b>👑 القاهر</b><small>ماسح السوق الكامل الحالي، مستقل عن الأربعة ويستمر كالرادار الخامس.</small></div><a id="openKahirBtn" class="rx-nav-link" href="./kahir-radar.html">فتح القاهر</a></section>
+<section class="rx-nav-card"><div><b>👑 الكنق</b><small>طبقة ذكاء تجمع أدلة الرادارات، الفحص العميق، الاتجاه، السيولة، الضغط وخطر الفخ قبل إصدار الحكم.</small></div><a class="rx-nav-link" href="./king.html">فتح الكنق</a></section>
+<section class="rx-nav-card" style="display:block">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+    <div><b>📡 حالة الرادارات</b><small>لوحة خفيفة: لا توقف الواجهة إذا تعذر الاتصال، وتعرض حالة 1–8 + البروفيسور.</small></div>
+    <span class="rx-nav-link secondary" style="min-width:110px;cursor:default">LIVE STATUS</span>
+  </div>
+  <div id="radarHealth" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px"></div>
+</section>
+<div id="symbolDeepScanPanel" aria-label="فحص العملة الشامل"></div>
 <div id="marketRadarPanel" aria-label="RadarX Dashboard"></div>
 <div id="backgroundMonitorPanel" aria-label="RadarX Background Monitor"></div>
 <div id="tradliSuitePanel" aria-label="RadarX Intelligence Suite"></div>
@@ -55,6 +77,7 @@ setTimeout(window.__RADARX_SHOW_BOOT_ERROR,3500);
 <script type="module">
 import {mountMarketRadarScreen} from './radarx-market-radar-screen.mjs';
 import {mountBackgroundMonitorControl} from './radarx-background-control.mjs';
+import {mountSymbolDeepScan} from './radarx-symbol-deep-scan.mjs';
 
 const panel=document.getElementById('marketRadarPanel');
 const installButton=document.createElement('button');
@@ -72,6 +95,7 @@ installButton.addEventListener('click',async()=>{
 });
 
 try{
+  mountSymbolDeepScan(document.getElementById('symbolDeepScanPanel'));
   mountMarketRadarScreen(panel);
   mountBackgroundMonitorControl(document.getElementById('backgroundMonitorPanel'));
   window.__RADARX_BOOT_OK=true;
@@ -96,6 +120,27 @@ document.getElementById('openBottomRadarBtn').addEventListener('click',event=>{
     window.RadarXNative.openBottomRadar();
   }
 });
+</script>
+
+<script type="module">
+import {getRadarStatus} from './radarx-backend-client.mjs';
+const healthEl=document.getElementById('radarHealth');
+const radarOrder=['EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR','LIQUIDITY_ABSORPTION_RADAR','KAHIR_RADAR','DOOMSDAY_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR','COIN_HUNTER_RADAR','PROFESSOR_RADAR'];
+const labels={'EARLY_MOVE_RADAR':'1 • المدمر','STRONG_MOVE_RADAR':'2 • ملك الظلام','ROTATION_LAG_RADAR':'3 • الجوكر','LIQUIDITY_ABSORPTION_RADAR':'4 • الكاسح','KAHIR_RADAR':'5 • القاهر','DOOMSDAY_RADAR':'6 • يوم القيامة','ALMUQAWIM_RADAR':'7 • المقاوم','EARLY_EXPANSION_RADAR':'8 • البرق','COIN_HUNTER_RADAR':'🎯 صائد العملات','WHALE_ACCUMULATION_RADAR':'🐋 تجمع الحيتان','PROFESSOR_RADAR':'البروفيسور'};
+function esc(v){return String(v != null ? v : '').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
+async function loadRadarHealth(){
+  try{
+    const r=await getRadarStatus();
+    if(r.status!==200)throw new Error('HTTP_'+r.status);
+    const map=new Map(((r.body && r.body.radars)||[]).map(x=>[x.radar,x]));
+    if(!healthEl)return;
+    healthEl.innerHTML=radarOrder.map(id=>{
+      const x=map.get(id), live=x && x.running===true;
+      return '<div class="rx-h '+(x?(live?'live':'off'):'err')+'"><b>'+esc(labels[id]||id)+'</b><i>'+esc(live?'يعمل':x?'متوقف':'غير متاح')+'</i></div>';
+    }).join('');
+  }catch(e){if(!healthEl)return;healthEl.innerHTML='<div class="rx-h err"><b>Backend</b><i>'+esc((e && e.message)||e)+'</i></div>';}
+}
+loadRadarHealth();setInterval(loadRadarHealth,20000);
 </script>
 </body>
 </html>

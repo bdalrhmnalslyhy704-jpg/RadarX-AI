@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d0a05">
+<title>RadarX — 🎯 صائد العملات</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{min-height:100%}
+body{margin:0;background:radial-gradient(circle at 50% -12%,#4a2d08 0,#171006 32%,#07090e 72%,#04060a 100%);color:#fff8e8;font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+main{width:min(1080px,100%);margin:auto;padding:12px 14px 36px}
+header{position:sticky;top:0;z-index:10;margin:-12px -14px 14px;padding:calc(11px + env(safe-area-inset-top)) 14px 12px;background:rgba(8,7,4,.93);backdrop-filter:blur(16px);border-bottom:1px solid #6a4d19}
+.top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.brand{display:flex;align-items:center;gap:10px}.logo{width:46px;height:46px;border-radius:15px;display:grid;place-items:center;background:linear-gradient(135deg,#ffd166,#ff9f1c);color:#171006;font-size:23px;font-weight:1000;box-shadow:0 0 24px #ffb70344}.brand b{display:block;font-size:19px}.brand small{display:block;color:#bea77e;font-size:10px;margin-top:2px}
+.state{border:1px solid #72541f;border-radius:999px;padding:7px 10px;font-size:10px;font-weight:1000}
+.state.live{color:#7ff5be;border-color:#2e7354}.state.warn{color:#ffd27a}.state.bad{color:#ff8f98}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
+.card{background:linear-gradient(145deg,#151108,#0c0f15);border:1px solid #3b321e;border-radius:18px;padding:14px;box-shadow:0 11px 34px rgba(0,0,0,.22)}
+.wide{grid-column:1/-1}.metric small{display:block;color:#9c8a67;font-size:10px}.metric b{display:block;font-size:20px;margin-top:4px}.muted{color:#a7977a;font-size:10px;line-height:1.7}
+.actions{display:flex;gap:8px;flex-wrap:wrap}.btn{min-height:44px;border:1px solid #6f531f;border-radius:12px;background:#171208;color:#fff5dc;font-weight:1000;padding:0 14px}.btn.primary{background:linear-gradient(135deg,#ffd166,#ff9f1c);color:#1a0f02;border:0;box-shadow:0 0 22px #ffb70322}.btn.stop{background:#2a1113;border-color:#71343b}.btn:disabled{opacity:.55}
+.lesson{display:grid;grid-template-columns:1.2fr 1fr;gap:10px}.lesson-box{border:1px solid #493b20;border-radius:15px;padding:12px;background:#0e0e0d}.chips{display:flex;flex-wrap:wrap;gap:6px}.chip{padding:6px 8px;border-radius:999px;background:#171309;border:1px solid #4b3d21;color:#efdfbc;font-size:9px}
+.rows{display:grid;gap:10px}.coin{border:1px solid #41341f;border-radius:16px;padding:12px;background:linear-gradient(145deg,#11100c,#0a0d12)}.coin.hit{border-color:#bf8b18;box-shadow:0 0 20px #ffb70314}
+.coin-top{display:flex;justify-content:space-between;align-items:center;gap:8px}.coin-top b{font-size:16px}.score{color:#ffd166;font-size:18px;font-weight:1000}.pill{font-size:9px;border:1px solid #4f4227;border-radius:999px;padding:4px 7px;color:#d9c9a9}
+.mini{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-top:9px}.mini div{padding:8px;border-radius:10px;background:#11130f}.mini b{display:block;font-size:11px}.mini small{display:block;color:#8f846e;font-size:9px;margin-top:2px}
+.reason{margin-top:9px;color:#c7b89a;font-size:10px;line-height:1.75}.danger{color:#ff9da6}.decision{font-weight:1000}.hunt{color:#ffd166}.watch{color:#8fd7ff}
+.empty{text-align:center;padding:28px;color:#998c76;border:1px dashed #504226;border-radius:15px}
+@media(max-width:850px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.lesson{grid-template-columns:1fr}.mini{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:520px){.grid{grid-template-columns:1fr 1fr}.wide{grid-column:1/-1}}
+</style>
+</head>
+<body>
+<main>
+<header><div class="top"><div class="brand"><div class="logo">🎯</div><div><b>صائد العملات</b><small>Adaptive Coin Hunter • Spot USDT • Paper Only</small></div></div><div id="state" class="state">جارٍ الاتصال…</div></div></header>
+
+<section class="card wide">
+  <div class="muted">الفكرة</div>
+  <h2 style="margin:4px 0 5px;font-size:22px">لا يصطاد أي عملة… يبحث عن <span class="hunt">الطريدة المناسبة</span>.</h2>
+  <div class="muted">كل دورة يتعلم من أقوى العملات التي تحركت خلال يومك، يستخرج منها بصمة الحجم والصفقات والضغط والانكماش والهيكل، ثم يفتش عن عملات أخرى ما زالت مبكرة وغير ممددة. «قنص» هنا تقييم خوارزمي وليس ضمانًا للارتفاع أو للربح.</div>
+  <div class="actions" style="margin-top:11px">
+    <button id="start" class="btn primary">تشغيل الصائد</button>
+    <button id="stop" class="btn stop">إيقاف الصائد</button>
+    <button id="scan" class="btn">صيد الآن</button>
+  </div>
+  <div id="updated" class="muted" style="margin-top:9px">آخر دورة: —</div>
+  <div id="error" class="danger" style="font-size:10px;margin-top:4px"></div>
+</section>
+
+<section class="grid">
+  <div class="card metric"><small>سوق Spot المؤهل</small><b id="universe">—</b><span class="muted">عملة</span></div>
+  <div class="card metric"><small>قادة اليوم</small><b id="leaders">—</b><span class="muted">عينة تعلم</span></div>
+  <div class="card metric"><small>مرشحون مفحوصون</small><b id="scanned">—</b><span class="muted">تحليل عميق</span></div>
+  <div class="card metric"><small>فرص قنص</small><b id="hits">—</b><span class="muted">فوق بوابة 86</span></div>
+</section>
+
+<section class="card wide">
+  <div class="lesson">
+    <div class="lesson-box"><b>🧠 بصمة اليوم التي تعلّمها الصائد</b><div id="factors" class="chips" style="margin-top:9px"></div></div>
+    <div class="lesson-box"><b>📐 ماذا يتعلم؟</b><div id="profile" class="muted" style="margin-top:8px">لم تكتمل عينة القادة بعد.</div></div>
+  </div>
+</section>
+
+<section class="card wide">
+  <div class="top"><b>🎯 الطرائد الأقرب للبصمة</b><span class="pill">ترتيب حي</span></div>
+  <div id="rows" class="rows" style="margin-top:10px"><div class="empty">لم تصل دورة صيد بعد.</div></div>
+</section>
+</main>
+
+<script type="module">
+import {getCoinHunterRadar,setRadarState} from './radarx-backend-client.mjs';
+
+const $=id=>document.getElementById(id);
+let busy=false;
+const nf=(v,d=2)=>{const n=Number(v);return Number.isFinite(n)?n.toFixed(d):'—'};
+const pct=v=>{const n=Number(v);return Number.isFinite(n)?(n>=0?'+':'')+n.toFixed(2)+'%':'—'};
+const time=v=>{try{return new Intl.DateTimeFormat('ar-YE',{timeZone:'Asia/Aden',hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true}).format(new Date(v));}catch{return v||'—'}};
+function esc(v){return String(v != null ? v : '').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));}
+
+function render(d){
+  const c=(d && d.coverage)||{}, m=(d && d.lesson)||{};
+  $('universe').textContent=(c.universe_total != null ? c.universe_total : '—');
+  $('leaders').textContent=(c.learned_samples != null ? c.learned_samples : (m.samples != null ? m.samples : '—'));
+  $('scanned').textContent=(c.deep_scanned_total != null ? c.deep_scanned_total : '—');
+  $('hits').textContent=(c.hunter_hits != null ? c.hunter_hits : '—');
+  $('updated').textContent='آخر دورة: '+time(d && d.as_of);
+  $('error').textContent=d && d.last_error ? 'خطأ: '+d.last_error : '';
+  const live=!!(d && d.running===true);
+  $('state').textContent=live?'LIVE • الصائد يعمل':'متوقف';
+  $('state').className='state '+(live?'live':'warn');
+
+  const factors=Array.isArray(m.top_factors)?m.top_factors:[];
+  $('factors').innerHTML=factors.length?factors.map(x=>'<span class="chip">'+esc(x.label)+' • '+nf(x.value,2)+'</span>').join(''):'<span class="muted">لم تتشكل بصمة كافية بعد.</span>';
+  $('profile').innerHTML=factors.length
+    ? factors.slice(0,4).map(x=>'<div>'+esc(x.label)+': <b>'+nf(x.value,2)+'</b></div>').join('')
+    : 'يتطلب الصائد عينة قادة يومية قابلة للتحليل.';
+
+  const rows=Array.isArray(d && d.candidates)?d.candidates:[];
+  if(!rows.length){$('rows').innerHTML='<div class="empty">لا توجد طريدة صالحة حاليًا. هذا مقصود: الصائد يفضل ألا يصدر إشارة على أن يصطاد عملة ضعيفة.</div>';return;}
+  $('rows').innerHTML=rows.slice(0,16).map(x=>{
+    const f=x.factors||{};
+    const hit=x.decision==='قنص';
+    const reasons=Array.isArray(x.reasons)?x.reasons:[];
+    const risks=Array.isArray(x.risk_flags)?x.risk_flags:[];
+    return '<article class="coin '+(hit?'hit':'')+'">'+
+      '<div class="coin-top"><div><b>'+esc(x.symbol)+'</b> <span class="pill '+(hit?'hunt':'watch')+'">'+esc(x.decision||'مراقبة')+'</span></div><span class="score">'+nf(x.score,1)+'</span></div>'+
+      '<div class="muted" style="margin-top:4px">تشابه مع بصمة القادة: <b>'+nf(x.similarity,1)+'/100</b> • حركة اليوم: <b>'+pct(x.today_pct)+'</b> • السعر: <b>'+nf(x.price,8)+'</b></div>'+
+      '<div class="mini">'+
+        '<div><b>'+nf(f.volume_acceleration,2)+'x</b><small>تسارع الحجم</small></div>'+
+        '<div><b>'+nf(f.trade_acceleration,2)+'x</b><small>تسارع الصفقات</small></div>'+
+        '<div><b>'+nf(f.taker_buy_ratio*100,1)+'%</b><small>Taker Buy</small></div>'+
+        '<div><b>'+nf(f.compression_ratio,2)+'</b><small>ضغط/انكماش</small></div>'+
+        '<div><b>'+nf(f.higher_low_count,0)+'</b><small>Higher-Lows</small></div>'+
+        '<div><b>'+pct(f.relative_vs_btc_pct)+'</b><small>قوة مقابل BTC</small></div>'+
+        '<div><b>'+pct(f.resistance_distance_pct)+'</b><small>مسافة المقاومة</small></div>'+
+        '<div><b>'+pct(f.one_hour_pct)+'</b><small>آخر ساعة</small></div>'+
+      '</div>'+
+      '<div class="reason"><b>لماذا؟</b> '+esc(reasons.slice(0,6).join(' • ')||'لم تتجمع أدلة كافية.')+'</div>'+
+      (risks.length?'<div class="reason danger"><b>حواجز الرفض:</b> '+esc(risks.join(' • '))+'</div>':'')+
+    '</article>';
+  }).join('');
+}
+
+async function refresh(scan=false){
+  if(busy)return;
+  busy=true;
+  try{
+    const r=await getCoinHunterRadar({quote:'USDT',limit:16,scan});
+    if(r.status===200){render(r.body);}
+    else $('error').textContent='HTTP_'+(r.status||0);
+  }catch(e){
+    $('state').textContent='تعذر الاتصال';
+    $('state').className='state bad';
+    $('error').textContent=e && e.message||String(e);
+  }finally{busy=false;}
+}
+async function control(action){
+  $('start').disabled=true;$('stop').disabled=true;$('scan').disabled=true;
+  try{
+    const r=await setRadarState('COIN_HUNTER_RADAR',action);
+    if(!r.ok)throw new Error(r.body && r.body.error||r.error||'HTTP_'+r.status);
+    await refresh(true);
+  }catch(e){$('error').textContent=(e && e.message)||String(e);}
+  finally{$('start').disabled=false;$('stop').disabled=false;$('scan').disabled=false;}
+}
+$('start').onclick=()=>control('start');
+$('stop').onclick=()=>control('stop');
+$('scan').onclick=()=>refresh(true);
+refresh(false);
+setInterval(()=>refresh(false),30000);
+</script>
+</body>
+</html>

@@ -1,17 +1,17 @@
 // Bottom Radar release hardening: fast native entry + fallback scan.
 const clamp=(n,min=0,max=100)=>Math.max(min,Math.min(max,Number(n)||0));
 const scoreOf=(c,id)=> {
-  const row=(c?.strategies||[]).find(x=>String(x.id).toUpperCase()===id);
-  return Number.isFinite(Number(row?.score?.value))?Number(row.score.value):null;
+  const row=((c && c.strategies)||[]).find(x=>String(x.id).toUpperCase()===id);
+  return Number.isFinite(Number(row && row.score && row.score.value))?Number(row.score.value):null;
 };
-const stateOf=(c,id)=>String((c?.strategies||[]).find(x=>String(x.id).toUpperCase()===id)?.signal_state||'').toUpperCase();
-const fpOf=c=>c?.pre_breakout_fingerprint||{};
+const stateOf=(c,id)=>String((((c && c.strategies)||[]).find(x=>String(x.id).toUpperCase()===id)||{}).signal_state||'').toUpperCase();
+const fpOf=c=>c && c.pre_breakout_fingerprint||{};
 const evidenceScore=(c,key,fallback=50)=>{
-  const x=fpOf(c)?.evidence?.[key];
-  return Number.isFinite(Number(x?.score))?clamp(x.score):fallback;
+  const x=(fpOf(c) && fpOf(c).evidence && fpOf(c).evidence[key]);
+  return Number.isFinite(Number(x && x.score))?clamp(x.score):fallback;
 };
-const evidenceStatus=(c,key)=>String(fpOf(c)?.evidence?.[key]?.status||'').toUpperCase();
-const bottomContextOf=c=>c?.bottom_context||{};
+const evidenceStatus=(c,key)=>String((fpOf(c) && fpOf(c).evidence && fpOf(c).evidence[key] && fpOf(c).evidence[key].status)||'').toUpperCase();
+const bottomContextOf=c=>c && c.bottom_context||{};
 
 function minDefined(values,fallback=50){
   const xs=values.filter(Number.isFinite);
@@ -37,25 +37,25 @@ export const BOTTOM_STRATEGIES=Object.freeze([
 
 function bottomAlgorithmScore(c){
   const ctx=bottomContextOf(c);
-  const composite=Number(ctx.metrics?.composite_algorithm_score);
+  const composite=Number(ctx.metrics && ctx.metrics.composite_algorithm_score);
   if(Number.isFinite(composite)) return clamp(composite);
   const a=ctx.algorithms||{};
   return avgDefined([
-    Number(a.rsi14?.score),
-    Number(a.stochastic14?.score),
-    Number(a.obv_accumulation?.score),
-    Number(a.volume_price_divergence?.score),
-    Number(a.ema20_50_reclaim?.score),
-    Number(a.wyckoff_spring?.score),
-    Number(a.vwap_position?.score),
-    Number(a.price_structure?.score),
-    Number(a.taker_flow?.score),
-    Number(a.orderbook_pressure?.score),
-    Number(a.whale_pressure?.score),
-    Number(a.sell_exhaustion?.score),
-    Number(a.squeeze?.score),
-    Number(a.momentum_awaken?.score),
-    Number(a.mtf_alignment?.score)
+    Number(a.rsi14 && a.rsi14.score),
+    Number(a.stochastic14 && a.stochastic14.score),
+    Number(a.obv_accumulation && a.obv_accumulation.score),
+    Number(a.volume_price_divergence && a.volume_price_divergence.score),
+    Number(a.ema20_50_reclaim && a.ema20_50_reclaim.score),
+    Number(a.wyckoff_spring && a.wyckoff_spring.score),
+    Number(a.vwap_position && a.vwap_position.score),
+    Number(a.price_structure && a.price_structure.score),
+    Number(a.taker_flow && a.taker_flow.score),
+    Number(a.orderbook_pressure && a.orderbook_pressure.score),
+    Number(a.whale_pressure && a.whale_pressure.score),
+    Number(a.sell_exhaustion && a.sell_exhaustion.score),
+    Number(a.squeeze && a.squeeze.score),
+    Number(a.momentum_awaken && a.momentum_awaken.score),
+    Number(a.mtf_alignment && a.mtf_alignment.score)
   ],45);
 }
 function bottomContextEvidence(c){
@@ -73,20 +73,20 @@ function bottomContextEvidence(c){
     recoveryFromLastRiseLowPct:Number.isFinite(Number(rise.recovery_from_low_pct))?Number(rise.recovery_from_low_pct):null,
     rangePositionPct:Number.isFinite(Number(ctx.range_position_pct))?Number(ctx.range_position_pct):null,
     algorithmScore:bottomAlgorithmScore(c),
-    rsi:Number.isFinite(Number(a.rsi14?.value))?Number(a.rsi14.value):null,
-    bullishDivergence:a.rsi14?.bullish_divergence===true,
-    stochasticK:Number.isFinite(Number(a.stochastic14?.k))?Number(a.stochastic14.k):null,
-    obvScore:Number.isFinite(Number(a.obv_accumulation?.score))?Number(a.obv_accumulation.score):null,
-    rvolRatio:Number.isFinite(Number(a.volume_price_divergence?.rvol_ratio))?Number(a.volume_price_divergence.rvol_ratio):null,
-    emaReclaimScore:Number.isFinite(Number(a.ema20_50_reclaim?.score))?Number(a.ema20_50_reclaim.score):null,
-    wyckoffScore:Number.isFinite(Number(a.wyckoff_spring?.score))?Number(a.wyckoff_spring.score):null,
-    springConfirmed:a.wyckoff_spring?.spring_confirmed===true,
-    vwap:Number.isFinite(Number(a.vwap_position?.vwap))?Number(a.vwap_position.vwap):null,
-    whaleHeuristic:a.whale_pressure?.heuristic===true,
-    whaleBidShare:Number.isFinite(Number(a.whale_pressure?.bid_wall_share))?Number(a.whale_pressure.bid_wall_share):null,
-    whaleAskShare:Number.isFinite(Number(a.whale_pressure?.ask_wall_share))?Number(a.whale_pressure.ask_wall_share):null,
-    squeezeScore:Number.isFinite(Number(a.squeeze?.score))?Number(a.squeeze.score):null,
-    sellExhaustionScore:Number.isFinite(Number(a.sell_exhaustion?.score))?Number(a.sell_exhaustion.score):null
+    rsi:Number.isFinite(Number(a.rsi14 && a.rsi14.value))?Number(a.rsi14.value):null,
+    bullishDivergence:a.rsi14 && a.rsi14.bullish_divergence===true,
+    stochasticK:Number.isFinite(Number(a.stochastic14 && a.stochastic14.k))?Number(a.stochastic14.k):null,
+    obvScore:Number.isFinite(Number(a.obv_accumulation && a.obv_accumulation.score))?Number(a.obv_accumulation.score):null,
+    rvolRatio:Number.isFinite(Number(a.volume_price_divergence && a.volume_price_divergence.rvol_ratio))?Number(a.volume_price_divergence.rvol_ratio):null,
+    emaReclaimScore:Number.isFinite(Number(a.ema20_50_reclaim && a.ema20_50_reclaim.score))?Number(a.ema20_50_reclaim.score):null,
+    wyckoffScore:Number.isFinite(Number(a.wyckoff_spring && a.wyckoff_spring.score))?Number(a.wyckoff_spring.score):null,
+    springConfirmed:a.wyckoff_spring && a.wyckoff_spring.spring_confirmed===true,
+    vwap:Number.isFinite(Number(a.vwap_position && a.vwap_position.vwap))?Number(a.vwap_position.vwap):null,
+    whaleHeuristic:a.whale_pressure && a.whale_pressure.heuristic===true,
+    whaleBidShare:Number.isFinite(Number(a.whale_pressure && a.whale_pressure.bid_wall_share))?Number(a.whale_pressure.bid_wall_share):null,
+    whaleAskShare:Number.isFinite(Number(a.whale_pressure && a.whale_pressure.ask_wall_share))?Number(a.whale_pressure.ask_wall_share):null,
+    squeezeScore:Number.isFinite(Number(a.squeeze && a.squeeze.score))?Number(a.squeeze.score):null,
+    sellExhaustionScore:Number.isFinite(Number(a.sell_exhaustion && a.sell_exhaustion.score))?Number(a.sell_exhaustion.score):null
   };
 }
 
@@ -97,11 +97,11 @@ function strategySignal(c,id){
 }
 
 export function scoreBottomCandidate(c){
-  const change=Number(c?.price_change_24h);
+  const change=Number(c && c.price_change_24h);
   const bottomEvidence=bottomContextEvidence(c);
-  const metrics=bottomContextOf(c)?.metrics||{};
+  const metrics=bottomContextOf(c) && bottomContextOf(c).metrics||{};
   const bottomAlgorithms=bottomAlgorithmScore(c);
-  const whalePressure=avgDefined([Number(metrics.whale_pressure),Number(bottomContextOf(c)?.algorithms?.whale_pressure?.score)],50);
+  const whalePressure=avgDefined([Number(metrics.whale_pressure),Number(bottomContextOf(c) && bottomContextOf(c).algorithms && bottomContextOf(c).algorithms.whale_pressure && bottomContextOf(c).algorithms.whale_pressure.score)],50);
   const drawdown = Number.isFinite(change)
     ? clamp(50 - change*6 + (change<0 ? 18 : change<=2 ? 6 : 0))
     : 35;
@@ -120,13 +120,13 @@ export function scoreBottomCandidate(c){
 
   const sellingExhaustion=avgDefined([
     Number(metrics.selling_exhaustion),
-    Number(bottomContextOf(c)?.algorithms?.sell_exhaustion?.score),
+    Number(bottomContextOf(c) && bottomContextOf(c).algorithms && bottomContextOf(c).algorithms.sell_exhaustion && bottomContextOf(c).algorithms.sell_exhaustion.score),
     scoreOf(c,'MEAN_REVERSION')
   ],45);
 
   const compression=avgDefined([
     Number(metrics.compression),
-    Number(bottomContextOf(c)?.algorithms?.squeeze?.score),
+    Number(bottomContextOf(c) && bottomContextOf(c).algorithms && bottomContextOf(c).algorithms.squeeze && bottomContextOf(c).algorithms.squeeze.score),
     scoreOf(c,'VCP_PRE_BREAKOUT')
   ],45);
 
@@ -145,10 +145,10 @@ export function scoreBottomCandidate(c){
     evidenceScore(c,'resistance')
   ],45);
 
-  const trapRisk=Number(fpOf(c)?.trapRisk);
+  const trapRisk=Number(fpOf(c) && fpOf(c).trapRisk);
   const trapQuality=Number.isFinite(trapRisk)?100-clamp(trapRisk):50;
-  const liquidity=clamp(c?.liquidity_quality,0,100);
-  const dataQuality=clamp(c?.data_quality,0,100);
+  const liquidity=clamp(c && c.liquidity_quality,0,100);
+  const dataQuality=clamp(c && c.data_quality,0,100);
 
   let raw=
     drawdown*0.10+
@@ -167,8 +167,8 @@ export function scoreBottomCandidate(c){
   const hardReject =
     dataQuality<70 ||
     liquidity<60 ||
-    fpOf(c)?.stage==='EXHAUSTED-HIGH-RISK' ||
-    fpOf(c)?.stage==='FALSE-BREAKOUT' ||
+    fpOf(c) && fpOf(c).stage==='EXHAUSTED-HIGH-RISK' ||
+    fpOf(c) && fpOf(c).stage==='FALSE-BREAKOUT' ||
     (Number.isFinite(change) && change>12 && buyingPressure<55);
 
   if(hardReject) raw=Math.min(raw,49);
@@ -217,8 +217,8 @@ export function scoreBottomCandidate(c){
   ];
 
   return {
-    symbol:String(c?.symbol||''),
-    price:Number(c?.last_price),
+    symbol:String(c && c.symbol||''),
+    price:Number(c && c.last_price),
     change24h:change,
     score:Math.round(clamp(raw)*10)/10,
     stage,
@@ -246,11 +246,12 @@ export function scoreBottomCandidate(c){
   };
 }
 
-export function rankBottomCandidates(body){
-  const candidates=Array.isArray(body?.candidates)?body.candidates:[];
+export function rankBottomCandidates(body, limit=10){
+  const safeLimit=Math.max(1,Math.min(50,Number(limit)||10));
+  const candidates=Array.isArray(body && body.candidates)?body.candidates:[];
   return candidates
-    .filter(c=>c?.data_status?.data_valid===true && Number.isFinite(Number(c?.last_price)))
+    .filter(c=>c && c.data_status && c.data_status.data_valid===true && Number.isFinite(Number(c && c.last_price)))
     .map(scoreBottomCandidate)
     .sort((a,b)=>b.score-a.score||b.buyingPressure-a.buyingPressure)
-    .slice(0,10);
+    .slice(0,safeLimit);
 }

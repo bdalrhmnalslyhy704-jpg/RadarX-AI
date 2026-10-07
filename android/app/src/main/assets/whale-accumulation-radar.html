@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#08070d">
+<title>🐋 تجمع الحيتان — RadarX</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;min-height:100%;background:#05050a;color:#f7f4ff;font-family:Arial,sans-serif}
+body{background:
+radial-gradient(circle at 12% 0,#5a401050,transparent 32%),
+radial-gradient(circle at 92% 10%,#4b1a5c38,transparent 30%),
+linear-gradient(180deg,#08070f 0,#05050a 58%,#0b0810 100%)}
+main{width:min(1120px,100%);margin:auto;padding:12px 14px 44px}
+.hero{position:relative;overflow:hidden;border:1px solid #79602b;border-radius:30px;padding:20px;background:linear-gradient(145deg,#171108,#0e0b14 52%,#170b1d);box-shadow:0 22px 70px #000b}
+.hero:before{content:'';position:absolute;inset:-1px;background:linear-gradient(120deg,transparent 25%,#ffd16618 45%,transparent 62%);transform:translateX(-120%);animation:sweep 6s linear infinite}
+.hero:after{content:'';position:absolute;width:260px;height:260px;border-radius:50%;left:-90px;top:-120px;background:radial-gradient(circle,#ffd16670,transparent 64%);filter:blur(1px)}
+@keyframes sweep{to{transform:translateX(120%)}}
+.badge{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;border:1px solid #96742f;background:#211809;color:#ffd166;font-weight:900;font-size:11px;position:relative;z-index:2}
+h1{position:relative;z-index:2;margin:12px 0 6px;font-size:32px;letter-spacing:.2px}
+.sub{position:relative;z-index:2;color:#c7bfcd;font-size:12px;line-height:1.9;max-width:950px}
+.heroGrid{display:grid;grid-template-columns:1.2fr .8fr;gap:12px;margin-top:16px;position:relative;z-index:2}
+.command{border:1px solid #3e3248;border-radius:22px;padding:14px;background:#0b0911cc}
+.command h2{font-size:13px;margin:0 0 8px}.command p{margin:0;color:#988fa1;font-size:10px;line-height:1.8}
+.metricGrid{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-top:12px;position:relative;z-index:2}
+.metric{border:1px solid #342a3e;border-radius:17px;padding:12px;background:linear-gradient(160deg,#100d16,#0a0810);min-height:68px}
+.metric b{display:block;font-size:21px;color:#ffe08a}.metric span{display:block;margin-top:4px;font-size:9px;color:#8e849a}
+.actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px;position:relative;z-index:2}
+button{border:0;border-radius:14px;padding:12px 16px;font-weight:900;cursor:pointer}
+.primary{background:linear-gradient(135deg,#ffe08a,#ff9f1c);color:#221600;box-shadow:0 10px 28px #ff9f1c25}
+.dark{background:#17111d;border:1px solid #44384d;color:#f4effb}
+.status{margin:12px 0;padding:12px 14px;border-radius:16px;background:#0b0910;border:1px solid #30263a;color:#bcb2c7;font-size:11px}
+.panels{display:grid;grid-template-columns:.9fr 1.1fr;gap:12px}
+.panel{margin-top:12px;border:1px solid #2d2536;border-radius:23px;padding:15px;background:#0a0810dd;box-shadow:0 12px 35px #0005}
+.panel h2{font-size:14px;margin:0 0 12px}.muted{color:#93899e;font-size:10px;line-height:1.8}
+.rows{display:grid;gap:11px}
+.card{border:1px solid #3a2e42;border-radius:21px;padding:14px;background:linear-gradient(155deg,#110d17,#09070d)}
+.cardHot{border-color:#a27d2c;box-shadow:inset 0 0 0 1px #ffd16618,0 14px 34px #0006}
+.top{display:flex;justify-content:space-between;gap:10px;align-items:center}.sym{font-size:19px;font-weight:1000}.score{font-size:20px;color:#ffd166;font-weight:1000}
+.pills{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.pill{font-size:9px;padding:6px 8px;border-radius:999px;background:#19131f;border:1px solid #403449;color:#ddd5e3}.pillGood{border-color:#7e6325;color:#ffe08a;background:#211909}
+.bar{margin-top:10px;height:9px;border-radius:999px;background:#17121c;overflow:hidden;border:1px solid #2c2332}.fill{height:100%;background:linear-gradient(90deg,#ff9f1c,#ffe08a);border-radius:999px}
+.facts{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:10px}.fact{border:1px solid #27202e;border-radius:13px;padding:8px;background:#08070d}.fact b{display:block;font-size:12px;color:#f6e5b3}.fact span{display:block;margin-top:3px;color:#80768a;font-size:8px}
+.reasons{margin-top:10px;color:#d1c8d7;font-size:10px;line-height:1.8}
+.reportGrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.reportBox{padding:10px;border-radius:15px;background:#0d0a13;border:1px solid #292131}.reportBox b{display:block;color:#f3d889;font-size:10px}.reportBox span{display:block;color:#9d93a8;font-size:9px;line-height:1.7;margin-top:3px}
+.note{margin-top:10px;padding:10px;border-radius:14px;background:#120e17;border:1px dashed #55475f;color:#ada2b7;font-size:9px;line-height:1.8}
+@media(max-width:820px){.heroGrid,.panels{grid-template-columns:1fr}.metricGrid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:480px){main{padding:10px 10px 36px}h1{font-size:26px}.metricGrid{gap:7px}.facts{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<main>
+<section class="hero">
+  <div class="badge">🐋 WHALE FLOW INTELLIGENCE • SPOT • PAPER ONLY</div>
+  <h1>تجمع الحيتان</h1>
+  <div class="sub">رادار متخصص لرصد <b>بصمة التجميع الكبيرة</b> من بيانات السوق العامة: صفقات كبيرة متكررة، صافي قيمة التنفيذ، امتصاص ضغط البيع، عمق الطلب، استمرارية الدعم، Taker Buy، وسلوك 5m. لا يدّعي معرفة هوية المتداول أو محفظته.</div>
+
+  <div class="heroGrid">
+    <div class="command">
+      <h2>🎯 ماذا يبحث عنه؟</h2>
+      <p>ليس مجرد صفقة كبيرة واحدة. المطلوب هو اجتماع عدة أدلة مستقلة واستمرارها عبر أكثر من دورة، مع رفض الحركة الممتدة والسبريد السيئ والبيانات غير الصالحة.</p>
+    </div>
+    <div class="command">
+      <h2>🧠 طريقة الحكم</h2>
+      <p>Large Prints + Taker Flow + Absorption + Orderbook Imbalance + Support Persistence + 5m Confirmation + Relative Strength.</p>
+    </div>
+  </div>
+
+  <div class="metricGrid">
+    <div class="metric"><b id="universe">—</b><span>العملات المؤهلة</span></div>
+    <div class="metric"><b id="scanned">—</b><span>فحص ناجح</span></div>
+    <div class="metric"><b id="confirmed">—</b><span>تجمع مستمر</span></div>
+    <div class="metric"><b id="streaks">—</b><span>تأكيد بالاستمرارية</span></div>
+  </div>
+
+  <div class="actions">
+    <button class="primary" id="scanBtn">🐋 فحص السوق الآن</button>
+    <button class="dark" id="startBtn">تشغيل مستمر</button>
+    <button class="dark" id="stopBtn">إيقاف</button>
+  </div>
+</section>
+
+<div class="status" id="status">جاهز — سيتم عرض آخر لقطة بدون إعادة مسح السوق.</div>
+
+<div class="panels">
+  <section class="panel">
+    <h2>📋 التقرير التنفيذي</h2>
+    <div class="reportGrid" id="report"></div>
+  </section>
+  <section class="panel">
+    <h2>🛡️ قواعد حماية الجودة</h2>
+    <div class="reportGrid">
+      <div class="reportBox"><b>Large Print</b><span>لا تكفي صفقة كبيرة واحدة؛ نبحث عن تكرار وصافي شراء.</span></div>
+      <div class="reportBox"><b>Absorption</b><span>حجم مرتفع مع قدرة السعر على الصمود بدل الانهيار.</span></div>
+      <div class="reportBox"><b>Orderbook</b><span>اختلال الطلب والقوة قرب السعر وعلى نطاق أوسع.</span></div>
+      <div class="reportBox"><b>Persistence</b><span>التجمع القوي يحتاج ظهورًا متكررًا عبر دورات.</span></div>
+      <div class="reportBox"><b>Anti-Chase</b><span>تُرفض العملة التي أصبحت ممتدة بالفعل.</span></div>
+      <div class="reportBox"><b>Data Integrity</b><span>شموع مغلقة فقط ورفض البيانات المستقبلية أو المتقادمة.</span></div>
+    </div>
+  </section>
+</div>
+
+<section class="panel">
+  <h2>🐋 أقوى بصمات التجميع الحالية</h2>
+  <div class="rows" id="rows"></div>
+</section>
+</main>
+
+<script type="module">
+import {getWhaleAccumulationRadar,setRadarState} from './radarx-backend-client.mjs';
+
+var rowsEl=document.getElementById('rows');
+var statusEl=document.getElementById('status');
+var reportEl=document.getElementById('report');
+var universeEl=document.getElementById('universe');
+var scannedEl=document.getElementById('scanned');
+var confirmedEl=document.getElementById('confirmed');
+var streaksEl=document.getElementById('streaks');
+var busy=false;
+var cacheKey='radarx.whale.intelligence.v2';
+var cacheTtl=5*60*1000;
+
+function esc(v){
+  return String(v===null||v===undefined?'':v).replace(/[&<>"']/g,function(ch){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];
+  });
+}
+function n(v,d){
+  var x=Number(v);return Number.isFinite(x)?x:d;
+}
+function fmt(v,d){
+  var x=n(v,null);return x===null?(d||'—'):x.toFixed(1);
+}
+function pct(v){
+  var x=n(v,null);return x===null?'—':x.toFixed(1)+'%';
+}
+function readCache(){
+  try{
+    var raw=sessionStorage.getItem(cacheKey);
+    if(!raw)return null;
+    var x=JSON.parse(raw);
+    if(!x||!x.savedAt||!x.body)return null;
+    return Date.now()-Number(x.savedAt)<cacheTtl?x.body:null;
+  }catch(e){return null;}
+}
+function writeCache(body){
+  try{sessionStorage.setItem(cacheKey,JSON.stringify({savedAt:Date.now(),body:body}));}catch(e){}
+}
+function render(body){
+  var rows=Array.isArray(body.candidates)?body.candidates:[];
+  var cov=body.coverage||{};
+  universeEl.textContent=String(n(cov.universe_total,0));
+  scannedEl.textContent=String(n(cov.scanned_successfully,0));
+  confirmedEl.textContent=String(n(body.confirmed_count,0));
+  streaksEl.textContent=String(n(cov.confirmed_after_persistence,0));
+  rowsEl.innerHTML='';
+  if(!rows.length){
+    rowsEl.innerHTML='<div class="muted">لا توجد بصمة تجميع قوية في آخر اللقطات. هذا يعني أن الرادار رفض الأدلة الضعيفة، وليس أن السوق بلا حركة.</div>';
+    return;
+  }
+  rows.slice(0,20).forEach(function(x){
+    var w=x.whale_accumulation||x.report||{};
+    var p=w.large_prints||{};
+    var c=w.candle_flow||{};
+    var d=w.orderbook||{};
+    var q=x.radar_quality_v3||{};
+    var s=x.whale_streak||{};
+    var score=n(x.opportunity_score,0);
+    var buyPct=n(p.largeBuyRatio,null);
+    var netPct=n(p.largeNotionalRatio,null);
+    var orderPct=n(d.nearImbalance,null);
+    var card=document.createElement('article');
+    card.className='card'+(x.eligible?' cardHot':'');
+    card.innerHTML=
+      '<div class="top"><div class="sym">🐋 '+esc(x.symbol||'—')+'</div><div class="score">'+fmt(score)+'/100</div></div>'+
+      '<div class="pills">'+
+        '<span class="pill '+(x.eligible?'pillGood':'')+'">'+esc(w.stage||x.potential_label||'WATCH')+'</span>'+
+        '<span class="pill">'+(x.eligible?'تجمع مؤكد':'مراقبة')+'</span>'+
+        '<span class="pill">استمرارية '+esc(String(n(s.count,0)))+'/'+esc(String(n(s.required,2)))+'</span>'+
+        '<span class="pill">جودة '+fmt(q.score)+'</span>'+
+      '</div>'+
+      '<div class="bar"><div class="fill" style="width:'+Math.max(0,Math.min(100,score))+'%"></div></div>'+
+      '<div class="facts">'+
+        '<div class="fact"><b>'+pct((buyPct===null?null:buyPct*100))+'</b><span>Large Buy Ratio</span></div>'+
+        '<div class="fact"><b>'+pct((netPct===null?null:netPct*100))+'</b><span>صافي القيمة الكبيرة</span></div>'+
+        '<div class="fact"><b>'+fmt(p.repeatBuyScore)+'</b><span>تكرار الشراء الكبير</span></div>'+
+        '<div class="fact"><b>'+fmt(p.burstScore)+'</b><span>تسارع الطباعة</span></div>'+
+        '<div class="fact"><b>'+fmt(c.volumeRatio)+'</b><span>Volume Ratio</span></div>'+
+        '<div class="fact"><b>'+pct((n(c.takerBuyRatio,null)===null?null:n(c.takerBuyRatio,0)*100))+'</b><span>Taker Buy</span></div>'+
+        '<div class="fact"><b>'+pct((orderPct===null?null:orderPct*100))+'</b><span>اختلال العمق القريب</span></div>'+
+        '<div class="fact"><b>'+fmt(w.support_score)+'</b><span>قوة الدعم</span></div>'+
+        '<div class="fact"><b>'+fmt(w.stability_score)+'</b><span>ثبات السعر</span></div>'+
+      '</div>'+
+      '<div class="reasons">'+esc((Array.isArray(x.reasons)?x.reasons:[]).slice(0,8).join(' • '))+'</div>'+
+      '<div class="note">'+
+        '<b>تقرير الحركة:</b> '+esc(w.direction||'BALANCED')+
+        ' • 5m: '+esc(fmt(w.price_context&&w.price_context.five_minute_move_pct))+'%'+
+        ' • BTC نسبي: '+esc(fmt(w.relative&&w.relative.relativeVsBtc))+'%'+
+        '<br><b>أكبر Print:</b> '+(Array.isArray(p.topPrints)&&p.topPrints.length?esc(fmt(p.topPrints[0].notional))+' USDT • '+esc(p.topPrints[0].side):'—')+
+        '<br><b>القرار:</b> '+(x.eligible?'تجمع متماسك يستحق المراقبة المكثفة':'لا يزال بحاجة إلى استمرارية/تأكيد إضافي')+
+      '</div>';
+    rowsEl.appendChild(card);
+  });
+}
+function renderReport(body){
+  var r=body.report||{};
+  var t=r.thresholds||{};
+  var rows=Array.isArray(r.what_it_measures)?r.what_it_measures:[];
+  reportEl.innerHTML=
+    '<div class="reportBox"><b>المهمة</b><span>اكتشاف بصمة تجميع كبيرة قبل أن تصبح الحركة ممتدة.</span></div>'+
+    '<div class="reportBox"><b>ما يُقاس</b><span>'+esc(rows.slice(0,5).join(' • '))+'</span></div>'+
+    '<div class="reportBox"><b>Large Buy</b><span>'+esc(String(t.minLargeBuyRatio||0.60))+' كحد أدنى للصفقات الكبيرة.</span></div>'+
+    '<div class="reportBox"><b>Net Large Imbalance</b><span>'+esc(String(t.minLargeNotionalImbalance||0.12))+' قبل اعتبار الطلب مهيمنًا.</span></div>'+
+    '<div class="reportBox"><b>Persistence</b><span>دورتان متتاليتان مطلوبة للتأكيد النهائي.</span></div>'+
+    '<div class="reportBox"><b>المصدر</b><span>Binance Public REST: aggTrades + depth + closed klines.</span></div>';
+}
+async function load(force){
+  if(busy)return;
+  var cached=!force?readCache():null;
+  if(cached){
+    render(cached);renderReport(cached);
+    statusEl.textContent='● لقطة محفوظة — لم نُعد مسح السوق عند الرجوع للرادار.';
+    return;
+  }
+  busy=true;
+  statusEl.textContent=force?'🐋 فحص Whale Intelligence كامل...':'تحميل آخر لقطة...';
+  try{
+    var r=await getWhaleAccumulationRadar({limit:20,scan:!!force});
+    if(!r.ok||!r.body)throw new Error(r.error||'WHALE_RADAR_UNAVAILABLE');
+    writeCache(r.body);
+    render(r.body);renderReport(r.body);
+    statusEl.textContent='● '+(r.body.running?'الرادار يعمل':'الرادار متوقف')+
+      ' • '+String((r.body.coverage&&r.body.coverage.scanned_successfully)||0)+
+      ' فحصًا • '+String((r.body.confirmed_count)||0)+' تجمع مستمر';
+  }catch(e){
+    statusEl.textContent='تعذر تحميل تجمع الحيتان — '+esc(e&&e.message||e);
+  }finally{busy=false;}
+}
+document.getElementById('scanBtn').addEventListener('click',function(){load(true);});
+document.getElementById('startBtn').addEventListener('click',async function(){
+  statusEl.textContent='جاري تشغيل تجمع الحيتان...';
+  try{
+    var r=await setRadarState('WHALE_ACCUMULATION_RADAR','start');
+    statusEl.textContent=r.ok?'تم تشغيل تجمع الحيتان — الفحص المستمر نشط':'فشل التشغيل — '+(r.error||('HTTP_'+r.status));
+    load(false);
+  }catch(e){statusEl.textContent='تعذر التشغيل — '+(e&&e.message||e);}
+});
+document.getElementById('stopBtn').addEventListener('click',async function(){
+  statusEl.textContent='جاري إيقاف تجمع الحيتان...';
+  try{
+    var r=await setRadarState('WHALE_ACCUMULATION_RADAR','stop');
+    statusEl.textContent=r.ok?'تم إيقاف تجمع الحيتان':'فشل الإيقاف — '+(r.error||('HTTP_'+r.status));
+  }catch(e){statusEl.textContent='تعذر الإيقاف — '+(e&&e.message||e);}
+});
+load(false);
+setInterval(function(){load(false);},60000);
+</script>
+</body>
+</html>

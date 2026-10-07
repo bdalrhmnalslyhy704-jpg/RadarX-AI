@@ -163,3 +163,168 @@ test('TEST_FIXTURE: public signal route is read-only and existing API paths rema
   assert.doesNotMatch(route,/createOrder|placeOrder|withdraw|account/i);
   assert.match(route,/req\.method==='GET'/);
 });
+
+
+test('TEST_FIXTURE: independent radar status/control and unified alerts preserve radar source/time',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-independent-radar-api-')),store=await new DurableStore({dir}).init();
+  const makeRadar=(id,name)=>({
+    running:false,
+    async start(){this.running=true;},
+    async stop(){this.running=false;},
+    health(){return{running:this.running,radar:id,radar_name:name,closed_candles_only:true};}
+  });
+  const early=makeRadar('EARLY_MOVE_RADAR','Radar 1 — Early-Wake');
+  const strong=makeRadar('STRONG_MOVE_RADAR','Radar 2 — Strong-Move');
+  const rotation=makeRadar('ROTATION_LAG_RADAR','Radar 3 — Rotation/Lag');
+  const r4=makeRadar('LIQUIDITY_ABSORPTION_RADAR','Radar 4 — Liquidity Absorption');
+  const r5=makeRadar('KAHIR_RADAR','Radar 5 — القاهر');
+  await store.appendMoveAlert({id:'R1',radar:'EARLY_MOVE_RADAR',symbol:'R1USDT',processed_at:Date.now()-1000,detected_at:Date.now()-1000,price:1});
+  await store.appendLiquidityAbsorptionAlert({id:'R4',radar:'LIQUIDITY_ABSORPTION_RADAR',radar_name:'Radar 4 — Liquidity Absorption',symbol:'R4USDT',processed_at:Date.now(),detected_at:Date.now(),price:2});
+  const server=createApiServer({config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},store,
+    monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},
+    pushProvider:new NoopPushProvider(),moveSentinel:early,strongMoveRadar:strong,rotationLagRadar:rotation,liquidityAbsorptionRadar:r4,kahirRadar:r5});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const base='http://127.0.0.1:'+server.address().port;
+  const status=await (await fetch(base+'/api/radar-status')).json();
+  assert.equal(status.radars.length,7);assert.equal(status.radars.every(x=>x.running===false),true);
+  assert.equal(status.radars.at(-1).radar_name,'Radar 7 — المقاوم');
+  const start=await (await fetch(base+'/api/radar-control?radar=LIQUIDITY_ABSORPTION_RADAR&action=start',{method:'POST'})).json();
+  assert.equal(start.running,true);assert.equal(early.running,false);assert.equal(strong.running,false);assert.equal(rotation.running,false);assert.equal(r4.running,true);
+  const alerts=await (await fetch(base+'/api/radar-alerts?radar=ALL&limit=10')).json();
+  assert.equal(alerts.meta.time_format,'12h');assert.equal(alerts.meta.detected_timezone,'Asia/Aden');
+  assert.equal(alerts.alerts[0].radar_name,'Radar 4 — Liquidity Absorption');
+  assert.equal('detected_time_12h' in alerts.alerts[0],true);
+  const stop=await (await fetch(base+'/api/radar-control?radar=LIQUIDITY_ABSORPTION_RADAR&action=stop',{method:'POST'})).json();
+  assert.equal(stop.running,false);assert.equal(r4.running,false);
+  const startViaGet=await (await fetch(base+'/api/radar-control?radar=LIQUIDITY_ABSORPTION_RADAR&action=start')).json();
+  assert.equal(startViaGet.running,true);assert.equal(r4.running,true);
+  const stopViaGet=await (await fetch(base+'/api/radar-control?radar=LIQUIDITY_ABSORPTION_RADAR&action=stop')).json();
+  assert.equal(stopViaGet.running,false);assert.equal(r4.running,false);
+  await new Promise(resolve=>server.close(resolve));
+});
+
+
+test('TEST_FIXTURE: Professor route exposes fused live intelligence and is independently controllable',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-professor-api-')),store=await new DurableStore({dir}).init(); let ticked=0;
+  await store.appendProfessorAlert({id:'P1',radar:'PROFESSOR_RADAR',radar_name:'البروفيسور — استخبارات عامة',symbol:'BTCUSDT',processed_at:Date.now(),detected_at:Date.now()});
+  const professor={
+    health:()=>({running:true,busy:false,last_scan_at:Date.now(),radar:'PROFESSOR_RADAR',radar_name:'البروفيسور — استخبارات عامة'}),
+    tick:async()=>{ticked++;},
+    snapshot:()=>({radar:'PROFESSOR_RADAR',radar_name:'البروفيسور — استخبارات عامة',as_of:new Date().toISOString(),universe:{eligible_spot_symbols:100,mentioned_symbols:2,deep_scanned:2},streams:{count:3,live_count:2,source_status:'LIVE',items:[]},news:{count:8,source_status:'LIVE',items:[]},candidates:[],meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}})
+  };
+  const server=createApiServer({config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},store,
+    monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},pushProvider:new NoopPushProvider(),professorRadar:professor});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const status=await (await fetch('http://127.0.0.1:'+server.address().port+'/api/radar-status')).json();
+    assert.equal(status.radars.length,8);assert.equal(status.radars.at(-1).radar_name,'البروفيسور — استخبارات عامة');
+    const res=await fetch('http://127.0.0.1:'+server.address().port+'/api/professor-radar?scan=1&limit=10');
+    assert.equal(res.status,200);const body=await res.json();assert.equal(ticked,1);assert.equal(body.meta.radar,'PROFESSOR_RADAR');assert.equal(body.alerts.length,1);assert.equal(body.alerts[0].radar_name,'البروفيسور — استخبارات عامة');
+    assert.equal(body.meta.real_order_execution,false);
+  }finally{await new Promise(resolve=>server.close(resolve));}
+});
+
+test('Whale Accumulation route exposes paper-only public contract',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-whale-api-')),store=await new DurableStore({dir}).init();
+  const whale={
+    health:()=>({running:false,busy:false,radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان',universe:100,scanned_successfully:3,confirmed_count:1}),
+    start:async()=>{},stop:async()=>{},tick:async()=>{},
+    coverage:()=>({universe_total:100,scanned_successfully:3,confirmed_after_persistence:1}),
+    snapshot:()=>[{symbol:'TESTUSDT',eligible:true,opportunity_score:86,whale_accumulation:{stage:'CONFIRMED_ACCUMULATION'},large_prints:{largeBuyRatio:.72,largeNotionalRatio:.18},candle_flow:{volumeRatio:1.7,takerBuyRatio:.62},orderbook:{nearImbalance:.12},radar_quality_v3:{score:90},whale_streak:{count:2,required:2},reasons:['LARGE_PRINT_REPETITION'],paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',processed_at:Date.now(),detected_at:Date.now()}],
+    report:()=>({thresholds:{minLargeBuyRatio:.6},what_it_measures:['Large Prints'],methodology:'test',source:'Binance Public REST'})
+  };
+  const server=createApiServer({config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},store,
+    monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},pushProvider:new NoopPushProvider(),whaleAccumulationRadar:whale});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const res=await fetch('http://127.0.0.1:'+server.address().port+'/api/whale-accumulation-radar?limit=1&scan=0');
+    assert.equal(res.status,200);const body=await res.json();
+    assert.equal(body.radar,'WHALE_ACCUMULATION_RADAR');
+    assert.equal(body.candidates.length,1);
+    assert.equal(body.meta.paper_trading,true);
+    assert.equal(body.meta.real_order_execution,false);
+    assert.equal(body.meta.confidence_score,'UNKNOWN');
+  }finally{await new Promise(resolve=>server.close(resolve));}
+});
+
+test('Multi-Analyst route exposes the twenty-stage contract',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-multi-analyst-api-')),store=await new DurableStore({dir}).init();
+  const engine={
+    getCached:()=>null,
+    scan:async()=>({
+      meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analyst_count:20,specialist_count:19},
+      as_of:new Date().toISOString(),source:'Binance Public REST',
+      universe:{quote:'USDT',eligible_spot_symbols:100,discovery_pool:2,scanned:2,returned:1,min_quote_volume_24h:300000},
+      market_context:{median_24h_change_pct:1,positive_breadth_pct:60},
+      summary:{strong_candidates:1,candidates:0,watch:0,rejected:1},
+      pipeline:['Discovery','Data Gate','19 Specialist Analysts','Chief Analyst'],
+      candidates:[{
+        symbol:'TESTUSDT',rank:1,last_price:1,price_change_24h:2,quote_volume_24h:1000000,
+        liquidity_quality:90,data_quality:100,direction:'LONG',verdict:'CANDIDATE',final_score:82,
+        consensus:{positive:14,strong:6,total:19,ratio:14/19},
+        analysts:Array.from({length:19},(_,i)=>({id:'A'+i,name:'A'+i,score:70,decision:'POSITIVE',direction:'LONG',evidence:{}})),
+        final_judge:{totalAnalysts:19,score:82,verdict:'CANDIDATE',direction:'LONG',positiveAnalysts:14,strongAnalysts:6,hardReasons:[],reasons:[]},
+        highlights:[],risk_flags:[],reason_codes:[],data_status:{data_valid:true},paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+      }]
+    })
+  };
+  const server=createApiServer({config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},store,
+    monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},pushProvider:new NoopPushProvider(),multiAnalystRadar:engine});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const res=await fetch('http://127.0.0.1:'+server.address().port+'/api/multi-analyst?quote=USDT&limit=1&scan=1');
+    assert.equal(res.status,200);
+    const body=await res.json();
+    assert.equal(body.meta.analyst_count,20);
+    assert.equal(body.meta.specialist_count,19);
+    assert.equal(body.candidates[0].analysts.length,19);
+    assert.equal(body.candidates[0].final_judge.totalAnalysts,19);
+    assert.equal(body.meta.paper_trading,true);
+    assert.equal(body.meta.real_order_execution,false);
+    assert.equal(body.meta.confidence_score,'UNKNOWN');
+  }finally{await new Promise(resolve=>server.close(resolve));}
+});
+
+test('TEST_FIXTURE: Kahir route can trigger an immediate scan without requiring prior alerts',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-kahir-api-')),store=await new DurableStore({dir}).init();
+  let ticked=0;
+  const kahir={
+    health:()=>({running:true,busy:false,radar:'KAHIR_RADAR',radar_name:'Radar 5 — القاهر'}),
+    tick:async()=>{ticked++;},
+    snapshot:()=>({radar:'KAHIR_RADAR',radar_name:'Radar 5 — القاهر',as_of:new Date().toISOString(),universe:{scanned:0,deep_scanned:0,eligible_spot_symbols:0},candidates:[],meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}})
+  };
+  const {server,base}=await startTestApi(store,{});
+  // Recreate with the Kahir dependency because startTestApi has no Kahir instance.
+  await new Promise(resolve=>server.close(resolve));
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server2=createApiServer({config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},
+    store,monitor,pushProvider:new NoopPushProvider(),kahirRadar:kahir});
+  await new Promise(resolve=>server2.listen(0,'127.0.0.1',resolve));
+  const res=await fetch('http://127.0.0.1:'+server2.address().port+'/api/kahir-radar?limit=20&scan=1');
+  assert.equal(res.status,200);
+  assert.equal(ticked,1);
+  const body=await res.json();
+  assert.equal(body.meta.radar,'KAHIR_RADAR');
+  await new Promise(resolve=>server2.close(resolve));
+});
+
+
+test('TEST_FIXTURE: Kahir immediate scan failure returns resilient status instead of HTTP 503',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-kahir-api-failure-')),store=await new DurableStore({dir}).init();
+  const kahir={
+    health:()=>({running:true,busy:false,last_scan_at:null,last_error:'TRANSIENT_BINANCE_FAILURE',radar:'KAHIR_RADAR',radar_name:'Radar 5 — القاهر'}),
+    tick:async()=>{throw new Error('TRANSIENT_BINANCE_FAILURE');},
+    snapshot:()=>({radar:'KAHIR_RADAR',radar_name:'Radar 5 — القاهر',as_of:null,universe:{scanned:0,deep_scanned:0,eligible_spot_symbols:0},candidates:[],meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}})
+  };
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'},monitoring:{running:true}})};
+  const server=createApiServer({config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},store,monitor,pushProvider:new NoopPushProvider(),kahirRadar:kahir});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const res=await fetch('http://127.0.0.1:'+server.address().port+'/api/kahir-radar?limit=20&scan=1');
+    assert.equal(res.status,200);
+    const body=await res.json();
+    assert.equal(body.meta.radar,'KAHIR_RADAR');
+    assert.equal(body.scan.requested,true);
+    assert.match(String(body.scan.error),/TRANSIENT_BINANCE_FAILURE/);
+  }finally{await new Promise(resolve=>server.close(resolve));}
+});

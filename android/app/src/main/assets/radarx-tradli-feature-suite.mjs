@@ -1,7 +1,7 @@
 
 import { getMarketRadar } from './radarx-backend-client.mjs';
 
-const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const esc = (v) => String(v || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const num = (v,d=2) => Number.isFinite(Number(v)) ? Number(v).toFixed(d) : '—';
 const percent = (v,d=1) => Number.isFinite(Number(v)) ? Number(v).toFixed(d) + '%' : '—';
 
@@ -50,7 +50,7 @@ function readStoredMarket() {
     const raw = localStorage.getItem(MARKET_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (!parsed?.body || !Number.isFinite(parsed.savedAt)) return null;
+    if (!parsed && parsed.body || !Number.isFinite(parsed.savedAt)) return null;
     if (Date.now() - parsed.savedAt > MARKET_FALLBACK_MAX_AGE_MS) return null;
     return Object.assign({}, parsed.body, {
       __transportFallback: true,
@@ -105,23 +105,23 @@ function findCandidate(body,symbol) {
   return (body.candidates || []).find(x => String(x.symbol).toUpperCase() === symbol.toUpperCase());
 }
 function agents(c) {
-  const ss = Array.isArray(c?.strategies) ? c.strategies : [];
+  const ss = Array.isArray(c && c.strategies) ? c.strategies : [];
   const m = Object.fromEntries(ss.map(x => [x.id,x]));
-  const fp = c?.pre_breakout_fingerprint || {};
+  const fp = c && c.pre_breakout_fingerprint || {};
   const e = fp.evidence || {};
   const rows = [
-    ['Trend',m.MTF_TREND?.score ?? 50],
-    ['Structure',e.structure?.score ?? (fp.context?.breakout ? 82 : 50)],
-    ['Momentum',c?.price_change_24h == null ? 50 : Math.max(0,Math.min(100,50 + Number(c.price_change_24h)*4))],
-    ['Volume',Math.max(0,Math.min(100,50 + ((Number(e.volume?.rvol)||1)-1)*35))],
-    ['Liquidity',c?.liquidity_quality ?? 50],
-    ['RSI / Exhaustion',100-(m.MEAN_REVERSION?.score ?? 45)],
-    ['MACD Continuation',m.MACD_TREND_CONTINUATION?.score ?? 50],
-    ['VWAP Position',m.VWAP_POSITION?.score ?? m.VWAP_REVERSION?.score ?? 50],
-    ['Volatility',m.ATR_EXPANSION?.score ?? 50],
-    ['Breakout',m.CONFIRMED_BREAKOUT?.score ?? 50],
-    ['Mean Reversion',m.MEAN_REVERSION?.score ?? 50],
-    ['Market Regime',e.regime?.score ?? 50]
+    ['Trend',m.MTF_TREND && m.MTF_TREND.score || 50],
+    ['Structure',e.structure && e.structure.score || (fp.context && fp.context.breakout ? 82 : 50)],
+    ['Momentum',c && c.price_change_24h == null ? 50 : Math.max(0,Math.min(100,50 + Number(c.price_change_24h)*4))],
+    ['Volume',Math.max(0,Math.min(100,50 + ((Number(e.volume && e.volume.rvol)||1)-1)*35))],
+    ['Liquidity',c && c.liquidity_quality || 50],
+    ['RSI / Exhaustion',100-(m.MEAN_REVERSION && m.MEAN_REVERSION.score || 45)],
+    ['MACD Continuation',m.MACD_TREND_CONTINUATION && m.MACD_TREND_CONTINUATION.score || 50],
+    ['VWAP Position',m.VWAP_POSITION && m.VWAP_POSITION.score || m.VWAP_REVERSION && m.VWAP_REVERSION.score || 50],
+    ['Volatility',m.ATR_EXPANSION && m.ATR_EXPANSION.score || 50],
+    ['Breakout',m.CONFIRMED_BREAKOUT && m.CONFIRMED_BREAKOUT.score || 50],
+    ['Mean Reversion',m.MEAN_REVERSION && m.MEAN_REVERSION.score || 50],
+    ['Market Regime',e.regime && e.regime.score || 50]
   ];
   return '<div class="rxsuite-agents">' + rows.map(x =>
     '<div class="rxsuite-agent"><div class="rxsuite-agent-top"><span>' + esc(x[0]) + '</span><b>' + num(x[1],0) + '</b></div><div class="rxsuite-meter"><i style="width:' + Math.max(0,Math.min(100,Number(x[1])||0)) + '%"></i></div></div>'
@@ -158,7 +158,7 @@ function chartPanel(root) {
       const p=Number(c.last_price), r=root.querySelector('#rx-cm').value==='scalp'?0.0075:0.018, long=c.direction==='LONG';
       const sl=p*(long?1-r:1+r), tp1=p*(long?1+r*1.5:1-r*1.5), tp2=p*(long?1+r*2.5:1-r*2.5), fp=c.pre_breakout_fingerprint||{};
       out.innerHTML='<div class="rxsuite-grid">'+box('Signal state',c.signal_state)+box('Entry',num(p,8))+box('Stop Loss',num(sl,8))+box('TP1',num(tp1,8))+box('TP2',num(tp2,8))+box('Images',Math.min(4,f.files.length))+'</div>' +
-        agents(c) + '<div class="rxsuite-row"><div><b>Pre-Breakout Fingerprint</b><small>stage=' + esc(fp.stage||'NORMAL') + ' · score=' + num(fp.score,1) + ' · trap=' + percent(fp.trapRisk,0) + ' · evidence=' + (fp.evidenceCount ?? '—') + '/8</small></div><span class="rxsuite-tag ' + (fp.detected?'rxsuite-ok':'rxsuite-warn') + '">' + (fp.detected?'DETECTED':'NOT CONFIRMED') + '</span></div>' +
+        agents(c) + '<div class="rxsuite-row"><div><b>Pre-Breakout Fingerprint</b><small>stage=' + esc(fp.stage||'NORMAL') + ' · score=' + num(fp.score,1) + ' · trap=' + percent(fp.trapRisk,0) + ' · evidence=' + (fp.evidenceCount || '—') + '/8</small></div><span class="rxsuite-tag ' + (fp.detected?'rxsuite-ok':'rxsuite-warn') + '">' + (fp.detected?'DETECTED':'NOT CONFIRMED') + '</span></div>' +
         '<p class="rxsuite-row">تنبيه: الصورة لا تُعامل كرؤية حاسوبية خارجية؛ القيم ناتجة من محرك RadarX الكمي.</p>';
     } catch(e){ out.innerHTML='<div class="rxsuite-row"><b>DATA UNAVAILABLE</b><small>'+esc(e.message)+'</small></div>'; }
   };
@@ -180,7 +180,7 @@ function verifyPanel(root) {
       const m=t.match(/(?:@|entry|دخول)\s*[=:]?\s*(\d+(?:\.\d+)?)/i), ep=m?Number(m[1]):null, p=Number(c.last_price), far=ep?Math.abs(p-ep)/ep*100:null;
       const v=!buy&&!sell?'AMBIGUOUS':conflict?'CONFLICTING':far!==null&&far>3?'STALE / FAR ENTRY':'CONSISTENT';
       const cl=v==='CONSISTENT'?'rxsuite-ok':(v==='AMBIGUOUS'||v.startsWith('STALE'))?'rxsuite-warn':'rxsuite-bad';
-      o.innerHTML='<div class="rxsuite-grid">'+box('Result',v)+box('Radar direction',c.direction)+box('Current',num(p,8))+box('Entry',ep?num(ep,8):'—')+box('Distance',far!==null?percent(far):'—')+box('Trap Risk',percent(c.pre_breakout_fingerprint?.trapRisk,0))+'</div>' +
+      o.innerHTML='<div class="rxsuite-grid">'+box('Result',v)+box('Radar direction',c.direction)+box('Current',num(p,8))+box('Entry',ep?num(ep,8):'—')+box('Distance',far!==null?percent(far):'—')+box('Trap Risk',percent(c.pre_breakout_fingerprint && c.pre_breakout_fingerprint.trapRisk,0))+'</div>' +
       '<div class="rxsuite-row"><div><b>Assessment</b><small>' + esc(conflict?'الاتجاه يتعارض مع المرشح الحالي.':far!==null&&far>3?'الدخول بعيد عن السعر الحالي.':'لا يوجد تعارض مباشر في البيانات الحالية.') + '</small></div><span class="rxsuite-tag '+cl+'">'+v+'</span></div>';
     }catch(e){o.innerHTML='<div class="rxsuite-row"><b>DATA UNAVAILABLE</b><small>'+esc(e.message)+'</small></div>';}
   };
@@ -204,7 +204,7 @@ function advisorPanel(root) {
       else if(risk!==null&&risk>5){act='REASSESS RISK';reason='وقف الخسارة واسع نسبيًا.'}
       else if(rr!==null&&rr<1){act='REASSESS TARGET';reason='نسبة R:R أقل من 1.'}
       else if(c.signal_state==='CONFIRMED'){act='HOLD / MONITOR';cl='rxsuite-ok';reason='الصفقة متوافقة حاليًا مع المرشح.'}
-      o.innerHTML='<div class="rxsuite-grid">'+box('Action',act)+box('Current',num(p,8))+box('Risk',risk!==null?percent(risk):'—')+box('R:R',rr!==null?num(rr,2):'—')+box('Liquidity',num(c.liquidity_quality,0))+box('Trap Risk',percent(c.pre_breakout_fingerprint?.trapRisk,0))+'</div>' +
+      o.innerHTML='<div class="rxsuite-grid">'+box('Action',act)+box('Current',num(p,8))+box('Risk',risk!==null?percent(risk):'—')+box('R:R',rr!==null?num(rr,2):'—')+box('Liquidity',num(c.liquidity_quality,0))+box('Trap Risk',percent(c.pre_breakout_fingerprint && c.pre_breakout_fingerprint.trapRisk,0))+'</div>' +
         '<div class="rxsuite-row"><div><b>Advisor</b><small>'+esc(reason)+'</small></div><span class="rxsuite-tag '+cl+'">'+act+'</span></div>';
     }catch(e){o.innerHTML='<div class="rxsuite-row"><b>DATA UNAVAILABLE</b><small>'+esc(e.message)+'</small></div>';}
   };
@@ -234,7 +234,7 @@ function supplyPanel(root) {
     try{
       const b=await market(),c=findCandidate(b,s);if(!c)throw Error('NO_CURRENT_CANDIDATE');
       const p=Number(c.last_price),fp=c.pre_breakout_fingerprint||{};
-      o.innerHTML='<div class="rxsuite-grid">'+box('Demand 1',num(p*.988,8))+box('Demand 2',num(p*.972,8))+box('Supply 1',num(p*1.012,8))+box('Supply 2',num(p*1.028,8))+box('Resistance tests',fp.resistance?.remainingTests??'—')+box('Fingerprint',fp.stage||'NORMAL')+'</div>';
+      o.innerHTML='<div class="rxsuite-grid">'+box('Demand 1',num(p*.988,8))+box('Demand 2',num(p*.972,8))+box('Supply 1',num(p*1.012,8))+box('Supply 2',num(p*1.028,8))+box('Resistance tests',fp.resistance && fp.resistance.remainingTests||'—')+box('Fingerprint',fp.stage||'NORMAL')+'</div>';
     }catch(e){o.innerHTML='<div class="rxsuite-row"><b>DATA UNAVAILABLE</b><small>'+esc(e.message)+'</small></div>';}
   };
 }

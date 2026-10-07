@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#071018">
+<title>🧠 مركز التحليل — RadarX</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;min-height:100%;background:#050b10;color:#edf7fa;font-family:system-ui,Arial,sans-serif}
+body{background:radial-gradient(circle at 15% 0,#16445855,transparent 30%),radial-gradient(circle at 92% 8%,#3d1d5a45,transparent 30%),linear-gradient(180deg,#071018,#04080c 70%,#071018)}
+main{width:min(1160px,100%);margin:auto;padding:12px 14px 48px}
+.hero{border:1px solid #22596d;border-radius:28px;padding:18px;background:linear-gradient(145deg,#0c1d27,#081118 55%,#111028);box-shadow:0 22px 70px #000a}
+.badge{display:inline-flex;padding:7px 11px;border:1px solid #2c7088;border-radius:999px;background:#0b2632;color:#76e4ff;font-size:10px;font-weight:900}
+h1{margin:11px 0 5px;font-size:30px}
+.sub{color:#9eb6c0;font-size:11px;line-height:1.85}
+.controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+button{border:1px solid #315c6b;border-radius:13px;padding:11px 14px;font-weight:900;background:#0a151c;color:#eaf7fa}
+.primary{background:linear-gradient(135deg,#4ed7ff,#6ef0c0);color:#03202a;border:0}
+.status{margin-top:12px;padding:11px 13px;border:1px solid #294653;border-radius:15px;background:#07131a;color:#a9c1ca;font-size:10px}
+.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:11px}
+.metric{padding:11px;border:1px solid #203b47;border-radius:16px;background:#08131a}
+.metric b{display:block;font-size:19px;color:#dff8ff}.metric span{font-size:8px;color:#78939e}
+.panel{margin-top:12px;padding:14px;border:1px solid #203a46;border-radius:22px;background:#081118dd}
+.panel h2{font-size:13px;margin:0 0 10px}
+.summaryGrid{display:grid;grid-template-columns:1.2fr .8fr;gap:10px}
+.verdict{padding:14px;border-radius:18px;border:1px solid #315565;background:#0a1920}
+.verdict strong{font-size:23px;display:block}.green{color:#6ef0c0}.yellow{color:#ffd66e}.red{color:#ff8e9d}.muted{color:#819aa5;font-size:9px;line-height:1.7}
+.pool{display:grid;gap:10px}
+.card{border:1px solid #233f4a;border-radius:19px;background:#071118;padding:12px}
+.cardTop{display:flex;justify-content:space-between;gap:10px;align-items:center}
+.sym{font-size:17px;font-weight:1000}.score{font-size:18px;font-weight:1000;color:#77e5ff}
+.meta{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}.pill{padding:5px 7px;border-radius:999px;border:1px solid #284652;background:#0a1820;color:#a8c0ca;font-size:8px}.pillGood{border-color:#2f806d;color:#72e9bf}
+.bar{height:8px;border-radius:999px;background:#101d24;overflow:hidden;margin:10px 0}.fill{height:100%;background:linear-gradient(90deg,#48dfff,#6ef0c0)}
+.analysts{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:10px}
+.a{border:1px solid #203844;border-radius:13px;padding:8px;background:#09141b}
+.a b{display:block;font-size:8px}.a span{display:block;margin-top:4px;font-size:13px;font-weight:900}.a small{display:block;margin-top:3px;color:#78909a;font-size:7px;line-height:1.45}
+.details{margin-top:10px;font-size:9px;color:#94adb7;line-height:1.8}
+#errors{color:#ff9aaa}
+@media(max-width:900px){.metrics{grid-template-columns:repeat(3,1fr)}.analysts{grid-template-columns:repeat(3,1fr)}.summaryGrid{grid-template-columns:1fr}}
+@media(max-width:560px){main{padding:10px}.metrics{grid-template-columns:repeat(2,1fr)}.analysts{grid-template-columns:repeat(2,1fr)}h1{font-size:25px}}
+</style>
+</head>
+<body>
+<main>
+<section class="hero">
+  <div class="badge">🧠 MULTI-ANALYST INTELLIGENCE • SPOT • PAPER ONLY</div>
+  <h1>مركز التحليل</h1>
+  <div class="sub">كل عملة تمر عبر منظومة مستقلة من <b>20 محللًا متخصصًا</b>. كل محلل يقيس جانبًا مختلفًا، ثم يحكم المحلل النهائي بالإجماع والبوابات الصارمة. لا توجد أوامر حقيقية، ولا نستخدم بيانات مفتوحة أو شموع غير مغلقة.</div>
+  <div class="controls">
+    <button class="primary" id="scan">🧠 ابدأ تحليل السوق</button>
+    <button id="refresh">↻ تحديث</button>
+  </div>
+  <div class="status" id="status">جاهز — لم يبدأ التحليل بعد.</div>
+  <div class="metrics">
+    <div class="metric"><b id="universe">—</b><span>Spot المؤهلة</span></div>
+    <div class="metric"><b id="scanned">—</b><span>تم تحليلها</span></div>
+    <div class="metric"><b id="strong">—</b><span>مرشحات قوية</span></div>
+    <div class="metric"><b id="candidate">—</b><span>مرشحات</span></div>
+    <div class="metric"><b id="watch">—</b><span>مراقبة</span></div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>⚖️ كيف يصدر الحكم؟</h2>
+  <div class="summaryGrid">
+    <div class="verdict"><strong id="headline">—</strong><div class="muted" id="headlineSub">كل النتائج تظهر بعد فحص بيانات حية وصالحة فقط.</div></div>
+    <div class="verdict"><strong id="breadth">—</strong><div class="muted">اتساع السوق الإيجابي • وسيط تغير 24h</div></div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>🏆 ترتيب العملات بعد مرورها على المحللين</h2>
+  <div class="pool" id="pool"><div class="muted">لا توجد نتائج بعد.</div></div>
+  <div id="errors"></div>
+</section>
+</main>
+
+<script type="module">
+import {getMultiAnalystRadar} from './radarx-backend-client.mjs';
+const $=id=>document.getElementById(id);
+const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const n=(v,d=0)=>Number.isFinite(Number(v))?Number(v):d;
+let busy=false;
+const analystLabel=id=>{
+ const map={MARKET_REGIME:'نظام السوق',MTF_ALIGNMENT:'توافق الأطر',MARKET_STRUCTURE:'الهيكل',BOTTOM_TURN:'القاع والتحول',MOMENTUM:'الزخم',VOLUME_CONFIRMATION:'تأكيد الحجم',VOLATILITY_COMPRESSION:'الانكماش',PRE_BREAKOUT:'ما قبل الاختراق',SUPPORT_RESISTANCE:'الدعم والمقاومة',RELATIVE_STRENGTH:'القوة النسبية',ORDERBOOK_PRESSURE:'دفتر الأوامر',LIQUIDITY_QUALITY:'جودة السيولة',LARGE_PLAYER_PROXY:'اللاعبون الكبار',ABSORPTION:'امتصاص السيولة',RISK_TRAPS:'الفخاخ والإرهاق',EXTENSION:'عدم مطاردة السعر',STRATEGY_CONSENSUS:'إجماع الاستراتيجيات',MARKET_BREADTH:'اتساع السوق',DATA_INTEGRITY:'سلامة البيانات'};
+ return map[id]||id;
+};
+function colorFor(v){return v>=80?'green':v>=60?'yellow':'red'}
+function render(body){
+ $('universe').textContent=n(body.universe?.eligible_spot_symbols);
+ $('scanned').textContent=n(body.universe?.scanned);
+ $('strong').textContent=n(body.summary?.strong_candidates);
+ $('candidate').textContent=n(body.summary?.candidates);
+ $('watch').textContent=n(body.summary?.watch);
+ $('breadth').textContent=body.market_context?.positive_breadth_pct==null?'—':n(body.market_context.positive_breadth_pct).toFixed(1)+'%';
+ const candidates=Array.isArray(body.candidates)?body.candidates:[];
+ $('headline').textContent=candidates.length?(n(candidates[0].final_score).toFixed(1)+' / 100 • '+String(candidates[0].verdict||'REJECT')):'لا توجد مرشحات قوية';
+ $('headline').className=colorFor(n(candidates[0]?.final_score,0));
+ $('headlineSub').textContent=candidates.length?'الأعلى حصل على '+n(candidates[0].consensus?.positive)+' / '+n(candidates[0].consensus?.total)+' محللًا إيجابيًا.':'تم رفض النتائج الضعيفة أو غير المكتملة.';
+ $('pool').innerHTML='';
+ if(!candidates.length){$('pool').innerHTML='<div class="muted">لا توجد عملات اجتازت البوابات الحالية.</div>';return}
+ for(const c of candidates){
+   const card=document.createElement('article');card.className='card';
+   const analysts=Array.isArray(c.analysts)?c.analysts:[];
+   card.innerHTML='<div class="cardTop"><div class="sym">🪙 '+esc(c.symbol)+'</div><div class="score">'+n(c.final_score).toFixed(1)+'/100</div></div>'+
+     '<div class="meta"><span class="pill '+(c.verdict==='STRONG_CANDIDATE'||c.verdict==='CANDIDATE'?'pillGood':'')+'">'+esc(c.verdict)+'</span>'+
+     '<span class="pill">إيجابي '+n(c.consensus?.positive)+'/'+n(c.consensus?.total)+'</span>'+
+     '<span class="pill">قوي '+n(c.consensus?.strong)+'</span>'+
+     '<span class="pill">'+esc(c.direction)+'</span>'+
+     '<span class="pill">DQ '+n(c.data_quality).toFixed(0)+'</span></div>'+
+     '<div class="bar"><div class="fill" style="width:'+Math.max(0,Math.min(100,n(c.final_score)))+'%"></div></div>'+
+     '<div class="analysts">'+analysts.map(a=>'<div class="a"><b>'+esc(analystLabel(a.id))+'</b><span class="'+colorFor(n(a.score))+'">'+n(a.score).toFixed(1)+'</span><small>'+esc(a.decision)+' • '+esc(a.direction)+'</small></div>').join('')+'</div>'+
+     '<div class="details"><b>أسباب القوة:</b> '+esc((c.final_judge?.reasons||[]).join(' • ')||'—')+
+     '<br><b>بوابات الرفض:</b> '+esc((c.final_judge?.hardReasons||[]).join(' • ')||'لا توجد')+
+     '<br><b>البيانات:</b> '+esc(c.data_status?.data_valid?'صالحة وحية':'غير مكتملة/مرفوضة')+
+     '</div>';
+   $('pool').appendChild(card);
+ }
+}
+async function run(){
+ if(busy)return;busy=true;$('status').textContent='🧠 جاري تحليل العملات عبر 20 محللًا...';$('errors').textContent='';
+ try{
+   const r=await getMultiAnalystRadar({limit:10});
+   if(!r.ok||!r.body)throw new Error(r.error||'MULTI_ANALYST_UNAVAILABLE');
+   render(r.body);
+   $('status').textContent='● اكتمل التحليل • '+n(r.body.universe?.scanned)+' عملات • 20 محللًا + المحلل النهائي';
+ }catch(e){$('status').textContent='تعذر التحليل — '+esc(e?.message||e);$('errors').textContent='قد تكون بيانات السوق غير متاحة الآن؛ لم يتم اختراع نتائج.'}
+ finally{busy=false;}
+}
+$('scan').addEventListener('click',run);$('refresh').addEventListener('click',run);
+</script>
+</body>
+</html>

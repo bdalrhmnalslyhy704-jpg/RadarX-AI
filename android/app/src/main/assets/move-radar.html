@@ -41,9 +41,9 @@ function render(rows){
  cards.innerHTML=rows.map(a=>{
   const up=a.direction==='UP_MOVE';
   return '<article class="card"><div class="row"><div><div class="sym">'+a.symbol+'</div><div class="muted">السعر '+n(a.price)+' • حركة 24h '+pct(a.movePct)+'</div></div><div style="text-align:left"><div class="score">'+n(a.setupScore)+'</div><span class="tag '+(up?'up':'down')+'">'+moveLabel(a.direction)+'</span></div></div>'+
-  '<div class="grid"><div class="box"><span>درجة الفرصة</span><b>'+n(a.setupScore)+'</b></div><div class="box"><span>تهيؤ التوسع</span><b>'+n(a.expansionPotential)+'</b></div><div class="box"><span>توافق الاستراتيجيات</span><b>'+n(a.strategy_confluence?.accepted_count)+' مؤكدة</b></div><div class="box"><span>أفضل استراتيجية</span><b>'+n(a.strategy_confluence?.best_score)+'</b></div></div>'+
+  '<div class="grid"><div class="box"><span>درجة الفرصة</span><b>'+n(a.setupScore)+'</b></div><div class="box"><span>تهيؤ التوسع</span><b>'+n(a.expansionPotential)+'</b></div><div class="box"><span>توافق الاستراتيجيات</span><b>'+n(a.strategy_confluence && a.strategy_confluence.accepted_count)+' مؤكدة</b></div><div class="box"><span>أفضل استراتيجية</span><b>'+n(a.strategy_confluence && a.strategy_confluence.best_score)+'</b></div></div>'+
   '<div class="reasons">'+a.reasons.slice(0,8).map(x=>'<span class="reason">'+x+'</span>').join('')+'</div>'+
-  '<div class="note">'+potentialLabel(a.potential_label)+' • '+(a.strategy_confluence?.accepted_ids||[]).join(', ')+' • '+new Date(a.processed_at||Date.now()).toLocaleString('ar-YE')+'</div></article>'
+  '<div class="note">'+potentialLabel(a.potential_label)+' • '+(a.strategy_confluence && a.strategy_confluence.accepted_ids||[]).join(', ')+' • '+new Date(a.processed_at||Date.now()).toLocaleString('ar-YE')+'</div></article>'
  }).join('')
 }
 async function load(){
@@ -51,14 +51,14 @@ async function load(){
  try{
   const since=Number(localStorage.getItem('radarx_move_cursor')||0);
   const r=await getMoveRadar({limit:50,since});
-  if(!r.ok||!r.body)throw new Error(r.body?.error||'MOVE_RADAR_UNAVAILABLE');
+  if(!r.ok||!r.body)throw new Error(r.body && r.body.error||'MOVE_RADAR_UNAVAILABLE');
   const rows=normalizeMoveAlerts(r.body).filter(a=>a.event==='PRE_EXPLOSION_ALERT' && Number(a.movePct)<=1.25);
   if(rows.length){
    const newest=Math.max(...rows.map(x=>Number(x.processed_at)||0));
    if(newest) localStorage.setItem('radarx_move_cursor',String(newest));
   }
   const m=r.body.monitoring||{};
-  status.innerHTML='<b>مباشر</b> — الخادم يفحص المرشحين الهادئين ثم يرسل '+(m.universe||0)+' عملة • WebSocket '+(m.websocket?.state||'UNKNOWN')+' • تنبيهات مستلمة '+rows.length;
+  status.innerHTML='<b>مباشر</b> — الخادم يفحص المرشحين الهادئين ثم يرسل '+(m.universe||0)+' عملة • WebSocket '+(m.websocket && m.websocket.state||'UNKNOWN')+' • تنبيهات مستلمة '+rows.length;
   render(rows);
  }catch(e){
   status.innerHTML='<b>لا يوجد اتصال حاليًا</b> — '+String(e.message||e);

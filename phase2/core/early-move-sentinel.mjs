@@ -1,5 +1,7 @@
 import {MarketUniverseScanner,buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {BinanceAllMarketTickerClient} from '../market/binance-market-ticker-ws.mjs';
+import {decorateRadarAlert} from './radar-alert-meta.mjs';
+import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 
 const clamp=(n,min=0,max=100)=>Math.max(min,Math.min(max,Number(n)||0));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -20,23 +22,23 @@ export const MOVE_RADAR_DEFAULTS=Object.freeze({
   deepConcurrency:4,
   earlyMax24hMovePct:1.25,
   earlyMin24hMovePct:-8,
-  earlyWakeTriggerPct:0.45,
-  earlyWakeDeltaPct:0.25,
-  earlyWakeMax24hMovePct:0.90,
+  earlyWakeTriggerPct:0.65,
+  earlyWakeDeltaPct:0.35,
+  earlyWakeMax24hMovePct:1.10,
   earlyWakeMin24hMovePct:-2,
   earlyWakeScanCooldownMs:90*1000,
-  earlyWakeAlertCooldownMs:10*60*1000,
-  earlyWakeMinScore:68,
-  earlyWakeMinLeaders:3,
+  earlyWakeAlertCooldownMs:15*60*1000,
+  earlyWakeMinScore:76,
+  earlyWakeMinLeaders:4,
   fastInterval:'5m',
   fastKlines:96,
   earlyScanCooldownMs:2*60*1000,
   maxEarlyDiscovery:36,
-  earlyMinPreMoveScore:78,
-  earlyMinExpansionScore:78,
-  earlyMinStrategyScore:72,
-  earlyMinAcceptedStrategies:2,
-  earlyMinConfirmations:6
+  earlyMinPreMoveScore:82,
+  earlyMinExpansionScore:82,
+  earlyMinStrategyScore:75,
+  earlyMinAcceptedStrategies:3,
+  earlyMinConfirmations:8
 });
 
 function strategyScore(candidate) {
@@ -536,11 +538,12 @@ export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
 }
 
 export class EarlyMoveSentinel {
-  constructor({rest,store,config={},clock=()=>Date.now(),logger=console,tickerWsFactory=null,scannerFactory=null}){
+  constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console,tickerWsFactory=null,scannerFactory=null}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
     this.rest=rest;
     this.store=store;
+    this.pushManager=pushManager;
     this.config={...MOVE_RADAR_DEFAULTS,...config};
     this.clock=clock;
     this.logger=logger;
@@ -577,7 +580,6 @@ export class EarlyMoveSentinel {
         deepConcurrency:this.config.deepConcurrency
       }
     });
-    await this.reconcile(true);
     this.ws=this.tickerWsFactory({
       urls:this.config.websocket.urls,
       heartbeatTimeoutMs:this.config.websocket.heartbeatTimeoutMs,
@@ -593,6 +595,12 @@ export class EarlyMoveSentinel {
       this.lastError=String(e?.message??e);
       this.logger.warn?.('MOVE_RECONCILE',this.lastError);
     }),this.config.reconcileMs);
+    try{
+      await this.reconcile(true);
+    }catch(e){
+      this.lastError=String(e?.message??e);
+      this.logger.warn?.('MOVE_BOOTSTRAP',this.lastError);
+    }
   }
 
   async stop(){
@@ -727,6 +735,27 @@ export class EarlyMoveSentinel {
         const preAlert=buildPreExplosionAlert(candidate,job.trigger,{now:this.clock()});
         const alert=preAlert.eligible?preAlert:wakeAlert.eligible?wakeAlert:(job.mode==='MOVE'?buildMoveAlert(candidate,job.trigger,{now:this.clock()}):null);
         if(!alert?.eligible)continue;
+        const cc=alert.components||{};
+        const sc=alert.strategy_confluence||{};
+        const gate=evaluateEliteGate({
+          radar:'EARLY_MOVE_SENTINEL',
+          direction:alert.direction,
+          baseScore:alert.opportunity_score,
+          priceChange24h:alert.price_change_24h,
+          liquidityScore:cc.liquidity||0,
+          dataQualityScore:cc.data_quality||0,
+          triggerScore:Math.max(Number(cc.pre_move)||0,Number(alert.expansion_potential)||0),
+          structureScore:Number(cc.structure)||50,
+          participationScore:Math.max(Number(cc.volume)||0,Number(sc.accepted_mean)||0),
+          flowScore:Number(cc.buying_pressure)||50,
+          relativeScore:Math.max(Number(cc.relative_strength)||0,Number(cc.mtf_alignment)||0),
+          momentumScore:Number(cc.momentum)||50,
+          compressionScore:Number(cc.squeeze)||50,
+          confirmations:Number(alert.pre_explosion?.confirmation_count||alert.confirmation_count||0),
+          minConfirmations:7,minScore:88,max24hMovePct:2.5,requireTrigger:true,minCategoryHits:5
+        });
+        alert.elite_gate=gate;
+        if(!gate.eligible)continue;
         const alertKey=`${job.symbol}:${alert.event}`;
         const recent=this.lastAlertScore.get(alertKey)||0;
         const lastAt=this.lastAlertAt.get(alertKey)||0;
@@ -734,7 +763,9 @@ export class EarlyMoveSentinel {
         if(lastAt>0&&this.clock()-lastAt<cooldown&&alert.opportunity_score<recent+5)continue;
         this.lastAlertAt.set(alertKey,this.clock());
         this.lastAlertScore.set(alertKey,alert.opportunity_score);
-        await this.store.appendMoveAlert(alert);
+        const decorated=decorateRadarAlert(alert,alert?.event==='PRE_EXPLOSION_ALERT'?'Radar 1 — Early-Wake / Pre-Explosion':'Radar 1 — Early-Wake');
+        await this.store.appendMoveAlert(decorated);
+        if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
         this.alertCount++;
       }catch(error){
         this.lastError=String(error?.message??error);

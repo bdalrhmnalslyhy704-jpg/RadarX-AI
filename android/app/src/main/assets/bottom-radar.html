@@ -49,7 +49,7 @@ details{margin-top:8px;border:1px solid #17364d;border-radius:10px;background:#0
 <div class="note">المؤشرات الجديدة تُحسب من شموع 15m المغلقة ودفتر Spot العام: Taker Buy/Sell، Order-Book Imbalance، امتصاص البيع، Squeeze، BOS/HL وتوافق 4H/1H. «ضغط الحيتان» استدلال من تمركز أكبر جدران السيولة في دفتر الأوامر وليس تعريفًا لهوية حيتان فعلية. لا توجد أسعار مستقبلية مضمونة ولا تنفيذ أو تداول حقيقي.</div>
 
 <script type="module">
-import {getMarketRadar} from './radarx-backend-client.mjs';
+import {getBottomRadar} from './radarx-backend-client.mjs';
 import {rankBottomCandidates} from './radarx-bottom-reversal.mjs';
 
 const scan=document.getElementById('scan');
@@ -58,6 +58,10 @@ const status=document.getElementById('status');
 const cards=document.getElementById('cards');
 let busy=false;
 let timer=null;
+const CACHE_KEY='radarx.bottom.cache.v2';
+const CACHE_TTL_MS=5*60*1000;
+function readCache(){try{const raw=sessionStorage.getItem(CACHE_KEY);if(!raw)return null;const x=JSON.parse(raw);return x&&Number.isFinite(Number(x.savedAt))&&x.body&&(Date.now()-Number(x.savedAt)<CACHE_TTL_MS)?x:null;}catch(e){return null;}}
+function writeCache(body){try{sessionStorage.setItem(CACHE_KEY,JSON.stringify({savedAt:Date.now(),body:body}));}catch(e){}}
 
 function fmt(n){
   if(!Number.isFinite(Number(n)))return '—';
@@ -104,8 +108,9 @@ function render(rows){
       '</article>';
   }).join('');
 }
-async function scanMarket(){
+async function scanMarket(force){
   if(busy)return;
+  if(!force){const cached=readCache();if(cached){const rows=rankBottomCandidates(cached.body,Number(limit.value)||10);const universe=cached.body&&cached.body.universe||{};status.innerHTML='<b>بيانات محفوظة</b> — '+rows.length+' مرشحًا • '+Number(universe.scanned||0)+' مفحوصة سابقًا • لم نُعد مسح السوق بعد الرجوع للرادار.';render(rows);return;}}
   busy=true;scan.disabled=true;scan.textContent='جاري فحص القيعان…';
   const requestedLimit=Number(limit.value)||10;
   const scanLimits=[requestedLimit];
@@ -116,14 +121,16 @@ async function scanMarket(){
     for(const scanLimit of [...new Set(scanLimits)]){
       for(let attempt=0;attempt<2;attempt++){
         try{
-          const r=await getMarketRadar({quote:'USDT',limit:scanLimit});
+          const r=await getBottomRadar({quote:'USDT',limit:scanLimit});
           if(r.ok&&r.body){
-            const rows=rankBottomCandidates(r.body);
-            status.innerHTML='<b>تم التحديث</b> — '+rows.length+' مرشحًا صالحًا من '+Number(r.body?.universe?.scanned||0)+' عملة مفحوصة • فحص '+scanLimit;
+            writeCache(r.body);
+            const rows=rankBottomCandidates(r.body, requestedLimit);
+            const universe=r.body&&r.body.universe||{};
+            status.innerHTML='<b>تم التحديث</b> — '+rows.length+' مرشحًا صالحًا من '+Number(universe.scanned||0)+' عملة مفحوصة بعمق • اكتشاف '+Number(universe.discovered||0)+' • فحص '+scanLimit;
             render(rows);
             return;
           }
-          lastErr=new Error('HTTP_'+(r.status||0));
+          lastErr=new Error(r.body && r.body.error||'HTTP_'+(r.status||0));
         }catch(e){lastErr=e}
         if(attempt===0) await new Promise(resolve=>setTimeout(resolve,800));
       }
@@ -136,14 +143,14 @@ async function scanMarket(){
     busy=false;scan.disabled=false;scan.textContent='فحص القيعان الآن';
   }
 }
-scan.addEventListener('click',scanMarket);
+scan.addEventListener('click',()=>scanMarket(true));
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden){clearInterval(timer);timer=null;return}
   clearInterval(timer);
-  timer=setInterval(()=>{if(!busy)scanMarket()},90000);
+  timer=setInterval(()=>{if(!busy)scanMarket(false)},90000);
 });
-timer=setInterval(()=>{if(!busy)scanMarket()},90000);
-setTimeout(scanMarket,250);
+timer=setInterval(()=>{if(!busy)scanMarket(false)},90000);
+setTimeout(()=>scanMarket(false),120);
 </script>
 </main>
 </body>

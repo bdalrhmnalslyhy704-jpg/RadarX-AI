@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#071018">
+<title>Radar 8 — البرق</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:radial-gradient(circle at 50% -10%,#142d47 0,#071018 48%,#05090e 100%);color:#e8f7fb;font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+main{width:min(980px,100%);margin:auto;padding:18px 14px 30px}
+header{position:sticky;top:0;z-index:5;margin:-18px -14px 14px;padding:calc(12px + env(safe-area-inset-top)) 14px 12px;background:rgba(5,12,19,.92);backdrop-filter:blur(14px);border-bottom:1px solid #244866}
+.top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.brand{display:flex;align-items:center;gap:10px}.logo{width:44px;height:44px;border-radius:13px;display:grid;place-items:center;background:linear-gradient(135deg,#35c9ff,#8a68ff);color:#06111a;font-weight:1000}.brand b{display:block;font-size:18px}.brand small{display:block;color:#8fa8bc;font-size:11px;margin-top:2px}
+.state{border:1px solid #27526c;border-radius:999px;padding:7px 10px;font-size:10px;font-weight:900}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.card{background:linear-gradient(145deg,#0c1a28,#09121b);border:1px solid #23445d;border-radius:17px;padding:14px;box-shadow:0 8px 28px rgba(0,0,0,.18)}.wide{grid-column:1/-1}
+.metric b{font-size:20px}.metric small{display:block;color:#8fa8bc;font-size:10px;margin-top:3px}.muted{color:#8fa8bc}.ok{color:#66e6b0}.warn{color:#ffd27a}.bad{color:#ff8794}
+.actions{display:flex;gap:8px;flex-wrap:wrap}.btn{min-height:44px;border:1px solid #2a536b;border-radius:12px;background:#0a1822;color:#e7f8ff;font-weight:900;padding:0 14px}.btn.primary{background:linear-gradient(135deg,#35c9ff,#756dff);color:#06111a;border:0}.btn.stop{background:#32151b;border-color:#6f313d}.btn:disabled{opacity:.55}
+.rows{display:grid;gap:9px}.coin{border:1px solid #24445d;border-radius:15px;padding:12px;background:#09141e}.coin-top{display:flex;align-items:center;justify-content:space-between;gap:8px}.coin-top b{font-size:15px}.score{font-weight:1000}.pill{font-size:9px;border:1px solid #33566b;border-radius:999px;padding:4px 7px;color:#bfe6f6}.mini{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:9px}.mini div{padding:8px;border-radius:11px;background:#0b1a25}.mini b{display:block;font-size:11px}.mini small{display:block;color:#819caf;font-size:9px;margin-top:2px}.reason{margin-top:9px;color:#b5d3df;font-size:10px;line-height:1.7}.meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.empty{padding:25px;text-align:center;color:#8ea6b7;border:1px dashed #29475a;border-radius:14px}
+@media(max-width:600px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.mini{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+</head>
+<body>
+<main>
+<header><div class="top"><div class="brand"><div class="logo">⚡</div><div><b>Radar 8 — البرق</b><small>Early Expansion • Spot USDT • Paper Only</small></div></div><div id="state" class="state">جارٍ الاتصال…</div></div></header>
+
+<section class="grid">
+<div class="card metric"><small>سوق Spot USDT</small><b id="universe">—</b><span class="muted">زوجًا مراقبًا</span></div>
+<div class="card metric"><small>المؤهل الآن</small><b id="eligible">—</b><span class="muted">مرشحًا</span></div>
+<div class="card metric"><small>Micro Scan</small><b id="micro">—</b><span class="muted">من الدورة الأخيرة</span></div>
+<div class="card metric"><small>Deep Scan</small><b id="deep">—</b><span class="muted">تأكيدًا عميقًا</span></div>
+<div class="card wide">
+  <div class="actions">
+    <button id="start" class="btn primary">تشغيل البرق</button>
+    <button id="stop" class="btn stop">إيقاف البرق</button>
+    <button id="scan" class="btn">فحص الآن</button>
+  </div>
+  <div id="updated" class="muted" style="font-size:10px;margin-top:9px">آخر تحديث: —</div>
+  <div id="error" class="bad" style="font-size:10px;margin-top:5px"></div>
+</div>
+
+<div class="card wide">
+  <div class="coin-top"><b>أقوى بصمات ما قبل الحركة</b><span class="pill">V2</span></div>
+  <div id="candidates" class="rows" style="margin-top:10px"><div class="empty">لم تصل بيانات بعد.</div></div>
+</div>
+</section>
+</main>
+
+<script type="module">
+const BASES=['https://radarx-ai-triple-production.up.railway.app','https://radarx-ai-production.up.railway.app'];
+const $=id=>document.getElementById(id);
+let timer=null;
+let busy=false;
+
+function esc(v){return String(v||'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));}
+function fmt(v,d=2){const n=Number(v);return Number.isFinite(n)?n.toFixed(d):'—';}
+function fmtPct(v){const n=Number(v);return Number.isFinite(n)?(n>=0?'+':'')+n.toFixed(2)+'%':'—';}
+function timeText(iso){try{return new Intl.DateTimeFormat('ar-YE',{timeZone:'Asia/Aden',hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true}).format(new Date(iso));}catch{return iso||'—';}}
+
+async function req(path,timeout=70000){
+  let last='';
+  for(const base of BASES){
+    const ctl=new AbortController();
+    const t=setTimeout(()=>ctl.abort(),timeout);
+    try{
+      const r=await fetch(base+path,{cache:'no-store',headers:{Accept:'application/json'},signal:ctl.signal});
+      const body=await r.json().catch(()=>null);
+      if(r.ok||[400,404,409,429].includes(r.status)) return {ok:r.ok,status:r.status,body,base};
+      last='HTTP_'+r.status;
+    }catch(e){last=String(e && e.message||e||'BACKEND_CONNECTION_FAILED');}
+    finally{clearTimeout(t);}
+  }
+  throw new Error(last||'BACKEND_CONNECTION_FAILED');
+}
+
+function render(data){
+  const u=data && data.universe||{}, m=data && data.monitoring||{};
+  $('universe').textContent=u.expected_total||m.universe_total||'—';
+  $('eligible').textContent=u.eligible_total||'—';
+  $('micro').textContent=m.micro_scanned_total||u.micro_scanned_total||'—';
+  $('deep').textContent=u.deep_scanned_total||'—';
+  const live=m.running===true;
+  $('state').textContent=live?'LIVE • البرق يعمل':'متوقف';
+  $('state').className='state '+(live?'ok':'warn');
+  $('updated').textContent='آخر تحديث: '+timeText(data && data.as_of);
+  $('error').textContent=m.last_error?'خطأ: '+esc(m.last_error):'';
+  const arr=Array.isArray(data && data.candidates)?data.candidates:[];
+  if(!arr.length){$('candidates').innerHTML='<div class="empty">لا توجد بصمات عميقة مؤكدة في هذه الدورة.</div>';return;}
+  $('candidates').innerHTML=arr.slice(0,20).map(c=>{
+    const fp=c.micro_fingerprint||{};
+    const met=fp.metrics||{};
+    const reasons=[...(fp.reasons||[]),...(c.reason_codes||[])].slice(0,8);
+    const risk=[...(fp.risk_flags||[]),...(c.risk_flags||[])].slice(0,5);
+    return '<article class="coin">'+
+      '<div class="coin-top"><b>'+esc(c.symbol)+'</b><span class="score">'+fmt(c.early_expansion_score,1)+'</span></div>'+
+      '<div class="meta"><span class="pill">'+esc(c.decision_band||'—')+'</span><span class="pill">'+esc(fp.mode||'—')+'</span><span class="pill">Micro '+fmt(fp.score,1)+'</span><span class="pill">'+esc(String(fp.confirmation_count||0))+'/'+esc(String(fp.confirmation_total||10))+' تأكيدات</span></div>'+
+      '<div class="mini">'+
+      '<div><b>'+fmt(met.rvol_1m,2)+'x</b><small>RVOL 1m</small></div>'+
+      '<div><b>'+fmt(met.trade_rvol_1m,2)+'x</b><small>Trades 1m</small></div>'+
+      '<div><b>'+fmt(met.bb_ratio,2)+'</b><small>BB ratio</small></div>'+
+      '<div><b>'+fmt(met.atr_ratio,2)+'</b><small>ATR ratio</small></div>'+
+      '<div><b>'+fmtPct(met.relative_strength_5m_pct)+'</b><small>RS vs BTC</small></div>'+
+      '<div><b>'+fmt(met.higher_low_count,0)+'</b><small>HL score</small></div>'+
+      '</div>'+
+      '<div class="reason"><b>الإشارات:</b> '+esc(reasons.join(' • ')||'—')+'</div>'+
+      (risk.length?'<div class="reason bad"><b>تحذير:</b> '+esc(risk.join(' • '))+'</div>':'')+
+      '</article>';
+  }).join('');
+}
+
+async function refresh({scan=false}={}){
+  if(busy)return;
+  busy=true;
+  try{
+    const q='/api/early-expansion-radar?quote=USDT&limit=100'+(scan?'&scan=1':'');
+    const r=await req(q,scan?120000:70000);
+    if(r.body)render(r.body);
+    if(!r.ok)$('error').textContent='HTTP_'+r.status;
+  }catch(e){$('state').textContent='تعذر الاتصال';$('state').className='state bad';$('error').textContent=String(e && e.message||e);}
+  finally{busy=false;}
+}
+async function control(action){
+  try{await req('/api/radar-control?radar=EARLY_EXPANSION_RADAR&action='+encodeURIComponent(action),30000);await refresh({scan:true});}
+  catch(e){$('error').textContent=String(e && e.message||e);}
+}
+$('start').onclick=()=>control('start');
+$('stop').onclick=()=>control('stop');
+$('scan').onclick=()=>refresh({scan:true});
+refresh();
+timer=setInterval(()=>refresh(),20000);
+</script>
+</body>
+</html>

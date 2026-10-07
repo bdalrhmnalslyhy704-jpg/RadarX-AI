@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#06070f">
+<title>RadarX — القاهر</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% -12%,#342064 0,#0b1022 38%,#05070d 100%);color:#f4f1ff;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+main{width:min(1080px,100%);margin:auto;padding:12px 14px 36px}
+header{position:sticky;top:0;z-index:20;margin:0 -14px;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;background:rgba(5,7,14,.92);backdrop-filter:blur(18px);border-bottom:1px solid #332650}
+.top{display:flex;justify-content:space-between;align-items:center;gap:10px}.brand{display:flex;align-items:center;gap:10px}.logo{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;background:linear-gradient(135deg,#e6b8ff,#7367ff);color:#100818;font-size:20px;font-weight:1000;box-shadow:0 0 28px rgba(160,116,255,.28)}.brand b{font-size:18px}.brand small{display:block;color:#aaa3c5;font-size:10px;margin-top:2px}
+.back{display:inline-flex;align-items:center;min-height:42px;padding:0 12px;border:1px solid #493566;border-radius:12px;color:#f3ecff;text-decoration:none;background:#0d1020;font-size:11px;font-weight:950}
+.hero{margin-top:14px;padding:20px;border:1px solid #4a356c;border-radius:22px;background:linear-gradient(145deg,#17102a,#0a1020);box-shadow:0 22px 60px rgba(0,0,0,.28)}h1{margin:0;font-size:26px}.hero p{color:#b6afd0;line-height:1.8;font-size:12px;margin:8px 0}.crown{font-size:30px}
+.badge{display:inline-flex;gap:7px;align-items:center;padding:7px 10px;border:1px solid #554078;border-radius:999px;color:#dcd3ff;background:#141028;font-size:10px;font-weight:950}.dot{width:7px;height:7px;border-radius:50%;background:#61e2bd;box-shadow:0 0 12px #61e2bd}
+.toolbar{display:flex;gap:8px;margin-top:11px}button,select{font:inherit}#scan{flex:1;min-height:46px;border:1px solid #b58aff;border-radius:13px;background:linear-gradient(135deg,#e0b1ff,#7667ff);color:#130b1f;font-weight:1000}#limit{width:98px;min-height:46px;border:1px solid #40335c;border-radius:13px;background:#0e1324;color:#f3edff;padding:0 8px;font-weight:900}
+.status{margin-top:10px;padding:12px;border:1px solid #2e2745;border-radius:14px;background:#0b0f1d;color:#aaa6bc;font-size:11px;line-height:1.7}.status b{color:#fff}
+.grid{display:grid;gap:10px;margin-top:12px}.card{padding:14px;border:1px solid #2d2546;border-radius:17px;background:linear-gradient(145deg,#0d1120,#080b14)}.head{display:flex;align-items:center;justify-content:space-between;gap:8px}.sym{font-size:17px;font-weight:1000}.score{font-size:24px;font-weight:1000}.stage{margin-top:3px;font-size:9px;color:#c9bef2}
+.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:10px}.m{padding:9px;border:1px solid #201b32;border-radius:11px;background:#090d18}.m span{display:block;color:#7f7898;font-size:8px}.m b{display:block;margin-top:4px;font-size:12px}.reasons{margin-top:9px;color:#bbb4ce;font-size:10px;line-height:1.7}
+.alert{border-color:#63438b;box-shadow:0 0 24px rgba(133,92,255,.12)}.note{margin-top:12px;color:#77718b;font-size:9px;line-height:1.7}
+@media(max-width:600px){.metrics{grid-template-columns:1fr 1fr}}
+</style>
+<style>html,body{min-height:100%;}body{background:radial-gradient(circle at 88% -10%,#8b5cf622 0,#080916 48%,#03070c 100%)!important;overscroll-behavior-y:none;}button{transition:transform .16s ease,opacity .16s ease,filter .16s ease;}button:active{transform:scale(.985);}*{scrollbar-width:thin;}</style></head>
+<body>
+<main>
+<header><div class="top"><div class="brand"><div class="logo">👑</div><div><b>Radar 5 — القاهر</b><small>Full Market Self-Change Radar • SPOT • PAPER ONLY</small></div></div><a class="back" href="./index.html">← RadarX</a></div></header>
+<section class="hero">
+  <h1><span class="crown">👑</span> القاهر</h1>
+  <p>رادار مستقل لا يطارد العملات التي ارتفعت بالفعل. يقارن كل عملة بسلوكها السابق، يبحث عن تسارع غير معتاد، انتقال نظام التذبذب، مشاركة حقيقية، كفاءة اندفاع واستمراريته، ثم يقارن سرعة العملة بسرعة السوق كاملة.</p>
+  <span class="badge"><span class="dot"></span> يراقب كامل سوق Spot • بيانات Binance العامة • لا تنفيذ حقيقي</span>
+  <div class="toolbar"><button id="scan">شغّل فحص القاهر</button><select id="limit"><option value="10">10</option><option value="20" selected>20</option><option value="30">30</option><option value="40">40</option><option value="50">50</option></select></div>
+</section>
+<div id="status" class="status"><b>جاهز</b> — أول دورة تحتاج إلى بناء خط أساس ذاتي لكل عملة.</div>
+<div id="cards" class="grid"><div class="status">لم تبدأ دورة الفحص بعد.</div></div>
+<div class="note">الخوارزميات: Self-Baseline Z • Participation Regime • Volatility Regime Transition • Kaufman Efficiency Shift • Range Acceptance • Impulse Persistence • Market Speed Spread. «القاهر» أداة كشف وتحليل وليست ضمانًا لارتفاع أو ربح.</div>
+</main>
+<script type="module">
+import {getKahirRadar} from './radarx-backend-client.mjs';
+const scan=document.getElementById('scan'),limit=document.getElementById('limit'),status=document.getElementById('status'),cards=document.getElementById('cards');
+let busy=false;
+const num=(v,d=2)=>Number.isFinite(Number(v))?Number(v).toLocaleString('en-US',{maximumFractionDigits:d}):'—';
+const pct=(v)=>Number.isFinite(Number(v))?Number(v).toFixed(2)+'%':'—';
+function render(body){
+ const rows=Array.isArray(body && body.candidates)?body.candidates:[];
+ if(!rows.length){cards.innerHTML='<div class="status"><b>لا يوجد مرشح جاهز بعد.</b><br>القاهر يحتاج دورة أو أكثر لبناء خط الأساس لكل عملة.</div>';return;}
+ cards.innerHTML=rows.map((x,i)=>{
+  const a=x.analysis||{},m=a.metrics||{};
+  return '<article class="card '+(x.eligible?'alert':'')+'"><div class="head"><div><div class="sym">'+(i+1)+'. '+x.symbol+'</div><div class="stage">'+(a.stage||'WATCH')+' • السعر '+num(x.lastPrice,8)+'</div></div><div class="score">'+num(x.score,1)+'</div></div>'+
+  '<div class="metrics">'+
+  '<div class="m"><span>1m Z</span><b>'+num(m.one_minute_z,2)+'</b></div>'+
+  '<div class="m"><span>5m Z</span><b>'+num(m.five_minute_z,2)+'</b></div>'+
+  '<div class="m"><span>Volume Ratio</span><b>'+num(m.volume_ratio,2)+'×</b></div>'+
+  '<div class="m"><span>Trade Ratio</span><b>'+num(m.trade_ratio,2)+'×</b></div>'+
+  '<div class="m"><span>Efficiency</span><b>'+num(m.efficiency,2)+'</b></div>'+
+  '<div class="m"><span>Relative Speed</span><b>'+num(m.relative_acceleration_bps,2)+' bps</b></div>'+
+  '</div>'+
+  '<div class="reasons">'+(Array.isArray(a.reasons)&&a.reasons.length?a.reasons.slice(0,7).join(' • '):'ما زال يبني البصمة الذاتية.')+'</div></article>';
+ }).join('');
+}
+async function load(){
+ if(busy)return;busy=true;scan.disabled=true;scan.textContent='القاهر يفحص السوق…';
+ status.innerHTML='<b>جاري الفحص</b> — مقارنة كل عملة بخطها الذاتي واستخراج أقوى تغيرات السوق.';
+ try{
+  const r=await getKahirRadar({quote:'USDT',limit:Number(limit.value)||20});
+  if(!r.ok||!r.body)throw new Error(r.body && r.body.error||r.error||'HTTP_'+(r.status||0));
+  const u=r.body.universe||{},h=r.body.monitoring||{};
+  status.innerHTML='<b>'+(h.running?'القاهر يعمل':'القاهر متوقف')+'</b> — تمت رؤية '+Number(u.scanned||0)+' عملة Spot • فحص عميق '+Number(u.deep_scanned||0)+' • إجمالي الكون '+Number(u.eligible_spot_symbols||0)+' • آخر دورة '+(r.body.as_of?new Date(r.body.as_of).toLocaleString('ar-SA'):'غير متاح');
+  render(r.body);
+ }catch(e){status.innerHTML='<b>تعذر فحص القاهر</b> — '+String(e.message||e);}
+ finally{busy=false;scan.disabled=false;scan.textContent='شغّل فحص القاهر';}
+}
+scan.addEventListener('click',load);setTimeout(load,250);setInterval(()=>{if(!busy&&!document.hidden)load()},60000);
+</script>
+</body>
+</html>
