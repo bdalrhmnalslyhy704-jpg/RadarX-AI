@@ -237,6 +237,7 @@ export async function getKingMarket({limit=5,deep=false}={},fetchImpl=globalThis
   const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
   return requestJson(base,'/api/king-market?limit='+encodeURIComponent(String(safeLimit))+'&deep='+(deep?'1':'0'),fetchImpl,120000);
 }
+export async function getWhaleClusterRadar({quote='USDT',limit=20,scan=true}={},fetchImpl=globalThis.fetch){return requestJson(BACKEND_BASE_URL,'/api/whale-cluster-radar?quote='+encodeURIComponent(quote)+'&limit='+encodeURIComponent(limit)+'&scan='+(scan?'1':'0'),fetchImpl);}
 export async function getRadarStatus(fetchImpl = globalThis.fetch) {
   const base = normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
   return requestJson(base, '/api/radar-status', fetchImpl);
