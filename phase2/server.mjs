@@ -98,7 +98,7 @@ export async function startServer({
   safeStart('MONITOR',monitor);
   const autoStart=config.radarControl?.autostart!==false;
   if(autoStart){
-    const startup=[['RADAR1',moveSentinel],['RADAR2',strongMoveRadar],['RADAR3',rotationLagRadar],['RADAR4',liquidityAbsorptionRadar],['RADAR5',kahirRadar],['RADAR6',doomsdayRadar],['RADAR7',alMuqawimRadar],['PROFESSOR_INTELLIGENCE',professorRadar],['RADAR8',earlyExpansionRadar],['COIN_HUNTER',coinHunterRadar],['WHALE_CLUSTER',whaleClusterRadar],['WHALE_ACCUMULATION',whaleAccumulationRadar],['MULTI_ANALYST',multiAnalystRadar]];
+    const startup=[['RADAR1',moveSentinel],['RADAR2',strongMoveRadar],['RADAR3',rotationLagRadar],['RADAR4',liquidityAbsorptionRadar],['RADAR5',kahirRadar],['RADAR6',doomsdayRadar],['RADAR7',alMuqawimRadar],['PROFESSOR_INTELLIGENCE',professorRadar],['RADAR8',earlyExpansionRadar],['COIN_HUNTER',coinHunterRadar],['WHALE_CLUSTER',whaleClusterRadar],['WHALE_ACCUMULATION',whaleAccumulationRadar]];
     startup.forEach(([name,instance],index)=>{
       setTimeout(()=>safeStart(name,instance),index*900);
     });
