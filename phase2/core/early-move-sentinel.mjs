@@ -14,7 +14,7 @@ export const MOVE_RADAR_DEFAULTS=Object.freeze({
   pollMs:5000,
   reconcileMs:15000,
   cooldownMs:30*60*1000,
-  maxDeepPerCycle:4,
+  maxDeepPerCycle:6,
   minQuoteVolume24h:750000,
   minDataQuality:70,
   minLiquidityQuality:60,
@@ -33,7 +33,7 @@ export const MOVE_RADAR_DEFAULTS=Object.freeze({
   fastInterval:'5m',
   fastKlines:96,
   earlyScanCooldownMs:2*60*1000,
-  maxEarlyDiscovery:36,
+  maxEarlyDiscovery:54,
   earlyMinPreMoveScore:82,
   earlyMinExpansionScore:82,
   earlyMinStrategyScore:75,
@@ -302,7 +302,8 @@ export function buildEarlyWakeAlert(candidate,trigger,{now=Date.now()}={}) {
     obv*0.02+
     wyckoff*0.01+
     mtf*0.01+
-    preMove*0.04
+    preMove*0.04+
+    historicalScore*0.06
   );
   const eligible=!alreadyMoved&&calmEnough&&
     dataQuality>=75&&
@@ -380,7 +381,8 @@ export function buildEarlyWakeAlert(candidate,trigger,{now=Date.now()}={}) {
       fast_impulse:fastScore,fast_momentum:fastMomentum,fast_volume:fastVolume,fast_taker_buy:fastTaker,fast_breakout:fastBreakout,fast_ema:fastEma,fast_range_expansion:fastRange,fast_body:fastBody,
       pre_move:preMove,momentum,volume,buying_pressure:buying,orderbook_pressure:orderbook,
       structure,squeeze,relative_strength:relative,resistance_proximity:resistance,
-      ema_reclaim:emaReclaim,rsi_score:rsiScore,obv_accumulation:obv,wyckoff_spring:wyckoff,mtf_alignment:mtf
+      ema_reclaim:emaReclaim,rsi_score:rsiScore,obv_accumulation:obv,wyckoff_spring:wyckoff,mtf_alignment:mtf,
+      historical_followthrough:historicalScore
     },
     taker_flow:{buy_ratio:takerRatio,buy_acceleration:takerAccel},
     reasons:[...new Set(reasons)].slice(0,10),
@@ -415,6 +417,9 @@ export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
   const whale=component(candidate,['bottom_context.metrics.whale_pressure','bottom_context.algorithms.whale_pressure.score'],45);
   const exhaustion=component(candidate,['bottom_context.metrics.selling_exhaustion','bottom_context.algorithms.sell_exhaustion.score'],45);
   const takerRatio=finite(bottom?.algorithms?.taker_flow?.buy_ratio,null);
+  const historicalFollowThrough=candidate?.fast_impulse_context?.historical_followthrough||{};
+  const historicalScore=finite(historicalFollowThrough.score,50);
+  const historicalSamples=finite(historicalFollowThrough.samples,0);
   const acceptedConfluence=clamp(strategies.acceptedCount*24+strategies.bestScore*0.35);
   const alreadyMoved=Boolean(ctx.already_moved)||priceChange>MOVE_RADAR_DEFAULTS.earlyMax24hMovePct||priceChange>20;
   const sessionReturn=finite(ctx.session_return_pct,null);
@@ -457,6 +462,7 @@ export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
   const eligible=!alreadyMoved&&calmEnough&&
     dataQuality>=80&&
     liquidity>=70&&
+    (historicalSamples<5||historicalScore>=48)&&
     strategies.bestScore>=MOVE_RADAR_DEFAULTS.earlyMinStrategyScore&&
     strategies.acceptedCount>=MOVE_RADAR_DEFAULTS.earlyMinAcceptedStrategies&&
     preMove>=MOVE_RADAR_DEFAULTS.earlyMinPreMoveScore&&
