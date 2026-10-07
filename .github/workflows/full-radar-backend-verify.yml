@@ -40,6 +40,14 @@ jobs:
           grep -Fq "/api/early-expansion-radar" phase2/http/api.mjs
           grep -Fq "/api/whale-accumulation-radar" phase2/http/api.mjs
           grep -Fq "radar:'EARLY_EXPANSION_RADAR'" phase2/http/api.mjs
+      - name: Verify Whale Accumulation public contract
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          BASE="http://127.0.0.1:8080"
+          echo "Contract source check only; route must exist in source."
+          grep -Fq "/api/whale-accumulation-radar" phase2/http/api.mjs
+          grep -Fq "WHALE_ACCUMULATION_RADAR" phase2/core/whale-accumulation-radar.mjs
       - name: Paper-only guard
         run: |
           set -euo pipefail
