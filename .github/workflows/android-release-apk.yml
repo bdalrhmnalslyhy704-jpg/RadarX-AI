@@ -358,7 +358,7 @@ jobs:
           test -s android/app/src/main/assets/coin-hunter-radar.html
           test -s android/app/src/main/assets/whale-accumulation-radar.html
           test -s android/app/src/main/assets/multi-analyst.html
-          grep -Fq 'multi-analyst.html' android/app/src/main/assets/index.html
+          grep -Fq 'multi-analyst-center.html' android/app/src/main/assets/index.html
           grep -Fq 'whale-accumulation-radar.html' android/app/src/main/assets/index.html
           grep -Fq 'coin-hunter-radar.html' android/app/src/main/assets/index.html
           node --check android/app/src/main/assets/radarx-radar-screen.mjs
