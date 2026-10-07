@@ -316,17 +316,22 @@ export async function setRadarState(radar, action, fetchImpl = globalThis.fetch)
   const bases=[normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL),...BACKEND_FALLBACK_URLS];
   let lastError=null;
   for(const base of bases){
+    const controller=typeof AbortController!=='undefined'?new AbortController():null;
+    let timer=null;
+    if(controller)ACTIVE_BACKEND_CONTROLLERS.add(controller);
     try{
       const response=await Promise.race([
         fetchImpl(base+'/api/radar-control?radar='+encodeURIComponent(safeRadar)+'&action='+encodeURIComponent(safeAction),{
-          method:'GET',cache:'no-store',headers:{Accept:'application/json'}
+          method:'GET',cache:'no-store',headers:{Accept:'application/json'},signal:controller?controller.signal:undefined
         }),
-        new Promise((_,reject)=>setTimeout(()=>reject(new Error('BACKEND_TIMEOUT')),15000))
+        new Promise((_,reject)=>{timer=setTimeout(()=>{try{controller&&controller.abort();}catch{} reject(new Error('BACKEND_TIMEOUT'));},8000);})
       ]);
+      clearTimeout(timer);
       let body=null;try{body=await response.json();}catch{}
       if(response.status===404&&base!==bases.at(-1))continue;
       return {status:response.status,ok:response.ok,body,error:null,base};
     }catch(error){lastError=error;}
+    finally{clearTimeout(timer);if(controller)ACTIVE_BACKEND_CONTROLLERS.delete(controller);}
   }
   return {status:0,ok:false,body:null,error:String(lastError && lastError.message||lastError||'BACKEND_CONNECTION_FAILED')};
 }
