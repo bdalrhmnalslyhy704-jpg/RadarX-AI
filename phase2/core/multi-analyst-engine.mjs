@@ -330,14 +330,14 @@ class SelfCalibrator{
     if(!this.stats.has(id))this.stats.set(id,{wins:0,losses:0,neutral:0});
     return this.stats.get(id);
   }
-  settle(analysts,ret){
-    const r=Number(ret);
+  settle(analysts,ret,horizon){
+    const r=Number(ret),target=Number(horizon?.target??.01),stop=Number(horizon?.stop??-.007);
     if(!Number.isFinite(r))return;
     for(const a of Array.isArray(analysts)?analysts:[]){
       if(a?.direction!=='LONG'||Number(a.score)<60)continue;
       const s=this._get(a.id);
-      if(r>=.01)s.wins++;
-      else if(r<=-.007)s.losses++;
+      if(r>=target)s.wins++;
+      else if(r<=stop)s.losses++;
       else s.neutral++;
     }
   }
@@ -448,7 +448,7 @@ export class MultiAnalystEngine {
       for(const h of CALIBRATION_HORIZONS){
         if(item.evaluated[h.key]||age<h.ms)continue;
         item.evaluated[h.key]=true;
-        if(entry>0&&current>0)this.calibration.settle(item.analysts,(current-entry)/entry);
+        if(entry>0&&current>0)this.calibration.settle(item.analysts,(current-entry)/entry,h);
       }
       if(now-item.asOf<5*60*60*1000)keep.push(item);
     }
