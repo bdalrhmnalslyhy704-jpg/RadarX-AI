@@ -125,8 +125,12 @@ async function refresh(scan=false){
   busy=true;
   try{
     const r=await getCoinHunterRadar({quote:'USDT',limit:16,scan});
-    if(r.status===200){render(r.body);}
-    else $('error').textContent='HTTP_'+(r.status||0);
+    if(r.status===200){
+      render(r.body);
+      if(r.body&&r.body.status==='not_ready'){
+        $('error').textContent='الفحص غير متاح مؤقتًا — '+String(r.body.error||'البيانات غير جاهزة');
+      }
+    } else $('error').textContent='HTTP_'+(r.status||0);
   }catch(e){
     $('state').textContent='تعذر الاتصال';
     $('state').className='state bad';

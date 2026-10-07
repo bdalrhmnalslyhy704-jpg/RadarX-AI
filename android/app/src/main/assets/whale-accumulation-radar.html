@@ -229,6 +229,10 @@ async function load(force){
     if(!r.ok||!r.body)throw new Error(r.error||'WHALE_RADAR_UNAVAILABLE');
     writeCache(r.body);
     render(r.body);renderReport(r.body);
+    if(r.body.status==='not_ready'){
+      statusEl.textContent='تعذر فحص تجمع الحيتان مؤقتًا — '+String(r.body.error||'البيانات غير جاهزة');
+      return;
+    }
     statusEl.textContent='● '+(r.body.running?'الرادار يعمل':'الرادار متوقف')+
       ' • '+String((r.body.coverage&&r.body.coverage.scanned_successfully)||0)+
       ' فحصًا • '+String((r.body.confirmed_count)||0)+' تجمع مستمر';

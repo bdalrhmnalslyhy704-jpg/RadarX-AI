@@ -1,3 +1,4 @@
+import {evaluateRadarQuality} from './radar-quality-v3.mjs';
 export const RADAR_NAMES=Object.freeze({
   EARLY_MOVE_RADAR:'Radar 1 — المدمر',
   STRONG_MOVE_RADAR:'Radar 2 — ملك الظلام',
@@ -6,7 +7,10 @@ export const RADAR_NAMES=Object.freeze({
   KAHIR_RADAR:'Radar 5 — القاهر',
   DOOMSDAY_RADAR:'Radar 6 — يوم القيامة',
   PROFESSOR_RADAR:'البروفيسور — استخبارات عامة',
-  ALMUQAWIM_RADAR:'Radar 7 — المقاوم'
+  ALMUQAWIM_RADAR:'Radar 7 — المقاوم',
+  EARLY_EXPANSION_RADAR:'Radar 8 — البرق',
+  COIN_HUNTER_RADAR:'🎯 صائد العملات',
+  WHALE_ACCUMULATION_RADAR:'🐋 تجمع الحيتان'
 });
 export const RADAR_PROFILES=Object.freeze({
   EARLY_MOVE_RADAR:Object.freeze({
@@ -56,6 +60,32 @@ export const RADAR_PROFILES=Object.freeze({
     timeframes:['1m','5m'],algorithms:['1m/3m/5m Momentum','Acceleration vs Self Baseline','Relative Volume','Trade Count Surge','Taker Flow','Squeeze Release','Donchian Breakout','EMA9/21 Burst','VWAP Reclaim','ATR Expansion','Relative Strength vs BTC','Range Acceptance'],
     guardrails:['Spot فقط','شموع مغلقة فقط','يمنع الحركة اليومية الممتدة','يشترط عدة أدلة قبل الإشعار','لا تنفيذ حقيقي']
   }),
+  EARLY_EXPANSION_RADAR:Object.freeze({
+    name:RADAR_NAMES.EARLY_EXPANSION_RADAR,icon:'⚡',color:'#00d9ff',
+    mission:'صائد ما قبل التوسع: يبحث عن بصمة الانفجار قبل ظهوره في السعر.',
+    strength:'يركز على العملات الهادئة التي يبدأ فيها الحجم والصفقات والهيكل والضغط بالتحول قبل الحركة الكبيرة.',
+    strategy:'Rotating 1m/5m Micro Fingerprint + Multi-Family Deep Confirmation',
+    timeframes:['1m','5m','15m','1h','4h'],
+    algorithms:['Price Acceleration','RVOL Acceleration','Trade Count','ATR/Bollinger','VWAP/EMA','ADX/MACD/RSI/OBV','Higher Lows','Resistance Pressure','BTC Relative Strength','Taker Divergence','Absorption/Reversal','Bid/Ask Depth'],
+    guardrails:['Closed candles only','Reject stale/future/gap data','Anti-chase extension gate','Cooldown and duplicate suppression']
+  }),
+  COIN_HUNTER_RADAR:Object.freeze({
+    name:RADAR_NAMES.COIN_HUNTER_RADAR,icon:'🎯',color:'#ffb703',
+    mission:'قناص انتقائي: يتعلم بصمة أقوى العملات التي تحركت اليوم ثم يبحث عن عملة أخرى ما زالت قبل التمدد وتحمل شروط القنص.',
+    strength:'لا يطارد العملة التي انفجرت؛ يعزل المرشحين الهادئين ويقارنهم ببصمة القادة اليومية.',
+    strategy:'Daily Mover Fingerprint + Adaptive Pattern Similarity + Pre-Breakout Confluence',
+    timeframes:['1h'],
+    algorithms:['Daily Mover Learning','Adaptive Leader Fingerprint','Volume Acceleration','Trade-Count Acceleration','Taker Buy Pressure','Higher-Low Structure','EMA20/EMA50','Bollinger Compression','Resistance Room','Relative Strength vs BTC','Anti-Chase Extension Gate','Liquidity Filter'],
+    guardrails:['Spot فقط','Paper فقط','شموع مغلقة فقط','يرفض التمدد','لا يضمن الربح أو الارتفاع','لا أسعار أو صفقات وهمية']
+  }),
+  WHALE_ACCUMULATION_RADAR:Object.freeze({
+    name:RADAR_NAMES.WHALE_ACCUMULATION_RADAR,icon:'🐋',color:'#ffd166',
+    mission:'رصد بصمة التجميع الكبير عبر الصفقات الكبيرة، تدفق الشراء، امتصاص البيع وعمق الطلب قبل التوسع.',
+    strength:'يعطي تقريرًا مفصلًا عن Large-Order Footprint؛ لا يدّعي معرفة هوية المتداول.',
+    strategy:'Large Print Flow + Taker Pressure + Absorption + Orderbook Imbalance + Support Persistence',
+    timeframes:['1m','5m'],algorithms:['Large AggTrade Prints','Large Buy/Sell Notional','Repeat Buy Pressure','Print Acceleration','Seller Absorption','Bid/Ask Depth','Support Persistence','Higher Lows','5m Confirmation'],
+    guardrails:['Spot فقط','Closed candles only','Public market data only','No trader identity claim','Anti-chase','Paper only']
+  }),
   ALMUQAWIM_RADAR:Object.freeze({
     name:RADAR_NAMES.ALMUQAWIM_RADAR,icon:'🛡️',color:'#38bdf8',
     mission:'حارس اتجاه السوق: لا يطارد الحركة؛ يحدد الاتجاه من هيكل القمم والقيعان وخط الاتجاه والمتوسط وتوافق الإطارات.',
@@ -98,7 +128,9 @@ export function radarPowerScore(alert){
     LIQUIDITY_ABSORPTION_RADAR:alert?.liquidity_absorption,
     DOOMSDAY_RADAR:alert?.doomsday,
     ALMUQAWIM_RADAR:alert?.almuqawim,
-    PROFESSOR_RADAR:alert?.professor
+    PROFESSOR_RADAR:alert?.professor,
+    COIN_HUNTER_RADAR:alert?.factors||alert?.coin_hunter||{},
+    WHALE_ACCUMULATION_RADAR:alert?.whale_accumulation||{}
   };
   const componentMean=meanNumbers(collectObjectScores(blocks[id]));
   const dataQuality=clamp100(alert?.data_quality??alert?.data_status?.data_quality??100);
@@ -106,7 +138,7 @@ export function radarPowerScore(alert){
   let power=base*.60+(componentMean??base)*.25+dataQuality*.15;
   if(riskCount)power-=Math.min(12,riskCount*2);
   const thresholds={
-    EARLY_MOVE_RADAR:72,STRONG_MOVE_RADAR:76,ROTATION_LAG_RADAR:78,LIQUIDITY_ABSORPTION_RADAR:82,KAHIR_RADAR:84,DOOMSDAY_RADAR:82,PROFESSOR_RADAR:80,ALMUQAWIM_RADAR:82
+    EARLY_MOVE_RADAR:72,STRONG_MOVE_RADAR:76,ROTATION_LAG_RADAR:78,LIQUIDITY_ABSORPTION_RADAR:82,KAHIR_RADAR:84,DOOMSDAY_RADAR:82,PROFESSOR_RADAR:80,ALMUQAWIM_RADAR:82,COIN_HUNTER_RADAR:86
   };
   const gate=power>=Number(thresholds[id]??80);
   return {
@@ -132,10 +164,12 @@ export function decorateRadarAlert(alert,radarName){
   const radar=String(alert?.radar||'').toUpperCase();
   const radar_v2=radarPowerScore(alert);
   const profile=RADAR_PROFILES[radar]||null;
+  const quality_v3=evaluateRadarQuality(alert);
   return {...alert,radar_name:alert?.radar_name||radarName||RADAR_NAMES[radar]||'RadarX',
     radar_profile:profile,
     radar_v2,
     radar_power_score:radar_v2.score,
+    radar_quality_v3:quality_v3,
     detected_at:at,
     detected_at_iso:alert?.detected_at_iso||new Date(at).toISOString(),
     detected_time_12h:alert?.detected_time_12h||formatRadarTime12h(at),

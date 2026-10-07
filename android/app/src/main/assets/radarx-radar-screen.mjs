@@ -53,6 +53,7 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
   if(!root||!p)return{destroy(){}};
 
   let dead=false,busy=false,timer=null;
+  const onPageHide=()=>{dead=true;if(timer)clearInterval(timer);};
   const CACHE_KEY='radarx.radar.cache.'+id;
   const CACHE_TTL_MS=5*60*1000;
   function readRadarCache(){try{const raw=sessionStorage.getItem(CACHE_KEY);if(!raw)return null;const x=JSON.parse(raw);return x&&Number.isFinite(Number(x.savedAt))&&x.body&&(Date.now()-Number(x.savedAt)<CACHE_TTL_MS)?x:null;}catch(error){return null;}}
@@ -165,12 +166,13 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
     ref.onclick=()=>refresh(true);
     refresh(false);
     timer=setInterval(refresh,20000);
+    window.addEventListener('pagehide',onPageHide,{once:true,capture:true});
   }catch(error){
     root.innerHTML=`<main class="rxs" dir="rtl"><section class="card hero"><h1>${p.i} ${p.n}</h1><div class="status">تعذر رسم الرادار</div><div class="muted">${e(error && error.message||error)}</div></section></main>`;
   }
 
   return {
     refresh:()=>refresh(),
-    destroy(){dead=true;if(timer)clearInterval(timer);root.innerHTML='';(function(){var _n=document.getElementById('rxs-style');if(_n)_n.remove();})();}
+    destroy(){dead=true;if(timer)clearInterval(timer);window.removeEventListener('pagehide',onPageHide,true);root.innerHTML='';(function(){var _n=document.getElementById('rxs-style');if(_n)_n.remove();})();}
   };
 }

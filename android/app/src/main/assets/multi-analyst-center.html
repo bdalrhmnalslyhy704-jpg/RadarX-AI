@@ -157,6 +157,10 @@ async function run(force){
     const r=await getMultiAnalyst({quote:'USDT',limit:10,scan:true});
     if(!r.ok||!r.body)throw new Error(r.error||('HTTP_'+r.status));
     saveCache(r.body);render(r.body);
+    if(r.body.status==='not_ready'){
+      status.textContent='تعذر التحليل مؤقتًا — '+String(r.body.error||'البيانات غير جاهزة');
+      return;
+    }
     const u=r.body.universe||{};
     status.textContent='● تحليل حي مكتمل • '+n(u.scanned,0)+' عملات دخلت المختبر • '+n(r.body.summary && r.body.summary.strong_candidates,0)+' مرشح قوي';
   }catch(e){

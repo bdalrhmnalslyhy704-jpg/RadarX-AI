@@ -349,9 +349,19 @@ public final class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (webView != null && webView.canGoBack()) {
-            webView.goBack();
-            return;
+        if (webView != null) {
+            try {
+                webView.evaluateJavascript(
+                        "(function(){try{window.dispatchEvent(new Event('pagehide'));}catch(e){}})();",
+                        null
+                );
+            } catch (Exception ignored) {
+            }
+            webView.stopLoading();
+            if (webView.canGoBack()) {
+                webView.goBack();
+                return;
+            }
         }
         super.onBackPressed();
     }
