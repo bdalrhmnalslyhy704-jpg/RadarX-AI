@@ -6,6 +6,7 @@ import {MarketUniverseScanner} from '../market/universe-scanner.mjs';
 import {RADAR_NAMES,RADAR_PROFILES,formatRadarTime12h,decorateRadarAlert} from '../core/radar-alert-meta.mjs';
 import {SymbolDeepAnalyzer,normalizeDeepScanSymbol} from '../core/symbol-deep-analyzer.mjs';
 import {buildKingVerdict,rankKingMarket} from '../core/king-intelligence.mjs';
+import {MultiAnalystEngine} from '../core/multi-analyst-engine.mjs';
 
 function send(res,status,body,extra={}){
   const data=JSON.stringify(body);
