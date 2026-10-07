@@ -87,7 +87,7 @@ const cards=document.getElementById('cards'),status=document.getElementById('sta
 const els={scanned:document.getElementById('scanned'),strong:document.getElementById('strong'),candidate:document.getElementById('candidate'),rejected:document.getElementById('rejected')};
 let latest=null,busy=false;
 const cacheKey='radarx.multiAnalyst.v1',cacheTtl=90*1000;
-function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
 function n(v,d=0){const x=Number(v);return Number.isFinite(x)?x:d;}
 function pct(v){return Number.isFinite(Number(v))?n(v).toFixed(1)+'%':'—';}
 function loadCache(){try{const x=JSON.parse(sessionStorage.getItem(cacheKey)||'null');return x&&Date.now()-n(x.at,0)<cacheTtl?x.body:null;}catch{return null;}}
@@ -97,9 +97,9 @@ function verdictLabel(v){
 }
 function render(body){
   latest=body||null;
-  const list=Array.isArray(body?.candidates)?body.candidates:[];
-  const s=body?.summary||{};
-  els.scanned.textContent=String(n(body?.universe?.scanned,0));
+  const list=Array.isArray(body && body.candidates)?body.candidates:[];
+  const s=body && body.summary||{};
+  els.scanned.textContent=String(n(body && body.universe && body.universe.scanned,0));
   els.strong.textContent=String(n(s.strong_candidates,0));
   els.candidate.textContent=String(n(s.candidates,0));
   els.rejected.textContent=String(n(s.rejected,0));
@@ -109,7 +109,7 @@ function render(body){
     const hot=x.verdict==='STRONG_CANDIDATE'||x.verdict==='CANDIDATE';
     const div=document.createElement('article');
     div.className='card'+(hot?' cardStrong':'');
-    const consensus=n(x.consensus?.ratio,0)*100;
+    const consensus=n(x.consensus && x.consensus.ratio,0)*100;
     const highlights=Array.isArray(x.highlights)?x.highlights.slice(0,6):[];
     div.innerHTML=
       '<div class="top"><div class="sym">'+(hot?'🧠 ':'🔎 ')+esc((idx+1)+'. '+x.symbol)+'</div><div class="score">'+n(x.final_score,0).toFixed(1)+'/100</div></div>'+
@@ -121,10 +121,10 @@ function render(body){
       '</div>'+
       '<div class="bar"><div class="fill" style="width:'+Math.max(0,Math.min(100,n(x.final_score,0)))+'%"></div></div>'+
       '<div class="facts">'+
-      '<div class="fact"><b>'+esc(x.last_price??'—')+'</b><span>السعر</span></div>'+
+      '<div class="fact"><b>'+esc(x.last_price==null?'—':x.last_price)+'</b><span>السعر</span></div>'+
       '<div class="fact"><b>'+pct(x.price_change_24h)+'</b><span>24h</span></div>'+
       '<div class="fact"><b>'+n(x.liquidity_quality,0).toFixed(0)+'</b><span>السيولة</span></div>'+
-      '<div class="fact"><b>'+n(x.consensus?.strong,0)+'/20</b><span>محللون ≥80</span></div>'+
+      '<div class="fact"><b>'+n(x.consensus && x.consensus.strong,0)+'/20</b><span>محللون ≥80</span></div>'+
       '</div>'+
       '<div class="reasons"><b>أقوى الأدلة:</b> '+esc(highlights.map(h=>h.name).join(' • ')||'لا توجد أدلة مرتفعة كفاية')+'</div>'+
       '<div class="pipeline">'+
@@ -134,8 +134,8 @@ function render(body){
       '<div class="details" id="detail-'+idx+'">'+
         '<div class="detailTitle">تقرير كل محلل — العملة تمر على الجميع</div>'+
         '<div class="analystList">'+(Array.isArray(x.analysts)?x.analysts.map(a=>'<div class="analyst"><div class="row"><b>'+esc(a.name)+'</b><span class="num">'+n(a.score,0).toFixed(0)+'</span></div><p>'+esc(a.decision)+' • '+esc(a.direction)+'<br>'+esc(Object.entries(a.evidence||{}).slice(0,3).map(([k,v])=>k+': '+(typeof v==='object'?JSON.stringify(v):v)).join(' • '))+'</p></div>').join(''):'')+'</div>'+
-        '<div class="note" style="margin-top:9px"><b>حكم المحلل النهائي:</b> '+esc(verdictLabel(x.verdict))+' • '+esc(x.final_judge?.reasons?.join(' • ')||'لا توجد أسباب إيجابية كافية')+
-        '<br><b>أسباب المنع:</b> '+esc(x.final_judge?.hardReasons?.join(' • ')||'لا يوجد منع صلب')+'</div>'+
+        '<div class="note" style="margin-top:9px"><b>حكم المحلل النهائي:</b> '+esc(verdictLabel(x.verdict))+' • '+esc(x.final_judge && x.final_judge.reasons ? x.final_judge.reasons.join(' • ') : ''||'لا توجد أسباب إيجابية كافية')+
+        '<br><b>أسباب المنع:</b> '+esc(x.final_judge && x.final_judge.hardReasons ? x.final_judge.hardReasons.join(' • ') : ''||'لا يوجد منع صلب')+'</div>'+
       '</div>';
     cards.appendChild(div);
   });
@@ -158,9 +158,9 @@ async function run(force){
     if(!r.ok||!r.body)throw new Error(r.error||('HTTP_'+r.status));
     saveCache(r.body);render(r.body);
     const u=r.body.universe||{};
-    status.textContent='● تحليل حي مكتمل • '+n(u.scanned,0)+' عملات دخلت المختبر • '+n(r.body.summary?.strong_candidates,0)+' مرشح قوي';
+    status.textContent='● تحليل حي مكتمل • '+n(u.scanned,0)+' عملات دخلت المختبر • '+n(r.body.summary && r.body.summary.strong_candidates,0)+' مرشح قوي';
   }catch(e){
-    status.textContent='تعذر التحليل الآن — '+esc(e?.message||e);
+    status.textContent='تعذر التحليل الآن — '+esc(e && e.message || e);
   }finally{busy=false;}
 }
 document.getElementById('scanBtn').addEventListener('click',()=>run(true));
