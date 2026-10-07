@@ -242,6 +242,16 @@ export async function getProfessorRadar({quote='USDT',limit=10,since=0,scan=true
   return requestJson(base,'/api/professor-radar?quote='+encodeURIComponent(safeQuote)+'&limit='+encodeURIComponent(String(safeLimit))+sinceParam+scanParam,fetchImpl,180000);
 }
 
+export async function getMultiAnalyst({quote='USDT',limit=10,scan=true}={},fetchImpl=globalThis.fetch){
+  const safeQuote=String(quote||'USDT').trim().toUpperCase();
+  const safeLimit=Number(limit);
+  if(!/^[A-Z]{2,10}$/.test(safeQuote))throw new Error('INVALID_QUOTE');
+  if(!Number.isInteger(safeLimit)||safeLimit<1||safeLimit>15)throw new Error('INVALID_LIMIT');
+  const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  const scanParam=scan?'&scan=1':'';
+  return requestJson(base,'/api/multi-analyst?quote='+encodeURIComponent(safeQuote)+'&limit='+encodeURIComponent(String(safeLimit))+scanParam,fetchImpl,240000);
+}
+
 export async function getKingIntelligence({symbol,deep=true}={},fetchImpl=globalThis.fetch){
   const raw=String(symbol||'').trim().toUpperCase();
   if(!/^[A-Z0-9]{5,20}$/.test(raw))throw new Error('INVALID_SYMBOL');
