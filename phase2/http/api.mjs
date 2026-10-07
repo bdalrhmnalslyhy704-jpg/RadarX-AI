@@ -135,7 +135,7 @@ function subscriptionValid(x){
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null, kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleClusterRadar=null}= {}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null, kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleClusterRadar=null,whaleAccumulationRadar=null}= {}){
   const counters=new Map();
   const moveConfig=config.moveRadar||{thresholdPct:1};
   const originList=config.auth.allowedOrigins;
@@ -158,6 +158,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     EARLY_EXPANSION_RADAR:{name:RADAR_NAMES.EARLY_EXPANSION_RADAR,instance:earlyExpansionRadar,read:'readEarlyExpansionAlerts'},
     ...(coinHunterRadar?{COIN_HUNTER_RADAR:{name:RADAR_NAMES.COIN_HUNTER_RADAR,instance:coinHunterRadar,read:'readCoinHunterAlerts'}}:{}),
     ...(whaleClusterRadar?{WHALE_CLUSTER_RADAR:{name:RADAR_NAMES.WHALE_CLUSTER_RADAR,instance:whaleClusterRadar,read:'readWhaleClusterAlerts'}}:{}),
+    ...(whaleAccumulationRadar?{WHALE_ACCUMULATION_RADAR:{name:'🐋 تجمع الحيتان',instance:whaleAccumulationRadar,read:'readWhaleAccumulationAlerts'}}:{}),
     ...(professorRadar?{PROFESSOR_RADAR:{name:RADAR_NAMES.PROFESSOR_RADAR,instance:professorRadar,read:'readProfessorAlerts'}}:{})
   });
   function radarStatus(){
@@ -189,7 +190,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(!rateOk(key))return send(res,429,{error:'RATE_LIMITED'});
     try{
       const u=new URL(req.url,'http://localhost');
-      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false},kahir_radar:kahirRadar?.health?.()||{running:false},doomsday_radar:doomsdayRadar?.health?.()||{running:false},almuqawim_radar:alMuqawimRadar?.health?.()||{running:false},professor_radar:professorRadar?.health?.()||{running:false},early_expansion_radar:earlyExpansionRadar?.health?.()||{running:false,radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق'},whale_cluster_radar:whaleClusterRadar?.health?.()||{running:false,radar:'WHALE_CLUSTER_RADAR',radar_name:'🐋 تجمع الحيتان'},coin_hunter_radar:coinHunterRadar?.health?.()||{running:false,radar:'COIN_HUNTER_RADAR',radar_name:'🎯 صائد العملات'}});
+      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false},kahir_radar:kahirRadar?.health?.()||{running:false},doomsday_radar:doomsdayRadar?.health?.()||{running:false},almuqawim_radar:alMuqawimRadar?.health?.()||{running:false},professor_radar:professorRadar?.health?.()||{running:false},early_expansion_radar:earlyExpansionRadar?.health?.()||{running:false,radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق'},whale_cluster_radar:whaleClusterRadar?.health?.()||{running:false,radar:'WHALE_CLUSTER_RADAR',radar_name:'🐋 تجمع الحيتان'},whale_accumulation_radar:whaleAccumulationRadar?.health?.()||{running:false,radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان'},coin_hunter_radar:coinHunterRadar?.health?.()||{running:false,radar:'COIN_HUNTER_RADAR',radar_name:'🎯 صائد العملات'}});
       if(u.pathname==='/api/radar-status'&&req.method==='GET')return send(res,200,{radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
       if(u.pathname==='/api/radar-control'&&(req.method==='POST'||req.method==='GET')){
         const radar=String(u.searchParams.get('radar')||'').trim().toUpperCase();
@@ -217,6 +218,20 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         }
         alerts.sort((a,b)=>Number(b.processed_at||b.detected_at||0)-Number(a.processed_at||a.detected_at||0));
         return send(res,200,{alerts:alerts.slice(0,limit),radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',detected_timezone:'Asia/Aden',time_format:'12h'}});
+      }
+      if(u.pathname==='/api/whale-accumulation-radar'&&req.method==='GET'){
+        if(!whaleAccumulationRadar)return send(res,503,{status:'not_ready',candidates:[],confirmed_count:0,coverage:{},error:'WHALE_ACCUMULATION_RADAR_UNAVAILABLE',meta:{live:false,source:'Binance Public REST',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        const limit=Math.max(1,Math.min(50,Math.trunc(Number(u.searchParams.get('limit')||20))));
+        const scan=String(u.searchParams.get('scan')||'0')==='1';
+        try{
+          if(scan){
+            if(!whaleAccumulationRadar.health().running) await whaleAccumulationRadar.start();
+            else await whaleAccumulationRadar.tick();
+          }
+          return send(res,200,whaleAccumulationRadar.snapshot(limit));
+        }catch(e){
+          return send(res,503,{status:'not_ready',candidates:[],confirmed_count:0,coverage:{},error:String(e?.message??e),monitoring:whaleAccumulationRadar.health(),meta:{live:false,source:'Binance Public REST',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'WHALE_ACCUMULATION_RADAR'}});
+        }
       }
       if(u.pathname==='/api/whale-cluster-radar'&&req.method==='GET'){
         if(!whaleClusterRadar)return send(res,503,{error:'WHALE_CLUSTER_RADAR_UNAVAILABLE',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
