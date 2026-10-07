@@ -224,6 +224,44 @@ test('TEST_FIXTURE: Professor route exposes fused live intelligence and is indep
   }finally{await new Promise(resolve=>server.close(resolve));}
 });
 
+test('Multi-Analyst route exposes the twenty-stage contract',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-multi-analyst-api-')),store=await new DurableStore({dir}).init();
+  const engine={
+    getCached:()=>null,
+    scan:async()=>({
+      meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analyst_count:20,specialist_count:19},
+      as_of:new Date().toISOString(),source:'Binance Public REST',
+      universe:{quote:'USDT',eligible_spot_symbols:100,discovery_pool:2,scanned:2,returned:1,min_quote_volume_24h:300000},
+      market_context:{median_24h_change_pct:1,positive_breadth_pct:60},
+      summary:{strong_candidates:1,candidates:0,watch:0,rejected:1},
+      pipeline:['Discovery','Data Gate','19 Specialist Analysts','Chief Analyst'],
+      candidates:[{
+        symbol:'TESTUSDT',rank:1,last_price:1,price_change_24h:2,quote_volume_24h:1000000,
+        liquidity_quality:90,data_quality:100,direction:'LONG',verdict:'CANDIDATE',final_score:82,
+        consensus:{positive:14,strong:6,total:19,ratio:14/19},
+        analysts:Array.from({length:19},(_,i)=>({id:'A'+i,name:'A'+i,score:70,decision:'POSITIVE',direction:'LONG',evidence:{}})),
+        final_judge:{totalAnalysts:19,score:82,verdict:'CANDIDATE',direction:'LONG',positiveAnalysts:14,strongAnalysts:6,hardReasons:[],reasons:[]},
+        highlights:[],risk_flags:[],reason_codes:[],data_status:{data_valid:true},paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+      }]
+    })
+  };
+  const server=createApiServer({config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},store,
+    monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},pushProvider:new NoopPushProvider(),multiAnalystRadar:engine});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const res=await fetch('http://127.0.0.1:'+server.address().port+'/api/multi-analyst?quote=USDT&limit=1&scan=1');
+    assert.equal(res.status,200);
+    const body=await res.json();
+    assert.equal(body.meta.analyst_count,20);
+    assert.equal(body.meta.specialist_count,19);
+    assert.equal(body.candidates[0].analysts.length,19);
+    assert.equal(body.candidates[0].final_judge.totalAnalysts,19);
+    assert.equal(body.paper_trading,true);
+    assert.equal(body.real_order_execution,false);
+    assert.equal(body.confidence_score,'UNKNOWN');
+  }finally{await new Promise(resolve=>server.close(resolve));}
+});
+
 test('TEST_FIXTURE: Kahir route can trigger an immediate scan without requiring prior alerts',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-kahir-api-')),store=await new DurableStore({dir}).init();
   let ticked=0;
