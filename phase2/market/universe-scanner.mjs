@@ -1407,47 +1407,56 @@ export class MarketUniverseScanner {
     let fastDeep = {interval:null,candles:[],source:null};
     let error = null;
 
-    try {
-      const fastInterval=String(options.fastInterval||'').trim();
-      const fastLimit=Math.max(40,Math.trunc(Number(options.fastKlines)||96));
-      const [tfResults, depth, whaleTrades, fastResult] = await Promise.all([
-        Promise.all(
-          ['4h','1h','15m'].map(async tf => {
-            const r = await this.fetchSeries(ticker.symbol, tf, klinesLimit);
-            const fetchedAt = Number(r.receivedAt) || this.clock();
-            return {
-              tf,
-              source: r.source ?? null,
-              candles: Array.isArray(r.candles)
-                ? r.candles.map(c => ({ ...c, symbol: ticker.symbol, timeframe: tf }))
-                : normalizeRawKlines(r.data, r.source, fetchedAt)
-            };
-          })
-        ),
-        this.fetchDepth(ticker.symbol),
-        options.includeWhaleFlow
-          ? this.requestOnce('/api/v3/aggTrades',{symbol:ticker.symbol,limit:500})
-          : Promise.resolve(null),
-        fastInterval ? this.fetchSeries(ticker.symbol, fastInterval, fastLimit) : Promise.resolve(null)
-      ]);
-      for (const r of tfResults) {
-        series[r.tf] = r.candles;
-        if (r.source) klinesSources.push(r.source);
-      }
-      const fastCandles=fastResult
-        ? Array.isArray(fastResult.candles)
-          ? fastResult.candles.map(c=>({...c,symbol:ticker.symbol,timeframe:fastInterval}))
-          : normalizeRawKlines(fastResult.data,fastResult.source,Number(fastResult.receivedAt)||this.clock())
-        : [];
-      fastDeep={interval:fastInterval||null,candles:fastCandles,source:fastResult?.source??null};
-      depthRaw = depth?.data ?? depth;
-      depthSource = depth?.source ?? null;
-      whaleTradesRaw = whaleTrades?.data ?? null;
-      whaleTradesSource = whaleTrades?.source ?? null;
-    } catch (e) {
-      error = e;
+    const fastInterval=String(options.fastInterval||'').trim();
+    const fastLimit=Math.max(40,Math.trunc(Number(options.fastKlines)||96));
+    const [tfResults,depthResult,whaleTradesResult,fastResult]=await Promise.all([
+      Promise.allSettled(
+        ['4h','1h','15m'].map(async tf=>{
+          const r=await this.fetchSeries(ticker.symbol,tf,klinesLimit);
+          const fetchedAt=Number(r.receivedAt)||this.clock();
+          return {
+            tf,
+            source:r.source??null,
+            candles:Array.isArray(r.candles)
+              ? r.candles.map(c=>({...c,symbol:ticker.symbol,timeframe:tf}))
+              : normalizeRawKlines(r.data,r.source,fetchedAt)
+          };
+        })
+      ),
+      Promise.resolve().then(()=>this.fetchDepth(ticker.symbol)),
+      options.includeWhaleFlow
+        ? Promise.resolve().then(()=>this.requestOnce('/api/v3/aggTrades',{symbol:ticker.symbol,limit:500}))
+        : Promise.resolve(null),
+      fastInterval
+        ? Promise.resolve().then(()=>this.fetchSeries(ticker.symbol,fastInterval,fastLimit))
+        : Promise.resolve(null)
+    ]);
+
+    for(const r of tfResults){
+      if(r.status!=='fulfilled')continue;
+      const value=r.value;
+      series[value.tf]=value.candles;
+      if(value.source)klinesSources.push(value.source);
+    }
+    const fastValue=fastResult.status==='fulfilled'?fastResult.value:null;
+    const fastCandles=fastValue
+      ? (Array.isArray(fastValue.candles)
+        ? fastValue.candles.map(c=>({...c,symbol:ticker.symbol,timeframe:fastInterval}))
+        : normalizeRawKlines(fastValue.data,fastValue.source,Number(fastValue.receivedAt)||this.clock()))
+      : [];
+    fastDeep={interval:fastInterval||null,candles:fastCandles,source:fastValue?.source??null};
+
+    if(depthResult.status==='fulfilled'){
+      depthRaw=depthResult.value?.data??depthResult.value;
+      depthSource=depthResult.value?.source??null;
+    }
+    if(whaleTradesResult.status==='fulfilled'&&whaleTradesResult.value){
+      whaleTradesRaw=whaleTradesResult.value?.data??null;
+      whaleTradesSource=whaleTradesResult.value?.source??null;
     }
 
+    const missingCore=['4h','1h','15m'].filter(tf=>!Array.isArray(series[tf])||series[tf].length===0);
+    if(missingCore.length)error=new Error('CORE_KLINES_INCOMPLETE:'+missingCore.join(','));
     const completedAt=this.clock();
     const deepSuccess=!error&&['4h','1h','15m'].every(function(tf){return Array.isArray(series[tf])&&series[tf].length>0;});
     const liquidity=this.computeLiquidity(depthRaw,ticker);
