@@ -20,6 +20,7 @@ on:
       - android-whale-intelligence-v2-build224-20261007
       - android-build224-whale-accumulation-v3-20261007
       - android-build224-final-stable-20261007
+      - build224-multi-analyst-20261007
   workflow_dispatch:
 
 permissions:
@@ -314,6 +315,8 @@ jobs:
           test -s android/app/src/main/assets/radar8-lightning.html
           test -s android/app/src/main/assets/coin-hunter-radar.html
           test -s android/app/src/main/assets/whale-accumulation-radar.html
+          test -s android/app/src/main/assets/multi-analyst-center.html
+          grep -Fq 'multi-analyst-center.html' android/app/src/main/assets/index.html
           grep -Fq 'whale-accumulation-radar.html' android/app/src/main/assets/index.html
           grep -Fq 'coin-hunter-radar.html' android/app/src/main/assets/index.html
           node --check android/app/src/main/assets/radarx-radar-screen.mjs
