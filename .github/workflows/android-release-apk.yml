@@ -307,10 +307,25 @@ jobs:
         run: |
           set -euo pipefail
           find android/app/src/main/assets -maxdepth 1 -type f -name '*.mjs' -print0 | xargs -0 -n1 node --check
-          if grep -RInE --include='*.mjs' --include='*.html' '\?\?i?|\?\.' android/app/src/main/assets; then
-            echo "::error::Optional chaining/nullish coalescing found in embedded WebView assets."
-            exit 1
-          fi
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          root = Path("android/app/src/main/assets")
+          pattern = re.compile(r"\?\?|\?\.")
+          offenders = []
+          for path in sorted(list(root.rglob("*.mjs")) + list(root.rglob("*.html"))):
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except UnicodeDecodeError as exc:
+                  raise SystemExit(f"Asset is not valid UTF-8: {path}: {exc}")
+              if pattern.search(text):
+                  offenders.append(str(path))
+          if offenders:
+              for path in offenders:
+                  print(f"FORBIDDEN_JS_SYNTAX {path}")
+              raise SystemExit("Optional chaining/nullish coalescing found in embedded WebView assets.")
+          print("Checked WebView assets for optional chaining/nullish coalescing: none found.")
+          PY
           node --check android/app/src/main/assets/tests/market-radar-integration.test.mjs
           python3 - <<'PY'
           from pathlib import Path
