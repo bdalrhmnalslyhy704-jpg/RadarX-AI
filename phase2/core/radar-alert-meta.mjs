@@ -8,7 +8,8 @@ export const RADAR_NAMES=Object.freeze({
   PROFESSOR_RADAR:'البروفيسور — استخبارات عامة',
   ALMUQAWIM_RADAR:'Radar 7 — المقاوم',
   EARLY_EXPANSION_RADAR:'Radar 8 — البرق',
-  COIN_HUNTER_RADAR:'🎯 صائد العملات'
+  COIN_HUNTER_RADAR:'🎯 صائد العملات',
+  WHALE_CLUSTER_RADAR:'🐋 تجمع الحيتان'
 });
 export const RADAR_PROFILES=Object.freeze({
   EARLY_MOVE_RADAR:Object.freeze({
@@ -76,6 +77,7 @@ export const RADAR_PROFILES=Object.freeze({
     algorithms:['Daily Mover Learning','Adaptive Leader Fingerprint','Volume Acceleration','Trade-Count Acceleration','Taker Buy Pressure','Higher-Low Structure','EMA20/EMA50','Bollinger Compression','Resistance Room','Relative Strength vs BTC','Anti-Chase Extension Gate','Liquidity Filter'],
     guardrails:['Spot فقط','Paper فقط','شموع مغلقة فقط','يرفض التمدد','لا يضمن الربح أو الارتفاع','لا أسعار أو صفقات وهمية']
   }),
+  WHALE_CLUSTER_RADAR:Object.freeze({name:RADAR_NAMES.WHALE_CLUSTER_RADAR,icon:'🐋',color:'#38bdf8',mission:'اكتشاف تجمع السيولة الشرائية المحتمل عبر دفتر الأوامر وتدفق السوق قبل الحركة.',strength:'يمزج اختلال دفتر الأوامر مع الامتصاص وتدفق الشراء والمشاركة.',strategy:'Orderbook Cluster + Absorption + Taker Flow + Participation',timeframes:['1m','5m'],algorithms:['Depth Imbalance','Bid/Ask Wall Concentration','Seller Absorption','Taker Buy Ratio','Volume Acceleration','Trade Count Acceleration','Spread Guard','Anti-Chase'],guardrails:['ليس إثباتًا لهوية حوت','Spot فقط','Paper فقط','Closed candles only','يرفض السبريد الواسع','يمنع مطاردة الحركة'] }),
   ALMUQAWIM_RADAR:Object.freeze({
     name:RADAR_NAMES.ALMUQAWIM_RADAR,icon:'🛡️',color:'#38bdf8',
     mission:'حارس اتجاه السوق: لا يطارد الحركة؛ يحدد الاتجاه من هيكل القمم والقيعان وخط الاتجاه والمتوسط وتوافق الإطارات.',
@@ -126,7 +128,7 @@ export function radarPowerScore(alert){
   let power=base*.60+(componentMean??base)*.25+dataQuality*.15;
   if(riskCount)power-=Math.min(12,riskCount*2);
   const thresholds={
-    EARLY_MOVE_RADAR:72,STRONG_MOVE_RADAR:76,ROTATION_LAG_RADAR:78,LIQUIDITY_ABSORPTION_RADAR:82,KAHIR_RADAR:84,DOOMSDAY_RADAR:82,PROFESSOR_RADAR:80,ALMUQAWIM_RADAR:82,COIN_HUNTER_RADAR:86
+    EARLY_MOVE_RADAR:72,STRONG_MOVE_RADAR:76,ROTATION_LAG_RADAR:78,LIQUIDITY_ABSORPTION_RADAR:82,KAHIR_RADAR:84,DOOMSDAY_RADAR:82,PROFESSOR_RADAR:80,ALMUQAWIM_RADAR:82,COIN_HUNTER_RADAR:86,WHALE_CLUSTER_RADAR:82
   };
   const gate=power>=Number(thresholds[id]??80);
   return {
