@@ -8,7 +8,8 @@ export const RADAR_NAMES=Object.freeze({
   PROFESSOR_RADAR:'البروفيسور — استخبارات عامة',
   ALMUQAWIM_RADAR:'Radar 7 — المقاوم',
   EARLY_EXPANSION_RADAR:'Radar 8 — البرق',
-  COIN_HUNTER_RADAR:'🎯 صائد العملات'
+  COIN_HUNTER_RADAR:'🎯 صائد العملات',
+  WHALE_ACCUMULATION_RADAR:'🐋 تجمع الحيتان'
 });
 export const RADAR_PROFILES=Object.freeze({
   EARLY_MOVE_RADAR:Object.freeze({
@@ -75,6 +76,14 @@ export const RADAR_PROFILES=Object.freeze({
     timeframes:['1h'],
     algorithms:['Daily Mover Learning','Adaptive Leader Fingerprint','Volume Acceleration','Trade-Count Acceleration','Taker Buy Pressure','Higher-Low Structure','EMA20/EMA50','Bollinger Compression','Resistance Room','Relative Strength vs BTC','Anti-Chase Extension Gate','Liquidity Filter'],
     guardrails:['Spot فقط','Paper فقط','شموع مغلقة فقط','يرفض التمدد','لا يضمن الربح أو الارتفاع','لا أسعار أو صفقات وهمية']
+  }),
+  WHALE_ACCUMULATION_RADAR:Object.freeze({
+    name:RADAR_NAMES.WHALE_ACCUMULATION_RADAR,icon:'🐋',color:'#ffd166',
+    mission:'رصد بصمة التجميع الكبير عبر الصفقات الكبيرة، تدفق الشراء، امتصاص البيع وعمق الطلب قبل التوسع.',
+    strength:'يعطي تقريرًا مفصلًا عن Large-Order Footprint؛ لا يدّعي معرفة هوية المتداول.',
+    strategy:'Large Print Flow + Taker Pressure + Absorption + Orderbook Imbalance + Support Persistence',
+    timeframes:['1m','5m'],algorithms:['Large AggTrade Prints','Large Buy/Sell Notional','Repeat Buy Pressure','Print Acceleration','Seller Absorption','Bid/Ask Depth','Support Persistence','Higher Lows','5m Confirmation'],
+    guardrails:['Spot فقط','Closed candles only','Public market data only','No trader identity claim','Anti-chase','Paper only']
   }),
   ALMUQAWIM_RADAR:Object.freeze({
     name:RADAR_NAMES.ALMUQAWIM_RADAR,icon:'🛡️',color:'#38bdf8',
