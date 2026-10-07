@@ -125,6 +125,56 @@ export function featureSet(candles, ticker, btcChange = null) {
   };
 }
 
+function earlyTimingFingerprint(candles) {
+  const c=closedCandles(candles,Date.now());
+  if(c.length<24)return null;
+  const closes=c.map(x=>Number(x.close)).filter(Number.isFinite);
+  const vols=c.map(x=>Number(x.volume)).filter(Number.isFinite);
+  const trades=c.map(x=>Number(x.tradeCount)).filter(Number.isFinite);
+  const recentVol=avg(vols.slice(-3)),baseVol=avg(vols.slice(-15,-3));
+  const recentTrades=avg(trades.slice(-3)),baseTrades=avg(trades.slice(-15,-3));
+  const recentBase=c.slice(-3).reduce((s,x)=>s+(Number(x.takerBuyBaseVolume)||0),0);
+  const recentQuote=c.slice(-3).reduce((s,x)=>s+(Number(x.volume)||0),0);
+  const takerRatio=recentQuote>0?recentBase/recentQuote:null;
+  const widths=c.slice(-15).map(x=>{
+    const cl=Number(x.close),h=Number(x.high),l=Number(x.low);
+    return cl>0?(h-l)/cl*100:null;
+  }).filter(Number.isFinite);
+  const compressionRatio=widths.length>=15?avg(widths.slice(-3))/(avg(widths.slice(0,12))||1):null;
+  const ema9=ema(closes.slice(-40),9),ema20=ema(closes.slice(-50),20);
+  const priorEma9=ema(closes.slice(-13,-3),9);
+  const emaSlope=Number.isFinite(ema9)&&Number.isFinite(priorEma9)&&priorEma9>0?pct(ema9,priorEma9):null;
+  const lows=c.slice(-6).map(x=>Number(x.low)).filter(Number.isFinite);
+  let higherLows=0;
+  for(let i=1;i<lows.length;i++)if(lows[i]>lows[i-1])higherLows++;
+  const last=c.at(-1);
+  const lastClose=Number(last.close);
+  const lastRange=Math.max(0,Number(last.high)-Number(last.low));
+  const closeLocation=lastRange>0?(lastClose-Number(last.low))/lastRange:0.5;
+  const momentum3=c.length>=4?pct(lastClose,Number(c.at(-4).close)):null;
+  const localHigh=Math.max(...c.slice(-24).map(x=>Number(x.high)).filter(Number.isFinite));
+  const breakoutRoom=Number.isFinite(localHigh)&&lastClose>0?(localHigh-lastClose)/lastClose*100:null;
+  const volumeScore=Number.isFinite(recentVol)&&Number.isFinite(baseVol)&&baseVol>0?clamp((recentVol/baseVol-0.9)*160):35;
+  const tradeScore=Number.isFinite(recentTrades)&&Number.isFinite(baseTrades)&&baseTrades>0?clamp((recentTrades/baseTrades-0.9)*150):35;
+  const takerScore=Number.isFinite(takerRatio)?clamp(50+(takerRatio-0.5)*600):40;
+  const squeezeScore=Number.isFinite(compressionRatio)?clamp(100-compressionRatio*110):40;
+  const structureScore=clamp(higherLows*18);
+  const emaScore=Number.isFinite(ema9)&&Number.isFinite(ema20)&&Number.isFinite(emaSlope)
+    ?clamp((ema9>=ema20?62:42)+(emaSlope>0?Math.min(28,emaSlope*10):0)):40;
+  const locationScore=clamp(closeLocation*100);
+  const roomScore=Number.isFinite(breakoutRoom)?clamp(100-Math.abs(breakoutRoom-1.8)*24):40;
+  let earlySetupScore=volumeScore*.18+tradeScore*.12+takerScore*.18+squeezeScore*.14+structureScore*.12+emaScore*.12+locationScore*.05+roomScore*.09;
+  if(Number.isFinite(momentum3)&&momentum3>1.8)earlySetupScore-=Math.min(18,(momentum3-1.8)*10);
+  if(Number.isFinite(takerRatio)&&takerRatio<0.49)earlySetupScore-=12;
+  if(Number.isFinite(breakoutRoom)&&breakoutRoom<0.35)earlySetupScore-=10;
+  return {
+    volumeAcceleration:Number.isFinite(recentVol)&&Number.isFinite(baseVol)&&baseVol>0?recentVol/baseVol:null,
+    tradeAcceleration:Number.isFinite(recentTrades)&&Number.isFinite(baseTrades)&&baseTrades>0?recentTrades/baseTrades:null,
+    takerRatio,compressionRatio,higherLowCount:higherLows,emaSlope,
+    momentum3,breakoutRoom,closeLocation,earlySetupScore:clamp(earlySetupScore)
+  };
+}
+
 function normalizeLeaderFeatures(leaderRows) {
   const fields = ['volumeAcceleration','tradeAcceleration','takerRatio','compressionRatio','emaSlope','higherLowCount','rangePosition','roc1h','roc4h','roc12h','bbWidth','breakoutRoom','btcChange'];
   const profile = {};
@@ -188,7 +238,7 @@ function patternLesson(leaderRows) {
   };
 }
 
-function scoreHunter({ticker, features, lesson, todayPct, dayHigh, dayLow, btcTodayPct}) {
+function scoreHunter({ticker, features, micro, lesson, todayPct, dayHigh, dayLow, btcTodayPct}) {
   const maxMove = Number(lesson.max_accepted_24h_move_pct ?? 8);
   const move = finite(todayPct);
   const oneHour = finite(features?.roc1h);
@@ -223,18 +273,20 @@ function scoreHunter({ticker, features, lesson, todayPct, dayHigh, dayLow, btcTo
   const timeScore = Number.isFinite(oneHour) && Number.isFinite(fiveHour)
     ? clamp(72 + oneHour * 6 + fiveHour * 2) : 45;
 
+  const microScore=finite(micro?.earlySetupScore) ?? 35;
   let score =
-    quiet * 0.10 +
-    volScore * 0.12 +
-    tradeScore * 0.08 +
-    takerScore * 0.10 +
-    squeezeScore * 0.12 +
-    hlScore * 0.10 +
-    emaScore * 0.10 +
-    relativeScore * 0.08 +
-    moveRoom * 0.08 +
+    quiet * 0.08 +
+    volScore * 0.11 +
+    tradeScore * 0.07 +
+    takerScore * 0.09 +
+    squeezeScore * 0.10 +
+    hlScore * 0.08 +
+    emaScore * 0.08 +
+    relativeScore * 0.07 +
+    moveRoom * 0.09 +
     timeScore * 0.04 +
-    (similarityScore ?? 45) * 0.08;
+    (similarityScore ?? 45) * 0.07 +
+    microScore * 0.12;
 
   score -= extensionPenalty;
   if (Number.isFinite(oneHour) && oneHour > 2.5) score -= 12;
@@ -242,10 +294,16 @@ function scoreHunter({ticker, features, lesson, todayPct, dayHigh, dayLow, btcTo
   if (Number.isFinite(taker) && taker < 0.485) score -= 10;
   score = clamp(score);
 
+  const microReady=Number.isFinite(microScore)&&microScore>=74;
+  const microVolume=Number.isFinite(micro?.volumeAcceleration)&&Number(micro.volumeAcceleration)>=1.05;
+  const microTaker=Number.isFinite(micro?.takerRatio)&&Number(micro.takerRatio)>=0.505;
+  const microRoom=Number.isFinite(micro?.breakoutRoom)&&Number(micro.breakoutRoom)>=0.35&&Number(micro.breakoutRoom)<=4.5;
+  const earlyMove=Number.isFinite(move)&&move<=4.5&&Number(move)>=-2.5;
+  const recentNotChasing=(!Number.isFinite(oneHour)||oneHour<=1.8)&&(!Number.isFinite(fiveHour)||fiveHour<=3.5);
   let decision = 'راقب';
-  if (score >= 86 && move <= maxMove && oneHour <= 2.5 && taker >= 0.50 && (similarityScore ?? 0) >= 70) {
+  if (score >= 86 && earlyMove && recentNotChasing && microReady && microVolume && microTaker && microRoom && taker >= 0.50 && (similarityScore ?? 0) >= 70) {
     decision = 'قنص';
-  } else if (score >= 77 && move <= maxMove + 2) {
+  } else if (score >= 78 && earlyMove && microScore >= 62 && (!Number.isFinite(micro?.momentum3)||micro.momentum3<=2.5)) {
     decision = 'ترقّب';
   } else {
     decision = 'مرفوض';
@@ -260,9 +318,19 @@ function scoreHunter({ticker, features, lesson, todayPct, dayHigh, dayLow, btcTo
   if (hls >= 4) reasons.push('سلسلة Higher-Lows');
   if (emaScore >= 80) reasons.push('السعر فوق/مع EMA20 وEMA50');
   if (Number.isFinite(rel) && rel >= 1) reasons.push('قوة نسبية أفضل من BTC');
+  if (microScore >= 74) reasons.push('بصمة مبكرة على 15m متوافقة');
+  if (Number(micro?.volumeAcceleration) >= 1.1) reasons.push('تسارع حجم 15m');
+  if (Number(micro?.takerRatio) >= 0.51) reasons.push('ضغط شراء 15m داعم');
+  if (Number(micro?.higherLowCount) >= 3) reasons.push('Higher-Lows على 15m');
+  if (Number(micro?.compressionRatio) <= 0.9) reasons.push('انكماش 15m قبل التوسع');
   if (moveRoom <= 2.5 && moveRoom >= 0) reasons.push('السعر قريب من المقاومة بدون تمدد كبير');
 
   const riskFlags = [];
+  if (!microReady) riskFlags.push('EARLY_FINGERPRINT_WEAK');
+  if (Number.isFinite(micro?.volumeAcceleration) && micro.volumeAcceleration < 1.05) riskFlags.push('MICRO_VOLUME_WEAK');
+  if (Number.isFinite(micro?.takerRatio) && micro.takerRatio < 0.505) riskFlags.push('MICRO_SELLER_PRESSURE');
+  if (Number.isFinite(micro?.momentum3) && micro.momentum3 > 2.5) riskFlags.push('MICRO_CHASE_RISK');
+  if (Number.isFinite(micro?.breakoutRoom) && micro.breakoutRoom < 0.35) riskFlags.push('RESISTANCE_TOO_CLOSE');
   if (move > maxMove) riskFlags.push('EXTENDED_24H');
   if (oneHour > 2.5) riskFlags.push('EXTENDED_1H');
   if (fiveHour > 5) riskFlags.push('EXTENDED_4H');
@@ -288,7 +356,15 @@ function scoreHunter({ticker, features, lesson, todayPct, dayHigh, dayLow, btcTo
       ema20: features?.ema20 ?? null,
       ema50: features?.ema50 ?? null,
       day_high: dayHigh,
-      day_low: dayLow
+      day_low: dayLow,
+      early_setup_score: microScore,
+      micro_volume_acceleration: micro?.volumeAcceleration ?? null,
+      micro_trade_acceleration: micro?.tradeAcceleration ?? null,
+      micro_taker_buy_ratio: micro?.takerRatio ?? null,
+      micro_compression_ratio: micro?.compressionRatio ?? null,
+      micro_higher_low_count: micro?.higherLowCount ?? null,
+      micro_momentum3: micro?.momentum3 ?? null,
+      micro_resistance_distance_pct: micro?.breakoutRoom ?? null
     },
     reasons,
     risk_flags: riskFlags
@@ -305,8 +381,8 @@ export const COIN_HUNTER_DEFAULTS = Object.freeze({
   deepCount: 20,
   deepConcurrency: 4,
   minLeaderMovePct: 6,
-  maxCandidateMovePct: 8,
-  minCandidateMovePct: -3,
+  maxCandidateMovePct: 4.5,
+  minCandidateMovePct: -2.5,
   alertCooldownMs: 8 * 60 * 1000,
   minHunterScore: 86,
   maxHunter24hMovePct: 8
@@ -454,15 +530,19 @@ export class CoinHunterRadar {
         const batch = pool.slice(i, i + concurrency);
         const rows = await Promise.all(batch.map(async t => {
           try {
-            const k = await this.rest.klines(t.symbol, '1h', {limit: 72});
-            const closed = closedCandles(k.candles, Date.now());
+            const [k1h,k15m] = await Promise.all([
+              this.rest.klines(t.symbol, '1h', {limit: 72}),
+              this.rest.klines(t.symbol, '15m', {limit: 96})
+            ]);
+            const closed = closedCandles(k1h.candles, Date.now());
+            const micro = earlyTimingFingerprint(k15m.candles);
             const features = featureSet(closed, t, btcToday);
-            if (!features) return null;
+            if (!features || !micro) return null;
             scanned += 1;
             const day = closed.filter(x=>Number(x.openTime)>=Number(dayStart));
             const dayPct = day.length >= 1 ? pct(Number(day.at(-1).close), Number(day[0].open)) : Number(t.priceChangePercent);
             const score = scoreHunter({
-              ticker:t, features, lesson:this.lesson,
+              ticker:t, features, micro, lesson:this.lesson,
               todayPct:dayPct,
               dayHigh:t.highPrice, dayLow:t.lowPrice, btcTodayPct:btcToday
             });
@@ -475,7 +555,7 @@ export class CoinHunterRadar {
               price:Number(t.lastPrice),
               quote_volume_24h:Number(t.quoteVolume),
               trade_count_24h:Number(t.count),
-              factors:score.metrics,
+              factors:{...score.metrics,early_timing_fingerprint:micro},
               reasons:score.reasons,
               risk_flags:score.risk_flags,
               detected_at:Date.now(),
@@ -571,6 +651,10 @@ export class CoinHunterRadar {
         'Resistance room',
         'Relative strength vs BTC',
         'Anti-chase extension gates',
+        '15m Early Timing Fingerprint',
+        'Micro RVOL/Trade acceleration',
+        'Micro Taker pressure and Higher-Lows',
+        'Micro compression and resistance-room gates',
         'Liquidity and data-integrity gates'
       ],
       data_policy:{spot_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true,no_synthetic_prices:true}

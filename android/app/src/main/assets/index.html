@@ -52,7 +52,6 @@ footer{padding:18px 4px;text-align:center;color:#8fa8b2;font-size:12px}
 <section class="rx-nav-card"><div><b>🧠 البروفيسور</b><small>استخبارات البثوث العامة: يستخرج الصفقات التي يتحدثون عنها، يطابق الأخبار، ثم يطلب تأكيد السوق الحقيقي ويعطي: «رأيي…».</small></div><a class="rx-nav-link" href="./professor-radar.html">فتح البروفيسور</a></section>
 <section class="rx-nav-card"><div><b>🛡️ المقاوم</b><small>حارس اتجاه السوق: هيكل HH/HL أو LH/LL، خط الاتجاه، المتوسط المتحرك وتوافق 4H + 1H، مع تحذير عند مخالفة اتجاه الإطار الكبير.</small></div><a class="rx-nav-link secondary" href="./al-muqawim-radar.html">فتح المقاوم</a></section>
 <section class="rx-nav-card"><div><b>🐋 تجمع الحيتان</b><small>صائد بصمة التجميع الكبير: Large Prints، تدفق الشراء، امتصاص البيع، عمق الطلب واستمرارية الدعم مع تقرير تفصيلي.</small></div><a class="rx-nav-link" style="background:linear-gradient(135deg,#ffd166,#ff9f1c)" href="./whale-accumulation-radar.html">فتح تجمع الحيتان</a></section><section class="rx-nav-card"><div><b>🧠 مركز التحليل</b><small>20 محللًا متخصصًا يفلترون كل عملة من الاتجاه والقاع والزخم والحجم والسيولة والحيتان والاختراق والمخاطر، ثم يصدر المحلل النهائي الحكم.</small></div><a class="rx-nav-link" style="background:linear-gradient(135deg,#4ed7ff,#6ef0c0);color:#03202a" href="./multi-analyst-center.html">فتح مركز التحليل</a></section>
-<section class="rx-nav-card"><div><b>🧠 مركز المحللين العشرين</b><small>كل عملة تمر على 19 محللًا متخصصًا ثم المحلل النهائي: الاتجاه، القاع، الهيكل، الزخم، الحجم، الانكماش، الاختراق، الدعم والمقاومة، القوة النسبية، السيولة، سلوك اللاعبين الكبار، الامتصاص ومخاطر الفخ.</small></div><a class="rx-nav-link" style="background:linear-gradient(135deg,#55e6ff,#45b7ff);color:#031017" href="./multi-analyst-center.html">فتح مركز المحللين</a></section>
 <section class="rx-nav-card"><div><b>👑 القاهر</b><small>ماسح السوق الكامل الحالي، مستقل عن الأربعة ويستمر كالرادار الخامس.</small></div><a id="openKahirBtn" class="rx-nav-link" href="./kahir-radar.html">فتح القاهر</a></section>
 <section class="rx-nav-card"><div><b>👑 الكنق</b><small>طبقة ذكاء تجمع أدلة الرادارات، الفحص العميق، الاتجاه، السيولة، الضغط وخطر الفخ قبل إصدار الحكم.</small></div><a class="rx-nav-link" href="./king.html">فتح الكنق</a></section>
 <section class="rx-nav-card" style="display:block">
@@ -68,6 +67,32 @@ footer{padding:18px 4px;text-align:center;color:#8fa8b2;font-size:12px}
 <div id="tradliSuitePanel" aria-label="RadarX Intelligence Suite"></div>
 <footer>RadarX • SPOT • قراءة فقط • paper_trading=true • real_order_execution=false • confidence_score=UNKNOWN</footer>
 </main>
+<script>
+(function(){
+  const KEY='radarx.dashboard.return.v2';
+  try{history.scrollRestoration='manual';}catch(e){}
+  document.addEventListener('click',function(event){
+    const a=event.target&&event.target.closest?event.target.closest('a[href]'):null;
+    if(!a)return;
+    const href=a.getAttribute('href')||'';
+    if(/\.html(?:[?#]|$)/i.test(href) && href!=='./index.html'){
+      try{sessionStorage.setItem(KEY,JSON.stringify({y:Number(window.scrollY)||0,href:href,at:Date.now()}));}catch(e){}
+    }
+  },true);
+  function restore(){
+    try{
+      const raw=sessionStorage.getItem(KEY);
+      if(!raw)return;
+      const saved=JSON.parse(raw);
+      if(!saved||!Number.isFinite(Number(saved.y)))return;
+      requestAnimationFrame(function(){requestAnimationFrame(function(){window.scrollTo(0,Number(saved.y)||0);});});
+    }catch(e){}
+  }
+  window.addEventListener('pageshow',restore);
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',restore,{once:true});
+  else restore();
+})();
+</script>
 <script>
 window.RadarXSmoke=window.RadarXSmoke||{state:function(value){try{console.log(value)}catch(e){}}};
 window.__RADARX_BOOT_OK=false;

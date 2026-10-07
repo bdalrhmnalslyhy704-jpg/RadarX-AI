@@ -116,7 +116,7 @@ var universeEl=document.getElementById('universe');
 var scannedEl=document.getElementById('scanned');
 var confirmedEl=document.getElementById('confirmed');
 var streaksEl=document.getElementById('streaks');
-var busy=false;
+var busy=false,pageDead=false,refreshTimer=null;
 var cacheKey='radarx.whale.intelligence.v2';
 var cacheTtl=5*60*1000;
 
@@ -215,7 +215,7 @@ function renderReport(body){
     '<div class="reportBox"><b>المصدر</b><span>Binance Public REST: aggTrades + depth + closed klines.</span></div>';
 }
 async function load(force){
-  if(busy)return;
+  if(pageDead||busy)return;
   var cached=!force?readCache():null;
   if(cached){
     render(cached);renderReport(cached);
@@ -257,7 +257,18 @@ document.getElementById('stopBtn').addEventListener('click',async function(){
   }catch(e){statusEl.textContent='تعذر الإيقاف — '+(e&&e.message||e);}
 });
 load(false);
-setInterval(function(){load(false);},60000);
+refreshTimer=setInterval(function(){load(false);},60000);
+window.addEventListener('pagehide',function(){
+  pageDead=true;
+  if(refreshTimer)clearInterval(refreshTimer);
+  refreshTimer=null;
+},{once:true,capture:true});
+window.addEventListener('pageshow',function(){
+  if(!pageDead)return;
+  pageDead=false;
+  if(!refreshTimer)refreshTimer=setInterval(function(){load(false);},60000);
+  load(false);
+});
 </script>
 </body>
 </html>

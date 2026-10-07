@@ -70,7 +70,7 @@ header{position:sticky;top:0;z-index:10;margin:-12px -14px 14px;padding:calc(11p
 import {getCoinHunterRadar,setRadarState} from './radarx-backend-client.mjs';
 
 const $=id=>document.getElementById(id);
-let busy=false;
+let busy=false,pageDead=false,refreshTimer=null;
 const nf=(v,d=2)=>{const n=Number(v);return Number.isFinite(n)?n.toFixed(d):'—'};
 const pct=v=>{const n=Number(v);return Number.isFinite(n)?(n>=0?'+':'')+n.toFixed(2)+'%':'—'};
 const time=v=>{try{return new Intl.DateTimeFormat('ar-YE',{timeZone:'Asia/Aden',hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true}).format(new Date(v));}catch{return v||'—'}};
@@ -115,13 +115,14 @@ function render(d){
         '<div><b>'+pct(f.one_hour_pct)+'</b><small>آخر ساعة</small></div>'+
       '</div>'+
       '<div class="reason"><b>لماذا؟</b> '+esc(reasons.slice(0,6).join(' • ')||'لم تتجمع أدلة كافية.')+'</div>'+
+      '<div class="reason"><b>توقيت ما قبل الحركة:</b> '+nf(f.early_setup_score,1)+'/100 • حجم 15m '+nf(f.micro_volume_acceleration,2)+'x • Taker 15m '+nf(f.micro_taker_buy_ratio*100,1)+'% • HL '+nf(f.micro_higher_low_count,0)+' • زخم 15m '+pct(f.micro_momentum3)+'</div>'+
       (risks.length?'<div class="reason danger"><b>حواجز الرفض:</b> '+esc(risks.join(' • '))+'</div>':'')+
     '</article>';
   }).join('');
 }
 
 async function refresh(scan=false){
-  if(busy)return;
+  if(pageDead||busy)return;
   busy=true;
   try{
     const r=await getCoinHunterRadar({quote:'USDT',limit:16,scan});
@@ -138,6 +139,7 @@ async function refresh(scan=false){
   }finally{busy=false;}
 }
 async function control(action){
+  if(pageDead)return;
   $('start').disabled=true;$('stop').disabled=true;$('scan').disabled=true;
   try{
     const r=await setRadarState('COIN_HUNTER_RADAR',action);
@@ -150,7 +152,18 @@ $('start').onclick=()=>control('start');
 $('stop').onclick=()=>control('stop');
 $('scan').onclick=()=>refresh(true);
 refresh(false);
-setInterval(()=>refresh(false),30000);
+refreshTimer=setInterval(()=>refresh(false),30000);
+window.addEventListener('pagehide',function(){
+  pageDead=true;
+  if(refreshTimer)clearInterval(refreshTimer);
+  refreshTimer=null;
+},{once:true,capture:true});
+window.addEventListener('pageshow',function(){
+  if(!pageDead)return;
+  pageDead=false;
+  if(!refreshTimer)refreshTimer=setInterval(()=>refresh(false),30000);
+  refresh(false);
+});
 </script>
 </body>
 </html>
