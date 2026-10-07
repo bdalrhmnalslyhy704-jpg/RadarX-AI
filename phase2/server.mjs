@@ -82,7 +82,15 @@ export async function startServer({
   const coinHunterRadar=new CoinHunterRadar({rest:coinHunterRest,store,pushManager:push,config:config.coinHunterRadar||{},logger});
   const whaleClusterRadar=new WhaleClusterRadar({rest,store,pushManager:push,config:config.whaleClusterRadar||{},logger});
   const whaleAccumulationRadar=new WhaleAccumulationRadar({rest,store,pushManager:push,config:config.whaleAccumulationRadar||{},logger});
-  const multiAnalystRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  const multiRestUrls=[
+    'https://data-api.binance.vision',
+    ...(config.rest.baseUrls??config.rest.urls??[])
+  ].filter((url,index,arr)=>arr.indexOf(url)===index);
+  const multiAnalystRest=new RestClient({
+    ...config.rest,
+    baseUrls:multiRestUrls,
+    maxRequestsPerMinute:Math.min(Number(config.rest.maxRequestsPerMinute)||120,110)
+  });
   const multiAnalystRadar=new MultiAnalystEngine({rest:multiAnalystRest,config:config.multiAnalyst||{},logger});
   const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,earlyExpansionRadar,coinHunterRadar,whaleClusterRadar,whaleAccumulationRadar,multiAnalystRadar});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
