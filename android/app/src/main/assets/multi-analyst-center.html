@@ -115,8 +115,10 @@ function render(body){
       '<div class="top"><div class="sym">'+(hot?'🧠 ':'🔎 ')+esc((idx+1)+'. '+x.symbol)+'</div><div class="score">'+n(x.final_score,0).toFixed(1)+'/100</div></div>'+
       '<div class="pills">'+
       '<span class="pill '+(hot?'good':'')+'">'+esc(verdictLabel(x.verdict))+'</span>'+
-      '<span class="pill">إجماع '+consensus.toFixed(0)+'%</span>'+
-      '<span class="pill">اتجاه '+esc(x.direction||'NEUTRAL')+'</span>'+
+      '<span class="pill">اتفاق '+n(x.final_judge && x.final_judge.agreement,0).toFixed(0)+'%</span>'+
+      '<span class="pill">مبكر '+n(x.final_judge && x.final_judge.early_score,0).toFixed(0)+'/100</span>'+
+      '<span class="pill">'+esc(x.final_judge && x.final_judge.timing || 'NO_SETUP')+'</span>'+
+      '<span class="pill">سوق '+esc(x.final_judge && x.final_judge.market_regime || 'MIXED')+'</span>'+
       '<span class="pill">جودة '+n(x.data_quality,0).toFixed(0)+'</span>'+
       '</div>'+
       '<div class="bar"><div class="fill" style="width:'+Math.max(0,Math.min(100,n(x.final_score,0)))+'%"></div></div>'+
@@ -126,7 +128,11 @@ function render(body){
       '<div class="fact"><b>'+n(x.liquidity_quality,0).toFixed(0)+'</b><span>السيولة</span></div>'+
       '<div class="fact"><b>'+n(x.consensus && x.consensus.strong,0)+'/20</b><span>محللون ≥80</span></div>'+
       '</div>'+
-      '<div class="reasons"><b>أقوى الأدلة:</b> '+esc(highlights.map(h=>h.name).join(' • ')||'لا توجد أدلة مرتفعة كفاية')+'</div>'+
+      '<div class="reasons"><b>أقوى الأدلة:</b> '+esc(highlights.map(h=>h.name).join(' • ')||'لا توجد أدلة مرتفعة كفاية')+
+      '<br><b>نافذة القرار:</b> '+esc(x.final_judge && x.final_judge.timing || 'NO_SETUP')+
+      ' • <b>الاستمرارية:</b> '+n(x.final_judge && x.final_judge.temporal_persistence,0).toFixed(1)+
+      ' • <b>الإجماع:</b> '+n(x.final_judge && x.final_judge.agreement,0).toFixed(0)+'%'+
+      '</div>'+
       '<div class="pipeline">'+
       highlights.slice(0,4).map(h=>'<div class="an"><b>'+esc(h.name)+'</b><small>'+esc(h.decision)+'</small><strong>'+n(h.score,0).toFixed(0)+'</strong></div>').join('')+
       '</div>'+
