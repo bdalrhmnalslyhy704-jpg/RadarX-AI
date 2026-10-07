@@ -108,8 +108,8 @@ export class WhaleAccumulationRadar{
   async start(){if(this.running)return;this.running=true;try{await this.tick();}catch(e){this.noteError(e);}this.timer=setInterval(()=>this.tick().catch(e=>this.noteError(e)),this.config.pollMs);}
   async stop(){this.running=false;if(this.timer)clearInterval(this.timer);this.timer=null;}
   noteError(e){this.lastError=String(e?.message??e);this.logger.warn?.('WHALE_ACCUMULATION',this.lastError);}
-  async tick(){
-    if(this.busy||!this.running)return;
+  async tick({force=false}={}){
+    if(this.busy||(!this.running&&!force))return;
     this.busy=true;try{
       const info=await this.rest.request('/api/v3/exchangeInfo');
       const universe=(info.data?.symbols||[]).filter(x=>x.symbol?.endsWith(this.config.quote)&&x.status==='TRADING'&&x.isSpotTradingAllowed!==false).map(x=>x.symbol);
@@ -143,6 +143,7 @@ export class WhaleAccumulationRadar{
       this.scanned=scanned;this.confirmed=confirmed;this.lastScanAt=this.clock();
     }finally{this.busy=false;}
   }
+  async scanOnce(){return this.tick({force:true});}
   snapshot(limit=20){return [...this.latest.values()].sort((a,b)=>b.opportunity_score-a.opportunity_score).slice(0,Math.max(1,Math.min(50,Math.trunc(Number(limit)||20))));}
   health(){return{running:this.running,busy:this.busy,radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان',universe:this.universeTotal,scanned_successfully:this.scanned,confirmed_count:this.confirmed,last_scan_at:this.lastScanAt,last_error:this.lastError,source:'Binance Public REST',closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'};}
   report(){return{thresholds:{minLargeBuyRatio:.60,minLargeNotionalImbalance:.12,minOpportunityScore:82},what_it_measures:['Large Prints','Taker Flow','Absorption','Orderbook Imbalance','Support Persistence','5m Confirmation','Relative Strength'],methodology:'Large Prints + Taker Flow + Absorption + Orderbook + Support + 5m + Relative Strength',source:'Binance Public REST: aggTrades + depth + closed klines'};}
