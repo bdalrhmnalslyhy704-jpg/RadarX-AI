@@ -169,6 +169,7 @@ export function decorateRadarAlert(alert,radarName){
     radar_profile:profile,
     radar_v2,
     radar_power_score:radar_v2.score,
+    radar_quality_v3,
     radar_quality_v3:quality_v3,
     detected_at:at,
     detected_at_iso:alert?.detected_at_iso||new Date(at).toISOString(),
