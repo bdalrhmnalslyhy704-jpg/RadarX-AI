@@ -145,6 +145,23 @@ export const CONFIG = Object.freeze({
     minHunterScore: int(process.env.RADARX_COIN_HUNTER_MIN_SCORE, 86),
     maxHunter24hMovePct: float(process.env.RADARX_COIN_HUNTER_MAX_24H_MOVE_PCT, 8)
   },
+  whaleClusterRadar: {
+    quote: 'USDT',
+    pollMs: int(process.env.RADARX_WHALE_CLUSTER_POLL_MS, 45000),
+    minQuoteVolume24h: int(process.env.RADARX_WHALE_CLUSTER_MIN_VOLUME, 1000000),
+    universeSize: int(process.env.RADARX_WHALE_CLUSTER_UNIVERSE, 80),
+    concurrency: int(process.env.RADARX_WHALE_CLUSTER_CONCURRENCY, 4),
+    depthLimit: int(process.env.RADARX_WHALE_CLUSTER_DEPTH, 100),
+    oneMinuteKlines: int(process.env.RADARX_WHALE_CLUSTER_1M_KLINES, 30),
+    fiveMinuteKlines: int(process.env.RADARX_WHALE_CLUSTER_5M_KLINES, 24),
+    minScore: int(process.env.RADARX_WHALE_CLUSTER_MIN_SCORE, 82),
+    watchScore: int(process.env.RADARX_WHALE_CLUSTER_WATCH_SCORE, 65),
+    minBidImbalance: float(process.env.RADARX_WHALE_CLUSTER_MIN_BID_IMBALANCE, 0.54),
+    minTakerBuyRatio: float(process.env.RADARX_WHALE_CLUSTER_MIN_TAKER, 0.51),
+    maxSpreadBps: int(process.env.RADARX_WHALE_CLUSTER_MAX_SPREAD_BPS, 25),
+    maxOneMinuteMovePct: float(process.env.RADARX_WHALE_CLUSTER_MAX_1M_MOVE, 2.5),
+    alertCooldownMs: int(process.env.RADARX_WHALE_CLUSTER_COOLDOWN, 15 * 60 * 1000)
+  },
   radarControl: {
     autostart: String(process.env.RADARX_RADARS_AUTOSTART ?? ((process.env.RADARX_ENV ?? 'development').toLowerCase() === 'production' ? 'true' : 'false')).toLowerCase() === 'true'
   },
