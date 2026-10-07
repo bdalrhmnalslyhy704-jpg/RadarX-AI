@@ -337,8 +337,7 @@ export function buildEarlyWakeAlert(candidate,trigger,{now=Date.now()}={}) {
     liquidity>=65&&
     leaders.length>=MOVE_RADAR_DEFAULTS.earlyWakeMinLeaders&&
     (leaders.length>=4||leaderScore>=MOVE_RADAR_DEFAULTS.earlyWakeMinScore)&&
-    hardLeader&&leaderScore>=MOVE_RADAR_DEFAULTS.earlyWakeMinScore&&
-    (historicalSamples<5||historicalScore>=48);
+    hardLeader&&leaderScore>=MOVE_RADAR_DEFAULTS.earlyWakeMinScore;
 
   const reasons=[];
   const push=(ok,text)=>{if(ok)reasons.push(text)};
@@ -563,7 +562,6 @@ export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
     },
     components:{pre_move:preMove,momentum,volume,buying_pressure:buying,structure,squeeze,relative_strength:relative,mtf_alignment:mtf,whale_pressure:whale,selling_exhaustion:exhaustion,liquidity,data_quality:dataQuality,historical_followthrough:historicalScore},
     taker_flow:{buy_ratio:takerRatio},
-    historical_followthrough:historicalFollowThrough,
     historical_followthrough:historicalFollowThrough,
     reasons:[...new Set(reasons)].slice(0,12),
     risk_flags:[...new Set(riskFlags)],
