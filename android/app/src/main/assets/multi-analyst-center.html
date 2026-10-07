@@ -85,7 +85,7 @@ button{border:0;border-radius:14px;padding:12px 16px;font-weight:900;font-size:1
 import {getMultiAnalyst} from './radarx-backend-client.mjs';
 const cards=document.getElementById('cards'),status=document.getElementById('status');
 const els={scanned:document.getElementById('scanned'),strong:document.getElementById('strong'),candidate:document.getElementById('candidate'),rejected:document.getElementById('rejected')};
-let latest=null,busy=false;
+let latest=null,busy=false,destroyed=false;
 const cacheKey='radarx.multiAnalyst.v1',cacheTtl=90*1000;
 function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
 function n(v,d=0){const x=Number(v);return Number.isFinite(x)?x:d;}
@@ -146,7 +146,7 @@ function render(body){
   }));
 }
 async function run(force){
-  if(busy)return;
+  if(destroyed||busy)return;
   if(!force){
     const c=loadCache();
     if(c){render(c);status.textContent='● آخر لقطة محفوظة — لم نعد تحليل السوق.';return;}
@@ -156,6 +156,7 @@ async function run(force){
   try{
     const r=await getMultiAnalyst({quote:'USDT',limit:10,scan:true});
     if(!r.ok||!r.body)throw new Error(r.error||('HTTP_'+r.status));
+    if(destroyed)return;
     saveCache(r.body);render(r.body);
     const u=r.body.universe||{};
     status.textContent='● تحليل حي مكتمل • '+n(u.scanned,0)+' عملات دخلت المختبر • '+n(r.body.summary && r.body.summary.strong_candidates,0)+' مرشح قوي';
@@ -166,6 +167,7 @@ async function run(force){
 document.getElementById('scanBtn').addEventListener('click',()=>run(true));
 document.getElementById('refreshBtn').addEventListener('click',()=>run(false));
 run(false);
+window.addEventListener('pagehide',function(){destroyed=true;},{once:true,capture:true});
 </script>
 </body>
 </html>
