@@ -247,6 +247,12 @@ function specialistAnalysis(candidate, market={}){
   return {a,features:{price,rsi,rsi1,rv,bb,ar,tRatio,structure:sm,book,roc4,roc16,trend4,trend1,rangePos,distanceEma},dataValid:dq>=70&&liq>=60&&s4.length>=50&&s1.length>=50&&s15.length>=80};
 }
 
+export function analyzeMultiAnalystCandidate(candidate, market={}){
+  const specialist=specialistAnalysis(candidate,market);
+  const final=finalVerdict(specialist.a,specialist.features,specialist.dataValid);
+  return {specialist,final};
+}
+
 const WEIGHTS={
   MARKET_REGIME:.06,MTF_ALIGNMENT:.06,MARKET_STRUCTURE:.07,BOTTOM_TURN:.07,MOMENTUM:.05,
   VOLUME_CONFIRMATION:.06,VOLATILITY_COMPRESSION:.05,PRE_BREAKOUT:.09,SUPPORT_RESISTANCE:.07,
@@ -347,8 +353,9 @@ export class MultiAnalystEngine {
       const breadthPct=validTickerReturns.length?validTickerReturns.filter(x=>x>0).length/validTickerReturns.length*100:null;
       const scanned=await boundedMap(selected,Math.max(1,Math.min(5,this.config.deepConcurrency)),async(ticker,index)=>{
         const row=await this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:info.source,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'5m',fastKlines:96,includeAnalysisPayload:true});
-        const specialist=specialistAnalysis(row,{btc15,btc1,marketMedian24h,breadthPct});
-        const final=finalVerdict(specialist.a,specialist.features,specialist.dataValid);
+        const analysis=analyzeMultiAnalystCandidate(row,{btc15,btc1,marketMedian24h,breadthPct});
+        const specialist=analysis.specialist;
+        const final=analysis.final;
         const publicAnalysts=specialist.a.map(x=>({...x}));
         delete row._analysis;
         return {
