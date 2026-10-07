@@ -509,7 +509,9 @@ export class MultiAnalystEngine {
       const scanned=await boundedMap(selected,Math.max(1,Math.min(5,this.config.deepConcurrency)),async(ticker,index)=>{
         try{
           const row=await this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:info.source,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'5m',fastKlines:96,includeAnalysisPayload:true});
-          if(!row||row.data_status?.data_valid===false&&row.data_quality<1)throw new Error('SYMBOL_DATA_UNAVAILABLE');
+          if(!row)throw new Error('SYMBOL_SCAN_RETURNED_EMPTY');
+          // A candidate must reach the 19 specialist analysts even when the data gate fails.
+          // The final judge remains fail-closed: invalid/stale/future/incomplete data is rejected there.
           this._settleOutcome(ticker.symbol,row?.last_price,this.clock());
           let prior=null;
           try{ prior=await this.store?.getIntelligenceMemory?.(ticker.symbol) || null; }catch{ prior=null; }
@@ -547,6 +549,8 @@ export class MultiAnalystEngine {
         }
       });
       const live=scanned.filter(Boolean);
+      const validLive=live.filter(x=>x?.data_status?.data_valid===true);
+      const gateRejected=live.filter(x=>x?.data_status?.data_valid!==true);
       for(const item of live){
         try{
           await this.store?.putIntelligenceMemory?.(item.symbol,{
@@ -576,9 +580,17 @@ export class MultiAnalystEngine {
           duration_ms:Math.max(0,this.clock()-startedAt),
           deep_concurrency:this.config.deepConcurrency,
           deep_klines:this.config.deepKlines,
-          successful_analyses:live.length,
+          attempted_analyses:selected.length,
+          successful_analyses:validLive.length,
+          gate_rejected:gateRejected.length,
           failed_analyses:scanErrors.length,
-          scan_errors:scanErrors.slice(0,20)
+          scan_errors:scanErrors.slice(0,20),
+          gate_rejections:gateRejected.slice(0,20).map(x=>({
+            symbol:x.symbol,
+            reasons:x.reason_codes||[],
+            invalidation:x.invalidation||[],
+            last_error:x.data_status?.last_error??null
+          }))
         }
       };
       this.cache={quote:q,expiresAt:this.clock()+this.config.ttlMs,value};
