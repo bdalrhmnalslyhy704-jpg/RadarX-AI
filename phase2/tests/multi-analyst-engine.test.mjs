@@ -35,6 +35,10 @@ assert.equal(good.specialist.a.length,19);
 assert.equal(good.final.totalAnalysts,19);
 assert.ok(['STRONG_CANDIDATE','CANDIDATE','WATCH','REJECT'].includes(good.final.verdict));
 assert.ok(Number.isFinite(good.final.score));
+assert.ok(Number.isFinite(good.final.early_score));
+assert.ok(Number.isFinite(good.final.agreement));
+assert.ok(['RISK_ON','RISK_OFF','MIXED'].includes(good.final.market_regime));
+assert.ok(['EARLY_SETUP','CONFIRMING_SETUP','EXTENDED','BEARISH','NO_SETUP'].includes(good.final.timing));
 
 const badData=analyzeMultiAnalystCandidate(rawFor({valid:false,dq:40}),{});
 assert.equal(badData.final.verdict,'REJECT');
