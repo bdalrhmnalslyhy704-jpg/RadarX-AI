@@ -195,6 +195,47 @@ const comments=[];for(const p of r.slice(0,3)){try{const body=await fetchText(p.
 const news=dedupe([...g,...n].map(x=>({...x,class:sourceClass(x.url,'news')})).map(x=>classifyEvidence(x))),official=dedupe(g.map(x=>({...x,class:sourceClass(x.url,'news')})).filter(x=>x.class==='OFFICIAL').map(x=>classifyEvidence(x))),social=dedupe([...r,...comments].map(x=>({...x,class:'SOCIAL'})).map(x=>classifyEvidence(x))),all=dedupe([...news,...official,...social]),domains=new Set(all.map(x=>host(x.url)).filter(Boolean));
 const spam=Math.max(0,social.filter(x=>x.sentiment!==50).length*.25-social.filter(x=>N(x.score,0)>=5).length*.15);
 return{query:q,news:news.slice(0,45),official:official.slice(0,30),social:social.slice(0,30),all,independent_domains:domains.size,comment_count:comments.length,social_spam_penalty:Number(spam.toFixed(1)),corroboration:corroborate(all),source_coverage:{gdelt:g.length,google_news:n.length,reddit_posts:r.length,reddit_comments:comments.length,official_found:official.length},limitations:['لا يمكن ضمان قراءة كل موقع أو منصة مغلقة.','المصادر الاجتماعية عامة وتحتاج تحققًا مستقلًا.']}}
-export function buildAgentVerdict({symbol,evidence={},deepScan=null,memory=[]}={}){const learning=weights(memory),agents=makeAgents(evidence,deepScan,learning),guard=agents.find(x=>x.id==='RISK_GUARDIAN')?.score||50,chief=agents.find(x=>x.id==='CHIEF_DECIDER')?.score||50,trap=N(deepScan?.assessment?.trap_risk,50),dq=N(deepScan?.data_quality?.score ?? deepScan?.scores?.data_quality,null),hard=(dq!=null&&dq<70)||trap>=78||guard<35,action=hard?'SPOT_AVOID':chief>=82&&guard>=60?'PAPER_WATCH':chief>=68?'WATCH':'WAIT_CONFIRMATION',direction=chief>=62?'BUY_BIAS':chief<=38?'SELL_BIAS':'NEUTRAL';return{engine:'AI_ANALYST_COUNCIL_20',engine_name:'🧠 مجلس 20 محللًا',council_size:AGENT_REGISTRY.length,specialist_count:AGENT_REGISTRY.length-1,symbol:String(symbol).toUpperCase(),agents,decision:{action,direction,score:Number(chief.toFixed(1)),quorum,quorum_required:12,quorum_ok:quorumOk,risk_score:Number((100-guard).toFixed(1)),trap_risk:trap,hard_reject:hard,stance:action==='PAPER_WATCH'?'اللجنة: مراقبة قوية مشروطة':action==='SPOT_AVOID'?'اللجنة: تجنب حاليًا':'اللجنة: انتظار التأكيد'},evidence_summary:{total:evidence.all?.length||0,news:evidence.news?.length||0,official:evidence.official?.length||0,social:evidence.social?.length||0,comments:evidence.comment_count||0,independent_domains:evidence.independent_domains||0,verified_claims:evidence.corroboration?.verified||0,unverified_claims:evidence.corroboration?.unverified||0},source_coverage:evidence.source_coverage||{},learning:{weights:learning.weights,stats:learning.stats},data_policy:{spot_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true,no_synthetic_prices:true,hard_reject_on_invalid_data:true},disclaimer:'تحليل آلي احتمالي؛ لا يضمن الربح ولا ينفذ أوامر حقيقية.'}}
+export function buildAgentVerdict({symbol,evidence={},deepScan=null,memory=[]}={}){
+  const learning=weights(memory);
+  const agents=makeAgents(evidence,deepScan,learning);
+  const trap=N(deepScan?.assessment?.trap_risk,50);
+  const dq=N(deepScan?.data_quality?.score ?? deepScan?.scores?.data_quality,null);
+  const liq=N(deepScan?.liquidity?.score,null);
+  const live=deepScan?.meta?.live!==false;
+  const closedOnly=deepScan?.data_quality?.no_open_candles_used!==false;
+  const trapGuard=agents.find(x=>x.id==='TRAP_DETECTOR')?.score||50;
+  const chief=agents.find(x=>x.id==='CHIEF_DECIDER')?.score||50;
+  const quorum=agents.filter(x=>x.id!=='CHIEF_DECIDER'&&Number.isFinite(Number(x.score))).length;
+  const quorumRequired=12;
+  const quorumOk=quorum>=quorumRequired;
+  const hard=(dq!=null&&dq<70)||trap>=78||trapGuard<35||(liq!=null&&liq<40)||!live||!closedOnly;
+  const action=!quorumOk?'WAIT_CONFIRMATION':hard?'SPOT_AVOID':chief>=82&&trapGuard>=62?'PAPER_WATCH':chief>=68?'WATCH':'WAIT_CONFIRMATION';
+  const direction=chief>=62?'BUY_BIAS':chief<=38?'SELL_BIAS':'NEUTRAL';
+  return {
+    engine:'AI_ANALYST_COUNCIL_20',
+    engine_name:'🧠 مجلس 20 محللًا',
+    council_size:AGENT_REGISTRY.length,
+    specialist_count:AGENT_REGISTRY.length-1,
+    symbol:String(symbol).toUpperCase(),
+    agents,
+    decision:{
+      action,direction,score:Number(chief.toFixed(1)),
+      quorum,quorum_required:quorumRequired,quorum_ok:quorumOk,
+      risk_score:Number((100-trapGuard).toFixed(1)),
+      trap_risk:trap,hard_reject:hard,
+      stance:action==='PAPER_WATCH'?'اللجنة: مراقبة قوية مشروطة':action==='SPOT_AVOID'?'اللجنة: تجنب حاليًا':action==='WATCH'?'اللجنة: قائمة مراقبة':'اللجنة: انتظار التأكيد'
+    },
+    evidence_summary:{
+      total:evidence.all?.length||0,news:evidence.news?.length||0,official:evidence.official?.length||0,
+      social:evidence.social?.length||0,comments:evidence.comment_count||0,independent_domains:evidence.independent_domains||0,
+      verified_claims:evidence.corroboration?.verified||0,unverified_claims:evidence.corroboration?.unverified||0
+    },
+    source_coverage:evidence.source_coverage||{},
+    learning:{weights:learning.weights,stats:learning.stats},
+    data_policy:{spot_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true,no_synthetic_prices:true,hard_reject_on_invalid_data:true},
+    disclaimer:'تحليل آلي احتمالي؛ لا يضمن الربح ولا ينفذ أوامر حقيقية.'
+  };
+}
+
 export function evaluateMemory(memory,{symbol,currentPrice,now=Date.now()}={}){const p=N(currentPrice,null);if(p==null)return[];const out=[];for(const x of memory||[]){if(String(x.symbol||'').toUpperCase()!==String(symbol||'').toUpperCase()||x.outcome!=='PENDING')continue;const age=now-N(x.created_at,now);if(age<15*60*1000)continue;const e=N(x.entry_price,p),ret=(p-e)/Math.max(e,1e-12)*100,th=age>=4*3600000?3:1.5,win=x.direction==='BUY_BIAS'?ret>=th:x.direction==='SELL_BIAS'?ret<=-th:false,loss=x.direction==='BUY_BIAS'?ret<=-th:x.direction==='SELL_BIAS'?ret>=th:false;if(win||loss||age>=24*3600000)out.push({...x,outcome:win?'WIN':loss?'LOSS':'NEUTRAL',return_pct:Number(ret.toFixed(3)),evaluated_at:now})}return out}
-export function createMemoryEntries({symbol,price,agents,now=Date.now()}={}){const p=N(price,null);if(p==null)return[];return(agents||[]).filter(x=>x.id&&x.id!=='CHIEF_DECIDER').map(x=>({id:x.id+':'+String(symbol).toUpperCase()+':'+now,agent_id:x.id,symbol:String(symbol).toUpperCase(),created_at:now,entry_price:p,direction:x.direction==='BUY_BIAS'?'BUY_BIAS':x.direction==='RISK_BIAS'?'SELL_BIAS':'NEUTRAL',score:x.score,outcome:'PENDING'}))}
+export function createMemoryEntries({symbol,price,agents,now=Date.now()}={}){const p=N(price,null);if(p==null)return[];return(agents||[]).filter(x=>x.id&&x.id!=='CHIEF_DECIDER').map(x=>({id:x.id+':'+String(symbol).toUpperCase()+':'+now,agent_id:x.id,symbol:String(symbol).toUpperCase(),created_at:now,entry_price:p,direction:x.direction==='BUY_BIAS'?'BUY_BIAS':(x.direction==='SELL_BIAS'||x.direction==='RISK_BIAS')?'SELL_BIAS':'NEUTRAL',score:x.score,outcome:'PENDING'}))}
