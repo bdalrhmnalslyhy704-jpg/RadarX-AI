@@ -460,6 +460,37 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           return send(res,200,{...snapshot,status:'not_ready',error:String(e?.message??e),alerts:[],monitoring:health,scan:{requested:runNow,completed:false,error:String(e?.message??e)},meta:{...(snapshot.meta||{}),live:false,radar:'WHALE_ACCUMULATION_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         }
       }
+      if(u.pathname==='/api/falcon-eye-radar'&&req.method==='GET'){
+        if(!falconEyeRadar)return send(res,503,{error:'FALCON_EYE_RADAR_UNAVAILABLE',radar:'FALCON_EYE_RADAR',radar_name:RADAR_NAMES.FALCON_EYE_RADAR,candidates:[],alerts:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        const sinceRaw=Number(u.searchParams.get('since')||0);
+        const limit=Math.max(1,Math.min(50,Math.trunc(Number(u.searchParams.get('limit')||20))));
+        const runNow=String(u.searchParams.get('scan')||'').trim()==='1';
+        try{
+          let scanError=null;
+          const before=falconEyeRadar.health?.()||{};
+          if(runNow&&before.busy!==true&&typeof falconEyeRadar.tick==='function'){
+            try{await falconEyeRadar.tick();}catch(e){scanError=String(e?.message??e);}
+          }
+          const health=falconEyeRadar.health?.()||{running:false,radar:'FALCON_EYE_RADAR',radar_name:RADAR_NAMES.FALCON_EYE_RADAR};
+          const alerts=typeof store.readFalconEyeAlerts==='function'
+            ? await store.readFalconEyeAlerts({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit})
+            : [];
+          return send(res,200,{
+            radar:'FALCON_EYE_RADAR',
+            radar_name:RADAR_NAMES.FALCON_EYE_RADAR,
+            candidates:Array.isArray(health.latest_candidates)?health.latest_candidates.slice(0,limit):[],
+            alerts,
+            monitoring:health,
+            scan:{requested:runNow,completed:scanError===null&&health.last_scan_at!=null,error:scanError||health.last_error||null},
+            thresholds:{min_score:Number(config.falconEyeRadar?.minScore??88),max_alerts_per_hour:Number(config.falconEyeRadar?.maxAlertsPerHour??3),max_24h_move_pct:8,market:'SPOT',fast_timeframe:'1m',confirmation_timeframe:'5m'},
+            algorithms:health.features||[],
+            meta:{live:health.running===true,source:'Binance Public REST + public Futures context',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true}
+          });
+        }catch(e){
+          return send(res,503,{error:String(e?.message??e),radar:'FALCON_EYE_RADAR',radar_name:RADAR_NAMES.FALCON_EYE_RADAR,candidates:[],alerts:[],monitoring:falconEyeRadar.health?.()||{running:false},meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true}});
+        }
+      }
+
       if(u.pathname==='/api/early-expansion-radar'&&req.method==='GET'){
         if(!earlyExpansionRadar)return send(res,503,{error:'EARLY_EXPANSION_RADAR_UNAVAILABLE',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         const quote=String(u.searchParams.get('quote')||config.earlyExpansionRadar?.quote||'USDT').trim().toUpperCase();
