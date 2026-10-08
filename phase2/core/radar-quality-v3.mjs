@@ -54,9 +54,8 @@ export function evaluateRadarQuality(alert={},options={}){
     liquidity*.13+
     evidenceScore*.08+
     empirical*.10+
-    falcon.quality*.11+
-    forensics.score*.04+
-    falcon.quality*.15-
+    falcon.quality*.15+
+    forensics.score*.04-
     Math.min(12,riskCount*2)-
     chasePenalty;
 
