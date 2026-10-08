@@ -24,7 +24,9 @@ function nested(obj,path){
 
 function pick(alert,keys){
   for(const p of keys){
-    const n=Number(nested(alert,p));
+    const raw=nested(alert,p);
+    if(raw===null||raw===undefined||raw==='')continue;
+    const n=Number(raw);
     if(Number.isFinite(n))return n;
   }
   return null;
