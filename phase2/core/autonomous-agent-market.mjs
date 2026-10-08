@@ -135,7 +135,7 @@ export class AutonomousAgentMarket {
     if(!scanner)throw new Error('SCANNER_REQUIRED');
     this.scanner=scanner;this.store=store;this.config={...AUTONOMOUS_AGENT_DEFAULTS,...config};
     this.clock=clock;this.logger=logger;this.running=false;this.timer=null;this.cycleBusy=false;
-    this.lastCycle=null;this.nextCycleAt=null;this.cursor=0;this.webCursor=0;this.universeCache=null;
+    this.lastCycle=null;this.nextCycleAt=null;this.cursor=0;this.webCursor=0;this.universeCache=null;this.previousSupreme=new Map();
   }
 
   async start(){
@@ -201,7 +201,9 @@ export class AutonomousAgentMarket {
         const memory=[...pendingMemory.filter(x=>String(x.symbol).toUpperCase()===candidate.symbol.toUpperCase())];
         const deepScan=makeMarketDeep(candidate);
         const verdict=buildAgentVerdict({symbol:candidate.symbol,evidence,deepScan,memory});
-        const supremeFusion=evaluateSupremeFusion({candidate,verdict});
+        const previousFusion=this.previousSupreme.get(candidate.symbol);
+        const supremeFusion=evaluateSupremeFusion({candidate,verdict,previous:previousFusion});
+        this.previousSupreme.set(candidate.symbol,{supreme_score:supremeFusion.score,observed_at:startedAt});
         const newEntries=createMemoryEntries({symbol:candidate.symbol,price:candidate.last_price,agents:verdict.agents,now:startedAt});
         const recent=memory.some(x=>Number(x.created_at||0)>startedAt-15*60*1000);
         if(!recent&&typeof this.store?.appendAgentMemory==='function'){
