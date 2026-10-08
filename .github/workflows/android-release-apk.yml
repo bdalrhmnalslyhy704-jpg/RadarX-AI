@@ -1,4 +1,4 @@
-# Falcon Eye + Build 224 release pipeline
+# Falcon Eye + Build 224 release pipeline — backend endpoint verified before release
 name: RadarX Android Release APK
 
 on:
