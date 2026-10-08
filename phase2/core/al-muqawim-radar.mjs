@@ -107,6 +107,48 @@ function timeframeAnalysis(candles,maPeriod=50,now=Date.now()){
   };
 }
 
+function recentReturn(rows,n=4){
+  const a=closedCandles(rows,Date.now());
+  if(a.length<=n)return null;
+  return (Number(a.at(-1).close)/Number(a.at(-(n+1)).close)-1)*100;
+}
+function ratioToMedian(values){
+  const x=values.map(Number).filter(Number.isFinite).sort((a,b)=>a-b);
+  if(!x.length)return null;
+  const m=Math.floor(x.length/2);return x.length%2?x[m]:(x[m-1]+x[m])/2;
+}
+function entryTiming(candles,price,ma,now=Date.now()){
+  const a=closedCandles(candles,now);
+  if(a.length<35||!(price>0)||!(ma>0))return {score:40,freshness:40,reason:'INSUFFICIENT_TIMING_DATA'};
+  const recent4=(Number(a.at(-1).close)/Number(a.at(-5).close)-1)*100;
+  const recent8=(Number(a.at(-1).close)/Number(a.at(-9).close)-1)*100;
+  const volumes=a.slice(-25).map(x=>Number(x.volume)).filter(Number.isFinite);
+  const currentVol=Number(a.at(-1).volume);
+  const volumeBase=ratioToMedian(volumes.slice(0,-1));
+  const volumeRatio=volumeBase>0?currentVol/volumeBase:null;
+  const ranges=a.slice(-20).map(x=>Number(x.high)-Number(x.low)).filter(Number.isFinite);
+  const rangeBase=ratioToMedian(ranges.slice(0,-1));
+  const currentRange=ranges.at(-1);
+  const rangeRatio=rangeBase>0?currentRange/rangeBase:null;
+  const distanceMa=Math.abs(price/ma-1)*100;
+  const prior=a.slice(-21,-1);
+  const resistance=Math.max(...prior.map(x=>Number(x.high)).filter(Number.isFinite));
+  const resistanceGap=resistance>0?(resistance-price)/price*100:null;
+  const nearResistance=Number.isFinite(resistanceGap)&&resistanceGap>=-0.8&&resistanceGap<=2.2;
+  const notExtended=recent4<=1.8&&recent8<=3.2&&distanceMa<=3.5;
+  const participation=Number.isFinite(volumeRatio)?clamp(50+(volumeRatio-1)*55):55;
+  const compression=Number.isFinite(rangeRatio)?clamp(70+(1-rangeRatio)*35):55;
+  const freshness=clamp(100-Math.max(0,recent8-1.2)*18-Math.max(0,distanceMa-1.5)*12-Math.max(0,(recent4-1.0))*15);
+  const score=clamp(
+    freshness*.34+
+    participation*.20+
+    (nearResistance?82:58)*.16+
+    (notExtended?88:42)*.18+
+    compression*.12
+  );
+  return {score,freshness,recent4,recent8,volumeRatio,rangeRatio,distanceMa,resistanceGap,nearResistance,notExtended,participation,compression};
+}
+
 export function buildAlMuqawimAnalysis(series,ticker,now=Date.now(),config={}){
   const maPeriod=Math.max(10,Math.trunc(Number(config.maPeriod)||50));
   const m15=timeframeAnalysis(series?.['15m']||[],maPeriod,now);
@@ -116,6 +158,9 @@ export function buildAlMuqawimAnalysis(series,ticker,now=Date.now(),config={}){
   if(tfs.some(x=>x.direction==='INSUFFICIENT')){
     return {eligible:false,stage:'INSUFFICIENT_DATA',direction:'NONE',score:null,closed_candles_only:true,timeframes:{'4h':h4,'1h':h1,'15m':m15}};
   }
+  const price=finite(ticker?.lastPrice);
+  const timing=entryTiming(series?.['15m']||[],price,m15.moving_average?.value,now);
+  const dailyMove=Math.abs(finite(ticker?.priceChange24h,0));
   const up=tfs.filter(x=>x.direction==='UP').length;
   const down=tfs.filter(x=>x.direction==='DOWN').length;
   const mixed=up>0&&down>0;
@@ -155,17 +200,26 @@ export function buildAlMuqawimAnalysis(series,ticker,now=Date.now(),config={}){
     maScore>=70?'price/MA aligned':'moving-average mixed',
     lowerAgreement>=90?'15m agrees with major direction':'15m conflicts or is neutral'
   ];
+  const entryReady=timing.score>=78&&timing.freshness>=72&&timing.notExtended&&dailyMove<=8&&
+    (timing.nearResistance||timing.recent4>=0.15)&&timing.distanceMa<=3.5;
   return {
-    eligible:score>=82&&major!=='CONFLICT'&&htfAligned===100&&structureScore>=90&&lowerAgreement>=90,
+    eligible:score>=86&&major==='UP'&&htfAligned===100&&structureScore>=90&&lowerAgreement>=90&&entryReady,
     closed_candles_only:true,
     direction:major,
     stage,
     score:Number(score.toFixed(1)),
     entry_risk:entryRisk,
     timeframes:{'4h':h4,'1h':h1,'15m':m15},
-    components:{market_structure:structureScore,higher_timeframe_alignment:htfAligned,lower_timeframe_agreement:lowerAgreement,trendline:trendlineScore,moving_average:maScore},
-    trigger:{min_score:82,required_htf_alignment:'4h+1h',required_structure:'HH+HL or LH+LL',ma_period:maPeriod,closed_candles_only:true},
-    reasons,
+    components:{market_structure:structureScore,higher_timeframe_alignment:htfAligned,lower_timeframe_agreement:lowerAgreement,trendline:trendlineScore,moving_average:maScore,entry_timing:timing.score,entry_freshness:timing.freshness},
+    trigger:{min_score:86,required_htf_alignment:'4h+1h',required_structure:'HH+HL',entry_timing_min:78,entry_freshness_min:72,max_24h_move_pct:8,max_distance_from_15m_ma_pct:3.5,closed_candles_only:true},
+    reasons:[
+      ...reasons,
+      timing.notExtended?'عدم مطاردة بعد اندفاعة قصيرة':'تحذير: الحركة القصيرة ممتدة',
+      timing.nearResistance?'اختبار مقاومة قريب':'المقاومة ليست في نقطة اختبار مثالية',
+      Number.isFinite(timing.volumeRatio)&&timing.volumeRatio>=1.12?'عودة مشاركة الحجم':'الحجم لا يثبت التجدد',
+      dailyMove<=8?'الحركة اليومية ما زالت قابلة للدخول':'رفض: الحركة اليومية ممتدة'
+    ],
+    entry_timing:timing,
     source:'Binance Public REST',
     detected_at:now,
     processed_at:now,
@@ -206,8 +260,8 @@ export class AlMuqawimRadar{
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
     this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
-    this.config={quote:'USDT',pollMs:60000,universeRefreshMs:5*60*1000,minQuoteVolume24h:750000,batchSize:5,alertCooldownMs:20*60*1000,minScore:82,maPeriod:50,...config};
-    this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;this.lastAlertAt=new Map();this.alertCount=0;this.scans=0;this.lastError=null;this.lastScanAtMs=null;this.busy=false;
+    this.config={quote:'USDT',pollMs:60000,universeRefreshMs:5*60*1000,minQuoteVolume24h:1000000,batchSize:5,alertCooldownMs:45*60*1000,minScore:86,minEntryTimingScore:78,minEntryFreshness:72,maxAlert24hMovePct:8,maxAlertsPerHour:3,maPeriod:50,...config};
+    this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;this.lastAlertAt=new Map();this.alertTimestamps=[];this.alertCount=0;this.scans=0;this.lastError=null;this.lastScanAtMs=null;this.busy=false;
   }
   start(){
     if(this.running)return;
@@ -251,14 +305,23 @@ export class AlMuqawimRadar{
     ]);
     const alert=buildAlMuqawimAlert(row,{ '4h':r4.candles,'1h':r1.candles,'15m':r15.candles },this.clock(),this.config);
     this.scans++;
-    if(!alert.eligible||Number(alert.opportunity_score)<this.config.minScore)return alert;
+    const timing=alert.entry_timing||{};
+    const ageCutoff=this.clock()-60*60*1000;
+    this.alertTimestamps=this.alertTimestamps.filter(ts=>Number(ts)>ageCutoff);
+    const budgetOk=this.alertTimestamps.length<Math.max(1,Number(this.config.maxAlertsPerHour)||3);
+    const strictReady=alert.eligible&&Number(alert.opportunity_score)>=Number(this.config.minScore)+4 &&
+      Number(timing.score)>=Number(this.config.minEntryTimingScore||78) &&
+      Number(timing.freshness)>=Number(this.config.minEntryFreshness||72) &&
+      timing.notExtended===true&&
+      Number(alert.price_change_24h||0)<=Number(this.config.maxAlert24hMovePct||8)&&budgetOk;
+    if(!strictReady)return alert;
     const last=this.lastAlertAt.get(row.symbol)||0;
     if(this.clock()-last<this.config.alertCooldownMs)return alert;
     this.lastAlertAt.set(row.symbol,this.clock());
     const decorated=decorateRadarAlert(alert,'Radar 7 — المقاوم');
     await this.store.appendAlMuqawimAlert(decorated);
     if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
-    this.alertCount++;
+    this.alertCount++;this.alertTimestamps.push(this.clock());
     return alert;
   }
   async tick(){
@@ -277,7 +340,7 @@ export class AlMuqawimRadar{
   health(){
     return {running:this.running,radar:'ALMUQAWIM_RADAR',universe:this.universe.length,last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,busy:this.busy,
       rest:this.rest?.health?.()||null,
-      algorithms:['MARKET_STRUCTURE_HH_HL_LH_LL','TRENDLINE_DIRECTION','MOVING_AVERAGE_FILTER','HIGHER_TIMEFRAME_ALIGNMENT','LOWER_TIMEFRAME_RISK_GUARD'],
+      algorithms:['MARKET_STRUCTURE_HH_HL_LH_LL','TRENDLINE_DIRECTION','MOVING_AVERAGE_FILTER','HIGHER_TIMEFRAME_ALIGNMENT','LOWER_TIMEFRAME_RISK_GUARD','ENTRY_TIMING_FRESHNESS','LOCAL_RESISTANCE_TEST','ANTI_CHASE_DISTANCE','HOURLY_ALERT_BUDGET'],
       source:'Binance Public REST',closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'};
   }
 }
