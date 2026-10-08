@@ -50,73 +50,68 @@ export function observeEvidenceTrajectory(alert={},now=Date.now()){
   const point=snapshot(alert,now);
   if(!point.symbol)return {version:'EVIDENCE_TRAJECTORY_V1',observed:false,quality:50,persistence:0,delta:0,improving_domains:0,degrading_domains:0,convergence:50,regime:'UNKNOWN'};
   const key=point.symbol+'|'+point.radar;
-  const prev=memory.get(key)||[];
-  const existing=prev.find(x=>x.id===point.id);
-  let series=existing?[...prev]:[...prev,point];
-  series=series.filter(x=>point.at-x.at<=WINDOW_MS).sort((a,b)=>a.at-b.at).slice(-MAX_POINTS);
-  if(!existing)memory.set(key,series);
+  const history=memory.get(key)||[];
+  const previous=history.length?history[history.length-1]:null;
 
-  const history=series;
-  const previous=history.length>=2?history[history.length-2]:null;
+  if(previous && previous.id===point.id){
+    const same={
+      version:'EVIDENCE_TRAJECTORY_V1',observed:true,persistence:history.length,window_ms:WINDOW_MS,
+      quality:50,current_strength:50,early_support:50,delta:0,convergence:50,
+      improving_domains:0,degrading_domains:0,flat_domains:Object.keys(point.fields).length,
+      positive_steps:0,regime:'STABLE',
+      domains:Object.fromEntries(Object.entries(point.fields).map(([k,v])=>[k,Number(v.toFixed(1))])),
+      as_of:new Date(point.at).toISOString()
+    };
+    return same;
+  }
+
+  const kept=history.filter(x=>point.at-x.at<=WINDOW_MS).slice(-MAX_POINTS+1);
   const deltas=previous?Object.keys(point.fields).map(k=>point.fields[k]-previous.fields[k]):[];
   const improving=deltas.filter(x=>x>=3).length;
   const degrading=deltas.filter(x=>x<=-3).length;
   const flat=deltas.filter(x=>Math.abs(x)<3).length;
   const delta=average(deltas,0);
-  const positiveSteps=history.slice(1).reduce((n,p,i)=>{
-    const prior=history[i];
+
+  kept.push(point);
+  memory.set(key,kept);
+
+  const positiveSteps=kept.slice(1).reduce((n,p,i)=>{
+    const prior=kept[i];
     const ds=Object.keys(p.fields).map(k=>p.fields[k]-prior.fields[k]);
     return n+(average(ds,0)>=2?1:0);
   },0);
   const currentAverage=average(Object.values(point.fields),50);
   const earlySupport=average([
-    point.fields.structure,
-    point.fields.flow,
-    point.fields.participation,
-    point.fields.relative,
-    point.fields.compression
+    point.fields.structure,point.fields.flow,point.fields.participation,
+    point.fields.relative,point.fields.compression
   ],50);
   const convergence=clamp(
     42+
     Math.max(0,improving-degrading)*7+
     Math.max(0,currentAverage-60)*.5+
-    Math.max(0,Math.min(3,positiveSteps))*6-
+    Math.min(3,positiveSteps)*6-
     Math.max(0,degrading-improving)*8
   );
-
   const quality=clamp(
-    50+
-    Math.max(-12,Math.min(12,delta))*2.2+
-    improving*4+
-    positiveSteps*4+
+    50+Math.max(-12,Math.min(12,delta))*2.2+
+    improving*4+positiveSteps*4+
     Math.max(0,earlySupport-62)*.35-
     degrading*5-
     Math.max(0,55-currentAverage)*.4
   );
-
   const regime=
-    degrading>=Math.max(3,improving+2)?'DETERIORATING':
+    degrading>=3&&degrading>improving?'DETERIORATING':
     improving>=4&&quality>=72?'IGNITING':
     improving>=2&&convergence>=68?'BUILDING':
-    history.length>=3&&Math.abs(delta)<2?'STABLE':
+    kept.length>=3&&Math.abs(delta)<2?'STABLE':
     quality>=68?'SUPPORTED':'UNPROVEN';
 
   return {
-    version:'EVIDENCE_TRAJECTORY_V1',
-    observed:true,
-    persistence:history.length,
-    window_ms:WINDOW_MS,
-    quality:Number(quality.toFixed(1)),
-    convergence:Number(convergence.toFixed(1)),
-    delta:Number(delta.toFixed(2)),
-    current_strength:Number(currentAverage.toFixed(1)),
-    early_support:Number(earlySupport.toFixed(1)),
-    improving_domains:improving,
-    degrading_domains:degrading,
-    flat_domains:flat,
-    positive_steps:positiveSteps,
-    regime,
-    domains:Object.fromEntries(Object.entries(point.fields).map(([k,v])=>[k,Number(v.toFixed(1))])),
+    version:'EVIDENCE_TRAJECTORY_V1',observed:true,persistence:kept.length,window_ms:WINDOW_MS,
+    quality:Number(quality.toFixed(1)),convergence:Number(convergence.toFixed(1)),delta:Number(delta.toFixed(2)),
+    current_strength:Number(currentAverage.toFixed(1)),early_support:Number(earlySupport.toFixed(1)),
+    improving_domains:improving,degrading_domains:degrading,flat_domains:flat,positive_steps:positiveSteps,
+    regime,domains:Object.fromEntries(Object.entries(point.fields).map(([k,v])=>[k,Number(v.toFixed(1))])),
     as_of:new Date(point.at).toISOString()
   };
 }
