@@ -221,6 +221,8 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
   const crossRadarBlocked=Boolean(previous)&&elapsed<p.globalCooldownMs&&!stronger;
   if(crossRadarBlocked)failures.push('CROSS_RADAR_COOLDOWN');
 
+  const trajectoryPersistence=Number.isFinite(Number(trajectory.persistence))?Number(trajectory.persistence):0;
+  const trajectoryConvergence=Number.isFinite(Number(trajectory.convergence))?Number(trajectory.convergence):0;
   const earlyHardFailures=failures.filter(x=>
     /^(RISK:)|DATA_QUALITY_BELOW|LIQUIDITY_BELOW|MICRO_MOVE_NOISE|LATE_SETUP_CHASE_GUARD|EARLY_SETUP_ALREADY_MOVED|EARLY_SETUP_NOT_CALM|FALCON_HARD_FAIL|MOVER_FORENSICS_HARD_FAIL|EVIDENCE_TRAJECTORY_DETERIORATING|BASE_ALERT_NOT_ELIGIBLE|ELITE_GATE_NOT_ELIGIBLE/.test(String(x))
   );
@@ -235,7 +237,7 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
     score>=Math.max(72,p.minScore-6) &&
     data>=p.minData &&
     (!p.minLiquidity||liquidity>=p.minLiquidity) &&
-    (Number(trajectoryBonus(trajectory))>=5 || Number(trajectory.persistence||0)<3 || Number(trajectory.convergence||0)>=62);
+    (Number(trajectoryBonus(trajectory))>=5 || trajectoryPersistence<3 || trajectoryConvergence>=62);
 
   const persistentEarlyCorridor=
     EARLY_RADARS.has(r) &&
