@@ -1460,7 +1460,17 @@ export class MarketUniverseScanner {
 
     const completedAt=this.clock();
     const coreSeriesReady=['4h','1h','15m'].every(function(tf){return Array.isArray(series[tf])&&series[tf].length>0;});
-    const liquidity=this.computeLiquidity(depthRaw,ticker);
+
+    let liquidity;
+    try{
+      liquidity=this.computeLiquidity(depthRaw,ticker);
+    }catch(liquidityError){
+      const msg='LIQUIDITY_COMPUTATION_FAILED:'+String(liquidityError?.message||liquidityError);
+      error=error||new Error(msg);
+      liquidity={quality:0,allowed:false,reasons:['LIQUIDITY_DATA_UNAVAILABLE','LIQUIDITY_COMPUTATION_FAILED'],spreadBps:null};
+      console.warn?.('RADARX_SYMBOL_SCAN_FAIL_CLOSED',JSON.stringify({symbol:String(ticker?.symbol||'').toUpperCase(),rank,error:msg}));
+    }
+
     let validSeries={'4h':false,'1h':false,'15m':false};
     let future=false;
     let staleTimeframes=['4h','1h','15m'];
@@ -1489,6 +1499,7 @@ export class MarketUniverseScanner {
       error=error||new Error('MARKET_ANALYSIS_DATA_FAILED:'+String(analysisError?.message||analysisError));
       evaluation=[];
     }
+
     const deepSuccess=!error&&coreSeriesReady;
     const fetchAges = ['4h', '1h', '15m']
       .map(tf => series[tf])
@@ -1497,37 +1508,113 @@ export class MarketUniverseScanner {
 
     emitTimeDiagnostics({symbol:ticker.symbol,series,ticker,completedAt,sources:[...klinesSources,depthSource]});
 
-    const candidate = buildCandidateContract({
-      ticker,
-      deep: {
-        success: deepSuccess,
-        series,
-        fast: fastDeep,
-        evaluation,
-        liquidity,
-        depth: depthRaw,
-        sources: {
-          exchangeInfo: sources.exchangeInfo,
-          ticker: sources.ticker,
-          klines: klinesSources,
-          fastKlines: fastDeep.source,
-          depth: depthSource
+    try{
+      return buildCandidateContract({
+        ticker,
+        deep: {
+          success: deepSuccess,
+          series,
+          fast: fastDeep,
+          evaluation,
+          liquidity,
+          depth: depthRaw,
+          sources: {
+            exchangeInfo: sources.exchangeInfo,
+            ticker: sources.ticker,
+            klines: klinesSources,
+            fastKlines: fastDeep.source,
+            depth: depthSource
+          },
+          completedAt,
+          minFetchAgeMs: fetchAges.filter(Number.isFinite).length
+            ? Math.min(...fetchAges.filter(Number.isFinite).map(ts => Math.max(0, completedAt - ts)))
+            : Math.max(0, completedAt - startedAt),
+          error
         },
-        completedAt,
-        minFetchAgeMs: fetchAges.filter(Number.isFinite).length
-          ? Math.min(...fetchAges.filter(Number.isFinite).map(ts => Math.max(0, completedAt - ts)))
-          : Math.max(0, completedAt - startedAt),
-        error
-      },
-      rank,
-      now: completedAt,
-      minDataQuality: this.config.minDataQuality,
-      minLiquidityQuality: this.config.minLiquidityQuality,
-      maxTriggerAgeMs: this.config.maxTriggerAgeMs,
-      includeAnalysisPayload: Boolean(options.includeAnalysisPayload)
-    });
-
-    return candidate;
+        rank,
+        now: completedAt,
+        minDataQuality: this.config.minDataQuality,
+        minLiquidityQuality: this.config.minLiquidityQuality,
+        maxTriggerAgeMs: this.config.maxTriggerAgeMs,
+        includeAnalysisPayload: Boolean(options.includeAnalysisPayload)
+      });
+    }catch(candidateError){
+      const msg='CANDIDATE_BUILD_FAILED:'+String(candidateError?.message||candidateError);
+      console.warn?.('RADARX_SYMBOL_SCAN_FAIL_CLOSED',JSON.stringify({symbol:String(ticker?.symbol||'').toUpperCase(),rank,error:msg,has4h:Array.isArray(series['4h']),has1h:Array.isArray(series['1h']),has15m:Array.isArray(series['15m']),depth:Boolean(depthRaw)}));
+      const last15=latestClosed(series['15m']||[]);
+      const stale=!Number.isFinite(Number(last15?.closeTime))||completedAt-Number(last15.closeTime)>this.config.maxTriggerAgeMs;
+      const safeSeries={};
+      for(const tf of ['4h','1h','15m']) safeSeries[tf]=Array.isArray(series[tf])?series[tf]:[];
+      const normalizedStrategies=Array.isArray(evaluation)?evaluation:[];
+      const reasonCodes=[...new Set([
+        'CANDIDATE_BUILD_FAILED',
+        'DEEP_SCAN_FAILED',
+        ...(stale?['STALE_DATA']:[]),
+        ...(future?['FUTURE_DATA']:[]),
+        ...(!validSeries['4h']||!validSeries['1h']||!validSeries['15m']?['CANDLE_INTEGRITY_FAILURE']:[]),
+        ...(liquidity?.reasons||[])
+      ])];
+      const source=combineSource([
+        sources.exchangeInfo,sources.ticker,...klinesSources,fastDeep.source,depthSource
+      ]);
+      return {
+        symbol:String(ticker?.symbol||'').toUpperCase(),
+        rank,
+        last_price:Number.isFinite(Number(ticker?.lastPrice))?Number(ticker.lastPrice):null,
+        price_change_24h:Number(ticker?.priceChange24h),
+        high_price_24h:Number.isFinite(Number(ticker?.highPrice24h))?Number(ticker.highPrice24h):null,
+        low_price_24h:Number.isFinite(Number(ticker?.lowPrice24h))?Number(ticker.lowPrice24h):null,
+        quote_volume_24h:Number(ticker?.quoteVolume24h)||0,
+        bottom_context:{available:false,closed_candles_only:true},
+        pre_move_context:{available:false,closed_candles_only:true},
+        liquidity_quality:Number(liquidity?.quality)||0,
+        data_quality:0,
+        confidence_score:'UNKNOWN',
+        market_regime:'UNKNOWN',
+        overall_score:null,
+        coverage:{
+          required_timeframes:['4h','1h','15m'],
+          available_timeframes:['4h','1h','15m'].filter(tf=>safeSeries[tf].length>0),
+          strategy_count:listActiveStrategies().length,
+          evaluated_strategy_count:normalizedStrategies.length,
+          ratio:listActiveStrategies().length?normalizedStrategies.length/listActiveStrategies().length:0
+        },
+        decision_band:'insufficient',
+        signal_state:'INSUFFICIENT_DATA',
+        direction:'NONE',
+        best_strategy:null,
+        strategies:normalizedStrategies,
+        accepted_strategies:[],
+        rejected_strategies:normalizedStrategies.filter(s=>s?.signal_state==='REJECTED'),
+        insufficient_strategies:normalizedStrategies.filter(s=>s?.signal_state==='INSUFFICIENT_DATA'),
+        evidence:[
+          {type:'market',code:'QUOTE_VOLUME_24H',value:Number(ticker?.quoteVolume24h)||0},
+          {type:'market',code:'PRICE_CHANGE_24H',value:Number(ticker?.priceChange24h)},
+          {type:'error',code:'CANDIDATE_BUILD_FAILED',value:msg}
+        ],
+        reason_codes:reasonCodes,
+        invalidation:['CANDIDATE_BUILD_FAILED'],
+        risk_flags:['CANDIDATE_BUILD_FAILED'],
+        fast_impulse_context:{
+          available:false,closed_candles_only:true,interval:fastDeep.interval||null,
+          candle_count:Array.isArray(fastDeep.candles)?fastDeep.candles.length:0
+        },
+        data_status:{
+          data_stale:stale,
+          data_valid:false,
+          last_error:msg,
+          source,
+          fetch_age_ms:fetchAges.filter(Number.isFinite).length
+            ? Math.min(...fetchAges.filter(Number.isFinite).map(ts=>Math.max(0,completedAt-ts)))
+            : Math.max(0,completedAt-startedAt)
+        },
+        paper_trading:true,
+        real_order_execution:false,
+        ...(options.includeAnalysisPayload?{_analysis:Object.freeze({
+          series:safeSeries,depth:depthRaw,fast:fastDeep,liquidity, evaluation:normalizedStrategies,completedAt
+        })}:{})
+      };
+    }
   }
 
   async scanBottom({ quote = this.config.quote, limit = this.config.scanLimit } = {}) {
