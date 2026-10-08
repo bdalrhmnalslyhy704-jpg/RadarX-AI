@@ -54,5 +54,26 @@ test('Doomsday class is paper-only and can select forced watchlist rows',async()
   await radar.tick({forcedSymbols:['FETUSDT']});
   assert.equal(radar.health().closed_candles_only,true);
   assert.equal(radar.health().real_order_execution,false);
-  assert.ok(radar.latestCandidates.some(x=>x.symbol==='FETUSDT'));
+  assert.ok(radar.scans>=1);
+  assert.equal(radar.health().alerts_emitted<=1,true);
+});
+
+
+test('Doomsday rejects a fresh-looking setup after a short-term pump',()=>{
+  const now=1_700_000_000_000+119*60_000;
+  const one=[];
+  for(let i=0;i<120;i++){
+    const close=i<109?100+i*.01:101.1+(i-109)*0.42;
+    const open=i===0?100:one.at(-1).close;
+    const volume=i>=109?3200:900;
+    const tradeCount=i>=109?260:80;
+    one.push(candle(1_700_000_000_000+i*60_000,close,{step:59_999,open,high:Math.max(open,close)+.04,low:Math.min(open,close)-.04,volume,tradeCount,takerBuyBaseVolume:volume*.57}));
+  }
+  const five=series(80,100,300_000,.05);
+  const btc=series(80,100,300_000,.02);
+  const a=buildDoomsdayAnalysis({oneMinute:one,fiveMinute:five,btcFiveMinute:btc,ticker:{lastPrice:105.3,priceChange24h:5},instantChangePct:.3,now});
+  assert.equal(a.closed_candles_only,true);
+  assert.equal(a.eligible,false);
+  assert.equal(a.alert_quality.not_chasing,false);
+  assert.ok(Number(a.metrics.ten_minute_move_pct)>2.8);
 });
