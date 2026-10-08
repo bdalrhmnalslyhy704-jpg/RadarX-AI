@@ -135,7 +135,7 @@ export function evaluateSupremeFusion({candidate={},verdict={},previous=null}={}
   const dataTrust=clamp(s.dataQuality*.70+s.liquidity*.20+Math.min(100,s.clusterHits*14)*.10);
   const historyAdjustment=clamp(50+(num(verdict?.learning?.weights?.HISTORY_LEARNER,1)-1)*100);
   const raw=s.pre*.18+s.early*.12+s.ignition*.13+s.structure*.10+s.compression*.07+s.relative*.08+
-    s.flow*.07+s.liquidity*.06+confirmation*.09+familyQuality*.07+dataTrust*.03+historyAdjustment*.02;
+    s.flow*.07+s.liquidity*.06+confirmation*.09+familyQuality*.07+dataTrust*.03+historyAdjustment*.02+transitionScore*.03;
   const penalties=Math.max(0,failureRisk-35)*.45+Math.max(0,65-antiChase)*.22+
     (s.clusterHits<4? (4-s.clusterHits)*4:0);
   const supremeScore=clamp(raw-penalties);
@@ -180,6 +180,8 @@ export function evaluateSupremeFusion({candidate={},verdict={},previous=null}={}
   ]);
 
   const momentumDelta=previous?supremeScore-num(previous.supreme_score,supremeScore):0;
+  const transitionScore=clamp(50+momentumDelta*5);
+  const transition=momentumDelta>=4?'ACCELERATING':momentumDelta<=-4?'DECELERATING':'STABLE';
   const action=eligible?'PAPER_ENTRY_CANDIDATE':
     hardReject?'SPOT_AVOID':
     stage==='LATE_CHASE'?'WAIT_CONFIRMATION':
@@ -201,6 +203,8 @@ export function evaluateSupremeFusion({candidate={},verdict={},previous=null}={}
     cluster_hits:s.clusterHits,
     analyst_agreement:Number(s.agentAgreement.toFixed(1)),
     momentum_delta:Number(momentumDelta.toFixed(1)),
+    transition_score:Number(transitionScore.toFixed(1)),
+    transition,
     families,
     snapshot:s,
     positive_reasons:positive,
