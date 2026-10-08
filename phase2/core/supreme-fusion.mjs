@@ -134,10 +134,14 @@ export function evaluateSupremeFusion({candidate={},verdict={},previous=null}={}
   );
   const dataTrust=clamp(s.dataQuality*.70+s.liquidity*.20+Math.min(100,s.clusterHits*14)*.10);
   const historyAdjustment=clamp(50+(num(verdict?.learning?.weights?.HISTORY_LEARNER,1)-1)*100);
-  const raw=s.pre*.18+s.early*.12+s.ignition*.13+s.structure*.10+s.compression*.07+s.relative*.08+
-    s.flow*.07+s.liquidity*.06+confirmation*.09+familyQuality*.07+dataTrust*.03+historyAdjustment*.02+transitionScore*.03;
+  const rawWithoutTransition=s.pre*.18+s.early*.12+s.ignition*.13+s.structure*.10+s.compression*.07+s.relative*.08+
+    s.flow*.07+s.liquidity*.06+confirmation*.09+familyQuality*.07+dataTrust*.03+historyAdjustment*.02;
   const penalties=Math.max(0,failureRisk-35)*.45+Math.max(0,65-antiChase)*.22+
     (s.clusterHits<4? (4-s.clusterHits)*4:0);
+  const baseScore=clamp(rawWithoutTransition-penalties);
+  const momentumDelta=previous?baseScore-num(previous.supreme_score,baseScore):0;
+  const transitionScore=clamp(50+momentumDelta*5);
+  const raw=rawWithoutTransition+transitionScore*.03;
   const supremeScore=clamp(raw-penalties);
   const stage=stageFor(s,supremeScore,antiChase,failureRisk);
   const direction=String(candidate?.direction||verdict?.decision?.direction||'NEUTRAL').toUpperCase();
@@ -179,8 +183,6 @@ export function evaluateSupremeFusion({candidate={},verdict={},previous=null}={}
     s.dataQuality<75?'DATA_QUALITY_NOT_ELITE':null
   ]);
 
-  const momentumDelta=previous?supremeScore-num(previous.supreme_score,supremeScore):0;
-  const transitionScore=clamp(50+momentumDelta*5);
   const transition=momentumDelta>=4?'ACCELERATING':momentumDelta<=-4?'DECELERATING':'STABLE';
   const action=eligible?'PAPER_ENTRY_CANDIDATE':
     hardReject?'SPOT_AVOID':
