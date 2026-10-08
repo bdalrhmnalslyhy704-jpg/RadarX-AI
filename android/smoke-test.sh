@@ -1,13 +1,35 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 debug_on_error() {
   rc=$?
   echo "Smoke test failed with exit code $rc"
+  adb devices -l 2>/dev/null || true
   adb logcat -d -s RadarXSmoke:I RadarXWeb:I RadarXBackground:I '*:S' 2>/dev/null || true
   exit "$rc"
 }
 trap debug_on_error ERR
+
+wait_for_online_device() {
+  local attempt state boot
+  for attempt in $(seq 1 20); do
+    state="$(adb get-state 2>/dev/null || true)"
+    if [[ "$state" == "device" ]]; then
+      boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\\r' || true)"
+      if [[ "$boot" == "1" ]]; then
+        sleep 1
+        state="$(adb get-state 2>/dev/null || true)"
+        if [[ "$state" == "device" ]]; then return 0; fi
+      fi
+    else
+      adb reconnect device >/dev/null 2>&1 || true
+    fi
+    sleep 1
+  done
+  echo "::error::Android emulator ADB never reached a stable online device state"
+  adb devices -l 2>/dev/null || true
+  return 1
+}
 
 APK="android/app/build/outputs/apk/release/app-release.apk"
 SERVICE_COMPONENT="com.radarx.app/.RadarXBackgroundMonitorService"
@@ -22,9 +44,12 @@ cleanup() {
 trap cleanup EXIT
 
 start_app_and_wait_ready() {
+  wait_for_online_device
   adb shell am force-stop com.radarx.app || true
+  wait_for_online_device
   adb logcat -c
   adb shell am start -W -n com.radarx.app/.MainActivity >/dev/null
+  wait_for_online_device
   sleep 8
 
   PID="$(adb shell pidof com.radarx.app | tr -d '\r' || true)"
@@ -71,7 +96,9 @@ assert_background_service_declared() {
 }
 
 adb wait-for-device
+wait_for_online_device
 adb install -r "$APK"
+wait_for_online_device
 
 # Online: the Activity must remain open and auto-start the foreground monitor.
 start_app_and_wait_ready
