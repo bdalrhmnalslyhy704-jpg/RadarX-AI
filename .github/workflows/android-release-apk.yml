@@ -19,19 +19,23 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          ref: 3aeb3b1d36f222c48998cee9fdc6b7a7f28dcedd
+          ref: 4a729d84dbf06ff9d4d5f0e49ca155f1f9901158
 
       - name: Verify Build 224 + Falcon Eye source
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "3aeb3b1d36f222c48998cee9fdc6b7a7f28dcedd"
-          grep -Fq 'versionCode 16' android/app/build.gradle
-          grep -Fq 'versionName "1.5.0"' android/app/build.gradle
+          test "$(git rev-parse HEAD)" = "4a729d84dbf06ff9d4d5f0e49ca155f1f9901158"
+          grep -Fq 'versionCode 17' android/app/build.gradle
+          grep -Fq 'versionName "1.5.1"' android/app/build.gradle
           test -s android/app/src/main/assets/falcon-eye-radar.html
           test -s android/app/src/main/assets/radarx-supreme-fusion.mjs
           grep -Fq 'falcon-eye-radar.html' android/app/src/main/assets/index.html
           grep -Fq 'radarx-supreme-fusion.mjs' android/app/src/main/assets/multi-analyst-center.html
+          grep -Fq 'ACCESS_NETWORK_STATE' android/app/src/main/AndroidManifest.xml
+          grep -Fq 'BACKGROUND_NETWORK_AVAILABLE' android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java
+          grep -Fq 'BACKGROUND_OFFLINE_WAIT' android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java
+          grep -Fq 'price_at_detection' android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java
           ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
           grep -RInq "paper_trading=true" android/app/src/main/assets
           grep -RInq "real_order_execution=false" android/app/src/main/assets
@@ -47,6 +51,8 @@ jobs:
           node --check phase2/core/radar-notification-gate.mjs
           node --check phase2/core/radar-alert-meta.mjs
           node --test phase2/tests/falcon-eye-radar.test.mjs
+          node --check phase2/core/store.mjs
+          node --test phase2/tests/store.test.mjs
           node --test phase2/tests/falcon-radar-core.test.mjs
           node --test phase2/tests/falcon-market-pulse.test.mjs
 
@@ -240,19 +246,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TAG="android-v1.5.0-supreme-fusion-${GITHUB_RUN_NUMBER}"
+          TAG="android-v1.5.1-falcon-offline-${GITHUB_RUN_NUMBER}"
           APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
-            --target "3aeb3b1d36f222c48998cee9fdc6b7a7f28dcedd" \
-            --title "RadarX Native — Build 224 + Radar 8 V2 + Hawkeye V2 + Supreme Fusion 1.5.0" \
-            --notes "Signed universal APK from the exact official Build 224 release source. Version 1.5.0. Includes Radar 8 V2, Hawkeye V2 and a Supreme Fusion evidence-based fusion/ranking layer above the 20-analyst X-FACTOR result. The added layer is read-only, rejects invalid data, protects against late chase, uses closed candles only, and never executes orders. paper_trading=true; real_order_execution=false; confidence_score=UNKNOWN. Android emulator smoke outcome: ${ANDROID_EMULATOR_SMOKE_OUTCOME}. A non-success outcome means emulator validation was not confirmed; the release is not claiming that smoke test passed."
+            --target "4a729d84dbf06ff9d4d5f0e49ca155f1f9901158" \
+            --title "RadarX Native — Build 224 + Radar 8 V2 + Hawkeye V2 + Supreme Fusion + Falcon Eye Offline Queue 1.5.1" \
+            --notes "Signed universal APK from exact Build 224 lineage. Version 1.5.1 adds a dedicated Falcon Eye event-history fetch, oldest-first replay after phone reconnection, a device-local durable alert queue before notification delivery, immediate scan on validated network restore, and notifications containing the original detection timestamp plus recorded detection price separately from delivery time. Offline limitation: the phone cannot fetch new live market data while Internet is unavailable; while the phone is offline, the online Railway radar service may continue scanning and store detections for delivery when the phone reconnects. Local pending alerts survive app process/service restarts. No simulated discoveries are generated. Supreme Fusion, Radar 8 V2, Hawkeye V2; closed candles only; Spot/Paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN. Android emulator smoke outcome: ${ANDROID_EMULATOR_SMOKE_OUTCOME}. If it is not success, emulator validation is unresolved and this release does not claim it passed."
 
       - name: Verify HTTPS release download
         shell: bash
         run: |
           set -euo pipefail
-          TAG="android-v1.5.0-supreme-fusion-${GITHUB_RUN_NUMBER}"
+          TAG="android-v1.5.1-falcon-offline-${GITHUB_RUN_NUMBER}"
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/radarx-release.apk"
           curl --fail --location --retry 3 --retry-delay 2 --silent --show-error "$URL" -o "${RUNNER_TEMP}/radarx-release-downloaded.apk"
           test -s "${RUNNER_TEMP}/radarx-release-downloaded.apk"
