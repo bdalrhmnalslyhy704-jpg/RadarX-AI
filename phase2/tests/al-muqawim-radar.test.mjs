@@ -21,11 +21,11 @@ function makeSeries(count,tfMs,trend=1){
 test('Al Muqawim confirms aligned bullish multi-timeframe structure',()=>{
   const now=Date.now();
   const series={
-    '4h':makeSeries(100,4*60*60*1000,0.15),
-    '1h':makeSeries(120,60*60*1000,0.15),
-    '15m':makeSeries(160,15*60*1000,0.15)
+    '4h':makeSeries(100,4*60*60*1000,0.04),
+    '1h':makeSeries(120,60*60*1000,0.04),
+    '15m':makeSeries(160,15*60*1000,0.04)
   };
-  const a=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:122.95,priceChange24h:1},now,{maPeriod:50});
+  const a=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:105.46,priceChange24h:1},now,{maPeriod:50});
   assert.equal(a.direction,'UP');
   assert.equal(a.closed_candles_only,true);
   assert.equal(a.eligible,true);
@@ -56,7 +56,7 @@ test('Al Muqawim rejects a technically bullish but already-extended entry',()=>{
     '1h':makeSeries(120,60*60*1000,1),
     '15m':makeSeries(160,15*60*1000,1)
   };
-  const a=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:122.95,priceChange24h:12},now,{maPeriod:50});
+  const a=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:105.46,priceChange24h:12},now,{maPeriod:50});
   assert.equal(a.direction,'UP');
   assert.equal(a.eligible,false);
   assert.ok(a.reasons.some(x=>String(x).includes('ممتدة')));
