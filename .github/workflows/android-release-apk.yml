@@ -252,8 +252,8 @@ jobs:
           console.log(JSON.stringify({http:code,radar:body.radar??null,analyst_count:body.meta?.analyst_count??null,candidates:body.candidates?.length??0}));
           NODE
 
-      - name: Verify Falcon Eye + Move Forensics + Evidence Trajectory
-        timeout-minutes: 3
+      - name: Verify X-FACTOR multi-analyst + Falcon + Move Forensics
+        timeout-minutes: 6
         run: |
           set -euo pipefail
           node --check phase2/core/move-forensics.mjs
@@ -265,6 +265,9 @@ jobs:
           node --check phase2/core/radar-alert-meta.mjs
           node --check phase2/core/king-intelligence.mjs
           node --test phase2/tests/move-forensics.test.mjs
+          node --test phase2/tests/multi-analyst-engine.test.mjs
+          node --test phase2/tests/multi-analyst.test.mjs
+          node --test phase2/tests/rest.test.mjs
           node --test phase2/tests/evidence-trajectory.test.mjs
           node --test phase2/tests/outcome-calibrator.test.mjs
           node --test phase2/tests/falcon-radar-core.test.mjs
