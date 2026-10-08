@@ -20,6 +20,7 @@ import {AlMuqawimRadar} from './core/al-muqawim-radar.mjs';
 import {EarlyExpansionRadar} from './core/early-expansion-radar.mjs';
 import {CoinHunterRadar} from './core/coin-hunter-radar.mjs';
 import {WhaleAccumulationRadar} from './core/whale-accumulation-radar.mjs';
+import {FalconEyeRadar} from './core/falcon-eye-radar.mjs';
 import {SymbolDeepAnalyzer} from './core/symbol-deep-analyzer.mjs';
 import {MarketUniverseScanner} from './market/universe-scanner.mjs';
 import {createApiServer} from './http/api.mjs';
@@ -94,7 +95,10 @@ export async function startServer({
   const whaleAccumulationUrls=['https://data-api.binance.vision',...(config.rest.baseUrls??config.rest.urls??[])].filter((url,index,arr)=>arr.indexOf(url)===index);
   const whaleAccumulationRest=new RestClient({...config.rest,baseUrls:whaleAccumulationUrls});
   const whaleAccumulationRadar=new WhaleAccumulationRadar({rest:whaleAccumulationRest,store,pushManager:push,config:config.whaleAccumulationRadar||{},logger});
-  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,multiAnalystRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,marketRadarRest});
+  // Falcon Eye uses public Binance Spot + public Futures market data. No API keys are required.
+  const falconFuturesRest=new RestClient({...config.rest,baseUrls:['https://fapi.binance.com']});
+  const falconEyeRadar=new FalconEyeRadar({rest, futuresRest:falconFuturesRest, store, pushManager:push, config:config.falconEyeRadar||{}, logger});
+  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,multiAnalystRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,marketRadarRest});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
   const safeStart=(name,instance)=>{
@@ -115,12 +119,13 @@ export async function startServer({
       ['RADAR4',liquidityAbsorptionRadar],['RADAR5',kahirRadar],['RADAR6',doomsdayRadar],
       ['RADAR7',alMuqawimRadar],['PROFESSOR_INTELLIGENCE',professorRadar],
       ['RADAR8',earlyExpansionRadar],['COIN_HUNTER',coinHunterRadar],
-      ['WHALE_ACCUMULATION',whaleAccumulationRadar]
+      ['WHALE_ACCUMULATION',whaleAccumulationRadar],
+      ['RADAR9',falconEyeRadar]
     ];
     startup.forEach(([name,instance],index)=>setTimeout(()=>safeStart(name,instance),index*700));
   }
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
-  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,multiAnalystRadar,symbolDeepAnalyzer,store,rest,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,multiAnalystRest,coinHunterRest,whaleAccumulationRest,marketRadarRest,push,close:async()=>{multiAnalystRadar.stop();await whaleAccumulationRadar.stop();await coinHunterRadar.stop();await earlyExpansionRadar.stop();await professorRadar.stop();await alMuqawimRadar.stop();await doomsdayRadar.stop();await kahirRadar.stop();await liquidityAbsorptionRadar.stop();await rotationLagRadar.stop();await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
+  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,multiAnalystRadar,symbolDeepAnalyzer,store,rest,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,multiAnalystRest,coinHunterRest,whaleAccumulationRest,marketRadarRest,push,close:async()=>{multiAnalystRadar.stop();await falconEyeRadar.stop();await whaleAccumulationRadar.stop();await coinHunterRadar.stop();await earlyExpansionRadar.stop();await professorRadar.stop();await alMuqawimRadar.stop();await doomsdayRadar.stop();await kahirRadar.stop();await liquidityAbsorptionRadar.stop();await rotationLagRadar.stop();await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
 }
 
 if(process.argv[1]&&resolve(fileURLToPath(import.meta.url))===resolve(process.argv[1])){

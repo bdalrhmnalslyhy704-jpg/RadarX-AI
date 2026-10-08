@@ -165,6 +165,26 @@ function radarSpecificChecks(alert,p){
     if(participation<68)failures.push('PARTICIPATION_REGIME_NOT_CONFIRMED');
   }
 
+  if(r==='FALCON_EYE_RADAR'){
+    const a=alert?.falcon_eye||{};
+    const m=a.metrics||{};
+    const cs=a.component_scores||{};
+    const d=a.derivatives||{};
+    if(Boolean(a.not_chasing)===false)failures.push('FALCON_ANTI_CHASE_FAIL');
+    if(Number(a.confirmation_count||0)<8)failures.push('FALCON_CONFIRMATION_BREADTH_LOW');
+    if(Number(cs.quietness||0)<65)failures.push('FALCON_QUIET_BASE_WEAK');
+    if(Number(cs.compression||0)<58)failures.push('FALCON_COMPRESSION_WEAK');
+    if(Number(cs.structure||0)<65)failures.push('FALCON_STRUCTURE_WEAK');
+    if(Number(cs.taker||0)<58)failures.push('FALCON_TAKER_FLOW_WEAK');
+    if(Number(cs.relative_strength||0)<55)failures.push('FALCON_RELATIVE_STRENGTH_WEAK');
+    if(Number(m.move_24h)>8)failures.push('FALCON_ALREADY_MOVED');
+    if(Number(m.return_10m)>3.8)failures.push('FALCON_10M_CHASE');
+    if(Number(m.return_5m)>2.5)failures.push('FALCON_5M_CHASE');
+    if(Number(m.ema21_distance_pct)>4.2)failures.push('FALCON_EMA_EXTENSION');
+    if(Number(m.resistance_gap_pct)<-1.2)failures.push('FALCON_BREAKOUT_EXTENSION');
+    if(Boolean(d.futures_available) && Number(d.funding_rate)>0.004)failures.push('FALCON_POSITIVE_FUNDING_CROWDING');
+  }
+
   if(r==='DOOMSDAY_RADAR'){
     const a=alert?.doomsday||{};
     const ignition=num(a.ignition_confirmations,0);

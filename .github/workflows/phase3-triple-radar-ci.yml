@@ -16,6 +16,7 @@ on:
       - radar6-doomsday-20261005
       - build224-multi-analyst-20261007
       - build224-doomsday-muqawim-sniper-v1
+      - build224-falcon-eye-ogn-v1
   pull_request:
     branches:
       - phase3-triple-radar
@@ -50,6 +51,7 @@ jobs:
       - name: Validate Triple Radar source
         run: |
           set -euo pipefail
+          node --check phase2/core/falcon-eye-radar.mjs
           node --check phase2/core/rotation-lag-radar.mjs
           node --check phase2/market/universe-scanner.mjs
           node --check phase2/core/strong-move-radar.mjs
@@ -71,3 +73,4 @@ jobs:
           test -f android/app/src/main/assets/radar3-joker.html
           test -f android/app/src/main/assets/radar4-sweeper.html
           test -f android/app/src/main/assets/doomsday-radar.html
+          test -f android/app/src/main/assets/falcon-eye-radar.html
