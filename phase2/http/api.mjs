@@ -162,9 +162,19 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     ...(professorRadar?{PROFESSOR_RADAR:{name:RADAR_NAMES.PROFESSOR_RADAR,instance:professorRadar,read:'readProfessorAlerts'}}:{}),
     ...(falconEyeRadar?{FALCON_EYE_RADAR:{name:RADAR_NAMES.FALCON_EYE_RADAR,instance:falconEyeRadar,read:'readFalconEyeAlerts'}}:{})
   });
+  function safeHealth(id,name,instance){
+    try{
+      const raw=typeof instance?.health==='function'
+        ? instance.health()
+        : {running:false,radar:id,radar_name:name};
+      return JSON.parse(JSON.stringify(raw,(_,v)=>typeof v==='bigint'?v.toString():v));
+    }catch(e){
+      return {running:false,radar:id,radar_name:name,error:String(e?.message??e),health_error:true};
+    }
+  }
   function radarStatus(){
     return Object.entries(radarEntries).map(([id,x])=>{
-      const health=typeof x.instance?.health==='function'?x.instance.health():{running:false,radar:id,radar_name:x.name};
+      const health=safeHealth(id,x.name,x.instance);
       return {radar:id,radar_name:x.name,running:Boolean(health.running),profile:RADAR_PROFILES[id]||null,health};
     });
   }
