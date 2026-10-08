@@ -1,4 +1,4 @@
-RadarX Android 1.5.1
+RadarX Android 1.5.2
 Release line: official Build 224 + Radar 8 V2 + Hawkeye V2 + Supreme Fusion
 UI: bundled inside APK via Android WebViewAssetLoader
 Backend: https://radarx-ai-triple-production.up.railway.app
@@ -18,3 +18,5 @@ Background monitoring:
 - No live prices or discoveries are fabricated while the phone has no internet connection.
 
 Release gate: source/JavaScript tests, Falcon Eye API contract, Railway health, signed universal APK verification, Android offline-to-online smoke test, and HTTPS download SHA-256 integrity check.
+
+Smoke gate note: Android ADB package inspection checks native service registration and data-sync foreground capability. ACCESS_NETWORK_STATE is validated from the source manifest at build time (not inferred from Android 11's runtime dumpsys output).
