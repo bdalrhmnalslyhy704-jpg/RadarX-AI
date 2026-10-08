@@ -27,7 +27,7 @@ function safeMemory(raw,symbol){
   };
 }
 
-function emptyStats(){return {15m:{samples:0,hits:0,neutral:0},1h:{samples:0,hits:0,neutral:0},4h:{samples:0,hits:0,neutral:0},24h:{samples:0,hits:0,neutral:0}};}
+function emptyStats(){return {'15m':{samples:0,hits:0,neutral:0},'1h':{samples:0,hits:0,neutral:0},'4h':{samples:0,hits:0,neutral:0},'24h':{samples:0,hits:0,neutral:0}};}
 
 function outcomeFor(direction,ret,target){
   const r=num(ret,null);
