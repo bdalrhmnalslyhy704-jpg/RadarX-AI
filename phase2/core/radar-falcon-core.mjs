@@ -21,9 +21,10 @@ function firstNumber(obj,paths,fallback=null){
   for(const path of paths){
     let node=obj;
     for(const key of String(path).split('.')){
-      if(node==null)break;
+      if(node==null){node=undefined;break;}
       node=node[key];
     }
+    if(node===null||node===undefined||node==='')continue;
     const n=Number(node);
     if(Number.isFinite(n))return n;
   }
@@ -47,7 +48,7 @@ function collectNumericSignals(obj,{depth=0,maxDepth=5,out=[]}={}){
 }
 
 function average(values,fallback=50){
-  const a=arr(values).map(Number).filter(Number.isFinite);
+  const a=arr(values).filter(v=>v!==null&&v!==undefined&&v!=='').map(Number).filter(Number.isFinite);
   return a.length?a.reduce((s,x)=>s+x,0)/a.length:fallback;
 }
 
