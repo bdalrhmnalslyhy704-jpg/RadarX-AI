@@ -96,8 +96,8 @@ export const DOOMSDAY_RADAR_DEFAULTS=Object.freeze({
   retryAttempts:1
 });
 
-function consecutiveMicroConfirmations(rows){
-  const a=closed(rows,Date.now());
+function consecutiveMicroConfirmations(rows,now=Date.now()){
+  const a=closed(rows,now);
   if(a.length<25)return 0;
   const start=Math.max(20,a.length-5);
   let streak=0;
@@ -186,7 +186,7 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
   const extended=Number.isFinite(dailyMove)&&dailyMove>=max24hMovePct;
   const e21DistancePct=(e21>0)?(price/e21-1)*100:null;
   const localFiveMove=Number.isFinite(r5)?r5:recentImpulse5m(m5);
-  const confirmationBars=consecutiveMicroConfirmations(m1);
+  const confirmationBars=consecutiveMicroConfirmations(m1,now);
   const sniperFreshness=sniperFreshnessFromMetrics({
     tenMinuteMove:r10,
     fiveMinuteMove:localFiveMove,
