@@ -1,4 +1,4 @@
-RadarX Android 1.5.3
+RadarX Android 1.5.4
 Release line: official Build 224 + Radar 8 V2 + Hawkeye V2 + Supreme Fusion
 UI: bundled inside APK via Android WebViewAssetLoader
 Backend: https://radarx-ai-triple-production.up.railway.app
@@ -19,4 +19,4 @@ Background monitoring:
 
 Release gate: source/JavaScript tests, Falcon Eye API contract, Railway health, signed universal APK verification, Android offline-to-online smoke test, and HTTPS download SHA-256 integrity check.
 
-Smoke gate note: release build statically validates RadarXBackgroundMonitorService, FOREGROUND_SERVICE_DATA_SYNC, and ACCESS_NETWORK_STATE from the manifest. The emulator smoke test verifies BACKGROUND_AUTO_START_REQUEST and BACKGROUND_SERVICE_READY from runtime logs rather than relying on Android package-dump formatting, checks offline waiting, then checks network-reconnect resumption.
+Smoke gate note: release build statically validates RadarXBackgroundMonitorService, FOREGROUND_SERVICE_DATA_SYNC, and ACCESS_NETWORK_STATE from the manifest. The emulator smoke test grants POST_NOTIFICATIONS in the disposable test emulator before first launch, then verifies BACKGROUND_AUTO_START_REQUEST and BACKGROUND_SERVICE_READY from runtime logs rather than relying on Android package-dump formatting, checks offline waiting, then checks network-reconnect resumption. The user's device will still request notification permission normally.
