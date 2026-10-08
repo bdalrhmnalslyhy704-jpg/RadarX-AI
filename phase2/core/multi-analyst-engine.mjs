@@ -870,7 +870,7 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
     recent_move_heat:Number.isFinite(pumpHeat)?Math.round(pumpHeat*10)/10:null,
     sniper_freshness:Number.isFinite(freshness)?Math.round(freshness*10)/10:null,
     sniper_score:Math.round(sniperScore*10)/10,
-    setup_fingerprint:Number.isFinite(fingerprint)?Math.round(fingerprint*10)/10,
+    setup_fingerprint:Number.isFinite(fingerprint)?Math.round(fingerprint*10)/10:null,
     group_consensus:groupConsensus,
     strongest_analysts:top.map(x=>({id:x.id,name:x.name,score:x.score,group:x.group})),
     weakest_analysts:weak.map(x=>({id:x.id,name:x.name,score:x.score,group:x.group,direction:x.direction})),
