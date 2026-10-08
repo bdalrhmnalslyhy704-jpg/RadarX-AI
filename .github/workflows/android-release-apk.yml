@@ -257,7 +257,7 @@ jobs:
           console.log(JSON.stringify({http:code,radar:body.radar??null,analyst_count:body.meta?.analyst_count??null,candidates:body.candidates?.length??0}));
           NODE
 
-      - name: Set up Gradle
+      - name: Run Falcon Eye radar intelligence contract test\n        timeout-minutes: 2\n        run: |\n          set -euo pipefail\n          node --test phase2/tests/falcon-radar-core.test.mjs\n          node --test phase2/tests/king-intelligence.test.mjs\n\n      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"

@@ -1,4 +1,5 @@
 import {isPreBreakoutNotificationEligible} from './radar-prebreakout-engine.mjs';
+import {evaluateFalconEye} from './radar-falcon-core.mjs';
 const clamp=(v,min=0,max=100)=>Math.max(min,Math.min(max,Number.isFinite(Number(v))?Number(v):0));
 const num=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
 const arr=v=>Array.isArray(v)?v:[];
@@ -184,6 +185,8 @@ function radarSpecificChecks(alert,p){
   return failures;
 }
 
+const EARLY_RADARS=new Set(['EARLY_MOVE_RADAR','EARLY_EXPANSION_RADAR','COIN_HUNTER_RADAR']);
+
 export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false}={}){
   const r=radarId(alert);
   const p=profileFor(alert);
@@ -193,9 +196,16 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
   const confirmations=confirmationsOf(alert);
   const categoryHits=categoryHitsOf(alert);
   const risks=criticalRisk(alert);
+  const falcon=evaluateFalconEye(alert,{now});
   const failures=[...radarSpecificChecks(alert,p),...risks.map(x=>'RISK:'+x)];
+
+  if(falcon.hard_fail)failures.push('FALCON_HARD_FAIL');
+  if(falcon.quality<60&&r!=='PROFESSOR_RADAR')failures.push('FALCON_QUALITY_TOO_LOW');
+  if(falcon.independent_domains<3&&r!=='PROFESSOR_RADAR')failures.push('FALCON_EVIDENCE_TOO_NARROW');
+
   if(alert?.eligible===false)failures.push('BASE_ALERT_NOT_ELIGIBLE');
   if(alert?.elite_gate&&alert.elite_gate.eligible===false)failures.push('ELITE_GATE_NOT_ELIGIBLE');
+
   const symbol=String(alert?.symbol||'').toUpperCase();
   const previous=symbol?recentBySymbol.get(symbol):null;
   const elapsed=previous?Math.max(0,Number(now)-previous.at):Infinity;
@@ -203,19 +213,42 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
   const crossRadarBlocked=Boolean(previous)&&elapsed<p.globalCooldownMs&&!stronger;
   if(crossRadarBlocked)failures.push('CROSS_RADAR_COOLDOWN');
 
-  const eligible=failures.length===0 && score>=p.minScore && data>=p.minData && (!p.minLiquidity||liquidity>=p.minLiquidity);
+  const earlyCorridor=
+    EARLY_RADARS.has(r) &&
+    failures.filter(x=>String(x).startsWith('RISK:')).length===0 &&
+    !falcon.hard_fail &&
+    falcon.early_window &&
+    falcon.capture>=78 &&
+    falcon.quality>=72 &&
+    falcon.independent_domains>=4 &&
+    score>=Math.max(72,p.minScore-6) &&
+    data>=p.minData &&
+    (!p.minLiquidity||liquidity>=p.minLiquidity);
+
+  const strictEligible=
+    failures.length===0 &&
+    score>=p.minScore &&
+    data>=p.minData &&
+    (!p.minLiquidity||liquidity>=p.minLiquidity) &&
+    falcon.quality>=68 &&
+    falcon.capture>=66 &&
+    falcon.independent_domains>=4;
+
+  const eligible=Boolean(strictEligible||earlyCorridor);
+  const mode=earlyCorridor&&!strictEligible?'FALCON_EARLY_TRACK':'STRICT_NOTIFICATION';
   const result={
     eligible,
     radar:r,
     score:Number(score.toFixed(1)),
     data_quality:Number(data.toFixed(1)),
-    liquidity:Number(liquidity.toFixed(1)),
+    liquidity_quality:Number(liquidity.toFixed(1)),
     confirmations,
     category_hits:categoryHits,
+    falcon_eye:falcon,
     previous_alert:previous?{radar:previous.radar,at:previous.at,score:previous.score}:null,
     cooldown_remaining_ms:crossRadarBlocked?Math.max(0,p.globalCooldownMs-elapsed):0,
     failures:[...new Set(failures)],
-    mode:'STRICT_NOTIFICATION_ONLY',
+    mode,
     no_extra_network_calls:true
   };
   if(eligible&&commit&&symbol)rememberRadarAlert(alert,now);
@@ -236,5 +269,5 @@ export function rememberRadarAlert(alert,now=Date.now()){
 export function resetRadarNotificationGateForTests(){recentBySymbol.clear();preBreakoutStreakBySymbol.clear();}
 
 export function notificationGateHealth(){
-  return {tracked_symbols:recentBySymbol.size,mode:'STRICT_NOTIFICATION_ONLY',cross_radar_suppression:true,no_extra_network_calls:true};
+  return {tracked_symbols:recentBySymbol.size,mode:'FALCON_EYE_V1_STRICT_PLUS_EARLY_TRACK',cross_radar_suppression:true,no_extra_network_calls:true};
 }

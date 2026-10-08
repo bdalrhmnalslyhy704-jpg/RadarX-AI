@@ -1,5 +1,5 @@
 import {buildSpotUniverse} from '../market/universe-scanner.mjs';
-import {formatRadarTime12h} from './radar-alert-meta.mjs';
+import {formatRadarTime12h,decorateRadarAlert} from './radar-alert-meta.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)||0));
 const finite=(x,d=null)=>Number.isFinite(Number(x))?Number(x):d;
@@ -155,7 +155,7 @@ function buildOpinion(candidate,deep,now,entryThreshold=75,watchThreshold=66){
   return {score:Number(score.toFixed(1)),stance,action,evidence_types:evidenceTypes,evidence_strength:Number(clamp(candidate.stream_mentions*12+candidate.news_mentions*5+(deep?20:0)).toFixed(1)),technical_score:Number(technical.toFixed(1)),stream_score:Number(stream.toFixed(1)),news_score:Number(news.toFixed(1)),trap_risk:Number(trap.toFixed(1)),paper_trade:paperTrade,as_of:new Date(now).toISOString(),disclaimer:'رأي تحليلي آلي مبني على بيانات عامة؛ ليس ضمانًا للربح. التنفيذ الحقيقي غير متاح في RadarX.'};
 }
 function buildAlert(candidate,opinion,now){
-  return {id:'PROFESSOR:'+candidate.symbol+':'+now,event:'PROFESSOR_LIVE_TRADE_INTELLIGENCE',radar:'PROFESSOR_RADAR',radar_name:'Radar 6 — البروفيسور',symbol:candidate.symbol,market:'SPOT',direction:opinion.action==='PAPER_ENTRY_CANDIDATE'?'UP_BIAS':opinion.action==='SPOT_AVOID'?'DOWN_OR_RISK':'NEUTRAL',opportunity_score:opinion.score,potential_label:opinion.action,professor_opinion:opinion,trade_claims:candidate.trade_claims.slice(0,12),news_items:candidate.news_items.slice(0,12),stream_mentions:candidate.stream_mentions,news_mentions:candidate.news_mentions,source:'YouTube Public Search + GDELT DOC 2.0 + Binance Public REST',detected_at:now,processed_at:now,detected_at_iso:new Date(now).toISOString(),detected_time_12h:formatRadarTime12h(now),detected_timezone:'Asia/Aden',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true,disclaimer:opinion.disclaimer};
+  return decorateRadarAlert({id:'PROFESSOR:'+candidate.symbol+':'+now,event:'PROFESSOR_LIVE_TRADE_INTELLIGENCE',radar:'PROFESSOR_RADAR',radar_name:'Radar 6 — البروفيسور',symbol:candidate.symbol,market:'SPOT',direction:opinion.action==='PAPER_ENTRY_CANDIDATE'?'UP_BIAS':opinion.action==='SPOT_AVOID'?'DOWN_OR_RISK':'NEUTRAL',opportunity_score:opinion.score,potential_label:opinion.action,professor_opinion:opinion,trade_claims:candidate.trade_claims.slice(0,12),news_items:candidate.news_items.slice(0,12),stream_mentions:candidate.stream_mentions,news_mentions:candidate.news_mentions,source:'YouTube Public Search + GDELT DOC 2.0 + Binance Public REST',detected_at:now,processed_at:now,detected_at_iso:new Date(now).toISOString(),detected_time_12h:formatRadarTime12h(now),detected_timezone:'Asia/Aden',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true,disclaimer:opinion.disclaimer},'البروفيسور — استخبارات عامة');
 }
 export function classifyStreamClaim(text){return streamClaim(text);}
 export function calculateProfessorOpinion(input){return buildOpinion(input.candidate||input,input.deep||null,input.now||Date.now(),input.entryThreshold??75,input.watchThreshold??66);}
