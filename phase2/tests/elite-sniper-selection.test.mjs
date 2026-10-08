@@ -11,12 +11,12 @@ function series(count,opts={}){return Array.from({length:count},(_,i)=>candle(i,
 function pumpSeries(count=120){
   return Array.from({length:count},(_,i)=>{
     let close=100;
-    if(i>=70&&i<86)close=100*(1+0.012*(i-69));
-    else if(i>=86)close=119.2;
-    const open=i===0?100:(i-1>=70&&i-1<86?100*(1+0.012*((i-1)-69)):i-1>=86?119.2:100);
+    if(i>=104&&i<120)close=100*(1+0.012*(i-103));
+    else if(i>=120)close=119.2;
+    const open=i===0?100:(i-1>=104&&i-1<120?100*(1+0.012*((i-1)-103)):i-1>=120?119.2:100);
     const high=Math.max(open,close)*1.003;
     const low=Math.min(open,close)*.997;
-    const volume=(i>=70&&i<86)?4200:1200;
+    const volume=(i>=104&&i<120)?4200:1200;
     const openTime=i*900000;
     return {openTime,open,high,low,close,volume,closeTime:openTime+899000,closed:true,takerBuyBaseVolume:volume*.60};
   });
