@@ -1,5 +1,6 @@
 import {isPreBreakoutNotificationEligible} from './radar-prebreakout-engine.mjs';
 import {evaluateFalconEye} from './radar-falcon-core.mjs';
+import {buildMoveForensics} from './move-forensics.mjs';
 const clamp=(v,min=0,max=100)=>Math.max(min,Math.min(max,Number.isFinite(Number(v))?Number(v):0));
 const num=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
 const arr=v=>Array.isArray(v)?v:[];
@@ -197,11 +198,14 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
   const categoryHits=categoryHitsOf(alert);
   const risks=criticalRisk(alert);
   const falcon=evaluateFalconEye(alert,{now});
+  const forensics=buildMoveForensics(alert,now);
   const failures=[...radarSpecificChecks(alert,p),...risks.map(x=>'RISK:'+x)];
 
   if(falcon.hard_fail)failures.push('FALCON_HARD_FAIL');
   if(falcon.quality<60&&r!=='PROFESSOR_RADAR')failures.push('FALCON_QUALITY_TOO_LOW');
   if(falcon.independent_domains<3&&r!=='PROFESSOR_RADAR')failures.push('FALCON_EVIDENCE_TOO_NARROW');
+  if(forensics.hard_fail)failures.push('MOVER_FORENSICS_HARD_FAIL');
+  if(forensics.quality<58&&r!=='PROFESSOR_RADAR')failures.push('MOVER_FORENSICS_QUALITY_LOW');
 
   if(alert?.eligible===false)failures.push('BASE_ALERT_NOT_ELIGIBLE');
   if(alert?.elite_gate&&alert.elite_gate.eligible===false)failures.push('ELITE_GATE_NOT_ELIGIBLE');
@@ -245,6 +249,7 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
     confirmations,
     category_hits:categoryHits,
     falcon_eye:falcon,
+    move_forensics:forensics,
     previous_alert:previous?{radar:previous.radar,at:previous.at,score:previous.score}:null,
     cooldown_remaining_ms:crossRadarBlocked?Math.max(0,p.globalCooldownMs-elapsed):0,
     failures:[...new Set(failures)],
