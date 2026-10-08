@@ -46,7 +46,7 @@ function scoreStats(stats){
 }
 
 async function load(store,symbol){
-  const raw=await store.getIntelligenceMemory(symbol);
+  const raw=await store.getPredictionCalibration(symbol);
   const m=safeMemory(raw,symbol);
   const defaults=emptyStats();
   for(const h of Object.keys(defaults))m.stats[h]={...defaults[h],...(m.stats[h]||{})};
@@ -61,14 +61,14 @@ async function save(store,m){
     stats:m.stats,
     updated_at:Date.now()
   };
-  await store.putIntelligenceMemory(m.symbol,slim);
+  await store.putPredictionCalibration(m.symbol,slim);
   return slim;
 }
 
 export async function updateSignalOutcomes(store,{symbol,price,now=Date.now()}={}){
   const s=String(symbol||'').trim().toUpperCase();
   const p=num(price,null);
-  if(!s||p==null||p<=0||!store?.getIntelligenceMemory||!store?.putIntelligenceMemory)return null;
+  if(!s||p==null||p<=0||!store?.getPredictionCalibration||!store?.putPredictionCalibration)return null;
   const m=await load(store,s);
   if(!m.predictions.length)return {symbol:s,updated:0,calibration_score:scoreStats(m.stats),stats:m.stats};
   let updated=0;
@@ -107,7 +107,7 @@ export async function updateSignalOutcomes(store,{symbol,price,now=Date.now()}={
     }
   }
   m.predictions=keep;
-  if(updated>0||m.history.length!==((await store.getIntelligenceMemory(s))?.history?.length||0))await save(store,m);
+  if(updated>0||m.history.length!==((await store.getPredictionCalibration(s))?.history?.length||0))await save(store,m);
   return {symbol:s,updated,calibration_score:Number(scoreStats(m.stats).toFixed(1)),stats:m.stats,pending:m.predictions.length};
 }
 
@@ -115,7 +115,7 @@ export async function recordSignalPrediction(store,{symbol,direction,entryPrice,
   const s=String(symbol||'').trim().toUpperCase();
   const p=num(entryPrice,null);
   const d=normalizeDirection(direction);
-  if(!s||p==null||p<=0||!d||!store?.getIntelligenceMemory||!store?.putIntelligenceMemory)return null;
+  if(!s||p==null||p<=0||!d||!store?.getPredictionCalibration||!store?.putPredictionCalibration)return null;
   const m=await load(store,s);
   const prediction_id=`${s}:${Number(now)}:${m.predictions.length+1}`;
   m.predictions.push({
@@ -136,7 +136,7 @@ export async function recordSignalPrediction(store,{symbol,direction,entryPrice,
 
 export async function getPredictionCalibration(store,symbol){
   const s=String(symbol||'').trim().toUpperCase();
-  if(!s||!store?.getIntelligenceMemory)return null;
+  if(!s||!store?.getPredictionCalibration)return null;
   const m=await load(store,s);
   return {
     version:'OUTCOME_CALIBRATION_V1',
