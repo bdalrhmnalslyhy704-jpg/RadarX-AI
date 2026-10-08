@@ -35,3 +35,28 @@ test('TEST_FIXTURE: Binance millisecond kline timestamps normalize and current o
   assert.equal(result.candles[0].closeTime,open+899999);
   assert.equal(result.candles[0].closed,false);
 });
+
+
+test('TEST_FIXTURE: shared RestClient coalesces identical in-flight public requests',async()=>{
+  let calls=0;
+  const fetchImpl=async()=>{calls++;await new Promise(r=>setTimeout(r,25));return{status:200,ok:true,headers:new Map(),json:async()=>({ok:true})};};
+  const a=new RestClient({baseUrls:['https://shared.test'],fetchImpl,timeoutMs:200,minIntervalMs:0,maxRequestsPerMinute:100});
+  const b=new RestClient({baseUrls:['https://shared.test'],fetchImpl,timeoutMs:200,minIntervalMs:0,maxRequestsPerMinute:100});
+  const [ra,rb]=await Promise.all([
+    a.request('/api/v3/ticker/24hr',{symbol:'COALESCEUSDT'}),
+    b.request('/api/v3/ticker/24hr',{symbol:'COALESCEUSDT'})
+  ]);
+  assert.equal(calls,1);
+  assert.deepEqual(ra.data,{ok:true});
+  assert.deepEqual(rb.data,{ok:true});
+});
+
+test('TEST_FIXTURE: short market-data cache reuses fresh identical requests',async()=>{
+  let calls=0;
+  const fetchImpl=async()=>{calls++;return{status:200,ok:true,headers:new Map(),json:async()=>({call:calls})};};
+  const client=new RestClient({baseUrls:['https://cache.test'],fetchImpl,timeoutMs:200,minIntervalMs:0,maxRequestsPerMinute:100});
+  const first=await client.request('/api/v3/klines',{symbol:'CACHEUSDT',interval:'15m',limit:120});
+  const second=await client.request('/api/v3/klines',{symbol:'CACHEUSDT',interval:'15m',limit:120});
+  assert.equal(calls,1);
+  assert.deepEqual(first.data,second.data);
+});
