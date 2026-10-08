@@ -834,7 +834,13 @@ export class MultiAnalystEngine {
     const requested=Math.max(1,Math.min(15,Math.trunc(Number(limit)||this.config.returnLimit)));
     if(!/^[A-Z]{2,10}$/.test(q))throw new Error('INVALID_QUOTE');
     if(this.cache&&this.cache.quote===q&&this.cache.expiresAt>now)return this.cache.value;
-    if(this.busy)return this.busy;
+    if(this.busy){
+      if(this.cache&&this.cache.quote===q){
+        const cached=this.cache.value;
+        return {...cached,meta:{...(cached.meta||{}),served_from_cache_while_scan:true,analysis_mode:'CACHE'}};
+      }
+      return this.busy;
+    }
     this.busy=(async()=>{
       const startedAt=this.clock();
       this.scanner._requests=new Map();
