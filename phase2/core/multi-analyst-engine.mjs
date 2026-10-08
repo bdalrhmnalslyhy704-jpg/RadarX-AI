@@ -213,6 +213,7 @@ function specialistAnalysis(candidate, market={}){
   const raw=candidate?._analysis;
   const now=Number(raw?.completedAt)||Date.now();
   const s4=closed(raw?.series?.['4h'],now),s1=closed(raw?.series?.['1h'],now),s15=closed(raw?.series?.['15m'],now);
+  const rowDataValid=candidate?.data_status?.data_valid===true;
   const c4=closes(s4),c1=closes(s1),c15=closes(s15);
   const price=safe(candidate?.last_price,null);
   const liq=safe(candidate?.liquidity_quality,0);
@@ -296,7 +297,7 @@ function specialistAnalysis(candidate, market={}){
   const dataScore=clamp(Math.min(dq,liq));
   a.push(analyst('DATA_INTEGRITY','حارس سلامة البيانات',dataScore,dq>=70&&liq>=60?'LONG':'NEUTRAL',{dataQuality:dq,liquidityQuality:liq,closedCandles:{'4h':s4.length,'1h':s1.length,'15m':s15.length}}));
   const vsBtc15=Number(rs15);
-  return {a,features:{price,priceChange24h:safe(candidate?.price_change_24h,0),high24:safe(candidate?.high_price_24h,null),low24:safe(candidate?.low_price_24h,null),rsi,rsi1,rv,bb,ar,tRatio,structure:sm,book,roc4,roc16,trend4,trend1,rangePos,distanceEma,relativeStrength15:vsBtc15},dataValid:dq>=70&&liq>=60&&s4.length>=50&&s1.length>=50&&s15.length>=80};
+  return {a,features:{price,priceChange24h:safe(candidate?.price_change_24h,0),high24:safe(candidate?.high_price_24h,null),low24:safe(candidate?.low_price_24h,null),rsi,rsi1,rv,bb,ar,tRatio,structure:sm,book,roc4,roc16,trend4,trend1,rangePos,distanceEma,relativeStrength15:vsBtc15},dataValid:rowDataValid&&dq>=70&&liq>=60&&s4.length>=50&&s1.length>=50&&s15.length>=80};
 }
 
 export function analyzeMultiAnalystCandidate(candidate, market={}, memory=null, calibration=null){
@@ -515,7 +516,29 @@ export class MultiAnalystEngine {
           this._settleOutcome(ticker.symbol,row?.last_price,this.clock());
           let prior=null;
           try{ prior=await this.store?.getIntelligenceMemory?.(ticker.symbol) || null; }catch{ prior=null; }
-          const analysis=analyzeMultiAnalystCandidate(row,{btc15,btc1,marketMedian24h,breadthPct},prior,this.calibration);
+          let analysis;
+          try{
+            analysis=analyzeMultiAnalystCandidate(row,{btc15,btc1,marketMedian24h,breadthPct},prior,this.calibration);
+          }catch(analysisError){
+            const msg='MULTI_ANALYST_ANALYSIS_FAILED:'+String(analysisError?.message||analysisError);
+            const specialist={a:Array.from({length:19},(_,i)=>({
+              id:'ANALYST_'+String(i+1).padStart(2,'0'),
+              name:'محلل سلامة مؤقت '+String(i+1),
+              score:0,direction:'NEUTRAL',decision:'FAIL',
+              evidence:{error:msg},risks:[msg]
+            })),features:{price:safe(row?.last_price,Number(ticker?.lastPrice)||null),priceChange24h:safe(row?.price_change_24h,0),structure:{bull:0,bear:0,headroom:null},book:{imbalance:null,bidWallShare:null,askWallShare:null}},dataValid:false};
+            const final={
+              score:0,verdict:'REJECT',direction:'NEUTRAL',positiveAnalysts:0,strongAnalysts:0,totalAnalysts:19,
+              hardReasons:['DATA_GATE_FAILED',msg],reasons:[],risks:[msg],agreement:0,
+              market_regime:'MIXED',early_score:0,timing:'NO_SETUP',temporal_persistence:0,
+              decision_gate:{critical_good:false,early_window_open:false,agreement_ok:false},
+              self_calibration:null
+            };
+            analysis={specialist,final};
+            row.data_status={...(row.data_status||{}),data_valid:false,last_error:msg};
+            row.reason_codes=[...(row.reason_codes||[]),'MULTI_ANALYST_ANALYSIS_FAILED'];
+            row.invalidation=[...(row.invalidation||[]),'MULTI_ANALYST_ANALYSIS_FAILED'];
+          }
           const specialist=analysis.specialist;
           const final=analysis.final;
           const publicAnalysts=specialist.a.map(x=>({...x}));
