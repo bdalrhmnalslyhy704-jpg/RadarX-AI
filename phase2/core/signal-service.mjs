@@ -1,6 +1,7 @@
 import {CONFIG as PHASE1_CONFIG,evaluateSymbolSnapshot} from '../../phase1/radarx-phase1-engine.mjs';
 import {assessDataGate,assessLiquidity,sourceIsLive} from './data-quality.mjs';
 import {EVENT_CLASS,marketEventClass} from './event-types.mjs';
+import {updateSignalOutcomes,recordSignalPrediction} from './outcome-calibrator.mjs';
 
 export const READ_ONLY_POLICY=Object.freeze({
   market:'SPOT',paper_trading:true,real_order_execution:false,allows_trade_endpoints:false,
@@ -23,10 +24,12 @@ export class SignalService{
     const engineConfig={...PHASE1_CONFIG,costs:{...PHASE1_CONFIG.costs,feeRate:this.config.paper.feeRate,slippageBps:this.config.paper.slippageBps}};
     const r=evaluateSymbolSnapshot({symbol:input.symbol,series4h:input.series4h,series1h:input.series1h,series15m:input.series15m,
       bookRaw:input.bookRaw,ticker24hRaw:input.ticker24hRaw,source:input.source||'UNKNOWN',now},{config:engineConfig});
+    let calibration=null;
+    try{calibration=await updateSignalOutcomes(this.store,{symbol:input.symbol,price:r.signal?.price?.reference,now});}catch{}
     const signal={...r.signal,event_class:eventClass,scores:{...r.signal.scores,data_quality:dg.quality,liquidity_quality:liq.quality,confidence_score:'UNKNOWN'},
       data_status:{...r.signal.data_status,source:input.source||'UNKNOWN',stale:dg.staleMs>this.config.monitoring.maxStaleTriggerMs,
         gaps:Boolean(input.unresolvedGap)||!dg.series.v4.valid||!dg.series.v1.valid||!dg.series.v15.valid,future_data_detected:dg.futureIssues.length>0},
-      paper_trade:{enabled:true,real_order_execution:false}};
+      paper_trade:{enabled:true,real_order_execution:false},learning_feedback:calibration};
     if(typeof this.store.putSignalSnapshot==='function'){
       try{await this.store.putSignalSnapshot(input.symbol,{symbol:input.symbol,processed_at:now,source_time:signal.candle?.close_time??null,signal,strategies:r.strategies});}catch{}
     }
@@ -41,6 +44,9 @@ export class SignalService{
     const d=await this.deduplicator.canEmit(signal,now);
     if(!d.allowed){audit.blocked_reasons=[...blocked,d.reason];await this.store.appendSignalAudit(audit);return{emitted:false,signal,blocked:audit.blocked_reasons,audit,dataGate:dg,liquidity:liq,strategies:r.strategies};}
     await this.deduplicator.markEmitted(signal,now);audit.emitted=true;audit.notification_status='QUEUED';await this.store.appendSignalAudit(audit);
+    let prediction=null;
+    try{prediction=await recordSignalPrediction(this.store,{symbol:input.symbol,direction:signal.direction,entryPrice:signal.price?.reference,score:Math.max(Number(signal.scores?.opportunity||0),Number(signal.scores?.setup||0)),strategy:signal.strategy,reasonCodes:signal.reason_codes,radar:signal.radar,now});}catch{}
+    signal.learning_prediction=prediction;
     const notifications=this.pushManager?await this.pushManager.notifySignal(signal):[];
     const status=notifications.some(x=>x.status==='SENT')?'SENT_OR_ATTEMPTED':notifications.length?'FAILED_OR_DISABLED':'NO_SUBSCRIBERS';
     await this.store.appendSignalAudit({...audit,event:'SIGNAL_NOTIFICATION_RESULT',notification_status:status});
