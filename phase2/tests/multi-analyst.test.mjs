@@ -46,7 +46,7 @@ const engine=new MultiAnalystEngine({
 const out=await engine.scan({quote:'USDT',limit:1});
 assert.equal(out.meta.analyst_count,20);
 assert.equal(out.meta.specialist_count,19);
-assert.equal(out.pipeline.length,4);
+assert.equal(out.pipeline.length,6);
 assert.ok(Array.isArray(out.candidates));
 assert.equal(out.candidates.length,1);
 const c=out.candidates[0];
