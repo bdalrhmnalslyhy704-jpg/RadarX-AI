@@ -1195,7 +1195,9 @@ export function buildCandidateContract({
   return {
     symbol,
     rank,
-    last_price: deep.success ? ticker.lastPrice : null,
+    // Ticker price is factual market data and remains visible even when the deep gate fails.
+    // The candidate remains fail-closed through data_status.data_valid.
+    last_price: Number.isFinite(Number(ticker?.lastPrice)) ? Number(ticker.lastPrice) : null,
     price_change_24h: ticker.priceChange24h,
     high_price_24h: ticker.highPrice24h,
     low_price_24h: ticker.lowPrice24h,
@@ -1457,12 +1459,37 @@ export class MarketUniverseScanner {
     }
 
     const completedAt=this.clock();
-    const deepSuccess=!error&&['4h','1h','15m'].every(function(tf){return Array.isArray(series[tf])&&series[tf].length>0;});
+    const coreSeriesReady=['4h','1h','15m'].every(function(tf){return Array.isArray(series[tf])&&series[tf].length>0;});
     const liquidity=this.computeLiquidity(depthRaw,ticker);
-    const validSeries={'4h':Array.isArray(series['4h'])&&validateSeries(series['4h'],'4h').valid,'1h':Array.isArray(series['1h'])&&validateSeries(series['1h'],'1h').valid,'15m':Array.isArray(series['15m'])&&validateSeries(series['15m'],'15m').valid};
-    const future=futureData(['4h','1h','15m'].flatMap(function(tf){return Array.isArray(series[tf])?series[tf]:[];}),completedAt);
-    const staleTimeframes=['4h','1h','15m'].filter(function(tf){const last=latestClosed(series[tf]||[]);return !last||completedAt-Number(last.closeTime)>TIMEFRAME_MS[tf]*2;});
-    const evaluation=evaluateRegisteredStrategies({strategies:listActiveStrategies(),series,depth:depthRaw,ticker,liquidity,future,staleTimeframes,validSeries,now:completedAt,config:this.strategyConfig,overrideEvaluator:this.strategyEvaluator});
+    let validSeries={'4h':false,'1h':false,'15m':false};
+    let future=false;
+    let staleTimeframes=['4h','1h','15m'];
+    let evaluation=[];
+    try{
+      validSeries={
+        '4h':Array.isArray(series['4h'])&&validateSeries(series['4h'],'4h').valid,
+        '1h':Array.isArray(series['1h'])&&validateSeries(series['1h'],'1h').valid,
+        '15m':Array.isArray(series['15m'])&&validateSeries(series['15m'],'15m').valid
+      };
+      future=futureData(['4h','1h','15m'].flatMap(function(tf){return Array.isArray(series[tf])?series[tf]:[];}),completedAt);
+      staleTimeframes=['4h','1h','15m'].filter(function(tf){
+        const last=latestClosed(series[tf]||[]);
+        return !last||completedAt-Number(last.closeTime)>TIMEFRAME_MS[tf]*2;
+      });
+      try{
+        evaluation=evaluateRegisteredStrategies({
+          strategies:listActiveStrategies(),series,depth:depthRaw,ticker,liquidity,future,staleTimeframes,
+          validSeries,now:completedAt,config:this.strategyConfig,overrideEvaluator:this.strategyEvaluator
+        });
+      }catch(strategyError){
+        error=error||new Error('STRATEGY_PIPELINE_FAILED:'+String(strategyError?.message||strategyError));
+        evaluation=[];
+      }
+    }catch(analysisError){
+      error=error||new Error('MARKET_ANALYSIS_DATA_FAILED:'+String(analysisError?.message||analysisError));
+      evaluation=[];
+    }
+    const deepSuccess=!error&&coreSeriesReady;
     const fetchAges = ['4h', '1h', '15m']
       .map(tf => series[tf])
       .filter(Array.isArray)
