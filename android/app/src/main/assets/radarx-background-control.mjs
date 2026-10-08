@@ -8,7 +8,11 @@ const RADARS=[
   {id:'LIQUIDITY_ABSORPTION_RADAR',name:'Radar 4 — الكاسح',icon:'🧹',color:'#06b6d4',desc:'رادار مختلف: يراقب امتصاص البيع، اختلال دفتر الطلب، البائعين العالقين وتوازن المزاد قبل القفزة.',algos:'Seller Absorption • Depth Imbalance/Vacuum • Trapped Sellers • Microstructure Dislocation • Auction Balance'},
   {id:'KAHIR_RADAR',name:'Radar 5 — القاهر',icon:'👑',desc:'يفحص كامل سوق Spot ويقارن كل عملة بسلوكها السابق، ثم يلتقط التسارع غير المعتاد وجودة الاندفاع قبل أن يصبح مجرد حركة ممتدة.',algos:'Self-Baseline Z • Participation Regime • Volatility Shift • Kaufman Efficiency • Range Acceptance • Impulse Persistence'}
   ,{id:'DOOMSDAY_RADAR',name:'Radar 6 — يوم القيامة',icon:'☄️',color:'#ff4d3d',desc:'صياد الانفجار المفاجئ: يراقب الشرارة قبل أن تصبح حركة يومية ممتدة، مع مراقبة خاصة لفجائية التسارع.',algos:'1m/3m/5m Momentum • Self Acceleration • RVOL • Trade Surge • Taker Flow • Squeeze Release • Donchian • EMA/VWAP • ATR • BTC Relative Strength'},
-  {id:'ALMUQAWIM_RADAR',name:'Radar 7 — المقاوم',icon:'🛡️',color:'#38bdf8',desc:'يحرس اتجاه السوق من هيكل HH/HL أو LH/LL، خط الاتجاه، المتوسط المتحرك وتوافق 4H + 1H.',algos:'HH/HL • LH/LL • Trendline • EMA Filter • 4H/1H Alignment • 15m Risk Guard'}
+  {id:'ALMUQAWIM_RADAR',name:'Radar 7 — المقاوم',icon:'🛡️',color:'#38bdf8',desc:'يحرس اتجاه السوق من هيكل HH/HL أو LH/LL، خط الاتجاه، المتوسط المتحرك وتوافق 4H + 1H.',algos:'HH/HL • LH/LL • Trendline • EMA Filter • 4H/1H Alignment • 15m Risk Guard'},
+  {id:'EARLY_EXPANSION_RADAR',name:'Radar 8 — البرق',icon:'⚡',color:'#22d3ee',desc:'يراقب ما قبل التوسع: الحركة الدقيقة، الحجم، الصفقات، الضغط، الانكماش والمقاومة قبل التمدد.',algos:'Micro Acceleration • RVOL • Taker Flow • Compression • VWAP/EMA • Structure'},
+  {id:'COIN_HUNTER_RADAR',name:'🎯 صائد العملات',icon:'🎯',color:'#facc15',desc:'يتعلم من قادة السوق ثم يبحث عن العملة التي ما زالت مبكرة وغير ممددة وتطابق البصمة المتعلمة.',algos:'Leader Fingerprint • Quiet Range • RVOL/Trades • Taker • HL • Anti-Chase'},
+  {id:'WHALE_ACCUMULATION_RADAR',name:'🐋 تجمع الحيتان',icon:'🐋',color:'#fbbf24',desc:'يبحث عن بصمة التجميع الكبير عبر الصفقات الكبيرة ودفتر الأوامر وامتصاص البيع واستمرارية الدعم.',algos:'Large Prints • Buy Imbalance • Depth • Absorption • Persistence'},
+  {id:'PROFESSOR_RADAR',name:'🧠 البروفيسور',icon:'🧠',color:'#a78bfa',desc:'يجمع الإشارات العامة والأخبار ويطلب تأكيد السوق الحقيقي قبل إصدار رأيه.',algos:'Public Sources • News • Transcript Clues • Deep Market Verification'}
 ];
 
 function addStyle(){
@@ -33,10 +37,10 @@ function fmt(v){return Number.isFinite(Number(v))?Number(v).toLocaleString('en-U
 export function mountBackgroundMonitorControl(root){
   if(!root||typeof document==='undefined')return{destroy(){}};
   addStyle();
-  root.innerHTML='<section class="rx-radar-wrap"><div class="rx-radar-head"><div><div class="rx-radar-title">🛰️ الرادارات المستقلة</div><div class="rx-radar-sub">كل رادار يعمل ويُوقف بشكل مستقل. لا يتم خلط الإشعارات: اسم الرادار + العملة + وقت الاكتشاف 12 ساعة.</div></div><span class="rx-radar-badge"><span class="rx-radar-dot" id="rx-radar-live-dot"></span><span id="rx-radar-global">جارٍ التحقق</span></span></div><div class="rx-radar-grid" id="rx-radar-grid"></div><div class="rx-radar-foot">Spot فقط • Paper Trading • لا أوامر حقيقية • لا أسعار مستقبلية صناعية. لخفض استهلاك طلبات Binance تم رفع شروط الإشارة وتخفيض دورات الفحص.</div></section>';
+  root.innerHTML='<section class="rx-radar-wrap"><div class="rx-radar-head"><div><div class="rx-radar-title">🛰️ الرادارات المستقلة</div><div class="rx-radar-sub">التشغيل المستمر مفعل تلقائيًا: عند فتح التطبيق نتأكد أن الرادارات تعمل، وتستمر على الخادم والخلفية. يمكن إيقاف أي رادار يدويًا.</div></div><span class="rx-radar-badge"><span class="rx-radar-dot" id="rx-radar-live-dot"></span><span id="rx-radar-global">جارٍ التحقق</span></span></div><div class="rx-radar-grid" id="rx-radar-grid"></div><div class="rx-radar-foot">Spot فقط • Paper Trading • لا أوامر حقيقية • لا أسعار مستقبلية صناعية. التشغيل التلقائي لا يحول أي نتيجة إلى أمر تداول.</div></section>';
   const grid=root.querySelector('#rx-radar-grid');
   const global=root.querySelector('#rx-radar-global');
-  let destroyed=false,timer=null;
+  let destroyed=false,timer=null,autoStartAttempted=false;
 
   function cardHtml(spec,status,alerts){
     const live=status && status.running===true;
@@ -51,7 +55,11 @@ export function mountBackgroundMonitorControl(root){
  LIQUIDITY_ABSORPTION_RADAR:'./radar4-sweeper.html',
  KAHIR_RADAR:'./kahir-radar.html',
  DOOMSDAY_RADAR:'./doomsday-radar.html',
- ALMUQAWIM_RADAR:'./al-muqawim-radar.html'
+ ALMUQAWIM_RADAR:'./al-muqawim-radar.html',
+ EARLY_EXPANSION_RADAR:'./radar8-lightning.html',
+ COIN_HUNTER_RADAR:'./coin-hunter-radar.html',
+ WHALE_ACCUMULATION_RADAR:'./whale-accumulation-radar.html',
+ PROFESSOR_RADAR:'./professor-radar.html'
  }[spec.id]||'#')+'">فتح نافذة الرادار</a></div>'+
       '<div class="rx-radar-alerts"><b>آخر اكتشافات هذا الرادار</b>'+ (sourceAlerts.length?sourceAlerts.map(a=>'<div class="rx-radar-alert"><b>'+esc(a.symbol||'—')+'</b> • '+esc(a.potential_label||a.event||'اكتشاف')+' • '+esc(fmt(a.price))+'<small>'+esc(a.radar_name||spec.name)+' • وقت الاكتشاف: '+esc(a.detected_time_12h||'غير متاح')+'</small></div>').join(''):'<div class="rx-radar-empty">لا يوجد اكتشاف محفوظ في المدة المعروضة.</div>')+'</div>'+
       '</article>';
@@ -60,11 +68,25 @@ export function mountBackgroundMonitorControl(root){
   async function refresh(){
     if(destroyed)return;
     try{
-      const [s,a]=await Promise.all([getRadarStatus(),getRadarAlerts({radar:'ALL',limit:20})]);
-      const statuses=(s.ok&&Array.isArray(s.body && s.body.radars)?s.body.radars:[]);
+      let [s,a]=await Promise.all([getRadarStatus(),getRadarAlerts({radar:'ALL',limit:20})]);
+      let statuses=(s.ok&&Array.isArray(s.body && s.body.radars)?s.body.radars:[]);
       const alerts=(a.ok&&Array.isArray(a.body && a.body.alerts)?a.body.alerts:[]);
+      if(!autoStartAttempted){
+        autoStartAttempted=true;
+        const toStart=statuses.filter(x=>x&&x.running!==true);
+        for(const entry of toStart){
+          if(destroyed)break;
+          try{await setRadarState(entry.radar,'start');}catch{}
+        }
+        if(toStart.length){
+          try{
+            s=await getRadarStatus();
+            statuses=(s.ok&&Array.isArray(s.body && s.body.radars)?s.body.radars:statuses);
+          }catch{}
+        }
+      }
       const active=statuses.filter(x=>x.running).length;
-      global.textContent=active?'يعمل '+active+' رادار':'كل الرادارات متوقفة';
+      global.textContent=active?'🟢 تشغيل مستمر • '+active+' رادار يعمل تلقائيًا':'⚠️ الرادارات لم تكتمل بعد';
       (function(){var _q=root.querySelector('#rx-radar-live-dot');if(_q)_q.classList.toggle('live',active>0);})();
       grid.innerHTML=RADARS.map(spec=>cardHtml(spec,statuses.find(x=>x.radar===spec.id),alerts)).join('');
       grid.querySelectorAll('[data-action]').forEach(btn=>btn.addEventListener('click',async()=>{
