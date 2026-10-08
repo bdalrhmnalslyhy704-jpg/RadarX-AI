@@ -331,6 +331,7 @@ function specialistAnalysis(candidate, market={}){
   const emaSpread15=Number.isFinite(price)&&Number.isFinite(ema20_15)&&Number.isFinite(ema50_15)?(ema20_15-ema50_15)/price*100:null;
   const emaSpread1=Number.isFinite(price)&&Number.isFinite(ema20)&&Number.isFinite(ema50)?(ema20-ema50)/price*100:null;
   const htfSpread=Number.isFinite(price)&&Number.isFinite(ema50_4)&&Number.isFinite(ema200)?(ema50_4-ema200)/price*100:null;
+  const distanceEma=Number.isFinite(price)&&Number.isFinite(ema20_15)&&ema20_15!==0?(price-ema20_15)/ema20_15*100:null;
 
   const rangeHigh=Number.isFinite(Number(candidate?.high_price_24h))?Number(candidate.high_price_24h):Math.max(...s15.slice(-96).map(x=>Number(x.high)).filter(Number.isFinite));
   const rangeLow=Number.isFinite(Number(candidate?.low_price_24h))?Number(candidate.low_price_24h):Math.min(...s15.slice(-96).map(x=>Number(x.low)).filter(Number.isFinite));
