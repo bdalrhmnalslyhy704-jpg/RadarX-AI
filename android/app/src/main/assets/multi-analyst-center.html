@@ -114,6 +114,7 @@ details{margin-top:9px;border-top:1px solid #1b3038;padding-top:8px}summary{curs
 
 <script type="module">
 import {getMultiAnalyst} from './radarx-backend-client.mjs';
+import {evaluateSupremeFusion,rankSupremeCandidates} from './radarx-supreme-fusion.mjs';
 
 const cards=document.getElementById('cards');
 const status=document.getElementById('status');
@@ -150,6 +151,42 @@ function num(v,d){
 }
 function pct(v){return Number.isFinite(Number(v))?num(v,0).toFixed(1)+'%':'—';}
 function cap(v){return Math.max(0,Math.min(100,num(v,0)));}
+function fusionAction(v){
+  return ({PAPER_ENTRY_CANDIDATE:'مرشح للمراقبة الورقية المشروطة',PAPER_WATCH:'مراقبة',WAIT_CONFIRMATION:'انتظار التأكيد',SPOT_AVOID:'تجنّب الصفقة'}[v]||'انتظار التأكيد');
+}
+function fusionStage(v){
+  return ({PRE_MOVE:'قبل الحركة',BUILDING:'تجهيز',TRIGGER_WINDOW:'نافذة التفعيل',LATE_CHASE:'مطاردة متأخرة',REJECT:'مرفوض',WATCH:'مراقبة'}[v]||'مراقبة');
+}
+function enrichCandidate(x){
+  const analysts=Array.isArray(x.analysts)?x.analysts:[];
+  const byId=new Map(analysts.map(a=>[String(a.id||'').toUpperCase(),a]));
+  const score=id=>num(byId.get(id)?.score,50);
+  const meanScore=(ids,fallback=50)=>{
+    const values=ids.map(id=>Number(byId.get(id)?.score)).filter(Number.isFinite);
+    return values.length?values.reduce((a,b)=>a+b,0)/values.length:fallback;
+  };
+  const dataValid=x?.data_status?.data_valid===true&&!x?.data_status?.stale&&!x?.data_status?.future_data_detected;
+  const change=Math.abs(num(x.price_change_24h,0));
+  const risks=Array.isArray(x.risk_flags)?x.risk_flags:[];
+  const early=num(x.intelligence?.early_score,num(x.final_judge?.early_score,50));
+  const momentum=meanScore(['MOMENTUM','PRE_BREAKOUT'],num(x.final_score,50));
+  const participation=meanScore(['VOLUME_CONFIRMATION','ORDERBOOK_PRESSURE','LIQUIDITY_QUALITY','ABSORPTION']);
+  const breakout=meanScore(['PRE_BREAKOUT','SUPPORT_RESISTANCE'],num(x.final_score,50));
+  const trapRisk=Math.max(0,Math.min(100,20+risks.length*10+Math.max(0,change-4)*2));
+  const candidate={
+    symbol:x.symbol,direction:x.direction||x.final_judge?.direction,
+    price_change_24h:num(x.price_change_24h,0),
+    data_quality:dataValid?num(x.data_quality,0):0,
+    liquidity_quality:num(x.liquidity_quality,0),
+    risk_flags:risks,
+    pre_move_context:{score:early,compression_score:score('VOLATILITY_COMPRESSION')},
+    pre_breakout_fingerprint:{trapRisk},
+    fast_impulse_context:{score:momentum,scores:{momentum,volume:score('VOLUME_CONFIRMATION'),taker_buy:score('ORDERBOOK_PRESSURE'),breakout}},
+    surge_fingerprint:{early_score:early,ignition_score:momentum,participation_score:participation,near_high_score:50}
+  };
+  const verdict={agents:analysts,decision:{direction:candidate.direction,score:num(x.final_score,50)}};
+  return {...x,supreme_fusion:evaluateSupremeFusion({candidate,verdict})};
+}
 function verdict(v){return v==='STRONG_CANDIDATE'?'مرشح قوي':v==='CANDIDATE'?'مرشح':v==='WATCH'?'مراقبة':'مرفوض';}
 function tagClass(v){return v==='STRONG_CANDIDATE'||v==='CANDIDATE'?'good':v==='REJECT'?'bad':'warn';}
 function cacheLoad(){
@@ -213,6 +250,8 @@ function renderBest(body,list){
 }
 function renderCard(x,idx){
   const j=x.final_judge||{}, hot=x.verdict==='STRONG_CANDIDATE'||x.verdict==='CANDIDATE';
+  const sf=x.supreme_fusion||{};
+  const fusionEvidence=[...(sf.positive_reasons||[]),...(sf.risk_flags||[])].slice(0,5).map(esc).join(' • ')||'لا توجد أدلة إضافية كافية';
   const analysts=Array.isArray(x.analysts)?x.analysts:[];
   const gc=j.group_consensus||{};
   const gkeys=Object.keys(gc);
@@ -241,6 +280,13 @@ function renderCard(x,idx){
       '<span class="tag">الدليل '+num(j.evidence_coverage,0).toFixed(0)+'%</span>'+
     '</div>'+
     '<div class="bar"><div class="fill" style="width:'+cap(x.final_score)+'%"></div></div>'+
+    '<div class="miniPanel" style="margin:9px 0;border-color:#685b93;background:linear-gradient(120deg,rgba(75,47,111,.24),rgba(10,20,30,.94))">'+
+      '<div class="lineTop"><b>🧠⚡ Supreme Fusion</b><b>'+num(sf.score,0).toFixed(1)+'/100</b></div>'+
+      '<div class="chips"><span class="tag">'+esc(sf.tier||'WATCH')+'</span><span class="tag">'+esc(fusionStage(sf.stage))+'</span><span class="tag">'+esc(fusionAction(sf.action))+'</span></div>'+
+      '<div style="font-size:9px;line-height:1.9;color:#b6c2d2;margin-top:6px">بصمة مبكرة '+num(sf.early_edge_score,0).toFixed(0)+' • خطر الفشل '+num(sf.failure_risk,0).toFixed(0)+' • حماية المطاردة '+num(sf.anti_chase_score,0).toFixed(0)+' • مجموعات مستقلة '+num(sf.cluster_hits,0)+'</div>'+
+      '<div style="font-size:8px;line-height:1.8;color:#9aaec1;margin-top:5px">'+fusionEvidence+'</div>'+
+      '<div style="font-size:8px;line-height:1.7;color:#8296a8;margin-top:5px">طبقة فرز إضافية مبنية على المحللين التسعة عشر؛ لا تضمن الربح ولا تنفذ أوامر. الثقة UNKNOWN والشموع المغلقة فقط.</div>'+
+    '</div>'+
     '<div class="grid4">'+
       '<div class="fact"><b>'+esc(x.last_price==null?'—':x.last_price)+'</b><span>السعر</span></div>'+
       '<div class="fact"><b>'+pct(x.price_change_24h)+'</b><span>24h</span></div>'+
@@ -264,7 +310,8 @@ function renderCard(x,idx){
 }
 function render(body){
   latest=body;
-  const list=Array.isArray(body&&body.candidates)?body.candidates:[];
+  const rawList=Array.isArray(body&&body.candidates)?body.candidates:[];
+  const list=rankSupremeCandidates(rawList.map(enrichCandidate),{limit:Math.max(1,rawList.length)});
   renderHeader(body);
   renderBest(body,list);
   if(!list.length){cards.innerHTML='<div class="empty">لا توجد عملات في هذه اللقطة. لا يتم اختلاق نتيجة لتعويض غياب البيانات.</div>';return;}
