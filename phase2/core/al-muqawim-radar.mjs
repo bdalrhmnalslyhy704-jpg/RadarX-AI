@@ -107,8 +107,8 @@ function timeframeAnalysis(candles,maPeriod=50,now=Date.now()){
   };
 }
 
-function recentReturn(rows,n=4){
-  const a=closedCandles(rows,Date.now());
+function recentReturn(rows,n=4,now=Date.now()){
+  const a=closedCandles(rows,now);
   if(a.length<=n)return null;
   return (Number(a.at(-1).close)/Number(a.at(-(n+1)).close)-1)*100;
 }
@@ -313,7 +313,7 @@ export class AlMuqawimRadar{
       Number(timing.score)>=Number(this.config.minEntryTimingScore||78) &&
       Number(timing.freshness)>=Number(this.config.minEntryFreshness||72) &&
       timing.notExtended===true&&
-      Number(alert.price_change_24h||0)<=Number(this.config.maxAlert24hMovePct||8)&&budgetOk;
+      Math.abs(Number(alert.price_change_24h||0))<=Number(this.config.maxAlert24hMovePct||8)&&budgetOk;
     if(!strictReady)return alert;
     const last=this.lastAlertAt.get(row.symbol)||0;
     if(this.clock()-last<this.config.alertCooldownMs)return alert;
