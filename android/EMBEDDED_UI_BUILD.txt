@@ -1,5 +1,5 @@
-RadarX Android 1.5.0
-Release line: exact Build 224 official source + Radar 8 V2 + Hawkeye V2 + Supreme Fusion
+RadarX Android 1.5.1
+Release line: official Build 224 + Radar 8 V2 + Hawkeye V2 + Supreme Fusion
 UI: bundled inside APK via Android WebViewAssetLoader
 Backend: https://radarx-ai-triple-production.up.railway.app
 GitHub Pages runtime dependency: none
@@ -7,6 +7,14 @@ Binance direct API from APK: none
 paper_trading=true
 real_order_execution=false
 confidence_score=UNKNOWN
-Closed candles only; invalid/stale data fail closed.
-Supreme Fusion: evidence-based client-side fusion over the 20-analyst X-FACTOR result, with early-stage ranking, anti-chase checks, and risk flags. It does not execute orders and does not claim calibrated probability.
-Release gate: Railway health/status/Hawkeye contract, Supreme Fusion unit tests, signed universal APK verification, Android emulator smoke, and HTTPS download integrity check.
+Closed candles only; stale or invalid data cannot be presented as a new live discovery.
+
+Background monitoring:
+- Android foreground service remains active in offline mode and reports that live market discovery is paused until validated connectivity returns.
+- Android network callback triggers an immediate scan on reconnect.
+- Falcon Eye reads its own durable event feed and cursor, independent of the combined radar feed.
+- Alert events are persisted locally before notification delivery; pending alerts survive service/process restarts.
+- Alerts replay in original detection order after outages and notifications report the original detection timestamp and recorded detection price, separately from phone delivery time.
+- No live prices or discoveries are fabricated while the phone has no internet connection.
+
+Release gate: source/JavaScript tests, Falcon Eye API contract, Railway health, signed universal APK verification, Android offline-to-online smoke test, and HTTPS download SHA-256 integrity check.
