@@ -173,10 +173,12 @@ public final class RadarXBackgroundMonitorService extends Service {
             int queued = notifyNewRadarAlerts(alerts == null ? new JSONArray() : alerts);
             long falconNextCursor = root.optLong("falcon_eye_next_cursor_at", 0L);
             long falconCursor = prefs().getLong(FALCON_CURSOR_KEY, 0L);
-            if (falconNextCursor > falconCursor) {
+            if (falconNextCursor > falconCursor && getPendingAlertCount() < MAX_PENDING_ALERTS) {
                 if (!prefs().edit().putLong(FALCON_CURSOR_KEY, falconNextCursor).commit()) {
                     Log.e(TAG, "FALCON_EYE_CURSOR_SAVE_FAILED");
                 }
+            } else if (falconNextCursor > falconCursor) {
+                Log.w(TAG, "FALCON_EYE_CURSOR_HELD_FOR_PENDING_QUEUE_DRAIN");
             }
 
             int delivered = deliverPendingAlerts();
