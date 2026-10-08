@@ -55,8 +55,8 @@ test('TEST_FIXTURE: short market-data cache reuses fresh identical requests',asy
   let calls=0;
   const fetchImpl=async()=>{calls++;return{status:200,ok:true,headers:new Map(),json:async()=>({call:calls})};};
   const client=new RestClient({baseUrls:['https://cache.test'],fetchImpl,timeoutMs:200,minIntervalMs:0,maxRequestsPerMinute:100});
-  const first=await client.request('/api/v3/klines',{symbol:'CACHEUSDT',interval:'15m',limit:120});
-  const second=await client.request('/api/v3/klines',{symbol:'CACHEUSDT',interval:'15m',limit:120});
+  const first=await client.request('/api/v3/ticker/24hr',{symbol:'CACHEUSDT'});
+  const second=await client.request('/api/v3/ticker/24hr',{symbol:'CACHEUSDT'});
   assert.equal(calls,1);
   assert.deepEqual(first.data,second.data);
 });
