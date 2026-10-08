@@ -2,6 +2,7 @@ package com.radarx.app;
 
 import android.annotation.SuppressLint;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.app.Activity;
 import android.graphics.Color;
 import android.net.Uri;
@@ -45,6 +46,9 @@ public final class MainActivity extends Activity {
     private static final String BACKEND_FALLBACK_ORIGIN =
             "https://radarx-ai-production.up.railway.app";
     private static final int REQUEST_POST_NOTIFICATIONS = 7301;
+    private static final String PREFS_BACKGROUND = "radarx_background";
+    private static final String PREF_AUTO_ENABLED = "auto_enabled";
+    private static final String PREF_NOTIFICATION_PROMPTED = "notification_permission_prompted";
     private boolean pendingBackgroundStart;
 
     private WebView webView;
@@ -127,6 +131,7 @@ public final class MainActivity extends Activity {
 
         setContentView(webView);
         webView.loadUrl(APP_URL);
+        webView.postDelayed(this::ensureContinuousMonitoring, 1400);
     }
 
     private static boolean isAllowedAppUri(Uri uri) {
@@ -241,7 +246,12 @@ public final class MainActivity extends Activity {
 
 
     private void startBackgroundMonitor() {
-        Log.i("RadarXBackground", "BACKGROUND_START_REQUEST");
+        startBackgroundMonitor(true);
+    }
+
+    private void startBackgroundMonitor(boolean userInitiated) {
+        Log.i("RadarXBackground", userInitiated ? "BACKGROUND_START_REQUEST" : "BACKGROUND_AUTO_START_REQUEST");
+        getSharedPreferences(PREFS_BACKGROUND, MODE_PRIVATE).edit().putBoolean(PREF_AUTO_ENABLED, true).apply();
         try {
             Intent intent = new Intent(this, RadarXBackgroundMonitorService.class);
             intent.setAction(RadarXBackgroundMonitorService.ACTION_START);
@@ -250,7 +260,9 @@ public final class MainActivity extends Activity {
             } else {
                 startService(intent);
             }
-            Toast.makeText(this, "تم تشغيل مراقبة RadarX في الخلفية", Toast.LENGTH_SHORT).show();
+            if (userInitiated) {
+                Toast.makeText(this, "تم تشغيل مراقبة RadarX في الخلفية", Toast.LENGTH_SHORT).show();
+            }
         } catch (Exception error) {
             Log.e("RadarXBackground", "Unable to start background monitor", error);
             Toast.makeText(this, "تعذر تشغيل المراقبة الخلفية", Toast.LENGTH_LONG).show();
@@ -264,10 +276,27 @@ public final class MainActivity extends Activity {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_POST_NOTIFICATIONS);
             return;
         }
-        startBackgroundMonitor();
+        startBackgroundMonitor(true);
+    }
+
+    private void ensureContinuousMonitoring() {
+        if (RadarXBackgroundMonitorService.isRunning(this)) return;
+        SharedPreferences prefs = getSharedPreferences(PREFS_BACKGROUND, MODE_PRIVATE);
+        if (!prefs.getBoolean(PREF_AUTO_ENABLED, true)) return;
+        if (Build.VERSION.SDK_INT >= 33 &&
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            if (!prefs.getBoolean(PREF_NOTIFICATION_PROMPTED, false)) {
+                prefs.edit().putBoolean(PREF_NOTIFICATION_PROMPTED, true).apply();
+                pendingBackgroundStart = true;
+                requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_POST_NOTIFICATIONS);
+            }
+            return;
+        }
+        startBackgroundMonitor(false);
     }
 
     private void stopBackgroundMonitor() {
+        getSharedPreferences(PREFS_BACKGROUND, MODE_PRIVATE).edit().putBoolean(PREF_AUTO_ENABLED, false).apply();
         Intent intent = new Intent(this, RadarXBackgroundMonitorService.class);
         intent.setAction(RadarXBackgroundMonitorService.ACTION_STOP);
         if (Build.VERSION.SDK_INT >= 26) {
@@ -339,7 +368,7 @@ public final class MainActivity extends Activity {
                     grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED;
             if (pendingBackgroundStart && granted) {
                 pendingBackgroundStart = false;
-                startBackgroundMonitor();
+                startBackgroundMonitor(false);
             } else if (pendingBackgroundStart) {
                 pendingBackgroundStart = false;
                 Toast.makeText(this, "تم رفض إشعارات المراقبة؛ لم يتم تشغيلها", Toast.LENGTH_LONG).show();
