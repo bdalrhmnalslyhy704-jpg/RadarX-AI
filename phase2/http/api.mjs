@@ -7,6 +7,7 @@ import {RADAR_NAMES,RADAR_PROFILES,formatRadarTime12h,decorateRadarAlert} from '
 import {SymbolDeepAnalyzer,normalizeDeepScanSymbol} from '../core/symbol-deep-analyzer.mjs';
 import {buildKingVerdict,rankKingMarket} from '../core/king-intelligence.mjs';
 import {collectAgentEvidence,buildAgentVerdict,evaluateMemory,createMemoryEntries} from '../core/ai-agent-hub.mjs';
+import {evaluateSupremeFusion} from '../core/supreme-fusion.mjs';
 
 function send(res,status,body,extra={}){
   const data=JSON.stringify(body);
@@ -545,13 +546,14 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           const memoryForVerdict=[...memory,...evaluated];
           const evidence=await collectAgentEvidence({symbol:rawSymbol});
           const verdict=buildAgentVerdict({symbol:rawSymbol,evidence,deepScan,memory:memoryForVerdict});
+          const supremeFusion=evaluateSupremeFusion({candidate:{symbol:rawSymbol,direction:verdict.decision?.direction,last_price:deepScan?.price?.last,price_change_24h:deepScan?.price?.change_24h_pct,data_quality:deepScan?.data_quality?.score??deepScan?.scores?.data_quality,liquidity_quality:deepScan?.liquidity?.score,pre_move_context:{score:deepScan?.pre_move_context?.score,compression_score:deepScan?.pre_move_context?.compression_score},pre_breakout_fingerprint:deepScan?.pre_breakout_fingerprint,fast_impulse_context:deepScan?.fast_impulse_context,surge_fingerprint:deepScan?.surge_fingerprint},verdict});
           const price=Number(deepScan?.price?.last);
           const recent=memory.filter(x=>String(x?.symbol||'').toUpperCase()===rawSymbol&&Number(x?.created_at||0)>now-10*60*1000);
           if(!recent.length&&Number.isFinite(price)&&typeof store.appendAgentMemory==='function'){
             const entries=createMemoryEntries({symbol:rawSymbol,price,agents:verdict.agents,now});
             for(const row of entries)await store.appendAgentMemory(row);
           }
-          return send(res,200,{...verdict,deep_snapshot:{price:deepScan?.price||null,assessment:deepScan?.assessment||null,liquidity:deepScan?.liquidity||null,pressure:deepScan?.pressure||null,zones:deepScan?.zones||null,data_quality:deepScan?.data_quality||deepScan?.scores||null},evidence_items:{news:(evidence.news||[]).slice(0,20),official:(evidence.official||[]).slice(0,15),social:(evidence.social||[]).slice(0,15)},meta:{live:true,source:'GDELT + Google News + Reddit + RadarX/Binance Public REST',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+          return send(res,200,{...verdict,supreme_fusion:supremeFusion,deep_snapshot:{price:deepScan?.price||null,assessment:deepScan?.assessment||null,liquidity:deepScan?.liquidity||null,pressure:deepScan?.pressure||null,zones:deepScan?.zones||null,data_quality:deepScan?.data_quality||deepScan?.scores||null},evidence_items:{news:(evidence.news||[]).slice(0,20),official:(evidence.official||[]).slice(0,15),social:(evidence.social||[]).slice(0,15)},meta:{live:true,source:'GDELT + Google News + Reddit + RadarX/Binance Public REST',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         }catch(e){
           const m=String(e?.message??e);
           const status=/INVALID_SYMBOL/.test(m)?400:/BINANCE_|HTTP_(?:408|418|429|451|500|502|503|504)|TIMEOUT|NETWORK|FETCH|ECONN|ENOTFOUND|ETIMEDOUT|ABORT/i.test(m)?503:500;
