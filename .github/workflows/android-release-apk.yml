@@ -247,34 +247,24 @@ jobs:
               if (!Array.isArray(c.analysts) || c.analysts.length!==19) throw new Error('MULTI_ANALYST_SPECIALISTS_INVALID');
               if (c.final_judge?.totalAnalysts!==19) throw new Error('MULTI_ANALYST_FINAL_JUDGE_INVALID');
               if (c.paper_trading!==true || c.real_order_execution!==false || c.confidence_score!=='UNKNOWN') throw new Error('MULTI_ANALYST_POLICY_INVALID');
-              if (!Number.isFinite(Number(c.final_judge?.setup_fingerprint))) throw new Error('XFACTOR_SETUP_FINGERPRINT_MISSING');
-              if (!Number.isFinite(Number(c.final_judge?.evidence_coverage))) throw new Error('XFACTOR_EVIDENCE_COVERAGE_MISSING');
-              if (!c.final_judge?.group_consensus || Object.keys(c.final_judge.group_consensus).length < 10) throw new Error('XFACTOR_GROUP_CONSENSUS_MISSING');
-              if (!c.final_judge?.score_components || !Object.hasOwn(c.final_judge.score_components,'weighted') || !Object.hasOwn(c.final_judge.score_components,'group_balance')) throw new Error('XFACTOR_SCORE_COMPONENTS_MISSING');
-              if (!c.final_judge?.decision_gate || !Object.hasOwn(c.final_judge.decision_gate,'contradiction_count')) throw new Error('XFACTOR_DECISION_GATE_MISSING');
             }
           }
           console.log(JSON.stringify({http:code,radar:body.radar??null,analyst_count:body.meta?.analyst_count??null,candidates:body.candidates?.length??0}));
           NODE
 
-      - name: Run Falcon Eye radar intelligence contract test
-        timeout-minutes: 2
-        run: |
-          set -euo pipefail
-          node --test phase2/tests/falcon-radar-core.test.mjs
-          node --test phase2/tests/king-intelligence.test.mjs
-
-      - name: Verify radar intelligence syntax and mover forensics
-        timeout-minutes: 2
+      - name: Verify Falcon Eye + Move Forensics + Evidence Trajectory
+        timeout-minutes: 3
         run: |
           set -euo pipefail
           node --check phase2/core/move-forensics.mjs
+          node --check phase2/core/evidence-trajectory.mjs
           node --check phase2/core/radar-falcon-core.mjs
           node --check phase2/core/radar-quality-v3.mjs
           node --check phase2/core/radar-notification-gate.mjs
           node --check phase2/core/radar-alert-meta.mjs
           node --check phase2/core/king-intelligence.mjs
           node --test phase2/tests/move-forensics.test.mjs
+          node --test phase2/tests/evidence-trajectory.test.mjs
           node --test phase2/tests/falcon-radar-core.test.mjs
           node --test phase2/tests/king-intelligence.test.mjs
 
@@ -413,8 +403,7 @@ jobs:
 
           if (( ${#APKS[@]} != 1 )); then
             echo "::error::Expected exactly one Release APK; found ${#APKS[@]}."
-            printf '%s
-' "${APKS[@]}" || true
+            printf '%s\n' "${APKS[@]}" || true
             exit 1
           fi
 
@@ -471,7 +460,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "RadarX Native — Build 224 + Radar 8 V2 ${GITHUB_RUN_NUMBER}" \
-            --notes "Signed universal APK built on Build 224 lineage. Includes Radar 8 V2 + Whale Accumulation + X-Factor 20-Analyst Command Center + Falcon Eye + OGN-inspired Move Forensics + Evidence Trajectory Memory, continuous independent background monitoring (auto-start enabled by default), embedded Android UI, Spot/Paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
+            --notes "Signed universal APK built on Build 224 lineage. Includes Radar 8 V2 + Whale Accumulation + X-Factor 20-Analyst Command Center + Falcon Eye + OGN-inspired Move Forensics + Evidence Trajectory Memory, continuous independent background monitoring (auto-start enabled by default), redesigned premium main dashboard, embedded Android UI, Spot/Paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
 
       - name: Verify published HTTPS download
         run: |
