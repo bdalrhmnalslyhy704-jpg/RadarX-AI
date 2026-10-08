@@ -572,7 +572,6 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             risk_flags:Number(deepScan?.assessment?.trap_risk||50)>=55?['TRAP_RISK_ELEVATED']:[]
           };
           const supremeFusion=evaluateSupremeFusion({candidate:syntheticCandidate,verdict});
-          const price=Number(deepScan?.price?.last);
           const recent=memory.filter(x=>String(x?.symbol||'').toUpperCase()===rawSymbol&&Number(x?.created_at||0)>now-10*60*1000);
           if(!recent.length&&Number.isFinite(price)&&typeof store.appendAgentMemory==='function'){
             const entries=createMemoryEntries({symbol:rawSymbol,price,agents:verdict.agents,now});
