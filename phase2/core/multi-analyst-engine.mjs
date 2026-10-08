@@ -775,7 +775,7 @@ export class MultiAnalystEngine {
     if(!rest||typeof rest.request!=='function')throw new Error('REST_CLIENT_REQUIRED');
     this.clock=clock;
     this.config={
-      quote:'USDT',discoveryPool:20,returnLimit:10,deepConcurrency:3,deepKlines:220,
+      quote:'USDT',discoveryPool:24,deepScanPool:14,returnLimit:10,deepConcurrency:3,deepKlines:220,
       minQuoteVolume24h:300000,minDataQuality:70,minLiquidityQuality:60,
       ttlMs:45000,...config
     };
@@ -852,12 +852,16 @@ export class MultiAnalystEngine {
         const sb=Math.log10(Math.max(1,b.quoteVolume24h))*0.6+Math.min(7,b.priceChange24h)*8;
         return sb-sa;
       }).slice(0,Math.max(6,Math.trunc(this.config.discoveryPool*.4)));
+      const quiet=normalized.filter(x=>x.priceChange24h>=-1.5&&x.priceChange24h<=3.5)
+        .sort((a,b)=>(Math.abs(a.priceChange24h-1.2)-Math.abs(b.priceChange24h-1.2)) || (b.quoteVolume24h-a.quoteVolume24h));
       const selected=[];const seen=new Set();
-      for(const row of [...top,...wake,...bottom]){
+      for(const row of [...top,...wake,...quiet,...bottom]){
         if(seen.has(row.symbol))continue; seen.add(row.symbol); selected.push(row);
         if(selected.length>=this.config.discoveryPool)break;
       }
       if(!selected.length)throw new Error('NO_SPOT_CANDIDATES');
+      const deepPool=Math.max(1,Math.min(selected.length,Math.trunc(Number(this.config.deepScanPool)||selected.length)));
+      const deepSelected=selected.slice(0,deepPool);
       let btc15=[],btc1=[];
       try{
         const [b15,b1]=await Promise.all([
@@ -963,6 +967,7 @@ export class MultiAnalystEngine {
         candidates,
         pipeline:['Discovery','Data Gate','19 Specialist Analysts','Chief Analyst'],
         diagnostics:{
+          scan_plan:{discovery:selected.length,deep:deepSelected.length,core_timeframes:['4h','1h','15m'],optional_fast_timeframe:null,shared_rest_broker:true},
           duration_ms:Math.max(0,this.clock()-startedAt),
           deep_concurrency:this.config.deepConcurrency,
           deep_klines:this.config.deepKlines,
