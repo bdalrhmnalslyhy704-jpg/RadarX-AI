@@ -139,7 +139,7 @@ console.log('multi-analyst-engine lab-entry regression: PASS');
   assert.equal(out.candidates.length,1);
   assert.equal(out.candidates[0].verdict,'REJECT');
   assert.equal(out.candidates[0].data_status.data_valid,false);
-  assert.match(String(out.candidates[0].data_status.last_error||''),'STRATEGY_PIPELINE_FAILED');
+  assert.match(String(out.candidates[0].data_status.last_error||''),/STRATEGY_PIPELINE_FAILED/);
   assert.equal(out.diagnostics.failed_analyses,0);
   assert.equal(out.diagnostics.gate_rejected,1);
 }
