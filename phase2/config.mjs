@@ -320,6 +320,17 @@ export const CONFIG = Object.freeze({
     minHunterScore: int(process.env.RADARX_COIN_HUNTER_MIN_SCORE, 86),
     maxHunter24hMovePct: float(process.env.RADARX_COIN_HUNTER_MAX_24H_MOVE_PCT, 8)
   },
+  falconEyeRadar: {
+    quote: 'USDT',
+    pollMs: int(process.env.RADARX_FALCON_EYE_POLL_MS, 45000),
+    universeRefreshMs: int(process.env.RADARX_FALCON_EYE_UNIVERSE_REFRESH_MS, 5 * 60 * 1000),
+    minQuoteVolume24h: int(process.env.RADARX_FALCON_EYE_MIN_QUOTE_VOLUME_24H, 1000000),
+    scanBatchSize: int(process.env.RADARX_FALCON_EYE_SCAN_BATCH, 6),
+    topCandidates: int(process.env.RADARX_FALCON_EYE_TOP_CANDIDATES, 5),
+    alertCooldownMs: int(process.env.RADARX_FALCON_EYE_ALERT_COOLDOWN_MS, 45 * 60 * 1000),
+    maxAlertsPerHour: int(process.env.RADARX_FALCON_EYE_MAX_ALERTS_PER_HOUR, 3),
+    minScore: int(process.env.RADARX_FALCON_EYE_MIN_SCORE, 88)
+  },
   paper: {
     feeRate: float(process.env.RADARX_PAPER_FEE_RATE, 0.001),
     slippageBps: float(process.env.RADARX_PAPER_SLIPPAGE_BPS, 5),
