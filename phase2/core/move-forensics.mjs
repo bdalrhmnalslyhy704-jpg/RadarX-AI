@@ -47,6 +47,20 @@ export function buildMoveForensics(alert={},now=Date.now()){
 
   const newsMentions=num(alert.news_mentions,0);
   const streamMentions=num(alert.stream_mentions,0);
+  const newsText=arr(alert.news_items).map(x=>String(x?.title||x?.text||'')).join(' ').toUpperCase();
+  const claimText=arr(alert.trade_claims).map(x=>String(x?.title||x?.text||x||'')).join(' ').toUpperCase();
+  const catalystText=newsText+' '+claimText;
+  const catalystKeywords={
+    BUYBACK:/BUYBACK|TOKEN BUYBACK|BOUGHT BACK/.test(catalystText),
+    STAKING:/STAKING|STAKED|LOCKED SUPPLY|YIELD/.test(catalystText),
+    LISTING:/LISTING|LISTED|NEW TRADING PAIR/.test(catalystText),
+    INTEGRATION:/INTEGRATION|PARTNERSHIP|COLLABORATION/.test(catalystText),
+    PRODUCT:/LAUNCH|UPGRADE|ROADMAP|MAINNET|PRODUCT UPDATE/.test(catalystText),
+    TOKENOMICS:/TOKENOMICS|SUPPLY|BURN|MIGRATION|MERGER/.test(catalystText),
+    NEGATIVE:/HACK|EXPLOIT|DELIST|UNLOCK|SEC ACTION/.test(catalystText)
+  };
+  const catalystKeywordHits=Object.entries(catalystKeywords).filter(([,v])=>v).map(([k])=>k);
+  const positiveCatalystKeywordCount=catalystKeywordHits.filter(k=>k!=='NEGATIVE').length;
   const newsScore=pick(opinion,['news_score'],pick(alert,['news_score'],50));
   const streamScore=pick(opinion,['stream_score'],pick(alert,['stream_score'],50));
 
@@ -69,13 +83,15 @@ export function buildMoveForensics(alert={},now=Date.now()){
     ?clamp(55+Math.log10(Math.max(1,quoteVolume/marketCap))*34):50;
 
   const catalystEvidence=Math.min(100,
-    (newsMentions>0?22:0)+
-    (streamMentions>0?18:0)+
-    (newsScore>62?20:0)+
-    (streamScore>62?15:0)+
-    (buybackTokens>0?12:0)+
+    (newsMentions>0?18:0)+
+    (streamMentions>0?14:0)+
+    (newsScore>62?18:0)+
+    (streamScore>62?12:0)+
+    Math.min(24,positiveCatalystKeywordCount*8)+
+    (buybackTokens>0?10:0)+
     (boughtPct>0?8:0)+
-    (stakedPct>=35?10:0)
+    (stakedPct>=35?8:0)-
+    (catalystKeywords.NEGATIVE?20:0)
   );
 
   const supplySqueeze=clamp(
@@ -150,6 +166,8 @@ export function buildMoveForensics(alert={},now=Date.now()){
     anti_late_score:Number(antiLate.toFixed(1)),
     immediate_drivers:immediateDrivers,
     contextual_drivers:contextualDrivers,
+    catalyst_keyword_hits:catalystKeywordHits,
+    negative_catalyst: Boolean(catalystKeywords.NEGATIVE),
     signatures,
     factors:{
       volume_ratio:Number.isFinite(volumeRatio)?Number(volumeRatio.toFixed(3)):null,
