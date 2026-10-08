@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {evaluateFalconEye} from '../core/radar-falcon-core.mjs';
 import {evaluateRadarNotificationGate,resetRadarNotificationGateForTests} from '../core/radar-notification-gate.mjs';
+import {decorateRadarAlert} from '../core/radar-alert-meta.mjs';
 
 function earlyAlert(overrides={}){
   return {
@@ -73,4 +74,7 @@ test('Notification gate has an early Falcon corridor without weakening hard safe
   assert.equal(r.mode,'FALCON_EARLY_TRACK');
   assert.equal(r.falcon_eye.early_window,true);
   assert.ok(r.falcon_eye.capture>=78);
+  const decorated=decorateRadarAlert(earlyAlert(),'Test Radar');
+  assert.ok(decorated.falcon_eye && decorated.falcon_eye.version==='FALCON_EYE_V1');
+  assert.equal(decorated.radar_quality_v3.falcon_eye.version,'FALCON_EYE_V1');
 });
