@@ -12,6 +12,9 @@ import android.content.pm.ServiceInfo;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.IBinder;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -41,6 +44,10 @@ public final class RadarXBackgroundMonitorService extends Service {
             "https://radarx-ai-triple-production.up.railway.app/api/radar-alerts?radar=ALL&limit=50";
     private static final String BACKEND_RADAR_ALERTS_FALLBACK =
             "https://radarx-ai-production.up.railway.app/api/radar-alerts?radar=ALL&limit=50";
+    private static final String BACKEND_FALCON_ALERTS =
+            "https://radarx-ai-triple-production.up.railway.app/api/falcon-eye-radar";
+    private static final String BACKEND_FALCON_ALERTS_FALLBACK =
+            "https://radarx-ai-production.up.railway.app/api/falcon-eye-radar";
     // Compatibility routes kept as immutable read-only references; active polling uses the unified feed above.
     private static final String BACKEND_MOVE_RADAR =
             "https://radarx-ai-triple-production.up.railway.app/api/move-radar?quote=USDT&limit=50";
@@ -62,12 +69,18 @@ public final class RadarXBackgroundMonitorService extends Service {
     private static final int STRONG_ALERT_NOTIFICATION_BASE = 43000;
     private static final int ROTATION_ALERT_NOTIFICATION_BASE = 44000;
     private static final long SCAN_MS = 15_000L;
-    private static final long ALERT_COOLDOWN_MS = 30 * 60_000L;
+    private static final String PENDING_ALERTS_KEY = "radar_alert_pending_json";
+    private static final String FALCON_CURSOR_KEY = "falcon_eye_alert_cursor_at";
+    private static final int MAX_PENDING_ALERTS = 300;
 
     private ScheduledExecutorService executor;
+    private ConnectivityManager connectivityManager;
+    private ConnectivityManager.NetworkCallback connectivityCallback;
     private volatile boolean stopping;
     private volatile boolean loggedFirstScan;
+    private volatile boolean offlineLogged;
     private final DecimalFormat scoreFmt = new DecimalFormat("0.0");
+    private final DecimalFormat priceFmt = new DecimalFormat("0.################", java.text.DecimalFormatSymbols.getInstance(Locale.US));
 
     @Override
     public void onCreate() {
@@ -100,6 +113,7 @@ public final class RadarXBackgroundMonitorService extends Service {
             return START_NOT_STICKY;
         }
 
+        registerConnectivityCallback();
         try {
             scheduleScan();
         } catch (Throwable error) {
@@ -126,26 +140,62 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     private void scanOnceSafe() {
         if (stopping) return;
+        deliverPendingAlerts();
+        if (!hasValidatedInternetConnection()) {
+            if (!offlineLogged) {
+                offlineLogged = true;
+                Log.i(TAG, "BACKGROUND_OFFLINE_WAIT");
+            }
+            updateStatus("عين الصقر تعمل في الخلفية وتنتظر الإنترنت. لا يمكن جلب أسعار أو اكتشافات سوق جديدة دون اتصال؛ التنبيهات المحفوظة محليًا ستبقى في قائمة الانتظار.");
+            return;
+        }
+
+        offlineLogged = false;
         try {
             long cursor = prefs().getLong("radar_alert_cursor_at", 0L);
             JSONObject root = fetchRadarAlertsFeed(cursor);
             JSONObject meta = root.optJSONObject("meta");
-            boolean live = meta != null && meta.optBoolean("paper_trading", true)
+            boolean policyValid = meta != null
+                && meta.optBoolean("paper_trading", true)
                 && !meta.optBoolean("real_order_execution", false);
-            if (live) {
-                if (!loggedFirstScan) { loggedFirstScan = true; Log.i(TAG, "BACKGROUND_SCAN_OK"); }
-                JSONArray alerts = root.optJSONArray("alerts");
-                int count = notifyNewRadarAlerts(alerts == null ? new JSONArray() : alerts);
-                JSONArray radars = root.optJSONArray("radars");
-                updateStatus("رادارات مستقلة • " + (radars == null ? 6 : radars.length()) +
-                    " • اكتشافات جديدة: " + count);
-            } else {
-                updateStatus("الرادارات المستقلة غير متاحة حاليًا؛ لا يتم توليد بيانات صناعية");
+            if (!policyValid) {
+                updateStatus("البيانات غير جاهزة أو سياسة القراءة فقط غير مؤكدة؛ لم يتم إصدار اكتشاف.");
+                return;
             }
+            if (!loggedFirstScan) {
+                loggedFirstScan = true;
+                Log.i(TAG, "BACKGROUND_SCAN_OK");
+            } else {
+                Log.i(TAG, "BACKGROUND_SCAN_COMPLETED");
+            }
+
+            JSONArray alerts = root.optJSONArray("alerts");
+            int queued = notifyNewRadarAlerts(alerts == null ? new JSONArray() : alerts);
+            long falconNextCursor = root.optLong("falcon_eye_next_cursor_at", 0L);
+            long falconCursor = prefs().getLong(FALCON_CURSOR_KEY, 0L);
+            if (falconNextCursor > falconCursor) {
+                if (!prefs().edit().putLong(FALCON_CURSOR_KEY, falconNextCursor).commit()) {
+                    Log.e(TAG, "FALCON_EYE_CURSOR_SAVE_FAILED");
+                }
+            }
+
+            int delivered = deliverPendingAlerts();
+            JSONArray radars = root.optJSONArray("radars");
+            updateStatus("عين الصقر + الرادارات المستقلة • محفوظة بانتظار الإشعار: " +
+                getPendingAlertCount() + " • أُرسل الآن: " + delivered +
+                " • اكتشافات حُفظت: " + queued);
+            if (queued > 0) Log.i(TAG, "BACKGROUND_ALERTS_QUEUED:" + queued);
+            if (delivered > 0) Log.i(TAG, "BACKGROUND_ALERTS_NOTIFIED:" + delivered);
         } catch (Throwable error) {
-            if (!loggedFirstScan) { loggedFirstScan = true; Log.w(TAG, "BACKGROUND_SCAN_ERROR", error); }
-            Log.w(TAG, "Background unified radar fetch failed", error);
-            updateStatus("الرادارات المستقلة • لا يوجد اتصال الآن؛ عند انقطاع الإنترنت: حُفظ التنبيه على الخادم ثم أُرسل عند عودة الاتصال؛ ستُستكمل القراءة عند عودة الإنترنت");
+            Log.w(TAG, "Background radar fetch failed", error);
+            deliverPendingAlerts();
+            if (!hasValidatedInternetConnection()) {
+                offlineLogged = true;
+                Log.i(TAG, "BACKGROUND_OFFLINE_WAIT");
+                updateStatus("انقطع الإنترنت أثناء الفحص. بقيت خدمة الخلفية وقائمة التنبيهات المحفوظة؛ سيُعاد جلب تنبيهات الخادم عند عودة الاتصال.");
+            } else {
+                updateStatus("الاتصال متاح لكن خادم الرادار لم يستجب؛ بقيت الخدمة وقائمة التنبيهات محفوظة وستتم إعادة المحاولة.");
+            }
         }
     }
 
@@ -158,8 +208,8 @@ public final class RadarXBackgroundMonitorService extends Service {
                 String target = base + (base.contains("?") ? "&since=" : "?since=") + cursor;
                 connection = (HttpURLConnection) new URL(target).openConnection();
                 connection.setRequestMethod("GET");
-                connection.setConnectTimeout(12_000);
-                connection.setReadTimeout(30_000);
+                connection.setConnectTimeout(6_000);
+                connection.setReadTimeout(12_000);
                 connection.setInstanceFollowRedirects(false);
                 connection.setRequestProperty("Accept", "application/json");
                 connection.setRequestProperty("Accept-Encoding", "identity");
@@ -169,14 +219,180 @@ public final class RadarXBackgroundMonitorService extends Service {
                     continue;
                 }
                 if (status != 200) throw new IllegalStateException("HTTP_" + status);
-                return new JSONObject(new String(readAll(connection.getInputStream()), StandardCharsets.UTF_8));
+                JSONObject root = new JSONObject(new String(readAll(connection.getInputStream()), StandardCharsets.UTF_8));
+                appendFalconEyeAlerts(root);
+                return root;
             } catch (Exception e) {
                 last = e;
             } finally {
                 if (connection != null) connection.disconnect();
             }
         }
-        return fetchIndividualRadarAlerts(cursor, last);
+        JSONObject root = fetchIndividualRadarAlerts(cursor, last);
+        appendFalconEyeAlerts(root);
+        return root;
+    }
+
+    /**
+     * Falcon Eye is fetched through its own append-only alert log and own durable cursor.
+     * It is not inferred from the combined-feed cursor or from a price observed later.
+     */
+    private void appendFalconEyeAlerts(JSONObject root) {
+        long cursor = prefs().getLong(FALCON_CURSOR_KEY, 0L);
+        String[] endpoints = {BACKEND_FALCON_ALERTS, BACKEND_FALCON_ALERTS_FALLBACK};
+        for (String endpoint : endpoints) {
+            HttpURLConnection connection = null;
+            try {
+                String target = endpoint + "?since=" + cursor + "&limit=50&scan=0";
+                connection = (HttpURLConnection) new URL(target).openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(5_000);
+                connection.setReadTimeout(9_000);
+                connection.setInstanceFollowRedirects(false);
+                connection.setRequestProperty("Accept", "application/json");
+                connection.setRequestProperty("Accept-Encoding", "identity");
+                int status = connection.getResponseCode();
+                if (status != 200) {
+                    Log.w(TAG, "FALCON_EYE_FEED_HTTP_" + status);
+                    continue;
+                }
+
+                JSONObject body = new JSONObject(new String(readAll(connection.getInputStream()), StandardCharsets.UTF_8));
+                JSONObject meta = body.optJSONObject("meta");
+                if (meta == null || !meta.optBoolean("paper_trading", false)
+                        || meta.optBoolean("real_order_execution", true)
+                        || !"UNKNOWN".equals(meta.optString("confidence_score", ""))) {
+                    Log.e(TAG, "FALCON_EYE_FEED_POLICY_REJECTED");
+                    return;
+                }
+
+                JSONArray sourceAlerts = body.optJSONArray("alerts");
+                JSONArray combined = root.optJSONArray("alerts");
+                if (combined == null) combined = new JSONArray();
+                JSONArray radars = root.optJSONArray("radars");
+                if (radars == null) radars = new JSONArray();
+                Set<String> existingIds = new HashSet<>();
+                for (int i = 0; i < combined.length(); i++) {
+                    JSONObject existing = combined.optJSONObject(i);
+                    if (existing == null) continue;
+                    String id = existing.optString("id", "");
+                    if (!id.isEmpty()) existingIds.add(id);
+                }
+
+                long nextCursor = cursor;
+                int appended = 0;
+                if (sourceAlerts != null) {
+                    for (int i = 0; i < sourceAlerts.length(); i++) {
+                        JSONObject row = sourceAlerts.optJSONObject(i);
+                        if (row == null) continue;
+                        long at = alertTimestamp(row);
+                        if (at <= cursor) continue;
+                        if (at > nextCursor) nextCursor = at;
+
+                        JSONObject copy = new JSONObject(row.toString());
+                        if (copy.optString("radar", "").isEmpty()) copy.put("radar", "FALCON_EYE_RADAR");
+                        if (copy.optString("radar_name", "").isEmpty()) copy.put("radar_name", "Radar 9 — عين الصقر");
+                        double price = detectionPrice(copy);
+                        if (price > 0 && !copy.has("price_at_detection")) copy.put("price_at_detection", price);
+                        if (!copy.has("detected_at") && at > 0) copy.put("detected_at", at);
+                        String id = copy.optString("id", "");
+                        if (id.isEmpty()) {
+                            id = "FALCON:" + copy.optString("symbol", "UNKNOWN") + ":" + at;
+                            copy.put("id", id);
+                        }
+                        if (!existingIds.contains(id)) {
+                            combined.put(copy);
+                            existingIds.add(id);
+                            appended++;
+                        }
+                    }
+                }
+
+                root.put("alerts", combined);
+                boolean hasRadar = false;
+                for (int i = 0; i < radars.length(); i++) {
+                    if ("FALCON_EYE_RADAR".equals(radars.optString(i, ""))) hasRadar = true;
+                }
+                if (!hasRadar) radars.put("FALCON_EYE_RADAR");
+                root.put("radars", radars);
+                if (nextCursor > cursor) root.put("falcon_eye_next_cursor_at", nextCursor);
+                Log.i(TAG, "FALCON_EYE_FEED_OK alerts=" + appended + " cursor=" + cursor);
+                return;
+            } catch (Exception error) {
+                Log.w(TAG, "FALCON_EYE_FEED_FETCH_FAILED:" + endpoint, error);
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        }
+    }
+
+    private void registerConnectivityCallback() {
+        if (Build.VERSION.SDK_INT < 24 || connectivityCallback != null) return;
+        connectivityManager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        if (connectivityManager == null) return;
+        connectivityCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                if (!hasValidatedInternetConnection()) return;
+                offlineLogged = false;
+                Log.i(TAG, "BACKGROUND_NETWORK_AVAILABLE");
+                updateStatus("عاد الإنترنت؛ يجري جلب تنبيهات عين الصقر المحفوظة وإرسال سعرها ووقت اكتشافها الأصليين.");
+                requestImmediateScan();
+            }
+
+            @Override
+            public void onLost(Network network) {
+                if (!hasValidatedInternetConnection()) {
+                    Log.i(TAG, "BACKGROUND_NETWORK_LOST");
+                    requestImmediateScan();
+                }
+            }
+        };
+        try {
+            connectivityManager.registerDefaultNetworkCallback(connectivityCallback);
+        } catch (Throwable error) {
+            connectivityCallback = null;
+            Log.w(TAG, "NETWORK_CALLBACK_REGISTER_FAILED", error);
+        }
+    }
+
+    private void unregisterConnectivityCallback() {
+        if (Build.VERSION.SDK_INT < 24 || connectivityManager == null || connectivityCallback == null) return;
+        try {
+            connectivityManager.unregisterNetworkCallback(connectivityCallback);
+        } catch (Throwable ignored) {
+            Log.w(TAG, "NETWORK_CALLBACK_UNREGISTER_FAILED");
+        }
+        connectivityCallback = null;
+    }
+
+    private void requestImmediateScan() {
+        ScheduledExecutorService current = executor;
+        if (stopping || current == null || current.isShutdown()) return;
+        try {
+            current.execute(() -> {
+                if (stopping) return;
+                deliverPendingAlerts();
+                scanOnceSafe();
+            });
+        } catch (Throwable error) {
+            Log.w(TAG, "IMMEDIATE_SCAN_SCHEDULE_FAILED", error);
+        }
+    }
+
+    private boolean hasValidatedInternetConnection() {
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        if (cm == null) return false;
+        if (Build.VERSION.SDK_INT >= 23) {
+            Network active = cm.getActiveNetwork();
+            if (active == null) return false;
+            NetworkCapabilities caps = cm.getNetworkCapabilities(active);
+            return caps != null
+                && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+        }
+        android.net.NetworkInfo info = cm.getActiveNetworkInfo();
+        return info != null && info.isConnected();
     }
 
     private JSONObject fetchIndividualRadarAlerts(long cursor, Exception prior) throws Exception {
@@ -249,28 +465,187 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     private int notifyNewRadarAlerts(JSONArray alerts) {
         Set<String> seen = new HashSet<>(prefs().getStringSet("radar_alert_seen_ids", new HashSet<>()));
+        JSONArray pending = loadPendingAlerts();
+        Set<String> queuedIds = pendingAlertIds(pending);
         long cursor = prefs().getLong("radar_alert_cursor_at", 0L);
         long maxAt = cursor;
-        int count = 0;
-        for (int i = alerts.length() - 1; i >= 0; i--) {
+        int added = 0;
+
+        for (int i = 0; i < alerts.length(); i++) {
             JSONObject alert = alerts.optJSONObject(i);
             if (alert == null) continue;
-            long at = alert.optLong("processed_at", alert.optLong("detected_at", 0L));
+            long at = alertTimestamp(alert);
             if (at > maxAt) maxAt = at;
             if (!alert.optBoolean("eligible", true)) continue;
-            String id = alert.optString("id", "");
-            if (id.isEmpty() || seen.contains(id)) continue;
-            notifyRadarAlert(alert);
-            seen.add(id);
-            count++;
+            String id = alert.optString("id", "").trim();
+            if (id.isEmpty()) id = "RADAR:" + alert.optString("radar", "UNKNOWN") + ":"
+                + alert.optString("symbol", "UNKNOWN") + ":" + at + ":" + detectionPrice(alert);
+            if (seen.contains(id) || queuedIds.contains(id)) continue;
+            if (pending.length() >= MAX_PENDING_ALERTS) {
+                Log.e(TAG, "PENDING_ALERT_QUEUE_FULL; preserving queued alerts");
+                break;
+            }
+            pending.put(compactAlert(alert, id, at));
+            queuedIds.add(id);
+            added++;
         }
-        while (seen.size() > 300) seen.remove(seen.iterator().next());
-        prefs().edit().putLong("radar_alert_cursor_at", maxAt)
-            .putStringSet("radar_alert_seen_ids", seen).apply();
-        return count;
+
+        if (!prefs().edit().putString(PENDING_ALERTS_KEY, pending.toString())
+                .putLong("radar_alert_cursor_at", maxAt).commit()) {
+            throw new IllegalStateException("RADAR_ALERT_QUEUE_PERSIST_FAILED");
+        }
+        return added;
     }
 
-    private void notifyRadarAlert(JSONObject alert) {
+    private JSONArray loadPendingAlerts() {
+        try {
+            return new JSONArray(prefs().getString(PENDING_ALERTS_KEY, "[]"));
+        } catch (Exception error) {
+            Log.e(TAG, "PENDING_ALERT_QUEUE_INVALID_JSON", error);
+            return new JSONArray();
+        }
+    }
+
+    private Set<String> pendingAlertIds(JSONArray pending) {
+        Set<String> ids = new HashSet<>();
+        for (int i = 0; i < pending.length(); i++) {
+            JSONObject alert = pending.optJSONObject(i);
+            if (alert == null) continue;
+            String id = alert.optString("id", "");
+            if (!id.isEmpty()) ids.add(id);
+        }
+        return ids;
+    }
+
+    private int getPendingAlertCount() {
+        return loadPendingAlerts().length();
+    }
+
+    private int deliverPendingAlerts() {
+        JSONArray pending = loadPendingAlerts();
+        if (pending.length() == 0) return 0;
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (manager == null) return 0;
+        if (Build.VERSION.SDK_INT >= 24 && !manager.areNotificationsEnabled()) {
+            Log.w(TAG, "PENDING_ALERTS_WAITING_FOR_NOTIFICATION_PERMISSION:" + pending.length());
+            return 0;
+        }
+        if (Build.VERSION.SDK_INT >= 26) {
+            NotificationChannel channel = manager.getNotificationChannel(CHANNEL_RADAR_ALERTS);
+            if (channel != null && channel.getImportance() == NotificationManager.IMPORTANCE_NONE) {
+                Log.w(TAG, "PENDING_ALERTS_WAITING_FOR_ENABLED_CHANNEL:" + pending.length());
+                return 0;
+            }
+        }
+
+        Set<String> seen = new HashSet<>(prefs().getStringSet("radar_alert_seen_ids", new HashSet<>()));
+        JSONArray remaining = new JSONArray();
+        int delivered = 0;
+        for (int i = 0; i < pending.length(); i++) {
+            JSONObject alert = pending.optJSONObject(i);
+            if (alert == null) continue;
+            String id = alert.optString("id", "");
+            if (!id.isEmpty() && seen.contains(id)) continue;
+            try {
+                if (notifyRadarAlert(alert)) {
+                    if (!id.isEmpty()) seen.add(id);
+                    delivered++;
+                } else {
+                    remaining.put(alert);
+                }
+            } catch (Throwable error) {
+                Log.w(TAG, "PENDING_ALERT_NOTIFY_FAILED:" + id, error);
+                remaining.put(alert);
+            }
+        }
+        while (seen.size() > 500) seen.remove(seen.iterator().next());
+        if (!prefs().edit().putString(PENDING_ALERTS_KEY, remaining.toString())
+                .putStringSet("radar_alert_seen_ids", seen).commit()) {
+            Log.e(TAG, "PENDING_ALERT_DELIVERY_STATE_SAVE_FAILED");
+        }
+        return delivered;
+    }
+
+    private JSONObject compactAlert(JSONObject source, String id, long at) {
+        JSONObject out = new JSONObject();
+        try {
+            out.put("id", id);
+            out.put("radar", source.optString("radar", "UNKNOWN_RADAR"));
+            out.put("radar_name", source.optString("radar_name", radarNameFor(source.optString("radar", ""))));
+            out.put("symbol", source.optString("symbol", "UNKNOWN"));
+            out.put("event", source.optString("event", "RADAR_ALERT"));
+            out.put("market", source.optString("market", "SPOT"));
+            out.put("direction", source.optString("direction", "UNKNOWN"));
+            out.put("opportunity_score", source.optDouble("opportunity_score", source.optDouble("setup_score", 0.0)));
+            out.put("potential_label", source.optString("potential_label", source.optString("stage", "RADAR_ALERT")));
+            out.put("detected_at", source.optLong("detected_at", at));
+            out.put("processed_at", source.optLong("processed_at", at));
+            out.put("detected_at_iso", source.optString("detected_at_iso", ""));
+            out.put("detected_time_12h", source.optString("detected_time_12h", ""));
+            out.put("detected_timezone", source.optString("detected_timezone", "Asia/Aden"));
+            double price = detectionPrice(source);
+            out.put("price_at_detection", price);
+            out.put("price_change_24h", source.optDouble("price_change_24h", 0.0));
+            out.put("source", source.optString("source", "Binance Public REST"));
+            out.put("eligible", source.optBoolean("eligible", true));
+            out.put("paper_trading", true);
+            out.put("real_order_execution", false);
+            out.put("confidence_score", "UNKNOWN");
+            out.put("queued_at_ms", System.currentTimeMillis());
+            JSONArray reasons = source.optJSONArray("reasons");
+            if (reasons != null) {
+                JSONArray copied = new JSONArray();
+                for (int i = 0; i < Math.min(5, reasons.length()); i++) copied.put(reasons.optString(i, ""));
+                out.put("reasons", copied);
+            }
+            JSONArray risks = source.optJSONArray("risk_flags");
+            if (risks != null) {
+                JSONArray copied = new JSONArray();
+                for (int i = 0; i < Math.min(5, risks.length()); i++) copied.put(risks.optString(i, ""));
+                out.put("risk_flags", copied);
+            }
+        } catch (Exception error) {
+            Log.w(TAG, "ALERT_COMPACTION_FAILED", error);
+        }
+        return out;
+    }
+
+    private static long alertTimestamp(JSONObject alert) {
+        if (alert == null) return 0L;
+        long detected = alert.optLong("detected_at", alert.optLong("detectedAt", 0L));
+        return detected > 0L ? detected : alert.optLong("processed_at", 0L);
+    }
+
+    private static double detectionPrice(JSONObject alert) {
+        if (alert == null) return 0.0;
+        String[] keys = {"price_at_detection", "detected_price", "price", "last_price", "lastPrice", "entry_price", "reference_price"};
+        double value = positiveNumber(alert, keys);
+        if (value > 0.0) return value;
+        String[] nested = {"falcon_eye", "snapshot", "market", "metrics", "deep_scan"};
+        for (String key : nested) {
+            JSONObject object = alert.optJSONObject(key);
+            value = positiveNumber(object, keys);
+            if (value > 0.0) return value;
+            value = positiveNumber(object == null ? null : object.optJSONObject("metrics"), keys);
+            if (value > 0.0) return value;
+        }
+        return 0.0;
+    }
+
+    private static double positiveNumber(JSONObject object, String[] keys) {
+        if (object == null) return 0.0;
+        for (String key : keys) {
+            double value = object.optDouble(key, 0.0);
+            if (Double.isFinite(value) && value > 0.0) return value;
+        }
+        return 0.0;
+    }
+
+    private static int notificationId(String id) {
+        return ALERT_NOTIFICATION_BASE + Math.abs(id.hashCode() % 1_000_000);
+    }
+
+    private boolean notifyRadarAlert(JSONObject alert) {
         String radar = alert.optString("radar", "UNKNOWN_RADAR");
         String radarName = alert.optString("radar_name", radarNameFor(radar));
         String symbol = alert.optString("symbol", "UNKNOWN");
@@ -278,9 +653,11 @@ public final class RadarXBackgroundMonitorService extends Service {
             ? alert.optDouble("opportunity_score", 0.0)
             : alert.optDouble("setup_score", 0.0);
         String stage = alert.optString("potential_label", alert.optString("event", "RADAR_ALERT"));
-        long detectedAt = alert.optLong("detected_at", alert.optLong("processed_at", 0L));
+        long detectedAt = alertTimestamp(alert);
         String detectedText = alert.optString("detected_time_12h", "");
         if (detectedText.isEmpty()) detectedText = formatTimestamp12h(detectedAt);
+        double detectedPrice = detectionPrice(alert);
+        String priceText = detectedPrice > 0.0 ? priceFmt.format(detectedPrice) : "غير مسجل في لقطة الاكتشاف";
 
         JSONArray reasons = alert.optJSONArray("reasons");
         StringBuilder reasonText = new StringBuilder();
@@ -293,8 +670,10 @@ public final class RadarXBackgroundMonitorService extends Service {
 
         String title = "RadarX • " + radarName + " • " + symbol;
         String body = "الرادار: " + radarName + " • " + symbol +
+            " • سعر وقت الاكتشاف: " + priceText +
             " • Score " + scoreFmt.format(score) + " • " + stage;
-        String timing = "وقت اكتشاف الخادم/العملة: " + detectedText + " • وقت إرسال الإشعار: " + formatTimestamp12h(System.currentTimeMillis()) + " • Asia/Aden • 12h";
+        String timing = "وقت الاكتشاف: " + detectedText + " • وقت وصول الإشعار للهاتف: " +
+            formatTimestamp12h(System.currentTimeMillis()) + " • Asia/Aden • 12h";
 
         Intent open = new Intent(this, MainActivity.class);
         PendingIntent pending = PendingIntent.getActivity(
@@ -309,6 +688,7 @@ public final class RadarXBackgroundMonitorService extends Service {
             .setStyle(new Notification.BigTextStyle().bigText(
                 body + " • " + (reasonText.length() > 0 ? reasonText : "إشعار من رادار مستقل") +
                 " • " + timing +
+                " • السعر هو لقطة وقت الاكتشاف، وليس السعر الحالي بعد التأخير" +
                 " • شموع مغلقة فقط • Paper Trading فقط • لا يوجد أمر تداول حقيقي"
             ))
             .setContentIntent(pending)
@@ -317,9 +697,10 @@ public final class RadarXBackgroundMonitorService extends Service {
             .setPriority(Notification.PRIORITY_HIGH);
 
         NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        if (manager != null) {
-            manager.notify(45000 + Math.abs(symbol.hashCode() % 10000), builder.build());
-        }
+        if (manager == null) return false;
+        String alertId = alert.optString("id", radar + ":" + symbol + ":" + detectedAt);
+        manager.notify(notificationId(alertId), builder.build());
+        return true;
     }
 
     private static String radarNameFor(String radar) {
@@ -334,6 +715,7 @@ public final class RadarXBackgroundMonitorService extends Service {
             case "ALMUQAWIM_RADAR": return "Radar 7 — المقاوم";
             case "EARLY_EXPANSION_RADAR": return "Radar 8 — البرق";
             case "COIN_HUNTER_RADAR": return "🎯 صائد العملات";
+            case "FALCON_EYE_RADAR": return "Radar 9 — عين الصقر";
             default: return "RadarX";
         }
     }
@@ -403,7 +785,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         NotificationChannel status = new NotificationChannel(
             CHANNEL_STATUS, "RadarX Background Monitor", NotificationManager.IMPORTANCE_LOW
         );
-        status.setDescription("حالة متابعة رادار الحركة في الخلفية");
+        status.setDescription("حالة خدمة الخلفية؛ تنتظر عند انقطاع الإنترنت وتستأنف جلب التنبيهات عند عودته");
         manager.createNotificationChannel(status);
 
         NotificationChannel alerts = new NotificationChannel(
@@ -433,6 +815,7 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     private void stopMonitoring() {
         stopping = true;
+        unregisterConnectivityCallback();
         if (executor != null) executor.shutdownNow();
         saveRunning(false);
         if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE);
@@ -443,6 +826,7 @@ public final class RadarXBackgroundMonitorService extends Service {
     @Override
     public void onDestroy() {
         stopping = true;
+        unregisterConnectivityCallback();
         if (executor != null) executor.shutdownNow();
         saveRunning(false);
         super.onDestroy();
