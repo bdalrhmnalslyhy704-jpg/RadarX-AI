@@ -3,196 +3,298 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#05080b">
-<title>🧠 مركز المحللين العشرين — RadarX</title>
+<meta name="theme-color" content="#04070b">
+<title>🧠 مركز القيادة — محللو RadarX 20</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;min-height:100%;background:#05080b;color:#eef7f8;font-family:Arial,sans-serif}
-body{background:radial-gradient(circle at 8% 0,#0c495b55,transparent 35%),radial-gradient(circle at 92% 8%,#3b176044,transparent 30%),linear-gradient(180deg,#061016,#04070a 70%,#070d11)}
-main{width:min(1180px,100%);margin:auto;padding:12px 14px 42px}
-.hero{border:1px solid #285b6b;border-radius:28px;padding:18px;background:linear-gradient(145deg,#0c2129,#09141c 55%,#130d20);box-shadow:0 20px 70px #0009;position:relative;overflow:hidden}
-.hero:after{content:'';position:absolute;width:320px;height:320px;left:-130px;top:-160px;border-radius:50%;background:radial-gradient(circle,#26d0ff2a,transparent 65%)}
-.badge{display:inline-flex;padding:8px 11px;border:1px solid #34768a;border-radius:999px;background:#071c24;color:#77e7ff;font-size:10px;font-weight:900}
-h1{font-size:30px;margin:12px 0 6px;position:relative;z-index:2}
-.sub{font-size:11px;line-height:1.9;color:#a9bcc4;max-width:1000px;position:relative;z-index:2}
-.actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px;position:relative;z-index:2}
-button{border:0;border-radius:14px;padding:12px 16px;font-weight:900;font-size:12px}
-.primary{background:linear-gradient(135deg,#55e6ff,#45b7ff);color:#031017}
-.dark{background:#0d171e;border:1px solid #27404a;color:#d9eef2}
-.status{margin-top:12px;padding:12px 14px;border-radius:15px;border:1px solid #234452;background:#08131a;color:#a9c0c7;font-size:11px}
-.metricGrid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:12px}
-.metric{padding:11px;border:1px solid #223c47;border-radius:16px;background:#071118}.metric b{display:block;font-size:20px}.metric span{display:block;margin-top:3px;color:#77909a;font-size:9px}
-.panel{margin-top:12px;padding:14px;border:1px solid #213740;border-radius:22px;background:#071015e8}
-.panel h2{font-size:14px;margin:0 0 10px}
-.cards{display:grid;gap:11px}
-.card{border:1px solid #233d47;border-radius:20px;padding:13px;background:linear-gradient(150deg,#0a151b,#071015)}
-.cardStrong{border-color:#2c7f93;box-shadow:0 10px 28px #20cfff12}
-.top{display:flex;justify-content:space-between;gap:10px;align-items:center}.sym{font-size:19px;font-weight:1000}.score{font-size:20px;font-weight:1000;color:#76e7ff}
-.pills{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.pill{padding:6px 8px;border-radius:999px;border:1px solid #28434d;background:#0c1820;color:#aec5cb;font-size:9px}.good{border-color:#287d61;color:#7cf1c0;background:#082018}
-.bar{height:9px;border-radius:999px;overflow:hidden;background:#0a141a;border:1px solid #1a343f;margin-top:10px}.fill{height:100%;background:linear-gradient(90deg,#3bc0ff,#6bf5d0)}
-.facts{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:10px}.fact{padding:8px;border:1px solid #1e343c;border-radius:12px;background:#081218}.fact b{display:block;font-size:12px}.fact span{display:block;color:#718993;font-size:8px;margin-top:2px}
-.reasons{margin-top:10px;font-size:10px;line-height:1.8;color:#c5d4d8}
-.pipeline{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:11px}.an{padding:8px;border-radius:12px;border:1px solid #1d343e;background:#081117}.an b{display:block;font-size:9px}.an small{display:block;color:#6f8992;font-size:8px;margin-top:3px}.an strong{display:block;margin-top:5px;font-size:11px;color:#77e7ff}
-.details{display:none;margin-top:10px;border-top:1px solid #20343c;padding-top:10px}.details.open{display:block}
-.analystList{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.analyst{padding:9px;border:1px solid #1e343c;border-radius:12px;background:#081218}.analyst .row{display:flex;justify-content:space-between;gap:8px}.analyst b{font-size:9px}.analyst .num{font-size:12px;color:#76e7ff;font-weight:900}.analyst p{margin:5px 0 0;color:#8ea4ab;font-size:8px;line-height:1.7}.detailTitle{font-size:11px;color:#d7e8ed;margin-bottom:8px}
-.note{padding:10px;border:1px dashed #35505a;border-radius:14px;color:#8ea5ad;font-size:9px;line-height:1.8}
-.empty{text-align:center;padding:28px;color:#718992;font-size:10px}
-@media(max-width:820px){.metricGrid{grid-template-columns:repeat(3,1fr)}.facts{grid-template-columns:repeat(3,1fr)}.pipeline{grid-template-columns:repeat(3,1fr)}}
-@media(max-width:560px){main{padding:10px 10px 36px}h1{font-size:25px}.metricGrid{grid-template-columns:repeat(2,1fr)}.facts{grid-template-columns:repeat(2,1fr)}.pipeline{grid-template-columns:repeat(2,1fr)}.analystList{grid-template-columns:1fr}}
+html,body{margin:0;min-height:100%;background:#03060a;color:#edf8fb;font-family:Arial,sans-serif}
+body{background:
+radial-gradient(circle at 12% 0,#1b566d55,transparent 30%),
+radial-gradient(circle at 92% 5%,#6f216955,transparent 27%),
+radial-gradient(circle at 50% 100%,#173b3f44,transparent 35%),
+linear-gradient(180deg,#061017,#03060a 68%,#061015)}
+main{width:min(1240px,100%);margin:auto;padding:11px 11px 40px}
+.hero{border:1px solid #2a6578;border-radius:28px;padding:18px;background:linear-gradient(145deg,#0a2028,#07121a 56%,#130b19);box-shadow:0 22px 80px #000b;position:relative;overflow:hidden}
+.hero:before{content:'';position:absolute;inset:-80px auto auto -90px;width:340px;height:340px;border-radius:50%;background:radial-gradient(circle,#3ce4ff30,transparent 68%);pointer-events:none}
+.badge{display:inline-flex;padding:8px 11px;border-radius:999px;border:1px solid #397a8d;background:#071a22;color:#82ebff;font-size:10px;font-weight:1000;letter-spacing:.3px}
+.head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;position:relative;z-index:2}
+h1{font-size:29px;line-height:1.2;margin:12px 0 6px}.sub{font-size:11px;line-height:1.9;color:#a7bac3;max-width:900px}
+.liveDot{display:inline-flex;align-items:center;gap:6px;margin-top:11px;padding:8px 10px;border:1px solid #234951;border-radius:999px;background:#071118;color:#87a8b2;font-size:9px;font-weight:900}
+.dot{width:8px;height:8px;border-radius:50%;background:#62f3b5;box-shadow:0 0 14px #62f3b5}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:13px}
+button{border:0;border-radius:14px;padding:12px 15px;font-weight:1000;font-size:11px}
+.primary{background:linear-gradient(135deg,#66efff,#4cc2ff);color:#021017;box-shadow:0 8px 24px #42d9ff25}.dark{background:#0c171e;border:1px solid #29434d;color:#d8edf2}
+.status{margin-top:11px;padding:11px 13px;border-radius:15px;border:1px solid #24434f;background:#071219;color:#afc5cc;font-size:10px;line-height:1.8}
+.dashboard{display:grid;grid-template-columns:1.1fr 1fr;gap:10px;margin-top:10px}
+.command{border:1px solid #213d47;border-radius:22px;background:#071116e8;padding:14px}
+.command h2{margin:0 0 10px;font-size:13px}
+.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:7px}
+.metric{padding:10px;border:1px solid #1d3540;border-radius:15px;background:#08131a}
+.metric b{display:block;font-size:20px}.metric span{display:block;color:#728b95;font-size:8px;margin-top:3px}
+.gaugeRow{display:grid;grid-template-columns:150px 1fr;gap:13px;align-items:center}
+.gauge{width:142px;height:142px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#4ce4ff 0deg,var(--deg)deg,#13232b var(--deg)deg 360deg);position:relative}
+.gauge:after{content:'';position:absolute;inset:13px;border-radius:50%;background:#071117;border:1px solid #1e3a44}
+.gaugeIn{position:relative;z-index:2;text-align:center}.gNum{font-size:29px;font-weight:1000;color:#83ecff}.gLbl{font-size:8px;color:#78919b;margin-top:2px}
+.scoreLines{display:grid;gap:7px}.line{padding:8px 9px;border:1px solid #1c343e;border-radius:13px;background:#08131a}.lineTop{display:flex;justify-content:space-between;gap:8px;font-size:9px;color:#9eb5bd}.bar{height:8px;margin-top:6px;border-radius:999px;background:#0a161d;overflow:hidden}.fill{height:100%;background:linear-gradient(90deg,#46cfff,#6af0c2);border-radius:999px}
+.panel{margin-top:10px;padding:13px;border:1px solid #203943;border-radius:22px;background:#071015e9}.panel h2{font-size:13px;margin:0 0 10px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}.chip{padding:7px 9px;border-radius:999px;border:1px solid #28434d;background:#09151b;color:#9eb8c1;font-size:8px;font-weight:900}.chip.ok{border-color:#2a7358;background:#08201a;color:#7ef0c0}.chip.warn{border-color:#76563a;background:#20170f;color:#efc891}.chip.bad{border-color:#7a3b42;background:#220f13;color:#f1a5ad}
+.cards{display:grid;gap:10px}
+.card{padding:12px;border-radius:19px;border:1px solid #203944;background:linear-gradient(145deg,#09151b,#061015)}.strongCard{border-color:#347d91;box-shadow:0 12px 35px #1ec5ea16}
+.cardHead{display:flex;justify-content:space-between;align-items:center;gap:10px}.sym{font-size:19px;font-weight:1000}.score{font-size:23px;font-weight:1000;color:#7feaff}
+.meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}.tag{padding:6px 8px;border:1px solid #233d47;border-radius:999px;color:#a6bcc4;background:#0a161d;font-size:8px}.tag.good{border-color:#28795f;background:#082119;color:#79efbd}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:9px}.fact{padding:8px;border-radius:12px;border:1px solid #1a313a;background:#081218}.fact b{display:block;font-size:12px}.fact span{display:block;color:#708992;font-size:7px;margin-top:2px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:9px}.miniPanel{padding:9px;border:1px solid #1a3039;border-radius:13px;background:#081218}.miniPanel h3{font-size:8px;margin:0 0 7px;color:#93acb4}
+.matrix{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:9px}.group{padding:8px;border-radius:12px;border:1px solid #1a323b;background:#081218}.group b{display:block;font-size:8px}.group strong{display:block;font-size:13px;color:#7ce9ff;margin-top:4px}.group small{display:block;color:#708991;font-size:7px;margin-top:2px}
+details{margin-top:9px;border-top:1px solid #1b3038;padding-top:8px}summary{cursor:pointer;font-size:9px;color:#b8cbd1;font-weight:900}
+.analysts{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:8px}.a{padding:8px;border-radius:11px;border:1px solid #1a3038;background:#081218}.aTop{display:flex;justify-content:space-between;gap:6px}.a b{font-size:8px}.a .num{font-size:11px;color:#7feaff;font-weight:1000}.a small{display:block;color:#78909a;font-size:7px;line-height:1.7;margin-top:3px}.riskBox{margin-top:8px;padding:9px;border:1px dashed #655047;border-radius:12px;background:#17100e;color:#c6a89a;font-size:8px;line-height:1.7}
+.note{padding:10px;border:1px dashed #314b54;border-radius:14px;color:#8ea7af;font-size:8px;line-height:1.8}
+.empty{text-align:center;padding:28px 10px;color:#708991;font-size:10px}
+@media(max-width:900px){.dashboard{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:620px){main{padding:8px 8px 32px}.head{display:block}h1{font-size:25px}.metrics{grid-template-columns:repeat(2,1fr)}.gaugeRow{grid-template-columns:115px 1fr}.gauge{width:110px;height:110px}.gauge:after{inset:11px}.gNum{font-size:23px}.grid4{grid-template-columns:repeat(2,1fr)}.two{grid-template-columns:1fr}.matrix{grid-template-columns:repeat(2,1fr)}.analysts{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 <main>
 <section class="hero">
-  <div class="badge">🧠 MULTI-ANALYST INTELLIGENCE • SPOT • PAPER ONLY</div>
-  <h1>مركز المحللين العشرين</h1>
-  <div class="sub">كل عملة تدخل المنظومة تمر على <b>19 محللًا متخصصًا مستقلًا</b> ثم على <b>المحلل النهائي</b>. لا نستخدم مؤشرًا واحدًا ولا نعتبر صفقة كبيرة وحدها دليلًا. البيانات غير الصالحة، السيولة الضعيفة، التمدد العالي، أو خطر الفخ يمكن أن يسقط العملة حتى لو كان الإجماع مرتفعًا.</div>
+  <div class="head">
+    <div>
+      <div class="badge">🧠 RADARX X-FACTOR • 20 ANALYSTS • SPOT • PAPER ONLY</div>
+      <h1>مركز القيادة — المحللون العشرون</h1>
+      <div class="sub">19 محللًا متخصصًا يعملون كلٌ من زاويته، ثم <b>المحلل النهائي</b> يدمج الأوزان والتوافق بين المجموعات ويبحث عن التناقضات وبصمة ما قبل الانفجار. لا نختلق إشارة ولا نسمّي البيانات غير الصالحة فرصة.</div>
+      <div class="liveDot"><span class="dot"></span><span id="liveText">في انتظار أول لقطة حيّة</span></div>
+    </div>
+  </div>
   <div class="actions">
-    <button class="primary" id="scanBtn">🧠 ابدأ التحليل الكامل</button>
-    <button class="dark" id="refreshBtn">تحديث من آخر لقطة</button>
+    <button class="primary" id="scanBtn">🧠 تحليل السوق الآن</button>
+    <button class="dark" id="refreshBtn">↻ آخر نتيجة</button>
   </div>
-  <div class="status" id="status">جاهز — لم يبدأ تحليل السوق بعد.</div>
-  <div class="status" id="diagnostics">الخط: اكتشاف السوق → بوابة البيانات → 19 محللًا → المحلل النهائي</div>
-  <div class="metricGrid">
-    <div class="metric"><b id="analystCount">20</b><span>عدد المحللين</span></div>
-    <div class="metric"><b id="scanned">—</b><span>عملات دخلت المختبر</span></div>
-    <div class="metric"><b id="strong">—</b><span>مرشح قوي</span></div>
-    <div class="metric"><b id="candidate">—</b><span>مرشح</span></div>
-    <div class="metric"><b id="rejected">—</b><span>مرفوض</span></div>
+  <div class="status" id="status">جاري تجهيز مركز القيادة…</div>
+</section>
+
+<section class="dashboard">
+  <div class="command">
+    <h2>⚡ لوحة القيادة</h2>
+    <div class="metrics">
+      <div class="metric"><b id="analystCount">20</b><span>محللون</span></div>
+      <div class="metric"><b id="scanned">—</b><span>دخل المختبر</span></div>
+      <div class="metric"><b id="strong">—</b><span>مرشح قوي</span></div>
+      <div class="metric"><b id="candidate">—</b><span>مرشح</span></div>
+      <div class="metric"><b id="rejected">—</b><span>مرفوض</span></div>
+    </div>
+    <div style="margin-top:9px" class="chips" id="marketChips"></div>
+  </div>
+  <div class="command">
+    <h2>🎯 أقوى حالة في اللقطة</h2>
+    <div class="gaugeRow">
+      <div class="gauge" id="gauge" style="--deg:0deg"><div class="gaugeIn"><div class="gNum" id="bestScore">—</div><div class="gLbl">X-FACTOR</div></div></div>
+      <div class="scoreLines">
+        <div class="line"><div class="lineTop"><span>بصمة مبكرة</span><b id="bestEarly">—</b></div><div class="bar"><div class="fill" id="earlyBar" style="width:0%"></div></div></div>
+        <div class="line"><div class="lineTop"><span>توافق المحللين</span><b id="bestAgree">—</b></div><div class="bar"><div class="fill" id="agreeBar" style="width:0%"></div></div></div>
+        <div class="line"><div class="lineTop"><span>توافق المجموعات</span><b id="bestGroup">—</b></div><div class="bar"><div class="fill" id="groupBar" style="width:0%"></div></div></div>
+        <div class="line"><div class="lineTop"><span>تغطية الأدلة</span><b id="bestCoverage">—</b></div><div class="bar"><div class="fill" id="coverageBar" style="width:0%"></div></div></div>
+      </div>
+    </div>
   </div>
 </section>
 
 <section class="panel">
-  <h2>🔬 خط التحليل</h2>
-  <div class="pipeline">
-    <div class="an"><b>1. Discovery</b><small>اكتشاف العملات المبكرة</small></div>
-    <div class="an"><b>2. Data Gate</b><small>سلامة الشموع والبيانات</small></div>
-    <div class="an"><b>3. 19 Specialists</b><small>تحليل مستقل متعدد الزوايا</small></div>
-    <div class="an"><b>4. Chief Analyst</b><small>إجماع + فلاتر خطر</small></div>
-  </div>
+  <h2>🔬 مصفوفة المختبر</h2>
+  <div class="chips" id="diagnostics"></div>
 </section>
 
 <section class="panel">
-  <h2>🏆 ترتيب المختبر</h2>
+  <h2>🏆 ترتيب فرص المختبر</h2>
   <div class="cards" id="cards"></div>
 </section>
 
 <section class="panel">
-  <div class="note">التحليل هنا خوارزمي مبني على بيانات Binance العامة وقراءة السوق فقط. لا يوجد تنفيذ أوامر حقيقية. كل نتيجة تبقى مراقبة/مرشحًا وليست ضمانًا للصعود.</div>
+  <div class="note">البيانات من مصادر السوق العامة، والتحليل Spot/Paper فقط. <b>confidence_score=UNKNOWN</b> ولا يوجد تنفيذ أوامر حقيقية. الإشارة القوية لا تعني ضمان الربح.</div>
 </section>
 </main>
 
 <script type="module">
 import {getMultiAnalyst} from './radarx-backend-client.mjs';
-const cards=document.getElementById('cards'),status=document.getElementById('status');
-const els={scanned:document.getElementById('scanned'),strong:document.getElementById('strong'),candidate:document.getElementById('candidate'),rejected:document.getElementById('rejected'),diagnostics:document.getElementById('diagnostics')};
-let latest=null,busy=false;
-const cacheKey='radarx.multiAnalyst.v1',cacheTtl=90*1000;
-function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
-function n(v,d=0){const x=Number(v);return Number.isFinite(x)?x:d;}
-function pct(v){return Number.isFinite(Number(v))?n(v).toFixed(1)+'%':'—';}
-function loadCache(){try{const x=JSON.parse(sessionStorage.getItem(cacheKey)||'null');return x&&Date.now()-n(x.at,0)<cacheTtl?x.body:null;}catch{return null;}}
-function saveCache(body){try{sessionStorage.setItem(cacheKey,JSON.stringify({at:Date.now(),body}));}catch{}}
-function verdictLabel(v){
-  return v==='STRONG_CANDIDATE'?'مرشح قوي':v==='CANDIDATE'?'مرشح':v==='WATCH'?'مراقبة':'مرفوض';
+
+const cards=document.getElementById('cards');
+const status=document.getElementById('status');
+const liveText=document.getElementById('liveText');
+const dEls={
+  diagnostics:document.getElementById('diagnostics'),
+  marketChips:document.getElementById('marketChips'),
+  scanned:document.getElementById('scanned'),
+  strong:document.getElementById('strong'),
+  candidate:document.getElementById('candidate'),
+  rejected:document.getElementById('rejected'),
+  bestScore:document.getElementById('bestScore'),
+  bestEarly:document.getElementById('bestEarly'),
+  bestAgree:document.getElementById('bestAgree'),
+  bestGroup:document.getElementById('bestGroup'),
+  bestCoverage:document.getElementById('bestCoverage'),
+  earlyBar:document.getElementById('earlyBar'),
+  agreeBar:document.getElementById('agreeBar'),
+  groupBar:document.getElementById('groupBar'),
+  coverageBar:document.getElementById('coverageBar'),
+  gauge:document.getElementById('gauge')
+};
+let busy=false;
+let latest=null;
+let lastLiveAt=0;
+const cacheKey='radarx.multiAnalyst.v3';
+const cacheTtl=50*1000;
+
+function esc(v){
+  return String(v==null?'':v).replace(/[&<>"']/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];});
 }
-function render(body){
-  latest=body||null;
-  const list=Array.isArray(body && body.candidates)?body.candidates:[];
-  const s=body && body.summary||{};
-  const d=body && body.diagnostics||{};
-  els.scanned.textContent=String(n(body && body.universe && body.universe.scanned,0));
-  els.strong.textContent=String(n(s.strong_candidates,0));
-  els.candidate.textContent=String(n(s.candidates,0));
-  els.rejected.textContent=String(n(s.rejected,0));
-  if(els.diagnostics){
-    els.diagnostics.textContent='تشخيص: '+n(d.attempted_analyses,0)+' دخلت المختبر • '+n(d.successful_analyses,0)+' اجتازت بوابة البيانات • '+n(d.gate_rejected,0)+' رفضتها البوابة • '+n(d.failed_analyses,0)+' أخطاء فحص';
+function num(v,d){
+  const x=Number(v);return Number.isFinite(x)?x:(d==null?0:d);
+}
+function pct(v){return Number.isFinite(Number(v))?num(v,0).toFixed(1)+'%':'—';}
+function cap(v){return Math.max(0,Math.min(100,num(v,0)));}
+function verdict(v){return v==='STRONG_CANDIDATE'?'مرشح قوي':v==='CANDIDATE'?'مرشح':v==='WATCH'?'مراقبة':'مرفوض';}
+function tagClass(v){return v==='STRONG_CANDIDATE'||v==='CANDIDATE'?'good':v==='REJECT'?'bad':'warn';}
+function cacheLoad(){
+  try{
+    const x=JSON.parse(sessionStorage.getItem(cacheKey)||'null');
+    return x&&Date.now()-num(x.at,0)<cacheTtl?x.body:null;
+  }catch(e){return null;}
+}
+function cacheSave(body){
+  try{sessionStorage.setItem(cacheKey,JSON.stringify({at:Date.now(),body:body}));}catch(e){}
+}
+function setBar(el,v){if(el)el.style.width=cap(v)+'%';}
+function groupScore(j){
+  const g=j&&j.group_consensus?j.group_consensus:{};
+  const vals=Object.keys(g).map(function(k){return num(g[k].score,50);});
+  if(!vals.length)return 50;
+  return vals.reduce(function(a,b){return a+b;},0)/vals.length;
+}
+function renderHeader(body){
+  const u=body&&body.universe||{},s=body&&body.summary||{},d=body&&body.diagnostics||{};
+  dEls.scanned.textContent=String(num(u.scanned,0));
+  dEls.strong.textContent=String(num(s.strong_candidates,0));
+  dEls.candidate.textContent=String(num(s.candidates,0));
+  dEls.rejected.textContent=String(s.rejected==null?s.rejected_candidates||0:s.rejected);
+
+  const meta=body&&body.meta||{};
+  const m=body&&body.market_context||{};
+  dEls.marketChips.innerHTML=
+    '<span class="chip '+(meta.live?'ok':'warn')+'">'+(meta.live?'● LIVE DATA':'○ DATA LIMITED')+'</span>'+
+    '<span class="chip">السوق '+esc(String(m.regime||'MIXED'))+'</span>'+
+    '<span class="chip">Breadth '+pct(m.positive_breadth_pct)+'</span>'+
+    '<span class="chip">Median 24h '+pct(m.median_24h_change_pct)+'</span>'+
+    '<span class="chip">Paper only</span>';
+
+  dEls.diagnostics.innerHTML=
+    '<span class="chip">اكتشاف '+num(u.discovery_pool,0)+'</span>'+
+    '<span class="chip ok">المختبر '+num(d.attempted_analyses,0)+'</span>'+
+    '<span class="chip '+(num(d.successful_analyses,0)>0?'ok':'warn')+'">بوابة البيانات '+num(d.successful_analyses,0)+'</span>'+
+    '<span class="chip '+(num(d.gate_rejected,0)>0?'warn':'ok')+'">بوابة مرفوضة '+num(d.gate_rejected,0)+'</span>'+
+    '<span class="chip '+(num(d.failed_analyses,0)>0?'bad':'ok')+'">أخطاء تنفيذ '+num(d.failed_analyses,0)+'</span>'+
+    '<span class="chip">زمن '+num(d.duration_ms,0)+'ms</span>';
+
+  liveText.textContent=meta.live?'● بيانات حيّة • آخر تحليل '+new Date(body.as_of).toLocaleTimeString('ar-SA',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'○ اللقطة مكتملة لكن بوابة البيانات لم تسمح بنتيجة حيّة';
+}
+function renderBest(body,list){
+  const best=list&&list.length?list[0]:null;
+  if(!best){
+    dEls.bestScore.textContent='—';dEls.bestEarly.textContent='—';dEls.bestAgree.textContent='—';dEls.bestGroup.textContent='—';dEls.bestCoverage.textContent='—';
+    setBar(dEls.earlyBar,0);setBar(dEls.agreeBar,0);setBar(dEls.groupBar,0);setBar(dEls.coverageBar,0);dEls.gauge.style.setProperty('--deg','0deg');return;
   }
-  cards.innerHTML='';
-  if(!list.length){cards.innerHTML='<div class="empty">لا توجد نتائج. اضغط «ابدأ التحليل الكامل» لإجراء فحص حي.</div>';return;}
-  list.forEach((x,idx)=>{
-    const hot=x.verdict==='STRONG_CANDIDATE'||x.verdict==='CANDIDATE';
-    const div=document.createElement('article');
-    div.className='card'+(hot?' cardStrong':'');
-    const consensus=n(x.consensus && x.consensus.ratio,0)*100;
-    const highlights=Array.isArray(x.highlights)?x.highlights.slice(0,6):[];
-    div.innerHTML=
-      '<div class="top"><div class="sym">'+(hot?'🧠 ':'🔎 ')+esc((idx+1)+'. '+x.symbol)+'</div><div class="score">'+n(x.final_score,0).toFixed(1)+'/100</div></div>'+
-      '<div class="pills">'+
-      '<span class="pill '+(hot?'good':'')+'">'+esc(verdictLabel(x.verdict))+'</span>'+
-      '<span class="pill">اتفاق '+n(x.final_judge && x.final_judge.agreement,0).toFixed(0)+'%</span>'+
-      '<span class="pill">مبكر '+n(x.final_judge && x.final_judge.early_score,0).toFixed(0)+'/100</span>'+
-      '<span class="pill">'+esc(x.final_judge && x.final_judge.timing || 'NO_SETUP')+'</span>'+
-      '<span class="pill">سوق '+esc(x.final_judge && x.final_judge.market_regime || 'MIXED')+'</span>'+
-      '<span class="pill">معايرة '+(
-        x.final_judge && Array.isArray(x.final_judge.self_calibration) && x.final_judge.self_calibration.length &&
-        Number(x.final_judge.self_calibration[0].samples) >= 30 ? 'مفعّلة' : 'تتعلم'
-      )+'</span>'+
-      '<span class="pill">جودة '+n(x.data_quality,0).toFixed(0)+'</span>'+
-      '</div>'+
-      '<div class="bar"><div class="fill" style="width:'+Math.max(0,Math.min(100,n(x.final_score,0)))+'%"></div></div>'+
-      '<div class="facts">'+
+  const j=best.final_judge||{};
+  const sc=cap(j.score==null?best.final_score:j.score);
+  const early=cap(j.early_score),agree=cap(j.agreement),group=cap(groupScore(j)),coverage=cap(j.evidence_coverage);
+  dEls.bestScore.textContent=sc.toFixed(1);
+  dEls.bestEarly.textContent=early.toFixed(0);
+  dEls.bestAgree.textContent=agree.toFixed(0)+'%';
+  dEls.bestGroup.textContent=group.toFixed(0)+'%';
+  dEls.bestCoverage.textContent=coverage.toFixed(0)+'%';
+  setBar(dEls.earlyBar,early);setBar(dEls.agreeBar,agree);setBar(dEls.groupBar,group);setBar(dEls.coverageBar,coverage);
+  dEls.gauge.style.setProperty('--deg',(sc/100*360).toFixed(0)+'deg');
+}
+function renderCard(x,idx){
+  const j=x.final_judge||{}, hot=x.verdict==='STRONG_CANDIDATE'||x.verdict==='CANDIDATE';
+  const analysts=Array.isArray(x.analysts)?x.analysts:[];
+  const gc=j.group_consensus||{};
+  const gkeys=Object.keys(gc);
+  const strong=j.strongest_analysts||[];
+  const weak=j.weakest_analysts||[];
+  const reasons=Array.isArray(j.reasons)?j.reasons:[];
+  const hard=Array.isArray(j.hardReasons)?j.hardReasons:[];
+  const groupHtml=gkeys.map(function(k){
+    const g=gc[k];
+    return '<div class="group"><b>'+esc(k)+'</b><strong>'+num(g.score,50).toFixed(0)+'</strong><small>'+num(g.long_votes,0)+' طويل • '+num(g.bearish_votes,0)+' هابط</small></div>';
+  }).join('');
+  const analystHtml=analysts.map(function(a){
+    return '<div class="a"><div class="aTop"><b>'+esc(a.name)+'</b><span class="num">'+num(a.score,0).toFixed(0)+'</span></div><small>'+esc(a.group||'')+' • '+esc(a.decision||'')+' • '+esc(a.direction||'')+'<br>تغطية الدليل: '+Math.round(num(a.coverage,0)*100)+'%</small></div>';
+  }).join('');
+  const reasonsHtml=reasons.length?reasons.map(esc).join(' • '):'لا توجد أدلة موجبة كافية';
+  const hardHtml=hard.length?hard.map(esc).join(' • '):'لا توجد بوابة رفض صلبة';
+  return '<article class="card '+(hot?'strongCard':'')+'">'+
+    '<div class="cardHead"><div class="sym">'+(hot?'🟢 ':'🔎 ')+(idx+1)+'. '+esc(x.symbol)+'</div><div class="score">'+num(x.final_score,0).toFixed(1)+'/100</div></div>'+
+    '<div class="meta">'+
+      '<span class="tag '+tagClass(x.verdict)+'">'+esc(verdict(x.verdict))+'</span>'+
+      '<span class="tag">الاتجاه '+esc(j.direction||'NEUTRAL')+'</span>'+
+      '<span class="tag">التوقيت '+esc(j.timing||'NO_SETUP')+'</span>'+
+      '<span class="tag">المبكر '+num(j.early_score,0).toFixed(0)+'</span>'+
+      '<span class="tag">الاتفاق '+num(j.agreement,0).toFixed(0)+'%</span>'+
+      '<span class="tag">بصمة '+num(j.setup_fingerprint,0).toFixed(0)+'</span>'+
+      '<span class="tag">الدليل '+num(j.evidence_coverage,0).toFixed(0)+'%</span>'+
+    '</div>'+
+    '<div class="bar"><div class="fill" style="width:'+cap(x.final_score)+'%"></div></div>'+
+    '<div class="grid4">'+
       '<div class="fact"><b>'+esc(x.last_price==null?'—':x.last_price)+'</b><span>السعر</span></div>'+
       '<div class="fact"><b>'+pct(x.price_change_24h)+'</b><span>24h</span></div>'+
-      '<div class="fact"><b>'+n(x.liquidity_quality,0).toFixed(0)+'</b><span>السيولة</span></div>'+
-      '<div class="fact"><b>'+n(x.consensus && x.consensus.strong,0)+'/20</b><span>محللون ≥80</span></div>'+
-      '</div>'+
-      '<div class="reasons"><b>أقوى الأدلة:</b> '+esc(highlights.map(h=>h.name).join(' • ')||'لا توجد أدلة مرتفعة كفاية')+
-      '<br><b>نافذة القرار:</b> '+esc(x.final_judge && x.final_judge.timing || 'NO_SETUP')+
-      ' • <b>الاستمرارية:</b> '+n(x.final_judge && x.final_judge.temporal_persistence,0).toFixed(1)+
-      ' • <b>الإجماع:</b> '+n(x.final_judge && x.final_judge.agreement,0).toFixed(0)+'%'+
-      (x.final_judge && Array.isArray(x.final_judge.self_calibration) && x.final_judge.self_calibration.length
-        ? '<br><b>التعلم الذاتي:</b> '+esc(x.final_judge.self_calibration.slice(0,3).map(function(s){
-            return String(s.id||'')+' '+(s.precision==null?'—':Number(s.precision).toFixed(1)+'%')+' ('+Number(s.samples||0)+' عينة)';
-          }).join(' • '))
-        : '')+
-      '</div>'+
-      '<div class="pipeline">'+
-      highlights.slice(0,4).map(h=>'<div class="an"><b>'+esc(h.name)+'</b><small>'+esc(h.decision)+'</small><strong>'+n(h.score,0).toFixed(0)+'</strong></div>').join('')+
-      '</div>'+
-      '<button class="dark detailBtn" data-index="'+idx+'" style="margin-top:10px;width:100%">عرض المحللين العشرين</button>'+
-      '<div class="details" id="detail-'+idx+'">'+
-        '<div class="detailTitle">تقرير كل محلل — العملة تمر على الجميع</div>'+
-        '<div class="analystList">'+(Array.isArray(x.analysts)?x.analysts.map(a=>'<div class="analyst"><div class="row"><b>'+esc(a.name)+'</b><span class="num">'+n(a.score,0).toFixed(0)+'</span></div><p>'+esc(a.decision)+' • '+esc(a.direction)+'<br>'+esc(Object.entries(a.evidence||{}).slice(0,3).map(([k,v])=>k+': '+(typeof v==='object'?JSON.stringify(v):v)).join(' • '))+'</p></div>').join(''):'')+'</div>'+
-        '<div class="note" style="margin-top:9px"><b>حكم المحلل النهائي:</b> '+esc(verdictLabel(x.verdict))+' • '+esc(x.final_judge && x.final_judge.reasons ? x.final_judge.reasons.join(' • ') : ''||'لا توجد أسباب إيجابية كافية')+
-        '<br><b>أسباب المنع:</b> '+esc(x.final_judge && x.final_judge.hardReasons ? x.final_judge.hardReasons.join(' • ') : ''||'لا يوجد منع صلب')+'</div>'+
-      '</div>';
-    cards.appendChild(div);
-  });
-  cards.querySelectorAll('.detailBtn').forEach(btn=>btn.addEventListener('click',()=>{
-    const box=document.getElementById('detail-'+btn.dataset.index);
-    const open=box.classList.toggle('open');
-    btn.textContent=open?'إخفاء تقرير المحللين':'عرض المحللين العشرين';
-  }));
+      '<div class="fact"><b>'+num(x.liquidity_quality,0).toFixed(0)+'</b><span>السيولة</span></div>'+
+      '<div class="fact"><b>'+num((x.consensus||{}).strong,0)+'/19</b><span>قوي</span></div>'+
+    '</div>'+
+    '<div class="two">'+
+      '<div class="miniPanel"><h3>⚡ أقوى المحللين</h3><div class="chips">'+strong.slice(0,5).map(function(a){return '<span class="chip ok">'+esc(a.name)+' '+num(a.score,0).toFixed(0)+'</span>';}).join('')+'</div></div>'+
+      '<div class="miniPanel"><h3>🛡️ أضعف/أخطر الأصوات</h3><div class="chips">'+weak.slice(0,4).map(function(a){return '<span class="chip '+(a.direction==='BEARISH'?'bad':'warn')+'">'+esc(a.name)+' '+num(a.score,0).toFixed(0)+'</span>';}).join('')+'</div></div>'+
+    '</div>'+
+    '<div class="matrix">'+groupHtml+'</div>'+
+    '<div class="two">'+
+      '<div class="miniPanel"><h3>✅ لماذا</h3><div style="font-size:8px;line-height:1.8;color:#aec2c9">'+reasonsHtml+'</div></div>'+
+      '<div class="miniPanel"><h3>⛔ ما الذي يمنع القرار</h3><div style="font-size:8px;line-height:1.8;color:#c8a9a0">'+hardHtml+'</div></div>'+
+    '</div>'+
+    '<details><summary>عرض تقرير المحللين العشرين الكامل</summary>'+
+      '<div class="analysts">'+analystHtml+'</div>'+
+      '<div class="riskBox"><b>المحلل النهائي:</b> '+esc(verdict(x.verdict))+' • الدرجة الموزونة '+num((j.score_components||{}).weighted,0).toFixed(1)+' • توازن المجموعات '+num((j.score_components||{}).group_balance,0).toFixed(1)+' • الحافة الاتجاهية '+num((j.score_components||{}).direction_edge,0).toFixed(1)+'</div>'+
+    '</details>'+
+  '</article>';
+}
+function render(body){
+  latest=body;
+  const list=Array.isArray(body&&body.candidates)?body.candidates:[];
+  renderHeader(body);
+  renderBest(body,list);
+  if(!list.length){cards.innerHTML='<div class="empty">لا توجد عملات في هذه اللقطة. لا يتم اختلاق نتيجة لتعويض غياب البيانات.</div>';return;}
+  cards.innerHTML=list.map(renderCard).join('');
 }
 async function run(force){
   if(busy)return;
   if(!force){
-    const c=loadCache();
-    if(c){render(c);status.textContent='● آخر لقطة محفوظة — لم نعد تحليل السوق.';return;}
+    const cached=cacheLoad();
+    if(cached){render(cached);status.textContent='● عُرضت آخر لقطة محلية، وسيتم تحديثها تلقائيًا من السوق.';return;}
   }
   busy=true;
-  status.textContent='🧠 المحللون يعملون... كل عملة تمر على 19 محللًا ثم المحلل النهائي. قد يحتاج الفحص وقتًا لأنه حقيقي وليس وهميًا.';
+  status.textContent='🧠 مركز القيادة يفحص السوق… 20 محللًا يعملون على كل مرشح.';
   try{
     const r=await getMultiAnalyst({quote:'USDT',limit:10,scan:true});
-    if(!r.ok||!r.body)throw new Error(r.error||('HTTP_'+r.status));
-    saveCache(r.body);render(r.body);
-    if(r.body.status==='not_ready'){
-      status.textContent='تعذر التحليل مؤقتًا — '+String(r.body.error||'البيانات غير جاهزة');
-      return;
-    }
-    const u=r.body.universe||{};
-    const meta=r.body.meta||{};
+    if(!r||!r.ok||!r.body)throw new Error((r&&r.error)||('HTTP_'+num(r&&r.status,0)));
+    cacheSave(r.body);render(r.body);lastLiveAt=Date.now();
+    const d=r.body.diagnostics||{},u=r.body.universe||{},s=r.body.summary||{},meta=r.body.meta||{};
     status.textContent=meta.live
-      ? '● تحليل حي مكتمل • '+n(u.scanned,0)+' عملات دخلت المختبر • '+n(r.body.summary && r.body.summary.strong_candidates,0)+' مرشح قوي'
-      : '● اكتمل الفحص • '+n(u.scanned,0)+' عملات دخلت المختبر • البيانات الحية الموثوقة غير متاحة لبعض/كل العملات؛ راجع التشخيص والرفض.';
+      ? '● تحليل حي مكتمل • '+num(u.scanned,0)+' دخلت المختبر • '+num(s.strong_candidates,0)+' مرشح قوي • '+num(d.failed_analyses,0)+' أخطاء تنفيذ'
+      : '● الفحص اكتمل • '+num(u.scanned,0)+' دخلت المختبر • البوابة منعت النتائج غير الموثوقة • '+num(d.failed_analyses,0)+' أخطاء تنفيذ';
   }catch(e){
-    status.textContent='تعذر التحليل الآن — '+esc(e && e.message || e);
+    status.textContent='تعذر التحليل الآن — '+String(e&&e.message||e);
   }finally{busy=false;}
 }
-document.getElementById('scanBtn').addEventListener('click',()=>run(true));
-document.getElementById('refreshBtn').addEventListener('click',()=>run(false));
+document.getElementById('scanBtn').addEventListener('click',function(){run(true);});
+document.getElementById('refreshBtn').addEventListener('click',function(){run(true);});
 run(false);
+setInterval(function(){run(true);},45000);
+document.addEventListener('visibilitychange',function(){if(!document.hidden&&(Date.now()-lastLiveAt>30000))run(true);});
 </script>
 </body>
 </html>
