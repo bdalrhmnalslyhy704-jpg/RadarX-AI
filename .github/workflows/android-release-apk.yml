@@ -28,7 +28,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Retired legacy APK publisher; official Build 224 + Hawkeye 1.4.9 publishing is pinned on main.
+  # Keep the workflow file inert on this development line so PR updates cannot publish a stale APK.
   release-apk:
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
 

@@ -1,6 +1,7 @@
 import {buildSpotUniverse, normalizeTickerRow, boundedMap} from '../market/universe-scanner.mjs';
 import {collectAgentEvidence, buildAgentVerdict, evaluateMemory, createMemoryEntries} from './ai-agent-hub.mjs';
 import {buildSurgeFingerprint, rankMeaningfulCandidates, selectSurgeSurface} from './market-surge-gate.mjs';
+import {evaluateSupremeFusion, rankSupremeCandidates, buildSupremeMarketState} from './supreme-fusion.mjs';
 
 const clamp=(v,a=0,b=100)=>Math.max(a,Math.min(b,Number.isFinite(Number(v))?Number(v):50));
 const num=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -134,7 +135,7 @@ export class AutonomousAgentMarket {
     if(!scanner)throw new Error('SCANNER_REQUIRED');
     this.scanner=scanner;this.store=store;this.config={...AUTONOMOUS_AGENT_DEFAULTS,...config};
     this.clock=clock;this.logger=logger;this.running=false;this.timer=null;this.cycleBusy=false;
-    this.lastCycle=null;this.nextCycleAt=null;this.cursor=0;this.webCursor=0;this.universeCache=null;
+    this.lastCycle=null;this.nextCycleAt=null;this.cursor=0;this.webCursor=0;this.universeCache=null;this.previousSupreme=new Map();
   }
 
   async start(){
@@ -198,7 +199,11 @@ export class AutonomousAgentMarket {
           await wait(30);
         }
         const memory=[...pendingMemory.filter(x=>String(x.symbol).toUpperCase()===candidate.symbol.toUpperCase())];
-        const verdict=buildAgentVerdict({symbol:candidate.symbol,evidence,deepScan:makeMarketDeep(candidate),memory});
+        const deepScan=makeMarketDeep(candidate);
+        const verdict=buildAgentVerdict({symbol:candidate.symbol,evidence,deepScan,memory});
+        const previousFusion=this.previousSupreme.get(candidate.symbol);
+        const supremeFusion=evaluateSupremeFusion({candidate,verdict,previous:previousFusion});
+        this.previousSupreme.set(candidate.symbol,{supreme_score:supremeFusion.score,observed_at:startedAt});
         const newEntries=createMemoryEntries({symbol:candidate.symbol,price:candidate.last_price,agents:verdict.agents,now:startedAt});
         const recent=memory.some(x=>Number(x.created_at||0)>startedAt-15*60*1000);
         if(!recent&&typeof this.store?.appendAgentMemory==='function'){
@@ -218,12 +223,16 @@ export class AutonomousAgentMarket {
           surge_ignition_score:candidate.surge_fingerprint.ignition_score,surge_tier:candidate.surge_fingerprint.tier,
           surge_reasons:candidate.surge_fingerprint.reasons||[],
           top_agents:(verdict.agents||[]).filter(x=>x.id!=='CHIEF_DECIDER').sort((a,b)=>b.score-a.score).slice(0,4).map(x=>({id:x.id,name:x.name,score:x.score,direction:x.direction,weight:x.weight})),
-          reasons:[...(candidate.reason_codes||[]).slice(0,4),...(verdict.decision?.stance?[verdict.decision.stance]:[])],
+          supreme_fusion:supremeFusion,
+          supreme_score:supremeFusion.score,
+          supreme_stage:supremeFusion.stage,
+          supreme_action:supremeFusion.action,
+          reasons:[...(candidate.reason_codes||[]).slice(0,4),...(verdict.decision?.stance?[verdict.decision.stance]:[]),...(supremeFusion.positive_reasons||[]).slice(0,3)],
           source_coverage:evidence.source_coverage||{},
           observed_at:startedAt
         });
       }
-      const sorted=[...decisions].sort((a,b)=>Number(b.surge_score??-1)-Number(a.surge_score??-1)||Number(b.score??-1)-Number(a.score??-1)||Number(b.discovery_score??-1)-Number(a.discovery_score??-1));
+      const sorted=rankSupremeCandidates(decisions,{limit:Math.max(20,Number(this.config.resultLimit)||20)});
       const surface=selectSurgeSurface(scanned.filter(Boolean),{limit:Number(this.config.resultLimit)||20});
       const learning=profile(pendingMemory);
       const state={
@@ -242,6 +251,7 @@ export class AutonomousAgentMarket {
         decisions:sorted.slice(0,Math.min(Number(this.config.resultLimit)||20,20)),
         learning,
         policy:{spot_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true,no_synthetic_prices:true,meaningful_moves_only:true},
+        supreme_fusion_market:buildSupremeMarketState(sorted,{limit:Number(this.config.resultLimit)||20}),
         diagnostics:{elapsed_ms:Math.max(0,this.clock()-startedAt),web_candidates:[...webTargetSymbols],last_error:null}
       };
       this.lastCycle=state;
@@ -250,7 +260,7 @@ export class AutonomousAgentMarket {
       return state;
     }catch(error){
       const m=String(error?.message??error);
-      this.lastCycle={engine:'AUTONOMOUS_TEN_AGENT_MARKET_V2',engine_name:'🧠 عقل السوق الذاتي — موجات حقيقية',running:this.running,as_of:new Date(this.clock()).toISOString(),error:m,universe:{eligible_spot_symbols:0,observed_symbols:0},decisions:[],learning:profile([]),policy:{spot_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};
+      this.lastCycle={engine:'AUTONOMOUS_TEN_AGENT_MARKET_V2',engine_name:'🧠 عقل السوق الذاتي — موجات حقيقية',running:this.running,as_of:new Date(this.clock()).toISOString(),error:m,universe:{eligible_spot_symbols:0,observed_symbols:0},decisions:[],supreme_fusion_market:buildSupremeMarketState([]),learning:profile([]),policy:{spot_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};
       throw error;
     }finally{this.cycleBusy=false;}
   }
@@ -258,7 +268,7 @@ export class AutonomousAgentMarket {
   async readState(){
     if(this.lastCycle)return this.lastCycle;
     const stored=await this.store?.getAgentMarketState?.();
-    return stored||{engine:'AUTONOMOUS_TEN_AGENT_MARKET_V2',engine_name:'🧠 عقل السوق الذاتي — موجات حقيقية',running:this.running,decisions:[],discovery:{top:[]},surge_surface:{meaningful:[],explosive_6p:[],early_breakout:[]},learning:profile([])};
+    return stored||{engine:'AUTONOMOUS_TEN_AGENT_MARKET_V2',engine_name:'🧠 عقل السوق الذاتي — موجات حقيقية',running:this.running,decisions:[],discovery:{top:[]},surge_surface:{meaningful:[],explosive_6p:[],early_breakout:[]},supreme_fusion_market:buildSupremeMarketState([]),learning:profile([])};
   }
 
   async learning(){

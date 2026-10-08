@@ -7,6 +7,7 @@ import {RADAR_NAMES,RADAR_PROFILES,formatRadarTime12h,decorateRadarAlert} from '
 import {SymbolDeepAnalyzer,normalizeDeepScanSymbol} from '../core/symbol-deep-analyzer.mjs';
 import {buildKingVerdict,rankKingMarket} from '../core/king-intelligence.mjs';
 import {collectAgentEvidence,buildAgentVerdict,evaluateMemory,createMemoryEntries} from '../core/ai-agent-hub.mjs';
+import {evaluateSupremeFusion} from '../core/supreme-fusion.mjs';
 
 function send(res,status,body,extra={}){
   const data=JSON.stringify(body);
@@ -545,13 +546,38 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           const memoryForVerdict=[...memory,...evaluated];
           const evidence=await collectAgentEvidence({symbol:rawSymbol});
           const verdict=buildAgentVerdict({symbol:rawSymbol,evidence,deepScan,memory:memoryForVerdict});
+          const m15=deepScan?.timeframes?.['15m']||{};
+          const preMoveScore=Number(((Number(deepScan?.assessment?.analysis_strength||50)*0.38)+(Number(deepScan?.assessment?.direction_score||50)*0.28)+(Number(deepScan?.momentum?.score||50)*0.20)+(Number(deepScan?.pressure?.score||50)*0.14)).toFixed(1));
+          const compressionScore=Number.isFinite(Number(m15?.bollinger?.width))
+            ? Math.max(0,Math.min(100,Number(m15.bollinger.width)<=1.2?91:Number(m15.bollinger.width)<=2?78:Number(m15.bollinger.width)<=3.5?64:Number(m15.bollinger.width)<=6?48:32))
+            : 50;
+          const volumeScore=Number.isFinite(Number(m15?.rvol))?Math.max(0,Math.min(100,50+(Number(m15.rvol)-1)*34)):50;
+          const fastScore=Number(((Number(m15?.momentum_score||50)*0.35)+(volumeScore*0.20)+(Number(deepScan?.pressure?.score||50)*0.20)+(Number(deepScan?.assessment?.direction_score||50)*0.25)).toFixed(1));
+          const resistance=Number(deepScan?.zones?.resistance);
           const price=Number(deepScan?.price?.last);
+          const resistanceDistance=Number.isFinite(resistance)&&resistance>0&&Number.isFinite(price)?((resistance/price)-1)*100:null;
+          const breakoutScore=Number((Number(deepScan?.assessment?.direction_score||50)*0.55+(resistanceDistance!=null?Math.max(20,Math.min(100,100-resistanceDistance*18)):50)*0.25+Number(deepScan?.pressure?.score||50)*0.20).toFixed(1));
+          const high24=Number(deepScan?.price?.high_24h);
+          const nearHighScore=Number.isFinite(high24)&&high24>0&&Number.isFinite(price)?Math.max(0,Math.min(100,100-Math.max(0,(high24-price)/high24*100)*18)):50;
+          const syntheticCandidate={
+            symbol:rawSymbol,
+            direction:verdict.decision?.direction,
+            last_price:price,
+            price_change_24h:Number(deepScan?.price?.change_24h_pct||0),
+            data_quality:deepScan?.data_quality?.score??deepScan?.scores?.data_quality,
+            liquidity_quality:deepScan?.liquidity?.score,
+            pre_move_context:{score:preMoveScore,compression_score:compressionScore},
+            fast_impulse_context:{score:fastScore,scores:{momentum:Number(m15?.momentum_score||50),volume:volumeScore,taker_buy:Number(deepScan?.pressure?.score||50),breakout:breakoutScore}},
+            surge_fingerprint:{early_score:preMoveScore,ignition_score:fastScore,participation_score:Number(deepScan?.pressure?.score||50),near_high_score:nearHighScore},
+            risk_flags:Number(deepScan?.assessment?.trap_risk||50)>=55?['TRAP_RISK_ELEVATED']:[]
+          };
+          const supremeFusion=evaluateSupremeFusion({candidate:syntheticCandidate,verdict});
           const recent=memory.filter(x=>String(x?.symbol||'').toUpperCase()===rawSymbol&&Number(x?.created_at||0)>now-10*60*1000);
           if(!recent.length&&Number.isFinite(price)&&typeof store.appendAgentMemory==='function'){
             const entries=createMemoryEntries({symbol:rawSymbol,price,agents:verdict.agents,now});
             for(const row of entries)await store.appendAgentMemory(row);
           }
-          return send(res,200,{...verdict,deep_snapshot:{price:deepScan?.price||null,assessment:deepScan?.assessment||null,liquidity:deepScan?.liquidity||null,pressure:deepScan?.pressure||null,zones:deepScan?.zones||null,data_quality:deepScan?.data_quality||deepScan?.scores||null},evidence_items:{news:(evidence.news||[]).slice(0,20),official:(evidence.official||[]).slice(0,15),social:(evidence.social||[]).slice(0,15)},meta:{live:true,source:'GDELT + Google News + Reddit + RadarX/Binance Public REST',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+          return send(res,200,{...verdict,supreme_fusion:supremeFusion,deep_snapshot:{price:deepScan?.price||null,assessment:deepScan?.assessment||null,liquidity:deepScan?.liquidity||null,pressure:deepScan?.pressure||null,zones:deepScan?.zones||null,data_quality:deepScan?.data_quality||deepScan?.scores||null},evidence_items:{news:(evidence.news||[]).slice(0,20),official:(evidence.official||[]).slice(0,15),social:(evidence.social||[]).slice(0,15)},meta:{live:true,source:'GDELT + Google News + Reddit + RadarX/Binance Public REST',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         }catch(e){
           const m=String(e?.message??e);
           const status=/INVALID_SYMBOL/.test(m)?400:/BINANCE_|HTTP_(?:408|418|429|451|500|502|503|504)|TIMEOUT|NETWORK|FETCH|ECONN|ENOTFOUND|ETIMEDOUT|ABORT/i.test(m)?503:500;
