@@ -13,7 +13,8 @@ export const RADAR_NAMES=Object.freeze({
   ALMUQAWIM_RADAR:'Radar 7 — المقاوم',
   EARLY_EXPANSION_RADAR:'Radar 8 — البرق',
   COIN_HUNTER_RADAR:'🎯 صائد العملات',
-  WHALE_ACCUMULATION_RADAR:'🐋 تجمع الحيتان'
+  WHALE_ACCUMULATION_RADAR:'🐋 تجمع الحيتان',
+  FALCON_EYE_RADAR:'Radar 9 — عين الصقر'
 });
 export const RADAR_PROFILES=Object.freeze({
   EARLY_MOVE_RADAR:Object.freeze({
@@ -96,6 +97,15 @@ export const RADAR_PROFILES=Object.freeze({
     strategy:'HH/HL + LH/LL + Trendline + Moving Average + Higher-Timeframe Alignment',
     timeframes:['4h','1h','15m'],algorithms:['HH/HL Structure','LH/LL Structure','Trendline Direction','EMA Direction Filter','4H/1H Alignment','15m Entry-Risk Guard'],
     guardrails:['شموع مغلقة فقط','Spot فقط','Paper فقط','لا يعتبر الإطار الصغير أقوى من الاتجاه الأكبر']
+  }),
+  FALCON_EYE_RADAR:Object.freeze({
+    name:RADAR_NAMES.FALCON_EYE_RADAR,icon:'🦅',color:'#f6c453',
+    mission:'عين الصقر: يحول درس انفجار OGN إلى بصمة قابلة لإعادة الاكتشاف قبل الانفجار، لا بعده.',
+    strength:'يجمع القاعدة الهادئة، Higher-Lows، ضغط الشراء، تسارع الحجم والصفقات، المقاومة، القوة النسبية، وانتقال المشتقات إلى حالة ضغط/انفراج.',
+    strategy:'OGN Pre-Explosion Fingerprint + Spot/Futures Confluence + Anti-Chase',
+    timeframes:['1m','5m','24h','Futures'],
+    algorithms:['Quiet Base','ATR/Bollinger Compression','Higher-Lows','Volume Acceleration','Trade Count Acceleration','Taker Flow','Resistance/Breakout','VWAP/EMA','Relative Strength vs BTC','Futures/Spot Volume Ratio','Open Interest Delta','Funding Squeeze Context','Forced Liquidations','Range Expansion','Efficiency'],
+    guardrails:['Spot فقط في قرار الرادار','بيانات مشتقات عامة فقط عند توفرها','شموع مغلقة فقط','يرفض الحركة الممتدة','ميزانية إشعارات صارمة','لا يدّعي معرفة هوية المستثمرين','Paper only']
   }),
   PROFESSOR_RADAR:Object.freeze({
     name:RADAR_NAMES.PROFESSOR_RADAR,icon:'🧠',color:'#ec4899',
