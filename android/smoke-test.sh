@@ -113,6 +113,16 @@ wait_for_online_device
 adb install -r "$APK"
 wait_for_online_device
 
+# Android 13+ requires POST_NOTIFICATIONS. Grant it in the disposable CI emulator
+# before first launch so MainActivity can start the foreground monitor without a
+# runtime permission dialog blocking the background-service assertion.
+adb shell pm grant com.radarx.app android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || {
+  echo "::error::Unable to grant POST_NOTIFICATIONS in the CI emulator"
+  adb shell dumpsys package com.radarx.app 2>/dev/null | grep -A8 -B2 'POST_NOTIFICATIONS' || true
+  exit 1
+}
+adb shell pm grant com.radarx.app android.permission.ACCESS_NETWORK_STATE >/dev/null 2>&1 || true
+
 # Online: the Activity must remain open and auto-start the foreground monitor.
 start_app_and_wait_ready
 
