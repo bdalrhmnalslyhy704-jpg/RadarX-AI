@@ -138,3 +138,30 @@ console.log('multi-analyst-engine lab-entry regression: PASS');
 }
 
 console.log('multi-analyst-engine runtime-error regression: PASS');
+
+// Regression: an unexpected scan-construction failure must fail closed without dropping the discovered symbol.
+{
+  const base15=series(120,{base:100,trend:.001});
+  const base1=series(100,{base:100,trend:.001});
+  const base4=series(60,{base:100,trend:.001});
+  const scanner=new (await import('../market/universe-scanner.mjs')).MarketUniverseScanner({
+    rest:{
+      klines:async(symbol,interval)=>({candles:interval==='15m'?base15:interval==='1h'?base1:base4,source:'TEST'}),
+      depth:async()=>({data:{bids:[['99.9','5000']],asks:[['100.1','2000']]},source:'TEST'})
+    },
+    config:{deepKlines:120}
+  });
+  scanner.computeLiquidity=()=>{throw new Error('SIMULATED_LIQUIDITY_COMPUTATION_ERROR');};
+  const row=await scanner.scanSymbol(
+    {symbol:'TESTUSDT',rank:1,lastPrice:100,priceChange24h:1,highPrice24h:101,lowPrice24h:99,quoteVolume24h:2000000,tradeCount24h:5000},
+    1,
+    {exchangeInfo:'TEST',ticker:'TEST'},
+    {klinesLimit:120,includeAnalysisPayload:true}
+  );
+  assert.equal(row.data_status.data_valid,false);
+  assert.match(String(row.data_status.last_error||''),'LIQUIDITY_COMPUTATION_FAILED');
+  assert.ok(row._analysis && row._analysis.series['15m'].length===120);
+}
+
+console.log('multi-analyst scan fail-closed regression: PASS');
+
