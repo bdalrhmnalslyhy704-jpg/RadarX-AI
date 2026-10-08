@@ -356,7 +356,6 @@ function specialistAnalysis(candidate, market={}){
   // Distance from the fast trigger EMA; used to penalize chasing extended price.
   const distanceEma=Number.isFinite(price)&&Number.isFinite(ema20_15)&&ema20_15>0
     ?Math.abs((price-ema20_15)/ema20_15*100):null;
-  const distanceEma=Number.isFinite(price)&&Number.isFinite(ema20_15)&&ema20_15!==0?(price-ema20_15)/ema20_15*100:null;
 
   const rangeHigh=Number.isFinite(Number(candidate?.high_price_24h))?Number(candidate.high_price_24h):Math.max(...s15.slice(-96).map(x=>Number(x.high)).filter(Number.isFinite));
   const rangeLow=Number.isFinite(Number(candidate?.low_price_24h))?Number(candidate.low_price_24h):Math.min(...s15.slice(-96).map(x=>Number(x.low)).filter(Number.isFinite));
@@ -1007,7 +1006,8 @@ export class MultiAnalystEngine {
 
       for(const item of live){
         try{
-          const previous=await this.store?.getIntelligenceMemory?.(item.symbol).catch?.(()=>null);
+          let previous=null;
+          try{previous=await this.store?.getIntelligenceMemory?.(item.symbol)||null;}catch{}
           const previousHistory=Array.isArray(previous?.history)?previous.history:[];
           const history=[...previousHistory,{
             as_of:this.clock(),
@@ -1034,7 +1034,7 @@ export class MultiAnalystEngine {
       const candidates=live.slice(0,requested).map((x,i)=>({...x,rank:i+1}));
       const strongCount=live.filter(x=>x.verdict==='STRONG_CANDIDATE').length;
       const value={
-        meta:{live:live.some(x=>x.data_status?.data_valid===true),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analyst_count:20,specialist_count:19},engine_revision:'ELITE_TRAJECTORY_V1'},
+        meta:{live:live.some(x=>x.data_status?.data_valid===true),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analyst_count:20,specialist_count:19,engine_revision:'ELITE_TRAJECTORY_V1'},
         as_of:new Date(this.clock()).toISOString(),
         source:'Binance Public REST',
         universe:{quote:q,eligible_spot_symbols:universe.length,discovery_pool:selected.length,deep_scan_pool:deepSelected.length,scanned:live.length,returned:candidates.length,min_quote_volume_24h:this.config.minQuoteVolume24h},
