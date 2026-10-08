@@ -183,11 +183,31 @@ const adaptiveWeights=(regime)=>{
   }
   return w;
 };
+
+const trajectoryFromMemory=(memory)=>{
+  const now=Date.now();
+  const history=Array.isArray(memory?.history)?memory.history:[];
+  const fresh=history.map(x=>({as_of:Number(x?.as_of),score:Number(x?.early_score)}))
+    .filter(x=>Number.isFinite(x.as_of)&&Number.isFinite(x.score)&&now-x.as_of>=0&&now-x.as_of<=3*60*60*1000)
+    .slice(-8);
+  if(fresh.length<2)return {score:50,observations:fresh.length,slope:0,up_ratio:0,max_drop:0};
+  const deltas=[];
+  for(let i=1;i<fresh.length;i++)deltas.push(fresh[i].score-fresh[i-1].score);
+  const upRatio=deltas.length?deltas.filter(x=>x>=0).length/deltas.length:0;
+  const slope=(fresh.at(-1).score-fresh[0].score)/Math.max(1,fresh.length-1);
+  let maxDrop=0;
+  for(let i=1;i<fresh.length;i++)maxDrop=Math.max(maxDrop,fresh[i-1].score-fresh[i].score);
+  const stability=clamp(100-maxDrop*5);
+  const score=clamp(50+slope*5+(upRatio-.5)*30+(stability-50)*.12);
+  return {score:Math.round(score*10)/10,observations:fresh.length,slope:Math.round(slope*100)/100,up_ratio:Math.round(upRatio*100)/100,max_drop:Math.round(maxDrop*10)/10};
+};
+
 const earlyOpportunity=(features,memory)=>{
   const move24=Number(features?.priceChange24h),head=Number(features?.structure?.headroom);
   const rv=Number(features?.rv),taker=Number(features?.tRatio),bb=Number(features?.bb);
   const rs=Number(features?.relativeStrength15),emaDist=Number(features?.distanceEma);
   const structure=Number(features?.structure?.bull)-Number(features?.structure?.bear);
+  const trajectory=trajectoryFromMemory(memory);
   let score=50;
   if(Number.isFinite(head)) score += clamp(100-Math.abs(head-2.2)*28,0,100)*.18-9;
   if(Number.isFinite(rv)) score += clamp(50+(rv-1)*70)*.15-7.5;
@@ -199,9 +219,11 @@ const earlyOpportunity=(features,memory)=>{
   if(Number.isFinite(move24)) score += clamp(94-Math.abs(move24-2.2)*14)*.08-7.52;
   const priorTs=Number(memory?.as_of),age=Date.now()-priorTs;
   const prior=Number(memory?.early_score);
-  const persistence=age>=0&&age<=45*60*1000&&prior>=60?Math.min(8,Math.max(0,(Number(score)-55)/6)):0;
-  score+=persistence;
-  return {score:clamp(score),persistence,move24,head,emaDist};
+  const freshPrior=age>=0&&age<=3*60*60*1000&&prior>=55;
+  const persistence=freshPrior?Math.min(8,Math.max(0,(Number(score)-50)/5)):0;
+  const trajectoryBonus=trajectory.observations>=2?clamp((trajectory.score-50)*.16,-4,8):0;
+  score+=persistence+trajectoryBonus;
+  return {score:clamp(score),persistence:persistence+trajectoryBonus,move24,head,emaDist,trajectory_score:trajectory.score,trajectory_observations:trajectory.observations};
 };
 const ANALYST_PROFILES=Object.freeze({
   MARKET_REGIME:{group:'MACRO',role:'اتجاه السوق العام'},
@@ -331,6 +353,9 @@ function specialistAnalysis(candidate, market={}){
   const emaSpread15=Number.isFinite(price)&&Number.isFinite(ema20_15)&&Number.isFinite(ema50_15)?(ema20_15-ema50_15)/price*100:null;
   const emaSpread1=Number.isFinite(price)&&Number.isFinite(ema20)&&Number.isFinite(ema50)?(ema20-ema50)/price*100:null;
   const htfSpread=Number.isFinite(price)&&Number.isFinite(ema50_4)&&Number.isFinite(ema200)?(ema50_4-ema200)/price*100:null;
+  // Distance from the fast trigger EMA; used to penalize chasing extended price.
+  const distanceEma=Number.isFinite(price)&&Number.isFinite(ema20_15)&&ema20_15>0
+    ?Math.abs((price-ema20_15)/ema20_15*100):null;
   const distanceEma=Number.isFinite(price)&&Number.isFinite(ema20_15)&&ema20_15!==0?(price-ema20_15)/ema20_15*100:null;
 
   const rangeHigh=Number.isFinite(Number(candidate?.high_price_24h))?Number(candidate.high_price_24h):Math.max(...s15.slice(-96).map(x=>Number(x.high)).filter(Number.isFinite));
@@ -692,6 +717,9 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   const chase=(Number.isFinite(move24)&&move24>7)||(Number.isFinite(emaDist)&&emaDist>6)||(Number.isFinite(head)&&head<.15);
   if(chase)early.score=Math.min(early.score,58);
 
+  const earlyCoreIds=['MARKET_STRUCTURE','VOLUME_CONFIRMATION','PRE_BREAKOUT','SUPPORT_RESISTANCE','RELATIVE_STRENGTH','ABSORPTION'];
+  const earlyCoreScores=earlyCoreIds.map(id=>Number(safeAnalysts.find(x=>x.id===id)?.score)).filter(Number.isFinite);
+  const earlyCoreGood=earlyCoreScores.filter(x=>x>=58).length>=4&&Number(setup.base_quality)>=55&&Number(setup.pressure)>=55&&Number(setup.timing)>=55&&Number(setup.risk)>=55;
   const hardReasons=[];
   if(!dataValid)hardReasons.push('DATA_GATE_FAILED');
   if(safeAnalysts.length!==19)hardReasons.push('SPECIALIST_COUNT_INVALID');
@@ -703,6 +731,7 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   if(avgCoverage<0.78)hardReasons.push('ANALYST_EVIDENCE_COVERAGE_LOW');
 
   const direction=directionEdge>=40?'LONG':directionEdge<=-40?'BEARISH':'NEUTRAL';
+  if(direction==='LONG'&&!earlyCoreGood&&early.score>=64)hardReasons.push('EARLY_CORE_NOT_READY');
   let timing='NO_SETUP';
   if(!chase&&direction==='LONG'&&early.score>=78&&(Number.isFinite(fingerprint)?fingerprint:0)>=76)timing='PRE_BREAKOUT';
   else if(!chase&&direction==='LONG'&&early.score>=68&&(Number.isFinite(fingerprint)?fingerprint:0)>=66)timing='EARLY_SETUP';
@@ -714,9 +743,9 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
     .every(id=>Number(safeAnalysts.find(x=>x.id===id)?.score)>=56);
 
   let verdict='REJECT';
-  if(!hardReasons.length&&direction==='LONG'&&balancedScore>=84&&positive>=12&&strong>=5&&positiveGroups>=6&&criticalGood&&agreement>=74&&early.score>=76&&(Number.isFinite(fingerprint)?fingerprint:0)>=75)
+  if(!hardReasons.length&&direction==='LONG'&&balancedScore>=84&&positive>=12&&strong>=5&&positiveGroups>=6&&criticalGood&&earlyCoreGood&&agreement>=74&&early.score>=76&&(Number.isFinite(fingerprint)?fingerprint:0)>=75&&early.trajectory_score>=48)
     verdict='STRONG_CANDIDATE';
-  else if(!hardReasons.length&&direction==='LONG'&&balancedScore>=76&&positive>=10&&strong>=3&&positiveGroups>=5&&criticalGood&&agreement>=64&&early.score>=64&&(Number.isFinite(fingerprint)?fingerprint:0)>=64)
+  else if(!hardReasons.length&&direction==='LONG'&&balancedScore>=76&&positive>=10&&strong>=3&&positiveGroups>=5&&criticalGood&&earlyCoreGood&&agreement>=64&&early.score>=64&&(Number.isFinite(fingerprint)?fingerprint:0)>=64&&early.trajectory_score>=45)
     verdict='CANDIDATE';
   else if(!hardReasons.length&&direction==='LONG'&&balancedScore>=65&&positive>=8&&positiveGroups>=4&&agreement>=52&&early.score>=52)
     verdict='WATCH';
@@ -738,7 +767,10 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
     agreement_ok:agreement>=64,
     group_agreement_ok:positiveGroups>=5,
     contradiction_count:bearishStrong,
-    evidence_coverage_ok:avgCoverage>=.78
+    evidence_coverage_ok:avgCoverage>=.78,
+    early_core_ok:earlyCoreGood,
+    trajectory_ok:early.trajectory_score>=45,
+    trajectory_observations:early.trajectory_observations||0
   };
 
   return {
@@ -754,6 +786,8 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
     early_score:Math.round(early.score*10)/10,
     timing,
     temporal_persistence:Math.round(Number(early.persistence||0)*10)/10,
+    temporal_trajectory:Number(early.trajectory_score),
+    temporal_trajectory_observations:Number(early.trajectory_observations||0),
     setup_fingerprint:Number.isFinite(fingerprint)?Math.round(fingerprint*10)/10:null,
     group_consensus:groupConsensus,
     strongest_analysts:top.map(x=>({id:x.id,name:x.name,score:x.score,group:x.group})),
@@ -852,19 +886,39 @@ export class MultiAnalystEngine {
         tradeCount24h:Number(x.count),priceChange24h:Number(x.priceChangePercent),
         highPrice24h:Number(x.highPrice),lowPrice24h:Number(x.lowPrice),tickerTime:Number(x.closeTime||x.eventTime||x.openTime||0)
       })).filter(x=>/^[A-Z0-9]{2,30}$/.test(x.symbol)&&Number.isFinite(x.lastPrice)&&x.lastPrice>0&&Number.isFinite(x.quoteVolume24h));
-      const top=rankTickerRows(tickers.data,universe,{minQuoteVolume24h:this.config.minQuoteVolume24h,limit:Math.max(8,Math.trunc(this.config.discoveryPool/2))});
-      const bottom=rankBottomTickerRows(tickers.data,universe,{minQuoteVolume24h:this.config.minQuoteVolume24h,limit:Math.max(4,Math.trunc(this.config.discoveryPool/5))});
+
+      const top=rankTickerRows(tickers.data,universe,{minQuoteVolume24h:this.config.minQuoteVolume24h,limit:Math.max(7,Math.trunc(this.config.discoveryPool*.36))});
+      const bottom=rankBottomTickerRows(tickers.data,universe,{minQuoteVolume24h:this.config.minQuoteVolume24h,limit:Math.max(4,Math.trunc(this.config.discoveryPool*.20))});
       const wake=normalized.filter(x=>x.priceChange24h>=0.35&&x.priceChange24h<=7).sort((a,b)=>{
         const sa=Math.log10(Math.max(1,a.quoteVolume24h))*0.6+Math.min(7,a.priceChange24h)*8;
         const sb=Math.log10(Math.max(1,b.quoteVolume24h))*0.6+Math.min(7,b.priceChange24h)*8;
         return sb-sa;
-      }).slice(0,Math.max(6,Math.trunc(this.config.discoveryPool*.4)));
-      const quiet=normalized.filter(x=>x.priceChange24h>=-1.5&&x.priceChange24h<=3.5)
-        .sort((a,b)=>(Math.abs(a.priceChange24h-1.2)-Math.abs(b.priceChange24h-1.2)) || (b.quoteVolume24h-a.quoteVolume24h));
-      const selected=[];const seen=new Set();
-      for(const row of [...top,...wake,...quiet,...bottom]){
-        if(seen.has(row.symbol))continue; seen.add(row.symbol); selected.push(row);
-        if(selected.length>=this.config.discoveryPool)break;
+      }).slice(0,Math.max(6,Math.trunc(this.config.discoveryPool*.30)));
+      // Preserve real scan capacity for coins that are liquid but still relatively quiet.
+      const quiet=normalized.filter(x=>
+        x.quoteVolume24h>=this.config.minQuoteVolume24h &&
+        x.priceChange24h>=-1.5&&x.priceChange24h<=3.5
+      ).map(x=>{
+        const range=Number.isFinite(x.highPrice24h)&&Number.isFinite(x.lowPrice24h)&&x.highPrice24h>x.lowPrice24h
+          ?x.highPrice24h-x.lowPrice24h:null;
+        const pos=range&&x.lastPrice>0?((x.lastPrice-x.lowPrice24h)/range)*100:50;
+        const baseProximity=clamp(100-Math.abs(pos-42)*1.8);
+        const moderateMove=clamp(100-Math.abs(x.priceChange24h-1.0)*22);
+        const activity=clamp(Math.log10(Math.max(1,x.tradeCount24h))*16);
+        const liquidity=clamp(Math.log10(Math.max(1,x.quoteVolume24h))*7);
+        return {...x,quiet_discovery_score:baseProximity*.35+moderateMove*.25+activity*.18+liquidity*.22};
+      }).sort((a,b)=>b.quiet_discovery_score-a.quiet_discovery_score)
+        .slice(0,Math.max(5,Math.trunc(this.config.discoveryPool*.28)));
+      // Round-robin the discovery buckets so volume leaders cannot consume the full deep-scan budget.
+      const buckets=[top,wake,quiet,bottom],selected=[],seen=new Set();
+      let bucketIndex=0;
+      while(selected.length<this.config.discoveryPool&&buckets.some(b=>b.length)){
+        const bucket=buckets[bucketIndex%buckets.length];
+        if(bucket.length){
+          const row=bucket.shift();
+          if(row&&!seen.has(row.symbol)){seen.add(row.symbol);selected.push(row);}
+        }
+        bucketIndex++;
       }
       if(!selected.length)throw new Error('NO_SPOT_CANDIDATES');
       const deepPool=Math.max(1,Math.min(selected.length,Math.trunc(Number(this.config.deepScanPool)||selected.length)));
@@ -935,6 +989,8 @@ export class MultiAnalystEngine {
               early_score:final.early_score,
               analyst_agreement:final.agreement,
               temporal_persistence:final.temporal_persistence,
+              temporal_trajectory:final.temporal_trajectory,
+              temporal_trajectory_observations:final.temporal_trajectory_observations,
               decision_gate:final.decision_gate
             },
             data_status:row.data_status,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
@@ -948,9 +1004,12 @@ export class MultiAnalystEngine {
       const live=scanned.filter(Boolean);
       const validLive=live.filter(x=>x?.data_status?.data_valid===true);
       const gateRejected=live.filter(x=>x?.data_status?.data_valid!==true);
+
       for(const item of live){
         try{
-          await this.store?.putIntelligenceMemory?.(item.symbol,{
+          const previous=await this.store?.getIntelligenceMemory?.(item.symbol).catch?.(()=>null);
+          const previousHistory=Array.isArray(previous?.history)?previous.history:[];
+          const history=[...previousHistory,{
             as_of:this.clock(),
             verdict:item.verdict,
             direction:item.direction,
@@ -958,6 +1017,16 @@ export class MultiAnalystEngine {
             early_score:item.intelligence?.early_score ?? null,
             timing:item.intelligence?.timing ?? null,
             agreement:item.intelligence?.analyst_agreement ?? null
+          }].slice(-12);
+          await this.store?.putIntelligenceMemory?.(item.symbol,{
+            as_of:this.clock(),
+            verdict:item.verdict,
+            direction:item.direction,
+            final_score:item.final_score,
+            early_score:item.intelligence?.early_score ?? null,
+            timing:item.intelligence?.timing ?? null,
+            agreement:item.intelligence?.analyst_agreement ?? null,
+            history
           });
         }catch{}
       }
@@ -965,7 +1034,7 @@ export class MultiAnalystEngine {
       const candidates=live.slice(0,requested).map((x,i)=>({...x,rank:i+1}));
       const strongCount=live.filter(x=>x.verdict==='STRONG_CANDIDATE').length;
       const value={
-        meta:{live:live.some(x=>x.data_status?.data_valid===true),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analyst_count:20,specialist_count:19},
+        meta:{live:live.some(x=>x.data_status?.data_valid===true),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analyst_count:20,specialist_count:19},engine_revision:'ELITE_TRAJECTORY_V1'},
         as_of:new Date(this.clock()).toISOString(),
         source:'Binance Public REST',
         universe:{quote:q,eligible_spot_symbols:universe.length,discovery_pool:selected.length,deep_scan_pool:deepSelected.length,scanned:live.length,returned:candidates.length,min_quote_volume_24h:this.config.minQuoteVolume24h},
