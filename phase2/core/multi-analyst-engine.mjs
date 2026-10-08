@@ -184,6 +184,58 @@ const adaptiveWeights=(regime)=>{
   return w;
 };
 
+const impulseEvent=(rows,lookback=96)=>{
+  const c=closes(rows),n=c.length;
+  if(n<8)return {gain:0,age:999,start:null,end:null};
+  const start=Math.max(0,n-Math.max(8,Math.trunc(lookback)));
+  let minPrice=c[start],minIndex=start;
+  let best={gain:0,age:n-1-start,start:start,end:start};
+  for(let i=start+1;i<n;i++){
+    const px=c[i];
+    if(Number.isFinite(px)&&minPrice>0){
+      const gain=(px-minPrice)/minPrice*100;
+      if(gain>best.gain){
+        best={gain,age:n-1-i,start:minIndex,end:i};
+      }
+    }
+    if(Number.isFinite(px)&&px<minPrice){minPrice=px;minIndex=i;}
+  }
+  return {
+    gain:Math.round(Math.max(0,best.gain)*100)/100,
+    age:Math.max(0,best.age),start:best.start,end:best.end
+  };
+};
+const decayedImpulseHeat=(event,decayBars=24,scale=7.5)=>{
+  const gain=Number(event?.gain),age=Number(event?.age);
+  if(!Number.isFinite(gain)||!Number.isFinite(age)||gain<=0)return 0;
+  return clamp(gain*Math.exp(-age/Math.max(1,decayBars))*scale);
+};
+const buildSniperFreshness=(series)=>{
+  const e15=impulseEvent(series?.['15m'],96);
+  const e1=impulseEvent(series?.['1h'],48);
+  const e4=impulseEvent(series?.['4h'],36);
+  const heat15=decayedImpulseHeat(e15,24,7.5);
+  const heat1=decayedImpulseHeat(e1,12,5.2);
+  const heat4=decayedImpulseHeat(e4,6,2.6);
+  const pumpHeat=clamp(Math.max(heat15,heat1,heat4));
+  const veryRecent4=impulseEvent(series?.['15m'],8);
+  const veryRecent8=impulseEvent(series?.['15m'],16);
+  const freshness=clamp(100-pumpHeat*1.05);
+  return {
+    pumpHeat:Math.round(pumpHeat*10)/10,
+    freshness:Math.round(freshness*10)/10,
+    recent4Gain:Number(veryRecent4.gain)||0,
+    recent8Gain:Number(veryRecent8.gain)||0,
+    recent24h15mGain:Number(e15.gain)||0,
+    recent48h1hGain:Number(e1.gain)||0,
+    recent6d4hGain:Number(e4.gain)||0,
+    recent15mAge:Number(veryRecent4.age)||999,
+    peak15mAge:Number(e15.age)||999,
+    peak1hAge:Number(e1.age)||999,
+    peak4hAge:Number(e4.age)||999
+  };
+};
+
 const trajectoryFromMemory=(memory)=>{
   const now=Date.now();
   const history=Array.isArray(memory?.history)?memory.history:[];
@@ -206,6 +258,7 @@ const earlyOpportunity=(features,memory)=>{
   const move24=Number(features?.priceChange24h),head=Number(features?.structure?.headroom);
   const rv=Number(features?.rv),taker=Number(features?.tRatio),bb=Number(features?.bb);
   const rs=Number(features?.relativeStrength15),emaDist=Number(features?.distanceEma);
+  const pumpHeat=Number(features?.pump_heat),freshness=Number(features?.sniper_freshness);
   const structure=Number(features?.structure?.bull)-Number(features?.structure?.bear);
   const trajectory=trajectoryFromMemory(memory);
   let score=50;
@@ -217,13 +270,15 @@ const earlyOpportunity=(features,memory)=>{
   score += clamp(50+structure*20)*.10-5;
   if(Number.isFinite(emaDist)) score += clamp(72-Math.max(0,emaDist-2)*10)*.08-5.76;
   if(Number.isFinite(move24)) score += clamp(94-Math.abs(move24-2.2)*14)*.08-7.52;
+  if(Number.isFinite(freshness)) score += (freshness-50)*.09;
+  if(Number.isFinite(pumpHeat)) score -= Math.max(0,pumpHeat-45)*.10;
   const priorTs=Number(memory?.as_of),age=Date.now()-priorTs;
   const prior=Number(memory?.early_score);
   const freshPrior=age>=0&&age<=3*60*60*1000&&prior>=55;
   const persistence=freshPrior?Math.min(8,Math.max(0,(Number(score)-50)/5)):0;
   const trajectoryBonus=trajectory.observations>=2?clamp((trajectory.score-50)*.16,-4,8):0;
   score+=persistence+trajectoryBonus;
-  return {score:clamp(score),persistence:persistence+trajectoryBonus,move24,head,emaDist,trajectory_score:trajectory.score,trajectory_observations:trajectory.observations};
+  return {score:clamp(score),persistence:persistence+trajectoryBonus,move24,head,emaDist,trajectory_score:trajectory.score,trajectory_observations:trajectory.observations,pump_heat:pumpHeat,sniper_freshness:freshness};
 };
 const ANALYST_PROFILES=Object.freeze({
   MARKET_REGIME:{group:'MACRO',role:'اتجاه السوق العام'},
@@ -356,6 +411,7 @@ function specialistAnalysis(candidate, market={}){
   // Distance from the fast trigger EMA; used to penalize chasing extended price.
   const distanceEma=Number.isFinite(price)&&Number.isFinite(ema20_15)&&ema20_15>0
     ?Math.abs((price-ema20_15)/ema20_15*100):null;
+  const sniperFreshness=buildSniperFreshness({ '4h':s4, '1h':s1, '15m':s15 });
 
   const rangeHigh=Number.isFinite(Number(candidate?.high_price_24h))?Number(candidate.high_price_24h):Math.max(...s15.slice(-96).map(x=>Number(x.high)).filter(Number.isFinite));
   const rangeLow=Number.isFinite(Number(candidate?.low_price_24h))?Number(candidate.low_price_24h):Math.min(...s15.slice(-96).map(x=>Number(x.low)).filter(Number.isFinite));
@@ -520,6 +576,7 @@ function specialistAnalysis(candidate, market={}){
     -Math.max(0,(Number(candidate?.price_change_24h)||0)-7)*4.6
     -Math.max(0,(Number(distanceEma)||0)-4)*6
     -Math.max(0,(Number(avgUpperWick)||0)-.28)*100
+    -Math.max(0,(Number(sniperFreshness.pumpHeat)||0)-45)*.38
     +(Number.isFinite(book.imbalance)&&book.imbalance>0.08?7:0)
     +(Number.isFinite(eff15)&&eff15>.62?4:0)
   );
@@ -531,6 +588,7 @@ function specialistAnalysis(candidate, market={}){
   const extensionScore=clamp(
     82-Math.max(0,Number(distanceEma||0))*7-Math.max(0,(Number(candidate?.price_change_24h)||0)-4)*3.3+
     (Number.isFinite(closeLocation)&&closeLocation<.82?4:0)
+    -(100-Number(sniperFreshness.freshness||50))*.32
   );
   a.push(analyst('EXTENSION','محلل عدم مطاردة السعر',extensionScore,extensionScore>=66?'LONG':extensionScore<42?'BEARISH':'NEUTRAL',{
     distanceFromEmaPct:distanceEma,move24hPct:candidate?.price_change_24h,closeLocationPct:Number.isFinite(closeLocation)?closeLocation*100:null
@@ -582,7 +640,8 @@ function specialistAnalysis(candidate, market={}){
       Number.isFinite(sm.headroom)?clamp(100-Math.max(0,sm.headroom)*12):50,
       extensionScore
     ])||50),
-    risk:clamp(avg([riskScore,extensionScore,liquidityScore])||50)
+    risk:clamp(avg([riskScore,extensionScore,liquidityScore])||50),
+    freshness:sniperFreshness.freshness
   };
   const fingerprintScore=clamp(
     setupFingerprint.base_quality*.22+
@@ -601,7 +660,10 @@ function specialistAnalysis(candidate, market={}){
     distanceEma,emaSpread15,emaSpread1,htfSpread,eff15,eff1,
     priceAccel,rangeBurst15,body:avgBody,upperWick:avgUpperWick,lowerWick:avgLowerWick,
     closeLocation,resistanceGap,supportGap,marketBreadth,
-    setupFingerprint,fingerprintScore
+    setupFingerprint,fingerprintScore,
+    recent_move:sniperFreshness,
+    pump_heat:sniperFreshness.pumpHeat,
+    sniper_freshness:sniperFreshness.freshness
   };
   return {a,features,dataValid:rowDataValid&&dq>=70&&liq>=60&&s4.length>=50&&s1.length>=50&&s15.length>=80};
 }
@@ -713,8 +775,18 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   const early=earlyOpportunity({...features,setupFingerprint:setup},memory);
   const fingerprint=Number(features?.fingerprintScore);
   const move24=Number(early.move24),head=Number(early.head),emaDist=Number(early.emaDist);
-  const chase=(Number.isFinite(move24)&&move24>7)||(Number.isFinite(emaDist)&&emaDist>6)||(Number.isFinite(head)&&head<.15);
-  if(chase)early.score=Math.min(early.score,58);
+  const pumpHeat=Number(early.pump_heat),freshness=Number(early.sniper_freshness);
+  const recent4Gain=Number(features?.recent_move?.recent4Gain),recent8Gain=Number(features?.recent_move?.recent8Gain);
+  const chase=(Number.isFinite(move24)&&move24>7)||(Number.isFinite(emaDist)&&emaDist>6)||(Number.isFinite(head)&&head<.15)||(Number.isFinite(recent4Gain)&&recent4Gain>=4.5);
+  const pumpExhaustion=(Number.isFinite(pumpHeat)&&pumpHeat>=72)||
+    (Number.isFinite(recent8Gain)&&recent8Gain>=7&&Number.isFinite(freshness)&&freshness<58);
+  const sniperScore=clamp(
+    Number(early.score||50)*.46+
+    (Number.isFinite(freshness)?freshness:50)*.24+
+    (Number.isFinite(early.trajectory_score)?early.trajectory_score:50)*.14+
+    (Number.isFinite(Number(features?.fingerprintScore))?Number(features.fingerprintScore):50)*.16
+  );
+  if(chase||pumpExhaustion)early.score=Math.min(early.score,56);
 
   const earlyCoreIds=['MARKET_STRUCTURE','VOLUME_CONFIRMATION','PRE_BREAKOUT','SUPPORT_RESISTANCE','RELATIVE_STRENGTH','ABSORPTION'];
   const earlyCoreScores=earlyCoreIds.map(id=>Number(safeAnalysts.find(x=>x.id===id)?.score)).filter(Number.isFinite);
@@ -727,6 +799,8 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   if(safeAnalysts.find(x=>x.id==='LIQUIDITY_QUALITY')?.score<60)hardReasons.push('LIQUIDITY_TOO_WEAK');
   if(bearishStrong>=3||bearishGroups>=3)hardReasons.push('CONSENSUS_CONTRADICTION');
   if(chase)hardReasons.push('EARLY_WINDOW_LOST');
+  if(pumpExhaustion)hardReasons.push('RECENT_PUMP_EXHAUSTION');
+  if(Number.isFinite(freshness)&&freshness<42)hardReasons.push('SNIPER_FRESHNESS_LOW');
   if(avgCoverage<0.78)hardReasons.push('ANALYST_EVIDENCE_COVERAGE_LOW');
 
   const direction=directionEdge>=40?'LONG':directionEdge<=-40?'BEARISH':'NEUTRAL';
@@ -742,11 +816,11 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
     .every(id=>Number(safeAnalysts.find(x=>x.id===id)?.score)>=56);
 
   let verdict='REJECT';
-  if(!hardReasons.length&&direction==='LONG'&&balancedScore>=84&&positive>=12&&strong>=5&&positiveGroups>=6&&criticalGood&&earlyCoreGood&&agreement>=74&&early.score>=76&&(Number.isFinite(fingerprint)?fingerprint:0)>=75&&early.trajectory_score>=48)
+  if(!hardReasons.length&&direction==='LONG'&&balancedScore>=84&&positive>=12&&strong>=5&&positiveGroups>=6&&criticalGood&&earlyCoreGood&&agreement>=74&&early.score>=76&&(Number.isFinite(fingerprint)?fingerprint:0)>=75&&early.trajectory_score>=48&&sniperScore>=82)
     verdict='STRONG_CANDIDATE';
-  else if(!hardReasons.length&&direction==='LONG'&&balancedScore>=76&&positive>=10&&strong>=3&&positiveGroups>=5&&criticalGood&&earlyCoreGood&&agreement>=64&&early.score>=64&&(Number.isFinite(fingerprint)?fingerprint:0)>=64&&early.trajectory_score>=45)
+  else if(!hardReasons.length&&direction==='LONG'&&balancedScore>=76&&positive>=10&&strong>=3&&positiveGroups>=5&&criticalGood&&earlyCoreGood&&agreement>=64&&early.score>=64&&(Number.isFinite(fingerprint)?fingerprint:0)>=64&&early.trajectory_score>=45&&sniperScore>=72)
     verdict='CANDIDATE';
-  else if(!hardReasons.length&&direction==='LONG'&&balancedScore>=65&&positive>=8&&positiveGroups>=4&&agreement>=52&&early.score>=52)
+  else if(!hardReasons.length&&direction==='LONG'&&balancedScore>=65&&positive>=8&&positiveGroups>=4&&agreement>=52&&early.score>=52&&sniperScore>=60)
     verdict='WATCH';
 
   const top=safeAnalysts.filter(x=>x.direction==='LONG').sort((a,b)=>b.score-a.score).slice(0,7);
@@ -769,7 +843,11 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
     evidence_coverage_ok:avgCoverage>=.78,
     early_core_ok:earlyCoreGood,
     trajectory_ok:early.trajectory_score>=45,
-    trajectory_observations:early.trajectory_observations||0
+    trajectory_observations:early.trajectory_observations||0,
+    sniper_freshness_ok:!Number.isFinite(freshness)||freshness>=42,
+    recent_move_heat:Number.isFinite(pumpHeat)?Math.round(pumpHeat*10)/10:null,
+    sniper_score:Math.round(sniperScore*10)/10,
+    pump_exhaustion_blocked:pumpExhaustion
   };
 
   return {
@@ -787,7 +865,10 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
     temporal_persistence:Math.round(Number(early.persistence||0)*10)/10,
     temporal_trajectory:Number(early.trajectory_score),
     temporal_trajectory_observations:Number(early.trajectory_observations||0),
-    setup_fingerprint:Number.isFinite(fingerprint)?Math.round(fingerprint*10)/10:null,
+    recent_move_heat:Number.isFinite(pumpHeat)?Math.round(pumpHeat*10)/10:null,
+    sniper_freshness:Number.isFinite(freshness)?Math.round(freshness*10)/10:null,
+    sniper_score:Math.round(sniperScore*10)/10,
+    setup_fingerprint:Number.isFinite(fingerprint)?Math.round(fingerprint*10)/10,
     group_consensus:groupConsensus,
     strongest_analysts:top.map(x=>({id:x.id,name:x.name,score:x.score,group:x.group})),
     weakest_analysts:weak.map(x=>({id:x.id,name:x.name,score:x.score,group:x.group,direction:x.direction})),
@@ -809,7 +890,7 @@ export class MultiAnalystEngine {
     if(!rest||typeof rest.request!=='function')throw new Error('REST_CLIENT_REQUIRED');
     this.clock=clock;
     this.config={
-      quote:'USDT',discoveryPool:24,deepScanPool:14,returnLimit:10,deepConcurrency:3,deepKlines:220,
+      quote:'USDT',discoveryPool:28,deepScanPool:16,returnLimit:8,deepConcurrency:3,deepKlines:220,
       minQuoteVolume24h:300000,minDataQuality:70,minLiquidityQuality:60,
       ttlMs:45000,...config
     };
@@ -1030,18 +1111,20 @@ export class MultiAnalystEngine {
           });
         }catch{}
       }
-      live.sort((a,b)=>b.final_score-a.final_score||b.consensus.ratio-a.consensus.ratio||b.liquidity_quality-a.liquidity_quality);
-      const candidates=live.slice(0,requested).map((x,i)=>({...x,rank:i+1}));
+      live.sort((a,b)=>(b.final_judge?.sniper_score??-1)-(a.final_judge?.sniper_score??-1)||b.final_score-a.final_score||b.consensus.ratio-a.consensus.ratio||b.liquidity_quality-a.liquidity_quality);
+      const qualified=live.filter(x=>x.verdict==='STRONG_CANDIDATE'||x.verdict==='CANDIDATE');
+      const candidates=qualified.slice(0,Math.min(requested,5)).map((x,i)=>({...x,rank:i+1}));
+      const watchlist=live.filter(x=>x.verdict==='WATCH').slice(0,Math.min(requested,3)).map((x,i)=>({...x,rank:i+1}));
       const strongCount=live.filter(x=>x.verdict==='STRONG_CANDIDATE').length;
       const value={
-        meta:{live:live.some(x=>x.data_status?.data_valid===true),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analyst_count:20,specialist_count:19,engine_revision:'ELITE_TRAJECTORY_V1'},
+        meta:{live:live.some(x=>x.data_status?.data_valid===true),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analyst_count:20,specialist_count:19,engine_revision:'ELITE_SNIPER_V1'},
         as_of:new Date(this.clock()).toISOString(),
         source:'Binance Public REST',
         universe:{quote:q,eligible_spot_symbols:universe.length,discovery_pool:selected.length,deep_scan_pool:deepSelected.length,scanned:live.length,returned:candidates.length,min_quote_volume_24h:this.config.minQuoteVolume24h},
         market_context:{regime:marketRegime({marketMedian24h,breadthPct}),median_24h_change_pct:marketMedian24h,positive_breadth_pct:breadthPct},
-        summary:{strong_candidates:strongCount,candidates:live.filter(x=>x.verdict==='CANDIDATE').length,watch:live.filter(x=>x.verdict==='WATCH').length,rejected:live.filter(x=>x.verdict==='REJECT').length},
-        candidates,
-        pipeline:['Discovery','Data Gate','19 Specialist Analysts','Chief Analyst'],
+        summary:{strong_candidates:strongCount,candidates:live.filter(x=>x.verdict==='CANDIDATE').length,qualified:qualified.length,watch:live.filter(x=>x.verdict==='WATCH').length,rejected:live.filter(x=>x.verdict==='REJECT').length},
+        candidates,watchlist,
+        pipeline:['Broad Discovery','Early-Opportunity Gate','Data Gate','19 Specialist Analysts','Chief Analyst','Sniper Freshness Gate'],
         diagnostics:{
           scan_plan:{discovery:selected.length,deep:deepSelected.length,core_timeframes:['4h','1h','15m'],optional_fast_timeframe:null,shared_rest_broker:true},
           duration_ms:Math.max(0,this.clock()-startedAt),
