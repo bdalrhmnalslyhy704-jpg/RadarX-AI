@@ -1,3 +1,5 @@
+import {evaluateFalconEye} from './radar-falcon-core.mjs';
+
 const clamp=(v,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number.isFinite(Number(v))?Number(v):0));
 const arr=v=>Array.isArray(v)?v:[];
 const upper=v=>String(v||'').toUpperCase();
@@ -22,13 +24,13 @@ function evidenceCount(alert){
   return Math.min(12,reasons+Math.min(5,codes)+Math.min(5,numeric));
 }
 
-export function evaluateRadarQuality(alert={}){
+export function evaluateRadarQuality(alert={},options={}){
   const radar=upper(alert.radar);
   const data=clamp(alert.data_quality??alert.data_status?.data_quality??alert.components?.data_quality??100);
   const liquidity=clamp(alert.liquidity_quality??alert.components?.liquidity??100);
   const price24=Number(alert.price_change_24h);
   const limit=Number(LIMITS[radar]||12);
-  const chasePenalty=Number.isFinite(price24)?clamp(Math.max(0,Math.abs(price24)-limit)*8,0,30):0;
+  const chasePenalty=Number.isFinite(price24)?clamp(Math.max(0,Math.abs(price24)-limit)*8,0,30);
 
   const hist=alert.historical_followthrough||alert.components?.historical_followthrough||alert.fast_impulse_context?.historical_followthrough||{};
   const histSamples=Number(hist.samples)||0;
@@ -40,18 +42,30 @@ export function evaluateRadarQuality(alert={}){
   const riskCount=arr(alert.risk_flags).length;
   const explicitRisk=arr(alert.risk_flags).some(x=>/STALE|FUTURE|INVALID|EXTENDED|CHAS|WIDE_SPREAD|LOW_LIQUIDITY/i.test(String(x)));
   const dataOk=data>=70,liquidityOk=liquidity>=60;
-  const score=clamp(
-    clamp(alert.opportunity_score??alert.setup_score??alert.radar_power_score??50)*.42+
-    data*.18+
-    liquidity*.15+
-    evidenceScore*.10+
-    empirical*.15-
+
+  const falcon=evaluateFalconEye(alert,{now:Number(options.now)||Date.now(),limits:LIMITS});
+  const opportunity=clamp(alert.opportunity_score??alert.setup_score??alert.radar_power_score??50);
+  const classicScore=
+    opportunity*.38+
+    data*.16+
+    liquidity*.13+
+    evidenceScore*.08+
+    empirical*.10+
+    falcon.quality*.15-
     Math.min(12,riskCount*2)-
-    chasePenalty
-  );
-  const hardFail=explicitRisk||!dataOk||!liquidityOk||Boolean(alert.data_status?.future_data_detected)||Boolean(alert.data_status?.stale);
+    chasePenalty;
+
+  const score=clamp(classicScore);
+  const hardFail=
+    explicitRisk||
+    !dataOk||
+    !liquidityOk||
+    Boolean(alert.data_status?.future_data_detected)||
+    Boolean(alert.data_status?.stale)||
+    Boolean(falcon.hard_fail);
+
   return {
-    version:'RADAR_QUALITY_V3',
+    version:'RADAR_QUALITY_V4_FALCON',
     score:Number(score.toFixed(1)),
     hard_fail:hardFail,
     data_quality:Number(data.toFixed(1)),
@@ -62,7 +76,8 @@ export function evaluateRadarQuality(alert={}){
     historical_followthrough_samples:histSamples,
     chase_penalty:Number(chasePenalty.toFixed(1)),
     risk_count:riskCount,
+    falcon_eye:falcon,
     target_24h_abs_move_before_signal_pct:limit,
-    decision:hardFail?'REJECT':score>=80?'HIGH_QUALITY':score>=68?'QUALITY_WATCH':'LOW_QUALITY'
+    decision:hardFail?'REJECT':score>=82?'HIGH_QUALITY':score>=70?'QUALITY_WATCH':'LOW_QUALITY'
   };
 }
