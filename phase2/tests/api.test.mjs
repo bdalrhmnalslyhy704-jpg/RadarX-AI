@@ -267,3 +267,30 @@ test('TEST_FIXTURE: Kahir immediate scan failure returns resilient status instea
     assert.match(String(body.scan.error),/TRANSIENT_BINANCE_FAILURE/);
   }finally{await new Promise(resolve=>server.close(resolve));}
 });
+
+test('TEST_FIXTURE: Falcon Eye history remains retrievable when the live scanner instance is unavailable',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-falcon-history-api-'));
+  const store=await new DurableStore({dir}).init();
+  await store.appendFalconEyeAlert({
+    id:'TEST_FIXTURE_FALCON_ALERT_1700000000000',
+    radar:'FALCON_EYE_RADAR',radar_name:'Radar 9 — عين الصقر',
+    symbol:'TESTUSDT',price:0.01234,price_at_detection:0.01234,
+    detected_at:1700000000000,processed_at:1700000000000,
+    detected_time_12h:'08:13:20 PM',detected_timezone:'Asia/Aden',
+    eligible:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+  });
+  const {server,base}=await startTestApi(store);
+  const response=await fetch(base+'/api/falcon-eye-radar?since=0&limit=10&scan=0');
+  assert.equal(response.status,200);
+  const body=await response.json();
+  assert.equal(body.radar,'FALCON_EYE_RADAR');
+  assert.equal(body.meta.live,false);
+  assert.equal(body.meta.paper_trading,true);
+  assert.equal(body.meta.real_order_execution,false);
+  assert.equal(body.meta.confidence_score,'UNKNOWN');
+  assert.equal(body.alerts.length,1);
+  assert.equal(body.alerts[0].symbol,'TESTUSDT');
+  assert.equal(body.alerts[0].price_at_detection,0.01234);
+  assert.equal(body.alerts[0].detected_at,1700000000000);
+  await new Promise(resolve=>server.close(resolve));
+});
