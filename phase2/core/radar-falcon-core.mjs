@@ -89,10 +89,15 @@ function priceTiming(alert,limit){
   const antiChase=num(fp?.anti_chase_score,null);
   const momentum=num(fp?.acceleration_score ?? alert?.components?.acceleration ?? alert?.components?.momentum,null);
 
-  let timing=clamp(100-Math.max(0,move-limit)*10);
-  if(Number.isFinite(early))timing=timing*.45+clamp(early)*.35;
-  if(Number.isFinite(antiChase))timing=timing*.20+clamp(antiChase)*.20;
-  if(Number.isFinite(momentum))timing=timing*.85+clamp(momentum)*.15;
+  const baseTiming=clamp(100-Math.max(0,move-limit)*10);
+  const timingParts=[
+    [baseTiming,.45],
+    [Number.isFinite(early)?clamp(early):null,.25],
+    [Number.isFinite(antiChase)?clamp(antiChase):null,.20],
+    [Number.isFinite(momentum)?clamp(momentum):null,.10]
+  ].filter(([value])=>Number.isFinite(value));
+  const timingWeight=timingParts.reduce((s,[,w])=>s+w,0)||1;
+  const timing=timingParts.reduce((s,[value,w])=>s+value*w,0)/timingWeight;
 
   const extended=move>limit;
   const late=move>limit*1.5;
