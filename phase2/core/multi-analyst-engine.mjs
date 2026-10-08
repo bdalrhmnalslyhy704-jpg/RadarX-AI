@@ -797,6 +797,10 @@ export class MultiAnalystEngine {
     this.busy=null;
     this.calibration=new SelfCalibrator(30);
     this.pendingOutcomes=new Map();
+    this.running=false;
+    this.monitorTimer=null;
+    this.monitorStartedAt=null;
+    this.monitorStats={scan_count:0,last_scan_at:null,last_error:null,next_scan_at:null};
   }
   _settleOutcome(symbol,currentPrice,now){
     const list=this.pendingOutcomes.get(symbol);
@@ -975,12 +979,52 @@ export class MultiAnalystEngine {
           }))
         }
       };
+      this.monitorStats.scan_count=Number(this.monitorStats.scan_count||0)+1;
+      this.monitorStats.last_scan_at=value.as_of;
+      this.monitorStats.last_error=null;
+      this.monitorStats.next_scan_at=new Date(this.clock()+Math.max(15000,Number(this.config.continuousIntervalMs)||90000)).toISOString();
+      value.monitoring={
+        continuous:true,
+        running:this.running,
+        interval_ms:Math.max(15000,Number(this.config.continuousIntervalMs)||90000),
+        scan_count:this.monitorStats.scan_count,
+        last_scan_at:this.monitorStats.last_scan_at,
+        last_error:null,
+        next_scan_at:this.monitorStats.next_scan_at
+      };
       this.cache={quote:q,expiresAt:this.clock()+this.config.ttlMs,value};
       return value;
     })();
     try{return await this.busy}finally{this.busy=null;}
   }
-  getCached({quote=this.config.quote}={}){return this.cache?.quote===String(quote).toUpperCase()?this.cache.value:null;}
+  getCached({quote=this.config.quote}={}){
+    return this.cache?.quote===String(quote).toUpperCase()?this.cache.value:null;
+  }
+  start(){
+    if(this.running)return;
+    this.running=true;
+    this.monitorStartedAt=this.clock();
+    const interval=Math.max(15000,Number(this.config.continuousIntervalMs)||90000);
+    const warmup=Math.max(0,Number(this.config.continuousWarmupMs)||8000);
+    const loop=async()=>{
+      if(!this.running)return;
+      try{
+        await this.scan({quote:this.config.quote,limit:this.config.returnLimit});
+      }catch(error){
+        this.monitorStats.last_error=String(error?.message||error);
+      }
+      if(!this.running)return;
+      this.monitorStats.next_scan_at=new Date(this.clock()+interval).toISOString();
+      this.monitorTimer=setTimeout(loop,interval);
+    };
+    this.monitorTimer=setTimeout(loop,warmup);
+  }
+  stop(){
+    this.running=false;
+    if(this.monitorTimer)clearTimeout(this.monitorTimer);
+    this.monitorTimer=null;
+    this.monitorStats.next_scan_at=null;
+  }
 }
 
 export const MULTI_ANALYST_NAMES=Object.freeze([
