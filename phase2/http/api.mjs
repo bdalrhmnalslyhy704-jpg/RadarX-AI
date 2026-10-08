@@ -546,7 +546,32 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           const memoryForVerdict=[...memory,...evaluated];
           const evidence=await collectAgentEvidence({symbol:rawSymbol});
           const verdict=buildAgentVerdict({symbol:rawSymbol,evidence,deepScan,memory:memoryForVerdict});
-          const supremeFusion=evaluateSupremeFusion({candidate:{symbol:rawSymbol,direction:verdict.decision?.direction,last_price:deepScan?.price?.last,price_change_24h:deepScan?.price?.change_24h_pct,data_quality:deepScan?.data_quality?.score??deepScan?.scores?.data_quality,liquidity_quality:deepScan?.liquidity?.score,pre_move_context:{score:deepScan?.pre_move_context?.score,compression_score:deepScan?.pre_move_context?.compression_score},pre_breakout_fingerprint:deepScan?.pre_breakout_fingerprint,fast_impulse_context:deepScan?.fast_impulse_context,surge_fingerprint:deepScan?.surge_fingerprint},verdict});
+          const m15=deepScan?.timeframes?.['15m']||{};
+          const preMoveScore=Number(((Number(deepScan?.assessment?.analysis_strength||50)*0.38)+(Number(deepScan?.assessment?.direction_score||50)*0.28)+(Number(deepScan?.momentum?.score||50)*0.20)+(Number(deepScan?.pressure?.score||50)*0.14)).toFixed(1));
+          const compressionScore=Number.isFinite(Number(m15?.bollinger?.width))
+            ? Math.max(0,Math.min(100,Number(m15.bollinger.width)<=1.2?91:Number(m15.bollinger.width)<=2?78:Number(m15.bollinger.width)<=3.5?64:Number(m15.bollinger.width)<=6?48:32))
+            : 50;
+          const volumeScore=Number.isFinite(Number(m15?.rvol))?Math.max(0,Math.min(100,50+(Number(m15.rvol)-1)*34)):50;
+          const fastScore=Number(((Number(m15?.momentum_score||50)*0.35)+(volumeScore*0.20)+(Number(deepScan?.pressure?.score||50)*0.20)+(Number(deepScan?.assessment?.direction_score||50)*0.25)).toFixed(1));
+          const resistance=Number(deepScan?.zones?.resistance);
+          const price=Number(deepScan?.price?.last);
+          const resistanceDistance=Number.isFinite(resistance)&&resistance>0&&Number.isFinite(price)?((resistance/price)-1)*100:null;
+          const breakoutScore=Number((Number(deepScan?.assessment?.direction_score||50)*0.55+(resistanceDistance!=null?Math.max(20,Math.min(100,100-resistanceDistance*18)):50)*0.25+Number(deepScan?.pressure?.score||50)*0.20).toFixed(1));
+          const high24=Number(deepScan?.price?.high_24h);
+          const nearHighScore=Number.isFinite(high24)&&high24>0&&Number.isFinite(price)?Math.max(0,Math.min(100,100-Math.max(0,(high24-price)/high24*100)*18)):50;
+          const syntheticCandidate={
+            symbol:rawSymbol,
+            direction:verdict.decision?.direction,
+            last_price:price,
+            price_change_24h:Number(deepScan?.price?.change_24h_pct||0),
+            data_quality:deepScan?.data_quality?.score??deepScan?.scores?.data_quality,
+            liquidity_quality:deepScan?.liquidity?.score,
+            pre_move_context:{score:preMoveScore,compression_score:compressionScore},
+            fast_impulse_context:{score:fastScore,scores:{momentum:Number(m15?.momentum_score||50),volume:volumeScore,taker_buy:Number(deepScan?.pressure?.score||50),breakout:breakoutScore}},
+            surge_fingerprint:{early_score:preMoveScore,ignition_score:fastScore,participation_score:Number(deepScan?.pressure?.score||50),near_high_score:nearHighScore},
+            risk_flags:Number(deepScan?.assessment?.trap_risk||50)>=55?['TRAP_RISK_ELEVATED']:[]
+          };
+          const supremeFusion=evaluateSupremeFusion({candidate:syntheticCandidate,verdict});
           const price=Number(deepScan?.price?.last);
           const recent=memory.filter(x=>String(x?.symbol||'').toUpperCase()===rawSymbol&&Number(x?.created_at||0)>now-10*60*1000);
           if(!recent.length&&Number.isFinite(price)&&typeof store.appendAgentMemory==='function'){
