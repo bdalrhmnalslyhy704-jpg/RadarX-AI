@@ -153,6 +153,7 @@ console.log('multi-analyst-engine runtime-error regression: PASS');
   const base4=series(60,{base:100,trend:.001});
   const scanner=new (await import('../market/universe-scanner.mjs')).MarketUniverseScanner({
     rest:{
+      request:async()=>({data:[],source:'TEST'}),
       klines:async(symbol,interval)=>({candles:interval==='15m'?base15:interval==='1h'?base1:base4,source:'TEST'}),
       depth:async()=>({data:{bids:[['99.9','5000']],asks:[['100.1','2000']]},source:'TEST'})
     },
