@@ -19,13 +19,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          ref: 904ccde3037c10656d49e4f05191acd6c580710d
+          ref: 663928e465832dc5ec8ec2d9d3539417b02fe6ad
 
       - name: Verify Build 224 + Falcon Eye source
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "904ccde3037c10656d49e4f05191acd6c580710d"
+          test "$(git rev-parse HEAD)" = "663928e465832dc5ec8ec2d9d3539417b02fe6ad"
           grep -Fq 'versionCode 17' android/app/build.gradle
           grep -Fq 'versionName "1.5.1"' android/app/build.gradle
           test -s android/app/src/main/assets/falcon-eye-radar.html
@@ -250,7 +250,7 @@ jobs:
           APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
-            --target "904ccde3037c10656d49e4f05191acd6c580710d" \
+            --target "663928e465832dc5ec8ec2d9d3539417b02fe6ad" \
             --title "RadarX Native — Build 224 + Radar 8 V2 + Hawkeye V2 + Supreme Fusion + Falcon Eye Offline Queue 1.5.1" \
             --notes "Signed universal APK from exact Build 224 lineage. Version 1.5.1 adds a dedicated Falcon Eye event-history fetch, oldest-first replay after phone reconnection, a device-local durable alert queue before notification delivery, immediate scan on validated network restore, and notifications containing the original detection timestamp plus recorded detection price separately from delivery time. Offline limitation: the phone cannot fetch new live market data while Internet is unavailable; while the phone is offline, the online Railway radar service may continue scanning and store detections for delivery when the phone reconnects. Local pending alerts survive app process/service restarts. No simulated discoveries are generated. Supreme Fusion, Radar 8 V2, Hawkeye V2; closed candles only; Spot/Paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN. Android emulator smoke outcome: ${ANDROID_EMULATOR_SMOKE_OUTCOME}. If it is not success, emulator validation is unresolved and this release does not claim it passed."
 
