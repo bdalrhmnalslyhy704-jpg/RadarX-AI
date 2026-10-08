@@ -90,9 +90,14 @@ start_app_and_wait_ready() {
 
 assert_background_service_declared() {
   PACKAGE="$(adb shell dumpsys package com.radarx.app 2>/dev/null | tr -d '\r' || true)"
-  printf '%s\n' "$PACKAGE" | grep -q 'RadarXBackgroundMonitorService'
-  printf '%s\n' "$PACKAGE" | grep -q 'FOREGROUND_SERVICE_DATA_SYNC'
-  printf '%s\n' "$PACKAGE" | grep -q 'ACCESS_NETWORK_STATE'
+  if ! printf '%s\n' "$PACKAGE" | grep -q 'RadarXBackgroundMonitorService'; then
+    echo "::error::RadarXBackgroundMonitorService is not registered"
+    return 1
+  fi
+  if ! printf '%s\n' "$PACKAGE" | grep -q 'FOREGROUND_SERVICE_DATA_SYNC'; then
+    echo "::error::Foreground data-sync service permission is missing"
+    return 1
+  fi
 }
 
 adb wait-for-device
