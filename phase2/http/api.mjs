@@ -473,8 +473,14 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         const runNow=String(u.searchParams.get('scan')||'').trim()==='1';
         try{
           let snapshot=multiAnalystRadar.getCached({quote});
-          if(runNow||!snapshot)snapshot=await multiAnalystRadar.scan({quote,limit});
-          return send(res,200,{...snapshot,radar:'MULTI_ANALYST'});
+          if(runNow){
+            snapshot=await multiAnalystRadar.scan({quote,limit});
+            return send(res,200,{...snapshot,radar:'MULTI_ANALYST',meta:{...(snapshot.meta||{}),analysis_mode:'FORCED_SCAN',served_from_cache_while_scan:false}});
+          }
+          if(!snapshot){
+            return send(res,503,{error:'MULTI_ANALYST_WARMING_UP',message:'X-FACTOR is warming its background market snapshot.',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analysis_mode:'WARMING_UP'},monitoring:multiAnalystRadar.monitorStats||null});
+          }
+          return send(res,200,{...snapshot,radar:'MULTI_ANALYST',meta:{...(snapshot.meta||{}),analysis_mode:'CACHE',served_from_cache_while_scan:false}});
         }catch(e){
           const cached=multiAnalystRadar.getCached({quote})||null;
           return send(res,200,{
