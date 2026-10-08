@@ -800,7 +800,7 @@ export class MultiAnalystEngine {
     this.running=false;
     this.monitorTimer=null;
     this.monitorStartedAt=null;
-    this.monitorStats={scan_count:0,last_scan_at:null,last_error:null,next_scan_at:null};
+    this.monitorStats={scan_count:0,last_scan_at:null,last_error:null,next_scan_at:null,last_scan_successful:false};
   }
   _settleOutcome(symbol,currentPrice,now){
     const list=this.pendingOutcomes.get(symbol);
@@ -870,9 +870,9 @@ export class MultiAnalystEngine {
       const marketMedian24h=validTickerReturns.length?validTickerReturns[Math.floor(validTickerReturns.length/2)]:null;
       const breadthPct=validTickerReturns.length?validTickerReturns.filter(x=>x>0).length/validTickerReturns.length*100:null;
       const scanErrors=[];
-      const scanned=await boundedMap(selected,Math.max(1,Math.min(5,this.config.deepConcurrency)),async(ticker,index)=>{
+      const scanned=await boundedMap(deepSelected,Math.max(1,Math.min(4,this.config.deepConcurrency)),async(ticker,index)=>{
         try{
-          const row=await this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:info.source,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'5m',fastKlines:96,includeAnalysisPayload:true});
+          const row=await this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:info.source,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'',includeAnalysisPayload:true});
           if(!row)throw new Error('SYMBOL_SCAN_RETURNED_EMPTY');
           // A candidate must reach the 19 specialist analysts even when the data gate fails.
           // The final judge remains fail-closed: invalid/stale/future/incomplete data is rejected there.
@@ -957,7 +957,7 @@ export class MultiAnalystEngine {
         meta:{live:live.some(x=>x.data_status?.data_valid===true),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analyst_count:20,specialist_count:19},
         as_of:new Date(this.clock()).toISOString(),
         source:'Binance Public REST',
-        universe:{quote:q,eligible_spot_symbols:universe.length,discovery_pool:selected.length,scanned:live.length,returned:candidates.length,min_quote_volume_24h:this.config.minQuoteVolume24h},
+        universe:{quote:q,eligible_spot_symbols:universe.length,discovery_pool:selected.length,deep_scan_pool:deepSelected.length,scanned:live.length,returned:candidates.length,min_quote_volume_24h:this.config.minQuoteVolume24h},
         market_context:{regime:marketRegime({marketMedian24h,breadthPct}),median_24h_change_pct:marketMedian24h,positive_breadth_pct:breadthPct},
         summary:{strong_candidates:strongCount,candidates:live.filter(x=>x.verdict==='CANDIDATE').length,watch:live.filter(x=>x.verdict==='WATCH').length,rejected:live.filter(x=>x.verdict==='REJECT').length},
         candidates,
