@@ -1,5 +1,6 @@
 // RadarX Supreme Fusion v1 — evidence-first market decision layer.
 // Pure, deterministic, read-only analysis. It does not place orders and never fabricates confidence.
+// Designed to sit above the analyst council as a correlation-aware decision layer.
 
 const clamp=(v,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number.isFinite(Number(v))?Number(v):50));
 const num=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
