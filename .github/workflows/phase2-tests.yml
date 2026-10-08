@@ -3,7 +3,7 @@ on:
   push:
     branches: ['phase2-*','supreme-fusion-build224']
   pull_request:
-    branches: [main]
+    branches: [main,'baseline/build224-official']
   workflow_dispatch:
 jobs:
   all-tests:
