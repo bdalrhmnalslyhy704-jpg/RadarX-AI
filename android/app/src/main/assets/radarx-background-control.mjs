@@ -13,6 +13,7 @@ const RADARS=[
   {id:'COIN_HUNTER_RADAR',name:'🎯 صائد العملات',icon:'🎯',color:'#facc15',desc:'يتعلم من قادة السوق ثم يبحث عن العملة التي ما زالت مبكرة وغير ممددة وتطابق البصمة المتعلمة.',algos:'Leader Fingerprint • Quiet Range • RVOL/Trades • Taker • HL • Anti-Chase'},
   {id:'WHALE_ACCUMULATION_RADAR',name:'🐋 تجمع الحيتان',icon:'🐋',color:'#fbbf24',desc:'يبحث عن بصمة التجميع الكبير عبر الصفقات الكبيرة ودفتر الأوامر وامتصاص البيع واستمرارية الدعم.',algos:'Large Prints • Buy Imbalance • Depth • Absorption • Persistence'},
   {id:'PROFESSOR_RADAR',name:'🧠 البروفيسور',icon:'🧠',color:'#a78bfa',desc:'يجمع الإشارات العامة والأخبار ويطلب تأكيد السوق الحقيقي قبل إصدار رأيه.',algos:'Public Sources • News • Transcript Clues • Deep Market Verification'}
+  ,{id:'FALCON_EYE_RADAR',name:'Radar 9 — عين الصقر',icon:'🦅',color:'#f6c453',desc:'يحوّل بصمة انفجار OGN إلى صياد مبكر: قاعدة هادئة، توسع مشاركة، ضغط شراء، مقاومة، قوة نسبية، ومشتقات عند توفرها، مع منع المطاردة.',algos:'OGN Fingerprint • Quiet Base • RVOL/Trades • Taker • S/R • BTC Relative Strength • Futures/Spot • OI • Funding • Liquidations'}
 ];
 
 function addStyle(){
@@ -59,7 +60,8 @@ export function mountBackgroundMonitorControl(root){
  EARLY_EXPANSION_RADAR:'./radar8-lightning.html',
  COIN_HUNTER_RADAR:'./coin-hunter-radar.html',
  WHALE_ACCUMULATION_RADAR:'./whale-accumulation-radar.html',
- PROFESSOR_RADAR:'./professor-radar.html'
+ PROFESSOR_RADAR:'./professor-radar.html',
+  FALCON_EYE_RADAR:'./falcon-eye-radar.html'
  }[spec.id]||'#')+'">فتح نافذة الرادار</a></div>'+
       '<div class="rx-radar-alerts"><b>آخر اكتشافات هذا الرادار</b>'+ (sourceAlerts.length?sourceAlerts.map(a=>'<div class="rx-radar-alert"><b>'+esc(a.symbol||'—')+'</b> • '+esc(a.potential_label||a.event||'اكتشاف')+' • '+esc(fmt(a.price))+'<small>'+esc(a.radar_name||spec.name)+' • وقت الاكتشاف: '+esc(a.detected_time_12h||'غير متاح')+'</small></div>').join(''):'<div class="rx-radar-empty">لا يوجد اكتشاف محفوظ في المدة المعروضة.</div>')+'</div>'+
       '</article>';
