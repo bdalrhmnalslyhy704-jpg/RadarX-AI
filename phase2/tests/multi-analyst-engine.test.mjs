@@ -137,10 +137,10 @@ console.log('multi-analyst-engine lab-entry regression: PASS');
   engineWithStrategyError.scanner.strategyEvaluator=()=>{throw new Error('SIMULATED_STRATEGY_PIPELINE_ERROR');};
   const out=await engineWithStrategyError.scan({quote:'USDT',limit:1});
   assert.equal(out.universe.scanned,1);
-  assert.equal(out.candidates.length,1);
-  assert.equal(out.candidates[0].verdict,'REJECT');
-  assert.equal(out.candidates[0].data_status.data_valid,false);
-  assert.match(String(out.candidates[0].data_status.last_error||''),/STRATEGY_PIPELINE_FAILED/);
+  assert.equal(out.candidates.length,0);
+  assert.equal(out.watchlist.length,0);
+  assert.equal(out.diagnostics.gate_rejected,1);
+  assert.match(String(out.diagnostics.gate_rejections[0].last_error||''),/STRATEGY_PIPELINE_FAILED/);
   assert.equal(out.diagnostics.failed_analyses,0);
   assert.equal(out.diagnostics.gate_rejected,1);
 }
