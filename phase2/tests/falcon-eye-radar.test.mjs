@@ -78,3 +78,5 @@ test('Falcon Eye vetoes OGN-style post-explosion chasing',()=>{
   assert.ok(a.anti_chase_penalty>=20);
   assert.ok(a.metrics.return_10m>3.8 || a.metrics.move_24h_pct>8);
 });
+
+// Fixture uses enough closed 5m candles for the pre-breakout window.
