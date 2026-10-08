@@ -235,7 +235,7 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
     score>=Math.max(72,p.minScore-6) &&
     data>=p.minData &&
     (!p.minLiquidity||liquidity>=p.minLiquidity) &&
-    (Number(trajectoryBonus(trajectory))>=5 || Number(trajectory.persistence)<3 || Number(trajectory.convergence)>=62);
+    (Number(trajectoryBonus(trajectory))>=5 || Number(trajectory.persistence||0)<3 || Number(trajectory.convergence||0)>=62);
 
   const persistentEarlyCorridor=
     EARLY_RADARS.has(r) &&
