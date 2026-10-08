@@ -279,7 +279,7 @@ async function run(force){
   busy=true;
   status.textContent='🧠 مركز القيادة يفحص السوق… 20 محللًا يعملون على كل مرشح.';
   try{
-    const r=await getMultiAnalyst({quote:'USDT',limit:10,scan:true});
+    const r=await getMultiAnalyst({quote:'USDT',limit:10,scan:force});
     if(!r||!r.ok||!r.body)throw new Error((r&&r.error)||('HTTP_'+num(r&&r.status,0)));
     cacheSave(r.body);render(r.body);lastLiveAt=Date.now();
     const d=r.body.diagnostics||{},u=r.body.universe||{},s=r.body.summary||{},meta=r.body.meta||{};
@@ -293,7 +293,7 @@ async function run(force){
 document.getElementById('scanBtn').addEventListener('click',function(){run(true);});
 document.getElementById('refreshBtn').addEventListener('click',function(){run(true);});
 run(false);
-setInterval(function(){run(true);},45000);
+setInterval(function(){run(false);},45000);
 document.addEventListener('visibilitychange',function(){if(!document.hidden&&(Date.now()-lastLiveAt>30000))run(true);});
 </script>
 </body>
