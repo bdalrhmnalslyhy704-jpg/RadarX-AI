@@ -257,7 +257,28 @@ jobs:
           console.log(JSON.stringify({http:code,radar:body.radar??null,analyst_count:body.meta?.analyst_count??null,candidates:body.candidates?.length??0}));
           NODE
 
-      - name: Run Falcon Eye radar intelligence contract test\n        timeout-minutes: 2\n        run: |\n          set -euo pipefail\n          node --test phase2/tests/falcon-radar-core.test.mjs\n          node --test phase2/tests/king-intelligence.test.mjs\n\n      - name: Verify radar intelligence syntax and mover forensics\n        timeout-minutes: 2\n        run: |\n          set -euo pipefail\n          node --check phase2/core/move-forensics.mjs\n          node --check phase2/core/radar-falcon-core.mjs\n          node --check phase2/core/radar-quality-v3.mjs\n          node --check phase2/core/radar-notification-gate.mjs\n          node --check phase2/core/radar-alert-meta.mjs\n          node --check phase2/core/king-intelligence.mjs\n          node --test phase2/tests/move-forensics.test.mjs\n          node --test phase2/tests/falcon-radar-core.test.mjs\n          node --test phase2/tests/king-intelligence.test.mjs\n\n      - name: Set up Gradle
+      - name: Run Falcon Eye radar intelligence contract test
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          node --test phase2/tests/falcon-radar-core.test.mjs
+          node --test phase2/tests/king-intelligence.test.mjs
+
+      - name: Verify radar intelligence syntax and mover forensics
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          node --check phase2/core/move-forensics.mjs
+          node --check phase2/core/radar-falcon-core.mjs
+          node --check phase2/core/radar-quality-v3.mjs
+          node --check phase2/core/radar-notification-gate.mjs
+          node --check phase2/core/radar-alert-meta.mjs
+          node --check phase2/core/king-intelligence.mjs
+          node --test phase2/tests/move-forensics.test.mjs
+          node --test phase2/tests/falcon-radar-core.test.mjs
+          node --test phase2/tests/king-intelligence.test.mjs
+
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
@@ -392,7 +413,8 @@ jobs:
 
           if (( ${#APKS[@]} != 1 )); then
             echo "::error::Expected exactly one Release APK; found ${#APKS[@]}."
-            printf '%s\n' "${APKS[@]}" || true
+            printf '%s
+' "${APKS[@]}" || true
             exit 1
           fi
 
