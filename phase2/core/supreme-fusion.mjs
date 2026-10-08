@@ -67,7 +67,7 @@ function snapshot(candidate,verdict,families){
   const liquidity=num(candidate?.liquidity_quality,families.PARTICIPATION?.score);
   const dataQuality=num(candidate?.data_quality,0);
   const trapRisk=num(candidate?.pre_breakout_fingerprint?.trapRisk,
-    num(candidate?.risk_flags?.length,0)*8 + Math.max(0,Math.abs(num(candidate?.price_change_24h,0))-8)*2);
+    50 + num(candidate?.risk_flags?.length,0)*8 + Math.max(0,Math.abs(num(candidate?.price_change_24h,0))-8)*2);
   const change=Math.abs(num(candidate?.price_change_24h,0));
   const nearHigh=num(candidate?.surge_fingerprint?.near_high_score,50);
   const agentAgreement=avg(Object.values(families).map(x=>x.coherence),50);
