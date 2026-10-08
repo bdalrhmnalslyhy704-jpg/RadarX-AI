@@ -444,7 +444,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "RadarX Native — Build 224 + Radar 8 V2 ${GITHUB_RUN_NUMBER}" \
-            --notes "Signed universal APK built on Build 224 lineage. Includes Radar 8 V2 + Whale Accumulation, user-controlled independent background monitoring (no auto-start), embedded Android UI, Spot/Paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
+            --notes "Signed universal APK built on Build 224 lineage. Includes Radar 8 V2 + Whale Accumulation, continuous independent background monitoring (auto-start enabled by default), embedded Android UI, Spot/Paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
 
       - name: Verify published HTTPS download
         run: |

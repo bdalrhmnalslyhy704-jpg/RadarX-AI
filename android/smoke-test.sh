@@ -56,9 +56,11 @@ start_app_and_wait_ready() {
     return 1
   fi
 
-  # The service must not start merely because the Activity was opened.
-  ! printf '%s\n' "$LOGS" | grep -Fq "BACKGROUND_START_REQUEST"
-  ! printf '%s\n' "$LOGS" | grep -Fq "BRIDGE_START_BACKGROUND"
+  # Build 224 now requires continuous monitoring: opening the Activity auto-starts
+  # the foreground service when notifications are permitted. This must be explicit
+  # in the native logs and must not crash/close the Activity.
+  printf '%s\n' "$LOGS" | grep -Fq "BACKGROUND_AUTO_START_REQUEST"
+  printf '%s\n' "$LOGS" | grep -Fq "BACKGROUND_SERVICE_READY"
 }
 
 assert_background_service_declared() {
@@ -70,14 +72,14 @@ assert_background_service_declared() {
 adb wait-for-device
 adb install -r "$APK"
 
-# Online: the Activity must remain open and NOT auto-start the foreground monitor.
+# Online: the Activity must remain open and auto-start the foreground monitor.
 start_app_and_wait_ready
 
 adb exec-out screencap -p > "$RUNNER_TEMP/radarx-online.png"
 test -s "$RUNNER_TEMP/radarx-online.png"
 head -c 8 "$RUNNER_TEMP/radarx-online.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
 
-# Background monitoring is explicitly user-controlled; the non-exported service must remain registered.
+# Background monitoring is continuous by default; the non-exported service must remain registered.
 assert_background_service_declared
 test -n "$(adb shell pidof com.radarx.app | tr -d '\r' || true)"
 
@@ -101,4 +103,4 @@ adb exec-out screencap -p > "$RUNNER_TEMP/radarx-offline.png"
 test -s "$RUNNER_TEMP/radarx-offline.png"
 head -c 8 "$RUNNER_TEMP/radarx-offline.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
 
-echo "Android emulator online/offline UI + no-auto-start/background-service registration smoke tests passed."
+echo "Android emulator online/offline UI + continuous-auto-start/background-service registration smoke tests passed."
