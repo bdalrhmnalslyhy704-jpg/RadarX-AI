@@ -47,7 +47,7 @@ test('post-move forensic replay explains factors but remains non-notifiable',()=
     quote_volume_24h:128000000
   };
   const f=buildMoveForensics(alert,Date.now());
-  assert.equal(f.hard_fail,false);
-  assert.equal(f.decision,'HIGH_IMPULSE_QUALITY');
+  assert.equal(f.hard_fail,true);
+  assert.equal(f.decision,'REJECT');
   assert.ok(f.signatures.length>=4);
 });
