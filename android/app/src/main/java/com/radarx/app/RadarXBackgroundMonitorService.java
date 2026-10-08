@@ -475,18 +475,27 @@ public final class RadarXBackgroundMonitorService extends Service {
             JSONObject alert = alerts.optJSONObject(i);
             if (alert == null) continue;
             long at = alertTimestamp(alert);
-            if (at > maxAt) maxAt = at;
-            if (!alert.optBoolean("eligible", true)) continue;
+            if (!alert.optBoolean("eligible", true)) {
+                if (at > maxAt) maxAt = at;
+                continue;
+            }
+
             String id = alert.optString("id", "").trim();
             if (id.isEmpty()) id = "RADAR:" + alert.optString("radar", "UNKNOWN") + ":"
                 + alert.optString("symbol", "UNKNOWN") + ":" + at + ":" + detectionPrice(alert);
-            if (seen.contains(id) || queuedIds.contains(id)) continue;
+            if (seen.contains(id) || queuedIds.contains(id)) {
+                if (at > maxAt) maxAt = at;
+                continue;
+            }
             if (pending.length() >= MAX_PENDING_ALERTS) {
-                Log.e(TAG, "PENDING_ALERT_QUEUE_FULL; preserving queued alerts");
+                // Do not advance past an alert that was not queued. It will be returned again
+                // after the existing durable queue drains.
+                Log.e(TAG, "PENDING_ALERT_QUEUE_FULL; preserving cursor before undispatched alert");
                 break;
             }
             pending.put(compactAlert(alert, id, at));
             queuedIds.add(id);
+            if (at > maxAt) maxAt = at;
             added++;
         }
 
