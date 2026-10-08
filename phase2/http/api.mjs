@@ -136,7 +136,7 @@ function subscriptionValid(x){
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,marketRadarRest=null}= {}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,marketRadarRest=null}= {}){
   const counters=new Map();
   const moveConfig=config.moveRadar||{thresholdPct:1};
   const originList=config.auth.allowedOrigins;
@@ -159,7 +159,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     EARLY_EXPANSION_RADAR:{name:RADAR_NAMES.EARLY_EXPANSION_RADAR,instance:earlyExpansionRadar,read:'readEarlyExpansionAlerts'},
     ...(coinHunterRadar?{COIN_HUNTER_RADAR:{name:RADAR_NAMES.COIN_HUNTER_RADAR,instance:coinHunterRadar,read:'readCoinHunterAlerts'}}:{}),
     ...(whaleAccumulationRadar?{WHALE_ACCUMULATION_RADAR:{name:RADAR_NAMES.WHALE_ACCUMULATION_RADAR,instance:whaleAccumulationRadar,read:'readWhaleAccumulationAlerts'}}:{}),
-    ...(professorRadar?{PROFESSOR_RADAR:{name:RADAR_NAMES.PROFESSOR_RADAR,instance:professorRadar,read:'readProfessorAlerts'}}:{})
+    ...(professorRadar?{PROFESSOR_RADAR:{name:RADAR_NAMES.PROFESSOR_RADAR,instance:professorRadar,read:'readProfessorAlerts'}}:{}),
+    ...(falconEyeRadar?{FALCON_EYE_RADAR:{name:RADAR_NAMES.FALCON_EYE_RADAR,instance:falconEyeRadar,read:'readFalconEyeAlerts'}}:{})
   });
   function radarStatus(){
     return Object.entries(radarEntries).map(([id,x])=>{
@@ -190,7 +191,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(!rateOk(key))return send(res,429,{error:'RATE_LIMITED'});
     try{
       const u=new URL(req.url,'http://localhost');
-      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false},kahir_radar:kahirRadar?.health?.()||{running:false},doomsday_radar:doomsdayRadar?.health?.()||{running:false},almuqawim_radar:alMuqawimRadar?.health?.()||{running:false},professor_radar:professorRadar?.health?.()||{running:false},early_expansion_radar:earlyExpansionRadar?.health?.()||{running:false,radar:'EARLY_EXPANSION_RADAR',radar_name:RADAR_NAMES.EARLY_EXPANSION_RADAR},coin_hunter_radar:coinHunterRadar?.health?.()||{running:false,radar:'COIN_HUNTER_RADAR',radar_name:RADAR_NAMES.COIN_HUNTER_RADAR},whale_accumulation_radar:whaleAccumulationRadar?.health?.()||{running:false,radar:'WHALE_ACCUMULATION_RADAR',radar_name:RADAR_NAMES.WHALE_ACCUMULATION_RADAR}});
+      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false},kahir_radar:kahirRadar?.health?.()||{running:false},doomsday_radar:doomsdayRadar?.health?.()||{running:false},almuqawim_radar:alMuqawimRadar?.health?.()||{running:false},professor_radar:professorRadar?.health?.()||{running:false},early_expansion_radar:earlyExpansionRadar?.health?.()||{running:false,radar:'EARLY_EXPANSION_RADAR',radar_name:RADAR_NAMES.EARLY_EXPANSION_RADAR},coin_hunter_radar:coinHunterRadar?.health?.()||{running:false,radar:'COIN_HUNTER_RADAR',radar_name:RADAR_NAMES.COIN_HUNTER_RADAR},whale_accumulation_radar:whaleAccumulationRadar?.health?.()||{running:false,radar:'WHALE_ACCUMULATION_RADAR',radar_name:RADAR_NAMES.WHALE_ACCUMULATION_RADAR},falcon_eye_radar:falconEyeRadar?.health?.()||{running:false,radar:'FALCON_EYE_RADAR',radar_name:RADAR_NAMES.FALCON_EYE_RADAR}});
       if(u.pathname==='/api/radar-status'&&req.method==='GET')return send(res,200,{radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
       if(u.pathname==='/api/radar-control'&&(req.method==='POST'||req.method==='GET')){
         const radar=String(u.searchParams.get('radar')||'').trim().toUpperCase();
