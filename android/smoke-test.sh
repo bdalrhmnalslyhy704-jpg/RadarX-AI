@@ -15,7 +15,7 @@ wait_for_online_device() {
   for attempt in $(seq 1 20); do
     state="$(adb get-state 2>/dev/null || true)"
     if [[ "$state" == "device" ]]; then
-      boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\\r' || true)"
+      boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
       if [[ "$boot" == "1" ]]; then
         sleep 1
         state="$(adb get-state 2>/dev/null || true)"
@@ -89,7 +89,7 @@ start_app_and_wait_ready() {
 }
 
 assert_background_service_declared() {
-  PACKAGE="$(adb shell dumpsys package com.radarx.app 2>/dev/null | tr -d '\\r' || true)"
+  PACKAGE="$(adb shell dumpsys package com.radarx.app 2>/dev/null | tr -d '\r' || true)"
   printf '%s\n' "$PACKAGE" | grep -q 'RadarXBackgroundMonitorService'
   printf '%s\n' "$PACKAGE" | grep -q 'FOREGROUND_SERVICE_DATA_SYNC'
   printf '%s\n' "$PACKAGE" | grep -q 'ACCESS_NETWORK_STATE'
