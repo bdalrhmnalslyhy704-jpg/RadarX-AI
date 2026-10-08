@@ -31,7 +31,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Retired legacy publisher: do not emit stale 1.4.9 / v6.8.11 APKs from backend-only pushes.
+  # Official Build 224 Android releases are pinned and signed by the main release workflow.
   release-apk:
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
