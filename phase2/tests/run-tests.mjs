@@ -16,6 +16,7 @@ const phase2=[
   'phase2/tests/falcon-radar-core.test.mjs',
   'phase2/tests/move-forensics.test.mjs',
   'phase2/tests/evidence-trajectory.test.mjs',
+  'phase2/tests/outcome-calibrator.test.mjs',
   'phase2/tests/dedup.test.mjs',
   'phase2/tests/early-move-sentinel.test.mjs',
   'phase2/tests/end-to-end.test.mjs',
