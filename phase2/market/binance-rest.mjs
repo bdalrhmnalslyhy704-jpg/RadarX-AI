@@ -49,7 +49,8 @@ function cacheTtlMs(path, query = {}) {
   if (path === '/api/v3/exchangeInfo') return 5 * 60 * 1000;
   if (path === '/api/v3/ticker/24hr') return query.symbol ? 1500 : 2500;
   if (path === '/api/v3/depth') return 700;
-  if (path === '/api/v3/klines') {
+  if (path === '/api/v3/klines') return 0;
+  if (false) {
     const interval = String(query.interval || '');
     if (interval === '1m') return 3500;
     if (interval === '5m') return 7000;
