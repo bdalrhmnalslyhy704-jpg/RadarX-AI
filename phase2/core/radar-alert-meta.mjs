@@ -1,5 +1,6 @@
 import {evaluateRadarQuality} from './radar-quality-v3.mjs';
 import {evaluateFalconEye} from './radar-falcon-core.mjs';
+import {buildMoveForensics} from './move-forensics.mjs';
 export const RADAR_NAMES=Object.freeze({
   EARLY_MOVE_RADAR:'Radar 1 — المدمر',
   STRONG_MOVE_RADAR:'Radar 2 — ملك الظلام',
@@ -166,12 +167,14 @@ export function decorateRadarAlert(alert,radarName){
   const radar_v2=radarPowerScore(alert);
   const profile=RADAR_PROFILES[radar]||null;
   const falcon_eye=evaluateFalconEye(alert,{now:at});
+  const move_forensics=buildMoveForensics(alert,at);
   const quality_v3=evaluateRadarQuality(alert,{now:at});
   return {...alert,radar_name:alert?.radar_name||radarName||RADAR_NAMES[radar]||'RadarX',
     radar_profile:profile,
     radar_v2,
     radar_power_score:radar_v2.score,
-    radar_quality_v3:{...quality_v3,falcon_eye},
+    radar_quality_v3:{...quality_v3,falcon_eye,move_forensics},
+    move_forensics,
     falcon_eye,
     capture_priority:falcon_eye.capture_priority,
     detection_stage:falcon_eye.stage,
