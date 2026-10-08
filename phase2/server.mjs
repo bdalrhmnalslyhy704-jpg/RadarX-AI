@@ -106,6 +106,8 @@ export async function startServer({
     }
   };
   safeStart('MONITOR',monitor);
+  // Keep the 20-analyst intelligence cache warm continuously so the Android center opens on recent work.
+  safeStart('MULTI_ANALYST_XFACTOR',multiAnalystRadar);
   const autoStart=config.radarControl?.autostart!==false;
   if(autoStart){
     const startup=[
@@ -118,7 +120,7 @@ export async function startServer({
     startup.forEach(([name,instance],index)=>setTimeout(()=>safeStart(name,instance),index*700));
   }
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
-  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,multiAnalystRadar,symbolDeepAnalyzer,store,rest,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,multiAnalystRest,coinHunterRest,whaleAccumulationRest,marketRadarRest,push,close:async()=>{await whaleAccumulationRadar.stop();await coinHunterRadar.stop();await earlyExpansionRadar.stop();await professorRadar.stop();await alMuqawimRadar.stop();await doomsdayRadar.stop();await kahirRadar.stop();await liquidityAbsorptionRadar.stop();await rotationLagRadar.stop();await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
+  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,multiAnalystRadar,symbolDeepAnalyzer,store,rest,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,multiAnalystRest,coinHunterRest,whaleAccumulationRest,marketRadarRest,push,close:async()=>{multiAnalystRadar.stop();await whaleAccumulationRadar.stop();await coinHunterRadar.stop();await earlyExpansionRadar.stop();await professorRadar.stop();await alMuqawimRadar.stop();await doomsdayRadar.stop();await kahirRadar.stop();await liquidityAbsorptionRadar.stop();await rotationLagRadar.stop();await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
 }
 
 if(process.argv[1]&&resolve(fileURLToPath(import.meta.url))===resolve(process.argv[1])){
