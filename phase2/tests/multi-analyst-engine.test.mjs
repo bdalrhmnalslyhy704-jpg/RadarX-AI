@@ -95,3 +95,46 @@ console.log('multi-analyst-engine.test.mjs: PASS');
 }
 
 console.log('multi-analyst-engine lab-entry regression: PASS');
+
+// Regression: a strategy-pipeline runtime error must not delete a discovered coin.
+// The scanner returns the coin as a fail-closed lab rejection with the error attached.
+{
+  const base15=series(120,{base:100,trend:.001});
+  const base1=series(100,{base:100,trend:.001});
+  const base4=series(60,{base:100,trend:.001});
+  const rawKlines=(xs)=>xs.map(x=>[
+    x.openTime,String(x.open),String(x.high),String(x.low),String(x.close),String(x.volume),
+    x.closeTime,String(x.volume),1000,String(x.takerBuyBaseVolume),String(x.takerBuyBaseVolume)
+  ]);
+  const scannerRest={
+    request:async(path)=>{
+      if(path==='/api/v3/exchangeInfo')return {data:{symbols:[
+        {symbol:'TESTUSDT',baseAsset:'TEST',quoteAsset:'USDT',status:'TRADING',isSpotTradingAllowed:true,permissions:['SPOT']}
+      ]},source:'TEST'};
+      if(path==='/api/v3/ticker/24hr')return {data:[{
+        symbol:'TESTUSDT',lastPrice:String(base15.at(-1).close),quoteVolume:'2000000',count:'5000',
+        priceChangePercent:'1',highPrice:'101',lowPrice:'99',closeTime:Date.now()
+      }],source:'TEST'};
+      throw new Error('UNEXPECTED_REQUEST:'+path);
+    },
+    klines:async(symbol,interval)=>({candles:interval==='15m'?base15:interval==='1h'?base1:base4,source:'TEST'}),
+    depth:async()=>({data:{
+      bids:[['99.9','5000'],['99.8','4000']],asks:[['100.1','2000'],['100.2','1500']]
+    },source:'TEST'})
+  };
+  const engineWithStrategyError=new MultiAnalystEngine({
+    rest:scannerRest,
+    config:{discoveryPool:1,returnLimit:1,deepConcurrency:1,deepKlines:120},
+  });
+  engineWithStrategyError.scanner.strategyEvaluator=()=>{throw new Error('SIMULATED_STRATEGY_PIPELINE_ERROR');};
+  const out=await engineWithStrategyError.scan({quote:'USDT',limit:1});
+  assert.equal(out.universe.scanned,1);
+  assert.equal(out.candidates.length,1);
+  assert.equal(out.candidates[0].verdict,'REJECT');
+  assert.equal(out.candidates[0].data_status.data_valid,false);
+  assert.match(String(out.candidates[0].data_status.last_error||''),'STRATEGY_PIPELINE_FAILED');
+  assert.equal(out.diagnostics.failed_analyses,0);
+  assert.equal(out.diagnostics.gate_rejected,1);
+}
+
+console.log('multi-analyst-engine runtime-error regression: PASS');
