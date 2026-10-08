@@ -221,9 +221,12 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
   const crossRadarBlocked=Boolean(previous)&&elapsed<p.globalCooldownMs&&!stronger;
   if(crossRadarBlocked)failures.push('CROSS_RADAR_COOLDOWN');
 
+  const earlyHardFailures=failures.filter(x=>
+    /^(RISK:)|DATA_QUALITY_BELOW|LIQUIDITY_BELOW|MICRO_MOVE_NOISE|LATE_SETUP_CHASE_GUARD|EARLY_SETUP_ALREADY_MOVED|EARLY_SETUP_NOT_CALM|FALCON_HARD_FAIL|MOVER_FORENSICS_HARD_FAIL|EVIDENCE_TRAJECTORY_DETERIORATING|BASE_ALERT_NOT_ELIGIBLE|ELITE_GATE_NOT_ELIGIBLE/.test(String(x))
+  );
   const earlyCorridor=
     EARLY_RADARS.has(r) &&
-    failures.filter(x=>String(x).startsWith('RISK:')).length===0 &&
+    earlyHardFailures.length===0 &&
     !falcon.hard_fail &&
     falcon.early_window &&
     falcon.capture>=78 &&
