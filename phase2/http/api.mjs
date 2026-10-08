@@ -475,33 +475,72 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         }
       }
       if(u.pathname==='/api/falcon-eye-radar'&&req.method==='GET'){
-        if(!falconEyeRadar)return send(res,503,{error:'FALCON_EYE_RADAR_UNAVAILABLE',radar:'FALCON_EYE_RADAR',radar_name:RADAR_NAMES.FALCON_EYE_RADAR,candidates:[],alerts:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         const sinceRaw=Number(u.searchParams.get('since')||0);
+        const safeSince=Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0;
         const limit=Math.max(1,Math.min(50,Math.trunc(Number(u.searchParams.get('limit')||20))));
         const runNow=String(u.searchParams.get('scan')||'').trim()==='1';
+        const radarName=RADAR_NAMES.FALCON_EYE_RADAR;
+        const readHistory=async()=>{
+          if(typeof store?.readFalconEyeAlerts!=='function')return [];
+          return await store.readFalconEyeAlerts({sinceMs:safeSince,limit});
+        };
+        const thresholds={min_score:Number(config.falconEyeRadar?.minScore??88),max_alerts_per_hour:Number(config.falconEyeRadar?.maxAlertsPerHour??3),max_24h_move_pct:8,market:'SPOT',fast_timeframe:'1m',confirmation_timeframe:'5m'};
+
+        // Alert history is useful even if the scanner instance did not start. Do not
+        // make a missing scanner hide events already written by the durable store.
+        if(!falconEyeRadar){
+          let alerts=[];
+          let historyError=null;
+          try{alerts=await readHistory();}catch(e){historyError=String(e?.message??e);}
+          console.warn('[FALCON_EYE_API] scanner instance unavailable; replaying stored history',historyError||'');
+          const unavailable={
+            radar:'FALCON_EYE_RADAR',radar_name:radarName,candidates:[],alerts,
+            monitoring:{running:false,radar:'FALCON_EYE_RADAR',radar_name:radarName,last_error:'FALCON_EYE_RADAR_UNAVAILABLE'},
+            scan:{requested:runNow,completed:false,error:'FALCON_EYE_RADAR_UNAVAILABLE'},
+            thresholds,algorithms:[],
+            meta:{live:false,source:'Durable Falcon Eye alert history',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true}
+          };
+          if(historyError)unavailable.history_error=historyError;
+          return send(res,historyError?503:200,unavailable);
+        }
+
         try{
           let scanError=null;
           const before=falconEyeRadar.health?.()||{};
           if(runNow&&before.busy!==true&&typeof falconEyeRadar.tick==='function'){
             try{await falconEyeRadar.tick();}catch(e){scanError=String(e?.message??e);}
           }
-          const health=safeHealth('FALCON_EYE_RADAR',RADAR_NAMES.FALCON_EYE_RADAR,falconEyeRadar);
-          const alerts=typeof store.readFalconEyeAlerts==='function'
-            ? await store.readFalconEyeAlerts({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit})
-            : [];
+          const health=safeHealth('FALCON_EYE_RADAR',radarName,falconEyeRadar);
+          const alerts=await readHistory();
           return send(res,200,{
             radar:'FALCON_EYE_RADAR',
-            radar_name:RADAR_NAMES.FALCON_EYE_RADAR,
+            radar_name:radarName,
             candidates:Array.isArray(health.latest_candidates)?health.latest_candidates.slice(0,limit):[],
             alerts,
             monitoring:health,
             scan:{requested:runNow,completed:scanError===null&&health.last_scan_at!=null,error:scanError||health.last_error||null},
-            thresholds:{min_score:Number(config.falconEyeRadar?.minScore??88),max_alerts_per_hour:Number(config.falconEyeRadar?.maxAlertsPerHour??3),max_24h_move_pct:8,market:'SPOT',fast_timeframe:'1m',confirmation_timeframe:'5m'},
+            thresholds,
             algorithms:health.features||[],
             meta:{live:health.running===true,source:'Binance Public REST + public Futures context',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true}
           });
         }catch(e){
-          return send(res,503,{error:String(e?.message??e),radar:'FALCON_EYE_RADAR',radar_name:RADAR_NAMES.FALCON_EYE_RADAR,candidates:[],alerts:[],monitoring:safeHealth('FALCON_EYE_RADAR',RADAR_NAMES.FALCON_EYE_RADAR,falconEyeRadar),meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true}});
+          // Preserve and serve stored detections even when a live scan throws. Include
+          // the scan failure explicitly so clients never mistake history for live data.
+          const message=String(e?.message??e);
+          console.error('[FALCON_EYE_API] request failed:',e?.stack??message);
+          let alerts=[];
+          let historyError=null;
+          try{alerts=await readHistory();}catch(historyFailure){historyError=String(historyFailure?.message??historyFailure);}
+          const body={
+            radar:'FALCON_EYE_RADAR',radar_name:radarName,candidates:[],alerts,
+            monitoring:safeHealth('FALCON_EYE_RADAR',radarName,falconEyeRadar),
+            scan:{requested:runNow,completed:false,error:message},
+            thresholds,algorithms:[],
+            meta:{live:false,source:'Durable Falcon Eye alert history',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',closed_candles_only:true},
+            error:message
+          };
+          if(historyError)body.history_error=historyError;
+          return send(res,historyError?503:200,body);
         }
       }
 
