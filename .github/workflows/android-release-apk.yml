@@ -175,7 +175,8 @@ jobs:
             "/api/doomsday-radar?limit=1&scan=0" \
             "/api/professor-radar?limit=1&scan=0" \
             "/api/almuqawim-radar?limit=1&scan=0" \
-            "/api/whale-accumulation-radar?limit=1&scan=0"; do
+            "/api/whale-accumulation-radar?limit=1&scan=0" \
+            "/api/falcon-eye-radar?limit=1&scan=0"; do
             code="$(curl --location --silent --show-error --max-time 60 -o "$RUNNER_TEMP/radar-check.json" -w "%{http_code}" "$BASE$path")"
             case "$code" in
               200|503) ;;
@@ -271,6 +272,7 @@ jobs:
           node --test phase2/tests/evidence-trajectory.test.mjs
           node --test phase2/tests/outcome-calibrator.test.mjs
           node --test phase2/tests/falcon-radar-core.test.mjs
+          node --test phase2/tests/falcon-eye-radar.test.mjs
           node --test phase2/tests/king-intelligence.test.mjs
 
       - name: Set up Gradle
@@ -378,9 +380,11 @@ jobs:
           test -s android/app/src/main/assets/radar8-lightning.html
           test -s android/app/src/main/assets/coin-hunter-radar.html
           test -s android/app/src/main/assets/whale-accumulation-radar.html
+          test -s android/app/src/main/assets/falcon-eye-radar.html
           test -s android/app/src/main/assets/multi-analyst.html
           grep -Fq 'multi-analyst-center.html' android/app/src/main/assets/index.html
           grep -Fq 'whale-accumulation-radar.html' android/app/src/main/assets/index.html
+          grep -Fq 'falcon-eye-radar.html' android/app/src/main/assets/index.html
           grep -Fq 'coin-hunter-radar.html' android/app/src/main/assets/index.html
           node --check android/app/src/main/assets/radarx-radar-screen.mjs
           grep -Fq 'radar8-lightning.html' android/app/src/main/assets/index.html
@@ -464,8 +468,8 @@ jobs:
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "RadarX Native — Build 224 + Radar 8 V2 ${GITHUB_RUN_NUMBER}" \
-            --notes "Signed universal APK built on Build 224 lineage. Includes Radar 8 V2 + Whale Accumulation + X-Factor 20-Analyst Command Center + Falcon Eye + OGN-inspired Move Forensics + Evidence Trajectory Memory, continuous independent background monitoring (auto-start enabled by default), redesigned premium main dashboard, embedded Android UI, Spot/Paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
+            --title "RadarX Native — Build 224 + Radar 8 V2 + عين الصقر ${GITHUB_RUN_NUMBER}" \
+            --notes "Signed universal APK built on Build 224 lineage. Includes Radar 8 V2 + Whale Accumulation + X-Factor 20-Analyst Command Center + Radar 9 — عين الصقر + OGN-inspired Move Forensics + Evidence Trajectory Memory, continuous independent background monitoring (auto-start enabled by default), redesigned premium main dashboard, embedded Android UI, Spot/Paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
 
       - name: Verify published HTTPS download
         run: |
