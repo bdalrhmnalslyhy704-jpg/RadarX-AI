@@ -27,3 +27,20 @@ test('TEST_FIXTURE: Radar 4 alert log survives fresh reads',async()=>{
   const rows=await store.readLiquidityAbsorptionAlerts({sinceMs:0,limit:10});
   assert.equal(rows.length,1);assert.equal(rows[0].radar,'LIQUIDITY_ABSORPTION_RADAR');assert.equal(rows[0].symbol,'TESTUSDT');
 });
+
+test('TEST_FIXTURE: Falcon Eye alert history replays oldest-first after an offline period',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-falcon-replay-'));
+  const store=await new DurableStore({dir}).init();
+  for (const at of [1000,2000,3000]) {
+    await store.appendFalconEyeAlert({
+      id:'FALCON:TESTUSDT:'+at,radar:'FALCON_EYE_RADAR',symbol:'TESTUSDT',
+      price:0.1234+at/100000,detected_at:at,processed_at:at,
+      paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+    });
+  }
+  const first=await store.readFalconEyeAlerts({sinceMs:0,limit:2});
+  assert.deepEqual(first.map(x=>x.processed_at),[1000,2000]);
+  assert.equal(first[0].price,0.1334);
+  const next=await store.readFalconEyeAlerts({sinceMs:first[1].processed_at,limit:2});
+  assert.deepEqual(next.map(x=>x.processed_at),[3000]);
+});
