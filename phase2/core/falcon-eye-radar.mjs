@@ -385,8 +385,12 @@ export class FalconEyeRadar {
   }
   selectBatch(rows){
     const ranked=[...rows].sort((a,b)=>{
-      const as=Math.abs(Number(a.priceChange24h)||0),bs=Math.abs(Number(b.priceChange24h)||0);
-      return (Math.abs(as)<8?0:1)-(Math.abs(bs)<8?0:1)||a.quoteVolume24h-b.quoteVolume24h;
+      const am=Number(a.priceChange24h)||0,bm=Number(b.priceChange24h)||0;
+      const ae=Math.abs(am)<8?0:1,be=Math.abs(bm)<8?0:1;
+      if(ae!==be)return ae-be;
+      const aEarly=am>=-3&&am<=8,bEarly=bm>=-3&&bm<=8;
+      if(aEarly!==bEarly)return aEarly? -1:1;
+      return Number(b.quoteVolume24h||0)-Number(a.quoteVolume24h||0);
     });
     const selected=[],seen=new Set();
     for(const r of ranked.slice(0,Math.min(3,ranked.length))){selected.push(r);seen.add(r.symbol);}
