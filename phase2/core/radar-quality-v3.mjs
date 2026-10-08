@@ -1,5 +1,6 @@
 import {evaluateFalconEye} from './radar-falcon-core.mjs';
 import {buildMoveForensics} from './move-forensics.mjs';
+import {trajectoryBonus,trajectoryPenalty} from './evidence-trajectory.mjs';
 
 const clamp=(v,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number.isFinite(Number(v))?Number(v):0));
 const arr=v=>Array.isArray(v)?v:[];
@@ -47,6 +48,7 @@ export function evaluateRadarQuality(alert={},options={}){
   const at=Number(options.now)||Date.now();
   const falcon=evaluateFalconEye(alert,{now:at,limits:LIMITS});
   const forensics=buildMoveForensics(alert,at);
+  const trajectory=alert?.evidence_trajectory||{};
   const opportunity=clamp(alert.opportunity_score??alert.setup_score??alert.radar_power_score??50);
   const classicScore=
     opportunity*.38+
@@ -55,7 +57,9 @@ export function evaluateRadarQuality(alert={},options={}){
     evidenceScore*.08+
     empirical*.10+
     falcon.quality*.15+
-    forensics.score*.04-
+    forensics.score*.04+
+    trajectoryBonus(trajectory)*0.55-
+    trajectoryPenalty(trajectory)*0.70-
     Math.min(12,riskCount*2)-
     chasePenalty;
 
@@ -82,6 +86,7 @@ export function evaluateRadarQuality(alert={},options={}){
     risk_count:riskCount,
     falcon_eye:falcon,
     move_forensics:forensics,
+    evidence_trajectory:trajectory,
     target_24h_abs_move_before_signal_pct:limit,
     decision:hardFail?'REJECT':score>=82?'HIGH_QUALITY':score>=70?'QUALITY_WATCH':'LOW_QUALITY'
   };
