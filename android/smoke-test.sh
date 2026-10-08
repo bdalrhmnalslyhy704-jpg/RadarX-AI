@@ -89,13 +89,21 @@ start_app_and_wait_ready() {
 }
 
 assert_background_service_declared() {
-  PACKAGE="$(adb shell dumpsys package com.radarx.app 2>/dev/null | tr -d '\r' || true)"
-  if ! printf '%s\n' "$PACKAGE" | grep -q 'RadarXBackgroundMonitorService'; then
-    echo "::error::RadarXBackgroundMonitorService is not registered"
+  # The Android package-manager dump is not consistent about printing Java component
+  # names. Verify the runtime service-start evidence instead; manifest declarations
+  # and required permissions are asserted statically by the release workflow.
+  local LOGS
+  LOGS="$(adb logcat -d -s RadarXBackground:I '*:S' 2>/dev/null || true)"
+  if ! printf '%s\n' "$LOGS" | grep -Fq "BACKGROUND_AUTO_START_REQUEST"; then
+    echo "::error::Activity did not request the background monitor"
     return 1
   fi
-  if ! printf '%s\n' "$PACKAGE" | grep -q 'FOREGROUND_SERVICE_DATA_SYNC'; then
-    echo "::error::Foreground data-sync service permission is missing"
+  if ! printf '%s\n' "$LOGS" | grep -Fq "BACKGROUND_SERVICE_READY"; then
+    echo "::error::Foreground monitor did not reach BACKGROUND_SERVICE_READY"
+    return 1
+  fi
+  if [[ -z "$(adb shell pidof com.radarx.app | tr -d '\r' || true)" ]]; then
+    echo "::error::RadarX application process is not alive"
     return 1
   fi
 }
