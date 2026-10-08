@@ -333,7 +333,7 @@ export const CONFIG = Object.freeze({
     deepConcurrency: int(process.env.RADARX_FALCON_EYE_DEEP_CONCURRENCY, 3),
     topCandidates: int(process.env.RADARX_FALCON_EYE_TOP_CANDIDATES, 8),
     alertCooldownMs: int(process.env.RADARX_FALCON_EYE_ALERT_COOLDOWN_MS, 45 * 60 * 1000),
-    maxAlertsPerHour: int(process.env.RADARX_FALCON_EYE_MAX_ALERTS_PER_HOUR, 3),
+    maxAlertsPerHour: int(process.env.RADARX_FALCON_EYE_MAX_ALERTS_PER_HOUR, 5),
     minScore: int(process.env.RADARX_FALCON_EYE_MIN_SCORE, 78)
   },
   paper: {
