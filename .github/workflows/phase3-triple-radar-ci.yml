@@ -50,6 +50,7 @@ jobs:
       - name: Validate Triple Radar source
         run: |
           set -euo pipefail
+          node --check phase2/core/falcon-eye-radar.mjs
           node --check phase2/core/rotation-lag-radar.mjs
           node --check phase2/market/universe-scanner.mjs
           node --check phase2/core/strong-move-radar.mjs
