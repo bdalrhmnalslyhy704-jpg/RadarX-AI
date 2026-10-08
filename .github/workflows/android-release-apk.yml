@@ -19,13 +19,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          ref: 94d2e730c29e1cfa6d0455f3a1eefa9c2218faec
+          ref: 814298ddebfdd18a93d7da86c36ade2d5be71936
 
       - name: Verify Build 224 + Falcon Eye source
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "94d2e730c29e1cfa6d0455f3a1eefa9c2218faec"
+          test "$(git rev-parse HEAD)" = "814298ddebfdd18a93d7da86c36ade2d5be71936"
           grep -Fq 'versionCode 15' android/app/build.gradle
           grep -Fq 'versionName "1.4.9"' android/app/build.gradle
           test -s android/app/src/main/assets/falcon-eye-radar.html
