@@ -1,3 +1,5 @@
+import {decorateRadarAlert} from './radar-alert-meta.mjs';
+
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 const clamp = (x, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, Number(x)));
@@ -546,7 +548,7 @@ export class CoinHunterRadar {
               todayPct:dayPct,
               dayHigh:t.highPrice, dayLow:t.lowPrice, btcTodayPct:btcToday
             });
-            return {
+            return decorateRadarAlert({
               symbol:t.symbol,
               score:score.score,
               decision:score.decision,
@@ -566,7 +568,7 @@ export class CoinHunterRadar {
               real_order_execution:false,
               confidence_score:'UNKNOWN',
               closed_candles_only:true
-            };
+            },'🎯 صائد العملات');
           } catch (error) {
             this.logger.debug?.('COIN_HUNTER '+t.symbol+': '+String(error?.message ?? error));
             return null;
