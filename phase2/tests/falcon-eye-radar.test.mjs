@@ -28,8 +28,8 @@ function flat(n=40,start=100,step=300_000){
 test('Falcon Eye turns the OGN fingerprint into an early, multi-factor setup',()=>{
   const now=1_800_000_000_000+100*60_000;
   const one=risingBase();
-  const five=flat();
-  const btc=flat(40,100);
+  const five=flat(80);
+  const btc=flat(80,100);
   const a=buildFalconEyeAnalysis({
     ticker:{symbol:'OGNUSDT',lastPrice:one.at(-1).close,priceChange24h:2.8,quoteVolume24h:2_500_000},
     oneMinute:one,fiveMinute:five,btcFiveMinute:btc,
