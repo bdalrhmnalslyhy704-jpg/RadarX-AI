@@ -11,6 +11,7 @@ const phase1=[
 const phase2=[
   'phase2/tests/api.test.mjs',
   'phase2/tests/autonomous-agent-market.test.mjs',
+  'phase2/tests/supreme-fusion.test.mjs',
   'phase2/tests/market-surge-gate.test.mjs',
   'phase2/tests/data-quality.test.mjs',
   'phase2/tests/elite-confluence-gate.test.mjs',
