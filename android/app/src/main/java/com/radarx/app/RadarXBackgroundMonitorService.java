@@ -79,6 +79,7 @@ public final class RadarXBackgroundMonitorService extends Service {
     private volatile boolean stopping;
     private volatile boolean loggedFirstScan;
     private volatile boolean offlineLogged;
+    private volatile boolean offlineWaitLogged;
     private final DecimalFormat scoreFmt = new DecimalFormat("0.0");
     private final DecimalFormat priceFmt = new DecimalFormat("0.################", java.text.DecimalFormatSymbols.getInstance(Locale.US));
 
@@ -142,8 +143,9 @@ public final class RadarXBackgroundMonitorService extends Service {
         if (stopping) return;
         deliverPendingAlerts();
         if (!hasValidatedInternetConnection()) {
-            if (!offlineLogged) {
-                offlineLogged = true;
+            offlineLogged = true;
+            if (!offlineWaitLogged) {
+                offlineWaitLogged = true;
                 Log.i(TAG, "BACKGROUND_OFFLINE_WAIT");
             }
             updateStatus("عين الصقر تعمل في الخلفية وتنتظر الإنترنت. لا يمكن جلب أسعار أو اكتشافات سوق جديدة دون اتصال؛ التنبيهات المحفوظة محليًا ستبقى في قائمة الانتظار.");
@@ -369,6 +371,7 @@ public final class RadarXBackgroundMonitorService extends Service {
     private void handleValidatedNetworkRestored() {
         if (!hasValidatedInternetConnection() || !offlineLogged) return;
         offlineLogged = false;
+        offlineWaitLogged = false;
         Log.i(TAG, "BACKGROUND_NETWORK_AVAILABLE");
         updateStatus("عاد الإنترنت؛ يجري جلب تنبيهات عين الصقر المحفوظة وإرسال سعرها ووقت اكتشافها الأصليين.");
         requestImmediateScan();
