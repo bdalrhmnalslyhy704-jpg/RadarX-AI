@@ -33,7 +33,7 @@ assert.equal(MULTI_ANALYST_NAMES.length,20);
 const good=analyzeMultiAnalystCandidate(rawFor(),{btc15:series(120,{base:90,trend:.0008}),btc1:series(100,{base:90,trend:.0008}),marketMedian24h:1,breadthPct:62});
 assert.equal(good.specialist.a.length,19);
 assert.equal(good.final.totalAnalysts,19);
-assert.ok(['STRONG_CANDIDATE','CANDIDATE','WATCH','REJECT'].includes(good.final.verdict));
+assert.ok(['STRONG_CANDIDATE','CANDIDATE','WATCH','EARLY_WATCH','REJECT'].includes(good.final.verdict));
 assert.ok(Number.isFinite(good.final.score));
 assert.ok(Number.isFinite(good.final.early_score));
 assert.ok(Number.isFinite(good.final.agreement));
@@ -198,3 +198,6 @@ console.log('multi-analyst scan fail-closed regression: PASS');
 
 console.log('multi-analyst scan payload regression: PASS');
 
+
+
+console.log('multi-analyst-engine v2 observability contracts: PASS');

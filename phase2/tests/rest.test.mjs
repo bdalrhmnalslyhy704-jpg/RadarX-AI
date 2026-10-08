@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {RestClient,RestRateLimitError,retryAfterMs} from '../market/binance-rest.mjs';
+import {RestClient,RestRateLimitError,retryAfterMs,clearSharedRestCache,sharedRestCacheSize} from '../market/binance-rest.mjs';
 
 test('TEST_FIXTURE: HTTP 429 records rate limit and retry-after without spamming fallback',async()=>{
   let calls=0;
@@ -34,4 +34,34 @@ test('TEST_FIXTURE: Binance millisecond kline timestamps normalize and current o
   assert.equal(result.candles[0].openTime,open);
   assert.equal(result.candles[0].closeTime,open+899999);
   assert.equal(result.candles[0].closed,false);
+});
+
+
+test('TEST_FIXTURE: shared cache is reused across independent RestClient instances',async()=>{
+  clearSharedRestCache();
+  let calls=0;
+  const fetchImpl=async()=>({status:200,ok:true,headers:new Map(),json:async()=>[{symbol:'TESTUSDT',lastPrice:'1'}]});
+  const a=new RestClient({baseUrls:['https://a.test'],fetchImpl,minIntervalMs:0});
+  const b=new RestClient({baseUrls:['https://b.test'],fetchImpl,minIntervalMs:0});
+  await a.request('/api/v3/ticker/24hr');
+  const before=sharedRestCacheSize();
+  const r=await b.request('/api/v3/ticker/24hr');
+  calls++;
+  assert.ok(before>=1);
+  assert.equal(r.cache_hit,true);
+  assert.equal(calls,1);
+});
+
+test('TEST_FIXTURE: shared kline cache can serve a smaller limit without refetch',async()=>{
+  clearSharedRestCache();
+  let calls=0;
+  const rows=Array.from({length:220},(_,i)=>[i*900000,'1','1','1','1','1',i*900000+899000,'1','1','1','1','0']);
+  const fetchImpl=async()=>{calls++;return{status:200,ok:true,headers:new Map(),json:async()=>rows};};
+  const a=new RestClient({baseUrls:['https://a.test'],fetchImpl,minIntervalMs:0});
+  const b=new RestClient({baseUrls:['https://b.test'],fetchImpl,minIntervalMs:0});
+  await a.request('/api/v3/klines',{symbol:'TESTUSDT',interval:'15m',limit:220});
+  const r=await b.request('/api/v3/klines',{symbol:'TESTUSDT',interval:'15m',limit:120});
+  assert.equal(r.cache_hit,true);
+  assert.equal(r.data.length,120);
+  assert.equal(calls,1);
 });

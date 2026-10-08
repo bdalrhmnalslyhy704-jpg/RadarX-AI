@@ -150,8 +150,8 @@ function num(v,d){
 }
 function pct(v){return Number.isFinite(Number(v))?num(v,0).toFixed(1)+'%':'—';}
 function cap(v){return Math.max(0,Math.min(100,num(v,0)));}
-function verdict(v){return v==='STRONG_CANDIDATE'?'مرشح قوي':v==='CANDIDATE'?'مرشح':v==='WATCH'?'مراقبة':'مرفوض';}
-function tagClass(v){return v==='STRONG_CANDIDATE'||v==='CANDIDATE'?'good':v==='REJECT'?'bad':'warn';}
+function verdict(v){return v==='STRONG_CANDIDATE'?'مرشح قوي':v==='CANDIDATE'?'مرشح':v==='WATCH'?'مراقبة':v==='EARLY_WATCH'?'مراقبة مبكرة':v==='NO_RESULT_DATA'?'فشل جمع البيانات':'مرفوض';}
+function tagClass(v){return v==='STRONG_CANDIDATE'||v==='CANDIDATE'?'good':v==='REJECT'||v==='NO_RESULT_DATA'?'bad':'warn';}
 function cacheLoad(){
   try{
     const x=JSON.parse(sessionStorage.getItem(cacheKey)||'null');
@@ -225,7 +225,7 @@ function renderCard(x,idx){
     return '<div class="group"><b>'+esc(k)+'</b><strong>'+num(g.score,50).toFixed(0)+'</strong><small>'+num(g.long_votes,0)+' طويل • '+num(g.bearish_votes,0)+' هابط</small></div>';
   }).join('');
   const analystHtml=analysts.map(function(a){
-    return '<div class="a"><div class="aTop"><b>'+esc(a.name)+'</b><span class="num">'+num(a.score,0).toFixed(0)+'</span></div><small>'+esc(a.group||'')+' • '+esc(a.decision||'')+' • '+esc(a.direction||'')+'<br>تغطية الدليل: '+Math.round(num(a.coverage,0)*100)+'%</small></div>';
+    return '<div class="a"><div class="aTop"><b>'+esc(a.name)+'</b><span class="num">'+num(a.score,0).toFixed(0)+'</span></div><small>'+esc(a.group||'')+' • '+esc(a.decision||'')+' • '+esc(a.direction||'')+'<br>تغطية الدليل: '+Math.round(num(a.coverage,0)*100)+'% • '+esc(a.verdict_note||'')+'<br>مستخدم: '+esc((a.evidence_used||[]).join('، ')||'—')+'<br>ناقص: '+esc((a.evidence_missing||[]).join('، ')||'لا شيء')+'</small></div>;
   }).join('');
   const reasonsHtml=reasons.length?reasons.map(esc).join(' • '):'لا توجد أدلة موجبة كافية';
   const hardHtml=hard.length?hard.map(esc).join(' • '):'لا توجد بوابة رفض صلبة';
@@ -267,7 +267,7 @@ function render(body){
   const list=Array.isArray(body&&body.candidates)?body.candidates:[];
   renderHeader(body);
   renderBest(body,list);
-  if(!list.length){cards.innerHTML='<div class="empty">لا توجد عملات في هذه اللقطة. لا يتم اختلاق نتيجة لتعويض غياب البيانات.</div>';return;}
+  if(!list.length){\n    const d=body&&body.diagnostics||{};\n    const msg=num(d.failed_analyses,0)>0?'المختبر واجه فشلًا في جمع بعض البيانات — افتح التشخيص لمعرفة الرموز والأسباب.':'لا توجد نتيجة مكتملة في هذه الدورة، لكن لا يتم اختلاق أي إشارة.';\n    cards.innerHTML='<div class="empty">🧪 '+msg+'</div>';\n    return;\n  }
   cards.innerHTML=list.map(renderCard).join('');
 }
 async function run(force){

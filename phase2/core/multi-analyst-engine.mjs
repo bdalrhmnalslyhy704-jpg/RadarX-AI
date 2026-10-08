@@ -242,11 +242,23 @@ const analyst=(id,name,score,direction='NEUTRAL',evidence={},risks=[])=>{
   const ev=finiteEvidenceCount(evidence);
   const coverage=ev.total?Math.round(ev.used/ev.total*1000)/1000:1;
   const bias=direction==='LONG'?s:direction==='BEARISH'?100-s:50;
+  const entries=Object.entries(evidence||{});
+  const evidence_used=entries.filter(([,v])=>{
+    if(Number.isFinite(Number(v)))return true;
+    if(Array.isArray(v))return v.some(x=>Number.isFinite(Number(x)));
+    return Boolean(v&&typeof v==='object'&&Object.values(v).some(x=>Number.isFinite(Number(x))));
+  }).map(([k])=>k);
+  const evidence_missing=entries.filter(([,v])=>v==null||v===''||(typeof v==='number'&&!Number.isFinite(v))).map(([k])=>k);
+  const verdict_note=direction==='LONG'
+    ?(s>=80?'دليل صاعد قوي':s>=65?'ميل صاعد يحتاج تأكيد':'مراقبة صعودية')
+    :direction==='BEARISH'
+      ?(s>=75?'تحذير هابط قوي':'ميل هابط')
+      :'دليل غير حاسم';
   return {
     id,name,group:profile.group,role:profile.role,
     score:s,direction,bias,
     decision:s>=80?'PASS':s>=65?'POSITIVE':s>=50?'WATCH':'FAIL',
-    evidence,coverage,
+    evidence,coverage,evidence_used,evidence_missing,verdict_note,
     risks:Array.isArray(risks)?risks:[]
   };
 };
@@ -691,15 +703,17 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   const chase=(Number.isFinite(move24)&&move24>7)||(Number.isFinite(emaDist)&&emaDist>6)||(Number.isFinite(head)&&head<.15);
   if(chase)early.score=Math.min(early.score,58);
 
-  const hardReasons=[];
-  if(!dataValid)hardReasons.push('DATA_GATE_FAILED');
-  if(safeAnalysts.length!==19)hardReasons.push('SPECIALIST_COUNT_INVALID');
-  if(safeAnalysts.find(x=>x.id==='RISK_TRAPS')?.score<42)hardReasons.push('RISK_TOO_HIGH');
-  if(safeAnalysts.find(x=>x.id==='EXTENSION')?.score<40)hardReasons.push('PRICE_ALREADY_EXTENDED');
-  if(safeAnalysts.find(x=>x.id==='LIQUIDITY_QUALITY')?.score<60)hardReasons.push('LIQUIDITY_TOO_WEAK');
-  if(bearishStrong>=3||bearishGroups>=3)hardReasons.push('CONSENSUS_CONTRADICTION');
-  if(chase)hardReasons.push('EARLY_WINDOW_LOST');
-  if(avgCoverage<0.78)hardReasons.push('ANALYST_EVIDENCE_COVERAGE_LOW');
+  const safetyHardReasons=[];
+  const thesisBlockers=[];
+  if(!dataValid)safetyHardReasons.push('DATA_GATE_FAILED');
+  if(safeAnalysts.length!==19)safetyHardReasons.push('SPECIALIST_COUNT_INVALID');
+  if(safeAnalysts.find(x=>x.id==='LIQUIDITY_QUALITY')?.score<60)safetyHardReasons.push('LIQUIDITY_TOO_WEAK');
+  if(avgCoverage<0.78)safetyHardReasons.push('ANALYST_EVIDENCE_COVERAGE_LOW');
+  if(safeAnalysts.find(x=>x.id==='RISK_TRAPS')?.score<42)thesisBlockers.push('RISK_TOO_HIGH');
+  if(safeAnalysts.find(x=>x.id==='EXTENSION')?.score<40)thesisBlockers.push('PRICE_ALREADY_EXTENDED');
+  if(bearishStrong>=3||bearishGroups>=3)thesisBlockers.push('CONSENSUS_CONTRADICTION');
+  if(chase)thesisBlockers.push('EARLY_WINDOW_LOST');
+  const hardReasons=[...safetyHardReasons,...thesisBlockers];
 
   const direction=directionEdge>=40?'LONG':directionEdge<=-40?'BEARISH':'NEUTRAL';
   let timing='NO_SETUP';
@@ -712,6 +726,7 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   const criticalGood=['MARKET_STRUCTURE','VOLUME_CONFIRMATION','PRE_BREAKOUT','SUPPORT_RESISTANCE','RISK_TRAPS','LIQUIDITY_QUALITY']
     .every(id=>Number(safeAnalysts.find(x=>x.id===id)?.score)>=56);
 
+  const earlyWatchEligible=safetyHardReasons.length===0&&direction==='LONG'&&!chase&&balancedScore>=58&&positive>=7&&positiveGroups>=3&&agreement>=45&&early.score>=50&&(Number.isFinite(fingerprint)?fingerprint:0)>=50;
   let verdict='REJECT';
   if(!hardReasons.length&&direction==='LONG'&&balancedScore>=84&&positive>=12&&strong>=5&&positiveGroups>=6&&criticalGood&&agreement>=74&&early.score>=76&&(Number.isFinite(fingerprint)?fingerprint:0)>=75)
     verdict='STRONG_CANDIDATE';
@@ -719,6 +734,8 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
     verdict='CANDIDATE';
   else if(!hardReasons.length&&direction==='LONG'&&balancedScore>=65&&positive>=8&&positiveGroups>=4&&agreement>=52&&early.score>=52)
     verdict='WATCH';
+  else if(earlyWatchEligible)
+    verdict='EARLY_WATCH';
 
   const top=safeAnalysts.filter(x=>x.direction==='LONG').sort((a,b)=>b.score-a.score).slice(0,7);
   const weak=safeAnalysts.filter(x=>x.direction!=='LONG').sort((a,b)=>a.score-b.score).slice(0,5);
@@ -743,8 +760,11 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   return {
     score:Math.round(balancedScore*10)/10,
     verdict,direction,
+    lab_status:'ANALYSIS_COMPLETE',
+    entry_eligibility:verdict==='STRONG_CANDIDATE'||verdict==='CANDIDATE'?'ACTIONABLE_CANDIDATE':verdict==='WATCH'||verdict==='EARLY_WATCH'?'WATCH_ONLY':'BLOCKED',
+    watchable:earlyWatchEligible,
     positiveAnalysts:positive,strongAnalysts:strong,bearishStrongAnalysts:bearishStrong,totalAnalysts:safeAnalysts.length,
-    hardReasons,reasons,risks,
+    hardReasons,safety_hard_reasons:safetyHardReasons,thesis_blockers:thesisBlockers,reasons,risks,
     agreement:Math.round(agreement*10)/10,
     analyst_dispersion:Number.isFinite(analystDispersion)?Math.round(analystDispersion*10)/10:null,
     group_dispersion:Number.isFinite(groupDispersion)?Math.round(groupDispersion*10)/10:null,
@@ -775,7 +795,7 @@ export class MultiAnalystEngine {
     if(!rest||typeof rest.request!=='function')throw new Error('REST_CLIENT_REQUIRED');
     this.clock=clock;
     this.config={
-      quote:'USDT',discoveryPool:20,returnLimit:10,deepConcurrency:3,deepKlines:220,
+      quote:'USDT',discoveryPool:32,deepCandidates:12,returnLimit:10,deepConcurrency:3,deepKlines:220,
       minQuoteVolume24h:300000,minDataQuality:70,minLiquidityQuality:60,
       ttlMs:45000,...config
     };
@@ -858,6 +878,14 @@ export class MultiAnalystEngine {
         if(selected.length>=this.config.discoveryPool)break;
       }
       if(!selected.length)throw new Error('NO_SPOT_CANDIDATES');
+      const cheapRank=(x)=>Math.log10(Math.max(1,Number(x.quoteVolume24h)||1))*.7+Math.min(8,Math.max(-4,Number(x.priceChange24h)||0))*5+(Number(x.tradeCount24h)>0?Math.log10(Math.max(1,Number(x.tradeCount24h)))*.15:0);
+      const deepCount=Math.max(6,Math.min(this.config.deepCandidates||12,selected.length));
+      const sortedSelected=[...selected].sort((a,b)=>cheapRank(b)-cheapRank(a));
+      const elite=Math.max(4,Math.ceil(deepCount*.7));
+      const reservePool=sortedSelected.slice(elite);
+      const rotationOffset=this.monitorStats.scan_count%Math.max(1,reservePool.length);
+      const rotated=reservePool.length?[...reservePool.slice(rotationOffset),...reservePool.slice(0,rotationOffset)]:[];
+      const deepSelected=[...sortedSelected.slice(0,elite),...rotated.slice(0,Math.max(0,deepCount-elite))];
       let btc15=[],btc1=[];
       try{
         const [b15,b1]=await Promise.all([
@@ -870,7 +898,7 @@ export class MultiAnalystEngine {
       const marketMedian24h=validTickerReturns.length?validTickerReturns[Math.floor(validTickerReturns.length/2)]:null;
       const breadthPct=validTickerReturns.length?validTickerReturns.filter(x=>x>0).length/validTickerReturns.length*100:null;
       const scanErrors=[];
-      const scanned=await boundedMap(selected,Math.max(1,Math.min(5,this.config.deepConcurrency)),async(ticker,index)=>{
+      const scanned=await boundedMap(deepSelected,Math.max(1,Math.min(5,this.config.deepConcurrency)),async(ticker,index)=>{
         try{
           const row=await this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:info.source,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'5m',fastKlines:96,includeAnalysisPayload:true});
           if(!row)throw new Error('SYMBOL_SCAN_RETURNED_EMPTY');
@@ -931,7 +959,18 @@ export class MultiAnalystEngine {
         }catch(error){
           const message=String(error?.message??error);
           scanErrors.push({symbol:String(ticker?.symbol||'').toUpperCase(),rank:index+1,error:message});
-          return null;
+          return {
+            symbol:String(ticker?.symbol||'').toUpperCase(),rank:index+1,
+            last_price:Number.isFinite(Number(ticker?.lastPrice))?Number(ticker.lastPrice):null,
+            price_change_24h:Number.isFinite(Number(ticker?.priceChange24h))?Number(ticker.priceChange24h):null,
+            quote_volume_24h:Number(ticker?.quoteVolume24h)||0,
+            liquidity_quality:0,data_quality:0,direction:'NONE',verdict:'NO_RESULT_DATA',lab_status:'SCAN_FAILED',
+            entry_eligibility:'BLOCKED',consensus:{positive:0,strong:0,total:0,ratio:0,bearish_strong:0},
+            analysts:[],final_judge:null,highlights:[],risk_flags:['SCAN_FAILED'],reason_codes:['SCAN_FAILED'],
+            intelligence:{market_regime:'UNKNOWN',timing:'NO_SETUP',early_score:null,analyst_agreement:null,temporal_persistence:0,decision_gate:{data_ok:false}},
+            data_status:{data_valid:false,data_stale:false,last_error:message,source:'Binance Public REST'},
+            paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+          };
         }
       });
       const live=scanned.filter(Boolean);
@@ -954,19 +993,19 @@ export class MultiAnalystEngine {
       const candidates=live.slice(0,requested).map((x,i)=>({...x,rank:i+1}));
       const strongCount=live.filter(x=>x.verdict==='STRONG_CANDIDATE').length;
       const value={
-        meta:{live:live.some(x=>x.data_status?.data_valid===true),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analyst_count:20,specialist_count:19},
+        meta:{live:live.some(x=>x.data_status?.data_valid===true),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analyst_count:20,specialist_count:19,lab_mode:'DEEP_OBSERVABILITY'},
         as_of:new Date(this.clock()).toISOString(),
         source:'Binance Public REST',
         universe:{quote:q,eligible_spot_symbols:universe.length,discovery_pool:selected.length,scanned:live.length,returned:candidates.length,min_quote_volume_24h:this.config.minQuoteVolume24h},
         market_context:{regime:marketRegime({marketMedian24h,breadthPct}),median_24h_change_pct:marketMedian24h,positive_breadth_pct:breadthPct},
-        summary:{strong_candidates:strongCount,candidates:live.filter(x=>x.verdict==='CANDIDATE').length,watch:live.filter(x=>x.verdict==='WATCH').length,rejected:live.filter(x=>x.verdict==='REJECT').length},
+        summary:{strong_candidates:strongCount,candidates:live.filter(x=>x.verdict==='CANDIDATE').length,watch:live.filter(x=>x.verdict==='WATCH'||x.verdict==='EARLY_WATCH').length,early_watch:live.filter(x=>x.verdict==='EARLY_WATCH').length,rejected:live.filter(x=>x.verdict==='REJECT').length,scan_failed:live.filter(x=>x.verdict==='NO_RESULT_DATA').length},
         candidates,
         pipeline:['Discovery','Data Gate','19 Specialist Analysts','Chief Analyst'],
         diagnostics:{
           duration_ms:Math.max(0,this.clock()-startedAt),
           deep_concurrency:this.config.deepConcurrency,
           deep_klines:this.config.deepKlines,
-          attempted_analyses:selected.length,
+          discovery_pool:selected.length,\n          deep_candidates:deepSelected.length,\n          attempted_analyses:deepSelected.length,
           successful_analyses:validLive.length,
           gate_rejected:gateRejected.length,
           failed_analyses:scanErrors.length,
