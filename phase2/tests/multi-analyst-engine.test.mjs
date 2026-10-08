@@ -167,7 +167,7 @@ console.log('multi-analyst-engine runtime-error regression: PASS');
     {klinesLimit:120,includeAnalysisPayload:true}
   );
   assert.equal(row.data_status.data_valid,false);
-  assert.match(String(row.data_status.last_error||''),'LIQUIDITY_COMPUTATION_FAILED');
+  assert.match(String(row.data_status.last_error||''),/LIQUIDITY_COMPUTATION_FAILED/);
   assert.ok(row._analysis && row._analysis.series['15m'].length===120);
 }
 
