@@ -123,6 +123,7 @@ function domainScores(alert){
   const rotation=alert?.rotation||{};
   const professor=alert?.professor_opinion||{};
   const whale=alert?.analysis||{};
+  const pulse=alert?.market_pulse||{};
 
   const pick=(paths,fallback=50)=>firstNumber(alert,paths,
     firstNumber(c,paths,fallback));
@@ -143,7 +144,8 @@ function domainScores(alert){
     num(fp.pressure_score,null),
     num(elite.categories?.flow,null),
     num(liq.metrics?.absorption_score,null),
-    num(whale.score,null)
+    num(whale.score,null),
+    Number.isFinite(Number(pulse?.priceDeltaPct))?clamp(50+Number(pulse.priceDeltaPct)*40):null
   ],50);
 
   const momentum=average([
@@ -151,7 +153,9 @@ function domainScores(alert){
     pick(['momentum']),
     num(fp.acceleration_score,null),
     num(strong.metrics?.return_3m,null)!=null?clamp(50+Number(strong.metrics.return_3m)*30):null,
-    num(elite.categories?.momentum,null)
+    num(elite.categories?.momentum,null),
+    num(pulse?.accelerationScore,null),
+    num(pulse?.score,null)
   ],50);
 
   const volatility=average([
@@ -183,7 +187,10 @@ function domainScores(alert){
     pick(['trade_score']),
     num(fp.participation_score,null),
     num(elite.categories?.participation,null),
-    num(liq.metrics?.volume_ratio,null)!=null?clamp(50+(Number(liq.metrics.volume_ratio)-1)*55):null
+    num(liq.metrics?.volume_ratio,null)!=null?clamp(50+(Number(liq.metrics.volume_ratio)-1)*55):null,
+    num(pulse?.score,null),
+    num(pulse?.volumeBurstRatio,null)!=null?clamp(50+Math.log2(Math.max(.25,Number(pulse.volumeBurstRatio)))*18):null,
+    num(pulse?.tradeBurstRatio,null)!=null?clamp(50+Math.log2(Math.max(.25,Number(pulse.tradeBurstRatio)))*18):null
   ],50);
 
   const liquidity=average([

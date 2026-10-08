@@ -16,7 +16,8 @@ const PROFILES=Object.freeze({
   PROFESSOR_RADAR:{minScore:82,minData:85,minConfirmations:0,minCategoryHits:0,minLiquidity:0,globalCooldownMs:30*60*1000,priority:3},
   EARLY_EXPANSION_RADAR:{minScore:82,minData:70,minConfirmations:0,minCategoryHits:0,minLiquidity:60,globalCooldownMs:10*60*1000,priority:4},
   COIN_HUNTER_RADAR:{minScore:86,minData:80,minConfirmations:0,minCategoryHits:0,minLiquidity:65,globalCooldownMs:12*60*1000,priority:4},
-  WHALE_ACCUMULATION_RADAR:{minScore:88,minData:80,minConfirmations:7,minCategoryHits:5,minLiquidity:70,globalCooldownMs:14*60*1000,priority:5}
+  WHALE_ACCUMULATION_RADAR:{minScore:88,minData:80,minConfirmations:7,minCategoryHits:5,minLiquidity:70,globalCooldownMs:14*60*1000,priority:5},
+  FALCON_EYE_RADAR:{minScore:78,minData:82,minConfirmations:8,minCategoryHits:5,minLiquidity:65,globalCooldownMs:12*60*1000,priority:5}
 });
 
 const recentBySymbol=new Map();
@@ -172,6 +173,7 @@ function radarSpecificChecks(alert,p){
     const d=a.derivatives||{};
     if(Boolean(a.not_chasing)===false)failures.push('FALCON_ANTI_CHASE_FAIL');
     if(Number(a.confirmation_count||0)<8)failures.push('FALCON_CONFIRMATION_BREADTH_LOW');
+    if(a.market_pulse && Number(a.market_pulse.score||0)<54)failures.push('FALCON_MARKET_PULSE_WEAK');
     if(Number(cs.quietness||0)<65)failures.push('FALCON_QUIET_BASE_WEAK');
     if(Number(cs.compression||0)<58)failures.push('FALCON_COMPRESSION_WEAK');
     if(Number(cs.structure||0)<65)failures.push('FALCON_STRUCTURE_WEAK');

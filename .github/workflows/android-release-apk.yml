@@ -272,6 +272,7 @@ jobs:
           node --test phase2/tests/evidence-trajectory.test.mjs
           node --test phase2/tests/outcome-calibrator.test.mjs
           node --test phase2/tests/falcon-radar-core.test.mjs
+          node --test phase2/tests/falcon-market-pulse.test.mjs
           node --test phase2/tests/falcon-eye-radar.test.mjs
           node --test phase2/tests/king-intelligence.test.mjs
 
