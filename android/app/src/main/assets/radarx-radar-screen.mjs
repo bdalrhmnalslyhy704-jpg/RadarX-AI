@@ -6,7 +6,7 @@ const P = {
   ROTATION_LAG_RADAR:{n:'الجوكر',i:'🃏',c:'#f59e0b',m:'دوران السيولة',s:'BTC/ETH Lead-Lag + Relative Strength + Value Acceptance',t:'15m • 1h',a:['BTC/ETH Lead-Lag','Relative Spread','Volume Dislocation','VWAP','Value Acceptance','RSI/MFI','Stochastic','Persistence','Compression'],g:['التأخر وحده ليس إشارة','رفض التمدد','توافق السوق والعملة']},
   LIQUIDITY_ABSORPTION_RADAR:{n:'الكاسح',i:'🧹',c:'#06b6d4',m:'امتصاص البيع',s:'Seller Absorption + Depth Imbalance + Trapped Sellers',t:'1m • 5m',a:['Seller Absorption','Depth Imbalance','Trapped Sellers','Microstructure','Auction Balance','Fractal Structure','5m Confirm'],g:['سبريد ضيق','حجم وامتصاص حقيقي','رفض التمدد']}
 ,
-  FALCON_EYE_RADAR:{n:'عين الصقر',i:'🦅',c:'#f6c453',m:'البصمة قبل الانفجار',s:'OGN Pre-Explosion Fingerprint + Spot/Futures Confluence + Anti-Chase',t:'1m • 5m • Futures',a:['Quiet Base','ATR/Bollinger','Higher-Lows','RVOL','Trade Count','Taker Flow','Resistance','VWAP/EMA','BTC Relative Strength','Futures/Spot','Open Interest','Funding','Liquidations','Range Expansion','Efficiency'],g:['يرفض مطاردة +8% يوميًا','يشترط عدة أدلة مستقلة','المشتقات اختيارية عند عدم توفرها','شموع مغلقة فقط','3 إشعارات كحد أقصى في الساعة']},
+  FALCON_EYE_RADAR:{n:'عين الصقر',i:'🦅',c:'#f6c453',m:'البصمة قبل الانفجار',s:'OGN Pre-Explosion Fingerprint + Spot/Futures Confluence + Anti-Chase',t:'1m • 5m • Futures',a:['Full-Market Pulse 30s','Quiet Base','Adaptive Acceleration','ATR/Bollinger','Higher-Lows','RVOL','Trade Count','Taker Flow','Resistance','VWAP/EMA','BTC Relative Strength','Futures/Spot','Open Interest','Funding','Liquidations','Range Expansion','Efficiency'],g:['يرفض مطاردة +8% يوميًا','يشترط عدة أدلة مستقلة','المشتقات اختيارية عند عدم توفرها','شموع مغلقة فقط','3 إشعارات كحد أقصى في الساعة']},
 };
 
 function e(v){return String(v||'').replace(/[&<>"]/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[x]));}
@@ -93,7 +93,10 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
     const setStatus=(x)=>{
       const live=x && x.running===true;
       stn.className='status '+(live?'live':'');
-      stn.textContent=live?'● '+p.n+' يعمل مستقلًا':'○ '+p.n+' متوقف';
+      const coverage=live&&x.market_coverage!=null?' • تغطية '+String(x.market_coverage):'';
+      const fast=live&&x.fast_candidates!=null?' • شرارات '+String(x.fast_candidates):'';
+      const ready=live&&x.pulse_ready_count!=null?' • جاهز '+String(x.pulse_ready_count):'';
+      stn.textContent=live?'● '+p.n+' يعمل مستقلًا'+coverage+fast+ready:'○ '+p.n+' متوقف';
       on.disabled=live;off.disabled=!live;
     };
 
