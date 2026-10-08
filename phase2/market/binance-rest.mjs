@@ -131,12 +131,12 @@ export class RestClient {
     const ttl=cacheTtlMs(path,query);
     const hit=cachedValue(key);
     if(hit){
-      return annotateClientSuccess(this,{data:hit.data,source:hit.source,receivedAt:Date.now()},null);
+      return annotateClientSuccess(this,{data:hit.data,source:hit.source,receivedAt:hit.receivedAt},null);
     }
     if(SHARED.inflight.has(key)){
       try{
         const shared=await SHARED.inflight.get(key);
-        return annotateClientSuccess(this,{data:shared.data,source:shared.source,receivedAt:Date.now()},null);
+        return annotateClientSuccess(this,{data:shared.data,source:shared.source,receivedAt:shared.receivedAt},null);
       }catch(error){
         this.lastError=String(error?.message??error);
         throw error;
