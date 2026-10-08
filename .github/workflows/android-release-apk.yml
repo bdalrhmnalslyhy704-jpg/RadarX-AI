@@ -19,15 +19,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          ref: 9c2301680f2a180dc9200620a27eea6315822b88
+          ref: 7f38a18862b9ff58d327c10e5cc7d1d6b7e1a68b
 
       - name: Verify Build 224 + Falcon Eye source
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "9c2301680f2a180dc9200620a27eea6315822b88"
-          grep -Fq 'versionCode 14' android/app/build.gradle
-          grep -Fq 'versionName "1.4.8"' android/app/build.gradle
+          test "$(git rev-parse HEAD)" = "7f38a18862b9ff58d327c10e5cc7d1d6b7e1a68b"
+          grep -Fq 'versionCode 15' android/app/build.gradle
+          grep -Fq 'versionName "1.4.9"' android/app/build.gradle
           test -s android/app/src/main/assets/falcon-eye-radar.html
           grep -Fq 'falcon-eye-radar.html' android/app/src/main/assets/index.html
           ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
@@ -44,6 +44,7 @@ jobs:
           node --check phase2/core/radar-alert-meta.mjs
           node --test phase2/tests/falcon-eye-radar.test.mjs
           node --test phase2/tests/falcon-radar-core.test.mjs
+          node --test phase2/tests/falcon-market-pulse.test.mjs
 
       - name: Verify Railway Radar 9 contract
         shell: bash
@@ -187,13 +188,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TAG="android-v1.4.8-falcon-eye-${GITHUB_RUN_NUMBER}"
+          TAG="android-v1.4.9-falcon-eye-hawkeye-${GITHUB_RUN_NUMBER}"
           APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
-            --target "9c2301680f2a180dc9200620a27eea6315822b88" \
-            --title "RadarX Native — Build 224 + Radar 8 V2 + عين الصقر 1.4.8" \
-            --notes "Signed universal APK. Build 224 lineage. Radar 9 — عين الصقر with OGN-inspired pre-explosion fingerprint, strict anti-chase, public Futures context, Spot/Paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
+            --target "7f38a18862b9ff58d327c10e5cc7d1d6b7e1a68b" \
+            --title "RadarX Native — Build 224 + Radar 8 V2 + عين الصقر Hawkeye V2 1.4.9" \
+            --notes "Signed universal APK. Build 224 lineage. Version 1.4.9. Radar 9 — عين الصقر Hawkeye V2 with full-market pulse discovery, OGN-inspired pre-explosion fingerprint, strict anti-chase, public Futures context, Spot/Paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
 
       - name: Verify HTTPS release download
         shell: bash
