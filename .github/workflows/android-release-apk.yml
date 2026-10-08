@@ -241,7 +241,7 @@ jobs:
           if (code===200) {
             if (body.radar!=='MULTI_ANALYST') throw new Error('MULTI_ANALYST_RADAR_INVALID');
             if (body.meta?.analyst_count!==20 || body.meta?.specialist_count!==19) throw new Error('MULTI_ANALYST_COUNT_INVALID');
-            if (!Array.isArray(body.pipeline) || body.pipeline.length!==4) throw new Error('MULTI_ANALYST_PIPELINE_INVALID');
+            if (!Array.isArray(body.pipeline) || body.pipeline.length!==6) throw new Error('MULTI_ANALYST_PIPELINE_INVALID');
             if (!Array.isArray(body.candidates)) throw new Error('MULTI_ANALYST_CANDIDATES_MISSING');
             for (const c of body.candidates) {
               if (!Array.isArray(c.analysts) || c.analysts.length!==19) throw new Error('MULTI_ANALYST_SPECIALISTS_INVALID');
