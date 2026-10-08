@@ -226,7 +226,7 @@ jobs:
           APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
-            --target "7f38a18862b9ff58d327c10e5cc7d1d6b7e1a68b" \
+            --target "814298ddebfdd18a93d7da86c36ade2d5be71936" \
             --title "RadarX Native — Build 224 + Radar 8 V2 + عين الصقر Hawkeye V2 1.4.9" \
             --notes "Signed universal APK. Build 224 lineage. Version 1.4.9. Radar 9 — عين الصقر Hawkeye V2 with full-market pulse discovery, OGN-inspired pre-explosion fingerprint, strict anti-chase, public Futures context, Spot/Paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
 
@@ -234,7 +234,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TAG="android-v1.4.8-falcon-eye-${GITHUB_RUN_NUMBER}"
+          TAG="android-v1.4.9-falcon-eye-hawkeye-${GITHUB_RUN_NUMBER}"
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/radarx-release.apk"
           curl --fail --location --retry 3 --retry-delay 2 --silent --show-error "$URL" -o "${RUNNER_TEMP}/radarx-release-downloaded.apk"
           test -s "${RUNNER_TEMP}/radarx-release-downloaded.apk"
