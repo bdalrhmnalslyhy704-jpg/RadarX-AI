@@ -117,7 +117,7 @@ footer{padding:20px 4px;text-align:center;color:#738aa2;font-size:10px}
   </div>
 </section>
 <div class="rx-stats">
-  <div class="rx-stat"><b>11</b><span>رادارات مستقلة</span></div>
+  <div class="rx-stat"><b>12</b><span>رادارات مستقلة</span></div>
   <div class="rx-stat"><b>20</b><span>محللو X‑FACTOR</span></div>
   <div class="rx-stat"><b>4+</b><span>مجالات Falcon</span></div>
   <div class="rx-stat"><b>0</b><span>تنفيذ حقيقي</span></div>
@@ -134,7 +134,7 @@ footer{padding:20px 4px;text-align:center;color:#738aa2;font-size:10px}
 <section class="rx-nav-card"><div><b>🃏 الجوكر</b><small>صائد دوران السيولة: يقارن العملة بـBTC/ETH ويبحث عن التحول في القوة النسبية وقبول القيمة.</small></div><a class="rx-nav-link" href="./radar3-joker.html">فتح الجوكر</a></section>
 <section class="rx-nav-card"><div><b>🧹 الكاسح</b><small>صائد امتصاص البيع: دفتر الأوامر، البائعون العالقون، البنية الدقيقة وتوازن المزاد قبل التحول.</small></div><a class="rx-nav-link" href="./radar4-sweeper.html">فتح الكاسح</a></section>
 <section class="rx-nav-card"><div><b>☄️ يوم القيامة</b><small>رادار الشرارة المفاجئة: يراقب الحركة القصيرة، تسارع الحجم والصفقات، Taker Flow، الانكماش، الاختراق والقوة النسبية ليصدر الإنذار قبل التمدد.</small></div><a class="rx-nav-link" href="./doomsday-radar.html">فتح يوم القيامة</a></section>
-<section class="rx-nav-card"><div><b>⚡ البرق 8</b><small>صائد ما قبل الارتفاع: يمسح Spot USDT كاملًا ثم يدور على 1m/5m ويجمع RVOL والصفقات والضغط والانكماش وVWAP/EMA وADX/MACD/RSI/OBV والـHigher-Lows والمقاومة والقوة النسبية والامتصاص.</small></div><a class="rx-nav-link" href="./radar8-lightning.html">فتح البرق</a></section>
+<section class="rx-nav-card"><div><b>⚡ البرق 8</b><small>صائد ما قبل الارتفاع: يمسح Spot USDT كاملًا ثم يدور على 1m/5m ويجمع RVOL والصفقات والضغط والانكماش وVWAP/EMA وADX/MACD/RSI/OBV والـHigher-Lows والمقاومة والقوة النسبية والامتصاص.</small></div><a class="rx-nav-link" href="./radar8-lightning.html">فتح البرق</a></section>\n<section class="rx-nav-card"><div><b>🦅 عين الصقر</b><small>يحفظ درس OGN: يبحث قبل الانفجار عن قاعدة هادئة، Higher-Lows، تسارع الحجم والصفقات، ضغط الشراء، اقتراب المقاومة، القوة النسبية مقابل BTC، ثم يقيس Futures/Spot وOpen Interest وFunding والتصفيات عند توفرها. يمنع مطاردة العملة بعد تمددها.</small></div><a class="rx-nav-link" style="background:linear-gradient(135deg,#f6c453,#ff9f43);color:#160d02" href="./falcon-eye-radar.html">فتح عين الصقر</a></section>
 <section class="rx-nav-card"><div><b>🎯 صائد العملات</b><small>قناص انتقائي: يتعلم من أقوى عملات اليوم، يستخرج بصمتها، ثم يبحث عن عملة ما زالت مبكرة وغير ممددة وتطابق الشروط قبل الانطلاقة.</small></div><a class="rx-nav-link" href="./coin-hunter-radar.html">فتح صائد العملات</a></section>
 <section class="rx-nav-card"><div><b>🧠 البروفيسور</b><small>استخبارات البثوث العامة: يستخرج الصفقات التي يتحدثون عنها، يطابق الأخبار، ثم يطلب تأكيد السوق الحقيقي ويعطي: «رأيي…».</small></div><a class="rx-nav-link" href="./professor-radar.html">فتح البروفيسور</a></section>
 <section class="rx-nav-card"><div><b>🛡️ المقاوم</b><small>حارس اتجاه السوق: هيكل HH/HL أو LH/LL، خط الاتجاه، المتوسط المتحرك وتوافق 4H + 1H، مع تحذير عند مخالفة اتجاه الإطار الكبير.</small></div><a class="rx-nav-link secondary" href="./al-muqawim-radar.html">فتح المقاوم</a></section>
@@ -237,8 +237,8 @@ document.getElementById('openBottomRadarBtn').addEventListener('click',event=>{
 <script type="module">
 import {getRadarStatus} from './radarx-backend-client.mjs';
 const healthEl=document.getElementById('radarHealth');
-const radarOrder=['EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR','LIQUIDITY_ABSORPTION_RADAR','KAHIR_RADAR','DOOMSDAY_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','PROFESSOR_RADAR'];
-const labels={'EARLY_MOVE_RADAR':'1 • المدمر','STRONG_MOVE_RADAR':'2 • ملك الظلام','ROTATION_LAG_RADAR':'3 • الجوكر','LIQUIDITY_ABSORPTION_RADAR':'4 • الكاسح','KAHIR_RADAR':'5 • القاهر','DOOMSDAY_RADAR':'6 • يوم القيامة','ALMUQAWIM_RADAR':'7 • المقاوم','EARLY_EXPANSION_RADAR':'8 • البرق','COIN_HUNTER_RADAR':'🎯 صائد العملات','WHALE_ACCUMULATION_RADAR':'🐋 تجمع الحيتان','PROFESSOR_RADAR':'البروفيسور'};
+const radarOrder=['EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR','LIQUIDITY_ABSORPTION_RADAR','KAHIR_RADAR','DOOMSDAY_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR','FALCON_EYE_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','PROFESSOR_RADAR'];
+const labels={'EARLY_MOVE_RADAR':'1 • المدمر','STRONG_MOVE_RADAR':'2 • ملك الظلام','ROTATION_LAG_RADAR':'3 • الجوكر','LIQUIDITY_ABSORPTION_RADAR':'4 • الكاسح','KAHIR_RADAR':'5 • القاهر','DOOMSDAY_RADAR':'6 • يوم القيامة','ALMUQAWIM_RADAR':'7 • المقاوم','EARLY_EXPANSION_RADAR':'8 • البرق','FALCON_EYE_RADAR':'9 • عين الصقر','COIN_HUNTER_RADAR':'🎯 صائد العملات','WHALE_ACCUMULATION_RADAR':'🐋 تجمع الحيتان','PROFESSOR_RADAR':'البروفيسور'};
 function esc(v){return String(v != null ? v : '').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
 async function loadRadarHealth(){
   try{
