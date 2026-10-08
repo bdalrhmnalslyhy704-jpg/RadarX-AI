@@ -165,3 +165,29 @@ console.log('multi-analyst-engine runtime-error regression: PASS');
 
 console.log('multi-analyst scan fail-closed regression: PASS');
 
+// Regression: the multi-analyst scan requests the internal analysis payload;
+// candidate construction must expose evaluated strategies without throwing.
+{
+  const base15=series(120,{base:100,trend:.001});
+  const base1=series(100,{base:100,trend:.001});
+  const base4=series(60,{base:100,trend:.001});
+  const scanner=new (await import('../market/universe-scanner.mjs')).MarketUniverseScanner({
+    rest:{
+      klines:async(symbol,interval)=>({candles:interval==='15m'?base15:interval==='1h'?base1:base4,source:'TEST'}),
+      depth:async()=>({data:{bids:[['99.9','5000'],['99.8','4000']],asks:[['100.1','2000'],['100.2','1500']]},source:'TEST'})
+    },
+    config:{deepKlines:120}
+  });
+  const row=await scanner.scanSymbol(
+    {symbol:'TESTUSDT',rank:1,lastPrice:100,priceChange24h:1,highPrice24h:101,lowPrice24h:99,quoteVolume24h:2000000,tradeCount24h:5000},
+    1,
+    {exchangeInfo:'TEST',ticker:'TEST'},
+    {klinesLimit:120,includeAnalysisPayload:true}
+  );
+  assert.ok(row._analysis);
+  assert.ok(Array.isArray(row._analysis.evaluation));
+  assert.equal(row.data_status.last_error,null);
+}
+
+console.log('multi-analyst scan payload regression: PASS');
+
