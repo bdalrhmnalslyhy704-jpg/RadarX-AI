@@ -870,7 +870,7 @@ export class MultiAnalystEngine {
       const marketMedian24h=validTickerReturns.length?validTickerReturns[Math.floor(validTickerReturns.length/2)]:null;
       const breadthPct=validTickerReturns.length?validTickerReturns.filter(x=>x>0).length/validTickerReturns.length*100:null;
       const scanErrors=[];
-      const scanned=await boundedMap(selected,Math.max(1,Math.min(5,this.config.deepConcurrency)),async(ticker,index)=>{
+      const scanned=await boundedMap(deepSelected,Math.max(1,Math.min(5,this.config.deepConcurrency)),async(ticker,index)=>{
         try{
           const row=await this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:info.source,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'5m',fastKlines:96,includeAnalysisPayload:true});
           if(!row)throw new Error('SYMBOL_SCAN_RETURNED_EMPTY');
@@ -954,12 +954,12 @@ export class MultiAnalystEngine {
       const candidates=live.slice(0,requested).map((x,i)=>({...x,rank:i+1}));
       const strongCount=live.filter(x=>x.verdict==='STRONG_CANDIDATE').length;
       const value={
-        meta:{live:live.some(x=>x.data_status?.data_valid===true),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analyst_count:20,specialist_count:19},
+        meta:{live:live.some(x=>x.data_status?.data_valid===true),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analyst_count:20,specialist_count:19,lab_mode:'DEEP_OBSERVABILITY'},
         as_of:new Date(this.clock()).toISOString(),
         source:'Binance Public REST',
         universe:{quote:q,eligible_spot_symbols:universe.length,discovery_pool:selected.length,scanned:live.length,returned:candidates.length,min_quote_volume_24h:this.config.minQuoteVolume24h},
         market_context:{regime:marketRegime({marketMedian24h,breadthPct}),median_24h_change_pct:marketMedian24h,positive_breadth_pct:breadthPct},
-        summary:{strong_candidates:strongCount,candidates:live.filter(x=>x.verdict==='CANDIDATE').length,watch:live.filter(x=>x.verdict==='WATCH').length,rejected:live.filter(x=>x.verdict==='REJECT').length},
+        summary:{strong_candidates:strongCount,candidates:live.filter(x=>x.verdict==='CANDIDATE').length,watch:live.filter(x=>x.verdict==='WATCH'||x.verdict==='EARLY_WATCH').length,early_watch:live.filter(x=>x.verdict==='EARLY_WATCH').length,rejected:live.filter(x=>x.verdict==='REJECT').length,scan_failed:live.filter(x=>x.verdict==='NO_RESULT_DATA').length},
         candidates,
         pipeline:['Discovery','Data Gate','19 Specialist Analysts','Chief Analyst'],
         diagnostics:{
