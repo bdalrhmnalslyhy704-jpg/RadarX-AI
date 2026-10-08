@@ -40,6 +40,13 @@ assert.ok(Number.isFinite(good.final.agreement));
 assert.ok(['RISK_ON','RISK_OFF','MIXED'].includes(good.final.market_regime));
 assert.ok(['EARLY_SETUP','CONFIRMING_SETUP','EXTENDED','BEARISH','NO_SETUP'].includes(good.final.timing));
 assert.ok(Object.prototype.hasOwnProperty.call(good.final,'self_calibration'));
+assert.ok(Number.isFinite(good.final.setup_fingerprint));
+assert.ok(Number.isFinite(good.final.evidence_coverage));
+assert.ok(good.final.group_consensus && Object.keys(good.final.group_consensus).length >= 10);
+assert.equal(good.final.totalAnalysts, 19);
+assert.equal(good.specialist.a.length, 19);
+assert.ok(good.specialist.a.every(function(a){return typeof a.group==='string'&&Number.isFinite(Number(a.score))&&Number.isFinite(Number(a.coverage));}));
+
 
 const badData=analyzeMultiAnalystCandidate(rawFor({valid:false,dq:40}),{});
 assert.equal(badData.final.verdict,'REJECT');
