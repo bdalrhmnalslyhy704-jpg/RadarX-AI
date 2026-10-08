@@ -20,7 +20,8 @@ test('mover forensics detects an OGN-like ignition fingerprint',()=>{
     },
     market_cap:28500000,
     quote_volume_24h:128000000,
-    market_rotation_pct:6.5
+    market_rotation_pct:6.5,
+    news_items:[{title:'OGN buyback and staking update'}]
   };
   const f=buildMoveForensics(alert,Date.now());
   assert.equal(f.hard_fail,false);
@@ -30,6 +31,8 @@ test('mover forensics detects an OGN-like ignition fingerprint',()=>{
   assert.ok(f.signatures.includes('TRADE_PARTICIPATION_BURST'));
   assert.ok(f.signatures.includes('COMPRESSION_TO_BREAKOUT'));
   assert.ok(f.signatures.includes('RELATIVE_STRENGTH_ROTATION'));
+  assert.ok(f.catalyst_keyword_hits.includes('BUYBACK'));
+  assert.ok(f.catalyst_keyword_hits.includes('STAKING'));
 });
 
 test('post-move forensic replay explains factors but remains non-notifiable',()=>{
