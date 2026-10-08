@@ -591,7 +591,8 @@ function specialistAnalysis(candidate, market={}){
     -(100-Number(sniperFreshness.freshness||50))*.32
   );
   a.push(analyst('EXTENSION','محلل عدم مطاردة السعر',extensionScore,extensionScore>=66?'LONG':extensionScore<42?'BEARISH':'NEUTRAL',{
-    distanceFromEmaPct:distanceEma,move24hPct:candidate?.price_change_24h,closeLocationPct:Number.isFinite(closeLocation)?closeLocation*100:null
+    distanceFromEmaPct:distanceEma,move24hPct:candidate?.price_change_24h,closeLocationPct:Number.isFinite(closeLocation)?closeLocation*100:null,
+    recentMoveHeat:sniperFreshness.pumpHeat,sniperFreshness:sniperFreshness.freshness,recent4Gain:sniperFreshness.recent4Gain,recent8Gain:sniperFreshness.recent8Gain
   }));
 
   const strategyScores=(candidate?.strategies||[]).map(x=>Number(x?.score?.value)).filter(Number.isFinite);
@@ -660,6 +661,7 @@ function specialistAnalysis(candidate, market={}){
     distanceEma,emaSpread15,emaSpread1,htfSpread,eff15,eff1,
     priceAccel,rangeBurst15,body:avgBody,upperWick:avgUpperWick,lowerWick:avgLowerWick,
     closeLocation,resistanceGap,supportGap,marketBreadth,
+    relativeStrength15:rs15,relativeStrength1:rs1,relativeStrength24:rel24,
     setupFingerprint,fingerprintScore,
     recent_move:sniperFreshness,
     pump_heat:sniperFreshness.pumpHeat,
