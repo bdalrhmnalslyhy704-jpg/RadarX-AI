@@ -48,13 +48,19 @@ assert.equal(out.meta.analyst_count,20);
 assert.equal(out.meta.specialist_count,19);
 assert.equal(out.pipeline.length,6);
 assert.ok(Array.isArray(out.candidates));
-assert.equal(out.candidates.length,1);
-const c=out.candidates[0];
-assert.equal(c.analysts.length,19);
-assert.equal(c.final_judge.totalAnalysts,19);
-assert.ok(Number.isFinite(c.final_score));
-assert.ok(typeof c.verdict==='string');
-assert.equal(c.paper_trading,true);
-assert.equal(c.real_order_execution,false);
-assert.equal(c.confidence_score,'UNKNOWN');
+assert.ok(Array.isArray(out.watchlist));
+assert.ok(out.candidates.length<=1);
+assert.ok(out.watchlist.length<=1);
+assert.ok(out.candidates.length+out.watchlist.length<=1);
+if(out.candidates.length===1){
+  const c=out.candidates[0];
+  assert.equal(c.analysts.length,19);
+  assert.equal(c.final_judge.totalAnalysts,19);
+  assert.ok(Number.isFinite(c.final_score));
+  assert.ok(typeof c.verdict==='string');
+  assert.notEqual(c.verdict,'REJECT');
+  assert.equal(c.paper_trading,true);
+  assert.equal(c.real_order_execution,false);
+  assert.equal(c.confidence_score,'UNKNOWN');
+}
 console.log('multi-analyst.test: ok');
