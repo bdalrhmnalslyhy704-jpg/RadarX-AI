@@ -30,7 +30,7 @@ export function evaluateRadarQuality(alert={},options={}){
   const liquidity=clamp(alert.liquidity_quality??alert.components?.liquidity??100);
   const price24=Number(alert.price_change_24h);
   const limit=Number(LIMITS[radar]||12);
-  const chasePenalty=Number.isFinite(price24)?clamp(Math.max(0,Math.abs(price24)-limit)*8,0,30);
+  const chasePenalty=Number.isFinite(price24)?clamp(Math.max(0,Math.abs(price24)-limit)*8,0,30):0;
 
   const hist=alert.historical_followthrough||alert.components?.historical_followthrough||alert.fast_impulse_context?.historical_followthrough||{};
   const histSamples=Number(hist.samples)||0;
