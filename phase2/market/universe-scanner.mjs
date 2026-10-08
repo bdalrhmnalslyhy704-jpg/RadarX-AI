@@ -1232,7 +1232,7 @@ export function buildCandidateContract({
     },
     paper_trading: true,
     real_order_execution: false,
-    ...(includeAnalysisPayload ? {_analysis: Object.freeze({series, depth: deep.depth, fast: deep.fast, liquidity, evaluation, completedAt: deep.completedAt})} : {})
+    ...(includeAnalysisPayload ? {_analysis: Object.freeze({series, depth: deep.depth, fast: deep.fast, liquidity, evaluation: strategies, completedAt: deep.completedAt})} : {})
   };
 }
 
