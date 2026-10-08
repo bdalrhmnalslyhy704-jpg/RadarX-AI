@@ -287,9 +287,13 @@ public final class MainActivity extends Activity {
                 checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             if (!prefs.getBoolean(PREF_NOTIFICATION_PROMPTED, false)) {
                 prefs.edit().putBoolean(PREF_NOTIFICATION_PROMPTED, true).apply();
-                pendingBackgroundStart = true;
+                // Ask for notification permission, but do not block local monitoring.
+                // Android can run a foreground service without drawer notifications;
+                // queued alerts can be delivered once the user grants notification access.
                 requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_POST_NOTIFICATIONS);
             }
+            Log.i("RadarXBackground", "POST_NOTIFICATIONS_MISSING_MONITOR_STILL_STARTED");
+            startBackgroundMonitor(false);
             return;
         }
         startBackgroundMonitor(false);
