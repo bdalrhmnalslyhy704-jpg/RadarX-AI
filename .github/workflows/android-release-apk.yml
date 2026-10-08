@@ -258,6 +258,7 @@ jobs:
           set -euo pipefail
           node --check phase2/core/move-forensics.mjs
           node --check phase2/core/evidence-trajectory.mjs
+          node --check phase2/core/outcome-calibrator.mjs
           node --check phase2/core/radar-falcon-core.mjs
           node --check phase2/core/radar-quality-v3.mjs
           node --check phase2/core/radar-notification-gate.mjs
@@ -265,6 +266,7 @@ jobs:
           node --check phase2/core/king-intelligence.mjs
           node --test phase2/tests/move-forensics.test.mjs
           node --test phase2/tests/evidence-trajectory.test.mjs
+          node --test phase2/tests/outcome-calibrator.test.mjs
           node --test phase2/tests/falcon-radar-core.test.mjs
           node --test phase2/tests/king-intelligence.test.mjs
 
