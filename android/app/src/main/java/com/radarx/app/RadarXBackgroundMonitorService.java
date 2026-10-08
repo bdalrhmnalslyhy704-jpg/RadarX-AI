@@ -335,16 +335,24 @@ public final class RadarXBackgroundMonitorService extends Service {
         connectivityCallback = new ConnectivityManager.NetworkCallback() {
             @Override
             public void onAvailable(Network network) {
-                if (!hasValidatedInternetConnection()) return;
-                offlineLogged = false;
-                Log.i(TAG, "BACKGROUND_NETWORK_AVAILABLE");
-                updateStatus("عاد الإنترنت؛ يجري جلب تنبيهات عين الصقر المحفوظة وإرسال سعرها ووقت اكتشافها الأصليين.");
-                requestImmediateScan();
+                handleValidatedNetworkRestored();
+            }
+
+            @Override
+            public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) {
+                // Android may call onAvailable before INTERNET is VALIDATED. Re-check when
+                // capabilities change too, otherwise the app can miss the reconnect edge.
+                if (capabilities != null
+                        && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                        && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                    handleValidatedNetworkRestored();
+                }
             }
 
             @Override
             public void onLost(Network network) {
                 if (!hasValidatedInternetConnection()) {
+                    offlineLogged = true;
                     Log.i(TAG, "BACKGROUND_NETWORK_LOST");
                     requestImmediateScan();
                 }
@@ -356,6 +364,14 @@ public final class RadarXBackgroundMonitorService extends Service {
             connectivityCallback = null;
             Log.w(TAG, "NETWORK_CALLBACK_REGISTER_FAILED", error);
         }
+    }
+
+    private void handleValidatedNetworkRestored() {
+        if (!hasValidatedInternetConnection() || !offlineLogged) return;
+        offlineLogged = false;
+        Log.i(TAG, "BACKGROUND_NETWORK_AVAILABLE");
+        updateStatus("عاد الإنترنت؛ يجري جلب تنبيهات عين الصقر المحفوظة وإرسال سعرها ووقت اكتشافها الأصليين.");
+        requestImmediateScan();
     }
 
     private void unregisterConnectivityCallback() {
