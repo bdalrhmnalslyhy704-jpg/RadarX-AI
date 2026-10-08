@@ -1,4 +1,5 @@
 import {evaluateFalconEye} from './radar-falcon-core.mjs';
+import {buildMoveForensics} from './move-forensics.mjs';
 
 const clamp=(v,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number.isFinite(Number(v))?Number(v):0));
 const arr=v=>Array.isArray(v)?v:[];
@@ -43,7 +44,9 @@ export function evaluateRadarQuality(alert={},options={}){
   const explicitRisk=arr(alert.risk_flags).some(x=>/STALE|FUTURE|INVALID|EXTENDED|CHAS|WIDE_SPREAD|LOW_LIQUIDITY/i.test(String(x)));
   const dataOk=data>=70,liquidityOk=liquidity>=60;
 
-  const falcon=evaluateFalconEye(alert,{now:Number(options.now)||Date.now(),limits:LIMITS});
+  const at=Number(options.now)||Date.now();
+  const falcon=evaluateFalconEye(alert,{now:at,limits:LIMITS});
+  const forensics=buildMoveForensics(alert,at);
   const opportunity=clamp(alert.opportunity_score??alert.setup_score??alert.radar_power_score??50);
   const classicScore=
     opportunity*.38+
@@ -51,6 +54,8 @@ export function evaluateRadarQuality(alert={},options={}){
     liquidity*.13+
     evidenceScore*.08+
     empirical*.10+
+    falcon.quality*.11+
+    forensics.score*.04+
     falcon.quality*.15-
     Math.min(12,riskCount*2)-
     chasePenalty;
@@ -77,6 +82,7 @@ export function evaluateRadarQuality(alert={},options={}){
     chase_penalty:Number(chasePenalty.toFixed(1)),
     risk_count:riskCount,
     falcon_eye:falcon,
+    move_forensics:forensics,
     target_24h_abs_move_before_signal_pct:limit,
     decision:hardFail?'REJECT':score>=82?'HIGH_QUALITY':score>=70?'QUALITY_WATCH':'LOW_QUALITY'
   };
