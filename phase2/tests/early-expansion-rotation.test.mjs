@@ -89,7 +89,7 @@ test('Radar 8 logs a full-cycle duration and phase timing breakdown',async()=>{
   assert.equal(report.received_total,0);
   assert.equal(report.paper_trading,true);
   assert.equal(report.real_order_execution,false);
-  for(const key of ['universe_refresh_ms','ticker_fast_selection_ms','market_context_ms','outcome_maintenance_ms','micro_scan_ms','deep_scan_ms','signal_archive_ms','notification_ms','other_ms'])
+  for(const key of ['universe_refresh_ms','ticker_fast_selection_ms','market_context_ms','outcome_maintenance_ms','micro_scan_ms','market_micro_overlap_ms','deep_scan_ms','signal_archive_ms','notification_ms','other_ms'])
     assert.ok(Number.isFinite(report.phase_timings_ms[key]),key);
 });
 

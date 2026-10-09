@@ -999,7 +999,7 @@ export function buildMicroFingerprint({oneMinute=[],fiveMinute=[],btcFiveMinute=
   const prof=scoreMicroProfile(m);
   const stage=!prof.antiChase?'ANTI_CHASE':prof.eligible?(prof.mode==='ABSORPTION_IGNITION'?'IGNITION_BUILD':'PRE_BREAK'):(prof.score>=58?'WATCH':'BASE_BUILD');
   return {
-    eligible:prof.eligible,stage,score:Number(prof.score.toFixed(1)),mode:prof.mode,confirmation_count:prof.confirmations,confirmation_total:10,closed_candles_only:true,
+    eligible:prof.eligible,stage,score:hasFiniteNumber(prof.score)?Number(Number(prof.score).toFixed(1)):null,mode:prof.mode,confirmation_count:prof.confirmations,confirmation_total:10,closed_candles_only:true,
     metrics:{return_1m:r1,return_3m:r3,return_5m:r5,return_15m:r15,acceleration_1m_pct:accel1,acceleration_5m_pct:accel5,rvol_1m:rv1,rvol_5m:rv5,trade_rvol_1m:tr1,trade_rvol_5m:tr5,taker_buy_ratio:taker.ratio,taker_buy_delta:taker.delta,bb_width:b?.width??null,bb_ratio:bbRatio,atr_ratio:atrRatio,ema9:e9,ema21:e21,ema50:e50,vwap:vw,vwap_distance_pct:vwDist,relative_strength_5m_pct:rs,macd_hist:mac?.histogram??null,macd_slope:macSlope,rsi:rsiNow,rsi_slope:rsiSlope,adx:adxNow,higher_low_count:hl.score,resistance_distance_pct:br.distance_pct,resistance:br.resistance,close_location_pct:location,range_compression_ratio:rangeRatio,price_change_24h_abs:price24Abs,absorption:prof.absorption},
     category_scores:prof.components,
     reasons:[prof.components.participation>=75?'MICRO_VOLUME_ACCELERATION':null,prof.components.tradeParticipation>=75?'MICRO_TRADE_ACCELERATION':null,prof.absorption?'LIQUIDITY_ABSORPTION_REVERSAL':null,prof.components.compression>=82?'MICRO_COMPRESSION':null,prof.components.structure>=70?'MICRO_STRUCTURE':null,prof.components.ema>=72?'MICRO_EMA_RECLAIM':null,prof.components.resistance>=78?'MICRO_RESISTANCE_PRESSURE':null,prof.components.relativeStrength>=60?'MICRO_RELATIVE_STRENGTH':null,prof.components.vwap>=60?'MICRO_VWAP_RECLAIM':null,prof.components.momentumTurn>=60?'MICRO_MOMENTUM_TURN':null,prof.components.adx>=55?'MICRO_ADX_TREND':null,prof.mode==='REVERSAL_ACCUMULATION'?'MICRO_REVERSAL_ACCUMULATION':null].filter(Boolean),
@@ -1029,6 +1029,7 @@ export class EarlyExpansionRadar{
     this.running=false;this.busy=false;this.timer=null;this.universe=[];this.universeAt=0;
     this.fastState=new Map();this.lastAlertAt=new Map();this.lastAlertScore=new Map();this.lastBand=new Map();
     this.lastMicroScanCycleBySymbol=new Map();this.lastDeepScanCycleBySymbol=new Map();
+    this.outcomeBackfillTask=null;
     this.latestCandidates=[];this.lastResult=null;this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
     this.fastScannedTotal=0;this.failedTotal=0;this.failedSymbols=[];this.lastCoverage=emptyEarlyExpansionUniverse(this.config,this.config.quote);
   }
@@ -1171,7 +1172,10 @@ export class EarlyExpansionRadar{
       withRetry(()=>this.rest.klines(row.symbol,'1m',{limit:this.config.oneMinuteKlines}),{attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep}),
       withRetry(()=>this.rest.klines(row.symbol,'5m',{limit:this.config.fiveMinuteKlines}),{attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep})
     ]);
-    return {row,fast,oneMinute:m1.candles,fiveMinute:m5.candles,micro_fingerprint:buildMicroFingerprint({oneMinute:m1.candles,fiveMinute:m5.candles,btcFiveMinute,ticker:row,now:this.clock(),config:this.config}),source:sourceList([m1.source,m5.source])};
+    // Accept either an already-resolved context array (tests/callers) or a shared
+    // in-flight BTC context promise so candle reads overlap without losing BTC-relative scoring.
+    const btcRows=await Promise.resolve(btcFiveMinute);
+    return {row,fast,oneMinute:m1.candles,fiveMinute:m5.candles,micro_fingerprint:buildMicroFingerprint({oneMinute:m1.candles,fiveMinute:m5.candles,btcFiveMinute:btcRows,ticker:row,now:this.clock(),config:this.config}),source:sourceList([m1.source,m5.source])};
   }
 
   async deepScan(row,fast,marketContext,micro){
@@ -1192,7 +1196,8 @@ export class EarlyExpansionRadar{
     if(!this.running||this.busy)return false;
     this.busy=true;const scanStartedAt=this.clock();
     const phaseTimings={universe_refresh_ms:0,ticker_fast_selection_ms:0,market_context_ms:0,
-      outcome_maintenance_ms:0,micro_scan_ms:0,deep_scan_ms:0,signal_archive_ms:0,notification_ms:0};
+      outcome_maintenance_ms:0,micro_scan_ms:0,market_micro_overlap_ms:0,
+      deep_scan_ms:0,signal_archive_ms:0,notification_ms:0};
     try{
       const q=this.normalizeQuote(quote),now=this.clock();
       const universeRefreshStartedAt=this.clock();
@@ -1209,43 +1214,97 @@ export class EarlyExpansionRadar{
       phaseTimings.ticker_fast_selection_ms=Math.max(0,this.clock()-tickerFastStartedAt);
       let btcFive=[],marketContext={};
       const marketContextStartedAt=this.clock();
-      try{
-        const [m5,m1]=await Promise.all([this.rest.klines('BTCUSDT','5m',{limit:Math.max(80,this.config.fiveMinuteKlines||180)}),this.rest.klines('BTCUSDT','1h',{limit:60})]);
-        btcFive=m5.candles||[];
-        const marketMoves=eligible.map(x=>x.priceChange24h).filter(hasFiniteNumber).map(Number);
-        marketContext={fiveMinute:m5.candles||[],oneHour:m1.candles||[],marketMedianChange24hPct:median(marketMoves),marketBreadthPct:marketMoves.length?marketMoves.filter(x=>x>0).length/marketMoves.length*100:null};
-      }catch(e){this.noteError(e,'market-context');}
-      phaseTimings.market_context_ms=Math.max(0,this.clock()-marketContextStartedAt);
-      const outcomeMaintenanceStartedAt=this.clock();
+      let marketContextCompletedAt=marketContextStartedAt;
+      const marketContextPromise=(async()=>{
+        try{
+          const [m5,m1]=await Promise.all([this.rest.klines('BTCUSDT','5m',{limit:Math.max(80,this.config.fiveMinuteKlines||180)}),this.rest.klines('BTCUSDT','1h',{limit:60})]);
+          btcFive=m5.candles||[];
+          const marketMoves=eligible.map(x=>x.priceChange24h).filter(hasFiniteNumber).map(Number);
+          marketContext={fiveMinute:m5.candles||[],oneHour:m1.candles||[],marketMedianChange24hPct:median(marketMoves),marketBreadthPct:marketMoves.length?marketMoves.filter(x=>x>0).length/marketMoves.length*100:null};
+        }catch(e){this.noteError(e,'market-context');}
+        finally{marketContextCompletedAt=this.clock();}
+        return {btcFive,marketContext};
+      })();
+      let outcomeMaintenanceWorkMs=0;
       const historyAlerts=[];
       try{
+        const historyReadStartedAt=this.clock();
         if(typeof this.store.readEarlyExpansionAlerts==='function')historyAlerts.push(...await this.store.readEarlyExpansionAlerts({sinceMs:now-45*24*60*60*1000,limit:100}));
         if(typeof this.store.readFalconEyeAlerts==='function')historyAlerts.push(...await this.store.readFalconEyeAlerts({sinceMs:now-45*24*60*60*1000,limit:100}));
+        outcomeMaintenanceWorkMs+=Math.max(0,this.clock()-historyReadStartedAt);
       }catch(e){this.noteError(e,'outcome-history-read');}
+      const importStartedAt=this.clock();
       await importHistoricalPreExpansionSignals(this.store,historyAlerts,{now,logger:this.logger}).catch(e=>this.noteError(e,'outcome-history-import'));
-      await updatePreExpansionMarkouts(this.store,rawRows,{now,marketContext,logger:this.logger}).catch(e=>this.noteError(e,'outcome-markout'));
-      await backfillHistoricalPreExpansionOutcomes(this.store,this.rest,{now,logger:this.logger}).catch(e=>this.noteError(e,'outcome-history-backfill'));
-      await maybeLogPreExpansionOutcomeReport(this.store,{logger:this.logger,now}).catch(e=>this.noteError(e,'outcome-report'));
-      phaseTimings.outcome_maintenance_ms=Math.max(0,this.clock()-outcomeMaintenanceStartedAt);
+      outcomeMaintenanceWorkMs+=Math.max(0,this.clock()-importStartedAt);
+
+      // Candle fetches run concurrently with the independent BTC context fetch.
+      // Each micro worker awaits the same context only after its 1m/5m reads finish.
       const microScanStartedAt=this.clock();
-      const microScanned=await boundedMap(selected,this.config.microConcurrency,async row=>{
-        try{return await this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFive);}
+      let microScanCompletedAt=microScanStartedAt;
+      const btcFivePromise=marketContextPromise.then(result=>result.btcFive);
+      const microScanPromise=boundedMap(selected,this.config.microConcurrency,async row=>{
+        try{return await this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFivePromise);}
         catch(e){this.failedTotal++;this.noteError(e,'micro-row');return {symbol:row.symbol,failed:true,error:String(e?.message??e),micro_fingerprint:{score:null,confirmation_count:0,eligible:false,closed_candles_only:true},source:sourceList([tickerSource])};}
-      });
-      phaseTimings.micro_scan_ms=Math.max(0,this.clock()-microScanStartedAt);
+      }).then(result=>{microScanCompletedAt=this.clock();return result;});
+
+      const marketContextResult=await marketContextPromise;
+      btcFive=marketContextResult.btcFive;
+      marketContext=marketContextResult.marketContext;
+      phaseTimings.market_context_ms=Math.max(0,marketContextCompletedAt-marketContextStartedAt);
+      const markoutStartedAt=this.clock();
+      await updatePreExpansionMarkouts(this.store,rawRows,{now,marketContext,logger:this.logger}).catch(e=>this.noteError(e,'outcome-markout'));
+      outcomeMaintenanceWorkMs+=Math.max(0,this.clock()-markoutStartedAt);
+      const reportStartedAt=this.clock();
+      await maybeLogPreExpansionOutcomeReport(this.store,{logger:this.logger,now}).catch(e=>this.noteError(e,'outcome-report'));
+      outcomeMaintenanceWorkMs+=Math.max(0,this.clock()-reportStartedAt);
+
+      // Historical closed-candle backfill is lower priority than live detection.
+      // Run it asynchronously with a bounded cadence so slow archive catch-up cannot
+      // hold a complete-market Radar 8 cycle hostage.
+      if(!this.outcomeBackfillTask){
+        const backfillStartedAt=this.clock();
+        const task=backfillHistoricalPreExpansionOutcomes(this.store,this.rest,{now:this.clock(),logger:this.logger})
+          .then(result=>{
+            this.logger.info?.('[RADARX_OUTCOME_BACKFILL_COMPLETE] '+JSON.stringify({
+              started_at:new Date(backfillStartedAt).toISOString(),completed_at:new Date(this.clock()).toISOString(),
+              duration_ms:Math.max(0,this.clock()-backfillStartedAt),evaluated:Number(result?.evaluated||0),
+              skipped:Number(result?.skipped||0),reason:result?.reason||null,throttled:result?.throttled===true
+            }));
+            return result;
+          })
+          .catch(e=>{this.noteError(e,'outcome-history-backfill');return null;})
+          .finally(()=>{if(this.outcomeBackfillTask===task)this.outcomeBackfillTask=null;});
+        this.outcomeBackfillTask=task;
+      }
+      phaseTimings.outcome_maintenance_ms=outcomeMaintenanceWorkMs;
+
+      const microScanned=await microScanPromise;
+      phaseTimings.micro_scan_ms=Math.max(0,microScanCompletedAt-microScanStartedAt);
+      phaseTimings.market_micro_overlap_ms=Math.max(0,
+        Math.min(marketContextCompletedAt,microScanCompletedAt)-Math.max(marketContextStartedAt,microScanStartedAt));
       const deepTargets=this.selectDeepFromMicro(microScanned,cycle);
       const deepScanStartedAt=this.clock();
       const scanned=await boundedMap(deepTargets,this.config.deepConcurrency,async micro=>{
         const row=micro.row,fast=fastBySymbol.get(row.symbol)||{};
         try{
           const evidence=await this.deepScan(row,fast,marketContext,micro),fp=micro.micro_fingerprint;
-          const microScore=Number(fp?.score),deepScore=Number(evidence.early_expansion_score);
-          const promoted=Boolean(fp?.eligible)&&Number.isFinite(microScore);
-          const finalScore=promoted?Math.max(Number.isFinite(deepScore)?deepScore:0,microScore):evidence.early_expansion_score;
+          const microScore=hasFiniteNumber(fp?.score)?Number(fp.score):null;
+          const deepScore=hasFiniteNumber(evidence.early_expansion_score)?Number(evidence.early_expansion_score):null;
+          const promoted=fp?.eligible===true&&microScore!==null;
+          const finalScore=promoted?Math.max(deepScore??0,microScore):deepScore;
+          const signalScoreSource=finalScore===null?null:
+            promoted&&deepScore!==null&&microScore===deepScore?'DEEP_AND_ELIGIBLE_MICRO_FINGERPRINT':
+            promoted&&(deepScore===null||microScore>deepScore)?'ELIGIBLE_MICRO_FINGERPRINT':
+            deepScore!==null?'DEEP_EARLY_EXPANSION_SCORE':null;
+          const sourceScoreStatus=microScore===null?'SOURCE_SCORE_MISSING':
+            promoted?'MICRO_FINGERPRINT_SCORE_QUALIFIED':'MICRO_FINGERPRINT_SCORE_UNQUALIFIED';
           const finalBand=evidence.pre_expansion_stage||evidence.decision_band;
           return {
             symbol:row.symbol,last_price:row.lastPrice,price_change_24h:row.priceChange24h,
-            early_expansion_score:Number.isFinite(finalScore)?Number(finalScore.toFixed(1)):null,decision_band:finalBand,pre_expansion_stage:finalBand,pre_expansion_fingerprint:evidence.pre_expansion_fingerprint,
+            early_expansion_score:finalScore!==null?Number(finalScore.toFixed(1)):null,
+            signal_score_source:signalScoreSource,micro_fingerprint_score:microScore,
+            micro_fingerprint_eligible:fp?.eligible===true,source_score_status:sourceScoreStatus,
+            decision_band:finalBand,pre_expansion_stage:finalBand,pre_expansion_fingerprint:evidence.pre_expansion_fingerprint,
             data_quality:evidence.data_quality,liquidity_quality:evidence.liquidity_quality,data_stale:evidence.data_stale,
             metrics:evidence.metrics,micro_fingerprint:fp,
             volume_metrics:{rvol_1m:evidence.metrics.rvol_1m,rvol_5m:evidence.metrics.rvol_5m,rvol_15m:evidence.metrics.rvol_15m,quote_rvol_5m:evidence.metrics.quote_rvol_5m,fast_volume_acceleration:fast.volume_accel_ratio},
@@ -1302,6 +1361,11 @@ export class EarlyExpansionRadar{
         price:candidate.last_price,price_change_24h:candidate.price_change_24h,
         // Measurement-only metadata: preserve the radar's existing score without changing its decision.
         early_expansion_score:candidate.early_expansion_score,
+        signal_score_source:candidate.signal_score_source,
+        source_score:candidate.micro_fingerprint_score,
+        source_score_type:'MICRO_FINGERPRINT_SCORE',
+        source_score_eligible:candidate.micro_fingerprint_eligible===true,
+        source_score_status:candidate.source_score_status,
         pre_expansion_stage:candidate.pre_expansion_stage||candidate.decision_band,
         decision_band:candidate.decision_band,data_quality:candidate.data_quality,
         data_stale:candidate.data_stale,closed_candles_only:true,
@@ -1337,8 +1401,10 @@ export class EarlyExpansionRadar{
       this.scans++;this.lastScanAtMs=now;this.lastError=null;
       this.lastResult={schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',as_of:new Date(now).toISOString(),quote:q,universe:coverage,candidates:this.latestCandidates,alerts_emitted_this_cycle:alertsThisCycle,meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',source:sourceList([tickerSource]),closed_candles_only:true,fast_scan:'ALL_ELIGIBLE_TICKERS_EVERY_CYCLE',micro_scan:'ROTATING_1M_5M_ACROSS_ELIGIBLE_UNIVERSE',deep_scan:'TOP_MICRO_FINGERPRINT_PLUS_QUIET_PLUS_ROTATION',universe_scope:'ALL_ELIGIBLE_SPOT_USDT'}};
       const scanCompletedAt=this.clock(),scanDurationMs=Math.max(0,scanCompletedAt-scanStartedAt);
-      const explicitlyTimedMs=Object.values(phaseTimings).reduce((sum,value)=>sum+Math.max(0,Number(value)||0),0);
-      phaseTimings.other_ms=Math.max(0,scanDurationMs-explicitlyTimedMs);
+      const explicitlyTimedMs=Object.entries(phaseTimings)
+        .filter(([key])=>key!=='market_micro_overlap_ms'&&key!=='other_ms')
+        .reduce((sum,[,value])=>sum+Math.max(0,Number(value)||0),0);
+      phaseTimings.other_ms=Math.max(0,scanDurationMs-Math.max(0,explicitlyTimedMs-phaseTimings.market_micro_overlap_ms));
       coverage.scan_started_at=new Date(scanStartedAt).toISOString();
       coverage.scan_completed_at=new Date(scanCompletedAt).toISOString();
       coverage.scan_duration_ms=scanDurationMs;

@@ -31,10 +31,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Retired legacy publisher: do not emit stale 1.4.9 / v6.8.11 APKs from backend-only pushes.
-  # Official Build 224 Android releases are pinned and signed by the main release workflow.
+  # Publish only from the official Build 224 branch after its backend and Android checks pass.
   release-apk:
-    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -128,7 +126,7 @@ jobs:
           RADAR8_JSON: ${{ runner.temp }}/radar8.json
         run: |
           set -euo pipefail
-          BASE="https://radarx-ai-production.up.railway.app"
+          BASE="https://radarx-ai-triple-production.up.railway.app"
           HEALTH="$(curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/healthz.json" -w "%{http_code}" "$BASE/healthz")"
           READY="$(curl --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/readyz.json" -w "%{http_code}" "$BASE/readyz")"
           RADAR8="$(curl --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 30 --silent --show-error -o "$RADAR8_JSON" -w "%{http_code}" "$BASE/api/early-expansion-radar?quote=USDT&limit=100")"
@@ -471,7 +469,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="android-v6.8.11-radar8-v2-hawkeye-${GITHUB_RUN_NUMBER}"
+          TAG="radarx-native-build224-radar8-v2-hawkeye-${GITHUB_RUN_NUMBER}"
           APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
@@ -482,7 +480,7 @@ jobs:
       - name: Verify published HTTPS download
         run: |
           set -euo pipefail
-          TAG="android-v6.8.11-radar8-v2-${GITHUB_RUN_NUMBER}"
+          TAG="radarx-native-build224-radar8-v2-hawkeye-${GITHUB_RUN_NUMBER}"
           APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
           DOWNLOADED="${RUNNER_TEMP}/radarx-release-downloaded.apk"
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/radarx-release.apk"
@@ -498,7 +496,7 @@ jobs:
           test ! -e "${RUNNER_TEMP}/radarx-release.keystore"
 
       - name: Upload verified APK only
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: radarx-release-apk
