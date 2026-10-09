@@ -21,8 +21,9 @@ const MAX_RECORDS=5000;
 const REARM_MS=60*60*1000;
 const HISTORICAL_WINDOW_MS=45*24*60*60*1000;
 const HISTORICAL_IMPORT_INTERVAL_MS=60*60*1000;
-const HISTORICAL_BACKFILL_INTERVAL_MS=6*60*60*1000;
-const HISTORICAL_BACKFILL_MAX_SIGNALS=2;
+// Measurement is incremental, with a bounded batch and a shared REST budget.
+const HISTORICAL_BACKFILL_INTERVAL_MS=60*1000;
+const HISTORICAL_BACKFILL_MAX_SIGNALS=3;
 const EXCLUDED_EVALUATION_SYMBOLS=new Set(['BTCUSDT','USDCUSDT','TUSDUSDT','USDPUSDT','FDUSDUSDT','BUSDUSDT','DAIUSDT','EURUSDT','EURTUSDT','USDEUSDT','PYUSDUSDT','USTCUSDT']);
 const PRICE_POLL_MIN_MS=20_000;
 const FALSE_BREAKOUT_WINDOW_MS=15*60_000;
@@ -862,15 +863,23 @@ export async function backfillHistoricalPreExpansionOutcomes(store,rest,{now=Dat
   await store.updatePreExpansionOutcomes(raw=>{
     const state=normalizeState(raw);
     if(now-state.last_historical_backfill_at<intervalMs)return false;
+    const hasDueUnmeasuredHorizon=r=>HORIZONS.some(([h,ms])=>{
+      const detectedAt=num(r?.detected_at);
+      if(detectedAt===null)return false;
+      const intervalMs=h==='4h'||h==='24h'?5*60_000:60_000;
+      const toleranceMs=Math.max(2*intervalMs,90_000);
+      if(now<detectedAt+ms+toleranceMs)return false;
+      if(r.horizon_status?.[h]?.historical_checked_at!=null)return false;
+      const markReady=r.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC';
+      const excursionReady=r.excursions?.[h]?.source==='HISTORICAL_CLOSED_OHLC'&&r.excursions?.[h]?.complete===true;
+      return !(markReady&&excursionReady);
+    });
     selected=state.records.filter(r=>
       r&&r.evaluation_eligible===true&&num(r.detected_at)!==null&&num(r.entry_price)>0&&
-      now-Number(r.detected_at)>=24*60*60_000+10*60_000&&
       now-Number(r.detected_at)<=HISTORICAL_WINDOW_MS&&
-      r.historical_evaluation!==true
-    ).sort((a,b)=>{
-      const aRanging=a.market_regime==='RANGING'?0:1,bRanging=b.market_regime==='RANGING'?0:1;
-      return aRanging-bRanging||Number(a.detected_at)-Number(b.detected_at);
-    }).slice(0,Math.max(1,Math.min(6,Math.trunc(Number(maxSignals)||1))));
+      r.historical_evaluation!==true&&hasDueUnmeasuredHorizon(r)
+    ).sort((a,b)=>Number(a.detected_at)-Number(b.detected_at))
+      .slice(0,Math.max(1,Math.min(6,Math.trunc(Number(maxSignals)||1))));
     if(!selected.length)return false;
     state.last_historical_backfill_at=now;state.updated_at=now;return state;
   });
@@ -884,10 +893,13 @@ export async function backfillHistoricalPreExpansionOutcomes(store,rest,{now=Dat
         rest.klines(signal.symbol,'5m',{limit:300,startTime:detectedAt,endTime:detectedAt+25*60*60_000})
       ]);
       const closedOne=candleRows(one?.candles,now),closedFive=candleRows(five?.candles,now);
-      if(closedOne.length<55||closedFive.length<270){
+      const oneHourMature=now>=detectedAt+60*60_000+90_000;
+      const dailyMature=now>=detectedAt+24*60*60_000+10*60_000;
+      if((oneHourMature&&closedOne.length<55)||(dailyMature&&closedFive.length<270)){
         logger?.warn?.('[PRE_EXPANSION_HISTORICAL_BACKFILL_INSUFFICIENT] '+JSON.stringify({
           signal_id:signal.signal_id,symbol:signal.symbol,one_minute_closed:closedOne.length,
-          five_minute_closed:closedFive.length,action:'SAVE_PER_HORIZON_INCOMPLETE_AND_RETRY'
+          five_minute_closed:closedFive.length,one_hour_horizon_mature:oneHourMature,
+          daily_horizon_mature:dailyMature,action:'SAVE_PER_HORIZON_INCOMPLETE'
         }));
       }
       const result=evaluateHistoricalPreExpansionSignal(signal,{candles1m:closedOne,candles5m:closedFive,now});
@@ -897,46 +909,64 @@ export async function backfillHistoricalPreExpansionOutcomes(store,rest,{now=Dat
         const state=normalizeState(raw),current=state.records.find(x=>x.signal_id===signal.signal_id);
         if(!current||current.historical_evaluation===true)return false;
         const historical=result.record;
-        const covered=[],completeWindows=[];
         current.provisional_marks={...object(current.provisional_marks)};
         for(const [h,mark] of Object.entries(object(current.marks))){
           if(mark?.sample_quality!=='HISTORICAL_CLOSED_OHLC')
             current.provisional_marks[h]??={...mark,status:'INCOMPLETE',reason:'LEGACY_MARK_NOT_CLOSED_OHLC'};
         }
-        current.marks={};current.excursions={};
-        current.horizon_status={...object(historical.horizon_status)};
-        for(const [h] of HORIZONS){
-          if(historical.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC'){
-            current.marks[h]=historical.marks[h];covered.push(h);
-          }
-          if(historical.excursions?.[h]?.source==='HISTORICAL_CLOSED_OHLC'){
-            current.excursions[h]=historical.excursions[h];
-            if(historical.excursions[h]?.complete===true)completeWindows.push(h);
-          }
-          if(!current.marks[h]){
-            current.horizon_status[h]={...object(current.horizon_status[h]),status:'INCOMPLETE',
-              source:'HISTORICAL_CLOSED_OHLC',reason:'NO_CLOSED_CANDLE_WITHIN_TOLERANCE',
-              checked_at:now,matures_at:Number(current.detected_at)+HORIZONS.find(x=>x[0]===h)[1]};
-          }else if(current.excursions[h]?.complete!==true){
-            current.horizon_status[h]={...object(current.horizon_status[h]),status:'COMPLETE',
-              excursion_status:'INCOMPLETE',reason:'INCOMPLETE_CLOSED_CANDLE_WINDOW',checked_at:now};
-          }
+        current.marks={...object(current.marks)};
+        current.excursions={...object(current.excursions)};
+        current.horizon_status={...object(current.horizon_status)};
+        for(const [h,ms] of HORIZONS){
+          const intervalMs=h==='4h'||h==='24h'?5*60_000:60_000;
+          const toleranceMs=Math.max(2*intervalMs,90_000);
+          const end=detectedAt+ms;
+          // Do not mark a horizon measured until its target has had time to close a confirming candle.
+          if(now<end+toleranceMs)continue;
+          const mark=historical.marks?.[h];
+          const excursion=historical.excursions?.[h];
+          if(mark?.sample_quality==='HISTORICAL_CLOSED_OHLC')current.marks[h]=mark;
+          if(excursion?.source==='HISTORICAL_CLOSED_OHLC')current.excursions[h]=excursion;
+          const currentMark=current.marks[h];
+          const currentExcursion=current.excursions[h];
+          const markReady=currentMark?.sample_quality==='HISTORICAL_CLOSED_OHLC';
+          const excursionReady=currentExcursion?.source==='HISTORICAL_CLOSED_OHLC'&&currentExcursion?.complete===true;
+          const priorStatus=object(current.horizon_status[h]);
+          const replayStatus=object(historical.horizon_status?.[h]);
+          current.horizon_status[h]={
+            ...priorStatus,...replayStatus,historical_checked_at:now,
+            source:'HISTORICAL_CLOSED_OHLC',matures_at:end,checked_at:now,
+            status:markReady?'COMPLETE':'INCOMPLETE',
+            mark_available:markReady,
+            excursion_status:excursionReady?'COMPLETE':'INCOMPLETE',
+            reason:!markReady?'NO_CLOSED_CANDLE_WITHIN_TOLERANCE':
+              !excursionReady?'INCOMPLETE_CLOSED_CANDLE_WINDOW':null
+          };
         }
-        current.first_3pct_at=historical.first_3pct_at;
-        current.max_favorable_pct=historical.max_favorable_pct;
-        current.max_adverse_pct=historical.max_adverse_pct;
-        if(historical.false_breakout!==null)current.false_breakout=historical.false_breakout;
-        current.false_breakout_detected_at=historical.false_breakout_detected_at??null;
-        current.false_breakout_basis=historical.false_breakout_basis??null;
+        const covered=HORIZONS.filter(([h])=>current.marks[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC').map(([h])=>h);
+        const completeWindows=HORIZONS.filter(([h])=>current.excursions[h]?.source==='HISTORICAL_CLOSED_OHLC'&&current.excursions[h]?.complete===true).map(([h])=>h);
         current.historical_evaluation_horizons=covered;
         current.historical_complete_excursion_horizons=completeWindows;
         current.historical_evaluation=HORIZONS.every(([h])=>covered.includes(h)&&completeWindows.includes(h));
-        current.observed_price_source='HISTORICAL_CLOSED_OHLC';
+        current.observed_price_source=covered.length?'HISTORICAL_CLOSED_OHLC':current.observed_price_source;
+        const completeExcursions=completeWindows.map(h=>current.excursions[h]).filter(Boolean);
+        current.max_favorable_pct=completeExcursions.length?Math.max(...completeExcursions.map(x=>Number(x.max_favorable_pct)||0)):null;
+        current.max_adverse_pct=completeExcursions.length?Math.min(...completeExcursions.map(x=>Number(x.max_adverse_pct)||0)):null;
+        if(now>=detectedAt+24*60*60_000+10*60_000&&current.excursions['24h']?.complete===true)
+          current.first_3pct_at=historical.first_3pct_at;
+        if(now>=detectedAt+FALSE_BREAKOUT_WINDOW_MS+90_000&&historical.false_breakout!==null){
+          current.false_breakout=historical.false_breakout;
+          current.false_breakout_detected_at=historical.false_breakout_detected_at??null;
+          current.false_breakout_basis=historical.false_breakout_basis??null;
+        }
+        const hasDueIncomplete=HORIZONS.some(([h,ms])=>now>=detectedAt+ms&&
+          current.horizon_status[h]?.historical_checked_at!=null&&current.horizon_status[h]?.status==='INCOMPLETE');
+        current.outcome_status=current.historical_evaluation?'COMPLETE':hasDueIncomplete?'INCOMPLETE':'PENDING';
         current.historical_evaluated_at=now;
-        current.outcome_status=current.historical_evaluation?'COMPLETE':'INCOMPLETE';
         current.updated_at=now;state.updated_at=now;
         event={signal_id:current.signal_id,radar:current.radar,symbol:current.symbol,signal_type:current.signal_type,
           created_at:current.created_at??current.detected_at,entry_price:current.entry_price,
+          processed_horizons: HORIZONS.filter(([h,ms])=>now>=Number(current.detected_at)+ms&&current.horizon_status[h]?.historical_checked_at===now).map(([h])=>h),
           historical_horizons:covered,complete_excursion_horizons:completeWindows,
           horizon_status:current.horizon_status,complete:current.historical_evaluation,
           outcome_status:current.outcome_status,max_favorable_pct:current.max_favorable_pct,
