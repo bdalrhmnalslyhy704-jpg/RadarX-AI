@@ -1094,7 +1094,7 @@ export class EarlyExpansionRadar{
     const n=Math.max(1,Math.trunc(this.config.deepCandidates||10));
     const target=Math.min(n,uniqueItemCount(valid));
     if(target===0)return [];
-    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve??8)),Math.max(0,target-1));
+    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve??8)),Math.max(0,target-1),Math.floor(target*.5));
     const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve??2)),Math.max(0,target-q-1));
     const core=target-q-r;
     const byScore=[...valid].sort((a,b)=>
