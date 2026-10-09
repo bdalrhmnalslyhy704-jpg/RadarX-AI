@@ -105,6 +105,15 @@ public final class MainActivity extends Activity {
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 WebResourceResponse local = assetLoader.shouldInterceptRequest(request.getUrl());
                 if (local != null) return local;
+
+                // WebView asset origins cannot rely on CORS headers from the public API.
+                // Proxy only the two explicitly allow-listed RadarX HTTPS GET endpoints.
+                if (isAllowedBackendUri(request.getUrl())) {
+                    if (!"GET".equalsIgnoreCase(request.getMethod())) {
+                        return blockedResponse("Read-only backend proxy allows GET only");
+                    }
+                    return fetchBackend(request);
+                }
                 return null;
             }
 
@@ -156,7 +165,7 @@ public final class MainActivity extends Activity {
         HttpURLConnection connection = null;
         try {
             URL url = new URL(request.getUrl().toString());
-            if (!BACKEND_ORIGIN.equalsIgnoreCase(url.getProtocol() + "://" + url.getHost())) {
+            if (!isAllowedBackendUri(Uri.parse(request.getUrl().toString()))) {
                 return blockedResponse("Backend destination blocked");
             }
             connection = (HttpURLConnection) url.openConnection();
