@@ -17,9 +17,9 @@ export function classifyDataStatus({
   unresolvedGap=false, futureIssues=[], seriesIntegrityOk=true,
   quality=100, minDataQuality=70
 }={}) {
-  if(sourceLive!==true)return DATA_STATUS.OFFLINE;
-  if(!trigger)return DATA_STATUS.UNAVAILABLE;
+  if(!trigger)return sourceLive===true?DATA_STATUS.UNAVAILABLE:DATA_STATUS.OFFLINE;
   if(!Number.isFinite(Number(staleMs))||Number(staleMs)>maxStaleTriggerMs)return DATA_STATUS.STALE;
+  if(sourceLive!==true)return DATA_STATUS.OFFLINE;
   if(unresolvedGap||futureIssues.length||!seriesIntegrityOk||Number(quality)<minDataQuality)return DATA_STATUS.PARTIAL;
   return DATA_STATUS.LIVE;
 }
