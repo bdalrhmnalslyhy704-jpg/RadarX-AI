@@ -84,6 +84,30 @@ test('Radar 8 logs a full-cycle duration and phase timing breakdown',async()=>{
     assert.ok(Number.isFinite(report.phase_timings_ms[key]),key);
 });
 
+test('Radar 8 starts 15m, 1h, 4h and depth reads concurrently for each deep candidate',async()=>{
+  let active=0,maxActive=0;
+  const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const rest={
+    async klines(symbol,interval){
+      active++;maxActive=Math.max(maxActive,active);
+      await delay(20);active--;
+      return {source:'TEST_FIXTURE',candles:[]};
+    },
+    async depth(){
+      active++;maxActive=Math.max(maxActive,active);
+      await delay(20);active--;
+      return {source:'TEST_FIXTURE',data:{bids:[],asks:[]}};
+    }
+  };
+  const radar=new EarlyExpansionRadar({rest,store:{},config:{retryAttempts:1},clock:()=>now,logger:{warn(){}}});
+  const result=await radar.deepScan(
+    {symbol:'PARALLELUSDT',lastPrice:1,priceChange24h:1,quoteVolume24h:1_000_000,tradeCount24h:1000},
+    {},{}, {oneMinute:[],fiveMinute:[],source:'TEST_FIXTURE'}
+  );
+  assert.ok(Number.isFinite(result.data_quality));
+  assert.equal(maxActive,4,JSON.stringify({maxActive}));
+});
+
 test('Radar 8 fills the 36 unique-symbol micro batch across overlapping selector lanes',()=>{
   const radar=makeRadar({microScanCandidates:36,quietReserve:8,rotationReserve:8});
   const input=rows(60);
