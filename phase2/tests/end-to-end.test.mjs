@@ -83,8 +83,9 @@ test('TEST_FIXTURE: incomplete candle and stale data cannot send push',async()=>
   const a=await serviceCase();const input=snap();
   input.series15m=input.series15m.map((c,i)=>i===input.series15m.length-1?{...c,closed:false}:c);
   const incomplete=await a.service.evaluateSnapshot(input);assert.equal(incomplete.emitted,false);
-  assert.equal(incomplete.signal.data_status.status,'PARTIAL_DATA');
+  assert.equal(incomplete.signal.data_status.status,'LIVE_DATA');
   assert.equal(incomplete.signal.data_status.candle_closed,true);
+  assert.equal(incomplete.signal.data_status.latest_series_candle_closed,false);
   assert.equal(a.provider.calls.length,0);
   const b=await serviceCase();const staleService=new SignalService({deduplicator:new SignalDeduplicator({store:b.store}),store:b.store,pushManager:new PushManager({provider:b.provider,store:b.store}),
     config:{...CONFIG,paper:{feeRate:0,slippageBps:0},monitoring:{...CONFIG.monitoring,maxStaleTriggerMs:60000}},clock:()=>1701000000000});
