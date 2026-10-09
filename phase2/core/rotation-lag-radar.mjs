@@ -409,21 +409,24 @@ export class RotationLagRadar {
   }
 
   selectBatch(rows){
-    if(!rows.length)return [];
+    if(!Array.isArray(rows)||!rows.length)return [];
     const active=[...rows].sort((a,b)=>{
       const sa=Math.abs(a.priceChange24h)*4+Math.log10(Math.max(1,a.quoteVolume24h))*3;
       const sb=Math.abs(b.priceChange24h)*4+Math.log10(Math.max(1,b.quoteVolume24h))*3;
       return sa-sb||b.quoteVolume24h-a.quoteVolume24h;
     });
-    const selected=active.slice(0,this.config.topLaggers);
-    const n=Math.max(1,this.config.rotationBatchSize);
-    for(let i=0;i<n&&this.universe.length;i++){
-      const symbol=this.universe[this.cursor%this.universe.length];
-      this.cursor=(this.cursor+1)%this.universe.length;
-      const row=rows.find(x=>x.symbol===symbol);
-      if(row)selected.push(row);
+    const selected=[],seen=new Set();
+    const take=row=>{if(row?.symbol&&!seen.has(row.symbol)){selected.push(row);seen.add(row.symbol);return true;}return false;};
+    const topCount=Math.max(0,Math.trunc(Number(this.config.topLaggers)||0));
+    const rotationCount=Math.max(0,Math.trunc(Number(this.config.rotationBatchSize)||0));
+    for(const row of active.slice(0,topCount))take(row);
+    const target=Math.min(new Set(active.map(x=>x.symbol)).size,topCount+rotationCount);
+    let visited=0;
+    while(selected.length<target&&visited<this.universe.length){
+      const symbol=this.universe[this.cursor%this.universe.length];this.cursor=(this.cursor+1)%this.universe.length;visited++;
+      take(active.find(x=>x.symbol===symbol));
     }
-    return [...new Map(selected.map(x=>[x.symbol,x])).values()];
+    return selected;
   }
 
   async scanRow(row,benchmarks){
