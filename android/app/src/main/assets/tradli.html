@@ -42,7 +42,7 @@ footer{padding:18px 4px;text-align:center;color:#70869b;font-size:10px;line-heig
 <section class="hero">
   <h1>TRADLI — AI Trading Analysis</h1>
   <p>صفحة مستقلة لوظائف TRADLI المدمجة داخل RadarX. كل وحدة تعمل على بيانات RadarX الحالية، ولا يوجد تنفيذ أو إرسال أوامر تداول من هذه الصفحة.</p>
-  <span class="pill"><span class="dot"></span> LIVE DATA • PAPER ONLY</span>
+  <span class="pill"><span class="dot"></span> BACKEND CHECK • SPOT • PAPER ONLY</span>
   <div class="grid">
     <div class="stat"><span>الوحدات</span><b>6 Modules</b></div>
     <div class="stat"><span>مصدر البيانات</span><b>RadarX Backend</b></div>
@@ -55,7 +55,7 @@ footer{padding:18px 4px;text-align:center;color:#70869b;font-size:10px;line-heig
     <div><b style="font-size:14px">اتصال بيانات TRADLI</b><small id="tradliConnectionText" style="display:block;color:#8ea7bd;margin-top:4px;line-height:1.6">جاري فحص الخادم…</small></div>
     <span id="tradliConnectionBadge" style="padding:6px 8px;border:1px solid #7d6b3b;border-radius:999px;color:#ffe0a0;font-size:10px;font-weight:900">CHECK</span>
   </div>
-  <button id="tradliRefreshData" type="button" style="width:100%;min-height:44px;margin-top:10px;border-radius:12px;border:1px solid #2b5675;background:#102941;color:#eaf5ff;font:inherit;font-weight:900">فحص بيانات السوق الآن</button>
+  <button id="tradliRefreshData" type="button" style="width:100%;min-height:44px;margin-top:10px;border-radius:12px;border:1px solid #2b5675;background:#102941;color:#eaf5ff;font:inherit;font-weight:900">فحص اتصال الخادم وبيانات السوق</button>
 </section>
 <div id="tradliSuitePanel" aria-label="TRADLI Intelligence Suite"></div>
 <footer>TRADLI داخل RadarX • قراءة وتحليل فقط • البيانات الحية من Backend RadarX • paper_trading=true • real_order_execution=false</footer>
@@ -78,27 +78,43 @@ async function diagnoseBackend(){
   badge.textContent='CHECK';
   badge.style.borderColor='#7d6b3b';
   badge.style.color='#ffe0a0';
-  statusText.textContent='جاري فحص الخادم…';
+  statusText.textContent='جاري فحص صحة الخادم ومسار بيانات السوق…';
   try{
-    const [health,ready]=await Promise.all([
-      requestJson(DEFAULT_BACKEND_BASE_URL,'/healthz'),
-      requestJson(DEFAULT_BACKEND_BASE_URL,'/readyz')
+    const [health,ready,market]=await Promise.all([
+      requestJson(DEFAULT_BACKEND_BASE_URL,'/healthz',globalThis.fetch,12000),
+      requestJson(DEFAULT_BACKEND_BASE_URL,'/readyz',globalThis.fetch,12000),
+      requestJson(DEFAULT_BACKEND_BASE_URL,'/api/market-radar?quote=USDT&limit=1',globalThis.fetch,30000)
     ]);
-    if(health.status===200 && (ready.status===200 || ready.status===503)){
-      badge.textContent=ready.status===503?'SLOW / STALE':'CONNECTED';
-      badge.style.borderColor=ready.status===503?'#8b7440':'#2c8667';
-      badge.style.color=ready.status===503?'#ffe0a0':'#b8f4dc';
-      statusText.textContent=ready.status===503
-        ? 'الخادم متصل لكن جاهزية البيانات ليست كاملة؛ سيُعاد المحاولة عند تشغيل أي وحدة.'
-        : 'الخادم متصل. بيانات TRADLI تُجلب من Backend RadarX عبر اتصال HTTPS.';
-    }else{
-      throw new Error('HEALTH_HTTP_'+health.status);
+    if(health.status!==200){
+      badge.textContent='OFFLINE';
+      badge.style.borderColor='#7d4650';
+      badge.style.color='#ffd0d5';
+      statusText.textContent='تعذر الوصول إلى فحص صحة الخادم (HTTP '+String(health.status||0)+').';
+      return;
     }
+    const validShape=market.status===200&&market.body&&Array.isArray(market.body.candidates);
+    const candidates=validShape?market.body.candidates:[];
+    const current=candidates.filter(x=>x&&x.data_status&&x.data_status.data_stale===false&&x.data_status.data_valid===true).length;
+    const backendLive=validShape&&market.body.meta&&market.body.meta.live===true;
+    if(!validShape){
+      badge.textContent='API OK / DATA ERROR';
+      badge.style.borderColor='#8b7440';
+      badge.style.color='#ffe0a0';
+      statusText.textContent='صحة الخادم ناجحة، لكن مسار Market Radar لم يرجع بيانات قابلة للقراءة (HTTP '+String(market.status||0)+'). أعد الفحص لاحقًا.';
+      return;
+    }
+    const degraded=ready.status===503||!backendLive||current===0;
+    badge.textContent=degraded?'CONNECTED / DEGRADED':'CONNECTED / LIVE';
+    badge.style.borderColor=degraded?'#8b7440':'#2c8667';
+    badge.style.color=degraded?'#ffe0a0':'#b8f4dc';
+    statusText.textContent=degraded
+      ? 'الخادم يردّ، لكن جاهزية السوق أو حداثة البيانات غير مكتملة. المرشحون الصالحون حاليًا: '+current+'. لا تستخدم البيانات غير الحية كإشارة دخول.'
+      : 'اتصال الخادم ومسار Market Radar ناجحان. المرشحون ذوو البيانات الحديثة: '+current+'. كل وحدة تعيد التحقق من صلاحية بياناتها عند الاستخدام.';
   }catch(error){
-    badge.textContent='OFFLINE';
+    badge.textContent='OFFLINE / RETRY';
     badge.style.borderColor='#7d4650';
     badge.style.color='#ffd0d5';
-    statusText.textContent='تعذر الوصول للخادم حاليًا. أعد الفحص؛ TRADLI يحتفظ بآخر بيانات سليمة محليًا.';
+    statusText.textContent='تعذر إكمال الاتصال بواجهة السوق. الخطأ: '+String(error?.message||error)+'؛ أعد الفحص عند استقرار الاتصال.';
   }
 }
 refresh.addEventListener('click',diagnoseBackend);
