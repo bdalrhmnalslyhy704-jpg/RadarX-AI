@@ -19,16 +19,16 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          ref: 49959dda895dcebc688770f77075319b8681ef17
+          ref: f1db315053d15b0e2549aa97946e415a4a424384
 
       - name: Verify Build 224 + Falcon Eye source
         shell: bash
         run: |
           set -euo pipefail
           set -x
-          test "$(git rev-parse HEAD)" = "49959dda895dcebc688770f77075319b8681ef17"
-          grep -Fq 'versionCode 26' android/app/build.gradle
-          grep -Fq 'versionName "1.6.0"' android/app/build.gradle
+          test "$(git rev-parse HEAD)" = "f1db315053d15b0e2549aa97946e415a4a424384"
+          grep -Fq 'versionCode 27' android/app/build.gradle
+          grep -Fq 'versionName "1.6.1"' android/app/build.gradle
           test -s android/app/src/main/assets/falcon-eye-radar.html
           test -s android/app/src/main/assets/radarx-supreme-fusion.mjs
           grep -Fq 'falcon-eye-radar.html' android/app/src/main/assets/index.html
@@ -47,7 +47,7 @@ jobs:
           grep -Fq 'manager.getRunningServices(Integer.MAX_VALUE)' android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java
           grep -Fq 'export async function getFalconEyeRadar' android/app/src/main/assets/radarx-backend-client.mjs
           grep -Fq "id!=='FALCON_EYE_RADAR'" android/app/src/main/assets/radarx-radar-screen.mjs
-          grep -Fq 'RadarX Android 1.6.0' android/EMBEDDED_UI_BUILD.txt
+          grep -Fq 'RadarX Android 1.6.1' android/EMBEDDED_UI_BUILD.txt
           test -s android/app/src/main/assets/tradli.html
           test -s android/app/src/main/assets/radarx-tradli-feature-suite.mjs
           test -s android/app/src/main/assets/tests/tradli-regression.test.mjs
@@ -91,6 +91,8 @@ jobs:
           node --check phase2/core/falcon-eye-radar.mjs
           node --check phase2/core/radar-notification-gate.mjs
           node --check phase2/core/radar-alert-meta.mjs
+          node --check phase2/core/symbol-deep-analyzer.mjs
+          node --test phase2/tests/symbol-deep-scan.test.mjs
           node --test phase2/tests/falcon-eye-radar.test.mjs
           node --check phase2/core/store.mjs
           node --test phase2/tests/store.test.mjs
@@ -291,19 +293,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TAG="android-v1.6.0-tradli-chart-lab-${GITHUB_RUN_NUMBER}"
+          TAG="android-v1.6.1-tradli-chart-lab-${GITHUB_RUN_NUMBER}"
           APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
-            --target "49959dda895dcebc688770f77075319b8681ef17" \
-            --title "RadarX Native — Build 224 + TRADLI Intelligence 1.6.0" \
-            --notes "Version 1.6.0 is built from the official Build 224 line. TRADLI is a separate native Activity with six integrated modules: Chart Lab, Verify, Advisor, Signals Hub, Supply/Demand, and a paper-only Order Desk. Chart Lab renders backend-provided Binance OHLC candles for 15m/1h/4h, filters open/future candles, and does not claim to AI-analyze uploaded pictures. Connection diagnostics test health, readiness, and the actual market data endpoint. The native smoke locates the visible TRADLI dashboard entry through UI accessibility rather than guessed screen coordinates. The WebView backend proxy is HTTPS allow-listed and GET-only. Order Desk is calculation/copy only; no order or withdrawal execution exists. Spot/Paper/read-only only; paper_trading=true; real_order_execution=false; confidence_score=UNKNOWN. Android online/offline/reconnect/TRADLI emulator smoke outcome: ${ANDROID_EMULATOR_SMOKE_OUTCOME}."
+            --target "f1db315053d15b0e2549aa97946e415a4a424384" \
+            --title "RadarX Native — Build 224 + TRADLI Intelligence 1.6.1" \
+            --notes "Version 1.6.1 is built from the official Build 224 line. TRADLI is a separate native Activity with six integrated modules: Chart Lab, Verify, Advisor, Signals Hub, Supply/Demand, and a paper-only Order Desk. Chart Lab renders backend-provided Binance OHLC candles for 15m/1h/4h, filters open/future candles, and does not claim to AI-analyze uploaded pictures. Connection diagnostics test health, readiness, and the actual market data endpoint. The native smoke locates the visible TRADLI dashboard entry through UI accessibility rather than guessed screen coordinates. The WebView backend proxy is HTTPS allow-listed and GET-only. Order Desk is calculation/copy only; no order or withdrawal execution exists. Spot/Paper/read-only only; paper_trading=true; real_order_execution=false; confidence_score=UNKNOWN. Android online/offline/reconnect/TRADLI emulator smoke outcome: ${ANDROID_EMULATOR_SMOKE_OUTCOME}."
 
       - name: Verify HTTPS release download
         shell: bash
         run: |
           set -euo pipefail
-          TAG="android-v1.6.0-tradli-chart-lab-${GITHUB_RUN_NUMBER}"
+          TAG="android-v1.6.1-tradli-chart-lab-${GITHUB_RUN_NUMBER}"
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/radarx-release.apk"
           curl --fail --location --retry 3 --retry-delay 2 --silent --show-error "$URL" -o "${RUNNER_TEMP}/radarx-release-downloaded.apk"
           test -s "${RUNNER_TEMP}/radarx-release-downloaded.apk"
