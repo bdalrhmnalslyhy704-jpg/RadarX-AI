@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto';
 export class DurableStore {
   constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.ready=false;this.lastWriteAt=null;
     this.files={subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
-      signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),
+      signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),
       intelligenceMemory:join(dir,'intelligence-memory.json'),strongMoveAlerts:join(dir,'strong-move-alerts.jsonl'),predictionCalibration:join(dir,'prediction-calibration.json'),rotationAlerts:join(dir,'rotation-alerts.jsonl'),liquidityAbsorptionAlerts:join(dir,'liquidity-absorption-alerts.jsonl'),kahirAlerts:join(dir,'kahir-alerts.jsonl'),doomsdayAlerts:join(dir,'doomsday-alerts.jsonl'),professorAlerts:join(dir,'professor-alerts.jsonl'),alMuqawimAlerts:join(dir,'al-muqawim-alerts.jsonl'),falconEyeAlerts:join(dir,'falcon-eye-alerts.jsonl')};}
   async init(){await mkdir(this.dir,{recursive:true});
     for(const [k,p] of Object.entries(this.files)){try{await readFile(p,'utf8');}catch{
@@ -38,6 +38,21 @@ export class DurableStore {
   async putPredictionCalibration(symbol,value){
     const key=String(symbol||'').trim().toUpperCase();if(!key)throw new Error('INVALID_PREDICTION_CALIBRATION_SYMBOL');
     return this.lock(async()=>{const a=await this.readJson(this.files.predictionCalibration);a[key]={...value,symbol:key,updated_at:Date.now()};await this.writeJson(this.files.predictionCalibration,a);return a[key];});
+  }
+  // Internal evaluation state only; no HTTP/API contract is exposed for this file.
+  async getPreExpansionOutcomes(){
+    return this.readJson(this.files.preExpansionOutcomes);
+  }
+  async updatePreExpansionOutcomes(updater){
+    if(typeof updater!=='function')throw new Error('PRE_EXPANSION_OUTCOME_UPDATER_REQUIRED');
+    return this.lock(async()=>{
+      const current=await this.readJson(this.files.preExpansionOutcomes);
+      const result=await updater(current);
+      if(result===false)return current;
+      const next=result&&typeof result==='object'&&!Array.isArray(result)?result:current;
+      await this.writeJson(this.files.preExpansionOutcomes,next);
+      return next;
+    });
   }
   async getIntelligenceMemory(symbol){
     const key=String(symbol||'').trim().toUpperCase();
