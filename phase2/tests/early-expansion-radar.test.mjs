@@ -352,7 +352,7 @@ test('Radar 8 deep quiet lane prioritizes the lowest daily change with genuine b
   const selected=radar.selectDeepFromMicro(candidates,1);
   assert.equal(selected.length,10);
   const quiet=selected.filter(x=>x._selection_lane==='quiet');
-  assert.ok(quiet.length>=7);
+  assert.equal(quiet.length,5);
   assert.equal(quiet[0].symbol,'ZZZQUIETUSDT');
   assert.ok(quiet.every(x=>Math.abs(x.row.priceChange24h)<=8));
 });
@@ -407,5 +407,6 @@ test('Radar 8 deep selector returns ten unique candidates when enough valid symb
   const selected=radar.selectDeepFromMicro([...candidates,candidates[0],candidates[1]],4);
   assert.equal(selected.length,10);
   assert.equal(new Set(selected.map(x=>x.symbol)).size,10);
-  assert.equal(selected.filter(x=>x._selection_lane==='quiet').length,8);
+  assert.equal(selected.filter(x=>x._selection_lane==='quiet').length,5);
+  assert.equal(selected.filter(x=>x._selection_lane==='rotation').length,2);
 });
