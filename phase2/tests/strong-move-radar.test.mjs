@@ -96,4 +96,11 @@ await radar.stop();
 assert.equal(radar.running,false);
 radar.tick=originalTick;
 
-// CI trigger: independent radar regression coverage stays on this branch.\nconsole.log('Strong Move Radar tests passed');
+// CI trigger: independent radar regression coverage stays on this branch.
+const batchRadar = new StrongMoveRadar({rest:{},store:{},config:{topMoverCount:3,rotationBatchSize:4},clock:()=>NOW});
+batchRadar.universe=Array.from({length:16},(_,i)=>`B${String(i).padStart(2,'0')}USDT`);
+const batchRows=batchRadar.universe.map((symbol,i)=>({symbol,lastPrice:10+i,priceChange24h:16-i,quoteVolume24h:2_000_000+i}));
+const selectedBatch=batchRadar.selectBatch(batchRows);
+assert.equal(selectedBatch.length,7,'Strong Move should fill its top+rotation budget when enough market rows exist');
+assert.equal(new Set(selectedBatch.map(x=>x.symbol)).size,7,'Strong Move must not waste rotation slots on duplicate top movers');
+\nconsole.log('Strong Move Radar tests passed');
