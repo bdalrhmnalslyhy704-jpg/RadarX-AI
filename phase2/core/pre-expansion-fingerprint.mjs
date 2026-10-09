@@ -71,9 +71,9 @@ export function assessPreExpansionFingerprint(input={}){
   const participationImproving=(volumeImproving||tradesImproving)&&
     (gradualVolume||gradualTrades||
       (Number.isFinite(volumeRatio)&&volumeRatio>=1.18&&Number.isFinite(tradeRatio)&&tradeRatio>=1.12));
-  const relativeStrengthWeak=(relativeStrengthBtcPct!==null&&relativeStrengthBtcPct< -0.75)&&
+  const relativeStrengthWeak=(relativeStrengthBtcPct!==null&&relativeStrengthBtcPct< -0.75)||
     (relativeStrengthMarketPct!==null&&relativeStrengthMarketPct< -0.75);
-  const resistanceClose=Number.isFinite(resistanceDistanceAtr)&&resistanceDistanceAtr>=-0.55&&resistanceDistanceAtr<=3.5;
+  const resistanceClose=Number.isFinite(resistanceDistanceAtr)&&resistanceDistanceAtr>=-1.25&&resistanceDistanceAtr<=3.5;
   let stage='WATCH_EARLY',reason='BASE_OR_PARTICIPATION_NOT_CONFIRMED';
 
   if(input.dataReady!==true||dailyChangePct===null||!(price>0)||input.requiredDataMissing===true){
@@ -82,7 +82,7 @@ export function assessPreExpansionFingerprint(input={}){
     const extended=Math.abs(dailyChangePct)>=maxMove24hPct||
       (Number.isFinite(return5mPct)&&Math.abs(return5mPct)>=maxMove5mPct)||
       (Number.isFinite(return10mPct)&&Math.abs(return10mPct)>=maxMove10mPct)||
-      (Number.isFinite(resistanceDistanceAtr)&&resistanceDistanceAtr< -0.75)||
+      (Number.isFinite(resistanceDistanceAtr)&&resistanceDistanceAtr< -1.5)||
       input.alreadyExtended===true;
     if(extended){stage='ALREADY_EXTENDED';reason='MOVE_ALREADY_EXTENDED';}
     else if(falseBreakout){stage='WATCH_EARLY';reason='FALSE_BREAKOUT_REJECTED';}
