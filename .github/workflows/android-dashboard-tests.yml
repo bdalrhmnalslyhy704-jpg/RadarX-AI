@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - android-market-radar-integration
+      - 'release/build224-tradli-1.5.9'
   pull_request:
     branches:
       - main
@@ -24,6 +25,8 @@ jobs:
         run: node android/backend-client-regression.mjs
       - name: Market Radar Dashboard tests
         run: node --test android/app/src/main/assets/tests/market-radar-integration.test.mjs
+      - name: TRADLI feature and connectivity regression
+        run: node --test android/app/src/main/assets/tests/tradli-regression.test.mjs
       - name: Static safety guards
         run: |
           set -euo pipefail
