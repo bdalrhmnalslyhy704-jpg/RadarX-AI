@@ -81,8 +81,12 @@ test('live markouts sample six horizons and detect a sampled resistance rejectio
     await recordPreExpansionSignals(store,[signal({stage:'BREAKOUT_DEVELOPING',at,regime:'RANGING',metrics:{five_min_resistance:105}})],{now:at});
     let r=await updatePreExpansionMarkouts(store,[{symbol:'ABCUSDT',lastPrice:106}],{now:at+30_000});
     assert.equal(r.updated,1);
-    r=await updatePreExpansionMarkouts(store,[{symbol:'ABCUSDT',lastPrice:106.2}],{now:at+5*60_000+30_000});
+    const markoutLogs=[];
+    r=await updatePreExpansionMarkouts(store,[{symbol:'ABCUSDT',lastPrice:106.2}],{
+      now:at+5*60_000+30_000,logger:{info:line=>markoutLogs.push(line)}
+    });
     assert.equal(r.updated,1);
+    assert.ok(markoutLogs.some(line=>line.includes('[PRE_EXPANSION_MARKOUT]')&&line.includes('"horizon":"5m"')));
     r=await updatePreExpansionMarkouts(store,[{symbol:'ABCUSDT',lastPrice:99.6}],{now:at+7*60_000});
     r=await updatePreExpansionMarkouts(store,[{symbol:'ABCUSDT',lastPrice:104.5}],{now:at+8*60_000});
     const state=await store.getPreExpansionOutcomes(),item=state.records[0];
