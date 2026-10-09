@@ -27,6 +27,8 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -63,6 +65,8 @@ public final class RadarXBackgroundMonitorService extends Service {
     private static final int ROTATION_ALERT_NOTIFICATION_BASE = 44000;
     private static final long SCAN_MS = 15_000L;
     private static final long ALERT_COOLDOWN_MS = 30 * 60_000L;
+    private static final String HEARTBEAT_KEY = "monitor_heartbeat_at_ms";
+    private static final long HEARTBEAT_STALE_MS = 5 * 60_000L;
 
     private ScheduledExecutorService executor;
     private volatile boolean stopping;
@@ -126,8 +130,9 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     private void scanOnceSafe() {
         if (stopping) return;
+        touchHeartbeat();
         try {
-            long cursor = prefs().getLong("radar_alert_cursor_at", 0L);
+            long cursor = currentAlertCursor();
             JSONObject root = fetchRadarAlertsFeed(cursor);
             JSONObject meta = root.optJSONObject("meta");
             boolean live = meta != null && meta.optBoolean("paper_trading", true)
@@ -145,7 +150,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         } catch (Throwable error) {
             if (!loggedFirstScan) { loggedFirstScan = true; Log.w(TAG, "BACKGROUND_SCAN_ERROR", error); }
             Log.w(TAG, "Background unified radar fetch failed", error);
-            updateStatus("الرادارات المستقلة • لا يوجد اتصال الآن؛ عند انقطاع الإنترنت: حُفظ التنبيه على الخادم ثم أُرسل عند عودة الاتصال؛ ستُستكمل القراءة عند عودة الإنترنت");
+            updateStatus("لا يوجد اتصال بالخادم الآن • تعذر التحقق من التنبيهات • ستستأنف المراقبة ويُراجع السجل الدائم عند عودة الاتصال");
         }
     }
 
@@ -169,7 +174,9 @@ public final class RadarXBackgroundMonitorService extends Service {
                     continue;
                 }
                 if (status != 200) throw new IllegalStateException("HTTP_" + status);
-                return new JSONObject(new String(readAll(connection.getInputStream()), StandardCharsets.UTF_8));
+                JSONObject root = new JSONObject(new String(readAll(connection.getInputStream()), StandardCharsets.UTF_8));
+                mergeFalconEyeHistory(root, cursor);
+                return root;
             } catch (Exception e) {
                 last = e;
             } finally {
@@ -177,6 +184,105 @@ public final class RadarXBackgroundMonitorService extends Service {
             }
         }
         return fetchIndividualRadarAlerts(cursor, last);
+    }
+
+    /** Initialize a new install at the current time, but preserve a cursor from older app versions. */
+    private long currentAlertCursor() {
+        SharedPreferences p = prefs();
+        if (!p.contains("radar_alert_cursor_at")) {
+            long now = System.currentTimeMillis();
+            p.edit().putLong("radar_alert_cursor_at", now)
+                .putBoolean("radar_alert_cursor_initialized", true).apply();
+            Log.i(TAG, "BACKGROUND_ALERT_CURSOR_INITIALIZED_AT_START");
+            return now;
+        }
+        long cursor = p.getLong("radar_alert_cursor_at", 0L);
+        if (!p.getBoolean("radar_alert_cursor_initialized", false)) {
+            if (cursor <= 0L) cursor = System.currentTimeMillis();
+            p.edit().putLong("radar_alert_cursor_at", cursor)
+                .putBoolean("radar_alert_cursor_initialized", true).apply();
+        }
+        return cursor;
+    }
+
+    /**
+     * Poll Radar 9's durable history independently of the combined feed. This protects
+     * background replay if the combined feed's limit or an older backend feed omits it.
+     */
+    private void mergeFalconEyeHistory(JSONObject root, long cursor) {
+        try {
+            JSONArray history = fetchFalconEyeHistory(cursor);
+            JSONArray primary = root.optJSONArray("alerts");
+            JSONArray combined = new JSONArray();
+            Set<String> ids = new HashSet<>();
+            appendRecentAlerts(primary, cursor, combined, ids);
+            appendRecentAlerts(history, cursor, combined, ids);
+
+            ArrayList<JSONObject> sorted = new ArrayList<>();
+            for (int i = 0; i < combined.length(); i++) {
+                JSONObject row = combined.optJSONObject(i);
+                if (row != null) sorted.add(row);
+            }
+            Collections.sort(sorted, (a, b) -> Long.compare(alertTimestamp(b), alertTimestamp(a)));
+            JSONArray result = new JSONArray();
+            for (JSONObject row : sorted) result.put(row);
+            root.put("alerts", result);
+        } catch (Exception error) {
+            // The primary feed remains usable even when the dedicated Radar 9 route is unavailable.
+            Log.w(TAG, "Falcon Eye history poll failed; keeping combined radar feed", error);
+        }
+    }
+
+    private JSONArray fetchFalconEyeHistory(long cursor) throws Exception {
+        Exception last = null;
+        String[] bases = {
+            "https://radarx-ai-triple-production.up.railway.app",
+            "https://radarx-ai-production.up.railway.app"
+        };
+        for (String base : bases) {
+            HttpURLConnection connection = null;
+            try {
+                touchHeartbeat();
+                String target = base + "/api/falcon-eye-radar?since=" + cursor + "&limit=50&scan=0";
+                connection = (HttpURLConnection) new URL(target).openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(8_000);
+                connection.setReadTimeout(12_000);
+                connection.setInstanceFollowRedirects(false);
+                connection.setRequestProperty("Accept", "application/json");
+                connection.setRequestProperty("Accept-Encoding", "identity");
+                int status = connection.getResponseCode();
+                if (status != 200) {
+                    last = new IllegalStateException("HTTP_" + status + "_FALCON_EYE_HISTORY");
+                    continue;
+                }
+                JSONObject body = new JSONObject(new String(readAll(connection.getInputStream()), StandardCharsets.UTF_8));
+                JSONArray alerts = body.optJSONArray("alerts");
+                return alerts == null ? new JSONArray() : alerts;
+            } catch (Exception error) {
+                last = error;
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        }
+        throw last == null ? new IllegalStateException("FALCON_EYE_HISTORY_UNAVAILABLE") : last;
+    }
+
+    private static void appendRecentAlerts(JSONArray source, long cursor, JSONArray target, Set<String> ids) {
+        if (source == null) return;
+        for (int i = 0; i < source.length(); i++) {
+            JSONObject row = source.optJSONObject(i);
+            if (row == null || alertTimestamp(row) <= cursor) continue;
+            String id = row.optString("id", "");
+            if (id.isEmpty()) {
+                id = row.optString("radar", "") + "|" + row.optString("symbol", "") + "|" + alertTimestamp(row);
+            }
+            if (ids.add(id)) target.put(row);
+        }
+    }
+
+    private static long alertTimestamp(JSONObject alert) {
+        return alert.optLong("processed_at", alert.optLong("detected_at", alert.optLong("detectedAt", 0L)));
     }
 
     private JSONObject fetchIndividualRadarAlerts(long cursor, Exception prior) throws Exception {
@@ -244,6 +350,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         root.put("meta", meta);
         root.put("alerts", merged);
         root.put("radars", radarNames);
+        mergeFalconEyeHistory(root, cursor);
         return root;
     }
 
@@ -292,7 +399,11 @@ public final class RadarXBackgroundMonitorService extends Service {
         }
 
         String title = "RadarX • " + radarName + " • " + symbol;
+        double detectedPrice = alertPrice(alert);
+        String priceText = detectedPrice > 0.0 && !Double.isNaN(detectedPrice) && !Double.isInfinite(detectedPrice)
+            ? formatPrice(detectedPrice) : "غير متوفر";
         String body = "الرادار: " + radarName + " • " + symbol +
+            " • السعر وقت الكشف: " + priceText + " • " + detectedText +
             " • Score " + scoreFmt.format(score) + " • " + stage;
         String timing = "وقت اكتشاف الخادم/العملة: " + detectedText + " • وقت إرسال الإشعار: " + formatTimestamp12h(System.currentTimeMillis()) + " • Asia/Aden • 12h";
 
@@ -336,6 +447,22 @@ public final class RadarXBackgroundMonitorService extends Service {
             case "COIN_HUNTER_RADAR": return "🎯 صائد العملات";
             default: return "RadarX";
         }
+    }
+
+    private static double alertPrice(JSONObject alert) {
+        String[] keys = {"price", "price_at_detection", "detection_price", "last_price", "lastPrice"};
+        for (String key : keys) {
+            if (!alert.has(key) || alert.isNull(key)) continue;
+            double value = alert.optDouble(key, Double.NaN);
+            if (value > 0.0 && !Double.isNaN(value) && !Double.isInfinite(value)) return value;
+        }
+        return Double.NaN;
+    }
+
+    private static String formatPrice(double price) {
+        DecimalFormat format = new DecimalFormat("0.############", new java.text.DecimalFormatSymbols(Locale.US));
+        format.setGroupingUsed(false);
+        return format.format(price);
     }
 
     private static String formatTimestamp12h(long epochMs) {
@@ -383,6 +510,7 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     private void updateStatus(String text) {
+        touchHeartbeat();
         Notification.Builder builder = new Notification.Builder(this, CHANNEL_STATUS)
             .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
             .setContentTitle("RadarX • مراقبة الخلفية")
@@ -465,13 +593,23 @@ public final class RadarXBackgroundMonitorService extends Service {
         return getSharedPreferences("radarx_background", Context.MODE_PRIVATE);
     }
 
+    private void touchHeartbeat() {
+        prefs().edit().putLong(HEARTBEAT_KEY, System.currentTimeMillis()).apply();
+    }
+
     private void saveRunning(boolean running) {
-        prefs().edit().putBoolean("running", running).apply();
+        SharedPreferences.Editor editor = prefs().edit().putBoolean("running", running);
+        if (running) editor.putLong(HEARTBEAT_KEY, System.currentTimeMillis());
+        else editor.remove(HEARTBEAT_KEY);
+        editor.apply();
     }
 
     public static boolean isRunning(Context context) {
-        return context.getSharedPreferences("radarx_background", Context.MODE_PRIVATE)
-            .getBoolean("running", false);
+        SharedPreferences p = context.getSharedPreferences("radarx_background", Context.MODE_PRIVATE);
+        if (!p.getBoolean("running", false)) return false;
+        long heartbeat = p.getLong(HEARTBEAT_KEY, 0L);
+        long age = System.currentTimeMillis() - heartbeat;
+        return heartbeat > 0L && age >= 0L && age < HEARTBEAT_STALE_MS;
     }
 
     private static byte[] readAll(java.io.InputStream input) throws Exception {
