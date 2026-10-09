@@ -41,6 +41,13 @@ assert.match(tradliActivity,/FALLBACK_BACKEND_ORIGIN\s*=\s*"https:\/\/radarx-ai-
 assert.match(tradliActivity,/PRIMARY_BACKEND_ORIGIN\.equalsIgnoreCase\(origin\)/);
 assert.match(tradliActivity,/FALLBACK_BACKEND_ORIGIN\.equalsIgnoreCase\(origin\)/);
 const manifest = await readFile(new URL('./app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
+const lightning = await readFile(new URL('./app/src/main/assets/radar8-lightning.html', import.meta.url), 'utf8');
+assert.match(lightning,/RADAR8_API_CONTRACT_MISMATCH/);
+assert.match(lightning,/activeControllers\.delete\(ctl\)/);
+assert.match(lightning,/queuedScan/);
+assert.match(lightning,/s\.error/);
+assert.match(lightning,/https:\/\/radarx-ai-triple-production\.up\.railway\.app/);
+assert.doesNotMatch(lightning,/radarx-ai-production\.up\.railway\.app/);
 const mainActivity = await readFile(new URL('./app/src/main/java/com/radarx/app/MainActivity.java', import.meta.url), 'utf8');
 assert.match(manifest,/android:foregroundServiceType="dataSync\\|specialUse"/);
 assert.match(manifest,/android:process=":radar_background"/);
