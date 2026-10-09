@@ -298,13 +298,19 @@ export class LiquidityAbsorptionRadar{
       .filter(x=>this.universe.includes(x.symbol)&&x.quoteVolume24h>=this.config.minQuoteVolume24h);
   }
   selectBatch(rows){
-    const ranked=[...rows].sort((a,b)=>b.quoteVolume24h-a.quoteVolume24h||Math.abs(a.priceChange24h)-Math.abs(b.priceChange24h));
-    const selected=ranked.slice(0,Math.max(1,Number(this.config.topLiquidityCount)||3));
-    for(let i=0;i<Math.max(1,Number(this.config.rotationBatchSize)||4)&&this.universe.length;i++){
-      const sym=this.universe[this.cursor%this.universe.length];this.cursor=(this.cursor+1)%this.universe.length;
-      const row=rows.find(x=>x.symbol===sym);if(row)selected.push(row);
+    const ranked=[...(Array.isArray(rows)?rows:[])].sort((a,b)=>b.quoteVolume24h-a.quoteVolume24h||Math.abs(a.priceChange24h)-Math.abs(b.priceChange24h));
+    const selected=[],seen=new Set();
+    const take=row=>{if(row?.symbol&&!seen.has(row.symbol)){selected.push(row);seen.add(row.symbol);return true;}return false;};
+    const topCount=Math.max(1,Math.trunc(Number(this.config.topLiquidityCount)||3));
+    const rotationCount=Math.max(1,Math.trunc(Number(this.config.rotationBatchSize)||4));
+    for(const row of ranked.slice(0,topCount))take(row);
+    const target=Math.min(new Set(ranked.map(x=>x.symbol)).size,topCount+rotationCount);
+    let visited=0;
+    while(selected.length<target&&visited<this.universe.length){
+      const symbol=this.universe[this.cursor%this.universe.length];this.cursor=(this.cursor+1)%this.universe.length;visited++;
+      take(ranked.find(x=>x.symbol===symbol));
     }
-    return [...new Map(selected.map(x=>[x.symbol,x])).values()];
+    return selected;
   }
   async scanRow(row){
     const last=this.lastScanAt.get(row.symbol)||0;
