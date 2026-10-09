@@ -557,6 +557,7 @@ export class EarlyMoveSentinel {
     this.lastAlertAt=new Map();
     this.lastAlertScore=new Map();
     this.lastEarlyScanAt=new Map();
+    this.preExplosionCursor=0;this.preExplosionRotationTotal=0;
     this.deepQueue=[];
     this.deepActive=0;
     this.ws=null;
@@ -624,6 +625,7 @@ export class EarlyMoveSentinel {
       queued_deep_scans:this.deepQueue.length,
       active_deep_scans:this.deepActive,
       pre_explosion_scans_tracked:this.lastEarlyScanAt.size,
+      pre_explosion_rotation_cursor:this.preExplosionCursor,pre_explosion_rotation_total:this.preExplosionRotationTotal,
       alerts_emitted:this.alertCount
     };
   }
@@ -668,13 +670,30 @@ export class EarlyMoveSentinel {
       minQuoteVolume24h:this.config.minQuoteVolume24h,
       max24hMovePct:this.config.earlyMax24hMovePct,
       min24hMovePct:this.config.earlyMin24hMovePct,
-      limit:this.config.maxEarlyDiscovery
+      limit:Math.max(this.spotSymbols.size,Number(this.config.maxEarlyDiscovery)||36)
     });
     const now=this.clock();
-    for(const row of discovery){
+    const queueLimit=Math.max(Number(this.config.maxEarlyDiscovery)||36,(Number(this.config.maxEarlyDiscovery)||36)*2);
+    const available=discovery.filter(row=>{
       const last=this.lastEarlyScanAt.get(row.symbol)||0;
-      if(now-last<this.config.earlyScanCooldownMs)continue;
-      if(this.deepQueue.some(x=>x.symbol===row.symbol&&x.mode==='PRE_EXPLOSION'))continue;
+      return now-last>=this.config.earlyScanCooldownMs&&
+        !this.deepQueue.some(x=>x.symbol===row.symbol&&x.mode==='PRE_EXPLOSION');
+    });
+    const maxPick=Math.max(1,Math.trunc(Number(this.config.maxEarlyDiscovery)||36));
+    const priorityCount=Math.min(available.length,Math.max(1,Math.floor(maxPick*.5)));
+    const selected=available.slice(0,priorityCount);
+    const selectedSymbols=new Set(selected.map(x=>x.symbol));
+    const rotationPool=available.slice(priorityCount);
+    let visits=0;
+    while(selected.length<Math.min(maxPick,available.length)&&rotationPool.length&&visits<rotationPool.length){
+      const row=rotationPool[this.preExplosionCursor%rotationPool.length];
+      this.preExplosionCursor=(this.preExplosionCursor+1)%rotationPool.length;
+      visits++;
+      if(row&&!selectedSymbols.has(row.symbol)){selected.push(row);selectedSymbols.add(row.symbol);}
+    }
+    this.preExplosionRotationTotal+=visits;
+    for(const row of selected){
+      if(this.deepQueue.length>=queueLimit)break;
       this.lastEarlyScanAt.set(row.symbol,now);
       this.deepQueue.push({
         symbol:row.symbol,
@@ -769,6 +788,7 @@ export class EarlyMoveSentinel {
         this.alertCount++;
       }catch(error){
         this.lastError=String(error?.message??error);
+        if(job.mode==='PRE_EXPLOSION'&&this.lastEarlyScanAt.get(job.symbol)===job.queuedAt)this.lastEarlyScanAt.delete(job.symbol);
       }finally{
         this.deepActive--;
       }
