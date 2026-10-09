@@ -1,4 +1,4 @@
-RadarX Android 1.5.7
+RadarX Android 1.5.8
 Release line: official Build 224 + Radar 8 V2 + Hawkeye V2 + Supreme Fusion
 UI: bundled inside APK via Android WebViewAssetLoader
 Backend: https://radarx-ai-triple-production.up.railway.app
@@ -19,4 +19,4 @@ Background monitoring:
 
 Release gate: source/JavaScript tests, Falcon Eye API contract, Railway health, signed universal APK verification, Android offline-to-online smoke test, and HTTPS download SHA-256 integrity check.
 
-Smoke gate note: release build statically validates RadarXBackgroundMonitorService, FOREGROUND_SERVICE_DATA_SYNC, and ACCESS_NETWORK_STATE from the manifest. MainActivity starts the native foreground monitor directly from onCreate, independently of WebView readiness, and retains a delayed retry. Service-running detection now uses process-local state instead of trusting a stale SharedPreferences bit, so an Android force-stop cannot block a future restart. Monitoring does not wait for POST_NOTIFICATIONS permission; visible notifications still require the user to allow them. The CI smoke test makes emulator permission grant best-effort, verifies native startup/service-ready logs, checks offline waiting and process liveness, then checks resumption after validated Internet returns.
+Smoke gate note: release build statically validates the monitoring service and required permissions. MainActivity starts monitoring independently of WebView readiness. Because the service runs in a separate Android process, its state is checked through ActivityManager rather than a process-local static flag. The WebView now proxies only allow-listed HTTPS GET requests for the two RadarX backends, including CORS headers; no trade/order APIs are exposed. Falcon Eye bypasses cached UI results, can request an explicit read-only scan, and displays real server candidates, saved alerts, and scan errors. Visible notifications still require the user to allow them. The CI smoke test verifies native startup/service-ready logs, checks offline waiting and process liveness, then checks resumption after validated Internet returns.
