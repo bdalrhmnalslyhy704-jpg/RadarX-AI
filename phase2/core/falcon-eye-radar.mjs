@@ -662,7 +662,7 @@ export class FalconEyeRadar {
         fiveMinute:btc[1].candles||[],
         oneMinute:btc[0].candles||[]
       };
-      await updatePreExpansionMarkouts(this.store,rows,{now:this.clock(),marketContext}).catch(e=>{this.lastError=String(e?.message??e);});
+      await updatePreExpansionMarkouts(this.store,rows,{now:this.clock(),marketContext,logger:this.logger}).catch(e=>{this.lastError=String(e?.message??e);});
       await maybeLogPreExpansionOutcomeReport(this.store,{logger:this.logger,now:this.clock()}).catch(e=>{this.lastError=String(e?.message??e);});
       const selected=this.selectBatch(rows);
       this.lastScanAtMs=this.clock();
@@ -674,7 +674,7 @@ export class FalconEyeRadar {
           try{return await this.scanRow(row,{one:btc[0].candles||[],five:btc[1].candles||[],marketContext});}
           catch(e){this.lastScanAt.delete(row.symbol);this.lastError=String(e?.message??e);return null;}
         }));
-        await recordPreExpansionSignals(this.store,batchAlerts.filter(Boolean),{now:this.clock(),marketContext})
+        await recordPreExpansionSignals(this.store,batchAlerts.filter(Boolean),{now:this.clock(),marketContext,logger:this.logger})
           .catch(e=>{this.lastError=String(e?.message??e);});
       }
     }finally{this.busy=false;}
