@@ -55,6 +55,7 @@ export function assessPreExpansionFingerprint(input={}){
   const maxMove24hPct=Math.max(0,numberOrNull(input.maxMove24hPct)??8);
   const maxMove5mPct=Math.max(0,numberOrNull(input.maxMove5mPct)??2.5);
   const maxMove10mPct=Math.max(0,numberOrNull(input.maxMove10mPct)??3.8);
+  const maxMove15mPct=Math.max(0,numberOrNull(input.maxMove15mPct)??6);
   const volumeTrendScore=numberOrNull(volumeTrend.score);
   const tradeTrendScore=numberOrNull(tradeTrend.score);
   const gradualVolume=volumeTrend.improving===true;
@@ -82,6 +83,7 @@ export function assessPreExpansionFingerprint(input={}){
     const extended=Math.abs(dailyChangePct)>=maxMove24hPct||
       (Number.isFinite(return5mPct)&&Math.abs(return5mPct)>=maxMove5mPct)||
       (Number.isFinite(return10mPct)&&Math.abs(return10mPct)>=maxMove10mPct)||
+      (Number.isFinite(return15mPct)&&Math.abs(return15mPct)>=maxMove15mPct)||
       (Number.isFinite(resistanceDistanceAtr)&&resistanceDistanceAtr< -1.5)||
       input.alreadyExtended===true;
     if(extended){stage='ALREADY_EXTENDED';reason='MOVE_ALREADY_EXTENDED';}
