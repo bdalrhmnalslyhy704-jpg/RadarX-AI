@@ -188,12 +188,18 @@ export class RestClient {
       symbol,interval,limit:opts.limit??250,startTime:opts.startTime,endTime:opts.endTime
     });
     const now=Date.now();
-    return {source:r.source,receivedAt:Number(r.receivedAt)||now,candles:r.data.map(x=>({
-      openTime:normalizeEpochMs(x[0], 'openTime'),open:Number(x[1]),high:Number(x[2]),low:Number(x[3]),close:Number(x[4]),
-      volume:Number(x[5]),closeTime:normalizeEpochMs(x[6], 'closeTime'),quoteVolume:Number(x[7]),tradeCount:Number(x[8]),
-      takerBuyBaseVolume:Number(x[9]),takerBuyQuoteVolume:Number(x[10]),
-      closed:Number(x[6])<now,source:'BINANCE_PUBLIC_REST',sourceTime:Number(r.receivedAt)||now
-    }))};
+    const receivedAt=Number(r.receivedAt)||now;
+    return {source:r.source,receivedAt,candles:r.data.map(x=>{
+      const openTime=normalizeEpochMs(x[0], 'openTime');
+      const closeTime=normalizeEpochMs(x[6], 'closeTime');
+      return {
+        openTime,open:Number(x[1]),high:Number(x[2]),low:Number(x[3]),close:Number(x[4]),
+        volume:Number(x[5]),closeTime,quoteVolume:Number(x[7]),tradeCount:Number(x[8]),
+        takerBuyBaseVolume:Number(x[9]),takerBuyQuoteVolume:Number(x[10]),
+        closed:closeTime<now,source:'BINANCE_PUBLIC_REST',sourceTime:receivedAt,
+        receivedAt,ageMs:Math.max(0,receivedAt-closeTime),eventTime:null,transportLatencyMs:null
+      };
+    })};
   }
   depth(symbol,limit=100){return this.request('/api/v3/depth',{symbol,limit});}
   ticker24h(symbol){return this.request('/api/v3/ticker/24hr',{symbol});}
