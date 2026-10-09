@@ -310,15 +310,19 @@ export class StrongMoveRadar {
       .filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h&&this.universe.includes(x.symbol));
   }
   selectBatch(rows){
-    const byMove=[...rows].sort((a,b)=>Math.abs(b.priceChange24h)-Math.abs(a.priceChange24h)||b.quoteVolume24h-a.quoteVolume24h);
-    const selected=[];
-    for(const x of byMove.slice(0,this.config.topMoverCount))selected.push(x);
-    const n=this.config.rotationBatchSize;
-    for(let i=0;i<n&&this.universe.length;i++){
-      const symbol=this.universe[this.cursor%this.universe.length];this.cursor=(this.cursor+1)%this.universe.length;
-      const row=rows.find(x=>x.symbol===symbol);if(row)selected.push(row);
+    const byMove=[...(Array.isArray(rows)?rows:[])].sort((a,b)=>Math.abs(b.priceChange24h)-Math.abs(a.priceChange24h)||b.quoteVolume24h-a.quoteVolume24h);
+    const selected=[],seen=new Set();
+    const take=row=>{if(row?.symbol&&!seen.has(row.symbol)){selected.push(row);seen.add(row.symbol);return true;}return false;};
+    const topCount=Math.max(0,Math.trunc(Number(this.config.topMoverCount)||0));
+    const rotationCount=Math.max(0,Math.trunc(Number(this.config.rotationBatchSize)||0));
+    for(const row of byMove.slice(0,topCount))take(row);
+    const target=Math.min(new Set(byMove.map(x=>x.symbol)).size,topCount+rotationCount);
+    let visited=0;
+    while(selected.length<target&&visited<this.universe.length){
+      const symbol=this.universe[this.cursor%this.universe.length];this.cursor=(this.cursor+1)%this.universe.length;visited++;
+      take(byMove.find(x=>x.symbol===symbol));
     }
-    return [...new Map(selected.map(x=>[x.symbol,x])).values()];
+    return selected;
   }
   async scanRow(row){
     const last=this.lastScanAt.get(row.symbol)||0;
