@@ -70,6 +70,7 @@ test('live markouts sample six horizons and detect a sampled resistance rejectio
     assert.equal(r.updated,1);
     r=await updatePreExpansionMarkouts(store,[{symbol:'ABCUSDT',lastPrice:106.2}],{now:at+5*60_000+30_000});
     assert.equal(r.updated,1);
+    r=await updatePreExpansionMarkouts(store,[{symbol:'ABCUSDT',lastPrice:99.6}],{now:at+7*60_000});
     r=await updatePreExpansionMarkouts(store,[{symbol:'ABCUSDT',lastPrice:104.5}],{now:at+8*60_000});
     const state=await store.getPreExpansionOutcomes(),item=state.records[0];
     assert.equal(item.marks['5m'].sample_quality,'NEAR_TARGET');
@@ -77,7 +78,8 @@ test('live markouts sample six horizons and detect a sampled resistance rejectio
     assert.equal(item.false_breakout,true);
     assert.equal(item.false_breakout_basis,'SAMPLED_SPOT_PRICE_REJECTION');
     assert.ok(item.max_favorable_pct>=6);
-    assert.ok(item.max_adverse_pct>=4);
+    assert.ok(item.max_adverse_pct<=0);
+    assert.ok(item.max_adverse_pct>=-.5);
     assert.ok(item.observations>=3);
   });
 });
