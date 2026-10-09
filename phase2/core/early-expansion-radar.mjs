@@ -208,6 +208,7 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   minActivityShockScore:76,
   activityShockCooldownMs:45*60*1000,
   maxActivityShockAlertsPerHour:6,
+  fastShockHoldMs:8*60*1000,
   maxBackoffMs:1500
 });
 
@@ -1066,7 +1067,7 @@ export class EarlyExpansionRadar{
     this.clock=clock;this.logger=logger;
     this.running=false;this.busy=false;this.timer=null;this.universe=[];this.universeAt=0;
     this.fastState=new Map();this.lastAlertAt=new Map();this.lastAlertScore=new Map();this.lastBand=new Map();
-    this.lastActivityShockAt=new Map();this.lastActivityShockKeyBySymbol=new Map();this.activityShockTimestamps=[];
+    this.lastActivityShockAt=new Map();this.lastActivityShockKeyBySymbol=new Map();this.activityShockTimestamps=[];this.fastShockPendingUntil=new Map();
     this.lastMicroScanCycleBySymbol=new Map();this.lastDeepScanCycleBySymbol=new Map();
     this.outcomeBackfillTask=null;
     this.latestCandidates=[];this.lastResult=null;this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
@@ -1125,6 +1126,8 @@ export class EarlyExpansionRadar{
     const volumeRatio=Number.isFinite(qBase)&&qBase>0?Math.max(0,qDelta)/qBase:null;
     const tradeRatio=Number.isFinite(tBase)&&tBase>0?Math.max(0,tDelta)/tBase:null;
     const fast={price_change_pct:priceChange,price_acceleration_pct:acceleration,volume_delta_quote:qDelta,trade_delta:tDelta,volume_accel_ratio:volumeRatio,trade_accel_ratio:tradeRatio,at:now,warmed_up:Boolean(prev)};
+    if(isFastActivityShockCandidate(row,fast,this.config))this.fastShockPendingUntil.set(row.symbol,now+Math.max(Number(this.config.fastShockHoldMs??8*60*1000),Number(this.config.pollMs||45000)*2));
+    for(const [symbol,until] of this.fastShockPendingUntil)if(Number(until)<=now)this.fastShockPendingUntil.delete(symbol);
     history.push({price:row.lastPrice,quote:row.quoteVolume24h,trades:row.tradeCount24h,qDelta,tDelta,priceChange,at:now});
     while(history.length>20)history.shift();
     this.fastState.set(row.symbol,history);
@@ -1143,7 +1146,7 @@ export class EarlyExpansionRadar{
       return {...row,fast,
         _microPreScore:fastScore*.55+(quiet??0)*.45,
         _quietScore:quiet??-1,_quietEligible:isQuietEarlyCandidate(row,fast,this.config),
-        _exceptional:isExceptionalMicroCandidate(row,fast,this.config)||isFastActivityShockCandidate(row,fast,this.config),
+        _exceptional:isExceptionalMicroCandidate(row,fast,this.config)||isFastActivityShockCandidate(row,fast,this.config)||Number(this.fastShockPendingUntil.get(key)||0)>this.clock(),
         _rotation:rotation,_rotationAge:rotationAge};
     });
     const n=Math.max(1,Math.trunc(this.config.microScanCandidates||36));
@@ -1327,6 +1330,7 @@ export class EarlyExpansionRadar{
         const row=micro.row,fast=fastBySymbol.get(row.symbol)||{};
         try{
           const evidence=await this.deepScan(row,fast,marketContext,micro),fp=micro.micro_fingerprint;
+          if(evidence.activity_shock?.detected===true)this.fastShockPendingUntil.delete(row.symbol);
           const microScore=hasFiniteNumber(fp?.score)?Number(fp.score):null;
           const deepScore=hasFiniteNumber(evidence.early_expansion_score)?Number(evidence.early_expansion_score):null;
           const promoted=fp?.eligible===true&&microScore!==null;
@@ -1509,7 +1513,7 @@ export class EarlyExpansionRadar{
       running:this.running,busy:this.busy,radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',
       universe_total:this.universe.length,universe_refreshed_at:this.universeAt||null,
       last_scan_at:this.lastScanAtMs,scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,
-      fast_scanned_total:this.fastScannedTotal,failed_total:this.failedTotal,failed_symbols:this.failedSymbols,micro_scanned_total:Number(this.lastCoverage?.micro_scanned_total||0),micro_scan_candidates:Number(this.lastCoverage?.micro_scan_candidates||0),rotation_cycle:Number(this.lastCoverage?.rotation_cycle||0),
+      fast_scanned_total:this.fastScannedTotal,failed_total:this.failedTotal,failed_symbols:this.failedSymbols,fast_shock_pending_total:[...this.fastShockPendingUntil.values()].filter(until=>Number(until)>now).length,micro_scanned_total:Number(this.lastCoverage?.micro_scanned_total||0),micro_scan_candidates:Number(this.lastCoverage?.micro_scan_candidates||0),rotation_cycle:Number(this.lastCoverage?.rotation_cycle||0),
       coverage:this.lastCoverage,
       poll_ms:this.config.pollMs,micro_scan_candidates:this.config.microScanCandidates,micro_concurrency:this.config.microConcurrency,rotation_reserve:this.config.rotationReserve,quiet_reserve:this.config.quietReserve,deep_candidates:this.config.deepCandidates,deep_concurrency:this.config.deepConcurrency,
       closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
