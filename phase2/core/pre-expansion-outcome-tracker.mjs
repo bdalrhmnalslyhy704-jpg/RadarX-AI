@@ -490,6 +490,7 @@ export async function maybeLogPreExpansionOutcomeReport(store,{logger=console,no
       records:v.records,matured_4h:v.matured_4h,meaningful_move_4h_pct:v.meaningful_move_4h_pct,
       false_signal_rate_4h_pct:v.false_signal_rate_4h_pct,avg_time_to_plus3_pct_within_4h_minutes:v.avg_time_to_plus3_pct_within_4h_minutes,
       false_breakout_rate_pct:v.false_breakout_rate_pct,already_extended_pct:v.already_extended_pct,
+      detected_before_move_pct:v.detected_before_move_pct,detected_after_move_pct:v.detected_after_move_pct,
       max_adverse_drawdown_pct:v.max_adverse_drawdown_pct,sample_warning:v.sample_warning,
       horizons:v.horizons
     }])),
