@@ -1,5 +1,6 @@
 package com.radarx.app;
 
+import android.app.ActivityManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -888,10 +889,23 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     public static boolean isRunning(Context context) {
-        // Never gate startup on the persisted bit alone: Android force-stop/process death
-        // can bypass onDestroy(), leaving "running=true" in SharedPreferences indefinitely.
-        // The static flag resets on process death, so opening the Activity can restart service.
-        return processServiceRunning;
+        // This service deliberately runs in :radar_background. Static fields are not shared
+        // across Android processes, so processServiceRunning in MainActivity cannot report
+        // the service process truthfully. Query Android's own running-service registry instead.
+        try {
+            ActivityManager manager = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
+            if (manager != null) {
+                for (ActivityManager.RunningServiceInfo service : manager.getRunningServices(Integer.MAX_VALUE)) {
+                    if (service != null && service.service != null
+                            && RadarXBackgroundMonitorService.class.getName().equals(service.service.getClassName())) {
+                        return true;
+                    }
+                }
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "RUNNING_SERVICE_QUERY_FAILED", error);
+        }
+        return false;
     }
 
     private static byte[] readAll(java.io.InputStream input) throws Exception {
