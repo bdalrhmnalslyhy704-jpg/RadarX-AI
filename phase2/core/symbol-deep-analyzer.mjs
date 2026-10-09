@@ -576,6 +576,24 @@ export class SymbolDeepAnalyzer {
         '1h':rows.find(x=>x.timeframe==='1h'),
         '4h':rows.find(x=>x.timeframe==='4h')
       },
+      chart:{
+        source:'Binance Public REST',
+        default_timeframe:'15m',
+        timeframes:Object.fromEntries(fetched.map(item=>[item.interval,{
+          source:item.source||'Binance Public REST',
+          closed_candles_only:true,
+          candle_count:Math.min(48,item.closed.length),
+          candles:item.closed.slice(-48).map(c=>({
+            open_time:Number(c.openTime),
+            close_time:Number(c.closeTime),
+            open:Number(c.open),
+            high:Number(c.high),
+            low:Number(c.low),
+            close:Number(c.close),
+            volume:Number(c.volume)
+          }))
+        }]))
+      },
       data_quality:quality(fetched.map(x=>x.closed),ticker,depth,'Binance Public REST'),
       algorithms:[
         'EMA 20/50/100/200',
