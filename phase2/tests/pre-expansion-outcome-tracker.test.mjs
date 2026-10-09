@@ -40,6 +40,32 @@ function candle(openTime,close,{step=60_000,high=close+.1,low=close-.1,open=clos
   return {openTime,closeTime:openTime+step-1,open,high,low,close,volume,quoteVolume:close*volume,closed:true};
 }
 
+test('DurableStore migrates legacy archive files without overwriting persistent data and survives re-open',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'radarx-archive-migration-'));
+  try{
+    const legacyDir=join(root,'legacy'),persistentDir=join(root,'persistent');
+    const legacy=await new DurableStore({dir:legacyDir}).init();
+    await legacy.updatePreExpansionOutcomes(()=>({
+      version:'PRE_EXPANSION_OUTCOMES_V2',
+      records:[{signal_id:'archive-canary',radar:'RADAR_8',symbol:'CANARYUSDT',
+        created_at:NOW,detected_at:NOW,entry_price:1,marks:{},horizon_status:{},outcome_status:'PENDING'}],
+      last_stage_by_key:{},last_price_update_at:0,last_report_log_at:0,
+      last_historical_import_at:0,last_historical_backfill_at:0,updated_at:NOW
+    }));
+    const persistent=await new DurableStore({dir:persistentDir}).init({legacyDir});
+    assert.ok(persistent.migratedFiles.includes('pre-expansion-outcomes.json'));
+    const first=await persistent.getPreExpansionOutcomes();
+    assert.equal(first.records.length,1);
+    assert.equal(first.records[0].signal_id,'archive-canary');
+    await persistent.updatePreExpansionOutcomes(raw=>({...raw,archive_marker:'persistent-write'}));
+    const reopened=await new DurableStore({dir:persistentDir}).init({legacyDir});
+    const afterRestart=await reopened.getPreExpansionOutcomes();
+    assert.equal(afterRestart.records.length,1);
+    assert.equal(afterRestart.archive_marker,'persistent-write');
+    assert.deepEqual(reopened.migratedFiles,[]);
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
 test('market regime classifier separates bullish, bearish, and ranging conditions',()=>{
   assert.equal(classifyEvaluationMarketRegime({marketMedianChange24hPct:1.2,marketBreadthPct:70,btcReturn5mPct:.3,btcReturn1hPct:.8}),'BULLISH');
   assert.equal(classifyEvaluationMarketRegime({marketMedianChange24hPct:-1.1,marketBreadthPct:34,btcReturn5mPct:-.4,btcReturn1hPct:-1.2}),'BEARISH');
@@ -71,6 +97,12 @@ test('records Radar 8/Radar 9 observations with time, entry, stage, data quality
     assert.deepEqual(r8.missing_required_fields,[]);
     assert.deepEqual(r8.reason_codes,['HIGHER_LOW_SEQUENCE','VOLUME_PARTICIPATION_IMPROVING']);
     assert.equal(r8.market_regime,'BULLISH');
+    assert.equal(r8.created_at,NOW);
+    assert.equal(r8.build_version,'Build 224');
+    assert.equal(r8.signal_score,null);
+    assert.deepEqual(r8.archive_missing_fields,['signal_score','build_commit']);
+    assert.equal(r8.outcome_status,'PENDING');
+    assert.equal(r8.horizon_status['5m'].status,'PENDING');
     assert.equal(state.records.find(x=>x.radar==='RADAR_9').radar,'RADAR_9');
   });
 });
@@ -86,17 +118,23 @@ test('live markouts sample six horizons and detect a sampled resistance rejectio
       now:at+5*60_000+30_000,logger:{info:line=>markoutLogs.push(line)}
     });
     assert.equal(r.updated,1);
-    assert.ok(markoutLogs.some(line=>line.includes('[PRE_EXPANSION_MARKOUT]')&&line.includes('"horizon":"5m"')));
+    // Live ticker observations are audit-only, never certified horizon results.
+    assert.ok(markoutLogs.every(line=>!line.includes('[PRE_EXPANSION_MARKOUT]')));
     r=await updatePreExpansionMarkouts(store,[{symbol:'ABCUSDT',lastPrice:99.6}],{now:at+7*60_000});
     r=await updatePreExpansionMarkouts(store,[{symbol:'ABCUSDT',lastPrice:104.5}],{now:at+8*60_000});
     const state=await store.getPreExpansionOutcomes(),item=state.records[0];
-    assert.equal(item.marks['5m'].sample_quality,'NEAR_TARGET');
-    assert.ok(item.marks['5m'].return_pct>6);
-    assert.equal(item.false_breakout,true);
-    assert.equal(item.false_breakout_basis,'SAMPLED_SPOT_PRICE_REJECTION');
-    assert.ok(item.max_favorable_pct>=6);
-    assert.ok(item.max_adverse_pct<=0);
-    assert.ok(item.max_adverse_pct>=-.5);
+    assert.equal(item.marks['5m'],undefined);
+    assert.equal(item.provisional_marks['5m'].sample_quality,'LIVE_TICKER_PROVISIONAL');
+    assert.equal(item.provisional_marks['5m'].status,'INCOMPLETE');
+    assert.equal(item.provisional_marks['5m'].reason,'NOT_CLOSED_BINANCE_OHLC');
+    assert.equal(item.horizon_status['5m'].status,'INCOMPLETE');
+    assert.equal(item.horizon_status['5m'].reason,'WAITING_FOR_BINANCE_CLOSED_OHLC');
+    assert.equal(item.false_breakout,null);
+    assert.equal(item.provisional_false_breakout,true);
+    assert.equal(item.provisional_false_breakout_basis,'SAMPLED_SPOT_PRICE_REJECTION');
+    assert.ok(item.provisional_max_favorable_pct>=6);
+    assert.ok(item.provisional_max_adverse_pct<=0);
+    assert.ok(item.provisional_max_adverse_pct>=-.5);
     assert.ok(item.observations>=3);
   });
 });
@@ -288,8 +326,19 @@ test('mature live signal receives retrospective closed-OHLC marks for all six ho
       assert.equal(row.marks[h].sample_quality,'HISTORICAL_CLOSED_OHLC');
     }
     assert.equal(row.outcome_status,'COMPLETE');
+    assert.equal(row.historical_evaluation,true);
+    assert.equal(row.observed_price_source,'HISTORICAL_CLOSED_OHLC');
     assert.ok(row.max_favorable_pct>0);
     assert.ok(row.max_adverse_pct<0);
+    const reopened=await new DurableStore({dir:store.dir}).init();
+    const reopenedState=await reopened.getPreExpansionOutcomes();
+    const reopenedRow=reopenedState.records.find(x=>x.signal_id===row.signal_id);
+    assert.ok(reopenedRow);
+    assert.equal(reopenedRow.outcome_status,'COMPLETE');
+    assert.equal(reopenedRow.marks['5m'].sample_quality,'HISTORICAL_CLOSED_OHLC');
+    assert.equal(reopenedRow.marks['24h'].sample_quality,'HISTORICAL_CLOSED_OHLC');
+    assert.deepEqual(['5m','15m','30m','60m','4h','24h'].map(h=>reopenedRow.horizon_status[h].status),
+      ['COMPLETE','COMPLETE','COMPLETE','COMPLETE','COMPLETE','COMPLETE']);
   });
 });
 
@@ -340,9 +389,11 @@ test('a single late sample may create a point mark but cannot certify complete M
     await updatePreExpansionMarkouts(store,[{symbol:'SPARSEUSDT',lastPrice:101}],{now:at+30_000});
     await updatePreExpansionMarkouts(store,[{symbol:'SPARSEUSDT',lastPrice:101.5}],{now:at+5*60_000+30_000});
     const row=(await store.getPreExpansionOutcomes()).records[0];
-    assert.equal(row.marks['5m'].sample_quality,'NEAR_TARGET');
+    assert.equal(row.marks['5m'],undefined);
+    assert.equal(row.provisional_marks['5m'].sample_quality,'LIVE_TICKER_PROVISIONAL');
     assert.equal(row.excursions['5m'].complete,false);
-    assert.equal(row.excursions['5m'].coverage_status,'INCOMPLETE_SAMPLED_WINDOW');
+    assert.equal(row.excursions['5m'].coverage_status,'INCOMPLETE_CLOSED_OHLC_WINDOW');
+    assert.equal(row.provisional_excursions['5m'].complete,false);
     const report=buildPreExpansionOutcomeReport(await store.getPreExpansionOutcomes());
     assert.equal(report.groups.by_radar.RADAR_8.horizons['5m'].excursion_samples,0);
     assert.equal(report.groups.by_radar.RADAR_8.horizons['5m'].avg_max_favorable_pct,null);
