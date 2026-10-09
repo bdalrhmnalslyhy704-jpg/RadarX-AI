@@ -1,4 +1,4 @@
-RadarX Android 1.6.0
+RadarX Android 1.6.1
 Release line: official Build 224 + Radar 8 V2 + Hawkeye V2 + Supreme Fusion
 TRADLI: six independent modules — Chart Lab, Verify, Advisor, Signals Hub, Supply/Demand, Order Desk
 UI: bundled inside APK via Android WebViewAssetLoader; TRADLI opens in its own native Activity
@@ -10,7 +10,7 @@ real_order_execution=false
 confidence_score=UNKNOWN
 Closed candles only; stale or invalid data cannot be presented as a new live discovery.
 
-TRADLI 1.6.0:
+TRADLI 1.6.1:
 - Native dashboard entry is smoke-tested through the visible accessibility target, not a guessed screen coordinate.
 - Backend proxy is HTTPS allow-listed and GET-only; backend failures are logged without exposing secrets.
 - Connection diagnostic checks health, readiness, and the actual Market Radar data route. Each module exposes actionable error details instead of claiming success on a failed request.
