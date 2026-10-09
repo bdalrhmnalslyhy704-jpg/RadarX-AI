@@ -20,10 +20,10 @@ async function withStore(fn){
   try{const store=await new DurableStore({dir}).init();await fn(store);}
   finally{await rm(dir,{recursive:true,force:true});}
 }
-function signal({radar='EARLY_EXPANSION_RADAR',symbol='ABCUSDT',stage='PRE_EXPANSION',at=NOW,price=100,move=1.2,regime=null,metrics={}}={}){
+function signal({radar='EARLY_EXPANSION_RADAR',symbol='ABCUSDT',stage='PRE_EXPANSION',at=NOW,price=100,move=1.2,regime=null,metrics={},score=66}={}){
   const alert={
     id:radar+':'+symbol+':'+stage+':'+at,radar,symbol,price,price_change_24h:move,
-    pre_expansion_stage:stage,decision_band:stage,data_quality:88,detected_at:at,
+    early_expansion_score:score,pre_expansion_stage:stage,decision_band:stage,data_quality:88,detected_at:at,
     reason_codes:['HIGHER_LOW_SEQUENCE','VOLUME_PARTICIPATION_IMPROVING'],
     metrics:{
       price_change_5m_pct:.2,price_change_10m_pct:.35,price_change_15m_pct:.5,
@@ -99,12 +99,31 @@ test('records Radar 8/Radar 9 observations with time, entry, stage, data quality
     assert.equal(r8.market_regime,'BULLISH');
     assert.equal(r8.created_at,NOW);
     assert.equal(r8.build_version,'Build 224');
-    assert.equal(r8.signal_score,null);
-    assert.ok(r8.archive_missing_fields.includes('signal_score'));
+    assert.equal(r8.signal_score,66);
+    assert.equal(r8.archive_missing_fields.includes('signal_score'),false);
     assert.equal(r8.archive_missing_fields.includes('build_commit'),!r8.build_commit);
     assert.equal(r8.outcome_status,'PENDING');
     assert.equal(r8.horizon_status['5m'].status,'PENDING');
     assert.equal(state.records.find(x=>x.radar==='RADAR_9').radar,'RADAR_9');
+  });
+});
+
+test('signal without source score remains auditable but is excluded from accuracy cohorts',async()=>{
+  await withStore(async store=>{
+    const result=await recordPreExpansionSignals(store,[signal({symbol:'NOSCOREUSDT',stage:'WATCH_EARLY',score:null})],{now:NOW});
+    assert.equal(result.recorded,1);
+    const state=await store.getPreExpansionOutcomes();
+    const row=state.records[0];
+    assert.equal(row.signal_score,null);
+    assert.ok(row.archive_missing_fields.includes('signal_score'));
+    assert.ok(row.missing_required_fields.includes('signal_score'));
+    assert.equal(row.evaluation_eligible,false);
+    assert.equal(row.evaluation_status,'EXCLUDED_INCOMPLETE');
+    assert.equal(row.evaluation_exclusion_reason.includes('signal_score'),true);
+    assert.ok(row.data_quality<100);
+    const report=buildPreExpansionOutcomeReport(state);
+    assert.equal(report.eligible_records,0);
+    assert.equal(report.excluded_incomplete_records,1);
   });
 });
 
@@ -241,7 +260,7 @@ test('Radar 9 normalized aliases receive full coverage when the actual source fi
   await withStore(async store=>{
     const alert={
       id:'FALCON:LINKUSDT:'+NOW,radar:'FALCON_EYE_RADAR',symbol:'LINKUSDT',price:100,
-      price_change_24h:1.2,pre_expansion_stage:'WATCH_EARLY',potential_label:'WATCH_EARLY',
+      price_change_24h:1.2,score:71,pre_expansion_stage:'WATCH_EARLY',potential_label:'WATCH_EARLY',
       data_quality:90,detected_at:NOW,market_regime_label:'MIXED',
       reasons:['BASE_STRUCTURE','GRADUAL_PARTICIPATION'],
       source:'Binance public REST',
@@ -258,6 +277,7 @@ test('Radar 9 normalized aliases receive full coverage when the actual source fi
     assert.equal(row.reported_data_quality,90);
     assert.equal(row.data_quality_source,'NORMALIZED_REQUIRED_FIELD_COVERAGE');
     assert.equal(row.data_quality,100);
+    assert.equal(row.signal_score,71);
     assert.equal(row.evaluation_eligible,true);
     assert.equal(row.market_regime,'RANGING');
     assert.deepEqual(row.missing_required_fields,[]);
@@ -407,7 +427,7 @@ test('Radar 8 production alert field aliases reach complete coverage without cha
   await withStore(async store=>{
     const alert={
       id:'EARLY_EXPANSION:ARBUSDT:'+NOW,event:'EARLY_EXPANSION_RADAR',radar:'EARLY_EXPANSION_RADAR',
-      symbol:'ARBUSDT',market:'SPOT',price:1.25,price_change_24h:1.8,
+      symbol:'ARBUSDT',market:'SPOT',price:1.25,price_change_24h:1.8,early_expansion_score:73.5,
       decision_band:'PRE_EXPANSION',potential_label:'PRE_EXPANSION',data_quality:100,data_stale:false,
       detected_at:NOW,processed_at:NOW,closed_candles_only:true,
       price_change_windows:{
@@ -422,6 +442,7 @@ test('Radar 8 production alert field aliases reach complete coverage without cha
     await recordPreExpansionSignals(store,[alert],{now:NOW});
     const row=(await store.getPreExpansionOutcomes()).records[0];
     assert.equal(row.data_quality,100);
+    assert.equal(row.signal_score,73.5);
     assert.equal(row.evaluation_eligible,true);
     assert.equal(row.market_regime,'RANGING');
     assert.deepEqual(row.missing_required_fields,[]);
