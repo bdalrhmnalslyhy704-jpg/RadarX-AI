@@ -63,12 +63,43 @@ function normalizeState(raw){
       const hasIncomplete=Object.values(horizonStatus).some(item=>item?.status==='INCOMPLETE')||
         Object.keys(provisionalMarks).length>0||(current.outcome_status==='COMPLETE'&&!historicalComplete);
       const schemaCurrent=typeof current.evaluation_eligible==='boolean'&&Array.isArray(current.missing_required_fields);
+      const hasSourceScore=num(current.signal_score)!==null;
+      const requiredFields=Array.isArray(current.required_fields)
+        ?[...new Set([...current.required_fields,'signal_score'])]
+        :current.required_fields;
+      const availableFields=Array.isArray(current.available_fields)
+        ?current.available_fields.filter(field=>field!=='signal_score'||hasSourceScore)
+        :current.available_fields;
+      if(hasSourceScore&&Array.isArray(availableFields)&&!availableFields.includes('signal_score'))availableFields.push('signal_score');
+      const normalizedMissingFields=schemaCurrent
+        ?[...new Set([
+          ...current.missing_required_fields.filter(field=>!(hasSourceScore&&field==='signal_score')),
+          ...(!hasSourceScore?['signal_score']:[])
+        ])]
+        :['LEGACY_RECORD_NOT_REVALIDATED'];
+      const recomputedCoverage=Array.isArray(requiredFields)&&requiredFields.length&&Array.isArray(availableFields)
+        ?Math.round(availableFields.filter(field=>requiredFields.includes(field)).length/requiredFields.length*100)
+        :94;
+      const normalizedDataQuality=hasSourceScore
+        ?current.data_quality
+        :Math.min(num(current.data_quality,recomputedCoverage)??recomputedCoverage,recomputedCoverage);
+      const evaluationEligible=schemaCurrent&&current.evaluation_eligible===true&&hasSourceScore;
+      const priorReasons=String(current.evaluation_exclusion_reason||'').split(',').map(x=>x.trim()).filter(Boolean);
+      const evaluationExclusionReason=!schemaCurrent
+        ?'LEGACY_RECORD_NOT_REVALIDATED'
+        :!hasSourceScore?[...new Set([...priorReasons,'signal_score'])].join(',')
+        :(evaluationEligible?null:(current.evaluation_exclusion_reason||normalizedMissingFields.join(',')||'DATA_QUALITY_GATE'));
       return {
         ...current,marks,provisional_marks:provisionalMarks,horizon_status:horizonStatus,
+        required_fields:requiredFields,available_fields:availableFields,
+        data_quality:normalizedDataQuality,
+        missing_required_fields:normalizedMissingFields,
+        evaluation_eligible:evaluationEligible,
+        evaluation_status:!schemaCurrent?'EXCLUDED_LEGACY_UNVALIDATED':
+          !hasSourceScore?'EXCLUDED_INCOMPLETE':
+          (current.evaluation_status||(evaluationEligible?'ELIGIBLE':'EXCLUDED_INCOMPLETE')),
+        evaluation_exclusion_reason:evaluationExclusionReason,
         market_regime:normalizeRegime(current.market_regime),
-        evaluation_eligible:schemaCurrent?current.evaluation_eligible:false,
-        missing_required_fields:schemaCurrent?current.missing_required_fields:['LEGACY_RECORD_NOT_REVALIDATED'],
-        evaluation_status:schemaCurrent?(current.evaluation_status||(current.evaluation_eligible?'ELIGIBLE':'EXCLUDED_INCOMPLETE')):'EXCLUDED_LEGACY_UNVALIDATED',
         outcome_status:historicalComplete?'COMPLETE':hasIncomplete?'INCOMPLETE':(current.outcome_status||'PENDING')
       };
     });
