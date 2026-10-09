@@ -131,6 +131,10 @@ public final class MainActivity extends Activity {
 
         setContentView(webView);
         webView.loadUrl(APP_URL);
+
+        // Start monitoring from the native Activity lifecycle, not from page readiness.
+        // WebView rendering or a pending notification permission must not gate scanner startup.
+        ensureContinuousMonitoring();
         webView.postDelayed(this::ensureContinuousMonitoring, 1400);
     }
 
@@ -280,7 +284,11 @@ public final class MainActivity extends Activity {
     }
 
     private void ensureContinuousMonitoring() {
-        if (RadarXBackgroundMonitorService.isRunning(this)) return;
+        Log.i("RadarXBackground", "BACKGROUND_AUTO_START_CHECK");
+        if (RadarXBackgroundMonitorService.isRunning(this)) {
+            Log.i("RadarXBackground", "BACKGROUND_SERVICE_ALREADY_RUNNING");
+            return;
+        }
         SharedPreferences prefs = getSharedPreferences(PREFS_BACKGROUND, MODE_PRIVATE);
         if (!prefs.getBoolean(PREF_AUTO_ENABLED, true)) return;
         if (Build.VERSION.SDK_INT >= 33 &&
