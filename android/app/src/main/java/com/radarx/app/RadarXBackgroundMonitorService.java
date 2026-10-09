@@ -73,6 +73,9 @@ public final class RadarXBackgroundMonitorService extends Service {
     private static final String FALCON_CURSOR_KEY = "falcon_eye_alert_cursor_at";
     private static final int MAX_PENDING_ALERTS = 300;
 
+    // Process-local truth; SharedPreferences may stay stale after Android force-stops the process.
+    private static volatile boolean processServiceRunning = false;
+
     private ScheduledExecutorService executor;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback connectivityCallback;
@@ -880,12 +883,15 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     private void saveRunning(boolean running) {
+        processServiceRunning = running;
         prefs().edit().putBoolean("running", running).apply();
     }
 
     public static boolean isRunning(Context context) {
-        return context.getSharedPreferences("radarx_background", Context.MODE_PRIVATE)
-            .getBoolean("running", false);
+        // Never gate startup on the persisted bit alone: Android force-stop/process death
+        // can bypass onDestroy(), leaving "running=true" in SharedPreferences indefinitely.
+        // The static flag resets on process death, so opening the Activity can restart service.
+        return processServiceRunning;
     }
 
     private static byte[] readAll(java.io.InputStream input) throws Exception {
