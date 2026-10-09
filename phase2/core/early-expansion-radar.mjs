@@ -1233,6 +1233,23 @@ export class EarlyExpansionRadar{
       coverage.deep_exceptional_bypass_total=deepTargets.filter(x=>x._selection_lane==='exceptional').length;
       coverage.micro_scan_coverage_ratio=eligible.length?coverage.micro_scanned_total/eligible.length:0;coverage.discovery_mode='TICKER_ALL + ROTATING_1M_5M_MICRO + DEEP_15M_1H_4H_DEPTH';
       this.lastCoverage=coverage;this.failedSymbols=[...new Set(failedSymbols)];
+      this.logger.info?.('[RADARX_SCAN_COVERAGE] '+JSON.stringify({
+        radar:'RADAR_8',build_version:'Build 224',quote:q,observed_at:new Date(now).toISOString(),
+        rotation_cycle:coverage.rotation_cycle,
+        expected_total:coverage.expected_total,received_total:coverage.received_total,
+        missing_ticker_total:coverage.missing_ticker_total,eligible_total:coverage.eligible_total,
+        fast_scanned_total:coverage.fast_scanned_total,micro_scan_candidates:coverage.micro_scan_candidates,
+        micro_scanned_total:coverage.micro_scanned_total,deep_candidates_requested:coverage.deep_candidates_requested,
+        deep_scanned_total:coverage.deep_scanned_total,skipped_total:coverage.skipped_total,
+        failed_total:coverage.failed_total,coverage_ratio:coverage.coverage_ratio,
+        deep_coverage_ratio:coverage.deep_coverage_ratio,
+        quiet_selected_total:coverage.micro_quiet_selected_total,
+        rotation_selected_total:coverage.micro_rotation_selected_total,
+        exceptional_bypass_total:coverage.micro_exceptional_bypass_total,
+        candidate_shortfall:coverage.micro_candidate_shortfall,
+        failed_symbols:this.failedSymbols.slice(0,25),
+        paper_trading:true,real_order_execution:false
+      }));
       for(const item of ok)item.coverage=coverage;
       ok.sort((a,b)=>(Number.isFinite(Number(b.early_expansion_score))?Number(b.early_expansion_score):-1)-(Number.isFinite(Number(a.early_expansion_score))?Number(a.early_expansion_score):-1)||Number(b.micro_fingerprint?.score||-1)-Number(a.micro_fingerprint?.score||-1)||a.symbol.localeCompare(b.symbol));
       this.latestCandidates=ok.slice(0,Math.max(1,Math.min(100,Number(this.config.returnLimit??100))));

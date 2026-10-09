@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {assessDataGate,assessLiquidity,latestClosed,futureIssues,timestampUnit,normalizeEpochMs,FUTURE_DATA_CLOCK_SKEW_MS} from '../core/data-quality.mjs';
+import {assessDataGate,assessLiquidity,latestClosed,futureIssues,timestampUnit,normalizeEpochMs,FUTURE_DATA_CLOCK_SKEW_MS,DATA_STATUS} from '../core/data-quality.mjs';
 import {series,incompleteSeries,TEST_FIXTURE} from './fixtures.mjs';
 
 test('TEST_FIXTURE: incomplete candle is not selected as latest completed candle',()=>{
@@ -69,6 +69,30 @@ test('TEST_FIXTURE: real future candle is rejected without bypassing the gate',(
   assert.equal(g.allowed,false);
   assert.equal(g.quality,0);
   assert.ok(g.blocked.includes('FUTURE_DATA'));
+});
+
+
+test('TEST_FIXTURE: data gate classifies live, partial, stale, unavailable and offline without weakening the gate',()=>{
+  const now=1700000000000;
+  const base={
+    series4h:series('4h',30,now-30*14400000),
+    series1h:series('1h',30,now-30*3600000),
+    series15m:series('15m',30,now-30*900000),
+    now,sourceLive:true
+  };
+  assert.equal(assessDataGate(base).status,DATA_STATUS.LIVE);
+
+  const gap=[...base.series15m];gap.splice(10,1);
+  assert.equal(assessDataGate({...base,series15m:gap}).status,DATA_STATUS.PARTIAL);
+
+  const staleNow=now+60*60*1000;
+  assert.equal(assessDataGate({...base,now:staleNow,maxStaleTriggerMs:60000}).status,DATA_STATUS.STALE);
+
+  assert.equal(assessDataGate({...base,series15m:[],minDataQuality:0}).status,DATA_STATUS.UNAVAILABLE);
+  assert.equal(assessDataGate({...base,sourceLive:false}).status,DATA_STATUS.OFFLINE);
+
+  assert.equal(assessDataGate({...base,sourceLive:false}).allowed,false);
+  assert.equal(assessDataGate({...base,series15m:gap}).allowed,false);
 });
 
 test('TEST_FIXTURE: timestamp units are explicit; seconds are rejected and milliseconds are accepted',()=>{
