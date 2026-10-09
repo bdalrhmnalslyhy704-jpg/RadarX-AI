@@ -114,6 +114,17 @@ function streamWeight(stream,evidence){
   const viewerBoost=clamp(Math.log10(Math.max(1,Number(stream.viewers||0)+1))*12,0,25);
   const evidenceBoost=evidence==='CAPTION'?25:evidence==='DESCRIPTION'?12:5;return 35+viewerBoost+evidenceBoost;
 }
+export function classifyNewsEvent(title='',domain=''){
+  const text=(String(title||'')+' '+String(domain||'')).toLowerCase();
+  if(/\b(listing|listed|will list|new trading pair|spot trading opens?|trading will open|trading opens?|market opens?|exchange support)\b/.test(text)||
+     /\b(open|opens|opening)\b.{0,45}\b(trading|market)\b/.test(text)||
+     /\b(trading|market)\b.{0,45}\b(open|opens|opening)\b/.test(text))return 'EXCHANGE_LISTING_OR_MARKET_OPEN';
+  if(/\b(unlock|token unlock|vesting|circulating supply increase)\b/.test(text))return 'TOKEN_UNLOCK_OR_SUPPLY_EVENT';
+  if(/\b(hack|exploit|breach|attack|security incident|delist|delisting|lawsuit|fraud)\b/.test(text))return 'NEGATIVE_SECURITY_OR_DELIST_EVENT';
+  if(/\b(upgrade|mainnet|testnet|hard fork|protocol launch|network upgrade)\b/.test(text))return 'PROTOCOL_UPGRADE_OR_LAUNCH';
+  if(/\b(partnership|integration|collaboration|strategic alliance)\b/.test(text))return 'PARTNERSHIP_OR_INTEGRATION';
+  return 'GENERAL_CRYPTO_NEWS';
+}
 function newsSentiment(item){return Number.isFinite(item.tone)?clamp(50+item.tone*3):wordScore(item.title,NEWS_BULL,NEWS_BEAR).score;}
 function aggregateMentions({streams,news,index}){
   const map=new Map();
@@ -128,7 +139,7 @@ function aggregateMentions({streams,news,index}){
   }
   for(const item of news){
     const assets=mentionedAssets(item.title,index);const score=newsSentiment(item);const w=35;
-    for(const a of assets){const c=get(a.symbol);c.news_mentions++;c.news_sum+=score*w;c.news_weight+=w;c.news_items.push({title:item.title,url:item.url,domain:item.domain,published_at:item.published_at,tone:item.tone,sentiment_score:Number(score.toFixed(1)),source:item.source});}
+    for(const a of assets){const c=get(a.symbol);c.news_mentions++;c.news_sum+=score*w;c.news_weight+=w;c.news_items.push({title:item.title,url:item.url,domain:item.domain,published_at:item.published_at,tone:item.tone,event_type:item.event_type||classifyNewsEvent(item.title,item.domain),sentiment_score:Number(score.toFixed(1)),source:item.source});}
   }
   return [...map.values()].map(c=>({...c,stream_score:Number((c.stream_weight?50+(c.stream_signed/c.stream_weight)*50:50).toFixed(1)),news_score:Number((c.news_weight?c.news_sum/c.news_weight:50).toFixed(1))}));
 }
@@ -186,12 +197,26 @@ export class ProfessorRadar{
     return {streams,errors};
   }
   async discoverNews(){
-    const queries=['(bitcoin OR ethereum OR crypto OR cryptocurrency OR binance OR altcoin)','(SEC OR ETF OR regulation OR hack OR exploit) (crypto OR bitcoin OR ethereum)','(listing OR partnership OR upgrade OR unlock OR liquidation) (crypto OR token)'];
-    const found=new Map();const errors=[];
-    for(const query of queries){
-      const url='https://api.gdeltproject.org/api/v2/doc/doc?mode=artlist&format=json&maxrecords='+Math.min(75,this.config.newsLimit)+'&timespan=2h&query='+encodeURIComponent(query);
-      try{const body=await fetchText(url,{timeoutMs:this.config.webTimeoutMs,fetchImpl:this.fetchImpl});for(const item of parseGdelt(body,this.config.newsLimit))found.set(item.url,item);}
-      catch(e){errors.push('GDELT:'+String(e?.message??e));}
+    const queries=[
+      {query:'(bitcoin OR ethereum OR crypto OR cryptocurrency OR binance OR altcoin)',timespan:'2h'},
+      {query:'(SEC OR ETF OR regulation OR hack OR exploit) (crypto OR bitcoin OR ethereum)',timespan:'2h'},
+      {query:'(listing OR partnership OR upgrade OR unlock OR liquidation) (crypto OR token)',timespan:'2h'},
+      {query:'(listing OR listed OR "new trading pair" OR "spot trading opens" OR "trading will open" OR "market opens") (upbit OR binance OR coinbase OR bybit OR okx)',timespan:'24h',kind:'EXCHANGE_LISTING_WATCH'}
+    ];
+    const found=new Map(),errors=[];
+    // Keep the feed watch bounded and parallel so a slow listing search cannot stall the entire professor cycle.
+    const results=await mapLimit(queries,3,async item=>{
+      const url='https://api.gdeltproject.org/api/v2/doc/doc?mode=artlist&format=json&maxrecords='+Math.min(75,this.config.newsLimit)+'&timespan='+item.timespan+'&query='+encodeURIComponent(item.query);
+      const body=await fetchText(url,{timeoutMs:this.config.webTimeoutMs,fetchImpl:this.fetchImpl});
+      return {query:item,items:parseGdelt(body,this.config.newsLimit)};
+    });
+    for(const result of results){
+      if(result?.error){errors.push('GDELT:'+String(result.error));continue;}
+      for(const item of result?.items||[]){
+        const enriched={...item,event_type:classifyNewsEvent(item.title,item.domain),
+          watch_scope:result.query.kind||'GENERAL_CRYPTO_NEWS'};
+        found.set(item.url,enriched);
+      }
     }
     return {news:[...found.values()].sort((a,b)=>(Number(b.published_at)||0)-(Number(a.published_at)||0)).slice(0,this.config.newsLimit),errors};
   }
