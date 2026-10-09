@@ -1,7 +1,7 @@
 name: RadarX Phase 2 Tests
 on:
   push:
-    branches: ['phase2-*', 'build224-sniper-selection-v1', 'fix/build224-quiet-fair-rotation-20261009']
+    branches: ['phase2-*', 'build224-sniper-selection-v1', 'fix/build224-quiet-fair-rotation-20261009', 'feat/build224-pre-expansion-fingerprint-20261009']
   pull_request:
     branches: [main, 'build224-multi-analyst-20261007']
   workflow_dispatch:

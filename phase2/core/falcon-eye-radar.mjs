@@ -2,7 +2,26 @@ import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.m
 import {updateMarketPulseHistory} from './falcon-market-pulse.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
+import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
 
+function normalizeRadarTickerRow(row,quote){
+  const normalized=normalizeTickerRow(row,quote);
+  if(normalized)return normalized;
+  if(!row||typeof row.symbol!=='string'||!/^[A-Z0-9]{5,30}$/i.test(row.symbol))return null;
+  const lastPrice=Number(row.lastPrice),quoteVolume=Number(row.quoteVolume),count=Number(row.count);
+  if(!Number.isFinite(lastPrice)||lastPrice<=0||!Number.isFinite(quoteVolume)||quoteVolume<0||!Number.isFinite(count)||count<0)return null;
+  const rawChange=row.priceChangePercent;
+  const dailyKnown=rawChange!==null&&rawChange!==undefined&&!(typeof rawChange==='string'&&rawChange.trim()==='')&&Number.isFinite(Number(rawChange));
+  const high=Number(row.highPrice),low=Number(row.lowPrice);
+  const tickerTime=['closeTime','eventTime','openTime'].map(key=>Number(row[key])).find(Number.isFinite)??null;
+  return {
+    symbol:String(row.symbol).toUpperCase(),quoteAsset:String(quote).toUpperCase(),
+    lastPrice,quoteVolume24h:quoteVolume,tradeCount24h:count,
+    priceChange24h:dailyKnown?Number(rawChange):null,
+    highPrice24h:Number.isFinite(high)&&high>0?high:null,
+    lowPrice24h:Number.isFinite(low)&&low>0?low:null,tickerTime
+  };
+}
 const clamp=(v,min=0,max=100)=>Math.max(min,Math.min(max,Number.isFinite(Number(v))?Number(v):min));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
 const hasFiniteValue=v=>v!==null&&v!==undefined&&!(typeof v==='string'&&v.trim()==='')&&Number.isFinite(Number(v));
@@ -153,10 +172,10 @@ export function buildFalconEyeAnalysis({
 }={}){
   const one=safeRows(oneMinute,now),five=safeRows(fiveMinute,now),btc1=safeRows(btcOneMinute,now),btc5=safeRows(btcFiveMinute,now);
   if(one.length<70||five.length<30){
-    return {eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true,one_minute_count:one.length,five_minute_count:five.length};
+    return {eligible:false,stage:'INSUFFICIENT_DATA',pre_expansion_stage:'DATA_INSUFFICIENT',pre_expansion_fingerprint:{stage:'DATA_INSUFFICIENT',reason:'CLOSED_CANDLES_INSUFFICIENT'},score:null,closed_candles_only:true,one_minute_count:one.length,five_minute_count:five.length};
   }
   const price=finite(ticker.lastPrice,null);
-  const move24=finite(ticker.priceChange24h,null);
+  const move24=hasFiniteValue(ticker.priceChange24h)?Number(ticker.priceChange24h):null;
   const closes=one.map(x=>Number(x.close));
   const r1=pct(Number(one.at(-1)?.close),Number(one.at(-2)?.close));
   const r3=pct(Number(one.at(-1)?.close),Number(one.at(-4)?.close));
@@ -261,8 +280,8 @@ export function buildFalconEyeAnalysis({
   ].filter(Boolean).length;
   const notChasing=antiChasePenalty<20 &&
     (!Number.isFinite(move24)||Math.abs(move24)<=8) &&
-    (!Number.isFinite(r10)||r10<=3.8) &&
-    (!Number.isFinite(r5)||r5<=2.5) &&
+    (!Number.isFinite(r10)||Math.abs(r10)<=3.8) &&
+    (!Number.isFinite(r5)||Math.abs(r5)<=2.5) &&
     (!Number.isFinite(e21Distance)||e21Distance<=4.2) &&
     (!Number.isFinite(resistanceGap)||resistanceGap>=-1.2);
   const earlyStructure=
@@ -274,7 +293,30 @@ export function buildFalconEyeAnalysis({
     score>=84&&confirmations>=9&&notChasing&&
     (br.break_up||Number.isFinite(r3)&&r3>=0.35)&&
     volumeScore>=62&&takerScore>=62;
-  const eligible=Boolean(earlyStructure||ignition);
+  const volumeTrend=measureGradualParticipation(one.map(x=>x.quoteVolume??x.volume));
+  const tradeTrend=measureGradualParticipation(one.map(x=>x.tradeCount));
+  const currentAtrPct=Number.isFinite(atr.now)&&lastClose>0?atr.now/lastClose*100:null;
+  const resistanceDistanceAtr=Number.isFinite(resistanceGap)&&Number.isFinite(currentAtrPct)&&currentAtrPct>0
+    ?resistanceGap/currentAtrPct:null;
+  const rsKnown=[rel.spread_5m,rel.spread_15m].filter(Number.isFinite);
+  const relativeStrengthBtcPct=rsKnown.length?rsKnown.reduce((sum,x)=>sum+x,0)/rsKnown.length:null;
+  const btcMarketReturn15m=btc5.length>=4?pct(Number(btc5.at(-1)?.close),Number(btc5.at(-4)?.close)):null;
+  const marketRegimeLabel=Number.isFinite(btcMarketReturn15m)?(btcMarketReturn15m>0?'BULLISH':btcMarketReturn15m<0?'BEARISH':'MIXED'):'UNKNOWN';
+  const falseBreakout=Number.isFinite(br.high)&&Number(last.high)>br.high*1.001&&lastClose<br.high&&closeLocation<55;
+  const preExpansion=assessPreExpansionFingerprint({
+    dataReady:one.length>=70&&five.length>=30&&Number.isFinite(price)&&price>0,
+    dailyChangePct:ticker.priceChange24h,lastPrice:price,maxMove24hPct:8,maxMove5mPct:2.5,maxMove10mPct:3.8,maxMove15mPct:6,
+    baseScore:hl*0.42+compressionScore*0.38+quietScore*0.20,
+    higherLowScore:hl,compressionScore,
+    compressionRatio:bb.ratio,rangeCompressionRatio:rangeRatio,bollingerRatio:bb.ratio,atrRatio:atr.ratio,
+    volumeRatio:va.volume_ratio,tradeRatio:va.trade_ratio,volumeTrend,tradeTrend,
+    relativeStrengthBtcPct,relativeStrengthMarketPct:hasFiniteValue(ticker.relativeStrengthMarket24hPct)?Number(ticker.relativeStrengthMarket24hPct):null,marketRegimeLabel,
+    resistanceDistanceAtr,breakoutConfirmed:br.break_up,falseBreakout,
+    return5mPct:r5,return10mPct:r10,return15mPct:pct(Number(one.at(-1)?.close),Number(one.at(-16)?.close)),
+    alreadyExtended:!notChasing
+  });
+  const eligible=Boolean((earlyStructure||ignition)&&
+    (preExpansion.stage==='PRE_EXPANSION'||preExpansion.stage==='BREAKOUT_DEVELOPING'));
   const stage=ignition?'IGNITION':earlyStructure?'PRE_ATTACK':score>=68?'BUILDING':'WATCH';
   const reasons=[];
   const push=(ok,s)=>{if(ok)reasons.push(s);};
@@ -293,7 +335,7 @@ export function buildFalconEyeAnalysis({
   push(liq.short_liquidation_notional>0,'تصفية مراكز بيع ظاهرة');
   push(expansionScore>=70,'انتقال نظام التذبذب إلى توسع');
   return {
-    eligible,stage,closed_candles_only:true,score:Number(score.toFixed(1)),
+    eligible,stage,pre_expansion_stage:preExpansion.stage,pre_expansion_fingerprint:preExpansion,market_regime_label:marketRegimeLabel,closed_candles_only:true,score:Number(score.toFixed(1)),
     confirmation_count:confirmations,not_chasing:notChasing,
     anti_chase_penalty:Number(antiChasePenalty.toFixed(1)),
     metrics:{
@@ -333,24 +375,24 @@ export function buildFalconEyeAlert(input,now=Date.now(),config={}){
     radar:'FALCON_EYE_RADAR',
     symbol:String(t.symbol||'UNKNOWN').toUpperCase(),
     market:'SPOT',direction:'UP_PREBREAKOUT',
-    price:finite(t.lastPrice),price_change_24h:finite(t.priceChange24h),
-    opportunity_score:a.score,potential_label:a.stage,
+    price:finite(t.lastPrice),price_change_24h:hasFiniteValue(t.priceChange24h)?Number(t.priceChange24h):null,
+    opportunity_score:a.score,potential_label:a.pre_expansion_stage??a.stage,
     falcon_eye:a,reasons:a.reasons,
     data_quality:90,liquidity_quality:clamp(62+Math.log10(Math.max(1,(Number(t.quoteVolume24h)||0)/1000000))*22),
     confirmation_count:a.confirmation_count,
     pre_breakout_fingerprint:{
-      ready:a.eligible,score:a.score,late:!a.not_chasing,micro_move:false,
+      ready:a.eligible,score:a.score,late:!a.not_chasing,pre_expansion_stage:a.pre_expansion_stage??'DATA_INSUFFICIENT',micro_move:false,
       impulse_quality_score:a.component_scores.momentum,
       confirmation_count:a.confirmation_count
     },
     risk_flags:[
-      Math.abs(finite(t.priceChange24h,0))>8?'ALREADY_EXTENDED':null,
+      (a.pre_expansion_stage==='ALREADY_EXTENDED'||(hasFiniteValue(t.priceChange24h)&&Math.abs(Number(t.priceChange24h))>=8))?'ALREADY_EXTENDED':null,
       a.not_chasing?null:'EXTENDED_CHASE',
       Number(a.metrics?.funding_rate)>0.004?'POSITIVE_FUNDING_CROWDING':null,
       Number(a.metrics?.resistance_gap_pct)<-1.2?'RESISTANCE_BROKEN_EXTENDED':null
     ].filter(Boolean),
     source:a.source,detected_at:now,processed_at:now,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
-    eligible:Boolean(a.eligible),
+    eligible:Boolean(a.eligible),pre_expansion_stage:a.pre_expansion_stage??'DATA_INSUFFICIENT',
     disclaimer:'عين الصقر تبحث عن تشابهات ما قبل انفجار OGN: قاعدة + توسع مشاركة + ضغط شراء + مقاومة/اختراق + مشتقات عند توفرها. لا تضمن ارتفاعًا أو ربحًا.'
   };
 }
@@ -391,9 +433,16 @@ export class FalconEyeRadar {
   }
   async tickerRows(){
     const r=await this.rest.request('/api/v3/ticker/24hr');
-    const raw=(Array.isArray(r.data)?r.data:[]).map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
+    const raw=(Array.isArray(r.data)?r.data:[]).map(x=>normalizeRadarTickerRow(x,this.config.quote)).filter(Boolean)
       .filter(x=>x.quoteVolume24h>=this.config.fastMinQuoteVolume24h&&this.universe.includes(x.symbol));
-    const pulse=updateMarketPulseHistory(raw,this.pulseHistory,this.clock(),{intervalMs:this.config.pollMs});
+    const marketMoves=raw.map(x=>x.priceChange24h).filter(hasFiniteValue).map(Number);
+    const marketMedianChange24hPct=median(marketMoves);
+    const benchmarked=raw.map(row=>({...row,
+      marketMedianChange24hPct,
+      relativeStrengthMarket24hPct:hasFiniteValue(row.priceChange24h)&&Number.isFinite(marketMedianChange24hPct)
+        ?Number(row.priceChange24h)-marketMedianChange24hPct:null
+    }));
+    const pulse=updateMarketPulseHistory(benchmarked,this.pulseHistory,this.clock(),{intervalMs:this.config.pollMs});
     this.marketCoverage=pulse.coverage;this.pulseReadyCount=pulse.readyCount;this.marketBreadthPct=pulse.breadthPct;
     this.fastCandidates=pulse.rows.filter(x=>x.market_pulse?.fast_trigger).length;
     return pulse.rows;
