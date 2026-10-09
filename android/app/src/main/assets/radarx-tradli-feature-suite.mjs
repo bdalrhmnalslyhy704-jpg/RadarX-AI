@@ -269,16 +269,23 @@ function advisorPanel(root) {
     const o=root.querySelector('#rx-ao'),s=root.querySelector('#rx-as').value.trim().toUpperCase(),d=root.querySelector('#rx-ad').value,e=Number(root.querySelector('#rx-ae').value),sl=Number(root.querySelector('#rx-asl').value),tp=Number(root.querySelector('#rx-atp').value);
     o.innerHTML='<p class="rxsuite-row">جاري فحص الصفقة…</p>';
     try{
-      const b=await market(),c=findCandidate(b,s);if(!c)throw Error('NO_CURRENT_CANDIDATE');
-      const p=Number(c.last_price),risk=Number.isFinite(e)&&Number.isFinite(sl)?Math.abs(e-sl)/e*100:null,rr=Number.isFinite(e)&&Number.isFinite(sl)&&Number.isFinite(tp)?Math.abs(tp-e)/Math.max(Math.abs(e-sl),1e-12):null;
-      const bad=(d==='LONG'&&c.direction!=='LONG')||(d==='SHORT'&&c.direction==='LONG');let act='WAIT',cl='rxsuite-warn',reason='المرشح يحتاج تأكيدًا.';
-      if(bad){act='REDUCE / REASSESS';cl='rxsuite-bad';reason='اتجاه الصفقة يتعارض مع اتجاه السوق المرصود.'}
-      else if(risk!==null&&risk>5){act='REASSESS RISK';reason='وقف الخسارة واسع نسبيًا.'}
-      else if(rr!==null&&rr<1){act='REASSESS TARGET';reason='نسبة R:R أقل من 1.'}
-      else if(c.signal_state==='CONFIRMED'){act='HOLD / MONITOR';cl='rxsuite-ok';reason='الصفقة متوافقة حاليًا مع المرشح.'}
-      o.innerHTML='<div class="rxsuite-grid">'+box('Action',act)+box('Current',num(p,8))+box('Risk',risk!==null?percent(risk):'—')+box('R:R',rr!==null?num(rr,2):'—')+box('Liquidity',num(c.liquidity_quality,0))+box('Trap Risk',percent(c.pre_breakout_fingerprint && c.pre_breakout_fingerprint.trapRisk,0))+'</div>' +
-        '<div class="rxsuite-row"><div><b>Advisor</b><small>'+esc(reason)+'</small></div><span class="rxsuite-tag '+cl+'">'+act+'</span></div>';
-    }catch(e){o.innerHTML='<div class="rxsuite-row"><b>DATA UNAVAILABLE</b><small>'+esc(e.message)+'</small></div>';}
+      const scan=await deepScan(s);
+      requireLiveDeepScan(scan);
+      const p=Number(scan.price.last),bias=String(scan.assessment?.direction_bias||'UNKNOWN');
+      const risk=e>0&&sl>0?Math.abs(e-sl)/e*100:null;
+      const rr=e>0&&sl>0&&tp>0?Math.abs(tp-e)/Math.max(Math.abs(e-sl),1e-12):null;
+      const bad=(d==='LONG'&&bias==='DOWNWARD_BIAS')||(d==='SHORT'&&bias==='UPWARD_BIAS');
+      const neutral=!['UPWARD_BIAS','DOWNWARD_BIAS'].includes(bias);
+      let act='WAIT / MORE EVIDENCE',cl='rxsuite-warn',reason='لم تصل المحاذاة المطلوبة أو ينقص مستوى تأكيد.';
+      if(bad){act='DIRECTION CONFLICT';cl='rxsuite-bad';reason='الاتجاه المطلوب يعاكس انحياز تحليل 15m/1h/4h.'}
+      else if(neutral){act='NO CLEAR BIAS';reason='الاتجاه المحايد لا يدعم تجهيز قرار دخول.'}
+      else if(Number(scan.assessment?.trap_risk)>=60){act='HIGH TRAP RISK';cl='rxsuite-bad';reason='تقدير مخاطر الفخ مرتفع؛ انتظر بنية أوضح.'}
+      else if(risk!==null&&risk>5){act='REASSESS RISK';reason='وقف الخسارة أبعد من 5% عن الدخول.'}
+      else if(rr!==null&&rr<1.2){act='REASSESS TARGET';reason='نسبة العائد إلى المخاطرة أقل من 1.2.'}
+      else if(Number(scan.assessment?.analysis_strength)>=70&&Number(scan.momentum?.score)>=58){act='ALIGNED / MONITOR';cl='rxsuite-ok';reason='المعايير الحالية متوافقة؛ هذا ليس أمر شراء ولا يضمن الربح.'}
+      o.innerHTML=deepNotice(scan)+'<div class="rxsuite-grid">'+box('Advisor state',act)+box('Market read',scan.assessment?.market_read||bias)+box('Current',num(p,8))+box('Risk',risk!==null?percent(risk):'—')+box('R:R',rr!==null?num(rr,2):'—')+box('Liquidity',num(scan.liquidity?.score,0))+box('Trap Risk',percent(scan.assessment?.trap_risk,0))+box('Momentum',num(scan.momentum?.score,0))+'</div>' +
+        '<div class="rxsuite-row"><div><b>Advisor • PAPER ONLY</b><small>'+esc(reason)+'</small></div><span class="rxsuite-tag '+cl+'">'+act+'</span></div>';
+    }catch(e){o.innerHTML='<div class="rxsuite-row"><b>تعذر التحليل الاستشاري</b><small>'+esc(e.message)+'</small></div>';}
   };
 }
 
