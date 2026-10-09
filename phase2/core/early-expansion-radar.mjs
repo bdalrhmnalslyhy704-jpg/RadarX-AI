@@ -4,6 +4,24 @@ import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notification-gate.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
 
+function normalizeRadarTickerRow(row,quote){
+  const normalized=normalizeTickerRow(row,quote);
+  if(normalized)return normalized;
+  if(!row||typeof row.symbol!=='string'||!/^[A-Z0-9]{5,30}$/i.test(row.symbol))return null;
+  const lastPrice=Number(row.lastPrice),quoteVolume=Number(row.quoteVolume),count=Number(row.count);
+  if(!Number.isFinite(lastPrice)||lastPrice<=0||!Number.isFinite(quoteVolume)||quoteVolume<0||!Number.isFinite(count)||count<0)return null;
+  const rawChange=row.priceChangePercent;
+  const dailyKnown=rawChange!==null&&rawChange!==undefined&&!(typeof rawChange==='string'&&rawChange.trim()==='')&&Number.isFinite(Number(rawChange));
+  const high=Number(row.highPrice),low=Number(row.lowPrice);
+  const tickerTime=['closeTime','eventTime','openTime'].map(key=>Number(row[key])).find(Number.isFinite)??null;
+  return {
+    symbol:String(row.symbol).toUpperCase(),quoteAsset:String(quote).toUpperCase(),
+    lastPrice,quoteVolume24h:quoteVolume,tradeCount24h:count,
+    priceChange24h:dailyKnown?Number(rawChange):null,
+    highPrice24h:Number.isFinite(high)&&high>0?high:null,
+    lowPrice24h:Number.isFinite(low)&&low>0?low:null,tickerTime
+  };
+}
 const clamp=(v,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number.isFinite(Number(v))?Number(v):0));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
 function hasFiniteNumber(v){return v!==null&&v!==undefined&&!(typeof v==='string'&&v.trim()==='')&&Number.isFinite(Number(v));}
@@ -1024,7 +1042,7 @@ export class EarlyExpansionRadar{
   async tickerRows(quote=this.config.quote){
     const q=this.normalizeQuote(quote);
     const r=await this.rest.request('/api/v3/ticker/24hr');
-    return {rows:(Array.isArray(r.data)?r.data:[]).map(x=>normalizeTickerRow(x,q)).filter(Boolean),source:r.source};
+    return {rows:(Array.isArray(r.data)?r.data:[]).map(x=>normalizeRadarTickerRow(x,q)).filter(Boolean),source:r.source};
   }
   updateFastState(row){
     const now=this.clock(),history=this.fastState.get(row.symbol)||[],prev=history.at(-1),prev2=history.at(-2);
