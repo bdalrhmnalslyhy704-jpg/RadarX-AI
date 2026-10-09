@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from '../core/pre-expansion-fingerprint.mjs';
-import {buildEarlyExpansionEvidence} from '../core/early-expansion-radar.mjs';
-import {buildFalconEyeAnalysis} from '../core/falcon-eye-radar.mjs';
+import {EarlyExpansionRadar,buildEarlyExpansionEvidence} from '../core/early-expansion-radar.mjs';
+import {FalconEyeRadar,buildFalconEyeAnalysis} from '../core/falcon-eye-radar.mjs';
 
 const rising=[92,95,98,100,104,109,115,121,128,136,145,155];
 const gradualVolume=measureGradualParticipation(rising);
@@ -118,4 +118,29 @@ test('Radar 8 exposes DATA_INSUFFICIENT when its daily-change value is missing',
   const result=buildEarlyExpansionEvidence({series:{},ticker:{symbol:'UNKNOWNUSDT',lastPrice:1,priceChange24h:null},now:1_900_000_000_000});
   assert.equal(result.pre_expansion_stage,'DATA_INSUFFICIENT');
   assert.equal(result.decision_band,'DATA_INSUFFICIENT');
+});
+
+
+test('Radar 8 keeps a ticker with missing daily change so it can be labeled DATA_INSUFFICIENT',async()=>{
+  const radar=new EarlyExpansionRadar({
+    rest:{request:async()=>({data:[{symbol:'MISSINGUSDT',lastPrice:'1.25',quoteVolume:'2500000',count:'12000',highPrice:'1.3',lowPrice:'1.1'}],source:'fixture'})},
+    store:{},clock:()=>1_900_000_000_000,logger:{warn(){}}
+  });
+  const result=await radar.tickerRows();
+  assert.equal(result.rows.length,1);
+  assert.equal(result.rows[0].symbol,'MISSINGUSDT');
+  assert.equal(result.rows[0].priceChange24h,null);
+});
+
+test('Radar 9 keeps a ticker with missing daily change and preserves null in the fast pulse',async()=>{
+  const radar=new FalconEyeRadar({
+    rest:{request:async()=>({data:[{symbol:'MISSINGUSDT',lastPrice:'1.25',quoteVolume:'2500000',count:'12000',highPrice:'1.3',lowPrice:'1.1'}]}),klines:async()=>({candles:[]})},
+    store:{},config:{fastMinQuoteVolume24h:100000,quote:'USDT'},clock:()=>1_900_000_000_000,logger:{warn(){}}
+  });
+  radar.universe=['MISSINGUSDT'];
+  const rows=await radar.tickerRows();
+  assert.equal(rows.length,1);
+  assert.equal(rows[0].priceChange24h,null);
+  assert.equal(rows[0].market_pulse.priceChange24h,null);
+  assert.equal(radar.selectBatch(rows).some(x=>x.symbol==='MISSINGUSDT'),true);
 });
