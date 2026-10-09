@@ -7,6 +7,14 @@ const list = (v, d) => {
   return a.length ? a : d;
 };
 
+export function resolveRadarAutostart(env=process.env){
+  const explicit=env.RADARX_RADARS_AUTOSTART;
+  if(explicit!==undefined&&String(explicit).trim()!=='')return String(explicit).trim().toLowerCase()==='true';
+  const productionMarkers=[env.RADARX_ENV,env.NODE_ENV,env.RAILWAY_ENVIRONMENT,env.RAILWAY_ENVIRONMENT_NAME]
+    .map(x=>String(x??'').trim().toLowerCase());
+  return productionMarkers.some(x=>x==='production'||x==='prod');
+}
+
 export const CONFIG = Object.freeze({
   environment: (process.env.RADARX_ENV ?? 'development').toLowerCase(),
   confidenceMode: String(process.env.RADARX_CONFIDENCE_MODE ?? 'UNKNOWN').toUpperCase(),
@@ -143,7 +151,7 @@ export const CONFIG = Object.freeze({
     maPeriod: int(process.env.RADARX_ALMUQAWIM_MA_PERIOD, 50)
   },
   radarControl: {
-    autostart: String(process.env.RADARX_RADARS_AUTOSTART ?? ((process.env.RADARX_ENV ?? 'development').toLowerCase() === 'production' ? 'true' : 'false')).toLowerCase() === 'true'
+    autostart: resolveRadarAutostart(process.env)
   },
   liquidityAbsorptionRadar: {
     quote: 'USDT',
