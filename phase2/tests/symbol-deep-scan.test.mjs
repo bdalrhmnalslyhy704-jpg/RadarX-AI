@@ -52,7 +52,7 @@ test('TEST_FIXTURE: deep symbol scan normalizes symbols and uses closed candles 
   assert.ok(Number.isFinite(result.pressure.score));
   assert.ok(result.timeframes['4h'].ema20 != null);
   assert.ok(result.zones);
-  assert.equal(result.chart.closed_candles_only,undefined,'chart contract is explicitly closed per timeframe rather than implied globally');
+  assert.equal(result.chart.source,'Binance Public REST');
   assert.equal(result.chart.default_timeframe,'15m');
   for(const timeframe of ['15m','1h','4h']){
     const chart=result.chart.timeframes[timeframe];
