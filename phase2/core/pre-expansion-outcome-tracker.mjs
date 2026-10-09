@@ -303,14 +303,16 @@ function updateOneRecord(record,price,now){
   if(record.last_observed_at!==now){record.observations=(record.observations||0)+1;record.last_observed_at=now;changed=true;}
   record.last_observed_price=price;
   record.last_return_pct=Number(ret.toFixed(4));
-  if(record.max_favorable_pct===null||ret>record.max_favorable_pct){
-    record.max_favorable_pct=Number(ret.toFixed(4));record.max_favorable_at=now;changed=true;
+  if(age<=24*60*60_000){
+    if(record.max_favorable_pct===null||ret>record.max_favorable_pct){
+      record.max_favorable_pct=Number(ret.toFixed(4));record.max_favorable_at=now;changed=true;
+    }
+    if(record.max_adverse_pct===null||ret<record.max_adverse_pct){
+      record.max_adverse_pct=Number(ret.toFixed(4));record.max_adverse_at=now;changed=true;
+    }
+    if(record.first_2pct_at===null&&ret>=2){record.first_2pct_at=now;changed=true;}
+    if(record.first_3pct_at===null&&ret>=3){record.first_3pct_at=now;changed=true;}
   }
-  if(record.max_adverse_pct===null||ret<record.max_adverse_pct){
-    record.max_adverse_pct=Number(ret.toFixed(4));record.max_adverse_at=now;changed=true;
-  }
-  if(record.first_2pct_at===null&&ret>=2){record.first_2pct_at=now;changed=true;}
-  if(record.first_3pct_at===null&&ret>=3){record.first_3pct_at=now;changed=true;}
   for(const [h,ms] of HORIZONS){
     const excursion=record.excursions?.[h]||{
       max_favorable_pct:0,max_adverse_pct:0,complete:false,samples:0,
@@ -390,7 +392,7 @@ export async function updatePreExpansionMarkouts(store,tickerRows,{now=Date.now(
       if(record.evaluation_eligible!==true)continue;
       const quote=quotes.get(record.symbol);
       if(!quote)continue;
-      if(record.outcome_status==='COMPLETE')continue;
+      if(HORIZONS.every(([h])=>Boolean(record.marks?.[h])))continue;
       if(record.entry_price===null||record.entry_price<=0)continue;
       const previousMarks=record.marks||{};
       const one=updateOneRecord(record,quote.price,quote.at);
