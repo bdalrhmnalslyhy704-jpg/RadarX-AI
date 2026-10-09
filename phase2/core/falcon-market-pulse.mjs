@@ -17,7 +17,7 @@ export function buildFastMarketPulse(row,history=[],now=Date.now(),{intervalMs=3
   };
   const prev=Array.isArray(history)&&history.length?history.at(-1):null;
   if(!prev||!Number.isFinite(current.lastPrice)||!Number.isFinite(prev.lastPrice)||prev.lastPrice<=0){
-    return {ready:false,score:50,stage:'WARMING',symbol:current.symbol,ageMs:0,priceDeltaPct:null,priceVelocityPctPerMin:null,volumeBurstRatio:null,tradeBurstRatio:null,accelerationScore:50,baseBreakScore:50,highProximityScore:50,anomalyScore:50,marketPulseReady:false,fast_trigger:false};
+    return {ready:false,score:50,stage:'WARMING',symbol:current.symbol,priceChange24h:current.priceChange24h,ageMs:0,priceDeltaPct:null,priceVelocityPctPerMin:null,volumeBurstRatio:null,tradeBurstRatio:null,accelerationScore:50,baseBreakScore:50,highProximityScore:50,compressionScore:null,priceCompressionRatio:null,higherLowScore:null,participationScore:null,anomalyScore:50,marketPulseReady:false,fast_trigger:false};
   }
 
   const elapsed=Math.max(1000,Math.min(5*60*1000,now-Number(prev.at)||intervalMs));
@@ -117,7 +117,7 @@ export function buildFastMarketPulse(row,history=[],now=Date.now(),{intervalMs=3
   const stage=explosive?'EVENT':score>=72?'IGNITING':score>=62?'WAKING':score>=52?'WATCH':'QUIET';
 
   return {
-    ready:true,symbol:current.symbol,score:Number(score.toFixed(1)),stage,
+    ready:true,symbol:current.symbol,priceChange24h:current.priceChange24h,score:Number(score.toFixed(1)),stage,
     ageMs:elapsed,priceDeltaPct:Number.isFinite(priceDelta)?Number(priceDelta.toFixed(4)):null,
     priceVelocityPctPerMin:Number.isFinite(velocity)?Number(velocity.toFixed(4)):null,
     volumeBurstRatio:Number.isFinite(volumeBurst)?Number(volumeBurst.toFixed(3)):null,
