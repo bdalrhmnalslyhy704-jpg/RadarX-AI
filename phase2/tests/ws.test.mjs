@@ -25,6 +25,34 @@ test('TEST_FIXTURE: websocket disconnect enters backoff and reconnects with anot
 });
 
 
+
+test('TEST_FIXTURE: websocket candle carries event, receive, age and transport timing separately',()=>{
+  Socket.instances.length=0;
+  const received=[];
+  const client=new BinanceStreamClient({urls:['wss://one.test/stream'],streams:['btcusdt@kline_15m'],
+    WebSocketImpl:Socket,heartbeatTimeoutMs:1000,maxConnectionMs:1000,onCandle:c=>received.push(c)});
+  client.start();
+  const now=Date.now();
+  const open=Math.floor((now-900000)/900000)*900000;
+  const close=open+899999;
+  const eventTime=now-12;
+  const payload={e:'kline',E:eventTime,s:'BTCUSDT',k:{t:open,T:close,s:'BTCUSDT',
+    o:'100',h:'101',l:'99',c:'100',v:'10',q:'1000',n:10,V:'5',Q:'500',x:true,i:'15m'}};
+  Socket.instances[0].emit('open');
+  Socket.instances[0].emit('message',Buffer.from(JSON.stringify(payload)));
+  client.stop();
+  assert.equal(received.length,1);
+  const candle=received[0];
+  assert.equal(candle.source,'BINANCE_PUBLIC_WS');
+  assert.equal(candle.eventTime,eventTime);
+  assert.equal(candle.sourceTime,eventTime);
+  assert.ok(Number.isFinite(candle.receivedAt));
+  assert.ok(candle.receivedAt>=eventTime);
+  assert.ok(Number.isFinite(candle.ageMs));
+  assert.equal(candle.transportLatencyMs,candle.receivedAt-eventTime);
+  assert.equal(candle.closed,true);
+});
+
 test('TEST_FIXTURE: websocket kline timestamps are milliseconds; seconds are rejected',async()=>{
   Socket.instances.length=0;
   const errors=[];
