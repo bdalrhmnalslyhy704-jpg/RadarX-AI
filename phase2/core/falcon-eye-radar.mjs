@@ -287,7 +287,7 @@ export function buildFalconEyeAnalysis({
   const falseBreakout=Number.isFinite(br.high)&&Number(last.high)>br.high*1.001&&lastClose<br.high&&closeLocation<55;
   const preExpansion=assessPreExpansionFingerprint({
     dataReady:one.length>=70&&five.length>=30&&Number.isFinite(price)&&price>0,
-    dailyChangePct:move24,lastPrice:price,maxMove24hPct:8,maxMove5mPct:2.5,maxMove10mPct:3.8,
+    dailyChangePct:move24,lastPrice:price,maxMove24hPct:8,maxMove5mPct:2.5,maxMove10mPct:3.8,maxMove15mPct:6,
     baseScore:hl*0.42+compressionScore*0.38+quietScore*0.20,
     higherLowScore:hl,compressionScore,
     compressionRatio:bb.ratio,rangeCompressionRatio:rangeRatio,bollingerRatio:bb.ratio,atrRatio:atr.ratio,
