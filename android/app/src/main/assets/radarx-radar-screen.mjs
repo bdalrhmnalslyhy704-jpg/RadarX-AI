@@ -112,9 +112,11 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
         const isJoker=id==='ROTATION_LAG_RADAR';
         const score=q(x.radar_power_score||x.radar_v2 && x.radar_v2.score||x.opportunity_score||x.score);
         const label=isJoker?(x.eligible===true?'جاهز للدوران':(x.potential_label||rotation.stage||'مراقبة')):(x.potential_label||x.event||'اكتشاف');
-        const shock=x.activity_shock||x.falcon_eye?.activity_shock||{};
+        const shock=x.activity_shock||(x.falcon_eye&&x.falcon_eye.activity_shock)||{};
         const sm=shock.metrics||{};
-        const shockNote=shock.detected===true?'<div class="shock-note">⚡ '+e(shock.stage||'ACTIVITY_SHOCK')+' • حجم '+e(sm.volume_shock_ratio??'—')+'x • صفقات '+e(sm.trade_shock_ratio??'—')+'x<br>مراقبة فقط • '+(shock.extended?'الحركة ممتدة — لا تطارد السعر':'تأكيد شمعة مغلقة')+'</div>':'';
+        const volumeShock=sm.volume_shock_ratio===null||sm.volume_shock_ratio===undefined?'—':sm.volume_shock_ratio;
+        const tradeShock=sm.trade_shock_ratio===null||sm.trade_shock_ratio===undefined?'—':sm.trade_shock_ratio;
+        const shockNote=shock.detected===true?'<div class="shock-note">⚡ '+e(shock.stage||'ACTIVITY_SHOCK')+' • حجم '+e(volumeShock)+'x • صفقات '+e(tradeShock)+'x<br>مراقبة فقط • '+(shock.extended?'الحركة ممتدة — لا تطارد السعر':'تأكيد شمعة مغلقة')+'</div>':'';
         const extra=isJoker?' • تأكيدات '+String((x.rotation && x.rotation.confirmations) || x.confirmations || 0):'';
         return '<article class="alert">'+
           '<div class="top"><b>'+e(x.symbol||'—')+'</b><span class="score">'+score+'/100</span></div>'+
