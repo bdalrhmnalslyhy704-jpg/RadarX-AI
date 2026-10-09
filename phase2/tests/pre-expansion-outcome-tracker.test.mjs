@@ -38,6 +38,7 @@ test('market regime classifier separates bullish, bearish, and ranging condition
   assert.equal(classifyEvaluationMarketRegime({marketMedianChange24hPct:-1.1,marketBreadthPct:34,btcReturn5mPct:-.4,btcReturn1hPct:-1.2}),'BEARISH');
   assert.equal(classifyEvaluationMarketRegime({marketMedianChange24hPct:.1,marketBreadthPct:51,btcReturn5mPct:.01}),'RANGING');
   assert.equal(classifyEvaluationMarketRegime({}),'UNKNOWN');
+  assert.equal(classifyEvaluationMarketRegime({marketRegime:'MIXED'}),'RANGING');
 });
 
 test('records Radar 8/Radar 9 observations with time, entry, stage, data quality, reasons, and market regime; de-duplicates repeated stages',async()=>{
