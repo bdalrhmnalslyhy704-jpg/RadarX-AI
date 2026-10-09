@@ -18,7 +18,9 @@ const moveService=await readFile(new URL('./app/src/main/java/com/radarx/app/Rad
 assert.match(moveService,/detectedAt = alert\.optLong\("detected_at", alert\.optLong\("processed_at"/);
 assert.match(moveService,/وقت اكتشاف الخادم/);
 assert.match(moveService,/وقت إرسال الإشعار/);
-assert.match(moveService,/عند انقطاع الإنترنت: حُفظ التنبيه على الخادم ثم أُرسل عند عودة الاتصال/);
+assert.match(moveService,/السجل الدائم عند عودة الاتصال/);
+assert.match(moveService,/السعر وقت الكشف/);
+assert.doesNotMatch(moveService,/عند انقطاع الإنترنت: حُفظ التنبيه على الخادم ثم أُرسل عند عودة الاتصال/);
 
 const screen=await readFile(new URL('./app/src/main/assets/radarx-market-radar-screen.mjs',import.meta.url),'utf8');
 assert.match(screen,/SCAN_COMPLETE/);
