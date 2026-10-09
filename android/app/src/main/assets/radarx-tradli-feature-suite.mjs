@@ -241,15 +241,20 @@ function verifyPanel(root) {
     const o=root.querySelector('#rx-vo'), s=root.querySelector('#rx-vs').value.trim().toUpperCase(), t=root.querySelector('#rx-vx').value;
     o.innerHTML='<p class="rxsuite-row">جاري التحقق…</p>';
     try{
-      const b=await market(),c=findCandidate(b,s);
-      if(!c){o.innerHTML='<div class="rxsuite-row"><b>INSUFFICIENT DATA</b></div>';return;}
-      const buy=/(?:buy|long)/i.test(t), sell=/(?:sell|short)/i.test(t), conflict=(buy&&c.direction!=='LONG')||(sell&&c.direction==='LONG');
-      const m=t.match(/(?:@|entry|دخول)\s*[=:]?\s*(\d+(?:\.\d+)?)/i), ep=m?Number(m[1]):null, p=Number(c.last_price), far=ep?Math.abs(p-ep)/ep*100:null;
-      const v=!buy&&!sell?'AMBIGUOUS':conflict?'CONFLICTING':far!==null&&far>3?'STALE / FAR ENTRY':'CONSISTENT';
-      const cl=v==='CONSISTENT'?'rxsuite-ok':(v==='AMBIGUOUS'||v.startsWith('STALE'))?'rxsuite-warn':'rxsuite-bad';
-      o.innerHTML='<div class="rxsuite-grid">'+box('Result',v)+box('Radar direction',c.direction)+box('Current',num(p,8))+box('Entry',ep?num(ep,8):'—')+box('Distance',far!==null?percent(far):'—')+box('Trap Risk',percent(c.pre_breakout_fingerprint && c.pre_breakout_fingerprint.trapRisk,0))+'</div>' +
-      '<div class="rxsuite-row"><div><b>Assessment</b><small>' + esc(conflict?'الاتجاه يتعارض مع المرشح الحالي.':far!==null&&far>3?'الدخول بعيد عن السعر الحالي.':'لا يوجد تعارض مباشر في البيانات الحالية.') + '</small></div><span class="rxsuite-tag '+cl+'">'+v+'</span></div>';
-    }catch(e){o.innerHTML='<div class="rxsuite-row"><b>DATA UNAVAILABLE</b><small>'+esc(e.message)+'</small></div>';}
+      const scan=await deepScan(s);
+      requireLiveDeepScan(scan);
+      const buy=/(?:buy|long)/i.test(t), sell=/(?:sell|short)/i.test(t);
+      const bias=String(scan.assessment?.direction_bias||'UNKNOWN');
+      const conflict=(buy&&bias==='DOWNWARD_BIAS')||(sell&&bias==='UPWARD_BIAS');
+      const m=t.match(/(?:@|entry|دخول)\s*[=:]?\s*(\d+(?:\.\d+)?)/i);
+      const ep=m?Number(m[1]):null,p=Number(scan.price.last),far=ep&&ep>0?Math.abs(p-ep)/ep*100:null;
+      const neutral=!['UPWARD_BIAS','DOWNWARD_BIAS'].includes(bias);
+      const v=!buy&&!sell?'AMBIGUOUS':conflict?'CONFLICTING':far!==null&&far>3?'STALE / FAR ENTRY':neutral?'NO CLEAR BIAS':'CONSISTENT — NOT AN ENTRY SIGNAL';
+      const cl=conflict?'rxsuite-bad':(v==='AMBIGUOUS'||v.startsWith('STALE')||neutral)?'rxsuite-warn':'rxsuite-ok';
+      const frame=root.querySelector('#rx-vt').value;
+      o.innerHTML=deepNotice(scan)+'<div class="rxsuite-grid">'+box('Result',v)+box('Market read',scan.assessment?.market_read||bias)+box('Price',num(p,8))+box('Entry',ep?num(ep,8):'—')+box('Distance',far!==null?percent(far):'—')+box('Trap risk',percent(scan.assessment?.trap_risk,0))+'</div>' +
+      '<div class="rxsuite-row"><div><b>Verify • '+esc(frame)+'</b><small>' + esc(conflict?'الإشارة تعاكس اتجاه الإطار متعدد الزمن.':far!==null&&far>3?'سعر الدخول بعيد أكثر من 3% عن السعر الحالي.':neutral?'الاتجاه غير حاسم؛ التحقق لا يعطي موافقة دخول.':'الإشارة لا تتعارض مباشرة مع الانحياز الحالي، وهذا لا يثبت نجاحها ولا يوصي بالدخول.') + '</small></div><span class="rxsuite-tag '+cl+'">'+v+'</span></div>';
+    }catch(e){o.innerHTML='<div class="rxsuite-row"><b>تعذر التحقق</b><small>'+esc(e.message)+'</small></div>';}
   };
 }
 
