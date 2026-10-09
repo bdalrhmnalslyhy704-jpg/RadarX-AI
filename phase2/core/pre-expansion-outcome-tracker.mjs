@@ -194,7 +194,12 @@ function makeSignal(alert,now,marketContext){
   if(!radar||!symbol||!stage||EXCLUDED_EVALUATION_SYMBOLS.has(symbol)||!(entry>0)||!(detectedAt>0))return null;
   const m=stageMetrics(alert),extended=assessAlreadyExtended(alert,stage,m);
   const context={...object(marketContext),...object(alert?.market_context)};
-  const suppliedRegime=alert?.market_regime_label??alert?.market_regime?.label??alert?.market_regime;
+  const suppliedRegime=alert?.market_regime_label??
+    alert?.market_regime?.label??
+    alert?.trigger_evidence?.market_regime?.label??
+    alert?.strategy_evidence?.pre_breakout_fingerprint?.market_regime_label??
+    alert?.falcon_eye?.market_regime_label??
+    (typeof alert?.market_regime==='string'?alert.market_regime:null);
   const marketRegime=normalizeRegime(suppliedRegime||classifyEvaluationMarketRegime(context));
   const r9=object(alert?.falcon_eye);
   const fingerprintReady=object(r9.pre_expansion_fingerprint).data_ready===true;
@@ -281,11 +286,11 @@ function markOutcome(ret,horizon){
   const threshold=def?.[2]??1;
   return r>=threshold?'HIT':r<=-threshold*.7?'MISS':'NEUTRAL';
 }
-function priceMap(rows){
+function priceMap(rows,fallbackAt=Date.now()){
   const map=new Map();
   for(const r of list(rows)){
     const symbol=String(r?.symbol||'').trim().toUpperCase(),price=num(r?.lastPrice??r?.last_price??r?.price);
-    if(symbol&&price>0)map.set(symbol,{price,at:num(r?.at,Date.now())});
+    if(symbol&&price>0)map.set(symbol,{price,at:num(r?.at,fallbackAt)});
   }
   return map;
 }
@@ -366,7 +371,7 @@ export async function updatePreExpansionMarkouts(store,tickerRows,{now=Date.now(
   const loggedMarkouts=[];
   if(typeof store?.updatePreExpansionOutcomes!=='function')return {updated:0,pending:0,reason:'TRACKER_STORE_UNAVAILABLE'};
   let updated=0,pending=0,skippedByThrottle=false;
-  const quotes=priceMap(tickerRows);
+  const quotes=priceMap(tickerRows,now);
   await store.updatePreExpansionOutcomes(raw=>{
     const rawState=object(raw);
     const state=normalizeState(raw);
@@ -375,7 +380,7 @@ export async function updatePreExpansionMarkouts(store,tickerRows,{now=Date.now(
       list(rawState.records).some(row=>row?.market_regime!==normalizeRegime(row?.market_regime)||
         typeof row?.evaluation_eligible!=='boolean'||!Array.isArray(row?.missing_required_fields));
     if(now-state.last_price_update_at<PRICE_POLL_MIN_MS){
-      skippedByThrottle=true;pending=state.records.filter(x=>x.outcome_status!=='COMPLETE'&&x.entry_price>0).length;
+      skippedByThrottle=true;pending=state.records.filter(x=>x.evaluation_eligible===true&&x.outcome_status!=='COMPLETE'&&x.entry_price>0).length;
       if(cohortCleanup){state.updated_at=now;return state;}
       return false;
     }
@@ -388,7 +393,7 @@ export async function updatePreExpansionMarkouts(store,tickerRows,{now=Date.now(
       if(record.outcome_status==='COMPLETE')continue;
       if(record.entry_price===null||record.entry_price<=0)continue;
       const previousMarks=record.marks||{};
-      const one=updateOneRecord(record,quote.price,now);
+      const one=updateOneRecord(record,quote.price,quote.at);
       for(const [h] of HORIZONS){
         if(!previousMarks[h]&&record.marks?.[h])loggedMarkouts.push({signal_id:record.signal_id,radar:record.radar,symbol:record.symbol,signal_type:record.signal_type,horizon:h,detected_at:record.detected_at,observed_at:record.marks[h].observed_at,delay_ms:record.marks[h].delay_ms,entry_price:record.entry_price,price:record.marks[h].price,return_pct:record.marks[h].return_pct,outcome:record.marks[h].outcome,sample_quality:record.marks[h].sample_quality,max_favorable_pct:record.excursions?.[h]?.max_favorable_pct,max_adverse_pct:record.excursions?.[h]?.max_adverse_pct});
       }
