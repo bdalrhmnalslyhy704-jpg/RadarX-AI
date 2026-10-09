@@ -1,4 +1,5 @@
-FROM node:22-bookworm-slim
+# Docker Official Image mirrored on Amazon ECR Public to avoid Docker Hub pull throttling.
+FROM public.ecr.aws/docker/library/node:22-bookworm-slim
 
 WORKDIR /app
 
