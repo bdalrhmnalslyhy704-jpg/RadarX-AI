@@ -64,8 +64,8 @@ export function assessPreExpansionFingerprint(input={}){
     ?Number((volumeTrendScore*.55+tradeTrendScore*.45).toFixed(1))
     :Number.isFinite(volumeTrendScore)?volumeTrendScore:Number.isFinite(tradeTrendScore)?tradeTrendScore:null;
   const falseBreakout=input.falseBreakout===true;
-  const baseDetected=(Number.isFinite(baseScore)&&baseScore>=60)&&
-    (Number.isFinite(higherLowScore)&&higherLowScore>=60)&&
+  const structureDetected=(Number.isFinite(baseScore)&&baseScore>=60)&&Number.isFinite(higherLowScore)&&higherLowScore>=60;
+  const baseDetected=structureDetected&&
     ((Number.isFinite(compressionScore)&&compressionScore>=60)||compressionRatios.some(x=>x<=0.90));
   const volumeImproving=gradualVolume||(Number.isFinite(volumeRatio)&&volumeRatio>=1.18);
   const tradesImproving=gradualTrades||(Number.isFinite(tradeRatio)&&tradeRatio>=1.12);
