@@ -547,7 +547,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     volumeTrend,tradeTrend,relativeStrengthBtcPct,
     relativeStrengthMarketPct:hasFiniteNumber(marketContext?.relativeStrengthMarketPct)?Number(marketContext.relativeStrengthMarketPct):null,
     resistanceDistanceAtr,breakoutConfirmed:br5.broken,falseBreakout,
-    return5mPct:r5,return10mPct:r5_3,return15mPct:r15_3,
+    return5mPct:r5,return10mPct:null,return15mPct:r5_3,
     alreadyExtended:extended
   });
   const decisionBand=preExpansion.stage;
