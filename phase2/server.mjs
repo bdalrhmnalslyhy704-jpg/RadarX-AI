@@ -119,11 +119,15 @@ export async function startServer({
       ['RADAR4',liquidityAbsorptionRadar],['RADAR5',kahirRadar],['RADAR6',doomsdayRadar],
       ['RADAR7',alMuqawimRadar],['PROFESSOR_INTELLIGENCE',professorRadar],
       ['RADAR8',earlyExpansionRadar],['COIN_HUNTER',coinHunterRadar],
-      ['WHALE_ACCUMULATION',whaleAccumulationRadar],
-      ['RADAR9',falconEyeRadar]
+      ['WHALE_ACCUMULATION',whaleAccumulationRadar]
     ];
     startup.forEach(([name,instance],index)=>setTimeout(()=>safeStart(name,instance),index*700));
+  } else {
+    logger.info('Optional radar auto-start disabled; Falcon Eye remains an independent continuous recorder.');
   }
+  // Falcon Eye must keep recording real Spot discoveries for Android background replay even
+  // when RADARX_RADARS_AUTOSTART is unset/false for the other optional radars.
+  safeStart('RADAR9',falconEyeRadar);
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
   return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,multiAnalystRadar,symbolDeepAnalyzer,store,rest,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,multiAnalystRest,coinHunterRest,whaleAccumulationRest,marketRadarRest,push,close:async()=>{multiAnalystRadar.stop();await falconEyeRadar.stop();await whaleAccumulationRadar.stop();await coinHunterRadar.stop();await earlyExpansionRadar.stop();await professorRadar.stop();await alMuqawimRadar.stop();await doomsdayRadar.stop();await kahirRadar.stop();await liquidityAbsorptionRadar.stop();await rotationLagRadar.stop();await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
 }
