@@ -305,9 +305,16 @@ export async function updatePreExpansionMarkouts(store,tickerRows,{now=Date.now(
   let updated=0,pending=0,skippedByThrottle=false;
   const quotes=priceMap(tickerRows);
   await store.updatePreExpansionOutcomes(raw=>{
+    const rawState=object(raw);
     const state=normalizeState(raw);
-    if(now-state.last_price_update_at<PRICE_POLL_MIN_MS){skippedByThrottle=true;pending=state.records.filter(x=>x.outcome_status!=='COMPLETE'&&x.entry_price>0).length;return false;}
-    let changed=false;
+    const cohortCleanup=list(rawState.records).length!==state.records.length||
+      Object.keys(object(rawState.last_stage_by_key)).length!==Object.keys(state.last_stage_by_key).length;
+    if(now-state.last_price_update_at<PRICE_POLL_MIN_MS){
+      skippedByThrottle=true;pending=state.records.filter(x=>x.outcome_status!=='COMPLETE'&&x.entry_price>0).length;
+      if(cohortCleanup){state.updated_at=now;return state;}
+      return false;
+    }
+    let changed=cohortCleanup;
     const marketRegime=classifyEvaluationMarketRegime(marketContext);
     for(const record of state.records){
       const quote=quotes.get(record.symbol);
