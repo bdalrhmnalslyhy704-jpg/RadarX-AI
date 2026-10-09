@@ -89,7 +89,8 @@ async function diagnoseBackend(){
       badge.textContent='OFFLINE';
       badge.style.borderColor='#7d4650';
       badge.style.color='#ffd0d5';
-      statusText.textContent='تعذر الوصول إلى فحص صحة الخادم (HTTP '+String(health.status||0)+').';
+      const detail=health.error||('HTTP_'+String(health.status||0));
+      statusText.textContent='تعذر الوصول إلى خادم RadarX الأساسي أو الاحتياطي: '+detail+'. تأكد من الإنترنت ثم اضغط «فحص اتصال الخادم وبيانات السوق» لإعادة المحاولة.';
       return;
     }
     const validShape=market.status===200&&market.body&&Array.isArray(market.body.candidates);
@@ -100,7 +101,8 @@ async function diagnoseBackend(){
       badge.textContent='API OK / DATA ERROR';
       badge.style.borderColor='#8b7440';
       badge.style.color='#ffe0a0';
-      statusText.textContent='صحة الخادم ناجحة، لكن مسار Market Radar لم يرجع بيانات قابلة للقراءة (HTTP '+String(market.status||0)+'). أعد الفحص لاحقًا.';
+      const detail=market.error||('HTTP_'+String(market.status||0));
+      statusText.textContent='الخادم يردّ، لكن مسار بيانات السوق تعثر: '+detail+'. هذا ليس اتصالًا كاملًا؛ أعد الفحص أو راجع حالة الخادم.';
       return;
     }
     const degraded=ready.status===503||!backendLive||current===0;
