@@ -382,15 +382,16 @@ test('legacy rows with MIXED regime are normalized and excluded until their inpu
   assert.equal(report.groups.by_market_regime.RANGING.excluded_incomplete_records,1);
 });
 
-test('RANGING historical benchmark requires 30 positive and 30 adverse closed-OHLC cases',()=>{
+test('RANGING history comparison requires 30 positive and 30 adverse cases per radar',()=>{
   const horizons=['5m','15m','30m','60m','4h','24h'];
-  const rows=Array.from({length:60},(_,i)=>{
-    const positive=i<30;
+  const makeRows=count=>Array.from({length:count},(_,i)=>{
+    const positive=i<Math.floor(count/2);
     return {
-      signal_id:'historic-'+i,radar:i%2?'RADAR_8':'RADAR_9',symbol:'COIN'+i+'USDT',
+      signal_id:'historic-'+count+'-'+i,radar:i%2?'RADAR_8':'RADAR_9',symbol:'COIN'+i+'USDT',
       signal_type:'PRE_EXPANSION',market_regime:i%3===0?'MIXED':'RANGING',
       evaluation_eligible:true,missing_required_fields:[],evaluation_status:'ELIGIBLE',
       detected_at:NOW+i,entry_price:100,historical_evaluation:true,detected_before_move:true,
+      data_quality:100,data_quality_source:'NORMALIZED_REQUIRED_FIELD_COVERAGE',
       marks:Object.fromEntries(horizons.map(h=>[h,{sample_quality:'HISTORICAL_CLOSED_OHLC',return_pct:positive?3.5:-1.2,outcome:positive?'HIT':'MISS'}])),
       excursions:Object.fromEntries(horizons.map(h=>[h,{
         source:'HISTORICAL_CLOSED_OHLC',complete:true,
@@ -399,14 +400,29 @@ test('RANGING historical benchmark requires 30 positive and 30 adverse closed-OH
       }]))
     };
   });
-  const report=buildPreExpansionOutcomeReport({records:rows,now:NOW});
-  assert.equal(report.ranging_historical_sample.complete_historical_records,60);
-  assert.equal(report.ranging_historical_sample.positive_cases,30);
-  assert.equal(report.ranging_historical_sample.negative_cases,30);
-  assert.equal(report.ranging_historical_sample.ready_for_comparison,true);
-  assert.equal(report.ranging_historical_sample.sample_warning,null);
-  assert.equal(report.comparison.radar8.matured_4h,30);
-  assert.equal(report.comparison.radar9.matured_4h,30);
+  const overallOnly=buildPreExpansionOutcomeReport({records:makeRows(60),now:NOW});
+  assert.equal(overallOnly.ranging_historical_sample.complete_historical_records,60);
+  assert.equal(overallOnly.ranging_historical_sample.positive_cases,30);
+  assert.equal(overallOnly.ranging_historical_sample.negative_cases,30);
+  assert.equal(overallOnly.ranging_historical_sample.sample_ready,true);
+  assert.equal(overallOnly.ranging_historical_sample.ready_for_comparison,false);
+  assert.equal(overallOnly.ranging_historical_sample.comparison_warning,'NEED_30_POSITIVE_AND_30_NEGATIVE_COMPLETE_RANGING_CASES_PER_RADAR');
+  assert.equal(overallOnly.ranging_historical_sample.by_radar.RADAR_8.positive_cases,15);
+  assert.equal(overallOnly.ranging_historical_sample.by_radar.RADAR_9.negative_cases,15);
+
+  const comparable=buildPreExpansionOutcomeReport({records:makeRows(120),now:NOW});
+  assert.equal(comparable.ranging_historical_sample.complete_historical_records,120);
+  assert.equal(comparable.ranging_historical_sample.positive_cases,60);
+  assert.equal(comparable.ranging_historical_sample.negative_cases,60);
+  assert.equal(comparable.ranging_historical_sample.sample_ready,true);
+  assert.equal(comparable.ranging_historical_sample.ready_for_comparison,true);
+  assert.equal(comparable.ranging_historical_sample.comparison_warning,null);
+  assert.equal(comparable.ranging_historical_sample.by_radar.RADAR_8.positive_cases,30);
+  assert.equal(comparable.ranging_historical_sample.by_radar.RADAR_8.negative_cases,30);
+  assert.equal(comparable.ranging_historical_sample.by_radar.RADAR_9.positive_cases,30);
+  assert.equal(comparable.ranging_historical_sample.by_radar.RADAR_9.negative_cases,30);
+  assert.equal(comparable.comparison.radar8.matured_4h,60);
+  assert.equal(comparable.comparison.radar9.matured_4h,60);
 });
 
 test('compacts already saved benchmark/stablecoin rows even when live markout polling is throttled',async()=>{
