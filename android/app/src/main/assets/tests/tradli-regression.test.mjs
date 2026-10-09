@@ -7,11 +7,12 @@ import {
   requestJson
 } from '../radarx-backend-client.mjs';
 
-const [tradliActivity, mainActivity, page, suite] = await Promise.all([
+const [tradliActivity, mainActivity, page, suite, smoke] = await Promise.all([
   readFile(new URL('../../java/com/radarx/app/TradliActivity.java', import.meta.url), 'utf8'),
   readFile(new URL('../../java/com/radarx/app/MainActivity.java', import.meta.url), 'utf8'),
   readFile(new URL('../tradli.html', import.meta.url), 'utf8'),
-  readFile(new URL('../radarx-tradli-feature-suite.mjs', import.meta.url), 'utf8')
+  readFile(new URL('../radarx-tradli-feature-suite.mjs', import.meta.url), 'utf8'),
+  readFile(new URL('../../../../smoke-test.sh', import.meta.url), 'utf8')
 ]);
 
 test('TRADLI WebView allows the current Railway backend and its HTTPS fallback', () => {
@@ -64,4 +65,32 @@ test('backend client retries the legacy host if the primary host returns 404', a
   assert.equal(result.ok,true);
   assert.equal(result.base,BACKEND_FALLBACK_URLS[0]);
   assert.equal(calls.length,2);
+});
+
+
+test('TRADLI opens the separate native Activity through a dashboard UI target',()=>{
+  assert.match(page,/id="openTradliBtn"/);
+  assert.match(page,/window\.RadarXNative\.openTradli\(\)/);
+  assert.match(mainActivity,/public void openTradli\(\)[\\s\\S]*?startActivity\(intent\)/);
+  assert.match(mainActivity,/TRADLI_OPEN_REQUESTED/);
+  assert.match(tradliActivity,/TRADLI_ACTIVITY_ON_CREATE/);
+  assert.match(smoke,/uiautomator dump \/sdcard\/radarx-window\.xml/);
+  assert.match(smoke,/text="فتح TRADLI"/);
+  assert.doesNotMatch(smoke,/tap_y=385|tap_y=440|tap_y=245/);
+});
+
+test('TRADLI backend proxy remains HTTPS allow-listed and GET-only',()=>{
+  assert.match(tradliActivity,/if \(!"GET"\.equalsIgnoreCase\(request\.getMethod\(\)\)\)/);
+  assert.match(tradliActivity,/BACKEND_PROXY_FAILURE/);
+  assert.match(tradliActivity,/BACKEND_FALLBACK_ORIGIN/);
+});
+
+test('Chart Lab renders server-provided closed candles for 15m, 1h, and 4h',()=>{
+  assert.match(suite,/function renderCandleChart\(/);
+  assert.match(suite,/scan\.chart\?\.timeframes\?\.\[timeframe\]\?\.candles/);
+  assert.match(suite,/Number\(c\.close_time\)<=Date\.now\(\)/);
+  assert.match(suite,/Number\(c\.open_time\)<Number\(c\.close_time\)/);
+  assert.match(suite,/value="15m"/);
+  assert.match(suite,/value="1h"/);
+  assert.match(suite,/value="4h"/);
 });
