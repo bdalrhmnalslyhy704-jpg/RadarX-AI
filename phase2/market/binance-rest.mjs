@@ -60,7 +60,7 @@ export function estimateBinanceRequestWeight(path, query = {}) {
     }
     return 80;
   }
-  if (path === '/api/v3/klines' || path === '/api/v3/uiKlines') {
+  if (path === '/api/v3/klines') {
     const limit = Math.max(1, Number(query.limit) || 500);
     return limit <= 99 ? 1 : limit <= 499 ? 2 : limit <= 1000 ? 5 : 10;
   }
@@ -158,22 +158,6 @@ function cachedValue(key, now = Date.now()) {
     return null;
   }
   return item.value;
-}
-
-async function waitSharedBudget() {
-  const now = Date.now();
-  if (SHARED.rateLimitedUntil > now) {
-    await sleep(SHARED.rateLimitedUntil - now);
-  }
-  let t = Date.now();
-  SHARED.usedAt = SHARED.usedAt.filter(x => x > t - 60000);
-  if (SHARED.usedAt.length >= SHARED_MAX_REQUESTS_PER_MINUTE) {
-    const wait = Math.max(100, SHARED.usedAt[0] + 60000 - t);
-    await sleep(wait);
-  }
-  t = Date.now();
-  const gap = t - SHARED.lastRequestAt;
-  if (gap < SHARED_MIN_INTERVAL_MS) await sleep(SHARED_MIN_INTERVAL_MS - gap);
 }
 
 function annotateClientSuccess(client, result, sourceIndex = null) {
