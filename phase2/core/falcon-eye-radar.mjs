@@ -294,7 +294,7 @@ export function buildFalconEyeAnalysis({
     volumeRatio:va.volume_ratio,tradeRatio:va.trade_ratio,volumeTrend,tradeTrend,
     relativeStrengthBtcPct,relativeStrengthMarketPct:null,marketRegimeLabel,
     resistanceDistanceAtr,breakoutConfirmed:br.break_up,falseBreakout,
-    return5mPct:r5,return10mPct:r10,return15mPct:r20,
+    return5mPct:r5,return10mPct:r10,return15mPct:pct(Number(one.at(-1)?.close),Number(one.at(-16)?.close)),
     alreadyExtended:!notChasing
   });
   const eligible=Boolean((earlyStructure||ignition)&&
