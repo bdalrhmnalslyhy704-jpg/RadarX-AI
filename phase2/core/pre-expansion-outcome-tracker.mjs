@@ -47,13 +47,28 @@ function normalizeState(raw){
     .filter(row=>!EXCLUDED_EVALUATION_SYMBOLS.has(String(row?.symbol||'').toUpperCase()))
     .map(row=>{
       const current=object(row);
+      const marks={...object(current.marks)};
+      const provisionalMarks={...object(current.provisional_marks)};
+      const horizonStatus={...object(current.horizon_status)};
+      for(const [h,mark] of Object.entries(marks)){
+        if(mark?.sample_quality==='HISTORICAL_CLOSED_OHLC')continue;
+        provisionalMarks[h]??={...mark,status:'INCOMPLETE',reason:'LEGACY_MARK_NOT_CLOSED_OHLC'};
+        delete marks[h];
+        horizonStatus[h]={...object(horizonStatus[h]),status:'INCOMPLETE',
+          source:mark?.sample_quality||'LEGACY_LIVE_SAMPLE',reason:'LEGACY_MARK_NOT_CLOSED_OHLC'};
+      }
+      const historicalComplete=current.historical_evaluation===true&&
+        HORIZONS.every(([h])=>marks[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC');
+      const hasIncomplete=Object.values(horizonStatus).some(item=>item?.status==='INCOMPLETE')||
+        Object.keys(provisionalMarks).length>0||(current.outcome_status==='COMPLETE'&&!historicalComplete);
       const schemaCurrent=typeof current.evaluation_eligible==='boolean'&&Array.isArray(current.missing_required_fields);
       return {
-        ...current,
+        ...current,marks,provisional_marks:provisionalMarks,horizon_status:horizonStatus,
         market_regime:normalizeRegime(current.market_regime),
         evaluation_eligible:schemaCurrent?current.evaluation_eligible:false,
         missing_required_fields:schemaCurrent?current.missing_required_fields:['LEGACY_RECORD_NOT_REVALIDATED'],
-        evaluation_status:schemaCurrent?(current.evaluation_status||(current.evaluation_eligible?'ELIGIBLE':'EXCLUDED_INCOMPLETE')):'EXCLUDED_LEGACY_UNVALIDATED'
+        evaluation_status:schemaCurrent?(current.evaluation_status||(current.evaluation_eligible?'ELIGIBLE':'EXCLUDED_INCOMPLETE')):'EXCLUDED_LEGACY_UNVALIDATED',
+        outcome_status:historicalComplete?'COMPLETE':hasIncomplete?'INCOMPLETE':(current.outcome_status||'PENDING')
       };
     });
   return {
@@ -216,13 +231,23 @@ function makeSignal(alert,now,marketContext){
   const coverage=fieldCoverage({radar,symbol,stage,entry,detectedAt,marketRegime,metrics:m,reasons,fingerprintReady});
   const quality=coverage.score;
   const reportedQuality=num(alert?.data_quality??alert?.falcon_eye?.data_quality);
+  const signalScore=num(alert?.early_expansion_score??alert?.score??alert?.signal_score??
+    alert?.opportunity_score??alert?.potential_score??alert?.falcon_eye?.early_expansion_score??
+    alert?.falcon_eye?.score??alert?.falcon_eye?.metrics?.score);
+  const buildVersion='Build 224';
+  const buildCommit=String(process.env.RAILWAY_GIT_COMMIT_SHA??process.env.GITHUB_SHA??'').trim()||null;
+  const buildBranch=String(process.env.RAILWAY_GIT_BRANCH??'').trim()||null;
+  const archiveMissingFields=[...(signalScore===null?['signal_score']:[]),...(!buildCommit?['build_commit']:[])];
   const evaluationEligible=quality===100&&stage!=='DATA_INSUFFICIENT'&&!m.data_stale&&m.closed_candles_only;
   const evaluationStatus=evaluationEligible?'ELIGIBLE':'EXCLUDED_INCOMPLETE';
   const signalId=String(alert?.id||'').trim()||[radar,symbol,stage,detectedAt].join(':');
   const detectedBeforeMove=assessBeforeMove(alert,stage,m,extended);
   return {
     signal_id:signalId,radar,symbol,entry_price:entry,detected_at:detectedAt,
-    detected_at_iso:new Date(detectedAt).toISOString(),signal_type:stage,
+    created_at:detectedAt,detected_at_iso:new Date(detectedAt).toISOString(),
+    build_version:buildVersion,build_commit:buildCommit,build_branch:buildBranch,
+    signal_score:signalScore,score_source:signalScore===null?null:'SOURCE_SIGNAL_SCORE',
+    archive_missing_fields:archiveMissingFields,signal_type:stage,
     data_quality:quality,data_quality_source:'NORMALIZED_REQUIRED_FIELD_COVERAGE',
     reported_data_quality:reportedQuality,data_quality_status:
       stage==='DATA_INSUFFICIENT'?'INSUFFICIENT':
@@ -246,11 +271,15 @@ function makeSignal(alert,now,marketContext){
     initial_metrics:m,
     source:list(alert?.source).length?list(alert.source):[String(alert?.source||'UNKNOWN')],
     false_breakout:null,false_breakout_basis:null,
-    marks:{},
-    excursions:Object.fromEntries(HORIZONS.map(([h])=>[h,{max_favorable_pct:0,max_adverse_pct:0,complete:false}])),
-    first_2pct_at:null,first_3pct_at:null,max_favorable_pct:0,max_adverse_pct:0,
+    marks:{},provisional_marks:{},
+    horizon_status:Object.fromEntries(HORIZONS.map(([h,ms])=>[h,{status:'PENDING',
+      source:'BINANCE_CLOSED_OHLC',matures_at:detectedAt+ms,reason:'WAITING_FOR_HORIZON'}])),
+    excursions:Object.fromEntries(HORIZONS.map(([h])=>[h,{max_favorable_pct:null,max_adverse_pct:null,complete:false,
+      source:'HISTORICAL_CLOSED_OHLC',coverage_status:'INCOMPLETE_CLOSED_OHLC_WINDOW'}])),
+    provisional_excursions:Object.fromEntries(HORIZONS.map(([h])=>[h,{max_favorable_pct:0,max_adverse_pct:0,complete:false}])),
+    first_2pct_at:null,first_3pct_at:null,max_favorable_pct:null,max_adverse_pct:null,
     max_favorable_at:null,max_adverse_at:null,observations:0,last_observed_at:detectedAt,
-    observed_price_source:'SAMPLED_SPOT_TICKERS',historical_evaluation:false
+    observed_price_source:'BINANCE_CLOSED_OHLC_REQUIRED',historical_evaluation:false,outcome_status:'PENDING'
   };
 }
 
@@ -272,6 +301,9 @@ export async function recordPreExpansionSignals(store,alerts,{now=Date.now(),mar
       state.records.push(incoming);loggedSignals.push({
         signal_id:incoming.signal_id,radar:incoming.radar,symbol:incoming.symbol,
         signal_type:incoming.signal_type,entry_price:incoming.entry_price,detected_at:incoming.detected_at,
+        created_at:incoming.created_at,signal_score:incoming.signal_score,
+        build_version:incoming.build_version,build_commit:incoming.build_commit,build_branch:incoming.build_branch,
+        archive_missing_fields:incoming.archive_missing_fields,
         data_quality:incoming.data_quality,data_quality_source:incoming.data_quality_source,
         reported_data_quality:incoming.reported_data_quality,data_quality_status:incoming.data_quality_status,
         available_fields:incoming.available_fields,missing_required_fields:incoming.missing_required_fields,
@@ -284,7 +316,8 @@ export async function recordPreExpansionSignals(store,alerts,{now=Date.now(),mar
       recorded++;changed=true;
     }
     const cutoff=now-45*24*60*60*1000;
-    state.records=state.records.filter(x=>num(x.detected_at,0)>=cutoff||!HORIZONS.every(([h])=>x.marks?.[h]));
+    state.records=state.records.filter(x=>num(x.detected_at,0)>=cutoff||
+      !HORIZONS.every(([h])=>x.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC'));
     if(state.records.length>MAX_RECORDS)state.records=state.records.slice(-MAX_RECORDS);
     const stageKeys=Object.keys(state.last_stage_by_key);
     if(stageKeys.length>6000){
@@ -321,70 +354,70 @@ function updateOneRecord(record,price,now){
   let changed=false;
   if(record.last_observed_at!==now){record.observations=(record.observations||0)+1;record.last_observed_at=now;changed=true;}
   record.last_observed_price=price;
-  record.last_return_pct=Number(ret.toFixed(4));
+  record.last_provisional_return_pct=Number(ret.toFixed(4));
   if(age<=24*60*60_000){
-    if(record.max_favorable_pct===null||ret>record.max_favorable_pct){
-      record.max_favorable_pct=Number(ret.toFixed(4));record.max_favorable_at=now;changed=true;
+    if(record.provisional_max_favorable_pct==null||ret>record.provisional_max_favorable_pct){
+      record.provisional_max_favorable_pct=Number(ret.toFixed(4));record.provisional_max_favorable_at=now;changed=true;
     }
-    if(record.max_adverse_pct===null||ret<record.max_adverse_pct){
-      record.max_adverse_pct=Number(ret.toFixed(4));record.max_adverse_at=now;changed=true;
+    if(record.provisional_max_adverse_pct==null||ret<record.provisional_max_adverse_pct){
+      record.provisional_max_adverse_pct=Number(ret.toFixed(4));record.provisional_max_adverse_at=now;changed=true;
     }
-    if(record.first_2pct_at===null&&ret>=2){record.first_2pct_at=now;changed=true;}
-    if(record.first_3pct_at===null&&ret>=3){record.first_3pct_at=now;changed=true;}
+    if(record.provisional_first_2pct_at==null&&ret>=2){record.provisional_first_2pct_at=now;changed=true;}
+    if(record.provisional_first_3pct_at==null&&ret>=3){record.provisional_first_3pct_at=now;changed=true;}
   }
   for(const [h,ms] of HORIZONS){
-    const excursion=record.excursions?.[h]||{
+    const excursion=record.provisional_excursions?.[h]||{
       max_favorable_pct:0,max_adverse_pct:0,complete:false,samples:0,
       first_observed_at:null,last_observed_at:null,max_gap_ms:0
     };
     if(age<=ms&&!excursion.complete){
       const priorAt=num(excursion.last_observed_at,null);
       if(priorAt!==null)excursion.max_gap_ms=Math.max(num(excursion.max_gap_ms,0),now-priorAt);
-      if(excursion.first_observed_at===null||excursion.first_observed_at===undefined)excursion.first_observed_at=now;
+      if(excursion.first_observed_at==null)excursion.first_observed_at=now;
       excursion.last_observed_at=now;
       excursion.samples=(num(excursion.samples,0)||0)+1;
-      if(excursion.max_favorable_pct===null||ret>excursion.max_favorable_pct)excursion.max_favorable_pct=Number(ret.toFixed(4));
-      if(excursion.max_adverse_pct===null||ret<excursion.max_adverse_pct)excursion.max_adverse_pct=Number(ret.toFixed(4));
-      record.excursions[h]=excursion;changed=true;
+      if(ret>excursion.max_favorable_pct)excursion.max_favorable_pct=Number(ret.toFixed(4));
+      if(ret<excursion.max_adverse_pct)excursion.max_adverse_pct=Number(ret.toFixed(4));
+      record.provisional_excursions=record.provisional_excursions||{};
+      record.provisional_excursions[h]=excursion;changed=true;
     }
-    if(!record.marks?.[h]&&age>=ms){
-      record.marks=record.marks||{};
-      record.marks[h]={
+    if(!record.provisional_marks?.[h]&&age>=ms){
+      record.provisional_marks=record.provisional_marks||{};
+      record.provisional_marks[h]={
         price,observed_at:now,delay_ms:age-ms,return_pct:Number(ret.toFixed(4)),
-        outcome:markOutcome(ret,h),sample_quality:age-ms<=horizonTolerance(ms)?'NEAR_TARGET':'LATE_SAMPLE',
-        tolerance_ms:horizonTolerance(ms)
+        provisional_outcome:markOutcome(ret,h),sample_quality:'LIVE_TICKER_PROVISIONAL',
+        status:'INCOMPLETE',reason:'NOT_CLOSED_BINANCE_OHLC',tolerance_ms:horizonTolerance(ms)
       };
-      const firstAt=num(excursion.first_observed_at,null),lastAt=num(excursion.last_observed_at,null);
-      const endCoverageMs=Math.max(90_000,Math.min(5*60_000,ms*.10));
-      const gapLimitMs=Math.max(90_000,Math.min(5*60_000,ms*.25));
-      const startCovered=firstAt!==null&&firstAt<=record.detected_at+Math.max(60_000,ms*.10);
-      const endCovered=lastAt!==null&&lastAt>=record.detected_at+ms-endCoverageMs;
-      const samplesCovered=num(excursion.samples,0)>=3&&num(excursion.max_gap_ms,0)<=gapLimitMs;
-      excursion.complete=Boolean(startCovered&&endCovered&&samplesCovered);
-      excursion.coverage_status=excursion.complete?'COMPLETE_SAMPLED_WINDOW':'INCOMPLETE_SAMPLED_WINDOW';
-      excursion.coverage_required_samples=3;
-      record.excursions[h]=excursion;changed=true;
+      record.horizon_status=record.horizon_status||{};
+      if(record.marks?.[h]?.sample_quality!=='HISTORICAL_CLOSED_OHLC'){
+        record.horizon_status[h]={status:'INCOMPLETE',source:'LIVE_TICKER_PROVISIONAL',
+          reason:'WAITING_FOR_BINANCE_CLOSED_OHLC',matures_at:record.detected_at+ms};
+      }
+      changed=true;
     }
   }
   const breakout=record.resistance_price;
-  if(record.signal_type==='BREAKOUT_DEVELOPING'&&breakout>0&&record.false_breakout===null){
-    if(!record.breakout_crossed_at&&price>=breakout*1.001){
-      record.breakout_crossed_at=now;record.breakout_cross_price=price;changed=true;
-    }else if(record.breakout_crossed_at){
-      if(now-record.breakout_crossed_at<=FALSE_BREAKOUT_WINDOW_MS&&price<breakout*.998){
-        record.false_breakout=true;record.false_breakout_detected_at=now;record.false_breakout_basis='SAMPLED_SPOT_PRICE_REJECTION';changed=true;
-      }else if(now-record.breakout_crossed_at>FALSE_BREAKOUT_WINDOW_MS){
-        record.false_breakout=false;record.false_breakout_basis='SAMPLED_SPOT_PRICES_NO_REJECTION_WITHIN_15M';changed=true;
+  if(record.signal_type==='BREAKOUT_DEVELOPING'&&breakout>0&&record.provisional_false_breakout==null){
+    if(!record.provisional_breakout_crossed_at&&price>=breakout*1.001){
+      record.provisional_breakout_crossed_at=now;record.provisional_breakout_cross_price=price;changed=true;
+    }else if(record.provisional_breakout_crossed_at){
+      if(now-record.provisional_breakout_crossed_at<=FALSE_BREAKOUT_WINDOW_MS&&price<breakout*.998){
+        record.provisional_false_breakout=true;record.provisional_false_breakout_detected_at=now;
+        record.provisional_false_breakout_basis='SAMPLED_SPOT_PRICE_REJECTION';changed=true;
+      }else if(now-record.provisional_breakout_crossed_at>FALSE_BREAKOUT_WINDOW_MS){
+        record.provisional_false_breakout=false;record.provisional_false_breakout_basis='SAMPLED_SPOT_PRICES_NO_REJECTION_WITHIN_15M';changed=true;
       }
     }else if(age>=FALSE_BREAKOUT_WINDOW_MS){
-      record.false_breakout=false;record.false_breakout_basis='SAMPLED_SPOT_PRICES_NO_BREAKOUT_WITHIN_15M';changed=true;
+      record.provisional_false_breakout=false;record.provisional_false_breakout_basis='SAMPLED_SPOT_PRICES_NO_BREAKOUT_WITHIN_15M';changed=true;
     }
-  }else if(record.false_breakout===null&&age>=FALSE_BREAKOUT_WINDOW_MS){
-    record.false_breakout=false;record.false_breakout_basis='NO_BREAKOUT_REJECTION_OBSERVED';changed=true;
+  }else if(record.provisional_false_breakout==null&&age>=FALSE_BREAKOUT_WINDOW_MS){
+    record.provisional_false_breakout=false;record.provisional_false_breakout_basis='NO_BREAKOUT_REJECTION_OBSERVED';changed=true;
   }
-  if(HORIZONS.every(([h])=>record.marks?.[h])){
-    record.outcome_status=HORIZONS.every(([h])=>record.marks[h]?.sample_quality!=='LATE_SAMPLE')?'COMPLETE':'LATE_SAMPLES';
-  }else record.outcome_status='PENDING';
+  const fullyHistorical=HORIZONS.every(([h])=>record.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC')&&
+    HORIZONS.every(([h])=>record.excursions?.[h]?.source==='HISTORICAL_CLOSED_OHLC'&&record.excursions[h]?.complete===true);
+  if(fullyHistorical)record.outcome_status='COMPLETE';
+  else if(Object.values(object(record.horizon_status)).some(v=>v?.status==='INCOMPLETE'))record.outcome_status='INCOMPLETE';
+  else record.outcome_status='PENDING';
   return changed;
 }
 
@@ -445,6 +478,23 @@ function signalAlreadyExtended(signal){
     Math.abs(num(m.return_15m_pct,0))>=6;
 }
 function returnPct(price,entry){return entry>0?Number(((price/entry-1)*100).toFixed(4)):null;}
+function closedWindowCoverage(rows,start,end,intervalMs){
+  const relevant=list(rows).filter(c=>Number(c.openTime)>=start&&Number(c.closeTime)<=end&&
+    Number.isFinite(Number(c.high))&&Number.isFinite(Number(c.low))&&Number(c.high)>0&&Number(c.low)>0)
+    .sort((a,b)=>Number(a.openTime)-Number(b.openTime));
+  const expected=Math.max(1,Math.floor((end-start)/intervalMs));
+  let maxGap=0;
+  for(let i=1;i<relevant.length;i++)maxGap=Math.max(maxGap,Number(relevant[i].openTime)-Number(relevant[i-1].openTime));
+  const firstAt=relevant.length?Number(relevant[0].openTime):null;
+  const lastAt=relevant.length?Number(relevant.at(-1).closeTime):null;
+  const enough=relevant.length>=Math.max(1,expected-1);
+  const startCovered=firstAt!==null&&firstAt<=start+intervalMs;
+  const endCovered=lastAt!==null&&lastAt>=end-intervalMs;
+  const gapsCovered=maxGap<=intervalMs*2+1;
+  return {complete:Boolean(enough&&startCovered&&endCovered&&gapsCovered),
+    expected_candles:expected,sample_count:relevant.length,max_gap_ms:maxGap,
+    start_covered:startCovered,end_covered:endCovered,gaps_covered:gapsCovered};
+}
 
 export function evaluateHistoricalPreExpansionSignal(signal,{candles1m=[],candles5m=[],now=Date.now()}={}){
   const entry=num(signal?.entry_price??signal?.price),detectedAt=num(signal?.detected_at??signal?.detectedAt);
@@ -453,37 +503,62 @@ export function evaluateHistoricalPreExpansionSignal(signal,{candles1m=[],candle
   const all=[...one,...five].filter(c=>Number(c.closeTime)>detectedAt&&Number(c.closeTime)<=detectedAt+24*60*60_000)
     .sort((a,b)=>Number(a.closeTime)-Number(b.closeTime));
   const record={
-    ...signal,entry_price:entry,detected_at:detectedAt,
-    market_regime:marketRegimeForSignal(signal),
-    already_extended_at_detection:signalAlreadyExtended(signal),
+    ...signal,entry_price:entry,detected_at:detectedAt,created_at:num(signal?.created_at,detectedAt),
+    market_regime:marketRegimeForSignal(signal),already_extended_at_detection:signalAlreadyExtended(signal),
     detected_before_move:signal?.detected_before_move??!signalAlreadyExtended(signal),
-    marks:{},excursions:{},historical_evaluation:true,
-    observed_price_source:'HISTORICAL_CLOSED_OHLC',
-    max_favorable_pct:0,max_adverse_pct:0,
-    false_breakout:null,false_breakout_basis:null
+    marks:{},horizon_status:{},excursions:{},historical_evaluation:false,
+    observed_price_source:'HISTORICAL_CLOSED_OHLC',max_favorable_pct:null,max_adverse_pct:null,
+    first_3pct_at:signal?.first_3pct_at??null,false_breakout:null,false_breakout_basis:null
   };
-  const sourceFor=h=>h==='4h'||h==='24h'?five:one;
   for(const [h,ms] of HORIZONS){
-    const end=detectedAt+ms,source=sourceFor(h);
-    const intervalMs=source===five?5*60_000:60_000;
-    const windowRows=source.filter(c=>Number(c.openTime)>=detectedAt&&Number(c.closeTime)<=end);
-    const mark=source.find(c=>Number(c.closeTime)>=end&&Number(c.closeTime)<=now);
-    if(mark&&Number(mark.closeTime)-end<=Math.max(2*intervalMs,90_000)){
+    const end=detectedAt+ms,source=(h==='4h'||h==='24h')?five:one;
+    const intervalMs=source===five?5*60_000:60_000,tolerance=Math.max(2*intervalMs,90_000);
+    const windowRows=source.filter(c=>Number(c.openTime)>=detectedAt&&Number(c.closeTime)<=end&&
+      Number(c.high)>0&&Number(c.low)>0).sort((a,b)=>Number(a.closeTime)-Number(b.closeTime));
+    const mark=source.filter(c=>Number(c.closeTime)>=end&&Number(c.closeTime)<=now)
+      .sort((a,b)=>Number(a.closeTime)-Number(b.closeTime))[0]||null;
+    const isMature=now>=end;
+    let markReady=false;
+    if(mark&&Number(mark.closeTime)-end<=tolerance){
       const ret=returnPct(Number(mark.close),entry);
-      record.marks[h]={price:Number(mark.close),observed_at:Number(mark.closeTime),delay_ms:Number(mark.closeTime)-end,return_pct:ret,outcome:markOutcome(ret,h),sample_quality:'HISTORICAL_CLOSED_OHLC',tolerance_ms:Math.max(2*intervalMs,90_000)};
+      if(ret!==null){
+        record.marks[h]={price:Number(mark.close),observed_at:Number(mark.closeTime),
+          delay_ms:Number(mark.closeTime)-end,return_pct:ret,outcome:markOutcome(ret,h),
+          sample_quality:'HISTORICAL_CLOSED_OHLC',source_interval:h==='4h'||h==='24h'?'5m':'1m',
+          source_open_time:Number(mark.openTime),source_close_time:Number(mark.closeTime),tolerance_ms:tolerance};
+        markReady=true;
+      }
     }
+    const coverage=closedWindowCoverage(source,detectedAt,end,intervalMs);
     const valid=windowRows.filter(c=>Number(c.high)>0&&Number(c.low)>0);
     if(valid.length){
       const maxHigh=Math.max(...valid.map(c=>Number(c.high))),minLow=Math.min(...valid.map(c=>Number(c.low)));
-      record.excursions[h]={max_favorable_pct:Math.max(0,returnPct(maxHigh,entry)),max_adverse_pct:Math.min(0,returnPct(minLow,entry)),max_high:maxHigh,min_low:minLow,complete:Boolean(record.marks[h]),source:'HISTORICAL_CLOSED_OHLC'};
-      if(record.max_favorable_pct===null||record.excursions[h].max_favorable_pct>record.max_favorable_pct)record.max_favorable_pct=record.excursions[h].max_favorable_pct;
-      if(record.max_adverse_pct===null||record.excursions[h].max_adverse_pct<record.max_adverse_pct)record.max_adverse_pct=record.excursions[h].max_adverse_pct;
+      record.excursions[h]={max_favorable_pct:Math.max(0,returnPct(maxHigh,entry)),
+        max_adverse_pct:Math.min(0,returnPct(minLow,entry)),max_high:maxHigh,min_low:minLow,
+        complete:Boolean(coverage.complete),coverage_status:coverage.complete?'COMPLETE_CLOSED_OHLC_WINDOW':'INCOMPLETE_CLOSED_OHLC_WINDOW',
+        expected_samples:coverage.expected_candles,samples:coverage.sample_count,max_gap_ms:coverage.max_gap_ms,
+        source:'HISTORICAL_CLOSED_OHLC',source_interval:h==='4h'||h==='24h'?'5m':'1m'};
+    }else{
+      record.excursions[h]={max_favorable_pct:null,max_adverse_pct:null,complete:false,
+        coverage_status:'INCOMPLETE_CLOSED_OHLC_WINDOW',expected_samples:coverage.expected_candles,
+        samples:0,max_gap_ms:0,source:'HISTORICAL_CLOSED_OHLC',source_interval:h==='4h'||h==='24h'?'5m':'1m'};
     }
+    const excursionComplete=record.excursions[h].complete===true;
+    record.horizon_status[h]={status:!isMature?'PENDING':markReady?'COMPLETE':'INCOMPLETE',
+      source:'HISTORICAL_CLOSED_OHLC',matures_at:end,mark_available:markReady,
+      excursion_status:excursionComplete?'COMPLETE':'INCOMPLETE',
+      reason:!isMature?'WAITING_FOR_HORIZON':!markReady?'NO_CLOSED_CANDLE_WITHIN_TOLERANCE':
+        !excursionComplete?'INCOMPLETE_CLOSED_CANDLE_WINDOW':null,
+      sample_count:coverage.sample_count,expected_samples:coverage.expected_candles,max_gap_ms:coverage.max_gap_ms};
+    if(record.excursions[h].max_favorable_pct!==null&&
+      (record.max_favorable_pct===null||record.excursions[h].max_favorable_pct>record.max_favorable_pct))
+      record.max_favorable_pct=record.excursions[h].max_favorable_pct;
+    if(record.excursions[h].max_adverse_pct!==null&&
+      (record.max_adverse_pct===null||record.excursions[h].max_adverse_pct<record.max_adverse_pct))
+      record.max_adverse_pct=record.excursions[h].max_adverse_pct;
   }
-  if(record.first_3pct_at===undefined||record.first_3pct_at===null){
-    const crossed=all.filter(c=>Number(c.high)>=entry*1.03).sort((a,b)=>Number(a.closeTime)-Number(b.closeTime))[0];
-    record.first_3pct_at=crossed?Number(crossed.closeTime):null;
-  }
+  const crossed=all.filter(c=>Number(c.high)>=entry*1.03).sort((a,b)=>Number(a.closeTime)-Number(b.closeTime))[0];
+  record.first_3pct_at=crossed?Number(crossed.closeTime):null;
   if(record.signal_type==='BREAKOUT_DEVELOPING'&&num(record.resistance_price)>0){
     const cutoff=detectedAt+FALSE_BREAKOUT_WINDOW_MS;
     const bars=one.filter(c=>Number(c.openTime)>=detectedAt&&Number(c.closeTime)<=cutoff);
@@ -492,7 +567,11 @@ export function evaluateHistoricalPreExpansionSignal(signal,{candles1m=[],candle
     record.false_breakout_detected_at=falseBar?Number(falseBar.closeTime):null;
     record.false_breakout_basis=record.false_breakout===null?'INSUFFICIENT_15M_CLOSED_CANDLES':'HISTORICAL_1M_HIGH_CLOSE';
   }
-  record.outcome_status=HORIZONS.every(([h])=>Boolean(record.marks[h]))?'COMPLETE':'PARTIAL';
+  const everyMark=HORIZONS.every(([h])=>record.marks[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC');
+  const everyWindow=HORIZONS.every(([h])=>record.excursions[h]?.source==='HISTORICAL_CLOSED_OHLC'&&record.excursions[h]?.complete===true);
+  record.historical_evaluation=everyMark&&everyWindow;
+  record.outcome_status=record.historical_evaluation?'COMPLETE':
+    HORIZONS.some(([h])=>record.horizon_status[h]?.status==='INCOMPLETE')?'INCOMPLETE':'PENDING';
   return {ok:true,record,source:'HISTORICAL_CLOSED_OHLC'};
 }
 
@@ -503,7 +582,7 @@ function average(xs){
 function percent(n,d){return d>0?Number((n/d*100).toFixed(2)):null;}
 function horizonStats(rows,h){
   const valid=rows.filter(r=>r.evaluation_eligible===true&&
-    ['NEAR_TARGET','HISTORICAL_CLOSED_OHLC'].includes(r.marks?.[h]?.sample_quality)&&
+    r.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC'&&
     Number.isFinite(num(r.marks?.[h]?.return_pct)));
   const returns=valid.map(r=>Number(r.marks[h].return_pct));
   const hits=valid.filter(r=>r.marks[h].outcome==='HIT').length;
@@ -548,10 +627,10 @@ function summarizeGroup(rows){
   const eligible=rows.filter(r=>r.evaluation_eligible===true);
   const measurable=eligible.filter(r=>PERFORMANCE_STAGES.has(r.signal_type));
   const completed4h=measurable.filter(r=>r.marks?.['4h']&&
-    ['NEAR_TARGET','HISTORICAL_CLOSED_OHLC'].includes(r.marks['4h'].sample_quality)&&
+    r.marks['4h'].sample_quality==='HISTORICAL_CLOSED_OHLC'&&
     r.excursions?.['4h']?.complete===true);
   const completed24h=eligible.filter(r=>r.marks?.['24h']&&
-    ['NEAR_TARGET','HISTORICAL_CLOSED_OHLC'].includes(r.marks['24h'].sample_quality)&&
+    r.marks['24h'].sample_quality==='HISTORICAL_CLOSED_OHLC'&&
     r.excursions?.['24h']?.complete===true);
   const impacts=completed4h.filter(r=>num(r.excursions?.['4h']?.max_favorable_pct,-Infinity)>=3).length;
   const falseSignals=completed4h.filter(r=>num(r.excursions?.['4h']?.max_favorable_pct,-Infinity)<3).length;
@@ -752,7 +831,8 @@ export async function importHistoricalPreExpansionSignals(store,alerts,{now=Date
       imported++;changed=true;
     }
     const cutoff=now-HISTORICAL_WINDOW_MS;
-    state.records=state.records.filter(x=>num(x.detected_at,0)>=cutoff||!HORIZONS.every(([h])=>x.marks?.[h]));
+    state.records=state.records.filter(x=>num(x.detected_at,0)>=cutoff||
+      !HORIZONS.every(([h])=>x.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC'));
     if(state.records.length>MAX_RECORDS)state.records=state.records.slice(-MAX_RECORDS);
     if(changed){state.updated_at=now;return state;}
     return false;
@@ -797,41 +877,63 @@ export async function backfillHistoricalPreExpansionOutcomes(store,rest,{now=Dat
         rest.klines(signal.symbol,'5m',{limit:300,startTime:detectedAt,endTime:detectedAt+25*60*60_000})
       ]);
       const closedOne=candleRows(one?.candles,now),closedFive=candleRows(five?.candles,now);
-      if(closedOne.length<55||closedFive.length<270){skipped++;logger?.warn?.('[PRE_EXPANSION_HISTORICAL_BACKFILL_INSUFFICIENT] '+JSON.stringify({signal_id:signal.signal_id,symbol:signal.symbol,one_minute_closed:closedOne.length,five_minute_closed:closedFive.length}));continue;}
+      if(closedOne.length<55||closedFive.length<270){
+        logger?.warn?.('[PRE_EXPANSION_HISTORICAL_BACKFILL_INSUFFICIENT] '+JSON.stringify({
+          signal_id:signal.signal_id,symbol:signal.symbol,one_minute_closed:closedOne.length,
+          five_minute_closed:closedFive.length,action:'SAVE_PER_HORIZON_INCOMPLETE_AND_RETRY'
+        }));
+      }
       const result=evaluateHistoricalPreExpansionSignal(signal,{candles1m:closedOne,candles5m:closedFive,now});
       if(!result.ok){skipped++;continue;}
       let event=null;
       await store.updatePreExpansionOutcomes(raw=>{
         const state=normalizeState(raw),current=state.records.find(x=>x.signal_id===signal.signal_id);
         if(!current||current.historical_evaluation===true)return false;
-        current.live_marks=current.live_marks||{...object(current.marks)};
-        current.live_excursions=current.live_excursions||{...object(current.excursions)};
         const historical=result.record;
-        const covered=[];
+        const covered=[],completeWindows=[];
+        current.provisional_marks={...object(current.provisional_marks)};
+        for(const [h,mark] of Object.entries(object(current.marks))){
+          if(mark?.sample_quality!=='HISTORICAL_CLOSED_OHLC')
+            current.provisional_marks[h]??={...mark,status:'INCOMPLETE',reason:'LEGACY_MARK_NOT_CLOSED_OHLC'};
+        }
+        current.marks={};current.excursions={};
+        current.horizon_status={...object(historical.horizon_status)};
         for(const [h] of HORIZONS){
           if(historical.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC'){
             current.marks[h]=historical.marks[h];covered.push(h);
           }
           if(historical.excursions?.[h]?.source==='HISTORICAL_CLOSED_OHLC'){
             current.excursions[h]=historical.excursions[h];
+            if(historical.excursions[h]?.complete===true)completeWindows.push(h);
+          }
+          if(!current.marks[h]){
+            current.horizon_status[h]={...object(current.horizon_status[h]),status:'INCOMPLETE',
+              source:'HISTORICAL_CLOSED_OHLC',reason:'NO_CLOSED_CANDLE_WITHIN_TOLERANCE',
+              checked_at:now,matures_at:Number(current.detected_at)+HORIZONS.find(x=>x[0]===h)[1]};
+          }else if(current.excursions[h]?.complete!==true){
+            current.horizon_status[h]={...object(current.horizon_status[h]),status:'COMPLETE',
+              excursion_status:'INCOMPLETE',reason:'INCOMPLETE_CLOSED_CANDLE_WINDOW',checked_at:now};
           }
         }
-        current.first_3pct_at=historical.first_3pct_at??current.first_3pct_at;
-        current.first_2pct_at=historical.first_2pct_at??current.first_2pct_at;
-        current.max_favorable_pct=Number.isFinite(historical.max_favorable_pct)?historical.max_favorable_pct:current.max_favorable_pct;
-        current.max_adverse_pct=Number.isFinite(historical.max_adverse_pct)?historical.max_adverse_pct:current.max_adverse_pct;
+        current.first_3pct_at=historical.first_3pct_at;
+        current.max_favorable_pct=historical.max_favorable_pct;
+        current.max_adverse_pct=historical.max_adverse_pct;
         if(historical.false_breakout!==null)current.false_breakout=historical.false_breakout;
-        current.false_breakout_detected_at=historical.false_breakout_detected_at??current.false_breakout_detected_at;
-        current.false_breakout_basis=historical.false_breakout_basis??current.false_breakout_basis;
+        current.false_breakout_detected_at=historical.false_breakout_detected_at??null;
+        current.false_breakout_basis=historical.false_breakout_basis??null;
         current.historical_evaluation_horizons=covered;
-        current.historical_evaluation=HORIZONS.every(([h])=>covered.includes(h));
-        current.observed_price_source=current.historical_evaluation?'HISTORICAL_CLOSED_OHLC':'MIXED_LIVE_AND_HISTORICAL';
+        current.historical_complete_excursion_horizons=completeWindows;
+        current.historical_evaluation=HORIZONS.every(([h])=>covered.includes(h)&&completeWindows.includes(h));
+        current.observed_price_source='HISTORICAL_CLOSED_OHLC';
         current.historical_evaluated_at=now;
-        current.outcome_status=HORIZONS.every(([h])=>Boolean(current.marks?.[h]))
-          ?(HORIZONS.every(([h])=>current.marks[h]?.sample_quality!=='LATE_SAMPLE')?'COMPLETE':'LATE_SAMPLES')
-          :'PARTIAL';
+        current.outcome_status=current.historical_evaluation?'COMPLETE':'INCOMPLETE';
         current.updated_at=now;state.updated_at=now;
-        event={signal_id:current.signal_id,radar:current.radar,symbol:current.symbol,signal_type:current.signal_type,historical_horizons:covered,complete:current.historical_evaluation,max_favorable_pct:current.max_favorable_pct,max_adverse_pct:current.max_adverse_pct,false_breakout:current.false_breakout};
+        event={signal_id:current.signal_id,radar:current.radar,symbol:current.symbol,signal_type:current.signal_type,
+          created_at:current.created_at??current.detected_at,entry_price:current.entry_price,
+          historical_horizons:covered,complete_excursion_horizons:completeWindows,
+          horizon_status:current.horizon_status,complete:current.historical_evaluation,
+          outcome_status:current.outcome_status,max_favorable_pct:current.max_favorable_pct,
+          max_adverse_pct:current.max_adverse_pct,false_breakout:current.false_breakout};
         return state;
       });
       if(event){evaluated++;logger?.info?.('[PRE_EXPANSION_HISTORICAL_BACKFILL] '+JSON.stringify(event));}
