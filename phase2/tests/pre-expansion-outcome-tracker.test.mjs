@@ -283,11 +283,55 @@ test('Radar 8 alert history can be durably read by the internal retrospective wo
 });
 
 
+test('Radar 8 production alert field aliases reach complete coverage without changing the detector score',async()=>{
+  await withStore(async store=>{
+    const alert={
+      id:'EARLY_EXPANSION:ARBUSDT:'+NOW,event:'EARLY_EXPANSION_RADAR',radar:'EARLY_EXPANSION_RADAR',
+      symbol:'ARBUSDT',market:'SPOT',price:1.25,price_change_24h:1.8,
+      decision_band:'PRE_EXPANSION',potential_label:'PRE_EXPANSION',data_quality:100,data_stale:false,
+      detected_at:NOW,processed_at:NOW,closed_candles_only:true,
+      price_change_windows:{
+        price_change_5m_pct:.2,price_change_10m_pct:.35,price_change_15m_pct:.55,
+        relative_strength_vs_btc_pct:.22,relative_strength_vs_market_pct:.4,
+        five_min_resistance:1.28,rvol_5m:1.35,trade_ratio:1.2,atr_ratio:.8
+      },
+      trigger_evidence:{market_regime:{label:'MIXED'}},
+      reason_codes:['RVOL_5M_ACCELERATION','HIGHER_LOW_SEQUENCE'],
+      source:'Binance Public REST'
+    };
+    await recordPreExpansionSignals(store,[alert],{now:NOW});
+    const row=(await store.getPreExpansionOutcomes()).records[0];
+    assert.equal(row.data_quality,100);
+    assert.equal(row.evaluation_eligible,true);
+    assert.equal(row.market_regime,'RANGING');
+    assert.deepEqual(row.missing_required_fields,[]);
+    assert.equal(row.initial_metrics.return_10m_pct,.35);
+    assert.equal(row.initial_metrics.volume_ratio,1.35);
+    assert.equal(row.initial_metrics.trade_ratio,1.2);
+  });
+});
+
+test('a single late sample may create a point mark but cannot certify complete MFE/MAE coverage',async()=>{
+  await withStore(async store=>{
+    const at=NOW+100_000;
+    await recordPreExpansionSignals(store,[signal({symbol:'SPARSEUSDT',stage:'WATCH_EARLY',at,regime:'RANGING'})],{now:at});
+    await updatePreExpansionMarkouts(store,[{symbol:'SPARSEUSDT',lastPrice:101}],{now:at+30_000});
+    await updatePreExpansionMarkouts(store,[{symbol:'SPARSEUSDT',lastPrice:101.5}],{now:at+5*60_000+30_000});
+    const row=(await store.getPreExpansionOutcomes()).records[0];
+    assert.equal(row.marks['5m'].sample_quality,'NEAR_TARGET');
+    assert.equal(row.excursions['5m'].complete,false);
+    assert.equal(row.excursions['5m'].coverage_status,'INCOMPLETE_SAMPLED_WINDOW');
+    const report=buildPreExpansionOutcomeReport(await store.getPreExpansionOutcomes());
+    assert.equal(report.groups.by_radar.RADAR_8.horizons['5m'].excursion_samples,0);
+    assert.equal(report.groups.by_radar.RADAR_8.horizons['5m'].avg_max_favorable_pct,null);
+  });
+});
+
 test('incomplete signals are saved for audit but excluded from markout updates and performance cohorts',async()=>{
   await withStore(async store=>{
     await recordPreExpansionSignals(store,[signal({
       symbol:'PARTIALUSDT',stage:'PRE_EXPANSION',regime:'RANGING',
-      metrics:{return_10m_pct:null,relative_strength_vs_btc_pct:null,volume_ratio:null,trade_ratio:null,atr_ratio:null}
+      metrics:{return_10m_pct:null,price_change_10m_pct:null,relative_strength_vs_btc_pct:null,volume_ratio:null,trade_ratio:null,atr_ratio:null}
     })],{now:NOW});
     const before=(await store.getPreExpansionOutcomes()).records[0];
     assert.equal(before.data_quality<100,true);
