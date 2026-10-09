@@ -143,7 +143,7 @@ for attempt in $(seq 1 20); do
   if printf '%s\n' "$TRADLI_LOGS" | grep -Fq "TRADLI page boot error:"; then
     echo "::error::TRADLI feature suite failed during embedded WebView bootstrap"
     printf '%s\n' "$TRADLI_LOGS"
-    return 1 2>/dev/null || exit 1
+    exit 1
   fi
   sleep 1
 done
