@@ -1,3 +1,4 @@
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import {buildMoveAlert,buildEarlyWakeAlert,buildPreExplosionAlert,rankPreExplosionTickerRows,EarlyMoveSentinel} from '../core/early-move-sentinel.mjs';
 import {buildFastImpulseContext} from '../market/universe-scanner.mjs';
