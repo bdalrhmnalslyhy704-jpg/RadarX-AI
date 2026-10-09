@@ -2,7 +2,7 @@ import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.m
 import {updateMarketPulseHistory} from './falcon-market-pulse.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
-import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
+import {assessPreExpansionFingerprint,measureGradualParticipation,assessQuietBaseActivityShock,createActivityShockWatchEvent} from './pre-expansion-fingerprint.mjs';
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
 
 function normalizeRadarTickerRow(row,quote){
@@ -176,6 +176,7 @@ export function buildFalconEyeAnalysis({
     return {eligible:false,stage:'INSUFFICIENT_DATA',pre_expansion_stage:'DATA_INSUFFICIENT',pre_expansion_fingerprint:{stage:'DATA_INSUFFICIENT',reason:'CLOSED_CANDLES_INSUFFICIENT'},score:null,closed_candles_only:true,one_minute_count:one.length,five_minute_count:five.length};
   }
   const price=finite(ticker.lastPrice,null);
+  const activityShock=assessQuietBaseActivityShock({fiveMinute:five,oneMinute:one,ticker,now,config});
   const move24=hasFiniteValue(ticker.priceChange24h)?Number(ticker.priceChange24h):null;
   const closes=one.map(x=>Number(x.close));
   const r1=pct(Number(one.at(-1)?.close),Number(one.at(-2)?.close));
@@ -269,7 +270,7 @@ export function buildFalconEyeAnalysis({
     momentumScore>=58,
     volumeScore>=62,
     tradeScore>=60,
-    takerScore>=62,
+    (takerScore>=62||activityShock.classification==='TECHNICAL_PRE_EXPANSION'),
     structureScore>=68,
     resistanceScore>=70,
     relativeScore>=60,
@@ -287,7 +288,7 @@ export function buildFalconEyeAnalysis({
     (!Number.isFinite(resistanceGap)||resistanceGap>=-1.2);
   const earlyStructure=
     score>=78&&confirmations>=8&&notChasing&&
-    volumeScore>=60&&tradeScore>=58&&takerScore>=60&&
+    volumeScore>=60&&tradeScore>=58&&(takerScore>=60||activityShock.classification==='TECHNICAL_PRE_EXPANSION')&&
     (structureScore>=68||hl>=70)&&
     (Number.isFinite(resistanceGap)&&resistanceGap<=1.4||br.break_up);
   const ignition=
@@ -316,12 +317,14 @@ export function buildFalconEyeAnalysis({
     return5mPct:r5,return10mPct:r10,return15mPct:pct(Number(one.at(-1)?.close),Number(one.at(-16)?.close)),
     alreadyExtended:!notChasing
   });
+  const activityShockWatchOnly=activityShock.classification==='TECHNICAL_PRE_EXPANSION'&&takerScore<62;
   const eligible=Boolean((earlyStructure||ignition)&&
-    (preExpansion.stage==='PRE_EXPANSION'||preExpansion.stage==='BREAKOUT_DEVELOPING'));
+    (preExpansion.stage==='PRE_EXPANSION'||preExpansion.stage==='BREAKOUT_DEVELOPING')&&!activityShockWatchOnly);
   const stage=ignition?'IGNITION':earlyStructure?'PRE_ATTACK':score>=68?'BUILDING':'WATCH';
   const reasons=[];
   const push=(ok,s)=>{if(ok)reasons.push(s);};
   push(quietScore>=72,'قاعدة هادئة قبل الحركة');
+  push(activityShock.detected,'صدمة حجم وعدد صفقات على شموع مغلقة — مراقبة فقط');
   push(compressionScore>=70,'انكماش ATR/Bollinger');
   push(va.volume_ratio>=1.25,'تسارع الحجم');
   push(va.trade_ratio>=1.20,'تسارع عدد الصفقات');
@@ -336,7 +339,7 @@ export function buildFalconEyeAnalysis({
   push(liq.short_liquidation_notional>0,'تصفية مراكز بيع ظاهرة');
   push(expansionScore>=70,'انتقال نظام التذبذب إلى توسع');
   return {
-    eligible,stage,pre_expansion_stage:preExpansion.stage,pre_expansion_fingerprint:preExpansion,market_regime_label:marketRegimeLabel,closed_candles_only:true,score:Number(score.toFixed(1)),
+    eligible,stage,pre_expansion_stage:preExpansion.stage,pre_expansion_fingerprint:preExpansion,activity_shock:activityShock,activity_shock_watch_only:activityShockWatchOnly,market_regime_label:marketRegimeLabel,closed_candles_only:true,score:Number(score.toFixed(1)),
     confirmation_count:confirmations,not_chasing:notChasing,
     anti_chase_penalty:Number(antiChasePenalty.toFixed(1)),
     metrics:{
@@ -347,7 +350,7 @@ export function buildFalconEyeAnalysis({
       bollinger_width:bb.width,bollinger_ratio:bb.ratio,atr_ratio:atr.ratio,range_ratio:rangeRatio,efficiency_ratio:efficiency,
       close_location_pct:closeLocation,higher_low_score:hl,
       relative_strength_5m_spread_pct:rel.spread_5m,relative_strength_15m_spread_pct:rel.spread_15m,
-      futures_spot_volume_ratio:d.futures_spot_volume_ratio,open_interest:d.open_interest,oi_change_pct:d.oi_change_pct,
+      futures_spot_volume_ratio:d.futures_spot_volume_ratio,open_interest:d.open_interest,oi_change_pct:d.oi_change_pct,activity_shock:activityShock,
       funding_rate:d.funding_rate,short_liquidation_notional:liq.short_liquidation_notional,long_liquidation_notional:liq.long_liquidation_notional
     },
     component_scores:{
@@ -626,6 +629,11 @@ export class FalconEyeRadar {
       ticker:row,oneMinute:one.candles,fiveMinute:five.candles,btcOneMinute:btcContext.one||[],btcFiveMinute:btcContext.five||[],
       futures:fd.futures,previousFutures:previous,liquidations:fd.liquidations
     },now,this.config);
+    const shockEvent=createActivityShockWatchEvent({shock:alert.falcon_eye?.activity_shock,symbol:row.symbol,price:row.lastPrice,radar:'FALCON_EYE_RADAR',radarName:'Radar 9 — عين الصقر',now});
+    if(shockEvent&&typeof this.store.appendActivityShockEvent==='function'){
+      try{const added=await this.store.appendActivityShockEvent(shockEvent);if(added!==false)this.logger.info?.('[RADARX_ACTIVITY_SHOCK_WATCH] '+JSON.stringify({radar:shockEvent.radar,symbol:shockEvent.symbol,classification:shockEvent.classification,first_activity_time:shockEvent.activity_shock.first_activity_time,event_time:shockEvent.activity_shock.event_time,volume_ratio:shockEvent.activity_shock.volume_ratio,trade_ratio:shockEvent.activity_shock.trade_ratio,watch_only:true}));}
+      catch(error){this.lastError=String(error?.message??error);}
+    }
     alert.market_pulse=row.market_pulse||null;
     alert.fast_lane=Boolean(row.market_pulse?.fast_trigger);
     this.lastFutures.set(row.symbol,fd.futures);
