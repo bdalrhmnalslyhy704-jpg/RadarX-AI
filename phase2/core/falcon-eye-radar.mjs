@@ -157,7 +157,7 @@ export function buildFalconEyeAnalysis({
     return {eligible:false,stage:'INSUFFICIENT_DATA',pre_expansion_stage:'DATA_INSUFFICIENT',pre_expansion_fingerprint:{stage:'DATA_INSUFFICIENT',reason:'CLOSED_CANDLES_INSUFFICIENT'},score:null,closed_candles_only:true,one_minute_count:one.length,five_minute_count:five.length};
   }
   const price=finite(ticker.lastPrice,null);
-  const move24=finite(ticker.priceChange24h,null);
+  const move24=hasFiniteValue(ticker.priceChange24h)?Number(ticker.priceChange24h):null;
   const closes=one.map(x=>Number(x.close));
   const r1=pct(Number(one.at(-1)?.close),Number(one.at(-2)?.close));
   const r3=pct(Number(one.at(-1)?.close),Number(one.at(-4)?.close));
@@ -287,7 +287,7 @@ export function buildFalconEyeAnalysis({
   const falseBreakout=Number.isFinite(br.high)&&Number(last.high)>br.high*1.001&&lastClose<br.high&&closeLocation<55;
   const preExpansion=assessPreExpansionFingerprint({
     dataReady:one.length>=70&&five.length>=30&&Number.isFinite(price)&&price>0,
-    dailyChangePct:move24,lastPrice:price,maxMove24hPct:8,maxMove5mPct:2.5,maxMove10mPct:3.8,maxMove15mPct:6,
+    dailyChangePct:ticker.priceChange24h,lastPrice:price,maxMove24hPct:8,maxMove5mPct:2.5,maxMove10mPct:3.8,maxMove15mPct:6,
     baseScore:hl*0.42+compressionScore*0.38+quietScore*0.20,
     higherLowScore:hl,compressionScore,
     compressionRatio:bb.ratio,rangeCompressionRatio:rangeRatio,bollingerRatio:bb.ratio,atrRatio:atr.ratio,
@@ -357,7 +357,7 @@ export function buildFalconEyeAlert(input,now=Date.now(),config={}){
     radar:'FALCON_EYE_RADAR',
     symbol:String(t.symbol||'UNKNOWN').toUpperCase(),
     market:'SPOT',direction:'UP_PREBREAKOUT',
-    price:finite(t.lastPrice),price_change_24h:finite(t.priceChange24h),
+    price:finite(t.lastPrice),price_change_24h:hasFiniteValue(t.priceChange24h)?Number(t.priceChange24h):null,
     opportunity_score:a.score,potential_label:a.pre_expansion_stage??a.stage,
     falcon_eye:a,reasons:a.reasons,
     data_quality:90,liquidity_quality:clamp(62+Math.log10(Math.max(1,(Number(t.quoteVolume24h)||0)/1000000))*22),
