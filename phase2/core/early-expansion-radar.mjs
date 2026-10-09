@@ -3,6 +3,7 @@ import {assessLiquidity, validateSeries, futureIssues} from './data-quality.mjs'
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notification-gate.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
+import {assessQuietBaseActivityShock,isFastActivityShockCandidate} from './activity-shock.mjs';
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
 
 function normalizeRadarTickerRow(row,quote){
@@ -204,6 +205,9 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   minRealertScoreDelta:5,
   retryAttempts:1,
   retryBaseMs:150,
+  minActivityShockScore:76,
+  activityShockCooldownMs:45*60*1000,
+  maxActivityShockAlertsPerHour:6,
   maxBackoffMs:1500
 });
 
@@ -430,8 +434,9 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   // Pass the raw series to the gate so future timestamps are rejected before
   // the closed-candle filter removes them.
   const gate=dataGate(series,now,cfg,{historicalReplay,allowMissingDepth:historicalReplay});
+  const activityShock=assessQuietBaseActivityShock({fiveMinute:s['5m'],ticker,now,config:cfg});
   const p=finite(ticker.lastPrice,null);
-  if(!(p>0))return {score:null,decision_band:'DATA_INSUFFICIENT',pre_expansion_stage:'DATA_INSUFFICIENT',pre_expansion_fingerprint:{stage:'DATA_INSUFFICIENT',reason:'INVALID_PRICE'},data_quality:0,liquidity_quality:null,data_stale:true,risk_flags:['INVALID_PRICE'],reason_codes:['INVALID_PRICE'],gates:gate};
+  if(!(p>0))return {score:null,decision_band:'DATA_INSUFFICIENT',pre_expansion_stage:'DATA_INSUFFICIENT',pre_expansion_fingerprint:{stage:'DATA_INSUFFICIENT',reason:'INVALID_PRICE'},activity_shock:activityShock,data_quality:0,liquidity_quality:null,data_stale:true,risk_flags:['INVALID_PRICE'],reason_codes:['INVALID_PRICE'],gates:gate};
   const r1=returns(s['1m'],1),r10=returns(s['1m'],10),r5=returns(s['5m'],1),r15=returns(s['15m'],1),r1h=returns(s['1h'],1),r4h=returns(s['4h'],1);
   const r5_3=returns(s['5m'],3),r15_3=returns(s['15m'],3);
   const rv1=rvol(s['1m'],30),rv5=rvol(s['5m'],20),rv15=rvol(s['15m'],20);
@@ -610,6 +615,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     decision_band:decisionBand,
     pre_expansion_stage:preExpansion.stage,
     pre_expansion_fingerprint:preExpansion,
+    activity_shock:activityShock,
     legacy_decision_band:legacyDecisionBand,
     data_quality:Number(gate.quality.toFixed(1)),
     data_stale:Boolean(gate.issues.some(x=>x.startsWith('STALE_DATA'))),
@@ -699,7 +705,8 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
       extended?'ALREADY_EXTENDED':null,
       highRisk?'HIGH_RISK_PUMP':null,
       dumpRisk?'HIGH_RISK_DUMP':null,
-      historicalReplay?'HISTORICAL_ORDERBOOK_UNAVAILABLE':null
+      historicalReplay?'HISTORICAL_ORDERBOOK_UNAVAILABLE':null,
+      activityShock.detected?'ACTIVITY_SHOCK_WATCH_ONLY':null
     ].filter(Boolean))],
     invalidation:[
       'CLOSED_CANDLES_ONLY',
@@ -864,6 +871,7 @@ export function buildEarlyExpansionAlert(candidate,now=Date.now()){
     },
     structure_metrics:candidate.structure_metrics,
     strategy_evidence:candidate.strategy_evidence,
+    activity_shock:candidate.activity_shock??null,
     trigger_evidence:candidate.trigger_evidence,
     risk_flags:candidate.risk_flags,
     reason_codes:candidate.reason_codes,
@@ -883,6 +891,34 @@ export function buildEarlyExpansionAlert(candidate,now=Date.now()){
   },'Radar 8 — البرق');
 }
 
+
+export function buildActivityShockWatchAlert(candidate,now=Date.now()){
+  const shock=candidate?.activity_shock||{};
+  const closeTime=Number(shock.detected_candle_close_time)||now;
+  const symbol=String(candidate?.symbol||'').toUpperCase();
+  return decorateRadarAlert({
+    id:'RADAR8_ACTIVITY_SHOCK:'+symbol+':'+closeTime,
+    event:'ACTIVITY_SHOCK_WATCH_ONLY',
+    radar:'EARLY_EXPANSION_RADAR',
+    radar_name:'Radar 8 — البرق',
+    symbol,market:'SPOT',direction:'UP_BIAS',
+    price:finite(candidate?.last_price??candidate?.lastPrice,null),
+    price_change_24h:finite(candidate?.price_change_24h??candidate?.priceChange24h,null),
+    opportunity_score:null,early_expansion_score:null,
+    potential_label:shock.stage||'ACTIVITY_SHOCK',
+    decision_band:'WATCH_EARLY',
+    activity_shock:shock,
+    risk_flags:[...new Set([...(candidate?.risk_flags||[]),'ACTIVITY_SHOCK_WATCH_ONLY',shock.extended?'ALREADY_EXTENDED':null].filter(Boolean))],
+    reason_codes:[...(shock.reasons||[]),'MONITOR_ONLY_NOT_ENTRY'],
+    data_quality:finite(candidate?.data_quality,0),
+    data_stale:Boolean(candidate?.data_stale),
+    source:candidate?.source||'Binance Public REST',
+    detected_at:now,processed_at:now,detected_candle_close_time:closeTime,
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+    closed_candles_only:true,watch_only:true,entry_eligible:false,
+    disclaimer:'تنبيه رصد فقط: انكشاف قفزة مؤكدة بالحجم وعدد الصفقات على شمعة مغلقة. ليس توصية شراء ولا إثباتًا لخبر أو تجميع حيتان. إذا كانت الحركة ممتدة فالمطلوب مراقبة المخاطر لا مطاردة السعر.'
+  },'Radar 8 — البرق');
+}
 
 function symbolHash(symbol){
   let h=2166136261>>>0;
@@ -996,10 +1032,12 @@ export function buildMicroFingerprint({oneMinute=[],fiveMinute=[],btcFiveMinute=
   const hl=higherLowScore(m5.slice(-48)),br=breakoutInfo(m5,20),location=closePosition(m5,30);
   const price24Abs=Math.abs(Number(ticker.priceChange24h)||0);
   const m={rv1,rv5,tr1,tr5,takerRatio:taker.ratio,takerDelta:taker.delta,bbRatio,rangeRatio,atrRatio,emaStack,emaReclaim,relativeStrength:rs,r1,r5,r15,accel5,accel1,rsi:rsiNow,rsiSlope,macSlope,adx:adxNow,hlScore:hl.score,resistanceDistance:br.distance_pct,breakoutBroken:br.broken,location,vwapDistance:vwDist,priceChange24hAbs:price24Abs};
+  const activityShock=assessQuietBaseActivityShock({fiveMinute:m5,ticker,now,config:cfg});
   const prof=scoreMicroProfile(m);
   const stage=!prof.antiChase?'ANTI_CHASE':prof.eligible?(prof.mode==='ABSORPTION_IGNITION'?'IGNITION_BUILD':'PRE_BREAK'):(prof.score>=58?'WATCH':'BASE_BUILD');
   return {
     eligible:prof.eligible,stage,score:hasFiniteNumber(prof.score)?Number(Number(prof.score).toFixed(1)):null,mode:prof.mode,confirmation_count:prof.confirmations,confirmation_total:10,closed_candles_only:true,
+    activity_shock:activityShock,
     metrics:{return_1m:r1,return_3m:r3,return_5m:r5,return_15m:r15,acceleration_1m_pct:accel1,acceleration_5m_pct:accel5,rvol_1m:rv1,rvol_5m:rv5,trade_rvol_1m:tr1,trade_rvol_5m:tr5,taker_buy_ratio:taker.ratio,taker_buy_delta:taker.delta,bb_width:b?.width??null,bb_ratio:bbRatio,atr_ratio:atrRatio,ema9:e9,ema21:e21,ema50:e50,vwap:vw,vwap_distance_pct:vwDist,relative_strength_5m_pct:rs,macd_hist:mac?.histogram??null,macd_slope:macSlope,rsi:rsiNow,rsi_slope:rsiSlope,adx:adxNow,higher_low_count:hl.score,resistance_distance_pct:br.distance_pct,resistance:br.resistance,close_location_pct:location,range_compression_ratio:rangeRatio,price_change_24h_abs:price24Abs,absorption:prof.absorption},
     category_scores:prof.components,
     reasons:[prof.components.participation>=75?'MICRO_VOLUME_ACCELERATION':null,prof.components.tradeParticipation>=75?'MICRO_TRADE_ACCELERATION':null,prof.absorption?'LIQUIDITY_ABSORPTION_REVERSAL':null,prof.components.compression>=82?'MICRO_COMPRESSION':null,prof.components.structure>=70?'MICRO_STRUCTURE':null,prof.components.ema>=72?'MICRO_EMA_RECLAIM':null,prof.components.resistance>=78?'MICRO_RESISTANCE_PRESSURE':null,prof.components.relativeStrength>=60?'MICRO_RELATIVE_STRENGTH':null,prof.components.vwap>=60?'MICRO_VWAP_RECLAIM':null,prof.components.momentumTurn>=60?'MICRO_MOMENTUM_TURN':null,prof.components.adx>=55?'MICRO_ADX_TREND':null,prof.mode==='REVERSAL_ACCUMULATION'?'MICRO_REVERSAL_ACCUMULATION':null].filter(Boolean),
@@ -1028,6 +1066,7 @@ export class EarlyExpansionRadar{
     this.clock=clock;this.logger=logger;
     this.running=false;this.busy=false;this.timer=null;this.universe=[];this.universeAt=0;
     this.fastState=new Map();this.lastAlertAt=new Map();this.lastAlertScore=new Map();this.lastBand=new Map();
+    this.lastActivityShockAt=new Map();this.lastActivityShockKeyBySymbol=new Map();this.activityShockTimestamps=[];
     this.lastMicroScanCycleBySymbol=new Map();this.lastDeepScanCycleBySymbol=new Map();
     this.outcomeBackfillTask=null;
     this.latestCandidates=[];this.lastResult=null;this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
@@ -1104,7 +1143,7 @@ export class EarlyExpansionRadar{
       return {...row,fast,
         _microPreScore:fastScore*.55+(quiet??0)*.45,
         _quietScore:quiet??-1,_quietEligible:isQuietEarlyCandidate(row,fast,this.config),
-        _exceptional:isExceptionalMicroCandidate(row,fast,this.config),
+        _exceptional:isExceptionalMicroCandidate(row,fast,this.config)||isFastActivityShockCandidate(row,fast,this.config),
         _rotation:rotation,_rotationAge:rotationAge};
     });
     const n=Math.max(1,Math.trunc(this.config.microScanCandidates||36));
@@ -1305,6 +1344,7 @@ export class EarlyExpansionRadar{
             signal_score_source:signalScoreSource,micro_fingerprint_score:microScore,
             micro_fingerprint_eligible:fp?.eligible===true,source_score_status:sourceScoreStatus,
             decision_band:finalBand,pre_expansion_stage:finalBand,pre_expansion_fingerprint:evidence.pre_expansion_fingerprint,
+            activity_shock:evidence.activity_shock??fp?.activity_shock??null,
             data_quality:evidence.data_quality,liquidity_quality:evidence.liquidity_quality,data_stale:evidence.data_stale,
             metrics:evidence.metrics,micro_fingerprint:fp,
             volume_metrics:{rvol_1m:evidence.metrics.rvol_1m,rvol_5m:evidence.metrics.rvol_5m,rvol_15m:evidence.metrics.rvol_15m,quote_rvol_5m:evidence.metrics.quote_rvol_5m,fast_volume_acceleration:fast.volume_accel_ratio},
@@ -1378,8 +1418,30 @@ export class EarlyExpansionRadar{
       phaseTimings.signal_archive_ms=Math.max(0,this.clock()-signalArchiveStartedAt);
       const notificationStartedAt=this.clock();
       let alertsThisCycle=0;
+      const previousActivityShockKeys=new Set(historyAlerts.filter(x=>x?.activity_shock?.detected===true)
+        .map(x=>String(x?.id||('RADAR8_ACTIVITY_SHOCK:'+String(x?.symbol||'').toUpperCase()+':'+Number(x?.activity_shock?.detected_candle_close_time||0)))));
       for(const candidate of ok){
         const alert=buildEarlyExpansionAlert(candidate,now),eligibleAlert=alertEligible(candidate,this.config)&&candidate.micro_fingerprint?.eligible===true;
+        const shock=candidate.activity_shock;
+        if(!eligibleAlert&&shock?.detected===true&&shock.watch_only===true&&Number(shock.score)>=Number(this.config.minActivityShockScore??76)&&
+          Number(candidate.data_quality)>=Number(this.config.minDataQuality??70)&&candidate.data_stale!==true){
+          const symbol=String(candidate.symbol||'').toUpperCase();
+          const closeTime=Number(shock.detected_candle_close_time)||now;
+          const shockKey='RADAR8_ACTIVITY_SHOCK:'+symbol+':'+closeTime;
+          const lastAt=Number(this.lastActivityShockAt.get(symbol)||0);
+          this.activityShockTimestamps=this.activityShockTimestamps.filter(t=>Number(t)>now-60*60*1000);
+          if(!previousActivityShockKeys.has(shockKey)&&this.lastActivityShockKeyBySymbol.get(symbol)!==shockKey&&
+             now-lastAt>=Number(this.config.activityShockCooldownMs??45*60*1000)&&
+             this.activityShockTimestamps.length<Number(this.config.maxActivityShockAlertsPerHour??6)){
+            const watchAlert=buildActivityShockWatchAlert(candidate,now);
+            await this.store.appendEarlyExpansionAlert(watchAlert);
+            if(typeof this.store.appendEarlyExpansionEvent==='function')await this.store.appendEarlyExpansionEvent({...watchAlert,event_type:'ACTIVITY_SHOCK_WATCH_TRACE'});
+            if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(watchAlert);
+            this.lastActivityShockAt.set(symbol,now);this.lastActivityShockKeyBySymbol.set(symbol,shockKey);
+            this.activityShockTimestamps.push(now);previousActivityShockKeys.add(shockKey);
+            this.alertCount++;alertsThisCycle++;
+          }
+        }
         const previousScore=this.lastAlertScore.get(candidate.symbol)||null,bandChanged=this.lastBand.get(candidate.symbol)!==candidate.decision_band;
         if(eligibleAlert&&(bandChanged||previousScore==null||candidate.early_expansion_score-previousScore>=this.config.minRealertScoreDelta)){
           const last=this.lastAlertAt.get(candidate.symbol),local=localAlertCooldown(last,now,this.config.alertCooldownMs);
