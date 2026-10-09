@@ -3,6 +3,7 @@ import {updateMarketPulseHistory} from './falcon-market-pulse.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
+import {recordPreExpansionSignals,updatePreExpansionMarkouts} from './pre-expansion-outcome-tracker.mjs';
 
 function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
@@ -655,16 +656,25 @@ export class FalconEyeRadar {
         this.rest.klines('BTCUSDT','1m',{limit:30}).catch(()=>({candles:[]})),
         this.rest.klines('BTCUSDT','5m',{limit:20}).catch(()=>({candles:[]}))
       ]);
+      const marketContext={
+        marketMedianChange24hPct:rows.find(x=>hasFiniteValue(x.marketMedianChange24hPct))?.marketMedianChange24hPct??null,
+        marketBreadthPct:this.marketBreadthPct,
+        fiveMinute:btc[1].candles||[],
+        oneMinute:btc[0].candles||[]
+      };
+      await updatePreExpansionMarkouts(this.store,rows,{now:this.clock(),marketContext}).catch(e=>{this.lastError=String(e?.message??e);});
       const selected=this.selectBatch(rows);
       this.lastScanAtMs=this.clock();
       const concurrency=Math.max(1,Math.min(this.config.deepConcurrency||3,selected.length||1));
       for(let i=0;i<selected.length;i+=concurrency){
         if(!this.running)break;
         const batch=selected.slice(i,i+concurrency);
-        await Promise.all(batch.map(async row=>{
-          try{await this.scanRow(row,{one:btc[0].candles||[],five:btc[1].candles||[]});}
-          catch(e){this.lastScanAt.delete(row.symbol);this.lastError=String(e?.message??e);}
+        const batchAlerts=await Promise.all(batch.map(async row=>{
+          try{return await this.scanRow(row,{one:btc[0].candles||[],five:btc[1].candles||[],marketContext});}
+          catch(e){this.lastScanAt.delete(row.symbol);this.lastError=String(e?.message??e);return null;}
         }));
+        await recordPreExpansionSignals(this.store,batchAlerts.filter(Boolean),{now:this.clock(),marketContext})
+          .catch(e=>{this.lastError=String(e?.message??e);});
       }
     }finally{this.busy=false;}
   }
