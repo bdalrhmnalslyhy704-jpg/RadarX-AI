@@ -260,7 +260,7 @@ test('Radar 9 normalized aliases receive full coverage when the actual source fi
   await withStore(async store=>{
     const alert={
       id:'FALCON:LINKUSDT:'+NOW,radar:'FALCON_EYE_RADAR',symbol:'LINKUSDT',price:100,
-      price_change_24h:1.2,pre_expansion_stage:'WATCH_EARLY',potential_label:'WATCH_EARLY',
+      price_change_24h:1.2,score:71,pre_expansion_stage:'WATCH_EARLY',potential_label:'WATCH_EARLY',
       data_quality:90,detected_at:NOW,market_regime_label:'MIXED',
       reasons:['BASE_STRUCTURE','GRADUAL_PARTICIPATION'],
       source:'Binance public REST',
@@ -277,6 +277,7 @@ test('Radar 9 normalized aliases receive full coverage when the actual source fi
     assert.equal(row.reported_data_quality,90);
     assert.equal(row.data_quality_source,'NORMALIZED_REQUIRED_FIELD_COVERAGE');
     assert.equal(row.data_quality,100);
+    assert.equal(row.signal_score,71);
     assert.equal(row.evaluation_eligible,true);
     assert.equal(row.market_regime,'RANGING');
     assert.deepEqual(row.missing_required_fields,[]);
@@ -426,7 +427,7 @@ test('Radar 8 production alert field aliases reach complete coverage without cha
   await withStore(async store=>{
     const alert={
       id:'EARLY_EXPANSION:ARBUSDT:'+NOW,event:'EARLY_EXPANSION_RADAR',radar:'EARLY_EXPANSION_RADAR',
-      symbol:'ARBUSDT',market:'SPOT',price:1.25,price_change_24h:1.8,
+      symbol:'ARBUSDT',market:'SPOT',price:1.25,price_change_24h:1.8,early_expansion_score:73.5,
       decision_band:'PRE_EXPANSION',potential_label:'PRE_EXPANSION',data_quality:100,data_stale:false,
       detected_at:NOW,processed_at:NOW,closed_candles_only:true,
       price_change_windows:{
@@ -441,6 +442,7 @@ test('Radar 8 production alert field aliases reach complete coverage without cha
     await recordPreExpansionSignals(store,[alert],{now:NOW});
     const row=(await store.getPreExpansionOutcomes()).records[0];
     assert.equal(row.data_quality,100);
+    assert.equal(row.signal_score,73.5);
     assert.equal(row.evaluation_eligible,true);
     assert.equal(row.market_regime,'RANGING');
     assert.deepEqual(row.missing_required_fields,[]);
