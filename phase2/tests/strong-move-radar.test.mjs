@@ -103,4 +103,4 @@ const batchRows=batchRadar.universe.map((symbol,i)=>({symbol,lastPrice:10+i,pric
 const selectedBatch=batchRadar.selectBatch(batchRows);
 assert.equal(selectedBatch.length,7,'Strong Move should fill its top+rotation budget when enough market rows exist');
 assert.equal(new Set(selectedBatch.map(x=>x.symbol)).size,7,'Strong Move must not waste rotation slots on duplicate top movers');
-\nconsole.log('Strong Move Radar tests passed');
+console.log('Strong Move Radar tests passed');
