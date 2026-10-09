@@ -61,6 +61,15 @@ export async function startServer({
   const archiveAnchor=[...archiveRecords].sort((a,b)=>Number(a?.detected_at||0)-Number(b?.detected_at||0))[0]||null;
   const archiveLatest=archiveRecords.reduce((latest,row)=>
     Number(row?.detected_at||0)>Number(latest?.detected_at||0)?row:latest,null);
+  const archiveHorizonCounts=Object.fromEntries(['5m','15m','30m','60m','4h','24h'].map(h=>{
+    const complete=archiveRecords.filter(row=>row?.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC'&&
+      row?.excursions?.[h]?.source==='HISTORICAL_CLOSED_OHLC'&&row?.excursions?.[h]?.complete===true).length;
+    const incomplete=archiveRecords.filter(row=>row?.horizon_status?.[h]?.status==='INCOMPLETE'||
+      (row?.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC'&&row?.excursions?.[h]?.complete!==true)).length;
+    const provisional=archiveRecords.filter(row=>Boolean(row?.provisional_marks?.[h])).length;
+    return [h,{complete,incomplete,pending:Math.max(0,archiveRecords.length-complete-incomplete),
+      provisional,records:archiveRecords.length}];
+  }));
   logger.info?.('[RADARX_ARCHIVE_READY] '+JSON.stringify({
     build_version:'Build 224',build_commit:process.env.RAILWAY_GIT_COMMIT_SHA||process.env.GITHUB_SHA||null,
     build_branch:process.env.RAILWAY_GIT_BRANCH||null,service_id:process.env.RAILWAY_SERVICE_ID||null,
@@ -69,6 +78,7 @@ export async function startServer({
     volume_mount_detected:archiveVolumeMounted,persisted_signal_count:archiveRecords.length,
     oldest_signal_id:archiveAnchor?.signal_id||null,oldest_signal_detected_at:archiveAnchor?.detected_at||null,
     latest_signal_id:archiveLatest?.signal_id||null,latest_signal_detected_at:archiveLatest?.detected_at||null,
+    horizon_counts:archiveHorizonCounts,
     historical_complete_count:archiveRecords.filter(row=>row?.outcome_status==='COMPLETE'&&row?.historical_evaluation===true).length,
     incomplete_count:archiveRecords.filter(row=>row?.outcome_status==='INCOMPLETE').length,
     migrated_legacy_files:store.migratedFiles,records_sha256:archiveDigest
