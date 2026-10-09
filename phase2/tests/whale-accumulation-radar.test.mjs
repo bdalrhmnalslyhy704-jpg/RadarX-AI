@@ -1,3 +1,4 @@
+// Regression branch: exercise the full patrol-slot fix suite.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {WhaleAccumulationRadar} from '../core/whale-accumulation-radar.mjs';
