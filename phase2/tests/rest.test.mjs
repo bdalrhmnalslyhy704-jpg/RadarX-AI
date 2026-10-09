@@ -4,7 +4,7 @@ import {RestClient,RestRateLimitError,retryAfterMs,estimateBinanceRequestWeight}
 import {CONFIG} from '../config.mjs';
 
 
-test('TEST_FIXTURE: per-client default cap aligns with weighted shared REST budget',async()=>{
+test('TEST_FIXTURE: each REST client keeps its independent conservative request cap',async()=>{
   const client=new RestClient({baseUrls:['https://rest-default-budget.test'],fetchImpl:async()=>({status:200,ok:true,headers:new Map(),json:async()=>({})})});
   assert.equal(client.maxRequestsPerMinute,240);
   assert.equal(CONFIG.rest.maxRequestsPerMinute,240);
@@ -31,8 +31,8 @@ test('TEST_FIXTURE: concurrent distinct REST requests reserve the shared budget 
     client.request('/api/v3/ticker/24hr',{symbol})
   ));
   assert.equal(results.length,3);assert.equal(calls,3);
-  assert.ok(starts[1]-starts[0]>=200,JSON.stringify(starts));
-  assert.ok(starts[2]-starts[1]>=200,JSON.stringify(starts));
+  assert.ok(starts[1]-starts[0]>=130,JSON.stringify(starts));
+  assert.ok(starts[2]-starts[1]>=130,JSON.stringify(starts));
   const health=client.health();
   assert.equal(health.binance_reported_used_weight_1m,103);
   assert.equal(health.shared_max_weight_per_minute,4000);

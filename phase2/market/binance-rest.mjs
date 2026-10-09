@@ -38,12 +38,12 @@ const SHARED = {
   observedUsedWeightAt: null
 };
 
-// These are deliberately below Binance's published 6,000 request-weight/minute
-// default. A serialized weighted budget prevents a conservative raw-request cap
-// from forcing every radar to wait behind unrelated reads.
-const SHARED_MAX_REQUESTS_PER_MINUTE = 240;
+// Let the shared broker schedule up to six raw requests per second while keeping
+// the stricter weighted budget at 4,000/minute (below Binance's documented 6,000).
+// The existing shared 429/418 cooldown is still applied before any request resumes.
+const SHARED_MAX_REQUESTS_PER_MINUTE = 360;
 const SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE = 4000;
-const SHARED_MIN_INTERVAL_MS = 250;
+const SHARED_MIN_INTERVAL_MS = 167;
 
 export function estimateBinanceRequestWeight(path, query = {}) {
   if (path === '/api/v3/exchangeInfo') return 20;
