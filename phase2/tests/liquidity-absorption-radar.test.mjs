@@ -101,3 +101,12 @@ test('Radar 4 health exposes its own name and distinct algorithms',()=>{
 });
 
 console.log('Liquidity Absorption Radar tests passed');
+
+test('Radar 4 fills unique rotation slots even when the patrol cursor starts on top-liquidity names',()=>{
+  const radar=new LiquidityAbsorptionRadar({rest:{},store:{},config:{topLiquidityCount:3,rotationBatchSize:4},clock:()=>NOW});
+  radar.universe=Array.from({length:16},(_,i)=>`L${String(i).padStart(2,'0')}USDT`);
+  const rows=radar.universe.map((symbol,i)=>({symbol,lastPrice:1+i,priceChange24h:0.5,quoteVolume24h:20_000_000-i*100_000}));
+  const selected=radar.selectBatch(rows);
+  assert.equal(selected.length,7);
+  assert.equal(new Set(selected.map(x=>x.symbol)).size,7);
+});
