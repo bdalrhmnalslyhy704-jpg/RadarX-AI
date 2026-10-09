@@ -184,10 +184,10 @@ test('Radar 9 normalized aliases receive full coverage when the actual source fi
       id:'FALCON:LINKUSDT:'+NOW,radar:'FALCON_EYE_RADAR',symbol:'LINKUSDT',price:100,
       price_change_24h:1.2,pre_expansion_stage:'WATCH_EARLY',potential_label:'WATCH_EARLY',
       data_quality:90,detected_at:NOW,market_regime_label:'MIXED',
-      reasons:['BASE_STRUCTURE','GRADUAL_PARTICIPATION'],closed_candles_only:true,
+      reasons:['BASE_STRUCTURE','GRADUAL_PARTICIPATION'],
       source:'Binance public REST',
       falcon_eye:{
-        pre_expansion_stage:'WATCH_EARLY',not_chasing:true,
+        pre_expansion_stage:'WATCH_EARLY',not_chasing:true,closed_candles_only:true,
         reasons:['BASE_STRUCTURE','GRADUAL_PARTICIPATION'],
         metrics:{last_price:100,return_5m:.2,return_10m:.35,relative_strength_5m_spread_pct:.12,
           local_high:105,volume_ratio:1.3,trade_ratio:1.2,atr_ratio:.8},
@@ -206,6 +206,24 @@ test('Radar 9 normalized aliases receive full coverage when the actual source fi
     assert.equal(row.initial_metrics.return_10m_pct,.35);
     assert.equal(row.initial_metrics.relative_strength_vs_btc_pct,.12);
     assert.equal(row.initial_metrics.resistance_price,105);
+  });
+});
+
+test('stale nested Falcon Eye evidence is excluded even when the outer alert omits data_stale',async()=>{
+  await withStore(async store=>{
+    const base=signal({radar:'FALCON_EYE_RADAR',symbol:'STALEUSDT',stage:'WATCH_EARLY',regime:'RANGING'});
+    base.data_stale=false;
+    base.falcon_eye={
+      ...base.falcon_eye,
+      closed_candles_only:true,
+      gates:{data_gate:{issues:['STALE_DATA:1m']}}
+    };
+    await recordPreExpansionSignals(store,[base],{now:NOW});
+    const row=(await store.getPreExpansionOutcomes()).records[0];
+    assert.equal(row.data_quality,0);
+    assert.equal(row.data_quality_status,'STALE');
+    assert.equal(row.evaluation_eligible,false);
+    assert.equal(row.evaluation_status,'EXCLUDED_INCOMPLETE');
   });
 });
 
