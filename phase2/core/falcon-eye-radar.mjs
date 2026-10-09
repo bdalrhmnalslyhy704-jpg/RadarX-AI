@@ -3,7 +3,7 @@ import {updateMarketPulseHistory} from './falcon-market-pulse.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
-import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport} from './pre-expansion-outcome-tracker.mjs';
+import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
 
 function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
@@ -662,7 +662,14 @@ export class FalconEyeRadar {
         fiveMinute:btc[1].candles||[],
         oneMinute:btc[0].candles||[]
       };
-      await updatePreExpansionMarkouts(this.store,rows,{now:this.clock(),marketContext,logger:this.logger}).catch(e=>{this.lastError=String(e?.message??e);});
+      const outcomeNow=this.clock(),historyAlerts=[];
+      try{
+        if(typeof this.store.readEarlyExpansionAlerts==='function')historyAlerts.push(...await this.store.readEarlyExpansionAlerts({sinceMs:outcomeNow-45*24*60*60*1000,limit:100}));
+        if(typeof this.store.readFalconEyeAlerts==='function')historyAlerts.push(...await this.store.readFalconEyeAlerts({sinceMs:outcomeNow-45*24*60*60*1000,limit:100}));
+      }catch(e){this.lastError=String(e?.message??e);}
+      await importHistoricalPreExpansionSignals(this.store,historyAlerts,{now:outcomeNow,logger:this.logger}).catch(e=>{this.lastError=String(e?.message??e);});
+      await updatePreExpansionMarkouts(this.store,rows,{now:outcomeNow,marketContext,logger:this.logger}).catch(e=>{this.lastError=String(e?.message??e);});
+      await backfillHistoricalPreExpansionOutcomes(this.store,this.rest,{now:outcomeNow,logger:this.logger}).catch(e=>{this.lastError=String(e?.message??e);});
       await maybeLogPreExpansionOutcomeReport(this.store,{logger:this.logger,now:this.clock()}).catch(e=>{this.lastError=String(e?.message??e);});
       const selected=this.selectBatch(rows);
       this.lastScanAtMs=this.clock();

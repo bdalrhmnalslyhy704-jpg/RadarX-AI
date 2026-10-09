@@ -19,6 +19,11 @@ const RADAR_ALIASES=new Map([
 ]);
 const MAX_RECORDS=5000;
 const REARM_MS=60*60*1000;
+const HISTORICAL_WINDOW_MS=45*24*60*60*1000;
+const HISTORICAL_IMPORT_INTERVAL_MS=60*60*1000;
+const HISTORICAL_BACKFILL_INTERVAL_MS=6*60*60*1000;
+const HISTORICAL_BACKFILL_MAX_SIGNALS=2;
+const EXCLUDED_EVALUATION_SYMBOLS=new Set(['BTCUSDT','USDCUSDT','TUSDUSDT','USDPUSDT','FDUSDUSDT','BUSDUSDT','DAIUSDT','EURUSDT','EURTUSDT','USDEUSDT','PYUSDUSDT','USTCUSDT']);
 const PRICE_POLL_MIN_MS=20_000;
 const FALSE_BREAKOUT_WINDOW_MS=15*60_000;
 
@@ -29,7 +34,7 @@ const keyOf=(radar,symbol)=>radar+'|'+symbol;
 const pct=(price,entry)=>Number.isFinite(price)&&Number.isFinite(entry)&&entry>0?(price/entry-1)*100:null;
 
 export function emptyPreExpansionOutcomeState(){
-  return {version:'PRE_EXPANSION_OUTCOMES_V1',records:[],last_stage_by_key:{},last_price_update_at:0,last_report_log_at:0,updated_at:0};
+  return {version:'PRE_EXPANSION_OUTCOMES_V1',records:[],last_stage_by_key:{},last_price_update_at:0,last_report_log_at:0,last_historical_import_at:0,last_historical_backfill_at:0,updated_at:0};
 }
 function normalizeState(raw){
   const state=object(raw);
@@ -38,7 +43,7 @@ function normalizeState(raw){
     records:list(state.records),
     last_stage_by_key:object(state.last_stage_by_key),
     last_price_update_at:num(state.last_price_update_at,0),
-    last_report_log_at:num(state.last_report_log_at,0),updated_at:num(state.updated_at,0)
+    last_report_log_at:num(state.last_report_log_at,0),last_historical_import_at:num(state.last_historical_import_at,0),last_historical_backfill_at:num(state.last_historical_backfill_at,0),updated_at:num(state.updated_at,0)
   };
 }
 
@@ -110,9 +115,9 @@ function lastReturn(rows,nBars){
 }
 export function classifyEvaluationMarketRegime(context={}){
   const c=object(context);
-  if(['BULLISH','BEARISH','RANGING','UNKNOWN'].includes(String(c.marketRegime||c.market_regime||'').toUpperCase())){
-    return String(c.marketRegime||c.market_regime).toUpperCase();
-  }
+  const suppliedRegime=String(c.marketRegime||c.market_regime||'').toUpperCase();
+  if(suppliedRegime==='MIXED')return 'RANGING';
+  if(['BULLISH','BEARISH','RANGING','UNKNOWN'].includes(suppliedRegime))return suppliedRegime;
   const medianChange=num(c.marketMedianChange24hPct??c.market_median_change_24h_pct);
   const breadth=num(c.marketBreadthPct??c.market_breadth_pct);
   const btc5=num(c.btcReturn5mPct??c.btc_return_5m_pct)??lastReturn(c.fiveMinute||[],1);
@@ -138,21 +143,41 @@ function makeSignal(alert,now,marketContext){
   const radar=normalizedRadar(alert),stage=inferStage(alert);
   const symbol=String(alert?.symbol||'').trim().toUpperCase();
   const entry=num(alert?.price??alert?.last_price??alert?.lastPrice??alert?.falcon_eye?.metrics?.last_price);
-  if(!radar||!symbol||!stage)return null;
+  if(!radar||!symbol||!stage||EXCLUDED_EVALUATION_SYMBOLS.has(symbol))return null;
   const detectedAt=num(alert?.detected_at??alert?.processed_at??alert?.as_of_ms,now);
   const m=stageMetrics(alert),extended=assessAlreadyExtended(alert,stage,m);
   const context={...object(marketContext),...object(alert?.market_context)};
   const marketRegime=String(alert?.market_regime_label||alert?.market_regime?.label||'').toUpperCase()||
     classifyEvaluationMarketRegime(context);
-  const quality=dataQuality(alert,stage,m);
+  const rawQuality=dataQuality(alert,stage,m);
+  const r9=object(alert?.falcon_eye);
+  const r9Ready=object(r9.pre_expansion_fingerprint).data_ready===true;
+  const r9QualityFields=[
+    m.daily_change_pct!==null,
+    entry!==null&&entry>0,
+    m.return_5m_pct!==null,
+    m.return_10m_pct!==null,
+    m.relative_strength_vs_btc_pct!==null,
+    m.resistance_price!==null||m.resistance_distance_atr!==null,
+    num(m.volume_ratio??m.rvol_5m)!==null,
+    num(m.trade_ratio)!==null,
+    num(m.atr_ratio??m.bollinger_ratio)!==null,
+    r9Ready||alert?.radar!=='FALCON_EYE_RADAR'
+  ];
+  const qualitySource=alert?.radar==='FALCON_EYE_RADAR'?'DERIVED_FIELD_COVERAGE':'RADAR_REPORTED_QUALITY';
+  const quality=(stage==='DATA_INSUFFICIENT'||m.data_stale||!m.closed_candles_only||m.daily_change_pct===null)
+    ?0
+    :alert?.radar==='FALCON_EYE_RADAR'
+      ?Math.round(r9QualityFields.filter(Boolean).length/r9QualityFields.length*100)
+      :rawQuality;
   const reasons=reasonList(alert);
   const existingId=String(alert?.id||'').trim();
   const signalId=existingId||[radar,symbol,stage,detectedAt].join(':');
   return {
     signal_id:signalId,radar,symbol,entry_price:entry,detected_at:detectedAt,
     detected_at_iso:new Date(detectedAt).toISOString(),signal_type:stage,
-    data_quality:quality,reported_data_quality:num(alert?.data_quality??alert?.falcon_eye?.data_quality),
-    data_quality_status:stage==='DATA_INSUFFICIENT'?'INSUFFICIENT':m.data_stale?'STALE':m.daily_change_pct===null?'DAILY_CHANGE_UNKNOWN':'AVAILABLE',
+    data_quality:quality,data_quality_source:qualitySource,reported_data_quality:num(alert?.data_quality??alert?.falcon_eye?.data_quality),
+    data_quality_status:stage==='DATA_INSUFFICIENT'?'INSUFFICIENT':m.data_stale?'STALE':m.daily_change_pct===null?'DAILY_CHANGE_UNKNOWN':quality<70?'PARTIAL_FIELD_COVERAGE':'AVAILABLE',
     reason_codes:reasons,market_regime:marketRegime,
     initial_daily_change_pct:m.daily_change_pct,
     relative_strength_vs_btc_pct:m.relative_strength_vs_btc_pct,
@@ -160,6 +185,7 @@ function makeSignal(alert,now,marketContext){
     resistance_price:m.resistance_price,resistance_distance_atr:m.resistance_distance_atr,
     already_extended_at_detection:extended,
     detected_before_move:assessBeforeMove(alert,stage,m,extended),
+    detected_after_move:!assessBeforeMove(alert,stage,m,extended),
     initial_metrics:m,source:list(alert?.source).length?list(alert.source):[String(alert?.source||'UNKNOWN')],
     false_breakout:null,false_breakout_basis:null,
     marks:{},excursions:Object.fromEntries(HORIZONS.map(([h])=>[h,{max_favorable_pct:0,max_adverse_pct:0,complete:false}])),
@@ -308,6 +334,7 @@ export async function updatePreExpansionMarkouts(store,tickerRows,{now=Date.now(
 
 function marketRegimeForSignal(signal){
   const label=String(signal?.market_regime||'UNKNOWN').toUpperCase();
+  if(label==='MIXED')return 'RANGING';
   return ['BULLISH','BEARISH','RANGING','UNKNOWN'].includes(label)?label:'UNKNOWN';
 }
 function signalAlreadyExtended(signal){
@@ -400,6 +427,10 @@ function summarizeGroup(rows){
   return {
     records:rows.length,
     measurable_signals:measurable.length,
+    detected_before_move_count:measurable.filter(r=>r.detected_before_move===true).length,
+    detected_before_move_pct:percent(measurable.filter(r=>r.detected_before_move===true).length,measurable.filter(r=>typeof r.detected_before_move==='boolean').length),
+    detected_after_move_count:measurable.filter(r=>r.detected_before_move===false).length,
+    detected_after_move_pct:percent(measurable.filter(r=>r.detected_before_move===false).length,measurable.filter(r=>typeof r.detected_before_move==='boolean').length),
     matured_4h:completed4h.length,
     meaningful_move_4h_pct:percent(impacts,completed4h.length),
     false_signal_rate_4h_pct:percent(falseSignals,completed4h.length),
@@ -422,7 +453,7 @@ export function buildPreExpansionOutcomeReport(input={}){
   };
   return {
     version:'PRE_EXPANSION_OUTCOME_REPORT_V1',as_of:new Date(num(input.now,Date.now())).toISOString(),
-    scope:{radars:['RADAR_8','RADAR_9'],stages:[...WATCHED_STAGES],horizons_ms:Object.fromEntries(HORIZONS.map(([h,ms])=>[h,ms])),impact_thresholds_pct:Object.fromEntries(HORIZONS.map(([h,,threshold])=>[h,threshold])),mfe_mae_source:'SAMPLED_SPOT_TICKERS unless historical_evaluation=true',no_real_orders:true},
+    scope:{radars:['RADAR_8','RADAR_9'],stages:[...WATCHED_STAGES],horizons_ms:Object.fromEntries(HORIZONS.map(([h,ms])=>[h,ms])),impact_thresholds_pct:Object.fromEntries(HORIZONS.map(([h,,threshold])=>[h,threshold])),mfe_mae_source:'Per horizon: SAMPLED_SPOT_TICKERS or HISTORICAL_CLOSED_OHLC, explicitly labelled',no_real_orders:true},
     total_records:records.length,pending_records:records.filter(r=>r.outcome_status!=='COMPLETE'&&r.entry_price>0).length,
     groups:{
       by_radar:groupBy(records,r=>r.radar),
@@ -462,6 +493,7 @@ export async function maybeLogPreExpansionOutcomeReport(store,{logger=console,no
       records:v.records,matured_4h:v.matured_4h,meaningful_move_4h_pct:v.meaningful_move_4h_pct,
       false_signal_rate_4h_pct:v.false_signal_rate_4h_pct,avg_time_to_plus3_pct_within_4h_minutes:v.avg_time_to_plus3_pct_within_4h_minutes,
       false_breakout_rate_pct:v.false_breakout_rate_pct,already_extended_pct:v.already_extended_pct,
+      detected_before_move_pct:v.detected_before_move_pct,detected_after_move_pct:v.detected_after_move_pct,
       max_adverse_drawdown_pct:v.max_adverse_drawdown_pct,sample_warning:v.sample_warning,
       horizons:v.horizons
     }])),
@@ -475,3 +507,124 @@ export async function maybeLogPreExpansionOutcomeReport(store,{logger=console,no
 }
 
 export const PRE_EXPANSION_OUTCOME_HORIZONS=HORIZONS.map(([key,ms,impact_threshold_pct])=>({key,ms,impact_threshold_pct}));
+
+
+/**
+ * Imports older saved Radar 8/9 alerts for retrospective OHLC review.
+ * Only alerts older than 24h are imported, so no incomplete signal is mistaken
+ * for a matured historical result. This does not expose or modify any API.
+ */
+export async function importHistoricalPreExpansionSignals(store,alerts,{now=Date.now(),logger=console,intervalMs=HISTORICAL_IMPORT_INTERVAL_MS}={}){
+  if(typeof store?.updatePreExpansionOutcomes!=='function')return {imported:0,skipped:list(alerts).length,reason:'TRACKER_STORE_UNAVAILABLE'};
+  let claimed=false;
+  await store.updatePreExpansionOutcomes(raw=>{
+    const state=normalizeState(raw);
+    if(now-state.last_historical_import_at<intervalMs)return false;
+    state.last_historical_import_at=now;state.updated_at=now;claimed=true;return state;
+  });
+  if(!claimed)return {imported:0,skipped:list(alerts).length,throttled:true};
+  const importable=list(alerts).filter(alert=>{
+    const at=num(alert?.detected_at??alert?.processed_at??alert?.as_of_ms);
+    return at!==null&&now-at>=24*60*60_000&&now-at<=HISTORICAL_WINDOW_MS;
+  });
+  const importedEvents=[];
+  let imported=0,skipped=0;
+  await store.updatePreExpansionOutcomes(raw=>{
+    const state=normalizeState(raw);let changed=false;
+    for(const alert of importable){
+      const row=makeSignal(alert,now,alert?.market_context||{});
+      if(!row){skipped++;continue;}
+      if(state.records.some(x=>x.signal_id===row.signal_id)){skipped++;continue;}
+      row.historical_archive_import=true;
+      row.outcome_status='PENDING';
+      state.records.push(row);
+      importedEvents.push({signal_id:row.signal_id,radar:row.radar,symbol:row.symbol,signal_type:row.signal_type,detected_at:row.detected_at,entry_price:row.entry_price});
+      imported++;changed=true;
+    }
+    const cutoff=now-HISTORICAL_WINDOW_MS;
+    state.records=state.records.filter(x=>num(x.detected_at,0)>=cutoff||!HORIZONS.every(([h])=>x.marks?.[h]));
+    if(state.records.length>MAX_RECORDS)state.records=state.records.slice(-MAX_RECORDS);
+    if(changed){state.updated_at=now;return state;}
+    return false;
+  });
+  for(const row of importedEvents)logger?.info?.('[PRE_EXPANSION_HISTORICAL_SIGNAL_IMPORTED] '+JSON.stringify(row));
+  return {imported,skipped:skipped+(list(alerts).length-importable.length)};
+}
+
+/**
+ * Replays mature recorded signals against actual closed public 1m/5m OHLC.
+ * A small hourly budget avoids competing with the live radars for the shared
+ * Binance public-REST request budget. Historical prices replace sampled prices
+ * only horizon-by-horizon when the required closed candle markout exists.
+ */
+export async function backfillHistoricalPreExpansionOutcomes(store,rest,{now=Date.now(),logger=console,intervalMs=HISTORICAL_BACKFILL_INTERVAL_MS,maxSignals=HISTORICAL_BACKFILL_MAX_SIGNALS}={}){
+  if(typeof store?.updatePreExpansionOutcomes!=='function'||typeof rest?.klines!=='function'){
+    return {evaluated:0,skipped:0,reason:'HISTORICAL_REST_OR_STORE_UNAVAILABLE'};
+  }
+  let selected=[];
+  await store.updatePreExpansionOutcomes(raw=>{
+    const state=normalizeState(raw);
+    if(now-state.last_historical_backfill_at<intervalMs)return false;
+    selected=state.records.filter(r=>
+      r&&num(r.detected_at)!==null&&num(r.entry_price)>0&&
+      now-Number(r.detected_at)>=24*60*60_000+10*60_000&&
+      now-Number(r.detected_at)<=HISTORICAL_WINDOW_MS&&
+      r.historical_evaluation!==true
+    ).sort((a,b)=>Number(a.detected_at)-Number(b.detected_at)).slice(0,Math.max(1,Math.min(6,Math.trunc(Number(maxSignals)||1))));
+    if(!selected.length)return false;
+    state.last_historical_backfill_at=now;state.updated_at=now;return state;
+  });
+  if(!selected.length)return {evaluated:0,skipped:0,throttled:true};
+  let evaluated=0,skipped=0;
+  for(const signal of selected){
+    try{
+      const detectedAt=Number(signal.detected_at);
+      const [one,five]=await Promise.all([
+        rest.klines(signal.symbol,'1m',{limit:100,startTime:detectedAt,endTime:detectedAt+75*60_000}),
+        rest.klines(signal.symbol,'5m',{limit:300,startTime:detectedAt,endTime:detectedAt+25*60*60_000})
+      ]);
+      const closedOne=candleRows(one?.candles,now),closedFive=candleRows(five?.candles,now);
+      if(closedOne.length<55||closedFive.length<270){skipped++;logger?.warn?.('[PRE_EXPANSION_HISTORICAL_BACKFILL_INSUFFICIENT] '+JSON.stringify({signal_id:signal.signal_id,symbol:signal.symbol,one_minute_closed:closedOne.length,five_minute_closed:closedFive.length}));continue;}
+      const result=evaluateHistoricalPreExpansionSignal(signal,{candles1m:closedOne,candles5m:closedFive,now});
+      if(!result.ok){skipped++;continue;}
+      let event=null;
+      await store.updatePreExpansionOutcomes(raw=>{
+        const state=normalizeState(raw),current=state.records.find(x=>x.signal_id===signal.signal_id);
+        if(!current||current.historical_evaluation===true)return false;
+        current.live_marks=current.live_marks||{...object(current.marks)};
+        current.live_excursions=current.live_excursions||{...object(current.excursions)};
+        const historical=result.record;
+        const covered=[];
+        for(const [h] of HORIZONS){
+          if(historical.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC'){
+            current.marks[h]=historical.marks[h];covered.push(h);
+          }
+          if(historical.excursions?.[h]?.source==='HISTORICAL_CLOSED_OHLC'){
+            current.excursions[h]=historical.excursions[h];
+          }
+        }
+        current.first_3pct_at=historical.first_3pct_at??current.first_3pct_at;
+        current.first_2pct_at=historical.first_2pct_at??current.first_2pct_at;
+        current.max_favorable_pct=Number.isFinite(historical.max_favorable_pct)?historical.max_favorable_pct:current.max_favorable_pct;
+        current.max_adverse_pct=Number.isFinite(historical.max_adverse_pct)?historical.max_adverse_pct:current.max_adverse_pct;
+        if(historical.false_breakout!==null)current.false_breakout=historical.false_breakout;
+        current.false_breakout_detected_at=historical.false_breakout_detected_at??current.false_breakout_detected_at;
+        current.false_breakout_basis=historical.false_breakout_basis??current.false_breakout_basis;
+        current.historical_evaluation_horizons=covered;
+        current.historical_evaluation=HORIZONS.every(([h])=>covered.includes(h));
+        current.observed_price_source=current.historical_evaluation?'HISTORICAL_CLOSED_OHLC':'MIXED_LIVE_AND_HISTORICAL';
+        current.historical_evaluated_at=now;
+        current.outcome_status=HORIZONS.every(([h])=>Boolean(current.marks?.[h]))?'COMPLETE':'PARTIAL';
+        current.updated_at=now;state.updated_at=now;
+        event={signal_id:current.signal_id,radar:current.radar,symbol:current.symbol,signal_type:current.signal_type,historical_horizons:covered,complete:current.historical_evaluation,max_favorable_pct:current.max_favorable_pct,max_adverse_pct:current.max_adverse_pct,false_breakout:current.false_breakout};
+        return state;
+      });
+      if(event){evaluated++;logger?.info?.('[PRE_EXPANSION_HISTORICAL_BACKFILL] '+JSON.stringify(event));}
+      else skipped++;
+    }catch(error){
+      skipped++;
+      logger?.warn?.('[PRE_EXPANSION_HISTORICAL_BACKFILL_ERROR] '+JSON.stringify({signal_id:signal.signal_id,symbol:signal.symbol,error:String(error?.message??error)}));
+    }
+  }
+  return {evaluated,skipped};
+}
