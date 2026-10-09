@@ -2,6 +2,7 @@ import {buildSpotUniverse, normalizeTickerRow, buildHistoricalFollowThrough} fro
 import {assessLiquidity, validateSeries, futureIssues} from './data-quality.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notification-gate.mjs';
+import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
 
 const clamp=(v,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number.isFinite(Number(v))?Number(v):0));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -411,7 +412,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   // the closed-candle filter removes them.
   const gate=dataGate(series,now,cfg,{historicalReplay,allowMissingDepth:historicalReplay});
   const p=finite(ticker.lastPrice,null);
-  if(!(p>0))return {score:null,decision_band:'DATA_INSUFFICIENT',data_quality:0,liquidity_quality:null,data_stale:true,risk_flags:['INVALID_PRICE'],reason_codes:['INVALID_PRICE'],gates:gate};
+  if(!(p>0))return {score:null,decision_band:'DATA_INSUFFICIENT',pre_expansion_stage:'DATA_INSUFFICIENT',pre_expansion_fingerprint:{stage:'DATA_INSUFFICIENT',reason:'INVALID_PRICE'},data_quality:0,liquidity_quality:null,data_stale:true,risk_flags:['INVALID_PRICE'],reason_codes:['INVALID_PRICE'],gates:gate};
   const r1=returns(s['1m'],1),r5=returns(s['5m'],1),r15=returns(s['15m'],1),r1h=returns(s['1h'],1),r4h=returns(s['4h'],1);
   const r5_3=returns(s['5m'],3),r15_3=returns(s['15m'],3);
   const rv1=rvol(s['1m'],30),rv5=rvol(s['5m'],20),rv15=rvol(s['15m'],20);
@@ -519,10 +520,37 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   const earlyScore=gate.valid&&gateIssues.every(x=>!['ALREADY_EXTENDED','LIQUIDITY_INSUFFICIENT','WIDE_SPREAD','RECENT_FAKEOUT','HISTORICAL_FOLLOWTHROUGH_WEAK'].includes(x))&&!highRisk&&!dumpRisk&&!historicalReplay
     ? Number(clamp(rawScore).toFixed(1)):null;
   const policyIssues=gateIssues.filter(x=>!gate.issues.includes(x));
-  const decisionBand=decideEarlyExpansionBand({
+  const legacyDecisionBand=decideEarlyExpansionBand({
     gateValid:gate.valid,gateIssues:gate.issues,policyIssues,highRiskPump:highRisk,extended,
     historicalReplay,earlyScore,breakoutBroken:br5.broken,r5_3,atrRatio:atrx.ratio,cfg
   });
+  const btcRows=closed(marketContext?.fiveMinute||[],now);
+  const coinReturn15m=returns(s['5m'],3),btcReturn15m=returns(btcRows,3);
+  const relativeStrengthBtcPct=Number.isFinite(coinReturn15m)&&Number.isFinite(btcReturn15m)?coinReturn15m-btcReturn15m:
+    (hasFiniteNumber(fastContext?.micro_fingerprint?.metrics?.relative_strength_5m_pct)?Number(fastContext.micro_fingerprint.metrics.relative_strength_5m_pct):null);
+  const volumeTrend=measureGradualParticipation(s['5m'].map(x=>x.quoteVolume??x.volume));
+  const tradeTrend=measureGradualParticipation(s['5m'].map(x=>x.tradeCount));
+  const volumeRatios=[rv1,rv5,qrv5,fastContext.volume_accel_ratio].filter(Number.isFinite);
+  const tradeRatios=[fastContext.trade_accel_ratio,fastContext.micro_fingerprint?.metrics?.trade_rvol_1m,fastContext.micro_fingerprint?.metrics?.trade_rvol_5m].filter(Number.isFinite);
+  const atrPct=Number.isFinite(atrx.current_atr)&&p>0?atrx.current_atr/p*100:null;
+  const resistanceDistanceAtr=Number.isFinite(br5.distance_pct)&&Number.isFinite(atrPct)&&atrPct>0?-br5.distance_pct/atrPct:null;
+  const falseBreakout=fakeoutFlag(s['5m']).flag||fakeoutFlag(s['15m']).flag;
+  const preExpansion=assessPreExpansionFingerprint({
+    dataReady:gate.valid&&p>0,dailyChangePct:ticker.priceChange24h,lastPrice:p,
+    maxMove24hPct:Math.min(8,Number(cfg.maxQuiet24hMovePct??8)),
+    maxMove5mPct:2.5,maxMove10mPct:3.8,
+    baseScore:hl.score*.42+compressionExpansion*.35+quiet24*.23,
+    higherLowScore:hl.score,compressionScore:compressionExpansion,
+    compressionRatio:comp.ratio,rangeCompressionRatio:comp.ratio,bollingerRatio:bb.ratio,atrRatio:atrx.ratio,
+    volumeRatio:volumeRatios.length?Math.max(...volumeRatios):null,
+    tradeRatio:tradeRatios.length?Math.max(...tradeRatios):null,
+    volumeTrend,tradeTrend,relativeStrengthBtcPct,
+    relativeStrengthMarketPct:hasFiniteNumber(marketContext?.relativeStrengthMarketPct)?Number(marketContext.relativeStrengthMarketPct):null,
+    resistanceDistanceAtr,breakoutConfirmed:br5.broken,falseBreakout,
+    return5mPct:r5,return10mPct:r5_3,return15mPct:r15_3,
+    alreadyExtended:extended
+  });
+  const decisionBand=preExpansion.stage;
 
   const riskFlags=[
     extended?'ALREADY_EXTENDED':null,
@@ -561,6 +589,9 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     early_expansion_score:earlyScore,
     forensic_evidence_score:Number(clamp(rawScore).toFixed(1)),
     decision_band:decisionBand,
+    pre_expansion_stage:preExpansion.stage,
+    pre_expansion_fingerprint:preExpansion,
+    legacy_decision_band:legacyDecisionBand,
     data_quality:Number(gate.quality.toFixed(1)),
     data_stale:Boolean(gate.issues.some(x=>x.startsWith('STALE_DATA'))),
     liquidity_quality:historicalReplay?null:liqQuality,
@@ -582,6 +613,9 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
       five_min_resistance:br5.resistance,five_min_breakout_distance_pct:br5.distance_pct,five_min_broken:br5.broken,
       fifteen_min_resistance:br15.resistance,fifteen_min_breakout_distance_pct:br15.distance_pct,
       higher_low:hl.higher_low,close_location_5m:closePosition(s['5m'],30),
+      relative_strength_vs_btc_pct:relativeStrengthBtcPct,relative_strength_vs_market_pct:preExpansion.relative_strength_vs_market_pct,
+      resistance_distance_atr:resistanceDistanceAtr,volume_participation_improving:preExpansion.volume_improving,
+      trade_participation_improving:preExpansion.trades_improving,participation_trend_score:preExpansion.participation_trend_score,
       orderbook_imbalance:liq.imbalance,spread_bps:liq.spread_bps,depth_notional:liq.depth_notional,
       historical_followthrough_score:historicalScore,
       historical_followthrough_samples:historicalFollowThrough.samples,
@@ -609,6 +643,12 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
         structure_score:hl.score,
         breakout_score:breakout,
         relative_strength_score:market.score,
+        relative_strength_vs_btc_pct:relativeStrengthBtcPct,
+        relative_strength_vs_market_pct:preExpansion.relative_strength_vs_market_pct,
+        market_regime_label:market.label,
+        resistance_distance_atr:resistanceDistanceAtr,
+        volume_participation_trend:volumeTrend,
+        trade_participation_trend:tradeTrend,
         orderbook_score:orderbookScore,
         historical_followthrough_score:historicalScore,
         historical_followthrough_samples:historicalFollowThrough.samples
@@ -1128,10 +1168,10 @@ export class EarlyExpansionRadar{
           const microScore=Number(fp?.score),deepScore=Number(evidence.early_expansion_score);
           const promoted=Boolean(fp?.eligible)&&Number.isFinite(microScore);
           const finalScore=promoted?Math.max(Number.isFinite(deepScore)?deepScore:0,microScore):evidence.early_expansion_score;
-          const finalBand=promoted?(fp.mode==='ABSORPTION_IGNITION'||fp.mode==='REVERSAL_ACCUMULATION'?'PRE_EXPANSION':fp.mode==='PARTICIPATION_BREAKOUT_BUILD'?'BREAKOUT_DEVELOPING':'PRE_EXPANSION'):evidence.decision_band;
+          const finalBand=evidence.pre_expansion_stage||evidence.decision_band;
           return {
             symbol:row.symbol,last_price:row.lastPrice,price_change_24h:row.priceChange24h,
-            early_expansion_score:Number.isFinite(finalScore)?Number(finalScore.toFixed(1)):null,decision_band:finalBand,
+            early_expansion_score:Number.isFinite(finalScore)?Number(finalScore.toFixed(1)):null,decision_band:finalBand,pre_expansion_stage:finalBand,pre_expansion_fingerprint:evidence.pre_expansion_fingerprint,
             data_quality:evidence.data_quality,liquidity_quality:evidence.liquidity_quality,data_stale:evidence.data_stale,
             metrics:evidence.metrics,micro_fingerprint:fp,
             volume_metrics:{rvol_1m:evidence.metrics.rvol_1m,rvol_5m:evidence.metrics.rvol_5m,rvol_15m:evidence.metrics.rvol_15m,quote_rvol_5m:evidence.metrics.quote_rvol_5m,fast_volume_acceleration:fast.volume_accel_ratio},
