@@ -1512,6 +1512,7 @@ export class EarlyExpansionRadar{
     };
   }
   health(){
+    const now=this.clock();
     return {
       running:this.running,busy:this.busy,radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',
       universe_total:this.universe.length,universe_refreshed_at:this.universeAt||null,
