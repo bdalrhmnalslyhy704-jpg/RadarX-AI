@@ -1423,7 +1423,7 @@ export class EarlyExpansionRadar{
       const notificationStartedAt=this.clock();
       let alertsThisCycle=0;
       const previousActivityShockKeys=new Set(historyAlerts.filter(x=>x?.activity_shock?.detected===true)
-        .map(x=>String(x?.id||('RADAR8_ACTIVITY_SHOCK:'+String(x?.symbol||'').toUpperCase()+':'+Number(x?.activity_shock?.detected_candle_close_time||0)))));
+        .map(x=>'RADAR8_ACTIVITY_SHOCK:'+String(x?.symbol||'').toUpperCase()+':'+Number(x?.activity_shock?.detected_candle_close_time||0)));
       for(const candidate of ok){
         const alert=buildEarlyExpansionAlert(candidate,now),eligibleAlert=alertEligible(candidate,this.config)&&candidate.micro_fingerprint?.eligible===true;
         const shock=candidate.activity_shock;
