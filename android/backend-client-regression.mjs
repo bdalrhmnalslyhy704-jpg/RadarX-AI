@@ -15,7 +15,8 @@ const index=await readFile(new URL('./app/src/main/assets/index.html',import.met
 assert.match(index,/radarx-market-radar-screen.mjs/);
 assert.match(index,/UI_READY/);
 const moveService=await readFile(new URL('./app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java',import.meta.url),'utf8');
-assert.match(moveService,/detectedAt = alert\.optLong\("detected_at", alert\.optLong\("processed_at"/);
+assert.match(moveService,/long detected = alert\.optLong\("detected_at", alert\.optLong\("detectedAt", 0L\)\)/);
+assert.match(moveService,/return detected > 0L \? detected : alert\.optLong\("processed_at", 0L\)/);
 assert.match(moveService,/وقت اكتشاف الخادم/);
 assert.match(moveService,/وقت إرسال الإشعار/);
 assert.match(moveService,/عند انقطاع الإنترنت: حُفظ التنبيه على الخادم ثم أُرسل عند عودة الاتصال/);
