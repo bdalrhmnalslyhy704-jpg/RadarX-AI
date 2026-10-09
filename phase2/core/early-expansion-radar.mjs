@@ -1172,7 +1172,10 @@ export class EarlyExpansionRadar{
       withRetry(()=>this.rest.klines(row.symbol,'1m',{limit:this.config.oneMinuteKlines}),{attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep}),
       withRetry(()=>this.rest.klines(row.symbol,'5m',{limit:this.config.fiveMinuteKlines}),{attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep})
     ]);
-    return {row,fast,oneMinute:m1.candles,fiveMinute:m5.candles,micro_fingerprint:buildMicroFingerprint({oneMinute:m1.candles,fiveMinute:m5.candles,btcFiveMinute,ticker:row,now:this.clock(),config:this.config}),source:sourceList([m1.source,m5.source])};
+    // Accept either an already-resolved context array (tests/callers) or a shared
+    // in-flight BTC context promise so candle reads overlap without losing BTC-relative scoring.
+    const btcRows=await Promise.resolve(btcFiveMinute);
+    return {row,fast,oneMinute:m1.candles,fiveMinute:m5.candles,micro_fingerprint:buildMicroFingerprint({oneMinute:m1.candles,fiveMinute:m5.candles,btcFiveMinute:btcRows,ticker:row,now:this.clock(),config:this.config}),source:sourceList([m1.source,m5.source])};
   }
 
   async deepScan(row,fast,marketContext,micro){
@@ -1223,14 +1226,39 @@ export class EarlyExpansionRadar{
         return {btcFive,marketContext};
       })();
       const outcomeMaintenanceStartedAt=this.clock();
+      let outcomeMaintenanceWorkMs=0;
       const historyAlerts=[];
       try{
+        const historyReadStartedAt=this.clock();
         if(typeof this.store.readEarlyExpansionAlerts==='function')historyAlerts.push(...await this.store.readEarlyExpansionAlerts({sinceMs:now-45*24*60*60*1000,limit:100}));
         if(typeof this.store.readFalconEyeAlerts==='function')historyAlerts.push(...await this.store.readFalconEyeAlerts({sinceMs:now-45*24*60*60*1000,limit:100}));
+        outcomeMaintenanceWorkMs+=Math.max(0,this.clock()-historyReadStartedAt);
       }catch(e){this.noteError(e,'outcome-history-read');}
+      const importStartedAt=this.clock();
       await importHistoricalPreExpansionSignals(this.store,historyAlerts,{now,logger:this.logger}).catch(e=>this.noteError(e,'outcome-history-import'));
+      outcomeMaintenanceWorkMs+=Math.max(0,this.clock()-importStartedAt);
+
+      // Candle fetches run concurrently with the independent BTC context fetch.
+      // Each micro worker awaits the same context only after its 1m/5m reads finish.
+      const microScanStartedAt=this.clock();
+      let microScanCompletedAt=microScanStartedAt;
+      const btcFivePromise=marketContextPromise.then(result=>result.btcFive);
+      const microScanPromise=boundedMap(selected,this.config.microConcurrency,async row=>{
+        try{return await this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFivePromise);}
+        catch(e){this.failedTotal++;this.noteError(e,'micro-row');return {symbol:row.symbol,failed:true,error:String(e?.message??e),micro_fingerprint:{score:null,confirmation_count:0,eligible:false,closed_candles_only:true},source:sourceList([tickerSource])};}
+      }).then(result=>{microScanCompletedAt=this.clock();return result;});
+
+      const marketContextResult=await marketContextPromise;
+      btcFive=marketContextResult.btcFive;
+      marketContext=marketContextResult.marketContext;
+      phaseTimings.market_context_ms=Math.max(0,marketContextCompletedAt-marketContextStartedAt);
+      const markoutStartedAt=this.clock();
       await updatePreExpansionMarkouts(this.store,rawRows,{now,marketContext,logger:this.logger}).catch(e=>this.noteError(e,'outcome-markout'));
+      outcomeMaintenanceWorkMs+=Math.max(0,this.clock()-markoutStartedAt);
+      const reportStartedAt=this.clock();
       await maybeLogPreExpansionOutcomeReport(this.store,{logger:this.logger,now}).catch(e=>this.noteError(e,'outcome-report'));
+      outcomeMaintenanceWorkMs+=Math.max(0,this.clock()-reportStartedAt);
+
       // Historical closed-candle backfill is lower priority than live detection.
       // Run it asynchronously with a bounded cadence so slow archive catch-up cannot
       // hold a complete-market Radar 8 cycle hostage.
@@ -1249,17 +1277,10 @@ export class EarlyExpansionRadar{
           .finally(()=>{if(this.outcomeBackfillTask===task)this.outcomeBackfillTask=null;});
         this.outcomeBackfillTask=task;
       }
-      phaseTimings.outcome_maintenance_ms=Math.max(0,this.clock()-outcomeMaintenanceStartedAt);
-      const microScanStartedAt=this.clock();
-      let microScanCompletedAt=microScanStartedAt;
-      const microScanPromise=boundedMap(selected,this.config.microConcurrency,async row=>{
-        try{return await this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFive);}
-        catch(e){this.failedTotal++;this.noteError(e,'micro-row');return {symbol:row.symbol,failed:true,error:String(e?.message??e),micro_fingerprint:{score:null,confirmation_count:0,eligible:false,closed_candles_only:true},source:sourceList([tickerSource])};}
-      }).then(result=>{microScanCompletedAt=this.clock();return result;});
-      const [microScanned,marketContextResult]=await Promise.all([microScanPromise,marketContextPromise]);
-      btcFive=marketContextResult.btcFive;
-      marketContext=marketContextResult.marketContext;
-      phaseTimings.market_context_ms=Math.max(0,marketContextCompletedAt-marketContextStartedAt);
+      outcomeMaintenanceWorkMs+=Math.max(0,this.clock()-outcomeMaintenanceStartedAt-(marketContextCompletedAt-marketContextStartedAt));
+      phaseTimings.outcome_maintenance_ms=outcomeMaintenanceWorkMs;
+
+      const microScanned=await microScanPromise;
       phaseTimings.micro_scan_ms=Math.max(0,microScanCompletedAt-microScanStartedAt);
       phaseTimings.market_micro_overlap_ms=Math.max(0,
         Math.min(marketContextCompletedAt,microScanCompletedAt)-Math.max(marketContextStartedAt,microScanStartedAt));
