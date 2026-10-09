@@ -20,14 +20,21 @@ async function withStore(fn){
   try{const store=await new DurableStore({dir}).init();await fn(store);}
   finally{await rm(dir,{recursive:true,force:true});}
 }
-function signal({radar='EARLY_EXPANSION_RADAR',symbol='ABCUSDT',stage='PRE_EXPANSION',at=NOW,price=100,move=1.2,metrics={}}={}){
-  return {
+function signal({radar='EARLY_EXPANSION_RADAR',symbol='ABCUSDT',stage='PRE_EXPANSION',at=NOW,price=100,move=1.2,regime=null,metrics={}}={}){
+  const alert={
     id:radar+':'+symbol+':'+stage+':'+at,radar,symbol,price,price_change_24h:move,
     pre_expansion_stage:stage,decision_band:stage,data_quality:88,detected_at:at,
     reason_codes:['HIGHER_LOW_SEQUENCE','VOLUME_PARTICIPATION_IMPROVING'],
-    metrics:{price_change_5m_pct:.2,price_change_15m_pct:.5,five_min_resistance:105,...metrics},
+    metrics:{
+      price_change_5m_pct:.2,price_change_10m_pct:.35,price_change_15m_pct:.5,
+      relative_strength_vs_btc_pct:.1,volume_ratio:1.3,trade_ratio:1.2,atr_ratio:.8,
+      five_min_resistance:105,...metrics
+    },
     risk_flags:[],closed_candles_only:true,source:'test-public-candle-fixture'
   };
+  if(regime)alert.market_regime_label=regime;
+  if(radar==='FALCON_EYE_RADAR')alert.falcon_eye={pre_expansion_fingerprint:{data_ready:true},reasons:['BASE_AND_PARTICIPATION']};
+  return alert;
 }
 function candle(openTime,close,{step=60_000,high=close+.1,low=close-.1,open=close-.02,volume=1000}={}){
   return {openTime,closeTime:openTime+step-1,open,high,low,close,volume,quoteVolume:close*volume,closed:true};
@@ -58,7 +65,10 @@ test('records Radar 8/Radar 9 observations with time, entry, stage, data quality
     const r8=state.records.find(x=>x.radar==='RADAR_8'&&x.signal_type==='WATCH_EARLY');
     assert.equal(r8.entry_price,100);
     assert.equal(r8.detected_at,NOW);
-    assert.equal(r8.data_quality,88);
+    assert.equal(r8.data_quality,100);
+    assert.equal(r8.reported_data_quality,88);
+    assert.equal(r8.evaluation_eligible,true);
+    assert.deepEqual(r8.missing_required_fields,[]);
     assert.deepEqual(r8.reason_codes,['HIGHER_LOW_SEQUENCE','VOLUME_PARTICIPATION_IMPROVING']);
     assert.equal(r8.market_regime,'BULLISH');
     assert.equal(state.records.find(x=>x.radar==='RADAR_9').radar,'RADAR_9');
@@ -68,7 +78,7 @@ test('records Radar 8/Radar 9 observations with time, entry, stage, data quality
 test('live markouts sample six horizons and detect a sampled resistance rejection',async()=>{
   await withStore(async store=>{
     const at=NOW+100_000;
-    await recordPreExpansionSignals(store,[signal({stage:'BREAKOUT_DEVELOPING',at,metrics:{five_min_resistance:105}})],{now:at});
+    await recordPreExpansionSignals(store,[signal({stage:'BREAKOUT_DEVELOPING',at,regime:'RANGING',metrics:{five_min_resistance:105}})],{now:at});
     let r=await updatePreExpansionMarkouts(store,[{symbol:'ABCUSDT',lastPrice:106}],{now:at+30_000});
     assert.equal(r.updated,1);
     r=await updatePreExpansionMarkouts(store,[{symbol:'ABCUSDT',lastPrice:106.2}],{now:at+5*60_000+30_000});
@@ -164,26 +174,51 @@ test('excludes BTC benchmark and stablecoin pairs from opportunity performance c
   });
 });
 
-test('Radar 9 measurement quality is derived from field coverage, not the constant alert quality',async()=>{
+test('Radar 9 normalized aliases receive full coverage when the actual source fields are present',async()=>{
   await withStore(async store=>{
-    await recordPreExpansionSignals(store,[signal({radar:'FALCON_EYE_RADAR',stage:'WATCH_EARLY'})],{now:NOW});
+    const alert={
+      id:'FALCON:LINKUSDT:'+NOW,radar:'FALCON_EYE_RADAR',symbol:'LINKUSDT',price:100,
+      price_change_24h:1.2,pre_expansion_stage:'WATCH_EARLY',potential_label:'WATCH_EARLY',
+      data_quality:90,detected_at:NOW,market_regime_label:'MIXED',
+      reasons:['BASE_STRUCTURE','GRADUAL_PARTICIPATION'],closed_candles_only:true,
+      source:'Binance public REST',
+      falcon_eye:{
+        pre_expansion_stage:'WATCH_EARLY',not_chasing:true,
+        reasons:['BASE_STRUCTURE','GRADUAL_PARTICIPATION'],
+        metrics:{last_price:100,return_5m:.2,return_10m:.35,relative_strength_5m_spread_pct:.12,
+          local_high:105,volume_ratio:1.3,trade_ratio:1.2,atr_ratio:.8},
+        pre_expansion_fingerprint:{data_ready:true,metrics:{resistance_distance_atr:.6}}
+      }
+    };
+    await recordPreExpansionSignals(store,[alert],{now:NOW});
     const row=(await store.getPreExpansionOutcomes()).records[0];
-    assert.equal(row.reported_data_quality,88);
-    assert.equal(row.data_quality_source,'DERIVED_FIELD_COVERAGE');
-    assert.ok(row.data_quality<row.reported_data_quality);
+    assert.equal(row.reported_data_quality,90);
+    assert.equal(row.data_quality_source,'NORMALIZED_REQUIRED_FIELD_COVERAGE');
+    assert.equal(row.data_quality,100);
+    assert.equal(row.evaluation_eligible,true);
+    assert.equal(row.market_regime,'RANGING');
+    assert.deepEqual(row.missing_required_fields,[]);
+    assert.equal(row.initial_metrics.return_5m_pct,.2);
+    assert.equal(row.initial_metrics.return_10m_pct,.35);
+    assert.equal(row.initial_metrics.relative_strength_vs_btc_pct,.12);
+    assert.equal(row.initial_metrics.resistance_price,105);
   });
 });
 
-test('report includes the percentages of early versus after-move discoveries',()=>{
+test('report never publishes cohort percentages from fewer than 30 eligible signals',()=>{
   const rows=[
-    {radar:'RADAR_8',symbol:'AAAUSDT',signal_type:'WATCH_EARLY',detected_before_move:true,already_extended_at_detection:false,marks:{},excursions:{}},
-    {radar:'RADAR_8',symbol:'BBBUSDT',signal_type:'PRE_EXPANSION',detected_before_move:false,already_extended_at_detection:true,marks:{},excursions:{}},
-    {radar:'RADAR_9',symbol:'CCCUSDT',signal_type:'BREAKOUT_DEVELOPING',detected_before_move:true,already_extended_at_detection:false,marks:{},excursions:{}}
+    {radar:'RADAR_8',symbol:'AAAUSDT',signal_type:'WATCH_EARLY',market_regime:'RANGING',evaluation_eligible:true,missing_required_fields:[],detected_before_move:true,already_extended_at_detection:false,marks:{},excursions:{}},
+    {radar:'RADAR_8',symbol:'BBBUSDT',signal_type:'PRE_EXPANSION',market_regime:'MIXED',evaluation_eligible:true,missing_required_fields:[],detected_before_move:false,already_extended_at_detection:true,marks:{},excursions:{}},
+    {radar:'RADAR_9',symbol:'CCCUSDT',signal_type:'BREAKOUT_DEVELOPING',market_regime:'RANGING',evaluation_eligible:true,missing_required_fields:[],detected_before_move:true,already_extended_at_detection:false,marks:{},excursions:{}}
   ];
   const report=buildPreExpansionOutcomeReport({records:rows,now:NOW});
-  assert.equal(report.groups.by_radar.RADAR_8.detected_before_move_pct,50);
-  assert.equal(report.groups.by_radar.RADAR_8.detected_after_move_pct,50);
-  assert.equal(report.comparison.radar9.detected_before_move_pct,100);
+  assert.equal(report.groups.by_radar.RADAR_8.records,2);
+  assert.equal(report.groups.by_radar.RADAR_8.detected_before_move_count,1);
+  assert.equal(report.groups.by_radar.RADAR_8.detected_before_move_pct,null);
+  assert.equal(report.groups.by_radar.RADAR_8.detected_after_move_pct,null);
+  assert.equal(report.comparison.radar9.detected_before_move_pct,null);
+  assert.equal(report.groups.by_radar.RADAR_8.horizons['4h'].hit_rate_pct,null);
+  assert.equal(report.groups.by_market_regime.RANGING.records,3);
 });
 
 test('imports only older archived signals, de-duplicates them, and excludes non-opportunity symbols',async()=>{
@@ -219,7 +254,7 @@ test('mature live signal receives retrospective closed-OHLC marks for all six ho
       const close=100+i*.035;
       return candle(detected+i*5*60_000,close,{step:5*60_000,high:close+.4,low:close-.3});
     });
-    await recordPreExpansionSignals(store,[signal({symbol:'HISTUSDT',stage:'PRE_EXPANSION',at:detected})],{now:detected});
+    await recordPreExpansionSignals(store,[signal({symbol:'HISTUSDT',stage:'PRE_EXPANSION',at:detected,regime:'RANGING'})],{now:detected});
     await updatePreExpansionMarkouts(store,[{symbol:'HISTUSDT',lastPrice:101}],{now:now-60_000});
     const fakeRest={klines:async(symbol,interval)=>({candles:interval==='1m'?one:five})};
     const result=await backfillHistoricalPreExpansionOutcomes(store,fakeRest,{now,maxSignals:1});
@@ -247,6 +282,66 @@ test('Radar 8 alert history can be durably read by the internal retrospective wo
   });
 });
 
+
+test('incomplete signals are saved for audit but excluded from markout updates and performance cohorts',async()=>{
+  await withStore(async store=>{
+    await recordPreExpansionSignals(store,[signal({
+      symbol:'PARTIALUSDT',stage:'PRE_EXPANSION',regime:'RANGING',
+      metrics:{return_10m_pct:null,relative_strength_vs_btc_pct:null,volume_ratio:null,trade_ratio:null,atr_ratio:null}
+    })],{now:NOW});
+    const before=(await store.getPreExpansionOutcomes()).records[0];
+    assert.equal(before.data_quality<100,true);
+    assert.equal(before.evaluation_eligible,false);
+    assert.equal(before.evaluation_status,'EXCLUDED_INCOMPLETE');
+    assert.ok(before.missing_required_fields.includes('return_10m_pct'));
+    assert.ok(before.missing_required_fields.includes('volume_ratio'));
+    await updatePreExpansionMarkouts(store,[{symbol:'PARTIALUSDT',lastPrice:105}],{now:NOW+6*60_000});
+    const after=(await store.getPreExpansionOutcomes()).records[0];
+    assert.deepEqual(after.marks,{});
+    const report=buildPreExpansionOutcomeReport(await store.getPreExpansionOutcomes());
+    assert.equal(report.excluded_incomplete_records,1);
+    assert.equal(report.eligible_records,0);
+    assert.equal(report.groups.by_radar.RADAR_8.meaningful_move_4h_pct,null);
+  });
+});
+
+test('legacy rows with MIXED regime are normalized and excluded until their input fields are revalidated',()=>{
+  const report=buildPreExpansionOutcomeReport({
+    records:[{signal_id:'legacy',radar:'RADAR_9',symbol:'ADAUSDT',signal_type:'WATCH_EARLY',
+      market_regime:'MIXED',entry_price:1,detected_at:NOW,marks:{},excursions:{}}],
+    now:NOW
+  });
+  assert.equal(report.groups.by_market_regime.RANGING.records,1);
+  assert.equal(report.groups.by_market_regime.RANGING.eligible_records,0);
+  assert.equal(report.groups.by_market_regime.RANGING.excluded_incomplete_records,1);
+});
+
+test('RANGING historical benchmark requires 30 positive and 30 adverse closed-OHLC cases',()=>{
+  const horizons=['5m','15m','30m','60m','4h','24h'];
+  const rows=Array.from({length:60},(_,i)=>{
+    const positive=i<30;
+    return {
+      signal_id:'historic-'+i,radar:i%2?'RADAR_8':'RADAR_9',symbol:'COIN'+i+'USDT',
+      signal_type:'PRE_EXPANSION',market_regime:i%3===0?'MIXED':'RANGING',
+      evaluation_eligible:true,missing_required_fields:[],evaluation_status:'ELIGIBLE',
+      detected_at:NOW+i,entry_price:100,historical_evaluation:true,detected_before_move:true,
+      marks:Object.fromEntries(horizons.map(h=>[h,{sample_quality:'HISTORICAL_CLOSED_OHLC',return_pct:positive?3.5:-1.2,outcome:positive?'HIT':'MISS'}])),
+      excursions:Object.fromEntries(horizons.map(h=>[h,{
+        source:'HISTORICAL_CLOSED_OHLC',complete:true,
+        max_favorable_pct:h==='4h'?(positive?4.5:1.1):positive?3.5:.8,
+        max_adverse_pct:h==='4h'?(positive?-.4:-1.5):positive?-.3:-1.2
+      }]))
+    };
+  });
+  const report=buildPreExpansionOutcomeReport({records:rows,now:NOW});
+  assert.equal(report.ranging_historical_sample.complete_historical_records,60);
+  assert.equal(report.ranging_historical_sample.positive_cases,30);
+  assert.equal(report.ranging_historical_sample.negative_cases,30);
+  assert.equal(report.ranging_historical_sample.ready_for_comparison,true);
+  assert.equal(report.ranging_historical_sample.sample_warning,null);
+  assert.equal(report.comparison.radar8.matured_4h,30);
+  assert.equal(report.comparison.radar9.matured_4h,30);
+});
 
 test('compacts already saved benchmark/stablecoin rows even when live markout polling is throttled',async()=>{
   await withStore(async store=>{
