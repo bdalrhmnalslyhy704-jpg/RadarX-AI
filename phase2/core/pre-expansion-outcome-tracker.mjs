@@ -504,3 +504,124 @@ export async function maybeLogPreExpansionOutcomeReport(store,{logger=console,no
 }
 
 export const PRE_EXPANSION_OUTCOME_HORIZONS=HORIZONS.map(([key,ms,impact_threshold_pct])=>({key,ms,impact_threshold_pct}));
+
+
+/**
+ * Imports older saved Radar 8/9 alerts for retrospective OHLC review.
+ * Only alerts older than 24h are imported, so no incomplete signal is mistaken
+ * for a matured historical result. This does not expose or modify any API.
+ */
+export async function importHistoricalPreExpansionSignals(store,alerts,{now=Date.now(),logger=console,intervalMs=HISTORICAL_IMPORT_INTERVAL_MS}={}){
+  if(typeof store?.updatePreExpansionOutcomes!=='function')return {imported:0,skipped:list(alerts).length,reason:'TRACKER_STORE_UNAVAILABLE'};
+  let claimed=false;
+  await store.updatePreExpansionOutcomes(raw=>{
+    const state=normalizeState(raw);
+    if(now-state.last_historical_import_at<intervalMs)return false;
+    state.last_historical_import_at=now;state.updated_at=now;claimed=true;return state;
+  });
+  if(!claimed)return {imported:0,skipped:list(alerts).length,throttled:true};
+  const importable=list(alerts).filter(alert=>{
+    const at=num(alert?.detected_at??alert?.processed_at??alert?.as_of_ms);
+    return at!==null&&now-at>=24*60*60_000&&now-at<=HISTORICAL_WINDOW_MS;
+  });
+  const importedEvents=[];
+  let imported=0,skipped=0;
+  await store.updatePreExpansionOutcomes(raw=>{
+    const state=normalizeState(raw);let changed=false;
+    for(const alert of importable){
+      const row=makeSignal(alert,now,alert?.market_context||{});
+      if(!row){skipped++;continue;}
+      if(state.records.some(x=>x.signal_id===row.signal_id)){skipped++;continue;}
+      row.historical_archive_import=true;
+      row.outcome_status='PENDING';
+      state.records.push(row);
+      importedEvents.push({signal_id:row.signal_id,radar:row.radar,symbol:row.symbol,signal_type:row.signal_type,detected_at:row.detected_at,entry_price:row.entry_price});
+      imported++;changed=true;
+    }
+    const cutoff=now-HISTORICAL_WINDOW_MS;
+    state.records=state.records.filter(x=>num(x.detected_at,0)>=cutoff||!HORIZONS.every(([h])=>x.marks?.[h]));
+    if(state.records.length>MAX_RECORDS)state.records=state.records.slice(-MAX_RECORDS);
+    if(changed){state.updated_at=now;return state;}
+    return false;
+  });
+  for(const row of importedEvents)logger?.info?.('[PRE_EXPANSION_HISTORICAL_SIGNAL_IMPORTED] '+JSON.stringify(row));
+  return {imported,skipped:skipped+(list(alerts).length-importable.length)};
+}
+
+/**
+ * Replays mature recorded signals against actual closed public 1m/5m OHLC.
+ * A small hourly budget avoids competing with the live radars for the shared
+ * Binance public-REST request budget. Historical prices replace sampled prices
+ * only horizon-by-horizon when the required closed candle markout exists.
+ */
+export async function backfillHistoricalPreExpansionOutcomes(store,rest,{now=Date.now(),logger=console,intervalMs=HISTORICAL_BACKFILL_INTERVAL_MS,maxSignals=HISTORICAL_BACKFILL_MAX_SIGNALS}={}){
+  if(typeof store?.updatePreExpansionOutcomes!=='function'||typeof rest?.klines!=='function'){
+    return {evaluated:0,skipped:0,reason:'HISTORICAL_REST_OR_STORE_UNAVAILABLE'};
+  }
+  let selected=[];
+  await store.updatePreExpansionOutcomes(raw=>{
+    const state=normalizeState(raw);
+    if(now-state.last_historical_backfill_at<intervalMs)return false;
+    selected=state.records.filter(r=>
+      r&&num(r.detected_at)!==null&&num(r.entry_price)>0&&
+      now-Number(r.detected_at)>=24*60*60_000+10*60_000&&
+      now-Number(r.detected_at)<=HISTORICAL_WINDOW_MS&&
+      r.historical_evaluation!==true
+    ).sort((a,b)=>Number(a.detected_at)-Number(b.detected_at)).slice(0,Math.max(1,Math.min(6,Math.trunc(Number(maxSignals)||1))));
+    if(!selected.length)return false;
+    state.last_historical_backfill_at=now;state.updated_at=now;return state;
+  });
+  if(!selected.length)return {evaluated:0,skipped:0,throttled:true};
+  let evaluated=0,skipped=0;
+  for(const signal of selected){
+    try{
+      const detectedAt=Number(signal.detected_at);
+      const [one,five]=await Promise.all([
+        rest.klines(signal.symbol,'1m',{limit:100,startTime:detectedAt,endTime:detectedAt+75*60_000}),
+        rest.klines(signal.symbol,'5m',{limit:300,startTime:detectedAt,endTime:detectedAt+25*60*60_000})
+      ]);
+      const closedOne=candleRows(one?.candles,now),closedFive=candleRows(five?.candles,now);
+      if(closedOne.length<55||closedFive.length<270){skipped++;logger?.warn?.('[PRE_EXPANSION_HISTORICAL_BACKFILL_INSUFFICIENT] '+JSON.stringify({signal_id:signal.signal_id,symbol:signal.symbol,one_minute_closed:closedOne.length,five_minute_closed:closedFive.length}));continue;}
+      const result=evaluateHistoricalPreExpansionSignal(signal,{candles1m:closedOne,candles5m:closedFive,now});
+      if(!result.ok){skipped++;continue;}
+      let event=null;
+      await store.updatePreExpansionOutcomes(raw=>{
+        const state=normalizeState(raw),current=state.records.find(x=>x.signal_id===signal.signal_id);
+        if(!current||current.historical_evaluation===true)return false;
+        current.live_marks=current.live_marks||{...object(current.marks)};
+        current.live_excursions=current.live_excursions||{...object(current.excursions)};
+        const historical=result.record;
+        const covered=[];
+        for(const [h] of HORIZONS){
+          if(historical.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC'){
+            current.marks[h]=historical.marks[h];covered.push(h);
+          }
+          if(historical.excursions?.[h]?.source==='HISTORICAL_CLOSED_OHLC'){
+            current.excursions[h]=historical.excursions[h];
+          }
+        }
+        current.first_3pct_at=historical.first_3pct_at??current.first_3pct_at;
+        current.first_2pct_at=historical.first_2pct_at??current.first_2pct_at;
+        current.max_favorable_pct=Number.isFinite(historical.max_favorable_pct)?historical.max_favorable_pct:current.max_favorable_pct;
+        current.max_adverse_pct=Number.isFinite(historical.max_adverse_pct)?historical.max_adverse_pct:current.max_adverse_pct;
+        if(historical.false_breakout!==null)current.false_breakout=historical.false_breakout;
+        current.false_breakout_detected_at=historical.false_breakout_detected_at??current.false_breakout_detected_at;
+        current.false_breakout_basis=historical.false_breakout_basis??current.false_breakout_basis;
+        current.historical_evaluation_horizons=covered;
+        current.historical_evaluation=HORIZONS.every(([h])=>covered.includes(h));
+        current.observed_price_source=current.historical_evaluation?'HISTORICAL_CLOSED_OHLC':'MIXED_LIVE_AND_HISTORICAL';
+        current.historical_evaluated_at=now;
+        current.outcome_status=HORIZONS.every(([h])=>Boolean(current.marks?.[h]))?'COMPLETE':'PARTIAL';
+        current.updated_at=now;state.updated_at=now;
+        event={signal_id:current.signal_id,radar:current.radar,symbol:current.symbol,signal_type:current.signal_type,historical_horizons:covered,complete:current.historical_evaluation,max_favorable_pct:current.max_favorable_pct,max_adverse_pct:current.max_adverse_pct,false_breakout:current.false_breakout};
+        return state;
+      });
+      if(event){evaluated++;logger?.info?.('[PRE_EXPANSION_HISTORICAL_BACKFILL] '+JSON.stringify(event));}
+      else skipped++;
+    }catch(error){
+      skipped++;
+      logger?.warn?.('[PRE_EXPANSION_HISTORICAL_BACKFILL_ERROR] '+JSON.stringify({signal_id:signal.signal_id,symbol:signal.symbol,error:String(error?.message??error)}));
+    }
+  }
+  return {evaluated,skipped};
+}
