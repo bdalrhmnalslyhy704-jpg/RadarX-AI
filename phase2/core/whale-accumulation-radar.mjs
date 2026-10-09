@@ -365,19 +365,24 @@ export class WhaleAccumulationRadar{
     return rows;
   }
   selectBatch(rows){
-    const sorted=[...rows].sort((a,b)=>{
+    const sorted=[...(Array.isArray(rows)?rows:[])].sort((a,b)=>{
       const qa=Math.max(0,Number(a.quoteVolume24h)||0),qb=Math.max(0,Number(b.quoteVolume24h)||0);
       const quietA=100-Math.min(60,Math.abs(Number(a.priceChange24h)||0)*10);
       const quietB=100-Math.min(60,Math.abs(Number(b.priceChange24h)||0)*10);
       return (quietB+Math.log10(Math.max(1,qb))*3)-(quietA+Math.log10(Math.max(1,qa))*3);
     });
-    const selected=sorted.slice(0,Math.max(1,Number(this.config.topAnchors)||8));
-    const n=Math.max(1,Number(this.config.rotationBatchSize)||10);
-    for(let i=0;i<n&&this.universe.length;i++){
-      const sym=this.universe[this.cursor%this.universe.length];this.cursor=(this.cursor+1)%this.universe.length;
-      const row=rows.find(x=>x.symbol===sym);if(row)selected.push(row);
+    const selected=[],seen=new Set();
+    const take=row=>{if(row?.symbol&&!seen.has(row.symbol)){selected.push(row);seen.add(row.symbol);return true;}return false;};
+    const topCount=Math.max(1,Math.trunc(Number(this.config.topAnchors)||8));
+    const rotationCount=Math.max(1,Math.trunc(Number(this.config.rotationBatchSize)||10));
+    for(const row of sorted.slice(0,topCount))take(row);
+    const target=Math.min(new Set(sorted.map(x=>x.symbol)).size,topCount+rotationCount);
+    let visited=0;
+    while(selected.length<target&&visited<this.universe.length){
+      const symbol=this.universe[this.cursor%this.universe.length];this.cursor=(this.cursor+1)%this.universe.length;visited++;
+      take(sorted.find(x=>x.symbol===symbol));
     }
-    return [...new Map(selected.map(x=>[x.symbol,x])).values()];
+    return selected;
   }
   async scanRow(row){
     const [one,five,agg,depth]=await Promise.all([
