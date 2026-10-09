@@ -169,7 +169,8 @@ function makeSignal(alert,now,marketContext){
   };
 }
 
-export async function recordPreExpansionSignals(store,alerts,{now=Date.now(),marketContext={}}={}){
+export async function recordPreExpansionSignals(store,alerts,{now=Date.now(),marketContext={},logger=console}={}){
+  const loggedSignals=[];
   if(typeof store?.updatePreExpansionOutcomes!=='function')return {recorded:0,skipped:list(alerts).length,reason:'TRACKER_STORE_UNAVAILABLE'};
   let recorded=0,skipped=0;
   await store.updatePreExpansionOutcomes(raw=>{
@@ -183,7 +184,7 @@ export async function recordPreExpansionSignals(store,alerts,{now=Date.now(),mar
       }
       const existing=state.records.find(x=>x.signal_id===incoming.signal_id);
       if(existing){skipped++;continue;}
-      state.records.push(incoming);
+      state.records.push(incoming);loggedSignals.push({signal_id:incoming.signal_id,radar:incoming.radar,symbol:incoming.symbol,signal_type:incoming.signal_type,entry_price:incoming.entry_price,detected_at:incoming.detected_at,data_quality:incoming.data_quality,market_regime:incoming.market_regime,detected_before_move:incoming.detected_before_move,already_extended_at_detection:incoming.already_extended_at_detection,reason_codes:incoming.reason_codes});
       state.last_stage_by_key[key]={stage:incoming.signal_type,last_recorded_at:now,signal_id:incoming.signal_id};
       recorded++;changed=true;
     }
@@ -198,6 +199,7 @@ export async function recordPreExpansionSignals(store,alerts,{now=Date.now(),mar
     if(changed){state.updated_at=now;return state;}
     return false;
   });
+  for(const signal of loggedSignals)logger?.info?.('[PRE_EXPANSION_SIGNAL_OBSERVED] '+JSON.stringify(signal));
   return {recorded,skipped};
 }
 
@@ -271,7 +273,8 @@ function updateOneRecord(record,price,now){
   return changed;
 }
 
-export async function updatePreExpansionMarkouts(store,tickerRows,{now=Date.now(),marketContext={}}={}){
+export async function updatePreExpansionMarkouts(store,tickerRows,{now=Date.now(),marketContext={},logger=console}={}){
+  const loggedMarkouts=[];
   if(typeof store?.updatePreExpansionOutcomes!=='function')return {updated:0,pending:0,reason:'TRACKER_STORE_UNAVAILABLE'};
   let updated=0,pending=0,skippedByThrottle=false;
   const quotes=priceMap(tickerRows);
@@ -285,7 +288,11 @@ export async function updatePreExpansionMarkouts(store,tickerRows,{now=Date.now(
       if(!quote)continue;
       if(record.outcome_status==='COMPLETE')continue;
       if(record.entry_price===null||record.entry_price<=0)continue;
+      const previousMarks=record.marks||{};
       const one=updateOneRecord(record,quote.price,now);
+      for(const [h] of HORIZONS){
+        if(!previousMarks[h]&&record.marks?.[h])loggedMarkouts.push({signal_id:record.signal_id,radar:record.radar,symbol:record.symbol,signal_type:record.signal_type,horizon:h,detected_at:record.detected_at,observed_at:record.marks[h].observed_at,delay_ms:record.marks[h].delay_ms,entry_price:record.entry_price,price:record.marks[h].price,return_pct:record.marks[h].return_pct,outcome:record.marks[h].outcome,sample_quality:record.marks[h].sample_quality,max_favorable_pct:record.excursions?.[h]?.max_favorable_pct,max_adverse_pct:record.excursions?.[h]?.max_adverse_pct});
+      }
       if(one){
         record.latest_market_regime=marketRegime;
         record.updated_at=now;updated++;changed=true;
@@ -295,6 +302,7 @@ export async function updatePreExpansionMarkouts(store,tickerRows,{now=Date.now(
     if(!changed)return false;
     state.last_price_update_at=now;state.updated_at=now;return state;
   });
+  for(const mark of loggedMarkouts)logger?.info?.('[PRE_EXPANSION_MARKOUT] '+JSON.stringify(mark));
   return {updated,pending,throttled:skippedByThrottle};
 }
 
