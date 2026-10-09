@@ -22,8 +22,11 @@ const REARM_MS=60*60*1000;
 const HISTORICAL_WINDOW_MS=45*24*60*60*1000;
 const HISTORICAL_IMPORT_INTERVAL_MS=60*60*1000;
 // Measurement is incremental, with a bounded batch and a shared REST budget.
-const HISTORICAL_BACKFILL_INTERVAL_MS=60*1000;
-const HISTORICAL_BACKFILL_MAX_SIGNALS=3;
+// Keep retrospective REST work well below the live scan budget. The worker
+// continues advancing mature horizons in small batches rather than competing
+// with each 45-second Radar 8 cycle.
+const HISTORICAL_BACKFILL_INTERVAL_MS=3*60*1000;
+const HISTORICAL_BACKFILL_MAX_SIGNALS=2;
 const EXCLUDED_EVALUATION_SYMBOLS=new Set(['BTCUSDT','USDCUSDT','TUSDUSDT','USDPUSDT','FDUSDUSDT','BUSDUSDT','DAIUSDT','EURUSDT','EURTUSDT','USDEUSDT','PYUSDUSDT','USTCUSDT']);
 const PRICE_POLL_MIN_MS=20_000;
 const FALSE_BREAKOUT_WINDOW_MS=15*60_000;
@@ -264,6 +267,15 @@ function makeSignal(alert,now,marketContext){
   const signalScore=num(alert?.early_expansion_score??alert?.score??alert?.signal_score??
     alert?.opportunity_score??alert?.potential_score??alert?.falcon_eye?.early_expansion_score??
     alert?.falcon_eye?.score??alert?.falcon_eye?.metrics?.score);
+  // Preserve secondary detector scores for auditing without promoting them to
+  // the canonical signal score or using them to pass evaluation eligibility.
+  const sourceScore=num(alert?.source_score??alert?.micro_fingerprint_score);
+  const sourceScoreType=String(alert?.source_score_type||'').trim()||
+    (sourceScore===null?'SOURCE_SCORE_NOT_PROVIDED':'SOURCE_SCORE');
+  const sourceScoreEligible=alert?.source_score_eligible===true;
+  const sourceScoreStatus=String(alert?.source_score_status||'').trim()||
+    (sourceScore===null?'SOURCE_SCORE_NOT_PROVIDED':sourceScoreEligible?'SOURCE_SCORE_QUALIFIED':'SOURCE_SCORE_AVAILABLE_NOT_QUALIFIED');
+  const signalScoreSource=signalScore===null?null:String(alert?.signal_score_source||'SOURCE_SIGNAL_SCORE');
   const coverage=fieldCoverage({radar,symbol,stage,entry,detectedAt,signalScore,marketRegime,metrics:m,reasons,fingerprintReady});
   const quality=coverage.score;
   const reportedQuality=num(alert?.data_quality??alert?.falcon_eye?.data_quality);
@@ -279,7 +291,9 @@ function makeSignal(alert,now,marketContext){
     signal_id:signalId,radar,symbol,entry_price:entry,detected_at:detectedAt,
     created_at:detectedAt,detected_at_iso:new Date(detectedAt).toISOString(),
     build_version:buildVersion,build_commit:buildCommit,build_branch:buildBranch,
-    signal_score:signalScore,score_source:signalScore===null?null:'SOURCE_SIGNAL_SCORE',
+    signal_score:signalScore,score_source:signalScoreSource,
+    source_score:sourceScore,source_score_type:sourceScoreType,
+    source_score_eligible:sourceScoreEligible,source_score_status:sourceScoreStatus,
     archive_missing_fields:archiveMissingFields,signal_type:stage,
     data_quality:quality,data_quality_source:'NORMALIZED_REQUIRED_FIELD_COVERAGE',
     reported_data_quality:reportedQuality,data_quality_status:
@@ -334,7 +348,9 @@ export async function recordPreExpansionSignals(store,alerts,{now=Date.now(),mar
       state.records.push(incoming);loggedSignals.push({
         signal_id:incoming.signal_id,radar:incoming.radar,symbol:incoming.symbol,
         signal_type:incoming.signal_type,entry_price:incoming.entry_price,detected_at:incoming.detected_at,
-        created_at:incoming.created_at,signal_score:incoming.signal_score,
+        created_at:incoming.created_at,signal_score:incoming.signal_score,score_source:incoming.score_source,
+        source_score:incoming.source_score,source_score_type:incoming.source_score_type,
+        source_score_eligible:incoming.source_score_eligible,source_score_status:incoming.source_score_status,
         build_version:incoming.build_version,build_commit:incoming.build_commit,build_branch:incoming.build_branch,
         archive_missing_fields:incoming.archive_missing_fields,
         data_quality:incoming.data_quality,data_quality_source:incoming.data_quality_source,
