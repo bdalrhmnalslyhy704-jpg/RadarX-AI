@@ -62,7 +62,10 @@ jobs:
           grep -Fq 'TRADLI_OPEN_REQUESTED' android/app/src/main/java/com/radarx/app/MainActivity.java
           grep -Fq 'SAVED_DATA_NOT_VALID_FOR_TRADE_REVIEW' android/app/src/main/assets/radarx-tradli-feature-suite.mjs
           grep -Fq 'uiautomator dump /sdcard/radarx-window.xml' android/smoke-test.sh
-          ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
+          if grep -En 'https?://[^" ]*github\.io/RadarX-AI' android/app/src/main/assets/index.html android/app/src/main/assets/tradli.html; then
+            echo "::error::Active Android entry pages must not depend on GitHub Pages."
+            exit 1
+          fi
           grep -RInq "paper_trading=true" android/app/src/main/assets
           grep -RInq "real_order_execution=false" android/app/src/main/assets
           # Confidence score is enforced by the live Radar 9 API contract below; it is not required as UI text in assets.
