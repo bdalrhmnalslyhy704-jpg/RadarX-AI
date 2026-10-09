@@ -348,6 +348,7 @@ public final class MainActivity extends Activity {
 
         @JavascriptInterface
         public void openTradli() {
+            Log.i("RadarXTradli", "TRADLI_OPEN_REQUESTED");
             runOnUiThread(() -> {
                 try {
                     Intent intent = new Intent(MainActivity.this, TradliActivity.class);
