@@ -153,6 +153,16 @@ function deepNotice(scan) {
   return '<div class="rxsuite-row"><div><b>'+(live?'تحليل عميق من الخادم':'بيانات غير مكتملة')+'</b><small>'+esc(text+warningText)+'</small></div><span class="rxsuite-tag '+(live?'rxsuite-ok':'rxsuite-warn')+'">'+(live?'LIVE PRICE':'CHECK DATA')+'</span></div>';
 }
 
+function signalTime(row) {
+  if (row?.detected_time_12h) return String(row.detected_time_12h);
+  const raw = row?.detected_at ?? row?.processed_at;
+  if (raw == null) return '—';
+  const date = new Date(raw);
+  if (!Number.isFinite(date.getTime())) return '—';
+  try { return new Intl.DateTimeFormat('ar-YE',{timeZone:'Asia/Aden',hour:'2-digit',minute:'2-digit',hour12:true}).format(date); }
+  catch { return date.toISOString(); }
+}
+
 function levelsFor(frame,key,price) {
   const rows = Array.isArray(frame?.[key]) ? frame[key] : [];
   const out = rows.map(x => {
@@ -296,11 +306,32 @@ function hubPanel(root) {
   root.querySelector('#rx-hr').onclick=async()=>{
     const o=root.querySelector('#rx-ho');o.innerHTML='<p class="rxsuite-row">تحديث…</p>';
     try{
-      const b=await market();
-      o.innerHTML=(b.candidates||[]).slice(0,12).map((c,i)=>
-        '<div class="rxsuite-row"><div><b>'+(i+1)+'. '+esc(c.symbol)+'</b><small>'+esc(c.best_strategy||'—')+' · score '+num(c.overall_score,1)+' · liquidity '+num(c.liquidity_quality,0)+'</small></div><span class="rxsuite-tag '+(c.signal_state==='CONFIRMED'?'rxsuite-ok':'rxsuite-warn')+'">'+esc(c.signal_state||'UNKNOWN')+'</span></div>'
-      ).join('')||'<p class="rxsuite-row">لا توجد نتائج.</p>';
-    }catch(e){o.innerHTML='<div class="rxsuite-row"><b>DATA UNAVAILABLE</b><small>'+esc(e.message)+'</small></div>';}
+      const [alertsResult,marketResult]=await Promise.allSettled([
+        getRadarAlerts({radar:'ALL',limit:30}),
+        market()
+      ]);
+      const signalResponse=alertsResult.status==='fulfilled'?alertsResult.value:null;
+      const b=marketResult.status==='fulfilled'?marketResult.value:null;
+      const alerts=signalResponse?.ok&&Array.isArray(signalResponse.body?.alerts)?signalResponse.body.alerts:[];
+      const alertRows=alerts.slice(0,15).map((a,i)=>{
+        const time=signalTime(a);
+        const price=Number(a.price ?? a.detection_price ?? a.price_at_detection);
+        const symbol=String(a.symbol||'UNKNOWN');
+        const score=a.opportunity_score ?? a.score;
+        const label=a.radar_name||a.radar||'RadarX';
+        return '<div class="rxsuite-row"><div><b>'+(i+1)+'. '+esc(symbol)+' · '+esc(label)+'</b><small>'+esc(a.direction||a.event||'ALERT')+' · وقت الاكتشاف '+esc(time)+' · price '+(Number.isFinite(price)?num(price,8):'—')+' · score '+num(score,1)+'</small></div><span class="rxsuite-tag '+(a.eligible===false?'rxsuite-warn':'rxsuite-ok')+'">'+esc(a.potential_label||a.event||'SAVED ALERT')+'</span></div>';
+      }).join('');
+      const candidateRows=b?(b.candidates||[]).slice(0,8).map((x,i)=>
+        '<div class="rxsuite-row"><div><b>'+(i+1)+'. '+esc(x.symbol)+'</b><small>'+esc(x.best_strategy||'—')+' · score '+num(x.overall_score,1)+' · liquidity '+num(x.liquidity_quality,0)+'</small></div><span class="rxsuite-tag '+(x.signal_state==='CONFIRMED'?'rxsuite-ok':'rxsuite-warn')+'">'+esc(x.signal_state||'UNKNOWN')+'</span></div>'
+      ).join(''):'';
+      const alertsError=alertsResult.status==='rejected'?'تعذر جلب سجل الإشارات المحفوظ: '+String(alertsResult.reason?.message||alertsResult.reason):(!signalResponse?.ok?'تعذر جلب سجل الإشارات من الخادم ('+String(signalResponse?.status||0)+').':'');
+      const marketError=marketResult.status==='rejected'?'تعذر جلب مرشحي السوق الحاليين: '+String(marketResult.reason?.message||marketResult.reason):'';
+      o.innerHTML+(b?marketNotice(b):'<div class="rxsuite-row"><b>Market Radar غير متاح</b><small>'+esc(marketError)+'</small></div>')+
+        '<div class="rxsuite-row"><div><b>الإشارات المسجلة من الرادارات</b><small>أحداث محفوظة في خادم RadarX؛ ليست تغذية مزعومة من قنوات أو منصات خارجية.</small></div><span class="rxsuite-tag">'+alerts.length+' saved</span></div>'+
+        (alertRows||'<div class="rxsuite-row"><b>لا توجد إشارات محفوظة ضمن النطاق الحالي</b><small>'+esc(alertsError||'لا توجد نتائج مسجلة الآن.')+'</small></div>')+
+        '<div class="rxsuite-row"><div><b>مرشحو السوق الحاليون</b><small>نتائج Market Radar الحالية بحسب جودة البيانات والاستراتيجيات.</small></div><span class="rxsuite-tag">'+(b?.candidates?.length||0)+' candidates</span></div>'+
+        (candidateRows||'<div class="rxsuite-row"><small>'+esc(marketError||'لا توجد مرشحات متاحة الآن.')+'</small></div>');
+    }catch(e){o.innerHTML='<div class="rxsuite-row"><b>تعذر تحديث مركز الإشارات</b><small>'+esc(e.message)+'</small></div>';}
   };
 }
 
@@ -311,10 +342,16 @@ function supplyPanel(root) {
   root.querySelector('#rx-sdr').onclick=async()=>{
     const o=root.querySelector('#rx-sdo'),s=root.querySelector('#rx-sds').value.trim().toUpperCase();o.innerHTML='<p class="rxsuite-row">جاري الاكتشاف…</p>';
     try{
-      const b=await market(),c=findCandidate(b,s);if(!c)throw Error('NO_CURRENT_CANDIDATE');
-      const p=Number(c.last_price),fp=c.pre_breakout_fingerprint||{};
-      o.innerHTML='<div class="rxsuite-grid">'+box('Demand 1',num(p*.988,8))+box('Demand 2',num(p*.972,8))+box('Supply 1',num(p*1.012,8))+box('Supply 2',num(p*1.028,8))+box('Resistance tests',fp.resistance && fp.resistance.remainingTests||'—')+box('Fingerprint',fp.stage||'NORMAL')+'</div>';
-    }catch(e){o.innerHTML='<div class="rxsuite-row"><b>DATA UNAVAILABLE</b><small>'+esc(e.message)+'</small></div>';}
+      const scan=await deepScan(s);
+      requireLiveDeepScan(scan);
+      const p=Number(scan.price.last),z=scan.zones||{},frame=scan.timeframes?.['15m']||{};
+      const supportRows=levelsFor(frame,'support_levels',p);
+      const resistanceRows=levelsFor(frame,'resistance_levels',p);
+      if(z.support!=null&&!supportRows.some(x=>Math.abs(x.price-Number(z.support))/Math.max(1,p)<0.0001))supportRows.unshift({price:Number(z.support),touches:0,distance:Number(z.distance_to_support_pct)||0});
+      if(z.resistance!=null&&!resistanceRows.some(x=>Math.abs(x.price-Number(z.resistance))/Math.max(1,p)<0.0001))resistanceRows.unshift({price:Number(z.resistance),touches:0,distance:Number(z.distance_to_resistance_pct)||0});
+      const renderZones=(title,rows,cls)=>'<div class="rxsuite-row"><div><b>'+esc(title)+'</b><small>'+(rows.length?'مستويات من تحليل القمم والقيعان والشموع المغلقة.':'لم تتأكد مستويات صالحة من البيانات الحالية.')+'</small></div><span class="rxsuite-tag '+cls+'">'+rows.length+' levels</span></div>'+(rows.length?rows.slice(0,3).map((x,i)=>'<div class="rxsuite-row"><div><b>'+(i+1)+'. '+num(x.price,8)+'</b><small>distance '+percent(x.distance,2)+' · touches '+num(x.touches,0)+'</small></div></div>').join(''):'');
+      o.innerHTML=deepNotice(scan)+'<div class="rxsuite-grid">'+box('Current price',num(p,8))+box('Position',z.position||'UNKNOWN')+box('Bounce signal',z.bounce_signal||'UNKNOWN')+box('Support distance',percent(z.distance_to_support_pct,2))+box('Resistance distance',percent(z.distance_to_resistance_pct,2))+box('Trap risk',percent(scan.assessment?.trap_risk,0))+'</div>'+renderZones('Demand / support',supportRows,'rxsuite-ok')+renderZones('Supply / resistance',resistanceRows,'rxsuite-warn')+'<div class="rxsuite-row"><small>هذه مناطق فنية مشتقة من بيانات الخادم وليست ضمانًا للارتداد أو الاختراق.</small></div>';
+    }catch(e){o.innerHTML='<div class="rxsuite-row"><b>تعذر تحليل العرض والطلب</b><small>'+esc(e.message)+'</small></div>';}
   };
 }
 
