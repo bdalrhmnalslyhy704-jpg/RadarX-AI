@@ -54,6 +54,14 @@ test('TEST_FIXTURE: market -> closed candle -> gate -> Phase1 engine -> Unified 
   const {store,provider,service}=await serviceCase();
   const first=await service.evaluateSnapshot(snap());
   assert.equal(first.emitted,true);assert.equal(first.signal.market,'SPOT');assert.equal(first.signal.candle.closed,true);
+  assert.equal(first.signal.data_status.status,'LIVE_DATA');
+  assert.equal(first.signal.data_status.source,'BINANCE_PUBLIC_WS');
+  assert.equal(first.signal.data_status.candle_closed,true);
+  assert.ok(Number.isFinite(first.signal.data_status.open_time));
+  assert.ok(Number.isFinite(first.signal.data_status.close_time));
+  assert.ok(Number.isFinite(first.signal.data_status.source_time));
+  assert.ok(Number.isFinite(first.signal.data_status.age_seconds));
+  assert.equal(first.signal.data_status.received_at,null);
   assert.equal(first.signal.scores.confidence_score,'UNKNOWN');assert.equal(first.signal.paper_trade.enabled,true);
   assert.equal(first.signal.paper_trade.real_order_execution,false);assert.equal(provider.calls.length,1);
   assert.equal(first.notifications[0].status,'SENT');
@@ -74,7 +82,10 @@ test('TEST_FIXTURE: market -> closed candle -> gate -> Phase1 engine -> Unified 
 test('TEST_FIXTURE: incomplete candle and stale data cannot send push',async()=>{
   const a=await serviceCase();const input=snap();
   input.series15m=input.series15m.map((c,i)=>i===input.series15m.length-1?{...c,closed:false}:c);
-  const incomplete=await a.service.evaluateSnapshot(input);assert.equal(incomplete.emitted,false);assert.equal(a.provider.calls.length,0);
+  const incomplete=await a.service.evaluateSnapshot(input);assert.equal(incomplete.emitted,false);
+  assert.equal(incomplete.signal.data_status.status,'PARTIAL_DATA');
+  assert.equal(incomplete.signal.data_status.candle_closed,true);
+  assert.equal(a.provider.calls.length,0);
   const b=await serviceCase();const staleService=new SignalService({deduplicator:new SignalDeduplicator({store:b.store}),store:b.store,pushManager:new PushManager({provider:b.provider,store:b.store}),
     config:{...CONFIG,paper:{feeRate:0,slippageBps:0},monitoring:{...CONFIG.monitoring,maxStaleTriggerMs:60000}},clock:()=>1701000000000});
   const stale=await staleService.evaluateSnapshot(snap());assert.equal(stale.emitted,false);assert.equal(b.provider.calls.length,0);
