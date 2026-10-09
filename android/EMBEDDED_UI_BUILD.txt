@@ -1,4 +1,4 @@
-RadarX Android 1.5.5
+RadarX Android 1.5.6
 Release line: official Build 224 + Radar 8 V2 + Hawkeye V2 + Supreme Fusion
 UI: bundled inside APK via Android WebViewAssetLoader
 Backend: https://radarx-ai-triple-production.up.railway.app
@@ -19,4 +19,4 @@ Background monitoring:
 
 Release gate: source/JavaScript tests, Falcon Eye API contract, Railway health, signed universal APK verification, Android offline-to-online smoke test, and HTTPS download SHA-256 integrity check.
 
-Smoke gate note: release build statically validates RadarXBackgroundMonitorService, FOREGROUND_SERVICE_DATA_SYNC, and ACCESS_NETWORK_STATE from the manifest. MainActivity now starts local foreground monitoring even if POST_NOTIFICATIONS permission is pending; it asks for permission but does not block scanning. Visible notification delivery still requires notification permission. The CI smoke test makes the emulator permission grant best-effort, checks actual BACKGROUND_AUTO_START_REQUEST and BACKGROUND_SERVICE_READY logs, verifies offline waiting, then checks network-reconnect resumption. The user's device will still request notification permission normally.
+Smoke gate note: release build statically validates RadarXBackgroundMonitorService, FOREGROUND_SERVICE_DATA_SYNC, and ACCESS_NETWORK_STATE from the manifest. MainActivity starts the native foreground monitor directly from onCreate, independently of WebView readiness, and retains a delayed retry. Monitoring does not wait for POST_NOTIFICATIONS permission; visible notifications still require the user to allow them. The CI smoke test makes emulator permission grant best-effort, verifies native startup/service-ready logs, checks offline waiting and process liveness, then checks resumption after validated Internet returns.
