@@ -221,3 +221,49 @@ openLast[openLast.length-1]={...openLast[openLast.length-1],closed:false};
 const closedOnlyContext=buildFastImpulseContext(openLast,{lastPrice:openLast.at(-1).close},20*60*60*1000);
 assert.equal(closedOnlyContext.closed_candles_only,true);
 assert.equal(closedOnlyContext.last_closed_time,openLast.at(-2).closeTime);
+
+
+test('Pre-explosion patrol rotates beyond the highest-ranked symbols without duplicate queue entries',()=>{
+  let now=1710001000000;
+  const symbols=Array.from({length:12},(_,i)=>`P${String(i).padStart(2,'0')}USDT`);
+  const sentinel=new EarlyMoveSentinel({
+    rest:{},store:{},
+    config:{maxEarlyDiscovery:4,minQuoteVolume24h:100000,earlyMax24hMovePct:1.25,earlyMin24hMovePct:-8,earlyScanCooldownMs:120000,maxDeepPerCycle:2},
+    clock:()=>now,
+    logger:{warn(){}},
+    tickerWsFactory:()=>({start(){},stop(){},health(){return{state:'STOPPED'}}})
+  });
+  sentinel.running=true;
+  sentinel.spotSymbols=new Set(symbols);
+  sentinel.drainDeepQueue=async()=>{};
+  const rows=symbols.map((symbol,i)=>({
+    symbol,lastPrice:1+i*0.01,quoteVolume:2_000_000-i*30_000,count:10000+i*100,
+    priceChangePercent:0.1+i*0.05,highPrice:1.2+i*0.01,lowPrice:0.8+i*0.01
+  }));
+  const covered=new Set();
+  for(let cycle=0;cycle<3;cycle++){
+    sentinel.queuePreExplosionDiscovery(rows);
+    const queued=sentinel.deepQueue.splice(0);
+    assert.equal(queued.length,4);
+    assert.equal(new Set(queued.map(x=>x.symbol)).size,4);
+    for(const job of queued)covered.add(job.symbol);
+    now+=120001;
+  }
+  assert.ok(covered.size>=8,`expected three patrol cycles to cover at least 8 symbols; got ${covered.size}`);
+  assert.ok(sentinel.preExplosionRotationTotal>0);
+});
+
+test('failed pre-explosion scan releases its cooldown so it can be retried',async()=>{
+  const now=1710002000000;
+  const sentinel=new EarlyMoveSentinel({
+    rest:{},store:{},config:{maxDeepPerCycle:1,earlyScanCooldownMs:120000},
+    clock:()=>now,logger:{warn(){}}
+  });
+  sentinel.running=true;
+  sentinel.scanner={scanSymbol:async()=>{throw new Error('TRANSIENT_FIXTURE_FAILURE');}};
+  sentinel.lastEarlyScanAt.set('RETRYUSDT',now);
+  sentinel.deepQueue.push({symbol:'RETRYUSDT',row:{symbol:'RETRYUSDT'},trigger:{},queuedAt:now,mode:'PRE_EXPLOSION'});
+  await sentinel.drainDeepQueue();
+  assert.equal(sentinel.lastEarlyScanAt.has('RETRYUSDT'),false);
+  assert.match(sentinel.lastError,/TRANSIENT_FIXTURE_FAILURE/);
+});
