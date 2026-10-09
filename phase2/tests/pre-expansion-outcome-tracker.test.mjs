@@ -363,6 +363,34 @@ test('mature live signal receives retrospective closed-OHLC marks for all six ho
   });
 });
 
+
+test('maturing signal records its 5m closed-OHLC outcome without waiting 24 hours',async()=>{
+  await withStore(async store=>{
+    const detected=NOW,now=NOW+7*60_000;
+    const one=Array.from({length:100},(_,i)=>{
+      const close=100+i*.04;
+      return candle(detected+i*60_000,close,{step:60_000,high:close+.2,low:close-.15});
+    });
+    const five=Array.from({length:300},(_,i)=>{
+      const close=100+i*.04;
+      return candle(detected+i*5*60_000,close,{step:5*60_000,high:close+.25,low:close-.2});
+    });
+    await recordPreExpansionSignals(store,[signal({symbol:'EARLYOUTCOMEUSDT',stage:'PRE_EXPANSION',at:detected,regime:'BEARISH'})],{now:detected});
+    const fakeRest={klines:async(symbol,interval)=>({candles:(interval==='1m'?one:five).filter(c=>c.closeTime<=now)})};
+    const result=await backfillHistoricalPreExpansionOutcomes(store,fakeRest,{now,maxSignals:1,intervalMs:0});
+    assert.equal(result.evaluated,1);
+    const state=await store.getPreExpansionOutcomes(),row=state.records[0];
+    assert.equal(row.marks['5m'].sample_quality,'HISTORICAL_CLOSED_OHLC');
+    assert.equal(row.horizon_status['5m'].status,'COMPLETE');
+    assert.equal(row.horizon_status['5m'].historical_checked_at,now);
+    assert.equal(row.excursions['5m'].complete,true);
+    assert.equal(row.horizon_status['15m'].status,'PENDING');
+    assert.equal(row.marks['15m'],undefined);
+    assert.equal(row.outcome_status,'PENDING');
+    assert.equal(row.historical_evaluation,false);
+  });
+});
+
 test('Radar 8 alert history can be durably read by the internal retrospective worker',async()=>{
   await withStore(async store=>{
     const alert=signal({symbol:'AAVEUSDT',stage:'BREAKOUT_DEVELOPING'});
