@@ -32,7 +32,7 @@ test('market pulse keeps unknown daily move unknown and exposes quiet-base proxi
   const prices=[100,100.5,99.8,100.4,100.0,100.1,100.2,100.25];
   let last=null;
   for(let i=0;i<prices.length;i++){
-    const row={...base('QUIETUSDT',prices[i],1_000_000+i*430,10_000+i*4),priceChange24h:0.5};
+    const row={...base('QUIETUSDT',prices[i],1_000_000+i*550,10_000+i*5),priceChange24h:0.5};
     last=updateMarketPulseHistory([row],history,t+i*30_000).rows[0].market_pulse;
   }
   assert.equal(last.ready,true);
