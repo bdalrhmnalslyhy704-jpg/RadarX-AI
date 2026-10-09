@@ -246,3 +246,25 @@ test('Radar 8 alert history can be durably read by the internal retrospective wo
     assert.equal(found[0].symbol,'AAVEUSDT');
   });
 });
+
+
+test('compacts already saved benchmark/stablecoin rows even when live markout polling is throttled',async()=>{
+  await withStore(async store=>{
+    await recordPreExpansionSignals(store,[signal({symbol:'SOLUSDT',stage:'WATCH_EARLY'})],{now:NOW});
+    await store.updatePreExpansionOutcomes(raw=>({
+      ...raw,
+      last_price_update_at:NOW,
+      records:[...raw.records,
+        {signal_id:'old-btc-row',radar:'RADAR_9',symbol:'BTCUSDT',signal_type:'WATCH_EARLY',entry_price:100,detected_at:NOW,marks:{},excursions:{}},
+        {signal_id:'old-tusd-row',radar:'RADAR_9',symbol:'TUSDUSDT',signal_type:'WATCH_EARLY',entry_price:1,detected_at:NOW,marks:{},excursions:{}}
+      ],
+      last_stage_by_key:{...raw.last_stage_by_key,'RADAR_9|BTCUSDT':{stage:'WATCH_EARLY',last_recorded_at:NOW},'RADAR_9|TUSDUSDT':{stage:'WATCH_EARLY',last_recorded_at:NOW}}
+    }));
+    const result=await updatePreExpansionMarkouts(store,[{symbol:'SOLUSDT',lastPrice:100}],{now:NOW+5_000});
+    assert.equal(result.throttled,true);
+    const state=await store.getPreExpansionOutcomes();
+    assert.equal(state.records.some(x=>['BTCUSDT','TUSDUSDT'].includes(x.symbol)),false);
+    assert.equal(Object.keys(state.last_stage_by_key).some(k=>k.includes('BTCUSDT')||k.includes('TUSDUSDT')),false);
+    assert.deepEqual(state.records.map(x=>x.symbol),['SOLUSDT']);
+  });
+});
