@@ -67,7 +67,7 @@ function risingBase(n=100,start=100,step=60_000){
     const early=i<n-8;
     const lift=early?0:(i-(n-8)+1)*.09;
     const value=close+lift;
-    out.push(candle(1_800_000_000_000+i*step,value,{volume:early?850:2500,tradeCount:early?75:230,taker:early?.50:.56,step}));
+    out.push(candle(1_800_000_000_000+i*step,value,{volume:early?850:2500,tradeCount:early?75:230,taker:early ? 0.50 : 0.56,step}));
   }
   return out;
 }
