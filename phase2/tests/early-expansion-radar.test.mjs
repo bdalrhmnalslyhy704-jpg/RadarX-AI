@@ -268,3 +268,144 @@ test('Radar 8 local cooldown suppresses repeats independently of the cross-radar
   assert.deepEqual(localAlertCooldown(4000000,4000000+10*60*1000,10*60*1000),{allowed:true,remaining_ms:0});
   assert.deepEqual(localAlertCooldown(4000000,4000000+11*60*1000,10*60*1000),{allowed:true,remaining_ms:0});
 });
+
+
+function selectionRadar(config={}){
+  return new EarlyExpansionRadar({
+    rest:{request:async()=>({data:[]})},
+    store:{},
+    config:{
+      minQuoteVolume24h:100000,
+      microScanCandidates:36,
+      deepCandidates:10,
+      quietReserve:8,
+      rotationReserve:8,
+      ...config
+    },
+    clock:()=>now,
+    logger:{warn(){}}
+  });
+}
+function selectionRows(count){
+  return Array.from({length:count},(_,i)=>({
+    symbol:'SEL'+String(i).padStart(3,'0')+'USDT',
+    lastPrice:1+i*.01,
+    priceChange24h:(i%8)*.45,
+    quoteVolume24h:1000000+i*1000,
+    tradeCount24h:20000+i*100
+  }));
+}
+function selectionFast(rows,overrides={}){
+  return new Map(rows.map((row,i)=>[row.symbol,{
+    price_change_pct:.08+(i%4)*.02,
+    price_acceleration_pct:.01+(i%3)*.01,
+    volume_accel_ratio:1.25+(i%3)*.05,
+    trade_accel_ratio:1.20+(i%2)*.1,
+    ...overrides[row.symbol]
+  }]));
+}
+function quietFingerprint(symbol,move,{score=65,participation=75,tradeParticipation=70,structure=78,compression=82,volume=1.5,trades=1.4}={}){
+  return {
+    symbol,
+    row:{symbol,lastPrice:1,priceChange24h:move,quoteVolume24h:1000000,tradeCount24h:20000},
+    micro_fingerprint:{
+      score,eligible:false,mode:'QUIET_COMPRESSION_BUILD',confirmation_count:4,
+      metrics:{
+        price_change_24h_abs:Math.abs(move),rvol_1m:volume,rvol_5m:Math.max(1.1,volume-.2),
+        trade_rvol_1m:trades,trade_rvol_5m:Math.max(1.1,trades-.1),
+        bb_ratio:.78,range_compression_ratio:.82,atr_ratio:.88,
+        higher_low_count:structure,resistance_distance_pct:-2,
+        acceleration_1m_pct:.08,acceleration_5m_pct:.12,taker_buy_ratio:.57
+      },
+      category_scores:{participation,tradeParticipation,structure,compression,momentumTurn:62}
+    }
+  };
+}
+
+test('Radar 8 micro selector fills the 36-symbol target after overlapping lanes and de-duplicates symbols',()=>{
+  const radar=selectionRadar({microScanCandidates:36,quietReserve:8,rotationReserve:8});
+  const rows=selectionRows(60);
+  const fast=selectionFast(rows);
+  const selected=radar.selectMicro([...rows,rows[0],rows[1]],fast,1);
+  assert.equal(selected.length,36);
+  assert.equal(new Set(selected.map(x=>x.symbol.toUpperCase())).size,36);
+  assert.equal(selected.filter(x=>x._selection_lane==='quiet').length,8);
+  assert.equal(selected.filter(x=>x._selection_lane==='rotation').length,8);
+});
+
+test('Radar 8 deep quiet lane prioritizes the lowest daily change with genuine base and participation evidence',()=>{
+  const radar=selectionRadar({deepCandidates:10,quietReserve:8,rotationReserve:2});
+  const candidates=[
+    quietFingerprint('ZZZQUIETUSDT',.12,{score:54,volume:1.8,trades:1.7}),
+    quietFingerprint('AAAUSDT',7.4,{score:92,volume:1.2,trades:1.1}),
+    quietFingerprint('BBBUSDT',4.6,{score:85}),
+    quietFingerprint('CCCUSDT',2.2,{score:76}),
+    quietFingerprint('DDDUSDT',.65,{score:66}),
+    quietFingerprint('EEEUSDT',1.1,{score:62}),
+    quietFingerprint('FFFUSDT',3.4,{score:60}),
+    quietFingerprint('GGGUSDT',5.1,{score:59}),
+    quietFingerprint('HHHUSDT',.85,{score:57}),
+    quietFingerprint('IIIUSDT',6.5,{score:55}),
+    quietFingerprint('JJJUSDT',2.8,{score:53}),
+    quietFingerprint('KKKUSDT',1.7,{score:52})
+  ];
+  const selected=radar.selectDeepFromMicro(candidates,1);
+  assert.equal(selected.length,10);
+  const quiet=selected.filter(x=>x._selection_lane==='quiet');
+  assert.ok(quiet.length>=7);
+  assert.equal(quiet[0].symbol,'ZZZQUIETUSDT');
+  assert.ok(quiet.every(x=>Math.abs(x.row.priceChange24h)<=8));
+});
+
+test('Radar 8 quiet lane does not mistake missing daily data for a quiet setup',()=>{
+  const radar=selectionRadar({microScanCandidates:10,quietReserve:4,rotationReserve:2});
+  const rows=[
+    ...selectionRows(12),
+    {symbol:'NO24HUSDT',lastPrice:1.2,quoteVolume24h:1000000,tradeCount24h:20000}
+  ];
+  const fast=selectionFast(rows,{'NO24HUSDT':{
+    price_change_pct:.4,price_acceleration_pct:.2,volume_accel_ratio:3.1,trade_accel_ratio:2.4
+  }});
+  const selected=radar.selectMicro(rows,fast,1);
+  assert.equal(selected.length,10);
+  assert.equal(selected.some(x=>x.symbol==='NO24HUSDT'&&x._selection_lane==='quiet'),false);
+});
+
+test('Radar 8 rotation memory gives the rotation reserve to previously unscanned symbols before recently scanned ones',()=>{
+  const radar=selectionRadar({microScanCandidates:10,quietReserve:0,rotationReserve:5});
+  const rows=selectionRows(50);
+  const fast=selectionFast(rows);
+  const first=radar.selectMicro(rows,fast,1);
+  const second=radar.selectMicro(rows,fast,2);
+  assert.equal(first.length,10);
+  assert.equal(second.length,10);
+  const firstSet=new Set(first.map(x=>x.symbol));
+  const fresh=second.filter(x=>!firstSet.has(x.symbol));
+  assert.equal(fresh.length,5);
+  assert.equal(second.filter(x=>x._selection_lane==='rotation').length,5);
+});
+
+test('Radar 8 exceptional early acceleration may bypass the rotation lane without exceeding the batch target',()=>{
+  const radar=selectionRadar({microScanCandidates:8,quietReserve:2,rotationReserve:3,exceptionalRotationBypassSlots:2});
+  const rows=selectionRows(40);
+  const fast=selectionFast(rows);
+  rows.push({symbol:'ZZZFASTUSDT',lastPrice:1,priceChange24h:3.5,quoteVolume24h:1200000,tradeCount24h:30000});
+  fast.set('ZZZFASTUSDT',{price_change_pct:.85,price_acceleration_pct:.28,volume_accel_ratio:3.8,trade_accel_ratio:2.7});
+  const selected=radar.selectMicro(rows,fast,1);
+  assert.equal(selected.length,8);
+  assert.equal(selected[0].symbol,'ZZZFASTUSDT');
+  assert.equal(selected[0]._selection_lane,'exceptional');
+});
+
+test('Radar 8 deep selector returns ten unique candidates when enough valid symbols exist despite lane overlap',()=>{
+  const radar=selectionRadar({deepCandidates:10,quietReserve:8,rotationReserve:2});
+  const candidates=Array.from({length:24},(_,i)=>quietFingerprint(
+    'DEEP'+String(i).padStart(2,'0')+'USDT',
+    .25+(i%10)*.45,
+    {score:90-(i%7),participation:75,tradeParticipation:72,structure:78,compression:82}
+  ));
+  const selected=radar.selectDeepFromMicro([...candidates,candidates[0],candidates[1]],4);
+  assert.equal(selected.length,10);
+  assert.equal(new Set(selected.map(x=>x.symbol)).size,10);
+  assert.equal(selected.filter(x=>x._selection_lane==='quiet').length,8);
+});
