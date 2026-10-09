@@ -25,6 +25,9 @@ test('Al Muqawim confirms aligned bullish multi-timeframe structure',()=>{
     '1h':makeSeries(120,60*60*1000,0.04,now),
     '15m':makeSeries(160,15*60*1000,0.04,now)
   };
+  const latestHour=series['1h'].at(-1);
+  latestHour.close+=1.25;
+  latestHour.high=Math.max(latestHour.high,latestHour.close+0.55);
   const a=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:105.46,priceChange24h:1},now,{maPeriod:50});
   assert.equal(a.direction,'UP');
   assert.equal(a.closed_candles_only,true);
