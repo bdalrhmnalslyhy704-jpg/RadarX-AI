@@ -12,7 +12,7 @@ const [tradliActivity, mainActivity, page, suite, smoke] = await Promise.all([
   readFile(new URL('../../java/com/radarx/app/MainActivity.java', import.meta.url), 'utf8'),
   readFile(new URL('../tradli.html', import.meta.url), 'utf8'),
   readFile(new URL('../radarx-tradli-feature-suite.mjs', import.meta.url), 'utf8'),
-  readFile(new URL('../../../../smoke-test.sh', import.meta.url), 'utf8')
+  readFile(new URL('../../../../../smoke-test.sh', import.meta.url), 'utf8')
 ]);
 
 test('TRADLI WebView allows the current Railway backend and its HTTPS fallback', () => {
