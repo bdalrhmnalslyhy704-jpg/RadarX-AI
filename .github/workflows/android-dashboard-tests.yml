@@ -26,7 +26,9 @@ jobs:
       - name: Market Radar Dashboard tests
         run: node --test android/app/src/main/assets/tests/market-radar-integration.test.mjs
       - name: TRADLI feature and connectivity regression
-        run: node --test android/app/src/main/assets/tests/tradli-regression.test.mjs
+        run: |
+          node --check android/app/src/main/assets/radarx-tradli-feature-suite.mjs
+          node --test android/app/src/main/assets/tests/tradli-regression.test.mjs
       - name: Static safety guards
         run: |
           set -euo pipefail
