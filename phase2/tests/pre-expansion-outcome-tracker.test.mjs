@@ -485,6 +485,45 @@ test('Radar 8 production alert field aliases reach complete coverage without cha
   });
 });
 
+
+test('Radar 8 preserves an unqualified micro score without promoting it to signal_score',async()=>{
+  await withStore(async store=>{
+    const alert=signal({symbol:'SCOREPROVENANCEUSDT',stage:'WATCH_EARLY'});
+    alert.early_expansion_score=null;
+    alert.source_score=61.7;
+    alert.source_score_type='MICRO_FINGERPRINT_SCORE';
+    alert.source_score_eligible=false;
+    alert.source_score_status='MICRO_FINGERPRINT_SCORE_UNQUALIFIED';
+    alert.signal_score_source=null;
+    await recordPreExpansionSignals(store,[alert],{now:NOW});
+    const row=(await store.getPreExpansionOutcomes()).records[0];
+    assert.equal(row.signal_score,null);
+    assert.equal(row.score_source,null);
+    assert.equal(row.source_score,61.7);
+    assert.equal(row.source_score_type,'MICRO_FINGERPRINT_SCORE');
+    assert.equal(row.source_score_eligible,false);
+    assert.equal(row.source_score_status,'MICRO_FINGERPRINT_SCORE_UNQUALIFIED');
+    assert.ok(row.missing_required_fields.includes('signal_score'));
+    assert.equal(row.evaluation_eligible,false);
+    assert.equal(row.evaluation_status,'EXCLUDED_INCOMPLETE');
+    assert.equal(row.horizon_status['5m'].status,'PENDING');
+  });
+});
+
+test('Radar 8 records an explicit missing-source-score state when the detector has no score',async()=>{
+  await withStore(async store=>{
+    const alert=signal({symbol:'NOSCOREPROVENANCEUSDT',stage:'WATCH_EARLY'});
+    alert.early_expansion_score=null;
+    await recordPreExpansionSignals(store,[alert],{now:NOW});
+    const row=(await store.getPreExpansionOutcomes()).records[0];
+    assert.equal(row.signal_score,null);
+    assert.equal(row.source_score,null);
+    assert.equal(row.source_score_status,'SOURCE_SCORE_NOT_PROVIDED');
+    assert.ok(row.missing_required_fields.includes('signal_score'));
+    assert.equal(row.evaluation_eligible,false);
+  });
+});
+
 test('a single late sample may create a point mark but cannot certify complete MFE/MAE coverage',async()=>{
   await withStore(async store=>{
     const at=NOW+100_000;
