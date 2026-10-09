@@ -424,6 +424,10 @@ function summarizeGroup(rows){
   return {
     records:rows.length,
     measurable_signals:measurable.length,
+    detected_before_move_count:measurable.filter(r=>r.detected_before_move===true).length,
+    detected_before_move_pct:percent(measurable.filter(r=>r.detected_before_move===true).length,measurable.filter(r=>typeof r.detected_before_move==='boolean').length),
+    detected_after_move_count:measurable.filter(r=>r.detected_before_move===false).length,
+    detected_after_move_pct:percent(measurable.filter(r=>r.detected_before_move===false).length,measurable.filter(r=>typeof r.detected_before_move==='boolean').length),
     matured_4h:completed4h.length,
     meaningful_move_4h_pct:percent(impacts,completed4h.length),
     false_signal_rate_4h_pct:percent(falseSignals,completed4h.length),
