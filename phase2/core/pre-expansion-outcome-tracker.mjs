@@ -115,9 +115,9 @@ function lastReturn(rows,nBars){
 }
 export function classifyEvaluationMarketRegime(context={}){
   const c=object(context);
-  if(['BULLISH','BEARISH','RANGING','UNKNOWN'].includes(String(c.marketRegime||c.market_regime||'').toUpperCase())){
-    return String(c.marketRegime||c.market_regime).toUpperCase();
-  }
+  const suppliedRegime=String(c.marketRegime||c.market_regime||'').toUpperCase();
+  if(suppliedRegime==='MIXED')return 'RANGING';
+  if(['BULLISH','BEARISH','RANGING','UNKNOWN'].includes(suppliedRegime))return suppliedRegime;
   const medianChange=num(c.marketMedianChange24hPct??c.market_median_change_24h_pct);
   const breadth=num(c.marketBreadthPct??c.market_breadth_pct);
   const btc5=num(c.btcReturn5mPct??c.btc_return_5m_pct)??lastReturn(c.fiveMinute||[],1);
@@ -165,9 +165,11 @@ function makeSignal(alert,now,marketContext){
     r9Ready||alert?.radar!=='FALCON_EYE_RADAR'
   ];
   const qualitySource=alert?.radar==='FALCON_EYE_RADAR'?'DERIVED_FIELD_COVERAGE':'RADAR_REPORTED_QUALITY';
-  const quality=alert?.radar==='FALCON_EYE_RADAR'
-    ?Math.round(r9QualityFields.filter(Boolean).length/r9QualityFields.length*100)
-    :rawQuality;
+  const quality=(stage==='DATA_INSUFFICIENT'||m.data_stale||!m.closed_candles_only||m.daily_change_pct===null)
+    ?0
+    :alert?.radar==='FALCON_EYE_RADAR'
+      ?Math.round(r9QualityFields.filter(Boolean).length/r9QualityFields.length*100)
+      :rawQuality;
   const reasons=reasonList(alert);
   const existingId=String(alert?.id||'').trim();
   const signalId=existingId||[radar,symbol,stage,detectedAt].join(':');
@@ -175,7 +177,7 @@ function makeSignal(alert,now,marketContext){
     signal_id:signalId,radar,symbol,entry_price:entry,detected_at:detectedAt,
     detected_at_iso:new Date(detectedAt).toISOString(),signal_type:stage,
     data_quality:quality,data_quality_source:qualitySource,reported_data_quality:num(alert?.data_quality??alert?.falcon_eye?.data_quality),
-    data_quality_status:stage==='DATA_INSUFFICIENT'?'INSUFFICIENT':m.data_stale?'STALE':m.daily_change_pct===null?'DAILY_CHANGE_UNKNOWN':'AVAILABLE',
+    data_quality_status:stage==='DATA_INSUFFICIENT'?'INSUFFICIENT':m.data_stale?'STALE':m.daily_change_pct===null?'DAILY_CHANGE_UNKNOWN':quality<70?'PARTIAL_FIELD_COVERAGE':'AVAILABLE',
     reason_codes:reasons,market_regime:marketRegime,
     initial_daily_change_pct:m.daily_change_pct,
     relative_strength_vs_btc_pct:m.relative_strength_vs_btc_pct,
@@ -332,6 +334,7 @@ export async function updatePreExpansionMarkouts(store,tickerRows,{now=Date.now(
 
 function marketRegimeForSignal(signal){
   const label=String(signal?.market_regime||'UNKNOWN').toUpperCase();
+  if(label==='MIXED')return 'RANGING';
   return ['BULLISH','BEARISH','RANGING','UNKNOWN'].includes(label)?label:'UNKNOWN';
 }
 function signalAlreadyExtended(signal){
