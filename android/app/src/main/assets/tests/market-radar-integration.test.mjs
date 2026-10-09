@@ -345,7 +345,7 @@ assert.match(tradliPage,/mountTradliFeatureSuite/);
 assert.match(tradliPage,/expected=\['chart','verify','advisor','hub','sd','desk'\]/);
 assert.match(tradliPage,/TRADLI_PAGE_READY/);
 assert.match(tradliPage,/اتصال بيانات TRADLI/);
-assert.match(tradliPage,/فحص بيانات السوق الآن/);
+assert.match(tradliPage,/فحص اتصال الخادم وبيانات السوق/);
 assert.match(tradliPage,/requestJson/);
 
 assert.equal(index.includes("mountTradliFeatureSuite"),false);
