@@ -5,6 +5,9 @@ import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
 
 const clamp=(v,min=0,max=100)=>Math.max(min,Math.min(max,Number.isFinite(Number(v))?Number(v):min));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
+const hasFiniteValue=v=>v!==null&&v!==undefined&&!(typeof v==='string'&&v.trim()==='')&&Number.isFinite(Number(v));
+const dailyMoveAbs=row=>hasFiniteValue(row?.priceChange24h)?Math.abs(Number(row.priceChange24h)):null;
+const uniqueBySymbol=rows=>[...new Map((rows||[]).filter(x=>x?.symbol).map(x=>[String(x.symbol).toUpperCase(),x])).values()];
 const avg=xs=>{const a=xs.map(Number).filter(Number.isFinite);return a.length?a.reduce((s,x)=>s+x,0)/a.length:null;};
 const median=xs=>{const a=xs.map(Number).filter(Number.isFinite).sort((a,b)=>a-b);if(!a.length)return null;const m=Math.floor(a.length/2);return a.length%2?a[m]:(a[m-1]+a[m])/2;};
 const pct=(a,b)=>Number.isFinite(Number(a))&&Number.isFinite(Number(b))&&Number(b)!==0?(Number(a)-Number(b))/Math.abs(Number(b))*100:null;
@@ -360,13 +363,18 @@ export class FalconEyeRadar {
     this.rest=rest;this.futuresRest=futuresRest;this.store=store;this.pushManager=pushManager;this.config={
       quote:'USDT',pollMs:30000,universeRefreshMs:5*60*1000,minQuoteVolume24h:500000,fastMinQuoteVolume24h:200000,
       scanBatchSize:8,pulseTopCandidates:4,quietCandidates:2,patrolBatchSize:2,deepConcurrency:3,
+      maxExtended24hMovePct:18,maxQuiet24hMovePct:8,quietMinBaseScore:55,quietMinCompressionScore:60,
+      quietMinHigherLowScore:60,quietMinParticipationScore:58,quietMinBurstRatio:1.08,
+      exceptionalRotationBypassSlots:2,exceptionalVolumeBurstRatio:2.2,exceptionalTradeBurstRatio:1.8,
       alertCooldownMs:45*60*1000,maxAlertsPerHour:3,minScore:78,
       ...config
     };
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
-    this.lastScanAt=new Map();this.lastAlertAt=new Map();this.lastFutures=new Map();this.alertTimestamps=[];
+    this.lastScanAt=new Map();this.lastSelectedAt=new Map();this.lastSelectionCycleBySymbol=new Map();this.selectionCycle=0;
+    this.lastAlertAt=new Map();this.lastFutures=new Map();this.alertTimestamps=[];
     this.scans=0;this.alertCount=0;this.lastScanAtMs=null;this.lastError=null;this.busy=false;this.latestCandidates=[];
     this.pulseHistory=new Map();this.marketCoverage=0;this.pulseReadyCount=0;this.marketBreadthPct=0;this.fastCandidates=0;
+    this.lastSelectionStats={cycle:0,input_rows:0,eligible_total:0,target:0,selected_total:0,quiet_selected:0,patrol_selected:0,exceptional_bypass_selected:0,incomplete_selected:0,selected_symbols:[]};
   }
   start(){
     if(this.running)return;
@@ -390,28 +398,137 @@ export class FalconEyeRadar {
     this.fastCandidates=pulse.rows.filter(x=>x.market_pulse?.fast_trigger).length;
     return pulse.rows;
   }
+  quietSelectionEvidence(row){
+    const move=dailyMoveAbs(row),pulse=row?.market_pulse||{};
+    if(move===null||move>Number(this.config.maxQuiet24hMovePct??8)||pulse.ready!==true||pulse.fast_trigger)return null;
+
+    // If the same symbol has already had a deep scan, prefer its real candle-derived
+    // compression/structure evidence; otherwise use explicitly-labeled pulse proxies.
+    const cached=this.latestCandidates.find(x=>String(x?.symbol||'').toUpperCase()===String(row.symbol).toUpperCase());
+    const deep=cached?.falcon_eye||cached||{};
+    const components=deep.component_scores||{};
+    const metrics=deep.metrics||{};
+    const base=hasFiniteValue(pulse.baseBreakScore)?Number(pulse.baseBreakScore):
+      hasFiniteValue(components.quietness)?Number(components.quietness):null;
+    const compression=hasFiniteValue(pulse.compressionScore)?Number(pulse.compressionScore):
+      hasFiniteValue(components.compression)?Number(components.compression):null;
+    const higherLow=hasFiniteValue(pulse.higherLowScore)?Number(pulse.higherLowScore):
+      hasFiniteValue(metrics.higher_low_score)?Number(metrics.higher_low_score):
+      hasFiniteValue(components.structure)?Number(components.structure):null;
+    const volumeBurst=hasFiniteValue(pulse.volumeBurstRatio)?Number(pulse.volumeBurstRatio):null;
+    const tradeBurst=hasFiniteValue(pulse.tradeBurstRatio)?Number(pulse.tradeBurstRatio):null;
+    const participation=hasFiniteValue(pulse.participationScore)?Number(pulse.participationScore):
+      Math.max(hasFiniteValue(components.volume)?Number(components.volume):0,hasFiniteValue(components.trades)?Number(components.trades):0);
+    const activityEvidence=(volumeBurst!==null&&volumeBurst>=Number(this.config.quietMinBurstRatio??1.08))||
+      (tradeBurst!==null&&tradeBurst>=Number(this.config.quietMinBurstRatio??1.08))||
+      ((hasFiniteValue(components.volume)&&Number(components.volume)>=Number(this.config.quietMinParticipationScore??58))||
+       (hasFiniteValue(components.trades)&&Number(components.trades)>=Number(this.config.quietMinParticipationScore??58)));
+    if(base===null||compression===null||higherLow===null||participation<Number(this.config.quietMinParticipationScore??58)||
+      base<Number(this.config.quietMinBaseScore??55)||compression<Number(this.config.quietMinCompressionScore??60)||
+      higherLow<Number(this.config.quietMinHigherLowScore??60)||!activityEvidence)return null;
+    const proximity=hasFiniteValue(pulse.highProximityScore)?Number(pulse.highProximityScore):50;
+    const quietness=100-move*6;
+    const score=quietness*.20+base*.15+compression*.20+higherLow*.20+participation*.20+proximity*.05;
+    return {score,move,base,compression,higherLow,participation,volumeBurst,tradeBurst,proximity};
+  }
+  isExceptionalPulseCandidate(row){
+    const move=dailyMoveAbs(row),pulse=row?.market_pulse||{};
+    if(move===null||move>Number(this.config.maxExtended24hMovePct??18)||pulse.ready!==true||!pulse.fast_trigger)return false;
+    const volume=hasFiniteValue(pulse.volumeBurstRatio)?Number(pulse.volumeBurstRatio):0;
+    const trades=hasFiniteValue(pulse.tradeBurstRatio)?Number(pulse.tradeBurstRatio):0;
+    return volume>=Number(this.config.exceptionalVolumeBurstRatio??2.2)||
+      trades>=Number(this.config.exceptionalTradeBurstRatio??1.8)||
+      (pulse.explosive===true&&move<=Number(this.config.maxQuiet24hMovePct??8));
+  }
   selectBatch(rows){
-    const usable=[...rows].filter(x=>Math.abs(Number(x.priceChange24h)||0)<=18);
-    const pulseRanked=[...usable].sort((a,b)=>{
-      const ap=Number(a.market_pulse?.score||50),bp=Number(b.market_pulse?.score||50);
+    const input=Array.isArray(rows)?rows:[];
+    const deduplicated=uniqueBySymbol(input);
+    // A known >18% 24h mover is excluded (anti-chase); missing daily data is not
+    // called quiet, but may still enter via the warming/incomplete patrol lane.
+    const usable=deduplicated.filter(row=>{
+      const move=dailyMoveAbs(row);
+      return move===null||move<=Number(this.config.maxExtended24hMovePct??18);
+    });
+    const complete=usable.filter(row=>dailyMoveAbs(row)!==null&&row.market_pulse?.ready===true);
+    const pulseRanked=[...complete].sort((a,b)=>{
+      const ap=hasFiniteValue(a.market_pulse?.score)?Number(a.market_pulse.score):0;
+      const bp=hasFiniteValue(b.market_pulse?.score)?Number(b.market_pulse.score):0;
       if(bp!==ap)return bp-ap;
       const af=Boolean(a.market_pulse?.fast_trigger),bf=Boolean(b.market_pulse?.fast_trigger);
       if(af!==bf)return bf-af;
-      return Number(b.quoteVolume24h||0)-Number(a.quoteVolume24h||0);
+      return (Number(b.quoteVolume24h)||0)-(Number(a.quoteVolume24h)||0)||String(a.symbol).localeCompare(String(b.symbol));
     });
-    const quietRanked=[...usable].filter(x=>!x.market_pulse?.fast_trigger).sort((a,b)=>{
-      const aq=Number(a.market_pulse?.baseBreakScore||50)+Number(a.market_pulse?.highProximityScore||50)*0.35;
-      const bq=Number(b.market_pulse?.baseBreakScore||50)+Number(b.market_pulse?.highProximityScore||50)*0.35;
-      return bq-aq;
+    const quietRanked=usable.map(row=>({row,evidence:this.quietSelectionEvidence(row)}))
+      .filter(x=>x.evidence)
+      .sort((a,b)=>a.evidence.move-b.evidence.move||b.evidence.score-a.evidence.score||String(a.row.symbol).localeCompare(String(b.row.symbol)))
+      .map(x=>x.row);
+    const exceptional=pulseRanked.filter(row=>this.isExceptionalPulseCandidate(row)).sort((a,b)=>
+      Number(b.market_pulse?.score||0)-Number(a.market_pulse?.score||0));
+    const patrolRanked=[...usable].sort((a,b)=>{
+      const sa=String(a.symbol).toUpperCase(),sb=String(b.symbol).toUpperCase();
+      const ta=Math.max(Number(this.lastScanAt.get(sa)||0),Number(this.lastSelectedAt.get(sa)||0));
+      const tb=Math.max(Number(this.lastScanAt.get(sb)||0),Number(this.lastSelectedAt.get(sb)||0));
+      if(ta!==tb)return ta-tb;
+      const ca=this.lastSelectionCycleBySymbol.has(sa)?Number(this.lastSelectionCycleBySymbol.get(sa)): -1;
+      const cb=this.lastSelectionCycleBySymbol.has(sb)?Number(this.lastSelectionCycleBySymbol.get(sb)): -1;
+      if(ca!==cb)return ca-cb;
+      const ia=this.universe.indexOf(sa),ib=this.universe.indexOf(sb);
+      const ra=ia<0?Number.MAX_SAFE_INTEGER:(ia-this.cursor+this.universe.length)%Math.max(1,this.universe.length);
+      const rb=ib<0?Number.MAX_SAFE_INTEGER:(ib-this.cursor+this.universe.length)%Math.max(1,this.universe.length);
+      return ra-rb||sa.localeCompare(sb);
     });
-    const selected=[],seen=new Set();
-    const take=(row)=>{if(row&&!seen.has(row.symbol)&&selected.length<this.config.scanBatchSize){selected.push(row);seen.add(row.symbol);return true;}return false;};
-    for(const row of pulseRanked.slice(0,this.config.pulseTopCandidates))take(row);
-    for(const row of quietRanked.slice(0,this.config.quietCandidates))take(row);
-    for(let i=0;i<this.config.patrolBatchSize&&selected.length<this.config.scanBatchSize&&this.universe.length;i++){
-      const symbol=this.universe[this.cursor%this.universe.length];this.cursor=(this.cursor+1)%this.universe.length;
-      const row=usable.find(x=>x.symbol===symbol);take(row);
+
+    const target=Math.min(Math.max(0,Math.trunc(Number(this.config.scanBatchSize)||8)),usable.length);
+    const selected=[],seen=new Set(),counts={pulse:0,quiet:0,patrol:0,exceptional:0,incomplete:0};
+    const take=(row,lane)=>{
+      const symbol=String(row?.symbol||'').toUpperCase();
+      if(!symbol||seen.has(symbol)||selected.length>=target)return false;
+      const copy={...row,_selection_lane:lane};
+      selected.push(copy);seen.add(symbol);
+      counts[lane]=(counts[lane]||0)+1;
+      if(row.market_pulse?.ready!==true||dailyMoveAbs(row)===null)counts.incomplete++;
+      return true;
+    };
+    const takeLane=(pool,quota,lane)=>{
+      let added=0;const limit=Math.max(0,Math.trunc(Number(quota)||0));
+      for(const row of pool||[]){
+        if(selected.length>=target||added>=limit)break;
+        if(take(row,lane))added++;
+      }
+      return added;
+    };
+
+    // Exceptional acceleration may bypass patrol, but remains bounded and anti-chase gated.
+    takeLane(exceptional,Math.min(target,Math.max(0,Math.trunc(Number(this.config.exceptionalRotationBypassSlots)||0))),'exceptional');
+    takeLane(pulseRanked,this.config.pulseTopCandidates,'pulse');
+    takeLane(quietRanked,this.config.quietCandidates,'quiet');
+    takeLane(patrolRanked,this.config.patrolBatchSize,'patrol');
+    // Overlap across lanes never shrinks the real scan batch.
+    takeLane(pulseRanked,target-selected.length,'pulse_fill');
+    takeLane(quietRanked,target-selected.length,'quiet_fill');
+    takeLane(patrolRanked,target-selected.length,'patrol_fill');
+    takeLane(usable,target-selected.length,'incomplete_fill');
+
+    this.selectionCycle++;
+    const now=this.clock();
+    for(const row of selected){
+      const symbol=String(row.symbol).toUpperCase();
+      this.lastSelectedAt.set(symbol,now);
+      this.lastSelectionCycleBySymbol.set(symbol,this.selectionCycle);
+      if(row._selection_lane==='patrol')this.cursor=(Math.max(0,this.universe.indexOf(symbol))+1)%Math.max(1,this.universe.length);
     }
+    if(this.lastSelectedAt.size>6000){
+      for(const [symbol,at] of [...this.lastSelectedAt.entries()].sort((a,b)=>a[1]-b[1]).slice(0,this.lastSelectedAt.size-5000)){
+        this.lastSelectedAt.delete(symbol);this.lastSelectionCycleBySymbol.delete(symbol);
+      }
+    }
+    this.lastSelectionStats={
+      cycle:this.selectionCycle,input_rows:input.length,unique_rows:deduplicated.length,eligible_total:usable.length,
+      target,selected_total:selected.length,pulse_selected:counts.pulse+counts.pulse_fill,
+      quiet_selected:counts.quiet+counts.quiet_fill,patrol_selected:counts.patrol+counts.patrol_fill,
+      exceptional_bypass_selected:counts.exceptional,incomplete_selected:counts.incomplete,
+      shortfall:Math.max(0,target-selected.length),selected_symbols:selected.map(x=>x.symbol)
+    };
     return selected;
   }
   async futuresData(symbol){
@@ -498,7 +615,8 @@ export class FalconEyeRadar {
       running:this.running,radar:'FALCON_EYE_RADAR',radar_name:'Radar 9 — عين الصقر',universe:this.universe.length,
       market_coverage:this.marketCoverage,pulse_ready_count:this.pulseReadyCount,market_breadth_pct:this.marketBreadthPct,fast_candidates:this.fastCandidates,
       last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,scans:this.scans,alerts:this.alertCount,
-      last_error:this.lastError,latest_candidates:this.latestCandidates.slice(0,10),active_alerts_last_hour:this.alertTimestamps.filter(t=>now-t<60*60*1000).length,
+      last_error:this.lastError,latest_candidates:this.latestCandidates.slice(0,10),selection:this.lastSelectionStats,
+      active_alerts_last_hour:this.alertTimestamps.filter(t=>now-t<60*60*1000).length,
       alert_budget_per_hour:this.config.maxAlertsPerHour,features:['OGN pre-explosion fingerprint','Spot/Futures volume ratio','Open Interest','Funding squeeze context','Forced-liquidation context','Higher-Lows','Compression→Expansion','Relative Strength vs BTC','Anti-chase']
     };
   }
