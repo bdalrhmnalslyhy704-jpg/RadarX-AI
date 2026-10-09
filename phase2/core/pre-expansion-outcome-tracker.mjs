@@ -581,23 +581,30 @@ function average(xs){
 }
 function percent(n,d){return d>0?Number((n/d*100).toFixed(2)):null;}
 function horizonStats(rows,h){
-  const valid=rows.filter(r=>r.evaluation_eligible===true&&
-    r.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC'&&
+  const cohort=rows.filter(r=>r.evaluation_eligible===true);
+  const valid=cohort.filter(r=>r.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC'&&
     Number.isFinite(num(r.marks?.[h]?.return_pct)));
+  const validIds=new Set(valid.map(r=>r.signal_id));
+  const incomplete=cohort.filter(r=>!validIds.has(r.signal_id)&&
+    (r.horizon_status?.[h]?.status==='INCOMPLETE'||Boolean(r.provisional_marks?.[h])));
+  const incompleteIds=new Set(incomplete.map(r=>r.signal_id));
+  const pending=cohort.filter(r=>!validIds.has(r.signal_id)&&!incompleteIds.has(r.signal_id));
   const returns=valid.map(r=>Number(r.marks[h].return_pct));
   const hits=valid.filter(r=>r.marks[h].outcome==='HIT').length;
   const misses=valid.filter(r=>r.marks[h].outcome==='MISS').length;
-  const excursions=valid.map(r=>r.excursions?.[h]).filter(x=>x&&x.complete===true);
+  const excursions=valid.map(r=>r.excursions?.[h]).filter(x=>x&&x.source==='HISTORICAL_CLOSED_OHLC'&&x.complete===true);
   const enough=valid.length>=30;
   const avgReturn=average(returns),avgMfe=average(excursions.map(x=>x.max_favorable_pct)),avgMae=average(excursions.map(x=>x.max_adverse_pct));
   return {
-    samples:valid.length,
+    samples:valid.length,complete_records:valid.length,incomplete_records:incomplete.length,
+    pending_records:pending.length,provisional_records:cohort.filter(r=>Boolean(r.provisional_marks?.[h])).length,
+    excluded_records:rows.length-cohort.length,source:'HISTORICAL_CLOSED_OHLC_ONLY',
     excursion_samples:excursions.length,
     avg_return_pct:avgReturn==null?null:Number(avgReturn.toFixed(4)),
     hit_rate_pct:enough?percent(hits,valid.length):null,
     miss_rate_pct:enough?percent(misses,valid.length):null,
     rate_status:enough?'READY_N_GE_30':'INSUFFICIENT_SAMPLE',
-    excursion_status:excursions.length?'SAMPLED_WINDOWS_ONLY':'NO_COMPLETE_EXCURSION_WINDOWS',
+    excursion_status:excursions.length?'COMPLETE_CLOSED_OHLC_WINDOWS':'NO_COMPLETE_EXCURSION_WINDOWS',
     avg_max_favorable_pct:avgMfe==null?null:Number(avgMfe.toFixed(4)),
     avg_max_adverse_pct:avgMae==null?null:Number(avgMae.toFixed(4))
   };
@@ -646,8 +653,8 @@ function summarizeGroup(rows){
   const adverse24h=excursions24h.map(x=>num(x.max_adverse_pct,null)).filter(x=>x!==null);
   const ratesReady=completed4h.length>=30;
   const extremes24Ready=completed24h.length>=30;
-  const markRecords=eligible.filter(r=>HORIZONS.every(([h])=>Boolean(r.marks?.[h])));
-  const missingMarkRecords=eligible.filter(r=>!HORIZONS.every(([h])=>Boolean(r.marks?.[h])));
+  const markRecords=eligible.filter(r=>HORIZONS.every(([h])=>r.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC'));
+  const missingMarkRecords=eligible.filter(r=>!HORIZONS.every(([h])=>r.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC'));
   const lateSampleRecords=eligible.filter(r=>HORIZONS.some(([h])=>r.marks?.[h]?.sample_quality==='LATE_SAMPLE'));
   const detectionReady=ratesReady&&detectionMeasured.length>=30;
   return {
@@ -726,7 +733,7 @@ export function buildPreExpansionOutcomeReport(input={}){
   const lateSampleRecords=eligible.filter(r=>HORIZONS.some(([h])=>r.marks?.[h]?.sample_quality==='LATE_SAMPLE'));
   return {
     version:'PRE_EXPANSION_OUTCOME_REPORT_V3',as_of:new Date(num(input.now,Date.now())).toISOString(),
-    scope:{radars:['RADAR_8','RADAR_9'],stages:[...WATCHED_STAGES],horizons_ms:Object.fromEntries(HORIZONS.map(([h,ms])=>[h,ms])),impact_thresholds_pct:Object.fromEntries(HORIZONS.map(([h,,threshold])=>[h,threshold])),mfe_mae_source:'Per horizon: SAMPLED_SPOT_TICKERS or HISTORICAL_CLOSED_OHLC, explicitly labelled',minimum_cohort_for_rates:30,no_real_orders:true},
+    scope:{radars:['RADAR_8','RADAR_9'],stages:[...WATCHED_STAGES],horizons_ms:Object.fromEntries(HORIZONS.map(([h,ms])=>[h,ms])),impact_thresholds_pct:Object.fromEntries(HORIZONS.map(([h,,threshold])=>[h,threshold])),mfe_mae_source:'Historical outcomes require HISTORICAL_CLOSED_OHLC; live ticker points are provisional diagnostics only',minimum_cohort_for_rates:30,no_real_orders:true},
     total_records:records.length,eligible_records:eligible.length,
     excluded_incomplete_records:records.length-eligible.length,
     ...coverage,
@@ -789,7 +796,7 @@ export async function maybeLogPreExpansionOutcomeReport(store,{logger=console,no
     by_stage:report.groups.by_stage,
     by_market_regime:report.groups.by_market_regime,
     comparison:report.comparison,
-    notes:['Cohort rates are suppressed until at least 30 eligible observations mature for the relevant denominator.','Incomplete field-coverage rows are retained for audit but excluded from all performance rates and markout updates.','Live excursions are sampled ticker extremes; historical replay results use closed OHLC candles.','Average time is detection-to-first +3% movement, not a guaranteed predictive lead time.','RANGING historical sample uses archived signal timestamps and real closed OHLC only; it is not a full detector-state replay over all historical candles.']
+    notes:['Cohort rates are suppressed until at least 30 eligible observations mature for the relevant denominator.','Incomplete field-coverage rows are retained for audit but excluded from performance rates.','Live ticker observations are provisional only; historical marks, extrema, and rates require closed Binance OHLC candles.','Average time is detection-to-first +3% movement, not a guaranteed predictive lead time.','RANGING historical sample uses archived signal timestamps and real closed OHLC only; it is not a full detector-state replay over all historical candles.']
   };
   logger.info?.('[PRE_EXPANSION_OUTCOME_REPORT] '+JSON.stringify(compact));
   return {logged:true,report:compact};
