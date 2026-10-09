@@ -37,6 +37,8 @@ public final class TradliActivity extends Activity {
     private static final String APP_ORIGIN =
             "https://appassets.androidplatform.net";
     private static final String BACKEND_ORIGIN =
+            "https://radarx-ai-triple-production.up.railway.app";
+    private static final String BACKEND_FALLBACK_ORIGIN =
             "https://radarx-ai-production.up.railway.app";
 
     private WebView webView;
@@ -162,9 +164,10 @@ public final class TradliActivity extends Activity {
     }
 
     private static boolean isAllowedBackendUri(Uri uri) {
-        return uri != null &&
-                "https".equalsIgnoreCase(uri.getScheme()) &&
-                BACKEND_ORIGIN.equalsIgnoreCase(uri.getScheme() + "://" + uri.getHost()) &&
+        if (uri == null || !"https".equalsIgnoreCase(uri.getScheme())) return false;
+        String origin = uri.getScheme() + "://" + uri.getHost();
+        return (BACKEND_ORIGIN.equalsIgnoreCase(origin) ||
+                BACKEND_FALLBACK_ORIGIN.equalsIgnoreCase(origin)) &&
                 (uri.getPort() == -1 || uri.getPort() == 443);
     }
 
@@ -172,10 +175,13 @@ public final class TradliActivity extends Activity {
         HttpURLConnection connection = null;
         try {
             URL url = new URL(request.getUrl().toString());
+            if (!isAllowedBackendUri(Uri.parse(url.toString()))) {
+                return blockedResponse("Backend destination blocked");
+            }
             connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("GET");
             connection.setConnectTimeout(12000);
-            connection.setReadTimeout(30000);
+            connection.setReadTimeout(180000);
             connection.setInstanceFollowRedirects(false);
             connection.setRequestProperty("Accept", "application/json");
             connection.setRequestProperty("Accept-Encoding", "identity");
