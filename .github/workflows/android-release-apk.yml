@@ -19,13 +19,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          ref: 0a765dce883108a7004575164906bf0e8a2558a6
+          ref: 1be2d31dffd27afedb662042c9f8043fa1257e9f
 
       - name: Verify Build 224 + Falcon Eye source
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "0a765dce883108a7004575164906bf0e8a2558a6"
+          test "$(git rev-parse HEAD)" = "1be2d31dffd27afedb662042c9f8043fa1257e9f"
           grep -Fq 'versionCode 24' android/app/build.gradle
           grep -Fq 'versionName "1.5.8"' android/app/build.gradle
           test -s android/app/src/main/assets/falcon-eye-radar.html
@@ -266,7 +266,7 @@ jobs:
           APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
-            --target "0a765dce883108a7004575164906bf0e8a2558a6" \
+            --target "1be2d31dffd27afedb662042c9f8043fa1257e9f" \
             --title "RadarX Native — Build 224 + Falcon Eye Recovery 1.5.8"
             --notes "Version 1.5.8 fixes Falcon Eye clock initialization, routes embedded WebView calls through the allow-listed HTTPS backend proxy, checks the background service across Android processes, and makes Falcon Eye bypass stale UI cache and request an explicit scan. Offline phones cannot fetch live prices; the online Railway scanner can save real discoveries for replay after reconnect. Notifications retain original detection price/time separately from phone delivery time. Publishing requires source tests, a live Falcon Eye scan contract, signed APK verification, and a passing Android online/offline/reconnect emulator test. Spot/Paper/read-only only; paper_trading=true; real_order_execution=false; confidence_score=UNKNOWN. Android emulator smoke outcome: ${ANDROID_EMULATOR_SMOKE_OUTCOME}."
 
