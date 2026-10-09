@@ -4,6 +4,24 @@ import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
 
+function normalizeRadarTickerRow(row,quote){
+  const normalized=normalizeTickerRow(row,quote);
+  if(normalized)return normalized;
+  if(!row||typeof row.symbol!=='string'||!/^[A-Z0-9]{5,30}$/i.test(row.symbol))return null;
+  const lastPrice=Number(row.lastPrice),quoteVolume=Number(row.quoteVolume),count=Number(row.count);
+  if(!Number.isFinite(lastPrice)||lastPrice<=0||!Number.isFinite(quoteVolume)||quoteVolume<0||!Number.isFinite(count)||count<0)return null;
+  const rawChange=row.priceChangePercent;
+  const dailyKnown=rawChange!==null&&rawChange!==undefined&&!(typeof rawChange==='string'&&rawChange.trim()==='')&&Number.isFinite(Number(rawChange));
+  const high=Number(row.highPrice),low=Number(row.lowPrice);
+  const tickerTime=['closeTime','eventTime','openTime'].map(key=>Number(row[key])).find(Number.isFinite)??null;
+  return {
+    symbol:String(row.symbol).toUpperCase(),quoteAsset:String(quote).toUpperCase(),
+    lastPrice,quoteVolume24h:quoteVolume,tradeCount24h:count,
+    priceChange24h:dailyKnown?Number(rawChange):null,
+    highPrice24h:Number.isFinite(high)&&high>0?high:null,
+    lowPrice24h:Number.isFinite(low)&&low>0?low:null,tickerTime
+  };
+}
 const clamp=(v,min=0,max=100)=>Math.max(min,Math.min(max,Number.isFinite(Number(v))?Number(v):min));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
 const hasFiniteValue=v=>v!==null&&v!==undefined&&!(typeof v==='string'&&v.trim()==='')&&Number.isFinite(Number(v));
@@ -415,7 +433,7 @@ export class FalconEyeRadar {
   }
   async tickerRows(){
     const r=await this.rest.request('/api/v3/ticker/24hr');
-    const raw=(Array.isArray(r.data)?r.data:[]).map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
+    const raw=(Array.isArray(r.data)?r.data:[]).map(x=>normalizeRadarTickerRow(x,this.config.quote)).filter(Boolean)
       .filter(x=>x.quoteVolume24h>=this.config.fastMinQuoteVolume24h&&this.universe.includes(x.symbol));
     const marketMoves=raw.map(x=>x.priceChange24h).filter(hasFiniteValue).map(Number);
     const marketMedianChange24hPct=median(marketMoves);
