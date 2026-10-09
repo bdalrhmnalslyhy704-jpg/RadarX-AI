@@ -169,7 +169,7 @@ function annotateClientSuccess(client, result, sourceIndex = null) {
 }
 
 export class RestClient {
-  constructor({baseUrls,fetchImpl=globalThis.fetch,timeoutMs=9000,minIntervalMs=100,maxRequestsPerMinute=120}) {
+  constructor({baseUrls,fetchImpl=globalThis.fetch,timeoutMs=9000,minIntervalMs=100,maxRequestsPerMinute=240}) {
     this.baseUrls=[...baseUrls]; this.fetchImpl=fetchImpl; this.timeoutMs=timeoutMs;
     this.minIntervalMs=minIntervalMs; this.maxRequestsPerMinute=maxRequestsPerMinute;
     this.usedAt=[]; this.lastRequestAt=0; this.currentBaseIndex=0;
