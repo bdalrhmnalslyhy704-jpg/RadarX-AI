@@ -34,6 +34,11 @@ test('TEST_FIXTURE: Binance millisecond kline timestamps normalize and current o
   assert.equal(result.candles[0].openTime,open);
   assert.equal(result.candles[0].closeTime,open+899999);
   assert.equal(result.candles[0].closed,false);
+  assert.equal(result.candles[0].source,'BINANCE_PUBLIC_REST');
+  assert.ok(Number.isFinite(result.candles[0].receivedAt));
+  assert.ok(Number.isFinite(result.candles[0].ageMs));
+  assert.equal(result.candles[0].eventTime,null);
+  assert.equal(result.candles[0].transportLatencyMs,null);
 });
 
 
