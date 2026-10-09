@@ -1056,8 +1056,8 @@ export class EarlyExpansionRadar{
     const n=Math.max(1,Math.trunc(this.config.microScanCandidates||36));
     const target=Math.min(n,uniqueItemCount(all));
     if(target===0)return [];
-    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve||8)),Math.max(0,target-1));
-    const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve||8)),Math.max(0,target-q-1));
+    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve??8)),Math.max(0,target-1));
+    const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve??8)),Math.max(0,target-q-1));
     const core=target-q-r;
     const byScore=[...all].sort((a,b)=>b._microPreScore-a._microPreScore||a.symbol.localeCompare(b.symbol));
     const byQuiet=all.filter(x=>x._quietEligible).sort((a,b)=>
@@ -1089,12 +1089,13 @@ export class EarlyExpansionRadar{
   }
   selectDeepFromMicro(results,cycle=0){
     const currentCycle=Math.max(0,Math.trunc(Number(cycle)||0));
-    const valid=(results||[]).filter(x=>x&&!x.failed&&x.symbol&&x.micro_fingerprint?.score!=null&&hasFiniteNumber(x.micro_fingerprint.score));
+    const valid=(results||[]).filter(x=>x&&!x.failed&&(x.symbol||x.row?.symbol)&&x.micro_fingerprint?.score!=null&&hasFiniteNumber(x.micro_fingerprint.score))
+      .map(x=>x.symbol?x:{...x,symbol:String(x.row.symbol).toUpperCase()});
     const n=Math.max(1,Math.trunc(this.config.deepCandidates||10));
     const target=Math.min(n,uniqueItemCount(valid));
     if(target===0)return [];
-    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve||8)),Math.max(0,target-1));
-    const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve||2)),Math.max(0,target-q-1));
+    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve??8)),Math.max(0,target-1));
+    const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve??2)),Math.max(0,target-q-1));
     const core=target-q-r;
     const byScore=[...valid].sort((a,b)=>
       Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||a.symbol.localeCompare(b.symbol)
