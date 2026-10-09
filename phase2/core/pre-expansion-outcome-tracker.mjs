@@ -19,6 +19,11 @@ const RADAR_ALIASES=new Map([
 ]);
 const MAX_RECORDS=5000;
 const REARM_MS=60*60*1000;
+const HISTORICAL_WINDOW_MS=45*24*60*60*1000;
+const HISTORICAL_IMPORT_INTERVAL_MS=60*60*1000;
+const HISTORICAL_BACKFILL_INTERVAL_MS=6*60*60*1000;
+const HISTORICAL_BACKFILL_MAX_SIGNALS=2;
+const EXCLUDED_EVALUATION_SYMBOLS=new Set(['BTCUSDT','USDCUSDT','TUSDUSDT','USDPUSDT','FDUSDUSDT','BUSDUSDT','DAIUSDT','EURUSDT','EURTUSDT','USDEUSDT','PYUSDUSDT','USTCUSDT']);
 const PRICE_POLL_MIN_MS=20_000;
 const FALSE_BREAKOUT_WINDOW_MS=15*60_000;
 
@@ -29,7 +34,7 @@ const keyOf=(radar,symbol)=>radar+'|'+symbol;
 const pct=(price,entry)=>Number.isFinite(price)&&Number.isFinite(entry)&&entry>0?(price/entry-1)*100:null;
 
 export function emptyPreExpansionOutcomeState(){
-  return {version:'PRE_EXPANSION_OUTCOMES_V1',records:[],last_stage_by_key:{},last_price_update_at:0,last_report_log_at:0,updated_at:0};
+  return {version:'PRE_EXPANSION_OUTCOMES_V1',records:[],last_stage_by_key:{},last_price_update_at:0,last_report_log_at:0,last_historical_import_at:0,last_historical_backfill_at:0,updated_at:0};
 }
 function normalizeState(raw){
   const state=object(raw);
@@ -38,7 +43,7 @@ function normalizeState(raw){
     records:list(state.records),
     last_stage_by_key:object(state.last_stage_by_key),
     last_price_update_at:num(state.last_price_update_at,0),
-    last_report_log_at:num(state.last_report_log_at,0),updated_at:num(state.updated_at,0)
+    last_report_log_at:num(state.last_report_log_at,0),last_historical_import_at:num(state.last_historical_import_at,0),last_historical_backfill_at:num(state.last_historical_backfill_at,0),updated_at:num(state.updated_at,0)
   };
 }
 
@@ -138,20 +143,38 @@ function makeSignal(alert,now,marketContext){
   const radar=normalizedRadar(alert),stage=inferStage(alert);
   const symbol=String(alert?.symbol||'').trim().toUpperCase();
   const entry=num(alert?.price??alert?.last_price??alert?.lastPrice??alert?.falcon_eye?.metrics?.last_price);
-  if(!radar||!symbol||!stage)return null;
+  if(!radar||!symbol||!stage||EXCLUDED_EVALUATION_SYMBOLS.has(symbol))return null;
   const detectedAt=num(alert?.detected_at??alert?.processed_at??alert?.as_of_ms,now);
   const m=stageMetrics(alert),extended=assessAlreadyExtended(alert,stage,m);
   const context={...object(marketContext),...object(alert?.market_context)};
   const marketRegime=String(alert?.market_regime_label||alert?.market_regime?.label||'').toUpperCase()||
     classifyEvaluationMarketRegime(context);
-  const quality=dataQuality(alert,stage,m);
+  const rawQuality=dataQuality(alert,stage,m);
+  const r9=object(alert?.falcon_eye);
+  const r9Ready=object(r9.pre_expansion_fingerprint).data_ready===true;
+  const r9QualityFields=[
+    m.daily_change_pct!==null,
+    entry!==null&&entry>0,
+    m.return_5m_pct!==null,
+    m.return_10m_pct!==null,
+    m.relative_strength_vs_btc_pct!==null,
+    m.resistance_price!==null||m.resistance_distance_atr!==null,
+    num(m.volume_ratio??m.rvol_5m)!==null,
+    num(m.trade_ratio)!==null,
+    num(m.atr_ratio??m.bollinger_ratio)!==null,
+    r9Ready||alert?.radar!=='FALCON_EYE_RADAR'
+  ];
+  const qualitySource=alert?.radar==='FALCON_EYE_RADAR'?'DERIVED_FIELD_COVERAGE':'RADAR_REPORTED_QUALITY';
+  const quality=alert?.radar==='FALCON_EYE_RADAR'
+    ?Math.round(r9QualityFields.filter(Boolean).length/r9QualityFields.length*100)
+    :rawQuality;
   const reasons=reasonList(alert);
   const existingId=String(alert?.id||'').trim();
   const signalId=existingId||[radar,symbol,stage,detectedAt].join(':');
   return {
     signal_id:signalId,radar,symbol,entry_price:entry,detected_at:detectedAt,
     detected_at_iso:new Date(detectedAt).toISOString(),signal_type:stage,
-    data_quality:quality,reported_data_quality:num(alert?.data_quality??alert?.falcon_eye?.data_quality),
+    data_quality:quality,data_quality_source:qualitySource,reported_data_quality:num(alert?.data_quality??alert?.falcon_eye?.data_quality),
     data_quality_status:stage==='DATA_INSUFFICIENT'?'INSUFFICIENT':m.data_stale?'STALE':m.daily_change_pct===null?'DAILY_CHANGE_UNKNOWN':'AVAILABLE',
     reason_codes:reasons,market_regime:marketRegime,
     initial_daily_change_pct:m.daily_change_pct,
@@ -160,6 +183,7 @@ function makeSignal(alert,now,marketContext){
     resistance_price:m.resistance_price,resistance_distance_atr:m.resistance_distance_atr,
     already_extended_at_detection:extended,
     detected_before_move:assessBeforeMove(alert,stage,m,extended),
+    detected_after_move:!assessBeforeMove(alert,stage,m,extended),
     initial_metrics:m,source:list(alert?.source).length?list(alert.source):[String(alert?.source||'UNKNOWN')],
     false_breakout:null,false_breakout_basis:null,
     marks:{},excursions:Object.fromEntries(HORIZONS.map(([h])=>[h,{max_favorable_pct:0,max_adverse_pct:0,complete:false}])),
