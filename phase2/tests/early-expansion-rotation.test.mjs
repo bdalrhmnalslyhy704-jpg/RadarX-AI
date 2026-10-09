@@ -86,7 +86,7 @@ test('Radar 8 prioritizes symbols not covered in the prior rotation cycle',()=>{
   const firstSymbols=new Set(first.map(x=>x.symbol));
   assert.equal(first.length,10);
   assert.equal(second.length,10);
-  assert.equal(second.filter(x=>!firstSymbols.has(x.symbol)).length,5);
+  assert.equal(second.filter(x=>!firstSymbols.has(x.symbol)).length,5,JSON.stringify({first:first.map(x=>({s:x.symbol,l:x._selection_lane,age:x._rotationAge})),second:second.map(x=>({s:x.symbol,l:x._selection_lane,age:x._rotationAge})),overlap:second.filter(x=>firstSymbols.has(x.symbol)).map(x=>x.symbol)}));
   assert.equal(second.filter(x=>x._selection_lane==='rotation').length,5);
 });
 
