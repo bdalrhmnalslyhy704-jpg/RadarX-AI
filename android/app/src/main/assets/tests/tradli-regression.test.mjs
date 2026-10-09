@@ -96,3 +96,12 @@ test('Chart Lab renders server-provided closed candles for 15m, 1h, and 4h',()=>
   assert.match(suite,/value="1h"/);
   assert.match(suite,/value="4h"/);
 });
+
+test('Android background smoke accepts verified scan evidence and offline wait',()=>{
+  assert.match(smoke,/function require_monitor_lifecycle_evidence\(/);
+  assert.match(smoke,/FALCON_EYE_FEED_OK/);
+  assert.match(smoke,/BACKGROUND_SCAN_COMPLETED/);
+  assert.match(smoke,/BACKGROUND_OFFLINE_WAIT/);
+  assert.match(smoke,/Foreground monitor runtime evidence is missing/);
+  assert.doesNotMatch(smoke,/printf '%s\\n' "\$LOGS" \\| grep -Fq "BACKGROUND_AUTO_START_REQUEST"\\n  printf '%s\\n' "\$LOGS" \\| grep -Fq "BACKGROUND_SERVICE_READY"/);
+});
