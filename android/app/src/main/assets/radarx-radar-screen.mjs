@@ -45,6 +45,7 @@ function installTheme(p){
     .rxs .alert{padding:10px;border-radius:13px;background:#07121b;border:1px solid #1d394d;margin-top:7px}
     .rxs .top{display:flex;justify-content:space-between;gap:8px;align-items:center}
     .rxs .score{color:${p.c};font-weight:1000}
+    .rxs .shock-note{margin-top:6px;padding:7px;border:1px solid #80652c;border-radius:10px;background:#211a0d;color:#ffe0a0;font-size:10px;line-height:1.7}
     @media(max-width:520px){.rxs{padding:8px}.rxs h1{font-size:23px}}
   `;
   document.head.appendChild(st);
@@ -111,11 +112,14 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
         const isJoker=id==='ROTATION_LAG_RADAR';
         const score=q(x.radar_power_score||x.radar_v2 && x.radar_v2.score||x.opportunity_score||x.score);
         const label=isJoker?(x.eligible===true?'جاهز للدوران':(x.potential_label||rotation.stage||'مراقبة')):(x.potential_label||x.event||'اكتشاف');
+        const shock=x.activity_shock||x.falcon_eye?.activity_shock||{};
+        const sm=shock.metrics||{};
+        const shockNote=shock.detected===true?'<div class="shock-note">⚡ '+e(shock.stage||'ACTIVITY_SHOCK')+' • حجم '+e(sm.volume_shock_ratio??'—')+'x • صفقات '+e(sm.trade_shock_ratio??'—')+'x<br>مراقبة فقط • '+(shock.extended?'الحركة ممتدة — لا تطارد السعر':'تأكيد شمعة مغلقة')+'</div>':'';
         const extra=isJoker?' • تأكيدات '+String((x.rotation && x.rotation.confirmations) || x.confirmations || 0):'';
         return '<article class="alert">'+
           '<div class="top"><b>'+e(x.symbol||'—')+'</b><span class="score">'+score+'/100</span></div>'+
           '<div class="muted">'+e(label)+' • '+e(x.direction||rotation.direction||'—')+' • '+e(x.detected_time_12h||'—')+extra+'</div>'+
-          '<div class="muted">'+e(Array.isArray(x.reasons)?x.reasons.slice(0,4).join(' • '):Array.isArray(rotation.reasons)?rotation.reasons.slice(0,4).join(' • '):'')+'</div>'+
+          '<div class="muted">'+e(Array.isArray(x.reasons)?x.reasons.slice(0,4).join(' • '):Array.isArray(rotation.reasons)?rotation.reasons.slice(0,4).join(' • '):'')+'</div>'+shockNote+
         '</article>';
       }).join('');
     };

@@ -174,6 +174,16 @@ test('Radar 8 exceptional acceleration may bypass rotation without changing batc
   assert.equal(selected[0]._selection_lane,'exceptional');
 });
 
+test('Radar 8 gives confirmed activity shocks a deep-scan bypass without granting entry eligibility',()=>{
+  const radar=makeRadar({deepCandidates:4,quietReserve:1,rotationReserve:1,exceptionalRotationBypassSlots:2});
+  const event=candidate('EVENTUSDT',25,{score:57,participation:65,tradeParticipation:66,structure:48,compression:45,volume:1.1,trades:1.0});
+  event.micro_fingerprint.activity_shock={detected:true,stage:'EVENT_DRIVEN_BREAKOUT',score:92,watch_only:true,entry_eligible:false,extended:true};
+  const others=[candidate('AAAUSDT',2,{score:89}),candidate('BBBUSTDT',3,{score:88}),candidate('CCCUSDT',1,{score:84}),candidate('DDDUSDT',4,{score:82})];
+  const selected=radar.selectDeepFromMicro([event,...others],9);
+  assert.ok(selected.some(x=>x.row.symbol==='EVENTUSDT'&&x._selection_lane==='exceptional'));
+  assert.equal(event.micro_fingerprint.activity_shock.entry_eligible,false);
+});
+
 test('Radar 8 deep scan preserves score capacity while selecting quiet bases from smallest move first',()=>{
   const radar=makeRadar({deepCandidates:10,quietReserve:8,rotationReserve:2});
   const candidates=[

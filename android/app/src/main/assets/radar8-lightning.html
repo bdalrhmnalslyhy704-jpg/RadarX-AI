@@ -16,7 +16,7 @@ header{position:sticky;top:0;z-index:5;margin:-18px -14px 14px;padding:calc(12px
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.card{background:linear-gradient(145deg,#0c1a28,#09121b);border:1px solid #23445d;border-radius:17px;padding:14px;box-shadow:0 8px 28px rgba(0,0,0,.18)}.wide{grid-column:1/-1}
 .metric b{font-size:20px}.metric small{display:block;color:#8fa8bc;font-size:10px;margin-top:3px}.muted{color:#8fa8bc}.ok{color:#66e6b0}.warn{color:#ffd27a}.bad{color:#ff8794}
 .actions{display:flex;gap:8px;flex-wrap:wrap}.btn{min-height:44px;border:1px solid #2a536b;border-radius:12px;background:#0a1822;color:#e7f8ff;font-weight:900;padding:0 14px}.btn.primary{background:linear-gradient(135deg,#35c9ff,#756dff);color:#06111a;border:0}.btn.stop{background:#32151b;border-color:#6f313d}.btn:disabled{opacity:.55}
-.rows{display:grid;gap:9px}.coin{border:1px solid #24445d;border-radius:15px;padding:12px;background:#09141e}.coin-top{display:flex;align-items:center;justify-content:space-between;gap:8px}.coin-top b{font-size:15px}.score{font-weight:1000}.pill{font-size:9px;border:1px solid #33566b;border-radius:999px;padding:4px 7px;color:#bfe6f6}.mini{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:9px}.mini div{padding:8px;border-radius:11px;background:#0b1a25}.mini b{display:block;font-size:11px}.mini small{display:block;color:#819caf;font-size:9px;margin-top:2px}.reason{margin-top:9px;color:#b5d3df;font-size:10px;line-height:1.7}.meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.empty{padding:25px;text-align:center;color:#8ea6b7;border:1px dashed #29475a;border-radius:14px}
+.rows{display:grid;gap:9px}.coin{border:1px solid #24445d;border-radius:15px;padding:12px;background:#09141e}.coin-top{display:flex;align-items:center;justify-content:space-between;gap:8px}.coin-top b{font-size:15px}.score{font-weight:1000}.pill{font-size:9px;border:1px solid #33566b;border-radius:999px;padding:4px 7px;color:#bfe6f6}.mini{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:9px}.mini div{padding:8px;border-radius:11px;background:#0b1a25}.mini b{display:block;font-size:11px}.mini small{display:block;color:#819caf;font-size:9px;margin-top:2px}.reason{margin-top:9px;color:#b5d3df;font-size:10px;line-height:1.7}.shock{margin-top:8px;padding:9px;border:1px solid #88652b;background:#23190a;color:#ffe0a0;border-radius:11px;font-size:10px;line-height:1.8}.meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.empty{padding:25px;text-align:center;color:#8ea6b7;border:1px dashed #29475a;border-radius:14px}
 @media(max-width:600px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.mini{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>
 </head>
@@ -57,6 +57,7 @@ function disposePage(){pageDead=true;if(timer)clearInterval(timer);for(const ctl
 
 function esc(v){return String(v||'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));}
 function fmt(v,d=2){const n=Number(v);return Number.isFinite(n)?n.toFixed(d):'—';}
+function fmtKnown(v,d=2){return v===null||v===undefined||v===''?'—':fmt(v,d);}
 function fmtPct(v){const n=Number(v);return Number.isFinite(n)?(n>=0?'+':'')+n.toFixed(2)+'%':'—';}
 function timeText(iso){try{return new Intl.DateTimeFormat('ar-YE',{timeZone:'Asia/Aden',hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true}).format(new Date(iso));}catch{return iso||'—';}}
 
@@ -96,6 +97,9 @@ function render(data){
     const met=fp.metrics||{};
     const reasons=[...(fp.reasons||[]),...(c.reason_codes||[])].slice(0,8);
     const risk=[...(fp.risk_flags||[]),...(c.risk_flags||[])].slice(0,5);
+    const shock=c.activity_shock||fp.activity_shock||{};
+    const sm=shock.metrics||{};
+    const shockCard=shock.detected===true?'<div class="shock"><b>⚡ رصد صدمة — مراقبة فقط</b> • '+esc(shock.stage||'ACTIVITY_SHOCK')+'<br>الحجم '+fmtKnown(sm.volume_shock_ratio,1)+'x • عدد الصفقات '+fmtKnown(sm.trade_shock_ratio,1)+'x • Taker Buy '+fmtKnown(sm.taker_buy_ratio===null||sm.taker_buy_ratio===undefined?null:Number(sm.taker_buy_ratio)*100,1)+'%<br>'+(shock.extended?'الحركة ممتدة — لا تطارد السعر.':'تأكدت من شمعة مغلقة؛ هذه ليست إشارة دخول.')+'</div>':'';
     return '<article class="coin">'+
       '<div class="coin-top"><b>'+esc(c.symbol)+'</b><span class="score">'+fmt(c.early_expansion_score,1)+'</span></div>'+
       '<div class="meta"><span class="pill">'+esc(c.decision_band||'—')+'</span><span class="pill">'+esc(fp.mode||'—')+'</span><span class="pill">Micro '+fmt(fp.score,1)+'</span><span class="pill">'+esc(String(fp.confirmation_count||0))+'/'+esc(String(fp.confirmation_total||10))+' تأكيدات</span></div>'+
@@ -107,6 +111,7 @@ function render(data){
       '<div><b>'+fmtPct(met.relative_strength_5m_pct)+'</b><small>RS vs BTC</small></div>'+
       '<div><b>'+fmt(met.higher_low_count,0)+'</b><small>HL score</small></div>'+
       '</div>'+
+      shockCard+
       '<div class="reason"><b>الإشارات:</b> '+esc(reasons.join(' • ')||'—')+'</div>'+
       (risk.length?'<div class="reason bad"><b>تحذير:</b> '+esc(risk.join(' • '))+'</div>':'')+
       '</article>';
