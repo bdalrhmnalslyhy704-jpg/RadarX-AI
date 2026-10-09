@@ -116,13 +116,13 @@ function streamWeight(stream,evidence){
 }
 export function classifyNewsEvent(title='',domain=''){
   const text=(String(title||'')+' '+String(domain||'')).toLowerCase();
-  if(/\\b(listing|listed|will list|new trading pair|spot trading opens?|trading will open|trading opens?|market opens?|exchange support)\\b/.test(text)||
-     /\\b(open|opens|opening)\\b.{0,45}\\b(trading|market)\\b/.test(text)||
-     /\\b(trading|market)\\b.{0,45}\\b(open|opens|opening)\\b/.test(text))return 'EXCHANGE_LISTING_OR_MARKET_OPEN';
-  if(/\\b(unlock|token unlock|vesting|circulating supply increase)\\b/.test(text))return 'TOKEN_UNLOCK_OR_SUPPLY_EVENT';
-  if(/\\b(hack|exploit|breach|attack|security incident|delist|delisting|lawsuit|fraud)\\b/.test(text))return 'NEGATIVE_SECURITY_OR_DELlST_EVENT';
-  if(/\\b(upgrade|mainnet|testnet|hard fork|protocol launch|network upgrade)\\b/.test(text))return 'PROTOCOL_UPGRADE_OR_LAUNCH';
-  if(/\\b(partnership|integration|collaboration|strategic alliance)\\b/.test(text))return 'PARTNERSHIP_OR_INTEGRATION';
+  if(/\b(listing|listed|will list|new trading pair|spot trading opens?|trading will open|trading opens?|market opens?|exchange support)\b/.test(text)||
+     /\b(open|opens|opening)\b.{0,45}\b(trading|market)\b/.test(text)||
+     /\b(trading|market)\b.{0,45}\b(open|opens|opening)\b/.test(text))return 'EXCHANGE_LISTING_OR_MARKET_OPEN';
+  if(/\b(unlock|token unlock|vesting|circulating supply increase)\b/.test(text))return 'TOKEN_UNLOCK_OR_SUPPLY_EVENT';
+  if(/\b(hack|exploit|breach|attack|security incident|delist|delisting|lawsuit|fraud)\b/.test(text))return 'NEGATIVE_SECURITY_OR_DELIST_EVENT';
+  if(/\b(upgrade|mainnet|testnet|hard fork|protocol launch|network upgrade)\b/.test(text))return 'PROTOCOL_UPGRADE_OR_LAUNCH';
+  if(/\b(partnership|integration|collaboration|strategic alliance)\b/.test(text))return 'PARTNERSHIP_OR_INTEGRATION';
   return 'GENERAL_CRYPTO_NEWS';
 }
 function newsSentiment(item){return Number.isFinite(item.tone)?clamp(50+item.tone*3):wordScore(item.title,NEWS_BULL,NEWS_BEAR).score;}
