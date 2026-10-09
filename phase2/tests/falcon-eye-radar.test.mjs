@@ -96,3 +96,53 @@ test('Falcon Eye health reports scanner state using the injected clock',()=>{
   assert.equal(health.scans,0);
   assert.equal(health.last_error,null);
 });
+
+
+test('Falcon Eye rotates deep-scan capacity across the market instead of repeating the same top rows',()=>{
+  let now=1_900_000_000_000;
+  const symbols=Array.from({length:32},(_,i)=>`C${String(i).padStart(2,'0')}USDT`);
+  const radar=new FalconEyeRadar({
+    rest:{},store:{},clock:()=>now,
+    config:{pollMs:30_000,scanBatchSize:8,pulseTopCandidates:3,quietCandidates:2,deepScanMinIntervalMs:90_000}
+  });
+  radar.universe=symbols;
+  const rows=symbols.map((symbol,i)=>({
+    symbol,lastPrice:1+i,quoteVolume24h:2_000_000,priceChange24h:1,
+    market_pulse:i<3
+      ? {fast_trigger:true,stage:'EVENT',explosive:true,score:96-i,priceDeltaPct:0.8,volumeBurstRatio:3.8,tradeBurstRatio:3.4,baseBreakScore:70,highProximityScore:85}
+      : {fast_trigger:false,stage:'WATCH',score:65,priceDeltaPct:0.02,volumeBurstRatio:1.1,tradeBurstRatio:1.1,baseBreakScore:90-i,highProximityScore:85-i*0.4}
+  }));
+  const seen=new Set();
+  for(let cycle=0;cycle<5;cycle++){
+    const batch=radar.selectBatch(rows,now);
+    assert.equal(batch.length,8,'the scanner should use its full batch budget when enough symbols are eligible');
+    assert.equal(new Set(batch.map(x=>x.symbol)).size,batch.length,'one symbol must not consume two slots in a cycle');
+    for(const row of batch){
+      seen.add(row.symbol);
+      radar.lastScanAt.set(row.symbol,now);
+    }
+    now+=30_000;
+  }
+  assert.ok(seen.size>=22,`fair patrol should reach at least 22 of 32 symbols over five cycles; got ${seen.size}`);
+  assert.ok(radar.lastPatrolVisits>0,'patrol cursor must advance across the exchange universe');
+  assert.equal(radar.health().last_batch_count,8);
+});
+
+test('Falcon Eye lets a genuinely urgent pulse bypass the normal deep-scan cooldown only',()=>{
+  const now=1_900_000_000_000;
+  const symbols=Array.from({length:12},(_,i)=>`U${String(i).padStart(2,'0')}USDT`);
+  const radar=new FalconEyeRadar({
+    rest:{},store:{},clock:()=>now,
+    config:{pollMs:30_000,scanBatchSize:8,pulseTopCandidates:3,quietCandidates:2,deepScanMinIntervalMs:90_000}
+  });
+  radar.universe=symbols;
+  const rows=symbols.map((symbol,i)=>({
+    symbol,lastPrice:10+i,quoteVolume24h:2_000_000,priceChange24h:1,
+    market_pulse:i===0
+      ? {fast_trigger:true,stage:'EVENT',explosive:true,score:95,priceDeltaPct:0.8,volumeBurstRatio:3.4,tradeBurstRatio:3.1}
+      : {fast_trigger:false,stage:'WATCH',score:55,priceDeltaPct:0.01,volumeBurstRatio:1,tradeBurstRatio:1,baseBreakScore:50,highProximityScore:50}
+  }));
+  for(const symbol of symbols)radar.lastScanAt.set(symbol,now-30_000);
+  const batch=radar.selectBatch(rows,now);
+  assert.deepEqual(batch.map(x=>x.symbol),[symbols[0]]);
+});
