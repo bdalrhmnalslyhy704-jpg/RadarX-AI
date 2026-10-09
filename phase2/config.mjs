@@ -45,7 +45,7 @@ export const CONFIG = Object.freeze({
     ]),
     timeoutMs: int(process.env.RADARX_REST_TIMEOUT_MS, 9000),
     minIntervalMs: int(process.env.RADARX_REST_MIN_INTERVAL_MS, 100),
-    maxRequestsPerMinute: int(process.env.RADARX_REST_MAX_REQUESTS_PER_MINUTE, 120)
+    maxRequestsPerMinute: int(process.env.RADARX_REST_MAX_REQUESTS_PER_MINUTE, 240)
   },
   monitoring: {
     bootstrapKlines: int(process.env.RADARX_BOOTSTRAP_KLINES, 250),
