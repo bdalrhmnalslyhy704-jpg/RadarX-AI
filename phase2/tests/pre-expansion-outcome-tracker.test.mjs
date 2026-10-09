@@ -11,7 +11,8 @@ import {
   importHistoricalPreExpansionSignals,
   backfillHistoricalPreExpansionOutcomes,
   recordPreExpansionSignals,
-  updatePreExpansionMarkouts
+  updatePreExpansionMarkouts,
+  maybeLogPreExpansionOutcomeReport
 } from '../core/pre-expansion-outcome-tracker.mjs';
 
 const NOW=1_900_000_000_000;
@@ -105,6 +106,38 @@ test('records Radar 8/Radar 9 observations with time, entry, stage, data quality
     assert.equal(r8.outcome_status,'PENDING');
     assert.equal(r8.horizon_status['5m'].status,'PENDING');
     assert.equal(state.records.find(x=>x.radar==='RADAR_9').radar,'RADAR_9');
+  });
+});
+
+test('legacy scoreless rows are migrated to incomplete and excluded from stored accuracy cohorts',async()=>{
+  await withStore(async store=>{
+    const required=['radar','symbol','signal_type','entry_price','detected_at','daily_change_pct',
+      'return_5m_pct','return_10m_pct','relative_strength','resistance_context','volume_ratio',
+      'trade_ratio','volatility_context','market_regime','reason_codes','closed_fresh_candles','fingerprint_ready'];
+    const row={
+      signal_id:'LEGACY:NOSCOREUSDT:WATCH_EARLY:'+NOW,radar:'RADAR_8',symbol:'NOSCOREUSDT',
+      signal_type:'WATCH_EARLY',entry_price:1,detected_at:NOW,signal_score:null,
+      required_fields:required,available_fields:[...required],missing_required_fields:[],
+      evaluation_eligible:true,evaluation_status:'ELIGIBLE',evaluation_exclusion_reason:null,
+      data_quality:100,data_quality_source:'NORMALIZED_REQUIRED_FIELD_COVERAGE',
+      market_regime:'RANGING',marks:{},excursions:{},horizon_status:{},outcome_status:'PENDING'
+    };
+    await store.updatePreExpansionOutcomes(()=>({
+      version:'PRE_EXPANSION_OUTCOMES_V2',records:[row],last_stage_by_key:{},
+      last_price_update_at:0,last_report_log_at:0,last_historical_import_at:0,
+      last_historical_backfill_at:0,updated_at:NOW
+    }));
+    const lines=[];
+    const result=await maybeLogPreExpansionOutcomeReport(store,{now:NOW,logger:{info:line=>lines.push(line)}});
+    assert.equal(result.logged,true);
+    assert.equal(result.report.eligible_records,0);
+    assert.equal(result.report.excluded_incomplete_records,1);
+    assert.equal(result.report.missing_field_counts.signal_score,1);
+    const state=await store.getPreExpansionOutcomes();
+    assert.equal(state.records[0].evaluation_eligible,false);
+    assert.equal(state.records[0].evaluation_status,'EXCLUDED_INCOMPLETE');
+    assert.ok(state.records[0].missing_required_fields.includes('signal_score'));
+    assert.ok(state.records[0].data_quality<100);
   });
 });
 
