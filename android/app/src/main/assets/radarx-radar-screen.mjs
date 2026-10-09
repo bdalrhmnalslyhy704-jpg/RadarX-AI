@@ -1,4 +1,4 @@
-import {getRadarStatus,getRadarAlerts,getRotationRadar,setRadarState} from './radarx-backend-client.mjs';
+import {getRadarStatus,getRadarAlerts,getRotationRadar,getFalconEyeRadar,setRadarState} from './radarx-backend-client.mjs';
 
 const P = {
   EARLY_MOVE_RADAR:{n:'المدمر',i:'☠️',c:'#ff3b30',m:'ما قبل الانفجار',s:'Pre-Breakout Fingerprint + Relative Strength + Compression',t:'1m • 5m • 15m',a:['Fast Impulse','RVOL','Taker Flow','EMA Reclaim','S/R','RSI','OBV','Wyckoff','MTF'],g:['يمنع مطاردة الحركة','جودة وسيولة لازمتان','شموع مغلقة فقط']},
@@ -122,7 +122,7 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
 
     async function refresh(force=false){
       if(dead||busy)return;
-      if(!force){
+      if(!force && id!=='FALCON_EYE_RADAR'){
         const cached=readRadarCache();
         if(cached){
           const body=cached.body||{};
@@ -136,17 +136,29 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
       }
       busy=true;
       try{
-        const s=await getRadarStatus();
-        if(s.ok)setStatus((s.body && s.body.radars||[]).find(x=>x.radar===id));
-        else stn.textContent='تعذر قراءة حالة الرادار — HTTP_'+(s.status||0);
+        if(id!=='FALCON_EYE_RADAR'){
+          const s=await getRadarStatus();
+          if(s.ok)setStatus((s.body && s.body.radars||[]).find(x=>x.radar===id));
+          else stn.textContent='تعذر قراءة حالة الرادار — HTTP_'+(s.status||0);
+        }
         let a;
-        if(id==='ROTATION_LAG_RADAR') a=await getRotationRadar({limit:20,scan:true});
+        if(id==='FALCON_EYE_RADAR') a=await getFalconEyeRadar({limit:20,scan:force});
+        else if(id==='ROTATION_LAG_RADAR') a=await getRotationRadar({limit:20,scan:true});
         else a=await getRadarAlerts({radar:id,limit:50});
         if(a.ok){
           writeRadarCache(a.body||{});
-          if(id==='ROTATION_LAG_RADAR')show([].concat(a.body&&a.body.candidates||[],a.body&&a.body.alerts||[]));
+          if(id==='FALCON_EYE_RADAR'){
+            const health=a.body&&a.body.monitoring||{running:false};
+            setStatus(health);
+            const scanError=a.body&&a.body.scan&&a.body.scan.error;
+            if(scanError)stn.textContent+=' • سبب التعثر: '+String(scanError);
+            show([].concat(a.body&&a.body.candidates||[],a.body&&a.body.alerts||[]));
+          }else if(id==='ROTATION_LAG_RADAR')show([].concat(a.body&&a.body.candidates||[],a.body&&a.body.alerts||[]));
           else show(a.body&&a.body.alerts||[]);
-        }else if(a.status===404)box.innerHTML='<div class="muted">لا يوجد مسار بيانات لهذا الرادار في الخادم الحالي.</div>';
+        }else{
+          if(id==='FALCON_EYE_RADAR')stn.textContent='تعذر فحص عين الصقر — '+(a.error||('HTTP_'+(a.status||0)));
+          if(a.status===404)box.innerHTML='<div class="muted">لا يوجد مسار بيانات لهذا الرادار في الخادم الحالي.</div>';
+        }
       }catch(x){
         stn.className='status';
         stn.textContent='Backend غير متاح — '+e(x && x.message||x);
@@ -164,7 +176,7 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
       }catch(x){
         stn.textContent='فشل تغيير الحالة — '+e(x && x.message||x);
       }
-      await refresh();
+      await refresh(true);
     }
 
     on.onclick=()=>control('start');
