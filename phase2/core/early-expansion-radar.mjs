@@ -1046,7 +1046,7 @@ export class EarlyExpansionRadar{
       const rotationAge=lastCycle===undefined?Number.MAX_SAFE_INTEGER:Math.max(0,currentCycle-lastCycle);
       return {
         ...row,fast,
-        _microPreScore:fastScore*.30+(quietScore??0)*.25+(50+rotation*50)*.15,
+        _microPreScore:fastScore*.55+(quietScore??0)*.45,
         _quietScore:quietScore??-1,
         _quietEligible:isQuietEarlyCandidate(row,fast,this.config),
         _exceptional:isExceptionalMicroCandidate(row,fast,this.config),
