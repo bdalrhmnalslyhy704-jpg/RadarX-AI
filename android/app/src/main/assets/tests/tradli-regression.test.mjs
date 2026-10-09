@@ -7,10 +7,11 @@ import {
   requestJson
 } from '../radarx-backend-client.mjs';
 
-const [tradliActivity, mainActivity, page, suite, smoke] = await Promise.all([
+const [tradliActivity, mainActivity, page, dashboardPage, suite, smoke] = await Promise.all([
   readFile(new URL('../../java/com/radarx/app/TradliActivity.java', import.meta.url), 'utf8'),
   readFile(new URL('../../java/com/radarx/app/MainActivity.java', import.meta.url), 'utf8'),
   readFile(new URL('../tradli.html', import.meta.url), 'utf8'),
+  readFile(new URL('../index.html', import.meta.url), 'utf8'),
   readFile(new URL('../radarx-tradli-feature-suite.mjs', import.meta.url), 'utf8'),
   readFile(new URL('../../../../../smoke-test.sh', import.meta.url), 'utf8')
 ]);
@@ -69,8 +70,8 @@ test('backend client retries the legacy host if the primary host returns 404', a
 
 
 test('TRADLI opens the separate native Activity through a dashboard UI target',()=>{
-  assert.match(page,/id="openTradliBtn"/);
-  assert.match(page,/window\.RadarXNative\.openTradli\(\)/);
+  assert.match(dashboardPage,/id="openTradliBtn"/);
+  assert.match(dashboardPage,/window\.RadarXNative\.openTradli\(\)/);
   assert.match(mainActivity,/public void openTradli\(\)[\\s\\S]*?startActivity\(intent\)/);
   assert.match(mainActivity,/TRADLI_OPEN_REQUESTED/);
   assert.match(tradliActivity,/TRADLI_ACTIVITY_ON_CREATE/);
