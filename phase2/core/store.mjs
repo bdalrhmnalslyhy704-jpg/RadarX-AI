@@ -1,16 +1,36 @@
 import {mkdir,readFile,writeFile,rename,appendFile} from 'node:fs/promises';
-import {join} from 'node:path';
+import {basename,join,resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
 
 export class DurableStore {
-  constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.ready=false;this.lastWriteAt=null;
+  constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
     this.files={subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
       signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),
       intelligenceMemory:join(dir,'intelligence-memory.json'),strongMoveAlerts:join(dir,'strong-move-alerts.jsonl'),predictionCalibration:join(dir,'prediction-calibration.json'),rotationAlerts:join(dir,'rotation-alerts.jsonl'),liquidityAbsorptionAlerts:join(dir,'liquidity-absorption-alerts.jsonl'),kahirAlerts:join(dir,'kahir-alerts.jsonl'),doomsdayAlerts:join(dir,'doomsday-alerts.jsonl'),professorAlerts:join(dir,'professor-alerts.jsonl'),alMuqawimAlerts:join(dir,'al-muqawim-alerts.jsonl'),falconEyeAlerts:join(dir,'falcon-eye-alerts.jsonl')};}
-  async init(){await mkdir(this.dir,{recursive:true});
-    for(const [k,p] of Object.entries(this.files)){try{await readFile(p,'utf8');}catch{
-      await writeFile(p,p.endsWith('.jsonl')?'':'{}',{flag:'wx'}).catch(()=>{});
-    }}this.ready=true;return this;}
+  async init({legacyDir=null}={}){
+    await mkdir(this.dir,{recursive:true});
+    // Migrate any surviving ephemeral files only when the durable target lacks that file.
+    // The copy is idempotent and never overwrites an existing archived file.
+    if(legacyDir&&resolve(legacyDir)!==resolve(this.dir)){
+      for(const p of Object.values(this.files)){
+        let destinationExists=false;
+        try{await readFile(p,'utf8');destinationExists=true;}catch{}
+        if(destinationExists)continue;
+        const legacyPath=join(legacyDir,basename(p));
+        try{
+          const contents=await readFile(legacyPath,'utf8');
+          await writeFile(p,contents,{flag:'wx'});
+          this.migratedFiles.push(basename(p));
+        }catch{}
+      }
+    }
+    for(const p of Object.values(this.files)){
+      try{await readFile(p,'utf8');}catch{
+        await writeFile(p,p.endsWith('.jsonl')?'':'{}',{flag:'wx'}).catch(()=>{});
+      }
+    }
+    this.ready=true;return this;
+  }
   async lock(fn){const p=this.queue.then(fn);this.queue=p.catch(()=>{});return p;}
   async readJson(p){try{return JSON.parse(await readFile(p,'utf8'));}catch{return{};}}
   async writeJson(p,v){const t=p+'.tmp-'+process.pid+'-'+Date.now();await writeFile(t,JSON.stringify(v,null,2)+'\n');await rename(t,p);this.lastWriteAt=Date.now();}

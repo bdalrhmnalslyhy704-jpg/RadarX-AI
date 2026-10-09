@@ -1240,6 +1240,8 @@ export class EarlyExpansionRadar{
         id:'RADAR8:'+candidate.symbol+':'+now+':'+String(candidate.pre_expansion_stage||candidate.decision_band),
         radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',symbol:candidate.symbol,
         price:candidate.last_price,price_change_24h:candidate.price_change_24h,
+        // Measurement-only metadata: preserve the radar's existing score without changing its decision.
+        early_expansion_score:candidate.early_expansion_score,
         pre_expansion_stage:candidate.pre_expansion_stage||candidate.decision_band,
         decision_band:candidate.decision_band,data_quality:candidate.data_quality,
         data_stale:candidate.data_stale,closed_candles_only:true,
