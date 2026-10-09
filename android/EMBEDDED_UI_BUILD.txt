@@ -1,7 +1,8 @@
-RadarX Android 1.5.9
+RadarX Android 1.6.0
 Release line: official Build 224 + Radar 8 V2 + Hawkeye V2 + Supreme Fusion
-UI: bundled inside APK via Android WebViewAssetLoader
-Backend: https://radarx-ai-triple-production.up.railway.app
+TRADLI: six independent modules — Chart Lab, Verify, Advisor, Signals Hub, Supply/Demand, Order Desk
+UI: bundled inside APK via Android WebViewAssetLoader; TRADLI opens in its own native Activity
+Backend: https://radarx-ai-triple-production.up.railway.app with HTTPS fallback https://radarx-ai-production.up.railway.app
 GitHub Pages runtime dependency: none
 Binance direct API from APK: none
 paper_trading=true
@@ -9,15 +10,21 @@ real_order_execution=false
 confidence_score=UNKNOWN
 Closed candles only; stale or invalid data cannot be presented as a new live discovery.
 
+TRADLI 1.6.0:
+- Native dashboard entry is smoke-tested through the visible accessibility target, not a guessed screen coordinate.
+- Backend proxy is HTTPS allow-listed and GET-only; backend failures are logged without exposing secrets.
+- Connection diagnostic checks health, readiness, and the actual Market Radar data route. Each module exposes actionable error details instead of claiming success on a failed request.
+- Chart Lab renders real OHLC candles returned by the backend for 15m, 1h, and 4h; the page rejects open/future candles. Uploaded chart images are previewed locally and are not falsely described as AI-analyzed.
+- Verify and Advisor use a live deep scan; Signals Hub reads saved RadarX alerts; Supply/Demand shows backend-derived support/resistance; Order Desk calculates and copies a paper-only plan without sending orders.
+- Cached/stored market responses are not accepted as proof of current live data for decision checks.
+
 Background monitoring:
 - Android foreground service remains active in offline mode and reports that live market discovery is paused until validated connectivity returns.
 - Android network callback triggers an immediate scan on reconnect.
 - Falcon Eye reads its own durable event feed and cursor, independent of the combined radar feed.
 - Alert events are persisted locally before notification delivery; pending alerts survive service/process restarts.
-- Alerts replay in original detection order after outages and notifications report the original detection timestamp and recorded detection price, separately from phone delivery time.
-- No live prices or discoveries are fabricated while the phone has no internet connection.
+- Alerts replay in original detection order after outages and notifications report original detection time and detection price separately from phone delivery time.
+- No live prices or discoveries are fabricated while the phone has no Internet connection.
 
-Release gate: source/JavaScript tests, Falcon Eye API contract, Railway health, signed universal APK verification, Android offline-to-online smoke test, and HTTPS download SHA-256 integrity check.
-
-Smoke gate note: release build statically validates the monitoring service and required permissions. MainActivity starts monitoring independently of WebView readiness. Because the service runs in a separate Android process, its state is checked through ActivityManager rather than a process-local static flag. The main dashboard and TRADLI now proxy only allow-listed HTTPS GET requests for both RadarX backends, including CORS headers and long-running analysis timeouts; no trade/order APIs are exposed. Falcon Eye bypasses cached UI results, can request an explicit read-only scan, and displays real server candidates, saved alerts, and scan errors. Visible notifications still require the user to allow them. The CI smoke test verifies native startup/service-ready logs, checks offline waiting and process liveness, then checks resumption after validated Internet returns.
-\nTRADLI 1.5.9: fixed current/fallback backend host allowlisting; repaired mobile tab CSS; diagnostic verifies the market endpoint, not only health; Chart Lab, Verify, Advisor, Signals Hub, Supply/Demand, and Order Desk use real backend data with stale-data warnings. Order Desk remains calculation/copy only; no live order submission.\n
+Release gate: JavaScript/source tests, Falcon Eye API contract, Railway health, signed universal APK verification, Android online/offline/reconnect + TRADLI launch smoke test, and HTTPS APK checksum verification.
+Safety: Spot/Paper/read-only only; no account, order, or withdrawal endpoints; no API keys in the APK.
