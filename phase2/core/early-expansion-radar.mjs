@@ -3,6 +3,7 @@ import {assessLiquidity, validateSeries, futureIssues} from './data-quality.mjs'
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notification-gate.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
+import {recordPreExpansionSignals,updatePreExpansionMarkouts} from './pre-expansion-outcome-tracker.mjs';
 
 function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
@@ -1176,6 +1177,7 @@ export class EarlyExpansionRadar{
         const marketMoves=eligible.map(x=>x.priceChange24h).filter(hasFiniteNumber).map(Number);
         marketContext={fiveMinute:m5.candles||[],oneHour:m1.candles||[],marketMedianChange24hPct:median(marketMoves),marketBreadthPct:marketMoves.length?marketMoves.filter(x=>x>0).length/marketMoves.length*100:null};
       }catch(e){this.noteError(e,'market-context');}
+      await updatePreExpansionMarkouts(this.store,rawRows,{now,marketContext}).catch(e=>this.noteError(e,'outcome-markout'));
       const microScanned=await boundedMap(selected,this.config.microConcurrency,async row=>{
         try{return await this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFive);}
         catch(e){this.failedTotal++;this.noteError(e,'micro-row');return {symbol:row.symbol,failed:true,error:String(e?.message??e),micro_fingerprint:{score:null,confirmation_count:0,eligible:false,closed_candles_only:true},source:sourceList([tickerSource])};}
@@ -1224,6 +1226,18 @@ export class EarlyExpansionRadar{
       for(const item of ok)item.coverage=coverage;
       ok.sort((a,b)=>(Number.isFinite(Number(b.early_expansion_score))?Number(b.early_expansion_score):-1)-(Number.isFinite(Number(a.early_expansion_score))?Number(a.early_expansion_score):-1)||Number(b.micro_fingerprint?.score||-1)-Number(a.micro_fingerprint?.score||-1)||a.symbol.localeCompare(b.symbol));
       this.latestCandidates=ok.slice(0,Math.max(1,Math.min(100,Number(this.config.returnLimit??100))));
+      const evaluationObservations=ok.map(candidate=>({
+        id:'RADAR8:'+candidate.symbol+':'+now+':'+String(candidate.pre_expansion_stage||candidate.decision_band),
+        radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',symbol:candidate.symbol,
+        price:candidate.last_price,price_change_24h:candidate.price_change_24h,
+        pre_expansion_stage:candidate.pre_expansion_stage||candidate.decision_band,
+        decision_band:candidate.decision_band,data_quality:candidate.data_quality,
+        data_stale:candidate.data_stale,closed_candles_only:true,
+        reason_codes:candidate.reason_codes||[],risk_flags:candidate.risk_flags||[],
+        metrics:candidate.metrics||{},strategy_evidence:candidate.strategy_evidence||{},
+        market_regime:candidate.market_regime,source:candidate.source,detected_at:now
+      }));
+      await recordPreExpansionSignals(this.store,evaluationObservations,{now,marketContext}).catch(e=>this.noteError(e,'outcome-record'));
       let alertsThisCycle=0;
       for(const candidate of ok){
         const alert=buildEarlyExpansionAlert(candidate,now),eligibleAlert=alertEligible(candidate,this.config)&&candidate.micro_fingerprint?.eligible===true;
