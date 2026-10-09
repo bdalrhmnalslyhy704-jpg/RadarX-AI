@@ -307,8 +307,16 @@ function updateOneRecord(record,price,now){
   if(record.first_2pct_at===null&&ret>=2){record.first_2pct_at=now;changed=true;}
   if(record.first_3pct_at===null&&ret>=3){record.first_3pct_at=now;changed=true;}
   for(const [h,ms] of HORIZONS){
-    const excursion=record.excursions?.[h]||{max_favorable_pct:0,max_adverse_pct:0,complete:false};
+    const excursion=record.excursions?.[h]||{
+      max_favorable_pct:0,max_adverse_pct:0,complete:false,samples:0,
+      first_observed_at:null,last_observed_at:null,max_gap_ms:0
+    };
     if(age<=ms&&!excursion.complete){
+      const priorAt=num(excursion.last_observed_at,null);
+      if(priorAt!==null)excursion.max_gap_ms=Math.max(num(excursion.max_gap_ms,0),now-priorAt);
+      if(excursion.first_observed_at===null||excursion.first_observed_at===undefined)excursion.first_observed_at=now;
+      excursion.last_observed_at=now;
+      excursion.samples=(num(excursion.samples,0)||0)+1;
       if(excursion.max_favorable_pct===null||ret>excursion.max_favorable_pct)excursion.max_favorable_pct=Number(ret.toFixed(4));
       if(excursion.max_adverse_pct===null||ret<excursion.max_adverse_pct)excursion.max_adverse_pct=Number(ret.toFixed(4));
       record.excursions[h]=excursion;changed=true;
@@ -320,7 +328,16 @@ function updateOneRecord(record,price,now){
         outcome:markOutcome(ret,h),sample_quality:age-ms<=horizonTolerance(ms)?'NEAR_TARGET':'LATE_SAMPLE',
         tolerance_ms:horizonTolerance(ms)
       };
-      excursion.complete=true;record.excursions[h]=excursion;changed=true;
+      const firstAt=num(excursion.first_observed_at,null),lastAt=num(excursion.last_observed_at,null);
+      const endCoverageMs=Math.max(90_000,Math.min(5*60_000,ms*.10));
+      const gapLimitMs=Math.max(90_000,Math.min(5*60_000,ms*.25));
+      const startCovered=firstAt!==null&&firstAt<=record.detected_at+Math.max(60_000,ms*.10);
+      const endCovered=lastAt!==null&&lastAt>=record.detected_at+ms-endCoverageMs;
+      const samplesCovered=num(excursion.samples,0)>=3&&num(excursion.max_gap_ms,0)<=gapLimitMs;
+      excursion.complete=Boolean(startCovered&&endCovered&&samplesCovered);
+      excursion.coverage_status=excursion.complete?'COMPLETE_SAMPLED_WINDOW':'INCOMPLETE_SAMPLED_WINDOW';
+      excursion.coverage_required_samples=3;
+      record.excursions[h]=excursion;changed=true;
     }
   }
   const breakout=record.resistance_price;
@@ -465,15 +482,17 @@ function horizonStats(rows,h){
   const returns=valid.map(r=>Number(r.marks[h].return_pct));
   const hits=valid.filter(r=>r.marks[h].outcome==='HIT').length;
   const misses=valid.filter(r=>r.marks[h].outcome==='MISS').length;
-  const excursions=valid.map(r=>r.excursions?.[h]).filter(Boolean);
+  const excursions=valid.map(r=>r.excursions?.[h]).filter(x=>x&&x.complete===true);
   const enough=valid.length>=30;
   const avgReturn=average(returns),avgMfe=average(excursions.map(x=>x.max_favorable_pct)),avgMae=average(excursions.map(x=>x.max_adverse_pct));
   return {
     samples:valid.length,
+    excursion_samples:excursions.length,
     avg_return_pct:avgReturn==null?null:Number(avgReturn.toFixed(4)),
     hit_rate_pct:enough?percent(hits,valid.length):null,
     miss_rate_pct:enough?percent(misses,valid.length):null,
     rate_status:enough?'READY_N_GE_30':'INSUFFICIENT_SAMPLE',
+    excursion_status:excursions.length?'SAMPLED_WINDOWS_ONLY':'NO_COMPLETE_EXCURSION_WINDOWS',
     avg_max_favorable_pct:avgMfe==null?null:Number(avgMfe.toFixed(4)),
     avg_max_adverse_pct:avgMae==null?null:Number(avgMae.toFixed(4))
   };
@@ -483,13 +502,13 @@ function summarizeGroup(rows){
   const measurable=rows.filter(r=>r.evaluation_eligible===true&&PERFORMANCE_STAGES.has(r.signal_type));
   const completed4h=measurable.filter(r=>r.marks?.['4h']&&
     ['NEAR_TARGET','HISTORICAL_CLOSED_OHLC'].includes(r.marks['4h'].sample_quality)&&
-    r.excursions?.['4h']?.complete!==false);
+    r.excursions?.['4h']?.complete===true);
   const impacts=completed4h.filter(r=>num(r.excursions?.['4h']?.max_favorable_pct,-Infinity)>=3).length;
   const falseSignals=completed4h.filter(r=>num(r.excursions?.['4h']?.max_favorable_pct,-Infinity)<3).length;
   const timeTo3=completed4h.filter(r=>r.first_3pct_at&&r.first_3pct_at<=r.detected_at+4*60*60_000).map(r=>(r.first_3pct_at-r.detected_at)/60_000);
   const falseKnown=measurable.filter(r=>r.signal_type==='BREAKOUT_DEVELOPING'&&r.false_breakout!==null&&r.false_breakout!==undefined);
   const late=measurable.filter(r=>r.already_extended_at_detection===true).length;
-  const drawdowns=rows.filter(r=>r.evaluation_eligible===true).map(r=>num(r.excursions?.['24h']?.max_adverse_pct??r.max_adverse_pct,null)).filter(x=>x!==null);
+  const drawdowns=rows.filter(r=>r.evaluation_eligible===true&&r.excursions?.['24h']?.complete===true).map(r=>num(r.excursions?.['24h']?.max_adverse_pct,null)).filter(x=>x!==null);
   const ratesReady=completed4h.length>=30;
   return {
     records:rows.length,
