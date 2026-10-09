@@ -76,6 +76,7 @@ export const KAHIR_RADAR_DEFAULTS=Object.freeze({
   minQuoteVolume24h:500000,
   baselineHistory:8,
   deepCandidates:14,
+  deepRotationReserve:2,
   deepConcurrency:4,
   deepOneMinuteKlines:150,
   deepFiveMinuteKlines:100,
@@ -246,7 +247,7 @@ export class KahirRadar{
     this.config={...KAHIR_RADAR_DEFAULTS,...config};
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.busy=false;
     this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
-    this.latestCandidates=[];this.selfSnapshots=new Map();this.lastMarketVelocityBps=0;
+    this.latestCandidates=[];this.selfSnapshots=new Map();this.lastMarketVelocityBps=0;this.deepCursor=0;
     this.lastResult=null;this.lastAlertAt=new Map();
   }
 
@@ -299,15 +300,30 @@ export class KahirRadar{
   }
   selectDeep(rows,updates){
     const bySym=new Map(updates.map(x=>[x.symbol,x]));
-    return [...rows].map(row=>{
+    const ranked=[...rows].map(row=>{
       const u=bySym.get(row.symbol)||{};
       const history=this.selfSnapshots.get(row.symbol)||[];
       const accel=u.relativeVelocityBps+(finite(u.selfChangePct,0)-finite(history.at(-2)?.selfChangePct,0))*100;
       const activity=Math.log10(Math.max(1,row.quoteVolume24h/this.config.minQuoteVolume24h))*12+
         Math.max(0,u.relativeVelocityBps)*1.8+
         Math.max(0,row.priceChange24h)*0.35;
-      return {...row,_kahir:u,_activityScore:activity};
-    }).sort((a,b)=>b._activityScore-a._activityScore).slice(0,Math.max(4,Math.trunc(this.config.deepCandidates)));
+      return {...row,_kahir:u,_activityScore:activity,_accelerationScore:accel};
+    }).sort((a,b)=>b._activityScore-a._activityScore||b._accelerationScore-a._accelerationScore);
+    const target=Math.min(ranked.length,Math.max(4,Math.trunc(this.config.deepCandidates)||14));
+    if(!target)return [];
+    const reserve=Math.min(Math.max(0,Math.trunc(this.config.deepRotationReserve??2)),Math.max(0,target-1));
+    const activeSlots=target-reserve;
+    const selected=ranked.slice(0,activeSlots);
+    const seen=new Set(selected.map(x=>x.symbol));
+    const rotationPool=ranked.slice(activeSlots);
+    let visited=0;
+    while(selected.length<target&&rotationPool.length&&visited<rotationPool.length){
+      const row=rotationPool[this.deepCursor%rotationPool.length];
+      this.deepCursor=(this.deepCursor+1)%rotationPool.length;
+      visited++;
+      if(row&&!seen.has(row.symbol)){selected.push(row);seen.add(row.symbol);}
+    }
+    return selected;
   }
   async deepScan(row){
     const [m1,m5]=await Promise.all([
