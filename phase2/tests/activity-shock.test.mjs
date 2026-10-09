@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {assessQuietBaseActivityShock,isFastActivityShockCandidate} from '../core/activity-shock.mjs';
+import {EarlyExpansionRadar} from '../core/early-expansion-radar.mjs';
 
 const start=1_800_000_000_000,step=5*60_000;
 function baseCandles({shock=null,count=30}={}){
@@ -75,4 +76,25 @@ test('fast ticker activity can reserve a micro-scan slot even after the daily mo
     {symbol:'FLATUSDT',lastPrice:1,priceChange24h:1},
     {price_change_pct:0,price_acceleration_pct:0,volume_accel_ratio:20,trade_accel_ratio:15}
   ),false);
+});
+
+
+test('keeps a fast-shock symbol in the micro queue while waiting for its 5m candle to close',()=>{
+  const now=1_900_000_000_000;
+  const rest={request:async()=>({data:[]}),klines:async()=>({candles:[]}),depth:async()=>({data:{bids:[],asks:[]}})};
+  const radar=new EarlyExpansionRadar({
+    rest,store:{},
+    config:{microScanCandidates:8,quietReserve:2,rotationReserve:2,minQuoteVolume24h:100000},
+    clock:()=>now,logger:{warn(){}}
+  });
+  const rows=Array.from({length:30},(_,i)=>({
+    symbol:i===0?'PENDINGUSDT':'COIN'+String(i).padStart(2,'0')+'USDT',
+    lastPrice:1+i*.01,priceChange24h:2,quoteVolume24h:1_000_000,tradeCount24h:15000
+  }));
+  radar.fastShockPendingUntil.set('PENDINGUSDT',now+5*60*1000);
+  const fast=new Map(rows.map(row=>[row.symbol,{
+    price_change_pct:.08,price_acceleration_pct:.02,volume_accel_ratio:1.2,trade_accel_ratio:1.1
+  }]));
+  const selected=radar.selectMicro(rows,fast,1);
+  assert.equal(selected.some(x=>x.symbol==='PENDINGUSDT'&&x._selection_lane==='exceptional'),true);
 });
