@@ -394,7 +394,7 @@ export async function updatePreExpansionMarkouts(store,tickerRows,{now=Date.now(
       if(!quote)continue;
       if(HORIZONS.every(([h])=>Boolean(record.marks?.[h])))continue;
       if(record.entry_price===null||record.entry_price<=0)continue;
-      const previousMarks=record.marks||{};
+      const previousMarks={...object(record.marks)};
       const one=updateOneRecord(record,quote.price,quote.at);
       for(const [h] of HORIZONS){
         if(!previousMarks[h]&&record.marks?.[h])loggedMarkouts.push({signal_id:record.signal_id,radar:record.radar,symbol:record.symbol,signal_type:record.signal_type,horizon:h,detected_at:record.detected_at,observed_at:record.marks[h].observed_at,delay_ms:record.marks[h].delay_ms,entry_price:record.entry_price,price:record.marks[h].price,return_pct:record.marks[h].return_pct,outcome:record.marks[h].outcome,sample_quality:record.marks[h].sample_quality,max_favorable_pct:record.excursions?.[h]?.max_favorable_pct,max_adverse_pct:record.excursions?.[h]?.max_adverse_pct});
