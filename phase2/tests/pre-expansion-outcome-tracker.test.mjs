@@ -151,6 +151,26 @@ test('missing daily change is recorded as data-insufficient, not as a successful
   });
 });
 
+test('missing or insufficient closed Binance candles are saved INCOMPLETE without invented horizon values',()=>{
+  const detected=NOW,now=NOW+25*60*60_000;
+  const result=evaluateHistoricalPreExpansionSignal({
+    signal_id:'RADAR_8:NO_CANDLESUSDT:PRE_EXPANSION:'+detected,
+    radar:'RADAR_8',symbol:'NO_CANDLESUSDT',signal_type:'PRE_EXPANSION',
+    created_at:detected,entry_price:1.25,detected_at:detected,market_regime:'RANGING',
+    signal_score:null,build_version:'Build 224',build_commit:null
+  },{candles1m:[],candles5m:[],now});
+  assert.equal(result.ok,true);
+  assert.deepEqual(result.record.marks,{});
+  assert.equal(result.record.outcome_status,'INCOMPLETE');
+  for(const h of ['5m','15m','30m','60m','4h','24h']){
+    assert.equal(result.record.horizon_status[h].status,'INCOMPLETE');
+    assert.equal(result.record.horizon_status[h].reason,'NO_CLOSED_CANDLE_WITHIN_TOLERANCE');
+    assert.equal(result.record.excursions[h].max_favorable_pct,null);
+    assert.equal(result.record.excursions[h].max_adverse_pct,null);
+    assert.equal(result.record.excursions[h].complete,false);
+  }
+});
+
 test('historical replay uses closed OHLC candles for markouts, MFE/MAE and false-breakout labeling',()=>{
   const at=NOW,start=at+60_000,one=[],five=[];
   for(let i=0;i<80;i++){
