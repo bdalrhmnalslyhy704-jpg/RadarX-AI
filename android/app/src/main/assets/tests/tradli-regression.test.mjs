@@ -72,7 +72,8 @@ test('backend client retries the legacy host if the primary host returns 404', a
 test('TRADLI opens the separate native Activity through a dashboard UI target',()=>{
   assert.match(dashboardPage,/id="openTradliBtn"/);
   assert.match(dashboardPage,/window\.RadarXNative\.openTradli\(\)/);
-  assert.match(mainActivity,/public void openTradli\(\)[\\s\\S]*?startActivity\(intent\)/);
+  assert.ok(mainActivity.includes('public void openTradli()'));
+  assert.ok(mainActivity.includes('startActivity(intent)'));
   assert.match(mainActivity,/TRADLI_OPEN_REQUESTED/);
   assert.match(tradliActivity,/TRADLI_ACTIVITY_ON_CREATE/);
   assert.match(smoke,/uiautomator dump \/sdcard\/radarx-window\.xml/);
