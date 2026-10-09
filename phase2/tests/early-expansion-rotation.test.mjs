@@ -45,6 +45,45 @@ function candidate(symbol,move,{score=65,participation=75,tradeParticipation=70,
   };
 }
 
+
+test('Radar 8 logs a full-cycle duration and phase timing breakdown',async()=>{
+  const events=[];
+  const store={
+    state:{records:[],last_historical_import_at:0,last_historical_backfill_at:0,last_report_log_at:0,updated_at:now},
+    async updatePreExpansionOutcomes(update){
+      const next=update(this.state);
+      if(next&&next!==false)this.state=next;
+      return this.state;
+    },
+    async readEarlyExpansionAlerts(){return[];},
+    async readFalconEyeAlerts(){return[];}
+  };
+  const rest={
+    async request(path){return path.includes('exchangeInfo')?{data:{symbols:[]}}:{data:[]};},
+    async klines(){return {candles:[]};},
+    async depth(){return {data:{bids:[],asks:[]}};}
+  };
+  const radar=new EarlyExpansionRadar({
+    rest,store,config:{pollMs:45000,microScanCandidates:8,deepCandidates:3},
+    clock:()=>now,logger:{info:x=>events.push(String(x)),warn:x=>events.push(String(x))}
+  });
+  radar.running=true;
+  assert.equal(await radar.tick(),true);
+  const line=events.find(x=>x.startsWith('[RADARX_SCAN_COMPLETE] '));
+  assert.ok(line,'complete scan timing log must be emitted');
+  const report=JSON.parse(line.slice(line.indexOf('{')));
+  assert.equal(report.radar,'RADAR_8');
+  assert.equal(report.configured_poll_ms,45000);
+  assert.equal(report.scan_duration_ms,0);
+  assert.equal(report.scan_overrun_ms,0);
+  assert.equal(report.expected_total,0);
+  assert.equal(report.received_total,0);
+  assert.equal(report.paper_trading,true);
+  assert.equal(report.real_order_execution,false);
+  for(const key of ['universe_refresh_ms','ticker_fast_selection_ms','market_context_ms','outcome_maintenance_ms','micro_scan_ms','deep_scan_ms','signal_archive_ms','notification_ms','other_ms'])
+    assert.ok(Number.isFinite(report.phase_timings_ms[key]),key);
+});
+
 test('Radar 8 fills the 36 unique-symbol micro batch across overlapping selector lanes',()=>{
   const radar=makeRadar({microScanCandidates:36,quietReserve:8,rotationReserve:8});
   const input=rows(60);

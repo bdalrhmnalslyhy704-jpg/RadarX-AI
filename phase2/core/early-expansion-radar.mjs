@@ -1162,9 +1162,14 @@ export class EarlyExpansionRadar{
   async tick({quote=this.config.quote}={}){
     if(!this.running||this.busy)return false;
     this.busy=true;const scanStartedAt=this.clock();
+    const phaseTimings={universe_refresh_ms:0,ticker_fast_selection_ms:0,market_context_ms:0,
+      outcome_maintenance_ms:0,micro_scan_ms:0,deep_scan_ms:0,signal_archive_ms:0,notification_ms:0};
     try{
       const q=this.normalizeQuote(quote),now=this.clock();
+      const universeRefreshStartedAt=this.clock();
       if(now-this.universeAt>this.config.universeRefreshMs||!this.universe.length)await this.refreshUniverse(q);
+      phaseTimings.universe_refresh_ms=Math.max(0,this.clock()-universeRefreshStartedAt);
+      const tickerFastStartedAt=this.clock();
       const {rows:rawRows,source:tickerSource}=await this.tickerRows(q);
       const expected=[...this.universe],set=new Set(expected);
       const receivedSymbols=[...new Set(rawRows.map(x=>x.symbol).filter(x=>set.has(x)))];
@@ -1172,13 +1177,17 @@ export class EarlyExpansionRadar{
       const fastBySymbol=new Map();for(const row of eligible)fastBySymbol.set(row.symbol,this.updateFastState(row));
       this.fastScannedTotal=eligible.length;
       const cycle=this.scans+1,selected=this.selectMicro(eligible,fastBySymbol,cycle);
+      phaseTimings.ticker_fast_selection_ms=Math.max(0,this.clock()-tickerFastStartedAt);
       let btcFive=[],marketContext={};
+      const marketContextStartedAt=this.clock();
       try{
         const [m5,m1]=await Promise.all([this.rest.klines('BTCUSDT','5m',{limit:Math.max(80,this.config.fiveMinuteKlines||180)}),this.rest.klines('BTCUSDT','1h',{limit:60})]);
         btcFive=m5.candles||[];
         const marketMoves=eligible.map(x=>x.priceChange24h).filter(hasFiniteNumber).map(Number);
         marketContext={fiveMinute:m5.candles||[],oneHour:m1.candles||[],marketMedianChange24hPct:median(marketMoves),marketBreadthPct:marketMoves.length?marketMoves.filter(x=>x>0).length/marketMoves.length*100:null};
       }catch(e){this.noteError(e,'market-context');}
+      phaseTimings.market_context_ms=Math.max(0,this.clock()-marketContextStartedAt);
+      const outcomeMaintenanceStartedAt=this.clock();
       const historyAlerts=[];
       try{
         if(typeof this.store.readEarlyExpansionAlerts==='function')historyAlerts.push(...await this.store.readEarlyExpansionAlerts({sinceMs:now-45*24*60*60*1000,limit:100}));
@@ -1188,11 +1197,15 @@ export class EarlyExpansionRadar{
       await updatePreExpansionMarkouts(this.store,rawRows,{now,marketContext,logger:this.logger}).catch(e=>this.noteError(e,'outcome-markout'));
       await backfillHistoricalPreExpansionOutcomes(this.store,this.rest,{now,logger:this.logger}).catch(e=>this.noteError(e,'outcome-history-backfill'));
       await maybeLogPreExpansionOutcomeReport(this.store,{logger:this.logger,now}).catch(e=>this.noteError(e,'outcome-report'));
+      phaseTimings.outcome_maintenance_ms=Math.max(0,this.clock()-outcomeMaintenanceStartedAt);
+      const microScanStartedAt=this.clock();
       const microScanned=await boundedMap(selected,this.config.microConcurrency,async row=>{
         try{return await this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFive);}
         catch(e){this.failedTotal++;this.noteError(e,'micro-row');return {symbol:row.symbol,failed:true,error:String(e?.message??e),micro_fingerprint:{score:null,confirmation_count:0,eligible:false,closed_candles_only:true},source:sourceList([tickerSource])};}
       });
+      phaseTimings.micro_scan_ms=Math.max(0,this.clock()-microScanStartedAt);
       const deepTargets=this.selectDeepFromMicro(microScanned,cycle);
+      const deepScanStartedAt=this.clock();
       const scanned=await boundedMap(deepTargets,this.config.deepConcurrency,async micro=>{
         const row=micro.row,fast=fastBySymbol.get(row.symbol)||{};
         try{
@@ -1215,6 +1228,7 @@ export class EarlyExpansionRadar{
           };
         }catch(e){this.failedTotal++;this.noteError(e,'deep-row');return {symbol:row.symbol,failed:true,error:String(e?.message??e),decision_band:'DATA_INSUFFICIENT',data_quality:0,micro_fingerprint:micro.micro_fingerprint,source:sourceList([tickerSource,micro.source])};}
       });
+      phaseTimings.deep_scan_ms=Math.max(0,this.clock()-deepScanStartedAt);
       const ok=scanned.filter(x=>x&&!x.failed),deepFailures=scanned.length-ok.length,deepScannedTotal=ok.length;
       const failedSymbols=scanned.filter(x=>x?.failed).map(x=>x.symbol);
       const coverage=buildEarlyExpansionUniverseCoverage({expectedSymbols:expected,receivedSymbols,eligibleTotal:eligible.length,fastScannedTotal:eligible.length,scannedTotal:eligible.length,deepScannedTotal,skippedTotal:Math.max(0,eligible.length-deepScannedTotal),failedTotal:deepFailures,failedSymbols,quote:q,minQuoteVolume24h:this.config.minQuoteVolume24h});
@@ -1266,7 +1280,10 @@ export class EarlyExpansionRadar{
         metrics:candidate.metrics||{},strategy_evidence:candidate.strategy_evidence||{},
         market_regime:candidate.market_regime,source:candidate.source,detected_at:now
       }));
+      const signalArchiveStartedAt=this.clock();
       await recordPreExpansionSignals(this.store,evaluationObservations,{now,marketContext,logger:this.logger}).catch(e=>this.noteError(e,'outcome-record'));
+      phaseTimings.signal_archive_ms=Math.max(0,this.clock()-signalArchiveStartedAt);
+      const notificationStartedAt=this.clock();
       let alertsThisCycle=0;
       for(const candidate of ok){
         const alert=buildEarlyExpansionAlert(candidate,now),eligibleAlert=alertEligible(candidate,this.config)&&candidate.micro_fingerprint?.eligible===true;
@@ -1287,8 +1304,31 @@ export class EarlyExpansionRadar{
         }
         if(!this.lastBand.has(candidate.symbol)||bandChanged)this.lastBand.set(candidate.symbol,candidate.decision_band);
       }
+      phaseTimings.notification_ms=Math.max(0,this.clock()-notificationStartedAt);
       this.scans++;this.lastScanAtMs=now;this.lastError=null;
       this.lastResult={schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',as_of:new Date(now).toISOString(),quote:q,universe:coverage,candidates:this.latestCandidates,alerts_emitted_this_cycle:alertsThisCycle,meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',source:sourceList([tickerSource]),closed_candles_only:true,fast_scan:'ALL_ELIGIBLE_TICKERS_EVERY_CYCLE',micro_scan:'ROTATING_1M_5M_ACROSS_ELIGIBLE_UNIVERSE',deep_scan:'TOP_MICRO_FINGERPRINT_PLUS_QUIET_PLUS_ROTATION',universe_scope:'ALL_ELIGIBLE_SPOT_USDT'}};
+      const scanCompletedAt=this.clock(),scanDurationMs=Math.max(0,scanCompletedAt-scanStartedAt);
+      const explicitlyTimedMs=Object.values(phaseTimings).reduce((sum,value)=>sum+Math.max(0,Number(value)||0),0);
+      phaseTimings.other_ms=Math.max(0,scanDurationMs-explicitlyTimedMs);
+      coverage.scan_started_at=new Date(scanStartedAt).toISOString();
+      coverage.scan_completed_at=new Date(scanCompletedAt).toISOString();
+      coverage.scan_duration_ms=scanDurationMs;
+      coverage.configured_poll_ms=Math.max(0,Number(this.config.pollMs)||0);
+      coverage.scan_overrun_ms=Math.max(0,scanDurationMs-coverage.configured_poll_ms);
+      coverage.phase_timings_ms={...phaseTimings};
+      this.lastCoverage=coverage;
+      this.logger.info?.('[RADARX_SCAN_COMPLETE] '+JSON.stringify({
+        radar:'RADAR_8',build_version:'Build 224',quote:q,rotation_cycle:coverage.rotation_cycle,
+        scan_started_at:coverage.scan_started_at,scan_completed_at:coverage.scan_completed_at,
+        scan_duration_ms:coverage.scan_duration_ms,configured_poll_ms:coverage.configured_poll_ms,
+        scan_overrun_ms:coverage.scan_overrun_ms,phase_timings_ms:coverage.phase_timings_ms,
+        expected_total:coverage.expected_total,received_total:coverage.received_total,
+        missing_ticker_total:coverage.missing_ticker_total,eligible_total:coverage.eligible_total,
+        fast_scanned_total:coverage.fast_scanned_total,micro_scanned_total:coverage.micro_scanned_total,
+        deep_scanned_total:coverage.deep_scanned_total,failed_total:coverage.failed_total,
+        coverage_ratio:coverage.coverage_ratio,deep_coverage_ratio:coverage.deep_coverage_ratio,
+        paper_trading:true,real_order_execution:false
+      }));
       return true;
     }catch(e){
       this.lastError=String(e?.message??e);this.lastScanAtMs=scanStartedAt;
