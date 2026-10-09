@@ -46,6 +46,16 @@ function candidate(symbol,move,{score=65,participation=75,tradeParticipation=70,
 }
 
 
+test('Radar 8 health remains available while an activity-shock candidate is held',()=>{
+  const radar=makeRadar();
+  radar.running=true;
+  radar.fastShockPendingUntil.set('TESTUSDT',now+60_000);
+  const health=radar.health();
+  assert.equal(health.running,true);
+  assert.equal(health.fast_shock_pending_total,1);
+  assert.equal(health.last_error,null);
+});
+
 test('Radar 8 schedules the next cycle from actual completion instead of skipping an overrun interval',()=>{
   assert.equal(nextEarlyExpansionPollDelayMs(45000,30000,true),15000);
   assert.equal(nextEarlyExpansionPollDelayMs(45000,45000,true),0);
