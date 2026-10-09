@@ -17,6 +17,7 @@ on:
       - build224-multi-analyst-20261007
       - build224-doomsday-muqawim-sniper-v1
       - build224-falcon-eye-ogn-v1
+      - build224-persistent-archive-20261009
   pull_request:
     branches:
       - phase3-triple-radar
