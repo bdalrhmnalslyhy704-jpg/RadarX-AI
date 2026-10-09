@@ -36,6 +36,15 @@ function addStyle() {
     '.rxsuite-row small{display:block;color:#8da7b1;margin-top:2px}.rxsuite-images{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:7px}.rxsuite-thumb{width:100%;aspect-ratio:16/10;object-fit:cover;border-radius:8px;border:1px solid #244550}' +
     '@media(max-width:700px){.rxsuite-tabs{grid-template-columns:repeat(2,minmax(0,1fr))}.rxsuite-form{grid-template-columns:1fr}.rxsuite-full{grid-column:auto}.rxsuite-grid,.rxsuite-agents{grid-template-columns:repeat(2,minmax(0,1fr))}}' +
     '.rxsuite-live{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:linear-gradient(135deg,#0f2031,#101a2b);border:1px solid #294d6a;border-radius:12px;margin:9px 0}' +'.rxsuite-live-dot{width:9px;height:9px;border-radius:50%;background:#ffd166;box-shadow:0 0 12px rgba(255,209,102,.45)}' +'.rxsuite-title{display:flex;align-items:center;justify-content:space-between;gap:10px}.rxsuite-sub{font-size:11px;color:#8ea6b8;margin-top:3px}' +'.rxsuite-copy{min-height:38px;padding:0 11px;border-radius:9px;border:1px solid #355977;background:#0e2131;color:#e8f5ff;font:inherit;font-weight:900}' +'.rxsuite-danger{border-color:#7b4653;background:#2a1720}.rxsuite-safe{border-color:#2e7f65;background:#10261f}' +'@media(max-width:450px){.rxsuite-grid,.rxsuite-agents,.rxsuite-images{grid-template-columns:1fr}}';
+  s.textContent +=
+    '.rxsuite{position:relative;overflow:hidden;border-color:rgba(76,202,255,.28);background:radial-gradient(circle at 100% 0%,rgba(57,137,255,.12),transparent 34%),linear-gradient(150deg,#0b1b2b,#07111b 72%);box-shadow:0 18px 42px rgba(0,0,0,.27),inset 0 1px 0 rgba(255,255,255,.035)}' +
+    '.rxsuite:before{content:"";position:absolute;top:0;left:12px;right:12px;height:2px;background:linear-gradient(90deg,transparent,#50ddff,#8b7cff,#ffd166,transparent);opacity:.8;pointer-events:none}' +
+    '.rxsuite-tabs{gap:8px}.rxsuite-tab{box-shadow:inset 0 1px 0 rgba(255,255,255,.025);transition:transform .16s ease,border-color .16s ease,background .16s ease}.rxsuite-tab:active,.rxsuite-btn:active{transform:translateY(1px)}' +
+    '.rxsuite-pane{background:linear-gradient(155deg,rgba(10,24,37,.98),rgba(5,13,22,.98));border-color:rgba(88,167,197,.23);box-shadow:inset 0 1px 0 rgba(255,255,255,.02)}' +
+    '.rxsuite-box,.rxsuite-agent{background:linear-gradient(145deg,rgba(13,29,43,.95),rgba(6,15,24,.96));border-color:rgba(83,154,184,.22)}' +
+    '.rxsuite-live{background:linear-gradient(115deg,rgba(16,44,61,.92),rgba(20,23,48,.92));border-color:rgba(67,192,232,.28);box-shadow:0 8px 22px rgba(0,0,0,.16)}' +
+    '.rxsuite-chart{margin:9px 0;padding:10px;border:1px solid rgba(79,176,208,.28);border-radius:13px;background:linear-gradient(160deg,#081725,#07111a);overflow:hidden}.rxsuite-chart-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px}.rxsuite-chart-head b{font-size:12px}.rxsuite-chart-head small,.rxsuite-chart-note{color:#8da7b1;font-size:10px}.rxsuite-chart svg{display:block;width:100%;height:auto;overflow:visible}.rxsuite-chart-note{display:block;margin-top:5px;line-height:1.6}' +
+    '@media(max-width:380px){.rxsuite{padding:10px}.rxsuite-tabs{gap:6px}.rxsuite-tab{font-size:11px;min-height:42px}.rxsuite-chart{padding:7px}.rxsuite-chart-head{align-items:flex-start;flex-direction:column}}';
   document.head.appendChild(s);
 }
 
@@ -199,11 +208,43 @@ function box(a,b) {
   return '<div class="rxsuite-box"><span>' + esc(a) + '</span><b>' + esc(b) + '</b></div>';
 }
 
+function renderCandleChart(rawCandles,timeframe='15m') {
+  const rows=(Array.isArray(rawCandles)?rawCandles:[]).filter(c=>{
+    const values=[c?.open_time,c?.close_time,c?.open,c?.high,c?.low,c?.close,c?.volume].map(Number);
+    return values.every(Number.isFinite)&&Number(c.close_time)<=Date.now()&&Number(c.open_time)<Number(c.close_time)&&
+      Number(c.low)>0&&Number(c.high)>=Number(c.low)&&Number(c.volume)>=0;
+  }).slice(-48);
+  const title={'15m':'15m · حركة قصيرة','1h':'1h · حركة متوسطة','4h':'4h · اتجاه أوسع'}[timeframe]||timeframe;
+  if(rows.length<3)return '<section class="rxsuite-chart"><div class="rxsuite-chart-head"><b>Chart Lab · '+esc(title)+'</b><span class="rxsuite-tag rxsuite-warn">NO CANDLES</span></div><small class="rxsuite-chart-note">لم تصل 3 شموع مغلقة صالحة على هذا الإطار. أعد الفحص عند استقرار اتصال الخادم.</small></section>';
+  const high=Math.max(...rows.map(x=>Number(x.high)));
+  const low=Math.min(...rows.map(x=>Number(x.low)));
+  const span=Math.max(high-low,Math.abs(high)*1e-8,1e-12);
+  const y=value=>6+((high-Number(value))/span)*68;
+  const step=300/rows.length;
+  const bodyWidth=Math.max(2,Math.min(7,step*.58));
+  const maxVolume=Math.max(1,...rows.map(x=>Number(x.volume)));
+  const grid=[8,42,76].map(gy=>'<line x1="3" y1="'+gy+'" x2="317" y2="'+gy+'" stroke="#20394b" stroke-width=".7" stroke-dasharray="3 4"/>').join('');
+  const candles=rows.map((c,i)=>{
+    const x=3+i*step+step/2;
+    const openY=y(c.open),closeY=y(c.close),top=Math.min(openY,closeY),height=Math.max(1,Math.abs(closeY-openY));
+    const up=Number(c.close)>=Number(c.open),color=up?'#49e3b0':'#ff748c';
+    const volumeHeight=Math.max(1,Number(c.volume)/maxVolume*14);
+    return '<line x1="'+x.toFixed(2)+'" y1="'+y(c.high).toFixed(2)+'" x2="'+x.toFixed(2)+'" y2="'+y(c.low).toFixed(2)+'" stroke="'+color+'" stroke-width="1.1"/>'+
+      '<rect x="'+(x-bodyWidth/2).toFixed(2)+'" y="'+top.toFixed(2)+'" width="'+bodyWidth.toFixed(2)+'" height="'+height.toFixed(2)+'" rx=".6" fill="'+color+'"/>'+
+      '<rect x="'+(x-bodyWidth/2).toFixed(2)+'" y="'+(106-volumeHeight).toFixed(2)+'" width="'+bodyWidth.toFixed(2)+'" height="'+volumeHeight.toFixed(2)+'" rx=".4" fill="'+color+'" opacity=".48"/>';
+  }).join('');
+  const latest=rows.at(-1);
+  return '<section class="rxsuite-chart"><div class="rxsuite-chart-head"><b>Chart Lab · '+esc(title)+'</b><span class="rxsuite-tag rxsuite-safe">BINANCE · CLOSED</span></div>'+
+    '<svg viewBox="0 0 320 112" role="img" aria-label="Candlestick chart '+esc(timeframe)+'">'+grid+candles+'<line x1="3" y1="91" x2="317" y2="91" stroke="#284456" stroke-width=".7"/></svg>'+
+    '<div class="rxsuite-chart-head"><small>High '+num(high,8)+' · Low '+num(low,8)+'</small><small>آخر إغلاق '+num(latest.close,8)+'</small></div>'+
+    '<small class="rxsuite-chart-note">شارت شموع من بيانات الخادم، لا من رسم توضيحي. تُستبعد الشمعة المفتوحة أو المستقبلية قبل العرض؛ ورفع صورة خارجية يعرضها محليًا فقط دون ادعاء تحليل بصري لها.</small></section>';
+}
+
 function chartPanel(root) {
   root.innerHTML =
     '<div class="rxsuite-form">' +
     '<div class="rxsuite-field"><label>الرمز</label><input id="rx-cs" class="rxsuite-input" value="BTCUSDT"></div>' +
-    '<div class="rxsuite-field"><label>النمط</label><select id="rx-cm" class="rxsuite-select"><option value="scalp">Scalping</option><option value="swing">Swing</option></select></div>' +
+    '<div class="rxsuite-field"><label>الإطار الزمني</label><select id="rx-cm" class="rxsuite-select"><option value="15m">15m · قصير</option><option value="1h">1h · متوسط</option><option value="4h">4h · اتجاه</option></select></div>' +
     '<div class="rxsuite-field rxsuite-full"><label>لقطات الشارت حتى 4</label><input id="rx-cf" class="rxsuite-input" type="file" accept="image/*" multiple></div>' +
     '</div><div id="rx-ci" class="rxsuite-images"></div>' +
     '<div class="rxsuite-actions"><button id="rx-cr" class="rxsuite-btn primary">تحليل الشارت + السوق</button></div>' +
@@ -227,14 +268,16 @@ function chartPanel(root) {
       const p=Number(scan.price?.last ?? scan.price?.last_closed_15m);
       const live=scan.meta?.live===true && Number.isFinite(Number(scan.price?.last));
       const assessment=scan.assessment||{}, zones=scan.zones||{}, frames=scan.timeframes||{};
-      const mode=root.querySelector('#rx-cm').value==='scalp'?'Scalping view':'Swing view';
+      const timeframe=root.querySelector('#rx-cm').value;
+      const mode={'15m':'15m · دخول قصير','1h':'1h · حركة متوسطة','4h':'4h · اتجاه عام'}[timeframe]||timeframe;
+      const chartView=renderCandleChart(scan.chart?.timeframes?.[timeframe]?.candles,timeframe);
       const banner=body?marketNotice(body):'<div class="rxsuite-row"><div><b>Market Radar غير متاح حاليًا</b><small>استخدمنا الفحص العميق المستقل إن كانت بياناته سليمة؛ المرشح متعدد الاستراتيجيات لم يصل.</small></div><span class="rxsuite-tag rxsuite-warn">PARTIAL</span></div>';
       const zoneRow='<div class="rxsuite-grid">'+box('Trend / '+mode,assessment.market_read||assessment.direction_bias||'—')+box('Analysis strength',num(assessment.analysis_strength,0))+box('Momentum',num(scan.momentum?.score,0))+box('Buy / sell pressure',scan.pressure?.reading||num(scan.pressure?.score,0))+box('Demand / support',zones.support!=null?num(zones.support,8):'—')+box('Supply / resistance',zones.resistance!=null?num(zones.resistance,8):'—')+'</div>';
       const frameRows=['15m','1h','4h'].map(tf=>{const x=frames[tf]||{};return box(tf+' trend',x.structure?.label||x.structure?.state||x.trend_state||'—')+box(tf+' RSI',num(x.rsi14,1));}).join('');
       const candidateSummary=c?agents(c):'<div class="rxsuite-row"><div><b>لا يوجد مرشح من متعدد الاستراتيجيات لهذا الرمز الآن</b><small>يعرض التقرير العميق أدناه ما توفر من بياناته، ولا يخترع إشارة مفقودة.</small></div></div>';
       const fp=c?.pre_breakout_fingerprint||null;
       const fingerprint=fp?'<div class="rxsuite-row"><div><b>Pre-Breakout Fingerprint</b><small>stage='+esc(fp.stage||'NORMAL')+' · score='+num(fp.score,1)+' · trap='+percent(fp.trapRisk,0)+' · evidence='+(fp.evidenceCount||'—')+'/8</small></div><span class="rxsuite-tag '+(fp.detected?'rxsuite-ok':'rxsuite-warn')+'">'+(fp.detected?'DETECTED':'NOT CONFIRMED')+'</span></div>':'';
-      out.innerHTML=banner+deepNotice(scan)+zoneRow+'<div class="rxsuite-grid">'+frameRows+'</div>'+candidateSummary+fingerprint+
+      out.innerHTML=banner+deepNotice(scan)+chartView+zoneRow+'<div class="rxsuite-grid">'+frameRows+'</div>'+candidateSummary+fingerprint+
         '<p class="rxsuite-row">صور الشارت تُعاين على الجهاز فقط؛ لا ندّعي استخراج أنماط بصرية من الصورة. مستويات العرض مأخوذة من تحليل الخادم للشموع المغلقة.</p>'+
         (!live?'<div class="rxsuite-row"><b>لا يوجد سعر حي مؤكد</b><small>التقرير الفني لا يُعامل كإشارة دخول.</small></div>':'');
     } catch(e){ out.innerHTML='<div class="rxsuite-row"><b>تعذر التحليل</b><small>'+esc(e.message)+'</small></div>'; }
