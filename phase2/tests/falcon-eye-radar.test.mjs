@@ -146,3 +146,70 @@ test('Falcon Eye lets a genuinely urgent pulse bypass the normal deep-scan coold
   const batch=radar.selectBatch(rows,now);
   assert.deepEqual(batch.map(x=>x.symbol),[symbols[0]]);
 });
+
+
+function selectionPulse({ready=true,score=50,fast=false,base=68,high=76,compression=82,higherLow=82,participation=72,volume=1.3,trades=1.2,delta=.04,acceleration=55}={}){
+  return {ready,score,stage:fast?'IGNITING':'QUIET',fast_trigger:fast,explosive:false,
+    baseBreakScore:base,highProximityScore:high,compressionScore:compression,higherLowScore:higherLow,
+    participationScore:participation,volumeBurstRatio:volume,tradeBurstRatio:trades,
+    priceDeltaPct:delta,accelerationScore:acceleration};
+}
+function selectTicker(symbol,move,pulse,volume=2_000_000){
+  return {symbol,lastPrice:1,priceChange24h:move,quoteVolume24h:volume,tradeCount24h:30000,market_pulse:pulse};
+}
+function selectionRadar(config={}){
+  return new FalconEyeRadar({
+    rest:{request:async()=>({data:[]}),klines:async()=>({candles:[]})},
+    store:{appendFalconEyeAlert:async()=>{},readFalconEyeAlerts:async()=>[]},
+    config:{scanBatchSize:8,pulseTopCandidates:3,quietCandidates:2,patrolBatchSize:2,exceptionalRotationBypassSlots:2,...config},
+    clock:()=>1_900_000_000_000,logger:{warn(){}}
+  });
+}
+
+test('Falcon Eye quiet lane requires base compression, higher lows, and improving participation',()=>{
+  const radar=selectionRadar({scanBatchSize:4,pulseTopCandidates:0,quietCandidates:3,patrolBatchSize:1,exceptionalRotationBypassSlots:0});
+  const rows=[
+    selectTicker('QUIET_AUSDT',.12,selectionPulse({score:45,base:72,compression:88,higherLow:85,participation:75,volume:1.24,trades:1.17})),
+    selectTicker('QUIET_BUSDT',.32,selectionPulse({score:48,base:70,compression:78,higherLow:75,participation:68,volume:1.2,trades:1.12})),
+    selectTicker('NO_COMPRESS_USDT',.05,selectionPulse({compression:42,higherLow:82})),
+    selectTicker('NO_HL_USDT',.08,selectionPulse({compression:80,higherLow:38})),
+    selectTicker('NO_ACTIVITY_USDT',.03,selectionPulse({compression:90,higherLow:85,participation:51,volume:.7,trades:.8,delta:0,acceleration:48})),
+    selectTicker('WARMING_USDT',.04,selectionPulse({ready:false,compression:null,higherLow:null,participation:null,volume:null,trades:null}))
+  ];
+  radar.universe=rows.map(x=>x.symbol);
+  const selected=radar.selectBatch(rows);
+  assert.equal(selected.length,4);
+  const quiet=selected.filter(x=>x._selection_lane==='quiet');
+  assert.equal(quiet.length,2);
+  assert.deepEqual(quiet.map(x=>x.symbol),['QUIET_AUSDT','QUIET_BUSDT']);
+  for(const symbol of ['WARMING_USDT','NO_COMPRESS_USDT','NO_HL_USDT','NO_ACTIVITY_USDT']){
+    assert.equal(quiet.some(x=>x.symbol===symbol),false);
+  }
+});
+
+test('Falcon Eye fills the batch after lane overlap and removes duplicate symbols',()=>{
+  const radar=selectionRadar({scanBatchSize:8,pulseTopCandidates:4,quietCandidates:2,patrolBatchSize:2,exceptionalRotationBypassSlots:1});
+  const rows=[];
+  for(let i=0;i<5;i++)rows.push(selectTicker('FAST'+i+'USDT',1+i*.2,selectionPulse({score:95-i,fast:true,volume:2.8,trades:2.1,compression:45,higherLow:40})));
+  for(let i=0;i<10;i++)rows.push(selectTicker('QUIET'+i+'USDT',.15+i*.2,selectionPulse({score:50-i*.2,compression:82,higherLow:78,volume:1.25,trades:1.15})));
+  for(let i=0;i<10;i++)rows.push(selectTicker('WARM'+i+'USDT',.4,selectionPulse({ready:false,score:50,compression:null,higherLow:null,participation:null,volume:null,trades:null})));
+  radar.universe=rows.map(x=>x.symbol);
+  const selected=radar.selectBatch([...rows,rows[0],rows[1]]);
+  assert.equal(selected.length,8);
+  assert.equal(new Set(selected.map(x=>x.symbol)).size,8);
+  assert.equal(selected[0]._selection_lane,'exceptional');
+  assert.equal(radar.health().selection.selected_total,8);
+  assert.equal(radar.health().selection.shortfall,0);
+});
+
+test('Falcon Eye patrol rotates toward symbols not selected in the last cycle',()=>{
+  const radar=selectionRadar({scanBatchSize:8,pulseTopCandidates:0,quietCandidates:0,patrolBatchSize:4,exceptionalRotationBypassSlots:0});
+  const rows=Array.from({length:30},(_,i)=>selectTicker('PATROL'+String(i).padStart(2,'0')+'USDT',.4,
+    selectionPulse({ready:false,score:50,compression:null,higherLow:null,participation:null,volume:null,trades:null})));
+  radar.universe=rows.map(x=>x.symbol);
+  const first=radar.selectBatch(rows);
+  const second=radar.selectBatch(rows);
+  assert.equal(first.length,8);
+  assert.equal(second.length,8);
+  assert.equal(second.some(x=>first.some(y=>y.symbol===x.symbol)),false);
+});
