@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {RestClient,RestRateLimitError,retryAfterMs,estimateBinanceRequestWeight} from '../market/binance-rest.mjs';
+import {CONFIG} from '../config.mjs';
 
+
+test('TEST_FIXTURE: per-client default cap aligns with weighted shared REST budget',async()=>{
+  const client=new RestClient({baseUrls:['https://rest-default-budget.test'],fetchImpl:async()=>({status:200,ok:true,headers:new Map(),json:async()=>({})})});
+  assert.equal(client.maxRequestsPerMinute,240);
+  assert.equal(CONFIG.rest.maxRequestsPerMinute,240);
+});
 
 test('TEST_FIXTURE: REST weight estimator is conservative for shared market-data endpoints',()=>{
   assert.equal(estimateBinanceRequestWeight('/api/v3/ticker/24hr',{}),80);
