@@ -341,9 +341,9 @@ test('stale nested Falcon Eye evidence is excluded even when the outer alert omi
 
 test('report never publishes cohort percentages from fewer than 30 eligible signals',()=>{
   const rows=[
-    {radar:'RADAR_8',symbol:'AAAUSDT',signal_type:'WATCH_EARLY',market_regime:'RANGING',evaluation_eligible:true,missing_required_fields:[],detected_before_move:true,already_extended_at_detection:false,marks:{},excursions:{}},
-    {radar:'RADAR_8',symbol:'BBBUSDT',signal_type:'PRE_EXPANSION',market_regime:'MIXED',evaluation_eligible:true,missing_required_fields:[],detected_before_move:false,already_extended_at_detection:true,marks:{},excursions:{}},
-    {radar:'RADAR_9',symbol:'CCCUSDT',signal_type:'BREAKOUT_DEVELOPING',market_regime:'RANGING',evaluation_eligible:true,missing_required_fields:[],detected_before_move:true,already_extended_at_detection:false,marks:{},excursions:{}}
+    {radar:'RADAR_8',symbol:'AAAUSDT',signal_type:'WATCH_EARLY',market_regime:'RANGING',signal_score:61,evaluation_eligible:true,missing_required_fields:[],detected_before_move:true,already_extended_at_detection:false,marks:{},excursions:{}},
+    {radar:'RADAR_8',symbol:'BBBUSDT',signal_type:'PRE_EXPANSION',market_regime:'MIXED',signal_score:72,evaluation_eligible:true,missing_required_fields:[],detected_before_move:false,already_extended_at_detection:true,marks:{},excursions:{}},
+    {radar:'RADAR_9',symbol:'CCCUSDT',signal_type:'BREAKOUT_DEVELOPING',market_regime:'RANGING',signal_score:80,evaluation_eligible:true,missing_required_fields:[],detected_before_move:true,already_extended_at_detection:false,marks:{},excursions:{}}
   ];
   const report=buildPreExpansionOutcomeReport({records:rows,now:NOW});
   assert.equal(report.groups.by_radar.RADAR_8.records,2);
@@ -553,7 +553,9 @@ test('RANGING history comparison requires 30 positive and 30 adverse cases per r
       signal_id:'historic-'+count+'-'+i,radar:i%2?'RADAR_8':'RADAR_9',symbol:'COIN'+i+'USDT',
       signal_type:'PRE_EXPANSION',market_regime:i%3===0?'MIXED':'RANGING',
       evaluation_eligible:true,missing_required_fields:[],evaluation_status:'ELIGIBLE',
-      detected_at:NOW+i,entry_price:100,historical_evaluation:true,detected_before_move:true,
+      detected_at:NOW+i,entry_price:100,signal_score:positive?75:52,historical_evaluation:true,detected_before_move:true,
+      required_fields:['signal_score'],available_fields:['signal_score'],missing_required_fields:[],
+      evaluation_eligible:true,evaluation_status:'ELIGIBLE',evaluation_exclusion_reason:null,
       data_quality:100,data_quality_source:'NORMALIZED_REQUIRED_FIELD_COVERAGE',
       marks:Object.fromEntries(horizons.map(h=>[h,{sample_quality:'HISTORICAL_CLOSED_OHLC',return_pct:positive?3.5:-1.2,outcome:positive?'HIT':'MISS'}])),
       excursions:Object.fromEntries(horizons.map(h=>[h,{
