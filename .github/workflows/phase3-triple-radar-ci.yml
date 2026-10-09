@@ -20,6 +20,7 @@ on:
   pull_request:
     branches:
       - phase3-triple-radar
+      - build224-multi-analyst-20261007
   workflow_dispatch:
 
 permissions:
