@@ -545,7 +545,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     volumeRatio:volumeRatios.length?Math.max(...volumeRatios):null,
     tradeRatio:tradeRatios.length?Math.max(...tradeRatios):null,
     volumeTrend,tradeTrend,relativeStrengthBtcPct,
-    relativeStrengthMarketPct:hasFiniteNumber(marketContext?.relativeStrengthMarketPct)?Number(marketContext.relativeStrengthMarketPct):null,
+    relativeStrengthMarketPct:hasFiniteNumber(ticker.priceChange24h)&&hasFiniteNumber(marketContext?.marketMedianChange24hPct)?Number(ticker.priceChange24h)-Number(marketContext.marketMedianChange24hPct):null,
     resistanceDistanceAtr,breakoutConfirmed:br5.broken,falseBreakout,
     return5mPct:r5,return10mPct:null,return15mPct:r5_3,
     alreadyExtended:extended
@@ -1154,7 +1154,9 @@ export class EarlyExpansionRadar{
       let btcFive=[],marketContext={};
       try{
         const [m5,m1]=await Promise.all([this.rest.klines('BTCUSDT','5m',{limit:Math.max(80,this.config.fiveMinuteKlines||180)}),this.rest.klines('BTCUSDT','1h',{limit:60})]);
-        btcFive=m5.candles||[];marketContext={fiveMinute:m5.candles||[],oneHour:m1.candles||[]};
+        btcFive=m5.candles||[];
+        const marketMoves=eligible.map(x=>x.priceChange24h).filter(hasFiniteNumber).map(Number);
+        marketContext={fiveMinute:m5.candles||[],oneHour:m1.candles||[],marketMedianChange24hPct:median(marketMoves),marketBreadthPct:marketMoves.length?marketMoves.filter(x=>x>0).length/marketMoves.length*100:null};
       }catch(e){this.noteError(e,'market-context');}
       const microScanned=await boundedMap(selected,this.config.microConcurrency,async row=>{
         try{return await this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFive);}
