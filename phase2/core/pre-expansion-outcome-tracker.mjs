@@ -29,7 +29,7 @@ const keyOf=(radar,symbol)=>radar+'|'+symbol;
 const pct=(price,entry)=>Number.isFinite(price)&&Number.isFinite(entry)&&entry>0?(price/entry-1)*100:null;
 
 export function emptyPreExpansionOutcomeState(){
-  return {version:'PRE_EXPANSION_OUTCOMES_V1',records:[],last_stage_by_key:{},last_price_update_at:0,updated_at:0};
+  return {version:'PRE_EXPANSION_OUTCOMES_V1',records:[],last_stage_by_key:{},last_price_update_at:0,last_report_log_at:0,updated_at:0};
 }
 function normalizeState(raw){
   const state=object(raw);
@@ -38,7 +38,7 @@ function normalizeState(raw){
     records:list(state.records),
     last_stage_by_key:object(state.last_stage_by_key),
     last_price_update_at:num(state.last_price_update_at,0),
-    updated_at:num(state.updated_at,0)
+    last_report_log_at:num(state.last_report_log_at,0),updated_at:num(state.updated_at,0)
   };
 }
 
@@ -332,7 +332,7 @@ export function evaluateHistoricalPreExpansionSignal(signal,{candles1m=[],candle
   for(const [h,ms] of HORIZONS){
     const end=detectedAt+ms,source=sourceFor(h);
     const intervalMs=source===five?5*60_000:60_000;
-    const windowRows=source.filter(c=>Number(c.closeTime)>detectedAt&&Number(c.closeTime)<=end);
+    const windowRows=source.filter(c=>Number(c.openTime)>=detectedAt&&Number(c.closeTime)<=end);
     const mark=source.find(c=>Number(c.closeTime)>=end&&Number(c.closeTime)<=now);
     if(mark&&Number(mark.closeTime)-end<=Math.max(2*intervalMs,90_000)){
       const ret=returnPct(Number(mark.close),entry);
@@ -352,7 +352,7 @@ export function evaluateHistoricalPreExpansionSignal(signal,{candles1m=[],candle
   }
   if(record.signal_type==='BREAKOUT_DEVELOPING'&&num(record.resistance_price)>0){
     const cutoff=detectedAt+FALSE_BREAKOUT_WINDOW_MS;
-    const bars=one.filter(c=>Number(c.closeTime)>detectedAt&&Number(c.closeTime)<=cutoff);
+    const bars=one.filter(c=>Number(c.openTime)>=detectedAt&&Number(c.closeTime)<=cutoff);
     const falseBar=bars.find(c=>Number(c.high)>=Number(record.resistance_price)*1.001&&Number(c.close)<Number(record.resistance_price)*.998);
     record.false_breakout=falseBar?true:(bars.length&&bars.at(-1).closeTime>=cutoff?false:null);
     record.false_breakout_detected_at=falseBar?Number(falseBar.closeTime):null;
@@ -386,9 +386,9 @@ function summarizeGroup(rows){
   const impacts=completed4h.filter(r=>num(r.excursions?.['4h']?.max_favorable_pct,-Infinity)>=3).length;
   const falseSignals=completed4h.filter(r=>num(r.excursions?.['4h']?.max_favorable_pct,-Infinity)<3).length;
   const timeTo3=completed4h.filter(r=>r.first_3pct_at&&r.first_3pct_at<=r.detected_at+4*60*60_000).map(r=>(r.first_3pct_at-r.detected_at)/60_000);
-  const falseKnown=measurable.filter(r=>r.false_breakout!==null&&r.false_breakout!==undefined);
+  const falseKnown=measurable.filter(r=>r.signal_type==='BREAKOUT_DEVELOPING'&&r.false_breakout!==null&&r.false_breakout!==undefined);
   const late=measurable.filter(r=>r.already_extended_at_detection===true).length;
-  const drawdowns=rows.map(r=>r.excursions?.['24h']?.max_adverse_pct??r.max_adverse_pct).map(num).filter(x=>x!==null);
+  const drawdowns=rows.map(r=>num(r.excursions?.['24h']?.max_adverse_pct??r.max_adverse_pct,null)).filter(x=>x!==null);
   return {
     records:rows.length,
     measurable_signals:measurable.length,
