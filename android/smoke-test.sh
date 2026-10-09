@@ -89,40 +89,43 @@ start_app_and_wait_ready() {
 }
 
 open_tradli_from_dashboard() {
-  local attempt tap_y top
-  # The CI emulator is 320x640. The main dashboard's TRADLI card follows the
-  # hero and statistics area; use real taps on its full-width button, not a
-  # direct launch of the non-exported Activity or a WebView accessibility dump.
-  for attempt in 1 2 3; do
-    adb shell am start -W -n com.radarx.app/.MainActivity >/dev/null
-    wait_for_online_device
-    # Return to the top of the scrolling dashboard before each coordinate variant.
-    for _ in $(seq 1 7); do
-      adb shell input swipe 160 220 160 610 120
-    done
-    case "$attempt" in
-      1)
-        adb shell input swipe 160 590 160 300 300
-        tap_y=385
-        ;;
-      2)
-        adb shell input swipe 160 590 160 360 260
-        tap_y=440
-        ;;
-      3)
-        adb shell input swipe 160 590 160 200 360
-        tap_y=245
-        ;;
-    esac
-    sleep 1
-    adb shell input tap 160 "$tap_y"
-    sleep 3
-    top="$(adb shell dumpsys activity activities 2>/dev/null | tr -d '\r' || true)"
-    if printf '%s\n' "$top" | grep -q 'com.radarx.app/.TradliActivity'; then
-      return 0
-    fi
+  local attempt xml node bounds x1 y1 x2 y2 tap_x tap_y top
+  adb shell am start -W -n com.radarx.app/.MainActivity >/dev/null
+  wait_for_online_device
+  sleep 1
+
+  # Put the dashboard near the top, then scroll until Android exposes the real
+  # WebView link in its accessibility tree. Fixed coordinates were unreliable
+  # when the dashboard content height changed between builds.
+  for _ in $(seq 1 8); do
+    adb shell input swipe 160 170 160 610 100
   done
-  echo "::error::Tapping the TRADLI card did not open TradliActivity"
+
+  for attempt in $(seq 1 18); do
+    adb shell uiautomator dump /sdcard/radarx-window.xml >/dev/null 2>&1 || true
+    xml="$(adb shell cat /sdcard/radarx-window.xml 2>/dev/null | tr -d '\r' || true)"
+    node="$(printf '%s\n' "$xml" | grep -o '<node[^>]*>' | grep -E 'text="فتح TRADLI"|content-desc="فتح TRADLI"|resource-id="[^"]*openTradliBtn[^"]*"' | head -n 1 || true)"
+    if [[ -n "$node" ]]; then
+      bounds="$(printf '%s\n' "$node" | sed -nE 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/p')"
+      if [[ -n "$bounds" ]]; then
+        read -r x1 y1 x2 y2 <<< "$bounds"
+        tap_x=$(( (x1 + x2) / 2 ))
+        tap_y=$(( (y1 + y2) / 2 ))
+        adb shell input tap "$tap_x" "$tap_y"
+        sleep 2
+        top="$(adb shell dumpsys activity activities 2>/dev/null | tr -d '\r' || true)"
+        if printf '%s\n' "$top" | grep -q 'com.radarx.app/.TradliActivity'; then
+          return 0
+        fi
+      fi
+    fi
+    # Scroll the dashboard down in small steps and look for the button again.
+    adb shell input swipe 160 560 160 220 240
+    sleep 0.35
+  done
+
+  echo "::error::The visible TRADLI dashboard link could not launch TradliActivity"
+  printf '%s\n' "$xml" | grep -E 'TRADLI|tradli|openTradliBtn' | tail -n 20 || true
   printf '%s\n' "$top" | grep -E 'mResumedActivity|ResumedActivity' | tail -n 5 || true
   return 1
 }
