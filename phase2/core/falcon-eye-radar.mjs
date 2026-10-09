@@ -357,6 +357,7 @@ export class FalconEyeRadar {
   constructor({rest,futuresRest=null,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
+    this.clock=typeof clock==='function'?clock:()=>Date.now();
     this.rest=rest;this.futuresRest=futuresRest;this.store=store;this.pushManager=pushManager;this.config={
       quote:'USDT',pollMs:30000,universeRefreshMs:5*60*1000,minQuoteVolume24h:500000,fastMinQuoteVolume24h:200000,
       scanBatchSize:8,pulseTopCandidates:4,quietCandidates:2,patrolBatchSize:2,deepConcurrency:3,
