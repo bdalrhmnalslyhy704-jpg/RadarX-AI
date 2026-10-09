@@ -267,7 +267,7 @@ jobs:
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
             --target "1be2d31dffd27afedb662042c9f8043fa1257e9f" \
-            --title "RadarX Native — Build 224 + Falcon Eye Recovery 1.5.8"
+            --title "RadarX Native — Build 224 + Falcon Eye Recovery 1.5.8" \
             --notes "Version 1.5.8 fixes Falcon Eye clock initialization, routes embedded WebView calls through the allow-listed HTTPS backend proxy, checks the background service across Android processes, and makes Falcon Eye bypass stale UI cache and request an explicit scan. Offline phones cannot fetch live prices; the online Railway scanner can save real discoveries for replay after reconnect. Notifications retain original detection price/time separately from phone delivery time. Publishing requires source tests, a live Falcon Eye scan contract, signed APK verification, and a passing Android online/offline/reconnect emulator test. Spot/Paper/read-only only; paper_trading=true; real_order_execution=false; confidence_score=UNKNOWN. Android emulator smoke outcome: ${ANDROID_EMULATOR_SMOKE_OUTCOME}."
 
       - name: Verify HTTPS release download
