@@ -3,7 +3,7 @@ import {assessLiquidity, validateSeries, futureIssues} from './data-quality.mjs'
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notification-gate.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
-import {recordPreExpansionSignals,updatePreExpansionMarkouts} from './pre-expansion-outcome-tracker.mjs';
+import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport} from './pre-expansion-outcome-tracker.mjs';
 
 function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
@@ -1178,6 +1178,7 @@ export class EarlyExpansionRadar{
         marketContext={fiveMinute:m5.candles||[],oneHour:m1.candles||[],marketMedianChange24hPct:median(marketMoves),marketBreadthPct:marketMoves.length?marketMoves.filter(x=>x>0).length/marketMoves.length*100:null};
       }catch(e){this.noteError(e,'market-context');}
       await updatePreExpansionMarkouts(this.store,rawRows,{now,marketContext}).catch(e=>this.noteError(e,'outcome-markout'));
+      await maybeLogPreExpansionOutcomeReport(this.store,{logger:this.logger,now}).catch(e=>this.noteError(e,'outcome-report'));
       const microScanned=await boundedMap(selected,this.config.microConcurrency,async row=>{
         try{return await this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFive);}
         catch(e){this.failedTotal++;this.noteError(e,'micro-row');return {symbol:row.symbol,failed:true,error:String(e?.message??e),micro_fingerprint:{score:null,confirmation_count:0,eligible:false,closed_candles_only:true},source:sourceList([tickerSource])};}
