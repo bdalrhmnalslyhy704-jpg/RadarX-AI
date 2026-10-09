@@ -40,8 +40,8 @@ function normalizeState(raw){
   const state=object(raw);
   return {
     ...emptyPreExpansionOutcomeState(),...state,
-    records:list(state.records),
-    last_stage_by_key:object(state.last_stage_by_key),
+    records:list(state.records).filter(row=>!EXCLUDED_EVALUATION_SYMBOLS.has(String(row?.symbol||'').toUpperCase())),
+    last_stage_by_key:Object.fromEntries(Object.entries(object(state.last_stage_by_key)).filter(([key])=>!EXCLUDED_EVALUATION_SYMBOLS.has(String(key).split('|')[1]||'').toUpperCase())),
     last_price_update_at:num(state.last_price_update_at,0),
     last_report_log_at:num(state.last_report_log_at,0),last_historical_import_at:num(state.last_historical_import_at,0),last_historical_backfill_at:num(state.last_historical_backfill_at,0),updated_at:num(state.updated_at,0)
   };
