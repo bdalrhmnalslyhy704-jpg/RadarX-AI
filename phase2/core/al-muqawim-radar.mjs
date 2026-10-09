@@ -284,18 +284,24 @@ export class AlMuqawimRadar{
       .filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h);
   }
   selectBatch(rows){
-    if(!rows.length)return[];
+    if(!Array.isArray(rows)||!rows.length)return [];
     const ranked=[...rows].sort((a,b)=>{
       const sa=Math.abs(a.priceChange24h)*3+Math.log10(Math.max(1,a.quoteVolume24h))*4;
       const sb=Math.abs(b.priceChange24h)*3+Math.log10(Math.max(1,b.quoteVolume24h))*4;
       return sb-sa||b.quoteVolume24h-a.quoteVolume24h;
     });
-    const selected=ranked.slice(0,Math.min(3,ranked.length));
-    for(let i=0;i<this.config.batchSize&&this.universe.length;i++){
-      const symbol=this.universe[this.cursor%this.universe.length];this.cursor=(this.cursor+1)%this.universe.length;
-      const row=rows.find(x=>x.symbol===symbol);if(row)selected.push(row);
+    const selected=[],seen=new Set();
+    const take=row=>{if(row?.symbol&&!seen.has(row.symbol)){selected.push(row);seen.add(row.symbol);return true;}return false;};
+    const topCount=Math.min(3,ranked.length);
+    const rotationCount=Math.max(0,Math.trunc(Number(this.config.batchSize)||0));
+    for(const row of ranked.slice(0,topCount))take(row);
+    const target=Math.min(new Set(ranked.map(x=>x.symbol)).size,topCount+rotationCount);
+    let visited=0;
+    while(selected.length<target&&visited<this.universe.length){
+      const symbol=this.universe[this.cursor%this.universe.length];this.cursor=(this.cursor+1)%this.universe.length;visited++;
+      take(ranked.find(x=>x.symbol===symbol));
     }
-    return [...new Map(selected.map(x=>[x.symbol,x])).values()];
+    return selected;
   }
   async scanRow(row){
     const [r4,r1,r15]=await Promise.all([
