@@ -48,8 +48,8 @@ export async function startServer({
   if(onRailway){
     try{
       const mounts=await readFile('/proc/mounts','utf8');
-      archiveVolumeMounted=mounts.split('\\n').some(line=>{
-        const mountPoint=line.split(' ')[1]?.replace(/\\\\040/g,' ');
+      archiveVolumeMounted=mounts.split('\n').some(line=>{
+        const mountPoint=line.split(' ')[1]?.replace(/\\040/g,' ');
         return mountPoint==='/data'||mountPoint?.startsWith('/data/');
       });
     }catch{archiveVolumeMounted=false;}
