@@ -47,7 +47,7 @@ header{position:sticky;top:0;z-index:5;margin:-18px -14px 14px;padding:calc(12px
 </main>
 
 <script type="module">
-const BASES=['https://radarx-ai-triple-production.up.railway.app','https://radarx-ai-production.up.railway.app'];
+const BASE='https://radarx-ai-triple-production.up.railway.app';
 const $=id=>document.getElementById(id);
 let timer=null;
 let busy=false;
@@ -61,37 +61,67 @@ function fmtKnown(v,d=2){return v===null||v===undefined||v===''?'—':fmt(v,d);}
 function fmtPct(v){const n=Number(v);return Number.isFinite(n)?(n>=0?'+':'')+n.toFixed(2)+'%':'—';}
 function timeText(iso){try{return new Intl.DateTimeFormat('ar-YE',{timeZone:'Asia/Aden',hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true}).format(new Date(iso));}catch{return iso||'—';}}
 
-async function req(path,timeout=70000){
+async function req(path,timeout=70000,attempts=3){
   if(pageDead)throw new Error('PAGE_DESTROYED');
-  let last='';
-  for(const base of BASES){
+  const retryable=new Set([408,425,429,500,502,503,504]);
+  let lastError='',lastResponse=null;
+  const count=Math.max(1,Math.min(3,Math.trunc(Number(attempts)||1)));
+  const perAttempt=Math.max(1000,Math.floor(Number(timeout||70000)/count));
+  for(let attempt=0;attempt<count;attempt++){
+    if(pageDead)throw new Error('PAGE_DESTROYED');
     const ctl=new AbortController();
     activeControllers.add(ctl);
-    const t=setTimeout(()=>ctl.abort(),timeout);
+    const t=setTimeout(()=>ctl.abort(),perAttempt);
     try{
-      const r=await fetch(base+path,{cache:'no-store',headers:{Accept:'application/json'},signal:ctl.signal});
+      const r=await fetch(BASE+path,{cache:'no-store',headers:{Accept:'application/json'},signal:ctl.signal});
       const body=await r.json().catch(()=>null);
-      if(r.ok||[400,404,409,429].includes(r.status)) return {ok:r.ok,status:r.status,body,base};
-      last='HTTP_'+r.status;
-    }catch(e){last=String(e && e.message||e||'BACKEND_CONNECTION_FAILED');}
-    finally{clearTimeout(t);}
+      lastResponse={ok:r.ok,status:r.status,body,base:BASE};
+      if(r.ok||!retryable.has(r.status))return lastResponse;
+      lastError='HTTP_'+r.status+(body&&body.error?':'+String(body.error):'');
+    }catch(e){
+      if(pageDead)throw new Error('PAGE_DESTROYED');
+      lastError=String(e&&e.name==='AbortError'?'REQUEST_TIMEOUT':e&&e.message||e||'BACKEND_CONNECTION_FAILED');
+      lastResponse=null;
+    }finally{
+      clearTimeout(t);
+      activeControllers.delete(ctl);
+    }
+    if(attempt<count-1)await new Promise(resolve=>setTimeout(resolve,attempt===0?650:1300));
   }
-  throw new Error(last||'BACKEND_CONNECTION_FAILED');
+  if(lastResponse)return lastResponse;
+  throw new Error(lastError||'BACKEND_CONNECTION_FAILED');
 }
 
+function fmtCount(v){if(v===null||v===undefined||v==='')return '—';const n=Number(v);return Number.isFinite(n)?String(n):'—';}
+function firstError(data){
+  const m=data&&data.monitoring||{},s=data&&data.scan||{};
+  return [data&&data.error,s.error,m.last_error].find(x=>x!==null&&x!==undefined&&String(x).trim()!=='')||'';
+}
 function render(data){
-  const u=data && data.universe||{}, m=data && data.monitoring||{};
-  $('universe').textContent=u.expected_total||m.universe_total||'—';
-  $('eligible').textContent=u.eligible_total||'—';
-  $('micro').textContent=m.micro_scanned_total||u.micro_scanned_total||'—';
-  $('deep').textContent=u.deep_scanned_total||'—';
+  const u=data&&data.universe||{},m=data&&data.monitoring||{};
+  $('universe').textContent=fmtCount(u.expected_total??m.universe_total);
+  $('eligible').textContent=fmtCount(u.eligible_total);
+  $('micro').textContent=fmtCount(m.micro_scanned_total??u.micro_scanned_total);
+  $('deep').textContent=fmtCount(u.deep_scanned_total);
   const live=m.running===true;
-  $('state').textContent=live?'LIVE • البرق يعمل':'متوقف';
-  $('state').className='state '+(live?'ok':'warn');
-  $('updated').textContent='آخر تحديث: '+timeText(data && data.as_of);
-  $('error').textContent=m.last_error?'خطأ: '+esc(m.last_error):'';
-  const arr=Array.isArray(data && data.candidates)?data.candidates:[];
-  if(!arr.length){$('candidates').innerHTML='<div class="empty">لا توجد بصمات عميقة مؤكدة في هذه الدورة.</div>';return;}
+  const completed=Number(m.scans||0)>0&&m.last_error==null&&data.status!=='not_ready';
+  $('state').textContent=live?(completed?'LIVE • البرق يعمل':'متصل • يجهز دورة الفحص'):'البرق غير مؤكد التشغيل';
+  $('state').className='state '+(live&&completed?'ok':live?'warn':'bad');
+  const coverage=Number.isFinite(Number(u.coverage_ratio))?Math.round(Number(u.coverage_ratio)*100)+'%':'—';
+  $('updated').textContent='آخر تحديث: '+timeText(data&&data.as_of)+' • تغطية السوق: '+coverage+
+    ' • وصل '+fmtCount(u.received_total)+'/'+fmtCount(u.expected_total);
+  const error=firstError(data);
+  $('error').textContent=error?'تنبيه الخدمة: '+esc(error):'';
+  const arr=Array.isArray(data&&data.candidates)?data.candidates:[];
+  if(!arr.length){
+    const message=!live
+      ?'لم يؤكد الخادم أن رادار البرق يعمل. افحص رسالة الحالة أعلاه وأعد المحاولة.'
+      :!completed
+        ?'البرق متصل لكنه لم يكمل دورة فحص ناجحة بعد؛ انتظر تحديث الحالة أو اضغط «فحص الآن».'
+        :'اكتملت دورة الفحص، لكن لم تظهر بصمة عميقة تجتاز شروط العرض الحالية. لن نعرض عملات وهمية.';
+    $('candidates').innerHTML='<div class="empty">'+esc(message)+'</div>';
+    return;
+  }
   $('candidates').innerHTML=arr.slice(0,20).map(c=>{
     const fp=c.micro_fingerprint||{};
     const met=fp.metrics||{};
@@ -118,22 +148,53 @@ function render(data){
   }).join('');
 }
 
+let queuedScan=false;
 async function refresh({scan=false}={}){
-  if(pageDead||busy)return;
+  if(pageDead)return;
+  if(busy){if(scan)queuedScan=true;return;}
   busy=true;
   try{
     const q='/api/early-expansion-radar?quote=USDT&limit=100'+(scan?'&scan=1':'');
-    const r=await req(q,scan?120000:70000);
-    if(r.body)render(r.body);
-    if(!r.ok)$('error').textContent='HTTP_'+r.status;
-  }catch(e){$('state').textContent='تعذر الاتصال';$('state').className='state bad';$('error').textContent=String(e && e.message||e);}
-  finally{busy=false;}
+    const r=await req(q,scan?120000:70000,scan?1:3);
+    if(!r.ok){
+      $('state').textContent='تعذر جلب بيانات البرق';
+      $('state').className='state bad';
+      const detail=r.body&&(r.body.error||r.body.message);
+      $('error').textContent=(detail?String(detail)+' • ':'')+'HTTP_'+r.status;
+      return;
+    }
+    if(!r.body||r.body.schema_version!=='RADAR8_V2'||r.body.radar!=='EARLY_EXPANSION_RADAR'||!r.body.monitoring){
+      throw new Error('RADAR8_API_CONTRACT_MISMATCH');
+    }
+    render(r.body);
+  }catch(e){
+    $('state').textContent='تعذر الاتصال بالبرق';
+    $('state').className='state bad';
+    $('error').textContent=String(e&&e.message||e||'BACKEND_CONNECTION_FAILED');
+  }finally{
+    busy=false;
+    if(queuedScan&&!pageDead){
+      queuedScan=false;
+      setTimeout(()=>refresh({scan:true}),100);
+    }
+  }
 }
 async function control(action){
   if(pageDead)return;
-  try{await req('/api/radar-control?radar=EARLY_EXPANSION_RADAR&action='+encodeURIComponent(action),30000);await refresh({scan:true});}
-  catch(e){$('error').textContent=String(e && e.message||e);}
+  try{
+    const r=await req('/api/radar-control?radar=EARLY_EXPANSION_RADAR&action='+encodeURIComponent(action),30000,3);
+    const body=r.body||{};
+    if(!r.ok||body.ok!==true||(action==='start'&&body.running!==true)){
+      throw new Error(String(body.message||body.error||('RADAR8_CONTROL_REJECTED_HTTP_'+r.status)));
+    }
+    await refresh({scan:true});
+  }catch(e){
+    $('state').textContent='تعذر تغيير حالة البرق';
+    $('state').className='state bad';
+    $('error').textContent=String(e&&e.message||e||'RADAR8_CONTROL_FAILED');
+  }
 }
+
 $('start').onclick=()=>control('start');
 $('stop').onclick=()=>control('stop');
 $('scan').onclick=()=>refresh({scan:true});
