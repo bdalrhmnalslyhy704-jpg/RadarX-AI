@@ -1,4 +1,6 @@
 import {fileURLToPath} from 'node:url';
+import {readFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {resolve} from 'node:path';
 import {CONFIG} from './config.mjs';
 import {RestClient} from './market/binance-rest.mjs';
@@ -37,7 +39,35 @@ export async function startServer({
     assertDeploymentEnvironment(process.env);
     assertReadOnlyStagingConfig(config);
   }
-  const store=await new DurableStore({dir:process.env.RADARX_DATA_DIR||'./.radarx-data'}).init();
+  const onRailway=Boolean(process.env.RAILWAY_SERVICE_ID||process.env.RAILWAY_ENVIRONMENT);
+  const archiveDir=process.env.RADARX_DATA_DIR||(onRailway?'/data/.radarx-data':'./.radarx-data');
+  const store=await new DurableStore({dir:archiveDir}).init({legacyDir:onRailway?'./.radarx-data':null});
+  const archiveState=await store.getPreExpansionOutcomes().catch(()=>({}));
+  const archiveRecords=Array.isArray(archiveState?.records)?archiveState.records:[];
+  let archiveVolumeMounted=null;
+  if(onRailway){
+    try{
+      const mounts=await readFile('/proc/mounts','utf8');
+      archiveVolumeMounted=mounts.split('\\n').some(line=>{
+        const mountPoint=line.split(' ')[1]?.replace(/\\\\040/g,' ');
+        return mountPoint==='/data'||mountPoint?.startsWith('/data/');
+      });
+    }catch{archiveVolumeMounted=false;}
+  }
+  const archiveDigest=createHash('sha256').update(JSON.stringify(archiveRecords.map(row=>({
+    signal_id:row?.signal_id,radar:row?.radar,symbol:row?.symbol,detected_at:row?.detected_at,
+    marks:row?.marks,horizon_status:row?.horizon_status
+  })))).digest('hex');
+  logger.info?.('[RADARX_ARCHIVE_READY] '+JSON.stringify({
+    build_version:'Build 224',build_commit:process.env.RAILWAY_GIT_COMMIT_SHA||process.env.GITHUB_SHA||null,
+    build_branch:process.env.RAILWAY_GIT_BRANCH||null,service_id:process.env.RAILWAY_SERVICE_ID||null,
+    deployment_id:process.env.RAILWAY_DEPLOYMENT_ID||null,store_dir:store.dir,
+    outcome_store_file:store.files.preExpansionOutcomes,volume_mount_path:onRailway?'/data':null,
+    volume_mount_detected:archiveVolumeMounted,persisted_signal_count:archiveRecords.length,
+    historical_complete_count:archiveRecords.filter(row=>row?.outcome_status==='COMPLETE'&&row?.historical_evaluation===true).length,
+    incomplete_count:archiveRecords.filter(row=>row?.outcome_status==='INCOMPLETE').length,
+    migrated_legacy_files:store.migratedFiles,records_sha256:archiveDigest
+  }));
   const rest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
   const dedup=new SignalDeduplicator({store,windowMs:15*60*1000});
   const provider=createPushProvider(config.push);
