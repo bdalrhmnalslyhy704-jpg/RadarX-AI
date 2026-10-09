@@ -34,7 +34,7 @@ const keyOf=(radar,symbol)=>radar+'|'+symbol;
 const pct=(price,entry)=>Number.isFinite(price)&&Number.isFinite(entry)&&entry>0?(price/entry-1)*100:null;
 
 export function emptyPreExpansionOutcomeState(){
-  return {version:'PRE_EXPANSION_OUTCOMES_V1',records:[],last_stage_by_key:{},last_price_update_at:0,last_report_log_at:0,last_historical_import_at:0,last_historical_backfill_at:0,updated_at:0};
+  return {version:'PRE_EXPANSION_OUTCOMES_V2',records:[],last_stage_by_key:{},last_price_update_at:0,last_report_log_at:0,last_historical_import_at:0,last_historical_backfill_at:0,updated_at:0};
 }
 function normalizeRegime(value){
   const label=String(value??'').trim().toUpperCase();
@@ -524,9 +524,11 @@ function coverageSummary(rows){
       missing[key]=(missing[key]||0)+1;
     }
   }
+  const avg=measured.length?Number(average(measured.map(r=>num(r.data_quality,0))).toFixed(2)):null;
   return {
     coverage_records:measured.length,
-    avg_field_coverage_pct:measured.length?Number(average(measured.map(r=>num(r.data_quality,0))).toFixed(2)):null,
+    avg_field_coverage_pct:avg,
+    average_field_coverage_pct:avg,
     missing_field_counts:Object.fromEntries(Object.entries(missing).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])))
   };
 }
