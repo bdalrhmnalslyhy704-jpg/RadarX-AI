@@ -120,8 +120,8 @@ jobs:
           test -x "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner"
           test -d "$ANDROID_SDK_ROOT/platforms/android-35"
 
-      - name: Verify Railway backend and Radar 8 public contract
-        timeout-minutes: 3
+      - name: Verify Railway backend and Radar 8 live scan contract
+        timeout-minutes: 4
         env:
           RADAR8_JSON: ${{ runner.temp }}/radar8.json
         run: |
@@ -129,42 +129,39 @@ jobs:
           BASE="https://radarx-ai-triple-production.up.railway.app"
           HEALTH="$(curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/healthz.json" -w "%{http_code}" "$BASE/healthz")"
           READY="$(curl --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/readyz.json" -w "%{http_code}" "$BASE/readyz")"
-          RADAR8="$(curl --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 30 --silent --show-error -o "$RADAR8_JSON" -w "%{http_code}" "$BASE/api/early-expansion-radar?quote=USDT&limit=100")"
           test "$HEALTH" = "200"
           case "$READY" in 200|503) ;; *) echo "::error::Unexpected readyz status: $READY"; exit 1 ;; esac
-          case "$RADAR8" in 200|503) ;; *) echo "::error::Unexpected Radar 8 status: $RADAR8"; exit 1 ;; esac
-          export READY_STATUS="$READY"
-          node --input-type=module <<'NODE'
+
+          # Wait through transient restarts/first scan. Never publish an APK against a merely-shaped, idle or unhealthy Radar 8 response.
+          RADAR8_OK=false
+          for attempt in $(seq 1 10); do
+            RADAR8="$(curl --connect-timeout 5 --max-time 12 --silent --show-error -o "$RADAR8_JSON" -w "%{http_code}" "$BASE/api/early-expansion-radar?quote=USDT&limit=100" 2>/dev/null || true)"
+            if [ "$RADAR8" = "200" ] && node --input-type=module - "$RADAR8_JSON" <<'NODE'
           import fs from 'node:fs';
-          const body = JSON.parse(fs.readFileSync(process.env.RADAR8_JSON, 'utf8'));
-          if (body.schema_version !== 'RADAR8_V2') throw new Error('RADAR8_SCHEMA_VERSION_INVALID');
-          if (body.radar !== 'EARLY_EXPANSION_RADAR') throw new Error('RADAR8_NAME_INVALID');
-          if (!body.meta || typeof body.meta.live !== 'boolean') throw new Error('RADAR8_META_LIVE_MISSING');
-          if (body.meta.paper_trading !== true) throw new Error('PAPER_TRADING_INVARIANT_FAILED');
-          if (body.meta.real_order_execution !== false) throw new Error('REAL_ORDER_EXECUTION_INVARIANT_FAILED');
-          if (body.meta.confidence_score !== 'UNKNOWN') throw new Error('CONFIDENCE_SCORE_INVARIANT_FAILED');
-          for (const key of ['expected_total','received_total','missing_ticker_total','eligible_total','fast_scanned_total','scanned_total','deep_scanned_total','skipped_total','failed_total','coverage_ratio','deep_coverage_ratio']) {
-            if (!Object.hasOwn(body.universe ?? {}, key)) throw new Error('RADAR8_COVERAGE_FIELD_MISSING:'+key);
-          }
-          for (const key of ['running','last_scan_at','failed_total','poll_ms','micro_scan_candidates','micro_concurrency','rotation_reserve','quiet_reserve','deep_candidates','deep_concurrency']) {
-            if (!Object.hasOwn(body.monitoring ?? {}, key)) throw new Error('RADAR8_MONITORING_FIELD_MISSING:'+key);
-          }
-          for (const key of ['requested','completed','error']) {
-            if (!Object.hasOwn(body.scan ?? {}, key)) throw new Error('RADAR8_SCAN_FIELD_MISSING:'+key);
-          }
-          console.log(JSON.stringify({
-            schema_version: body.schema_version,
-            radar: body.radar,
-            meta_live: body.meta.live,
-            meta_paper_trading: body.meta.paper_trading,
-            meta_real_order_execution: body.meta.real_order_execution,
-            meta_confidence_score: body.meta.confidence_score,
-            universe: body.universe,
-            monitoring: body.monitoring,
-            scan: body.scan,
-            readyz_http_status: Number(process.env.READY_STATUS)
-          }, null, 2));
+          const body=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          const u=body.universe||{},m=body.monitoring||{},s=body.scan||{},meta=body.meta||{};
+          const num=x=>Number.isFinite(Number(x))?Number(x):0;
+          const problems=[];
+          if(body.schema_version!=='RADAR8_V2')problems.push('SCHEMA');
+          if(body.radar!=='EARLY_EXPANSION_RADAR')problems.push('RADAR_NAME');
+          if(meta.live!==true||m.running!==true)problems.push('NOT_RUNNING');
+          if(meta.paper_trading!==true||meta.real_order_execution!==false||meta.confidence_score!=='UNKNOWN')problems.push('SAFETY_INVARIANT');
+          if(num(m.scans)<1||!num(m.last_scan_at)||m.last_error)problems.push('NO_SUCCESSFUL_SCAN');
+          if(s.completed!==true||s.error)problems.push('SCAN_NOT_COMPLETE');
+          if(num(u.expected_total)<=0||num(u.received_total)<=0||num(u.eligible_total)<=0)problems.push('EMPTY_UNIVERSE');
+          if(num(u.fast_scanned_total)<=0||num(u.scanned_total)<=0||num(u.deep_scanned_total)<=0)problems.push('NO_SCAN_COVERAGE');
+          if(num(u.coverage_ratio)<0.95||num(u.missing_ticker_total)!==0||num(u.failed_total)!==0)problems.push('INCOMPLETE_COVERAGE');
+          if(problems.length){console.error('Radar 8 live scan not ready:',problems.join(','),JSON.stringify({universe:u,monitoring:{running:m.running,scans:m.scans,last_scan_at:m.last_scan_at,last_error:m.last_error},scan:s}));process.exit(1);}
+          console.log('Radar 8 live scan contract passed:',JSON.stringify({expected:u.expected_total,received:u.received_total,eligible:u.eligible_total,deep:u.deep_scanned_total,coverage:u.coverage_ratio,paper_trading:meta.paper_trading,real_order_execution:meta.real_order_execution}));
           NODE
+            then
+              RADAR8_OK=true
+              break
+            fi
+            echo "Radar 8 not ready yet (HTTP ${RADAR8:-unknown}, attempt $attempt/10); retrying."
+            sleep 5
+          done
+          test "$RADAR8_OK" = "true" || { echo "::error::Radar 8 did not complete a healthy scan; APK release blocked."; exit 1; }
       - name: Verify full-radar Triple backend contract
         timeout-minutes: 4
         run: |
