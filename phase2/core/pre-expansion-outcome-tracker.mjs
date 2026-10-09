@@ -107,8 +107,17 @@ function stageMetrics(alert){
     trade_ratio:num(m.trade_ratio??m.trade_count_ratio??m.trades_ratio),
     atr_ratio:num(m.atr_ratio??m.volatility_ratio),
     bollinger_ratio:num(m.bollinger_ratio??m.bollinger_width_ratio),
-    data_stale:Boolean(alert?.data_stale||object(alert?.gates).data_stale),
-    closed_candles_only:alert?.closed_candles_only!==false
+    data_stale:Boolean(
+      alert?.data_stale===true||
+      object(alert?.gates).data_stale===true||
+      object(alert?.falcon_eye).data_stale===true||
+      object(object(alert?.falcon_eye).gates).data_stale===true||
+      [...list(object(object(alert?.gates).data_gate).issues),
+        ...list(object(object(object(alert?.falcon_eye).gates).data_gate).issues),
+        ...list(alert?.risk_flags),...list(object(alert?.falcon_eye).risk_flags)]
+        .some(issue=>String(issue).toUpperCase().startsWith('STALE_DATA'))
+    ),
+    closed_candles_only:Boolean(alert?.closed_candles_only??alert?.falcon_eye?.closed_candles_only??false)
   };
 }
 
