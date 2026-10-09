@@ -88,6 +88,27 @@ start_app_and_wait_ready() {
   printf '%s\n' "$LOGS" | grep -Fq "BACKGROUND_SERVICE_READY"
 }
 
+open_tradli_from_dashboard() {
+  local attempt xml bounds x1 y1 x2 y2 cx cy
+  for attempt in $(seq 1 8); do
+    adb shell uiautomator dump /sdcard/radarx-window.xml >/dev/null 2>&1 || true
+    xml="$(adb shell cat /sdcard/radarx-window.xml 2>/dev/null | tr -d '\r' || true)"
+    bounds="$(printf '%s\n' "$xml" | sed -n 's/.*text="فتح TRADLI"[^>]*bounds="\[\([0-9][0-9]*\),\([0-9][0-9]*\)\]\[\([0-9][0-9]*\),\([0-9][0-9]*\)\]".*/\1 \2 \3 \4/p' | head -n 1)"
+    if [[ -n "$bounds" ]]; then
+      read -r x1 y1 x2 y2 <<< "$bounds"
+      cx=$(( (x1+x2)/2 ))
+      cy=$(( (y1+y2)/2 ))
+      adb shell input tap "$cx" "$cy"
+      return 0
+    fi
+    adb shell input swipe 200 780 200 300 420
+    sleep 1
+  done
+  echo "::error::TRADLI link was not discoverable in the dashboard accessibility tree"
+  printf '%s\n' "$xml" | grep -o 'text="[^"]*TRADLI[^"]*"' | tail -n 20 || true
+  return 1
+}
+
 assert_background_service_declared() {
   # The Android package-manager dump is not consistent about printing Java component
   # names. Verify the runtime service-start evidence instead; manifest declarations
@@ -131,7 +152,7 @@ head -c 8 "$RUNNER_TEMP/radarx-online.png" | od -An -t x1 | tr -d ' ' | grep -Fq
 
 # TRADLI is a separate native Activity. Smoke-test its module bootstrap inside the embedded WebView.
 adb logcat -c
-adb shell am start -W -n com.radarx.app/.TradliActivity >/dev/null
+open_tradli_from_dashboard
 wait_for_online_device
 TRADLI_READY=0
 for attempt in $(seq 1 20); do
