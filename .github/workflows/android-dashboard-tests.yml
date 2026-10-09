@@ -5,6 +5,7 @@ on:
     branches:
       - android-market-radar-integration
       - 'release/build224-tradli-1.5.9'
+      - 'release/build224-tradli-1.6.0'
   pull_request:
     branches:
       - main
