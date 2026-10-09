@@ -311,6 +311,16 @@ export async function getRadarAlerts({radar='ALL',limit=20,since=0}={}, fetchImp
   return requestJson(base,'/api/radar-alerts?radar='+encodeURIComponent(safeRadar)+'&limit='+encodeURIComponent(String(safeLimit))+sinceParam,fetchImpl);
 }
 
+export async function getFalconEyeRadar({limit=20,since=0,scan=false}={},fetchImpl=globalThis.fetch){
+  const safeLimit=Number(limit);
+  if(!Number.isInteger(safeLimit)||safeLimit<1||safeLimit>50)throw new Error('INVALID_LIMIT');
+  const safeSince=Number(since);
+  const sinceParam=Number.isFinite(safeSince)&&safeSince>0?'&since='+encodeURIComponent(String(Math.trunc(safeSince))):'';
+  const scanParam=scan?'&scan=1':'';
+  const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  return requestJson(base,'/api/falcon-eye-radar?limit='+encodeURIComponent(String(safeLimit))+sinceParam+scanParam,fetchImpl,120000);
+}
+
 export async function setRadarState(radar, action, fetchImpl = globalThis.fetch) {
   if (PAGE_HIDDEN) return {status:0,ok:false,body:null,error:'PAGE_HIDDEN',base:normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL)};
   const safeRadar=String(radar||'').trim().toUpperCase();
