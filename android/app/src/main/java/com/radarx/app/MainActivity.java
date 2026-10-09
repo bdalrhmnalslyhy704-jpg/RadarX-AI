@@ -171,7 +171,7 @@ public final class MainActivity extends Activity {
             connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("GET");
             connection.setConnectTimeout(12000);
-            connection.setReadTimeout(60000);
+            connection.setReadTimeout(180000);
             connection.setInstanceFollowRedirects(false);
             connection.setRequestProperty("Accept", "application/json");
             connection.setRequestProperty("Accept-Encoding", "identity");
