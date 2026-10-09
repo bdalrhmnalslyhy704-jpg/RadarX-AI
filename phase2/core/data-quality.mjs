@@ -2,7 +2,27 @@ import {timeframeMs} from '../../phase1/radarx-phase1-engine.mjs';
 
 export const finite = v => Number.isFinite(Number(v));
 
+export const DATA_STATUS = Object.freeze({
+  LIVE: 'LIVE_DATA',
+  PARTIAL: 'PARTIAL_DATA',
+  STALE: 'DATA_STALE',
+  UNAVAILABLE: 'DATA_UNAVAILABLE',
+  OFFLINE: 'OFFLINE'
+});
+
 export const FUTURE_DATA_CLOCK_SKEW_MS = 5000;
+
+export function classifyDataStatus({
+  sourceLive, trigger, staleMs, maxStaleTriggerMs=1800000,
+  unresolvedGap=false, futureIssues=[], seriesIntegrityOk=true,
+  quality=100, minDataQuality=70
+}={}) {
+  if(sourceLive!==true)return DATA_STATUS.OFFLINE;
+  if(!trigger)return DATA_STATUS.UNAVAILABLE;
+  if(!Number.isFinite(Number(staleMs))||Number(staleMs)>maxStaleTriggerMs)return DATA_STATUS.STALE;
+  if(unresolvedGap||futureIssues.length||!seriesIntegrityOk||Number(quality)<minDataQuality)return DATA_STATUS.PARTIAL;
+  return DATA_STATUS.LIVE;
+}
 const EPOCH_MS_MIN = 100_000_000_000;
 
 export function timestampUnit(value){
@@ -74,7 +94,13 @@ export function assessDataGate({series4h,series1h,series15m,now=Date.now(),sourc
   if(staleMs>maxStaleTriggerMs)blocked.push('STALE_DATA');
   if(!v4.valid||!v1.valid||!v15.valid)blocked.push('SERIES_INTEGRITY_FAILURE');
   if(quality<minDataQuality)blocked.push('LOW_DATA_QUALITY');
-  return {allowed:blocked.length===0,quality,blocked,staleMs,latestClosed15m:trigger?.closeTime??null,futureIssues:future,series:{v4,v1,v15}};
+  const status=classifyDataStatus({
+    sourceLive,trigger,staleMs,maxStaleTriggerMs,unresolvedGap,
+    futureIssues:future,seriesIntegrityOk:v4.valid&&v1.valid&&v15.valid,
+    quality,minDataQuality
+  });
+  return {allowed:blocked.length===0,quality,blocked,staleMs,status,
+    latestClosed15m:trigger?.closeTime??null,futureIssues:future,series:{v4,v1,v15}};
 }
 
 export function assessLiquidity({book,ticker24h,minQuality=60}){
