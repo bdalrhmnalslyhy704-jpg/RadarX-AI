@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildRotationAnalysis,buildRotationAlert} from '../core/rotation-lag-radar.mjs';
+import {buildRotationAnalysis,buildRotationAlert,RotationLagRadar} from '../core/rotation-lag-radar.mjs';
 
 function candle(i,{price=100,move=0,volume=100000,span=0.4}={}){
   const openTime=i*900000;
@@ -73,3 +73,12 @@ const extended=buildRotationAlert({
 assert.ok(!extended.risk_flags.includes('24H_ALREADY_EXTENDED')||extended.price_change_24h>=10);
 
 console.log('Rotation Lag Radar tests passed');
+
+test('Rotation Lag fills rotation slots when the cursor overlaps the ranked shortlist',()=>{
+  const radar=new RotationLagRadar({rest:{},store:{},config:{topLaggers:2,rotationBatchSize:5},clock:()=>now});
+  radar.universe=Array.from({length:16},(_,i)=>`R${String(i).padStart(2,'0')}USDT`);
+  const rows=radar.universe.map((symbol,i)=>({symbol,lastPrice:1+i,priceChange24h:i,quoteVolume24h:2_000_000}));
+  const selected=radar.selectBatch(rows);
+  assert.equal(selected.length,7);
+  assert.equal(new Set(selected.map(x=>x.symbol)).size,7);
+});
