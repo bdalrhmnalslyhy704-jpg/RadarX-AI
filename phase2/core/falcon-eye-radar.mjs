@@ -3,7 +3,7 @@ import {updateMarketPulseHistory} from './falcon-market-pulse.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
-import {recordPreExpansionSignals,updatePreExpansionMarkouts} from './pre-expansion-outcome-tracker.mjs';
+import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport} from './pre-expansion-outcome-tracker.mjs';
 
 function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
@@ -663,6 +663,7 @@ export class FalconEyeRadar {
         oneMinute:btc[0].candles||[]
       };
       await updatePreExpansionMarkouts(this.store,rows,{now:this.clock(),marketContext}).catch(e=>{this.lastError=String(e?.message??e);});
+      await maybeLogPreExpansionOutcomeReport(this.store,{logger:this.logger,now:this.clock()}).catch(e=>{this.lastError=String(e?.message??e);});
       const selected=this.selectBatch(rows);
       this.lastScanAtMs=this.clock();
       const concurrency=Math.max(1,Math.min(this.config.deepConcurrency||3,selected.length||1));
