@@ -162,8 +162,8 @@ function makeSignal(alert,now,marketContext){
     detected_before_move:assessBeforeMove(alert,stage,m,extended),
     initial_metrics:m,source:list(alert?.source).length?list(alert.source):[String(alert?.source||'UNKNOWN')],
     false_breakout:null,false_breakout_basis:null,
-    marks:{},excursions:Object.fromEntries(HORIZONS.map(([h])=>[h,{max_favorable_pct:null,max_adverse_pct:null,complete:false}])),
-    first_2pct_at:null,first_3pct_at:null,max_favorable_pct:null,max_adverse_pct:null,
+    marks:{},excursions:Object.fromEntries(HORIZONS.map(([h])=>[h,{max_favorable_pct:0,max_adverse_pct:0,complete:false}])),
+    first_2pct_at:null,first_3pct_at:null,max_favorable_pct:0,max_adverse_pct:0,
     max_favorable_at:null,max_adverse_at:null,observations:0,last_observed_at:detectedAt,
     observed_price_source:'SAMPLED_SPOT_TICKERS',historical_evaluation:false
   };
@@ -234,7 +234,7 @@ function updateOneRecord(record,price,now){
   if(record.first_2pct_at===null&&ret>=2){record.first_2pct_at=now;changed=true;}
   if(record.first_3pct_at===null&&ret>=3){record.first_3pct_at=now;changed=true;}
   for(const [h,ms] of HORIZONS){
-    const excursion=record.excursions?.[h]||{max_favorable_pct:null,max_adverse_pct:null,complete:false};
+    const excursion=record.excursions?.[h]||{max_favorable_pct:0,max_adverse_pct:0,complete:false};
     if(age<=ms&&!excursion.complete){
       if(excursion.max_favorable_pct===null||ret>excursion.max_favorable_pct)excursion.max_favorable_pct=Number(ret.toFixed(4));
       if(excursion.max_adverse_pct===null||ret<excursion.max_adverse_pct)excursion.max_adverse_pct=Number(ret.toFixed(4));
@@ -325,7 +325,7 @@ export function evaluateHistoricalPreExpansionSignal(signal,{candles1m=[],candle
     detected_before_move:signal?.detected_before_move??!signalAlreadyExtended(signal),
     marks:{},excursions:{},historical_evaluation:true,
     observed_price_source:'HISTORICAL_CLOSED_OHLC',
-    max_favorable_pct:null,max_adverse_pct:null,
+    max_favorable_pct:0,max_adverse_pct:0,
     false_breakout:null,false_breakout_basis:null
   };
   const sourceFor=h=>h==='4h'||h==='24h'?five:one;
@@ -341,7 +341,7 @@ export function evaluateHistoricalPreExpansionSignal(signal,{candles1m=[],candle
     const valid=windowRows.filter(c=>Number(c.high)>0&&Number(c.low)>0);
     if(valid.length){
       const maxHigh=Math.max(...valid.map(c=>Number(c.high))),minLow=Math.min(...valid.map(c=>Number(c.low)));
-      record.excursions[h]={max_favorable_pct:returnPct(maxHigh,entry),max_adverse_pct:returnPct(minLow,entry),max_high:maxHigh,min_low:minLow,complete:Boolean(record.marks[h]),source:'HISTORICAL_CLOSED_OHLC'};
+      record.excursions[h]={max_favorable_pct:Math.max(0,returnPct(maxHigh,entry)),max_adverse_pct:Math.min(0,returnPct(minLow,entry)),max_high:maxHigh,min_low:minLow,complete:Boolean(record.marks[h]),source:'HISTORICAL_CLOSED_OHLC'};
       if(record.max_favorable_pct===null||record.excursions[h].max_favorable_pct>record.max_favorable_pct)record.max_favorable_pct=record.excursions[h].max_favorable_pct;
       if(record.max_adverse_pct===null||record.excursions[h].max_adverse_pct<record.max_adverse_pct)record.max_adverse_pct=record.excursions[h].max_adverse_pct;
     }
