@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildFalconEyeAnalysis} from '../core/falcon-eye-radar.mjs';
+import {buildFalconEyeAnalysis,FalconEyeRadar} from '../core/falcon-eye-radar.mjs';
 
 function candle(openTime,close,{open=close-0.02,high=close+0.06,low=close-0.06,volume=900,tradeCount=80,taker=0.50}={}) {
   return {openTime,closeTime:openTime+59_999,open,high,low,close,volume,quoteVolume:close*volume,tradeCount,takerBuyBaseVolume:volume*taker,closed:true};
@@ -80,3 +80,19 @@ test('Falcon Eye vetoes OGN-style post-explosion chasing',()=>{
 });
 
 // Fixture uses enough closed 5m candles for the pre-breakout window.
+
+
+test('Falcon Eye health reports scanner state using the injected clock',()=>{
+  const now=1_800_000_000_000;
+  const radar=new FalconEyeRadar({
+    rest:{},
+    store:{},
+    clock:()=>now
+  });
+  const health=radar.health();
+  assert.equal(health.running,false);
+  assert.equal(health.radar,'FALCON_EYE_RADAR');
+  assert.equal(health.last_scan_at,null);
+  assert.equal(health.scans,0);
+  assert.equal(health.last_error,null);
+});
