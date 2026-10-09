@@ -351,11 +351,20 @@ test('a single late sample may create a point mark but cannot certify complete M
 
 test('incomplete signals are saved for audit but excluded from markout updates and performance cohorts',async()=>{
   await withStore(async store=>{
+    const observedLogs=[];
     await recordPreExpansionSignals(store,[signal({
       symbol:'PARTIALUSDT',stage:'PRE_EXPANSION',regime:'RANGING',
       metrics:{return_10m_pct:null,price_change_10m_pct:null,relative_strength_vs_btc_pct:null,volume_ratio:null,trade_ratio:null,atr_ratio:null}
-    })],{now:NOW});
+    })],{now:NOW,logger:{info:line=>observedLogs.push(line)}});
     const before=(await store.getPreExpansionOutcomes()).records[0];
+    const observedLine=observedLogs.find(line=>line.includes('[PRE_EXPANSION_SIGNAL_OBSERVED]'));
+    assert.ok(observedLine);
+    const observed=JSON.parse(observedLine.slice(observedLine.indexOf('{')));
+    assert.equal(observed.evaluation_eligible,false);
+    assert.equal(observed.data_quality_source,'NORMALIZED_REQUIRED_FIELD_COVERAGE');
+    assert.ok(observed.missing_required_fields.includes('return_10m_pct'));
+    assert.ok(observed.missing_required_fields.includes('volume_ratio'));
+    assert.equal(observed.reported_data_quality,88);
     assert.equal(before.data_quality<100,true);
     assert.equal(before.evaluation_eligible,false);
     assert.equal(before.evaluation_status,'EXCLUDED_INCOMPLETE');
