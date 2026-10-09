@@ -36,7 +36,9 @@ public final class TradliActivity extends Activity {
             "https://appassets.androidplatform.net/assets/tradli.html";
     private static final String APP_ORIGIN =
             "https://appassets.androidplatform.net";
-    private static final String BACKEND_ORIGIN =
+    private static final String PRIMARY_BACKEND_ORIGIN =
+            "https://radarx-ai-triple-production.up.railway.app";
+    private static final String FALLBACK_BACKEND_ORIGIN =
             "https://radarx-ai-production.up.railway.app";
 
     private WebView webView;
@@ -162,10 +164,13 @@ public final class TradliActivity extends Activity {
     }
 
     private static boolean isAllowedBackendUri(Uri uri) {
-        return uri != null &&
-                "https".equalsIgnoreCase(uri.getScheme()) &&
-                BACKEND_ORIGIN.equalsIgnoreCase(uri.getScheme() + "://" + uri.getHost()) &&
-                (uri.getPort() == -1 || uri.getPort() == 443);
+        if (uri == null || !"https".equalsIgnoreCase(uri.getScheme()) ||
+                (uri.getPort() != -1 && uri.getPort() != 443)) {
+            return false;
+        }
+        String origin = uri.getScheme() + "://" + uri.getHost();
+        return PRIMARY_BACKEND_ORIGIN.equalsIgnoreCase(origin) ||
+                FALLBACK_BACKEND_ORIGIN.equalsIgnoreCase(origin);
     }
 
     private static WebResourceResponse fetchBackend(WebResourceRequest request) {
