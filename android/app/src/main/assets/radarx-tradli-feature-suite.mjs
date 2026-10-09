@@ -326,7 +326,7 @@ function hubPanel(root) {
       ).join(''):'';
       const alertsError=alertsResult.status==='rejected'?'تعذر جلب سجل الإشارات المحفوظ: '+String(alertsResult.reason?.message||alertsResult.reason):(!signalResponse?.ok?'تعذر جلب سجل الإشارات من الخادم ('+String(signalResponse?.status||0)+').':'');
       const marketError=marketResult.status==='rejected'?'تعذر جلب مرشحي السوق الحاليين: '+String(marketResult.reason?.message||marketResult.reason):'';
-      o.innerHTML+(b?marketNotice(b):'<div class="rxsuite-row"><b>Market Radar غير متاح</b><small>'+esc(marketError)+'</small></div>')+
+      o.innerHTML=(b?marketNotice(b):'<div class="rxsuite-row"><b>Market Radar غير متاح</b><small>'+esc(marketError)+'</small></div>')+
         '<div class="rxsuite-row"><div><b>الإشارات المسجلة من الرادارات</b><small>أحداث محفوظة في خادم RadarX؛ ليست تغذية مزعومة من قنوات أو منصات خارجية.</small></div><span class="rxsuite-tag">'+alerts.length+' saved</span></div>'+
         (alertRows||'<div class="rxsuite-row"><b>لا توجد إشارات محفوظة ضمن النطاق الحالي</b><small>'+esc(alertsError||'لا توجد نتائج مسجلة الآن.')+'</small></div>')+
         '<div class="rxsuite-row"><div><b>مرشحو السوق الحاليون</b><small>نتائج Market Radar الحالية بحسب جودة البيانات والاستراتيجيات.</small></div><span class="rxsuite-tag">'+(b?.candidates?.length||0)+' candidates</span></div>'+
@@ -396,24 +396,33 @@ function orderDesk(root) {
     const qty=Number(root.querySelector('#rx-oq').value);
     o.innerHTML='<p class="rxsuite-row">جاري التحقق من السعر والاتجاه…</p>';
     try {
-      const b=await market(),c=findCandidate(b,symbol);
-      if(!c) throw Error('NO_CURRENT_CANDIDATE');
-      const p=Number(c.last_price);
+      const scan=await deepScan(symbol);
+      requireLiveDeepScan(scan);
+      const p=Number(scan.price.last);
       const valid=[entry,sl,tp].every(Number.isFinite) && entry>0 && sl>0 && tp>0;
       if(!valid) throw Error('INVALID_ORDER_FIELDS');
+      const qtyRaw=root.querySelector('#rx-oq').value.trim();
+      const hasQty=qtyRaw.length>0;
+      if(hasQty&&(!Number.isFinite(qty)||qty<=0))throw Error('INVALID_QUANTITY');
       const dirOk=side==='LONG' ? sl<entry && tp>entry : sl>entry && tp<entry;
       const rr=Math.abs(tp-entry)/Math.max(Math.abs(entry-sl),1e-12);
       const distance=Math.abs(p-entry)/entry*100;
-      const riskAmount=Number.isFinite(qty)&&qty>0 ? Math.abs(entry-sl)*qty : null;
+      const riskAmount=hasQty ? Math.abs(entry-sl)*qty : null;
       if(!dirOk) throw Error('INVALID_ORDER_DIRECTION_LEVELS');
-      const textOrder=(side==='LONG'?'BUY':'SELL')+' '+symbol+' @ '+entry+' | SL '+sl+' | TP1 '+tp+(Number.isFinite(qty)?' | QTY '+qty:'');
-      o.innerHTML=
-        '<div class="rxsuite-grid">'+box('Current',num(p,8))+box('Entry',num(entry,8))+box('SL',num(sl,8))+box('TP1',num(tp,8))+box('R:R',num(rr,2))+box('Entry distance',percent(distance))+'</div>'+
+      const bias=String(scan.assessment?.direction_bias||'UNKNOWN');
+      const conflict=(side==='LONG'&&bias==='DOWNWARD_BIAS')||(side==='SHORT'&&bias==='UPWARD_BIAS');
+      const neutral=!['UPWARD_BIAS','DOWNWARD_BIAS'].includes(bias);
+      const readiness=conflict?'DIRECTION CONFLICT':neutral?'WAIT FOR CONFIRMATION':distance>3?'ENTRY TOO FAR':Number(scan.assessment?.trap_risk)>=60?'HIGH TRAP RISK':rr<1.2?'LOW R:R':'PAPER CALCULATION READY';
+      const readinessClass=conflict||readiness==='HIGH TRAP RISK'?'rxsuite-danger':readiness==='PAPER CALCULATION READY'?'rxsuite-safe':'rxsuite-warn';
+      const textOrder=(side==='LONG'?'BUY':'SELL')+' '+symbol+' @ '+entry+' | SL '+sl+' | TP1 '+tp+(hasQty?' | QTY '+qty:'');
+      o.innerHTML=deepNotice(scan)+'<div class="rxsuite-grid">'+box('Live price',num(p,8))+box('Entry',num(entry,8))+box('SL',num(sl,8))+box('TP1',num(tp,8))+box('R:R',num(rr,2))+box('Entry distance',percent(distance))+'</div>'+
+        '<div class="rxsuite-row"><div><b>Paper preparation status</b><small>'+esc(readiness)+' · '+esc(bias)+' · لا يوجد تنفيذ أو إرسال أوامر.</small></div><span class="rxsuite-tag '+readinessClass+'">'+esc(readiness)+'</span></div>'+
         '<div class="rxsuite-row"><div><b>Prepared order</b><small>'+esc(textOrder)+'</small></div><button id="rx-oc" class="rxsuite-copy">نسخ</button></div>'+
-        '<div class="rxsuite-row"><div><b>Risk amount</b><small>'+ (riskAmount===null?'لم يُدخل حجم كمية.':num(riskAmount,8)) +'</small></div><span class="rxsuite-tag rxsuite-safe">NO EXECUTION</span></div>';
+        '<div class="rxsuite-row"><div><b>Risk amount</b><small>'+ (riskAmount===null?'أدخل الكمية لحساب المخاطرة المالية.':num(riskAmount,8)) +'</small></div><span class="rxsuite-tag rxsuite-safe">NO EXECUTION</span></div>'+
+        '<div class="rxsuite-row"><small>الحساب تعليمي فقط. تحقق من السيولة والمخاطر يدويًا؛ ليس أمرًا ماليًا ولا ضمانًا للربح.</small></div>';
       root.querySelector('#rx-oc').onclick=async()=>{
         try{await navigator.clipboard.writeText(textOrder);root.querySelector('#rx-oc').textContent='تم النسخ';}
-        catch{root.querySelector('#rx-oc').textContent='انسخ يدويًا';}
+        catch{root.querySelector('#rx-oc').textContent='انسخ النص الظاهر يدويًا';}
       };
     } catch(e) {
       o.innerHTML='<div class="rxsuite-row"><div><b>ORDER NOT READY</b><small>'+esc(e.message)+'</small></div><span class="rxsuite-tag rxsuite-danger">CHECK INPUT</span></div>';
