@@ -165,9 +165,9 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   minLiquidityQuality:58,
   maxSpreadBps:22,
   minDataQuality:70,
-  microScanCandidates:36,
+  microScanCandidates:12,
   rotationReserve:8,
-  deepCandidates:10,
+  deepCandidates:3,
   quietReserve:8,
   microConcurrency:6,
   deepConcurrency:4,
@@ -1151,12 +1151,16 @@ export class EarlyExpansionRadar{
 
   async deepScan(row,fast,marketContext,micro){
     const cfg=this.config,series={'1m':micro.oneMinute,'5m':micro.fiveMinute},sources=[micro.source];
-    for(const tf of ['15m','1h','4h']){
-      const rr=await withRetry(()=>this.rest.klines(row.symbol,tf,{limit:({'15m':cfg.fifteenMinuteKlines,'1h':cfg.oneHourKlines,'4h':cfg.fourHourKlines})[tf]}),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep});
-      series[tf]=rr.candles;sources.push(rr.source);
-    }
-    const dd=await withRetry(()=>this.rest.depth(row.symbol,100),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep});
-    sources.push(dd.source);
+    // These reads are independent. Start them together; the shared weighted REST
+    // scheduler still enforces the process-wide public-Binance budget.
+    const [r15,r1h,r4h,dd]=await Promise.all([
+      withRetry(()=>this.rest.klines(row.symbol,'15m',{limit:cfg.fifteenMinuteKlines}),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep}),
+      withRetry(()=>this.rest.klines(row.symbol,'1h',{limit:cfg.oneHourKlines}),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep}),
+      withRetry(()=>this.rest.klines(row.symbol,'4h',{limit:cfg.fourHourKlines}),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep}),
+      withRetry(()=>this.rest.depth(row.symbol,100),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep})
+    ]);
+    series['15m']=r15.candles;series['1h']=r1h.candles;series['4h']=r4h.candles;
+    sources.push(r15.source,r1h.source,r4h.source,dd.source);
     return buildEarlyExpansionEvidence({series,ticker:row,depth:dd.data,marketContext,fastContext:fast,now:this.clock(),config:cfg,historicalReplay:false,sourceList:sources});
   }
   async tick({quote=this.config.quote}={}){
