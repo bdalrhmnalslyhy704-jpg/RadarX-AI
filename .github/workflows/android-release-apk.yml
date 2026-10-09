@@ -121,7 +121,7 @@ jobs:
           test -d "$ANDROID_SDK_ROOT/platforms/android-35"
 
       - name: Verify Railway backend and Radar 8 public contract
-        timeout-minutes: 3
+        timeout-minutes: 5
         env:
           RADAR8_JSON: ${{ runner.temp }}/radar8.json
         run: |
@@ -129,28 +129,43 @@ jobs:
           BASE="https://radarx-ai-triple-production.up.railway.app"
           HEALTH="$(curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/healthz.json" -w "%{http_code}" "$BASE/healthz")"
           READY="$(curl --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/readyz.json" -w "%{http_code}" "$BASE/readyz")"
-          RADAR8="$(curl --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 30 --silent --show-error -o "$RADAR8_JSON" -w "%{http_code}" "$BASE/api/early-expansion-radar?quote=USDT&limit=100")"
           test "$HEALTH" = "200"
           case "$READY" in 200|503) ;; *) echo "::error::Unexpected readyz status: $READY"; exit 1 ;; esac
-          case "$RADAR8" in 200|503) ;; *) echo "::error::Unexpected Radar 8 status: $RADAR8"; exit 1 ;; esac
           export READY_STATUS="$READY"
-          node --input-type=module <<'NODE'
+
+          # Do not publish an APK while Radar 8 is merely instantiated but has
+          # zero market coverage. Give a fresh Railway deploy time to complete
+          # its first real Spot-USDT scan before validating the contract.
+          VERIFIED=false
+          for attempt in $(seq 1 18); do
+            RADAR8="$(curl --location --connect-timeout 10 --max-time 25 --silent --show-error -o "$RADAR8_JSON" -w "%{http_code}" "$BASE/api/early-expansion-radar?quote=USDT&limit=100" || true)"
+            if [ "$RADAR8" = "200" ] && node --input-type=module <<'NODE'
           import fs from 'node:fs';
           const body = JSON.parse(fs.readFileSync(process.env.RADAR8_JSON, 'utf8'));
-          if (body.schema_version !== 'RADAR8_V2') throw new Error('RADAR8_SCHEMA_VERSION_INVALID');
-          if (body.radar !== 'EARLY_EXPANSION_RADAR') throw new Error('RADAR8_NAME_INVALID');
-          if (!body.meta || typeof body.meta.live !== 'boolean') throw new Error('RADAR8_META_LIVE_MISSING');
-          if (body.meta.paper_trading !== true) throw new Error('PAPER_TRADING_INVARIANT_FAILED');
-          if (body.meta.real_order_execution !== false) throw new Error('REAL_ORDER_EXECUTION_INVARIANT_FAILED');
-          if (body.meta.confidence_score !== 'UNKNOWN') throw new Error('CONFIDENCE_SCORE_INVARIANT_FAILED');
+          const problems = [];
+          if (body.schema_version !== 'RADAR8_V2') problems.push('RADAR8_SCHEMA_VERSION_INVALID');
+          if (body.radar !== 'EARLY_EXPANSION_RADAR') problems.push('RADAR8_NAME_INVALID');
+          if (body.meta?.live !== true) problems.push('RADAR8_NOT_LIVE');
+          if (body.meta?.paper_trading !== true) problems.push('PAPER_TRADING_INVARIANT_FAILED');
+          if (body.meta?.real_order_execution !== false) problems.push('REAL_ORDER_EXECUTION_INVARIANT_FAILED');
+          if (body.meta?.confidence_score !== 'UNKNOWN') problems.push('CONFIDENCE_SCORE_INVARIANT_FAILED');
+          if (body.monitoring?.running !== true) problems.push('RADAR8_MONITOR_NOT_RUNNING');
           for (const key of ['expected_total','received_total','missing_ticker_total','eligible_total','fast_scanned_total','scanned_total','deep_scanned_total','skipped_total','failed_total','coverage_ratio','deep_coverage_ratio']) {
-            if (!Object.hasOwn(body.universe ?? {}, key)) throw new Error('RADAR8_COVERAGE_FIELD_MISSING:'+key);
+            if (!Object.hasOwn(body.universe ?? {}, key)) problems.push('RADAR8_COVERAGE_FIELD_MISSING:'+key);
           }
           for (const key of ['running','last_scan_at','failed_total','poll_ms','micro_scan_candidates','micro_concurrency','rotation_reserve','quiet_reserve','deep_candidates','deep_concurrency']) {
-            if (!Object.hasOwn(body.monitoring ?? {}, key)) throw new Error('RADAR8_MONITORING_FIELD_MISSING:'+key);
+            if (!Object.hasOwn(body.monitoring ?? {}, key)) problems.push('RADAR8_MONITORING_FIELD_MISSING:'+key);
           }
           for (const key of ['requested','completed','error']) {
-            if (!Object.hasOwn(body.scan ?? {}, key)) throw new Error('RADAR8_SCAN_FIELD_MISSING:'+key);
+            if (!Object.hasOwn(body.scan ?? {}, key)) problems.push('RADAR8_SCAN_FIELD_MISSING:'+key);
+          }
+          if (!(Number(body.universe?.expected_total) > 0)) problems.push('RADAR8_EXPECTED_UNIVERSE_EMPTY');
+          if (!(Number(body.universe?.received_total) > 0)) problems.push('RADAR8_RECEIVED_TICKERS_EMPTY');
+          if (!(Number(body.universe?.coverage_ratio) >= 0.95)) problems.push('RADAR8_COVERAGE_BELOW_95_PERCENT');
+          if (!(Number(body.monitoring?.last_scan_at) > 0)) problems.push('RADAR8_HAS_NOT_COMPLETED_A_SCAN');
+          if (problems.length) {
+            console.log('Radar 8 warm-up/integration check not ready:', problems.join(','));
+            process.exit(1);
           }
           console.log(JSON.stringify({
             schema_version: body.schema_version,
@@ -165,6 +180,18 @@ jobs:
             readyz_http_status: Number(process.env.READY_STATUS)
           }, null, 2));
           NODE
+            then
+              VERIFIED=true
+              break
+            fi
+            echo "Radar 8 has not completed a valid market scan yet (attempt $attempt/18; HTTP ${RADAR8:-no response})."
+            sleep 5
+          done
+          if [ "$VERIFIED" != "true" ]; then
+            echo "::error::Radar 8 did not pass the live market-coverage check; refusing to publish this APK."
+            exit 1
+          fi
+
       - name: Verify full-radar Triple backend contract
         timeout-minutes: 4
         run: |
