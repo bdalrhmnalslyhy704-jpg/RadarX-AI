@@ -183,13 +183,14 @@ function reasonList(alert){
   const reasons=[...list(alert?.reason_codes),...list(alert?.reasons),...list(alert?.falcon_eye?.reasons)];
   return [...new Set(reasons.map(x=>typeof x==='string'?x:String(x?.code||x?.reason||'')).filter(Boolean))].slice(0,24);
 }
-function fieldCoverage({radar,symbol,stage,entry,detectedAt,marketRegime,metrics,reasons,fingerprintReady}){
+function fieldCoverage({radar,symbol,stage,entry,detectedAt,signalScore,marketRegime,metrics,reasons,fingerprintReady}){
   const fields={
     radar:Boolean(radar),
     symbol:Boolean(symbol),
     signal_type:WATCHED_STAGES.has(stage)&&stage!=='DATA_INSUFFICIENT',
     entry_price:Number.isFinite(entry)&&entry>0,
     detected_at:Number.isFinite(detectedAt)&&detectedAt>0,
+    signal_score:Number.isFinite(signalScore),
     daily_change_pct:metrics.daily_change_pct!==null,
     return_5m_pct:metrics.return_5m_pct!==null,
     return_10m_pct:metrics.return_10m_pct!==null,
@@ -229,12 +230,12 @@ function makeSignal(alert,now,marketContext){
   const r9=object(alert?.falcon_eye);
   const fingerprintReady=object(r9.pre_expansion_fingerprint).data_ready===true;
   const reasons=reasonList(alert);
-  const coverage=fieldCoverage({radar,symbol,stage,entry,detectedAt,marketRegime,metrics:m,reasons,fingerprintReady});
-  const quality=coverage.score;
-  const reportedQuality=num(alert?.data_quality??alert?.falcon_eye?.data_quality);
   const signalScore=num(alert?.early_expansion_score??alert?.score??alert?.signal_score??
     alert?.opportunity_score??alert?.potential_score??alert?.falcon_eye?.early_expansion_score??
     alert?.falcon_eye?.score??alert?.falcon_eye?.metrics?.score);
+  const coverage=fieldCoverage({radar,symbol,stage,entry,detectedAt,signalScore,marketRegime,metrics:m,reasons,fingerprintReady});
+  const quality=coverage.score;
+  const reportedQuality=num(alert?.data_quality??alert?.falcon_eye?.data_quality);
   const buildVersion='Build 224';
   const buildCommit=String(process.env.RAILWAY_GIT_COMMIT_SHA??process.env.GITHUB_SHA??'').trim()||null;
   const buildBranch=String(process.env.RAILWAY_GIT_BRANCH??'').trim()||null;
