@@ -514,58 +514,109 @@ function horizonStats(rows,h){
   };
 }
 
+function coverageSummary(rows){
+  const measured=rows.filter(r=>r?.data_quality_source==='NORMALIZED_REQUIRED_FIELD_COVERAGE'&&Number.isFinite(num(r.data_quality,null)));
+  const missing={};
+  for(const row of measured){
+    for(const field of list(row.missing_required_fields)){
+      const key=String(field||'').trim();
+      if(!key)continue;
+      missing[key]=(missing[key]||0)+1;
+    }
+  }
+  return {
+    coverage_records:measured.length,
+    avg_field_coverage_pct:measured.length?Number(average(measured.map(r=>num(r.data_quality,0))).toFixed(2)):null,
+    missing_field_counts:Object.fromEntries(Object.entries(missing).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])))
+  };
+}
+
 function summarizeGroup(rows){
-  const measurable=rows.filter(r=>r.evaluation_eligible===true&&PERFORMANCE_STAGES.has(r.signal_type));
+  const coverage=coverageSummary(rows);
+  const eligible=rows.filter(r=>r.evaluation_eligible===true);
+  const measurable=eligible.filter(r=>PERFORMANCE_STAGES.has(r.signal_type));
   const completed4h=measurable.filter(r=>r.marks?.['4h']&&
     ['NEAR_TARGET','HISTORICAL_CLOSED_OHLC'].includes(r.marks['4h'].sample_quality)&&
     r.excursions?.['4h']?.complete===true);
+  const completed24h=eligible.filter(r=>r.marks?.['24h']&&
+    ['NEAR_TARGET','HISTORICAL_CLOSED_OHLC'].includes(r.marks['24h'].sample_quality)&&
+    r.excursions?.['24h']?.complete===true);
   const impacts=completed4h.filter(r=>num(r.excursions?.['4h']?.max_favorable_pct,-Infinity)>=3).length;
   const falseSignals=completed4h.filter(r=>num(r.excursions?.['4h']?.max_favorable_pct,-Infinity)<3).length;
   const timeTo3=completed4h.filter(r=>r.first_3pct_at&&r.first_3pct_at<=r.detected_at+4*60*60_000).map(r=>(r.first_3pct_at-r.detected_at)/60_000);
   const falseKnown=measurable.filter(r=>r.signal_type==='BREAKOUT_DEVELOPING'&&r.false_breakout!==null&&r.false_breakout!==undefined);
-  const late=measurable.filter(r=>r.already_extended_at_detection===true).length;
-  const drawdowns=rows.filter(r=>r.evaluation_eligible===true&&r.excursions?.['24h']?.complete===true).map(r=>num(r.excursions?.['24h']?.max_adverse_pct,null)).filter(x=>x!==null);
+  const late=completed4h.filter(r=>r.already_extended_at_detection===true).length;
+  const detectionMeasured=completed4h.filter(r=>typeof r.detected_before_move==='boolean');
+  const excursions4h=completed4h.map(r=>r.excursions['4h']).filter(Boolean);
+  const excursions24h=completed24h.map(r=>r.excursions['24h']).filter(Boolean);
+  const favorable4h=excursions4h.map(x=>num(x.max_favorable_pct,null)).filter(x=>x!==null);
+  const adverse4h=excursions4h.map(x=>num(x.max_adverse_pct,null)).filter(x=>x!==null);
+  const favorable24h=excursions24h.map(x=>num(x.max_favorable_pct,null)).filter(x=>x!==null);
+  const adverse24h=excursions24h.map(x=>num(x.max_adverse_pct,null)).filter(x=>x!==null);
   const ratesReady=completed4h.length>=30;
+  const extremes24Ready=completed24h.length>=30;
+  const markRecords=eligible.filter(r=>HORIZONS.every(([h])=>Boolean(r.marks?.[h])));
+  const missingMarkRecords=eligible.filter(r=>!HORIZONS.every(([h])=>Boolean(r.marks?.[h])));
+  const lateSampleRecords=eligible.filter(r=>HORIZONS.some(([h])=>r.marks?.[h]?.sample_quality==='LATE_SAMPLE'));
+  const detectionReady=ratesReady&&detectionMeasured.length>=30;
   return {
     records:rows.length,
-    eligible_records:rows.filter(r=>r.evaluation_eligible===true).length,
-    excluded_incomplete_records:rows.filter(r=>r.evaluation_eligible!==true).length,
+    eligible_records:eligible.length,
+    excluded_incomplete_records:rows.length-eligible.length,
+    ...coverage,
     measurable_signals:measurable.length,
     detected_before_move_count:measurable.filter(r=>r.detected_before_move===true).length,
-    detected_before_move_pct:measurable.length>=30?percent(measurable.filter(r=>r.detected_before_move===true).length,measurable.filter(r=>typeof r.detected_before_move==='boolean').length):null,
+    detected_before_move_pct:detectionReady?percent(detectionMeasured.filter(r=>r.detected_before_move===true).length,detectionMeasured.length):null,
     detected_after_move_count:measurable.filter(r=>r.detected_before_move===false).length,
-    detected_after_move_pct:measurable.length>=30?percent(measurable.filter(r=>r.detected_before_move===false).length,measurable.filter(r=>typeof r.detected_before_move==='boolean').length):null,
+    detected_after_move_pct:detectionReady?percent(detectionMeasured.filter(r=>r.detected_before_move===false).length,detectionMeasured.length):null,
     matured_4h:completed4h.length,
+    matured_24h:completed24h.length,
     meaningful_move_4h_pct:ratesReady?percent(impacts,completed4h.length):null,
     false_signal_rate_4h_pct:ratesReady?percent(falseSignals,completed4h.length):null,
-    avg_time_to_plus3_pct_within_4h_minutes:timeTo3.length>=30?Number(average(timeTo3).toFixed(2)):null,
+    time_to_plus3_count:timeTo3.length,
+    avg_time_to_plus3_pct_within_4h_minutes:ratesReady&&timeTo3.length>=30?Number(average(timeTo3).toFixed(2)):null,
     false_breakout_known:falseKnown.length,
     false_breakout_rate_pct:falseKnown.length>=30?percent(falseKnown.filter(r=>r.false_breakout===true).length,falseKnown.length):null,
-    already_extended_count:late,
-    already_extended_pct:measurable.length>=30?percent(late,measurable.length):null,
-    max_adverse_drawdown_pct:drawdowns.length?Number(Math.min(...drawdowns).toFixed(4)):null,
+    already_extended_count:measurable.filter(r=>r.already_extended_at_detection===true).length,
+    already_extended_pct:detectionReady?percent(late,detectionMeasured.length):null,
+    max_favorable_move_4h_pct:ratesReady&&favorable4h.length?Number(Math.max(...favorable4h).toFixed(4)):null,
+    max_adverse_move_4h_pct:ratesReady&&adverse4h.length?Number(Math.min(...adverse4h).toFixed(4)):null,
+    max_favorable_move_24h_pct:extremes24Ready&&favorable24h.length?Number(Math.max(...favorable24h).toFixed(4)):null,
+    max_adverse_drawdown_24h_pct:extremes24Ready&&adverse24h.length?Number(Math.min(...adverse24h).toFixed(4)):null,
+    max_adverse_drawdown_pct:extremes24Ready&&adverse24h.length?Number(Math.min(...adverse24h).toFixed(4)):null,
+    complete_point_mark_records:markRecords.length,
+    pending_records:missingMarkRecords.length,
+    late_sample_records:lateSampleRecords.length,
+    extremes_status:extremes24Ready?'READY_N_GE_30_MATURED_24H':
+      (ratesReady?'FOUR_HOUR_EXTREMES_READY_24H_PENDING':'INSUFFICIENT_MATURED_SAMPLE'),
     horizons:Object.fromEntries(HORIZONS.map(([h])=>[h,horizonStats(rows,h)])),
-    sample_warning:completed4h.length<30?'SMALL_SAMPLE_LESS_THAN_30_MATURED_4H_SIGNALS':null
+    sample_warning:!ratesReady?'SMALL_SAMPLE_LESS_THAN_30_MATURED_4H_SIGNALS':null
   };
 }
 
 function buildRangingHistoricalSample(records){
-  const candidates=records.filter(r=>r.evaluation_eligible===true&&r.market_regime==='RANGING'&&
+  const candidates=records.filter(r=>r.evaluation_eligible===true&&normalizeRegime(r.market_regime)==='RANGING'&&
     r.historical_evaluation===true&&PERFORMANCE_STAGES.has(r.signal_type)&&
     HORIZONS.every(([h])=>r.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC'&&
       r.excursions?.[h]?.source==='HISTORICAL_CLOSED_OHLC'&&r.excursions?.[h]?.complete===true));
-  const positive=candidates.filter(r=>num(r.excursions?.['4h']?.max_favorable_pct,-Infinity)>=3);
-  const negative=candidates.filter(r=>num(r.excursions?.['4h']?.max_favorable_pct,-Infinity)<3&&
-    num(r.excursions?.['4h']?.max_adverse_pct,0)<=-1);
-  const neutral=candidates.length-positive.length-negative.length;
-  const ready=positive.length>=30&&negative.length>=30;
+  const classify=rows=>{
+    const positive=rows.filter(r=>num(r.excursions?.['4h']?.max_favorable_pct,-Infinity)>=3);
+    const negative=rows.filter(r=>num(r.excursions?.['4h']?.max_favorable_pct,-Infinity)<3&&
+      num(r.excursions?.['4h']?.max_adverse_pct,0)<=-1);
+    return {complete_historical_records:rows.length,positive_cases:positive.length,negative_cases:negative.length,
+      neutral_cases:rows.length-positive.length-negative.length,
+      sample_ready:positive.length>=30&&negative.length>=30};
+  };
+  const overall=classify(candidates);
+  const byRadar=Object.fromEntries(['RADAR_8','RADAR_9'].map(radar=>[radar,classify(candidates.filter(r=>r.radar===radar))]));
+  const readyForComparison=['RADAR_8','RADAR_9'].every(r=>byRadar[r].positive_cases>=30&&byRadar[r].negative_cases>=30);
   return {
     regime:'RANGING',source:'ARCHIVED_SIGNALS_REPLAYED_AGAINST_CLOSED_OHLC',
     label_thresholds:{positive_max_favorable_4h_pct_gte:3,negative_max_favorable_4h_pct_lt:3,negative_max_adverse_4h_pct_lte:-1},
-    complete_historical_records:candidates.length,
-    positive_cases:positive.length,negative_cases:negative.length,neutral_cases:neutral,
-    ready_for_comparison:ready,
-    sample_warning:ready?null:'NEED_AT_LEAST_30_POSITIVE_AND_30_NEGATIVE_COMPLETE_RANGING_CASES',
+    ...overall,by_radar:byRadar,
+    ready_for_comparison:readyForComparison,
+    comparison_warning:readyForComparison?null:'NEED_30_POSITIVE_AND_30_NEGATIVE_COMPLETE_RANGING_CASES_PER_RADAR',
+    sample_warning:overall.sample_ready?null:'NEED_AT_LEAST_30_POSITIVE_AND_30_NEGATIVE_COMPLETE_RANGING_CASES',
     case_source:'REAL_ARCHIVED_SIGNAL_TIMESTAMPS_AND_CLOSED_OHLC_ONLY'
   };
 }
@@ -578,14 +629,19 @@ export function buildPreExpansionOutcomeReport(input={}){
     return Object.fromEntries(Object.entries(groups).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,summarizeGroup(v)]));
   };
   const eligible=records.filter(r=>r.evaluation_eligible===true);
-  const coverageValues=records.map(r=>num(r.data_quality,null)).filter(x=>x!==null);
+  const coverage=coverageSummary(records);
+  const pendingRecords=eligible.filter(r=>!HORIZONS.every(([h])=>Boolean(r.marks?.[h])));
+  const completePointMarkRecords=eligible.filter(r=>HORIZONS.every(([h])=>Boolean(r.marks?.[h])));
+  const lateSampleRecords=eligible.filter(r=>HORIZONS.some(([h])=>r.marks?.[h]?.sample_quality==='LATE_SAMPLE'));
   return {
-    version:'PRE_EXPANSION_OUTCOME_REPORT_V2',as_of:new Date(num(input.now,Date.now())).toISOString(),
+    version:'PRE_EXPANSION_OUTCOME_REPORT_V3',as_of:new Date(num(input.now,Date.now())).toISOString(),
     scope:{radars:['RADAR_8','RADAR_9'],stages:[...WATCHED_STAGES],horizons_ms:Object.fromEntries(HORIZONS.map(([h,ms])=>[h,ms])),impact_thresholds_pct:Object.fromEntries(HORIZONS.map(([h,,threshold])=>[h,threshold])),mfe_mae_source:'Per horizon: SAMPLED_SPOT_TICKERS or HISTORICAL_CLOSED_OHLC, explicitly labelled',minimum_cohort_for_rates:30,no_real_orders:true},
     total_records:records.length,eligible_records:eligible.length,
     excluded_incomplete_records:records.length-eligible.length,
-    average_field_coverage_pct:coverageValues.length?Number(average(coverageValues).toFixed(2)):null,
-    pending_records:records.filter(r=>r.evaluation_eligible===true&&r.outcome_status==='PENDING').length,
+    ...coverage,
+    pending_records:pendingRecords.length,
+    complete_point_mark_records:completePointMarkRecords.length,
+    late_sample_records:lateSampleRecords.length,
     ranging_historical_sample:buildRangingHistoricalSample(records),
     groups:{
       by_radar:groupBy(records,r=>r.radar),
@@ -619,14 +675,24 @@ export async function maybeLogPreExpansionOutcomeReport(store,{logger=console,no
   if(!report)return {logged:false,reason:'THROTTLED_OR_NO_RECORDS'};
   const compact={
     event:'PRE_EXPANSION_OUTCOME_REPORT',
-    version:report.version,as_of:report.as_of,total_records:report.total_records,pending_records:report.pending_records,
+    version:report.version,as_of:report.as_of,total_records:report.total_records,
+    eligible_records:report.eligible_records,excluded_incomplete_records:report.excluded_incomplete_records,
+    coverage_records:report.coverage_records,average_field_coverage_pct:report.avg_field_coverage_pct,
+    missing_field_counts:report.missing_field_counts,pending_records:report.pending_records,
+    complete_point_mark_records:report.complete_point_mark_records,late_sample_records:report.late_sample_records,
+    ranging_historical_sample:report.ranging_historical_sample,
     thresholds:report.scope.impact_thresholds_pct,
     by_radar:Object.fromEntries(Object.entries(report.groups.by_radar).map(([k,v])=>[k,{
       records:v.records,matured_4h:v.matured_4h,meaningful_move_4h_pct:v.meaningful_move_4h_pct,
       false_signal_rate_4h_pct:v.false_signal_rate_4h_pct,avg_time_to_plus3_pct_within_4h_minutes:v.avg_time_to_plus3_pct_within_4h_minutes,
       false_breakout_rate_pct:v.false_breakout_rate_pct,already_extended_pct:v.already_extended_pct,
       detected_before_move_pct:v.detected_before_move_pct,detected_after_move_pct:v.detected_after_move_pct,
-      max_adverse_drawdown_pct:v.max_adverse_drawdown_pct,sample_warning:v.sample_warning,
+      max_favorable_move_4h_pct:v.max_favorable_move_4h_pct,max_adverse_move_4h_pct:v.max_adverse_move_4h_pct,
+      max_favorable_move_24h_pct:v.max_favorable_move_24h_pct,max_adverse_drawdown_24h_pct:v.max_adverse_drawdown_24h_pct,
+      avg_field_coverage_pct:v.avg_field_coverage_pct,coverage_records:v.coverage_records,
+      missing_field_counts:v.missing_field_counts,matured_24h:v.matured_24h,
+      complete_point_mark_records:v.complete_point_mark_records,pending_records:v.pending_records,
+      late_sample_records:v.late_sample_records,extremes_status:v.extremes_status,sample_warning:v.sample_warning,
       horizons:v.horizons
     }])),
     by_stage:report.groups.by_stage,
