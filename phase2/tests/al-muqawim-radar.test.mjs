@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {buildAlMuqawimAnalysis,AlMuqawimRadar} from '../core/al-muqawim-radar.mjs';
 
-function makeSeries(count,tfMs,trend=1){
-  const now=Date.now();
+function makeSeries(count,tfMs,trend=1,anchor=Date.now()){
+  const now=anchor;
   const rows=[];
   const pattern=[0,2,1,-1];
   for(let i=0;i<count;i++){
@@ -21,9 +21,9 @@ function makeSeries(count,tfMs,trend=1){
 test('Al Muqawim confirms aligned bullish multi-timeframe structure',()=>{
   const now=Date.now();
   const series={
-    '4h':makeSeries(100,4*60*60*1000,0.04),
-    '1h':makeSeries(120,60*60*1000,0.04),
-    '15m':makeSeries(160,15*60*1000,0.04)
+    '4h':makeSeries(100,4*60*60*1000,0.04,now),
+    '1h':makeSeries(120,60*60*1000,0.04,now),
+    '15m':makeSeries(160,15*60*1000,0.04,now)
   };
   const a=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:105.46,priceChange24h:1},now,{maPeriod:50});
   assert.equal(a.direction,'UP');
@@ -38,9 +38,9 @@ test('Al Muqawim confirms aligned bullish multi-timeframe structure',()=>{
 test('Al Muqawim flags a lower-timeframe conflict',()=>{
   const now=Date.now();
   const series={
-    '4h':makeSeries(100,4*60*60*1000,1),
-    '1h':makeSeries(120,60*60*1000,1),
-    '15m':makeSeries(160,15*60*1000,-1)
+    '4h':makeSeries(100,4*60*60*1000,1,now),
+    '1h':makeSeries(120,60*60*1000,1,now),
+    '15m':makeSeries(160,15*60*1000,-1,now)
   };
   const a=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:90},now,{maPeriod:50});
   assert.equal(a.direction,'UP');
@@ -52,9 +52,9 @@ test('Al Muqawim flags a lower-timeframe conflict',()=>{
 test('Al Muqawim rejects a technically bullish but already-extended entry',()=>{
   const now=Date.now();
   const series={
-    '4h':makeSeries(100,4*60*60*1000,1),
-    '1h':makeSeries(120,60*60*1000,1),
-    '15m':makeSeries(160,15*60*1000,1)
+    '4h':makeSeries(100,4*60*60*1000,1,now),
+    '1h':makeSeries(120,60*60*1000,1,now),
+    '15m':makeSeries(160,15*60*1000,1,now)
   };
   const a=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:105.46,priceChange24h:12},now,{maPeriod:50});
   assert.equal(a.direction,'UP');
