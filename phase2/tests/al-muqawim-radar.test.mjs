@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildAlMuqawimAnalysis} from '../core/al-muqawim-radar.mjs';
+import {buildAlMuqawimAnalysis,AlMuqawimRadar} from '../core/al-muqawim-radar.mjs';
 
 function makeSeries(count,tfMs,trend=1){
   const now=Date.now();
@@ -60,4 +60,14 @@ test('Al Muqawim rejects a technically bullish but already-extended entry',()=>{
   assert.equal(a.direction,'UP');
   assert.equal(a.eligible,false);
   assert.ok(a.reasons.some(x=>String(x).includes('ممتدة')));
+});
+
+test('Al Muqawim preserves its rotation budget when the top three overlap patrol symbols',()=>{
+  const now=Date.now();
+  const radar=new AlMuqawimRadar({rest:{},store:{},config:{batchSize:5},clock:()=>now});
+  radar.universe=Array.from({length:16},(_,i)=>`M${String(i).padStart(2,'0')}USDT`);
+  const rows=radar.universe.map((symbol,i)=>({symbol,lastPrice:1+i,priceChange24h:12-i,quoteVolume24h:2_000_000+i}));
+  const selected=radar.selectBatch(rows);
+  assert.equal(selected.length,8);
+  assert.equal(new Set(selected.map(x=>x.symbol)).size,8);
 });
