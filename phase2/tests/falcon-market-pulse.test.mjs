@@ -25,3 +25,28 @@ test('fast pulse preserves broad market coverage without requiring deep candles'
   assert.equal(out.coverage,100);
   assert.equal(h.size,100);
 });
+
+
+test('market pulse keeps unknown daily move unknown and exposes quiet-base proxies only when history supports them',()=>{
+  const history=new Map(),t=2_000_000_000_000;
+  const prices=[100,100.5,99.8,100.4,100.0,100.1,100.2,100.25];
+  let last=null;
+  for(let i=0;i<prices.length;i++){
+    const row={...base('QUIETUSDT',prices[i],1_000_000+i*430,10_000+i*4),priceChange24h:0.5};
+    last=updateMarketPulseHistory([row],history,t+i*30_000).rows[0].market_pulse;
+  }
+  assert.equal(last.ready,true);
+  assert.ok(Number.isFinite(last.compressionScore));
+  assert.ok(Number.isFinite(last.higherLowScore));
+  assert.ok(Number.isFinite(last.participationScore));
+  assert.ok(last.compressionScore>=78);
+  assert.ok(last.higherLowScore>=70);
+  assert.ok(last.participationScore>=58);
+  assert.equal(last.fast_trigger,false);
+
+  const missing=updateMarketPulseHistory([{
+    symbol:'UNKNOWN24HUSDT',lastPrice:1,quoteVolume24h:100_000,tradeCount24h:1000,priceChange24h:null,
+    highPrice24h:1.1,lowPrice24h:.9
+  }],new Map(),t).rows[0].market_pulse;
+  assert.equal(missing.priceChange24h,null);
+});
