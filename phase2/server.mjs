@@ -58,12 +58,17 @@ export async function startServer({
     signal_id:row?.signal_id,radar:row?.radar,symbol:row?.symbol,detected_at:row?.detected_at,
     marks:row?.marks,horizon_status:row?.horizon_status
   })))).digest('hex');
+  const archiveAnchor=[...archiveRecords].sort((a,b)=>Number(a?.detected_at||0)-Number(b?.detected_at||0))[0]||null;
+  const archiveLatest=archiveRecords.reduce((latest,row)=>
+    Number(row?.detected_at||0)>Number(latest?.detected_at||0)?row:latest,null);
   logger.info?.('[RADARX_ARCHIVE_READY] '+JSON.stringify({
     build_version:'Build 224',build_commit:process.env.RAILWAY_GIT_COMMIT_SHA||process.env.GITHUB_SHA||null,
     build_branch:process.env.RAILWAY_GIT_BRANCH||null,service_id:process.env.RAILWAY_SERVICE_ID||null,
     deployment_id:process.env.RAILWAY_DEPLOYMENT_ID||null,store_dir:store.dir,
     outcome_store_file:store.files.preExpansionOutcomes,volume_mount_path:onRailway?'/data':null,
     volume_mount_detected:archiveVolumeMounted,persisted_signal_count:archiveRecords.length,
+    oldest_signal_id:archiveAnchor?.signal_id||null,oldest_signal_detected_at:archiveAnchor?.detected_at||null,
+    latest_signal_id:archiveLatest?.signal_id||null,latest_signal_detected_at:archiveLatest?.detected_at||null,
     historical_complete_count:archiveRecords.filter(row=>row?.outcome_status==='COMPLETE'&&row?.historical_evaluation===true).length,
     incomplete_count:archiveRecords.filter(row=>row?.outcome_status==='INCOMPLETE').length,
     migrated_legacy_files:store.migratedFiles,records_sha256:archiveDigest
