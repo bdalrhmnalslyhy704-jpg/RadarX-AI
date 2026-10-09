@@ -1,5 +1,5 @@
 import {CONFIG as PHASE1_CONFIG,evaluateSymbolSnapshot} from '../../phase1/radarx-phase1-engine.mjs';
-import {assessDataGate,assessLiquidity,sourceIsLive} from './data-quality.mjs';
+import {assessDataGate,assessLiquidity,sourceIsLive,latestClosed} from './data-quality.mjs';
 import {EVENT_CLASS,marketEventClass} from './event-types.mjs';
 import {updateSignalOutcomes,recordSignalPrediction} from './outcome-calibrator.mjs';
 
@@ -7,6 +7,10 @@ export const READ_ONLY_POLICY=Object.freeze({
   market:'SPOT',paper_trading:true,real_order_execution:false,allows_trade_endpoints:false,
   allows_withdrawals:false,allows_user_data:false
 });
+function signalTimeFallback(signal,dataGate){
+  return signal?.candle?.close_time??dataGate?.latestClosed15m??null;
+}
+
 export const defaultSettings=()=>({
   enabled:true,symbols:['BTCUSDT','ETHUSDT'],timeframes:['15m'],
   minDataQuality:70,minLiquidityQuality:60,signalTypes:['ENTRY_CANDIDATE','CONFIRMED']
@@ -26,9 +30,19 @@ export class SignalService{
       bookRaw:input.bookRaw,ticker24hRaw:input.ticker24hRaw,source:input.source||'UNKNOWN',now},{config:engineConfig});
     let calibration=null;
     try{calibration=await updateSignalOutcomes(this.store,{symbol:input.symbol,price:r.signal?.price?.reference,now});}catch{}
+    const triggerCandle=latestClosed(Array.isArray(input.series15m)?input.series15m:[]);
     const signal={...r.signal,event_class:eventClass,scores:{...r.signal.scores,data_quality:dg.quality,liquidity_quality:liq.quality,confidence_score:'UNKNOWN'},
-      data_status:{...r.signal.data_status,source:input.source||'UNKNOWN',stale:dg.staleMs>this.config.monitoring.maxStaleTriggerMs,
-        gaps:Boolean(input.unresolvedGap)||!dg.series.v4.valid||!dg.series.v1.valid||!dg.series.v15.valid,future_data_detected:dg.futureIssues.length>0},
+      data_status:{...r.signal.data_status,status:dg.status,source:input.source||'UNKNOWN',
+        source_time:triggerCandle?.closeTime??signalTimeFallback(r.signal,dg),
+        open_time:triggerCandle?.openTime??null,close_time:triggerCandle?.closeTime??null,
+        received_at:Number.isFinite(Number(triggerCandle?.receivedAt))?Number(triggerCandle.receivedAt):null,
+        age_seconds:Number.isFinite(Number(dg.staleMs))?Math.max(0,Math.round(Number(dg.staleMs)/1000)):null,
+        timeframe:triggerCandle?.timeframe||r.signal.candle?.timeframe||'15m',
+        candle_closed:Boolean(triggerCandle&&Number(triggerCandle.closeTime)<=now),
+        latest_series_candle_closed:(()=>{const latest=Array.isArray(input.series15m)?input.series15m.at(-1):null;return Boolean(latest&&latest.closed!==false&&Number(latest.closeTime)<=now);})(),
+        data_quality:dg.quality,stale:dg.staleMs>this.config.monitoring.maxStaleTriggerMs,
+        gaps:Boolean(input.unresolvedGap)||!dg.series.v4.valid||!dg.series.v1.valid||!dg.series.v15.valid,
+        future_data_detected:dg.futureIssues.length>0},
       paper_trade:{enabled:true,real_order_execution:false},learning_feedback:calibration};
     if(typeof this.store.putSignalSnapshot==='function'){
       try{await this.store.putSignalSnapshot(input.symbol,{symbol:input.symbol,processed_at:now,source_time:signal.candle?.close_time??null,signal,strategies:r.strategies});}catch{}

@@ -89,7 +89,9 @@ test('TEST_FIXTURE: data gate classifies live, partial, stale, unavailable and o
   assert.equal(assessDataGate({...base,now:staleNow,maxStaleTriggerMs:60000}).status,DATA_STATUS.STALE);
 
   assert.equal(assessDataGate({...base,series15m:[],minDataQuality:0}).status,DATA_STATUS.UNAVAILABLE);
+  assert.equal(assessDataGate({...base,now:staleNow,maxStaleTriggerMs:60000,sourceLive:false}).status,DATA_STATUS.STALE);
   assert.equal(assessDataGate({...base,sourceLive:false}).status,DATA_STATUS.OFFLINE);
+  assert.equal(assessDataGate({...base,series15m:[],sourceLive:false}).status,DATA_STATUS.OFFLINE);
 
   assert.equal(assessDataGate({...base,sourceLive:false}).allowed,false);
   assert.equal(assessDataGate({...base,series15m:gap}).allowed,false);
