@@ -360,13 +360,13 @@ export class FalconEyeRadar {
     this.clock=typeof clock==='function'?clock:()=>Date.now();
     this.rest=rest;this.futuresRest=futuresRest;this.store=store;this.pushManager=pushManager;this.config={
       quote:'USDT',pollMs:30000,universeRefreshMs:5*60*1000,minQuoteVolume24h:500000,fastMinQuoteVolume24h:200000,
-      scanBatchSize:8,pulseTopCandidates:4,quietCandidates:2,patrolBatchSize:2,deepConcurrency:3,
+      scanBatchSize:8,pulseTopCandidates:3,quietCandidates:2,patrolBatchSize:2,deepScanMinIntervalMs:90_000,deepConcurrency:3,
       alertCooldownMs:45*60*1000,maxAlertsPerHour:3,minScore:78,
       ...config
     };
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
     this.lastScanAt=new Map();this.lastAlertAt=new Map();this.lastFutures=new Map();this.alertTimestamps=[];
-    this.scans=0;this.alertCount=0;this.lastScanAtMs=null;this.lastError=null;this.busy=false;this.latestCandidates=[];
+    this.scans=0;this.alertCount=0;this.lastScanAtMs=null;this.lastError=null;this.busy=false;this.latestCandidates=[];this.lastBatchSymbols=[];this.lastBatchAt=null;this.lastPatrolVisits=0;
     this.pulseHistory=new Map();this.marketCoverage=0;this.pulseReadyCount=0;this.marketBreadthPct=0;this.fastCandidates=0;
   }
   start(){
@@ -391,28 +391,61 @@ export class FalconEyeRadar {
     this.fastCandidates=pulse.rows.filter(x=>x.market_pulse?.fast_trigger).length;
     return pulse.rows;
   }
-  selectBatch(rows){
-    const usable=[...rows].filter(x=>Math.abs(Number(x.priceChange24h)||0)<=18);
-    const pulseRanked=[...usable].sort((a,b)=>{
+  selectBatch(rows,now=this.clock()){
+    const allRows=(Array.isArray(rows)?rows:[]).filter(x=>
+      x?.symbol&&Math.abs(Number(x.priceChange24h)||0)<=18
+    );
+    const minRescanMs=Math.max(90_000,Number(this.config.deepScanMinIntervalMs)||0,Number(this.config.pollMs||30_000)*2);
+    const urgentRescanMs=Math.max(10_000,Number(this.config.pollMs||30_000)*0.7);
+    const urgent=(row)=>{
+      const p=row?.market_pulse||{};
+      return p.stage==='EVENT'||p.explosive===true||
+        (Number.isFinite(Number(p.priceDeltaPct))&&Number(p.priceDeltaPct)>=0.55)||
+        (Number.isFinite(Number(p.volumeBurstRatio))&&Number(p.volumeBurstRatio)>=3)||
+        (Number.isFinite(Number(p.tradeBurstRatio))&&Number(p.tradeBurstRatio)>=3)||
+        (Number(p.score)>=82&&p.fast_trigger===true);
+    };
+    const dueRows=allRows.filter(row=>{
+      const last=this.lastScanAt.get(row.symbol)||0;
+      if(!last)return true;
+      const age=now-last;
+      return age>=minRescanMs||(urgent(row)&&age>=urgentRescanMs);
+    });
+    const pulseRanked=dueRows.filter(x=>x.market_pulse?.fast_trigger===true).sort((a,b)=>{
       const ap=Number(a.market_pulse?.score||50),bp=Number(b.market_pulse?.score||50);
       if(bp!==ap)return bp-ap;
-      const af=Boolean(a.market_pulse?.fast_trigger),bf=Boolean(b.market_pulse?.fast_trigger);
-      if(af!==bf)return bf-af;
-      return Number(b.quoteVolume24h||0)-Number(a.quoteVolume24h||0);
+      return Number(b.market_pulse?.volumeBurstRatio||0)-Number(a.market_pulse?.volumeBurstRatio||0);
     });
-    const quietRanked=[...usable].filter(x=>!x.market_pulse?.fast_trigger).sort((a,b)=>{
-      const aq=Number(a.market_pulse?.baseBreakScore||50)+Number(a.market_pulse?.highProximityScore||50)*0.35;
-      const bq=Number(b.market_pulse?.baseBreakScore||50)+Number(b.market_pulse?.highProximityScore||50)*0.35;
+    const quietRanked=dueRows.filter(x=>x.market_pulse?.fast_trigger!==true).sort((a,b)=>{
+      const aq=Number(a.market_pulse?.baseBreakScore||50)+Number(a.market_pulse?.highProximityScore||50)*0.35+Number(a.market_pulse?.score||50)*0.15;
+      const bq=Number(b.market_pulse?.baseBreakScore||50)+Number(b.market_pulse?.highProximityScore||50)*0.35+Number(b.market_pulse?.score||50)*0.15;
       return bq-aq;
     });
     const selected=[],seen=new Set();
-    const take=(row)=>{if(row&&!seen.has(row.symbol)&&selected.length<this.config.scanBatchSize){selected.push(row);seen.add(row.symbol);return true;}return false;};
-    for(const row of pulseRanked.slice(0,this.config.pulseTopCandidates))take(row);
-    for(const row of quietRanked.slice(0,this.config.quietCandidates))take(row);
-    for(let i=0;i<this.config.patrolBatchSize&&selected.length<this.config.scanBatchSize&&this.universe.length;i++){
-      const symbol=this.universe[this.cursor%this.universe.length];this.cursor=(this.cursor+1)%this.universe.length;
-      const row=usable.find(x=>x.symbol===symbol);take(row);
+    const batchLimit=Math.max(1,Math.min(16,Math.trunc(Number(this.config.scanBatchSize)||8)));
+    const take=(row)=>{
+      if(row&&!seen.has(row.symbol)&&selected.length<batchLimit){
+        selected.push(row);seen.add(row.symbol);return true;
+      }
+      return false;
+    };
+    const pulseSlots=Math.max(0,Math.min(3,Math.trunc(Number(this.config.pulseTopCandidates??3))));
+    const quietSlots=Math.max(0,Math.min(3,Math.trunc(Number(this.config.quietCandidates??2))));
+    for(const row of pulseRanked.slice(0,pulseSlots))take(row);
+    for(const row of quietRanked.slice(0,quietSlots))take(row);
+
+    const dueBySymbol=new Map(dueRows.map(row=>[row.symbol,row]));
+    let patrolVisits=0;
+    const maxPatrolVisits=this.universe.length;
+    while(selected.length<batchLimit&&patrolVisits<maxPatrolVisits){
+      const symbol=this.universe[this.cursor%this.universe.length];
+      this.cursor=(this.cursor+1)%this.universe.length;
+      patrolVisits++;
+      take(dueBySymbol.get(symbol));
     }
+    this.lastBatchSymbols=selected.map(row=>row.symbol);
+    this.lastBatchAt=now;
+    this.lastPatrolVisits=patrolVisits;
     return selected;
   }
   async futuresData(symbol){
@@ -487,7 +520,7 @@ export class FalconEyeRadar {
         const batch=selected.slice(i,i+concurrency);
         await Promise.all(batch.map(async row=>{
           try{await this.scanRow(row,{one:btc[0].candles||[],five:btc[1].candles||[]});}
-          catch(e){this.lastError=String(e?.message??e);}
+          catch(e){this.lastScanAt.delete(row.symbol);this.lastError=String(e?.message??e);}
         }));
       }
     }finally{this.busy=false;}
@@ -496,7 +529,7 @@ export class FalconEyeRadar {
   health(){
     const now=this.clock();
     return {
-      running:this.running,radar:'FALCON_EYE_RADAR',radar_name:'Radar 9 — عين الصقر',universe:this.universe.length,
+      running:this.running,radar:'FALCON_EYE_RADAR',radar_name:'Radar 9 — عين الصقر',universe:this.universe.length,last_batch_symbols:this.lastBatchSymbols.slice(),last_batch_count:this.lastBatchSymbols.length,last_batch_at:this.lastBatchAt,last_patrol_visits:this.lastPatrolVisits,deep_scan_min_interval_ms:Math.max(90_000,Number(this.config.deepScanMinIntervalMs)||0,Number(this.config.pollMs||30_000)*2),
       market_coverage:this.marketCoverage,pulse_ready_count:this.pulseReadyCount,market_breadth_pct:this.marketBreadthPct,fast_candidates:this.fastCandidates,
       last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,scans:this.scans,alerts:this.alertCount,
       last_error:this.lastError,latest_candidates:this.latestCandidates.slice(0,10),active_alerts_last_hour:this.alertTimestamps.filter(t=>now-t<60*60*1000).length,
