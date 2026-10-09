@@ -432,7 +432,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   const gate=dataGate(series,now,cfg,{historicalReplay,allowMissingDepth:historicalReplay});
   const p=finite(ticker.lastPrice,null);
   if(!(p>0))return {score:null,decision_band:'DATA_INSUFFICIENT',pre_expansion_stage:'DATA_INSUFFICIENT',pre_expansion_fingerprint:{stage:'DATA_INSUFFICIENT',reason:'INVALID_PRICE'},data_quality:0,liquidity_quality:null,data_stale:true,risk_flags:['INVALID_PRICE'],reason_codes:['INVALID_PRICE'],gates:gate};
-  const r1=returns(s['1m'],1),r5=returns(s['5m'],1),r15=returns(s['15m'],1),r1h=returns(s['1h'],1),r4h=returns(s['4h'],1);
+  const r1=returns(s['1m'],1),r10=returns(s['1m'],10),r5=returns(s['5m'],1),r15=returns(s['15m'],1),r1h=returns(s['1h'],1),r4h=returns(s['4h'],1);
   const r5_3=returns(s['5m'],3),r15_3=returns(s['15m'],3);
   const rv1=rvol(s['1m'],30),rv5=rvol(s['5m'],20),rv15=rvol(s['15m'],20);
   const qrv5=quoteRvol(s['5m'],20);
@@ -617,10 +617,12 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     liquidity_quality_live:liqQuality,
     score_components:scoreParts,
     metrics:{
-      price_change_1m_pct:r1,price_change_5m_pct:r5,price_change_15m_pct:r15,price_change_1h_pct:r1h,price_change_4h_pct:r4h,
+      price_change_1m_pct:r1,price_change_5m_pct:r5,price_change_10m_pct:r10,price_change_15m_pct:r15,price_change_1h_pct:r1h,price_change_4h_pct:r4h,
       price_change_5m_15m_agg_pct:r5_3,price_change_15m_45m_agg_pct:r15_3,
       fast_price_change_pct:instant,fast_price_acceleration_pct:accel,
       rvol_1m:rv1,rvol_5m:rv5,rvol_15m:rv15,quote_rvol_5m:qrv5,
+      volume_ratio:volumeRatios.length?Math.max(...volumeRatios):null,
+      trade_ratio:tradeRatios.length?Math.max(...tradeRatios):microTradeRvol(s['1m'])??microTradeRvol(s['5m']),
       taker_buy_ratio:pressure.buy_ratio,taker_buy_delta:pressure.buy_delta,
       bb_width:bb.width,bb_width_ratio:bb.ratio,compression_ratio:comp.ratio,
       atr_ratio:atrx.ratio,current_atr:atrx.current_atr,
