@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {ProfessorRadar,calculateProfessorOpinion,classifyStreamClaim} from '../core/professor-radar.mjs';
+import {ProfessorRadar,calculateProfessorOpinion,classifyStreamClaim,classifyNewsEvent} from '../core/professor-radar.mjs';
+
+test('TEST_PROFESSOR: exchange listing headlines are classified as context, not as a guaranteed catalyst',()=>{
+  assert.equal(classifyNewsEvent('KAIA spot trading opens on Upbit','upbit.com'),'EXCHANGE_LISTING_OR_MARKET_OPEN');
+  assert.equal(classifyNewsEvent('Token unlock next week','example.com'),'TOKEN_UNLOCK_OR_SUPPLY_EVENT');
+  assert.equal(classifyNewsEvent('Exchange reports a security exploit','example.com'),'NEGATIVE_SECURITY_OR_DELlST_EVENT');
+});
 
 test('TEST_PROFESSOR: stream claim classifier separates buy and sell language',()=>{
   assert.equal(classifyStreamClaim('BTC buy long breakout entry').action,'BUY_BIAS');
