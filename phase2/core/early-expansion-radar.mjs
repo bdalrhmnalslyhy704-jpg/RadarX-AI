@@ -1008,6 +1008,17 @@ export function buildMicroFingerprint({oneMinute=[],fiveMinute=[],btcFiveMinute=
   };
 }
 
+/**
+ * Maintain an effective scan cadence without dropping a whole poll interval when a
+ * cycle runs slightly longer than its configured cadence. A busy/error result gets
+ * a short bounded retry; every actual tick remains protected by the existing busy flag.
+ */
+export function nextEarlyExpansionPollDelayMs(pollMs,elapsedMs,completed=true){
+  const poll=Math.max(1,Number(pollMs)||45000);
+  if(completed!==true)return Math.min(5000,Math.max(1000,poll));
+  return Math.max(0,poll-Math.max(0,Number(elapsedMs)||0));
+}
+
 export class EarlyExpansionRadar{
   constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
@@ -1024,10 +1035,24 @@ export class EarlyExpansionRadar{
   start(){
     if(this.running)return;
     this.running=true;this.lastError=null;
-    this.refreshUniverse().then(()=>this.tick()).catch(e=>this.noteError(e,'bootstrap'));
-    this.timer=setInterval(()=>this.tick().catch(e=>this.noteError(e,'tick')),this.config.pollMs);
+    const scheduleNext=delayMs=>{
+      if(!this.running)return;
+      this.timer=setTimeout(()=>{void runCycle();},Math.max(0,Number(delayMs)||0));
+    };
+    const runCycle=async()=>{
+      if(!this.running)return;
+      const cycleStartedAt=this.clock();
+      let completed=false;
+      try{completed=await this.tick();}
+      catch(e){this.noteError(e,'scheduled-tick');}
+      const elapsedMs=Math.max(0,this.clock()-cycleStartedAt);
+      scheduleNext(nextEarlyExpansionPollDelayMs(this.config.pollMs,elapsedMs,completed));
+    };
+    // tick() refreshes the universe when it is first empty. Starting immediately
+    // avoids a separate bootstrap scan racing the scheduler's first timer.
+    scheduleNext(0);
   }
-  async stop(){this.running=false;if(this.timer)clearInterval(this.timer);this.timer=null;}
+  async stop(){this.running=false;if(this.timer)clearTimeout(this.timer);this.timer=null;}
   noteError(e,where='scan'){this.lastError=String(e?.message??e);this.logger.warn?.('EARLY_EXPANSION_RADAR_'+where,this.lastError);}
   normalizeQuote(quote=this.config.quote){
     const q=String(quote||this.config.quote).trim().toUpperCase();
