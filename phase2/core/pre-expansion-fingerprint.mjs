@@ -88,11 +88,12 @@ export function assessPreExpansionFingerprint(input={}){
       input.alreadyExtended===true;
     if(extended){stage='ALREADY_EXTENDED';reason='MOVE_ALREADY_EXTENDED';}
     else if(falseBreakout){stage='WATCH_EARLY';reason='FALSE_BREAKOUT_REJECTED';}
-    else if(baseDetected&&participationImproving&&!relativeStrengthWeak&&resistanceClose&&
-      (input.breakoutConfirmed===true||
-        (resistanceDistanceAtr<=0.45&&Number.isFinite(volumeRatio)&&volumeRatio>=1.2&&
-          Number.isFinite(tradeRatio)&&tradeRatio>=1.15&&
-          ((Number.isFinite(return5mPct)&&return5mPct>0)||(Number.isFinite(return10mPct)&&return10mPct>0.15))))){
+    else if(structureDetected&&participationImproving&&!relativeStrengthWeak&&resistanceClose&&input.breakoutConfirmed===true){
+      stage='BREAKOUT_DEVELOPING';reason='BASE_STRUCTURE_AND_CLOSED_BREAKOUT_CONFIRMED';
+    }else if(baseDetected&&participationImproving&&!relativeStrengthWeak&&resistanceClose&&
+      resistanceDistanceAtr<=0.45&&Number.isFinite(volumeRatio)&&volumeRatio>=1.2&&
+      Number.isFinite(tradeRatio)&&tradeRatio>=1.15&&
+      ((Number.isFinite(return5mPct)&&return5mPct>0)||(Number.isFinite(return10mPct)&&return10mPct>0.15))){
       stage='BREAKOUT_DEVELOPING';reason='BASE_PARTICIPATION_AND_RESISTANCE_CONFIRMATION';
     }else if(baseDetected&&participationImproving&&!relativeStrengthWeak&&resistanceClose){
       stage='PRE_EXPANSION';reason='COMPRESSED_BASE_AND_IMPROVING_PARTICIPATION';
