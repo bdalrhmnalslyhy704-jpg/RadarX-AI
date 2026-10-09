@@ -53,3 +53,16 @@ assert.equal(mainActivity.includes('postDelayed(backgroundStartRunnable, BACKGRO
 assert.match(mainActivity,/if \(isAllowedBackendUri\(request\.getUrl\(\)\)\)/);
 assert.match(moveService,/manager\.getRunningServices\(Integer\.MAX_VALUE\)/);
 
+const tradliActivity = await readFile(new URL('./app/src/main/java/com/radarx/app/TradliActivity.java', import.meta.url), 'utf8');
+const tradliPage = await readFile(new URL('./app/src/main/assets/tradli.html', import.meta.url), 'utf8');
+const tradliSuite = await readFile(new URL('./app/src/main/assets/radarx-tradli-feature-suite.mjs', import.meta.url), 'utf8');
+assert.match(tradliActivity,/BACKEND_ORIGIN\s*=\s*\n\s*"https:\/\/radarx-ai-triple-production\.up\.railway\.app"/);
+assert.match(tradliActivity,/BACKEND_FALLBACK_ORIGIN\s*=\s*\n\s*"https:\/\/radarx-ai-production\.up\.railway\.app"/);
+assert.match(tradliActivity,/isAllowedBackendUri\(Uri\.parse\(url\.toString\(\)\)\)/);
+assert.match(tradliActivity,/connection\.setReadTimeout\(180000\)/);
+assert.match(mainActivity,/connection\.setReadTimeout\(180000\)/);
+assert.match(tradliPage,/\/api\/market-radar\?quote=USDT&limit=1/);
+assert.match(tradliSuite,/getSymbolDeepScan/);
+assert.match(tradliSuite,/getRadarAlerts/);
+assert.match(tradliSuite,/SAVED_DATA_NOT_VALID_FOR_TRADE_REVIEW/);
+
