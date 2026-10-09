@@ -430,4 +430,40 @@ export function buildPreExpansionOutcomeReport(input={}){
   };
 }
 
+
+/**
+ * Writes a compact internal log report at most once per hour. This deliberately
+ * uses Railway runtime logs instead of changing any public API response.
+ */
+export async function maybeLogPreExpansionOutcomeReport(store,{logger=console,now=Date.now(),intervalMs=60*60_000}={}){
+  if(typeof store?.updatePreExpansionOutcomes!=='function')return {logged:false,reason:'TRACKER_STORE_UNAVAILABLE'};
+  let report=null;
+  await store.updatePreExpansionOutcomes(raw=>{
+    const state=normalizeState(raw);
+    if(!state.records.length||now-state.last_report_log_at<intervalMs)return false;
+    state.last_report_log_at=now;state.updated_at=now;
+    report=buildPreExpansionOutcomeReport({...state,now});
+    return state;
+  });
+  if(!report)return {logged:false,reason:'THROTTLED_OR_NO_RECORDS'};
+  const compact={
+    event:'PRE_EXPANSION_OUTCOME_REPORT',
+    version:report.version,as_of:report.as_of,total_records:report.total_records,pending_records:report.pending_records,
+    thresholds:report.scope.impact_thresholds_pct,
+    by_radar:Object.fromEntries(Object.entries(report.groups.by_radar).map(([k,v])=>[k,{
+      records:v.records,matured_4h:v.matured_4h,meaningful_move_4h_pct:v.meaningful_move_4h_pct,
+      false_signal_rate_4h_pct:v.false_signal_rate_4h_pct,avg_time_to_plus3_pct_within_4h_minutes:v.avg_time_to_plus3_pct_within_4h_minutes,
+      false_breakout_rate_pct:v.false_breakout_rate_pct,already_extended_pct:v.already_extended_pct,
+      max_adverse_drawdown_pct:v.max_adverse_drawdown_pct,sample_warning:v.sample_warning,
+      horizons:v.horizons
+    }])),
+    by_stage:report.groups.by_stage,
+    by_market_regime:report.groups.by_market_regime,
+    comparison:report.comparison,
+    notes:['Rates use matured horizon samples only.','Live excursions are sampled ticker extremes; historical replay results use closed OHLC candles.','Average time is signal-to-first +3% move, not a guaranteed predictive lead time.']
+  };
+  logger.info?.('[PRE_EXPANSION_OUTCOME_REPORT] '+JSON.stringify(compact));
+  return {logged:true,report:compact};
+}
+
 export const PRE_EXPANSION_OUTCOME_HORIZONS=HORIZONS.map(([key,ms,impact_threshold_pct])=>({key,ms,impact_threshold_pct}));
