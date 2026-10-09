@@ -453,7 +453,7 @@ export function buildPreExpansionOutcomeReport(input={}){
   };
   return {
     version:'PRE_EXPANSION_OUTCOME_REPORT_V1',as_of:new Date(num(input.now,Date.now())).toISOString(),
-    scope:{radars:['RADAR_8','RADAR_9'],stages:[...WATCHED_STAGES],horizons_ms:Object.fromEntries(HORIZONS.map(([h,ms])=>[h,ms])),impact_thresholds_pct:Object.fromEntries(HORIZONS.map(([h,,threshold])=>[h,threshold])),mfe_mae_source:'SAMPLED_SPOT_TICKERS unless historical_evaluation=true',no_real_orders:true},
+    scope:{radars:['RADAR_8','RADAR_9'],stages:[...WATCHED_STAGES],horizons_ms:Object.fromEntries(HORIZONS.map(([h,ms])=>[h,ms])),impact_thresholds_pct:Object.fromEntries(HORIZONS.map(([h,,threshold])=>[h,threshold])),mfe_mae_source:'Per horizon: SAMPLED_SPOT_TICKERS or HISTORICAL_CLOSED_OHLC, explicitly labelled',no_real_orders:true},
     total_records:records.length,pending_records:records.filter(r=>r.outcome_status!=='COMPLETE'&&r.entry_price>0).length,
     groups:{
       by_radar:groupBy(records,r=>r.radar),
