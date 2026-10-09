@@ -1177,7 +1177,7 @@ export class EarlyExpansionRadar{
         const marketMoves=eligible.map(x=>x.priceChange24h).filter(hasFiniteNumber).map(Number);
         marketContext={fiveMinute:m5.candles||[],oneHour:m1.candles||[],marketMedianChange24hPct:median(marketMoves),marketBreadthPct:marketMoves.length?marketMoves.filter(x=>x>0).length/marketMoves.length*100:null};
       }catch(e){this.noteError(e,'market-context');}
-      await updatePreExpansionMarkouts(this.store,rawRows,{now,marketContext}).catch(e=>this.noteError(e,'outcome-markout'));
+      await updatePreExpansionMarkouts(this.store,rawRows,{now,marketContext,logger:this.logger}).catch(e=>this.noteError(e,'outcome-markout'));
       await maybeLogPreExpansionOutcomeReport(this.store,{logger:this.logger,now}).catch(e=>this.noteError(e,'outcome-report'));
       const microScanned=await boundedMap(selected,this.config.microConcurrency,async row=>{
         try{return await this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFive);}
@@ -1238,7 +1238,7 @@ export class EarlyExpansionRadar{
         metrics:candidate.metrics||{},strategy_evidence:candidate.strategy_evidence||{},
         market_regime:candidate.market_regime,source:candidate.source,detected_at:now
       }));
-      await recordPreExpansionSignals(this.store,evaluationObservations,{now,marketContext}).catch(e=>this.noteError(e,'outcome-record'));
+      await recordPreExpansionSignals(this.store,evaluationObservations,{now,marketContext,logger:this.logger}).catch(e=>this.noteError(e,'outcome-record'));
       let alertsThisCycle=0;
       for(const candidate of ok){
         const alert=buildEarlyExpansionAlert(candidate,now),eligibleAlert=alertEligible(candidate,this.config)&&candidate.micro_fingerprint?.eligible===true;
