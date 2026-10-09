@@ -1,6 +1,36 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {RestClient,RestRateLimitError,retryAfterMs} from '../market/binance-rest.mjs';
+import {RestClient,RestRateLimitError,retryAfterMs,estimateBinanceRequestWeight} from '../market/binance-rest.mjs';
+
+
+test('TEST_FIXTURE: REST weight estimator is conservative for shared market-data endpoints',()=>{
+  assert.equal(estimateBinanceRequestWeight('/api/v3/ticker/24hr',{}),80);
+  assert.equal(estimateBinanceRequestWeight('/api/v3/ticker/24hr',{symbol:'BTCUSDT'}),2);
+  assert.equal(estimateBinanceRequestWeight('/api/v3/ticker/24hr',{symbols:'["BTCUSDT","ETHUSDT"]'}),2);
+  assert.equal(estimateBinanceRequestWeight('/api/v3/klines',{symbol:'BTCUSDT',interval:'1m',limit:180}),2);
+  assert.equal(estimateBinanceRequestWeight('/api/v3/klines',{symbol:'BTCUSDT',interval:'1m',limit:1000}),5);
+  assert.equal(estimateBinanceRequestWeight('/api/v3/depth',{symbol:'BTCUSDT',limit:100}),5);
+  assert.equal(estimateBinanceRequestWeight('/api/v3/depth',{symbol:'BTCUSDT',limit:500}),25);
+});
+
+test('TEST_FIXTURE: concurrent distinct REST requests reserve the shared budget serially and record exchange usage',async()=>{
+  const starts=[];let calls=0;
+  const fetchImpl=async()=>{
+    starts.push(Date.now());const n=++calls;
+    return {status:200,ok:true,headers:new Map([['x-mbx-used-weight-1m',String(100+n)]]),json:async()=>({n})};
+  };
+  const client=new RestClient({baseUrls:['https://weighted-queue.test'],fetchImpl,timeoutMs:300,minIntervalMs:0,maxRequestsPerMinute:100});
+  const results=await Promise.all(['QUEUEAUSDT','QUEUEBUSDT','QUEUECUSDT'].map(symbol=>
+    client.request('/api/v3/ticker/24hr',{symbol})
+  ));
+  assert.equal(results.length,3);assert.equal(calls,3);
+  assert.ok(starts[1]-starts[0]>=200,JSON.stringify(starts));
+  assert.ok(starts[2]-starts[1]>=200,JSON.stringify(starts));
+  const health=client.health();
+  assert.equal(health.binance_reported_used_weight_1m,103);
+  assert.equal(health.shared_max_weight_per_minute,4000);
+  assert.ok(Number(health.shared_estimated_weight_last_minute)>=6);
+});
 
 test('TEST_FIXTURE: HTTP 429 records rate limit and retry-after without spamming fallback',async()=>{
   let calls=0;

@@ -32,11 +32,105 @@ const SHARED = {
   cache: new Map(),
   usedAt: [],
   lastRequestAt: 0,
-  rateLimitedUntil: 0
+  rateLimitedUntil: 0,
+  budgetQueue: Promise.resolve(),
+  observedUsedWeight1m: null,
+  observedUsedWeightAt: null
 };
 
-const SHARED_MAX_REQUESTS_PER_MINUTE = 90;
-const SHARED_MIN_INTERVAL_MS = 300;
+// These are deliberately below Binance's published 6,000 request-weight/minute
+// default. A serialized weighted budget prevents a conservative raw-request cap
+// from forcing every radar to wait behind unrelated reads.
+const SHARED_MAX_REQUESTS_PER_MINUTE = 240;
+const SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE = 4000;
+const SHARED_MIN_INTERVAL_MS = 250;
+
+export function estimateBinanceRequestWeight(path, query = {}) {
+  if (path === '/api/v3/exchangeInfo') return 20;
+  if (path === '/api/v3/ticker/24hr') {
+    if (query.symbol) return 2;
+    if (query.symbols) {
+      let count = 0;
+      try {
+        const parsed = typeof query.symbols === 'string' ? JSON.parse(query.symbols) : query.symbols;
+        count = Array.isArray(parsed) ? parsed.length : 0;
+      } catch {}
+      if (count > 0 && count <= 20) return 2;
+      if (count > 20 && count <= 100) return 40;
+    }
+    return 80;
+  }
+  if (path === '/api/v3/klines') {
+    const limit = Math.max(1, Number(query.limit) || 500);
+    return limit <= 99 ? 1 : limit <= 499 ? 2 : limit <= 1000 ? 5 : 10;
+  }
+  if (path === '/api/v3/depth') {
+    const limit = Math.max(1, Number(query.limit) || 100);
+    return limit <= 100 ? 5 : limit <= 500 ? 25 : limit <= 1000 ? 50 : 250;
+  }
+  return 1;
+}
+
+function waitUntilMs(entries, now, requiredWeight) {
+  let remaining = entries.reduce((sum, item) => sum + item.weight, 0);
+  for (const item of entries) {
+    remaining -= item.weight;
+    if (remaining + requiredWeight <= SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE) {
+      return Math.max(0, item.at + 60000 - now);
+    }
+  }
+  return Math.max(0, (entries[0]?.at ?? now) + 60000 - now);
+}
+
+async function waitSharedBudget(path, query = {}) {
+  // A small promise lock makes budget checks + reservations atomic. Without it,
+  // concurrent scan workers could all pass the same check and burst together.
+  let release;
+  const previous = SHARED.budgetQueue;
+  SHARED.budgetQueue = new Promise(resolve => { release = resolve; });
+  await previous;
+  try {
+    const weight = estimateBinanceRequestWeight(path, query);
+    for (;;) {
+      const now = Date.now();
+      const cooldown = SHARED.rateLimitedUntil - now;
+      if (cooldown > 0) {
+        await sleep(cooldown);
+        continue;
+      }
+      SHARED.usedAt = SHARED.usedAt.filter(item => item.at > now - 60000);
+      const usedWeight = SHARED.usedAt.reduce((sum, item) => sum + item.weight, 0);
+      const requestWait = SHARED.usedAt.length >= SHARED_MAX_REQUESTS_PER_MINUTE
+        ? Math.max(0, SHARED.usedAt[0].at + 60000 - now)
+        : 0;
+      const weightWait = usedWeight + weight > SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE
+        ? waitUntilMs(SHARED.usedAt, now, weight)
+        : 0;
+      const spacingWait = Math.max(0, SHARED.lastRequestAt + SHARED_MIN_INTERVAL_MS - now);
+      const waitMs = Math.max(requestWait, weightWait, spacingWait);
+      if (waitMs > 0) {
+        await sleep(waitMs);
+        continue;
+      }
+      const reservedAt = Date.now();
+      SHARED.lastRequestAt = reservedAt;
+      SHARED.usedAt.push({ at: reservedAt, weight });
+      return reservedAt;
+    }
+  } finally {
+    release();
+  }
+}
+
+function recordObservedUsedWeight(responseHeaders) {
+  const raw = responseHeaders?.get?.('x-mbx-used-weight-1m')
+    ?? responseHeaders?.get?.('X-MBX-USED-WEIGHT-1M');
+  const value = Number(raw);
+  if (raw != null && Number.isFinite(value) && value >= 0) {
+    SHARED.observedUsedWeight1m = value;
+    SHARED.observedUsedWeightAt = Date.now();
+  }
+}
 
 function normalizedQuery(query = {}) {
   return Object.entries(query)
@@ -66,22 +160,6 @@ function cachedValue(key, now = Date.now()) {
   return item.value;
 }
 
-async function waitSharedBudget() {
-  const now = Date.now();
-  if (SHARED.rateLimitedUntil > now) {
-    await sleep(SHARED.rateLimitedUntil - now);
-  }
-  let t = Date.now();
-  SHARED.usedAt = SHARED.usedAt.filter(x => x > t - 60000);
-  if (SHARED.usedAt.length >= SHARED_MAX_REQUESTS_PER_MINUTE) {
-    const wait = Math.max(100, SHARED.usedAt[0] + 60000 - t);
-    await sleep(wait);
-  }
-  t = Date.now();
-  const gap = t - SHARED.lastRequestAt;
-  if (gap < SHARED_MIN_INTERVAL_MS) await sleep(SHARED_MIN_INTERVAL_MS - gap);
-}
-
 function annotateClientSuccess(client, result, sourceIndex = null) {
   if (Number.isInteger(sourceIndex)) client.currentBaseIndex = sourceIndex;
   client.lastSuccessAt = Date.now();
@@ -102,9 +180,14 @@ export class RestClient {
     rate_limited_until:this.rateLimitedUntil||null,
     current_base_url:this.baseUrls[this.currentBaseIndex]??null,
     shared_queue_depth:SHARED.inflight.size,
-    shared_cache_entries:SHARED.cache.size
+    shared_cache_entries:SHARED.cache.size,
+    shared_requests_last_minute:SHARED.usedAt.length,
+    shared_estimated_weight_last_minute:SHARED.usedAt.reduce((sum,item)=>sum+item.weight,0),
+    shared_max_weight_per_minute:SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE,
+    binance_reported_used_weight_1m:SHARED.observedUsedWeight1m,
+    binance_reported_used_weight_at:SHARED.observedUsedWeightAt
   };}
-  async waitBudget(){
+  async waitBudget(path, query = {}){
     let now=Date.now();
     if(this.rateLimitedUntil>now) await sleep(this.rateLimitedUntil-now);
     const cutoff=Date.now()-60000;
@@ -115,7 +198,7 @@ export class RestClient {
     now=Date.now();
     const gap=now-this.lastRequestAt;
     if(gap<this.minIntervalMs) await sleep(this.minIntervalMs-gap);
-    await waitSharedBudget();
+    await waitSharedBudget(path, query);
   }
   async request(path,query={}) {
     if(!String(path).startsWith('/api/v3/')) throw new Error('REST_PATH_NOT_ALLOWED');
@@ -138,15 +221,13 @@ export class RestClient {
     const task=(async()=>{
       let error=null;
       for(let attempt=0;attempt<this.baseUrls.length;attempt++){
-        await this.waitBudget();
+        await this.waitBudget(path, query);
         const idx=(this.currentBaseIndex+attempt)%this.baseUrls.length;
         const qs=new URLSearchParams(normalizedQuery(query));
         const url=this.baseUrls[idx]+path+(qs.toString()?'?'+qs:'');
         const ac=new AbortController(); const tm=setTimeout(()=>ac.abort(),this.timeoutMs);
         const requestAt=Date.now();
         this.lastRequestAt=requestAt; this.usedAt.push(requestAt);
-        SHARED.lastRequestAt=requestAt; SHARED.usedAt.push(requestAt);
-        SHARED.usedAt=SHARED.usedAt.filter(x=>x>Date.now()-60000);
         this.state='REQUESTING';
         try{
           const r=await this.fetchImpl(url,{method:'GET',signal:ac.signal,headers:{Accept:'application/json'}});
@@ -157,6 +238,7 @@ export class RestClient {
             throw new RestRateLimitError(wait);
           }
           if(!r.ok) throw new Error('HTTP_'+r.status);
+          recordObservedUsedWeight(r.headers);
           const data=await r.json();
           const result={data,source:this.baseUrls[idx],receivedAt:Date.now()};
           if(ttl>0) SHARED.cache.set(key,{expiresAt:Date.now()+ttl,value:result});
