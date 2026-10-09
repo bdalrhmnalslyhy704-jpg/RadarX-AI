@@ -5,6 +5,8 @@ import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notific
 
 const clamp=(v,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number.isFinite(Number(v))?Number(v):0));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
+function hasFiniteNumber(v){return v!==null&&v!==undefined&&!(typeof v==='string'&&v.trim()==='')&&Number.isFinite(Number(v));}
+function absolute24hMove(row){return hasFiniteNumber(row?.priceChange24h)?Math.abs(Number(row.priceChange24h)):null;}
 const mean=a=>{const x=(Array.isArray(a)?a:[]).map(Number).filter(Number.isFinite);return x.length?x.reduce((s,v)=>s+v,0)/x.length:null;};
 const median=a=>{const x=(Array.isArray(a)?a:[]).map(Number).filter(Number.isFinite).sort((p,q)=>p-q);if(!x.length)return null;const m=Math.floor(x.length/2);return x.length%2?x[m]:(x[m-1]+x[m])/2;};
 const pct=(a,b)=>Number.isFinite(Number(a))&&Number.isFinite(Number(b))&&Number(b)!==0?(Number(a)/Number(b)-1)*100:null;
@@ -160,6 +162,15 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   freshness1hMs:75*60*1000,
   freshness4hMs:5*60*60*1000,
   maxEarly24hMovePct:12,
+  maxQuiet24hMovePct:8,
+  quietMinParticipationRatio:1.12,
+  quietMinPriceAccelerationPct:0.03,
+  quietDeepMinParticipationScore:58,
+  exceptionalRotationBypassSlots:2,
+  exceptionalVolumeAccelRatio:2.2,
+  exceptionalTradeAccelRatio:1.8,
+  exceptionalPriceAccelerationPct:0.15,
+  rotationBypassMin24hMovePct:4,
   hardExtended24hMovePct:18,
   hardExtended1hMovePct:8,
   hardExtended15mMovePct:6,
@@ -635,7 +646,9 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
 }
 
 function fastCandidateScore(row,fast,cfg){
-  const quiet=clamp(100-Math.max(0,Math.abs(Number(row.priceChange24h)||0))*5);
+  const move=absolute24hMove(row);
+  // Unknown daily change is not treated as a perfectly quiet coin.
+  const quiet=move===null?35:clamp(100-move*5);
   const instant=clamp(50+Number(fast.price_change_pct||0)*180);
   const accel=clamp(50+Number(fast.price_acceleration_pct||0)*260);
   const vol=Number(fast.volume_accel_ratio);const trades=Number(fast.trade_accel_ratio);
@@ -649,10 +662,131 @@ function fastCandidateScore(row,fast,cfg){
 }
 
 function quietCandidateScore(row,fast,cfg){
-  const quiet=clamp(100-Math.abs(Number(row.priceChange24h)||0)*7);
-  const activity=clamp(50+Math.max(0,Number(fast.volume_accel_ratio||1)-1)*35);
-  const structureBase=clamp(80-Math.abs(Number(fast.price_change_pct||0))*40);
+  const move=absolute24hMove(row);
+  if(move===null||!hasFiniteNumber(row?.lastPrice)||Number(row.lastPrice)<=0||
+    !hasFiniteNumber(row?.quoteVolume24h)||Number(row.quoteVolume24h)<Number(cfg.minQuoteVolume24h||0))return null;
+  const quiet=clamp(100-move*7);
+  const volume=hasFiniteNumber(fast?.volume_accel_ratio)?Number(fast.volume_accel_ratio):1;
+  const activity=clamp(50+Math.max(0,volume-1)*35);
+  const change=hasFiniteNumber(fast?.price_change_pct)?Number(fast.price_change_pct):0;
+  const structureBase=clamp(80-Math.abs(change)*40);
   return quiet*.55+activity*.25+structureBase*.20;
+}
+
+function isQuietEarlyCandidate(row,fast,cfg){
+  const move=absolute24hMove(row);
+  if(move===null||move>Number(cfg.maxQuiet24hMovePct??8))return false;
+  if(quietCandidateScore(row,fast,cfg)===null)return false;
+  const volume=hasFiniteNumber(fast?.volume_accel_ratio)?Number(fast.volume_accel_ratio):null;
+  const trades=hasFiniteNumber(fast?.trade_accel_ratio)?Number(fast.trade_accel_ratio):null;
+  const acceleration=hasFiniteNumber(fast?.price_acceleration_pct)?Number(fast.price_acceleration_pct):null;
+  const shortMove=hasFiniteNumber(fast?.price_change_pct)?Number(fast.price_change_pct):null;
+  const participationImproving=
+    (volume!==null&&volume>=Number(cfg.quietMinParticipationRatio??1.12))||
+    (trades!==null&&trades>=Number(cfg.quietMinParticipationRatio??1.12));
+  const momentumAwakening=acceleration!==null&&shortMove!==null&&
+    acceleration>=Number(cfg.quietMinPriceAccelerationPct??0.03)&&shortMove>0;
+  return participationImproving||momentumAwakening;
+}
+
+function isExceptionalMicroCandidate(row,fast,cfg){
+  const move=absolute24hMove(row);
+  if(move===null||move>=Number(cfg.hardExtended24hMovePct||18))return false;
+  const volume=hasFiniteNumber(fast?.volume_accel_ratio)?Number(fast.volume_accel_ratio):0;
+  const trades=hasFiniteNumber(fast?.trade_accel_ratio)?Number(fast.trade_accel_ratio):0;
+  const acceleration=hasFiniteNumber(fast?.price_acceleration_pct)?Number(fast.price_acceleration_pct):0;
+  const shortMove=hasFiniteNumber(fast?.price_change_pct)?Number(fast.price_change_pct):0;
+  const volumeSurge=volume>=Number(cfg.exceptionalVolumeAccelRatio??2.2);
+  const tradeSurge=trades>=Number(cfg.exceptionalTradeAccelRatio??1.8);
+  const strongImpulse=acceleration>=Number(cfg.exceptionalPriceAccelerationPct??0.15)&&shortMove>0;
+  const earlyDailyImpulse=move>=Number(cfg.rotationBypassMin24hMovePct??4)&&volume>=1.6&&trades>=1.4;
+  return (volumeSurge&&strongImpulse)||(volumeSurge&&tradeSurge&&acceleration>0)||earlyDailyImpulse;
+}
+
+function quietDeepRank(item,cfg){
+  const row=item?.row,move=absolute24hMove(row),fp=item?.micro_fingerprint;
+  if(move===null||move>Number(cfg.maxQuiet24hMovePct??8)||!fp||!hasFiniteNumber(fp.score))return null;
+  const m=fp.metrics||{},c=fp.category_scores||{};
+  const rvol1=hasFiniteNumber(m.rvol_1m)?Number(m.rvol_1m):null;
+  const rvol5=hasFiniteNumber(m.rvol_5m)?Number(m.rvol_5m):null;
+  const trade1=hasFiniteNumber(m.trade_rvol_1m)?Number(m.trade_rvol_1m):null;
+  const participation=Math.max(
+    hasFiniteNumber(c.participation)?Number(c.participation):0,
+    hasFiniteNumber(c.tradeParticipation)?Number(c.tradeParticipation):0,
+    rvol1!==null?clamp(50+Math.max(0,rvol1-1)*18):0,
+    rvol5!==null?clamp(50+Math.max(0,rvol5-1)*12):0,
+    trade1!==null?clamp(50+Math.max(0,trade1-1)*20):0
+  );
+  const structure= Math.max(
+    hasFiniteNumber(c.structure)?Number(c.structure):0,
+    hasFiniteNumber(m.higher_low_count)?Number(m.higher_low_count):0
+  );
+  const bbRatio=hasFiniteNumber(m.bb_ratio)?Number(m.bb_ratio):null;
+  const rangeRatio=hasFiniteNumber(m.range_compression_ratio)?Number(m.range_compression_ratio):null;
+  const atrRatio=hasFiniteNumber(m.atr_ratio)?Number(m.atr_ratio):null;
+  const compression=Math.max(
+    hasFiniteNumber(c.compression)?Number(c.compression):0,
+    bbRatio!==null&&bbRatio<=0.90?78:0,
+    rangeRatio!==null&&rangeRatio<=0.90?72:0,
+    atrRatio!==null&&atrRatio<=0.92?70:0
+  );
+  const resistanceDistance=hasFiniteNumber(m.resistance_distance_pct)?Number(m.resistance_distance_pct):null;
+  const resistanceNear=resistanceDistance!==null&&resistanceDistance>=-5&&resistanceDistance<=1.5;
+  const participationImproving=participation>=Number(cfg.quietDeepMinParticipationScore??58);
+  const baseOrStructure=compression>=65||structure>=62||resistanceNear;
+  if(!participationImproving||!baseOrStructure)return null;
+  return (100-move*6)*.35+participation*.25+structure*.20+compression*.20;
+}
+
+function isExceptionalDeepCandidate(item,cfg){
+  const move=absolute24hMove(item?.row),fp=item?.micro_fingerprint,m=fp?.metrics||{},c=fp?.category_scores||{};
+  if(move===null||move>=Number(cfg.hardExtended24hMovePct||18))return false;
+  const volume=Math.max(
+    hasFiniteNumber(m.rvol_1m)?Number(m.rvol_1m):0,
+    hasFiniteNumber(m.rvol_5m)?Number(m.rvol_5m):0
+  );
+  const trades=Math.max(
+    hasFiniteNumber(m.trade_rvol_1m)?Number(m.trade_rvol_1m):0,
+    hasFiniteNumber(m.trade_rvol_5m)?Number(m.trade_rvol_5m):0
+  );
+  const acceleration=Math.max(
+    hasFiniteNumber(m.acceleration_1m_pct)?Number(m.acceleration_1m_pct):-999,
+    hasFiniteNumber(m.acceleration_5m_pct)?Number(m.acceleration_5m_pct):-999
+  );
+  const pressure=hasFiniteNumber(m.taker_buy_ratio)?Number(m.taker_buy_ratio):0;
+  const structure=Math.max(
+    hasFiniteNumber(c.structure)?Number(c.structure):0,
+    hasFiniteNumber(m.higher_low_count)?Number(m.higher_low_count):0
+  );
+  return (volume>=Number(cfg.exceptionalVolumeAccelRatio??2.2)&&
+    (acceleration>=Number(cfg.exceptionalPriceAccelerationPct??0.15)||pressure>=0.58||structure>=72))||
+    (trades>=Number(cfg.exceptionalTradeAccelRatio??1.8)&&
+    (acceleration>0||pressure>=0.58));
+}
+
+function uniqueItemCount(items){
+  return new Set((items||[]).map(item=>String(item?.symbol??item?.row?.symbol??'').trim().toUpperCase()).filter(Boolean)).size;
+}
+
+function takeUniqueLane(selected,seen,pool,count,lane){
+  const limit=Math.max(0,Math.trunc(Number(count)||0));
+  if(limit===0)return 0;
+  let added=0;
+  for(const item of pool||[]){
+    const symbol=String(item?.symbol??item?.row?.symbol??'').trim().toUpperCase();
+    if(!symbol||seen.has(symbol))continue;
+    seen.add(symbol);
+    selected.push({...item,_selection_lane:lane});
+    added++;
+    if(added>=limit)break;
+  }
+  return added;
+}
+
+function trimCycleMemory(map,maxSize=5000){
+  if(map.size<=maxSize)return;
+  const oldest=[...map.entries()].sort((a,b)=>a[1]-b[1]);
+  for(let i=0;i<oldest.length-maxSize;i++)map.delete(oldest[i][0]);
 }
 
 function sourceList(values){return [...new Set(values.flatMap(v=>Array.isArray(v)?v:[v]).filter(Boolean))];}
@@ -852,6 +986,7 @@ export class EarlyExpansionRadar{
     this.clock=clock;this.logger=logger;
     this.running=false;this.busy=false;this.timer=null;this.universe=[];this.universeAt=0;
     this.fastState=new Map();this.lastAlertAt=new Map();this.lastAlertScore=new Map();this.lastBand=new Map();
+    this.lastMicroScanCycleBySymbol=new Map();this.lastDeepScanCycleBySymbol=new Map();
     this.latestCandidates=[];this.lastResult=null;this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
     this.fastScannedTotal=0;this.failedTotal=0;this.failedSymbols=[];this.lastCoverage=emptyEarlyExpansionUniverse(this.config,this.config.quote);
   }
@@ -900,30 +1035,101 @@ export class EarlyExpansionRadar{
     return fast;
   }
   selectMicro(rows,fastBySymbol,cycle=0){
-    const all=rows.map(row=>{
+    const currentCycle=Math.max(0,Math.trunc(Number(cycle)||0));
+    const all=(rows||[]).filter(row=>row&&row.symbol).map(row=>{
       const fast=fastBySymbol.get(row.symbol)||{};
-      const quiet=quietCandidateScore(row,fast,this.config);
+      const quietScore=quietCandidateScore(row,fast,this.config);
       const fastScore=fastCandidateScore(row,fast,this.config);
-      const rotation=((symbolHash(row.symbol)+Math.imul(cycle,2654435761))>>>0)/4294967296;
-      return {...row,fast,_microPreScore:fastScore*.30+quiet*.25+(50+rotation*50)*.15,_quietScore:quiet,_rotation:rotation};
+      const key=String(row.symbol).toUpperCase();
+      const lastCycle=this.lastMicroScanCycleBySymbol.get(key);
+      const rotation=((symbolHash(row.symbol)+Math.imul(currentCycle,2654435761))>>>0)/4294967296;
+      const rotationAge=lastCycle===undefined?Number.MAX_SAFE_INTEGER:Math.max(0,currentCycle-lastCycle);
+      return {
+        ...row,fast,
+        _microPreScore:fastScore*.30+(quietScore??0)*.25+(50+rotation*50)*.15,
+        _quietScore:quietScore??-1,
+        _quietEligible:isQuietEarlyCandidate(row,fast,this.config),
+        _exceptional:isExceptionalMicroCandidate(row,fast,this.config),
+        _rotation:rotation,_rotationAge:rotationAge
+      };
     });
     const n=Math.max(1,Math.trunc(this.config.microScanCandidates||36));
-    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve||8)),n-1);
-    const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve||8)),Math.max(0,n-q-1));
+    const target=Math.min(n,uniqueItemCount(all));
+    if(target===0)return [];
+    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve||8)),Math.max(0,target-1));
+    const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve||8)),Math.max(0,target-q-1));
+    const core=target-q-r;
     const byScore=[...all].sort((a,b)=>b._microPreScore-a._microPreScore||a.symbol.localeCompare(b.symbol));
-    const byQuiet=[...all].sort((a,b)=>b._quietScore-a._quietScore||Math.abs(a.priceChange24h)-Math.abs(b.priceChange24h)||a.symbol.localeCompare(b.symbol));
-    const byRotation=[...all].sort((a,b)=>a._rotation-b._rotation||a.symbol.localeCompare(b.symbol));
-    return [...new Map([...byScore.slice(0,n-q-r),...byQuiet.slice(0,q),...byRotation.slice(0,r)].map(x=>[x.symbol,x])).values()].slice(0,n);
+    const byQuiet=all.filter(x=>x._quietEligible).sort((a,b)=>
+      (absolute24hMove(a)??Infinity)-(absolute24hMove(b)??Infinity)||
+      b._quietScore-a._quietScore||a.symbol.localeCompare(b.symbol)
+    );
+    const byRotation=[...all].sort((a,b)=>
+      b._rotationAge-a._rotationAge||a._rotation-b._rotation||a.symbol.localeCompare(b.symbol)
+    );
+    const byExceptional=all.filter(x=>x._exceptional).sort((a,b)=>
+      b._microPreScore-a._microPreScore||b._rotationAge-a._rotationAge||a.symbol.localeCompare(b.symbol)
+    );
+
+    // Each lane fills its quota with new symbols only; overlaps cannot silently shrink the batch.
+    const selected=[],seen=new Set();
+    const exceptionSlots=Math.min(core,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots||0)));
+    takeUniqueLane(selected,seen,byExceptional,exceptionSlots,'exceptional');
+    takeUniqueLane(selected,seen,byScore,Math.max(0,core-selected.length),'score');
+    takeUniqueLane(selected,seen,byQuiet,q,'quiet');
+    takeUniqueLane(selected,seen,byRotation,r,'rotation');
+    takeUniqueLane(selected,seen,byScore,target-selected.length,'fill_score');
+    takeUniqueLane(selected,seen,byQuiet,target-selected.length,'fill_quiet');
+    takeUniqueLane(selected,seen,byRotation,target-selected.length,'fill_rotation');
+    takeUniqueLane(selected,seen,all,target-selected.length,'fill_any');
+
+    for(const item of selected)this.lastMicroScanCycleBySymbol.set(String(item.symbol).toUpperCase(),currentCycle);
+    trimCycleMemory(this.lastMicroScanCycleBySymbol);
+    return selected.slice(0,target);
   }
   selectDeepFromMicro(results,cycle=0){
-    const valid=(results||[]).filter(x=>x&&!x.failed&&x.micro_fingerprint?.score!=null);
+    const currentCycle=Math.max(0,Math.trunc(Number(cycle)||0));
+    const valid=(results||[]).filter(x=>x&&!x.failed&&x.symbol&&x.micro_fingerprint?.score!=null&&hasFiniteNumber(x.micro_fingerprint.score));
     const n=Math.max(1,Math.trunc(this.config.deepCandidates||10));
-    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve||8)),n-1);
-    const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve||2)),Math.max(0,n-q-1));
-    const byScore=[...valid].sort((a,b)=>Number(b.micro_fingerprint?.score||-1)-Number(a.micro_fingerprint?.score||-1));
-    const byQuiet=[...valid].sort((a,b)=>Number(b.micro_fingerprint?.metrics?.price_change_24h_abs??999)-Number(a.micro_fingerprint?.metrics?.price_change_24h_abs??999));
-    const byRotation=[...valid].sort((a,b)=>(((symbolHash(a.symbol)+Math.imul(cycle,2654435761))>>>0)-((symbolHash(b.symbol)+Math.imul(cycle,2654435761))>>>0)));
-    return [...new Map([...byScore.slice(0,n-q-r),...byQuiet.slice(0,q),...byRotation.slice(0,r)].map(x=>[x.symbol,x])).values()].slice(0,n);
+    const target=Math.min(n,uniqueItemCount(valid));
+    if(target===0)return [];
+    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve||8)),Math.max(0,target-1));
+    const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve||2)),Math.max(0,target-q-1));
+    const core=target-q-r;
+    const byScore=[...valid].sort((a,b)=>
+      Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||a.symbol.localeCompare(b.symbol)
+    );
+    const rankedQuiet=valid.map(item=>({...item,_quietScore:quietDeepRank(item,this.config)}))
+      .filter(item=>item._quietScore!==null)
+      .sort((a,b)=>(absolute24hMove(a.row)??Infinity)-(absolute24hMove(b.row)??Infinity)||
+        b._quietScore-a._quietScore||a.symbol.localeCompare(b.symbol));
+    const byRotation=[...valid].map(item=>{
+      const key=String(item.symbol).toUpperCase();
+      const lastCycle=this.lastDeepScanCycleBySymbol.get(key);
+      return {
+        ...item,
+        _rotationAge:lastCycle===undefined?Number.MAX_SAFE_INTEGER:Math.max(0,currentCycle-lastCycle),
+        _rotation:((symbolHash(item.symbol)+Math.imul(currentCycle,2654435761))>>>0)
+      };
+    }).sort((a,b)=>b._rotationAge-a._rotationAge||a._rotation-b._rotation||a.symbol.localeCompare(b.symbol));
+    const byExceptional=valid.filter(x=>isExceptionalDeepCandidate(x,this.config)).sort((a,b)=>
+      Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||a.symbol.localeCompare(b.symbol)
+    );
+
+    const selected=[],seen=new Set();
+    const exceptionSlots=Math.min(core,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots||0)));
+    takeUniqueLane(selected,seen,byExceptional,exceptionSlots,'exceptional');
+    takeUniqueLane(selected,seen,byScore,Math.max(0,core-selected.length),'score');
+    takeUniqueLane(selected,seen,rankedQuiet,q,'quiet');
+    takeUniqueLane(selected,seen,byRotation,r,'rotation');
+    takeUniqueLane(selected,seen,byScore,target-selected.length,'fill_score');
+    takeUniqueLane(selected,seen,rankedQuiet,target-selected.length,'fill_quiet');
+    takeUniqueLane(selected,seen,byRotation,target-selected.length,'fill_rotation');
+    takeUniqueLane(selected,seen,valid,target-selected.length,'fill_any');
+
+    for(const item of selected)this.lastDeepScanCycleBySymbol.set(String(item.symbol).toUpperCase(),currentCycle);
+    trimCycleMemory(this.lastDeepScanCycleBySymbol);
+    return selected.slice(0,target);
   }
   async microScan(row,fast,btcFiveMinute){
     const [m1,m5]=await Promise.all([
@@ -991,8 +1197,24 @@ export class EarlyExpansionRadar{
       const ok=scanned.filter(x=>x&&!x.failed),deepFailures=scanned.length-ok.length,deepScannedTotal=ok.length;
       const failedSymbols=scanned.filter(x=>x?.failed).map(x=>x.symbol);
       const coverage=buildEarlyExpansionUniverseCoverage({expectedSymbols:expected,receivedSymbols,eligibleTotal:eligible.length,fastScannedTotal:eligible.length,scannedTotal:eligible.length,deepScannedTotal,skippedTotal:Math.max(0,eligible.length-deepScannedTotal),failedTotal:deepFailures,failedSymbols,quote:q,minQuoteVolume24h:this.config.minQuoteVolume24h});
-      coverage.micro_scanned_total=microScanned.filter(x=>x&&!x.failed).length;coverage.micro_scan_candidates=selected.length;coverage.rotation_cycle=cycle;
-      coverage.micro_scan_coverage_ratio=eligible.length?coverage.micro_scanned_total/eligible.length:0;coverage.discovery_mode='TICKER_ALL + ROTATING_1M_5M_MICRO + DEEP_15M_1H_4H_DEPTH';
+      coverage.micro_scanned_total=microScanned.filter(x=>x&&!x.failed).length;
+      coverage.micro_scan_candidates=selected.length;
+      coverage.micro_candidate_target=Math.min(Math.max(1,Math.trunc(this.config.microScanCandidates||36)),uniqueItemCount(eligible.map(row=>({symbol:row.symbol}))));
+      coverage.micro_candidate_shortfall=Math.max(0,coverage.micro_candidate_target-selected.length);
+      coverage.micro_quiet_selected_total=selected.filter(x=>x._selection_lane==='quiet').length;
+      coverage.micro_rotation_selected_total=selected.filter(x=>x._selection_lane==='rotation').length;
+      coverage.micro_exceptional_bypass_total=selected.filter(x=>x._selection_lane==='exceptional').length;
+      coverage.rotation_cycle=cycle;
+      const deepPool=microScanned.filter(x=>x&&!x.failed&&x.symbol&&x.micro_fingerprint?.score!=null&&hasFiniteNumber(x.micro_fingerprint.score));
+      coverage.deep_candidate_pool_total=uniqueItemCount(deepPool);
+      coverage.deep_candidate_target=Math.min(Math.max(1,Math.trunc(this.config.deepCandidates||10)),coverage.deep_candidate_pool_total);
+      coverage.deep_candidates_requested=deepTargets.length;
+      coverage.deep_candidate_shortfall=Math.max(0,coverage.deep_candidate_target-deepTargets.length);
+      coverage.deep_quiet_selected_total=deepTargets.filter(x=>x._selection_lane==='quiet').length;
+      coverage.deep_rotation_selected_total=deepTargets.filter(x=>x._selection_lane==='rotation').length;
+      coverage.deep_exceptional_bypass_total=deepTargets.filter(x=>x._selection_lane==='exceptional').length;
+      coverage.micro_scan_coverage_ratio=eligible.length?coverage.micro_scanned_total/eligible.length:0;
+      coverage.discovery_mode='TICKER_ALL + ROTATING_1M_5M_MICRO + DEEP_15M_1H_4H_DEPTH';
       this.lastCoverage=coverage;this.failedSymbols=[...new Set(failedSymbols)];
       for(const item of ok)item.coverage=coverage;
       ok.sort((a,b)=>(Number.isFinite(Number(b.early_expansion_score))?Number(b.early_expansion_score):-1)-(Number.isFinite(Number(a.early_expansion_score))?Number(a.early_expansion_score):-1)||Number(b.micro_fingerprint?.score||-1)-Number(a.micro_fingerprint?.score||-1)||a.symbol.localeCompare(b.symbol));
