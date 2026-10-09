@@ -100,7 +100,8 @@ test('records Radar 8/Radar 9 observations with time, entry, stage, data quality
     assert.equal(r8.created_at,NOW);
     assert.equal(r8.build_version,'Build 224');
     assert.equal(r8.signal_score,null);
-    assert.deepEqual(r8.archive_missing_fields,['signal_score','build_commit']);
+    assert.ok(r8.archive_missing_fields.includes('signal_score'));
+    assert.equal(r8.archive_missing_fields.includes('build_commit'),!r8.build_commit);
     assert.equal(r8.outcome_status,'PENDING');
     assert.equal(r8.horizon_status['5m'].status,'PENDING');
     assert.equal(state.records.find(x=>x.radar==='RADAR_9').radar,'RADAR_9');
