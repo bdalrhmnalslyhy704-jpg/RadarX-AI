@@ -800,6 +800,9 @@ function quietDeepRank(item,cfg){
 }
 function isExceptionalDeepCandidate(item,cfg){
   const move=absolute24hMove(item?.row),fp=item?.micro_fingerprint,m=fp?.metrics||{},c=fp?.category_scores||{};
+  // A verified closed-candle activity shock earns a deep confirmation slot even after a large daily move.
+  // This changes observation priority only; it does not grant signal or entry eligibility.
+  if(fp?.activity_shock?.detected===true)return true;
   if(move===null||move>=Number(cfg.hardExtended24hMovePct||18))return false;
   const volume=Math.max(hasFiniteNumber(m.rvol_1m)?Number(m.rvol_1m):0,hasFiniteNumber(m.rvol_5m)?Number(m.rvol_5m):0);
   const trades=Math.max(hasFiniteNumber(m.trade_rvol_1m)?Number(m.trade_rvol_1m):0,hasFiniteNumber(m.trade_rvol_5m)?Number(m.trade_rvol_5m):0);
