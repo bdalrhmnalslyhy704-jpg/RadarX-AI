@@ -5,12 +5,18 @@ import {normalizeEpochMs} from '../core/data-quality.mjs';
 const toCandle = payload => {
   const k=payload?.k;
   if(payload?.e!=='kline'||!k) return null;
+  const receivedAt=Date.now();
+  const eventTime=normalizeEpochMs(Number(payload.E)||receivedAt, 'eventTime');
+  const openTime=normalizeEpochMs(k.t, 'openTime');
+  const closeTime=normalizeEpochMs(k.T, 'closeTime');
   return {
-    symbol:String(k.s||'').toUpperCase(), openTime:normalizeEpochMs(k.t, 'openTime'), closeTime:normalizeEpochMs(k.T, 'closeTime'),
+    symbol:String(k.s||'').toUpperCase(),openTime,closeTime,
     open:Number(k.o),high:Number(k.h),low:Number(k.l),close:Number(k.c),volume:Number(k.v),
     quoteVolume:Number(k.q),tradeCount:Number(k.n),takerBuyBaseVolume:Number(k.V),
     takerBuyQuoteVolume:Number(k.Q),closed:Boolean(k.x),source:'BINANCE_PUBLIC_WS',
-    sourceTime:normalizeEpochMs(Number(payload.E)||Date.now(), 'eventTime'),timeframe:String(k.i||'')
+    sourceTime:eventTime,eventTime,receivedAt,
+    ageMs:Math.max(0,receivedAt-closeTime),
+    transportLatencyMs:Math.max(0,receivedAt-eventTime),timeframe:String(k.i||'')
   };
 };
 
