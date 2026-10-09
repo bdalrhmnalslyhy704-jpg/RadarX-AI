@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {classifyBackendState,isFreshLiveSignal,isFreshLiveState} from './app/src/main/assets/radarx-backend-client.mjs';
+import {classifyBackendState,isFreshLiveSignal,isFreshLiveState,getFalconEyeRadar} from './app/src/main/assets/radarx-backend-client.mjs';
 import {readFile} from 'node:fs/promises';
 
 const freshSignal={status:200,body:{signal:{data_status:{data_stale:false,data_valid:true,last_error:null}},meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}}};
@@ -23,6 +23,15 @@ assert.match(moveService,/عند انقطاع الإنترنت: حُفظ الت�
 const screen=await readFile(new URL('./app/src/main/assets/radarx-market-radar-screen.mjs',import.meta.url),'utf8');
 assert.match(screen,/SCAN_COMPLETE/);
 assert.match(screen,/Paper Trading/);
+let falconRequestUrl='';
+const falconResult=await getFalconEyeRadar({limit:5,since:123,scan:true},async(url,options)=>{
+  falconRequestUrl=url;
+  assert.equal(options.method,'GET');
+  return {ok:true,status:200,json:async()=>({radar:'FALCON_EYE_RADAR',monitoring:{running:true}})};
+});
+assert.equal(falconResult.ok,true);
+assert.match(falconRequestUrl,/\/api\/falcon-eye-radar\?limit=5&since=123&scan=1$/);
+
 console.log('Android backend-client regression tests passed');
 
 // Dashboard CI trigger; no runtime behavior.
@@ -40,3 +49,6 @@ assert.match(manifest,/android:process=":radar_background"/);
 // UI_READY is emitted from the WebView bridge and is verified by the native emulator smoke test, not by this source-level regression suite.
 assert.equal(mainActivity.includes('BACKGROUND_START_DELAY_MS'),false);
 assert.equal(mainActivity.includes('postDelayed(backgroundStartRunnable, BACKGROUND_START_DELAY_MS)'),false);
+assert.match(mainActivity,/if \(isAllowedBackendUri\(request\.getUrl\(\)\)\)/);
+assert.match(moveService,/manager\.getRunningServices\(Integer\.MAX_VALUE\)/);
+
