@@ -211,14 +211,23 @@ function chartPanel(root) {
     const out=root.querySelector('#rx-co'), symbol=root.querySelector('#rx-cs').value.trim().toUpperCase();
     out.innerHTML='<p class="rxsuite-row">جاري تحليل 12 زاوية…</p>';
     try {
-      const body=await market(), c=findCandidate(body,symbol);
-      if(!c){out.innerHTML='<div class="rxsuite-row"><b>WAIT</b><small>الرمز غير موجود ضمن المرشحين الحاليين.</small></div>';return;}
-      const p=Number(c.last_price), r=root.querySelector('#rx-cm').value==='scalp'?0.0075:0.018, long=c.direction==='LONG';
-      const sl=p*(long?1-r:1+r), tp1=p*(long?1+r*1.5:1-r*1.5), tp2=p*(long?1+r*2.5:1-r*2.5), fp=c.pre_breakout_fingerprint||{};
-      out.innerHTML='<div class="rxsuite-grid">'+box('Signal state',c.signal_state)+box('Entry',num(p,8))+box('Stop Loss',num(sl,8))+box('TP1',num(tp1,8))+box('TP2',num(tp2,8))+box('Images',Math.min(4,f.files.length))+'</div>' +
-        agents(c) + '<div class="rxsuite-row"><div><b>Pre-Breakout Fingerprint</b><small>stage=' + esc(fp.stage||'NORMAL') + ' · score=' + num(fp.score,1) + ' · trap=' + percent(fp.trapRisk,0) + ' · evidence=' + (fp.evidenceCount || '—') + '/8</small></div><span class="rxsuite-tag ' + (fp.detected?'rxsuite-ok':'rxsuite-warn') + '">' + (fp.detected?'DETECTED':'NOT CONFIRMED') + '</span></div>' +
-        '<p class="rxsuite-row">تنبيه: الصورة لا تُعامل كرؤية حاسوبية خارجية؛ القيم ناتجة من محرك RadarX الكمي.</p>';
-    } catch(e){ out.innerHTML='<div class="rxsuite-row"><b>DATA UNAVAILABLE</b><small>'+esc(e.message)+'</small></div>'; }
+      const scan=await deepScan(symbol);
+      const body=await market().catch(()=>null);
+      const c=body?findCandidate(body,symbol):null;
+      const p=Number(scan.price?.last ?? scan.price?.last_closed_15m);
+      const live=scan.meta?.live===true && Number.isFinite(Number(scan.price?.last));
+      const assessment=scan.assessment||{}, zones=scan.zones||{}, frames=scan.timeframes||{};
+      const mode=root.querySelector('#rx-cm').value==='scalp'?'Scalping view':'Swing view';
+      const banner=body?marketNotice(body):'<div class="rxsuite-row"><div><b>Market Radar غير متاح حاليًا</b><small>استخدمنا الفحص العميق المستقل إن كانت بياناته سليمة؛ المرشح متعدد الاستراتيجيات لم يصل.</small></div><span class="rxsuite-tag rxsuite-warn">PARTIAL</span></div>';
+      const zoneRow='<div class="rxsuite-grid">'+box('Trend / '+mode,assessment.market_read||assessment.direction_bias||'—')+box('Analysis strength',num(assessment.analysis_strength,0))+box('Momentum',num(scan.momentum?.score,0))+box('Buy / sell pressure',scan.pressure?.reading||num(scan.pressure?.score,0))+box('Demand / support',zones.support!=null?num(zones.support,8):'—')+box('Supply / resistance',zones.resistance!=null?num(zones.resistance,8):'—')+'</div>';
+      const frameRows=['15m','1h','4h'].map(tf=>{const x=frames[tf]||{};return box(tf+' trend',x.structure?.label||x.structure?.state||x.trend_state||'—')+box(tf+' RSI',num(x.rsi14,1));}).join('');
+      const candidateSummary=c?agents(c):'<div class="rxsuite-row"><div><b>لا يوجد مرشح من متعدد الاستراتيجيات لهذا الرمز الآن</b><small>يعرض التقرير العميق أدناه ما توفر من بياناته، ولا يخترع إشارة مفقودة.</small></div></div>';
+      const fp=c?.pre_breakout_fingerprint||null;
+      const fingerprint=fp?'<div class="rxsuite-row"><div><b>Pre-Breakout Fingerprint</b><small>stage='+esc(fp.stage||'NORMAL')+' · score='+num(fp.score,1)+' · trap='+percent(fp.trapRisk,0)+' · evidence='+(fp.evidenceCount||'—')+'/8</small></div><span class="rxsuite-tag '+(fp.detected?'rxsuite-ok':'rxsuite-warn')+'">'+(fp.detected?'DETECTED':'NOT CONFIRMED')+'</span></div>':'';
+      out.innerHTML=banner+deepNotice(scan)+zoneRow+'<div class="rxsuite-grid">'+frameRows+'</div>'+candidateSummary+fingerprint+
+        '<p class="rxsuite-row">صور الشارت تُعاين على الجهاز فقط؛ لا ندّعي استخراج أنماط بصرية من الصورة. مستويات العرض مأخوذة من تحليل الخادم للشموع المغلقة.</p>'+
+        (!live?'<div class="rxsuite-row"><b>لا يوجد سعر حي مؤكد</b><small>التقرير الفني لا يُعامل كإشارة دخول.</small></div>':'');
+    } catch(e){ out.innerHTML='<div class="rxsuite-row"><b>تعذر التحليل</b><small>'+esc(e.message)+'</small></div>'; }
   };
 }
 
