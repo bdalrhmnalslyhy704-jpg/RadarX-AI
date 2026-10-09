@@ -742,7 +742,9 @@ function isExceptionalDeepCandidate(item,cfg){
 }
 function selectionSymbol(item){return String(item?.symbol??item?.row?.symbol??'').trim().toUpperCase();}
 function takeUniqueLane(selected,seen,pool,count,lane){
-  const limit=Math.max(0,Math.trunc(Number(count)||0));let added=0;
+  const limit=Math.max(0,Math.trunc(Number(count)||0));
+  if(limit===0)return 0;
+  let added=0;
   for(const item of pool||[]){
     const symbol=selectionSymbol(item);
     if(!symbol||seen.has(symbol))continue;
