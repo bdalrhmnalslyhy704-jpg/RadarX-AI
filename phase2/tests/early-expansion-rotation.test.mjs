@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,nextEarlyExpansionPollDelayMs} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -45,6 +45,15 @@ function candidate(symbol,move,{score=65,participation=75,tradeParticipation=70,
   };
 }
 
+
+test('Radar 8 schedules the next cycle from actual completion instead of skipping an overrun interval',()=>{
+  assert.equal(nextEarlyExpansionPollDelayMs(45000,30000,true),15000);
+  assert.equal(nextEarlyExpansionPollDelayMs(45000,45000,true),0);
+  assert.equal(nextEarlyExpansionPollDelayMs(45000,61800,true),0);
+  assert.equal(nextEarlyExpansionPollDelayMs(45000,64000,true),0);
+  assert.equal(nextEarlyExpansionPollDelayMs(45000,1000,false),5000);
+  assert.equal(nextEarlyExpansionPollDelayMs(1000,1000,false),1000);
+});
 
 test('Radar 8 logs a full-cycle duration and phase timing breakdown',async()=>{
   const events=[];
