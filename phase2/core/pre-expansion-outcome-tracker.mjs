@@ -269,7 +269,17 @@ export async function recordPreExpansionSignals(store,alerts,{now=Date.now(),mar
       }
       const existing=state.records.find(x=>x.signal_id===incoming.signal_id);
       if(existing){skipped++;continue;}
-      state.records.push(incoming);loggedSignals.push({signal_id:incoming.signal_id,radar:incoming.radar,symbol:incoming.symbol,signal_type:incoming.signal_type,entry_price:incoming.entry_price,detected_at:incoming.detected_at,data_quality:incoming.data_quality,market_regime:incoming.market_regime,detected_before_move:incoming.detected_before_move,already_extended_at_detection:incoming.already_extended_at_detection,reason_codes:incoming.reason_codes});
+      state.records.push(incoming);loggedSignals.push({
+        signal_id:incoming.signal_id,radar:incoming.radar,symbol:incoming.symbol,
+        signal_type:incoming.signal_type,entry_price:incoming.entry_price,detected_at:incoming.detected_at,
+        data_quality:incoming.data_quality,data_quality_source:incoming.data_quality_source,
+        reported_data_quality:incoming.reported_data_quality,data_quality_status:incoming.data_quality_status,
+        available_fields:incoming.available_fields,missing_required_fields:incoming.missing_required_fields,
+        evaluation_eligible:incoming.evaluation_eligible,evaluation_status:incoming.evaluation_status,
+        evaluation_exclusion_reason:incoming.evaluation_exclusion_reason,
+        market_regime:incoming.market_regime,detected_before_move:incoming.detected_before_move,
+        already_extended_at_detection:incoming.already_extended_at_detection,reason_codes:incoming.reason_codes
+      });
       state.last_stage_by_key[key]={stage:incoming.signal_type,last_recorded_at:now,signal_id:incoming.signal_id};
       recorded++;changed=true;
     }
