@@ -89,23 +89,41 @@ start_app_and_wait_ready() {
 }
 
 open_tradli_from_dashboard() {
-  local attempt xml bounds x1 y1 x2 y2 cx cy
-  for attempt in $(seq 1 8); do
-    adb shell uiautomator dump /sdcard/radarx-window.xml >/dev/null 2>&1 || true
-    xml="$(adb shell cat /sdcard/radarx-window.xml 2>/dev/null | tr -d '\r' || true)"
-    bounds="$(printf '%s\n' "$xml" | sed -n 's/.*text="فتح TRADLI"[^>]*bounds="\[\([0-9][0-9]*\),\([0-9][0-9]*\)\]\[\([0-9][0-9]*\),\([0-9][0-9]*\)\]".*/\1 \2 \3 \4/p' | head -n 1)"
-    if [[ -n "$bounds" ]]; then
-      read -r x1 y1 x2 y2 <<< "$bounds"
-      cx=$(( (x1+x2)/2 ))
-      cy=$(( (y1+y2)/2 ))
-      adb shell input tap "$cx" "$cy"
+  local attempt tap_y top
+  # The CI emulator is 320x640. The main dashboard's TRADLI card follows the
+  # hero and statistics area; use real taps on its full-width button, not a
+  # direct launch of the non-exported Activity or a WebView accessibility dump.
+  for attempt in 1 2 3; do
+    adb shell am start -W -n com.radarx.app/.MainActivity >/dev/null
+    wait_for_online_device
+    # Return to the top of the scrolling dashboard before each coordinate variant.
+    for _ in $(seq 1 7); do
+      adb shell input swipe 160 220 160 610 120
+    done
+    case "$attempt" in
+      1)
+        adb shell input swipe 160 590 160 300 300
+        tap_y=385
+        ;;
+      2)
+        adb shell input swipe 160 590 160 360 260
+        tap_y=440
+        ;;
+      3)
+        adb shell input swipe 160 590 160 200 360
+        tap_y=245
+        ;;
+    esac
+    sleep 1
+    adb shell input tap 160 "$tap_y"
+    sleep 3
+    top="$(adb shell dumpsys activity activities 2>/dev/null | tr -d '\r' || true)"
+    if printf '%s\n' "$top" | grep -q 'com.radarx.app/.TradliActivity'; then
       return 0
     fi
-    adb shell input swipe 200 780 200 300 420
-    sleep 1
   done
-  echo "::error::TRADLI link was not discoverable in the dashboard accessibility tree"
-  printf '%s\n' "$xml" | grep -o 'text="[^"]*TRADLI[^"]*"' | tail -n 20 || true
+  echo "::error::Tapping the TRADLI card did not open TradliActivity"
+  printf '%s\n' "$top" | grep -E 'mResumedActivity|ResumedActivity' | tail -n 5 || true
   return 1
 }
 
