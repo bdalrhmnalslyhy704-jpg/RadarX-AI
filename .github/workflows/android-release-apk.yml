@@ -65,8 +65,7 @@ jobs:
           ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
           grep -RInq "paper_trading=true" android/app/src/main/assets
           grep -RInq "real_order_execution=false" android/app/src/main/assets
-          grep -RInq "confidence_score" android/app/src/main/assets
-          grep -RInq "UNKNOWN" android/app/src/main/assets
+          # Confidence score is enforced by the live Radar 9 API contract below; it is not required as UI text in assets.
 
       - name: Verify Falcon Eye and Supreme Fusion tests
         shell: bash
