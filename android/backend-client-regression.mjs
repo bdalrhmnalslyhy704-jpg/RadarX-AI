@@ -33,6 +33,11 @@ assert.match(background,/rotation_alert_cursor_at/);
 assert.match(background,/CHANNEL_ROTATION_ALERTS/);
 assert.match(background,/KAHIR_RADAR/);
 
+const tradliActivity = await readFile(new URL('./app/src/main/java/com/radarx/app/TradliActivity.java', import.meta.url), 'utf8');
+assert.match(tradliActivity,/PRIMARY_BACKEND_ORIGIN\s*=\s*"https:\/\/radarx-ai-triple-production\.up\.railway\.app"/);
+assert.match(tradliActivity,/FALLBACK_BACKEND_ORIGIN\s*=\s*"https:\/\/radarx-ai-production\.up\.railway\.app"/);
+assert.match(tradliActivity,/PRIMARY_BACKEND_ORIGIN\.equalsIgnoreCase\(origin\)/);
+assert.match(tradliActivity,/FALLBACK_BACKEND_ORIGIN\.equalsIgnoreCase\(origin\)/);
 const manifest = await readFile(new URL('./app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
 const mainActivity = await readFile(new URL('./app/src/main/java/com/radarx/app/MainActivity.java', import.meta.url), 'utf8');
 assert.match(manifest,/android:foregroundServiceType="dataSync\\|specialUse"/);
