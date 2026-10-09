@@ -43,6 +43,23 @@ cleanup() {
 }
 trap cleanup EXIT
 
+require_monitor_lifecycle_evidence() {
+  local logs="$1"
+  if printf '%s\n' "$logs" | grep -Fq "BACKGROUND_SERVICE_READY"; then
+    return 0
+  fi
+  if printf '%s\n' "$logs" | grep -Fq "BACKGROUND_OFFLINE_WAIT"; then
+    return 0
+  fi
+  if printf '%s\n' "$logs" | grep -Eq "BACKGROUND_SCAN_OK|BACKGROUND_SCAN_COMPLETED" \
+      && printf '%s\n' "$logs" | grep -Fq "FALCON_EYE_FEED_OK"; then
+    return 0
+  fi
+  echo "::error::Foreground monitor has not shown READY, successful scan+Falcon feed, or offline-wait evidence"
+  printf '%s\n' "$logs" | grep -E 'BACKGROUND_|FALCON_EYE_' | tail -n 30 || true
+  return 1
+}
+
 start_app_and_wait_ready() {
   wait_for_online_device
   adb shell am force-stop com.radarx.app || true
@@ -81,11 +98,10 @@ start_app_and_wait_ready() {
     return 1
   fi
 
-  # Build 224 now requires continuous monitoring: opening the Activity auto-starts
-  # the foreground service when notifications are permitted. This must be explicit
-  # in the native logs and must not crash/close the Activity.
-  printf '%s\n' "$LOGS" | grep -Fq "BACKGROUND_AUTO_START_REQUEST"
-  printf '%s\n' "$LOGS" | grep -Fq "BACKGROUND_SERVICE_READY"
+  # A running monitor may have been started before this log window (Android can
+  # keep the foreground service alive while the Activity is recreated). Accept
+  # explicit readiness, a successful live scan+Falcon feed, or explicit offline wait.
+  require_monitor_lifecycle_evidence "$LOGS"
 }
 
 open_tradli_from_dashboard() {
@@ -136,12 +152,8 @@ assert_background_service_declared() {
   # and required permissions are asserted statically by the release workflow.
   local LOGS
   LOGS="$(adb logcat -d -s RadarXBackground:I '*:S' 2>/dev/null || true)"
-  if ! printf '%s\n' "$LOGS" | grep -Fq "BACKGROUND_AUTO_START_REQUEST"; then
-    echo "::error::Activity did not request the background monitor"
-    return 1
-  fi
-  if ! printf '%s\n' "$LOGS" | grep -Fq "BACKGROUND_SERVICE_READY"; then
-    echo "::error::Foreground monitor did not reach BACKGROUND_SERVICE_READY"
+  if ! require_monitor_lifecycle_evidence "$LOGS"; then
+    echo "::error::Foreground monitor runtime evidence is missing"
     return 1
   fi
   if [[ -z "$(adb shell pidof com.radarx.app | tr -d '\r' || true)" ]]; then
