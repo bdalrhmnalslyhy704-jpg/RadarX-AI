@@ -129,6 +129,39 @@ adb exec-out screencap -p > "$RUNNER_TEMP/radarx-online.png"
 test -s "$RUNNER_TEMP/radarx-online.png"
 head -c 8 "$RUNNER_TEMP/radarx-online.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
 
+# TRADLI is a separate native Activity. Smoke-test its module bootstrap inside the embedded WebView.
+adb logcat -c
+adb shell am start -W -n com.radarx.app/.TradliActivity >/dev/null
+wait_for_online_device
+TRADLI_READY=0
+for attempt in $(seq 1 20); do
+  TRADLI_LOGS="$(adb logcat -d -s RadarXTradliWeb:I '*:S' 2>/dev/null || true)"
+  if printf '%s\n' "$TRADLI_LOGS" | grep -Fq "TRADLI_PAGE_READY"; then
+    TRADLI_READY=1
+    break
+  fi
+  if printf '%s\n' "$TRADLI_LOGS" | grep -Fq "TRADLI page boot error:"; then
+    echo "::error::TRADLI feature suite failed during embedded WebView bootstrap"
+    printf '%s\n' "$TRADLI_LOGS"
+    return 1 2>/dev/null || exit 1
+  fi
+  sleep 1
+done
+if [[ "$TRADLI_READY" != "1" ]]; then
+  echo "::error::TRADLI_PAGE_READY was not emitted"
+  adb logcat -d -s RadarXTradliWeb:I '*:S' 2>/dev/null || true
+  exit 1
+fi
+TRADLI_TOP="$(adb shell dumpsys activity activities 2>/dev/null | tr -d '\r' || true)"
+if ! printf '%s\n' "$TRADLI_TOP" | grep -q 'com.radarx.app/.TradliActivity'; then
+  echo "::error::TRADLI Activity did not remain resumed"
+  printf '%s\n' "$TRADLI_TOP" | grep -E 'mResumedActivity|ResumedActivity' || true
+  exit 1
+fi
+adb shell am start -W -n com.radarx.app/.MainActivity >/dev/null
+wait_for_online_device
+sleep 2
+
 # Background monitoring is continuous by default; the non-exported service must remain registered.
 assert_background_service_declared
 test -n "$(adb shell pidof com.radarx.app | tr -d '\r' || true)"
