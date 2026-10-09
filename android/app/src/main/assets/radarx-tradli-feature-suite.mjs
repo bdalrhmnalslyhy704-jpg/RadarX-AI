@@ -1,5 +1,5 @@
 
-import { getMarketRadar } from './radarx-backend-client.mjs';
+import { getMarketRadar, getSymbolDeepScan, getRadarAlerts } from './radarx-backend-client.mjs';
 
 const esc = (v) => String(v || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const num = (v,d=2) => Number.isFinite(Number(v)) ? Number(v).toFixed(d) : '—';
@@ -11,7 +11,7 @@ function addStyle() {
   s.id = 'rx-suite-style';
   s.textContent =
     '.rxsuite{margin-top:12px;background:#0b1820;border:1px solid #1d3944;border-radius:17px;padding:14px}' +
-    '.rxsuite-tabs{display:grid;grid-template-columns:repeat(6,1fr);gap:7px;margin:12px 0}' +
+    '.rxsuite-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:12px 0}' +
     '.rxsuite-tab{min-height:44px;border:1px solid #234651;background:#08131a;color:#dff2f6;border-radius:11px;font:inherit;font-weight:900}' +
     '.rxsuite-tab.active{border-color:#35c9ff;background:linear-gradient(135deg,#112f40,#182748);box-shadow:0 5px 16px rgba(53,201,255,.12)}' +
     '.rxsuite-pane{display:none;background:#08131a;border:1px solid #17313a;border-radius:13px;padding:12px}' +
@@ -34,8 +34,8 @@ function addStyle() {
     '.rxsuite-ok{border-color:#268c68;color:#b5f5da}.rxsuite-bad{border-color:#9b4651;color:#ffc4ca}.rxsuite-warn{border-color:#90713a;color:#ffe0a0}' +
     '.rxsuite-row{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:9px;border:1px solid #17313a;border-radius:10px;background:#071018;margin-top:7px}' +
     '.rxsuite-row small{display:block;color:#8da7b1;margin-top:2px}.rxsuite-images{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:7px}.rxsuite-thumb{width:100%;aspect-ratio:16/10;object-fit:cover;border-radius:8px;border:1px solid #244550}' +
-    '@media(max-width:700px){.rxsuite-tabs{grid-template-columns:repeat(2,1fr).rxsuite-form{grid-template-columns:1fr}.rxsuite-full{grid-column:auto}.rxsuite-grid,.rxsuite-agents{grid-template-columns:1fr 1fr}}' +
-    '.rxsuite-live{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:linear-gradient(135deg,#0f2031,#101a2b);border:1px solid #294d6a;border-radius:12px;margin:9px 0}' +'.rxsuite-live-dot{width:9px;height:9px;border-radius:50%;background:#43e0a3;box-shadow:0 0 12px #43e0a3}' +'.rxsuite-title{display:flex;align-items:center;justify-content:space-between;gap:10px}.rxsuite-sub{font-size:11px;color:#8ea6b8;margin-top:3px}' +'.rxsuite-copy{min-height:38px;padding:0 11px;border-radius:9px;border:1px solid #355977;background:#0e2131;color:#e8f5ff;font:inherit;font-weight:900}' +'.rxsuite-danger{border-color:#7b4653;background:#2a1720}.rxsuite-safe{border-color:#2e7f65;background:#10261f}' +'@media(max-width:450px){.rxsuite-grid,.rxsuite-agents,.rxsuite-images{grid-template-columns:1fr}}';
+    '@media(max-width:700px){.rxsuite-tabs{grid-template-columns:repeat(2,minmax(0,1fr))}.rxsuite-form{grid-template-columns:1fr}.rxsuite-full{grid-column:auto}.rxsuite-grid,.rxsuite-agents{grid-template-columns:repeat(2,minmax(0,1fr))}}' +
+    '.rxsuite-live{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:linear-gradient(135deg,#0f2031,#101a2b);border:1px solid #294d6a;border-radius:12px;margin:9px 0}' +'.rxsuite-live-dot{width:9px;height:9px;border-radius:50%;background:#ffd166;box-shadow:0 0 12px rgba(255,209,102,.45)}' +'.rxsuite-title{display:flex;align-items:center;justify-content:space-between;gap:10px}.rxsuite-sub{font-size:11px;color:#8ea6b8;margin-top:3px}' +'.rxsuite-copy{min-height:38px;padding:0 11px;border-radius:9px;border:1px solid #355977;background:#0e2131;color:#e8f5ff;font:inherit;font-weight:900}' +'.rxsuite-danger{border-color:#7b4653;background:#2a1720}.rxsuite-safe{border-color:#2e7f65;background:#10261f}' +'@media(max-width:450px){.rxsuite-grid,.rxsuite-agents,.rxsuite-images{grid-template-columns:1fr}}';
   document.head.appendChild(s);
 }
 
@@ -50,7 +50,7 @@ function readStoredMarket() {
     const raw = localStorage.getItem(MARKET_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (!parsed && parsed.body || !Number.isFinite(parsed.savedAt)) return null;
+    if (!parsed || !parsed.body || !Number.isFinite(parsed.savedAt)) return null;
     if (Date.now() - parsed.savedAt > MARKET_FALLBACK_MAX_AGE_MS) return null;
     return Object.assign({}, parsed.body, {
       __transportFallback: true,
@@ -103,6 +103,64 @@ async function market() {
 
 function findCandidate(body,symbol) {
   return (body.candidates || []).find(x => String(x.symbol).toUpperCase() === symbol.toUpperCase());
+}
+
+function marketNotice(body) {
+  if (body?.__transportFallback) {
+    const age = Math.max(0,Number(body.__transportAgeMs)||0);
+    const mins = Math.max(1,Math.round(age/60000));
+    return '<div class="rxsuite-row"><div><b>بيانات محفوظة — ليست حية</b><small>فشل الاتصال بالخادم؛ آخر نسخة محفوظة منذ '+mins+' دقيقة تقريبًا. لا تستخدمها لاتخاذ قرار تداول.</small></div><span class="rxsuite-tag rxsuite-warn">CACHED</span></div>';
+  }
+  if (body?.meta?.live === false || body?.meta?.data_stale === true) {
+    return '<div class="rxsuite-row"><div><b>الخادم ردّ لكن البيانات غير مؤكدة كبيانات حية</b><small>انتظر تحديث المصدر؛ لا تُعامل هذه النتيجة كإشارة دخول حديثة.</small></div><span class="rxsuite-tag rxsuite-warn">NOT LIVE</span></div>';
+  }
+  return '<div class="rxsuite-row"><div><b>مصدر النتيجة: خادم RadarX</b><small>افحص حالة بيانات الرمز داخل التقرير؛ اتصال الخادم وحده لا يثبت صلاحية فرصة تداول.</small></div><span class="rxsuite-tag rxsuite-safe">BACKEND RESPONSE</span></div>';
+}
+
+function requireFreshMarket(body) {
+  if (body?.__transportFallback) throw new Error('SAVED_DATA_NOT_VALID_FOR_TRADE_REVIEW');
+  if (body?.meta?.live === false || body?.meta?.data_stale === true) throw new Error('LIVE_MARKET_DATA_NOT_CONFIRMED');
+}
+
+async function deepScan(symbol) {
+  const response = await getSymbolDeepScan(symbol);
+  if (!response?.ok || response.status !== 200 || response.body?.status !== 'ok') {
+    const detail = response?.body?.error || response?.body?.code || response?.error || ('HTTP_' + String(response?.status || 0));
+    throw new Error('DEEP_SCAN_' + detail);
+  }
+  const scan = response.body;
+  if (scan.paper_trading !== true || scan.real_order_execution !== false ||
+      scan.meta?.paper_trading !== true || scan.meta?.real_order_execution !== false ||
+      scan.confidence_score !== 'UNKNOWN' || scan.meta?.confidence_score !== 'UNKNOWN') {
+    throw new Error('DEEP_SCAN_SAFETY_CONTRACT_INVALID');
+  }
+  return scan;
+}
+
+function requireLiveDeepScan(scan) {
+  if (scan?.meta?.live !== true || !Number.isFinite(Number(scan?.price?.last)) || Number(scan.price.last) <= 0) {
+    throw new Error('LIVE_PRICE_NOT_AVAILABLE');
+  }
+}
+
+function deepNotice(scan) {
+  const live = scan?.meta?.live === true && Number(scan?.price?.last) > 0;
+  const warnings = Array.isArray(scan?.meta?.source_warnings) ? scan.meta.source_warnings : [];
+  const text = live
+    ? 'آخر سعر مستلم من الخادم '+num(scan.price.last,8)+' • تحليل شموع مغلقة 15m / 1h / 4h'
+    : 'التحليل الفني وصل، لكن السعر الحي غير متاح. لن نعرضه كفرصة حية.';
+  const warningText = warnings.length ? ' • تنبيهات المصدر: '+warnings.join(', ') : '';
+  return '<div class="rxsuite-row"><div><b>'+(live?'تحليل عميق من الخادم':'بيانات غير مكتملة')+'</b><small>'+esc(text+warningText)+'</small></div><span class="rxsuite-tag '+(live?'rxsuite-ok':'rxsuite-warn')+'">'+(live?'LIVE PRICE':'CHECK DATA')+'</span></div>';
+}
+
+function levelsFor(frame,key,price) {
+  const rows = Array.isArray(frame?.[key]) ? frame[key] : [];
+  const out = rows.map(x => {
+    const level = Number(typeof x === 'number' ? x : (x?.price ?? x?.level ?? x?.value));
+    if (!Number.isFinite(level) || level <= 0) return null;
+    return {price:level,touches:Number(x?.touches)||0,distance:price>0?Math.abs(level-price)/price*100:Infinity};
+  }).filter(Boolean).sort((a,b)=>a.distance-b.distance);
+  return out.slice(0,3);
 }
 function agents(c) {
   const ss = Array.isArray(c && c.strategies) ? c.strategies : [];
