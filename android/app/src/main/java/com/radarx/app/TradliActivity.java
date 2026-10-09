@@ -47,6 +47,7 @@ public final class TradliActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        android.util.Log.i("RadarXTradliWeb", "TRADLI_ACTIVITY_ON_CREATE");
         getWindow().setStatusBarColor(Color.rgb(5, 12, 22));
         getWindow().setNavigationBarColor(Color.rgb(5, 12, 22));
 
@@ -124,7 +125,12 @@ public final class TradliActivity extends Activity {
                 Uri uri = request.getUrl();
                 WebResourceResponse local = assetLoader.shouldInterceptRequest(uri);
                 if (local != null) return local;
-                if (isAllowedBackendUri(uri)) return fetchBackend(request);
+                if (isAllowedBackendUri(uri)) {
+                    if (!"GET".equalsIgnoreCase(request.getMethod())) {
+                        return blockedResponse("TRADLI backend proxy is GET-only");
+                    }
+                    return fetchBackend(request);
+                }
                 return blockedResponse("Network destination blocked");
             }
 
@@ -217,6 +223,7 @@ public final class TradliActivity extends Activity {
                     new ByteArrayInputStream(body)
             );
         } catch (Exception error) {
+            android.util.Log.w("RadarXTradliWeb", "BACKEND_PROXY_FAILURE " + error.getClass().getSimpleName());
             byte[] body = ("{\"status\":503,\"error\":\"" +
                     error.getClass().getSimpleName() + "\"}").getBytes(StandardCharsets.UTF_8);
             Map<String, String> headers = new HashMap<>();
