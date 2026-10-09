@@ -6,9 +6,10 @@ const toCandle = payload => {
   const k=payload?.k;
   if(payload?.e!=='kline'||!k) return null;
   const receivedAt=Date.now();
-  const eventTime=normalizeEpochMs(Number(payload.E)||receivedAt, 'eventTime');
+  // Validate candle timestamps first to preserve the existing failure precedence.
   const openTime=normalizeEpochMs(k.t, 'openTime');
   const closeTime=normalizeEpochMs(k.T, 'closeTime');
+  const eventTime=normalizeEpochMs(Number(payload.E)||receivedAt, 'eventTime');
   return {
     symbol:String(k.s||'').toUpperCase(),openTime,closeTime,
     open:Number(k.o),high:Number(k.h),low:Number(k.l),close:Number(k.c),volume:Number(k.v),
