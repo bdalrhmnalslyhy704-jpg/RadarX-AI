@@ -101,6 +101,28 @@ test('Kahir scans a full Spot universe before selecting a bounded deep set',asyn
 });
 
 
+
+test('Kahir rotates deep-scan slots beyond the same highest-activity candidates',()=>{
+  const radar=new KahirRadar({rest:{},store:{},config:{deepCandidates:4,deepRotationReserve:2,deepConcurrency:2},clock:()=>NOW,logger:{warn(){}}});
+  const rows=Array.from({length:12},(_,i)=>({
+    symbol:`KH${String(i).padStart(2,'0')}USDT`,lastPrice:1+i,
+    quoteVolume24h:500_000*(12-i),priceChange24h:8-i*0.8
+  }));
+  const updates=rows.map((row,i)=>({
+    symbol:row.symbol,selfChangePct:0.35-i*0.05,velocityBps:35-i*5,
+    marketVelocityBps:0,relativeVelocityBps:35-i*5,at:NOW
+  }));
+  const covered=new Set();
+  for(let cycle=0;cycle<3;cycle++){
+    const selected=radar.selectDeep(rows,updates);
+    assert.equal(selected.length,4);
+    assert.equal(new Set(selected.map(x=>x.symbol)).size,4);
+    for(const row of selected)covered.add(row.symbol);
+  }
+  assert.ok(covered.size>=8,`expected rotating deep scans to cover at least 8 of 12 symbols; got ${covered.size}`);
+  assert.equal(radar.deepCursor,6);
+});
+
 test('Kahir keeps its loop alive when a transient market request fails',async()=>{
   let calls=0;
   const rest={
