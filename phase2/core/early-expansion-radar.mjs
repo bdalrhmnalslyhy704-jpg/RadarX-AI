@@ -538,7 +538,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   const preExpansion=assessPreExpansionFingerprint({
     dataReady:gate.valid&&p>0,dailyChangePct:ticker.priceChange24h,lastPrice:p,
     maxMove24hPct:Math.min(8,Number(cfg.maxQuiet24hMovePct??8)),
-    maxMove5mPct:2.5,maxMove10mPct:3.8,
+    maxMove5mPct:2.5,maxMove10mPct:3.8,maxMove15mPct:6,
     baseScore:hl.score*.42+compressionExpansion*.35+quiet24*.23,
     higherLowScore:hl.score,compressionScore:compressionExpansion,
     compressionRatio:comp.ratio,rangeCompressionRatio:comp.ratio,bollingerRatio:bb.ratio,atrRatio:atrx.ratio,
