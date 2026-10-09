@@ -25,6 +25,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          set -x
           test "$(git rev-parse HEAD)" = "49959dda895dcebc688770f77075319b8681ef17"
           grep -Fq 'versionCode 26' android/app/build.gradle
           grep -Fq 'versionName "1.6.0"' android/app/build.gradle
