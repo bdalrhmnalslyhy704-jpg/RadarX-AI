@@ -19,15 +19,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          ref: 183c5494a6923fd19e59c00cfa1c23b8e3b04f12
+          ref: 36e190b2a2893395dc83827cffe6d6b748c64f17
 
       - name: Verify Build 224 + Falcon Eye source
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "183c5494a6923fd19e59c00cfa1c23b8e3b04f12"
-          grep -Fq 'versionCode 23' android/app/build.gradle
-          grep -Fq 'versionName "1.5.7"' android/app/build.gradle
+          test "$(git rev-parse HEAD)" = "36e190b2a2893395dc83827cffe6d6b748c64f17"
+          grep -Fq 'versionCode 24' android/app/build.gradle
+          grep -Fq 'versionName "1.5.8"' android/app/build.gradle
           test -s android/app/src/main/assets/falcon-eye-radar.html
           test -s android/app/src/main/assets/radarx-supreme-fusion.mjs
           grep -Fq 'falcon-eye-radar.html' android/app/src/main/assets/index.html
@@ -42,6 +42,11 @@ jobs:
           grep -Fq 'BACKGROUND_NETWORK_AVAILABLE' android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java
           grep -Fq 'BACKGROUND_OFFLINE_WAIT' android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java
           grep -Fq 'price_at_detection' android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java
+          grep -Fq 'isAllowedBackendUri(request.getUrl())' android/app/src/main/java/com/radarx/app/MainActivity.java
+          grep -Fq 'manager.getRunningServices(Integer.MAX_VALUE)' android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java
+          grep -Fq 'export async function getFalconEyeRadar' android/app/src/main/assets/radarx-backend-client.mjs
+          grep -Fq "id!=='FALCON_EYE_RADAR'" android/app/src/main/assets/radarx-radar-screen.mjs
+          grep -Fq 'RadarX Android 1.5.8' android/EMBEDDED_UI_BUILD.txt
           ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
           grep -RInq "paper_trading=true" android/app/src/main/assets
           grep -RInq "real_order_execution=false" android/app/src/main/assets
@@ -54,6 +59,7 @@ jobs:
           bash -n android/smoke-test.sh
           node --check android/app/src/main/assets/radarx-supreme-fusion.mjs
           node --test android/supreme-fusion.test.mjs
+          node android/backend-client-regression.mjs
           node --check phase2/core/falcon-eye-radar.mjs
           node --check phase2/core/radar-notification-gate.mjs
           node --check phase2/core/radar-alert-meta.mjs
@@ -70,22 +76,26 @@ jobs:
           BASE="https://radarx-ai-triple-production.up.railway.app"
           HEALTH="$(curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/healthz.json" -w "%{http_code}" "$BASE/healthz")"
           STATUS="$(curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/status.json" -w "%{http_code}" "$BASE/api/radar-status")"
-          FALCON="$(curl --location --silent --show-error --max-time 60 -o "$RUNNER_TEMP/falcon.json" -w "%{http_code}" "$BASE/api/falcon-eye-radar?limit=1&scan=0")"
+          FALCON="$(curl --fail --location --silent --show-error --connect-timeout 10 --max-time 120 -o "$RUNNER_TEMP/falcon.json" -w "%{http_code}" "$BASE/api/falcon-eye-radar?limit=1&scan=1")"
           test "$HEALTH" = "200"
           test "$STATUS" = "200"
-          case "$FALCON" in 200|503) ;; *) cat "$RUNNER_TEMP/falcon.json"; exit 1 ;; esac
+          test "$FALCON" = "200"
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           const s=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/status.json','utf8'));
           const f=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/falcon.json','utf8'));
           const e=(s.radars||[]).find(x=>x.radar==='FALCON_EYE_RADAR');
           if(!e) throw new Error('FALCON_EYE_NOT_REGISTERED');
+          if(e.running!==true || f.monitoring?.running!==true) throw new Error('FALCON_EYE_NOT_RUNNING');
           if(f.radar!=='FALCON_EYE_RADAR') throw new Error('FALCON_EYE_ENDPOINT_INVALID');
           if(f.radar_name!=='Radar 9 — عين الصقر') throw new Error('FALCON_EYE_NAME_INVALID');
           if(f.meta?.paper_trading!==true || f.meta?.real_order_execution!==false || f.meta?.confidence_score!=='UNKNOWN') throw new Error('FALCON_EYE_POLICY_INVALID');
           if(f.meta?.closed_candles_only!==true) throw new Error('FALCON_EYE_CLOSED_CANDLE_INVALID');
           if(!Array.isArray(f.candidates)) throw new Error('FALCON_EYE_CANDIDATES_INVALID');
-          console.log(JSON.stringify({radar:f.radar,running:e.running,candidates:f.candidates.length,alerts:Array.isArray(f.alerts)?f.alerts.length:0},null,2));
+          if(!Number.isFinite(Number(f.monitoring?.universe)) || Number(f.monitoring.universe)<1) throw new Error('FALCON_EYE_UNIVERSE_EMPTY');
+          if(!Number.isFinite(Number(f.monitoring?.last_scan_at))) throw new Error('FALCON_EYE_SCAN_NOT_COMPLETED');
+          if(String(f.monitoring?.last_error||'').includes('this.clock is not a function')) throw new Error('FALCON_EYE_CLOCK_REGRESSION');
+          console.log(JSON.stringify({radar:f.radar,running:e.running,universe:f.monitoring.universe,last_scan_at:f.monitoring.last_scan_at,scans:f.monitoring.scans,candidates:f.candidates.length,alerts:Array.isArray(f.alerts)?f.alerts.length:0},null,2));
           NODE
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -226,7 +236,6 @@ jobs:
       - name: Android Emulator smoke test
         id: android_emulator_smoke
         timeout-minutes: 7
-        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
@@ -253,19 +262,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TAG="android-v1.5.7-falcon-offline-${GITHUB_RUN_NUMBER}"
+          TAG="android-v1.5.8-falcon-clock-proxy-${GITHUB_RUN_NUMBER}"
           APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
-            --target "183c5494a6923fd19e59c00cfa1c23b8e3b04f12" \
-            --title "RadarX Native — Build 224 + Radar 8 V2 + Hawkeye V2 + Supreme Fusion + Falcon Eye Offline Queue 1.5.7" \
-            --notes "Signed universal APK from the official Build 224 lineage. Version 1.5.7 keeps Falcon Eye's durable offline queue, oldest-first replay, validated-network reconnect scan, and notifications with recorded detection price/time distinct from phone delivery time. The phone cannot fetch new live market data while its Internet is unavailable; the online Railway scanner may continue recording real discoveries for retrieval on reconnect. MainActivity starts the foreground monitor directly from the native Activity lifecycle and does not block monitoring while POST_NOTIFICATIONS permission is pending. The service-running check now uses process-local state instead of a stale SharedPreferences bit, so a force-stop/process death cannot prevent the next launch from restarting the monitor. Visible notifications still require the user to allow them. The emulator test uses a best-effort permission grant, checks native startup/service-ready logs, verifies offline wait, then validates reconnection resumption. No synthetic market discoveries are generated. Supreme Fusion, Radar 8 V2, Hawkeye V2; closed candles only; Spot/Paper/read-only only; paper_trading=true; real_order_execution=false; confidence_score=UNKNOWN. Android emulator smoke outcome: ${ANDROID_EMULATOR_SMOKE_OUTCOME}. A non-success result means the offline/reconnect smoke test remains unverified."
+            --target "36e190b2a2893395dc83827cffe6d6b748c64f17" \
+            --title "RadarX Native — Build 224 + Falcon Eye Recovery 1.5.8"
+            --notes "Version 1.5.8 fixes Falcon Eye clock initialization, routes embedded WebView calls through the allow-listed HTTPS backend proxy, checks the background service across Android processes, and makes Falcon Eye bypass stale UI cache and request an explicit scan. Offline phones cannot fetch live prices; the online Railway scanner can save real discoveries for replay after reconnect. Notifications retain original detection price/time separately from phone delivery time. Publishing requires source tests, a live Falcon Eye scan contract, signed APK verification, and a passing Android online/offline/reconnect emulator test. Spot/Paper/read-only only; paper_trading=true; real_order_execution=false; confidence_score=UNKNOWN. Android emulator smoke outcome: ${ANDROID_EMULATOR_SMOKE_OUTCOME}."
 
       - name: Verify HTTPS release download
         shell: bash
         run: |
           set -euo pipefail
-          TAG="android-v1.5.7-falcon-offline-${GITHUB_RUN_NUMBER}"
+          TAG="android-v1.5.8-falcon-clock-proxy-${GITHUB_RUN_NUMBER}"
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/radarx-release.apk"
           curl --fail --location --retry 3 --retry-delay 2 --silent --show-error "$URL" -o "${RUNNER_TEMP}/radarx-release-downloaded.apk"
           test -s "${RUNNER_TEMP}/radarx-release-downloaded.apk"
