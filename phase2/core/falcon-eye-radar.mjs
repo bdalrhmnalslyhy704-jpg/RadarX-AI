@@ -292,7 +292,7 @@ export function buildFalconEyeAnalysis({
     higherLowScore:hl,compressionScore,
     compressionRatio:bb.ratio,rangeCompressionRatio:rangeRatio,bollingerRatio:bb.ratio,atrRatio:atr.ratio,
     volumeRatio:va.volume_ratio,tradeRatio:va.trade_ratio,volumeTrend,tradeTrend,
-    relativeStrengthBtcPct,relativeStrengthMarketPct:null,marketRegimeLabel,
+    relativeStrengthBtcPct,relativeStrengthMarketPct:hasFiniteValue(ticker.relativeStrengthMarket24hPct)?Number(ticker.relativeStrengthMarket24hPct):null,marketRegimeLabel,
     resistanceDistanceAtr,breakoutConfirmed:br.break_up,falseBreakout,
     return5mPct:r5,return10mPct:r10,return15mPct:pct(Number(one.at(-1)?.close),Number(one.at(-16)?.close)),
     alreadyExtended:!notChasing
@@ -417,7 +417,14 @@ export class FalconEyeRadar {
     const r=await this.rest.request('/api/v3/ticker/24hr');
     const raw=(Array.isArray(r.data)?r.data:[]).map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
       .filter(x=>x.quoteVolume24h>=this.config.fastMinQuoteVolume24h&&this.universe.includes(x.symbol));
-    const pulse=updateMarketPulseHistory(raw,this.pulseHistory,this.clock(),{intervalMs:this.config.pollMs});
+    const marketMoves=raw.map(x=>x.priceChange24h).filter(hasFiniteValue).map(Number);
+    const marketMedianChange24hPct=median(marketMoves);
+    const benchmarked=raw.map(row=>({...row,
+      marketMedianChange24hPct,
+      relativeStrengthMarket24hPct:hasFiniteValue(row.priceChange24h)&&Number.isFinite(marketMedianChange24hPct)
+        ?Number(row.priceChange24h)-marketMedianChange24hPct:null
+    }));
+    const pulse=updateMarketPulseHistory(benchmarked,this.pulseHistory,this.clock(),{intervalMs:this.config.pollMs});
     this.marketCoverage=pulse.coverage;this.pulseReadyCount=pulse.readyCount;this.marketBreadthPct=pulse.breadthPct;
     this.fastCandidates=pulse.rows.filter(x=>x.market_pulse?.fast_trigger).length;
     return pulse.rows;
