@@ -1225,7 +1225,6 @@ export class EarlyExpansionRadar{
         finally{marketContextCompletedAt=this.clock();}
         return {btcFive,marketContext};
       })();
-      const outcomeMaintenanceStartedAt=this.clock();
       let outcomeMaintenanceWorkMs=0;
       const historyAlerts=[];
       try{
@@ -1277,7 +1276,6 @@ export class EarlyExpansionRadar{
           .finally(()=>{if(this.outcomeBackfillTask===task)this.outcomeBackfillTask=null;});
         this.outcomeBackfillTask=task;
       }
-      outcomeMaintenanceWorkMs+=Math.max(0,this.clock()-outcomeMaintenanceStartedAt-(marketContextCompletedAt-marketContextStartedAt));
       phaseTimings.outcome_maintenance_ms=outcomeMaintenanceWorkMs;
 
       const microScanned=await microScanPromise;
