@@ -134,3 +134,44 @@ test('startup removes only abandoned atomic-write temporary files before archive
   assert.equal(await readFile(unrelated,'utf8'),'keep-me');
   assert.equal(await readFile(source,'utf8'),'durable-archive');
 });
+
+
+test('large pre-expansion outcome ledger writes compact, valid JSON and remains updateable',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-outcome-compact-'));
+  const store=await new DurableStore({dir}).init();
+  const state={
+    version:'PRE_EXPANSION_OUTCOMES_V2',
+    records:Array.from({length:5000},(_,i)=>({
+      signal_id:'RADAR8:TEST'+i+'USDT:'+i,
+      radar:'RADAR_8',
+      symbol:'TEST'+i+'USDT',
+      signal_type:'WATCH_EARLY',
+      detected_at:1700000000000+i,
+      entry_price:1+i/10000,
+      evaluation_eligible:true,
+      marks:{'5m':null,'15m':null,'30m':null,'60m':null,'4h':null,'24h':null},
+      horizon_status:{'5m':{status:'PENDING',reason:'WAITING_FOR_HORIZON'},
+        '15m':{status:'PENDING',reason:'WAITING_FOR_HORIZON'},
+        '30m':{status:'PENDING',reason:'WAITING_FOR_HORIZON'},
+        '60m':{status:'PENDING',reason:'WAITING_FOR_HORIZON'},
+        '4h':{status:'PENDING',reason:'WAITING_FOR_HORIZON'},
+        '24h':{status:'PENDING',reason:'WAITING_FOR_HORIZON'}},
+      initial_metrics:{rvol:1.24,volume_ratio:1.31,trade_ratio:1.18},
+      reason_codes:['RVOL_5M_ACCELERATION','NEAR_5M_RESISTANCE']
+    })),
+    last_stage_by_key:{'RADAR_8|TEST0USDT':{stage:'WATCH_EARLY',last_recorded_at:1700000000000}},
+    last_price_update_at:0,last_report_log_at:0,last_historical_import_at:0,
+    last_historical_backfill_at:0,updated_at:1700000000000
+  };
+  await store.updatePreExpansionOutcomes(()=>state);
+  const saved=await readFile(store.files.preExpansionOutcomes,'utf8');
+  assert.equal(JSON.parse(saved).records.length,5000);
+  assert.ok(saved.startsWith('{"version":"PRE_EXPANSION_OUTCOMES_V2"'),
+    'large outcome ledger should be written in compact JSON');
+  assert.ok(Buffer.byteLength(saved)<Buffer.byteLength(JSON.stringify(state,null,2)),
+    'compact serialization should avoid large pretty-print overhead');
+  await store.updatePreExpansionOutcomes(current=>({...current,updated_at:1700000000123}));
+  const next=JSON.parse(await readFile(store.files.preExpansionOutcomes,'utf8'));
+  assert.equal(next.records.length,5000,'update must preserve every bounded record');
+  assert.equal(next.updated_at,1700000000123);
+});
