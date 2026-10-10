@@ -1,4 +1,5 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
+import {ScanSchedulerJournal, schedulerLaneReason} from './scan-scheduler.mjs';
 import {formatRadarTime12h,decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 
@@ -329,6 +330,10 @@ export function buildWhaleAccumulationAlert(input,now=Date.now()){
 export const WHALE_ACCUMULATION_DEFAULTS=Object.freeze({
   quote:'USDT',pollMs:60000,universeRefreshMs:10*60*1000,
   minQuoteVolume24h:1500000,topAnchors:8,rotationBatchSize:10,
+  schedulerFastPathSlots:2,schedulerQuietAnchorSlots:4,
+  schedulerExceptionalVolumeRatio:2.2,schedulerExceptionalTradeRatio:1.8,
+  schedulerExceptionalPriceStepPct:0.15,schedulerQuietParticipationRatio:1.12,
+  schedulerQuietMaxDailyMovePct:8,
   minWhaleNotional:25000,volumeDivisor:10000,
   minLargeBuyRatio:0.60,minLargeNotionalImbalance:0.12,minRepeatBuyScore:67,minBurstScore:58,
   minVolumeRatio:1.15,minTakerBuyRatio:0.515,minAbsorptionScore:67,
@@ -344,6 +349,8 @@ export class WhaleAccumulationRadar{
     this.clock=clock;this.logger=logger;this.running=false;this.busy=false;this.timer=null;
     this.universe=[];this.universeAt=0;this.cursor=0;this.scans=0;this.alertCount=0;this.lastError=null;this.lastScanAtMs=null;
     this.latestCandidates=[];this.previousDepth=new Map();this.lastAlertAt=new Map();this.lastCoverage={};
+    this.scheduler=new ScanSchedulerJournal({radar:'RADAR_9',store,clock,logger});
+    this.fastHistoryBySymbol=new Map();this.lastSelectionDistribution={};
   }
   start(){
     if(this.running)return Promise.resolve();
@@ -356,7 +363,8 @@ export class WhaleAccumulationRadar{
   async refreshUniverse(){
     const r=await this.rest.request('/api/v3/exchangeInfo');
     this.universe=buildSpotUniverse(r.data,this.config.quote).map(x=>x.symbol);
-    this.universeAt=this.clock();this.cursor=0;
+    this.universeAt=this.clock();
+    if(this.universe.length)this.cursor=this.cursor%this.universe.length;
   }
   async tickerRows(){
     const r=await this.rest.request('/api/v3/ticker/24hr');
@@ -364,25 +372,115 @@ export class WhaleAccumulationRadar{
       .filter(x=>this.universe.includes(x.symbol)&&Number(x.quoteVolume24h)>=Number(this.config.minQuoteVolume24h));
     return rows;
   }
-  selectBatch(rows){
-    const sorted=[...(Array.isArray(rows)?rows:[])].sort((a,b)=>{
-      const qa=Math.max(0,Number(a.quoteVolume24h)||0),qb=Math.max(0,Number(b.quoteVolume24h)||0);
-      const quietA=100-Math.min(60,Math.abs(Number(a.priceChange24h)||0)*10);
-      const quietB=100-Math.min(60,Math.abs(Number(b.priceChange24h)||0)*10);
-      return (quietB+Math.log10(Math.max(1,qb))*3)-(quietA+Math.log10(Math.max(1,qa))*3);
+  updateFastSnapshot(row, at = this.clock()) {
+    const symbol=String(row?.symbol||'').toUpperCase();
+    if(!symbol)return {volume_accel_ratio:null,trade_accel_ratio:null,price_acceleration_pct:null,warmed_up:false};
+    const history=this.fastHistoryBySymbol.get(symbol)||[];
+    const previous=history.length?history[history.length-1]:null;
+    const spanMs=previous?Math.max(1,at-previous.at):null;
+    const quoteDelta=previous?Math.max(0,Number(row.quoteVolume24h)-previous.quoteVolume24h):null;
+    const tradeDelta=previous?Math.max(0,Number(row.tradeCount24h)-previous.tradeCount24h):null;
+    const volumeRate=previous?quoteDelta/Math.max(1,spanMs/60000):null;
+    const tradeRate=previous?tradeDelta/Math.max(1,spanMs/60000):null;
+    const priorVolumes=history.slice(-8).map(x=>x.volumeRate).filter(x=>Number.isFinite(x)&&x>0);
+    const priorTrades=history.slice(-8).map(x=>x.tradeRate).filter(x=>Number.isFinite(x)&&x>0);
+    const median=values=>{
+      const sorted=[...values].sort((a,b)=>a-b);
+      if(!sorted.length)return null;
+      const mid=Math.floor(sorted.length/2);
+      return sorted.length%2?sorted[mid]:(sorted[mid-1]+sorted[mid])/2;
+    };
+    const volumeBase=median(priorVolumes),tradeBase=median(priorTrades);
+    const previousPrice=Number(previous?.lastPrice),currentPrice=Number(row.lastPrice);
+    const priceStep=previousPrice>0&&currentPrice>0?(currentPrice/previousPrice-1)*100:null;
+    const snapshot={
+      at,quoteVolume24h:Number(row.quoteVolume24h)||0,tradeCount24h:Number(row.tradeCount24h)||0,
+      lastPrice:currentPrice,volumeRate,tradeRate,priceStepPct:priceStep
+    };
+    history.push(snapshot);
+    while(history.length>12)history.shift();
+    this.fastHistoryBySymbol.set(symbol,history);
+    return {
+      volume_accel_ratio:Number.isFinite(volumeBase)&&volumeBase>0&&Number.isFinite(volumeRate)?volumeRate/volumeBase:null,
+      trade_accel_ratio:Number.isFinite(tradeBase)&&tradeBase>0&&Number.isFinite(tradeRate)?tradeRate/tradeBase:null,
+      price_acceleration_pct:Number.isFinite(priceStep)?priceStep:null,
+      quote_delta:quoteDelta,trade_delta:tradeDelta,observed_at:at,warmed_up:history.length>=3
+    };
+  }
+  selectBatch(rows, at = this.clock()) {
+    const uniqueBySymbol=new Map();
+    for(const row of Array.isArray(rows)?rows:[]){
+      const symbol=String(row?.symbol||'').toUpperCase();
+      if(symbol&&!uniqueBySymbol.has(symbol))uniqueBySymbol.set(symbol,row);
+    }
+    const all=[...uniqueBySymbol.values()].map(row=>{
+      const symbol=String(row.symbol).toUpperCase();
+      const fast=row._schedulerFast||this.fastHistoryBySymbol.get(symbol)?.at(-1)||{};
+      const move=Number(row.priceChange24h);
+      const validMove=Number.isFinite(move);
+      const exceptional=(Number(fast.volume_accel_ratio)>=Number(this.config.schedulerExceptionalVolumeRatio)||
+        Number(fast.trade_accel_ratio)>=Number(this.config.schedulerExceptionalTradeRatio)||
+        Number(fast.price_acceleration_pct)>=Number(this.config.schedulerExceptionalPriceStepPct));
+      const quiet=validMove&&Math.abs(move)<=Number(this.config.schedulerQuietMaxDailyMovePct)&&
+        (Number(fast.volume_accel_ratio)>=Number(this.config.schedulerQuietParticipationRatio)||
+         Number(fast.trade_accel_ratio)>=Number(this.config.schedulerQuietParticipationRatio)||
+         (Number(fast.price_acceleration_pct)>0&&Number(fast.price_acceleration_pct)<Number(this.config.schedulerExceptionalPriceStepPct)));
+      const lastAt=this.scheduler.lastScanAt('DEEP',symbol);
+      const queuedAt=this.scheduler.queueStartedAt('DEEP',symbol);
+      const cursorIndex=this.universe.indexOf(symbol);
+      const cursorDistance=cursorIndex<0?Number.MAX_SAFE_INTEGER:(cursorIndex-this.cursor+this.universe.length)%Math.max(1,this.universe.length);
+      const qa=Math.max(0,Number(row.quoteVolume24h)||0);
+      const rank=(validMove?100-Math.min(60,Math.abs(move)*10):0)+Math.log10(Math.max(1,qa))*3;
+      return {...row,_schedulerFast:fast,_exceptional:exceptional,_quiet:quiet,_schedulerRank:rank,
+        _lastDeepAt:lastAt,_neverDeepScanned:lastAt===null,
+        _deepWaitAgeMs:lastAt===null?Number.MAX_SAFE_INTEGER:Math.max(0,at-lastAt),
+        _queueAgeMs:queuedAt===null?0:Math.max(0,at-queuedAt),
+        _cursorDistance:cursorDistance};
     });
-    const selected=[],seen=new Set();
-    const take=row=>{if(row?.symbol&&!seen.has(row.symbol)){selected.push(row);seen.add(row.symbol);return true;}return false;};
+    const rankDesc=[...all].sort((a,b)=>b._schedulerRank-a._schedulerRank||a.symbol.localeCompare(b.symbol));
+    const quietRank=all.filter(x=>x._quiet).sort((a,b)=>
+      Math.abs(Number(a.priceChange24h))-Math.abs(Number(b.priceChange24h))||
+      b._schedulerRank-a._schedulerRank||a.symbol.localeCompare(b.symbol));
+    const exceptional=all.filter(x=>x._exceptional).sort((a,b)=>
+      b._schedulerRank-a._schedulerRank||b._deepWaitAgeMs-a._deepWaitAgeMs||a.symbol.localeCompare(b.symbol));
+    const rotation=[...all].sort((a,b)=>
+      Number(b._exceptional)-Number(a._exceptional)||
+      Number(b._neverDeepScanned)-Number(a._neverDeepScanned)||
+      b._deepWaitAgeMs-a._deepWaitAgeMs||
+      b._queueAgeMs-a._queueAgeMs||
+      a._cursorDistance-b._cursorDistance||a.symbol.localeCompare(b.symbol));
     const topCount=Math.max(1,Math.trunc(Number(this.config.topAnchors)||8));
     const rotationCount=Math.max(1,Math.trunc(Number(this.config.rotationBatchSize)||10));
-    for(const row of sorted.slice(0,topCount))take(row);
-    const target=Math.min(new Set(sorted.map(x=>x.symbol)).size,topCount+rotationCount);
-    let visited=0;
-    while(selected.length<target&&visited<this.universe.length){
-      const symbol=this.universe[this.cursor%this.universe.length];this.cursor=(this.cursor+1)%this.universe.length;visited++;
-      take(sorted.find(x=>x.symbol===symbol));
-    }
-    return selected;
+    const target=Math.min(all.length,topCount+rotationCount);
+    const anchorTarget=Math.min(topCount,target);
+    const rotationTarget=Math.min(rotationCount,Math.max(0,target-anchorTarget));
+    const selected=[],seen=new Set();
+    const take=(pool,count,lane)=>{
+      const limit=Math.max(0,Math.trunc(Number(count)||0));
+      if(limit===0)return 0;
+      let added=0;
+      for(const row of pool){
+        const symbol=String(row?.symbol||'').toUpperCase();
+        if(!symbol||seen.has(symbol))continue;
+        seen.add(symbol);selected.push({...row,_selection_lane:lane});added++;
+        if(added>=limit)break;
+      }
+      return added;
+    };
+    const fastSlots=Math.min(anchorTarget,Math.max(0,Math.trunc(Number(this.config.schedulerFastPathSlots)||2)));
+    take(exceptional,fastSlots,'exceptional');
+    const quietSlots=Math.min(Math.max(0,Math.trunc(Number(this.config.schedulerQuietAnchorSlots)||4)),Math.max(0,anchorTarget-selected.length));
+    take(quietRank,quietSlots,'quiet');
+    take(rankDesc,Math.max(0,anchorTarget-selected.length),'anchor');
+    take(rotation,rotationTarget,'rotation');
+    // If a lane overlaps or has too few eligible candidates, use unique bounded fallbacks.
+    take(exceptional,target-selected.length,'fast');
+    take(rotation,target-selected.length,'rotation_fill');
+    take(rankDesc,target-selected.length,'rank_fill');
+    this.lastSelectionDistribution=selected.reduce((out,row)=>{
+      const lane=row._selection_lane||'unknown';out[lane]=(out[lane]||0)+1;return out;
+    },{});
+    return selected.slice(0,target);
   }
   async scanRow(row){
     const [one,five,agg,depth]=await Promise.all([
@@ -414,22 +512,107 @@ export class WhaleAccumulationRadar{
   async tick(){
     if(!this.running||this.busy)return;
     this.busy=true;
+    const cycleStartedAt=this.clock();
+    await this.scheduler.hydrate();
     try{
       if(!this.universe.length||this.clock()-this.universeAt>=Number(this.config.universeRefreshMs))await this.refreshUniverse();
-      const rows=await this.tickerRows();
-      const selected=this.selectBatch(rows);
-      let success=0,failed=0;
+      const fastScanStartedAt=this.clock();
+      const fetchedRows=await this.tickerRows();
+      const fastSeenAt=this.clock();
+      const rows=fetchedRows.map(row=>({...row,_schedulerFast:this.updateFastSnapshot(row,fastSeenAt),_fastSeenAt:fastSeenAt}));
+      for(const row of rows)this.scheduler.ensureQueued('DEEP',row.symbol,fastSeenAt);
+      const selected=this.selectBatch(rows,fastSeenAt);
+      const selectedSymbols=new Set(selected.map(x=>String(x.symbol).toUpperCase()));
+      const cycle=Math.max(1,Math.trunc(Number(this.lastCoverage?.cycle||0))+1);
+      const fastDurationMs=Math.max(0,fastSeenAt-fastScanStartedAt);
+      for(const row of rows){
+        const fast=row._schedulerFast||{};
+        this.scheduler.record({stage:'FAST',symbol:row.symbol,eventType:'COMPLETED',cycle,at:fastSeenAt,
+          queuedAt:fastScanStartedAt,startedAt:fastScanStartedAt,elapsedMs:fastDurationMs,fastSeenAt,
+          reasonCode:'RADAR9_FAST_TICKER_SNAPSHOT_RECEIVED',
+          extra:{last_price:row.lastPrice,quote_volume_24h:row.quoteVolume24h,
+            trade_count_24h:row.tradeCount24h,volume_accel_ratio:fast.volume_accel_ratio??null,
+            trade_accel_ratio:fast.trade_accel_ratio??null,price_acceleration_pct:fast.price_acceleration_pct??null}});
+      }
+      this.scheduler.record({stage:'FAST',eventType:'CYCLE_COMPLETE',cycle,at:fastSeenAt,elapsedMs:fastDurationMs,
+        reasonCode:'RADAR9_TICKER_SNAPSHOT_RECEIVED',extra:{symbols_total:rows.length}});
+      for(const row of rows){
+        const symbol=String(row.symbol).toUpperCase();
+        const fast=row._schedulerFast||{};
+        const fastSnapshot={last_price:row.lastPrice,quote_volume_24h:row.quoteVolume24h,
+          trade_count_24h:row.tradeCount24h,volume_accel_ratio:fast.volume_accel_ratio??null,
+          trade_accel_ratio:fast.trade_accel_ratio??null,price_acceleration_pct:fast.price_acceleration_pct??null};
+        if(!selectedSymbols.has(symbol)){
+          const reason=row._exceptional?'EXCEPTIONAL_FAST_PATH_CAPACITY':row._quiet?'QUIET_ANCHOR_CAPACITY':'OVERDUE_ROTATION_CAPACITY';
+          this.scheduler.defer('DEEP',symbol,{cycle,at:fastSeenAt,fastSeenAt,reasonCode:reason,
+            extra:{lane:'deferred',fast_snapshot:fastSnapshot}});
+        }
+      }
+      for(const row of selected){
+        const symbol=String(row.symbol).toUpperCase();
+        const lane=row._selection_lane||'anchor';
+        const fast=row._schedulerFast||{};
+        const fastSnapshot={last_price:row.lastPrice,quote_volume_24h:row.quoteVolume24h,
+          trade_count_24h:row.tradeCount24h,volume_accel_ratio:fast.volume_accel_ratio??null,
+          trade_accel_ratio:fast.trade_accel_ratio??null,price_acceleration_pct:fast.price_acceleration_pct??null};
+        this.scheduler.selected('DEEP',symbol,{cycle,at:fastSeenAt,lane,
+          reasonCode:schedulerLaneReason(lane,'DEEP'),fastSeenAt,extra:{fast_snapshot:fastSnapshot}});
+      }
+      let success=0,failed=0,incomplete=0;
+      const waitTimes=[];
       for(const row of selected){
         if(!this.running)break;
-        try{await this.scanRow(row);success++;}catch(e){failed++;this.lastError=String(e?.message??e);}
+        const symbol=String(row.symbol).toUpperCase(),lane=row._selection_lane||'anchor',startedAt=this.clock();
+        const started=this.scheduler.started('DEEP',symbol,{cycle,at:startedAt,lane,
+          reasonCode:schedulerLaneReason(lane,'DEEP'),fastSeenAt,
+          extra:{fast_snapshot:{last_price:row.lastPrice,quote_volume_24h:row.quoteVolume24h,
+            trade_count_24h:row.tradeCount24h}}});
+        waitTimes.push(started.wait_ms);
+        try{
+          const result=await this.scanRow(row);
+          const a=result?.whale_accumulation||{};
+          const stage=String(a.stage||result?.potential_label||'').toUpperCase();
+          const dataIncomplete=!result||['DATA_INSUFFICIENT','INCOMPLETE','WARMING_UP'].includes(stage)||
+            result?.data_status==='INCOMPLETE'||result?.data_status==='DATA_UNAVAILABLE';
+          this.scheduler.finished('DEEP',symbol,{cycle,at:this.clock(),startedAt,
+            outcome:dataIncomplete?'INCOMPLETE':'COMPLETED',lane,
+            reasonCode:dataIncomplete?'DATA_MISSING_OR_NOT_MATURE':result?.eligible?'SIGNAL_CONFIRMED':'NO_SIGNAL_NOT_A_FAILURE',
+            failureCounted:false,fastSeenAt,
+            extra:{signal_eligible:Boolean(result?.eligible),signal_stage:stage||null,data_complete:!dataIncomplete}});
+          if(dataIncomplete)incomplete++;else success++;
+        }catch(e){
+          failed++;this.lastError=String(e?.message??e);
+          this.scheduler.finished('DEEP',symbol,{cycle,at:this.clock(),startedAt,outcome:'FAILED',lane,
+            reasonCode:'RADAR9_SCAN_EXCEPTION',failureCounted:true,fastSeenAt,
+            extra:{error:String(e?.message??e)}});
+        }
       }
+      const cycleCompletedAt=this.clock();
       this.lastCoverage={
-        universe_total:rows.length,batch_size:selected.length,scanned_successfully:success,failed,rotation_cursor:this.cursor,
-        candidates_retained:this.latestCandidates.length,last_scan_at:this.clock()
+        cycle,universe_total:rows.length,batch_size:selected.length,scanned_successfully:success,failed,rotation_cursor:this.cursor,
+        candidates_retained:this.latestCandidates.length,last_scan_at:cycleCompletedAt
       };
-      this.lastScanAtMs=this.clock();
+      this.lastScanAtMs=cycleCompletedAt;
+      this.lastSelectionDistribution=selected.reduce((out,row)=>{
+        const lane=row._selection_lane||'unknown';out[lane]=(out[lane]||0)+1;return out;
+      },{});
+      this.scheduler.record({stage:'CYCLE',eventType:'COMPLETED',cycle,at:cycleCompletedAt,
+        elapsedMs:Math.max(0,cycleCompletedAt-cycleStartedAt),reasonCode:'RADAR9_CYCLE_TIMINGS',
+        extra:{fast_symbols:rows.length,deep_selected:selected.length,deep_completed:success,
+          incomplete,failed,selection_distribution:this.lastSelectionDistribution,
+          wait_ms:{min:waitTimes.length?Math.min(...waitTimes):null,max:waitTimes.length?Math.max(...waitTimes):null,
+            average:waitTimes.length?waitTimes.reduce((s,x)=>s+x,0)/waitTimes.length:null},
+          fast_scan_ms:fastDurationMs}});
+      this.logger.info?.('[RADARX_SCHEDULER_REPORT] '+JSON.stringify({
+        radar:'RADAR_9',cycle,fast_symbols:rows.length,deep_selected:selected.length,
+        selection_distribution:this.lastSelectionDistribution,deep_success:success,incomplete,failed,
+        deep_wait_ms:waitTimes,selected_symbols:selected.map(x=>String(x.symbol||'').toUpperCase()),unique_selected_symbols:new Set(selected.map(x=>String(x.symbol||'').toUpperCase())).size,duplicate_selected_count:selected.length-new Set(selected.map(x=>String(x.symbol||'').toUpperCase())).size,fast_scan_ms:fastDurationMs,cycle_duration_ms:Math.max(0,cycleCompletedAt-cycleStartedAt)
+      }));
       this.lastError=failed?this.lastError:null;
-    }finally{this.busy=false;}
+    }finally{
+      await this.scheduler.flush();
+      this.busy=false;
+    }
   }
   snapshot(limit=20){
     const rows=this.latestCandidates.slice(0,Math.max(1,Math.min(50,Number(limit)||20)));
