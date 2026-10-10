@@ -322,6 +322,19 @@ test('coverage gate stays closed for one missing symbol, opens only when all are
   assert.equal(proof.symbols.find(item=>item.symbol==='CCCUSDT').state,'CANDLE_CACHE_MISSING');
   assert.equal(proof.cache_coverage_ready,false,'one missing eligible symbol must keep the gate closed');
 
+  const nextBar = candles({now:now+STEP,count:1})[0];
+  cache.seed('AAAUSDT',[{...nextBar,symbol:'AAAUSDT'}],'BINANCE_PUBLIC_REST');
+  const socket = FakeSocket.instances.at(-1);
+  socket.emit('message',Buffer.from(JSON.stringify({
+    e:'kline',E:now,s:'CCCUSDT',k:{
+      s:'CCCUSDT',i:'5m',t:nextBar.openTime,T:nextBar.closeTime,
+      o:String(nextBar.open),h:String(nextBar.high),l:String(nextBar.low),c:String(nextBar.close),
+      v:'100',q:'1000',n:10,V:'50',Q:'500',x:false
+    }
+  })));
+  assert.equal(cache.health().ignored_open_candle_frames,1,'open websocket candles must be observed but not cached');
+  assert.ok(cache.getSeries('AAAUSDT').candles.every(candle=>candle.closeTime<=now),
+    'a future closed-marked candle must be rejected rather than cached');
   cache.seed('CCCUSDT',candles({now,count:72}).map(candle=>({...candle,symbol:'CCCUSDT'})),'BINANCE_PUBLIC_REST');
   proof = cache.coverageReport();
   assert.equal(proof.ready_symbols,3);
@@ -332,11 +345,13 @@ test('coverage gate stays closed for one missing symbol, opens only when all are
   assert.ok(proof.symbols.every(item=>item.closed_candle_count>=60));
   assert.ok(proof.symbols.every(item=>item.continuity_gap_count===0));
   assert.ok(proof.symbols.every(item=>item.latest_candle_age_ms<=8*60_000));
-  assert.ok(proof.symbols.every(item=>item.future_candle_count===0));
+  assert.equal(proof.symbols.find(item=>item.symbol==='AAAUSDT').future_candle_count,1,
+    'future candle attempts are reported for the affected symbol');
+  assert.equal(proof.symbols.find(item=>item.symbol==='CCCUSDT').open_candle_frames_ignored,1,
+    'open websocket frames are reported per symbol rather than cached as closed');
 
   now += STEP;
   const nextClosed = candles({now,count:1})[0];
-  const socket = FakeSocket.instances.at(-1);
   for (const symbol of ['AAAUSDT','BBBUSDT','CCCUSDT']) {
     socket.emit('message',Buffer.from(JSON.stringify({
       e:'kline',E:now,s:symbol,k:{
@@ -370,6 +385,8 @@ test('same closed-candle payload is deduplicated instead of being counted as fre
   assert.equal(cache.putCandle(candle),true);
   assert.equal(cache.putCandle({...candle,receivedAt:now+100}),false);
   assert.equal(cache.getSeries('AAAUSDT').candles.length,1);
+  assert.equal(cache.health().duplicate_closed_candle_frames,1);
+  assert.equal(cache.coverageReport().symbols[0].duplicate_closed_candle_frames,1);
 });
 
 test('repeated scans reuse a still-fresh closed 5m evaluation until a new candle arrives', () => {
