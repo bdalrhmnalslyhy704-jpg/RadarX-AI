@@ -331,8 +331,27 @@ export class MarketWideLightScan {
       const previous = this.lastEvaluationBySymbol.get(symbol);
       const sameCandle = Boolean(signature && previous?.signature === signature);
       const age = latestCloseTime === null ? null : Math.max(0, at - latestCloseTime);
+      const cacheRegression = Boolean(signature && previous &&
+        latestCloseTime < Number(previous.latestCloseTime));
+      const candleRevision = Boolean(signature && previous &&
+        latestCloseTime === Number(previous.latestCloseTime) && signature !== previous.signature);
       let result;
-      if (sameCandle && age <= this.config.maxCandleAgeMs) {
+      if (cacheRegression || candleRevision) {
+        const reason = cacheRegression ? 'CACHE_TIME_REGRESSION' : 'CLOSED_CANDLE_REVISION';
+        result = {
+          ...insufficient(symbol, series, at, reason, {
+            observed_latest_close_time_ms: latestCloseTime,
+            previous_latest_close_time_ms: previous.latestCloseTime
+          }),
+          evaluated_at: at,
+          visited_at: at,
+          evaluation_reused: false,
+          new_closed_candle: false,
+          data_is_fresh: false,
+          cache_state: 'STALE_DATA',
+          evaluation_kind: cacheRegression ? 'CACHE_REGRESSION' : 'CANDLE_REVISION'
+        };
+      } else if (sameCandle && age <= this.config.maxCandleAgeMs) {
         result = {
           ...previous.result,
           data_age_ms: age,
@@ -360,10 +379,6 @@ export class MarketWideLightScan {
         result = evaluateMarketWideLightCandidate({symbol, series, now: at, config: this.config});
         const newClosedCandle = latestCloseTime !== null &&
           (!previous || latestCloseTime > Number(previous.latestCloseTime));
-        const revisedCandle = Boolean(signature && previous &&
-          latestCloseTime === Number(previous.latestCloseTime) && signature !== previous.signature);
-        const cacheRegression = Boolean(signature && previous &&
-          latestCloseTime < Number(previous.latestCloseTime));
         result = {
           ...result,
           evaluated_at: at,
@@ -371,9 +386,7 @@ export class MarketWideLightScan {
           evaluation_reused: false,
           new_closed_candle: newClosedCandle,
           data_is_fresh: result.evaluated === true,
-          evaluation_kind: revisedCandle ? 'CANDLE_REVISION' :
-            cacheRegression ? 'CACHE_REGRESSION' :
-            newClosedCandle ? 'NEW_CLOSED_CANDLE' : 'NO_NEW_CLOSED_CANDLE'
+          evaluation_kind: newClosedCandle ? 'NEW_CLOSED_CANDLE' : 'NO_NEW_CLOSED_CANDLE'
         };
         if (signature) {
           this.lastEvaluationBySymbol.set(symbol, {
