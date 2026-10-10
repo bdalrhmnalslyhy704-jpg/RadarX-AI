@@ -733,6 +733,16 @@ try {
   const holdoutLiftPassed = Number.isFinite(chosenVsMarketCI?.confidence_interval_95_percentage_points?.lower) &&
     chosenVsMarketCI.confidence_interval_95_percentage_points.lower > 0;
   const holdoutRiskPassed = Number.isFinite(holdoutRiskDelta) && holdoutRiskDelta <= 2;
+  const runtimePoolHoldout = summarizeSampleBlock(holdoutSamples,'light48');
+  const runtimePoolVsMarketCI = pairedDifferenceCI(
+    holdoutSamples.map(row=>({left:row.metrics?.light48,right:row.metrics?.market})),
+    'left','right','hit5_mfe4h_rate',524199
+  );
+  const runtimePoolRiskDelta = runtimePoolHoldout && marketHoldout
+    ? runtimePoolHoldout.adverse5_mae4h_pct - marketHoldout.adverse5_mae4h_pct : null;
+  const runtimePoolLiftPassed = Number.isFinite(runtimePoolVsMarketCI?.confidence_interval_95_percentage_points?.lower) &&
+    runtimePoolVsMarketCI.confidence_interval_95_percentage_points.lower > 0;
+  const runtimePoolRiskPassed = Number.isFinite(runtimePoolRiskDelta) && runtimePoolRiskDelta <= 2;
   const holdoutSamplePassed = holdoutSamples.length >= MIN_SAMPLE_COUNT;
   report.outcome_metrics.walk_forward_validation = {
     split_method:'Chronological 2/3 discovery; final 1/3 held out. Strategy chosen only from discovery snapshots.',
@@ -741,10 +751,16 @@ try {
     strategy_selection_objective:'Per-snapshot HIT_5PCT_MAX_UPSIDE_WITHIN_4H minus 0.35 times ADVERSE_5PCT_DRAWDOWN_WITHIN_4H',
     discovery_strategy_ranking:strategyScores,
     chosen_preexpansion_strategy:chosenStrategy,
+    pool_acceptance_basis:'Actual MarketWideLightScan candidateSymbols returned by the runtime module; includes configured fair rotation.',
     holdout:{
       selected_strategy:chosenHoldout,
       entire_market:marketHoldout,
       current_light_pool_48:lightHoldout,
+      runtime_candidate_pool_48:runtimePoolHoldout,
+      runtime_pool_vs_market_hit5_ci:runtimePoolVsMarketCI,
+      runtime_pool_adverse5_delta_vs_market_percentage_points:round(runtimePoolRiskDelta,3),
+      runtime_pool_predictive_lift_gate:runtimePoolLiftPassed?'PASS':'NOT_PROVEN',
+      runtime_pool_risk_gate:runtimePoolRiskPassed?'PASS':'FAIL',
       high_1h_momentum_12:momentumHoldout,
       downside_risk_guard_shortlist_12:summarizeSampleBlock(holdoutSamples,'riskGuard12'),
       downside_risk_guard_pool_48:summarizeSampleBlock(holdoutSamples,'riskGuard48'),
@@ -758,19 +774,21 @@ try {
       risk_gate:holdoutRiskPassed?'PASS':'FAIL'
     }
   };
-  report.quality.prediction_evidence_gate = holdoutLiftPassed ? 'PASS' : 'NOT_PROVEN';
+  report.quality.prediction_evidence_gate = runtimePoolLiftPassed ? 'PASS' : 'NOT_PROVEN';
   report.quality.data_integrity_gate = completeData && holdoutSamplePassed ? 'PASS' : 'FAIL';
-  report.quality.ready_for_merge = completeData && holdoutSamplePassed && holdoutLiftPassed && holdoutRiskPassed;
+  report.quality.ready_for_merge = completeData && holdoutSamplePassed && runtimePoolLiftPassed && runtimePoolRiskPassed;
   report.quality.rules = {
     minimum_sample_snapshots:MIN_SAMPLE_COUNT,
     discovery_fraction:2/3,
     holdout_fraction:1/3,
     minimum_market_coverage_ratio_pct:MIN_COVERAGE_RATIO * 100,
     require_lookahead_violations_zero:true,
-    require_holdout_95pct_block_bootstrap_lower_bound_above_zero_vs_market:true,
-    maximum_adverse5_risk_delta_vs_market_percentage_points:2,
+    acceptance_pool:'ACTUAL_RUNTIME_MARKET_WIDE_LIGHT_SCAN_48_WITH_FAIR_ROTATION',
+    require_runtime_pool_holdout_95pct_block_bootstrap_lower_bound_above_zero_vs_market:true,
+    maximum_runtime_pool_adverse5_risk_delta_vs_market_percentage_points:2,
     primary_metric:'HIT_5PCT_MAX_UPSIDE_WITHIN_4H',
-    risk_metric:'ADVERSE_5PCT_DRAWDOWN_WITHIN_4H'
+    risk_metric:'ADVERSE_5PCT_DRAWDOWN_WITHIN_4H',
+    note:'The separately scored market-wide shortlist is descriptive only and cannot open the merge gate.'
   };
   report.duration_seconds = round((Date.now() - startedAt) / 1000, 2);
   report.status = completeData ? (report.quality.ready_for_merge ? 'PREDICTIVE_EVIDENCE_PASS' : 'PREDICTIVE_EVIDENCE_NOT_PROVEN') : 'DATA_INTEGRITY_GATE_FAILED';
@@ -790,6 +808,10 @@ try {
     light48_hit5_4h:report.outcome_metrics.market_wide_light_pool_48.hit_5pct_upside_4h_pct,
     light48_lift_ci:report.outcome_metrics.light_pool_vs_market.confidence_interval_95_percentage_points,
     chosen_strategy:report.outcome_metrics.walk_forward_validation.chosen_preexpansion_strategy,
+    runtime_candidate_pool_holdout:report.outcome_metrics.walk_forward_validation.holdout.runtime_candidate_pool_48,
+    runtime_pool_vs_market_ci:report.outcome_metrics.walk_forward_validation.holdout.runtime_pool_vs_market_hit5_ci,
+    runtime_pool_adverse5_delta:report.outcome_metrics.walk_forward_validation.holdout.runtime_pool_adverse5_delta_vs_market_percentage_points,
+    runtime_pool_ready_for_merge:report.quality.ready_for_merge,
     risk_guard_holdout:{
       shortlist12:report.outcome_metrics.walk_forward_validation.holdout.downside_risk_guard_shortlist_12,
       pool48:report.outcome_metrics.walk_forward_validation.holdout.downside_risk_guard_pool_48,
