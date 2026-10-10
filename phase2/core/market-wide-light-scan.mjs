@@ -14,6 +14,21 @@ const median = values => {
 const clamp = value => Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
 const symbolOf = row => String(row?.symbol || '').trim().toUpperCase();
 
+// Base assets that do not behave like directional altcoin opportunities for an
+// early-expansion scanner. They are still audited for full-market coverage;
+// they cannot consume the candidate/rotation slots.
+const NON_DIRECTIONAL_BASE_ASSETS = new Set([
+  'AEUR','BUSD','DAI','EURI','EUR','EURCV','FDUSD','PAXG','PYUSD','RLUSD',
+  'TUSD','USDC','USDD','USD0','USD1','USDE','USDP','USDS','USDX','USYC',
+  'USDT','XAUT','XUSD'
+]);
+
+export function isDirectionalCandidateSymbol(value) {
+  const symbol = String(value || '').trim().toUpperCase();
+  if (!symbol.endsWith('USDT') || symbol.length <= 4) return true;
+  return !NON_DIRECTIONAL_BASE_ASSETS.has(symbol.slice(0, -4));
+}
+
 export const MARKET_WIDE_LIGHT_SCAN_DEFAULTS = Object.freeze({
   minClosedCandles: 60,
   maxClosedCandles: 96,
@@ -405,9 +420,14 @@ export class MarketWideLightScan {
       result.last_light_candidate_cycle = this.lastCandidateCycleBySymbol.get(symbol) ?? null;
       result.candidate_selected = false;
       result.candidate_selection_reason = null;
+      result.non_directional_base_asset = !isDirectionalCandidateSymbol(symbol);
+      result.candidate_selection_exclusion_reason = result.non_directional_base_asset
+        ? 'NON_DIRECTIONAL_BASE_ASSET' : null;
       audit.set(symbol, result);
       if (result.evaluated) evaluated.push({row, result, symbol});
-      if (exceptionalFlag) exceptional.push({row, result, symbol});
+      // The non-directional set remains in the audit/coverage ledger but never
+      // takes over Micro slots, even when generic fast-shock heuristics fire.
+      if (exceptionalFlag && !result.non_directional_base_asset) exceptional.push({row, result, symbol});
     }
 
     const limit = Math.min(eligibleTotal, Math.max(1, Math.trunc(Number(this.config.candidateLimit) || 48)));
@@ -421,6 +441,7 @@ export class MarketWideLightScan {
       if (entry) {
         entry.candidate_selected = true;
         entry.candidate_selection_reason = reason;
+        entry.candidate_selection_exclusion_reason = null;
       }
       return true;
     };
@@ -445,7 +466,7 @@ export class MarketWideLightScan {
 
     const rotationCount = Math.min(rotationReserve, Math.max(0, limit - selected.length));
     const scoreLimit = Math.max(0, limit - rotationReserve);
-    const ranked = [...evaluated].sort((a, b) =>
+    const ranked = [...evaluated].filter(item => isDirectionalCandidateSymbol(item.symbol)).sort((a, b) =>
       Number(b.result.candidate) - Number(a.result.candidate) ||
       Number(b.result.candidate_score ?? -1) - Number(a.result.candidate_score ?? -1) ||
       Number(b.result.metrics?.optional_participation_available) - Number(a.result.metrics?.optional_participation_available) ||
@@ -458,17 +479,20 @@ export class MarketWideLightScan {
       const entry = audit.get(item.symbol);
       if (entry) { entry.light_rank = index + 1; entry.rank_basis = 'LIGHT_EVIDENCE'; }
     });
-    const rotationPool = [...uniqueRows].map(row => {
+    const allRotationPool = [...uniqueRows].map(row => {
       const symbol = symbolOf(row);
       return {row, symbol, result: audit.get(symbol), _priority: 0};
     }).sort(fairOrder);
-    rotationPool.forEach((item, index) => {
+    allRotationPool.forEach((item, index) => {
       const entry = audit.get(item.symbol);
       if (entry && entry.light_rank === null) {
         entry.light_rank = ranked.length + index + 1;
-        entry.rank_basis = item.result?.evaluated ? 'LIGHT_SCORE_FALLBACK' : 'FAIR_ROTATION_NO_VALID_LIGHT_DATA';
+        entry.rank_basis = !isDirectionalCandidateSymbol(item.symbol)
+          ? 'NON_DIRECTIONAL_BASE_ASSET_EXCLUDED'
+          : item.result?.evaluated ? 'LIGHT_SCORE_FALLBACK' : 'FAIR_ROTATION_NO_VALID_LIGHT_DATA';
       }
     });
+    const rotationPool = allRotationPool.filter(item => isDirectionalCandidateSymbol(item.symbol));
     for (const item of rotationPool) {
       if (selected.length >= limit) break;
       add(item, item.result?.evaluated ? 'FAIR_ROTATION_VALID_DATA' : 'FAIR_ROTATION_CACHE_WARMUP');
@@ -504,6 +528,7 @@ export class MarketWideLightScan {
       stale_total: scanRows.filter(item => item.cache_state === 'STALE_DATA' || item.reason === 'STALE_CLOSED_5M_CACHE').length,
       invalid_total: scanRows.filter(item => item.reason === 'INVALID_CLOSED_CANDLE' || item.reason === 'CLOSED_CANDLE_SEQUENCE_HAS_GAPS').length,
       light_candidate_total: validCandidateTotal,
+      non_directional_excluded_total: scanRows.filter(item => item.non_directional_base_asset === true).length,
       micro_candidate_pool_total: selected.length,
       rotation_reserve_configured: rotationReserve,
       exceptional_preserved_total: selectedExceptional,
