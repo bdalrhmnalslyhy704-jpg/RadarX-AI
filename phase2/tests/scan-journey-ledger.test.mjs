@@ -18,8 +18,9 @@ function cycle(at,n,symbols=[{symbol:'AAAUSDT',deep:false}]) {
     counters:{eligible_total:symbols.length,fast_scanned_total:symbols.length,micro_scanned_total:symbols.length,deep_scanned_total:symbols.filter(x=>x.deep).length},
     coins:symbols.map(x=>({
       symbol:x.symbol,eligible:true,eligibility_at:at,fast_scan_at:at,
-      micro_scan_completed_at:at+3000,deep_scan_completed_at:x.deep?at+8000:INCOMPLETE,
-      ticker:{price:10},candles_used:x.deep?{'1m':[candle(at+1000)]}:{'1m':INCOMPLETE},
+      first_eligible_at:at, micro_scan_completed_at:at+3000,
+      deep_scan_status:x.deep?'COMPLETED':INCOMPLETE,deep_scan_completed_at:x.deep?at+8000:INCOMPLETE,
+      ticker:{price:10},candles_used:x.deep?{'1m':[candle(at-60_000)]}:{'1m':INCOMPLETE},
       outcomes:incompleteHorizons('NOT_MATURED')
     }))
   };
@@ -80,7 +81,7 @@ test('compressed journey archive survives a fresh DurableStore and repeated writ
   assert.equal(reloaded.length,1);
   assert.equal(reloaded[0].coins.length,2);
   assert.equal(reloaded[0].coins[0].symbol,'AAAUSDT');
-  assert.equal(reloaded[0].coins[0].candles_used['1m'][0].close_time,t0+61_000);
+  assert.equal(reloaded[0].coins[0].candles_used['1m'][0].close_time,t0);
   assert.equal(state.last_deep_cycle_by_symbol.AAAUSDT,1);
   assert.equal(state.last_deep_cycle_by_symbol.BBBUSDT,undefined);
 });
