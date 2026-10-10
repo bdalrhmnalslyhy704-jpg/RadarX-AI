@@ -85,8 +85,10 @@ test('Radar 8 micro rotation gives the longest-waiting symbol a slot and de-dupl
   assert.equal(selected.length,4);
   assert.equal(new Set(selected.map(x=>x.symbol.toUpperCase())).size,4);
   assert.ok(selected.some(x=>x.symbol==='OLDWAITUSDT'&&x._selection_lane==='rotation'));
-  assert.ok(selected.find(x=>x.symbol==='OLDWAITUSDT')._rotationAgeMs>
-    selected.find(x=>x.symbol==='RECENT1USDT')?._rotationAgeMs || true);
+  const oldest=selected.find(x=>x.symbol==='OLDWAITUSDT');
+  const recent=selected.find(x=>x.symbol==='RECENT1USDT');
+  assert.ok(oldest&&recent,'rotation should include both an overdue and a recent symbol');
+  assert.ok(oldest._rotationAgeMs>recent._rotationAgeMs);
 });
 
 test('Radar 9 routes exceptional movement quickly, preserves a quiet-base slot and gives the oldest wait a rotation slot',()=>{
