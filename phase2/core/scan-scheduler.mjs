@@ -113,20 +113,31 @@ export class ScanSchedulerJournal {
     const calculatedWait = normalizedSymbol
       ? Math.max(0, Number(at) - Number(lastAt ?? queueAt ?? at))
       : null;
+    const eventAt=Number(at);
+    const startedAtValue=finite(startedAt)?Number(startedAt):null;
+    const fastSeenAtValue=finite(fastSeenAt)?Number(fastSeenAt):null;
+    const queueAgeMs=normalizedSymbol&&finite(queueAt)?Math.max(0,eventAt-Number(queueAt)):null;
+    const timeToFastMs=normalizedStage==='FAST'&&normalizedSymbol&&fastSeenAtValue!==null&&finite(queueAt)
+      ?Math.max(0,fastSeenAtValue-Number(queueAt)):null;
+    const timeFromFastToScanMs=normalizedSymbol&&fastSeenAtValue!==null&&startedAtValue!==null
+      ?Math.max(0,startedAtValue-fastSeenAtValue):null;
     const event = {
       radar: this.radar,
       symbol: normalizedSymbol || null,
       stage: normalizedStage,
-      cycle: Number.isFinite(Number(cycle)) ? Number(cycle) : null,
+      cycle: finite(cycle) ? Number(cycle) : null,
       event_type: String(eventType || 'OBSERVED').toUpperCase(),
-      event_at: Number(at),
+      event_at: eventAt,
       queued_at: queueAt,
-      started_at: finite(startedAt) ? Number(startedAt) : null,
+      queue_age_ms: queueAgeMs,
+      time_to_fast_ms: timeToFastMs,
+      time_from_fast_to_scan_ms: timeFromFastToScanMs,
+      started_at: startedAtValue,
       wait_ms: finite(waitMs) ? Math.max(0, Number(waitMs)) : calculatedWait,
       elapsed_ms: finite(elapsedMs) ? Math.max(0, Number(elapsedMs)) : null,
       lane: lane || null,
       reason_code: reasonCode || null,
-      fast_seen_at: finite(fastSeenAt) ? Number(fastSeenAt) : null,
+      fast_seen_at: fastSeenAtValue,
       failure_counted: Boolean(failureCounted),
       ...extra
     };
