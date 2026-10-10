@@ -351,6 +351,7 @@ try {
   latestSnapshot = Math.min(latestSnapshot, closeBoundary(collectionStartedAt - FUTURE_BARS * CANDLE_MS));
   const sampleTimes = [];
   for (let at = latestSnapshot; at >= earliestSnapshot; at -= SAMPLE_STEP_MS) sampleTimes.push(at);
+  sampleTimes.reverse(); // Stateful scanner replay must advance forward in time.
   if (sampleTimes.length < MIN_SAMPLE_COUNT) throw new Error('INSUFFICIENT_HISTORICAL_SNAPSHOTS:' + sampleTimes.length);
   report.data.history_window_start_utc = new Date(earliestCommonClose).toISOString();
   report.data.history_window_end_utc = new Date(latestCommonClose).toISOString();
