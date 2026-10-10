@@ -852,6 +852,42 @@ function trimCycleMemory(map,maxSize=5000){
   const oldest=[...map.entries()].sort((a,b)=>a[1]-b[1]);
   for(let i=0;i<oldest.length-maxSize;i++)map.delete(oldest[i][0]);
 }
+function numericMapDelta(after={},before={}) {
+  const out={};
+  for(const key of new Set([...Object.keys(before||{}),...Object.keys(after||{})])){
+    const value=(Number(after?.[key])||0)-(Number(before?.[key])||0);
+    if(value!==0)out[key]=value;
+  }
+  return out;
+}
+function restTelemetryProcessDelta(start,end) {
+  if(!start||!end)return {available:false,reason:'REST_TELEMETRY_SNAPSHOT_UNAVAILABLE'};
+  const numeric=['actual_http_attempts','http_responses','http_2xx','http_non_2xx','transport_errors','rate_limits','total_latency_ms','estimated_weight'];
+  const delta={available:true,scope:'SHARED_REST_ALL_RADARS',started_at_ms:start.captured_at_ms??null,ended_at_ms:end.captured_at_ms??null};
+  for(const key of numeric)delta[key]=(Number(end[key])||0)-(Number(start[key])||0);
+  delta.status_counts=numericMapDelta(end.status_counts,start.status_counts);
+  delta.path_counts=numericMapDelta(end.path_counts,start.path_counts);
+  delta.host_counts=numericMapDelta(end.host_counts,start.host_counts);
+  delta.weight_by_path=numericMapDelta(end.weight_by_path,start.weight_by_path);
+  delta.binance_reported_used_weight_1m_start=start.observed_used_weight_1m??null;
+  delta.binance_reported_used_weight_1m_end=end.observed_used_weight_1m??null;
+  return delta;
+}
+function createCycleRestTelemetry(cycleId,startedAt,rest) {
+  let startSnapshot=null;
+  try{if(typeof rest?.telemetrySnapshot==='function')startSnapshot={...rest.telemetrySnapshot(),captured_at_ms:Date.now()};}catch{}
+  return {schema_version:'RADAR8_REST_TELEMETRY_V1',cycle_id:cycleId,started_at_ms:startedAt,
+    logical_calls:0,cache_hits:0,coalesced_calls:0,actual_http_attempts:0,by_stage:{},calls:[],
+    process_start_snapshot:startSnapshot};
+}
+function finishCycleRestTelemetry(collector,rest,endedAt) {
+  if(!collector)return {schema_version:'RADAR8_REST_TELEMETRY_V1',available:false,reason:'CYCLE_TELEMETRY_NOT_INITIALIZED'};
+  let endSnapshot=null;
+  try{if(typeof rest?.telemetrySnapshot==='function')endSnapshot={...rest.telemetrySnapshot(),captured_at_ms:Date.now()};}catch{}
+  const {process_start_snapshot,...radar8}=collector;
+  return {...radar8,ended_at_ms:endedAt,available:true,
+    process_rest_delta:restTelemetryProcessDelta(process_start_snapshot,endSnapshot)};
+}
 
 function sourceList(values){return [...new Set(values.flatMap(v=>Array.isArray(v)?v:[v]).filter(Boolean))];}
 
@@ -1096,6 +1132,7 @@ export class EarlyExpansionRadar{
     this.fastState=new Map();this.lastAlertAt=new Map();this.lastAlertScore=new Map();this.lastBand=new Map();
     this.lastActivityShockAt=new Map();this.lastActivityShockKeyBySymbol=new Map();this.activityShockTimestamps=[];this.fastShockPendingUntil=new Map();
     this.lastMicroScanCycleBySymbol=new Map();this.lastDeepScanCycleBySymbol=new Map();
+    this.lastMicroSelectionAudit=[];this.lastDeepSelectionAudit=[];this.activeCycleRestTelemetry=null;
     this.scheduler=new ScanSchedulerJournal({radar:'RADAR_8',store,clock,logger});
     this.lastDeepAtBySymbol=new Map();this.firstEligibleAtBySymbol=new Map();
     this.journeyStateHydrated=false;this.lastJourneyArchive=null;this.lastJourneyError=null;
