@@ -13,6 +13,16 @@ function finite(value) {
     Number.isFinite(Number(value));
 }
 
+export function normalizeMissing(value) {
+  if (value === null || value === undefined || value === '') return INCOMPLETE;
+  if (typeof value === 'number' && !Number.isFinite(value)) return INCOMPLETE;
+  if (Array.isArray(value)) return value.map(normalizeMissing);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key,child])=>[key,normalizeMissing(child)]));
+  }
+  return value;
+}
+
 export function closedCandleSnapshot(rows, asOfMs=Date.now()) {
   const cutoff = Number(asOfMs);
   if (!Array.isArray(rows) || !Number.isFinite(cutoff)) return INCOMPLETE;
