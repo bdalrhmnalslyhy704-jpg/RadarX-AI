@@ -64,7 +64,7 @@ test('Radar 9 bounds deep concurrency, preserves all selected coins, and coalesc
   await new Promise(resolve=>setTimeout(resolve,1));
   await radar.tick(); // Must request a follow-up cycle rather than overlap the active one.
   await first;
-  for(let n=0;n<100&&Number(radar.lastCoverage?.cycle||0)<2;n++)
+  for(let n=0;n<200&&logs.filter(x=>x.startsWith('[RADARX_SCHEDULER_REPORT]')).length<2;n++)
     await new Promise(resolve=>setTimeout(resolve,2));
   await radar.stop();
   assert.equal(maxActive,2,'deep worker count must stay at the configured bound');
