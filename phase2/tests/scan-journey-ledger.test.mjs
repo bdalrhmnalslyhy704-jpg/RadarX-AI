@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {closedCandleSnapshot,INCOMPLETE,incompleteHorizons,makeScanJourneyCycleId,SCAN_JOURNEY_SCHEMA,validateScanJourneyCycle,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes} from '../core/scan-journey-ledger.mjs';
+import {closedCandleSnapshot,INCOMPLETE,incompleteHorizons,makeScanJourneyCycleId,SCAN_JOURNEY_SCHEMA,validateScanJourneyCycle,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,reconcileEligibilityQueueAge} from '../core/scan-journey-ledger.mjs';
 import {DurableStore} from '../core/store.mjs';
 
 const t0=1_800_000_000_000;
@@ -64,6 +64,25 @@ test('INCOMPLETE horizon values are explicit and never invented',()=>{
     assert.equal(values[horizon].mark_price,'.INCOMPLETE');
     assert.equal(values[horizon].reason,'NO_CLOSED_CANDLE');
   }
+});
+
+test('queue age survives missing tickers and resets only on observed loss of eligibility',()=>{
+  const prior=new Map([['AAAUSDT',t0],['BBBUSDT',t0],['OLDUSDT',t0]]);
+  const observed=new Map([['BBBUSDT',{quoteVolume24h:100}]]);
+  const next=reconcileEligibilityQueueAge({
+    previous:prior,universeSymbols:['AAAUSDT','BBBUSDT','CCCUSDT'],
+    tickerBySymbol:observed,eligibleSymbols:['CCCUSDT'],minQuoteVolume24h:750_000,now:t0+90_000
+  });
+  assert.equal(next.get('AAAUSDT'),t0);
+  assert.equal(next.has('BBBUSDT'),false);
+  assert.equal(next.has('OLDUSDT'),false);
+  assert.equal(next.get('CCCUSDT'),t0+90_000);
+  const stillMissing=reconcileEligibilityQueueAge({
+    previous:next,universeSymbols:['AAAUSDT','CCCUSDT'],
+    tickerBySymbol:new Map(),eligibleSymbols:['CCCUSDT'],minQuoteVolume24h:750_000,now:t0+180_000
+  });
+  assert.equal(stillMissing.get('AAAUSDT'),t0);
+  assert.equal(stillMissing.get('CCCUSDT'),t0+90_000);
 });
 
 test('tracked outcomes distinguish pending, complete, partial and untracked horizons',()=>{
