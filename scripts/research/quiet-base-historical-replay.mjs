@@ -517,6 +517,23 @@ async function main() {
     const targetDay = TARGETS.includes(symbol);
     const moveStart = firstFailedMovementLabel(bars, targetDay);
     const eventStartMs = moveStart?.time_ms ?? null;
+    const annotateStageDurations=(episodes,strict)=>{
+      let cursor=0;
+      for(const episode of episodes.filter(item=>item.symbol===symbol)){
+        while(cursor<assessments.length&&assessments[cursor].time_ms<=episode.time_ms)cursor++;
+        let endIndex=cursor;
+        while(endIndex<assessments.length&&(strict?assessments[endIndex].strictResult.classification:assessments[endIndex].result.classification)===episode.stage)endIndex++;
+        const endItem=endIndex<assessments.length?assessments[endIndex]:null;
+        const endTime=endItem?.time_ms??assessments.at(-1)?.time_ms??episode.time_ms;
+        episode.end_time_utc=iso(endTime);
+        episode.duration_minutes=round(Math.max(0,endTime-episode.time_ms)/60_000,2);
+        episode.ended_by_classification=endItem?(strict?endItem.strictResult.classification:endItem.result.classification):'REPLAY_WINDOW_END';
+        episode.right_censored=!endItem;
+        cursor=endIndex;
+      }
+    };
+    annotateStageDurations(strictStageEpisodes,true);
+    annotateStageDurations(temporalStageEpisodes,false);
     for(const episode of [...strictStageEpisodes,...temporalStageEpisodes].filter(item=>item.symbol===symbol)){
       episode.minutes_before_move_start=eventStartMs===null?null:round((eventStartMs-episode.time_ms)/60_000,2);
       episode.within_24h_before_move=eventStartMs!==null&&episode.time_ms>=eventStartMs-24*60*60_000&&episode.time_ms<=eventStartMs;
@@ -531,6 +548,8 @@ async function main() {
       const firstBlocker = strictBaseline ? found.strictBlocker : found.blocker;
       return {time_utc:found.time_utc,time_ms:found.time_ms,price:found.price,
         minutes_before_move_start:round((eventStartMs-found.time_ms)/60_000,2),
+        episode_duration_minutes:(strictBaseline?strictStageEpisodes:temporalStageEpisodes).find(item=>item.symbol===symbol&&item.stage===which&&item.time_ms===found.time_ms)?.duration_minutes??null,
+        episode_ended_by:(strictBaseline?strictStageEpisodes:temporalStageEpisodes).find(item=>item.symbol===symbol&&item.stage===which&&item.time_ms===found.time_ms)?.ended_by_classification??null,
         reason:observed.reason,first_blocker_if_any:firstBlocker,metrics:observed.metrics,evidence:observed.evidence,
         temporal_promotion:observed.metrics?.temporal_promotion===true};
     };

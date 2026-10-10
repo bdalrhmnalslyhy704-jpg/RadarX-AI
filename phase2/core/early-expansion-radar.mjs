@@ -1207,7 +1207,7 @@ export class EarlyExpansionRadar{
       const lightClose=Number(lightState?.assessment?.candle_close_time_ms);
       const lightAge=Number.isFinite(lightClose)?Math.max(0,selectionAt-lightClose):Number.POSITIVE_INFINITY;
       const lightFresh=Boolean(lightState?.assessment&&lightAge<=QUIET_BASE_LIGHT_FRESHNESS_MS&&
-        lightState.assessment.classification!=='DATA_INSUFFICIENT'&&lightState.assessment.classification!=='ALREADY_EXTENDED');
+        lightState.assessment.classification!=='DATA_INSUFFICIENT');
       const lightScore=lightFresh&&Number.isFinite(Number(lightState?.rank?.light_score))?Number(lightState.rank.light_score):null;
       const lightPriority=lightFresh&&lightState?.rank?.priority===true;
       const combinedQuietScore=Math.max(quiet??-1,lightScore===null?-1:lightScore+(lightPriority?4:0));
@@ -1310,7 +1310,7 @@ export class EarlyExpansionRadar{
     const light=this.quietBaseLightStateBySymbol.get(symbol);
     const lightClose=Number(light?.assessment?.candle_close_time_ms);
     const lightFresh=Boolean(light?.assessment&&Number.isFinite(lightClose)&&this.clock()-lightClose<=QUIET_BASE_LIGHT_FRESHNESS_MS&&
-      light.assessment.classification!=='DATA_INSUFFICIENT'&&light.assessment.classification!=='ALREADY_EXTENDED');
+      light.assessment.classification!=='DATA_INSUFFICIENT');
     return {row,fast,oneMinute:m1.candles,fiveMinute:m5.candles,
       micro_fingerprint:buildMicroFingerprint({oneMinute:m1.candles,fiveMinute:m5.candles,btcFiveMinute:btcRows,ticker:row,now:this.clock(),config:this.config}),
       quiet_base_light:lightFresh?{priority:light.rank?.priority===true,light_score:light.rank?.light_score??null,
@@ -1420,6 +1420,7 @@ export class EarlyExpansionRadar{
       const quietLightSelected=this.selectQuietBaseLight(eligible,fastBySymbol,cycle);
       const quietLightSelectedSymbols=new Set(quietLightSelected.map(item=>String(item.symbol).toUpperCase()));
       const quietLightStartedAt=this.clock();
+      const quietLightConfig={...this.config, maxQuietMove24hPct:Number.POSITIVE_INFINITY, maxMove5mPct:Number.POSITIVE_INFINITY, maxMove15mPct:Number.POSITIVE_INFINITY};
       const quietLightResults=await boundedMap(quietLightSelected,Math.max(1,Math.min(6,Number(this.config.microConcurrency)||6)),async row=>{
         const symbol=String(row.symbol).toUpperCase(),startedAt=this.clock();
         const entry=journeyEntries.get(symbol),firstEligibleAt=Number(this.firstEligibleAtBySymbol.get(symbol)||fastSeenAt);
@@ -1432,7 +1433,7 @@ export class EarlyExpansionRadar{
             attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep
           });
           const completedAt=this.clock();
-          const assessment=assessQuietBasePreExpansion({fiveMinute:response.candles||[],ticker:row,now:completedAt,dataReady:true,dataIssues:[],config:this.config});
+          const assessment=assessQuietBasePreExpansion({fiveMinute:response.candles||[],ticker:{...row,priceChange24h:0},now:completedAt,dataReady:true,dataIssues:[],config:quietLightConfig});
           const rank=scoreQuietBasePreExpansionLight(assessment);
           this.quietBaseLightStateBySymbol.set(symbol,{symbol,assessedAt:completedAt,source:response.source||null,assessment,rank,stage:'LIGHT',cycle});
           const m=assessment.metrics||{};
@@ -1467,10 +1468,9 @@ export class EarlyExpansionRadar{
       const quietLightSuccessful=quietLightResults.filter(item=>!item.failed&&item.assessment?.classification!=='DATA_INSUFFICIENT');
       const quietLightSummary={eligible_total:eligible.length,selected_total:quietLightSelected.length,evaluated_total:quietLightResults.length,
         successful_total:quietLightSuccessful.length,priority_total:quietLightSuccessful.filter(item=>item.rank?.priority===true).length,
-        pre_expansion_total:quietLightSuccessful.filter(item=>item.assessment?.classification==='PRE_EXPANSION').length,
-        watch_early_total:quietLightSuccessful.filter(item=>item.assessment?.classification==='WATCH_EARLY').length,
-        already_extended_total:quietLightSuccessful.filter(item=>item.assessment?.classification==='ALREADY_EXTENDED').length,
-        data_insufficient_total:quietLightResults.filter(item=>item.assessment?.classification==='DATA_INSUFFICIENT').length,
+        light_pre_expansion_rank_total:quietLightSuccessful.filter(item=>item.assessment?.classification==='PRE_EXPANSION').length,
+        light_watch_early_rank_total:quietLightSuccessful.filter(item=>item.assessment?.classification==='WATCH_EARLY').length,
+        light_data_insufficient_total:quietLightResults.filter(item=>item.assessment?.classification==='DATA_INSUFFICIENT').length,
         compression_rejected_total:quietLightSuccessful.filter(item=>!['narrow_price_base_range_pct','atr_contraction_ratio','bollinger_width_ratio'].every(key=>item.assessment.evidence.find(ev=>ev.key===key)?.passed===true)).length,
         participation_rejected_total:quietLightSuccessful.filter(item=>item.rank?.core_base_passed===true&&!item.rank?.priority&&item.assessment.classification!=='ALREADY_EXTENDED').length,
         deferred_total:Math.max(0,eligible.length-quietLightSelected.length),
