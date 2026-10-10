@@ -537,7 +537,6 @@ try {
   report.binance_http_attempts = httpAttempts;
   report.legacy_micro_selector_active = true;
   report.micro_pool_applied = false;
-  report.shadow_started = false;
   report.merged = false;
   report.deployed = false;
   report.note = report.status === 'SHADOW_COMPLETE'
@@ -577,7 +576,6 @@ try {
   report.market_wide_cache_coverage_ready = report.market_wide_cache_coverage_ready === true;
   report.acceptance_gate_open = report.market_wide_cache_coverage_ready;
   report.micro_pool_applied = false;
-  report.shadow_started = false;
   report.merged = false;
   report.deployed = false;
   await saveReport();
