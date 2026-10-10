@@ -199,6 +199,7 @@ test('OPERATIONAL_MONITOR: 25 consecutive Radar 8 cycles with same-data Build 22
   try{
     for(let i=0;i<25;i++){
       activeBaselineComparison=null;
+      const cycleLogStart=monitorLogs.length;
       const ok=await radar.tick();
       assert.equal(ok,true,'cycle '+(i+1)+' must complete against live REST data: '+JSON.stringify({lastError:radar.lastError,health:radar.health(),rest:rest.health(),telemetry:rest.telemetrySnapshot(),logs:monitorLogs.slice(-8)}));
       const latest=(await store.readScanJourneyCycles({limit:1}))[0];
@@ -229,14 +230,39 @@ test('OPERATIONAL_MONITOR: 25 consecutive Radar 8 cycles with same-data Build 22
         baselineState.lastCycle.set(symbol,latest.cycle_number||i+1);
         baselineState.queuedAt.delete(symbol);
       }
+      const deepEntries=latest.coins.filter(x=>x.deep_selection_selected===true);
+      const deepErrorDetails=latest.coins.filter(x=>x.deep_scan_status==='FAILED').map(x=>({
+        symbol:x.symbol,lane:x.deep_selection_lane,rank:x.deep_selection_rank,
+        status:x.deep_scan_status,error:x.rejection_reason||x.deep_analysis?.error||'UNKNOWN_DEEP_ERROR',
+        micro_score:x.micro_selection_score
+      }));
+      const dataIncompleteDetails=deepEntries.filter(x=>
+        x.deep_scan_status==='COMPLETED'&&(
+          x.decision==='DATA_INSUFFICIENT'||x.deep_analysis?.data_stale===true||
+          !Number.isFinite(Number(x.deep_analysis?.data_quality))||Number(x.deep_analysis?.data_quality)<50
+        )).map(x=>({
+          symbol:x.symbol,lane:x.deep_selection_lane,status:x.deep_scan_status,decision:x.decision,
+          reason:x.rejection_reason,data_quality:x.deep_analysis?.data_quality??null,
+          data_stale:x.deep_analysis?.data_stale??null,source:x.deep_analysis?.source??null,
+          candle_timeframes:Object.fromEntries(Object.entries(x.candles_used||{}).map(([tf,v])=>[tf,
+            typeof v==='string'?v:(v?.status||v?.source||(Array.isArray(v?.candles)?('CANDLES_'+v.candles.length):(v?'PRESENT':'MISSING')))
+          ]))
+        }));
+      const newlyLoggedErrors=monitorLogs.slice(cycleLogStart).filter(x=>
+        /EARLY_EXPANSION_RADAR_(deep-row|micro-row|market-context|ticker)/i.test(x)
+      ).map(x=>x.slice(0,500));
       cycles.push({
         cycle_id:latest.cycle_id,started_at:latest.started_at,completed_at:latest.completed_at,
         scan_duration_ms:latest.scan_duration_ms,
+        expected_total:latest.counters.expected_total,received_total:latest.counters.received_total,
+        missing_ticker_total:latest.counters.missing_ticker_total,
         eligible_total:latest.counters.eligible_total,eligible_symbols:latest.counters.eligible_symbols,
+        eligible_duplicate_symbol_rows:latest.counters.eligible_duplicate_symbol_rows,
         micro_selected_total:latest.counters.micro_selected_total,micro_selected_symbols:latest.counters.micro_selected_symbols,
         micro_success_total:latest.counters.micro_success_total,micro_pre_expansion_total:latest.counters.micro_pre_expansion_total,
         micro_watch_early_total:latest.counters.micro_watch_early_total,micro_quiet_selected_total:latest.counters.micro_quiet_selected_total,
         micro_exceptional_candidate_total:latest.counters.micro_exceptional_candidate_total,
+        micro_incomplete_or_warming_total:latest.counters.micro_incomplete_or_warming_total,
         deep_selected_symbols:latest.counters.deep_selected_symbols,
         deep_pre_expansion_selected_total:latest.counters.deep_pre_expansion_selected_total,
         deep_watch_early_selected_total:latest.counters.deep_watch_early_selected_total,
@@ -244,6 +270,7 @@ test('OPERATIONAL_MONITOR: 25 consecutive Radar 8 cycles with same-data Build 22
         micro_duplicate_input_symbol_rows:latest.counters.micro_duplicate_input_symbol_rows,
         deep_duplicate_input_symbol_rows:latest.counters.deep_duplicate_input_symbol_rows,
         micro_failed_total:latest.counters.micro_failed_total,deep_failed_total:latest.counters.deep_failed_total,
+        deep_error_details:deepErrorDetails,data_incomplete_details:dataIncompleteDetails,stage_error_logs:newlyLoggedErrors,
         rest_attempts:latest.counters.rest_request_telemetry.actual_http_attempts,
         process_http_attempts:latest.counters.rest_request_telemetry.process_rest_delta.actual_http_attempts,
         rest_request_stages:Object.fromEntries(Object.entries(latest.counters.rest_request_telemetry.by_stage).map(([k,v])=>[k,v.actual_http_attempts])),
@@ -264,29 +291,68 @@ test('OPERATIONAL_MONITOR: 25 consecutive Radar 8 cycles with same-data Build 22
     const prWatch=cycles.reduce((n,x)=>n+x.same_data_baseline_comparison.pr_watch_early_selected_total,0);
     const baselineChosen=cycles.reduce((n,x)=>n+x.same_data_baseline_comparison.baseline_deep_symbols.length,0);
     const prChosen=cycles.reduce((n,x)=>n+x.same_data_baseline_comparison.pr_deep_symbols.length,0);
+    const aggregate={
+      eligible_per_cycle_median:cycles.slice().sort((a,b)=>a.eligible_total-b.eligible_total)[Math.floor(cycles.length/2)].eligible_total,
+      median_cycle_ms:cycles.map(x=>x.scan_duration_ms).sort((a,b)=>a-b)[Math.floor(cycles.length/2)],
+      p90_cycle_ms:cycles.map(x=>x.scan_duration_ms).sort((a,b)=>a-b)[Math.ceil(cycles.length*.9)-1],
+      max_cycle_ms:Math.max(...cycles.map(x=>x.scan_duration_ms)),
+      rest_attempts_total:cycles.reduce((n,x)=>n+x.rest_attempts,0),
+      rest_attempts_per_cycle_max:Math.max(...cycles.map(x=>x.rest_attempts)),
+      missing_tickers:cycles.reduce((n,x)=>n+x.missing_ticker_total,0),
+      micro_incomplete_or_warming_total:cycles.reduce((n,x)=>n+x.micro_incomplete_or_warming_total,0),
+      micro_failures:cycles.reduce((n,x)=>n+x.micro_failed_total,0),
+      deep_failures:cycles.reduce((n,x)=>n+x.deep_failed_total,0),
+      deep_failure_details:cycles.flatMap(x=>x.deep_error_details.map(d=>({...d,cycle_id:x.cycle_id}))),
+      data_incomplete_entries:cycles.reduce((n,x)=>n+x.data_incomplete_details.length,0),
+      data_incomplete_details:cycles.flatMap(x=>x.data_incomplete_details.map(d=>({...d,cycle_id:x.cycle_id}))),
+      duplicates:cycles.reduce((n,x)=>n+x.micro_duplicate_input_symbol_rows+x.deep_duplicate_input_symbol_rows+x.eligible_duplicate_symbol_rows,0),
+      baseline_deep_candidate_seats:baselineChosen,pr_deep_candidate_seats:prChosen,
+      baseline_pre_expansion_deep:baselinePre,pr_pre_expansion_deep:prPre,
+      baseline_watch_early_deep:baselineWatch,pr_watch_early_deep:prWatch,
+      baseline_exceptional_selections:cycles.reduce((n,x)=>n+x.same_data_baseline_comparison.candidate_ranks.filter(c=>c.baseline_lane==='exceptional').length,0),
+      pr_exceptional_selections:cycles.reduce((n,x)=>n+x.same_data_baseline_comparison.candidate_ranks.filter(c=>c.pr_lane==='exceptional').length,0),
+      baseline_rotation_selections:cycles.reduce((n,x)=>n+x.same_data_baseline_comparison.candidate_ranks.filter(c=>String(c.baseline_lane||'').includes('rotation')).length,0),
+      pr_rotation_selections:cycles.reduce((n,x)=>n+x.same_data_baseline_comparison.candidate_ranks.filter(c=>String(c.pr_lane||'').includes('rotation')).length,0),
+      cycles_with_pre_expansion:cycles.filter(x=>x.same_data_baseline_comparison.pre_expansion_candidates_total>0).length,
+      cycles_where_pr_added_pre_expansion_to_deep:cycles.filter(x=>x.same_data_baseline_comparison.pr_pre_expansion_selected_total>x.same_data_baseline_comparison.baseline_pre_expansion_selected_total).length,
+      cycles_where_deep_selection_changed:cycles.filter(x=>x.same_data_baseline_comparison.selected_changed_from_baseline_total>0).length,
+      cycles_where_pr_increased_watch_selection:cycles.filter(x=>x.same_data_baseline_comparison.pr_watch_early_selected_total>x.same_data_baseline_comparison.baseline_watch_early_selected_total).length
+    };
+    const qualityGates={
+      all_25_cycles_completed:cycles.length===25,
+      archive_reopens_and_verifies:verified.complete===true,
+      micro_has_zero_failures:aggregate.micro_failures===0,
+      deep_has_zero_failures:aggregate.deep_failures===0,
+      no_duplicate_rows:aggregate.duplicates===0,
+      no_missing_tickers:aggregate.missing_tickers===0,
+      no_pr_watch_early_increase:aggregate.cycles_where_pr_increased_watch_selection===0,
+      same_deep_capacity_as_baseline:aggregate.baseline_deep_candidate_seats===aggregate.pr_deep_candidate_seats,
+      exceptional_lane_retained:aggregate.pr_exceptional_selections>0,
+      rotation_lane_retained:aggregate.pr_rotation_selections>0,
+      request_volume_bounded:aggregate.rest_attempts_per_cycle_max<=42,
+      pre_expansion_improved:aggregate.cycles_with_pre_expansion===0?'INSUFFICIENT_PRE_EXPANSION_OBSERVATIONS':aggregate.pr_pre_expansion_deep>aggregate.baseline_pre_expansion_deep
+    };
+    const hardGateKeys=['all_25_cycles_completed','archive_reopens_and_verifies','micro_has_zero_failures','deep_has_zero_failures','no_duplicate_rows','no_missing_tickers','no_pr_watch_early_increase','same_deep_capacity_as_baseline','exceptional_lane_retained','rotation_lane_retained','request_volume_bounded'];
+    const hardGatesPass=hardGateKeys.every(k=>qualityGates[k]===true);
+    const mergeEligible=hardGatesPass&&qualityGates.pre_expansion_improved===true;
     const summary={
       mode:'CI_LIVE_PUBLIC_SPOT_REST_NOT_PRODUCTION_DEPLOYMENT',
       baseline_mode:'test-only faithful Build 224 pre-PR selector replayed on each exact Micro result pool; independent shadow rotation state',
       cycles_run:cycles.length,cycles,archive_verified:verified.complete,
-      aggregate:{
-        eligible_per_cycle_median:cycles.slice().sort((a,b)=>a.eligible_total-b.eligible_total)[Math.floor(cycles.length/2)].eligible_total,
-        median_cycle_ms:cycles.slice().map(x=>x.scan_duration_ms).sort((a,b)=>a-b)[Math.floor(cycles.length/2)],
-        rest_attempts_total:cycles.reduce((n,x)=>n+x.rest_attempts,0),
-        micro_failures:cycles.reduce((n,x)=>n+x.micro_failed_total,0),
-        deep_failures:cycles.reduce((n,x)=>n+x.deep_failed_total,0),
-        duplicates:cycles.reduce((n,x)=>n+x.micro_duplicate_input_symbol_rows+x.deep_duplicate_input_symbol_rows,0),
-        baseline_deep_candidate_seats:baselineChosen,pr_deep_candidate_seats:prChosen,
-        baseline_pre_expansion_deep:baselinePre,pr_pre_expansion_deep:prPre,
-        baseline_watch_early_deep:baselineWatch,pr_watch_early_deep:prWatch,
-        cycles_with_pre_expansion:cycles.filter(x=>x.same_data_baseline_comparison.pre_expansion_candidates_total>0).length,
-        cycles_where_pr_added_pre_expansion_to_deep:cycles.filter(x=>x.same_data_baseline_comparison.pr_pre_expansion_selected_total>x.same_data_baseline_comparison.baseline_pre_expansion_selected_total).length,
-        cycles_where_deep_selection_changed:cycles.filter(x=>x.same_data_baseline_comparison.selected_changed_from_baseline_total>0).length
-      },
+      aggregate,quality_gates:qualityGates,hard_gates_pass:hardGatesPass,merge_eligible:mergeEligible,
       paper_trading:true,real_order_execution:false
     };
     if(process.env.RADAR8_MONITOR_REPORT_PATH)
       await writeFile(process.env.RADAR8_MONITOR_REPORT_PATH,JSON.stringify(summary,null,2)+'\n');
     console.log('[RADAR8_LIVE_MONITOR_SUMMARY] '+JSON.stringify(summary));
+    assert.equal(aggregate.micro_failures,0,'micro failures found: '+JSON.stringify(aggregate));
+    assert.equal(aggregate.deep_failures,0,'deep failures found: '+JSON.stringify(aggregate.deep_failure_details));
+    assert.equal(aggregate.duplicates,0,'duplicate selection/input rows found: '+JSON.stringify(aggregate));
+    assert.equal(aggregate.missing_tickers,0,'missing ticker rows found: '+JSON.stringify(aggregate));
+    assert.equal(aggregate.cycles_where_pr_increased_watch_selection,0,'PR increased WATCH_EARLY Deep selection: '+JSON.stringify(aggregate));
+    assert.ok(qualityGates.request_volume_bounded,'REST attempts exceeded operational bound: '+JSON.stringify(aggregate));
+    if(aggregate.cycles_with_pre_expansion>0)
+      assert.ok(qualityGates.pre_expansion_improved,'PRE_EXPANSION did not reach Deep better than baseline: '+JSON.stringify(aggregate));
   }finally{
     await radar.stop();
     await rm(dir,{recursive:true,force:true});
