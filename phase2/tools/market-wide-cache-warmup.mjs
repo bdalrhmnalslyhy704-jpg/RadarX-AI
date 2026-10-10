@@ -338,7 +338,7 @@ try {
       websocket_state:health.transport_state,
       websocket_messages:health.received_messages,
       new_closed_candles_cached:health.received_closed_candles,
-      duplicate_closed_candle_frames:health.duplicateClosedCandleFrames,
+      duplicate_closed_candle_frames:health.duplicate_closed_candle_frames,
       ignored_open_candle_frames:health.ignored_open_candle_frames,
       rejected_future_candles:health.rejected_future_candles,
       reconnect_attempts:health.reconnect_attempts,
