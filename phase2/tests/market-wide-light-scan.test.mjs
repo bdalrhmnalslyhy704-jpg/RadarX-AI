@@ -327,6 +327,25 @@ test('repeated scans reuse a still-fresh closed 5m evaluation until a new candle
   assert.equal(second.summary.new_closed_candle_total,0);
 });
 
+test('cache time regressions are rejected and never promoted as a new closed candle', () => {
+  const now = 1_900_000_000_000;
+  const light = new MarketWideLightScan({config:{minClosedCandles:60},clock:()=>now});
+  const eligible = [row(0)];
+  const first = light.scan({eligible,now,cycle:1,getSeries:symbol=>cacheSeries(symbol,now)});
+  assert.equal(first.audit.get(eligible[0].symbol).new_closed_candle,true);
+  const regressedSeries = cacheSeries(eligible[0].symbol,now).candles.slice(0,-1);
+  const regressed = light.scan({
+    eligible,now:now+1000,cycle:2,
+    getSeries:symbol=>({symbol,candles:regressedSeries,source:SOURCE})
+  });
+  const audit = regressed.audit.get(eligible[0].symbol);
+  assert.equal(audit.reason,'CACHE_TIME_REGRESSION');
+  assert.equal(audit.cache_state,'STALE_DATA');
+  assert.equal(audit.evaluated,false);
+  assert.equal(audit.new_closed_candle,false);
+  assert.equal(regressed.coverageReady,false);
+});
+
 test('WebSocket reconnect retries stop after the configured bound on HTTP 451', async () => {
   FakeSocket.instances.length = 0;
   const states = [];
