@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,stat} from 'node:fs/promises';
+import {mkdtemp,stat,mkdir,readFile,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DurableStore} from '../core/store.mjs';
@@ -107,4 +107,30 @@ test('Kahir alert audit writes valid newline-delimited JSON events',async()=>{
   const rows=(await store.readRecent('kahirAlerts',10)).sort((a,b)=>a.processed_at-b.processed_at);
   assert.equal(rows.length,2,'each alert must be a separate JSONL row');
   assert.deepEqual(rows.map(x=>x.symbol),['AAAUSDT','BBBUSDT']);
+});
+
+
+test('startup removes only abandoned atomic-write temporary files before archive writers start',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-startup-temp-cleanup-'));
+  const journeys=join(dir,'scan-journeys');
+  await mkdir(journeys,{recursive:true});
+  const abandonedJson=join(dir,'pre-expansion-outcomes.json.tmp-14-12345');
+  const abandonedScheduler=join(dir,'scan-scheduler-events.jsonl.compact-14-12346');
+  const abandonedJourney=join(journeys,'cycle.json.gz.tmp-14-12347');
+  const unrelated=join(dir,'user-notes.tmp-important');
+  const source=join(journeys,'cycle.json.gz');
+  await writeFile(abandonedJson,'partial-json-write');
+  await writeFile(abandonedScheduler,'partial-compaction');
+  await writeFile(abandonedJourney,'partial-cycle');
+  await writeFile(unrelated,'keep-me');
+  await writeFile(source,'durable-archive');
+  const store=await new DurableStore({dir}).init();
+  assert.equal(store.tempCleanup.deleted_files,3);
+  assert.equal(store.tempCleanup.freed_bytes,Buffer.byteLength('partial-json-write')+Buffer.byteLength('partial-compaction')+Buffer.byteLength('partial-cycle'));
+  assert.equal(store.tempCleanup.failed_files,0);
+  await assert.rejects(readFile(abandonedJson));
+  await assert.rejects(readFile(abandonedScheduler));
+  await assert.rejects(readFile(abandonedJourney));
+  assert.equal(await readFile(unrelated,'utf8'),'keep-me');
+  assert.equal(await readFile(source,'utf8'),'durable-archive');
 });
