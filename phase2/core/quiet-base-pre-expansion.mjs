@@ -198,12 +198,11 @@ export function assessQuietBasePreExpansion({
 
   const firstHalfLow = Math.min(...recent12.slice(0, 6).map(row => Number(row.low)));
   const secondHalfLow = Math.min(...recent12.slice(6).map(row => Number(row.low)));
-  const allSupportLow = Math.min(...recent12.map(row => Number(row.low)));
   const lastClose = Number(last.close);
   const supportUndercutPct = firstHalfLow > 0 ? (firstHalfLow - secondHalfLow) / firstHalfLow * 100 : null;
   const higherLows = Number.isFinite(supportUndercutPct) && supportUndercutPct <= -0.02;
-  const supportStable = allSupportLow > 0 && secondHalfLow >= allSupportLow &&
-    (lastClose - allSupportLow) / lastClose * 100 <= 0.8;
+  const supportStable = firstHalfLow > 0 && Number.isFinite(supportUndercutPct) &&
+    supportUndercutPct <= Number(cfg.maxSupportUndercutPct);
   const supportPassed = higherLows || supportStable;
 
   const priorResistanceRows = rows.slice(-25, -1);
