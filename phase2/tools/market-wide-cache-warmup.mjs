@@ -378,6 +378,8 @@ try {
         light_not_evaluated_total:Number(light.not_evaluated_total)||0,
         fresh_cache_coverage_ratio:Number(light.fresh_cache_coverage_ratio)||0,
         light_candidate_total:Number(light.light_candidate_total)||0,
+        non_directional_excluded_total:Number.isInteger(Number(light.non_directional_excluded_total))
+          ? Number(light.non_directional_excluded_total) : null,
         micro_candidate_pool_total:Number(light.micro_candidate_pool_total)||0,
         candidate_to_micro_total:Number(light.candidate_to_micro_total)||0,
         candidate_to_deep_total:Number(light.candidate_to_deep_total)||0,
@@ -507,6 +509,9 @@ try {
     const poolRows=rows.filter(row=>row.shadow_arm===SHADOW_ARM.LIGHT_POOL);
     const nonDirectionalPoolSymbols=[...new Set(poolRows.flatMap(row=>row.non_directional_micro_symbols||[]))].sort();
     const nonDirectionalPoolSelections=poolRows.reduce((sum,row)=>sum+(row.non_directional_micro_symbols||[]).length,0);
+    const filterAuditVerified=rows.length===SHADOW_CYCLES&&rows.every(row=>
+      Number.isInteger(row.non_directional_excluded_total)&&row.non_directional_excluded_total>=0);
+    const auditedNonDirectionalExcludedTotal=rows.reduce((sum,row)=>sum+(row.non_directional_excluded_total||0),0);
     const selectorActivationVerified=rows.length===SHADOW_CYCLES&&rows.every(row=>
       row.micro_pool_applied===(row.shadow_arm===SHADOW_ARM.LIGHT_POOL)&&
       row.legacy_micro_selector_active===(row.shadow_arm===SHADOW_ARM.LEGACY));
@@ -543,6 +548,8 @@ try {
       pairs_with_changed_micro_selection:report.shadow.pairs.filter(pair=>pair.selection_changed).length,
       non_directional_pool_selection_total:nonDirectionalPoolSelections,
       non_directional_pool_symbols:nonDirectionalPoolSymbols,
+      directional_filter_audit_verified:filterAuditVerified,
+      audited_non_directional_excluded_total:auditedNonDirectionalExcludedTotal,
       mean_micro_jaccard_ratio:report.shadow.pairs.length
         ?report.shadow.pairs.reduce((sum,pair)=>sum+(Number(pair.micro_jaccard_ratio)||0),0)/report.shadow.pairs.length:null,
       mean_light_pool_duration_delta_ms:report.shadow.pairs.length
@@ -564,7 +571,7 @@ try {
         report.shadow.coverage_ready_every_cycle !== true || report.shadow.websocket_live_every_cycle !== true ||
         selectorActivationVerified!==true || balancedArms!==true ||
         report.shadow.pairs.length!==Math.floor(SHADOW_CYCLES/2) ||
-        nonDirectionalPoolSelections!==0 ||
+        nonDirectionalPoolSelections!==0 || filterAuditVerified!==true ||
         noDeepFailures!==true || zeroExtraLightRest!==true) {
       if (report.shadow.status === 'RUNNING') report.shadow.status = 'INCOMPLETE';
       report.status = 'SHADOW_INCOMPLETE';
