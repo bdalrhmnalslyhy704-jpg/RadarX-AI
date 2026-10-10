@@ -232,7 +232,7 @@ export function evaluateMarketWideLightCandidate({
     (coreConditions.narrow_base && coreConditions.support_structure && coreConditions.resistance_proximity);
   const failedConditions = Object.entries(coreConditions).filter(([, passed]) => !passed).map(([name]) => name);
   return {
-    symbol: key, evaluated: true, scanned: true, scanned_at: at,
+    symbol: key, layer_visited: true, evaluated: true, scanned: true, scanned_at: at,
     source, data_age_ms: age, latest_candle_close_time_ms: last.closeTime,
     result: candidate ? 'LIGHT_CANDIDATE' : 'LIGHT_REJECTED',
     reason: candidate ? 'LIGHT_FEATURES_RANK_ONLY' : 'INSUFFICIENT_LIGHT_CONFLUENCE',
@@ -263,7 +263,7 @@ function insufficient(symbol, series, now, reason, details = {}) {
   const lastClosed = candles.filter(x => x?.closed === true && KNOWN(x.closeTime) && Number(x.closeTime) <= now)
     .sort((a, b) => Number(a.closeTime) - Number(b.closeTime)).at(-1) || null;
   return {
-    symbol, evaluated: false, scanned: false, scanned_at: now,
+    symbol, layer_visited: true, evaluated: false, scanned: false, scanned_at: now,
     source: String(series?.source || lastClosed?.source || 'NO_CACHE'),
     data_age_ms: lastClosed ? Math.max(0, now - Number(lastClosed.closeTime)) : null,
     latest_candle_close_time_ms: lastClosed?.closeTime ?? null,
