@@ -677,8 +677,8 @@ try {
   const momentumHoldout = summarizeSampleBlock(holdoutSamples,'momentum12');
   const validationSeries = key => holdoutSamples.map(row=>({left:row.metrics?.[key],right:row.metrics?.market}));
   const chosenVsMarketCI = chosenStrategy ? pairedDifferenceCI(validationSeries(chosenStrategy),'left','right','hit5_mfe4h_rate',224199) : null;
-  const chosenVsLightCI = chosenStrategy ? pairedDifferenceCI(holdoutSamples.map(row=>({left:row.metrics?.[chosenStrategy],right:row.metrics?.light48}),'left','right','hit5_mfe4h_rate',324199) : null;
-  const chosenVsMomentumCI = chosenStrategy ? pairedDifferenceCI(holdoutSamples.map(row=>({left:row.metrics?.[chosenStrategy],right:row.metrics?.momentum12}),'left','right','hit5_mfe4h_rate',424199) : null;
+  const chosenVsLightCI = chosenStrategy ? pairedDifferenceCI(holdoutSamples.map(row=>({left:row.metrics?.[chosenStrategy],right:row.metrics?.light48})),'left','right','hit5_mfe4h_rate',324199) : null;
+  const chosenVsMomentumCI = chosenStrategy ? pairedDifferenceCI(holdoutSamples.map(row=>({left:row.metrics?.[chosenStrategy],right:row.metrics?.momentum12})),'left','right','hit5_mfe4h_rate',424199) : null;
   const holdoutRiskDelta = chosenHoldout && marketHoldout
     ? chosenHoldout.adverse5_mae4h_pct - marketHoldout.adverse5_mae4h_pct : null;
   const holdoutLiftPassed = Number.isFinite(chosenVsMarketCI?.confidence_interval_95_percentage_points?.lower) &&
