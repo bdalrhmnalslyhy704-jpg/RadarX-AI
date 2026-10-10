@@ -13,7 +13,7 @@ function normalizeStreamUrls(urls) {
   const supplied = [...new Set((Array.isArray(urls) ? urls : [])
     .map(value => String(value || '').trim()).filter(Boolean))];
   const usesBinance = supplied.some(value => {
-    try { return /(^|\\.)binance\\.(com|vision)$/i.test(new URL(value).hostname); }
+    try { return /(^|\.)binance\.(com|vision)$/i.test(new URL(value).hostname); }
     catch { return false; }
   });
   if (!usesBinance) return supplied.length ? supplied : [BINANCE_MARKET_DATA_WS_URL];
