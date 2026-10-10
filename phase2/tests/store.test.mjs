@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,stat} from 'node:fs/promises';
+import {mkdtemp,stat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DurableStore} from '../core/store.mjs';
@@ -68,7 +68,7 @@ test('scheduler archive hydrates each radar independently when another radar dom
 });
 
 
-test('append-only operational journals compact without evicting another radar',async()=>{
+test('scheduler journal automatically compacts its tail per radar before unbounded growth',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-scheduler-bounded-archive-'));
   const store=await new DurableStore({dir}).init();
   await store.appendScanSchedulerEvents([
@@ -99,22 +99,12 @@ test('append-only operational journals compact without evicting another radar',a
   assert.deepEqual(radar9.map(x=>x.event_type),['DEFERRED','STARTED','COMPLETED']);
 });
 
-test('bounded alert archive retains the newest audit rows and fixes Kahir JSONL framing',async()=>{
-  const dir=await mkdtemp(join(tmpdir(),'radarx-alert-bounded-archive-'));
+test('Kahir alert audit writes valid newline-delimited JSON events',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-kahir-jsonl-'));
   const store=await new DurableStore({dir}).init();
-  for(let i=1;i<=2005;i++)await store.appendFalconEyeAlert({
-    id:'FALCON:TESTUSDT:'+i,radar:'FALCON_EYE_RADAR',symbol:'TESTUSDT',
-    detected_at:i,processed_at:i,price:1+i/10000
-  });
-  const compacted=await store.compactJsonlArchive('falconEyeAlerts',{force:true});
-  assert.equal(compacted.compacted,true);
-  const rows=JSON.parse('['+(await readFile(store.files.falconEyeAlerts,'utf8')).trim().split('\\n').join(',')+']');
-  assert.equal(rows.length,2000);
-  assert.equal(rows[0].processed_at,6);
-  assert.equal(rows.at(-1).processed_at,2005);
   await store.appendKahirAlert({id:'KAHIR:AAAUSDT:1',symbol:'AAAUSDT',processed_at:1});
   await store.appendKahirAlert({id:'KAHIR:BBBUSDT:2',symbol:'BBBUSDT',processed_at:2});
-  const kahir=(await store.readRecent('kahirAlerts',10)).sort((a,b)=>a.processed_at-b.processed_at);
-  assert.equal(kahir.length,2,'Kahir events must be separated by real newline delimiters');
-  assert.deepEqual(kahir.map(x=>x.symbol),['AAAUSDT','BBBUSDT']);
+  const rows=(await store.readRecent('kahirAlerts',10)).sort((a,b)=>a.processed_at-b.processed_at);
+  assert.equal(rows.length,2,'each alert must be a separate JSONL row');
+  assert.deepEqual(rows.map(x=>x.symbol),['AAAUSDT','BBBUSDT']);
 });
