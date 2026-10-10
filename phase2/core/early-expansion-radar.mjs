@@ -1999,24 +1999,57 @@ export class EarlyExpansionRadar{
           const outcomeSummary=summarizeScanJourneyOutcomes(coins);
           const quietBaseFingerprintSummary=summarizeQuietBasePreExpansion(scanned);
           const quietBaseMicroFingerprintSummary=summarizeQuietBasePreExpansion(microScanned);
+          const restRequestTelemetry=await this.currentCycleRestTelemetry(completedAt);
+          const microClassifications=microScanned.map(x=>String(x?.micro_fingerprint?.quiet_base_pre_expansion?.classification||'DATA_INSUFFICIENT').toUpperCase());
+          const deepSelectedSymbols=new Set(deepTargets.map(selectionSymbol));
+          const preInMicro=microScanned.filter(x=>x?.micro_fingerprint?.quiet_base_pre_expansion?.classification==='PRE_EXPANSION');
+          const watchInMicro=microScanned.filter(x=>x?.micro_fingerprint?.quiet_base_pre_expansion?.classification==='WATCH_EARLY');
+          const preInDeep=deepTargets.filter(x=>x?.micro_fingerprint?.quiet_base_pre_expansion?.classification==='PRE_EXPANSION');
+          const watchInDeep=deepTargets.filter(x=>x?.micro_fingerprint?.quiet_base_pre_expansion?.classification==='WATCH_EARLY');
           const counters={
             quiet_base_pre_expansion:quietBaseFingerprintSummary,
             quiet_base_pre_expansion_micro:quietBaseMicroFingerprintSummary,
+            operational_telemetry_schema:'RADAR8_OPERATIONAL_TELEMETRY_V1',
+            rest_request_telemetry:restRequestTelemetry,
+            eligible_symbols:eligible.map(x=>x.symbol),
+            micro_selected_symbols:selected.map(selectionSymbol),
+            deep_selected_symbols:deepTargets.map(selectionSymbol),
             expected_total:expected.length,received_total:receivedSymbols.length,
             missing_ticker_total:Math.max(0,expected.length-receivedSymbols.length),
             eligible_total:eligible.length,fast_scanned_total:eligible.length,
+            eligible_duplicate_symbol_rows:Math.max(0,eligible.length-new Set(eligible.map(x=>String(x.symbol).toUpperCase())).size),
+            micro_selection_ranked_total:this.lastMicroSelectionAudit.length,
             micro_selected_total:selected.length,
+            micro_deferred_total:Math.max(0,eligible.length-selected.length),
+            micro_duplicate_input_symbol_rows:this.lastMicroDuplicateInputCount||0,
+            micro_selected_duplicate_symbol_rows:Math.max(0,selected.length-new Set(selected.map(selectionSymbol)).size),
             micro_attempted_total:coins.filter(x=>x.micro_scan_completed_at!==INCOMPLETE).length,
             micro_success_total:microScanned.filter(x=>x&&!x.failed).length,
+            micro_failed_total:microScanned.filter(x=>x?.failed).length,
+            micro_incomplete_or_warming_total:microScanned.filter(x=>x?.failed||!hasFiniteNumber(x?.micro_fingerprint?.score)||['DATA_INSUFFICIENT','WARMING_UP','INCOMPLETE'].includes(String(x?.micro_fingerprint?.stage||'').toUpperCase())).length,
+            micro_pre_expansion_total:preInMicro.length,
+            micro_watch_early_total:watchInMicro.length,
+            micro_already_extended_total:microClassifications.filter(x=>x==='ALREADY_EXTENDED').length,
+            micro_quiet_fingerprint_evaluated_total:microScanned.filter(x=>x?.micro_fingerprint?.quiet_base_pre_expansion).length,
+            micro_quiet_selected_total:selected.filter(x=>x._selection_lane==='quiet'||x._selection_lane==='fill_quiet').length,
+            micro_exceptional_candidate_total:this.lastMicroSelectionAudit.filter(x=>x.exceptional_candidate).length,
+            micro_exceptional_selected_total:selected.filter(x=>x._selection_lane==='exceptional').length,
+            micro_rotation_selected_total:selected.filter(x=>x._selection_lane==='rotation'||x._selection_lane==='fill_rotation').length,
+            deep_selection_ranked_total:this.lastDeepSelectionAudit.length,
             deep_selected_total:deepTargets.length,
+            deep_deferred_total:Math.max(0,deepPoolBeforeSelection.length-deepTargets.length),
+            deep_duplicate_input_symbol_rows:this.lastDeepDuplicateInputCount||0,
+            deep_selected_duplicate_symbol_rows:Math.max(0,deepTargets.length-new Set(deepTargets.map(selectionSymbol)).size),
             deep_attempted_total:coins.filter(x=>x.deep_scan_started_at!==INCOMPLETE).length,
             deep_completed_total:deepThisCycle.size,
             deep_failed_total:deepTargets.length-deepThisCycle.size,
-            micro_quiet_share:selected.filter(x=>x._selection_lane==='quiet'||x._selection_lane==='fill_quiet').length,
-            micro_rotation_share:selected.filter(x=>x._selection_lane==='rotation'||x._selection_lane==='fill_rotation').length,
-            micro_exceptional_share:selected.filter(x=>x._selection_lane==='exceptional').length,
+            deep_pre_expansion_selected_total:preInDeep.length,
+            deep_pre_expansion_deferred_total:preInMicro.filter(x=>!deepSelectedSymbols.has(selectionSymbol(x))).length,
+            deep_watch_early_selected_total:watchInDeep.length,
+            deep_watch_early_not_selected_total:watchInMicro.filter(x=>!deepSelectedSymbols.has(selectionSymbol(x))).length,
             deep_quiet_share:deepTargets.filter(x=>x._selection_lane==='quiet'||x._selection_lane==='fill_quiet').length,
             deep_rotation_share:deepTargets.filter(x=>x._selection_lane==='rotation'||x._selection_lane==='fill_rotation').length,
+            deep_exceptional_candidate_total:this.lastDeepSelectionAudit.filter(x=>x.activity_shock_detected).length,
             deep_exceptional_share:deepTargets.filter(x=>x._selection_lane==='exceptional').length,
             eligible_never_deep_scanned_total:pending.filter(x=>x.never_deep_scanned).length,
             oldest_never_deep_scanned_symbol:oldestNever?.symbol||INCOMPLETE,
