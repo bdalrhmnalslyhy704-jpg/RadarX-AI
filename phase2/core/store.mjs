@@ -54,7 +54,7 @@ export class DurableStore {
   async writeJson(p,v){
     const t=p+'.tmp-'+process.pid+'-'+Date.now();
     try{
-      await writeFile(t,JSON.stringify(v,null,2)+'\\n');
+      await writeFile(t,JSON.stringify(v,null,2)+'\n');
       await rename(t,p);
       this.lastWriteAt=Date.now();
     }catch(error){
