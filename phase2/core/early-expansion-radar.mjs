@@ -5,7 +5,7 @@ import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notific
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
 import {assessQuietBaseActivityShock,isFastActivityShockCandidate} from './activity-shock.mjs';
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
-import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId,normalizeMissing} from './scan-journey-ledger.mjs';
+import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId,normalizeMissing,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes} from './scan-journey-ledger.mjs';
 
 function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
@@ -1297,7 +1297,15 @@ export class EarlyExpansionRadar{
       const eligibleBySymbol=new Map(eligible.map(x=>[x.symbol,x]));
       const fastBySymbol=new Map();for(const row of eligible)fastBySymbol.set(row.symbol,this.updateFastState(row));
       const fastScanAt=this.clock(),eligibleSet=new Set(eligible.map(x=>x.symbol));
-      for(const symbol of [...this.firstEligibleAtBySymbol.keys()])if(!eligibleSet.has(symbol))this.firstEligibleAtBySymbol.delete(symbol);
+      for(const symbol of [...this.firstEligibleAtBySymbol.keys()]){
+        if(!set.has(symbol)){this.firstEligibleAtBySymbol.delete(symbol);continue;}
+        const seenTicker=rawBySymbol.get(symbol);
+        // A missing ticker or missing liquidity field is a data gap, not proof
+        // that the symbol lost eligibility. Preserve queue age in that case.
+        if(seenTicker&&hasFiniteNumber(seenTicker.quoteVolume24h)&&
+          Number(seenTicker.quoteVolume24h)<Number(this.config.minQuoteVolume24h))
+          this.firstEligibleAtBySymbol.delete(symbol);
+      }
       for(const row of eligible)if(!this.firstEligibleAtBySymbol.has(row.symbol))this.firstEligibleAtBySymbol.set(row.symbol,fastScanAt);
       journey.expected_symbols=expected;journey.received_symbols=receivedSymbols;journey.eligible_symbols=eligible.map(x=>x.symbol);
       journey.raw_ticker_source=tickerSource;journey.eligible_at=fastScanAt;
@@ -1708,6 +1716,13 @@ export class EarlyExpansionRadar{
           let outcomeState={records:[]};
           try{outcomeState=await this.store.getPreExpansionOutcomes();}catch(e){this.noteError(e,'journey-outcome-read');}
           const outcomeRecords=Array.isArray(outcomeState?.records)?outcomeState.records:[];
+          if(typeof this.store.refreshScanJourneyOutcomes==='function'){
+            try{
+              const refreshed=await this.store.refreshScanJourneyOutcomes(outcomeRecords,{limit:24,now:completedAt});
+              if(refreshed.updated_cycles>0||refreshed.corrupt_files>0||refreshed.missing_files>0)
+                this.logger.info?.('[RADARX_SCAN_JOURNEY_OUTCOME_REFRESH] '+JSON.stringify(refreshed));
+            }catch(e){this.noteError(e,'journey-outcome-refresh');}
+          }
           for(const candidate of ok){
             const stage=String(candidate.pre_expansion_stage||candidate.decision_band||'');
             const entry=journeyEntries.get(candidate.symbol);
@@ -1716,20 +1731,7 @@ export class EarlyExpansionRadar{
             const outcome=outcomeRecords.find(x=>x?.signal_id===signalId&&x?.radar==='RADAR_8');
             if(!outcome)continue;
             entry.outcome_signal_id=signalId;
-            entry.outcomes=Object.fromEntries(['5m','15m','30m','60m','4h','24h'].map(h=>{
-              const mark=outcome.marks?.[h],excursion=outcome.excursions?.[h],status=outcome.horizon_status?.[h];
-              const closed=mark?.sample_quality==='HISTORICAL_CLOSED_OHLC';
-              const excursionClosed=excursion?.source==='HISTORICAL_CLOSED_OHLC'&&excursion?.complete===true;
-              return [h,{
-                status:closed?(status?.status==='COMPLETE'?'COMPLETE':'PARTIAL_CLOSED_OHLC'):INCOMPLETE,
-                return_pct:closed&&hasFiniteNumber(mark?.return_pct)?Number(mark.return_pct):INCOMPLETE,
-                mark_price:closed&&hasFiniteNumber(mark?.price)?Number(mark.price):INCOMPLETE,
-                mark_time:closed&&hasFiniteNumber(mark?.observed_at)?Number(mark.observed_at):INCOMPLETE,
-                max_favorable_pct:excursionClosed&&hasFiniteNumber(excursion?.max_favorable_pct)?Number(excursion.max_favorable_pct):INCOMPLETE,
-                max_adverse_pct:excursionClosed&&hasFiniteNumber(excursion?.max_adverse_pct)?Number(excursion.max_adverse_pct):INCOMPLETE,
-                reason:closed?(excursionClosed?INCOMPLETE:(status?.reason||'INCOMPLETE_CLOSED_CANDLE_WINDOW')):(status?.reason||'WAITING_FOR_CLOSED_OHLC')
-              }];
-            }));
+            entry.outcomes=scanJourneyOutcomesFromRecord(outcome);
           }
           const deepThisCycle=new Set(scanned.filter(x=>x&&!x.failed).map(x=>String(x.symbol||'').toUpperCase()));
           const pending=eligible.filter(x=>!deepThisCycle.has(x.symbol)).map(x=>{
@@ -1790,10 +1792,9 @@ export class EarlyExpansionRadar{
             oldest_pending_symbol:oldestPending?.symbol||INCOMPLETE,
             oldest_pending_wait_ms:oldestPending?.wait_ms??INCOMPLETE,
             oldest_pending_wait_cycles:oldestPending?.wait_cycles??INCOMPLETE,
-            outcomes_by_horizon:Object.fromEntries(['5m','15m','30m','60m','4h','24h'].map(h=>[h,{
-              complete:coins.filter(x=>x.outcomes?.[h]?.status==='COMPLETE').length,
-              incomplete:coins.filter(x=>x.outcomes?.[h]?.status===INCOMPLETE||x.outcomes?.[h]?.status==='PARTIAL_CLOSED_OHLC').length
-            }]))
+            outcomes_tracked_total:summarizeScanJourneyOutcomes(coins).tracked_total,
+            outcomes_untracked_total:summarizeScanJourneyOutcomes(coins).untracked_total,
+            outcomes_by_horizon:summarizeScanJourneyOutcomes(coins).by_horizon
           };
           const record={
             schema_version:SCAN_JOURNEY_SCHEMA,cycle_id:journey.cycle_id,cycle_number:cycle,
