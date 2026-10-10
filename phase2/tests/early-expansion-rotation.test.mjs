@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,nextEarlyExpansionPollDelayMs,buildMicroFingerprint} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,nextEarlyExpansionPollDelayMs,buildMicroFingerprint,EARLY_EXPANSION_RADAR_DEFAULTS} from '../core/early-expansion-radar.mjs';
 import {RestClient} from '../market/binance-rest.mjs';
 import {DurableStore} from '../core/store.mjs';
 import {mkdtemp,rm} from 'node:fs/promises';
