@@ -1,6 +1,7 @@
 name: RadarX Full-Market Cache Warm-up Proof
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - feature/build224-market-wide-light-scan-20261010
