@@ -356,8 +356,8 @@ try {
   report.data.history_window_start_utc = new Date(earliestCommonClose).toISOString();
   report.data.history_window_end_utc = new Date(latestCommonClose).toISOString();
   report.data.snapshot_count = sampleTimes.length;
-  report.data.snapshot_first_utc = new Date(sampleTimes.at(-1)).toISOString();
-  report.data.snapshot_last_utc = new Date(sampleTimes[0]).toISOString();
+  report.data.snapshot_first_utc = new Date(sampleTimes[0]).toISOString();
+  report.data.snapshot_last_utc = new Date(sampleTimes.at(-1)).toISOString();
   report.data.common_history_symbols = readyRows.length;
   report.quality = {
     future_data_in_inputs: false,
