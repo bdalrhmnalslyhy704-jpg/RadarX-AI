@@ -7,6 +7,7 @@ import {DurableStore} from '../core/store.mjs';
 import {SCAN_JOURNEY_SCHEMA} from '../core/scan-journey-ledger.mjs';
 import {MarketWideLightScan, evaluateMarketWideLightCandidate} from '../core/market-wide-light-scan.mjs';
 import {MarketWideKlineCache} from '../market/market-wide-kline-cache.mjs';
+import {BinanceStreamClient} from '../market/binance-ws.mjs';
 import {RestClient} from '../market/binance-rest.mjs';
 
 const STEP = 5 * 60_000;
@@ -268,4 +269,86 @@ test('market-wide websocket cache bounds/deduplicates streams and keeps only clo
   assert.equal(cache.setSymbols(['BBBUSDT','AAAUSDT']),false,'identical normalized universe must not reconnect');
   cache.stop();
   assert.equal(cache.health().state,'STOPPED');
+});
+
+
+test('cache readiness requires all expected symbols to have fresh continuous closed 5m bars', () => {
+  let now = 1_900_000_000_000;
+  FakeSocket.instances.length = 0;
+  const cache = new MarketWideKlineCache({
+    urls:['wss://stream.binance.com:9443/stream','wss://stream.binance.com:443/stream'],
+    WebSocketImpl:FakeSocket,clock:()=>now,logger:{warn(){}}
+  });
+  assert.equal(cache.urls[0],'wss://data-stream.binance.vision/stream',
+    'the market-data-only WebSocket must be attempted first');
+  cache.setSymbols(['AAAUSDT','BBBUSDT']);
+  cache.start();
+  assert.match(FakeSocket.instances[0].url,/data-stream\.binance\.vision\/stream/);
+  cache.seed('AAAUSDT',candles({now,count:72}).map(candle=>({...candle,symbol:'AAAUSDT'})),'BINANCE_PUBLIC_REST');
+  let status = cache.health();
+  assert.equal(status.expected_symbols,2);
+  assert.equal(status.ready_symbols,1);
+  assert.equal(status.missing_symbols,1);
+  assert.equal(status.cache_coverage_ready,false);
+  now += 9 * 60_000;
+  status = cache.health();
+  assert.equal(status.stale_symbols,1);
+  assert.equal(status.missing_symbols,1);
+  assert.equal(status.cache_coverage_ready,false);
+  cache.stop();
+});
+
+test('same closed-candle payload is deduplicated instead of being counted as fresh data', () => {
+  const now = 1_900_000_000_000;
+  const cache = new MarketWideKlineCache({urls:['wss://fake.test/stream'],WebSocketImpl:FakeSocket,
+    clock:()=>now,logger:{warn(){}}});
+  cache.setSymbols(['AAAUSDT']);
+  const candle = {...candles({now,count:1})[0],symbol:'AAAUSDT',source:'BINANCE_PUBLIC_WS'};
+  assert.equal(cache.putCandle(candle),true);
+  assert.equal(cache.putCandle({...candle,receivedAt:now+100}),false);
+  assert.equal(cache.getSeries('AAAUSDT').candles.length,1);
+});
+
+test('repeated scans reuse a still-fresh closed 5m evaluation until a new candle arrives', () => {
+  const now = 1_900_000_000_000;
+  const light = new MarketWideLightScan({config:{minClosedCandles:60},clock:()=>now});
+  const eligible = [row(0)];
+  const first = light.scan({eligible,now,cycle:1,getSeries:symbol=>cacheSeries(symbol,now)});
+  const firstAudit = first.audit.get(eligible[0].symbol);
+  assert.equal(firstAudit.new_closed_candle,true);
+  assert.equal(firstAudit.evaluation_reused,false);
+  const second = light.scan({eligible,now:now+1000,cycle:2,getSeries:symbol=>cacheSeries(symbol,now+1000)});
+  const secondAudit = second.audit.get(eligible[0].symbol);
+  assert.equal(secondAudit.new_closed_candle,false);
+  assert.equal(secondAudit.evaluation_reused,true);
+  assert.equal(secondAudit.evaluation_kind,'REUSED_CLOSED_CANDLE');
+  assert.equal(secondAudit.evaluated_at,firstAudit.evaluated_at);
+  assert.equal(second.summary.reused_evaluation_total,1);
+  assert.equal(second.summary.new_closed_candle_total,0);
+});
+
+test('WebSocket reconnect retries stop after the configured bound on HTTP 451', async () => {
+  FakeSocket.instances.length = 0;
+  const states = [];
+  const client = new BinanceStreamClient({
+    urls:['wss://data-stream.binance.vision/stream'],
+    streams:['aaausdt@kline_5m'],
+    WebSocketImpl:FakeSocket,
+    initialBackoffMs:1,maxBackoffMs:1,jitterRatio:0,maxReconnectAttempts:2,
+    onState:(state,reason)=>states.push({state,reason})
+  });
+  client.start();
+  for (let attempt=0; attempt<3; attempt++) {
+    const socket = FakeSocket.instances.at(-1);
+    socket.emit('unexpected-response',{}, {statusCode:451,resume(){}});
+    await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  const health = client.health();
+  assert.equal(health.state,'DEGRADED');
+  assert.equal(health.reconnect_attempts,2);
+  assert.equal(health.consecutive_reconnect_attempts,2);
+  assert.equal(FakeSocket.instances.length,3,'initial connection plus exactly two bounded retries');
+  assert.ok(states.some(item=>String(item.reason||'').includes('WS_HTTP_451')));
+  assert.ok(states.some(item=>String(item.reason||'').includes('WS_RECONNECT_LIMIT_REACHED')));
+  client.stop();
 });
