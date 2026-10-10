@@ -262,8 +262,13 @@ function insufficient(symbol, series, now, reason, details = {}) {
   const candles = Array.isArray(series?.candles) ? series.candles : [];
   const lastClosed = candles.filter(x => x?.closed === true && KNOWN(x.closeTime) && Number(x.closeTime) <= now)
     .sort((a, b) => Number(a.closeTime) - Number(b.closeTime)).at(-1) || null;
+  const cacheState = reason === 'CANDLE_CACHE_MISSING' ? 'CANDLE_CACHE_MISSING' :
+    reason === 'STALE_CLOSED_5M_CACHE' ? 'STALE_DATA' :
+    reason === 'INSUFFICIENT_CLOSED_5M_CANDLES' ? 'CANDLE_CACHE_INCOMPLETE' : 'INVALID_DATA';
   return {
     symbol, layer_visited: true, evaluated: false, scanned: false, scanned_at: now,
+    evaluated_at: now, visited_at: now, evaluation_reused: false, new_closed_candle: false,
+    cache_state: cacheState, data_is_fresh: false,
     source: String(series?.source || lastClosed?.source || 'NO_CACHE'),
     data_age_ms: lastClosed ? Math.max(0, now - Number(lastClosed.closeTime)) : null,
     latest_candle_close_time_ms: lastClosed?.closeTime ?? null,
@@ -284,6 +289,7 @@ export class MarketWideLightScan {
     this.config = {...MARKET_WIDE_LIGHT_SCAN_DEFAULTS, ...config};
     this.clock = clock;
     this.lastCandidateCycleBySymbol = new Map();
+    this.lastEvaluationBySymbol = new Map();
   }
 
   scan({
@@ -302,6 +308,9 @@ export class MarketWideLightScan {
     const eligibleTotal = uniqueRows.length;
     const maxSymbols = Math.max(1, Math.trunc(Number(this.config.maxEligibleSymbols) || 1200));
     if (eligibleTotal > maxSymbols) throw new Error('MARKET_WIDE_LIGHT_ELIGIBLE_LIMIT_EXCEEDED');
+    for (const symbol of this.lastEvaluationBySymbol.keys()) {
+      if (!seen.has(symbol)) this.lastEvaluationBySymbol.delete(symbol);
+    }
 
     const audit = new Map();
     const evaluated = [];
@@ -309,7 +318,73 @@ export class MarketWideLightScan {
     for (const row of uniqueRows) {
       const symbol = symbolOf(row);
       const series = getSeries(symbol);
-      const result = evaluateMarketWideLightCandidate({symbol, series, now: at, config: this.config});
+      const latestClosed = Array.isArray(series?.candles)
+        ? series.candles.filter(candle => candle?.closed === true && KNOWN(candle.openTime) &&
+          KNOWN(candle.closeTime) && Number(candle.closeTime) <= at)
+          .sort((a, b) => Number(a.closeTime) - Number(b.closeTime)).at(-1) || null
+        : null;
+      const latestCloseTime = latestClosed ? Number(latestClosed.closeTime) : null;
+      const signature = latestClosed ? [
+        latestClosed.openTime, latestClosed.closeTime, latestClosed.open,
+        latestClosed.high, latestClosed.low, latestClosed.close
+      ].map(value => String(value)).join(':') : null;
+      const previous = this.lastEvaluationBySymbol.get(symbol);
+      const sameCandle = Boolean(signature && previous?.signature === signature);
+      const age = latestCloseTime === null ? null : Math.max(0, at - latestCloseTime);
+      let result;
+      if (sameCandle && age <= this.config.maxCandleAgeMs) {
+        result = {
+          ...previous.result,
+          data_age_ms: age,
+          latest_candle_close_time_ms: latestCloseTime,
+          evaluated_at: previous.evaluatedAt,
+          visited_at: at,
+          evaluation_reused: true,
+          new_closed_candle: false,
+          data_is_fresh: true,
+          evaluation_kind: 'REUSED_CLOSED_CANDLE'
+        };
+      } else if (sameCandle && previous.result?.reason === 'STALE_CLOSED_5M_CACHE') {
+        result = {
+          ...previous.result,
+          data_age_ms: age,
+          latest_candle_close_time_ms: latestCloseTime,
+          evaluated_at: previous.evaluatedAt,
+          visited_at: at,
+          evaluation_reused: true,
+          new_closed_candle: false,
+          data_is_fresh: false,
+          evaluation_kind: 'REUSED_STALE_REJECTION'
+        };
+      } else {
+        result = evaluateMarketWideLightCandidate({symbol, series, now: at, config: this.config});
+        const newClosedCandle = latestCloseTime !== null &&
+          (!previous || latestCloseTime > Number(previous.latestCloseTime));
+        const revisedCandle = Boolean(signature && previous &&
+          latestCloseTime === Number(previous.latestCloseTime) && signature !== previous.signature);
+        const cacheRegression = Boolean(signature && previous &&
+          latestCloseTime < Number(previous.latestCloseTime));
+        result = {
+          ...result,
+          evaluated_at: at,
+          visited_at: at,
+          evaluation_reused: false,
+          new_closed_candle: newClosedCandle,
+          data_is_fresh: result.evaluated === true,
+          evaluation_kind: revisedCandle ? 'CANDLE_REVISION' :
+            cacheRegression ? 'CACHE_REGRESSION' :
+            newClosedCandle ? 'NEW_CLOSED_CANDLE' : 'NO_NEW_CLOSED_CANDLE'
+        };
+        if (signature) {
+          this.lastEvaluationBySymbol.set(symbol, {
+            signature,
+            latestCloseTime,
+            evaluatedAt: at,
+            result: {...result}
+          });
+        }
+      }
+      if (!result.cache_state && result.evaluated) result.cache_state = 'READY';
       const exceptionalFlag = Boolean(isExceptional(row));
       const microAtRaw = lastMicroScannedAt(symbol);
       result.exceptional_priority = exceptionalFlag;
@@ -397,6 +472,7 @@ export class MarketWideLightScan {
     });
     const evaluatedTotal = evaluated.length;
     const validCandidateTotal = evaluated.filter(item => item.result.candidate).length;
+    const scanRows = [...audit.values()];
     const minimumReady = Math.max(1, Math.trunc(Number(this.config.minimumReadyCandidates) || 24));
     const coverageReady = eligibleTotal > 0 && evaluatedTotal === eligibleTotal;
     const selectedExceptional = selected.filter(item => item.selectionReason === 'EXCEPTIONAL_PRESERVED').length;
@@ -407,8 +483,13 @@ export class MarketWideLightScan {
       evaluated_total: evaluatedTotal,
       not_evaluated_total: eligibleTotal - evaluatedTotal,
       fresh_cache_coverage_ratio: eligibleTotal ? evaluatedTotal / eligibleTotal : 0,
-      stale_total: [...audit.values()].filter(item => item.reason === 'STALE_CLOSED_5M_CACHE').length,
-      invalid_total: [...audit.values()].filter(item => item.reason === 'INVALID_CLOSED_CANDLE' || item.reason === 'CLOSED_CANDLE_SEQUENCE_HAS_GAPS').length,
+      new_closed_candle_total: scanRows.filter(item => item.new_closed_candle === true).length,
+      reused_evaluation_total: scanRows.filter(item => item.evaluation_reused === true).length,
+      no_new_closed_candle_total: scanRows.filter(item => item.evaluation_kind === 'NO_NEW_CLOSED_CANDLE' ||
+        item.evaluation_kind === 'REUSED_CLOSED_CANDLE' || item.evaluation_kind === 'REUSED_STALE_REJECTION').length,
+      cache_missing_total: scanRows.filter(item => item.cache_state === 'CANDLE_CACHE_MISSING').length,
+      stale_total: scanRows.filter(item => item.cache_state === 'STALE_DATA' || item.reason === 'STALE_CLOSED_5M_CACHE').length,
+      invalid_total: scanRows.filter(item => item.reason === 'INVALID_CLOSED_CANDLE' || item.reason === 'CLOSED_CANDLE_SEQUENCE_HAS_GAPS').length,
       light_candidate_total: validCandidateTotal,
       micro_candidate_pool_total: selected.length,
       rotation_reserve_configured: rotationReserve,
