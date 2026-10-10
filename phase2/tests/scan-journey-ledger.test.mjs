@@ -20,7 +20,7 @@ function cycle(at,n,symbols=[{symbol:'AAAUSDT',deep:false}]) {
       symbol:x.symbol,eligible:true,eligibility_at:at,fast_scan_at:at,
       first_eligible_at:at, micro_scan_completed_at:at+3000,
       deep_scan_status:x.deep?'COMPLETED':INCOMPLETE,deep_scan_completed_at:x.deep?at+8000:INCOMPLETE,
-      ticker:{price:10},candles_used:x.deep?{'1m':[candle(at-60_000)]}:{'1m':INCOMPLETE},
+      ticker:{price:10},candles_used:x.deep?{'1m':[{open_time:at-60_000,close_time:at,open:10,high:11,low:9,close:10.5,volume:100,quote_volume:1050,trade_count:7,taker_buy_base_volume:53}]}:{'1m':INCOMPLETE},
       outcomes:incompleteHorizons('NOT_MATURED')
     }))
   };
