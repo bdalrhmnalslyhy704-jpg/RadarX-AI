@@ -57,7 +57,8 @@ const phase2=[
   'phase2/tests/scan-scheduler.test.mjs',
   'phase2/tests/scan-scheduler.test.mjs',
   'phase2/tests/symbol-deep-scan.test.mjs',
-  'phase2/tests/ws.test.mjs'
+  'phase2/tests/ws.test.mjs',
+  'phase2/tests/market-wide-light-scan.test.mjs'
 ];
 
 const scope=process.argv[2]||'all';
