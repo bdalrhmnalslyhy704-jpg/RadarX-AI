@@ -4,6 +4,7 @@ import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DurableStore} from '../core/store.mjs';
+import {SCAN_JOURNEY_SCHEMA} from '../core/scan-journey-ledger.mjs';
 import {MarketWideLightScan, evaluateMarketWideLightCandidate} from '../core/market-wide-light-scan.mjs';
 import {MarketWideKlineCache} from '../market/market-wide-kline-cache.mjs';
 
@@ -63,7 +64,15 @@ test('market-wide light scan covers all eligible symbols once and keeps candidat
   assert.equal(result.summary.evaluated_total,40);
   assert.equal(result.summary.not_evaluated_total,290);
   assert.equal(result.summary.binance_rest_calls_added_by_light_scan,0);
-  assert.equal(result.coverageReady,true);
+  assert.equal(result.coverageReady,false,'partial cache coverage must not activate the filter');
+  assert.equal(result.summary.selection_mode,'BOOTSTRAP_FULL_UNIVERSE');
+  const fullyWarmed = light.scan({
+    eligible,now:now+1000,cycle:2,
+    getSeries:symbol=>cacheSeries(symbol,now+1000),
+    lastMicroScannedAt:()=>null
+  });
+  assert.equal(fullyWarmed.summary.evaluated_total,330);
+  assert.equal(fullyWarmed.coverageReady,true,'only complete fresh-candle coverage can activate ranking');
 });
 
 test('future candles are excluded and the returned evaluation never uses a close after as-of', () => {
@@ -159,7 +168,7 @@ test('the scan journey archive preserves per-symbol light-scan provenance after 
       closed_candles_only:true,metrics:{base_range_pct:0.8,atr_ratio:0.7,volume_participation:{available:false,recentRatio:null}}
     };
     await store.appendScanJourneyCycle({
-      schema_version:'SCAN_JOURNEY_V1',cycle_id:'RADAR8:USDT:MWLIGHT:1',
+      schema_version:SCAN_JOURNEY_SCHEMA,cycle_id:'RADAR8:USDT:MWLIGHT:1',
       cycle_number:1,radar:'RADAR_8',quote:'USDT',status:'COMPLETE',
       started_at:now,completed_at:now+300,counters:{market_wide_light_scan:{eligible_total:330,evaluated_total:210,micro_candidate_pool_total:48,binance_rest_calls_added_by_light_scan:0}},
       data_policy:{closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
