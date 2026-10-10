@@ -6,6 +6,7 @@ import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-e
 import {assessQuietBaseActivityShock,isFastActivityShockCandidate} from './activity-shock.mjs';
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
 import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId,normalizeMissing,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,reconcileEligibilityQueueAge} from './scan-journey-ledger.mjs';
+import {ScanSchedulerJournal, schedulerLaneReason} from './scan-scheduler.mjs';
 
 function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
@@ -1073,6 +1074,7 @@ export class EarlyExpansionRadar{
     this.fastState=new Map();this.lastAlertAt=new Map();this.lastAlertScore=new Map();this.lastBand=new Map();
     this.lastActivityShockAt=new Map();this.lastActivityShockKeyBySymbol=new Map();this.activityShockTimestamps=[];this.fastShockPendingUntil=new Map();
     this.lastMicroScanCycleBySymbol=new Map();this.lastDeepScanCycleBySymbol=new Map();
+    this.scheduler=new ScanSchedulerJournal({radar:'RADAR_8',store,clock,logger});
     this.lastDeepAtBySymbol=new Map();this.firstEligibleAtBySymbol=new Map();
     this.journeyStateHydrated=false;this.lastJourneyArchive=null;this.lastJourneyError=null;
     this.outcomeBackfillTask=null;
@@ -1152,19 +1154,25 @@ export class EarlyExpansionRadar{
   }
   selectMicro(rows,fastBySymbol,cycle=0){
     const currentCycle=Math.max(0,Math.trunc(Number(cycle)||0));
+    const selectionAt=this.clock();
     const all=(rows||[]).filter(row=>row&&row.symbol).map(row=>{
       const fast=fastBySymbol.get(row.symbol)||{};
       const quiet=quietCandidateScore(row,fast,this.config);
       const fastScore=fastCandidateScore(row,fast,this.config);
       const key=String(row.symbol).toUpperCase();
       const lastCycle=this.lastMicroScanCycleBySymbol.get(key);
+      const lastAt=this.scheduler.lastScanAt('MICRO',key),queuedAt=this.scheduler.queueStartedAt('MICRO',key);
+      const neverScanned=lastAt===null;
+      const elapsedSinceScan=neverScanned?Number.MAX_SAFE_INTEGER:Math.max(0,selectionAt-lastAt);
+      const queueAge=queuedAt===null?0:Math.max(0,selectionAt-queuedAt);
       const rotation=((symbolHash(row.symbol)+Math.imul(currentCycle,2654435761))>>>0)/4294967296;
       const rotationAge=lastCycle===undefined?Number.MAX_SAFE_INTEGER:Math.max(0,currentCycle-lastCycle);
       return {...row,fast,
         _microPreScore:fastScore*.55+(quiet??0)*.45,
         _quietScore:quiet??-1,_quietEligible:isQuietEarlyCandidate(row,fast,this.config),
         _exceptional:isExceptionalMicroCandidate(row,fast,this.config)||isFastActivityShockCandidate(row,fast,this.config)||Number(this.fastShockPendingUntil.get(key)||0)>this.clock(),
-        _rotation:rotation,_rotationAge:rotationAge};
+        _lastActuallyScannedAt:lastAt,_neverScanned:neverScanned,_queueAgeMs:queueAge,
+        _rotationAgeMs:elapsedSinceScan,_rotation:rotation,_rotationAge:rotationAge};
     });
     const n=Math.max(1,Math.trunc(this.config.microScanCandidates||36));
     const target=Math.min(n,new Set(all.map(x=>String(x.symbol).toUpperCase())).size);
@@ -1175,7 +1183,7 @@ export class EarlyExpansionRadar{
     const byScore=[...all].sort((a,b)=>b._microPreScore-a._microPreScore||a.symbol.localeCompare(b.symbol));
     const byQuiet=all.filter(x=>x._quietEligible).sort((a,b)=>
       (absolute24hMove(a)??Infinity)-(absolute24hMove(b)??Infinity)||b._quietScore-a._quietScore||a.symbol.localeCompare(b.symbol));
-    const byRotation=[...all].sort((a,b)=>b._rotationAge-a._rotationAge||a._rotation-b._rotation||a.symbol.localeCompare(b.symbol));
+    const byRotation=[...all].sort((a,b)=>Number(b._neverScanned)-Number(a._neverScanned)||b._rotationAgeMs-a._rotationAgeMs||b._queueAgeMs-a._queueAgeMs||b._rotationAge-a._rotationAge||a._rotation-b._rotation||a.symbol.localeCompare(b.symbol));
     const byExceptional=all.filter(x=>x._exceptional).sort((a,b)=>b._microPreScore-a._microPreScore||b._rotationAge-a._rotationAge||a.symbol.localeCompare(b.symbol));
     const selected=[],seen=new Set();
     const exceptionSlots=Math.min(core,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2)));
@@ -1193,6 +1201,7 @@ export class EarlyExpansionRadar{
   }
   selectDeepFromMicro(results,cycle=0){
     const currentCycle=Math.max(0,Math.trunc(Number(cycle)||0));
+    const selectionAt=this.clock();
     const valid=(results||[]).filter(x=>x&&!x.failed&&selectionSymbol(x)&&x.micro_fingerprint?.score!=null&&hasFiniteNumber(x.micro_fingerprint.score));
     const n=Math.max(1,Math.trunc(this.config.deepCandidates||10));
     const target=Math.min(n,new Set(valid.map(selectionSymbol)).size);
@@ -1207,9 +1216,13 @@ export class EarlyExpansionRadar{
       .sort((a,b)=>(absolute24hMove(a.row)??Infinity)-(absolute24hMove(b.row)??Infinity)||b._quietScore-a._quietScore||selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const byRotation=[...valid].map(item=>{
       const symbol=selectionSymbol(item),lastCycle=this.lastDeepScanCycleBySymbol.get(symbol);
-      return {...item,_rotationAge:lastCycle===undefined?Number.MAX_SAFE_INTEGER:Math.max(0,currentCycle-lastCycle),
+      const lastAt=this.scheduler.lastScanAt('DEEP',symbol),queuedAt=this.scheduler.queueStartedAt('DEEP',symbol),neverScanned=lastAt===null;
+      return {...item,_lastActuallyScannedAt:lastAt,_neverScanned:neverScanned,
+        _rotationAgeMs:neverScanned?Number.MAX_SAFE_INTEGER:Math.max(0,selectionAt-lastAt),
+        _queueAgeMs:queuedAt===null?0:Math.max(0,selectionAt-queuedAt),
+        _rotationAge:lastCycle===undefined?Number.MAX_SAFE_INTEGER:Math.max(0,currentCycle-lastCycle),
         _rotation:((symbolHash(symbol)+Math.imul(currentCycle,2654435761))>>>0)};
-    }).sort((a,b)=>b._rotationAge-a._rotationAge||a._rotation-b._rotation||selectionSymbol(a).localeCompare(selectionSymbol(b)));
+    }).sort((a,b)=>Number(b._neverScanned)-Number(a._neverScanned)||b._rotationAgeMs-a._rotationAgeMs||b._queueAgeMs-a._queueAgeMs||b._rotationAge-a._rotationAge||a._rotation-b._rotation||selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const byExceptional=valid.filter(x=>isExceptionalDeepCandidate(x,this.config)).sort((a,b)=>
       Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const selected=[],seen=new Set();
@@ -1258,6 +1271,7 @@ export class EarlyExpansionRadar{
   async tick({quote=this.config.quote}={}){
     if(!this.running||this.busy)return false;
     this.busy=true;const scanStartedAt=this.clock();
+    await this.scheduler.hydrate();
     const journeyEntries=new Map(),journeyMicroBySymbol=new Map(),journeyDeepBySymbol=new Map(),journeyDeepCandlesBySymbol=new Map();
     const journey={cycle_id:null,cycle_number:null,quote:INCOMPLETE,source:INCOMPLETE,expected_symbols:[],received_symbols:[],eligible_symbols:[],status:'RUNNING'};
     const makeJourneyEntry=(symbol)=>({
@@ -1330,7 +1344,23 @@ export class EarlyExpansionRadar{
         journeyEntries.set(symbol,entry);
       }
       this.fastScannedTotal=eligible.length;
+      const fastSeenAt=fastScanAt;
+      for(const row of eligible)this.scheduler.ensureQueued('MICRO',row.symbol,fastSeenAt);
       const cycle=this.scans+1,selected=this.selectMicro(eligible,fastBySymbol,cycle);
+      for(const row of eligible)this.scheduler.record({stage:'FAST',symbol:row.symbol,eventType:'COMPLETED',cycle,at:fastSeenAt,
+        queuedAt:tickerFastStartedAt,startedAt:tickerFastStartedAt,elapsedMs:Math.max(0,fastSeenAt-tickerFastStartedAt),fastSeenAt,
+        reasonCode:'ALL_ELIGIBLE_TICKER_FAST_SCAN',
+        extra:{last_price:row.lastPrice,quote_volume_24h:row.quoteVolume24h,trade_count_24h:row.tradeCount24h}});
+      this.scheduler.record({stage:'FAST',eventType:'CYCLE_COMPLETE',cycle,at:fastSeenAt,
+        elapsedMs:Math.max(0,fastSeenAt-tickerFastStartedAt),reasonCode:'ALL_ELIGIBLE_TICKERS_OBSERVED',
+        extra:{symbols_total:eligible.length,expected_total:expected.length,received_total:receivedSymbols.length}});
+      const selectedMicroSchedulerSymbols=new Set(selected.map(selectionSymbol));
+      for(const row of eligible)if(!selectedMicroSchedulerSymbols.has(selectionSymbol(row)))
+        this.scheduler.defer('MICRO',row.symbol,{cycle,at:fastSeenAt,fastSeenAt,reasonCode:'MICRO_BATCH_CAPACITY'});
+      for(const row of selected){
+        const lane=row._selection_lane||'score';
+        this.scheduler.selected('MICRO',row.symbol,{cycle,at:fastSeenAt,lane,reasonCode:schedulerLaneReason(lane,'MICRO'),fastSeenAt});
+      }
       journey.cycle_number=cycle;
       const selectedMicroSet=new Set(selected.map(x=>x.symbol));
       for(const row of eligible){
@@ -1373,8 +1403,10 @@ export class EarlyExpansionRadar{
       let microScanCompletedAt=microScanStartedAt;
       const btcFivePromise=marketContextPromise.then(result=>result.btcFive);
       const microScanPromise=boundedMap(selected,this.config.microConcurrency,async row=>{
-        const entry=journeyEntries.get(row.symbol),started=this.clock();
-        if(entry)entry.micro_scan_started_at=started;
+        const entry=journeyEntries.get(row.symbol),startedAt=this.clock(),lane=row._selection_lane||'score';
+        const started=this.scheduler.started('MICRO',row.symbol,{cycle,at:startedAt,lane,
+          reasonCode:schedulerLaneReason(lane,'MICRO'),fastSeenAt});
+        if(entry)entry.micro_scan_started_at=startedAt;
         try{
           const result=await this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFivePromise);
           const completed=this.clock();
@@ -1386,13 +1418,27 @@ export class EarlyExpansionRadar{
             entry.radar_scores.RADAR_8.micro_score=hasFiniteNumber(result.micro_fingerprint?.score)?Number(result.micro_fingerprint.score):INCOMPLETE;
             if(result.failed){entry.rejection_reason=result.error||'MICRO_SCAN_FAILED';entry.decision='DATA_INSUFFICIENT';}
           }
-          journeyMicroBySymbol.set(row.symbol,result);
-          return result;
+          const fp=result?.micro_fingerprint||{};
+          const incomplete=Boolean(result?.failed)||!hasFiniteNumber(fp.score)||
+            ['DATA_INSUFFICIENT','WARMING_UP','INCOMPLETE'].includes(String(fp.stage||'').toUpperCase());
+          this.scheduler.finished('MICRO',row.symbol,{cycle,at:completed,startedAt,
+            outcome:result?.failed?'FAILED':incomplete?'INCOMPLETE':'COMPLETED',lane,
+            reasonCode:result?.failed?'MICRO_SCAN_EXCEPTION':incomplete?'MICRO_FINGERPRINT_INCOMPLETE':'MICRO_FINGERPRINT_READY',
+            failureCounted:Boolean(result?.failed),fastSeenAt,
+            extra:{score_available:hasFiniteNumber(fp.score),fingerprint_stage:fp.stage||null}});
+          const scheduledResult={...(result&&typeof result==='object'?result:{}),scheduler_wait_ms:started.wait_ms,
+            scheduler_scan_started_at_ms:startedAt,scheduler_scan_completed_at_ms:completed};
+          journeyMicroBySymbol.set(row.symbol,scheduledResult);
+          return scheduledResult;
         }catch(e){
           const completed=this.clock();
           this.failedTotal++;this.noteError(e,'micro-row');
+          this.scheduler.finished('MICRO',row.symbol,{cycle,at:completed,startedAt,outcome:'FAILED',
+            lane,reasonCode:'MICRO_SCAN_EXCEPTION',failureCounted:true,fastSeenAt,extra:{error:String(e?.message??e)}});
           if(entry){entry.micro_scan_completed_at=completed;entry.micro_fingerprint=INCOMPLETE;entry.rejection_reason=String(e?.message??e);entry.decision='DATA_INSUFFICIENT';}
-          const failed={symbol:row.symbol,failed:true,error:String(e?.message??e),micro_fingerprint:{score:null,confirmation_count:0,eligible:false,closed_candles_only:true},source:sourceList([tickerSource])};
+          const failed={symbol:row.symbol,failed:true,error:String(e?.message??e),
+            scheduler_wait_ms:started.wait_ms,scheduler_scan_started_at_ms:startedAt,scheduler_scan_completed_at_ms:completed,
+            micro_fingerprint:{score:null,confirmation_count:0,eligible:false,closed_candles_only:true},source:sourceList([tickerSource])};
           journeyMicroBySymbol.set(row.symbol,failed);
           return failed;
         }
@@ -1434,15 +1480,32 @@ export class EarlyExpansionRadar{
       phaseTimings.market_micro_overlap_ms=Math.max(0,
         Math.min(marketContextCompletedAt,microScanCompletedAt)-Math.max(marketContextStartedAt,microScanStartedAt));
       const priorDeepCycles=new Map(this.lastDeepScanCycleBySymbol);
+      const deepPoolBeforeSelection=microScanned.filter(x=>x&&!x.failed&&selectionSymbol(x)&&hasFiniteNumber(x.micro_fingerprint?.score));
+      const deepSelectionAt=this.clock();
+      for(const item of deepPoolBeforeSelection)this.scheduler.ensureQueued('DEEP',selectionSymbol(item),deepSelectionAt);
       const deepTargets=this.selectDeepFromMicro(microScanned,cycle);
+      const selectedDeepSchedulerSymbols=new Set(deepTargets.map(selectionSymbol));
+      for(const item of deepPoolBeforeSelection)if(!selectedDeepSchedulerSymbols.has(selectionSymbol(item)))
+        this.scheduler.defer('DEEP',selectionSymbol(item),{cycle,at:deepSelectionAt,fastSeenAt,reasonCode:'DEEP_BATCH_CAPACITY',
+          extra:{micro_score:item.micro_fingerprint?.score??null}});
+      for(const item of deepTargets){
+        const lane=item._selection_lane||'score';
+        this.scheduler.selected('DEEP',selectionSymbol(item),{cycle,at:deepSelectionAt,lane,
+          reasonCode:schedulerLaneReason(lane,'DEEP'),fastSeenAt,extra:{micro_score:item.micro_fingerprint?.score??null}});
+      }
       for(const micro of deepTargets){
         const symbol=selectionSymbol(micro),entry=journeyEntries.get(symbol);
         if(entry){entry.deep_selected_at=this.clock();entry.deep_selection_lane=micro._selection_lane||INCOMPLETE;entry.deep_scan_status='RUNNING';entry.rejection_reason=INCOMPLETE;}
       }
       const deepScanStartedAt=this.clock();
+      const deepWaitBySymbol=new Map();
       const scanned=await boundedMap(deepTargets,this.config.deepConcurrency,async micro=>{
         const row=micro.row,fast=fastBySymbol.get(row.symbol)||{},entry=journeyEntries.get(row.symbol);
-        const deepStarted=this.clock();
+        const deepStarted=this.clock(),lane=micro._selection_lane||'score';
+        const deepSchedulerStarted=this.scheduler.started('DEEP',row.symbol,{cycle,at:deepStarted,lane,
+          reasonCode:schedulerLaneReason(lane,'DEEP'),fastSeenAt,
+          extra:{micro_score:micro.micro_fingerprint?.score??null,micro_scan_wait_ms:Number(micro.scheduler_wait_ms)||0}});
+        deepWaitBySymbol.set(row.symbol,deepSchedulerStarted.wait_ms);
         if(entry)entry.deep_scan_started_at=deepStarted;
         try{
           const evidence=await this.deepScan(row,fast,marketContext,micro,candles=>{
@@ -1464,6 +1527,16 @@ export class EarlyExpansionRadar{
           const sourceScoreStatus=microScore===null?'SOURCE_SCORE_MISSING':
             promoted?'MICRO_FINGERPRINT_SCORE_QUALIFIED':'MICRO_FINGERPRINT_SCORE_UNQUALIFIED';
           const finalBand=evidence.pre_expansion_stage||evidence.decision_band;
+          const incomplete=finalBand==='DATA_INSUFFICIENT'||finalBand==='INCOMPLETE'||
+            evidence.data_stale===true||!hasFiniteNumber(evidence.data_quality)||
+            Number(evidence.data_quality)<Number(this.config.minDataQuality);
+          this.scheduler.finished('DEEP',row.symbol,{cycle,at:deepCompleted,startedAt:deepStarted,
+            outcome:incomplete?'INCOMPLETE':'COMPLETED',lane,
+            reasonCode:incomplete?'DEEP_DATA_INCOMPLETE':
+              (alertEligible({...evidence,early_expansion_score:finalScore,decision_band:finalBand},this.config)?'SIGNAL_EVALUATED':'NO_SIGNAL_NOT_A_FAILURE'),
+            failureCounted:false,fastSeenAt,
+            extra:{decision_band:finalBand||null,score_available:hasFiniteNumber(finalScore),data_stale:Boolean(evidence.data_stale),
+              micro_scan_wait_ms:Number(micro.scheduler_wait_ms)||0,deep_scan_wait_ms:deepSchedulerStarted.wait_ms}});
           return {
             symbol:row.symbol,last_price:row.lastPrice,price_change_24h:row.priceChange24h,
             early_expansion_score:finalScore!==null?Number(finalScore.toFixed(1)):null,
@@ -1483,6 +1556,10 @@ export class EarlyExpansionRadar{
         }catch(e){
           const deepCompleted=this.clock();
           this.failedTotal++;this.noteError(e,'deep-row');
+          this.scheduler.finished('DEEP',row.symbol,{cycle,at:deepCompleted,startedAt:deepStarted,outcome:'FAILED',lane,
+            reasonCode:'DEEP_SCAN_EXCEPTION',failureCounted:true,fastSeenAt,
+            extra:{error:String(e?.message??e),micro_scan_wait_ms:Number(micro.scheduler_wait_ms)||0,
+              deep_scan_wait_ms:deepWaitBySymbol.get(row.symbol)}});
           if(entry){entry.deep_scan_completed_at=deepCompleted;entry.deep_scan_status='FAILED';entry.decision='DATA_INSUFFICIENT';entry.rejection_reason=String(e?.message??e);}
           journeyDeepBySymbol.set(row.symbol,{failed:true,error:String(e?.message??e),deep_started_at:deepStarted,deep_completed_at:deepCompleted,micro});
           return {symbol:row.symbol,failed:true,error:String(e?.message??e),decision_band:'DATA_INSUFFICIENT',data_quality:0,micro_fingerprint:micro.micro_fingerprint,source:sourceList([tickerSource,micro.source])};
@@ -1693,6 +1770,23 @@ export class EarlyExpansionRadar{
       coverage.scan_overrun_ms=Math.max(0,scanDurationMs-coverage.configured_poll_ms);
       coverage.phase_timings_ms={...phaseTimings};
       this.lastCoverage=coverage;
+      const schedulerMicroSymbols=selected.map(x=>selectionSymbol(x)).filter(Boolean);
+      const schedulerDeepSymbols=deepTargets.map(x=>selectionSymbol(x)).filter(Boolean);
+      const laneCounts=items=>items.reduce((out,item)=>{const lane=item._selection_lane||'unknown';out[lane]=(out[lane]||0)+1;return out;},{});
+      const schedulerMicroLanes=laneCounts(selected),schedulerDeepLanes=laneCounts(deepTargets);
+      const schedulerReport={radar:'RADAR_8',cycle,fast_eligible:eligible.length,
+        micro_selected:schedulerMicroSymbols.length,micro_unique:new Set(schedulerMicroSymbols).size,
+        micro_duplicate_count:schedulerMicroSymbols.length-new Set(schedulerMicroSymbols).size,
+        deep_selected:schedulerDeepSymbols.length,deep_unique:new Set(schedulerDeepSymbols).size,
+        deep_duplicate_count:schedulerDeepSymbols.length-new Set(schedulerDeepSymbols).size,
+        micro_lane_counts:schedulerMicroLanes,deep_lane_counts:schedulerDeepLanes,
+        micro_wait_ms:microScanned.map(x=>Number(x?.scheduler_wait_ms)||0),
+        deep_wait_ms:deepTargets.map(x=>deepWaitBySymbol.get(selectionSymbol(x))??null),
+        micro_symbols:schedulerMicroSymbols,deep_symbols:schedulerDeepSymbols,
+        failed_total:deepFailures,paper_trading:true,real_order_execution:false};
+      this.scheduler.record({stage:'CYCLE',eventType:'COMPLETED',cycle,at:scanCompletedAt,elapsedMs:scanDurationMs,
+        reasonCode:'RADAR8_CYCLE_TIMINGS',extra:schedulerReport});
+      this.logger.info?.('[RADARX_SCHEDULER_REPORT] '+JSON.stringify(schedulerReport));
       this.logger.info?.('[RADARX_SCAN_COMPLETE] '+JSON.stringify({
         radar:'RADAR_8',build_version:'Build 224',quote:q,rotation_cycle:coverage.rotation_cycle,
         scan_started_at:coverage.scan_started_at,scan_completed_at:coverage.scan_completed_at,
@@ -1850,7 +1944,7 @@ export class EarlyExpansionRadar{
       }
       this.lastResult={...emptyEarlyExpansionSnapshot(this.config,quote,this.lastError),schema_version:'RADAR8_V2',as_of:new Date(scanStartedAt).toISOString()};
       return false;
-    }finally{this.busy=false;}
+    }finally{await this.scheduler.flush();this.busy=false;}
   }
   snapshot(limit=100,quote=this.config.quote){
     const q=this.normalizeQuote(quote);
