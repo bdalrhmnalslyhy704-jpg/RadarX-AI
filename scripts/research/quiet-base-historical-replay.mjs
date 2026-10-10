@@ -19,7 +19,7 @@ const API_BASES = [
 const TARGETS = ['MAGICUSDT', 'KAIAUSDT'];
 const STABLE_BASES = new Set([
   'USDT','USDC','BUSD','TUSD','FDUSD','USDP','DAI','EUR','EURT','USDE','USTC',
-  'PYUSD','USDS','USD1','EURI','AEUR','UST','PAXG'
+  'PYUSD','USDS','USD1','EURI','AEUR','UST','PAXG','RLUSD'
 ]);
 const round = (value, digits = 6) => Number.isFinite(value) ? Number(value.toFixed(digits)) : null;
 const iso = ms => Number.isFinite(Number(ms)) ? new Date(Number(ms)).toISOString() : null;
@@ -227,10 +227,17 @@ async function saveGzip(filename, content) {
 async function main() {
   await mkdir(OUT, { recursive: true });
   const manifest = {
+  const timestampNormalizationCases = [
+    { unit: 'milliseconds', raw: 1791500400000, expected_ms: 1791500400000 },
+    { unit: 'microseconds', raw: 1791500400000000, expected_ms: 1791500400000 },
+    { unit: 'seconds', raw: 1791500400, expected_ms: 1791500400000 }
+  ].map(item => ({ ...item, actual_ms: toMs(item.raw), pass: toMs(item.raw) === item.expected_ms }));
+  if (timestampNormalizationCases.some(item => !item.pass)) throw new Error('TIMESTAMP_UNIT_NORMALIZATION_SELF_TEST_FAILED');
     status: 'STARTING',
     generated_at: new Date().toISOString(),
     source_policy: 'Binance public Spot REST raw /api/v3/klines interval=5m; no daily candles as detector input',
     timestamp_normalization: 'epoch microseconds >= 1e14 divided by 1000; milliseconds >= 1e11 retained; seconds >= 1e9 multiplied by 1000',
+    timestamp_normalization_self_test: timestampNormalizationCases,
     window_start_utc: iso(WINDOW_START_MS),
     comparison_selection: 'Deterministic top quote-volume eligible Spot USDT assets from current Binance 24h ticker snapshot; targets MAGICUSDT and KAIAUSDT added explicitly; comparisons are exploratory and survivor-biased, not a random market sample',
     event_start_label_rule: 'First closed 5m bar in the target event day with prior 1h close-to-close return >=5% OR prior 4h return >=10%; diagnostic label only',
