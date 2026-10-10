@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assessQuietBasePreExpansion } from '../core/quiet-base-pre-expansion.mjs';
+import { assessQuietBasePreExpansion, summarizeQuietBasePreExpansion } from '../core/quiet-base-pre-expansion.mjs';
 
 const start = 1_800_000_000_000;
 const step = 5 * 60_000;
