@@ -5,7 +5,7 @@ import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notific
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
 import {assessQuietBaseActivityShock,isFastActivityShockCandidate} from './activity-shock.mjs';
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
-import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId,normalizeMissing,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes} from './scan-journey-ledger.mjs';
+import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId,normalizeMissing,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,reconcileEligibilityQueueAge} from './scan-journey-ledger.mjs';
 
 function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
@@ -1297,16 +1297,11 @@ export class EarlyExpansionRadar{
       const eligibleBySymbol=new Map(eligible.map(x=>[x.symbol,x]));
       const fastBySymbol=new Map();for(const row of eligible)fastBySymbol.set(row.symbol,this.updateFastState(row));
       const fastScanAt=this.clock(),eligibleSet=new Set(eligible.map(x=>x.symbol));
-      for(const symbol of [...this.firstEligibleAtBySymbol.keys()]){
-        if(!set.has(symbol)){this.firstEligibleAtBySymbol.delete(symbol);continue;}
-        const seenTicker=rawBySymbol.get(symbol);
-        // A missing ticker or missing liquidity field is a data gap, not proof
-        // that the symbol lost eligibility. Preserve queue age in that case.
-        if(seenTicker&&hasFiniteNumber(seenTicker.quoteVolume24h)&&
-          Number(seenTicker.quoteVolume24h)<Number(this.config.minQuoteVolume24h))
-          this.firstEligibleAtBySymbol.delete(symbol);
-      }
-      for(const row of eligible)if(!this.firstEligibleAtBySymbol.has(row.symbol))this.firstEligibleAtBySymbol.set(row.symbol,fastScanAt);
+      this.firstEligibleAtBySymbol=reconcileEligibilityQueueAge({
+        previous:this.firstEligibleAtBySymbol,universeSymbols:expected,
+        tickerBySymbol:rawBySymbol,eligibleSymbols:eligible.map(x=>x.symbol),
+        minQuoteVolume24h:this.config.minQuoteVolume24h,now:fastScanAt
+      });
       journey.expected_symbols=expected;journey.received_symbols=receivedSymbols;journey.eligible_symbols=eligible.map(x=>x.symbol);
       journey.raw_ticker_source=tickerSource;journey.eligible_at=fastScanAt;
       for(const symbol of expected){
