@@ -329,7 +329,7 @@ export function buildWhaleAccumulationAlert(input,now=Date.now()){
 
 export const WHALE_ACCUMULATION_DEFAULTS=Object.freeze({
   quote:'USDT',pollMs:60000,universeRefreshMs:10*60*1000,
-  minQuoteVolume24h:1500000,topAnchors:8,rotationBatchSize:10,
+  minQuoteVolume24h:1500000,topAnchors:8,rotationBatchSize:10,deepConcurrency:4,
   schedulerFastPathSlots:2,schedulerQuietAnchorSlots:4,
   schedulerExceptionalVolumeRatio:2.2,schedulerExceptionalTradeRatio:1.8,
   schedulerExceptionalPriceStepPct:0.15,schedulerQuietParticipationRatio:1.12,
@@ -347,15 +347,17 @@ export class WhaleAccumulationRadar{
     if(!store)throw new Error('STORE_REQUIRED');
     this.rest=rest;this.store=store;this.pushManager=pushManager;this.config={...WHALE_ACCUMULATION_DEFAULTS,...config};
     this.clock=clock;this.logger=logger;this.running=false;this.busy=false;this.timer=null;
+    this.pendingTick=false;this.pendingTickAt=null;this.coalescedTickCount=0;this.nextCyclePendingWaitMs=0;
     this.universe=[];this.universeAt=0;this.cursor=0;this.scans=0;this.alertCount=0;this.lastError=null;this.lastScanAtMs=null;
     this.latestCandidates=[];this.previousDepth=new Map();this.lastAlertAt=new Map();this.lastCoverage={};
+    this.lastRowTimings=new Map();
     this.scheduler=new ScanSchedulerJournal({radar:'RADAR_9',store,clock,logger});
     this.fastHistoryBySymbol=new Map();this.lastSelectionDistribution={};
   }
   start(){
     if(this.running)return Promise.resolve();
     this.running=true;
-    const initial=Promise.resolve().then(()=>this.refreshUniverse()).then(()=>this.tick()).catch(e=>{this.lastError=String(e?.message??e);});
+    const initial=Promise.resolve().then(()=>this.tick()).catch(e=>{this.lastError=String(e?.message??e);});
     this.timer=setInterval(()=>this.tick().catch(e=>{this.lastError=String(e?.message??e);}),Math.max(30000,Number(this.config.pollMs)||60000));
     return initial;
   }
@@ -483,141 +485,268 @@ export class WhaleAccumulationRadar{
     return selected.slice(0,target);
   }
   async scanRow(row){
-    const aggTradesPromise=typeof this.rest.aggTrades==='function'
-      ?this.rest.aggTrades(row.symbol,{limit:1000})
-      :this.rest.request('/api/v3/aggTrades',{symbol:row.symbol,limit:1000});
-    const [one,five,agg,depth]=await Promise.all([
-      this.rest.klines(row.symbol,'1m',{limit:120}),
-      this.rest.klines(row.symbol,'5m',{limit:60}),
-      aggTradesPromise,
-      this.rest.depth(row.symbol,100)
-    ]);
-    const prev=this.previousDepth.get(row.symbol)||null;
-    const alert=buildWhaleAccumulationAlert({
-      ticker:row,oneMinute:one.candles,fiveMinute:five.candles,aggTrades:agg.data,book:depth.data,previousBook:prev
-    },this.clock());
-    this.previousDepth.set(row.symbol,depth.data);
-    this.latestCandidates.push(alert);
-    this.latestCandidates.sort((a,b)=>Number(b.opportunity_score||0)-Number(a.opportunity_score||0));
-    this.latestCandidates=this.latestCandidates.slice(0,60);
-    this.scans++;
-    if(alert.eligible){
-      const last=this.lastAlertAt.get(row.symbol)||0;
-      if(this.clock()-last>=Number(this.config.alertCooldownMs||720000)){
-        this.lastAlertAt.set(row.symbol,this.clock());
-        await this.store.appendWhaleAccumulationAlert(alert);
-        if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(alert);
-        this.alertCount++;
+    const symbol=String(row?.symbol||'').toUpperCase();
+    const rowStartedAt=this.clock();
+    const timing={symbol,data_fetch_ms:0,signal_analysis_ms:0,signal_archive_write_ms:0,result_send_ms:0,row_total_ms:0};
+    try{
+      const dataStartedAt=this.clock();
+      const aggTradesPromise=typeof this.rest.aggTrades==='function'
+        ?this.rest.aggTrades(row.symbol,{limit:1000})
+        :this.rest.request('/api/v3/aggTrades',{symbol:row.symbol,limit:1000});
+      const [one,five,agg,depth]=await Promise.all([
+        this.rest.klines(row.symbol,'1m',{limit:120}),
+        this.rest.klines(row.symbol,'5m',{limit:60}),
+        aggTradesPromise,
+        this.rest.depth(row.symbol,100)
+      ]);
+      timing.data_fetch_ms=Math.max(0,this.clock()-dataStartedAt);
+      const analysisStartedAt=this.clock();
+      const prev=this.previousDepth.get(row.symbol)||null;
+      const alert=buildWhaleAccumulationAlert({
+        ticker:row,oneMinute:one.candles,fiveMinute:five.candles,aggTrades:agg.data,book:depth.data,previousBook:prev
+      },this.clock());
+      this.previousDepth.set(row.symbol,depth.data);
+      this.latestCandidates.push(alert);
+      this.latestCandidates.sort((a,b)=>Number(b.opportunity_score||0)-Number(a.opportunity_score||0));
+      this.latestCandidates=this.latestCandidates.slice(0,60);
+      this.scans++;
+      timing.signal_analysis_ms=Math.max(0,this.clock()-analysisStartedAt);
+      if(alert.eligible){
+        const last=this.lastAlertAt.get(row.symbol)||0;
+        if(this.clock()-last>=Number(this.config.alertCooldownMs||720000)){
+          this.lastAlertAt.set(row.symbol,this.clock());
+          const archiveStartedAt=this.clock();
+          await this.store.appendWhaleAccumulationAlert(alert);
+          timing.signal_archive_write_ms+=Math.max(0,this.clock()-archiveStartedAt);
+          if(this.pushManager?.notifyRadarAlert){
+            const sendStartedAt=this.clock();
+            await this.pushManager.notifyRadarAlert(alert);
+            timing.result_send_ms+=Math.max(0,this.clock()-sendStartedAt);
+          }
+          this.alertCount++;
+        }
       }
+      return alert;
+    }finally{
+      timing.row_total_ms=Math.max(0,this.clock()-rowStartedAt);
+      this.lastRowTimings.set(symbol,timing);
     }
-    return alert;
   }
   async tick(){
-    if(!this.running||this.busy)return;
+    if(!this.running)return;
+    if(this.busy){
+      this.pendingTick=true;
+      if(this.pendingTickAt===null)this.pendingTickAt=this.clock();
+      this.coalescedTickCount++;
+      return;
+    }
     this.busy=true;
     const cycleStartedAt=this.clock();
-    await this.scheduler.hydrate();
+    const pollMs=Math.max(30000,Number(this.config.pollMs)||60000);
+    const metrics={
+      radar:'RADAR_9',cycle:Math.max(1,Math.trunc(Number(this.lastCoverage?.cycle||0))+1),
+      cadence_ms:pollMs,started_at:new Date(cycleStartedAt).toISOString(),
+      archive_hydration_ms:0,universe_refresh_ms:0,ticker_collection_ms:0,data_collection_ms:0,
+      fast_snapshot_ms:0,fast_selection_ms:0,fast_scan_ms:0,
+      micro_scan_ms:null,micro_scan_status:'NOT_APPLICABLE_RADAR_9_HAS_NO_MICRO_STAGE',
+      deep_scan_wall_ms:0,deep_row_time_sum_ms:0,deep_data_fetch_sum_ms:0,
+      signal_analysis_sum_ms:0,signal_archive_write_ms:0,result_send_ms:0,
+      scheduler_archive_write_ms:0,fast_symbols:0,deep_selected:0,deep_attempted:0,
+      deep_completed:0,incomplete:0,failed:0,unattempted:0,
+      unique_selected_symbols:0,duplicate_selected_count:0,selection_distribution:{},
+      quiet_selected_count:0,exceptional_selected_count:0,deep_concurrency:0,
+      coalesced_tick_count:0,pending_tick_age_ms:0,deep_wait_ms:[],selected_symbols:[],
+      paper_trading:true,real_order_execution:false
+    };
+    metrics.pending_tick_wait_ms=this.nextCyclePendingWaitMs;
+    this.nextCyclePendingWaitMs=0;
+    let selected=[];
+    let cycleError=null;
     try{
-      if(!this.universe.length||this.clock()-this.universeAt>=Number(this.config.universeRefreshMs))await this.refreshUniverse();
-      const fastScanStartedAt=this.clock();
+      const hydrationStartedAt=this.clock();
+      await this.scheduler.hydrate();
+      metrics.archive_hydration_ms=Math.max(0,this.clock()-hydrationStartedAt);
+      const refreshStartedAt=this.clock();
+      if(!this.universe.length||this.clock()-this.universeAt>=Number(this.config.universeRefreshMs))
+        await this.refreshUniverse();
+      metrics.universe_refresh_ms=Math.max(0,this.clock()-refreshStartedAt);
+
+      const collectionStartedAt=this.clock();
       const fetchedRows=await this.tickerRows();
+      metrics.ticker_collection_ms=Math.max(0,this.clock()-collectionStartedAt);
       const fastSeenAt=this.clock();
+
+      const snapshotStartedAt=this.clock();
       const rows=fetchedRows.map(row=>({...row,_schedulerFast:this.updateFastSnapshot(row,fastSeenAt),_fastSeenAt:fastSeenAt}));
+      metrics.fast_snapshot_ms=Math.max(0,this.clock()-snapshotStartedAt);
+      metrics.fast_symbols=rows.length;
       for(const row of rows)this.scheduler.ensureQueued('DEEP',row.symbol,fastSeenAt);
-      const selected=this.selectBatch(rows,fastSeenAt);
-      const selectedSymbols=new Set(selected.map(x=>String(x.symbol).toUpperCase()));
-      const cycle=Math.max(1,Math.trunc(Number(this.lastCoverage?.cycle||0))+1);
-      const fastDurationMs=Math.max(0,fastSeenAt-fastScanStartedAt);
-      for(const row of rows){
-        const fast=row._schedulerFast||{};
-        this.scheduler.record({stage:'FAST',symbol:row.symbol,eventType:'COMPLETED',cycle,at:fastSeenAt,
-          queuedAt:fastScanStartedAt,startedAt:fastScanStartedAt,elapsedMs:fastDurationMs,fastSeenAt,
-          reasonCode:'RADAR9_FAST_TICKER_SNAPSHOT_RECEIVED',
-          extra:{last_price:row.lastPrice,quote_volume_24h:row.quoteVolume24h,
-            trade_count_24h:row.tradeCount24h,volume_accel_ratio:fast.volume_accel_ratio??null,
-            trade_accel_ratio:fast.trade_accel_ratio??null,price_acceleration_pct:fast.price_acceleration_pct??null}});
-      }
-      this.scheduler.record({stage:'FAST',eventType:'CYCLE_COMPLETE',cycle,at:fastSeenAt,elapsedMs:fastDurationMs,
-        reasonCode:'RADAR9_TICKER_SNAPSHOT_RECEIVED',extra:{symbols_total:rows.length}});
+
+      const selectionStartedAt=this.clock();
+      selected=this.selectBatch(rows,fastSeenAt);
+      metrics.fast_selection_ms=Math.max(0,this.clock()-selectionStartedAt);
+      metrics.fast_scan_ms=metrics.fast_snapshot_ms+metrics.fast_selection_ms;
+      metrics.data_collection_ms=metrics.universe_refresh_ms+metrics.ticker_collection_ms;
+      metrics.deep_selected=selected.length;
+      metrics.unique_selected_symbols=new Set(selected.map(x=>String(x.symbol||'').toUpperCase())).size;
+      metrics.duplicate_selected_count=selected.length-metrics.unique_selected_symbols;
+      metrics.selected_symbols=selected.map(x=>String(x.symbol||'').toUpperCase());
+      metrics.selection_distribution=selected.reduce((out,row)=>{
+        const lane=row._selection_lane||'unknown';out[lane]=(out[lane]||0)+1;return out;
+      },{});
+      metrics.quiet_selected_count=Number(metrics.selection_distribution.quiet)||0;
+      metrics.exceptional_selected_count=Number(metrics.selection_distribution.exceptional)||0;
+      const selectedSymbols=new Set(metrics.selected_symbols);
+
       for(const row of rows){
         const symbol=String(row.symbol).toUpperCase();
         const fast=row._schedulerFast||{};
         const fastSnapshot={last_price:row.lastPrice,quote_volume_24h:row.quoteVolume24h,
           trade_count_24h:row.tradeCount24h,volume_accel_ratio:fast.volume_accel_ratio??null,
           trade_accel_ratio:fast.trade_accel_ratio??null,price_acceleration_pct:fast.price_acceleration_pct??null};
+        this.scheduler.record({stage:'FAST',symbol:row.symbol,eventType:'COMPLETED',cycle:metrics.cycle,
+          at:fastSeenAt,queuedAt:collectionStartedAt,startedAt:collectionStartedAt,
+          elapsedMs:metrics.ticker_collection_ms,fastSeenAt,
+          reasonCode:'RADAR9_FAST_TICKER_SNAPSHOT_RECEIVED',extra:fastSnapshot});
         if(!selectedSymbols.has(symbol)){
           const reason=row._exceptional?'EXCEPTIONAL_FAST_PATH_CAPACITY':row._quiet?'QUIET_ANCHOR_CAPACITY':'OVERDUE_ROTATION_CAPACITY';
-          this.scheduler.defer('DEEP',symbol,{cycle,at:fastSeenAt,fastSeenAt,reasonCode:reason,
+          this.scheduler.defer('DEEP',symbol,{cycle:metrics.cycle,at:fastSeenAt,fastSeenAt,reasonCode:reason,
             extra:{lane:'deferred',fast_snapshot:fastSnapshot}});
         }
       }
+      this.scheduler.record({stage:'FAST',eventType:'CYCLE_COMPLETE',cycle:metrics.cycle,at:fastSeenAt,
+        elapsedMs:metrics.ticker_collection_ms,reasonCode:'RADAR9_TICKER_SNAPSHOT_RECEIVED',
+        extra:{symbols_total:rows.length,data_collection_ms:metrics.data_collection_ms,
+          fast_snapshot_ms:metrics.fast_snapshot_ms,selection_ms:metrics.fast_selection_ms}});
       for(const row of selected){
-        const symbol=String(row.symbol).toUpperCase();
-        const lane=row._selection_lane||'anchor';
-        const fast=row._schedulerFast||{};
-        const fastSnapshot={last_price:row.lastPrice,quote_volume_24h:row.quoteVolume24h,
-          trade_count_24h:row.tradeCount24h,volume_accel_ratio:fast.volume_accel_ratio??null,
-          trade_accel_ratio:fast.trade_accel_ratio??null,price_acceleration_pct:fast.price_acceleration_pct??null};
-        this.scheduler.selected('DEEP',symbol,{cycle,at:fastSeenAt,lane,
-          reasonCode:schedulerLaneReason(lane,'DEEP'),fastSeenAt,extra:{fast_snapshot:fastSnapshot}});
-      }
-      let success=0,failed=0,incomplete=0;
-      const waitTimes=[];
-      for(const row of selected){
-        if(!this.running)break;
-        const symbol=String(row.symbol).toUpperCase(),lane=row._selection_lane||'anchor',startedAt=this.clock();
-        const started=this.scheduler.started('DEEP',symbol,{cycle,at:startedAt,lane,
+        const symbol=String(row.symbol).toUpperCase(),lane=row._selection_lane||'anchor',fast=row._schedulerFast||{};
+        this.scheduler.selected('DEEP',symbol,{cycle:metrics.cycle,at:fastSeenAt,lane,
           reasonCode:schedulerLaneReason(lane,'DEEP'),fastSeenAt,
           extra:{fast_snapshot:{last_price:row.lastPrice,quote_volume_24h:row.quoteVolume24h,
             trade_count_24h:row.tradeCount24h}}});
-        waitTimes.push(started.wait_ms);
-        try{
-          const result=await this.scanRow(row);
-          const a=result?.whale_accumulation||{};
-          const stage=String(a.stage||result?.potential_label||'').toUpperCase();
-          const dataIncomplete=!result||['DATA_INSUFFICIENT','INCOMPLETE','WARMING_UP'].includes(stage)||
-            result?.data_status==='INCOMPLETE'||result?.data_status==='DATA_UNAVAILABLE';
-          this.scheduler.finished('DEEP',symbol,{cycle,at:this.clock(),startedAt,
-            outcome:dataIncomplete?'INCOMPLETE':'COMPLETED',lane,
-            reasonCode:dataIncomplete?'DATA_MISSING_OR_NOT_MATURE':result?.eligible?'SIGNAL_CONFIRMED':'NO_SIGNAL_NOT_A_FAILURE',
-            failureCounted:false,fastSeenAt,
-            extra:{signal_eligible:Boolean(result?.eligible),signal_stage:stage||null,data_complete:!dataIncomplete}});
-          if(dataIncomplete)incomplete++;else success++;
-        }catch(e){
-          failed++;this.lastError=String(e?.message??e);
-          this.logger.warn?.('[RADARX_RADAR9_SCAN_FAILED] '+JSON.stringify({
-            cycle,symbol,error:String(e?.message??e),stack:e?.stack||null
-          }));
-          this.scheduler.finished('DEEP',symbol,{cycle,at:this.clock(),startedAt,outcome:'FAILED',lane,
-            reasonCode:'RADAR9_SCAN_EXCEPTION',failureCounted:true,fastSeenAt,
-            extra:{error:String(e?.message??e)}});
-        }
       }
+
+      let nextIndex=0;
+      const concurrency=Math.min(selected.length||1,4,Math.max(1,Math.trunc(Number(this.config.deepConcurrency)||4)));
+      metrics.deep_concurrency=concurrency;
+      this.lastRowTimings.clear();
+      const deepStartedAt=this.clock();
+      const worker=async()=>{
+        for(;;){
+          const index=nextIndex++;
+          if(index>=selected.length)return;
+          const row=selected[index];
+          const symbol=String(row.symbol).toUpperCase();
+          const lane=row._selection_lane||'anchor';
+          const startedAt=this.clock();
+          const scheduledStart=this.scheduler.started('DEEP',symbol,{cycle:metrics.cycle,at:startedAt,lane,
+            reasonCode:schedulerLaneReason(lane,'DEEP'),fastSeenAt,
+            extra:{fast_snapshot:{last_price:row.lastPrice,quote_volume_24h:row.quoteVolume24h,
+              trade_count_24h:row.tradeCount24h}}});
+          metrics.deep_wait_ms.push(scheduledStart.wait_ms);
+          metrics.deep_attempted++;
+          try{
+            const result=await this.scanRow(row);
+            const outcomeTiming=this.lastRowTimings.get(symbol)||{};
+            metrics.deep_row_time_sum_ms+=Number(outcomeTiming.row_total_ms)||0;
+            metrics.deep_data_fetch_sum_ms+=Number(outcomeTiming.data_fetch_ms)||0;
+            metrics.signal_analysis_sum_ms+=Number(outcomeTiming.signal_analysis_ms)||0;
+            metrics.signal_archive_write_ms+=Number(outcomeTiming.signal_archive_write_ms)||0;
+            metrics.result_send_ms+=Number(outcomeTiming.result_send_ms)||0;
+            const a=result?.whale_accumulation||{};
+            const stage=String(a.stage||result?.potential_label||'').toUpperCase();
+            const dataIncomplete=!result||['DATA_INSUFFICIENT','INCOMPLETE','WARMING_UP'].includes(stage)||
+              result?.data_status==='INCOMPLETE'||result?.data_status==='DATA_UNAVAILABLE';
+            this.scheduler.finished('DEEP',symbol,{cycle:metrics.cycle,at:this.clock(),startedAt,
+              outcome:dataIncomplete?'INCOMPLETE':'COMPLETED',lane,
+              reasonCode:dataIncomplete?'DATA_MISSING_OR_NOT_MATURE':result?.eligible?'SIGNAL_CONFIRMED':'NO_SIGNAL_NOT_A_FAILURE',
+              failureCounted:false,fastSeenAt,
+              extra:{signal_eligible:Boolean(result?.eligible),signal_stage:stage||null,data_complete:!dataIncomplete,
+                row_timings_ms:outcomeTiming}});
+            if(dataIncomplete)metrics.incomplete++;else metrics.deep_completed++;
+          }catch(e){
+            const outcomeTiming=this.lastRowTimings.get(symbol)||{};
+            metrics.deep_row_time_sum_ms+=Number(outcomeTiming.row_total_ms)||0;
+            metrics.deep_data_fetch_sum_ms+=Number(outcomeTiming.data_fetch_ms)||0;
+            metrics.signal_analysis_sum_ms+=Number(outcomeTiming.signal_analysis_ms)||0;
+            metrics.signal_archive_write_ms+=Number(outcomeTiming.signal_archive_write_ms)||0;
+            metrics.result_send_ms+=Number(outcomeTiming.result_send_ms)||0;
+            metrics.failed++;
+            this.lastError=String(e?.message??e);
+            this.logger.warn?.('[RADARX_RADAR9_SCAN_FAILED] '+JSON.stringify({
+              cycle:metrics.cycle,symbol,error:String(e?.message??e),stack:e?.stack||null
+            }));
+            this.scheduler.finished('DEEP',symbol,{cycle:metrics.cycle,at:this.clock(),startedAt,outcome:'FAILED',lane,
+              reasonCode:'RADAR9_SCAN_EXCEPTION',failureCounted:true,fastSeenAt,
+              extra:{error:String(e?.message??e),row_timings_ms:outcomeTiming}});
+          }
+        }
+      };
+      const workers=Array.from({length:Math.min(concurrency,selected.length)},()=>worker());
+      await Promise.all(workers);
+      metrics.deep_scan_wall_ms=Math.max(0,this.clock()-deepStartedAt);
+      metrics.unattempted=Math.max(0,selected.length-metrics.deep_attempted);
+      this.cursor=(this.cursor+Math.max(1,metrics.deep_attempted))%Math.max(1,this.universe.length);
       const cycleCompletedAt=this.clock();
       this.lastCoverage={
-        cycle,universe_total:rows.length,batch_size:selected.length,scanned_successfully:success,failed,rotation_cursor:this.cursor,
-        candidates_retained:this.latestCandidates.length,last_scan_at:cycleCompletedAt
+        cycle:metrics.cycle,universe_total:rows.length,batch_size:selected.length,
+        scanned_successfully:metrics.deep_completed,failed:metrics.failed,rotation_cursor:this.cursor,
+        candidates_retained:this.latestCandidates.length,last_scan_at:cycleCompletedAt,
+        deep_attempted:metrics.deep_attempted,incomplete:metrics.incomplete,unattempted:metrics.unattempted
       };
       this.lastScanAtMs=cycleCompletedAt;
-      this.lastSelectionDistribution=selected.reduce((out,row)=>{
-        const lane=row._selection_lane||'unknown';out[lane]=(out[lane]||0)+1;return out;
-      },{});
-      this.scheduler.record({stage:'CYCLE',eventType:'COMPLETED',cycle,at:cycleCompletedAt,
-        elapsedMs:Math.max(0,cycleCompletedAt-cycleStartedAt),reasonCode:'RADAR9_CYCLE_TIMINGS',
-        extra:{fast_symbols:rows.length,deep_selected:selected.length,deep_completed:success,
-          incomplete,failed,selection_distribution:this.lastSelectionDistribution,
-          wait_ms:{min:waitTimes.length?Math.min(...waitTimes):null,max:waitTimes.length?Math.max(...waitTimes):null,
-            average:waitTimes.length?waitTimes.reduce((s,x)=>s+x,0)/waitTimes.length:null},
-          fast_scan_ms:fastDurationMs}});
-      this.logger.info?.('[RADARX_SCHEDULER_REPORT] '+JSON.stringify({
-        radar:'RADAR_9',cycle,fast_symbols:rows.length,deep_selected:selected.length,
-        selection_distribution:this.lastSelectionDistribution,deep_success:success,incomplete,failed,
-        deep_wait_ms:waitTimes,selected_symbols:selected.map(x=>String(x.symbol||'').toUpperCase()),unique_selected_symbols:new Set(selected.map(x=>String(x.symbol||'').toUpperCase())).size,duplicate_selected_count:selected.length-new Set(selected.map(x=>String(x.symbol||'').toUpperCase())).size,fast_scan_ms:fastDurationMs,cycle_duration_ms:Math.max(0,cycleCompletedAt-cycleStartedAt)
-      }));
-      this.lastError=failed?this.lastError:null;
+      this.lastSelectionDistribution={...metrics.selection_distribution};
+      this.lastError=metrics.failed?this.lastError:null;
+    }catch(error){
+      cycleError=error;
+      this.lastError=String(error?.message??error);
+      metrics.cycle_error=this.lastError;
+      this.logger.warn?.('[RADARX_RADAR9_CYCLE_ERROR] '+JSON.stringify({cycle:metrics.cycle,error:this.lastError}));
     }finally{
-      await this.scheduler.flush();
+      metrics.coalesced_tick_count=this.coalescedTickCount;
+      metrics.pending_tick_age_ms=this.pendingTickAt===null?0:Math.max(0,this.clock()-this.pendingTickAt);
+      const firstFlushStartedAt=this.clock();
+      const firstFlush=await this.scheduler.flush();
+      metrics.scheduler_archive_write_ms=Math.max(0,this.clock()-firstFlushStartedAt);
+      metrics.scheduler_archive_events_written=Number(firstFlush?.written)||0;
+      metrics.cycle_duration_ms=Math.max(0,this.clock()-cycleStartedAt);
+      metrics.cycle_overrun_ms=Math.max(0,metrics.cycle_duration_ms-pollMs);
+      metrics.ended_at=new Date(this.clock()).toISOString();
+      this.scheduler.record({stage:'CYCLE',eventType:'COMPLETED',cycle:metrics.cycle,at:this.clock(),
+        elapsedMs:metrics.cycle_duration_ms,reasonCode:'RADAR9_CYCLE_TIMINGS',
+        extra:{...metrics,cycle_error:cycleError?this.lastError:null}});
+      const summaryFlushStartedAt=this.clock();
+      const summaryFlush=await this.scheduler.flush();
+      metrics.scheduler_archive_write_ms+=Math.max(0,this.clock()-summaryFlushStartedAt);
+      metrics.scheduler_archive_events_written+=Number(summaryFlush?.written)||0;
+      metrics.cycle_duration_ms=Math.max(0,this.clock()-cycleStartedAt);
+      metrics.cycle_overrun_ms=Math.max(0,metrics.cycle_duration_ms-pollMs);
+      metrics.ended_at=new Date(this.clock()).toISOString();
+      this.logger.info?.('[RADARX_SCHEDULER_REPORT] '+JSON.stringify({
+        ...metrics,
+        deep_selected:selected.length,
+        deep_completed:metrics.deep_completed,
+        incomplete:metrics.incomplete,
+        failed:metrics.failed,
+        unique_selected_symbols:metrics.unique_selected_symbols,
+        duplicate_selected_count:metrics.duplicate_selected_count,
+        quiet_selected_total:metrics.quiet_selected_count,
+        exceptional_bypass_total:metrics.exceptional_selected_count,
+        paper_trading:true,real_order_execution:false
+      }));
       this.busy=false;
+      const shouldRunPending=this.running&&this.pendingTick;
+      const pendingAt=this.pendingTickAt;
+      this.pendingTick=false;
+      this.pendingTickAt=null;
+      this.coalescedTickCount=0;
+      if(shouldRunPending){
+        this.nextCyclePendingWaitMs=pendingAt===null?0:Math.max(0,this.clock()-pendingAt);
+        queueMicrotask(()=>this.tick().catch(error=>{
+          this.lastError=String(error?.message??error);
+          this.logger.warn?.('[RADARX_RADAR9_PENDING_CYCLE_FAILED] '+JSON.stringify({error:this.lastError}));
+        }));
+      }
     }
   }
   snapshot(limit=20){
