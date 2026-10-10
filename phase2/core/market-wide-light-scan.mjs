@@ -237,7 +237,7 @@ export function evaluateMarketWideLightCandidate({
     result: candidate ? 'LIGHT_CANDIDATE' : 'LIGHT_REJECTED',
     reason: candidate ? 'LIGHT_FEATURES_RANK_ONLY' : 'INSUFFICIENT_LIGHT_CONFLUENCE',
     rejection_reason: candidate ? null : (failedConditions[0] || 'INSUFFICIENT_LIGHT_CONFLUENCE'),
-    candidate, candidate_score: score === null ? null : Number(score.toFixed(4)), candidate_rank: null,
+    candidate, candidate_score: score === null ? null : Number(score.toFixed(4)), light_rank: null, rank_basis: 'LIGHT_EVIDENCE', candidate_rank: null,
     closed_candles_only: true, future_candles_excluded: normalized.futureExcluded,
     metrics: {
       bars_used: rows.length,
@@ -268,7 +268,7 @@ function insufficient(symbol, series, now, reason, details = {}) {
     data_age_ms: lastClosed ? Math.max(0, now - Number(lastClosed.closeTime)) : null,
     latest_candle_close_time_ms: lastClosed?.closeTime ?? null,
     result: 'DATA_INSUFFICIENT', reason, rejection_reason: reason,
-    candidate: false, candidate_score: null, candidate_rank: null,
+    candidate: false, candidate_score: null, light_rank: null, rank_basis: 'NO_VALID_LIGHT_DATA', candidate_rank: null,
     closed_candles_only: true, future_candles_excluded: Number(details.futureExcluded || 0),
     metrics: null, details
   };
@@ -366,10 +366,21 @@ export class MarketWideLightScan {
       if (selected.length >= scoreLimit) break;
       add(item, item.result.candidate ? 'LIGHT_SCORE_CANDIDATE' : 'LIGHT_SCORE_FILL');
     }
+    ranked.forEach((item, index) => {
+      const entry = audit.get(item.symbol);
+      if (entry) { entry.light_rank = index + 1; entry.rank_basis = 'LIGHT_EVIDENCE'; }
+    });
     const rotationPool = [...uniqueRows].map(row => {
       const symbol = symbolOf(row);
       return {row, symbol, result: audit.get(symbol), _priority: 0};
     }).sort(fairOrder);
+    rotationPool.forEach((item, index) => {
+      const entry = audit.get(item.symbol);
+      if (entry && entry.light_rank === null) {
+        entry.light_rank = ranked.length + index + 1;
+        entry.rank_basis = item.result?.evaluated ? 'LIGHT_SCORE_FALLBACK' : 'FAIR_ROTATION_NO_VALID_LIGHT_DATA';
+      }
+    });
     for (const item of rotationPool) {
       if (selected.length >= limit) break;
       add(item, item.result?.evaluated ? 'FAIR_ROTATION_VALID_DATA' : 'FAIR_ROTATION_CACHE_WARMUP');
@@ -417,7 +428,8 @@ export class MarketWideLightScan {
       _marketWideLightScore: item.result?.candidate_score ?? null,
       _marketWideLightFallback: item.result?.evaluated !== true,
       _marketWideLightSelectionReason: item.selectionReason,
-      _marketWideLightRank: audit.get(item.symbol)?.candidate_rank ?? null
+      _marketWideLightRank: audit.get(item.symbol)?.light_rank ?? null,
+      _marketWideLightPoolRank: audit.get(item.symbol)?.candidate_rank ?? null
     }));
     return {
       summary, audit, candidateRows,
