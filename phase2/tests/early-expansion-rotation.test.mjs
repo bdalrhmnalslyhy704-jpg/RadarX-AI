@@ -459,7 +459,7 @@ test('OPERATIONAL_MONITOR: three consecutive Radar 8 cycles against live public 
     rest,store,
     config:{
       ...EARLY_EXPANSION_RADAR_DEFAULTS,
-      minQuoteVolume24h:750_000,microScanCandidates:12,deepCandidates:3,
+      minQuoteVolume24h:350_000,microScanCandidates:12,deepCandidates:3,
       quietReserve:8,rotationReserve:8,microConcurrency:6,deepConcurrency:4,
       universeRefreshMs:60*60*1000,retryAttempts:1,pollMs:45_000
     },
