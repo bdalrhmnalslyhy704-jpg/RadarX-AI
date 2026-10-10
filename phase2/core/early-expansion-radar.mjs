@@ -1270,6 +1270,7 @@ export class EarlyExpansionRadar{
       radar_scores:{RADAR_1:INCOMPLETE,RADAR_2:INCOMPLETE,RADAR_3:INCOMPLETE,RADAR_4:INCOMPLETE,RADAR_5:INCOMPLETE,RADAR_6:INCOMPLETE,RADAR_7:INCOMPLETE,RADAR_8:INCOMPLETE,RADAR_9:INCOMPLETE},
       analyst_scores:INCOMPLETE,analyst_scores_reason:'MULTI_ANALYST_NOT_RUN_FOR_EVERY_RADAR8_SYMBOL',
       decision:INCOMPLETE,rejection_reason:'TICKER_NOT_PROCESSED',
+      notification_gate_evaluated_at:INCOMPLETE,notification_gate:INCOMPLETE,notification_gate_rejection_reason:INCOMPLETE,
       notification_attempted_at:INCOMPLETE,notification_request_resolved_at:INCOMPLETE,
       notification_sent_at:INCOMPLETE,notification_status:INCOMPLETE,
       outcomes:incompleteHorizons('NO_SIGNAL_OUTCOME_FOR_THIS_CYCLE')
@@ -1504,8 +1505,14 @@ export class EarlyExpansionRadar{
           entry.radar_scores.RADAR_8.micro_score=hasFiniteNumber(microResult.micro_fingerprint?.score)?Number(microResult.micro_fingerprint.score):INCOMPLETE;
         }
         if(!deepSelectedSet.has(row.symbol)&&microSelectedSet.has(row.symbol)&&microCompletedSet.has(row.symbol)){
-          entry.decision='MICRO_ONLY_NO_DEEP_SLOT';
-          entry.rejection_reason='NOT_SELECTED_FOR_DEEP_SCAN_THIS_CYCLE';
+          const fp=microResult?.micro_fingerprint;
+          if(!hasFiniteNumber(fp?.score)){
+            entry.decision='DATA_INSUFFICIENT';
+            entry.rejection_reason='MICRO_FINGERPRINT_SCORE_MISSING';
+          }else{
+            entry.decision='MICRO_ONLY_NO_DEEP_SLOT';
+            entry.rejection_reason='NOT_SELECTED_FOR_DEEP_SCAN_THIS_CYCLE';
+          }
         }
       }
       for(const result of scanned){
@@ -1641,6 +1648,15 @@ export class EarlyExpansionRadar{
           if(local.allowed){
             alert.coverage=candidate.coverage;alert.micro_fingerprint=candidate.micro_fingerprint;
             const ng=evaluateRadarNotificationGate(alert,{now});alert.notification_gate=ng;
+            const journeyGateEntry=journeyEntries.get(candidate.symbol);
+            if(journeyGateEntry){
+              journeyGateEntry.notification_gate_evaluated_at=this.clock();
+              journeyGateEntry.notification_gate=normalizeMissing(ng);
+              if(!ng.eligible){
+                journeyGateEntry.notification_status='BLOCKED_BY_NOTIFICATION_GATE';
+                journeyGateEntry.notification_gate_rejection_reason=normalizeMissing(ng.reasons||ng.reason||'NOT_ELIGIBLE');
+              }
+            }
             if(ng.eligible){
               this.lastAlertAt.set(candidate.symbol,now);this.lastAlertScore.set(candidate.symbol,candidate.early_expansion_score);this.lastBand.set(candidate.symbol,candidate.decision_band);
               await this.store.appendEarlyExpansionAlert(alert);
