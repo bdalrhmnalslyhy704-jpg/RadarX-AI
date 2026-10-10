@@ -42,6 +42,9 @@ export async function startServer({
   const onRailway=Boolean(process.env.RAILWAY_SERVICE_ID||process.env.RAILWAY_ENVIRONMENT);
   const archiveDir=process.env.RADARX_DATA_DIR||(onRailway?'/data/.radarx-data':'./.radarx-data');
   const store=await new DurableStore({dir:archiveDir}).init({legacyDir:onRailway?'./.radarx-data':null});
+  logger.info?.('[RADARX_ARCHIVE_TEMP_CLEANUP] '+JSON.stringify({
+    build_version:'Build 224',store_dir:store.dir,...(store.tempCleanup||{deleted_files:0,freed_bytes:0,failed_files:0})
+  }));
   const archiveState=await store.getPreExpansionOutcomes().catch(()=>({}));
   const archiveRecords=Array.isArray(archiveState?.records)?archiveState.records:[];
   let archiveVolumeMounted=null;

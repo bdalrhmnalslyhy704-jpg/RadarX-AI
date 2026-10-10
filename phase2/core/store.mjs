@@ -1,10 +1,19 @@
 import {createReadStream} from 'node:fs';
 import {createInterface} from 'node:readline';
-import {mkdir,readFile,writeFile,rename,appendFile} from 'node:fs/promises';
+import {mkdir,readFile,writeFile,rename,appendFile,stat,unlink,readdir} from 'node:fs/promises';
 import {basename,join,resolve} from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
 import {gzipSync,gunzipSync} from 'node:zlib';
 import {SCAN_JOURNEY_SCHEMA,scanJourneyFilename,validateScanJourneyCycle,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,SCAN_JOURNEY_HORIZONS} from './scan-journey-ledger.mjs';
+const MiB=1024*1024;
+// Scheduler events are operational queue state. Hydration reads at most 5,000
+// rows per radar; full scan decisions remain in the Scan Journey ledger.
+const JSONL_ARCHIVE_POLICIES=Object.freeze({
+  schedulerEvents:{compactAtBytes:12*MiB,retainRowsPerKey:5000,keyField:'radar',maxRetainedBytesPerKey:512*1024}
+});
+const ORPHAN_TEMP_SUFFIX=/\.(?:tmp|repair|outcome|compact)-\d+-\d+$/;
+
+
 
 export class DurableStore {
   constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
@@ -15,6 +24,9 @@ export class DurableStore {
   async init({legacyDir=null}={}){
     await mkdir(this.dir,{recursive:true});
     await mkdir(this.scanJourneyDir,{recursive:true});
+    // init runs before any writers start; matching files can only be abandoned
+    // atomic-write temporaries from a previous process.
+    this.tempCleanup=await this.cleanupOrphanedTemporaryFiles();
     // Migrate any surviving ephemeral files only when the durable target lacks that file.
     // The copy is idempotent and never overwrites an existing archived file.
     if(legacyDir&&resolve(legacyDir)!==resolve(this.dir)){
@@ -39,7 +51,114 @@ export class DurableStore {
   }
   async lock(fn){const p=this.queue.then(fn);this.queue=p.catch(()=>{});return p;}
   async readJson(p){try{return JSON.parse(await readFile(p,'utf8'));}catch{return{};}}
-  async writeJson(p,v){const t=p+'.tmp-'+process.pid+'-'+Date.now();await writeFile(t,JSON.stringify(v,null,2)+'\n');await rename(t,p);this.lastWriteAt=Date.now();}
+  async writeJson(p,v){
+    const t=p+'.tmp-'+process.pid+'-'+Date.now();
+    try{
+      await writeFile(t,JSON.stringify(v,null,2)+'\n');
+      await rename(t,p);
+      this.lastWriteAt=Date.now();
+    }catch(error){
+      await unlink(t).catch(()=>{});
+      throw error;
+    }
+  }
+  async cleanupOrphanedTemporaryFiles(){
+    let deletedFiles=0,freedBytes=0,failedFiles=0;
+    for(const root of [this.dir,this.scanJourneyDir]){
+      let entries=[];
+      try{entries=await readdir(root,{withFileTypes:true});}
+      catch(error){if(error?.code==='ENOENT')continue;failedFiles++;continue;}
+      for(const entry of entries){
+        if(!entry.isFile()||!ORPHAN_TEMP_SUFFIX.test(entry.name))continue;
+        const path=join(root,entry.name);
+        try{
+          const info=await stat(path);
+          await unlink(path);
+          deletedFiles++;freedBytes+=Math.max(0,Number(info.size)||0);
+        }catch(error){if(error?.code!=='ENOENT')failedFiles++;}
+      }
+    }
+    return {deleted_files:deletedFiles,freed_bytes:freedBytes,failed_files:failedFiles};
+  }
+
+  async compactJsonlArchive(kind,{force=false}={}){
+    return this.lock(()=>this._compactJsonlArchive(kind,{force}));
+  }
+  async _compactJsonlArchive(kind,{force=false}={}){
+    const policy=JSONL_ARCHIVE_POLICIES[kind],file=this.files[kind];
+    if(!policy||!file)return {compacted:false,reason:'NO_RETENTION_POLICY'};
+    let before;
+    try{before=await stat(file);}catch(error){
+      if(error?.code==='ENOENT')return {compacted:false,reason:'FILE_NOT_FOUND'};
+      throw error;
+    }
+    if(!force&&before.size<policy.compactAtBytes)
+      return {compacted:false,reason:'BELOW_COMPACTION_THRESHOLD',before_bytes:before.size};
+    const limit=Number(policy.retainRowsPerKey??policy.retainRows);
+    if(!Number.isInteger(limit)||limit<1)throw new Error('JSONL_RETENTION_LIMIT_INVALID');
+    const groups=new Map();let sequence=0,inputRows=0;
+    const input=createReadStream(file,{encoding:'utf8'});
+    const reader=createInterface({input,crlfDelay:Infinity});
+    try{
+      for await(const line of reader){
+        if(!line.trim())continue;
+        let key='__all__';
+        if(policy.keyField){
+          try{
+            const parsed=JSON.parse(line);
+            key=String(parsed?.[policy.keyField]??'UNKNOWN');
+          }catch{key='UNKNOWN';}
+        }
+        let group=groups.get(key);
+        if(!group){group={rows:[],cursor:0};groups.set(key,group);}
+        const row={sequence:sequence++,line,bytes:Buffer.byteLength(line,'utf8')+1};
+        inputRows++;
+        if(group.rows.length<limit)group.rows.push(row);
+        else{
+          group.rows[group.cursor]=row;
+          group.cursor=(group.cursor+1)%limit;
+        }
+      }
+    }finally{
+      reader.close();input.destroy();
+    }
+    const kept=[];
+    for(const group of groups.values()){
+      const rows=group.rows.filter(Boolean).sort((a,b)=>a.sequence-b.sequence);
+      const byteLimit=Number(policy.maxRetainedBytesPerKey??policy.maxRetainedBytes??Infinity);
+      let bytes=rows.reduce((sum,row)=>sum+row.bytes,0),start=0;
+      while(rows.length-start>1&&bytes>byteLimit){bytes-=rows[start].bytes;start++;}
+      kept.push(...rows.slice(start));
+    }
+    kept.sort((a,b)=>a.sequence-b.sequence);
+    const content=kept.length?kept.map(row=>row.line).join('\n')+'\n':'';
+    const afterBytes=Buffer.byteLength(content,'utf8');
+    if(afterBytes>=before.size)
+      return {compacted:false,reason:'RETENTION_DID_NOT_REDUCE_FILE',before_bytes:before.size,after_bytes:afterBytes,input_rows:inputRows,retained_rows:kept.length};
+    const temp=file+'.compact-'+process.pid+'-'+Date.now();
+    try{
+      await writeFile(temp,content,{flag:'wx'});
+      await rename(temp,file);
+    }catch(error){
+      await unlink(temp).catch(()=>{});
+      // Keep the source intact if a compacted copy cannot be made durable.
+      throw error;
+    }
+    this.lastWriteAt=Date.now();
+    return {compacted:true,before_bytes:before.size,after_bytes:afterBytes,input_rows:inputRows,retained_rows:kept.length};
+  }
+  async appendJsonlArchive(kind,values){
+    const rows=(Array.isArray(values)?values:[values]).filter(x=>x&&typeof x==='object'&&!Array.isArray(x));
+    const file=this.files[kind];
+    if(!file)throw new Error('JSONL_ARCHIVE_KIND_UNKNOWN:'+kind);
+    if(!rows.length)return {written:0};
+    return this.lock(async()=>{
+      await this._compactJsonlArchive(kind);
+      await appendFile(file,rows.map(x=>JSON.stringify(x)).join('\n')+'\n');
+      this.lastWriteAt=Date.now();
+      return {written:rows.length};
+    });
+  }
   async getSubscriptions(userId=null){const a=await this.readJson(this.files.subscriptions);const r=Object.values(a);
     return userId?r.filter(x=>x.user_id===userId&&!x.disabled):r.filter(x=>!x.disabled);}
   async upsertSubscription(userId,s){return this.lock(async()=>{const a=await this.readJson(this.files.subscriptions);
@@ -105,7 +224,7 @@ export class DurableStore {
   async readRotationAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('rotationAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
   async appendLiquidityAbsorptionAlert(v){return this.lock(async()=>{await appendFile(this.files.liquidityAbsorptionAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readLiquidityAbsorptionAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('liquidityAbsorptionAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendKahirAlert(v){return this.lock(async()=>{await appendFile(this.files.kahirAlerts,JSON.stringify(v)+'\\n');this.lastWriteAt=Date.now();});}
+  async appendKahirAlert(v){return this.appendJsonlArchive('kahirAlerts',[v]);}
   async readKahirAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('kahirAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
   async appendDoomsdayAlert(v){return this.lock(async()=>{await appendFile(this.files.doomsdayAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readDoomsdayAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('doomsdayAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
@@ -115,13 +234,7 @@ export class DurableStore {
   async appendEarlyExpansionAlert(v){return this.lock(async()=>{await appendFile(this.files.earlyExpansionAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readEarlyExpansionAlerts({sinceMs=0,limit=100}={}){const safeLimit=Math.min(500,Math.max(1,Number(limit)||100));const rows=await this.readRecent('earlyExpansionAlerts',500);return rows.filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).sort((a,b)=>Number(a?.processed_at??a?.detected_at??0)-Number(b?.processed_at??b?.detected_at??0)).slice(0,safeLimit);}
   async appendScanSchedulerEvents(events){
-    const rows=(Array.isArray(events)?events:[]).filter(x=>x&&typeof x==='object');
-    if(!rows.length)return {written:0};
-    return this.lock(async()=>{
-      await appendFile(this.files.schedulerEvents,rows.map(x=>JSON.stringify(x)).join('\n')+'\n');
-      this.lastWriteAt=Date.now();
-      return {written:rows.length};
-    });
+    return this.appendJsonlArchive('schedulerEvents',events);
   }
   async readScanSchedulerEvents({radar=null,symbol=null,sinceMs=0,limit=1000}={}){
     const safeLimit=Math.min(5000,Math.max(1,Number(limit)||1000));
@@ -157,7 +270,6 @@ export class DurableStore {
   async appendFalconEyeAlert(v){return this.lock(async()=>{await appendFile(this.files.falconEyeAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readFalconEyeAlerts({sinceMs=0,limit=100}={}){const safeLimit=Math.min(100,Math.max(1,Number(limit)||100));const rows=await this.readRecent('falconEyeAlerts',500);return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).sort((a,b)=>Number(a?.processed_at||0)-Number(b?.processed_at||0)).slice(0,safeLimit);}
   async readProfessorAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('professorAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendKahirAlert(v){return this.lock(async()=>{await appendFile(this.files.kahirAlerts,JSON.stringify(v)+'\\n');this.lastWriteAt=Date.now();});}
   async readKahirAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('kahirAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
 
   scanJourneyState(raw={}) {
@@ -203,7 +315,8 @@ export class DurableStore {
         // Keep its sequence and counters unchanged: repair is not a second event.
         const repaired=gzipSync(Buffer.from(JSON.stringify({...cycle,cycle_sequence:prior.cycle_sequence}),'utf8'),{level:6});
         const temp=existingPath+'.repair-'+process.pid+'-'+Date.now();
-        await writeFile(temp,repaired);await rename(temp,existingPath);
+        try{await writeFile(temp,repaired);await rename(temp,existingPath);}
+        catch(error){await unlink(temp).catch(()=>{});throw error;}
         state.compressed_bytes=Math.max(0,state.compressed_bytes-Number(prior.compressed_bytes||0)+repaired.length);
         prior.compressed_bytes=repaired.length;
         prior.sha256=createHash('sha256').update(repaired).digest('hex');
@@ -217,8 +330,8 @@ export class DurableStore {
       const zipped=gzipSync(Buffer.from(JSON.stringify(stored),'utf8'),{level:6});
       const finalPath=join(this.scanJourneyDir,filename);
       const tempPath=finalPath+'.tmp-'+process.pid+'-'+Date.now();
-      await writeFile(tempPath,zipped);
-      await rename(tempPath,finalPath);
+      try{await writeFile(tempPath,zipped);await rename(tempPath,finalPath);}
+      catch(error){await unlink(tempPath).catch(()=>{});throw error;}
       const coins=Array.isArray(cycle.coins)?cycle.coins:[];
       const eligible=coins.filter(x=>x&&x.eligible===true);
       const metadata={
@@ -341,7 +454,8 @@ export class DurableStore {
           cycle.outcomes_updated_at=Number(now);
           const compressed=gzipSync(Buffer.from(JSON.stringify(cycle),'utf8'),{level:6});
           const temp=filePath+'.outcome-'+process.pid+'-'+Date.now();
-          await writeFile(temp,compressed);await rename(temp,filePath);
+          try{await writeFile(temp,compressed);await rename(temp,filePath);}
+          catch(error){await unlink(temp).catch(()=>{});throw error;}
           state.compressed_bytes=Math.max(0,state.compressed_bytes-Number(metadata.compressed_bytes||0)+compressed.length);
           metadata.compressed_bytes=compressed.length;
           metadata.sha256=createHash('sha256').update(compressed).digest('hex');
