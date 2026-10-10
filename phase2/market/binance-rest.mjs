@@ -35,7 +35,12 @@ const SHARED = {
   rateLimitedUntil: 0,
   budgetQueue: Promise.resolve(),
   observedUsedWeight1m: null,
-  observedUsedWeightAt: null
+  observedUsedWeightAt: null,
+  telemetry: {
+    actual_http_attempts: 0, http_responses: 0, http_2xx: 0, http_non_2xx: 0,
+    transport_errors: 0, rate_limits: 0, total_latency_ms: 0, estimated_weight: 0,
+    status_counts: {}, path_counts: {}, host_counts: {}, weight_by_path: {}
+  }
 };
 
 // Let the shared broker schedule up to six raw requests per second while keeping
@@ -44,6 +49,74 @@ const SHARED = {
 const SHARED_MAX_REQUESTS_PER_MINUTE = 360;
 const SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE = 4000;
 const SHARED_MIN_INTERVAL_MS = 167;
+
+function safeQueryForTelemetry(query={}) {
+  const out={};
+  for(const key of ['symbol','symbols','interval','limit','startTime','endTime'])
+    if(query?.[key]!==undefined&&query?.[key]!==null)out[key]=query[key];
+  return out;
+}
+function restTelemetryCall(context,path,query) {
+  const collector=context?.collector;
+  if(!collector||typeof collector!=='object')return null;
+  const stage=String(context.stage||'UNSPECIFIED');
+  const bucket=collector.by_stage[stage]||(collector.by_stage[stage]={
+    logical_calls:0,cache_hits:0,coalesced_calls:0,actual_http_attempts:0,
+    http_2xx:0,http_non_2xx:0,transport_errors:0,rate_limits:0,
+    total_latency_ms:0,status_counts:{},paths:{}
+  });
+  const pathBucket=bucket.paths[path]||(bucket.paths[path]={logical_calls:0,actual_http_attempts:0});
+  bucket.logical_calls++;pathBucket.logical_calls++;
+  collector.logical_calls=(Number(collector.logical_calls)||0)+1;
+  const event={stage,symbol:context.symbol||query?.symbol||null,path,query:safeQueryForTelemetry(query),called_at_ms:Date.now(),outcome:'PENDING',actual_http_attempts:[]};
+  (collector.calls||(collector.calls=[])).push(event);
+  return {collector,bucket,pathBucket,event,context};
+}
+function restTelemetryCacheHit(call) {
+  if(!call)return;
+  call.bucket.cache_hits++;call.event.outcome='CACHE_HIT';
+  call.collector.cache_hits=(Number(call.collector.cache_hits)||0)+1;
+}
+function restTelemetryCoalesced(call) {
+  if(!call)return;
+  call.bucket.coalesced_calls++;call.event.outcome='COALESCED';
+  call.collector.coalesced_calls=(Number(call.collector.coalesced_calls)||0)+1;
+}
+function beginRestTelemetryAttempt(call,{path,query,host,attempt,at}) {
+  const weight=estimateBinanceRequestWeight(path,query);
+  const row={attempt:attempt+1,host,path,started_at_ms:at,http_status:null,latency_ms:null,estimated_weight:weight,outcome:'IN_FLIGHT',used_weight_1m:null};
+  SHARED.telemetry.actual_http_attempts++;
+  SHARED.telemetry.estimated_weight+=weight;
+  SHARED.telemetry.path_counts[path]=(SHARED.telemetry.path_counts[path]||0)+1;
+  SHARED.telemetry.host_counts[host]=(SHARED.telemetry.host_counts[host]||0)+1;
+  SHARED.telemetry.weight_by_path[path]=(SHARED.telemetry.weight_by_path[path]||0)+weight;
+  if(call){
+    call.bucket.actual_http_attempts++;call.pathBucket.actual_http_attempts++;
+    call.collector.actual_http_attempts=(Number(call.collector.actual_http_attempts)||0)+1;
+    call.event.actual_http_attempts.push(row);
+  }
+  return row;
+}
+function finishRestTelemetryAttempt(call,row,{status=null,latencyMs=0,outcome='TRANSPORT_ERROR',usedWeight=null}={}) {
+  row.http_status=status;row.latency_ms=Math.max(0,Number(latencyMs)||0);row.outcome=outcome;row.used_weight_1m=usedWeight;
+  SHARED.telemetry.total_latency_ms+=row.latency_ms;
+  if(status!==null){
+    SHARED.telemetry.http_responses++;
+    const key=String(status);SHARED.telemetry.status_counts[key]=(SHARED.telemetry.status_counts[key]||0)+1;
+    if(status>=200&&status<300)SHARED.telemetry.http_2xx++;
+    else SHARED.telemetry.http_non_2xx++;
+    if(status===418||status===429)SHARED.telemetry.rate_limits++;
+  } else SHARED.telemetry.transport_errors++;
+  if(call){
+    call.bucket.total_latency_ms+=row.latency_ms;
+    if(status!==null){
+      const key=String(status);call.bucket.status_counts[key]=(call.bucket.status_counts[key]||0)+1;
+      if(status>=200&&status<300)call.bucket.http_2xx++;
+      else call.bucket.http_non_2xx++;
+      if(status===418||status===429)call.bucket.rate_limits++;
+    } else call.bucket.transport_errors++;
+  }
+}
 
 export function estimateBinanceRequestWeight(path, query = {}) {
   if (path === '/api/v3/exchangeInfo') return 20;
@@ -175,6 +248,17 @@ export class RestClient {
     this.usedAt=[]; this.lastRequestAt=0; this.currentBaseIndex=0;
     this.lastSuccessAt=null; this.lastError=null; this.rateLimitedUntil=0; this.state='INIT';
   }
+  telemetrySnapshot(){
+    return {
+      ...SHARED.telemetry,
+      status_counts:{...SHARED.telemetry.status_counts},
+      path_counts:{...SHARED.telemetry.path_counts},
+      host_counts:{...SHARED.telemetry.host_counts},
+      weight_by_path:{...SHARED.telemetry.weight_by_path},
+      observed_used_weight_1m:SHARED.observedUsedWeight1m,
+      observed_used_weight_at:SHARED.observedUsedWeightAt
+    };
+  }
   health(){return {
     state:this.state,last_success_at:this.lastSuccessAt,last_error:this.lastError,
     rate_limited_until:this.rateLimitedUntil||null,
@@ -200,19 +284,24 @@ export class RestClient {
     if(gap<this.minIntervalMs) await sleep(this.minIntervalMs-gap);
     await waitSharedBudget(path, query);
   }
-  async request(path,query={}) {
+  async request(path,query={},telemetryContext=null) {
     if(!String(path).startsWith('/api/v3/')) throw new Error('REST_PATH_NOT_ALLOWED');
+    const telemetry=restTelemetryCall(telemetryContext,path,query);
     const key=cacheKey(this.baseUrls,path,query);
     const ttl=cacheTtlMs(path,query);
     const hit=cachedValue(key);
     if(hit){
+      restTelemetryCacheHit(telemetry);
       return annotateClientSuccess(this,{data:hit.data,source:hit.source,receivedAt:Date.now()},null);
     }
     if(SHARED.inflight.has(key)){
+      restTelemetryCoalesced(telemetry);
       try{
         const shared=await SHARED.inflight.get(key);
+        telemetry&&(telemetry.event.outcome='COALESCED_SUCCESS');
         return annotateClientSuccess(this,{data:shared.data,source:shared.source,receivedAt:Date.now()},null);
       }catch(error){
+        if(telemetry)telemetry.event.outcome='COALESCED_ERROR';
         this.lastError=String(error?.message??error);
         throw error;
       }
@@ -229,8 +318,14 @@ export class RestClient {
         const requestAt=Date.now();
         this.lastRequestAt=requestAt; this.usedAt.push(requestAt);
         this.state='REQUESTING';
+        const attemptTelemetry=beginRestTelemetryAttempt(telemetry,{path,query,host:new URL(url).host,attempt,at:requestAt});
+        let responseStatus=null;
         try{
           const r=await this.fetchImpl(url,{method:'GET',signal:ac.signal,headers:{Accept:'application/json'}});
+          responseStatus=Number(r.status);
+          const usedWeightHeader=r.headers?.get?.('x-mbx-used-weight-1m')??r.headers?.get?.('X-MBX-USED-WEIGHT-1M');
+          const usedWeight=usedWeightHeader==null?null:Number(usedWeightHeader);
+          finishRestTelemetryAttempt(telemetry,attemptTelemetry,{status:responseStatus,latencyMs:Date.now()-requestAt,outcome:r.ok?'HTTP_OK':'HTTP_ERROR',usedWeight:Number.isFinite(usedWeight)?usedWeight:null});
           if(r.status===429||r.status===418){
             const wait=retryAfterMs(r.headers)??Math.min(60000,1500*(2**attempt));
             SHARED.rateLimitedUntil=Math.max(SHARED.rateLimitedUntil,Date.now()+wait);
@@ -246,6 +341,7 @@ export class RestClient {
           this.lastError=null; this.state='LIVE';
           return result;
         }catch(e){
+          if(attemptTelemetry.outcome==='IN_FLIGHT')finishRestTelemetryAttempt(telemetry,attemptTelemetry,{status:responseStatus,latencyMs:Date.now()-requestAt,outcome:responseStatus===null?'TRANSPORT_ERROR':'HTTP_ERROR',usedWeight:null});
           error=e; this.lastError=String(e?.message??e);
           if(e?.name==='RestRateLimitError') break;
         }finally{clearTimeout(tm);}
@@ -257,8 +353,10 @@ export class RestClient {
     SHARED.inflight.set(key,task);
     try{
       const result=await task;
+      if(telemetry)telemetry.event.outcome=telemetry.event.actual_http_attempts.length?'HTTP_SUCCESS':'SHARED_SUCCESS';
       return annotateClientSuccess(this,{data:result.data,source:result.source,receivedAt:Date.now()},null);
     }catch(error){
+      if(telemetry)telemetry.event.outcome=error?.name==='RestRateLimitError'?'RATE_LIMITED':'ERROR';
       this.state=error?.name==='RestRateLimitError'?'RATE_LIMITED':'ERROR';
       throw error;
     }finally{
@@ -268,7 +366,7 @@ export class RestClient {
   async klines(symbol,interval,opts={}) {
     const r=await this.request('/api/v3/klines',{
       symbol,interval,limit:opts.limit??250,startTime:opts.startTime,endTime:opts.endTime
-    });
+    },opts.telemetryContext??null);
     const now=Date.now();
     const receivedAt=Number(r.receivedAt)||now;
     return {source:r.source,receivedAt,candles:r.data.map(x=>{
@@ -283,6 +381,6 @@ export class RestClient {
       };
     })};
   }
-  depth(symbol,limit=100){return this.request('/api/v3/depth',{symbol,limit});}
-  ticker24h(symbol){return this.request('/api/v3/ticker/24hr',{symbol});}
+  depth(symbol,limit=100,telemetryContext=null){return this.request('/api/v3/depth',{symbol,limit},telemetryContext);}
+  ticker24h(symbol,telemetryContext=null){return this.request('/api/v3/ticker/24hr',{symbol},telemetryContext);}
 }
