@@ -36,6 +36,17 @@ test('gradual volume and trade improvement is measured across three smoothed buc
   assert.equal(result.trades_improving,true);
 });
 
+test('zero middle participation bucket returns unknown step ratio without crashing Radar 8',()=>{
+  const result=measureGradualParticipation([100,100,100,100,0,0,0,0,150,150,150,150]);
+  assert.equal(result.available,true);
+  assert.equal(result.baseline,100);
+  assert.equal(result.middle,0);
+  assert.equal(result.recent,150);
+  assert.equal(result.ratio,1.5);
+  assert.equal(result.step_ratio,null);
+  assert.equal(result.improving,false,'a missing middle-to-recent ratio must not be treated as improving participation');
+});
+
 test('missing 24-hour percentage is DATA_INSUFFICIENT, never a quiet setup',()=>{
   const result=assessPreExpansionFingerprint({...baseInput,dailyChangePct:null});
   assert.equal(result.stage,'DATA_INSUFFICIENT');
