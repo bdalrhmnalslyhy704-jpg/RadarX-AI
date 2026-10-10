@@ -523,8 +523,17 @@ export class WhaleAccumulationRadar{
       for(const row of rows)this.scheduler.ensureQueued('DEEP',row.symbol,fastSeenAt);
       const selected=this.selectBatch(rows,fastSeenAt);
       const selectedSymbols=new Set(selected.map(x=>String(x.symbol).toUpperCase()));
-      const cycle=this.scans+1;
+      const cycle=Math.max(1,Math.trunc(Number(this.lastCoverage?.cycle||0))+1);
       const fastDurationMs=Math.max(0,fastSeenAt-fastScanStartedAt);
+      for(const row of rows){
+        const fast=row._schedulerFast||{};
+        this.scheduler.record({stage:'FAST',symbol:row.symbol,eventType:'COMPLETED',cycle,at:fastSeenAt,
+          queuedAt:fastScanStartedAt,startedAt:fastScanStartedAt,elapsedMs:fastDurationMs,fastSeenAt,
+          reasonCode:'RADAR9_FAST_TICKER_SNAPSHOT_RECEIVED',
+          extra:{last_price:row.lastPrice,quote_volume_24h:row.quoteVolume24h,
+            trade_count_24h:row.tradeCount24h,volume_accel_ratio:fast.volume_accel_ratio??null,
+            trade_accel_ratio:fast.trade_accel_ratio??null,price_acceleration_pct:fast.price_acceleration_pct??null}});
+      }
       this.scheduler.record({stage:'FAST',eventType:'CYCLE_COMPLETE',cycle,at:fastSeenAt,elapsedMs:fastDurationMs,
         reasonCode:'RADAR9_TICKER_SNAPSHOT_RECEIVED',extra:{symbols_total:rows.length}});
       for(const row of rows){
@@ -580,7 +589,7 @@ export class WhaleAccumulationRadar{
       }
       const cycleCompletedAt=this.clock();
       this.lastCoverage={
-        universe_total:rows.length,batch_size:selected.length,scanned_successfully:success,failed,rotation_cursor:this.cursor,
+        cycle,universe_total:rows.length,batch_size:selected.length,scanned_successfully:success,failed,rotation_cursor:this.cursor,
         candidates_retained:this.latestCandidates.length,last_scan_at:cycleCompletedAt
       };
       this.lastScanAtMs=cycleCompletedAt;
