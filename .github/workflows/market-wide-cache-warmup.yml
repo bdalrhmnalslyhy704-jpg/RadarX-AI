@@ -9,6 +9,9 @@ on:
       - 'phase2/market/market-wide-kline-cache.mjs'
       - 'phase2/market/binance-ws.mjs'
       - 'phase2/market/universe-scanner.mjs'
+      - 'phase2/core/early-expansion-radar.mjs'
+      - 'phase2/core/store.mjs'
+      - 'phase2/config.mjs'
       - 'phase2/tests/market-wide-light-scan.test.mjs'
       - '.github/workflows/market-wide-cache-warmup.yml'
 
