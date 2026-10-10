@@ -36,6 +36,16 @@ test('gradual volume and trade improvement is measured across three smoothed buc
   assert.equal(result.trades_improving,true);
 });
 
+test('zero middle participation bucket returns an unknown step ratio without crashing Radar 8',()=>{
+  const result=measureGradualParticipation([100,100,100,100,0,0,0,0,150,150,150,150]);
+  assert.equal(result.samples,12);
+  assert.equal(result.baseline,100);
+  assert.equal(result.middle,0);
+  assert.equal(result.recent,150);
+  assert.equal(result.step_ratio,null);
+  assert.equal(result.improving,false,'a missing middle-to-recent ratio must not be treated as improving participation');
+});
+
 test('missing 24-hour percentage is DATA_INSUFFICIENT, never a quiet setup',()=>{
   const result=assessPreExpansionFingerprint({...baseInput,dailyChangePct:null});
   assert.equal(result.stage,'DATA_INSUFFICIENT');
@@ -77,6 +87,31 @@ function flat(n=80,start=100,step=300_000){
     return {openTime,closeTime:openTime+step-1,open:close-.005,high:close+.02,low:close-.02,close,volume:1200,quoteVolume:close*1200,tradeCount:120,takerBuyBaseVolume:600,closed:true};
   });
 }
+test('Radar 8 full evidence path accepts zero-middle participation data without crashing',()=>{
+  const five=flat(80,1,300_000);
+  const pattern=[100,100,100,100,0,0,0,0,150,150,150,150];
+  for(let i=0;i<12;i++){
+    const row=five[five.length-12+i];
+    row.volume=pattern[i];
+    row.quoteVolume=row.close*pattern[i];
+    row.tradeCount=pattern[i];
+    row.takerBuyBaseVolume=pattern[i]*0.5;
+  }
+  const last=five.at(-1);
+  const result=buildEarlyExpansionEvidence({
+    series:{'5m':five},
+    ticker:{symbol:'XUSDUSDT',lastPrice:last.close,priceChange24h:1.4,quoteVolume24h:2_500_000,tradeCount24h:12_000},
+    now:last.closeTime+1
+  });
+  const zeroBucket=measureGradualParticipation(pattern);
+  assert.equal(typeof zeroBucket.available,'boolean');
+  assert.equal(zeroBucket.middle,0);
+  assert.equal(zeroBucket.step_ratio,null);
+  assert.equal(zeroBucket.improving,false);
+  assert.equal(result.pre_expansion_stage,'DATA_INSUFFICIENT');
+  assert.equal(result.pre_expansion_fingerprint.stage,'DATA_INSUFFICIENT');
+});
+
 function falconInput({dailyMove=2.8,wickFailure=false}={}){
   const now=1_800_000_000_000+240*60_000,one=risingBase(),five=flat(),btc=flat();
   if(wickFailure){

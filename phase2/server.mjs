@@ -6,6 +6,7 @@ import {CONFIG} from './config.mjs';
 import {RestClient} from './market/binance-rest.mjs';
 import {BinanceStreamClient} from './market/binance-ws.mjs';
 import {BinanceAllMarketTickerClient} from './market/binance-market-ticker-ws.mjs';
+import {MarketWideKlineCache} from './market/market-wide-kline-cache.mjs';
 import {DurableStore} from './core/store.mjs';
 import {SignalDeduplicator} from './core/dedup.mjs';
 import {SignalService} from './core/signal-service.mjs';
@@ -136,7 +137,17 @@ export async function startServer({
   const multiAnalystRest=new RestClient({...config.rest,baseUrls:multiAnalystRestUrls});
   const multiAnalystRadar=new MultiAnalystEngine({rest:multiAnalystRest,store,config:config.multiAnalyst||{}});
   const alMuqawimRadar=new AlMuqawimRadar({rest,store,pushManager:push,config:config.alMuqawimRadar||{},logger});
-  const earlyExpansionRadar=new EarlyExpansionRadar({rest,store,pushManager:push,config:config.earlyExpansionRadar||{},logger});
+  const marketWideKlineCache=new MarketWideKlineCache({
+    rest,
+    urls:config.websocket.urls,
+    initialBackoffMs:config.websocket.initialBackoffMs,
+    maxBackoffMs:config.websocket.maxBackoffMs,
+    jitterRatio:config.websocket.jitterRatio,
+    heartbeatTimeoutMs:config.websocket.heartbeatTimeoutMs,
+    maxConnectionMs:config.websocket.maxConnectionMs,
+    logger
+  });
+  const earlyExpansionRadar=new EarlyExpansionRadar({rest,store,pushManager:push,marketWideKlineCache,config:config.earlyExpansionRadar||{},logger});
   const coinHunterUrls=['https://data-api.binance.vision',...(config.rest.baseUrls??config.rest.urls??[])].filter((url,index,arr)=>arr.indexOf(url)===index);
   const coinHunterRest=new RestClient({...config.rest,baseUrls:coinHunterUrls});
   const coinHunterRadar=new CoinHunterRadar({rest:coinHunterRest,store,pushManager:push,config:config.coinHunterRadar||{},logger});
@@ -177,7 +188,7 @@ export async function startServer({
   // when RADARX_RADARS_AUTOSTART is unset/false for the other optional radars.
   safeStart('RADAR9',falconEyeRadar);
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
-  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,multiAnalystRadar,symbolDeepAnalyzer,store,rest,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,multiAnalystRest,coinHunterRest,whaleAccumulationRest,marketRadarRest,push,close:async()=>{multiAnalystRadar.stop();await falconEyeRadar.stop();await whaleAccumulationRadar.stop();await coinHunterRadar.stop();await earlyExpansionRadar.stop();await professorRadar.stop();await alMuqawimRadar.stop();await doomsdayRadar.stop();await kahirRadar.stop();await liquidityAbsorptionRadar.stop();await rotationLagRadar.stop();await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
+  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,marketWideKlineCache,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,multiAnalystRadar,symbolDeepAnalyzer,store,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,multiAnalystRest,coinHunterRest,whaleAccumulationRest,marketRadarRest,push,close:async()=>{multiAnalystRadar.stop();await falconEyeRadar.stop();await whaleAccumulationRadar.stop();await coinHunterRadar.stop();await earlyExpansionRadar.stop();await professorRadar.stop();await alMuqawimRadar.stop();await doomsdayRadar.stop();await kahirRadar.stop();await liquidityAbsorptionRadar.stop();await rotationLagRadar.stop();await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
 }
 
 if(process.argv[1]&&resolve(fileURLToPath(import.meta.url))===resolve(process.argv[1])){

@@ -1,0 +1,624 @@
+const KNOWN = value => value !== null && value !== undefined &&
+  !(typeof value === 'string' && value.trim() === '') && Number.isFinite(Number(value));
+const numberOrNull = value => KNOWN(value) ? Number(value) : null;
+const mean = values => {
+  const rows = values.filter(Number.isFinite);
+  return rows.length ? rows.reduce((sum, value) => sum + value, 0) / rows.length : null;
+};
+const median = values => {
+  const rows = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!rows.length) return null;
+  const mid = Math.floor(rows.length / 2);
+  return rows.length % 2 ? rows[mid] : (rows[mid - 1] + rows[mid]) / 2;
+};
+const clamp = value => Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
+const symbolOf = row => String(row?.symbol || '').trim().toUpperCase();
+
+// Base assets that do not behave like directional altcoin opportunities for an
+// early-expansion scanner. They are still audited for full-market coverage;
+// they cannot consume the candidate/rotation slots.
+const NON_DIRECTIONAL_BASE_ASSETS = new Set([
+  'AEUR','BFUSD','BUSD','DAI','EURI','EUR','EURCV','EURS','FDUSD','PAXG','PYUSD','RLUSD',
+  'TUSD','USDC','USDD','USD0','USD1','USDE','USDP','USDS','USDX','USYC',
+  'USDF','USDT','USDY','XAUT','XUSD'
+]);
+
+export function isDirectionalCandidateSymbol(value) {
+  const symbol = String(value || '').trim().toUpperCase();
+  if (!symbol.endsWith('USDT') || symbol.length <= 4) return true;
+  return !NON_DIRECTIONAL_BASE_ASSETS.has(symbol.slice(0, -4));
+}
+
+export const MARKET_WIDE_LIGHT_SCAN_DEFAULTS = Object.freeze({
+  minClosedCandles: 60,
+  maxClosedCandles: 96,
+  maxCandleAgeMs: 8 * 60_000,
+  candleStepMs: 5 * 60_000,
+  continuityToleranceMs: 1000,
+  maxBaseRangePct: 2.5,
+  maxAtrRatio: 0.85,
+  maxBollingerWidthRatio: 0.88,
+  maxResistanceDistancePct: 2.5,
+  maxSupportUndercutPct: 0.3,
+  minParticipationRatio: 1.08,
+  minMiddleParticipationRatio: 0.98,
+  minStepParticipationRatio: 1.01,
+  candidateLimit: 48,
+  rotationReserve: 12,
+  minimumReadyCandidates: 24,
+  maxEligibleSymbols: 1200
+});
+
+function validateCandles(input, now, cfg) {
+  const all = Array.isArray(input) ? input : [];
+  const closed = [];
+  let futureExcluded = 0;
+  let malformedClosed = 0;
+  for (const candle of all) {
+    if (!candle || candle.closed !== true) continue;
+    const openTime = numberOrNull(candle.openTime), closeTime = numberOrNull(candle.closeTime);
+    const open = numberOrNull(candle.open), high = numberOrNull(candle.high);
+    const low = numberOrNull(candle.low), close = numberOrNull(candle.close);
+    if (closeTime !== null && closeTime > now) {
+      futureExcluded++;
+      continue;
+    }
+    if (openTime === null || closeTime === null || closeTime < openTime ||
+        open === null || high === null || low === null || close === null ||
+        !(open > 0) || !(close > 0) || !(low > 0) ||
+        high < Math.max(open, close) || low > Math.min(open, close)) {
+      malformedClosed++;
+      continue;
+    }
+    const volume = numberOrNull(candle.volume);
+    const tradeCount = numberOrNull(candle.tradeCount);
+    if ((volume !== null && volume < 0) || (tradeCount !== null && tradeCount < 0)) {
+      malformedClosed++;
+      continue;
+    }
+    closed.push({...candle, openTime, closeTime, open, high, low, close, volume, tradeCount});
+  }
+  closed.sort((a, b) => a.openTime - b.openTime);
+  const unique = [];
+  const seenTimes = new Set();
+  for (const candle of closed) {
+    if (seenTimes.has(candle.openTime)) {
+      unique[unique.length - 1] = candle;
+      continue;
+    }
+    seenTimes.add(candle.openTime);
+    unique.push(candle);
+  }
+  const rows = unique.slice(-Math.max(cfg.minClosedCandles, cfg.maxClosedCandles));
+  let gaps = 0;
+  for (let i = 1; i < rows.length; i++) {
+    if (Math.abs((rows[i].openTime - rows[i - 1].openTime) - cfg.candleStepMs) > cfg.continuityToleranceMs) gaps++;
+  }
+  return {rows, futureExcluded, malformedClosed, gaps};
+}
+
+function trueRanges(rows) {
+  const values = [];
+  for (let i = 1; i < rows.length; i++) {
+    const current = rows[i], previous = rows[i - 1];
+    values.push(Math.max(
+      current.high - current.low,
+      Math.abs(current.high - previous.close),
+      Math.abs(current.low - previous.close)
+    ));
+  }
+  return values;
+}
+
+function bollingerWidth(rows) {
+  if (rows.length !== 20) return null;
+  const closes = rows.map(row => row.close);
+  const mid = mean(closes);
+  if (!(mid > 0)) return null;
+  const variance = mean(closes.map(value => (value - mid) ** 2));
+  return variance !== null ? 4 * Math.sqrt(variance) / mid * 100 : null;
+}
+
+function gradualParticipation(rows, field, cfg) {
+  const values = rows.map(row => numberOrNull(row[field]));
+  if (values.length < 32 || values.some(value => value === null || value < 0)) {
+    return {available: false, reason: 'PARTICIPATION_FIELD_MISSING', baseline: null, recentRatio: null,
+      middleRatio: null, stepRatio: null, improving: null};
+  }
+  const baseline = median(values.slice(-32, -12));
+  const last12 = values.slice(-12);
+  const buckets = [
+    median(last12.slice(0, 4)),
+    median(last12.slice(4, 8)),
+    median(last12.slice(8, 12))
+  ];
+  const [oldest, middle, recent] = buckets;
+  if (!(baseline > 0) || !(oldest > 0) || !(middle > 0) || !(recent >= 0)) {
+    return {available: false, reason: 'PARTICIPATION_BASELINE_UNAVAILABLE', baseline: null, recentRatio: null,
+      middleRatio: null, stepRatio: null, improving: null};
+  }
+  const recentRatio = recent / baseline, middleRatio = middle / oldest, stepRatio = recent / middle;
+  return {
+    available: true, reason: 'PARTICIPATION_AVAILABLE', baseline,
+    oldestBucket: oldest, middleBucket: middle, recentBucket: recent,
+    recentRatio, middleRatio, stepRatio,
+    improving: recentRatio >= cfg.minParticipationRatio &&
+      middleRatio >= cfg.minMiddleParticipationRatio && stepRatio >= cfg.minStepParticipationRatio
+  };
+}
+
+/** Light ranking only. It never emits, stores, or authorizes a trading alert. */
+export function evaluateMarketWideLightCandidate({
+  symbol, series = null, now = Date.now(), config = {}
+} = {}) {
+  const cfg = {...MARKET_WIDE_LIGHT_SCAN_DEFAULTS, ...config};
+  const key = String(symbol || series?.symbol || '').trim().toUpperCase();
+  if (!key) return insufficient('', series, Number(now), 'INVALID_SYMBOL');
+  const at = Number(now);
+  if (!Number.isFinite(at)) return insufficient(key, series, Date.now(), 'INVALID_SCAN_TIME');
+  if (!series || !Array.isArray(series.candles)) return insufficient(key, series, at, 'CANDLE_CACHE_MISSING');
+  const normalized = validateCandles(series.candles, at, cfg);
+  const rows = normalized.rows;
+  const last = rows.at(-1) || null;
+  const age = last ? Math.max(0, at - last.closeTime) : null;
+  const source = String(series.source || last?.source || 'UNKNOWN_SOURCE');
+  const dataDetails = {
+    closed_candles: rows.length,
+    futureExcluded: normalized.futureExcluded,
+    malformedClosed: normalized.malformedClosed,
+    gap_count: normalized.gaps,
+    latest_close_time_ms: last?.closeTime ?? null,
+    maximum_age_ms: cfg.maxCandleAgeMs
+  };
+  if (!last) return insufficient(key, series, at, 'NO_VALID_CLOSED_5M_CANDLES', dataDetails);
+  if (age > cfg.maxCandleAgeMs) return insufficient(key, series, at, 'STALE_CLOSED_5M_CACHE', dataDetails);
+  if (normalized.malformedClosed > 0) return insufficient(key, series, at, 'INVALID_CLOSED_CANDLE', dataDetails);
+  if (normalized.gaps > 0) return insufficient(key, series, at, 'CLOSED_CANDLE_SEQUENCE_HAS_GAPS', dataDetails);
+  if (rows.length < cfg.minClosedCandles) return insufficient(key, series, at, 'INSUFFICIENT_CLOSED_5M_CANDLES', dataDetails);
+  if (!['BINANCE_PUBLIC_WS', 'BINANCE_PUBLIC_REST', 'BINANCE_PUBLIC_REST_CACHE'].includes(source) &&
+      !rows.some(row => ['BINANCE_PUBLIC_WS', 'BINANCE_PUBLIC_REST', 'BINANCE_PUBLIC_REST_CACHE'].includes(String(row.source)))) {
+    return insufficient(key, series, at, 'UNVERIFIED_CANDLE_SOURCE', dataDetails);
+  }
+
+  const recent12 = rows.slice(-12);
+  const baseHigh = Math.max(...recent12.map(row => row.high));
+  const baseLow = Math.min(...recent12.map(row => row.low));
+  const meanClose = mean(recent12.map(row => row.close));
+  const baseRangePct = meanClose > 0 ? (baseHigh - baseLow) / meanClose * 100 : null;
+
+  const trs = trueRanges(rows);
+  const recentAtr = mean(trs.slice(-14));
+  const baselineAtr = mean(trs.slice(-28, -14));
+  const atrRatio = baselineAtr > 0 && recentAtr !== null ? recentAtr / baselineAtr : null;
+
+  const currentWidth = bollingerWidth(rows.slice(-20));
+  const oldWidths = [];
+  for (let end = 20; end <= rows.length - 20; end++) {
+    const width = bollingerWidth(rows.slice(end - 20, end));
+    if (Number.isFinite(width)) oldWidths.push(width);
+  }
+  const baselineWidth = median(oldWidths);
+  const bollingerWidthRatio = baselineWidth > 0 && currentWidth !== null ? currentWidth / baselineWidth : null;
+
+  const firstHalfLow = Math.min(...recent12.slice(0, 6).map(row => row.low));
+  const secondHalfLow = Math.min(...recent12.slice(6).map(row => row.low));
+  const supportUndercutPct = firstHalfLow > 0 ? (firstHalfLow - secondHalfLow) / firstHalfLow * 100 : null;
+  const higherLows = supportUndercutPct !== null && supportUndercutPct <= -0.02;
+  const stableSupport = supportUndercutPct !== null && supportUndercutPct <= cfg.maxSupportUndercutPct;
+  const supportConfirmed = higherLows || stableSupport;
+
+  const resistanceRows = rows.slice(-25, -1);
+  const resistance = resistanceRows.length ? Math.max(...resistanceRows.map(row => row.high)) : null;
+  const lastClose = Number(last.close);
+  const resistanceDistancePct = resistance !== null && lastClose > 0 ? (resistance - lastClose) / lastClose * 100 : null;
+  const nearResistance = Number.isFinite(resistanceDistancePct) &&
+    resistanceDistancePct >= -0.1 && resistanceDistancePct <= cfg.maxResistanceDistancePct;
+
+  // Missing volume/trade-count data are explicitly marked and never replaced with zero or synthetic values.
+  const volumeParticipation = gradualParticipation(rows, 'volume', cfg);
+  const tradeParticipation = gradualParticipation(rows, 'tradeCount', cfg);
+  const rangeScore = baseRangePct === null ? null : clamp(100 * (1 - baseRangePct / cfg.maxBaseRangePct));
+  const atrScore = atrRatio === null ? null : clamp(100 * (1 - atrRatio / 1.3));
+  const bbScore = bollingerWidthRatio === null ? null : clamp(100 * (1 - bollingerWidthRatio / 1.3));
+  const compressionScore = atrScore === null && bbScore === null ? null :
+    Math.max(atrScore ?? -1, bbScore ?? -1);
+  const structureScore = higherLows ? 100 : stableSupport ? 70 : 0;
+  const resistanceScore = nearResistance ? clamp(100 * (1 - Math.max(0, resistanceDistancePct) / cfg.maxResistanceDistancePct)) : 0;
+
+  // Early-expansion ranking: short-term direction + acceleration + actual activity/buy-flow.
+  // These are ranking inputs only; they never emit alerts or authorize an order.
+  const lastCloseOf = offset => numberOrNull(rows[rows.length - 1 - offset]?.close);
+  const closeReturnPct = offset => {
+    const current = numberOrNull(last.close), previous = lastCloseOf(offset);
+    return current !== null && previous !== null && previous > 0 ? (current / previous - 1) * 100 : null;
+  };
+  const momentum15m = closeReturnPct(3);
+  const previous15m = (() => {
+    const recent = lastCloseOf(3), older = lastCloseOf(6);
+    return recent !== null && older !== null && older > 0 ? (recent / older - 1) * 100 : null;
+  })();
+  const momentum1h = closeReturnPct(12);
+  const momentum4h = closeReturnPct(48);
+  const acceleration15m = momentum15m !== null && previous15m !== null ? momentum15m - previous15m : null;
+  const recentBars = rows.slice(-3);
+  const baselineBars = rows.slice(-27, -3);
+  const medianAvailable = values => median(values.map(numberOrNull).filter(value => value !== null && value >= 0));
+  const recentQuote = medianAvailable(recentBars.map(row => row.quoteVolume));
+  const baselineQuote = medianAvailable(baselineBars.map(row => row.quoteVolume));
+  const recentVolume = recentQuote ?? medianAvailable(recentBars.map(row => row.volume));
+  const baselineVolume = baselineQuote ?? medianAvailable(baselineBars.map(row => row.volume));
+  const volumeRatio = recentVolume !== null && baselineVolume > 0 ? recentVolume / baselineVolume : null;
+  const recentTrades = medianAvailable(recentBars.map(row => row.tradeCount));
+  const baselineTrades = medianAvailable(baselineBars.map(row => row.tradeCount));
+  const tradeRatio = recentTrades !== null && baselineTrades > 0 ? recentTrades / baselineTrades : null;
+  const buyQuoteValues = recentBars.map(row => numberOrNull(row.takerBuyQuoteVolume));
+  const quoteValues = recentBars.map(row => numberOrNull(row.quoteVolume));
+  const buyPressure = buyQuoteValues.every(value => value !== null) && quoteValues.every(value => value !== null) &&
+    quoteValues.reduce((sum, value) => sum + value, 0) > 0
+    ? buyQuoteValues.reduce((sum, value) => sum + value, 0) / quoteValues.reduce((sum, value) => sum + value, 0)
+    : null;
+  const momentum15Score = momentum15m === null ? null : clamp(50 + momentum15m * 30);
+  const momentum1hScore = momentum1h === null ? null : clamp(50 + momentum1h * 12);
+  const accelerationScore = acceleration15m === null ? null : clamp(50 + acceleration15m * 25);
+  const volumeScore = volumeRatio !== null && volumeRatio > 0 ? clamp(50 + Math.log2(Math.max(0.125, volumeRatio)) * 25) : null;
+  const tradeScore = tradeRatio !== null && tradeRatio > 0 ? clamp(50 + Math.log2(Math.max(0.125, tradeRatio)) * 25) : null;
+  const buyPressureScore = buyPressure === null ? null : clamp((buyPressure - 0.4) * 500);
+  const guardedParts = [
+    [momentum15Score, 0.24], [momentum1hScore, 0.20], [accelerationScore, 0.14],
+    [volumeScore, 0.16], [tradeScore, 0.06], [buyPressureScore, 0.12],
+    [structureScore, 0.04], [resistanceScore, 0.04]
+  ].filter(([value, weight]) => value !== null && weight > 0);
+  const guardedWeight = guardedParts.reduce((sum, [, weight]) => sum + weight, 0);
+  let expansionScore = guardedWeight > 0
+    ? guardedParts.reduce((sum, [value, weight]) => sum + value * weight, 0) / guardedWeight
+    : null;
+  const overextensionPenalty =
+    (momentum4h !== null ? Math.max(0, momentum4h - 5) * 3 : 0) +
+    (momentum1h !== null ? Math.max(0, momentum1h - 3) * 4 : 0);
+  if (expansionScore !== null) expansionScore = Math.max(0, expansionScore - overextensionPenalty);
+
+  const participationScores = [];
+  if (volumeParticipation.available) participationScores.push(volumeParticipation.improving ? 100 : clamp(100 * volumeParticipation.recentRatio / cfg.minParticipationRatio));
+  if (tradeParticipation.available) participationScores.push(tradeParticipation.improving ? 100 : clamp(100 * tradeParticipation.recentRatio / cfg.minParticipationRatio));
+  const parts = [
+    [rangeScore, 0.25], [compressionScore, 0.25],
+    [structureScore, 0.20], [resistanceScore, 0.20],
+    [participationScores.length ? mean(participationScores) : null, 0.10]
+  ].filter(([score]) => score !== null);
+  const weight = parts.reduce((sum, [, w]) => sum + w, 0);
+  const score = weight > 0 ? parts.reduce((sum, [partScore, w]) => sum + partScore * w, 0) / weight : null;
+  const compressionConfirmed = (atrRatio !== null && atrRatio <= cfg.maxAtrRatio) ||
+    (bollingerWidthRatio !== null && bollingerWidthRatio <= cfg.maxBollingerWidthRatio);
+  const coreConditions = {
+    narrow_base: baseRangePct !== null && baseRangePct <= cfg.maxBaseRangePct,
+    volatility_compression: compressionConfirmed,
+    support_structure: supportConfirmed,
+    resistance_proximity: nearResistance
+  };
+  const candidate = Object.values(coreConditions).filter(Boolean).length >= 2 ||
+    (coreConditions.narrow_base && coreConditions.volatility_compression && coreConditions.support_structure) ||
+    (coreConditions.narrow_base && coreConditions.support_structure && coreConditions.resistance_proximity);
+  const failedConditions = Object.entries(coreConditions).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    symbol: key, layer_visited: true, evaluated: true, scanned: true, scanned_at: at,
+    source, data_age_ms: age, latest_candle_close_time_ms: last.closeTime,
+    result: candidate ? 'LIGHT_CANDIDATE' : 'LIGHT_REJECTED',
+    reason: candidate ? 'LIGHT_FEATURES_RANK_ONLY' : 'INSUFFICIENT_LIGHT_CONFLUENCE',
+    rejection_reason: candidate ? null : (failedConditions[0] || 'INSUFFICIENT_LIGHT_CONFLUENCE'),
+    candidate,
+    candidate_score: score === null ? null : Number(score.toFixed(4)),
+    expansion_score: expansionScore === null ? null : Number(expansionScore.toFixed(4)),
+    light_rank: null, rank_basis: 'LIGHT_EVIDENCE', candidate_rank: null,
+    closed_candles_only: true, future_candles_excluded: normalized.futureExcluded,
+    metrics: {
+      bars_used: rows.length,
+      last_candle_close_time_ms: last.closeTime,
+      base_range_pct: baseRangePct,
+      atr_ratio: atrRatio,
+      bollinger_width_ratio: bollingerWidthRatio,
+      higher_lows: higherLows,
+      stable_support: stableSupport,
+      support_undercut_pct: supportUndercutPct,
+      resistance_distance_pct: resistanceDistancePct,
+      volume_participation: volumeParticipation,
+      trade_count_participation: tradeParticipation,
+      expansion_ranking: {
+        momentum15m_pct: momentum15m, momentum1h_pct: momentum1h, momentum4h_pct: momentum4h,
+        acceleration15m_pct: acceleration15m, volume_ratio: volumeRatio, trade_ratio: tradeRatio,
+        taker_buy_quote_share: buyPressure, overextension_penalty: overextensionPenalty,
+        score: expansionScore
+      },
+      core_conditions: coreConditions,
+      optional_participation_available: volumeParticipation.available || tradeParticipation.available
+    },
+    details: dataDetails
+  };
+}
+
+function insufficient(symbol, series, now, reason, details = {}) {
+  const candles = Array.isArray(series?.candles) ? series.candles : [];
+  const lastClosed = candles.filter(x => x?.closed === true && KNOWN(x.closeTime) && Number(x.closeTime) <= now)
+    .sort((a, b) => Number(a.closeTime) - Number(b.closeTime)).at(-1) || null;
+  const cacheState = reason === 'CANDLE_CACHE_MISSING' ? 'CANDLE_CACHE_MISSING' :
+    reason === 'STALE_CLOSED_5M_CACHE' ? 'STALE_DATA' :
+    reason === 'INSUFFICIENT_CLOSED_5M_CANDLES' ? 'CANDLE_CACHE_INCOMPLETE' : 'INVALID_DATA';
+  return {
+    symbol, layer_visited: true, evaluated: false, scanned: false, scanned_at: now,
+    evaluated_at: now, visited_at: now, evaluation_reused: false, new_closed_candle: false,
+    cache_state: cacheState, data_is_fresh: false,
+    source: String(series?.source || lastClosed?.source || 'NO_CACHE'),
+    data_age_ms: lastClosed ? Math.max(0, now - Number(lastClosed.closeTime)) : null,
+    latest_candle_close_time_ms: lastClosed?.closeTime ?? null,
+    result: 'DATA_INSUFFICIENT', reason, rejection_reason: reason,
+    candidate: false, candidate_score: null, light_rank: null, rank_basis: 'NO_VALID_LIGHT_DATA', candidate_rank: null,
+    closed_candles_only: true, future_candles_excluded: Number(details.futureExcluded || 0),
+    metrics: null, details
+  };
+}
+
+/**
+ * Every eligible symbol is audited once. Candidate selection is a prefilter,
+ * not an alert decision. Exceptional and rotation lanes are independent of
+ * light score, so cold-cache symbols can still reach Micro for cache seeding.
+ */
+export class MarketWideLightScan {
+  constructor({config = {}, clock = () => Date.now()} = {}) {
+    this.config = {...MARKET_WIDE_LIGHT_SCAN_DEFAULTS, ...config};
+    this.clock = clock;
+    this.lastCandidateCycleBySymbol = new Map();
+    this.lastEvaluationBySymbol = new Map();
+  }
+
+  scan({
+    eligible = [], getSeries = () => null, now = this.clock(), cycle = 0,
+    isExceptional = () => false, lastMicroScannedAt = () => null
+  } = {}) {
+    const at = Number(now), cycleNumber = Math.max(0, Math.trunc(Number(cycle) || 0));
+    const uniqueRows = [], duplicateSymbols = [];
+    const seen = new Set();
+    for (const row of Array.isArray(eligible) ? eligible : []) {
+      const symbol = symbolOf(row);
+      if (!symbol) continue;
+      if (seen.has(symbol)) { duplicateSymbols.push(symbol); continue; }
+      seen.add(symbol); uniqueRows.push(row);
+    }
+    const eligibleTotal = uniqueRows.length;
+    const maxSymbols = Math.max(1, Math.trunc(Number(this.config.maxEligibleSymbols) || 1200));
+    if (eligibleTotal > maxSymbols) throw new Error('MARKET_WIDE_LIGHT_ELIGIBLE_LIMIT_EXCEEDED');
+    for (const symbol of this.lastEvaluationBySymbol.keys()) {
+      if (!seen.has(symbol)) this.lastEvaluationBySymbol.delete(symbol);
+    }
+
+    const audit = new Map();
+    const evaluated = [];
+    const exceptional = [];
+    for (const row of uniqueRows) {
+      const symbol = symbolOf(row);
+      const series = getSeries(symbol);
+      const latestClosed = Array.isArray(series?.candles)
+        ? series.candles.filter(candle => candle?.closed === true && KNOWN(candle.openTime) &&
+          KNOWN(candle.closeTime) && Number(candle.closeTime) <= at)
+          .sort((a, b) => Number(a.closeTime) - Number(b.closeTime)).at(-1) || null
+        : null;
+      const latestCloseTime = latestClosed ? Number(latestClosed.closeTime) : null;
+      const signature = latestClosed ? [
+        latestClosed.openTime, latestClosed.closeTime, latestClosed.open,
+        latestClosed.high, latestClosed.low, latestClosed.close
+      ].map(value => String(value)).join(':') : null;
+      const previous = this.lastEvaluationBySymbol.get(symbol);
+      const sameCandle = Boolean(signature && previous?.signature === signature);
+      const age = latestCloseTime === null ? null : Math.max(0, at - latestCloseTime);
+      const cacheRegression = Boolean(signature && previous &&
+        latestCloseTime < Number(previous.latestCloseTime));
+      const candleRevision = Boolean(signature && previous &&
+        latestCloseTime === Number(previous.latestCloseTime) && signature !== previous.signature);
+      let result;
+      if (cacheRegression || candleRevision) {
+        const reason = cacheRegression ? 'CACHE_TIME_REGRESSION' : 'CLOSED_CANDLE_REVISION';
+        result = {
+          ...insufficient(symbol, series, at, reason, {
+            observed_latest_close_time_ms: latestCloseTime,
+            previous_latest_close_time_ms: previous.latestCloseTime
+          }),
+          evaluated_at: at,
+          visited_at: at,
+          evaluation_reused: false,
+          new_closed_candle: false,
+          data_is_fresh: false,
+          cache_state: 'STALE_DATA',
+          evaluation_kind: cacheRegression ? 'CACHE_REGRESSION' : 'CANDLE_REVISION'
+        };
+      } else if (sameCandle && age <= this.config.maxCandleAgeMs) {
+        result = {
+          ...previous.result,
+          data_age_ms: age,
+          latest_candle_close_time_ms: latestCloseTime,
+          evaluated_at: previous.evaluatedAt,
+          visited_at: at,
+          evaluation_reused: true,
+          new_closed_candle: false,
+          data_is_fresh: true,
+          evaluation_kind: 'REUSED_CLOSED_CANDLE'
+        };
+      } else if (sameCandle && previous.result?.reason === 'STALE_CLOSED_5M_CACHE') {
+        result = {
+          ...previous.result,
+          data_age_ms: age,
+          latest_candle_close_time_ms: latestCloseTime,
+          evaluated_at: previous.evaluatedAt,
+          visited_at: at,
+          evaluation_reused: true,
+          new_closed_candle: false,
+          data_is_fresh: false,
+          evaluation_kind: 'REUSED_STALE_REJECTION'
+        };
+      } else {
+        result = evaluateMarketWideLightCandidate({symbol, series, now: at, config: this.config});
+        const newClosedCandle = latestCloseTime !== null &&
+          (!previous || latestCloseTime > Number(previous.latestCloseTime));
+        result = {
+          ...result,
+          evaluated_at: at,
+          visited_at: at,
+          evaluation_reused: false,
+          new_closed_candle: newClosedCandle,
+          data_is_fresh: result.evaluated === true,
+          evaluation_kind: newClosedCandle ? 'NEW_CLOSED_CANDLE' : 'NO_NEW_CLOSED_CANDLE'
+        };
+        if (signature) {
+          this.lastEvaluationBySymbol.set(symbol, {
+            signature,
+            latestCloseTime,
+            evaluatedAt: at,
+            result: {...result}
+          });
+        }
+      }
+      if (!result.cache_state && result.evaluated) result.cache_state = 'READY';
+      const exceptionalFlag = Boolean(isExceptional(row));
+      const microAtRaw = lastMicroScannedAt(symbol);
+      result.exceptional_priority = exceptionalFlag;
+      result.last_micro_scanned_at = KNOWN(microAtRaw) ? Number(microAtRaw) : null;
+      result.last_light_candidate_cycle = this.lastCandidateCycleBySymbol.get(symbol) ?? null;
+      result.candidate_selected = false;
+      result.candidate_selection_reason = null;
+      result.non_directional_base_asset = !isDirectionalCandidateSymbol(symbol);
+      result.candidate_selection_exclusion_reason = result.non_directional_base_asset
+        ? 'NON_DIRECTIONAL_BASE_ASSET' : null;
+      audit.set(symbol, result);
+      if (result.evaluated) evaluated.push({row, result, symbol});
+      // The non-directional set remains in the audit/coverage ledger but never
+      // takes over Micro slots, even when generic fast-shock heuristics fire.
+      if (exceptionalFlag && !result.non_directional_base_asset) exceptional.push({row, result, symbol});
+    }
+
+    const limit = Math.min(eligibleTotal, Math.max(1, Math.trunc(Number(this.config.candidateLimit) || 48)));
+    const rotationReserve = Math.min(Math.max(0, Math.trunc(Number(this.config.rotationReserve) || 0)), Math.max(0, limit - 1));
+    const selected = [], selectedSymbols = new Set();
+    const add = (item, reason) => {
+      if (!item || selected.length >= limit || selectedSymbols.has(item.symbol)) return false;
+      selectedSymbols.add(item.symbol);
+      selected.push({...item, selectionReason: reason});
+      const entry = audit.get(item.symbol);
+      if (entry) {
+        entry.candidate_selected = true;
+        entry.candidate_selection_reason = reason;
+        entry.candidate_selection_exclusion_reason = null;
+      }
+      return true;
+    };
+    const lastMicro = item => item.result.last_micro_scanned_at;
+    const lastCandidate = item => this.lastCandidateCycleBySymbol.get(item.symbol) ?? -Infinity;
+    const fairOrder = (a, b) =>
+      Number(b.result.exceptional_priority) - Number(a.result.exceptional_priority) ||
+      Number(lastMicro(a) !== null) - Number(lastMicro(b) !== null) ||
+      (lastMicro(a) ?? -Infinity) - (lastMicro(b) ?? -Infinity) ||
+      lastCandidate(a) - lastCandidate(b) ||
+      a.symbol.localeCompare(b.symbol);
+
+    const exceptionLimit = Math.min(
+      exceptional.length,
+      Math.max(0, limit - rotationReserve),
+      Math.max(1, Math.min(4, Math.floor(limit * 0.2)))
+    );
+    for (const item of [...exceptional].sort(fairOrder)) {
+      if (selected.filter(row => row.selectionReason === 'EXCEPTIONAL_PRESERVED').length >= exceptionLimit) break;
+      add(item, 'EXCEPTIONAL_PRESERVED');
+    }
+
+    const rotationCount = Math.min(rotationReserve, Math.max(0, limit - selected.length));
+    const scoreLimit = Math.max(0, limit - rotationReserve);
+    const ranked = [...evaluated].filter(item => isDirectionalCandidateSymbol(item.symbol)).sort((a, b) =>
+      Number(b.result.expansion_score ?? -1) - Number(a.result.expansion_score ?? -1) ||
+      Number(b.result.metrics?.optional_participation_available) - Number(a.result.metrics?.optional_participation_available) ||
+      Number(b.result.candidate) - Number(a.result.candidate) ||
+      Number(b.result.candidate_score ?? -1) - Number(a.result.candidate_score ?? -1) ||
+      fairOrder(a, b));
+    for (const item of ranked) {
+      if (selected.length >= scoreLimit) break;
+      add(item, 'GUARDED_MOMENTUM_SCORE_SELECTED');
+    }
+    ranked.forEach((item, index) => {
+      const entry = audit.get(item.symbol);
+      if (entry) { entry.light_rank = index + 1; entry.rank_basis = 'GUARDED_MOMENTUM_EVIDENCE'; }
+    });
+    const allRotationPool = [...uniqueRows].map(row => {
+      const symbol = symbolOf(row);
+      return {row, symbol, result: audit.get(symbol), _priority: 0};
+    }).sort(fairOrder);
+    allRotationPool.forEach((item, index) => {
+      const entry = audit.get(item.symbol);
+      if (entry && entry.light_rank === null) {
+        entry.light_rank = ranked.length + index + 1;
+        entry.rank_basis = !isDirectionalCandidateSymbol(item.symbol)
+          ? 'NON_DIRECTIONAL_BASE_ASSET_EXCLUDED'
+          : item.result?.evaluated ? 'LIGHT_SCORE_FALLBACK' : 'FAIR_ROTATION_NO_VALID_LIGHT_DATA';
+      }
+    });
+    const rotationPool = allRotationPool.filter(item => isDirectionalCandidateSymbol(item.symbol));
+    for (const item of rotationPool) {
+      if (selected.length >= limit) break;
+      add(item, item.result?.evaluated ? 'FAIR_ROTATION_VALID_DATA' : 'FAIR_ROTATION_CACHE_WARMUP');
+    }
+    for (const item of ranked) {
+      if (selected.length >= limit) break;
+      add(item, 'LIGHT_RANK_FILL');
+    }
+
+    selected.forEach((item, index) => {
+      const entry = audit.get(item.symbol);
+      if (entry) entry.candidate_rank = index + 1;
+      this.lastCandidateCycleBySymbol.set(item.symbol, cycleNumber);
+    });
+    const evaluatedTotal = evaluated.length;
+    const validCandidateTotal = evaluated.filter(item => item.result.candidate).length;
+    const scanRows = [...audit.values()];
+    const minimumReady = Math.max(1, Math.trunc(Number(this.config.minimumReadyCandidates) || 24));
+    const coverageReady = eligibleTotal > 0 && evaluatedTotal === eligibleTotal;
+    const selectedExceptional = selected.filter(item => item.selectionReason === 'EXCEPTIONAL_PRESERVED').length;
+    const summary = {
+      eligible_total: eligibleTotal,
+      duplicate_symbol_total: duplicateSymbols.length,
+      duplicate_symbols: [...new Set(duplicateSymbols)],
+      evaluated_total: evaluatedTotal,
+      not_evaluated_total: eligibleTotal - evaluatedTotal,
+      fresh_cache_coverage_ratio: eligibleTotal ? evaluatedTotal / eligibleTotal : 0,
+      new_closed_candle_total: scanRows.filter(item => item.new_closed_candle === true).length,
+      reused_evaluation_total: scanRows.filter(item => item.evaluation_reused === true).length,
+      no_new_closed_candle_total: scanRows.filter(item => item.evaluation_kind === 'NO_NEW_CLOSED_CANDLE' ||
+        item.evaluation_kind === 'REUSED_CLOSED_CANDLE' || item.evaluation_kind === 'REUSED_STALE_REJECTION').length,
+      cache_missing_total: scanRows.filter(item => item.cache_state === 'CANDLE_CACHE_MISSING').length,
+      stale_total: scanRows.filter(item => item.cache_state === 'STALE_DATA' || item.reason === 'STALE_CLOSED_5M_CACHE').length,
+      invalid_total: scanRows.filter(item => item.reason === 'INVALID_CLOSED_CANDLE' || item.reason === 'CLOSED_CANDLE_SEQUENCE_HAS_GAPS').length,
+      light_candidate_total: validCandidateTotal,
+      non_directional_excluded_total: scanRows.filter(item => item.non_directional_base_asset === true).length,
+      micro_candidate_pool_total: selected.length,
+      rotation_reserve_configured: rotationReserve,
+      exceptional_preserved_total: selectedExceptional,
+      cache_coverage_ready: coverageReady,
+      selection_mode: coverageReady ? 'MARKET_WIDE_CANDIDATE_POOL' : 'BOOTSTRAP_FULL_UNIVERSE',
+      candidate_to_micro_total: null,
+      candidate_to_deep_total: null,
+      micro_pre_expansion_total: null,
+      deep_pre_expansion_total: null,
+      scan_duration_ms: null,
+      binance_rest_calls_added_by_light_scan: 0
+    };
+    const candidateRows = selected.map(item => ({
+      ...item.row,
+      _marketWideLightScan: audit.get(item.symbol),
+      _marketWideLightScore: item.result?.candidate_score ?? null,
+      _marketWideExpansionScore: item.result?.expansion_score ?? null,
+      _marketWideLightFallback: item.result?.evaluated !== true,
+      _marketWideLightSelectionReason: item.selectionReason,
+      _marketWideLightRank: audit.get(item.symbol)?.light_rank ?? null,
+      _marketWideLightPoolRank: audit.get(item.symbol)?.candidate_rank ?? null
+    }));
+    return {
+      summary, audit, candidateRows,
+      candidateSymbols: selected.map(item => item.symbol),
+      selected, uniqueRows, eligibleTotal, evaluatedTotal,
+      coverageReady, scannedAt: at, cycle: cycleNumber
+    };
+  }
+}
