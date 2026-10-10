@@ -84,12 +84,24 @@ test('Radar 8 Micro quiet-base summary survives durable archive append and reloa
     cycle_number:1,radar:'RADAR_8',quote:'USDT',status:'COMPLETE',
     started_at:at,completed_at:at+2000,
     data_policy:{closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
-    counters:{micro_selected_total:12,quiet_base_pre_expansion_micro:summary},
+    counters:{micro_selected_total:12,quiet_base_pre_expansion_micro:summary,
+      operational_telemetry_schema:'RADAR8_OPERATIONAL_TELEMETRY_V1',
+      rest_request_telemetry:{
+        schema_version:'RADAR8_REST_TELEMETRY_V1',cycle_id:'RADAR8:USDT:'+at,
+        logical_calls:3,cache_hits:1,coalesced_calls:0,actual_http_attempts:2,
+        by_stage:{MICRO_5M:{logical_calls:1,actual_http_attempts:1,http_2xx:1}},
+        calls:[{stage:'MICRO_5M',symbol:'ARCHIVEUSDT',path:'/api/v3/klines',outcome:'HTTP_SUCCESS',
+          actual_http_attempts:[{attempt:1,host:'data-api.binance.vision',http_status:200,latency_ms:31,estimated_weight:2}]}],
+        process_rest_delta:{available:true,scope:'SHARED_REST_ALL_RADARS',actual_http_attempts:4,http_2xx:4,rate_limits:0}
+      }},
     coins:[{
       symbol:'ARCHIVEUSDT',eligible:true,fast_scan_at:at+100,
+      micro_selection_rank:7,micro_selection_score:84.2,micro_selection_selected:true,
+      micro_selection_reason:'SELECTED_QUIET',micro_selection_lane:'quiet',
       micro_selected_at:at+200,micro_scan_started_at:at+300,micro_scan_completed_at:at+900,
-      micro_fingerprint:{quiet_base_pre_expansion:{fingerprint:'QUIET_BASE_PRE_EXPANSION',classification:'PRE_EXPANSION',detected:true,closed_candles_only:true}},
-      deep_scan_status:'DEFERRED'
+      micro_fingerprint:{score:71,quiet_base_pre_expansion:{fingerprint:'QUIET_BASE_PRE_EXPANSION',classification:'PRE_EXPANSION',detected:true,closed_candles_only:true}},
+      deep_score_rank:1,deep_selection_rank:2,deep_selection_score:71,deep_selection_selected:true,
+      deep_selection_reason:'SELECTED_QUIET',deep_selection_lane:'quiet',deep_scan_status:'COMPLETED'
     }]
   };
   const write=await store.appendScanJourneyCycle(cycle);
@@ -98,6 +110,12 @@ test('Radar 8 Micro quiet-base summary survives durable archive append and reloa
   const restored=await freshStore.readScanJourneyCycles({limit:1});
   assert.equal(restored.length,1);
   assert.deepEqual(restored[0].counters.quiet_base_pre_expansion_micro,summary);
+  assert.equal(restored[0].counters.rest_request_telemetry.actual_http_attempts,2);
+  assert.equal(restored[0].counters.rest_request_telemetry.calls[0].actual_http_attempts[0].latency_ms,31);
+  assert.equal(restored[0].coins[0].micro_selection_rank,7);
+  assert.equal(restored[0].coins[0].micro_selection_reason,'SELECTED_QUIET');
+  assert.equal(restored[0].coins[0].deep_selection_rank,2);
+  assert.equal(restored[0].coins[0].deep_selection_selected,true);
   assert.equal(restored[0].coins[0].micro_fingerprint.quiet_base_pre_expansion.classification,'PRE_EXPANSION');
   assert.equal(restored[0].data_policy.paper_trading,true);
   assert.equal(restored[0].data_policy.real_order_execution,false);
