@@ -2102,9 +2102,15 @@ export class EarlyExpansionRadar{
             schema_version:SCAN_JOURNEY_SCHEMA,cycle_id:journey.cycle_id,cycle_number:journey.cycle_number||this.scans+1,
             radar:'RADAR_8',quote:journey.quote,status:'FAILED',error:this.lastError,
             started_at:scanStartedAt,completed_at:failedAt,source:journey.raw_ticker_source||INCOMPLETE,
+            scan_duration_ms:Math.max(0,failedAt-scanStartedAt),
             data_policy:{closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
-            counters:{expected_total:journey.expected_symbols.length||this.universe.length,received_total:journey.received_symbols.length||0,
+            phase_timings_ms:normalizeMissing(phaseTimings),
+            counters:{operational_telemetry_schema:'RADAR8_OPERATIONAL_TELEMETRY_V1',
+              rest_request_telemetry:await this.currentCycleRestTelemetry(failedAt),
+              expected_total:journey.expected_symbols.length||this.universe.length,received_total:journey.received_symbols.length||0,
               eligible_total:journey.eligible_symbols.length||0,micro_selected_total:journeyMicroBySymbol.size,deep_attempted_total:journeyDeepBySymbol.size,
+              micro_selected_symbols:[...journeyMicroBySymbol.keys()],
+              deep_selected_symbols:[...journeyDeepBySymbol.keys()],
               failed_stage:'SCAN_CYCLE_FAILED',error:this.lastError},
             coins
           };
@@ -2119,7 +2125,10 @@ export class EarlyExpansionRadar{
       }
       this.lastResult={...emptyEarlyExpansionSnapshot(this.config,quote,this.lastError),schema_version:'RADAR8_V2',as_of:new Date(scanStartedAt).toISOString()};
       return false;
-    }finally{await this.scheduler.flush();this.busy=false;}
+    }finally{
+      try{await this.scheduler.flush();}
+      finally{this.activeCycleRestTelemetry=null;this.busy=false;}
+    }
   }
   snapshot(limit=100,quote=this.config.quote){
     const q=this.normalizeQuote(quote);
