@@ -1,0 +1,59 @@
+name: RadarX Full-Market Cache Warm-up Proof
+
+on:
+  push:
+    branches:
+      - feature/build224-market-wide-light-scan-20261010
+    paths:
+      - 'phase2/tools/market-wide-cache-warmup.mjs'
+      - 'phase2/market/market-wide-kline-cache.mjs'
+      - 'phase2/market/binance-ws.mjs'
+      - 'phase2/market/universe-scanner.mjs'
+      - 'phase2/tests/market-wide-light-scan.test.mjs'
+      - '.github/workflows/market-wide-cache-warmup.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: market-wide-cache-warmup-proof
+  cancel-in-progress: false
+
+jobs:
+  full-market-warmup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      RADARX_MARKET_WIDE_WARMUP_MAX_MINUTES: '330'
+      RADARX_MARKET_WIDE_WARMUP_REPORT: artifacts/market-wide-cache-warmup.json
+    steps:
+      - name: Checkout isolated PR branch
+        uses: actions/checkout@v4
+        timeout-minutes: 5
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        timeout-minutes: 5
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+        timeout-minutes: 10
+      - name: Validate warm-up code and coverage gate
+        run: |
+          node --check phase2/tools/market-wide-cache-warmup.mjs
+          node --check phase2/market/market-wide-kline-cache.mjs
+          node --check phase2/market/binance-ws.mjs
+          node phase2/tests/run-tests.mjs phase2
+        timeout-minutes: 35
+      - name: Collect full eligible Spot USDT market through bounded combined WebSocket
+        run: node phase2/tools/market-wide-cache-warmup.mjs
+        timeout-minutes: 340
+      - name: Upload per-symbol warm-up report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-market-wide-cache-warmup-report
+          path: artifacts/market-wide-cache-warmup.json
+          if-no-files-found: warn
+          retention-days: 7
