@@ -131,6 +131,7 @@ export class MarketWideKlineCache {
     this.lastStreamError = null;
     this.receivedClosedCandles = 0;
     this.receivedMessages = 0;
+    this.duplicateClosedCandleFrames = 0;
     this.rejectedCandles = 0;
     this.streamGeneration = 0;
     this.attachRestKlineObserver();
@@ -249,7 +250,10 @@ export class MarketWideKlineCache {
           return left === right;
         });
       // Repeated frames/copies of the same closed bar are not new market data.
-      if (sameBar) return false;
+      if (sameBar) {
+        this.duplicateClosedCandleFrames++;
+        return false;
+      }
       // Don't let a delayed REST response overwrite a newer websocket observation.
       if (old.source === 'BINANCE_PUBLIC_WS' && candle.source !== 'BINANCE_PUBLIC_WS') return false;
       if (candle.source !== 'BINANCE_PUBLIC_WS' && Number(candle.receivedAt) < Number(old.receivedAt)) return false;
@@ -382,6 +386,7 @@ export class MarketWideKlineCache {
       cached_closed_candles: candleCount,
       received_messages: this.receivedMessages,
       received_closed_candles: this.receivedClosedCandles,
+      duplicate_closed_candle_frames: this.duplicateClosedCandleFrames,
       rejected_candles: this.rejectedCandles,
       reconnect_attempts: wsHealth.reconnect_attempts ?? 0,
       consecutive_reconnect_attempts: wsHealth.consecutive_reconnect_attempts ?? 0,
