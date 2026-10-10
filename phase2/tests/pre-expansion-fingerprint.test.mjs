@@ -87,6 +87,30 @@ function flat(n=80,start=100,step=300_000){
     return {openTime,closeTime:openTime+step-1,open:close-.005,high:close+.02,low:close-.02,close,volume:1200,quoteVolume:close*1200,tradeCount:120,takerBuyBaseVolume:600,closed:true};
   });
 }
+test('Radar 8 full evidence path does not crash when the closed-candle middle participation bucket is zero',()=>{
+  const five=flat(80,1,300_000);
+  const pattern=[100,100,100,100,0,0,0,0,150,150,150,150];
+  for(let i=0;i<12;i++){
+    const row=five[five.length-12+i];
+    row.volume=pattern[i];
+    row.quoteVolume=row.close*pattern[i];
+    row.tradeCount=pattern[i];
+    row.takerBuyBaseVolume=pattern[i]*0.5;
+  }
+  const last=five.at(-1);
+  const result=buildEarlyExpansionEvidence({
+    series:{'5m':five},
+    ticker:{symbol:'XUSDUSDT',lastPrice:last.close,priceChange24h:1.4,quoteVolume24h:2_500_000,tradeCount24h:12_000},
+    now:last.closeTime+1
+  });
+  assert.equal(result.pre_expansion_stage,'DATA_INSUFFICIENT');
+  assert.equal(result.pre_expansion_fingerprint.metrics.volume_trend.available,true);
+  assert.equal(result.pre_expansion_fingerprint.metrics.volume_trend.middle,0);
+  assert.equal(result.pre_expansion_fingerprint.metrics.volume_trend.step_ratio,null);
+  assert.equal(result.pre_expansion_fingerprint.metrics.volume_trend.improving,false);
+  assert.equal(result.pre_expansion_fingerprint.metrics.trade_trend.step_ratio,null);
+});
+
 function falconInput({dailyMove=2.8,wickFailure=false}={}){
   const now=1_800_000_000_000+240*60_000,one=risingBase(),five=flat(),btc=flat();
   if(wickFailure){
