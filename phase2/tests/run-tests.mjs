@@ -49,6 +49,7 @@ const phase2=[
   'phase2/tests/source-policy.test.mjs',
   'phase2/tests/staging-preflight.test.mjs',
   'phase2/tests/store.test.mjs',
+  'phase2/tests/scan-journey-ledger.test.mjs',
   'phase2/tests/strategy-market-radar-integration.test.mjs',
   'phase2/tests/strong-move-radar.test.mjs',
   'phase2/tests/whale-accumulation-radar.test.mjs',
