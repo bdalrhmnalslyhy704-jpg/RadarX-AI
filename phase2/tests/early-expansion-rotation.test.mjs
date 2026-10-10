@@ -271,3 +271,102 @@ test('Radar 8 deep scan de-duplicates row-wrapped candidates and fills ten slots
   assert.equal(new Set(selected.map(x=>x.row.symbol)).size,10);
   assert.equal(selected.filter(x=>x._selection_lane==='quiet').length,5);
 });
+
+
+test('Radar 8 PRE_EXPANSION ranks ahead of WATCH_EARLY in the single quiet Deep slot',()=>{
+  const radar=makeRadar({deepCandidates:3,quietReserve:1,rotationReserve:1,exceptionalRotationBypassSlots:0});
+  const strong=candidate('STRONGUSDT',1.4,{score:98});
+  const watch=candidate('WATCHUSDT',0.8,{score:97});
+  watch.micro_fingerprint.quiet_base_pre_expansion={
+    fingerprint:'QUIET_BASE_PRE_EXPANSION',classification:'WATCH_EARLY',detected:false,closed_candles_only:true,evidence:[]
+  };
+  const pre=candidate('PREUSDT',1.2,{score:60,participation:54,tradeParticipation:52,structure:55,compression:50});
+  pre.micro_fingerprint.quiet_base_pre_expansion={
+    fingerprint:'QUIET_BASE_PRE_EXPANSION',classification:'PRE_EXPANSION',detected:true,closed_candles_only:true,evidence:[]
+  };
+  const selected=radar.selectDeepFromMicro([strong,watch,pre,watch],17);
+  assert.equal(selected.length,3);
+  assert.equal(new Set(selected.map(x=>x.row.symbol)).size,3,'duplicate symbols must not consume multiple slots');
+  const quiet=selected.filter(x=>x._selection_lane==='quiet'||x._selection_lane==='fill_quiet');
+  assert.equal(quiet.length,1,'Deep capacity 3 must retain only one quiet seat');
+  assert.equal(quiet[0].row.symbol,'PREUSDT');
+  assert.equal(pre.micro_fingerprint.eligible,false,'PRE prioritization is observation priority, not a buy flag');
+});
+
+test('Radar 8 WATCH_EARLY cannot displace independent quiet evidence even with a higher micro score',()=>{
+  const radar=makeRadar({deepCandidates:3,quietReserve:1,rotationReserve:1,exceptionalRotationBypassSlots:0});
+  const strong=candidate('COREUSDT',1.2,{score:99});
+  const independent=candidate('INDEPENDENTQUIETUSDT',1.1,{score:62});
+  const watch=candidate('WATCHONLYUSDT',0.6,{score:98});
+  watch.micro_fingerprint.quiet_base_pre_expansion={
+    fingerprint:'QUIET_BASE_PRE_EXPANSION',classification:'WATCH_EARLY',detected:false,closed_candles_only:true,evidence:[]
+  };
+  const selected=radar.selectDeepFromMicro([strong,watch,independent],18);
+  assert.ok(selected.some(x=>x.row.symbol==='COREUSDT'));
+  assert.ok(selected.some(x=>x.row.symbol==='INDEPENDENTQUIETUSDT'&&x._selection_lane==='quiet'),
+    JSON.stringify(selected.map(x=>({symbol:x.row.symbol,lane:x._selection_lane}))));
+  assert.equal(selected.find(x=>x.row.symbol==='WATCHONLYUSDT')?._selection_lane,'rotation',
+    'WATCH may only reach the cycle through the existing fair-rotation lane here');
+  assert.equal(watch.micro_fingerprint.eligible,false);
+});
+
+test('Radar 8 WATCH_EARLY without strong independent quiet rank cannot reserve the quiet seat',()=>{
+  const radar=makeRadar({deepCandidates:3,quietReserve:1,rotationReserve:1,exceptionalRotationBypassSlots:0});
+  const strong=candidate('CORE2USDT',1.1,{score:99});
+  const watch=candidate('WEAKWATCHUSDT',1.0,{score:98,participation:40,tradeParticipation:38,structure:35,compression:35,volume:.9,trades:.8});
+  watch.micro_fingerprint.metrics.bb_ratio=1.25;
+  watch.micro_fingerprint.metrics.range_compression_ratio=1.2;
+  watch.micro_fingerprint.metrics.atr_ratio=1.15;
+  watch.micro_fingerprint.metrics.resistance_distance_pct=18;
+  watch.micro_fingerprint.quiet_base_pre_expansion={
+    fingerprint:'QUIET_BASE_PRE_EXPANSION',classification:'WATCH_EARLY',detected:false,closed_candles_only:true,evidence:[]
+  };
+  const independent=candidate('BETTERQUIETUSDT',1.2,{score:60});
+  const selected=radar.selectDeepFromMicro([strong,watch,independent],19);
+  assert.ok(selected.some(x=>x.row.symbol==='BETTERQUIETUSDT'&&x._selection_lane==='quiet'));
+  assert.notEqual(selected.find(x=>x.row.symbol==='WEAKWATCHUSDT')?._selection_lane,'quiet');
+});
+
+test('Radar 8 exceptional deep bypass remains available alongside the quiet reserve and rotation',()=>{
+  const radar=makeRadar({deepCandidates:3,quietReserve:1,rotationReserve:1,exceptionalRotationBypassSlots:1});
+  const event=candidate('SHOCKUSDT',2,{score:42});
+  event.micro_fingerprint.activity_shock={detected:true,score:94,watch_only:true,entry_eligible:false};
+  const pre=candidate('PRESEATUSDT',1.2,{score:60,participation:54,tradeParticipation:52,structure:55,compression:50});
+  pre.micro_fingerprint.quiet_base_pre_expansion={
+    fingerprint:'QUIET_BASE_PRE_EXPANSION',classification:'PRE_EXPANSION',detected:true,closed_candles_only:true,evidence:[]
+  };
+  const selected=radar.selectDeepFromMicro([event,pre,candidate('NORMALUSDT',3,{score:80}),candidate('ROTATION2USDT',2,{score:62})],20);
+  assert.ok(selected.some(x=>x.row.symbol==='SHOCKUSDT'&&x._selection_lane==='exceptional'));
+  assert.ok(selected.some(x=>x.row.symbol==='PRESEATUSDT'&&x._selection_lane==='quiet'));
+  assert.equal(event.micro_fingerprint.activity_shock.entry_eligible,false);
+  assert.equal(selected.length,3);
+  assert.equal(new Set(selected.map(x=>x.row.symbol)).size,3);
+});
+
+test('Radar 8 Deep rotation still advances to an unseen candidate across cycles',()=>{
+  const radar=makeRadar({deepCandidates:3,quietReserve:0,rotationReserve:1,exceptionalRotationBypassSlots:0});
+  const input=['ROT0USDT','ROT1USDT','ROT2USDT','ROT3USDT'].map(symbol=>candidate(symbol,1,{score:85}));
+  const first=radar.selectDeepFromMicro(input,1);
+  const firstRotation=first.find(x=>x._selection_lane==='rotation');
+  assert.ok(firstRotation);
+  const second=radar.selectDeepFromMicro(input,2);
+  const secondRotation=second.find(x=>x._selection_lane==='rotation');
+  assert.ok(secondRotation);
+  assert.notEqual(secondRotation.row.symbol,firstRotation.row.symbol,
+    JSON.stringify({first:first.map(x=>({s:x.row.symbol,l:x._selection_lane})),second:second.map(x=>({s:x.row.symbol,l:x._selection_lane}))}));
+  assert.equal(new Set(second.map(x=>x.row.symbol)).size,3);
+});
+
+test('Radar 8 Micro quiet-base assessment reuses existing 1m and 5m candle reads only',async()=>{
+  const calls=[];
+  const radar=new EarlyExpansionRadar({
+    rest:{async klines(symbol,interval){calls.push({symbol,interval});return{source:'TEST_FIXTURE',candles:[]};}},
+    store:{},config:{retryAttempts:0},clock:()=>now,logger:{warn(){}}
+  });
+  const result=await radar.microScan(
+    {symbol:'READCOUNTUSDT',lastPrice:1,priceChange24h:1,quoteVolume24h:1_000_000,tradeCount24h:1000},
+    {},[]
+  );
+  assert.deepEqual(calls.map(x=>x.interval).sort(),['1m','5m']);
+  assert.ok(result.micro_fingerprint.quiet_base_pre_expansion);
+});
