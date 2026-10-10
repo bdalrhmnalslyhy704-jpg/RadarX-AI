@@ -20,10 +20,15 @@ function candles({now = 1_900_000_000_000, count = 72, source = SOURCE, includeA
     const wobble = recent ? (index % 3 - 1) * 0.025 : (index % 5 - 2) * 0.32;
     const close = 100 + wobble;
     const supportRise = index >= count - 6 ? 0.08 : index >= count - 12 ? 0.04 : 0;
+    const open = close - 0.015;
+    const high = Math.max(close + (recent ? 0.08 : 0.55), open, close);
+    const low = Math.min(
+      99.55 + supportRise + (recent ? (index % 2) * 0.015 : (index % 4) * 0.12),
+      open - 0.025, close - 0.025
+    );
     return {
       symbol: 'TESTUSDT', openTime, closeTime: openTime + STEP - 1,
-      open: close - 0.015, high: close + (recent ? 0.08 : 0.55),
-      low: 99.55 + supportRise + (recent ? (index % 2) * 0.015 : (index % 4) * 0.12),
+      open, high, low,
       close, volume: includeActivity ? (recent ? 150 + index : 1000 + (index % 4) * 250) : null,
       tradeCount: includeActivity ? (recent ? 18 + index % 6 : 100 + (index % 5) * 25) : null,
       closed: true, source, receivedAt: now - 1000
