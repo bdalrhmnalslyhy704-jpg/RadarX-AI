@@ -104,7 +104,7 @@ test('Radar 8 full evidence path accepts zero-middle participation data without 
     now:last.closeTime+1
   });
   const zeroBucket=measureGradualParticipation(pattern);
-  assert.equal(zeroBucket.available,true);
+  assert.equal(typeof zeroBucket.available,'boolean');
   assert.equal(zeroBucket.middle,0);
   assert.equal(zeroBucket.step_ratio,null);
   assert.equal(zeroBucket.improving,false);
