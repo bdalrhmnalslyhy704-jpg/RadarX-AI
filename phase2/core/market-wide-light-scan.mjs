@@ -345,10 +345,18 @@ export class MarketWideLightScan {
       lastCandidate(a) - lastCandidate(b) ||
       a.symbol.localeCompare(b.symbol);
 
-    for (const item of [...exceptional].sort(fairOrder)) add(item, 'EXCEPTIONAL_PRESERVED');
+    const exceptionLimit = Math.min(
+      exceptional.length,
+      Math.max(0, limit - rotationReserve),
+      Math.max(1, Math.min(4, Math.floor(limit * 0.2)))
+    );
+    for (const item of [...exceptional].sort(fairOrder)) {
+      if (selected.filter(row => row.selectionReason === 'EXCEPTIONAL_PRESERVED').length >= exceptionLimit) break;
+      add(item, 'EXCEPTIONAL_PRESERVED');
+    }
 
     const rotationCount = Math.min(rotationReserve, Math.max(0, limit - selected.length));
-    const scoreLimit = Math.max(0, limit - rotationCount);
+    const scoreLimit = Math.max(0, limit - rotationReserve);
     const ranked = [...evaluated].sort((a, b) =>
       Number(b.result.candidate) - Number(a.result.candidate) ||
       Number(b.result.candidate_score ?? -1) - Number(a.result.candidate_score ?? -1) ||
@@ -379,7 +387,7 @@ export class MarketWideLightScan {
     const evaluatedTotal = evaluated.length;
     const validCandidateTotal = evaluated.filter(item => item.result.candidate).length;
     const minimumReady = Math.max(1, Math.trunc(Number(this.config.minimumReadyCandidates) || 24));
-    const coverageReady = evaluatedTotal >= Math.min(minimumReady, eligibleTotal);
+    const coverageReady = eligibleTotal > 0 && evaluatedTotal === eligibleTotal;
     const selectedExceptional = selected.filter(item => item.selectionReason === 'EXCEPTIONAL_PRESERVED').length;
     const summary = {
       eligible_total: eligibleTotal,
