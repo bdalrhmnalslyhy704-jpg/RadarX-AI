@@ -1179,16 +1179,23 @@ export class EarlyExpansionRadar{
     if(q!==String(this.config.quote).toUpperCase())throw new Error('QUOTE_NOT_CONFIGURED');
     return q;
   }
+  requestTelemetryContext(stage,symbol=null){
+    const collector=this.activeCycleRestTelemetry;
+    return collector?{collector,radar:'RADAR_8',cycle_id:collector.cycle_id,stage,symbol}:null;
+  }
+  async currentCycleRestTelemetry(endedAt=this.clock()){
+    return finishCycleRestTelemetry(this.activeCycleRestTelemetry,this.rest,endedAt);
+  }
   async refreshUniverse(quote=this.config.quote){
     const q=this.normalizeQuote(quote);
-    const r=await this.rest.request('/api/v3/exchangeInfo');
+    const r=await this.rest.request('/api/v3/exchangeInfo',{},this.requestTelemetryContext('UNIVERSE_REFRESH'));
     this.universe=buildSpotUniverse(r.data,q).map(x=>x.symbol);
     this.universeAt=this.clock();
     this.lastCoverage=emptyEarlyExpansionUniverse(this.config,q);
   }
   async tickerRows(quote=this.config.quote){
     const q=this.normalizeQuote(quote);
-    const r=await this.rest.request('/api/v3/ticker/24hr');
+    const r=await this.rest.request('/api/v3/ticker/24hr',{},this.requestTelemetryContext('TICKER_UNIVERSE'));
     return {rows:(Array.isArray(r.data)?r.data:[]).map(x=>normalizeRadarTickerRow(x,q)).filter(Boolean),source:r.source};
   }
   updateFastState(row){
@@ -1300,8 +1307,8 @@ export class EarlyExpansionRadar{
   }
   async microScan(row,fast,btcFiveMinute){
     const [m1,m5]=await Promise.all([
-      withRetry(()=>this.rest.klines(row.symbol,'1m',{limit:this.config.oneMinuteKlines}),{attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep}),
-      withRetry(()=>this.rest.klines(row.symbol,'5m',{limit:this.config.fiveMinuteKlines}),{attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep})
+      withRetry(()=>this.rest.klines(row.symbol,'1m',{limit:this.config.oneMinuteKlines,telemetryContext:this.requestTelemetryContext('MICRO_1M',row.symbol)}),{attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep}),
+      withRetry(()=>this.rest.klines(row.symbol,'5m',{limit:this.config.fiveMinuteKlines,telemetryContext:this.requestTelemetryContext('MICRO_5M',row.symbol)}),{attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep})
     ]);
     // Accept either an already-resolved context array (tests/callers) or a shared
     // in-flight BTC context promise so candle reads overlap without losing BTC-relative scoring.
@@ -1314,10 +1321,10 @@ export class EarlyExpansionRadar{
     // These reads are independent. Start them together; the shared weighted REST
     // scheduler still enforces the process-wide public-Binance budget.
     const [r15,r1h,r4h,dd]=await Promise.all([
-      withRetry(()=>this.rest.klines(row.symbol,'15m',{limit:cfg.fifteenMinuteKlines}),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep}),
-      withRetry(()=>this.rest.klines(row.symbol,'1h',{limit:cfg.oneHourKlines}),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep}),
-      withRetry(()=>this.rest.klines(row.symbol,'4h',{limit:cfg.fourHourKlines}),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep}),
-      withRetry(()=>this.rest.depth(row.symbol,100),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep})
+      withRetry(()=>this.rest.klines(row.symbol,'15m',{limit:cfg.fifteenMinuteKlines,telemetryContext:this.requestTelemetryContext('DEEP_15M',row.symbol)}),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep}),
+      withRetry(()=>this.rest.klines(row.symbol,'1h',{limit:cfg.oneHourKlines,telemetryContext:this.requestTelemetryContext('DEEP_1H',row.symbol)}),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep}),
+      withRetry(()=>this.rest.klines(row.symbol,'4h',{limit:cfg.fourHourKlines,telemetryContext:this.requestTelemetryContext('DEEP_4H',row.symbol)}),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep}),
+      withRetry(()=>this.rest.depth(row.symbol,100,this.requestTelemetryContext('DEEP_DEPTH',row.symbol)),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep})
     ]);
     series['15m']=r15.candles;series['1h']=r1h.candles;series['4h']=r4h.candles;
     sources.push(r15.source,r1h.source,r4h.source,dd.source);
@@ -1436,7 +1443,7 @@ export class EarlyExpansionRadar{
       let marketContextCompletedAt=marketContextStartedAt;
       const marketContextPromise=(async()=>{
         try{
-          const [m5,m1]=await Promise.all([this.rest.klines('BTCUSDT','5m',{limit:Math.max(80,this.config.fiveMinuteKlines||180)}),this.rest.klines('BTCUSDT','1h',{limit:60})]);
+          const [m5,m1]=await Promise.all([this.rest.klines('BTCUSDT','5m',{limit:Math.max(80,this.config.fiveMinuteKlines||180),telemetryContext:this.requestTelemetryContext('MARKET_CONTEXT_5M','BTCUSDT')}),this.rest.klines('BTCUSDT','1h',{limit:60,telemetryContext:this.requestTelemetryContext('MARKET_CONTEXT_1H','BTCUSDT')})]);
           btcFive=m5.candles||[];
           const marketMoves=eligible.map(x=>x.priceChange24h).filter(hasFiniteNumber).map(Number);
           marketContext={fiveMinute:m5.candles||[],oneHour:m1.candles||[],marketMedianChange24hPct:median(marketMoves),marketBreadthPct:marketMoves.length?marketMoves.filter(x=>x>0).length/marketMoves.length*100:null};
