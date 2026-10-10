@@ -1818,6 +1818,12 @@ export class EarlyExpansionRadar{
       return true;
     }catch(e){
       this.lastError=String(e?.message??e);this.lastScanAtMs=scanStartedAt;
+      this.logger.error?.('[RADARX_SCAN_JOURNEY_CYCLE_FAILED] '+JSON.stringify({
+        cycle_id:journey.cycle_id||INCOMPLETE,stage:journey.status||'RUNNING',
+        error:this.lastError,expected_total:journey.expected_symbols.length||this.universe.length,
+        received_total:journey.received_symbols.length||0,eligible_total:journey.eligible_symbols.length||0,
+        micro_rows:journeyMicroBySymbol.size,deep_rows:journeyDeepBySymbol.size
+      }));
       if(journey.cycle_id&&typeof this.store.appendScanJourneyCycle==='function'){
         try{
           const failedAt=this.clock();
@@ -1839,7 +1845,7 @@ export class EarlyExpansionRadar{
           const archive=await this.store.appendScanJourneyCycle(failedRecord);
           this.scans=Math.max(this.scans,Number(archive.cycle_sequence)||0);
           this.lastJourneyArchive=archive;this.lastJourneyError=null;
-          this.logger.info?.('[RADARX_SCAN_JOURNEY_ARCHIVE] '+JSON.stringify({cycle_id:failedRecord.cycle_id,cycle_sequence:archive.cycle_sequence,status:'FAILED',coin_rows:archive.cycle_coin_rows,retained_cycles:archive.retained_cycles,retained_coin_rows:archive.retained_coin_rows}));
+          this.logger.info?.('[RADARX_SCAN_JOURNEY_ARCHIVE] '+JSON.stringify({cycle_id:failedRecord.cycle_id,cycle_sequence:archive.cycle_sequence,status:'FAILED',error:this.lastError,coin_rows:archive.cycle_coin_rows,retained_cycles:archive.retained_cycles,retained_coin_rows:archive.retained_coin_rows}));
         }catch(archiveError){
           this.lastJourneyError=String(archiveError?.message??archiveError);
           this.logger.warn?.('EARLY_EXPANSION_RADAR_journey-archive',this.lastJourneyError);
