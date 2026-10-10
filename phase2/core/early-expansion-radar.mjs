@@ -1234,7 +1234,7 @@ export class EarlyExpansionRadar{
       const rotation=((symbolHash(row.symbol)+Math.imul(currentCycle,2654435761))>>>0)/4294967296;
       const rotationAge=lastCycle===undefined?Number.MAX_SAFE_INTEGER:Math.max(0,currentCycle-lastCycle);
       return {...row,fast,
-        _microPreScore:fastScore*.55+(quiet??0)*.45,
+        _microFastScore:fastScore,_microPreScore:fastScore*.55+(quiet??0)*.45,
         _quietScore:quiet??-1,_quietEligible:isQuietEarlyCandidate(row,fast,this.config),
         _exceptional:isExceptionalMicroCandidate(row,fast,this.config)||isFastActivityShockCandidate(row,fast,this.config)||Number(this.fastShockPendingUntil.get(key)||0)>this.clock(),
         _lastActuallyScannedAt:lastAt,_neverScanned:neverScanned,_queueAgeMs:queueAge,
@@ -1271,7 +1271,7 @@ export class EarlyExpansionRadar{
       const symbol=selectionSymbol(item),picked=selectedLanes.get(symbol);
       return {symbol,rank_by_micro_score:index+1,selected:picked!==undefined,selected_rank:picked?.rank??null,
         selection_lane:picked?.lane??null,score:Number.isFinite(Number(item._microPreScore))?Number(item._microPreScore):null,
-        fast_score:Number.isFinite(Number(item.fast?._microPreScore))?Number(item.fast._microPreScore):null,
+        fast_score:Number.isFinite(Number(item._microFastScore))?Number(item._microFastScore):null,
         quiet_score:Number.isFinite(Number(item._quietScore))?Number(item._quietScore):null,
         quiet_eligible:Boolean(item._quietEligible),exceptional_candidate:Boolean(item._exceptional),
         decision_reason:picked?'SELECTED_'+String(picked.lane).toUpperCase():'MICRO_BATCH_CAPACITY',
@@ -1378,6 +1378,7 @@ export class EarlyExpansionRadar{
       micro_selection_rank:INCOMPLETE,micro_selection_score:INCOMPLETE,micro_selection_selected:false,
       micro_selection_reason:INCOMPLETE,micro_deferred_reason:INCOMPLETE,micro_selection_evidence:INCOMPLETE,
       micro_scan_started_at:INCOMPLETE,micro_scan_completed_at:INCOMPLETE,micro_fingerprint:INCOMPLETE,
+      quiet_base_classification:INCOMPLETE,activity_shock_detected:INCOMPLETE,
       deep_selected_at:INCOMPLETE,deep_selection_lane:INCOMPLETE,deep_selection_rank:INCOMPLETE,deep_score_rank:INCOMPLETE,
       deep_selection_score:INCOMPLETE,deep_selection_selected:false,deep_selection_reason:'NOT_ENTERED_MICRO',
       deep_scan_started_at:INCOMPLETE,deep_scan_completed_at:INCOMPLETE,deep_scan_status:INCOMPLETE,deep_analysis:INCOMPLETE,
@@ -1444,6 +1445,7 @@ export class EarlyExpansionRadar{
           entry.rejection_reason=!ticker?'TICKER_MISSING_FROM_RECEIVED_UNIVERSE':
             !Number.isFinite(Number(ticker.quoteVolume24h))?'QUOTE_VOLUME_MISSING':
             Number(ticker.quoteVolume24h)<Number(this.config.minQuoteVolume24h)?'BELOW_MIN_QUOTE_VOLUME_24H':'NOT_ELIGIBLE_FOR_SPOT_USDT_SCAN';
+          entry.micro_selection_reason='NOT_ELIGIBLE';entry.deep_selection_reason='NOT_ELIGIBLE';
         }
         journeyEntries.set(symbol,entry);
       }
@@ -1531,6 +1533,8 @@ export class EarlyExpansionRadar{
           if(entry){
             entry.micro_scan_completed_at=completed;
             entry.micro_fingerprint=normalizeMissing(result.micro_fingerprint||INCOMPLETE);
+            entry.quiet_base_classification=result.micro_fingerprint?.quiet_base_pre_expansion?.classification??INCOMPLETE;
+            entry.activity_shock_detected=result.micro_fingerprint?.activity_shock?.detected===true;
             entry.candles_used['1m']=closedCandleSnapshot(result.oneMinute,completed);
             entry.candles_used['5m']=closedCandleSnapshot(result.fiveMinute,completed);
             entry.radar_scores.RADAR_8.micro_score=hasFiniteNumber(result.micro_fingerprint?.score)?Number(result.micro_fingerprint.score):INCOMPLETE;
