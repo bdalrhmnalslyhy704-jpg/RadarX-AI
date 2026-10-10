@@ -16,3 +16,18 @@ test('Whale radar fills unique rotation slots when patrol overlaps quiet high-vo
   assert.equal(selected.length,7);
   assert.equal(new Set(selected.map(x=>x.symbol)).size,7);
 });
+test('Whale scan falls back to the shared REST request for aggTrades when no wrapper exists',async()=>{
+  const calls=[];
+  const now=Date.now();
+  const radar=new WhaleAccumulationRadar({
+    rest:{
+      klines:async(symbol,interval)=>({candles:[],source:'fixture'}),
+      request:async(path,query)=>{calls.push({path,query});return {data:[],source:'fixture'};},
+      depth:async()=>({data:{bids:[['1','100']],asks:[['1.01','100']]},source:'fixture'})
+    },
+    store:{},clock:()=>now,logger:{info(){},warn(){},error(){}}
+  });
+  const result=await radar.scanRow({symbol:'TESTUSDT',lastPrice:1,priceChange24h:0,quoteVolume24h:2_000_000});
+  assert.equal(result.symbol,'TESTUSDT');
+  assert.deepEqual(calls,[{path:'/api/v3/aggTrades',query:{symbol:'TESTUSDT',limit:1000}}]);
+});
