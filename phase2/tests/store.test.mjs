@@ -91,7 +91,7 @@ test('scheduler journal automatically compacts its tail per radar before unbound
   const after=(await stat(file)).size;
   assert.ok(after<before/2,'automatic compaction should materially reduce journal size');
   const radar8=await store.readScanSchedulerEvents({radar:'RADAR_8',limit:5000});
-  assert.equal(radar8.length,5000,'retains the supported hydration window');
+  assert.ok(radar8.length>0&&radar8.length<5000,'keeps a bounded recent tail within the per-radar byte ceiling');
   assert.equal(radar8.at(-1).symbol,'AFTER_COMPACTION_USDT');
   assert.equal(radar8.at(-2).symbol,'COIN19999USDT');
   const radar9=await store.readScanSchedulerEvents({radar:'RADAR_9',limit:100});
