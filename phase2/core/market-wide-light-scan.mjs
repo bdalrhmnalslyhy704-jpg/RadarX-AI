@@ -547,8 +547,8 @@ export class MarketWideLightScan {
       const microAtRaw = lastMicroScannedAt(symbol);
       const hasEventBreakout = eventShock?.detected === true && eventShock?.stage === 'EVENT_DRIVEN_BREAKOUT';
       const eventCloseTime = Number(eventShock?.detected_candle_close_time);
-      const needsEventMicroConfirmation = hasEventBreakout && Number.isFinite(eventCloseTime) &&
-        (!KNOWN(microAtRaw) || Number(microAtRaw) < eventCloseTime);
+      const needsEventMicroConfirmation = isDirectionalCandidateSymbol(symbol) && hasEventBreakout &&
+        Number.isFinite(eventCloseTime) && (!KNOWN(microAtRaw) || Number(microAtRaw) < eventCloseTime);
       if (hasEventBreakout) {
         result.event_driven_breakout = {
           ...eventShock,
