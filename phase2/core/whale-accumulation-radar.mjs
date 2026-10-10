@@ -456,12 +456,14 @@ export class WhaleAccumulationRadar{
     const rotationTarget=Math.min(rotationCount,Math.max(0,target-anchorTarget));
     const selected=[],seen=new Set();
     const take=(pool,count,lane)=>{
+      const limit=Math.max(0,Math.trunc(Number(count)||0));
+      if(limit===0)return 0;
       let added=0;
       for(const row of pool){
         const symbol=String(row?.symbol||'').toUpperCase();
         if(!symbol||seen.has(symbol))continue;
         seen.add(symbol);selected.push({...row,_selection_lane:lane});added++;
-        if(added>=count)break;
+        if(added>=limit)break;
       }
       return added;
     };
