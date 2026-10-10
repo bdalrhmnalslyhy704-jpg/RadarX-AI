@@ -174,6 +174,12 @@ export class RestClient {
     this.minIntervalMs=minIntervalMs; this.maxRequestsPerMinute=maxRequestsPerMinute;
     this.usedAt=[]; this.lastRequestAt=0; this.currentBaseIndex=0;
     this.lastSuccessAt=null; this.lastError=null; this.rateLimitedUntil=0; this.state='INIT';
+    this.klineObservers=new Set();
+  }
+  subscribeKlines(observer){
+    if(typeof observer!=='function')throw new Error('KLINE_OBSERVER_MUST_BE_FUNCTION');
+    this.klineObservers.add(observer);
+    return ()=>this.klineObservers.delete(observer);
   }
   health(){return {
     state:this.state,last_success_at:this.lastSuccessAt,last_error:this.lastError,
@@ -271,7 +277,7 @@ export class RestClient {
     });
     const now=Date.now();
     const receivedAt=Number(r.receivedAt)||now;
-    return {source:r.source,receivedAt,candles:r.data.map(x=>{
+    const candles=r.data.map(x=>{
       const openTime=normalizeEpochMs(x[0], 'openTime');
       const closeTime=normalizeEpochMs(x[6], 'closeTime');
       return {
@@ -279,9 +285,16 @@ export class RestClient {
         volume:Number(x[5]),closeTime,quoteVolume:Number(x[7]),tradeCount:Number(x[8]),
         takerBuyBaseVolume:Number(x[9]),takerBuyQuoteVolume:Number(x[10]),
         closed:closeTime<now,source:'BINANCE_PUBLIC_REST',sourceTime:receivedAt,
-        receivedAt,ageMs:Math.max(0,receivedAt-closeTime),eventTime:null,transportLatencyMs:null
+        receivedAt,ageMs:Math.max(0,receivedAt-closeTime),eventTime:null,transportLatencyMs:null,
+        symbol:String(symbol||'').toUpperCase(),timeframe:String(interval||'')
       };
-    })};
+    });
+    const result={source:r.source,receivedAt,candles};
+    for(const observer of [...this.klineObservers]){
+      try{observer({symbol:String(symbol||'').toUpperCase(),interval:String(interval||''),source:r.source,receivedAt,candles});}
+      catch{}
+    }
+    return result;
   }
   depth(symbol,limit=100){return this.request('/api/v3/depth',{symbol,limit});}
   ticker24h(symbol){return this.request('/api/v3/ticker/24hr',{symbol});}
