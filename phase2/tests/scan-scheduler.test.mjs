@@ -241,8 +241,16 @@ test('TEST_FIXTURE: scheduler before/after replay reports wait reduction and lan
         lane,fastSeenAt:now,reasonCode:'BENCHMARK_MICRO_COMPLETE',failureCounted:false});
     }
     now=baseAt+(cycle-1)*cadenceMs+200;
-    const microResults=selected.map((row,i)=>candidate(row.symbol,row.priceChange24h,{
-      score:82-(i%9),participation:75,tradeParticipation:72,structure:78,compression:82,volume:1.5,trades:1.4
+    const microResults=selected.map((row,i)=>({
+      row,
+      micro_fingerprint:{
+        score:82-(i%9),eligible:false,mode:'QUIET_COMPRESSION_BUILD',confirmation_count:4,
+        metrics:{price_change_24h_abs:Math.abs(row.priceChange24h),rvol_1m:1.5,rvol_5m:1.3,
+          trade_rvol_1m:1.4,trade_rvol_5m:1.3,bb_ratio:.78,range_compression_ratio:.82,atr_ratio:.88,
+          higher_low_count:78,resistance_distance_pct:-2,acceleration_1m_pct:.08,
+          acceleration_5m_pct:.12,taker_buy_ratio:.57},
+        category_scores:{participation:75,tradeParticipation:72,structure:78,compression:82,momentumTurn:62}
+      }
     }));
     for(const item of microResults)radar.scheduler.ensureQueued('DEEP',item.row.symbol,baseAt);
     const deep=radar.selectDeepFromMicro(microResults,cycle);
