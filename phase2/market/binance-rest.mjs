@@ -285,8 +285,7 @@ export class RestClient {
         volume:Number(x[5]),closeTime,quoteVolume:Number(x[7]),tradeCount:Number(x[8]),
         takerBuyBaseVolume:Number(x[9]),takerBuyQuoteVolume:Number(x[10]),
         closed:closeTime<now,source:'BINANCE_PUBLIC_REST',sourceTime:receivedAt,
-        receivedAt,ageMs:Math.max(0,receivedAt-closeTime),eventTime:null,transportLatencyMs:null,
-        symbol:String(symbol||'').toUpperCase(),timeframe:String(interval||'')
+        receivedAt,ageMs:Math.max(0,receivedAt-closeTime),eventTime:null,transportLatencyMs:null
       };
     });
     const result={source:r.source,receivedAt,candles};
