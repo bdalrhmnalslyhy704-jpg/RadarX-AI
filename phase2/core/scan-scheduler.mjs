@@ -166,7 +166,7 @@ export class ScanSchedulerJournal {
   started(stage, symbol, { cycle = null, at = this.clock(), lane = null, reasonCode = 'SCAN_STARTED', fastSeenAt = null, extra = {} } = {}) {
     const queueAt = this.ensureQueued(stage, symbol, at);
     return this.record({
-      stage, symbol, eventType: 'STARTED', cycle, at, queuedAt: queueAt,
+      stage, symbol, eventType: 'STARTED', cycle, at, queuedAt: queueAt, startedAt: at,
       waitMs: Math.max(0, at - Number(this.lastScanAt(stage, symbol) ?? queueAt)),
       lane, reasonCode, fastSeenAt, extra
     });
