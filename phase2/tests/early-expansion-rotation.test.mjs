@@ -151,11 +151,14 @@ function selectBuild224Baseline(radar,results,cycle,state,selectionAt=Date.now()
   const picked=new Map(selected.map((item,index)=>[baselineSymbol(item),{rank:index+1,lane:item._selection_lane||'score'}]));
   const scoreRanks=new Map();byScore.forEach((item,i)=>{const s=baselineSymbol(item);if(!scoreRanks.has(s))scoreRanks.set(s,i+1);});
   const quietRanks=new Map();byQuiet.forEach((item,i)=>{const s=baselineSymbol(item);if(!quietRanks.has(s))quietRanks.set(s,i+1);});
-  const audit=[...new Map(valid.map(item=>[baselineSymbol(item),item])).entries()].map(([symbol,item])=>{
-    const chosen=picked.get(symbol),classification=item?.micro_fingerprint?.quiet_base_pre_expansion?.classification??null;
-    return {symbol,score:Number(item.micro_fingerprint.score),score_rank:scoreRanks.get(symbol)??null,
+  const uniqueInputs=[...new Map((results||[]).filter(item=>baselineSymbol(item)).map(item=>[baselineSymbol(item),item])).entries()];
+  const audit=uniqueInputs.map(([symbol,item])=>{
+    const chosen=picked.get(symbol),score=baselineHasFiniteNumber(item?.micro_fingerprint?.score)?Number(item.micro_fingerprint.score):null;
+    const classification=item?.micro_fingerprint?.quiet_base_pre_expansion?.classification??null;
+    return {symbol,score,score_rank:scoreRanks.get(symbol)??null,
       quiet_rank:quietRanks.get(symbol)??null,classification,selected:Boolean(chosen),selected_rank:chosen?.rank??null,
-      selection_lane:chosen?.lane??null,reason:chosen?'SELECTED_'+chosen.lane.toUpperCase():'DEEP_BATCH_CAPACITY'};
+      selection_lane:chosen?.lane??null,reason:chosen?'SELECTED_'+chosen.lane.toUpperCase():
+        item?.failed?'MICRO_SCAN_FAILED':score===null?'MICRO_FINGERPRINT_NOT_SCOREABLE':'DEEP_BATCH_CAPACITY'};
   });
   return {selected:selected.slice(0,target),audit,candidate_total:valid.length};
 }
@@ -575,9 +578,58 @@ test('OPERATIONAL_MONITOR: 25 consecutive Radar 8 cycles with same-data Build 22
     clock:()=>Date.now(),logger
   });
   radar.running=true;
+  const baselineState={lastAt:new Map(),lastCycle:new Map(),queuedAt:new Map()};
+  let activeBaselineComparison=null;
+  const appendJourney=store.appendScanJourneyCycle.bind(store);
+  store.appendScanJourneyCycle=async record=>{
+    if(record?.status==='COMPLETE'&&activeBaselineComparison)
+      record.counters.same_cycle_baseline_comparison=structuredClone(activeBaselineComparison);
+    return appendJourney(record);
+  };
+  const realDeepSelector=radar.selectDeepFromMicro.bind(radar);
+  radar.selectDeepFromMicro=function(results,cycle){
+    const baseline=selectBuild224Baseline(this,results,cycle,baselineState,Date.now());
+    const prSelected=realDeepSelector(results,cycle);
+    const prAudit=new Map(this.lastDeepSelectionAudit.map(x=>[x.symbol,x]));
+    const baselineAudit=new Map(baseline.audit.map(x=>[x.symbol,x]));
+    const symbols=new Set([...baselineAudit.keys(),...prAudit.keys()]);
+    const candidateRanks=[...symbols].sort().map(symbol=>{
+      const b=baselineAudit.get(symbol)||{},p=prAudit.get(symbol)||{};
+      return {symbol,classification:b.classification??p.quiet_base_classification??null,
+        score:b.score??p.score??null,
+        baseline_score_rank:b.score_rank??null,baseline_quiet_rank:b.quiet_rank??null,
+        baseline_selected_rank:b.selected_rank??null,baseline_lane:b.selection_lane??null,baseline_reason:b.reason??'NOT_IN_BASELINE_POOL',
+        pr_score_rank:p.rank_by_micro_score??null,pr_quiet_rank:p.quiet_rank??null,
+        pr_selected_rank:p.selected_rank??null,pr_lane:p.selection_lane??null,pr_reason:p.decision_reason??'NOT_IN_PR_POOL'};
+    });
+    const baselineSymbols=baseline.selected.map(baselineSymbol),prSymbols=prSelected.map(baselineSymbol);
+    const classOf=symbol=>candidateRanks.find(x=>x.symbol===symbol)?.classification;
+    activeBaselineComparison={
+      schema_version:'RADAR8_SAME_CYCLE_BASELINE_V1',
+      baseline:'Build224 before PR #198: score + ordinary quiet rank + fair rotation + exceptional bypass',
+      experimental:'PR #198 current selector',
+      cycle,deep_candidate_total:baseline.candidate_total,
+      pre_expansion_candidates_total:candidateRanks.filter(x=>x.classification==='PRE_EXPANSION').length,
+      watch_early_candidates_total:candidateRanks.filter(x=>x.classification==='WATCH_EARLY').length,
+      baseline_deep_symbols:baselineSymbols,pr_deep_symbols:prSymbols,
+      selected_overlap_total:baselineSymbols.filter(s=>prSymbols.includes(s)).length,
+      selected_changed_from_baseline_total:new Set([...baselineSymbols,...prSymbols]).size-baselineSymbols.filter(s=>prSymbols.includes(s)).length,
+      baseline_pre_expansion_selected_total:baselineSymbols.filter(s=>classOf(s)==='PRE_EXPANSION').length,
+      pr_pre_expansion_selected_total:prSymbols.filter(s=>classOf(s)==='PRE_EXPANSION').length,
+      baseline_watch_early_selected_total:baselineSymbols.filter(s=>classOf(s)==='WATCH_EARLY').length,
+      pr_watch_early_selected_total:prSymbols.filter(s=>classOf(s)==='WATCH_EARLY').length,
+      baseline_quiet_lane_selected_total:baseline.selected.filter(x=>String(x._selection_lane||'').includes('quiet')).length,
+      pr_quiet_lane_selected_total:prSelected.filter(x=>String(x._selection_lane||'').includes('quiet')).length,
+      baseline_exceptional_selected_total:baseline.selected.filter(x=>x._selection_lane==='exceptional').length,
+      pr_exceptional_selected_total:prSelected.filter(x=>x._selection_lane==='exceptional').length,
+      candidate_ranks:candidateRanks
+    };
+    return prSelected;
+  };
   const cycles=[];
   try{
-    for(let i=0;i<3;i++){
+    for(let i=0;i<25;i++){
+      activeBaselineComparison=null;
       const ok=await radar.tick();
       assert.equal(ok,true,'cycle '+(i+1)+' must complete against live REST data: '+JSON.stringify({lastError:radar.lastError,health:radar.health(),rest:rest.health(),telemetry:rest.telemetrySnapshot(),logs:monitorLogs.slice(-8)}));
       const latest=(await store.readScanJourneyCycles({limit:1}))[0];
@@ -595,34 +647,71 @@ test('OPERATIONAL_MONITOR: 25 consecutive Radar 8 cycles with same-data Build 22
       assert.equal(latest.counters.deep_selected_total,new Set(latest.counters.deep_selected_symbols).size);
       assert.equal(latest.counters.micro_selected_total,latest.coins.filter(x=>x.micro_selection_selected===true).length);
       assert.equal(latest.counters.deep_selected_total,latest.coins.filter(x=>x.deep_selection_selected===true).length);
+      const comparison=latest.counters.same_cycle_baseline_comparison;
+      assert.ok(comparison,'baseline comparison must be stored in the same cycle archive row');
+      assert.equal(comparison.candidate_ranks.length,latest.counters.deep_selection_ranked_total);
+      assert.deepEqual([...comparison.pr_deep_symbols].sort(),[...latest.counters.deep_selected_symbols].sort());
+      assert.ok(comparison.baseline_deep_symbols.length<=3);
+      assert.ok(comparison.pr_deep_symbols.length<=3);
+      assert.equal(comparison.candidate_ranks.filter(x=>x.pr_selected_rank!==null).length,comparison.pr_deep_symbols.length);
+      assert.equal(comparison.candidate_ranks.filter(x=>x.baseline_selected_rank!==null).length,comparison.baseline_deep_symbols.length);
+      for(const symbol of comparison.baseline_deep_symbols){
+        baselineState.lastAt.set(symbol,latest.completed_at);
+        baselineState.lastCycle.set(symbol,latest.cycle_number||i+1);
+        baselineState.queuedAt.delete(symbol);
+      }
       cycles.push({
         cycle_id:latest.cycle_id,started_at:latest.started_at,completed_at:latest.completed_at,
-        eligible_total:latest.counters.eligible_total,micro_selected_total:latest.counters.micro_selected_total,
+        scan_duration_ms:latest.scan_duration_ms,
+        eligible_total:latest.counters.eligible_total,eligible_symbols:latest.counters.eligible_symbols,
+        micro_selected_total:latest.counters.micro_selected_total,micro_selected_symbols:latest.counters.micro_selected_symbols,
         micro_success_total:latest.counters.micro_success_total,micro_pre_expansion_total:latest.counters.micro_pre_expansion_total,
         micro_watch_early_total:latest.counters.micro_watch_early_total,micro_quiet_selected_total:latest.counters.micro_quiet_selected_total,
         micro_exceptional_candidate_total:latest.counters.micro_exceptional_candidate_total,
         deep_selected_symbols:latest.counters.deep_selected_symbols,
         deep_pre_expansion_selected_total:latest.counters.deep_pre_expansion_selected_total,
         deep_watch_early_selected_total:latest.counters.deep_watch_early_selected_total,
-        deep_deferred_total:latest.counters.deep_deferred_total,
-        micro_deferred_total:latest.counters.micro_deferred_total,
+        deep_deferred_total:latest.counters.deep_deferred_total,micro_deferred_total:latest.counters.micro_deferred_total,
         micro_duplicate_input_symbol_rows:latest.counters.micro_duplicate_input_symbol_rows,
         deep_duplicate_input_symbol_rows:latest.counters.deep_duplicate_input_symbol_rows,
-        micro_failed_total:latest.counters.micro_failed_total,
-        deep_failed_total:latest.counters.deep_failed_total,
-        radar8_tagged_http_attempts:latest.counters.rest_request_telemetry.actual_http_attempts,
+        micro_failed_total:latest.counters.micro_failed_total,deep_failed_total:latest.counters.deep_failed_total,
+        rest_attempts:latest.counters.rest_request_telemetry.actual_http_attempts,
         process_http_attempts:latest.counters.rest_request_telemetry.process_rest_delta.actual_http_attempts,
-        stage_http_attempts:Object.fromEntries(Object.entries(latest.counters.rest_request_telemetry.by_stage).map(([k,v])=>[k,v.actual_http_attempts])),
-        phase_timings_ms:latest.phase_timings_ms
+        rest_request_stages:Object.fromEntries(Object.entries(latest.counters.rest_request_telemetry.by_stage).map(([k,v])=>[k,v.actual_http_attempts])),
+        phase_timings_ms:latest.phase_timings_ms,
+        same_data_baseline_comparison:comparison
       });
     }
-    assert.equal(cycles.length,3);
+    assert.equal(cycles.length,25);
     const verified=await store.verifyScanJourneyArchive();
     assert.equal(verified.complete,true,JSON.stringify(verified));
-    console.log('[RADAR8_LIVE_MONITOR_SUMMARY] '+JSON.stringify({
-      mode:'CI_LIVE_PUBLIC_SPOT_REST_NOT_PRODUCTION_DEPLOYMENT',cycles,
-      archive_verified:verified.complete,paper_trading:true,real_order_execution:false
-    }));
+    const baselinePre=cycles.reduce((n,x)=>n+x.same_data_baseline_comparison.baseline_pre_expansion_selected_total,0);
+    const prPre=cycles.reduce((n,x)=>n+x.same_data_baseline_comparison.pr_pre_expansion_selected_total,0);
+    const baselineWatch=cycles.reduce((n,x)=>n+x.same_data_baseline_comparison.baseline_watch_early_selected_total,0);
+    const prWatch=cycles.reduce((n,x)=>n+x.same_data_baseline_comparison.pr_watch_early_selected_total,0);
+    const baselineChosen=cycles.reduce((n,x)=>n+x.same_data_baseline_comparison.baseline_deep_symbols.length,0);
+    const prChosen=cycles.reduce((n,x)=>n+x.same_data_baseline_comparison.pr_deep_symbols.length,0);
+    const summary={
+      mode:'CI_LIVE_PUBLIC_SPOT_REST_NOT_PRODUCTION_DEPLOYMENT',
+      baseline_mode:'test-only faithful Build 224 pre-PR selector replayed on each exact Micro result pool; independent shadow rotation state',
+      cycles_run:cycles.length,cycles,archive_verified:verified.complete,
+      aggregate:{
+        eligible_per_cycle_median:cycles.slice().sort((a,b)=>a.eligible_total-b.eligible_total)[Math.floor(cycles.length/2)].eligible_total,
+        median_cycle_ms:cycles.slice().map(x=>x.scan_duration_ms).sort((a,b)=>a-b)[Math.floor(cycles.length/2)],
+        rest_attempts_total:cycles.reduce((n,x)=>n+x.rest_attempts,0),
+        micro_failures:cycles.reduce((n,x)=>n+x.micro_failed_total,0),
+        deep_failures:cycles.reduce((n,x)=>n+x.deep_failed_total,0),
+        duplicates:cycles.reduce((n,x)=>n+x.micro_duplicate_input_symbol_rows+x.deep_duplicate_input_symbol_rows,0),
+        baseline_deep_candidate_seats:baselineChosen,pr_deep_candidate_seats:prChosen,
+        baseline_pre_expansion_deep:baselinePre,pr_pre_expansion_deep:prPre,
+        baseline_watch_early_deep:baselineWatch,pr_watch_early_deep:prWatch,
+        cycles_with_pre_expansion:cycles.filter(x=>x.same_data_baseline_comparison.pre_expansion_candidates_total>0).length,
+        cycles_where_pr_added_pre_expansion_to_deep:cycles.filter(x=>x.same_data_baseline_comparison.pr_pre_expansion_selected_total>x.same_data_baseline_comparison.baseline_pre_expansion_selected_total).length,
+        cycles_where_deep_selection_changed:cycles.filter(x=>x.same_data_baseline_comparison.selected_changed_from_baseline_total>0).length
+      },
+      paper_trading:true,real_order_execution:false
+    };
+    console.log('[RADAR8_LIVE_MONITOR_SUMMARY] '+JSON.stringify(summary));
   }finally{
     await radar.stop();
     await rm(dir,{recursive:true,force:true});
