@@ -1,3 +1,5 @@
+import {createReadStream} from 'node:fs';
+import {createInterface} from 'node:readline';
 import {mkdir,readFile,writeFile,rename,appendFile} from 'node:fs/promises';
 import {basename,join,resolve} from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
@@ -123,14 +125,34 @@ export class DurableStore {
   }
   async readScanSchedulerEvents({radar=null,symbol=null,sinceMs=0,limit=1000}={}){
     const safeLimit=Math.min(5000,Math.max(1,Number(limit)||1000));
-    const rows=await this.readRecent('schedulerEvents',safeLimit);
     const targetRadar=radar?String(radar).toUpperCase():null;
     const targetSymbol=symbol?String(symbol).toUpperCase():null;
-    return rows.filter(x=>
-      (!targetRadar||String(x?.radar||'').toUpperCase()===targetRadar)&&
-      (!targetSymbol||String(x?.symbol||'').toUpperCase()===targetSymbol)&&
-      Number(x?.event_at||0)>=Number(sinceMs||0)
-    ).sort((a,b)=>Number(a?.event_at||0)-Number(b?.event_at||0));
+    // Filter while streaming, then retain the newest N records for this radar.
+    // Applying a global last-N cap first lets a busy radar evict another radar's state.
+    const rows=[];
+    let cursor=0;
+    try{
+      await this.lock(async()=>{
+        const input=createReadStream(this.files.schedulerEvents,{encoding:'utf8'});
+        const reader=createInterface({input,crlfDelay:Infinity});
+        try{
+          for await(const line of reader){
+            if(!line.trim())continue;
+            let event;
+            try{event=JSON.parse(line);}catch{continue;}
+            if(targetRadar&&String(event?.radar||'').toUpperCase()!==targetRadar)continue;
+            if(targetSymbol&&String(event?.symbol||'').toUpperCase()!==targetSymbol)continue;
+            if(Number(event?.event_at||0)<Number(sinceMs||0))continue;
+            if(rows.length<safeLimit)rows.push(event);
+            else{rows[cursor]=event;cursor=(cursor+1)%safeLimit;}
+          }
+        }finally{
+          reader.close();
+          input.destroy();
+        }
+      });
+    }catch{return[];}
+    return rows.sort((a,b)=>Number(a?.event_at||0)-Number(b?.event_at||0));
   }
   async appendFalconEyeAlert(v){return this.lock(async()=>{await appendFile(this.files.falconEyeAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readFalconEyeAlerts({sinceMs=0,limit=100}={}){const safeLimit=Math.min(100,Math.max(1,Number(limit)||100));const rows=await this.readRecent('falconEyeAlerts',500);return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).sort((a,b)=>Number(a?.processed_at||0)-Number(b?.processed_at||0)).slice(0,safeLimit);}

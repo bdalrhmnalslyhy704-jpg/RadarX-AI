@@ -44,3 +44,25 @@ test('TEST_FIXTURE: Falcon Eye alert history replays oldest-first after an offli
   const next=await store.readFalconEyeAlerts({sinceMs:first[1].processed_at,limit:2});
   assert.deepEqual(next.map(x=>x.processed_at),[3000]);
 });
+
+test('scheduler archive hydrates each radar independently when another radar dominates the newest rows',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-scheduler-partition-read-'));
+  const store=await new DurableStore({dir}).init();
+  await store.appendScanSchedulerEvents([
+    {radar:'RADAR_9',stage:'DEEP',symbol:'QUIETUSDT',event_type:'DEFERRED',event_at:1000,queued_at:400},
+    {radar:'RADAR_9',stage:'DEEP',symbol:'QUIETUSDT',event_type:'STARTED',event_at:2000,queued_at:400,started_at:2000},
+    {radar:'RADAR_9',stage:'DEEP',symbol:'QUIETUSDT',event_type:'COMPLETED',event_at:3000,queued_at:400,started_at:2000}
+  ]);
+  const noisyRadar=Array.from({length:6005},(_,i)=>({
+    radar:'RADAR_8',stage:'FAST',symbol:'COIN'+i+'USDT',event_type:'COMPLETED',
+    event_at:4000+i,queued_at:4000+i,started_at:4000+i
+  }));
+  await store.appendScanSchedulerEvents(noisyRadar);
+  const radar9=await store.readScanSchedulerEvents({radar:'RADAR_9',limit:100});
+  assert.equal(radar9.length,3,'Radar 8 ticker volume must not evict Radar 9 history');
+  assert.deepEqual(radar9.map(x=>x.event_type),['DEFERRED','STARTED','COMPLETED']);
+  assert.deepEqual(radar9.map(x=>x.event_at),[1000,2000,3000]);
+  const radar8=await store.readScanSchedulerEvents({radar:'RADAR_8',limit:2});
+  assert.equal(radar8.length,2);
+  assert.deepEqual(radar8.map(x=>x.symbol),['COIN6003USDT','COIN6004USDT']);
+});
