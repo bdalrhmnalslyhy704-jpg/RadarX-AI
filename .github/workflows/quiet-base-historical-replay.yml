@@ -31,7 +31,7 @@ jobs:
         continue-on-error: true
         env:
           REPLAY_START_UTC: '2026-09-15T00:00:00.000Z'
-          REPLAY_COMPARISON_SYMBOLS: '48'
+          REPLAY_ADDITIONAL_COMPARISONS: '32'
           REPLAY_OUT_DIR: artifacts/quiet-base-replay
         run: node scripts/research/quiet-base-historical-replay.mjs
       - name: Upload raw data, candidate trace and diagnostic report

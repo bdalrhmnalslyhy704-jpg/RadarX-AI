@@ -7,7 +7,7 @@ import { assessQuietBasePreExpansion, QUIET_BASE_PRE_EXPANSION_DEFAULTS } from '
 const OUT = path.resolve(process.env.REPLAY_OUT_DIR || 'artifacts/quiet-base-replay');
 const INTERVAL_MS = 5 * 60_000;
 const WINDOW_START_MS = Date.parse(process.env.REPLAY_START_UTC || '2026-09-15T00:00:00.000Z');
-const MAX_COMPARISONS = Math.max(8, Math.min(48, Number(process.env.REPLAY_COMPARISON_SYMBOLS || 48)));
+const MAX_ADDITIONAL_COMPARISONS = Math.max(8, Math.min(32, Number(process.env.REPLAY_ADDITIONAL_COMPARISONS || 32)));
 const MIN_SAMPLE_QUOTE_VOLUME = 750_000;
 const API_BASES = [
   'https://data-api.binance.vision',
@@ -17,6 +17,11 @@ const API_BASES = [
   'https://api2.binance.com'
 ];
 const TARGETS = ['MAGICUSDT', 'KAIAUSDT'];
+// Keep the prior successful 18-pair replay cohort stable for before/after comparability.
+const BASELINE_COMPARISON_SYMBOLS = [
+  'SOLUSDT','NEARUSDT','ZECUSDT','XRPUSDT','SUIUSDT','BNBUSDT','WLDUSDT','UNIUSDT',
+  'ADAUSDT','DOGEUSDT','RLCUSDT','ENAUSDT','STRKUSDT','AVAXUSDT','RLUSDUSDT','ATOMUSDT'
+];
 const STABLE_BASES = new Set([
   'USDT','USDC','BUSD','TUSD','FDUSD','USDP','DAI','EUR','EURT','USDE','USTC',
   'PYUSD','USDS','USD1','EURI','AEUR','UST','PAXG','RLUSD'
@@ -253,7 +258,7 @@ async function main() {
     timestamp_normalization: 'epoch microseconds >= 1e14 divided by 1000; milliseconds >= 1e11 retained; seconds >= 1e9 multiplied by 1000',
     timestamp_normalization_self_test: timestampNormalizationCases,
     window_start_utc: iso(WINDOW_START_MS),
-    comparison_selection: 'Deterministic top quote-volume eligible Spot USDT assets from current Binance 24h ticker snapshot; targets MAGICUSDT and KAIAUSDT added explicitly; comparisons are exploratory and survivor-biased, not a random market sample',
+    comparison_selection: 'Fixed baseline cohort preserves the prior 18 pairs (MAGICUSDT, KAIAUSDT plus the previous 16 comparisons). Additional comparisons are chosen from the current eligible Spot USDT quote-volume universe; this is exploratory and survivor-biased, not a random market sample.',
     event_start_label_rule: 'First closed 5m bar in the target event day with prior 1h close-to-close return >=5% OR prior 4h return >=10%; diagnostic label only',
     quiet_outcome_rule: 'For each episode passing five core-base gates, label future outcome only (not a detector feature): max favorable high excursion over next 4h >=5% = quiet_then_rise; <5% = quiet_no_rise; incomplete 4h future = unlabelled',
     detector_thresholds: QUIET_BASE_PRE_EXPANSION_DEFAULTS,
@@ -302,23 +307,31 @@ async function main() {
     process.exitCode = 2;
     return;
   }
-  const spotSymbols = new Map((exchange.symbols || [])
-    .filter(item => item.status === 'TRADING' && item.quoteAsset === 'USDT' &&
-      item.isSpotTradingAllowed !== false && !STABLE_BASES.has(item.baseAsset) &&
-      !/(UP|DOWN|BULL|BEAR)USDT$/.test(item.symbol))
+  const exchangeSymbols = (exchange.symbols || []).filter(item => item.status === 'TRADING' &&
+    item.quoteAsset === 'USDT' && item.isSpotTradingAllowed !== false &&
+    !/(UP|DOWN|BULL|BEAR)USDT$/.test(item.symbol));
+  const allSpotUsdtSymbols = new Map(exchangeSymbols.map(item => [item.symbol, item]));
+  const spotSymbols = new Map(exchangeSymbols.filter(item => !STABLE_BASES.has(item.baseAsset))
     .map(item => [item.symbol, item]));
   const tickerBySymbol = new Map((Array.isArray(tickers) ? tickers : [])
     .filter(item => spotSymbols.has(item.symbol) && Number(item.quoteVolume) >= MIN_SAMPLE_QUOTE_VOLUME)
     .map(item => [item.symbol, item]));
-  const comparisons = [...tickerBySymbol.values()]
-    .filter(item => !TARGETS.includes(item.symbol) && !['BTCUSDT','ETHUSDT'].includes(item.symbol))
+  const availableBaselineComparisons = BASELINE_COMPARISON_SYMBOLS.filter(symbol => allSpotUsdtSymbols.has(symbol));
+  const unavailableBaselineComparisons = BASELINE_COMPARISON_SYMBOLS.filter(symbol => !allSpotUsdtSymbols.has(symbol));
+  const additionalComparisons = [...tickerBySymbol.values()]
+    .filter(item => !TARGETS.includes(item.symbol) && !BASELINE_COMPARISON_SYMBOLS.includes(item.symbol) && !['BTCUSDT','ETHUSDT'].includes(item.symbol))
     .sort((a, b) => Number(b.quoteVolume) - Number(a.quoteVolume))
-    .slice(0, MAX_COMPARISONS)
+    .slice(0, MAX_ADDITIONAL_COMPARISONS)
     .map(item => item.symbol);
-  const symbols = [...new Set([...TARGETS.filter(symbol => spotSymbols.has(symbol)), ...comparisons])];
+  const comparisons = [...availableBaselineComparisons, ...additionalComparisons];
+  const symbols = [...new Set([...TARGETS.filter(symbol => spotSymbols.has(symbol)), ...availableBaselineComparisons, ...additionalComparisons])];
   manifest.market_data_source = marketDataSource;
   manifest.server_time_utc = iso(serverNow);
   manifest.comparison_quote_volume_threshold = MIN_SAMPLE_QUOTE_VOLUME;
+  manifest.baseline_symbols_requested = [...TARGETS.filter(symbol => spotSymbols.has(symbol)), ...availableBaselineComparisons];
+  manifest.baseline_comparison_symbols_requested = availableBaselineComparisons;
+  manifest.baseline_comparison_symbols_unavailable = unavailableBaselineComparisons;
+  manifest.additional_comparison_symbols_requested = additionalComparisons;
   manifest.comparison_symbols_requested = comparisons;
   manifest.symbols_requested = symbols;
   if (!symbols.includes('MAGICUSDT') || !symbols.includes('KAIAUSDT')) {
@@ -704,7 +717,11 @@ async function main() {
       daily_change_24h: 'Derived from the close 288 five-minute intervals earlier, not daily candles.',
       event_start: 'First closed candle during 2026-10-09 UTC for MAGIC/KAIA with a preceding 1h return >=5% or 4h return >=10%. This is a diagnostic move threshold, not an assertion of the exact first trade of the event.',
       quiet_outcome: 'A core-base episode is labeled only after looking forward 4h at raw 5m highs; future data is confined to outcome labeling.',
+      prior_18_pair_baseline_symbols: manifest.baseline_symbols_requested,
+      baseline_comparison_symbols_unavailable: unavailableBaselineComparisons,
+      additional_comparison_universe: additionalComparisons,
       comparison_universe: comparisons,
+      total_symbol_count: symbols.length,
       comparisons_are_representative: false
     },
     production_coverage: manifest.production_coverage_reference,
