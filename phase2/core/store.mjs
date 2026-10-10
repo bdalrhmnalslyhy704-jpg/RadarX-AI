@@ -6,23 +6,9 @@ import {randomUUID,createHash} from 'node:crypto';
 import {gzipSync,gunzipSync} from 'node:zlib';
 import {SCAN_JOURNEY_SCHEMA,scanJourneyFilename,validateScanJourneyCycle,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,SCAN_JOURNEY_HORIZONS} from './scan-journey-ledger.mjs';
 const MiB=1024*1024;
-// These are append-only operational journals, not the durable per-cycle/per-symbol
-// Scan Journey ledger. Keep their tails bounded before they can fill the shared volume.
+// Scheduler events are operational queue state. Hydration reads at most 5,000
+// rows per radar; full scan decisions remain in the Scan Journey ledger.
 const JSONL_ARCHIVE_POLICIES=Object.freeze({
-  signals:{compactAtBytes:16*MiB,retainRows:10000,maxRetainedBytes:12*MiB},
-  notifications:{compactAtBytes:8*MiB,retainRows:5000,maxRetainedBytes:6*MiB},
-  moveAlerts:{compactAtBytes:4*MiB,retainRows:2000,maxRetainedBytes:3*MiB},
-  earlyExpansionAlerts:{compactAtBytes:4*MiB,retainRows:2000,maxRetainedBytes:3*MiB},
-  strongMoveAlerts:{compactAtBytes:4*MiB,retainRows:2000,maxRetainedBytes:3*MiB},
-  rotationAlerts:{compactAtBytes:4*MiB,retainRows:2000,maxRetainedBytes:3*MiB},
-  liquidityAbsorptionAlerts:{compactAtBytes:4*MiB,retainRows:2000,maxRetainedBytes:3*MiB},
-  kahirAlerts:{compactAtBytes:4*MiB,retainRows:2000,maxRetainedBytes:3*MiB},
-  doomsdayAlerts:{compactAtBytes:4*MiB,retainRows:2000,maxRetainedBytes:3*MiB},
-  professorAlerts:{compactAtBytes:4*MiB,retainRows:2000,maxRetainedBytes:3*MiB},
-  alMuqawimAlerts:{compactAtBytes:4*MiB,retainRows:2000,maxRetainedBytes:3*MiB},
-  falconEyeAlerts:{compactAtBytes:4*MiB,retainRows:2000,maxRetainedBytes:3*MiB},
-  // Scheduler hydration already reads at most the latest 5,000 rows per radar.
-  // Compact each radar independently so busy Radar 8 cannot evict Radar 9 state.
   schedulerEvents:{compactAtBytes:12*MiB,retainRowsPerKey:5000,keyField:'radar',maxRetainedBytesPerKey:5*MiB}
 });
 
@@ -122,8 +108,7 @@ export class DurableStore {
       await rename(temp,file);
     }catch(error){
       await unlink(temp).catch(()=>{});
-      // Never truncate or overwrite the source if the compacted copy cannot be
-      // made durable. ENOSPC must stay visible to the caller rather than lose logs.
+      // Keep the source intact if a compacted copy cannot be made durable.
       throw error;
     }
     this.lastWriteAt=Date.now();
@@ -197,23 +182,23 @@ export class DurableStore {
       return a[key];
     });
   }
-  async appendSignalAudit(v){return this.appendJsonlArchive('signals',[v]);}
-  async appendNotificationAudit(v){return this.appendJsonlArchive('notifications',[v]);}  async appendMoveAlert(v){return this.appendJsonlArchive('moveAlerts',[v]);}
+  async appendSignalAudit(v){return this.lock(async()=>{await appendFile(this.files.signals,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendNotificationAudit(v){return this.lock(async()=>{await appendFile(this.files.notifications,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}  async appendMoveAlert(v){return this.lock(async()=>{await appendFile(this.files.moveAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readMoveAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('moveAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendStrongMoveAlert(v){return this.appendJsonlArchive('strongMoveAlerts',[v]);}
+  async appendStrongMoveAlert(v){return this.lock(async()=>{await appendFile(this.files.strongMoveAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readStrongMoveAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('strongMoveAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendRotationAlert(v){return this.appendJsonlArchive('rotationAlerts',[v]);}
+  async appendRotationAlert(v){return this.lock(async()=>{await appendFile(this.files.rotationAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readRotationAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('rotationAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendLiquidityAbsorptionAlert(v){return this.appendJsonlArchive('liquidityAbsorptionAlerts',[v]);}
+  async appendLiquidityAbsorptionAlert(v){return this.lock(async()=>{await appendFile(this.files.liquidityAbsorptionAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readLiquidityAbsorptionAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('liquidityAbsorptionAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
   async appendKahirAlert(v){return this.appendJsonlArchive('kahirAlerts',[v]);}
   async readKahirAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('kahirAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendDoomsdayAlert(v){return this.appendJsonlArchive('doomsdayAlerts',[v]);}
+  async appendDoomsdayAlert(v){return this.lock(async()=>{await appendFile(this.files.doomsdayAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readDoomsdayAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('doomsdayAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendProfessorAlert(v){return this.appendJsonlArchive('professorAlerts',[v]);}
-  async appendAlMuqawimAlert(v){return this.appendJsonlArchive('alMuqawimAlerts',[v]);}
+  async appendProfessorAlert(v){return this.lock(async()=>{await appendFile(this.files.professorAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendAlMuqawimAlert(v){return this.lock(async()=>{await appendFile(this.files.alMuqawimAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readAlMuqawimAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('alMuqawimAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendEarlyExpansionAlert(v){return this.appendJsonlArchive('earlyExpansionAlerts',[v]);}
+  async appendEarlyExpansionAlert(v){return this.lock(async()=>{await appendFile(this.files.earlyExpansionAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readEarlyExpansionAlerts({sinceMs=0,limit=100}={}){const safeLimit=Math.min(500,Math.max(1,Number(limit)||100));const rows=await this.readRecent('earlyExpansionAlerts',500);return rows.filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).sort((a,b)=>Number(a?.processed_at??a?.detected_at??0)-Number(b?.processed_at??b?.detected_at??0)).slice(0,safeLimit);}
   async appendScanSchedulerEvents(events){
     return this.appendJsonlArchive('schedulerEvents',events);
@@ -249,7 +234,7 @@ export class DurableStore {
     }catch{return[];}
     return rows.sort((a,b)=>Number(a?.event_at||0)-Number(b?.event_at||0));
   }
-  async appendFalconEyeAlert(v){return this.appendJsonlArchive('falconEyeAlerts',[v]);}
+  async appendFalconEyeAlert(v){return this.lock(async()=>{await appendFile(this.files.falconEyeAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readFalconEyeAlerts({sinceMs=0,limit=100}={}){const safeLimit=Math.min(100,Math.max(1,Number(limit)||100));const rows=await this.readRecent('falconEyeAlerts',500);return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).sort((a,b)=>Number(a?.processed_at||0)-Number(b?.processed_at||0)).slice(0,safeLimit);}
   async readProfessorAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('professorAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
   async readKahirAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('kahirAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
