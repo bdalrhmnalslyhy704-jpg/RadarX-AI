@@ -6,6 +6,7 @@ import {MarketWideKlineCache} from '../market/market-wide-kline-cache.mjs';
 import {DurableStore} from '../core/store.mjs';
 import {EarlyExpansionRadar} from '../core/early-expansion-radar.mjs';
 import {CONFIG} from '../config.mjs';
+import {shadowArmForCycle,compareShadowPairCycles,summarizeShadowArm,SHADOW_ARM} from '../core/market-wide-shadow-experiment.mjs';
 
 const MIN_QUOTE_VOLUME_24H = Number(process.env.RADARX_MARKET_WIDE_MIN_QUOTE_VOLUME_24H || 750000);
 const MAX_WARMUP_MINUTES = Math.min(120, Math.max(1,
@@ -266,6 +267,10 @@ try {
     }
 
     const isShadowCycle = warmupReady;
+    const shadowAssignment = isShadowCycle ? shadowArmForCycle(report.shadow.cycles.length + 1) : null;
+    // Toggle only in this isolated process. Warm-up and production remain legacy-only.
+    radar.config.marketWideLightScanPoolActivationEnabled =
+      Boolean(shadowAssignment && shadowAssignment.arm === SHADOW_ARM.LIGHT_POOL);
     const cycleStartedAt = Date.now();
     const httpBefore = httpAttempts.length;
     const archiveIndexBefore = observedCycleArchives.length;
@@ -310,7 +315,10 @@ try {
         gate_ready_cycle:report.cycles,
         completed_cycles:0,
         micro_pool_applied:false,
-        pool_activation_enabled:false,
+        pool_activation_enabled:true,
+        assignment_mode:'BALANCED_AB_ABBA_PAIRS',
+        planned_legacy_cycles:Math.ceil(SHADOW_CYCLES/2),
+        planned_light_pool_cycles:Math.floor(SHADOW_CYCLES/2),
         legacy_micro_selector_active:true,
         deep_scans_enabled:true,
         isolated_process:true,
@@ -324,7 +332,8 @@ try {
           micro_scanned_total:Number(radar.lastCoverage?.micro_scanned_total)||0,
           scan_duration_ms:Number(radar.lastCoverage?.scan_duration_ms)||0
         },
-        cycles:[]
+        cycles:[],
+        pairs:[]
       };
       progressLog('[MARKET_WIDE_CACHE_SHADOW_STARTED]',{
         gate_ready:true,cycle:report.cycles,eligible_symbols:coverage.expected_symbols,
@@ -352,6 +361,10 @@ try {
       const currentDuration = Number(completion?.scan_duration_ms ?? radar.lastCoverage?.scan_duration_ms);
       const cycleRow = {
         shadow_cycle:report.shadow.cycles.length+1,
+        shadow_pair_index:shadowAssignment?.pair_index??null,
+        shadow_pair_position:shadowAssignment?.pair_position??null,
+        shadow_arm:shadowAssignment?.arm??'UNKNOWN',
+        expected_pool_activation:shadowAssignment?.expected_micro_pool_applied===true,
         radar_cycle:report.cycles,
         cycle_id:archive.cycle_id||null,
         observed_at:new Date(now).toISOString(),
@@ -384,11 +397,26 @@ try {
         actual_binance_http_attempts:Math.max(0,httpAttempts.length-httpBefore),
         actual_5m_kline_http_attempts:httpAttempts.slice(httpBefore).filter(item=>item.url.includes('/api/v3/klines')&&item.url.includes('interval=5m')).length,
         binance_rest_calls_added_by_light_scan:Number(light.binance_rest_calls_added_by_light_scan)||0,
+        micro_input_total:Number(light.micro_input_total)||0,
+        micro_pool_applied:light.micro_pool_applied===true,
+        legacy_micro_selector_active:light.legacy_micro_selector_active===true,
         micro_symbols:Array.isArray(scheduler?.micro_symbols)?scheduler.micro_symbols:[],
         deep_symbols:Array.isArray(scheduler?.deep_symbols)?scheduler.deep_symbols:[]
       };
       report.shadow.cycles.push(cycleRow);
       report.shadow.completed_cycles = report.shadow.cycles.length;
+      const activationMatches = cycleRow.micro_pool_applied === cycleRow.expected_pool_activation &&
+        cycleRow.legacy_micro_selector_active === !cycleRow.expected_pool_activation;
+      if (!activationMatches) {
+        shadowAbortReason = cycleRow.expected_pool_activation ? 'CANDIDATE_POOL_NOT_APPLIED' : 'LEGACY_SELECTOR_CONTAMINATED';
+        progressLog('[MARKET_WIDE_CACHE_SHADOW_SELECTOR_MISMATCH]',{
+          shadow_cycle:cycleRow.shadow_cycle,arm:cycleRow.shadow_arm,reason:shadowAbortReason,
+          expected_pool_activation:cycleRow.expected_pool_activation,
+          micro_pool_applied:cycleRow.micro_pool_applied,
+          legacy_micro_selector_active:cycleRow.legacy_micro_selector_active
+        });
+        break;
+      }
       if (cycleRow.market_wide_cache_coverage_ready !== true || cycleRow.websocket_transport_state !== 'LIVE' || cycleRow.websocket_running !== true) {
         shadowAbortReason = cycleRow.market_wide_cache_coverage_ready !== true
           ? 'CACHE_GATE_CLOSED_DURING_SHADOW' : 'WEBSOCKET_NOT_LIVE_DURING_SHADOW';
@@ -406,7 +434,10 @@ try {
         progressLog('[MARKET_WIDE_CACHE_SHADOW_COMPLETE]',{
           requested_cycles:SHADOW_CYCLES,completed_cycles:report.shadow.cycles.length,
           duration_ms:report.shadow.duration_ms,coverage_ready_every_cycle:true,
-          websocket_live_every_cycle:true,micro_pool_applied:false,
+          websocket_live_every_cycle:true,micro_pool_activation_verified:true,
+          legacy_selector_cycles:report.shadow.cycles.filter(row=>row.shadow_arm===SHADOW_ARM.LEGACY).length,
+          light_pool_cycles:report.shadow.cycles.filter(row=>row.shadow_arm===SHADOW_ARM.LIGHT_POOL).length,
+          compared_pairs:Math.floor(report.shadow.cycles.length/2),
           light_scan_added_rest_calls:report.shadow.cycles.reduce((sum,row)=>sum+row.binance_rest_calls_added_by_light_scan,0)
         });
       }
@@ -464,6 +495,16 @@ try {
     report.shadow.completed_cycles = rows.length;
     report.shadow.coverage_ready_every_cycle = rows.length === SHADOW_CYCLES && rows.every(row=>row.market_wide_cache_coverage_ready===true);
     report.shadow.websocket_live_every_cycle = rows.length === SHADOW_CYCLES && rows.every(row=>row.websocket_transport_state==='LIVE'&&row.websocket_running===true);
+    report.shadow.pairs = [];
+    for(let index=0;index+1<rows.length;index+=2){
+      const pair=compareShadowPairCycles(rows.slice(index,index+2));
+      if(pair.complete)report.shadow.pairs.push(pair);
+    }
+    const legacyRows=rows.filter(row=>row.shadow_arm===SHADOW_ARM.LEGACY);
+    const poolRows=rows.filter(row=>row.shadow_arm===SHADOW_ARM.LIGHT_POOL);
+    const selectorActivationVerified=rows.length===SHADOW_CYCLES&&rows.every(row=>
+      row.micro_pool_applied===(row.shadow_arm===SHADOW_ARM.LIGHT_POOL)&&
+      row.legacy_micro_selector_active===(row.shadow_arm===SHADOW_ARM.LEGACY));
     report.shadow.summary = {
       requested_cycles:SHADOW_CYCLES,
       completed_cycles:rows.length,
@@ -491,12 +532,32 @@ try {
       cycles_with_zero_light_scan_rest_calls:rows.filter(row=>row.binance_rest_calls_added_by_light_scan===0).length,
       coverage_ready_every_cycle:report.shadow.coverage_ready_every_cycle,
       websocket_live_every_cycle:report.shadow.websocket_live_every_cycle,
-      micro_pool_applied:false,
+      selector_activation_verified:selectorActivationVerified,
+      arm_counts:{legacy:legacyRows.length,light_pool:poolRows.length},
+      pairs_completed:report.shadow.pairs.length,
+      pairs_with_changed_micro_selection:report.shadow.pairs.filter(pair=>pair.selection_changed).length,
+      mean_micro_jaccard_ratio:report.shadow.pairs.length
+        ?report.shadow.pairs.reduce((sum,pair)=>sum+(Number(pair.micro_jaccard_ratio)||0),0)/report.shadow.pairs.length:null,
+      mean_light_pool_duration_delta_ms:report.shadow.pairs.length
+        ?report.shadow.pairs.reduce((sum,pair)=>sum+(Number(pair.light_pool_duration_delta_ms)||0),0)/report.shadow.pairs.length:null,
+      by_arm:{
+        legacy:summarizeShadowArm(rows,SHADOW_ARM.LEGACY),
+        light_pool:summarizeShadowArm(rows,SHADOW_ARM.LIGHT_POOL)
+      },
       paper_trading:true,
       real_order_execution:false
     };
+    const balancedArms=legacyRows.length===Math.ceil(SHADOW_CYCLES/2)&&poolRows.length===Math.floor(SHADOW_CYCLES/2);
+    const noDeepFailures=rows.every(row=>Number(row.deep_failed_total||0)===0);
+    const zeroExtraLightRest=rows.every(row=>Number(row.binance_rest_calls_added_by_light_scan||0)===0);
+    report.shadow.summary.balanced_arms=balancedArms;
+    report.shadow.summary.no_deep_failures=noDeepFailures;
+    report.shadow.summary.zero_extra_light_scan_rest_calls=zeroExtraLightRest;
     if (report.shadow.status !== 'COMPLETE' || rows.length !== SHADOW_CYCLES ||
-        report.shadow.coverage_ready_every_cycle !== true || report.shadow.websocket_live_every_cycle !== true) {
+        report.shadow.coverage_ready_every_cycle !== true || report.shadow.websocket_live_every_cycle !== true ||
+        selectorActivationVerified!==true || balancedArms!==true ||
+        report.shadow.pairs.length!==Math.floor(SHADOW_CYCLES/2) ||
+        noDeepFailures!==true || zeroExtraLightRest!==true) {
       if (report.shadow.status === 'RUNNING') report.shadow.status = 'INCOMPLETE';
       report.status = 'SHADOW_INCOMPLETE';
     } else {
@@ -540,7 +601,7 @@ try {
   report.merged = false;
   report.deployed = false;
   report.note = report.status === 'SHADOW_COMPLETE'
-    ? 'Full eligible market history and WebSocket freshness gate passed; isolated live Shadow cycles completed with candidate pool activation disabled. No merge or deployment.'
+    ? 'Full eligible market history and live WebSocket gates passed; balanced legacy-vs-light-pool Shadow pairs verified per-cycle selector activation. This measures selection and runtime effects, not predictive accuracy. No merge or deployment.'
     : allReady
       ? 'Full cache coverage was reached, but the isolated Shadow comparison did not complete its required cycles. Inspect shadow.abort_reason.'
       : 'Acceptance gate remains closed; inspect per_symbol readiness_reason. Shadow did not start.';
