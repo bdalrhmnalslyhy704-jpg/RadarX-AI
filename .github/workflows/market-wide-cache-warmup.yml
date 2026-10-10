@@ -17,14 +17,14 @@ permissions:
 
 concurrency:
   group: market-wide-cache-warmup-proof
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   full-market-warmup:
     runs-on: ubuntu-latest
-    timeout-minutes: 355
+    timeout-minutes: 115
     env:
-      RADARX_MARKET_WIDE_WARMUP_MAX_MINUTES: '330'
+      RADARX_MARKET_WIDE_WARMUP_MAX_MINUTES: '90'
       RADARX_MARKET_WIDE_WARMUP_REPORT: artifacts/market-wide-cache-warmup.json
     steps:
       - name: Checkout isolated PR branch
@@ -48,7 +48,7 @@ jobs:
         timeout-minutes: 35
       - name: Collect full eligible Spot USDT market through bounded combined WebSocket
         run: node phase2/tools/market-wide-cache-warmup.mjs
-        timeout-minutes: 340
+        timeout-minutes: 100
       - name: Upload per-symbol warm-up report
         if: always()
         uses: actions/upload-artifact@v4
