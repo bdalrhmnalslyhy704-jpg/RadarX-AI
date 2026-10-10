@@ -45,7 +45,7 @@ export class BinanceStreamClient {
   scheduleReconnect(reason){
     if(!this.running)return;
     const why=String(reason||'WS_CLOSED');
-    if(this.consecutiveReconnectCount>=this.maxReconnectAttempts){
+    if(this.reconnectCount>=this.maxReconnectAttempts){
       this.running=false;
       if(this.timer)clearTimeout(this.timer);
       this.timer=null;
