@@ -24,6 +24,8 @@ test('scheduler journal restores queue age and last real scan after DurableStore
     now+=250;
     const first=journal.started('DEEP','AAAUSDT',{cycle:1,at:now,lane:'rotation',fastSeenAt:10_100});
     assert.equal(first.wait_ms,250);
+    assert.equal(first.queue_age_ms,250);
+    assert.equal(first.time_from_fast_to_scan_ms,150);
     now+=200;
     journal.finished('DEEP','AAAUSDT',{
       cycle:1,at:now,startedAt:10_250,outcome:'INCOMPLETE',
@@ -109,6 +111,8 @@ test('Radar 9 routes exceptional movement quickly, preserves a quiet-base slot a
     FASTUSDT:{volume_accel_ratio:3.4,trade_accel_ratio:2.5,price_acceleration_pct:.28},
     QUIETUSDT:{volume_accel_ratio:1.3,trade_accel_ratio:1.25,price_acceleration_pct:.04}
   };
+  radar.fastHistoryBySymbol.set('FASTUSDT',[fastBySymbol.FASTUSDT]);
+  radar.fastHistoryBySymbol.set('QUIETUSDT',[fastBySymbol.QUIETUSDT]);
   radar.updateFastSnapshot=row=>fastBySymbol[row.symbol]||{
     volume_accel_ratio:1.01,trade_accel_ratio:1.01,price_acceleration_pct:.005
   };
