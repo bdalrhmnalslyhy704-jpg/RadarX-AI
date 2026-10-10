@@ -95,7 +95,8 @@ function assessCachedEventDrivenBreakout({symbol, series, ticker, now, config}) 
     return unavailableEventShock(symbol, 'INVALID_CLOSED_CANDLE_FOR_EVENT_SCAN', tail.length);
   }
   const step = Math.max(1, Number(config?.candleStepMs) || 5 * 60_000);
-  const tolerance = Math.max(0, Number(config?.continuityToleranceMs) ?? 1000);
+  const toleranceRaw = Number(config?.continuityToleranceMs);
+  const tolerance = Number.isFinite(toleranceRaw) ? Math.max(0, toleranceRaw) : 1000;
   for (let i = 1; i < tail.length; i++) {
     if (Math.abs((Number(tail[i].openTime) - Number(tail[i - 1].openTime)) - step) > tolerance) {
       return unavailableEventShock(symbol, 'CLOSED_CANDLE_SEQUENCE_HAS_GAPS_FOR_EVENT_SCAN', tail.length);
