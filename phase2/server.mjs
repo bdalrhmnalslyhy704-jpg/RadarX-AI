@@ -135,6 +135,7 @@ export async function startServer({
   const multiAnalystRadar=new MultiAnalystEngine({rest:multiAnalystRest,store,config:config.multiAnalyst||{}});
   const alMuqawimRadar=new AlMuqawimRadar({rest,store,pushManager:push,config:config.alMuqawimRadar||{},logger});
   const marketWideKlineCache=new MarketWideKlineCache({
+    rest,
     urls:config.websocket.urls,
     initialBackoffMs:config.websocket.initialBackoffMs,
     maxBackoffMs:config.websocket.maxBackoffMs,
