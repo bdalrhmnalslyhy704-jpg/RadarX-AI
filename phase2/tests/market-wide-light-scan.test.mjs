@@ -536,7 +536,9 @@ test('extreme closed-candle breakouts get bounded Micro priority from cache with
     {symbol:'ALTUSDT',lastPrice:1,priceChange24h:0.2,quoteVolume24h:2_000_000,tradeCount24h:10000}
   ];
   const cache=new Map(rows.map(row=>[row.symbol,{
-    symbol:row.symbol,source:SOURCE,candles:eventDrivenCandles(row.symbol,now)
+    symbol:row.symbol,source:SOURCE,candles:row.symbol==='ALTUSDT'
+      ?candles({now,count:72}).map(candle=>({...candle,symbol:row.symbol}))
+      :eventDrivenCandles(row.symbol,now)
   }]));
   const light=new MarketWideLightScan({
     config:{candidateLimit:3,rotationReserve:2,minimumReadyCandidates:2},
