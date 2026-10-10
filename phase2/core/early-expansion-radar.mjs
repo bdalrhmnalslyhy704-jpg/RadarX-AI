@@ -4,6 +4,7 @@ import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notification-gate.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
 import {assessQuietBaseActivityShock,isFastActivityShockCandidate} from './activity-shock.mjs';
+import {assessQuietBasePreExpansion,summarizeQuietBasePreExpansion} from './quiet-base-pre-expansion.mjs';
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
 import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId,normalizeMissing,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,reconcileEligibilityQueueAge} from './scan-journey-ledger.mjs';
 import {ScanSchedulerJournal, schedulerLaneReason} from './scan-scheduler.mjs';
@@ -438,6 +439,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   // the closed-candle filter removes them.
   const gate=dataGate(series,now,cfg,{historicalReplay,allowMissingDepth:historicalReplay});
   const activityShock=assessQuietBaseActivityShock({fiveMinute:s['5m'],ticker,now,config:cfg});
+  const quietBasePreExpansion=assessQuietBasePreExpansion({fiveMinute:series['5m']||[],ticker,now,dataReady:gate.valid,dataIssues:gate.issues,config:cfg});
   const p=finite(ticker.lastPrice,null);
   if(!(p>0))return {score:null,decision_band:'DATA_INSUFFICIENT',pre_expansion_stage:'DATA_INSUFFICIENT',pre_expansion_fingerprint:{stage:'DATA_INSUFFICIENT',reason:'INVALID_PRICE'},activity_shock:activityShock,data_quality:0,liquidity_quality:null,data_stale:true,risk_flags:['INVALID_PRICE'],reason_codes:['INVALID_PRICE'],gates:gate};
   const r1=returns(s['1m'],1),r10=returns(s['1m'],10),r5=returns(s['5m'],1),r15=returns(s['15m'],1),r1h=returns(s['1h'],1),r4h=returns(s['4h'],1);
@@ -577,6 +579,11 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     return5mPct:r5,return10mPct:null,return15mPct:r5_3,
     alreadyExtended:extended
   });
+  preExpansion.quiet_base_pre_expansion=quietBasePreExpansion;
+  if(quietBasePreExpansion.classification==='PRE_EXPANSION'&&earlyScore!==null&&gate.valid&&!extended&&!historicalReplay){
+    preExpansion.stage='PRE_EXPANSION';
+    preExpansion.reason='QUIET_BASE_PRE_EXPANSION_CONFIRMED';
+  }
   const decisionBand=preExpansion.stage;
 
   const riskFlags=[
@@ -1539,6 +1546,7 @@ export class EarlyExpansionRadar{
               micro_scan_wait_ms:Number(micro.scheduler_wait_ms)||0,deep_scan_wait_ms:deepSchedulerStarted.wait_ms}});
           return {
             symbol:row.symbol,last_price:row.lastPrice,price_change_24h:row.priceChange24h,
+            quiet_base_scan_latency_ms:hasFiniteNumber(entry?.fast_scan_at)?Math.max(0,deepStarted-Number(entry.fast_scan_at)):null,
             early_expansion_score:finalScore!==null?Number(finalScore.toFixed(1)):null,
             signal_score_source:signalScoreSource,micro_fingerprint_score:microScore,
             micro_fingerprint_eligible:fp?.eligible===true,source_score_status:sourceScoreStatus,
@@ -1613,6 +1621,8 @@ export class EarlyExpansionRadar{
           data_stale:typeof result.data_stale==='boolean'?result.data_stale:INCOMPLETE,
           metrics:normalizeMissing(result.metrics||INCOMPLETE),structure_metrics:normalizeMissing(result.structure_metrics||INCOMPLETE),
           strategy_evidence:normalizeMissing(result.strategy_evidence||INCOMPLETE),trigger_evidence:normalizeMissing(result.trigger_evidence||INCOMPLETE),
+          quiet_base_pre_expansion:normalizeMissing(result.pre_expansion_fingerprint?.quiet_base_pre_expansion||INCOMPLETE),
+          quiet_base_scan_latency_ms:hasFiniteNumber(result.quiet_base_scan_latency_ms)?Number(result.quiet_base_scan_latency_ms):INCOMPLETE,
           risk_flags:result.risk_flags||[],reason_codes:result.reason_codes||[],
           invalidation:result.invalidation||INCOMPLETE,market_regime:result.market_regime||INCOMPLETE,
           source:result.source||INCOMPLETE
@@ -1688,6 +1698,8 @@ export class EarlyExpansionRadar{
         data_stale:candidate.data_stale,closed_candles_only:true,
         reason_codes:candidate.reason_codes||[],risk_flags:candidate.risk_flags||[],
         metrics:candidate.metrics||{},strategy_evidence:candidate.strategy_evidence||{},
+        quiet_base_pre_expansion:candidate.pre_expansion_fingerprint?.quiet_base_pre_expansion||null,
+        quiet_base_scan_latency_ms:hasFiniteNumber(candidate.quiet_base_scan_latency_ms)?Number(candidate.quiet_base_scan_latency_ms):null,
         market_regime:candidate.market_regime,source:candidate.source,detected_at:now
       }));
       const signalArchiveStartedAt=this.clock();
@@ -1859,7 +1871,9 @@ export class EarlyExpansionRadar{
             return entry;
           });
           const outcomeSummary=summarizeScanJourneyOutcomes(coins);
+          const quietBaseFingerprintSummary=summarizeQuietBasePreExpansion(scanned);
           const counters={
+            quiet_base_pre_expansion:quietBaseFingerprintSummary,
             expected_total:expected.length,received_total:receivedSymbols.length,
             missing_ticker_total:Math.max(0,expected.length-receivedSymbols.length),
             eligible_total:eligible.length,fast_scanned_total:eligible.length,
