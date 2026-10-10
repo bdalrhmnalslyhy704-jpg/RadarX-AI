@@ -1489,7 +1489,6 @@ export class EarlyExpansionRadar{
         if(entry)entry.micro_scan_started_at=startedAt;
         try{
           const result=await this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFivePromise);
-          if(!result?.failed&&Array.isArray(result?.fiveMinute))this.marketWideKlineCache?.seed?.(row.symbol,result.fiveMinute,'BINANCE_PUBLIC_REST');
           const completed=this.clock();
           if(entry){
             entry.micro_scan_completed_at=completed;
