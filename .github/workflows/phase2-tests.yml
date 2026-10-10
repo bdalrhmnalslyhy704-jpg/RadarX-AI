@@ -33,6 +33,9 @@ jobs:
       - name: Run Phase 1 and Phase 2 tests
         run: npm test
         timeout-minutes: 25
+      - name: Probe Binance market-data WebSocket and bounded REST fallback
+        run: node phase2/tests/market-data-connectivity-smoke.mjs
+        timeout-minutes: 1
       - name: Check required Phase 2 modules
         run: |
           node --check phase2/server.mjs
