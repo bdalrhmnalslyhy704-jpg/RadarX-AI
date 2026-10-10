@@ -449,6 +449,12 @@ test('OPERATIONAL_MONITOR: three consecutive Radar 8 cycles against live public 
     baseUrls:['https://data-api.binance.vision','https://api.binance.com'],
     timeoutMs:9000,minIntervalMs:100,maxRequestsPerMinute:240
   });
+  const monitorLogs=[];
+  const logger={
+    info(message){if(String(message).includes('RADARX_'))monitorLogs.push(String(message));},
+    warn(...args){monitorLogs.push(args.map(String).join(' '));},
+    error(...args){monitorLogs.push(args.map(String).join(' '));}
+  };
   const radar=new EarlyExpansionRadar({
     rest,store,
     config:{
@@ -457,15 +463,14 @@ test('OPERATIONAL_MONITOR: three consecutive Radar 8 cycles against live public 
       quietReserve:8,rotationReserve:8,microConcurrency:6,deepConcurrency:4,
       universeRefreshMs:60*60*1000,retryAttempts:1,pollMs:45_000
     },
-    clock:()=>Date.now(),
-    logger:{info(){},warn(){},error(){}}
+    clock:()=>Date.now(),logger
   });
   radar.running=true;
   const cycles=[];
   try{
     for(let i=0;i<3;i++){
       const ok=await radar.tick();
-      assert.equal(ok,true,'cycle '+(i+1)+' must complete against live REST data');
+      assert.equal(ok,true,'cycle '+(i+1)+' must complete against live REST data: '+JSON.stringify({lastError:radar.lastError,health:radar.health(),rest:rest.health(),telemetry:rest.telemetrySnapshot(),logs:monitorLogs.slice(-8)}));
       const latest=(await store.readScanJourneyCycles({limit:1}))[0];
       assert.ok(latest,'completed cycle must be archived');
       assert.equal(latest.status,'COMPLETE');
