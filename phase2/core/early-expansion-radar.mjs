@@ -1205,6 +1205,7 @@ export class EarlyExpansionRadar{
   async tick({quote=this.config.quote}={}){
     if(!this.running||this.busy)return false;
     this.busy=true;const scanStartedAt=this.clock();
+    await this.scheduler.hydrate();
     const phaseTimings={universe_refresh_ms:0,ticker_fast_selection_ms:0,market_context_ms:0,
       outcome_maintenance_ms:0,micro_scan_ms:0,deep_scan_ms:0,signal_archive_ms:0,notification_ms:0};
     try{
@@ -1219,8 +1220,24 @@ export class EarlyExpansionRadar{
       const eligible=rawRows.filter(x=>set.has(x.symbol)&&x.quoteVolume24h>=this.config.minQuoteVolume24h);
       const fastBySymbol=new Map();for(const row of eligible)fastBySymbol.set(row.symbol,this.updateFastState(row));
       this.fastScannedTotal=eligible.length;
-      const cycle=this.scans+1,selected=this.selectMicro(eligible,fastBySymbol,cycle);
+      const cycle=this.scans+1;
+      const fastSeenAt=this.clock();
+      for(const row of eligible)this.scheduler.ensureQueued('MICRO',row.symbol,fastSeenAt);
+      const selected=this.selectMicro(eligible,fastBySymbol,cycle);
       phaseTimings.ticker_fast_selection_ms=Math.max(0,this.clock()-tickerFastStartedAt);
+      this.scheduler.record({stage:'FAST',eventType:'CYCLE_COMPLETE',cycle,at:fastSeenAt,
+        elapsedMs:phaseTimings.ticker_fast_selection_ms,reasonCode:'ALL_ELIGIBLE_TICKERS_OBSERVED',
+        extra:{symbols_total:eligible.length,expected_total:expected.length,received_total:receivedSymbols.length}});
+      const selectedMicro=new Set(selected.map(x=>selectionSymbol(x)));
+      for(const row of eligible){
+        if(selectedMicro.has(selectionSymbol(row)))continue;
+        this.scheduler.defer('MICRO',row.symbol,{cycle,at:fastSeenAt,fastSeenAt,reasonCode:'MICRO_BATCH_CAPACITY'});
+      }
+      for(const item of selected){
+        const lane=item._selection_lane||'score';
+        this.scheduler.selected('MICRO',item.symbol,{cycle,at:fastSeenAt,lane,
+          reasonCode:schedulerLaneReason(lane,'MICRO'),fastSeenAt});
+      }
       let btcFive=[],marketContext={};
       const marketContextStartedAt=this.clock();
       try{
@@ -1243,20 +1260,66 @@ export class EarlyExpansionRadar{
       phaseTimings.outcome_maintenance_ms=Math.max(0,this.clock()-outcomeMaintenanceStartedAt);
       const microScanStartedAt=this.clock();
       const microScanned=await boundedMap(selected,this.config.microConcurrency,async row=>{
-        try{return await this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFive);}
-        catch(e){this.failedTotal++;this.noteError(e,'micro-row');return {symbol:row.symbol,failed:true,error:String(e?.message??e),micro_fingerprint:{score:null,confirmation_count:0,eligible:false,closed_candles_only:true},source:sourceList([tickerSource])};}
+        const startedAt=this.clock(),lane=row._selection_lane||'score';
+        this.scheduler.started('MICRO',row.symbol,{cycle,at:startedAt,lane,
+          reasonCode:schedulerLaneReason(lane,'MICRO'),fastSeenAt});
+        try{
+          const result=await this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFive);
+          const fp=result?.micro_fingerprint||{};
+          const incomplete=Boolean(result?.failed)||!hasFiniteNumber(fp.score)||
+            ['DATA_INSUFFICIENT','WARMING_UP','INCOMPLETE'].includes(String(fp.stage||'').toUpperCase());
+          this.scheduler.finished('MICRO',row.symbol,{cycle,at:this.clock(),startedAt,
+            outcome:result?.failed?'FAILED':incomplete?'INCOMPLETE':'COMPLETED',
+            lane,reasonCode:result?.failed?'MICRO_SCAN_EXCEPTION':incomplete?'MICRO_FINGERPRINT_INCOMPLETE':'MICRO_FINGERPRINT_READY',
+            failureCounted:Boolean(result?.failed),fastSeenAt,
+            extra:{score_available:hasFiniteNumber(fp.score),fingerprint_stage:fp.stage||null}});
+          return result;
+        }catch(e){
+          this.failedTotal++;this.noteError(e,'micro-row');
+          this.scheduler.finished('MICRO',row.symbol,{cycle,at:this.clock(),startedAt,outcome:'FAILED',
+            lane,reasonCode:'MICRO_SCAN_EXCEPTION',failureCounted:true,fastSeenAt,
+            extra:{error:String(e?.message??e)}});
+          return {symbol:row.symbol,failed:true,error:String(e?.message??e),micro_fingerprint:{score:null,confirmation_count:0,eligible:false,closed_candles_only:true},source:sourceList([tickerSource])};
+        }
       });
       phaseTimings.micro_scan_ms=Math.max(0,this.clock()-microScanStartedAt);
+      const deepPoolBeforeSelection=microScanned.filter(x=>x&&!x.failed&&selectionSymbol(x)&&hasFiniteNumber(x.micro_fingerprint?.score));
+      const deepSelectionAt=this.clock();
+      for(const item of deepPoolBeforeSelection)this.scheduler.ensureQueued('DEEP',selectionSymbol(item),deepSelectionAt);
       const deepTargets=this.selectDeepFromMicro(microScanned,cycle);
+      const selectedDeep=new Set(deepTargets.map(selectionSymbol));
+      for(const item of deepPoolBeforeSelection){
+        const symbol=selectionSymbol(item);
+        if(selectedDeep.has(symbol))continue;
+        this.scheduler.defer('DEEP',symbol,{cycle,at:deepSelectionAt,fastSeenAt,
+          reasonCode:'DEEP_BATCH_CAPACITY',extra:{micro_score:item.micro_fingerprint?.score??null}});
+      }
+      for(const item of deepTargets){
+        const lane=item._selection_lane||'score';
+        this.scheduler.selected('DEEP',selectionSymbol(item),{cycle,at:deepSelectionAt,lane,
+          reasonCode:schedulerLaneReason(lane,'DEEP'),fastSeenAt,
+          extra:{micro_score:item.micro_fingerprint?.score??null}});
+      }
       const deepScanStartedAt=this.clock();
       const scanned=await boundedMap(deepTargets,this.config.deepConcurrency,async micro=>{
-        const row=micro.row,fast=fastBySymbol.get(row.symbol)||{};
+        const row=micro.row,fast=fastBySymbol.get(row.symbol)||{},deepStartedAt=this.clock();
+        const lane=micro._selection_lane||'score';
+        this.scheduler.started('DEEP',row.symbol,{cycle,at:deepStartedAt,lane,
+          reasonCode:schedulerLaneReason(lane,'DEEP'),fastSeenAt,
+          extra:{micro_score:micro.micro_fingerprint?.score??null}});
         try{
           const evidence=await this.deepScan(row,fast,marketContext,micro),fp=micro.micro_fingerprint;
           const microScore=Number(fp?.score),deepScore=Number(evidence.early_expansion_score);
           const promoted=Boolean(fp?.eligible)&&Number.isFinite(microScore);
           const finalScore=promoted?Math.max(Number.isFinite(deepScore)?deepScore:0,microScore):evidence.early_expansion_score;
           const finalBand=evidence.pre_expansion_stage||evidence.decision_band;
+          const incomplete=finalBand==='DATA_INSUFFICIENT'||finalBand==='INCOMPLETE'||
+            evidence.data_stale===true||Number(evidence.data_quality)<Number(this.config.minDataQuality);
+          this.scheduler.finished('DEEP',row.symbol,{cycle,at:this.clock(),startedAt:deepStartedAt,
+            outcome:incomplete?'INCOMPLETE':'COMPLETED',lane,
+            reasonCode:incomplete?'DEEP_DATA_INCOMPLETE':(alertEligible({...evidence,early_expansion_score:finalScore,decision_band:finalBand},this.config)?'SIGNAL_EVALUATED':'NO_SIGNAL_NOT_A_FAILURE'),
+            failureCounted:false,fastSeenAt,
+            extra:{decision_band:finalBand||null,score_available:hasFiniteNumber(finalScore),data_stale:Boolean(evidence.data_stale)}});
           return {
             symbol:row.symbol,last_price:row.lastPrice,price_change_24h:row.priceChange24h,
             early_expansion_score:Number.isFinite(finalScore)?Number(finalScore.toFixed(1)):null,decision_band:finalBand,pre_expansion_stage:finalBand,pre_expansion_fingerprint:evidence.pre_expansion_fingerprint,
@@ -1269,7 +1332,13 @@ export class EarlyExpansionRadar{
             invalidation:evidence.invalidation,estimated_lead_time:evidence.estimated_lead_time,source:sourceList([evidence.source,tickerSource,micro.source]),coverage:null,
             paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',forensic_evidence_score:evidence.forensic_evidence_score,market_regime:evidence.market_regime
           };
-        }catch(e){this.failedTotal++;this.noteError(e,'deep-row');return {symbol:row.symbol,failed:true,error:String(e?.message??e),decision_band:'DATA_INSUFFICIENT',data_quality:0,micro_fingerprint:micro.micro_fingerprint,source:sourceList([tickerSource,micro.source])};}
+        }catch(e){
+          this.failedTotal++;this.noteError(e,'deep-row');
+          this.scheduler.finished('DEEP',row.symbol,{cycle,at:this.clock(),startedAt:deepStartedAt,
+            outcome:'FAILED',lane,reasonCode:'DEEP_SCAN_EXCEPTION',failureCounted:true,fastSeenAt,
+            extra:{error:String(e?.message??e)}});
+          return {symbol:row.symbol,failed:true,error:String(e?.message??e),decision_band:'DATA_INSUFFICIENT',data_quality:0,micro_fingerprint:micro.micro_fingerprint,source:sourceList([tickerSource,micro.source])};
+        }
       });
       phaseTimings.deep_scan_ms=Math.max(0,this.clock()-deepScanStartedAt);
       const ok=scanned.filter(x=>x&&!x.failed),deepFailures=scanned.length-ok.length,deepScannedTotal=ok.length;
@@ -1360,6 +1429,19 @@ export class EarlyExpansionRadar{
       coverage.scan_overrun_ms=Math.max(0,scanDurationMs-coverage.configured_poll_ms);
       coverage.phase_timings_ms={...phaseTimings};
       this.lastCoverage=coverage;
+      this.scheduler.record({stage:'CYCLE',eventType:'COMPLETED',cycle,at:scanCompletedAt,elapsedMs:scanDurationMs,
+        reasonCode:'RADAR8_CYCLE_TIMINGS',extra:{symbols_fast:eligible.length,symbols_micro_selected:selected.length,
+          symbols_micro_completed:microScanned.filter(x=>x&&!x.failed).length,symbols_deep_selected:deepTargets.length,
+          symbols_deep_completed:ok.length,symbols_deep_failed:deepFailures,phase_timings_ms:{...phaseTimings}}});
+      this.logger.info?.('[RADARX_SCHEDULER_REPORT] '+JSON.stringify({
+        radar:'RADAR_8',cycle,fast_symbols:eligible.length,micro_selected:selected.length,
+        micro_lanes:selected.reduce((o,x)=>(o[x._selection_lane||'score']=(o[x._selection_lane||'score']||0)+1,o),{}),
+        deep_selected:deepTargets.length,
+        deep_lanes:deepTargets.reduce((o,x)=>(o[x._selection_lane||'score']=(o[x._selection_lane||'score']||0)+1,o),{}),
+        micro_wait_ms:microScanned.map(x=>Number(x?.scheduler_wait_ms)||0),
+        deep_wait_ms:scanned.map(x=>Number(x?.scheduler_wait_ms)||0),
+        scan_duration_ms:scanDurationMs,phase_timings_ms:{...phaseTimings}
+      }));
       this.logger.info?.('[RADARX_SCAN_COMPLETE] '+JSON.stringify({
         radar:'RADAR_8',build_version:'Build 224',quote:q,rotation_cycle:coverage.rotation_cycle,
         scan_started_at:coverage.scan_started_at,scan_completed_at:coverage.scan_completed_at,
@@ -1377,7 +1459,7 @@ export class EarlyExpansionRadar{
       this.lastError=String(e?.message??e);this.lastScanAtMs=scanStartedAt;
       this.lastResult={...emptyEarlyExpansionSnapshot(this.config,quote,this.lastError),schema_version:'RADAR8_V2',as_of:new Date(scanStartedAt).toISOString()};
       return false;
-    }finally{this.busy=false;}
+    }finally{await this.scheduler.flush();this.busy=false;}
   }
   snapshot(limit=100,quote=this.config.quote){
     const q=this.normalizeQuote(quote);
