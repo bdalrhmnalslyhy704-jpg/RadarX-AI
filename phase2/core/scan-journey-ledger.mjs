@@ -46,7 +46,7 @@ export function closedCandleSnapshot(rows, asOfMs=Date.now()) {
     quote_volume:finite(c.quoteVolume) ? Number(c.quoteVolume) : INCOMPLETE,
     trade_count:finite(c.tradeCount ?? c.count) ? Number(c.tradeCount ?? c.count) : INCOMPLETE,
     taker_buy_base_volume:finite(c.takerBuyBaseVolume) ? Number(c.takerBuyBaseVolume) : INCOMPLETE
-  })) : [];
+  })) : INCOMPLETE;
 }
 
 export function incompleteHorizons(reason='NO_CLOSED_HORIZON_RESULT') {
@@ -86,6 +86,7 @@ export function validateScanJourneyCycle(cycle) {
     }
     for (const [key,child] of Object.entries(value)) {
       const childPath = path+'.'+key;
+      if (key === 'closed' && child === false && path.includes('candles_used')) errors.push('UNCLOSED_CANDLE:'+path);
       if (key === 'close_time' || key === 'closeTime') {
         const t = epoch(child);
         if (t !== null && completedAt !== null && t > completedAt) errors.push('FUTURE_CANDLE:'+childPath);
