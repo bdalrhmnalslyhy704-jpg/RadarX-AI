@@ -7,7 +7,7 @@ permissions:
   contents: read
 concurrency:
   group: pr199-live-shadow-20261010
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   live-shadow:
     runs-on: ubuntu-latest
