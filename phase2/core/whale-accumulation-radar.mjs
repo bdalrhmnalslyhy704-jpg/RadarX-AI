@@ -483,10 +483,13 @@ export class WhaleAccumulationRadar{
     return selected.slice(0,target);
   }
   async scanRow(row){
+    const aggTradesPromise=typeof this.rest.aggTrades==='function'
+      ?this.rest.aggTrades(row.symbol,{limit:1000})
+      :this.rest.request('/api/v3/aggTrades',{symbol:row.symbol,limit:1000});
     const [one,five,agg,depth]=await Promise.all([
       this.rest.klines(row.symbol,'1m',{limit:120}),
       this.rest.klines(row.symbol,'5m',{limit:60}),
-      this.rest.aggTrades(row.symbol,{limit:1000}),
+      aggTradesPromise,
       this.rest.depth(row.symbol,100)
     ]);
     const prev=this.previousDepth.get(row.symbol)||null;
