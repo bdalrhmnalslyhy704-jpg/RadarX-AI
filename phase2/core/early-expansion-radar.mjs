@@ -1764,6 +1764,7 @@ export class EarlyExpansionRadar{
             if(!entry.eligible&&entry.rejection_reason===INCOMPLETE)entry.rejection_reason='NOT_ELIGIBLE';
             return entry;
           });
+          const outcomeSummary=summarizeScanJourneyOutcomes(coins);
           const counters={
             expected_total:expected.length,received_total:receivedSymbols.length,
             missing_ticker_total:Math.max(0,expected.length-receivedSymbols.length),
@@ -1787,9 +1788,9 @@ export class EarlyExpansionRadar{
             oldest_pending_symbol:oldestPending?.symbol||INCOMPLETE,
             oldest_pending_wait_ms:oldestPending?.wait_ms??INCOMPLETE,
             oldest_pending_wait_cycles:oldestPending?.wait_cycles??INCOMPLETE,
-            outcomes_tracked_total:summarizeScanJourneyOutcomes(coins).tracked_total,
-            outcomes_untracked_total:summarizeScanJourneyOutcomes(coins).untracked_total,
-            outcomes_by_horizon:summarizeScanJourneyOutcomes(coins).by_horizon
+            outcomes_tracked_total:outcomeSummary.tracked_total,
+            outcomes_untracked_total:outcomeSummary.untracked_total,
+            outcomes_by_horizon:outcomeSummary.by_horizon
           };
           const record={
             schema_version:SCAN_JOURNEY_SCHEMA,cycle_id:journey.cycle_id,cycle_number:cycle,
