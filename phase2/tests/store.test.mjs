@@ -4,6 +4,7 @@ import {mkdtemp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DurableStore} from '../core/store.mjs';
+import {SCAN_JOURNEY_SCHEMA} from '../core/scan-journey-ledger.mjs';
 
 test('TEST_FIXTURE: durable settings subscriptions and audit jsonl survive a fresh read',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-store-'));
@@ -65,4 +66,40 @@ test('scheduler archive hydrates each radar independently when another radar dom
   const radar8=await store.readScanSchedulerEvents({radar:'RADAR_8',limit:2});
   assert.equal(radar8.length,2);
   assert.deepEqual(radar8.map(x=>x.symbol),['COIN6003USDT','COIN6004USDT']);
+});
+
+
+test('Radar 8 Micro quiet-base summary survives durable archive append and reload',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-quiet-summary-archive-'));
+  const at=1_800_000_000_000;
+  const store=await new DurableStore({dir}).init();
+  const summary={
+    evaluated_total:12,pre_expansion_total:2,watch_early_total:3,
+    already_extended_total:1,data_insufficient_total:2,no_signal_total:4,
+    average_scan_latency_ms:740,max_scan_latency_ms:1500
+  };
+  const cycle={
+    schema_version:SCAN_JOURNEY_SCHEMA,
+    cycle_id:'RADAR8:USDT:'+at,
+    cycle_number:1,radar:'RADAR_8',quote:'USDT',status:'COMPLETE',
+    started_at:at,completed_at:at+2000,
+    data_policy:{closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
+    counters:{micro_selected_total:12,quiet_base_pre_expansion_micro:summary},
+    coins:[{
+      symbol:'ARCHIVEUSDT',eligible:true,fast_scan_at:at+100,
+      micro_selected_at:at+200,micro_scan_started_at:at+300,micro_scan_completed_at:at+900,
+      micro_fingerprint:{quiet_base_pre_expansion:{fingerprint:'QUIET_BASE_PRE_EXPANSION',classification:'PRE_EXPANSION',detected:true,closed_candles_only:true}},
+      deep_scan_status:'DEFERRED'
+    }]
+  };
+  const write=await store.appendScanJourneyCycle(cycle);
+  assert.equal(write.duplicate,false);
+  const freshStore=await new DurableStore({dir}).init();
+  const restored=await freshStore.readScanJourneyCycles({limit:1});
+  assert.equal(restored.length,1);
+  assert.deepEqual(restored[0].counters.quiet_base_pre_expansion_micro,summary);
+  assert.equal(restored[0].coins[0].micro_fingerprint.quiet_base_pre_expansion.classification,'PRE_EXPANSION');
+  assert.equal(restored[0].data_policy.paper_trading,true);
+  assert.equal(restored[0].data_policy.real_order_execution,false);
+  assert.equal(restored[0].data_policy.closed_candles_only,true);
 });
