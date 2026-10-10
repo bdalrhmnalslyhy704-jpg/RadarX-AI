@@ -1431,7 +1431,10 @@ export class EarlyExpansionRadar{
             attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep
           });
           const completedAt=this.clock();
-          const assessment=assessQuietBasePreExpansion({fiveMinute:response.candles||[],ticker:{...row,priceChange24h:0},now:completedAt,dataReady:true,dataIssues:[],config:quietLightConfig});
+          const latestClosedBar=(response.candles||[])
+            .filter(candle=>Number(candle.closeTime)<=completedAt&&Number(candle.close)>0)
+            .sort((left,right)=>Number(left.closeTime)-Number(right.closeTime)).at(-1);
+          const assessment=assessQuietBasePreExpansion({fiveMinute:response.candles||[],ticker:{...row,lastPrice:Number(latestClosedBar?.close),priceChange24h:0},now:completedAt,dataReady:true,dataIssues:[],config:quietLightConfig});
           const rank=scoreQuietBasePreExpansionLight(assessment);
           this.quietBaseLightStateBySymbol.set(symbol,{symbol,assessedAt:completedAt,source:response.source||null,assessment,rank,stage:'LIGHT',cycle});
           const m=assessment.metrics||{};
