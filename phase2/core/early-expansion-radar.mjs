@@ -1378,6 +1378,7 @@ export class EarlyExpansionRadar{
       const eligibleBySymbol=new Map(eligible.map(x=>[x.symbol,x]));
       const fastBySymbol=new Map();for(const row of eligible)fastBySymbol.set(row.symbol,this.updateFastState(row));
       const fastScanAt=this.clock(),eligibleSet=new Set(eligible.map(x=>x.symbol));
+      phaseTimings.ticker_fast_selection_ms=Math.max(0,fastScanAt-tickerFastStartedAt);
       this.firstEligibleAtBySymbol=reconcileEligibilityQueueAge({
         previous:this.firstEligibleAtBySymbol,universeSymbols:expected,
         tickerBySymbol:rawBySymbol,eligibleSymbols:eligible.map(x=>x.symbol),
@@ -1519,7 +1520,6 @@ export class EarlyExpansionRadar{
         const entry=journeyEntries.get(row.symbol);
         if(entry){entry.micro_selected_at=this.clock();entry.micro_selection_lane=row._selection_lane||INCOMPLETE;entry.rejection_reason=INCOMPLETE;}
       }
-      phaseTimings.ticker_fast_selection_ms=Math.max(0,this.clock()-tickerFastStartedAt);
       let btcFive=[],marketContext={};
       const marketContextStartedAt=this.clock();
       let marketContextCompletedAt=marketContextStartedAt;
