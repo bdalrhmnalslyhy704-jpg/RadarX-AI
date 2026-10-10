@@ -30,6 +30,7 @@ export class RestRateLimitError extends Error {
 const SHARED = {
   inflight: new Map(),
   cache: new Map(),
+  cachePruneAt: 0,
   usedAt: [],
   lastRequestAt: 0,
   rateLimitedUntil: 0,
@@ -44,6 +45,10 @@ const SHARED = {
 const SHARED_MAX_REQUESTS_PER_MINUTE = 360;
 const SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE = 4000;
 const SHARED_MIN_INTERVAL_MS = 167;
+// TTL only helps if expired entries are removed. Symbols rotate continuously,
+// so prune expired market-data payloads and cap the shared cache to bound heap use.
+const SHARED_MAX_CACHE_ENTRIES = 512;
+const SHARED_CACHE_PRUNE_INTERVAL_MS = 1000;
 
 export function estimateBinanceRequestWeight(path, query = {}) {
   if (path === '/api/v3/exchangeInfo') return 20;
@@ -151,7 +156,35 @@ function cacheKey(baseUrls, path, query) {
   return JSON.stringify([baseUrls.slice().sort(), path, normalizedQuery(query)]);
 }
 
+function pruneSharedCache(now = Date.now(), force = false) {
+  if (!force && now < SHARED.cachePruneAt && SHARED.cache.size <= SHARED_MAX_CACHE_ENTRIES) return;
+  SHARED.cachePruneAt = now + SHARED_CACHE_PRUNE_INTERVAL_MS;
+  for (const [key, item] of SHARED.cache) {
+    if (!item || !Number.isFinite(Number(item.expiresAt)) || Number(item.expiresAt) <= now) {
+      SHARED.cache.delete(key);
+    }
+  }
+  while (SHARED.cache.size > SHARED_MAX_CACHE_ENTRIES) {
+    const oldest = SHARED.cache.keys().next();
+    if (oldest.done) break;
+    SHARED.cache.delete(oldest.value);
+  }
+}
+
+function cacheSharedValue(key, value, now = Date.now()) {
+  pruneSharedCache(now);
+  // Replacing a key also moves it to the newest position in the bounded FIFO.
+  SHARED.cache.delete(key);
+  SHARED.cache.set(key, value);
+  while (SHARED.cache.size > SHARED_MAX_CACHE_ENTRIES) {
+    const oldest = SHARED.cache.keys().next();
+    if (oldest.done) break;
+    SHARED.cache.delete(oldest.value);
+  }
+}
+
 function cachedValue(key, now = Date.now()) {
+  pruneSharedCache(now);
   const item = SHARED.cache.get(key);
   if (!item || item.expiresAt <= now) {
     if (item) SHARED.cache.delete(key);
@@ -241,7 +274,7 @@ export class RestClient {
           recordObservedUsedWeight(r.headers);
           const data=await r.json();
           const result={data,source:this.baseUrls[idx],receivedAt:Date.now()};
-          if(ttl>0) SHARED.cache.set(key,{expiresAt:Date.now()+ttl,value:result});
+          if(ttl>0) cacheSharedValue(key,{expiresAt:Date.now()+ttl,value:result});
           this.currentBaseIndex=idx; this.lastSuccessAt=Date.now();
           this.lastError=null; this.state='LIVE';
           return result;
