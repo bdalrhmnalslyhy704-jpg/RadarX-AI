@@ -1029,6 +1029,7 @@ export class EarlyExpansionRadar{
     this.running=false;this.busy=false;this.timer=null;this.universe=[];this.universeAt=0;
     this.fastState=new Map();this.lastAlertAt=new Map();this.lastAlertScore=new Map();this.lastBand=new Map();
     this.lastMicroScanCycleBySymbol=new Map();this.lastDeepScanCycleBySymbol=new Map();
+    this.scheduler=new ScanSchedulerJournal({radar:'RADAR_8',store,clock,logger});
     this.latestCandidates=[];this.lastResult=null;this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
     this.fastScannedTotal=0;this.failedTotal=0;this.failedSymbols=[];this.lastCoverage=emptyEarlyExpansionUniverse(this.config,this.config.quote);
   }
@@ -1092,19 +1093,26 @@ export class EarlyExpansionRadar{
   }
   selectMicro(rows,fastBySymbol,cycle=0){
     const currentCycle=Math.max(0,Math.trunc(Number(cycle)||0));
+    const selectionAt=this.clock();
     const all=(rows||[]).filter(row=>row&&row.symbol).map(row=>{
       const fast=fastBySymbol.get(row.symbol)||{};
       const quiet=quietCandidateScore(row,fast,this.config);
       const fastScore=fastCandidateScore(row,fast,this.config);
       const key=String(row.symbol).toUpperCase();
       const lastCycle=this.lastMicroScanCycleBySymbol.get(key);
+      const lastAt=this.scheduler.lastScanAt('MICRO',key);
+      const queuedAt=this.scheduler.queueStartedAt('MICRO',key);
+      const neverScanned=lastAt===null;
       const rotation=((symbolHash(row.symbol)+Math.imul(currentCycle,2654435761))>>>0)/4294967296;
       const rotationAge=lastCycle===undefined?Number.MAX_SAFE_INTEGER:Math.max(0,currentCycle-lastCycle);
+      const elapsedSinceScan=neverScanned?Number.MAX_SAFE_INTEGER:Math.max(0,selectionAt-lastAt);
+      const queueAge=queuedAt===null?0:Math.max(0,selectionAt-queuedAt);
       return {...row,fast,
         _microPreScore:fastScore*.55+(quiet??0)*.45,
         _quietScore:quiet??-1,_quietEligible:isQuietEarlyCandidate(row,fast,this.config),
         _exceptional:isExceptionalMicroCandidate(row,fast,this.config),
-        _rotation:rotation,_rotationAge:rotationAge};
+        _lastActuallyScannedAt:lastAt,_neverScanned:neverScanned,_queueAgeMs:queueAge,
+        _rotationAgeMs:elapsedSinceScan,_rotation:rotation,_rotationAge:rotationAge};
     });
     const n=Math.max(1,Math.trunc(this.config.microScanCandidates||36));
     const target=Math.min(n,new Set(all.map(x=>String(x.symbol).toUpperCase())).size);
@@ -1115,7 +1123,7 @@ export class EarlyExpansionRadar{
     const byScore=[...all].sort((a,b)=>b._microPreScore-a._microPreScore||a.symbol.localeCompare(b.symbol));
     const byQuiet=all.filter(x=>x._quietEligible).sort((a,b)=>
       (absolute24hMove(a)??Infinity)-(absolute24hMove(b)??Infinity)||b._quietScore-a._quietScore||a.symbol.localeCompare(b.symbol));
-    const byRotation=[...all].sort((a,b)=>b._rotationAge-a._rotationAge||a._rotation-b._rotation||a.symbol.localeCompare(b.symbol));
+    const byRotation=[...all].sort((a,b)=>Number(b._neverScanned)-Number(a._neverScanned)||b._rotationAgeMs-a._rotationAgeMs||b._queueAgeMs-a._queueAgeMs||b._rotationAge-a._rotationAge||a._rotation-b._rotation||a.symbol.localeCompare(b.symbol));
     const byExceptional=all.filter(x=>x._exceptional).sort((a,b)=>b._microPreScore-a._microPreScore||b._rotationAge-a._rotationAge||a.symbol.localeCompare(b.symbol));
     const selected=[],seen=new Set();
     const exceptionSlots=Math.min(core,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2)));
@@ -1133,6 +1141,7 @@ export class EarlyExpansionRadar{
   }
   selectDeepFromMicro(results,cycle=0){
     const currentCycle=Math.max(0,Math.trunc(Number(cycle)||0));
+    const selectionAt=this.clock();
     const valid=(results||[]).filter(x=>x&&!x.failed&&selectionSymbol(x)&&x.micro_fingerprint?.score!=null&&hasFiniteNumber(x.micro_fingerprint.score));
     const n=Math.max(1,Math.trunc(this.config.deepCandidates||10));
     const target=Math.min(n,new Set(valid.map(selectionSymbol)).size);
@@ -1147,9 +1156,14 @@ export class EarlyExpansionRadar{
       .sort((a,b)=>(absolute24hMove(a.row)??Infinity)-(absolute24hMove(b.row)??Infinity)||b._quietScore-a._quietScore||selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const byRotation=[...valid].map(item=>{
       const symbol=selectionSymbol(item),lastCycle=this.lastDeepScanCycleBySymbol.get(symbol);
-      return {...item,_rotationAge:lastCycle===undefined?Number.MAX_SAFE_INTEGER:Math.max(0,currentCycle-lastCycle),
+      const lastAt=this.scheduler.lastScanAt('DEEP',symbol),queuedAt=this.scheduler.queueStartedAt('DEEP',symbol);
+      const neverScanned=lastAt===null;
+      return {...item,_lastActuallyScannedAt:lastAt,_neverScanned:neverScanned,
+        _rotationAgeMs:neverScanned?Number.MAX_SAFE_INTEGER:Math.max(0,selectionAt-lastAt),
+        _queueAgeMs:queuedAt===null?0:Math.max(0,selectionAt-queuedAt),
+        _rotationAge:lastCycle===undefined?Number.MAX_SAFE_INTEGER:Math.max(0,currentCycle-lastCycle),
         _rotation:((symbolHash(symbol)+Math.imul(currentCycle,2654435761))>>>0)};
-    }).sort((a,b)=>b._rotationAge-a._rotationAge||a._rotation-b._rotation||selectionSymbol(a).localeCompare(selectionSymbol(b)));
+    }).sort((a,b)=>Number(b._neverScanned)-Number(a._neverScanned)||b._rotationAgeMs-a._rotationAgeMs||b._queueAgeMs-a._queueAgeMs||b._rotationAge-a._rotationAge||a._rotation-b._rotation||selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const byExceptional=valid.filter(x=>isExceptionalDeepCandidate(x,this.config)).sort((a,b)=>
       Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const selected=[],seen=new Set();
