@@ -199,3 +199,85 @@ test('scheduler event timing stays causal and forward candles remain blocked by 
   const future={openTime:now+900_000,closeTime:now+1_799_999,open:1,high:1.1,low:.9,close:1,volume:10,closed:false};
   assert.deepEqual(futureIssues([future],now),['FUTURE_OPEN_0']);
 });
+
+
+test('TEST_FIXTURE: scheduler before/after replay reports wait reduction and lane distribution',()=>{
+  const baseAt=1_900_000_000_000;
+  const cadenceMs=45_000,cycles=30,horizonMs=cadenceMs*cycles,coinCount=40;
+  let now=baseAt;
+  const config={minQuoteVolume24h:100_000,microScanCandidates:12,deepCandidates:4,
+    quietReserve:1,rotationReserve:2,exceptionalRotationBypassSlots:0};
+  const radar=new EarlyExpansionRadar({rest:{},store:{},config,clock:()=>now,logger:silent});
+  const rows=Array.from({length:coinCount},(_,i)=>({
+    symbol:'BENCH'+String(i).padStart(2,'0')+'USDT',
+    lastPrice:1+i*.01,priceChange24h:(i%7)*.55,
+    quoteVolume24h:1_000_000+i*10_000,tradeCount24h:20_000+i*100
+  }));
+  const fast=new Map(rows.map((row,i)=>[row.symbol,{
+    price_change_pct:.10+(i%3)*.01,price_acceleration_pct:.02+(i%3)*.005,
+    volume_accel_ratio:1.4+(i%4)*.04,trade_accel_ratio:1.3+(i%3)*.03
+  }]));
+
+  const baselineMicro=[...rows].sort((a,b)=>b.quoteVolume24h-a.quoteVolume24h).slice(0,config.microScanCandidates);
+  const baselineDeep=baselineMicro.slice(0,config.deepCandidates);
+  const baselineMicroTimes=new Map(baselineMicro.map(x=>[x.symbol,100]));
+  const baselineDeepTimes=new Map(baselineDeep.map(x=>[x.symbol,200]));
+  const beforeLatency=(map)=>rows.map(row=>map.has(row.symbol)?map.get(row.symbol):horizonMs);
+  const beforeMicro=beforeLatency(baselineMicroTimes),beforeDeep=beforeLatency(baselineDeepTimes);
+
+  const firstMicro=new Map(),firstDeep=new Map();
+  const microLanes={},deepLanes={};
+  for(let cycle=1;cycle<=cycles;cycle++){
+    now=baseAt+(cycle-1)*cadenceMs;
+    for(const row of rows)radar.scheduler.ensureQueued('MICRO',row.symbol,baseAt);
+    const selected=radar.selectMicro(rows,fast,cycle);
+    for(const row of selected){
+      const lane=row._selection_lane||'unknown';
+      microLanes[lane]=(microLanes[lane]||0)+1;
+      const startedAt=now+100;
+      if(!firstMicro.has(row.symbol))firstMicro.set(row.symbol,startedAt-baseAt);
+      radar.scheduler.started('MICRO',row.symbol,{cycle,at:startedAt,lane,fastSeenAt:now,reasonCode:'BENCHMARK_MICRO'});
+      radar.scheduler.finished('MICRO',row.symbol,{cycle,at:startedAt+1,startedAt,outcome:'COMPLETED',
+        lane,fastSeenAt:now,reasonCode:'BENCHMARK_MICRO_COMPLETE',failureCounted:false});
+    }
+    now=baseAt+(cycle-1)*cadenceMs+200;
+    const microResults=selected.map((row,i)=>candidate(row.symbol,row.priceChange24h,{
+      score:82-(i%9),participation:75,tradeParticipation:72,structure:78,compression:82,volume:1.5,trades:1.4
+    }));
+    for(const item of microResults)radar.scheduler.ensureQueued('DEEP',item.row.symbol,baseAt);
+    const deep=radar.selectDeepFromMicro(microResults,cycle);
+    for(const item of deep){
+      const symbol=item.row.symbol,lane=item._selection_lane||'unknown';
+      deepLanes[lane]=(deepLanes[lane]||0)+1;
+      const startedAt=now+100;
+      if(!firstDeep.has(symbol))firstDeep.set(symbol,startedAt-baseAt);
+      radar.scheduler.started('DEEP',symbol,{cycle,at:startedAt,lane,fastSeenAt:now,reasonCode:'BENCHMARK_DEEP'});
+      radar.scheduler.finished('DEEP',symbol,{cycle,at:startedAt+1,startedAt,outcome:'COMPLETED',
+        lane,fastSeenAt:now,reasonCode:'BENCHMARK_DEEP_COMPLETE',failureCounted:false});
+    }
+  }
+  const afterLatency=(map)=>rows.map(row=>map.has(row.symbol)?map.get(row.symbol):horizonMs);
+  const afterMicro=afterLatency(firstMicro),afterDeep=afterLatency(firstDeep);
+  const summarize=values=>{
+    const sorted=[...values].sort((a,b)=>a-b);
+    return {
+      coverage_count:values.filter(x=>x<horizonMs).length,
+      coverage_pct:Number((values.filter(x=>x<horizonMs).length/values.length*100).toFixed(1)),
+      avg_wait_ms:Math.round(values.reduce((s,x)=>s+x,0)/values.length),
+      median_wait_ms:sorted[Math.floor(sorted.length/2)],
+      p95_wait_ms:sorted[Math.min(sorted.length-1,Math.floor(sorted.length*.95))]
+    };
+  };
+  const report={
+    fixture:'40 synthetic symbols; 30 cycles; 45s cadence; unscanned coins are right-censored at 1,350,000ms',
+    horizon_ms:horizonMs,
+    before:{micro:summarize(beforeMicro),deep:summarize(beforeDeep)},
+    after:{micro:summarize(afterMicro),deep:summarize(afterDeep)},
+    lane_distribution:{micro:microLanes,deep:deepLanes}
+  };
+  console.log('[RADARX_SCHEDULER_BENCHMARK] '+JSON.stringify(report));
+  assert.ok(report.after.micro.coverage_count>report.before.micro.coverage_count);
+  assert.ok(report.after.deep.coverage_count>report.before.deep.coverage_count);
+  assert.ok(report.after.micro.avg_wait_ms<report.before.micro.avg_wait_ms);
+  assert.ok(report.after.deep.avg_wait_ms<report.before.deep.avg_wait_ms);
+});
