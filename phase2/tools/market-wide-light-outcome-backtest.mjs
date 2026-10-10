@@ -125,9 +125,128 @@ function perSampleRates(rows) {
   return {
     hit5_mfe4h_rate: rate(rows.map(row => row.mfe4h >= 5)),
     hit3_mfe4h_rate: rate(rows.map(row => row.mfe4h >= 3)),
+    hit10_mfe4h_rate: rate(rows.map(row => row.mfe4h >= 10)),
+    adverse5_mae4h_rate: rate(rows.map(row => row.mae4h <= -5)),
     mean_return4h: mean(rows.map(row => row.return4h)),
     mean_mfe4h: mean(rows.map(row => row.mfe4h)),
     median_mae4h: median(rows.map(row => row.mae4h))
+  };
+}
+
+function clampScore(value) {
+  return Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
+}
+function weightedScore(parts) {
+  const valid = parts.filter(([value, weight]) => Number.isFinite(value) && Number.isFinite(weight) && weight > 0);
+  const denominator = valid.reduce((sum, [, weight]) => sum + weight, 0);
+  return denominator > 0 ? valid.reduce((sum, [value, weight]) => sum + value * weight, 0) / denominator : null;
+}
+function medianFinite(values) {
+  return median(values.filter(value => Number.isFinite(value) && value >= 0));
+}
+function deriveExpansionFeatures(candles, index, audit) {
+  const closeAt = at => Number(candles[at]?.close);
+  const pctFrom = offset => {
+    const current = closeAt(index), previous = closeAt(index - offset);
+    return Number.isFinite(current) && Number.isFinite(previous) && previous > 0
+      ? (current / previous - 1) * 100 : null;
+  };
+  const momentum15m = pctFrom(3);
+  const preceding15m = (() => {
+    const recent = closeAt(index - 3), older = closeAt(index - 6);
+    return Number.isFinite(recent) && Number.isFinite(older) && older > 0 ? (recent / older - 1) * 100 : null;
+  })();
+  const momentum1h = pctFrom(12);
+  const momentum4h = pctFrom(48);
+  const acceleration15m = Number.isFinite(momentum15m) && Number.isFinite(preceding15m)
+    ? momentum15m - preceding15m : null;
+  const recentBars = candles.slice(index - 2, index + 1);
+  const baselineBars = candles.slice(index - 26, index - 2);
+  const recentQuote = medianFinite(recentBars.map(row => Number(row.quoteVolume)));
+  const baselineQuote = medianFinite(baselineBars.map(row => Number(row.quoteVolume)));
+  const recentVolume = recentQuote ?? medianFinite(recentBars.map(row => Number(row.volume)));
+  const baselineVolume = baselineQuote ?? medianFinite(baselineBars.map(row => Number(row.volume)));
+  const volumeRatio = recentVolume !== null && baselineVolume > 0 ? recentVolume / baselineVolume : null;
+  const recentTrades = medianFinite(recentBars.map(row => Number(row.tradeCount)));
+  const baselineTrades = medianFinite(baselineBars.map(row => Number(row.tradeCount)));
+  const tradeRatio = recentTrades !== null && baselineTrades > 0 ? recentTrades / baselineTrades : null;
+  const buyQuote = recentBars.reduce((sum, row) => sum + (Number.isFinite(Number(row.takerBuyQuoteVolume)) ? Number(row.takerBuyQuoteVolume) : 0), 0);
+  const totalQuote = recentBars.reduce((sum, row) => sum + (Number.isFinite(Number(row.quoteVolume)) ? Number(row.quoteVolume) : 0), 0);
+  const buyPressure = totalQuote > 0 && recentBars.every(row => Number.isFinite(Number(row.takerBuyQuoteVolume)))
+    ? buyQuote / totalQuote : null;
+  const metrics = audit?.metrics || {};
+  const core = metrics.core_conditions || {};
+  const lightScore = Number.isFinite(audit?.candidate_score) ? audit.candidate_score : null;
+  const resistanceDistance = Number.isFinite(metrics.resistance_distance_pct) ? metrics.resistance_distance_pct : null;
+  const atrRatio = Number.isFinite(metrics.atr_ratio) ? metrics.atr_ratio : null;
+  const bbRatio = Number.isFinite(metrics.bollinger_width_ratio) ? metrics.bollinger_width_ratio : null;
+  const compressionRatio = [atrRatio, bbRatio].filter(Number.isFinite).length
+    ? Math.min(...[atrRatio, bbRatio].filter(Number.isFinite)) : null;
+  const features = {
+    momentum15m, preceding15m, momentum1h, momentum4h, acceleration15m,
+    volumeRatio, tradeRatio, buyPressure, lightScore, resistanceDistance,
+    supportScore: core.support_structure === true ? (metrics.higher_lows === true ? 100 : 70) :
+      core.support_structure === false ? 0 : null,
+    compressionScore: compressionRatio === null ? null : clampScore(100 * (1 - compressionRatio / 1.3)),
+    resistanceScore: resistanceDistance === null ? null :
+      (resistanceDistance >= -0.1 && resistanceDistance <= 2.5
+        ? clampScore(100 * (1 - Math.max(0, resistanceDistance) / 2.5)) : 0),
+    momentum15Score: Number.isFinite(momentum15m) ? clampScore(50 + momentum15m * 30) : null,
+    momentum1hScore: Number.isFinite(momentum1h) ? clampScore(50 + momentum1h * 12) : null,
+    accelerationScore: Number.isFinite(acceleration15m) ? clampScore(50 + acceleration15m * 25) : null,
+    volumeScore: Number.isFinite(volumeRatio) && volumeRatio > 0
+      ? clampScore(50 + Math.log2(Math.max(0.125, volumeRatio)) * 25) : null,
+    tradeScore: Number.isFinite(tradeRatio) && tradeRatio > 0
+      ? clampScore(50 + Math.log2(Math.max(0.125, tradeRatio)) * 25) : null,
+    buyPressureScore: Number.isFinite(buyPressure) ? clampScore((buyPressure - 0.4) * 500) : null
+  };
+  const expansionPenalty =
+    (Number.isFinite(momentum4h) ? Math.max(0, momentum4h - 5) * 3 : 0) +
+    (Number.isFinite(momentum1h) ? Math.max(0, momentum1h - 3) * 4 : 0);
+  features.hybridExpansionScore = weightedScore([
+    [features.lightScore, 0.24],
+    [features.momentum15Score, 0.18],
+    [features.momentum1hScore, 0.12],
+    [features.accelerationScore, 0.12],
+    [features.volumeScore, 0.13],
+    [features.buyPressureScore, 0.12],
+    [features.supportScore, 0.04],
+    [features.resistanceScore, 0.05]
+  ]);
+  features.flowConfirmedScore = weightedScore([
+    [features.momentum15Score, 0.20],
+    [features.accelerationScore, 0.15],
+    [features.volumeScore, 0.20],
+    [features.tradeScore, 0.08],
+    [features.buyPressureScore, 0.18],
+    [features.resistanceScore, 0.08],
+    [features.supportScore, 0.06],
+    [features.lightScore, 0.05]
+  ]);
+  features.guardedMomentumScore = weightedScore([
+    [features.momentum15Score, 0.24],
+    [features.momentum1hScore, 0.20],
+    [features.accelerationScore, 0.14],
+    [features.volumeScore, 0.16],
+    [features.tradeScore, 0.06],
+    [features.buyPressureScore, 0.12],
+    [features.supportScore, 0.04],
+    [features.resistanceScore, 0.04]
+  ]);
+  for (const key of ['hybridExpansionScore', 'flowConfirmedScore', 'guardedMomentumScore']) {
+    if (Number.isFinite(features[key])) features[key] = Math.max(0, features[key] - expansionPenalty);
+  }
+  return features;
+}
+function summarizeSampleBlock(samples, key) {
+  const rows = samples.map(sample => sample.metrics?.[key]).filter(Boolean);
+  return {
+    snapshots: rows.length,
+    hit5_mfe4h_pct: round(mean(rows.map(row => row.hit5_mfe4h_rate)) * 100, 3),
+    hit10_mfe4h_pct: round(mean(rows.map(row => row.hit10_mfe4h_rate)) * 100, 3),
+    adverse5_mae4h_pct: round(mean(rows.map(row => row.adverse5_mae4h_rate)) * 100, 3),
+    mean_return4h_pct: round(mean(rows.map(row => row.mean_return4h)), 4),
+    mean_max_upside4h_pct: round(mean(rows.map(row => row.mean_mfe4h)), 4)
   };
 }
 function normalizedKlines(symbol, rawRows, fetchedAt) {
@@ -143,6 +262,8 @@ function normalizedKlines(symbol, rawRows, fetchedAt) {
     closeTime: Number(row[6]),
     quoteVolume: Number(row[7]),
     tradeCount: Number(row[8]),
+    takerBuyBaseVolume: Number(row[9]),
+    takerBuyQuoteVolume: Number(row[10]),
     closed: Number(row[6]) <= fetchedAt,
     source: 'BINANCE_PUBLIC_REST'
   })).filter(row => row.closed && Number.isFinite(row.openTime) && Number.isFinite(row.closeTime) &&
@@ -207,9 +328,11 @@ function forwardOutcome(symbol, candles, index) {
   const maxHigh = rows => Math.max(...rows.map(row => row.high));
   const minLow = rows => Math.min(...rows.map(row => row.low));
   const returnAt = rows => (rows.at(-1).close / startPrice - 1) * 100;
+  const momentum15m = (current.close / candles[index - 3].close - 1) * 100;
   const momentum1h = (current.close / candles[index - 12].close - 1) * 100;
+  const momentum4h = (current.close / candles[index - 48].close - 1) * 100;
   return {
-    symbol, momentum1h,
+    symbol, momentum15m, momentum1h, momentum4h,
     return15m: returnAt(next15),
     return1h: returnAt(next1h),
     return4h: returnAt(next4h),
@@ -372,7 +495,8 @@ try {
   };
   const scanner = new MarketWideLightScan({config:{candidateLimit:48,rotationReserve:12,maxCandleAgeMs:8 * 60 * 1000,
     minClosedCandles:60,maxClosedCandles:96,minimumReadyCandidates:24},clock:()=>Date.now()});
-  const pooled = {market:[], light48:[], light12:[], momentum12:[]};
+  const pooled = {market:[], light48:[], light12:[], momentum12:[],
+    hybrid48:[], hybrid12:[], hybrid12_from_light48:[], flow48:[], flow12:[], guarded48:[], guarded12:[]};
   const perSampleMetrics = [];
   let sampleIndex = 0;
   let totalEligibleInSnapshots = 0;
@@ -435,16 +559,56 @@ try {
     const lightShortlistRows = ranked.slice(0, 12).map(item => outcomeBySymbol.get(item.symbol)).filter(Boolean);
     const momentumShortlistRows = eligibleNow.map(row => outcomeBySymbol.get(row.symbol)).filter(Boolean)
       .sort((a, b) => b.momentum1h - a.momentum1h).slice(0, 12);
+    const decorated = eligibleNow.map(row => {
+      const symbol = row.symbol;
+      const index = indexBySymbol.get(symbol);
+      const historyRow = readyRows.find(item => item.symbol === symbol);
+      const audit = result.audit.get(symbol);
+      const features = historyRow && Number.isInteger(index)
+        ? deriveExpansionFeatures(historyRow.candles, index, audit) : {};
+      return {symbol, outcome:outcomeBySymbol.get(symbol), features};
+    }).filter(item => item.outcome);
+    const rankByFeature = (featureKey, limit) => decorated
+      .filter(item => isDirectionalCandidateSymbol(item.symbol) && Number.isFinite(item.features[featureKey]))
+      .slice()
+      .sort((a,b) => b.features[featureKey] - a.features[featureKey] || a.symbol.localeCompare(b.symbol))
+      .slice(0, limit)
+      .map(item => item.outcome);
+    const hybrid48Rows = rankByFeature('hybridExpansionScore', 48);
+    const hybrid12Rows = rankByFeature('hybridExpansionScore', 12);
+    const flow48Rows = rankByFeature('flowConfirmedScore', 48);
+    const flow12Rows = rankByFeature('flowConfirmedScore', 12);
+    const guarded48Rows = rankByFeature('guardedMomentumScore', 48);
+    const guarded12Rows = rankByFeature('guardedMomentumScore', 12);
+    const lightPoolSymbols = new Set(result.candidateSymbols);
+    const hybrid12FromLight48Rows = decorated.filter(item => lightPoolSymbols.has(item.symbol) &&
+      isDirectionalCandidateSymbol(item.symbol) && Number.isFinite(item.features.hybridExpansionScore))
+      .sort((a,b) => b.features.hybridExpansionScore - a.features.hybridExpansionScore || a.symbol.localeCompare(b.symbol))
+      .slice(0,12).map(item => item.outcome);
     pooled.market.push(...marketRows);
     pooled.light48.push(...lightPoolRows);
     pooled.light12.push(...lightShortlistRows);
     pooled.momentum12.push(...momentumShortlistRows);
+    pooled.hybrid48.push(...hybrid48Rows);
+    pooled.hybrid12.push(...hybrid12Rows);
+    pooled.hybrid12_from_light48.push(...hybrid12FromLight48Rows);
+    pooled.flow48.push(...flow48Rows);
+    pooled.flow12.push(...flow12Rows);
+    pooled.guarded48.push(...guarded48Rows);
+    pooled.guarded12.push(...guarded12Rows);
     report.quality.total_selected_pool_observations += lightPoolRows.length;
     const groups = {
       market:perSampleRates(marketRows),
       light48:perSampleRates(lightPoolRows),
       light12:perSampleRates(lightShortlistRows),
-      momentum12:perSampleRates(momentumShortlistRows)
+      momentum12:perSampleRates(momentumShortlistRows),
+      hybrid48:perSampleRates(hybrid48Rows),
+      hybrid12:perSampleRates(hybrid12Rows),
+      hybrid12_from_light48:perSampleRates(hybrid12FromLight48Rows),
+      flow48:perSampleRates(flow48Rows),
+      flow12:perSampleRates(flow12Rows),
+      guarded48:perSampleRates(guarded48Rows),
+      guarded12:perSampleRates(guarded12Rows)
     };
     perSampleMetrics.push({
       snapshot_utc:new Date(timestamp).toISOString(),
@@ -469,29 +633,92 @@ try {
     market_wide_light_pool_48: summarizeRows(pooled.light48),
     light_score_shortlist_12: summarizeRows(pooled.light12),
     recent_1h_momentum_shortlist_12: summarizeRows(pooled.momentum12),
+    hybrid_expansion_pool_48: summarizeRows(pooled.hybrid48),
+    hybrid_expansion_shortlist_12: summarizeRows(pooled.hybrid12),
+    hybrid_expansion_shortlist_from_light_pool_12: summarizeRows(pooled.hybrid12_from_light48),
+    flow_confirmed_pool_48: summarizeRows(pooled.flow48),
+    flow_confirmed_shortlist_12: summarizeRows(pooled.flow12),
+    guarded_momentum_pool_48: summarizeRows(pooled.guarded48),
+    guarded_momentum_shortlist_12: summarizeRows(pooled.guarded12),
     light_pool_vs_market: pairedDifferenceCI(perSampleMetrics.map(row=>({left:row.metrics.light48,right:row.metrics.market})),
       'left','right','hit5_mfe4h_rate',224199),
     light_shortlist_vs_momentum_shortlist: pairedDifferenceCI(perSampleMetrics.map(row=>({left:row.metrics.light12,right:row.metrics.momentum12})),
       'left','right','hit5_mfe4h_rate',824199),
     primary_metric: 'Percentage of selections whose maximum high within the next 4 hours is at least 5% above the signal-time close.',
-    interpretation_note: 'Use paired per-snapshot differences and their 4-snapshot moving-block bootstrap intervals; pooled percentages are descriptive and may overweight symbols appearing in many snapshots.'
+    interpretation_note: 'Pooled percentages are descriptive; decision gates use a chronological discovery/held-out split and paired per-snapshot moving-block bootstrap intervals.'
   };
-  const poolCI = report.outcome_metrics.light_pool_vs_market.confidence_interval_95_percentage_points;
-  const shortlistCI = report.outcome_metrics.light_shortlist_vs_momentum_shortlist.confidence_interval_95_percentage_points;
-  const poolLiftPassed = Number.isFinite(poolCI?.lower) && poolCI.lower > 0;
-  const shortlistLiftPassed = Number.isFinite(shortlistCI?.lower) && shortlistCI.lower > 0;
   const completeData = report.quality.lookahead_guard_passed === true &&
     report.quality.snapshots_with_sufficient_universe >= MIN_SAMPLE_COUNT &&
     report.quality.full_cache_coverage_pct >= 95;
-  report.quality.prediction_evidence_gate = poolLiftPassed && shortlistLiftPassed ? 'PASS' : 'NOT_PROVEN';
-  report.quality.data_integrity_gate = completeData ? 'PASS' : 'FAIL';
-  report.quality.ready_for_merge = completeData && poolLiftPassed && shortlistLiftPassed;
+  const splitIndex = Math.floor(perSampleMetrics.length * 2 / 3);
+  const discoverySamples = perSampleMetrics.slice(0, splitIndex);
+  const holdoutSamples = perSampleMetrics.slice(splitIndex);
+  const candidateStrategies = [
+    'light48','light12','hybrid48','hybrid12','hybrid12_from_light48',
+    'flow48','flow12','guarded48','guarded12'
+  ];
+  const discoveryUtility = key => {
+    const rates = discoverySamples.map(sample => sample.metrics?.[key]).filter(Boolean);
+    return rates.length ? mean(rates.map(row =>
+      Number.isFinite(row.hit5_mfe4h_rate) && Number.isFinite(row.adverse5_mae4h_rate)
+        ? row.hit5_mfe4h_rate - 0.35 * row.adverse5_mae4h_rate : null
+    ).filter(Number.isFinite)) : null;
+  };
+  const strategyScores = candidateStrategies.map(strategy => ({
+    strategy, discovery_utility_hit5_minus_0_35_times_adverse5:round(discoveryUtility(strategy),6),
+    discovery: summarizeSampleBlock(discoverySamples,strategy)
+  })).filter(row => Number.isFinite(row.discovery_utility_hit5_minus_0_35_times_adverse5))
+    .sort((a,b) => b.discovery_utility_hit5_minus_0_35_times_adverse5 - a.discovery_utility_hit5_minus_0_35_times_adverse5 ||
+      a.strategy.localeCompare(b.strategy));
+  const chosenStrategy = strategyScores[0]?.strategy || null;
+  const chosenHoldout = chosenStrategy ? summarizeSampleBlock(holdoutSamples,chosenStrategy) : null;
+  const marketHoldout = summarizeSampleBlock(holdoutSamples,'market');
+  const lightHoldout = summarizeSampleBlock(holdoutSamples,'light48');
+  const momentumHoldout = summarizeSampleBlock(holdoutSamples,'momentum12');
+  const validationSeries = key => holdoutSamples.map(row=>({left:row.metrics?.[key],right:row.metrics?.market}));
+  const chosenVsMarketCI = chosenStrategy ? pairedDifferenceCI(validationSeries(chosenStrategy),'left','right','hit5_mfe4h_rate',224199) : null;
+  const chosenVsLightCI = chosenStrategy ? pairedDifferenceCI(holdoutSamples.map(row=>({left:row.metrics?.[chosenStrategy],right:row.metrics?.light48}),'left','right','hit5_mfe4h_rate',324199) : null;
+  const chosenVsMomentumCI = chosenStrategy ? pairedDifferenceCI(holdoutSamples.map(row=>({left:row.metrics?.[chosenStrategy],right:row.metrics?.momentum12}),'left','right','hit5_mfe4h_rate',424199) : null;
+  const holdoutRiskDelta = chosenHoldout && marketHoldout
+    ? chosenHoldout.adverse5_mae4h_pct - marketHoldout.adverse5_mae4h_pct : null;
+  const holdoutLiftPassed = Number.isFinite(chosenVsMarketCI?.confidence_interval_95_percentage_points?.lower) &&
+    chosenVsMarketCI.confidence_interval_95_percentage_points.lower > 0;
+  const holdoutRiskPassed = Number.isFinite(holdoutRiskDelta) && holdoutRiskDelta <= 2;
+  const holdoutSamplePassed = holdoutSamples.length >= MIN_SAMPLE_COUNT;
+  report.outcome_metrics.walk_forward_validation = {
+    split_method:'Chronological 2/3 discovery; final 1/3 held out. Strategy chosen only from discovery snapshots.',
+    discovery_snapshot_count:discoverySamples.length,
+    holdout_snapshot_count:holdoutSamples.length,
+    strategy_selection_objective:'Per-snapshot HIT_5PCT_MAX_UPSIDE_WITHIN_4H minus 0.35 times ADVERSE_5PCT_DRAWDOWN_WITHIN_4H',
+    discovery_strategy_ranking:strategyScores,
+    chosen_preexpansion_strategy:chosenStrategy,
+    holdout:{
+      selected_strategy:chosenHoldout,
+      entire_market:marketHoldout,
+      current_light_pool_48:lightHoldout,
+      high_1h_momentum_12:momentumHoldout,
+      chosen_vs_market_hit5_ci:chosenVsMarketCI,
+      chosen_vs_existing_light_pool_hit5_ci:chosenVsLightCI,
+      chosen_vs_momentum12_hit5_ci:chosenVsMomentumCI,
+      chosen_adverse5_delta_vs_market_percentage_points:round(holdoutRiskDelta,3),
+      sample_gate:holdoutSamplePassed?'PASS':'FAIL',
+      predictive_lift_gate:holdoutLiftPassed?'PASS':'NOT_PROVEN',
+      risk_gate:holdoutRiskPassed?'PASS':'FAIL'
+    }
+  };
+  report.quality.prediction_evidence_gate = holdoutLiftPassed ? 'PASS' : 'NOT_PROVEN';
+  report.quality.data_integrity_gate = completeData && holdoutSamplePassed ? 'PASS' : 'FAIL';
+  report.quality.ready_for_merge = completeData && holdoutSamplePassed && holdoutLiftPassed && holdoutRiskPassed;
   report.quality.rules = {
     minimum_sample_snapshots:MIN_SAMPLE_COUNT,
+    discovery_fraction:2/3,
+    holdout_fraction:1/3,
     minimum_market_coverage_ratio_pct:MIN_COVERAGE_RATIO * 100,
     require_lookahead_violations_zero:true,
-    require_95pct_block_bootstrap_lower_bound_above_zero_for_both_primary_comparisons:true,
-    primary_metric:'HIT_5PCT_MAX_UPSIDE_WITHIN_4H'
+    require_holdout_95pct_block_bootstrap_lower_bound_above_zero_vs_market:true,
+    maximum_adverse5_risk_delta_vs_market_percentage_points:2,
+    primary_metric:'HIT_5PCT_MAX_UPSIDE_WITHIN_4H',
+    risk_metric:'ADVERSE_5PCT_DRAWDOWN_WITHIN_4H'
   };
   report.duration_seconds = round((Date.now() - startedAt) / 1000, 2);
   report.status = completeData ? (report.quality.ready_for_merge ? 'PREDICTIVE_EVIDENCE_PASS' : 'PREDICTIVE_EVIDENCE_NOT_PROVEN') : 'DATA_INTEGRITY_GATE_FAILED';
@@ -510,9 +737,11 @@ try {
     market_hit5_4h:report.outcome_metrics.entire_historical_eligible_universe.hit_5pct_upside_4h_pct,
     light48_hit5_4h:report.outcome_metrics.market_wide_light_pool_48.hit_5pct_upside_4h_pct,
     light48_lift_ci:report.outcome_metrics.light_pool_vs_market.confidence_interval_95_percentage_points,
-    light12_hit5_4h:report.outcome_metrics.light_score_shortlist_12.hit_5pct_upside_4h_pct,
-    momentum12_hit5_4h:report.outcome_metrics.recent_1h_momentum_shortlist_12.hit_5pct_upside_4h_pct,
-    light12_vs_momentum_ci:report.outcome_metrics.light_shortlist_vs_momentum_shortlist.confidence_interval_95_percentage_points,
+    chosen_strategy:report.outcome_metrics.walk_forward_validation.chosen_preexpansion_strategy,
+    discovery_strategies:report.outcome_metrics.walk_forward_validation.discovery_strategy_ranking.map(row=>({
+      strategy:row.strategy,utility:row.discovery_utility_hit5_minus_0_35_times_adverse5
+    })),
+    holdout:report.outcome_metrics.walk_forward_validation.holdout,
     prediction_evidence_gate:report.quality.prediction_evidence_gate,
     data_integrity_gate:report.quality.data_integrity_gate,
     ready_for_merge:report.quality.ready_for_merge,
