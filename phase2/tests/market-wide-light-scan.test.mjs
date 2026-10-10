@@ -7,6 +7,7 @@ import {DurableStore} from '../core/store.mjs';
 import {SCAN_JOURNEY_SCHEMA} from '../core/scan-journey-ledger.mjs';
 import {MarketWideLightScan, evaluateMarketWideLightCandidate} from '../core/market-wide-light-scan.mjs';
 import {MarketWideKlineCache} from '../market/market-wide-kline-cache.mjs';
+import {RestClient} from '../market/binance-rest.mjs';
 
 const STEP = 5 * 60_000;
 const SOURCE = 'BINANCE_PUBLIC_REST';
@@ -190,6 +191,39 @@ test('the scan journey archive preserves per-symbol light-scan provenance after 
   } finally {
     await rm(dir,{recursive:true,force:true});
   }
+});
+
+test('shared RestClient responses seed the 5m cache without an additional REST request', async () => {
+  const now = Date.now();
+  const step = 5 * 60_000;
+  const boundary = Math.floor(now / step) * step;
+  const raw = Array.from({length:72},(_,index)=>{
+    const openTime = boundary - (72-index)*step;
+    const closeTime = openTime + step - 1;
+    return [openTime,'100','100.5','99.5','100','10',closeTime,'1000',100,'6','600','0'];
+  });
+  let actualFetchAttempts = 0;
+  const rest = new RestClient({
+    baseUrls:['https://rest.test.invalid'],
+    timeoutMs:1000,minIntervalMs:0,maxRequestsPerMinute:240,
+    fetchImpl:async()=>{
+      actualFetchAttempts++;
+      return {ok:true,status:200,headers:{get:()=>null},json:async()=>raw};
+    }
+  });
+  const cache = new MarketWideKlineCache({
+    rest,urls:['wss://stream.test/stream'],WebSocketImpl:FakeSocket,
+    clock:()=>Date.now(),logger:{warn(){}}
+  });
+  cache.setSymbols(['AAAUSDT']);
+  const response = await rest.klines('AAAUSDT','5m',{limit:72});
+  assert.equal(actualFetchAttempts,1,'the existing Micro/radar request remains the only outbound HTTP attempt');
+  assert.equal(response.candles.filter(candle=>candle.closed).length,72);
+  const series = cache.getSeries('AAAUSDT');
+  assert.equal(series.candles.length,72,'all valid closed bars from the shared REST response should seed the cache');
+  assert.ok(series.candles.every(candle=>candle.source==='BINANCE_PUBLIC_REST'));
+  assert.ok(series.candles.every(candle=>candle.closeTime<=Date.now()));
+  cache.stop();
 });
 
 class FakeSocket {
