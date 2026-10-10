@@ -130,6 +130,7 @@ export class MarketWideKlineCache {
     this.streamState = 'STOPPED';
     this.lastStreamError = null;
     this.receivedClosedCandles = 0;
+    this.receivedMessages = 0;
     this.rejectedCandles = 0;
     this.streamGeneration = 0;
     this.attachRestKlineObserver();
@@ -197,6 +198,10 @@ export class MarketWideKlineCache {
       streams: this.symbols.map(symbol => symbol.toLowerCase() + '@kline_5m'),
       ...this.streamOptions,
       ...(this.WebSocketImpl ? {WebSocketImpl: this.WebSocketImpl} : {}),
+      onMessage: () => {
+        if (generation !== this.streamGeneration) return;
+        this.receivedMessages++;
+      },
       onCandle: candle => {
         if (generation !== this.streamGeneration) return;
         if (String(candle?.timeframe || '') !== '5m' || candle?.closed !== true) return;
@@ -288,6 +293,52 @@ export class MarketWideKlineCache {
     };
   }
 
+  coverageReport() {
+    const now = this.clock();
+    const symbols = this.symbols.map(symbol => {
+      const readiness = assessCachedEntry(this.cache.get(symbol), now, this.maxCandleAgeMs);
+      const entry = this.cache.get(symbol);
+      const candles = (entry?.candles || []).filter(row => row?.closed === true &&
+        Number.isFinite(Number(row.closeTime)) && Number(row.closeTime) <= now)
+        .slice().sort((a, b) => Number(a.openTime) - Number(b.openTime));
+      const last = candles.at(-1) || null;
+      const recent = candles.slice(-Math.max(MIN_READY_CLOSED_CANDLES, 96));
+      const gaps = [];
+      for (let index = 1; index < recent.length; index++) {
+        if (Number(recent[index].openTime) - Number(recent[index - 1].openTime) !== FIVE_MINUTE_MS) {
+          gaps.push({previous_open_time_ms:Number(recent[index-1].openTime),next_open_time_ms:Number(recent[index].openTime)});
+        }
+      }
+      return {
+        symbol,ready:readiness.ready,state:readiness.state,
+        closed_candle_count:readiness.closedCandles,
+        latest_closed_candle_close_time_ms:last?.closeTime ?? null,
+        latest_candle_age_ms:readiness.ageMs,
+        uses_only_closed_candles:true,
+        future_candle_count:(entry?.candles || []).filter(row => row?.closed === true && Number(row.closeTime) > now).length,
+        continuity_gap_count:gaps.length,
+        continuity_gaps:gaps,
+        sources:[...new Set(recent.map(row => String(row.source || 'UNKNOWN_SOURCE')))]
+      };
+    });
+    const readySymbols = symbols.filter(item => item.ready).length;
+    const missingSymbols = symbols.filter(item => item.state === 'CANDLE_CACHE_MISSING').length;
+    const staleSymbols = symbols.filter(item => item.state === 'STALE_DATA').length;
+    const incompleteSymbols = symbols.filter(item => !item.ready &&
+      item.state !== 'CANDLE_CACHE_MISSING' && item.state !== 'STALE_DATA').length;
+    return {
+      generated_at_ms:now,
+      expected_symbols:symbols.length,
+      ready_symbols:readySymbols,
+      not_ready_symbols:symbols.length-readySymbols,
+      missing_symbols:missingSymbols,
+      stale_symbols:staleSymbols,
+      incomplete_symbols:incompleteSymbols,
+      cache_coverage_ready:symbols.length>0 && readySymbols===symbols.length,
+      symbols
+    };
+  }
+
   health() {
     const now = this.clock();
     const states = this.symbols.map(symbol => ({symbol, ...assessCachedEntry(this.cache.get(symbol), now, this.maxCandleAgeMs)}));
@@ -329,6 +380,7 @@ export class MarketWideKlineCache {
       incomplete_symbols: incompleteSymbols,
       cache_coverage_ready: this.symbols.length > 0 && readySymbols === this.symbols.length,
       cached_closed_candles: candleCount,
+      received_messages: this.receivedMessages,
       received_closed_candles: this.receivedClosedCandles,
       rejected_candles: this.rejectedCandles,
       reconnect_attempts: wsHealth.reconnect_attempts ?? 0,
