@@ -1,0 +1,55 @@
+name: PR199 Isolated Live Shadow
+on:
+  push:
+    branches:
+      - shadow/pr199-live-measurement-20261010
+permissions:
+  contents: read
+concurrency:
+  group: pr199-live-shadow-20261010
+  cancel-in-progress: false
+jobs:
+  live-shadow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout PR #199 isolated branch
+        uses: actions/checkout@v4
+        with:
+          path: pr
+          ref: ${{ github.sha }}
+      - name: Checkout Build 224 comparison baseline
+        uses: actions/checkout@v4
+        with:
+          path: baseline
+          ref: 791f464720ec69357b910b211229358456fd1d6b
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install isolated PR dependencies
+        run: npm ci --prefix pr
+      - name: Install isolated baseline dependencies
+        run: npm ci --prefix baseline
+      - name: Run real-data Shadow warm-up and 30 paired cycles
+        working-directory: pr
+        env:
+          RADARX_ENV: shadow
+          NODE_ENV: test
+          RADARX_RADARS_AUTOSTART: 'false'
+          RADARX_EARLY_EXPANSION_MIN_QUOTE_VOLUME_24H: '750000'
+          RADARX_EARLY_EXPANSION_MICRO_SCAN_CANDIDATES: '12'
+          RADARX_EARLY_EXPANSION_DEEP_CANDIDATES: '3'
+          RADARX_SHADOW_DATA_ROOT: ${{ runner.temp }}
+          RADARX_SHADOW_OUTPUT: ${{ runner.temp }}/pr199-shadow-report.json
+        run: node phase2/tools/pr199-shadow.mjs ../baseline
+      - name: Upload Shadow report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr199-live-shadow-report
+          path: ${{ runner.temp }}/pr199-shadow-report.json
+          if-no-files-found: warn
+          retention-days: 14
