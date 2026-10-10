@@ -27,7 +27,8 @@ function normalizeStreamUrls(urls) {
 function assessCachedEntry(entry, now, maxAgeMs) {
   const candles = (entry?.candles || [])
     .filter(row => row?.closed === true && Number.isFinite(Number(row.closeTime)) && Number(row.closeTime) <= now)
-    .slice().sort((a, b) => Number(a.openTime) - Number(b.openTime));
+    .slice().sort((a, b) => Number(a.openTime) - Number(b.openTime))
+    .slice(-Math.max(MIN_READY_CLOSED_CANDLES, 96));
   if (!candles.length) return {ready:false, state:'CANDLE_CACHE_MISSING', ageMs:null, closedCandles:0};
   const last = candles.at(-1);
   const ageMs = Math.max(0, now - Number(last.closeTime));
@@ -235,10 +236,20 @@ export class MarketWideKlineCache {
     }
     const byOpen = new Map(entry.candles.map(row => [row.openTime, row]));
     const old = byOpen.get(candle.openTime);
-    // A WebSocket close takes precedence over a cached REST copy of the same bar.
-    if (!old || candle.source === 'BINANCE_PUBLIC_WS' || Number(candle.receivedAt) >= Number(old.receivedAt)) {
-      byOpen.set(candle.openTime, candle);
+    if (old) {
+      const sameBar = ['openTime','closeTime','open','high','low','close','volume','quoteVolume','tradeCount',
+        'takerBuyBaseVolume','takerBuyQuoteVolume'].every(key => {
+          const left = old[key] == null ? null : Number(old[key]);
+          const right = candle[key] == null ? null : Number(candle[key]);
+          return left === right;
+        });
+      // Repeated frames/copies of the same closed bar are not new market data.
+      if (sameBar) return false;
+      // Don't let a delayed REST response overwrite a newer websocket observation.
+      if (old.source === 'BINANCE_PUBLIC_WS' && candle.source !== 'BINANCE_PUBLIC_WS') return false;
+      if (candle.source !== 'BINANCE_PUBLIC_WS' && Number(candle.receivedAt) < Number(old.receivedAt)) return false;
     }
+    byOpen.set(candle.openTime, candle);
     entry.candles = [...byOpen.values()]
       .filter(row => row.closed === true && Number(row.closeTime) <= now)
       .sort((a, b) => a.openTime - b.openTime)
