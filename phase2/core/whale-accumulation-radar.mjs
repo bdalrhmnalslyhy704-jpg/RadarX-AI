@@ -510,22 +510,98 @@ export class WhaleAccumulationRadar{
   async tick(){
     if(!this.running||this.busy)return;
     this.busy=true;
+    const cycleStartedAt=this.clock();
+    await this.scheduler.hydrate();
     try{
       if(!this.universe.length||this.clock()-this.universeAt>=Number(this.config.universeRefreshMs))await this.refreshUniverse();
-      const rows=await this.tickerRows();
-      const selected=this.selectBatch(rows);
-      let success=0,failed=0;
+      const fastScanStartedAt=this.clock();
+      const fetchedRows=await this.tickerRows();
+      const fastSeenAt=this.clock();
+      const rows=fetchedRows.map(row=>({...row,_schedulerFast:this.updateFastSnapshot(row,fastSeenAt),_fastSeenAt:fastSeenAt}));
+      for(const row of rows)this.scheduler.ensureQueued('DEEP',row.symbol,fastSeenAt);
+      const selected=this.selectBatch(rows,fastSeenAt);
+      const selectedSymbols=new Set(selected.map(x=>String(x.symbol).toUpperCase()));
+      const cycle=this.scans+1;
+      const fastDurationMs=Math.max(0,fastSeenAt-fastScanStartedAt);
+      this.scheduler.record({stage:'FAST',eventType:'CYCLE_COMPLETE',cycle,at:fastSeenAt,elapsedMs:fastDurationMs,
+        reasonCode:'RADAR9_TICKER_SNAPSHOT_RECEIVED',extra:{symbols_total:rows.length}});
+      for(const row of rows){
+        const symbol=String(row.symbol).toUpperCase();
+        const fast=row._schedulerFast||{};
+        const fastSnapshot={last_price:row.lastPrice,quote_volume_24h:row.quoteVolume24h,
+          trade_count_24h:row.tradeCount24h,volume_accel_ratio:fast.volume_accel_ratio??null,
+          trade_accel_ratio:fast.trade_accel_ratio??null,price_acceleration_pct:fast.price_acceleration_pct??null};
+        if(!selectedSymbols.has(symbol)){
+          const reason=row._exceptional?'EXCEPTIONAL_FAST_PATH_CAPACITY':row._quiet?'QUIET_ANCHOR_CAPACITY':'OVERDUE_ROTATION_CAPACITY';
+          this.scheduler.defer('DEEP',symbol,{cycle,at:fastSeenAt,fastSeenAt,reasonCode:reason,
+            extra:{lane:'deferred',fast_snapshot:fastSnapshot}});
+        }
+      }
+      for(const row of selected){
+        const symbol=String(row.symbol).toUpperCase();
+        const lane=row._selection_lane||'anchor';
+        const fast=row._schedulerFast||{};
+        const fastSnapshot={last_price:row.lastPrice,quote_volume_24h:row.quoteVolume24h,
+          trade_count_24h:row.tradeCount24h,volume_accel_ratio:fast.volume_accel_ratio??null,
+          trade_accel_ratio:fast.trade_accel_ratio??null,price_acceleration_pct:fast.price_acceleration_pct??null};
+        this.scheduler.selected('DEEP',symbol,{cycle,at:fastSeenAt,lane,
+          reasonCode:schedulerLaneReason(lane,'DEEP'),fastSeenAt,extra:{fast_snapshot:fastSnapshot}});
+      }
+      let success=0,failed=0,incomplete=0;
+      const waitTimes=[];
       for(const row of selected){
         if(!this.running)break;
-        try{await this.scanRow(row);success++;}catch(e){failed++;this.lastError=String(e?.message??e);}
+        const symbol=String(row.symbol).toUpperCase(),lane=row._selection_lane||'anchor',startedAt=this.clock();
+        const started=this.scheduler.started('DEEP',symbol,{cycle,at:startedAt,lane,
+          reasonCode:schedulerLaneReason(lane,'DEEP'),fastSeenAt,
+          extra:{fast_snapshot:{last_price:row.lastPrice,quote_volume_24h:row.quoteVolume24h,
+            trade_count_24h:row.tradeCount24h}}});
+        waitTimes.push(started.wait_ms);
+        try{
+          const result=await this.scanRow(row);
+          const a=result?.whale_accumulation||{};
+          const stage=String(a.stage||result?.potential_label||'').toUpperCase();
+          const dataIncomplete=!result||['DATA_INSUFFICIENT','INCOMPLETE','WARMING_UP'].includes(stage)||
+            result?.data_status==='INCOMPLETE'||result?.data_status==='DATA_UNAVAILABLE';
+          this.scheduler.finished('DEEP',symbol,{cycle,at:this.clock(),startedAt,
+            outcome:dataIncomplete?'INCOMPLETE':'COMPLETED',lane,
+            reasonCode:dataIncomplete?'DATA_MISSING_OR_NOT_MATURE':result?.eligible?'SIGNAL_CONFIRMED':'NO_SIGNAL_NOT_A_FAILURE',
+            failureCounted:false,fastSeenAt,
+            extra:{signal_eligible:Boolean(result?.eligible),signal_stage:stage||null,data_complete:!dataIncomplete}});
+          if(dataIncomplete)incomplete++;else success++;
+        }catch(e){
+          failed++;this.lastError=String(e?.message??e);
+          this.scheduler.finished('DEEP',symbol,{cycle,at:this.clock(),startedAt,outcome:'FAILED',lane,
+            reasonCode:'RADAR9_SCAN_EXCEPTION',failureCounted:true,fastSeenAt,
+            extra:{error:String(e?.message??e)}});
+        }
       }
+      const cycleCompletedAt=this.clock();
       this.lastCoverage={
         universe_total:rows.length,batch_size:selected.length,scanned_successfully:success,failed,rotation_cursor:this.cursor,
-        candidates_retained:this.latestCandidates.length,last_scan_at:this.clock()
+        candidates_retained:this.latestCandidates.length,last_scan_at:cycleCompletedAt
       };
-      this.lastScanAtMs=this.clock();
+      this.lastScanAtMs=cycleCompletedAt;
+      this.lastSelectionDistribution=selected.reduce((out,row)=>{
+        const lane=row._selection_lane||'unknown';out[lane]=(out[lane]||0)+1;return out;
+      },{});
+      this.scheduler.record({stage:'CYCLE',eventType:'COMPLETED',cycle,at:cycleCompletedAt,
+        elapsedMs:Math.max(0,cycleCompletedAt-cycleStartedAt),reasonCode:'RADAR9_CYCLE_TIMINGS',
+        extra:{fast_symbols:rows.length,deep_selected:selected.length,deep_completed:success,
+          incomplete,failed,selection_distribution:this.lastSelectionDistribution,
+          wait_ms:{min:waitTimes.length?Math.min(...waitTimes):null,max:waitTimes.length?Math.max(...waitTimes):null,
+            average:waitTimes.length?waitTimes.reduce((s,x)=>s+x,0)/waitTimes.length:null},
+          fast_scan_ms:fastDurationMs}});
+      this.logger.info?.('[RADARX_SCHEDULER_REPORT] '+JSON.stringify({
+        radar:'RADAR_9',cycle,fast_symbols:rows.length,deep_selected:selected.length,
+        selection_distribution:this.lastSelectionDistribution,deep_success:success,incomplete,failed,
+        deep_wait_ms:waitTimes,fast_scan_ms:fastDurationMs,cycle_duration_ms:Math.max(0,cycleCompletedAt-cycleStartedAt)
+      }));
       this.lastError=failed?this.lastError:null;
-    }finally{this.busy=false;}
+    }finally{
+      await this.scheduler.flush();
+      this.busy=false;
+    }
   }
   snapshot(limit=20){
     const rows=this.latestCandidates.slice(0,Math.max(1,Math.min(50,Number(limit)||20)));
