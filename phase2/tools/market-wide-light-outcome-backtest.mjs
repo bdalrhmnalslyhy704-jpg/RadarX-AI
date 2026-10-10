@@ -176,6 +176,16 @@ function deriveExpansionFeatures(candles, index, audit) {
     ? buyQuote / totalQuote : null;
   const metrics = audit?.metrics || {};
   const core = metrics.core_conditions || {};
+  const recentHourBars = candles.slice(index - 11, index + 1);
+  const recentHourHigh = Math.max(...recentHourBars.map(row => Number(row.high)).filter(Number.isFinite));
+  const recentHourLow = Math.min(...recentHourBars.map(row => Number(row.low)).filter(Number.isFinite));
+  const currentClose = closeAt(index);
+  const drawdownFromHourHighPct = Number.isFinite(recentHourHigh) && recentHourHigh > 0 && currentClose > 0
+    ? (currentClose / recentHourHigh - 1) * 100 : null;
+  const hourRangePct = Number.isFinite(recentHourHigh) && Number.isFinite(recentHourLow) && currentClose > 0
+    ? (recentHourHigh - recentHourLow) / currentClose * 100 : null;
+  const redCandleRatio = recentHourBars.length === 12
+    ? recentHourBars.filter(row => Number(row.close) < Number(row.open)).length / recentHourBars.length : null;
   const lightScore = Number.isFinite(audit?.candidate_score) ? audit.candidate_score : null;
   const resistanceDistance = Number.isFinite(metrics.resistance_distance_pct) ? metrics.resistance_distance_pct : null;
   const atrRatio = Number.isFinite(metrics.atr_ratio) ? metrics.atr_ratio : null;
@@ -185,6 +195,7 @@ function deriveExpansionFeatures(candles, index, audit) {
   const features = {
     momentum15m, preceding15m, momentum1h, momentum4h, acceleration15m,
     volumeRatio, tradeRatio, buyPressure, lightScore, resistanceDistance,
+    drawdownFromHourHighPct, hourRangePct, redCandleRatio,
     supportScore: core.support_structure === true ? (metrics.higher_lows === true ? 100 : 70) :
       core.support_structure === false ? 0 : null,
     compressionScore: compressionRatio === null ? null : clampScore(100 * (1 - compressionRatio / 1.3)),
@@ -233,8 +244,30 @@ function deriveExpansionFeatures(candles, index, audit) {
     [features.supportScore, 0.04],
     [features.resistanceScore, 0.04]
   ]);
+  features.riskGuardedScore = weightedScore([
+    [features.lightScore, 0.18],
+    [features.momentum15Score, 0.11],
+    [features.momentum1hScore, 0.10],
+    [features.accelerationScore, 0.08],
+    [features.volumeScore, 0.10],
+    [features.tradeScore, 0.05],
+    [features.buyPressureScore, 0.10],
+    [features.supportScore, 0.11],
+    [features.compressionScore, 0.10],
+    [features.resistanceScore, 0.07]
+  ]);
+  const downsidePenalty =
+    (Number.isFinite(momentum15m) ? Math.max(0, -momentum15m) * 8 : 0) +
+    (Number.isFinite(momentum1h) ? Math.max(0, -momentum1h - 0.5) * 6 : 0) +
+    (Number.isFinite(momentum4h) ? Math.max(0, -momentum4h - 1) * 2 : 0) +
+    (Number.isFinite(drawdownFromHourHighPct) ? Math.max(0, -drawdownFromHourHighPct - 1) * 7 : 0) +
+    (Number.isFinite(redCandleRatio) ? Math.max(0, redCandleRatio - 0.5) * 40 : 0) +
+    (Number.isFinite(hourRangePct) ? Math.max(0, hourRangePct - 3) * 5 : 0);
   for (const key of ['hybridExpansionScore', 'flowConfirmedScore', 'guardedMomentumScore']) {
     if (Number.isFinite(features[key])) features[key] = Math.max(0, features[key] - expansionPenalty);
+  }
+  if (Number.isFinite(features.riskGuardedScore)) {
+    features.riskGuardedScore = Math.max(0, features.riskGuardedScore - expansionPenalty - downsidePenalty);
   }
   return features;
 }
@@ -496,7 +529,8 @@ try {
   const scanner = new MarketWideLightScan({config:{candidateLimit:48,rotationReserve:12,maxCandleAgeMs:8 * 60 * 1000,
     minClosedCandles:60,maxClosedCandles:96,minimumReadyCandidates:24},clock:()=>Date.now()});
   const pooled = {market:[], light48:[], light12:[], momentum12:[],
-    hybrid48:[], hybrid12:[], hybrid12_from_light48:[], flow48:[], flow12:[], guarded48:[], guarded12:[]};
+    hybrid48:[], hybrid12:[], hybrid12_from_light48:[], flow48:[], flow12:[], guarded48:[], guarded12:[],
+    riskGuard48:[], riskGuard12:[], riskGuard12_from_light48:[]};
   const perSampleMetrics = [];
   let sampleIndex = 0;
   let totalEligibleInSnapshots = 0;
@@ -580,10 +614,16 @@ try {
     const flow12Rows = rankByFeature('flowConfirmedScore', 12);
     const guarded48Rows = rankByFeature('guardedMomentumScore', 48);
     const guarded12Rows = rankByFeature('guardedMomentumScore', 12);
+    const riskGuard48Rows = rankByFeature('riskGuardedScore', 48);
+    const riskGuard12Rows = rankByFeature('riskGuardedScore', 12);
     const lightPoolSymbols = new Set(result.candidateSymbols);
     const hybrid12FromLight48Rows = decorated.filter(item => lightPoolSymbols.has(item.symbol) &&
       isDirectionalCandidateSymbol(item.symbol) && Number.isFinite(item.features.hybridExpansionScore))
       .sort((a,b) => b.features.hybridExpansionScore - a.features.hybridExpansionScore || a.symbol.localeCompare(b.symbol))
+      .slice(0,12).map(item => item.outcome);
+    const riskGuard12FromLight48Rows = decorated.filter(item => lightPoolSymbols.has(item.symbol) &&
+      isDirectionalCandidateSymbol(item.symbol) && Number.isFinite(item.features.riskGuardedScore))
+      .sort((a,b) => b.features.riskGuardedScore - a.features.riskGuardedScore || a.symbol.localeCompare(b.symbol))
       .slice(0,12).map(item => item.outcome);
     pooled.market.push(...marketRows);
     pooled.light48.push(...lightPoolRows);
@@ -596,6 +636,9 @@ try {
     pooled.flow12.push(...flow12Rows);
     pooled.guarded48.push(...guarded48Rows);
     pooled.guarded12.push(...guarded12Rows);
+    pooled.riskGuard48.push(...riskGuard48Rows);
+    pooled.riskGuard12.push(...riskGuard12Rows);
+    pooled.riskGuard12_from_light48.push(...riskGuard12FromLight48Rows);
     report.quality.total_selected_pool_observations += lightPoolRows.length;
     const groups = {
       market:perSampleRates(marketRows),
@@ -608,7 +651,10 @@ try {
       flow48:perSampleRates(flow48Rows),
       flow12:perSampleRates(flow12Rows),
       guarded48:perSampleRates(guarded48Rows),
-      guarded12:perSampleRates(guarded12Rows)
+      guarded12:perSampleRates(guarded12Rows),
+      riskGuard48:perSampleRates(riskGuard48Rows),
+      riskGuard12:perSampleRates(riskGuard12Rows),
+      riskGuard12_from_light48:perSampleRates(riskGuard12FromLight48Rows)
     };
     perSampleMetrics.push({
       snapshot_utc:new Date(timestamp).toISOString(),
@@ -640,6 +686,9 @@ try {
     flow_confirmed_shortlist_12: summarizeRows(pooled.flow12),
     guarded_momentum_pool_48: summarizeRows(pooled.guarded48),
     guarded_momentum_shortlist_12: summarizeRows(pooled.guarded12),
+    downside_risk_guard_pool_48: summarizeRows(pooled.riskGuard48),
+    downside_risk_guard_shortlist_12: summarizeRows(pooled.riskGuard12),
+    downside_risk_guard_shortlist_from_light_pool_12: summarizeRows(pooled.riskGuard12_from_light48),
     light_pool_vs_market: pairedDifferenceCI(perSampleMetrics.map(row=>({left:row.metrics.light48,right:row.metrics.market})),
       'left','right','hit5_mfe4h_rate',224199),
     light_shortlist_vs_momentum_shortlist: pairedDifferenceCI(perSampleMetrics.map(row=>({left:row.metrics.light12,right:row.metrics.momentum12})),
@@ -655,7 +704,7 @@ try {
   const holdoutSamples = perSampleMetrics.slice(splitIndex);
   const candidateStrategies = [
     'light48','light12','hybrid48','hybrid12','hybrid12_from_light48',
-    'flow48','flow12','guarded48','guarded12'
+    'flow48','flow12','guarded48','guarded12','riskGuard48','riskGuard12','riskGuard12_from_light48'
   ];
   const discoveryUtility = key => {
     const rates = discoverySamples.map(sample => sample.metrics?.[key]).filter(Boolean);
@@ -697,6 +746,9 @@ try {
       entire_market:marketHoldout,
       current_light_pool_48:lightHoldout,
       high_1h_momentum_12:momentumHoldout,
+      downside_risk_guard_shortlist_12:summarizeSampleBlock(holdoutSamples,'riskGuard12'),
+      downside_risk_guard_pool_48:summarizeSampleBlock(holdoutSamples,'riskGuard48'),
+      downside_risk_guard_shortlist_from_light_pool_12:summarizeSampleBlock(holdoutSamples,'riskGuard12_from_light48'),
       chosen_vs_market_hit5_ci:chosenVsMarketCI,
       chosen_vs_existing_light_pool_hit5_ci:chosenVsLightCI,
       chosen_vs_momentum12_hit5_ci:chosenVsMomentumCI,
@@ -738,6 +790,11 @@ try {
     light48_hit5_4h:report.outcome_metrics.market_wide_light_pool_48.hit_5pct_upside_4h_pct,
     light48_lift_ci:report.outcome_metrics.light_pool_vs_market.confidence_interval_95_percentage_points,
     chosen_strategy:report.outcome_metrics.walk_forward_validation.chosen_preexpansion_strategy,
+    risk_guard_holdout:{
+      shortlist12:report.outcome_metrics.walk_forward_validation.holdout.downside_risk_guard_shortlist_12,
+      pool48:report.outcome_metrics.walk_forward_validation.holdout.downside_risk_guard_pool_48,
+      shortlistFromLightPool12:report.outcome_metrics.walk_forward_validation.holdout.downside_risk_guard_shortlist_from_light_pool_12
+    },
     discovery_strategies:report.outcome_metrics.walk_forward_validation.discovery_strategy_ranking.map(row=>({
       strategy:row.strategy,utility:row.discovery_utility_hit5_minus_0_35_times_adverse5
     })),
