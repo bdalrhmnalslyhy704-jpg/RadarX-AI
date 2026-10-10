@@ -69,6 +69,8 @@ test('market-wide light scan covers all eligible symbols once and keeps candidat
   assert.equal(new Set(result.candidateRows.map(x=>x.symbol)).size,48);
   assert.equal(result.summary.evaluated_total,40);
   assert.equal(result.summary.not_evaluated_total,290);
+  assert.ok([...result.audit.values()].every(item=>Number.isInteger(item.light_rank)),'every eligible symbol needs an explicit light or rotation rank');
+  assert.ok([...result.audit.values()].filter(item=>!item.evaluated).every(item=>item.rank_basis==='FAIR_ROTATION_NO_VALID_LIGHT_DATA'));
   assert.equal(result.summary.binance_rest_calls_added_by_light_scan,0);
   assert.equal(result.coverageReady,false,'partial cache coverage must not activate the filter');
   assert.equal(result.summary.selection_mode,'BOOTSTRAP_FULL_UNIVERSE');
@@ -167,8 +169,8 @@ test('the scan journey archive preserves per-symbol light-scan provenance after 
     const now = 1_900_000_000_000;
     const store = await new DurableStore({dir}).init();
     const lightAudit = {
-      symbol:'ARCHIVEUSDT',evaluated:true,scanned:true,scanned_at:now,
-      source:'BINANCE_PUBLIC_WS',data_age_ms:1200,result:'LIGHT_CANDIDATE',
+      symbol:'ARCHIVEUSDT',layer_visited:true,evaluated:true,scanned:true,scanned_at:now,
+      source:'BINANCE_PUBLIC_WS',data_age_ms:1200,result:'LIGHT_CANDIDATE',light_rank:2,rank_basis:'LIGHT_EVIDENCE',
       reason:'LIGHT_FEATURES_RANK_ONLY',rejection_reason:null,candidate_rank:2,
       candidate_selected:true,candidate_selection_reason:'LIGHT_SCORE_CANDIDATE',
       closed_candles_only:true,metrics:{base_range_pct:0.8,atr_ratio:0.7,volume_participation:{available:false,recentRatio:null}}
@@ -187,6 +189,8 @@ test('the scan journey archive preserves per-symbol light-scan provenance after 
     assert.equal(cycles[0].coins[0].market_wide_light_scan.source,'BINANCE_PUBLIC_WS');
     assert.equal(cycles[0].coins[0].market_wide_light_scan.candidate_rank,2);
     assert.equal(cycles[0].coins[0].market_wide_light_scan.data_age_ms,1200);
+    assert.equal(cycles[0].coins[0].market_wide_light_scan.light_rank,2);
+    assert.equal(cycles[0].coins[0].market_wide_light_scan.rank_basis,'LIGHT_EVIDENCE');
     assert.equal(cycles[0].coins[0].market_wide_light_scan.metrics.volume_participation.available,false);
   } finally {
     await rm(dir,{recursive:true,force:true});
