@@ -46,6 +46,15 @@ function candidate(symbol,move,{score=65,participation=75,tradeParticipation=70,
 }
 
 
+test('a 48-symbol market-wide light pool preserves the configured Micro capacity of twelve',()=>{
+  const radar=makeRadar({microScanCandidates:12,quietReserve:8,rotationReserve:8});
+  const input=rows(48);
+  const selected=radar.selectMicro(input,fastMap(input),100);
+  assert.equal(radar.config.microScanCandidates,12);
+  assert.equal(selected.length,12);
+  assert.equal(new Set(selected.map(x=>x.symbol)).size,12);
+});
+
 test('Radar 8 health remains available while an activity-shock candidate is held',()=>{
   const radar=makeRadar();
   radar.running=true;
