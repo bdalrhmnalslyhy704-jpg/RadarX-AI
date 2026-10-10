@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 import { mkdir, writeFile } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
 import path from 'node:path';
-import { gzipSync } from 'node:zlib';
+import { once } from 'node:events';
+import { finished } from 'node:stream/promises';
+import { createGzip, gzipSync } from 'node:zlib';
 import { assessQuietBasePreExpansion, QUIET_BASE_PRE_EXPANSION_DEFAULTS } from '../../phase2/core/quiet-base-pre-expansion.mjs';
 
 const OUT = path.resolve(process.env.REPLAY_OUT_DIR || 'artifacts/quiet-base-replay');
@@ -20,7 +23,7 @@ const TARGETS = ['MAGICUSDT', 'KAIAUSDT'];
 // Keep the prior successful 18-pair replay cohort stable for before/after comparability.
 const BASELINE_COMPARISON_SYMBOLS = [
   'SOLUSDT','NEARUSDT','ZECUSDT','XRPUSDT','SUIUSDT','BNBUSDT','WLDUSDT','UNIUSDT',
-  'ADAUSDT','DOGEUSDT','RLCUSDT','ENAUSDT','STRKUSDT','AVAXUSDT','RLUSDUSDT','ATOMUSDT'
+  'ADAUSDT','DOGEUSDT','RLCUSDT','ENAUSDT','STRKUSDT','AVAXUSDT','ATOMUSDT','TRXUSDT'
 ];
 const STABLE_BASES = new Set([
   'USDT','USDC','BUSD','TUSD','FDUSD','USDP','DAI','EUR','EURT','USDE','USTC',
@@ -311,6 +314,30 @@ function compactExtendedTransition(item) {
 function asCsv(rows, columns) {
   return [columns.map(csvCell).join(','), ...rows.map(row => columns.map(key => csvCell(row[key])).join(','))].join('\n') + '\n';
 }
+const TRACE_COLUMNS = [
+  'symbol','candle_open_time_utc','candle_close_time_utc','close_price','daily_change_24h_pct',
+  'move_1h_pct','move_4h_pct','classification','reason','strict_baseline_classification','strict_baseline_reason','temporal_promotion',
+  'outcome_mfe_next_24h_pct_lookahead_only','first_blocker_key','first_blocker_value','strict_baseline_first_blocker_key','strict_baseline_first_blocker_value','strict_baseline_first_blocker_threshold',
+  'first_blocker_threshold','narrow_base_range_pct','atr_current','atr_baseline','atr_contraction_ratio',
+  'bollinger_width_pct','bollinger_width_baseline_pct','bollinger_width_ratio','higher_lows','support_stable',
+  'support_undercut_pct','resistance_distance_pct','volume_recent_vs_baseline','volume_middle_vs_oldest',
+  'volume_recent_vs_middle','trades_recent_vs_baseline','trades_middle_vs_oldest','trades_recent_vs_middle',
+  'flow_state','core_base_passed','outcome_mfe_next_4h_pct_lookahead_only','candle_close_time_ms','evidence_json'
+];
+async function createCsvGzipWriter(filename, columns) {
+  await mkdir(path.dirname(filename), { recursive: true });
+  const output = createWriteStream(filename);
+  const gzip = createGzip({ level: 9 });
+  gzip.pipe(output);
+  const writeChunk = async chunk => {
+    if (!gzip.write(chunk)) await once(gzip, 'drain');
+  };
+  await writeChunk(columns.map(csvCell).join(',') + '\n');
+  return {
+    write: async row => writeChunk(columns.map(key => csvCell(row[key])).join(',') + '\n'),
+    close: async () => { gzip.end(); await finished(output); }
+  };
+}
 async function saveGzip(filename, content) {
   await writeFile(filename, gzipSync(Buffer.from(content), { level: 9 }));
 }
@@ -388,8 +415,8 @@ async function main() {
   const tickerBySymbol = new Map((Array.isArray(tickers) ? tickers : [])
     .filter(item => spotSymbols.has(item.symbol) && Number(item.quoteVolume) >= MIN_SAMPLE_QUOTE_VOLUME)
     .map(item => [item.symbol, item]));
-  const availableBaselineComparisons = BASELINE_COMPARISON_SYMBOLS.filter(symbol => allSpotUsdtSymbols.has(symbol));
-  const unavailableBaselineComparisons = BASELINE_COMPARISON_SYMBOLS.filter(symbol => !allSpotUsdtSymbols.has(symbol));
+  const availableBaselineComparisons = BASELINE_COMPARISON_SYMBOLS.filter(symbol => spotSymbols.has(symbol));
+  const unavailableBaselineComparisons = BASELINE_COMPARISON_SYMBOLS.filter(symbol => !spotSymbols.has(symbol));
   const additionalComparisons = [...tickerBySymbol.values()]
     .filter(item => !TARGETS.includes(item.symbol) && !BASELINE_COMPARISON_SYMBOLS.includes(item.symbol) && !['BTCUSDT','ETHUSDT'].includes(item.symbol))
     .sort((a, b) => Number(b.quoteVolume) - Number(a.quoteVolume))
@@ -415,7 +442,8 @@ async function main() {
     return;
   }
 
-  const traces = [];
+  const traceWriter = await createCsvGzipWriter(path.join(OUT, 'candidate-candle-trace.csv.gz'), TRACE_COLUMNS);
+  let traceCount = 0;
   const summaries = [];
   const allEpisodes = [];
   const allTransitions = [];
@@ -553,7 +581,10 @@ async function main() {
       };
       // Preserve every replay timestamp where a narrow base is present or the fingerprint changes the classification.
       const narrow = hasPassed(result, 'narrow_price_base_range_pct');
-      if (narrow || ['WATCH_EARLY','PRE_EXPANSION','ALREADY_EXTENDED','DATA_INSUFFICIENT'].includes(result.classification)) traces.push(rowTrace);
+      if (narrow || ['WATCH_EARLY','PRE_EXPANSION','ALREADY_EXTENDED','DATA_INSUFFICIENT'].includes(result.classification)) {
+        await traceWriter.write(rowTrace);
+        traceCount++;
+      }
       const candidate = {
         symbol,
         time_ms: current.closeTime,
@@ -817,17 +848,7 @@ async function main() {
     production_changes: false,
     merged_or_deployed: false
   };
-  const traceColumns = [
-    'symbol','candle_open_time_utc','candle_close_time_utc','close_price','daily_change_24h_pct',
-    'move_1h_pct','move_4h_pct','classification','reason','strict_baseline_classification','strict_baseline_reason','temporal_promotion',
-    'outcome_mfe_next_24h_pct_lookahead_only','first_blocker_key','first_blocker_value','strict_baseline_first_blocker_key','strict_baseline_first_blocker_value','strict_baseline_first_blocker_threshold',
-    'first_blocker_threshold','narrow_base_range_pct','atr_current','atr_baseline','atr_contraction_ratio',
-    'bollinger_width_pct','bollinger_width_baseline_pct','bollinger_width_ratio','higher_lows','support_stable',
-    'support_undercut_pct','resistance_distance_pct','volume_recent_vs_baseline','volume_middle_vs_oldest',
-    'volume_recent_vs_middle','trades_recent_vs_baseline','trades_middle_vs_oldest','trades_recent_vs_middle',
-    'flow_state','core_base_passed','outcome_mfe_next_4h_pct_lookahead_only','candle_close_time_ms','evidence_json'
-  ];
-  await saveGzip(path.join(OUT, 'candidate-candle-trace.csv.gz'), asCsv(traces, traceColumns));
+  await traceWriter.close();
   await writeFile(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2));
   const md = [];
   md.push('# QUIET_BASE_PRE_EXPANSION — Binance Spot 5m Historical Replay');
@@ -872,7 +893,7 @@ async function main() {
     item.quiet_core_base_episodes_total + ' | ' + item.quiet_then_rise_episodes_4h + ' | ' + item.quiet_no_rise_episodes_4h + ' | ' + item.quiet_no_rise_episodes_24h + ' |');
   md.push('');
   md.push('## Failure/coverage diagnosis');
-  md.push('See report.json for strict-before/temporal-after stage counts, episode outcome labels at 4h and 24h, first blockers, evidence ratios, scan coverage, source endpoints, gaps, and future-leakage checks. candidate-candle-trace.csv.gz contains the per-candidate candle trace; future MFE fields are outcome labels only.');
+  md.push('See report.json for strict-before/temporal-after stage counts, episode outcome labels at 4h and 24h, first blockers, evidence ratios, scan coverage, source endpoints, gaps, and future-leakage checks. candidate-candle-trace.csv.gz is streamed incrementally to avoid a giant in-memory CSV string; future MFE fields are outcome labels only.');
   md.push('');
   md.push('## Download failures');
   md.push(manifest.download_errors.length ? JSON.stringify(manifest.download_errors, null, 2) : 'None.');
@@ -883,7 +904,7 @@ async function main() {
   manifest.status = report.status;
   manifest.completed_at = new Date().toISOString();
   manifest.closed_candle_count_total = manifest.symbols.reduce((sum, item) => sum + (Number(item.closed_rows) || 0), 0);
-  manifest.replay_candidate_trace_rows = traces.length;
+  manifest.replay_candidate_trace_rows = traceCount;
   manifest.core_base_episodes = allEpisodes.length;
   await writeFile(path.join(OUT, 'download-diagnostics.json'), JSON.stringify(manifest, null, 2));
 
@@ -895,7 +916,7 @@ async function main() {
     comparison_symbols: comparisons,
     core_base_episodes: allEpisodes.length,
     episode_labels: episodeSummary,
-    trace_rows: traces.length,
+    trace_rows: traceCount,
     future_leakage_passed: report.future_leakage.passed,
     future_leakage_failed: report.future_leakage.failed,
     download_errors: manifest.download_errors.length,
