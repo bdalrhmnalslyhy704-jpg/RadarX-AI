@@ -114,8 +114,13 @@ test('TEST_FIXTURE: shared REST cache prunes expired rotating-symbol payloads in
   for(let i=0;i<20;i++){
     await client.request('/api/v3/ticker/24hr',{symbol:`ROTATE${String(i).padStart(2,'0')}USDT`});
   }
+  // Pruning is deliberately bounded to a one-second cadence, not synchronous
+  // with every cache insertion. Let that cadence run, then trigger one request
+  // so the assertion observes the post-prune state rather than an in-between tail.
+  await new Promise(resolve=>setTimeout(resolve,1100));
+  await client.request('/api/v3/ticker/24hr',{symbol:'ROTATE_FINAL_USDT'});
   const health=client.health();
-  assert.equal(calls,20,'each distinct symbol should be requested once');
+  assert.equal(calls,21,'each distinct symbol should be requested once');
   assert.ok(health.shared_cache_entries<=12,
-    `expired symbol payloads must be pruned; current entries=${health.shared_cache_entries}`);
+    `expired symbol payloads must be pruned after the bounded cleanup interval; current entries=${health.shared_cache_entries}`);
 });
