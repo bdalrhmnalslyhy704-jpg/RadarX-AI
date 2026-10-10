@@ -1,14 +1,18 @@
 import {mkdir,readFile,writeFile,rename,appendFile} from 'node:fs/promises';
 import {basename,join,resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
+import {gzipSync,gunzipSync} from 'node:zlib';
+import {SCAN_JOURNEY_SCHEMA,scanJourneyFilename,validateScanJourneyCycle} from './scan-journey-ledger.mjs';
 
 export class DurableStore {
   constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
-    this.files={subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
+    this.scanJourneyDir=join(dir,'scan-journeys');
+    this.files={scanJourneyManifest:join(dir,'scan-journey-manifest.json'),subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
       signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),
       intelligenceMemory:join(dir,'intelligence-memory.json'),strongMoveAlerts:join(dir,'strong-move-alerts.jsonl'),predictionCalibration:join(dir,'prediction-calibration.json'),rotationAlerts:join(dir,'rotation-alerts.jsonl'),liquidityAbsorptionAlerts:join(dir,'liquidity-absorption-alerts.jsonl'),kahirAlerts:join(dir,'kahir-alerts.jsonl'),doomsdayAlerts:join(dir,'doomsday-alerts.jsonl'),professorAlerts:join(dir,'professor-alerts.jsonl'),alMuqawimAlerts:join(dir,'al-muqawim-alerts.jsonl'),falconEyeAlerts:join(dir,'falcon-eye-alerts.jsonl')};}
   async init({legacyDir=null}={}){
     await mkdir(this.dir,{recursive:true});
+    await mkdir(this.scanJourneyDir,{recursive:true});
     // Migrate any surviving ephemeral files only when the durable target lacks that file.
     // The copy is idempotent and never overwrites an existing archived file.
     if(legacyDir&&resolve(legacyDir)!==resolve(this.dir)){
@@ -113,6 +117,112 @@ export class DurableStore {
   async readProfessorAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('professorAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
   async appendKahirAlert(v){return this.lock(async()=>{await appendFile(this.files.kahirAlerts,JSON.stringify(v)+'\\n');this.lastWriteAt=Date.now();});}
   async readKahirAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('kahirAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
+
+  scanJourneyState(raw={}) {
+    const s=raw&&typeof raw==='object'?raw:{};
+    return {
+      schema_version:SCAN_JOURNEY_SCHEMA,
+      cycles:Array.isArray(s.cycles)?s.cycles:[],
+      cycle_sequence:Math.max(0,Number(s.cycle_sequence)||0),
+      total_recorded_cycles:Math.max(0,Number(s.total_recorded_cycles)||0),
+      pruned_cycle_count:Math.max(0,Number(s.pruned_cycle_count)||0),
+      retained_coin_rows:Math.max(0,Number(s.retained_coin_rows)||0),
+      compressed_bytes:Math.max(0,Number(s.compressed_bytes)||0),
+      last_micro_cycle_by_symbol:s.last_micro_cycle_by_symbol&&typeof s.last_micro_cycle_by_symbol==='object'?s.last_micro_cycle_by_symbol:{},
+      last_deep_cycle_by_symbol:s.last_deep_cycle_by_symbol&&typeof s.last_deep_cycle_by_symbol==='object'?s.last_deep_cycle_by_symbol:{},
+      last_deep_at_by_symbol:s.last_deep_at_by_symbol&&typeof s.last_deep_at_by_symbol==='object'?s.last_deep_at_by_symbol:{},
+      eligible_since_by_symbol:s.eligible_since_by_symbol&&typeof s.eligible_since_by_symbol==='object'?s.eligible_since_by_symbol:{},
+      updated_at:Math.max(0,Number(s.updated_at)||0)
+    };
+  }
+  async getScanJourneyState(){
+    return this.scanJourneyState(await this.readJson(this.files.scanJourneyManifest));
+  }
+  async appendScanJourneyCycle(cycle,{maxBytes=260*1024*1024}={}){
+    const validation=validateScanJourneyCycle(cycle);
+    if(!validation.valid)throw new Error('SCAN_JOURNEY_INVALID:'+validation.errors.join(','));
+    const cycleId=String(cycle.cycle_id);
+    const filename=scanJourneyFilename(cycleId);
+    const max=Math.max(1024*1024,Number(maxBytes)||260*1024*1024);
+    return this.lock(async()=>{
+      const state=this.scanJourneyState(await this.readJson(this.files.scanJourneyManifest));
+      const prior=state.cycles.find(x=>x.cycle_id===cycleId);
+      if(prior)return {duplicate:true,cycle_id:cycleId,cycle_sequence:prior.cycle_sequence,retained_cycles:state.cycles.length,retained_coin_rows:state.retained_coin_rows,compressed_bytes:state.compressed_bytes,pruned_cycle_count:state.pruned_cycle_count};
+      const sequence=Math.max(state.cycle_sequence+1,Math.trunc(Number(cycle.cycle_number)||0));
+      const stored={...cycle,cycle_sequence:sequence};
+      const zipped=gzipSync(Buffer.from(JSON.stringify(stored),'utf8'),{level:6});
+      const finalPath=join(this.scanJourneyDir,filename);
+      const tempPath=finalPath+'.tmp-'+process.pid+'-'+Date.now();
+      await writeFile(tempPath,zipped);
+      await rename(tempPath,finalPath);
+      const coins=Array.isArray(cycle.coins)?cycle.coins:[];
+      const eligible=coins.filter(x=>x&&x.eligible===true);
+      const metadata={
+        cycle_id:cycleId,filename,cycle_sequence:sequence,
+        started_at:cycle.started_at??null,completed_at:cycle.completed_at??null,
+        coin_count:coins.length,eligible_count:eligible.length,
+        fast_count:coins.filter(x=>x?.fast_scan_at!==undefined&&x.fast_scan_at!=='.INCOMPLETE'&&x.fast_scan_at!==null).length,
+        micro_count:coins.filter(x=>x?.micro_scan_completed_at!==undefined&&x.micro_scan_completed_at!=='.INCOMPLETE'&&x.micro_scan_completed_at!==null).length,
+        deep_count:coins.filter(x=>x?.deep_scan_completed_at!==undefined&&x.deep_scan_completed_at!=='.INCOMPLETE'&&x.deep_scan_completed_at!==null).length,
+        compressed_bytes:zipped.length,stored_at:Date.now()
+      };
+      state.cycles.push(metadata);
+      state.cycle_sequence=sequence;
+      state.total_recorded_cycles+=1;
+      state.retained_coin_rows+=coins.length;
+      state.compressed_bytes+=zipped.length;
+      const currentEligible=new Set(eligible.map(x=>String(x.symbol||'').toUpperCase()).filter(Boolean));
+      for(const symbol of Object.keys(state.eligible_since_by_symbol)){
+        if(!currentEligible.has(symbol))delete state.eligible_since_by_symbol[symbol];
+      }
+      for(const coin of eligible){
+        const symbol=String(coin.symbol||'').toUpperCase();
+        if(!symbol)continue;
+        const first=Number(coin.eligibility_at);
+        if(!Object.hasOwn(state.eligible_since_by_symbol,symbol))
+          state.eligible_since_by_symbol[symbol]=Number.isFinite(first)?first:Date.now();
+        if(coin.micro_scan_completed_at!==undefined&&coin.micro_scan_completed_at!=='.INCOMPLETE'&&coin.micro_scan_completed_at!==null)
+          state.last_micro_cycle_by_symbol[symbol]=sequence;
+        if(coin.deep_scan_completed_at!==undefined&&coin.deep_scan_completed_at!=='.INCOMPLETE'&&coin.deep_scan_completed_at!==null){
+          state.last_deep_cycle_by_symbol[symbol]=sequence;
+          const at=Number(coin.deep_scan_completed_at);
+          if(Number.isFinite(at))state.last_deep_at_by_symbol[symbol]=at;
+        }
+      }
+      for(const key of ['last_micro_cycle_by_symbol','last_deep_cycle_by_symbol','last_deep_at_by_symbol']){
+        const map=state[key],entries=Object.entries(map);
+        if(entries.length>10000){
+          entries.sort((a,b)=>Number(a[1]||0)-Number(b[1]||0));
+          for(const [symbol] of entries.slice(0,entries.length-10000))delete map[symbol];
+        }
+      }
+      // The Railway volume is shared with the existing signal archive. Use a rolling
+      // compressed journal ceiling so scan history cannot consume the whole 500 MB mount.
+      while(state.compressed_bytes>max&&state.cycles.length>1){
+        const oldest=state.cycles.shift();
+        await import('node:fs/promises').then(fs=>fs.unlink(join(this.scanJourneyDir,oldest.filename)).catch(()=>{}));
+        state.compressed_bytes=Math.max(0,state.compressed_bytes-Number(oldest.compressed_bytes||0));
+        state.retained_coin_rows=Math.max(0,state.retained_coin_rows-Number(oldest.coin_count||0));
+        state.pruned_cycle_count+=1;
+      }
+      state.updated_at=Date.now();
+      await this.writeJson(this.files.scanJourneyManifest,state);
+      return {duplicate:false,cycle_id:cycleId,cycle_sequence:sequence,retained_cycles:state.cycles.length,retained_coin_rows:state.retained_coin_rows,compressed_bytes:state.compressed_bytes,pruned_cycle_count:state.pruned_cycle_count,cycle_coin_rows:coins.length};
+    });
+  }
+  async readScanJourneyCycles({limit=10}={}){
+    const state=await this.getScanJourneyState();
+    const take=Math.max(1,Math.min(1000,Math.trunc(Number(limit)||10)));
+    const rows=[];
+    for(const entry of state.cycles.slice(-take).reverse()){
+      try{
+        const bytes=await readFile(join(this.scanJourneyDir,entry.filename));
+        const cycle=JSON.parse(gunzipSync(bytes).toString('utf8'));
+        rows.push(cycle);
+      }catch{}
+    }
+    return rows;
+  }
 
   async readRecent(kind,limit=100){
     const file=this.files[kind];
