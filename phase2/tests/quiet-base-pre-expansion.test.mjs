@@ -117,3 +117,28 @@ test('low taker-buy does not independently reject a valid quiet base', () => {
   assert.equal(result.metrics.flow_state, 'POSSIBLE_ABSORPTION');
   assert.equal(result.detected, true);
 });
+
+test('cycle summary counts fingerprint stages, participation rejections and scan latency', async () => {
+  const { summarizeQuietBasePreExpansion } = await import('../core/quiet-base-pre-expansion.mjs');
+  const valid = analyze(quietBase());
+  const flat = analyze(quietBase({ participation: 'flat' }));
+  const extended = analyze(quietBase(), { daily: 14 });
+  const missing = assessQuietBasePreExpansion({
+    fiveMinute: [], ticker: { lastPrice: 1, priceChange24h: 1 }, now: closeTime(quietBase().at(-1)) + 1
+  });
+  const summary = summarizeQuietBasePreExpansion([
+    { symbol: 'MAGICUSDT', pre_expansion_fingerprint: { quiet_base_pre_expansion: valid }, quiet_base_scan_latency_ms: 1200 },
+    { symbol: 'FLATUSDT', pre_expansion_fingerprint: { quiet_base_pre_expansion: flat }, quiet_base_scan_latency_ms: 2800 },
+    { symbol: 'LATEUSDT', pre_expansion_fingerprint: { quiet_base_pre_expansion: extended }, quiet_base_scan_latency_ms: 800 },
+    { symbol: 'MISSINGUSDT', pre_expansion_fingerprint: { quiet_base_pre_expansion: missing }, quiet_base_scan_latency_ms: null },
+    { symbol: 'FAILEDUSDT', failed: true }
+  ]);
+  assert.equal(summary.evaluated_total, 4);
+  assert.equal(summary.pre_expansion_total, 1);
+  assert.equal(summary.already_extended_total, 1);
+  assert.equal(summary.data_insufficient_total, 1);
+  assert.equal(summary.no_signal_total + summary.watch_early_total, 1);
+  assert.ok(summary.any_participation_not_improving_total >= 1);
+  assert.equal(summary.average_scan_latency_ms, 1600);
+  assert.equal(summary.max_scan_latency_ms, 2800);
+});
