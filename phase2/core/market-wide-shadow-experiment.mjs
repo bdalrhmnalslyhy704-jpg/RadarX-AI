@@ -12,7 +12,8 @@ export function shadowArmForCycle(cycleNumber) {
     expected_micro_pool_applied:arm === SHADOW_ARM.LIGHT_POOL};
 }
 
-const finite = value => Number.isFinite(Number(value)) ? Number(value) : null;
+const finite = value => value === null || value === undefined || (typeof value === 'string' && value.trim() === '')
+  ? null : Number.isFinite(Number(value)) ? Number(value) : null;
 const sorted = values => values.filter(Number.isFinite).sort((a,b)=>a-b);
 const mean = values => {
   const rows=values.filter(Number.isFinite);
