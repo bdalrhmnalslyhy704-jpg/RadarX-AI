@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,nextEarlyExpansionPollDelayMs} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,nextEarlyExpansionPollDelayMs,buildMicroFingerprint} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -43,6 +43,22 @@ function candidate(symbol,move,{score=65,participation=75,tradeParticipation=70,
       category_scores:{participation,tradeParticipation,structure,compression,momentumTurn:62}
     }
   };
+}
+
+
+function microCandles({count,step,now,btc=false}){
+  const lastOpen=Math.floor((now-1)/step)*step-step;
+  const firstOpen=lastOpen-(count-1)*step;
+  return Array.from({length:count},(_,i)=>{
+    const openTime=firstOpen+i*step;
+    const center=btc?40000+Math.min(i,count-14)*0.1:1+Math.min(i,count-14)*0.00025;
+    const halfRange=btc?(i<count-14?0.2:0.02):(i<count-14?0.004:0.0003);
+    const volume= !btc&&i>=count-12?[1050,1150,1320][Math.floor((i-(count-12))/4)]:1000;
+    const tradeCount= !btc&&i>=count-12?[105,116,134][Math.floor((i-(count-12))/4)]:100;
+    return {openTime,closeTime:openTime+step-1,open:center-(btc?0.05:0.00008),
+      high:center+halfRange,low:center-halfRange,close:center,volume,
+      quoteVolume:volume*center,tradeCount,takerBuyBaseVolume:volume*.32,closed:true};
+  });
 }
 
 
@@ -211,6 +227,38 @@ test('Radar 8 deep scan preserves score capacity while selecting quiet bases fro
   const quiet=selected.filter(x=>x._selection_lane==='quiet');
   assert.equal(quiet.length,5);
   assert.equal(quiet[0].row.symbol,'ZZZQUIETUSDT');
+});
+
+
+test('Radar 8 deep selection prioritizes a closed-candle PRE_EXPANSION micro fingerprint in the quiet lane',()=>{
+  const radar=makeRadar({deepCandidates:3,quietReserve:1,rotationReserve:1,exceptionalRotationBypassSlots:0});
+  const strong=candidate('HIGHSCOREUSDT',4.2,{score:96});
+  const rotation=candidate('ROTATIONUSDT',2.1,{score:73});
+  const quiet=candidate('QUIETBASEUSDT',1.6,{score:61,participation:54,tradeParticipation:52,structure:55,compression:50});
+  quiet.micro_fingerprint.quiet_base_pre_expansion={
+    fingerprint:'QUIET_BASE_PRE_EXPANSION',classification:'PRE_EXPANSION',detected:true,
+    closed_candles_only:true,evidence:[]
+  };
+  const selected=radar.selectDeepFromMicro([strong,rotation,quiet],5);
+  assert.equal(selected.length,3);
+  assert.ok(selected.some(x=>x.row.symbol==='QUIETBASEUSDT'&&x._selection_lane==='quiet'),
+    JSON.stringify(selected.map(x=>({symbol:x.row.symbol,lane:x._selection_lane}))));
+});
+
+test('Radar 8 micro fingerprint archives the quiet-base assessment from closed 5m candles',()=>{
+  const now=1_900_000_000_000;
+  const oneMinute=microCandles({count:100,step:60_000,now});
+  const fiveMinute=microCandles({count:90,step:300_000,now});
+  const btcFiveMinute=microCandles({count:90,step:300_000,now,btc:true});
+  const fp=buildMicroFingerprint({
+    oneMinute,fiveMinute,btcFiveMinute,
+    ticker:{symbol:'MICROQUIETUSDT',lastPrice:fiveMinute.at(-1).close,priceChange24h:2.1,quoteVolume24h:1_000_000},
+    now,config:{freshness1mMs:2*60_000,freshness5mMs:8*60_000}
+  });
+  assert.equal(fp.quiet_base_pre_expansion?.fingerprint,'QUIET_BASE_PRE_EXPANSION');
+  assert.equal(fp.quiet_base_pre_expansion?.classification,'PRE_EXPANSION',JSON.stringify(fp.quiet_base_pre_expansion));
+  assert.equal(fp.quiet_base_pre_expansion?.closed_candles_only,true);
+  assert.ok(fp.quiet_base_pre_expansion.evidence.every(x=>x.used_through_candle_close_time_ms<=now));
 });
 
 test('Radar 8 deep scan de-duplicates row-wrapped candidates and fills ten slots',()=>{

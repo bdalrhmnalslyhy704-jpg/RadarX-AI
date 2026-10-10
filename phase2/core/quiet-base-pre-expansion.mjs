@@ -287,14 +287,22 @@ export function assessQuietBasePreExpansion({
 
 /** Summarize per-cycle Radar 8 fingerprint evaluations without counting absent/error rows as signals. */
 export function summarizeQuietBasePreExpansion(results = []) {
+  const fingerprintFor = row => row?.pre_expansion_fingerprint?.quiet_base_pre_expansion ||
+    row?.micro_fingerprint?.quiet_base_pre_expansion || row?.quiet_base_pre_expansion || null;
   const rows = (Array.isArray(results) ? results : [])
-    .filter(row => !row?.failed && row?.pre_expansion_fingerprint?.quiet_base_pre_expansion)
-    .map(row => ({
-      symbol: String(row.symbol || '').toUpperCase(),
-      fingerprint: row.pre_expansion_fingerprint.quiet_base_pre_expansion,
-      latency: num(row.quiet_base_scan_latency_ms)
-    }));
-  const evidence = (row, key) => row.fingerprint.evidence.find(item => item.key === key);
+    .filter(row => !row?.failed && fingerprintFor(row))
+    .map(row => {
+      const started = num(row.scheduler_scan_started_at_ms);
+      const completed = num(row.scheduler_scan_completed_at_ms);
+      const latency = num(row.quiet_base_scan_latency_ms) ??
+        (started !== null && completed !== null ? Math.max(0, completed - started) : null);
+      return {
+        symbol: String(row.symbol || row.row?.symbol || '').toUpperCase(),
+        fingerprint: fingerprintFor(row),
+        latency
+      };
+    });
+  const evidence = (row, key) => (Array.isArray(row.fingerprint.evidence) ? row.fingerprint.evidence : []).find(item => item.key === key);
   const requiredBaseKeys = [
     'narrow_price_base_range_pct', 'atr_contraction_ratio',
     'bollinger_width_ratio', 'higher_lows_or_stable_support',

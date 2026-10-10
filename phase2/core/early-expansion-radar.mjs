@@ -783,6 +783,9 @@ function isExceptionalMicroCandidate(row,fast,cfg){
 function quietDeepRank(item,cfg){
   const row=item?.row,move=absolute24hMove(row),fp=item?.micro_fingerprint;
   if(move===null||move>Number(cfg.maxQuiet24hMovePct??8)||!fp||!hasFiniteNumber(fp.score))return null;
+  const quietClass=fp.quiet_base_pre_expansion?.classification;
+  if(quietClass==='PRE_EXPANSION')return 10000+Math.max(0,8-move);
+  if(quietClass==='WATCH_EARLY')return 5000+Math.max(0,8-move);
   const m=fp.metrics||{},c=fp.category_scores||{};
   const rv1=hasFiniteNumber(m.rvol_1m)?Number(m.rvol_1m):null;
   const rv5=hasFiniteNumber(m.rvol_5m)?Number(m.rvol_5m):null;
@@ -806,6 +809,10 @@ function quietDeepRank(item,cfg){
   if(participation<Number(cfg.quietDeepMinParticipationScore??58)||
     !(compression>=65||structure>=62||resistanceNear))return null;
   return (100-move*6)*.35+participation*.25+structure*.20+compression*.20;
+}
+function quietDeepTier(item){
+  const classification=item?.micro_fingerprint?.quiet_base_pre_expansion?.classification;
+  return classification==='PRE_EXPANSION'?0:classification==='WATCH_EARLY'?1:2;
 }
 function isExceptionalDeepCandidate(item,cfg){
   const move=absolute24hMove(item?.row),fp=item?.micro_fingerprint,m=fp?.metrics||{},c=fp?.category_scores||{};
@@ -1022,9 +1029,10 @@ export function buildMicroFingerprint({oneMinute=[],fiveMinute=[],btcFiveMinute=
   const cfg={...EARLY_EXPANSION_RADAR_DEFAULTS,...config};
   const i1=microSeriesIssues(oneMinute,'1m',now,cfg),i5=microSeriesIssues(fiveMinute,'5m',now,cfg),ib=microSeriesIssues(btcFiveMinute,'5m',now,cfg);
   const issues=[...i1.issues,...i5.issues,...ib.issues];
-  if(issues.length)return {eligible:false,stage:'DATA_INSUFFICIENT',score:null,confirmation_count:0,confirmation_total:10,mode:'DATA_INSUFFICIENT',closed_candles_only:true,reason_codes:[...new Set(issues)].slice(0,30),risk_flags:[],metrics:{},category_scores:{}};
+  const quietBasePreExpansion=assessQuietBasePreExpansion({fiveMinute:i5.rows,ticker,now,dataReady:i5.issues.length===0,dataIssues:i5.issues,config:cfg});
+  if(issues.length)return {eligible:false,stage:'DATA_INSUFFICIENT',score:null,confirmation_count:0,confirmation_total:10,mode:'DATA_INSUFFICIENT',closed_candles_only:true,reason_codes:[...new Set(issues)].slice(0,30),risk_flags:[],metrics:{},category_scores:{},quiet_base_pre_expansion:quietBasePreExpansion};
   const m1=i1.rows,m5=i5.rows,btc=ib.rows;
-  if(m1.length<80||m5.length<40||btc.length<20)return {eligible:false,stage:'WARMING_UP',score:null,confirmation_count:0,confirmation_total:10,mode:'WARMING_UP',closed_candles_only:true,reason_codes:['MICRO_FINGERPRINT_WARMING_UP'],risk_flags:[],metrics:{},category_scores:{}};
+  if(m1.length<80||m5.length<40||btc.length<20)return {eligible:false,stage:'WARMING_UP',score:null,confirmation_count:0,confirmation_total:10,mode:'WARMING_UP',closed_candles_only:true,reason_codes:['MICRO_FINGERPRINT_WARMING_UP'],risk_flags:[],metrics:{},category_scores:{},quiet_base_pre_expansion:quietBasePreExpansion};
   const r1=returns(m1,1),r3=returns(m1,3),r5=returns(m5,1),r15=returns(m5,3);
   const prev5=returns(m5.slice(0,-3),3),prev1=returns(m1.slice(0,-3),3);
   const accel5=Number.isFinite(r15)&&Number.isFinite(prev5)?r15-prev5:null;
@@ -1051,6 +1059,7 @@ export function buildMicroFingerprint({oneMinute=[],fiveMinute=[],btcFiveMinute=
   return {
     eligible:prof.eligible,stage,score:hasFiniteNumber(prof.score)?Number(Number(prof.score).toFixed(1)):null,mode:prof.mode,confirmation_count:prof.confirmations,confirmation_total:10,closed_candles_only:true,
     activity_shock:activityShock,
+    quiet_base_pre_expansion:quietBasePreExpansion,
     metrics:{return_1m:r1,return_3m:r3,return_5m:r5,return_15m:r15,acceleration_1m_pct:accel1,acceleration_5m_pct:accel5,rvol_1m:rv1,rvol_5m:rv5,trade_rvol_1m:tr1,trade_rvol_5m:tr5,taker_buy_ratio:taker.ratio,taker_buy_delta:taker.delta,bb_width:b?.width??null,bb_ratio:bbRatio,atr_ratio:atrRatio,ema9:e9,ema21:e21,ema50:e50,vwap:vw,vwap_distance_pct:vwDist,relative_strength_5m_pct:rs,macd_hist:mac?.histogram??null,macd_slope:macSlope,rsi:rsiNow,rsi_slope:rsiSlope,adx:adxNow,higher_low_count:hl.score,resistance_distance_pct:br.distance_pct,resistance:br.resistance,close_location_pct:location,range_compression_ratio:rangeRatio,price_change_24h_abs:price24Abs,absorption:prof.absorption},
     category_scores:prof.components,
     reasons:[prof.components.participation>=75?'MICRO_VOLUME_ACCELERATION':null,prof.components.tradeParticipation>=75?'MICRO_TRADE_ACCELERATION':null,prof.absorption?'LIQUIDITY_ABSORPTION_REVERSAL':null,prof.components.compression>=82?'MICRO_COMPRESSION':null,prof.components.structure>=70?'MICRO_STRUCTURE':null,prof.components.ema>=72?'MICRO_EMA_RECLAIM':null,prof.components.resistance>=78?'MICRO_RESISTANCE_PRESSURE':null,prof.components.relativeStrength>=60?'MICRO_RELATIVE_STRENGTH':null,prof.components.vwap>=60?'MICRO_VWAP_RECLAIM':null,prof.components.momentumTurn>=60?'MICRO_MOMENTUM_TURN':null,prof.components.adx>=55?'MICRO_ADX_TREND':null,prof.mode==='REVERSAL_ACCUMULATION'?'MICRO_REVERSAL_ACCUMULATION':null].filter(Boolean),
@@ -1220,7 +1229,7 @@ export class EarlyExpansionRadar{
     const byScore=[...valid].sort((a,b)=>Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const byQuiet=valid.map(item=>({...item,_quietScore:quietDeepRank(item,this.config)}))
       .filter(item=>item._quietScore!==null)
-      .sort((a,b)=>(absolute24hMove(a.row)??Infinity)-(absolute24hMove(b.row)??Infinity)||b._quietScore-a._quietScore||selectionSymbol(a).localeCompare(selectionSymbol(b)));
+      .sort((a,b)=>quietDeepTier(a)-quietDeepTier(b)||(absolute24hMove(a.row)??Infinity)-(absolute24hMove(b.row)??Infinity)||b._quietScore-a._quietScore||selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const byRotation=[...valid].map(item=>{
       const symbol=selectionSymbol(item),lastCycle=this.lastDeepScanCycleBySymbol.get(symbol);
       const lastAt=this.scheduler.lastScanAt('DEEP',symbol),queuedAt=this.scheduler.queueStartedAt('DEEP',symbol),neverScanned=lastAt===null;
@@ -1872,8 +1881,10 @@ export class EarlyExpansionRadar{
           });
           const outcomeSummary=summarizeScanJourneyOutcomes(coins);
           const quietBaseFingerprintSummary=summarizeQuietBasePreExpansion(scanned);
+          const quietBaseMicroFingerprintSummary=summarizeQuietBasePreExpansion(microScanned);
           const counters={
             quiet_base_pre_expansion:quietBaseFingerprintSummary,
+            quiet_base_pre_expansion_micro:quietBaseMicroFingerprintSummary,
             expected_total:expected.length,received_total:receivedSymbols.length,
             missing_ticker_total:Math.max(0,expected.length-receivedSymbols.length),
             eligible_total:eligible.length,fast_scanned_total:eligible.length,

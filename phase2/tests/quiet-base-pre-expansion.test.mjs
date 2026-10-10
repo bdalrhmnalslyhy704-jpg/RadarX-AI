@@ -142,3 +142,18 @@ test('cycle summary counts fingerprint stages, participation rejections and scan
   assert.equal(summary.average_scan_latency_ms, 1600);
   assert.equal(summary.max_scan_latency_ms, 2800);
 });
+
+
+test('cycle summary reads micro-stage fingerprints and derives measured scheduler latency',()=>{
+  const fingerprint=analyze(quietBase());
+  const summary=summarizeQuietBasePreExpansion([{
+    row:{symbol:'MICROUSDT'},
+    scheduler_scan_started_at_ms:1000,
+    scheduler_scan_completed_at_ms:1750,
+    micro_fingerprint:{quiet_base_pre_expansion:fingerprint}
+  }]);
+  assert.equal(summary.evaluated_total,1);
+  assert.equal(summary.pre_expansion_total,1);
+  assert.equal(summary.average_scan_latency_ms,750);
+  assert.equal(summary.max_scan_latency_ms,750);
+});
