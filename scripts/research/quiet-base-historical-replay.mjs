@@ -334,6 +334,8 @@ async function main() {
   const summaries = [];
   const allEpisodes = [];
   const allTransitions = [];
+  const allStrictStageEpisodes = [];
+  const allTemporalStageEpisodes = [];
   for (const symbol of symbols) {
     console.log('[DOWNLOAD_START] ' + symbol);
     let downloaded;
@@ -538,6 +540,8 @@ async function main() {
       episode.minutes_before_move_start=eventStartMs===null?null:round((eventStartMs-episode.time_ms)/60_000,2);
       episode.within_24h_before_move=eventStartMs!==null&&episode.time_ms>=eventStartMs-24*60*60_000&&episode.time_ms<=eventStartMs;
     }
+    allStrictStageEpisodes.push(...strictStageEpisodes);
+    allTemporalStageEpisodes.push(...temporalStageEpisodes);
     const signalBeforeEvent = (which, strictBaseline = false) => {
       if (eventStartMs === null) return null;
       const cutoff = eventStartMs - 24 * 60 * 60_000;
@@ -681,10 +685,10 @@ async function main() {
     if(item.temporal_promotion)summary.temporal_promotion_episodes=(summary.temporal_promotion_episodes||0)+1;
     return summary;
   },{});
-  const stageEpisodesBeforeAfter={strict_baseline:stageSummary(strictStageEpisodes),temporal_path:stageSummary(temporalStageEpisodes),
-    strict_baseline_total:strictStageEpisodes.length,temporal_path_total:temporalStageEpisodes.length,
-    repeated_stage_candle_rows_proxy_before:strictClassCounts.WATCH_EARLY+strictClassCounts.PRE_EXPANSION-strictStageEpisodes.length,
-    repeated_stage_candle_rows_proxy_after:classCounts.WATCH_EARLY+classCounts.PRE_EXPANSION-temporalStageEpisodes.length};
+  const stageEpisodesBeforeAfter={strict_baseline:stageSummary(allStrictStageEpisodes),temporal_path:stageSummary(allTemporalStageEpisodes),
+    strict_baseline_total:allStrictStageEpisodes.length,temporal_path_total:allTemporalStageEpisodes.length,
+    repeated_stage_candle_rows_proxy_before:summaries.reduce((sum,item)=>sum+(item.strict_baseline_classifications.WATCH_EARLY||0)+(item.strict_baseline_classifications.PRE_EXPANSION||0),0)-allStrictStageEpisodes.length,
+    repeated_stage_candle_rows_proxy_after:summaries.reduce((sum,item)=>sum+(item.classifications.WATCH_EARLY||0)+(item.classifications.PRE_EXPANSION||0),0)-allTemporalStageEpisodes.length};
   const targetSummary = summaries.filter(item => TARGETS.includes(item.symbol));
   const symbolSummary = summaries.filter(item => !TARGETS.includes(item.symbol));
   const report = {
@@ -708,8 +712,8 @@ async function main() {
     comparison_results: symbolSummary,
     core_base_episode_labels_4h_and_24h: episodeSummary,
     stage_episodes_before_after:stageEpisodesBeforeAfter,
-    all_stage_episodes_before:strictStageEpisodes,
-    all_stage_episodes_after:temporalStageEpisodes,
+    all_stage_episodes_before:allStrictStageEpisodes,
+    all_stage_episodes_after:allTemporalStageEpisodes,
     all_core_base_episodes: allEpisodes,
     already_extended_transitions: allTransitions,
     future_leakage: {
