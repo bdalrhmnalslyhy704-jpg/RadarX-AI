@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {closedCandleSnapshot,INCOMPLETE,incompleteHorizons,makeScanJourneyCycleId,SCAN_JOURNEY_SCHEMA,validateScanJourneyCycle} from '../core/scan-journey-ledger.mjs';
+import {closedCandleSnapshot,INCOMPLETE,incompleteHorizons,makeScanJourneyCycleId,SCAN_JOURNEY_SCHEMA,validateScanJourneyCycle,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes} from '../core/scan-journey-ledger.mjs';
 import {DurableStore} from '../core/store.mjs';
 
 const t0=1_800_000_000_000;
@@ -64,6 +64,65 @@ test('INCOMPLETE horizon values are explicit and never invented',()=>{
     assert.equal(values[horizon].mark_price,'.INCOMPLETE');
     assert.equal(values[horizon].reason,'NO_CLOSED_CANDLE');
   }
+});
+
+test('tracked outcomes distinguish pending, complete, partial and untracked horizons',()=>{
+  const record={signal_id:'SIGNAL-AAA',marks:{},horizon_status:{},excursions:{}};
+  for(const h of ['5m','15m','30m','60m','4h','24h']){
+    record.horizon_status[h]={status:'PENDING',reason:'WAITING_FOR_HORIZON'};
+    record.excursions[h]={source:'HISTORICAL_CLOSED_OHLC',complete:false,max_favorable_pct:null,max_adverse_pct:null};
+  }
+  record.marks['5m']={sample_quality:'HISTORICAL_CLOSED_OHLC',price:10.2,observed_at:t0+300_000,return_pct:2};
+  record.horizon_status['5m']={status:'COMPLETE'};
+  record.excursions['5m']={source:'HISTORICAL_CLOSED_OHLC',complete:true,max_favorable_pct:3,max_adverse_pct:-1};
+  const outcomes=scanJourneyOutcomesFromRecord(record);
+  assert.equal(outcomes['5m'].status,'COMPLETE');
+  assert.equal(outcomes['5m'].return_pct,2);
+  assert.equal(outcomes['15m'].status,'PENDING');
+  assert.equal(outcomes['15m'].return_pct,INCOMPLETE);
+  assert.equal(outcomes['15m'].reason,'WAITING_FOR_HORIZON');
+  assert.equal(outcomes['24h'].status,'PENDING');
+  const summary=summarizeScanJourneyOutcomes([
+    {symbol:'AAAUSDT',outcome_signal_id:'SIGNAL-AAA',outcomes},
+    {symbol:'BBBUSDT',outcome_signal_id:INCOMPLETE,outcomes:incompleteHorizons()}
+  ]);
+  assert.equal(summary.tracked_total,1);
+  assert.equal(summary.untracked_total,1);
+  assert.equal(summary.by_horizon['5m'].complete,1);
+  assert.equal(summary.by_horizon['15m'].pending,1);
+});
+
+test('archived outcome horizons update idempotently as closed-candle results mature',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-scan-journey-outcome-refresh-'));
+  const store=await new DurableStore({dir}).init();
+  const first=cycle(t0,1,[{symbol:'AAAUSDT',deep:true},{symbol:'BBBUSDT',deep:false}]);
+  first.coins[0].outcome_signal_id='SIGNAL-AAA';
+  const saved=await store.appendScanJourneyCycle(first);
+  assert.equal((await store.verifyScanJourneyArchive()).complete,true);
+  const outcome={signal_id:'SIGNAL-AAA',marks:{},horizon_status:{},excursions:{}};
+  for(const h of ['5m','15m','30m','60m','4h','24h']){
+    const ms=h==='5m'?300_000:h==='15m'?900_000:h==='30m'?1_800_000:h==='60m'?3_600_000:h==='4h'?14_400_000:86_400_000;
+    outcome.marks[h]={sample_quality:'HISTORICAL_CLOSED_OHLC',price:10.2,observed_at:t0+ms,return_pct:2};
+    outcome.horizon_status[h]={status:'COMPLETE',reason:null};
+    outcome.excursions[h]={source:'HISTORICAL_CLOSED_OHLC',complete:true,max_favorable_pct:3,max_adverse_pct:-1};
+  }
+  const now=t0+90_000_000;
+  const refresh=await store.refreshScanJourneyOutcomes([outcome],{limit:10,now,checkIntervalMs:5_000});
+  assert.equal(refresh.updated_cycles,1);
+  assert.equal(refresh.updated_coin_rows,1);
+  assert.equal(refresh.retained_cycles,1);
+  const reloaded=await store.readScanJourneyCycles({limit:5});
+  assert.equal(reloaded[0].coins[0].outcomes['5m'].return_pct,2);
+  assert.equal(reloaded[0].coins[0].outcomes['24h'].status,'COMPLETE');
+  assert.equal(reloaded[0].coins[1].outcomes['5m'].status,INCOMPLETE);
+  assert.equal(reloaded[0].counters.outcomes_tracked_total,1);
+  assert.equal(reloaded[0].counters.outcomes_untracked_total,1);
+  assert.equal((await store.verifyScanJourneyArchive()).complete,true);
+  const again=await store.refreshScanJourneyOutcomes([outcome],{limit:10,now:now+5_000,checkIntervalMs:5_000});
+  assert.equal(again.updated_cycles,0);
+  const after=await store.getScanJourneyState();
+  assert.equal(after.cycle_sequence,saved.cycle_sequence);
+  assert.equal(after.retained_coin_rows,2);
 });
 
 test('compressed journey archive survives a fresh DurableStore and repeated writes are idempotent',async()=>{
