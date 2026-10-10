@@ -1165,29 +1165,26 @@ export class EarlyExpansionRadar{
   }
   selectQuietBaseLight(rows,fastBySymbol,cycle=0){
     const currentCycle=Math.max(1,Math.trunc(Number(cycle)||1));
-    const all=(rows||[]).filter(row=>row&&row.symbol).map(row=>{
-      const fast=fastBySymbol.get(row.symbol)||{};
-      const quiet=quietCandidateScore(row,fast,this.config);
-      const fastScore=fastCandidateScore(row,fast,this.config);
-      return {...row,fast,_lightPriorityScore:Number(fastScore||0)*.55+Number(quiet||0)*.45,
-        _lightExceptional:isExceptionalMicroCandidate(row,fast,this.config)||
-          isFastActivityShockCandidate(row,fast,this.config)||
-          Number(this.fastShockPendingUntil.get(String(row.symbol).toUpperCase())||0)>this.clock(),
-        _lightQuietScore:quiet??-1};
-    });
+    const all=(rows||[]).filter(row=>row&&row.symbol);
     const uniqueCount=new Set(all.map(row=>String(row.symbol).toUpperCase())).size;
     const target=Math.min(Math.max(1,Math.trunc(this.config.quietBaseLightCandidates||96)),uniqueCount);
     if(!target)return [];
-    const prioritySlots=Math.min(8,Math.max(1,Math.floor(target/8)));
     const selected=[],seen=new Set();
-    const priority=[...all].sort((a,b)=>
-      Number(b._lightExceptional)-Number(a._lightExceptional)||
-      Number(isQuietEarlyCandidate(b,b.fast,this.config))-Number(isQuietEarlyCandidate(a,a.fast,this.config))||
-      b._lightPriorityScore-a._lightPriorityScore||
-      b._lightQuietScore-a._lightQuietScore||a.symbol.localeCompare(b.symbol));
-    takeUniqueLane(selected,seen,priority,prioritySlots,'priority');
-    // Deterministic rotation gives the rest of the eligible universe a light look
-    // without changing the existing micro or deep batch size.
+    // Any priority reservation can only reuse the last 5m light result, which was
+    // scored exclusively from the allowed quiet-base evidence. Never use 24h move,
+    // fast acceleration, Taker Buy or any unlisted signal to pick the current batch.
+    const freshPriorLight=all.map(row=>{
+      const symbol=String(row.symbol).toUpperCase();
+      const state=this.quietBaseLightStateBySymbol.get(symbol);
+      const closeTime=Number(state?.assessment?.candle_close_time_ms);
+      const fresh=Boolean(state?.assessment&&Number.isFinite(closeTime)&&
+        this.clock()-closeTime<=QUIET_BASE_LIGHT_FRESHNESS_MS&&state.assessment.classification!=='DATA_INSUFFICIENT');
+      return {...row,_priorLightFresh:fresh,_priorLightScore:fresh?Number(state.rank?.light_score):-1,
+        _priorLightPriority:fresh&&state.rank?.priority===true};
+    }).filter(row=>row._priorLightPriority&&Number.isFinite(row._priorLightScore))
+      .sort((a,b)=>b._priorLightScore-a._priorLightScore||a.symbol.localeCompare(b.symbol));
+    const prioritySlots=Math.min(8,Math.max(1,Math.floor(target/8)));
+    takeUniqueLane(selected,seen,freshPriorLight,prioritySlots,'prior_light_evidence');
     const ring=[...all].sort((a,b)=>symbolHash(a.symbol)-symbolHash(b.symbol)||a.symbol.localeCompare(b.symbol));
     const rotationSlots=Math.max(0,target-selected.length);
     const offset=ring.length?(((currentCycle-1)*rotationSlots)%ring.length):0;
@@ -1195,7 +1192,7 @@ export class EarlyExpansionRadar{
     takeUniqueLane(selected,seen,rotated,rotationSlots,'rotation');
     return selected.slice(0,target);
   }
-  selectMicro(rows,fastBySymbol,cycle=0){
+    selectMicro(rows,fastBySymbol,cycle=0){
     const currentCycle=Math.max(0,Math.trunc(Number(cycle)||0));
     const selectionAt=this.clock();
     const all=(rows||[]).filter(row=>row&&row.symbol).map(row=>{

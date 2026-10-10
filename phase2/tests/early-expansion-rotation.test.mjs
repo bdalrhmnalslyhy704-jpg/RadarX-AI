@@ -245,6 +245,16 @@ test('Radar 8 gives one existing deep quiet slot to a high-quality light quiet-b
   assert.equal(selectedLight._selection_lane,'quiet_base');
 });
 
+test('Radar 8 light batch coverage does not depend on ticker momentum/volume acceleration scores',()=>{
+  const config={quietBaseLightCandidates:24,microScanCandidates:8,deepCandidates:3};
+  const input=rows(50);
+  const ordinary=makeRadar(config).selectQuietBaseLight(input,fastMap(input),1).map(x=>x.symbol);
+  const overrides={};
+  for(const row of input)overrides[row.symbol]={price_change_pct:99,price_acceleration_pct:99,volume_accel_ratio:99,trade_accel_ratio:99};
+  const altered=makeRadar(config).selectQuietBaseLight(input,fastMap(input,overrides),1).map(x=>x.symbol);
+  assert.deepEqual(altered,ordinary,'pre-screen selection must be rotation based; allowed evidence ranks coins only after the light candle scan');
+});
+
 test('Radar 8 deep scan de-duplicates row-wrapped candidates and fills ten slots',()=>{
   const radar=makeRadar({deepCandidates:10,quietReserve:8,rotationReserve:2});
   const input=Array.from({length:24},(_,i)=>candidate('DEEP'+String(i).padStart(2,'0')+'USDT',.25+(i%10)*.45,{
