@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DurableStore} from '../core/store.mjs';
 import {SCAN_JOURNEY_SCHEMA} from '../core/scan-journey-ledger.mjs';
-import {MarketWideLightScan, evaluateMarketWideLightCandidate} from '../core/market-wide-light-scan.mjs';
+import {MarketWideLightScan, evaluateMarketWideLightCandidate, isDirectionalCandidateSymbol} from '../core/market-wide-light-scan.mjs';
 import {MarketWideKlineCache} from '../market/market-wide-kline-cache.mjs';
 import {BinanceStreamClient} from '../market/binance-ws.mjs';
 import {RestClient} from '../market/binance-rest.mjs';
@@ -450,4 +450,46 @@ test('WebSocket reconnect retries stop after the configured bound on HTTP 451', 
   assert.ok(states.some(item=>String(item.reason||'').includes('WS_HTTP_451')));
   assert.ok(states.some(item=>String(item.reason||'').includes('WS_RECONNECT_LIMIT_REACHED')));
   client.stop();
+});
+
+
+test('stable, fiat and gold-backed bases remain fully audited but cannot consume Micro candidate slots', () => {
+  const now = 1_900_000_000_000;
+  const nonDirectional = [
+    'USDCUSDT','USD1USDT','RLUSDUSDT','FDUSDUSDT','PAXGUSDT','XAUTUSDT',
+    'EURIUSDT','EURUSDT','BFUSDUSDT'
+  ];
+  const directional = Array.from({length:32},(_,i)=>row(i));
+  const eligible = [
+    ...nonDirectional.map((symbol,i)=>({symbol,lastPrice:1,quoteVolume24h:1_000_000,tradeCount24h:1000,priceChange24h:0.05+i/100})),
+    ...directional
+  ];
+  const light = new MarketWideLightScan({config:{candidateLimit:24,rotationReserve:6,minimumReadyCandidates:12},clock:()=>now});
+  const result = light.scan({
+    eligible,now,cycle:1,
+    getSeries:symbol=>cacheSeries(symbol,now),
+    isExceptional:item=>nonDirectional.includes(item.symbol),
+    lastMicroScannedAt:()=>null
+  });
+  assert.equal(result.eligibleTotal,eligible.length,'excluded symbols still count toward full market coverage');
+  assert.equal(result.audit.size,eligible.length,'excluded symbols remain observable in the forensic audit');
+  assert.equal(result.summary.evaluated_total,eligible.length);
+  assert.equal(result.coverageReady,true,'candidate-pool filtering must not fake a coverage gap');
+  assert.equal(result.summary.non_directional_excluded_total,nonDirectional.length);
+  assert.ok(nonDirectional.every(symbol=>!result.candidateSymbols.includes(symbol)),
+    'stablecoin, fiat and gold-backed pairs must never take candidate or rotation slots');
+  assert.ok(nonDirectional.every(symbol=>{
+    const item=result.audit.get(symbol);
+    return item.non_directional_base_asset===true &&
+      item.candidate_selected===false &&
+      item.candidate_selection_exclusion_reason==='NON_DIRECTIONAL_BASE_ASSET' &&
+      item.rank_basis==='NON_DIRECTIONAL_BASE_ASSET_EXCLUDED';
+  }));
+  assert.ok(result.candidateSymbols.length<=24);
+  assert.ok(result.candidateSymbols.every(isDirectionalCandidateSymbol));
+  assert.ok(result.candidateSymbols.some(symbol=>symbol.startsWith('LIGHT')),
+    'the bounded pool must retain directional symbols after exclusions');
+  assert.ok(isDirectionalCandidateSymbol('OGNUSDT'));
+  assert.equal(isDirectionalCandidateSymbol('RLUSDUSDT'),false);
+  assert.equal(isDirectionalCandidateSymbol('PAXGUSDT'),false);
 });
