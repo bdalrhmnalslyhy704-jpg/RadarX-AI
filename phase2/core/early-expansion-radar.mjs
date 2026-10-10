@@ -5,6 +5,7 @@ import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notific
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
 import {assessQuietBaseActivityShock,isFastActivityShockCandidate} from './activity-shock.mjs';
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
+import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId} from './scan-journey-ledger.mjs';
 
 function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
@@ -1072,9 +1073,22 @@ export class EarlyExpansionRadar{
     this.fastState=new Map();this.lastAlertAt=new Map();this.lastAlertScore=new Map();this.lastBand=new Map();
     this.lastActivityShockAt=new Map();this.lastActivityShockKeyBySymbol=new Map();this.activityShockTimestamps=[];this.fastShockPendingUntil=new Map();
     this.lastMicroScanCycleBySymbol=new Map();this.lastDeepScanCycleBySymbol=new Map();
+    this.lastDeepAtBySymbol=new Map();this.firstEligibleAtBySymbol=new Map();
+    this.journeyStateHydrated=false;this.lastJourneyArchive=null;this.lastJourneyError=null;
     this.outcomeBackfillTask=null;
     this.latestCandidates=[];this.lastResult=null;this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
     this.fastScannedTotal=0;this.failedTotal=0;this.failedSymbols=[];this.lastCoverage=emptyEarlyExpansionUniverse(this.config,this.config.quote);
+  }
+  async hydrateScanJourneyState(){
+    if(this.journeyStateHydrated)return;
+    this.journeyStateHydrated=true;
+    if(typeof this.store.getScanJourneyState!=='function')return;
+    const state=await this.store.getScanJourneyState();
+    this.scans=Math.max(this.scans,Number(state?.cycle_sequence)||0);
+    this.lastMicroScanCycleBySymbol=new Map(Object.entries(state?.last_micro_cycle_by_symbol||{}).map(([k,v])=>[k,Number(v)||0]));
+    this.lastDeepScanCycleBySymbol=new Map(Object.entries(state?.last_deep_cycle_by_symbol||{}).map(([k,v])=>[k,Number(v)||0]));
+    this.lastDeepAtBySymbol=new Map(Object.entries(state?.last_deep_at_by_symbol||{}).map(([k,v])=>[k,Number(v)||0]));
+    this.firstEligibleAtBySymbol=new Map(Object.entries(state?.eligible_since_by_symbol||{}).map(([k,v])=>[k,Number(v)||this.clock()]));
   }
   start(){
     if(this.running)return;
@@ -1223,7 +1237,7 @@ export class EarlyExpansionRadar{
     return {row,fast,oneMinute:m1.candles,fiveMinute:m5.candles,micro_fingerprint:buildMicroFingerprint({oneMinute:m1.candles,fiveMinute:m5.candles,btcFiveMinute:btcRows,ticker:row,now:this.clock(),config:this.config}),source:sourceList([m1.source,m5.source])};
   }
 
-  async deepScan(row,fast,marketContext,micro){
+  async deepScan(row,fast,marketContext,micro,onClosedCandles=null){
     const cfg=this.config,series={'1m':micro.oneMinute,'5m':micro.fiveMinute},sources=[micro.source];
     // These reads are independent. Start them together; the shared weighted REST
     // scheduler still enforces the process-wide public-Binance budget.
@@ -1235,27 +1249,94 @@ export class EarlyExpansionRadar{
     ]);
     series['15m']=r15.candles;series['1h']=r1h.candles;series['4h']=r4h.candles;
     sources.push(r15.source,r1h.source,r4h.source,dd.source);
-    return buildEarlyExpansionEvidence({series,ticker:row,depth:dd.data,marketContext,fastContext:fast,now:this.clock(),config:cfg,historicalReplay:false,sourceList:sources});
+    const candleAsOf=this.clock();
+    if(typeof onClosedCandles==='function')onClosedCandles(Object.fromEntries(
+      Object.entries(series).map(([tf,rows])=>[tf,closedCandleSnapshot(closed(rows,candleAsOf),candleAsOf)])
+    ));
+    return buildEarlyExpansionEvidence({series,ticker:row,depth:dd.data,marketContext,fastContext:fast,now:candleAsOf,config:cfg,historicalReplay:false,sourceList:sources});
   }
   async tick({quote=this.config.quote}={}){
     if(!this.running||this.busy)return false;
     this.busy=true;const scanStartedAt=this.clock();
+    const journeyEntries=new Map(),journeyMicroBySymbol=new Map(),journeyDeepBySymbol=new Map(),journeyDeepCandlesBySymbol=new Map();
+    const journey={cycle_id:null,cycle_number:null,quote:INCOMPLETE,source:INCOMPLETE,expected_symbols:[],received_symbols:[],eligible_symbols:[],status:'RUNNING'};
+    const makeJourneyEntry=(symbol)=>({
+      symbol:String(symbol).toUpperCase(),eligible:false,eligibility_at:INCOMPLETE,fast_scan_at:INCOMPLETE,
+      ticker:INCOMPLETE,fast:INCOMPLETE,micro_selected_at:INCOMPLETE,micro_selection_lane:INCOMPLETE,
+      micro_scan_started_at:INCOMPLETE,micro_scan_completed_at:INCOMPLETE,micro_fingerprint:INCOMPLETE,
+      deep_selected_at:INCOMPLETE,deep_selection_lane:INCOMPLETE,deep_scan_started_at:INCOMPLETE,
+      deep_scan_completed_at:INCOMPLETE,deep_analysis:INCOMPLETE,
+      candles_used:{'1m':INCOMPLETE,'5m':INCOMPLETE,'15m':INCOMPLETE,'1h':INCOMPLETE,'4h':INCOMPLETE},
+      radar_scores:{RADAR_1:INCOMPLETE,RADAR_2:INCOMPLETE,RADAR_3:INCOMPLETE,RADAR_4:INCOMPLETE,RADAR_5:INCOMPLETE,RADAR_6:INCOMPLETE,RADAR_7:INCOMPLETE,RADAR_8:INCOMPLETE,RADAR_9:INCOMPLETE},
+      analyst_scores:INCOMPLETE,analyst_scores_reason:'MULTI_ANALYST_NOT_RUN_FOR_EVERY_RADAR8_SYMBOL',
+      decision:INCOMPLETE,rejection_reason:'TICKER_NOT_PROCESSED',
+      notification_attempted_at:INCOMPLETE,notification_request_resolved_at:INCOMPLETE,
+      notification_sent_at:INCOMPLETE,notification_status:INCOMPLETE,
+      outcomes:incompleteHorizons('NO_SIGNAL_OUTCOME_FOR_THIS_CYCLE')
+    });
     const phaseTimings={universe_refresh_ms:0,ticker_fast_selection_ms:0,market_context_ms:0,
       outcome_maintenance_ms:0,micro_scan_ms:0,market_micro_overlap_ms:0,
       deep_scan_ms:0,signal_archive_ms:0,notification_ms:0};
     try{
-      const q=this.normalizeQuote(quote),now=this.clock();
+      const q=this.normalizeQuote(quote);
+      await this.hydrateScanJourneyState();
+      const now=this.clock();
+      journey.quote=q;journey.cycle_id=makeScanJourneyCycleId(q,scanStartedAt);
       const universeRefreshStartedAt=this.clock();
       if(now-this.universeAt>this.config.universeRefreshMs||!this.universe.length)await this.refreshUniverse(q);
       phaseTimings.universe_refresh_ms=Math.max(0,this.clock()-universeRefreshStartedAt);
+      journey.expected_symbols=[...this.universe];
+      for(const symbol of journey.expected_symbols)if(!journeyEntries.has(symbol))journeyEntries.set(symbol,makeJourneyEntry(symbol));
       const tickerFastStartedAt=this.clock();
       const {rows:rawRows,source:tickerSource}=await this.tickerRows(q);
       const expected=[...this.universe],set=new Set(expected);
       const receivedSymbols=[...new Set(rawRows.map(x=>x.symbol).filter(x=>set.has(x)))];
+      const rawBySymbol=new Map(rawRows.filter(x=>set.has(x.symbol)).map(x=>[x.symbol,x]));
       const eligible=rawRows.filter(x=>set.has(x.symbol)&&x.quoteVolume24h>=this.config.minQuoteVolume24h);
+      const eligibleBySymbol=new Map(eligible.map(x=>[x.symbol,x]));
       const fastBySymbol=new Map();for(const row of eligible)fastBySymbol.set(row.symbol,this.updateFastState(row));
+      const fastScanAt=this.clock(),eligibleSet=new Set(eligible.map(x=>x.symbol));
+      for(const symbol of [...this.firstEligibleAtBySymbol.keys()])if(!eligibleSet.has(symbol))this.firstEligibleAtBySymbol.delete(symbol);
+      for(const row of eligible)if(!this.firstEligibleAtBySymbol.has(row.symbol))this.firstEligibleAtBySymbol.set(row.symbol,fastScanAt);
+      journey.expected_symbols=expected;journey.received_symbols=receivedSymbols;journey.eligible_symbols=eligible.map(x=>x.symbol);
+      journey.raw_ticker_source=tickerSource;journey.eligible_at=fastScanAt;
+      for(const symbol of expected){
+        const entry=journeyEntries.get(symbol)||makeJourneyEntry(symbol),ticker=rawBySymbol.get(symbol),isEligible=eligibleBySymbol.has(symbol);
+        entry.eligible=isEligible;
+        entry.ticker=ticker?{
+          price:Number.isFinite(Number(ticker.lastPrice))?Number(ticker.lastPrice):INCOMPLETE,
+          price_change_24h:Number.isFinite(Number(ticker.priceChange24h))?Number(ticker.priceChange24h):INCOMPLETE,
+          quote_volume_24h:Number.isFinite(Number(ticker.quoteVolume24h))?Number(ticker.quoteVolume24h):INCOMPLETE,
+          trade_count_24h:Number.isFinite(Number(ticker.tradeCount24h))?Number(ticker.tradeCount24h):INCOMPLETE,
+          high_24h:Number.isFinite(Number(ticker.highPrice24h))?Number(ticker.highPrice24h):INCOMPLETE,
+          low_24h:Number.isFinite(Number(ticker.lowPrice24h))?Number(ticker.lowPrice24h):INCOMPLETE,
+          source:tickerSource||INCOMPLETE,as_of:fastScanAt
+        }:INCOMPLETE;
+        if(isEligible){
+          entry.eligibility_at=fastScanAt;entry.fast_scan_at=fastScanAt;
+          entry.fast=fastBySymbol.get(symbol)||INCOMPLETE;
+          entry.rejection_reason=INCOMPLETE;
+          const fs=fastCandidateScore(ticker,entry.fast,this.config);
+          entry.radar_scores.RADAR_8={fast_score:hasFiniteNumber(fs)?Number(fs):INCOMPLETE,micro_score:INCOMPLETE,deep_score:INCOMPLETE,final_score:INCOMPLETE};
+        } else {
+          entry.rejection_reason=!ticker?'TICKER_MISSING_FROM_RECEIVED_UNIVERSE':
+            !Number.isFinite(Number(ticker.quoteVolume24h))?'QUOTE_VOLUME_MISSING':
+            Number(ticker.quoteVolume24h)<Number(this.config.minQuoteVolume24h)?'BELOW_MIN_QUOTE_VOLUME_24H':'NOT_ELIGIBLE_FOR_SPOT_USDT_SCAN';
+        }
+        journeyEntries.set(symbol,entry);
+      }
       this.fastScannedTotal=eligible.length;
       const cycle=this.scans+1,selected=this.selectMicro(eligible,fastBySymbol,cycle);
+      journey.cycle_number=cycle;
+      const selectedMicroSet=new Set(selected.map(x=>x.symbol));
+      for(const row of eligible){
+        const entry=journeyEntries.get(row.symbol);
+        if(!selectedMicroSet.has(row.symbol))entry.rejection_reason='NOT_SELECTED_MICRO_CAPACITY_THIS_CYCLE';
+      }
+      for(const row of selected){
+        const entry=journeyEntries.get(row.symbol);
+        if(entry){entry.micro_selected_at=this.clock();entry.micro_selection_lane=row._selection_lane||INCOMPLETE;entry.rejection_reason=INCOMPLETE;}
+      }
       phaseTimings.ticker_fast_selection_ms=Math.max(0,this.clock()-tickerFastStartedAt);
       let btcFive=[],marketContext={};
       const marketContextStartedAt=this.clock();
@@ -1288,8 +1369,29 @@ export class EarlyExpansionRadar{
       let microScanCompletedAt=microScanStartedAt;
       const btcFivePromise=marketContextPromise.then(result=>result.btcFive);
       const microScanPromise=boundedMap(selected,this.config.microConcurrency,async row=>{
-        try{return await this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFivePromise);}
-        catch(e){this.failedTotal++;this.noteError(e,'micro-row');return {symbol:row.symbol,failed:true,error:String(e?.message??e),micro_fingerprint:{score:null,confirmation_count:0,eligible:false,closed_candles_only:true},source:sourceList([tickerSource])};}
+        const entry=journeyEntries.get(row.symbol),started=this.clock();
+        if(entry)entry.micro_scan_started_at=started;
+        try{
+          const result=await this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFivePromise);
+          const completed=this.clock();
+          if(entry){
+            entry.micro_scan_completed_at=completed;
+            entry.micro_fingerprint=result.micro_fingerprint||INCOMPLETE;
+            entry.candles_used['1m']=closedCandleSnapshot(result.oneMinute,completed);
+            entry.candles_used['5m']=closedCandleSnapshot(result.fiveMinute,completed);
+            entry.radar_scores.RADAR_8.micro_score=hasFiniteNumber(result.micro_fingerprint?.score)?Number(result.micro_fingerprint.score):INCOMPLETE;
+            if(result.failed){entry.rejection_reason=result.error||'MICRO_SCAN_FAILED';entry.decision='DATA_INSUFFICIENT';}
+          }
+          journeyMicroBySymbol.set(row.symbol,result);
+          return result;
+        }catch(e){
+          const completed=this.clock();
+          this.failedTotal++;this.noteError(e,'micro-row');
+          if(entry){entry.micro_scan_completed_at=completed;entry.micro_fingerprint=INCOMPLETE;entry.rejection_reason=String(e?.message??e);entry.decision='DATA_INSUFFICIENT';}
+          const failed={symbol:row.symbol,failed:true,error:String(e?.message??e),micro_fingerprint:{score:null,confirmation_count:0,eligible:false,closed_candles_only:true},source:sourceList([tickerSource])};
+          journeyMicroBySymbol.set(row.symbol,failed);
+          return failed;
+        }
       }).then(result=>{microScanCompletedAt=this.clock();return result;});
 
       const marketContextResult=await marketContextPromise;
@@ -1328,11 +1430,21 @@ export class EarlyExpansionRadar{
       phaseTimings.market_micro_overlap_ms=Math.max(0,
         Math.min(marketContextCompletedAt,microScanCompletedAt)-Math.max(marketContextStartedAt,microScanStartedAt));
       const deepTargets=this.selectDeepFromMicro(microScanned,cycle);
+      const priorDeepCycles=new Map(this.lastDeepScanCycleBySymbol);
+      for(const micro of deepTargets){
+        const symbol=selectionSymbol(micro),entry=journeyEntries.get(symbol);
+        if(entry){entry.deep_selected_at=this.clock();entry.deep_selection_lane=micro._selection_lane||INCOMPLETE;entry.rejection_reason=INCOMPLETE;}
+      }
       const deepScanStartedAt=this.clock();
       const scanned=await boundedMap(deepTargets,this.config.deepConcurrency,async micro=>{
-        const row=micro.row,fast=fastBySymbol.get(row.symbol)||{};
+        const row=micro.row,fast=fastBySymbol.get(row.symbol)||{},entry=journeyEntries.get(row.symbol);
+        const deepStarted=this.clock();
+        if(entry)entry.deep_scan_started_at=deepStarted;
         try{
-          const evidence=await this.deepScan(row,fast,marketContext,micro),fp=micro.micro_fingerprint;
+          const evidence=await this.deepScan(row,fast,marketContext,micro,candles=>journeyDeepCandlesBySymbol.set(row.symbol,candles)),fp=micro.micro_fingerprint;
+          const deepCompleted=this.clock();
+          if(entry)entry.deep_scan_completed_at=deepCompleted;
+          journeyDeepBySymbol.set(row.symbol,{evidence,micro,deep_started_at:deepStarted,deep_completed_at:deepCompleted});
           if(evidence.activity_shock?.detected===true)this.fastShockPendingUntil.delete(row.symbol);
           const microScore=hasFiniteNumber(fp?.score)?Number(fp.score):null;
           const deepScore=hasFiniteNumber(evidence.early_expansion_score)?Number(evidence.early_expansion_score):null;
@@ -1361,11 +1473,69 @@ export class EarlyExpansionRadar{
             invalidation:evidence.invalidation,estimated_lead_time:evidence.estimated_lead_time,source:sourceList([evidence.source,tickerSource,micro.source]),coverage:null,
             paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',forensic_evidence_score:evidence.forensic_evidence_score,market_regime:evidence.market_regime
           };
-        }catch(e){this.failedTotal++;this.noteError(e,'deep-row');return {symbol:row.symbol,failed:true,error:String(e?.message??e),decision_band:'DATA_INSUFFICIENT',data_quality:0,micro_fingerprint:micro.micro_fingerprint,source:sourceList([tickerSource,micro.source])};}
+        }catch(e){
+          const deepCompleted=this.clock();
+          this.failedTotal++;this.noteError(e,'deep-row');
+          if(entry){entry.deep_scan_completed_at=deepCompleted;entry.decision='DATA_INSUFFICIENT';entry.rejection_reason=String(e?.message??e);}
+          journeyDeepBySymbol.set(row.symbol,{failed:true,error:String(e?.message??e),deep_started_at:deepStarted,deep_completed_at:deepCompleted,micro});
+          return {symbol:row.symbol,failed:true,error:String(e?.message??e),decision_band:'DATA_INSUFFICIENT',data_quality:0,micro_fingerprint:micro.micro_fingerprint,source:sourceList([tickerSource,micro.source])};
+        }
       });
       phaseTimings.deep_scan_ms=Math.max(0,this.clock()-deepScanStartedAt);
       const ok=scanned.filter(x=>x&&!x.failed),deepFailures=scanned.length-ok.length,deepScannedTotal=ok.length;
       const failedSymbols=scanned.filter(x=>x?.failed).map(x=>x.symbol);
+      const deepSelectedSet=new Set(deepTargets.map(x=>selectionSymbol(x)).filter(Boolean));
+      const microCompletedSet=new Set(microScanned.filter(x=>x&&!x.failed&&x.row?.symbol).map(x=>x.row.symbol));
+      for(const row of eligible){
+        const entry=journeyEntries.get(row.symbol);
+        if(!entry)continue;
+        const microResult=journeyMicroBySymbol.get(row.symbol);
+        if(microResult&&!microResult.failed){
+          entry.micro_fingerprint=microResult.micro_fingerprint||INCOMPLETE;
+          entry.radar_scores.RADAR_8.micro_score=hasFiniteNumber(microResult.micro_fingerprint?.score)?Number(microResult.micro_fingerprint.score):INCOMPLETE;
+        }
+        if(!deepSelectedSet.has(row.symbol)&&microSelectedSet.has(row.symbol)&&microCompletedSet.has(row.symbol)){
+          entry.decision='MICRO_ONLY_NO_DEEP_SLOT';
+          entry.rejection_reason='NOT_SELECTED_FOR_DEEP_SCAN_THIS_CYCLE';
+        }
+      }
+      for(const result of scanned){
+        const entry=journeyEntries.get(result?.symbol);
+        if(!entry)continue;
+        if(result.failed){
+          entry.decision='DATA_INSUFFICIENT';entry.rejection_reason=result.error||'DEEP_SCAN_FAILED';
+          entry.deep_analysis={status:INCOMPLETE,error:result.error||'DEEP_SCAN_FAILED'};
+          continue;
+        }
+        const band=String(result.pre_expansion_stage||result.decision_band||'DATA_INSUFFICIENT');
+        entry.decision=band;
+        entry.deep_analysis={
+          early_expansion_score:hasFiniteNumber(result.early_expansion_score)?Number(result.early_expansion_score):INCOMPLETE,
+          micro_fingerprint_score:hasFiniteNumber(result.micro_fingerprint_score)?Number(result.micro_fingerprint_score):INCOMPLETE,
+          micro_fingerprint_eligible:result.micro_fingerprint_eligible===true,
+          data_quality:hasFiniteNumber(result.data_quality)?Number(result.data_quality):INCOMPLETE,
+          liquidity_quality:hasFiniteNumber(result.liquidity_quality)?Number(result.liquidity_quality):INCOMPLETE,
+          data_stale:typeof result.data_stale==='boolean'?result.data_stale:INCOMPLETE,
+          metrics:result.metrics||INCOMPLETE,structure_metrics:result.structure_metrics||INCOMPLETE,
+          strategy_evidence:result.strategy_evidence||INCOMPLETE,trigger_evidence:result.trigger_evidence||INCOMPLETE,
+          risk_flags:result.risk_flags||[],reason_codes:result.reason_codes||[],
+          invalidation:result.invalidation||INCOMPLETE,market_regime:result.market_regime||INCOMPLETE,
+          source:result.source||INCOMPLETE
+        };
+        entry.radar_scores.RADAR_8={
+          fast_score:entry.radar_scores.RADAR_8?.fast_score??INCOMPLETE,
+          micro_score:hasFiniteNumber(result.micro_fingerprint_score)?Number(result.micro_fingerprint_score):INCOMPLETE,
+          deep_score:hasFiniteNumber(result.early_expansion_score)?Number(result.early_expansion_score):INCOMPLETE,
+          final_score:hasFiniteNumber(result.early_expansion_score)?Number(result.early_expansion_score):INCOMPLETE
+        };
+        const other=Array.isArray(result.reason_codes)?result.reason_codes:[];
+        entry.rejection_reason=band==='NO_SIGNAL'?'BELOW_EARLY_EXPANSION_THRESHOLD':
+          band==='ALREADY_EXTENDED'?'ANTI_CHASE_ALREADY_EXTENDED':
+          band==='HIGH_RISK_PUMP'?'HIGH_RISK_PUMP_FILTER':
+          band==='DATA_INSUFFICIENT'?'DATA_OR_LIQUIDITY_GATE':
+          result.micro_fingerprint_eligible!==true?'MICRO_FINGERPRINT_NOT_QUALIFIED':
+          other.length?INCOMPLETE:INCOMPLETE;
+      }
       const coverage=buildEarlyExpansionUniverseCoverage({expectedSymbols:expected,receivedSymbols,eligibleTotal:eligible.length,fastScannedTotal:eligible.length,scannedTotal:eligible.length,deepScannedTotal,skippedTotal:Math.max(0,eligible.length-deepScannedTotal),failedTotal:deepFailures,failedSymbols,quote:q,minQuoteVolume24h:this.config.minQuoteVolume24h});
       coverage.micro_scanned_total=microScanned.filter(x=>x&&!x.failed).length;coverage.micro_scan_candidates=selected.length;
       coverage.micro_candidate_target=Math.min(Math.max(1,Math.trunc(this.config.microScanCandidates||36)),eligible.length);
@@ -1374,6 +1544,11 @@ export class EarlyExpansionRadar{
       coverage.micro_rotation_selected_total=selected.filter(x=>x._selection_lane==='rotation'||x._selection_lane==='fill_rotation').length;
       coverage.micro_exceptional_bypass_total=selected.filter(x=>x._selection_lane==='exceptional').length;coverage.rotation_cycle=cycle;
       const deepPool=microScanned.filter(x=>x&&!x.failed&&selectionSymbol(x)&&hasFiniteNumber(x.micro_fingerprint?.score));
+      const completedDeepSymbols=new Set(scanned.filter(x=>x&&!x.failed).map(x=>String(x.symbol||'').toUpperCase()));
+      for(const symbol of completedDeepSymbols){
+        const entry=journeyEntries.get(symbol),stamp=Number(entry?.deep_scan_completed_at);
+        if(Number.isFinite(stamp))this.lastDeepAtBySymbol.set(symbol,stamp);
+      }
       coverage.deep_candidate_pool_total=new Set(deepPool.map(selectionSymbol)).size;
       coverage.deep_candidate_target=Math.min(Math.max(1,Math.trunc(this.config.deepCandidates||10)),coverage.deep_candidate_pool_total);
       coverage.deep_candidates_requested=deepTargets.length;coverage.deep_candidate_shortfall=Math.max(0,coverage.deep_candidate_target-deepTargets.length);
@@ -1443,7 +1618,9 @@ export class EarlyExpansionRadar{
             const watchAlert=buildActivityShockWatchAlert(candidate,now);
             await this.store.appendEarlyExpansionAlert(watchAlert);
             if(typeof this.store.appendEarlyExpansionEvent==='function')await this.store.appendEarlyExpansionEvent({...watchAlert,event_type:'ACTIVITY_SHOCK_WATCH_TRACE'});
-            if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(watchAlert);
+            const journeyEntry=journeyEntries.get(symbol);
+            if(journeyEntry){journeyEntry.notification_attempted_at=this.clock();journeyEntry.notification_status='ACTIVITY_SHOCK_WATCH';journeyEntry.alert_id=String(watchAlert.id||INCOMPLETE);}
+            if(this.pushManager?.notifyRadarAlert){await this.pushManager.notifyRadarAlert(watchAlert);if(journeyEntry){journeyEntry.notification_request_resolved_at=this.clock();journeyEntry.notification_status='PUSH_REQUEST_RESOLVED_DELIVERY_UNCONFIRMED';}}
             this.lastActivityShockAt.set(symbol,now);this.lastActivityShockKeyBySymbol.set(symbol,shockKey);
             this.activityShockTimestamps.push(now);previousActivityShockKeys.add(shockKey);
             this.alertCount++;alertsThisCycle++;
@@ -1459,7 +1636,15 @@ export class EarlyExpansionRadar{
               this.lastAlertAt.set(candidate.symbol,now);this.lastAlertScore.set(candidate.symbol,candidate.early_expansion_score);this.lastBand.set(candidate.symbol,candidate.decision_band);
               await this.store.appendEarlyExpansionAlert(alert);
               if(typeof this.store.appendEarlyExpansionEvent==='function')await this.store.appendEarlyExpansionEvent({...alert,event_type:'EARLY_EXPANSION_ALERT_TRACE'});
-              if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(alert);
+              const journeyEntry=journeyEntries.get(candidate.symbol);
+              if(journeyEntry){
+                journeyEntry.notification_attempted_at=this.clock();journeyEntry.notification_status='PUSH_REQUEST_PENDING';
+                journeyEntry.alert_id=String(alert.id||INCOMPLETE);journeyEntry.alert_stage=String(alert.pre_expansion_stage||alert.decision_band||INCOMPLETE);
+              }
+              if(this.pushManager?.notifyRadarAlert){
+                await this.pushManager.notifyRadarAlert(alert);
+                if(journeyEntry){journeyEntry.notification_request_resolved_at=this.clock();journeyEntry.notification_status='PUSH_REQUEST_RESOLVED_DELIVERY_UNCONFIRMED';}
+              }
               rememberRadarAlert(alert,now);this.alertCount++;alertsThisCycle++;
             }
           }
