@@ -1,3 +1,4 @@
+// Recheck the exact current branch head; this replay is evidence-only and never deploys or trades.
 import {mkdir, writeFile} from 'node:fs/promises';
 import {dirname, resolve} from 'node:path';
 import assert from 'node:assert/strict';
