@@ -224,6 +224,59 @@ export function evaluateMarketWideLightCandidate({
     Math.max(atrScore ?? -1, bbScore ?? -1);
   const structureScore = higherLows ? 100 : stableSupport ? 70 : 0;
   const resistanceScore = nearResistance ? clamp(100 * (1 - Math.max(0, resistanceDistancePct) / cfg.maxResistanceDistancePct)) : 0;
+
+  // Early-expansion ranking: short-term direction + acceleration + actual activity/buy-flow.
+  // These are ranking inputs only; they never emit alerts or authorize an order.
+  const lastCloseOf = offset => numberOrNull(rows[rows.length - 1 - offset]?.close);
+  const closeReturnPct = offset => {
+    const current = numberOrNull(last.close), previous = lastCloseOf(offset);
+    return current !== null && previous !== null && previous > 0 ? (current / previous - 1) * 100 : null;
+  };
+  const momentum15m = closeReturnPct(3);
+  const previous15m = (() => {
+    const recent = lastCloseOf(3), older = lastCloseOf(6);
+    return recent !== null && older !== null && older > 0 ? (recent / older - 1) * 100 : null;
+  })();
+  const momentum1h = closeReturnPct(12);
+  const momentum4h = closeReturnPct(48);
+  const acceleration15m = momentum15m !== null && previous15m !== null ? momentum15m - previous15m : null;
+  const recentBars = rows.slice(-3);
+  const baselineBars = rows.slice(-27, -3);
+  const medianAvailable = values => median(values.map(numberOrNull).filter(value => value !== null && value >= 0));
+  const recentQuote = medianAvailable(recentBars.map(row => row.quoteVolume));
+  const baselineQuote = medianAvailable(baselineBars.map(row => row.quoteVolume));
+  const recentVolume = recentQuote ?? medianAvailable(recentBars.map(row => row.volume));
+  const baselineVolume = baselineQuote ?? medianAvailable(baselineBars.map(row => row.volume));
+  const volumeRatio = recentVolume !== null && baselineVolume > 0 ? recentVolume / baselineVolume : null;
+  const recentTrades = medianAvailable(recentBars.map(row => row.tradeCount));
+  const baselineTrades = medianAvailable(baselineBars.map(row => row.tradeCount));
+  const tradeRatio = recentTrades !== null && baselineTrades > 0 ? recentTrades / baselineTrades : null;
+  const buyQuoteValues = recentBars.map(row => numberOrNull(row.takerBuyQuoteVolume));
+  const quoteValues = recentBars.map(row => numberOrNull(row.quoteVolume));
+  const buyPressure = buyQuoteValues.every(value => value !== null) && quoteValues.every(value => value !== null) &&
+    quoteValues.reduce((sum, value) => sum + value, 0) > 0
+    ? buyQuoteValues.reduce((sum, value) => sum + value, 0) / quoteValues.reduce((sum, value) => sum + value, 0)
+    : null;
+  const momentum15Score = momentum15m === null ? null : clamp(50 + momentum15m * 30);
+  const momentum1hScore = momentum1h === null ? null : clamp(50 + momentum1h * 12);
+  const accelerationScore = acceleration15m === null ? null : clamp(50 + acceleration15m * 25);
+  const volumeScore = volumeRatio !== null && volumeRatio > 0 ? clamp(50 + Math.log2(Math.max(0.125, volumeRatio)) * 25) : null;
+  const tradeScore = tradeRatio !== null && tradeRatio > 0 ? clamp(50 + Math.log2(Math.max(0.125, tradeRatio)) * 25) : null;
+  const buyPressureScore = buyPressure === null ? null : clamp((buyPressure - 0.4) * 500);
+  const guardedParts = [
+    [momentum15Score, 0.24], [momentum1hScore, 0.20], [accelerationScore, 0.14],
+    [volumeScore, 0.16], [tradeScore, 0.06], [buyPressureScore, 0.12],
+    [structureScore, 0.04], [resistanceScore, 0.04]
+  ].filter(([value, weight]) => value !== null && weight > 0);
+  const guardedWeight = guardedParts.reduce((sum, [, weight]) => sum + weight, 0);
+  let expansionScore = guardedWeight > 0
+    ? guardedParts.reduce((sum, [value, weight]) => sum + value * weight, 0) / guardedWeight
+    : null;
+  const overextensionPenalty =
+    (momentum4h !== null ? Math.max(0, momentum4h - 5) * 3 : 0) +
+    (momentum1h !== null ? Math.max(0, momentum1h - 3) * 4 : 0);
+  if (expansionScore !== null) expansionScore = Math.max(0, expansionScore - overextensionPenalty);
+
   const participationScores = [];
   if (volumeParticipation.available) participationScores.push(volumeParticipation.improving ? 100 : clamp(100 * volumeParticipation.recentRatio / cfg.minParticipationRatio));
   if (tradeParticipation.available) participationScores.push(tradeParticipation.improving ? 100 : clamp(100 * tradeParticipation.recentRatio / cfg.minParticipationRatio));
@@ -252,7 +305,10 @@ export function evaluateMarketWideLightCandidate({
     result: candidate ? 'LIGHT_CANDIDATE' : 'LIGHT_REJECTED',
     reason: candidate ? 'LIGHT_FEATURES_RANK_ONLY' : 'INSUFFICIENT_LIGHT_CONFLUENCE',
     rejection_reason: candidate ? null : (failedConditions[0] || 'INSUFFICIENT_LIGHT_CONFLUENCE'),
-    candidate, candidate_score: score === null ? null : Number(score.toFixed(4)), light_rank: null, rank_basis: 'LIGHT_EVIDENCE', candidate_rank: null,
+    candidate,
+    candidate_score: score === null ? null : Number(score.toFixed(4)),
+    expansion_score: expansionScore === null ? null : Number(expansionScore.toFixed(4)),
+    light_rank: null, rank_basis: 'LIGHT_EVIDENCE', candidate_rank: null,
     closed_candles_only: true, future_candles_excluded: normalized.futureExcluded,
     metrics: {
       bars_used: rows.length,
@@ -266,6 +322,12 @@ export function evaluateMarketWideLightCandidate({
       resistance_distance_pct: resistanceDistancePct,
       volume_participation: volumeParticipation,
       trade_count_participation: tradeParticipation,
+      expansion_ranking: {
+        momentum15m_pct: momentum15m, momentum1h_pct: momentum1h, momentum4h_pct: momentum4h,
+        acceleration15m_pct: acceleration15m, volume_ratio: volumeRatio, trade_ratio: tradeRatio,
+        taker_buy_quote_share: buyPressure, overextension_penalty: overextensionPenalty,
+        score: expansionScore
+      },
       core_conditions: coreConditions,
       optional_participation_available: volumeParticipation.available || tradeParticipation.available
     },
@@ -467,17 +529,18 @@ export class MarketWideLightScan {
     const rotationCount = Math.min(rotationReserve, Math.max(0, limit - selected.length));
     const scoreLimit = Math.max(0, limit - rotationReserve);
     const ranked = [...evaluated].filter(item => isDirectionalCandidateSymbol(item.symbol)).sort((a, b) =>
+      Number(b.result.expansion_score ?? -1) - Number(a.result.expansion_score ?? -1) ||
+      Number(b.result.metrics?.optional_participation_available) - Number(a.result.metrics?.optional_participation_available) ||
       Number(b.result.candidate) - Number(a.result.candidate) ||
       Number(b.result.candidate_score ?? -1) - Number(a.result.candidate_score ?? -1) ||
-      Number(b.result.metrics?.optional_participation_available) - Number(a.result.metrics?.optional_participation_available) ||
       fairOrder(a, b));
     for (const item of ranked) {
       if (selected.length >= scoreLimit) break;
-      add(item, item.result.candidate ? 'LIGHT_SCORE_CANDIDATE' : 'LIGHT_SCORE_FILL');
+      add(item, 'GUARDED_MOMENTUM_SCORE_SELECTED');
     }
     ranked.forEach((item, index) => {
       const entry = audit.get(item.symbol);
-      if (entry) { entry.light_rank = index + 1; entry.rank_basis = 'LIGHT_EVIDENCE'; }
+      if (entry) { entry.light_rank = index + 1; entry.rank_basis = 'GUARDED_MOMENTUM_EVIDENCE'; }
     });
     const allRotationPool = [...uniqueRows].map(row => {
       const symbol = symbolOf(row);
@@ -545,6 +608,7 @@ export class MarketWideLightScan {
       ...item.row,
       _marketWideLightScan: audit.get(item.symbol),
       _marketWideLightScore: item.result?.candidate_score ?? null,
+      _marketWideExpansionScore: item.result?.expansion_score ?? null,
       _marketWideLightFallback: item.result?.evaluated !== true,
       _marketWideLightSelectionReason: item.selectionReason,
       _marketWideLightRank: audit.get(item.symbol)?.light_rank ?? null,
