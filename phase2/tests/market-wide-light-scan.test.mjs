@@ -193,7 +193,7 @@ test('the scan journey archive preserves per-symbol light-scan provenance after 
   }
 });
 
-test('shared RestClient responses seed the 5m cache without an additional REST request', async () => {
+test('kline responses from another shared REST client seed the cache without another request', async () => {
   const now = Date.now();
   const step = 5 * 60_000;
   const boundary = Math.floor(now / step) * step;
@@ -203,7 +203,12 @@ test('shared RestClient responses seed the 5m cache without an additional REST r
     return [openTime,'100','100.5','99.5','100','10',closeTime,'1000',100,'6','600','0'];
   });
   let actualFetchAttempts = 0;
-  const rest = new RestClient({
+  const cacheRest = new RestClient({
+    baseUrls:['https://cache-client.test.invalid'],
+    timeoutMs:1000,minIntervalMs:0,maxRequestsPerMinute:240,
+    fetchImpl:async()=>{throw new Error('cache subscription must not create REST calls');}
+  });
+  const requestRest = new RestClient({
     baseUrls:['https://rest.test.invalid'],
     timeoutMs:1000,minIntervalMs:0,maxRequestsPerMinute:240,
     fetchImpl:async()=>{
@@ -212,11 +217,11 @@ test('shared RestClient responses seed the 5m cache without an additional REST r
     }
   });
   const cache = new MarketWideKlineCache({
-    rest,urls:['wss://stream.test/stream'],WebSocketImpl:FakeSocket,
+    rest:cacheRest,urls:['wss://stream.test/stream'],WebSocketImpl:FakeSocket,
     clock:()=>Date.now(),logger:{warn(){}}
   });
   cache.setSymbols(['AAAUSDT']);
-  const response = await rest.klines('AAAUSDT','5m',{limit:72});
+  const response = await requestRest.klines('AAAUSDT','5m',{limit:72});
   assert.equal(actualFetchAttempts,1,'the existing Micro/radar request remains the only outbound HTTP attempt');
   assert.equal(response.candles.filter(candle=>candle.closed).length,72);
   const series = cache.getSeries('AAAUSDT');
