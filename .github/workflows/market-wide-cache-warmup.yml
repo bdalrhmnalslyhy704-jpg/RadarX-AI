@@ -15,6 +15,7 @@ on:
       - 'phase2/core/store.mjs'
       - 'phase2/config.mjs'
       - 'phase2/tests/market-wide-light-scan.test.mjs'
+      - 'phase2/tests/pre-expansion-fingerprint.test.mjs'
       - '.github/workflows/market-wide-cache-warmup.yml'
 
 permissions:
