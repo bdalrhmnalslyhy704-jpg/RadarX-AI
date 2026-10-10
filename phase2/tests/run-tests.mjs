@@ -53,6 +53,8 @@ const phase2=[
   'phase2/tests/strategy-market-radar-integration.test.mjs',
   'phase2/tests/strong-move-radar.test.mjs',
   'phase2/tests/whale-accumulation-radar.test.mjs',
+  'phase2/tests/scan-scheduler.test.mjs',
+  'phase2/tests/scan-scheduler.test.mjs',
   'phase2/tests/symbol-deep-scan.test.mjs',
   'phase2/tests/ws.test.mjs'
 ];
