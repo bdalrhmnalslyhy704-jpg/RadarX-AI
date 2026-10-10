@@ -1,0 +1,58 @@
+name: RadarX Radar 8 Operational Monitor
+
+on:
+  pull_request:
+    branches:
+      - build224-multi-analyst-20261007
+    paths:
+      - ".github/workflows/radar8-operational-monitor.yml"
+      - "phase2/tests/radar8-operational-monitor.test.mjs"
+      - "phase2/tests/early-expansion-rotation.test.mjs"
+      - "phase2/core/early-expansion-radar.mjs"
+      - "phase2/core/store.mjs"
+      - "phase2/core/scan-journey-ledger.mjs"
+      - "phase2/market/binance-rest.mjs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: radar8-operational-monitor-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-monitor:
+    name: 25-cycle isolated Spot monitor and same-data A/B
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      RADARX_RUN_RADAR8_LIVE_MONITOR: "1"
+      RADAR8_MONITOR_REPORT_PATH: artifacts/radar8-live-monitor-report.json
+    steps:
+      - name: Check out PR branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare isolated report path
+        run: mkdir -p artifacts
+
+      - name: Run 25 consecutive live public Spot cycles
+        timeout-minutes: 20
+        run: node --test --test-timeout=900000 phase2/tests/radar8-operational-monitor.test.mjs
+
+      - name: Upload full per-cycle report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radar8-operational-monitor-${{ github.run_id }}
+          path: artifacts/radar8-live-monitor-report.json
+          if-no-files-found: warn
+          retention-days: 14
