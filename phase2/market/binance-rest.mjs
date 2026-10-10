@@ -35,7 +35,8 @@ const SHARED = {
   rateLimitedUntil: 0,
   budgetQueue: Promise.resolve(),
   observedUsedWeight1m: null,
-  observedUsedWeightAt: null
+  observedUsedWeightAt: null,
+  klineObservers: new Set()
 };
 
 // Let the shared broker schedule up to six raw requests per second while keeping
@@ -174,12 +175,11 @@ export class RestClient {
     this.minIntervalMs=minIntervalMs; this.maxRequestsPerMinute=maxRequestsPerMinute;
     this.usedAt=[]; this.lastRequestAt=0; this.currentBaseIndex=0;
     this.lastSuccessAt=null; this.lastError=null; this.rateLimitedUntil=0; this.state='INIT';
-    this.klineObservers=new Set();
   }
   subscribeKlines(observer){
     if(typeof observer!=='function')throw new Error('KLINE_OBSERVER_MUST_BE_FUNCTION');
-    this.klineObservers.add(observer);
-    return ()=>this.klineObservers.delete(observer);
+    SHARED.klineObservers.add(observer);
+    return ()=>SHARED.klineObservers.delete(observer);
   }
   health(){return {
     state:this.state,last_success_at:this.lastSuccessAt,last_error:this.lastError,
@@ -289,7 +289,7 @@ export class RestClient {
       };
     });
     const result={source:r.source,receivedAt,candles};
-    for(const observer of [...this.klineObservers]){
+    for(const observer of [...SHARED.klineObservers]){
       try{observer({symbol:String(symbol||'').toUpperCase(),interval:String(interval||''),source:r.source,receivedAt,candles});}
       catch{}
     }
