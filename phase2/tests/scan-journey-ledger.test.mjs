@@ -40,13 +40,16 @@ test('closed candle snapshot excludes future, still-open and malformed candles',
   assert.equal(snapshot[0].trade_count,7);
 });
 
-test('scan journey validation rejects any future stage time or future candle',()=>{
+test('scan journey validation rejects future and unclosed candle rows',()=>{
   const good=cycle(t0,1,[{symbol:'AAAUSDT',deep:true}]);
-  assert.deepEqual(validateScanJourneyCycle(good),{valid:true,errors:[]});
-  const bad=structuredClone(good);
-  bad.coins[0].candles_used['1m'][0].close_time=bad.completed_at+1;
-  assert.equal(validateScanJourneyCycle(bad).valid,false);
-  assert.ok(validateScanJourneyCycle(bad).errors.some(x=>x.startsWith('FUTURE_CANDLE:')));
+  const future=structuredClone(good);
+  future.coins[0].candles_used['1m'][0].close_time=future.completed_at+1;
+  assert.equal(validateScanJourneyCycle(future).valid,false);
+  assert.ok(validateScanJourneyCycle(future).errors.some(x=>x.startsWith('FUTURE_CANDLE:')));
+  const open=structuredClone(good);
+  open.coins[0].candles_used['1m'][0].closed=false;
+  assert.equal(validateScanJourneyCycle(open).valid,false);
+  assert.ok(validateScanJourneyCycle(open).errors.some(x=>x.startsWith('UNCLOSED_CANDLE:')));
 });
 
 test('INCOMPLETE horizon values are explicit and never invented',()=>{
