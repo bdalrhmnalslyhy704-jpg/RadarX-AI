@@ -220,7 +220,8 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   marketWideLightScanMinReadyCandidates:24,
   marketWideLightScanMaxCandleAgeMs:8*60*1000,
   marketWideLightScanMinClosedCandles:60,
-  marketWideLightScanMaxClosedCandles:96
+  marketWideLightScanMaxClosedCandles:96,
+  marketWideLightScanPoolActivationEnabled:true
 });
 
 function closed(rows,now=Date.now()){
@@ -1392,13 +1393,21 @@ export class EarlyExpansionRadar{
             lastMicroScannedAt:symbol=>this.scheduler.lastScanAt('MICRO',symbol)
           });
           const lightPoolSet=new Set(marketWideLightResult.candidateSymbols);
-          if(marketWideLightResult.coverageReady&&this.marketWideKlineCache&&eligible.length>=Math.min(12,Number(this.config.microScanCandidates)||12)){
+          let cacheProof=null;
+          try{cacheProof=this.marketWideKlineCache?.health?.()||null;}catch{}
+          const fullMarketCacheReady=cacheProof?.full_market_coverage_ready===true;
+          if(this.config.marketWideLightScanPoolActivationEnabled!==false&&
+              marketWideLightResult.coverageReady&&fullMarketCacheReady&&this.marketWideKlineCache&&
+              eligible.length>=Math.min(12,Number(this.config.microScanCandidates)||12)){
             const pool=marketWideLightResult.candidateRows.filter(row=>lightPoolSet.has(selectionSymbol(row)));
             if(pool.length>=Math.min(12,eligible.length)){
               microSelectionInput=pool;marketWideLightApplied=true;
             }
           }
           marketWideLightResult.summary.micro_pool_applied=marketWideLightApplied;
+          marketWideLightResult.summary.market_wide_cache_coverage_ready=fullMarketCacheReady;
+          marketWideLightResult.summary.websocket_advanced_symbols=Number(cacheProof?.websocket_advanced_symbols)||0;
+          marketWideLightResult.summary.legacy_micro_selector_active=!marketWideLightApplied;
           marketWideLightResult.summary.micro_capacity_configured=Number(this.config.microScanCandidates)||12;
           marketWideLightResult.summary.micro_input_total=microSelectionInput.length;
           marketWideLightResult.summary.scan_duration_ms=Math.max(0,this.clock()-marketWideLightStartedAt);
