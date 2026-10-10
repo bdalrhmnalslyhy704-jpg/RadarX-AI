@@ -23,14 +23,14 @@ const toCandle = payload => {
 
 export class BinanceStreamClient {
   constructor({urls,streams,WebSocketImpl=WebSocket,initialBackoffMs=1000,maxBackoffMs=60000,jitterRatio=0.2,
-    heartbeatTimeoutMs=90000,maxConnectionMs=82800000,maxReconnectAttempts=Infinity,onCandle=()=>{},onState=()=>{}}){
+    heartbeatTimeoutMs=90000,maxConnectionMs=82800000,maxReconnectAttempts=Infinity,onCandle=()=>{},onMessage=()=>{},onState=()=>{}}){
     if(!streams.length||streams.length>1024) throw new Error('INVALID_STREAM_COUNT');
     this.urls=[...urls];this.streams=streams.map(x=>x.toLowerCase());this.WebSocketImpl=WebSocketImpl;
     this.initialBackoffMs=initialBackoffMs;this.maxBackoffMs=maxBackoffMs;this.jitterRatio=jitterRatio;
     this.heartbeatTimeoutMs=heartbeatTimeoutMs;this.maxConnectionMs=maxConnectionMs;
     this.maxReconnectAttempts=Number.isFinite(Number(maxReconnectAttempts))?
       Math.max(0,Math.trunc(Number(maxReconnectAttempts))):Infinity;
-    this.onCandle=onCandle;this.onState=onState;this.socket=null;this.running=false;
+    this.onCandle=onCandle;this.onMessage=onMessage;this.onState=onState;this.socket=null;this.running=false;
     this.timer=null;this.heartbeatTimer=null;this.connectionTimer=null;this.attempt=0;this.urlIndex=0;
     this.lastMessageAt=null;this.lastConnectedAt=null;this.reconnectCount=0;this.consecutiveReconnectCount=0;
     this.lastConnectionFailure=null;this.state='STOPPED';this.connectionId=null;
@@ -73,7 +73,7 @@ export class BinanceStreamClient {
     }));
     socket.on('message',guard(raw=>{
       this.lastMessageAt=Date.now();this.state='LIVE';
-      try{const x=JSON.parse(raw.toString());const candle=toCandle(x?.data??x);if(candle)this.onCandle(candle);}
+      try{const x=JSON.parse(raw.toString());const payload=x?.data??x;this.onMessage(payload);const candle=toCandle(payload);if(candle)this.onCandle(candle);}
       catch(e){this.onState(this.state,'INVALID_WS_JSON:'+String(e?.message??e));}
     }));
     socket.on('ping',guard(()=>{try{socket.pong?.();}catch{}}));
