@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp} from 'node:fs/promises';
+import {mkdtemp,readFile,stat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DurableStore} from '../core/store.mjs';
@@ -65,4 +65,56 @@ test('scheduler archive hydrates each radar independently when another radar dom
   const radar8=await store.readScanSchedulerEvents({radar:'RADAR_8',limit:2});
   assert.equal(radar8.length,2);
   assert.deepEqual(radar8.map(x=>x.symbol),['COIN6003USDT','COIN6004USDT']);
+});
+
+
+test('append-only operational journals compact without evicting another radar',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-scheduler-bounded-archive-'));
+  const store=await new DurableStore({dir}).init();
+  await store.appendScanSchedulerEvents([
+    {radar:'RADAR_9',stage:'DEEP',symbol:'OLDERUSDT',event_type:'DEFERRED',event_at:1000,queued_at:400},
+    {radar:'RADAR_9',stage:'DEEP',symbol:'OLDERUSDT',event_type:'STARTED',event_at:2000,queued_at:400,started_at:2000},
+    {radar:'RADAR_9',stage:'DEEP',symbol:'OLDERUSDT',event_type:'COMPLETED',event_at:3000,queued_at:400,started_at:2000}
+  ]);
+  const noisy=Array.from({length:20000},(_,i)=>({
+    radar:'RADAR_8',stage:'FAST',symbol:'COIN'+i+'USDT',event_type:'COMPLETED',
+    event_at:4000+i,queued_at:4000+i,started_at:4000+i,evidence:'x'.repeat(600)
+  }));
+  await store.appendScanSchedulerEvents(noisy);
+  const file=store.files.schedulerEvents;
+  const before=(await stat(file)).size;
+  assert.ok(before>12*1024*1024,'fixture must cross the automatic compaction threshold');
+  await store.appendScanSchedulerEvents([{
+    radar:'RADAR_8',stage:'FAST',symbol:'AFTER_COMPACTION_USDT',event_type:'COMPLETED',
+    event_at:30000,queued_at:30000,started_at:30000
+  }]);
+  const after=(await stat(file)).size;
+  assert.ok(after<before/2,'automatic compaction should materially reduce journal size');
+  const radar8=await store.readScanSchedulerEvents({radar:'RADAR_8',limit:5000});
+  assert.equal(radar8.length,5000,'retains the supported hydration window');
+  assert.equal(radar8.at(-1).symbol,'AFTER_COMPACTION_USDT');
+  assert.equal(radar8.at(-2).symbol,'COIN19999USDT');
+  const radar9=await store.readScanSchedulerEvents({radar:'RADAR_9',limit:100});
+  assert.equal(radar9.length,3,'per-radar history must remain available');
+  assert.deepEqual(radar9.map(x=>x.event_type),['DEFERRED','STARTED','COMPLETED']);
+});
+
+test('bounded alert archive retains the newest audit rows and fixes Kahir JSONL framing',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-alert-bounded-archive-'));
+  const store=await new DurableStore({dir}).init();
+  for(let i=1;i<=2005;i++)await store.appendFalconEyeAlert({
+    id:'FALCON:TESTUSDT:'+i,radar:'FALCON_EYE_RADAR',symbol:'TESTUSDT',
+    detected_at:i,processed_at:i,price:1+i/10000
+  });
+  const compacted=await store.compactJsonlArchive('falconEyeAlerts',{force:true});
+  assert.equal(compacted.compacted,true);
+  const rows=JSON.parse('['+(await readFile(store.files.falconEyeAlerts,'utf8')).trim().split('\\n').join(',')+']');
+  assert.equal(rows.length,2000);
+  assert.equal(rows[0].processed_at,6);
+  assert.equal(rows.at(-1).processed_at,2005);
+  await store.appendKahirAlert({id:'KAHIR:AAAUSDT:1',symbol:'AAAUSDT',processed_at:1});
+  await store.appendKahirAlert({id:'KAHIR:BBBUSDT:2',symbol:'BBBUSDT',processed_at:2});
+  const kahir=(await store.readRecent('kahirAlerts',10)).sort((a,b)=>a.processed_at-b.processed_at);
+  assert.equal(kahir.length,2,'Kahir events must be separated by real newline delimiters');
+  assert.deepEqual(kahir.map(x=>x.symbol),['AAAUSDT','BBBUSDT']);
 });
