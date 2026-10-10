@@ -91,7 +91,7 @@ export function validateScanJourneyCycle(cycle) {
         const t = epoch(child);
         if (t !== null && completedAt !== null && t > completedAt) errors.push('FUTURE_CANDLE:'+childPath);
       }
-      if (/(^|_)(detected_at|eligible_at|fast_scan_at|micro_selected_at|micro_scan_started_at|micro_scan_completed_at|deep_selected_at|deep_scan_started_at|deep_scan_completed_at|notification_attempted_at|notification_dispatched_at|sent_at|close_time|open_time)$/i.test(key)) {
+      if (/(^|_)(started_at|completed_at|detected_at|processed_at|eligible_at|eligibility_at|first_eligible_at|fast_scan_at|micro_selected_at|micro_scan_started_at|micro_scan_completed_at|deep_selected_at|deep_scan_started_at|deep_scan_completed_at|notification_gate_evaluated_at|notification_attempted_at|notification_request_resolved_at|notification_sent_at|notification_dispatched_at|observed_at|sent_at|close_time|open_time)$/i.test(key)) {
         const t=epoch(child);
         if (t !== null && completedAt !== null && t > completedAt) errors.push('FUTURE_TIMESTAMP:'+childPath);
       }
