@@ -1261,9 +1261,25 @@ export class EarlyExpansionRadar{
     takeUniqueLane(selected,seen,byQuiet,target-selected.length,'fill_quiet');
     takeUniqueLane(selected,seen,byRotation,target-selected.length,'fill_rotation');
     takeUniqueLane(selected,seen,all,target-selected.length,'fill_any');
-    for(const item of selected)this.lastMicroScanCycleBySymbol.set(selectionSymbol(item),currentCycle);
+    const finalSelected=selected.slice(0,target),selectedLanes=new Map(finalSelected.map((item,index)=>[selectionSymbol(item),{lane:item._selection_lane||'score',rank:index+1}]));
+    const scoreRanked=[],scoreSeen=new Set();
+    for(const item of byScore){const symbol=selectionSymbol(item);if(!symbol||scoreSeen.has(symbol))continue;scoreSeen.add(symbol);scoreRanked.push(item);}
+    const quietRank=new Map(),quietSeen=new Set();
+    for(const item of byQuiet){const symbol=selectionSymbol(item);if(!symbol||quietSeen.has(symbol))continue;quietSeen.add(symbol);quietRank.set(symbol,quietRank.size+1);}
+    this.lastMicroDuplicateInputCount=Math.max(0,all.length-new Set(all.map(selectionSymbol).filter(Boolean)).size);
+    this.lastMicroSelectionAudit=scoreRanked.map((item,index)=>{
+      const symbol=selectionSymbol(item),picked=selectedLanes.get(symbol);
+      return {symbol,rank_by_micro_score:index+1,selected:picked!==undefined,selected_rank:picked?.rank??null,
+        selection_lane:picked?.lane??null,score:Number.isFinite(Number(item._microPreScore))?Number(item._microPreScore):null,
+        fast_score:Number.isFinite(Number(item.fast?._microPreScore))?Number(item.fast._microPreScore):null,
+        quiet_score:Number.isFinite(Number(item._quietScore))?Number(item._quietScore):null,
+        quiet_eligible:Boolean(item._quietEligible),exceptional_candidate:Boolean(item._exceptional),
+        decision_reason:picked?'SELECTED_'+String(picked.lane).toUpperCase():'MICRO_BATCH_CAPACITY',
+        quiet_rank:quietRank.get(symbol)??null};
+    });
+    for(const item of finalSelected)this.lastMicroScanCycleBySymbol.set(selectionSymbol(item),currentCycle);
     trimCycleMemory(this.lastMicroScanCycleBySymbol);
-    return selected.slice(0,target);
+    return finalSelected;
   }
   selectDeepFromMicro(results,cycle=0){
     const currentCycle=Math.max(0,Math.trunc(Number(cycle)||0));
@@ -1301,9 +1317,25 @@ export class EarlyExpansionRadar{
     takeUniqueLane(selected,seen,byQuiet,target-selected.length,'fill_quiet');
     takeUniqueLane(selected,seen,byRotation,target-selected.length,'fill_rotation');
     takeUniqueLane(selected,seen,valid,target-selected.length,'fill_any');
-    for(const item of selected)this.lastDeepScanCycleBySymbol.set(selectionSymbol(item),currentCycle);
+    const finalSelected=selected.slice(0,target),selectedLanes=new Map(finalSelected.map((item,index)=>[selectionSymbol(item),{lane:item._selection_lane||'score',rank:index+1}]));
+    const scoreRanks=new Map();byScore.forEach(item=>{const symbol=selectionSymbol(item);if(symbol&&!scoreRanks.has(symbol))scoreRanks.set(symbol,scoreRanks.size+1);});
+    const quietRanks=new Map();byQuiet.forEach(item=>{const symbol=selectionSymbol(item);if(symbol&&!quietRanks.has(symbol))quietRanks.set(symbol,quietRanks.size+1);});
+    const rotationRanks=new Map();byRotation.forEach(item=>{const symbol=selectionSymbol(item);if(symbol&&!rotationRanks.has(symbol))rotationRanks.set(symbol,rotationRanks.size+1);});
+    const inputBySymbol=new Map();
+    for(const item of (results||[])){const symbol=selectionSymbol(item);if(symbol&&!inputBySymbol.has(symbol))inputBySymbol.set(symbol,item);}
+    this.lastDeepDuplicateInputCount=Math.max(0,(results||[]).filter(item=>selectionSymbol(item)).length-inputBySymbol.size);
+    this.lastDeepSelectionAudit=[...inputBySymbol.entries()].map(([symbol,item])=>{
+      const fp=item?.micro_fingerprint||{},score=hasFiniteNumber(fp.score)?Number(fp.score):null,picked=selectedLanes.get(symbol);
+      return {symbol,rank_by_micro_score:scoreRanks.get(symbol)??null,selected:picked!==undefined,selected_rank:picked?.rank??null,
+        selection_lane:picked?.lane??null,score,quiet_rank:quietRanks.get(symbol)??null,rotation_rank:rotationRanks.get(symbol)??null,
+        quiet_base_classification:fp.quiet_base_pre_expansion?.classification??null,
+        activity_shock_detected:fp.activity_shock?.detected===true,
+        decision_reason:picked?'SELECTED_'+String(picked.lane).toUpperCase():
+          item?.failed?'MICRO_SCAN_FAILED':score===null?'MICRO_FINGERPRINT_NOT_SCOREABLE':'DEEP_BATCH_CAPACITY'};
+    });
+    for(const item of finalSelected)this.lastDeepScanCycleBySymbol.set(selectionSymbol(item),currentCycle);
     trimCycleMemory(this.lastDeepScanCycleBySymbol);
-    return selected.slice(0,target);
+    return finalSelected;
   }
   async microScan(row,fast,btcFiveMinute){
     const [m1,m5]=await Promise.all([
