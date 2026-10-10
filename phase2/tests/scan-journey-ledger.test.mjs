@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp} from 'node:fs/promises';
+import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {closedCandleSnapshot,INCOMPLETE,incompleteHorizons,makeScanJourneyCycleId,SCAN_JOURNEY_SCHEMA,validateScanJourneyCycle} from '../core/scan-journey-ledger.mjs';
@@ -101,4 +101,31 @@ test('last deep scan and eligible age state survive restart and remain fair acro
   assert.equal(state.eligible_since_by_symbol.AAAUSDT,t0);
   assert.equal(state.eligible_since_by_symbol.BBBUSDT,t0);
   assert.equal((await store2.readScanJourneyCycles({limit:5})).length,2);
+});
+
+
+test('archive verifier detects a lost cycle and a repeated write repairs it without double-counting',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-scan-journey-loss-'));
+  const store1=await new DurableStore({dir}).init();
+  const first=cycle(t0,1,[{symbol:'AAAUSDT',deep:true},{symbol:'BBBUSDT',deep:false}]);
+  const saved=await store1.appendScanJourneyCycle(first);
+  assert.equal((await store1.verifyScanJourneyArchive()).complete,true);
+  const state=await store1.getScanJourneyState();
+  const filepath=join(store1.scanJourneyDir,state.cycles[0].filename);
+  await rm(filepath);
+  const damaged=await store1.verifyScanJourneyArchive();
+  assert.equal(damaged.complete,false);
+  assert.deepEqual(damaged.missing_cycles,[first.cycle_id]);
+  assert.equal(damaged.readable_coin_rows,0);
+  const repaired=await store1.appendScanJourneyCycle(first);
+  assert.equal(repaired.duplicate,true);
+  assert.equal(repaired.repaired,true);
+  const verified=await store1.verifyScanJourneyArchive();
+  assert.equal(verified.complete,true);
+  assert.equal(verified.readable_cycles,1);
+  assert.equal(verified.readable_coin_rows,2);
+  const after=await store1.getScanJourneyState();
+  assert.equal(after.total_recorded_cycles,1);
+  assert.equal(after.retained_coin_rows,2);
+  assert.equal(after.cycle_sequence,saved.cycle_sequence);
 });
