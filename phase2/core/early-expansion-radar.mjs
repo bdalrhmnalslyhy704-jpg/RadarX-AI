@@ -1619,11 +1619,11 @@ export class EarlyExpansionRadar{
       }
       const selectedDeepSchedulerSymbols=new Set(deepTargets.map(selectionSymbol));
       for(const item of deepPoolBeforeSelection)if(!selectedDeepSchedulerSymbols.has(selectionSymbol(item)))
-        this.scheduler.defer('DEEP',selectionSymbol(item),{cycle,at:deepSelectionAt,fastSeenAt,reasonCode:'DEEP_BATCH_CAPACITY',
+        this.scheduler.defer('DEEP',selectionSymbol(item),{cycle,at:deepSelectionStartedAt,fastSeenAt,reasonCode:'DEEP_BATCH_CAPACITY',
           extra:{micro_score:item.micro_fingerprint?.score??null}});
       for(const item of deepTargets){
         const lane=item._selection_lane||'score';
-        this.scheduler.selected('DEEP',selectionSymbol(item),{cycle,at:deepSelectionAt,lane,
+        this.scheduler.selected('DEEP',selectionSymbol(item),{cycle,at:deepSelectionStartedAt,lane,
           reasonCode:schedulerLaneReason(lane,'DEEP'),fastSeenAt,extra:{micro_score:item.micro_fingerprint?.score??null}});
       }
       for(const micro of deepTargets){
