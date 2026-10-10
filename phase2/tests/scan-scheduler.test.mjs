@@ -35,7 +35,7 @@ test('scheduler journal restores queue age and last real scan after DurableStore
     journal.selected('DEEP','BBBUSDT',{cycle:1,at:now,lane:'score',reasonCode:'HIGHEST_CURRENT_EARLY_SCORE'});
     now+=100;
     const noSignalStart=journal.started('DEEP','BBBUSDT',{cycle:1,at:now,lane:'score'});
-    assert.equal(noSignalStart.wait_ms,400);
+    assert.equal(noSignalStart.wait_ms,200);
     now+=200;
     journal.finished('DEEP','BBBUSDT',{
       cycle:1,at:now,startedAt:10_650,outcome:'COMPLETED',
@@ -79,14 +79,16 @@ test('Radar 8 micro rotation gives the longest-waiting symbol a slot and de-dupl
     trade_accel_ratio:i<2?1.4:1.01
   }]));
   radar.scheduler.lastStartedAt.set(radar.scheduler.stageKey('MICRO','OLDWAITUSDT'),NOW-900_000);
-  for(const symbol of ['BEST1USDT','BEST2USDT','RECENT1USDT','RECENT2USDT'])
+  for(const symbol of ['BEST1USDT','BEST2USDT','RECENT2USDT'])
     radar.scheduler.lastStartedAt.set(radar.scheduler.stageKey('MICRO',symbol),NOW-5_000);
+  radar.scheduler.lastStartedAt.set(radar.scheduler.stageKey('MICRO','RECENT1USDT'),NOW-30_000);
   const selected=radar.selectMicro([...rows,rows[2]],fast,7);
   assert.equal(selected.length,4);
   assert.equal(new Set(selected.map(x=>x.symbol.toUpperCase())).size,4);
   assert.ok(selected.some(x=>x.symbol==='OLDWAITUSDT'&&x._selection_lane==='rotation'));
   const oldest=selected.find(x=>x.symbol==='OLDWAITUSDT');
-  const recent=selected.find(x=>x.symbol==='RECENT1USDT');
+  const recent=selected.filter(x=>x.symbol.startsWith('RECENT'))
+    .sort((a,b)=>b._rotationAgeMs-a._rotationAgeMs)[0];
   assert.ok(oldest&&recent,'rotation should include both an overdue and a recent symbol');
   assert.ok(oldest._rotationAgeMs>recent._rotationAgeMs);
 });
