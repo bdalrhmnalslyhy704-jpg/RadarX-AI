@@ -172,7 +172,7 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   maxSpreadBps:22,
   minDataQuality:70,
   microScanCandidates:12,
-  quietBaseLightCandidates:96,
+  quietBaseLightCandidates:192,
   rotationReserve:8,
   deepCandidates:3,
   quietReserve:8,
@@ -1167,7 +1167,7 @@ export class EarlyExpansionRadar{
     const currentCycle=Math.max(1,Math.trunc(Number(cycle)||1));
     const all=(rows||[]).filter(row=>row&&row.symbol);
     const uniqueCount=new Set(all.map(row=>String(row.symbol).toUpperCase())).size;
-    const target=Math.min(Math.max(1,Math.trunc(this.config.quietBaseLightCandidates||96)),uniqueCount);
+    const target=Math.min(Math.max(1,Math.trunc(this.config.quietBaseLightCandidates||192)),uniqueCount);
     if(!target)return [];
     const selected=[],seen=new Set();
     // Any priority reservation can only reuse the last 5m light result, which was

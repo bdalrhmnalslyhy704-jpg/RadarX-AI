@@ -367,10 +367,10 @@ async function main() {
     production_coverage_reference: {
       observed_eligible_per_cycle_range: [338, 339],
       observed_micro_candidates_per_cycle: 12,
-      light_screen_candidates_per_cycle: 96,
-      light_screen_fraction_of_eligible_pct: round(96 / 339 * 100, 3),
-      light_rotation_slots_per_cycle: 88,
-      theoretical_rotation_sweep_cycles: Math.ceil(339 / 88),
+      light_screen_candidates_per_cycle: 192,
+      light_screen_fraction_of_eligible_pct: round(192 / 339 * 100, 3),
+      light_rotation_slots_per_cycle: 184,
+      theoretical_rotation_sweep_cycles: Math.ceil(339 / 184),
       observed_micro_candidates_per_cycle: 12,
       observed_deep_scans_per_cycle: 3,
       deep_scan_fraction_of_eligible_pct: round(3 / 339 * 100, 3)
