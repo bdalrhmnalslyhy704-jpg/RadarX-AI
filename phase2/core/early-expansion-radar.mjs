@@ -1375,9 +1375,12 @@ export class EarlyExpansionRadar{
     const makeJourneyEntry=(symbol)=>({
       symbol:String(symbol).toUpperCase(),eligible:false,eligibility_at:INCOMPLETE,first_eligible_at:INCOMPLETE,fast_scan_at:INCOMPLETE,
       ticker:INCOMPLETE,fast:INCOMPLETE,micro_selected_at:INCOMPLETE,micro_selection_lane:INCOMPLETE,
+      micro_selection_rank:INCOMPLETE,micro_selection_score:INCOMPLETE,micro_selection_selected:false,
+      micro_selection_reason:INCOMPLETE,micro_deferred_reason:INCOMPLETE,micro_selection_evidence:INCOMPLETE,
       micro_scan_started_at:INCOMPLETE,micro_scan_completed_at:INCOMPLETE,micro_fingerprint:INCOMPLETE,
-      deep_selected_at:INCOMPLETE,deep_selection_lane:INCOMPLETE,deep_scan_started_at:INCOMPLETE,
-      deep_scan_completed_at:INCOMPLETE,deep_scan_status:INCOMPLETE,deep_analysis:INCOMPLETE,
+      deep_selected_at:INCOMPLETE,deep_selection_lane:INCOMPLETE,deep_selection_rank:INCOMPLETE,deep_score_rank:INCOMPLETE,
+      deep_selection_score:INCOMPLETE,deep_selection_selected:false,deep_selection_reason:'NOT_ENTERED_MICRO',
+      deep_scan_started_at:INCOMPLETE,deep_scan_completed_at:INCOMPLETE,deep_scan_status:INCOMPLETE,deep_analysis:INCOMPLETE,
       candles_used:{'1m':INCOMPLETE,'5m':INCOMPLETE,'15m':INCOMPLETE,'1h':INCOMPLETE,'4h':INCOMPLETE},
       radar_scores:{RADAR_1:INCOMPLETE,RADAR_2:INCOMPLETE,RADAR_3:INCOMPLETE,RADAR_4:INCOMPLETE,RADAR_5:INCOMPLETE,RADAR_6:INCOMPLETE,RADAR_7:INCOMPLETE,RADAR_8:INCOMPLETE,RADAR_9:INCOMPLETE},
       analyst_scores:INCOMPLETE,analyst_scores_reason:'MULTI_ANALYST_NOT_RUN_FOR_EVERY_RADAR8_SYMBOL',
@@ -1387,14 +1390,17 @@ export class EarlyExpansionRadar{
       notification_sent_at:INCOMPLETE,notification_status:INCOMPLETE,
       outcomes:incompleteHorizons('NO_SIGNAL_OUTCOME_FOR_THIS_CYCLE')
     });
-    const phaseTimings={universe_refresh_ms:0,ticker_fast_selection_ms:0,market_context_ms:0,
-      outcome_maintenance_ms:0,micro_scan_ms:0,market_micro_overlap_ms:0,
+    const phaseTimings={universe_refresh_ms:0,ticker_fast_selection_ms:0,micro_selection_ms:0,market_context_ms:0,
+      outcome_maintenance_ms:0,micro_scan_ms:0,market_micro_overlap_ms:0,deep_selection_ms:0,
       deep_scan_ms:0,signal_archive_ms:0,notification_ms:0};
     try{
       const q=this.normalizeQuote(quote);
       await this.hydrateScanJourneyState();
       const now=this.clock();
       journey.quote=q;journey.cycle_id=makeScanJourneyCycleId(q,scanStartedAt);
+      this.activeCycleRestTelemetry=createCycleRestTelemetry(journey.cycle_id,scanStartedAt,this.rest);
+      this.lastMicroSelectionAudit=[];this.lastDeepSelectionAudit=[];
+      this.lastMicroDuplicateInputCount=0;this.lastDeepDuplicateInputCount=0;
       const universeRefreshStartedAt=this.clock();
       if(now-this.universeAt>this.config.universeRefreshMs||!this.universe.length)await this.refreshUniverse(q);
       phaseTimings.universe_refresh_ms=Math.max(0,this.clock()-universeRefreshStartedAt);
@@ -1444,7 +1450,21 @@ export class EarlyExpansionRadar{
       this.fastScannedTotal=eligible.length;
       const fastSeenAt=fastScanAt;
       for(const row of eligible)this.scheduler.ensureQueued('MICRO',row.symbol,fastSeenAt);
-      const cycle=this.scans+1,selected=this.selectMicro(eligible,fastBySymbol,cycle);
+      const cycle=this.scans+1,microSelectionStartedAt=this.clock();
+      const selected=this.selectMicro(eligible,fastBySymbol,cycle);
+      phaseTimings.micro_selection_ms=Math.max(0,this.clock()-microSelectionStartedAt);
+      const microAuditBySymbol=new Map(this.lastMicroSelectionAudit.map(x=>[x.symbol,x]));
+      for(const row of eligible){
+        const symbol=String(row.symbol).toUpperCase(),entry=journeyEntries.get(symbol),audit=microAuditBySymbol.get(symbol);
+        if(!entry)continue;
+        entry.micro_selection_rank=audit?.rank_by_micro_score??INCOMPLETE;
+        entry.micro_selection_score=audit?.score??INCOMPLETE;
+        entry.micro_selection_selected=audit?.selected===true;
+        entry.micro_selection_reason=audit?.decision_reason||'MICRO_BATCH_CAPACITY';
+        entry.micro_deferred_reason=audit?.selected?INCOMPLETE:'MICRO_BATCH_CAPACITY';
+        entry.micro_selection_evidence=audit?{quiet_score:audit.quiet_score,quiet_rank:audit.quiet_rank,
+          quiet_eligible:audit.quiet_eligible,exceptional_candidate:audit.exceptional_candidate}:INCOMPLETE;
+      }
       for(const row of eligible)this.scheduler.record({stage:'FAST',symbol:row.symbol,eventType:'COMPLETED',cycle,at:fastSeenAt,
         queuedAt:tickerFastStartedAt,startedAt:tickerFastStartedAt,elapsedMs:Math.max(0,fastSeenAt-tickerFastStartedAt),fastSeenAt,
         reasonCode:'ALL_ELIGIBLE_TICKER_FAST_SCAN',
@@ -1579,9 +1599,20 @@ export class EarlyExpansionRadar{
         Math.min(marketContextCompletedAt,microScanCompletedAt)-Math.max(marketContextStartedAt,microScanStartedAt));
       const priorDeepCycles=new Map(this.lastDeepScanCycleBySymbol);
       const deepPoolBeforeSelection=microScanned.filter(x=>x&&!x.failed&&selectionSymbol(x)&&hasFiniteNumber(x.micro_fingerprint?.score));
-      const deepSelectionAt=this.clock();
-      for(const item of deepPoolBeforeSelection)this.scheduler.ensureQueued('DEEP',selectionSymbol(item),deepSelectionAt);
+      const deepSelectionStartedAt=this.clock();
+      for(const item of deepPoolBeforeSelection)this.scheduler.ensureQueued('DEEP',selectionSymbol(item),deepSelectionStartedAt);
       const deepTargets=this.selectDeepFromMicro(microScanned,cycle);
+      phaseTimings.deep_selection_ms=Math.max(0,this.clock()-deepSelectionStartedAt);
+      const deepAuditBySymbol=new Map(this.lastDeepSelectionAudit.map(x=>[x.symbol,x]));
+      for(const item of microScanned){
+        const symbol=selectionSymbol(item),entry=journeyEntries.get(symbol),audit=deepAuditBySymbol.get(symbol);
+        if(!entry)continue;
+        entry.deep_score_rank=audit?.rank_by_micro_score??INCOMPLETE;
+        entry.deep_selection_rank=audit?.selected_rank??INCOMPLETE;
+        entry.deep_selection_score=audit?.score??INCOMPLETE;
+        entry.deep_selection_selected=audit?.selected===true;
+        entry.deep_selection_reason=audit?.decision_reason||'MICRO_FINGERPRINT_NOT_SCOREABLE';
+      }
       const selectedDeepSchedulerSymbols=new Set(deepTargets.map(selectionSymbol));
       for(const item of deepPoolBeforeSelection)if(!selectedDeepSchedulerSymbols.has(selectionSymbol(item)))
         this.scheduler.defer('DEEP',selectionSymbol(item),{cycle,at:deepSelectionAt,fastSeenAt,reasonCode:'DEEP_BATCH_CAPACITY',
