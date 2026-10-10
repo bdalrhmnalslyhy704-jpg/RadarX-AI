@@ -55,6 +55,7 @@ export class MarketWideKlineCache {
     maxConnectionMs = 23 * 60 * 60 * 1000,
     maxCandlesPerSymbol = DEFAULT_MAX_CANDLES_PER_SYMBOL,
     maxSymbols = DEFAULT_MAX_SYMBOLS,
+    rest = null,
     clock = () => Date.now(),
     logger = console
   } = {}) {
@@ -74,6 +75,12 @@ export class MarketWideKlineCache {
     this.receivedClosedCandles = 0;
     this.rejectedCandles = 0;
     this.streamGeneration = 0;
+    this.unsubscribeKlines = typeof rest?.subscribeKlines === 'function'
+      ? rest.subscribeKlines(({symbol, interval, candles, source}) => {
+          if (String(interval || '') !== '5m') return;
+          this.seed(symbol, candles, source ? 'BINANCE_PUBLIC_REST' : 'BINANCE_PUBLIC_REST');
+        })
+      : null;
   }
 
   normalizeSymbols(symbols = []) {
@@ -89,6 +96,8 @@ export class MarketWideKlineCache {
     if (next.length === this.symbols.length &&
         next.every((symbol, index) => symbol === this.symbols[index])) return false;
     this.symbols = next;
+    const eligible = new Set(next);
+    for (const symbol of this.cache.keys()) if (!eligible.has(symbol)) this.cache.delete(symbol);
     if (this.running) this.rebuildStream();
     return true;
   }
@@ -177,6 +186,7 @@ export class MarketWideKlineCache {
   seed(symbol, candles, source = 'BINANCE_PUBLIC_REST') {
     const key = String(symbol || '').trim().toUpperCase();
     if (!/^[A-Z0-9]{2,25}USDT$/.test(key)) return 0;
+    if (this.symbols.length && !this.symbols.includes(key)) return 0;
     let accepted = 0;
     for (const candle of Array.isArray(candles) ? candles : []) {
       const normalized = normalizeClosedCandle({...candle, symbol: key, source: candle?.source || source}, this.clock(), source);
