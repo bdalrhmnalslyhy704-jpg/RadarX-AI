@@ -21,7 +21,10 @@ export function measureGradualParticipation(values,{maxSamples=12,minSamples=6}=
   if(tail.length<6)return {available:false,samples:xs.length,baseline:null,middle:null,recent:null,ratio:null,step_ratio:null,score:null,improving:false};
   const groups=[tail.slice(0,segment),tail.slice(segment,segment*2),tail.slice(segment*2)];
   const [baseline,middle,recent]=groups.map(group=>median(group));
-  if(!Number.isFinite(baseline)||baseline<=0||!Number.isFinite(middle)||!Number.isFinite(recent)){
+  // A zero middle bucket has no valid denominator for the middle→recent ratio.
+  // Treat it as unavailable; otherwise stepRatio becomes null and formatting it
+  // with toFixed can abort the entire symbol's deep scan.
+  if(!Number.isFinite(baseline)||baseline<=0||!Number.isFinite(middle)||middle<=0||!Number.isFinite(recent)){
     return {available:false,samples:xs.length,baseline,middle,recent,ratio:null,step_ratio:null,score:null,improving:false};
   }
   const ratio=recent/baseline,stepRatio=middle>0?recent/middle:null,middleRatio=middle/baseline;
