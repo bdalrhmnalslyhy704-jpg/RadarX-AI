@@ -236,6 +236,78 @@ function mfeLabel(value, horizon) {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return 'UNLABELLED_INCOMPLETE_' + horizon;
   return Number(value) >= 5 ? 'RISE_MFE_' + horizon + '_GTE_5_PERCENT' : 'NO_RISE_MFE_' + horizon + '_LT_5_PERCENT';
 }
+
+function compactMetricSummary(metrics = {}) {
+  const volume=metrics.volume_trend||{},trades=metrics.trades_trend||{};
+  return {
+    daily_change_24h_pct: metrics.daily_change_24h_pct ?? null,
+    move_5m_pct: metrics.move_5m_pct ?? null,
+    move_15m_pct: metrics.move_15m_pct ?? null,
+    narrow_base_range_pct: metrics.narrow_base_range_pct ?? null,
+    atr_ratio: metrics.atr_ratio ?? null,
+    bollinger_width_ratio: metrics.bollinger_width_ratio ?? null,
+    higher_lows: metrics.higher_lows ?? null,
+    support_stable: metrics.support_stable ?? null,
+    support_undercut_pct: metrics.support_undercut_pct ?? null,
+    resistance_distance_pct: metrics.resistance_distance_pct ?? null,
+    volume_recent_vs_baseline: volume.recent_vs_self_baseline ?? null,
+    volume_middle_vs_oldest: volume.middle_vs_oldest ?? null,
+    volume_recent_vs_middle: volume.recent_vs_middle ?? null,
+    trades_recent_vs_baseline: trades.recent_vs_self_baseline ?? null,
+    trades_middle_vs_oldest: trades.middle_vs_oldest ?? null,
+    trades_recent_vs_middle: trades.recent_vs_middle ?? null,
+    temporal_promotion: metrics.temporal_promotion === true
+  };
+}
+function compactBlockerRecord(blocker) {
+  if (!blocker) return null;
+  const value=blocker.value;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {key:blocker.key??null,value:value??null,threshold:blocker.threshold??null,reason:blocker.reason??null};
+  }
+  const compactValue={};
+  for(const key of [
+    'available','samples','baseline','oldest_bucket','middle_bucket','recent_bucket',
+    'recent_vs_self_baseline','middle_vs_oldest','recent_vs_middle','improving',
+    'higher_lows','support_stable','first_half_support','second_half_support','support_undercut_pct',
+    'daily_change_24h_pct','move_5m_pct','move_15m_pct'
+  ]) if(value[key]!==undefined)compactValue[key]=value[key];
+  return {key:blocker.key??null,value:compactValue,threshold:blocker.threshold??null,reason:blocker.reason??null};
+}
+function compactCoreEpisode(episode) {
+  return {
+    symbol:episode.symbol,start_time_utc:episode.start_time_utc,start_time_ms:episode.start_time_ms,
+    start_price:episode.start_price,classification_at_episode_start:episode.classification_at_episode_start,
+    reason_at_episode_start:episode.reason_at_episode_start,
+    first_blocker:compactBlockerRecord(episode.first_blocker),
+    metrics_at_episode_start:compactMetricSummary(episode.metrics_at_episode_start),
+    future_mfe_4h_pct_lookahead_only:episode.future_mfe_4h_pct_lookahead_only,
+    future_mfe_24h_pct_lookahead_only:episode.future_mfe_24h_pct_lookahead_only,
+    outcome_label:episode.outcome_label,outcome_label_24h:episode.outcome_label_24h
+  };
+}
+function compactStageEpisode(episode) {
+  return {
+    symbol:episode.symbol,stage:episode.stage,time_utc:episode.time_utc,time_ms:episode.time_ms,
+    price:episode.price,reason:episode.reason,first_blocker:compactBlockerRecord(episode.first_blocker),
+    temporal_promotion:episode.temporal_promotion===true,
+    minutes_before_move_start:episode.minutes_before_move_start??null,
+    within_24h_before_move:episode.within_24h_before_move??false,
+    duration_minutes:episode.duration_minutes??null,
+    ended_by_classification:episode.ended_by_classification??null,right_censored:episode.right_censored===true,
+    mfe_next_4h_pct_lookahead_only:episode.mfe_next_4h_pct_lookahead_only??null,
+    mfe_next_24h_pct_lookahead_only:episode.mfe_next_24h_pct_lookahead_only??null,
+    outcome_4h:episode.outcome_4h,outcome_24h:episode.outcome_24h
+  };
+}
+function compactExtendedTransition(item) {
+  return {
+    symbol:item.symbol,time_utc:item.time_utc,time_ms:item.time_ms,price:item.price,
+    classification:item.classification,blocker:compactBlockerRecord(item.blocker),
+    metrics:compactMetricSummary(item.metrics)
+  };
+}
+
 function asCsv(rows, columns) {
   return [columns.map(csvCell).join(','), ...rows.map(row => columns.map(key => csvCell(row[key])).join(','))].join('\n') + '\n';
 }
@@ -729,10 +801,10 @@ async function main() {
     comparison_results: symbolSummary,
     core_base_episode_labels_4h_and_24h: episodeSummary,
     stage_episodes_before_after:stageEpisodesBeforeAfter,
-    all_stage_episodes_before:allStrictStageEpisodes,
-    all_stage_episodes_after:allTemporalStageEpisodes,
-    all_core_base_episodes: allEpisodes,
-    already_extended_transitions: allTransitions,
+    all_stage_episodes_before:allStrictStageEpisodes.map(compactStageEpisode),
+    all_stage_episodes_after:allTemporalStageEpisodes.map(compactStageEpisode),
+    all_core_base_episodes: allEpisodes.map(compactCoreEpisode),
+    already_extended_transitions: allTransitions.map(compactExtendedTransition),
     future_leakage: {
       checks: manifest.future_leakage_checks.length,
       passed: manifest.future_leakage_checks.filter(item => item.pass).length,
