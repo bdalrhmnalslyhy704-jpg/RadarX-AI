@@ -5,6 +5,7 @@ import {RestClient} from '../market/binance-rest.mjs';
 import {MarketWideKlineCache} from '../market/market-wide-kline-cache.mjs';
 import {DurableStore} from '../core/store.mjs';
 import {EarlyExpansionRadar} from '../core/early-expansion-radar.mjs';
+import {isDirectionalCandidateSymbol} from '../core/market-wide-light-scan.mjs';
 import {CONFIG} from '../config.mjs';
 import {shadowArmForCycle,compareShadowPairCycles,summarizeShadowArm,SHADOW_ARM} from '../core/market-wide-shadow-experiment.mjs';
 
@@ -401,6 +402,8 @@ try {
         micro_pool_applied:light.micro_pool_applied===true,
         legacy_micro_selector_active:light.legacy_micro_selector_active===true,
         micro_symbols:Array.isArray(scheduler?.micro_symbols)?scheduler.micro_symbols:[],
+        non_directional_micro_symbols:(Array.isArray(scheduler?.micro_symbols)?scheduler.micro_symbols:[])
+          .filter(symbol=>!isDirectionalCandidateSymbol(symbol)),
         deep_symbols:Array.isArray(scheduler?.deep_symbols)?scheduler.deep_symbols:[]
       };
       report.shadow.cycles.push(cycleRow);
@@ -502,6 +505,8 @@ try {
     }
     const legacyRows=rows.filter(row=>row.shadow_arm===SHADOW_ARM.LEGACY);
     const poolRows=rows.filter(row=>row.shadow_arm===SHADOW_ARM.LIGHT_POOL);
+    const nonDirectionalPoolSymbols=[...new Set(poolRows.flatMap(row=>row.non_directional_micro_symbols||[]))].sort();
+    const nonDirectionalPoolSelections=poolRows.reduce((sum,row)=>sum+(row.non_directional_micro_symbols||[]).length,0);
     const selectorActivationVerified=rows.length===SHADOW_CYCLES&&rows.every(row=>
       row.micro_pool_applied===(row.shadow_arm===SHADOW_ARM.LIGHT_POOL)&&
       row.legacy_micro_selector_active===(row.shadow_arm===SHADOW_ARM.LEGACY));
@@ -536,6 +541,8 @@ try {
       arm_counts:{legacy:legacyRows.length,light_pool:poolRows.length},
       pairs_completed:report.shadow.pairs.length,
       pairs_with_changed_micro_selection:report.shadow.pairs.filter(pair=>pair.selection_changed).length,
+      non_directional_pool_selection_total:nonDirectionalPoolSelections,
+      non_directional_pool_symbols:nonDirectionalPoolSymbols,
       mean_micro_jaccard_ratio:report.shadow.pairs.length
         ?report.shadow.pairs.reduce((sum,pair)=>sum+(Number(pair.micro_jaccard_ratio)||0),0)/report.shadow.pairs.length:null,
       mean_light_pool_duration_delta_ms:report.shadow.pairs.length
@@ -557,6 +564,7 @@ try {
         report.shadow.coverage_ready_every_cycle !== true || report.shadow.websocket_live_every_cycle !== true ||
         selectorActivationVerified!==true || balancedArms!==true ||
         report.shadow.pairs.length!==Math.floor(SHADOW_CYCLES/2) ||
+        nonDirectionalPoolSelections!==0 ||
         noDeepFailures!==true || zeroExtraLightRest!==true) {
       if (report.shadow.status === 'RUNNING') report.shadow.status = 'INCOMPLETE';
       report.status = 'SHADOW_INCOMPLETE';
@@ -601,7 +609,7 @@ try {
   report.merged = false;
   report.deployed = false;
   report.note = report.status === 'SHADOW_COMPLETE'
-    ? 'Full eligible market history and live WebSocket gates passed; balanced legacy-vs-light-pool Shadow pairs verified per-cycle selector activation. This measures selection and runtime effects, not predictive accuracy. No merge or deployment.'
+    ? 'Full eligible market history and live WebSocket gates passed; balanced legacy-vs-light-pool Shadow pairs verified per-cycle selector activation and exclusion of stable/fiat/gold-backed bases. This measures selection and runtime effects, not predictive accuracy. No merge or deployment.'
     : allReady
       ? 'Full cache coverage was reached, but the isolated Shadow comparison did not complete its required cycles. Inspect shadow.abort_reason.'
       : 'Acceptance gate remains closed; inspect per_symbol readiness_reason. Shadow did not start.';
