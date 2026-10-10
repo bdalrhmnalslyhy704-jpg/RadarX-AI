@@ -90,10 +90,11 @@ export function scanJourneyOutcomesFromRecord(record) {
     const mark=record.marks?.[h],excursion=record.excursions?.[h],horizon=record.horizon_status?.[h];
     const closed=mark?.sample_quality==='HISTORICAL_CLOSED_OHLC';
     const excursionSource=excursion?.source==='HISTORICAL_CLOSED_OHLC';
+    const excursionHasValues=excursionSource&&(finite(excursion?.max_favorable_pct)||finite(excursion?.max_adverse_pct));
     const excursionComplete=excursionSource&&excursion?.complete===true;
     const pending=horizon?.status==='PENDING';
     const status=closed&&horizon?.status==='COMPLETE'&&excursionComplete?'COMPLETE':
-      closed||excursionSource?'PARTIAL_CLOSED_OHLC':
+      closed||excursionHasValues?'PARTIAL_CLOSED_OHLC':
       pending?'PENDING':INCOMPLETE;
     const value=(x)=>finite(x)?Number(x):INCOMPLETE;
     return [h,{
