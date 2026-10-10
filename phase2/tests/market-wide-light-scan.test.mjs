@@ -298,6 +298,47 @@ test('cache readiness requires all expected symbols to have fresh continuous clo
   cache.stop();
 });
 
+test('coverage gate stays closed for one missing symbol, opens only when all are ready, and closes on staleness', () => {
+  let now = 1_900_000_000_000;
+  const cache = new MarketWideKlineCache({
+    urls:['wss://stream.test/stream'], WebSocketImpl:FakeSocket,
+    clock:()=>now, logger:{warn(){}}
+  });
+  cache.setSymbols(['AAAUSDT','BBBUSDT','CCCUSDT']);
+  cache.start();
+
+  let proof = cache.coverageReport();
+  assert.equal(proof.expected_symbols,3);
+  assert.equal(proof.ready_symbols,0);
+  assert.equal(proof.not_ready_symbols,3);
+  assert.equal(proof.cache_coverage_ready,false);
+
+  cache.seed('AAAUSDT',candles({now,count:72}).map(candle=>({...candle,symbol:'AAAUSDT'})),'BINANCE_PUBLIC_REST');
+  cache.seed('BBBUSDT',candles({now,count:72}).map(candle=>({...candle,symbol:'BBBUSDT'})),'BINANCE_PUBLIC_REST');
+  proof = cache.coverageReport();
+  assert.equal(proof.ready_symbols,2);
+  assert.equal(proof.not_ready_symbols,1);
+  assert.equal(proof.symbols.find(item=>item.symbol==='CCCUSDT').state,'CANDLE_CACHE_MISSING');
+  assert.equal(proof.cache_coverage_ready,false,'one missing eligible symbol must keep the gate closed');
+
+  cache.seed('CCCUSDT',candles({now,count:72}).map(candle=>({...candle,symbol:'CCCUSDT'})),'BINANCE_PUBLIC_REST');
+  proof = cache.coverageReport();
+  assert.equal(proof.ready_symbols,3);
+  assert.equal(proof.not_ready_symbols,0);
+  assert.equal(proof.cache_coverage_ready,true,'the gate opens only after every eligible symbol is ready');
+  assert.ok(proof.symbols.every(item=>item.closed_candle_count>=60));
+  assert.ok(proof.symbols.every(item=>item.continuity_gap_count===0));
+  assert.ok(proof.symbols.every(item=>item.latest_candle_age_ms<=8*60_000));
+  assert.ok(proof.symbols.every(item=>item.future_candle_count===0));
+
+  now += 9 * 60_000;
+  proof = cache.coverageReport();
+  assert.equal(proof.ready_symbols,0);
+  assert.equal(proof.stale_symbols,3);
+  assert.equal(proof.cache_coverage_ready,false,'the gate must close again when the cached bars become stale');
+  cache.stop();
+});
+
 test('same closed-candle payload is deduplicated instead of being counted as fresh data', () => {
   const now = 1_900_000_000_000;
   const cache = new MarketWideKlineCache({urls:['wss://fake.test/stream'],WebSocketImpl:FakeSocket,
