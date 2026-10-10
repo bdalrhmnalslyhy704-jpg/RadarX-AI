@@ -1432,7 +1432,6 @@ export class EarlyExpansionRadar{
         Math.min(marketContextCompletedAt,microScanCompletedAt)-Math.max(marketContextStartedAt,microScanStartedAt));
       const priorDeepCycles=new Map(this.lastDeepScanCycleBySymbol);
       const deepTargets=this.selectDeepFromMicro(microScanned,cycle);
-      const priorDeepCycles=new Map(this.lastDeepScanCycleBySymbol);
       for(const micro of deepTargets){
         const symbol=selectionSymbol(micro),entry=journeyEntries.get(symbol);
         if(entry){entry.deep_selected_at=this.clock();entry.deep_selection_lane=micro._selection_lane||INCOMPLETE;entry.deep_scan_status='RUNNING';entry.rejection_reason=INCOMPLETE;}
