@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assessQuietBasePreExpansion } from '../core/quiet-base-pre-expansion.mjs';
+import { assessQuietBasePreExpansion, scoreQuietBasePreExpansionLight, QUIET_BASE_PRE_EXPANSION_DEFAULTS } from '../core/quiet-base-pre-expansion.mjs';
 
 const start = 1_800_000_000_000;
 const step = 5 * 60_000;
@@ -116,6 +116,47 @@ test('low taker-buy does not independently reject a valid quiet base', () => {
   assert.equal(result.classification, 'PRE_EXPANSION', JSON.stringify(result));
   assert.equal(result.metrics.flow_state, 'POSSIBLE_ABSORPTION');
   assert.equal(result.detected, true);
+});
+
+
+test('persistent trade improvement promotes a base only when volume independently passes the unchanged 1.08x rule', () => {
+  const rows = quietBase();
+  const startGroup = rows.length - 12;
+  const groups = [100, 102, 104];
+  for (let i = startGroup; i < rows.length; i++) {
+    rows[i].tradeCount = groups[Math.floor((i - startGroup) / 4)];
+  }
+  const result = analyze(rows);
+  const strictTrades = result.evidence.find(item => item.key === 'gradual_trades_vs_same_coin');
+  const temporalTrades = result.evidence.find(item => item.key === 'persistent_trade_trend');
+  const combined = result.evidence.find(item => item.key === 'persistent_volume_trade_confirmation');
+  assert.equal(QUIET_BASE_PRE_EXPANSION_DEFAULTS.minParticipationRatio, 1.08);
+  assert.equal(strictTrades.passed, false, JSON.stringify(strictTrades));
+  assert.ok(strictTrades.value.recent_vs_self_baseline < 1.08);
+  assert.equal(temporalTrades.passed, true, JSON.stringify(temporalTrades));
+  assert.equal(combined.passed, true, JSON.stringify(combined));
+  assert.equal(result.classification, 'PRE_EXPANSION', JSON.stringify(result));
+  assert.equal(result.reason, 'QUIET_BASE_WITH_PERSISTENT_TRADE_BUILD');
+  assert.equal(result.metrics.temporal_promotion, true);
+  const light = scoreQuietBasePreExpansionLight(result);
+  assert.equal(light.priority, true);
+  assert.equal(light.temporal_promotion, true);
+  assert.equal(light.entry_eligible, undefined, 'light screen must not make an alert/entry decision');
+});
+
+test('persistent trades alone cannot promote a base when volume fails its unchanged rule', () => {
+  const rows = quietBase({ participation: 'flat' });
+  const startGroup = rows.length - 12;
+  const groups = [100, 102, 104];
+  for (let i = startGroup; i < rows.length; i++) {
+    rows[i].tradeCount = groups[Math.floor((i - startGroup) / 4)];
+  }
+  const result = analyze(rows);
+  assert.equal(result.evidence.find(item => item.key === 'persistent_trade_trend').passed, true);
+  assert.equal(result.evidence.find(item => item.key === 'gradual_volume_vs_same_coin').passed, false);
+  assert.equal(result.evidence.find(item => item.key === 'persistent_volume_trade_confirmation').passed, false);
+  assert.notEqual(result.classification, 'PRE_EXPANSION');
+  assert.equal(result.metrics.temporal_promotion, false);
 });
 
 test('cycle summary counts fingerprint stages, participation rejections and scan latency', async () => {

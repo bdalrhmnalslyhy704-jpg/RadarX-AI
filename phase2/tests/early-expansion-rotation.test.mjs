@@ -213,6 +213,38 @@ test('Radar 8 deep scan preserves score capacity while selecting quiet bases fro
   assert.equal(quiet[0].row.symbol,'ZZZQUIETUSDT');
 });
 
+
+test('Radar 8 light quiet-base screen rotates broadly before the unchanged micro/deep batches',()=>{
+  const radar=makeRadar({quietBaseLightCandidates:24,microScanCandidates:8,deepCandidates:3});
+  const input=rows(50),fast=fastMap(input);
+  const cycles=[1,2,3,4].map(cycle=>radar.selectQuietBaseLight(input,fast,cycle));
+  assert.ok(cycles.every(selected=>selected.length===24));
+  assert.ok(cycles.every(selected=>new Set(selected.map(x=>x.symbol)).size===24));
+  assert.ok(cycles.every(selected=>selected.filter(x=>x._selection_lane==='priority').length<=8));
+  const covered=new Set(cycles.flatMap(selected=>selected.map(x=>x.symbol)));
+  assert.equal(covered.size,50,JSON.stringify({covered:covered.size,expected:50}));
+  const micro=radar.selectMicro(input,fast,1);
+  assert.equal(micro.length,8,'light ranking must not enlarge the existing micro batch');
+  assert.equal(radar.config.deepCandidates,3,'light ranking must not enlarge the deep batch');
+});
+
+test('Radar 8 gives one existing deep quiet slot to a high-quality light quiet-base candidate',()=>{
+  const radar=makeRadar({deepCandidates:3,quietReserve:1,rotationReserve:1,exceptionalRotationBypassSlots:0});
+  const light=candidate('LIGHTBASEUSDT',.4,{score:40,participation:50,tradeParticipation:50,structure:45,compression:45});
+  light.quiet_base_light={priority:true,light_score:98,classification:'WATCH_EARLY'};
+  const others=[
+    candidate('TOPSCOREUSDT',1,{score:95}),
+    candidate('ROTATIONUSDT',2,{score:35}),
+    candidate('LOWERUSDT',3,{score:20})
+  ];
+  const selected=radar.selectDeepFromMicro([...others,light],7);
+  assert.equal(selected.length,3);
+  assert.equal(new Set(selected.map(item=>item.row.symbol)).size,3);
+  const selectedLight=selected.find(item=>item.row.symbol==='LIGHTBASEUSDT');
+  assert.ok(selectedLight,'eligible light-ranked base should get its existing quiet slot');
+  assert.equal(selectedLight._selection_lane,'quiet_base');
+});
+
 test('Radar 8 deep scan de-duplicates row-wrapped candidates and fills ten slots',()=>{
   const radar=makeRadar({deepCandidates:10,quietReserve:8,rotationReserve:2});
   const input=Array.from({length:24},(_,i)=>candidate('DEEP'+String(i).padStart(2,'0')+'USDT',.25+(i%10)*.45,{

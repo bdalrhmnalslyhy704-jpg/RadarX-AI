@@ -4,7 +4,7 @@ import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notification-gate.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
 import {assessQuietBaseActivityShock,isFastActivityShockCandidate} from './activity-shock.mjs';
-import {assessQuietBasePreExpansion,summarizeQuietBasePreExpansion} from './quiet-base-pre-expansion.mjs';
+import {assessQuietBasePreExpansion,scoreQuietBasePreExpansionLight,summarizeQuietBasePreExpansion} from './quiet-base-pre-expansion.mjs';
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
 import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId,normalizeMissing,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,reconcileEligibilityQueueAge} from './scan-journey-ledger.mjs';
 import {ScanSchedulerJournal, schedulerLaneReason} from './scan-scheduler.mjs';
@@ -35,6 +35,8 @@ const mean=a=>{const x=(Array.isArray(a)?a:[]).map(Number).filter(Number.isFinit
 const median=a=>{const x=(Array.isArray(a)?a:[]).map(Number).filter(Number.isFinite).sort((p,q)=>p-q);if(!x.length)return null;const m=Math.floor(x.length/2);return x.length%2?x[m]:(x[m-1]+x[m])/2;};
 const pct=(a,b)=>Number.isFinite(Number(a))&&Number.isFinite(Number(b))&&Number(b)!==0?(Number(a)/Number(b)-1)*100:null;
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const QUIET_BASE_LIGHT_KLINE_LIMIT=90;
+const QUIET_BASE_LIGHT_FRESHNESS_MS=8*60*1000;
 async function withRetry(fn,{attempts=1,baseMs=150,maxBackoffMs=1500,sleepFn=sleep}={}){
   let last;
   for(let i=0;i<=attempts;i++){
@@ -170,6 +172,7 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   maxSpreadBps:22,
   minDataQuality:70,
   microScanCandidates:12,
+  quietBaseLightCandidates:96,
   rotationReserve:8,
   deepCandidates:3,
   quietReserve:8,
@@ -1081,6 +1084,7 @@ export class EarlyExpansionRadar{
     this.fastState=new Map();this.lastAlertAt=new Map();this.lastAlertScore=new Map();this.lastBand=new Map();
     this.lastActivityShockAt=new Map();this.lastActivityShockKeyBySymbol=new Map();this.activityShockTimestamps=[];this.fastShockPendingUntil=new Map();
     this.lastMicroScanCycleBySymbol=new Map();this.lastDeepScanCycleBySymbol=new Map();
+    this.quietBaseLightStateBySymbol=new Map();
     this.scheduler=new ScanSchedulerJournal({radar:'RADAR_8',store,clock,logger});
     this.lastDeepAtBySymbol=new Map();this.firstEligibleAtBySymbol=new Map();
     this.journeyStateHydrated=false;this.lastJourneyArchive=null;this.lastJourneyError=null;
@@ -1159,6 +1163,38 @@ export class EarlyExpansionRadar{
     this.fastState.set(row.symbol,history);
     return fast;
   }
+  selectQuietBaseLight(rows,fastBySymbol,cycle=0){
+    const currentCycle=Math.max(1,Math.trunc(Number(cycle)||1));
+    const all=(rows||[]).filter(row=>row&&row.symbol).map(row=>{
+      const fast=fastBySymbol.get(row.symbol)||{};
+      const quiet=quietCandidateScore(row,fast,this.config);
+      const fastScore=fastCandidateScore(row,fast,this.config);
+      return {...row,fast,_lightPriorityScore:Number(fastScore||0)*.55+Number(quiet||0)*.45,
+        _lightExceptional:isExceptionalMicroCandidate(row,fast,this.config)||
+          isFastActivityShockCandidate(row,fast,this.config)||
+          Number(this.fastShockPendingUntil.get(String(row.symbol).toUpperCase())||0)>this.clock(),
+        _lightQuietScore:quiet??-1};
+    });
+    const uniqueCount=new Set(all.map(row=>String(row.symbol).toUpperCase())).size;
+    const target=Math.min(Math.max(1,Math.trunc(this.config.quietBaseLightCandidates||96)),uniqueCount);
+    if(!target)return [];
+    const prioritySlots=Math.min(8,Math.max(1,Math.floor(target/8)));
+    const selected=[],seen=new Set();
+    const priority=[...all].sort((a,b)=>
+      Number(b._lightExceptional)-Number(a._lightExceptional)||
+      Number(isQuietEarlyCandidate(b,b.fast,this.config))-Number(isQuietEarlyCandidate(a,a.fast,this.config))||
+      b._lightPriorityScore-a._lightPriorityScore||
+      b._lightQuietScore-a._lightQuietScore||a.symbol.localeCompare(b.symbol));
+    takeUniqueLane(selected,seen,priority,prioritySlots,'priority');
+    // Deterministic rotation gives the rest of the eligible universe a light look
+    // without changing the existing micro or deep batch size.
+    const ring=[...all].sort((a,b)=>symbolHash(a.symbol)-symbolHash(b.symbol)||a.symbol.localeCompare(b.symbol));
+    const rotationSlots=Math.max(0,target-selected.length);
+    const offset=ring.length?(((currentCycle-1)*rotationSlots)%ring.length):0;
+    const rotated=ring.slice(offset).concat(ring.slice(0,offset));
+    takeUniqueLane(selected,seen,rotated,rotationSlots,'rotation');
+    return selected.slice(0,target);
+  }
   selectMicro(rows,fastBySymbol,cycle=0){
     const currentCycle=Math.max(0,Math.trunc(Number(cycle)||0));
     const selectionAt=this.clock();
@@ -1167,6 +1203,15 @@ export class EarlyExpansionRadar{
       const quiet=quietCandidateScore(row,fast,this.config);
       const fastScore=fastCandidateScore(row,fast,this.config);
       const key=String(row.symbol).toUpperCase();
+      const lightState=this.quietBaseLightStateBySymbol.get(key);
+      const lightClose=Number(lightState?.assessment?.candle_close_time_ms);
+      const lightAge=Number.isFinite(lightClose)?Math.max(0,selectionAt-lightClose):Number.POSITIVE_INFINITY;
+      const lightFresh=Boolean(lightState?.assessment&&lightAge<=QUIET_BASE_LIGHT_FRESHNESS_MS&&
+        lightState.assessment.classification!=='DATA_INSUFFICIENT'&&lightState.assessment.classification!=='ALREADY_EXTENDED');
+      const lightScore=lightFresh&&Number.isFinite(Number(lightState?.rank?.light_score))?Number(lightState.rank.light_score):null;
+      const lightPriority=lightFresh&&lightState?.rank?.priority===true;
+      const combinedQuietScore=Math.max(quiet??-1,lightScore===null?-1:lightScore+(lightPriority?4:0));
+      const combinedQuietEligible=isQuietEarlyCandidate(row,fast,this.config)||lightPriority;
       const lastCycle=this.lastMicroScanCycleBySymbol.get(key);
       const lastAt=this.scheduler.lastScanAt('MICRO',key),queuedAt=this.scheduler.queueStartedAt('MICRO',key);
       const neverScanned=lastAt===null;
@@ -1175,8 +1220,9 @@ export class EarlyExpansionRadar{
       const rotation=((symbolHash(row.symbol)+Math.imul(currentCycle,2654435761))>>>0)/4294967296;
       const rotationAge=lastCycle===undefined?Number.MAX_SAFE_INTEGER:Math.max(0,currentCycle-lastCycle);
       return {...row,fast,
-        _microPreScore:fastScore*.55+(quiet??0)*.45,
-        _quietScore:quiet??-1,_quietEligible:isQuietEarlyCandidate(row,fast,this.config),
+        _microPreScore:fastScore*.55+Math.max(quiet??0,lightScore??0)*.45,
+        _quietScore:combinedQuietScore,_quietEligible:combinedQuietEligible,
+        _quietBaseLightScore:lightScore,_quietBaseLightPriority:lightPriority,_quietBaseLightAgeMs:lightFresh?lightAge:null,
         _exceptional:isExceptionalMicroCandidate(row,fast,this.config)||isFastActivityShockCandidate(row,fast,this.config)||Number(this.fastShockPendingUntil.get(key)||0)>this.clock(),
         _lastActuallyScannedAt:lastAt,_neverScanned:neverScanned,_queueAgeMs:queueAge,
         _rotationAgeMs:elapsedSinceScan,_rotation:rotation,_rotationAge:rotationAge};
@@ -1218,9 +1264,14 @@ export class EarlyExpansionRadar{
     const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve??2)),Math.max(0,target-q-1));
     const core=target-q-r;
     const byScore=[...valid].sort((a,b)=>Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
+    const byQuietBase=valid.filter(item=>item.quiet_base_light?.priority===true&&hasFiniteNumber(item.quiet_base_light?.light_score))
+      .sort((a,b)=>Number(b.quiet_base_light.light_score)-Number(a.quiet_base_light.light_score)||
+        (absolute24hMove(a.row)??Infinity)-(absolute24hMove(b.row)??Infinity)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const byQuiet=valid.map(item=>({...item,_quietScore:quietDeepRank(item,this.config)}))
       .filter(item=>item._quietScore!==null)
-      .sort((a,b)=>(absolute24hMove(a.row)??Infinity)-(absolute24hMove(b.row)??Infinity)||b._quietScore-a._quietScore||selectionSymbol(a).localeCompare(selectionSymbol(b)));
+      .sort((a,b)=>(absolute24hMove(a.row)??Infinity)-(absolute24hMove(b.row)??Infinity)||
+        Number(b.quiet_base_light?.light_score||0)-Number(a.quiet_base_light?.light_score||0)||
+        b._quietScore-a._quietScore||selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const byRotation=[...valid].map(item=>{
       const symbol=selectionSymbol(item),lastCycle=this.lastDeepScanCycleBySymbol.get(symbol);
       const lastAt=this.scheduler.lastScanAt('DEEP',symbol),queuedAt=this.scheduler.queueStartedAt('DEEP',symbol),neverScanned=lastAt===null;
@@ -1236,7 +1287,8 @@ export class EarlyExpansionRadar{
     const exceptionSlots=Math.min(core,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2)));
     takeUniqueLane(selected,seen,byExceptional,exceptionSlots,'exceptional');
     takeUniqueLane(selected,seen,byScore,Math.max(0,core-selected.length),'score');
-    takeUniqueLane(selected,seen,byQuiet,q,'quiet');
+    const quietBaseSlotsUsed=takeUniqueLane(selected,seen,byQuietBase,q,'quiet_base');
+    takeUniqueLane(selected,seen,byQuiet,Math.max(0,q-quietBaseSlotsUsed),'quiet');
     takeUniqueLane(selected,seen,byRotation,r,'rotation');
     takeUniqueLane(selected,seen,byScore,target-selected.length,'fill_score');
     takeUniqueLane(selected,seen,byQuiet,target-selected.length,'fill_quiet');
@@ -1254,7 +1306,17 @@ export class EarlyExpansionRadar{
     // Accept either an already-resolved context array (tests/callers) or a shared
     // in-flight BTC context promise so candle reads overlap without losing BTC-relative scoring.
     const btcRows=await Promise.resolve(btcFiveMinute);
-    return {row,fast,oneMinute:m1.candles,fiveMinute:m5.candles,micro_fingerprint:buildMicroFingerprint({oneMinute:m1.candles,fiveMinute:m5.candles,btcFiveMinute:btcRows,ticker:row,now:this.clock(),config:this.config}),source:sourceList([m1.source,m5.source])};
+    const symbol=String(row.symbol||'').toUpperCase();
+    const light=this.quietBaseLightStateBySymbol.get(symbol);
+    const lightClose=Number(light?.assessment?.candle_close_time_ms);
+    const lightFresh=Boolean(light?.assessment&&Number.isFinite(lightClose)&&this.clock()-lightClose<=QUIET_BASE_LIGHT_FRESHNESS_MS&&
+      light.assessment.classification!=='DATA_INSUFFICIENT'&&light.assessment.classification!=='ALREADY_EXTENDED');
+    return {row,fast,oneMinute:m1.candles,fiveMinute:m5.candles,
+      micro_fingerprint:buildMicroFingerprint({oneMinute:m1.candles,fiveMinute:m5.candles,btcFiveMinute:btcRows,ticker:row,now:this.clock(),config:this.config}),
+      quiet_base_light:lightFresh?{priority:light.rank?.priority===true,light_score:light.rank?.light_score??null,
+        classification:light.assessment.classification,candle_close_time_ms:light.assessment.candle_close_time_ms,
+        first_blocking_key:light.rank?.first_blocking_key??null,assessed_at:light.assessedAt}:null,
+      source:sourceList([m1.source,m5.source])};
   }
 
   async deepScan(row,fast,marketContext,micro,onClosedCandles=null){
@@ -1283,6 +1345,7 @@ export class EarlyExpansionRadar{
     const journey={cycle_id:null,cycle_number:null,quote:INCOMPLETE,source:INCOMPLETE,expected_symbols:[],received_symbols:[],eligible_symbols:[],status:'RUNNING'};
     const makeJourneyEntry=(symbol)=>({
       symbol:String(symbol).toUpperCase(),eligible:false,eligibility_at:INCOMPLETE,first_eligible_at:INCOMPLETE,fast_scan_at:INCOMPLETE,
+      quiet_base_light_screen:INCOMPLETE,
       ticker:INCOMPLETE,fast:INCOMPLETE,micro_selected_at:INCOMPLETE,micro_selection_lane:INCOMPLETE,
       micro_scan_started_at:INCOMPLETE,micro_scan_completed_at:INCOMPLETE,micro_fingerprint:INCOMPLETE,
       deep_selected_at:INCOMPLETE,deep_selection_lane:INCOMPLETE,deep_scan_started_at:INCOMPLETE,
@@ -1296,7 +1359,7 @@ export class EarlyExpansionRadar{
       notification_sent_at:INCOMPLETE,notification_status:INCOMPLETE,
       outcomes:incompleteHorizons('NO_SIGNAL_OUTCOME_FOR_THIS_CYCLE')
     });
-    const phaseTimings={universe_refresh_ms:0,ticker_fast_selection_ms:0,market_context_ms:0,
+    const phaseTimings={universe_refresh_ms:0,ticker_fast_selection_ms:0,quiet_base_light_screen_ms:0,market_context_ms:0,
       outcome_maintenance_ms:0,micro_scan_ms:0,market_micro_overlap_ms:0,
       deep_scan_ms:0,signal_archive_ms:0,notification_ms:0};
     try{
@@ -1353,7 +1416,88 @@ export class EarlyExpansionRadar{
       this.fastScannedTotal=eligible.length;
       const fastSeenAt=fastScanAt;
       for(const row of eligible)this.scheduler.ensureQueued('MICRO',row.symbol,fastSeenAt);
-      const cycle=this.scans+1,selected=this.selectMicro(eligible,fastBySymbol,cycle);
+      const cycle=this.scans+1;
+      const quietLightSelected=this.selectQuietBaseLight(eligible,fastBySymbol,cycle);
+      const quietLightSelectedSymbols=new Set(quietLightSelected.map(item=>String(item.symbol).toUpperCase()));
+      const quietLightStartedAt=this.clock();
+      const quietLightResults=await boundedMap(quietLightSelected,Math.max(1,Math.min(6,Number(this.config.microConcurrency)||6)),async row=>{
+        const symbol=String(row.symbol).toUpperCase(),startedAt=this.clock();
+        const entry=journeyEntries.get(symbol),firstEligibleAt=Number(this.firstEligibleAtBySymbol.get(symbol)||fastSeenAt);
+        if(entry)entry.quiet_base_light_screen={reached_this_cycle:true,status:'RUNNING',reason:'LIGHT_5M_SCREEN_STARTED',
+          light_evaluated_at:INCOMPLETE,first_eligible_at:firstEligibleAt,wait_ms:Math.max(0,startedAt-firstEligibleAt),
+          scan_duration_ms:INCOMPLETE,classification:INCOMPLETE,light_score:INCOMPLETE,priority:false,
+          first_blocking_key:INCOMPLETE,evidence_summary:INCOMPLETE,light_to_deep_wait_ms:INCOMPLETE,eligible_to_deep_wait_ms:INCOMPLETE};
+        try{
+          const response=await withRetry(()=>this.rest.klines(symbol,'5m',{limit:QUIET_BASE_LIGHT_KLINE_LIMIT}),{
+            attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep
+          });
+          const completedAt=this.clock();
+          const assessment=assessQuietBasePreExpansion({fiveMinute:response.candles||[],ticker:row,now:completedAt,dataReady:true,dataIssues:[],config:this.config});
+          const rank=scoreQuietBasePreExpansionLight(assessment);
+          this.quietBaseLightStateBySymbol.set(symbol,{symbol,assessedAt:completedAt,source:response.source||null,assessment,rank,stage:'LIGHT',cycle});
+          const m=assessment.metrics||{};
+          const compactEvidence={narrow_base_range_pct:m.narrow_base_range_pct??null,atr_ratio:m.atr_ratio??null,
+            bollinger_width_ratio:m.bollinger_width_ratio??null,higher_lows:m.higher_lows??null,support_stable:m.support_stable??null,
+            resistance_distance_pct:m.resistance_distance_pct??null,volume_recent_vs_baseline:m.volume_trend?.recent_vs_self_baseline??null,
+            volume_middle_vs_oldest:m.volume_trend?.middle_vs_oldest??null,volume_recent_vs_middle:m.volume_trend?.recent_vs_middle??null,
+            trades_recent_vs_baseline:m.trades_trend?.recent_vs_self_baseline??null,trades_middle_vs_oldest:m.trades_trend?.middle_vs_oldest??null,
+            trades_recent_vs_middle:m.trades_trend?.recent_vs_middle??null,persistent_trade_trend:m.persistent_trade_trend?.confirmed===true,
+            temporal_promotion:m.temporal_promotion===true,candle_close_time_ms:assessment.candle_close_time_ms??null};
+          if(entry)entry.quiet_base_light_screen={reached_this_cycle:true,status:assessment.classification==='DATA_INSUFFICIENT'?'DATA_INSUFFICIENT':'EVALUATED',
+            reason:rank.first_blocking_reason||assessment.reason||'LIGHT_SCREEN_EVALUATED',light_evaluated_at:completedAt,
+            first_eligible_at:firstEligibleAt,wait_ms:Math.max(0,startedAt-firstEligibleAt),scan_duration_ms:Math.max(0,completedAt-startedAt),
+            classification:assessment.classification,light_score:rank.light_score,priority:rank.priority,
+            first_blocking_key:rank.first_blocking_key||INCOMPLETE,evidence_summary:compactEvidence,light_to_deep_wait_ms:INCOMPLETE,eligible_to_deep_wait_ms:INCOMPLETE};
+          return {symbol,row,assessment,rank,source:response.source||null,startedAt,completedAt,failed:false};
+        }catch(error){
+          const completedAt=this.clock();
+          const assessment=assessQuietBasePreExpansion({fiveMinute:[],ticker:row,now:completedAt,dataReady:false,dataIssues:['LIGHT_SCAN_FAILED'],config:this.config});
+          const rank=scoreQuietBasePreExpansionLight(assessment);
+          this.quietBaseLightStateBySymbol.set(symbol,{symbol,assessedAt:completedAt,assessment,rank,stage:'LIGHT_FAILED',cycle});
+          if(entry)entry.quiet_base_light_screen={reached_this_cycle:true,status:'FAILED',reason:String(error?.message??error),
+            light_evaluated_at:completedAt,first_eligible_at:firstEligibleAt,wait_ms:Math.max(0,startedAt-firstEligibleAt),
+            scan_duration_ms:Math.max(0,completedAt-startedAt),classification:'DATA_INSUFFICIENT',light_score:null,
+            priority:false,first_blocking_key:'data_quality',evidence_summary:{data_issue:'LIGHT_SCAN_FAILED'},light_to_deep_wait_ms:INCOMPLETE,eligible_to_deep_wait_ms:INCOMPLETE};
+          this.noteError(error,'quiet-base-light-scan');
+          return {symbol,row,assessment,rank,source:null,startedAt,completedAt,failed:true};
+        }
+      });
+      const quietLightCompletedAt=this.clock();
+      phaseTimings.quiet_base_light_screen_ms=Math.max(0,quietLightCompletedAt-quietLightStartedAt);
+      const quietLightSuccessful=quietLightResults.filter(item=>!item.failed&&item.assessment?.classification!=='DATA_INSUFFICIENT');
+      const quietLightSummary={eligible_total:eligible.length,selected_total:quietLightSelected.length,evaluated_total:quietLightResults.length,
+        successful_total:quietLightSuccessful.length,priority_total:quietLightSuccessful.filter(item=>item.rank?.priority===true).length,
+        pre_expansion_total:quietLightSuccessful.filter(item=>item.assessment?.classification==='PRE_EXPANSION').length,
+        watch_early_total:quietLightSuccessful.filter(item=>item.assessment?.classification==='WATCH_EARLY').length,
+        already_extended_total:quietLightSuccessful.filter(item=>item.assessment?.classification==='ALREADY_EXTENDED').length,
+        data_insufficient_total:quietLightResults.filter(item=>item.assessment?.classification==='DATA_INSUFFICIENT').length,
+        compression_rejected_total:quietLightSuccessful.filter(item=>!['narrow_price_base_range_pct','atr_contraction_ratio','bollinger_width_ratio'].every(key=>item.assessment.evidence.find(ev=>ev.key===key)?.passed===true)).length,
+        participation_rejected_total:quietLightSuccessful.filter(item=>item.rank?.core_base_passed===true&&!item.rank?.priority&&item.assessment.classification!=='ALREADY_EXTENDED').length,
+        deferred_total:Math.max(0,eligible.length-quietLightSelected.length),
+        average_scan_latency_ms:quietLightResults.length?Math.round(quietLightResults.reduce((sum,item)=>sum+Math.max(0,item.completedAt-item.startedAt),0)/quietLightResults.length):null,
+        max_scan_latency_ms:quietLightResults.length?Math.max(...quietLightResults.map(item=>Math.max(0,item.completedAt-item.startedAt))):null,
+        duration_ms:Math.max(0,quietLightCompletedAt-quietLightStartedAt),deep_priority_from_light_total:0};
+      for(const row of eligible){
+        const symbol=String(row.symbol).toUpperCase(),entry=journeyEntries.get(symbol);
+        if(!entry||quietLightSelectedSymbols.has(symbol))continue;
+        const state=this.quietBaseLightStateBySymbol.get(symbol),closeTime=Number(state?.assessment?.candle_close_time_ms);
+        const cacheFresh=Number.isFinite(closeTime)&&this.clock()-closeTime<=QUIET_BASE_LIGHT_FRESHNESS_MS&&state.assessment.classification!=='DATA_INSUFFICIENT';
+        const m=cacheFresh?state.assessment.metrics||{}:{};
+        entry.quiet_base_light_screen={reached_this_cycle:false,status:cacheFresh?'CACHED_NOT_RESCANNED':'NOT_REACHED',
+          reason:'LIGHT_ROTATION_CAPACITY',light_evaluated_at:cacheFresh?state.assessedAt:INCOMPLETE,
+          first_eligible_at:Number(this.firstEligibleAtBySymbol.get(symbol)||fastSeenAt),
+          wait_ms:Math.max(0,fastSeenAt-Number(this.firstEligibleAtBySymbol.get(symbol)||fastSeenAt)),scan_duration_ms:INCOMPLETE,
+          classification:cacheFresh?state.assessment.classification:INCOMPLETE,
+          light_score:cacheFresh?state.rank?.light_score??INCOMPLETE:INCOMPLETE,priority:cacheFresh?state.rank?.priority===true:false,
+          first_blocking_key:cacheFresh?state.rank?.first_blocking_key??INCOMPLETE:INCOMPLETE,
+          evidence_summary:cacheFresh?{narrow_base_range_pct:m.narrow_base_range_pct??null,atr_ratio:m.atr_ratio??null,
+            bollinger_width_ratio:m.bollinger_width_ratio??null,higher_lows:m.higher_lows??null,support_stable:m.support_stable??null,
+            resistance_distance_pct:m.resistance_distance_pct??null,volume_recent_vs_baseline:m.volume_trend?.recent_vs_self_baseline??null,
+            trades_recent_vs_baseline:m.trades_trend?.recent_vs_self_baseline??null,persistent_trade_trend:m.persistent_trade_trend?.confirmed===true,
+            temporal_promotion:m.temporal_promotion===true,candle_close_time_ms:state.assessment.candle_close_time_ms??null}:INCOMPLETE,
+          light_to_deep_wait_ms:INCOMPLETE,eligible_to_deep_wait_ms:INCOMPLETE};
+      }
+      const selected=this.selectMicro(eligible,fastBySymbol,cycle);
       for(const row of eligible)this.scheduler.record({stage:'FAST',symbol:row.symbol,eventType:'COMPLETED',cycle,at:fastSeenAt,
         queuedAt:tickerFastStartedAt,startedAt:tickerFastStartedAt,elapsedMs:Math.max(0,fastSeenAt-tickerFastStartedAt),fastSeenAt,
         reasonCode:'ALL_ELIGIBLE_TICKER_FAST_SCAN',
@@ -1491,6 +1635,7 @@ export class EarlyExpansionRadar{
       const deepSelectionAt=this.clock();
       for(const item of deepPoolBeforeSelection)this.scheduler.ensureQueued('DEEP',selectionSymbol(item),deepSelectionAt);
       const deepTargets=this.selectDeepFromMicro(microScanned,cycle);
+      quietLightSummary.deep_priority_from_light_total=deepTargets.filter(item=>item.quiet_base_light?.priority===true).length;
       const selectedDeepSchedulerSymbols=new Set(deepTargets.map(selectionSymbol));
       for(const item of deepPoolBeforeSelection)if(!selectedDeepSchedulerSymbols.has(selectionSymbol(item)))
         this.scheduler.defer('DEEP',selectionSymbol(item),{cycle,at:deepSelectionAt,fastSeenAt,reasonCode:'DEEP_BATCH_CAPACITY',
@@ -1513,7 +1658,16 @@ export class EarlyExpansionRadar{
           reasonCode:schedulerLaneReason(lane,'DEEP'),fastSeenAt,
           extra:{micro_score:micro.micro_fingerprint?.score??null,micro_scan_wait_ms:Number(micro.scheduler_wait_ms)||0}});
         deepWaitBySymbol.set(row.symbol,deepSchedulerStarted.wait_ms);
-        if(entry)entry.deep_scan_started_at=deepStarted;
+        if(entry){
+          entry.deep_scan_started_at=deepStarted;
+          const lightScreen=entry.quiet_base_light_screen,lightAt=Number(lightScreen?.light_evaluated_at);
+          if(lightScreen&&Number.isFinite(lightAt)){
+            lightScreen.light_to_deep_wait_ms=Math.max(0,deepStarted-lightAt);
+            const firstEligible=Number(lightScreen.first_eligible_at);
+            lightScreen.eligible_to_deep_wait_ms=Number.isFinite(firstEligible)?Math.max(0,deepStarted-firstEligible):INCOMPLETE;
+            lightScreen.deep_scan_started_at=deepStarted;
+          }
+        }
         try{
           const evidence=await this.deepScan(row,fast,marketContext,micro,candles=>{
             journeyDeepCandlesBySymbol.set(row.symbol,candles);
@@ -1662,6 +1816,7 @@ export class EarlyExpansionRadar{
       coverage.deep_exceptional_bypass_total=deepTargets.filter(x=>x._selection_lane==='exceptional').length;
       coverage.micro_scan_coverage_ratio=eligible.length?coverage.micro_scanned_total/eligible.length:0;coverage.discovery_mode='TICKER_ALL + ROTATING_1M_5M_MICRO + DEEP_15M_1H_4H_DEPTH';
       this.lastCoverage=coverage;this.failedSymbols=[...new Set(failedSymbols)];
+      this.logger.info?.('[RADARX_QUIET_BASE_LIGHT_SCREEN] '+JSON.stringify({radar:'RADAR_8',cycle,...quietLightSummary,paper_trading:true,real_order_execution:false}));
       this.logger.info?.('[RADARX_SCAN_COVERAGE] '+JSON.stringify({
         radar:'RADAR_8',build_version:'Build 224',quote:q,observed_at:new Date(now).toISOString(),
         rotation_cycle:coverage.rotation_cycle,
@@ -1674,6 +1829,12 @@ export class EarlyExpansionRadar{
         deep_coverage_ratio:coverage.deep_coverage_ratio,
         quiet_selected_total:coverage.micro_quiet_selected_total,
         rotation_selected_total:coverage.micro_rotation_selected_total,
+        quiet_base_light_selected_total:quietLightSummary.selected_total,
+        quiet_base_light_evaluated_total:quietLightSummary.successful_total,
+        quiet_base_light_priority_total:quietLightSummary.priority_total,
+        quiet_base_light_deferred_total:quietLightSummary.deferred_total,
+        quiet_base_light_duration_ms:quietLightSummary.duration_ms,
+        deep_priority_from_quiet_base_light_total:quietLightSummary.deep_priority_from_light_total,
         exceptional_bypass_total:coverage.micro_exceptional_bypass_total,
         candidate_shortfall:coverage.micro_candidate_shortfall,
         failed_symbols:this.failedSymbols.slice(0,25),
@@ -1874,6 +2035,7 @@ export class EarlyExpansionRadar{
           const quietBaseFingerprintSummary=summarizeQuietBasePreExpansion(scanned);
           const counters={
             quiet_base_pre_expansion:quietBaseFingerprintSummary,
+            quiet_base_light_screen:quietLightSummary,
             expected_total:expected.length,received_total:receivedSymbols.length,
             missing_ticker_total:Math.max(0,expected.length-receivedSymbols.length),
             eligible_total:eligible.length,fast_scanned_total:eligible.length,

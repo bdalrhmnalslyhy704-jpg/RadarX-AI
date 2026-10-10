@@ -27,7 +27,10 @@ export const QUIET_BASE_PRE_EXPANSION_DEFAULTS = Object.freeze({
   maxSupportUndercutPct: 0.3,
   minParticipationRatio: 1.08,
   minMiddleParticipationRatio: 0.98,
-  minStepParticipationRatio: 1.01
+  minStepParticipationRatio: 1.01,
+  persistentTradeMinRecentVsBaseline: 0.98,
+  persistentTradeMinMiddleVsOldest: 1.01,
+  persistentTradeMinRecentVsMiddle: 1.01
 });
 
 function validClosedCandles(input, now) {
@@ -217,6 +220,13 @@ export function assessQuietBasePreExpansion({
   const tradeTrend = participationTrend(rows.map(row => ({ ...row, tradeCount: row.tradeCount ?? row.count })), 'tradeCount', cfg);
   const volumeImproving = volumeTrend.available && volumeTrend.improving;
   const tradesImproving = tradeTrend.available && tradeTrend.improving;
+  // Temporal fallback preserves the general 1.08x floor. It only supports a
+  // promotion when trade activity rises across all three closed-candle groups,
+  // stays at least 0.98x its baseline, and volume independently passes 1.08x.
+  const persistentTradeTrend = tradeTrend.available &&
+    tradeTrend.recent_vs_self_baseline >= Number(cfg.persistentTradeMinRecentVsBaseline) &&
+    tradeTrend.middle_vs_oldest >= Number(cfg.persistentTradeMinMiddleVsOldest) &&
+    tradeTrend.recent_vs_middle >= Number(cfg.persistentTradeMinRecentVsMiddle);
   const narrowBase = Number.isFinite(baseRangePct) && baseRangePct <= Number(cfg.maxBaseRangePct);
   const atrContracting = Number.isFinite(atrRatio) && atrRatio <= Number(cfg.maxAtrRatio);
   const bbContracting = Number.isFinite(bbRatio) && bbRatio <= Number(cfg.maxBollingerWidthRatio);
@@ -247,6 +257,8 @@ export function assessQuietBasePreExpansion({
     makeEvidence('resistance_proximity_pct', round(resistanceDistancePct), { min_pct: -0.1, max_pct: Number(cfg.maxResistanceDistancePct) }, nearResistance, 'PRICE_NEAR_PRIOR_RESISTANCE', 'RESISTANCE_NOT_NEAR_OR_ALREADY_CROSSED', closeTime),
     makeEvidence('gradual_volume_vs_same_coin', volumeTrend, { min_recent_vs_baseline: Number(cfg.minParticipationRatio), min_middle_vs_oldest: Number(cfg.minMiddleParticipationRatio), min_recent_vs_middle: Number(cfg.minStepParticipationRatio) }, volumeImproving, 'VOLUME_GRADUALLY_IMPROVING_VS_OWN_BASELINE', 'VOLUME_TREND_NOT_GRADUALLY_IMPROVING', closeTime),
     makeEvidence('gradual_trades_vs_same_coin', tradeTrend, { min_recent_vs_baseline: Number(cfg.minParticipationRatio), min_middle_vs_oldest: Number(cfg.minMiddleParticipationRatio), min_recent_vs_middle: Number(cfg.minStepParticipationRatio) }, tradesImproving, 'TRADE_COUNT_GRADUALLY_IMPROVING_VS_OWN_BASELINE', 'TRADE_COUNT_TREND_NOT_GRADUALLY_IMPROVING', closeTime),
+    makeEvidence('persistent_trade_trend', { ...tradeTrend, persistent_confirmation: persistentTradeTrend }, { min_recent_vs_baseline: Number(cfg.persistentTradeMinRecentVsBaseline), min_middle_vs_oldest: Number(cfg.persistentTradeMinMiddleVsOldest), min_recent_vs_middle: Number(cfg.persistentTradeMinRecentVsMiddle), closed_candle_groups: 3 }, persistentTradeTrend, 'TRADE_COUNT_RISE_PERSISTED_ACROSS_THREE_CLOSED_CANDLE_GROUPS', 'TRADE_COUNT_TEMPORAL_CONFIRMATION_NOT_MET', closeTime),
+    makeEvidence('persistent_volume_trade_confirmation', { volume_improving: volumeImproving, persistent_trade_trend: persistentTradeTrend }, { require_volume_improving: true, require_persistent_trade_trend: true, general_trade_baseline_min_ratio_unchanged: Number(cfg.minParticipationRatio) }, volumeImproving && persistentTradeTrend, 'VOLUME_AND_PERSISTENT_TRADES_CONFIRMED', 'VOLUME_OR_PERSISTENT_TRADES_NOT_CONFIRMED', closeTime),
     makeEvidence('anti_chase', { daily_change_24h_pct: round(dailyMove), move_5m_pct: round(move5m), move_15m_pct: round(move15m) }, { max_abs_24h_pct: Number(cfg.maxQuietMove24hPct), max_abs_5m_pct: Number(cfg.maxMove5mPct), max_abs_15m_pct: Number(cfg.maxMove15mPct) }, !extended, 'MOVE_NOT_EXTENDED', 'ALREADY_EXTENDED', closeTime)
   ];
   result.evidence = evidence;
@@ -257,7 +269,9 @@ export function assessQuietBasePreExpansion({
     bollinger_width_ratio: round(bbRatio), higher_lows: higherLows, support_stable: supportStable,
     support_low_first_half: round(firstHalfLow), support_low_second_half: round(secondHalfLow),
     resistance_price: round(resistance, 8), resistance_distance_pct: round(resistanceDistancePct),
-    volume_trend: volumeTrend, trades_trend: tradeTrend, flow_state: result.flow_state,
+    volume_trend: volumeTrend, trades_trend: tradeTrend,
+    persistent_trade_trend: { confirmed: persistentTradeTrend, baseline_min_ratio: Number(cfg.persistentTradeMinRecentVsBaseline), middle_vs_oldest_min_ratio: Number(cfg.persistentTradeMinMiddleVsOldest), recent_vs_middle_min_ratio: Number(cfg.persistentTradeMinRecentVsMiddle), requires_volume_improving: true },
+    temporal_promotion: false, flow_state: result.flow_state,
     future_candles_excluded: (Array.isArray(fiveMinute) ? fiveMinute.filter(c => Number.isFinite(Number(c?.closeTime)) && Number(c.closeTime) > asOf).length : 0),
     excluded_input_candles: (Array.isArray(fiveMinute) ? fiveMinute.length : 0) - rows.length,
     last_closed_price: round(lastClose, 8), last_closed_volume: round(Number(last.volume)),
@@ -265,13 +279,17 @@ export function assessQuietBasePreExpansion({
     recent_volume_mean: round(recentVolume)
   };
   const coreBase = compressionConfirmed && structureConfirmed && nearResistance;
+  const persistentParticipationConfirmed = volumeImproving && persistentTradeTrend;
   if (extended) {
     result.classification = 'ALREADY_EXTENDED';
     result.reason = 'ANTI_CHASE_MOVE_ALREADY_EXTENDED';
-  } else if (coreBase && participationConfirmed) {
+  } else if (coreBase && (participationConfirmed || persistentParticipationConfirmed)) {
     result.classification = 'PRE_EXPANSION';
-    result.reason = 'QUIET_COMPRESSED_BASE_WITH_GRADUAL_VOLUME_AND_TRADE_BUILD';
+    result.reason = participationConfirmed
+      ? 'QUIET_COMPRESSED_BASE_WITH_GRADUAL_VOLUME_AND_TRADE_BUILD'
+      : 'QUIET_BASE_WITH_PERSISTENT_TRADE_BUILD';
     result.detected = true;
+    result.metrics.temporal_promotion = !participationConfirmed && persistentParticipationConfirmed;
   } else if (coreBase && someParticipation) {
     result.classification = 'WATCH_EARLY';
     result.reason = 'QUIET_BASE_CONFIRMED_BUT_PARTICIPATION_IS_PARTIAL';
@@ -282,6 +300,59 @@ export function assessQuietBasePreExpansion({
       !nearResistance ? 'RESISTANCE_NOT_NEAR' : 'GRADUAL_PARTICIPATION_NOT_CONFIRMED';
   }
   return result;
+}
+
+
+/**
+ * Light-screen rank only: this never grants alert/entry eligibility. It ranks
+ * an already-computed closed-candle fingerprint for Radar 8 micro/deep selection.
+ */
+export function scoreQuietBasePreExpansionLight(result = {}) {
+  const evidence = Array.isArray(result?.evidence) ? result.evidence : [];
+  const item = key => evidence.find(row => row.key === key) || null;
+  const passed = key => item(key)?.passed === true;
+  const classification = String(result?.classification || 'DATA_INSUFFICIENT');
+  const coreKeys = [
+    'narrow_price_base_range_pct', 'atr_contraction_ratio', 'bollinger_width_ratio',
+    'higher_lows_or_stable_support', 'resistance_proximity_pct'
+  ];
+  const weights = {
+    narrow_price_base_range_pct: 15,
+    atr_contraction_ratio: 20,
+    bollinger_width_ratio: 20,
+    higher_lows_or_stable_support: 12,
+    resistance_proximity_pct: 12,
+    gradual_volume_vs_same_coin: 10,
+    gradual_trades_vs_same_coin: 11
+  };
+  const coreBasePassed = coreKeys.every(passed);
+  const volumeImproving = passed('gradual_volume_vs_same_coin');
+  const tradesImproving = passed('gradual_trades_vs_same_coin');
+  const persistentTradeTrend = passed('persistent_trade_trend');
+  const extended = classification === 'ALREADY_EXTENDED';
+  const dataInsufficient = classification === 'DATA_INSUFFICIENT';
+  let score = Object.entries(weights).reduce((sum, [key, weight]) => sum + (passed(key) ? weight : 0), 0);
+  if (classification === 'PRE_EXPANSION') score = Math.max(score, 96);
+  else if (classification === 'WATCH_EARLY') score = Math.max(score, 86);
+  else if (coreBasePassed && (volumeImproving || tradesImproving || persistentTradeTrend)) score = Math.max(score, 78);
+  const priority = !extended && !dataInsufficient && coreBasePassed &&
+    (volumeImproving || tradesImproving || persistentTradeTrend);
+  if (extended || dataInsufficient) score = 0;
+  const firstRejected = evidence.find(row => row.passed === false) || null;
+  return {
+    classification,
+    light_score: round(score, 2),
+    priority,
+    core_base_passed: coreBasePassed,
+    volume_improving: volumeImproving,
+    trades_improving: tradesImproving,
+    persistent_trade_trend: persistentTradeTrend,
+    temporal_promotion: result?.metrics?.temporal_promotion === true,
+    first_blocking_key: firstRejected?.key || null,
+    first_blocking_reason: firstRejected?.reason || result?.reason || 'NO_BLOCKER_RECORDED',
+    candle_close_time_ms: Number.isFinite(Number(result?.candle_close_time_ms)) ? Number(result.candle_close_time_ms) : null,
+    evaluated_at_is_closed_candle_only: result?.closed_candles_only === true
+  };
 }
 
 
@@ -315,6 +386,7 @@ export function summarizeQuietBasePreExpansion(results = []) {
     any_participation_not_improving_total: rows.filter(row =>
       evidence(row, 'gradual_volume_vs_same_coin')?.passed !== true ||
       evidence(row, 'gradual_trades_vs_same_coin')?.passed !== true).length,
+    temporal_promotion_total: rows.filter(row => row.fingerprint.metrics?.temporal_promotion === true).length,
     average_scan_latency_ms: latencyValues.length ? Math.round(mean(latencyValues)) : null,
     max_scan_latency_ms: latencyValues.length ? Math.max(...latencyValues) : null,
     flow_possible_absorption_total: rows.filter(row => row.fingerprint.flow_state === 'POSSIBLE_ABSORPTION').length,

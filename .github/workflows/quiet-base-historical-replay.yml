@@ -3,7 +3,7 @@ name: Quiet Base Historical Replay (diagnostic only)
 on:
   push:
     branches:
-      - diagnostic/quiet-base-historical-replay-20261010
+      - feature/build224-radar8-micro-quiet-priority-20261010
   workflow_dispatch:
 
 permissions:
@@ -17,7 +17,7 @@ jobs:
       - name: Checkout diagnostic branch
         uses: actions/checkout@v4
         with:
-          ref: diagnostic/quiet-base-historical-replay-20261010
+          ref: feature/build224-radar8-micro-quiet-priority-20261010
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -31,7 +31,7 @@ jobs:
         continue-on-error: true
         env:
           REPLAY_START_UTC: '2026-09-15T00:00:00.000Z'
-          REPLAY_COMPARISON_SYMBOLS: '16'
+          REPLAY_COMPARISON_SYMBOLS: '48'
           REPLAY_OUT_DIR: artifacts/quiet-base-replay
         run: node scripts/research/quiet-base-historical-replay.mjs
       - name: Upload raw data, candidate trace and diagnostic report
