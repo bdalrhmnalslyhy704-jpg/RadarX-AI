@@ -239,6 +239,8 @@ test('Radar 8 micro rotation gives priority to symbols that have never reached D
   const target=input.at(-1).symbol;
   radar.lastDeepScanCycleBySymbol.delete(target);
   radar.lastDeepAtBySymbol.delete(target);
+  // Historical STARTED means an attempt happened, not that Deep completed.
+  radar.scheduler.lastStartedAt.set(`DEEP:${target}`,now-60_000);
   radar.firstEligibleAtBySymbol.set(target,now-3_600_000);
   fast.set(target,{price_change_pct:0.001,price_acceleration_pct:0,volume_accel_ratio:1,trade_accel_ratio:1});
   const selected=radar.selectMicro(input,fast,30);
@@ -265,7 +267,8 @@ test('Radar 8 deep rotation prioritizes never-scanned eligible symbols over rece
   const target='DEEPNONEUSDT';
   radar.lastDeepScanCycleBySymbol.delete(target);
   radar.lastDeepAtBySymbol.delete(target);
-  radar.scheduler.lastStartedAt.delete(`DEEP:${target}`);
+  // A persisted start from a previous failed attempt must not erase the completion gap.
+  radar.scheduler.lastStartedAt.set(`DEEP:${target}`,now-60_000);
   radar.firstEligibleAtBySymbol.set(target,now-3_600_000);
   const selected=radar.selectDeepFromMicro(items,30);
   assert.ok(selected.some(x=>x.row.symbol===target&&x._selection_lane==='rotation'),

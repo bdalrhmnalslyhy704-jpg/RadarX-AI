@@ -1177,14 +1177,14 @@ export class EarlyExpansionRadar{
       const queueAge=queuedAt===null?Math.max(0,selectionAt-Number(this.firstEligibleAtBySymbol.get(key)||selectionAt)):Math.max(0,selectionAt-queuedAt);
       const deepCycle=this.lastDeepScanCycleBySymbol.get(key);
       const deepAt=Number(this.lastDeepAtBySymbol.get(key)||0);
-      const deepStartedAt=this.scheduler.lastScanAt('DEEP',key);
-      const hasDeepScan=deepCycle!==undefined||deepStartedAt!==null||deepAt>0;
+      // Scheduler STARTED events track attempts, not successful Deep evidence.
+      // Only the durable completed-cycle map/timestamp can close a never-Deep gap.
+      const hasDeepScan=deepCycle!==undefined||deepAt>0;
       const neverDeepScanned=!hasDeepScan;
       const firstEligibleAt=Number(this.firstEligibleAtBySymbol.get(key)||selectionAt);
       const deepWaitAgeMs=neverDeepScanned?Math.max(0,selectionAt-firstEligibleAt):
         (deepAt>0?Math.max(0,selectionAt-deepAt):
-          deepStartedAt!==null?Math.max(0,selectionAt-deepStartedAt):
-            Math.max(0,currentCycle-Number(deepCycle||currentCycle))*Math.max(1,Number(this.config.pollMs)||45000));
+          Math.max(0,currentCycle-Number(deepCycle||currentCycle))*Math.max(1,Number(this.config.pollMs)||45000));
       const rotation=((symbolHash(row.symbol)+Math.imul(currentCycle,2654435761))>>>0)/4294967296;
       const rotationAge=lastCycle===undefined?Number.MAX_SAFE_INTEGER:Math.max(0,currentCycle-lastCycle);
       return {...row,fast,
@@ -1245,13 +1245,14 @@ export class EarlyExpansionRadar{
       const symbol=selectionSymbol(item),lastCycle=this.lastDeepScanCycleBySymbol.get(symbol);
       const lastAt=this.scheduler.lastScanAt('DEEP',symbol),queuedAt=this.scheduler.queueStartedAt('DEEP',symbol);
       const deepAt=Number(this.lastDeepAtBySymbol.get(symbol)||0);
-      const hasDeepScan=lastCycle!==undefined||lastAt!==null||deepAt>0;
+      // A persisted STARTED event can be from a failed/partial attempt. Do not let
+      // it satisfy the never-successfully-deep-scanned fairness requirement.
+      const hasDeepScan=lastCycle!==undefined||deepAt>0;
       const neverScanned=!hasDeepScan;
       const firstEligibleAt=Number(this.firstEligibleAtBySymbol.get(symbol)||selectionAt);
       const deepWaitAgeMs=neverScanned?Math.max(0,selectionAt-firstEligibleAt):
         (deepAt>0?Math.max(0,selectionAt-deepAt):
-          lastAt!==null?Math.max(0,selectionAt-lastAt):
-            Math.max(0,currentCycle-Number(lastCycle||currentCycle))*Math.max(1,Number(this.config.pollMs)||45000));
+          Math.max(0,currentCycle-Number(lastCycle||currentCycle))*Math.max(1,Number(this.config.pollMs)||45000));
       return {...item,_lastActuallyScannedAt:lastAt,_neverScanned:neverScanned,_deepWaitAgeMs:deepWaitAgeMs,
         _rotationAgeMs:lastAt!==null?Math.max(0,selectionAt-lastAt):(deepAt>0?Math.max(0,selectionAt-deepAt):deepWaitAgeMs),
         _queueAgeMs:queuedAt===null?Math.max(0,selectionAt-firstEligibleAt):Math.max(0,selectionAt-queuedAt),
