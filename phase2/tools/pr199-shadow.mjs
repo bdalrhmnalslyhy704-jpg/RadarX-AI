@@ -202,6 +202,8 @@ async function createRuntime(name, dir) {
     state.cache = cache;
   }
   const radar = new radarMod.EarlyExpansionRadar(pass);
+  // Enable tick() without start(), so no overlapping scheduler timer is created.
+  radar.running = true;
   state.radar = radar;
   if (radar.marketWideLightScan?.scan) {
     const scan = radar.marketWideLightScan.scan.bind(radar.marketWideLightScan);
