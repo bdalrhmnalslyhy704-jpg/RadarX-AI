@@ -1,6 +1,6 @@
 import {createReadStream} from 'node:fs';
 import {createInterface} from 'node:readline';
-import {mkdir,readFile,writeFile,rename,appendFile,stat,unlink} from 'node:fs/promises';
+import {mkdir,readFile,writeFile,rename,appendFile,stat,unlink,readdir} from 'node:fs/promises';
 import {basename,join,resolve} from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
 import {gzipSync,gunzipSync} from 'node:zlib';
@@ -11,6 +11,8 @@ const MiB=1024*1024;
 const JSONL_ARCHIVE_POLICIES=Object.freeze({
   schedulerEvents:{compactAtBytes:12*MiB,retainRowsPerKey:5000,keyField:'radar',maxRetainedBytesPerKey:5*MiB}
 });
+const ORPHAN_TEMP_SUFFIX=/\.(?:tmp|repair|outcome|compact)-\d+-\d+$/;
+
 
 
 export class DurableStore {
@@ -22,6 +24,9 @@ export class DurableStore {
   async init({legacyDir=null}={}){
     await mkdir(this.dir,{recursive:true});
     await mkdir(this.scanJourneyDir,{recursive:true});
+    // init runs before any writers start; matching files can only be abandoned
+    // atomic-write temporaries from a previous process.
+    this.tempCleanup=await this.cleanupOrphanedTemporaryFiles();
     // Migrate any surviving ephemeral files only when the durable target lacks that file.
     // The copy is idempotent and never overwrites an existing archived file.
     if(legacyDir&&resolve(legacyDir)!==resolve(this.dir)){
@@ -46,7 +51,35 @@ export class DurableStore {
   }
   async lock(fn){const p=this.queue.then(fn);this.queue=p.catch(()=>{});return p;}
   async readJson(p){try{return JSON.parse(await readFile(p,'utf8'));}catch{return{};}}
-  async writeJson(p,v){const t=p+'.tmp-'+process.pid+'-'+Date.now();await writeFile(t,JSON.stringify(v,null,2)+'\n');await rename(t,p);this.lastWriteAt=Date.now();}
+  async writeJson(p,v){
+    const t=p+'.tmp-'+process.pid+'-'+Date.now();
+    try{
+      await writeFile(t,JSON.stringify(v,null,2)+'\\n');
+      await rename(t,p);
+      this.lastWriteAt=Date.now();
+    }catch(error){
+      await unlink(t).catch(()=>{});
+      throw error;
+    }
+  }
+  async cleanupOrphanedTemporaryFiles(){
+    let deletedFiles=0,freedBytes=0,failedFiles=0;
+    for(const root of [this.dir,this.scanJourneyDir]){
+      let entries=[];
+      try{entries=await readdir(root,{withFileTypes:true});}
+      catch(error){if(error?.code==='ENOENT')continue;failedFiles++;continue;}
+      for(const entry of entries){
+        if(!entry.isFile()||!ORPHAN_TEMP_SUFFIX.test(entry.name))continue;
+        const path=join(root,entry.name);
+        try{
+          const info=await stat(path);
+          await unlink(path);
+          deletedFiles++;freedBytes+=Math.max(0,Number(info.size)||0);
+        }catch(error){if(error?.code!=='ENOENT')failedFiles++;}
+      }
+    }
+    return {deleted_files:deletedFiles,freed_bytes:freedBytes,failed_files:failedFiles};
+  }
 
   async compactJsonlArchive(kind,{force=false}={}){
     return this.lock(()=>this._compactJsonlArchive(kind,{force}));
@@ -282,7 +315,8 @@ export class DurableStore {
         // Keep its sequence and counters unchanged: repair is not a second event.
         const repaired=gzipSync(Buffer.from(JSON.stringify({...cycle,cycle_sequence:prior.cycle_sequence}),'utf8'),{level:6});
         const temp=existingPath+'.repair-'+process.pid+'-'+Date.now();
-        await writeFile(temp,repaired);await rename(temp,existingPath);
+        try{await writeFile(temp,repaired);await rename(temp,existingPath);}
+        catch(error){await unlink(temp).catch(()=>{});throw error;}
         state.compressed_bytes=Math.max(0,state.compressed_bytes-Number(prior.compressed_bytes||0)+repaired.length);
         prior.compressed_bytes=repaired.length;
         prior.sha256=createHash('sha256').update(repaired).digest('hex');
@@ -296,8 +330,8 @@ export class DurableStore {
       const zipped=gzipSync(Buffer.from(JSON.stringify(stored),'utf8'),{level:6});
       const finalPath=join(this.scanJourneyDir,filename);
       const tempPath=finalPath+'.tmp-'+process.pid+'-'+Date.now();
-      await writeFile(tempPath,zipped);
-      await rename(tempPath,finalPath);
+      try{await writeFile(tempPath,zipped);await rename(tempPath,finalPath);}
+      catch(error){await unlink(tempPath).catch(()=>{});throw error;}
       const coins=Array.isArray(cycle.coins)?cycle.coins:[];
       const eligible=coins.filter(x=>x&&x.eligible===true);
       const metadata={
@@ -420,7 +454,8 @@ export class DurableStore {
           cycle.outcomes_updated_at=Number(now);
           const compressed=gzipSync(Buffer.from(JSON.stringify(cycle),'utf8'),{level:6});
           const temp=filePath+'.outcome-'+process.pid+'-'+Date.now();
-          await writeFile(temp,compressed);await rename(temp,filePath);
+          try{await writeFile(temp,compressed);await rename(temp,filePath);}
+          catch(error){await unlink(temp).catch(()=>{});throw error;}
           state.compressed_bytes=Math.max(0,state.compressed_bytes-Number(metadata.compressed_bytes||0)+compressed.length);
           metadata.compressed_bytes=compressed.length;
           metadata.sha256=createHash('sha256').update(compressed).digest('hex');
