@@ -2,7 +2,7 @@ import {mkdir,readFile,writeFile,rename,appendFile} from 'node:fs/promises';
 import {basename,join,resolve} from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
 import {gzipSync,gunzipSync} from 'node:zlib';
-import {SCAN_JOURNEY_SCHEMA,scanJourneyFilename,validateScanJourneyCycle} from './scan-journey-ledger.mjs';
+import {SCAN_JOURNEY_SCHEMA,scanJourneyFilename,validateScanJourneyCycle,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,SCAN_JOURNEY_HORIZONS} from './scan-journey-ledger.mjs';
 
 export class DurableStore {
   constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
@@ -187,6 +187,8 @@ export class DurableStore {
         micro_count:coins.filter(x=>x?.micro_scan_completed_at!==undefined&&x.micro_scan_completed_at!=='.INCOMPLETE'&&x.micro_scan_completed_at!==null).length,
         deep_count:coins.filter(x=>x?.deep_scan_status==='COMPLETED').length,
         deep_failed_count:coins.filter(x=>x?.deep_scan_status==='FAILED').length,
+        outcome_signal_ids:coins.map(x=>x?.outcome_signal_id).filter(x=>typeof x==='string'&&x&&x!=='.INCOMPLETE'),
+        outcomes_checked_at:0,
         compressed_bytes:zipped.length,sha256:createHash('sha256').update(zipped).digest('hex'),stored_at:Date.now()
       };
       state.cycles.push(metadata);
@@ -236,6 +238,93 @@ export class DurableStore {
       await this.writeJson(this.files.scanJourneyManifest,state);
       for(const oldFile of prunedFiles)await import('node:fs/promises').then(fs=>fs.unlink(join(this.scanJourneyDir,oldFile)).catch(()=>{}));
       return {duplicate:false,cycle_id:cycleId,cycle_sequence:sequence,retained_cycles:state.cycles.length,retained_coin_rows:state.retained_coin_rows,compressed_bytes:state.compressed_bytes,pruned_cycle_count:state.pruned_cycle_count,cycle_coin_rows:coins.length};
+    });
+  }
+  async refreshScanJourneyOutcomes(records,{limit=24,now=Date.now(),checkIntervalMs=60_000}={}){
+    const byId=new Map((Array.isArray(records)?records:[])
+      .filter(x=>x&&typeof x.signal_id==='string'&&x.signal_id)
+      .map(x=>[x.signal_id,x]));
+    const take=Math.max(1,Math.min(100,Math.trunc(Number(limit)||24)));
+    const interval=Math.max(5_000,Number(checkIntervalMs)||60_000);
+    return this.lock(async()=>{
+      const state=this.scanJourneyState(await this.readJson(this.files.scanJourneyManifest));
+      const candidates=state.cycles
+        .filter(x=>!Array.isArray(x.outcome_signal_ids)||x.outcome_signal_ids.length>0)
+        .filter(x=>Math.max(0,Number(now)-Number(x.outcomes_checked_at||0))>=interval)
+        .sort((a,b)=>Number(a.outcomes_checked_at||0)-Number(b.outcomes_checked_at||0)||Number(a.cycle_sequence||0)-Number(b.cycle_sequence||0))
+        .slice(0,take);
+      let checkedCycles=0,updatedCycles=0,updatedCoinRows=0,missingFiles=0,corruptFiles=0;
+      for(const metadata of candidates){
+        const filePath=join(this.scanJourneyDir,metadata.filename);
+        let cycle,bytes;
+        try{
+          bytes=await readFile(filePath);
+          if(!metadata.sha256||createHash('sha256').update(bytes).digest('hex')!==metadata.sha256){
+            corruptFiles++;continue;
+          }
+          cycle=JSON.parse(gunzipSync(bytes).toString('utf8'));
+          if(cycle.cycle_id!==metadata.cycle_id||!Array.isArray(cycle.coins)){
+            corruptFiles++;continue;
+          }
+        }catch(error){
+          if(error?.code==='ENOENT')missingFiles++;else corruptFiles++;
+          continue;
+        }
+        const ids=[...new Set(cycle.coins.map(x=>x?.outcome_signal_id)
+          .filter(x=>typeof x==='string'&&x&&x!=='.INCOMPLETE'))];
+        let cycleChanged=false,coinUpdates=0;
+        for(const coin of cycle.coins){
+          const id=coin?.outcome_signal_id;
+          if(typeof id!=='string'||!id||id==='.INCOMPLETE')continue;
+          const outcome=byId.get(id);
+          if(!outcome)continue;
+          const mapped=scanJourneyOutcomesFromRecord(outcome);
+          if(JSON.stringify(coin.outcomes)!==JSON.stringify(mapped)){
+            coin.outcomes=mapped;coinUpdates++;cycleChanged=true;
+          }
+        }
+        const outcomeSummary=summarizeScanJourneyOutcomes(cycle.coins);
+        const nextCounters={
+          ...(cycle.counters||{}),
+          outcomes_tracked_total:outcomeSummary.tracked_total,
+          outcomes_untracked_total:outcomeSummary.untracked_total,
+          outcomes_by_horizon:outcomeSummary.by_horizon
+        };
+        if(JSON.stringify(cycle.counters?.outcomes_by_horizon)!==JSON.stringify(nextCounters.outcomes_by_horizon)||
+           cycle.counters?.outcomes_tracked_total!==nextCounters.outcomes_tracked_total||
+           cycle.counters?.outcomes_untracked_total!==nextCounters.outcomes_untracked_total){
+          cycle.counters=nextCounters;cycleChanged=true;
+        }
+        if(cycleChanged){
+          cycle.outcomes_updated_at=Number(now);
+          const compressed=gzipSync(Buffer.from(JSON.stringify(cycle),'utf8'),{level:6});
+          const temp=filePath+'.outcome-'+process.pid+'-'+Date.now();
+          await writeFile(temp,compressed);await rename(temp,filePath);
+          state.compressed_bytes=Math.max(0,state.compressed_bytes-Number(metadata.compressed_bytes||0)+compressed.length);
+          metadata.compressed_bytes=compressed.length;
+          metadata.sha256=createHash('sha256').update(compressed).digest('hex');
+          metadata.stored_at=Number(now);
+          updatedCycles++;updatedCoinRows+=coinUpdates;
+        }
+        metadata.outcome_signal_ids=ids.filter(id=>{
+          const outcome=byId.get(id);
+          if(!outcome)return true;
+          return !SCAN_JOURNEY_HORIZONS.every(h=>{
+            const mapped=scanJourneyOutcomesFromRecord(outcome)[h];
+            return mapped.status==='COMPLETE';
+          });
+        });
+        metadata.outcomes_checked_at=Number(now);
+        metadata.outcome_tracked_total=outcomeSummary.tracked_total;
+        metadata.outcome_complete_total=Object.values(outcomeSummary.by_horizon['24h']||{}).length
+          ? outcomeSummary.by_horizon['24h'].complete:0;
+        checkedCycles++;
+        state.updated_at=Number(now);
+        await this.writeJson(this.files.scanJourneyManifest,state);
+      }
+      return {checked_cycles:checkedCycles,updated_cycles:updatedCycles,updated_coin_rows:updatedCoinRows,
+        missing_files:missingFiles,corrupt_files:corruptFiles,pending_cycles:state.cycles.filter(x=>Array.isArray(x.outcome_signal_ids)&&x.outcome_signal_ids.length>0).length,
+        retained_cycles:state.cycles.length,retained_coin_rows:state.retained_coin_rows,compressed_bytes:state.compressed_bytes};
     });
   }
   async verifyScanJourneyArchive(){
