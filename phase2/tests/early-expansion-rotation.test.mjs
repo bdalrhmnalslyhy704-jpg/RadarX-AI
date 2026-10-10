@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EarlyExpansionRadar,nextEarlyExpansionPollDelayMs,buildMicroFingerprint} from '../core/early-expansion-radar.mjs';
+import {RestClient} from '../market/binance-rest.mjs';
+import {DurableStore} from '../core/store.mjs';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -369,4 +374,143 @@ test('Radar 8 Micro quiet-base assessment reuses existing 1m and 5m candle reads
   );
   assert.deepEqual(calls.map(x=>x.interval).sort(),['1m','5m']);
   assert.ok(result.micro_fingerprint.quiet_base_pre_expansion);
+});
+
+
+test('Radar 8 stores a unique rank and explicit capacity reason for every candidate',()=>{
+  const radar=makeRadar({microScanCandidates:12,quietReserve:3,rotationReserve:2,deepCandidates:3});
+  const input=rows(18);
+  const selected=radar.selectMicro([...input,input[0]],fastMap(input),31);
+  assert.equal(selected.length,12);
+  assert.equal(radar.lastMicroDuplicateInputCount,1);
+  assert.equal(radar.lastMicroSelectionAudit.length,18);
+  assert.equal(new Set(radar.lastMicroSelectionAudit.map(x=>x.symbol)).size,18);
+  assert.deepEqual(radar.lastMicroSelectionAudit.map(x=>x.rank_by_micro_score).sort((a,b)=>a-b),Array.from({length:18},(_,i)=>i+1));
+  assert.equal(radar.lastMicroSelectionAudit.filter(x=>x.selected).length,12);
+  assert.equal(radar.lastMicroSelectionAudit.filter(x=>x.decision_reason==='MICRO_BATCH_CAPACITY').length,6);
+  assert.deepEqual(new Set(selected.map(x=>x.symbol)),new Set(radar.lastMicroSelectionAudit.filter(x=>x.selected).map(x=>x.symbol)));
+});
+
+test('Radar 8 archives an explicit Deep score rank, final rank and deferral reason for every Micro result',()=>{
+  const radar=makeRadar({deepCandidates:3,quietReserve:1,rotationReserve:1,exceptionalRotationBypassSlots:0});
+  const input=Array.from({length:6},(_,i)=>candidate('AUDIT'+i+'USDT',1+i*.2,{score:90-i*3}));
+  input[0].micro_fingerprint.quiet_base_pre_expansion={fingerprint:'QUIET_BASE_PRE_EXPANSION',classification:'PRE_EXPANSION',detected:true,closed_candles_only:true};
+  input[1].micro_fingerprint.quiet_base_pre_expansion={fingerprint:'QUIET_BASE_PRE_EXPANSION',classification:'WATCH_EARLY',detected:false,closed_candles_only:true};
+  const selected=radar.selectDeepFromMicro([...input,input[0]],32);
+  assert.equal(selected.length,3);
+  assert.equal(radar.lastDeepDuplicateInputCount,1);
+  assert.equal(radar.lastDeepSelectionAudit.length,6);
+  assert.equal(radar.lastDeepSelectionAudit.filter(x=>x.selected).length,3);
+  assert.deepEqual(radar.lastDeepSelectionAudit.map(x=>x.rank_by_micro_score).sort((a,b)=>a-b),[1,2,3,4,5,6]);
+  assert.equal(radar.lastDeepSelectionAudit.filter(x=>x.decision_reason==='DEEP_BATCH_CAPACITY').length,3);
+  assert.equal(radar.lastDeepSelectionAudit.find(x=>x.symbol==='AUDIT0USDT').quiet_base_classification,'PRE_EXPANSION');
+  assert.equal(new Set(selected.map(x=>x.row.symbol)).size,3);
+});
+
+test('RestClient telemetry separates real HTTP attempts from cached logical calls',async()=>{
+  const collector={cycle_id:'TEST_REST_TELEMETRY',logical_calls:0,cache_hits:0,coalesced_calls:0,actual_http_attempts:0,by_stage:{},calls:[]};
+  let fetchCount=0;
+  const rest=new RestClient({
+    baseUrls:['https://radarx-rest-telemetry.invalid'],minIntervalMs:0,timeoutMs:1500,
+    fetchImpl:async()=>{
+      fetchCount++;
+      return new Response(JSON.stringify({symbol:'RESTTELEMETRYUSDT',lastPrice:'1'}),{
+        status:200,headers:{'content-type':'application/json','x-mbx-used-weight-1m':'2'}
+      });
+    }
+  });
+  const before=rest.telemetrySnapshot();
+  const ctx={collector,radar:'RADAR_8',cycle_id:collector.cycle_id,stage:'TEST_TICKER',symbol:'RESTTELEMETRYUSDT'};
+  const query={symbol:'RESTTELEMETRYUSDT'};
+  await rest.request('/api/v3/ticker/24hr',query,ctx);
+  await rest.request('/api/v3/ticker/24hr',query,ctx);
+  const after=rest.telemetrySnapshot();
+  assert.equal(fetchCount,1);
+  assert.equal(collector.logical_calls,2);
+  assert.equal(collector.actual_http_attempts,1);
+  assert.equal(collector.cache_hits,1);
+  assert.equal(collector.by_stage.TEST_TICKER.actual_http_attempts,1);
+  assert.equal(collector.by_stage.TEST_TICKER.cache_hits,1);
+  assert.equal(collector.calls[0].actual_http_attempts[0].http_status,200);
+  assert.ok(Number.isFinite(collector.calls[0].actual_http_attempts[0].latency_ms));
+  assert.equal(after.actual_http_attempts-before.actual_http_attempts,1);
+});
+
+const shouldRunLiveRadar8Monitor=process.env.GITHUB_ACTIONS==='true'&&
+  process.env.GITHUB_WORKFLOW==='RadarX Phase 2 Tests'&&
+  process.env.GITHUB_HEAD_REF==='experiment/build224-radar8-micro-quiet-base-20261010';
+
+test('OPERATIONAL_MONITOR: three consecutive Radar 8 cycles against live public Binance Spot data', {
+  skip:!shouldRunLiveRadar8Monitor,timeout:180_000
+},async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-radar8-live-monitor-'));
+  const store=await new DurableStore({dir}).init();
+  const rest=new RestClient({
+    baseUrls:['https://data-api.binance.vision','https://api.binance.com'],
+    timeoutMs:9000,minIntervalMs:100,maxRequestsPerMinute:240
+  });
+  const radar=new EarlyExpansionRadar({
+    rest,store,
+    config:{
+      ...EARLY_EXPANSION_RADAR_DEFAULTS,
+      minQuoteVolume24h:750_000,microScanCandidates:12,deepCandidates:3,
+      quietReserve:1,rotationReserve:1,microConcurrency:6,deepConcurrency:4,
+      universeRefreshMs:60*60*1000,retryAttempts:1,pollMs:45_000
+    },
+    clock:()=>Date.now(),
+    logger:{info(){},warn(){},error(){}}
+  });
+  radar.running=true;
+  const cycles=[];
+  try{
+    for(let i=0;i<3;i++){
+      const ok=await radar.tick();
+      assert.equal(ok,true,'cycle '+(i+1)+' must complete against live REST data');
+      const latest=(await store.readScanJourneyCycles({limit:1}))[0];
+      assert.ok(latest,'completed cycle must be archived');
+      assert.equal(latest.status,'COMPLETE');
+      assert.equal(latest.data_policy.paper_trading,true);
+      assert.equal(latest.data_policy.real_order_execution,false);
+      assert.equal(latest.counters.operational_telemetry_schema,'RADAR8_OPERATIONAL_TELEMETRY_V1');
+      assert.ok(latest.counters.rest_request_telemetry.process_rest_delta.available);
+      assert.ok(latest.counters.rest_request_telemetry.actual_http_attempts>0);
+      assert.ok(latest.counters.rest_request_telemetry.process_rest_delta.actual_http_attempts>0);
+      assert.ok(latest.counters.micro_selected_total<=12);
+      assert.ok(latest.counters.deep_selected_total<=3);
+      assert.equal(latest.counters.micro_selected_total,new Set(latest.counters.micro_selected_symbols).size);
+      assert.equal(latest.counters.deep_selected_total,new Set(latest.counters.deep_selected_symbols).size);
+      assert.equal(latest.counters.micro_selected_total,latest.coins.filter(x=>x.micro_selection_selected===true).length);
+      assert.equal(latest.counters.deep_selected_total,latest.coins.filter(x=>x.deep_selection_selected===true).length);
+      cycles.push({
+        cycle_id:latest.cycle_id,started_at:latest.started_at,completed_at:latest.completed_at,
+        eligible_total:latest.counters.eligible_total,micro_selected_total:latest.counters.micro_selected_total,
+        micro_success_total:latest.counters.micro_success_total,micro_pre_expansion_total:latest.counters.micro_pre_expansion_total,
+        micro_watch_early_total:latest.counters.micro_watch_early_total,micro_quiet_selected_total:latest.counters.micro_quiet_selected_total,
+        micro_exceptional_candidate_total:latest.counters.micro_exceptional_candidate_total,
+        deep_selected_symbols:latest.counters.deep_selected_symbols,
+        deep_pre_expansion_selected_total:latest.counters.deep_pre_expansion_selected_total,
+        deep_watch_early_selected_total:latest.counters.deep_watch_early_selected_total,
+        deep_deferred_total:latest.counters.deep_deferred_total,
+        micro_deferred_total:latest.counters.micro_deferred_total,
+        micro_duplicate_input_symbol_rows:latest.counters.micro_duplicate_input_symbol_rows,
+        deep_duplicate_input_symbol_rows:latest.counters.deep_duplicate_input_symbol_rows,
+        micro_failed_total:latest.counters.micro_failed_total,
+        deep_failed_total:latest.counters.deep_failed_total,
+        radar8_tagged_http_attempts:latest.counters.rest_request_telemetry.actual_http_attempts,
+        process_http_attempts:latest.counters.rest_request_telemetry.process_rest_delta.actual_http_attempts,
+        stage_http_attempts:Object.fromEntries(Object.entries(latest.counters.rest_request_telemetry.by_stage).map(([k,v])=>[k,v.actual_http_attempts])),
+        phase_timings_ms:latest.phase_timings_ms
+      });
+    }
+    assert.equal(cycles.length,3);
+    const verified=await store.verifyScanJourneyArchive();
+    assert.equal(verified.complete,true,JSON.stringify(verified));
+    console.log('[RADAR8_LIVE_MONITOR_SUMMARY] '+JSON.stringify({
+      mode:'CI_LIVE_PUBLIC_SPOT_REST_NOT_PRODUCTION_DEPLOYMENT',cycles,
+      archive_verified:verified.complete,paper_trading:true,real_order_execution:false
+    }));
+  }finally{
+    await radar.stop();
+    await rm(dir,{recursive:true,force:true});
+  }
 });
