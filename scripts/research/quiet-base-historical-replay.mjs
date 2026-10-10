@@ -226,13 +226,13 @@ async function saveGzip(filename, content) {
 
 async function main() {
   await mkdir(OUT, { recursive: true });
-  const manifest = {
   const timestampNormalizationCases = [
     { unit: 'milliseconds', raw: 1791500400000, expected_ms: 1791500400000 },
     { unit: 'microseconds', raw: 1791500400000000, expected_ms: 1791500400000 },
     { unit: 'seconds', raw: 1791500400, expected_ms: 1791500400000 }
   ].map(item => ({ ...item, actual_ms: toMs(item.raw), pass: toMs(item.raw) === item.expected_ms }));
   if (timestampNormalizationCases.some(item => !item.pass)) throw new Error('TIMESTAMP_UNIT_NORMALIZATION_SELF_TEST_FAILED');
+  const manifest = {
     status: 'STARTING',
     generated_at: new Date().toISOString(),
     source_policy: 'Binance public Spot REST raw /api/v3/klines interval=5m; no daily candles as detector input',
