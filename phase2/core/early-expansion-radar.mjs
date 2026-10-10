@@ -784,8 +784,9 @@ function quietDeepRank(item,cfg){
   const row=item?.row,move=absolute24hMove(row),fp=item?.micro_fingerprint;
   if(move===null||move>Number(cfg.maxQuiet24hMovePct??8)||!fp||!hasFiniteNumber(fp.score))return null;
   const quietClass=fp.quiet_base_pre_expansion?.classification;
-  if(quietClass==='PRE_EXPANSION')return 10000+Math.max(0,8-move);
-  if(quietClass==='WATCH_EARLY')return 5000+Math.max(0,8-move);
+  // A detector-confirmed PRE_EXPANSION may use the single reserved quiet slot.
+  // Keep it ahead of ordinary quiet ranks without turning it into buy eligibility.
+  if(quietClass==='PRE_EXPANSION')return 1000+Math.max(0,8-move);
   const m=fp.metrics||{},c=fp.category_scores||{};
   const rv1=hasFiniteNumber(m.rvol_1m)?Number(m.rvol_1m):null;
   const rv5=hasFiniteNumber(m.rvol_5m)?Number(m.rvol_5m):null;
@@ -808,11 +809,16 @@ function quietDeepRank(item,cfg){
   const resistanceNear=resistance!==null&&resistance>=-5&&resistance<=1.5;
   if(participation<Number(cfg.quietDeepMinParticipationScore??58)||
     !(compression>=65||structure>=62||resistanceNear))return null;
-  return (100-move*6)*.35+participation*.25+structure*.20+compression*.20;
+  const independentRank=(100-move*6)*.35+participation*.25+structure*.20+compression*.20;
+  // WATCH_EARLY receives no artificial tier. It must also score strongly on
+  // independent micro evidence, then remains behind normal quiet candidates.
+  if(quietClass==='WATCH_EARLY'&&independentRank<78)return null;
+  return independentRank;
 }
 function quietDeepTier(item){
   const classification=item?.micro_fingerprint?.quiet_base_pre_expansion?.classification;
-  return classification==='PRE_EXPANSION'?0:classification==='WATCH_EARLY'?1:2;
+  // PRE is preferred; independent quiet evidence beats a WATCH-only classification.
+  return classification==='PRE_EXPANSION'?0:classification==='WATCH_EARLY'?2:1;
 }
 function isExceptionalDeepCandidate(item,cfg){
   const move=absolute24hMove(item?.row),fp=item?.micro_fingerprint,m=fp?.metrics||{},c=fp?.category_scores||{};
