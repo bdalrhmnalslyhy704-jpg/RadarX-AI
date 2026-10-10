@@ -144,3 +144,16 @@ test('Radar 9 keeps a ticker with missing daily change and preserves null in the
   assert.equal(rows[0].market_pulse.priceChange24h,null);
   assert.equal(radar.selectBatch(rows).some(x=>x.symbol==='MISSINGUSDT'),true);
 });
+
+
+test('zero middle participation bucket is unavailable and never calls toFixed on a null step ratio',()=>{
+  const result=measureGradualParticipation([10,10,0,0,20,20]);
+  assert.equal(result.available,false);
+  assert.equal(result.baseline,10);
+  assert.equal(result.middle,0);
+  assert.equal(result.recent,20);
+  assert.equal(result.ratio,null);
+  assert.equal(result.step_ratio,null);
+  assert.equal(result.score,null);
+  assert.equal(result.improving,false);
+});
