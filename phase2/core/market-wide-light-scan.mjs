@@ -18,9 +18,9 @@ const symbolOf = row => String(row?.symbol || '').trim().toUpperCase();
 // early-expansion scanner. They are still audited for full-market coverage;
 // they cannot consume the candidate/rotation slots.
 const NON_DIRECTIONAL_BASE_ASSETS = new Set([
-  'AEUR','BUSD','DAI','EURI','EUR','EURCV','FDUSD','PAXG','PYUSD','RLUSD',
+  'AEUR','BFUSD','BUSD','DAI','EURI','EUR','EURCV','EURS','FDUSD','PAXG','PYUSD','RLUSD',
   'TUSD','USDC','USDD','USD0','USD1','USDE','USDP','USDS','USDX','USYC',
-  'USDT','XAUT','XUSD'
+  'USDF','USDT','USDY','XAUT','XUSD'
 ]);
 
 export function isDirectionalCandidateSymbol(value) {
