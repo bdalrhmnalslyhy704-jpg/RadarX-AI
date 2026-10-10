@@ -50,6 +50,10 @@ test('scan journey validation rejects future and unclosed candle rows',()=>{
   open.coins[0].candles_used['1m'][0].closed=false;
   assert.equal(validateScanJourneyCycle(open).valid,false);
   assert.ok(validateScanJourneyCycle(open).errors.some(x=>x.startsWith('UNCLOSED_CANDLE:')));
+  const futureStage=structuredClone(good);
+  futureStage.coins[0].eligibility_at=futureStage.completed_at+1;
+  assert.equal(validateScanJourneyCycle(futureStage).valid,false);
+  assert.ok(validateScanJourneyCycle(futureStage).errors.some(x=>x.startsWith('FUTURE_TIMESTAMP:')));
 });
 
 test('INCOMPLETE horizon values are explicit and never invented',()=>{
