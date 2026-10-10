@@ -163,7 +163,8 @@ export class DurableStore {
         coin_count:coins.length,eligible_count:eligible.length,
         fast_count:coins.filter(x=>x?.fast_scan_at!==undefined&&x.fast_scan_at!=='.INCOMPLETE'&&x.fast_scan_at!==null).length,
         micro_count:coins.filter(x=>x?.micro_scan_completed_at!==undefined&&x.micro_scan_completed_at!=='.INCOMPLETE'&&x.micro_scan_completed_at!==null).length,
-        deep_count:coins.filter(x=>x?.deep_scan_completed_at!==undefined&&x.deep_scan_completed_at!=='.INCOMPLETE'&&x.deep_scan_completed_at!==null).length,
+        deep_count:coins.filter(x=>x?.deep_scan_status==='COMPLETED').length,
+        deep_failed_count:coins.filter(x=>x?.deep_scan_status==='FAILED').length,
         compressed_bytes:zipped.length,stored_at:Date.now()
       };
       state.cycles.push(metadata);
@@ -178,12 +179,12 @@ export class DurableStore {
       for(const coin of eligible){
         const symbol=String(coin.symbol||'').toUpperCase();
         if(!symbol)continue;
-        const first=Number(coin.eligibility_at);
+        const first=Number(coin.first_eligible_at??coin.eligibility_at);
         if(!Object.hasOwn(state.eligible_since_by_symbol,symbol))
           state.eligible_since_by_symbol[symbol]=Number.isFinite(first)?first:Date.now();
         if(coin.micro_scan_completed_at!==undefined&&coin.micro_scan_completed_at!=='.INCOMPLETE'&&coin.micro_scan_completed_at!==null)
           state.last_micro_cycle_by_symbol[symbol]=sequence;
-        if(coin.deep_scan_completed_at!==undefined&&coin.deep_scan_completed_at!=='.INCOMPLETE'&&coin.deep_scan_completed_at!==null){
+        if(coin.deep_scan_status==='COMPLETED'&&coin.deep_scan_completed_at!==undefined&&coin.deep_scan_completed_at!=='.INCOMPLETE'&&coin.deep_scan_completed_at!==null){
           state.last_deep_cycle_by_symbol[symbol]=sequence;
           const at=Number(coin.deep_scan_completed_at);
           if(Number.isFinite(at))state.last_deep_at_by_symbol[symbol]=at;
@@ -198,15 +199,17 @@ export class DurableStore {
       }
       // The Railway volume is shared with the existing signal archive. Use a rolling
       // compressed journal ceiling so scan history cannot consume the whole 500 MB mount.
+      const prunedFiles=[];
       while(state.compressed_bytes>max&&state.cycles.length>1){
         const oldest=state.cycles.shift();
-        await import('node:fs/promises').then(fs=>fs.unlink(join(this.scanJourneyDir,oldest.filename)).catch(()=>{}));
+        prunedFiles.push(oldest.filename);
         state.compressed_bytes=Math.max(0,state.compressed_bytes-Number(oldest.compressed_bytes||0));
         state.retained_coin_rows=Math.max(0,state.retained_coin_rows-Number(oldest.coin_count||0));
         state.pruned_cycle_count+=1;
       }
       state.updated_at=Date.now();
       await this.writeJson(this.files.scanJourneyManifest,state);
+      for(const oldFile of prunedFiles)await import('node:fs/promises').then(fs=>fs.unlink(join(this.scanJourneyDir,oldFile)).catch(()=>{}));
       return {duplicate:false,cycle_id:cycleId,cycle_sequence:sequence,retained_cycles:state.cycles.length,retained_coin_rows:state.retained_coin_rows,compressed_bytes:state.compressed_bytes,pruned_cycle_count:state.pruned_cycle_count,cycle_coin_rows:coins.length};
     });
   }
