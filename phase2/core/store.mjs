@@ -9,7 +9,7 @@ const MiB=1024*1024;
 // Scheduler events are operational queue state. Hydration reads at most 5,000
 // rows per radar; full scan decisions remain in the Scan Journey ledger.
 const JSONL_ARCHIVE_POLICIES=Object.freeze({
-  schedulerEvents:{compactAtBytes:12*MiB,retainRowsPerKey:5000,keyField:'radar',maxRetainedBytesPerKey:5*MiB}
+  schedulerEvents:{compactAtBytes:12*MiB,retainRowsPerKey:5000,keyField:'radar',maxRetainedBytesPerKey:800*1024}
 });
 const ORPHAN_TEMP_SUFFIX=/\.(?:tmp|repair|outcome|compact)-\d+-\d+$/;
 
