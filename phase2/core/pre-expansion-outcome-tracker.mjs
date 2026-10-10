@@ -317,6 +317,8 @@ function makeSignal(alert,now,marketContext){
     detected_after_move:!detectedBeforeMove,
     initial_metrics:m,
     source:list(alert?.source).length?list(alert.source):[String(alert?.source||'UNKNOWN')],
+    ...(radar==='RADAR_8'&&object(alert?.quiet_base_pre_expansion).fingerprint==='QUIET_BASE_PRE_EXPANSION'
+      ?{quiet_base_pre_expansion:object(alert.quiet_base_pre_expansion)}:{}),
     false_breakout:null,false_breakout_basis:null,
     marks:{},provisional_marks:{},
     horizon_status:Object.fromEntries(HORIZONS.map(([h,ms])=>[h,{status:'PENDING',
@@ -359,7 +361,8 @@ export async function recordPreExpansionSignals(store,alerts,{now=Date.now(),mar
         evaluation_eligible:incoming.evaluation_eligible,evaluation_status:incoming.evaluation_status,
         evaluation_exclusion_reason:incoming.evaluation_exclusion_reason,
         market_regime:incoming.market_regime,detected_before_move:incoming.detected_before_move,
-        already_extended_at_detection:incoming.already_extended_at_detection,reason_codes:incoming.reason_codes
+        already_extended_at_detection:incoming.already_extended_at_detection,reason_codes:incoming.reason_codes,
+        ...(incoming.quiet_base_pre_expansion?{quiet_base_pre_expansion:incoming.quiet_base_pre_expansion}:{})
       });
       state.last_stage_by_key[key]={stage:incoming.signal_type,last_recorded_at:now,signal_id:incoming.signal_id};
       recorded++;changed=true;
