@@ -27,7 +27,7 @@ export function measureGradualParticipation(values,{maxSamples=12,minSamples=6}=
   const ratio=recent/baseline,stepRatio=middle>0?recent/middle:null,middleRatio=middle/baseline;
   const improving=ratio>=1.08&&middleRatio>=0.98&&Number.isFinite(stepRatio)&&stepRatio>=1.01;
   const score=clamp(50+Math.max(-1,ratio-1)*28+(middleRatio>=0.98?4:0)+(stepRatio>=1.01?6:0));
-  return {available:true,samples:xs.length,baseline,middle,recent,ratio:Number(ratio.toFixed(4)),step_ratio:Number(stepRatio.toFixed(4)),middle_ratio:Number(middleRatio.toFixed(4)),score:Number(score.toFixed(1)),improving};
+  return {available:true,samples:xs.length,baseline,middle,recent,ratio:Number(ratio.toFixed(4)),step_ratio:Number.isFinite(stepRatio)?Number(stepRatio.toFixed(4)):null,middle_ratio:Number(middleRatio.toFixed(4)),score:Number(score.toFixed(1)),improving};
 }
 
 /**
