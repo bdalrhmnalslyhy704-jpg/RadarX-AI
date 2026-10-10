@@ -53,8 +53,12 @@ export class DurableStore {
   async readJson(p){try{return JSON.parse(await readFile(p,'utf8'));}catch{return{};}}
   async writeJson(p,v){
     const t=p+'.tmp-'+process.pid+'-'+Date.now();
+    // The outcome ledger is a large, internal 5,000-record file. Compact JSON
+    // preserves the schema while avoiding a large whitespace-heavy serialization
+    // buffer on every live markout update. Other JSON files remain human-readable.
+    const serialized=JSON.stringify(v,null,p===this.files.preExpansionOutcomes?0:2)+'\n';
     try{
-      await writeFile(t,JSON.stringify(v,null,2)+'\n');
+      await writeFile(t,serialized);
       await rename(t,p);
       this.lastWriteAt=Date.now();
     }catch(error){
@@ -191,10 +195,16 @@ export class DurableStore {
   async updatePreExpansionOutcomes(updater){
     if(typeof updater!=='function')throw new Error('PRE_EXPANSION_OUTCOME_UPDATER_REQUIRED');
     return this.lock(async()=>{
-      const current=await this.readJson(this.files.preExpansionOutcomes);
+      let current=await this.readJson(this.files.preExpansionOutcomes);
       const result=await updater(current);
       if(result===false)return current;
       const next=result&&typeof result==='object'&&!Array.isArray(result)?result:current;
+      if(next!==current){
+        // Drop the original parsed snapshot before serializing the normalized state.
+        // Yield once so the completed updater's stack can unwind and become collectible.
+        current=null;
+        await new Promise(resolve=>setImmediate(resolve));
+      }
       await this.writeJson(this.files.preExpansionOutcomes,next);
       return next;
     });
