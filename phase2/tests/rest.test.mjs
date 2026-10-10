@@ -102,3 +102,20 @@ test('TEST_FIXTURE: short market-data cache reuses fresh identical requests',asy
   assert.equal(calls,1);
   assert.deepEqual(first.data,second.data);
 });
+
+
+test('TEST_FIXTURE: shared REST cache prunes expired rotating-symbol payloads instead of retaining them indefinitely',async()=>{
+  let calls=0;
+  const fetchImpl=async url=>{
+    calls++;
+    return{status:200,ok:true,headers:new Map(),json:async()=>({url,call:calls})};
+  };
+  const client=new RestClient({baseUrls:['https://cache-retention.test'],fetchImpl,timeoutMs:200,minIntervalMs:0,maxRequestsPerMinute:100});
+  for(let i=0;i<20;i++){
+    await client.request('/api/v3/ticker/24hr',{symbol:`ROTATE${String(i).padStart(2,'0')}USDT`});
+  }
+  const health=client.health();
+  assert.equal(calls,20,'each distinct symbol should be requested once');
+  assert.ok(health.shared_cache_entries<=12,
+    `expired symbol payloads must be pruned; current entries=${health.shared_cache_entries}`);
+});

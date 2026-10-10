@@ -223,3 +223,51 @@ test('Radar 8 deep scan de-duplicates row-wrapped candidates and fills ten slots
   assert.equal(new Set(selected.map(x=>x.row.symbol)).size,10);
   assert.equal(selected.filter(x=>x._selection_lane==='quiet').length,5);
 });
+
+
+test('Radar 8 micro rotation gives priority to symbols that have never reached Deep even when recently micro-scanned',()=>{
+  const radar=makeRadar({microScanCandidates:4,quietReserve:0,rotationReserve:3,exceptionalRotationBypassSlots:0});
+  const input=rows(12),fast=fastMap(input);
+  for(let i=0;i<input.length;i++){
+    const symbol=input[i].symbol;
+    radar.scheduler.lastStartedAt.set(`MICRO:${symbol}`,now-(input.length-i)*1000);
+    radar.lastMicroScanCycleBySymbol.set(symbol,10+i);
+    radar.lastDeepScanCycleBySymbol.set(symbol,25);
+    radar.lastDeepAtBySymbol.set(symbol,now-90_000);
+    radar.firstEligibleAtBySymbol.set(symbol,now-3_600_000+i*1000);
+  }
+  const target=input.at(-1).symbol;
+  radar.lastDeepScanCycleBySymbol.delete(target);
+  radar.lastDeepAtBySymbol.delete(target);
+  radar.firstEligibleAtBySymbol.set(target,now-3_600_000);
+  fast.set(target,{price_change_pct:0.001,price_acceleration_pct:0,volume_accel_ratio:1,trade_accel_ratio:1});
+  const selected=radar.selectMicro(input,fast,30);
+  assert.ok(selected.some(x=>x.symbol===target&&x._selection_lane==='rotation'),
+    JSON.stringify({target,selected:selected.map(x=>({symbol:x.symbol,lane:x._selection_lane,neverDeep:x._neverDeepScanned}))}));
+});
+
+test('Radar 8 deep rotation prioritizes never-scanned eligible symbols over recently scanned symbols',()=>{
+  const radar=makeRadar({deepCandidates:3,quietReserve:0,rotationReserve:2,exceptionalRotationBypassSlots:0});
+  const items=[
+    candidate('DEEPOK1USDT',4,{score:95}),
+    candidate('DEEPOK2USDT',3,{score:88}),
+    candidate('DEEPOK3USDT',2,{score:82}),
+    candidate('DEEPOK4USDT',1,{score:75}),
+    candidate('DEEPNONEUSDT',.2,{score:10})
+  ];
+  for(const item of items){
+    const symbol=item.row.symbol;
+    radar.lastDeepScanCycleBySymbol.set(symbol,25);
+    radar.lastDeepAtBySymbol.set(symbol,now-60_000);
+    radar.scheduler.lastStartedAt.set(`DEEP:${symbol}`,now-60_000);
+    radar.firstEligibleAtBySymbol.set(symbol,now-300_000);
+  }
+  const target='DEEPNONEUSDT';
+  radar.lastDeepScanCycleBySymbol.delete(target);
+  radar.lastDeepAtBySymbol.delete(target);
+  radar.scheduler.lastStartedAt.delete(`DEEP:${target}`);
+  radar.firstEligibleAtBySymbol.set(target,now-3_600_000);
+  const selected=radar.selectDeepFromMicro(items,30);
+  assert.ok(selected.some(x=>x.row.symbol===target&&x._selection_lane==='rotation'),
+    JSON.stringify({target,selected:selected.map(x=>({symbol:x.row.symbol,lane:x._selection_lane,neverDeep:x._neverScanned,wait:x._deepWaitAgeMs}))}));
+});
