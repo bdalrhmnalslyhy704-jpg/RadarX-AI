@@ -61,6 +61,51 @@ export function incompleteHorizons(reason='NO_CLOSED_HORIZON_RESULT') {
   }]));
 }
 
+export function scanJourneyOutcomesFromRecord(record) {
+  if(!record||typeof record!=='object')return incompleteHorizons('NO_MATCHING_OUTCOME_RECORD');
+  return Object.fromEntries(SCAN_JOURNEY_HORIZONS.map(h=>{
+    const mark=record.marks?.[h],excursion=record.excursions?.[h],horizon=record.horizon_status?.[h];
+    const closed=mark?.sample_quality==='HISTORICAL_CLOSED_OHLC';
+    const excursionSource=excursion?.source==='HISTORICAL_CLOSED_OHLC';
+    const excursionComplete=excursionSource&&excursion?.complete===true;
+    const pending=horizon?.status==='PENDING';
+    const status=closed&&horizon?.status==='COMPLETE'&&excursionComplete?'COMPLETE':
+      closed||excursionSource?'PARTIAL_CLOSED_OHLC':
+      pending?'PENDING':INCOMPLETE;
+    const value=(x)=>finite(x)?Number(x):INCOMPLETE;
+    return [h,{
+      status,
+      return_pct:closed?value(mark?.return_pct):INCOMPLETE,
+      mark_price:closed?value(mark?.price):INCOMPLETE,
+      mark_time:closed?value(mark?.observed_at):INCOMPLETE,
+      max_favorable_pct:excursionSource?value(excursion?.max_favorable_pct):INCOMPLETE,
+      max_adverse_pct:excursionSource?value(excursion?.max_adverse_pct):INCOMPLETE,
+      reason:status==='PENDING'?(horizon?.reason||'WAITING_FOR_HORIZON'):
+        status==='PARTIAL_CLOSED_OHLC'?(horizon?.reason||'INCOMPLETE_CLOSED_OHLC_WINDOW'):
+        status==='COMPLETE'?INCOMPLETE:(horizon?.reason||'NO_CLOSED_OHLC_OUTCOME')
+    }];
+  }));
+}
+
+export function summarizeScanJourneyOutcomes(coins=[]) {
+  const rows=Array.isArray(coins)?coins:[];
+  const tracked=rows.filter(x=>x&&x.outcome_signal_id&&x.outcome_signal_id!==INCOMPLETE);
+  const untracked=Math.max(0,rows.length-tracked.length);
+  return {
+    tracked_total:tracked.length,
+    untracked_total:untracked,
+    by_horizon:Object.fromEntries(SCAN_JOURNEY_HORIZONS.map(h=>{
+      const values=tracked.map(x=>x.outcomes?.[h]?.status||INCOMPLETE);
+      return [h,{
+        complete:values.filter(v=>v==='COMPLETE').length,
+        pending:values.filter(v=>v==='PENDING').length,
+        partial:values.filter(v=>v==='PARTIAL_CLOSED_OHLC').length,
+        incomplete:values.filter(v=>v===INCOMPLETE).length
+      }];
+    }))
+  };
+}
+
 function epoch(value) {
   if (finite(value)) return Number(value);
   if (typeof value === 'string') {
