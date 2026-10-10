@@ -51,6 +51,115 @@ function candidate(symbol,move,{score=65,participation=75,tradeParticipation=70,
 }
 
 
+
+
+function baselineHasFiniteNumber(v){return v!==null&&v!==undefined&&!(typeof v==='string'&&v.trim()==='')&&Number.isFinite(Number(v));}
+function baselineMove(row){return baselineHasFiniteNumber(row?.priceChange24h)?Math.abs(Number(row.priceChange24h)):null;}
+function baselineSymbol(item){return String(item?.symbol??item?.row?.symbol??'').trim().toUpperCase();}
+function baselineClamp(v,lo=0,hi=100){return Math.max(lo,Math.min(hi,Number.isFinite(Number(v))?Number(v):0));}
+function baselineSymbolHash(symbol){
+  let h=2166136261>>>0;
+  for(const ch of String(symbol||'')){h^=ch.charCodeAt(0);h=Math.imul(h,16777619);}
+  return h>>>0;
+}
+function baselineQuietDeepRank(item,cfg){
+  const row=item?.row,move=baselineMove(row),fp=item?.micro_fingerprint;
+  if(move===null||move>Number(cfg.maxQuiet24hMovePct??8)||!fp||!baselineHasFiniteNumber(fp.score))return null;
+  const m=fp.metrics||{},c=fp.category_scores||{};
+  const rv1=baselineHasFiniteNumber(m.rvol_1m)?Number(m.rvol_1m):null;
+  const rv5=baselineHasFiniteNumber(m.rvol_5m)?Number(m.rvol_5m):null;
+  const tr1=baselineHasFiniteNumber(m.trade_rvol_1m)?Number(m.trade_rvol_1m):null;
+  const participation=Math.max(
+    baselineHasFiniteNumber(c.participation)?Number(c.participation):0,
+    baselineHasFiniteNumber(c.tradeParticipation)?Number(c.tradeParticipation):0,
+    rv1!==null?baselineClamp(50+Math.max(0,rv1-1)*18):0,
+    rv5!==null?baselineClamp(50+Math.max(0,rv5-1)*12):0,
+    tr1!==null?baselineClamp(50+Math.max(0,tr1-1)*20):0
+  );
+  const structure=Math.max(baselineHasFiniteNumber(c.structure)?Number(c.structure):0,
+    baselineHasFiniteNumber(m.higher_low_count)?Number(m.higher_low_count):0);
+  const bb=baselineHasFiniteNumber(m.bb_ratio)?Number(m.bb_ratio):null;
+  const range=baselineHasFiniteNumber(m.range_compression_ratio)?Number(m.range_compression_ratio):null;
+  const atr=baselineHasFiniteNumber(m.atr_ratio)?Number(m.atr_ratio):null;
+  const compression=Math.max(baselineHasFiniteNumber(c.compression)?Number(c.compression):0,
+    bb!==null&&bb<=.90?78:0,range!==null&&range<=.90?72:0,atr!==null&&atr<=.92?70:0);
+  const resistance=baselineHasFiniteNumber(m.resistance_distance_pct)?Number(m.resistance_distance_pct):null;
+  const resistanceNear=resistance!==null&&resistance>=-5&&resistance<=1.5;
+  if(participation<Number(cfg.quietDeepMinParticipationScore??58)||
+    !(compression>=65||structure>=62||resistanceNear))return null;
+  return (100-move*6)*.35+participation*.25+structure*.20+compression*.20;
+}
+function baselineExceptionalDeep(item,cfg){
+  const move=baselineMove(item?.row),fp=item?.micro_fingerprint,m=fp?.metrics||{},c=fp?.category_scores||{};
+  if(fp?.activity_shock?.detected===true)return true;
+  if(move===null||move>=Number(cfg.hardExtended24hMovePct||18))return false;
+  const volume=Math.max(baselineHasFiniteNumber(m.rvol_1m)?Number(m.rvol_1m):0,baselineHasFiniteNumber(m.rvol_5m)?Number(m.rvol_5m):0);
+  const trades=Math.max(baselineHasFiniteNumber(m.trade_rvol_1m)?Number(m.trade_rvol_1m):0,baselineHasFiniteNumber(m.trade_rvol_5m)?Number(m.trade_rvol_5m):0);
+  const acceleration=Math.max(baselineHasFiniteNumber(m.acceleration_1m_pct)?Number(m.acceleration_1m_pct):-999,baselineHasFiniteNumber(m.acceleration_5m_pct)?Number(m.acceleration_5m_pct):-999);
+  const pressure=baselineHasFiniteNumber(m.taker_buy_ratio)?Number(m.taker_buy_ratio):0;
+  const structure=Math.max(baselineHasFiniteNumber(c.structure)?Number(c.structure):0,baselineHasFiniteNumber(m.higher_low_count)?Number(m.higher_low_count):0);
+  return (volume>=Number(cfg.exceptionalVolumeAccelRatio??2.2)&&(acceleration>=Number(cfg.exceptionalPriceAccelerationPct??.15)||pressure>=.58||structure>=72))||
+    (trades>=Number(cfg.exceptionalTradeAccelRatio??1.8)&&(acceleration>0||pressure>=.58));
+}
+function baselineTakeLane(selected,seen,pool,count,lane){
+  const limit=Math.max(0,Math.trunc(Number(count)||0));if(limit===0)return;
+  let added=0;
+  for(const item of pool||[]){
+    const symbol=baselineSymbol(item);
+    if(!symbol||seen.has(symbol))continue;
+    seen.add(symbol);selected.push({...item,_selection_lane:lane});added++;
+    if(added>=limit)break;
+  }
+}
+// Faithful test-only reproduction of Build 224's pre-PR #198 Deep selector.
+// It intentionally uses independent historical rotation state and the very same
+// Micro outputs given to the experimental selector; it does no REST calls.
+function selectBuild224Baseline(radar,results,cycle,state,selectionAt=Date.now()){
+  const currentCycle=Math.max(0,Math.trunc(Number(cycle)||0));
+  const valid=(results||[]).filter(x=>x&&!x.failed&&baselineSymbol(x)&&x.micro_fingerprint?.score!=null&&baselineHasFiniteNumber(x.micro_fingerprint.score));
+  const n=Math.max(1,Math.trunc(radar.config.deepCandidates||10));
+  const target=Math.min(n,new Set(valid.map(baselineSymbol)).size);
+  if(!target)return {selected:[],audit:[],candidate_total:0};
+  const q=Math.min(Math.max(0,Math.trunc(radar.config.quietReserve??8)),Math.max(0,target-1),Math.floor(target*.5));
+  const r=Math.min(Math.max(0,Math.trunc(radar.config.rotationReserve??2)),Math.max(0,target-q-1));
+  const core=target-q-r;
+  const byScore=[...valid].sort((a,b)=>Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||baselineSymbol(a).localeCompare(baselineSymbol(b)));
+  const byQuiet=valid.map(item=>({...item,_quietScore:baselineQuietDeepRank(item,radar.config)}))
+    .filter(item=>item._quietScore!==null)
+    .sort((a,b)=>(baselineMove(a.row)??Infinity)-(baselineMove(b.row)??Infinity)||b._quietScore-a._quietScore||baselineSymbol(a).localeCompare(baselineSymbol(b)));
+  for(const item of valid){const s=baselineSymbol(item);if(!state.queuedAt.has(s))state.queuedAt.set(s,selectionAt);}
+  const byRotation=[...valid].map(item=>{
+    const symbol=baselineSymbol(item),lastCycle=state.lastCycle.get(symbol),lastAt=state.lastAt.get(symbol),queuedAt=state.queuedAt.get(symbol);
+    const neverScanned=lastAt===undefined;
+    return {...item,_neverScanned:neverScanned,
+      _rotationAgeMs:neverScanned?Number.MAX_SAFE_INTEGER:Math.max(0,selectionAt-lastAt),
+      _queueAgeMs:queuedAt===undefined?0:Math.max(0,selectionAt-queuedAt),
+      _rotationAge:lastCycle===undefined?Number.MAX_SAFE_INTEGER:Math.max(0,currentCycle-lastCycle),
+      _rotation:((baselineSymbolHash(symbol)+Math.imul(currentCycle,2654435761))>>>0)};
+  }).sort((a,b)=>Number(b._neverScanned)-Number(a._neverScanned)||b._rotationAgeMs-a._rotationAgeMs||b._queueAgeMs-a._queueAgeMs||b._rotationAge-a._rotationAge||a._rotation-b._rotation||baselineSymbol(a).localeCompare(baselineSymbol(b)));
+  const byExceptional=valid.filter(x=>baselineExceptionalDeep(x,radar.config)).sort((a,b)=>
+    Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||baselineSymbol(a).localeCompare(baselineSymbol(b)));
+  const selected=[],seen=new Set(),exceptionSlots=Math.min(core,Math.max(0,Math.trunc(radar.config.exceptionalRotationBypassSlots??2)));
+  baselineTakeLane(selected,seen,byExceptional,exceptionSlots,'exceptional');
+  baselineTakeLane(selected,seen,byScore,Math.max(0,core-selected.length),'score');
+  baselineTakeLane(selected,seen,byQuiet,q,'quiet');
+  baselineTakeLane(selected,seen,byRotation,r,'rotation');
+  baselineTakeLane(selected,seen,byScore,target-selected.length,'fill_score');
+  baselineTakeLane(selected,seen,byQuiet,target-selected.length,'fill_quiet');
+  baselineTakeLane(selected,seen,byRotation,target-selected.length,'fill_rotation');
+  baselineTakeLane(selected,seen,valid,target-selected.length,'fill_any');
+  const picked=new Map(selected.map((item,index)=>[baselineSymbol(item),{rank:index+1,lane:item._selection_lane||'score'}]));
+  const scoreRanks=new Map();byScore.forEach((item,i)=>{const s=baselineSymbol(item);if(!scoreRanks.has(s))scoreRanks.set(s,i+1);});
+  const quietRanks=new Map();byQuiet.forEach((item,i)=>{const s=baselineSymbol(item);if(!quietRanks.has(s))quietRanks.set(s,i+1);});
+  const audit=[...new Map(valid.map(item=>[baselineSymbol(item),item])).entries()].map(([symbol,item])=>{
+    const chosen=picked.get(symbol),classification=item?.micro_fingerprint?.quiet_base_pre_expansion?.classification??null;
+    return {symbol,score:Number(item.micro_fingerprint.score),score_rank:scoreRanks.get(symbol)??null,
+      quiet_rank:quietRanks.get(symbol)??null,classification,selected:Boolean(chosen),selected_rank:chosen?.rank??null,
+      selection_lane:chosen?.lane??null,reason:chosen?'SELECTED_'+chosen.lane.toUpperCase():'DEEP_BATCH_CAPACITY'};
+  });
+  return {selected:selected.slice(0,target),audit,candidate_total:valid.length};
+}
+
 function microCandles({count,step,now,btc=false}){
   const lastOpen=Math.floor((now-1)/step)*step-step;
   const firstOpen=lastOpen-(count-1)*step;
@@ -440,8 +549,8 @@ const shouldRunLiveRadar8Monitor=process.env.GITHUB_ACTIONS==='true'&&
   process.env.GITHUB_WORKFLOW==='RadarX Phase 2 Tests'&&
   process.env.GITHUB_HEAD_REF==='experiment/build224-radar8-micro-quiet-base-20261010';
 
-test('OPERATIONAL_MONITOR: three consecutive Radar 8 cycles against live public Binance Spot data', {
-  skip:!shouldRunLiveRadar8Monitor,timeout:180_000
+test('OPERATIONAL_MONITOR: 25 consecutive Radar 8 cycles with same-data Build 224 baseline comparison', {
+  skip:!shouldRunLiveRadar8Monitor,timeout:360_000
 },async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-radar8-live-monitor-'));
   const store=await new DurableStore({dir}).init();
