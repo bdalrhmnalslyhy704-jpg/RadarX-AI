@@ -112,7 +112,7 @@ export class DurableStore {
     const rows=(Array.isArray(events)?events:[]).filter(x=>x&&typeof x==='object');
     if(!rows.length)return {written:0};
     return this.lock(async()=>{
-      await appendFile(this.files.schedulerEvents,rows.map(x=>JSON.stringify(x)).join('\\n')+'\\n');
+      await appendFile(this.files.schedulerEvents,rows.map(x=>JSON.stringify(x)).join('\n')+'\n');
       this.lastWriteAt=Date.now();
       return {written:rows.length};
     });
