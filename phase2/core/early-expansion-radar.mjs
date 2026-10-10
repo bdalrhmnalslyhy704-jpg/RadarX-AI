@@ -5,7 +5,7 @@ import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notific
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
 import {assessQuietBaseActivityShock,isFastActivityShockCandidate} from './activity-shock.mjs';
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
-import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId} from './scan-journey-ledger.mjs';
+import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId,normalizeMissing} from './scan-journey-ledger.mjs';
 
 function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
@@ -1261,11 +1261,11 @@ export class EarlyExpansionRadar{
     const journeyEntries=new Map(),journeyMicroBySymbol=new Map(),journeyDeepBySymbol=new Map(),journeyDeepCandlesBySymbol=new Map();
     const journey={cycle_id:null,cycle_number:null,quote:INCOMPLETE,source:INCOMPLETE,expected_symbols:[],received_symbols:[],eligible_symbols:[],status:'RUNNING'};
     const makeJourneyEntry=(symbol)=>({
-      symbol:String(symbol).toUpperCase(),eligible:false,eligibility_at:INCOMPLETE,fast_scan_at:INCOMPLETE,
+      symbol:String(symbol).toUpperCase(),eligible:false,eligibility_at:INCOMPLETE,first_eligible_at:INCOMPLETE,fast_scan_at:INCOMPLETE,
       ticker:INCOMPLETE,fast:INCOMPLETE,micro_selected_at:INCOMPLETE,micro_selection_lane:INCOMPLETE,
       micro_scan_started_at:INCOMPLETE,micro_scan_completed_at:INCOMPLETE,micro_fingerprint:INCOMPLETE,
       deep_selected_at:INCOMPLETE,deep_selection_lane:INCOMPLETE,deep_scan_started_at:INCOMPLETE,
-      deep_scan_completed_at:INCOMPLETE,deep_analysis:INCOMPLETE,
+      deep_scan_completed_at:INCOMPLETE,deep_scan_status:INCOMPLETE,deep_analysis:INCOMPLETE,
       candles_used:{'1m':INCOMPLETE,'5m':INCOMPLETE,'15m':INCOMPLETE,'1h':INCOMPLETE,'4h':INCOMPLETE},
       radar_scores:{RADAR_1:INCOMPLETE,RADAR_2:INCOMPLETE,RADAR_3:INCOMPLETE,RADAR_4:INCOMPLETE,RADAR_5:INCOMPLETE,RADAR_6:INCOMPLETE,RADAR_7:INCOMPLETE,RADAR_8:INCOMPLETE,RADAR_9:INCOMPLETE},
       analyst_scores:INCOMPLETE,analyst_scores_reason:'MULTI_ANALYST_NOT_RUN_FOR_EVERY_RADAR8_SYMBOL',
@@ -1313,8 +1313,8 @@ export class EarlyExpansionRadar{
           source:tickerSource||INCOMPLETE,as_of:fastScanAt
         }:INCOMPLETE;
         if(isEligible){
-          entry.eligibility_at=fastScanAt;entry.fast_scan_at=fastScanAt;
-          entry.fast=fastBySymbol.get(symbol)||INCOMPLETE;
+          entry.eligibility_at=fastScanAt;entry.first_eligible_at=this.firstEligibleAtBySymbol.get(symbol)||fastScanAt;entry.fast_scan_at=fastScanAt;
+          entry.fast=normalizeMissing(fastBySymbol.get(symbol)||INCOMPLETE);
           entry.rejection_reason=INCOMPLETE;
           const fs=fastCandidateScore(ticker,entry.fast,this.config);
           entry.radar_scores.RADAR_8={fast_score:hasFiniteNumber(fs)?Number(fs):INCOMPLETE,micro_score:INCOMPLETE,deep_score:INCOMPLETE,final_score:INCOMPLETE};
@@ -1376,7 +1376,7 @@ export class EarlyExpansionRadar{
           const completed=this.clock();
           if(entry){
             entry.micro_scan_completed_at=completed;
-            entry.micro_fingerprint=result.micro_fingerprint||INCOMPLETE;
+            entry.micro_fingerprint=normalizeMissing(result.micro_fingerprint||INCOMPLETE);
             entry.candles_used['1m']=closedCandleSnapshot(result.oneMinute,completed);
             entry.candles_used['5m']=closedCandleSnapshot(result.fiveMinute,completed);
             entry.radar_scores.RADAR_8.micro_score=hasFiniteNumber(result.micro_fingerprint?.score)?Number(result.micro_fingerprint.score):INCOMPLETE;
@@ -1429,11 +1429,12 @@ export class EarlyExpansionRadar{
       phaseTimings.micro_scan_ms=Math.max(0,microScanCompletedAt-microScanStartedAt);
       phaseTimings.market_micro_overlap_ms=Math.max(0,
         Math.min(marketContextCompletedAt,microScanCompletedAt)-Math.max(marketContextStartedAt,microScanStartedAt));
+      const priorDeepCycles=new Map(this.lastDeepScanCycleBySymbol);
       const deepTargets=this.selectDeepFromMicro(microScanned,cycle);
       const priorDeepCycles=new Map(this.lastDeepScanCycleBySymbol);
       for(const micro of deepTargets){
         const symbol=selectionSymbol(micro),entry=journeyEntries.get(symbol);
-        if(entry){entry.deep_selected_at=this.clock();entry.deep_selection_lane=micro._selection_lane||INCOMPLETE;entry.rejection_reason=INCOMPLETE;}
+        if(entry){entry.deep_selected_at=this.clock();entry.deep_selection_lane=micro._selection_lane||INCOMPLETE;entry.deep_scan_status='RUNNING';entry.rejection_reason=INCOMPLETE;}
       }
       const deepScanStartedAt=this.clock();
       const scanned=await boundedMap(deepTargets,this.config.deepConcurrency,async micro=>{
@@ -1441,9 +1442,12 @@ export class EarlyExpansionRadar{
         const deepStarted=this.clock();
         if(entry)entry.deep_scan_started_at=deepStarted;
         try{
-          const evidence=await this.deepScan(row,fast,marketContext,micro,candles=>journeyDeepCandlesBySymbol.set(row.symbol,candles)),fp=micro.micro_fingerprint;
+          const evidence=await this.deepScan(row,fast,marketContext,micro,candles=>{
+            journeyDeepCandlesBySymbol.set(row.symbol,candles);
+            if(entry)for(const tf of ['1m','5m','15m','1h','4h'])entry.candles_used[tf]=candles[tf]??INCOMPLETE;
+          }),fp=micro.micro_fingerprint;
           const deepCompleted=this.clock();
-          if(entry)entry.deep_scan_completed_at=deepCompleted;
+          if(entry){entry.deep_scan_completed_at=deepCompleted;entry.deep_scan_status='COMPLETED';}
           journeyDeepBySymbol.set(row.symbol,{evidence,micro,deep_started_at:deepStarted,deep_completed_at:deepCompleted});
           if(evidence.activity_shock?.detected===true)this.fastShockPendingUntil.delete(row.symbol);
           const microScore=hasFiniteNumber(fp?.score)?Number(fp.score):null;
@@ -1476,7 +1480,7 @@ export class EarlyExpansionRadar{
         }catch(e){
           const deepCompleted=this.clock();
           this.failedTotal++;this.noteError(e,'deep-row');
-          if(entry){entry.deep_scan_completed_at=deepCompleted;entry.decision='DATA_INSUFFICIENT';entry.rejection_reason=String(e?.message??e);}
+          if(entry){entry.deep_scan_completed_at=deepCompleted;entry.deep_scan_status='FAILED';entry.decision='DATA_INSUFFICIENT';entry.rejection_reason=String(e?.message??e);}
           journeyDeepBySymbol.set(row.symbol,{failed:true,error:String(e?.message??e),deep_started_at:deepStarted,deep_completed_at:deepCompleted,micro});
           return {symbol:row.symbol,failed:true,error:String(e?.message??e),decision_band:'DATA_INSUFFICIENT',data_quality:0,micro_fingerprint:micro.micro_fingerprint,source:sourceList([tickerSource,micro.source])};
         }
@@ -1484,6 +1488,11 @@ export class EarlyExpansionRadar{
       phaseTimings.deep_scan_ms=Math.max(0,this.clock()-deepScanStartedAt);
       const ok=scanned.filter(x=>x&&!x.failed),deepFailures=scanned.length-ok.length,deepScannedTotal=ok.length;
       const failedSymbols=scanned.filter(x=>x?.failed).map(x=>x.symbol);
+      for(const failed of scanned.filter(x=>x?.failed)){
+        const symbol=String(failed.symbol||'').toUpperCase();
+        if(priorDeepCycles.has(symbol))this.lastDeepScanCycleBySymbol.set(symbol,priorDeepCycles.get(symbol));
+        else this.lastDeepScanCycleBySymbol.delete(symbol);
+      }
       const deepSelectedSet=new Set(deepTargets.map(x=>selectionSymbol(x)).filter(Boolean));
       const microCompletedSet=new Set(microScanned.filter(x=>x&&!x.failed&&x.row?.symbol).map(x=>x.row.symbol));
       for(const row of eligible){
@@ -1491,7 +1500,7 @@ export class EarlyExpansionRadar{
         if(!entry)continue;
         const microResult=journeyMicroBySymbol.get(row.symbol);
         if(microResult&&!microResult.failed){
-          entry.micro_fingerprint=microResult.micro_fingerprint||INCOMPLETE;
+          entry.micro_fingerprint=normalizeMissing(microResult.micro_fingerprint||INCOMPLETE);
           entry.radar_scores.RADAR_8.micro_score=hasFiniteNumber(microResult.micro_fingerprint?.score)?Number(microResult.micro_fingerprint.score):INCOMPLETE;
         }
         if(!deepSelectedSet.has(row.symbol)&&microSelectedSet.has(row.symbol)&&microCompletedSet.has(row.symbol)){
@@ -1516,8 +1525,8 @@ export class EarlyExpansionRadar{
           data_quality:hasFiniteNumber(result.data_quality)?Number(result.data_quality):INCOMPLETE,
           liquidity_quality:hasFiniteNumber(result.liquidity_quality)?Number(result.liquidity_quality):INCOMPLETE,
           data_stale:typeof result.data_stale==='boolean'?result.data_stale:INCOMPLETE,
-          metrics:result.metrics||INCOMPLETE,structure_metrics:result.structure_metrics||INCOMPLETE,
-          strategy_evidence:result.strategy_evidence||INCOMPLETE,trigger_evidence:result.trigger_evidence||INCOMPLETE,
+          metrics:normalizeMissing(result.metrics||INCOMPLETE),structure_metrics:normalizeMissing(result.structure_metrics||INCOMPLETE),
+          strategy_evidence:normalizeMissing(result.strategy_evidence||INCOMPLETE),trigger_evidence:normalizeMissing(result.trigger_evidence||INCOMPLETE),
           risk_flags:result.risk_flags||[],reason_codes:result.reason_codes||[],
           invalidation:result.invalidation||INCOMPLETE,market_regime:result.market_regime||INCOMPLETE,
           source:result.source||INCOMPLETE
@@ -1678,9 +1687,149 @@ export class EarlyExpansionRadar{
         coverage_ratio:coverage.coverage_ratio,deep_coverage_ratio:coverage.deep_coverage_ratio,
         paper_trading:true,real_order_execution:false
       }));
+      if(typeof this.store.appendScanJourneyCycle==='function'&&journey.cycle_id){
+        try{
+          const completedAt=this.clock();
+          let outcomeState={records:[]};
+          try{outcomeState=await this.store.getPreExpansionOutcomes();}catch(e){this.noteError(e,'journey-outcome-read');}
+          const outcomeRecords=Array.isArray(outcomeState?.records)?outcomeState.records:[];
+          for(const candidate of ok){
+            const stage=String(candidate.pre_expansion_stage||candidate.decision_band||'');
+            const entry=journeyEntries.get(candidate.symbol);
+            if(!entry)continue;
+            const signalId='RADAR8:'+candidate.symbol+':'+now+':'+stage;
+            const outcome=outcomeRecords.find(x=>x?.signal_id===signalId&&x?.radar==='RADAR_8');
+            if(!outcome)continue;
+            entry.outcome_signal_id=signalId;
+            entry.outcomes=Object.fromEntries(['5m','15m','30m','60m','4h','24h'].map(h=>{
+              const mark=outcome.marks?.[h],excursion=outcome.excursions?.[h],status=outcome.horizon_status?.[h];
+              const closed=mark?.sample_quality==='HISTORICAL_CLOSED_OHLC';
+              const excursionClosed=excursion?.source==='HISTORICAL_CLOSED_OHLC'&&excursion?.complete===true;
+              return [h,{
+                status:closed?(status?.status==='COMPLETE'?'COMPLETE':'PARTIAL_CLOSED_OHLC'):INCOMPLETE,
+                return_pct:closed&&hasFiniteNumber(mark?.return_pct)?Number(mark.return_pct):INCOMPLETE,
+                mark_price:closed&&hasFiniteNumber(mark?.price)?Number(mark.price):INCOMPLETE,
+                mark_time:closed&&hasFiniteNumber(mark?.observed_at)?Number(mark.observed_at):INCOMPLETE,
+                max_favorable_pct:excursionClosed&&hasFiniteNumber(excursion?.max_favorable_pct)?Number(excursion.max_favorable_pct):INCOMPLETE,
+                max_adverse_pct:excursionClosed&&hasFiniteNumber(excursion?.max_adverse_pct)?Number(excursion.max_adverse_pct):INCOMPLETE,
+                reason:closed?(excursionClosed?INCOMPLETE:(status?.reason||'INCOMPLETE_CLOSED_CANDLE_WINDOW')):(status?.reason||'WAITING_FOR_CLOSED_OHLC')
+              }];
+            }));
+          }
+          const deepThisCycle=new Set(scanned.filter(x=>x&&!x.failed).map(x=>String(x.symbol||'').toUpperCase()));
+          const pending=eligible.filter(x=>!deepThisCycle.has(x.symbol)).map(x=>{
+            const lastDeepAt=Number(this.lastDeepAtBySymbol.get(x.symbol)||0);
+            const firstEligible=Number(this.firstEligibleAtBySymbol.get(x.symbol)||fastScanAt);
+            const waitFrom=lastDeepAt>0?lastDeepAt:firstEligible;
+            const lastCycle=Number(priorDeepCycles.get(x.symbol)||0);
+            return {symbol:x.symbol,wait_from:waitFrom,wait_ms:Math.max(0,completedAt-waitFrom),
+              wait_cycles:lastCycle>0?Math.max(0,cycle-lastCycle):cycle,last_deep_cycle:lastCycle||INCOMPLETE,
+              never_deep_scanned:lastCycle<=0};
+          }).sort((a,b)=>a.wait_from-b.wait_from||b.wait_ms-a.wait_ms||a.symbol.localeCompare(b.symbol));
+          const oldestNever=pending.filter(x=>x.never_deep_scanned).sort((a,b)=>a.wait_from-b.wait_from||a.symbol.localeCompare(b.symbol))[0]||null;
+          const oldestPending=pending[0]||null;
+          const coins=[...journeyEntries.values()].map(entry=>{
+            const deepCandles=journeyDeepCandlesBySymbol.get(entry.symbol);
+            if(deepCandles)for(const tf of ['1m','5m','15m','1h','4h'])entry.candles_used[tf]=deepCandles[tf]??INCOMPLETE;
+            const micro=journeyMicroBySymbol.get(entry.symbol);
+            if(micro&&!micro.failed){
+              entry.micro_fingerprint=normalizeMissing(micro.micro_fingerprint||INCOMPLETE);
+              entry.micro_source=micro.source||INCOMPLETE;
+            }
+            const deep=journeyDeepBySymbol.get(entry.symbol);
+            if(deep?.failed){entry.deep_scan_status='FAILED';entry.rejection_reason=deep.error||entry.rejection_reason;}
+            if(entry.eligible){
+              entry.first_eligible_at=this.firstEligibleAtBySymbol.get(entry.symbol)||entry.eligibility_at;
+              entry.last_deep_scan_at=this.lastDeepAtBySymbol.get(entry.symbol)||INCOMPLETE;
+              entry.last_deep_scan_cycle=priorDeepCycles.get(entry.symbol)??INCOMPLETE;
+            }
+            entry.scan_cycle_number=cycle;
+            entry.price_at_fast_scan=entry.ticker?.price??INCOMPLETE;
+            entry.price_at_deep_scan=deepCandles?.['1m']?.length?deepCandles['1m'].at(-1).close:INCOMPLETE;
+            entry.radar_scores=normalizeMissing(entry.radar_scores);
+            entry.analyst_scores=INCOMPLETE;
+            entry.analyst_scores_reason='MULTI_ANALYST_NOT_RUN_FOR_EVERY_RADAR8_SYMBOL';
+            if(!entry.eligible&&entry.rejection_reason===INCOMPLETE)entry.rejection_reason='NOT_ELIGIBLE';
+            return entry;
+          });
+          const counters={
+            expected_total:expected.length,received_total:receivedSymbols.length,
+            missing_ticker_total:Math.max(0,expected.length-receivedSymbols.length),
+            eligible_total:eligible.length,fast_scanned_total:eligible.length,
+            micro_selected_total:selected.length,
+            micro_attempted_total:coins.filter(x=>x.micro_scan_completed_at!==INCOMPLETE).length,
+            micro_success_total:microScanned.filter(x=>x&&!x.failed).length,
+            deep_selected_total:deepTargets.length,
+            deep_attempted_total:coins.filter(x=>x.deep_scan_started_at!==INCOMPLETE).length,
+            deep_completed_total:deepThisCycle.size,
+            deep_failed_total:deepTargets.length-deepThisCycle.size,
+            micro_quiet_share:selected.filter(x=>x._selection_lane==='quiet'||x._selection_lane==='fill_quiet').length,
+            micro_rotation_share:selected.filter(x=>x._selection_lane==='rotation'||x._selection_lane==='fill_rotation').length,
+            micro_exceptional_share:selected.filter(x=>x._selection_lane==='exceptional').length,
+            deep_quiet_share:deepTargets.filter(x=>x._selection_lane==='quiet'||x._selection_lane==='fill_quiet').length,
+            deep_rotation_share:deepTargets.filter(x=>x._selection_lane==='rotation'||x._selection_lane==='fill_rotation').length,
+            deep_exceptional_share:deepTargets.filter(x=>x._selection_lane==='exceptional').length,
+            eligible_never_deep_scanned_total:pending.filter(x=>x.never_deep_scanned).length,
+            oldest_never_deep_scanned_symbol:oldestNever?.symbol||INCOMPLETE,
+            oldest_never_deep_scanned_wait_ms:oldestNever?.wait_ms??INCOMPLETE,
+            oldest_pending_symbol:oldestPending?.symbol||INCOMPLETE,
+            oldest_pending_wait_ms:oldestPending?.wait_ms??INCOMPLETE,
+            oldest_pending_wait_cycles:oldestPending?.wait_cycles??INCOMPLETE,
+            outcomes_by_horizon:Object.fromEntries(['5m','15m','30m','60m','4h','24h'].map(h=>[h,{
+              complete:coins.filter(x=>x.outcomes?.[h]?.status==='COMPLETE').length,
+              incomplete:coins.filter(x=>x.outcomes?.[h]?.status===INCOMPLETE||x.outcomes?.[h]?.status==='PARTIAL_CLOSED_OHLC').length
+            }]))
+          };
+          const record={
+            schema_version:SCAN_JOURNEY_SCHEMA,cycle_id:journey.cycle_id,cycle_number:cycle,
+            radar:'RADAR_8',quote:q,status:'COMPLETE',started_at:scanStartedAt,completed_at:completedAt,
+            scan_duration_ms:Math.max(0,completedAt-scanStartedAt),source:tickerSource||INCOMPLETE,
+            data_policy:{closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
+            counters,phase_timings_ms:normalizeMissing(phaseTimings),coins
+          };
+          const archive=await this.store.appendScanJourneyCycle(record);
+          this.lastJourneyArchive=archive;this.lastJourneyError=null;
+          this.logger.info?.('[RADARX_SCAN_JOURNEY_ARCHIVE] '+JSON.stringify({
+            cycle_id:record.cycle_id,cycle_sequence:archive.cycle_sequence,status:'COMPLETE',
+            coin_rows:archive.cycle_coin_rows,retained_cycles:archive.retained_cycles,
+            retained_coin_rows:archive.retained_coin_rows,compressed_bytes:archive.compressed_bytes,
+            pruned_cycle_count:archive.pruned_cycle_count,counters
+          }));
+        }catch(archiveError){
+          this.lastJourneyError=String(archiveError?.message??archiveError);
+          this.noteError(archiveError,'journey-archive');
+        }
+      }
       return true;
     }catch(e){
       this.lastError=String(e?.message??e);this.lastScanAtMs=scanStartedAt;
+      if(journey.cycle_id&&typeof this.store.appendScanJourneyCycle==='function'){
+        try{
+          const failedAt=this.clock();
+          for(const symbol of this.universe)if(!journeyEntries.has(symbol))journeyEntries.set(symbol,makeJourneyEntry(symbol));
+          const coins=[...journeyEntries.values()].map(entry=>({...entry,
+            rejection_reason:entry.rejection_reason===INCOMPLETE?'SCAN_CYCLE_FAILED_BEFORE_STAGE':entry.rejection_reason,
+            outcomes:entry.outcomes||incompleteHorizons('SCAN_CYCLE_FAILED')
+          }));
+          const failedRecord={
+            schema_version:SCAN_JOURNEY_SCHEMA,cycle_id:journey.cycle_id,cycle_number:journey.cycle_number||this.scans+1,
+            radar:'RADAR_8',quote:journey.quote,status:'FAILED',error:this.lastError,
+            started_at:scanStartedAt,completed_at:failedAt,source:journey.raw_ticker_source||INCOMPLETE,
+            data_policy:{closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
+            counters:{expected_total:journey.expected_symbols.length||this.universe.length,received_total:journey.received_symbols.length||0,
+              eligible_total:journey.eligible_symbols.length||0,micro_selected_total:journeyMicroBySymbol.size,deep_attempted_total:journeyDeepBySymbol.size,
+              failed_stage:'SCAN_CYCLE_FAILED',error:this.lastError},
+            coins
+          };
+          const archive=await this.store.appendScanJourneyCycle(failedRecord);
+          this.scans=Math.max(this.scans,Number(archive.cycle_sequence)||0);
+          this.lastJourneyArchive=archive;this.lastJourneyError=null;
+          this.logger.info?.('[RADARX_SCAN_JOURNEY_ARCHIVE] '+JSON.stringify({cycle_id:failedRecord.cycle_id,cycle_sequence:archive.cycle_sequence,status:'FAILED',coin_rows:archive.cycle_coin_rows,retained_cycles:archive.retained_cycles,retained_coin_rows:archive.retained_coin_rows}));
+        }catch(archiveError){
+          this.lastJourneyError=String(archiveError?.message??archiveError);
+          this.logger.warn?.('EARLY_EXPANSION_RADAR_journey-archive',this.lastJourneyError);
+        }
+      }
       this.lastResult={...emptyEarlyExpansionSnapshot(this.config,quote,this.lastError),schema_version:'RADAR8_V2',as_of:new Date(scanStartedAt).toISOString()};
       return false;
     }finally{this.busy=false;}
