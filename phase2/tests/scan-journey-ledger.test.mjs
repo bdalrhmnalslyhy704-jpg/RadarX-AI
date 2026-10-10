@@ -140,7 +140,7 @@ test('archive verifier detects a lost cycle and a repeated write repairs it with
 
 test('temporary ticker omission preserves queue age; an observed liquidity failure resets it',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-scan-journey-age-'));
-  const store=new DurableStore({dir}).init();
+  const store=await new DurableStore({dir}).init();
   await (await store).appendScanJourneyCycle(cycle(t0,1,[{symbol:'AAAUSDT',deep:false}]));
   const missing=cycle(t0+60_000,2,[{symbol:'AAAUSDT',deep:false}]);
   missing.coins[0].eligible=false;
