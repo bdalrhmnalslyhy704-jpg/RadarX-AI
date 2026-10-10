@@ -49,6 +49,29 @@ export function closedCandleSnapshot(rows, asOfMs=Date.now()) {
   })) : INCOMPLETE;
 }
 
+export function reconcileEligibilityQueueAge({
+  previous=new Map(),universeSymbols=[],tickerBySymbol=new Map(),eligibleSymbols=[],
+  minQuoteVolume24h=0,now=Date.now()
+}={}) {
+  const next=previous instanceof Map?new Map(previous):new Map(Object.entries(previous||{}).map(([k,v])=>[k,Number(v)]));
+  const universe=new Set((Array.isArray(universeSymbols)?universeSymbols:[]).map(x=>String(x).toUpperCase()));
+  const ticker=(symbol)=>tickerBySymbol instanceof Map?tickerBySymbol.get(symbol):tickerBySymbol?.[symbol];
+  for(const symbol of [...next.keys()]) {
+    const key=String(symbol).toUpperCase();
+    if(!universe.has(key)){next.delete(symbol);continue;}
+    const seen=ticker(key);
+    // Preserve age for missing or incomplete ticker rows; only clear the queue
+    // when observed liquidity proves the symbol is currently below threshold.
+    if(seen&&finite(seen.quoteVolume24h)&&Number(seen.quoteVolume24h)<Number(minQuoteVolume24h))
+      next.delete(symbol);
+  }
+  for(const value of Array.isArray(eligibleSymbols)?eligibleSymbols:[]) {
+    const symbol=String(value).toUpperCase();
+    if(symbol&&universe.has(symbol)&&!next.has(symbol))next.set(symbol,Number(now));
+  }
+  return next;
+}
+
 export function incompleteHorizons(reason='NO_CLOSED_HORIZON_RESULT') {
   return Object.fromEntries(SCAN_JOURNEY_HORIZONS.map(h => [h, {
     status:INCOMPLETE,
