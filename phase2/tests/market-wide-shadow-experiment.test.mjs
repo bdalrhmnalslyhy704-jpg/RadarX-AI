@@ -50,7 +50,7 @@ test('arm summary detects selector activation mismatch and computes durations',(
       light_candidate_total:2,micro_candidate_pool_total:48,micro_selected_total:12,deep_completed_total:3,
       deep_failed_total:0,missing_ticker_total:0,actual_binance_http_attempts:10,actual_5m_kline_http_attempts:2,
       binance_rest_calls_added_by_light_scan:0,micro_symbols:['AAAUSDT']},
-    {shadow_arm:'LEGACY',micro_pool_applied:false,legacy_micro_selector_active:true,scan_duration_ms:60000,
+    {shadow_arm:'LEGACY',micro_pool_applied:false,legacy_micro_selector_active:true,scan_duration_ms:null,
       light_candidate_total:4,micro_candidate_pool_total:48,micro_selected_total:12,deep_completed_total:3,
       deep_failed_total:0,missing_ticker_total:0,actual_binance_http_attempts:12,actual_5m_kline_http_attempts:3,
       binance_rest_calls_added_by_light_scan:0,micro_symbols:['BBBUSDT']},
@@ -67,7 +67,7 @@ test('arm summary detects selector activation mismatch and computes durations',(
   const pool=summarizeShadowArm(rows,SHADOW_ARM.LIGHT_POOL);
   assert.equal(legacy.cycles,2);
   assert.equal(legacy.pool_activation_verified,true);
-  assert.equal(legacy.avg_scan_duration_ms,50000);
+  assert.equal(legacy.avg_scan_duration_ms,40000);
   assert.equal(pool.cycles,2);
   assert.equal(pool.pool_activation_verified,false);
   assert.equal(pool.light_scan_added_rest_calls,0);
