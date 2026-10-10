@@ -157,7 +157,7 @@ async function createRuntime(name, dir) {
     microConcurrency: 6,
     deepConcurrency: 4
   };
-  const rest = new restMod.RestClient({...configRoot.rest, baseUrls: configRoot.rest.urls, timeoutMs: 7000, maxRequestsPerMinute: 240});
+  const rest = new restMod.RestClient({...configRoot.rest, baseUrls: ['https://data-api.binance.vision'], timeoutMs: 5000, maxRequestsPerMinute: 240});
   const storeDir = join(runDataDir, name);
   await mkdir(storeDir, {recursive: true});
   if (storeDir === '/data' || storeDir.startsWith('/data' + sep)) throw new Error('STORE_PATH_MUST_NOT_USE_PRODUCTION_VOLUME');
