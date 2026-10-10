@@ -60,6 +60,8 @@ export class MarketWideKlineCache {
     logger = console
   } = {}) {
     this.urls = [...urls];
+    this.rest = rest;
+    this.unsubscribeKlines = null;
     this.WebSocketImpl = WebSocketImpl;
     this.streamOptions = {initialBackoffMs, maxBackoffMs, jitterRatio, heartbeatTimeoutMs, maxConnectionMs};
     this.maxCandlesPerSymbol = Math.max(60, Math.trunc(Number(maxCandlesPerSymbol) || DEFAULT_MAX_CANDLES_PER_SYMBOL));
@@ -75,12 +77,15 @@ export class MarketWideKlineCache {
     this.receivedClosedCandles = 0;
     this.rejectedCandles = 0;
     this.streamGeneration = 0;
-    this.unsubscribeKlines = typeof rest?.subscribeKlines === 'function'
-      ? rest.subscribeKlines(({symbol, interval, candles, source}) => {
-          if (String(interval || '') !== '5m') return;
-          this.seed(symbol, candles, source ? 'BINANCE_PUBLIC_REST' : 'BINANCE_PUBLIC_REST');
-        })
-      : null;
+    this.attachRestKlineObserver();
+  }
+
+  attachRestKlineObserver() {
+    if (this.unsubscribeKlines || typeof this.rest?.subscribeKlines !== 'function') return;
+    this.unsubscribeKlines = this.rest.subscribeKlines(({symbol, interval, candles}) => {
+      if (String(interval || '') !== '5m') return;
+      this.seed(symbol, candles, 'BINANCE_PUBLIC_REST');
+    });
   }
 
   normalizeSymbols(symbols = []) {
@@ -104,6 +109,7 @@ export class MarketWideKlineCache {
 
   start() {
     if (this.running) return;
+    this.attachRestKlineObserver();
     this.running = true;
     this.rebuildStream();
   }
@@ -115,6 +121,10 @@ export class MarketWideKlineCache {
     this.client = null;
     old?.stop();
     this.streamState = 'STOPPED';
+    if (this.unsubscribeKlines) {
+      this.unsubscribeKlines();
+      this.unsubscribeKlines = null;
+    }
   }
 
   rebuildStream() {
