@@ -136,3 +136,25 @@ test('archive verifier detects a lost cycle and a repeated write repairs it with
   assert.equal(after.retained_coin_rows,2);
   assert.equal(after.cycle_sequence,saved.cycle_sequence);
 });
+
+
+test('temporary ticker omission preserves queue age; an observed liquidity failure resets it',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-scan-journey-age-'));
+  const store=new DurableStore({dir}).init();
+  await (await store).appendScanJourneyCycle(cycle(t0,1,[{symbol:'AAAUSDT',deep:false}]));
+  const missing=cycle(t0+60_000,2,[{symbol:'AAAUSDT',deep:false}]);
+  missing.coins[0].eligible=false;
+  missing.coins[0].eligibility_at=INCOMPLETE;
+  missing.coins[0].first_eligible_at=INCOMPLETE;
+  missing.coins[0].fast_scan_at=INCOMPLETE;
+  missing.coins[0].ticker=INCOMPLETE;
+  missing.coins[0].rejection_reason='TICKER_MISSING_FROM_RECEIVED_UNIVERSE';
+  await store.appendScanJourneyCycle(missing);
+  assert.equal((await store.getScanJourneyState()).eligible_since_by_symbol.AAAUSDT,t0);
+
+  const liquidityFail=cycle(t0+120_000,3,[{symbol:'AAAUSDT',deep:false}]);
+  liquidityFail.coins[0].eligible=false;
+  liquidityFail.coins[0].rejection_reason='BELOW_MIN_QUOTE_VOLUME_24H';
+  await store.appendScanJourneyCycle(liquidityFail);
+  assert.equal((await store.getScanJourneyState()).eligible_since_by_symbol.AAAUSDT,undefined);
+});
