@@ -1226,6 +1226,13 @@ export class EarlyExpansionRadar{
       for(const row of eligible)this.scheduler.ensureQueued('MICRO',row.symbol,fastSeenAt);
       const selected=this.selectMicro(eligible,fastBySymbol,cycle);
       phaseTimings.ticker_fast_selection_ms=Math.max(0,this.clock()-tickerFastStartedAt);
+      for(const row of eligible){
+        this.scheduler.record({stage:'FAST',symbol:row.symbol,eventType:'COMPLETED',cycle,at:fastSeenAt,
+          queuedAt:tickerFastStartedAt,startedAt:tickerFastStartedAt,
+          elapsedMs:Math.max(0,fastSeenAt-tickerFastStartedAt),fastSeenAt,
+          reasonCode:'ALL_ELIGIBLE_TICKER_FAST_SCAN',
+          extra:{last_price:row.lastPrice,quote_volume_24h:row.quoteVolume24h,trade_count_24h:row.tradeCount24h}});
+      }
       this.scheduler.record({stage:'FAST',eventType:'CYCLE_COMPLETE',cycle,at:fastSeenAt,
         elapsedMs:phaseTimings.ticker_fast_selection_ms,reasonCode:'ALL_ELIGIBLE_TICKERS_OBSERVED',
         extra:{symbols_total:eligible.length,expected_total:expected.length,received_total:receivedSymbols.length}});
@@ -1262,25 +1269,32 @@ export class EarlyExpansionRadar{
       const microScanStartedAt=this.clock();
       const microScanned=await boundedMap(selected,this.config.microConcurrency,async row=>{
         const startedAt=this.clock(),lane=row._selection_lane||'score';
-        this.scheduler.started('MICRO',row.symbol,{cycle,at:startedAt,lane,
+        const started=this.scheduler.started('MICRO',row.symbol,{cycle,at:startedAt,lane,
           reasonCode:schedulerLaneReason(lane,'MICRO'),fastSeenAt});
         try{
           const result=await this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFive);
           const fp=result?.micro_fingerprint||{};
           const incomplete=Boolean(result?.failed)||!hasFiniteNumber(fp.score)||
             ['DATA_INSUFFICIENT','WARMING_UP','INCOMPLETE'].includes(String(fp.stage||'').toUpperCase());
-          this.scheduler.finished('MICRO',row.symbol,{cycle,at:this.clock(),startedAt,
+          const completedAt=this.clock();
+          this.scheduler.finished('MICRO',row.symbol,{cycle,at:completedAt,startedAt,
             outcome:result?.failed?'FAILED':incomplete?'INCOMPLETE':'COMPLETED',
             lane,reasonCode:result?.failed?'MICRO_SCAN_EXCEPTION':incomplete?'MICRO_FINGERPRINT_INCOMPLETE':'MICRO_FINGERPRINT_READY',
             failureCounted:Boolean(result?.failed),fastSeenAt,
             extra:{score_available:hasFiniteNumber(fp.score),fingerprint_stage:fp.stage||null}});
-          return result;
+          return {...(result&&typeof result==='object'?result:{}),scheduler_wait_ms:started.wait_ms,
+            scheduler_scan_started_at_ms:startedAt,scheduler_scan_completed_at_ms:completedAt};
         }catch(e){
           this.failedTotal++;this.noteError(e,'micro-row');
-          this.scheduler.finished('MICRO',row.symbol,{cycle,at:this.clock(),startedAt,outcome:'FAILED',
+          const completedAt=this.clock();
+          this.scheduler.finished('MICRO',row.symbol,{cycle,at:completedAt,startedAt,outcome:'FAILED',
             lane,reasonCode:'MICRO_SCAN_EXCEPTION',failureCounted:true,fastSeenAt,
             extra:{error:String(e?.message??e)}});
-          return {symbol:row.symbol,failed:true,error:String(e?.message??e),micro_fingerprint:{score:null,confirmation_count:0,eligible:false,closed_candles_only:true},source:sourceList([tickerSource])};
+          return {symbol:row.symbol,failed:true,error:String(e?.message??e),
+            scheduler_wait_ms:started.wait_ms,scheduler_scan_started_at_ms:startedAt,
+            scheduler_scan_completed_at_ms:completedAt,
+            micro_fingerprint:{score:null,confirmation_count:0,eligible:false,closed_candles_only:true},
+            source:sourceList([tickerSource])};
         }
       });
       phaseTimings.micro_scan_ms=Math.max(0,this.clock()-microScanStartedAt);
@@ -1302,12 +1316,15 @@ export class EarlyExpansionRadar{
           extra:{micro_score:item.micro_fingerprint?.score??null}});
       }
       const deepScanStartedAt=this.clock();
+      const deepWaitBySymbol=new Map();
       const scanned=await boundedMap(deepTargets,this.config.deepConcurrency,async micro=>{
         const row=micro.row,fast=fastBySymbol.get(row.symbol)||{},deepStartedAt=this.clock();
         const lane=micro._selection_lane||'score';
-        this.scheduler.started('DEEP',row.symbol,{cycle,at:deepStartedAt,lane,
+        const started=this.scheduler.started('DEEP',row.symbol,{cycle,at:deepStartedAt,lane,
           reasonCode:schedulerLaneReason(lane,'DEEP'),fastSeenAt,
-          extra:{micro_score:micro.micro_fingerprint?.score??null}});
+          extra:{micro_score:micro.micro_fingerprint?.score??null,
+            micro_scan_wait_ms:Number(micro.scheduler_wait_ms)||0}});
+        deepWaitBySymbol.set(row.symbol,started.wait_ms);
         try{
           const evidence=await this.deepScan(row,fast,marketContext,micro),fp=micro.micro_fingerprint;
           const microScore=Number(fp?.score),deepScore=Number(evidence.early_expansion_score);
@@ -1316,11 +1333,13 @@ export class EarlyExpansionRadar{
           const finalBand=evidence.pre_expansion_stage||evidence.decision_band;
           const incomplete=finalBand==='DATA_INSUFFICIENT'||finalBand==='INCOMPLETE'||
             evidence.data_stale===true||Number(evidence.data_quality)<Number(this.config.minDataQuality);
-          this.scheduler.finished('DEEP',row.symbol,{cycle,at:this.clock(),startedAt:deepStartedAt,
+          const completedAt=this.clock();
+          this.scheduler.finished('DEEP',row.symbol,{cycle,at:completedAt,startedAt:deepStartedAt,
             outcome:incomplete?'INCOMPLETE':'COMPLETED',lane,
             reasonCode:incomplete?'DEEP_DATA_INCOMPLETE':(alertEligible({...evidence,early_expansion_score:finalScore,decision_band:finalBand},this.config)?'SIGNAL_EVALUATED':'NO_SIGNAL_NOT_A_FAILURE'),
             failureCounted:false,fastSeenAt,
-            extra:{decision_band:finalBand||null,score_available:hasFiniteNumber(finalScore),data_stale:Boolean(evidence.data_stale)}});
+            extra:{decision_band:finalBand||null,score_available:hasFiniteNumber(finalScore),data_stale:Boolean(evidence.data_stale),
+              micro_scan_wait_ms:Number(micro.scheduler_wait_ms)||0,deep_scan_wait_ms:started.wait_ms}});
           return {
             symbol:row.symbol,last_price:row.lastPrice,price_change_24h:row.priceChange24h,
             early_expansion_score:Number.isFinite(finalScore)?Number(finalScore.toFixed(1)):null,decision_band:finalBand,pre_expansion_stage:finalBand,pre_expansion_fingerprint:evidence.pre_expansion_fingerprint,
@@ -1335,10 +1354,13 @@ export class EarlyExpansionRadar{
           };
         }catch(e){
           this.failedTotal++;this.noteError(e,'deep-row');
-          this.scheduler.finished('DEEP',row.symbol,{cycle,at:this.clock(),startedAt:deepStartedAt,
+          const completedAt=this.clock();
+          this.scheduler.finished('DEEP',row.symbol,{cycle,at:completedAt,startedAt:deepStartedAt,
             outcome:'FAILED',lane,reasonCode:'DEEP_SCAN_EXCEPTION',failureCounted:true,fastSeenAt,
-            extra:{error:String(e?.message??e)}});
-          return {symbol:row.symbol,failed:true,error:String(e?.message??e),decision_band:'DATA_INSUFFICIENT',data_quality:0,micro_fingerprint:micro.micro_fingerprint,source:sourceList([tickerSource,micro.source])};
+            extra:{error:String(e?.message??e),micro_scan_wait_ms:Number(micro.scheduler_wait_ms)||0,
+              deep_scan_wait_ms:deepWaitBySymbol.get(row.symbol)}});
+          return {symbol:row.symbol,failed:true,error:String(e?.message??e),decision_band:'DATA_INSUFFICIENT',
+            data_quality:0,micro_fingerprint:micro.micro_fingerprint,source:sourceList([tickerSource,micro.source])};
         }
       });
       phaseTimings.deep_scan_ms=Math.max(0,this.clock()-deepScanStartedAt);
@@ -1440,7 +1462,7 @@ export class EarlyExpansionRadar{
         deep_selected:deepTargets.length,
         deep_lanes:deepTargets.reduce((o,x)=>(o[x._selection_lane||'score']=(o[x._selection_lane||'score']||0)+1,o),{}),
         micro_wait_ms:microScanned.map(x=>Number(x?.scheduler_wait_ms)||0),
-        deep_wait_ms:scanned.map(x=>Number(x?.scheduler_wait_ms)||0),
+        deep_wait_ms:scanned.map(x=>Number(deepWaitBySymbol.get(x?.symbol))||0),
         scan_duration_ms:scanDurationMs,phase_timings_ms:{...phaseTimings}
       }));
       this.logger.info?.('[RADARX_SCAN_COMPLETE] '+JSON.stringify({
