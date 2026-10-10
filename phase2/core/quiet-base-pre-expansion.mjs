@@ -258,7 +258,8 @@ export function assessQuietBasePreExpansion({
     support_low_first_half: round(firstHalfLow), support_low_second_half: round(secondHalfLow),
     resistance_price: round(resistance, 8), resistance_distance_pct: round(resistanceDistancePct),
     volume_trend: volumeTrend, trades_trend: tradeTrend, flow_state: result.flow_state,
-    future_candles_excluded: (Array.isArray(fiveMinute) ? fiveMinute.length : 0) - rows.length,
+    future_candles_excluded: (Array.isArray(fiveMinute) ? fiveMinute.filter(c => Number.isFinite(Number(c?.closeTime)) && Number(c.closeTime) > asOf).length : 0),
+    excluded_input_candles: (Array.isArray(fiveMinute) ? fiveMinute.length : 0) - rows.length,
     last_closed_price: round(lastClose, 8), last_closed_volume: round(Number(last.volume)),
     last_closed_trade_count: num(last.tradeCount ?? last.count),
     recent_volume_mean: round(recentVolume)
@@ -281,4 +282,42 @@ export function assessQuietBasePreExpansion({
       !nearResistance ? 'RESISTANCE_NOT_NEAR' : 'GRADUAL_PARTICIPATION_NOT_CONFIRMED';
   }
   return result;
+}
+
+
+/** Summarize per-cycle Radar 8 fingerprint evaluations without counting absent/error rows as signals. */
+export function summarizeQuietBasePreExpansion(results = []) {
+  const rows = (Array.isArray(results) ? results : [])
+    .filter(row => !row?.failed && row?.pre_expansion_fingerprint?.quiet_base_pre_expansion)
+    .map(row => ({
+      symbol: String(row.symbol || '').toUpperCase(),
+      fingerprint: row.pre_expansion_fingerprint.quiet_base_pre_expansion,
+      latency: num(row.quiet_base_scan_latency_ms)
+    }));
+  const evidence = (row, key) => row.fingerprint.evidence.find(item => item.key === key);
+  const requiredBaseKeys = [
+    'narrow_price_base_range_pct', 'atr_contraction_ratio',
+    'bollinger_width_ratio', 'higher_lows_or_stable_support',
+    'resistance_proximity_pct'
+  ];
+  const latencyValues = rows.map(row => row.latency).filter(Number.isFinite);
+  const count = classification => rows.filter(row => row.fingerprint.classification === classification).length;
+  return {
+    evaluated_total: rows.length,
+    base_conditions_passed_total: rows.filter(row => requiredBaseKeys.every(key => evidence(row, key)?.passed === true)).length,
+    pre_expansion_total: count('PRE_EXPANSION'),
+    watch_early_total: count('WATCH_EARLY'),
+    already_extended_total: count('ALREADY_EXTENDED'),
+    data_insufficient_total: count('DATA_INSUFFICIENT'),
+    no_signal_total: count('NO_SIGNAL'),
+    volume_not_improving_total: rows.filter(row => evidence(row, 'gradual_volume_vs_same_coin')?.passed === false).length,
+    trades_not_improving_total: rows.filter(row => evidence(row, 'gradual_trades_vs_same_coin')?.passed === false).length,
+    any_participation_not_improving_total: rows.filter(row =>
+      evidence(row, 'gradual_volume_vs_same_coin')?.passed !== true ||
+      evidence(row, 'gradual_trades_vs_same_coin')?.passed !== true).length,
+    average_scan_latency_ms: latencyValues.length ? Math.round(mean(latencyValues)) : null,
+    max_scan_latency_ms: latencyValues.length ? Math.max(...latencyValues) : null,
+    flow_possible_absorption_total: rows.filter(row => row.fingerprint.flow_state === 'POSSIBLE_ABSORPTION').length,
+    flow_unknown_total: rows.filter(row => row.fingerprint.flow_state === 'UNKNOWN_FLOW').length
+  };
 }
