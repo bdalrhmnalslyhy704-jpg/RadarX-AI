@@ -194,10 +194,13 @@ export class DurableStore {
       state.total_recorded_cycles+=1;
       state.retained_coin_rows+=coins.length;
       state.compressed_bytes+=zipped.length;
-      const currentEligible=new Set(eligible.map(x=>String(x.symbol||'').toUpperCase()).filter(Boolean));
-      for(const symbol of Object.keys(state.eligible_since_by_symbol)){
-        if(!currentEligible.has(symbol))delete state.eligible_since_by_symbol[symbol];
-      }
+      const explicitlyBelowEligibility=new Set(coins
+        .filter(coin=>coin&&coin.rejection_reason==='BELOW_MIN_QUOTE_VOLUME_24H')
+        .map(coin=>String(coin.symbol||'').toUpperCase()).filter(Boolean));
+      // A missing ticker is a data gap, not proof the symbol lost eligibility.
+      // Preserve its queue age across partial Binance replies and resets only when
+      // an observed ticker clearly fails the explicit liquidity threshold.
+      for(const symbol of explicitlyBelowEligibility)delete state.eligible_since_by_symbol[symbol];
       for(const coin of eligible){
         const symbol=String(coin.symbol||'').toUpperCase();
         if(!symbol)continue;
@@ -258,7 +261,7 @@ export class DurableStore {
     return {schema_version:SCAN_JOURNEY_SCHEMA,expected_cycles:state.cycles.length,readable_cycles:readableCycles,
       expected_coin_rows:state.retained_coin_rows,readable_coin_rows:readableCoinRows,verified_bytes:verifiedBytes,
       missing_cycles:missingCycles,corrupt_cycles:corruptCycles,
-      complete:missingCycles.length===0&&corruptCycles.length===0&&readableCycles===state.cycles.length};
+      complete:missingCycles.length===0&&corruptCycles.length===0&&readableCycles===state.cycles.length&&readableCoinRows===state.retained_coin_rows};
   }
   async readScanJourneyCycles({limit=10}={}){
     const state=await this.getScanJourneyState();
