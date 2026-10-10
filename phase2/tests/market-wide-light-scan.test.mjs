@@ -70,6 +70,10 @@ test('market-wide light scan covers all eligible symbols once and keeps candidat
   assert.equal(new Set(result.candidateRows.map(x=>x.symbol)).size,48);
   assert.equal(result.summary.evaluated_total,40);
   assert.equal(result.summary.not_evaluated_total,290);
+  assert.ok([...result.audit.values()].filter(item=>item.evaluated).every(item=>Number.isFinite(item.expansion_score)),
+    'every fresh, valid symbol must receive a numeric guarded early-expansion rank');
+  assert.ok([...result.audit.values()].filter(item=>item.evaluated).every(item=>Number.isFinite(item.metrics.expansion_ranking?.momentum15m_pct)),
+    'the rank records only momentum computed from closed candles');
   assert.ok([...result.audit.values()].every(item=>Number.isInteger(item.light_rank)),'every eligible symbol needs an explicit light or rotation rank');
   assert.ok([...result.audit.values()].filter(item=>!item.evaluated).every(item=>item.rank_basis==='FAIR_ROTATION_NO_VALID_LIGHT_DATA'));
   assert.equal(result.summary.binance_rest_calls_added_by_light_scan,0);
@@ -122,6 +126,10 @@ test('missing volume and trade count remain unavailable and are not invented', (
   assert.equal(result.metrics.volume_participation.recentRatio,null);
   assert.equal(result.metrics.trade_count_participation.recentRatio,null);
   assert.equal(result.metrics.optional_participation_available,false);
+  assert.equal(result.metrics.expansion_ranking.volume_ratio,null,'missing activity data must not be replaced with zero');
+  assert.equal(result.metrics.expansion_ranking.trade_ratio,null,'missing trade data must remain unknown');
+  assert.equal(result.metrics.expansion_ranking.taker_buy_quote_share,null,'missing taker-buy data must remain unknown');
+  assert.ok(Number.isFinite(result.expansion_score),'price-only inputs may still rank using available validated price features');
 });
 
 test('invalid candles and sequence gaps are rejected, not compressed across', () => {
