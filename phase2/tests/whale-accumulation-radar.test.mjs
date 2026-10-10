@@ -146,7 +146,7 @@ test('Radar 9 uses a bounded five-worker Deep batch to meet its 60-second cadenc
   assert.equal(maxActive,5,'Radar 9 may run at most five concurrent deep workers');
   assert.equal(completedRows,6,'all six selected symbols must finish');
   assert.equal(radar.lastCoverage.deep_attempted,6);
-  assert.equal(radar.lastCoverage.deep_completed,6);
+  assert.equal(radar.lastCoverage.scanned_successfully,6);
   const report=logs.filter(x=>x.startsWith('[RADARX_SCHEDULER_REPORT]')).map(x=>JSON.parse(x.slice(x.indexOf('{')))).at(-1);
   assert.equal(report.deep_concurrency,5);
   assert.equal(report.deep_selected,6);
