@@ -22,8 +22,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install locked Node dependencies
+        run: npm ci
       - name: Run current Phase 1 and Phase 2 tests
-        run: node phase2/tests/run-tests.mjs
+        run: npm test
       - name: Download Binance Spot 5m bars and replay Radar 8 fingerprint
         id: replay
         continue-on-error: true
