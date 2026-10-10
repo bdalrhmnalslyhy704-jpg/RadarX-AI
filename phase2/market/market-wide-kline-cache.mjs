@@ -132,7 +132,10 @@ export class MarketWideKlineCache {
     this.receivedClosedCandles = 0;
     this.receivedMessages = 0;
     this.duplicateClosedCandleFrames = 0;
+    this.rejectedFutureCandles = 0;
     this.rejectedCandles = 0;
+    this.firstRestBackfillCloseTimeBySymbol = new Map();
+    this.latestWebSocketClosedTimeBySymbol = new Map();
     this.streamGeneration = 0;
     this.attachRestKlineObserver();
   }
@@ -160,6 +163,8 @@ export class MarketWideKlineCache {
     this.symbols = next;
     const eligible = new Set(next);
     for (const symbol of this.cache.keys()) if (!eligible.has(symbol)) this.cache.delete(symbol);
+    for (const symbol of this.firstRestBackfillCloseTimeBySymbol.keys()) if (!eligible.has(symbol)) this.firstRestBackfillCloseTimeBySymbol.delete(symbol);
+    for (const symbol of this.latestWebSocketClosedTimeBySymbol.keys()) if (!eligible.has(symbol)) this.latestWebSocketClosedTimeBySymbol.delete(symbol);
     if (this.running) this.rebuildStream();
     return true;
   }
@@ -207,7 +212,11 @@ export class MarketWideKlineCache {
         if (generation !== this.streamGeneration) return;
         if (String(candle?.timeframe || '') !== '5m' || candle?.closed !== true) return;
         const saved = this.putCandle(candle, 'BINANCE_PUBLIC_WS');
-        if (saved) this.receivedClosedCandles++;
+        if (saved) {
+          this.receivedClosedCandles++;
+          const symbol = String(candle.symbol || '').toUpperCase();
+          this.latestWebSocketClosedTimeBySymbol.set(symbol, Number(candle.closeTime));
+        }
       },
       onState: (state, reason) => {
         if (generation !== this.streamGeneration) return;
@@ -271,9 +280,21 @@ export class MarketWideKlineCache {
     const key = String(symbol || '').trim().toUpperCase();
     if (!/^[A-Z0-9]{2,25}USDT$/.test(key)) return 0;
     if (this.symbols.length && !this.symbols.includes(key)) return 0;
+    const now = this.clock();
+    const inputRows = Array.isArray(candles) ? candles : [];
+    if (String(source).includes('REST') && !this.firstRestBackfillCloseTimeBySymbol.has(key)) {
+      const firstRestClose = inputRows.filter(candle => candle?.closed === true &&
+        validNumber(candle.closeTime) && Number(candle.closeTime) <= now)
+        .reduce((latest, candle) => Math.max(latest, Number(candle.closeTime)), -Infinity);
+      if (Number.isFinite(firstRestClose)) this.firstRestBackfillCloseTimeBySymbol.set(key, firstRestClose);
+    }
     let accepted = 0;
-    for (const candle of Array.isArray(candles) ? candles : []) {
-      const normalized = normalizeClosedCandle({...candle, symbol: key, source: candle?.source || source}, this.clock(), source);
+    for (const candle of inputRows) {
+      if (candle?.closed === true && validNumber(candle.closeTime) && Number(candle.closeTime) > now) {
+        this.rejectedFutureCandles++;
+        continue;
+      }
+      const normalized = normalizeClosedCandle({...candle, symbol: key, source: candle?.source || source}, now, source);
       if (normalized && this.putCandle(normalized, source)) accepted++;
     }
     return accepted;
@@ -322,10 +343,16 @@ export class MarketWideKlineCache {
         future_candle_count:(entry?.candles || []).filter(row => row?.closed === true && Number(row.closeTime) > now).length,
         continuity_gap_count:gaps.length,
         continuity_gaps:gaps,
-        sources:[...new Set(recent.map(row => String(row.source || 'UNKNOWN_SOURCE')))]
+        sources:[...new Set(recent.map(row => String(row.source || 'UNKNOWN_SOURCE')))],
+        rest_backfill_latest_close_time_ms:this.firstRestBackfillCloseTimeBySymbol.get(symbol) ?? null,
+        latest_websocket_closed_candle_close_time_ms:this.latestWebSocketClosedTimeBySymbol.get(symbol) ?? null,
+        websocket_advanced_beyond_backfill:
+          Number(this.latestWebSocketClosedTimeBySymbol.get(symbol) ?? -Infinity) >
+          Number(this.firstRestBackfillCloseTimeBySymbol.get(symbol) ?? Infinity)
       };
     });
     const readySymbols = symbols.filter(item => item.ready).length;
+    const websocketAdvancedSymbols = symbols.filter(item => item.websocket_advanced_beyond_backfill).length;
     const missingSymbols = symbols.filter(item => item.state === 'CANDLE_CACHE_MISSING').length;
     const staleSymbols = symbols.filter(item => item.state === 'STALE_DATA').length;
     const incompleteSymbols = symbols.filter(item => !item.ready &&
@@ -339,6 +366,9 @@ export class MarketWideKlineCache {
       stale_symbols:staleSymbols,
       incomplete_symbols:incompleteSymbols,
       cache_coverage_ready:symbols.length>0 && readySymbols===symbols.length,
+      websocket_advanced_symbols:websocketAdvancedSymbols,
+      websocket_sync_ready:symbols.length>0 && websocketAdvancedSymbols===symbols.length,
+      full_market_coverage_ready:symbols.length>0 && readySymbols===symbols.length && websocketAdvancedSymbols===symbols.length,
       symbols
     };
   }
@@ -383,10 +413,18 @@ export class MarketWideKlineCache {
       stale_symbols: staleSymbols,
       incomplete_symbols: incompleteSymbols,
       cache_coverage_ready: this.symbols.length > 0 && readySymbols === this.symbols.length,
+      websocket_advanced_symbols: this.symbols.filter(symbol =>
+        Number(this.latestWebSocketClosedTimeBySymbol.get(symbol) ?? -Infinity) >
+        Number(this.firstRestBackfillCloseTimeBySymbol.get(symbol) ?? Infinity)).length,
+      full_market_coverage_ready: this.symbols.length > 0 && readySymbols === this.symbols.length &&
+        this.symbols.every(symbol =>
+          Number(this.latestWebSocketClosedTimeBySymbol.get(symbol) ?? -Infinity) >
+          Number(this.firstRestBackfillCloseTimeBySymbol.get(symbol) ?? Infinity)),
       cached_closed_candles: candleCount,
       received_messages: this.receivedMessages,
       received_closed_candles: this.receivedClosedCandles,
       duplicate_closed_candle_frames: this.duplicateClosedCandleFrames,
+      rejected_future_candles: this.rejectedFutureCandles,
       rejected_candles: this.rejectedCandles,
       reconnect_attempts: wsHealth.reconnect_attempts ?? 0,
       consecutive_reconnect_attempts: wsHealth.consecutive_reconnect_attempts ?? 0,
