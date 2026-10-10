@@ -132,7 +132,11 @@ export class MarketWideKlineCache {
     this.receivedClosedCandles = 0;
     this.receivedMessages = 0;
     this.duplicateClosedCandleFrames = 0;
+    this.duplicateClosedCandleFramesBySymbol = new Map();
+    this.ignoredOpenCandleFrames = 0;
+    this.ignoredOpenCandleFramesBySymbol = new Map();
     this.rejectedFutureCandles = 0;
+    this.rejectedFutureCandlesBySymbol = new Map();
     this.rejectedCandles = 0;
     this.firstRestBackfillCloseTimeBySymbol = new Map();
     this.latestWebSocketClosedTimeBySymbol = new Map();
@@ -165,6 +169,9 @@ export class MarketWideKlineCache {
     for (const symbol of this.cache.keys()) if (!eligible.has(symbol)) this.cache.delete(symbol);
     for (const symbol of this.firstRestBackfillCloseTimeBySymbol.keys()) if (!eligible.has(symbol)) this.firstRestBackfillCloseTimeBySymbol.delete(symbol);
     for (const symbol of this.latestWebSocketClosedTimeBySymbol.keys()) if (!eligible.has(symbol)) this.latestWebSocketClosedTimeBySymbol.delete(symbol);
+    for (const map of [this.duplicateClosedCandleFramesBySymbol,this.ignoredOpenCandleFramesBySymbol,this.rejectedFutureCandlesBySymbol]) {
+      for (const symbol of map.keys()) if (!eligible.has(symbol)) map.delete(symbol);
+    }
     if (this.running) this.rebuildStream();
     return true;
   }
@@ -210,7 +217,14 @@ export class MarketWideKlineCache {
       },
       onCandle: candle => {
         if (generation !== this.streamGeneration) return;
-        if (String(candle?.timeframe || '') !== '5m' || candle?.closed !== true) return;
+        if (String(candle?.timeframe || '') !== '5m') return;
+        const symbol = String(candle?.symbol || '').trim().toUpperCase();
+        if (candle?.closed !== true) {
+          this.ignoredOpenCandleFrames++;
+          this.ignoredOpenCandleFramesBySymbol.set(symbol,
+            (this.ignoredOpenCandleFramesBySymbol.get(symbol) || 0) + 1);
+          return;
+        }
         const saved = this.putCandle(candle, 'BINANCE_PUBLIC_WS');
         if (saved) {
           this.receivedClosedCandles++;
@@ -261,6 +275,8 @@ export class MarketWideKlineCache {
       // Repeated frames/copies of the same closed bar are not new market data.
       if (sameBar) {
         this.duplicateClosedCandleFrames++;
+        this.duplicateClosedCandleFramesBySymbol.set(candle.symbol,
+          (this.duplicateClosedCandleFramesBySymbol.get(candle.symbol) || 0) + 1);
         return false;
       }
       // Don't let a delayed REST response overwrite a newer websocket observation.
@@ -290,8 +306,14 @@ export class MarketWideKlineCache {
     }
     let accepted = 0;
     for (const candle of inputRows) {
-      if (candle?.closed === true && validNumber(candle.closeTime) && Number(candle.closeTime) > now) {
+      if (candle?.closed !== true) {
+        this.ignoredOpenCandleFrames++;
+        this.ignoredOpenCandleFramesBySymbol.set(key,(this.ignoredOpenCandleFramesBySymbol.get(key)||0)+1);
+        continue;
+      }
+      if (validNumber(candle.closeTime) && Number(candle.closeTime) > now) {
         this.rejectedFutureCandles++;
+        this.rejectedFutureCandlesBySymbol.set(key,(this.rejectedFutureCandlesBySymbol.get(key)||0)+1);
         continue;
       }
       const normalized = normalizeClosedCandle({...candle, symbol: key, source: candle?.source || source}, now, source);
@@ -340,7 +362,10 @@ export class MarketWideKlineCache {
         latest_closed_candle_close_time_ms:last?.closeTime ?? null,
         latest_candle_age_ms:readiness.ageMs,
         uses_only_closed_candles:true,
-        future_candle_count:(entry?.candles || []).filter(row => row?.closed === true && Number(row.closeTime) > now).length,
+        future_candle_count:(entry?.candles || []).filter(row => row?.closed === true && Number(row.closeTime) > now).length +
+          (this.rejectedFutureCandlesBySymbol.get(symbol)||0),
+        open_candle_frames_ignored:this.ignoredOpenCandleFramesBySymbol.get(symbol)||0,
+        duplicate_closed_candle_frames:this.duplicateClosedCandleFramesBySymbol.get(symbol)||0,
         continuity_gap_count:gaps.length,
         continuity_gaps:gaps,
         sources:[...new Set(recent.map(row => String(row.source || 'UNKNOWN_SOURCE')))],
@@ -428,6 +453,7 @@ export class MarketWideKlineCache {
       received_messages: this.receivedMessages,
       received_closed_candles: this.receivedClosedCandles,
       duplicate_closed_candle_frames: this.duplicateClosedCandleFrames,
+      ignored_open_candle_frames: this.ignoredOpenCandleFrames,
       rejected_future_candles: this.rejectedFutureCandles,
       rejected_candles: this.rejectedCandles,
       reconnect_attempts: wsHealth.reconnect_attempts ?? 0,
