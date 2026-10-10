@@ -1,0 +1,45 @@
+name: Quiet Base Historical Replay (diagnostic only)
+
+on:
+  push:
+    branches:
+      - diagnostic/quiet-base-historical-replay-20261010
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  historical-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout diagnostic branch
+        uses: actions/checkout@v4
+        with:
+          ref: diagnostic/quiet-base-historical-replay-20261010
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run current Phase 1 and Phase 2 tests
+        run: node phase2/tests/run-tests.mjs
+      - name: Download Binance Spot 5m bars and replay Radar 8 fingerprint
+        id: replay
+        continue-on-error: true
+        env:
+          REPLAY_START_UTC: '2026-09-15T00:00:00.000Z'
+          REPLAY_COMPARISON_SYMBOLS: '16'
+          REPLAY_OUT_DIR: artifacts/quiet-base-replay
+        run: node scripts/research/quiet-base-historical-replay.mjs
+      - name: Upload raw data, candidate trace and diagnostic report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radar8-quiet-base-binance-5m-replay
+          path: artifacts/quiet-base-replay/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Preserve replay failure status
+        if: steps.replay.outcome != 'success'
+        run: exit 1
