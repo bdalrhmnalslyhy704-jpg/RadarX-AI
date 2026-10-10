@@ -404,6 +404,10 @@ export class MarketWideKlineCache {
       websocket_url: wsHealth.url || null,
       rest_fallback_state: restFallbackState,
       rest_fallback_seeded_symbols: restSeededSymbols,
+      rest_backfilled_symbols: this.firstRestBackfillCloseTimeBySymbol.size,
+      websocket_updated_symbols: this.symbols.filter(symbol =>
+        Number(this.latestWebSocketClosedTimeBySymbol.get(symbol) ?? -Infinity) >
+        Number(this.firstRestBackfillCloseTimeBySymbol.get(symbol) ?? Infinity)).length,
       subscribed_symbols: this.symbols.length,
       cached_symbols: this.cache.size,
       warmed_symbols: readySymbols,
