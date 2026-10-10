@@ -12,7 +12,7 @@ const STEP = 5 * 60_000;
 const SOURCE = 'BINANCE_PUBLIC_REST';
 
 function candles({now = 1_900_000_000_000, count = 72, source = SOURCE, includeActivity = true} = {}) {
-  const aligned = Math.floor(now / STEP) * STEP - 1;
+  const aligned = Math.floor(now / STEP) * STEP - STEP;
   const firstOpen = aligned - (count - 1) * STEP;
   return Array.from({length: count}, (_, index) => {
     const openTime = firstOpen + index * STEP;
