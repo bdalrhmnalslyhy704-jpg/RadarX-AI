@@ -582,6 +582,9 @@ export class WhaleAccumulationRadar{
           if(dataIncomplete)incomplete++;else success++;
         }catch(e){
           failed++;this.lastError=String(e?.message??e);
+          this.logger.warn?.('[RADARX_RADAR9_SCAN_FAILED] '+JSON.stringify({
+            cycle,symbol,error:String(e?.message??e),stack:e?.stack||null
+          }));
           this.scheduler.finished('DEEP',symbol,{cycle,at:this.clock(),startedAt,outcome:'FAILED',lane,
             reasonCode:'RADAR9_SCAN_EXCEPTION',failureCounted:true,fastSeenAt,
             extra:{error:String(e?.message??e)}});
