@@ -39,12 +39,13 @@ const SHARED = {
   observedUsedWeightAt: null
 };
 
-// Let the shared broker schedule up to six raw requests per second while keeping
-// the stricter weighted budget at 4,000/minute (below Binance's documented 6,000).
-// The existing shared 429/418 cooldown is still applied before any request resumes.
-const SHARED_MAX_REQUESTS_PER_MINUTE = 360;
+// Let the shared broker schedule at most seven raw requests per second while
+// retaining a stricter weighted budget of 4,000/minute (below Binance's documented 6,000).
+// This only removes avoidable queue delay for the same requested work; the shared
+// weight ceiling and 429/418 cooldown still block requests before they are sent.
+const SHARED_MAX_REQUESTS_PER_MINUTE = 420;
 const SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE = 4000;
-const SHARED_MIN_INTERVAL_MS = 167;
+const SHARED_MIN_INTERVAL_MS = 143;
 // TTL only helps if expired entries are removed. Symbols rotate continuously,
 // so prune expired market-data payloads and cap the shared cache to bound heap use.
 const SHARED_MAX_CACHE_ENTRIES = 512;
