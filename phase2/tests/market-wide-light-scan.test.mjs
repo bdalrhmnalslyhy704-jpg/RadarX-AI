@@ -312,6 +312,7 @@ test('coverage gate stays closed for one missing symbol, opens only when all are
   assert.equal(proof.ready_symbols,0);
   assert.equal(proof.not_ready_symbols,3);
   assert.equal(proof.cache_coverage_ready,false);
+  assert.equal(proof.full_market_coverage_ready,false);
 
   cache.seed('AAAUSDT',candles({now,count:72}).map(candle=>({...candle,symbol:'AAAUSDT'})),'BINANCE_PUBLIC_REST');
   cache.seed('BBBUSDT',candles({now,count:72}).map(candle=>({...candle,symbol:'BBBUSDT'})),'BINANCE_PUBLIC_REST');
@@ -325,17 +326,38 @@ test('coverage gate stays closed for one missing symbol, opens only when all are
   proof = cache.coverageReport();
   assert.equal(proof.ready_symbols,3);
   assert.equal(proof.not_ready_symbols,0);
-  assert.equal(proof.cache_coverage_ready,true,'the gate opens only after every eligible symbol is ready');
+  assert.equal(proof.cache_coverage_ready,true,'historical REST backfill covers every eligible symbol');
+  assert.equal(proof.full_market_coverage_ready,false,'REST history alone must not open the complete gate');
+  assert.equal(proof.websocket_sync_ready,false);
   assert.ok(proof.symbols.every(item=>item.closed_candle_count>=60));
   assert.ok(proof.symbols.every(item=>item.continuity_gap_count===0));
   assert.ok(proof.symbols.every(item=>item.latest_candle_age_ms<=8*60_000));
   assert.ok(proof.symbols.every(item=>item.future_candle_count===0));
 
+  now += STEP;
+  const nextClosed = candles({now,count:1})[0];
+  const socket = FakeSocket.instances.at(-1);
+  for (const symbol of ['AAAUSDT','BBBUSDT','CCCUSDT']) {
+    socket.emit('message',Buffer.from(JSON.stringify({
+      e:'kline',E:now,s:symbol,k:{
+        s:symbol,i:'5m',t:nextClosed.openTime,T:nextClosed.closeTime,
+        o:String(nextClosed.open),h:String(nextClosed.high),l:String(nextClosed.low),c:String(nextClosed.close),
+        v:String(nextClosed.volume??100),q:String(nextClosed.quoteVolume??1000),n:Number(nextClosed.tradeCount??10),
+        V:String(nextClosed.takerBuyBaseVolume??50),Q:String(nextClosed.takerBuyQuoteVolume??500),x:true
+      }
+    })));
+  }
+  proof = cache.coverageReport();
+  assert.equal(proof.websocket_advanced_symbols,3);
+  assert.equal(proof.websocket_sync_ready,true);
+  assert.equal(proof.full_market_coverage_ready,true,'only REST backfill plus a newer closed WebSocket candle opens the full gate');
+
   now += 9 * 60_000;
   proof = cache.coverageReport();
   assert.equal(proof.ready_symbols,0);
   assert.equal(proof.stale_symbols,3);
-  assert.equal(proof.cache_coverage_ready,false,'the gate must close again when the cached bars become stale');
+  assert.equal(proof.cache_coverage_ready,false,'historical coverage must close when the data becomes stale');
+  assert.equal(proof.full_market_coverage_ready,false,'the full gate must stay closed when history becomes stale');
   cache.stop();
 });
 
