@@ -1503,7 +1503,7 @@ export class EarlyExpansionRadar{
           entry.micro_fingerprint=normalizeMissing(microResult.micro_fingerprint||INCOMPLETE);
           entry.radar_scores.RADAR_8.micro_score=hasFiniteNumber(microResult.micro_fingerprint?.score)?Number(microResult.micro_fingerprint.score):INCOMPLETE;
         }
-        if(!deepSelectedSet.has(row.symbol)&&microSelectedSet.has(row.symbol)&&microCompletedSet.has(row.symbol)){
+        if(!deepSelectedSet.has(row.symbol)&&selectedMicroSet.has(row.symbol)&&microCompletedSet.has(row.symbol)){
           const fp=microResult?.micro_fingerprint;
           if(!hasFiniteNumber(fp?.score)){
             entry.decision='DATA_INSUFFICIENT';
