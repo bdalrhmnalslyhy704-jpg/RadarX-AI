@@ -100,11 +100,42 @@ start_app_and_wait_ready() {
 }
 
 assert_background_service_declared() {
-  PHASE="verify background service manifest registration"
-  local package_dump
-  package_dump="$(timeout 12s adb shell dumpsys package com.radarx.app 2>/dev/null | tr -d '\\r' || true)"
-  printf '%s\\n' "${package_dump}" | grep -q 'RadarXBackgroundMonitorService'
-  printf '%s\\n' "${package_dump}" | grep -q 'FOREGROUND_SERVICE_DATA_SYNC'
+  PHASE="verify background service registration in the built APK manifest"
+  local aapt manifest_tree permissions
+  aapt="$(find "$ANDROID_HOME/build-tools" -type f -name aapt 2>/dev/null | sort -V | tail -1)"
+  if [[ -z "$aapt" || ! -x "$aapt" ]]; then
+    echo "::error::Android aapt tool was not found; cannot inspect the packaged manifest"
+    return 1
+  fi
+
+  manifest_tree="$("$aapt" dump xmltree "$APK" AndroidManifest.xml)"
+  permissions="$("$aapt" dump permissions "$APK")"
+
+  if ! printf '%s\n' "$manifest_tree" | grep -Fq 'com.radarx.app.RadarXBackgroundMonitorService'; then
+    echo "::error::Packaged APK does not declare RadarXBackgroundMonitorService"
+    printf '%s\n' "$manifest_tree" | grep -Ei 'service|RadarXBackgroundMonitorService' | tail -n 80 || true
+    return 1
+  fi
+  if ! printf '%s\n' "$manifest_tree" | grep -Fq 'radar_background'; then
+    echo "::error::Background service is not isolated into the expected process"
+    printf '%s\n' "$manifest_tree" | grep -Ei 'RadarXBackgroundMonitorService|process' | tail -n 80 || true
+    return 1
+  fi
+  if ! printf '%s\n' "$permissions" | grep -Fq 'android.permission.FOREGROUND_SERVICE_DATA_SYNC'; then
+    echo "::error::Packaged APK lacks FOREGROUND_SERVICE_DATA_SYNC permission"
+    printf '%s\n' "$permissions"
+    return 1
+  fi
+
+  # This is a separate runtime assertion; a manifest declaration alone is not proof
+  # that Android actually started the foreground service.
+  local logs
+  logs="$(timeout 6s adb logcat -d -s RadarXBackground:I '*:S' 2>/dev/null || true)"
+  if ! printf '%s\n' "$logs" | grep -Fq 'BACKGROUND_SERVICE_READY'; then
+    echo "::error::Manifest is valid but the foreground monitor never reported runtime readiness"
+    printf '%s\n' "$logs" | tail -n 100
+    return 1
+  fi
 }
 
 PHASE="wait for Android emulator device"
