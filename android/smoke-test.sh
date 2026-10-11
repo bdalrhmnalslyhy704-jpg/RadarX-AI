@@ -27,6 +27,10 @@ cleanup() {
     kill "${REPLAY_SERVER_PID}" >/dev/null 2>&1 || true
     wait "${REPLAY_SERVER_PID}" 2>/dev/null || true
   fi
+  if [[ -n "${REPLAY_LOGCAT_PID:-}" ]]; then
+    kill "${REPLAY_LOGCAT_PID}" >/dev/null 2>&1 || true
+    wait "${REPLAY_LOGCAT_PID}" 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT
 
@@ -230,13 +234,23 @@ fixture_stats() {
 stat_field() {
   node -e 'const s=JSON.parse(process.argv[1]); process.stdout.write(String(s[process.argv[2]] ?? ""));' "$1" "$2"
 }
+REPLAY_LOG_FILE="${REPLAY_TMP}/radarx-replay-logcat.txt"
+: > "${REPLAY_LOG_FILE}"
+# One persistent log stream avoids repeatedly invoking adb logcat -d inside the
+# replay wait loop; all assertions still inspect actual Android runtime logs.
+adb logcat -v brief -s RadarXBackground:I RadarXSmoke:I AndroidRuntime:E '*:S' >> "${REPLAY_LOG_FILE}" 2>&1 &
+REPLAY_LOGCAT_PID=$!
+sleep 1
+if ! kill -0 "${REPLAY_LOGCAT_PID}" 2>/dev/null; then
+  echo "::error::Could not start Android replay log capture"
+  exit 1
+fi
+replay_logs() { cat "${REPLAY_LOG_FILE}"; }
 accepted_log_count() {
-  timeout 10s adb logcat -d -s RadarXBackground:I '*:S' 2>/dev/null |
-    grep -F 'ALERT_POST_REQUEST_ACCEPTED key=' | wc -l | tr -d ' '
+  grep -F 'ALERT_POST_REQUEST_ACCEPTED key=' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' '
 }
 accepted_log_keys() {
-  timeout 10s adb logcat -d -s RadarXBackground:I '*:S' 2>/dev/null |
-    sed -n 's/^.*ALERT_POST_REQUEST_ACCEPTED key=//p'
+  sed -n 's/^.*ALERT_POST_REQUEST_ACCEPTED key=//p' "${REPLAY_LOG_FILE}"
 }
 launch_replay_test_app() {
   timeout 25s adb shell am start -n com.radarx.app/.MainActivity \
@@ -265,7 +279,7 @@ for attempt in $(seq 1 35); do
 done
 if [[ "${replay_ready}" -ne 1 ]]; then
   echo "::error::Debug replay app or local feed did not become ready"
-  timeout 10s adb logcat -d -s RadarXSmoke:I RadarXBackground:I AndroidRuntime:E '*:S' | tail -n 180 || true
+  tail -n 180 "${REPLAY_LOG_FILE}" || true
   exit 1
 fi
 
@@ -311,7 +325,7 @@ for attempt in $(seq 1 120); do
   if [[ "${accepted}" -ge 150 && "${restart_done}" -eq 0 ]]; then
     # Wait for the synchronous checkpoint; preserve logs across force-stop.
     sleep 2
-    before_ready="$(timeout 6s adb logcat -d -s RadarXBackground:I '*:S' 2>/dev/null | grep -F 'BACKGROUND_SERVICE_READY' | wc -l | tr -d ' ')"
+    before_ready="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
     old_service_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
     timeout 15s adb shell am force-stop com.radarx.app
     sleep 2
@@ -319,7 +333,7 @@ for attempt in $(seq 1 120); do
     restarted_ready=0
     for restart_attempt in $(seq 1 30); do
       new_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
-      ready_count="$(timeout 6s adb logcat -d -s RadarXBackground:I '*:S' 2>/dev/null | grep -F 'BACKGROUND_SERVICE_READY' | wc -l | tr -d ' ')"
+      ready_count="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
       logs="$(timeout 5s adb logcat -d -s RadarXSmoke:I RadarXBackground:I '*:S' 2>/dev/null || true)"
       if [[ -n "${new_pid}" && "${ready_count}" -gt "${before_ready}" ]] &&
          printf '%s\n' "${logs}" | grep -Fq 'REPLAY_TEST_OVERRIDE_CONFIGURED'; then
@@ -330,7 +344,7 @@ for attempt in $(seq 1 120); do
     done
     if [[ "${restarted_ready}" -ne 1 ]]; then
       echo "::error::Background service failed to restart with its saved cursor"
-      timeout 10s adb logcat -d -s RadarXSmoke:I RadarXBackground:I AndroidRuntime:E '*:S' | tail -n 180 || true
+      tail -n 180 "${REPLAY_LOG_FILE}" || true
       exit 1
     fi
     if [[ -n "${old_service_pid}" && "${new_pid}" == "${old_service_pid}" ]]; then
@@ -360,7 +374,7 @@ if [[ "${replay_complete}" -ne 1 ]]; then
   echo "::error::Replay did not drain all 623 alerts before timeout"
   echo "accepted=$(accepted_log_count)"
   fixture_stats || true
-  timeout 10s adb logcat -d -s RadarXBackground:I '*:S' | tail -n 180 || true
+  tail -n 180 "${REPLAY_LOG_FILE}" || true
   exit 1
 fi
 
