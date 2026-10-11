@@ -307,6 +307,11 @@ test('TEST_FIXTURE: unified radar alert replay returns all historical pages olde
       price:0.1234,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
     });
   }
+  await store.appendFalconEyeAlert({
+    id:'FALCON:offline-history',radar:'FALCON_EYE_RADAR',symbol:'OGNUSDT',
+    processed_at:100000,detected_at:100000,price:0.1234,
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+  });
   const server=createApiServer({
     config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},
     store,monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},
@@ -341,6 +346,11 @@ test('TEST_FIXTURE: unified radar alert replay returns all historical pages olde
     assert.equal(seen[49],'RADAR4:0049');
     assert.equal(seen[50],'RADAR4:0050','equal-time alerts after a page boundary must replay');
     assert.equal(seen[129],'RADAR4:0129');
+    const allQuery=new URLSearchParams({radar:'ALL',limit:'50',since:'0',since_id:'',oldest_first:'1'});
+    const allReplay=await (await fetch(base+'/api/radar-alerts?'+allQuery.toString())).json();
+    assert.equal(allReplay.oldest_first,true);
+    assert.equal(allReplay.alerts.some(x=>x.id==='FALCON:offline-history'),true,
+      'durable Falcon Eye history must replay even when its scanner instance is absent');
   }finally{
     await new Promise(resolve=>server.close(resolve));
   }
