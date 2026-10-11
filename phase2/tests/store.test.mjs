@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,stat,mkdir,readFile,writeFile,readdir} from 'node:fs/promises';
+import {mkdtemp,stat,mkdir,readFile,writeFile,readdir,truncate} from 'node:fs/promises';
+import {spawnSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -523,6 +524,61 @@ test('scan-journey archive refuses unsafe low disk headroom before changing dura
     const signal=await store.readFalconEyeAlerts({sinceMs:0,limit:10});
     assert.equal(signal.length,1);
     assert.equal(signal[0].id,'FALCON:LOWDISK:1');
+  }finally{
+    await import('node:fs/promises').then(fs=>fs.rm(dir,{recursive:true,force:true}));
+  }
+});
+
+
+test('DurableStore startup does not read a large existing JSONL archive into the heap',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-large-jsonl-startup-'));
+  try{
+    const largeArchive=join(dir,'notifications.jsonl');
+    await writeFile(largeArchive,'');
+    // A sparse 128 MiB fixture distinguishes stat-based existence checks from
+    // readFile-based checks without physically writing 128 MiB of test content.
+    await truncate(largeArchive,128*1024*1024);
+    const storeUrl=new URL('../core/store.mjs',import.meta.url).href;
+    const script=`import {DurableStore} from ${JSON.stringify(storeUrl)}; await new DurableStore({dir:process.argv[1]}).init(); console.log('INIT_OK');`;
+    const child=spawnSync(process.execPath,[
+      '--max-old-space-size=96','--input-type=module','-e',script,dir
+    ],{encoding:'utf8',timeout:30_000,maxBuffer:2*1024*1024});
+    assert.equal(child.error,undefined,String(child.error||''));
+    assert.equal(child.status,0,'startup must work under a 96 MiB heap with a 128 MiB archive: '+String(child.stderr||''));
+    assert.match(child.stdout,/INIT_OK/);
+    assert.equal((await stat(largeArchive)).size,128*1024*1024,'startup must preserve the pre-existing archive unchanged');
+  }finally{
+    await import('node:fs/promises').then(fs=>fs.rm(dir,{recursive:true,force:true}));
+  }
+});
+
+test('archive writes fail closed when filesystem capacity cannot be measured',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-capacity-unavailable-'));
+  try{
+    const store=await new DurableStore({
+      dir,freeBytesProvider:async()=>{throw new Error('simulated statfs permission error');}
+    }).init();
+    await assert.rejects(
+      store.appendFalconEyeAlert({
+        id:'FALCON:CAPACITY-UNAVAILABLE',radar:'FALCON_EYE_RADAR',symbol:'TESTUSDT',
+        detected_at:Date.now(),processed_at:Date.now(),price:1,
+        paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+      }),
+      error=>error?.code==='DURABLE_STORE_CAPACITY_UNAVAILABLE'
+    );
+    const completedAt=Date.now()-60_000;
+    const cycle={
+      schema_version:SCAN_JOURNEY_SCHEMA,cycle_id:'RADAR8:USDT:CAPACITY-UNAVAILABLE',cycle_number:1,
+      radar:'RADAR_8',quote:'USDT',status:'COMPLETE',started_at:completedAt-1000,completed_at:completedAt,
+      data_policy:{closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
+      counters:{},coins:[{symbol:'TESTUSDT',eligible:true}]
+    };
+    await assert.rejects(
+      store.appendScanJourneyCycle(cycle),
+      error=>error?.code==='DURABLE_STORE_CAPACITY_UNAVAILABLE'
+    );
+    assert.equal((await readdir(store.scanJourneyDir)).filter(name=>name.endsWith('.json.gz')).length,0);
+    assert.equal((await store.getScanJourneyState()).cycles.length,0);
   }finally{
     await import('node:fs/promises').then(fs=>fs.rm(dir,{recursive:true,force:true}));
   }
