@@ -299,7 +299,7 @@ test('TEST_FIXTURE: Falcon Eye history remains retrievable when the live scanner
 test('TEST_FIXTURE: unified radar alert replay returns all historical pages oldest-first without cursor gaps',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-unified-alert-replay-'));
   const store=await new DurableStore({dir}).init();
-  for(let i=0;i<130;i++){
+  for(let i=0;i<620;i++){
     const at=100000+Math.floor(i/3);
     await store.appendLiquidityAbsorptionAlert({
       id:'RADAR4:'+String(i).padStart(4,'0'),radar:'LIQUIDITY_ABSORPTION_RADAR',
@@ -337,15 +337,18 @@ test('TEST_FIXTURE: unified radar alert replay returns all historical pages olde
       cursorAt=Number(body.next_cursor?.since||cursorAt);
       cursorId=String(body.next_cursor?.since_id||cursorId);
       pageCount++;
-      assert.ok(pageCount<=4,'replay must drain with bounded pages');
+      assert.ok(pageCount<=14,'replay must drain with bounded pages');
     }
-    assert.equal(pageCount,3);
-    assert.equal(seen.length,130);
-    assert.equal(new Set(seen).size,130,'no alert may be repeated');
+    assert.equal(pageCount,13);
+    assert.equal(seen.length,620);
+    assert.equal(new Set(seen).size,620,'no alert may be repeated');
     assert.equal(seen[0],'RADAR4:0000');
     assert.equal(seen[49],'RADAR4:0049');
     assert.equal(seen[50],'RADAR4:0050','equal-time alerts after a page boundary must replay');
     assert.equal(seen[129],'RADAR4:0129');
+    assert.equal(seen[619],'RADAR4:0619');
+    assert.ok(seen.every((id,index)=>id==='RADAR4:'+String(index).padStart(4,'0')),
+      'more than 500 durable alerts must replay exactly once, in order, including every equal-time boundary');
     const allQuery=new URLSearchParams({radar:'ALL',limit:'50',since:'0',since_id:'',oldest_first:'1'});
     const allReplay=await (await fetch(base+'/api/radar-alerts?'+allQuery.toString())).json();
     assert.equal(allReplay.oldest_first,true);
