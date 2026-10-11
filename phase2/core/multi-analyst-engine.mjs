@@ -786,7 +786,9 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   const analystMedian=median(familyRows.map(x=>x.score))||50;
   const groupScores=Object.values(groupConsensus).map(x=>x.score);
   const groupMean=avg(groupScores)||50;
-  const balancedScore=clamp(weightedScore*.62+analystMedian*.15+groupMean*.23);
+  const familyMean=avg(familyRows.map(x=>x.score))||50;
+  // The final score uses each independent evidence family once; role/group scores remain diagnostics.
+  const balancedScore=clamp(weightedScore*.62+analystMedian*.15+familyMean*.23);
 
   const longStrength=familyRows.reduce((sum,x)=>sum+(x.long_votes>x.bearish_votes?Math.max(0,x.score-50):0),0);
   const bearStrength=familyRows.reduce((sum,x)=>sum+(x.bearish_votes>x.long_votes?Math.max(0,x.score-50):0),0);
@@ -797,12 +799,12 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   const positiveAnalysts=safeAnalysts.filter(x=>x.score>=65&&x.direction!=='BEARISH').length;
   const strongAnalysts=safeAnalysts.filter(x=>x.score>=80&&x.direction==='LONG').length;
   const bearishStrongAnalysts=safeAnalysts.filter(x=>x.score>=75&&x.direction==='BEARISH').length;
-  const activeGroups=Object.keys(groupConsensus);
-  const positiveGroups=activeGroups.filter(g=>groupConsensus[g].score>=62&&groupConsensus[g].long_votes>=1).length;
-  const bearishGroups=activeGroups.filter(g=>groupConsensus[g].score<=42&&groupConsensus[g].bearish_votes>=1).length;
+  const activeFamilies=Object.keys(familyConsensus);
+  const positiveGroups=activeFamilies.filter(f=>familyConsensus[f].score>=62&&familyConsensus[f].long_votes>=1).length;
+  const bearishGroups=activeFamilies.filter(f=>familyConsensus[f].score<=42&&familyConsensus[f].bearish_votes>=1).length;
   const analystDispersion=stdev(familyRows.map(x=>x.score));
   const groupDispersion=stdev(groupScores);
-  const agreement=clamp(100-(analystDispersion||0)*2.35-(groupDispersion||0)*1.35);
+  const agreement=clamp(100-(analystDispersion||0)*2.35);
   const avgCoverage=avg(safeAnalysts.map(x=>x.coverage))||0;
   const setup=features?.setupFingerprint||{};
   const early=earlyOpportunity({...features,setupFingerprint:setup},memory);
@@ -913,7 +915,8 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
     score_components:{
       weighted:Math.round(weightedScore*10)/10,
       median:Math.round(analystMedian*10)/10,
-      group_balance:Math.round(groupMean*10)/10,
+      group_balance:Math.round(familyMean*10)/10,
+      group_category_diagnostic:Math.round(groupMean*10)/10,
       balanced:Math.round(balancedScore*10)/10,
       direction_edge:Math.round(directionEdge*10)/10
     },
