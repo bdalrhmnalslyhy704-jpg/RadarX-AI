@@ -450,6 +450,31 @@ test('repeated scans reuse a still-fresh closed 5m evaluation until a new candle
   assert.equal(second.summary.new_closed_candle_total,0);
 });
 
+test('a failed light evaluation is retried when older history fills without a newer last candle', () => {
+  const now=1_900_000_000_000;
+  const light=new MarketWideLightScan({config:{minClosedCandles:60},clock:()=>now});
+  const eligible=[row(0)];
+  const full=cacheSeries(eligible[0].symbol,now,{count:72});
+  const incomplete={...full,candles:full.candles.slice(-20)};
+  const first=light.scan({
+    eligible,now,cycle:1,getSeries:()=>incomplete
+  });
+  assert.equal(first.coverageReady,false);
+  assert.equal(first.audit.get(eligible[0].symbol).evaluated,false);
+  assert.equal(first.audit.get(eligible[0].symbol).reason,'INSUFFICIENT_CLOSED_5M_CANDLES');
+  const completed=light.scan({
+    eligible,now:now+1000,cycle:2,getSeries:()=>full
+  });
+  const item=completed.audit.get(eligible[0].symbol);
+  assert.equal(item.new_closed_candle,false,'the latest candle timestamp did not change');
+  assert.equal(item.evaluation_reused,false,'an earlier incomplete result must not be reused after more history arrives');
+  assert.equal(item.evaluated,true);
+  assert.equal(item.evaluation_kind,'CACHE_BECAME_READY');
+  assert.equal(completed.coverageReady,true,
+    'complete fresh closed history should qualify even if no new closed candle arrived');
+  assert.equal(completed.summary.binance_rest_calls_added_by_light_scan,0);
+});
+
 test('cache time regressions are rejected and never promoted as a new closed candle', () => {
   const now = 1_900_000_000_000;
   const light = new MarketWideLightScan({config:{minClosedCandles:60},clock:()=>now});

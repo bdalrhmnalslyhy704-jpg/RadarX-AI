@@ -428,7 +428,7 @@ export class MarketWideLightScan {
           cache_state: 'STALE_DATA',
           evaluation_kind: cacheRegression ? 'CACHE_REGRESSION' : 'CANDLE_REVISION'
         };
-      } else if (sameCandle && age <= this.config.maxCandleAgeMs) {
+      } else if (sameCandle && age <= this.config.maxCandleAgeMs && previous.result?.evaluated === true) {
         result = {
           ...previous.result,
           data_age_ms: age,
@@ -456,6 +456,8 @@ export class MarketWideLightScan {
         result = evaluateMarketWideLightCandidate({symbol, series, now: at, config: this.config});
         const newClosedCandle = latestCloseTime !== null &&
           (!previous || latestCloseTime > Number(previous.latestCloseTime));
+        const cacheBecameReady = Boolean(previous && previous.result?.evaluated !== true && result.evaluated === true);
+        const incompleteCacheRechecked = Boolean(previous && previous.result?.evaluated !== true && result.evaluated !== true);
         result = {
           ...result,
           evaluated_at: at,
@@ -463,7 +465,9 @@ export class MarketWideLightScan {
           evaluation_reused: false,
           new_closed_candle: newClosedCandle,
           data_is_fresh: result.evaluated === true,
-          evaluation_kind: newClosedCandle ? 'NEW_CLOSED_CANDLE' : 'NO_NEW_CLOSED_CANDLE'
+          evaluation_kind: newClosedCandle ? 'NEW_CLOSED_CANDLE' :
+            cacheBecameReady ? 'CACHE_BECAME_READY' :
+            incompleteCacheRechecked ? 'RECHECKED_INCOMPLETE_CACHE' : 'NO_NEW_CLOSED_CANDLE'
         };
         if (signature) {
           this.lastEvaluationBySymbol.set(symbol, {
