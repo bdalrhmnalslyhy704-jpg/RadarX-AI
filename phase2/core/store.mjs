@@ -200,7 +200,9 @@ export class DurableStore {
   async writeJson(p,v){
     const t=p+'.tmp-'+process.pid+'-'+Date.now()+'-'+randomUUID();
     const compactOutcome=p===this.files.preExpansionOutcomes;
-    const budget=await this.diskWriteBudget(this.storageReserveBytes);
+    // Large outcome rewrites preserve 16 MiB of write headroom; small manifests/snapshots
+    // use a 1 MiB floor so retention metadata can still be committed under pressure.
+    const budget=await this.diskWriteBudget(compactOutcome?this.storageReserveBytes:MiB);
     let written=0;
     const limiter=new Transform({
       transform(chunk,encoding,callback){
