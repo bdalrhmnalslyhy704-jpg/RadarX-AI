@@ -137,12 +137,16 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (BuildConfig.DEBUG) Log.i("RadarXSmoke", "ACTIVITY_RESUMED");
+        if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            Log.i("RadarXSmoke", "ACTIVITY_RESUMED");
+        }
     }
 
     @Override
     protected void onPause() {
-        if (BuildConfig.DEBUG) Log.i("RadarXSmoke", "ACTIVITY_PAUSED");
+        if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            Log.i("RadarXSmoke", "ACTIVITY_PAUSED");
+        }
         super.onPause();
     }
 
