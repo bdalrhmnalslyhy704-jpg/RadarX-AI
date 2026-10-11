@@ -621,6 +621,35 @@ export class DurableStore {
     return rows;
   }
 
+  async readAlertPage(kind,{sinceMs=0,sinceId='',radar='',limit=100}={}){
+    const file=this.files[kind];
+    if(!file)return[];
+    const safeLimit=Math.min(1000,Math.max(1,Math.trunc(Number(limit)||100)));
+    const after=Math.max(0,Number.isFinite(Number(sinceMs))?Number(sinceMs):0);
+    const afterId=String(sinceId||'');
+    const radarId=String(radar||'UNKNOWN_RADAR').toUpperCase();
+    let content='';
+    try{content=await readFile(file,'utf8');}catch{return[];}
+    const compare=(a,b)=>a.at-b.at||a.cursorId.localeCompare(b.cursorId);
+    const page=[];
+    for(const line of content.split('\n')){
+      if(!line.trim())continue;
+      let row;
+      try{row=JSON.parse(line);}catch{continue;}
+      if(!row||typeof row!=='object'||Array.isArray(row))continue;
+      const at=Number(row.processed_at??row.detected_at??row.detectedAt??row.event_at??0);
+      if(!Number.isFinite(at)||at<=0)continue;
+      const identity=String(row.id||[row.symbol||'',row.event||row.type||'',at].join(':'));
+      const cursorId=radarId+'|'+identity;
+      if(at<after||(at===after&&(!afterId||cursorId.localeCompare(afterId)<=0)))continue;
+      const item={row,at,cursorId};
+      if(page.length<safeLimit){page.push(item);continue;}
+      let worst=0;
+      for(let i=1;i<page.length;i++)if(compare(page[i],page[worst])>0)worst=i;
+      if(compare(item,page[worst])<0)page[worst]=item;
+    }
+    return page.sort(compare).map(item=>({...item.row,replay_cursor_at:item.at,replay_cursor_id:item.cursorId}));
+  }
   async readRecent(kind,limit=100){
     const file=this.files[kind];
     if(!file)return[];
