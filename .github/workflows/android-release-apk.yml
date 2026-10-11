@@ -47,7 +47,7 @@ jobs:
           set -euo pipefail
           deadline=$((SECONDS + 55 * 60))
           while (( SECONDS < deadline )); do
-            response="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs" -f "head_sha=$GITHUB_SHA" -f "per_page=100")"
+            response="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/runs" -f "head_sha=$GITHUB_SHA" -F "per_page=100")"
             selected="$(jq -c --arg expected_name "RadarX Triple Radar CI" --arg expected_sha "$GITHUB_SHA" --arg expected_branch "$GITHUB_REF_NAME" \
               '[.workflow_runs[] | select(.name == $expected_name and .head_sha == $expected_sha and .head_branch == $expected_branch)] | sort_by(.created_at) | last // empty' \
               <<<"$response")"
@@ -227,98 +227,200 @@ jobs:
           fi
 
       - name: Verify full-radar Triple backend contract
-        timeout-minutes: 4
+        timeout-minutes: 12
         run: |
           set -euo pipefail
           BASE="https://radarx-ai-triple-production.up.railway.app"
-          for path in \
-            "/api/radar-status" \
-            "/api/move-radar?limit=1" \
-            "/api/strong-move-radar?limit=1" \
-            "/api/rotation-lag-radar?limit=1" \
-            "/api/liquidity-absorption-radar?limit=1" \
-            "/api/kahir-radar?limit=1&scan=0" \
-            "/api/doomsday-radar?limit=1&scan=0" \
-            "/api/professor-radar?limit=1&scan=0" \
-            "/api/almuqawim-radar?limit=1&scan=0" \
-            "/api/whale-accumulation-radar?limit=1&scan=0" \
-            "/api/falcon-eye-radar?limit=1&scan=0"; do
-            code="$(curl --location --silent --show-error --max-time 60 -o "$RUNNER_TEMP/radar-check.json" -w "%{http_code}" "$BASE$path")"
-            case "$code" in
-              200|503) ;;
-              *) echo "::error::Triple backend returned HTTP $code for $path"; cat "$RUNNER_TEMP/radar-check.json"; exit 1 ;;
-            esac
-          done
-      - name: Verify Coin Hunter public contract
-        timeout-minutes: 3
-        run: |
-          set -euo pipefail
-          BASE="https://radarx-ai-triple-production.up.railway.app"
-          CODE="$(curl --location --silent --show-error --max-time 60 -o "$RUNNER_TEMP/coin-hunter.json" -w "%{http_code}" "$BASE/api/coin-hunter-radar?quote=USDT&limit=5&scan=0")"
-          case "$CODE" in 200|503) ;; *) echo "::error::Coin Hunter returned HTTP $CODE"; cat "$RUNNER_TEMP/coin-hunter.json"; exit 1 ;; esac
+          check_endpoint() {
+            local path="$1" label="$2" file="$RUNNER_TEMP/radar-check-$2.json" code="000"
+            for attempt in $(seq 1 6); do
+              code="$(curl --location --connect-timeout 8 --max-time 12 --silent --show-error \
+                -o "$file" -w "%{http_code}" "$BASE$path" 2>"$RUNNER_TEMP/radar-curl-$2.log" || true)"
+              if [[ "$code" == "200" ]] && node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"))' "$file" >/dev/null 2>&1; then
+                echo "PASS $label HTTP 200 with valid JSON (attempt $attempt)"
+                return 0
+              fi
+              echo "Retry $attempt/6 for $label: HTTP $code"
+              if (( attempt < 6 )); then sleep 4; fi
+            done
+            echo "::error::Required endpoint is unavailable or invalid after bounded retries: $label ($path), HTTP $code"
+            cat "$file" 2>/dev/null || true
+            cat "$RUNNER_TEMP/radar-curl-$2.log" 2>/dev/null || true
+            return 1
+          }
+
+          while IFS='|' read -r label path; do
+            check_endpoint "$path" "$label"
+          done <<'ENDPOINTS'
+          radar-status|/api/radar-status
+          move-radar|/api/move-radar?limit=1
+          strong-move-radar|/api/strong-move-radar?limit=1
+          rotation-lag-radar|/api/rotation-lag-radar?limit=1
+          liquidity-absorption-radar|/api/liquidity-absorption-radar?limit=1
+          kahir-radar|/api/kahir-radar?limit=1&scan=0
+          doomsday-radar|/api/doomsday-radar?limit=1&scan=0
+          professor-radar|/api/professor-radar?limit=1&scan=0
+          almuqawim-radar|/api/almuqawim-radar?limit=1&scan=0
+          whale-accumulation-radar|/api/whale-accumulation-radar?limit=1&scan=0
+          falcon-eye-radar|/api/falcon-eye-radar?limit=1&scan=0
+          ENDPOINTS
+
+          # HTTP 200 alone is insufficient: every current production scanner must
+          # be instantiated and running; this does not claim every unit is independent.
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const code=Number(process.env.CODE||'0');
-          const raw=fs.readFileSync(process.env.RUNNER_TEMP+'/coin-hunter.json','utf8');
-          const body=JSON.parse(raw);
-          if (code===200) {
-            if (body.radar !== 'COIN_HUNTER_RADAR') throw new Error('COIN_HUNTER_RADAR_INVALID');
-            if (body.radar_name !== '🎯 صائد العملات') throw new Error('COIN_HUNTER_NAME_INVALID');
-            if (body.meta?.paper_trading !== true || body.meta?.real_order_execution !== false || body.meta?.confidence_score !== 'UNKNOWN') throw new Error('COIN_HUNTER_POLICY_INVALID');
-            if (body.data_policy?.closed_candles_only !== true) throw new Error('COIN_HUNTER_CLOSED_CANDLE_POLICY_INVALID');
-            if (!Array.isArray(body.candidates)) throw new Error('COIN_HUNTER_CANDIDATES_MISSING');
-            if (!Object.hasOwn(body,'lesson') || !Object.hasOwn(body,'coverage')) throw new Error('COIN_HUNTER_LEARNING_CONTRACT_MISSING');
+          const body=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/radar-check-radar-status.json','utf8'));
+          if(!Array.isArray(body.radars))throw new Error('RADAR_STATUS_LIST_MISSING');
+          if(body.meta?.paper_trading!==true||body.meta?.real_order_execution!==false||body.meta?.confidence_score!=='UNKNOWN')throw new Error('RADAR_FLEET_POLICY_INVALID');
+          const required=[
+            'EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR',
+            'LIQUIDITY_ABSORPTION_RADAR','KAHIR_RADAR','DOOMSDAY_RADAR',
+            'ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR','COIN_HUNTER_RADAR',
+            'WHALE_ACCUMULATION_RADAR','PROFESSOR_RADAR','FALCON_EYE_RADAR'
+          ];
+          const failures=[];
+          for(const id of required){
+            const row=body.radars.find(x=>x.radar===id);
+            if(!row)failures.push(id+':MISSING');
+            else if(row.running!==true)failures.push(id+':NOT_RUNNING');
           }
-          console.log(JSON.stringify({http:code,radar:body.radar??null,name:body.radar_name??null,candidates:body.candidates?.length??0,learned_samples:body.lesson?.samples??0,coverage:body.coverage??{}}));
+          if(failures.length)throw new Error('RADAR_FLEET_NOT_READY:'+failures.join(','));
+          console.log(JSON.stringify({radars:body.radars.length,required_running:required.length,policy:body.meta}));
           NODE
-      - name: Verify Whale Accumulation public contract
-        timeout-minutes: 3
+      - name: Verify Coin Hunter public contract and runtime
+        timeout-minutes: 8
         env:
           BASE: https://radarx-ai-triple-production.up.railway.app
         run: |
           set -euo pipefail
-          CODE="$(curl --location --silent --show-error --max-time 60 -o "$RUNNER_TEMP/whale.json" -w "%{http_code}" "$BASE/api/whale-accumulation-radar?limit=5&scan=0")"
-          case "$CODE" in 200|503) ;; *) echo "::error::Whale Accumulation returned HTTP $CODE"; cat "$RUNNER_TEMP/whale.json"; exit 1 ;; esac
-          export CODE
-          node --input-type=module <<'NODE'
+          READY=false
+          CODE="000"
+          for attempt in $(seq 1 8); do
+            CODE="$(curl --location --connect-timeout 8 --max-time 15 --silent --show-error \
+              -o "$RUNNER_TEMP/coin-hunter.json" -w "%{http_code}" \
+              "$BASE/api/coin-hunter-radar?quote=USDT&limit=5&scan=0" 2>"$RUNNER_TEMP/coin-hunter-curl.log" || true)"
+            export CODE
+            if [[ "$CODE" == "200" ]]; then
+              if node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const body=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/coin-hunter.json','utf8'));
+          const h=body.monitoring||{}, errors=[];
+          if(body.radar!=='COIN_HUNTER_RADAR')errors.push('RADAR_INVALID');
+          if(body.radar_name!=='🎯 صائد العملات')errors.push('NAME_INVALID');
+          if(body.meta?.live!==true||h.running!==true)errors.push('NOT_RUNNING');
+          if(!Number(h.last_scan_at)||body.scan?.completed!==true||body.scan?.error)errors.push('NO_SUCCESSFUL_SCAN');
+          if(body.status==='not_ready'||body.error)errors.push('NOT_READY');
+          if(body.meta?.paper_trading!==true||body.meta?.real_order_execution!==false||body.meta?.confidence_score!=='UNKNOWN')errors.push('POLICY_INVALID');
+          if(body.data_policy?.closed_candles_only!==true||body.data_policy?.no_synthetic_prices!==true)errors.push('DATA_POLICY_INVALID');
+          if(!Array.isArray(body.candidates))errors.push('CANDIDATES_MISSING');
+          if(!Object.hasOwn(body,'lesson')||!Object.hasOwn(body,'coverage'))errors.push('LEARNING_CONTRACT_MISSING');
+          if(errors.length){console.error(errors.join(','));process.exit(1);}
+          console.log(JSON.stringify({radar:body.radar,scans:h.scans,last_scan_at:h.last_scan_at,candidates:body.candidates.length,learned_samples:h.learned_samples,coverage:body.coverage}));
+          NODE
+              then READY=true; break; fi
+            fi
+            echo "Coin Hunter not proven ready (attempt $attempt/8, HTTP $CODE)."
+            if (( attempt < 8 )); then sleep 5; fi
+          done
+          if [[ "$READY" != "true" ]]; then
+            echo "::error::Coin Hunter failed HTTP/schema/runtime validation after bounded retries."
+            cat "$RUNNER_TEMP/coin-hunter.json" 2>/dev/null || true
+            cat "$RUNNER_TEMP/coin-hunter-curl.log" 2>/dev/null || true
+            exit 1
+          fi
+      - name: Verify Whale Accumulation public contract and runtime
+        timeout-minutes: 8
+        env:
+          BASE: https://radarx-ai-triple-production.up.railway.app
+        run: |
+          set -euo pipefail
+          READY=false
+          CODE="000"
+          for attempt in $(seq 1 8); do
+            CODE="$(curl --location --connect-timeout 8 --max-time 15 --silent --show-error \
+              -o "$RUNNER_TEMP/whale.json" -w "%{http_code}" \
+              "$BASE/api/whale-accumulation-radar?limit=5&scan=0" 2>"$RUNNER_TEMP/whale-curl.log" || true)"
+            export CODE
+            if [[ "$CODE" == "200" ]]; then
+              if node --input-type=module <<'NODE'
           import fs from 'node:fs';
           const body=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/whale.json','utf8'));
-          if (Number(process.env.CODE||'0')===200) {
-            if (body.radar !== 'WHALE_ACCUMULATION_RADAR') throw new Error('WHALE_RADAR_INVALID');
-            if (body.radar_name !== '🐋 تجمع الحيتان') throw new Error('WHALE_NAME_INVALID');
-            if (body.meta?.paper_trading !== true || body.meta?.real_order_execution !== false || body.meta?.confidence_score !== 'UNKNOWN') throw new Error('WHALE_POLICY_INVALID');
-            if (!Array.isArray(body.candidates)) throw new Error('WHALE_CANDIDATES_MISSING');
-            if (!body.report || !body.methodology) throw new Error('WHALE_REPORT_MISSING');
-          }
-          console.log(JSON.stringify({http:Number(process.env.CODE||'0'),radar:body.radar||null,candidates:Array.isArray(body.candidates)?body.candidates.length:0,confirmed:body.confirmed_count||0}));
+          const h=body.monitoring||{}, errors=[];
+          if(body.radar!=='WHALE_ACCUMULATION_RADAR')errors.push('RADAR_INVALID');
+          if(body.radar_name!=='🐋 تجمع الحيتان')errors.push('NAME_INVALID');
+          if(body.meta?.live!==true||h.running!==true)errors.push('NOT_RUNNING');
+          if(!Number(h.last_scan_at)||body.scan?.completed!==true||body.scan?.error)errors.push('NO_SUCCESSFUL_SCAN');
+          if(body.status==='not_ready'||body.error)errors.push('NOT_READY');
+          if(body.meta?.paper_trading!==true||body.meta?.real_order_execution!==false||body.meta?.confidence_score!=='UNKNOWN')errors.push('POLICY_INVALID');
+          if(!Array.isArray(body.candidates))errors.push('CANDIDATES_MISSING');
+          if(!body.report||!body.methodology)errors.push('REPORT_OR_METHODOLOGY_MISSING');
+          if(errors.length){console.error(errors.join(','));process.exit(1);}
+          console.log(JSON.stringify({radar:body.radar,scans:h.scans,last_scan_at:h.last_scan_at,candidates:body.candidates.length,confirmed:body.confirmed_count||0}));
           NODE
-      - name: Verify Multi-Analyst public contract
-        timeout-minutes: 4
+              then READY=true; break; fi
+            fi
+            echo "Whale Accumulation not proven ready (attempt $attempt/8, HTTP $CODE)."
+            if (( attempt < 8 )); then sleep 5; fi
+          done
+          if [[ "$READY" != "true" ]]; then
+            echo "::error::Whale Accumulation failed HTTP/schema/runtime validation after bounded retries."
+            cat "$RUNNER_TEMP/whale.json" 2>/dev/null || true
+            cat "$RUNNER_TEMP/whale-curl.log" 2>/dev/null || true
+            exit 1
+          fi
+      - name: Verify Multi-Analyst public contract and actual analysis
+        timeout-minutes: 10
         env:
           BASE: https://radarx-ai-triple-production.up.railway.app
         run: |
           set -euo pipefail
-          CODE="$(curl --location --silent --show-error --max-time 60 -o "$RUNNER_TEMP/multi-analyst.json" -w "%{http_code}" "$BASE/api/multi-analyst?quote=USDT&limit=1")"
-          case "$CODE" in 200|502|503) ;; *) echo "::error::Multi-Analyst returned HTTP $CODE"; cat "$RUNNER_TEMP/multi-analyst.json"; exit 1 ;; esac
-          export CODE
-          node --input-type=module <<'NODE'
+          READY=false
+          CODE="000"
+          for attempt in $(seq 1 10); do
+            CODE="$(curl --location --connect-timeout 8 --max-time 20 --silent --show-error \
+              -o "$RUNNER_TEMP/multi-analyst.json" -w "%{http_code}" \
+              "$BASE/api/multi-analyst?quote=USDT&limit=1" 2>"$RUNNER_TEMP/multi-analyst-curl.log" || true)"
+            export CODE
+            if [[ "$CODE" == "200" ]]; then
+              if node --input-type=module <<'NODE'
           import fs from 'node:fs';
           const body=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/multi-analyst.json','utf8'));
-          const code=Number(process.env.CODE||'0');
-          if (code===200) {
-            if (body.radar!=='MULTI_ANALYST') throw new Error('MULTI_ANALYST_RADAR_INVALID');
-            if (body.meta?.analyst_count!==20 || body.meta?.specialist_count!==19) throw new Error('MULTI_ANALYST_COUNT_INVALID');
-            if (!Array.isArray(body.pipeline) || body.pipeline.length!==6) throw new Error('MULTI_ANALYST_PIPELINE_INVALID');
-            if (!Array.isArray(body.candidates)) throw new Error('MULTI_ANALYST_CANDIDATES_MISSING');
-            for (const c of body.candidates) {
-              if (!Array.isArray(c.analysts) || c.analysts.length!==19) throw new Error('MULTI_ANALYST_SPECIALISTS_INVALID');
-              if (c.final_judge?.totalAnalysts!==19) throw new Error('MULTI_ANALYST_FINAL_JUDGE_INVALID');
-              if (c.paper_trading!==true || c.real_order_execution!==false || c.confidence_score!=='UNKNOWN') throw new Error('MULTI_ANALYST_POLICY_INVALID');
-            }
+          const h=body.monitoring||{}, d=body.diagnostics||{}, errors=[];
+          if(body.radar!=='MULTI_ANALYST')errors.push('RADAR_INVALID');
+          if(body.meta?.analyst_count!==20||body.meta?.specialist_count!==19)errors.push('ANALYST_COUNT_INVALID');
+          if(body.meta?.live!==true)errors.push('NO_VALID_LIVE_ANALYSIS');
+          if(body.meta?.paper_trading!==true||body.meta?.real_order_execution!==false||body.meta?.confidence_score!=='UNKNOWN')errors.push('POLICY_INVALID');
+          if(!Array.isArray(body.pipeline)||body.pipeline.length!==6)errors.push('PIPELINE_INVALID');
+          if(!Array.isArray(body.candidates)||!Array.isArray(body.watchlist))errors.push('RESULT_LISTS_MISSING');
+          if(h.running!==true||Number(h.scan_count)<1||!h.last_scan_at)errors.push('BACKGROUND_SCAN_NOT_PROVEN');
+          if(h.last_error)errors.push('BACKGROUND_SCAN_ERROR:'+h.last_error);
+          if(Number(d.attempted_analyses)<1)errors.push('NO_REAL_ANALYSIS_ATTEMPT');
+          if(Number(d.successful_analyses)<1)errors.push('NO_VALID_ANALYSIS');
+          if(Number(d.failed_analyses)>Number(d.attempted_analyses))errors.push('DIAGNOSTIC_COUNTS_INVALID');
+          const asOf=Date.parse(body.as_of||'');
+          if(!Number.isFinite(asOf)||Date.now()-asOf>240000||asOf>Date.now()+5000)errors.push('SNAPSHOT_STALE_OR_FUTURE');
+          for(const c of [...(body.candidates||[]),...(body.watchlist||[])]){
+            if(!Array.isArray(c.analysts)||c.analysts.length!==19)errors.push('SPECIALISTS_INVALID:'+c.symbol);
+            if(c.final_judge?.totalAnalysts!==19)errors.push('FINAL_JUDGE_INVALID:'+c.symbol);
+            if(c.paper_trading!==true||c.real_order_execution!==false||c.confidence_score!=='UNKNOWN')errors.push('RESULT_POLICY_INVALID:'+c.symbol);
           }
-          console.log(JSON.stringify({http:code,radar:body.radar??null,analyst_count:body.meta?.analyst_count??null,candidates:body.candidates?.length??0}));
+          if(errors.length){console.error(errors.join(','));process.exit(1);}
+          console.log(JSON.stringify({radar:body.radar,analyst_count:body.meta.analyst_count,specialist_count:body.meta.specialist_count,
+            scan_count:h.scan_count,last_scan_at:h.last_scan_at,attempted_analyses:d.attempted_analyses,
+            successful_analyses:d.successful_analyses,gate_rejected:d.gate_rejected,failed_analyses:d.failed_analyses,
+            candidates:body.candidates.length,watchlist:body.watchlist.length,as_of:body.as_of}));
           NODE
-
+              then READY=true; break; fi
+            fi
+            echo "Multi-Analyst actual runtime not proven (attempt $attempt/10, HTTP $CODE)."
+            if (( attempt < 10 )); then sleep 5; fi
+          done
+          if [[ "$READY" != "true" ]]; then
+            echo "::error::Multi-Analyst failed actual-run, freshness, policy, or 19-specialist contract validation after bounded retries."
+            cat "$RUNNER_TEMP/multi-analyst.json" 2>/dev/null || true
+            cat "$RUNNER_TEMP/multi-analyst-curl.log" 2>/dev/null || true
+            exit 1
+          fi
       - name: Verify X-FACTOR multi-analyst + Falcon + Move Forensics
         timeout-minutes: 6
         run: |
