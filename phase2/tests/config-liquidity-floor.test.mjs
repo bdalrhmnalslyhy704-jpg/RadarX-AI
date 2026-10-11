@@ -28,11 +28,11 @@ test('all Spot USDT radar liquidity thresholds enforce the shared 750,000 USDT f
       CONFIG.moveRadar, CONFIG.strongMoveRadar, CONFIG.marketRadar, CONFIG.rotationRadar,
       CONFIG.alMuqawimRadar, CONFIG.liquidityAbsorptionRadar, CONFIG.kahirRadar, CONFIG.doomsdayRadar,
       CONFIG.multiAnalyst, CONFIG.earlyExpansionRadar, CONFIG.whaleAccumulationRadar,
-      CONFIG.coinHunter, CONFIG.falconEyeRadar
+      CONFIG.coinHunterRadar, CONFIG.falconEyeRadar
     ]) {
       assert.ok(section.minQuoteVolume24h >= 750000, JSON.stringify(section));
     }
-    assert.equal(CONFIG.falconEye.fastMinQuoteVolume24h, 750000);
+    assert.equal(CONFIG.falconEyeRadar.fastMinQuoteVolume24h, 750000);
     assert.equal(CONFIG.strongMoveRadar.minQuoteVolume24h, 750000);
     assert.equal(CONFIG.liquidityAbsorptionRadar.minQuoteVolume24h, 1500000);
     assert.equal(CONFIG.whaleAccumulationRadar.minQuoteVolume24h, 1500000);
