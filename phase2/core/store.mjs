@@ -5,7 +5,7 @@ import {basename,join,resolve} from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
 import {Readable,Transform} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
-import {createGzip,gunzipSync} from 'node:zlib';
+import {createGzip,createGunzip,gunzipSync} from 'node:zlib';
 import {SCAN_JOURNEY_SCHEMA,scanJourneyFilename,validateScanJourneyCycle,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,SCAN_JOURNEY_HORIZONS} from './scan-journey-ledger.mjs';
 const MiB=1024*1024;
 // Scheduler events are operational queue state. Hydration reads at most 5,000
@@ -14,6 +14,74 @@ const JSONL_ARCHIVE_POLICIES=Object.freeze({
   schedulerEvents:{compactAtBytes:12*MiB,retainRowsPerKey:5000,keyField:'radar',maxRetainedBytesPerKey:512*1024}
 });
 const ORPHAN_TEMP_SUFFIX=/\.(?:tmp|repair|outcome|compact)-\d+-\d+(?:-[a-f0-9-]+)?$/;
+
+// Verify an archived cycle without holding its compressed buffer, decompressed
+// string, and parsed object tree at once. The stream scanner only retains a short
+// key-detection tail and counts top-level coin objects; the manifest SHA stays authoritative.
+async function inspectGzipScanJourneyCycle(filePath){
+  const digest=createHash('sha256');
+  let compressedBytes=0;
+  const hashTap=new Transform({
+    transform(chunk,encoding,callback){
+      compressedBytes+=chunk.length;
+      digest.update(chunk);
+      callback(null,chunk);
+    }
+  });
+  const gunzip=createGunzip();
+  const pump=pipeline(createReadStream(filePath),hashTap,gunzip);
+  let carry='',cycleId=null,coinsFound=false,coinsClosed=false,coinCount=0;
+  let nested=0,inString=false,escaped=false;
+  const scanCoins=text=>{
+    for(let i=0;i<text.length;i++){
+      const ch=text[i];
+      if(inString){
+        if(escaped)escaped=false;
+        else if(ch==='\\')escaped=true;
+        else if(ch==='"')inString=false;
+        continue;
+      }
+      if(ch==='"'){inString=true;continue;}
+      if(coinsClosed)continue;
+      if(nested===0&&ch===']'){coinsClosed=true;continue;}
+      if(ch==='{'){
+        if(nested===0)coinCount++;
+        nested++;
+      }else if(ch==='['){
+        nested++;
+      }else if(ch==='}'||ch===']'){
+        if(nested>0)nested--;
+        else if(ch===']')coinsClosed=true;
+      }
+    }
+  };
+  try{
+    for await(const chunk of gunzip){
+      const text=chunk.toString('utf8');
+      if(coinsFound){scanCoins(text);continue;}
+      const probe=carry+text;
+      if(cycleId===null){
+        const idMatch=/"cycle_id"\\s*:\\s*"([^"\\\\]*)"/.exec(probe);
+        if(idMatch)cycleId=idMatch[1];
+      }
+      const coinsMatch=/"coins"\\s*:\\s*\\[/.exec(probe);
+      if(coinsMatch){
+        coinsFound=true;
+        scanCoins(probe.slice(coinsMatch.index+coinsMatch[0].length));
+        carry='';
+      }else carry=probe.slice(-512);
+    }
+    await pump;
+  }catch(error){
+    await pump.catch(()=>{});
+    throw error;
+  }
+  return {
+    sha256:digest.digest('hex'),compressed_bytes:compressedBytes,cycle_id:cycleId,
+    coin_count:coinCount,coins_array_complete:coinsFound&&coinsClosed&&!inString&&nested===0
+  };
+}
+
 
 // Serialize a durable cycle in bounded chunks. Avoid a full JSON string + Buffer +
 // gzip buffer coexisting in the V8 heap during the 496-symbol market-wide cycle.
@@ -537,16 +605,45 @@ export class DurableStore {
       const finalPath=join(this.scanJourneyDir,filename);
       const archived=await writeGzipJsonAtomic(finalPath,stored,{maxBytes:Math.min(budget.max_write_bytes,max)});
       const coins=Array.isArray(cycle.coins)?cycle.coins:[];
-      const eligible=coins.filter(x=>x&&x.eligible===true);
+      let eligibleCount=0,fastCount=0,microCount=0,deepCount=0,deepFailedCount=0;
+      const outcomeSignalIds=[],explicitlyBelowEligibility=new Set();
+      // Count and update queue state in one pass instead of allocating several
+      // full-size filter/map arrays on every 280–496 symbol scan cycle.
+      for(const coin of coins){
+        if(!coin||typeof coin!=='object')continue;
+        if(coin.eligible===true){
+          eligibleCount++;
+          const symbol=String(coin.symbol||'').toUpperCase();
+          if(symbol){
+            const first=Number(coin.first_eligible_at??coin.eligibility_at);
+            if(!Object.hasOwn(state.eligible_since_by_symbol,symbol))
+              state.eligible_since_by_symbol[symbol]=Number.isFinite(first)?first:Date.now();
+            if(coin.micro_scan_completed_at!==undefined&&coin.micro_scan_completed_at!=='.INCOMPLETE'&&coin.micro_scan_completed_at!==null)
+              state.last_micro_cycle_by_symbol[symbol]=sequence;
+            if(coin.deep_scan_status==='COMPLETED'&&coin.deep_scan_completed_at!==undefined&&coin.deep_scan_completed_at!=='.INCOMPLETE'&&coin.deep_scan_completed_at!==null){
+              state.last_deep_cycle_by_symbol[symbol]=sequence;
+              const at=Number(coin.deep_scan_completed_at);
+              if(Number.isFinite(at))state.last_deep_at_by_symbol[symbol]=at;
+            }
+          }
+        }
+        if(coin.rejection_reason==='BELOW_MIN_QUOTE_VOLUME_24H'){
+          const symbol=String(coin.symbol||'').toUpperCase();
+          if(symbol)explicitlyBelowEligibility.add(symbol);
+        }
+        if(coin.fast_scan_at!==undefined&&coin.fast_scan_at!=='.INCOMPLETE'&&coin.fast_scan_at!==null)fastCount++;
+        if(coin.micro_scan_completed_at!==undefined&&coin.micro_scan_completed_at!=='.INCOMPLETE'&&coin.micro_scan_completed_at!==null)microCount++;
+        if(coin.deep_scan_status==='COMPLETED')deepCount++;
+        if(coin.deep_scan_status==='FAILED')deepFailedCount++;
+        const signalId=coin.outcome_signal_id;
+        if(typeof signalId==='string'&&signalId&&signalId!=='.INCOMPLETE')outcomeSignalIds.push(signalId);
+      }
       const metadata={
         cycle_id:cycleId,filename,cycle_sequence:sequence,
         started_at:cycle.started_at??null,completed_at:cycle.completed_at??null,
-        coin_count:coins.length,eligible_count:eligible.length,
-        fast_count:coins.filter(x=>x?.fast_scan_at!==undefined&&x.fast_scan_at!=='.INCOMPLETE'&&x.fast_scan_at!==null).length,
-        micro_count:coins.filter(x=>x?.micro_scan_completed_at!==undefined&&x.micro_scan_completed_at!=='.INCOMPLETE'&&x.micro_scan_completed_at!==null).length,
-        deep_count:coins.filter(x=>x?.deep_scan_status==='COMPLETED').length,
-        deep_failed_count:coins.filter(x=>x?.deep_scan_status==='FAILED').length,
-        outcome_signal_ids:coins.map(x=>x?.outcome_signal_id).filter(x=>typeof x==='string'&&x&&x!=='.INCOMPLETE'),
+        coin_count:coins.length,eligible_count:eligibleCount,
+        fast_count:fastCount,micro_count:microCount,deep_count:deepCount,
+        deep_failed_count:deepFailedCount,outcome_signal_ids:outcomeSignalIds,
         outcomes_checked_at:0,
         compressed_bytes:archived.bytes,sha256:archived.sha256,stored_at:Date.now()
       };
@@ -555,27 +652,8 @@ export class DurableStore {
       state.total_recorded_cycles+=1;
       state.retained_coin_rows+=coins.length;
       state.compressed_bytes+=archived.bytes;
-      const explicitlyBelowEligibility=new Set(coins
-        .filter(coin=>coin&&coin.rejection_reason==='BELOW_MIN_QUOTE_VOLUME_24H')
-        .map(coin=>String(coin.symbol||'').toUpperCase()).filter(Boolean));
-      // A missing ticker is a data gap, not proof the symbol lost eligibility.
-      // Preserve its queue age across partial Binance replies and resets only when
-      // an observed ticker clearly fails the explicit liquidity threshold.
+      // Missing tickers preserve queue age. Only an explicit below-floor rejection resets it.
       for(const symbol of explicitlyBelowEligibility)delete state.eligible_since_by_symbol[symbol];
-      for(const coin of eligible){
-        const symbol=String(coin.symbol||'').toUpperCase();
-        if(!symbol)continue;
-        const first=Number(coin.first_eligible_at??coin.eligibility_at);
-        if(!Object.hasOwn(state.eligible_since_by_symbol,symbol))
-          state.eligible_since_by_symbol[symbol]=Number.isFinite(first)?first:Date.now();
-        if(coin.micro_scan_completed_at!==undefined&&coin.micro_scan_completed_at!=='.INCOMPLETE'&&coin.micro_scan_completed_at!==null)
-          state.last_micro_cycle_by_symbol[symbol]=sequence;
-        if(coin.deep_scan_status==='COMPLETED'&&coin.deep_scan_completed_at!==undefined&&coin.deep_scan_completed_at!=='.INCOMPLETE'&&coin.deep_scan_completed_at!==null){
-          state.last_deep_cycle_by_symbol[symbol]=sequence;
-          const at=Number(coin.deep_scan_completed_at);
-          if(Number.isFinite(at))state.last_deep_at_by_symbol[symbol]=at;
-        }
-      }
       for(const key of ['last_micro_cycle_by_symbol','last_deep_cycle_by_symbol','last_deep_at_by_symbol']){
         const map=state[key],entries=Object.entries(map);
         if(entries.length>10000){
@@ -692,15 +770,12 @@ export class DurableStore {
     let readableCycles=0,readableCoinRows=0,verifiedBytes=0;
     for(const entry of state.cycles){
       try{
-        const bytes=await readFile(join(this.scanJourneyDir,entry.filename));
-        if(!entry.sha256||createHash('sha256').update(bytes).digest('hex')!==entry.sha256){
+        const inspected=await inspectGzipScanJourneyCycle(join(this.scanJourneyDir,entry.filename));
+        if(!entry.sha256||inspected.sha256!==entry.sha256||
+           inspected.cycle_id!==entry.cycle_id||!inspected.coins_array_complete){
           corruptCycles.push(entry.cycle_id);continue;
         }
-        const cycle=JSON.parse(gunzipSync(bytes).toString('utf8'));
-        if(cycle.cycle_id!==entry.cycle_id||!Array.isArray(cycle.coins)){
-          corruptCycles.push(entry.cycle_id);continue;
-        }
-        readableCycles++;readableCoinRows+=cycle.coins.length;verifiedBytes+=bytes.length;
+        readableCycles++;readableCoinRows+=inspected.coin_count;verifiedBytes+=inspected.compressed_bytes;
       }catch(error){
         if(error?.code==='ENOENT')missingCycles.push(entry.cycle_id);
         else corruptCycles.push(entry.cycle_id);
