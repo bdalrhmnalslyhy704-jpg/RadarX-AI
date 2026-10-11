@@ -1,5 +1,19 @@
 export const SHADOW_ARM = Object.freeze({ LEGACY: 'LEGACY', LIGHT_POOL: 'LIGHT_POOL' });
 
+export function assessShadowCycleGate({
+  marketWideCacheCoverageReady,
+  websocketTransportState,
+  websocketRunning
+} = {}) {
+  if (marketWideCacheCoverageReady !== true) {
+    return {ready:false,reason:'CACHE_GATE_CLOSED_DURING_SHADOW'};
+  }
+  if (websocketTransportState !== 'LIVE' || websocketRunning !== true) {
+    return {ready:false,reason:'WEBSOCKET_NOT_LIVE_DURING_SHADOW'};
+  }
+  return {ready:true,reason:null};
+}
+
 export function shadowArmForCycle(cycleNumber) {
   const cycle = Number(cycleNumber);
   if (!Number.isInteger(cycle) || cycle < 1) throw new Error('INVALID_SHADOW_CYCLE_NUMBER');

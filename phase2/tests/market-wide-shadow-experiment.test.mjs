@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {SHADOW_ARM,shadowArmForCycle,compareShadowPairCycles,summarizeShadowArm}
+import {SHADOW_ARM,shadowArmForCycle,assessShadowCycleGate,compareShadowPairCycles,summarizeShadowArm}
   from '../core/market-wide-shadow-experiment.mjs';
 
 test('30-cycle AB/BA plan is balanced and includes one of each arm in every pair',()=>{
@@ -71,4 +71,24 @@ test('arm summary detects selector activation mismatch and computes durations',(
   assert.equal(pool.cycles,2);
   assert.equal(pool.pool_activation_verified,false);
   assert.equal(pool.light_scan_added_rest_calls,0);
+});
+
+
+test('shadow gate pauses a sample when live cache coverage temporarily closes and resumes only when fully ready',()=>{
+  const missing=assessShadowCycleGate({
+    marketWideCacheCoverageReady:false,websocketTransportState:'LIVE',websocketRunning:true
+  });
+  assert.deepEqual(missing,{ready:false,reason:'CACHE_GATE_CLOSED_DURING_SHADOW'});
+  const disconnected=assessShadowCycleGate({
+    marketWideCacheCoverageReady:true,websocketTransportState:'CONNECTING',websocketRunning:true
+  });
+  assert.deepEqual(disconnected,{ready:false,reason:'WEBSOCKET_NOT_LIVE_DURING_SHADOW'});
+  const stopped=assessShadowCycleGate({
+    marketWideCacheCoverageReady:true,websocketTransportState:'LIVE',websocketRunning:false
+  });
+  assert.deepEqual(stopped,{ready:false,reason:'WEBSOCKET_NOT_LIVE_DURING_SHADOW'});
+  const recovered=assessShadowCycleGate({
+    marketWideCacheCoverageReady:true,websocketTransportState:'LIVE',websocketRunning:true
+  });
+  assert.deepEqual(recovered,{ready:true,reason:null});
 });

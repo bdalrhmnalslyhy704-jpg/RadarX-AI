@@ -7,7 +7,7 @@ import {DurableStore} from '../core/store.mjs';
 import {EarlyExpansionRadar} from '../core/early-expansion-radar.mjs';
 import {isDirectionalCandidateSymbol} from '../core/market-wide-light-scan.mjs';
 import {CONFIG} from '../config.mjs';
-import {shadowArmForCycle,compareShadowPairCycles,summarizeShadowArm,SHADOW_ARM} from '../core/market-wide-shadow-experiment.mjs';
+import {shadowArmForCycle,assessShadowCycleGate,compareShadowPairCycles,summarizeShadowArm,SHADOW_ARM} from '../core/market-wide-shadow-experiment.mjs';
 
 const MIN_QUOTE_VOLUME_24H = Number(process.env.RADARX_MARKET_WIDE_MIN_QUOTE_VOLUME_24H || 750000);
 const MAX_WARMUP_MINUTES = Math.min(120, Math.max(1,
@@ -39,7 +39,7 @@ const report = {
   market_wide_cache_coverage_ready: false,
   micro_pool_applied: false,
   shadow_started: false,
-  shadow: {status:'NOT_STARTED',requested_cycles:SHADOW_CYCLES,max_duration_minutes:MAX_SHADOW_MINUTES,completed_cycles:0,cycles:[]},
+  shadow: {status:'NOT_STARTED',requested_cycles:SHADOW_CYCLES,max_duration_minutes:MAX_SHADOW_MINUTES,completed_cycles:0,cycles:[],interrupted_cycles:[]},
   merged: false,
   deployed: false,
   minimum_quote_volume_24h: MIN_QUOTE_VOLUME_24H,
@@ -120,6 +120,7 @@ async function saveReport() {
     shadow_completed_cycles: report.shadow?.completed_cycles || 0,
     shadow_requested_cycles: report.shadow?.requested_cycles || SHADOW_CYCLES,
     shadow_abort_reason: report.shadow?.abort_reason || null,
+    shadow_gate_interrupted_cycles: report.shadow?.interrupted_cycles?.length || 0,
     elapsed_seconds: report.elapsed_seconds,
     eligible_total: report.discovery.eligible_symbols,
     ready_total: report.summary?.ready_symbols ?? 0,
@@ -267,9 +268,10 @@ try {
   let shadowAbortReason = null;
   while (true) {
     const beforeCycleAt = Date.now();
-    if (!warmupReady && beforeCycleAt >= warmupDeadline) break;
+    if (!report.shadow_started && !warmupReady && beforeCycleAt >= warmupDeadline) break;
     if (warmupReady && report.shadow.cycles.length >= SHADOW_CYCLES) break;
-    if (warmupReady && beforeCycleAt >= shadowDeadline) {
+    if (report.shadow_started && beforeCycleAt >= shadowDeadline &&
+        report.shadow.cycles.length < SHADOW_CYCLES) {
       shadowAbortReason = 'SHADOW_MAX_DURATION_EXCEEDED';
       break;
     }
@@ -309,46 +311,50 @@ try {
 
     if (!warmupReady && report.market_wide_cache_coverage_ready === true &&
         health.running === true && health.transport_state === 'LIVE') {
+      const firstShadowStart = report.shadow_started !== true;
       warmupReady = true;
-      shadowDeadline = now + MAX_SHADOW_MINUTES * 60_000;
       report.status = 'SHADOW_RUNNING';
-      report.warmup_completed_at_ms = now;
-      report.shadow_started = true;
       radar.selectDeepFromMicro = liveSelectDeepFromMicro;
-      report.shadow = {
-        status:'RUNNING',
-        requested_cycles:SHADOW_CYCLES,
-        max_duration_minutes:MAX_SHADOW_MINUTES,
-        started_at_ms:now,
-        gate_ready_cycle:report.cycles,
-        completed_cycles:0,
-        micro_pool_applied:false,
-        pool_activation_enabled:true,
-        assignment_mode:'BALANCED_AB_ABBA_PAIRS',
-        planned_legacy_cycles:Math.ceil(SHADOW_CYCLES/2),
-        planned_light_pool_cycles:Math.floor(SHADOW_CYCLES/2),
-        legacy_micro_selector_active:true,
-        deep_scans_enabled:true,
-        isolated_process:true,
-        baseline:{
-          eligible_symbols:coverage.expected_symbols,
-          cache_ready_symbols:coverage.ready_symbols,
-          websocket_advanced_symbols:coverage.websocket_advanced_symbols,
-          websocket_transport_state:health.transport_state,
-          actual_http_attempt_total:httpAttempts.length,
-          actual_5m_kline_http_attempts:httpAttempts.filter(item=>item.url.includes('/api/v3/klines')&&item.url.includes('interval=5m')).length,
-          micro_scanned_total:Number(radar.lastCoverage?.micro_scanned_total)||0,
-          scan_duration_ms:Number(radar.lastCoverage?.scan_duration_ms)||0
-        },
-        cycles:[],
-        pairs:[]
-      };
-      progressLog('[MARKET_WIDE_CACHE_SHADOW_STARTED]',{
-        gate_ready:true,cycle:report.cycles,eligible_symbols:coverage.expected_symbols,
-        ready_symbols:coverage.ready_symbols,websocket_advanced_symbols:coverage.websocket_advanced_symbols,
-        requested_shadow_cycles:SHADOW_CYCLES,maximum_shadow_minutes:MAX_SHADOW_MINUTES,
-        micro_pool_applied:false,legacy_micro_selector_active:true,deep_scans_enabled:true
-      });
+      if (firstShadowStart) {
+        shadowDeadline = now + MAX_SHADOW_MINUTES * 60_000;
+        report.warmup_completed_at_ms = now;
+        report.shadow_started = true;
+        report.shadow = {
+          status:'RUNNING',
+          requested_cycles:SHADOW_CYCLES,
+          max_duration_minutes:MAX_SHADOW_MINUTES,
+          started_at_ms:now,
+          gate_ready_cycle:report.cycles,
+          completed_cycles:0,
+          attempted_cycles:0,
+          micro_pool_applied:false,
+          pool_activation_enabled:true,
+          assignment_mode:'BALANCED_AB_ABBA_PAIRS',
+          planned_legacy_cycles:Math.ceil(SHADOW_CYCLES/2),
+          planned_light_pool_cycles:Math.floor(SHADOW_CYCLES/2),
+          legacy_micro_selector_active:true,
+          deep_scans_enabled:true,
+          isolated_process:true,
+          cycles:[],
+          pairs:[],
+          interrupted_cycles:[]
+        };
+        progressLog('[MARKET_WIDE_CACHE_SHADOW_STARTED]',{
+          gate_ready:true,cycle:report.cycles,eligible_symbols:coverage.expected_symbols,
+          ready_symbols:coverage.ready_symbols,websocket_advanced_symbols:coverage.websocket_advanced_symbols,
+          requested_shadow_cycles:SHADOW_CYCLES,maximum_shadow_minutes:MAX_SHADOW_MINUTES,
+          micro_pool_applied:false,legacy_micro_selector_active:true,deep_scans_enabled:true
+        });
+      } else {
+        shadowDeadline = Number(report.shadow.started_at_ms) + MAX_SHADOW_MINUTES * 60_000;
+        progressLog('[MARKET_WIDE_CACHE_SHADOW_RESUMED]',{
+          gate_ready:true,cycle:report.cycles,eligible_symbols:coverage.expected_symbols,
+          ready_symbols:coverage.ready_symbols,websocket_advanced_symbols:coverage.websocket_advanced_symbols,
+          valid_shadow_cycles_completed:report.shadow.cycles.length,
+          interrupted_cycles:report.shadow.interrupted_cycles.length,
+          requested_shadow_cycles:SHADOW_CYCLES
+        });
+      }
     } else if (isShadowCycle) {
       const archive = observedCycleArchives.length > archiveIndexBefore
         ? observedCycleArchives.at(-1) : null;
@@ -415,31 +421,67 @@ try {
           .filter(symbol=>!isDirectionalCandidateSymbol(symbol)),
         deep_symbols:Array.isArray(scheduler?.deep_symbols)?scheduler.deep_symbols:[]
       };
-      report.shadow.cycles.push(cycleRow);
-      report.shadow.completed_cycles = report.shadow.cycles.length;
-      const activationMatches = cycleRow.micro_pool_applied === cycleRow.expected_pool_activation &&
-        cycleRow.legacy_micro_selector_active === !cycleRow.expected_pool_activation;
-      if (!activationMatches) {
-        shadowAbortReason = cycleRow.expected_pool_activation ? 'CANDIDATE_POOL_NOT_APPLIED' : 'LEGACY_SELECTOR_CONTAMINATED';
-        progressLog('[MARKET_WIDE_CACHE_SHADOW_SELECTOR_MISMATCH]',{
-          shadow_cycle:cycleRow.shadow_cycle,arm:cycleRow.shadow_arm,reason:shadowAbortReason,
-          expected_pool_activation:cycleRow.expected_pool_activation,
-          micro_pool_applied:cycleRow.micro_pool_applied,
-          legacy_micro_selector_active:cycleRow.legacy_micro_selector_active
+      report.shadow.attempted_cycles = (report.shadow.attempted_cycles || 0) + 1;
+      const gateDecision = assessShadowCycleGate({
+        marketWideCacheCoverageReady:cycleRow.market_wide_cache_coverage_ready === true,
+        websocketTransportState:cycleRow.websocket_transport_state,
+        websocketRunning:cycleRow.websocket_running === true
+      });
+      if (!gateDecision.ready) {
+        report.shadow.interrupted_cycles.push({
+          ...cycleRow,
+          interrupted_at_ms:now,
+          gate_reason:gateDecision.reason,
+          counted_as_shadow_sample:false
         });
-        break;
-      }
-      if (cycleRow.market_wide_cache_coverage_ready !== true || cycleRow.websocket_transport_state !== 'LIVE' || cycleRow.websocket_running !== true) {
-        shadowAbortReason = cycleRow.market_wide_cache_coverage_ready !== true
-          ? 'CACHE_GATE_CLOSED_DURING_SHADOW' : 'WEBSOCKET_NOT_LIVE_DURING_SHADOW';
-        progressLog('[MARKET_WIDE_CACHE_SHADOW_ABORTED]',{
-          shadow_cycle:cycleRow.shadow_cycle,reason:shadowAbortReason,
-          ready_symbols:coverage.ready_symbols,expected_symbols:coverage.expected_symbols,
-          websocket_state:health.transport_state,websocket_running:health.running
+        if (cycleRow.deep_failed_total > 0) {
+          shadowAbortReason = 'SHADOW_DEEP_FAILURE_DURING_GATE_RECOVERY';
+          progressLog('[MARKET_WIDE_CACHE_SHADOW_ABORTED]',{
+            shadow_cycle:cycleRow.shadow_cycle,reason:shadowAbortReason,
+            deep_failed_total:cycleRow.deep_failed_total
+          });
+          break;
+        }
+        if (cycleRow.binance_rest_calls_added_by_light_scan !== 0) {
+          shadowAbortReason = 'LIGHT_SCAN_ADDED_REST_CALLS_DURING_GATE_RECOVERY';
+          progressLog('[MARKET_WIDE_CACHE_SHADOW_ABORTED]',{
+            shadow_cycle:cycleRow.shadow_cycle,reason:shadowAbortReason,
+            light_scan_added_rest_calls:cycleRow.binance_rest_calls_added_by_light_scan
+          });
+          break;
+        }
+        warmupReady = false;
+        radar.config.marketWideLightScanPoolActivationEnabled = false;
+        report.status = 'SHADOW_RECOVERING_CACHE';
+        progressLog('[MARKET_WIDE_CACHE_SHADOW_CYCLE_EXCLUDED_GATE_CLOSED]',{
+          attempted_cycle:report.shadow.attempted_cycles,
+          retry_sample:report.shadow.cycles.length + 1,
+          arm_to_retry:shadowArmForCycle(report.shadow.cycles.length + 1).arm,
+          reason:gateDecision.reason,
+          eligible_symbols:cycleRow.eligible_total,
+          market_cache_ready:cycleRow.market_wide_cache_coverage_ready,
+          websocket_state:cycleRow.websocket_transport_state,
+          websocket_running:cycleRow.websocket_running,
+          deep_failed_total:cycleRow.deep_failed_total,
+          light_scan_added_rest_calls:cycleRow.binance_rest_calls_added_by_light_scan
         });
-        break;
+      } else {
+        report.shadow.cycles.push(cycleRow);
+        report.shadow.completed_cycles = report.shadow.cycles.length;
+        const activationMatches = cycleRow.micro_pool_applied === cycleRow.expected_pool_activation &&
+          cycleRow.legacy_micro_selector_active === !cycleRow.expected_pool_activation;
+        if (!activationMatches) {
+          shadowAbortReason = cycleRow.expected_pool_activation ? 'CANDIDATE_POOL_NOT_APPLIED' : 'LEGACY_SELECTOR_CONTAMINATED';
+          progressLog('[MARKET_WIDE_CACHE_SHADOW_SELECTOR_MISMATCH]',{
+            shadow_cycle:cycleRow.shadow_cycle,arm:cycleRow.shadow_arm,reason:shadowAbortReason,
+            expected_pool_activation:cycleRow.expected_pool_activation,
+            micro_pool_applied:cycleRow.micro_pool_applied,
+            legacy_micro_selector_active:cycleRow.legacy_micro_selector_active
+          });
+          break;
+        }
       }
-      if (report.shadow.cycles.length === SHADOW_CYCLES) {
+      if (!shadowAbortReason && report.shadow.cycles.length === SHADOW_CYCLES) {
         report.shadow.status = 'COMPLETE';
         report.shadow.finished_at_ms = now;
         report.shadow.duration_ms = Math.max(0,now-report.shadow.started_at_ms);
@@ -569,8 +611,13 @@ try {
       real_order_execution:false
     };
     const balancedArms=legacyRows.length===Math.ceil(SHADOW_CYCLES/2)&&poolRows.length===Math.floor(SHADOW_CYCLES/2);
-    const noDeepFailures=rows.every(row=>Number(row.deep_failed_total||0)===0);
-    const zeroExtraLightRest=rows.every(row=>Number(row.binance_rest_calls_added_by_light_scan||0)===0);
+    const interrupted=report.shadow.interrupted_cycles||[];
+    const noDeepFailures=rows.every(row=>Number(row.deep_failed_total||0)===0) &&
+      interrupted.every(row=>Number(row.deep_failed_total||0)===0);
+    const zeroExtraLightRest=rows.every(row=>Number(row.binance_rest_calls_added_by_light_scan||0)===0) &&
+      interrupted.every(row=>Number(row.binance_rest_calls_added_by_light_scan||0)===0);
+    report.shadow.summary.gate_interrupted_cycles=interrupted.length;
+    report.shadow.summary.gate_interrupted_cycles_recovered=interrupted.every(row=>row.counted_as_shadow_sample===false);
     report.shadow.summary.balanced_arms=balancedArms;
     report.shadow.summary.no_deep_failures=noDeepFailures;
     report.shadow.summary.zero_extra_light_scan_rest_calls=zeroExtraLightRest;
@@ -626,7 +673,7 @@ try {
   report.merged = false;
   report.deployed = false;
   report.note = report.status === 'SHADOW_COMPLETE'
-    ? 'Full eligible market history and live WebSocket gates passed; balanced legacy-vs-light-pool Shadow pairs verified per-cycle selector activation and exclusion of stable/fiat/gold-backed bases. This measures selection and runtime effects, not predictive accuracy. No merge or deployment.'
+    ? 'Full eligible market history and live WebSocket gates passed for all counted Shadow samples; transient cache-gate closures were excluded and recovered before samples resumed. Balanced legacy-vs-light-pool pairs verified selector activation, directional filtering, zero added REST calls and zero Deep failures. This measures selection/runtime effects, not predictive accuracy. No merge or deployment.'
     : allReady
       ? 'Full cache coverage was reached, but the isolated Shadow comparison did not complete its required cycles. Inspect shadow.abort_reason.'
       : 'Acceptance gate remains closed; inspect per_symbol readiness_reason. Shadow did not start.';
