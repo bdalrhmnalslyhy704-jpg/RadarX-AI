@@ -555,7 +555,7 @@ export class DurableStore {
           invalidCycles++;continue;
         }
         cycle=JSON.parse(gunzipSync(bytes).toString('utf8'));
-        if(cycle?.cycle_id!==metadata.cycle_id||!Array.isArray(cycle?.coins)){
+        if(cycle?.cycle_id!==metadata.cycle_id||cycle?.radar!=='RADAR_8'||cycle?.status!=='COMPLETE'||!Array.isArray(cycle?.coins)){
           invalidCycles++;continue;
         }
       }catch(error){
@@ -565,7 +565,7 @@ export class DurableStore {
       }
       for(const coin of cycle.coins){
         const symbol=String(coin?.symbol||'').trim().toUpperCase();
-        if(!wanted.has(symbol)||resolved.has(symbol))continue;
+        if(!wanted.has(symbol)||resolved.has(symbol)||coin?.eligible!==true)continue;
         const raw=coin?.candles_used?.[timeframe];
         if(!Array.isArray(raw)||raw.length===0)continue;
         snapshotsExamined++;
