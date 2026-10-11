@@ -94,6 +94,10 @@ jobs:
           node android/background-monitor-regression.mjs
           node --test android/app/src/main/assets/tests/market-radar-integration.test.mjs
 
+      - name: Build production backend Docker image
+        timeout-minutes: 10
+        run: docker build --pull=false -t radarx-ai-ci:${{ github.sha }} .
+
       - name: Set up Android build toolchain
         uses: actions/setup-java@v4
         timeout-minutes: 5
