@@ -434,3 +434,96 @@ test('scan-journey compressed retention remains bounded under repeated appends',
     await import('node:fs/promises').then(fs=>fs.rm(dir,{recursive:true,force:true}));
   }
 });
+
+
+test('atomic JSON snapshots remain readable while writers repeatedly replace the file',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-atomic-json-readers-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    const target=store.files.signalSnapshots;
+    const invalid=[];
+    let reading=true,reads=0;
+    const reader=(async()=>{
+      while(reading){
+        try{
+          const raw=await readFile(target,'utf8');
+          const parsed=JSON.parse(raw);
+          assert.ok(parsed&&typeof parsed==='object'&&!Array.isArray(parsed));
+          reads++;
+        }catch(error){invalid.push(String(error?.message||error));}
+        await new Promise(resolve=>setImmediate(resolve));
+      }
+    })();
+    for(let i=0;i<180;i++){
+      await store.putSignalSnapshot('T'+String(i).padStart(4,'0'),{sequence:i,payload:'x'.repeat(1200)});
+    }
+    reading=false;
+    await reader;
+    assert.ok(reads>0,'concurrent reader must observe snapshots during writes');
+    assert.deepEqual(invalid,[],'atomic rename must never expose a partial JSON document');
+    const final=JSON.parse(await readFile(target,'utf8'));
+    assert.equal(Object.keys(final).length,180,'serialized updates must not lose concurrent snapshot writes');
+  }finally{
+    await import('node:fs/promises').then(fs=>fs.rm(dir,{recursive:true,force:true}));
+  }
+});
+
+test('replaying the same scan-journey cycle ID is idempotent and preserves archive integrity',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-cycle-idempotency-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    const completedAt=Date.now()-60_000;
+    const cycle={
+      schema_version:SCAN_JOURNEY_SCHEMA,cycle_id:'RADAR8:USDT:IDEMPOTENCY',cycle_number:1,
+      radar:'RADAR_8',quote:'USDT',status:'COMPLETE',started_at:completedAt-1000,completed_at:completedAt,
+      data_policy:{closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
+      counters:{},coins:[{symbol:'TESTUSDT',eligible:true}]
+    };
+    const first=await store.appendScanJourneyCycle(cycle,{maxBytes:3*1024*1024});
+    const second=await store.appendScanJourneyCycle(cycle,{maxBytes:3*1024*1024});
+    assert.equal(first.duplicate,false);
+    assert.equal(second.duplicate,true);
+    assert.equal(second.cycle_sequence,first.cycle_sequence);
+    const state=await store.getScanJourneyState();
+    assert.equal(state.cycles.length,1,'same cycle ID must not create a second archive entry');
+    assert.equal(state.total_recorded_cycles,1);
+    const audit=await store.verifyScanJourneyArchive();
+    assert.equal(audit.complete,true);
+    assert.equal(audit.readable_cycles,1);
+  }finally{
+    await import('node:fs/promises').then(fs=>fs.rm(dir,{recursive:true,force:true}));
+  }
+});
+
+test('scan-journey archive refuses unsafe low disk headroom before changing durable state',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-cycle-storage-pressure-'));
+  try{
+    const store=await new DurableStore({
+      dir,freeBytesProvider:async()=>8*1024*1024,storageReserveBytes:16*1024*1024
+    }).init();
+    const completedAt=Date.now()-60_000;
+    const cycle={
+      schema_version:SCAN_JOURNEY_SCHEMA,cycle_id:'RADAR8:USDT:LOW-DISK',cycle_number:1,
+      radar:'RADAR_8',quote:'USDT',status:'COMPLETE',started_at:completedAt-1000,completed_at:completedAt,
+      data_policy:{closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
+      counters:{},coins:[{symbol:'TESTUSDT',eligible:true}]
+    };
+    await assert.rejects(store.appendScanJourneyCycle(cycle),error=>error?.code==='SCAN_JOURNEY_STORAGE_PRESSURE');
+    const state=await store.getScanJourneyState();
+    assert.equal(state.cycles.length,0,'storage pressure must not publish a partial manifest entry');
+    assert.equal((await readdir(store.scanJourneyDir)).filter(name=>name.endsWith('.json.gz')).length,0,
+      'storage pressure must not leave a partial compressed archive file');
+    // A cycle's primary signal journal is independent of the optional bulky journey
+    // snapshot; the caller can finish the cycle and report the archive-pressure state.
+    await store.appendFalconEyeAlert({
+      id:'FALCON:LOWDISK:1',radar:'FALCON_EYE_RADAR',symbol:'TESTUSDT',
+      detected_at:completedAt,processed_at:completedAt,price:1,
+      paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+    });
+    const signal=await store.readFalconEyeAlerts({sinceMs:0,limit:10});
+    assert.equal(signal.length,1);
+    assert.equal(signal[0].id,'FALCON:LOWDISK:1');
+  }finally{
+    await import('node:fs/promises').then(fs=>fs.rm(dir,{recursive:true,force:true}));
+  }
+});
