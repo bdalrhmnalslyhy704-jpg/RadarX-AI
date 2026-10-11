@@ -187,7 +187,11 @@ export class ProfessorRadar{
       try{
         const url='https://www.youtube.com/results?search_query='+encodeURIComponent(query);
         const html=await fetchText(url,{timeoutMs:this.config.webTimeoutMs,fetchImpl:this.fetchImpl});
-        for(const s of parseYoutubeSearch(html,query,this.config.liveSearchLimit))found.set(s.id,s);
+        const receivedAt=this.clock();
+        for(const s of parseYoutubeSearch(html,query,this.config.liveSearchLimit))found.set(s.id,{
+          ...s,source:'YOUTUBE_PUBLIC_SEARCH',received_at:receivedAt,
+          received_at_iso:new Date(receivedAt).toISOString()
+        });
       }catch(e){errors.push(query+':'+String(e?.message??e));}
       await sleep(120);
     }
@@ -208,12 +212,17 @@ export class ProfessorRadar{
     const results=await mapLimit(queries,3,async item=>{
       const url='https://api.gdeltproject.org/api/v2/doc/doc?mode=artlist&format=json&maxrecords='+Math.min(75,this.config.newsLimit)+'&timespan='+item.timespan+'&query='+encodeURIComponent(item.query);
       const body=await fetchText(url,{timeoutMs:this.config.webTimeoutMs,fetchImpl:this.fetchImpl});
-      return {query:item,items:parseGdelt(body,this.config.newsLimit)};
+      const receivedAt=this.clock();
+      return {query:item,items:parseGdelt(body,this.config.newsLimit),received_at:receivedAt};
     });
     for(const result of results){
       if(result?.error){errors.push('GDELT:'+String(result.error));continue;}
       for(const item of result?.items||[]){
         const enriched={...item,event_type:classifyNewsEvent(item.title,item.domain),
+          received_at:result.received_at??null,
+          received_at_iso:Number.isFinite(Number(result.received_at))?new Date(Number(result.received_at)).toISOString():null,
+          age_at_receive_ms:Number.isFinite(Number(result.received_at))&&Number.isFinite(Number(item.published_at))
+            ?Math.max(0,Number(result.received_at)-Number(item.published_at)):null,
           watch_scope:result.query.kind||'GENERAL_CRYPTO_NEWS'};
         found.set(item.url,enriched);
       }
