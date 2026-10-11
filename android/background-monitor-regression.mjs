@@ -43,22 +43,24 @@ assert.match(service, /persistDurableAlertCursor\(at, replayKey, seen\)/,
   'the durable replay cursor must advance only after each individual event has been handled');
 assert.match(service, /private boolean persistDurableAlertCursor\(long at, String replayKey, Set<String> seen\)/,
   'cursor checkpoint persistence must return a success state');
-assert.match(service, /\.putStringSet\("radar_alert_seen_ids", seen\)\s*\.commit\(\)/,
-  'each handled event must persist its compound cursor synchronously before the next event');
+assert.match(service, /\.putStringSet\("radar_alert_seen_ids", seen\)[\s\S]*?\.putStringSet\("radar_alert_pending_notification_ids", pending\)[\s\S]*?\.commit\(\)/,
+  'each handled event must atomically persist the compound cursor and clear its pending notification reservation');
 assert.match(service, /if \(!persistDurableAlertCursor\(at, replayKey, seen\)\)/,
   'replay must stop when local cursor persistence fails');
 assert.doesNotMatch(service, /maxAt = Math\.max\(cursor, nextCursor\.optLong\("since", cursor\)\)/,
   'the page next_cursor must never leap past events that have not been posted or safely skipped');
-assert.match(service, /private boolean notifyRadarAlert\(JSONObject alert\)/,
-  'the notification post operation must report whether Android accepted the request');
+assert.match(service, /private boolean notifyRadarAlert\(JSONObject alert, String replayIdentity, boolean durableCursor\)/,
+  'notification posts must use the compound replay identity and know whether the feed has a durable cursor');
 assert.match(service, /manager\.areNotificationsEnabled\(\)/,
   'disabled Android notifications must leave the current alert pending');
 assert.match(service, /manager\.getNotificationChannel\(CHANNEL_RADAR_ALERTS\)/,
   'the service must inspect the alert channel before advancing the durable cursor');
 assert.match(service, /channel\.getImportance\(\) == NotificationManager\.IMPORTANCE_NONE/,
   'a disabled notification channel must leave the current alert pending');
-assert.match(service, /if \(!notifyRadarAlert\(alert\)\)/,
-  'an alert that cannot be posted must stop page processing without skipping its cursor');
+assert.match(service, /if \(!notifyRadarAlert\(alert, replayKey, true\)\)/,
+  'a durable alert that cannot be posted must stop page processing without skipping its cursor');
+assert.match(service, /if \(!notifyRadarAlert\(alert, replayKey, false\)\)/,
+  'a non-durable fallback alert must not move the durable cursor when a post is blocked');
 assert.match(service, /if \(identity\.isEmpty\(\)\)/,
   'rows without a source id must still receive a stable compound cursor identity');
 assert.match(service, /ALERT_POST_REQUEST_ACCEPTED/,
@@ -96,3 +98,15 @@ assert.ok(service.includes('at > 0L && at >= cursor'),
   'fallback must not omit events with the current timestamp when stable IDs differ');
 assert.ok(service.includes('sortAlertsChronologically(root)') && service.includes('root.put("oldest_first", true)'),
   'bounded fallback candidates must be notified in chronological order without moving the durable cursor');
+
+assert.match(service, /radar_alert_pending_notification_ids/,
+  'durable alerts must have a synchronous pending reservation before NotificationManager is called');
+assert.match(service, /getActiveNotifications\(\)/,
+  'restart recovery must reconcile a notification already accepted by Android before posting again');
+assert.match(service, /ALERT_POST_RECONCILED_ACTIVE/,
+  'recovered active notifications must be logged separately from new post requests');
+assert.match(service, /BACKGROUND_SCHEDULER_ALREADY_RUNNING/,
+  'repeated START intents must not create replacement schedulers during a scan');
+assert.match(service, /scanInProgress\.compareAndSet\(false, true\)/,
+  'a single service instance must never run concurrent polling passes');
+
