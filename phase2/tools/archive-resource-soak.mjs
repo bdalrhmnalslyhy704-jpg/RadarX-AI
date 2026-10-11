@@ -172,7 +172,7 @@ async function handle(req,res){
       duration_ms:Date.now()-started,archive_status:archiveStatus,archive_error_code:pressureCode,
       cycle_completed:true
     });
-    sendJson(res,200,{ok:true,cycle:CYCLE_COUNT+1,cycle_completed:true,archive_status,pressure_code:pressureCode});
+    sendJson(res,200,{ok:true,cycle:CYCLE_COUNT+1,cycle_completed:true,archive_status:archiveStatus,pressure_code:pressureCode});
     return;
   }
   sendJson(res,404,{error:'NOT_FOUND'});
