@@ -1,5 +1,6 @@
-# Docker Official Image mirrored on Amazon ECR Public to avoid Docker Hub pull throttling.
-FROM public.ecr.aws/docker/library/node:22-bookworm-slim
+# Use the official Node.js 22 slim image directly. The ECR Public mirror has
+# returned 429 Data limit exceeded in CI; this is the equivalent upstream image.
+FROM node:22-bookworm-slim
 
 WORKDIR /app
 
