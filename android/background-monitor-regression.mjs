@@ -35,7 +35,7 @@ assert.match(service, /oldest_first=1&since_id=/,
   'background sync must request chronological replay pages from its durable cursor');
 assert.match(service, /radar_alert_cursor_id/,
   'equal-timestamp detections must be paginated without advancing past unseen alerts');
-assert.match(service, /notifyNewRadarAlerts\(JSONArray alerts, boolean oldestFirst, JSONObject nextCursor\)/,
+assert.match(service, /notifyNewRadarAlerts\(JSONArray alerts, boolean oldestFirst, JSONObject nextCursor, boolean cursorAdvanceAllowed\)/,
   'notifications must preserve oldest-first replay order after reconnect');
 
 assert.match(service, /getRunningAppProcesses\(\)/,
