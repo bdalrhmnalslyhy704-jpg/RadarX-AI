@@ -109,8 +109,8 @@ test('Coin Hunter and Whale alerts persist in their own JSONL archives and suppo
   assert.equal(coinPage[0].replay_cursor_id,'COIN_HUNTER_RADAR|COINHUNTER:OGNUSDT:100000');
   assert.equal(whalePage[0].replay_cursor_id,'WHALE_ACCUMULATION_RADAR|WHALE:CTSIUSDT:100000');
 
-  const coinLines=(await readFile(store.files.coinHunterAlerts,'utf8')).split('\\n').filter(Boolean);
-  const whaleLines=(await readFile(store.files.whaleAccumulationAlerts,'utf8')).split('\\n').filter(Boolean);
+  const coinLines=(await readFile(store.files.coinHunterAlerts,'utf8')).split('\n').filter(Boolean);
+  const whaleLines=(await readFile(store.files.whaleAccumulationAlerts,'utf8')).split('\n').filter(Boolean);
   assert.equal(coinLines.length,1,'Coin Hunter writes one complete newline-delimited event');
   assert.equal(whaleLines.length,1,'Whale writes one complete newline-delimited event');
 });
