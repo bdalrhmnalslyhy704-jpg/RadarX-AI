@@ -359,11 +359,28 @@ test('TEST_FIXTURE: unified radar alert replay returns all historical pages olde
     assert.equal(seen[619],'RADAR4:0619');
     assert.ok(seen.every((id,index)=>id==='RADAR4:'+String(index).padStart(4,'0')),
       'more than 500 durable alerts must replay exactly once, in order, including every equal-time boundary');
-    const allQuery=new URLSearchParams({radar:'ALL',limit:'50',since:'0',since_id:'',oldest_first:'1'});
-    const allReplay=await (await fetch(base+'/api/radar-alerts?'+allQuery.toString())).json();
-    assert.equal(allReplay.oldest_first,true);
-    assert.equal(allReplay.alerts.some(x=>x.id==='FALCON:offline-history'),true,
-      'durable Falcon Eye history must replay even when its scanner instance is absent');
+    const allSeen=[];
+    let allAt=0,allId='',allMore=true,allPages=0;
+    while(allMore){
+      const allQuery=new URLSearchParams({radar:'ALL',limit:'50',since:String(allAt),since_id:allId,oldest_first:'1'});
+      const allReplay=await (await fetch(base+'/api/radar-alerts?'+allQuery.toString())).json();
+      assert.equal(allReplay.oldest_first,true);
+      allSeen.push(...allReplay.alerts.map(x=>x.id));
+      allMore=allReplay.has_more===true;
+      allAt=Number(allReplay.next_cursor?.since??allAt);
+      allId=String(allReplay.next_cursor?.since_id??allId);
+      allPages++;
+      assert.ok(allPages<=14,'all radar archives should replay in bounded pages');
+    }
+    assert.equal(allPages,13);
+    assert.equal(allSeen.length,623);
+    assert.equal(new Set(allSeen).size,623);
+    assert.ok(allSeen.includes('COINHUNTER:offline-history'));
+    assert.ok(allSeen.includes('WHALE:offline-history'));
+    assert.ok(allSeen.includes('FALCON:offline-history'));
+    assert.equal(allSeen[0],'COINHUNTER:offline-history');
+    assert.equal(allSeen[1],'WHALE:offline-history');
+    assert.equal(allSeen[622],'RADAR4:0619');
   }finally{
     await new Promise(resolve=>server.close(resolve));
   }
