@@ -30,3 +30,10 @@ assert.match(store, /async readFalconEyeAlerts/,
   'Radar 9 history must be stored/read through DurableStore');
 
 console.log('Background monitoring regression checks passed: Radar 9 replay, durable cursor, stale monitor recovery, detection price/time, and truthful offline status.');
+
+assert.match(service, /oldest_first=1&since_id=/,
+  'background sync must request chronological replay pages from its durable cursor');
+assert.match(service, /radar_alert_cursor_id/,
+  'equal-timestamp detections must be paginated without advancing past unseen alerts');
+assert.match(service, /notifyNewRadarAlerts\(JSONArray alerts, boolean oldestFirst\)/,
+  'notifications must preserve oldest-first replay order after reconnect');
