@@ -21,6 +21,7 @@ import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.text.DecimalFormat;
 import java.text.SimpleDateFormat;
@@ -133,14 +134,15 @@ public final class RadarXBackgroundMonitorService extends Service {
         touchHeartbeat();
         try {
             long cursor = currentAlertCursor();
-            JSONObject root = fetchRadarAlertsFeed(cursor);
+            String cursorId = prefs().getString("radar_alert_cursor_id", "");
+            JSONObject root = fetchRadarAlertsFeed(cursor, cursorId);
             JSONObject meta = root.optJSONObject("meta");
             boolean live = meta != null && meta.optBoolean("paper_trading", true)
                 && !meta.optBoolean("real_order_execution", false);
             if (live) {
                 if (!loggedFirstScan) { loggedFirstScan = true; Log.i(TAG, "BACKGROUND_SCAN_OK"); }
                 JSONArray alerts = root.optJSONArray("alerts");
-                int count = notifyNewRadarAlerts(alerts == null ? new JSONArray() : alerts);
+                int count = notifyNewRadarAlerts(alerts == null ? new JSONArray() : alerts, root.optBoolean("oldest_first", false));
                 JSONArray radars = root.optJSONArray("radars");
                 updateStatus("رادارات مستقلة • " + (radars == null ? 6 : radars.length()) +
                     " • اكتشافات جديدة: " + count);
@@ -154,13 +156,14 @@ public final class RadarXBackgroundMonitorService extends Service {
         }
     }
 
-    private JSONObject fetchRadarAlertsFeed(long cursor) throws Exception {
+    private JSONObject fetchRadarAlertsFeed(long cursor, String cursorId) throws Exception {
         Exception last = null;
         String[] unifiedBases = {BACKEND_RADAR_ALERTS, BACKEND_RADAR_ALERTS_FALLBACK};
         for (String base : unifiedBases) {
             HttpURLConnection connection = null;
             try {
-                String target = base + (base.contains("?") ? "&since=" : "?since=") + cursor;
+                String target = base + (base.contains("?") ? "&since=" : "?since=") + cursor +
+                    "&limit=50&oldest_first=1&since_id=" + URLEncoder.encode(cursorId, "UTF-8");
                 connection = (HttpURLConnection) new URL(target).openConnection();
                 connection.setRequestMethod("GET");
                 connection.setConnectTimeout(12_000);
@@ -175,7 +178,7 @@ public final class RadarXBackgroundMonitorService extends Service {
                 }
                 if (status != 200) throw new IllegalStateException("HTTP_" + status);
                 JSONObject root = new JSONObject(new String(readAll(connection.getInputStream()), StandardCharsets.UTF_8));
-                mergeFalconEyeHistory(root, cursor);
+                if (!root.optBoolean("oldest_first", false)) mergeFalconEyeHistory(root, cursor);
                 return root;
             } catch (Exception e) {
                 last = e;
@@ -183,7 +186,7 @@ public final class RadarXBackgroundMonitorService extends Service {
                 if (connection != null) connection.disconnect();
             }
         }
-        return fetchIndividualRadarAlerts(cursor, last);
+        return fetchIndividualRadarAlerts(cursor, cursorId, last);
     }
 
     /** Initialize a new install at the current time, but preserve a cursor from older app versions. */
@@ -285,7 +288,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         return alert.optLong("processed_at", alert.optLong("detected_at", alert.optLong("detectedAt", 0L)));
     }
 
-    private JSONObject fetchIndividualRadarAlerts(long cursor, Exception prior) throws Exception {
+    private JSONObject fetchIndividualRadarAlerts(long cursor, String cursorId, Exception prior) throws Exception {
         String base = "https://radarx-ai-triple-production.up.railway.app";
         String[] paths = {
             "/api/move-radar?quote=USDT&limit=50",
@@ -354,18 +357,32 @@ public final class RadarXBackgroundMonitorService extends Service {
         return root;
     }
 
-    private int notifyNewRadarAlerts(JSONArray alerts) {
+    private int notifyNewRadarAlerts(JSONArray alerts, boolean oldestFirst) {
         Set<String> seen = new HashSet<>(prefs().getStringSet("radar_alert_seen_ids", new HashSet<>()));
         long cursor = prefs().getLong("radar_alert_cursor_at", 0L);
+        String cursorId = prefs().getString("radar_alert_cursor_id", "");
         long maxAt = cursor;
+        String maxCursorId = cursorId;
         int count = 0;
-        for (int i = alerts.length() - 1; i >= 0; i--) {
+        int start = oldestFirst ? 0 : alerts.length() - 1;
+        int end = oldestFirst ? alerts.length() : -1;
+        int step = oldestFirst ? 1 : -1;
+        for (int i = start; i != end; i += step) {
             JSONObject alert = alerts.optJSONObject(i);
             if (alert == null) continue;
-            long at = alert.optLong("processed_at", alert.optLong("detected_at", 0L));
-            if (at > maxAt) maxAt = at;
-            if (!alert.optBoolean("eligible", true)) continue;
+            long at = alert.optLong("replay_cursor_at",
+                alert.optLong("processed_at", alert.optLong("detected_at", alert.optLong("detectedAt", 0L))));
             String id = alert.optString("id", "");
+            String replayCursorId = alert.optString("replay_cursor_id", "");
+            if (replayCursorId.isEmpty()) {
+                replayCursorId = alert.optString("radar", "UNKNOWN_RADAR") + "|" +
+                    (id.isEmpty() ? alert.optString("symbol", "UNKNOWN") + ":" + at : id);
+            }
+            if (at > maxAt || (at == maxAt && replayCursorId.compareTo(maxCursorId) > 0)) {
+                maxAt = at;
+                maxCursorId = replayCursorId;
+            }
+            if (!alert.optBoolean("eligible", true)) continue;
             if (id.isEmpty() || seen.contains(id)) continue;
             notifyRadarAlert(alert);
             seen.add(id);
@@ -373,6 +390,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         }
         while (seen.size() > 300) seen.remove(seen.iterator().next());
         prefs().edit().putLong("radar_alert_cursor_at", maxAt)
+            .putString("radar_alert_cursor_id", maxCursorId)
             .putStringSet("radar_alert_seen_ids", seen).apply();
         return count;
     }
