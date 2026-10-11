@@ -118,14 +118,34 @@ jobs:
           # Recent Google SDK repositories no longer publish the legacy "tools" package.
           packages: "platform-tools"
 
-      - name: Assemble Android debug APK
-        timeout-minutes: 15
+      - name: Accept Android SDK licenses
+        timeout-minutes: 3
         run: |
           set -euo pipefail
-          sdkmanager --licenses < <(yes) >/dev/null
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-          gradle -p android :app:assembleDebug --no-daemon
-          test -s android/app/build/outputs/apk/debug/app-debug.apk
+          echo "RADARX_ANDROID_SDK_LICENSES_START"
+          license_answers="$(printf 'y\\n%.0s' {1..100})"
+          timeout 120s sdkmanager --licenses <<< "${license_answers}"
+          echo "RADARX_ANDROID_SDK_LICENSES_READY"
+
+      - name: Install Android SDK build packages
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          echo "RADARX_ANDROID_SDK_INSTALL_START"
+          timeout 420s sdkmanager --verbose "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          echo "RADARX_ANDROID_SDK_INSTALL_READY"
+
+      - name: Assemble Android debug APK
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          echo "RADARX_ANDROID_GRADLE_ASSEMBLE_START"
+          timeout 540s gradle --console=plain -p android :app:assembleDebug --no-daemon --stacktrace --info
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "${APK}"
+          echo "RADARX_ANDROID_GRADLE_ASSEMBLE_READY"
+          ls -lh "${APK}"
+          sha256sum "${APK}"
 
       - name: Android emulator online/offline background smoke
         uses: reactivecircus/android-emulator-runner@v2
