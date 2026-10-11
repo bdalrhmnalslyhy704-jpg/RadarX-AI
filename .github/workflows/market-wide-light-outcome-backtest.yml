@@ -1,0 +1,51 @@
+name: RadarX Build 224 Market-Wide Light Scan Outcome Replay
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/build224-market-wide-light-scan-20261010
+    paths:
+      - 'phase2/tools/market-wide-light-outcome-backtest.mjs'
+      - '.github/workflows/market-wide-light-outcome-backtest.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: market-wide-light-outcome-backtest-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  historical-outcome-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RADARX_MARKET_WIDE_OUTCOME_REPORT: artifacts/market-wide-light-outcome-backtest.json
+    steps:
+      - name: Checkout isolated Build 224 experiment
+        uses: actions/checkout@v4
+        timeout-minutes: 5
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        timeout-minutes: 5
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install repository dependencies
+        run: npm ci
+        timeout-minutes: 10
+      - name: Validate replay source
+        run: node --check phase2/tools/market-wide-light-outcome-backtest.mjs
+        timeout-minutes: 2
+      - name: Replay closed Binance candles and measure forward outcomes
+        run: node phase2/tools/market-wide-light-outcome-backtest.mjs
+        timeout-minutes: 40
+      - name: Upload outcome evidence report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-market-wide-outcome-evidence
+          path: artifacts/market-wide-light-outcome-backtest.json
+          if-no-files-found: warn
+          retention-days: 7

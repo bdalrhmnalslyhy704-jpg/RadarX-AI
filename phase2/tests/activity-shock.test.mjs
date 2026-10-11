@@ -98,3 +98,30 @@ test('keeps a fast-shock symbol in the micro queue while waiting for its 5m cand
   const selected=radar.selectMicro(rows,fast,1);
   assert.equal(selected.some(x=>x.symbol==='PENDINGUSDT'&&x._selection_lane==='exceptional'),true);
 });
+
+
+test('cached market-wide event breakout consumes only an existing bounded exceptional Micro slot',()=>{
+  const now=1_900_000_000_000;
+  const radar=new EarlyExpansionRadar({
+    rest:{},store:{},
+    config:{microScanCandidates:8,quietReserve:2,rotationReserve:2,exceptionalRotationBypassSlots:2},
+    clock:()=>now,logger:{warn(){}}
+  });
+  const rows=Array.from({length:30},(_,i)=>({
+    symbol:i===0?'EVENTUSDT':'ORDINARY'+String(i).padStart(2,'0')+'USDT',
+    lastPrice:1+i*.001,priceChange24h:.2,quoteVolume24h:2_000_000,tradeCount24h:10000
+  }));
+  const fast=new Map(rows.map(row=>[row.symbol,{
+    price_change_pct:.02,price_acceleration_pct:0,volume_accel_ratio:1,trade_accel_ratio:1,
+    ...(row.symbol==='EVENTUSDT'?{market_wide_event_driven_breakout:{
+      stage:'EVENT_DRIVEN_BREAKOUT',detected:true,needs_micro_confirmation:true,
+      watch_only:true,entry_eligible:false,closed_candles_only:true
+    }}:{})
+  }]));
+  const selected=radar.selectMicro(rows,fast,1);
+  const event=selected.find(item=>item.symbol==='EVENTUSDT');
+  assert.ok(event,'the cached event should survive the ordinary score/rotation lanes');
+  assert.equal(event._selection_lane,'exceptional');
+  assert.equal(event.fast.market_wide_event_driven_breakout.entry_eligible,false);
+  assert.ok(selected.length<=8,'event priority must not exceed the existing Micro batch cap');
+});

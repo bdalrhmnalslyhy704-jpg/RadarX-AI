@@ -1,0 +1,842 @@
+// Recheck the exact current branch head; this replay is evidence-only and never deploys or trades.
+import {mkdir, writeFile} from 'node:fs/promises';
+import {dirname, resolve} from 'node:path';
+import assert from 'node:assert/strict';
+import {MarketWideLightScan, isDirectionalCandidateSymbol} from '../core/market-wide-light-scan.mjs';
+
+const API_ROOT = 'https://data-api.binance.vision';
+const MIN_QUOTE_VOLUME = 750000;
+const KLINE_LIMIT = 1000;
+const CANDLE_MS = 5 * 60 * 1000;
+const SAMPLE_STEP_MS = 60 * 60 * 1000;
+const LOOKBACK_BARS = 96;
+const FUTURE_BARS = 48;
+const HORIZONS = {m15: 3, h1: 12, h4: 48};
+const MIN_HISTORY_BARS = 800;
+const MIN_SAMPLE_UNIVERSE = 100;
+const MIN_SAMPLE_COUNT = 24;
+const MIN_COVERAGE_RATIO = 0.70;
+const REPORT_PATH = resolve(process.env.RADARX_MARKET_WIDE_OUTCOME_REPORT || 'artifacts/market-wide-light-outcome-backtest.json');
+const sleep = ms => new Promise(resolveSleep => setTimeout(resolveSleep, ms));
+const startedAt = Date.now();
+let lastRequestStartedAt = 0;
+let requestQueue = Promise.resolve();
+const requestAudit = [];
+
+function round(value, digits = 4) {
+  return Number.isFinite(value) ? Number(value.toFixed(digits)) : null;
+}
+function mean(values) {
+  const rows = values.filter(Number.isFinite);
+  return rows.length ? rows.reduce((sum, value) => sum + value, 0) / rows.length : null;
+}
+function median(values) {
+  const rows = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!rows.length) return null;
+  const mid = Math.floor(rows.length / 2);
+  return rows.length % 2 ? rows[mid] : (rows[mid - 1] + rows[mid]) / 2;
+}
+function rate(values) {
+  const rows = values.filter(value => typeof value === 'boolean');
+  return rows.length ? rows.filter(Boolean).length / rows.length : null;
+}
+function stddev(values) {
+  const rows = values.filter(Number.isFinite);
+  if (rows.length < 2) return 0;
+  const avg = mean(rows);
+  return Math.sqrt(rows.reduce((sum, value) => sum + (value - avg) ** 2, 0) / (rows.length - 1));
+}
+function quantile(sorted, q) {
+  if (!sorted.length) return null;
+  const position = (sorted.length - 1) * q;
+  const lo = Math.floor(position), hi = Math.ceil(position);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (position - lo);
+}
+function seededRandom(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state ^= state << 13; state ^= state >>> 17; state ^= state << 5;
+    return (state >>> 0) / 4294967296;
+  };
+}
+function movingBlockBootstrapCI(values, {blockLength = 4, iterations = 2000, seed = 224199} = {}) {
+  const rows = values.filter(Number.isFinite);
+  if (rows.length < 8) return {method:'MOVING_BLOCK_BOOTSTRAP_4H', n:rows.length, low:null, high:null};
+  const random = seededRandom(seed);
+  const means = [];
+  for (let iteration = 0; iteration < iterations; iteration++) {
+    const sample = [];
+    while (sample.length < rows.length) {
+      const start = Math.floor(random() * rows.length);
+      for (let offset = 0; offset < blockLength && sample.length < rows.length; offset++) {
+        sample.push(rows[(start + offset) % rows.length]);
+      }
+    }
+    means.push(mean(sample));
+  }
+  means.sort((a, b) => a - b);
+  return {method:'MOVING_BLOCK_BOOTSTRAP_4H', n:rows.length, low:round(quantile(means, 0.025), 6), high:round(quantile(means, 0.975), 6)};
+}
+function closeBoundary(timestamp) {
+  return Math.floor((timestamp + 1) / CANDLE_MS) * CANDLE_MS - 1;
+}
+function continuous(rows) {
+  if (!Array.isArray(rows) || !rows.length) return false;
+  for (let index = 1; index < rows.length; index++) {
+    if (Number(rows[index].openTime) - Number(rows[index - 1].openTime) !== CANDLE_MS) return false;
+  }
+  return true;
+}
+function summarizeRows(rows) {
+  const available = rows.filter(row => row && Number.isFinite(row.return4h) && Number.isFinite(row.mfe4h) && Number.isFinite(row.mae4h));
+  return {
+    observations: available.length,
+    unique_symbols: new Set(available.map(row => row.symbol)).size,
+    avg_return_15m_pct: round(mean(available.map(row => row.return15m)), 4),
+    avg_return_1h_pct: round(mean(available.map(row => row.return1h)), 4),
+    median_return_1h_pct: round(median(available.map(row => row.return1h)), 4),
+    avg_return_4h_pct: round(mean(available.map(row => row.return4h)), 4),
+    median_return_4h_pct: round(median(available.map(row => row.return4h)), 4),
+    median_max_upside_1h_pct: round(median(available.map(row => row.mfe1h)), 4),
+    hit_3pct_upside_1h_pct: round((rate(available.map(row => row.mfe1h >= 3)) ?? 0) * 100, 3),
+    hit_3pct_upside_4h_pct: round((rate(available.map(row => row.mfe4h >= 3)) ?? 0) * 100, 3),
+    hit_5pct_upside_4h_pct: round((rate(available.map(row => row.mfe4h >= 5)) ?? 0) * 100, 3),
+    hit_10pct_upside_4h_pct: round((rate(available.map(row => row.mfe4h >= 10)) ?? 0) * 100, 3),
+    median_max_adverse_4h_pct: round(median(available.map(row => row.mae4h)), 4),
+    adverse_5pct_4h_pct: round((rate(available.map(row => row.mae4h <= -5)) ?? 0) * 100, 3)
+  };
+}
+function pairedDifferenceCI(perSample, leftKey, rightKey, metricKey, seed) {
+  const diffs = perSample
+    .filter(row => Number.isFinite(row[leftKey]?.[metricKey]) && Number.isFinite(row[rightKey]?.[metricKey]))
+    .map(row => row[leftKey][metricKey] - row[rightKey][metricKey]);
+  const ci = movingBlockBootstrapCI(diffs, {seed});
+  return {
+    matched_snapshots: diffs.length,
+    mean_difference_percentage_points: round(mean(diffs) * 100, 3),
+    confidence_interval_95_percentage_points: {
+      method: ci.method,
+      block_length_snapshots: 4,
+      lower: ci.low === null ? null : round(ci.low * 100, 3),
+      upper: ci.high === null ? null : round(ci.high * 100, 3)
+    }
+  };
+}
+function perSampleRates(rows) {
+  return {
+    hit5_mfe4h_rate: rate(rows.map(row => row.mfe4h >= 5)),
+    hit3_mfe4h_rate: rate(rows.map(row => row.mfe4h >= 3)),
+    hit10_mfe4h_rate: rate(rows.map(row => row.mfe4h >= 10)),
+    adverse5_mae4h_rate: rate(rows.map(row => row.mae4h <= -5)),
+    mean_return4h: mean(rows.map(row => row.return4h)),
+    mean_mfe4h: mean(rows.map(row => row.mfe4h)),
+    median_mae4h: median(rows.map(row => row.mae4h))
+  };
+}
+
+function clampScore(value) {
+  return Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
+}
+function weightedScore(parts) {
+  const valid = parts.filter(([value, weight]) => Number.isFinite(value) && Number.isFinite(weight) && weight > 0);
+  const denominator = valid.reduce((sum, [, weight]) => sum + weight, 0);
+  return denominator > 0 ? valid.reduce((sum, [value, weight]) => sum + value * weight, 0) / denominator : null;
+}
+function medianFinite(values) {
+  return median(values.filter(value => Number.isFinite(value) && value >= 0));
+}
+function deriveExpansionFeatures(candles, index, audit) {
+  const closeAt = at => Number(candles[at]?.close);
+  const pctFrom = offset => {
+    const current = closeAt(index), previous = closeAt(index - offset);
+    return Number.isFinite(current) && Number.isFinite(previous) && previous > 0
+      ? (current / previous - 1) * 100 : null;
+  };
+  const momentum15m = pctFrom(3);
+  const preceding15m = (() => {
+    const recent = closeAt(index - 3), older = closeAt(index - 6);
+    return Number.isFinite(recent) && Number.isFinite(older) && older > 0 ? (recent / older - 1) * 100 : null;
+  })();
+  const momentum1h = pctFrom(12);
+  const momentum4h = pctFrom(48);
+  const acceleration15m = Number.isFinite(momentum15m) && Number.isFinite(preceding15m)
+    ? momentum15m - preceding15m : null;
+  const recentBars = candles.slice(index - 2, index + 1);
+  const baselineBars = candles.slice(index - 26, index - 2);
+  const recentQuote = medianFinite(recentBars.map(row => Number(row.quoteVolume)));
+  const baselineQuote = medianFinite(baselineBars.map(row => Number(row.quoteVolume)));
+  const recentVolume = recentQuote ?? medianFinite(recentBars.map(row => Number(row.volume)));
+  const baselineVolume = baselineQuote ?? medianFinite(baselineBars.map(row => Number(row.volume)));
+  const volumeRatio = recentVolume !== null && baselineVolume > 0 ? recentVolume / baselineVolume : null;
+  const recentTrades = medianFinite(recentBars.map(row => Number(row.tradeCount)));
+  const baselineTrades = medianFinite(baselineBars.map(row => Number(row.tradeCount)));
+  const tradeRatio = recentTrades !== null && baselineTrades > 0 ? recentTrades / baselineTrades : null;
+  const buyQuote = recentBars.reduce((sum, row) => sum + (Number.isFinite(Number(row.takerBuyQuoteVolume)) ? Number(row.takerBuyQuoteVolume) : 0), 0);
+  const totalQuote = recentBars.reduce((sum, row) => sum + (Number.isFinite(Number(row.quoteVolume)) ? Number(row.quoteVolume) : 0), 0);
+  const buyPressure = totalQuote > 0 && recentBars.every(row => Number.isFinite(Number(row.takerBuyQuoteVolume)))
+    ? buyQuote / totalQuote : null;
+  const metrics = audit?.metrics || {};
+  const core = metrics.core_conditions || {};
+  const recentHourBars = candles.slice(index - 11, index + 1);
+  const recentHourHigh = Math.max(...recentHourBars.map(row => Number(row.high)).filter(Number.isFinite));
+  const recentHourLow = Math.min(...recentHourBars.map(row => Number(row.low)).filter(Number.isFinite));
+  const currentClose = closeAt(index);
+  const drawdownFromHourHighPct = Number.isFinite(recentHourHigh) && recentHourHigh > 0 && currentClose > 0
+    ? (currentClose / recentHourHigh - 1) * 100 : null;
+  const hourRangePct = Number.isFinite(recentHourHigh) && Number.isFinite(recentHourLow) && currentClose > 0
+    ? (recentHourHigh - recentHourLow) / currentClose * 100 : null;
+  const redCandleRatio = recentHourBars.length === 12
+    ? recentHourBars.filter(row => Number(row.close) < Number(row.open)).length / recentHourBars.length : null;
+  const lightScore = Number.isFinite(audit?.candidate_score) ? audit.candidate_score : null;
+  const resistanceDistance = Number.isFinite(metrics.resistance_distance_pct) ? metrics.resistance_distance_pct : null;
+  const atrRatio = Number.isFinite(metrics.atr_ratio) ? metrics.atr_ratio : null;
+  const bbRatio = Number.isFinite(metrics.bollinger_width_ratio) ? metrics.bollinger_width_ratio : null;
+  const compressionRatio = [atrRatio, bbRatio].filter(Number.isFinite).length
+    ? Math.min(...[atrRatio, bbRatio].filter(Number.isFinite)) : null;
+  const features = {
+    momentum15m, preceding15m, momentum1h, momentum4h, acceleration15m,
+    volumeRatio, tradeRatio, buyPressure, lightScore, resistanceDistance,
+    drawdownFromHourHighPct, hourRangePct, redCandleRatio,
+    supportScore: core.support_structure === true ? (metrics.higher_lows === true ? 100 : 70) :
+      core.support_structure === false ? 0 : null,
+    compressionScore: compressionRatio === null ? null : clampScore(100 * (1 - compressionRatio / 1.3)),
+    resistanceScore: resistanceDistance === null ? null :
+      (resistanceDistance >= -0.1 && resistanceDistance <= 2.5
+        ? clampScore(100 * (1 - Math.max(0, resistanceDistance) / 2.5)) : 0),
+    momentum15Score: Number.isFinite(momentum15m) ? clampScore(50 + momentum15m * 30) : null,
+    momentum1hScore: Number.isFinite(momentum1h) ? clampScore(50 + momentum1h * 12) : null,
+    accelerationScore: Number.isFinite(acceleration15m) ? clampScore(50 + acceleration15m * 25) : null,
+    volumeScore: Number.isFinite(volumeRatio) && volumeRatio > 0
+      ? clampScore(50 + Math.log2(Math.max(0.125, volumeRatio)) * 25) : null,
+    tradeScore: Number.isFinite(tradeRatio) && tradeRatio > 0
+      ? clampScore(50 + Math.log2(Math.max(0.125, tradeRatio)) * 25) : null,
+    buyPressureScore: Number.isFinite(buyPressure) ? clampScore((buyPressure - 0.4) * 500) : null
+  };
+  const expansionPenalty =
+    (Number.isFinite(momentum4h) ? Math.max(0, momentum4h - 5) * 3 : 0) +
+    (Number.isFinite(momentum1h) ? Math.max(0, momentum1h - 3) * 4 : 0);
+  features.hybridExpansionScore = weightedScore([
+    [features.lightScore, 0.24],
+    [features.momentum15Score, 0.18],
+    [features.momentum1hScore, 0.12],
+    [features.accelerationScore, 0.12],
+    [features.volumeScore, 0.13],
+    [features.buyPressureScore, 0.12],
+    [features.supportScore, 0.04],
+    [features.resistanceScore, 0.05]
+  ]);
+  features.flowConfirmedScore = weightedScore([
+    [features.momentum15Score, 0.20],
+    [features.accelerationScore, 0.15],
+    [features.volumeScore, 0.20],
+    [features.tradeScore, 0.08],
+    [features.buyPressureScore, 0.18],
+    [features.resistanceScore, 0.08],
+    [features.supportScore, 0.06],
+    [features.lightScore, 0.05]
+  ]);
+  features.guardedMomentumScore = weightedScore([
+    [features.momentum15Score, 0.24],
+    [features.momentum1hScore, 0.20],
+    [features.accelerationScore, 0.14],
+    [features.volumeScore, 0.16],
+    [features.tradeScore, 0.06],
+    [features.buyPressureScore, 0.12],
+    [features.supportScore, 0.04],
+    [features.resistanceScore, 0.04]
+  ]);
+  features.riskGuardedScore = weightedScore([
+    [features.lightScore, 0.18],
+    [features.momentum15Score, 0.11],
+    [features.momentum1hScore, 0.10],
+    [features.accelerationScore, 0.08],
+    [features.volumeScore, 0.10],
+    [features.tradeScore, 0.05],
+    [features.buyPressureScore, 0.10],
+    [features.supportScore, 0.11],
+    [features.compressionScore, 0.10],
+    [features.resistanceScore, 0.07]
+  ]);
+  const downsidePenalty =
+    (Number.isFinite(momentum15m) ? Math.max(0, -momentum15m) * 8 : 0) +
+    (Number.isFinite(momentum1h) ? Math.max(0, -momentum1h - 0.5) * 6 : 0) +
+    (Number.isFinite(momentum4h) ? Math.max(0, -momentum4h - 1) * 2 : 0) +
+    (Number.isFinite(drawdownFromHourHighPct) ? Math.max(0, -drawdownFromHourHighPct - 1) * 7 : 0) +
+    (Number.isFinite(redCandleRatio) ? Math.max(0, redCandleRatio - 0.5) * 40 : 0) +
+    (Number.isFinite(hourRangePct) ? Math.max(0, hourRangePct - 3) * 5 : 0);
+  for (const key of ['hybridExpansionScore', 'flowConfirmedScore', 'guardedMomentumScore']) {
+    if (Number.isFinite(features[key])) features[key] = Math.max(0, features[key] - expansionPenalty);
+  }
+  if (Number.isFinite(features.riskGuardedScore)) {
+    features.riskGuardedScore = Math.max(0, features.riskGuardedScore - expansionPenalty - downsidePenalty);
+  }
+  return features;
+}
+function summarizeSampleBlock(samples, key) {
+  const rows = samples.map(sample => sample.metrics?.[key]).filter(Boolean);
+  return {
+    snapshots: rows.length,
+    hit5_mfe4h_pct: round(mean(rows.map(row => row.hit5_mfe4h_rate)) * 100, 3),
+    hit10_mfe4h_pct: round(mean(rows.map(row => row.hit10_mfe4h_rate)) * 100, 3),
+    adverse5_mae4h_pct: round(mean(rows.map(row => row.adverse5_mae4h_rate)) * 100, 3),
+    mean_return4h_pct: round(mean(rows.map(row => row.mean_return4h)), 4),
+    mean_max_upside4h_pct: round(mean(rows.map(row => row.mean_mfe4h)), 4)
+  };
+}
+function normalizedKlines(symbol, rawRows, fetchedAt) {
+  if (!Array.isArray(rawRows)) throw new Error('KLINE_RESPONSE_NOT_ARRAY:' + symbol);
+  return rawRows.map(row => ({
+    symbol,
+    openTime: Number(row[0]),
+    open: Number(row[1]),
+    high: Number(row[2]),
+    low: Number(row[3]),
+    close: Number(row[4]),
+    volume: Number(row[5]),
+    closeTime: Number(row[6]),
+    quoteVolume: Number(row[7]),
+    tradeCount: Number(row[8]),
+    takerBuyBaseVolume: Number(row[9]),
+    takerBuyQuoteVolume: Number(row[10]),
+    closed: Number(row[6]) <= fetchedAt,
+    source: 'BINANCE_PUBLIC_REST'
+  })).filter(row => row.closed && Number.isFinite(row.openTime) && Number.isFinite(row.closeTime) &&
+    Number.isFinite(row.open) && Number.isFinite(row.high) && Number.isFinite(row.low) &&
+    Number.isFinite(row.close) && row.close > 0)
+    .sort((a, b) => a.openTime - b.openTime)
+    .filter((row, index, rows) => index === 0 || row.openTime !== rows[index - 1].openTime);
+}
+async function getJson(url) {
+  const previous = requestQueue;
+  let release;
+  requestQueue = new Promise(resolveQueue => { release = resolveQueue; });
+  await previous;
+  try {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const spacing = Math.max(0, lastRequestStartedAt + 220 - Date.now());
+      if (spacing) await sleep(spacing);
+      lastRequestStartedAt = Date.now();
+      const audit = {url, started_at_ms:lastRequestStartedAt, status:null, attempt:attempt + 1};
+      requestAudit.push(audit);
+      let response;
+      try {
+        response = await fetch(url, {headers:{accept:'application/json','user-agent':'RadarX-Research-Shadow/1.0'}});
+      } catch (error) {
+        audit.error = String(error?.message || error).slice(0, 200);
+        if (attempt === 3) throw error;
+        await sleep(500 * (attempt + 1));
+        continue;
+      }
+      audit.status = response.status;
+      if (response.ok) {
+        audit.finished_at_ms = Date.now();
+        return await response.json();
+      }
+      audit.error = 'HTTP_' + response.status;
+      if ((response.status === 418 || response.status === 429) && attempt < 3) {
+        const header = Number(response.headers.get('retry-after'));
+        await sleep(Number.isFinite(header) && header > 0 ? Math.min(60000, header * 1000) : 5000 * (attempt + 1));
+        continue;
+      }
+      if (response.status >= 500 && attempt < 3) {
+        await sleep(750 * (attempt + 1));
+        continue;
+      }
+      throw new Error('BINANCE_HTTP_' + response.status + ':' + url.split('?')[0]);
+    }
+    throw new Error('BINANCE_REQUEST_RETRIES_EXHAUSTED');
+  } finally {
+    release();
+  }
+}
+function forwardOutcome(symbol, candles, index) {
+  const previous = candles.slice(index - 12, index + 1);
+  const current = candles[index];
+  const next15 = candles.slice(index + 1, index + 1 + HORIZONS.m15);
+  const next1h = candles.slice(index + 1, index + 1 + HORIZONS.h1);
+  const next4h = candles.slice(index + 1, index + 1 + HORIZONS.h4);
+  if (previous.length !== 13 || next15.length !== 3 || next1h.length !== 12 || next4h.length !== 48 ||
+      !continuous(previous) || !continuous([current, ...next4h])) return null;
+  assert.ok(next4h[0].openTime > current.closeTime, 'NO_LOOKAHEAD_FUTURE_START');
+  const startPrice = current.close;
+  const maxHigh = rows => Math.max(...rows.map(row => row.high));
+  const minLow = rows => Math.min(...rows.map(row => row.low));
+  const returnAt = rows => (rows.at(-1).close / startPrice - 1) * 100;
+  const momentum15m = (current.close / candles[index - 3].close - 1) * 100;
+  const momentum1h = (current.close / candles[index - 12].close - 1) * 100;
+  const momentum4h = (current.close / candles[index - 48].close - 1) * 100;
+  return {
+    symbol, momentum15m, momentum1h, momentum4h,
+    return15m: returnAt(next15),
+    return1h: returnAt(next1h),
+    return4h: returnAt(next4h),
+    mfe1h: (maxHigh(next1h) / startPrice - 1) * 100,
+    mfe4h: (maxHigh(next4h) / startPrice - 1) * 100,
+    mae4h: (minLow(next4h) / startPrice - 1) * 100,
+    signal_close_time_ms: current.closeTime
+  };
+}
+
+function selfTest() {
+  const fake = [];
+  const open0 = 1800000000000;
+  for (let index = 0; index < 60; index++) {
+    const open = 100 + index * 0.01;
+    fake.push({symbol:'TESTUSDT',openTime:open0 + index * CANDLE_MS,closeTime:open0 + index * CANDLE_MS + CANDLE_MS - 1,
+      open,high:open * 1.01,low:open * 0.99,close:open * 1.005,volume:10,tradeCount:20,closed:true,source:'BINANCE_PUBLIC_REST'});
+  }
+  assert.equal(continuous(fake.slice(0, 12)), true);
+  assert.equal(isDirectionalCandidateSymbol('OGNUSDT'), true);
+  assert.equal(isDirectionalCandidateSymbol('USDCUSDT'), false);
+  const ci = movingBlockBootstrapCI([0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8], {iterations:100,seed:224});
+  assert.equal(ci.n, 8);
+  assert.ok(Number.isFinite(ci.low) && Number.isFinite(ci.high));
+}
+selfTest();
+
+const report = {
+  schema_version: 1,
+  status: 'INITIALIZING',
+  started_at_utc: new Date(startedAt).toISOString(),
+  mode: 'ISOLATED_HISTORICAL_OUTCOME_REPLAY',
+  production_touched: false,
+  merged: false,
+  deployed: false,
+  paper_trading: true,
+  real_order_execution: false,
+  confidence_score: 'UNKNOWN',
+  settings: {
+    minimum_quote_volume_24h_usdt: MIN_QUOTE_VOLUME,
+    klines_interval: '5m',
+    requested_history_limit_per_symbol: KLINE_LIMIT,
+    snapshot_spacing_minutes: 60,
+    indicator_history_bars: LOOKBACK_BARS,
+    forward_horizons_minutes: {m15:15,h1:60,h4:240},
+    min_history_bars_per_symbol: MIN_HISTORY_BARS,
+    requests_serialized: true,
+    minimum_request_spacing_ms: 220
+  },
+  methodology: {
+    candle_policy: 'Only fully closed Binance public 5m candles; inputs are capped at the snapshot candle. Outcomes use strictly later candles.',
+    comparator: 'All historically evaluable eligible symbols and a separate top-12 1h-momentum comparator; this is not claimed to reproduce the legacy Micro selector.',
+    selection: 'MarketWideLightScan 48-symbol pool and a score-ranked 12-symbol shortlist from that pool; no alerts or orders are generated.',
+    known_limitations: [
+      'Current active symbols and current 24h quote-volume eligibility are used for a bounded recent-history replay, so delisted coins and historical eligibility are not reconstructed.',
+      'The 4-hour forward windows overlap across hourly snapshots; confidence intervals use a deterministic circular 4-snapshot moving-block bootstrap, but results remain observational rather than proof of future profitability.',
+      'A light-scan candidate is a prefilter only; this replay does not authorize trades or claim trading profitability.'
+    ]
+  },
+  data: {},
+  quality: {},
+  outcome_metrics: {},
+  per_sample: [],
+  request_audit: requestAudit,
+  failures: []
+};
+
+try {
+  const exchangeInfo = await getJson(API_ROOT + '/api/v3/exchangeInfo');
+  const tickers = await getJson(API_ROOT + '/api/v3/ticker/24hr');
+  if (!Array.isArray(exchangeInfo?.symbols) || !Array.isArray(tickers)) throw new Error('BINANCE_UNIVERSE_RESPONSE_INVALID');
+  const tickerBySymbol = new Map(tickers.map(row => [String(row.symbol || '').toUpperCase(), row]));
+  const currentUniverse = exchangeInfo.symbols
+    .filter(row => row.status === 'TRADING' && row.quoteAsset === 'USDT' && row.isSpotTradingAllowed !== false)
+    .map(row => {
+      const symbol = String(row.symbol || '').toUpperCase();
+      const ticker = tickerBySymbol.get(symbol);
+      return {symbol, quoteVolume24h:Number(ticker?.quoteVolume), lastPrice:Number(ticker?.lastPrice)};
+    })
+    .filter(row => row.symbol && Number.isFinite(row.quoteVolume24h) && row.quoteVolume24h >= MIN_QUOTE_VOLUME)
+    .sort((a, b) => a.symbol.localeCompare(b.symbol));
+  report.data = {
+    exchange_info_spot_usdt_symbols: exchangeInfo.symbols.filter(row => row.status === 'TRADING' && row.quoteAsset === 'USDT' && row.isSpotTradingAllowed !== false).length,
+    current_eligible_symbols: currentUniverse.length,
+    directional_eligible_symbols: currentUniverse.filter(row => isDirectionalCandidateSymbol(row.symbol)).length,
+    history_ready_symbols: 0,
+    history_ready_ratio_pct: 0,
+    candles_requested_per_symbol: KLINE_LIMIT,
+    candles_received_total: 0,
+    candles_received_min_per_symbol: null,
+    candles_received_median_per_symbol: null,
+    candles_received_max_per_symbol: null,
+    collection_started_at_ms: Date.now(),
+    request_count_before_symbol_downloads: requestAudit.length
+  };
+  if (currentUniverse.length < MIN_SAMPLE_UNIVERSE) throw new Error('CURRENT_ELIGIBLE_UNIVERSE_TOO_SMALL:' + currentUniverse.length);
+  const collectionStartedAt = Date.now();
+  const history = new Map();
+  for (const entry of currentUniverse) {
+    const url = API_ROOT + '/api/v3/klines?symbol=' + encodeURIComponent(entry.symbol) + '&interval=5m&limit=' + KLINE_LIMIT;
+    try {
+      const raw = await getJson(url);
+      const candles = normalizedKlines(entry.symbol, raw, collectionStartedAt);
+      history.set(entry.symbol, {entry, candles, error:null});
+    } catch (error) {
+      const failure = {symbol:entry.symbol,reason:String(error?.message || error).slice(0, 220)};
+      report.failures.push(failure);
+      history.set(entry.symbol, {entry, candles:[], error:failure.reason});
+    }
+  }
+  const perSymbolCounts = currentUniverse.map(row => history.get(row.symbol)?.candles?.length || 0);
+  const historyReady = currentUniverse.filter(row => {
+    const candles = history.get(row.symbol)?.candles || [];
+    return candles.length >= MIN_HISTORY_BARS && candles.length > 0 &&
+      collectionStartedAt - candles.at(-1).closeTime <= 15 * 60 * 1000;
+  });
+  report.data.history_ready_symbols = historyReady.length;
+  report.data.history_ready_ratio_pct = round(historyReady.length / currentUniverse.length * 100, 3);
+  report.data.candles_received_total = perSymbolCounts.reduce((sum, value) => sum + value, 0);
+  report.data.candles_received_min_per_symbol = perSymbolCounts.length ? Math.min(...perSymbolCounts) : null;
+  report.data.candles_received_median_per_symbol = median(perSymbolCounts);
+  report.data.candles_received_max_per_symbol = perSymbolCounts.length ? Math.max(...perSymbolCounts) : null;
+  report.data.collection_finished_at_ms = Date.now();
+  report.data.kline_download_requests = currentUniverse.length;
+  report.data.http_attempts_total = requestAudit.length;
+  if (historyReady.length < Math.max(MIN_SAMPLE_UNIVERSE, Math.ceil(currentUniverse.length * MIN_COVERAGE_RATIO))) {
+    throw new Error('HISTORICAL_UNIVERSE_COVERAGE_INSUFFICIENT:' + historyReady.length + '/' + currentUniverse.length);
+  }
+
+  const readyRows = historyReady.map(row => ({
+    ...row,
+    candles:history.get(row.symbol).candles,
+    byCloseTime:new Map(history.get(row.symbol).candles.map((candle, index) => [candle.closeTime, index]))
+  }));
+  const earliestCommonClose = Math.max(...readyRows.map(row => row.candles[0].closeTime));
+  const latestCommonClose = Math.min(...readyRows.map(row => row.candles.at(-1).closeTime));
+  const earliestSnapshot = earliestCommonClose + (LOOKBACK_BARS - 1) * CANDLE_MS;
+  let latestSnapshot = closeBoundary(latestCommonClose - FUTURE_BARS * CANDLE_MS);
+  latestSnapshot = Math.min(latestSnapshot, closeBoundary(collectionStartedAt - FUTURE_BARS * CANDLE_MS));
+  const sampleTimes = [];
+  for (let at = latestSnapshot; at >= earliestSnapshot; at -= SAMPLE_STEP_MS) sampleTimes.push(at);
+  sampleTimes.reverse(); // Stateful scanner replay must advance forward in time.
+  if (sampleTimes.length < MIN_SAMPLE_COUNT) throw new Error('INSUFFICIENT_HISTORICAL_SNAPSHOTS:' + sampleTimes.length);
+  report.data.history_window_start_utc = new Date(earliestCommonClose).toISOString();
+  report.data.history_window_end_utc = new Date(latestCommonClose).toISOString();
+  report.data.snapshot_count = sampleTimes.length;
+  report.data.snapshot_first_utc = new Date(sampleTimes[0]).toISOString();
+  report.data.snapshot_last_utc = new Date(sampleTimes.at(-1)).toISOString();
+  report.data.common_history_symbols = readyRows.length;
+  report.quality = {
+    future_data_in_inputs: false,
+    lookahead_violations: 0,
+    snapshots_with_sufficient_universe: 0,
+    snapshots_full_cache_coverage: 0,
+    snapshots_missing_coverage: 0,
+    total_market_wide_evaluations: 0,
+    total_selected_pool_observations: 0,
+    all_input_candles_closed: true,
+    zero_live_orders: true
+  };
+  const scanner = new MarketWideLightScan({config:{candidateLimit:48,rotationReserve:12,maxCandleAgeMs:8 * 60 * 1000,
+    minClosedCandles:60,maxClosedCandles:96,minimumReadyCandidates:24},clock:()=>Date.now()});
+  const pooled = {market:[], light48:[], light12:[], momentum12:[],
+    hybrid48:[], hybrid12:[], hybrid12_from_light48:[], flow48:[], flow12:[], guarded48:[], guarded12:[],
+    riskGuard48:[], riskGuard12:[], riskGuard12_from_light48:[]};
+  const perSampleMetrics = [];
+  let sampleIndex = 0;
+  let totalEligibleInSnapshots = 0;
+  let minEligibleInSnapshot = Infinity;
+  let maxEligibleInSnapshot = 0;
+  for (const timestamp of sampleTimes) {
+    sampleIndex++;
+    const eligibleNow = [];
+    const indexBySymbol = new Map();
+    const outcomeBySymbol = new Map();
+    for (const row of readyRows) {
+      const index = row.byCloseTime.get(timestamp);
+      if (!Number.isInteger(index) || index < LOOKBACK_BARS - 1 || index + FUTURE_BARS >= row.candles.length) continue;
+      const inputRows = row.candles.slice(index - LOOKBACK_BARS + 1, index + 1);
+      const futureRows = row.candles.slice(index + 1, index + FUTURE_BARS + 1);
+      if (inputRows.length !== LOOKBACK_BARS || !continuous(inputRows) || !continuous([row.candles[index], ...futureRows])) continue;
+      if (inputRows.some(candle => candle.closed !== true || candle.closeTime > timestamp)) {
+        report.quality.lookahead_violations++;
+        report.quality.future_data_in_inputs = true;
+        continue;
+      }
+      const outcome = forwardOutcome(row.symbol, row.candles, index);
+      if (!outcome) continue;
+      indexBySymbol.set(row.symbol, index);
+      outcomeBySymbol.set(row.symbol, outcome);
+      eligibleNow.push({symbol:row.symbol,quoteVolume24h:row.quoteVolume24h,lastPrice:row.lastPrice});
+    }
+    totalEligibleInSnapshots += eligibleNow.length;
+    minEligibleInSnapshot = Math.min(minEligibleInSnapshot, eligibleNow.length);
+    maxEligibleInSnapshot = Math.max(maxEligibleInSnapshot, eligibleNow.length);
+    if (eligibleNow.length < Math.max(MIN_SAMPLE_UNIVERSE, Math.ceil(currentUniverse.length * MIN_COVERAGE_RATIO))) {
+      report.quality.snapshots_missing_coverage++;
+      continue;
+    }
+    report.quality.snapshots_with_sufficient_universe++;
+    const result = scanner.scan({
+      eligible:eligibleNow,
+      getSeries:symbol => {
+        const row = readyRows.find(item => item.symbol === symbol);
+        const index = indexBySymbol.get(symbol);
+        if (!row || !Number.isInteger(index)) return null;
+        return {symbol,source:'BINANCE_PUBLIC_REST',candles:row.candles.slice(index - LOOKBACK_BARS + 1,index + 1)};
+      },
+      now:timestamp,
+      cycle:sampleIndex,
+      isExceptional:()=>false,
+      lastMicroScannedAt:()=>null
+    });
+    report.quality.total_market_wide_evaluations += result.summary.evaluated_total;
+    if (result.summary.evaluated_total === eligibleNow.length && result.summary.cache_coverage_ready) {
+      report.quality.snapshots_full_cache_coverage++;
+    }
+    const marketRows = eligibleNow.map(row => outcomeBySymbol.get(row.symbol)).filter(Boolean);
+    const lightPoolRows = result.candidateSymbols.map(symbol => outcomeBySymbol.get(symbol)).filter(Boolean);
+    const ranked = result.selected.slice().sort((a, b) =>
+      Number(b.result?.candidate) - Number(a.result?.candidate) ||
+      Number(b.result?.candidate_score ?? -1) - Number(a.result?.candidate_score ?? -1) ||
+      Number(b.result?.metrics?.optional_participation_available) - Number(a.result?.metrics?.optional_participation_available) ||
+      a.symbol.localeCompare(b.symbol));
+    const lightShortlistRows = ranked.slice(0, 12).map(item => outcomeBySymbol.get(item.symbol)).filter(Boolean);
+    const momentumShortlistRows = eligibleNow.map(row => outcomeBySymbol.get(row.symbol)).filter(Boolean)
+      .sort((a, b) => b.momentum1h - a.momentum1h).slice(0, 12);
+    const decorated = eligibleNow.map(row => {
+      const symbol = row.symbol;
+      const index = indexBySymbol.get(symbol);
+      const historyRow = readyRows.find(item => item.symbol === symbol);
+      const audit = result.audit.get(symbol);
+      const features = historyRow && Number.isInteger(index)
+        ? deriveExpansionFeatures(historyRow.candles, index, audit) : {};
+      return {symbol, outcome:outcomeBySymbol.get(symbol), features};
+    }).filter(item => item.outcome);
+    const rankByFeature = (featureKey, limit) => decorated
+      .filter(item => isDirectionalCandidateSymbol(item.symbol) && Number.isFinite(item.features[featureKey]))
+      .slice()
+      .sort((a,b) => b.features[featureKey] - a.features[featureKey] || a.symbol.localeCompare(b.symbol))
+      .slice(0, limit)
+      .map(item => item.outcome);
+    const hybrid48Rows = rankByFeature('hybridExpansionScore', 48);
+    const hybrid12Rows = rankByFeature('hybridExpansionScore', 12);
+    const flow48Rows = rankByFeature('flowConfirmedScore', 48);
+    const flow12Rows = rankByFeature('flowConfirmedScore', 12);
+    const guarded48Rows = rankByFeature('guardedMomentumScore', 48);
+    const guarded12Rows = rankByFeature('guardedMomentumScore', 12);
+    const riskGuard48Rows = rankByFeature('riskGuardedScore', 48);
+    const riskGuard12Rows = rankByFeature('riskGuardedScore', 12);
+    const lightPoolSymbols = new Set(result.candidateSymbols);
+    const hybrid12FromLight48Rows = decorated.filter(item => lightPoolSymbols.has(item.symbol) &&
+      isDirectionalCandidateSymbol(item.symbol) && Number.isFinite(item.features.hybridExpansionScore))
+      .sort((a,b) => b.features.hybridExpansionScore - a.features.hybridExpansionScore || a.symbol.localeCompare(b.symbol))
+      .slice(0,12).map(item => item.outcome);
+    const riskGuard12FromLight48Rows = decorated.filter(item => lightPoolSymbols.has(item.symbol) &&
+      isDirectionalCandidateSymbol(item.symbol) && Number.isFinite(item.features.riskGuardedScore))
+      .sort((a,b) => b.features.riskGuardedScore - a.features.riskGuardedScore || a.symbol.localeCompare(b.symbol))
+      .slice(0,12).map(item => item.outcome);
+    pooled.market.push(...marketRows);
+    pooled.light48.push(...lightPoolRows);
+    pooled.light12.push(...lightShortlistRows);
+    pooled.momentum12.push(...momentumShortlistRows);
+    pooled.hybrid48.push(...hybrid48Rows);
+    pooled.hybrid12.push(...hybrid12Rows);
+    pooled.hybrid12_from_light48.push(...hybrid12FromLight48Rows);
+    pooled.flow48.push(...flow48Rows);
+    pooled.flow12.push(...flow12Rows);
+    pooled.guarded48.push(...guarded48Rows);
+    pooled.guarded12.push(...guarded12Rows);
+    pooled.riskGuard48.push(...riskGuard48Rows);
+    pooled.riskGuard12.push(...riskGuard12Rows);
+    pooled.riskGuard12_from_light48.push(...riskGuard12FromLight48Rows);
+    report.quality.total_selected_pool_observations += lightPoolRows.length;
+    const groups = {
+      market:perSampleRates(marketRows),
+      light48:perSampleRates(lightPoolRows),
+      light12:perSampleRates(lightShortlistRows),
+      momentum12:perSampleRates(momentumShortlistRows),
+      hybrid48:perSampleRates(hybrid48Rows),
+      hybrid12:perSampleRates(hybrid12Rows),
+      hybrid12_from_light48:perSampleRates(hybrid12FromLight48Rows),
+      flow48:perSampleRates(flow48Rows),
+      flow12:perSampleRates(flow12Rows),
+      guarded48:perSampleRates(guarded48Rows),
+      guarded12:perSampleRates(guarded12Rows),
+      riskGuard48:perSampleRates(riskGuard48Rows),
+      riskGuard12:perSampleRates(riskGuard12Rows),
+      riskGuard12_from_light48:perSampleRates(riskGuard12FromLight48Rows)
+    };
+    perSampleMetrics.push({
+      snapshot_utc:new Date(timestamp).toISOString(),
+      eligible_with_closed_continuous_outcomes:eligibleNow.length,
+      evaluated_total:result.summary.evaluated_total,
+      light_candidate_total:result.summary.light_candidate_total,
+      light_pool_total:result.candidateSymbols.length,
+      light_shortlist_total:lightShortlistRows.length,
+      momentum_shortlist_total:momentumShortlistRows.length,
+      metrics:groups
+    });
+  }
+  report.quality.avg_eligible_per_snapshot = round(totalEligibleInSnapshots / sampleTimes.length, 2);
+  report.quality.min_eligible_per_snapshot = Number.isFinite(minEligibleInSnapshot) ? minEligibleInSnapshot : 0;
+  report.quality.max_eligible_per_snapshot = maxEligibleInSnapshot;
+  report.quality.average_current_universe_coverage_pct = round(report.quality.avg_eligible_per_snapshot / currentUniverse.length * 100, 3);
+  report.quality.lookahead_guard_passed = report.quality.lookahead_violations === 0 && report.quality.future_data_in_inputs === false;
+  report.quality.full_cache_coverage_pct = round(report.quality.snapshots_full_cache_coverage / Math.max(1,report.quality.snapshots_with_sufficient_universe) * 100,3);
+  report.per_sample = perSampleMetrics;
+  report.outcome_metrics = {
+    entire_historical_eligible_universe: summarizeRows(pooled.market),
+    market_wide_light_pool_48: summarizeRows(pooled.light48),
+    light_score_shortlist_12: summarizeRows(pooled.light12),
+    recent_1h_momentum_shortlist_12: summarizeRows(pooled.momentum12),
+    hybrid_expansion_pool_48: summarizeRows(pooled.hybrid48),
+    hybrid_expansion_shortlist_12: summarizeRows(pooled.hybrid12),
+    hybrid_expansion_shortlist_from_light_pool_12: summarizeRows(pooled.hybrid12_from_light48),
+    flow_confirmed_pool_48: summarizeRows(pooled.flow48),
+    flow_confirmed_shortlist_12: summarizeRows(pooled.flow12),
+    guarded_momentum_pool_48: summarizeRows(pooled.guarded48),
+    guarded_momentum_shortlist_12: summarizeRows(pooled.guarded12),
+    downside_risk_guard_pool_48: summarizeRows(pooled.riskGuard48),
+    downside_risk_guard_shortlist_12: summarizeRows(pooled.riskGuard12),
+    downside_risk_guard_shortlist_from_light_pool_12: summarizeRows(pooled.riskGuard12_from_light48),
+    light_pool_vs_market: pairedDifferenceCI(perSampleMetrics.map(row=>({left:row.metrics.light48,right:row.metrics.market})),
+      'left','right','hit5_mfe4h_rate',224199),
+    light_shortlist_vs_momentum_shortlist: pairedDifferenceCI(perSampleMetrics.map(row=>({left:row.metrics.light12,right:row.metrics.momentum12})),
+      'left','right','hit5_mfe4h_rate',824199),
+    primary_metric: 'Percentage of selections whose maximum high within the next 4 hours is at least 5% above the signal-time close.',
+    interpretation_note: 'Pooled percentages are descriptive; decision gates use a chronological discovery/held-out split and paired per-snapshot moving-block bootstrap intervals.'
+  };
+  const completeData = report.quality.lookahead_guard_passed === true &&
+    report.quality.snapshots_with_sufficient_universe >= MIN_SAMPLE_COUNT &&
+    report.quality.full_cache_coverage_pct >= 95;
+  const splitIndex = Math.floor(perSampleMetrics.length * 2 / 3);
+  const discoverySamples = perSampleMetrics.slice(0, splitIndex);
+  const holdoutSamples = perSampleMetrics.slice(splitIndex);
+  const candidateStrategies = [
+    'light48','light12','hybrid48','hybrid12','hybrid12_from_light48',
+    'flow48','flow12','guarded48','guarded12','riskGuard48','riskGuard12','riskGuard12_from_light48'
+  ];
+  const discoveryUtility = key => {
+    const rates = discoverySamples.map(sample => sample.metrics?.[key]).filter(Boolean);
+    return rates.length ? mean(rates.map(row =>
+      Number.isFinite(row.hit5_mfe4h_rate) && Number.isFinite(row.adverse5_mae4h_rate)
+        ? row.hit5_mfe4h_rate - 0.35 * row.adverse5_mae4h_rate : null
+    ).filter(Number.isFinite)) : null;
+  };
+  const strategyScores = candidateStrategies.map(strategy => ({
+    strategy, discovery_utility_hit5_minus_0_35_times_adverse5:round(discoveryUtility(strategy),6),
+    discovery: summarizeSampleBlock(discoverySamples,strategy)
+  })).filter(row => Number.isFinite(row.discovery_utility_hit5_minus_0_35_times_adverse5))
+    .sort((a,b) => b.discovery_utility_hit5_minus_0_35_times_adverse5 - a.discovery_utility_hit5_minus_0_35_times_adverse5 ||
+      a.strategy.localeCompare(b.strategy));
+  const chosenStrategy = strategyScores[0]?.strategy || null;
+  const chosenHoldout = chosenStrategy ? summarizeSampleBlock(holdoutSamples,chosenStrategy) : null;
+  const marketHoldout = summarizeSampleBlock(holdoutSamples,'market');
+  const lightHoldout = summarizeSampleBlock(holdoutSamples,'light48');
+  const momentumHoldout = summarizeSampleBlock(holdoutSamples,'momentum12');
+  const validationSeries = key => holdoutSamples.map(row=>({left:row.metrics?.[key],right:row.metrics?.market}));
+  const chosenVsMarketCI = chosenStrategy ? pairedDifferenceCI(validationSeries(chosenStrategy),'left','right','hit5_mfe4h_rate',224199) : null;
+  const chosenVsLightCI = chosenStrategy ? pairedDifferenceCI(holdoutSamples.map(row=>({left:row.metrics?.[chosenStrategy],right:row.metrics?.light48})),'left','right','hit5_mfe4h_rate',324199) : null;
+  const chosenVsMomentumCI = chosenStrategy ? pairedDifferenceCI(holdoutSamples.map(row=>({left:row.metrics?.[chosenStrategy],right:row.metrics?.momentum12})),'left','right','hit5_mfe4h_rate',424199) : null;
+  const holdoutRiskDelta = chosenHoldout && marketHoldout
+    ? chosenHoldout.adverse5_mae4h_pct - marketHoldout.adverse5_mae4h_pct : null;
+  const holdoutLiftPassed = Number.isFinite(chosenVsMarketCI?.confidence_interval_95_percentage_points?.lower) &&
+    chosenVsMarketCI.confidence_interval_95_percentage_points.lower > 0;
+  const holdoutRiskPassed = Number.isFinite(holdoutRiskDelta) && holdoutRiskDelta <= 2;
+  const runtimePoolHoldout = summarizeSampleBlock(holdoutSamples,'light48');
+  const runtimePoolVsMarketCI = pairedDifferenceCI(
+    holdoutSamples.map(row=>({left:row.metrics?.light48,right:row.metrics?.market})),
+    'left','right','hit5_mfe4h_rate',524199
+  );
+  const runtimePoolRiskDelta = runtimePoolHoldout && marketHoldout
+    ? runtimePoolHoldout.adverse5_mae4h_pct - marketHoldout.adverse5_mae4h_pct : null;
+  const runtimePoolLiftPassed = Number.isFinite(runtimePoolVsMarketCI?.confidence_interval_95_percentage_points?.lower) &&
+    runtimePoolVsMarketCI.confidence_interval_95_percentage_points.lower > 0;
+  const runtimePoolRiskPassed = Number.isFinite(runtimePoolRiskDelta) && runtimePoolRiskDelta <= 2;
+  const holdoutSamplePassed = holdoutSamples.length >= MIN_SAMPLE_COUNT;
+  report.outcome_metrics.walk_forward_validation = {
+    split_method:'Chronological 2/3 discovery; final 1/3 held out. Strategy chosen only from discovery snapshots.',
+    discovery_snapshot_count:discoverySamples.length,
+    holdout_snapshot_count:holdoutSamples.length,
+    strategy_selection_objective:'Per-snapshot HIT_5PCT_MAX_UPSIDE_WITHIN_4H minus 0.35 times ADVERSE_5PCT_DRAWDOWN_WITHIN_4H',
+    discovery_strategy_ranking:strategyScores,
+    chosen_preexpansion_strategy:chosenStrategy,
+    pool_acceptance_basis:'Actual MarketWideLightScan candidateSymbols returned by the runtime module; includes configured fair rotation.',
+    holdout:{
+      selected_strategy:chosenHoldout,
+      entire_market:marketHoldout,
+      current_light_pool_48:lightHoldout,
+      runtime_candidate_pool_48:runtimePoolHoldout,
+      runtime_pool_vs_market_hit5_ci:runtimePoolVsMarketCI,
+      runtime_pool_adverse5_delta_vs_market_percentage_points:round(runtimePoolRiskDelta,3),
+      runtime_pool_predictive_lift_gate:runtimePoolLiftPassed?'PASS':'NOT_PROVEN',
+      runtime_pool_risk_gate:runtimePoolRiskPassed?'PASS':'FAIL',
+      high_1h_momentum_12:momentumHoldout,
+      downside_risk_guard_shortlist_12:summarizeSampleBlock(holdoutSamples,'riskGuard12'),
+      downside_risk_guard_pool_48:summarizeSampleBlock(holdoutSamples,'riskGuard48'),
+      downside_risk_guard_shortlist_from_light_pool_12:summarizeSampleBlock(holdoutSamples,'riskGuard12_from_light48'),
+      chosen_vs_market_hit5_ci:chosenVsMarketCI,
+      chosen_vs_existing_light_pool_hit5_ci:chosenVsLightCI,
+      chosen_vs_momentum12_hit5_ci:chosenVsMomentumCI,
+      chosen_adverse5_delta_vs_market_percentage_points:round(holdoutRiskDelta,3),
+      sample_gate:holdoutSamplePassed?'PASS':'FAIL',
+      predictive_lift_gate:holdoutLiftPassed?'PASS':'NOT_PROVEN',
+      risk_gate:holdoutRiskPassed?'PASS':'FAIL'
+    }
+  };
+  report.quality.prediction_evidence_gate = runtimePoolLiftPassed ? 'PASS' : 'NOT_PROVEN';
+  report.quality.data_integrity_gate = completeData && holdoutSamplePassed ? 'PASS' : 'FAIL';
+  report.quality.ready_for_merge = completeData && holdoutSamplePassed && runtimePoolLiftPassed && runtimePoolRiskPassed;
+  report.quality.rules = {
+    minimum_sample_snapshots:MIN_SAMPLE_COUNT,
+    discovery_fraction:2/3,
+    holdout_fraction:1/3,
+    minimum_market_coverage_ratio_pct:MIN_COVERAGE_RATIO * 100,
+    require_lookahead_violations_zero:true,
+    acceptance_pool:'ACTUAL_RUNTIME_MARKET_WIDE_LIGHT_SCAN_48_WITH_FAIR_ROTATION',
+    require_runtime_pool_holdout_95pct_block_bootstrap_lower_bound_above_zero_vs_market:true,
+    maximum_runtime_pool_adverse5_risk_delta_vs_market_percentage_points:2,
+    primary_metric:'HIT_5PCT_MAX_UPSIDE_WITHIN_4H',
+    risk_metric:'ADVERSE_5PCT_DRAWDOWN_WITHIN_4H',
+    note:'The separately scored market-wide shortlist is descriptive only and cannot open the merge gate.'
+  };
+  report.duration_seconds = round((Date.now() - startedAt) / 1000, 2);
+  report.status = completeData ? (report.quality.ready_for_merge ? 'PREDICTIVE_EVIDENCE_PASS' : 'PREDICTIVE_EVIDENCE_NOT_PROVEN') : 'DATA_INTEGRITY_GATE_FAILED';
+  report.finished_at_utc = new Date().toISOString();
+  await mkdir(dirname(REPORT_PATH), {recursive:true});
+  await writeFile(REPORT_PATH, JSON.stringify(report, null, 2) + '\n', 'utf8');
+  console.log('[MARKET_WIDE_LIGHT_OUTCOME_REPORT] ' + JSON.stringify({
+    status:report.status,
+    current_eligible:report.data.current_eligible_symbols,
+    history_ready:report.data.history_ready_symbols,
+    history_coverage_pct:report.data.history_ready_ratio_pct,
+    snapshots:report.data.snapshot_count,
+    snapshots_with_coverage:report.quality.snapshots_with_sufficient_universe,
+    full_cache_coverage_pct:report.quality.full_cache_coverage_pct,
+    lookahead_violations:report.quality.lookahead_violations,
+    market_hit5_4h:report.outcome_metrics.entire_historical_eligible_universe.hit_5pct_upside_4h_pct,
+    light48_hit5_4h:report.outcome_metrics.market_wide_light_pool_48.hit_5pct_upside_4h_pct,
+    light48_lift_ci:report.outcome_metrics.light_pool_vs_market.confidence_interval_95_percentage_points,
+    chosen_strategy:report.outcome_metrics.walk_forward_validation.chosen_preexpansion_strategy,
+    runtime_candidate_pool_holdout:report.outcome_metrics.walk_forward_validation.holdout.runtime_candidate_pool_48,
+    runtime_pool_vs_market_ci:report.outcome_metrics.walk_forward_validation.holdout.runtime_pool_vs_market_hit5_ci,
+    runtime_pool_adverse5_delta:report.outcome_metrics.walk_forward_validation.holdout.runtime_pool_adverse5_delta_vs_market_percentage_points,
+    runtime_pool_ready_for_merge:report.quality.ready_for_merge,
+    risk_guard_holdout:{
+      shortlist12:report.outcome_metrics.walk_forward_validation.holdout.downside_risk_guard_shortlist_12,
+      pool48:report.outcome_metrics.walk_forward_validation.holdout.downside_risk_guard_pool_48,
+      shortlistFromLightPool12:report.outcome_metrics.walk_forward_validation.holdout.downside_risk_guard_shortlist_from_light_pool_12
+    },
+    discovery_strategies:report.outcome_metrics.walk_forward_validation.discovery_strategy_ranking.map(row=>({
+      strategy:row.strategy,utility:row.discovery_utility_hit5_minus_0_35_times_adverse5
+    })),
+    holdout:report.outcome_metrics.walk_forward_validation.holdout,
+    prediction_evidence_gate:report.quality.prediction_evidence_gate,
+    data_integrity_gate:report.quality.data_integrity_gate,
+    ready_for_merge:report.quality.ready_for_merge,
+    report_path:REPORT_PATH
+  }));
+  if (report.status === 'DATA_INTEGRITY_GATE_FAILED') process.exitCode = 1;
+} catch (error) {
+  report.status = 'FAILED';
+  report.failure_reason = String(error?.message || error).slice(0, 500);
+  report.duration_seconds = round((Date.now() - startedAt) / 1000, 2);
+  report.finished_at_utc = new Date().toISOString();
+  try {
+    await mkdir(dirname(REPORT_PATH), {recursive:true});
+    await writeFile(REPORT_PATH, JSON.stringify(report, null, 2) + '\n', 'utf8');
+  } catch {}
+  console.error('[MARKET_WIDE_LIGHT_OUTCOME_FAILED] ' + report.failure_reason);
+  process.exitCode = 1;
+}
