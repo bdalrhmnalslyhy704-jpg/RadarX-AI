@@ -4,6 +4,7 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.app.ActivityManager;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
@@ -34,6 +35,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.Locale;
+import java.util.List;
 
 public final class RadarXBackgroundMonitorService extends Service {
     public static final String ACTION_START = "com.radarx.app.action.START_BACKGROUND_MONITOR";
@@ -634,9 +636,22 @@ public final class RadarXBackgroundMonitorService extends Service {
     public static boolean isRunning(Context context) {
         SharedPreferences p = context.getSharedPreferences("radarx_background", Context.MODE_PRIVATE);
         if (!p.getBoolean("running", false)) return false;
+
         long heartbeat = p.getLong(HEARTBEAT_KEY, 0L);
         long age = System.currentTimeMillis() - heartbeat;
-        return heartbeat > 0L && age >= 0L && age < HEARTBEAT_STALE_MS;
+        if (heartbeat <= 0L || age < 0L || age >= HEARTBEAT_STALE_MS) return false;
+
+        // SharedPreferences survive a force-stop, but the separate foreground-service
+        // process does not. A fresh heartbeat alone therefore must not suppress restart.
+        ActivityManager manager = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
+        if (manager == null) return false;
+        List<ActivityManager.RunningAppProcessInfo> processes = manager.getRunningAppProcesses();
+        if (processes == null) return false;
+        String expectedProcess = context.getPackageName() + ":radar_background";
+        for (ActivityManager.RunningAppProcessInfo process : processes) {
+            if (process != null && expectedProcess.equals(process.processName)) return true;
+        }
+        return false;
     }
 
     private static byte[] readAll(java.io.InputStream input) throws Exception {
