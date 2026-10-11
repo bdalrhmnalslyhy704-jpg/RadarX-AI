@@ -9,7 +9,7 @@ debug_on_error() {
 }
 trap debug_on_error ERR
 
-APK="android/app/build/outputs/apk/release/app-release.apk"
+APK="${RADARX_APK_PATH:-android/app/build/outputs/apk/release/app-release.apk}"
 SERVICE_COMPONENT="com.radarx.app/.RadarXBackgroundMonitorService"
 START_ACTION="com.radarx.app.action.START_BACKGROUND_MONITOR"
 
