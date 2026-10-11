@@ -201,3 +201,27 @@ console.log('multi-analyst scan fail-closed regression: PASS');
 
 console.log('multi-analyst scan payload regression: PASS');
 
+
+
+// Memory regression: transient calibration rows expire on every scan maintenance pass
+// and symbol history stays bounded. This does not touch durable market alert archives.
+{
+  let now=1_900_000_000_000;
+  const engine=new MultiAnalystEngine({rest:{request:async()=>({data:[]})},clock:()=>now});
+  engine.pendingOutcomes.set('OLDUSDT',[{asOf:now-5*60*60*1000-1,evaluated:{}}]);
+  engine.pendingOutcomes.set('FRESHUSDT',[{asOf:now-60_000,evaluated:{}}]);
+  const first=engine._prunePendingOutcomes(now);
+  assert.equal(engine.pendingOutcomes.has('OLDUSDT'),false,'expired transient calibration data must be released');
+  assert.equal(engine.pendingOutcomes.has('FRESHUSDT'),true,'unexpired calibration data must be retained');
+  assert.equal(first.expired_items,1);
+  assert.equal(first.expired_symbols,1);
+  for(let i=0;i<2050;i++){
+    const symbol='MEM'+String(i).padStart(4,'0')+'USDT';
+    engine.pendingOutcomes.set(symbol,[{asOf:now,evaluated:{}}]);
+  }
+  const bounded=engine._prunePendingOutcomes(now);
+  assert.equal(engine.pendingOutcomes.size,2048,'transient per-symbol history exceeded its explicit bound');
+  assert.equal(bounded.capacity_evictions,3,'bounded-history evictions must be observable');
+  assert.equal(engine.pendingOutcomes.has('FRESHUSDT'),false,'oldest transient symbol is evicted when the cap is exceeded');
+  assert.equal(engine.pendingOutcomes.has('MEM2049USDT'),true,'newest transient symbol is retained');
+}
