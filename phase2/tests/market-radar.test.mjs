@@ -214,6 +214,23 @@ test('market scanner deduplicates symbols and only deep-scans selected rows',asy
   assert.equal(rest.calls.filter(x=>x.type==='depth').length,2);
 });
 
+test('concurrent identical market scans share one in-flight scan',async()=>{
+  const rest=makeRest();
+  const scanner=new MarketUniverseScanner({
+    rest,
+    config:{minQuoteVolume24h:750000,scanLimit:2,returnLimit:2,deepConcurrency:2},
+    strategyEvaluator:evaluator
+  });
+  const [first,second]=await Promise.all([
+    scanner.scan({quote:'USDT',limit:2}),
+    scanner.scan({quote:'USDT',limit:2})
+  ]);
+  assert.deepEqual(second,first);
+  assert.equal(rest.calls.filter(x=>x.type==='request'&&x.path==='/api/v3/ticker/24hr').length,1);
+  assert.equal(rest.calls.filter(x=>x.type==='request'&&x.path==='/api/v3/exchangeInfo').length,1);
+  assert.equal(rest.calls.filter(x=>x.type==='depth').length,2);
+});
+
 test('missing ticker prevents symbol from being deep-scanned',async()=>{
   const rest=makeRest();
   rest.request=async(path)=>{

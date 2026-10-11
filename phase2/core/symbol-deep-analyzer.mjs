@@ -482,10 +482,21 @@ export class SymbolDeepAnalyzer {
       quote: String(config.quote || 'USDT').toUpperCase(),
       klineLimit: Math.max(180, Math.min(300, Number(config.klineLimit || 240)))
     };
+    this._scanFlights = new Map();
   }
 
-  async scan(rawSymbol) {
+  scan(rawSymbol) {
     const symbol = normalizeDeepScanSymbol(rawSymbol, this.config.quote);
+    const pending = this._scanFlights.get(symbol);
+    if (pending) return pending;
+    const task = Promise.resolve().then(() => this._scan(symbol));
+    this._scanFlights.set(symbol, task);
+    return task.finally(() => {
+      if (this._scanFlights.get(symbol) === task) this._scanFlights.delete(symbol);
+    });
+  }
+
+  async _scan(symbol) {
     const now = Date.now();
     const intervals = ['15m','1h','4h'];
     const fetched = await Promise.all(intervals.map(async interval=>{
