@@ -8,6 +8,7 @@ on:
       - feature/build224-event-breakout-integrated-v3-20261011
       - feature/build224-event-breakout-integrated-v4-20261011
       - feature/build224-market-wide-integrated-rebased-20261011
+      - experiment/build224-cache-rehydrate-shadow-20261011
     paths:
       - 'phase2/tools/market-wide-cache-warmup.mjs'
       - 'phase2/market/market-wide-kline-cache.mjs'
@@ -33,9 +34,9 @@ concurrency:
 jobs:
   full-market-warmup:
     runs-on: ubuntu-latest
-    timeout-minutes: 160
+    timeout-minutes: 100
     env:
-      RADARX_MARKET_WIDE_WARMUP_MAX_MINUTES: '90'
+      RADARX_MARKET_WIDE_WARMUP_MAX_MINUTES: '30'
       RADARX_MARKET_WIDE_WARMUP_REPORT: artifacts/market-wide-cache-warmup.json
       RADARX_MARKET_WIDE_SHADOW_CYCLES: '30'
       RADARX_MARKET_WIDE_SHADOW_MAX_MINUTES: '25'
