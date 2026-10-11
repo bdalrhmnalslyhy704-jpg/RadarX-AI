@@ -436,9 +436,15 @@ public final class RadarXBackgroundMonitorService extends Service {
             " • Score " + scoreFmt.format(score) + " • " + stage;
         String timing = "وقت اكتشاف الخادم/العملة: " + detectedText + " • وقت إرسال الإشعار: " + formatTimestamp12h(System.currentTimeMillis()) + " • Asia/Aden • 12h";
 
+        String notificationIdentity = alert.optString("id", "");
+        if (notificationIdentity.isEmpty()) {
+            notificationIdentity = radar + "|" + symbol + "|" + detectedAt + "|" + stage;
+        }
+        int notificationId = 45_000 + Math.floorMod(notificationIdentity.hashCode(), 1_000_000_000);
+
         Intent open = new Intent(this, MainActivity.class);
         PendingIntent pending = PendingIntent.getActivity(
-            this, 45000 + Math.abs(symbol.hashCode()),
+            this, notificationId,
             open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
@@ -458,7 +464,7 @@ public final class RadarXBackgroundMonitorService extends Service {
 
         NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (manager != null) {
-            manager.notify(45000 + Math.abs(symbol.hashCode() % 10000), builder.build());
+            manager.notify(notificationIdentity, notificationId, builder.build());
         }
     }
 
