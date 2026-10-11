@@ -19,6 +19,7 @@ on:
       - build224-falcon-eye-ogn-v1
       - build224-persistent-archive-20261009
       - feature/build224-event-breakout-integrated-v4-20261011
+      - fix/build224-smoke-release-gate-20261011
   pull_request:
     branches:
       - phase3-triple-radar
