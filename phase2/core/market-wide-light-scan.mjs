@@ -1,3 +1,4 @@
+import {assessQuietBaseActivityShock} from './activity-shock.mjs';
 const KNOWN = value => value !== null && value !== undefined &&
   !(typeof value === 'string' && value.trim() === '') && Number.isFinite(Number(value));
 const numberOrNull = value => KNOWN(value) ? Number(value) : null;
@@ -48,6 +49,74 @@ export const MARKET_WIDE_LIGHT_SCAN_DEFAULTS = Object.freeze({
   minimumReadyCandidates: 24,
   maxEligibleSymbols: 1200
 });
+
+const EVENT_KLINE_SOURCES = new Set([
+  'BINANCE_PUBLIC_WS', 'BINANCE_PUBLIC_REST', 'BINANCE_PUBLIC_REST_CACHE'
+]);
+
+function unavailableEventShock(symbol, reason, closedCandles = 0) {
+  return {
+    available: false, detected: false, stage: 'DATA_INSUFFICIENT', reason, score: 0,
+    reasons: [], watch_only: true, entry_eligible: false, taker_buy_is_required: false,
+    closed_candles_only: true, detected_candle_close_time: null, extended: false,
+    metrics: {symbol, closed_candles: closedCandles}
+  };
+}
+
+/**
+ * Detect only on the latest 22 contiguous, fresh, exchange-sourced closed 5m
+ * candles already in cache. This helper never performs network requests.
+ */
+function assessCachedEventDrivenBreakout({symbol, series, ticker, now, config}) {
+  if (!Array.isArray(series?.candles)) {
+    return unavailableEventShock(symbol, 'CANDLE_CACHE_MISSING');
+  }
+  const rows = series.candles.filter(candle => candle?.closed === true && KNOWN(candle.openTime) &&
+    (!KNOWN(candle.closeTime) || Number(candle.closeTime) <= now))
+    .sort((a, b) => Number(a.openTime) - Number(b.openTime));
+  const byOpenTime = new Map();
+  for (const candle of rows) byOpenTime.set(Number(candle.openTime), candle);
+  const unique = [...byOpenTime.values()].sort((a, b) => Number(a.openTime) - Number(b.openTime));
+  if (unique.length < 22) {
+    return unavailableEventShock(symbol, 'INSUFFICIENT_CLOSED_CANDLES_FOR_EVENT_SCAN', unique.length);
+  }
+  const tail = unique.slice(-22);
+  const malformed = tail.some(candle => {
+    const openTime = numberOrNull(candle.openTime), closeTime = numberOrNull(candle.closeTime);
+    const open = numberOrNull(candle.open), high = numberOrNull(candle.high);
+    const low = numberOrNull(candle.low), close = numberOrNull(candle.close);
+    const volume = numberOrNull(candle.volume), trades = numberOrNull(candle.tradeCount ?? candle.count);
+    return candle.closed !== true || openTime === null || closeTime === null || closeTime < openTime ||
+      closeTime > now || open === null || high === null || low === null || close === null ||
+      !(open > 0) || !(close > 0) || !(low > 0) || high < Math.max(open, close) ||
+      low > Math.min(open, close) || (volume !== null && volume < 0) || (trades !== null && trades < 0);
+  });
+  if (malformed) {
+    return unavailableEventShock(symbol, 'INVALID_CLOSED_CANDLE_FOR_EVENT_SCAN', tail.length);
+  }
+  const step = Math.max(1, Number(config?.candleStepMs) || 5 * 60_000);
+  const toleranceRaw = Number(config?.continuityToleranceMs);
+  const tolerance = Number.isFinite(toleranceRaw) ? Math.max(0, toleranceRaw) : 1000;
+  for (let i = 1; i < tail.length; i++) {
+    if (Math.abs((Number(tail[i].openTime) - Number(tail[i - 1].openTime)) - step) > tolerance) {
+      return unavailableEventShock(symbol, 'CLOSED_CANDLE_SEQUENCE_HAS_GAPS_FOR_EVENT_SCAN', tail.length);
+    }
+  }
+  const last = tail.at(-1);
+  const age = Math.max(0, Number(now) - Number(last.closeTime));
+  const maxAge = Math.max(1, Number(config?.maxCandleAgeMs) || MARKET_WIDE_LIGHT_SCAN_DEFAULTS.maxCandleAgeMs);
+  if (age > maxAge) return unavailableEventShock(symbol, 'STALE_CLOSED_5M_DATA_FOR_EVENT_SCAN', tail.length);
+  const source = String(series.source || '').toUpperCase();
+  const trusted = EVENT_KLINE_SOURCES.has(source) ||
+    tail.some(candle => EVENT_KLINE_SOURCES.has(String(candle.source || '').toUpperCase()));
+  if (!trusted) return unavailableEventShock(symbol, 'UNVERIFIED_CANDLE_SOURCE_FOR_EVENT_SCAN', tail.length);
+  return assessQuietBaseActivityShock({
+    fiveMinute: tail,
+    ticker: {...(ticker || {}), symbol},
+    now: Number(now),
+    config: config || {}
+  });
+}
 
 function validateCandles(input, now, cfg) {
   const all = Array.isArray(input) ? input : [];
@@ -395,6 +464,7 @@ export class MarketWideLightScan {
     for (const row of uniqueRows) {
       const symbol = symbolOf(row);
       const series = getSeries(symbol);
+      const eventShock = assessCachedEventDrivenBreakout({symbol, series, ticker: row, now: at, config: this.config});
       const latestClosed = Array.isArray(series?.candles)
         ? series.candles.filter(candle => candle?.closed === true && KNOWN(candle.openTime) &&
           KNOWN(candle.closeTime) && Number(candle.closeTime) <= at)
@@ -474,9 +544,20 @@ export class MarketWideLightScan {
           });
         }
       }
-      if (!result.cache_state && result.evaluated) result.cache_state = 'READY';
-      const exceptionalFlag = Boolean(isExceptional(row));
       const microAtRaw = lastMicroScannedAt(symbol);
+      const hasEventBreakout = eventShock?.detected === true && eventShock?.stage === 'EVENT_DRIVEN_BREAKOUT';
+      const eventCloseTime = Number(eventShock?.detected_candle_close_time);
+      const needsEventMicroConfirmation = isDirectionalCandidateSymbol(symbol) && hasEventBreakout &&
+        Number.isFinite(eventCloseTime) && (!KNOWN(microAtRaw) || Number(microAtRaw) < eventCloseTime);
+      if (hasEventBreakout) {
+        result.event_driven_breakout = {
+          ...eventShock,
+          needs_micro_confirmation: needsEventMicroConfirmation,
+          priority_basis: 'CLOSED_5M_VOLUME_AND_TRADES_WITH_CONFIRMED_BREAKOUT'
+        };
+      }
+      if (!result.cache_state && result.evaluated) result.cache_state = 'READY';
+      const exceptionalFlag = Boolean(isExceptional(row)) || needsEventMicroConfirmation;
       result.exceptional_priority = exceptionalFlag;
       result.last_micro_scanned_at = KNOWN(microAtRaw) ? Number(microAtRaw) : null;
       result.last_light_candidate_cycle = this.lastCandidateCycleBySymbol.get(symbol) ?? null;
@@ -595,6 +676,12 @@ export class MarketWideLightScan {
       micro_candidate_pool_total: selected.length,
       rotation_reserve_configured: rotationReserve,
       exceptional_preserved_total: selectedExceptional,
+      event_driven_breakout_detected_total: scanRows.filter(item => item.event_driven_breakout?.detected === true).length,
+      event_driven_breakout_needs_micro_total: scanRows.filter(item => item.event_driven_breakout?.needs_micro_confirmation === true).length,
+      event_driven_breakout_selected_total: selected.filter(item =>
+        audit.get(item.symbol)?.event_driven_breakout?.needs_micro_confirmation === true).length,
+      event_driven_breakout_extended_total: scanRows.filter(item =>
+        item.event_driven_breakout?.detected === true && item.event_driven_breakout?.extended === true).length,
       cache_coverage_ready: coverageReady,
       selection_mode: coverageReady ? 'MARKET_WIDE_CANDIDATE_POOL' : 'BOOTSTRAP_FULL_UNIVERSE',
       candidate_to_micro_total: null,
@@ -612,7 +699,8 @@ export class MarketWideLightScan {
       _marketWideLightFallback: item.result?.evaluated !== true,
       _marketWideLightSelectionReason: item.selectionReason,
       _marketWideLightRank: audit.get(item.symbol)?.light_rank ?? null,
-      _marketWideLightPoolRank: audit.get(item.symbol)?.candidate_rank ?? null
+      _marketWideLightPoolRank: audit.get(item.symbol)?.candidate_rank ?? null,
+      _marketWideEventDrivenBreakout: audit.get(item.symbol)?.event_driven_breakout ?? null
     }));
     return {
       summary, audit, candidateRows,

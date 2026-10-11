@@ -536,3 +536,99 @@ test('stable, fiat and gold-backed bases remain fully audited but cannot consume
   assert.equal(isDirectionalCandidateSymbol('RLUSDUSDT'),false);
   assert.equal(isDirectionalCandidateSymbol('PAXGUSDT'),false);
 });
+
+function eventDrivenCandles(symbol, now, {
+  open = 100, high = 101.5, low = 99.8, close = 101.2,
+  volume = 16000, trades = 1200
+} = {}) {
+  const count = 72;
+  const alignedLast = Math.floor(now / STEP) * STEP - STEP;
+  return Array.from({length:count},(_,index)=>{
+    const openTime = alignedLast - (count - 1 - index) * STEP;
+    const closeTime = openTime + STEP - 1;
+    const baseClose = 100 + index * 0.0001;
+    const last = index === count - 1;
+    const candleOpen = last ? open : baseClose - 0.01;
+    const candleClose = last ? close : baseClose;
+    const candleHigh = last ? high : baseClose + 0.1;
+    const candleLow = last ? low : baseClose - 0.1;
+    const candleVolume = last ? volume : 1000;
+    const tradeCount = last ? trades : 100;
+    return {
+      symbol,openTime,closeTime,open:candleOpen,high:candleHigh,low:candleLow,close:candleClose,
+      volume:candleVolume,quoteVolume:candleClose*candleVolume,tradeCount,
+      takerBuyBaseVolume:candleVolume*0.45,closed:true,source:SOURCE
+    };
+  });
+}
+
+test('extreme closed-candle breakouts get bounded Micro priority from cache without added REST calls',()=>{
+  const now=1_900_000_000_000;
+  const rows=[
+    {symbol:'EVENTUSDT',lastPrice:101.2,priceChange24h:5,quoteVolume24h:5_000_000,tradeCount24h:50000},
+    {symbol:'USDCUSDT',lastPrice:1.2,priceChange24h:5,quoteVolume24h:5_000_000,tradeCount24h:50000},
+    {symbol:'ALTUSDT',lastPrice:1,priceChange24h:0.2,quoteVolume24h:2_000_000,tradeCount24h:10000}
+  ];
+  const cache=new Map(rows.map(row=>[row.symbol,{
+    symbol:row.symbol,source:SOURCE,candles:row.symbol==='ALTUSDT'
+      ?candles({now,count:72}).map(candle=>({...candle,symbol:row.symbol}))
+      :eventDrivenCandles(row.symbol,now)
+  }]));
+  const light=new MarketWideLightScan({
+    config:{candidateLimit:3,rotationReserve:2,minimumReadyCandidates:2},
+    clock:()=>now
+  });
+  const result=light.scan({
+    eligible:rows,getSeries:symbol=>cache.get(symbol)||null,now,cycle:1,
+    lastMicroScannedAt:()=>null
+  });
+  const event=result.audit.get('EVENTUSDT');
+  assert.equal(event.event_driven_breakout.detected,true);
+  assert.equal(event.event_driven_breakout.stage,'EVENT_DRIVEN_BREAKOUT');
+  assert.equal(event.event_driven_breakout.needs_micro_confirmation,true);
+  assert.equal(event.event_driven_breakout.watch_only,true);
+  assert.equal(event.event_driven_breakout.entry_eligible,false);
+  assert.equal(event.candidate_selection_reason,'EXCEPTIONAL_PRESERVED');
+  assert.ok(result.candidateSymbols.includes('EVENTUSDT'));
+  assert.equal(result.candidateSymbols.includes('USDCUSDT'),false,
+    'a non-directional/stablecoin-like pair cannot consume the Micro pool');
+  assert.equal(result.summary.event_driven_breakout_detected_total,2);
+  assert.equal(result.summary.event_driven_breakout_needs_micro_total,1,
+    'only directional, unconfirmed breakouts count as urgent Micro work');
+  assert.equal(result.summary.event_driven_breakout_selected_total,1);
+  assert.equal(result.summary.binance_rest_calls_added_by_light_scan,0);
+});
+
+test('event-driven breakout does not create repeated Micro priority after the event candle was scanned',()=>{
+  const now=1_900_000_000_000;
+  const row={symbol:'EVENTUSDT',lastPrice:101.2,priceChange24h:5,quoteVolume24h:5_000_000,tradeCount24h:50000};
+  const cache={symbol:row.symbol,source:SOURCE,candles:eventDrivenCandles(row.symbol,now)};
+  const light=new MarketWideLightScan({config:{candidateLimit:8,rotationReserve:2},clock:()=>now});
+  const first=light.scan({eligible:[row],getSeries:()=>cache,now,cycle:1,lastMicroScannedAt:()=>null});
+  assert.equal(first.audit.get(row.symbol).event_driven_breakout.needs_micro_confirmation,true);
+  const second=light.scan({
+    eligible:[row],getSeries:()=>cache,now:now+2000,cycle:2,lastMicroScannedAt:()=>now+1
+  });
+  const event=second.audit.get(row.symbol).event_driven_breakout;
+  assert.equal(event.detected,true);
+  assert.equal(event.needs_micro_confirmation,false);
+  assert.equal(second.audit.get(row.symbol).exceptional_priority,false);
+  assert.equal(second.summary.event_driven_breakout_selected_total,0);
+});
+
+test('an extreme event remains observation-only after the daily move is extended',()=>{
+  const now=1_900_000_000_000;
+  const row={symbol:'LATEUSDT',lastPrice:119.05,priceChange24h:25,quoteVolume24h:5_000_000,tradeCount24h:50000};
+  const cache={symbol:row.symbol,source:SOURCE,candles:eventDrivenCandles(row.symbol,now,{
+    open:100,high:120,low:99.8,close:119.05,volume:1_500_000,trades:191_500
+  })};
+  const light=new MarketWideLightScan({config:{candidateLimit:8,rotationReserve:2},clock:()=>now});
+  const result=light.scan({eligible:[row],getSeries:()=>cache,now,cycle:1,lastMicroScannedAt:()=>null});
+  const event=result.audit.get(row.symbol).event_driven_breakout;
+  assert.equal(event.detected,true);
+  assert.equal(event.extended,true);
+  assert.equal(event.watch_only,true);
+  assert.equal(event.entry_eligible,false);
+  assert.equal(event.needs_micro_confirmation,true);
+  assert.equal(result.summary.event_driven_breakout_extended_total,1);
+});
