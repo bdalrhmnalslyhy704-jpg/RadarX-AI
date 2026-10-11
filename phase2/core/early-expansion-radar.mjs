@@ -1194,7 +1194,9 @@ export class EarlyExpansionRadar{
       return {...row,fast,
         _microPreScore:fastScore*.55+(quiet??0)*.45,
         _quietScore:quiet??-1,_quietEligible:isQuietEarlyCandidate(row,fast,this.config),
-        _exceptional:isExceptionalMicroCandidate(row,fast,this.config)||isFastActivityShockCandidate(row,fast,this.config)||Number(this.fastShockPendingUntil.get(key)||0)>this.clock(),
+        _exceptional:isExceptionalMicroCandidate(row,fast,this.config)||isFastActivityShockCandidate(row,fast,this.config)||
+          fast?.market_wide_event_driven_breakout?.needs_micro_confirmation===true||
+          Number(this.fastShockPendingUntil.get(key)||0)>this.clock(),
         _lastActuallyScannedAt:lastAt,_neverScanned:neverScanned,_queueAgeMs:queueAge,
         _rotationAgeMs:elapsedSinceScan,_rotation:rotation,_rotationAge:rotationAge};
     });
@@ -1414,6 +1416,11 @@ export class EarlyExpansionRadar{
           for(const row of eligible){
             const entry=journeyEntries.get(row.symbol),light=marketWideLightResult.audit.get(row.symbol);
             if(entry&&light)entry.market_wide_light_scan=normalizeMissing({...light});
+            const eventBreakout=light?.event_driven_breakout;
+            if(eventBreakout?.needs_micro_confirmation===true){
+              const fast=fastBySymbol.get(row.symbol)||{};
+              fastBySymbol.set(row.symbol,{...fast,market_wide_event_driven_breakout:eventBreakout});
+            }
           }
         }catch(error){
           this.noteError(error,'market-wide-light-scan');
