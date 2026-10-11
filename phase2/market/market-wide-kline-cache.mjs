@@ -257,8 +257,14 @@ export class MarketWideKlineCache {
     let entry = this.cache.get(candle.symbol);
     if (!entry) {
       if (this.cache.size >= this.maxSymbols) {
-        const oldest = [...this.cache.entries()].sort((a, b) => a[1].lastSeenAt - b[1].lastSeenAt)[0];
-        if (oldest) this.cache.delete(oldest[0]);
+        // Find the least-recently-used symbol in one pass instead of materializing
+        // and sorting a second list of all cache entries.
+        let oldestSymbol=null,oldestSeenAt=Infinity;
+        for(const [symbol,cached] of this.cache){
+          const seenAt=Number(cached.lastSeenAt)||0;
+          if(seenAt<oldestSeenAt){oldestSeenAt=seenAt;oldestSymbol=symbol;}
+        }
+        if(oldestSymbol!==null)this.cache.delete(oldestSymbol);
       }
       entry = {candles: [], lastSeenAt: now};
       this.cache.set(candle.symbol, entry);
@@ -373,6 +379,9 @@ export class MarketWideKlineCache {
       const candles = entry?.candles || [];
       const last = candles.at(-1) || null;
       const recentStart = Math.max(0,candles.length-Math.max(MIN_READY_CLOSED_CANDLES,96));
+      const recentSources=new Set();
+      for(let index=recentStart;index<candles.length;index++)
+        recentSources.add(String(candles[index].source||'UNKNOWN_SOURCE'));
       const gaps = [];
       for (let index = recentStart+1; index < candles.length; index++) {
         if (Number(candles[index].openTime) - Number(candles[index-1].openTime) !== FIVE_MINUTE_MS) {
@@ -391,7 +400,7 @@ export class MarketWideKlineCache {
         duplicate_closed_candle_frames:this.duplicateClosedCandleFramesBySymbol.get(symbol)||0,
         continuity_gap_count:gaps.length,
         continuity_gaps:gaps,
-        sources:[...new Set(recent.map(row => String(row.source || 'UNKNOWN_SOURCE')))],
+        sources:[...recentSources],
         rest_backfill_latest_close_time_ms:this.firstRestBackfillCloseTimeBySymbol.get(symbol) ?? null,
         latest_websocket_closed_candle_close_time_ms:this.latestWebSocketClosedTimeBySymbol.get(symbol) ?? null,
         websocket_advanced_beyond_backfill:
