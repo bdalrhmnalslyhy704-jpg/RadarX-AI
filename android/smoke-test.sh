@@ -298,6 +298,19 @@ accepted_log_count() {
 accepted_log_keys() {
   sed -n 's/^.*ALERT_POST_REQUEST_ACCEPTED key=//p' "${REPLAY_LOG_FILE}"
 }
+reconciled_log_count() {
+  { grep -F 'ALERT_POST_RECONCILED_ACTIVE key=' "${REPLAY_LOG_FILE}" || true; } |
+    wc -l | tr -d ' '
+}
+reconciled_log_keys() {
+  sed -n 's/^.*ALERT_POST_RECONCILED_ACTIVE key=//p' "${REPLAY_LOG_FILE}"
+}
+handled_log_keys() {
+  { accepted_log_keys; reconciled_log_keys; }
+}
+handled_unique_count() {
+  handled_log_keys | sort -u | wc -l | tr -d ' '
+}
 launch_replay_test_app() {
   timeout 25s adb shell am start -n com.radarx.app/.MainActivity \
     --es radarx_test_alert_feed_url "${REPLAY_TEST_FEED_URL}" \
@@ -407,8 +420,8 @@ for attempt in $(seq 1 120); do
     restart_done=1
   fi
 
-  accepted="$(accepted_log_count)"
-  if [[ "${accepted}" -ge 623 ]]; then
+  handled="$(handled_unique_count)"
+  if [[ "${handled}" -ge 623 ]]; then
     stats="$(fixture_stats)"
     drained="$(stat_field "${stats}" drainedRequests)"
     if [[ "${drained}" -ge 1 ]]; then
@@ -431,18 +444,28 @@ if [[ "${replay_complete}" -ne 1 ]]; then
   exit 1
 fi
 
-PHASE="assert exactly 623 unique accepted notifications and final compound cursor"
+PHASE="assert exactly 623 unique handled alerts, zero repeated post requests, and final compound cursor"
 keys_file="${REPLAY_TMP}/radarx-replay-accepted-keys.txt"
+handled_file="${REPLAY_TMP}/radarx-replay-handled-keys.txt"
 accepted_log_keys > "${keys_file}"
+handled_log_keys > "${handled_file}"
 accepted_total="$(wc -l < "${keys_file}" | tr -d ' ')"
 accepted_unique="$(sort -u "${keys_file}" | wc -l | tr -d ' ')"
-if [[ "${accepted_total}" -ne 623 || "${accepted_unique}" -ne 623 ]]; then
-  echo "::error::Replay posts lost or duplicated: total=${accepted_total} unique=${accepted_unique} expected=623"
+handled_total="$(wc -l < "${handled_file}" | tr -d ' ')"
+handled_unique="$(sort -u "${handled_file}" | wc -l | tr -d ' ')"
+reconciled_total="$(reconciled_log_count)"
+if [[ "${accepted_total}" -ne "${accepted_unique}" ]]; then
+  echo "::error::Duplicate NotificationManager post requests: total=${accepted_total} unique=${accepted_unique}"
   sort "${keys_file}" | uniq -c | grep -vE '^[[:space:]]+1 ' | head -n 60 || true
   exit 1
 fi
-if ! grep -Fq 'FALCON_EYE_RADAR|REPLAY:0623' "${keys_file}"; then
-  echo "::error::Last archived alert was not accepted by NotificationManager"
+if [[ "${handled_unique}" -ne 623 ]]; then
+  echo "::error::Replay did not handle 623 unique alerts: handled=${handled_unique} expected=623"
+  sort "${handled_file}" | uniq -c | grep -vE '^[[:space:]]+1 ' | head -n 60 || true
+  exit 1
+fi
+if ! grep -Fq 'FALCON_EYE_RADAR|REPLAY:0623' "${handled_file}"; then
+  echo "::error::Last archived alert was neither posted nor reconciled as already active"
   exit 1
 fi
 prefs_xml="$(timeout 8s adb shell run-as com.radarx.app cat shared_prefs/radarx_background.xml 2>/dev/null || true)"
@@ -458,4 +481,4 @@ if [[ "${final_pages}" -lt 13 || "${final_drained}" -lt 1 ]]; then
   echo "::error::Replay pagination incomplete: pages=${final_pages} drained=${final_drained}"
   exit 1
 fi
-echo "ANDROID_DURABLE_REPLAY_PASS: alerts=623 unique_posts=623 missing=0 duplicate_posts=0 same_timestamp=yes no_id_rows=yes offline_reconnect=yes force_stop_restart=yes final_cursor=verified pages=${final_pages}"
+echo "ANDROID_DURABLE_REPLAY_PASS: alerts=623 handled_unique=${handled_unique} new_post_requests=${accepted_total} reconciled_active=${reconciled_total} duplicate_post_requests=0 missing=0 same_timestamp=yes no_id_rows=yes offline_reconnect=yes force_stop_restart=yes final_cursor=verified pages=${final_pages}"
