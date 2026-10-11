@@ -32,8 +32,10 @@ import java.util.Set;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.Locale;
 import java.util.List;
 
@@ -72,6 +74,8 @@ public final class RadarXBackgroundMonitorService extends Service {
     private static final long HEARTBEAT_STALE_MS = 5 * 60_000L;
 
     private ScheduledExecutorService executor;
+    private ScheduledFuture<?> scanFuture;
+    private final AtomicBoolean scanInProgress = new AtomicBoolean(false);
     private volatile boolean stopping;
     private volatile boolean loggedFirstScan;
     private final DecimalFormat scoreFmt = new DecimalFormat("0.0");
@@ -80,11 +84,7 @@ public final class RadarXBackgroundMonitorService extends Service {
     public void onCreate() {
         super.onCreate();
         createChannels();
-        executor = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "RadarX-Background");
-            t.setDaemon(true);
-            return t;
-        });
+        executor = newScanExecutor();
     }
 
     @Override
@@ -120,20 +120,32 @@ public final class RadarXBackgroundMonitorService extends Service {
         return START_STICKY;
     }
 
-    private void scheduleScan() {
-        if (executor == null || executor.isShutdown()) return;
-        executor.shutdownNow();
-        executor = Executors.newSingleThreadScheduledExecutor(r -> {
+    private ScheduledExecutorService newScanExecutor() {
+        return Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "RadarX-Background");
             t.setDaemon(true);
             return t;
         });
+    }
+
+    private void scheduleScan() {
+        // Repeated START intents must not interrupt a scan and create a second
+        // scheduler while the first invocation is still posting/checkpointing alerts.
+        if (executor == null || executor.isShutdown()) {
+            executor = newScanExecutor();
+            scanFuture = null;
+        }
+        if (scanFuture != null && !scanFuture.isCancelled() && !scanFuture.isDone()) {
+            Log.i(TAG, "BACKGROUND_SCHEDULER_ALREADY_RUNNING");
+            return;
+        }
+
         long scanInterval = SCAN_MS;
         if (isDebugBuild()) {
             long requestedInterval = prefs().getLong("radarx_test_scan_interval_ms", 0L);
             if (requestedInterval >= 500L && requestedInterval <= 5000L) scanInterval = requestedInterval;
         }
-        executor.scheduleWithFixedDelay(this::scanOnceSafe, 0L, scanInterval, TimeUnit.MILLISECONDS);
+        scanFuture = executor.scheduleWithFixedDelay(this::scanOnceSafe, 0L, scanInterval, TimeUnit.MILLISECONDS);
     }
 
     private boolean isDebugBuild() {
@@ -142,8 +154,12 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     private void scanOnceSafe() {
         if (stopping) return;
-        touchHeartbeat();
+        if (!scanInProgress.compareAndSet(false, true)) {
+            Log.w(TAG, "BACKGROUND_SCAN_SKIPPED_OVERLAP");
+            return;
+        }
         try {
+            touchHeartbeat();
             long cursor = currentAlertCursor();
             String cursorId = prefs().getString("radar_alert_cursor_id", "");
             JSONObject root = fetchRadarAlertsFeed(cursor, cursorId);
@@ -166,6 +182,8 @@ public final class RadarXBackgroundMonitorService extends Service {
             if (!loggedFirstScan) { loggedFirstScan = true; Log.w(TAG, "BACKGROUND_SCAN_ERROR", error); }
             Log.w(TAG, "Background unified radar fetch failed", error);
             updateStatus("لا يوجد اتصال بالخادم الآن • تعذر التحقق من التنبيهات • ستستأنف المراقبة ويُراجع السجل الدائم عند عودة الاتصال");
+        } finally {
+            scanInProgress.set(false);
         }
     }
 
