@@ -83,6 +83,38 @@ test('durable alert replay pages preserve the full archive, oldest-first order, 
   assert.equal(all[619].id,'FALCON:0619');
 });
 
+test('Coin Hunter and Whale alerts persist in their own JSONL archives and support cursor replay',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-coin-whale-alerts-'));
+  const store=await new DurableStore({dir}).init();
+  await store.appendCoinHunterAlert({
+    id:'COINHUNTER:OGNUSDT:100000',radar:'COIN_HUNTER_RADAR',symbol:'OGNUSDT',
+    processed_at:100000,detected_at:100000,price:0.1234,
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+  });
+  await store.appendWhaleAccumulationAlert({
+    id:'WHALE:CTSIUSDT:100000',radar:'WHALE_ACCUMULATION_RADAR',symbol:'CTSIUSDT',
+    processed_at:100000,detected_at:100000,price:0.2345,
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+  });
+
+  const coin=await store.readCoinHunterAlerts({sinceMs:0,limit:10});
+  const whale=await store.readWhaleAccumulationAlerts({sinceMs:0,limit:10});
+  assert.equal(coin.length,1);
+  assert.equal(coin[0].id,'COINHUNTER:OGNUSDT:100000');
+  assert.equal(whale.length,1);
+  assert.equal(whale[0].id,'WHALE:CTSIUSDT:100000');
+
+  const coinPage=await store.readAlertPage('coinHunterAlerts',{sinceMs:0,radar:'COIN_HUNTER_RADAR',limit:10});
+  const whalePage=await store.readAlertPage('whaleAccumulationAlerts',{sinceMs:0,radar:'WHALE_ACCUMULATION_RADAR',limit:10});
+  assert.equal(coinPage[0].replay_cursor_id,'COIN_HUNTER_RADAR|COINHUNTER:OGNUSDT:100000');
+  assert.equal(whalePage[0].replay_cursor_id,'WHALE_ACCUMULATION_RADAR|WHALE:CTSIUSDT:100000');
+
+  const coinLines=(await readFile(store.files.coinHunterAlerts,'utf8')).split('\\n').filter(Boolean);
+  const whaleLines=(await readFile(store.files.whaleAccumulationAlerts,'utf8')).split('\\n').filter(Boolean);
+  assert.equal(coinLines.length,1,'Coin Hunter writes one complete newline-delimited event');
+  assert.equal(whaleLines.length,1,'Whale writes one complete newline-delimited event');
+});
+
 test('scheduler archive hydrates each radar independently when another radar dominates the newest rows',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-scheduler-partition-read-'));
   const store=await new DurableStore({dir}).init();
