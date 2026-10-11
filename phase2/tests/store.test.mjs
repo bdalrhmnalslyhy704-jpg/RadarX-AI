@@ -391,7 +391,7 @@ test('scan-journey compressed retention remains bounded under repeated appends',
       const coins=Array.from({length:40},(_,coinIndex)=>({
         symbol:'TEST'+String(coinIndex).padStart(3,'0')+'USDT',
         eligible:true,
-        evidence_payload:stableArchivePayload(cycleIndex+':'+coinIndex,6144)
+        evidence_payload:stableArchivePayload(cycleIndex+':'+coinIndex,12288)
       }));
       await store.appendScanJourneyCycle({
         schema_version:SCAN_JOURNEY_SCHEMA,
