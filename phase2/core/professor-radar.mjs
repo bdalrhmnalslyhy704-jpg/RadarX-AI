@@ -146,13 +146,13 @@ function aggregateMentions({streams,news,index}){
     const evidence=stream.transcript?.available?'CAPTION':stream.description?'DESCRIPTION':'TITLE';const claim=streamClaim(text);const w=streamWeight(stream,evidence);
     for(const a of assets){
       const c=get(a.symbol);c.stream_mentions++;c.stream_weight+=w;c.stream_signed+=(claim.action==='BUY_BIAS'?1:claim.action==='SELL_BIAS'?-1:0)*w;
-      c.trade_claims.push({source:'YOUTUBE_PUBLIC',video_id:stream.id,channel:stream.channel,title:stream.title,url:stream.url,evidence,evidenced_action:claim.action,asset:a.symbol});
+      c.trade_claims.push({source:stream.source||'YOUTUBE_PUBLIC_SEARCH',video_id:stream.id,channel:stream.channel,title:stream.title,url:stream.url,published_text:stream.published_text||null,received_at:stream.received_at??null,received_at_iso:stream.received_at_iso||null,source_status:stream.live?'LIVE_PUBLIC_STREAM':'PUBLICATION_TIME_NOT_VERIFIED',evidence,evidenced_action:claim.action,asset:a.symbol});
     }
   }
   for(const item of news){
     if(item.eligible_for_scoring===false)continue;
     const assets=mentionedAssets(item.title,index);const score=newsSentiment(item);const w=35;
-    for(const a of assets){const c=get(a.symbol);c.news_mentions++;c.news_sum+=score*w;c.news_weight+=w;c.news_items.push({title:item.title,url:item.url,domain:item.domain,published_at:item.published_at,tone:item.tone,event_type:item.event_type||classifyNewsEvent(item.title,item.domain),sentiment_score:Number(score.toFixed(1)),source:item.source});}
+    for(const a of assets){const c=get(a.symbol);c.news_mentions++;c.news_sum+=score*w;c.news_weight+=w;c.news_items.push({title:item.title,url:item.url,domain:item.domain,published_at:item.published_at,received_at:item.received_at??null,received_at_iso:item.received_at_iso||null,age_at_receive_ms:item.age_at_receive_ms??null,freshness_status:item.freshness_status||'PUBLISHED_AT_UNAVAILABLE',eligible_for_scoring:item.eligible_for_scoring===true,tone:item.tone,event_type:item.event_type||classifyNewsEvent(item.title,item.domain),sentiment_score:Number(score.toFixed(1)),source:item.source});}
   }
   return [...map.values()].map(c=>({...c,stream_score:Number((c.stream_weight?50+(c.stream_signed/c.stream_weight)*50:50).toFixed(1)),news_score:Number((c.news_weight?c.news_sum/c.news_weight:50).toFixed(1))}));
 }
