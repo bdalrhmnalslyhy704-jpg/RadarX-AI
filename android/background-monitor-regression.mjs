@@ -44,3 +44,9 @@ assert.match(service, /getPackageName\(\)\s*\+\s*":radar_background"/,
   'background recovery must specifically verify the dedicated service process after force-stop');
 assert.ok(service.includes('manager.notify(notificationIdentity, notificationId, builder.build())'),
   'distinct archived alert IDs must have distinct notification identities rather than overwriting each other by symbol');
+assert.ok(service.includes('/api/whale-accumulation-radar?quote=USDT&limit=50'),
+  'individual-endpoint fallback must include Whale Accumulation');
+assert.ok(service.includes('meta.put("cursor_advance_allowed", false)'),
+  'non-durable fallback feeds must not advance the durable replay cursor');
+assert.ok(service.includes('radar_alert_fallback_seen_ids') && service.includes('fallbackSeen.contains(id)'),
+  'fallback notifications must be de-duplicated against the later durable replay');
