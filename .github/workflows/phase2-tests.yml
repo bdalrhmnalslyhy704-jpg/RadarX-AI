@@ -1,31 +1,48 @@
 name: RadarX Phase 2 Tests
 on:
   push:
-    branches: ['phase2-*', 'build224-sniper-selection-v1', 'fix/build224-quiet-fair-rotation-20261009', 'feat/build224-pre-expansion-fingerprint-20261009']
+    branches: ['phase2-*', 'build224-sniper-selection-v1', 'fix/build224-quiet-fair-rotation-20261009', 'feat/build224-pre-expansion-fingerprint-20261009', 'feature/build224-market-wide-light-scan-20261010']
   pull_request:
     branches: [main, 'build224-multi-analyst-20261007']
   workflow_dispatch:
+
+# Keep CI runs for this ref serialized without cancelling an in-progress safety/test run.
+concurrency:
+  group: phase2-tests-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   all-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        timeout-minutes: 5
       - uses: actions/setup-node@v4
+        timeout-minutes: 5
         with:
           node-version: 24
       - name: Install dependencies
         run: npm ci
+        timeout-minutes: 10
       - name: Audit production dependencies (critical threshold)
         run: npm audit --omit=dev --audit-level=critical
+        timeout-minutes: 5
       - name: Run Phase 1 and Phase 2 tests
         run: npm test
+        timeout-minutes: 25
+      - name: Probe Binance market-data WebSocket and bounded REST fallback
+        run: node phase2/tests/market-data-connectivity-smoke.mjs
+        timeout-minutes: 1
       - name: Check required Phase 2 modules
         run: |
           node --check phase2/server.mjs
           node --check phase2/runtime.mjs
           node --check phase2/http/api.mjs
           node --check phase2/market/universe-scanner.mjs
+        timeout-minutes: 5
       - name: Build Docker image
         run: docker build -t radarx-phase4-test .
+        timeout-minutes: 15

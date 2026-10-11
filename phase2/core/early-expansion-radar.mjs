@@ -8,6 +8,7 @@ import {assessQuietBasePreExpansion,summarizeQuietBasePreExpansion} from './quie
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
 import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId,normalizeMissing,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,reconcileEligibilityQueueAge} from './scan-journey-ledger.mjs';
 import {ScanSchedulerJournal, schedulerLaneReason} from './scan-scheduler.mjs';
+import {MarketWideLightScan} from './market-wide-light-scan.mjs';
 
 function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
@@ -212,7 +213,15 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   activityShockCooldownMs:45*60*1000,
   maxActivityShockAlertsPerHour:6,
   fastShockHoldMs:8*60*1000,
-  maxBackoffMs:1500
+  maxBackoffMs:1500,
+  marketWideLightScanEnabled:true,
+  marketWideLightScanCandidateLimit:48,
+  marketWideLightScanRotationReserve:12,
+  marketWideLightScanMinReadyCandidates:24,
+  marketWideLightScanMaxCandleAgeMs:8*60*1000,
+  marketWideLightScanMinClosedCandles:60,
+  marketWideLightScanMaxClosedCandles:96,
+  marketWideLightScanPoolActivationEnabled:true
 });
 
 function closed(rows,now=Date.now()){
@@ -1071,12 +1080,20 @@ export function nextEarlyExpansionPollDelayMs(pollMs,elapsedMs,completed=true){
 }
 
 export class EarlyExpansionRadar{
-  constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
+  constructor({rest,store,pushManager=null,marketWideKlineCache=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
-    this.rest=rest;this.store=store;this.pushManager=pushManager;
+    this.rest=rest;this.store=store;this.pushManager=pushManager;this.marketWideKlineCache=marketWideKlineCache;
     this.config={...EARLY_EXPANSION_RADAR_DEFAULTS,...config};
     this.clock=clock;this.logger=logger;
+    this.marketWideLightScan=new MarketWideLightScan({config:{
+      candidateLimit:this.config.marketWideLightScanCandidateLimit,
+      rotationReserve:this.config.marketWideLightScanRotationReserve,
+      minimumReadyCandidates:this.config.marketWideLightScanMinReadyCandidates,
+      maxCandleAgeMs:this.config.marketWideLightScanMaxCandleAgeMs,
+      minClosedCandles:this.config.marketWideLightScanMinClosedCandles,
+      maxClosedCandles:this.config.marketWideLightScanMaxClosedCandles
+    },clock});
     this.running=false;this.busy=false;this.timer=null;this.universe=[];this.universeAt=0;
     this.fastState=new Map();this.lastAlertAt=new Map();this.lastAlertScore=new Map();this.lastBand=new Map();
     this.lastActivityShockAt=new Map();this.lastActivityShockKeyBySymbol=new Map();this.activityShockTimestamps=[];this.fastShockPendingUntil=new Map();
@@ -1119,7 +1136,7 @@ export class EarlyExpansionRadar{
     // avoids a separate bootstrap scan racing the scheduler's first timer.
     scheduleNext(0);
   }
-  async stop(){this.running=false;if(this.timer)clearTimeout(this.timer);this.timer=null;}
+  async stop(){this.running=false;if(this.timer)clearTimeout(this.timer);this.timer=null;this.marketWideKlineCache?.stop?.();}
   noteError(e,where='scan'){this.lastError=String(e?.message??e);this.logger.warn?.('EARLY_EXPANSION_RADAR_'+where,this.lastError);}
   normalizeQuote(quote=this.config.quote){
     const q=String(quote||this.config.quote).trim().toUpperCase();
@@ -1327,7 +1344,7 @@ export class EarlyExpansionRadar{
       notification_sent_at:INCOMPLETE,notification_status:INCOMPLETE,
       outcomes:incompleteHorizons('NO_SIGNAL_OUTCOME_FOR_THIS_CYCLE')
     });
-    const phaseTimings={universe_refresh_ms:0,ticker_fast_selection_ms:0,market_context_ms:0,
+    const phaseTimings={universe_refresh_ms:0,ticker_fast_selection_ms:0,market_wide_light_scan_ms:0,market_context_ms:0,
       outcome_maintenance_ms:0,micro_scan_ms:0,market_micro_overlap_ms:0,
       deep_scan_ms:0,signal_archive_ms:0,notification_ms:0};
     try{
@@ -1384,7 +1401,61 @@ export class EarlyExpansionRadar{
       this.fastScannedTotal=eligible.length;
       const fastSeenAt=fastScanAt;
       for(const row of eligible)this.scheduler.ensureQueued('MICRO',row.symbol,fastSeenAt);
-      const cycle=this.scans+1,selected=this.selectMicro(eligible,fastBySymbol,cycle);
+      const cycle=this.scans+1;
+      let marketWideLightResult=null,marketWideLightApplied=false;
+      let microSelectionInput=eligible;
+      const marketWideLightStartedAt=this.clock();
+      if(this.config.marketWideLightScanEnabled!==false&&this.marketWideKlineCache){
+        try{
+          this.marketWideKlineCache.setSymbols(eligible.map(row=>row.symbol));
+          if(!this.marketWideKlineCache.running)this.marketWideKlineCache.start();
+        }catch(error){this.noteError(error,'market-wide-light-stream');}
+      }
+      if(this.config.marketWideLightScanEnabled!==false){
+        try{
+          marketWideLightResult=this.marketWideLightScan.scan({
+            eligible,getSeries:symbol=>this.marketWideKlineCache?.getSeries(symbol)||null,
+            now:fastSeenAt,cycle,
+            isExceptional:row=>{
+              const fast=fastBySymbol.get(row.symbol)||{};
+              return isExceptionalMicroCandidate(row,fast,this.config)||isFastActivityShockCandidate(row,fast,this.config)||
+                Number(this.fastShockPendingUntil.get(String(row.symbol).toUpperCase())||0)>fastSeenAt;
+            },
+            lastMicroScannedAt:symbol=>this.scheduler.lastScanAt('MICRO',symbol)
+          });
+          const lightPoolSet=new Set(marketWideLightResult.candidateSymbols);
+          let cacheProof=null;
+          try{cacheProof=this.marketWideKlineCache?.health?.()||null;}catch{}
+          const fullMarketCacheReady=cacheProof?.full_market_coverage_ready===true;
+          if(this.config.marketWideLightScanPoolActivationEnabled!==false&&
+              marketWideLightResult.coverageReady&&fullMarketCacheReady&&this.marketWideKlineCache&&
+              eligible.length>=Math.min(12,Number(this.config.microScanCandidates)||12)){
+            const pool=marketWideLightResult.candidateRows.filter(row=>lightPoolSet.has(selectionSymbol(row)));
+            if(pool.length>=Math.min(12,eligible.length)){
+              microSelectionInput=pool;marketWideLightApplied=true;
+            }
+          }
+          marketWideLightResult.summary.micro_pool_applied=marketWideLightApplied;
+          marketWideLightResult.summary.market_wide_cache_coverage_ready=fullMarketCacheReady;
+          marketWideLightResult.summary.websocket_advanced_symbols=Number(cacheProof?.websocket_advanced_symbols)||0;
+          marketWideLightResult.summary.legacy_micro_selector_active=!marketWideLightApplied;
+          marketWideLightResult.summary.micro_capacity_configured=Number(this.config.microScanCandidates)||12;
+          marketWideLightResult.summary.micro_input_total=microSelectionInput.length;
+          marketWideLightResult.summary.scan_duration_ms=Math.max(0,this.clock()-marketWideLightStartedAt);
+          for(const row of eligible){
+            const entry=journeyEntries.get(row.symbol),light=marketWideLightResult.audit.get(row.symbol);
+            if(entry&&light)entry.market_wide_light_scan=normalizeMissing({...light});
+          }
+        }catch(error){
+          this.noteError(error,'market-wide-light-scan');
+          marketWideLightResult=null;microSelectionInput=eligible;marketWideLightApplied=false;
+        }
+      }
+      phaseTimings.market_wide_light_scan_ms=Math.max(0,this.clock()-marketWideLightStartedAt);
+      if(marketWideLightResult)marketWideLightResult.summary.scan_duration_ms=phaseTimings.market_wide_light_scan_ms;
+      const selected=this.selectMicro(microSelectionInput,fastBySymbol,cycle);
+      const lightCandidateSymbols=new Set(marketWideLightResult?.candidateSymbols||[]);
+      const lightEligibleCandidateSet=new Set(marketWideLightResult?.selected?.map(item=>item.symbol)||[]);
       for(const row of eligible)this.scheduler.record({stage:'FAST',symbol:row.symbol,eventType:'COMPLETED',cycle,at:fastSeenAt,
         queuedAt:tickerFastStartedAt,startedAt:tickerFastStartedAt,elapsedMs:Math.max(0,fastSeenAt-tickerFastStartedAt),fastSeenAt,
         reasonCode:'ALL_ELIGIBLE_TICKER_FAST_SCAN',
@@ -1394,7 +1465,8 @@ export class EarlyExpansionRadar{
         extra:{symbols_total:eligible.length,expected_total:expected.length,received_total:receivedSymbols.length}});
       const selectedMicroSchedulerSymbols=new Set(selected.map(selectionSymbol));
       for(const row of eligible)if(!selectedMicroSchedulerSymbols.has(selectionSymbol(row)))
-        this.scheduler.defer('MICRO',row.symbol,{cycle,at:fastSeenAt,fastSeenAt,reasonCode:'MICRO_BATCH_CAPACITY'});
+        this.scheduler.defer('MICRO',row.symbol,{cycle,at:fastSeenAt,fastSeenAt,
+          reasonCode:marketWideLightApplied&&!lightCandidateSymbols.has(selectionSymbol(row))?'MARKET_WIDE_LIGHT_SCAN_DEFERRED':'MICRO_BATCH_CAPACITY'});
       for(const row of selected){
         const lane=row._selection_lane||'score';
         this.scheduler.selected('MICRO',row.symbol,{cycle,at:fastSeenAt,lane,reasonCode:schedulerLaneReason(lane,'MICRO'),fastSeenAt});
@@ -1403,7 +1475,8 @@ export class EarlyExpansionRadar{
       const selectedMicroSet=new Set(selected.map(x=>x.symbol));
       for(const row of eligible){
         const entry=journeyEntries.get(row.symbol);
-        if(!selectedMicroSet.has(row.symbol))entry.rejection_reason='NOT_SELECTED_MICRO_CAPACITY_THIS_CYCLE';
+        if(!selectedMicroSet.has(row.symbol))entry.rejection_reason=marketWideLightApplied&&!lightCandidateSymbols.has(selectionSymbol(row))?
+          'MARKET_WIDE_LIGHT_SCAN_DEFERRED':'NOT_SELECTED_MICRO_CAPACITY_THIS_CYCLE';
       }
       for(const row of selected){
         const entry=journeyEntries.get(row.symbol);
@@ -1909,6 +1982,15 @@ export class EarlyExpansionRadar{
             missing_ticker_total:Math.max(0,expected.length-receivedSymbols.length),
             eligible_total:eligible.length,fast_scanned_total:eligible.length,
             micro_selected_total:selected.length,
+            market_wide_light_scan:marketWideLightResult?{
+              ...marketWideLightResult.summary,
+              candidate_to_micro_total:selected.filter(x=>lightEligibleCandidateSet.has(selectionSymbol(x))).length,
+              candidate_to_deep_total:deepTargets.filter(x=>lightEligibleCandidateSet.has(selectionSymbol(x))).length,
+              micro_pre_expansion_total:microScanned.filter(x=>x?.micro_fingerprint?.quiet_base_pre_expansion?.classification==='PRE_EXPANSION').length,
+              deep_pre_expansion_total:deepTargets.filter(x=>x?.micro_fingerprint?.quiet_base_pre_expansion?.classification==='PRE_EXPANSION').length,
+              websocket_cache:this.marketWideKlineCache?.health?.()||null,
+              binance_rest_calls_added_by_light_scan:0
+            }:{status:'UNAVAILABLE',binance_rest_calls_added_by_light_scan:0},
             micro_attempted_total:coins.filter(x=>x.micro_scan_completed_at!==INCOMPLETE).length,
             micro_success_total:microScanned.filter(x=>x&&!x.failed).length,
             deep_selected_total:deepTargets.length,
