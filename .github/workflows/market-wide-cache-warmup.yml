@@ -22,7 +22,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: market-wide-cache-warmup-proof
+  # Different feature branches need independent acceptance proofs; a later
+  # integration branch must not cancel the parent phase's live Shadow run.
+  group: market-wide-cache-warmup-proof-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
