@@ -126,6 +126,18 @@ export function classifyNewsEvent(title='',domain=''){
   return 'GENERAL_CRYPTO_NEWS';
 }
 function newsSentiment(item){return Number.isFinite(item.tone)?clamp(50+item.tone*3):wordScore(item.title,NEWS_BULL,NEWS_BEAR).score;}
+export function assessNewsFreshness(publishedAt, receivedAt, maxAgeMs) {
+  const published=Number(publishedAt),received=Number(receivedAt),maxAge=Number(maxAgeMs);
+  if(!Number.isFinite(published)||published<=0||!Number.isFinite(received)||received<=0)
+    return {status:'PUBLISHED_AT_UNAVAILABLE',eligible_for_scoring:false,age_ms:null};
+  const age=received-published;
+  if(age < -5*60_000)
+    return {status:'PUBLISHED_AT_IN_FUTURE',eligible_for_scoring:false,age_ms:age};
+  if(!Number.isFinite(maxAge)||maxAge<=0||age>maxAge)
+    return {status:'STALE_DATA',eligible_for_scoring:false,age_ms:age};
+  return {status:'AVAILABLE',eligible_for_scoring:true,age_ms:age};
+}
+
 function aggregateMentions({streams,news,index}){
   const map=new Map();
   const get=s=>{if(!map.has(s))map.set(s,{symbol:s,baseAsset:s.replace(/USDT$/,''),stream_mentions:0,news_mentions:0,stream_weight:0,stream_signed:0,news_weight:0,news_sum:0,trade_claims:[],news_items:[]});return map.get(s);};
@@ -138,6 +150,7 @@ function aggregateMentions({streams,news,index}){
     }
   }
   for(const item of news){
+    if(item.eligible_for_scoring===false)continue;
     const assets=mentionedAssets(item.title,index);const score=newsSentiment(item);const w=35;
     for(const a of assets){const c=get(a.symbol);c.news_mentions++;c.news_sum+=score*w;c.news_weight+=w;c.news_items.push({title:item.title,url:item.url,domain:item.domain,published_at:item.published_at,tone:item.tone,event_type:item.event_type||classifyNewsEvent(item.title,item.domain),sentiment_score:Number(score.toFixed(1)),source:item.source});}
   }
@@ -218,11 +231,16 @@ export class ProfessorRadar{
     for(const result of results){
       if(result?.error){errors.push('GDELT:'+String(result.error));continue;}
       for(const item of result?.items||[]){
+        const receivedAt=Number(result.received_at);
+        const maxAgeMs=result.query.timespan==='24h'?24*60*60_000:2*60*60_000;
+        const freshness=assessNewsFreshness(item.published_at,receivedAt,maxAgeMs);
         const enriched={...item,event_type:classifyNewsEvent(item.title,item.domain),
           received_at:result.received_at??null,
-          received_at_iso:Number.isFinite(Number(result.received_at))?new Date(Number(result.received_at)).toISOString():null,
-          age_at_receive_ms:Number.isFinite(Number(result.received_at))&&Number.isFinite(Number(item.published_at))
-            ?Math.max(0,Number(result.received_at)-Number(item.published_at)):null,
+          received_at_iso:Number.isFinite(receivedAt)?new Date(receivedAt).toISOString():null,
+          age_at_receive_ms:freshness.age_ms,
+          freshness_status:freshness.status,
+          eligible_for_scoring:freshness.eligible_for_scoring,
+          max_age_ms:maxAgeMs,
           watch_scope:result.query.kind||'GENERAL_CRYPTO_NEWS'};
         found.set(item.url,enriched);
       }
