@@ -468,7 +468,7 @@ export class DurableStore {
       state.cycle_sequence=sequence;
       state.total_recorded_cycles+=1;
       state.retained_coin_rows+=coins.length;
-      state.compressed_bytes+=zipped.length;
+      state.compressed_bytes+=archived.bytes;
       const explicitlyBelowEligibility=new Set(coins
         .filter(coin=>coin&&coin.rejection_reason==='BELOW_MIN_QUOTE_VOLUME_24H')
         .map(coin=>String(coin.symbol||'').toUpperCase()).filter(Boolean));
@@ -571,13 +571,11 @@ export class DurableStore {
         }
         if(cycleChanged){
           cycle.outcomes_updated_at=Number(now);
-          const compressed=gzipSync(Buffer.from(JSON.stringify(cycle),'utf8'),{level:6});
-          const temp=filePath+'.outcome-'+process.pid+'-'+Date.now();
-          try{await writeFile(temp,compressed);await rename(temp,filePath);}
-          catch(error){await unlink(temp).catch(()=>{});throw error;}
-          state.compressed_bytes=Math.max(0,state.compressed_bytes-Number(metadata.compressed_bytes||0)+compressed.length);
-          metadata.compressed_bytes=compressed.length;
-          metadata.sha256=createHash('sha256').update(compressed).digest('hex');
+          const budget=await this.scanJourneyWriteBudget();
+          const compressed=await writeGzipJsonAtomic(filePath,cycle,{maxBytes:budget.max_write_bytes});
+          state.compressed_bytes=Math.max(0,state.compressed_bytes-Number(metadata.compressed_bytes||0)+compressed.bytes);
+          metadata.compressed_bytes=compressed.bytes;
+          metadata.sha256=compressed.sha256;
           metadata.stored_at=Number(now);
           updatedCycles++;updatedCoinRows+=coinUpdates;
         }
