@@ -628,10 +628,12 @@ public final class RadarXBackgroundMonitorService extends Service {
                 return false;
             }
         }
+        boolean wasPendingReservation = false;
         if (durableCursor) {
             SharedPreferences p = prefs();
             Set<String> pendingNotificationIds = new HashSet<>(
                 p.getStringSet("radar_alert_pending_notification_ids", new HashSet<>()));
+            wasPendingReservation = pendingNotificationIds.contains(notificationIdentity);
             pendingNotificationIds.add(notificationIdentity);
             if (!p.edit().putStringSet("radar_alert_pending_notification_ids", pendingNotificationIds).commit()) {
                 Log.w(TAG, "ALERT_POST_BLOCKED_PENDING_CHECKPOINT_FAILED key=" + notificationIdentity);
@@ -639,10 +641,12 @@ public final class RadarXBackgroundMonitorService extends Service {
             }
         }
 
-        // NotificationManager uses (tag,id) as an idempotent identity. If the process
-        // died after notify() but before the compound cursor commit, reconcile the
-        // still-active system notification instead of posting the same event again.
-        if (hasActiveAlertNotification(manager, notificationIdentity, notificationId)) {
+        // An existing durable reservation means the previous process may have posted
+        // the notification but died before committing its compound cursor. Only in that
+        // crash window do we enumerate active notifications; fresh alerts should not
+        // repeatedly parcel the whole notification tray (which grows during replay).
+        if ((!durableCursor || wasPendingReservation) &&
+                hasActiveAlertNotification(manager, notificationIdentity, notificationId)) {
             if (isDebugBuild()) Log.i(TAG, "ALERT_POST_RECONCILED_ACTIVE key=" + notificationIdentity);
             return true;
         }

@@ -105,6 +105,10 @@ assert.match(service, /getActiveNotifications\(\)/,
   'restart recovery must reconcile a notification already accepted by Android before posting again');
 assert.match(service, /ALERT_POST_RECONCILED_ACTIVE/,
   'recovered active notifications must be logged separately from new post requests');
+assert.match(service, /wasPendingReservation = pendingNotificationIds\.contains\(notificationIdentity\)/,
+  'active-notification enumeration must be enabled when an uncommitted durable reservation exists');
+assert.match(service, /if \(\(!durableCursor \|\| wasPendingReservation\) &&\s*hasActiveAlertNotification/,
+  'normal scans avoid tray enumeration unless restart reconciliation is required');
 assert.match(service, /BACKGROUND_SCHEDULER_ALREADY_RUNNING/,
   'repeated START intents must not create replacement schedulers during a scan');
 assert.match(service, /scanInProgress\.compareAndSet\(false, true\)/,
