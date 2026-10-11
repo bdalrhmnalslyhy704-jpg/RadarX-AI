@@ -191,8 +191,9 @@ async function checkedFetch(path){
   httpRequests++;
   if(response.status>=500)http5xx++;
   if(response.status===502)http502++;
-  const body=await response.json();
-  assert.ok(response.status>=200&&response.status<300,'test endpoint unexpectedly failed: '+path+' HTTP '+response.status);
+  const body=await response.json().catch(async()=>({raw:await response.text().catch(()=> '')}));
+  assert.ok(response.status>=200&&response.status<300,
+    'test endpoint unexpectedly failed: '+path+' HTTP '+response.status+' body='+JSON.stringify(body));
   return body;
 }
 
