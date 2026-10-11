@@ -57,9 +57,21 @@ function* jsonChunks(value, ancestors=new Set(), arrayMember=false) {
   }
 }
 
+function* bufferedJsonChunks(value,{newline=false,chunkChars=32*1024}={}){
+  let buffer='';
+  for(const piece of jsonChunks(value)){
+    buffer+=piece;
+    if(buffer.length>=chunkChars){
+      yield buffer;
+      buffer='';
+    }
+  }
+  if(newline)buffer+='\n';
+  if(buffer)yield buffer;
+}
+
 function* jsonDocumentChunks(value){
-  yield* jsonChunks(value);
-  yield '\n';
+  yield* bufferedJsonChunks(value,{newline:true});
 }
 
 async function writeGzipJsonAtomic(path,value,{maxBytes=Infinity}={}) {
@@ -81,7 +93,7 @@ async function writeGzipJsonAtomic(path,value,{maxBytes=Infinity}={}) {
   });
   try{
     await pipeline(
-      Readable.from(jsonChunks(value),{objectMode:false}),
+      Readable.from(bufferedJsonChunks(value),{objectMode:false}),
       createGzip({level:6}),
       meter,
       createWriteStream(temp,{flags:'wx'})
