@@ -24,6 +24,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: write
 
 concurrency:
@@ -34,9 +35,42 @@ jobs:
   # Publish only from the official Build 224 branch after its backend and Android checks pass.
   release-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 75
 
     steps:
+      - name: Require successful Triple Radar CI for this exact Build 224 commit
+        if: github.ref_name == 'build224-multi-analyst-20261007'
+        timeout-minutes: 60
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 55 * 60))
+          while (( SECONDS < deadline )); do
+            response="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs" -f "head_sha=$GITHUB_SHA" -f "per_page=100")"
+            selected="$(jq -c --arg expected_name "RadarX Triple Radar CI" --arg expected_sha "$GITHUB_SHA" --arg expected_branch "$GITHUB_REF_NAME" \
+              '[.workflow_runs[] | select(.name == $expected_name and .head_sha == $expected_sha and .head_branch == $expected_branch)] | sort_by(.created_at) | last // empty' \
+              <<<"$response")"
+            if [[ -n "$selected" ]]; then
+              status="$(jq -r '.status' <<<"$selected")"
+              conclusion="$(jq -r '.conclusion // ""' <<<"$selected")"
+              run_url="$(jq -r '.html_url' <<<"$selected")"
+              echo "Triple Radar CI for $GITHUB_SHA: status=$status conclusion=$conclusion ($run_url)"
+              if [[ "$status" == "completed" ]]; then
+                if [[ "$conclusion" == "success" ]]; then
+                  echo "Exact-commit Triple Radar CI passed; release checks may begin."
+                  exit 0
+                fi
+                echo "::error::Refusing APK publication: Triple Radar CI did not pass on this exact commit ($conclusion)."
+                exit 1
+              fi
+            else
+              echo "Waiting for Triple Radar CI to start on exact SHA $GITHUB_SHA ..."
+            fi
+            sleep 15
+          done
+          echo "::error::Refusing APK publication: no successful Triple Radar CI completed for $GITHUB_SHA before timeout."
+          exit 1
       - name: Checkout exact release-signing branch
         uses: actions/checkout@v4
         with:
@@ -482,9 +516,8 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
 
-      - name: Android Emulator online/offline smoke test (best effort)
-        timeout-minutes: 6
-        continue-on-error: true
+      - name: Android Emulator online/offline smoke test (required before publication)
+        timeout-minutes: 15
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
