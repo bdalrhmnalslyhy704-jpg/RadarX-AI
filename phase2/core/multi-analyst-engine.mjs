@@ -281,25 +281,25 @@ const earlyOpportunity=(features,memory)=>{
   return {score:clamp(score),persistence:persistence+trajectoryBonus,move24,head,emaDist,trajectory_score:trajectory.score,trajectory_observations:trajectory.observations,pump_heat:pumpHeat,sniper_freshness:freshness};
 };
 const ANALYST_PROFILES=Object.freeze({
-  MARKET_REGIME:{group:'MACRO',role:'اتجاه السوق العام'},
-  MTF_ALIGNMENT:{group:'TREND',role:'توافق الأطر'},
-  MARKET_STRUCTURE:{group:'STRUCTURE',role:'هيكل السعر'},
-  BOTTOM_TURN:{group:'REVERSAL',role:'القاع والتحول'},
-  MOMENTUM:{group:'MOMENTUM',role:'قوة الحركة'},
-  VOLUME_CONFIRMATION:{group:'FLOW',role:'تأكيد التدفق والحجم'},
-  VOLATILITY_COMPRESSION:{group:'VOLATILITY',role:'الضغط والانفراج'},
-  PRE_BREAKOUT:{group:'BREAKOUT',role:'ما قبل الاختراق'},
-  SUPPORT_RESISTANCE:{group:'PRICE_ACTION',role:'الدعم والمقاومة'},
-  RELATIVE_STRENGTH:{group:'RELATIVE',role:'القوة النسبية'},
-  ORDERBOOK_PRESSURE:{group:'MICROSTRUCTURE',role:'ضغط دفتر الأوامر'},
-  LIQUIDITY_QUALITY:{group:'MICROSTRUCTURE',role:'جودة التنفيذ والسيولة'},
-  LARGE_PLAYER_PROXY:{group:'FLOW',role:'سلوك اللاعبين الكبار'},
-  ABSORPTION:{group:'FLOW',role:'امتصاص العرض والطلب'},
-  RISK_TRAPS:{group:'RISK',role:'الفخاخ والإرهاق'},
-  EXTENSION:{group:'RISK',role:'خطر مطاردة السعر'},
-  STRATEGY_CONSENSUS:{group:'STRATEGY',role:'إجماع الاستراتيجيات'},
-  MARKET_BREADTH:{group:'MACRO',role:'اتساع السوق'},
-  DATA_INTEGRITY:{group:'DATA',role:'سلامة البيانات'}
+  MARKET_REGIME:{group:'MACRO',evidence_family:'MARKET_CONTEXT',role:'اتجاه السوق العام'},
+  MTF_ALIGNMENT:{group:'TREND',evidence_family:'TREND_ALIGNMENT',role:'توافق الأطر'},
+  MARKET_STRUCTURE:{group:'STRUCTURE',evidence_family:'PRICE_STRUCTURE',role:'هيكل السعر'},
+  BOTTOM_TURN:{group:'REVERSAL',evidence_family:'PRICE_STRUCTURE',role:'القاع والتحول'},
+  MOMENTUM:{group:'MOMENTUM',evidence_family:'PRICE_MOMENTUM',role:'قوة الحركة'},
+  VOLUME_CONFIRMATION:{group:'FLOW',evidence_family:'VOLUME_FLOW',role:'تأكيد التدفق والحجم'},
+  VOLATILITY_COMPRESSION:{group:'VOLATILITY',evidence_family:'VOLATILITY_COMPRESSION',role:'الضغط والانفراج'},
+  PRE_BREAKOUT:{group:'BREAKOUT',evidence_family:'PRICE_STRUCTURE',role:'ما قبل الاختراق'},
+  SUPPORT_RESISTANCE:{group:'PRICE_ACTION',evidence_family:'PRICE_STRUCTURE',role:'الدعم والمقاومة'},
+  RELATIVE_STRENGTH:{group:'RELATIVE',evidence_family:'RELATIVE_STRENGTH',role:'القوة النسبية'},
+  ORDERBOOK_PRESSURE:{group:'MICROSTRUCTURE',evidence_family:'MICROSTRUCTURE',role:'ضغط دفتر الأوامر'},
+  LIQUIDITY_QUALITY:{group:'MICROSTRUCTURE',evidence_family:'MICROSTRUCTURE',role:'جودة التنفيذ والسيولة'},
+  LARGE_PLAYER_PROXY:{group:'FLOW',evidence_family:'VOLUME_FLOW',role:'سلوك اللاعبين الكبار'},
+  ABSORPTION:{group:'FLOW',evidence_family:'VOLUME_FLOW',role:'امتصاص العرض والطلب'},
+  RISK_TRAPS:{group:'RISK',evidence_family:'EXTENSION_RISK',role:'الفخاخ والإرهاق'},
+  EXTENSION:{group:'RISK',evidence_family:'EXTENSION_RISK',role:'خطر مطاردة السعر'},
+  STRATEGY_CONSENSUS:{group:'STRATEGY',evidence_family:'STRATEGY_CONSENSUS',role:'إجماع الاستراتيجيات'},
+  MARKET_BREADTH:{group:'MACRO',evidence_family:'MARKET_CONTEXT',role:'اتساع السوق'},
+  DATA_INTEGRITY:{group:'DATA',evidence_family:'DATA_INTEGRITY',role:'سلامة البيانات'}
 });
 
 const finiteEvidenceCount=(evidence)=>{
@@ -314,13 +314,13 @@ const finiteEvidenceCount=(evidence)=>{
 };
 
 const analyst=(id,name,score,direction='NEUTRAL',evidence={},risks=[])=>{
-  const profile=ANALYST_PROFILES[id]||{group:'OTHER',role:'محلل متخصص'};
+  const profile=ANALYST_PROFILES[id]||{group:'OTHER',evidence_family:'UNCLASSIFIED:'+id,role:'محلل متخصص'};
   const s=Math.round(clamp(score)*10)/10;
   const ev=finiteEvidenceCount(evidence);
   const coverage=ev.total?Math.round(ev.used/ev.total*1000)/1000:1;
   const bias=direction==='LONG'?s:direction==='BEARISH'?100-s:50;
   return {
-    id,name,group:profile.group,role:profile.role,
+    id,name,group:profile.group,evidence_family:profile.evidence_family,role:profile.role,
     score:s,direction,bias,
     decision:s>=80?'PASS':s>=65?'POSITIVE':s>=50?'WATCH':'FAIL',
     evidence,coverage,
@@ -725,6 +725,33 @@ class SelfCalibrator{
 }
 const GROUPS=['MACRO','TREND','STRUCTURE','REVERSAL','MOMENTUM','FLOW','VOLATILITY','BREAKOUT','PRICE_ACTION','RELATIVE','MICROSTRUCTURE','RISK','STRATEGY','DATA'];
 
+const buildEvidenceFamilyConsensus=(analysts,weights={})=>{
+  const groups=new Map();
+  for(const row of Array.isArray(analysts)?analysts:[]){
+    const family=String(row?.evidence_family||('UNCLASSIFIED:'+String(row?.id||'UNKNOWN')));
+    if(!groups.has(family))groups.set(family,[]);
+    groups.get(family).push(row);
+  }
+  const out={};
+  for(const [family,rows] of groups){
+    const memberWeights=rows.map(row=>Math.max(0,Number(weights[row.id])||0));
+    const memberWeightSum=memberWeights.reduce((sum,value)=>sum+value,0);
+    const score=memberWeightSum>0
+      ?rows.reduce((sum,row,index)=>sum+clamp(row.score)*memberWeights[index],0)/memberWeightSum
+      :(avg(rows.map(row=>clamp(row.score)))||50);
+    const longVotes=rows.filter(row=>row.direction==='LONG').length;
+    const bearishVotes=rows.filter(row=>row.direction==='BEARISH').length;
+    out[family]={
+      score:Math.round(score*10)/10,
+      median:Math.round((median(rows.map(row=>row.score))||50)*10)/10,
+      long_votes:longVotes,bearish_votes:bearishVotes,members:rows.length,
+      family_weight:memberWeights.length?Math.max(...memberWeights):0,
+      coverage:Math.round((avg(rows.map(row=>row.coverage))*100)||0)/100
+    };
+  }
+  return out;
+};
+
 const buildGroupConsensus=(analysts)=>{
   const out={};
   for(const group of GROUPS){
@@ -752,24 +779,25 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   }
   const safeAnalysts=Array.isArray(analysts)?analysts:[];
   const groupConsensus=buildGroupConsensus(safeAnalysts);
-  const weightedBase=safeAnalysts.reduce((sum,x)=>sum+clamp(x.score)*Number(weights[x.id]||0),0);
-  const weightSum=Object.values(weights).reduce((sum,x)=>sum+Number(x||0),0)||1;
-  const weightedScore=weightedBase/weightSum;
-  const analystMedian=median(safeAnalysts.map(x=>x.score))||50;
+  const familyConsensus=buildEvidenceFamilyConsensus(safeAnalysts,weights);
+  const familyRows=Object.values(familyConsensus);
+  const familyWeightSum=familyRows.reduce((sum,row)=>sum+row.family_weight,0)||1;
+  const weightedScore=familyRows.reduce((sum,row)=>sum+row.score*row.family_weight,0)/familyWeightSum;
+  const analystMedian=median(familyRows.map(x=>x.score))||50;
   const groupScores=Object.values(groupConsensus).map(x=>x.score);
   const groupMean=avg(groupScores)||50;
   const balancedScore=clamp(weightedScore*.62+analystMedian*.15+groupMean*.23);
 
-  const longStrength=safeAnalysts.reduce((s,x)=>s+(x.direction==='LONG'?Math.max(0,x.score-50):0),0);
-  const bearStrength=safeAnalysts.reduce((s,x)=>s+(x.direction==='BEARISH'?Math.max(0,x.score-50):0),0);
+  const longStrength=familyRows.reduce((sum,x)=>sum+(x.long_votes>x.bearish_votes?Math.max(0,x.score-50):0),0);
+  const bearStrength=familyRows.reduce((sum,x)=>sum+(x.bearish_votes>x.long_votes?Math.max(0,x.score-50):0),0);
   const directionEdge=longStrength-bearStrength;
-  const positive=safeAnalysts.filter(x=>x.score>=65&&x.direction!=='BEARISH').length;
-  const strong=safeAnalysts.filter(x=>x.score>=80&&x.direction==='LONG').length;
-  const bearishStrong=safeAnalysts.filter(x=>x.score>=75&&x.direction==='BEARISH').length;
+  const positive=familyRows.filter(x=>x.score>=65&&x.bearish_votes<=x.long_votes).length;
+  const strong=familyRows.filter(x=>x.score>=80&&x.long_votes>x.bearish_votes).length;
+  const bearishStrong=familyRows.filter(x=>x.score>=75&&x.bearish_votes>x.long_votes).length;
   const activeGroups=Object.keys(groupConsensus);
   const positiveGroups=activeGroups.filter(g=>groupConsensus[g].score>=62&&groupConsensus[g].long_votes>=1).length;
   const bearishGroups=activeGroups.filter(g=>groupConsensus[g].score<=42&&groupConsensus[g].bearish_votes>=1).length;
-  const analystDispersion=stdev(safeAnalysts.map(x=>x.score));
+  const analystDispersion=stdev(familyRows.map(x=>x.score));
   const groupDispersion=stdev(groupScores);
   const agreement=clamp(100-(analystDispersion||0)*2.35-(groupDispersion||0)*1.35);
   const avgCoverage=avg(safeAnalysts.map(x=>x.coverage))||0;
@@ -872,6 +900,7 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
     sniper_score:Math.round(sniperScore*10)/10,
     setup_fingerprint:Number.isFinite(fingerprint)?Math.round(fingerprint*10)/10:null,
     group_consensus:groupConsensus,
+    evidence_family_consensus:familyConsensus,
     strongest_analysts:top.map(x=>({id:x.id,name:x.name,score:x.score,group:x.group})),
     weakest_analysts:weak.map(x=>({id:x.id,name:x.name,score:x.score,group:x.group,direction:x.direction})),
     score_components:{
