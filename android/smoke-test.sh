@@ -46,11 +46,11 @@ start_app_and_wait_ready() {
 
   PHASE="wait for live process and resumed Activity"
   local pid="" top="" resumed="" ready=0
-  for attempt in $(seq 1 15); do
+  for attempt in $(seq 1 35); do
     pid="$(timeout 3s adb shell pidof com.radarx.app 2>/dev/null | tr -d '\\r' || true)"
     if [[ -n "${pid}" ]]; then
       top="$(timeout 4s adb shell dumpsys activity activities 2>/dev/null | tr -d '\\r' || true)"
-      resumed="$(printf '%s\\n' "${top}" | grep -E 'mResumedActivity|ResumedActivity' | tail -n 5 || true)"
+      resumed="$(printf '%s\\n' "${top}" | grep -E '^[[:space:]]*ResumedActivity:' | tail -n 5 || true)"
       if printf '%s\\n' "${resumed}" | grep -q 'com.radarx.app'; then
         ready=1
         break
