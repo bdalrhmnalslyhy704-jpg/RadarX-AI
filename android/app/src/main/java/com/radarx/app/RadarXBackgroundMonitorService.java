@@ -630,10 +630,10 @@ public final class RadarXBackgroundMonitorService extends Service {
         }
         if (durableCursor) {
             SharedPreferences p = prefs();
-            Set<String> pending = new HashSet<>(
+            Set<String> pendingNotificationIds = new HashSet<>(
                 p.getStringSet("radar_alert_pending_notification_ids", new HashSet<>()));
-            pending.add(notificationIdentity);
-            if (!p.edit().putStringSet("radar_alert_pending_notification_ids", pending).commit()) {
+            pendingNotificationIds.add(notificationIdentity);
+            if (!p.edit().putStringSet("radar_alert_pending_notification_ids", pendingNotificationIds).commit()) {
                 Log.w(TAG, "ALERT_POST_BLOCKED_PENDING_CHECKPOINT_FAILED key=" + notificationIdentity);
                 return false;
             }
