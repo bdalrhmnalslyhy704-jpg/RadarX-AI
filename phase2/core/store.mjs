@@ -16,7 +16,7 @@ const ORPHAN_TEMP_SUFFIX=/\.(?:tmp|repair|outcome|compact)-\d+-\d+$/;
 
 
 export class DurableStore {
-  constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
+  constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];this.preExpansionOutcomeCache=undefined;
     this.scanJourneyDir=join(dir,'scan-journeys');
     this.files={scanJourneyManifest:join(dir,'scan-journey-manifest.json'),subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
       signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),
@@ -190,14 +190,21 @@ export class DurableStore {
   }
   // Internal evaluation state only; no HTTP/API contract is exposed for this file.
   async getPreExpansionOutcomes(){
-    return this.readJson(this.files.preExpansionOutcomes);
+    // This store is owned by one backend process. Keep its parsed outcome ledger in
+    // memory so the 5,000-row file is not reparsed on every radar cycle. All writes
+    // still pass through the store lock and atomically refresh this cache.
+    if(this.preExpansionOutcomeCache!==undefined)return this.preExpansionOutcomeCache;
+    const state=await this.readJson(this.files.preExpansionOutcomes);
+    this.preExpansionOutcomeCache=state;
+    return state;
   }
   async updatePreExpansionOutcomes(updater){
     if(typeof updater!=='function')throw new Error('PRE_EXPANSION_OUTCOME_UPDATER_REQUIRED');
     return this.lock(async()=>{
-      let current=await this.readJson(this.files.preExpansionOutcomes);
+      let current=this.preExpansionOutcomeCache;
+      if(current===undefined)current=await this.readJson(this.files.preExpansionOutcomes);
       const result=await updater(current);
-      if(result===false)return current;
+      if(result===false){this.preExpansionOutcomeCache=current;return current;}
       const next=result&&typeof result==='object'&&!Array.isArray(result)?result:current;
       if(next!==current){
         // Drop the original parsed snapshot before serializing the normalized state.
@@ -206,6 +213,7 @@ export class DurableStore {
         await new Promise(resolve=>setImmediate(resolve));
       }
       await this.writeJson(this.files.preExpansionOutcomes,next);
+      this.preExpansionOutcomeCache=next;
       return next;
     });
   }
@@ -311,7 +319,7 @@ export class DurableStore {
     if(!validation.valid)throw new Error('SCAN_JOURNEY_INVALID:'+validation.errors.join(','));
     const cycleId=String(cycle.cycle_id);
     const filename=scanJourneyFilename(cycleId);
-    const max=Math.max(1024*1024,Number(maxBytes)||260*1024*1024);
+    const max=Math.max(1024*1024,Number(maxBytes)||160*1024*1024);
     return this.lock(async()=>{
       const state=this.scanJourneyState(await this.readJson(this.files.scanJourneyManifest));
       const prior=state.cycles.find(x=>x.cycle_id===cycleId);
@@ -393,8 +401,9 @@ export class DurableStore {
           for(const [symbol] of entries.slice(0,entries.length-10000))delete map[symbol];
         }
       }
-      // The Railway volume is shared with the existing signal archive. Use a rolling
-      // compressed journal ceiling so scan history cannot consume the whole 500 MB mount.
+      // The Railway volume is shared with outcome and alert archives. Retain at most
+      // 160 MiB of scan journeys, reserving the rest of the existing 500 MB mount for
+      // signal history, outcomes, and atomic-write headroom.
       const prunedFiles=[];
       while(state.compressed_bytes>max&&state.cycles.length>1){
         const oldest=state.cycles.shift();
@@ -668,11 +677,30 @@ export class DurableStore {
   async readRecent(kind,limit=100){
     const file=this.files[kind];
     if(!file)return[];
-    let s='';
-    try{s=await readFile(file,'utf8');}catch{return[];}
+    const safeLimit=Math.max(1,Math.trunc(Number(limit)||100));
+    // JSONL alert archives grow over time. Stream the file and keep only the last
+    // N raw lines, rather than reading/splitting the entire archive into heap memory.
+    const tail=new Array(safeLimit);
+    let count=0,cursor=0,input=null,lines=null;
+    try{
+      input=createReadStream(file,{encoding:'utf8'});
+      lines=createInterface({input,crlfDelay:Infinity});
+      for await(const line of lines){
+        if(!line)continue;
+        tail[cursor]=line;
+        cursor=(cursor+1)%safeLimit;
+        count=Math.min(safeLimit,count+1);
+      }
+    }catch{
+      return[];
+    }finally{
+      if(lines)lines.close();
+      if(input&&!input.destroyed)input.destroy();
+    }
+    const first=(cursor-count+safeLimit)%safeLimit;
     const rows=[];
-    for(const line of s.split('\n').filter(Boolean).slice(-Math.max(1,Number(limit)||100))){
-      try{rows.push(JSON.parse(line));}catch{}
+    for(let i=0;i<count;i++){
+      try{rows.push(JSON.parse(tail[(first+i)%safeLimit]));}catch{}
     }
     return rows.reverse();
   }

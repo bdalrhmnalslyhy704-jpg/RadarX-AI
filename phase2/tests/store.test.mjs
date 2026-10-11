@@ -19,6 +19,43 @@ test('TEST_FIXTURE: durable settings subscriptions and audit jsonl survive a fre
   assert.equal(rows[0].signal_id,'TEST_FIXTURE');assert.equal(rows[0].status,'SENT');
 });
 
+test('readRecent streams a growing JSONL archive and returns only its newest rows in reverse order',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-read-recent-stream-'));
+  const store=await new DurableStore({dir}).init();
+  const total=12000;
+  const body=Array.from({length:total},(_,seq)=>JSON.stringify({
+    id:'FALCON:'+seq,seq,radar:'FALCON_EYE_RADAR',symbol:'TESTUSDT',processed_at:seq+1,
+    payload:'x'.repeat(900)
+  })).join('\n')+'\n';
+  await writeFile(store.files.falconEyeAlerts,body,'utf8');
+  const rows=await store.readRecent('falconEyeAlerts',7);
+  assert.deepEqual(rows.map(row=>row.seq),[11999,11998,11997,11996,11995,11994,11993]);
+  assert.equal(rows[0].id,'FALCON:11999');
+  assert.equal(rows.length,7);
+});
+
+test('the pre-expansion outcome ledger is cached and refreshed by atomic updates without reparsing the full file',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-outcome-cache-'));
+  const store=await new DurableStore({dir}).init();
+  const originalReadJson=store.readJson.bind(store);
+  let outcomeFileReads=0;
+  store.readJson=async path=>{
+    if(path===store.files.preExpansionOutcomes)outcomeFileReads++;
+    return originalReadJson(path);
+  };
+  const first=await store.getPreExpansionOutcomes();
+  assert.equal(outcomeFileReads,1);
+  const second=await store.getPreExpansionOutcomes();
+  assert.strictEqual(second,first);
+  assert.equal(outcomeFileReads,1);
+  await store.updatePreExpansionOutcomes(raw=>({...raw,records:[],cache_test_marker:'persisted'}));
+  assert.equal(outcomeFileReads,1,'an in-process outcome update must not reparse the whole durable JSON file');
+  const refreshed=await store.getPreExpansionOutcomes();
+  assert.equal(refreshed.cache_test_marker,'persisted');
+  assert.equal(outcomeFileReads,1);
+  const reopened=await new DurableStore({dir}).init();
+  assert.equal((await reopened.getPreExpansionOutcomes()).cache_test_marker,'persisted');
+});
 
 test('TEST_FIXTURE: Radar 4 alert log survives fresh reads',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-radar4-store-'));
