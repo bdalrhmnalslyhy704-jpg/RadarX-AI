@@ -146,7 +146,7 @@ public final class RadarXBackgroundMonitorService extends Service {
                 JSONArray alerts = root.optJSONArray("alerts");
                 boolean cursorAdvanceAllowed = meta == null || meta.optBoolean("cursor_advance_allowed", true);
                 int count = notifyNewRadarAlerts(alerts == null ? new JSONArray() : alerts,
-                    root.optBoolean("oldest_first", false), root.optJSONObject("next_cursor"), cursorAdvanceAllowed);
+                    root.optBoolean("oldest_first", false), cursorAdvanceAllowed);
                 JSONArray radars = root.optJSONArray("radars");
                 updateStatus("رادارات مستقلة • " + (radars == null ? 6 : radars.length()) +
                     " • اكتشافات جديدة: " + count);
@@ -404,64 +404,95 @@ public final class RadarXBackgroundMonitorService extends Service {
         root.put("alerts", sorted);
     }
 
-    private int notifyNewRadarAlerts(JSONArray alerts, boolean oldestFirst, JSONObject nextCursor, boolean cursorAdvanceAllowed) {
+    /**
+     * Process a replay page monotonically. The server's next_cursor is never
+     * committed up front: every row must first be safely skipped as already handled
+     * or accepted by Android's NotificationManager, otherwise the durable cursor
+     * stays immediately before the row and the next poll retries it.
+     *
+     * A successful notify() call only means Android accepted the post request;
+     * it is not proof that the notification was displayed or seen by the user.
+     */
+    private int notifyNewRadarAlerts(JSONArray alerts, boolean oldestFirst, boolean cursorAdvanceAllowed) {
         Set<String> seen = new HashSet<>(prefs().getStringSet("radar_alert_seen_ids", new HashSet<>()));
-        // Keep a separate bounded de-duplication ledger for best-effort fallback
-        // alerts. When the durable endpoint returns, these IDs suppress duplicates
-        // while the real compound cursor safely drains the complete archive.
         Set<String> fallbackSeen = new HashSet<>(prefs().getStringSet("radar_alert_fallback_seen_ids", new HashSet<>()));
-        long cursor = prefs().getLong("radar_alert_cursor_at", 0L);
-        String cursorId = prefs().getString("radar_alert_cursor_id", "");
-        long maxAt = cursor;
-        String maxCursorId = cursorId;
-        // Trust the server's compound cursor for chronological replay; its tie ordering
-        // must not be reinterpreted with Java's different String collation rules.
-        if (cursorAdvanceAllowed && oldestFirst && nextCursor != null) {
-            maxAt = Math.max(cursor, nextCursor.optLong("since", cursor));
-            if (nextCursor.optLong("since", cursor) >= cursor) {
-                maxCursorId = nextCursor.optString("since_id", cursorId);
-            }
-        }
         int count = 0;
         int start = oldestFirst ? 0 : alerts.length() - 1;
         int end = oldestFirst ? alerts.length() : -1;
         int step = oldestFirst ? 1 : -1;
+
         for (int i = start; i != end; i += step) {
             JSONObject alert = alerts.optJSONObject(i);
             if (alert == null) continue;
+
             long at = alert.optLong("replay_cursor_at",
                 alert.optLong("processed_at", alert.optLong("detected_at", alert.optLong("detectedAt", 0L))));
             String id = alert.optString("id", "");
-            String replayCursorId = alert.optString("replay_cursor_id", "");
-            if (replayCursorId.isEmpty()) {
-                replayCursorId = alert.optString("radar", "UNKNOWN_RADAR") + "|" +
-                    (id.isEmpty() ? alert.optString("symbol", "UNKNOWN") + ":" + at : id);
+            String radar = alert.optString("radar", "UNKNOWN_RADAR").toUpperCase(Locale.ROOT);
+            String replayKey = alert.optString("replay_cursor_id", "");
+            if (replayKey.isEmpty()) {
+                // Match DurableStore.readAlertPage(): radar + stable event identity.
+                String identity = id;
+                if (identity.isEmpty()) {
+                    identity = alert.optString("symbol", "") + ":" +
+                        alert.optString("event", alert.optString("type", "")) + ":" + at;
+                }
+                replayKey = radar + "|" + identity;
             }
-            if (cursorAdvanceAllowed && !(oldestFirst && nextCursor != null) &&
-                (at > maxAt || (at == maxAt && replayCursorId.compareTo(maxCursorId) > 0))) {
-                maxAt = at;
-                maxCursorId = replayCursorId;
+
+            if (cursorAdvanceAllowed && at <= 0L) {
+                // A durable row without a valid cursor must never be silently consumed.
+                Log.w(TAG, "BACKGROUND_ALERT_CURSOR_INVALID; keeping durable cursor before row");
+                break;
             }
-            if (!alert.optBoolean("eligible", true)) continue;
-            if (id.isEmpty() || seen.contains(id) || fallbackSeen.contains(id)) continue;
-            notifyRadarAlert(alert);
-            if (cursorAdvanceAllowed) seen.add(id); else fallbackSeen.add(id);
-            count++;
-        }
-        if (cursorAdvanceAllowed) {
-            while (seen.size() > 300) seen.remove(seen.iterator().next());
-            prefs().edit().putLong("radar_alert_cursor_at", maxAt)
-                .putString("radar_alert_cursor_id", maxCursorId)
-                .putStringSet("radar_alert_seen_ids", seen).apply();
-        } else {
-            while (fallbackSeen.size() > 5000) fallbackSeen.remove(fallbackSeen.iterator().next());
-            // Do not persist a newer archive cursor from this incomplete feed.
-            prefs().edit().putStringSet("radar_alert_fallback_seen_ids", fallbackSeen).apply();
+
+            boolean alreadyHandled = seen.contains(replayKey) ||
+                (!id.isEmpty() && seen.contains(id)) ||
+                fallbackSeen.contains(replayKey) ||
+                (!id.isEmpty() && fallbackSeen.contains(id));
+            boolean eligible = alert.optBoolean("eligible", true);
+
+            if (cursorAdvanceAllowed) {
+                if (eligible && !alreadyHandled) {
+                    if (!notifyRadarAlert(alert)) {
+                        // Keep this event and all later events pending for the next poll.
+                        Log.w(TAG, "BACKGROUND_ALERT_POST_BLOCKED; durable cursor not advanced; key=" + replayKey);
+                        break;
+                    }
+                    seen.add(replayKey);
+                    count++;
+                }
+
+                // Persist after each safely handled event, not at the end of the page.
+                // A crash during a long replay therefore cannot skip the unprocessed tail.
+                persistDurableAlertCursor(at, replayKey, seen);
+            } else {
+                // Bounded legacy endpoints are opportunistic only. Never use them to
+                // advance the cursor into the complete archive.
+                if (!eligible || alreadyHandled) continue;
+                if (!notifyRadarAlert(alert)) {
+                    Log.w(TAG, "BACKGROUND_FALLBACK_ALERT_POST_BLOCKED; durable cursor unchanged; key=" + replayKey);
+                    break;
+                }
+                fallbackSeen.add(replayKey);
+                count++;
+                while (fallbackSeen.size() > 5000) fallbackSeen.remove(fallbackSeen.iterator().next());
+                prefs().edit().putStringSet("radar_alert_fallback_seen_ids", fallbackSeen).apply();
+            }
         }
         return count;
     }
 
-    private void notifyRadarAlert(JSONObject alert) {
+    private void persistDurableAlertCursor(long at, String replayKey, Set<String> seen) {
+        while (seen.size() > 300) seen.remove(seen.iterator().next());
+        prefs().edit()
+            .putLong("radar_alert_cursor_at", at)
+            .putString("radar_alert_cursor_id", replayKey)
+            .putStringSet("radar_alert_seen_ids", seen)
+            .apply();
+    }
+
+    private boolean notifyRadarAlert(JSONObject alert) {
         String radar = alert.optString("radar", "UNKNOWN_RADAR");
         String radarName = alert.optString("radar_name", radarNameFor(radar));
         String symbol = alert.optString("symbol", "UNKNOWN");
@@ -518,8 +549,29 @@ public final class RadarXBackgroundMonitorService extends Service {
             .setPriority(Notification.PRIORITY_HIGH);
 
         NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        if (manager != null) {
+        if (manager == null) {
+            Log.w(TAG, "ALERT_POST_BLOCKED_NOTIFICATION_MANAGER_UNAVAILABLE");
+            return false;
+        }
+        if (!manager.areNotificationsEnabled()) {
+            Log.w(TAG, "ALERT_POST_BLOCKED_NOTIFICATIONS_DISABLED");
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= 26) {
+            NotificationChannel channel = manager.getNotificationChannel(CHANNEL_RADAR_ALERTS);
+            if (channel == null || channel.getImportance() == NotificationManager.IMPORTANCE_NONE) {
+                Log.w(TAG, "ALERT_POST_BLOCKED_CHANNEL_DISABLED");
+                return false;
+            }
+        }
+        try {
             manager.notify(notificationIdentity, notificationId, builder.build());
+            // This records acceptance by NotificationManager only, not device delivery.
+            Log.i(TAG, "ALERT_POST_REQUEST_ACCEPTED");
+            return true;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "ALERT_POST_FAILED", error);
+            return false;
         }
     }
 
