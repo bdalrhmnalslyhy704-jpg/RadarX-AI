@@ -39,6 +39,12 @@ assert.match(service, /notifyNewRadarAlerts\(JSONArray alerts, boolean oldestFir
   'notifications must preserve oldest-first replay order after reconnect');
 assert.match(service, /persistDurableAlertCursor\(at, replayKey, seen\)/,
   'the durable replay cursor must advance only after each individual event has been handled');
+assert.match(service, /private boolean persistDurableAlertCursor\(long at, String replayKey, Set<String> seen\)/,
+  'cursor checkpoint persistence must return a success state');
+assert.match(service, /\.putStringSet\("radar_alert_seen_ids", seen\)\s*\.commit\(\)/,
+  'each handled event must persist its compound cursor synchronously before the next event');
+assert.match(service, /if \(!persistDurableAlertCursor\(at, replayKey, seen\)\)/,
+  'replay must stop when local cursor persistence fails');
 assert.doesNotMatch(service, /maxAt = Math\.max\(cursor, nextCursor\.optLong\("since", cursor\)\)/,
   'the page next_cursor must never leap past events that have not been posted or safely skipped');
 assert.match(service, /private boolean notifyRadarAlert\(JSONObject alert\)/,
