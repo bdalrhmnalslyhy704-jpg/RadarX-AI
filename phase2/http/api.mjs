@@ -485,18 +485,18 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         }
       }
       if(u.pathname==='/api/whale-accumulation-radar'&&req.method==='GET'){
-        if(!whaleAccumulationRadar)return send(res,503,{error:'WHALE_ACCUMULATION_RADAR_UNAVAILABLE',radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان',candidates:[],confirmed_count:0,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        if(!whaleAccumulationRadar)return send(res,503,{error:'WHALE_ACCUMULATION_RADAR_UNAVAILABLE',radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان',candidates:[],confirmed_count:0,possible_count:0,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         const limit=Math.max(1,Math.min(50,Math.trunc(Number(u.searchParams.get('limit')||20))));
         const runNow=String(u.searchParams.get('scan')||'')==='1';
         try{
           const before=whaleAccumulationRadar.health?.()||{};
           if(runNow&&before.busy!==true&&typeof whaleAccumulationRadar.tick==='function')await whaleAccumulationRadar.tick();
-          const snapshot=whaleAccumulationRadar.snapshot?.(limit)||{radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان',candidates:[],confirmed_count:0};
+          const snapshot=whaleAccumulationRadar.snapshot?.(limit)||{radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان',candidates:[],confirmed_count:0,possible_count:0};
           const health=whaleAccumulationRadar.health?.()||{running:false};
           const alerts=typeof store.readWhaleAccumulationAlerts==='function'?await store.readWhaleAccumulationAlerts({limit}):[];
           return send(res,200,{...snapshot,alerts,monitoring:health,scan:{requested:runNow,completed:health.last_scan_at!=null,error:health.last_error||null},meta:{...(snapshot.meta||{}),live:health.running===true,radar:'WHALE_ACCUMULATION_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         }catch(e){
-          const snapshot=whaleAccumulationRadar.snapshot?.(limit)||{radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان',candidates:[],confirmed_count:0};
+          const snapshot=whaleAccumulationRadar.snapshot?.(limit)||{radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان',candidates:[],confirmed_count:0,possible_count:0};
           const health=whaleAccumulationRadar.health?.()||{running:false};
           return send(res,200,{...snapshot,status:'not_ready',error:String(e?.message??e),alerts:[],monitoring:health,scan:{requested:runNow,completed:false,error:String(e?.message??e)},meta:{...(snapshot.meta||{}),live:false,radar:'WHALE_ACCUMULATION_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         }

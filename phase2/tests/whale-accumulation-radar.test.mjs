@@ -1,6 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {WhaleAccumulationRadar} from '../core/whale-accumulation-radar.mjs';
+import {WhaleAccumulationRadar,buildWhaleAccumulationAnalysis,buildWhaleAccumulationAlert} from '../core/whale-accumulation-radar.mjs';
+
+test('Whale accumulation fails closed when any primary public market source is unavailable',()=>{
+  const input={ticker:{symbol:'TESTUSDT',lastPrice:1,priceChange24h:0,quoteVolume24h:2_000_000},
+    oneMinute:[],fiveMinute:[],aggTrades:[],book:null,previousBook:null,now:1_800_000_000_000};
+  const analysis=buildWhaleAccumulationAnalysis(input);
+  assert.equal(analysis.eligible,false);
+  assert.equal(analysis.stage,'DATA_UNAVAILABLE');
+  assert.equal(analysis.data_status,'DATA_UNAVAILABLE');
+  assert.deepEqual(analysis.missing_sources,['aggTrades','klines_1m','klines_5m','orderbook_depth']);
+  assert.ok(Object.values(analysis.source_availability).every(value=>value==='UNAVAILABLE'));
+  const alert=buildWhaleAccumulationAlert(input,input.now);
+  assert.equal(alert.eligible,false);
+  assert.equal(alert.potential_label,'DATA_UNAVAILABLE');
+  assert.notEqual(alert.event,'WHALE_ACCUMULATION_CONFIRMED');
+  assert.equal(alert.confidence_score,'UNKNOWN');
+  assert.equal(alert.real_order_execution,false);
+});
 
 test('Whale radar fills unique rotation slots when patrol overlaps quiet high-volume anchors',()=>{
   const radar=new WhaleAccumulationRadar({

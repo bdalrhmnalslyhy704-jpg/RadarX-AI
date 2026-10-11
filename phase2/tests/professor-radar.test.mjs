@@ -49,7 +49,8 @@ test('TEST_PROFESSOR: scan fuses public stream + news + Binance technical confir
     {videoRenderer:{videoId:'abc123',title:{simpleText:'BTC buy long breakout LIVE'},descriptionSnippet:{runs:[{text:'BTC entry now'}]},ownerText:{simpleText:'Test Trader'},viewCountText:{simpleText:'1K'},badges:[{metadataBadgeRenderer:{label:{simpleText:'LIVE NOW'}}}],thumbnailOverlays:[]}}
   ]}}]}}}}};
   const player={};
-  const gdelt={articles:[{title:'Bitcoin partnership boosts market growth',url:'https://example.com/news/1',domain:'example.com',datetime:'2026-10-04T18:00:00Z',tone:4}]};
+  const now=Date.parse('2026-10-11T18:00:00Z');
+  const gdelt={articles:[{title:'Bitcoin partnership boosts market growth',url:'https://example.com/news/1',domain:'example.com',datetime:'2026-10-11T17:00:00Z',tone:4}]};
   const fetchImpl=async url=>{
     const u=String(url);
     if(u.includes('youtube.com/results?search_query='))return new Response('var ytInitialData = '+JSON.stringify(ytData)+';',{status:200});
@@ -57,7 +58,7 @@ test('TEST_PROFESSOR: scan fuses public stream + news + Binance technical confir
     if(u.includes('api.gdeltproject.org'))return new Response(JSON.stringify(gdelt),{status:200,headers:{'content-type':'application/json'}});
     throw new Error('UNEXPECTED_URL');
   };
-  const radar=new ProfessorRadar({rest,store,deepAnalyzer,fetchImpl,config:{liveSearchLimit:8,transcriptStreams:1,newsLimit:10,deepCandidates:5,deepConcurrency:1,alertCooldownMs:0,minEntryScore:78,minWatchScore:66},clock:()=>1700000000000,logger:{warn(){}}});
+  const radar=new ProfessorRadar({rest,store,deepAnalyzer,fetchImpl,config:{liveSearchLimit:8,transcriptStreams:1,newsLimit:10,deepCandidates:5,deepConcurrency:1,alertCooldownMs:0,minEntryScore:78,minWatchScore:66},clock:()=>now,logger:{warn(){}}});
   radar.running=true;
   const ok=await radar.tick();
   radar.running=false;
@@ -66,6 +67,13 @@ test('TEST_PROFESSOR: scan fuses public stream + news + Binance technical confir
   assert.equal(snap.radar,'PROFESSOR_RADAR');
   assert.equal(snap.streams.live_count,1);
   assert.equal(snap.news.count,1);
+  assert.equal(snap.news.items[0].published_at,Date.parse('2026-10-11T17:00:00Z'));
+  assert.equal(snap.news.items[0].published_at_iso,'2026-10-11T17:00:00.000Z');
+  assert.equal(snap.news.items[0].retrieved_at,'2026-10-11T18:00:00.000Z');
+  assert.equal(snap.news.items[0].freshness_status,'FRESH');
+  assert.equal(snap.news.items[0].claim_status,'UNVERIFIED_PUBLIC_CLAIM');
+  assert.equal(snap.streams.items[0].retrieved_at,'2026-10-11T18:00:00.000Z');
+  assert.equal(snap.streams.items[0].freshness_status,'LIVE_AT_RETRIEVAL');
   assert.equal(snap.candidates[0].symbol,'BTCUSDT');
   assert.equal(snap.candidates[0].opinion.action,'PAPER_ENTRY_CANDIDATE');
   assert.equal(alerts.length,1);
