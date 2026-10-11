@@ -238,13 +238,6 @@ REPLAY_LOG_FILE="${REPLAY_TMP}/radarx-replay-logcat.txt"
 : > "${REPLAY_LOG_FILE}"
 # One persistent log stream avoids repeatedly invoking adb logcat -d inside the
 # replay wait loop; all assertions still inspect actual Android runtime logs.
-adb logcat -v brief -s RadarXBackground:I RadarXSmoke:I AndroidRuntime:E '*:S' >> "${REPLAY_LOG_FILE}" 2>&1 &
-REPLAY_LOGCAT_PID=$!
-sleep 1
-if ! kill -0 "${REPLAY_LOGCAT_PID}" 2>/dev/null; then
-  echo "::error::Could not start Android replay log capture"
-  exit 1
-fi
 replay_logs() { cat "${REPLAY_LOG_FILE}"; }
 accepted_log_count() {
   grep -F 'ALERT_POST_REQUEST_ACCEPTED key=' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' '
@@ -265,10 +258,17 @@ timeout 10s adb shell cmd connectivity airplane-mode disable >/dev/null 2>&1 || 
 timeout 15s adb shell am force-stop com.radarx.app >/dev/null 2>&1 || true
 timeout 20s adb shell pm clear com.radarx.app
 timeout 10s adb logcat -c
+adb logcat -v brief -s RadarXBackground:I RadarXSmoke:I AndroidRuntime:E '*:S' >> "${REPLAY_LOG_FILE}" 2>&1 &
+REPLAY_LOGCAT_PID=$!
+sleep 1
+if ! kill -0 "${REPLAY_LOGCAT_PID}" 2>/dev/null; then
+  echo "::error::Could not start Android replay log capture"
+  exit 1
+fi
 launch_replay_test_app
 replay_ready=0
 for attempt in $(seq 1 35); do
-  logs="$(timeout 5s adb logcat -d -s RadarXSmoke:I RadarXBackground:I '*:S' 2>/dev/null || true)"
+  logs="$(replay_logs)"
   if printf '%s\n' "${logs}" | grep -Fq 'REPLAY_TEST_OVERRIDE_CONFIGURED' &&
      printf '%s\n' "${logs}" | grep -Fq 'BACKGROUND_SERVICE_READY' &&
      printf '%s\n' "${logs}" | grep -Fq 'DEBUG_REPLAY_TEST_FEED_ACTIVE'; then
@@ -334,7 +334,7 @@ for attempt in $(seq 1 120); do
     for restart_attempt in $(seq 1 30); do
       new_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
       ready_count="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
-      logs="$(timeout 5s adb logcat -d -s RadarXSmoke:I RadarXBackground:I '*:S' 2>/dev/null || true)"
+      logs="$(replay_logs)"
       if [[ -n "${new_pid}" && "${ready_count}" -gt "${before_ready}" ]] &&
          printf '%s\n' "${logs}" | grep -Fq 'REPLAY_TEST_OVERRIDE_CONFIGURED'; then
         restarted_ready=1
