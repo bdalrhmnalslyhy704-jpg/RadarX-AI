@@ -32,8 +32,10 @@ import java.util.Set;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.Locale;
 import java.util.List;
 
@@ -72,6 +74,8 @@ public final class RadarXBackgroundMonitorService extends Service {
     private static final long HEARTBEAT_STALE_MS = 5 * 60_000L;
 
     private ScheduledExecutorService executor;
+    private ScheduledFuture<?> scanFuture;
+    private final AtomicBoolean scanInProgress = new AtomicBoolean(false);
     private volatile boolean stopping;
     private volatile boolean loggedFirstScan;
     private final DecimalFormat scoreFmt = new DecimalFormat("0.0");
@@ -80,11 +84,7 @@ public final class RadarXBackgroundMonitorService extends Service {
     public void onCreate() {
         super.onCreate();
         createChannels();
-        executor = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "RadarX-Background");
-            t.setDaemon(true);
-            return t;
-        });
+        executor = newScanExecutor();
     }
 
     @Override
@@ -120,20 +120,32 @@ public final class RadarXBackgroundMonitorService extends Service {
         return START_STICKY;
     }
 
-    private void scheduleScan() {
-        if (executor == null || executor.isShutdown()) return;
-        executor.shutdownNow();
-        executor = Executors.newSingleThreadScheduledExecutor(r -> {
+    private ScheduledExecutorService newScanExecutor() {
+        return Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "RadarX-Background");
             t.setDaemon(true);
             return t;
         });
+    }
+
+    private void scheduleScan() {
+        // Repeated START intents must not interrupt a scan and create a second
+        // scheduler while the first invocation is still posting/checkpointing alerts.
+        if (executor == null || executor.isShutdown()) {
+            executor = newScanExecutor();
+            scanFuture = null;
+        }
+        if (scanFuture != null && !scanFuture.isCancelled() && !scanFuture.isDone()) {
+            Log.i(TAG, "BACKGROUND_SCHEDULER_ALREADY_RUNNING");
+            return;
+        }
+
         long scanInterval = SCAN_MS;
         if (isDebugBuild()) {
             long requestedInterval = prefs().getLong("radarx_test_scan_interval_ms", 0L);
             if (requestedInterval >= 500L && requestedInterval <= 5000L) scanInterval = requestedInterval;
         }
-        executor.scheduleWithFixedDelay(this::scanOnceSafe, 0L, scanInterval, TimeUnit.MILLISECONDS);
+        scanFuture = executor.scheduleWithFixedDelay(this::scanOnceSafe, 0L, scanInterval, TimeUnit.MILLISECONDS);
     }
 
     private boolean isDebugBuild() {
@@ -142,8 +154,12 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     private void scanOnceSafe() {
         if (stopping) return;
-        touchHeartbeat();
+        if (!scanInProgress.compareAndSet(false, true)) {
+            Log.w(TAG, "BACKGROUND_SCAN_SKIPPED_OVERLAP");
+            return;
+        }
         try {
+            touchHeartbeat();
             long cursor = currentAlertCursor();
             String cursorId = prefs().getString("radar_alert_cursor_id", "");
             JSONObject root = fetchRadarAlertsFeed(cursor, cursorId);
@@ -166,6 +182,8 @@ public final class RadarXBackgroundMonitorService extends Service {
             if (!loggedFirstScan) { loggedFirstScan = true; Log.w(TAG, "BACKGROUND_SCAN_ERROR", error); }
             Log.w(TAG, "Background unified radar fetch failed", error);
             updateStatus("لا يوجد اتصال بالخادم الآن • تعذر التحقق من التنبيهات • ستستأنف المراقبة ويُراجع السجل الدائم عند عودة الاتصال");
+        } finally {
+            scanInProgress.set(false);
         }
     }
 
@@ -470,7 +488,7 @@ public final class RadarXBackgroundMonitorService extends Service {
 
             if (cursorAdvanceAllowed) {
                 if (eligible && !alreadyHandled) {
-                    if (!notifyRadarAlert(alert)) {
+                    if (!notifyRadarAlert(alert, replayKey, true)) {
                         // Keep this event and all later events pending for the next poll.
                         Log.w(TAG, "BACKGROUND_ALERT_POST_BLOCKED; durable cursor not advanced; key=" + replayKey);
                         break;
@@ -490,7 +508,7 @@ public final class RadarXBackgroundMonitorService extends Service {
                 // Bounded legacy endpoints are opportunistic only. Never use them to
                 // advance the cursor into the complete archive.
                 if (!eligible || alreadyHandled) continue;
-                if (!notifyRadarAlert(alert)) {
+                if (!notifyRadarAlert(alert, replayKey, false)) {
                     Log.w(TAG, "BACKGROUND_FALLBACK_ALERT_POST_BLOCKED; durable cursor unchanged; key=" + replayKey);
                     break;
                 }
@@ -505,15 +523,35 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     private boolean persistDurableAlertCursor(long at, String replayKey, Set<String> seen) {
         while (seen.size() > 300) seen.remove(seen.iterator().next());
-        // commit() makes each checkpoint durable before the next event is consumed.
-        return prefs().edit()
+        SharedPreferences p = prefs();
+        Set<String> pending = new HashSet<>(
+            p.getStringSet("radar_alert_pending_notification_ids", new HashSet<>()));
+        pending.remove(replayKey);
+        // The event cursor and pending-notification cleanup are one durable checkpoint.
+        // This closes the post-accepted/pre-cursor crash window without posting twice.
+        return p.edit()
             .putLong("radar_alert_cursor_at", at)
             .putString("radar_alert_cursor_id", replayKey)
             .putStringSet("radar_alert_seen_ids", seen)
+            .putStringSet("radar_alert_pending_notification_ids", pending)
             .commit();
     }
 
-    private boolean notifyRadarAlert(JSONObject alert) {
+    private boolean hasActiveAlertNotification(NotificationManager manager, String tag, int id) {
+        if (Build.VERSION.SDK_INT < 23) return false;
+        try {
+            android.service.notification.StatusBarNotification[] active = manager.getActiveNotifications();
+            if (active == null) return false;
+            for (android.service.notification.StatusBarNotification item : active) {
+                if (item.getId() == id && tag.equals(item.getTag())) return true;
+            }
+        } catch (RuntimeException error) {
+            Log.w(TAG, "ALERT_ACTIVE_NOTIFICATION_QUERY_FAILED", error);
+        }
+        return false;
+    }
+
+    private boolean notifyRadarAlert(JSONObject alert, String replayIdentity, boolean durableCursor) {
         String radar = alert.optString("radar", "UNKNOWN_RADAR");
         String radarName = alert.optString("radar_name", radarNameFor(radar));
         String symbol = alert.optString("symbol", "UNKNOWN");
@@ -543,10 +581,14 @@ public final class RadarXBackgroundMonitorService extends Service {
             " • Score " + scoreFmt.format(score) + " • " + stage;
         String timing = "وقت اكتشاف الخادم/العملة: " + detectedText + " • وقت إرسال الإشعار: " + formatTimestamp12h(System.currentTimeMillis()) + " • Asia/Aden • 12h";
 
-        String notificationIdentity = alert.optString("replay_cursor_id", "");
-        if (notificationIdentity.isEmpty()) notificationIdentity = alert.optString("id", "");
+        String notificationIdentity = replayIdentity == null ? "" : replayIdentity.trim();
+        if (notificationIdentity.isEmpty()) notificationIdentity = alert.optString("replay_cursor_id", "");
         if (notificationIdentity.isEmpty()) {
-            notificationIdentity = radar + "|" + symbol + "|" + detectedAt + "|" + stage;
+            String id = alert.optString("id", "");
+            String identity = id.isEmpty()
+                ? symbol + ":" + alert.optString("event", alert.optString("type", "")) + ":" + detectedAt
+                : id;
+            notificationIdentity = radar.toUpperCase(Locale.ROOT) + "|" + identity;
         }
         int notificationId = 45_000 + Math.floorMod(notificationIdentity.hashCode(), 1_000_000_000);
 
@@ -586,6 +628,29 @@ public final class RadarXBackgroundMonitorService extends Service {
                 return false;
             }
         }
+        boolean wasPendingReservation = false;
+        if (durableCursor) {
+            SharedPreferences p = prefs();
+            Set<String> pendingNotificationIds = new HashSet<>(
+                p.getStringSet("radar_alert_pending_notification_ids", new HashSet<>()));
+            wasPendingReservation = pendingNotificationIds.contains(notificationIdentity);
+            pendingNotificationIds.add(notificationIdentity);
+            if (!p.edit().putStringSet("radar_alert_pending_notification_ids", pendingNotificationIds).commit()) {
+                Log.w(TAG, "ALERT_POST_BLOCKED_PENDING_CHECKPOINT_FAILED key=" + notificationIdentity);
+                return false;
+            }
+        }
+
+        // An existing durable reservation means the previous process may have posted
+        // the notification but died before committing its compound cursor. Only in that
+        // crash window do we enumerate active notifications; fresh alerts should not
+        // repeatedly parcel the whole notification tray (which grows during replay).
+        if ((!durableCursor || wasPendingReservation) &&
+                hasActiveAlertNotification(manager, notificationIdentity, notificationId)) {
+            if (isDebugBuild()) Log.i(TAG, "ALERT_POST_RECONCILED_ACTIVE key=" + notificationIdentity);
+            return true;
+        }
+
         try {
             manager.notify(notificationIdentity, notificationId, builder.build());
             // This records acceptance by NotificationManager only, not device delivery.

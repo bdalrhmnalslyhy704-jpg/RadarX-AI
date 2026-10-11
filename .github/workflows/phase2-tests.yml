@@ -1,7 +1,7 @@
 name: RadarX Phase 2 Tests
 on:
   push:
-    branches: ['phase2-*', 'build224-sniper-selection-v1', 'fix/build224-quiet-fair-rotation-20261009', 'feat/build224-pre-expansion-fingerprint-20261009', 'feature/build224-market-wide-light-scan-20261010', 'feature/build224-event-breakout-integrated-v4-20261011']
+    branches: ['phase2-*', 'build224-sniper-selection-v1', 'fix/build224-quiet-fair-rotation-20261009', 'feat/build224-pre-expansion-fingerprint-20261009', 'feature/build224-market-wide-light-scan-20261010', 'feature/build224-event-breakout-integrated-v4-20261011', 'fix/build224-smoke-release-gate-20261011']
   pull_request:
     branches: [main, 'build224-multi-analyst-20261007']
   workflow_dispatch:
@@ -33,6 +33,9 @@ jobs:
       - name: Run Phase 1 and Phase 2 tests
         run: npm test
         timeout-minutes: 25
+      - name: Measure archive memory, disk pressure, retention and HTTP resilience
+        run: node phase2/tools/archive-resource-soak.mjs
+        timeout-minutes: 10
       - name: Probe Binance market-data WebSocket and bounded REST fallback
         run: node phase2/tests/market-data-connectivity-smoke.mjs
         timeout-minutes: 1

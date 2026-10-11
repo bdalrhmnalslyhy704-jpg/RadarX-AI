@@ -19,6 +19,7 @@ on:
       - build224-falcon-eye-ogn-v1
       - build224-persistent-archive-20261009
       - feature/build224-event-breakout-integrated-v4-20261011
+      - fix/build224-smoke-release-gate-20261011
   pull_request:
     branches:
       - phase3-triple-radar
@@ -155,3 +156,12 @@ jobs:
           target: default
           arch: x86_64
           script: RADARX_APK_PATH=android/app/build/outputs/apk/debug/app-debug.apk bash android/smoke-test.sh
+
+      - name: Upload Android validation APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-android-validation-${{ github.sha }}
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7

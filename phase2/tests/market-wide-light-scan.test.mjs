@@ -804,3 +804,33 @@ test('archive rehydration retries newly eligible and re-entering symbols with a 
   assert.equal(calls.flat().includes('AAAUSDT')&&calls.length===4,true,
     'already-ready symbols are not redundantly re-read from the archive');
 });
+
+
+test('bounded candle cache keeps the owned sorted array and avoids per-frame full-array rebuilds',()=>{
+  let now=1_900_000_000_000;
+  const cache=new MarketWideKlineCache({clock:()=>now,maxCandlesPerSymbol:60,maxSymbols:2});
+  cache.setSymbols(['TESTUSDT']);
+  const accepted=cache.seed('TESTUSDT',candles({now,count:72}),SOURCE);
+  assert.equal(accepted,72);
+  const entry=cache.cache.get('TESTUSDT');
+  assert.equal(entry.candles.length,60,'retention is bounded to the configured per-symbol limit');
+  const retainedArray=entry.candles;
+  for(let i=1;i<retainedArray.length;i++)
+    assert.ok(retainedArray[i-1].openTime<retainedArray[i].openTime,'cached candles stay uniquely ordered');
+  const previous=retainedArray.at(-1);
+  const openTime=previous.openTime+STEP;
+  const next={
+    symbol:'TESTUSDT',openTime,closeTime:openTime+STEP-1,
+    open:previous.close,high:previous.close+0.2,low:previous.close-0.2,close:previous.close+0.1,
+    volume:123,quoteVolume:1230,tradeCount:10,takerBuyBaseVolume:60,takerBuyQuoteVolume:600,
+    closed:true,source:SOURCE,receivedAt:openTime+STEP
+  };
+  now=next.closeTime+1;
+  assert.equal(cache.putCandle(next,SOURCE),true);
+  assert.equal(cache.cache.get('TESTUSDT').candles,retainedArray,
+    'new closed bars must update the bounded array in place rather than allocate a full replacement');
+  assert.equal(retainedArray.length,60);
+  assert.equal(retainedArray.at(-1).openTime,openTime);
+  assert.equal(cache.putCandle(next,SOURCE),false,'a duplicate closed candle is not new market data');
+  assert.equal(cache.duplicateClosedCandleFrames,1);
+});

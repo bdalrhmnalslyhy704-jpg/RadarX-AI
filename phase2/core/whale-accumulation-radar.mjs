@@ -172,6 +172,14 @@ export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggT
   const five=closed(fiveMinute,now);
   const depth=depthStats(book,price);
   const previous=depthStats(previousBook,price);
+  const sourceAvailability={
+    aggTrades:Array.isArray(aggTrades)&&aggTrades.length>0?'AVAILABLE':'UNAVAILABLE',
+    klines_1m:candles.available?'AVAILABLE':'UNAVAILABLE',
+    klines_5m:five.length>=2?'AVAILABLE':'UNAVAILABLE',
+    orderbook_depth:Array.isArray(book?.bids)&&book.bids.length>0&&Array.isArray(book?.asks)&&book.asks.length>0?'AVAILABLE':'UNAVAILABLE'
+  };
+  const missingSources=Object.entries(sourceAvailability).filter(([,status])=>status!=='AVAILABLE').map(([source])=>source);
+  const sourceComplete=missingSources.length===0;
   const depthPersistence=previousBook
     ? clamp(50+(depth.nearImbalance>=previous.nearImbalance?28:0)+(depth.midImbalance>=previous.midImbalance?22:0))
     : 50;
@@ -223,6 +231,7 @@ export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggT
     relativeNeutrality(quiet24)*.03
   );
   const eligible=
+    sourceComplete&&
     price>0&&
     score>=Number(config.minScore||84)&&
     confirmationCount>=Number(config.minConfirmations||8)&&
@@ -234,10 +243,13 @@ export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggT
     supportScore>=Number(config.minSupportScore||65)&&
     spreadOk&&
     notExtended;
-  const stage=eligible&&score>=92?'WHALE_ACCUMULATION_CONFIRMED':score>=87?'WHALE_ACCUMULATION_ACTIVE':score>=78?'WHALE_BUILDING':'WATCH';
+  // Public Spot market data cannot identify the trader behind a print or order-book level.
+  // Never describe the inferred footprint as a confirmed whale.
+  const stage=!sourceComplete?'DATA_UNAVAILABLE':eligible?'POSSIBLE_ACCUMULATION':score>=78?'POSSIBLE_LARGE_FLOW':'WATCH';
   const direction=buyDominance>=65?'BUY_SIDE':'BALANCED';
   const reasons=[];
   const push=(ok,s)=>{if(ok)reasons.push(s)};
+  for(const source of missingSources)reasons.push('DATA_UNAVAILABLE:'+source);
   push(prints.largeBuyRatio>=0.60,'Large prints تميل بقوة لجهة الشراء');
   push(prints.largeNotionalRatio>=0.12,'صافي القيمة الكبيرة لصالح المشترين');
   push(prints.repeatBuyScore>=67,'تكرار صفقات كبيرة شرائية');
@@ -260,6 +272,8 @@ export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggT
   if(!previousBook)risk.push('NO_DEPTH_PERSISTENCE_YET');
   return {
     eligible,stage,score:Number(score.toFixed(1)),direction,
+    data_status:sourceComplete?'LIVE_DATA':'DATA_UNAVAILABLE',
+    source_availability:sourceAvailability,missing_sources:missingSources,
     confirmation_count:confirmationCount,confirmation_total:confirmations.length,
     large_prints:prints,candle_flow:candles,orderbook:depth,
     orderbook_persistence:{score:Number(depthPersistence.toFixed(1)),has_previous:Boolean(previousBook),previous_near_imbalance:Number(previous.nearImbalance.toFixed(4)),current_near_imbalance:Number(depth.nearImbalance.toFixed(4))},
@@ -310,7 +324,8 @@ export function buildWhaleAccumulationAlert(input,now=Date.now()){
   a.elite_gate=gate;
   return decorateRadarAlert({
     id:'WHALE:'+String(t.symbol||'UNKNOWN').toUpperCase()+':'+now,
-    event:'WHALE_ACCUMULATION_ALERT',
+    event:a.eligible?'POSSIBLE_ACCUMULATION':
+      (a.source_availability?.aggTrades==='AVAILABLE'&&Number(a.large_prints?.largeCount)>=3?'POSSIBLE_LARGE_FLOW':'WHALE_ACCUMULATION_WATCH'),
     radar:'WHALE_ACCUMULATION_RADAR',
     radar_name:'🐋 تجمع الحيتان',
     symbol:String(t.symbol||'UNKNOWN').toUpperCase(),
@@ -319,7 +334,8 @@ export function buildWhaleAccumulationAlert(input,now=Date.now()){
     price_change_24h:finite(t.priceChange24h,null),
     opportunity_score:a.score,potential_label:a.stage,
     whale_accumulation:a,reasons:a.reasons,risk_flags:a.risk_flags,
-    source:a.source,limitation:a.limitation,
+    source:a.source,limitation:a.limitation,data_status:a.data_status,
+    source_availability:a.source_availability,missing_sources:a.missing_sources,
     detected_at:now,processed_at:now,detected_at_iso:new Date(now).toISOString(),
     detected_time_12h:formatRadarTime12h(now),detected_timezone:'Asia/Aden',
     paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
@@ -329,7 +345,7 @@ export function buildWhaleAccumulationAlert(input,now=Date.now()){
 
 export const WHALE_ACCUMULATION_DEFAULTS=Object.freeze({
   quote:'USDT',pollMs:60000,universeRefreshMs:10*60*1000,
-  minQuoteVolume24h:1500000,topAnchors:8,rotationBatchSize:10,deepConcurrency:5,
+  minQuoteVolume24h:750000,topAnchors:8,rotationBatchSize:10,deepConcurrency:5,
   schedulerFastPathSlots:2,schedulerQuietAnchorSlots:4,
   schedulerExceptionalVolumeRatio:2.2,schedulerExceptionalTradeRatio:1.8,
   schedulerExceptionalPriceStepPct:0.15,schedulerQuietParticipationRatio:1.12,
@@ -655,11 +671,11 @@ export class WhaleAccumulationRadar{
             metrics.result_send_ms+=Number(outcomeTiming.result_send_ms)||0;
             const a=result?.whale_accumulation||{};
             const stage=String(a.stage||result?.potential_label||'').toUpperCase();
-            const dataIncomplete=!result||['DATA_INSUFFICIENT','INCOMPLETE','WARMING_UP'].includes(stage)||
+            const dataIncomplete=!result||['DATA_INSUFFICIENT','INCOMPLETE','WARMING_UP','DATA_UNAVAILABLE'].includes(stage)||
               result?.data_status==='INCOMPLETE'||result?.data_status==='DATA_UNAVAILABLE';
             this.scheduler.finished('DEEP',symbol,{cycle:metrics.cycle,at:this.clock(),startedAt,
               outcome:dataIncomplete?'INCOMPLETE':'COMPLETED',lane,
-              reasonCode:dataIncomplete?'DATA_MISSING_OR_NOT_MATURE':result?.eligible?'SIGNAL_CONFIRMED':'NO_SIGNAL_NOT_A_FAILURE',
+              reasonCode:dataIncomplete?'DATA_MISSING_OR_NOT_MATURE':result?.eligible?'POSSIBLE_ACCUMULATION':'NO_SIGNAL_NOT_A_FAILURE',
               failureCounted:false,fastSeenAt,
               extra:{signal_eligible:Boolean(result?.eligible),signal_stage:stage||null,data_complete:!dataIncomplete,
                 row_timings_ms:outcomeTiming}});
@@ -751,12 +767,12 @@ export class WhaleAccumulationRadar{
   }
   snapshot(limit=20){
     const rows=this.latestCandidates.slice(0,Math.max(1,Math.min(50,Number(limit)||20)));
-    const confirmed=rows.filter(x=>x.eligible);
+    const possible=rows.filter(x=>x.eligible);
     return {
       radar:'WHALE_ACCUMULATION_RADAR',radar_name:'🐋 تجمع الحيتان',quote:this.config.quote,
       as_of:this.lastScanAtMs?new Date(this.lastScanAtMs).toISOString():null,running:this.running,busy:this.busy,
       candidates:rows.map(x=>({...x,report:x.whale_accumulation||null})),
-      confirmed_count:confirmed.length,alerts_emitted:this.alertCount,
+      confirmed_count:0,possible_count:possible.length,alerts_emitted:this.alertCount,
       coverage:this.lastCoverage,last_error:this.lastError,
       methodology:{
         large_trade_source:'Binance Public /api/v3/aggTrades',

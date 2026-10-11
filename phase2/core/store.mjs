@@ -1,9 +1,11 @@
-import {createReadStream} from 'node:fs';
+import {createReadStream,createWriteStream} from 'node:fs';
 import {createInterface} from 'node:readline';
-import {mkdir,readFile,writeFile,rename,appendFile,stat,unlink,readdir} from 'node:fs/promises';
+import {mkdir,readFile,writeFile,rename,appendFile,stat,statfs,unlink,readdir} from 'node:fs/promises';
 import {basename,join,resolve} from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
-import {gzipSync,gunzipSync} from 'node:zlib';
+import {Readable,Transform} from 'node:stream';
+import {pipeline} from 'node:stream/promises';
+import {createGzip,createGunzip,gunzipSync} from 'node:zlib';
 import {SCAN_JOURNEY_SCHEMA,scanJourneyFilename,validateScanJourneyCycle,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,SCAN_JOURNEY_HORIZONS} from './scan-journey-ledger.mjs';
 const MiB=1024*1024;
 // Scheduler events are operational queue state. Hydration reads at most 5,000
@@ -11,12 +13,174 @@ const MiB=1024*1024;
 const JSONL_ARCHIVE_POLICIES=Object.freeze({
   schedulerEvents:{compactAtBytes:12*MiB,retainRowsPerKey:5000,keyField:'radar',maxRetainedBytesPerKey:512*1024}
 });
-const ORPHAN_TEMP_SUFFIX=/\.(?:tmp|repair|outcome|compact)-\d+-\d+$/;
+const ORPHAN_TEMP_SUFFIX=/\.(?:tmp|repair|outcome|compact)-\d+-\d+(?:-[a-f0-9-]+)?$/;
+
+// Verify an archived cycle without holding its compressed buffer, decompressed
+// string, and parsed object tree at once. The stream scanner only retains a short
+// key-detection tail and counts top-level coin objects; the manifest SHA stays authoritative.
+async function inspectGzipScanJourneyCycle(filePath){
+  const digest=createHash('sha256');
+  let compressedBytes=0;
+  const hashTap=new Transform({
+    transform(chunk,encoding,callback){
+      compressedBytes+=chunk.length;
+      digest.update(chunk);
+      callback(null,chunk);
+    }
+  });
+  const gunzip=createGunzip();
+  const pump=pipeline(createReadStream(filePath),hashTap,gunzip);
+  let carry='',cycleId=null,coinsFound=false,coinsClosed=false,coinCount=0;
+  let nested=0,inString=false,escaped=false;
+  const scanCoins=text=>{
+    for(let i=0;i<text.length;i++){
+      const ch=text[i];
+      if(inString){
+        if(escaped)escaped=false;
+        else if(ch==='\\')escaped=true;
+        else if(ch==='"')inString=false;
+        continue;
+      }
+      if(ch==='"'){inString=true;continue;}
+      if(coinsClosed)continue;
+      if(nested===0&&ch===']'){coinsClosed=true;continue;}
+      if(ch==='{'){
+        if(nested===0)coinCount++;
+        nested++;
+      }else if(ch==='['){
+        nested++;
+      }else if(ch==='}'||ch===']'){
+        if(nested>0)nested--;
+        else if(ch===']')coinsClosed=true;
+      }
+    }
+  };
+  try{
+    for await(const chunk of gunzip){
+      const text=chunk.toString('utf8');
+      if(coinsFound){if(!coinsClosed)scanCoins(text);continue;}
+      const probe=carry+text;
+      if(cycleId===null){
+        const idMatch=/"cycle_id"\s*:\s*"([^"\\]*)"/.exec(probe);
+        if(idMatch)cycleId=idMatch[1];
+      }
+      const coinsMatch=/"coins"\s*:\s*\[/.exec(probe);
+      if(coinsMatch){
+        coinsFound=true;
+        scanCoins(probe.slice(coinsMatch.index+coinsMatch[0].length));
+        carry='';
+      }else carry=probe.slice(-512);
+    }
+    await pump;
+  }catch(error){
+    await pump.catch(()=>{});
+    throw error;
+  }
+  return {
+    sha256:digest.digest('hex'),compressed_bytes:compressedBytes,cycle_id:cycleId,
+    coin_count:coinCount,coins_array_complete:coinsFound&&coinsClosed&&!inString&&nested===0
+  };
+}
 
 
+// Serialize a durable cycle in bounded chunks. Avoid a full JSON string + Buffer +
+// gzip buffer coexisting in the V8 heap during the 496-symbol market-wide cycle.
+function* jsonChunks(value, ancestors=new Set(), arrayMember=false) {
+  if(value===null){yield 'null';return;}
+  if(typeof value==='string'||typeof value==='boolean'){yield JSON.stringify(value);return;}
+  if(typeof value==='number'){yield Number.isFinite(value)?String(value):'null';return;}
+  if(typeof value==='undefined'||typeof value==='function'||typeof value==='symbol'){
+    if(arrayMember)yield 'null';
+    return;
+  }
+  if(typeof value==='bigint')throw new TypeError('Do not know how to serialize a BigInt');
+  if(typeof value!=='object'){yield 'null';return;}
+  if(ancestors.has(value))throw new TypeError('Converting circular structure to JSON');
+  ancestors.add(value);
+  try {
+    if(Array.isArray(value)){
+      yield '[';
+      for(let i=0;i<value.length;i++){
+        if(i)yield ',';
+        const child=value[i];
+        if(child===undefined||typeof child==='function'||typeof child==='symbol')yield 'null';
+        else yield* jsonChunks(child,ancestors,true);
+      }
+      yield ']';
+      return;
+    }
+    yield '{';
+    let first=true;
+    for(const [key,child] of Object.entries(value)){
+      if(child===undefined||typeof child==='function'||typeof child==='symbol')continue;
+      if(!first)yield ',';
+      first=false;
+      yield JSON.stringify(key);
+      yield ':';
+      yield* jsonChunks(child,ancestors,false);
+    }
+    yield '}';
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function* bufferedJsonChunks(value,{newline=false,chunkChars=32*1024}={}){
+  let buffer='';
+  for(const piece of jsonChunks(value)){
+    buffer+=piece;
+    if(buffer.length>=chunkChars){
+      yield buffer;
+      buffer='';
+    }
+  }
+  if(newline)buffer+='\n';
+  if(buffer)yield buffer;
+}
+
+function* jsonDocumentChunks(value){
+  yield* bufferedJsonChunks(value,{newline:true});
+}
+
+async function writeGzipJsonAtomic(path,value,{maxBytes=Infinity}={}) {
+  const temp=path+'.tmp-'+process.pid+'-'+Date.now()+'-'+randomUUID();
+  const digest=createHash('sha256');
+  let bytes=0;
+  const meter=new Transform({
+    transform(chunk,encoding,callback){
+      bytes+=chunk.length;
+      if(bytes>maxBytes){
+        const error=new Error('SCAN_JOURNEY_CYCLE_TOO_LARGE: compressed_bytes='+bytes+',limit_bytes='+maxBytes);
+        error.code='SCAN_JOURNEY_CYCLE_TOO_LARGE';
+        callback(error);
+        return;
+      }
+      digest.update(chunk);
+      callback(null,chunk);
+    }
+  });
+  try{
+    await pipeline(
+      Readable.from(bufferedJsonChunks(value),{objectMode:false}),
+      createGzip({level:6}),
+      meter,
+      createWriteStream(temp,{flags:'wx'})
+    );
+    const sha256=digest.digest('hex');
+    await rename(temp,path);
+    return {bytes,sha256};
+  }catch(error){
+    await unlink(temp).catch(()=>{});
+    throw error;
+  }
+}
 
 export class DurableStore {
-  constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
+  constructor({dir='./.radarx-data',freeBytesProvider=null,maxCycleArchiveBytes=24*MiB,storageReserveBytes=16*MiB}={}){
+    this.dir=dir;this.queue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];this.preExpansionOutcomeCache=undefined;
+    this.freeBytesProvider=typeof freeBytesProvider==='function'?freeBytesProvider:null;
+    this.maxCycleArchiveBytes=Math.max(1024*1024,Number(maxCycleArchiveBytes)||24*MiB);
+    this.storageReserveBytes=Math.max(1024*1024,Number(storageReserveBytes)||16*MiB);
     this.scanJourneyDir=join(dir,'scan-journeys');
     this.files={scanJourneyManifest:join(dir,'scan-journey-manifest.json'),subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
       signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),
@@ -24,41 +188,119 @@ export class DurableStore {
   async init({legacyDir=null}={}){
     await mkdir(this.dir,{recursive:true});
     await mkdir(this.scanJourneyDir,{recursive:true});
-    // init runs before any writers start; matching files can only be abandoned
-    // atomic-write temporaries from a previous process.
+    // Recover abandoned temporary files before testing free-space limits.
     this.tempCleanup=await this.cleanupOrphanedTemporaryFiles();
-    // Migrate any surviving ephemeral files only when the durable target lacks that file.
-    // The copy is idempotent and never overwrites an existing archived file.
+    // Probe file existence with stat; never read a potentially hundreds-of-MiB JSONL
+    // archive merely to test whether the durable copy exists.
     if(legacyDir&&resolve(legacyDir)!==resolve(this.dir)){
       for(const p of Object.values(this.files)){
-        let destinationExists=false;
-        try{await readFile(p,'utf8');destinationExists=true;}catch{}
-        if(destinationExists)continue;
+        try{await stat(p);continue;}
+        catch(error){if(error?.code!=='ENOENT')throw error;}
         const legacyPath=join(legacyDir,basename(p));
+        let legacyInfo;
+        try{legacyInfo=await stat(legacyPath);}
+        catch(error){if(error?.code==='ENOENT')continue;throw error;}
+        const budget=await this.diskWriteBudget(MiB);
+        if(legacyInfo.size>budget.max_write_bytes){
+          const error=new Error('DURABLE_STORE_MIGRATION_STORAGE_PRESSURE: '+basename(p));
+          error.code='DURABLE_STORE_STORAGE_PRESSURE';
+          throw error;
+        }
+        const temp=p+'.tmp-'+process.pid+'-'+Date.now();
         try{
-          const contents=await readFile(legacyPath,'utf8');
-          await writeFile(p,contents,{flag:'wx'});
+          await pipeline(createReadStream(legacyPath),createWriteStream(temp,{flags:'wx'}));
+          await rename(temp,p);
           this.migratedFiles.push(basename(p));
-        }catch{}
+        }catch(error){
+          await unlink(temp).catch(()=>{});
+          // Never swallow a failed migration: keep the legacy source and fail clearly.
+          throw error;
+        }
       }
     }
     for(const p of Object.values(this.files)){
-      try{await readFile(p,'utf8');}catch{
-        await writeFile(p,p.endsWith('.jsonl')?'':'{}',{flag:'wx'}).catch(()=>{});
+      try{await stat(p);}
+      catch(error){
+        if(error?.code!=='ENOENT')throw error;
+        await writeFile(p,p.endsWith('.jsonl')?'':'{}',{flag:'wx'}).catch(writeError=>{
+          if(writeError?.code!=='EEXIST')throw writeError;
+        });
       }
     }
     this.ready=true;return this;
   }
   async lock(fn){const p=this.queue.then(fn);this.queue=p.catch(()=>{});return p;}
+  async diskWriteBudget(reserveBytes=this.storageReserveBytes){
+    let freeBytes;
+    try{
+      if(this.freeBytesProvider)freeBytes=Number(await this.freeBytesProvider(this.dir));
+      else {
+        const fs=await statfs(this.dir);
+        freeBytes=Number(fs.bavail)*Number(fs.bsize);
+      }
+    }catch(cause){
+      const error=new Error('DURABLE_STORE_CAPACITY_UNAVAILABLE: '+String(cause?.message||cause));
+      error.code='DURABLE_STORE_CAPACITY_UNAVAILABLE';
+      error.cause=cause;
+      throw error;
+    }
+    if(!Number.isFinite(freeBytes)||freeBytes<0){
+      const error=new Error('DURABLE_STORE_CAPACITY_UNAVAILABLE');
+      error.code='DURABLE_STORE_CAPACITY_UNAVAILABLE';
+      throw error;
+    }
+    return {free_bytes:Math.floor(freeBytes),max_write_bytes:Math.floor(freeBytes-Math.max(0,Number(reserveBytes)||0)),capacity_checked:true};
+  }
+  async appendText(p,text){
+    const bytes=Buffer.byteLength(text);
+    const budget=await this.diskWriteBudget(MiB);
+    if(bytes>budget.max_write_bytes){
+      const error=new Error('DURABLE_STORE_STORAGE_PRESSURE: required_bytes='+bytes+',available_write_bytes='+budget.max_write_bytes);
+      error.code='DURABLE_STORE_STORAGE_PRESSURE';
+      error.requiredBytes=bytes;
+      error.availableWriteBytes=budget.max_write_bytes;
+      throw error;
+    }
+    await appendFile(p,text);
+    this.lastWriteAt=Date.now();
+  }
   async readJson(p){try{return JSON.parse(await readFile(p,'utf8'));}catch{return{};}}
   async writeJson(p,v){
-    const t=p+'.tmp-'+process.pid+'-'+Date.now();
-    // The outcome ledger is a large, internal 5,000-record file. Compact JSON
-    // preserves the schema while avoiding a large whitespace-heavy serialization
-    // buffer on every live markout update. Other JSON files remain human-readable.
-    const serialized=JSON.stringify(v,null,p===this.files.preExpansionOutcomes?0:2)+'\n';
+    const t=p+'.tmp-'+process.pid+'-'+Date.now()+'-'+randomUUID();
+    const compactOutcome=p===this.files.preExpansionOutcomes;
+    // Large outcome rewrites preserve 16 MiB of write headroom; small manifests/snapshots
+    // use a 1 MiB floor so retention metadata can still be committed under pressure.
+    const budget=await this.diskWriteBudget(compactOutcome?this.storageReserveBytes:MiB);
+    let written=0;
+    const limiter=new Transform({
+      transform(chunk,encoding,callback){
+        written+=chunk.length;
+        if(written>budget.max_write_bytes){
+          const error=new Error('DURABLE_STORE_STORAGE_PRESSURE: serialized_bytes='+written+',available_write_bytes='+budget.max_write_bytes);
+          error.code='DURABLE_STORE_STORAGE_PRESSURE';
+          callback(error);
+          return;
+        }
+        callback(null,chunk);
+      }
+    });
     try{
-      await writeFile(t,serialized);
+      if(compactOutcome){
+        await pipeline(
+          Readable.from(jsonDocumentChunks(v),{objectMode:false}),
+          limiter,
+          createWriteStream(t,{flags:'wx'})
+        );
+      }else{
+        const serialized=JSON.stringify(v,null,2)+'\n';
+        written=Buffer.byteLength(serialized);
+        if(written>budget.max_write_bytes){
+          const error=new Error('DURABLE_STORE_STORAGE_PRESSURE: serialized_bytes='+written+',available_write_bytes='+budget.max_write_bytes);
+          error.code='DURABLE_STORE_STORAGE_PRESSURE';
+          throw error;
+        }
+        await writeFile(t,serialized,{flag:'wx'});
+      }
       await rename(t,p);
       this.lastWriteAt=Date.now();
     }catch(error){
@@ -158,7 +400,7 @@ export class DurableStore {
     if(!rows.length)return {written:0};
     return this.lock(async()=>{
       await this._compactJsonlArchive(kind);
-      await appendFile(file,rows.map(x=>JSON.stringify(x)).join('\n')+'\n');
+      await this.appendText(file,rows.map(x=>JSON.stringify(x)).join('\n')+'\n');
       this.lastWriteAt=Date.now();
       return {written:rows.length};
     });
@@ -190,14 +432,21 @@ export class DurableStore {
   }
   // Internal evaluation state only; no HTTP/API contract is exposed for this file.
   async getPreExpansionOutcomes(){
-    return this.readJson(this.files.preExpansionOutcomes);
+    // This store is owned by one backend process. Keep its parsed outcome ledger in
+    // memory so the 5,000-row file is not reparsed on every radar cycle. All writes
+    // still pass through the store lock and atomically refresh this cache.
+    if(this.preExpansionOutcomeCache!==undefined)return this.preExpansionOutcomeCache;
+    const state=await this.readJson(this.files.preExpansionOutcomes);
+    this.preExpansionOutcomeCache=state;
+    return state;
   }
   async updatePreExpansionOutcomes(updater){
     if(typeof updater!=='function')throw new Error('PRE_EXPANSION_OUTCOME_UPDATER_REQUIRED');
     return this.lock(async()=>{
-      let current=await this.readJson(this.files.preExpansionOutcomes);
+      let current=this.preExpansionOutcomeCache;
+      if(current===undefined)current=await this.readJson(this.files.preExpansionOutcomes);
       const result=await updater(current);
-      if(result===false)return current;
+      if(result===false){this.preExpansionOutcomeCache=current;return current;}
       const next=result&&typeof result==='object'&&!Array.isArray(result)?result:current;
       if(next!==current){
         // Drop the original parsed snapshot before serializing the normalized state.
@@ -206,6 +455,7 @@ export class DurableStore {
         await new Promise(resolve=>setImmediate(resolve));
       }
       await this.writeJson(this.files.preExpansionOutcomes,next);
+      this.preExpansionOutcomeCache=next;
       return next;
     });
   }
@@ -225,23 +475,23 @@ export class DurableStore {
       return a[key];
     });
   }
-  async appendSignalAudit(v){return this.lock(async()=>{await appendFile(this.files.signals,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
-  async appendNotificationAudit(v){return this.lock(async()=>{await appendFile(this.files.notifications,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}  async appendMoveAlert(v){return this.lock(async()=>{await appendFile(this.files.moveAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendSignalAudit(v){return this.lock(async()=>{await this.appendText(this.files.signals,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendNotificationAudit(v){return this.lock(async()=>{await this.appendText(this.files.notifications,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}  async appendMoveAlert(v){return this.lock(async()=>{await this.appendText(this.files.moveAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readMoveAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('moveAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendStrongMoveAlert(v){return this.lock(async()=>{await appendFile(this.files.strongMoveAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendStrongMoveAlert(v){return this.lock(async()=>{await this.appendText(this.files.strongMoveAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readStrongMoveAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('strongMoveAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendRotationAlert(v){return this.lock(async()=>{await appendFile(this.files.rotationAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendRotationAlert(v){return this.lock(async()=>{await this.appendText(this.files.rotationAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readRotationAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('rotationAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendLiquidityAbsorptionAlert(v){return this.lock(async()=>{await appendFile(this.files.liquidityAbsorptionAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendLiquidityAbsorptionAlert(v){return this.lock(async()=>{await this.appendText(this.files.liquidityAbsorptionAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readLiquidityAbsorptionAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('liquidityAbsorptionAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
   async appendKahirAlert(v){return this.appendJsonlArchive('kahirAlerts',[v]);}
   async readKahirAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('kahirAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendDoomsdayAlert(v){return this.lock(async()=>{await appendFile(this.files.doomsdayAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendDoomsdayAlert(v){return this.lock(async()=>{await this.appendText(this.files.doomsdayAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readDoomsdayAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('doomsdayAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendProfessorAlert(v){return this.lock(async()=>{await appendFile(this.files.professorAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
-  async appendAlMuqawimAlert(v){return this.lock(async()=>{await appendFile(this.files.alMuqawimAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendProfessorAlert(v){return this.lock(async()=>{await this.appendText(this.files.professorAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendAlMuqawimAlert(v){return this.lock(async()=>{await this.appendText(this.files.alMuqawimAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readAlMuqawimAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('alMuqawimAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendEarlyExpansionAlert(v){return this.lock(async()=>{await appendFile(this.files.earlyExpansionAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendEarlyExpansionAlert(v){return this.lock(async()=>{await this.appendText(this.files.earlyExpansionAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readEarlyExpansionAlerts({sinceMs=0,limit=100}={}){const safeLimit=Math.min(500,Math.max(1,Number(limit)||100));const rows=await this.readRecent('earlyExpansionAlerts',500);return rows.filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).sort((a,b)=>Number(a?.processed_at??a?.detected_at??0)-Number(b?.processed_at??b?.detected_at??0)).slice(0,safeLimit);}
   async appendScanSchedulerEvents(events){
     return this.appendJsonlArchive('schedulerEvents',events);
@@ -277,13 +527,13 @@ export class DurableStore {
     }catch{return[];}
     return rows.sort((a,b)=>Number(a?.event_at||0)-Number(b?.event_at||0));
   }
-  async appendFalconEyeAlert(v){return this.lock(async()=>{await appendFile(this.files.falconEyeAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendFalconEyeAlert(v){return this.lock(async()=>{await this.appendText(this.files.falconEyeAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readFalconEyeAlerts({sinceMs=0,limit=100}={}){const safeLimit=Math.min(100,Math.max(1,Number(limit)||100));const rows=await this.readRecent('falconEyeAlerts',500);return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).sort((a,b)=>Number(a?.processed_at||0)-Number(b?.processed_at||0)).slice(0,safeLimit);}
   async readProfessorAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('professorAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
   async readKahirAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('kahirAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendCoinHunterAlert(v){return this.lock(async()=>{await appendFile(this.files.coinHunterAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendCoinHunterAlert(v){return this.lock(async()=>{await this.appendText(this.files.coinHunterAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readCoinHunterAlerts({sinceMs=0,limit=100}={}){const take=Math.min(100,Math.max(1,Math.trunc(Number(limit)||100)));const rows=await this.readRecent('coinHunterAlerts',Math.min(500,take));return rows.filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).slice(0,take);}
-  async appendWhaleAccumulationAlert(v){return this.lock(async()=>{await appendFile(this.files.whaleAccumulationAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendWhaleAccumulationAlert(v){return this.lock(async()=>{await this.appendText(this.files.whaleAccumulationAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readWhaleAccumulationAlerts({sinceMs=0,limit=100}={}){const take=Math.min(100,Math.max(1,Math.trunc(Number(limit)||100)));const rows=await this.readRecent('whaleAccumulationAlerts',Math.min(500,take));return rows.filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).slice(0,take);}
 
   scanJourneyState(raw={}) {
@@ -306,12 +556,24 @@ export class DurableStore {
   async getScanJourneyState(){
     return this.scanJourneyState(await this.readJson(this.files.scanJourneyManifest));
   }
-  async appendScanJourneyCycle(cycle,{maxBytes=260*1024*1024}={}){
+  async scanJourneyWriteBudget(){
+    const disk=await this.diskWriteBudget(this.storageReserveBytes);
+    const maxWriteBytes=Math.min(this.maxCycleArchiveBytes,disk.max_write_bytes);
+    if(maxWriteBytes<1024*1024){
+      const error=new Error('SCAN_JOURNEY_STORAGE_PRESSURE: free_bytes='+disk.free_bytes+',reserve_bytes='+this.storageReserveBytes);
+      error.code='SCAN_JOURNEY_STORAGE_PRESSURE';
+      error.freeBytes=disk.free_bytes;
+      error.reserveBytes=this.storageReserveBytes;
+      throw error;
+    }
+    return {free_bytes:disk.free_bytes,max_write_bytes:Math.floor(maxWriteBytes),capacity_checked:true};
+  }
+  async appendScanJourneyCycle(cycle,{maxBytes=160*1024*1024}={}){
     const validation=validateScanJourneyCycle(cycle);
     if(!validation.valid)throw new Error('SCAN_JOURNEY_INVALID:'+validation.errors.join(','));
     const cycleId=String(cycle.cycle_id);
     const filename=scanJourneyFilename(cycleId);
-    const max=Math.max(1024*1024,Number(maxBytes)||260*1024*1024);
+    const max=Math.max(1024*1024,Number(maxBytes)||160*1024*1024);
     return this.lock(async()=>{
       const state=this.scanJourneyState(await this.readJson(this.files.scanJourneyManifest));
       const prior=state.cycles.find(x=>x.cycle_id===cycleId);
@@ -327,13 +589,11 @@ export class DurableStore {
         }catch{}
         // Repair a missing/corrupt copy from the repeated deterministic cycle id.
         // Keep its sequence and counters unchanged: repair is not a second event.
-        const repaired=gzipSync(Buffer.from(JSON.stringify({...cycle,cycle_sequence:prior.cycle_sequence}),'utf8'),{level:6});
-        const temp=existingPath+'.repair-'+process.pid+'-'+Date.now();
-        try{await writeFile(temp,repaired);await rename(temp,existingPath);}
-        catch(error){await unlink(temp).catch(()=>{});throw error;}
-        state.compressed_bytes=Math.max(0,state.compressed_bytes-Number(prior.compressed_bytes||0)+repaired.length);
-        prior.compressed_bytes=repaired.length;
-        prior.sha256=createHash('sha256').update(repaired).digest('hex');
+        const budget=await this.scanJourneyWriteBudget();
+        const repaired=await writeGzipJsonAtomic(existingPath,{...cycle,cycle_sequence:prior.cycle_sequence},{maxBytes:budget.max_write_bytes});
+        state.compressed_bytes=Math.max(0,state.compressed_bytes-Number(prior.compressed_bytes||0)+repaired.bytes);
+        prior.compressed_bytes=repaired.bytes;
+        prior.sha256=repaired.sha256;
         prior.stored_at=Date.now();
         state.updated_at=Date.now();
         await this.writeJson(this.files.scanJourneyManifest,state);
@@ -341,51 +601,59 @@ export class DurableStore {
       }
       const sequence=Math.max(state.cycle_sequence+1,Math.trunc(Number(cycle.cycle_number)||0));
       const stored={...cycle,cycle_sequence:sequence};
-      const zipped=gzipSync(Buffer.from(JSON.stringify(stored),'utf8'),{level:6});
+      const budget=await this.scanJourneyWriteBudget();
       const finalPath=join(this.scanJourneyDir,filename);
-      const tempPath=finalPath+'.tmp-'+process.pid+'-'+Date.now();
-      try{await writeFile(tempPath,zipped);await rename(tempPath,finalPath);}
-      catch(error){await unlink(tempPath).catch(()=>{});throw error;}
+      const archived=await writeGzipJsonAtomic(finalPath,stored,{maxBytes:Math.min(budget.max_write_bytes,max)});
       const coins=Array.isArray(cycle.coins)?cycle.coins:[];
-      const eligible=coins.filter(x=>x&&x.eligible===true);
+      let eligibleCount=0,fastCount=0,microCount=0,deepCount=0,deepFailedCount=0;
+      const outcomeSignalIds=[],explicitlyBelowEligibility=new Set();
+      // Count and update queue state in one pass instead of allocating several
+      // full-size filter/map arrays on every 280–496 symbol scan cycle.
+      for(const coin of coins){
+        if(!coin||typeof coin!=='object')continue;
+        if(coin.eligible===true){
+          eligibleCount++;
+          const symbol=String(coin.symbol||'').toUpperCase();
+          if(symbol){
+            const first=Number(coin.first_eligible_at??coin.eligibility_at);
+            if(!Object.hasOwn(state.eligible_since_by_symbol,symbol))
+              state.eligible_since_by_symbol[symbol]=Number.isFinite(first)?first:Date.now();
+            if(coin.micro_scan_completed_at!==undefined&&coin.micro_scan_completed_at!=='.INCOMPLETE'&&coin.micro_scan_completed_at!==null)
+              state.last_micro_cycle_by_symbol[symbol]=sequence;
+            if(coin.deep_scan_status==='COMPLETED'&&coin.deep_scan_completed_at!==undefined&&coin.deep_scan_completed_at!=='.INCOMPLETE'&&coin.deep_scan_completed_at!==null){
+              state.last_deep_cycle_by_symbol[symbol]=sequence;
+              const at=Number(coin.deep_scan_completed_at);
+              if(Number.isFinite(at))state.last_deep_at_by_symbol[symbol]=at;
+            }
+          }
+        }
+        if(coin.rejection_reason==='BELOW_MIN_QUOTE_VOLUME_24H'){
+          const symbol=String(coin.symbol||'').toUpperCase();
+          if(symbol)explicitlyBelowEligibility.add(symbol);
+        }
+        if(coin.fast_scan_at!==undefined&&coin.fast_scan_at!=='.INCOMPLETE'&&coin.fast_scan_at!==null)fastCount++;
+        if(coin.micro_scan_completed_at!==undefined&&coin.micro_scan_completed_at!=='.INCOMPLETE'&&coin.micro_scan_completed_at!==null)microCount++;
+        if(coin.deep_scan_status==='COMPLETED')deepCount++;
+        if(coin.deep_scan_status==='FAILED')deepFailedCount++;
+        const signalId=coin.outcome_signal_id;
+        if(typeof signalId==='string'&&signalId&&signalId!=='.INCOMPLETE')outcomeSignalIds.push(signalId);
+      }
       const metadata={
         cycle_id:cycleId,filename,cycle_sequence:sequence,
         started_at:cycle.started_at??null,completed_at:cycle.completed_at??null,
-        coin_count:coins.length,eligible_count:eligible.length,
-        fast_count:coins.filter(x=>x?.fast_scan_at!==undefined&&x.fast_scan_at!=='.INCOMPLETE'&&x.fast_scan_at!==null).length,
-        micro_count:coins.filter(x=>x?.micro_scan_completed_at!==undefined&&x.micro_scan_completed_at!=='.INCOMPLETE'&&x.micro_scan_completed_at!==null).length,
-        deep_count:coins.filter(x=>x?.deep_scan_status==='COMPLETED').length,
-        deep_failed_count:coins.filter(x=>x?.deep_scan_status==='FAILED').length,
-        outcome_signal_ids:coins.map(x=>x?.outcome_signal_id).filter(x=>typeof x==='string'&&x&&x!=='.INCOMPLETE'),
+        coin_count:coins.length,eligible_count:eligibleCount,
+        fast_count:fastCount,micro_count:microCount,deep_count:deepCount,
+        deep_failed_count:deepFailedCount,outcome_signal_ids:outcomeSignalIds,
         outcomes_checked_at:0,
-        compressed_bytes:zipped.length,sha256:createHash('sha256').update(zipped).digest('hex'),stored_at:Date.now()
+        compressed_bytes:archived.bytes,sha256:archived.sha256,stored_at:Date.now()
       };
       state.cycles.push(metadata);
       state.cycle_sequence=sequence;
       state.total_recorded_cycles+=1;
       state.retained_coin_rows+=coins.length;
-      state.compressed_bytes+=zipped.length;
-      const explicitlyBelowEligibility=new Set(coins
-        .filter(coin=>coin&&coin.rejection_reason==='BELOW_MIN_QUOTE_VOLUME_24H')
-        .map(coin=>String(coin.symbol||'').toUpperCase()).filter(Boolean));
-      // A missing ticker is a data gap, not proof the symbol lost eligibility.
-      // Preserve its queue age across partial Binance replies and resets only when
-      // an observed ticker clearly fails the explicit liquidity threshold.
+      state.compressed_bytes+=archived.bytes;
+      // Missing tickers preserve queue age. Only an explicit below-floor rejection resets it.
       for(const symbol of explicitlyBelowEligibility)delete state.eligible_since_by_symbol[symbol];
-      for(const coin of eligible){
-        const symbol=String(coin.symbol||'').toUpperCase();
-        if(!symbol)continue;
-        const first=Number(coin.first_eligible_at??coin.eligibility_at);
-        if(!Object.hasOwn(state.eligible_since_by_symbol,symbol))
-          state.eligible_since_by_symbol[symbol]=Number.isFinite(first)?first:Date.now();
-        if(coin.micro_scan_completed_at!==undefined&&coin.micro_scan_completed_at!=='.INCOMPLETE'&&coin.micro_scan_completed_at!==null)
-          state.last_micro_cycle_by_symbol[symbol]=sequence;
-        if(coin.deep_scan_status==='COMPLETED'&&coin.deep_scan_completed_at!==undefined&&coin.deep_scan_completed_at!=='.INCOMPLETE'&&coin.deep_scan_completed_at!==null){
-          state.last_deep_cycle_by_symbol[symbol]=sequence;
-          const at=Number(coin.deep_scan_completed_at);
-          if(Number.isFinite(at))state.last_deep_at_by_symbol[symbol]=at;
-        }
-      }
       for(const key of ['last_micro_cycle_by_symbol','last_deep_cycle_by_symbol','last_deep_at_by_symbol']){
         const map=state[key],entries=Object.entries(map);
         if(entries.length>10000){
@@ -393,8 +661,9 @@ export class DurableStore {
           for(const [symbol] of entries.slice(0,entries.length-10000))delete map[symbol];
         }
       }
-      // The Railway volume is shared with the existing signal archive. Use a rolling
-      // compressed journal ceiling so scan history cannot consume the whole 500 MB mount.
+      // The Railway volume is shared with outcome and alert archives. Retain at most
+      // 160 MiB of scan journeys, reserving the rest of the existing 500 MB mount for
+      // signal history, outcomes, and atomic-write headroom.
       const prunedFiles=[];
       while(state.compressed_bytes>max&&state.cycles.length>1){
         const oldest=state.cycles.shift();
@@ -466,13 +735,11 @@ export class DurableStore {
         }
         if(cycleChanged){
           cycle.outcomes_updated_at=Number(now);
-          const compressed=gzipSync(Buffer.from(JSON.stringify(cycle),'utf8'),{level:6});
-          const temp=filePath+'.outcome-'+process.pid+'-'+Date.now();
-          try{await writeFile(temp,compressed);await rename(temp,filePath);}
-          catch(error){await unlink(temp).catch(()=>{});throw error;}
-          state.compressed_bytes=Math.max(0,state.compressed_bytes-Number(metadata.compressed_bytes||0)+compressed.length);
-          metadata.compressed_bytes=compressed.length;
-          metadata.sha256=createHash('sha256').update(compressed).digest('hex');
+          const budget=await this.scanJourneyWriteBudget();
+          const compressed=await writeGzipJsonAtomic(filePath,cycle,{maxBytes:budget.max_write_bytes});
+          state.compressed_bytes=Math.max(0,state.compressed_bytes-Number(metadata.compressed_bytes||0)+compressed.bytes);
+          metadata.compressed_bytes=compressed.bytes;
+          metadata.sha256=compressed.sha256;
           metadata.stored_at=Number(now);
           updatedCycles++;updatedCoinRows+=coinUpdates;
         }
@@ -503,15 +770,12 @@ export class DurableStore {
     let readableCycles=0,readableCoinRows=0,verifiedBytes=0;
     for(const entry of state.cycles){
       try{
-        const bytes=await readFile(join(this.scanJourneyDir,entry.filename));
-        if(!entry.sha256||createHash('sha256').update(bytes).digest('hex')!==entry.sha256){
+        const inspected=await inspectGzipScanJourneyCycle(join(this.scanJourneyDir,entry.filename));
+        if(!entry.sha256||inspected.sha256!==entry.sha256||
+           inspected.cycle_id!==entry.cycle_id||!inspected.coins_array_complete){
           corruptCycles.push(entry.cycle_id);continue;
         }
-        const cycle=JSON.parse(gunzipSync(bytes).toString('utf8'));
-        if(cycle.cycle_id!==entry.cycle_id||!Array.isArray(cycle.coins)){
-          corruptCycles.push(entry.cycle_id);continue;
-        }
-        readableCycles++;readableCoinRows+=cycle.coins.length;verifiedBytes+=bytes.length;
+        readableCycles++;readableCoinRows+=inspected.coin_count;verifiedBytes+=inspected.compressed_bytes;
       }catch(error){
         if(error?.code==='ENOENT')missingCycles.push(entry.cycle_id);
         else corruptCycles.push(entry.cycle_id);
@@ -612,7 +876,9 @@ export class DurableStore {
   }
   async readScanJourneyCycles({limit=10}={}){
     const state=await this.getScanJourneyState();
-    const take=Math.max(1,Math.min(1000,Math.trunc(Number(limit)||10)));
+    // This diagnostic helper returns decoded cycles; cap aggregate retention so callers
+    // cannot accidentally inflate the heap by requesting the whole compressed archive.
+    const take=Math.max(1,Math.min(24,Math.trunc(Number(limit)||10)));
     const rows=[];
     for(const entry of state.cycles.slice(-take).reverse()){
       try{
@@ -668,11 +934,30 @@ export class DurableStore {
   async readRecent(kind,limit=100){
     const file=this.files[kind];
     if(!file)return[];
-    let s='';
-    try{s=await readFile(file,'utf8');}catch{return[];}
+    const safeLimit=Math.max(1,Math.trunc(Number(limit)||100));
+    // JSONL alert archives grow over time. Stream the file and keep only the last
+    // N raw lines, rather than reading/splitting the entire archive into heap memory.
+    const tail=new Array(safeLimit);
+    let count=0,cursor=0,input=null,lines=null;
+    try{
+      input=createReadStream(file,{encoding:'utf8'});
+      lines=createInterface({input,crlfDelay:Infinity});
+      for await(const line of lines){
+        if(!line)continue;
+        tail[cursor]=line;
+        cursor=(cursor+1)%safeLimit;
+        count=Math.min(safeLimit,count+1);
+      }
+    }catch{
+      return[];
+    }finally{
+      if(lines)lines.close();
+      if(input&&!input.destroyed)input.destroy();
+    }
+    const first=(cursor-count+safeLimit)%safeLimit;
     const rows=[];
-    for(const line of s.split('\n').filter(Boolean).slice(-Math.max(1,Number(limit)||100))){
-      try{rows.push(JSON.parse(line));}catch{}
+    for(let i=0;i<count;i++){
+      try{rows.push(JSON.parse(tail[(first+i)%safeLimit]));}catch{}
     }
     return rows.reverse();
   }

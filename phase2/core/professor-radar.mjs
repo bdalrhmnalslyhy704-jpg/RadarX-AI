@@ -83,12 +83,38 @@ async function readYoutubeTranscript(stream,{timeoutMs=6000,fetchImpl=globalThis
   }catch(error){return{available:false,text:'',reason:String(error?.message??error)};}
 }
 function stripHtml(v){return cleanText(String(v||'').replace(/<[^>]+>/g,' '));}
-function parseGdelt(text,limit){
+function classifyFreshness(publishedAt,retrievedAt,{live=false}={}){
+  if(live)return 'LIVE_AT_RETRIEVAL';
+  if(publishedAt===null||publishedAt===undefined||publishedAt===''||!Number.isFinite(Number(publishedAt)))return 'PUBLISHED_TIME_UNAVAILABLE';
+  if(Number(publishedAt)>Number(retrievedAt)+5*60_000)return 'FUTURE_TIMESTAMP';
+  if(Number(retrievedAt)-Number(publishedAt)>24*60*60_000)return 'STALE';
+  return 'FRESH';
+}
+function parseRelativePublishedAt(text,now){
+  const value=String(text||'').trim();
+  if(/\byesterday\b/i.test(value))return Number(now)-24*60*60_000;
+  if(/\btoday\b/i.test(value))return Number(now);
+  const match=value.match(/(\d+(?:\.\d+)?)\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s+ago/i);
+  if(!match)return null;
+  const count=Number(match[1]),unit=match[2].toLowerCase();
+  const factor=unit.startsWith('second')?1000:unit.startsWith('minute')?60_000:
+    unit.startsWith('hour')?60*60_000:unit.startsWith('day')?24*60*60_000:
+    unit.startsWith('week')?7*24*60*60_000:unit.startsWith('month')?30*24*60*60_000:365*24*60*60_000;
+  return Number.isFinite(count)?Number(now)-count*factor:null;
+}
+function parseGdelt(text,limit,retrievedAt=Date.now()){
   let json;try{json=JSON.parse(text);}catch{return[];}
-  return (Array.isArray(json?.articles)?json.articles:[]).slice(0,limit).map(a=>({
-    title:stripHtml(a?.title||''),url:safeUrl(a?.url),domain:cleanText(a?.domain||''),
-    published_at:Date.parse(String(a?.datetime||a?.seendate||''))||null,tone:finite(a?.tone),source:'GDELT DOC 2.0'
-  })).filter(x=>x.title&&x.url);
+  return (Array.isArray(json?.articles)?json.articles:[]).slice(0,limit).map(a=>{
+    const published_at=Date.parse(String(a?.datetime||a?.seendate||''))||null;
+    return {
+      title:stripHtml(a?.title||''),url:safeUrl(a?.url),domain:cleanText(a?.domain||''),
+      published_at,published_at_iso:published_at?new Date(published_at).toISOString():null,
+      retrieved_at:new Date(retrievedAt).toISOString(),
+      freshness_status:classifyFreshness(published_at,retrievedAt),
+      claim_status:'UNVERIFIED_PUBLIC_CLAIM',
+      tone:finite(a?.tone),source:'GDELT DOC 2.0',source_type:'NEWS_ARTICLE'
+    };
+  }).filter(x=>x.title&&x.url);
 }
 function buildAssetIndex(universe){
   const map=new Map();
@@ -129,17 +155,26 @@ function newsSentiment(item){return Number.isFinite(item.tone)?clamp(50+item.ton
 function aggregateMentions({streams,news,index}){
   const map=new Map();
   const get=s=>{if(!map.has(s))map.set(s,{symbol:s,baseAsset:s.replace(/USDT$/,''),stream_mentions:0,news_mentions:0,stream_weight:0,stream_signed:0,news_weight:0,news_sum:0,trade_claims:[],news_items:[]});return map.get(s);};
-  for(const stream of streams){
+  for(const stream of streams.filter(x=>['FRESH','LIVE_AT_RETRIEVAL'].includes(x.freshness_status))){
     const text=[stream.title,stream.description,stream.transcript?.text||''].join(' ');const assets=mentionedAssets(text,index);
     const evidence=stream.transcript?.available?'CAPTION':stream.description?'DESCRIPTION':'TITLE';const claim=streamClaim(text);const w=streamWeight(stream,evidence);
     for(const a of assets){
       const c=get(a.symbol);c.stream_mentions++;c.stream_weight+=w;c.stream_signed+=(claim.action==='BUY_BIAS'?1:claim.action==='SELL_BIAS'?-1:0)*w;
-      c.trade_claims.push({source:'YOUTUBE_PUBLIC',video_id:stream.id,channel:stream.channel,title:stream.title,url:stream.url,evidence,evidenced_action:claim.action,asset:a.symbol});
+      c.trade_claims.push({source:'YOUTUBE_PUBLIC',source_type:stream.source_type||'PUBLIC_VIDEO',
+        video_id:stream.id,channel:stream.channel,title:stream.title,url:stream.url,evidence,evidenced_action:claim.action,asset:a.symbol,
+        published_at:stream.published_at??null,published_at_iso:stream.published_at_iso??null,published_text:stream.published_text??null,
+        retrieved_at:stream.retrieved_at??null,freshness_status:stream.freshness_status||'PUBLISHED_TIME_UNAVAILABLE',
+        claim_status:'UNVERIFIED_PUBLIC_CLAIM'});
     }
   }
-  for(const item of news){
+  for(const item of news.filter(x=>x.freshness_status==='FRESH')){
     const assets=mentionedAssets(item.title,index);const score=newsSentiment(item);const w=35;
-    for(const a of assets){const c=get(a.symbol);c.news_mentions++;c.news_sum+=score*w;c.news_weight+=w;c.news_items.push({title:item.title,url:item.url,domain:item.domain,published_at:item.published_at,tone:item.tone,event_type:item.event_type||classifyNewsEvent(item.title,item.domain),sentiment_score:Number(score.toFixed(1)),source:item.source});}
+    for(const a of assets){const c=get(a.symbol);c.news_mentions++;c.news_sum+=score*w;c.news_weight+=w;c.news_items.push({
+      title:item.title,url:item.url,domain:item.domain,published_at:item.published_at,published_at_iso:item.published_at_iso??null,
+      retrieved_at:item.retrieved_at??null,freshness_status:item.freshness_status||'PUBLISHED_TIME_UNAVAILABLE',
+      claim_status:'UNVERIFIED_PUBLIC_CLAIM',tone:item.tone,event_type:item.event_type||classifyNewsEvent(item.title,item.domain),
+      sentiment_score:Number(score.toFixed(1)),source:item.source,source_type:item.source_type||'NEWS_ARTICLE'
+    });}
   }
   return [...map.values()].map(c=>({...c,stream_score:Number((c.stream_weight?50+(c.stream_signed/c.stream_weight)*50:50).toFixed(1)),news_score:Number((c.news_weight?c.news_sum/c.news_weight:50).toFixed(1))}));
 }
@@ -191,9 +226,25 @@ export class ProfessorRadar{
       }catch(e){errors.push(query+':'+String(e?.message??e));}
       await sleep(120);
     }
-    const streams=[...found.values()].slice(0,this.config.liveSearchLimit);const targets=streams.filter(s=>s.live).slice(0,this.config.transcriptStreams);
+    const retrievedAt=this.clock();
+    const streams=[...found.values()].slice(0,this.config.liveSearchLimit).map(s=>{
+      const published_at=s.published_at!==null&&s.published_at!==undefined&&s.published_at!==''&&Number.isFinite(Number(s.published_at))
+        ?Number(s.published_at):parseRelativePublishedAt(s.published_text,retrievedAt);
+      const freshness_status=classifyFreshness(published_at,retrievedAt,{live:s.live===true});
+      return {...s,source:'YOUTUBE_PUBLIC_SEARCH',source_type:s.live?'LIVE_STREAM':'PUBLIC_VIDEO',
+        published_at,published_at_iso:published_at?new Date(published_at).toISOString():null,
+        published_time_status:published_at?'AVAILABLE':'UNAVAILABLE',
+        retrieved_at:new Date(retrievedAt).toISOString(),freshness_status,
+        claim_status:'UNVERIFIED_PUBLIC_CLAIM'};
+    });
+    const targets=streams.filter(s=>s.live).slice(0,this.config.transcriptStreams);
     const transcripts=await mapLimit(targets,2,s=>readYoutubeTranscript(s,{timeoutMs:this.config.transcriptTimeoutMs,fetchImpl:this.fetchImpl}));
-    const tm=new Map(targets.map((s,i)=>[s.id,transcripts[i]]));for(const s of streams)s.transcript=tm.get(s.id)||{available:false,text:'',reason:'NOT_ATTEMPTED'};
+    const tm=new Map(targets.map((s,i)=>[s.id,transcripts[i]]));
+    for(const s of streams){
+      const transcript=tm.get(s.id)||{available:false,text:'',reason:'NOT_ATTEMPTED'};
+      s.transcript={...transcript,source:'YOUTUBE_TRANSCRIPT',retrieved_at:new Date(this.clock()).toISOString(),
+        claim_status:'UNVERIFIED_PUBLIC_CLAIM'};
+    }
     return {streams,errors};
   }
   async discoverNews(){
@@ -208,7 +259,8 @@ export class ProfessorRadar{
     const results=await mapLimit(queries,3,async item=>{
       const url='https://api.gdeltproject.org/api/v2/doc/doc?mode=artlist&format=json&maxrecords='+Math.min(75,this.config.newsLimit)+'&timespan='+item.timespan+'&query='+encodeURIComponent(item.query);
       const body=await fetchText(url,{timeoutMs:this.config.webTimeoutMs,fetchImpl:this.fetchImpl});
-      return {query:item,items:parseGdelt(body,this.config.newsLimit)};
+      const retrievedAt=this.clock();
+      return {query:item,items:parseGdelt(body,this.config.newsLimit,retrievedAt)};
     });
     for(const result of results){
       if(result?.error){errors.push('GDELT:'+String(result.error));continue;}

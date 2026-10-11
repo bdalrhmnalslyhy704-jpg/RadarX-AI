@@ -44,7 +44,7 @@ test('TEST_FIXTURE: HTTP 429 records rate limit and retry-after without spamming
   const fetchImpl=async()=>{calls++;return{status:429,headers:new Map([['retry-after','0.001']]),ok:false,json:async()=>({})};};
   const c=new RestClient({baseUrls:['https://a.test','https://b.test'],fetchImpl,timeoutMs:100,minIntervalMs:0,maxRequestsPerMinute:100});
   await assert.rejects(()=>c.request('/api/v3/klines',{symbol:'BTCUSDT',interval:'15m'}),e=>e instanceof RestRateLimitError);
-  assert.equal(calls,1);assert.equal(c.health().state,'RATE_LIMITED');assert.ok(c.health().rate_limited_until>Date.now()-1);
+  assert.equal(calls,1);assert.equal(c.health().state,'RATE_LIMITED');assert.ok(c.health().rate_limited_until>Date.now()+900,'sub-second Retry-After must not erase the cooldown');
 });
 
 test('TEST_FIXTURE: retry-after header is parsed in milliseconds',()=>{
@@ -62,7 +62,9 @@ test('TEST_FIXTURE: Binance kline timestamps are milliseconds; seconds are rejec
 
 test('TEST_FIXTURE: Binance millisecond kline timestamps normalize and current open candle stays open',async()=>{
   const now=Date.now();
-  const open=Math.floor((now-5000)/900000)*900000;
+  // Pin this fixture to the currently forming interval; subtracting a fixed 5s can
+  // select the candle that just closed when CI happens to run on an interval edge.
+  const open=Math.floor(now/900000)*900000;
   const fetchImpl=async()=>({status:200,ok:true,headers:new Map(),json:async()=>[
     [open,'100','101','99','100','1000',open+899999,100000,10,500,50000,'0']
   ]});
@@ -123,4 +125,34 @@ test('TEST_FIXTURE: shared REST cache prunes expired rotating-symbol payloads in
   assert.equal(calls,21,'each distinct symbol should be requested once');
   assert.ok(health.shared_cache_entries<=12,
     `expired symbol payloads must be pruned after the bounded cleanup interval; current entries=${health.shared_cache_entries}`);
+});
+
+
+test('TEST_FIXTURE: shared in-flight request cap bounds simultaneous fetch and body parsing without dropping queued scans',async()=>{
+  let active=0,peakActive=0,calls=0;
+  const fetchImpl=async url=>{
+    active++;calls++;peakActive=Math.max(peakActive,active);
+    const symbol=new URL(url).searchParams.get('symbol');
+    await new Promise(resolve=>setTimeout(resolve,950));
+    return{
+      status:200,ok:true,headers:new Map(),
+      json:async()=>{
+        await new Promise(resolve=>setTimeout(resolve,150));
+        active--;
+        return {symbol};
+      }
+    };
+  };
+  const client=new RestClient({
+    baseUrls:['https://shared-inflight-cap.test'],fetchImpl,timeoutMs:5000,minIntervalMs:0,maxRequestsPerMinute:100
+  });
+  const symbols=Array.from({length:14},(_,i)=>'LOAD'+String(i).padStart(2,'0')+'USDT');
+  const results=await Promise.all(symbols.map(symbol=>client.request('/api/v3/ticker/24hr',{symbol})));
+  assert.equal(calls,symbols.length,'queued requests must all reach fetch');
+  assert.deepEqual(results.map(row=>row.data.symbol).sort(),symbols.slice().sort(),'no queued symbol request may be dropped');
+  assert.equal(peakActive,6,'the shared network/body-processing budget must reach, but never exceed, six slots');
+  const health=client.health();
+  assert.equal(health.shared_max_in_flight_requests,6);
+  assert.equal(health.shared_active_requests,0);
+  assert.equal(health.shared_waiting_requests,0);
 });

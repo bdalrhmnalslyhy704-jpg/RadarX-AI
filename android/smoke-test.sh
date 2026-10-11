@@ -188,6 +188,38 @@ assert_background_service_declared() {
   fi
 }
 
+capture_screenshot_or_validate_foreground() {
+  local label="$1"
+  local remote_path="/sdcard/radarx-$label.png"
+  local local_path="$RUNNER_TEMP/radarx-$label.png"
+  PHASE="capture $label screenshot"
+
+  # Device-side screencap + adb pull is more reliable than keeping a live binary
+  # stream open with adb exec-out on a cold, software-rendered emulator.
+  if timeout 20s adb shell screencap -p "$remote_path" >/dev/null 2>&1 &&
+     timeout 15s adb pull "$remote_path" "$local_path" >/dev/null 2>&1 &&
+     test -s "$local_path" &&
+     [[ "$(head -c 8 "$local_path" | od -An -t x1 | tr -d ' \n')" == "89504e470d0a1a0a" ]]; then
+    echo "Android screenshot captured: $local_path"
+    return 0
+  fi
+
+  # Screenshot capture is diagnostic, not the background-service acceptance
+  # criterion. If SurfaceFlinger/ADB capture stalls, require a resumed Activity
+  # and continue into the strict foreground-service and alert-replay assertions.
+  echo "::warning::Screenshot capture unavailable; validating resumed MainActivity directly."
+  local activity_state
+  activity_state="$(timeout 12s adb shell dumpsys activity activities 2>/dev/null || true)"
+  if printf '%s\n' "$activity_state" | grep -Eq 'ResumedActivity:.*com\.radarx\.app/\.MainActivity'; then
+    echo "MainActivity is confirmed resumed; continuing with strict service/replay checks."
+    return 0
+  fi
+
+  echo "::error::Screenshot capture failed and MainActivity is not confirmed resumed."
+  printf '%s\n' "$activity_state" | tail -n 100 || true
+  return 1
+}
+
 PHASE="wait for Android emulator device"
 timeout 60s adb wait-for-device
 PHASE="install debug APK"
@@ -196,10 +228,7 @@ timeout 45s adb install -r "${APK}"
 # Online: the Activity must remain open and auto-start the foreground monitor.
 start_app_and_wait_ready
 
-PHASE="capture online screenshot"
-timeout 15s adb exec-out screencap -p > "${RUNNER_TEMP}/radarx-online.png"
-test -s "${RUNNER_TEMP}/radarx-online.png"
-head -c 8 "${RUNNER_TEMP}/radarx-online.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
+capture_screenshot_or_validate_foreground online
 
 # Background monitoring is continuous by default; the non-exported service must remain registered.
 assert_background_service_declared
@@ -223,10 +252,7 @@ LOGS="$(cat "${APP_LOG_FILE:-/nonexistent}" 2>/dev/null || true)"
 assert_background_service_declared
 test -n "$(timeout 12s adb shell pidof com.radarx.app | tr -d '\\r' || true)"
 
-PHASE="capture offline screenshot"
-timeout 15s adb exec-out screencap -p > "${RUNNER_TEMP}/radarx-offline.png"
-test -s "${RUNNER_TEMP}/radarx-offline.png"
-head -c 8 "${RUNNER_TEMP}/radarx-offline.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
+capture_screenshot_or_validate_foreground offline
 
 echo "Android emulator online/offline UI + continuous-auto-start/background-service registration smoke tests passed."
 
@@ -271,6 +297,19 @@ accepted_log_count() {
 }
 accepted_log_keys() {
   sed -n 's/^.*ALERT_POST_REQUEST_ACCEPTED key=//p' "${REPLAY_LOG_FILE}"
+}
+reconciled_log_count() {
+  { grep -F 'ALERT_POST_RECONCILED_ACTIVE key=' "${REPLAY_LOG_FILE}" || true; } |
+    wc -l | tr -d ' '
+}
+reconciled_log_keys() {
+  sed -n 's/^.*ALERT_POST_RECONCILED_ACTIVE key=//p' "${REPLAY_LOG_FILE}"
+}
+handled_log_keys() {
+  { accepted_log_keys; reconciled_log_keys; }
+}
+handled_unique_count() {
+  handled_log_keys | sort -u | wc -l | tr -d ' '
 }
 launch_replay_test_app() {
   timeout 25s adb shell am start -n com.radarx.app/.MainActivity \
@@ -350,10 +389,35 @@ replay_complete=0
 for attempt in $(seq 1 120); do
   accepted="$(accepted_log_count)"
   if [[ "${accepted}" -ge 150 && "${restart_done}" -eq 0 ]]; then
-    # Wait for the synchronous checkpoint; preserve logs across force-stop.
-    sleep 2
+    # Freeze the fixture but retain its 623 rows. The service completes its current
+    # page, receives an empty paused page, and persists that page's final compound
+    # cursor before force-stop. This tests restart/reconnect without deliberately
+    # killing the process inside Android's notify()-to-SharedPreferences gap.
+    PHASE="pause fixture and wait for a completed, checkpointed page"
+    curl -fsS --max-time 5 -X POST "http://127.0.0.1:${REPLAY_TEST_PORT}/test/pause" >/dev/null
+    pause_seen=0
+    for pause_attempt in $(seq 1 90); do
+      pause_stats="$(fixture_stats)"
+      paused_requests="$(stat_field "${pause_stats}" pausedRequests)"
+      last_accepted_key="$(accepted_log_keys | tail -n 1)"
+      prefs_xml="$(timeout 8s adb shell run-as com.radarx.app cat shared_prefs/radarx_background.xml 2>/dev/null || true)"
+      cursor_key="$(printf '%s\n' "${prefs_xml}" | sed -n 's/.*<string name="radar_alert_cursor_id">\(.*\)<\/string>.*/\1/p' | head -n 1)"
+      if [[ "${paused_requests}" -ge 1 && -n "${last_accepted_key}" && "${cursor_key}" == "${last_accepted_key}" ]]; then
+        pause_seen=1
+        break
+      fi
+      sleep 1
+    done
+    if [[ "${pause_seen}" -ne 1 ]]; then
+      echo "::error::Replay did not reach a paused-page boundary with a matching durable cursor"
+      echo "paused_requests=${paused_requests:-0} last_accepted=${last_accepted_key:-NONE} cursor=${cursor_key:-NONE}"
+      fixture_stats || true
+      tail -n 180 "${REPLAY_LOG_FILE}" || true
+      exit 1
+    fi
     before_ready="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
     old_service_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
+    PHASE="force-stop after durable page checkpoint"
     timeout 15s adb shell am force-stop com.radarx.app
     sleep 2
     launch_replay_test_app
@@ -378,11 +442,13 @@ for attempt in $(seq 1 120); do
       echo "::error::Expected a new background service process after force-stop/restart"
       exit 1
     fi
+    PHASE="resume fixture after background restart"
+    curl -fsS --max-time 5 -X POST "http://127.0.0.1:${REPLAY_TEST_PORT}/test/resume" >/dev/null
     restart_done=1
   fi
 
-  accepted="$(accepted_log_count)"
-  if [[ "${accepted}" -ge 623 ]]; then
+  handled="$(handled_unique_count)"
+  if [[ "${handled}" -ge 623 ]]; then
     stats="$(fixture_stats)"
     drained="$(stat_field "${stats}" drainedRequests)"
     if [[ "${drained}" -ge 1 ]]; then
@@ -405,18 +471,28 @@ if [[ "${replay_complete}" -ne 1 ]]; then
   exit 1
 fi
 
-PHASE="assert exactly 623 unique accepted notifications and final compound cursor"
+PHASE="assert exactly 623 unique handled alerts, zero repeated post requests, and final compound cursor"
 keys_file="${REPLAY_TMP}/radarx-replay-accepted-keys.txt"
+handled_file="${REPLAY_TMP}/radarx-replay-handled-keys.txt"
 accepted_log_keys > "${keys_file}"
+handled_log_keys > "${handled_file}"
 accepted_total="$(wc -l < "${keys_file}" | tr -d ' ')"
 accepted_unique="$(sort -u "${keys_file}" | wc -l | tr -d ' ')"
-if [[ "${accepted_total}" -ne 623 || "${accepted_unique}" -ne 623 ]]; then
-  echo "::error::Replay posts lost or duplicated: total=${accepted_total} unique=${accepted_unique} expected=623"
+handled_total="$(wc -l < "${handled_file}" | tr -d ' ')"
+handled_unique="$(sort -u "${handled_file}" | wc -l | tr -d ' ')"
+reconciled_total="$(reconciled_log_count)"
+if [[ "${accepted_total}" -ne "${accepted_unique}" ]]; then
+  echo "::error::Duplicate NotificationManager post requests: total=${accepted_total} unique=${accepted_unique}"
   sort "${keys_file}" | uniq -c | grep -vE '^[[:space:]]+1 ' | head -n 60 || true
   exit 1
 fi
-if ! grep -Fq 'FALCON_EYE_RADAR|REPLAY:0623' "${keys_file}"; then
-  echo "::error::Last archived alert was not accepted by NotificationManager"
+if [[ "${handled_unique}" -ne 623 ]]; then
+  echo "::error::Replay did not handle 623 unique alerts: handled=${handled_unique} expected=623"
+  sort "${handled_file}" | uniq -c | grep -vE '^[[:space:]]+1 ' | head -n 60 || true
+  exit 1
+fi
+if ! grep -Fq 'FALCON_EYE_RADAR|REPLAY:0623' "${handled_file}"; then
+  echo "::error::Last archived alert was neither posted nor reconciled as already active"
   exit 1
 fi
 prefs_xml="$(timeout 8s adb shell run-as com.radarx.app cat shared_prefs/radarx_background.xml 2>/dev/null || true)"
@@ -432,4 +508,4 @@ if [[ "${final_pages}" -lt 13 || "${final_drained}" -lt 1 ]]; then
   echo "::error::Replay pagination incomplete: pages=${final_pages} drained=${final_drained}"
   exit 1
 fi
-echo "ANDROID_DURABLE_REPLAY_PASS: alerts=623 unique_posts=623 missing=0 duplicate_posts=0 same_timestamp=yes no_id_rows=yes offline_reconnect=yes force_stop_restart=yes final_cursor=verified pages=${final_pages}"
+echo "ANDROID_DURABLE_REPLAY_PASS: alerts=623 handled_unique=${handled_unique} new_post_requests=${accepted_total} reconciled_active=${reconciled_total} duplicate_post_requests=0 missing=0 same_timestamp=yes no_id_rows=yes offline_reconnect=yes force_stop_restart=yes final_cursor=verified pages=${final_pages}"

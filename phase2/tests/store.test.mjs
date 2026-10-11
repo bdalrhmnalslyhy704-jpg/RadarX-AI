@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,stat,mkdir,readFile,writeFile} from 'node:fs/promises';
+import {mkdtemp,stat,mkdir,readFile,writeFile,readdir,truncate} from 'node:fs/promises';
+import {spawnSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {createHash} from 'node:crypto';
 import {DurableStore} from '../core/store.mjs';
 import {SCAN_JOURNEY_SCHEMA} from '../core/scan-journey-ledger.mjs';
 
@@ -19,6 +21,43 @@ test('TEST_FIXTURE: durable settings subscriptions and audit jsonl survive a fre
   assert.equal(rows[0].signal_id,'TEST_FIXTURE');assert.equal(rows[0].status,'SENT');
 });
 
+test('readRecent streams a growing JSONL archive and returns only its newest rows in reverse order',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-read-recent-stream-'));
+  const store=await new DurableStore({dir}).init();
+  const total=12000;
+  const body=Array.from({length:total},(_,seq)=>JSON.stringify({
+    id:'FALCON:'+seq,seq,radar:'FALCON_EYE_RADAR',symbol:'TESTUSDT',processed_at:seq+1,
+    payload:'x'.repeat(900)
+  })).join('\n')+'\n';
+  await writeFile(store.files.falconEyeAlerts,body,'utf8');
+  const rows=await store.readRecent('falconEyeAlerts',7);
+  assert.deepEqual(rows.map(row=>row.seq),[11999,11998,11997,11996,11995,11994,11993]);
+  assert.equal(rows[0].id,'FALCON:11999');
+  assert.equal(rows.length,7);
+});
+
+test('the pre-expansion outcome ledger is cached and refreshed by atomic updates without reparsing the full file',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-outcome-cache-'));
+  const store=await new DurableStore({dir}).init();
+  const originalReadJson=store.readJson.bind(store);
+  let outcomeFileReads=0;
+  store.readJson=async path=>{
+    if(path===store.files.preExpansionOutcomes)outcomeFileReads++;
+    return originalReadJson(path);
+  };
+  const first=await store.getPreExpansionOutcomes();
+  assert.equal(outcomeFileReads,1);
+  const second=await store.getPreExpansionOutcomes();
+  assert.strictEqual(second,first);
+  assert.equal(outcomeFileReads,1);
+  await store.updatePreExpansionOutcomes(raw=>({...raw,records:[],cache_test_marker:'persisted'}));
+  assert.equal(outcomeFileReads,1,'an in-process outcome update must not reparse the whole durable JSON file');
+  const refreshed=await store.getPreExpansionOutcomes();
+  assert.equal(refreshed.cache_test_marker,'persisted');
+  assert.equal(outcomeFileReads,1);
+  const reopened=await new DurableStore({dir}).init();
+  assert.equal((await reopened.getPreExpansionOutcomes()).cache_test_marker,'persisted');
+});
 
 test('TEST_FIXTURE: Radar 4 alert log survives fresh reads',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-radar4-store-'));
@@ -327,6 +366,219 @@ test('scan-journey candle history rehydrates only newest fresh continuous closed
     assert.equal(after.compressed_bytes,before.compressed_bytes,'rehydration must not mutate or rewrite the archive');
     const audit=await store.verifyScanJourneyArchive();
     assert.equal(audit.complete,true,'bad market data in a row is not the same as a damaged archive file');
+  }finally{
+    await import('node:fs/promises').then(fs=>fs.rm(dir,{recursive:true,force:true}));
+  }
+});
+
+
+function stableArchivePayload(seed,length){
+  let out='';
+  for(let block=0;out.length<length;block++)
+    out+=createHash('sha256').update(seed+':'+block).digest('hex');
+  return out.slice(0,length);
+}
+
+test('scan-journey compressed retention remains bounded under repeated appends',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-scan-journey-retention-soak-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    // Store enforces a 1 MiB minimum archive budget; fill it over multiple cycles.
+  const maxBytes=1024*1024;
+    const cycles=6;
+    let completedAt=1_900_000_000_000;
+    for(let cycleIndex=0;cycleIndex<cycles;cycleIndex++){
+      const cycleId='RADAR8:USDT:RESOURCE-RETENTION:'+cycleIndex;
+      const coins=Array.from({length:40},(_,coinIndex)=>({
+        symbol:'TEST'+String(coinIndex).padStart(3,'0')+'USDT',
+        eligible:true,
+        evidence_payload:stableArchivePayload(cycleIndex+':'+coinIndex,12288)
+      }));
+      await store.appendScanJourneyCycle({
+        schema_version:SCAN_JOURNEY_SCHEMA,
+        cycle_id:cycleId,
+        cycle_number:cycleIndex+1,
+        radar:'RADAR_8',
+        quote:'USDT',
+        status:'COMPLETE',
+        started_at:completedAt-1000,
+        completed_at:completedAt,
+        data_policy:{
+          closed_candles_only:true,
+          paper_trading:true,
+          real_order_execution:false,
+          confidence_score:'UNKNOWN'
+        },
+        counters:{},
+        coins
+      },{maxBytes});
+      completedAt+=60_000;
+      const state=await store.getScanJourneyState();
+      assert.ok(state.compressed_bytes<=maxBytes,
+        'the compressed archive must stay within its explicit byte budget');
+      assert.ok(state.cycles.some(row=>row.cycle_id===cycleId),
+        'the newly completed cycle must remain in the retained manifest');
+    }
+    const state=await store.getScanJourneyState();
+    assert.ok(state.pruned_cycle_count>0,
+      'repeated appends beyond the budget must prune old cycles');
+    assert.equal(state.cycles.at(-1).cycle_id,'RADAR8:USDT:RESOURCE-RETENTION:5',
+      'the latest completed cycle must be retained');
+    const files=(await readdir(store.scanJourneyDir))
+      .filter(name=>name.endsWith('.json.gz')).sort();
+    assert.deepEqual(files,state.cycles.map(row=>row.filename).sort(),
+      'disk archive files and manifest retention must agree exactly');
+    const audit=await store.verifyScanJourneyArchive();
+    assert.equal(audit.complete,true,
+      'retained compressed cycles must remain readable and pass integrity verification');
+  }finally{
+    await import('node:fs/promises').then(fs=>fs.rm(dir,{recursive:true,force:true}));
+  }
+});
+
+
+test('atomic JSON snapshots remain readable while writers repeatedly replace the file',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-atomic-json-readers-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    const target=store.files.signalSnapshots;
+    const invalid=[];
+    let reading=true,reads=0;
+    const reader=(async()=>{
+      while(reading){
+        try{
+          const raw=await readFile(target,'utf8');
+          const parsed=JSON.parse(raw);
+          assert.ok(parsed&&typeof parsed==='object'&&!Array.isArray(parsed));
+          reads++;
+        }catch(error){invalid.push(String(error?.message||error));}
+        await new Promise(resolve=>setImmediate(resolve));
+      }
+    })();
+    for(let i=0;i<180;i++){
+      await store.putSignalSnapshot('T'+String(i).padStart(4,'0'),{sequence:i,payload:'x'.repeat(1200)});
+    }
+    reading=false;
+    await reader;
+    assert.ok(reads>0,'concurrent reader must observe snapshots during writes');
+    assert.deepEqual(invalid,[],'atomic rename must never expose a partial JSON document');
+    const final=JSON.parse(await readFile(target,'utf8'));
+    assert.equal(Object.keys(final).length,180,'serialized updates must not lose concurrent snapshot writes');
+  }finally{
+    await import('node:fs/promises').then(fs=>fs.rm(dir,{recursive:true,force:true}));
+  }
+});
+
+test('replaying the same scan-journey cycle ID is idempotent and preserves archive integrity',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-cycle-idempotency-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    const completedAt=Date.now()-60_000;
+    const cycle={
+      schema_version:SCAN_JOURNEY_SCHEMA,cycle_id:'RADAR8:USDT:IDEMPOTENCY',cycle_number:1,
+      radar:'RADAR_8',quote:'USDT',status:'COMPLETE',started_at:completedAt-1000,completed_at:completedAt,
+      data_policy:{closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
+      counters:{},coins:[{symbol:'TESTUSDT',eligible:true}]
+    };
+    const first=await store.appendScanJourneyCycle(cycle,{maxBytes:3*1024*1024});
+    const second=await store.appendScanJourneyCycle(cycle,{maxBytes:3*1024*1024});
+    assert.equal(first.duplicate,false);
+    assert.equal(second.duplicate,true);
+    assert.equal(second.cycle_sequence,first.cycle_sequence);
+    const state=await store.getScanJourneyState();
+    assert.equal(state.cycles.length,1,'same cycle ID must not create a second archive entry');
+    assert.equal(state.total_recorded_cycles,1);
+    const audit=await store.verifyScanJourneyArchive();
+    assert.equal(audit.complete,true);
+    assert.equal(audit.readable_cycles,1);
+  }finally{
+    await import('node:fs/promises').then(fs=>fs.rm(dir,{recursive:true,force:true}));
+  }
+});
+
+test('scan-journey archive refuses unsafe low disk headroom before changing durable state',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-cycle-storage-pressure-'));
+  try{
+    const store=await new DurableStore({
+      dir,freeBytesProvider:async()=>8*1024*1024,storageReserveBytes:16*1024*1024
+    }).init();
+    const completedAt=Date.now()-60_000;
+    const cycle={
+      schema_version:SCAN_JOURNEY_SCHEMA,cycle_id:'RADAR8:USDT:LOW-DISK',cycle_number:1,
+      radar:'RADAR_8',quote:'USDT',status:'COMPLETE',started_at:completedAt-1000,completed_at:completedAt,
+      data_policy:{closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
+      counters:{},coins:[{symbol:'TESTUSDT',eligible:true}]
+    };
+    await assert.rejects(store.appendScanJourneyCycle(cycle),error=>error?.code==='SCAN_JOURNEY_STORAGE_PRESSURE');
+    const state=await store.getScanJourneyState();
+    assert.equal(state.cycles.length,0,'storage pressure must not publish a partial manifest entry');
+    assert.equal((await readdir(store.scanJourneyDir)).filter(name=>name.endsWith('.json.gz')).length,0,
+      'storage pressure must not leave a partial compressed archive file');
+    // A cycle's primary signal journal is independent of the optional bulky journey
+    // snapshot; the caller can finish the cycle and report the archive-pressure state.
+    await store.appendFalconEyeAlert({
+      id:'FALCON:LOWDISK:1',radar:'FALCON_EYE_RADAR',symbol:'TESTUSDT',
+      detected_at:completedAt,processed_at:completedAt,price:1,
+      paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+    });
+    const signal=await store.readFalconEyeAlerts({sinceMs:0,limit:10});
+    assert.equal(signal.length,1);
+    assert.equal(signal[0].id,'FALCON:LOWDISK:1');
+  }finally{
+    await import('node:fs/promises').then(fs=>fs.rm(dir,{recursive:true,force:true}));
+  }
+});
+
+
+test('DurableStore startup does not read a large existing JSONL archive into the heap',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-large-jsonl-startup-'));
+  try{
+    const largeArchive=join(dir,'notifications.jsonl');
+    await writeFile(largeArchive,'');
+    // A sparse 128 MiB fixture distinguishes stat-based existence checks from
+    // readFile-based checks without physically writing 128 MiB of test content.
+    await truncate(largeArchive,128*1024*1024);
+    const storeUrl=new URL('../core/store.mjs',import.meta.url).href;
+    const script=`import {DurableStore} from ${JSON.stringify(storeUrl)}; await new DurableStore({dir:process.argv[1]}).init(); console.log('INIT_OK');`;
+    const child=spawnSync(process.execPath,[
+      '--max-old-space-size=96','--input-type=module','-e',script,dir
+    ],{encoding:'utf8',timeout:30_000,maxBuffer:2*1024*1024});
+    assert.equal(child.error,undefined,String(child.error||''));
+    assert.equal(child.status,0,'startup must work under a 96 MiB heap with a 128 MiB archive: '+String(child.stderr||''));
+    assert.match(child.stdout,/INIT_OK/);
+    assert.equal((await stat(largeArchive)).size,128*1024*1024,'startup must preserve the pre-existing archive unchanged');
+  }finally{
+    await import('node:fs/promises').then(fs=>fs.rm(dir,{recursive:true,force:true}));
+  }
+});
+
+test('archive writes fail closed when filesystem capacity cannot be measured',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-capacity-unavailable-'));
+  try{
+    const store=await new DurableStore({
+      dir,freeBytesProvider:async()=>{throw new Error('simulated statfs permission error');}
+    }).init();
+    await assert.rejects(
+      store.appendFalconEyeAlert({
+        id:'FALCON:CAPACITY-UNAVAILABLE',radar:'FALCON_EYE_RADAR',symbol:'TESTUSDT',
+        detected_at:Date.now(),processed_at:Date.now(),price:1,
+        paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+      }),
+      error=>error?.code==='DURABLE_STORE_CAPACITY_UNAVAILABLE'
+    );
+    const completedAt=Date.now()-60_000;
+    const cycle={
+      schema_version:SCAN_JOURNEY_SCHEMA,cycle_id:'RADAR8:USDT:CAPACITY-UNAVAILABLE',cycle_number:1,
+      radar:'RADAR_8',quote:'USDT',status:'COMPLETE',started_at:completedAt-1000,completed_at:completedAt,
+      data_policy:{closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
+      counters:{},coins:[{symbol:'TESTUSDT',eligible:true}]
+    };
+    await assert.rejects(
+      store.appendScanJourneyCycle(cycle),
+      error=>error?.code==='DURABLE_STORE_CAPACITY_UNAVAILABLE'
+    );
+    assert.equal((await readdir(store.scanJourneyDir)).filter(name=>name.endsWith('.json.gz')).length,0);
+    assert.equal((await store.getScanJourneyState()).cycles.length,0);
   }finally{
     await import('node:fs/promises').then(fs=>fs.rm(dir,{recursive:true,force:true}));
   }

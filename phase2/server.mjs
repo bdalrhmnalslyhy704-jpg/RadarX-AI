@@ -58,22 +58,42 @@ export async function startServer({
       });
     }catch{archiveVolumeMounted=false;}
   }
-  const archiveDigest=createHash('sha256').update(JSON.stringify(archiveRecords.map(row=>({
-    signal_id:row?.signal_id,radar:row?.radar,symbol:row?.symbol,detected_at:row?.detected_at,
-    marks:row?.marks,horizon_status:row?.horizon_status
-  })))).digest('hex');
-  const archiveAnchor=[...archiveRecords].sort((a,b)=>Number(a?.detected_at||0)-Number(b?.detected_at||0))[0]||null;
-  const archiveLatest=archiveRecords.reduce((latest,row)=>
-    Number(row?.detected_at||0)>Number(latest?.detected_at||0)?row:latest,null);
-  const archiveHorizonCounts=Object.fromEntries(['5m','15m','30m','60m','4h','24h'].map(h=>{
-    const complete=archiveRecords.filter(row=>row?.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC'&&
-      row?.excursions?.[h]?.source==='HISTORICAL_CLOSED_OHLC'&&row?.excursions?.[h]?.complete===true).length;
-    const incomplete=archiveRecords.filter(row=>row?.horizon_status?.[h]?.status==='INCOMPLETE'||
-      (row?.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC'&&row?.excursions?.[h]?.complete!==true)).length;
-    const provisional=archiveRecords.filter(row=>Boolean(row?.provisional_marks?.[h])).length;
-    return [h,{complete,incomplete,pending:Math.max(0,archiveRecords.length-complete-incomplete),
-      provisional,records:archiveRecords.length}];
-  }));
+  // Compute the durable-ledger digest and horizon counts in one pass. Avoid
+  // materializing a second 5,000-row projection, sorted copy, and six filtered arrays
+  // during startup; the production heap is intentionally bounded.
+  const archiveDigestHash=createHash('sha256');
+  archiveDigestHash.update('[');
+  let archiveDigestRows=0,archiveAnchor=null,archiveLatest=null;
+  let historicalCompleteCount=0,incompleteCount=0;
+  const archiveHorizons=['5m','15m','30m','60m','4h','24h'];
+  const archiveHorizonCounts=Object.fromEntries(archiveHorizons.map(h=>[h,{
+    complete:0,incomplete:0,pending:0,provisional:0,records:archiveRecords.length
+  }]));
+  for(const row of archiveRecords){
+    if(archiveDigestRows++)archiveDigestHash.update(',');
+    archiveDigestHash.update(JSON.stringify({
+      signal_id:row?.signal_id,radar:row?.radar,symbol:row?.symbol,detected_at:row?.detected_at,
+      marks:row?.marks,horizon_status:row?.horizon_status
+    }));
+    const detectedAt=Number(row?.detected_at||0);
+    if(!archiveAnchor||detectedAt<Number(archiveAnchor?.detected_at||0))archiveAnchor=row;
+    if(!archiveLatest||detectedAt>Number(archiveLatest?.detected_at||0))archiveLatest=row;
+    if(row?.outcome_status==='COMPLETE'&&row?.historical_evaluation===true)historicalCompleteCount++;
+    if(row?.outcome_status==='INCOMPLETE')incompleteCount++;
+    for(const h of archiveHorizons){
+      if(row?.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC'&&
+         row?.excursions?.[h]?.source==='HISTORICAL_CLOSED_OHLC'&&row?.excursions?.[h]?.complete===true)stats.complete++;
+      if(row?.horizon_status?.[h]?.status==='INCOMPLETE'||
+         (row?.marks?.[h]?.sample_quality==='HISTORICAL_CLOSED_OHLC'&&row?.excursions?.[h]?.complete!==true))stats.incomplete++;
+      if(Boolean(row?.provisional_marks?.[h]))stats.provisional++;
+    }
+  }
+  archiveDigestHash.update(']');
+  const archiveDigest=archiveDigestHash.digest('hex');
+  for(const h of archiveHorizons){
+    const stats=archiveHorizonCounts[h];
+    stats.pending=Math.max(0,archiveRecords.length-stats.complete-stats.incomplete);
+  }
   logger.info?.('[RADARX_ARCHIVE_READY] '+JSON.stringify({
     build_version:'Build 224',build_commit:process.env.RAILWAY_GIT_COMMIT_SHA||process.env.GITHUB_SHA||null,
     build_branch:process.env.RAILWAY_GIT_BRANCH||null,service_id:process.env.RAILWAY_SERVICE_ID||null,
