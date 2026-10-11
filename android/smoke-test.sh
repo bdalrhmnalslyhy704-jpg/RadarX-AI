@@ -40,9 +40,9 @@ trap cleanup EXIT
 
 start_app_and_wait_ready() {
   PHASE="force-stop before clean launch"
-  if [[ -n "\${APP_LOGCAT_PID:-}" ]]; then
-    kill "\${APP_LOGCAT_PID}" >/dev/null 2>&1 || true
-    wait "\${APP_LOGCAT_PID}" 2>/dev/null || true
+  if [[ -n "${APP_LOGCAT_PID:-}" ]]; then
+    kill "${APP_LOGCAT_PID}" >/dev/null 2>&1 || true
+    wait "${APP_LOGCAT_PID}" 2>/dev/null || true
     APP_LOGCAT_PID=""
   fi
   timeout 20s adb shell am force-stop com.radarx.app || true
@@ -50,13 +50,13 @@ start_app_and_wait_ready() {
 
   # Capture startup logs continuously. Repeated short adb logcat dumps can time
   # out on a cold software-rendered emulator and hide healthy Activity markers.
-  APP_LOG_FILE="\${RUNNER_TEMP:-/tmp}/radarx-app-startup-logcat.txt"
-  : > "\${APP_LOG_FILE}"
+  APP_LOG_FILE="${RUNNER_TEMP:-/tmp}/radarx-app-startup-logcat.txt"
+  : > "${APP_LOG_FILE}"
   PHASE="start persistent app startup log capture"
-  adb logcat -v brief -s RadarXSmoke:I RadarXWeb:I RadarXBackground:I AndroidRuntime:E ActivityTaskManager:E '*:S' >> "\${APP_LOG_FILE}" 2>&1 &
+  adb logcat -v brief -s RadarXSmoke:I RadarXWeb:I RadarXBackground:I AndroidRuntime:E ActivityTaskManager:E '*:S' >> "${APP_LOG_FILE}" 2>&1 &
   APP_LOGCAT_PID=$!
   sleep 1
-  if ! kill -0 "\${APP_LOGCAT_PID}" 2>/dev/null; then
+  if ! kill -0 "${APP_LOGCAT_PID}" 2>/dev/null; then
     echo "::error::Could not start Android startup log capture"
     return 1
   fi
@@ -65,72 +65,72 @@ start_app_and_wait_ready() {
   local start_output
   start_output="$(timeout 45s adb shell am start -n com.radarx.app/.MainActivity 2>&1)" || {
     local rc=$?
-    echo "::error::MainActivity launch command failed (exit \${rc})"
-    echo "\${start_output}"
-    return "\${rc}"
+    echo "::error::MainActivity launch command failed (exit ${rc})"
+    echo "${start_output}"
+    return "${rc}"
   }
-  echo "MainActivity launch: \${start_output}"
+  echo "MainActivity launch: ${start_output}"
 
   PHASE="wait for live process, resumed Activity, and JS UI readiness"
   local pid="" logs="" resume_line="" pause_line="" ready=0
   for attempt in $(seq 1 60); do
-    logs="$(cat "\${APP_LOG_FILE}" 2>/dev/null || true)"
+    logs="$(cat "${APP_LOG_FILE}" 2>/dev/null || true)"
     # Query the process every 10 seconds rather than issuing two adb commands
     # on every iteration; each ADB query has enough time for a cold emulator.
     if (( attempt == 1 || attempt % 5 == 0 )); then
-      pid="$(timeout 12s adb shell pidof com.radarx.app 2>/dev/null | tr -d '\\r' || true)"
+      pid="$(timeout 12s adb shell pidof com.radarx.app 2>/dev/null | tr -d '\r' || true)"
     fi
-    resume_line="$(printf '%s\\n' "\${logs}" | grep -nF 'ACTIVITY_RESUMED' | tail -n 1 | cut -d: -f1 || true)"
-    pause_line="$(printf '%s\\n' "\${logs}" | grep -nF 'ACTIVITY_PAUSED' | tail -n 1 | cut -d: -f1 || true)"
-    if [[ -n "\${pid}" && -n "\${resume_line}" ]] &&
-       printf '%s\\n' "\${logs}" | grep -Fq 'UI_READY' &&
-       { [[ -z "\${pause_line}" ]] || (( resume_line > pause_line )); }; then
+    resume_line="$(printf '%s\n' "${logs}" | grep -nF 'ACTIVITY_RESUMED' | tail -n 1 | cut -d: -f1 || true)"
+    pause_line="$(printf '%s\n' "${logs}" | grep -nF 'ACTIVITY_PAUSED' | tail -n 1 | cut -d: -f1 || true)"
+    if [[ -n "${pid}" && -n "${resume_line}" ]] &&
+       printf '%s\n' "${logs}" | grep -Fq 'UI_READY' &&
+       { [[ -z "${pause_line}" ]] || (( resume_line > pause_line )); }; then
       ready=1
       break
     fi
     sleep 2
   done
-  if [[ "\${ready}" -ne 1 ]]; then
+  if [[ "${ready}" -ne 1 ]]; then
     echo "::error::RadarX Activity/process/UI did not become ready"
-    echo "PID=\${pid:-NONE} RESUME_LINE=\${resume_line:-NONE} PAUSE_LINE=\${pause_line:-NONE}"
-    printf '%s\\n' "\${logs}" | tail -n 180
+    echo "PID=${pid:-NONE} RESUME_LINE=${resume_line:-NONE} PAUSE_LINE=${pause_line:-NONE}"
+    printf '%s\n' "${logs}" | tail -n 180
     timeout 15s adb shell dumpsys activity activities 2>/dev/null | tail -n 100 || true
     timeout 12s adb logcat -d -b crash 2>/dev/null | tail -n 140 || true
     return 1
   fi
-  echo "RadarX Activity/process/UI ready: pid=\${pid}"
+  echo "RadarX Activity/process/UI ready: pid=${pid}"
 
   PHASE="wait for background foreground-service startup"
   local service_ready=0
   for attempt in $(seq 1 30); do
-    logs="$(cat "\${APP_LOG_FILE}" 2>/dev/null || true)"
-    if printf '%s\\n' "\${logs}" | grep -Fq "BACKGROUND_AUTO_START_REQUEST" &&
-       printf '%s\\n' "\${logs}" | grep -Fq "BACKGROUND_SERVICE_READY"; then
+    logs="$(cat "${APP_LOG_FILE}" 2>/dev/null || true)"
+    if printf '%s\n' "${logs}" | grep -Fq "BACKGROUND_AUTO_START_REQUEST" &&
+       printf '%s\n' "${logs}" | grep -Fq "BACKGROUND_SERVICE_READY"; then
       service_ready=1
       break
     fi
     sleep 2
   done
 
-  if printf '%s\\n' "\${logs}" | grep -Eqi 'RadarXWeb: ERROR:Uncaught (ReferenceError|SyntaxError|TypeError)'; then
+  if printf '%s\n' "${logs}" | grep -Eqi 'RadarXWeb: ERROR:Uncaught (ReferenceError|SyntaxError|TypeError)'; then
     echo "::error::RadarX WebView runtime JavaScript error detected"
-    printf '%s\\n' "\${logs}" | tail -n 180
+    printf '%s\n' "${logs}" | tail -n 180
     return 1
   fi
-  if printf '%s\\n' "\${logs}" | grep -Fq 'RadarX Dashboard boot error:'; then
+  if printf '%s\n' "${logs}" | grep -Fq 'RadarX Dashboard boot error:'; then
     echo "::error::RadarX dashboard boot error detected"
-    printf '%s\\n' "\${logs}" | tail -n 180
+    printf '%s\n' "${logs}" | tail -n 180
     return 1
   fi
-  if [[ "\${service_ready}" -ne 1 ]]; then
+  if [[ "${service_ready}" -ne 1 ]]; then
     echo "::error::Expected automatic monitor startup markers were not observed"
-    printf '%s\\n' "\${logs}" | tail -n 180
+    printf '%s\n' "${logs}" | tail -n 180
     return 1
   fi
 
   # Stop the stream only after both UI and service readiness have been observed.
-  kill "\${APP_LOGCAT_PID}" >/dev/null 2>&1 || true
-  wait "\${APP_LOGCAT_PID}" 2>/dev/null || true
+  kill "${APP_LOGCAT_PID}" >/dev/null 2>&1 || true
+  wait "${APP_LOGCAT_PID}" 2>/dev/null || true
   APP_LOGCAT_PID=""
 }
 assert_background_service_declared() {
