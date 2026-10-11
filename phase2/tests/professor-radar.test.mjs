@@ -69,7 +69,7 @@ test('TEST_PROFESSOR: scan fuses public stream + news + Binance technical confir
   assert.equal(snap.candidates[0].symbol,'BTCUSDT');
   assert.equal(snap.candidates[0].opinion.action,'PAPER_ENTRY_CANDIDATE');
   assert.equal(alerts.length,1);
-  assert.equal(alerts[0].radar_name,'Radar 6 — البروفيسور');
+  assert.equal(alerts[0].radar_name,'البروفيسور — استخبارات عامة');
   assert.equal(alerts[0].paper_trading,true);
   assert.equal(alerts[0].real_order_execution,false);
 });
