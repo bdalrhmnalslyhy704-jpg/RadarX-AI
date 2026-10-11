@@ -240,7 +240,8 @@ REPLAY_LOG_FILE="${REPLAY_TMP}/radarx-replay-logcat.txt"
 # replay wait loop; all assertions still inspect actual Android runtime logs.
 replay_logs() { cat "${REPLAY_LOG_FILE}"; }
 accepted_log_count() {
-  grep -F 'ALERT_POST_REQUEST_ACCEPTED key=' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' '
+  { grep -F 'ALERT_POST_REQUEST_ACCEPTED key=' "${REPLAY_LOG_FILE}" || true; } |
+    wc -l | tr -d ' '
 }
 accepted_log_keys() {
   sed -n 's/^.*ALERT_POST_REQUEST_ACCEPTED key=//p' "${REPLAY_LOG_FILE}"
