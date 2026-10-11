@@ -257,9 +257,10 @@ class FakeSocket {
 test('verified scan-journey closed candles can seed live cache without any added REST calls',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-market-wide-cache-rehydrate-'));
   const now=Date.now();
+  let archiveHttpAttempts=0;
   const cacheRest=new RestClient({
     baseUrls:['https://archive-cache.test.invalid'],timeoutMs:1000,minIntervalMs:0,
-    fetchImpl:async()=>{throw new Error('archive rehydration must not perform network requests');}
+    fetchImpl:async()=>{archiveHttpAttempts++;throw new Error('archive rehydration must not perform network requests');}
   });
   FakeSocket.instances.length=0;
   const cache=new MarketWideKlineCache({
@@ -301,7 +302,7 @@ test('verified scan-journey closed candles can seed live cache without any added
     assert.equal(health.websocket_sync_ready,true);
     assert.equal(health.full_market_coverage_ready,true,
       'verified recent archive history plus a live combined stream satisfies the unchanged strict gate');
-    assert.equal(cacheRest.health().shared_requests_last_minute,0,
+    assert.equal(archiveHttpAttempts,0,
       'reading durable snapshots and seeding the cache must not trigger REST calls');
     assert.ok(cache.getSeries('AAAUSDT').candles.every(candle=>candle.source==='BINANCE_PUBLIC_REST_CACHE'));
   }finally{
