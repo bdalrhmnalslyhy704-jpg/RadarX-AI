@@ -142,7 +142,7 @@ public final class RadarXBackgroundMonitorService extends Service {
             if (live) {
                 if (!loggedFirstScan) { loggedFirstScan = true; Log.i(TAG, "BACKGROUND_SCAN_OK"); }
                 JSONArray alerts = root.optJSONArray("alerts");
-                int count = notifyNewRadarAlerts(alerts == null ? new JSONArray() : alerts, root.optBoolean("oldest_first", false));
+                int count = notifyNewRadarAlerts(alerts == null ? new JSONArray() : alerts, root.optBoolean("oldest_first", false), root.optJSONObject("next_cursor"));
                 JSONArray radars = root.optJSONArray("radars");
                 updateStatus("رادارات مستقلة • " + (radars == null ? 6 : radars.length()) +
                     " • اكتشافات جديدة: " + count);
@@ -357,12 +357,20 @@ public final class RadarXBackgroundMonitorService extends Service {
         return root;
     }
 
-    private int notifyNewRadarAlerts(JSONArray alerts, boolean oldestFirst) {
+    private int notifyNewRadarAlerts(JSONArray alerts, boolean oldestFirst, JSONObject nextCursor) {
         Set<String> seen = new HashSet<>(prefs().getStringSet("radar_alert_seen_ids", new HashSet<>()));
         long cursor = prefs().getLong("radar_alert_cursor_at", 0L);
         String cursorId = prefs().getString("radar_alert_cursor_id", "");
         long maxAt = cursor;
         String maxCursorId = cursorId;
+        // Trust the server's compound cursor for chronological replay; its tie ordering
+        // must not be reinterpreted with Java's different String collation rules.
+        if (oldestFirst && nextCursor != null) {
+            maxAt = Math.max(cursor, nextCursor.optLong("since", cursor));
+            if (nextCursor.optLong("since", cursor) >= cursor) {
+                maxCursorId = nextCursor.optString("since_id", cursorId);
+            }
+        }
         int count = 0;
         int start = oldestFirst ? 0 : alerts.length() - 1;
         int end = oldestFirst ? alerts.length() : -1;
@@ -378,7 +386,8 @@ public final class RadarXBackgroundMonitorService extends Service {
                 replayCursorId = alert.optString("radar", "UNKNOWN_RADAR") + "|" +
                     (id.isEmpty() ? alert.optString("symbol", "UNKNOWN") + ":" + at : id);
             }
-            if (at > maxAt || (at == maxAt && replayCursorId.compareTo(maxCursorId) > 0)) {
+            if (!(oldestFirst && nextCursor != null) &&
+                (at > maxAt || (at == maxAt && replayCursorId.compareTo(maxCursorId) > 0))) {
                 maxAt = at;
                 maxCursorId = replayCursorId;
             }
