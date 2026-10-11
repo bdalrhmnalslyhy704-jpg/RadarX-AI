@@ -1,0 +1,47 @@
+name: RadarX PR217 Read-only Closure Audit
+
+on:
+  push:
+    branches:
+      - fix/build224-smoke-release-gate-20261011
+    paths:
+      - 'phase2/tools/pr217-closure-audit.mjs'
+      - '.github/workflows/pr217-closure-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr217-closure-audit-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  read-only-live-and-candle-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate audit script
+        run: node --check phase2/tools/pr217-closure-audit.mjs
+      - name: Audit production snapshots and closed Binance Spot candles
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+          RADARX_CLOSURE_REPORT_JSON: artifacts/pr217-closure-audit.json
+          RADARX_CLOSURE_REPORT_MD: artifacts/pr217-closure-audit.md
+        run: node phase2/tools/pr217-closure-audit.mjs
+      - name: Upload read-only audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-pr217-closure-audit-${{ github.sha }}
+          path: |
+            artifacts/pr217-closure-audit.json
+            artifacts/pr217-closure-audit.md
+          if-no-files-found: warn
+          retention-days: 14
