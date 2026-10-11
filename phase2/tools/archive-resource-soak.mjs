@@ -245,7 +245,7 @@ try{
       retained_cycle_count:normalState.cycles.length,retained_coin_rows:normalState.retained_coin_rows,
       pruned_cycle_count:normalState.pruned_cycle_count
     },
-    http:{requests:httpRequests,5xx:http5xx,status_502:http502,expected_failures:0},
+    http:{requests:httpRequests,'5xx':http5xx,status_502:http502,expected_failures:0},
     cycles:{completed:cyclesCompleted,successfully_archived:cyclesArchived,explicitly_skipped_for_low_disk:archiveSkipped,manifest_total_recorded:normalState.total_recorded_cycles,archive_integrity:archiveAudit},
     signals:{expected:expectedSignalCount,observed:allSignalIds.length,unique:uniqueSignalCount,missing:missingSignals,duplicates:duplicateSignals,normal_log_rows:normalSignals.length,low_disk_log_rows:pressureSignals.length},
     low_disk_scenario:{
