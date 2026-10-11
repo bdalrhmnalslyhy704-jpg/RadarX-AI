@@ -217,7 +217,7 @@ export class RestClient {
   }
   health(){return {
     state:this.state,last_success_at:this.lastSuccessAt,last_error:this.lastError,
-    rate_limited_until:this.rateLimitedUntil||null,
+    rate_limited_until:Math.max(Number(this.rateLimitedUntil)||0,SHARED.rateLimitedUntil)||null,
     current_base_url:this.baseUrls[this.currentBaseIndex]??null,
     shared_queue_depth:SHARED.inflight.size,
     shared_cache_entries:SHARED.cache.size,
@@ -272,10 +272,15 @@ export class RestClient {
         try{
           const r=await this.fetchImpl(url,{method:'GET',signal:ac.signal,headers:{Accept:'application/json'}});
           if(r.status===429||r.status===418){
-            const wait=retryAfterMs(r.headers)??Math.min(60000,1500*(2**attempt));
-            SHARED.rateLimitedUntil=Math.max(SHARED.rateLimitedUntil,Date.now()+wait);
-            this.rateLimitedUntil=Date.now()+wait; this.state='RATE_LIMITED';
-            throw new RestRateLimitError(wait);
+            // Treat even sub-second Retry-After values as a real cooldown. A zero/near-zero
+            // window makes the client re-hit Binance immediately and makes health misleading.
+            const requestedWait=retryAfterMs(r.headers)??Math.min(60000,1500*(2**attempt));
+            const wait=Math.max(1000,requestedWait);
+            const cooldownUntil=Date.now()+wait;
+            SHARED.rateLimitedUntil=Math.max(SHARED.rateLimitedUntil,cooldownUntil);
+            this.rateLimitedUntil=Math.max(Number(this.rateLimitedUntil)||0,SHARED.rateLimitedUntil);
+            this.state='RATE_LIMITED';
+            throw new RestRateLimitError(Math.max(0,this.rateLimitedUntil-Date.now()));
           }
           if(!r.ok) throw new Error('HTTP_'+r.status);
           recordObservedUsedWeight(r.headers);
