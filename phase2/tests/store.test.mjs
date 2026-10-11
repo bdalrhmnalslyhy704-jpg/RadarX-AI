@@ -382,7 +382,8 @@ test('scan-journey compressed retention remains bounded under repeated appends',
   const dir=await mkdtemp(join(tmpdir(),'radarx-scan-journey-retention-soak-'));
   try{
     const store=await new DurableStore({dir}).init();
-    const maxBytes=350*1024;
+    // Store enforces a 1 MiB minimum archive budget; fill it over multiple cycles.
+  const maxBytes=1024*1024;
     const cycles=6;
     let completedAt=1_900_000_000_000;
     for(let cycleIndex=0;cycleIndex<cycles;cycleIndex++){
