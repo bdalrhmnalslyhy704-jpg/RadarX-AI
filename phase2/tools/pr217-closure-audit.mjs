@@ -72,10 +72,26 @@ function stamp(row){return num(row?.detected_at??row?.processed_at??row?.detecte
 function typeOf(row){return String(row?.signal_type??row?.potential_label??row?.event??row?.type??row?.stage??'UNKNOWN').toUpperCase();}
 function identity(row,fallback='UNKNOWN_RADAR'){return String(row?.replay_cursor_id||row?.signal_id||row?.id||[row?.radar||fallback,row?.symbol||'',typeOf(row),stamp(row)].join('|'));}
 function candlesFrom(raw) {
-  return (Array.isArray(raw)?raw:[]).filter(r=>Array.isArray(r)&&r.length>=9).map(r=>({
-    openTime:Number(r[0]),open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),close:Number(r[4]),
-    baseVolume:Number(r[5]),closeTime:Number(r[6]),quoteVolume:Number(r[7]),trades:Number(r[8])
-  })).filter(r=>Number.isFinite(r.closeTime)&&r.closeTime<=now&&[r.open,r.high,r.low,r.close,r.quoteVolume].every(Number.isFinite)&&r.close>0&&r.high>=r.low).sort((a,b)=>a.openTime-b.openTime);
+  const byOpenTime=new Map();
+  for(const row of (Array.isArray(raw)?raw:[])) {
+    if(!Array.isArray(row)||row.length<9)continue;
+    const candle={
+      openTime:Number(row[0]),open:Number(row[1]),high:Number(row[2]),low:Number(row[3]),close:Number(row[4]),
+      baseVolume:Number(row[5]),closeTime:Number(row[6]),quoteVolume:Number(row[7]),trades:Number(row[8])
+    };
+    if(!Number.isFinite(candle.openTime)||candle.openTime%CANDLE_MS!==0||
+      candle.closeTime!==candle.openTime+CANDLE_MS-1||candle.closeTime>now||
+      ![candle.open,candle.high,candle.low,candle.close,candle.quoteVolume].every(Number.isFinite)||
+      candle.open<=0||candle.close<=0||candle.low<=0||candle.high<Math.max(candle.open,candle.close)||
+      candle.low>Math.min(candle.open,candle.close)||candle.high<candle.low||candle.quoteVolume<0)continue;
+    byOpenTime.set(candle.openTime,candle);
+  }
+  const sorted=[...byOpenTime.values()].sort((a,b)=>a.openTime-b.openTime);
+  // Keep only the latest continuous chain. Never bridge an absent or invalid closed candle.
+  let latestChainStart=0;
+  for(let i=1;i<sorted.length;i++)
+    if(sorted[i].openTime!==sorted[i-1].openTime+CANDLE_MS)latestChainStart=i;
+  return sorted.slice(latestChainStart);
 }
 function quoteVolume24hAt(rows,index) {
   if(index<BARS_24H-1)return {status:'NOT_ENOUGH_24H_CLOSED_CANDLES',quote_volume:null,bars:index+1};
@@ -105,28 +121,48 @@ function outcomes(signal,rows) {
   if(!at)return {status:'SIGNAL_TIMESTAMP_UNAVAILABLE',detected_at:null,entry_price:null,horizons:{}};
   let index=-1;
   for(let i=0;i<rows.length;i++){if(rows[i].closeTime<=at)index=i;else break;}
-  const entry=num(signal.entry_price??signal.entryPrice??signal.price??signal.last_price)??(index>=0?rows[index].close:null);
+  const reportedEntry=num(signal.entry_price??signal.entryPrice??signal.price??signal.last_price);
+  const entry=reportedEntry??(index>=0?rows[index].close:null);
+  const entryPriceSource=reportedEntry!==null?'SIGNAL_REPORTED_PRICE':entry!==null?'LAST_CLOSED_CANDLE_BEFORE_SIGNAL':'UNAVAILABLE';
   const horizons={};
   for(const h of HORIZONS) {
     const target=at+h.ms;
-    const future=rows.filter(r=>r.closeTime>at&&r.closeTime<=target);
-    const matured=now>=target,sufficient=future.length>=h.bars;
+    // Use only candles that opened at/after the signal timestamp and closed by the horizon.
+    // A candle already in progress at the signal time can contain pre-signal highs/lows.
+    const firstFullOpen=Math.ceil(at/CANDLE_MS)*CANDLE_MS;
+    const expectedFullBars=Math.max(0,Math.floor((target-firstFullOpen)/CANDLE_MS));
+    const future=rows.filter(r=>r.openTime>=at&&r.closeTime<=target);
+    const matured=now>=target;
+    const contiguous=future.every((r,i)=>i===0||r.openTime===future[i-1].openTime+CANDLE_MS);
+    const covered=expectedFullBars>0&&future.length===expectedFullBars&&contiguous;
+    const status=matured?(covered?'COMPLETE':'INCOMPLETE_CLOSED_CANDLE_COVERAGE'):'PENDING';
     const high=future.length?Math.max(...future.map(r=>r.high)):null;
     const low=future.length?Math.min(...future.map(r=>r.low)):null;
     const last=future.at(-1)||null;
+    const closeReturn=entry&&last?round(pct(last.close,entry)):null;
+    const mfe=entry&&high!==null?round(pct(high,entry)):null;
+    const mae=entry&&low!==null?round(pct(low,entry)):null;
+    const final=status==='COMPLETE';
     horizons[h.key]={
-      status:matured&&sufficient?'COMPLETE':now<target?'PENDING':'INCOMPLETE_CLOSED_CANDLE_COVERAGE',
-      source:'BINANCE_SPOT_CLOSED_5M_OHLC',expected_bars:h.bars,observed_bars:future.length,
-      close_return_pct:entry&&last?round(pct(last.close,entry)):null,
-      mfe_pct:entry&&high!==null?round(pct(high,entry)):null,
-      mae_pct:entry&&low!==null?round(pct(low,entry)):null,
+      status,source:'BINANCE_SPOT_CLOSED_5M_OHLC',
+      nominal_horizon_ms:h.ms,expected_full_closed_bars:expectedFullBars,observed_bars:future.length,
+      contiguous,endpoint_close_at:iso(last?.closeTime),
+      endpoint_elapsed_ms:last?last.closeTime-at:null,
+      endpoint_gap_to_horizon_ms:last?Math.max(0,target-last.closeTime):null,
+      close_return_pct:final?closeReturn:null,mfe_pct:final?mfe:null,mae_pct:final?mae:null,
+      provisional_close_return_pct:final?null:closeReturn,
+      provisional_mfe_pct:final?null:mfe,provisional_mae_pct:final?null:mae,
+      evaluation_basis:'LAST_FULLY_CLOSED_5M_CANDLE_AT_OR_BEFORE_HORIZON',
       matures_at:iso(target)
     };
   }
   const liquidity=historicalLiquidityAt(rows,at);
+  const rawStage=signal.stage??signal.phase??signal.pipeline_stage??signal.analysis_stage??signal.signal_stage??null;
   return {
-    status:'SIGNAL_ROW_FOUND',signal_id:identity(signal),radar:signal.radar||null,signal_type:typeOf(signal),
-    detected_at:iso(at),entry_price:entry,
+    status:'SIGNAL_ROW_FOUND',signal_id:identity(signal),radar:signal.radar||signal._audit_endpoint_radar||null,
+    signal_type:typeOf(signal),signal_stage:rawStage,
+    signal_stage_status:rawStage===null?'NOT_EXPOSED_BY_PUBLIC_ALERT_ROW':'FIELD_EXPOSED_FULL_PATH_NOT_EXPOSED',
+    detected_at:iso(at),entry_price:entry,entry_price_source:entryPriceSource,
     evaluation_eligible:typeof signal.evaluation_eligible==='boolean'?signal.evaluation_eligible:null,
     data_quality_status:signal.data_quality_status||signal.data_status?.status||null,
     source_score_status:signal.source_score_status||null,
@@ -212,8 +248,9 @@ try {
     for(const alert of result.alerts) {
       const symbol=String(alert?.symbol||'').toUpperCase();
       if(!alertsBySymbol.has(symbol)||stamp(alert)<since||stamp(alert)>now)continue;
-      const key=identity(alert,RADARS[i]);
-      if(!alertsBySymbol.get(symbol).some(row=>identity(row,RADARS[i])===key))alertsBySymbol.get(symbol).push(alert);
+      const endpointKey=RADARS[i]+'|'+identity(alert,RADARS[i]);
+      if(!alertsBySymbol.get(symbol).some(row=>(row._audit_endpoint_radar||row.radar||RADARS[i])+'|'+identity(row,RADARS[i])===endpointKey))
+        alertsBySymbol.get(symbol).push({...alert,_audit_endpoint_radar:RADARS[i]});
       targetCount++;
     }
     report.radar_runtime.endpoint_audit.push({
@@ -223,12 +260,22 @@ try {
   }
 
   const candleResults=await mapLimit(TARGETS,3,async symbol=>{
-    const url=new URL('/api/v3/klines',BINANCE);
-    url.searchParams.set('symbol',symbol);url.searchParams.set('interval','5m');
-    url.searchParams.set('limit',String(KLINE_LIMIT));
-    url.searchParams.set('startTime',String(now-(KLINE_LIMIT+2)*CANDLE_MS));
-    const raw=await fetchJson(url.toString(),{timeoutMs:25000});
-    return {symbol,candles:candlesFrom(raw)};
+    const recentUrl=new URL('/api/v3/klines',BINANCE);
+    recentUrl.searchParams.set('symbol',symbol);recentUrl.searchParams.set('interval','5m');
+    // With no startTime Binance returns the newest 1,000 closed/open candles.
+    recentUrl.searchParams.set('limit',String(KLINE_LIMIT));
+    const recent=await fetchJson(recentUrl.toString(),{timeoutMs:25000});
+    const firstRecentOpen=(Array.isArray(recent)?recent:[]).map(row=>num(row?.[0])).filter(Number.isFinite).sort((a,b)=>a-b)[0];
+    let older=[];
+    if(firstRecentOpen!==undefined) {
+      const olderUrl=new URL('/api/v3/klines',BINANCE);
+      olderUrl.searchParams.set('symbol',symbol);olderUrl.searchParams.set('interval','5m');
+      olderUrl.searchParams.set('startTime',String(firstRecentOpen-(BARS_24H+4)*CANDLE_MS));
+      olderUrl.searchParams.set('endTime',String(firstRecentOpen-1));
+      olderUrl.searchParams.set('limit',String(BARS_24H+4));
+      older=await fetchJson(olderUrl.toString(),{timeoutMs:25000});
+    }
+    return {symbol,candles:candlesFrom([...(Array.isArray(older)?older:[]),...(Array.isArray(recent)?recent:[])])};
   });
   const candleMap=new Map();
   for(let i=0;i<candleResults.length;i++) {
@@ -240,16 +287,26 @@ try {
   for(const symbol of TARGETS) {
     const pair=exchangeMap.get(symbol),ticker=tickerMap.get(symbol),candles=candleMap.get(symbol)||[];
     const rawAlerts=(alertsBySymbol.get(symbol)||[]).filter(row=>stamp(row)>=since&&stamp(row)<=now).sort((a,b)=>stamp(a)-stamp(b));
-    const signals=rawAlerts.map(row=>outcomes(row,candles));
+    // Keep only the first chronological signal per radar+symbol for outcome scoring.
+    // Later rows remain explicitly counted as observations, not independent signals.
+    const firstByRadar=new Map();
+    for(const row of rawAlerts) {
+      const radar=String(row.radar||row.radar_name||row._audit_endpoint_radar||'UNKNOWN_RADAR');
+      if(!firstByRadar.has(radar))firstByRadar.set(radar,row);
+    }
+    const firstUniqueRows=[...firstByRadar.values()].sort((a,b)=>stamp(a)-stamp(b));
+    const signals=firstUniqueRows.map(row=>outcomes(row,candles));
     const marker=moveMarker(candles);
     const quoteVolume=num(ticker?.quoteVolume);
-    const qualified=signals.filter(row=>['WATCH_EARLY','PRE_EXPANSION','BREAKOUT_DEVELOPING'].includes(row.signal_type)&&row.evaluation_eligible!==false&&row.historical_24h_quote_volume?.eligible===true);
+    const preMarkerEligible=signals.filter(row=>row.detected_at&&marker.at!==null&&
+      Date.parse(row.detected_at)<=marker.at&&row.evaluation_eligible!==false&&row.historical_24h_quote_volume?.eligible===true);
     let relation='NOT_PROVEN';
     if(marker.at!==null) {
-      if(qualified.some(row=>Date.parse(row.detected_at)<=marker.at))relation='QUALIFIED_EARLY_SIGNAL_BEFORE_ROLLING_24H_PLUS5_CROSS';
-      else if(signals.some(row=>row.detected_at&&Date.parse(row.detected_at)>marker.at))relation='AVAILABLE_SIGNALS_AFTER_MARKER_OR_NOT_HISTORICALLY_ELIGIBLE';
-      else relation='NO_MATCHING_SIGNAL_IN_LIMITED_ALERT_WINDOW';
-    }
+      if(preMarkerEligible.length)relation='ELIGIBLE_FIRST_RADAR_SIGNAL_BEFORE_ROLLING_24H_PLUS5_MARKER_NOT_PROOF_OF_MOVE_START';
+      else if(signals.some(row=>row.detected_at&&Date.parse(row.detected_at)>marker.at))
+        relation='AVAILABLE_FIRST_SIGNALS_AFTER_MARKER_OR_HISTORICAL_ELIGIBILITY_NOT_MET';
+      else relation='NO_ELIGIBLE_FIRST_RADAR_SIGNAL_BEFORE_MARKER_IN_BOUNDED_ALERT_WINDOW';
+    } else relation='NO_PLUS5_MARKER_IN_AVAILABLE_CONTINUOUS_CLOSED_CANDLE_WINDOW';
     report.symbol_audit.push({
       symbol,
       source_groups:[...(MOVERS.includes(symbol)?['USER_MOVER_LIST']:[]),...(PRIOR_NOTIFICATIONS.includes(symbol)?['LEGACY_NOTIFICATION_LIST']:[])],
@@ -259,13 +316,21 @@ try {
         current_quote_volume_24h:quoteVolume,threshold_usdt:MIN_QUOTE_VOLUME,
         eligible_now:pair&&quoteVolume!==null?pair.status==='TRADING'&&pair.quoteAsset==='USDT'&&pair.isSpotTradingAllowed!==false&&quoteVolume>=MIN_QUOTE_VOLUME:null
       },
-      candle_history:{status:candles.length>=BARS_24H?'CLOSED_5M_HISTORY_AVAILABLE':'LIMITED_OR_UNAVAILABLE',closed_candles:candles.length,first_closed_candle:iso(candles[0]?.closeTime),last_closed_candle:iso(candles.at(-1)?.closeTime)},
-      movement_start_marker_24h_plus5:{...marker,at:iso(marker.at)},
+      candle_history:{
+        status:candles.length>=BARS_24H?'CLOSED_5M_HISTORY_AVAILABLE':'LIMITED_OR_UNAVAILABLE',
+        closed_candles:candles.length,first_closed_candle:iso(candles[0]?.closeTime),
+        last_closed_candle:iso(candles.at(-1)?.closeTime),continuous_latest_chain:true
+      },
+      movement_start_marker_24h_plus5:{...marker,at:iso(marker.at),interpretation:'OPERATIONAL_ROLLING_24H_THRESHOLD_CROSS_NOT_ECONOMIC_MOVE_START'},
       signal_evidence:{
-        window_since:iso(since),per_radar_endpoint_cap:100,matching_alerts:signals.length,
+        window_since:iso(since),per_radar_endpoint_cap:100,
+        matching_alert_rows_in_bounded_pages:rawAlerts.length,
+        first_unique_signals_one_per_radar_symbol:signals.length,
+        later_alert_rows_not_counted_as_independent:Math.max(0,rawAlerts.length-signals.length),
+        matching_alerts:signals.length,
         signal_types:signals.reduce((acc,row)=>(acc[row.signal_type]=(acc[row.signal_type]||0)+1,acc),{}),
         earliest_signal:signals[0]?{radar:signals[0].radar,signal_type:signals[0].signal_type,at:signals[0].detected_at,entry_price:signals[0].entry_price}:null,
-        first_qualified_early_signal:qualified[0]?{radar:qualified[0].radar,signal_type:qualified[0].signal_type,at:qualified[0].detected_at,entry_price:qualified[0].entry_price,source_score_status:qualified[0].source_score_status}:null,
+        first_pre_marker_eligible_alert:preMarkerEligible[0]?{radar:preMarkerEligible[0].radar,signal_type:preMarkerEligible[0].signal_type,at:preMarkerEligible[0].detected_at,entry_price:preMarkerEligible[0].entry_price,source_score_status:preMarkerEligible[0].source_score_status}:null,
         relationship_to_marker:relation,full_fast_micro_deep_trace:'NOT_EXPOSED_BY_PUBLIC_ALERT_ROW'
       },
       signals,
@@ -307,9 +372,9 @@ const markdown=[
   '',
   '## Symbol evidence',
   '',
-  '| Symbol | Eligible now | Closed candles | Alert rows | Earliest signal | +5% marker | Relationship |',
-  '|---|---:|---:|---:|---|---|---|',
-  ...report.symbol_audit.map(row=>'| '+row.symbol+' | '+(row.current_eligibility.eligible_now===true?'YES':row.current_eligibility.eligible_now===false?'NO':'UNKNOWN')+' | '+row.candle_history.closed_candles+' | '+row.signal_evidence.matching_alerts+' | '+(row.signal_evidence.earliest_signal?row.signal_evidence.earliest_signal.signal_type+' @ '+row.signal_evidence.earliest_signal.at:'NONE IN BOUNDED PAGE')+' | '+row.movement_start_marker_24h_plus5.status+' | '+row.signal_evidence.relationship_to_marker+' |'),
+  '| Symbol | Eligible now | Continuous closed 5m candles | Raw alert rows | First unique signals (per radar) | Earliest first signal | +5% marker | Relationship |',
+  '|---|---:|---:|---:|---:|---|---|---|',
+  ...report.symbol_audit.map(row=>'| '+row.symbol+' | '+(row.current_eligibility.eligible_now===true?'YES':row.current_eligibility.eligible_now===false?'NO':'UNKNOWN')+' | '+row.candle_history.closed_candles+' | '+row.signal_evidence.matching_alert_rows_in_bounded_pages+' | '+row.signal_evidence.first_unique_signals_one_per_radar_symbol+' | '+(row.signal_evidence.earliest_signal?row.signal_evidence.earliest_signal.signal_type+' @ '+row.signal_evidence.earliest_signal.at:'NONE IN BOUNDED PAGE')+' | '+row.movement_start_marker_24h_plus5.status+' | '+row.signal_evidence.relationship_to_marker+' |'),
   '',
   '## Radar health snapshot',
   '',
