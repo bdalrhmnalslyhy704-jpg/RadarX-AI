@@ -1102,6 +1102,7 @@ export class EarlyExpansionRadar{
     this.lastDeepAtBySymbol=new Map();this.firstEligibleAtBySymbol=new Map();
     this.journeyStateHydrated=false;this.lastJourneyArchive=null;this.lastJourneyError=null;
     this.outcomeBackfillTask=null;
+    this.marketWideCacheArchiveHydrationAttempted=false;this.marketWideCacheArchiveHydration=null;this.marketWideCacheArchiveHydrationAttemptAtBySymbol=new Map();this.marketWideCacheArchiveLastEligibleSymbols=new Set();
     this.latestCandidates=[];this.lastResult=null;this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
     this.fastScannedTotal=0;this.failedTotal=0;this.failedSymbols=[];this.lastCoverage=emptyEarlyExpansionUniverse(this.config,this.config.quote);
   }
@@ -1325,6 +1326,68 @@ export class EarlyExpansionRadar{
     ));
     return buildEarlyExpansionEvidence({series,ticker:row,depth:dd.data,marketContext,fastContext:fast,now:candleAsOf,config:cfg,historicalReplay:false,sourceList:sources});
   }
+  async rehydrateMarketWideCacheFromArchive(eligible,now=this.clock()){
+    if(!this.marketWideKlineCache||typeof this.store.readScanJourneyCandleHistory!=='function')return null;
+    // The eligible universe can change while the process is running. Hydrate only
+    // symbols whose cache is not ready, and retry missing/stale archive snapshots
+    // on a bounded per-symbol cooldown instead of permanently giving up after the
+    // first startup pass. This remains archive-only: no REST calls are introduced.
+    const eligibleSymbols=[...new Set((Array.isArray(eligible)?eligible:[])
+      .map(row=>String(row?.symbol||'').trim().toUpperCase())
+      .filter(symbol=>/^[A-Z0-9]{2,25}USDT$/.test(symbol)))];
+    const newlyEligible=new Set(eligibleSymbols.filter(symbol=>!this.marketWideCacheArchiveLastEligibleSymbols.has(symbol)));
+    this.marketWideCacheArchiveLastEligibleSymbols=new Set(eligibleSymbols);
+    let coverage=null;
+    try{coverage=this.marketWideKlineCache.coverageReport?.()||null;}catch{}
+    const readyBySymbol=new Map((Array.isArray(coverage?.symbols)?coverage.symbols:[])
+      .map(item=>[String(item?.symbol||'').trim().toUpperCase(),item?.ready===true]));
+    const retryMs=Math.max(60_000,Math.trunc(Number(this.config.marketWideCacheArchiveHydrationRetryMs)||5*60_000));
+    const symbols=eligibleSymbols.filter(symbol=>{
+      if(readyBySymbol.get(symbol)===true)return false;
+      const lastAttempt=this.marketWideCacheArchiveHydrationAttemptAtBySymbol.get(symbol);
+      // setSymbols removes cache data for symbols that leave eligibility. If one
+      // re-enters, retry immediately even if its previous archive attempt is on cooldown.
+      return newlyEligible.has(symbol)||!Number.isFinite(lastAttempt)||Number(now)-lastAttempt>=retryMs;
+    });
+    if(!symbols.length)return this.marketWideCacheArchiveHydration;
+    this.marketWideCacheArchiveHydrationAttempted=true;
+    for(const symbol of symbols)this.marketWideCacheArchiveHydrationAttemptAtBySymbol.set(symbol,Number(now));
+    const startedAt=this.clock();
+    try{
+      const minimum=Math.max(60,Math.trunc(Number(this.config.marketWideLightScanMinClosedCandles)||60));
+      const maximum=Math.max(minimum,Math.min(96,Math.trunc(Number(this.config.marketWideLightScanMaxClosedCandles)||96)));
+      const report=await this.store.readScanJourneyCandleHistory({
+        symbols,
+        timeframe:'5m',minCandles:minimum,maxCandles:maximum,maxCycles:50,
+        maxAgeMs:Math.max(5*60_000,Number(this.config.marketWideLightScanMaxCandleAgeMs)||8*60_000),now
+      });
+      let seededSymbols=0,seededCandles=0;
+      for(const [symbol,candles] of Object.entries(report.series||{})){
+        const accepted=this.marketWideKlineCache.seed(symbol,candles,'BINANCE_PUBLIC_REST_CACHE');
+        if(accepted>0)seededSymbols++;
+        seededCandles+=accepted;
+      }
+      const cache=this.marketWideKlineCache.health?.()||{};
+      this.marketWideCacheArchiveHydration={
+        status:'COMPLETE',requested_symbols:report.requested_symbols,
+        archive_hydrated_symbols:report.hydrated_symbols,seeded_symbols:seededSymbols,
+        seeded_candles:seededCandles,stale_symbols:report.stale_symbols,
+        invalid_symbols:report.invalid_symbols,missing_snapshot_symbols:report.missing_snapshot_symbols,
+        unreadable_cycles:report.unreadable_cycles,invalid_cycles:report.invalid_cycles,
+        cycles_examined:report.cycles_examined,duration_ms:Math.max(0,this.clock()-startedAt),
+        cache_ready_symbols:cache.ready_symbols??0,cache_expected_symbols:cache.expected_symbols??0,
+        extra_binance_rest_calls:0,archive_mutated:false
+      };
+      this.logger.info?.('[RADARX_MARKET_WIDE_CACHE_ARCHIVE_REHYDRATE] '+JSON.stringify(this.marketWideCacheArchiveHydration));
+      return this.marketWideCacheArchiveHydration;
+    }catch(error){
+      this.marketWideCacheArchiveHydration={status:'FAILED',reason:String(error?.message??error),
+        duration_ms:Math.max(0,this.clock()-startedAt),extra_binance_rest_calls:0,archive_mutated:false};
+      this.noteError(error,'market-wide-cache-archive-rehydrate');
+      this.logger.warn?.('[RADARX_MARKET_WIDE_CACHE_ARCHIVE_REHYDRATE] '+JSON.stringify(this.marketWideCacheArchiveHydration));
+      return this.marketWideCacheArchiveHydration;
+    }
+  }
   async tick({quote=this.config.quote}={}){
     if(!this.running||this.busy)return false;
     this.busy=true;const scanStartedAt=this.clock();
@@ -1411,6 +1474,7 @@ export class EarlyExpansionRadar{
         try{
           this.marketWideKlineCache.setSymbols(eligible.map(row=>row.symbol));
           if(!this.marketWideKlineCache.running)this.marketWideKlineCache.start();
+          await this.rehydrateMarketWideCacheFromArchive(eligible,fastSeenAt);
         }catch(error){this.noteError(error,'market-wide-light-stream');}
       }
       if(this.config.marketWideLightScanEnabled!==false){

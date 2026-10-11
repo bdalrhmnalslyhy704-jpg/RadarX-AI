@@ -4,6 +4,7 @@ import {mkdtemp,stat,mkdir,readFile,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DurableStore} from '../core/store.mjs';
+import {SCAN_JOURNEY_SCHEMA} from '../core/scan-journey-ledger.mjs';
 
 test('TEST_FIXTURE: durable settings subscriptions and audit jsonl survive a fresh read',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-store-'));
@@ -174,4 +175,58 @@ test('large pre-expansion outcome ledger writes compact, valid JSON and remains 
   const next=JSON.parse(await readFile(store.files.preExpansionOutcomes,'utf8'));
   assert.equal(next.records.length,5000,'update must preserve every bounded record');
   assert.equal(next.updated_at,1700000000123);
+});
+
+
+test('scan-journey candle history rehydrates only newest fresh continuous closed data without archive mutation',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-journey-candle-rehydrate-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    const step=5*60_000,now=1_900_000_000_000;
+    const makeBars=(asOf,count=72)=>{
+      const aligned=Math.floor(asOf/step)*step-step;
+      const first=aligned-(count-1)*step;
+      return Array.from({length:count},(_,index)=>{
+        const open=first+index*step;
+        return {open_time:open,close_time:open+step-1,open:100,high:101,low:99,close:100,
+          volume:10,quote_volume:1000,trade_count:20,taker_buy_base_volume:5};
+      });
+    };
+    const append=async({id,completedAt,coins})=>store.appendScanJourneyCycle({
+      schema_version:SCAN_JOURNEY_SCHEMA,cycle_id:id,cycle_number:1,radar:'RADAR_8',quote:'USDT',
+      status:'COMPLETE',started_at:completedAt-1000,completed_at:completedAt,
+      data_policy:{closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
+      counters:{},coins
+    });
+    await append({id:'RADAR8:USDT:REHYDRATE:OLD',completedAt:now-60*60_000,coins:[
+      {symbol:'OLDUSDT',eligible:true,candles_used:{'5m':makeBars(now-60*60_000)}}
+    ]});
+    const broken=makeBars(now);
+    broken.splice(32,1);
+    await append({id:'RADAR8:USDT:REHYDRATE:CURRENT',completedAt:now,coins:[
+      {symbol:'FRESHUSDT',eligible:true,candles_used:{'5m':makeBars(now)}},
+      {symbol:'BROKENUSDT',eligible:true,candles_used:{'5m':broken}}
+    ]});
+    const before=await store.getScanJourneyState();
+    const result=await store.readScanJourneyCandleHistory({
+      symbols:['FRESHUSDT','OLDUSDT','BROKENUSDT','NOSNAPSHOTUSDT'],timeframe:'5m',
+      minCandles:60,maxCandles:72,maxCycles:20,maxAgeMs:8*60_000,now
+    });
+    assert.equal(result.requested_symbols,4);
+    assert.equal(result.hydrated_symbols,1);
+    assert.equal(result.series.FRESHUSDT.length,72);
+    assert.ok(result.series.FRESHUSDT.every(candle=>candle.source==='BINANCE_PUBLIC_REST_CACHE'));
+    assert.ok(result.series.FRESHUSDT.every(candle=>candle.closed===true&&candle.closeTime<=now));
+    assert.equal(result.stale_symbols,1,'older archive candles must not be treated as live');
+    assert.equal(result.invalid_symbols,1,'a gap in the newest stored candle sequence must be rejected');
+    assert.equal(result.missing_snapshot_symbols,1,'symbols with no persisted candle snapshot remain unavailable');
+    assert.equal(result.invalid_cycles,0);
+    const after=await store.getScanJourneyState();
+    assert.equal(after.cycle_sequence,before.cycle_sequence,'rehydration is read-only');
+    assert.equal(after.compressed_bytes,before.compressed_bytes,'rehydration must not mutate or rewrite the archive');
+    const audit=await store.verifyScanJourneyArchive();
+    assert.equal(audit.complete,true,'bad market data in a row is not the same as a damaged archive file');
+  }finally{
+    await import('node:fs/promises').then(fs=>fs.rm(dir,{recursive:true,force:true}));
+  }
 });

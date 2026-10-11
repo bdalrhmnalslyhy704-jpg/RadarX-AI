@@ -518,6 +518,94 @@ export class DurableStore {
       missing_cycles:missingCycles,corrupt_cycles:corruptCycles,
       complete:missingCycles.length===0&&corruptCycles.length===0&&readableCycles===state.cycles.length&&readableCoinRows===state.retained_coin_rows};
   }
+  /**
+   * Rehydrate only recent, verified closed-candle history already persisted in the
+   * Scan Journey archive. This is a read-only archive lookup: it makes no REST calls
+   * and never relaxes the market-wide cache's freshness/continuity gate.
+   */
+  async readScanJourneyCandleHistory({
+    symbols=[],timeframe='5m',minCandles=60,maxCandles=96,maxCycles=50,
+    maxAgeMs=8*60_000,now=Date.now()
+  }={}){
+    const intervalMs={'1m':60_000,'5m':5*60_000,'15m':15*60_000,'1h':60*60_000,'4h':4*60*60_000}[String(timeframe)];
+    if(!intervalMs)throw new Error('SCAN_JOURNEY_CANDLE_TIMEFRAME_UNSUPPORTED');
+    const wanted=new Set((Array.isArray(symbols)?symbols:[])
+      .map(value=>String(value||'').trim().toUpperCase())
+      .filter(symbol=>/^[A-Z0-9]{2,25}USDT$/.test(symbol)));
+    const cutoff=Number(now);
+    if(!Number.isFinite(cutoff)||cutoff<=0)throw new Error('SCAN_JOURNEY_CANDLE_NOW_INVALID');
+    const minimum=Math.max(2,Math.min(180,Math.trunc(Number(minCandles)||60)));
+    const maximum=Math.max(minimum,Math.min(180,Math.trunc(Number(maxCandles)||96)));
+    const cycleLimit=Math.max(1,Math.min(100,Math.trunc(Number(maxCycles)||50)));
+    const freshness=Math.max(0,Number.isFinite(Number(maxAgeMs))?Number(maxAgeMs):8*60_000);
+    const state=await this.getScanJourneyState();
+    const history=state.cycles.slice(-cycleLimit).reverse();
+    const resolved=new Set(),series={};
+    let cyclesExamined=0,unreadableCycles=0,invalidCycles=0,snapshotsExamined=0;
+    let staleSymbols=0,invalidSymbols=0;
+    const finite=value=>value!==null&&value!==undefined&&
+      !(typeof value==='string'&&value.trim()==='')&&Number.isFinite(Number(value));
+    for(const metadata of history){
+      if(resolved.size>=wanted.size)break;
+      let cycle;
+      cyclesExamined++;
+      try{
+        const bytes=await readFile(join(this.scanJourneyDir,metadata.filename));
+        if(!metadata.sha256||createHash('sha256').update(bytes).digest('hex')!==metadata.sha256){
+          invalidCycles++;continue;
+        }
+        cycle=JSON.parse(gunzipSync(bytes).toString('utf8'));
+        if(cycle?.cycle_id!==metadata.cycle_id||cycle?.radar!=='RADAR_8'||cycle?.status!=='COMPLETE'||!Array.isArray(cycle?.coins)){
+          invalidCycles++;continue;
+        }
+      }catch(error){
+        if(error?.code==='ENOENT')unreadableCycles++;
+        else invalidCycles++;
+        continue;
+      }
+      for(const coin of cycle.coins){
+        const symbol=String(coin?.symbol||'').trim().toUpperCase();
+        if(!wanted.has(symbol)||resolved.has(symbol)||coin?.eligible!==true)continue;
+        const raw=coin?.candles_used?.[timeframe];
+        if(!Array.isArray(raw)||raw.length===0)continue;
+        snapshotsExamined++;
+        // Once a symbol has a newer real snapshot, older snapshots can never make it
+        // fresher; resolve it even if it is stale or fails candle integrity checks.
+        resolved.add(symbol);
+        const rows=raw.slice(-maximum);
+        const validRows=rows.length>=minimum&&rows.every((row,index)=>{
+          const openTime=Number(row?.open_time),closeTime=Number(row?.close_time);
+          const open=Number(row?.open),high=Number(row?.high),low=Number(row?.low),close=Number(row?.close);
+          const volume=Number(row?.volume);
+          if(![openTime,closeTime,open,high,low,close,volume].every(Number.isFinite))return false;
+          if(openTime<=0||closeTime!==openTime+intervalMs-1||closeTime>cutoff||
+             open<=0||close<=0||low<=0||high<Math.max(open,close)||low>Math.min(open,close)||
+             high<low||volume<0)return false;
+          if(index>0&&openTime-Number(rows[index-1].open_time)!==intervalMs)return false;
+          return true;
+        });
+        if(!validRows){invalidSymbols++;continue;}
+        const latestClose=Number(rows.at(-1).close_time);
+        if(cutoff-latestClose<0||cutoff-latestClose>freshness){staleSymbols++;continue;}
+        series[symbol]=rows.map(row=>({
+          symbol,openTime:Number(row.open_time),closeTime:Number(row.close_time),
+          open:Number(row.open),high:Number(row.high),low:Number(row.low),close:Number(row.close),
+          volume:Number(row.volume),
+          quoteVolume:finite(row.quote_volume)?Number(row.quote_volume):null,
+          tradeCount:finite(row.trade_count)?Number(row.trade_count):null,
+          takerBuyBaseVolume:finite(row.taker_buy_base_volume)?Number(row.taker_buy_base_volume):null,
+          closed:true,source:'BINANCE_PUBLIC_REST_CACHE',sourceTime:Number(row.close_time),receivedAt:cutoff
+        }));
+      }
+    }
+    return {
+      timeframe,requested_symbols:wanted.size,hydrated_symbols:Object.keys(series).length,
+      missing_snapshot_symbols:Math.max(0,wanted.size-resolved.size),
+      stale_symbols:staleSymbols,invalid_symbols:invalidSymbols,
+      cycles_examined:cyclesExamined,unreadable_cycles:unreadableCycles,
+      invalid_cycles:invalidCycles,snapshots_examined:snapshotsExamined,series
+    };
+  }
   async readScanJourneyCycles({limit=10}={}){
     const state=await this.getScanJourneyState();
     const take=Math.max(1,Math.min(1000,Math.trunc(Number(limit)||10)));
