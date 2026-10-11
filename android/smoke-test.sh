@@ -46,13 +46,15 @@ start_app_and_wait_ready() {
 
   PHASE="wait for live process and resumed Activity"
   local pid="" top="" resumed="" ready=0
-  for attempt in $(seq 1 20); do
-    pid="$(timeout 5s adb shell pidof com.radarx.app 2>/dev/null | tr -d '\\r' || true)"
-    top="$(timeout 7s adb shell dumpsys activity activities 2>/dev/null | tr -d '\\r' || true)"
-    resumed="$(printf '%s\\n' "${top}" | grep -E 'mResumedActivity|ResumedActivity' | tail -n 5 || true)"
-    if [[ -n "${pid}" ]] && printf '%s\\n' "${resumed}" | grep -q 'com.radarx.app'; then
-      ready=1
-      break
+  for attempt in $(seq 1 15); do
+    pid="$(timeout 3s adb shell pidof com.radarx.app 2>/dev/null | tr -d '\\r' || true)"
+    if [[ -n "${pid}" ]]; then
+      top="$(timeout 4s adb shell dumpsys activity activities 2>/dev/null | tr -d '\\r' || true)"
+      resumed="$(printf '%s\\n' "${top}" | grep -E 'mResumedActivity|ResumedActivity' | tail -n 5 || true)"
+      if printf '%s\\n' "${resumed}" | grep -q 'com.radarx.app'; then
+        ready=1
+        break
+      fi
     fi
     sleep 2
   done
@@ -68,8 +70,8 @@ start_app_and_wait_ready() {
 
   PHASE="wait for background foreground-service startup"
   local logs="" service_ready=0
-  for attempt in $(seq 1 15); do
-    logs="$(timeout 8s adb logcat -d -s RadarXWeb:I RadarXBackground:I '*:S' 2>/dev/null || true)"
+  for attempt in $(seq 1 12); do
+    logs="$(timeout 4s adb logcat -d -s RadarXWeb:I RadarXBackground:I '*:S' 2>/dev/null || true)"
     if printf '%s\\n' "${logs}" | grep -Fq "BACKGROUND_AUTO_START_REQUEST" &&
        printf '%s\\n' "${logs}" | grep -Fq "BACKGROUND_SERVICE_READY"; then
       service_ready=1
