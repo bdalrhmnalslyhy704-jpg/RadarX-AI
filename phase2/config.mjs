@@ -1,6 +1,16 @@
 import {resolvePort,resolveHost} from './runtime.mjs';
 
 const int = (v, d) => Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : d;
+
+// Shared minimum market liquidity for all market-wide Spot USDT discovery.
+// Per-radar thresholds may be stricter, but never silently scan below this floor.
+export const DEFAULT_MIN_SPOT_QUOTE_VOLUME_24H_USDT = 750_000;
+export function minSpotQuoteVolume24h(value, fallback = DEFAULT_MIN_SPOT_QUOTE_VOLUME_24H_USDT) {
+  const parsed = Number(value);
+  const candidate = Number.isFinite(parsed) ? Math.trunc(parsed) : Math.trunc(Number(fallback));
+  return Math.max(DEFAULT_MIN_SPOT_QUOTE_VOLUME_24H_USDT,
+    Number.isFinite(candidate) ? candidate : DEFAULT_MIN_SPOT_QUOTE_VOLUME_24H_USDT);
+}
 const float = (v, d) => Number.isFinite(Number(v)) ? Number(v) : d;
 const list = (v, d) => {
   const a = String(v ?? '').split(',').map(x => x.trim()).filter(Boolean);
@@ -65,7 +75,7 @@ export const CONFIG = Object.freeze({
     reconcileMs: int(process.env.RADARX_MOVE_RECONCILE_MS, 15000),
     cooldownMs: int(process.env.RADARX_MOVE_ALERT_COOLDOWN_MS, 30 * 60 * 1000),
     maxDeepPerCycle: int(process.env.RADARX_MOVE_MAX_DEEP, 3),
-    minQuoteVolume24h: int(process.env.RADARX_MOVE_MIN_QUOTE_VOLUME_24H, 750000),
+    minQuoteVolume24h: minSpotQuoteVolume24h(process.env.RADARX_MOVE_MIN_QUOTE_VOLUME_24H, 750000),
     minDataQuality: int(process.env.RADARX_MIN_DATA_QUALITY, 70),
     minLiquidityQuality: int(process.env.RADARX_MIN_LIQUIDITY_QUALITY, 60),
     deepKlines: int(process.env.RADARX_MOVE_DEEP_KLINES, 220),
@@ -105,7 +115,7 @@ export const CONFIG = Object.freeze({
     quote: 'USDT',
     pollMs: int(process.env.RADARX_STRONG_MOVE_POLL_MS, 15000),
     universeRefreshMs: int(process.env.RADARX_STRONG_MOVE_UNIVERSE_REFRESH_MS, 60000),
-    minQuoteVolume24h: int(process.env.RADARX_STRONG_MOVE_MIN_QUOTE_VOLUME_24H, 1000000),
+    minQuoteVolume24h: minSpotQuoteVolume24h(process.env.RADARX_STRONG_MOVE_MIN_QUOTE_VOLUME_24H, 1000000),
     rotationBatchSize: int(process.env.RADARX_STRONG_MOVE_ROTATION_BATCH, 7),
     topMoverCount: int(process.env.RADARX_STRONG_MOVE_TOP_MOVERS, 6),
     alertCooldownMs: int(process.env.RADARX_STRONG_MOVE_ALERT_COOLDOWN_MS, 5 * 60 * 1000),
@@ -118,7 +128,7 @@ export const CONFIG = Object.freeze({
     returnLimit: 6,
     deepConcurrency: 6,
     deepKlines: 160,
-    minQuoteVolume24h: int(process.env.RADARX_MARKET_RADAR_MIN_QUOTE_VOLUME_24H, 750000),
+    minQuoteVolume24h: minSpotQuoteVolume24h(process.env.RADARX_MARKET_RADAR_MIN_QUOTE_VOLUME_24H, 750000),
     minDataQuality: int(process.env.RADARX_MIN_DATA_QUALITY, 70),
     minLiquidityQuality: int(process.env.RADARX_MIN_LIQUIDITY_QUALITY, 60),
     maxTriggerAgeMs: 30 * 60 * 1000,
@@ -132,7 +142,7 @@ export const CONFIG = Object.freeze({
     quote: 'USDT',
     pollMs: int(process.env.RADARX_ROTATION_RADAR_POLL_MS, 30000),
     universeRefreshMs: int(process.env.RADARX_ROTATION_RADAR_UNIVERSE_REFRESH_MS, 5 * 60 * 1000),
-    minQuoteVolume24h: int(process.env.RADARX_ROTATION_RADAR_MIN_QUOTE_VOLUME_24H, 750000),
+    minQuoteVolume24h: minSpotQuoteVolume24h(process.env.RADARX_ROTATION_RADAR_MIN_QUOTE_VOLUME_24H, 750000),
     rotationBatchSize: int(process.env.RADARX_ROTATION_RADAR_BATCH, 7),
     topLaggers: int(process.env.RADARX_ROTATION_RADAR_TOP_LAGGERS, 3),
     maxAbs24hMovePct: float(process.env.RADARX_ROTATION_RADAR_MAX_24H_MOVE_PCT, 8),
@@ -144,7 +154,7 @@ export const CONFIG = Object.freeze({
     quote: 'USDT',
     pollMs: int(process.env.RADARX_ALMUQAWIM_POLL_MS, 60000),
     universeRefreshMs: int(process.env.RADARX_ALMUQAWIM_UNIVERSE_REFRESH_MS, 5 * 60 * 1000),
-    minQuoteVolume24h: int(process.env.RADARX_ALMUQAWIM_MIN_QUOTE_VOLUME_24H, 750000),
+    minQuoteVolume24h: minSpotQuoteVolume24h(process.env.RADARX_ALMUQAWIM_MIN_QUOTE_VOLUME_24H, 750000),
     batchSize: int(process.env.RADARX_ALMUQAWIM_BATCH_SIZE, 5),
     alertCooldownMs: int(process.env.RADARX_ALMUQAWIM_ALERT_COOLDOWN_MS, 20 * 60 * 1000),
     minScore: int(process.env.RADARX_ALMUQAWIM_MIN_SCORE, 82),
@@ -157,7 +167,7 @@ export const CONFIG = Object.freeze({
     quote: 'USDT',
     pollMs: int(process.env.RADARX_LIQUIDITY_ABSORPTION_POLL_MS, 45000),
     universeRefreshMs: int(process.env.RADARX_LIQUIDITY_ABSORPTION_UNIVERSE_REFRESH_MS, 5 * 60 * 1000),
-    minQuoteVolume24h: int(process.env.RADARX_LIQUIDITY_ABSORPTION_MIN_QUOTE_VOLUME_24H, 1500000),
+    minQuoteVolume24h: minSpotQuoteVolume24h(process.env.RADARX_LIQUIDITY_ABSORPTION_MIN_QUOTE_VOLUME_24H, 1500000),
     rotationBatchSize: int(process.env.RADARX_LIQUIDITY_ABSORPTION_BATCH, 4),
     topLiquidityCount: int(process.env.RADARX_LIQUIDITY_ABSORPTION_TOP, 3),
     alertCooldownMs: int(process.env.RADARX_LIQUIDITY_ABSORPTION_ALERT_COOLDOWN_MS, 20 * 60 * 1000),
@@ -168,7 +178,7 @@ export const CONFIG = Object.freeze({
     quote: 'USDT',
     pollMs: int(process.env.RADARX_KAHIR_POLL_MS, 30000),
     universeRefreshMs: int(process.env.RADARX_KAHIR_UNIVERSE_REFRESH_MS, 5 * 60 * 1000),
-    minQuoteVolume24h: int(process.env.RADARX_KAHIR_MIN_QUOTE_VOLUME_24H, 500000),
+    minQuoteVolume24h: minSpotQuoteVolume24h(process.env.RADARX_KAHIR_MIN_QUOTE_VOLUME_24H, 500000),
     baselineHistory: int(process.env.RADARX_KAHIR_BASELINE_HISTORY, 8),
     deepCandidates: int(process.env.RADARX_KAHIR_DEEP_CANDIDATES, 14),
     deepConcurrency: int(process.env.RADARX_KAHIR_DEEP_CONCURRENCY, 4),
@@ -187,7 +197,7 @@ export const CONFIG = Object.freeze({
     quote: 'USDT',
     pollMs: int(process.env.RADARX_DOOMSDAY_POLL_MS, 15000),
     universeRefreshMs: int(process.env.RADARX_DOOMSDAY_UNIVERSE_REFRESH_MS, 5 * 60 * 1000),
-    minQuoteVolume24h: int(process.env.RADARX_DOOMSDAY_MIN_QUOTE_VOLUME_24H, 500000),
+    minQuoteVolume24h: minSpotQuoteVolume24h(process.env.RADARX_DOOMSDAY_MIN_QUOTE_VOLUME_24H, 500000),
     deepCandidates: int(process.env.RADARX_DOOMSDAY_DEEP_CANDIDATES, 10),
     deepConcurrency: int(process.env.RADARX_DOOMSDAY_DEEP_CONCURRENCY, 4),
     oneMinuteKlines: int(process.env.RADARX_DOOMSDAY_1M_KLINES, 120),
@@ -207,7 +217,7 @@ export const CONFIG = Object.freeze({
     quote: 'USDT',
     pollMs: int(process.env.RADARX_DOOMSDAY_POLL_MS, 15000),
     universeRefreshMs: int(process.env.RADARX_DOOMSDAY_UNIVERSE_REFRESH_MS, 5 * 60 * 1000),
-    minQuoteVolume24h: int(process.env.RADARX_DOOMSDAY_MIN_QUOTE_VOLUME_24H, 500000),
+    minQuoteVolume24h: minSpotQuoteVolume24h(process.env.RADARX_DOOMSDAY_MIN_QUOTE_VOLUME_24H, 500000),
     deepCandidates: int(process.env.RADARX_DOOMSDAY_DEEP_CANDIDATES, 10),
     deepConcurrency: int(process.env.RADARX_DOOMSDAY_DEEP_CONCURRENCY, 4),
     oneMinuteKlines: int(process.env.RADARX_DOOMSDAY_1M_KLINES, 120),
@@ -230,7 +240,7 @@ export const CONFIG = Object.freeze({
     returnLimit: int(process.env.RADARX_MULTI_ANALYST_RETURN_LIMIT, 10),
     deepConcurrency: int(process.env.RADARX_MULTI_ANALYST_DEEP_CONCURRENCY, 3),
     deepKlines: int(process.env.RADARX_MULTI_ANALYST_DEEP_KLINES, 220),
-    minQuoteVolume24h: int(process.env.RADARX_MULTI_ANALYST_MIN_QUOTE_VOLUME_24H, 300000),
+    minQuoteVolume24h: minSpotQuoteVolume24h(process.env.RADARX_MULTI_ANALYST_MIN_QUOTE_VOLUME_24H, 300000),
     minDataQuality: int(process.env.RADARX_MIN_DATA_QUALITY, 70),
     minLiquidityQuality: int(process.env.RADARX_MIN_LIQUIDITY_QUALITY, 60),
     ttlMs: int(process.env.RADARX_MULTI_ANALYST_TTL_MS, 45000),
@@ -256,7 +266,7 @@ export const CONFIG = Object.freeze({
     quote: 'USDT',
     pollMs: int(process.env.RADARX_EARLY_EXPANSION_POLL_MS, 45000),
     universeRefreshMs: int(process.env.RADARX_EARLY_EXPANSION_UNIVERSE_REFRESH_MS, 15 * 60 * 1000),
-    minQuoteVolume24h: int(process.env.RADARX_EARLY_EXPANSION_MIN_QUOTE_VOLUME_24H, 350000),
+    minQuoteVolume24h: minSpotQuoteVolume24h(process.env.RADARX_EARLY_EXPANSION_MIN_QUOTE_VOLUME_24H, 350000),
     minLiquidityQuality: int(process.env.RADARX_EARLY_EXPANSION_MIN_LIQUIDITY_QUALITY, 58),
     maxSpreadBps: int(process.env.RADARX_EARLY_EXPANSION_MAX_SPREAD_BPS, 22),
     minDataQuality: int(process.env.RADARX_EARLY_EXPANSION_MIN_DATA_QUALITY, 70),
@@ -291,7 +301,7 @@ export const CONFIG = Object.freeze({
     quote: 'USDT',
     pollMs: int(process.env.RADARX_WHALE_ACCUMULATION_POLL_MS, 60000),
     universeRefreshMs: int(process.env.RADARX_WHALE_ACCUMULATION_UNIVERSE_REFRESH_MS, 10 * 60 * 1000),
-    minQuoteVolume24h: int(process.env.RADARX_WHALE_ACCUMULATION_MIN_QUOTE_VOLUME_24H, 1500000),
+    minQuoteVolume24h: minSpotQuoteVolume24h(process.env.RADARX_WHALE_ACCUMULATION_MIN_QUOTE_VOLUME_24H, 1500000),
     topAnchors: int(process.env.RADARX_WHALE_ACCUMULATION_TOP_ANCHORS, 8),
     rotationBatchSize: int(process.env.RADARX_WHALE_ACCUMULATION_ROTATION_BATCH, 10),
     minWhaleNotional: int(process.env.RADARX_WHALE_ACCUMULATION_MIN_NOTIONAL, 25000),
@@ -316,7 +326,7 @@ export const CONFIG = Object.freeze({
     quote: 'USDT',
     pollMs: int(process.env.RADARX_COIN_HUNTER_POLL_MS, 60000),
     universeRefreshMs: int(process.env.RADARX_COIN_HUNTER_UNIVERSE_REFRESH_MS, 10 * 60 * 1000),
-    minQuoteVolume24h: int(process.env.RADARX_COIN_HUNTER_MIN_QUOTE_VOLUME_24H, 750000),
+    minQuoteVolume24h: minSpotQuoteVolume24h(process.env.RADARX_COIN_HUNTER_MIN_QUOTE_VOLUME_24H, 750000),
     leaderCount: int(process.env.RADARX_COIN_HUNTER_LEADER_COUNT, 12),
     candidatePool: int(process.env.RADARX_COIN_HUNTER_CANDIDATE_POOL, 36),
     deepCount: int(process.env.RADARX_COIN_HUNTER_DEEP_COUNT, 16),
@@ -332,8 +342,8 @@ export const CONFIG = Object.freeze({
     quote: 'USDT',
     pollMs: int(process.env.RADARX_FALCON_EYE_POLL_MS, 30000),
     universeRefreshMs: int(process.env.RADARX_FALCON_EYE_UNIVERSE_REFRESH_MS, 5 * 60 * 1000),
-    minQuoteVolume24h: int(process.env.RADARX_FALCON_EYE_MIN_QUOTE_VOLUME_24H, 500000),
-    fastMinQuoteVolume24h: int(process.env.RADARX_FALCON_EYE_FAST_MIN_QUOTE_VOLUME_24H, 200000),
+    minQuoteVolume24h: minSpotQuoteVolume24h(process.env.RADARX_FALCON_EYE_MIN_QUOTE_VOLUME_24H, 500000),
+    fastMinQuoteVolume24h: minSpotQuoteVolume24h(process.env.RADARX_FALCON_EYE_FAST_MIN_QUOTE_VOLUME_24H, 200000),
     scanBatchSize: int(process.env.RADARX_FALCON_EYE_SCAN_BATCH, 8),
     pulseTopCandidates: int(process.env.RADARX_FALCON_EYE_PULSE_TOP, 4),
     quietCandidates: int(process.env.RADARX_FALCON_EYE_QUIET_CANDIDATES, 2),
