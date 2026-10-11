@@ -50,3 +50,9 @@ assert.ok(service.includes('meta.put("cursor_advance_allowed", false)'),
   'non-durable fallback feeds must not advance the durable replay cursor');
 assert.ok(service.includes('radar_alert_fallback_seen_ids') && service.includes('fallbackSeen.contains(id)'),
   'fallback notifications must be de-duplicated against the later durable replay');
+assert.ok(service.includes('meta.put("feed_mode", "NON_DURABLE_LEGACY_FALLBACK")'),
+  'legacy 200 responses must be treated as bounded non-durable feeds');
+assert.ok(service.includes('at > 0L && at >= cursor'),
+  'fallback must not omit events with the current timestamp when stable IDs differ');
+assert.ok(service.includes('sortAlertsChronologically(root)') && service.includes('root.put("oldest_first", true)'),
+  'bounded fallback candidates must be notified in chronological order without moving the durable cursor');
