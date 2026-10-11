@@ -28,9 +28,10 @@ const store=await new DurableStore({
   freeBytesProvider:async()=>512*MiB,
   storageReserveBytes:16*MiB
 }).init();
+let pressureFreeBytes=512*MiB;
 const pressureStore=await new DurableStore({
   dir:pressureDir,
-  freeBytesProvider:async()=>8*MiB,
+  freeBytesProvider:async()=>pressureFreeBytes,
   storageReserveBytes:16*MiB
 }).init();
 
@@ -109,6 +110,13 @@ function signal(index,pressure=false){
     storage_pressure_fixture:pressure
   };
 }
+
+const pressureSeedCycles=[100,101].map(index=>makeCycle(index));
+for(const cycle of pressureSeedCycles)
+  await pressureStore.appendScanJourneyCycle(cycle,{maxBytes:8*MiB});
+const pressureSeedIds=(await pressureStore.getScanJourneyState()).cycles.map(row=>row.cycle_id);
+assert.equal(pressureSeedIds.length,2,'pressure fixture requires two valid pre-existing archived cycles');
+pressureFreeBytes=8*MiB;
 function sendJson(res,status,body){
   res.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});
   res.end(JSON.stringify(body));
@@ -214,6 +222,9 @@ try{
   normalSignals=await store.readAlertPage('falconEyeAlerts',{sinceMs:0,radar:'FALCON_EYE_RADAR',limit:1000});
   pressureSignals=await pressureStore.readAlertPage('falconEyeAlerts',{sinceMs:0,radar:'FALCON_EYE_RADAR',limit:1000});
   pressureState=await pressureStore.getScanJourneyState();
+  const pressureArchiveAudit=await pressureStore.verifyScanJourneyArchive();
+  const pressureFiles=(await readdir(pressureStore.scanJourneyDir)).filter(name=>name.endsWith('.json.gz'));
+  const pressureSeedIdsAfter=pressureState.cycles.map(row=>row.cycle_id);
   normalDiskFinal=await directoryBytes(normalDir);
   pressureDiskFinal=await directoryBytes(pressureDir);
   await observeDisk();
@@ -249,9 +260,14 @@ try{
     cycles:{completed:cyclesCompleted,successfully_archived:cyclesArchived,explicitly_skipped_for_low_disk:archiveSkipped,manifest_total_recorded:normalState.total_recorded_cycles,archive_integrity:archiveAudit},
     signals:{expected:expectedSignalCount,observed:allSignalIds.length,unique:uniqueSignalCount,missing:missingSignals,duplicates:duplicateSignals,normal_log_rows:normalSignals.length,low_disk_log_rows:pressureSignals.length},
     low_disk_scenario:{
-      simulated_free_bytes:8*MiB,protected_reserve_bytes:16*MiB,
+      simulated_free_bytes:pressureFreeBytes,protected_reserve_bytes:16*MiB,
       archive_status:measurements.at(-1).archive_status,cycle_completed:measurements.at(-1).cycle_completed,
-      committed_cycle_count:pressureState.cycles.length,partial_archive_files:(await readdir(pressureStore.scanJourneyDir)).filter(name=>name.endsWith('.json.gz')).length
+      prior_retained_cycle_ids:pressureSeedIds,retained_cycle_ids_after_pressure:pressureSeedIdsAfter,
+      committed_cycle_count_after_pressure:pressureState.cycles.length,
+      compressed_archive_bytes_after_pressure:pressureState.compressed_bytes,
+      archive_integrity:pressureArchiveAudit,
+      cycle_created_during_pressure_is_not_published:!pressureState.cycles.some(row=>row.cycle_id.includes('RESOURCE-SOAK:'+CYCLE_COUNT+':')),
+      archive_file_count:pressureFiles.length,archive_file_count_matches_manifest:pressureFiles.length===pressureState.cycles.length
     },
     verdict:'PASS'
   };
@@ -263,8 +279,13 @@ try{
   assert.equal(archiveAudit.complete,true,'retained archive integrity failed');
   assert.equal(archiveAudit.readable_cycles,normalState.cycles.length);
   assert.equal(normalState.pruned_cycle_count>0,true,'stress test must exercise repeated retention');
-  assert.equal(pressureState.cycles.length,0,'low-disk gate must not publish a partial manifest');
-  assert.equal((await readdir(pressureStore.scanJourneyDir)).filter(name=>name.endsWith('.json.gz')).length,0);
+  assert.deepEqual(pressureSeedIdsAfter,pressureSeedIds,'low-disk rejection must preserve the exact prior archive manifest');
+  assert.equal(pressureState.cycles.length,2,'prior archived cycles must remain available under disk pressure');
+  assert.equal(pressureArchiveAudit.complete,true,'prior archive records must remain readable and pass hash verification');
+  assert.equal(pressureFiles.length,pressureState.cycles.length,'no partial gzip cycle files may be left behind');
+  assert.equal(pressureState.cycles.some(row=>row.cycle_id.includes('RESOURCE-SOAK:'+CYCLE_COUNT+':')),false,
+    'a snapshot rejected for low disk must never be published in the manifest');
+  assert.equal(pressureDiskFinal<=TEST_DISK_CAP,true,'low-disk fixture must remain below its explicit filesystem cap');
   assert.equal(allSignalIds.length,expectedSignalCount,'signal records were lost in the fixture');
   assert.equal(uniqueSignalCount,expectedSignalCount,'signal IDs were duplicated in the fixture');
   assert.equal(http5xx,0,'HTTP 5xx occurred while the archive was under load');
