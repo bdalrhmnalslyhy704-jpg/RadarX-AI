@@ -1102,7 +1102,7 @@ export class EarlyExpansionRadar{
     this.lastDeepAtBySymbol=new Map();this.firstEligibleAtBySymbol=new Map();
     this.journeyStateHydrated=false;this.lastJourneyArchive=null;this.lastJourneyError=null;
     this.outcomeBackfillTask=null;
-    this.marketWideCacheArchiveHydrationAttempted=false;this.marketWideCacheArchiveHydration=null;this.marketWideCacheArchiveHydrationAttemptAtBySymbol=new Map();
+    this.marketWideCacheArchiveHydrationAttempted=false;this.marketWideCacheArchiveHydration=null;this.marketWideCacheArchiveHydrationAttemptAtBySymbol=new Map();this.marketWideCacheArchiveLastEligibleSymbols=new Set();
     this.latestCandidates=[];this.lastResult=null;this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
     this.fastScannedTotal=0;this.failedTotal=0;this.failedSymbols=[];this.lastCoverage=emptyEarlyExpansionUniverse(this.config,this.config.quote);
   }
@@ -1335,6 +1335,8 @@ export class EarlyExpansionRadar{
     const eligibleSymbols=[...new Set((Array.isArray(eligible)?eligible:[])
       .map(row=>String(row?.symbol||'').trim().toUpperCase())
       .filter(symbol=>/^[A-Z0-9]{2,25}USDT$/.test(symbol)))];
+    const newlyEligible=new Set(eligibleSymbols.filter(symbol=>!this.marketWideCacheArchiveLastEligibleSymbols.has(symbol)));
+    this.marketWideCacheArchiveLastEligibleSymbols=new Set(eligibleSymbols);
     let coverage=null;
     try{coverage=this.marketWideKlineCache.coverageReport?.()||null;}catch{}
     const readyBySymbol=new Map((Array.isArray(coverage?.symbols)?coverage.symbols:[])
@@ -1343,7 +1345,9 @@ export class EarlyExpansionRadar{
     const symbols=eligibleSymbols.filter(symbol=>{
       if(readyBySymbol.get(symbol)===true)return false;
       const lastAttempt=this.marketWideCacheArchiveHydrationAttemptAtBySymbol.get(symbol);
-      return !Number.isFinite(lastAttempt)||Number(now)-lastAttempt>=retryMs;
+      // setSymbols removes cache data for symbols that leave eligibility. If one
+      // re-enters, retry immediately even if its previous archive attempt is on cooldown.
+      return newlyEligible.has(symbol)||!Number.isFinite(lastAttempt)||Number(now)-lastAttempt>=retryMs;
     });
     if(!symbols.length)return this.marketWideCacheArchiveHydration;
     this.marketWideCacheArchiveHydrationAttempted=true;
