@@ -25,17 +25,17 @@ test('all Spot USDT radar liquidity thresholds enforce the shared 750,000 USDT f
       await import('../config.mjs?liquidity-floor-regression');
     assert.equal(DEFAULT_MIN_SPOT_QUOTE_VOLUME_24H_USDT, 750000);
     for (const section of [
-      CONFIG.move, CONFIG.strongMove, CONFIG.marketRadar, CONFIG.rotationRadar,
-      CONFIG.alMuqawim, CONFIG.liquidityAbsorption, CONFIG.kahir, CONFIG.doomsday,
-      CONFIG.multiAnalyst, CONFIG.earlyExpansion, CONFIG.whaleAccumulation,
-      CONFIG.coinHunter, CONFIG.falconEye
+      CONFIG.moveRadar, CONFIG.strongMoveRadar, CONFIG.marketRadar, CONFIG.rotationRadar,
+      CONFIG.alMuqawimRadar, CONFIG.liquidityAbsorptionRadar, CONFIG.kahirRadar, CONFIG.doomsdayRadar,
+      CONFIG.multiAnalyst, CONFIG.earlyExpansionRadar, CONFIG.whaleAccumulationRadar,
+      CONFIG.coinHunter, CONFIG.falconEyeRadar
     ]) {
       assert.ok(section.minQuoteVolume24h >= 750000, JSON.stringify(section));
     }
     assert.equal(CONFIG.falconEye.fastMinQuoteVolume24h, 750000);
-    assert.equal(CONFIG.strongMove.minQuoteVolume24h, 750000);
-    assert.equal(CONFIG.liquidityAbsorption.minQuoteVolume24h, 1500000);
-    assert.equal(CONFIG.whaleAccumulation.minQuoteVolume24h, 1500000);
+    assert.equal(CONFIG.strongMoveRadar.minQuoteVolume24h, 750000);
+    assert.equal(CONFIG.liquidityAbsorptionRadar.minQuoteVolume24h, 1500000);
+    assert.equal(CONFIG.whaleAccumulationRadar.minQuoteVolume24h, 1500000);
     assert.equal(minSpotQuoteVolume24h('not-a-number', 1000000), 1000000);
     assert.equal(minSpotQuoteVolume24h('200000', 1500000), 750000);
     assert.equal(minSpotQuoteVolume24h('2000000', 1500000), 2000000);
