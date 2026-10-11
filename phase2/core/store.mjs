@@ -13,7 +13,7 @@ const MiB=1024*1024;
 const JSONL_ARCHIVE_POLICIES=Object.freeze({
   schedulerEvents:{compactAtBytes:12*MiB,retainRowsPerKey:5000,keyField:'radar',maxRetainedBytesPerKey:512*1024}
 });
-const ORPHAN_TEMP_SUFFIX=/\.(?:tmp|repair|outcome|compact)-\d+-\d+$/;
+const ORPHAN_TEMP_SUFFIX=/\.(?:tmp|repair|outcome|compact)-\d+-\d+(?:-[a-f0-9-]+)?$/;
 
 // Serialize a durable cycle in bounded chunks. Avoid a full JSON string + Buffer +
 // gzip buffer coexisting in the V8 heap during the 496-symbol market-wide cycle.
@@ -120,46 +120,116 @@ export class DurableStore {
   async init({legacyDir=null}={}){
     await mkdir(this.dir,{recursive:true});
     await mkdir(this.scanJourneyDir,{recursive:true});
-    // init runs before any writers start; matching files can only be abandoned
-    // atomic-write temporaries from a previous process.
+    // Recover abandoned temporary files before testing free-space limits.
     this.tempCleanup=await this.cleanupOrphanedTemporaryFiles();
-    // Migrate any surviving ephemeral files only when the durable target lacks that file.
-    // The copy is idempotent and never overwrites an existing archived file.
+    // Probe file existence with stat; never read a potentially hundreds-of-MiB JSONL
+    // archive merely to test whether the durable copy exists.
     if(legacyDir&&resolve(legacyDir)!==resolve(this.dir)){
       for(const p of Object.values(this.files)){
-        let destinationExists=false;
-        try{await readFile(p,'utf8');destinationExists=true;}catch{}
-        if(destinationExists)continue;
+        try{await stat(p);continue;}
+        catch(error){if(error?.code!=='ENOENT')throw error;}
         const legacyPath=join(legacyDir,basename(p));
+        let legacyInfo;
+        try{legacyInfo=await stat(legacyPath);}
+        catch(error){if(error?.code==='ENOENT')continue;throw error;}
+        const budget=await this.diskWriteBudget(MiB);
+        if(legacyInfo.size>budget.max_write_bytes){
+          const error=new Error('DURABLE_STORE_MIGRATION_STORAGE_PRESSURE: '+basename(p));
+          error.code='DURABLE_STORE_STORAGE_PRESSURE';
+          throw error;
+        }
+        const temp=p+'.tmp-'+process.pid+'-'+Date.now();
         try{
-          const contents=await readFile(legacyPath,'utf8');
-          await writeFile(p,contents,{flag:'wx'});
+          await pipeline(createReadStream(legacyPath),createWriteStream(temp,{flags:'wx'}));
+          await rename(temp,p);
           this.migratedFiles.push(basename(p));
-        }catch{}
+        }catch(error){
+          await unlink(temp).catch(()=>{});
+          // Never swallow a failed migration: keep the legacy source and fail clearly.
+          throw error;
+        }
       }
     }
     for(const p of Object.values(this.files)){
-      try{await readFile(p,'utf8');}catch{
-        await writeFile(p,p.endsWith('.jsonl')?'':'{}',{flag:'wx'}).catch(()=>{});
+      try{await stat(p);}
+      catch(error){
+        if(error?.code!=='ENOENT')throw error;
+        await writeFile(p,p.endsWith('.jsonl')?'':'{}',{flag:'wx'}).catch(writeError=>{
+          if(writeError?.code!=='EEXIST')throw writeError;
+        });
       }
     }
     this.ready=true;return this;
   }
   async lock(fn){const p=this.queue.then(fn);this.queue=p.catch(()=>{});return p;}
+  async diskWriteBudget(reserveBytes=this.storageReserveBytes){
+    let freeBytes;
+    try{
+      if(this.freeBytesProvider)freeBytes=Number(await this.freeBytesProvider(this.dir));
+      else {
+        const fs=await statfs(this.dir);
+        freeBytes=Number(fs.bavail)*Number(fs.bsize);
+      }
+    }catch(cause){
+      const error=new Error('DURABLE_STORE_CAPACITY_UNAVAILABLE: '+String(cause?.message||cause));
+      error.code='DURABLE_STORE_CAPACITY_UNAVAILABLE';
+      error.cause=cause;
+      throw error;
+    }
+    if(!Number.isFinite(freeBytes)||freeBytes<0){
+      const error=new Error('DURABLE_STORE_CAPACITY_UNAVAILABLE');
+      error.code='DURABLE_STORE_CAPACITY_UNAVAILABLE';
+      throw error;
+    }
+    return {free_bytes:Math.floor(freeBytes),max_write_bytes:Math.floor(freeBytes-Math.max(0,Number(reserveBytes)||0)),capacity_checked:true};
+  }
+  async appendText(p,text){
+    const bytes=Buffer.byteLength(text);
+    const budget=await this.diskWriteBudget(MiB);
+    if(bytes>budget.max_write_bytes){
+      const error=new Error('DURABLE_STORE_STORAGE_PRESSURE: required_bytes='+bytes+',available_write_bytes='+budget.max_write_bytes);
+      error.code='DURABLE_STORE_STORAGE_PRESSURE';
+      error.requiredBytes=bytes;
+      error.availableWriteBytes=budget.max_write_bytes;
+      throw error;
+    }
+    await appendFile(p,text);
+    this.lastWriteAt=Date.now();
+  }
   async readJson(p){try{return JSON.parse(await readFile(p,'utf8'));}catch{return{};}}
   async writeJson(p,v){
     const t=p+'.tmp-'+process.pid+'-'+Date.now()+'-'+randomUUID();
     const compactOutcome=p===this.files.preExpansionOutcomes;
-    // Keep public/operational manifests readable, but stream the bounded 5,000-row
-    // markout ledger so a second full JSON string does not coexist with its object.
+    const budget=await this.diskWriteBudget(this.storageReserveBytes);
+    let written=0;
+    const limiter=new Transform({
+      transform(chunk,encoding,callback){
+        written+=chunk.length;
+        if(written>budget.max_write_bytes){
+          const error=new Error('DURABLE_STORE_STORAGE_PRESSURE: serialized_bytes='+written+',available_write_bytes='+budget.max_write_bytes);
+          error.code='DURABLE_STORE_STORAGE_PRESSURE';
+          callback(error);
+          return;
+        }
+        callback(null,chunk);
+      }
+    });
     try{
       if(compactOutcome){
         await pipeline(
           Readable.from(jsonDocumentChunks(v),{objectMode:false}),
+          limiter,
           createWriteStream(t,{flags:'wx'})
         );
       }else{
-        await writeFile(t,JSON.stringify(v,null,2)+'\n',{flag:'wx'});
+        const serialized=JSON.stringify(v,null,2)+'\n';
+        written=Buffer.byteLength(serialized);
+        if(written>budget.max_write_bytes){
+          const error=new Error('DURABLE_STORE_STORAGE_PRESSURE: serialized_bytes='+written+',available_write_bytes='+budget.max_write_bytes);
+          error.code='DURABLE_STORE_STORAGE_PRESSURE';
+          throw error;
+        }
+        await writeFile(t,serialized,{flag:'wx'});
       }
       await rename(t,p);
       this.lastWriteAt=Date.now();
@@ -260,7 +330,7 @@ export class DurableStore {
     if(!rows.length)return {written:0};
     return this.lock(async()=>{
       await this._compactJsonlArchive(kind);
-      await appendFile(file,rows.map(x=>JSON.stringify(x)).join('\n')+'\n');
+      await this.appendText(file,rows.map(x=>JSON.stringify(x)).join('\n')+'\n');
       this.lastWriteAt=Date.now();
       return {written:rows.length};
     });
@@ -335,23 +405,23 @@ export class DurableStore {
       return a[key];
     });
   }
-  async appendSignalAudit(v){return this.lock(async()=>{await appendFile(this.files.signals,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
-  async appendNotificationAudit(v){return this.lock(async()=>{await appendFile(this.files.notifications,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}  async appendMoveAlert(v){return this.lock(async()=>{await appendFile(this.files.moveAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendSignalAudit(v){return this.lock(async()=>{await this.appendText(this.files.signals,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendNotificationAudit(v){return this.lock(async()=>{await this.appendText(this.files.notifications,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}  async appendMoveAlert(v){return this.lock(async()=>{await this.appendText(this.files.moveAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readMoveAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('moveAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendStrongMoveAlert(v){return this.lock(async()=>{await appendFile(this.files.strongMoveAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendStrongMoveAlert(v){return this.lock(async()=>{await this.appendText(this.files.strongMoveAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readStrongMoveAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('strongMoveAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendRotationAlert(v){return this.lock(async()=>{await appendFile(this.files.rotationAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendRotationAlert(v){return this.lock(async()=>{await this.appendText(this.files.rotationAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readRotationAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('rotationAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendLiquidityAbsorptionAlert(v){return this.lock(async()=>{await appendFile(this.files.liquidityAbsorptionAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendLiquidityAbsorptionAlert(v){return this.lock(async()=>{await this.appendText(this.files.liquidityAbsorptionAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readLiquidityAbsorptionAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('liquidityAbsorptionAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
   async appendKahirAlert(v){return this.appendJsonlArchive('kahirAlerts',[v]);}
   async readKahirAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('kahirAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendDoomsdayAlert(v){return this.lock(async()=>{await appendFile(this.files.doomsdayAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendDoomsdayAlert(v){return this.lock(async()=>{await this.appendText(this.files.doomsdayAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readDoomsdayAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('doomsdayAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendProfessorAlert(v){return this.lock(async()=>{await appendFile(this.files.professorAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
-  async appendAlMuqawimAlert(v){return this.lock(async()=>{await appendFile(this.files.alMuqawimAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendProfessorAlert(v){return this.lock(async()=>{await this.appendText(this.files.professorAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendAlMuqawimAlert(v){return this.lock(async()=>{await this.appendText(this.files.alMuqawimAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readAlMuqawimAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('alMuqawimAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendEarlyExpansionAlert(v){return this.lock(async()=>{await appendFile(this.files.earlyExpansionAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendEarlyExpansionAlert(v){return this.lock(async()=>{await this.appendText(this.files.earlyExpansionAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readEarlyExpansionAlerts({sinceMs=0,limit=100}={}){const safeLimit=Math.min(500,Math.max(1,Number(limit)||100));const rows=await this.readRecent('earlyExpansionAlerts',500);return rows.filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).sort((a,b)=>Number(a?.processed_at??a?.detected_at??0)-Number(b?.processed_at??b?.detected_at??0)).slice(0,safeLimit);}
   async appendScanSchedulerEvents(events){
     return this.appendJsonlArchive('schedulerEvents',events);
@@ -387,13 +457,13 @@ export class DurableStore {
     }catch{return[];}
     return rows.sort((a,b)=>Number(a?.event_at||0)-Number(b?.event_at||0));
   }
-  async appendFalconEyeAlert(v){return this.lock(async()=>{await appendFile(this.files.falconEyeAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendFalconEyeAlert(v){return this.lock(async()=>{await this.appendText(this.files.falconEyeAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readFalconEyeAlerts({sinceMs=0,limit=100}={}){const safeLimit=Math.min(100,Math.max(1,Number(limit)||100));const rows=await this.readRecent('falconEyeAlerts',500);return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).sort((a,b)=>Number(a?.processed_at||0)-Number(b?.processed_at||0)).slice(0,safeLimit);}
   async readProfessorAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('professorAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
   async readKahirAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('kahirAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendCoinHunterAlert(v){return this.lock(async()=>{await appendFile(this.files.coinHunterAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendCoinHunterAlert(v){return this.lock(async()=>{await this.appendText(this.files.coinHunterAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readCoinHunterAlerts({sinceMs=0,limit=100}={}){const take=Math.min(100,Math.max(1,Math.trunc(Number(limit)||100)));const rows=await this.readRecent('coinHunterAlerts',Math.min(500,take));return rows.filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).slice(0,take);}
-  async appendWhaleAccumulationAlert(v){return this.lock(async()=>{await appendFile(this.files.whaleAccumulationAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async appendWhaleAccumulationAlert(v){return this.lock(async()=>{await this.appendText(this.files.whaleAccumulationAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readWhaleAccumulationAlerts({sinceMs=0,limit=100}={}){const take=Math.min(100,Math.max(1,Math.trunc(Number(limit)||100)));const rows=await this.readRecent('whaleAccumulationAlerts',Math.min(500,take));return rows.filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).slice(0,take);}
 
   scanJourneyState(raw={}) {
@@ -417,25 +487,16 @@ export class DurableStore {
     return this.scanJourneyState(await this.readJson(this.files.scanJourneyManifest));
   }
   async scanJourneyWriteBudget(){
-    let freeBytes=null;
-    try{
-      if(this.freeBytesProvider)freeBytes=Number(await this.freeBytesProvider(this.dir));
-      else {
-        const fs=await statfs(this.dir);
-        freeBytes=Number(fs.bavail)*Number(fs.bsize);
-      }
-    }catch{return {free_bytes:null,max_write_bytes:this.maxCycleArchiveBytes,capacity_checked:false};}
-    if(!Number.isFinite(freeBytes)||freeBytes<0)
-      return {free_bytes:null,max_write_bytes:this.maxCycleArchiveBytes,capacity_checked:false};
-    const maxWriteBytes=Math.min(this.maxCycleArchiveBytes,freeBytes-this.storageReserveBytes);
+    const disk=await this.diskWriteBudget(this.storageReserveBytes);
+    const maxWriteBytes=Math.min(this.maxCycleArchiveBytes,disk.max_write_bytes);
     if(maxWriteBytes<1024*1024){
-      const error=new Error('SCAN_JOURNEY_STORAGE_PRESSURE: free_bytes='+Math.floor(freeBytes)+',reserve_bytes='+this.storageReserveBytes);
+      const error=new Error('SCAN_JOURNEY_STORAGE_PRESSURE: free_bytes='+disk.free_bytes+',reserve_bytes='+this.storageReserveBytes);
       error.code='SCAN_JOURNEY_STORAGE_PRESSURE';
-      error.freeBytes=Math.floor(freeBytes);
+      error.freeBytes=disk.free_bytes;
       error.reserveBytes=this.storageReserveBytes;
       throw error;
     }
-    return {free_bytes:Math.floor(freeBytes),max_write_bytes:Math.floor(maxWriteBytes),capacity_checked:true};
+    return {free_bytes:disk.free_bytes,max_write_bytes:Math.floor(maxWriteBytes),capacity_checked:true};
   }
   async appendScanJourneyCycle(cycle,{maxBytes=160*1024*1024}={}){
     const validation=validateScanJourneyCycle(cycle);
