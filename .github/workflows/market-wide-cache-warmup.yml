@@ -5,9 +5,13 @@ on:
   push:
     branches:
       - feature/build224-market-wide-light-scan-20261010
+      - feature/build224-event-breakout-integrated-v3-20261011
     paths:
       - 'phase2/tools/market-wide-cache-warmup.mjs'
       - 'phase2/market/market-wide-kline-cache.mjs'
+      - 'phase2/core/market-wide-light-scan.mjs'
+      - 'phase2/core/early-expansion-radar.mjs'
+      - 'phase2/tests/activity-shock.test.mjs'
       - 'phase2/market/binance-ws.mjs'
       - 'phase2/market/universe-scanner.mjs'
       - 'phase2/core/early-expansion-radar.mjs'

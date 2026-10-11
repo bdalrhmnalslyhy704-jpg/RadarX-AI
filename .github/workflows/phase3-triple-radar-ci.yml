@@ -18,6 +18,7 @@ on:
       - build224-doomsday-muqawim-sniper-v1
       - build224-falcon-eye-ogn-v1
       - build224-persistent-archive-20261009
+      - feature/build224-event-breakout-integrated-v3-20261011
   pull_request:
     branches:
       - phase3-triple-radar
