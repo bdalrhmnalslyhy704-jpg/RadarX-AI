@@ -1294,6 +1294,7 @@ export class MarketUniverseScanner {
     this.sleepFn = sleepFn;
     this.strategyEvaluator = strategyEvaluator;
     this._requests = new Map();
+    this._scanFlights = new Map();
   }
 
   async requestOnce(path, query = {}) {
@@ -1763,7 +1764,26 @@ export class MarketUniverseScanner {
     };
   }
 
-  async scan({ quote = this.config.quote, limit = this.config.scanLimit } = {}) {
+  scan({ quote = this.config.quote, limit = this.config.scanLimit } = {}) {
+    const normalizedQuote = String(quote || this.config.quote).trim().toUpperCase();
+    const normalizedLimit = normalizeRadarLimit(limit, this.config);
+    const key = `market:${normalizedQuote}:${normalizedLimit}`;
+    return this._coalesceScan(key, () => this._scan({ quote, limit }));
+  }
+
+  async _coalesceScan(key, operation) {
+    const pending = this._scanFlights.get(key);
+    if (pending) return pending;
+    const task = Promise.resolve().then(operation);
+    this._scanFlights.set(key, task);
+    try {
+      return await task;
+    } finally {
+      if (this._scanFlights.get(key) === task) this._scanFlights.delete(key);
+    }
+  }
+
+  async _scan({ quote = this.config.quote, limit = this.config.scanLimit } = {}) {
     const startedAt = this.clock();
     const normalizedQuote = String(quote || this.config.quote).trim().toUpperCase();
     if (!/^[A-Z]{2,10}$/.test(normalizedQuote)) throw new Error('INVALID_QUOTE');
