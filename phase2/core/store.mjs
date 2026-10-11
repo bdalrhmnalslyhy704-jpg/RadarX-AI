@@ -57,6 +57,11 @@ function* jsonChunks(value, ancestors=new Set(), arrayMember=false) {
   }
 }
 
+function* jsonDocumentChunks(value){
+  yield* jsonChunks(value);
+  yield '\n';
+}
+
 async function writeGzipJsonAtomic(path,value,{maxBytes=Infinity}={}) {
   const temp=path+'.tmp-'+process.pid+'-'+Date.now()+'-'+randomUUID();
   const digest=createHash('sha256');
@@ -131,13 +136,19 @@ export class DurableStore {
   async lock(fn){const p=this.queue.then(fn);this.queue=p.catch(()=>{});return p;}
   async readJson(p){try{return JSON.parse(await readFile(p,'utf8'));}catch{return{};}}
   async writeJson(p,v){
-    const t=p+'.tmp-'+process.pid+'-'+Date.now();
-    // The outcome ledger is a large, internal 5,000-record file. Compact JSON
-    // preserves the schema while avoiding a large whitespace-heavy serialization
-    // buffer on every live markout update. Other JSON files remain human-readable.
-    const serialized=JSON.stringify(v,null,p===this.files.preExpansionOutcomes?0:2)+'\n';
+    const t=p+'.tmp-'+process.pid+'-'+Date.now()+'-'+randomUUID();
+    const compactOutcome=p===this.files.preExpansionOutcomes;
+    // Keep public/operational manifests readable, but stream the bounded 5,000-row
+    // markout ledger so a second full JSON string does not coexist with its object.
     try{
-      await writeFile(t,serialized);
+      if(compactOutcome){
+        await pipeline(
+          Readable.from(jsonDocumentChunks(v),{objectMode:false}),
+          createWriteStream(t,{flags:'wx'})
+        );
+      }else{
+        await writeFile(t,JSON.stringify(v,null,2)+'\n',{flag:'wx'});
+      }
       await rename(t,p);
       this.lastWriteAt=Date.now();
     }catch(error){
@@ -715,7 +726,9 @@ export class DurableStore {
   }
   async readScanJourneyCycles({limit=10}={}){
     const state=await this.getScanJourneyState();
-    const take=Math.max(1,Math.min(1000,Math.trunc(Number(limit)||10)));
+    // This diagnostic helper returns decoded cycles; cap aggregate retention so callers
+    // cannot accidentally inflate the heap by requesting the whole compressed archive.
+    const take=Math.max(1,Math.min(24,Math.trunc(Number(limit)||10)));
     const rows=[];
     for(const entry of state.cycles.slice(-take).reverse()){
       try{
