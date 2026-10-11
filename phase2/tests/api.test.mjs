@@ -294,3 +294,54 @@ test('TEST_FIXTURE: Falcon Eye history remains retrievable when the live scanner
   assert.equal(body.alerts[0].detected_at,1700000000000);
   await new Promise(resolve=>server.close(resolve));
 });
+
+
+test('TEST_FIXTURE: unified radar alert replay returns all historical pages oldest-first without cursor gaps',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-unified-alert-replay-'));
+  const store=await new DurableStore({dir}).init();
+  for(let i=0;i<130;i++){
+    const at=100000+Math.floor(i/3);
+    await store.appendLiquidityAbsorptionAlert({
+      id:'RADAR4:'+String(i).padStart(4,'0'),radar:'LIQUIDITY_ABSORPTION_RADAR',
+      symbol:'TESTUSDT',event:'TEST_FIXTURE',processed_at:at,detected_at:at,
+      price:0.1234,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+    });
+  }
+  const server=createApiServer({
+    config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},
+    store,monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},
+    pushProvider:new NoopPushProvider(),liquidityAbsorptionRadar:{health:()=>({running:false})}
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const base='http://127.0.0.1:'+server.address().port;
+    const seen=[];
+    let cursorAt=0,cursorId='',hasMore=true;
+    let pageCount=0;
+    while(hasMore){
+      const query=new URLSearchParams({radar:'LIQUIDITY_ABSORPTION_RADAR',limit:'50',since:String(cursorAt),since_id:cursorId,oldest_first:'1'});
+      const response=await fetch(base+'/api/radar-alerts?'+query.toString());
+      assert.equal(response.status,200);
+      const body=await response.json();
+      assert.equal(body.oldest_first,true);
+      assert.equal(body.meta.paper_trading,true);
+      assert.equal(body.meta.real_order_execution,false);
+      assert.ok(Array.isArray(body.alerts));
+      seen.push(...body.alerts.map(x=>x.id));
+      hasMore=body.has_more===true;
+      cursorAt=Number(body.next_cursor?.since||cursorAt);
+      cursorId=String(body.next_cursor?.since_id||cursorId);
+      pageCount++;
+      assert.ok(pageCount<=4,'replay must drain with bounded pages');
+    }
+    assert.equal(pageCount,3);
+    assert.equal(seen.length,130);
+    assert.equal(new Set(seen).size,130,'no alert may be repeated');
+    assert.equal(seen[0],'RADAR4:0000');
+    assert.equal(seen[49],'RADAR4:0049');
+    assert.equal(seen[50],'RADAR4:0050','equal-time alerts after a page boundary must replay');
+    assert.equal(seen[129],'RADAR4:0129');
+  }finally{
+    await new Promise(resolve=>server.close(resolve));
+  }
+});
