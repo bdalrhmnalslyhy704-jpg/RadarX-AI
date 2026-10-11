@@ -1102,7 +1102,7 @@ export class EarlyExpansionRadar{
     this.lastDeepAtBySymbol=new Map();this.firstEligibleAtBySymbol=new Map();
     this.journeyStateHydrated=false;this.lastJourneyArchive=null;this.lastJourneyError=null;
     this.outcomeBackfillTask=null;
-    this.marketWideCacheArchiveHydrationAttempted=false;this.marketWideCacheArchiveHydration=null;
+    this.marketWideCacheArchiveHydrationAttempted=false;this.marketWideCacheArchiveHydration=null;this.marketWideCacheArchiveHydrationAttemptAtBySymbol=new Map();this.marketWideCacheArchiveLastEligibleSymbols=new Set();
     this.latestCandidates=[];this.lastResult=null;this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
     this.fastScannedTotal=0;this.failedTotal=0;this.failedSymbols=[];this.lastCoverage=emptyEarlyExpansionUniverse(this.config,this.config.quote);
   }
@@ -1327,17 +1327,37 @@ export class EarlyExpansionRadar{
     return buildEarlyExpansionEvidence({series,ticker:row,depth:dd.data,marketContext,fastContext:fast,now:candleAsOf,config:cfg,historicalReplay:false,sourceList:sources});
   }
   async rehydrateMarketWideCacheFromArchive(eligible,now=this.clock()){
-    if(this.marketWideCacheArchiveHydrationAttempted)return this.marketWideCacheArchiveHydration;
     if(!this.marketWideKlineCache||typeof this.store.readScanJourneyCandleHistory!=='function')return null;
-    // One bounded read-only archive pass per process; normal Micro requests keep
-    // warming symbols that have no fresh persisted candle snapshot.
+    // The eligible universe can change while the process is running. Hydrate only
+    // symbols whose cache is not ready, and retry missing/stale archive snapshots
+    // on a bounded per-symbol cooldown instead of permanently giving up after the
+    // first startup pass. This remains archive-only: no REST calls are introduced.
+    const eligibleSymbols=[...new Set((Array.isArray(eligible)?eligible:[])
+      .map(row=>String(row?.symbol||'').trim().toUpperCase())
+      .filter(symbol=>/^[A-Z0-9]{2,25}USDT$/.test(symbol)))];
+    const newlyEligible=new Set(eligibleSymbols.filter(symbol=>!this.marketWideCacheArchiveLastEligibleSymbols.has(symbol)));
+    this.marketWideCacheArchiveLastEligibleSymbols=new Set(eligibleSymbols);
+    let coverage=null;
+    try{coverage=this.marketWideKlineCache.coverageReport?.()||null;}catch{}
+    const readyBySymbol=new Map((Array.isArray(coverage?.symbols)?coverage.symbols:[])
+      .map(item=>[String(item?.symbol||'').trim().toUpperCase(),item?.ready===true]));
+    const retryMs=Math.max(60_000,Math.trunc(Number(this.config.marketWideCacheArchiveHydrationRetryMs)||5*60_000));
+    const symbols=eligibleSymbols.filter(symbol=>{
+      if(readyBySymbol.get(symbol)===true)return false;
+      const lastAttempt=this.marketWideCacheArchiveHydrationAttemptAtBySymbol.get(symbol);
+      // setSymbols removes cache data for symbols that leave eligibility. If one
+      // re-enters, retry immediately even if its previous archive attempt is on cooldown.
+      return newlyEligible.has(symbol)||!Number.isFinite(lastAttempt)||Number(now)-lastAttempt>=retryMs;
+    });
+    if(!symbols.length)return this.marketWideCacheArchiveHydration;
     this.marketWideCacheArchiveHydrationAttempted=true;
+    for(const symbol of symbols)this.marketWideCacheArchiveHydrationAttemptAtBySymbol.set(symbol,Number(now));
     const startedAt=this.clock();
     try{
       const minimum=Math.max(60,Math.trunc(Number(this.config.marketWideLightScanMinClosedCandles)||60));
       const maximum=Math.max(minimum,Math.min(96,Math.trunc(Number(this.config.marketWideLightScanMaxClosedCandles)||96)));
       const report=await this.store.readScanJourneyCandleHistory({
-        symbols:(Array.isArray(eligible)?eligible:[]).map(row=>row?.symbol),
+        symbols,
         timeframe:'5m',minCandles:minimum,maxCandles:maximum,maxCycles:50,
         maxAgeMs:Math.max(5*60_000,Number(this.config.marketWideLightScanMaxCandleAgeMs)||8*60_000),now
       });
