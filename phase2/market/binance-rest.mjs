@@ -29,6 +29,8 @@ export class RestRateLimitError extends Error {
  */
 const SHARED = {
   inflight: new Map(),
+  activeRequests: 0,
+  requestWaiters: [],
   cache: new Map(),
   cachePruneAt: 0,
   usedAt: [],
@@ -47,6 +49,17 @@ const SHARED = {
 const SHARED_MAX_REQUESTS_PER_MINUTE = 420;
 const SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE = 4000;
 const SHARED_MIN_INTERVAL_MS = 143;
+// Cap actual fetch + body parsing work shared by all radar/analyst clients.
+const SHARED_MAX_IN_FLIGHT_REQUESTS = 6;
+async function acquireSharedRequestSlot(){
+  if(SHARED.activeRequests<SHARED_MAX_IN_FLIGHT_REQUESTS){SHARED.activeRequests++;return;}
+  await new Promise(resolve=>SHARED.requestWaiters.push(resolve));
+}
+function releaseSharedRequestSlot(){
+  const next=SHARED.requestWaiters.shift();
+  if(next)next();
+  else SHARED.activeRequests=Math.max(0,SHARED.activeRequests-1);
+}
 // TTL only helps if expired entries are removed. Symbols rotate continuously,
 // so prune expired market-data payloads and cap the shared cache to bound heap use.
 const SHARED_MAX_CACHE_ENTRIES = 512;
@@ -220,6 +233,9 @@ export class RestClient {
     rate_limited_until:Math.max(Number(this.rateLimitedUntil)||0,SHARED.rateLimitedUntil)||null,
     current_base_url:this.baseUrls[this.currentBaseIndex]??null,
     shared_queue_depth:SHARED.inflight.size,
+    shared_active_requests:SHARED.activeRequests,
+    shared_waiting_requests:SHARED.requestWaiters.length,
+    shared_max_in_flight_requests:SHARED_MAX_IN_FLIGHT_REQUESTS,
     shared_cache_entries:SHARED.cache.size,
     shared_requests_last_minute:SHARED.usedAt.length,
     shared_estimated_weight_last_minute:SHARED.usedAt.reduce((sum,item)=>sum+item.weight,0),
@@ -262,10 +278,13 @@ export class RestClient {
       let error=null;
       for(let attempt=0;attempt<this.baseUrls.length;attempt++){
         await this.waitBudget(path, query);
+        await acquireSharedRequestSlot();
+        let tm=null;
+        try{
         const idx=(this.currentBaseIndex+attempt)%this.baseUrls.length;
         const qs=new URLSearchParams(normalizedQuery(query));
         const url=this.baseUrls[idx]+path+(qs.toString()?'?'+qs:'');
-        const ac=new AbortController(); const tm=setTimeout(()=>ac.abort(),this.timeoutMs);
+        const ac=new AbortController(); tm=setTimeout(()=>ac.abort(),this.timeoutMs);
         const requestAt=Date.now();
         this.lastRequestAt=requestAt; this.usedAt.push(requestAt);
         this.state='REQUESTING';
@@ -293,7 +312,8 @@ export class RestClient {
         }catch(e){
           error=e; this.lastError=String(e?.message??e);
           if(e?.name==='RestRateLimitError') break;
-        }finally{clearTimeout(tm);}
+        }finally{if(tm!==null)clearTimeout(tm);}
+        }finally{releaseSharedRequestSlot();}
       }
       if(error?.name==='RestRateLimitError') throw error;
       throw error??new Error('REST_REQUEST_FAILED');
