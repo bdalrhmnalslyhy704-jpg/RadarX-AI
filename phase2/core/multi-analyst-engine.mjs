@@ -791,9 +791,12 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   const longStrength=familyRows.reduce((sum,x)=>sum+(x.long_votes>x.bearish_votes?Math.max(0,x.score-50):0),0);
   const bearStrength=familyRows.reduce((sum,x)=>sum+(x.bearish_votes>x.long_votes?Math.max(0,x.score-50):0),0);
   const directionEdge=longStrength-bearStrength;
-  const positive=familyRows.filter(x=>x.score>=65&&x.bearish_votes<=x.long_votes).length;
-  const strong=familyRows.filter(x=>x.score>=80&&x.long_votes>x.bearish_votes).length;
-  const bearishStrong=familyRows.filter(x=>x.score>=75&&x.bearish_votes>x.long_votes).length;
+  const positiveFamilies=familyRows.filter(x=>x.score>=65&&x.long_votes>x.bearish_votes).length;
+  const strongFamilies=familyRows.filter(x=>x.score>=80&&x.long_votes>x.bearish_votes).length;
+  const bearishStrongFamilies=familyRows.filter(x=>x.score>=75&&x.bearish_votes>x.long_votes).length;
+  const positiveAnalysts=safeAnalysts.filter(x=>x.score>=65&&x.direction!=='BEARISH').length;
+  const strongAnalysts=safeAnalysts.filter(x=>x.score>=80&&x.direction==='LONG').length;
+  const bearishStrongAnalysts=safeAnalysts.filter(x=>x.score>=75&&x.direction==='BEARISH').length;
   const activeGroups=Object.keys(groupConsensus);
   const positiveGroups=activeGroups.filter(g=>groupConsensus[g].score>=62&&groupConsensus[g].long_votes>=1).length;
   const bearishGroups=activeGroups.filter(g=>groupConsensus[g].score<=42&&groupConsensus[g].bearish_votes>=1).length;
@@ -827,7 +830,7 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   if(safeAnalysts.find(x=>x.id==='RISK_TRAPS')?.score<42)hardReasons.push('RISK_TOO_HIGH');
   if(safeAnalysts.find(x=>x.id==='EXTENSION')?.score<40)hardReasons.push('PRICE_ALREADY_EXTENDED');
   if(safeAnalysts.find(x=>x.id==='LIQUIDITY_QUALITY')?.score<60)hardReasons.push('LIQUIDITY_TOO_WEAK');
-  if(bearishStrong>=3||bearishGroups>=3)hardReasons.push('CONSENSUS_CONTRADICTION');
+  if(bearishStrongFamilies>=3||bearishGroups>=3)hardReasons.push('CONSENSUS_CONTRADICTION');
   if(chase)hardReasons.push('EARLY_WINDOW_LOST');
   if(pumpExhaustion)hardReasons.push('RECENT_PUMP_EXHAUSTION');
   if(Number.isFinite(freshness)&&freshness<42)hardReasons.push('SNIPER_FRESHNESS_LOW');
@@ -846,11 +849,11 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
     .every(id=>Number(safeAnalysts.find(x=>x.id===id)?.score)>=56);
 
   let verdict='REJECT';
-  if(!hardReasons.length&&direction==='LONG'&&balancedScore>=84&&positive>=12&&strong>=5&&positiveGroups>=6&&criticalGood&&earlyCoreGood&&agreement>=74&&early.score>=76&&(Number.isFinite(fingerprint)?fingerprint:0)>=75&&early.trajectory_score>=48&&sniperScore>=82)
+  if(!hardReasons.length&&direction==='LONG'&&balancedScore>=84&&positiveFamilies>=8&&strongFamilies>=4&&positiveGroups>=6&&criticalGood&&earlyCoreGood&&agreement>=74&&early.score>=76&&(Number.isFinite(fingerprint)?fingerprint:0)>=75&&early.trajectory_score>=48&&sniperScore>=82)
     verdict='STRONG_CANDIDATE';
-  else if(!hardReasons.length&&direction==='LONG'&&balancedScore>=76&&positive>=10&&strong>=3&&positiveGroups>=5&&criticalGood&&earlyCoreGood&&agreement>=64&&early.score>=64&&(Number.isFinite(fingerprint)?fingerprint:0)>=64&&early.trajectory_score>=45&&sniperScore>=72)
+  else if(!hardReasons.length&&direction==='LONG'&&balancedScore>=76&&positiveFamilies>=7&&strongFamilies>=3&&positiveGroups>=5&&criticalGood&&earlyCoreGood&&agreement>=64&&early.score>=64&&(Number.isFinite(fingerprint)?fingerprint:0)>=64&&early.trajectory_score>=45&&sniperScore>=72)
     verdict='CANDIDATE';
-  else if(!hardReasons.length&&direction==='LONG'&&balancedScore>=65&&positive>=8&&positiveGroups>=4&&agreement>=52&&early.score>=52&&sniperScore>=60)
+  else if(!hardReasons.length&&direction==='LONG'&&balancedScore>=65&&positiveFamilies>=6&&positiveGroups>=4&&agreement>=52&&early.score>=52&&sniperScore>=60)
     verdict='WATCH';
 
   const top=safeAnalysts.filter(x=>x.direction==='LONG').sort((a,b)=>b.score-a.score).slice(0,7);
@@ -869,7 +872,7 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
     early_window_open:!chase,
     agreement_ok:agreement>=64,
     group_agreement_ok:positiveGroups>=5,
-    contradiction_count:bearishStrong,
+    contradiction_count:bearishStrongFamilies,
     evidence_coverage_ok:avgCoverage>=.78,
     early_core_ok:earlyCoreGood,
     trajectory_ok:early.trajectory_score>=45,
@@ -883,7 +886,7 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   return {
     score:Math.round(balancedScore*10)/10,
     verdict,direction,
-    positiveAnalysts:positive,strongAnalysts:strong,bearishStrongAnalysts:bearishStrong,totalAnalysts:safeAnalysts.length,
+    positiveAnalysts,strongAnalysts,bearishStrongAnalysts,totalAnalysts:safeAnalysts.length,
     hardReasons,reasons,risks,
     agreement:Math.round(agreement*10)/10,
     analyst_dispersion:Number.isFinite(analystDispersion)?Math.round(analystDispersion*10)/10:null,
