@@ -340,6 +340,22 @@ export class MarketWideKlineCache {
     };
   }
 
+  websocketCoverageState() {
+    const health = this.client?.health?.() || {};
+    const streams = Array.isArray(this.client?.streams) ? this.client.streams : [];
+    const subscriptionComplete = this.running === true && this.symbols.length > 0 &&
+      streams.length === this.symbols.length &&
+      this.symbols.every(symbol => streams.includes(symbol.toLowerCase() + '@kline_5m'));
+    const live = this.running === true && this.streamState === 'LIVE' && health.state === 'LIVE';
+    return {
+      live,
+      subscription_complete: subscriptionComplete,
+      subscribed_symbols: streams.length,
+      expected_symbols: this.symbols.length,
+      ready: live && subscriptionComplete
+    };
+  }
+
   coverageReport() {
     const now = this.clock();
     const symbols = this.symbols.map(symbol => {
@@ -378,6 +394,7 @@ export class MarketWideKlineCache {
     });
     const readySymbols = symbols.filter(item => item.ready).length;
     const websocketAdvancedSymbols = symbols.filter(item => item.websocket_advanced_beyond_backfill).length;
+    const websocketCoverage = this.websocketCoverageState();
     const missingSymbols = symbols.filter(item => item.state === 'CANDLE_CACHE_MISSING').length;
     const staleSymbols = symbols.filter(item => item.state === 'STALE_DATA').length;
     const incompleteSymbols = symbols.filter(item => !item.ready &&
@@ -392,8 +409,11 @@ export class MarketWideKlineCache {
       incomplete_symbols:incompleteSymbols,
       cache_coverage_ready:symbols.length>0 && readySymbols===symbols.length,
       websocket_advanced_symbols:websocketAdvancedSymbols,
-      websocket_sync_ready:symbols.length>0 && websocketAdvancedSymbols===symbols.length,
-      full_market_coverage_ready:symbols.length>0 && readySymbols===symbols.length && websocketAdvancedSymbols===symbols.length,
+      websocket_live:websocketCoverage.live,
+      websocket_subscription_complete:websocketCoverage.subscription_complete,
+      websocket_subscribed_symbols:websocketCoverage.subscribed_symbols,
+      websocket_sync_ready:websocketCoverage.ready,
+      full_market_coverage_ready:symbols.length>0 && readySymbols===symbols.length && websocketCoverage.ready,
       symbols
     };
   }
@@ -411,7 +431,8 @@ export class MarketWideKlineCache {
       (this.cache.get(symbol)?.candles || []).some(candle => candle.source === 'BINANCE_PUBLIC_REST' ||
         candle.source === 'BINANCE_PUBLIC_REST_CACHE')).length;
     const wsHealth = this.client?.health?.() || {};
-    const websocketLive = wsHealth.state === 'LIVE' || this.streamState === 'LIVE';
+    const websocketCoverage = this.websocketCoverageState();
+    const websocketLive = websocketCoverage.live;
     let restFallbackState = 'NOT_ACTIVE';
     if (!websocketLive && this.running) {
       if (this.streamState === 'DEGRADED') {
@@ -442,13 +463,15 @@ export class MarketWideKlineCache {
       stale_symbols: staleSymbols,
       incomplete_symbols: incompleteSymbols,
       cache_coverage_ready: this.symbols.length > 0 && readySymbols === this.symbols.length,
+      websocket_live: websocketCoverage.live,
+      websocket_subscription_complete: websocketCoverage.subscription_complete,
+      websocket_subscribed_symbols: websocketCoverage.subscribed_symbols,
+      websocket_sync_ready: websocketCoverage.ready,
       websocket_advanced_symbols: this.symbols.filter(symbol =>
         Number(this.latestWebSocketClosedTimeBySymbol.get(symbol) ?? -Infinity) >
         Number(this.firstRestBackfillCloseTimeBySymbol.get(symbol) ?? Infinity)).length,
       full_market_coverage_ready: this.symbols.length > 0 && readySymbols === this.symbols.length &&
-        this.symbols.every(symbol =>
-          Number(this.latestWebSocketClosedTimeBySymbol.get(symbol) ?? -Infinity) >
-          Number(this.firstRestBackfillCloseTimeBySymbol.get(symbol) ?? Infinity)),
+        websocketCoverage.ready,
       cached_closed_candles: candleCount,
       received_messages: this.receivedMessages,
       received_closed_candles: this.receivedClosedCandles,

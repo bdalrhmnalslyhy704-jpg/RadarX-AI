@@ -360,6 +360,7 @@ test('coverage gate stays closed for one missing symbol, opens only when all are
 
   now += STEP;
   const nextClosed = candles({now,count:1})[0];
+  socket.emit('open');
   for (const symbol of ['AAAUSDT','BBBUSDT','CCCUSDT']) {
     socket.emit('message',Buffer.from(JSON.stringify({
       e:'kline',E:now,s:symbol,k:{
@@ -382,6 +383,40 @@ test('coverage gate stays closed for one missing symbol, opens only when all are
   assert.equal(proof.cache_coverage_ready,false,'historical coverage must close when the data becomes stale');
   assert.equal(proof.full_market_coverage_ready,false,'the full gate must stay closed when history becomes stale');
   cache.stop();
+});
+
+test('live combined WebSocket coverage does not require every subscribed symbol to close a new candle', () => {
+  let now = 1_900_000_000_000;
+  FakeSocket.instances.length = 0;
+  const cache = new MarketWideKlineCache({
+    urls:['wss://stream.test/stream'], WebSocketImpl:FakeSocket,
+    clock:()=>now, logger:{warn(){}}
+  });
+  cache.setSymbols(['AAAUSDT','LINEAUSDT']);
+  cache.start();
+  const socket = FakeSocket.instances.at(-1);
+  for (const symbol of ['AAAUSDT','LINEAUSDT']) {
+    cache.seed(symbol,candles({now,count:72}).map(candle=>({...candle,symbol})),'BINANCE_PUBLIC_REST');
+  }
+  let proof = cache.coverageReport();
+  assert.equal(proof.cache_coverage_ready,true);
+  assert.equal(proof.websocket_sync_ready,false,'a connecting socket is not a live market-wide stream');
+  assert.equal(proof.full_market_coverage_ready,false);
+  socket.emit('open');
+  proof = cache.coverageReport();
+  assert.equal(proof.ready_symbols,2);
+  assert.equal(proof.websocket_live,true);
+  assert.equal(proof.websocket_subscription_complete,true);
+  assert.equal(proof.websocket_subscribed_symbols,2);
+  assert.equal(proof.websocket_advanced_symbols,0,
+    'neither symbol needs an extra closed candle to prove the combined subscription is live');
+  assert.equal(proof.websocket_sync_ready,true);
+  assert.equal(proof.full_market_coverage_ready,true,
+    'fresh contiguous closed history for every symbol plus one live subscription containing every symbol is full market coverage');
+  assert.ok(proof.symbols.every(item=>item.sources.includes('BINANCE_PUBLIC_REST')),
+    'the cache can continue analyzing verified closed REST history until the next closed WebSocket candle arrives');
+  cache.stop();
+  assert.equal(cache.health().full_market_coverage_ready,false,'stopping the stream closes the live gate');
 });
 
 test('same closed-candle payload is deduplicated instead of being counted as fresh data', () => {

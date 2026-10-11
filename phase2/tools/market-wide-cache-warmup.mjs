@@ -133,7 +133,7 @@ async function saveReport() {
     websocket_messages: report.transport.websocket_messages,
     reconnect_attempts: report.transport.reconnect_attempts,
     historical_rest_backfill: report.transport.rest_historical_backfill_used,
-    websocket_updated_every_symbol: report.summary?.websocket_sync_ready ?? false,
+    websocket_sync_ready: report.summary?.websocket_sync_ready ?? false,
     report_path: REPORT_PATH
   }));
 }
@@ -159,8 +159,12 @@ function finalizeCoverage(coverage) {
   const symbols = coverage.symbols.map(row => {
     const historyReady = row.ready === true;
     const wsAdvanced = row.websocket_advanced_beyond_backfill === true;
-    const ready = historyReady && wsAdvanced;
-    const reason = !historyReady ? row.state : !wsAdvanced ? 'WS_NOT_ADVANCED_AFTER_BACKFILL' : null;
+    // Binance kline streams emit updates when a symbol trades. A quiet symbol
+    // may not close another 5m candle during warm-up even when it is correctly
+    // subscribed and the combined WebSocket is live. Keep that as telemetry,
+    // not as a per-symbol readiness failure.
+    const ready = historyReady;
+    const reason = !historyReady ? row.state : null;
     return {
       ...row,
       historical_backfill_ready: historyReady,
@@ -183,9 +187,12 @@ function finalizeCoverage(coverage) {
     stale_symbols: symbols.filter(row => row.state === 'STALE_DATA').length,
     incomplete_symbols: symbols.filter(row => !row.ready &&
       !['CANDLE_CACHE_MISSING','STALE_DATA','WS_NOT_ADVANCED_AFTER_BACKFILL'].includes(row.state)).length,
-    websocket_not_advanced_symbols: symbols.filter(row => row.state === 'WS_NOT_ADVANCED_AFTER_BACKFILL').length,
+    websocket_not_advanced_symbols: symbols.filter(row => row.websocket_updated_after_backfill !== true).length,
     websocket_advanced_symbols: coverage.websocket_advanced_symbols,
-    websocket_sync_ready: coverage.websocket_sync_ready,
+    websocket_live: coverage.websocket_live === true,
+    websocket_subscription_complete: coverage.websocket_subscription_complete === true,
+    websocket_subscribed_symbols: Number(coverage.websocket_subscribed_symbols) || 0,
+    websocket_sync_ready: coverage.websocket_sync_ready === true,
     reason_counts: counts
   };
   report.per_symbol = symbols;
@@ -606,8 +613,11 @@ try {
     actual_micro_1m_klines_http_attempts:httpAttempts.filter(item=>item.url.includes('/api/v3/klines')&&item.url.includes('interval=1m')).length,
     extra_per_symbol_rest_warmup_requests:0,
     historical_backfill_method:'EXISTING_MICRO_KLINE_RESPONSES_VIA_SHARED_REST_OBSERVER',
-    websocket_sync_ready:coverage.websocket_sync_ready,
-    full_market_coverage_ready:coverage.full_market_coverage_ready
+    websocket_live:coverage.websocket_live === true,
+    websocket_subscription_complete:coverage.websocket_subscription_complete === true,
+    websocket_subscribed_symbols:Number(coverage.websocket_subscribed_symbols)||0,
+    websocket_sync_ready:coverage.websocket_sync_ready === true,
+    full_market_coverage_ready:coverage.full_market_coverage_ready === true
   };
   report.binance_http_attempt_total = httpAttempts.length;
   report.binance_http_attempts = httpAttempts;
