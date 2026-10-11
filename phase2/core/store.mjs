@@ -58,7 +58,7 @@ async function inspectGzipScanJourneyCycle(filePath){
   try{
     for await(const chunk of gunzip){
       const text=chunk.toString('utf8');
-      if(coinsFound){scanCoins(text);continue;}
+      if(coinsFound){if(!coinsClosed)scanCoins(text);continue;}
       const probe=carry+text;
       if(cycleId===null){
         const idMatch=/"cycle_id"\s*:\s*"([^"\\]*)"/.exec(probe);
