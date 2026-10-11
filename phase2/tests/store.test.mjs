@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,stat,mkdir,readFile,writeFile} from 'node:fs/promises';
+import {mkdtemp,stat,mkdir,readFile,writeFile,readdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {createHash} from 'node:crypto';
 import {DurableStore} from '../core/store.mjs';
 import {SCAN_JOURNEY_SCHEMA} from '../core/scan-journey-ledger.mjs';
 
@@ -364,6 +365,70 @@ test('scan-journey candle history rehydrates only newest fresh continuous closed
     assert.equal(after.compressed_bytes,before.compressed_bytes,'rehydration must not mutate or rewrite the archive');
     const audit=await store.verifyScanJourneyArchive();
     assert.equal(audit.complete,true,'bad market data in a row is not the same as a damaged archive file');
+  }finally{
+    await import('node:fs/promises').then(fs=>fs.rm(dir,{recursive:true,force:true}));
+  }
+});
+
+
+function stableArchivePayload(seed,length){
+  let out='';
+  for(let block=0;out.length<length;block++)
+    out+=createHash('sha256').update(seed+':'+block).digest('hex');
+  return out.slice(0,length);
+}
+
+test('scan-journey compressed retention remains bounded under repeated appends',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-scan-journey-retention-soak-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    const maxBytes=350*1024;
+    const cycles=6;
+    let completedAt=1_900_000_000_000;
+    for(let cycleIndex=0;cycleIndex<cycles;cycleIndex++){
+      const cycleId='RADAR8:USDT:RESOURCE-RETENTION:'+cycleIndex;
+      const coins=Array.from({length:40},(_,coinIndex)=>({
+        symbol:'TEST'+String(coinIndex).padStart(3,'0')+'USDT',
+        eligible:true,
+        evidence_payload:stableArchivePayload(cycleIndex+':'+coinIndex,6144)
+      }));
+      await store.appendScanJourneyCycle({
+        schema_version:SCAN_JOURNEY_SCHEMA,
+        cycle_id:cycleId,
+        cycle_number:cycleIndex+1,
+        radar:'RADAR_8',
+        quote:'USDT',
+        status:'COMPLETE',
+        started_at:completedAt-1000,
+        completed_at:completedAt,
+        data_policy:{
+          closed_candles_only:true,
+          paper_trading:true,
+          real_order_execution:false,
+          confidence_score:'UNKNOWN'
+        },
+        counters:{},
+        coins
+      },{maxBytes});
+      completedAt+=60_000;
+      const state=await store.getScanJourneyState();
+      assert.ok(state.compressed_bytes<=maxBytes,
+        'the compressed archive must stay within its explicit byte budget');
+      assert.ok(state.cycles.some(row=>row.cycle_id===cycleId),
+        'the newly completed cycle must remain in the retained manifest');
+    }
+    const state=await store.getScanJourneyState();
+    assert.ok(state.pruned_cycle_count>0,
+      'repeated appends beyond the budget must prune old cycles');
+    assert.equal(state.cycles.at(-1).cycle_id,'RADAR8:USDT:RESOURCE-RETENTION:5',
+      'the latest completed cycle must be retained');
+    const files=(await readdir(store.scanJourneyDir))
+      .filter(name=>name.endsWith('.json.gz')).sort();
+    assert.deepEqual(files,state.cycles.map(row=>row.filename).sort(),
+      'disk archive files and manifest retention must agree exactly');
+    const audit=await store.verifyScanJourneyArchive();
+    assert.equal(audit.complete,true,
+      'retained compressed cycles must remain readable and pass integrity verification');
   }finally{
     await import('node:fs/promises').then(fs=>fs.rm(dir,{recursive:true,force:true}));
   }
