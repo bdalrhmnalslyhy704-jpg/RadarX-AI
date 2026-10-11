@@ -69,6 +69,25 @@ test('TEST_FIXTURE: deep symbol scan normalizes symbols and uses closed candles 
   }
 });
 
+test('TEST_FIXTURE: concurrent deep scans for equivalent symbol names share one read-only analysis',async()=>{
+  const underlying=mockRest();
+  const calls={klines:0,ticker:0,depth:0};
+  const rest={
+    async klines(...args){calls.klines++;await new Promise(resolve=>setTimeout(resolve,10));return underlying.klines(...args);},
+    async ticker24h(...args){calls.ticker++;await new Promise(resolve=>setTimeout(resolve,10));return underlying.ticker24h(...args);},
+    async depth(...args){calls.depth++;await new Promise(resolve=>setTimeout(resolve,10));return underlying.depth(...args);}
+  };
+  const analyzer=new SymbolDeepAnalyzer({rest});
+  const [short,long]=await Promise.all([
+    analyzer.scan('SAND'),
+    analyzer.scan('SANDUSDT')
+  ]);
+  assert.deepEqual(long,short);
+  assert.equal(calls.klines,3,'one request for each timeframe');
+  assert.equal(calls.ticker,1,'one ticker request');
+  assert.equal(calls.depth,1,'one order-book request');
+});
+
 test('TEST_FIXTURE: deep symbol scan API is public GET-only and does not create orders',async(t)=>{
   const monitor={rest:mockRest(),health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
   const config={auth:{secret:'',allowedOrigins:[]},api:{rateLimitPerMinute:1000,maxBodyBytes:65536}};
