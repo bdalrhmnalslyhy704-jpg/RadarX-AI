@@ -23,7 +23,7 @@ on:
       - '.github/workflows/market-wide-cache-warmup.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   # Different feature branches need independent acceptance proofs; a later
@@ -71,3 +71,57 @@ jobs:
           path: artifacts/market-wide-cache-warmup.json
           if-no-files-found: warn
           retention-days: 7
+      - name: Publish compact Shadow proof result to experiment branch
+        if: always()
+        env:
+          REPORT_PATH: artifacts/market-wide-cache-warmup.json
+          SUMMARY_PATH: artifacts/market-wide-shadow-summary.json
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFile, writeFile, mkdir} from 'node:fs/promises';
+          let report = null;
+          try { report = JSON.parse(await readFile(process.env.REPORT_PATH, 'utf8')); } catch {}
+          const shadow = report?.shadow || {};
+          const summary = {
+            schema_version: 1,
+            published_at_utc: new Date().toISOString(),
+            source_commit: process.env.GITHUB_SHA || null,
+            branch: process.env.GITHUB_REF_NAME || null,
+            status: report?.status || 'REPORT_MISSING',
+            failure_reason: report?.failure_reason || null,
+            acceptance_gate_open: report?.acceptance_gate_open === true,
+            market_wide_cache_coverage_ready: report?.market_wide_cache_coverage_ready === true,
+            discovery: report?.discovery || null,
+            summary: report?.summary || null,
+            transport: report?.transport || null,
+            micro_selector: report?.micro_selector || null,
+            shadow: {
+              status: shadow.status || 'NOT_STARTED',
+              requested_cycles: shadow.requested_cycles ?? null,
+              completed_cycles: shadow.completed_cycles ?? shadow.cycles?.length ?? 0,
+              attempted_cycles: shadow.attempted_cycles ?? null,
+              max_duration_minutes: shadow.max_duration_minutes ?? null,
+              abort_reason: shadow.abort_reason || null,
+              coverage_ready_every_cycle: shadow.coverage_ready_every_cycle === true,
+              websocket_live_every_cycle: shadow.websocket_live_every_cycle === true,
+              selector_activation_verified: shadow.selector_activation_verified ?? shadow.summary?.selector_activation_verified ?? null,
+              interrupted_cycles: shadow.interrupted_cycles || [],
+              pairs: shadow.pairs || [],
+              cycles: shadow.cycles || [],
+              summary: shadow.summary || null
+            },
+            merged: false,
+            deployed: false,
+            paper_trading: true,
+            real_order_execution: false
+          };
+          await mkdir('artifacts', {recursive:true});
+          await writeFile(process.env.SUMMARY_PATH, JSON.stringify(summary, null, 2) + '\n', 'utf8');
+          NODE
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add artifacts/market-wide-shadow-summary.json
+          if ! git diff --cached --quiet; then
+            git commit -m "ci: record isolated Build 224 Shadow proof result"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
