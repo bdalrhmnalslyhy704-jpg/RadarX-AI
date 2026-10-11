@@ -7,6 +7,8 @@ import {
   MarketUniverseScanner
 } from '../market/universe-scanner.mjs';
 
+const MAX_PENDING_OUTCOME_SYMBOLS = 2048;
+const PENDING_OUTCOME_TTL_MS = 5*60*60*1000;
 const clamp=(x,lo=0,hi=100)=>{
   const n=Number(x);
   return Number.isFinite(n)?Math.max(lo,Math.min(hi,n)):50;
@@ -914,10 +916,44 @@ export class MultiAnalystEngine {
     this.busy=null;
     this.calibration=new SelfCalibrator(30);
     this.pendingOutcomes=new Map();
+    this.pendingOutcomePruneStats={expired_items:0,expired_symbols:0,capacity_evictions:0};
     this.running=false;
     this.monitorTimer=null;
     this.monitorStartedAt=null;
     this.monitorStats={scan_count:0,last_scan_at:null,last_error:null,next_scan_at:null,last_scan_successful:false};
+  }
+  _prunePendingOutcomes(now=this.clock()){
+    let expiredItems=0,expiredSymbols=0;
+    // Mutate each tiny (maximum two items per symbol) queue in place. Stale
+    // calibration samples have already passed the five-hour horizon and can no
+    // longer contribute to calibration; this does not touch stored market alerts.
+    for(const [symbol,items] of this.pendingOutcomes){
+      if(!Array.isArray(items)||items.length===0){
+        this.pendingOutcomes.delete(symbol);expiredSymbols++;continue;
+      }
+      let write=0;
+      for(let read=0;read<items.length;read++){
+        const item=items[read];
+        if(!item||!Number.isFinite(Number(item.asOf))||now-Number(item.asOf)>=PENDING_OUTCOME_TTL_MS){
+          expiredItems++;continue;
+        }
+        items[write++]=item;
+      }
+      items.length=write;
+      if(write===0){this.pendingOutcomes.delete(symbol);expiredSymbols++;}
+    }
+    this.pendingOutcomePruneStats.expired_items+=expiredItems;
+    this.pendingOutcomePruneStats.expired_symbols+=expiredSymbols;
+    // Map insertion order is used as a low-cost FIFO for the bounded transient
+    // calibration queue. Registration refreshes a symbol's position; eviction
+    // is counted and observable, never confused with a market-alert deletion.
+    while(this.pendingOutcomes.size>MAX_PENDING_OUTCOME_SYMBOLS){
+      const oldest=this.pendingOutcomes.keys().next().value;
+      if(oldest===undefined)break;
+      this.pendingOutcomes.delete(oldest);
+      this.pendingOutcomePruneStats.capacity_evictions++;
+    }
+    return {pending_symbols:this.pendingOutcomes.size,...this.pendingOutcomePruneStats};
   }
   _settleOutcome(symbol,currentPrice,now){
     const list=this.pendingOutcomes.get(symbol);
@@ -931,7 +967,7 @@ export class MultiAnalystEngine {
         item.evaluated[h.key]=true;
         if(entry>0&&current>0)this.calibration.settle(item.analysts,(current-entry)/entry,h);
       }
-      if(now-item.asOf<5*60*60*1000)keep.push(item);
+      if(now-item.asOf<PENDING_OUTCOME_TTL_MS)keep.push(item);
     }
     if(keep.length)this.pendingOutcomes.set(symbol,keep.slice(-2));
     else this.pendingOutcomes.delete(symbol);
@@ -942,12 +978,14 @@ export class MultiAnalystEngine {
     const last=existing.at(-1);
     if(last&&now-last.asOf<30*60*1000)return;
     existing.push({...item,asOf:now,evaluated:{'15m':false,'1h':false,'4h':false}});
+    this.pendingOutcomes.delete(item.symbol);
     this.pendingOutcomes.set(item.symbol,existing.slice(-2));
   }
   async scan({quote=this.config.quote,limit=this.config.returnLimit}={}){
     const now=this.clock();
     const q=String(quote||this.config.quote).trim().toUpperCase();
     const requested=Math.max(1,Math.min(15,Math.trunc(Number(limit)||this.config.returnLimit)));
+    this._prunePendingOutcomes(now);
     if(!/^[A-Z]{2,10}$/.test(q))throw new Error('INVALID_QUOTE');
     if(this.cache&&this.cache.quote===q&&this.cache.expiresAt>now)return this.cache.value;
     if(this.busy){
