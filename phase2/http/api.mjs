@@ -238,6 +238,11 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         const limit=Math.max(1,Math.min(100,Math.trunc(Number(u.searchParams.get('limit')||20))));
         const entries=radar==='ALL'?Object.entries(radarEntries):radarEntries[radar]?[[radar,radarEntries[radar]]]:null;
         if(!entries)return send(res,400,{error:'INVALID_RADAR',radar});
+        // Keep durable Falcon Eye history replayable even if its scanner failed to initialize.
+        if(oldestFirst&&radar==='ALL'&&!entries.some(([id])=>id==='FALCON_EYE_RADAR')&&
+          typeof store?.readAlertPage==='function'){
+          entries.push(['FALCON_EYE_RADAR',{name:RADAR_NAMES.FALCON_EYE_RADAR,read:'readFalconEyeAlerts',archive:'falconEyeAlerts'}]);
+        }
         const alerts=[];
         for(const [radarId,entry] of entries){
           if(oldestFirst&&entry.archive&&typeof store?.readAlertPage==='function'){
