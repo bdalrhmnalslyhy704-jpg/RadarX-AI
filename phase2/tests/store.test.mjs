@@ -46,6 +46,43 @@ test('TEST_FIXTURE: Falcon Eye alert history replays oldest-first after an offli
   assert.deepEqual(next.map(x=>x.processed_at),[3000]);
 });
 
+
+test('durable alert replay pages preserve the full archive, oldest-first order, and same-time cursor boundaries',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-alert-replay-page-'));
+  const store=await new DurableStore({dir}).init();
+  for(let i=0;i<620;i++){
+    const at=100000+Math.floor(i/3);
+    await store.appendFalconEyeAlert({
+      id:'FALCON:'+String(i).padStart(4,'0'),radar:'FALCON_EYE_RADAR',symbol:'TESTUSDT',
+      processed_at:at,detected_at:at,price:0.1234,paper_trading:true,real_order_execution:false
+    });
+  }
+  const first=await store.readAlertPage('falconEyeAlerts',{sinceMs:0,radar:'FALCON_EYE_RADAR',limit:100});
+  assert.equal(first.length,100);
+  assert.equal(first[0].id,'FALCON:0000');
+  assert.equal(first[99].id,'FALCON:0099');
+  assert.ok(first[99].replay_cursor_id.endsWith('|FALCON:0099'));
+  const second=await store.readAlertPage('falconEyeAlerts',{
+    sinceMs:first[99].replay_cursor_at,sinceId:first[99].replay_cursor_id,
+    radar:'FALCON_EYE_RADAR',limit:100
+  });
+  assert.equal(second.length,100);
+  assert.equal(second[0].id,'FALCON:0100','same-timestamp items after the page boundary must not be skipped');
+  assert.equal(second[99].id,'FALCON:0199');
+  const all=[...first,...second];
+  let cursorAt=second[99].replay_cursor_at,cursorId=second[99].replay_cursor_id;
+  while(all.length<620){
+    const next=await store.readAlertPage('falconEyeAlerts',{sinceMs:cursorAt,sinceId:cursorId,radar:'FALCON_EYE_RADAR',limit:100});
+    assert.ok(next.length>0,'the persisted cursor must continue through the archive');
+    all.push(...next);
+    cursorAt=next[next.length-1].replay_cursor_at;
+    cursorId=next[next.length-1].replay_cursor_id;
+  }
+  assert.equal(all.length,620);
+  assert.equal(new Set(all.map(x=>x.id)).size,620);
+  assert.equal(all[619].id,'FALCON:0619');
+});
+
 test('scheduler archive hydrates each radar independently when another radar dominates the newest rows',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-scheduler-partition-read-'));
   const store=await new DurableStore({dir}).init();
