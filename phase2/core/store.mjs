@@ -61,10 +61,10 @@ async function inspectGzipScanJourneyCycle(filePath){
       if(coinsFound){scanCoins(text);continue;}
       const probe=carry+text;
       if(cycleId===null){
-        const idMatch=/"cycle_id"\\s*:\\s*"([^"\\\\]*)"/.exec(probe);
+        const idMatch=/"cycle_id"\s*:\s*"([^"\\]*)"/.exec(probe);
         if(idMatch)cycleId=idMatch[1];
       }
-      const coinsMatch=/"coins"\\s*:\\s*\\[/.exec(probe);
+      const coinsMatch=/"coins"\s*:\s*\[/.exec(probe);
       if(coinsMatch){
         coinsFound=true;
         scanCoins(probe.slice(coinsMatch.index+coinsMatch[0].length));
