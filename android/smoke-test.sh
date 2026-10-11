@@ -1,106 +1,435 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+
+PHASE="initialization"
 
 debug_on_error() {
-  rc=$?
-  echo "Smoke test failed with exit code $rc"
-  adb logcat -d -s RadarXSmoke:I RadarXWeb:I RadarXBackground:I '*:S' 2>/dev/null || true
-  exit "$rc"
+  local rc=$?
+  trap - ERR
+  set +e
+  echo "::error::RadarX Android smoke test failed during: ${PHASE} (exit ${rc})"
+  timeout 5s adb devices -l 2>&1 | tail -n 40 || true
+  timeout 10s adb logcat -d -b all -s RadarXSmoke:I RadarXWeb:I RadarXBackground:I AndroidRuntime:E ActivityTaskManager:E '*:S' 2>&1 | tail -n 180 || true
+  timeout 8s adb shell dumpsys activity activities 2>&1 | tail -n 80 || true
+  exit "${rc}"
 }
 trap debug_on_error ERR
 
-APK="android/app/build/outputs/apk/release/app-release.apk"
-SERVICE_COMPONENT="com.radarx.app/.RadarXBackgroundMonitorService"
+APK="${RADARX_APK_PATH:-android/app/build/outputs/apk/release/app-release.apk}"
 START_ACTION="com.radarx.app.action.START_BACKGROUND_MONITOR"
 
 cleanup() {
-  adb shell am force-stop com.radarx.app >/dev/null 2>&1 || true
-  adb shell cmd connectivity airplane-mode disable >/dev/null 2>&1 || true
-  adb shell settings put global airplane_mode_on 0 >/dev/null 2>&1 || true
-  adb shell svc wifi enable >/dev/null 2>&1 || true
+  timeout 5s adb shell am force-stop com.radarx.app >/dev/null 2>&1 || true
+  timeout 5s adb shell cmd connectivity airplane-mode disable >/dev/null 2>&1 || true
+  timeout 5s adb shell settings put global airplane_mode_on 0 >/dev/null 2>&1 || true
+  timeout 5s adb shell svc wifi enable >/dev/null 2>&1 || true
+  if [[ -n "${REPLAY_SERVER_PID:-}" ]]; then
+    kill "${REPLAY_SERVER_PID}" >/dev/null 2>&1 || true
+    wait "${REPLAY_SERVER_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${APP_LOGCAT_PID:-}" ]]; then
+    kill "${APP_LOGCAT_PID}" >/dev/null 2>&1 || true
+    wait "${APP_LOGCAT_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${REPLAY_LOGCAT_PID:-}" ]]; then
+    kill "${REPLAY_LOGCAT_PID}" >/dev/null 2>&1 || true
+    wait "${REPLAY_LOGCAT_PID}" 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT
 
 start_app_and_wait_ready() {
-  adb shell am force-stop com.radarx.app || true
-  adb logcat -c
-  adb shell am start -W -n com.radarx.app/.MainActivity >/dev/null
-  sleep 8
+  PHASE="force-stop before clean launch"
+  if [[ -n "${APP_LOGCAT_PID:-}" ]]; then
+    kill "${APP_LOGCAT_PID}" >/dev/null 2>&1 || true
+    wait "${APP_LOGCAT_PID}" 2>/dev/null || true
+    APP_LOGCAT_PID=""
+  fi
+  timeout 20s adb shell am force-stop com.radarx.app || true
+  timeout 15s adb logcat -c
 
-  PID="$(adb shell pidof com.radarx.app | tr -d '\r' || true)"
-  if [[ -z "$PID" ]]; then
-    echo "::error::RadarX process is not alive after launch"
-    adb shell dumpsys activity exit-info com.radarx.app 2>/dev/null | tail -n 120 || true
-    adb logcat -d -b crash 2>/dev/null | tail -n 160 || true
+  # Capture startup logs continuously. Repeated short adb logcat dumps can time
+  # out on a cold software-rendered emulator and hide healthy Activity markers.
+  APP_LOG_FILE="${RUNNER_TEMP:-/tmp}/radarx-app-startup-logcat.txt"
+  : > "${APP_LOG_FILE}"
+  PHASE="start persistent app startup log capture"
+  adb logcat -v brief -s RadarXSmoke:I RadarXWeb:I RadarXBackground:I AndroidRuntime:E ActivityTaskManager:E '*:S' >> "${APP_LOG_FILE}" 2>&1 &
+  APP_LOGCAT_PID=$!
+  sleep 1
+  if ! kill -0 "${APP_LOGCAT_PID}" 2>/dev/null; then
+    echo "::error::Could not start Android startup log capture"
     return 1
   fi
 
-  TOP="$(adb shell dumpsys activity activities 2>/dev/null | tr -d '\r' || true)"
-  RESUMED="$(printf '%s\n' "$TOP" | grep -E 'mResumedActivity|ResumedActivity' | tail -n 5 || true)"
-  if ! printf '%s\n' "$RESUMED" | grep -q 'com.radarx.app'; then
-    echo "::error::RadarX MainActivity is not resumed after launch"
-    printf '%s\n' "$RESUMED"
-    adb shell dumpsys activity top 2>/dev/null | tail -n 80 || true
+  PHASE="launch MainActivity without blocking for WebView idle"
+  local start_output
+  start_output="$(timeout 45s adb shell am start -n com.radarx.app/.MainActivity 2>&1)" || {
+    local rc=$?
+    echo "::error::MainActivity launch command failed (exit ${rc})"
+    echo "${start_output}"
+    return "${rc}"
+  }
+  echo "MainActivity launch: ${start_output}"
+
+  PHASE="wait for live process, resumed Activity, and JS UI readiness"
+  local pid="" logs="" resume_line="" pause_line="" ready=0
+  for attempt in $(seq 1 60); do
+    logs="$(cat "${APP_LOG_FILE}" 2>/dev/null || true)"
+    # Query the process every 10 seconds rather than issuing two adb commands
+    # on every iteration; each ADB query has enough time for a cold emulator.
+    if (( attempt == 1 || attempt % 5 == 0 )); then
+      pid="$(timeout 12s adb shell pidof com.radarx.app 2>/dev/null | tr -d '\r' || true)"
+    fi
+    resume_line="$(printf '%s\n' "${logs}" | grep -nF 'ACTIVITY_RESUMED' | tail -n 1 | cut -d: -f1 || true)"
+    pause_line="$(printf '%s\n' "${logs}" | grep -nF 'ACTIVITY_PAUSED' | tail -n 1 | cut -d: -f1 || true)"
+    if [[ -n "${pid}" && -n "${resume_line}" ]] &&
+       printf '%s\n' "${logs}" | grep -Fq 'UI_READY' &&
+       { [[ -z "${pause_line}" ]] || (( resume_line > pause_line )); }; then
+      ready=1
+      break
+    fi
+    sleep 2
+  done
+  if [[ "${ready}" -ne 1 ]]; then
+    echo "::error::RadarX Activity/process/UI did not become ready"
+    echo "PID=${pid:-NONE} RESUME_LINE=${resume_line:-NONE} PAUSE_LINE=${pause_line:-NONE}"
+    printf '%s\n' "${logs}" | tail -n 180
+    timeout 15s adb shell dumpsys activity activities 2>/dev/null | tail -n 100 || true
+    timeout 12s adb logcat -d -b crash 2>/dev/null | tail -n 140 || true
     return 1
   fi
+  echo "RadarX Activity/process/UI ready: pid=${pid}"
 
-  LOGS="$(adb logcat -d -s RadarXWeb:I RadarXBackground:I '*:S' 2>/dev/null || true)"
-  if printf '%s\n' "$LOGS" | grep -Eqi 'RadarXWeb: ERROR:Uncaught (ReferenceError|SyntaxError|TypeError)'; then
+  PHASE="wait for background foreground-service startup"
+  local service_ready=0
+  for attempt in $(seq 1 30); do
+    logs="$(cat "${APP_LOG_FILE}" 2>/dev/null || true)"
+    if printf '%s\n' "${logs}" | grep -Fq "BACKGROUND_AUTO_START_REQUEST" &&
+       printf '%s\n' "${logs}" | grep -Fq "BACKGROUND_SERVICE_READY"; then
+      service_ready=1
+      break
+    fi
+    sleep 2
+  done
+
+  if printf '%s\n' "${logs}" | grep -Eqi 'RadarXWeb: ERROR:Uncaught (ReferenceError|SyntaxError|TypeError)'; then
     echo "::error::RadarX WebView runtime JavaScript error detected"
-    printf '%s\n' "$LOGS"
+    printf '%s\n' "${logs}" | tail -n 180
     return 1
   fi
-  if printf '%s\n' "$LOGS" | grep -Fq 'RadarX Dashboard boot error:'; then
+  if printf '%s\n' "${logs}" | grep -Fq 'RadarX Dashboard boot error:'; then
     echo "::error::RadarX dashboard boot error detected"
-    printf '%s\n' "$LOGS"
+    printf '%s\n' "${logs}" | tail -n 180
+    return 1
+  fi
+  if [[ "${service_ready}" -ne 1 ]]; then
+    echo "::error::Expected automatic monitor startup markers were not observed"
+    printf '%s\n' "${logs}" | tail -n 180
     return 1
   fi
 
-  # Build 224 now requires continuous monitoring: opening the Activity auto-starts
-  # the foreground service when notifications are permitted. This must be explicit
-  # in the native logs and must not crash/close the Activity.
-  printf '%s\n' "$LOGS" | grep -Fq "BACKGROUND_AUTO_START_REQUEST"
-  printf '%s\n' "$LOGS" | grep -Fq "BACKGROUND_SERVICE_READY"
+  # Stop the stream only after both UI and service readiness have been observed.
+  kill "${APP_LOGCAT_PID}" >/dev/null 2>&1 || true
+  wait "${APP_LOGCAT_PID}" 2>/dev/null || true
+  APP_LOGCAT_PID=""
 }
-
 assert_background_service_declared() {
-  PACKAGE="$(adb shell dumpsys package com.radarx.app 2>/dev/null | tr -d '\\r' || true)"
-  printf '%s\n' "$PACKAGE" | grep -q 'RadarXBackgroundMonitorService'
-  printf '%s\n' "$PACKAGE" | grep -q 'FOREGROUND_SERVICE_DATA_SYNC'
+  PHASE="verify background service registration in the built APK manifest"
+  local aapt manifest_tree permissions
+  aapt="$(find "$ANDROID_HOME/build-tools" -type f -name aapt 2>/dev/null | sort -V | tail -1)"
+  if [[ -z "$aapt" || ! -x "$aapt" ]]; then
+    echo "::error::Android aapt tool was not found; cannot inspect the packaged manifest"
+    return 1
+  fi
+
+  manifest_tree="$("$aapt" dump xmltree "$APK" AndroidManifest.xml)"
+  permissions="$("$aapt" dump permissions "$APK")"
+
+  if ! printf '%s\n' "$manifest_tree" | grep -Fq 'com.radarx.app.RadarXBackgroundMonitorService'; then
+    echo "::error::Packaged APK does not declare RadarXBackgroundMonitorService"
+    printf '%s\n' "$manifest_tree" | grep -Ei 'service|RadarXBackgroundMonitorService' | tail -n 80 || true
+    return 1
+  fi
+  if ! printf '%s\n' "$manifest_tree" | grep -Fq 'radar_background'; then
+    echo "::error::Background service is not isolated into the expected process"
+    printf '%s\n' "$manifest_tree" | grep -Ei 'RadarXBackgroundMonitorService|process' | tail -n 80 || true
+    return 1
+  fi
+  if ! printf '%s\n' "$permissions" | grep -Fq 'android.permission.FOREGROUND_SERVICE_DATA_SYNC'; then
+    echo "::error::Packaged APK lacks FOREGROUND_SERVICE_DATA_SYNC permission"
+    printf '%s\n' "$permissions"
+    return 1
+  fi
+
+  # Verify live service state independently of logcat. Heavy WebView output can
+  # rotate the log buffer after the service-ready marker, so a missing old log line
+  # alone must not fail a correctly running service. Conversely, a manifest or log
+  # marker alone is not enough: Android must currently hold the service instance.
+  local logs runtime_state service_pid
+  logs="$(cat "${APP_LOG_FILE:-/nonexistent}" 2>/dev/null || true)"
+  runtime_state="$(timeout 15s adb shell dumpsys activity services com.radarx.app 2>/dev/null || true)"
+  service_pid="$(timeout 12s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
+  if ! printf '%s\n' "$runtime_state" | grep -Fq 'RadarXBackgroundMonitorService' || [[ -z "$service_pid" ]]; then
+    echo "::error::Manifest is valid but Android does not show a live background-monitor service process"
+    echo "BACKGROUND_SERVICE_PID=\${service_pid:-NONE}"
+    if printf '%s\n' "$logs" | grep -Fq 'BACKGROUND_SERVICE_READY'; then
+      echo "BACKGROUND_READY_MARKER=present"
+    else
+      echo "BACKGROUND_READY_MARKER=absent_or_rotated"
+    fi
+    printf '%s\n' "$runtime_state" | grep -Ei 'RadarXBackgroundMonitorService|ServiceRecord|isForeground|ProcessRecord|radar_background' | tail -n 120 || true
+    printf '%s\n' "$logs" | tail -n 100
+    return 1
+  fi
+  if printf '%s\n' "$logs" | grep -Fq 'BACKGROUND_SERVICE_READY'; then
+    echo "Android background service confirmed live: pid=$service_pid; ready-marker=present"
+  else
+    echo "Android background service confirmed live: pid=$service_pid; ready-marker=rotated-after-runtime-confirmation"
+  fi
 }
 
-adb wait-for-device
-adb install -r "$APK"
+PHASE="wait for Android emulator device"
+timeout 60s adb wait-for-device
+PHASE="install debug APK"
+timeout 45s adb install -r "${APK}"
 
 # Online: the Activity must remain open and auto-start the foreground monitor.
 start_app_and_wait_ready
 
-adb exec-out screencap -p > "$RUNNER_TEMP/radarx-online.png"
-test -s "$RUNNER_TEMP/radarx-online.png"
-head -c 8 "$RUNNER_TEMP/radarx-online.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
+PHASE="capture online screenshot"
+timeout 15s adb exec-out screencap -p > "${RUNNER_TEMP}/radarx-online.png"
+test -s "${RUNNER_TEMP}/radarx-online.png"
+head -c 8 "${RUNNER_TEMP}/radarx-online.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
 
 # Background monitoring is continuous by default; the non-exported service must remain registered.
 assert_background_service_declared
-test -n "$(adb shell pidof com.radarx.app | tr -d '\r' || true)"
+test -n "$(timeout 12s adb shell pidof com.radarx.app | tr -d '\\r' || true)"
 
 # Offline: the local UI Activity must still remain open without the backend.
-adb shell cmd connectivity airplane-mode enable >/dev/null 2>&1 || true
-adb shell settings put global airplane_mode_on 1 >/dev/null 2>&1 || true
-adb shell svc wifi disable >/dev/null 2>&1 || true
-adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true >/dev/null 2>&1 || true
+PHASE="simulate offline state"
+timeout 10s adb shell cmd connectivity airplane-mode enable >/dev/null 2>&1 || true
+timeout 10s adb shell settings put global airplane_mode_on 1 >/dev/null 2>&1 || true
+timeout 10s adb shell svc wifi disable >/dev/null 2>&1 || true
+timeout 10s adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true >/dev/null 2>&1 || true
 sleep 3
 
 start_app_and_wait_ready
 
-# No automatic background start even offline.
-LOGS="$(adb logcat -d -s RadarXSmoke:I RadarXWeb:I RadarXBackground:I '*:S' 2>/dev/null || true)"
-! printf '%s\n' "$LOGS" | grep -Fq "BACKGROUND_START_REQUEST"
+# The monitor may auto-start, but it must not be misclassified as a user-initiated request.
+PHASE="verify offline startup is not user-initiated"
+LOGS="$(cat "${APP_LOG_FILE:-/nonexistent}" 2>/dev/null || true)"
+! printf '%s\\n' "${LOGS}" | grep -Fq "BACKGROUND_START_REQUEST"
 
 assert_background_service_declared
-test -n "$(adb shell pidof com.radarx.app | tr -d '\r' || true)"
+test -n "$(timeout 12s adb shell pidof com.radarx.app | tr -d '\\r' || true)"
 
-adb exec-out screencap -p > "$RUNNER_TEMP/radarx-offline.png"
-test -s "$RUNNER_TEMP/radarx-offline.png"
-head -c 8 "$RUNNER_TEMP/radarx-offline.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
+PHASE="capture offline screenshot"
+timeout 15s adb exec-out screencap -p > "${RUNNER_TEMP}/radarx-offline.png"
+test -s "${RUNNER_TEMP}/radarx-offline.png"
+head -c 8 "${RUNNER_TEMP}/radarx-offline.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
 
 echo "Android emulator online/offline UI + continuous-auto-start/background-service registration smoke tests passed."
+
+
+# Deterministic reconnect/restart regression: 623 durable alerts including
+# same-timestamp groups and rows with no source id. The test override is debug-only.
+PHASE="start local 623-alert replay fixture"
+REPLAY_TEST_PORT=18765
+REPLAY_TEST_FEED_URL="http://10.0.2.2:${REPLAY_TEST_PORT}/api/radar-alerts?radar=ALL"
+REPLAY_TMP="${RUNNER_TEMP:-/tmp}"
+node android/background-replay-test-server.mjs > "${REPLAY_TMP}/radarx-replay-fixture.log" 2>&1 &
+REPLAY_SERVER_PID=$!
+fixture_ready=0
+for attempt in $(seq 1 30); do
+  if curl -fsS --max-time 2 "http://127.0.0.1:${REPLAY_TEST_PORT}/test/health" >/dev/null 2>&1; then
+    fixture_ready=1
+    break
+  fi
+  sleep 1
+done
+if [[ "${fixture_ready}" -ne 1 ]]; then
+  echo "::error::Replay fixture server did not start"
+  cat "${REPLAY_TMP}/radarx-replay-fixture.log" || true
+  exit 1
+fi
+curl -fsS --max-time 3 "http://127.0.0.1:${REPLAY_TEST_PORT}/test/empty" >/dev/null
+
+fixture_stats() {
+  curl -fsS --max-time 3 "http://127.0.0.1:${REPLAY_TEST_PORT}/test/stats"
+}
+stat_field() {
+  node -e 'const s=JSON.parse(process.argv[1]); process.stdout.write(String(s[process.argv[2]] ?? ""));' "$1" "$2"
+}
+REPLAY_LOG_FILE="${REPLAY_TMP}/radarx-replay-logcat.txt"
+: > "${REPLAY_LOG_FILE}"
+# One persistent log stream avoids repeatedly invoking adb logcat -d inside the
+# replay wait loop; all assertions still inspect actual Android runtime logs.
+replay_logs() { cat "${REPLAY_LOG_FILE}"; }
+accepted_log_count() {
+  { grep -F 'ALERT_POST_REQUEST_ACCEPTED key=' "${REPLAY_LOG_FILE}" || true; } |
+    wc -l | tr -d ' '
+}
+accepted_log_keys() {
+  sed -n 's/^.*ALERT_POST_REQUEST_ACCEPTED key=//p' "${REPLAY_LOG_FILE}"
+}
+launch_replay_test_app() {
+  timeout 25s adb shell am start -n com.radarx.app/.MainActivity \
+    --es radarx_test_alert_feed_url "${REPLAY_TEST_FEED_URL}" \
+    --el radarx_test_scan_interval_ms 1000
+}
+
+PHASE="clear emulator app data and establish an empty-feed cursor"
+timeout 10s adb shell svc wifi enable >/dev/null 2>&1 || true
+timeout 10s adb shell settings put global airplane_mode_on 0 >/dev/null 2>&1 || true
+timeout 10s adb shell cmd connectivity airplane-mode disable >/dev/null 2>&1 || true
+timeout 15s adb shell am force-stop com.radarx.app >/dev/null 2>&1 || true
+timeout 20s adb shell pm clear com.radarx.app
+timeout 10s adb logcat -c
+adb logcat -v brief -s RadarXBackground:I RadarXSmoke:I AndroidRuntime:E '*:S' >> "${REPLAY_LOG_FILE}" 2>&1 &
+REPLAY_LOGCAT_PID=$!
+sleep 1
+if ! kill -0 "${REPLAY_LOGCAT_PID}" 2>/dev/null; then
+  echo "::error::Could not start Android replay log capture"
+  exit 1
+fi
+launch_replay_test_app
+replay_ready=0
+for attempt in $(seq 1 35); do
+  logs="$(replay_logs)"
+  if printf '%s\n' "${logs}" | grep -Fq 'REPLAY_TEST_OVERRIDE_CONFIGURED' &&
+     printf '%s\n' "${logs}" | grep -Fq 'BACKGROUND_SERVICE_READY' &&
+     printf '%s\n' "${logs}" | grep -Fq 'DEBUG_REPLAY_TEST_FEED_ACTIVE'; then
+    replay_ready=1
+    break
+  fi
+  sleep 2
+done
+if [[ "${replay_ready}" -ne 1 ]]; then
+  echo "::error::Debug replay app or local feed did not become ready"
+  tail -n 180 "${REPLAY_LOG_FILE}" || true
+  exit 1
+fi
+
+# Establish the initial cursor against an empty feed before the outage.
+empty_seen=0
+for attempt in $(seq 1 20); do
+  stats="$(fixture_stats)"
+  empty_seen="$(stat_field "${stats}" emptyRequests)"
+  if [[ "${empty_seen}" -ge 2 ]]; then break; fi
+  sleep 1
+done
+if [[ "${empty_seen}" -lt 2 ]]; then
+  echo "::error::The app never polled the empty feed to initialize its cursor"
+  exit 1
+fi
+[[ "$(accepted_log_count)" -eq 0 ]]
+
+PHASE="simulate offline period while more than 500 events are queued"
+timeout 10s adb shell cmd connectivity airplane-mode enable >/dev/null 2>&1 || true
+timeout 10s adb shell settings put global airplane_mode_on 1 >/dev/null 2>&1 || true
+timeout 10s adb shell svc wifi disable >/dev/null 2>&1 || true
+timeout 5s adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true >/dev/null 2>&1 || true
+sleep 4
+curl -fsS --max-time 5 -X POST "http://127.0.0.1:${REPLAY_TEST_PORT}/test/queue" > "${REPLAY_TMP}/radarx-replay-queued.json"
+sleep 8
+offline_stats="$(fixture_stats)"
+offline_requests="$(stat_field "${offline_stats}" queuedRequests)"
+if [[ "${offline_requests}" -ne 0 ]]; then
+  echo "::error::Android reached the fixture while airplane mode was enabled: queuedRequests=${offline_requests}"
+  exit 1
+fi
+[[ "$(accepted_log_count)" -eq 0 ]]
+
+PHASE="reconnect and drain the full durable alert archive"
+timeout 10s adb shell svc wifi enable >/dev/null 2>&1 || true
+timeout 10s adb shell settings put global airplane_mode_on 0 >/dev/null 2>&1 || true
+timeout 10s adb shell cmd connectivity airplane-mode disable >/dev/null 2>&1 || true
+timeout 5s adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false >/dev/null 2>&1 || true
+restart_done=0
+replay_complete=0
+for attempt in $(seq 1 120); do
+  accepted="$(accepted_log_count)"
+  if [[ "${accepted}" -ge 150 && "${restart_done}" -eq 0 ]]; then
+    # Wait for the synchronous checkpoint; preserve logs across force-stop.
+    sleep 2
+    before_ready="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
+    old_service_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
+    timeout 15s adb shell am force-stop com.radarx.app
+    sleep 2
+    launch_replay_test_app
+    restarted_ready=0
+    for restart_attempt in $(seq 1 30); do
+      new_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
+      ready_count="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
+      logs="$(replay_logs)"
+      if [[ -n "${new_pid}" && "${ready_count}" -gt "${before_ready}" ]] &&
+         printf '%s\n' "${logs}" | grep -Fq 'REPLAY_TEST_OVERRIDE_CONFIGURED'; then
+        restarted_ready=1
+        break
+      fi
+      sleep 2
+    done
+    if [[ "${restarted_ready}" -ne 1 ]]; then
+      echo "::error::Background service failed to restart with its saved cursor"
+      tail -n 180 "${REPLAY_LOG_FILE}" || true
+      exit 1
+    fi
+    if [[ -n "${old_service_pid}" && "${new_pid}" == "${old_service_pid}" ]]; then
+      echo "::error::Expected a new background service process after force-stop/restart"
+      exit 1
+    fi
+    restart_done=1
+  fi
+
+  accepted="$(accepted_log_count)"
+  if [[ "${accepted}" -ge 623 ]]; then
+    stats="$(fixture_stats)"
+    drained="$(stat_field "${stats}" drainedRequests)"
+    if [[ "${drained}" -ge 1 ]]; then
+      replay_complete=1
+      break
+    fi
+  fi
+  sleep 2
+done
+if [[ "${restart_done}" -ne 1 ]]; then
+  echo "::error::Replay did not reach the planned mid-run restart"
+  echo "accepted=$(accepted_log_count)"
+  exit 1
+fi
+if [[ "${replay_complete}" -ne 1 ]]; then
+  echo "::error::Replay did not drain all 623 alerts before timeout"
+  echo "accepted=$(accepted_log_count)"
+  fixture_stats || true
+  tail -n 180 "${REPLAY_LOG_FILE}" || true
+  exit 1
+fi
+
+PHASE="assert exactly 623 unique accepted notifications and final compound cursor"
+keys_file="${REPLAY_TMP}/radarx-replay-accepted-keys.txt"
+accepted_log_keys > "${keys_file}"
+accepted_total="$(wc -l < "${keys_file}" | tr -d ' ')"
+accepted_unique="$(sort -u "${keys_file}" | wc -l | tr -d ' ')"
+if [[ "${accepted_total}" -ne 623 || "${accepted_unique}" -ne 623 ]]; then
+  echo "::error::Replay posts lost or duplicated: total=${accepted_total} unique=${accepted_unique} expected=623"
+  sort "${keys_file}" | uniq -c | grep -vE '^[[:space:]]+1 ' | head -n 60 || true
+  exit 1
+fi
+if ! grep -Fq 'FALCON_EYE_RADAR|REPLAY:0623' "${keys_file}"; then
+  echo "::error::Last archived alert was not accepted by NotificationManager"
+  exit 1
+fi
+prefs_xml="$(timeout 8s adb shell run-as com.radarx.app cat shared_prefs/radarx_background.xml 2>/dev/null || true)"
+if ! printf '%s\n' "${prefs_xml}" | grep -Fq 'FALCON_EYE_RADAR|REPLAY:0623'; then
+  echo "::error::The persisted compound cursor did not reach the final event"
+  printf '%s\n' "${prefs_xml}" | grep -E 'radar_alert_cursor_(at|id)|cursor_initialized' || true
+  exit 1
+fi
+final_stats="$(fixture_stats)"
+final_pages="$(stat_field "${final_stats}" queuedRequests)"
+final_drained="$(stat_field "${final_stats}" drainedRequests)"
+if [[ "${final_pages}" -lt 13 || "${final_drained}" -lt 1 ]]; then
+  echo "::error::Replay pagination incomplete: pages=${final_pages} drained=${final_drained}"
+  exit 1
+fi
+echo "ANDROID_DURABLE_REPLAY_PASS: alerts=623 unique_posts=623 missing=0 duplicate_posts=0 same_timestamp=yes no_id_rows=yes offline_reconnect=yes force_stop_restart=yes final_cursor=verified pages=${final_pages}"

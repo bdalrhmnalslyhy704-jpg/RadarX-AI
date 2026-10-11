@@ -46,6 +46,107 @@ test('TEST_FIXTURE: Falcon Eye alert history replays oldest-first after an offli
   assert.deepEqual(next.map(x=>x.processed_at),[3000]);
 });
 
+
+test('durable alert replay pages preserve the full archive, oldest-first order, and same-time cursor boundaries',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-alert-replay-page-'));
+  const store=await new DurableStore({dir}).init();
+  for(let i=0;i<620;i++){
+    const at=100000+Math.floor(i/3);
+    await store.appendFalconEyeAlert({
+      id:'FALCON:'+String(i).padStart(4,'0'),radar:'FALCON_EYE_RADAR',symbol:'TESTUSDT',
+      processed_at:at,detected_at:at,price:0.1234,paper_trading:true,real_order_execution:false
+    });
+  }
+  const first=await store.readAlertPage('falconEyeAlerts',{sinceMs:0,radar:'FALCON_EYE_RADAR',limit:100});
+  assert.equal(first.length,100);
+  assert.equal(first[0].id,'FALCON:0000');
+  assert.equal(first[99].id,'FALCON:0099');
+  assert.ok(first[99].replay_cursor_id.endsWith('|FALCON:0099'));
+  const second=await store.readAlertPage('falconEyeAlerts',{
+    sinceMs:first[99].replay_cursor_at,sinceId:first[99].replay_cursor_id,
+    radar:'FALCON_EYE_RADAR',limit:100
+  });
+  assert.equal(second.length,100);
+  assert.equal(second[0].id,'FALCON:0100','same-timestamp items after the page boundary must not be skipped');
+  assert.equal(second[99].id,'FALCON:0199');
+  const all=[...first,...second];
+  let cursorAt=second[99].replay_cursor_at,cursorId=second[99].replay_cursor_id;
+  while(all.length<620){
+    const next=await store.readAlertPage('falconEyeAlerts',{sinceMs:cursorAt,sinceId:cursorId,radar:'FALCON_EYE_RADAR',limit:100});
+    assert.ok(next.length>0,'the persisted cursor must continue through the archive');
+    all.push(...next);
+    cursorAt=next[next.length-1].replay_cursor_at;
+    cursorId=next[next.length-1].replay_cursor_id;
+  }
+  assert.equal(all.length,620);
+  assert.equal(new Set(all.map(x=>x.id)).size,620);
+  assert.equal(all[619].id,'FALCON:0619');
+});
+
+test('durable replay builds stable cursor identities for archived rows missing an id',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-missing-alert-id-'));
+  const store=await new DurableStore({dir}).init();
+  for(const event of ['FLOW_A','FLOW_B','FLOW_C']){
+    await store.appendFalconEyeAlert({
+      radar:'FALCON_EYE_RADAR',symbol:'TESTUSDT',event,
+      processed_at:200000,detected_at:200000,price:0.125,
+      paper_trading:true,real_order_execution:false
+    });
+  }
+  const first=await store.readAlertPage('falconEyeAlerts',{sinceMs:0,radar:'FALCON_EYE_RADAR',limit:1});
+  assert.equal(first.length,1);
+  assert.equal(first[0].replay_cursor_id,'FALCON_EYE_RADAR|TESTUSDT:FLOW_A:200000');
+  const second=await store.readAlertPage('falconEyeAlerts',{
+    sinceMs:first[0].replay_cursor_at,sinceId:first[0].replay_cursor_id,
+    radar:'FALCON_EYE_RADAR',limit:1
+  });
+  assert.equal(second.length,1);
+  assert.equal(second[0].replay_cursor_id,'FALCON_EYE_RADAR|TESTUSDT:FLOW_B:200000');
+  const third=await store.readAlertPage('falconEyeAlerts',{
+    sinceMs:second[0].replay_cursor_at,sinceId:second[0].replay_cursor_id,
+    radar:'FALCON_EYE_RADAR',limit:1
+  });
+  assert.equal(third.length,1);
+  assert.equal(third[0].replay_cursor_id,'FALCON_EYE_RADAR|TESTUSDT:FLOW_C:200000');
+  const done=await store.readAlertPage('falconEyeAlerts',{
+    sinceMs:third[0].replay_cursor_at,sinceId:third[0].replay_cursor_id,
+    radar:'FALCON_EYE_RADAR',limit:1
+  });
+  assert.equal(done.length,0,'a stable compound cursor must drain equal-timestamp rows without loss or repeats');
+});
+
+test('Coin Hunter and Whale alerts persist in their own JSONL archives and support cursor replay',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-coin-whale-alerts-'));
+  const store=await new DurableStore({dir}).init();
+  await store.appendCoinHunterAlert({
+    id:'COINHUNTER:OGNUSDT:100000',radar:'COIN_HUNTER_RADAR',symbol:'OGNUSDT',
+    processed_at:100000,detected_at:100000,price:0.1234,
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+  });
+  await store.appendWhaleAccumulationAlert({
+    id:'WHALE:CTSIUSDT:100000',radar:'WHALE_ACCUMULATION_RADAR',symbol:'CTSIUSDT',
+    processed_at:100000,detected_at:100000,price:0.2345,
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+  });
+
+  const coin=await store.readCoinHunterAlerts({sinceMs:0,limit:10});
+  const whale=await store.readWhaleAccumulationAlerts({sinceMs:0,limit:10});
+  assert.equal(coin.length,1);
+  assert.equal(coin[0].id,'COINHUNTER:OGNUSDT:100000');
+  assert.equal(whale.length,1);
+  assert.equal(whale[0].id,'WHALE:CTSIUSDT:100000');
+
+  const coinPage=await store.readAlertPage('coinHunterAlerts',{sinceMs:0,radar:'COIN_HUNTER_RADAR',limit:10});
+  const whalePage=await store.readAlertPage('whaleAccumulationAlerts',{sinceMs:0,radar:'WHALE_ACCUMULATION_RADAR',limit:10});
+  assert.equal(coinPage[0].replay_cursor_id,'COIN_HUNTER_RADAR|COINHUNTER:OGNUSDT:100000');
+  assert.equal(whalePage[0].replay_cursor_id,'WHALE_ACCUMULATION_RADAR|WHALE:CTSIUSDT:100000');
+
+  const coinLines=(await readFile(store.files.coinHunterAlerts,'utf8')).split('\n').filter(Boolean);
+  const whaleLines=(await readFile(store.files.whaleAccumulationAlerts,'utf8')).split('\n').filter(Boolean);
+  assert.equal(coinLines.length,1,'Coin Hunter writes one complete newline-delimited event');
+  assert.equal(whaleLines.length,1,'Whale writes one complete newline-delimited event');
+});
+
 test('scheduler archive hydrates each radar independently when another radar dominates the newest rows',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-scheduler-partition-read-'));
   const store=await new DurableStore({dir}).init();

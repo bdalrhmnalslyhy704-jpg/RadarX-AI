@@ -149,18 +149,18 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     config: config.symbolDeepScan ?? {}
   }) : null);
   const radarEntries = Object.freeze({
-    EARLY_MOVE_RADAR:{name:RADAR_NAMES.EARLY_MOVE_RADAR,instance:moveSentinel,read:'readMoveAlerts'},
-    STRONG_MOVE_RADAR:{name:RADAR_NAMES.STRONG_MOVE_RADAR,instance:strongMoveRadar,read:'readStrongMoveAlerts'},
-    ROTATION_LAG_RADAR:{name:RADAR_NAMES.ROTATION_LAG_RADAR,instance:rotationLagRadar,read:'readRotationAlerts'},
-    LIQUIDITY_ABSORPTION_RADAR:{name:RADAR_NAMES.LIQUIDITY_ABSORPTION_RADAR,instance:liquidityAbsorptionRadar,read:'readLiquidityAbsorptionAlerts'},
-    KAHIR_RADAR:{name:RADAR_NAMES.KAHIR_RADAR,instance:kahirRadar,read:'readKahirAlerts'},
-    DOOMSDAY_RADAR:{name:RADAR_NAMES.DOOMSDAY_RADAR,instance:doomsdayRadar,read:'readDoomsdayAlerts'},
-    ALMUQAWIM_RADAR:{name:RADAR_NAMES.ALMUQAWIM_RADAR,instance:alMuqawimRadar,read:'readAlMuqawimAlerts'},
-    EARLY_EXPANSION_RADAR:{name:RADAR_NAMES.EARLY_EXPANSION_RADAR,instance:earlyExpansionRadar,read:'readEarlyExpansionAlerts'},
-    ...(coinHunterRadar?{COIN_HUNTER_RADAR:{name:RADAR_NAMES.COIN_HUNTER_RADAR,instance:coinHunterRadar,read:'readCoinHunterAlerts'}}:{}),
-    ...(whaleAccumulationRadar?{WHALE_ACCUMULATION_RADAR:{name:RADAR_NAMES.WHALE_ACCUMULATION_RADAR,instance:whaleAccumulationRadar,read:'readWhaleAccumulationAlerts'}}:{}),
-    ...(professorRadar?{PROFESSOR_RADAR:{name:RADAR_NAMES.PROFESSOR_RADAR,instance:professorRadar,read:'readProfessorAlerts'}}:{}),
-    ...(falconEyeRadar?{FALCON_EYE_RADAR:{name:RADAR_NAMES.FALCON_EYE_RADAR,instance:falconEyeRadar,read:'readFalconEyeAlerts'}}:{})
+    EARLY_MOVE_RADAR:{name:RADAR_NAMES.EARLY_MOVE_RADAR,instance:moveSentinel,read:'readMoveAlerts',archive:'moveAlerts'},
+    STRONG_MOVE_RADAR:{name:RADAR_NAMES.STRONG_MOVE_RADAR,instance:strongMoveRadar,read:'readStrongMoveAlerts',archive:'strongMoveAlerts'},
+    ROTATION_LAG_RADAR:{name:RADAR_NAMES.ROTATION_LAG_RADAR,instance:rotationLagRadar,read:'readRotationAlerts',archive:'rotationAlerts'},
+    LIQUIDITY_ABSORPTION_RADAR:{name:RADAR_NAMES.LIQUIDITY_ABSORPTION_RADAR,instance:liquidityAbsorptionRadar,read:'readLiquidityAbsorptionAlerts',archive:'liquidityAbsorptionAlerts'},
+    KAHIR_RADAR:{name:RADAR_NAMES.KAHIR_RADAR,instance:kahirRadar,read:'readKahirAlerts',archive:'kahirAlerts'},
+    DOOMSDAY_RADAR:{name:RADAR_NAMES.DOOMSDAY_RADAR,instance:doomsdayRadar,read:'readDoomsdayAlerts',archive:'doomsdayAlerts'},
+    ALMUQAWIM_RADAR:{name:RADAR_NAMES.ALMUQAWIM_RADAR,instance:alMuqawimRadar,read:'readAlMuqawimAlerts',archive:'alMuqawimAlerts'},
+    EARLY_EXPANSION_RADAR:{name:RADAR_NAMES.EARLY_EXPANSION_RADAR,instance:earlyExpansionRadar,read:'readEarlyExpansionAlerts',archive:'earlyExpansionAlerts'},
+    ...(coinHunterRadar?{COIN_HUNTER_RADAR:{name:RADAR_NAMES.COIN_HUNTER_RADAR,instance:coinHunterRadar,read:'readCoinHunterAlerts',archive:'coinHunterAlerts'}}:{}),
+    ...(whaleAccumulationRadar?{WHALE_ACCUMULATION_RADAR:{name:RADAR_NAMES.WHALE_ACCUMULATION_RADAR,instance:whaleAccumulationRadar,read:'readWhaleAccumulationAlerts',archive:'whaleAccumulationAlerts'}}:{}),
+    ...(professorRadar?{PROFESSOR_RADAR:{name:RADAR_NAMES.PROFESSOR_RADAR,instance:professorRadar,read:'readProfessorAlerts',archive:'professorAlerts'}}:{}),
+    ...(falconEyeRadar?{FALCON_EYE_RADAR:{name:RADAR_NAMES.FALCON_EYE_RADAR,instance:falconEyeRadar,read:'readFalconEyeAlerts',archive:'falconEyeAlerts'}}:{})
   });
   function safeHealth(id,name,instance){
     try{
@@ -232,14 +232,41 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       if(u.pathname==='/api/radar-alerts'&&req.method==='GET'){
         const radar=String(u.searchParams.get('radar')||'ALL').trim().toUpperCase();
         const sinceRaw=Number(u.searchParams.get('since')||0);
+        const sinceMs=Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0;
+        const sinceId=String(u.searchParams.get('since_id')||'');
+        const oldestFirst=['1','true','asc'].includes(String(u.searchParams.get('oldest_first')||'').trim().toLowerCase());
         const limit=Math.max(1,Math.min(100,Math.trunc(Number(u.searchParams.get('limit')||20))));
-        const entries=radar==='ALL'?Object.values(radarEntries):radarEntries[radar]?[radarEntries[radar]]:null;
+        const entries=radar==='ALL'?Object.entries(radarEntries):radarEntries[radar]?[[radar,radarEntries[radar]]]:null;
         if(!entries)return send(res,400,{error:'INVALID_RADAR',radar});
+        // Keep durable Falcon Eye history replayable even if its scanner failed to initialize.
+        if(oldestFirst&&radar==='ALL'&&!entries.some(([id])=>id==='FALCON_EYE_RADAR')&&
+          typeof store?.readAlertPage==='function'){
+          entries.push(['FALCON_EYE_RADAR',{name:RADAR_NAMES.FALCON_EYE_RADAR,read:'readFalconEyeAlerts',archive:'falconEyeAlerts'}]);
+        }
         const alerts=[];
-        for(const entry of entries){
+        for(const [radarId,entry] of entries){
+          if(oldestFirst&&entry.archive&&typeof store?.readAlertPage==='function'){
+            const rows=await store.readAlertPage(entry.archive,{sinceMs,sinceId,radar:radarId,limit:limit+1});
+            for(const row of rows)alerts.push({...decorateRadarAlert(row,entry.name),
+              replay_cursor_at:row.replay_cursor_at,replay_cursor_id:row.replay_cursor_id});
+            continue;
+          }
           if(typeof store?.[entry.read]!=='function')continue;
-          const rows=await store[entry.read]({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit});
+          const rows=await store[entry.read]({sinceMs,limit});
           for(const row of rows)alerts.push(decorateRadarAlert(row,entry.name));
+        }
+        if(oldestFirst){
+          const time=a=>Number(a.replay_cursor_at??a.processed_at??a.detected_at??0);
+          const key=a=>String(a.replay_cursor_id||((a.radar||'UNKNOWN_RADAR')+'|'+(a.id||'')));
+          alerts.sort((a,b)=>time(a)-time(b)||key(a).localeCompare(key(b)));
+          const hasMore=alerts.length>limit;
+          const page=alerts.slice(0,limit);
+          const last=page[page.length-1];
+          return send(res,200,{
+            alerts:page,oldest_first:true,has_more:hasMore,
+            next_cursor:last?{since:Number(last.replay_cursor_at??last.processed_at??last.detected_at??0),since_id:key(last)}:{since:sinceMs,since_id:sinceId},
+            radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',detected_timezone:'Asia/Aden',time_format:'12h'}
+          });
         }
         alerts.sort((a,b)=>Number(b.processed_at||b.detected_at||0)-Number(a.processed_at||a.detected_at||0));
         return send(res,200,{alerts:alerts.slice(0,limit),radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',detected_timezone:'Asia/Aden',time_format:'12h'}});

@@ -294,3 +294,94 @@ test('TEST_FIXTURE: Falcon Eye history remains retrievable when the live scanner
   assert.equal(body.alerts[0].detected_at,1700000000000);
   await new Promise(resolve=>server.close(resolve));
 });
+
+
+test('TEST_FIXTURE: unified radar alert replay returns all historical pages oldest-first without cursor gaps',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-unified-alert-replay-'));
+  const store=await new DurableStore({dir}).init();
+  for(let i=0;i<620;i++){
+    const at=100000+Math.floor(i/3);
+    await store.appendLiquidityAbsorptionAlert({
+      id:'RADAR4:'+String(i).padStart(4,'0'),radar:'LIQUIDITY_ABSORPTION_RADAR',
+      symbol:'TESTUSDT',event:'TEST_FIXTURE',processed_at:at,detected_at:at,
+      price:0.1234,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+    });
+  }
+  await store.appendFalconEyeAlert({
+    id:'FALCON:offline-history',radar:'FALCON_EYE_RADAR',symbol:'OGNUSDT',
+    processed_at:100000,detected_at:100000,price:0.1234,
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+  });
+  await store.appendCoinHunterAlert({
+    id:'COINHUNTER:offline-history',radar:'COIN_HUNTER_RADAR',symbol:'OGNUSDT',
+    processed_at:99998,detected_at:99998,price:0.1234,
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+  });
+  await store.appendWhaleAccumulationAlert({
+    id:'WHALE:offline-history',radar:'WHALE_ACCUMULATION_RADAR',symbol:'CTSIUSDT',
+    processed_at:99999,detected_at:99999,price:0.2345,
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+  });
+  const server=createApiServer({
+    config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},
+    store,monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},
+    pushProvider:new NoopPushProvider(),liquidityAbsorptionRadar:{health:()=>({running:false})},coinHunterRadar:{health:()=>({running:true})},whaleAccumulationRadar:{health:()=>({running:true})}
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const base='http://127.0.0.1:'+server.address().port;
+    const seen=[];
+    let cursorAt=0,cursorId='',hasMore=true;
+    let pageCount=0;
+    while(hasMore){
+      const query=new URLSearchParams({radar:'LIQUIDITY_ABSORPTION_RADAR',limit:'50',since:String(cursorAt),since_id:cursorId,oldest_first:'1'});
+      const response=await fetch(base+'/api/radar-alerts?'+query.toString());
+      assert.equal(response.status,200);
+      const body=await response.json();
+      assert.equal(body.oldest_first,true);
+      assert.equal(body.meta.paper_trading,true);
+      assert.equal(body.meta.real_order_execution,false);
+      assert.ok(Array.isArray(body.alerts));
+      seen.push(...body.alerts.map(x=>x.id));
+      hasMore=body.has_more===true;
+      cursorAt=Number(body.next_cursor?.since||cursorAt);
+      cursorId=String(body.next_cursor?.since_id||cursorId);
+      pageCount++;
+      assert.ok(pageCount<=14,'replay must drain with bounded pages');
+    }
+    assert.equal(pageCount,13);
+    assert.equal(seen.length,620);
+    assert.equal(new Set(seen).size,620,'no alert may be repeated');
+    assert.equal(seen[0],'RADAR4:0000');
+    assert.equal(seen[49],'RADAR4:0049');
+    assert.equal(seen[50],'RADAR4:0050','equal-time alerts after a page boundary must replay');
+    assert.equal(seen[129],'RADAR4:0129');
+    assert.equal(seen[619],'RADAR4:0619');
+    assert.ok(seen.every((id,index)=>id==='RADAR4:'+String(index).padStart(4,'0')),
+      'more than 500 durable alerts must replay exactly once, in order, including every equal-time boundary');
+    const allSeen=[];
+    let allAt=0,allId='',allMore=true,allPages=0;
+    while(allMore){
+      const allQuery=new URLSearchParams({radar:'ALL',limit:'50',since:String(allAt),since_id:allId,oldest_first:'1'});
+      const allReplay=await (await fetch(base+'/api/radar-alerts?'+allQuery.toString())).json();
+      assert.equal(allReplay.oldest_first,true);
+      allSeen.push(...allReplay.alerts.map(x=>x.id));
+      allMore=allReplay.has_more===true;
+      allAt=Number(allReplay.next_cursor?.since??allAt);
+      allId=String(allReplay.next_cursor?.since_id??allId);
+      allPages++;
+      assert.ok(allPages<=14,'all radar archives should replay in bounded pages');
+    }
+    assert.equal(allPages,13);
+    assert.equal(allSeen.length,623);
+    assert.equal(new Set(allSeen).size,623);
+    assert.ok(allSeen.includes('COINHUNTER:offline-history'));
+    assert.ok(allSeen.includes('WHALE:offline-history'));
+    assert.ok(allSeen.includes('FALCON:offline-history'));
+    assert.equal(allSeen[0],'COINHUNTER:offline-history');
+    assert.equal(allSeen[1],'WHALE:offline-history');
+    assert.equal(allSeen[622],'RADAR4:0619');
+  }finally{
+    await new Promise(resolve=>server.close(resolve));
+  }
+});

@@ -20,7 +20,7 @@ export class DurableStore {
     this.scanJourneyDir=join(dir,'scan-journeys');
     this.files={scanJourneyManifest:join(dir,'scan-journey-manifest.json'),subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
       signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),
-      intelligenceMemory:join(dir,'intelligence-memory.json'),strongMoveAlerts:join(dir,'strong-move-alerts.jsonl'),predictionCalibration:join(dir,'prediction-calibration.json'),rotationAlerts:join(dir,'rotation-alerts.jsonl'),liquidityAbsorptionAlerts:join(dir,'liquidity-absorption-alerts.jsonl'),kahirAlerts:join(dir,'kahir-alerts.jsonl'),doomsdayAlerts:join(dir,'doomsday-alerts.jsonl'),professorAlerts:join(dir,'professor-alerts.jsonl'),alMuqawimAlerts:join(dir,'al-muqawim-alerts.jsonl'),falconEyeAlerts:join(dir,'falcon-eye-alerts.jsonl'),schedulerEvents:join(dir,'scan-scheduler-events.jsonl')};}
+      intelligenceMemory:join(dir,'intelligence-memory.json'),strongMoveAlerts:join(dir,'strong-move-alerts.jsonl'),predictionCalibration:join(dir,'prediction-calibration.json'),rotationAlerts:join(dir,'rotation-alerts.jsonl'),liquidityAbsorptionAlerts:join(dir,'liquidity-absorption-alerts.jsonl'),kahirAlerts:join(dir,'kahir-alerts.jsonl'),doomsdayAlerts:join(dir,'doomsday-alerts.jsonl'),professorAlerts:join(dir,'professor-alerts.jsonl'),alMuqawimAlerts:join(dir,'al-muqawim-alerts.jsonl'),coinHunterAlerts:join(dir,'coin-hunter-alerts.jsonl'),whaleAccumulationAlerts:join(dir,'whale-accumulation-alerts.jsonl'),falconEyeAlerts:join(dir,'falcon-eye-alerts.jsonl'),schedulerEvents:join(dir,'scan-scheduler-events.jsonl')};}
   async init({legacyDir=null}={}){
     await mkdir(this.dir,{recursive:true});
     await mkdir(this.scanJourneyDir,{recursive:true});
@@ -281,6 +281,10 @@ export class DurableStore {
   async readFalconEyeAlerts({sinceMs=0,limit=100}={}){const safeLimit=Math.min(100,Math.max(1,Number(limit)||100));const rows=await this.readRecent('falconEyeAlerts',500);return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).sort((a,b)=>Number(a?.processed_at||0)-Number(b?.processed_at||0)).slice(0,safeLimit);}
   async readProfessorAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('professorAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
   async readKahirAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('kahirAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
+  async appendCoinHunterAlert(v){return this.lock(async()=>{await appendFile(this.files.coinHunterAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async readCoinHunterAlerts({sinceMs=0,limit=100}={}){const take=Math.min(100,Math.max(1,Math.trunc(Number(limit)||100)));const rows=await this.readRecent('coinHunterAlerts',Math.min(500,take));return rows.filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).slice(0,take);}
+  async appendWhaleAccumulationAlert(v){return this.lock(async()=>{await appendFile(this.files.whaleAccumulationAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async readWhaleAccumulationAlerts({sinceMs=0,limit=100}={}){const take=Math.min(100,Math.max(1,Math.trunc(Number(limit)||100)));const rows=await this.readRecent('whaleAccumulationAlerts',Math.min(500,take));return rows.filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).slice(0,take);}
 
   scanJourneyState(raw={}) {
     const s=raw&&typeof raw==='object'?raw:{};
@@ -621,6 +625,46 @@ export class DurableStore {
     return rows;
   }
 
+  async readAlertPage(kind,{sinceMs=0,sinceId='',radar='',limit=100}={}){
+    const file=this.files[kind];
+    if(!file)return[];
+    const safeLimit=Math.min(1000,Math.max(1,Math.trunc(Number(limit)||100)));
+    const after=Math.max(0,Number.isFinite(Number(sinceMs))?Number(sinceMs):0);
+    const afterId=String(sinceId||'');
+    const radarId=String(radar||'UNKNOWN_RADAR').toUpperCase();
+    const compare=(a,b)=>a.at-b.at||a.cursorId.localeCompare(b.cursorId);
+    const page=[];
+    let input=null,lines=null;
+    try{
+      // Stream the full archive so replay is independent of recent-500 readers
+      // without allocating the complete JSONL file in memory.
+      input=createReadStream(file,{encoding:'utf8'});
+      lines=createInterface({input,crlfDelay:Infinity});
+      for await(const line of lines){
+        if(!line.trim())continue;
+        let row;
+        try{row=JSON.parse(line);}catch{continue;}
+        if(!row||typeof row!=='object'||Array.isArray(row))continue;
+        const at=Number(row.processed_at??row.detected_at??row.detectedAt??row.event_at??0);
+        if(!Number.isFinite(at)||at<=0)continue;
+        const identity=String(row.id||[row.symbol||'',row.event||row.type||'',at].join(':'));
+        const cursorId=radarId+'|'+identity;
+        if(at<after||(at===after&&(!afterId||cursorId.localeCompare(afterId)<=0)))continue;
+        const item={row,at,cursorId};
+        if(page.length<safeLimit){page.push(item);continue;}
+        let worst=0;
+        for(let i=1;i<page.length;i++)if(compare(page[i],page[worst])>0)worst=i;
+        if(compare(item,page[worst])<0)page[worst]=item;
+      }
+    }catch{
+      // Fail closed so a partial archive read cannot advance the client cursor.
+      return[];
+    }finally{
+      if(lines)lines.close();
+      if(input&&!input.destroyed)input.destroy();
+    }
+    return page.sort(compare).map(item=>({...item.row,replay_cursor_at:item.at,replay_cursor_id:item.cursorId}));
+  }
   async readRecent(kind,limit=100){
     const file=this.files[kind];
     if(!file)return[];
