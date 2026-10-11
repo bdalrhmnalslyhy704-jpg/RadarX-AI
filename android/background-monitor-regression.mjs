@@ -38,7 +38,7 @@ assert.match(service, /radar_alert_cursor_id/,
 assert.match(service, /notifyNewRadarAlerts\(JSONArray alerts, boolean oldestFirst, JSONObject nextCursor\)/,
   'notifications must preserve oldest-first replay order after reconnect');
 
-assert.match(service, /getRunningAppProcesses\\(\\)/,
+assert.match(service, /getRunningAppProcesses\(\)/,
   'a fresh stored heartbeat must not be treated as proof that Android still has the background process');
-assert.match(service, /getPackageName\\(\\)\\s*\\+\\s*":radar_background"/,
+assert.match(service, /getPackageName\(\)\s*\+\s*":radar_background"/,
   'background recovery must specifically verify the dedicated service process after force-stop');
