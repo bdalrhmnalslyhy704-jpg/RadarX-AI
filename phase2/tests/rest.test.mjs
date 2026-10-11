@@ -126,3 +126,33 @@ test('TEST_FIXTURE: shared REST cache prunes expired rotating-symbol payloads in
   assert.ok(health.shared_cache_entries<=12,
     `expired symbol payloads must be pruned after the bounded cleanup interval; current entries=${health.shared_cache_entries}`);
 });
+
+
+test('TEST_FIXTURE: shared in-flight request cap bounds simultaneous fetch and body parsing without dropping queued scans',async()=>{
+  let active=0,peakActive=0,calls=0;
+  const fetchImpl=async url=>{
+    active++;calls++;peakActive=Math.max(peakActive,active);
+    const symbol=new URL(url).searchParams.get('symbol');
+    await new Promise(resolve=>setTimeout(resolve,950));
+    return{
+      status:200,ok:true,headers:new Map(),
+      json:async()=>{
+        await new Promise(resolve=>setTimeout(resolve,150));
+        active--;
+        return {symbol};
+      }
+    };
+  };
+  const client=new RestClient({
+    baseUrls:['https://shared-inflight-cap.test'],fetchImpl,timeoutMs:5000,minIntervalMs:0,maxRequestsPerMinute:100
+  });
+  const symbols=Array.from({length:14},(_,i)=>'LOAD'+String(i).padStart(2,'0')+'USDT');
+  const results=await Promise.all(symbols.map(symbol=>client.request('/api/v3/ticker/24hr',{symbol})));
+  assert.equal(calls,symbols.length,'queued requests must all reach fetch');
+  assert.deepEqual(results.map(row=>row.data.symbol).sort(),symbols.slice().sort(),'no queued symbol request may be dropped');
+  assert.equal(peakActive,6,'the shared network/body-processing budget must reach, but never exceed, six slots');
+  const health=client.health();
+  assert.equal(health.shared_max_in_flight_requests,6);
+  assert.equal(health.shared_active_requests,0);
+  assert.equal(health.shared_waiting_requests,0);
+});
