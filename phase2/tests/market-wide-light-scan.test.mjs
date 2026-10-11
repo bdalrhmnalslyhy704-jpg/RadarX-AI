@@ -718,7 +718,7 @@ test('an extreme event remains observation-only after the daily move is extended
   assert.equal(result.summary.event_driven_breakout_extended_total,1);
 });
 
-test('archive rehydration retries newly eligible unready symbols with a bounded per-symbol cooldown',async()=>{
+test('archive rehydration retries newly eligible and re-entering symbols with a bounded cooldown',async()=>{
   let now=1_900_000_000_000;
   const archive=new Map();
   const seeded=new Map();
@@ -764,6 +764,8 @@ test('archive rehydration retries newly eligible unready symbols with a bounded 
     config:{marketWideCacheArchiveHydrationRetryMs:5*60_000},
     clock:()=>now,logger:{info(){},warn(){}}
   });
+
+  activeSymbols=['AAAUSDT'];
   await radar.rehydrateMarketWideCacheFromArchive([{symbol:'AAAUSDT'}],now);
   assert.deepEqual(calls,[['AAAUSDT']]);
   assert.equal(seeded.has('AAAUSDT'),true,'the startup archive snapshot should seed the cache');
@@ -778,13 +780,27 @@ test('archive rehydration retries newly eligible unready symbols with a bounded 
   await radar.rehydrateMarketWideCacheFromArchive([{symbol:'AAAUSDT'},{symbol:'BBBUSDT'}],now);
   assert.equal(calls.length,2,'a symbol with no saved snapshot must not trigger an archive read every scan');
 
+  activeSymbols=['AAAUSDT'];
+  now+=15_000;
+  await radar.rehydrateMarketWideCacheFromArchive([{symbol:'AAAUSDT'}],now);
+  assert.equal(calls.length,2,'leaving the eligible universe must not trigger an archive read for cached symbols');
+
+  activeSymbols=['AAAUSDT','BBBUSDT'];
+  now+=15_000;
+  await radar.rehydrateMarketWideCacheFromArchive([{symbol:'AAAUSDT'},{symbol:'BBBUSDT'}],now);
+  assert.deepEqual(calls,[['AAAUSDT'],['BBBUSDT'],['BBBUSDT']],
+    'a symbol re-entering eligibility must be retried immediately because setSymbols removed its old cache');
+
+  now+=60_000;
+  await radar.rehydrateMarketWideCacheFromArchive([{symbol:'AAAUSDT'},{symbol:'BBBUSDT'}],now);
+  assert.equal(calls.length,3,'a missing snapshot remains throttled during the cooldown');
+
   now+=240_001;
   archive.set('BBBUSDT',archiveRows('BBBUSDT',now));
   await radar.rehydrateMarketWideCacheFromArchive([{symbol:'AAAUSDT'},{symbol:'BBBUSDT'}],now);
-  assert.deepEqual(calls,[['AAAUSDT'],['BBBUSDT'],['BBBUSDT']],
+  assert.deepEqual(calls,[['AAAUSDT'],['BBBUSDT'],['BBBUSDT'],['BBBUSDT']],
     'a still-unready symbol is retried when its cooldown expires');
   assert.equal(seeded.has('BBBUSDT'),true,'a fresh snapshot discovered on retry must hydrate the newly eligible symbol');
-  assert.equal(calls.flat().includes('AAAUSDT')&&calls.length===3,true,
+  assert.equal(calls.flat().includes('AAAUSDT')&&calls.length===4,true,
     'already-ready symbols are not redundantly re-read from the archive');
 });
-
