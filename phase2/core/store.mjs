@@ -1,9 +1,11 @@
-import {createReadStream} from 'node:fs';
+import {createReadStream,createWriteStream} from 'node:fs';
 import {createInterface} from 'node:readline';
-import {mkdir,readFile,writeFile,rename,appendFile,stat,unlink,readdir} from 'node:fs/promises';
+import {mkdir,readFile,writeFile,rename,appendFile,stat,statfs,unlink,readdir} from 'node:fs/promises';
 import {basename,join,resolve} from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
-import {gzipSync,gunzipSync} from 'node:zlib';
+import {Readable,Transform} from 'node:stream';
+import {pipeline} from 'node:stream/promises';
+import {createGzip,gunzipSync} from 'node:zlib';
 import {SCAN_JOURNEY_SCHEMA,scanJourneyFilename,validateScanJourneyCycle,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,SCAN_JOURNEY_HORIZONS} from './scan-journey-ledger.mjs';
 const MiB=1024*1024;
 // Scheduler events are operational queue state. Hydration reads at most 5,000
@@ -13,10 +15,87 @@ const JSONL_ARCHIVE_POLICIES=Object.freeze({
 });
 const ORPHAN_TEMP_SUFFIX=/\.(?:tmp|repair|outcome|compact)-\d+-\d+$/;
 
+// Serialize a durable cycle in bounded chunks. Avoid a full JSON string + Buffer +
+// gzip buffer coexisting in the V8 heap during the 496-symbol market-wide cycle.
+function* jsonChunks(value, ancestors=new Set(), arrayMember=false) {
+  if(value===null){yield 'null';return;}
+  if(typeof value==='string'||typeof value==='boolean'){yield JSON.stringify(value);return;}
+  if(typeof value==='number'){yield Number.isFinite(value)?String(value):'null';return;}
+  if(typeof value==='undefined'||typeof value==='function'||typeof value==='symbol'){
+    if(arrayMember)yield 'null';
+    return;
+  }
+  if(typeof value==='bigint')throw new TypeError('Do not know how to serialize a BigInt');
+  if(typeof value!=='object'){yield 'null';return;}
+  if(ancestors.has(value))throw new TypeError('Converting circular structure to JSON');
+  ancestors.add(value);
+  try {
+    if(Array.isArray(value)){
+      yield '[';
+      for(let i=0;i<value.length;i++){
+        if(i)yield ',';
+        const child=value[i];
+        if(child===undefined||typeof child==='function'||typeof child==='symbol')yield 'null';
+        else yield* jsonChunks(child,ancestors,true);
+      }
+      yield ']';
+      return;
+    }
+    yield '{';
+    let first=true;
+    for(const [key,child] of Object.entries(value)){
+      if(child===undefined||typeof child==='function'||typeof child==='symbol')continue;
+      if(!first)yield ',';
+      first=false;
+      yield JSON.stringify(key);
+      yield ':';
+      yield* jsonChunks(child,ancestors,false);
+    }
+    yield '}';
+  } finally {
+    ancestors.delete(value);
+  }
+}
 
+async function writeGzipJsonAtomic(path,value,{maxBytes=Infinity}={}) {
+  const temp=path+'.tmp-'+process.pid+'-'+Date.now()+'-'+randomUUID();
+  const digest=createHash('sha256');
+  let bytes=0;
+  const meter=new Transform({
+    transform(chunk,encoding,callback){
+      bytes+=chunk.length;
+      if(bytes>maxBytes){
+        const error=new Error('SCAN_JOURNEY_CYCLE_TOO_LARGE: compressed_bytes='+bytes+',limit_bytes='+maxBytes);
+        error.code='SCAN_JOURNEY_CYCLE_TOO_LARGE';
+        callback(error);
+        return;
+      }
+      digest.update(chunk);
+      callback(null,chunk);
+    }
+  });
+  try{
+    await pipeline(
+      Readable.from(jsonChunks(value),{objectMode:false}),
+      createGzip({level:6}),
+      meter,
+      createWriteStream(temp,{flags:'wx'})
+    );
+    const sha256=digest.digest('hex');
+    await rename(temp,path);
+    return {bytes,sha256};
+  }catch(error){
+    await unlink(temp).catch(()=>{});
+    throw error;
+  }
+}
 
 export class DurableStore {
-  constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];this.preExpansionOutcomeCache=undefined;
+  constructor({dir='./.radarx-data',freeBytesProvider=null,maxCycleArchiveBytes=24*MiB,storageReserveBytes=16*MiB}={}){
+    this.dir=dir;this.queue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];this.preExpansionOutcomeCache=undefined;
+    this.freeBytesProvider=typeof freeBytesProvider==='function'?freeBytesProvider:null;
+    this.maxCycleArchiveBytes=Math.max(1024*1024,Number(maxCycleArchiveBytes)||24*MiB);
+    this.storageReserveBytes=Math.max(1024*1024,Number(storageReserveBytes)||16*MiB);
     this.scanJourneyDir=join(dir,'scan-journeys');
     this.files={scanJourneyManifest:join(dir,'scan-journey-manifest.json'),subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
       signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),
@@ -314,6 +393,27 @@ export class DurableStore {
   async getScanJourneyState(){
     return this.scanJourneyState(await this.readJson(this.files.scanJourneyManifest));
   }
+  async scanJourneyWriteBudget(){
+    let freeBytes=null;
+    try{
+      if(this.freeBytesProvider)freeBytes=Number(await this.freeBytesProvider(this.dir));
+      else {
+        const fs=await statfs(this.dir);
+        freeBytes=Number(fs.bavail)*Number(fs.bsize);
+      }
+    }catch{return {free_bytes:null,max_write_bytes:this.maxCycleArchiveBytes,capacity_checked:false};}
+    if(!Number.isFinite(freeBytes)||freeBytes<0)
+      return {free_bytes:null,max_write_bytes:this.maxCycleArchiveBytes,capacity_checked:false};
+    const maxWriteBytes=Math.min(this.maxCycleArchiveBytes,freeBytes-this.storageReserveBytes);
+    if(maxWriteBytes<1024*1024){
+      const error=new Error('SCAN_JOURNEY_STORAGE_PRESSURE: free_bytes='+Math.floor(freeBytes)+',reserve_bytes='+this.storageReserveBytes);
+      error.code='SCAN_JOURNEY_STORAGE_PRESSURE';
+      error.freeBytes=Math.floor(freeBytes);
+      error.reserveBytes=this.storageReserveBytes;
+      throw error;
+    }
+    return {free_bytes:Math.floor(freeBytes),max_write_bytes:Math.floor(maxWriteBytes),capacity_checked:true};
+  }
   async appendScanJourneyCycle(cycle,{maxBytes=160*1024*1024}={}){
     const validation=validateScanJourneyCycle(cycle);
     if(!validation.valid)throw new Error('SCAN_JOURNEY_INVALID:'+validation.errors.join(','));
@@ -335,13 +435,11 @@ export class DurableStore {
         }catch{}
         // Repair a missing/corrupt copy from the repeated deterministic cycle id.
         // Keep its sequence and counters unchanged: repair is not a second event.
-        const repaired=gzipSync(Buffer.from(JSON.stringify({...cycle,cycle_sequence:prior.cycle_sequence}),'utf8'),{level:6});
-        const temp=existingPath+'.repair-'+process.pid+'-'+Date.now();
-        try{await writeFile(temp,repaired);await rename(temp,existingPath);}
-        catch(error){await unlink(temp).catch(()=>{});throw error;}
-        state.compressed_bytes=Math.max(0,state.compressed_bytes-Number(prior.compressed_bytes||0)+repaired.length);
-        prior.compressed_bytes=repaired.length;
-        prior.sha256=createHash('sha256').update(repaired).digest('hex');
+        const budget=await this.scanJourneyWriteBudget();
+        const repaired=await writeGzipJsonAtomic(existingPath,{...cycle,cycle_sequence:prior.cycle_sequence},{maxBytes:budget.max_write_bytes});
+        state.compressed_bytes=Math.max(0,state.compressed_bytes-Number(prior.compressed_bytes||0)+repaired.bytes);
+        prior.compressed_bytes=repaired.bytes;
+        prior.sha256=repaired.sha256;
         prior.stored_at=Date.now();
         state.updated_at=Date.now();
         await this.writeJson(this.files.scanJourneyManifest,state);
@@ -349,11 +447,9 @@ export class DurableStore {
       }
       const sequence=Math.max(state.cycle_sequence+1,Math.trunc(Number(cycle.cycle_number)||0));
       const stored={...cycle,cycle_sequence:sequence};
-      const zipped=gzipSync(Buffer.from(JSON.stringify(stored),'utf8'),{level:6});
+      const budget=await this.scanJourneyWriteBudget();
       const finalPath=join(this.scanJourneyDir,filename);
-      const tempPath=finalPath+'.tmp-'+process.pid+'-'+Date.now();
-      try{await writeFile(tempPath,zipped);await rename(tempPath,finalPath);}
-      catch(error){await unlink(tempPath).catch(()=>{});throw error;}
+      const archived=await writeGzipJsonAtomic(finalPath,stored,{maxBytes:budget.max_write_bytes});
       const coins=Array.isArray(cycle.coins)?cycle.coins:[];
       const eligible=coins.filter(x=>x&&x.eligible===true);
       const metadata={
@@ -366,7 +462,7 @@ export class DurableStore {
         deep_failed_count:coins.filter(x=>x?.deep_scan_status==='FAILED').length,
         outcome_signal_ids:coins.map(x=>x?.outcome_signal_id).filter(x=>typeof x==='string'&&x&&x!=='.INCOMPLETE'),
         outcomes_checked_at:0,
-        compressed_bytes:zipped.length,sha256:createHash('sha256').update(zipped).digest('hex'),stored_at:Date.now()
+        compressed_bytes:archived.bytes,sha256:archived.sha256,stored_at:Date.now()
       };
       state.cycles.push(metadata);
       state.cycle_sequence=sequence;
