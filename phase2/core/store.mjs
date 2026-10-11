@@ -314,7 +314,7 @@ export class DurableStore {
   async getScanJourneyState(){
     return this.scanJourneyState(await this.readJson(this.files.scanJourneyManifest));
   }
-  async appendScanJourneyCycle(cycle,{maxBytes=260*1024*1024}={}){
+  async appendScanJourneyCycle(cycle,{maxBytes=160*1024*1024}={}){
     const validation=validateScanJourneyCycle(cycle);
     if(!validation.valid)throw new Error('SCAN_JOURNEY_INVALID:'+validation.errors.join(','));
     const cycleId=String(cycle.cycle_id);
