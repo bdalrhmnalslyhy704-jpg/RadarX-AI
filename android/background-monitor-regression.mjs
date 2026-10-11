@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const service = await readFile('android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java', 'utf8');
+const main = await readFile('android/app/src/main/java/com/radarx/app/MainActivity.java', 'utf8');
+const replayFixture = await readFile('android/background-replay-test-server.mjs', 'utf8');
 const api = await readFile('phase2/http/api.mjs', 'utf8');
 const store = await readFile('phase2/core/store.mjs', 'utf8');
 
@@ -61,6 +63,20 @@ assert.match(service, /if \(identity\.isEmpty\(\)\)/,
   'rows without a source id must still receive a stable compound cursor identity');
 assert.match(service, /ALERT_POST_REQUEST_ACCEPTED/,
   'logs must distinguish NotificationManager acceptance from actual device delivery');
+assert.ok(service.includes('alert.optString("replay_cursor_id", "")'),
+  'notification identity must follow the compound cursor for rows that lack a source id');
+assert.ok(service.includes('testFeed.matches("http://10\\\\.0\\\\.2\\\\.2:18[0-9]{3}/api-radar-alerts\\\\?radar=ALL")'),
+  'the local replay test feed must be restricted to the emulator host and radar-alert route');
+assert.ok(service.includes('isDebugBuild() && testFeed.matches'),
+  'release builds must never honor the debug replay fixture URL');
+assert.ok(main.includes('FLAG_DEBUGGABLE') && main.includes('REPLAY_TEST_OVERRIDE_CONFIGURED'),
+  'MainActivity must gate and report persisted debug-only test overrides');
+assert.ok(main.includes('"10.0.2.2"') && main.includes('intervalMs <= 5000L'),
+  'test override must restrict its host and polling interval');
+assert.ok(replayFixture.includes('length: 623') && replayFixture.includes('replay_cursor_id') &&
+  replayFixture.includes('emptyRequests') && replayFixture.includes('queuedRequests'),
+  'the replay fixture must generate more than 500 ordered events and expose outage/reconnect counters');
+
 
 assert.match(service, /getRunningAppProcesses\(\)/,
   'a fresh stored heartbeat must not be treated as proof that Android still has the background process');
