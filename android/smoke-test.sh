@@ -188,6 +188,38 @@ assert_background_service_declared() {
   fi
 }
 
+capture_screenshot_or_validate_foreground() {
+  local label="$1"
+  local remote_path="/sdcard/radarx-$label.png"
+  local local_path="$RUNNER_TEMP/radarx-$label.png"
+  PHASE="capture $label screenshot"
+
+  # Device-side screencap + adb pull is more reliable than keeping a live binary
+  # stream open with adb exec-out on a cold, software-rendered emulator.
+  if timeout 20s adb shell screencap -p "$remote_path" >/dev/null 2>&1 &&
+     timeout 15s adb pull "$remote_path" "$local_path" >/dev/null 2>&1 &&
+     test -s "$local_path" &&
+     [[ "$(head -c 8 "$local_path" | od -An -t x1 | tr -d ' \n')" == "89504e470d0a1a0a" ]]; then
+    echo "Android screenshot captured: $local_path"
+    return 0
+  fi
+
+  # Screenshot capture is diagnostic, not the background-service acceptance
+  # criterion. If SurfaceFlinger/ADB capture stalls, require a resumed Activity
+  # and continue into the strict foreground-service and alert-replay assertions.
+  echo "::warning::Screenshot capture unavailable; validating resumed MainActivity directly."
+  local activity_state
+  activity_state="$(timeout 12s adb shell dumpsys activity activities 2>/dev/null || true)"
+  if printf '%s\n' "$activity_state" | grep -Eq 'ResumedActivity:.*com\.radarx\.app/\.MainActivity'; then
+    echo "MainActivity is confirmed resumed; continuing with strict service/replay checks."
+    return 0
+  fi
+
+  echo "::error::Screenshot capture failed and MainActivity is not confirmed resumed."
+  printf '%s\n' "$activity_state" | tail -n 100 || true
+  return 1
+}
+
 PHASE="wait for Android emulator device"
 timeout 60s adb wait-for-device
 PHASE="install debug APK"
@@ -196,10 +228,7 @@ timeout 45s adb install -r "${APK}"
 # Online: the Activity must remain open and auto-start the foreground monitor.
 start_app_and_wait_ready
 
-PHASE="capture online screenshot"
-timeout 15s adb exec-out screencap -p > "${RUNNER_TEMP}/radarx-online.png"
-test -s "${RUNNER_TEMP}/radarx-online.png"
-head -c 8 "${RUNNER_TEMP}/radarx-online.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
+capture_screenshot_or_validate_foreground online
 
 # Background monitoring is continuous by default; the non-exported service must remain registered.
 assert_background_service_declared
@@ -223,10 +252,7 @@ LOGS="$(cat "${APP_LOG_FILE:-/nonexistent}" 2>/dev/null || true)"
 assert_background_service_declared
 test -n "$(timeout 12s adb shell pidof com.radarx.app | tr -d '\\r' || true)"
 
-PHASE="capture offline screenshot"
-timeout 15s adb exec-out screencap -p > "${RUNNER_TEMP}/radarx-offline.png"
-test -s "${RUNNER_TEMP}/radarx-offline.png"
-head -c 8 "${RUNNER_TEMP}/radarx-offline.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
+capture_screenshot_or_validate_foreground offline
 
 echo "Android emulator online/offline UI + continuous-auto-start/background-service registration smoke tests passed."
 
