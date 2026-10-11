@@ -389,10 +389,35 @@ replay_complete=0
 for attempt in $(seq 1 120); do
   accepted="$(accepted_log_count)"
   if [[ "${accepted}" -ge 150 && "${restart_done}" -eq 0 ]]; then
-    # Wait for the synchronous checkpoint; preserve logs across force-stop.
-    sleep 2
+    # Freeze the fixture but retain its 623 rows. The service completes its current
+    # page, receives an empty paused page, and persists that page's final compound
+    # cursor before force-stop. This tests restart/reconnect without deliberately
+    # killing the process inside Android's notify()-to-SharedPreferences gap.
+    PHASE="pause fixture and wait for a completed, checkpointed page"
+    curl -fsS --max-time 5 -X POST "http://127.0.0.1:${REPLAY_TEST_PORT}/test/pause" >/dev/null
+    pause_seen=0
+    for pause_attempt in $(seq 1 90); do
+      pause_stats="$(fixture_stats)"
+      paused_requests="$(stat_field "${pause_stats}" pausedRequests)"
+      last_accepted_key="$(accepted_log_keys | tail -n 1)"
+      prefs_xml="$(timeout 8s adb shell run-as com.radarx.app cat shared_prefs/radarx_background.xml 2>/dev/null || true)"
+      cursor_key="$(printf '%s\n' "${prefs_xml}" | sed -n 's/.*<string name="radar_alert_cursor_id">\(.*\)<\/string>.*/\1/p' | head -n 1)"
+      if [[ "${paused_requests}" -ge 1 && -n "${last_accepted_key}" && "${cursor_key}" == "${last_accepted_key}" ]]; then
+        pause_seen=1
+        break
+      fi
+      sleep 1
+    done
+    if [[ "${pause_seen}" -ne 1 ]]; then
+      echo "::error::Replay did not reach a paused-page boundary with a matching durable cursor"
+      echo "paused_requests=${paused_requests:-0} last_accepted=${last_accepted_key:-NONE} cursor=${cursor_key:-NONE}"
+      fixture_stats || true
+      tail -n 180 "${REPLAY_LOG_FILE}" || true
+      exit 1
+    fi
     before_ready="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
     old_service_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
+    PHASE="force-stop after durable page checkpoint"
     timeout 15s adb shell am force-stop com.radarx.app
     sleep 2
     launch_replay_test_app
@@ -417,6 +442,8 @@ for attempt in $(seq 1 120); do
       echo "::error::Expected a new background service process after force-stop/restart"
       exit 1
     fi
+    PHASE="resume fixture after background restart"
+    curl -fsS --max-time 5 -X POST "http://127.0.0.1:${REPLAY_TEST_PORT}/test/resume" >/dev/null
     restart_done=1
   fi
 

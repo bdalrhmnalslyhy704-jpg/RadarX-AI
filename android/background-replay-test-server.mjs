@@ -6,6 +6,8 @@ let requests = 0;
 let emptyRequests = 0;
 let queuedRequests = 0;
 let drainedRequests = 0;
+let pausedRequests = 0;
+let resumeRequests = 0;
 let lastRequest = null;
 let events = [];
 
@@ -66,6 +68,8 @@ const server = http.createServer((req, res) => {
     emptyRequests = 0;
     queuedRequests = 0;
     drainedRequests = 0;
+    pausedRequests = 0;
+    resumeRequests = 0;
     requests = 0;
     lastRequest = null;
     return send(res, 200, { ok: true, mode });
@@ -75,10 +79,19 @@ const server = http.createServer((req, res) => {
     mode = 'queue';
     return send(res, 200, { ok: true, mode, events: events.length });
   }
+  if (url.pathname === '/test/pause' && req.method === 'POST') {
+    mode = 'paused';
+    return send(res, 200, { ok: true, mode, count: events.length });
+  }
+  if (url.pathname === '/test/resume' && req.method === 'POST') {
+    mode = 'queue';
+    resumeRequests++;
+    return send(res, 200, { ok: true, mode, count: events.length, resumeRequests });
+  }
   if (url.pathname === '/test/stats') {
     return send(res, 200, {
       ok: true, mode, count: events.length, requests, emptyRequests,
-      queuedRequests, drainedRequests, lastRequest
+      queuedRequests, drainedRequests, pausedRequests, resumeRequests, lastRequest
     });
   }
   if (url.pathname === '/api/radar-alerts' && req.method === 'GET') {
@@ -87,6 +100,17 @@ const server = http.createServer((req, res) => {
     const sinceId = String(url.searchParams.get('since_id') || '');
     const limit = Math.max(1, Math.min(50, Math.trunc(Number(url.searchParams.get('limit') || 50))));
     lastRequest = { since, since_id: sinceId, limit, mode };
+    if (mode === 'paused') {
+      pausedRequests++;
+      return send(res, 200, {
+        oldest_first: true, has_more: false,
+        next_cursor: { since, since_id: sinceId },
+        radars: ['FALCON_EYE_RADAR'], alerts: [],
+        meta: { live: true, paper_trading: true, real_order_execution: false,
+          confidence_score: 'UNKNOWN', cursor_advance_allowed: true,
+          feed_mode: 'DURABLE_TEST_FIXTURE_PAUSED' }
+      });
+    }
     if (mode !== 'queue') {
       emptyRequests++;
       return send(res, 200, {

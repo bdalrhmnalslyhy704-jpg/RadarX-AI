@@ -78,6 +78,14 @@ assert.ok(main.includes('"10.0.2.2"') && main.includes('intervalMs <= 5000L'),
 assert.ok(replayFixture.includes('length: 623') && replayFixture.includes('replay_cursor_id') &&
   replayFixture.includes('emptyRequests') && replayFixture.includes('queuedRequests'),
   'the replay fixture must generate more than 500 ordered events and expose outage/reconnect counters');
+assert.ok(replayFixture.includes("url.pathname === '/test/pause'") &&
+  replayFixture.includes("url.pathname === '/test/resume'") && replayFixture.includes('pausedRequests'),
+  'the replay fixture must support pausing without deleting queued events and resuming after restart');
+assert.ok(service.includes('radar_alert_cursor_id') && service.includes('persistDurableAlertCursor'),
+  'the replay app must persist the compound cursor before a controlled restart');
+assert.ok((await readFile('android/smoke-test.sh', 'utf8')).includes('/test/pause') &&
+  (await readFile('android/smoke-test.sh', 'utf8')).includes('/test/resume'),
+  'the emulator restart must wait for a stable page checkpoint before resuming replay');
 
 
 assert.match(service, /getRunningAppProcesses\(\)/,
