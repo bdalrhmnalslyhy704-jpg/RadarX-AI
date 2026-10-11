@@ -85,16 +85,16 @@ async function readYoutubeTranscript(stream,{timeoutMs=6000,fetchImpl=globalThis
 function stripHtml(v){return cleanText(String(v||'').replace(/<[^>]+>/g,' '));}
 function classifyFreshness(publishedAt,retrievedAt,{live=false}={}){
   if(live)return 'LIVE_AT_RETRIEVAL';
-  if(!Number.isFinite(Number(publishedAt)))return 'PUBLISHED_TIME_UNAVAILABLE';
+  if(publishedAt===null||publishedAt===undefined||publishedAt===''||!Number.isFinite(Number(publishedAt)))return 'PUBLISHED_TIME_UNAVAILABLE';
   if(Number(publishedAt)>Number(retrievedAt)+5*60_000)return 'FUTURE_TIMESTAMP';
   if(Number(retrievedAt)-Number(publishedAt)>24*60*60_000)return 'STALE';
   return 'FRESH';
 }
 function parseRelativePublishedAt(text,now){
   const value=String(text||'').trim();
-  if(/\\byesterday\\b/i.test(value))return Number(now)-24*60*60_000;
-  if(/\\btoday\\b/i.test(value))return Number(now);
-  const match=value.match(/(\\d+(?:\\.\\d+)?)\\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\\s+ago/i);
+  if(/\byesterday\b/i.test(value))return Number(now)-24*60*60_000;
+  if(/\btoday\b/i.test(value))return Number(now);
+  const match=value.match(/(\d+(?:\.\d+)?)\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s+ago/i);
   if(!match)return null;
   const count=Number(match[1]),unit=match[2].toLowerCase();
   const factor=unit.startsWith('second')?1000:unit.startsWith('minute')?60_000:
@@ -228,7 +228,8 @@ export class ProfessorRadar{
     }
     const retrievedAt=this.clock();
     const streams=[...found.values()].slice(0,this.config.liveSearchLimit).map(s=>{
-      const published_at=Number.isFinite(Number(s.published_at))?Number(s.published_at):parseRelativePublishedAt(s.published_text,retrievedAt);
+      const published_at=s.published_at!==null&&s.published_at!==undefined&&s.published_at!==''&&Number.isFinite(Number(s.published_at))
+        ?Number(s.published_at):parseRelativePublishedAt(s.published_text,retrievedAt);
       const freshness_status=classifyFreshness(published_at,retrievedAt,{live:s.live===true});
       return {...s,source:'YOUTUBE_PUBLIC_SEARCH',source_type:s.live?'LIVE_STREAM':'PUBLIC_VIDEO',
         published_at,published_at_iso:published_at?new Date(published_at).toISOString():null,
