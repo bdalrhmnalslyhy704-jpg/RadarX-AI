@@ -134,6 +134,18 @@ public final class MainActivity extends Activity {
         webView.postDelayed(this::ensureContinuousMonitoring, 1400);
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (BuildConfig.DEBUG) Log.i("RadarXSmoke", "ACTIVITY_RESUMED");
+    }
+
+    @Override
+    protected void onPause() {
+        if (BuildConfig.DEBUG) Log.i("RadarXSmoke", "ACTIVITY_PAUSED");
+        super.onPause();
+    }
+
     private static boolean isAllowedAppUri(Uri uri) {
         return uri != null
                 && "https".equalsIgnoreCase(uri.getScheme())

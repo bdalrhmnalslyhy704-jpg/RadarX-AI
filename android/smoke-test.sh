@@ -44,30 +44,32 @@ start_app_and_wait_ready() {
   }
   echo "MainActivity launch: ${start_output}"
 
-  PHASE="wait for live process and resumed Activity"
-  local pid="" top="" resumed="" ready=0
-  for attempt in $(seq 1 35); do
-    pid="$(timeout 3s adb shell pidof com.radarx.app 2>/dev/null | tr -d '\\r' || true)"
-    if [[ -n "${pid}" ]]; then
-      top="$(timeout 4s adb shell dumpsys activity activities 2>/dev/null | tr -d '\\r' || true)"
-      resumed="$(printf '%s\\n' "${top}" | grep -E '^[[:space:]]*ResumedActivity:' | tail -n 5 || true)"
-      if printf '%s\\n' "${resumed}" | grep -q 'com.radarx.app'; then
-        ready=1
-        break
-      fi
+  PHASE="wait for live process, resumed Activity, and JS UI readiness"
+  local pid="" logs="" resume_line="" pause_line="" ready=0
+  for attempt in $(seq 1 25); do
+    pid="$(timeout 3s adb shell pidof com.radarx.app 2>/dev/null | tr -d '\r' || true)"
+    logs="$(timeout 3s adb logcat -d -s RadarXSmoke:I RadarXWeb:I RadarXBackground:I '*:S' 2>/dev/null || true)"
+    resume_line="$(printf '%s\n' "${logs}" | grep -nF 'ACTIVITY_RESUMED' | tail -n 1 | cut -d: -f1 || true)"
+    pause_line="$(printf '%s\n' "${logs}" | grep -nF 'ACTIVITY_PAUSED' | tail -n 1 | cut -d: -f1 || true)"
+    if [[ -n "${pid}" && -n "${resume_line}" ]] &&
+       printf '%s\n' "${logs}" | grep -Fq 'UI_READY' &&
+       { [[ -z "${pause_line}" ]] || (( resume_line > pause_line )); }; then
+      ready=1
+      break
     fi
     sleep 2
   done
   if [[ "${ready}" -ne 1 ]]; then
-    echo "::error::RadarX process/Activity did not become ready"
-    echo "PID=${pid:-NONE}"
-    printf '%s\\n' "${resumed}"
-    timeout 10s adb shell dumpsys activity exit-info com.radarx.app 2>/dev/null | tail -n 100 || true
+    echo "::error::RadarX Activity/process/UI did not become ready"
+    echo "PID=${pid:-NONE} RESUME_LINE=${resume_line:-NONE} PAUSE_LINE=${pause_line:-NONE}"
+    printf '%s\n' "${logs}" | tail -n 180
+    timeout 10s adb shell dumpsys activity activities 2>/dev/null | tail -n 100 || true
     timeout 10s adb logcat -d -b crash 2>/dev/null | tail -n 140 || true
     return 1
   fi
-  echo "RadarX process/Activity ready: pid=${pid}"
+  echo "RadarX Activity/process/UI ready: pid=${pid}"
 
+  
   PHASE="wait for background foreground-service startup"
   local logs="" service_ready=0
   for attempt in $(seq 1 12); do

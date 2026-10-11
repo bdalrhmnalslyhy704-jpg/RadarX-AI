@@ -30,10 +30,10 @@ permissions:
 
 # Keep an active validation run alive when another update arrives.
 concurrency:
-  # Keep each commit's validation independent: a wedged emulator run must not
-  # hold all newer PR heads behind a single concurrency slot.
-  group: triple-radar-ci-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
-  cancel-in-progress: false
+  # Only validate the newest commit for each branch/PR; stale emulator runs
+  # must not consume runners after a newer commit is pushed.
+  group: triple-radar-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   backend:
