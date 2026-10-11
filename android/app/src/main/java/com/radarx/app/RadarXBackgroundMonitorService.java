@@ -182,7 +182,20 @@ public final class RadarXBackgroundMonitorService extends Service {
                 }
                 if (status != 200) throw new IllegalStateException("HTTP_" + status);
                 JSONObject root = new JSONObject(new String(readAll(connection.getInputStream()), StandardCharsets.UTF_8));
-                if (!root.optBoolean("oldest_first", false)) mergeFalconEyeHistory(root, cursor);
+                if (!root.optBoolean("oldest_first", false)) {
+                    mergeFalconEyeHistory(root, cursor);
+                    JSONObject meta = root.optJSONObject("meta");
+                    if (meta == null) {
+                        meta = new JSONObject();
+                        root.put("meta", meta);
+                    }
+                    // A legacy 200 response may be only a bounded newest-first page.
+                    // Never treat it as a durable replay source or advance the cursor.
+                    meta.put("cursor_advance_allowed", false);
+                    meta.put("feed_mode", "NON_DURABLE_LEGACY_FALLBACK");
+                    sortAlertsChronologically(root);
+                    root.put("oldest_first", true);
+                }
                 return root;
             } catch (Exception e) {
                 last = e;
@@ -339,7 +352,9 @@ public final class RadarXBackgroundMonitorService extends Service {
                             JSONObject row = candidates.optJSONObject(i);
                             if (row == null) continue;
                             long at = row.optLong("processed_at", row.optLong("detected_at", row.optLong("detectedAt", 0L)));
-                            if (at > cursor) merged.put(row);
+                            // Include equal-timestamp rows; the separate fallback ID ledger
+                            // de-duplicates them without moving the durable compound cursor.
+                            if (at > 0L && at >= cursor) merged.put(row);
                         }
                     }
                 }
@@ -364,7 +379,29 @@ public final class RadarXBackgroundMonitorService extends Service {
         root.put("alerts", merged);
         root.put("radars", radarNames);
         mergeFalconEyeHistory(root, cursor);
+        sortAlertsChronologically(root);
+        root.put("oldest_first", true);
         return root;
+    }
+
+    private static void sortAlertsChronologically(JSONObject root) throws Exception {
+        JSONArray rows = root.optJSONArray("alerts");
+        if (rows == null) return;
+        ArrayList<JSONObject> ordered = new ArrayList<>();
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject row = rows.optJSONObject(i);
+            if (row != null) ordered.add(row);
+        }
+        Collections.sort(ordered, (left, right) -> {
+            int byTime = Long.compare(alertTimestamp(left), alertTimestamp(right));
+            if (byTime != 0) return byTime;
+            String leftKey = left.optString("radar", "UNKNOWN_RADAR") + "|" + left.optString("id", "");
+            String rightKey = right.optString("radar", "UNKNOWN_RADAR") + "|" + right.optString("id", "");
+            return leftKey.compareTo(rightKey);
+        });
+        JSONArray sorted = new JSONArray();
+        for (JSONObject row : ordered) sorted.put(row);
+        root.put("alerts", sorted);
     }
 
     private int notifyNewRadarAlerts(JSONArray alerts, boolean oldestFirst, JSONObject nextCursor, boolean cursorAdvanceAllowed) {
