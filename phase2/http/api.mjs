@@ -157,8 +157,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     DOOMSDAY_RADAR:{name:RADAR_NAMES.DOOMSDAY_RADAR,instance:doomsdayRadar,read:'readDoomsdayAlerts',archive:'doomsdayAlerts'},
     ALMUQAWIM_RADAR:{name:RADAR_NAMES.ALMUQAWIM_RADAR,instance:alMuqawimRadar,read:'readAlMuqawimAlerts',archive:'alMuqawimAlerts'},
     EARLY_EXPANSION_RADAR:{name:RADAR_NAMES.EARLY_EXPANSION_RADAR,instance:earlyExpansionRadar,read:'readEarlyExpansionAlerts',archive:'earlyExpansionAlerts'},
-    ...(coinHunterRadar?{COIN_HUNTER_RADAR:{name:RADAR_NAMES.COIN_HUNTER_RADAR,instance:coinHunterRadar,read:'readCoinHunterAlerts'}}:{}),
-    ...(whaleAccumulationRadar?{WHALE_ACCUMULATION_RADAR:{name:RADAR_NAMES.WHALE_ACCUMULATION_RADAR,instance:whaleAccumulationRadar,read:'readWhaleAccumulationAlerts'}}:{}),
+    ...(coinHunterRadar?{COIN_HUNTER_RADAR:{name:RADAR_NAMES.COIN_HUNTER_RADAR,instance:coinHunterRadar,read:'readCoinHunterAlerts',archive:'coinHunterAlerts'}}:{}),
+    ...(whaleAccumulationRadar?{WHALE_ACCUMULATION_RADAR:{name:RADAR_NAMES.WHALE_ACCUMULATION_RADAR,instance:whaleAccumulationRadar,read:'readWhaleAccumulationAlerts',archive:'whaleAccumulationAlerts'}}:{}),
     ...(professorRadar?{PROFESSOR_RADAR:{name:RADAR_NAMES.PROFESSOR_RADAR,instance:professorRadar,read:'readProfessorAlerts',archive:'professorAlerts'}}:{}),
     ...(falconEyeRadar?{FALCON_EYE_RADAR:{name:RADAR_NAMES.FALCON_EYE_RADAR,instance:falconEyeRadar,read:'readFalconEyeAlerts',archive:'falconEyeAlerts'}}:{})
   });
