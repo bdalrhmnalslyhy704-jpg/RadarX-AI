@@ -35,8 +35,26 @@ assert.match(service, /oldest_first=1&since_id=/,
   'background sync must request chronological replay pages from its durable cursor');
 assert.match(service, /radar_alert_cursor_id/,
   'equal-timestamp detections must be paginated without advancing past unseen alerts');
-assert.match(service, /notifyNewRadarAlerts\(JSONArray alerts, boolean oldestFirst, JSONObject nextCursor, boolean cursorAdvanceAllowed\)/,
+assert.match(service, /notifyNewRadarAlerts\(JSONArray alerts, boolean oldestFirst, boolean cursorAdvanceAllowed\)/,
   'notifications must preserve oldest-first replay order after reconnect');
+assert.match(service, /persistDurableAlertCursor\(at, replayKey, seen\)/,
+  'the durable replay cursor must advance only after each individual event has been handled');
+assert.doesNotMatch(service, /maxAt = Math\.max\(cursor, nextCursor\.optLong\("since", cursor\)\)/,
+  'the page next_cursor must never leap past events that have not been posted or safely skipped');
+assert.match(service, /private boolean notifyRadarAlert\(JSONObject alert\)/,
+  'the notification post operation must report whether Android accepted the request');
+assert.match(service, /manager\.areNotificationsEnabled\(\)/,
+  'disabled Android notifications must leave the current alert pending');
+assert.match(service, /manager\.getNotificationChannel\(CHANNEL_RADAR_ALERTS\)/,
+  'the service must inspect the alert channel before advancing the durable cursor');
+assert.match(service, /channel\.getImportance\(\) == NotificationManager\.IMPORTANCE_NONE/,
+  'a disabled notification channel must leave the current alert pending');
+assert.match(service, /if \(!notifyRadarAlert\(alert\)\)/,
+  'an alert that cannot be posted must stop page processing without skipping its cursor');
+assert.match(service, /if \(identity\.isEmpty\(\)\)/,
+  'rows without a source id must still receive a stable compound cursor identity');
+assert.match(service, /ALERT_POST_REQUEST_ACCEPTED/,
+  'logs must distinguish NotificationManager acceptance from actual device delivery');
 
 assert.match(service, /getRunningAppProcesses\(\)/,
   'a fresh stored heartbeat must not be treated as proof that Android still has the background process');
@@ -48,7 +66,7 @@ assert.ok(service.includes('/api/whale-accumulation-radar?quote=USDT&limit=50'),
   'individual-endpoint fallback must include Whale Accumulation');
 assert.ok(service.includes('meta.put("cursor_advance_allowed", false)'),
   'non-durable fallback feeds must not advance the durable replay cursor');
-assert.ok(service.includes('radar_alert_fallback_seen_ids') && service.includes('fallbackSeen.contains(id)'),
+assert.ok(service.includes('radar_alert_fallback_seen_ids') && service.includes('fallbackSeen.contains(replayKey)'),
   'fallback notifications must be de-duplicated against the later durable replay');
 assert.ok(service.includes('meta.put("feed_mode", "NON_DURABLE_LEGACY_FALLBACK")'),
   'legacy 200 responses must be treated as bounded non-durable feeds');
