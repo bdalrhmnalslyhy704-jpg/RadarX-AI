@@ -281,9 +281,9 @@ export class DurableStore {
   async readFalconEyeAlerts({sinceMs=0,limit=100}={}){const safeLimit=Math.min(100,Math.max(1,Number(limit)||100));const rows=await this.readRecent('falconEyeAlerts',500);return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).sort((a,b)=>Number(a?.processed_at||0)-Number(b?.processed_at||0)).slice(0,safeLimit);}
   async readProfessorAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('professorAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
   async readKahirAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('kahirAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
-  async appendCoinHunterAlert(v){return this.lock(async()=>{await appendFile(this.files.coinHunterAlerts,JSON.stringify(v)+'\\n');this.lastWriteAt=Date.now();});}
+  async appendCoinHunterAlert(v){return this.lock(async()=>{await appendFile(this.files.coinHunterAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readCoinHunterAlerts({sinceMs=0,limit=100}={}){const take=Math.min(100,Math.max(1,Math.trunc(Number(limit)||100)));const rows=await this.readRecent('coinHunterAlerts',Math.min(500,take));return rows.filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).slice(0,take);}
-  async appendWhaleAccumulationAlert(v){return this.lock(async()=>{await appendFile(this.files.whaleAccumulationAlerts,JSON.stringify(v)+'\\n');this.lastWriteAt=Date.now();});}
+  async appendWhaleAccumulationAlert(v){return this.lock(async()=>{await appendFile(this.files.whaleAccumulationAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readWhaleAccumulationAlerts({sinceMs=0,limit=100}={}){const take=Math.min(100,Math.max(1,Math.trunc(Number(limit)||100)));const rows=await this.readRecent('whaleAccumulationAlerts',Math.min(500,take));return rows.filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).slice(0,take);}
 
   scanJourneyState(raw={}) {
