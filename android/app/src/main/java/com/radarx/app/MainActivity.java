@@ -49,6 +49,8 @@ public final class MainActivity extends Activity {
     private static final String PREFS_BACKGROUND = "radarx_background";
     private static final String PREF_AUTO_ENABLED = "auto_enabled";
     private static final String PREF_NOTIFICATION_PROMPTED = "notification_permission_prompted";
+    private static final String PREF_REPLAY_TEST_FEED_URL = "radarx_test_alert_feed_url";
+    private static final String PREF_REPLAY_TEST_SCAN_MS = "radarx_test_scan_interval_ms";
     private boolean pendingBackgroundStart;
 
     private WebView webView;
@@ -57,6 +59,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        configureDebugReplayTest(getIntent());
 
         getWindow().setStatusBarColor(Color.rgb(7, 16, 24));
         getWindow().setNavigationBarColor(Color.rgb(7, 16, 24));
@@ -260,6 +263,39 @@ public final class MainActivity extends Activity {
         webView.loadDataWithBaseURL(APP_URL, html, "text/html", "UTF-8", null);
     }
 
+
+    private void configureDebugReplayTest(Intent launchIntent) {
+        if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) == 0) {
+            return; // Release APKs never read or honor this test-only override.
+        }
+        SharedPreferences prefs = getSharedPreferences(PREFS_BACKGROUND, MODE_PRIVATE);
+        String feedUrl = launchIntent == null ? null : launchIntent.getStringExtra("radarx_test_alert_feed_url");
+        if (feedUrl == null || feedUrl.isEmpty()) {
+            prefs.edit().remove(PREF_REPLAY_TEST_FEED_URL).remove(PREF_REPLAY_TEST_SCAN_MS).commit();
+            return;
+        }
+
+        long intervalMs = launchIntent.getLongExtra("radarx_test_scan_interval_ms", 1000L);
+        Uri uri = Uri.parse(feedUrl);
+        boolean valid = "http".equalsIgnoreCase(uri.getScheme())
+                && "10.0.2.2".equals(uri.getHost())
+                && uri.getPort() >= 18000 && uri.getPort() <= 18999
+                && "/api/radar-alerts".equals(uri.getPath())
+                && "ALL".equals(uri.getQueryParameter("radar"))
+                && intervalMs >= 500L && intervalMs <= 5000L;
+        if (!valid) {
+            prefs.edit().remove(PREF_REPLAY_TEST_FEED_URL).remove(PREF_REPLAY_TEST_SCAN_MS).commit();
+            Log.w("RadarXSmoke", "REPLAY_TEST_OVERRIDE_REJECTED");
+            return;
+        }
+
+        boolean saved = prefs.edit()
+                .putString(PREF_REPLAY_TEST_FEED_URL, feedUrl)
+                .putLong(PREF_REPLAY_TEST_SCAN_MS, intervalMs)
+                .commit();
+        if (saved) Log.i("RadarXSmoke", "REPLAY_TEST_OVERRIDE_CONFIGURED");
+        else Log.e("RadarXSmoke", "REPLAY_TEST_OVERRIDE_PERSIST_FAILED");
+    }
 
     private void startBackgroundMonitor() {
         startBackgroundMonitor(true);
