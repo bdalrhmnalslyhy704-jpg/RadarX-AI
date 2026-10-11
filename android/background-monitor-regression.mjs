@@ -42,3 +42,5 @@ assert.match(service, /getRunningAppProcesses\(\)/,
   'a fresh stored heartbeat must not be treated as proof that Android still has the background process');
 assert.match(service, /getPackageName\(\)\s*\+\s*":radar_background"/,
   'background recovery must specifically verify the dedicated service process after force-stop');
+assert.ok(service.includes('manager.notify(notificationIdentity, notificationId, builder.build())'),
+  'distinct archived alert IDs must have distinct notification identities rather than overwriting each other by symbol');
