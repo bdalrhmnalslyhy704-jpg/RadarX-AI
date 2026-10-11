@@ -128,7 +128,16 @@ public final class RadarXBackgroundMonitorService extends Service {
             t.setDaemon(true);
             return t;
         });
-        executor.scheduleWithFixedDelay(this::scanOnceSafe, 0L, SCAN_MS, TimeUnit.MILLISECONDS);
+        long scanInterval = SCAN_MS;
+        if (isDebugBuild()) {
+            long requestedInterval = prefs().getLong("radarx_test_scan_interval_ms", 0L);
+            if (requestedInterval >= 500L && requestedInterval <= 5000L) scanInterval = requestedInterval;
+        }
+        executor.scheduleWithFixedDelay(this::scanOnceSafe, 0L, scanInterval, TimeUnit.MILLISECONDS);
+    }
+
+    private boolean isDebugBuild() {
+        return (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
     }
 
     private void scanOnceSafe() {
@@ -162,7 +171,14 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     private JSONObject fetchRadarAlertsFeed(long cursor, String cursorId) throws Exception {
         Exception last = null;
-        String[] unifiedBases = {BACKEND_RADAR_ALERTS, BACKEND_RADAR_ALERTS_FALLBACK};
+        String testFeed = prefs().getString("radarx_test_alert_feed_url", "");
+        String[] unifiedBases;
+        if (isDebugBuild() && testFeed.matches("http://10\\.0\\.2\\.2:18[0-9]{3}/api/radar-alerts\\?radar=ALL")) {
+            unifiedBases = new String[] { testFeed };
+            Log.i(TAG, "DEBUG_REPLAY_TEST_FEED_ACTIVE");
+        } else {
+            unifiedBases = new String[] { BACKEND_RADAR_ALERTS, BACKEND_RADAR_ALERTS_FALLBACK };
+        }
         for (String base : unifiedBases) {
             HttpURLConnection connection = null;
             try {
@@ -527,7 +543,8 @@ public final class RadarXBackgroundMonitorService extends Service {
             " • Score " + scoreFmt.format(score) + " • " + stage;
         String timing = "وقت اكتشاف الخادم/العملة: " + detectedText + " • وقت إرسال الإشعار: " + formatTimestamp12h(System.currentTimeMillis()) + " • Asia/Aden • 12h";
 
-        String notificationIdentity = alert.optString("id", "");
+        String notificationIdentity = alert.optString("replay_cursor_id", "");
+        if (notificationIdentity.isEmpty()) notificationIdentity = alert.optString("id", "");
         if (notificationIdentity.isEmpty()) {
             notificationIdentity = radar + "|" + symbol + "|" + detectedAt + "|" + stage;
         }
@@ -572,7 +589,8 @@ public final class RadarXBackgroundMonitorService extends Service {
         try {
             manager.notify(notificationIdentity, notificationId, builder.build());
             // This records acceptance by NotificationManager only, not device delivery.
-            Log.i(TAG, "ALERT_POST_REQUEST_ACCEPTED");
+            if (isDebugBuild()) Log.i(TAG, "ALERT_POST_REQUEST_ACCEPTED key=" + notificationIdentity);
+            else Log.i(TAG, "ALERT_POST_REQUEST_ACCEPTED");
             return true;
         } catch (RuntimeException error) {
             Log.w(TAG, "ALERT_POST_FAILED", error);
