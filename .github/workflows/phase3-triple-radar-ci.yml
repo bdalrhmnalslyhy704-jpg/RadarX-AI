@@ -108,6 +108,9 @@ jobs:
       - name: Install Android SDK packages
         uses: android-actions/setup-android@v3
         timeout-minutes: 5
+        with:
+          # Recent Google SDK repositories no longer publish the legacy "tools" package.
+          packages: "platform-tools"
 
       - name: Assemble Android debug APK
         timeout-minutes: 15
