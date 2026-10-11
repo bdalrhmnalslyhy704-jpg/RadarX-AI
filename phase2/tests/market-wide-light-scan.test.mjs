@@ -9,6 +9,7 @@ import {MarketWideLightScan, evaluateMarketWideLightCandidate, isDirectionalCand
 import {MarketWideKlineCache} from '../market/market-wide-kline-cache.mjs';
 import {BinanceStreamClient} from '../market/binance-ws.mjs';
 import {RestClient} from '../market/binance-rest.mjs';
+import {EarlyExpansionRadar} from '../core/early-expansion-radar.mjs';
 
 const STEP = 5 * 60_000;
 const SOURCE = 'BINANCE_PUBLIC_REST';
@@ -716,3 +717,74 @@ test('an extreme event remains observation-only after the daily move is extended
   assert.equal(event.needs_micro_confirmation,true);
   assert.equal(result.summary.event_driven_breakout_extended_total,1);
 });
+
+test('archive rehydration retries newly eligible unready symbols with a bounded per-symbol cooldown',async()=>{
+  let now=1_900_000_000_000;
+  const archive=new Map();
+  const seeded=new Map();
+  const calls=[];
+  let activeSymbols=[];
+  const archiveRows=(symbol,at)=>candles({now:at,count:72}).map(candle=>({
+    ...candle,symbol,source:'BINANCE_PUBLIC_REST_CACHE',receivedAt:at
+  }));
+  archive.set('AAAUSDT',archiveRows('AAAUSDT',now));
+  const store={
+    async readScanJourneyCandleHistory({symbols,maxAgeMs=8*60_000,now:asOf}){
+      calls.push([...symbols]);
+      const series={};
+      for(const symbol of symbols){
+        const rows=archive.get(symbol);
+        if(!rows?.length)continue;
+        const age=Number(asOf)-Number(rows.at(-1).closeTime);
+        if(age>=0&&age<=maxAgeMs)series[symbol]=rows;
+      }
+      return {
+        requested_symbols:symbols.length,hydrated_symbols:Object.keys(series).length,
+        missing_snapshot_symbols:symbols.filter(symbol=>!archive.has(symbol)).length,
+        stale_symbols:0,invalid_symbols:0,cycles_examined:1,unreadable_cycles:0,
+        invalid_cycles:0,series
+      };
+    }
+  };
+  const cache={
+    coverageReport(){
+      return {symbols:activeSymbols.map(symbol=>({symbol,ready:seeded.has(symbol)}))};
+    },
+    seed(symbol,rows){
+      if(!Array.isArray(rows)||!rows.length)return 0;
+      seeded.set(symbol,rows);
+      return rows.length;
+    },
+    health(){
+      return {ready_symbols:seeded.size,expected_symbols:activeSymbols.length};
+    }
+  };
+  const radar=new EarlyExpansionRadar({
+    rest:{},store,marketWideKlineCache:cache,
+    config:{marketWideCacheArchiveHydrationRetryMs:5*60_000},
+    clock:()=>now,logger:{info(){},warn(){}}
+  });
+  await radar.rehydrateMarketWideCacheFromArchive([{symbol:'AAAUSDT'}],now);
+  assert.deepEqual(calls,[['AAAUSDT']]);
+  assert.equal(seeded.has('AAAUSDT'),true,'the startup archive snapshot should seed the cache');
+
+  activeSymbols=['AAAUSDT','BBBUSDT'];
+  now+=45_000;
+  await radar.rehydrateMarketWideCacheFromArchive([{symbol:'AAAUSDT'},{symbol:'BBBUSDT'}],now);
+  assert.deepEqual(calls,[['AAAUSDT'],['BBBUSDT']],
+    'a newly eligible symbol must be considered even after the initial startup pass');
+
+  now+=60_000;
+  await radar.rehydrateMarketWideCacheFromArchive([{symbol:'AAAUSDT'},{symbol:'BBBUSDT'}],now);
+  assert.equal(calls.length,2,'a symbol with no saved snapshot must not trigger an archive read every scan');
+
+  now+=240_001;
+  archive.set('BBBUSDT',archiveRows('BBBUSDT',now));
+  await radar.rehydrateMarketWideCacheFromArchive([{symbol:'AAAUSDT'},{symbol:'BBBUSDT'}],now);
+  assert.deepEqual(calls,[['AAAUSDT'],['BBBUSDT'],['BBBUSDT']],
+    'a still-unready symbol is retried when its cooldown expires');
+  assert.equal(seeded.has('BBBUSDT'),true,'a fresh snapshot discovered on retry must hydrate the newly eligible symbol');
+  assert.equal(calls.flat().includes('AAAUSDT')&&calls.length===3,true,
+    'already-ready symbols are not redundantly re-read from the archive');
+});
+
