@@ -465,7 +465,11 @@ public final class RadarXBackgroundMonitorService extends Service {
 
                 // Persist after each safely handled event, not at the end of the page.
                 // A crash during a long replay therefore cannot skip the unprocessed tail.
-                persistDurableAlertCursor(at, replayKey, seen);
+                if (!persistDurableAlertCursor(at, replayKey, seen)) {
+                    // Do not consume later rows if local cursor persistence failed.
+                    Log.w(TAG, "BACKGROUND_ALERT_CURSOR_PERSIST_FAILED; stopping replay");
+                    break;
+                }
             } else {
                 // Bounded legacy endpoints are opportunistic only. Never use them to
                 // advance the cursor into the complete archive.
@@ -483,13 +487,14 @@ public final class RadarXBackgroundMonitorService extends Service {
         return count;
     }
 
-    private void persistDurableAlertCursor(long at, String replayKey, Set<String> seen) {
+    private boolean persistDurableAlertCursor(long at, String replayKey, Set<String> seen) {
         while (seen.size() > 300) seen.remove(seen.iterator().next());
-        prefs().edit()
+        // commit() makes each checkpoint durable before the next event is consumed.
+        return prefs().edit()
             .putLong("radar_alert_cursor_at", at)
             .putString("radar_alert_cursor_id", replayKey)
             .putStringSet("radar_alert_seen_ids", seen)
-            .apply();
+            .commit();
     }
 
     private boolean notifyRadarAlert(JSONObject alert) {
