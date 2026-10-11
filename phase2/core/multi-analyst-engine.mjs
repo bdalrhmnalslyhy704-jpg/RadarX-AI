@@ -893,7 +893,7 @@ export class MultiAnalystEngine {
     this.clock=clock;
     this.config={
       quote:'USDT',discoveryPool:28,deepScanPool:16,returnLimit:8,deepConcurrency:3,deepKlines:220,
-      minQuoteVolume24h:300000,minDataQuality:70,minLiquidityQuality:60,
+      minQuoteVolume24h:750000,minDataQuality:70,minLiquidityQuality:60,
       ttlMs:45000,...config
     };
     this.scanner=new MarketUniverseScanner({

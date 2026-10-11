@@ -166,7 +166,7 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   quote:'USDT',
   pollMs:45000,
   universeRefreshMs:15*60*1000,
-  minQuoteVolume24h:350000,
+  minQuoteVolume24h:750000,
   minLiquidityQuality:58,
   maxSpreadBps:22,
   minDataQuality:70,

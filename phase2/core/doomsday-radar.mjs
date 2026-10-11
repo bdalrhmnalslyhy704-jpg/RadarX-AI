@@ -71,7 +71,7 @@ export const DOOMSDAY_RADAR_DEFAULTS=Object.freeze({
   quote:'USDT',
   pollMs:15000,
   universeRefreshMs:5*60*1000,
-  minQuoteVolume24h:500000,
+  minQuoteVolume24h:750000,
   deepCandidates:10,
   deepConcurrency:4,
   oneMinuteKlines:120,

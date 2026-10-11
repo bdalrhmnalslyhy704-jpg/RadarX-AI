@@ -353,7 +353,7 @@ export class RotationLagRadar {
     if(!store)throw new Error('STORE_REQUIRED');
     this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={
-      quote:'USDT',pollMs:45000,universeRefreshMs:5*60*1000,minQuoteVolume24h:1000000,
+      quote:'USDT',pollMs:45000,universeRefreshMs:5*60*1000,minQuoteVolume24h:750000,
       rotationBatchSize:5,topLaggers:2,maxAbs24hMovePct:6,alertCooldownMs:15*60*1000,
       minScore:82,minConfirmations:5,...config
     };

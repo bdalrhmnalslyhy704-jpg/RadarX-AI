@@ -345,7 +345,7 @@ export function buildWhaleAccumulationAlert(input,now=Date.now()){
 
 export const WHALE_ACCUMULATION_DEFAULTS=Object.freeze({
   quote:'USDT',pollMs:60000,universeRefreshMs:10*60*1000,
-  minQuoteVolume24h:1500000,topAnchors:8,rotationBatchSize:10,deepConcurrency:5,
+  minQuoteVolume24h:750000,topAnchors:8,rotationBatchSize:10,deepConcurrency:5,
   schedulerFastPathSlots:2,schedulerQuietAnchorSlots:4,
   schedulerExceptionalVolumeRatio:2.2,schedulerExceptionalTradeRatio:1.8,
   schedulerExceptionalPriceStepPct:0.15,schedulerQuietParticipationRatio:1.12,

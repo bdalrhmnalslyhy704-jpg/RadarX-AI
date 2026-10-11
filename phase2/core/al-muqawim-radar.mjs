@@ -260,7 +260,7 @@ export class AlMuqawimRadar{
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
     this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
-    this.config={quote:'USDT',pollMs:60000,universeRefreshMs:5*60*1000,minQuoteVolume24h:1000000,batchSize:5,alertCooldownMs:45*60*1000,minScore:86,minEntryTimingScore:78,minEntryFreshness:72,maxAlert24hMovePct:8,maxAlertsPerHour:3,maPeriod:50,...config};
+    this.config={quote:'USDT',pollMs:60000,universeRefreshMs:5*60*1000,minQuoteVolume24h:750000,batchSize:5,alertCooldownMs:45*60*1000,minScore:86,minEntryTimingScore:78,minEntryFreshness:72,maxAlert24hMovePct:8,maxAlertsPerHour:3,maPeriod:50,...config};
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;this.lastAlertAt=new Map();this.alertTimestamps=[];this.alertCount=0;this.scans=0;this.lastError=null;this.lastScanAtMs=null;this.busy=false;
   }
   start(){

@@ -265,7 +265,7 @@ export class LiquidityAbsorptionRadar{
     this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={
       quote:'USDT',pollMs:45000,universeRefreshMs:5*60*1000,
-      minQuoteVolume24h:1500000,rotationBatchSize:4,topLiquidityCount:3,
+      minQuoteVolume24h:750000,rotationBatchSize:4,topLiquidityCount:3,
       alertCooldownMs:20*60*1000,minScore:83,minConfirmations:6,
       ...config
     };

@@ -73,7 +73,7 @@ export const KAHIR_RADAR_DEFAULTS=Object.freeze({
   quote:'USDT',
   pollMs:30000,
   universeRefreshMs:5*60*1000,
-  minQuoteVolume24h:500000,
+  minQuoteVolume24h:750000,
   baselineHistory:8,
   deepCandidates:14,
   deepRotationReserve:2,
