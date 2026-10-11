@@ -25,10 +25,10 @@ function normalizeStreamUrls(urls) {
 }
 
 function assessCachedEntry(entry, now, maxAgeMs) {
-  const candles = (entry?.candles || [])
-    .filter(row => row?.closed === true && Number.isFinite(Number(row.closeTime)) && Number(row.closeTime) <= now)
-    .slice().sort((a, b) => Number(a.openTime) - Number(b.openTime))
-    .slice(-Math.max(MIN_READY_CLOSED_CANDLES, 96));
+  // putCandle keeps this bounded array ordered, unique by openTime, closed-only,
+  // and rejects future candles. Re-sorting/copying up to 180 candle objects on every
+  // status read multiplied temporary allocations by the whole market universe.
+  const candles = entry?.candles || [];
   if (!candles.length) return {ready:false, state:'CANDLE_CACHE_MISSING', ageMs:null, closedCandles:0};
   const last = candles.at(-1);
   const ageMs = Math.max(0, now - Number(last.closeTime));
@@ -263,9 +263,18 @@ export class MarketWideKlineCache {
       entry = {candles: [], lastSeenAt: now};
       this.cache.set(candle.symbol, entry);
     }
-    const byOpen = new Map(entry.candles.map(row => [row.openTime, row]));
-    const old = byOpen.get(candle.openTime);
-    if (old) {
+    // Keep the bounded cache array ordered in place. The former Map -> values ->
+    // filter -> sort pipeline allocated several full candle arrays for each frame.
+    let low=0,high=entry.candles.length-1,insertAt=entry.candles.length,found=-1;
+    while(low<=high){
+      const mid=(low+high)>>1;
+      const time=Number(entry.candles[mid].openTime);
+      if(time===candle.openTime){found=mid;break;}
+      if(time<candle.openTime){low=mid+1;insertAt=low;}
+      else {high=mid-1;insertAt=mid;}
+    }
+    if(found>=0){
+      const old=entry.candles[found];
       const sameBar = ['openTime','closeTime','open','high','low','close','volume','quoteVolume','tradeCount',
         'takerBuyBaseVolume','takerBuyQuoteVolume'].every(key => {
           const left = old[key] == null ? null : Number(old[key]);
@@ -282,12 +291,12 @@ export class MarketWideKlineCache {
       // Don't let a delayed REST response overwrite a newer websocket observation.
       if (old.source === 'BINANCE_PUBLIC_WS' && candle.source !== 'BINANCE_PUBLIC_WS') return false;
       if (candle.source !== 'BINANCE_PUBLIC_WS' && Number(candle.receivedAt) < Number(old.receivedAt)) return false;
+      entry.candles[found]=candle;
+    }else{
+      entry.candles.splice(insertAt,0,candle);
+      if(entry.candles.length>this.maxCandlesPerSymbol)
+        entry.candles.splice(0,entry.candles.length-this.maxCandlesPerSymbol);
     }
-    byOpen.set(candle.openTime, candle);
-    entry.candles = [...byOpen.values()]
-      .filter(row => row.closed === true && Number(row.closeTime) <= now)
-      .sort((a, b) => a.openTime - b.openTime)
-      .slice(-this.maxCandlesPerSymbol);
     entry.lastSeenAt = now;
     return true;
   }
@@ -361,15 +370,13 @@ export class MarketWideKlineCache {
     const symbols = this.symbols.map(symbol => {
       const readiness = assessCachedEntry(this.cache.get(symbol), now, this.maxCandleAgeMs);
       const entry = this.cache.get(symbol);
-      const candles = (entry?.candles || []).filter(row => row?.closed === true &&
-        Number.isFinite(Number(row.closeTime)) && Number(row.closeTime) <= now)
-        .slice().sort((a, b) => Number(a.openTime) - Number(b.openTime));
+      const candles = entry?.candles || [];
       const last = candles.at(-1) || null;
-      const recent = candles.slice(-Math.max(MIN_READY_CLOSED_CANDLES, 96));
+      const recentStart = Math.max(0,candles.length-Math.max(MIN_READY_CLOSED_CANDLES,96));
       const gaps = [];
-      for (let index = 1; index < recent.length; index++) {
-        if (Number(recent[index].openTime) - Number(recent[index - 1].openTime) !== FIVE_MINUTE_MS) {
-          gaps.push({previous_open_time_ms:Number(recent[index-1].openTime),next_open_time_ms:Number(recent[index].openTime)});
+      for (let index = recentStart+1; index < candles.length; index++) {
+        if (Number(candles[index].openTime) - Number(candles[index-1].openTime) !== FIVE_MINUTE_MS) {
+          gaps.push({previous_open_time_ms:Number(candles[index-1].openTime),next_open_time_ms:Number(candles[index].openTime)});
         }
       }
       return {
