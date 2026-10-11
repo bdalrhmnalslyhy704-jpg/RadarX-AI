@@ -449,7 +449,7 @@ export class DurableStore {
       const stored={...cycle,cycle_sequence:sequence};
       const budget=await this.scanJourneyWriteBudget();
       const finalPath=join(this.scanJourneyDir,filename);
-      const archived=await writeGzipJsonAtomic(finalPath,stored,{maxBytes:budget.max_write_bytes});
+      const archived=await writeGzipJsonAtomic(finalPath,stored,{maxBytes:Math.min(budget.max_write_bytes,max)});
       const coins=Array.isArray(cycle.coins)?cycle.coins:[];
       const eligible=coins.filter(x=>x&&x.eligible===true);
       const metadata={
