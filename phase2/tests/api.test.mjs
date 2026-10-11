@@ -312,10 +312,20 @@ test('TEST_FIXTURE: unified radar alert replay returns all historical pages olde
     processed_at:100000,detected_at:100000,price:0.1234,
     paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
   });
+  await store.appendCoinHunterAlert({
+    id:'COINHUNTER:offline-history',radar:'COIN_HUNTER_RADAR',symbol:'OGNUSDT',
+    processed_at:99998,detected_at:99998,price:0.1234,
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+  });
+  await store.appendWhaleAccumulationAlert({
+    id:'WHALE:offline-history',radar:'WHALE_ACCUMULATION_RADAR',symbol:'CTSIUSDT',
+    processed_at:99999,detected_at:99999,price:0.2345,
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+  });
   const server=createApiServer({
     config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},
     store,monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},
-    pushProvider:new NoopPushProvider(),liquidityAbsorptionRadar:{health:()=>({running:false})}
+    pushProvider:new NoopPushProvider(),liquidityAbsorptionRadar:{health:()=>({running:false})},coinHunterRadar:{health:()=>({running:true})},whaleAccumulationRadar:{health:()=>({running:true})}
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try{
