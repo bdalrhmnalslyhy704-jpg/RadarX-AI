@@ -144,7 +144,9 @@ public final class RadarXBackgroundMonitorService extends Service {
             if (live) {
                 if (!loggedFirstScan) { loggedFirstScan = true; Log.i(TAG, "BACKGROUND_SCAN_OK"); }
                 JSONArray alerts = root.optJSONArray("alerts");
-                int count = notifyNewRadarAlerts(alerts == null ? new JSONArray() : alerts, root.optBoolean("oldest_first", false), root.optJSONObject("next_cursor"));
+                boolean cursorAdvanceAllowed = meta == null || meta.optBoolean("cursor_advance_allowed", true);
+                int count = notifyNewRadarAlerts(alerts == null ? new JSONArray() : alerts,
+                    root.optBoolean("oldest_first", false), root.optJSONObject("next_cursor"), cursorAdvanceAllowed);
                 JSONArray radars = root.optJSONArray("radars");
                 updateStatus("رادارات مستقلة • " + (radars == null ? 6 : radars.length()) +
                     " • اكتشافات جديدة: " + count);
@@ -302,7 +304,8 @@ public final class RadarXBackgroundMonitorService extends Service {
             "/api/professor-radar?quote=USDT&limit=50",
             "/api/almuqawim-radar?quote=USDT&limit=50",
             "/api/early-expansion-radar?quote=USDT&limit=50",
-            "/api/coin-hunter-radar?quote=USDT&limit=50&scan=0"
+            "/api/coin-hunter-radar?quote=USDT&limit=50&scan=0",
+            "/api/whale-accumulation-radar?quote=USDT&limit=50"
         };
         JSONArray merged = new JSONArray();
         JSONArray radarNames = new JSONArray();
@@ -352,6 +355,11 @@ public final class RadarXBackgroundMonitorService extends Service {
         meta.put("paper_trading", true);
         meta.put("real_order_execution", false);
         meta.put("confidence_score", "UNKNOWN");
+        // Individual per-radar endpoints expose only bounded recent rows, not the
+        // complete durable replay archive. They may notify opportunistically but
+        // must never move the persisted compound archive cursor.
+        meta.put("cursor_advance_allowed", false);
+        meta.put("feed_mode", "NON_DURABLE_FALLBACK");
         root.put("meta", meta);
         root.put("alerts", merged);
         root.put("radars", radarNames);
@@ -359,15 +367,19 @@ public final class RadarXBackgroundMonitorService extends Service {
         return root;
     }
 
-    private int notifyNewRadarAlerts(JSONArray alerts, boolean oldestFirst, JSONObject nextCursor) {
+    private int notifyNewRadarAlerts(JSONArray alerts, boolean oldestFirst, JSONObject nextCursor, boolean cursorAdvanceAllowed) {
         Set<String> seen = new HashSet<>(prefs().getStringSet("radar_alert_seen_ids", new HashSet<>()));
+        // Keep a separate bounded de-duplication ledger for best-effort fallback
+        // alerts. When the durable endpoint returns, these IDs suppress duplicates
+        // while the real compound cursor safely drains the complete archive.
+        Set<String> fallbackSeen = new HashSet<>(prefs().getStringSet("radar_alert_fallback_seen_ids", new HashSet<>()));
         long cursor = prefs().getLong("radar_alert_cursor_at", 0L);
         String cursorId = prefs().getString("radar_alert_cursor_id", "");
         long maxAt = cursor;
         String maxCursorId = cursorId;
         // Trust the server's compound cursor for chronological replay; its tie ordering
         // must not be reinterpreted with Java's different String collation rules.
-        if (oldestFirst && nextCursor != null) {
+        if (cursorAdvanceAllowed && oldestFirst && nextCursor != null) {
             maxAt = Math.max(cursor, nextCursor.optLong("since", cursor));
             if (nextCursor.optLong("since", cursor) >= cursor) {
                 maxCursorId = nextCursor.optString("since_id", cursorId);
@@ -388,21 +400,27 @@ public final class RadarXBackgroundMonitorService extends Service {
                 replayCursorId = alert.optString("radar", "UNKNOWN_RADAR") + "|" +
                     (id.isEmpty() ? alert.optString("symbol", "UNKNOWN") + ":" + at : id);
             }
-            if (!(oldestFirst && nextCursor != null) &&
+            if (cursorAdvanceAllowed && !(oldestFirst && nextCursor != null) &&
                 (at > maxAt || (at == maxAt && replayCursorId.compareTo(maxCursorId) > 0))) {
                 maxAt = at;
                 maxCursorId = replayCursorId;
             }
             if (!alert.optBoolean("eligible", true)) continue;
-            if (id.isEmpty() || seen.contains(id)) continue;
+            if (id.isEmpty() || seen.contains(id) || fallbackSeen.contains(id)) continue;
             notifyRadarAlert(alert);
-            seen.add(id);
+            if (cursorAdvanceAllowed) seen.add(id); else fallbackSeen.add(id);
             count++;
         }
-        while (seen.size() > 300) seen.remove(seen.iterator().next());
-        prefs().edit().putLong("radar_alert_cursor_at", maxAt)
-            .putString("radar_alert_cursor_id", maxCursorId)
-            .putStringSet("radar_alert_seen_ids", seen).apply();
+        if (cursorAdvanceAllowed) {
+            while (seen.size() > 300) seen.remove(seen.iterator().next());
+            prefs().edit().putLong("radar_alert_cursor_at", maxAt)
+                .putString("radar_alert_cursor_id", maxCursorId)
+                .putStringSet("radar_alert_seen_ids", seen).apply();
+        } else {
+            while (fallbackSeen.size() > 5000) fallbackSeen.remove(fallbackSeen.iterator().next());
+            // Do not persist a newer archive cursor from this incomplete feed.
+            prefs().edit().putStringSet("radar_alert_fallback_seen_ids", fallbackSeen).apply();
+        }
         return count;
     }
 
