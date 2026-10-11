@@ -277,10 +277,12 @@ export class RestClient {
     const task=(async()=>{
       let error=null;
       for(let attempt=0;attempt<this.baseUrls.length;attempt++){
-        await this.waitBudget(path, query);
         await acquireSharedRequestSlot();
         let tm=null;
         try{
+        // Reserve rate/weight at dispatch time once a global slot is available.
+        // This prevents queued requests from pre-reserving budget and bunching on release.
+        await this.waitBudget(path, query);
         const idx=(this.currentBaseIndex+attempt)%this.baseUrls.length;
         const qs=new URLSearchParams(normalizedQuery(query));
         const url=this.baseUrls[idx]+path+(qs.toString()?'?'+qs:'');
