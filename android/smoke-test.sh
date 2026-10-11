@@ -127,14 +127,30 @@ assert_background_service_declared() {
     return 1
   fi
 
-  # This is a separate runtime assertion; a manifest declaration alone is not proof
-  # that Android actually started the foreground service.
-  local logs
+  # Verify live service state independently of logcat. Heavy WebView output can
+  # rotate the log buffer after the service-ready marker, so a missing old log line
+  # alone must not fail a correctly running service. Conversely, a manifest or log
+  # marker alone is not enough: Android must currently hold the service instance.
+  local logs runtime_state service_pid
   logs="$(timeout 6s adb logcat -d -s RadarXBackground:I '*:S' 2>/dev/null || true)"
-  if ! printf '%s\n' "$logs" | grep -Fq 'BACKGROUND_SERVICE_READY'; then
-    echo "::error::Manifest is valid but the foreground monitor never reported runtime readiness"
+  runtime_state="$(timeout 8s adb shell dumpsys activity services com.radarx.app 2>/dev/null || true)"
+  service_pid="$(timeout 5s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
+  if ! printf '%s\n' "$runtime_state" | grep -Fq 'RadarXBackgroundMonitorService' || [[ -z "$service_pid" ]]; then
+    echo "::error::Manifest is valid but Android does not show a live background-monitor service process"
+    echo "BACKGROUND_SERVICE_PID=\${service_pid:-NONE}"
+    if printf '%s\n' "$logs" | grep -Fq 'BACKGROUND_SERVICE_READY'; then
+      echo "BACKGROUND_READY_MARKER=present"
+    else
+      echo "BACKGROUND_READY_MARKER=absent_or_rotated"
+    fi
+    printf '%s\n' "$runtime_state" | grep -Ei 'RadarXBackgroundMonitorService|ServiceRecord|isForeground|ProcessRecord|radar_background' | tail -n 120 || true
     printf '%s\n' "$logs" | tail -n 100
     return 1
+  fi
+  if printf '%s\n' "$logs" | grep -Fq 'BACKGROUND_SERVICE_READY'; then
+    echo "Android background service confirmed live: pid=$service_pid; ready-marker=present"
+  else
+    echo "Android background service confirmed live: pid=$service_pid; ready-marker=rotated-after-runtime-confirmation"
   fi
 }
 
