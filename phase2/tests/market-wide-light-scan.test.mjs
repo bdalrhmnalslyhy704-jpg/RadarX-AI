@@ -254,6 +254,62 @@ class FakeSocket {
   pong() {}
 }
 
+test('verified scan-journey closed candles can seed live cache without any added REST calls',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-market-wide-cache-rehydrate-'));
+  const now=Date.now();
+  const cacheRest=new RestClient({
+    baseUrls:['https://archive-cache.test.invalid'],timeoutMs:1000,minIntervalMs:0,
+    fetchImpl:async()=>{throw new Error('archive rehydration must not perform network requests');}
+  });
+  FakeSocket.instances.length=0;
+  const cache=new MarketWideKlineCache({
+    rest:cacheRest,urls:['wss://stream.test/stream'],WebSocketImpl:FakeSocket,
+    clock:()=>now,logger:{warn(){}}
+  });
+  try{
+    const store=await new DurableStore({dir}).init();
+    const snapshot=symbol=>candles({now,count:72,source:SOURCE}).map(candle=>({
+      open_time:candle.openTime,close_time:candle.closeTime,open:candle.open,high:candle.high,low:candle.low,
+      close:candle.close,volume:candle.volume,quote_volume:1000,trade_count:candle.tradeCount,
+      taker_buy_base_volume:50
+    }));
+    await store.appendScanJourneyCycle({
+      schema_version:SCAN_JOURNEY_SCHEMA,cycle_id:'RADAR8:USDT:CACHE_REHYDRATE:'+now,
+      cycle_number:1,radar:'RADAR_8',quote:'USDT',status:'COMPLETE',started_at:now-1000,completed_at:now,
+      data_policy:{closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
+      counters:{},coins:[
+        {symbol:'AAAUSDT',eligible:true,candles_used:{'5m':snapshot('AAAUSDT')}},
+        {symbol:'BBBUSDT',eligible:true,candles_used:{'5m':snapshot('BBBUSDT')}}
+      ]
+    });
+    const restored=await new DurableStore({dir}).init();
+    cache.setSymbols(['AAAUSDT','BBBUSDT']);
+    cache.start();
+    const history=await restored.readScanJourneyCandleHistory({
+      symbols:['AAAUSDT','BBBUSDT'],timeframe:'5m',minCandles:60,maxCandles:72,
+      maxCycles:10,maxAgeMs:8*60_000,now
+    });
+    assert.equal(history.hydrated_symbols,2);
+    for(const [symbol,bars] of Object.entries(history.series)){
+      assert.ok(cache.seed(symbol,bars,'BINANCE_PUBLIC_REST_CACHE')>=60);
+    }
+    const socket=FakeSocket.instances.at(-1);
+    socket.emit('open');
+    const health=cache.health();
+    assert.equal(health.ready_symbols,2);
+    assert.equal(health.cache_coverage_ready,true);
+    assert.equal(health.websocket_sync_ready,true);
+    assert.equal(health.full_market_coverage_ready,true,
+      'verified recent archive history plus a live combined stream satisfies the unchanged strict gate');
+    assert.equal(cacheRest.health().shared_requests_last_minute,0,
+      'reading durable snapshots and seeding the cache must not trigger REST calls');
+    assert.ok(cache.getSeries('AAAUSDT').candles.every(candle=>candle.source==='BINANCE_PUBLIC_REST_CACHE'));
+  }finally{
+    cache.stop();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('market-wide websocket cache bounds/deduplicates streams and keeps only closed candles', () => {
   FakeSocket.instances.length=0;
   const now = 1_900_000_000_000;
