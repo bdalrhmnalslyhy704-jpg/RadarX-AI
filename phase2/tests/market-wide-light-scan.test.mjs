@@ -83,7 +83,7 @@ test('market-wide light scan covers all eligible symbols once and keeps candidat
   const belowWarmup = light.scan({
     eligible,now:now+500,cycle:2,
     getSeries:symbol=>{
-      const index=Number(symbol.match(/(\\d+)USDT$/)?.[1]||0);
+      const index=Number(symbol.match(/(\d+)USDT$/)?.[1]||0);
       return index<20?cacheSeries(symbol,now+500):null;
     },
     lastMicroScannedAt:()=>null
