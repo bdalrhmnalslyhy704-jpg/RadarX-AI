@@ -360,7 +360,8 @@ export function buildStrongMoveAlert(candidate,now=Date.now()){
 }
 
 
-export function finalizeStrongMoveCandidate(alert,row,{now=Date.now(),minScore=76,lastAlertAt=0,alertCooldownMs=0,telemetry=true}={}){
+export function finalizeStrongMoveCandidate(alert,row,{now=Date.now(),clock=()=>Date.now(),minScore=76,lastAlertAt=0,alertCooldownMs=0,telemetry=true}={}){
+  const decisionStartedAt=Number.isFinite(Number(now))?Number(now):Date.now();
   const alertScore=Math.max(Number(alert?.strong_move?.score)||0,Number(alert?.strong_move?.component_scores?.flash)||0);
   const a=alert?.strong_move||{},cs=a.component_scores||{},m=a.metrics||{};
   const minQuoteVolume=Math.max(1,Number(row?.minQuoteVolume24h)||1_000_000);
@@ -390,9 +391,13 @@ export function finalizeStrongMoveCandidate(alert,row,{now=Date.now(),minScore=7
   if(inCooldown)failures.push('SYMBOL_ALERT_COOLDOWN');
   const accepted=Boolean(alert?.eligible)&&alertScore>=Number(minScore)&&gate.eligible&&notificationGate.eligible&&!inCooldown;
   const finalGate={...notificationGate,eligible:accepted,failures:[...new Set(failures)],stage_decision:accepted?'GATE_ACCEPTED':'REJECTED'};
+  const completedRaw=typeof clock==='function'?clock():decisionStartedAt;
+  const decisionCompletedAt=Number.isFinite(Number(completedRaw))?Number(completedRaw):decisionStartedAt;
+  finalGate.decision_started_at=decisionStartedAt;
+  finalGate.decision_completed_at=decisionCompletedAt;
   alert.notification_gate=finalGate;
-  if(telemetry)recordRadarDecision(alert,finalGate,{now,extraReasons:[]});
-  return {accepted,alertScore,gate,notificationGate:finalGate,alert};
+  if(telemetry)recordRadarDecision(alert,finalGate,{now:decisionCompletedAt,extraReasons:[]});
+  return {accepted,alertScore,gate,notificationGate:finalGate,decisionStartedAt,decisionCompletedAt,alert};
 }
 
 export class StrongMoveRadar {
@@ -458,19 +463,23 @@ export class StrongMoveRadar {
     ]);
     if(typeof this.rest.aggTrades!=='function')throw new Error('AGG_TRADES_UNAVAILABLE');
     const tradeFlow=await this.rest.aggTrades(row.symbol,{limit:1000,endTime:this.clock()});
+    const sourceObservedAt=Math.max(
+      Number(one?.receivedAt)||0,Number(five?.receivedAt)||0,Number(tradeFlow?.receivedAt)||0
+    )||this.clock();
     const alert=buildStrongMoveAlert({
       ticker:row,one_minute:one.candles,five_minute:five.candles,agg_trades:tradeFlow.trades??tradeFlow.data??[]
-    },this.clock());
+    },sourceObservedAt);
     this.scans++;
-    const observedAt=this.clock();
-    alert.observed_at=observedAt;
+    alert.observed_at=sourceObservedAt;
     alert.source_event_at=alert.source_candle_close_at==null?null:finite(alert.source_candle_close_at);
-    alert.source_data_age_ms=alert.source_event_at==null?null:Math.max(0,observedAt-alert.source_event_at);
+    alert.source_data_age_ms=alert.source_event_at==null?null:Math.max(0,sourceObservedAt-alert.source_event_at);
     const restHealth=this.rest?.health?.()||{};
     alert.rest_queue_depth=finite(restHealth.queue_depth);
     alert.rest_queue_wait_ms=finite(restHealth.queue_wait_ms_last);
+    const decisionStartedAt=this.clock();
+    alert.processed_at=decisionStartedAt;
     const finalized=finalizeStrongMoveCandidate(alert,{...row,minQuoteVolume24h:this.config.minQuoteVolume24h},{
-      now:observedAt,minScore:this.config.minScore,lastAlertAt:this.lastAlertAt.get(row.symbol)||0,
+      now:decisionStartedAt,clock:this.clock,minScore:this.config.minScore,lastAlertAt:this.lastAlertAt.get(row.symbol)||0,
       alertCooldownMs:this.config.alertCooldownMs,telemetry:true
     });
     if(!finalized.accepted)return alert;
