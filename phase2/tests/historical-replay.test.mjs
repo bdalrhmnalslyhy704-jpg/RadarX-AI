@@ -126,6 +126,28 @@ test('forward +50/+70 percent labels are outcomes, separate from evaluator input
 });
 
 
+test('replay reports dynamic early warnings separately from strict acceptances',()=>{
+  const rows=candles(260);
+  const replay=runHistoricalReplay({
+    symbol:'WUSDT',oneMinuteCandles:rows,aggTrades:syntheticTrades(rows),
+    startTime:rows[180].openTime,endTime:rows[184].closeTime,tradeCoverageComplete:true,
+    evaluate(input){
+      return {
+        accepted:true,accepted_mode:'DYNAMIC_EARLY_WARNING',
+        early_warning:{eligible:true,score:80,soft_failures:['RISK:ADVANCED_CHASE_RISK']},
+        score:86,stage:'PRE_EXPANSION_WATCH',reason_codes:[],
+        alert:{eligible:true,notification_mode:'DYNAMIC_EARLY_WARNING',early_warning:{eligible:true,score:80}}
+      };
+    }
+  });
+  assert.equal(replay.summary.accepted,5);
+  assert.equal(replay.summary.first_early_warning_accepted_at,replay.steps[0].timestamp);
+  assert.equal(replay.summary.first_strict_accepted_at,null);
+  assert.deepEqual(replay.summary.accepted_mode_counts,[{mode:'DYNAMIC_EARLY_WARNING',count:5}]);
+  assert.equal(replay.steps[0].accepted_mode,'DYNAMIC_EARLY_WARNING');
+  assert.equal(replay.steps[0].early_warning_score,80);
+});
+
 test('replay preserves core, elite and notification rejection stages for forensic review', () => {
   const rows = candles(260);
   const replay = runHistoricalReplay({
