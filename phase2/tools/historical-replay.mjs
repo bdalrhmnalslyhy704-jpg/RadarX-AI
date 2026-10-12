@@ -77,7 +77,10 @@ async function fetchAggregateTrades(client, symbol, start, end, {maxPages, maxTr
     const last = page[page.length - 1];
     lastTimestamp = last.T;
     if (last.T >= end) { complete = true; break; }
-    if (page.length < Math.min(1000, remaining)) { complete = true; break; }
+    if (page.length < Math.min(1000, remaining)) {
+      // A short page before the requested end is not proof that the window was covered.
+      complete = false; break;
+    }
     if (!Number.isFinite(last.a) || last.a < 0) break;
     fromId = last.a + 1;
     cursor = last.T + 1;
