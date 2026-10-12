@@ -52,3 +52,25 @@ test('base composite does not alter the score for fixed independent evidence cat
     momentumScore:88,compressionScore:76,confirmations:9,minConfirmations:7,minScore:84,max24hMovePct:3};
   assert.equal(evaluateEliteGate({...base,baseScore:0}).score,evaluateEliteGate({...base,baseScore:100}).score);
 });
+
+
+test('negative 24h performance does not mislabel an upward reversal as an extended chase',()=>{
+  const x=evaluateEliteGate({
+    radar:'TEST',direction:'UP_MOVE',baseScore:95,priceChange24h:-12,liquidityScore:95,dataQualityScore:95,
+    triggerScore:95,structureScore:90,participationScore:92,flowScore:90,relativeScore:88,momentumScore:94,
+    compressionScore:87,confirmations:10,minConfirmations:7,minScore:84,max24hMovePct:5
+  });
+  assert.equal(x.risk_flags.includes('ALREADY_EXTENDED_24H'),false);
+  assert.equal(x.advanced.anti_chase,100);
+  assert.equal(x.eligible,true);
+});
+
+test('a positive prior move still trips the upward anti-chase guard',()=>{
+  const x=evaluateEliteGate({
+    radar:'TEST',direction:'UP_MOVE',baseScore:95,priceChange24h:12,liquidityScore:95,dataQualityScore:95,
+    triggerScore:95,structureScore:90,participationScore:92,flowScore:90,relativeScore:88,momentumScore:94,
+    compressionScore:87,confirmations:10,minConfirmations:7,minScore:84,max24hMovePct:5
+  });
+  assert.equal(x.risk_flags.includes('ALREADY_EXTENDED_24H'),true);
+  assert.equal(x.eligible,false);
+});
