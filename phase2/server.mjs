@@ -43,7 +43,8 @@ export async function startServer({
   const store=await new DurableStore({dir:process.env.RADARX_DATA_DIR||'./.radarx-data'}).init();
   const spotRestBudget=createRestRequestBudget();
   const rest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls,budget:spotRestBudget,maxConcurrentRequests:4});
-  const marketSnapshotHub=new SpotMarketSnapshotHub({rest,logger,tickerTtlMs:1500,exchangeInfoTtlMs:10*60*1000});
+  const marketSnapshotRest=new RestClient({...config.rest,baseUrls:['https://data-api.binance.vision',...(config.rest.baseUrls??config.rest.urls??[])].filter((url,index,arr)=>arr.indexOf(url)===index),budget:spotRestBudget,maxConcurrentRequests:4});
+  const marketSnapshotHub=new SpotMarketSnapshotHub({rest:marketSnapshotRest,logger,tickerTtlMs:1500,exchangeInfoTtlMs:10*60*1000});
   const dedup=new SignalDeduplicator({store,windowMs:15*60*1000});
   const provider=createPushProvider(config.push);
   const push=new PushManager({provider,store,deduplicator:dedup,retryBaseMs:config.monitoring.pushRetryMs});
