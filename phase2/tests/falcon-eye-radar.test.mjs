@@ -7,22 +7,24 @@ function candle(openTime,close,{open=close-0.02,high=close+0.06,low=close-0.06,v
   return {openTime,closeTime:openTime+59_999,open,high,low,close,volume,quoteVolume:close*volume,tradeCount,takerBuyBaseVolume:volume*taker,closed:true};
 }
 
-function risingBase(n=100,start=100,step=60_000){
+function risingBase(n=100,start=100,step=60_000,asOf=null){
   const rows=[];
+  const baseTime=asOf!==null&&asOf!==undefined&&Number.isFinite(Number(asOf))?Number(asOf)-n*step-9_999:1_800_000_000_000;
   for(let i=0;i<n;i++){
     const close=start+i*0.004;
     const early=i<n-8;
     const lift=early?0:(i-(n-8)+1)*0.09;
     const value=close+lift;
-    rows.push(candle(1_800_000_000_000+i*step,value,{volume:early?850:2500,tradeCount:early?75:230,taker:early?0.50:0.56}));
+    rows.push(candle(baseTime+i*step,value,{volume:early?850:2500,tradeCount:early?75:230,taker:early?0.50:0.56}));
   }
   return rows;
 }
 
-function flat(n=40,start=100,step=300_000){
+function flat(n=40,start=100,step=300_000,asOf=null){
+  const baseTime=asOf!==null&&asOf!==undefined&&Number.isFinite(Number(asOf))?Number(asOf)-n*step-9_999:1_800_000_000_000;
   return Array.from({length:n},(_,i)=>{
-    const close=start+i*0.001;
-    return {openTime:1_800_000_000_000+i*step,closeTime:1_800_000_000_000+i*step+step-1,open:close-0.005,high:close+0.02,low:close-0.02,close,volume:1200,quoteVolume:close*1200,tradeCount:120,takerBuyBaseVolume:600,closed:true};
+    const close=start+i*0.001,openTime=baseTime+i*step;
+    return {openTime,closeTime:openTime+step-1,open:close-0.005,high:close+0.02,low:close-0.02,close,volume:1200,quoteVolume:close*1200,tradeCount:120,takerBuyBaseVolume:600,closed:true};
   });
 }
 
@@ -47,12 +49,13 @@ test('Falcon Eye notification diversity reads the actual nested component scores
 
 test('Falcon Eye turns the OGN fingerprint into an early, multi-factor setup',()=>{
   const now=1_800_000_000_000+240*60_000;
-  const one=risingBase();
-  const five=flat(80);
-  const btc=flat(80,100);
+  const one=risingBase(100,100,60_000,now);
+  const five=flat(80,100,300_000,now);
+  const btc=flat(80,100,300_000,now);
+  const btcOne=flat(30,100,60_000,now);
   const a=buildFalconEyeAnalysis({
     ticker:{symbol:'OGNUSDT',lastPrice:one.at(-1).close,priceChange24h:2.8,quoteVolume24h:2_500_000},
-    oneMinute:one,fiveMinute:five,btcFiveMinute:btc,
+    oneMinute:one,fiveMinute:five,btcOneMinute:btcOne,btcFiveMinute:btc,
     futures:{quoteVolume:25_000_000,openInterest:1_030_000,fundingRate:-0.004},
     previousFutures:{openInterest:1_000_000},
     liquidations:[{time:now-10_000,price:'101',origQty:'1000',side:'BUY'}],
@@ -74,7 +77,7 @@ test('Falcon Eye turns the OGN fingerprint into an early, multi-factor setup',()
 
 test('Falcon Eye vetoes OGN-style post-explosion chasing',()=>{
   const now=1_800_000_000_000+240*60_000;
-  const one=risingBase();
+  const one=risingBase(100,100,60_000,now);
   for(let i=one.length-10;i<one.length;i++){
     one[i].close=one[i-1].close*1.008;
     one[i].open=one[i-1].close;
@@ -84,11 +87,12 @@ test('Falcon Eye vetoes OGN-style post-explosion chasing',()=>{
     one[i].tradeCount=500;
     one[i].takerBuyBaseVolume=one[i].volume*0.59;
   }
-  const five=flat();
-  const btc=flat(40,100);
+  const five=flat(40,100,300_000,now);
+  const btc=flat(40,100,300_000,now);
+  const btcOne=flat(30,100,60_000,now);
   const a=buildFalconEyeAnalysis({
     ticker:{symbol:'OGNUSDT',lastPrice:one.at(-1).close,priceChange24h:14,quoteVolume24h:5_000_000},
-    oneMinute:one,fiveMinute:five,btcFiveMinute:btc,
+    oneMinute:one,fiveMinute:five,btcOneMinute:btcOne,btcFiveMinute:btc,
     futures:{quoteVolume:70_000_000,openInterest:2_000_000,fundingRate:-0.008},
     previousFutures:{openInterest:1_950_000},
     now
@@ -97,6 +101,23 @@ test('Falcon Eye vetoes OGN-style post-explosion chasing',()=>{
   assert.equal(a.not_chasing,false);
   assert.ok(a.anti_chase_penalty>=20);
   assert.ok(a.metrics.return_10m>3.8 || a.metrics.move_24h_pct>8);
+});
+
+
+test('Falcon Eye refuses stale or discontinuous spot and BTC candles',()=>{
+  const now=1_800_000_000_000+240*60_000;
+  const one=risingBase(100,100,60_000,now),five=flat(80,100,300_000,now);
+  const btcOne=flat(30,100,60_000,now),btcFive=flat(40,100,300_000,now);
+  const ticker={symbol:'OGNUSDT',lastPrice:one.at(-1).close,priceChange24h:2.8,quoteVolume24h:2_500_000};
+  const stale=buildFalconEyeAnalysis({ticker,oneMinute:risingBase(100,100,60_000,now-5*60_000),fiveMinute:five,btcOneMinute:btcOne,btcFiveMinute:btcFive,now});
+  assert.equal(stale.eligible,false);assert.equal(stale.data_status,'DATA_STALE');assert.equal(stale.data_stale,true);
+  const gapped=[...one];gapped.splice(76,1);
+  const gap=buildFalconEyeAnalysis({ticker,oneMinute:gapped,fiveMinute:five,btcOneMinute:btcOne,btcFiveMinute:btcFive,now});
+  assert.equal(gap.eligible,false);assert.equal(gap.data_status,'DATA_GAP');
+});
+test('Falcon Eye emits a safe insufficient-data alert instead of throwing on missing components',()=>{
+  const alert=buildFalconEyeAlert({ticker:{symbol:'TESTUSDT',lastPrice:1,priceChange24h:0},oneMinute:[],fiveMinute:[],btcOneMinute:[],btcFiveMinute:[]},1_900_000_000_000);
+  assert.equal(alert.eligible,false);assert.equal(alert.data_status.status,'DATA_INSUFFICIENT');assert.equal(alert.data_quality,0);
 });
 
 // Fixture uses enough closed 5m candles for the pre-breakout window.
