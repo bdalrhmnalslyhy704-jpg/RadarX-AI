@@ -285,6 +285,17 @@ export function runHistoricalReplay({
       }
     });
   }
+  const firstAcceptedAt=rows.find(x=>x.decision==="ACCEPTED")?.timestamp??null;
+  const firstCoreTriggerAt=rows.find(x=>x.core_trigger_eligible===true)?.timestamp??null;
+  const premove50Status=actual50At===null
+    ? "NO_PLUS_50_PERCENT_EVENT_IN_WINDOW"
+    : firstAcceptedAt!==null&&firstAcceptedAt<actual50At
+      ? "PREMOVE_ALERT_ACCEPTED"
+      : firstCoreTriggerAt!==null&&firstCoreTriggerAt<actual50At
+        ? "CORE_TRIGGER_SEEN_BUT_FINAL_GATE_BLOCKED"
+        : firstCoreTriggerAt!==null
+          ? "CORE_TRIGGER_AFTER_PLUS_50_PERCENT"
+          : "NO_CORE_TRIGGER_BEFORE_PLUS_50_PERCENT";
   return {
     engine: "RADARX_HISTORICAL_REPLAY_V1",
     symbol: sym,
@@ -297,8 +308,9 @@ export function runHistoricalReplay({
     },
     summary: {
       replay_steps: rows.length, accepted: acceptedCount, rejected: rejectedCount,
-      first_accepted_at: rows.find(x => x.decision === "ACCEPTED")?.timestamp ?? null,
-      first_core_trigger_at: rows.find(x => x.core_trigger_eligible === true)?.timestamp ?? null,
+      premove_50_status: premove50Status,
+      first_accepted_at: firstAcceptedAt,
+      first_core_trigger_at: firstCoreTriggerAt,
       first_candidate_eligible_at: rows.find(x => x.candidate_eligible === true)?.timestamp ?? null,
       first_elite_gate_eligible_at: rows.find(x => x.elite_gate.eligible === true)?.timestamp ?? null,
       first_observed_score_ge_86_at: rows.find(x => Number(x.score) >= 86)?.timestamp ?? null,
