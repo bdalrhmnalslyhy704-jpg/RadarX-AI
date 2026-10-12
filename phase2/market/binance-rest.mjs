@@ -54,6 +54,8 @@ const SHARED_CACHE_PRUNE_INTERVAL_MS = 1000;
 
 export function estimateBinanceRequestWeight(path, query = {}) {
   if (path === '/api/v3/exchangeInfo') return 20;
+  // Binance Spot GET /api/v3/aggTrades has a request weight of 4.
+  if (path === '/api/v3/aggTrades') return 4;
   if (path === '/api/v3/ticker/24hr') {
     if (query.symbol) return 2;
     if (query.symbols) {
