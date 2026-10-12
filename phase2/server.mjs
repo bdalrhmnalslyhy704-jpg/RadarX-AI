@@ -46,7 +46,7 @@ export async function startServer({
   logger.info?.('[RADARX_ARCHIVE_TEMP_CLEANUP] '+JSON.stringify({
     build_version:'Build 224',store_dir:store.dir,...(store.tempCleanup||{deleted_files:0,freed_bytes:0,failed_files:0})
   }));
-  const outcomeLedgerCompaction=await store.compactPreExpansionOutcomes({maxRecords:2500,maxStageKeys:6000});
+  const outcomeLedgerCompaction=await store.compactPreExpansionOutcomes({maxRecords:1500,maxStageKeys:4000});
   logger.info?.('[RADARX_OUTCOME_LEDGER_COMPACTION] '+JSON.stringify({
     build_version:'Build 224',store_dir:store.dir,...outcomeLedgerCompaction
   }));
