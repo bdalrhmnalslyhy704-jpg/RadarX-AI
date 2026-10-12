@@ -101,7 +101,7 @@ test('forward +50/+70 percent labels are outcomes, separate from evaluator input
   const start = rows[190].openTime;
   const replay = runHistoricalReplay({
     symbol: 'WUSDT', oneMinuteCandles: rows, startTime: start,
-    endTime: rows[220].closeTime,
+    endTime: rows[299].closeTime,
     evaluate(input) {
       if ('outcome' in input || 'forward_max_upside_pct' in input) sawOutcomeOnlyLeak = true;
       return {accepted: false, stage: 'WATCH'};
@@ -109,6 +109,9 @@ test('forward +50/+70 percent labels are outcomes, separate from evaluator input
   });
   assert.equal(sawOutcomeOnlyLeak, false);
   assert.ok(replay.steps.every(x => 'outcome' in x && x.outcome.is_future_data_for_scoring === false));
+  assert.notEqual(replay.summary.first_actual_window_50pct_at, null);
+  assert.equal(replay.summary.first_accepted_at, null);
+  assert.equal(replay.summary.premove_50_status, 'NO_CORE_TRIGGER_BEFORE_PLUS_50_PERCENT');
 });
 
 
