@@ -36,6 +36,8 @@ test('Al Muqawim confirms aligned bullish multi-timeframe structure',()=>{
   assert.ok(Number.isFinite(a.entry_timing.freshness));
   assert.equal(a.timeframes['4h'].structure.direction,'UP');
   assert.equal(a.timeframes['1h'].moving_average.direction.startsWith('UP'),true);
+  assert.equal(a.data_status,'LIVE_DATA');
+  assert.ok(a.data_quality>=85);
 });
 
 test('Al Muqawim flags a lower-timeframe conflict',()=>{
@@ -63,6 +65,40 @@ test('Al Muqawim rejects a technically bullish but already-extended entry',()=>{
   assert.equal(a.direction,'UP');
   assert.equal(a.eligible,false);
   assert.ok(a.reasons.some(x=>String(x).includes('ممتدة')));
+});
+
+test('Al Muqawim rejects stale higher-timeframe data rather than labeling it live',()=>{
+  const now=Date.now();
+  const series={
+    '4h':makeSeries(100,4*60*60*1000,0.04,now-24*60*60*1000),
+    '1h':makeSeries(120,60*60*1000,0.04,now),
+    '15m':makeSeries(160,15*60*1000,0.04,now)
+  };
+  const a=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:105.46,priceChange24h:1},now,{maPeriod:50});
+  assert.equal(a.eligible,false);
+  assert.equal(a.stage,'STALE_DATA');
+  assert.equal(a.data_status,'DATA_STALE');
+  assert.equal(a.data_stale,true);
+});
+
+test('Al Muqawim refuses discontinuous 15m candles and distinguishes insufficient candles',()=>{
+  const now=Date.now();
+  const series={
+    '4h':makeSeries(100,4*60*60*1000,0.04,now),
+    '1h':makeSeries(120,60*60*1000,0.04,now),
+    '15m':makeSeries(160,15*60*1000,0.04,now)
+  };
+  series['15m'].splice(135,1);
+  const gap=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:105.46,priceChange24h:1},now,{maPeriod:50});
+  assert.equal(gap.eligible,false);
+  assert.equal(gap.stage,'DATA_GAP');
+  assert.equal(gap.data_status,'DATA_GAP');
+
+  const short={...series,'15m':makeSeries(25,15*60*1000,0.04,now)};
+  const insufficient=buildAlMuqawimAnalysis(short,{symbol:'TESTUSDT',lastPrice:105.46,priceChange24h:1},now,{maPeriod:50});
+  assert.equal(insufficient.eligible,false);
+  assert.equal(insufficient.stage,'INSUFFICIENT_DATA');
+  assert.equal(insufficient.data_status,'DATA_INSUFFICIENT');
 });
 
 test('Al Muqawim preserves its rotation budget when the top three overlap patrol symbols',()=>{
