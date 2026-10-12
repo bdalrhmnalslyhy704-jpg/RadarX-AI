@@ -118,9 +118,12 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
   const btc1h=closedCandles(benchmarks?.BTCUSDT?.one_hour,now);
   const eth1h=closedCandles(benchmarks?.ETHUSDT?.one_hour,now);
 
-  if(m15.length<60||h1.length<30||btc15.length<12||eth15.length<12){
-    return {eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true,
-      counts:{fifteen_min:m15.length,one_hour:h1.length,btc15:btc15.length,eth15:eth15.length}};
+  if(m15.length<60||h1.length<30||btc15.length<12||eth15.length<12||btc1h.length<2||eth1h.length<2){
+    return {
+      eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true,
+      data_quality:0,data_stale:false,reason_codes:['INSUFFICIENT_CLOSED_CANDLES'],
+      counts:{fifteen_min:m15.length,one_hour:h1.length,btc15:btc15.length,eth15:eth15.length,btc1h:btc1h.length,eth1h:eth1h.length}
+    };
   }
   const freshness={
     symbol_15m_age_ms:candleAgeMs(m15,now),
@@ -380,7 +383,7 @@ export function buildRotationAlert(candidate,now=Date.now()){
     real_order_execution:false,
     confidence_score:'UNKNOWN',
     data_quality:finite(a.data_quality,0),liquidity_quality:finite(ticker.quoteVolume24h,0)>=750000?clamp(70+Math.log10(Math.max(1,Number(ticker.quoteVolume24h)/750000))*30):0,
-    data_status:{status:a.data_stale?'DATA_STALE':'LIVE_DATA',stale:Boolean(a.data_stale),data_quality:finite(a.data_quality,0),data_valid:a.data_stale!==true,source:'Binance Public REST'},
+    data_status:{status:a.data_stale?'DATA_STALE':a.stage==='INSUFFICIENT_DATA'?'DATA_INSUFFICIENT':'LIVE_DATA',stale:Boolean(a.data_stale),data_quality:finite(a.data_quality,0),data_valid:a.stage!=='INSUFFICIENT_DATA'&&a.data_stale!==true,source:'Binance Public REST'},
     eligible:a.eligible,
     disclaimer:'رادار Rotation/Lag يبحث عن دوران/لحاق نسبي وتحول سلوكي قبل اتساع الحركة؛ لا يضمن اتجاه الحركة أو استمرارها.'
   };
