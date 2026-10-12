@@ -8,7 +8,7 @@ function candle(openTime,close,opts={}){
 }
 function series(n,base=100,step=60_000,boost=0,endAt=null){
   const out=[];
-  const start=Number.isFinite(Number(endAt))?Number(endAt)-n*step:1_700_000_000_000;
+  const start=endAt!==null&&endAt!==undefined&&Number.isFinite(Number(endAt))?Number(endAt)-n*step:1_700_000_000_000;
   for(let i=0;i<n;i++){
     const c=base+i*.01+(i>n-8?(i-(n-8))*boost:0);
     out.push(candle(start+i*step,c,{step:step-1,volume:i>n-8?2600:900,tradeCount:i>n-8?220:80,takerBuyBaseVolume:i>n-8?1500:430}));
