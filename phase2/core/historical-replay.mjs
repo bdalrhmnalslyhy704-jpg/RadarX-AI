@@ -205,7 +205,7 @@ export function runHistoricalReplay({
     else rejectedCount++;
 
     // Outcome-only fields are calculated separately, after evaluate() has finished.
-    const forwardRows = candles.slice(index + 1).filter(x => x.openTime <= at + horizon);
+    const forwardRows = candles.slice(index + 1).filter(x => x.closeTime <= at + horizon);
     const horizonObserved = candles.length > index + 1 && candles[candles.length - 1].closeTime >= at + horizon;
     const close = candle.close;
     const f50 = outcomeAtPrice(forwardRows, close * 1.5, at + horizon);
