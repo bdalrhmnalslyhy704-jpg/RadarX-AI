@@ -5,6 +5,7 @@ import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
 import {assessQuietBaseActivityShock} from './activity-shock.mjs';
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
+import {isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
 
 function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
@@ -432,12 +433,13 @@ export class FalconEyeRadar {
   async refreshUniverse(){
     const info=await this.rest.request('/api/v3/exchangeInfo');
     const symbols=buildSpotUniverse(info.data,this.config.quote);
-    this.universe=symbols.filter(x=>x.symbol).map(x=>x.symbol);
+    this.universe=symbols.filter(x=>x.symbol&&isDirectionalCandidateSymbol(x.symbol)).map(x=>x.symbol);
     this.universeAt=this.clock();this.cursor=0;
   }
   async tickerRows(){
     const r=await this.rest.request('/api/v3/ticker/24hr');
     const raw=(Array.isArray(r.data)?r.data:[]).map(x=>normalizeRadarTickerRow(x,this.config.quote)).filter(Boolean)
+      .filter(x=>isDirectionalCandidateSymbol(x.symbol))
       .filter(x=>x.quoteVolume24h>=this.config.fastMinQuoteVolume24h&&this.universe.includes(x.symbol));
     const marketMoves=raw.map(x=>x.priceChange24h).filter(hasFiniteValue).map(Number);
     const marketMedianChange24hPct=median(marketMoves);
