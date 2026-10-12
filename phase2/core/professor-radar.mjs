@@ -126,6 +126,30 @@ export function classifyNewsEvent(title='',domain=''){
   return 'GENERAL_CRYPTO_NEWS';
 }
 function newsSentiment(item){return Number.isFinite(item.tone)?clamp(50+item.tone*3):wordScore(item.title,NEWS_BULL,NEWS_BEAR).score;}
+
+export function filterFreshProfessorNews(items,{now=Date.now(),maxFutureSkewMs=5*60*1000,generalMaxAgeMs=2*60*60*1000,listingMaxAgeMs=24*60*60*1000}={}){
+  const fresh=[],rejected=[];
+  for(const item of Array.isArray(items)?items:[]){
+    const raw=item?.published_at;
+    const publishedAt=typeof raw==='string'&&!/^\\d+(?:\\.\\d+)?$/.test(raw.trim())?Date.parse(raw):Number(raw);
+    if(!Number.isFinite(publishedAt)||publishedAt<=0){
+      rejected.push({item,reason:'NEWS_TIMESTAMP_MISSING'});
+      continue;
+    }
+    if(publishedAt>Number(now)+maxFutureSkewMs){
+      rejected.push({item,reason:'NEWS_TIMESTAMP_IN_FUTURE'});
+      continue;
+    }
+    const maxAgeMs=item?.watch_scope==='EXCHANGE_LISTING_WATCH'?listingMaxAgeMs:generalMaxAgeMs;
+    const ageMs=Math.max(0,Number(now)-publishedAt);
+    if(ageMs>maxAgeMs){
+      rejected.push({item,reason:'NEWS_TOO_OLD'});
+      continue;
+    }
+    fresh.push({...item,published_at:publishedAt,news_freshness:{status:'FRESH',age_ms:ageMs,max_age_ms:maxAgeMs}});
+  }
+  return {fresh,rejected};
+}
 function aggregateMentions({streams,news,index}){
   const map=new Map();
   const get=s=>{if(!map.has(s))map.set(s,{symbol:s,baseAsset:s.replace(/USDT$/,''),stream_mentions:0,news_mentions:0,stream_weight:0,stream_signed:0,news_weight:0,news_sum:0,trade_claims:[],news_items:[]});return map.get(s);};
@@ -218,7 +242,12 @@ export class ProfessorRadar{
         found.set(item.url,enriched);
       }
     }
-    return {news:[...found.values()].sort((a,b)=>(Number(b.published_at)||0)-(Number(a.published_at)||0)).slice(0,this.config.newsLimit),errors};
+    const freshness=filterFreshProfessorNews([...found.values()],{now:this.clock()});
+    return {
+      news:freshness.fresh.sort((a,b)=>Number(b.published_at)-Number(a.published_at)).slice(0,this.config.newsLimit),
+      rejected:freshness.rejected,
+      errors
+    };
   }
   async tick(){
     if(!this.running||this.busy)return false;this.busy=true;const now=this.clock();
@@ -236,7 +265,7 @@ export class ProfessorRadar{
       }
       this.latestCandidates=enriched.sort((a,b)=>b.opinion.score-a.opinion.score).slice(0,20);this.lastScanAtMs=now;
       this.lastError=[...streamResult.errors,...newsResult.errors].join(' | ')||null;
-      this.lastResult={radar:'PROFESSOR_RADAR',radar_name:'Radar 6 — البروفيسور',as_of:new Date(now).toISOString(),universe:{eligible_spot_symbols:this.universe.length,mentioned_symbols:mentions.length,deep_scanned:enriched.length},streams:{count:this.latestStreams.length,live_count:this.latestStreams.filter(x=>x.live).length,source_status:streamResult.errors.length?'PARTIAL':'LIVE',items:this.latestStreams},news:{count:this.latestNews.length,source_status:newsResult.errors.length?'PARTIAL':'LIVE',items:this.latestNews},candidates:this.latestCandidates,meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',discovery_scope:'Public YouTube search pages are not exhaustive; news via GDELT realtime coverage.'},errors:this.lastError?this.lastError.split(' | ').slice(0,8):[]};
+      this.lastResult={radar:'PROFESSOR_RADAR',radar_name:'Radar 6 — البروفيسور',as_of:new Date(now).toISOString(),universe:{eligible_spot_symbols:this.universe.length,mentioned_symbols:mentions.length,deep_scanned:enriched.length},streams:{count:this.latestStreams.length,live_count:this.latestStreams.filter(x=>x.live).length,source_status:streamResult.errors.length?'PARTIAL':'LIVE',items:this.latestStreams},news:{count:this.latestNews.length,rejected_count:(newsResult.rejected||[]).length,source_status:newsResult.errors.length?'PARTIAL':'LIVE',freshness_window_hours:{general:2,exchange_listing:24},items:this.latestNews},candidates:this.latestCandidates,meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',discovery_scope:'Public YouTube search pages are not exhaustive; GDELT news is filtered by publication-time freshness.'},errors:this.lastError?this.lastError.split(' | ').slice(0,8):[]};
       return true;
     }catch(e){
       this.lastScanAtMs=now;this.noteError(e,'tick');this.lastResult={...(this.lastResult||{}),radar:'PROFESSOR_RADAR',radar_name:'Radar 6 — البروفيسور',as_of:new Date(now).toISOString(),scan_error:this.lastError,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};return false;
