@@ -25,6 +25,7 @@ const phase2=[
   'phase2/tests/end-to-end.test.mjs',
   'phase2/tests/frontend-contract.test.mjs',
   'phase2/tests/historical-replay.test.mjs',
+  'phase2/tests/historical-replay-matrix.test.mjs',
   'phase2/tests/integration-failures.test.mjs',
   'phase2/tests/ai-agent-hub.test.mjs',
   'phase2/tests/king-intelligence.test.mjs',
