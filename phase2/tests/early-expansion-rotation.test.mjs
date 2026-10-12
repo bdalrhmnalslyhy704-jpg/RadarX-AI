@@ -46,20 +46,20 @@ function candidate(symbol,move,{score=65,participation=75,tradeParticipation=70,
 }
 
 
-test('Radar 8 activates guarded candidate pooling at 55 percent verified cache coverage but never with an unhealthy stream',()=>{
-  const partial={expected_symbols:330,ready_symbols:190,websocket_live:true,
+test('Radar 8 activates guarded candidate pooling at 10 percent verified cache coverage but never with an unhealthy stream',()=>{
+  const partial={expected_symbols:337,ready_symbols:46,websocket_live:true,
     websocket_subscription_complete:true,websocket_sync_ready:true,full_market_coverage_ready:false};
-  assert.equal(isMarketWideCachePoolReady(partial,.55),true,
-    '190/330 ready symbols plus a live complete subscription should enable guarded candidate pooling');
-  assert.equal(isMarketWideCachePoolReady({...partial,ready_symbols:165},.55),false,
-    'coverage below the configured 55 percent floor must stay in bootstrap mode');
-  assert.equal(isMarketWideCachePoolReady({...partial,websocket_live:false},.55),false,
+  assert.equal(isMarketWideCachePoolReady(partial,.10),true,
+    '46/337 ready symbols plus a live complete subscription should enable guarded candidate pooling');
+  assert.equal(isMarketWideCachePoolReady({...partial,ready_symbols:32},.10),false,
+    'coverage below the configured 10 percent floor must stay in bootstrap mode');
+  assert.equal(isMarketWideCachePoolReady({...partial,websocket_live:false},.10),false,
     'a degraded or disconnected WebSocket must never activate cache-ranked selection');
-  assert.equal(isMarketWideCachePoolReady({...partial,websocket_subscription_complete:false},.55),false,
+  assert.equal(isMarketWideCachePoolReady({...partial,websocket_subscription_complete:false},.10),false,
     'all eligible symbols must remain subscribed even when some candle histories are incomplete');
-  assert.equal(isMarketWideCachePoolReady({...partial,websocket_sync_ready:false},.55),false,
+  assert.equal(isMarketWideCachePoolReady({...partial,websocket_sync_ready:false},.10),false,
     'transport synchronization is still required');
-  assert.equal(isMarketWideCachePoolReady({...partial,ready_symbols:330},1.01),true,
+  assert.equal(isMarketWideCachePoolReady({...partial,ready_symbols:337},1.01),true,
     'coverage thresholds are clamped to the valid range');
 });
 
