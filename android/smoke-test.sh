@@ -385,14 +385,40 @@ timeout 10s adb shell cmd connectivity airplane-mode disable >/dev/null 2>&1 || 
 timeout 5s adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false >/dev/null 2>&1 || true
 restart_done=0
 replay_complete=0
-for attempt in $(seq 1 120); do
+for attempt in $(seq 1 420); do
   accepted="$(accepted_log_count)"
   if [[ "${accepted}" -ge 150 && "${restart_done}" -eq 0 ]]; then
-    # Stop only the service, keeping app notifications in Android's tray so restart reconciliation is tested faithfully.
+    # Deliver the service's supported STOP action instead of ActivityManager's
+    # stopservice command, which returns exit 255 for this foreground service on API 29.
+    # Alert notifications remain in the tray; only the background service is stopped.
     sleep 2
     before_ready="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
     old_service_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
-    timeout 15s adb shell am stopservice -n com.radarx.app/.RadarXBackgroundMonitorService
+    if [[ -z "${old_service_pid}" ]]; then
+      echo "::error::Background service was not running at the planned mid-run restart"
+      tail -n 120 "${REPLAY_LOG_FILE}" || true
+      exit 1
+    fi
+    stop_output=""
+    if ! stop_output="$(timeout 15s adb shell am startservice -n com.radarx.app/.RadarXBackgroundMonitorService -a com.radarx.app.action.STOP_BACKGROUND_MONITOR 2>&1)"; then
+      echo "Service STOP action command returned non-zero; verifying actual Android service state"
+      printf '%s\n' "${stop_output}"
+    fi
+    service_stopped=0
+    for stop_attempt in $(seq 1 25); do
+      live_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
+      if [[ -z "${live_pid}" ]]; then
+        service_stopped=1
+        break
+      fi
+      sleep 1
+    done
+    if [[ "${service_stopped}" -ne 1 ]]; then
+      echo "::error::Service STOP action did not terminate the background process"
+      echo "old_pid=${old_service_pid} live_pid=${live_pid:-NONE}"
+      tail -n 120 "${REPLAY_LOG_FILE}" || true
+      exit 1
+    fi
     sleep 2
     launch_replay_test_app
     restarted_ready=0
