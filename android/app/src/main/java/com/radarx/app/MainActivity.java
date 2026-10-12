@@ -52,7 +52,6 @@ public final class MainActivity extends Activity {
     private static final String PREF_REPLAY_TEST_FEED_URL = "radarx_test_alert_feed_url";
     private static final String PREF_REPLAY_TEST_SCAN_MS = "radarx_test_scan_interval_ms";
     private boolean pendingBackgroundStart;
-    private boolean suppressAutoStartForSmokeStop;
 
     private WebView webView;
     private WebViewAssetLoader assetLoader;
@@ -135,9 +134,7 @@ public final class MainActivity extends Activity {
 
         setContentView(webView);
         webView.loadUrl(APP_URL);
-        webView.postDelayed(() -> {
-            if (!suppressAutoStartForSmokeStop) ensureContinuousMonitoring();
-        }, 1400);
+        webView.postDelayed(this::ensureContinuousMonitoring, 1400);
     }
 
     @Override
@@ -152,24 +149,18 @@ public final class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        boolean stopForReplay = intent != null
-                && intent.getBooleanExtra("radarx_test_stop_background_service", false);
-        // Android can deliver a repeated explicit launch to the existing top Activity
-        // instead of creating a new instance. Debug replay controls must be handled in
-        // both paths so the CI restart test actually issues the requested service STOP.
-        if (!stopForReplay) {
-            // Do not let a stop-test flag leak into the subsequent relaunch: Android may
-            // reuse this Activity, and the normal replay relaunch must restore monitoring.
-            suppressAutoStartForSmokeStop = false;
+        boolean debugBuild = (getApplicationInfo().flags
+                & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+        String replayFeed = intent == null ? null
+                : intent.getStringExtra("radarx_test_alert_feed_url");
+        if (debugBuild) {
+            Log.i("RadarXSmoke", "REPLAY_TEST_ACTIVITY_INTENT_RECEIVED feedPresent="
+                    + (replayFeed != null && !replayFeed.isEmpty()));
         }
         configureDebugReplayTest(intent);
-        if (!stopForReplay && (getApplicationInfo().flags
-                & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
-            String replayFeed = intent == null ? null
-                    : intent.getStringExtra("radarx_test_alert_feed_url");
-            if (replayFeed != null && !replayFeed.isEmpty()) {
-                webView.post(this::ensureContinuousMonitoring);
-            }
+        if (debugBuild && replayFeed != null && !replayFeed.isEmpty()) {
+            // Reusing an existing Activity does not re-run onCreate auto-start.
+            webView.post(this::ensureContinuousMonitoring);
         }
     }
 
@@ -324,20 +315,6 @@ public final class MainActivity extends Activity {
         if (saved) Log.i("RadarXSmoke", "REPLAY_TEST_OVERRIDE_CONFIGURED");
         else Log.e("RadarXSmoke", "REPLAY_TEST_OVERRIDE_PERSIST_FAILED");
 
-        // Debug-emulator-only control for deterministic background-service restart tests.
-        // This exercises the service's non-exported STOP action from inside the app UID;
-        // adb shell cannot directly start this non-exported service on Android 10.
-        if (launchIntent.getBooleanExtra("radarx_test_stop_background_service", false)) {
-            suppressAutoStartForSmokeStop = true;
-            Intent stopIntent = new Intent(this, RadarXBackgroundMonitorService.class);
-            stopIntent.setAction(RadarXBackgroundMonitorService.ACTION_STOP);
-            try {
-                startService(stopIntent);
-                Log.i("RadarXBackground", "REPLAY_TEST_STOP_BACKGROUND_REQUEST");
-            } catch (Exception error) {
-                Log.e("RadarXBackground", "REPLAY_TEST_STOP_BACKGROUND_REQUEST_FAILED", error);
-            }
-        }
     }
 
     private void startBackgroundMonitor() {

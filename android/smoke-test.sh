@@ -325,11 +325,10 @@ launch_replay_test_app() {
     --el radarx_test_scan_interval_ms 1000
 }
 request_background_service_stop_for_replay() {
-  # MainActivity invokes the non-exported service STOP action under the app UID.
-  timeout 25s adb shell am start -n com.radarx.app/.MainActivity \
-    --es radarx_test_alert_feed_url "${REPLAY_TEST_FEED_URL}" \
-    --el radarx_test_scan_interval_ms 1000 \
-    --ez radarx_test_stop_background_service true
+  # Receiver is declared only in src/debug and calls the non-exported service under the app UID.
+  timeout 15s adb shell am broadcast \
+    -a com.radarx.app.action.DEBUG_REPLAY_STOP_BACKGROUND \
+    -p com.radarx.app
 }
 
 PHASE="clear emulator app data and establish an empty-feed cursor"
@@ -423,15 +422,18 @@ for attempt in $(seq 1 420); do
       # Service process residency is not a stop signal: Android may retain an empty
       # app process. Require the service's persisted running flag to be false and
       # the foreground-service heartbeat to be removed.
-      if printf '%s\n' "${stop_prefs}" | grep -Eq '<boolean name="running" value="false" ?/>' &&
-         ! printf '%s\n' "${stop_prefs}" | grep -Fq 'name="monitor_heartbeat_at_ms"'; then
+      stop_logs="$(replay_logs)"
+      if printf '%s\\n' "${stop_logs}" | grep -Fq 'REPLAY_TEST_STOP_BROADCAST_RECEIVED' &&
+         printf '%s\\n' "${stop_logs}" | grep -Fq 'BACKGROUND_STOP_ACTION_RECEIVED' &&
+         printf '%s\\n' "${stop_prefs}" | grep -Eq '<boolean name="running" value="false" ?/>' &&
+         ! printf '%s\\n' "${stop_prefs}" | grep -Fq 'name="monitor_heartbeat_at_ms"' then
         service_stopped=1
         break
       fi
       sleep 1
     done
     if [[ "${service_stopped}" -ne 1 ]]; then
-      echo "::error::Service STOP action did not clear the persisted running state"
+      echo "::error::Service STOP action did not clear persisted state or receiver/service markers"
       printf '%s\n' "${stop_prefs}" | grep -E 'name="running"|monitor_heartbeat_at_ms' || true
       timeout 8s adb shell dumpsys activity services com.radarx.app 2>&1 | grep -Ei 'RadarXBackgroundMonitorService|ServiceRecord|isForeground|startRequested' | tail -n 100 || true
       tail -n 120 "${REPLAY_LOG_FILE}" || true
