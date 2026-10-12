@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildMoveAlert,buildEarlyWakeAlert,buildPreExplosionAlert,rankPreExplosionTickerRows,EarlyMoveSentinel} from '../core/early-move-sentinel.mjs';
+import {buildMoveAlert,buildEarlyWakeAlert,buildPreExplosionAlert,rankPreExplosionTickerRows,resolveAlertConfirmationCount,EarlyMoveSentinel} from '../core/early-move-sentinel.mjs';
 import {buildFastImpulseContext} from '../market/universe-scanner.mjs';
 
 const candidate={
@@ -44,6 +44,17 @@ assert.equal(alert.paper_trading,true);
 assert.equal(alert.real_order_execution,false);
 assert.equal(alert.confidence_score,'UNKNOWN');
 assert.ok(alert.reasons.length>0);
+assert.ok(resolveAlertConfirmationCount(alert)>=7,
+  'qualified ordinary move alert must pass measured independent evidence into the final gate');
+assert.equal(resolveAlertConfirmationCount({
+  pre_explosion:{confirmation_count:8},early_wake:{leader_count:11}
+}),8,'pre-explosion confirmations take precedence when the pre-explosion schema is present');
+assert.equal(resolveAlertConfirmationCount({
+  early_wake:{leader_count:9}
+}),9,'early-wake leader count must be read from its nested schema');
+assert.equal(resolveAlertConfirmationCount({opportunity_score:50,components:{}}),0,
+  'missing evidence must not be fabricated as confirmations');
+
 
 const sentinel=new EarlyMoveSentinel({
   rest:{},
