@@ -315,6 +315,13 @@ launch_replay_test_app() {
     --es radarx_test_alert_feed_url "${REPLAY_TEST_FEED_URL}" \
     --el radarx_test_scan_interval_ms 1000
 }
+request_background_service_stop_for_replay() {
+  # MainActivity invokes the non-exported service STOP action under the app UID.
+  timeout 25s adb shell am start -n com.radarx.app/.MainActivity \
+    --es radarx_test_alert_feed_url "${REPLAY_TEST_FEED_URL}" \
+    --el radarx_test_scan_interval_ms 1000 \
+    --ez radarx_test_stop_background_service true
+}
 
 PHASE="clear emulator app data and establish an empty-feed cursor"
 timeout 10s adb shell svc wifi enable >/dev/null 2>&1 || true
@@ -399,26 +406,29 @@ for attempt in $(seq 1 420); do
       tail -n 120 "${REPLAY_LOG_FILE}" || true
       exit 1
     fi
-    stop_output=""
-    if ! stop_output="$(timeout 15s adb shell am startservice -n com.radarx.app/.RadarXBackgroundMonitorService -a com.radarx.app.action.STOP_BACKGROUND_MONITOR 2>&1)"; then
-      echo "Service STOP action command returned non-zero; verifying actual Android service state"
-      printf '%s\n' "${stop_output}"
-    fi
+    request_background_service_stop_for_replay
     service_stopped=0
+    stop_prefs=""
     for stop_attempt in $(seq 1 25); do
-      live_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
-      if [[ -z "${live_pid}" ]]; then
+      stop_prefs="$(timeout 5s adb shell run-as com.radarx.app cat shared_prefs/radarx_background.xml 2>/dev/null || true)"
+      # Service process residency is not a stop signal: Android may retain an empty
+      # app process. Require the service's persisted running flag to be false and
+      # the foreground-service heartbeat to be removed.
+      if printf '%s\n' "${stop_prefs}" | grep -Eq '<boolean name="running" value="false" ?/>' &&
+         ! printf '%s\n' "${stop_prefs}" | grep -Fq 'name="monitor_heartbeat_at_ms"'; then
         service_stopped=1
         break
       fi
       sleep 1
     done
     if [[ "${service_stopped}" -ne 1 ]]; then
-      echo "::error::Service STOP action did not terminate the background process"
-      echo "old_pid=${old_service_pid} live_pid=${live_pid:-NONE}"
+      echo "::error::Service STOP action did not clear the persisted running state"
+      printf '%s\n' "${stop_prefs}" | grep -E 'name="running"|monitor_heartbeat_at_ms' || true
+      timeout 8s adb shell dumpsys activity services com.radarx.app 2>&1 | grep -Ei 'RadarXBackgroundMonitorService|ServiceRecord|isForeground|startRequested' | tail -n 100 || true
       tail -n 120 "${REPLAY_LOG_FILE}" || true
       exit 1
     fi
+    echo "REPLAY_TEST_STOP_CONFIRMED: running=false heartbeat=absent"
     sleep 2
     launch_replay_test_app
     restarted_ready=0
@@ -426,7 +436,10 @@ for attempt in $(seq 1 420); do
       new_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
       ready_count="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
       logs="$(replay_logs)"
+      restart_prefs="$(timeout 5s adb shell run-as com.radarx.app cat shared_prefs/radarx_background.xml 2>/dev/null || true)"
       if [[ -n "${new_pid}" && "${ready_count}" -gt "${before_ready}" ]] &&
+         printf '%s\n' "${restart_prefs}" | grep -Eq '<boolean name="running" value="true" ?/>' &&
+         printf '%s\n' "${restart_prefs}" | grep -Fq 'name="monitor_heartbeat_at_ms"' &&
          printf '%s\n' "${logs}" | grep -Fq 'REPLAY_TEST_OVERRIDE_CONFIGURED'; then
         restarted_ready=1
         break
