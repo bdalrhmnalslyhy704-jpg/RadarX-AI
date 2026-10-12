@@ -640,15 +640,50 @@ export class FalconEyeRadar {
     this.latestCandidates=[alert,...this.latestCandidates.filter(x=>x.symbol!==alert.symbol)].sort((a,b)=>
       Number(b.opportunity_score||0)-Number(a.opportunity_score||0)
     ).slice(0,20);
-    if(!alert.eligible||alert.opportunity_score<this.config.minScore||!gate.eligible)return alert;
+    const logDecision=(decision,reasons=[])=>{
+      this.logger.info?.('[FALCON_EYE_DECISION] '+JSON.stringify({
+        radar:'FALCON_EYE_RADAR',symbol:row.symbol,decision,detected_at:now,
+        price:alert.price,score:alert.opportunity_score,min_score:Number(this.config.minScore)||78,
+        analysis_eligible:Boolean(alert.eligible),analysis_stage:alert.pre_expansion_stage||alert.potential_label||alert.falcon_eye?.stage||null,
+        not_chasing:alert.falcon_eye?.not_chasing??null,
+        confirmation_count:alert.falcon_eye?.confirmation_count??alert.confirmation_count??0,
+        gate_eligible:Boolean(gate.eligible),gate_mode:gate.mode||null,
+        gate_score:gate.score??null,gate_failures:Array.isArray(gate.failures)?gate.failures:[],
+        falcon_quality:gate.falcon_eye?.quality??null,
+        falcon_capture:gate.falcon_eye?.capture??null,
+        independent_domains:gate.falcon_eye?.independent_domains??null,
+        component_scores:alert.falcon_eye?.component_scores||{},
+        reasons:[...new Set(reasons)]
+      }));
+    };
+    const rejectionReasons=[];
+    if(!alert.eligible)rejectionReasons.push('FALCON_ANALYSIS_NOT_ELIGIBLE');
+    if(Number(alert.opportunity_score)<Number(this.config.minScore))rejectionReasons.push('BELOW_CONFIGURED_MIN_SCORE');
+    if(!gate.eligible)rejectionReasons.push(...(Array.isArray(gate.failures)?gate.failures:['NOTIFICATION_GATE_REJECTED']));
+    if(rejectionReasons.length){
+      logDecision('WATCH_ONLY',rejectionReasons);
+      return alert;
+    }
     const lastAlert=this.lastAlertAt.get(row.symbol)||0;
-    if(now-lastAlert<this.config.alertCooldownMs)return alert;
+    if(now-lastAlert<this.config.alertCooldownMs){
+      logDecision('SUPPRESSED_SYMBOL_COOLDOWN',['SYMBOL_ALERT_COOLDOWN']);
+      return alert;
+    }
     this.alertTimestamps=this.alertTimestamps.filter(t=>now-t<60*60*1000);
-    if(this.alertTimestamps.length>=this.config.maxAlertsPerHour)return alert;
+    if(this.alertTimestamps.length>=this.config.maxAlertsPerHour){
+      logDecision('SUPPRESSED_HOURLY_BUDGET',['MAX_ALERTS_PER_HOUR_REACHED']);
+      return alert;
+    }
     const decorated=decorateRadarAlert(alert,'Radar 9 — عين الصقر');
     await this.store.appendFalconEyeAlert(decorated);
+    this.logger.info?.('[FALCON_EYE_ALERT_PERSISTED] '+JSON.stringify({
+      radar:'FALCON_EYE_RADAR',symbol:row.symbol,alert_id:decorated.id,price:decorated.price,
+      detected_at:decorated.detected_at??now,score:decorated.opportunity_score,
+      gate_mode:gate.mode||null,paper_trading:true,real_order_execution:false
+    }));
     if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
     this.lastAlertAt.set(row.symbol,now);this.alertTimestamps.push(now);this.alertCount++;
+    logDecision('ALERT_PERSISTED_AND_PUSH_ATTEMPTED',[]);
     return decorated;
   }
   async tick(){
