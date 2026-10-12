@@ -77,8 +77,9 @@ export function observedRequestWeight(headers) {
   return best;
 }
 
-export function createRestRequestBudget(){
-  return {usedAt:[],rateLimitedUntil:0,observedWeight:null,observedWeightAt:null,reservationQueue:Promise.resolve(),reservationQueueDepth:0};
+export function createRestRequestBudget({maxConcurrentRequests=16}={}){
+  const cap=Math.max(1,Math.min(64,Math.trunc(Number(maxConcurrentRequests)||16)));
+  return {usedAt:[],rateLimitedUntil:0,observedWeight:null,observedWeightAt:null,reservationQueue:Promise.resolve(),reservationQueueDepth:0,maxConcurrentRequests:cap,activeRequests:0,maxObservedActiveRequests:0,requestSlotWaiters:[]};
 }
 
 export class RestClient {
@@ -92,7 +93,8 @@ export class RestClient {
     safetyMarginWeight=100,
     clock=()=>Date.now(),
     sleepFn=sleep,
-    budget=null
+    budget=null,
+    maxConcurrentRequests=1
   }) {
     this.baseUrls=[...baseUrls];
     this.fetchImpl=fetchImpl;
@@ -104,6 +106,9 @@ export class RestClient {
     this.clock=clock;
     this.sleepFn=sleepFn;
     this.budget=budget??createRestRequestBudget();
+    this.maxConcurrentRequests=Math.max(1,Math.min(64,Math.trunc(Number(maxConcurrentRequests)||1)));
+    this.activeRequests=0;
+    this.pendingTasks=[];
     if(!this.budget||!Array.isArray(this.budget.usedAt)||!(this.budget.reservationQueue instanceof Promise))throw new Error('INVALID_REST_REQUEST_BUDGET');
     this.usedAt=this.budget.usedAt;
     this.lastRequestAt=0;
@@ -139,6 +144,11 @@ export class RestClient {
     current_base_url:this.baseUrls[this.currentBaseIndex]??null,
     queue_depth:this.queueDepth,
     shared_budget_waiters:this.budget.reservationQueueDepth,
+    active_request_count:this.activeRequests,
+    max_concurrent_requests:this.maxConcurrentRequests,
+    shared_active_requests:this.budget.activeRequests,
+    shared_max_concurrent_requests:this.budget.maxConcurrentRequests,
+    shared_request_slot_waiters:this.budget.requestSlotWaiters.length,
     queue_wait_ms_last:this.lastQueueWaitMs,
     queue_wait_ms_p95:this.queueWaitSamples.length ? [...this.queueWaitSamples].sort((a,b)=>a-b)[Math.ceil(this.queueWaitSamples.length*0.95)-1] : null,
     queue_wait_ms_max:this.queueWaitSamples.length ? this.maxQueueWaitMs : null,
@@ -204,17 +214,46 @@ export class RestClient {
   async enqueue(task) {
     this.queueDepth++;
     const queuedAt=this.clock();
-    let release;
-    const previous=this.queue;
-    this.queue=new Promise(resolve=>{release=resolve;});
-    await previous;
-    const waited=Math.max(0,this.clock()-queuedAt);
-    this.lastQueueWaitMs=waited;
-    this.maxQueueWaitMs=Math.max(this.maxQueueWaitMs,waited);
-    this.queueWaitSamples.push(waited);
-    if(this.queueWaitSamples.length>256)this.queueWaitSamples.shift();
-    try{return await task();}
-    finally{this.queueDepth=Math.max(0,this.queueDepth-1);release();}
+    return new Promise((resolve,reject)=>{
+      this.pendingTasks.push({task,resolve,reject,queuedAt});
+      this._drainQueue();
+    });
+  }
+
+  _drainQueue(){
+    while(this.activeRequests<this.maxConcurrentRequests&&this.pendingTasks.length){
+      const item=this.pendingTasks.shift();
+      this.activeRequests++;
+      const waited=Math.max(0,this.clock()-item.queuedAt);
+      this.lastQueueWaitMs=waited;this.maxQueueWaitMs=Math.max(this.maxQueueWaitMs,waited);
+      this.queueWaitSamples.push(waited);if(this.queueWaitSamples.length>256)this.queueWaitSamples.shift();
+      Promise.resolve().then(item.task).then(item.resolve,item.reject).finally(()=>{
+        this.activeRequests=Math.max(0,this.activeRequests-1);
+        this.queueDepth=Math.max(0,this.queueDepth-1);
+        this._drainQueue();
+      });
+    }
+  }
+
+  _makeSlotRelease(){
+    let released=false;const budget=this.budget;
+    return ()=>{
+      if(released)return;released=true;
+      const next=budget.requestSlotWaiters.shift();
+      if(next)next(this._makeSlotRelease());
+      else budget.activeRequests=Math.max(0,budget.activeRequests-1);
+    };
+  }
+
+  async acquireRequestSlot(){
+    const budget=this.budget;
+    if(budget.activeRequests<budget.maxConcurrentRequests){
+      budget.activeRequests++;
+      budget.maxObservedActiveRequests=Math.max(budget.maxObservedActiveRequests,budget.activeRequests);
+      return this._makeSlotRelease();
+    }
+    const release=await new Promise(resolve=>budget.requestSlotWaiters.push(resolve));
+    return release;
   }
 
   async _request(path,query={}) {
@@ -225,6 +264,7 @@ export class RestClient {
     let error=null;
     for(let attempt=0;attempt<this.baseUrls.length;attempt++){
       await this.waitBudget(weight);
+      const releaseSlot=await this.acquireRequestSlot();
       const idx=(this.currentBaseIndex+attempt)%this.baseUrls.length;
       const url=this.baseUrls[idx]+path+(qs.toString()?'?'+qs:'');
       const ac=new AbortController();
@@ -256,7 +296,7 @@ export class RestClient {
         error=e;
         this.lastError=String(e?.message??e);
         if(e?.name==='RestRateLimitError')break;
-      }finally{clearTimeout(tm);}
+      }finally{clearTimeout(tm);releaseSlot();}
     }
     if(error?.name==='RestRateLimitError')throw error;
     this.state='ERROR';
