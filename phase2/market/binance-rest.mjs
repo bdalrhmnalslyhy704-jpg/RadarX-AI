@@ -77,6 +77,10 @@ export function observedRequestWeight(headers) {
   return best;
 }
 
+export function createRestRequestBudget(){
+  return {usedAt:[],rateLimitedUntil:0,observedWeight:null,observedWeightAt:null,reservationQueue:Promise.resolve(),reservationQueueDepth:0};
+}
+
 export class RestClient {
   constructor({
     baseUrls,
@@ -87,7 +91,8 @@ export class RestClient {
     maxWeightPerMinute=SPOT_REQUEST_WEIGHT_LIMIT_PER_MINUTE,
     safetyMarginWeight=100,
     clock=()=>Date.now(),
-    sleepFn=sleep
+    sleepFn=sleep,
+    budget=null
   }) {
     this.baseUrls=[...baseUrls];
     this.fetchImpl=fetchImpl;
@@ -98,14 +103,13 @@ export class RestClient {
     this.safetyMarginWeight=Math.max(0,Math.trunc(Number(safetyMarginWeight)||0));
     this.clock=clock;
     this.sleepFn=sleepFn;
-    this.usedAt=[];
+    this.budget=budget??createRestRequestBudget();
+    if(!this.budget||!Array.isArray(this.budget.usedAt)||!(this.budget.reservationQueue instanceof Promise))throw new Error('INVALID_REST_REQUEST_BUDGET');
+    this.usedAt=this.budget.usedAt;
     this.lastRequestAt=0;
     this.currentBaseIndex=0;
     this.lastSuccessAt=null;
     this.lastError=null;
-    this.rateLimitedUntil=0;
-    this.observedWeight=null;
-    this.observedWeightAt=null;
     this.state='INIT';
     this.queue=Promise.resolve();
     this.queueDepth=0;
@@ -115,6 +119,13 @@ export class RestClient {
     this.inflightRequests=new Map();
     this.coalescedRequestCount=0;
   }
+
+  get rateLimitedUntil(){return this.budget.rateLimitedUntil;}
+  set rateLimitedUntil(value){this.budget.rateLimitedUntil=Math.max(0,Number(value)||0);}
+  get observedWeight(){return this.budget.observedWeight;}
+  set observedWeight(value){this.budget.observedWeight=value==null?null:Number(value);}
+  get observedWeightAt(){return this.budget.observedWeightAt;}
+  set observedWeightAt(value){this.budget.observedWeightAt=value==null?null:Number(value);}
 
   get budgetLimit() {
     return Math.max(1,this.maxWeightPerMinute-this.safetyMarginWeight);
@@ -127,6 +138,7 @@ export class RestClient {
     rate_limited_until:this.rateLimitedUntil||null,
     current_base_url:this.baseUrls[this.currentBaseIndex]??null,
     queue_depth:this.queueDepth,
+    shared_budget_waiters:this.budget.reservationQueueDepth,
     queue_wait_ms_last:this.lastQueueWaitMs,
     queue_wait_ms_p95:this.queueWaitSamples.length ? [...this.queueWaitSamples].sort((a,b)=>a-b)[Math.ceil(this.queueWaitSamples.length*0.95)-1] : null,
     queue_wait_ms_max:this.queueWaitSamples.length ? this.maxQueueWaitMs : null,
@@ -142,36 +154,51 @@ export class RestClient {
   };}
 
   localWeightUsed(now=this.clock()){
-    const cutoff=now-60000;
-    this.usedAt=this.usedAt.filter(x=>x.at>cutoff);
+    const cutoff=now-60000;let write=0;
+    for(const item of this.usedAt)if(item.at>cutoff)this.usedAt[write++]=item;
+    this.usedAt.length=write;
     return this.usedAt.reduce((s,x)=>s+x.weight,0);
   }
 
   async waitBudget(weight) {
     const w=Math.max(1,Math.trunc(Number(weight)||1));
-    while(true){
-      const now=this.clock();
-      if(this.rateLimitedUntil>now){
-        await this.sleepFn(this.rateLimitedUntil-now);
-        continue;
+    this.budget.reservationQueueDepth++;
+    try{
+      while(true){
+        let release;
+        const previous=this.budget.reservationQueue;
+        this.budget.reservationQueue=new Promise(resolve=>{release=resolve;});
+        await previous;
+        let reserved=false,waitMs=0;
+        try{
+          const now=this.clock();
+          if(this.rateLimitedUntil>now)waitMs=this.rateLimitedUntil-now;
+          else{
+            const local=this.localWeightUsed(now);
+            const observed=this.observedWeight;
+            const observedFresh=observed!=null&&this.observedWeightAt!=null&&(now-this.observedWeightAt<60000);
+            if(local+w<=this.budgetLimit&&(!observedFresh||observed+w<=this.budgetLimit)){
+              const gap=this.clock()-this.lastRequestAt;
+              if(gap<this.minIntervalMs)waitMs=this.minIntervalMs-gap;
+              else{
+                // Reserve weight atomically across all clients using this budget, before
+                // the network await begins; independent clients can still fetch in parallel.
+                const reservedAt=this.clock();
+                this.usedAt.push({at:reservedAt,weight:w});
+                this.lastRequestAt=reservedAt;
+                reserved=true;
+              }
+            }else{
+              const oldest=this.usedAt[0]?.at;
+              waitMs=oldest!=null?Math.max(100,oldest+60000-now):1000;
+              if(observedFresh&&observed+w>this.budgetLimit)waitMs=Math.max(waitMs,60000-(now%60000)+250);
+            }
+          }
+        }finally{release();}
+        if(reserved)return;
+        await this.sleepFn(Math.max(1,waitMs||100));
       }
-      const local=this.localWeightUsed(now);
-      if(local+w<=this.budgetLimit){
-        const observed=this.observedWeight;
-        const observedFresh=observed!=null&&this.observedWeightAt!=null&&(now-this.observedWeightAt<60000);
-        if(!observedFresh||observed+w<=this.budgetLimit)break;
-      }
-      const oldest=this.usedAt[0]?.at;
-      const localWait=oldest!=null?Math.max(100,oldest+60000-now):1000;
-      let wait=localWait;
-      const observed=this.observedWeight;
-      if(observed!=null&&this.observedWeightAt!=null&&(now-this.observedWeightAt<60000)&&observed+w>this.budgetLimit){
-        wait=Math.max(wait,60000-(now%60000)+250);
-      }
-      await this.sleepFn(wait);
-    }
-    const gap=this.clock()-this.lastRequestAt;
-    if(gap<this.minIntervalMs)await this.sleepFn(this.minIntervalMs-gap);
+    }finally{this.budget.reservationQueueDepth=Math.max(0,this.budget.reservationQueueDepth-1);}
   }
 
   async enqueue(task) {
@@ -202,8 +229,7 @@ export class RestClient {
       const url=this.baseUrls[idx]+path+(qs.toString()?'?'+qs:'');
       const ac=new AbortController();
       const tm=setTimeout(()=>ac.abort(),this.timeoutMs);
-      this.lastRequestAt=this.clock();
-      this.usedAt.push({at:this.lastRequestAt,weight});
+      // Request weight was reserved by waitBudget before this network call.
       this.state='REQUESTING';
       try{
         const r=await this.fetchImpl(url,{method:'GET',signal:ac.signal,headers:{Accept:'application/json'}});
