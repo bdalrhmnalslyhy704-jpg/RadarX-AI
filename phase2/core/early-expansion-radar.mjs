@@ -1265,7 +1265,7 @@ export class EarlyExpansionRadar{
       b._rotationAge-a._rotationAge||a._rotation-b._rotation||a.symbol.localeCompare(b.symbol));
     const byExceptional=all.filter(x=>x._exceptional).sort((a,b)=>b._microPreScore-a._microPreScore||b._rotationAge-a._rotationAge||a.symbol.localeCompare(b.symbol));
     const selected=[],seen=new Set();
-    const exceptionSlots=Math.min(Math.max(0,core-1),Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2)));
+    const exceptionSlots=Math.min(core,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2)));
     takeUniqueLane(selected,seen,byExceptional,exceptionSlots,'exceptional');
     takeUniqueLane(selected,seen,byScore,Math.max(0,core-selected.length),'score');
     takeUniqueLane(selected,seen,byQuiet,q,'quiet');
