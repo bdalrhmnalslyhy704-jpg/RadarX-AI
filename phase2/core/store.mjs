@@ -32,7 +32,12 @@ class StreamingJsonValueReader{
   async peek(){return await this.fill()?this.buffer[this.index]:null;}
   async take(){const value=await this.peek();if(value!==null)this.index++;return value;}
   async skipWhitespace(){
-    while(await this.fill()&&/\s/.test(this.buffer[this.index]))this.index++;
+    while(await this.fill()){
+      let index=this.index;
+      while(index<this.buffer.length&&/\s/.test(this.buffer[index]))index++;
+      this.index=index;
+      if(index<this.buffer.length)return;
+    }
   }
   async consume(expected){
     await this.skipWhitespace();
