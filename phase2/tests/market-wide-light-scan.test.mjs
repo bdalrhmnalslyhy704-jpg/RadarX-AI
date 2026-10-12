@@ -89,6 +89,23 @@ test('market-wide light scan covers all eligible symbols once and keeps candidat
   assert.equal(fullyWarmed.coverageReady,true,'only complete fresh-candle coverage can activate ranking');
 });
 
+test('market-wide light scan preserves a broad burst lane instead of dropping candidates at a four-symbol cap', () => {
+  const now = 1_900_000_000_000;
+  const eligible = Array.from({length:80},(_,i)=>row(i));
+  const burstSymbols = eligible.slice(60,68).map(item=>item.symbol);
+  const light = new MarketWideLightScan({config:{candidateLimit:48,rotationReserve:12},clock:()=>now});
+  const result = light.scan({
+    eligible,now,cycle:10,getSeries:()=>null,
+    isExceptional:item=>burstSymbols.includes(item.symbol),
+    lastMicroScannedAt:()=>null
+  });
+  assert.equal(result.candidateRows.length,48);
+  assert.ok(burstSymbols.every(symbol=>result.candidateSymbols.includes(symbol)),
+    'all eight confirmed high-priority symbols must survive the market-wide prefilter');
+  assert.equal(result.summary.exceptional_preserved_total,8);
+  assert.equal(result.summary.binance_rest_calls_added_by_light_scan,0);
+});
+
 test('future candles are excluded and the returned evaluation never uses a close after as-of', () => {
   const now = 1_900_000_000_000;
   const input = candles({now,count:72});
