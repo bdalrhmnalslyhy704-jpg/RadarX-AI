@@ -193,15 +193,15 @@ export function classifyStreamClaim(text){return streamClaim(text);}
 export function calculateProfessorOpinion(input){return buildOpinion(input.candidate||input,input.deep||null,input.now||Date.now(),input.entryThreshold??75,input.watchThreshold??66);}
 
 export class ProfessorRadar{
-  constructor({rest,store,pushManager=null,deepAnalyzer=null,config={},clock=()=>Date.now(),logger=console,fetchImpl=globalThis.fetch}={}){
+  constructor({rest,marketData=null,store,pushManager=null,deepAnalyzer=null,config={},clock=()=>Date.now(),logger=console,fetchImpl=globalThis.fetch}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');if(!store)throw new Error('STORE_REQUIRED');
-    this.rest=rest;this.store=store;this.pushManager=pushManager;this.deepAnalyzer=deepAnalyzer;this.config={...PROFESSOR_RADAR_DEFAULTS,...config};this.clock=clock;this.logger=logger;this.fetchImpl=fetchImpl;
+    this.rest=rest;this.marketData=marketData;this.store=store;this.pushManager=pushManager;this.deepAnalyzer=deepAnalyzer;this.config={...PROFESSOR_RADAR_DEFAULTS,...config};this.clock=clock;this.logger=logger;this.fetchImpl=fetchImpl;
     this.running=false;this.busy=false;this.timer=null;this.universe=[];this.universeAt=0;this.lastScanAtMs=null;this.lastError=null;this.alertCount=0;this.scans=0;this.latestCandidates=[];this.latestStreams=[];this.latestNews=[];this.lastResult=null;this.lastAlertAt=new Map();
   }
   start(){if(this.running)return;this.running=true;this.lastError=null;this.refreshUniverse().then(()=>this.tick()).catch(e=>this.noteError(e,'bootstrap'));this.timer=setInterval(()=>this.tick().catch(e=>this.noteError(e,'tick')),this.config.pollMs);}
   async stop(){this.running=false;if(this.timer)clearInterval(this.timer);this.timer=null;}
   noteError(e,where='scan'){this.lastError=String(e?.message??e);this.logger.warn?.('PROFESSOR_RADAR_'+where,this.lastError);}
-  async refreshUniverse(){const r=await this.rest.request('/api/v3/exchangeInfo');this.universe=buildSpotUniverse(r.data,this.config.quote);this.universeAt=this.clock();}
+  async refreshUniverse(){const r=this.marketData?await this.marketData.exchangeInfo():await this.rest.request('/api/v3/exchangeInfo');this.universe=buildSpotUniverse(r.data,this.config.quote);this.universeAt=this.clock();}
   async discoverStreams(){
     const found=new Map();const errors=[];
     for(const query of this.config.searchQueries){
