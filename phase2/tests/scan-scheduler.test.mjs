@@ -95,7 +95,7 @@ test('Radar 8 micro rotation gives the longest-waiting symbol a slot and de-dupl
   assert.ok(oldest._rotationAgeMs>recent._rotationAgeMs);
 });
 
-test('Radar 9 routes exceptional movement quickly, preserves a quiet-base slot and gives the oldest wait a rotation slot',()=>{
+test('Whale accumulation routes exceptional movement quickly, preserves a quiet-base slot and gives the oldest wait a rotation slot',()=>{
   const radar=new WhaleAccumulationRadar({
     rest:{},store:{readScanSchedulerEvents:async()=>[],appendScanSchedulerEvents:async()=>{}},
     clock:()=>NOW,logger:silent,
@@ -129,7 +129,7 @@ test('Radar 9 routes exceptional movement quickly, preserves a quiet-base slot a
   assert.equal(radar.lastSelectionDistribution.quiet,1);
 });
 
-test('Radar 9 records no-signal and incomplete rows without counting them as failed scans',async()=>{
+test('Whale accumulation records no-signal and incomplete rows without counting them as failed scans',async()=>{
   let now=NOW;
   const archived=[];
   const store={
@@ -173,14 +173,14 @@ test('Radar 9 records no-signal and incomplete rows without counting them as fai
   await radar.tick();
   assert.equal(new Set(scanned).size,scanned.length,'a symbol is scanned at most once in a cycle');
   assert.equal(scanned.length,3,'duplicate ticker rows must not expand the selected cycle');
-  const completed=archived.filter(x=>x.radar==='RADAR_9'&&x.stage==='DEEP'&&
+  const completed=archived.filter(x=>x.radar==='WHALE_ACCUMULATION_RADAR'&&x.stage==='DEEP'&&
     x.event_type==='COMPLETED'&&x.reason_code==='NO_SIGNAL_NOT_A_FAILURE');
   assert.ok(completed.length>=1);
   assert.ok(completed.every(x=>x.failure_counted===false));
-  const incomplete=archived.filter(x=>x.radar==='RADAR_9'&&x.event_type==='INCOMPLETE');
+  const incomplete=archived.filter(x=>x.radar==='WHALE_ACCUMULATION_RADAR'&&x.event_type==='INCOMPLETE');
   assert.equal(incomplete.length,1);
   assert.equal(incomplete[0].failure_counted,false);
-  const cycle=archived.find(x=>x.radar==='RADAR_9'&&x.stage==='CYCLE');
+  const cycle=archived.find(x=>x.radar==='WHALE_ACCUMULATION_RADAR'&&x.stage==='CYCLE');
   assert.equal(cycle.failed,0);
   assert.equal(cycle.incomplete,1);
   await radar.stop();
