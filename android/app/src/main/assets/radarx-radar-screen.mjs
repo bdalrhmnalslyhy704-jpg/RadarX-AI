@@ -59,7 +59,7 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
   const p=P[id];
   if(!root||!p)return{destroy(){}};
 
-  let dead=false,busy=false,timer=null;
+  let dead=false,busy=false,timer=null,refreshPending=false;
   let refreshRadar=()=>{};
   const startPolling=()=>{
     if(dead||timer)return;
@@ -185,7 +185,13 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
     };
 
     async function refresh(force=false){
-      if(dead||busy)return;
+      if(dead)return;
+      if(busy){
+        // A pageshow/visibility refresh must not disappear while an older request
+        // is aborting or finishing after the WebView returns from background.
+        if(force)refreshPending=true;
+        return;
+      }
       if(!force){
         const cached=readRadarCache();
         if(cached){
@@ -225,7 +231,13 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
         stn.className='status';
         stn.textContent='Backend غير متاح — '+e(x && x.message||x);
         box.innerHTML='<div class="muted">تعذر تحميل النتائج، لكن واجهة الرادار تعمل. أعد التحديث لاحقًا.</div>';
-      }finally{busy=false;}
+      }finally{
+        busy=false;
+        if(refreshPending){
+          refreshPending=false;
+          if(!dead)Promise.resolve().then(()=>refresh(true));
+        }
+      }
     };
 
     refreshRadar=refresh;
