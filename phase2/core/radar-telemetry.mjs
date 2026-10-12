@@ -235,7 +235,7 @@ ul{padding-right:20px}li{margin:7px 0;overflow-wrap:anywhere}.foot{border-top:1p
 <p>قياس بوابة القرار للرادارات. تُحدّث اللوحة تلقائيًا كل 5 ثوانٍ عند توفر الخدمة.</p>
 <p id="state" class="muted">جارٍ تحميل القياسات…</p>
 <div class="grid">
-<div class="card"><div class="k">قرارات مسجلة في الذاكرة</div><div class="v" id="cycles">—</div></div>
+<div class="card"><div class="k">قرارات المرشحين المسجلة</div><div class="v" id="cycles">—</div></div>
 <div class="card"><div class="k">اجتازت البوابة</div><div class="v yes" id="accepted">—</div></div>
 <div class="card"><div class="k">مرفوضة</div><div class="v no" id="rejected">—</div></div>
 <div class="card"><div class="k">زمن المعالجة P50</div><div class="v" id="p50">—</div></div>
@@ -243,7 +243,7 @@ ul{padding-right:20px}li{margin:7px 0;overflow-wrap:anywhere}.foot{border-top:1p
 <div class="card"><div class="k">عمر المصدر P95</div><div class="v" id="age">—</div></div>
 </div>
 <section><h2>حالة الرادارات ومحركات المسح والطوابير</h2><div class="wrap"><table><thead><tr><th>المحرك</th><th>الحالة</th><th>المسح/الدورات</th><th>قبول/رفض البوابة</th><th>زمن P95</th><th>عمق الطابور</th><th>انتظار الطابور</th><th>أكثر أسباب الرفض</th></tr></thead><tbody id="radars"><tr><td colspan="8">لا توجد بيانات بعد</td></tr></tbody></table></div></section>
-<section><h2>آخر قرارات الإشعار</h2><div class="wrap"><table><thead><tr><th>إغلاق حدث السوق</th><th>وقت الرصد</th><th>وقت قرار الإشعار</th><th>الرادار</th><th>العملة</th><th>مرحلة الرصد</th><th>مرحلة القرار</th><th>القرار النهائي</th><th>السعر</th><th>تسارع السيولة</th><th>أسباب الرفض</th></tr></thead><tbody id="events"><tr><td colspan="11">لا توجد بيانات بعد</td></tr></tbody></table></div></section>
+<section><h2>آخر قرارات الإشعار</h2><div class="wrap"><table><thead><tr><th>إغلاق حدث السوق</th><th>وقت الرصد</th><th>وقت قرار الإشعار</th><th>الرادار</th><th>العملة</th><th>مرحلة الرصد</th><th>مرحلة القرار</th><th>القرار النهائي</th><th>السعر</th><th>تسارع السيولة</th><th>سبب الرفض/حالة الدورة</th></tr></thead><tbody id="events"><tr><td colspan="11">لا توجد بيانات بعد</td></tr></tbody></table></div></section>
 <section><h2>الأسباب الأكثر تكرارًا</h2><ul id="reasons"><li>لا توجد أسباب مسجلة بعد</li></ul></section>
 <div class="foot muted">تنبيه: زمن المعالجة هنا من سجل الرصد إلى قرار بوابة الإشعار، وليس زمن الشبكة الكامل أو ضمانًا لتنفيذ الإشعار. عمر البيانات يُقاس منفصلًا. المقاييس في ذاكرة العملية الحالية وتُمسح عند إعادة تشغيل الخدمة. البيانات المفقودة تظهر كـ «—» ولا تُفسَّر على أنها صفر. Spot / Paper Trading / قراءة فقط.</div>
 <script>
@@ -259,17 +259,17 @@ try{
  const response=await fetch("/api/radar-telemetry?limit=80",{cache:"no-store",headers:{Accept:"application/json"}});
  if(!response.ok)throw new Error("HTTP "+response.status);
  const data=await response.json(),s=data.summary||{};
- $("cycles").textContent=String(s.cycles??0);$("accepted").textContent=String(s.gate_accepted??0);$("rejected").textContent=String(s.rejected??0);
+ $("cycles").textContent=String(s.candidate_decisions??0);$("accepted").textContent=String(s.gate_accepted??0);$("rejected").textContent=String(s.rejected??0);
  $("p50").textContent=fmt(s.latency_ms_p50," ms");$("p95").textContent=fmt(s.latency_ms_p95," ms");$("age").textContent=fmt(s.source_data_age_ms_p95," ms");
  const health=new Map((data.radars||[]).map(x=>[x.radar,x]));
  const eventMap=new Map((data.by_radar||[]).map(x=>[x.radar,x]));
  const radarIds=[...new Set([...(data.radars||[]).map(x=>x.radar),...(data.by_radar||[]).map(x=>x.radar)])];
- const byRadar=radarIds.map(id=>{const x=eventMap.get(id)||{radar:id,cycles:0,gate_accepted:0,rejected:0,latency_ms_p95:null,queue_depth:null,queue_wait_ms:null,top_reasons:[]};const h=health.get(id);const state=h&&h.mode==="ON_DEMAND"?"عند الطلب":h?(h.running?"يعمل":"متوقف"):(x.cycles?"دورة مسجلة":"لا توجد دورة مسجلة");const scans=h&&h.health?(h.health.scans??h.health.cycles??"—"):"—";const acceptedRejected=String(x.gate_accepted)+"/"+String(x.rejected);const queueDepth=x.queue_depth??h?.health?.rest?.queue_depth??h?.health?.queue_depth??null;const queueWait=x.queue_wait_ms??h?.health?.rest?.queue_wait_ms_last??h?.health?.queue_wait_ms_last??null;const reasons=(x.top_reasons||[]).map(v=>v.reason+" ("+v.count+")").join("، ");return [x.radar,state,String(scans)+" / "+String(x.cycles),acceptedRejected,fmt(x.latency_ms_p95," ms"),queueDepth===null?"—":String(queueDepth),fmt(queueWait," ms"),reasons||"—"];});
+ const byRadar=radarIds.map(id=>{const x=eventMap.get(id)||{radar:id,cycles:0,candidate_decisions:0,gate_accepted:0,rejected:0,latency_ms_p95:null,queue_depth:null,queue_wait_ms:null,top_reasons:[]};const h=health.get(id);const state=h&&h.mode==="ON_DEMAND"?"عند الطلب":h?(h.running?"يعمل":"متوقف"):(x.cycles?"دورة مسجلة":"لا توجد دورة مسجلة");const scans=h&&h.health?(h.health.scans??h.health.cycles??"—"):"—";const acceptedRejected=String(x.gate_accepted)+"/"+String(x.rejected);const queueDepth=x.queue_depth??h?.health?.rest?.queue_depth??h?.health?.queue_depth??null;const queueWait=x.queue_wait_ms??h?.health?.rest?.queue_wait_ms_last??h?.health?.queue_wait_ms_last??null;const reasons=(x.top_reasons||[]).map(v=>v.reason+" ("+v.count+")").join("، ");return [x.radar,state,String(scans)+" / "+String(x.candidate_decisions??0)+" قرار / "+String(x.cycles??0)+" دورة بلا قرار",acceptedRejected,fmt(x.latency_ms_p95," ms"),queueDepth===null?"—":String(queueDepth),fmt(queueWait," ms"),reasons||"—"];});
  rows($("radars"),byRadar,8,"لا توجد دورات أو قرارات مسجلة");
- const ev=(data.events||[]).map(x=>[time(x.source_event_at),time(x.observed_at),time(x.decision_at),x.radar,x.symbol,x.stage_observed,x.stage_decision||"—",(x.accepted?"قبول":"رفض")+" · "+String(x.score??"—"),x.price==null?"—":String(x.price),fmt(x.liquidity_acceleration,""),(x.reason_codes||[]).join("، ")||"—"]);
+ const ev=(data.events||[]).map(x=>[time(x.source_event_at),time(x.observed_at),time(x.decision_at),x.radar,x.symbol,x.stage_observed,x.stage_decision||"—",(x.event_type==="BACKGROUND_CYCLE"?"دورة بلا قرار":x.accepted===true?"قبول":"رفض")+" · "+String(x.score??"—"),x.price==null?"—":String(x.price),fmt(x.liquidity_acceleration,""),(x.reason_codes||[]).join("، ")||"—"]);
  rows($("events"),ev,11,"لا توجد بيانات بعد");
  const rs=data.top_rejection_reasons||[];$("reasons").replaceChildren();if(!rs.length){const li=document.createElement("li");li.textContent="لا توجد أسباب رفض مسجلة بعد";$("reasons").appendChild(li);}else for(const x of rs){const li=document.createElement("li");li.textContent=x.reason+" — "+x.count;$("reasons").appendChild(li);}
- $("state").textContent="آخر تحديث: "+time(Date.now())+" · سجل محفوظ في الذاكرة: "+String(data.retained_events??0)+" / "+String(data.buffer_capacity??0);
+ $("state").textContent="آخر تحديث: "+time(Date.now())+" · قرارات المرشحين: "+String(s.candidate_decisions??0)+" · دورات بلا قرار: "+String(s.background_cycles_no_candidate??0)+" · أحداث الذاكرة: "+String(data.retained_events??0)+" / "+String(data.buffer_capacity??0);
 }catch(error){$("state").textContent="تعذر جلب القياسات: "+String(error&&error.message||error)+" · سيُعاد المحاولة تلقائيًا";}
 }
 update();setInterval(update,5000);
