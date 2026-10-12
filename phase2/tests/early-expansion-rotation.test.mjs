@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,nextEarlyExpansionPollDelayMs} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -45,6 +45,23 @@ function candidate(symbol,move,{score=65,participation=75,tradeParticipation=70,
   };
 }
 
+
+test('Radar 8 can activate candidate pooling at verified partial cache coverage but not with an unhealthy stream',()=>{
+  const partial={expected_symbols:330,ready_symbols:299,websocket_live:true,
+    websocket_subscription_complete:true,websocket_sync_ready:true,full_market_coverage_ready:false};
+  assert.equal(isMarketWideCachePoolReady(partial,.85),true,
+    '299/330 fresh symbols plus a live complete subscription should enable guarded candidate pooling');
+  assert.equal(isMarketWideCachePoolReady({...partial,ready_symbols:250},.85),false,
+    'coverage below the configured floor must stay in bootstrap mode');
+  assert.equal(isMarketWideCachePoolReady({...partial,websocket_live:false},.85),false,
+    'a degraded or disconnected WebSocket must never activate cache-ranked selection');
+  assert.equal(isMarketWideCachePoolReady({...partial,websocket_subscription_complete:false},.85),false,
+    'all eligible symbols must remain subscribed even when some candle histories are incomplete');
+  assert.equal(isMarketWideCachePoolReady({...partial,websocket_sync_ready:false},.85),false,
+    'transport synchronization is still required');
+  assert.equal(isMarketWideCachePoolReady({...partial,ready_symbols:330},1.01),true,
+    'coverage thresholds are clamped to the valid range');
+});
 
 test('a 48-symbol market-wide light pool preserves the configured Micro capacity of twelve',()=>{
   const radar=makeRadar({microScanCandidates:12,quietReserve:8,rotationReserve:8});
