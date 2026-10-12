@@ -114,6 +114,14 @@ for(const c of lowBuy.slice(-3))c.takerBuyQuoteVolume=c.quoteVolume*0.69;
 const rejectedBuy=buildStrongMoveAnalysis(lowBuy,make5m(),ticker,NOW,aggTrades);
 assert.equal(rejectedBuy.eligible,false,'69% taker-buy flow must fail closed');
 assert.ok(rejectedBuy.trigger_diagnostics.failed_checks.includes('TAKER_BUY_QUOTE_RATIO_GT_70_PERCENT'));
+const rejectedAlert=buildStrongMoveAlert({one_minute:lowBuy,five_minute:make5m(),ticker,agg_trades:aggTrades},NOW+200);
+rejectedAlert.observed_at=NOW+200;
+const exactReject=finalizeStrongMoveCandidate(rejectedAlert,{...ticker,minQuoteVolume24h:1_000_000},{
+  now:NOW+220,clock:()=>NOW+225,minScore:76,lastAlertAt:0,alertCooldownMs:0,telemetry:true
+});
+assert.equal(exactReject.accepted,false);
+assert.ok(exactReject.notificationGate.failures.includes('CORE_TRIGGER:TAKER_BUY_QUOTE_RATIO_GT_70_PERCENT'));
+assert.ok(radarTelemetry.events.at(-1).reason_codes.includes('CORE_TRIGGER:TAKER_BUY_QUOTE_RATIO_GT_70_PERCENT'));
 
 const openRows=make1m();
 openRows.at(-1).closed=false;
