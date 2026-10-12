@@ -714,10 +714,10 @@ export function buildEarlyExpansionAlert(candidate,now=Date.now()){
 }
 
 export class EarlyExpansionRadar{
-  constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
+  constructor({rest,marketData=null,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
-    this.rest=rest;this.store=store;this.pushManager=pushManager;
+    this.rest=rest;this.marketData=marketData;this.store=store;this.pushManager=pushManager;
     this.config={...EARLY_EXPANSION_RADAR_DEFAULTS,...config};
     this.clock=clock;this.logger=logger;
     this.running=false;this.busy=false;this.timer=null;this.universe=[];this.universeAt=0;
@@ -741,14 +741,14 @@ export class EarlyExpansionRadar{
   }
   async refreshUniverse(quote=this.config.quote){
     const q=this.normalizeQuote(quote);
-    const r=await this.rest.request('/api/v3/exchangeInfo');
+    const r=this.marketData?await this.marketData.exchangeInfo():await this.rest.request('/api/v3/exchangeInfo');
     this.universe=buildSpotUniverse(r.data,q).map(x=>x.symbol);
     this.universeAt=this.clock();
     this.lastCoverage=emptyEarlyExpansionUniverse(this.config,q);
   }
   async tickerRows(quote=this.config.quote){
     const q=this.normalizeQuote(quote);
-    const r=await this.rest.request('/api/v3/ticker/24hr');
+    const r=this.marketData?await this.marketData.ticker24h():await this.rest.request('/api/v3/ticker/24hr');
     return {rows:(Array.isArray(r.data)?r.data:[]).map(x=>normalizeTickerRow(x,q)).filter(Boolean),source:r.source};
   }
   updateFastState(row){
