@@ -1,4 +1,4 @@
-import {getRadarStatus,getRadarAlerts,getRotationRadar,setRadarState} from './radarx-backend-client.mjs';
+import {getRadarStatus,getRadarAlerts,getRotationRadar,getFalconEyeRadar,setRadarState} from './radarx-backend-client.mjs';
 
 const P = {
   EARLY_MOVE_RADAR:{n:'المدمر',i:'☠️',c:'#ff3b30',m:'ما قبل الانفجار',s:'Pre-Breakout Fingerprint + Relative Strength + Compression',t:'1m • 5m • 15m',a:['Fast Impulse','RVOL','Taker Flow','EMA Reclaim','S/R','RSI','OBV','Wyckoff','MTF'],g:['يمنع مطاردة الحركة','جودة وسيولة لازمتان','شموع مغلقة فقط']},
@@ -11,6 +11,7 @@ const P = {
 
 function e(v){return String(v||'').replace(/[&<>"]/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[x]));}
 function q(v){return Number.isFinite(Number(v))?Number(v).toFixed(1):'—';}
+function priceFmt(v){return Number.isFinite(Number(v))?new Intl.NumberFormat('en-US',{maximumFractionDigits:8}).format(Number(v)):'—';}
 
 function idFromPath(){
   const f=String(location.pathname||'').split('/').pop().toLowerCase();
@@ -46,6 +47,8 @@ function installTheme(p){
     .rxs .top{display:flex;justify-content:space-between;gap:8px;align-items:center}
     .rxs .score{color:${p.c};font-weight:1000}
     .rxs .shock-note{margin-top:6px;padding:7px;border:1px solid #80652c;border-radius:10px;background:#211a0d;color:#ffe0a0;font-size:10px;line-height:1.7}
+    .rxs .candidate-note{margin-top:6px;padding:7px;border:1px solid #8a6d32;border-radius:10px;background:#211a0d;color:#ffe3a4;font-size:10px;line-height:1.7}
+    .rxs .candidate-chip{display:inline-block;border:1px solid #8a6d32;border-radius:999px;padding:3px 7px;margin-inline-start:5px;color:#ffe3a4;font-size:9px;font-weight:900}
     @media(max-width:520px){.rxs{padding:8px}.rxs h1{font-size:23px}}
   `;
   document.head.appendChild(st);
@@ -79,8 +82,9 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
       <section class="card"><b>🎯 المهمة</b><p class="muted">${p.s} • ${p.t}</p></section>
       <section class="card"><b>⚙️ الخوارزميات</b><div class="chips">${p.a.map(x=>'<span class="chip">'+e(x)+'</span>').join('')}</div></section>
       <section class="card"><b>🛡️ حواجز الجودة</b><div class="chips">${p.g.map(x=>'<span class="chip">'+e(x)+'</span>').join('')}</div></section>
+      ${id==='FALCON_EYE_RADAR'?'<section class="card"><div class="top"><b>🔎 مرشحون تحت المراقبة — ليسوا تنبيهات شراء</b><span class="candidate-chip">مراقبة فقط</span></div><p class="muted">هذه عملات حلّلها عين الصقر ولم تجتز بالضرورة بوابة التنبيه النهائية. عرض المرشح لا يعني أن تنبيهًا أُرسل.</p><div data-c><div class="muted">جارٍ تحميل المرشحين…</div></div></section>':''}
       <section class="card">
-        <div class="top"><b>🚨 آخر اكتشافات ${p.n}</b><button class="btn go" style="min-height:34px;padding:0 10px" data-ref>تحديث</button></div>
+        <div class="top"><b>${id==='FALCON_EYE_RADAR'?'🔔 التنبيهات التي اجتازت البوابة':'🚨 آخر اكتشافات '+p.n}</b><button class="btn go" style="min-height:34px;padding:0 10px" data-ref>تحديث</button></div>
         <div data-a><div class="muted">لا توجد بيانات بعد.</div></div>
       </section>
     </main>`;
@@ -89,6 +93,7 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
     const on=root.querySelector('[data-on]');
     const off=root.querySelector('[data-off]');
     const box=root.querySelector('[data-a]');
+    const candidateBox=root.querySelector('[data-c]');
     const ref=root.querySelector('[data-ref]');
 
     const setStatus=(x)=>{
@@ -101,27 +106,59 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
       on.disabled=live;off.disabled=!live;
     };
 
-    const show=(rows)=>{
+    const show=(rows,target=box,{observationOnly=false}={})=>{
+      if(!target)return;
       if(!Array.isArray(rows)||!rows.length){
-        box.innerHTML='<div class="muted">لا يوجد مرشح أو اكتشاف محفوظ حاليًا.</div>';
+        target.innerHTML='<div class="muted">'+(observationOnly?'لا يوجد مرشح مبكر كافٍ للمراقبة في هذه الدورة.':'لا يوجد تنبيه محفوظ اجتاز بوابة الجودة حاليًا.')+'</div>';
         return;
       }
       const sorted=[...rows].sort((a,b)=>Number(b.radar_power_score||b.opportunity_score||b.score||0)-Number(a.radar_power_score||a.opportunity_score||a.score||0));
-      box.innerHTML=sorted.slice(0,20).map(x=>{
+      target.innerHTML=sorted.slice(0,20).map(x=>{
         const rotation=x.rotation||{};
         const isJoker=id==='ROTATION_LAG_RADAR';
         const score=q(x.radar_power_score||x.radar_v2 && x.radar_v2.score||x.opportunity_score||x.score);
-        const label=isJoker?(x.eligible===true?'جاهز للدوران':(x.potential_label||rotation.stage||'مراقبة')):(x.potential_label||x.event||'اكتشاف');
+        const label=observationOnly
+          ?'مرشح للمراقبة • '+String(x.pre_expansion_stage||x.falcon_eye?.pre_expansion_stage||x.potential_label||x.stage||'قيد التقييم')
+          :(isJoker?(x.eligible===true?'جاهز للدوران':(x.potential_label||rotation.stage||'مراقبة')):(x.potential_label||x.event||'اكتشاف'));
         const shock=x.activity_shock||(x.falcon_eye&&x.falcon_eye.activity_shock)||{};
         const sm=shock.metrics||{};
         const volumeShock=sm.volume_shock_ratio===null||sm.volume_shock_ratio===undefined?'—':sm.volume_shock_ratio;
         const tradeShock=sm.trade_shock_ratio===null||sm.trade_shock_ratio===undefined?'—':sm.trade_shock_ratio;
         const shockNote=shock.detected===true?'<div class="shock-note">⚡ '+e(shock.stage||'ACTIVITY_SHOCK')+' • حجم '+e(volumeShock)+'x • صفقات '+e(tradeShock)+'x<br>مراقبة فقط • '+(shock.extended?'الحركة ممتدة — لا تطارد السعر':'تأكيد شمعة مغلقة')+'</div>':'';
+        const gateFailures=Array.isArray(x.elite_gate?.failures)?x.elite_gate.failures:[];
+        const gateFailureLabels={
+          SCORE_BELOW_STRICT_THRESHOLD:'الدرجة أقل من حد الإشعار',
+          CONFIRMATION_BREADTH_LOW:'التأكيدات المستقلة غير كافية',
+          CATEGORY_DIVERSITY_LOW:'تنوع الأدلة غير كافٍ',
+          FALCON_ANTI_CHASE_FAIL:'حركة ممتدة — رُفضت المطاردة',
+          FALCON_QUIET_BASE_WEAK:'القاعدة الهادئة غير واضحة',
+          FALCON_COMPRESSION_WEAK:'الانكماش غير كافٍ',
+          FALCON_STRUCTURE_WEAK:'الهيكل السعري غير مؤكد',
+          FALCON_TAKER_FLOW_WEAK:'ضغط الشراء غير مؤكد',
+          FALCON_RELATIVE_STRENGTH_WEAK:'القوة النسبية غير كافية',
+          FALCON_MARKET_PULSE_WEAK:'نبض السوق لا يؤكد الحركة',
+          FALCON_ALREADY_MOVED:'العملة تحركت بالفعل',
+          FALCON_10M_CHASE:'الحركة على 10 دقائق ممتدة',
+          FALCON_5M_CHASE:'الحركة على 5 دقائق ممتدة',
+          FALCON_EMA_EXTENSION:'السعر بعيد عن المتوسط',
+          FALCON_BREAKOUT_EXTENSION:'السعر تجاوز الاختراق الآمن',
+          FALCON_QUALITY_TOO_LOW:'جودة أدلة الصقر غير كافية',
+          FALCON_EVIDENCE_TOO_NARROW:'عدد مجالات الأدلة المستقلة قليل',
+          MOVER_FORENSICS_QUALITY_LOW:'تأكيد حركة السعر غير كافٍ',
+          BASE_ALERT_NOT_ELIGIBLE:'البصمة الأساسية لم تكتمل'
+        };
+        const rejectionNote=observationOnly
+          ?'<div class="candidate-note">مراقبة فقط — ليس تنبيه شراء أو أمر تداول.'+
+            (gateFailures.length?'<br>ما منع الإشعار: '+e(gateFailures.slice(0,3).map(code=>gateFailureLabels[code]||code).join(' • ')):'')+
+            '</div>':'';
+        const priceValue=x.price??x.falcon_eye?.metrics?.price??x.falcon_eye?.metrics?.last_price;
+        const timeValue=x.detected_time_12h||x.detected_time||
+          (Number.isFinite(Number(x.detected_at))?new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Aden',hour:'numeric',minute:'2-digit',hour12:true}).format(new Date(Number(x.detected_at))):'—');
         const extra=isJoker?' • تأكيدات '+String((x.rotation && x.rotation.confirmations) || x.confirmations || 0):'';
         return '<article class="alert">'+
           '<div class="top"><b>'+e(x.symbol||'—')+'</b><span class="score">'+score+'/100</span></div>'+
-          '<div class="muted">'+e(label)+' • '+e(x.direction||rotation.direction||'—')+' • '+e(x.detected_time_12h||'—')+extra+'</div>'+
-          '<div class="muted">'+e(Array.isArray(x.reasons)?x.reasons.slice(0,4).join(' • '):Array.isArray(rotation.reasons)?rotation.reasons.slice(0,4).join(' • '):'')+'</div>'+shockNote+
+          '<div class="muted">'+e(label)+' • '+e(x.direction||rotation.direction||'—')+' • '+e(timeValue)+extra+'</div>'+
+          '<div class="muted">'+(priceValue!==null&&priceValue!==undefined?'السعر وقت التحليل: '+e(priceFmt(priceValue))+' • ':'')+e(Array.isArray(x.reasons)?x.reasons.slice(0,4).join(' • '):Array.isArray(rotation.reasons)?rotation.reasons.slice(0,4).join(' • '):'')+'</div>'+rejectionNote+shockNote+
         '</article>';
       }).join('');
     };
@@ -132,8 +169,13 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
         const cached=readRadarCache();
         if(cached){
           const body=cached.body||{};
-          const rows=id==='ROTATION_LAG_RADAR'?(body.candidates||[]).concat(body.alerts||[]):(body.alerts||[]);
-          show(rows);
+          if(id==='FALCON_EYE_RADAR'){
+            show(body.candidates||[],candidateBox,{observationOnly:true});
+            show(body.alerts||[],box);
+          }else{
+            const rows=id==='ROTATION_LAG_RADAR'?(body.candidates||[]).concat(body.alerts||[]):(body.alerts||[]);
+            show(rows);
+          }
           const st=body.monitoring||body.status;
           if(st)setStatus(st);
           else stn.textContent='● بيانات محفوظة — بدون إعادة فحص السوق';
@@ -146,11 +188,16 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
         if(s.ok)setStatus((s.body && s.body.radars||[]).find(x=>x.radar===id));
         else stn.textContent='تعذر قراءة حالة الرادار — HTTP_'+(s.status||0);
         let a;
-        if(id==='ROTATION_LAG_RADAR') a=await getRotationRadar({limit:20,scan:true});
+        if(id==='FALCON_EYE_RADAR')a=await getFalconEyeRadar({limit:50,scan:false});
+        else if(id==='ROTATION_LAG_RADAR')a=await getRotationRadar({limit:20,scan:true});
         else a=await getRadarAlerts({radar:id,limit:50});
         if(a.ok){
           writeRadarCache(a.body||{});
-          if(id==='ROTATION_LAG_RADAR')show([].concat(a.body&&a.body.candidates||[],a.body&&a.body.alerts||[]));
+          if(id==='FALCON_EYE_RADAR'){
+            show(a.body&&a.body.candidates||[],candidateBox,{observationOnly:true});
+            show(a.body&&a.body.alerts||[],box);
+            setStatus(a.body&&a.body.monitoring||((s.body&&s.body.radars||[]).find(x=>x.radar===id)));
+          }else if(id==='ROTATION_LAG_RADAR')show([].concat(a.body&&a.body.candidates||[],a.body&&a.body.alerts||[]));
           else show(a.body&&a.body.alerts||[]);
         }else if(a.status===404)box.innerHTML='<div class="muted">لا يوجد مسار بيانات لهذا الرادار في الخادم الحالي.</div>';
       }catch(x){
