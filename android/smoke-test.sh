@@ -440,25 +440,34 @@ for attempt in $(seq 1 180); do
       exit 1
     fi
     echo "REPLAY_TEST_STOP_CONFIRMED: running=false heartbeat=absent"
+    # Snapshot counters only after stop was confirmed so posts from the stopping
+    # instance cannot masquerade as proof that the restarted service resumed.
+    accepted_before_resume="$(accepted_log_count)"
+    feed_before_resume="$(grep -F 'DEBUG_REPLAY_TEST_FEED_ACTIVE' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
     sleep 2
     launch_replay_test_app
     restarted_ready=0
     for restart_attempt in $(seq 1 30); do
       new_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
-      ready_count="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
       logs="$(replay_logs)"
       restart_prefs="$(timeout 5s adb shell run-as com.radarx.app cat shared_prefs/radarx_background.xml 2>/dev/null || true)"
-      if [[ -n "${new_pid}" && "${ready_count}" -gt "${before_ready}" ]] &&
+      feed_after_resume="$(printf '%s\n' "${logs}" | grep -F 'DEBUG_REPLAY_TEST_FEED_ACTIVE' | wc -l | tr -d ' ')"
+      accepted_after_resume="$(accepted_log_count)"
+      if [[ -n "${new_pid}" ]] &&
          printf '%s\n' "${restart_prefs}" | grep -Eq '<boolean name="running" value="true" ?/>' &&
          printf '%s\n' "${restart_prefs}" | grep -Fq 'name="monitor_heartbeat_at_ms"' &&
-         printf '%s\n' "${logs}" | grep -Fq 'REPLAY_TEST_OVERRIDE_CONFIGURED'; then
+         [[ "${feed_after_resume}" -gt "${feed_before_resume}" ]] &&
+         [[ "${accepted_after_resume}" -gt "${accepted_before_resume}" ]]; then
         restarted_ready=1
+        echo "REPLAY_TEST_RESUME_CONFIRMED: pid=${new_pid} accepted_before=${accepted_before_resume} accepted_after=${accepted_after_resume} new_feed_fetch=yes"
         break
       fi
       sleep 2
     done
     if [[ "${restarted_ready}" -ne 1 ]]; then
-      echo "::error::Background service failed to resume with its saved cursor after service stop/start"
+      echo "::error::Background service did not resume polling from its saved cursor after service stop/start"
+      echo "restart_pid=${new_pid:-NONE} accepted_before=${accepted_before_resume} accepted_after=${accepted_after_resume:-NONE} feed_before=${feed_before_resume} feed_after=${feed_after_resume:-NONE}"
+      printf '%s\n' "${restart_prefs:-}" | grep -E 'name="running"|monitor_heartbeat_at_ms|radar_alert_cursor_(at|id)' || true
       tail -n 180 "${REPLAY_LOG_FILE}" || true
       exit 1
     fi
