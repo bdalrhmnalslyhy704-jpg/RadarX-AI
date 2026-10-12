@@ -260,10 +260,10 @@ export function buildLiquidityAbsorptionAlert(candidate,now=Date.now()){
 }
 
 export class LiquidityAbsorptionRadar{
-  constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
+  constructor({rest,marketData=null,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
-    this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
+    this.rest=rest;this.marketData=marketData;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={
       quote:'USDT',pollMs:45000,universeRefreshMs:5*60*1000,
       minQuoteVolume24h:1500000,rotationBatchSize:4,topLiquidityCount:3,
@@ -289,12 +289,12 @@ export class LiquidityAbsorptionRadar{
   }
   async stop(){this.running=false;if(this.timer)clearInterval(this.timer);this.timer=null;}
   async refreshUniverse(){
-    const r=await this.rest.request('/api/v3/exchangeInfo');
+    const r=this.marketData?await this.marketData.exchangeInfo():await this.rest.request('/api/v3/exchangeInfo');
     this.universe=buildSpotUniverse(r.data,this.config.quote).map(x=>x.symbol);
     this.universeAt=this.clock();this.cursor=0;
   }
   async tickerRows(){
-    const r=await this.rest.request('/api/v3/ticker/24hr');
+    const r=this.marketData?await this.marketData.ticker24h():await this.rest.request('/api/v3/ticker/24hr');
     return (Array.isArray(r.data)?r.data:[]).map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
       .filter(x=>this.universe.includes(x.symbol)&&x.quoteVolume24h>=this.config.minQuoteVolume24h);
   }
