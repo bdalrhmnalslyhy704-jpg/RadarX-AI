@@ -84,7 +84,7 @@ jobs:
         run: |
           set +e
           mkdir -p reports
-          node phase2/tools/historical-replay.mjs --symbols GTCUSDT,WUSDT --lookback-hours 24 --max-trade-pages 500 --max-trades 500000 --output reports/historical-replay-gtc-w.json
+          node phase2/tools/historical-replay.mjs --symbols GTCUSDT,WUSDT,RLCUSDT,RADUSDT,ORCAUSDT,API3USDT,DIAUSDT,OGNUSDT --start 2026-10-11T21:27:59.999Z --end 2026-10-12T21:27:59.999Z --max-trade-pages 500 --max-trades 500000 --output reports/historical-replay-gtc-w.json
           replay_status=$?
           printf 'exit_code=%s\n' "$replay_status" > reports/historical-replay-status.txt
           {
@@ -107,7 +107,10 @@ jobs:
             console.log('- First core trigger: ' + when(item.summary?.first_core_trigger_at));
             console.log('- First candidate eligible: ' + when(item.summary?.first_candidate_eligible_at));
             console.log('- First elite-gate eligible: ' + when(item.summary?.first_elite_gate_eligible_at));
-            console.log('- First final accepted decision: ' + when(item.summary?.first_accepted_at));
+            console.log('- First accepted decision: ' + when(item.summary?.first_accepted_at));
+            console.log('- First smart early-warning accepted decision: ' + when(item.summary?.first_early_warning_accepted_at));
+            console.log('- First strict-gate accepted decision: ' + when(item.summary?.first_strict_accepted_at));
+            console.log('- Accepted decision modes: ' + JSON.stringify(item.summary?.accepted_mode_counts ?? []));
             console.log('- Maximum score/time: ' + String(item.summary?.maximum_score ?? 'n/a') + ' / ' + when(item.summary?.maximum_score_at));
             console.log('- Actual window +50% first aggTrade timestamp: ' + when(item.summary?.first_actual_window_50pct_at));
             console.log('- +50% candle-close estimate (lower precision): ' + when(item.summary?.first_actual_window_50pct_candle_close_at));
