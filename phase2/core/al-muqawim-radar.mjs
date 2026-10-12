@@ -176,6 +176,7 @@ export function buildAlMuqawimAnalysis(series,ticker,now=Date.now(),config={}){
   const h1=timeframeAnalysis(series?.['1h']||[],maPeriod,now,60*60_000);
   const h4=timeframeAnalysis(series?.['4h']||[],maPeriod,now,4*60*60_000);
   const tfs=[h4,h1,m15];
+  const dataQuality=Math.min(...tfs.map(x=>Number.isFinite(Number(x.data_quality))?Number(x.data_quality):0));
   const blocked=tfs.find(x=>['INSUFFICIENT','STALE_DATA','DATA_GAP','DATA_QUALITY_LOW'].includes(x.direction));
   if(blocked){
     const dataStatus=blocked.data_status||'DATA_UNAVAILABLE';
