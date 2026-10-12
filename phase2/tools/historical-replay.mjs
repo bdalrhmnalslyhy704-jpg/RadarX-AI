@@ -3,7 +3,10 @@ import {mkdir, writeFile, rename} from 'node:fs/promises';
 import {dirname, resolve} from 'node:path';
 import {CONFIG} from '../config.mjs';
 import {RestClient} from '../market/binance-rest.mjs';
-import {buildStrongMoveAlert, finalizeStrongMoveCandidate} from '../core/strong-move-radar.mjs';
+import {buildStrongMoveAlert} from '../core/strong-move-radar.mjs';
+import {evaluateEliteGate} from '../core/elite-confluence-gate.mjs';
+import {evaluateRadarNotificationGate} from '../core/radar-notification-gate.mjs';
+import {evaluateDynamicEarlyWarningGate} from '../core/dynamic-early-warning-gate.mjs';
 import {runHistoricalReplay} from '../core/historical-replay.mjs';
 
 const MINUTE_MS = 60_000;
@@ -158,27 +161,71 @@ async function main() {
         }, input.now);
         alert.observed_at = input.now;
         alert.source_event_at = alert.source_candle_close_at ?? input.now;
-        const finalized = finalizeStrongMoveCandidate(alert, {
-          ...input.ticker, minQuoteVolume24h
-        }, {
-          now: input.now,
-          minScore: Number(tickerConfig.minScore ?? 76),
-          lastAlertAt: lastAlertAt.value,
-          alertCooldownMs: Number(tickerConfig.alertCooldownMs ?? 12 * MINUTE_MS),
-          telemetry: false
+        const a = alert.strong_move || {};
+        const cs = a.component_scores || {};
+        const m = a.metrics || {};
+        const alertScore = Math.max(Number(a.score) || 0, Number(cs.flash) || 0);
+        const volumeQuote = Math.max(1, Number(input.ticker.quoteVolume24h) || 0);
+        const liquidityScore = Math.max(0, Math.min(100, 70 + Math.log10(Math.max(1, volumeQuote / minQuoteVolume24h)) * 30));
+        const participationValues = [Number(cs.volume), Number(cs.trades)].filter(Number.isFinite);
+        const participationScore = participationValues.length
+          ? participationValues.reduce((sum, value) => sum + value, 0) / participationValues.length : 50;
+        const eliteGate = evaluateEliteGate({
+          radar: 'STRONG_MOVE_RADAR',
+          direction: a.direction,
+          baseScore: alertScore,
+          priceChange24h: input.ticker.priceChange24h,
+          liquidityScore,
+          dataQualityScore: 90,
+          triggerScore: Math.max(Number(cs.flash) || 0, Number(cs.breakout) || 0),
+          structureScore: Math.max(Number(cs.breakout) || 0, Number(cs.ema) || 0),
+          participationScore,
+          flowScore: Number(cs.taker) || 50,
+          relativeScore: Number(m.five_min_trend) || 50,
+          momentumScore: Math.max(Number(cs.velocity) || 0, Number(cs.flash) || 0),
+          compressionScore: Math.max(Number(cs.bollinger) || 0, Number(cs.range) || 0),
+          confirmations: Number(m.flash_confirmations) || 0,
+          minConfirmations: 4, minScore: 86, max24hMovePct: 8,
+          requireTrigger: true, minCategoryHits: 5
         });
-        if (finalized.accepted) lastAlertAt.value = input.now;
+        alert.elite_gate = eliteGate;
+        alert.data_quality = Number(a.data_quality) || 0;
+        alert.liquidity_quality = liquidityScore;
+        alert.data_status = {status:a.data_stale?'DATA_STALE':'LIVE_DATA',stale:Boolean(a.data_stale),future_data_detected:false,source:'Binance Public REST'};
+        const strictFailures = [];
+        if (!alert.eligible) strictFailures.push('STRONG_MOVE_CORE_GATE_FAILED');
+        if (alertScore < Number(tickerConfig.minScore ?? 76)) strictFailures.push('SCORE_BELOW_STRICT_THRESHOLD');
+        if (!eliteGate.eligible) strictFailures.push(...(Array.isArray(eliteGate.failures)?eliteGate.failures:['ELITE_GATE_NOT_ELIGIBLE']));
+        let notificationGate = {eligible:false,failures:strictFailures,standard_gate_failures:strictFailures};
+        const cooldownBlocked = input.now - lastAlertAt.value < Number(tickerConfig.alertCooldownMs ?? 12 * MINUTE_MS);
+        if (!strictFailures.length && !cooldownBlocked) {
+          notificationGate = evaluateRadarNotificationGate(alert, {now:input.now,commit:false});
+        }
+        if (!notificationGate.eligible) strictFailures.push(...(Array.isArray(notificationGate.failures)?notificationGate.failures:[]));
+        if (cooldownBlocked) strictFailures.push('LOCAL_ALERT_COOLDOWN');
+        const earlyGate = evaluateDynamicEarlyWarningGate(alert, input.ticker, {
+          now:input.now,
+          alertScore,
+          minQuoteVolume24h,
+          strictFailures,
+          coreTriggerFailures: Array.isArray(eliteGate.failures)?eliteGate.failures:[],
+          lastAlertAt:lastAlertAt.value,
+          earlyCooldownMs:Number(tickerConfig.alertCooldownMs ?? 12 * MINUTE_MS)
+        });
+        const accepted = Boolean(alert.eligible && alertScore >= Number(tickerConfig.minScore ?? 76) &&
+          eliteGate.eligible && notificationGate.eligible && !cooldownBlocked);
+        if (accepted) lastAlertAt.value = input.now;
         return {
-          accepted: finalized.accepted,
-          accepted_mode: finalized.acceptedByMode ?? (finalized.accepted ? 'STRICT' : 'NONE'),
-          early_warning: finalized.earlyGate ?? null,
-          strict_gate_failures: finalized.notificationGate.standard_gate_failures ?? finalized.notificationGate.failures ?? [],
+          accepted,
+          accepted_mode: accepted ? 'STRICT' : (earlyGate.eligible ? 'EARLY_WARNING' : 'NONE'),
+          early_warning: earlyGate,
+          strict_gate_failures: notificationGate.standard_gate_failures ?? notificationGate.failures ?? strictFailures,
           alert,
-          score: finalized.alertScore,
-          stage: alert.potential_label ?? alert.strong_move?.stage,
-          notificationGate: finalized.notificationGate,
-          reason_codes: finalized.notificationGate.failures,
-          liquidity_acceleration: alert.strong_move?.metrics?.liquidity_acceleration?.three_minute_acceleration ?? null
+          score: alertScore,
+          stage: alert.potential_label ?? a.stage,
+          notificationGate,
+          reason_codes: notificationGate.failures ?? strictFailures,
+          liquidity_acceleration: a.metrics?.liquidity_acceleration?.three_minute_acceleration ?? null
         };
       }
     });
