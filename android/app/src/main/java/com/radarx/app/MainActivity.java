@@ -149,6 +149,16 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        // Android can deliver a repeated explicit launch to the existing top Activity
+        // instead of creating a new instance. Debug replay controls must be handled in
+        // both paths so the CI restart test actually issues the requested service STOP.
+        configureDebugReplayTest(intent);
+    }
+
+    @Override
     protected void onPause() {
         if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
             Log.i("RadarXSmoke", "ACTIVITY_PAUSED");
