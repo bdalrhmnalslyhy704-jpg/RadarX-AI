@@ -49,7 +49,7 @@ function inspectFalconSeries(rawRows,now,{intervalMs,minCount,maxAgeMs}){
   const recent=rows.slice(-48);let maxGapMs=0,gapCount=0;
   for(let i=1;i<recent.length;i++){const g=Number(recent[i].openTime)-Number(recent[i-1].openTime);if(g>intervalMs*1.5){gapCount++;maxGapMs=Math.max(maxGapMs,g)}}
   const ageMs=rows.length?Number(now)-Number(rows.at(-1).closeTime):null;
-  const future=raw.some(c=>hasFiniteValue(c?.openTime)&&Number(c.openTime)>Number(now)+intervalMs);
+  const future=raw.some(c=>hasFiniteValue(c?.openTime)&&Number(c.openTime)>Number(now));
   let status='LIVE_DATA',reason=null;
   if(future){status='DATA_FUTURE';reason='FUTURE_CANDLE_START'}
   else if(rows.length<minCount){status='DATA_INSUFFICIENT';reason='INSUFFICIENT_CLOSED_CANDLES'}

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildFalconEyeAnalysis,FalconEyeRadar} from '../core/falcon-eye-radar.mjs';
+import {buildFalconEyeAnalysis,buildFalconEyeAlert,FalconEyeRadar} from '../core/falcon-eye-radar.mjs';
 import {evaluateRadarNotificationGate} from '../core/radar-notification-gate.mjs';
 
 function candle(openTime,close,{open=close-0.02,high=close+0.06,low=close-0.06,volume=900,tradeCount=80,taker=0.50}={}) {
