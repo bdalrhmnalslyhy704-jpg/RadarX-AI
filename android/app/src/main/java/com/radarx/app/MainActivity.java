@@ -140,6 +140,14 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (webView != null) {
+            webView.onResume();
+            webView.resumeTimers();
+            // Reconcile the native monitor whenever the app returns from background.
+            // The foreground service lives in a separate process, so this does not
+            // depend on JavaScript timers or the WebView being fully loaded.
+            ensureContinuousMonitoring();
+        }
         if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
             Log.i("RadarXSmoke", "ACTIVITY_RESUMED");
         }
@@ -159,13 +167,18 @@ public final class MainActivity extends Activity {
         }
         configureDebugReplayTest(intent);
         if (debugBuild && replayFeed != null && !replayFeed.isEmpty()) {
-            // Reusing an existing Activity does not re-run onCreate auto-start.
-            webView.post(this::ensureContinuousMonitoring);
+            // Restart native monitoring directly; do not make service recovery
+            // depend on a WebView message queue that may be paused or detached.
+            ensureContinuousMonitoring();
         }
     }
 
     @Override
     protected void onPause() {
+        if (webView != null) {
+            webView.onPause();
+            webView.pauseTimers();
+        }
         if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
             Log.i("RadarXSmoke", "ACTIVITY_PAUSED");
         }
@@ -466,7 +479,6 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         if (webView != null) {
-            webView.loadUrl("about:blank");
             webView.stopLoading();
             webView.setWebChromeClient(null);
             webView.setWebViewClient(null);
