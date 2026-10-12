@@ -454,7 +454,7 @@ export class StrongMoveRadar {
     this.scans++;
     const observedAt=this.clock();
     alert.observed_at=observedAt;
-    alert.source_event_at=finite(alert.source_candle_close_at);
+    alert.source_event_at=alert.source_candle_close_at==null?null:finite(alert.source_candle_close_at);
     alert.source_data_age_ms=alert.source_event_at==null?null:Math.max(0,observedAt-alert.source_event_at);
     const restHealth=this.rest?.health?.()||{};
     alert.rest_queue_depth=finite(restHealth.queue_depth);
