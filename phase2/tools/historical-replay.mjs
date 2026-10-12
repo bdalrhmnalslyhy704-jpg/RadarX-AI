@@ -70,9 +70,12 @@ async function fetchAggregateTrades(client, symbol, start, end, {maxPages, maxTr
   let lastTimestamp = null;
   while (pages < maxPages && all.size < maxTrades) {
     const remaining = maxTrades - all.size;
-    const result = await client.aggTrades(symbol, fromId == null
-      ? {startTime: cursor, endTime: end, limit: Math.min(1000, remaining)}
-      : {fromId, limit: Math.min(1000, remaining)});
+    const query = fromId == null
+      ? {symbol, startTime: cursor, endTime: end, limit: Math.min(1000, remaining)}
+      : {symbol, fromId, limit: Math.min(1000, remaining)};
+    // Production RestClient intentionally exposes a generic allowlisted request()
+    // rather than endpoint-specific aggTrades(); keep replay compatible with it.
+    const result = await client.request('/api/v3/aggTrades', query);
     const page = normalizedTrades(result.trades ?? result.data ?? []);
     pages++;
     if (!page.length) { complete = true; break; }
