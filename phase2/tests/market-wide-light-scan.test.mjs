@@ -78,15 +78,26 @@ test('market-wide light scan covers all eligible symbols once and keeps candidat
   assert.ok([...result.audit.values()].every(item=>Number.isInteger(item.light_rank)),'every eligible symbol needs an explicit light or rotation rank');
   assert.ok([...result.audit.values()].filter(item=>!item.evaluated).every(item=>item.rank_basis==='FAIR_ROTATION_NO_VALID_LIGHT_DATA'));
   assert.equal(result.summary.binance_rest_calls_added_by_light_scan,0);
-  assert.equal(result.coverageReady,false,'partial cache coverage must not activate the filter');
-  assert.equal(result.summary.selection_mode,'BOOTSTRAP_FULL_UNIVERSE');
+  assert.equal(result.coverageReady,true,'40 fresh symbols exceed the 24-symbol minimum and 10 percent warmup floor');
+  assert.equal(result.summary.selection_mode,'MARKET_WIDE_CANDIDATE_POOL');
+  const belowWarmup = light.scan({
+    eligible,now:now+500,cycle:2,
+    getSeries:symbol=>{
+      const index=Number(symbol.match(/(\\d+)USDT$/)?.[1]||0);
+      return index<20?cacheSeries(symbol,now+500):null;
+    },
+    lastMicroScannedAt:()=>null
+  });
+  assert.equal(belowWarmup.summary.evaluated_total,20);
+  assert.equal(belowWarmup.coverageReady,false,'fewer than 24 fresh symbols must keep the filter disabled');
+  assert.equal(belowWarmup.summary.selection_mode,'BOOTSTRAP_FULL_UNIVERSE');
   const fullyWarmed = light.scan({
-    eligible,now:now+1000,cycle:2,
+    eligible,now:now+1000,cycle:3,
     getSeries:symbol=>cacheSeries(symbol,now+1000),
     lastMicroScannedAt:()=>null
   });
   assert.equal(fullyWarmed.summary.evaluated_total,330);
-  assert.equal(fullyWarmed.coverageReady,true,'only complete fresh-candle coverage can activate ranking');
+  assert.equal(fullyWarmed.coverageReady,true,'full fresh-candle coverage also activates ranking');
 });
 
 test('market-wide light pool can operate at post-restart 13.6 percent verified coverage without dropping an unready burst candidate',()=>{
