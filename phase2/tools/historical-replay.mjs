@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import {mkdir, writeFile, rename} from 'node:fs/promises';
 import {dirname, resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {CONFIG} from '../config.mjs';
 import {RestClient} from '../market/binance-rest.mjs';
 import {buildStrongMoveAlert} from '../core/strong-move-radar.mjs';
@@ -61,7 +62,7 @@ async function fetchOneMinute(client, symbol, start, end) {
   return {candles: [...byOpen.values()].sort((a, b) => a.openTime - b.openTime), pages, complete: cursor > end || rows.length < pages * 1000};
 }
 
-async function fetchAggregateTrades(client, symbol, start, end, {maxPages, maxTrades}) {
+export async function fetchAggregateTrades(client, symbol, start, end, {maxPages, maxTrades}) {
   let cursor = start;
   let fromId = null;
   const all = new Map();
@@ -285,7 +286,9 @@ async function main() {
     process.exitCode = 2;
   }
 }
-main().catch(error => {
-  process.stderr.write('[REPLAY_ERROR] ' + String(error?.stack ?? error) + '\n');
-  process.exitCode = 1;
-});
+if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1])) {
+  main().catch(error => {
+    process.stderr.write('[REPLAY_ERROR] ' + String(error?.stack ?? error) + '\n');
+    process.exitCode = 1;
+  });
+}
