@@ -483,7 +483,7 @@ export class CoinHunterRadar {
   async refreshUniverse(quote) {
     const now = Date.now();
     if (!this.universe.length || now - this.universeAt >= Number(this.config.universeRefreshMs)) {
-      const info = await this.rest.request('/api/v3/exchangeInfo');
+      const info = this.marketData ? await this.marketData.exchangeInfo() : await this.rest.request('/api/v3/exchangeInfo');
       const symbols = new Set(
         (info.data?.symbols || [])
           .filter(x => this.isSpotSymbol(x, quote))
