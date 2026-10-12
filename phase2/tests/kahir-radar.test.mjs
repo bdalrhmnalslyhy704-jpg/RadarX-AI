@@ -56,6 +56,24 @@ test('Kahir detects an unusual self-referenced acceleration with participation a
   assert.ok(result.metrics.relative_acceleration_bps>1.5);
 });
 
+test('Kahir rejects a single-candle volume spike without trade participation',()=>{
+  const one=candles(150,60000);
+  one.at(-1).tradeCount=160;
+  const result=buildKahirAnalysis({
+    oneMinute:one,
+    fiveMinute:fiveMinuteImpulse(),
+    ticker:{lastPrice:101.2,priceChange24h:3,quoteVolume24h:5000000},
+    selfHistory:[
+      {price:100,velocity_bps:1,selfChangePct:0.01},
+      {price:100.05,velocity_bps:2,selfChangePct:0.05}
+    ],
+    marketVelocityBps:1,
+    now:NOW
+  });
+  assert.ok(result.metrics.trade_ratio<1.2);
+  assert.equal(result.eligible,false);
+});
+
 test('Kahir refuses an already-extended daily move even when short-term momentum is strong',()=>{
   const result=buildKahirAnalysis({
     oneMinute:candles(150,60000),
