@@ -106,6 +106,14 @@ test('market-wide light scan preserves a broad burst lane instead of dropping ca
   assert.equal(result.summary.binance_rest_calls_added_by_light_scan,0);
 });
 
+test('benchmarks, wrapped majors and tokenized equities never consume directional pump candidates',()=>{
+  for(const symbol of ['BTCUSDT','ETHUSDT','BNBUSDT','WBTCUSDT','SOXLBUSDT','NVDABUSDT','MSTRBUSDT']){
+    assert.equal(isDirectionalCandidateSymbol(symbol),false,symbol);
+  }
+  assert.equal(isDirectionalCandidateSymbol('PLUMEUSDT'),true);
+  assert.equal(isDirectionalCandidateSymbol('RSRUSDT'),true);
+});
+
 test('future candles are excluded and the returned evaluation never uses a close after as-of', () => {
   const now = 1_900_000_000_000;
   const input = candles({now,count:72});
