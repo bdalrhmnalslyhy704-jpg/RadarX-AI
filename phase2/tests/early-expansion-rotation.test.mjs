@@ -95,8 +95,11 @@ test('Radar 8 logs a full-cycle duration and phase timing breakdown',async()=>{
     rest,store,config:{pollMs:45000,microScanCandidates:8,deepCandidates:3},
     clock:()=>now,logger:{info:x=>events.push(String(x)),warn:x=>events.push(String(x))}
   });
+  // A stuck scheduler journal write must not hold the background cycle latch.
+  radar.scheduler.flush=()=>new Promise(()=>{});
   radar.running=true;
   assert.equal(await radar.tick(),true);
+  assert.equal(radar.busy,false,'scan latch must release even if archive flush never resolves');
   const line=events.find(x=>x.startsWith('[RADARX_SCAN_COMPLETE] '));
   assert.ok(line,'complete scan timing log must be emitted');
   const report=JSON.parse(line.slice(line.indexOf('{')));
@@ -110,6 +113,20 @@ test('Radar 8 logs a full-cycle duration and phase timing breakdown',async()=>{
   assert.equal(report.real_order_execution,false);
   for(const key of ['universe_refresh_ms','ticker_fast_selection_ms','market_context_ms','outcome_maintenance_ms','micro_scan_ms','market_micro_overlap_ms','deep_scan_ms','signal_archive_ms','notification_ms','other_ms'])
     assert.ok(Number.isFinite(report.phase_timings_ms[key]),key);
+});
+
+test('Radar 8 always releases the cycle latch when scheduler hydration fails',async()=>{
+  const events=[];
+  const radar=new EarlyExpansionRadar({
+    rest:{},store:{},
+    clock:()=>now,
+    logger:{info:x=>events.push(String(x)),warn:x=>events.push(String(x))}
+  });
+  radar.running=true;
+  radar.scheduler.hydrate=async()=>{throw new Error('SIMULATED_SCHEDULER_HYDRATE_FAILURE');};
+  assert.equal(await radar.tick(),false);
+  assert.equal(radar.busy,false,'failed hydration must not leave the scanner permanently busy');
+  assert.match(radar.lastError,/SIMULATED_SCHEDULER_HYDRATE_FAILURE/);
 });
 
 test('Radar 8 starts 15m, 1h, 4h and depth reads concurrently for each deep candidate',async()=>{
