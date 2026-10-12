@@ -282,8 +282,7 @@ export class KahirRadar{
     return (Array.isArray(r.data)?r.data:[])
       .map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
       .filter(x=>this.universe.includes(x.symbol)&&isDirectionalCandidateSymbol(x.symbol))
-      .filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h)
-      .filter(x=>Math.abs(Number(x.priceChange24h))<=6);
+      .filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h);
   }
   snapshotTicker(row){
     return {price:finite(row.lastPrice,0),velocity_bps:0,at:this.clock()};
@@ -313,8 +312,12 @@ export class KahirRadar{
     return {marketVelocityBps,updates};
   }
   selectDeep(rows,updates){
+    // Keep market-wide accounting complete, but do not spend Deep requests chasing a
+    // coin whose daily impulse is already outside the early-move window.
+    const earlyRows=(Array.isArray(rows)?rows:[]).filter(row=>
+      Math.abs(Number(row?.priceChange24h))<=Number(this.config.maxAbs24hMovePct??6));
     const bySym=new Map(updates.map(x=>[x.symbol,x]));
-    const ranked=[...rows].map(row=>{
+    const ranked=[...earlyRows].map(row=>{
       const u=bySym.get(row.symbol)||{};
       const history=this.selfSnapshots.get(row.symbol)||[];
       const accel=u.relativeVelocityBps+(finite(u.selfChangePct,0)-finite(history.at(-2)?.selfChangePct,0))*100;
