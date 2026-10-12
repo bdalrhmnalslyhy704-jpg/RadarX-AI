@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {aggregateFiveMinuteCandles, normalizeHistoricalCandles, runHistoricalReplay} from '../core/historical-replay.mjs';
 
 const MINUTE = 60_000;
-const ORIGIN = Math.floor((Date.now() - 10 * 60 * MINUTE) / MINUTE) * MINUTE;
+const ORIGIN = Math.floor((Date.now() - 10 * 60 * MINUTE) / (5 * MINUTE)) * (5 * MINUTE);
 
 function candles(count = 300) {
   const rows = [];
@@ -108,6 +108,5 @@ test('forward +50/+70 percent labels are outcomes, separate from evaluator input
     }
   });
   assert.equal(sawOutcomeOnlyLeak, false);
-  assert.ok(replay.steps.every(x => !('outcome' in x))); 
   assert.ok(replay.steps.every(x => 'outcome' in x && x.outcome.is_future_data_for_scoring === false));
 });
