@@ -132,6 +132,7 @@ function radarSpecificChecks(alert,p){
 
   if(r==='STRONG_MOVE_RADAR'){
     const m=alert?.strong_move?.metrics||{};
+    if(Math.abs(num(alert?.price_change_24h??alert?.priceChange24h,0))>8)failures.push('STRONG_MOVE_ALREADY_EXTENDED');
     const hasImpulse=num(m.return_3m,0)>=0.60 || Boolean(m.micro_breakout);
     const hasParticipation=num(m.volume_ratio,0)>=1.6 || num(m.trade_ratio,0)>=1.35;
     const hasFlow=num(m.taker_buy_ratio,0)>=0.53 || num(m.taker_buy_delta,0)>=0.01;
@@ -158,7 +159,7 @@ function radarSpecificChecks(alert,p){
   }
 
   if(r==='KAHIR_RADAR'){
-    const a=alert?.analysis||{};
+    const a=alert?.analysis||alert?.kahir_analysis||{};
     const m=a.metrics||{};
     const z=Math.max(num(m.one_minute_z,0),num(m.five_minute_z,0));
     const participation=num(a.algorithms?.PARTICIPATION_REGIME?.score,0);
