@@ -78,15 +78,52 @@ test('market-wide light scan covers all eligible symbols once and keeps candidat
   assert.ok([...result.audit.values()].every(item=>Number.isInteger(item.light_rank)),'every eligible symbol needs an explicit light or rotation rank');
   assert.ok([...result.audit.values()].filter(item=>!item.evaluated).every(item=>item.rank_basis==='FAIR_ROTATION_NO_VALID_LIGHT_DATA'));
   assert.equal(result.summary.binance_rest_calls_added_by_light_scan,0);
-  assert.equal(result.coverageReady,false,'partial cache coverage must not activate the filter');
-  assert.equal(result.summary.selection_mode,'BOOTSTRAP_FULL_UNIVERSE');
+  assert.equal(result.coverageReady,true,'40 fresh symbols exceed the 24-symbol minimum and 10 percent warmup floor');
+  assert.equal(result.summary.selection_mode,'MARKET_WIDE_CANDIDATE_POOL');
+  const belowWarmup = light.scan({
+    eligible,now:now+500,cycle:2,
+    getSeries:symbol=>{
+      const index=Number(symbol.match(/(\d+)USDT$/)?.[1]||0);
+      return index<20?cacheSeries(symbol,now+500):null;
+    },
+    lastMicroScannedAt:()=>null
+  });
+  assert.equal(belowWarmup.summary.evaluated_total,20);
+  assert.equal(belowWarmup.coverageReady,false,'fewer than 24 fresh symbols must keep the filter disabled');
+  assert.equal(belowWarmup.summary.selection_mode,'BOOTSTRAP_FULL_UNIVERSE');
   const fullyWarmed = light.scan({
-    eligible,now:now+1000,cycle:2,
+    eligible,now:now+1000,cycle:3,
     getSeries:symbol=>cacheSeries(symbol,now+1000),
     lastMicroScannedAt:()=>null
   });
   assert.equal(fullyWarmed.summary.evaluated_total,330);
-  assert.equal(fullyWarmed.coverageReady,true,'only complete fresh-candle coverage can activate ranking');
+  assert.equal(fullyWarmed.coverageReady,true,'full fresh-candle coverage also activates ranking');
+});
+
+test('market-wide light pool can operate at post-restart 13.6 percent verified coverage without dropping an unready burst candidate',()=>{
+  const now=1_900_000_000_000;
+  const eligible=Array.from({length:337},(_,i)=>row(i));
+  const light=new MarketWideLightScan({
+    config:{candidateLimit:48,rotationReserve:12,minimumReadyCandidates:24,minimumCoverageRatio:.10},clock:()=>now
+  });
+  const result=light.scan({
+    eligible,now,cycle:20,
+    getSeries:symbol=>{
+      const index=Number(symbol.match(/(\d+)USDT$/)?.[1]||0);
+      return index<46?cacheSeries(symbol,now):null;
+    },
+    isExceptional:item=>item.symbol==='LIGHT336USDT',
+    lastMicroScannedAt:()=>null
+  });
+  assert.equal(result.summary.evaluated_total,46);
+  assert.equal(result.summary.fresh_cache_coverage_ratio,46/337);
+  assert.equal(result.coverageReady,true,'46 fresh evaluations are above the required 24-symbol minimum and 10 percent coverage floor');
+  assert.equal(result.summary.full_universe_evaluation_complete,false,'the remaining symbols stay explicitly visible as incomplete');
+  assert.equal(result.summary.minimum_ready_candidates,24);
+  assert.equal(result.summary.minimum_cache_coverage_ratio,.10);
+  assert.ok(result.candidateSymbols.includes('LIGHT336USDT'),'a fast exceptional symbol without light-cache data must remain eligible for Micro confirmation');
+  assert.equal(result.audit.get('LIGHT336USDT').candidate_selection_reason,'EXCEPTIONAL_PRESERVED');
+  assert.equal(result.summary.binance_rest_calls_added_by_light_scan,0);
 });
 
 test('market-wide light scan preserves a broad burst lane instead of dropping candidates at a four-symbol cap', () => {

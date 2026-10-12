@@ -1,6 +1,7 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
+import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
 import {isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
@@ -34,7 +35,14 @@ function stdev(xs){
 export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
   const a=closedCandles(oneM,now),b=closedCandles(fiveM,now);
   if(a.length<40||b.length<20){
-    return {eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true,one_minute_count:a.length,five_minute_count:b.length};
+    return {eligible:false,stage:'INSUFFICIENT_DATA',direction:'NONE',score:null,closed_candles_only:true,one_minute_count:a.length,five_minute_count:b.length,data_quality:0,data_stale:true};
+  }
+  const oneAge=Math.max(0,Number(now)-Number(a.at(-1)?.closeTime));
+  const fiveAge=Math.max(0,Number(now)-Number(b.at(-1)?.closeTime));
+  if(!Number.isFinite(oneAge)||!Number.isFinite(fiveAge)||oneAge>3*60*1000||fiveAge>10*60*1000){
+    return {eligible:false,stage:'STALE_DATA',direction:'NONE',score:null,closed_candles_only:true,
+      one_minute_count:a.length,five_minute_count:b.length,data_quality:0,data_stale:true,
+      reason_codes:['STALE_CLOSED_CANDLES'],one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge};
   }
 
   const closes=a.map(x=>Number(x.close));
@@ -198,6 +206,7 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
   return {
     eligible:strongTrigger,
     closed_candles_only:true,
+    data_quality:90,data_stale:false,candle_freshness:{one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge},
     stage,
     direction,
     score:Math.round(score*10)/10,
@@ -254,8 +263,9 @@ export function buildStrongMoveAlert(candidate,now=Date.now()){
     reasons:a.reasons,
     risk_flags:[
       Math.abs(finite(ticker.priceChange24h,0))>=20?'24H_ALREADY_EXTENDED':null,
-      a.component_scores.taker<45?'SELLING_PRESSURE_HIGH':null,
-      a.component_scores.range>90?'VOLATILITY_EXTREME':null
+      a.data_stale===true?'STALE_DATA':null,
+      (a.component_scores?.taker??50)<45?'SELLING_PRESSURE_HIGH':null,
+      (a.component_scores?.range??0)>90?'VOLATILITY_EXTREME':null
     ].filter(Boolean),
     source:a.source,
     detected_at:now,
@@ -263,6 +273,9 @@ export function buildStrongMoveAlert(candidate,now=Date.now()){
     paper_trading:true,
     real_order_execution:false,
     confidence_score:'UNKNOWN',
+    data_quality:finite(a.data_quality,0),
+    data_status:{status:a.data_stale?'DATA_STALE':'LIVE_DATA',stale:Boolean(a.data_stale),future_data_detected:false,source:'Binance Public REST'},
+    liquidity_quality:clamp(70+Math.log10(Math.max(1,(Number(ticker.quoteVolume24h)||0)/1000000))*30),
     eligible:a.eligible,
     disclaimer:'رادار الحركة القوية يلتقط توسعًا/تسارعًا ظهر فعليًا؛ لا يضمن استمرار الحركة أو اتجاهها لاحقًا.'
   };
@@ -312,7 +325,13 @@ export class StrongMoveRadar {
       .filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h&&this.universe.includes(x.symbol));
   }
   selectBatch(rows){
-    const byMove=[...(Array.isArray(rows)?rows:[])].sort((a,b)=>Math.abs(b.priceChange24h)-Math.abs(a.priceChange24h)||b.quoteVolume24h-a.quoteVolume24h);
+    const byMove=[...(Array.isArray(rows)?rows:[])].sort((a,b)=>{
+      const am=Number(a.priceChange24h),bm=Number(b.priceChange24h);
+      const ae=Math.abs(am)>8,be=Math.abs(bm)>8;
+      if(ae!==be)return Number(ae)-Number(be);
+      if(!ae&&am!==bm)return bm-am;
+      return Math.abs(bm)-Math.abs(am)||b.quoteVolume24h-a.quoteVolume24h;
+    });
     const selected=[],seen=new Set();
     const take=row=>{if(row?.symbol&&!seen.has(row.symbol)){selected.push(row);seen.add(row.symbol);return true;}return false;};
     const topCount=Math.max(0,Math.trunc(Number(this.config.topMoverCount)||0));
@@ -363,7 +382,13 @@ export class StrongMoveRadar {
       minConfirmations:4,minScore:86,max24hMovePct:8,requireTrigger:true,minCategoryHits:5
     });
     alert.elite_gate=gate;
+    alert.data_quality=finite(a.data_quality,0);
+    alert.liquidity_quality=clamp(70+Math.log10(Math.max(1,Number(row.quoteVolume24h)/this.config.minQuoteVolume24h))*30);
+    alert.data_status={status:a.data_stale?'DATA_STALE':'LIVE_DATA',stale:Boolean(a.data_stale),future_data_detected:false,source:'Binance Public REST'};
     if(!alert.eligible||alertScore<this.config.minScore||!gate.eligible)return alert;
+    const notificationGate=evaluateRadarNotificationGate(alert,{now:this.clock(),commit:true});
+    alert.notification_gate=notificationGate;
+    if(!notificationGate.eligible)return alert;
     const lastAlert=this.lastAlertAt.get(row.symbol)||0;
     if(this.clock()-lastAlert<this.config.alertCooldownMs)return alert;
     this.lastAlertAt.set(row.symbol,this.clock());

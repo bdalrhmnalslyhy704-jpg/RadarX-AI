@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,stat,mkdir,readFile,writeFile} from 'node:fs/promises';
+import {mkdtemp,stat,mkdir,readFile,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DurableStore} from '../core/store.mjs';
@@ -300,6 +300,58 @@ test('large pre-expansion outcome ledger writes compact, valid JSON and remains 
   assert.equal(next.updated_at,1700000000123);
 });
 
+
+test('streams more than 5,000 outcome rows and keeps a 1,500-row working set with recent stage cooldowns',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-outcome-ledger-bound-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    const state={
+      version:'PRE_EXPANSION_OUTCOMES_V2',
+      records:Array.from({length:5500},(_,i)=>({
+        signal_id:'RADAR8:TESTUSDT:'+i,radar:'RADAR_8',symbol:'TESTUSDT',
+        signal_type:'WATCH_EARLY',detected_at:1700000000000+i,entry_price:1+i/10000,
+        marks:{'5m':{price:1+i/20000,at:1700000000000+i}},
+        horizon_status:{'5m':{status:'PENDING',matures_at:1700000300000+i}},
+        excursions:{'5m':{sample_count:1,max_favorable_pct:.1}}
+      })),
+      last_stage_by_key:Object.fromEntries(Array.from({length:5001},(_,i)=>[
+        'RADAR_8|KEY'+i+'USDT',{stage:'WATCH_EARLY',last_recorded_at:1700000000000+i}
+      ])),
+      last_price_update_at:0,last_report_log_at:0,last_historical_import_at:0,
+      last_historical_backfill_at:0,updated_at:1700000000000
+    };
+    await store.updatePreExpansionOutcomes(()=>state);
+    const result=await store.compactPreExpansionOutcomes({maxRecords:1500,maxStageKeys:4000});
+    assert.equal(result.compacted,true);
+    assert.equal(result.trimmed_records,4000);
+    assert.equal(result.retained_records,1500);
+    assert.equal(result.trimmed_stage_keys,1001);
+    const saved=JSON.parse(await readFile(store.files.preExpansionOutcomes,'utf8'));
+    assert.equal(saved.records.length,1500);
+    assert.equal(saved.records[0].signal_id,'RADAR8:TESTUSDT:4000');
+    assert.equal(saved.records.at(-1).signal_id,'RADAR8:TESTUSDT:5499');
+    assert.equal(Object.keys(saved.last_stage_by_key).length,4000);
+    assert.equal(Object.hasOwn(saved.last_stage_by_key,'RADAR_8|KEY0USDT'),false);
+    assert.equal(Object.hasOwn(saved.last_stage_by_key,'RADAR_8|KEY5000USDT'),true);
+    const second=await store.compactPreExpansionOutcomes({maxRecords:1500,maxStageKeys:4000});
+    assert.equal(second.compacted,false);
+    assert.equal(second.reason,'WITHIN_LIMITS');
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+test('refuses to overwrite a malformed outcome ledger during compaction',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-outcome-ledger-invalid-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    await writeFile(store.files.preExpansionOutcomes,'{"records":[not-json]}');
+    await assert.rejects(store.compactPreExpansionOutcomes(),/PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON/);
+    assert.equal(await readFile(store.files.preExpansionOutcomes,'utf8'),'{"records":[not-json]}');
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
 
 test('scan-journey candle history rehydrates only newest fresh continuous closed data without archive mutation',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-journey-candle-rehydrate-'));

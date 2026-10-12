@@ -51,6 +51,7 @@ export const MARKET_WIDE_LIGHT_SCAN_DEFAULTS = Object.freeze({
   candidateLimit: 48,
   rotationReserve: 12,
   minimumReadyCandidates: 24,
+  minimumCoverageRatio: 0.10,
   maxEligibleSymbols: 1200
 });
 
@@ -666,7 +667,16 @@ export class MarketWideLightScan {
     const validCandidateTotal = evaluated.filter(item => item.result.candidate).length;
     const scanRows = [...audit.values()];
     const minimumReady = Math.max(1, Math.trunc(Number(this.config.minimumReadyCandidates) || 24));
-    const coverageReady = eligibleTotal > 0 && evaluatedTotal === eligibleTotal;
+    const minimumCoverageRatio = Math.max(0.10, Math.min(1,
+      Number.isFinite(Number(this.config.minimumCoverageRatio)) ? Number(this.config.minimumCoverageRatio) : 0.10));
+    const freshCoverageRatio = eligibleTotal ? evaluatedTotal / eligibleTotal : 0;
+    const fullUniverseEvaluationComplete = eligibleTotal > 0 && evaluatedTotal === eligibleTotal;
+    // Candidate selection is allowed with a sufficiently broad verified cache;
+    // symbols without ready data remain in the fair-rotation/exception lane and
+    // must still pass the independent Micro/Deep data-quality and anti-chase gates.
+    const coverageReady = eligibleTotal > 0 &&
+      evaluatedTotal >= Math.min(minimumReady, eligibleTotal) &&
+      freshCoverageRatio >= minimumCoverageRatio;
     const selectedExceptional = selected.filter(item => item.selectionReason === 'EXCEPTIONAL_PRESERVED').length;
     const summary = {
       eligible_total: eligibleTotal,
@@ -674,7 +684,10 @@ export class MarketWideLightScan {
       duplicate_symbols: [...new Set(duplicateSymbols)],
       evaluated_total: evaluatedTotal,
       not_evaluated_total: eligibleTotal - evaluatedTotal,
-      fresh_cache_coverage_ratio: eligibleTotal ? evaluatedTotal / eligibleTotal : 0,
+      fresh_cache_coverage_ratio: freshCoverageRatio,
+      minimum_ready_candidates: Math.min(minimumReady, eligibleTotal),
+      minimum_cache_coverage_ratio: minimumCoverageRatio,
+      full_universe_evaluation_complete: fullUniverseEvaluationComplete,
       new_closed_candle_total: scanRows.filter(item => item.new_closed_candle === true).length,
       reused_evaluation_total: scanRows.filter(item => item.evaluation_reused === true).length,
       no_new_closed_candle_total: scanRows.filter(item => item.evaluation_kind === 'NO_NEW_CLOSED_CANDLE' ||

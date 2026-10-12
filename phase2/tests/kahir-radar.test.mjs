@@ -120,6 +120,20 @@ test('Kahir scans a full Spot universe before selecting a bounded deep set',asyn
 
 
 
+
+test('Kahir rejects stale closed candles instead of treating cached movement as live',()=>{
+  const m1=candles(150,60000).map(row=>({...row,openTime:row.openTime-20*60*1000,closeTime:row.closeTime-20*60*1000}));
+  const m5=fiveMinuteImpulse().map(row=>({...row,openTime:row.openTime-20*60*1000,closeTime:row.closeTime-20*60*1000}));
+  const result=buildKahirAnalysis({
+    oneMinute:m1,fiveMinute:m5,ticker:{lastPrice:101.2,priceChange24h:1,quoteVolume24h:5_000_000},
+    selfHistory:[{price:100,velocity_bps:1,selfChangePct:.01},{price:100.05,velocity_bps:2,selfChangePct:.05}],
+    marketVelocityBps:1,now:NOW
+  });
+  assert.equal(result.eligible,false);
+  assert.equal(result.stage,'STALE_DATA');
+  assert.equal(result.data_stale,true);
+});
+
 test('Kahir rotates deep-scan slots beyond the same highest-activity candidates',()=>{
   const radar=new KahirRadar({rest:{},store:{},config:{deepCandidates:4,deepRotationReserve:2,deepConcurrency:2},clock:()=>NOW,logger:{warn(){}}});
   const rows=Array.from({length:12},(_,i)=>({

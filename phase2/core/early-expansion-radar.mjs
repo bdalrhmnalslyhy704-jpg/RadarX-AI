@@ -166,14 +166,14 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   quote:'USDT',
   pollMs:45000,
   universeRefreshMs:15*60*1000,
-  minQuoteVolume24h:350000,
+  minQuoteVolume24h:750000,
   minLiquidityQuality:58,
   maxSpreadBps:22,
   minDataQuality:70,
-  microScanCandidates:12,
-  rotationReserve:3,
-  deepCandidates:3,
-  quietReserve:4,
+  microScanCandidates:18,
+  rotationReserve:8,
+  deepCandidates:5,
+  quietReserve:8,
   microConcurrency:6,
   deepConcurrency:4,
   oneMinuteKlines:180,
@@ -218,6 +218,7 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   marketWideLightScanCandidateLimit:48,
   marketWideLightScanRotationReserve:12,
   marketWideLightScanMinReadyCandidates:24,
+  marketWideLightScanMinCoverageRatio:0.10,
   marketWideLightScanMaxCandleAgeMs:8*60*1000,
   marketWideLightScanMinClosedCandles:60,
   marketWideLightScanMaxClosedCandles:96,
@@ -1089,6 +1090,17 @@ export function nextEarlyExpansionPollDelayMs(pollMs,elapsedMs,completed=true){
   return Math.max(0,poll-Math.max(0,Number(elapsedMs)||0));
 }
 
+export function isMarketWideCachePoolReady(cacheProof, minimumCoverageRatio=0.10){
+  const expected=Number(cacheProof?.expected_symbols);
+  const ready=Number(cacheProof?.ready_symbols);
+  const ratio=Number.isFinite(expected)&&expected>0&&Number.isFinite(ready)
+    ?Math.max(0,Math.min(1,ready/expected)):0;
+  const minimum=Math.max(0.10,Math.min(1,Number.isFinite(Number(minimumCoverageRatio))?Number(minimumCoverageRatio):0.10));
+  return cacheProof?.websocket_live===true&&
+    cacheProof?.websocket_subscription_complete===true&&
+    cacheProof?.websocket_sync_ready===true&&ratio>=minimum;
+}
+
 export class EarlyExpansionRadar{
   constructor({rest,store,pushManager=null,marketWideKlineCache=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
@@ -1100,6 +1112,7 @@ export class EarlyExpansionRadar{
       candidateLimit:this.config.marketWideLightScanCandidateLimit,
       rotationReserve:this.config.marketWideLightScanRotationReserve,
       minimumReadyCandidates:this.config.marketWideLightScanMinReadyCandidates,
+      minimumCoverageRatio:this.config.marketWideLightScanMinCoverageRatio,
       maxCandleAgeMs:this.config.marketWideLightScanMaxCandleAgeMs,
       minClosedCandles:this.config.marketWideLightScanMinClosedCandles,
       maxClosedCandles:this.config.marketWideLightScanMaxClosedCandles
@@ -1230,20 +1243,16 @@ export class EarlyExpansionRadar{
     const n=Math.max(1,Math.trunc(this.config.microScanCandidates||36));
     const target=Math.min(n,new Set(all.map(x=>String(x.symbol).toUpperCase())).size);
     if(!target)return [];
-    // Keep event/score lanes alive: fixed quiet+rotation reserves previously
-    // consumed 11 of 12 Micro slots, leaving only one slot for every fast event.
-    // Cap quiet to one third and rotation to one quarter for larger batches.
-    // A 3-symbol Deep batch keeps one quiet, one rotation, and one core slot.
-    const configuredQuiet=Math.min(Math.max(0,Math.trunc(this.config.quietReserve??4)),Math.max(0,target-1));
-    const configuredRotation=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve??3)),Math.max(0,target-configuredQuiet-1));
-    let q=configuredQuiet,r=configuredRotation,core=target-q-r;
-    if(core<2&&target>1){
-      const quietCap=target>=6?Math.floor(target/3):Math.floor(target/2);
-      const rotationCap=target>=6?Math.floor(target/4):1;
-      q=Math.min(configuredQuiet,Math.max(0,Math.min(target-1,quietCap)));
-      r=Math.min(configuredRotation,Math.max(0,Math.min(target-q-1,rotationCap)));
-      core=target-q-r;
-    }
+    // Cap quiet slots, preserve explicit rotation, and always leave at least
+    // two slots for score/event candidates even as configurable reserves grow.
+    const requestedQuiet=Math.max(0,Math.trunc(this.config.quietReserve??4));
+    const requestedRotation=Math.max(0,Math.trunc(this.config.rotationReserve??3));
+    const quietCap=target>1?Math.floor(target/3):0;
+    const q=Math.min(requestedQuiet,quietCap,Math.max(0,target-1));
+    const coreReserve=Math.max(3,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2))+2);
+    const rotationCap=Math.max(0,target-q-(target>=6?coreReserve:2));
+    const r=Math.min(requestedRotation,rotationCap);
+    const core=target-q-r;
     const byScore=[...all].sort((a,b)=>b._microPreScore-a._microPreScore||a.symbol.localeCompare(b.symbol));
     const byQuiet=all.filter(x=>x._quietEligible).sort((a,b)=>
       (absolute24hMove(a)??Infinity)-(absolute24hMove(b)??Infinity)||b._quietScore-a._quietScore||a.symbol.localeCompare(b.symbol));
@@ -1277,9 +1286,14 @@ export class EarlyExpansionRadar{
     const n=Math.max(1,Math.trunc(this.config.deepCandidates||10));
     const target=Math.min(n,new Set(valid.map(selectionSymbol)).size);
     if(!target)return [];
-    // 8 quiet slots by default would crowd out all but one scored candidate in a 10-wide batch.
-    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve??8)),Math.max(0,target-1),Math.floor(target*.5));
-    const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve??2)),Math.max(0,target-q-1));
+    // Cap quiet slots, preserve explicit rotation, and keep score/event capacity.
+    const requestedQuiet=Math.max(0,Math.trunc(this.config.quietReserve??4));
+    const requestedRotation=Math.max(0,Math.trunc(this.config.rotationReserve??3));
+    const quietCap=target>1?Math.floor(target/3):0;
+    const q=Math.min(requestedQuiet,quietCap,Math.max(0,target-1));
+    const coreReserve=Math.max(3,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2))+1);
+    const rotationCap=Math.max(0,target-q-(target>=6?coreReserve:2));
+    const r=Math.min(requestedRotation,rotationCap);
     const core=target-q-r;
     const byScore=[...valid].sort((a,b)=>Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const byQuiet=valid.map(item=>({...item,_quietScore:quietDeepRank(item,this.config)}))
@@ -1319,7 +1333,10 @@ export class EarlyExpansionRadar{
       exceptionSlots=Math.min(byExceptional.length,maxEventSlots);
       const remaining=Math.max(0,target-exceptionSlots);
       quietSlots=Math.min(q,Math.floor(remaining/3));
-      rotationSlots=Math.min(r,Math.max(0,remaining-quietSlots));
+      // For Deep batches of four or more, reserve one score-ranked slot even
+      // when multiple burst events arrive together; use the rest for fair rotation.
+      const scoreReserve=target>=4?1:0;
+      rotationSlots=Math.min(Math.max(r,1),Math.max(0,remaining-quietSlots-scoreReserve));
       scoreSlots=Math.max(0,remaining-quietSlots-rotationSlots);
     }
     takeUniqueLane(selected,seen,byExceptional,exceptionSlots,'exceptional');
@@ -1531,8 +1548,13 @@ export class EarlyExpansionRadar{
           let cacheProof=null;
           try{cacheProof=this.marketWideKlineCache?.health?.()||null;}catch{}
           const fullMarketCacheReady=cacheProof?.full_market_coverage_ready===true;
+          const marketWideCachePoolReady=isMarketWideCachePoolReady(
+            cacheProof,this.config.marketWideLightScanMinCoverageRatio);
+          const expectedCacheSymbols=Number(cacheProof?.expected_symbols)||0;
+          const readyCacheSymbols=Number(cacheProof?.ready_symbols)||0;
+          const marketWideCacheReadyRatio=expectedCacheSymbols>0?readyCacheSymbols/expectedCacheSymbols:0;
           if(this.config.marketWideLightScanPoolActivationEnabled!==false&&
-              marketWideLightResult.coverageReady&&fullMarketCacheReady&&this.marketWideKlineCache&&
+              marketWideLightResult.coverageReady&&marketWideCachePoolReady&&this.marketWideKlineCache&&
               eligible.length>=Math.min(12,Number(this.config.microScanCandidates)||12)){
             const pool=marketWideLightResult.candidateRows.filter(row=>lightPoolSet.has(selectionSymbol(row)));
             if(pool.length>=Math.min(12,eligible.length)){
@@ -1540,7 +1562,9 @@ export class EarlyExpansionRadar{
             }
           }
           marketWideLightResult.summary.micro_pool_applied=marketWideLightApplied;
-          marketWideLightResult.summary.market_wide_cache_coverage_ready=fullMarketCacheReady;
+          marketWideLightResult.summary.market_wide_cache_coverage_ready=marketWideCachePoolReady;
+          marketWideLightResult.summary.market_wide_cache_ready_ratio=marketWideCacheReadyRatio;
+          marketWideLightResult.summary.full_market_cache_coverage_ready=fullMarketCacheReady;
           marketWideLightResult.summary.websocket_advanced_symbols=Number(cacheProof?.websocket_advanced_symbols)||0;
           marketWideLightResult.summary.legacy_micro_selector_active=!marketWideLightApplied;
           marketWideLightResult.summary.micro_capacity_configured=Number(this.config.microScanCandidates)||12;

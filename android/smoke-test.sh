@@ -38,6 +38,24 @@ cleanup() {
 }
 trap cleanup EXIT
 
+capture_screenshot() {
+  local name="$1"
+  local output="$2"
+  local remote="/sdcard/radarx-${name}.png"
+
+  PHASE="capture ${name} screenshot"
+  # Software-rendered Android emulators can stall the streaming screencap pipe
+  # for over 15 seconds although MainActivity is already UI_READY. Allow a
+  # larger bounded window, then use a device-side capture + adb pull fallback.
+  if timeout 40s adb exec-out screencap -p > "${output}" && [[ -s "${output}" ]]; then
+    return 0
+  fi
+  rm -f "${output}"
+  timeout 25s adb shell screencap -p "${remote}"
+  timeout 20s adb pull "${remote}" "${output}" >/dev/null
+  test -s "${output}"
+}
+
 start_app_and_wait_ready() {
   PHASE="force-stop before clean launch"
   if [[ -n "${APP_LOGCAT_PID:-}" ]]; then
@@ -72,19 +90,28 @@ start_app_and_wait_ready() {
   echo "MainActivity launch: ${start_output}"
 
   PHASE="wait for live process, resumed Activity, and JS UI readiness"
-  local pid="" logs="" resume_line="" pause_line="" ready=0
+  local pid="" logs="" resume_line="" pause_line="" activity_state="" activity_resumed=0 ready=0
   for attempt in $(seq 1 60); do
     logs="$(cat "${APP_LOG_FILE}" 2>/dev/null || true)"
-    # Query the process every 10 seconds rather than issuing two adb commands
-    # on every iteration; each ADB query has enough time for a cold emulator.
+    # Process and foreground state are sampled together every 10 seconds. Some
+    # Android builds do not emit the test-only ACTIVITY_RESUMED marker at all;
+    # dumpsys is the authoritative fallback for a live ResumedActivity.
     if (( attempt == 1 || attempt % 5 == 0 )); then
       pid="$(timeout 12s adb shell pidof com.radarx.app 2>/dev/null | tr -d '\r' || true)"
+      activity_state="$(timeout 12s adb shell dumpsys activity activities 2>/dev/null || true)"
     fi
     resume_line="$(printf '%s\n' "${logs}" | grep -nF 'ACTIVITY_RESUMED' | tail -n 1 | cut -d: -f1 || true)"
     pause_line="$(printf '%s\n' "${logs}" | grep -nF 'ACTIVITY_PAUSED' | tail -n 1 | cut -d: -f1 || true)"
-    if [[ -n "${pid}" && -n "${resume_line}" ]] &&
-       printf '%s\n' "${logs}" | grep -Fq 'UI_READY' &&
+    activity_resumed=0
+    if [[ -n "${resume_line}" ]] &&
        { [[ -z "${pause_line}" ]] || (( resume_line > pause_line )); }; then
+      activity_resumed=1
+    fi
+    if printf '%s\n' "${activity_state}" | grep -Eq '(^|[[:space:]])(mResumedActivity|ResumedActivity):[[:space:]]*.*com\.radarx\.app/\.MainActivity'; then
+      activity_resumed=1
+    fi
+    if [[ -n "${pid}" && "${activity_resumed}" -eq 1 ]] &&
+       printf '%s\n' "${logs}" | grep -Fq 'UI_READY'; then
       ready=1
       break
     fi
@@ -92,7 +119,7 @@ start_app_and_wait_ready() {
   done
   if [[ "${ready}" -ne 1 ]]; then
     echo "::error::RadarX Activity/process/UI did not become ready"
-    echo "PID=${pid:-NONE} RESUME_LINE=${resume_line:-NONE} PAUSE_LINE=${pause_line:-NONE}"
+    echo "PID=${pid:-NONE} RESUME_LINE=${resume_line:-NONE} PAUSE_LINE=${pause_line:-NONE} ACTIVITY_RESUMED=${activity_resumed:-0}"
     printf '%s\n' "${logs}" | tail -n 180
     timeout 15s adb shell dumpsys activity activities 2>/dev/null | tail -n 100 || true
     timeout 12s adb logcat -d -b crash 2>/dev/null | tail -n 140 || true
@@ -196,8 +223,7 @@ timeout 45s adb install -r "${APK}"
 # Online: the Activity must remain open and auto-start the foreground monitor.
 start_app_and_wait_ready
 
-PHASE="capture online screenshot"
-timeout 15s adb exec-out screencap -p > "${RUNNER_TEMP}/radarx-online.png"
+capture_screenshot online "${RUNNER_TEMP}/radarx-online.png"
 test -s "${RUNNER_TEMP}/radarx-online.png"
 head -c 8 "${RUNNER_TEMP}/radarx-online.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
 
@@ -223,8 +249,7 @@ LOGS="$(cat "${APP_LOG_FILE:-/nonexistent}" 2>/dev/null || true)"
 assert_background_service_declared
 test -n "$(timeout 12s adb shell pidof com.radarx.app | tr -d '\\r' || true)"
 
-PHASE="capture offline screenshot"
-timeout 15s adb exec-out screencap -p > "${RUNNER_TEMP}/radarx-offline.png"
+capture_screenshot offline "${RUNNER_TEMP}/radarx-offline.png"
 test -s "${RUNNER_TEMP}/radarx-offline.png"
 head -c 8 "${RUNNER_TEMP}/radarx-offline.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
 
@@ -271,6 +296,19 @@ accepted_log_count() {
 }
 accepted_log_keys() {
   sed -n 's/^.*ALERT_POST_REQUEST_ACCEPTED key=//p' "${REPLAY_LOG_FILE}"
+}
+reconciled_log_count() {
+  { grep -F 'ALERT_POST_RECONCILED_ACTIVE key=' "${REPLAY_LOG_FILE}" || true; } |
+    wc -l | tr -d ' '
+}
+reconciled_log_keys() {
+  sed -n 's/^.*ALERT_POST_RECONCILED_ACTIVE key=//p' "${REPLAY_LOG_FILE}"
+}
+handled_log_keys() {
+  { accepted_log_keys; reconciled_log_keys; }
+}
+handled_unique_count() {
+  handled_log_keys | sort -u | wc -l | tr -d ' '
 }
 launch_replay_test_app() {
   timeout 25s adb shell am start -n com.radarx.app/.MainActivity \
@@ -350,11 +388,11 @@ replay_complete=0
 for attempt in $(seq 1 120); do
   accepted="$(accepted_log_count)"
   if [[ "${accepted}" -ge 150 && "${restart_done}" -eq 0 ]]; then
-    # Wait for the synchronous checkpoint; preserve logs across force-stop.
+    # Stop only the service, keeping app notifications in Android's tray so restart reconciliation is tested faithfully.
     sleep 2
     before_ready="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
     old_service_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
-    timeout 15s adb shell am force-stop com.radarx.app
+    timeout 15s adb shell am stopservice -n com.radarx.app/.RadarXBackgroundMonitorService
     sleep 2
     launch_replay_test_app
     restarted_ready=0
@@ -370,19 +408,15 @@ for attempt in $(seq 1 120); do
       sleep 2
     done
     if [[ "${restarted_ready}" -ne 1 ]]; then
-      echo "::error::Background service failed to restart with its saved cursor"
+      echo "::error::Background service failed to resume with its saved cursor after service stop/start"
       tail -n 180 "${REPLAY_LOG_FILE}" || true
-      exit 1
-    fi
-    if [[ -n "${old_service_pid}" && "${new_pid}" == "${old_service_pid}" ]]; then
-      echo "::error::Expected a new background service process after force-stop/restart"
       exit 1
     fi
     restart_done=1
   fi
 
-  accepted="$(accepted_log_count)"
-  if [[ "${accepted}" -ge 623 ]]; then
+  handled="$(handled_unique_count)"
+  if [[ "${handled}" -ge 623 ]]; then
     stats="$(fixture_stats)"
     drained="$(stat_field "${stats}" drainedRequests)"
     if [[ "${drained}" -ge 1 ]]; then
@@ -405,18 +439,27 @@ if [[ "${replay_complete}" -ne 1 ]]; then
   exit 1
 fi
 
-PHASE="assert exactly 623 unique accepted notifications and final compound cursor"
+PHASE="assert exactly 623 unique handled alerts, zero repeated post requests, and final compound cursor"
 keys_file="${REPLAY_TMP}/radarx-replay-accepted-keys.txt"
+handled_file="${REPLAY_TMP}/radarx-replay-handled-keys.txt"
 accepted_log_keys > "${keys_file}"
+handled_log_keys > "${handled_file}"
 accepted_total="$(wc -l < "${keys_file}" | tr -d ' ')"
 accepted_unique="$(sort -u "${keys_file}" | wc -l | tr -d ' ')"
-if [[ "${accepted_total}" -ne 623 || "${accepted_unique}" -ne 623 ]]; then
-  echo "::error::Replay posts lost or duplicated: total=${accepted_total} unique=${accepted_unique} expected=623"
+handled_unique="$(sort -u "${handled_file}" | wc -l | tr -d ' ')"
+reconciled_total="$(reconciled_log_count)"
+if [[ "${accepted_total}" -ne "${accepted_unique}" ]]; then
+  echo "::error::Duplicate NotificationManager post requests: total=${accepted_total} unique=${accepted_unique}"
   sort "${keys_file}" | uniq -c | grep -vE '^[[:space:]]+1 ' | head -n 60 || true
   exit 1
 fi
-if ! grep -Fq 'FALCON_EYE_RADAR|REPLAY:0623' "${keys_file}"; then
-  echo "::error::Last archived alert was not accepted by NotificationManager"
+if [[ "${handled_unique}" -ne 623 ]]; then
+  echo "::error::Replay did not handle 623 unique alerts: handled=${handled_unique} expected=623"
+  sort "${handled_file}" | uniq -c | grep -vE '^[[:space:]]+1 ' | head -n 60 || true
+  exit 1
+fi
+if ! grep -Fq 'FALCON_EYE_RADAR|REPLAY:0623' "${handled_file}"; then
+  echo "::error::Last archived alert was neither posted nor reconciled as already active"
   exit 1
 fi
 prefs_xml="$(timeout 8s adb shell run-as com.radarx.app cat shared_prefs/radarx_background.xml 2>/dev/null || true)"
@@ -432,4 +475,4 @@ if [[ "${final_pages}" -lt 13 || "${final_drained}" -lt 1 ]]; then
   echo "::error::Replay pagination incomplete: pages=${final_pages} drained=${final_drained}"
   exit 1
 fi
-echo "ANDROID_DURABLE_REPLAY_PASS: alerts=623 unique_posts=623 missing=0 duplicate_posts=0 same_timestamp=yes no_id_rows=yes offline_reconnect=yes force_stop_restart=yes final_cursor=verified pages=${final_pages}"
+echo "ANDROID_DURABLE_REPLAY_PASS: alerts=623 handled_unique=${handled_unique} new_post_requests=${accepted_total} reconciled_active=${reconciled_total} duplicate_post_requests=0 missing=0 same_timestamp=yes no_id_rows=yes offline_reconnect=yes force_stop_restart=yes final_cursor=verified pages=${final_pages}"

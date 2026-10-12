@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,nextEarlyExpansionPollDelayMs} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -45,6 +45,58 @@ function candidate(symbol,move,{score=65,participation=75,tradeParticipation=70,
   };
 }
 
+
+test('Radar 8 activates guarded candidate pooling at 10 percent verified cache coverage but never with an unhealthy stream',()=>{
+  assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.marketWideLightScanMinCoverageRatio,0.10,
+    'the actual Radar 8 runtime default must use the verified post-restart coverage floor');
+  assert.equal(makeRadar().config.marketWideLightScanMinCoverageRatio,0.10,
+    'the constructed radar must not override the 10 percent recovery floor with a stale 85 percent default');
+  const partial={expected_symbols:337,ready_symbols:46,websocket_live:true,
+    websocket_subscription_complete:true,websocket_sync_ready:true,full_market_coverage_ready:false};
+  assert.equal(isMarketWideCachePoolReady(partial,.10),true,
+    '46/337 ready symbols plus a live complete subscription should enable guarded candidate pooling');
+  assert.equal(isMarketWideCachePoolReady({...partial,ready_symbols:32},.10),false,
+    'coverage below the configured 10 percent floor must stay in bootstrap mode');
+  assert.equal(isMarketWideCachePoolReady({...partial,websocket_live:false},.10),false,
+    'a degraded or disconnected WebSocket must never activate cache-ranked selection');
+  assert.equal(isMarketWideCachePoolReady({...partial,websocket_subscription_complete:false},.10),false,
+    'all eligible symbols must remain subscribed even when some candle histories are incomplete');
+  assert.equal(isMarketWideCachePoolReady({...partial,websocket_sync_ready:false},.10),false,
+    'transport synchronization is still required');
+  assert.equal(isMarketWideCachePoolReady({...partial,ready_symbols:337},1.01),true,
+    'coverage thresholds are clamped to the valid range');
+});
+
+test('Radar 8 capacity of 18 preserves event, ranked-score, quiet, and rotation lanes',()=>{
+  const radar=makeRadar({microScanCandidates:18,quietReserve:8,rotationReserve:8,exceptionalRotationBypassSlots:3});
+  const input=rows(60),fast=fastMap(input);
+  for(const row of input.slice(0,8)){
+    fast.set(row.symbol,{price_change_pct:.42,price_acceleration_pct:.20,volume_accel_ratio:3.2,trade_accel_ratio:2.1});
+  }
+  const selected=radar.selectMicro(input,fast,7);
+  const lane=name=>selected.filter(x=>x._selection_lane===name).length;
+  assert.equal(selected.length,18);
+  assert.equal(new Set(selected.map(x=>x.symbol)).size,18);
+  assert.equal(lane('exceptional'),3);
+  assert.equal(lane('score'),2,'two score-ranked slots remain after the event bypass');
+  assert.equal(lane('quiet'),6);
+  assert.equal(lane('rotation'),7);
+});
+
+test('Radar 8 five-slot Deep batch preserves a score-ranked slot when burst events arrive together',()=>{
+  const radar=makeRadar({deepCandidates:5,quietReserve:8,rotationReserve:8,exceptionalRotationBypassSlots:3});
+  const items=Array.from({length:12},(_,i)=>candidate('DP'+String(i).padStart(2,'0')+'USDT',1+i*.1,{score:90-i}));
+  for(const item of items.slice(0,5)){
+    item.micro_fingerprint.activity_shock={detected:true,stage:'EVENT_DRIVEN_BREAKOUT',score:92,
+      watch_only:true,entry_eligible:false,extended:false};
+  }
+  const selected=radar.selectDeepFromMicro(items,17);
+  assert.equal(selected.length,5);
+  assert.equal(new Set(selected.map(x=>x.row.symbol)).size,5);
+  assert.equal(selected.filter(x=>x._selection_lane==='exceptional').length,3);
+  assert.equal(selected.filter(x=>x._selection_lane==='score'||x._selection_lane==='fill_score').length,1);
+  assert.equal(selected.filter(x=>x._selection_lane==='rotation'||x._selection_lane==='fill_rotation').length,1);
+});
 
 test('a 48-symbol market-wide light pool preserves the configured Micro capacity of twelve',()=>{
   const radar=makeRadar({microScanCandidates:12,quietReserve:8,rotationReserve:8});
@@ -171,7 +223,7 @@ test('Radar 8 quiet micro lane orders lowest valid daily change when participati
   const fast=fastMap(input,overrides);
   const selected=radar.selectMicro(input,fast,1);
   const quiet=selected.filter(x=>x._selection_lane==='quiet');
-  assert.equal(quiet.length,5);
+  assert.equal(quiet.length,3);
   const quietMoves=quiet.map(x=>Math.abs(x.priceChange24h));
   assert.deepEqual(quietMoves,[...quietMoves].sort((a,b)=>a-b));
   assert.ok(quietMoves.every(x=>x<=8));
@@ -284,7 +336,7 @@ test('Radar 8 deep scan preserves score capacity while selecting quiet bases fro
   assert.equal(selected.length,10);
   assert.equal(new Set(selected.map(x=>x.row.symbol)).size,10);
   const quiet=selected.filter(x=>x._selection_lane==='quiet');
-  assert.equal(quiet.length,5);
+  assert.equal(quiet.length,3);
   assert.equal(quiet[0].row.symbol,'ZZZQUIETUSDT');
 });
 
@@ -296,7 +348,7 @@ test('Radar 8 deep scan de-duplicates row-wrapped candidates and fills ten slots
   const selected=radar.selectDeepFromMicro([...input,input[0],input[1]],4);
   assert.equal(selected.length,10);
   assert.equal(new Set(selected.map(x=>x.row.symbol)).size,10);
-  assert.equal(selected.filter(x=>x._selection_lane==='quiet').length,5);
+  assert.equal(selected.filter(x=>x._selection_lane==='quiet').length,3);
 });
 
 
