@@ -171,9 +171,9 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   maxSpreadBps:22,
   minDataQuality:70,
   microScanCandidates:12,
-  rotationReserve:8,
+  rotationReserve:3,
   deepCandidates:3,
-  quietReserve:8,
+  quietReserve:4,
   microConcurrency:6,
   deepConcurrency:4,
   oneMinuteKlines:180,
@@ -191,7 +191,7 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   quietMinParticipationRatio:1.12,
   quietMinPriceAccelerationPct:0.03,
   quietDeepMinParticipationScore:58,
-  exceptionalRotationBypassSlots:2,
+  exceptionalRotationBypassSlots:3,
   exceptionalVolumeAccelRatio:2.2,
   exceptionalTradeAccelRatio:1.8,
   exceptionalPriceAccelerationPct:0.15,
@@ -1218,8 +1218,14 @@ export class EarlyExpansionRadar{
     const n=Math.max(1,Math.trunc(this.config.microScanCandidates||36));
     const target=Math.min(n,new Set(all.map(x=>String(x.symbol).toUpperCase())).size);
     if(!target)return [];
-    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve??8)),Math.max(0,target-1));
-    const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve??8)),Math.max(0,target-q-1));
+    // Keep event/score lanes alive: fixed quiet+rotation reserves previously
+    // consumed 11 of 12 Micro slots, leaving only one slot for every fast event.
+    // Cap quiet to one third and rotation to one quarter for larger batches.
+    // A 3-symbol Deep batch keeps one quiet, one rotation, and one core slot.
+    const quietCap=target>=6?Math.floor(target/3):Math.floor(target/2);
+    const rotationCap=target>=6?Math.floor(target/4):(target>1?1:0);
+    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve??4)),Math.max(0,Math.min(target-1,quietCap)));
+    const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve??3)),Math.max(0,Math.min(target-q-1,rotationCap)));
     const core=target-q-r;
     const byScore=[...all].sort((a,b)=>b._microPreScore-a._microPreScore||a.symbol.localeCompare(b.symbol));
     const byQuiet=all.filter(x=>x._quietEligible).sort((a,b)=>
