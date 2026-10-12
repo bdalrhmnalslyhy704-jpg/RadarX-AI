@@ -130,6 +130,7 @@ async function main() {
   };
 
   for (const symbol of symbols) {
+    try {
     process.stderr.write('[REPLAY] ' + symbol + ' fetching closed 1m candles…\n');
     const candleFetch = await fetchOneMinute(client, symbol, start - 24 * HOUR_MS - 125 * MINUTE_MS, end);
     const tradeFetch = await fetchAggregateTrades(client, symbol, start - 65_000, end, {maxPages, maxTrades});
@@ -184,6 +185,21 @@ async function main() {
     process.stderr.write('[REPLAY] ' + symbol + ' steps=' + replay.summary.replay_steps +
       ' accepted=' + replay.summary.accepted + ' rejected=' + replay.summary.rejected +
       ' trade_coverage=' + (tradeFetch.complete ? 'COMPLETE' : 'INCOMPLETE') + '\n');
+    } catch (error) {
+      const message = String(error?.message ?? error).replace(/[^a-z0-9_.:\- ]/gi, '_').slice(0, 240);
+      report.results.push({
+        engine: 'RADARX_HISTORICAL_REPLAY_V1', symbol,
+        range: {start_time: start, end_time: end},
+        data_quality: {source: 'BINANCE_PUBLIC_REST', real_market_data_required: true,
+          synthetic_data_used: false, candle_fetch_complete: false, trade_coverage_complete: false,
+          failure: message},
+        summary: {replay_steps: 0, accepted: 0, rejected: 0,
+          first_accepted_at: null, first_actual_window_50pct_at: null, first_actual_window_70pct_at: null},
+        steps: [],
+        policy: {market: 'SPOT', paper_trading: true, real_order_execution: false, confidence_score: 'UNKNOWN'}
+      });
+      process.stderr.write('[REPLAY_ERROR] ' + symbol + ' ' + message + '\n');
+    }
   }
   const dir = dirname(output);
   await mkdir(dir, {recursive: true});
