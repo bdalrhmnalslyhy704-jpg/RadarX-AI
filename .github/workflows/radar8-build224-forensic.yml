@@ -66,7 +66,7 @@ jobs:
       - name: Run coordinator, bounded JSONL and matrix-specific tests
         run: |
           set -euo pipefail
-          node --test --test-timeout=60000 phase2/tests/store.test.mjs
+          node --max-old-space-size=256 --test --test-timeout=60000 phase2/tests/store.test.mjs
           node --test --test-timeout=60000 phase2/tests/radar-swarm-coordinator.test.mjs
           node --test --test-timeout=60000 phase2/tests/historical-replay-matrix.test.mjs
           node --test --test-timeout=60000 phase2/tests/historical-replay.test.mjs
