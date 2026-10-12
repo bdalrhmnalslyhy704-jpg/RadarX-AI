@@ -149,7 +149,7 @@ jobs:
 
       - name: Android emulator online/offline background smoke
         uses: reactivecircus/android-emulator-runner@v2
-        timeout-minutes: 25
+        timeout-minutes: 35
         with:
           api-level: 29
           target: default
