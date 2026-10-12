@@ -34,12 +34,12 @@ export function buildMoveForensics(alert={},now=Date.now()){
   const opinion=alert?.professor_opinion||{};
 
   const price24=Math.abs(num(alert.price_change_24h??alert.priceChange24h,0));
-  const volumeRatio=pick(alert,['volume_ratio','volumeAcceleration'],pick(c,['volume_ratio','volume_acceleration'],pick(fp,['volume_ratio'],null)));
-  const tradeRatio=pick(alert,['trade_ratio','tradeAcceleration'],pick(c,['trade_ratio','trade_acceleration'],null));
+  const volumeRatio=pick(alert,['volume_ratio','volumeAcceleration'],pick(c,['volume_ratio','volume_acceleration'],pick(fp,['volume_ratio'],pick(strong,['volume_ratio'],null))));
+  const tradeRatio=pick(alert,['trade_ratio','tradeAcceleration'],pick(c,['trade_ratio','trade_acceleration'],pick(strong,['trade_ratio'],null)));
   const taker=pick(alert,['taker_buy_ratio'],pick(c,['taker_buy_ratio','taker'],pick(fp,['taker_buy_ratio'],pick(strong,['taker_buy_ratio'],null))));
-  const breakout=pick(alert,['breakout_score','breakout'],pick(c,['breakout'],pick(fp,['resistance_pressure_score'],null)));
-  const compression=pick(alert,['compression_score'],pick(c,['compression','squeeze'],pick(fp,['compression_score'],null)));
-  const relative=pick(alert,['relative_score','relative_strength'],pick(c,['relative_strength'],pick(fp,['relative_strength_score'],null)));
+  const breakout=pick(alert,['breakout_score','breakout'],pick(c,['breakout'],pick(fp,['resistance_pressure_score'],pick(strongComponents,['breakout'],null))));
+  const compression=pick(alert,['compression_score'],pick(c,['compression','squeeze'],pick(fp,['compression_score'],pick(strongComponents,['bollinger'],null))));
+  const relative=pick(alert,['relative_score','relative_strength'],pick(c,['relative_strength'],pick(fp,['relative_strength_score'],pick(strong,['five_min_trend'],null))));
   const liquidity=pick(alert,['liquidity_quality'],pick(c,['liquidity'],pick(liq,['metrics.depth_score'],null)));
   const data=pick(alert,['data_quality'],pick(alert,['data_status.data_quality'],100));
   const impulse=pick(alert,['momentum_score','opportunity_score'],pick(c,['momentum','momentum_score'],pick(fp,['acceleration_score'],50)));
