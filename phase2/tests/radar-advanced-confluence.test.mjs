@@ -35,3 +35,12 @@ test('anti-chase guard penalizes already extended moves without network work',()
   assert.ok(early.anti_chase>extended.anti_chase);
   assert.ok(extended.score<early.score);
 });
+
+
+test('anti-chase is direction-aware: dips do not count as upside extension',()=>{
+  const categories={trigger:88,structure:84,participation:84,flow:82,relative:80,momentum:87,compression:76};
+  const upward=evaluateAdvancedConfluence({priceChange24h:-12,direction:'UP_MOVE',confirmations:8,minConfirmations:7,categories});
+  const downward=evaluateAdvancedConfluence({priceChange24h:-12,direction:'DOWN_MOVE',confirmations:8,minConfirmations:7,categories});
+  assert.equal(upward.anti_chase,100);
+  assert.ok(downward.anti_chase<30);
+});

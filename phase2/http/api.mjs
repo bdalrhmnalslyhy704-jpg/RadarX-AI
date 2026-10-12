@@ -7,6 +7,7 @@ import {RADAR_NAMES,RADAR_PROFILES,formatRadarTime12h,decorateRadarAlert} from '
 import {SymbolDeepAnalyzer,normalizeDeepScanSymbol} from '../core/symbol-deep-analyzer.mjs';
 import {buildKingVerdict,rankKingMarket} from '../core/king-intelligence.mjs';
 import {collectAgentEvidence,buildAgentVerdict,evaluateMemory,createMemoryEntries} from '../core/ai-agent-hub.mjs';
+import {radarTelemetry,renderRadarTelemetryDashboard} from '../core/radar-telemetry.mjs';
 
 function send(res,status,body,extra={}){
   const data=JSON.stringify(body);
@@ -159,9 +160,17 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     EARLY_EXPANSION_RADAR:{name:RADAR_NAMES.EARLY_EXPANSION_RADAR,instance:earlyExpansionRadar,read:'readEarlyExpansionAlerts'}
   });
   function radarStatus(){
-    return Object.entries(radarEntries).map(([id,x])=>{
-      const health=typeof x.instance?.health==='function'?x.instance.health():{running:false,radar:id,radar_name:x.name};
-      return {radar:id,radar_name:x.name,running:Boolean(health.running),profile:RADAR_PROFILES[id]||null,health};
+    const defined=Object.entries(radarEntries).map(([id,x])=>({radar:id,radar_name:x.name,instance:x.instance,mode:'BACKGROUND',profile:RADAR_PROFILES[id]||null}));
+    const auxiliary=[
+      {radar:'MARKET_MONITOR',radar_name:'مراقبة السوق المشتركة',instance:monitor,mode:'BACKGROUND'},
+      {radar:'AUTONOMOUS_AI_MARKET',radar_name:'مركز وكلاء الذكاء',instance:agentMarket,mode:'BACKGROUND'},
+      {radar:'MARKET_UNIVERSE_SCANNER',radar_name:'ماسح السوق عند الطلب',instance:marketRadar,mode:'ON_DEMAND'},
+      {radar:'SYMBOL_DEEP_ANALYZER',radar_name:'فاحص الرمز العميق عند الطلب',instance:deepSymbolScanner,mode:'ON_DEMAND'}
+    ];
+    return [...defined,...auxiliary].map(x=>{
+      const health=typeof x.instance?.health==='function'?x.instance.health():
+        {running:x.mode==='ON_DEMAND'?null:false,radar:x.radar,radar_name:x.radar_name,mode:x.mode};
+      return {radar:x.radar,radar_name:x.radar_name,running:Boolean(health.running),mode:x.mode,profile:x.profile||null,health};
     });
   }
   function allowedOrigin(req){
@@ -189,6 +198,16 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       const u=new URL(req.url,'http://localhost');
       if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false},kahir_radar:kahirRadar?.health?.()||{running:false},doomsday_radar:doomsdayRadar?.health?.()||{running:false},professor_radar:professorRadar?.health?.()||{running:false},early_expansion_radar:earlyExpansionRadar?.health?.()||{running:false},autonomous_ai_market:agentMarket?.health?.()||{running:false}});
       if(u.pathname==='/api/radar-status'&&req.method==='GET')return send(res,200,{radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+      if(u.pathname==='/api/radar-telemetry'&&req.method==='GET'){
+        const limit=Math.max(1,Math.min(500,Math.trunc(Number(u.searchParams.get('limit')||100))));
+        return send(res,200,{...radarTelemetry.snapshot({limit}),radars:radarStatus(),
+          meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+            scope:'notification-gate decision telemetry; not end-to-end exchange/network latency'}});
+      }
+      if(u.pathname==='/radar-telemetry'&&req.method==='GET'){
+        res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});
+        return res.end(renderRadarTelemetryDashboard());
+      }
       if(u.pathname==='/api/radar-control'&&(req.method==='POST'||req.method==='GET')){
         const radar=String(u.searchParams.get('radar')||'').trim().toUpperCase();
         const action=String(u.searchParams.get('action')||'').trim().toLowerCase();

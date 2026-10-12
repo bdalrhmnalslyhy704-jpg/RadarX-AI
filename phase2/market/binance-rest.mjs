@@ -3,6 +3,7 @@ import {normalizeEpochMs} from '../core/data-quality.mjs';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 export const SPOT_REQUEST_WEIGHT_LIMIT_PER_MINUTE = 6000;
+const sharedInFlightRequests = new Map();
 
 export function retryAfterMs(headers) {
   const raw = headers?.get?.('retry-after');
@@ -29,6 +30,7 @@ export function requestWeightFor(path,query={}) {
   const p=String(path||'').split('?')[0];
   if(p==='/api/v3/exchangeInfo')return 20;
   if(p==='/api/v3/klines')return 2;
+  if(p==='/api/v3/aggTrades')return 4;
   if(p==='/api/v3/depth'){
     const n=Math.trunc(Number(query?.limit??100));
     if(n<=100)return 5;
@@ -107,6 +109,11 @@ export class RestClient {
     this.state='INIT';
     this.queue=Promise.resolve();
     this.queueDepth=0;
+    this.queueWaitSamples=[];
+    this.lastQueueWaitMs=null;
+    this.maxQueueWaitMs=0;
+    this.inflightRequests=new Map();
+    this.coalescedRequestCount=0;
   }
 
   get budgetLimit() {
@@ -120,6 +127,12 @@ export class RestClient {
     rate_limited_until:this.rateLimitedUntil||null,
     current_base_url:this.baseUrls[this.currentBaseIndex]??null,
     queue_depth:this.queueDepth,
+    queue_wait_ms_last:this.lastQueueWaitMs,
+    queue_wait_ms_p95:this.queueWaitSamples.length ? [...this.queueWaitSamples].sort((a,b)=>a-b)[Math.ceil(this.queueWaitSamples.length*0.95)-1] : null,
+    queue_wait_ms_max:this.queueWaitSamples.length ? this.maxQueueWaitMs : null,
+    queue_wait_samples:this.queueWaitSamples.length,
+    inflight_request_count:this.inflightRequests.size,
+    coalesced_request_count:this.coalescedRequestCount,
     request_weight_used_last_minute:this.localWeightUsed(),
     observed_request_weight_1m:this.observedWeight,
     observed_request_weight_at:this.observedWeightAt,
@@ -163,10 +176,16 @@ export class RestClient {
 
   async enqueue(task) {
     this.queueDepth++;
+    const queuedAt=this.clock();
     let release;
     const previous=this.queue;
     this.queue=new Promise(resolve=>{release=resolve;});
     await previous;
+    const waited=Math.max(0,this.clock()-queuedAt);
+    this.lastQueueWaitMs=waited;
+    this.maxQueueWaitMs=Math.max(this.maxQueueWaitMs,waited);
+    this.queueWaitSamples.push(waited);
+    if(this.queueWaitSamples.length>256)this.queueWaitSamples.shift();
     try{return await task();}
     finally{this.queueDepth=Math.max(0,this.queueDepth-1);release();}
   }
@@ -219,7 +238,29 @@ export class RestClient {
   }
 
   request(path,query={}) {
-    return this.enqueue(()=>this._request(path,query));
+    const normalized=Object.entries(query||{}).filter(([,value])=>value!=null)
+      .map(([key,value])=>[key,String(value)]).sort(([a],[b])=>a.localeCompare(b));
+    const key=String(path)+'?'+new URLSearchParams(normalized).toString();
+    const local=this.inflightRequests.get(key);
+    if(local){
+      this.coalescedRequestCount++;
+      return local;
+    }
+    const sharedKey=JSON.stringify(this.baseUrls)+'|'+key;
+    const shared=sharedInFlightRequests.get(sharedKey);
+    if(shared){
+      this.coalescedRequestCount++;
+      return shared;
+    }
+    const work=this.enqueue(()=>this._request(path,query));
+    let tracked;
+    tracked=work.finally(()=>{
+      if(this.inflightRequests.get(key)===tracked)this.inflightRequests.delete(key);
+      if(sharedInFlightRequests.get(sharedKey)===tracked)sharedInFlightRequests.delete(sharedKey);
+    });
+    this.inflightRequests.set(key,tracked);
+    sharedInFlightRequests.set(sharedKey,tracked);
+    return tracked;
   }
 
   async klines(symbol,interval,opts={}) {
@@ -235,5 +276,9 @@ export class RestClient {
     }))};
   }
   depth(symbol,limit=100){return this.request('/api/v3/depth',{symbol,limit});}
+  aggTrades(symbol,opts={}){
+    return this.request('/api/v3/aggTrades',{symbol,limit:Math.min(1000,Math.max(1,Math.trunc(Number(opts.limit)||1000))),startTime:opts.startTime,endTime:opts.endTime,fromId:opts.fromId})
+      .then(r=>({source:r.source,receivedAt:this.clock(),trades:r.data,data:r.data}));
+  }
   ticker24h(symbol){return this.request('/api/v3/ticker/24hr',symbol?{symbol}:{});}
 }

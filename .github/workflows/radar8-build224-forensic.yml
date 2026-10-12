@@ -6,6 +6,11 @@ on:
       - feature/build224-radar8-early-expansion-20261006
   pull_request:
 
+# A new PR head supersedes old forensic runs; do not consume REST/network quota replaying obsolete commits in parallel.
+concurrency:
+  group: radarx-build224-forensic-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -40,6 +45,15 @@ jobs:
           node --check phase2/tests/early-expansion-radar.test.mjs
           node --check phase2/tests/binance-rest.test.mjs
           node --check phase2/tests/early-expansion-api-contract.test.mjs
+          node --check phase2/core/strong-move-radar.mjs
+          node --check phase2/core/dynamic-early-warning-gate.mjs
+          node --check phase2/tests/dynamic-early-warning-gate.test.mjs
+          node --check phase2/core/radar-notification-gate.mjs
+          node --check phase2/core/radar-telemetry.mjs
+          node --check phase2/core/historical-replay.mjs
+          node --check phase2/tools/historical-replay.mjs
+          node --check phase2/tests/historical-replay.test.mjs
+          node --check phase2/tests/radar-telemetry.test.mjs
 
       - name: Run Binance REST rate-limit tests
         run: node --test --test-timeout=60000 phase2/tests/binance-rest.test.mjs
@@ -49,6 +63,9 @@ jobs:
 
       - name: Run Radar 8 API contract tests
         run: node --test --test-timeout=60000 phase2/tests/early-expansion-api-contract.test.mjs
+
+      - name: Run dynamic early-warning gate tests
+        run: node --test --test-timeout=60000 phase2/tests/dynamic-early-warning-gate.test.mjs
 
       - name: Run full Phase 2 test suite
         run: node phase2/tests/run-tests.mjs phase2
@@ -61,6 +78,60 @@ jobs:
           mkdir -p reports
           node phase2/tools/early-expansion-forensic.mjs
 
+      - name: Run GTC/W public Spot historical replay
+        id: gtc-w-replay
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p reports
+          node phase2/tools/historical-replay.mjs --symbols GTCUSDT,WUSDT,RLCUSDT,RADUSDT,ORCAUSDT,API3USDT,DIAUSDT,OGNUSDT --start 2026-10-11T21:27:59.999Z --end 2026-10-12T21:27:59.999Z --max-trade-pages 500 --max-trades 500000 --output reports/historical-replay-gtc-w.json
+          replay_status=$?
+          printf 'exit_code=%s\n' "$replay_status" > reports/historical-replay-status.txt
+          {
+            echo "## GTC/W historical replay"
+            echo ""
+            echo "- CLI exit code: $replay_status (2 means the engine deliberately failed closed because historical coverage is incomplete; 1 means execution error; 0 means full requested coverage.)"
+            echo "- The report compares per-minute decisions to the first +50%/+70% window moves using public Binance Spot data only."
+            echo "- An artifact with incomplete trade coverage is diagnostic only; it is not a successful prediction replay."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -f reports/historical-replay-gtc-w.json ]; then
+            node --input-type=module >> "$GITHUB_STEP_SUMMARY" <<'NODE'
+          import {readFile} from 'node:fs/promises';
+          const report = JSON.parse(await readFile('reports/historical-replay-gtc-w.json','utf8'));
+          for (const item of report.results || []) {
+            const when = value => value ? new Date(value).toISOString() : 'not observed';
+            console.log('');
+            console.log('### ' + item.symbol);
+            console.log('- Steps: ' + (item.summary?.replay_steps ?? 0) + '; accepted: ' + (item.summary?.accepted ?? 0) + '; rejected: ' + (item.summary?.rejected ?? 0));
+            console.log('- Trade coverage complete: ' + String(item.data_quality?.trade_coverage_complete === true));
+            console.log('- First core trigger: ' + when(item.summary?.first_core_trigger_at));
+            console.log('- First candidate eligible: ' + when(item.summary?.first_candidate_eligible_at));
+            console.log('- First elite-gate eligible: ' + when(item.summary?.first_elite_gate_eligible_at));
+            console.log('- First accepted decision: ' + when(item.summary?.first_accepted_at));
+            console.log('- First smart early-warning accepted decision: ' + when(item.summary?.first_early_warning_accepted_at));
+            console.log('- First strict-gate accepted decision: ' + when(item.summary?.first_strict_accepted_at));
+            console.log('- Accepted decision modes: ' + JSON.stringify(item.summary?.accepted_mode_counts ?? []));
+            console.log('- Maximum score/time: ' + String(item.summary?.maximum_score ?? 'n/a') + ' / ' + when(item.summary?.maximum_score_at));
+            console.log('- Actual window +50% first aggTrade timestamp: ' + when(item.summary?.first_actual_window_50pct_at));
+            console.log('- +50% candle-close estimate (lower precision): ' + when(item.summary?.first_actual_window_50pct_candle_close_at));
+            console.log('- +50% timestamp source/alignment: ' + String(item.summary?.actual_window_50pct_timestamp_source ?? 'UNKNOWN') + ' / ' + String(item.summary?.actual_window_50pct_alignment ?? 'UNKNOWN'));
+            console.log('- Actual window +70% first aggTrade timestamp: ' + when(item.summary?.first_actual_window_70pct_at));
+            console.log('- +70% candle-close estimate (lower precision): ' + when(item.summary?.first_actual_window_70pct_candle_close_at));
+            console.log('- +70% timestamp source/alignment: ' + String(item.summary?.actual_window_70pct_timestamp_source ?? 'UNKNOWN') + ' / ' + String(item.summary?.actual_window_70pct_alignment ?? 'UNKNOWN'));
+            console.log('- Pre-move +50% classification: ' + String(item.summary?.premove_50_status ?? 'not available'));
+            if (item.summary?.premove_50_status !== 'PREMOVE_ALERT_ACCEPTED') {
+              console.log('- Prediction validation: NOT PASSED — no accepted alert is recorded before the +50% crossing in this replay window.');
+            } else {
+              console.log('- Prediction validation: pre-move accepted alert observed; this is one historical case, not proof of general predictive accuracy.');
+            }
+            console.log('- Minutes core trigger lead to +50%: ' + String(item.summary?.minutes_from_first_core_trigger_to_actual_50pct ?? 'not detected'));
+            console.log('- Strong Move trigger failure counts: ' + JSON.stringify(item.summary?.core_trigger_failure_counts ?? []));
+            console.log('- Rejection groups: ' + JSON.stringify(item.summary?.rejection_groups ?? []));
+          }
+          NODE
+          fi
+          exit 0
+
       - name: Upload forensic report
         uses: actions/upload-artifact@v4
         with:
@@ -68,6 +139,8 @@ jobs:
           path: |
             reports/radar8-forensic-2026-10-06.json
             reports/radar8-forensic-2026-10-06.md
+            reports/historical-replay-gtc-w.json
+            reports/historical-replay-status.txt
           if-no-files-found: error
           retention-days: 14
 

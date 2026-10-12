@@ -18,6 +18,9 @@ export function evaluateEliteGate({
   relativeScore=50,
   momentumScore=50,
   compressionScore=50,
+  takerBuyRatio=null,
+  requireTakerBuyRatio=false,
+  minTakerBuyRatio=0.70,
   confirmations=0,
   minConfirmations=6,
   minScore=84,
@@ -35,26 +38,23 @@ export function evaluateEliteGate({
     compression:clamp(compressionScore)
   };
   const hits=Object.entries(categories).filter(([,v])=>hit(v,70)).map(([name])=>name);
-  const extended=Math.abs(Number(priceChange24h)||0)>max24hMovePct;
+  const change24h=Number(priceChange24h)||0;
+  const side=String(direction||'UP').toUpperCase();
+  const extended=side.startsWith('UP')?change24h>max24hMovePct:
+    side.startsWith('DOWN')?change24h < -max24hMovePct:Math.abs(change24h)>max24hMovePct;
   const weakLiquidity=clamp(liquidityScore)<60;
   const weakData=clamp(dataQualityScore)<80;
   const missingTrigger=requireTrigger&&!hit(triggerScore,72);
   const volumeWithoutFollowThrough=clamp(participationScore)>=86&&clamp(structureScore)<58&&clamp(momentumScore)<60;
   const flowWithoutRelativeSupport=clamp(flowScore)>=88&&clamp(relativeScore)<45;
-  const legacyScore=clamp(
-    clamp(baseScore)*0.28+
-    categories.trigger*0.18+
-    categories.structure*0.13+
-    categories.participation*0.12+
-    categories.flow*0.11+
-    categories.relative*0.08+
-    categories.momentum*0.06+
-    categories.compression*0.04
-  );
-  const advanced=evaluateAdvancedConfluence({
-    categories,priceChange24h,confirmations,minConfirmations,baseScore:legacyScore
-  });
-  const score=clamp(legacyScore*0.58+advanced.score*0.42);
+  // A single weighted vote per independent evidence family; baseScore is composite/diagnostic only.
+  const legacyScore=clamp(categories.trigger*0.18+categories.structure*0.17+categories.participation*0.15+
+    categories.flow*0.16+categories.relative*0.10+categories.momentum*0.16+categories.compression*0.08);
+  const advanced=evaluateAdvancedConfluence({categories,priceChange24h,direction,confirmations,minConfirmations,baseScore:0});
+  // Advanced confluence acts as a separate veto, not a second weighted copy of these same components.
+  const score=legacyScore;
+  const takerRatioAvailable=takerBuyRatio!=null&&Number.isFinite(Number(takerBuyRatio));
+  const takerFlowRejected=requireTakerBuyRatio&&(!takerRatioAvailable||Number(takerBuyRatio)<=Number(minTakerBuyRatio));
   const eligible=
     String(direction).startsWith('UP') &&
     !extended &&
@@ -63,6 +63,7 @@ export function evaluateEliteGate({
     !missingTrigger &&
     !volumeWithoutFollowThrough &&
     !flowWithoutRelativeSupport &&
+    !takerFlowRejected &&
     score>=minScore &&
     Number(confirmations)>=minConfirmations &&
     hits.length>=minCategoryHits &&
@@ -92,6 +93,7 @@ export function evaluateEliteGate({
   if(missingTrigger)riskFlags.push('NO_PRIMARY_TRIGGER');
   if(volumeWithoutFollowThrough)riskFlags.push('VOLUME_WITHOUT_PRICE_FOLLOW_THROUGH');
   if(flowWithoutRelativeSupport)riskFlags.push('FLOW_WITHOUT_RELATIVE_SUPPORT');
+  if(takerFlowRejected)riskFlags.push(takerRatioAvailable?'TAKER_BUY_RATIO_NOT_ABOVE_70_PERCENT':'TAKER_BUY_RATIO_DATA_MISSING');
   if(Number(confirmations)<minConfirmations)riskFlags.push('LOW_CONFLUENCE');
   if(hits.length<minCategoryHits)riskFlags.push('LOW_CATEGORY_DIVERSITY');
 
@@ -104,6 +106,9 @@ export function evaluateEliteGate({
     category_hits:hits.length,
     categories,
     legacy_score:Number(legacyScore.toFixed(1)),
+    input_base_score:Number(clamp(baseScore).toFixed(1)),
+    taker_buy_ratio:takerRatioAvailable?Number(takerBuyRatio):null,
+    require_taker_buy_ratio:requireTakerBuyRatio,min_taker_buy_ratio:minTakerBuyRatio,
     advanced,
     reasons,
     risk_flags:riskFlags,
