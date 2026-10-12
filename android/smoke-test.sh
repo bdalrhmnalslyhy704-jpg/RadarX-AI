@@ -400,7 +400,7 @@ timeout 10s adb shell cmd connectivity airplane-mode disable >/dev/null 2>&1 || 
 timeout 5s adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false >/dev/null 2>&1 || true
 restart_done=0
 replay_complete=0
-for attempt in $(seq 1 420); do
+for attempt in $(seq 1 180); do
   accepted="$(accepted_log_count)"
   if [[ "${accepted}" -ge 150 && "${restart_done}" -eq 0 ]]; then
     # Deliver the service's supported STOP action instead of ActivityManager's
@@ -466,6 +466,9 @@ for attempt in $(seq 1 420); do
   fi
 
   handled="$(handled_unique_count)"
+  if (( attempt == 1 || attempt % 15 == 0 )); then
+    echo "DURABLE_REPLAY_PROGRESS: attempt=${attempt}/180 accepted=$(accepted_log_count) handled=${handled} $(fixture_stats 2>/dev/null || true)"
+  fi
   if [[ "${handled}" -ge 623 ]]; then
     stats="$(fixture_stats)"
     drained="$(stat_field "${stats}" drainedRequests)"
