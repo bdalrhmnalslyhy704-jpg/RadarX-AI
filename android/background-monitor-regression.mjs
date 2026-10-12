@@ -110,4 +110,13 @@ assert.match(service, /if \(\(!durableCursor \|\| wasPendingReservation\) &&\s*h
 assert.match(service, /ALERT_POST_RECONCILED_ACTIVE/,
   'reconciled notifications must be distinguishable from new NotificationManager posts');
 
+const smokeReplay = await readFile('android/smoke-test.sh','utf8');
+assert.match(smokeReplay, /handled_unique_count/,
+  'the 623-event replay must count notifications reconciled after restart as handled without requiring duplicate posts');
+assert.match(smokeReplay, /reconciled_log_keys/,
+  'the replay audit must prove every accepted or reconciled alert has a unique stable identity');
+assert.match(smokeReplay, /Duplicate NotificationManager post requests/,
+  'the replay smoke test must reject duplicate notification post requests');
+
+
 
