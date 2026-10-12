@@ -3,6 +3,7 @@ import {normalizeEpochMs} from '../core/data-quality.mjs';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 export const SPOT_REQUEST_WEIGHT_LIMIT_PER_MINUTE = 6000;
+const sharedInFlightRequests = new Map();
 
 export function retryAfterMs(headers) {
   const raw = headers?.get?.('retry-after');
@@ -240,17 +241,25 @@ export class RestClient {
     const normalized=Object.entries(query||{}).filter(([,value])=>value!=null)
       .map(([key,value])=>[key,String(value)]).sort(([a],[b])=>a.localeCompare(b));
     const key=String(path)+'?'+new URLSearchParams(normalized).toString();
-    const existing=this.inflightRequests.get(key);
-    if(existing){
+    const local=this.inflightRequests.get(key);
+    if(local){
       this.coalescedRequestCount++;
-      return existing;
+      return local;
+    }
+    const sharedKey=JSON.stringify(this.baseUrls)+'|'+key;
+    const shared=sharedInFlightRequests.get(sharedKey);
+    if(shared){
+      this.coalescedRequestCount++;
+      return shared;
     }
     const work=this.enqueue(()=>this._request(path,query));
     let tracked;
     tracked=work.finally(()=>{
       if(this.inflightRequests.get(key)===tracked)this.inflightRequests.delete(key);
+      if(sharedInFlightRequests.get(sharedKey)===tracked)sharedInFlightRequests.delete(sharedKey);
     });
     this.inflightRequests.set(key,tracked);
+    sharedInFlightRequests.set(sharedKey,tracked);
     return tracked;
   }
 
