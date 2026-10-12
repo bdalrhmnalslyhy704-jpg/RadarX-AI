@@ -47,6 +47,7 @@ const phase2=[
   'phase2/tests/store.test.mjs',
   'phase2/tests/strategy-market-radar-integration.test.mjs',
   'phase2/tests/strong-move-radar.test.mjs',
+  'phase2/tests/spot-market-snapshot-hub.test.mjs',
   'phase2/tests/radar-swarm-coordinator.test.mjs',
   'phase2/tests/al-muqawim-radar.test.mjs',
   'phase2/tests/coin-hunter-radar.test.mjs',
