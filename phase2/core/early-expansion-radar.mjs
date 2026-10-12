@@ -218,7 +218,7 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   marketWideLightScanCandidateLimit:48,
   marketWideLightScanRotationReserve:12,
   marketWideLightScanMinReadyCandidates:24,
-  marketWideLightScanMinCoverageRatio:0.85,
+  marketWideLightScanMinCoverageRatio:0.10,
   marketWideLightScanMaxCandleAgeMs:8*60*1000,
   marketWideLightScanMinClosedCandles:60,
   marketWideLightScanMaxClosedCandles:96,
