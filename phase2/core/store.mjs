@@ -197,6 +197,56 @@ export class DurableStore {
     const key=String(symbol||'').trim().toUpperCase();if(!key)throw new Error('INVALID_PREDICTION_CALIBRATION_SYMBOL');
     return this.lock(async()=>{const a=await this.readJson(this.files.predictionCalibration);a[key]={...value,symbol:key,updated_at:Date.now()};await this.writeJson(this.files.predictionCalibration,a);return a[key];});
   }
+  // Compact the high-churn outcome ledger once at process startup. The ledger is
+  // intentionally smaller than the immutable Scan Journey archive: completed scan
+  // evidence remains in Scan Journey, while this working set keeps the most recent
+  // outcomes so recurring full-file reads cannot exhaust the bounded Node heap.
+  async compactPreExpansionOutcomes({maxRecords=2500,maxStageKeys=6000}={}){
+    const recordLimit=Math.max(100,Math.min(5000,Math.trunc(Number(maxRecords)||2500)));
+    const stageLimit=Math.max(100,Math.min(10000,Math.trunc(Number(maxStageKeys)||6000)));
+    return this.lock(async()=>{
+      let raw;
+      try{raw=await readFile(this.files.preExpansionOutcomes,'utf8');}
+      catch(error){
+        if(error?.code==='ENOENT')return {compacted:false,reason:'FILE_NOT_FOUND',retained_records:0,trimmed_records:0};
+        throw error;
+      }
+      let state;
+      try{state=JSON.parse(raw);}
+      catch{throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');}
+      if(!state||typeof state!=='object'||Array.isArray(state))
+        throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_STATE');
+      const priorRecords=Array.isArray(state.records)?state.records:[];
+      const priorCount=priorRecords.length;
+      const trimmedRecords=Math.max(0,priorCount-recordLimit);
+      if(trimmedRecords)state.records=priorRecords.slice(-recordLimit);
+      else if(!Array.isArray(state.records))state.records=[];
+      const stageMap=state.last_stage_by_key&&typeof state.last_stage_by_key==='object'&&!Array.isArray(state.last_stage_by_key)
+        ?state.last_stage_by_key:{};
+      let trimmedStageKeys=0;
+      const stageEntries=Object.entries(stageMap);
+      if(stageEntries.length>stageLimit){
+        stageEntries.sort((a,b)=>Number(a[1]?.last_recorded_at||0)-Number(b[1]?.last_recorded_at||0));
+        const removeCount=stageEntries.length-stageLimit;
+        for(const [key] of stageEntries.slice(0,removeCount))delete stageMap[key];
+        state.last_stage_by_key=stageMap;
+        trimmedStageKeys=removeCount;
+      }else if(state.last_stage_by_key!==stageMap)state.last_stage_by_key=stageMap;
+      const beforeBytes=Buffer.byteLength(raw,'utf8');
+      if(!trimmedRecords&&!trimmedStageKeys){
+        return {compacted:false,reason:'WITHIN_LIMITS',retained_records:priorCount,trimmed_records:0,
+          retained_stage_keys:stageEntries.length,trimmed_stage_keys:0,before_bytes:beforeBytes,after_bytes:beforeBytes};
+      }
+      // Drop the large input string before serializing the smaller, bounded state.
+      raw=null;
+      await new Promise(resolve=>setImmediate(resolve));
+      await this.writeJson(this.files.preExpansionOutcomes,state);
+      const afterBytes=Number((await stat(this.files.preExpansionOutcomes)).size)||0;
+      return {compacted:true,reason:'WORKING_SET_BOUNDED',retained_records:state.records.length,
+        trimmed_records:trimmedRecords,retained_stage_keys:Object.keys(state.last_stage_by_key||{}).length,
+        trimmed_stage_keys:trimmedStageKeys,before_bytes:beforeBytes,after_bytes:afterBytes};
+    });
+  }
   // Internal evaluation state only; no HTTP/API contract is exposed for this file.
   async getPreExpansionOutcomes(){
     return this.readJson(this.files.preExpansionOutcomes);
