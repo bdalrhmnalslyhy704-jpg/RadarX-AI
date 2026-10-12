@@ -60,7 +60,27 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
   if(!root||!p)return{destroy(){}};
 
   let dead=false,busy=false,timer=null;
-  const onPageHide=()=>{dead=true;if(timer)clearInterval(timer);};
+  const startPolling=()=>{
+    if(dead||timer)return;
+    timer=setInterval(refresh,20000);
+  };
+  const onPageHide=()=>{
+    dead=true;
+    if(timer){clearInterval(timer);timer=null;}
+  };
+  const onPageShow=()=>{
+    // Android/WebView may restore this same page after backgrounding or a screen
+    // lock. Re-arm polling: a one-shot pagehide handler must not leave the radar dead.
+    dead=false;
+    window.removeEventListener('pagehide',onPageHide,true);
+    window.addEventListener('pagehide',onPageHide,{once:true,capture:true});
+    if(timer){clearInterval(timer);timer=null;}
+    startPolling();
+    refresh(true);
+  };
+  const onVisibilityChange=()=>{
+    if(!document.hidden&&!dead)refresh(true);
+  };
   const CACHE_KEY='radarx.radar.cache.'+id;
   const CACHE_TTL_MS=5*60*1000;
   function readRadarCache(){try{const raw=sessionStorage.getItem(CACHE_KEY);if(!raw)return null;const x=JSON.parse(raw);return x&&Number.isFinite(Number(x.savedAt))&&x.body&&(Date.now()-Number(x.savedAt)<CACHE_TTL_MS)?x:null;}catch(error){return null;}}
@@ -224,14 +244,24 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
     off.onclick=()=>control('stop');
     ref.onclick=()=>refresh(true);
     refresh(false);
-    timer=setInterval(refresh,20000);
+    startPolling();
     window.addEventListener('pagehide',onPageHide,{once:true,capture:true});
+    window.addEventListener('pageshow',onPageShow,true);
+    document.addEventListener('visibilitychange',onVisibilityChange);
   }catch(error){
     root.innerHTML=`<main class="rxs" dir="rtl"><section class="card hero"><h1>${p.i} ${p.n}</h1><div class="status">تعذر رسم الرادار</div><div class="muted">${e(error && error.message||error)}</div></section></main>`;
   }
 
   return {
     refresh:()=>refresh(),
-    destroy(){dead=true;if(timer)clearInterval(timer);window.removeEventListener('pagehide',onPageHide,true);root.innerHTML='';(function(){var _n=document.getElementById('rxs-style');if(_n)_n.remove();})();}
+    destroy(){
+      dead=true;
+      if(timer){clearInterval(timer);timer=null;}
+      window.removeEventListener('pagehide',onPageHide,true);
+      window.removeEventListener('pageshow',onPageShow,true);
+      document.removeEventListener('visibilitychange',onVisibilityChange);
+      root.innerHTML='';
+      (function(){var _n=document.getElementById('rxs-style');if(_n)_n.remove();})();
+    }
   };
 }
