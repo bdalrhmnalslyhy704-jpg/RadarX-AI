@@ -108,6 +108,9 @@ export class RestClient {
     this.state='INIT';
     this.queue=Promise.resolve();
     this.queueDepth=0;
+    this.queueWaitSamples=[];
+    this.lastQueueWaitMs=null;
+    this.maxQueueWaitMs=0;
   }
 
   get budgetLimit() {
@@ -121,6 +124,10 @@ export class RestClient {
     rate_limited_until:this.rateLimitedUntil||null,
     current_base_url:this.baseUrls[this.currentBaseIndex]??null,
     queue_depth:this.queueDepth,
+    queue_wait_ms_last:this.lastQueueWaitMs,
+    queue_wait_ms_p95:this.queueWaitSamples.length ? [...this.queueWaitSamples].sort((a,b)=>a-b)[Math.ceil(this.queueWaitSamples.length*0.95)-1] : null,
+    queue_wait_ms_max:this.queueWaitSamples.length ? this.maxQueueWaitMs : null,
+    queue_wait_samples:this.queueWaitSamples.length,
     request_weight_used_last_minute:this.localWeightUsed(),
     observed_request_weight_1m:this.observedWeight,
     observed_request_weight_at:this.observedWeightAt,
@@ -164,10 +171,16 @@ export class RestClient {
 
   async enqueue(task) {
     this.queueDepth++;
+    const queuedAt=this.clock();
     let release;
     const previous=this.queue;
     this.queue=new Promise(resolve=>{release=resolve;});
     await previous;
+    const waited=Math.max(0,this.clock()-queuedAt);
+    this.lastQueueWaitMs=waited;
+    this.maxQueueWaitMs=Math.max(this.maxQueueWaitMs,waited);
+    this.queueWaitSamples.push(waited);
+    if(this.queueWaitSamples.length>256)this.queueWaitSamples.shift();
     try{return await task();}
     finally{this.queueDepth=Math.max(0,this.queueDepth-1);release();}
   }
@@ -237,7 +250,7 @@ export class RestClient {
   }
   depth(symbol,limit=100){return this.request('/api/v3/depth',{symbol,limit});}
   aggTrades(symbol,opts={}){
-    return this.request('/api/v3/aggTrades',{symbol,limit:Math.min(1000,Math.max(1,Math.trunc(Number(opts.limit)||1000))),startTime:opts.startTime,endTime:opts.endTime})
+    return this.request('/api/v3/aggTrades',{symbol,limit:Math.min(1000,Math.max(1,Math.trunc(Number(opts.limit)||1000))),startTime:opts.startTime,endTime:opts.endTime,fromId:opts.fromId})
       .then(r=>({source:r.source,receivedAt:this.clock(),trades:r.data,data:r.data}));
   }
   ticker24h(symbol){return this.request('/api/v3/ticker/24hr',symbol?{symbol}:{});}
