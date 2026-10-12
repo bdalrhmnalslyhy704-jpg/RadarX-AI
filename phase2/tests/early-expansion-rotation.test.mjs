@@ -220,6 +220,42 @@ test('Radar 8 gives confirmed activity shocks a deep-scan bypass without grantin
   assert.equal(event.micro_fingerprint.activity_shock.entry_eligible,false);
 });
 
+test('Radar 8 gives a market-wide confirmed burst deep priority even when Micro score is weak',()=>{
+  const radar=makeRadar({deepCandidates:3,quietReserve:1,rotationReserve:1,exceptionalRotationBypassSlots:2});
+  const event=candidate('PLUMEUSDT',16,{score:18,participation:48,tradeParticipation:48,structure:42,compression:42,volume:1.0,trades:1.0});
+  event.fast={
+    price_change_pct:.42,price_acceleration_pct:.21,volume_accel_ratio:2.8,trade_accel_ratio:2.0,
+    market_wide_event_driven_breakout:{detected:true,stage:'EVENT_DRIVEN_BREAKOUT',needs_micro_confirmation:true}
+  };
+  const others=[
+    candidate('HIGH1USDT',10,{score:95}),candidate('HIGH2USDT',11,{score:91}),
+    candidate('HIGH3USDT',12,{score:87}),candidate('HIGH4USDT',13,{score:85})
+  ];
+  radar.lastDeepScanCycleBySymbol.set('PLUMEUSDT',30);
+  radar.lastDeepAtBySymbol.set('PLUMEUSDT',now-1000);
+  radar.scheduler.lastStartedAt.set('DEEP:PLUMEUSDT',now-1000);
+  const selected=radar.selectDeepFromMicro([event,...others],31);
+  assert.ok(selected.some(x=>x.row.symbol==='PLUMEUSDT'&&x._selection_lane==='exceptional'));
+  assert.equal(event.micro_fingerprint.eligible,false,'Deep priority does not grant alert eligibility');
+});
+
+test('Radar 8 gives two simultaneous confirmed bursts two deep slots while preserving rotation',()=>{
+  const radar=makeRadar({deepCandidates:3,quietReserve:1,rotationReserve:1,exceptionalRotationBypassSlots:2});
+  const mkEvent=(symbol,score)=> {
+    const item=candidate(symbol,16,{score,participation:48,tradeParticipation:48,structure:42,compression:42,volume:1.0,trades:1.0});
+    item.fast={price_change_pct:.40,price_acceleration_pct:.20,volume_accel_ratio:2.8,trade_accel_ratio:2.0,
+      market_wide_event_driven_breakout:{detected:true,stage:'EVENT_DRIVEN_BREAKOUT',needs_micro_confirmation:true}};
+    radar.lastDeepScanCycleBySymbol.set(symbol,30);radar.lastDeepAtBySymbol.set(symbol,now-1000);
+    return item;
+  };
+  const a=mkEvent('EVENTAUSDT',20),b=mkEvent('EVENTBUSDT',19);
+  const others=[candidate('HIGH1USDT',10,{score:95}),candidate('HIGH2USDT',11,{score:91}),candidate('HIGH3USDT',12,{score:87})];
+  const selected=radar.selectDeepFromMicro([a,b,...others],31);
+  assert.equal(selected.filter(x=>x._selection_lane==='exceptional').length,2);
+  assert.ok(selected.some(x=>x.row.symbol==='EVENTAUSDT'));
+  assert.ok(selected.some(x=>x.row.symbol==='EVENTBUSDT'));
+});
+
 test('Radar 8 deep scan preserves score capacity while selecting quiet bases from smallest move first',()=>{
   const radar=makeRadar({deepCandidates:10,quietReserve:8,rotationReserve:2});
   const candidates=[
