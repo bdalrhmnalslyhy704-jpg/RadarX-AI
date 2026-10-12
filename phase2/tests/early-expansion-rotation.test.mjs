@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -47,6 +47,10 @@ function candidate(symbol,move,{score=65,participation=75,tradeParticipation=70,
 
 
 test('Radar 8 activates guarded candidate pooling at 10 percent verified cache coverage but never with an unhealthy stream',()=>{
+  assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.marketWideLightScanMinCoverageRatio,0.10,
+    'the actual Radar 8 runtime default must use the verified post-restart coverage floor');
+  assert.equal(makeRadar().config.marketWideLightScanMinCoverageRatio,0.10,
+    'the constructed radar must not override the 10 percent recovery floor with a stale 85 percent default');
   const partial={expected_symbols:337,ready_symbols:46,websocket_live:true,
     websocket_subscription_complete:true,websocket_sync_ready:true,full_market_coverage_ready:false};
   assert.equal(isMarketWideCachePoolReady(partial,.10),true,
