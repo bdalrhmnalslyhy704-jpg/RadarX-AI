@@ -102,6 +102,35 @@ test('Falcon Eye vetoes OGN-style post-explosion chasing',()=>{
 // Fixture uses enough closed 5m candles for the pre-breakout window.
 
 
+test('Falcon Eye logs the exact gate reasons for a candidate that is not emitted as an alert',async()=>{
+  const now=1_800_000_000_000+240*60_000;
+  const one=risingBase();
+  const five=flat(80);
+  const events=[];
+  const radar=new FalconEyeRadar({
+    rest:{klines:async(_symbol,interval)=>({candles:interval==='1m'?one:five,source:'TEST_FIXTURE'})},
+    store:{},
+    config:{minScore:101},
+    clock:()=>now,
+    logger:{info:x=>events.push(String(x)),warn(){}}
+  });
+  const row={
+    symbol:'TESTUSDT',lastPrice:one.at(-1).close,priceChange24h:2.8,
+    quoteVolume24h:2_500_000,tradeCount24h:100_000
+  };
+  await radar.scanRow(row,{one:flat(40),five:flat(40)});
+  const line=events.find(x=>x.startsWith('[FALCON_EYE_DECISION] '));
+  assert.ok(line,'rejected Falcon candidates need an auditable decision record');
+  const report=JSON.parse(line.slice(line.indexOf('{')));
+  assert.equal(report.radar,'FALCON_EYE_RADAR');
+  assert.equal(report.symbol,'TESTUSDT');
+  assert.equal(report.decision,'WATCH_ONLY');
+  assert.ok(report.reasons.includes('BELOW_CONFIGURED_MIN_SCORE'));
+  assert.ok(Array.isArray(report.gate_failures));
+  assert.ok(Object.hasOwn(report,'analysis_eligible'));
+  assert.ok(Object.hasOwn(report,'falcon_quality'));
+});
+
 test('Falcon Eye health reports scanner state using the injected clock',()=>{
   const now=1_800_000_000_000;
   const radar=new FalconEyeRadar({
