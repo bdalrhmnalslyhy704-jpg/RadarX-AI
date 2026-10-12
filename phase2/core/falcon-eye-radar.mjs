@@ -1,5 +1,6 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {updateMarketPulseHistory} from './falcon-market-pulse.mjs';
+import {isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
@@ -407,7 +408,7 @@ export class FalconEyeRadar {
     if(!store)throw new Error('STORE_REQUIRED');
     this.clock=typeof clock==='function'?clock:()=>Date.now();
     this.rest=rest;this.futuresRest=futuresRest;this.store=store;this.pushManager=pushManager;this.config={
-      quote:'USDT',pollMs:30000,universeRefreshMs:5*60*1000,minQuoteVolume24h:500000,fastMinQuoteVolume24h:200000,
+      quote:'USDT',pollMs:30000,universeRefreshMs:5*60*1000,minQuoteVolume24h:750000,fastMinQuoteVolume24h:750000,
       scanBatchSize:8,pulseTopCandidates:3,quietCandidates:2,patrolBatchSize:2,deepScanMinIntervalMs:90_000,deepConcurrency:3,
       maxExtended24hMovePct:18,maxQuiet24hMovePct:8,quietMinBaseScore:55,quietMinCompressionScore:60,
       quietMinHigherLowScore:60,quietMinParticipationScore:58,quietMinBurstRatio:1.08,
@@ -438,7 +439,7 @@ export class FalconEyeRadar {
   async tickerRows(){
     const r=await this.rest.request('/api/v3/ticker/24hr');
     const raw=(Array.isArray(r.data)?r.data:[]).map(x=>normalizeRadarTickerRow(x,this.config.quote)).filter(Boolean)
-      .filter(x=>x.quoteVolume24h>=this.config.fastMinQuoteVolume24h&&this.universe.includes(x.symbol));
+      .filter(x=>x.quoteVolume24h>=this.config.fastMinQuoteVolume24h&&this.universe.includes(x.symbol)&&isDirectionalCandidateSymbol(x.symbol));
     const marketMoves=raw.map(x=>x.priceChange24h).filter(hasFiniteValue).map(Number);
     const marketMedianChange24hPct=median(marketMoves);
     const benchmarked=raw.map(row=>({...row,

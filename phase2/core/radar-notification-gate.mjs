@@ -56,6 +56,25 @@ function categoryHitsOf(alert){
   const gate=alert?.elite_gate;
   if(Number.isFinite(Number(gate?.category_hits)))return Number(gate.category_hits);
   const r=radarId(alert);
+  if(r==='FALCON_EYE_RADAR'){
+    const s=alert?.falcon_eye?.component_scores||{};
+    return [s.momentum,s.volume,s.trades,s.taker,s.structure,s.resistance,s.relative_strength,
+      s.derivatives,s.breakout,s.ema,s.vwap,s.bollinger,s.efficiency,s.atr,s.quietness,s.compression]
+      .filter(v=>num(v,0)>=70).length;
+  }
+  if(r==='KAHIR_RADAR'){
+    const a=alert?.kahir_analysis||alert?.analysis||{},alg=a.algorithms||{},m=a.metrics||{};
+    const z=Math.max(num(m.one_minute_z,0),num(m.five_minute_z,0));
+    return [
+      num(alg.PARTICIPATION_REGIME?.score,0),
+      num(alg.VOLATILITY_REGIME_TRANSITION?.score,0),
+      num(alg.KAUFMAN_EFFICIENCY_SHIFT?.score,0),
+      num(alg.RANGE_ACCEPTANCE?.score,0),
+      num(alg.IMPULSE_PERSISTENCE?.score,0),
+      clamp(50+z*15),
+      clamp(50+num(m.relative_acceleration_bps,0)*5)
+    ].filter(v=>num(v,0)>=70).length;
+  }
   const c=alert?.components||{};
   const checks=r==='EARLY_MOVE_RADAR'
     ? [c.momentum,c.volume,c.buying_pressure,c.orderbook_pressure,c.structure,c.squeeze,c.relative_strength,c.mtf_alignment,c.ema_reclaim,c.rsi_score,c.obv_accumulation,c.wyckoff_spring].filter(v=>num(v,0)>=65)
@@ -132,6 +151,7 @@ function radarSpecificChecks(alert,p){
 
   if(r==='STRONG_MOVE_RADAR'){
     const m=alert?.strong_move?.metrics||{};
+    if(Math.abs(num(alert?.price_change_24h??alert?.priceChange24h,0))>8)failures.push('STRONG_MOVE_ALREADY_EXTENDED');
     const hasImpulse=num(m.return_3m,0)>=0.60 || Boolean(m.micro_breakout);
     const hasParticipation=num(m.volume_ratio,0)>=1.6 || num(m.trade_ratio,0)>=1.35;
     const hasFlow=num(m.taker_buy_ratio,0)>=0.53 || num(m.taker_buy_delta,0)>=0.01;
@@ -158,7 +178,7 @@ function radarSpecificChecks(alert,p){
   }
 
   if(r==='KAHIR_RADAR'){
-    const a=alert?.analysis||{};
+    const a=alert?.analysis||alert?.kahir_analysis||{};
     const m=a.metrics||{};
     const z=Math.max(num(m.one_minute_z,0),num(m.five_minute_z,0));
     const participation=num(a.algorithms?.PARTICIPATION_REGIME?.score,0);
@@ -171,15 +191,24 @@ function radarSpecificChecks(alert,p){
     const m=a.metrics||{};
     const cs=a.component_scores||{};
     const d=a.derivatives||{};
+    // The analyzer has already required the early-stage score, multi-factor confirmations,
+    // closed candles and anti-chase check. Preserve that verified path when compression or
+    // relative strength is the lone weak component, but only with strong participation/flow
+    // and an observed resistance/burst trigger.
+    const validatedEarlySetup=a.eligible===true&&
+      ['PRE_EXPANSION','BREAKOUT_DEVELOPING'].includes(String(a.pre_expansion_stage||''))&&
+      Number(a.score)>=78&&Number(a.confirmation_count)>=8&&a.not_chasing===true&&
+      num(m.move_24h_pct,99)<=8&&Number(cs.volume)>=60&&Number(cs.trades)>=58&&Number(cs.taker)>=58&&
+      (m.micro_breakout===true||num(m.resistance_gap_pct,99)<=1.4||num(m.return_3m,0)>=0.35);
     if(Boolean(a.not_chasing)===false)failures.push('FALCON_ANTI_CHASE_FAIL');
     if(Number(a.confirmation_count||0)<8)failures.push('FALCON_CONFIRMATION_BREADTH_LOW');
     if(a.market_pulse && Number(a.market_pulse.score||0)<54)failures.push('FALCON_MARKET_PULSE_WEAK');
     if(Number(cs.quietness||0)<65)failures.push('FALCON_QUIET_BASE_WEAK');
-    if(Number(cs.compression||0)<58)failures.push('FALCON_COMPRESSION_WEAK');
+    if(Number(cs.compression||0)<58&&!validatedEarlySetup)failures.push('FALCON_COMPRESSION_WEAK');
     if(Number(cs.structure||0)<65)failures.push('FALCON_STRUCTURE_WEAK');
     if(Number(cs.taker||0)<58)failures.push('FALCON_TAKER_FLOW_WEAK');
-    if(Number(cs.relative_strength||0)<55)failures.push('FALCON_RELATIVE_STRENGTH_WEAK');
-    if(Number(m.move_24h)>8)failures.push('FALCON_ALREADY_MOVED');
+    if(Number(cs.relative_strength||0)<55&&!validatedEarlySetup)failures.push('FALCON_RELATIVE_STRENGTH_WEAK');
+    if(Number(m.move_24h_pct)>8)failures.push('FALCON_ALREADY_MOVED');
     if(Number(m.return_10m)>3.8)failures.push('FALCON_10M_CHASE');
     if(Number(m.return_5m)>2.5)failures.push('FALCON_5M_CHASE');
     if(Number(m.ema21_distance_pct)>4.2)failures.push('FALCON_EMA_EXTENSION');

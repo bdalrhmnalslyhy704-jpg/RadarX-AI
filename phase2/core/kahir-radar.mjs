@@ -1,6 +1,8 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {formatRadarTime12h} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
+import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
+import {isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)||0));
 const finite=(x,d=null)=>Number.isFinite(Number(x))?Number(x):d;
@@ -73,7 +75,7 @@ export const KAHIR_RADAR_DEFAULTS=Object.freeze({
   quote:'USDT',
   pollMs:30000,
   universeRefreshMs:5*60*1000,
-  minQuoteVolume24h:500000,
+  minQuoteVolume24h:750000,
   baselineHistory:8,
   deepCandidates:14,
   deepRotationReserve:2,
@@ -87,12 +89,17 @@ export const KAHIR_RADAR_DEFAULTS=Object.freeze({
   minVolumeRatio:1.35,
   minEfficiency:0.52,
   minRelativeAccelerationBps:1.5,
-  maxAbs24hMovePct:15
+  maxAbs24hMovePct:6
 });
 
 export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHistory=[],marketVelocityBps=0,now=Date.now()}={}){
   const m1=closed(oneMinute,now),m5=closed(fiveMinute,now);
-  if(m1.length<80||m5.length<50)return {eligible:false,stage:'WARMING_UP',score:null,closed_candles_only:true};
+  if(m1.length<80||m5.length<50)return {eligible:false,stage:'WARMING_UP',score:null,closed_candles_only:true,data_quality:0,data_stale:true};
+  const oneAge=Math.max(0,Number(now)-Number(m1.at(-1)?.closeTime));
+  const fiveAge=Math.max(0,Number(now)-Number(m5.at(-1)?.closeTime));
+  if(!Number.isFinite(oneAge)||!Number.isFinite(fiveAge)||oneAge>3*60*1000||fiveAge>10*60*1000)
+    return {eligible:false,stage:'STALE_DATA',score:null,closed_candles_only:true,data_quality:0,data_stale:true,
+      reason_codes:['STALE_CLOSED_CANDLES'],metrics:{one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge}};
   const price=finite(ticker.lastPrice,0);
   if(!(price>0))return {eligible:false,stage:'INVALID_PRICE',score:null,closed_candles_only:true};
 
@@ -147,7 +154,10 @@ export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHis
     score>=KAHIR_RADAR_DEFAULTS.minScore&&
     (z1>=KAHIR_RADAR_DEFAULTS.minOneMinuteZ||z5>=KAHIR_RADAR_DEFAULTS.minFiveMinuteZ)&&
     volumeRatio>=KAHIR_RADAR_DEFAULTS.minVolumeRatio&&
+    tradeRatio>=1.20&&
     eff>=KAHIR_RADAR_DEFAULTS.minEfficiency&&
+    acceptance>=65&&
+    persistence>=68&&
     relativeAccelerationBps>=KAHIR_RADAR_DEFAULTS.minRelativeAccelerationBps;
 
   const stage=eligible?(score>=92?'POWER_SURGE':'IGNITION'):score>=76?'BUILDING_PRESSURE':'WATCH';
@@ -177,7 +187,8 @@ export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHis
   if(extended)reasons.push('رفض: الحركة اليومية ممتدة');
 
   return {
-    eligible,stage,score:Math.round(score*10)/10,closed_candles_only:true,
+    eligible,stage,score:Math.round(score*10)/10,closed_candles_only:true,data_quality:90,data_stale:false,
+    candle_freshness:{one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge},
     confirmation_count:confirmations.length,confirmation_total:9,direction,
     algorithms:{
       SELF_BASELINE_Z:{one_minute_z:z1,five_minute_z:z5,self_acceleration_pct:selfAccelerationPct,relative_acceleration_bps:relativeAccelerationBps},
@@ -233,8 +244,10 @@ function buildKahirAlert(candidate,analysis,now=Date.now()){
     source:'Binance Public REST',detected_at:now,processed_at:now,
     detected_at_iso:new Date(now).toISOString(),detected_time_12h:formatRadarTime12h(now),
     detected_timezone:'Asia/Aden',
+    data_quality:Number.isFinite(Number(analysis.data_quality))?Number(analysis.data_quality):0,
+    data_status:{status:analysis.data_stale?'DATA_STALE':'LIVE_DATA',stale:Boolean(analysis.data_stale),source:'Binance Public REST'},
     paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
-    eligible:true,
+    eligible:Boolean(analysis.eligible),
     disclaimer:'القاهر يرصد تغيرًا غير اعتيادي في سلوك العملة ويجمع عوامل تأكيد؛ ليس ضمانًا لارتفاع مستقبلي ولا إشارة تنفيذ.'
   };
 }
@@ -268,7 +281,7 @@ export class KahirRadar{
     const r=await this.rest.request('/api/v3/ticker/24hr');
     return (Array.isArray(r.data)?r.data:[])
       .map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
-      .filter(x=>this.universe.includes(x.symbol))
+      .filter(x=>this.universe.includes(x.symbol)&&isDirectionalCandidateSymbol(x.symbol))
       .filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h);
   }
   snapshotTicker(row){
@@ -299,8 +312,12 @@ export class KahirRadar{
     return {marketVelocityBps,updates};
   }
   selectDeep(rows,updates){
+    // Keep market-wide accounting complete, but do not spend Deep requests chasing a
+    // coin whose daily impulse is already outside the early-move window.
+    const earlyRows=(Array.isArray(rows)?rows:[]).filter(row=>
+      Math.abs(Number(row?.priceChange24h))<=Number(this.config.maxAbs24hMovePct??6));
     const bySym=new Map(updates.map(x=>[x.symbol,x]));
-    const ranked=[...rows].map(row=>{
+    const ranked=[...earlyRows].map(row=>{
       const u=bySym.get(row.symbol)||{};
       const history=this.selfSnapshots.get(row.symbol)||[];
       const accel=u.relativeVelocityBps+(finite(u.selfChangePct,0)-finite(history.at(-2)?.selfChangePct,0))*100;
@@ -370,10 +387,17 @@ export class KahirRadar{
       if(this.clock()-lastAlert>=this.config.alertCooldownMs){
         const alert=buildKahirAlert(candidate,analysis,this.clock());
         alert.elite_gate=gate;
+        const notificationGate=evaluateRadarNotificationGate(alert,{now:alert.detected_at,commit:true});
+        result.notification_gate=notificationGate;
+        if(!notificationGate.eligible){
+          result.eligible=false;
+          result.blocked_reasons=notificationGate.failures;
+          return result;
+        }
+        alert.notification_gate=notificationGate;
         this.lastAlertAt.set(row.symbol,alert.detected_at);
         await this.store.appendKahirAlert(alert);
-        if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(alert);
-        this.alertCount++;
+        if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(alert); this.alertCount++;
       }
     }
     return result;
