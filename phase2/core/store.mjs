@@ -359,22 +359,24 @@ export class DurableStore {
     const recordLimit=Math.max(100,Math.min(5000,Math.trunc(Number(maxRecords)||2500)));
     const stageLimit=Math.max(100,Math.min(10000,Math.trunc(Number(maxStageKeys)||6000)));
     return this.lock(async()=>{
-      let raw;
-      try{raw=await readFile(this.files.preExpansionOutcomes,'utf8');}
+      let beforeBytes=0;
+      try{beforeBytes=Number((await stat(this.files.preExpansionOutcomes)).size)||0;}
       catch(error){
         if(error?.code==='ENOENT')return {compacted:false,reason:'FILE_NOT_FOUND',retained_records:0,trimmed_records:0};
         throw error;
       }
-      let state;
-      try{state=JSON.parse(raw);}
-      catch{throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');}
+      let parsed;
+      try{parsed=await readBoundedOutcomeLedger(this.files.preExpansionOutcomes,recordLimit);}
+      catch(error){
+        if(String(error?.message||'').startsWith('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_'))throw error;
+        throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');
+      }
+      const state=parsed.state;
       if(!state||typeof state!=='object'||Array.isArray(state))
         throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_STATE');
-      const priorRecords=Array.isArray(state.records)?state.records:[];
-      const priorCount=priorRecords.length;
+      const priorCount=Number(parsed.totalRecords)||0;
       const trimmedRecords=Math.max(0,priorCount-recordLimit);
-      if(trimmedRecords)state.records=priorRecords.slice(-recordLimit);
-      else if(!Array.isArray(state.records))state.records=[];
+      if(!Array.isArray(state.records))state.records=[];
       const stageMap=state.last_stage_by_key&&typeof state.last_stage_by_key==='object'&&!Array.isArray(state.last_stage_by_key)
         ?state.last_stage_by_key:{};
       let trimmedStageKeys=0;
@@ -386,13 +388,12 @@ export class DurableStore {
         state.last_stage_by_key=stageMap;
         trimmedStageKeys=removeCount;
       }else if(state.last_stage_by_key!==stageMap)state.last_stage_by_key=stageMap;
-      const beforeBytes=Buffer.byteLength(raw,'utf8');
       if(!trimmedRecords&&!trimmedStageKeys){
-        return {compacted:false,reason:'WITHIN_LIMITS',retained_records:priorCount,trimmed_records:0,
+        return {compacted:false,reason:'WITHIN_LIMITS',retained_records:state.records.length,trimmed_records:0,
           retained_stage_keys:stageEntries.length,trimmed_stage_keys:0,before_bytes:beforeBytes,after_bytes:beforeBytes};
       }
-      // Drop the large input string before serializing the smaller, bounded state.
-      raw=null;
+      // Only the retained records are ever parsed into objects. This avoids the
+      // 5,000-row JSON.parse allocation that previously aborted the V8 heap.
       await new Promise(resolve=>setImmediate(resolve));
       await this.writeJson(this.files.preExpansionOutcomes,state);
       const afterBytes=Number((await stat(this.files.preExpansionOutcomes)).size)||0;
