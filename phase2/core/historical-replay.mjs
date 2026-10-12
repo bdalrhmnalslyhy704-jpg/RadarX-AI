@@ -147,10 +147,26 @@ export function runHistoricalReplay({
   }
   const windowStartRow = candles.find(x => x.openTime >= start && x.closeTime <= end) ?? null;
   const windowBaseline = finite(windowStartRow?.open);
-  const actual50At = windowBaseline === null ? null : candles.find(x =>
+  const actual50CandleCloseAt = windowBaseline === null ? null : candles.find(x =>
     x.openTime >= start && x.closeTime <= end && x.high >= windowBaseline * 1.5)?.closeTime ?? null;
-  const actual70At = windowBaseline === null ? null : candles.find(x =>
+  const actual70CandleCloseAt = windowBaseline === null ? null : candles.find(x =>
     x.openTime >= start && x.closeTime <= end && x.high >= windowBaseline * 1.7)?.closeTime ?? null;
+  // Exact crossing times come from public aggTrades, not minute-candle close times.
+  // Incomplete trade history makes the exact timestamp unknown rather than guessed.
+  const firstTradeAtTarget = target => trades.find(x =>
+    x.T >= start && x.T <= end && Number(x.p) >= target)?.T ?? null;
+  const actual50At = windowBaseline === null || !tradeCoverageComplete
+    ? null : firstTradeAtTarget(windowBaseline * 1.5);
+  const actual70At = windowBaseline === null || !tradeCoverageComplete
+    ? null : firstTradeAtTarget(windowBaseline * 1.7);
+  const targetCrossingSource = !tradeCoverageComplete
+    ? "UNAVAILABLE_INCOMPLETE_TRADE_COVERAGE" : "BINANCE_PUBLIC_AGG_TRADES";
+  const actual50Alignment = !tradeCoverageComplete ? "TRADE_COVERAGE_INCOMPLETE" :
+    actual50CandleCloseAt !== null && actual50At === null ? "CANDLE_TRADE_CROSSING_MISMATCH" :
+    actual50At !== null ? "BINANCE_AGGTRADE_TIMESTAMP" : "NOT_REACHED";
+  const actual70Alignment = !tradeCoverageComplete ? "TRADE_COVERAGE_INCOMPLETE" :
+    actual70CandleCloseAt !== null && actual70At === null ? "CANDLE_TRADE_CROSSING_MISMATCH" :
+    actual70At !== null ? "BINANCE_AGGTRADE_TIMESTAMP" : "NOT_REACHED";
   const cooldown = Math.max(0, finite(alertCooldownMs) ?? 0);
   const horizon = Math.max(0, finite(outcomeHorizonMs) ?? 0);
   const rows = [];
@@ -280,6 +296,12 @@ export function runHistoricalReplay({
         minutes_to_future_70pct: f70 === null ? null : Math.round((f70 - at) / MINUTE_MS * 100) / 100,
         window_baseline_price: windowBaseline,
         actual_window_50pct_at: actual50At, actual_window_70pct_at: actual70At,
+        actual_window_50pct_candle_close_at: actual50CandleCloseAt,
+        actual_window_70pct_candle_close_at: actual70CandleCloseAt,
+        actual_window_50pct_timestamp_source: targetCrossingSource,
+        actual_window_70pct_timestamp_source: targetCrossingSource,
+        actual_window_50pct_alignment: actual50Alignment,
+        actual_window_70pct_alignment: actual70Alignment,
         minutes_before_actual_window_50pct: actual50At === null ? null : Math.round((actual50At - at) / MINUTE_MS * 100) / 100,
         minutes_before_actual_window_70pct: actual70At === null ? null : Math.round((actual70At - at) / MINUTE_MS * 100) / 100
       }
@@ -287,15 +309,19 @@ export function runHistoricalReplay({
   }
   const firstAcceptedAt=rows.find(x=>x.decision==="ACCEPTED")?.timestamp??null;
   const firstCoreTriggerAt=rows.find(x=>x.core_trigger_eligible===true)?.timestamp??null;
-  const premove50Status=actual50At===null
-    ? "NO_PLUS_50_PERCENT_EVENT_IN_WINDOW"
-    : firstAcceptedAt!==null&&firstAcceptedAt<actual50At
-      ? "PREMOVE_ALERT_ACCEPTED"
-      : firstCoreTriggerAt!==null&&firstCoreTriggerAt<actual50At
-        ? "CORE_TRIGGER_SEEN_BUT_FINAL_GATE_BLOCKED"
-        : firstCoreTriggerAt!==null
-          ? "CORE_TRIGGER_AFTER_PLUS_50_PERCENT"
-          : "NO_CORE_TRIGGER_BEFORE_PLUS_50_PERCENT";
+  const premove50Status=!tradeCoverageComplete
+    ? "TRADE_COVERAGE_INCOMPLETE"
+    : actual50CandleCloseAt!==null&&actual50At===null
+      ? "CANDLE_TRADE_CROSSING_MISMATCH"
+      : actual50At===null
+        ? "NO_PLUS_50_PERCENT_EVENT_IN_WINDOW"
+        : firstAcceptedAt!==null&&firstAcceptedAt<actual50At
+          ? "PREMOVE_ALERT_ACCEPTED"
+          : firstCoreTriggerAt!==null&&firstCoreTriggerAt<actual50At
+            ? "CORE_TRIGGER_SEEN_BUT_FINAL_GATE_BLOCKED"
+            : firstCoreTriggerAt!==null
+              ? "CORE_TRIGGER_AFTER_PLUS_50_PERCENT"
+              : "NO_CORE_TRIGGER_BEFORE_PLUS_50_PERCENT";
   return {
     engine: "RADARX_HISTORICAL_REPLAY_V1",
     symbol: sym,
@@ -304,6 +330,8 @@ export function runHistoricalReplay({
       source: "BINANCE_PUBLIC_REST", real_market_data_required: true, synthetic_data_used: false,
       closed_1m_candles: candles.length, complete_5m_candles: five.length,
       aggregate_trades: trades.length, trade_coverage_complete: Boolean(tradeCoverageComplete),
+      target_crossing_timestamp_source: targetCrossingSource,
+      target_crossing_alignment: {plus_50:actual50Alignment,plus_70:actual70Alignment},
       trade_coverage: tradeCoverage, lookahead_guard: "evaluator receives only candles/trades timestamped before or at each decision; forward outcomes are calculated afterward"
     },
     summary: {
