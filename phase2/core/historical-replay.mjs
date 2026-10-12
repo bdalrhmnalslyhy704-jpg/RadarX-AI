@@ -246,7 +246,12 @@ export function runHistoricalReplay({
       stage_observed: String(stageFrom(raw)).slice(0, 80),
       strong_move_stage: strong?.stage ?? null,
       core_trigger_diagnostics: strong?.trigger_diagnostics ?? null,
-      decision: accepted ? "ACCEPTED" : "REJECTED", rejection_group: rejectionGroup, reason_codes: reasons,
+      decision: accepted ? "ACCEPTED" : "REJECTED",
+      accepted_mode:String(raw?.accepted_mode ?? alert?.notification_mode ?? (accepted ? "STRICT" : "NONE")),
+      rejection_group: rejectionGroup, reason_codes: reasons,
+      strict_gate_failures:Array.isArray(raw?.strict_gate_failures)?raw.strict_gate_failures.slice(0,20):[],
+      early_warning:raw?.early_warning??alert?.early_warning??null,
+      early_warning_score:finite(raw?.early_warning?.score??alert?.early_warning?.score),
       score: finite(raw?.score ?? alert?.opportunity_score ?? strong?.score),
       candidate_eligible: typeof alert?.eligible === "boolean" ? alert.eligible : null,
       core_trigger_eligible: typeof strong?.eligible === "boolean" ? strong.eligible : null,
@@ -308,6 +313,11 @@ export function runHistoricalReplay({
     });
   }
   const firstAcceptedAt=rows.find(x=>x.decision==="ACCEPTED")?.timestamp??null;
+  const firstEarlyWarningAcceptedAt=rows.find(x=>x.decision==="ACCEPTED"&&x.accepted_mode==="DYNAMIC_EARLY_WARNING")?.timestamp??null;
+  const firstStrictAcceptedAt=rows.find(x=>x.decision==="ACCEPTED"&&x.accepted_mode==="STRICT")?.timestamp??null;
+  const acceptedModeCounts=Object.entries(rows.filter(x=>x.decision==="ACCEPTED").reduce((counts,row)=>{
+    counts[row.accepted_mode]=(counts[row.accepted_mode]||0)+1;return counts;
+  },{})).map(([mode,count])=>({mode,count}));
   const firstCoreTriggerAt=rows.find(x=>x.core_trigger_eligible===true)?.timestamp??null;
   const premove50Status=!tradeCoverageComplete
     ? "TRADE_COVERAGE_INCOMPLETE"
@@ -338,6 +348,9 @@ export function runHistoricalReplay({
       replay_steps: rows.length, accepted: acceptedCount, rejected: rejectedCount,
       premove_50_status: premove50Status,
       first_accepted_at: firstAcceptedAt,
+      first_early_warning_accepted_at:firstEarlyWarningAcceptedAt,
+      first_strict_accepted_at:firstStrictAcceptedAt,
+      accepted_mode_counts:acceptedModeCounts,
       first_core_trigger_at: firstCoreTriggerAt,
       first_candidate_eligible_at: rows.find(x => x.candidate_eligible === true)?.timestamp ?? null,
       first_elite_gate_eligible_at: rows.find(x => x.elite_gate.eligible === true)?.timestamp ?? null,
