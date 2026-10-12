@@ -804,3 +804,13 @@ test('archive rehydration retries newly eligible and re-entering symbols with a 
   assert.equal(calls.flat().includes('AAAUSDT')&&calls.length===4,true,
     'already-ready symbols are not redundantly re-read from the archive');
 });
+
+
+test('directional selection excludes pegged, wrapped and tokenized-equity assets without hardcoding volatile altcoins',()=>{
+  for(const symbol of ['USDCUSDT','RLUSDUSDT','PAXGUSDT','XAUTUSDT','WBTCUSDT','WBETHUSDT','NVDABUSDT','QQQBUSDT','SPXLBUSDT']){
+    assert.equal(isDirectionalCandidateSymbol(symbol),false,symbol);
+  }
+  for(const symbol of ['WUSDT','RSRUSDT','SUSDT','IOUSDT','ZROUSDT','CKBUSDT','METISUSDT','PLUMEUSDT','OGNUSDT','CTSIUSDT']){
+    assert.equal(isDirectionalCandidateSymbol(symbol),true,symbol);
+  }
+});
