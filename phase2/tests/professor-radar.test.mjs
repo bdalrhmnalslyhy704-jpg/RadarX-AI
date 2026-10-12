@@ -65,7 +65,8 @@ test('TEST_PROFESSOR: scan fuses public stream + news + Binance technical confir
     return {status:'ok',symbol,price:{last:100,last_closed_15m:100},assessment:{direction_score:82,trap_risk:20},zones:{support:96,resistance:108}};
   }};
   const ytData={contents:{twoColumnSearchResultsRenderer:{primaryContents:{sectionListRenderer:{contents:[{itemSectionRenderer:{contents:[
-    {videoRenderer:{videoId:'abc123',title:{simpleText:'BTC buy long breakout LIVE'},descriptionSnippet:{runs:[{text:'BTC entry now'}]},ownerText:{simpleText:'Test Trader'},viewCountText:{simpleText:'1K'},badges:[{metadataBadgeRenderer:{label:{simpleText:'LIVE NOW'}}}],thumbnailOverlays:[]}}
+    {videoRenderer:{videoId:'abc123',title:{simpleText:'BTC buy long breakout LIVE'},descriptionSnippet:{runs:[{text:'BTC entry now'}]},ownerText:{simpleText:'Test Trader'},viewCountText:{simpleText:'1K'},badges:[{metadataBadgeRenderer:{label:{simpleText:'LIVE NOW'}}}],thumbnailOverlays:[]}},
+    {videoRenderer:{videoId:'replay999',title:{simpleText:'BTC buy long breakout LIVE'},descriptionSnippet:{runs:[{text:'BTC entry now from replay'}]},ownerText:{simpleText:'Old Replay'},publishedTimeText:{simpleText:'2 days ago'},viewCountText:{simpleText:'20K'},badges:[],thumbnailOverlays:[]}}
   ]}}]}}}}};
   const player={};
   const gdelt={articles:[{title:'Bitcoin partnership boosts market growth',url:'https://example.com/news/1',domain:'example.com',datetime:new Date(1700000000000-10*60*1000).toISOString(),tone:4}]};
@@ -83,9 +84,12 @@ test('TEST_PROFESSOR: scan fuses public stream + news + Binance technical confir
   assert.equal(ok,true);
   const snap=radar.snapshot(10);
   assert.equal(snap.radar,'PROFESSOR_RADAR');
+  assert.equal(snap.streams.count,2);
   assert.equal(snap.streams.live_count,1);
   assert.equal(snap.news.count,1);
   assert.equal(snap.candidates[0].symbol,'BTCUSDT');
+  assert.equal(snap.candidates[0].stream_mentions,1,'the old replay must not be counted as a live trade claim');
+  assert.equal(snap.candidates[0].trade_claims.length,1);
   assert.equal(snap.candidates[0].opinion.action,'PAPER_ENTRY_CANDIDATE');
   assert.equal(alerts.length,1);
   assert.equal(alerts[0].radar_name,'Radar 6 — البروفيسور');

@@ -57,9 +57,10 @@ function parseYoutubeSearch(html,query,limit){
   for(const v of videos){
     if(seen.has(v.videoId))continue;seen.add(v.videoId);
     const title=simpleText(v.title),description=simpleText(v.descriptionSnippet),channel=simpleText(v.ownerText);
-    const badge=(v.badges||[]).map(b=>simpleText(b?.metadataBadgeRenderer)).join(' ');
+    const badge=(v.badges||[]).map(b=>simpleText(b?.metadataBadgeRenderer?.label||b?.metadataBadgeRenderer?.style)).join(' ');
     const overlay=(v.thumbnailOverlays||[]).map(x=>simpleText(x?.thumbnailOverlayTimeStatusRenderer?.text)).join(' ');
-    const live=/live|مباشر|جار(?:ي|ٍ) الآن/i.test([title,badge,overlay].join(' '));
+    // The title may contain "LIVE" in an old replay; only platform live badge/overlay qualifies.
+    const live=/live|مباشر|جار(?:ي|ٍ) الآن/i.test([badge,overlay].join(' '));
     if(!live&&!/trading|crypto|bitcoin|binance|تداول|مباشر|live/i.test(title))continue;
     const views=Number((simpleText(v.viewCountText)||'').replace(/[^0-9.]/g,''))||0;
     out.push({id:v.videoId,title,description,channel,viewers:views,published_text:simpleText(v.publishedTimeText),live,url:'https://www.youtube.com/watch?v='+encodeURIComponent(v.videoId),query});
@@ -155,6 +156,7 @@ function aggregateMentions({streams,news,index}){
   const map=new Map();
   const get=s=>{if(!map.has(s))map.set(s,{symbol:s,baseAsset:s.replace(/USDT$/,''),stream_mentions:0,news_mentions:0,stream_weight:0,stream_signed:0,news_weight:0,news_sum:0,trade_claims:[],news_items:[]});return map.get(s);};
   for(const stream of streams){
+    if(stream?.live!==true)continue;
     const text=[stream.title,stream.description,stream.transcript?.text||''].join(' ');const assets=mentionedAssets(text,index);
     const evidence=stream.transcript?.available?'CAPTION':stream.description?'DESCRIPTION':'TITLE';const claim=streamClaim(text);const w=streamWeight(stream,evidence);
     for(const a of assets){
