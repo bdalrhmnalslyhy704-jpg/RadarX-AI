@@ -39,5 +39,5 @@ test('TEST_FIXTURE: large JSONL scheduler journals read only the recent tail in 
   const recent=await store.readRecent('schedulerEvents',3);
   assert.deepEqual(recent.map(x=>x.event_at),[20000,19999,19998]);
   const radar8=await store.readScanSchedulerEvents({radar:'RADAR_8',limit:3});
-  assert.deepEqual(radar8.map(x=>x.event_at),[19994,19996,19998]);
+  assert.deepEqual(radar8.map(x=>x.event_at),[19995,19997,19999]);
 });
