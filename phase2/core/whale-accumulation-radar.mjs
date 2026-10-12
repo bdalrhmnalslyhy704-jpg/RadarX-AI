@@ -718,7 +718,7 @@ export class WhaleAccumulationRadar{
       metrics.ended_at=new Date(this.clock()).toISOString();
       this.scheduler.record({stage:'CYCLE',eventType:'COMPLETED',cycle:metrics.cycle,at:this.clock(),
         elapsedMs:metrics.cycle_duration_ms,reasonCode:'WHALE_ACCUMULATION_CYCLE_TIMINGS',
-        extra:{...metrics,cycle_error:cycleError?this.lastError:null}});
+        extra:{...metrics,radar:'RADAR_9',cycle_error:cycleError?this.lastError:null}});
       const summaryFlushStartedAt=this.clock();
       const summaryFlush=await this.scheduler.flush();
       metrics.scheduler_archive_write_ms+=Math.max(0,this.clock()-summaryFlushStartedAt);
