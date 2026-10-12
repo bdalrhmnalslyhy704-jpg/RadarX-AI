@@ -160,9 +160,17 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     EARLY_EXPANSION_RADAR:{name:RADAR_NAMES.EARLY_EXPANSION_RADAR,instance:earlyExpansionRadar,read:'readEarlyExpansionAlerts'}
   });
   function radarStatus(){
-    return Object.entries(radarEntries).map(([id,x])=>{
-      const health=typeof x.instance?.health==='function'?x.instance.health():{running:false,radar:id,radar_name:x.name};
-      return {radar:id,radar_name:x.name,running:Boolean(health.running),profile:RADAR_PROFILES[id]||null,health};
+    const defined=Object.entries(radarEntries).map(([id,x])=>({radar:id,radar_name:x.name,instance:x.instance,mode:'BACKGROUND',profile:RADAR_PROFILES[id]||null}));
+    const auxiliary=[
+      {radar:'MARKET_MONITOR',radar_name:'مراقبة السوق المشتركة',instance:monitor,mode:'BACKGROUND'},
+      {radar:'AUTONOMOUS_AI_MARKET',radar_name:'مركز وكلاء الذكاء',instance:agentMarket,mode:'BACKGROUND'},
+      {radar:'MARKET_UNIVERSE_SCANNER',radar_name:'ماسح السوق عند الطلب',instance:marketRadar,mode:'ON_DEMAND'},
+      {radar:'SYMBOL_DEEP_ANALYZER',radar_name:'فاحص الرمز العميق عند الطلب',instance:deepSymbolScanner,mode:'ON_DEMAND'}
+    ];
+    return [...defined,...auxiliary].map(x=>{
+      const health=typeof x.instance?.health==='function'?x.instance.health():
+        {running:x.mode==='ON_DEMAND'?null:false,radar:x.radar,radar_name:x.radar_name,mode:x.mode};
+      return {radar:x.radar,radar_name:x.radar_name,running:Boolean(health.running),mode:x.mode,profile:x.profile||null,health};
     });
   }
   function allowedOrigin(req){
