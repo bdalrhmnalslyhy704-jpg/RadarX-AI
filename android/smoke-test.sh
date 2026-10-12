@@ -38,6 +38,24 @@ cleanup() {
 }
 trap cleanup EXIT
 
+capture_screenshot() {
+  local name="$1"
+  local output="$2"
+  local remote="/sdcard/radarx-${name}.png"
+
+  PHASE="capture ${name} screenshot"
+  # Software-rendered Android emulators can stall the streaming screencap pipe
+  # for over 15 seconds although MainActivity is already UI_READY. Allow a
+  # larger bounded window, then use a device-side capture + adb pull fallback.
+  if timeout 40s adb exec-out screencap -p > "${output}" && [[ -s "${output}" ]]; then
+    return 0
+  fi
+  rm -f "${output}"
+  timeout 25s adb shell screencap -p "${remote}"
+  timeout 20s adb pull "${remote}" "${output}" >/dev/null
+  test -s "${output}"
+}
+
 start_app_and_wait_ready() {
   PHASE="force-stop before clean launch"
   if [[ -n "${APP_LOGCAT_PID:-}" ]]; then
@@ -196,8 +214,7 @@ timeout 45s adb install -r "${APK}"
 # Online: the Activity must remain open and auto-start the foreground monitor.
 start_app_and_wait_ready
 
-PHASE="capture online screenshot"
-timeout 15s adb exec-out screencap -p > "${RUNNER_TEMP}/radarx-online.png"
+capture_screenshot online "${RUNNER_TEMP}/radarx-online.png"
 test -s "${RUNNER_TEMP}/radarx-online.png"
 head -c 8 "${RUNNER_TEMP}/radarx-online.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
 
@@ -223,8 +240,7 @@ LOGS="$(cat "${APP_LOG_FILE:-/nonexistent}" 2>/dev/null || true)"
 assert_background_service_declared
 test -n "$(timeout 12s adb shell pidof com.radarx.app | tr -d '\\r' || true)"
 
-PHASE="capture offline screenshot"
-timeout 15s adb exec-out screencap -p > "${RUNNER_TEMP}/radarx-offline.png"
+capture_screenshot offline "${RUNNER_TEMP}/radarx-offline.png"
 test -s "${RUNNER_TEMP}/radarx-offline.png"
 head -c 8 "${RUNNER_TEMP}/radarx-offline.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
 
