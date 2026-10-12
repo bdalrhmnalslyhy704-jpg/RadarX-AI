@@ -247,9 +247,18 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now,aggTrades=[]){
   const flashTrigger=direction==='UP_SURGE'&&buyPressureConfirmed&&threeSecondBuyPressureConfirmed&&flashScore>=74&&flashConfirmations>=4&&
     ((Number.isFinite(r3)&&r3>=0.45)||(Number.isFinite(volumeRatio)&&volumeRatio>=1.50)||microBreak||breakUp);
   const score=Math.max(compositeScore,flashScore);
-  const strongTrigger=buyPressureConfirmed&&threeSecondBuyPressureConfirmed&&score>=74&&(flashTrigger||
-    ((Number.isFinite(shortReturn)&&shortReturn>=0.65)||(Number.isFinite(volumeRatio)&&volumeRatio>=2.5&&compositeScore>=72)||
-     (Number.isFinite(accel)&&accel>=0.45&&compositeScore>=72)));
+  const alternateTrigger=
+    (Number.isFinite(shortReturn)&&shortReturn>=0.65)||
+    (Number.isFinite(volumeRatio)&&volumeRatio>=2.5&&compositeScore>=72)||
+    (Number.isFinite(accel)&&accel>=0.45&&compositeScore>=72);
+  const triggerChecks=[
+    {code:'TAKER_BUY_QUOTE_RATIO_GT_70_PERCENT',eligible:buyPressureConfirmed,observed:buyRatio,operator:'>',threshold:0.70},
+    {code:'THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT',eligible:threeSecondBuyPressureConfirmed,observed:threeSecondLiquidity.taker_buy_ratio??null,operator:'>',threshold:0.70},
+    {code:'STRONG_MOVE_SCORE_GE_74',eligible:score>=74,observed:score,operator:'>=',threshold:74},
+    {code:'FLASH_OR_ALTERNATE_PRICE_TRIGGER',eligible:Boolean(flashTrigger||alternateTrigger),observed:{flash_trigger:flashTrigger,alternate_trigger:alternateTrigger,return_3m:shortReturn,volume_ratio:volumeRatio,acceleration:accel,composite_score:compositeScore},operator:'OR',threshold:null}
+  ];
+  const triggerFailures=triggerChecks.filter(x=>!x.eligible).map(x=>x.code);
+  const strongTrigger=triggerFailures.length===0;
   const stage=strongTrigger?(score>=88?'EXPLOSIVE':'STRONG_MOVE'):score>=68?'BUILDING':'WATCH';
 
   const reasons=[];
@@ -271,6 +280,7 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now,aggTrades=[]){
 
   return {
     eligible:strongTrigger,
+    trigger_diagnostics:{eligible:strongTrigger,checks:triggerChecks,failed_checks:triggerFailures},
     closed_candles_only:true,
     source_candle_close_at:finite(last?.closeTime),
     stage,
