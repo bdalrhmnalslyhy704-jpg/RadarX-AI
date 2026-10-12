@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp} from 'node:fs/promises';
+import {mkdtemp,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DurableStore} from '../core/store.mjs';
@@ -26,4 +26,18 @@ test('TEST_FIXTURE: Radar 4 alert log survives fresh reads',async()=>{
   await store.appendLiquidityAbsorptionAlert(alert);
   const rows=await store.readLiquidityAbsorptionAlerts({sinceMs:0,limit:10});
   assert.equal(rows.length,1);assert.equal(rows[0].radar,'LIQUIDITY_ABSORPTION_RADAR');assert.equal(rows[0].symbol,'TESTUSDT');
+});
+
+
+test('TEST_FIXTURE: large JSONL scheduler journals read only the recent tail in newest-first order',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-large-journal-'));
+  const store=await new DurableStore({dir}).init();
+  const lines=Array.from({length:20000},(_,i)=>JSON.stringify({
+    event_at:i+1,radar:i%2===0?'RADAR_8':'RADAR_9',symbol:'S'+i+'USDT',payload:'x'.repeat(200)
+  }));
+  await writeFile(store.files.schedulerEvents,lines.join('\\n')+'\\n');
+  const recent=await store.readRecent('schedulerEvents',3);
+  assert.deepEqual(recent.map(x=>x.event_at),[20000,19999,19998]);
+  const radar8=await store.readScanSchedulerEvents({radar:'RADAR_8',limit:3});
+  assert.deepEqual(radar8.map(x=>x.event_at),[19994,19996,19998]);
 });
