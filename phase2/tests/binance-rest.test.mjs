@@ -56,6 +56,42 @@ test('separate Spot clients atomically share the one-minute weight ceiling',asyn
   assert.ok(clientA.health().shared_budget_waiters>=0);
 });
 
+test('same-client REST requests run concurrently within the explicit client and shared caps',async()=>{
+  let active=0,maxActive=0,calls=0,releaseFetch;
+  const responseGate=new Promise(resolve=>{releaseFetch=resolve;});
+  const budget=createRestRequestBudget({maxConcurrentRequests:4});
+  const client=new RestClient({baseUrls:['https://parallel.example'],minIntervalMs:0,maxWeightPerMinute:100,safetyMarginWeight:0,maxConcurrentRequests:2,budget,clock:()=>1_900_000_000_000,sleepFn:async()=>{},fetchImpl:async()=>{
+    calls++;active++;maxActive=Math.max(maxActive,active);
+    await responseGate;
+    active--;return response(200,[],{'X-MBX-USED-WEIGHT-1M':'8'});
+  }});
+  const tasks=Array.from({length:4},(_,i)=>client.request('/api/v3/ticker/24hr',{symbol:'T'+i+'USDT'}));
+  await new Promise(resolve=>setImmediate(resolve));
+  try{assert.equal(calls,2);assert.equal(maxActive,2);assert.equal(client.health().active_request_count,2);}
+  finally{releaseFetch();}
+  await Promise.all(tasks);
+  assert.equal(calls,4);assert.equal(maxActive,2);assert.equal(client.health().shared_active_requests,0);
+});
+
+test('the shared Spot REST semaphore caps simultaneous requests across radar clients',async()=>{
+  let now=1_900_200_000_000,active=0,maxActive=0,calls=0,releases=[];
+  const budget=createRestRequestBudget({maxConcurrentRequests:2});
+  const makeClient=()=>new RestClient({baseUrls:['https://shared-slots.example'],minIntervalMs:0,maxWeightPerMinute:100,safetyMarginWeight:0,maxConcurrentRequests:4,budget,clock:()=>now,sleepFn:async()=>{},fetchImpl:async()=>{
+    calls++;active++;maxActive=Math.max(maxActive,active);
+    await new Promise(resolve=>releases.push(resolve));
+    active--;return response(200,[],{'X-MBX-USED-WEIGHT-1M':'8'});
+  }});
+  const clients=[makeClient(),makeClient(),makeClient(),makeClient()];
+  const tasks=clients.map((client,i)=>client.request('/api/v3/ticker/24hr',{symbol:'Z'+i+'USDT'}));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(calls,2);assert.equal(maxActive,2);
+  releases.splice(0).forEach(resolve=>resolve());
+  await new Promise(resolve=>setImmediate(resolve));
+  releases.splice(0).forEach(resolve=>resolve());
+  await Promise.all(tasks);
+  assert.equal(calls,4);assert.equal(maxActive,2);assert.equal(budget.activeRequests,0);
+});
+
 test('identical overlapping reads are coalesced across RestClient instances sharing endpoint routes',async()=>{
   let firstCalls=0,secondCalls=0,releaseFirst;
   const firstResponse=new Promise(resolve=>{releaseFirst=resolve;});
