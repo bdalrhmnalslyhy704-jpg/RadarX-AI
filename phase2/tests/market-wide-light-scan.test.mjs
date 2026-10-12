@@ -98,7 +98,7 @@ test('market-wide light pool can operate at 90 percent verified coverage without
   const result=light.scan({
     eligible,now,cycle:20,
     getSeries:symbol=>{
-      const index=Number(symbol.match(/(\\d+)USDT$/)?.[1]||0);
+      const index=Number(symbol.match(/(\d+)USDT$/)?.[1]||0);
       return index<300?cacheSeries(symbol,now):null;
     },
     isExceptional:item=>item.symbol==='LIGHT329USDT',
