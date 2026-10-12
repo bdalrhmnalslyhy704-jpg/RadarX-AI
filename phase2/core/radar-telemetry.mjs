@@ -239,8 +239,10 @@ try{
  $("cycles").textContent=String(s.cycles??0);$("accepted").textContent=String(s.gate_accepted??0);$("rejected").textContent=String(s.rejected??0);
  $("p50").textContent=fmt(s.latency_ms_p50," ms");$("p95").textContent=fmt(s.latency_ms_p95," ms");$("age").textContent=fmt(s.source_data_age_ms_p95," ms");
  const health=new Map((data.radars||[]).map(x=>[x.radar,x]));
- const byRadar=(data.by_radar||[]).map(x=>{const h=health.get(x.radar),state=h?h.running?"يعمل":"متوقف":"لم يسجل قرارًا";const scans=h&&h.health?(h.health.scans??h.health.cycles??"—"):"—";const acceptedRejected=String(x.gate_accepted)+"/"+String(x.rejected);const reasons=(x.top_reasons||[]).map(v=>v.reason+" ("+v.count+")").join("، ");return [x.radar,state,String(scans)+" / "+String(x.cycles),acceptedRejected,fmt(x.latency_ms_p95," ms"),x.queue_depth===null?"—":String(x.queue_depth),reasons||"—"];});
- rows($("radars"),byRadar,7,"لا توجد قرارات بوابة مسجلة");
+ const eventMap=new Map((data.by_radar||[]).map(x=>[x.radar,x]));
+ const radarIds=[...new Set([...(data.radars||[]).map(x=>x.radar),...(data.by_radar||[]).map(x=>x.radar)])];
+ const byRadar=radarIds.map(id=>{const x=eventMap.get(id)||{radar:id,cycles:0,gate_accepted:0,rejected:0,latency_ms_p95:null,queue_depth:null,top_reasons:[]};const h=health.get(id);const state=h?(h.running?"يعمل":"متوقف"):(x.cycles?"دورة مسجلة":"لا توجد دورة مسجلة");const scans=h&&h.health?(h.health.scans??h.health.cycles??"—"):"—";const acceptedRejected=String(x.gate_accepted)+"/"+String(x.rejected);const reasons=(x.top_reasons||[]).map(v=>v.reason+" ("+v.count+")").join("، ");return [x.radar,state,String(scans)+" / "+String(x.cycles),acceptedRejected,fmt(x.latency_ms_p95," ms"),x.queue_depth===null?"—":String(x.queue_depth),reasons||"—"];});
+ rows($("radars"),byRadar,7,"لا توجد دورات أو قرارات مسجلة");
  const ev=(data.events||[]).map(x=>[time(x.decision_at),x.radar,x.symbol,x.stage_observed,(x.accepted?"قبول":"رفض")+" · "+String(x.score??"—"),x.price===null?"—":String(x.price),fmt(x.liquidity_acceleration,""),(x.reason_codes||[]).join("، ")||"—"]);
  rows($("events"),ev,8,"لا توجد أحداث");
  const rs=data.top_rejection_reasons||[];$("reasons").replaceChildren();if(!rs.length){const li=document.createElement("li");li.textContent="لا توجد أسباب رفض مسجلة بعد";$("reasons").appendChild(li);}else for(const x of rs){const li=document.createElement("li");li.textContent=x.reason+" — "+x.count;$("reasons").appendChild(li);}
