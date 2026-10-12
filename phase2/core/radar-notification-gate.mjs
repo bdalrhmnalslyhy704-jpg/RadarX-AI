@@ -56,6 +56,25 @@ function categoryHitsOf(alert){
   const gate=alert?.elite_gate;
   if(Number.isFinite(Number(gate?.category_hits)))return Number(gate.category_hits);
   const r=radarId(alert);
+  if(r==='FALCON_EYE_RADAR'){
+    const s=alert?.falcon_eye?.component_scores||{};
+    return [s.momentum,s.volume,s.trades,s.taker,s.structure,s.resistance,s.relative_strength,
+      s.derivatives,s.breakout,s.ema,s.vwap,s.bollinger,s.efficiency,s.atr,s.quietness,s.compression]
+      .filter(v=>num(v,0)>=70).length;
+  }
+  if(r==='KAHIR_RADAR'){
+    const a=alert?.kahir_analysis||alert?.analysis||{},alg=a.algorithms||{},m=a.metrics||{};
+    const z=Math.max(num(m.one_minute_z,0),num(m.five_minute_z,0));
+    return [
+      num(alg.PARTICIPATION_REGIME?.score,0),
+      num(alg.VOLATILITY_REGIME_TRANSITION?.score,0),
+      num(alg.KAUFMAN_EFFICIENCY_SHIFT?.score,0),
+      num(alg.RANGE_ACCEPTANCE?.score,0),
+      num(alg.IMPULSE_PERSISTENCE?.score,0),
+      clamp(50+z*15),
+      clamp(50+num(m.relative_acceleration_bps,0)*5)
+    ].filter(v=>num(v,0)>=70).length;
+  }
   const c=alert?.components||{};
   const checks=r==='EARLY_MOVE_RADAR'
     ? [c.momentum,c.volume,c.buying_pressure,c.orderbook_pressure,c.structure,c.squeeze,c.relative_strength,c.mtf_alignment,c.ema_reclaim,c.rsi_score,c.obv_accumulation,c.wyckoff_spring].filter(v=>num(v,0)>=65)
