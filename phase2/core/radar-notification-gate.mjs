@@ -1,4 +1,5 @@
 import {isPreBreakoutNotificationEligible} from './radar-prebreakout-engine.mjs';
+import {recordRadarDecision} from './radar-telemetry.mjs';
 const clamp=(v,min=0,max=100)=>Math.max(min,Math.min(max,Number.isFinite(Number(v))?Number(v):0));
 const num=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
 const arr=v=>Array.isArray(v)?v:[];
@@ -180,7 +181,7 @@ function radarSpecificChecks(alert,p){
   return failures;
 }
 
-export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false}={}){
+export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false,telemetry=true}={}){
   const r=radarId(alert);
   const p=profileFor(alert);
   const score=scoreOf(alert);
@@ -215,6 +216,7 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
     no_extra_network_calls:true
   };
   if(eligible&&commit&&symbol)rememberRadarAlert(alert,now);
+  if(telemetry)recordRadarDecision(alert,result,{now});
   return result;
 }
 
