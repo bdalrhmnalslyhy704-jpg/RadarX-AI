@@ -17,7 +17,10 @@ const RADAR_ALIASES=new Map([
   ['RADAR9','RADAR_9'],
   ['RADAR_9','RADAR_9']
 ]);
-const MAX_RECORDS=5000;
+// Keep the mutable outcome working set smaller than the durable Scan Journey archive.
+// The previous 5,000 deep records plus repeated normalize/serialize copies exhausted
+// the ~410 MiB Node heap in production. Scan Journey keeps the wider evidence history.
+const MAX_RECORDS=2500;
 const REARM_MS=60*60*1000;
 const HISTORICAL_WINDOW_MS=45*24*60*60*1000;
 const HISTORICAL_IMPORT_INTERVAL_MS=60*60*1000;
@@ -47,7 +50,7 @@ function normalizeRegime(value){
 }
 function normalizeState(raw){
   const state=object(raw);
-  const records=list(state.records)
+  const records=list(state.records).slice(-MAX_RECORDS)
     .filter(row=>!EXCLUDED_EVALUATION_SYMBOLS.has(String(row?.symbol||'').toUpperCase()))
     .map(row=>{
       const current=object(row);
