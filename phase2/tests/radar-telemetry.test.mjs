@@ -46,6 +46,29 @@ test('telemetry ring buffer is bounded and reports missing ages as null, not zer
   assert.equal(snapshot.events[0].source_data_age_ms, null);
 });
 
+test('background cycles with no candidate are not counted as rejected notifications', () => {
+  const now=1_800_000_000_000;
+  const telemetry=new RadarTelemetry({capacity:100,clock:()=>now});
+  const event=telemetry.recordDecision({
+    radar:'STRONG_MOVE_RADAR',symbol:'SYSTEM',telemetry_type:'BACKGROUND_CYCLE',
+    stage:'TICK_CYCLE',observed_at:now-50,processed_at:now
+  },{
+    eligible:false,failures:['CYCLE_COMPLETED_WITHOUT_GATE_DECISION']
+  },{now});
+  assert.equal(event.event_type,'BACKGROUND_CYCLE');
+  assert.equal(event.decision,'CYCLE_NO_GATE_DECISION');
+  assert.equal(event.accepted,null);
+  const snapshot=telemetry.snapshot();
+  assert.equal(snapshot.summary.candidate_decisions,0);
+  assert.equal(snapshot.summary.background_cycles_no_candidate,1);
+  assert.equal(snapshot.summary.rejected,0);
+  assert.equal(snapshot.summary.gate_accepted,0);
+  assert.equal(snapshot.top_rejection_reasons.length,0);
+  assert.equal(snapshot.by_radar[0].cycles,1);
+  assert.equal(snapshot.by_radar[0].candidate_decisions,0);
+  assert.equal(snapshot.by_radar[0].rejected,0);
+});
+
 test('dashboard is RTL, reads telemetry endpoint and safely renders values as text', () => {
   const html = renderRadarTelemetryDashboard();
   assert.match(html, /dir="rtl"/);
@@ -54,6 +77,8 @@ test('dashboard is RTL, reads telemetry endpoint and safely renders values as te
   assert.match(html, /وقت الرصد/);
   assert.match(html, /وقت قرار الإشعار/);
   assert.match(html, /stage_decision/);
+  assert.match(html, /دورة بلا قرار/);
+  assert.match(html, /candidate_decisions/);
   assert.match(html, /setInterval\(update,5000\)/);
   assert.match(html, /textContent/);
   assert.match(html, /ليس زمن الشبكة الكامل|ليس زمن الشبكة/);
