@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildMoveAlert,buildEarlyWakeAlert,buildPreExplosionAlert,rankPreExplosionTickerRows,EarlyMoveSentinel} from '../core/early-move-sentinel.mjs';
+import {buildMoveAlert,buildEarlyWakeAlert,buildPreExplosionAlert,rankPreExplosionTickerRows,resolveAlertConfirmationCount,EarlyMoveSentinel} from '../core/early-move-sentinel.mjs';
 import {buildFastImpulseContext} from '../market/universe-scanner.mjs';
 
 const candidate={
@@ -44,6 +44,11 @@ assert.equal(alert.paper_trading,true);
 assert.equal(alert.real_order_execution,false);
 assert.equal(alert.confidence_score,'UNKNOWN');
 assert.ok(alert.reasons.length>0);
+assert.ok(resolveAlertConfirmationCount(alert)>=7,
+  'ordinary movement alerts with multiple strong evidence factors must not be sent to the final gate with zero confirmations');
+assert.equal(resolveAlertConfirmationCount({
+  pre_explosion:{confirmation_count:8},early_wake:{leader_count:11}
+}),8,'pre-explosion confirmations take precedence when both shapes are present');
 
 const sentinel=new EarlyMoveSentinel({
   rest:{},
@@ -184,6 +189,11 @@ assert.equal(wake.direction,'UP_MOVE');
 assert.equal(wake.eligible,true);
 assert.ok(wake.early_wake.leader_count>=3);
 assert.ok(wake.opportunity_score>=68);
+assert.equal(resolveAlertConfirmationCount(wake),wake.early_wake.leader_count,
+  'the final gate must receive early-wake leader confirmations, not a default zero');
+assert.ok(resolveAlertConfirmationCount(wake)>=7,
+  'this qualified early-wake fixture has enough independent leaders for the final confluence gate');
+assert.equal(resolveAlertConfirmationCount(preAlert),preAlert.pre_explosion.confirmation_count);
 
 const tooLate=buildEarlyWakeAlert({...wakeCandidate,price_change_24h:1.2},{
   movePct:1.2,previousMovePct:0.8,deltaPct:0.4
