@@ -218,6 +218,7 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   marketWideLightScanCandidateLimit:48,
   marketWideLightScanRotationReserve:12,
   marketWideLightScanMinReadyCandidates:24,
+  marketWideLightScanMinCoverageRatio:0.85,
   marketWideLightScanMaxCandleAgeMs:8*60*1000,
   marketWideLightScanMinClosedCandles:60,
   marketWideLightScanMaxClosedCandles:96,
@@ -1089,6 +1090,17 @@ export function nextEarlyExpansionPollDelayMs(pollMs,elapsedMs,completed=true){
   return Math.max(0,poll-Math.max(0,Number(elapsedMs)||0));
 }
 
+export function isMarketWideCachePoolReady(cacheProof, minimumCoverageRatio=0.85){
+  const expected=Number(cacheProof?.expected_symbols);
+  const ready=Number(cacheProof?.ready_symbols);
+  const ratio=Number.isFinite(expected)&&expected>0&&Number.isFinite(ready)
+    ?Math.max(0,Math.min(1,ready/expected)):0;
+  const minimum=Math.max(0.5,Math.min(1,Number.isFinite(Number(minimumCoverageRatio))?Number(minimumCoverageRatio):0.85));
+  return cacheProof?.websocket_live===true&&
+    cacheProof?.websocket_subscription_complete===true&&
+    cacheProof?.websocket_sync_ready===true&&ratio>=minimum;
+}
+
 export class EarlyExpansionRadar{
   constructor({rest,store,pushManager=null,marketWideKlineCache=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
@@ -1100,6 +1112,7 @@ export class EarlyExpansionRadar{
       candidateLimit:this.config.marketWideLightScanCandidateLimit,
       rotationReserve:this.config.marketWideLightScanRotationReserve,
       minimumReadyCandidates:this.config.marketWideLightScanMinReadyCandidates,
+      minimumCoverageRatio:this.config.marketWideLightScanMinCoverageRatio,
       maxCandleAgeMs:this.config.marketWideLightScanMaxCandleAgeMs,
       minClosedCandles:this.config.marketWideLightScanMinClosedCandles,
       maxClosedCandles:this.config.marketWideLightScanMaxClosedCandles
@@ -1531,8 +1544,13 @@ export class EarlyExpansionRadar{
           let cacheProof=null;
           try{cacheProof=this.marketWideKlineCache?.health?.()||null;}catch{}
           const fullMarketCacheReady=cacheProof?.full_market_coverage_ready===true;
+          const marketWideCachePoolReady=isMarketWideCachePoolReady(
+            cacheProof,this.config.marketWideLightScanMinCoverageRatio);
+          const expectedCacheSymbols=Number(cacheProof?.expected_symbols)||0;
+          const readyCacheSymbols=Number(cacheProof?.ready_symbols)||0;
+          const marketWideCacheReadyRatio=expectedCacheSymbols>0?readyCacheSymbols/expectedCacheSymbols:0;
           if(this.config.marketWideLightScanPoolActivationEnabled!==false&&
-              marketWideLightResult.coverageReady&&fullMarketCacheReady&&this.marketWideKlineCache&&
+              marketWideLightResult.coverageReady&&marketWideCachePoolReady&&this.marketWideKlineCache&&
               eligible.length>=Math.min(12,Number(this.config.microScanCandidates)||12)){
             const pool=marketWideLightResult.candidateRows.filter(row=>lightPoolSet.has(selectionSymbol(row)));
             if(pool.length>=Math.min(12,eligible.length)){
@@ -1540,7 +1558,9 @@ export class EarlyExpansionRadar{
             }
           }
           marketWideLightResult.summary.micro_pool_applied=marketWideLightApplied;
-          marketWideLightResult.summary.market_wide_cache_coverage_ready=fullMarketCacheReady;
+          marketWideLightResult.summary.market_wide_cache_coverage_ready=marketWideCachePoolReady;
+          marketWideLightResult.summary.market_wide_cache_ready_ratio=marketWideCacheReadyRatio;
+          marketWideLightResult.summary.full_market_cache_coverage_ready=fullMarketCacheReady;
           marketWideLightResult.summary.websocket_advanced_symbols=Number(cacheProof?.websocket_advanced_symbols)||0;
           marketWideLightResult.summary.legacy_micro_selector_active=!marketWideLightApplied;
           marketWideLightResult.summary.micro_capacity_configured=Number(this.config.microScanCandidates)||12;
