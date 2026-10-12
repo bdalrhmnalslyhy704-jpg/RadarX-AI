@@ -106,7 +106,14 @@ jobs:
             console.log('- Maximum score/time: ' + String(item.summary?.maximum_score ?? 'n/a') + ' / ' + when(item.summary?.maximum_score_at));
             console.log('- Actual window +50% time: ' + when(item.summary?.first_actual_window_50pct_at));
             console.log('- Actual window +70% time: ' + when(item.summary?.first_actual_window_70pct_at));
+            console.log('- Pre-move +50% classification: ' + String(item.summary?.premove_50_status ?? 'not available'));
+            if (item.summary?.premove_50_status !== 'PREMOVE_ALERT_ACCEPTED') {
+              console.log('- Prediction validation: NOT PASSED — no accepted alert is recorded before the +50% crossing in this replay window.');
+            } else {
+              console.log('- Prediction validation: pre-move accepted alert observed; this is one historical case, not proof of general predictive accuracy.');
+            }
             console.log('- Minutes core trigger lead to +50%: ' + String(item.summary?.minutes_from_first_core_trigger_to_actual_50pct ?? 'not detected'));
+            console.log('- Strong Move trigger failure counts: ' + JSON.stringify(item.summary?.core_trigger_failure_counts ?? []));
             console.log('- Rejection groups: ' + JSON.stringify(item.summary?.rejection_groups ?? []));
           }
           NODE
