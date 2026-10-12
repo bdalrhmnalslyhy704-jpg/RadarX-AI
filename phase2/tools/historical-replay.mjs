@@ -131,7 +131,7 @@ async function main() {
 
   for (const symbol of symbols) {
     process.stderr.write('[REPLAY] ' + symbol + ' fetching closed 1m candles…\n');
-    const candleFetch = await fetchOneMinute(client, symbol, start - 125 * MINUTE_MS, end);
+    const candleFetch = await fetchOneMinute(client, symbol, start - 24 * HOUR_MS - 125 * MINUTE_MS, end);
     const tradeFetch = await fetchAggregateTrades(client, symbol, start - 65_000, end, {maxPages, maxTrades});
     const tickerConfig = config.strongMoveRadar || {};
     const minQuoteVolume24h = Number(tickerConfig.minQuoteVolume24h ?? 1_000_000);
