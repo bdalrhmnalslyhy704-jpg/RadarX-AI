@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildFalconEyeAnalysis,FalconEyeRadar} from '../core/falcon-eye-radar.mjs';
+import {buildFalconEyeAnalysis,buildFalconEyeAlert,FalconEyeRadar} from '../core/falcon-eye-radar.mjs';
+import {evaluateRadarNotificationGate,resetRadarNotificationGateForTests} from '../core/radar-notification-gate.mjs';
 
 function candle(openTime,close,{open=close-0.02,high=close+0.06,low=close-0.06,volume=900,tradeCount=80,taker=0.50}={}) {
   return {openTime,closeTime:openTime+59_999,open,high,low,close,volume,quoteVolume:close*volume,tradeCount,takerBuyBaseVolume:volume*taker,closed:true};
@@ -212,4 +213,28 @@ test('Falcon Eye patrol rotates toward symbols not selected in the last cycle',(
   assert.equal(first.length,8);
   assert.equal(second.length,8);
   assert.equal(second.some(x=>first.some(y=>y.symbol===x.symbol)),false);
+});
+
+
+test('the shared notification gate reads Falcon Eye nested evidence instead of treating it as missing',()=>{
+  resetRadarNotificationGateForTests();
+  const now=1_800_000_000_000+240*60_000;
+  const one=risingBase();
+  const five=flat(80);
+  const btc=flat(80,100);
+  const input={
+    ticker:{symbol:'OGNUSDT',lastPrice:one.at(-1).close,priceChange24h:2.8,quoteVolume24h:2_500_000},
+    oneMinute:one,fiveMinute:five,btcFiveMinute:btc,
+    futures:{quoteVolume:25_000_000,openInterest:1_030_000,fundingRate:-0.004},
+    previousFutures:{openInterest:1_000_000},
+    liquidations:[{time:now-10_000,price:'101',origQty:'1000',side:'BUY'}]
+  };
+  const alert=buildFalconEyeAlert(input,now);
+  assert.equal(alert.eligible,true);
+  const gate=evaluateRadarNotificationGate(alert,{now});
+  assert.equal(gate.eligible,true,JSON.stringify({failures:gate.failures,quality:gate.falcon_eye?.quality,
+    capture:gate.falcon_eye?.capture,independent_domains:gate.falcon_eye?.independent_domains,
+    move_forensics:gate.move_forensics?.quality,category_hits:gate.category_hits}));
+  assert.ok(gate.category_hits>=5);
+  assert.ok(gate.falcon_eye.independent_domains>=4);
 });
