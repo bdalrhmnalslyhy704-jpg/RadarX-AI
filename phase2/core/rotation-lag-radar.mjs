@@ -349,10 +349,10 @@ export function buildRotationAlert(candidate,now=Date.now()){
 const STABLE_BASES=new Set(['USDC','BUSD','FDUSD','TUSD','USDP','DAI','USDE','USD1']);
 
 export class RotationLagRadar {
-  constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
+  constructor({rest,marketData=null,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
-    this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
+    this.rest=rest;this.marketData=marketData;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={
       quote:'USDT',pollMs:45000,universeRefreshMs:5*60*1000,minQuoteVolume24h:1000000,
       rotationBatchSize:5,topLaggers:2,maxAbs24hMovePct:6,alertCooldownMs:15*60*1000,
@@ -377,7 +377,7 @@ export class RotationLagRadar {
   noteError(e){this.lastError=String(e?.message??e);this.logger.warn?.('ROTATION_LAG',this.lastError);}
 
   async refreshUniverse(){
-    const r=await this.rest.request('/api/v3/exchangeInfo');
+    const r=this.marketData?await this.marketData.exchangeInfo():await this.rest.request('/api/v3/exchangeInfo');
     const symbols=buildSpotUniverse(r.data,this.config.quote);
     this.universe=symbols.map(x=>x.symbol).filter(s=>{
       const base=s.endsWith(this.config.quote)?s.slice(0,-this.config.quote.length):s;
@@ -387,7 +387,7 @@ export class RotationLagRadar {
   }
 
   async tickerRows(){
-    const r=await this.rest.request('/api/v3/ticker/24hr');
+    const r=this.marketData?await this.marketData.ticker24h():await this.rest.request('/api/v3/ticker/24hr');
     return (Array.isArray(r.data)?r.data:[])
       .map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
       .filter(x=>this.universe.includes(x.symbol))
