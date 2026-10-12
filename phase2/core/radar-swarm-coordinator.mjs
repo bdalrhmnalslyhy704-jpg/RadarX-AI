@@ -24,10 +24,10 @@ export class RadarSwarmCoordinator {
     try{this.logger.warn?.('[RADAR_SWARM_START_FAILED] '+runner.id+' '+state.last_error);}catch{}
     // A failed async bootstrap may already have created a timer. Stop that worker
     // without waiting for it; one cleanup failure must not block the other radars.
+    state.stop_invoked=true;
     try{
-      const cleanup=runner.instance.stop();
-      if(cleanup&&typeof cleanup.then==='function')cleanup.catch(stopError=>{state.cleanup_error=describeError(stopError);});
-    }catch(stopError){state.cleanup_error=describeError(stopError);}
+      state.cleanupPromise=Promise.resolve(runner.instance.stop()).catch(stopError=>{state.cleanup_error=describeError(stopError);});
+    }catch(stopError){state.cleanup_error=describeError(stopError);state.cleanupPromise=Promise.resolve();}
   }
   _launch(runner,generation){
     if(!this.running||generation!==this.generation)return;const state=this.states.get(runner.id);if(!state||['STARTING','RUNNING'].includes(state.status))return;
@@ -54,8 +54,12 @@ export class RadarSwarmCoordinator {
     return {coordinator:'RADAR_SWARM_12',status,expected_count:this.expectedCount,registered_count:radars.length,running_count,failed_count,missing_count,startup_spacing_ms:this.startupSpacingMs,lifecycle_running:this.running,updated_at:this.clock(),radars};
   }
   async stop(){
-    this.running=false;this.generation++;const active=this.runners.filter(r=>(this.states.get(r.id)?.launch_attempts||0)>0);
-    const results=await Promise.allSettled(active.map(async runner=>{await runner.instance.stop();const state=this.states.get(runner.id);if(state){state.status='STOPPED';state.stopped_at=this.clock();}}));
+    this.running=false;this.generation++;
+    const priorCleanups=this.runners.map(r=>this.states.get(r.id)?.cleanupPromise).filter(Boolean);
+    const active=this.runners.filter(r=>{const state=this.states.get(r.id);return (state?.launch_attempts||0)>0&&!state?.stop_invoked;});
+    for(const runner of active){const state=this.states.get(runner.id);if(state)state.stop_invoked=true;}
+    const results=await Promise.allSettled(active.map(async runner=>{await runner.instance.stop();const state=this.states.get(runner.id);if(state){state.status='STOPPED';state.stopped_at=this.clock();state.cleanupPromise=Promise.resolve();}}));
+    await Promise.allSettled(priorCleanups);
     for(let i=0;i<results.length;i++)if(results[i].status==='rejected'){const state=this.states.get(active[i].id);if(state){state.status='DEGRADED';state.last_error='STOP_FAILED: '+describeError(results[i].reason);}}
     this.startPromise=null;return this.snapshot();
   }
