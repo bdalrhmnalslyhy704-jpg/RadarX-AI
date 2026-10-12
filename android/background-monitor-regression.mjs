@@ -49,16 +49,16 @@ assert.match(service, /if \(!persistDurableAlertCursor\(at, replayKey, seen\)\)/
   'replay must stop when local cursor persistence fails');
 assert.doesNotMatch(service, /maxAt = Math\.max\(cursor, nextCursor\.optLong\("since", cursor\)\)/,
   'the page next_cursor must never leap past events that have not been posted or safely skipped');
-assert.match(service, /private boolean notifyRadarAlert\(JSONObject alert\)/,
-  'the notification post operation must report whether Android accepted the request');
+assert.match(service, /private boolean notifyRadarAlert\(JSONObject alert, String replayIdentity, boolean durableCursor\)/,
+  'notification posting must preserve stable replay identity and whether the feed has durable cursor semantics');
 assert.match(service, /manager\.areNotificationsEnabled\(\)/,
   'disabled Android notifications must leave the current alert pending');
 assert.match(service, /manager\.getNotificationChannel\(CHANNEL_RADAR_ALERTS\)/,
   'the service must inspect the alert channel before advancing the durable cursor');
 assert.match(service, /channel\.getImportance\(\) == NotificationManager\.IMPORTANCE_NONE/,
   'a disabled notification channel must leave the current alert pending');
-assert.match(service, /if \(!notifyRadarAlert\(alert\)\)/,
-  'an alert that cannot be posted must stop page processing without skipping its cursor');
+assert.match(service, /if \(!notifyRadarAlert\(alert, replayKey, true\)\)/,
+  'a durable alert that cannot be posted must stop page processing without skipping its cursor');
 assert.match(service, /if \(identity\.isEmpty\(\)\)/,
   'rows without a source id must still receive a stable compound cursor identity');
 assert.match(service, /ALERT_POST_REQUEST_ACCEPTED/,
