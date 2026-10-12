@@ -3,6 +3,7 @@ import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 import {evaluateRadarNotificationGate,rememberRadarAlert} from './radar-notification-gate.mjs';
 import {recordRadarDecision} from './radar-telemetry.mjs';
+import {evaluateDynamicEarlyWarningGate} from './dynamic-early-warning-gate.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -383,24 +384,48 @@ export function finalizeStrongMoveCandidate(alert,row,{now=Date.now(),clock=()=>
   const notificationGate=evaluateRadarNotificationGate(alert,{now,telemetry:false});
   const failures=[...(notificationGate.failures||[])];
   const coreTriggerFailures=Array.isArray(a?.trigger_diagnostics?.failed_checks)
-    ? a.trigger_diagnostics.failed_checks.map(code=>'CORE_TRIGGER:'+String(code).slice(0,100)) : [];
-  failures.push(...coreTriggerFailures);
+    ? a.trigger_diagnostics.failed_checks.map(String) : [];
+  failures.push(...coreTriggerFailures.map(code=>'CORE_TRIGGER:'+String(code).slice(0,100)));
   if(!alert?.eligible)failures.push('BASE_ALERT_NOT_ELIGIBLE');
   if(alertScore<Number(minScore))failures.push('RADAR_SCORE_BELOW_MINIMUM');
   if(!gate.eligible)failures.push('ELITE_GATE_NOT_ELIGIBLE');
   const cooldownAt=Number(lastAlertAt)||0;
   const cooldown=Math.max(0,Number(alertCooldownMs)||0);
-  const inCooldown=cooldownAt>0&&now-cooldownAt<cooldown;
-  if(inCooldown)failures.push('SYMBOL_ALERT_COOLDOWN');
-  const accepted=Boolean(alert?.eligible)&&alertScore>=Number(minScore)&&gate.eligible&&notificationGate.eligible&&!inCooldown;
-  const finalGate={...notificationGate,eligible:accepted,failures:[...new Set(failures)],stage_decision:accepted?'GATE_ACCEPTED':'REJECTED'};
+  const inCooldown=cooldownAt>0&&decisionStartedAt-cooldownAt<cooldown;
+  const strictAccepted=Boolean(alert?.eligible)&&alertScore>=Number(minScore)&&gate.eligible&&notificationGate.eligible&&!inCooldown;
+  const earlyGate=strictAccepted?null:evaluateDynamicEarlyWarningGate(alert,row,{
+    now:decisionStartedAt,alertScore,minQuoteVolume24h:minQuoteVolume,
+    strictFailures:notificationGate.failures||[],
+    coreTriggerFailures:a?.trigger_diagnostics?.failed_checks||[],
+    lastAlertAt:cooldownAt,earlyCooldownMs:Math.max(30*60*1000,cooldown)
+  });
+  const dynamicAccepted=earlyGate?.eligible===true;
+  const acceptedByMode=strictAccepted?'STRICT':dynamicAccepted?'DYNAMIC_EARLY_WARNING':null;
+  const accepted=strictAccepted||dynamicAccepted;
+  if(dynamicAccepted){
+    alert.notification_mode='DYNAMIC_EARLY_WARNING';
+    alert.alert_class='PRE_EXPANSION_WATCH';
+    alert.early_warning=earlyGate;
+    alert.potential_label='PRE_EXPANSION_WATCH';
+    alert.disclaimer='تحذير رصد مبكر متعدد الأدلة فقط؛ ليس تأكيد دخول أو ضمان ارتفاع. شروط القبول الصارمة لم تكتمل بالكامل.';
+  }
   const completedRaw=typeof clock==='function'?clock():decisionStartedAt;
   const decisionCompletedAt=Number.isFinite(Number(completedRaw))?Number(completedRaw):decisionStartedAt;
-  finalGate.decision_started_at=decisionStartedAt;
-  finalGate.decision_completed_at=decisionCompletedAt;
+  const finalGate={
+    ...notificationGate,
+    eligible:accepted,
+    failures:dynamicAccepted?[]:[...new Set(failures)],
+    soft_failures:dynamicAccepted?[...new Set(earlyGate.soft_failures||[])]:[],
+    standard_gate_failures:[...new Set(notificationGate.failures||[])],
+    dynamic_early_gate:earlyGate,
+    accepted_mode:acceptedByMode,
+    stage_decision:strictAccepted?'GATE_ACCEPTED':dynamicAccepted?'EARLY_WARNING_ACCEPTED':'REJECTED',
+    decision_started_at:decisionStartedAt,
+    decision_completed_at:decisionCompletedAt
+  };
   alert.notification_gate=finalGate;
   if(telemetry)recordRadarDecision(alert,finalGate,{now:decisionCompletedAt,extraReasons:[]});
-  return {accepted,alertScore,gate,notificationGate:finalGate,decisionStartedAt,decisionCompletedAt,alert};
+  return {accepted,acceptedByMode,alertScore,gate,notificationGate:finalGate,earlyGate,decisionStartedAt,decisionCompletedAt,alert};
 }
 
 export class StrongMoveRadar {
