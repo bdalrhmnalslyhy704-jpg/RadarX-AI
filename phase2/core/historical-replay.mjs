@@ -229,6 +229,7 @@ export function runHistoricalReplay({
       price_change_24h_pct: finite(ticker.priceChange24h),
       stage_observed: String(stageFrom(raw)).slice(0, 80),
       strong_move_stage: strong?.stage ?? null,
+      core_trigger_diagnostics: strong?.trigger_diagnostics ?? null,
       decision: accepted ? "ACCEPTED" : "REJECTED", rejection_group: rejectionGroup, reason_codes: reasons,
       score: finite(raw?.score ?? alert?.opportunity_score ?? strong?.score),
       candidate_eligible: typeof alert?.eligible === "boolean" ? alert.eligible : null,
@@ -306,6 +307,10 @@ export function runHistoricalReplay({
       rejection_groups: Object.entries(rows.reduce((groups, row) => {
         groups[row.rejection_group] = (groups[row.rejection_group] || 0) + 1; return groups;
       }, {})).map(([group, count]) => ({group, count})).sort((a,b) => b.count - a.count),
+      core_trigger_failure_counts: Object.entries(rows.reduce((counts, row) => {
+        for (const code of row.core_trigger_diagnostics?.failed_checks ?? []) counts[code] = (counts[code] || 0) + 1;
+        return counts;
+      }, {})).map(([code, count]) => ({code, count})).sort((a,b) => b.count - a.count),
       first_actual_window_50pct_at: actual50At, first_actual_window_70pct_at: actual70At,
       minutes_from_first_accepted_to_actual_50pct: rows.find(x => x.decision === "ACCEPTED") && actual50At !== null
         ? Math.round((actual50At - rows.find(x => x.decision === "ACCEPTED").timestamp) / MINUTE_MS * 100) / 100 : null,
