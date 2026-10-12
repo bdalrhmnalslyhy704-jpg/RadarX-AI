@@ -1211,9 +1211,10 @@ export class MarketUniverseScanner {
     this._requests.set(key, promise);
     try {
       return await promise;
-    } catch (error) {
-      this._requests.delete(key);
-      throw error;
+    } finally {
+      // Coalesce only overlapping reads. Retaining a successful promise here would
+      // turn a request de-duplication map into an unbounded stale-data cache.
+      if(this._requests.get(key)===promise)this._requests.delete(key);
     }
   }
 
