@@ -70,20 +70,22 @@ test('a failed resistance wick is not promoted to pre-expansion or breakout-deve
 function candle(openTime,close,{open=close-.02,high=close+.06,low=close-.06,volume=900,tradeCount=80,taker=.50,step=60_000}={}){
   return {openTime,closeTime:openTime+step-1,open,high,low,close,volume,quoteVolume:close*volume,tradeCount,takerBuyBaseVolume:volume*taker,closed:true};
 }
-function risingBase(n=100,start=100,step=60_000){
+function risingBase(n=100,start=100,step=60_000,asOf=null){
   const out=[];
+  const baseTime=asOf!==null&&asOf!==undefined&&Number.isFinite(Number(asOf))?Number(asOf)-n*step-9_999:1_800_000_000_000;
   for(let i=0;i<n;i++){
     const close=start+i*.004;
     const early=i<n-8;
     const lift=early?0:(i-(n-8)+1)*.09;
     const value=close+lift;
-    out.push(candle(1_800_000_000_000+i*step,value,{volume:early?850:2500,tradeCount:early?75:230,taker:early ? 0.50 : 0.56,step}));
+    out.push(candle(baseTime+i*step,value,{volume:early?850:2500,tradeCount:early?75:230,taker:early ? 0.50 : 0.56,step}));
   }
   return out;
 }
-function flat(n=80,start=100,step=300_000){
+function flat(n=80,start=100,step=300_000,asOf=null){
+  const baseTime=asOf!==null&&asOf!==undefined&&Number.isFinite(Number(asOf))?Number(asOf)-n*step-9_999:1_800_000_000_000;
   return Array.from({length:n},(_,i)=>{
-    const close=start+i*.001,openTime=1_800_000_000_000+i*step;
+    const close=start+i*.001,openTime=baseTime+i*step;
     return {openTime,closeTime:openTime+step-1,open:close-.005,high:close+.02,low:close-.02,close,volume:1200,quoteVolume:close*1200,tradeCount:120,takerBuyBaseVolume:600,closed:true};
   });
 }
@@ -113,14 +115,15 @@ test('Radar 8 full evidence path accepts zero-middle participation data without 
 });
 
 function falconInput({dailyMove=2.8,wickFailure=false}={}){
-  const now=1_800_000_000_000+240*60_000,one=risingBase(),five=flat(),btc=flat();
+  const now=1_800_000_000_000+240*60_000;
+  const one=risingBase(100,100,60_000,now),five=flat(80,100,300_000,now),btc=flat(80,100,300_000,now),btcOne=flat(30,100,60_000,now);
   if(wickFailure){
     const last=one.at(-1),priorHigh=Math.max(...one.slice(-31,-1).map(x=>Number(x.high)));
     last.open=priorHigh*.997;last.close=priorHigh*.998;last.low=priorHigh*.996;last.high=priorHigh*1.02;
   }
   return {
     ticker:{symbol:'EARLYUSDT',lastPrice:one.at(-1).close,priceChange24h:dailyMove,quoteVolume24h:2_500_000},
-    oneMinute:one,fiveMinute:five,btcFiveMinute:btc,
+    oneMinute:one,fiveMinute:five,btcOneMinute:btcOne,btcFiveMinute:btc,
     futures:{quoteVolume:25_000_000,openInterest:1_030_000,fundingRate:-.004},
     previousFutures:{openInterest:1_000_000},
     liquidations:[{time:now-10_000,price:'101',origQty:'1000',side:'BUY'}],now
@@ -153,6 +156,7 @@ test('Radar 8 exposes DATA_INSUFFICIENT when its daily-change value is missing',
   const result=buildEarlyExpansionEvidence({series:{},ticker:{symbol:'UNKNOWNUSDT',lastPrice:1,priceChange24h:null},now:1_900_000_000_000});
   assert.equal(result.pre_expansion_stage,'DATA_INSUFFICIENT');
   assert.equal(result.decision_band,'DATA_INSUFFICIENT');
+  assert.equal(result.data_quality,0,'missing required timeframes must not retain a full quality score');
 });
 
 

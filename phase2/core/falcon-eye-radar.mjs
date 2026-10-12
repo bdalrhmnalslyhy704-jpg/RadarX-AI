@@ -33,12 +33,31 @@ const avg=xs=>{const a=xs.map(Number).filter(Number.isFinite);return a.length?a.
 const median=xs=>{const a=xs.map(Number).filter(Number.isFinite).sort((a,b)=>a-b);if(!a.length)return null;const m=Math.floor(a.length/2);return a.length%2?a[m]:(a[m-1]+a[m])/2;};
 const pct=(a,b)=>Number.isFinite(Number(a))&&Number.isFinite(Number(b))&&Number(b)!==0?(Number(a)-Number(b))/Math.abs(Number(b))*100:null;
 const safeRows=(rows,now)=> (Array.isArray(rows)?rows:[]).filter(c=>
-  c?.closed!==false &&
-  Number.isFinite(Number(c?.openTime)) && Number.isFinite(Number(c?.closeTime)) &&
-  Number(c.closeTime)<=Number(now) &&
-  Number(c.close)>0 && Number(c.high)>=Number(c.low) && Number(c.low)>0 &&
-  Number.isFinite(Number(c.volume))
+  c?.closed!==false && hasFiniteValue(c?.openTime) && Number(c.openTime)>0 &&
+  hasFiniteValue(c?.closeTime) && Number(c.closeTime)>Number(c.openTime) && Number(c.closeTime)<=Number(now) &&
+  hasFiniteValue(c?.open) && Number(c.open)>0 && hasFiniteValue(c?.close) && Number(c.close)>0 &&
+  hasFiniteValue(c?.high) && hasFiniteValue(c?.low) && Number(c.high)>=Number(c.low) && Number(c.low)>0 &&
+  hasFiniteValue(c?.volume) && Number(c.volume)>=0
 ).sort((a,b)=>Number(a.openTime)-Number(b.openTime));
+
+function inspectFalconSeries(rawRows,now,{intervalMs,minCount,maxAgeMs}){
+  const raw=Array.isArray(rawRows)?rawRows:[],rows=safeRows(raw,now);
+  const coverage=raw.length?rows.length/raw.length:0;
+  const trades=rows.length?rows.filter(c=>hasFiniteValue(c.tradeCount)&&Number(c.tradeCount)>=0).length/rows.length:0;
+  const taker=rows.length?rows.filter(c=>hasFiniteValue(c.takerBuyBaseVolume)&&Number(c.takerBuyBaseVolume)>=0&&Number(c.takerBuyBaseVolume)<=Number(c.volume)*1.02).length/rows.length:0;
+  const quality=Number(clamp(100*(coverage*.5+trades*.25+taker*.25)).toFixed(1));
+  const recent=rows.slice(-48);let maxGapMs=0,gapCount=0;
+  for(let i=1;i<recent.length;i++){const g=Number(recent[i].openTime)-Number(recent[i-1].openTime);if(g>intervalMs*1.5){gapCount++;maxGapMs=Math.max(maxGapMs,g)}}
+  const ageMs=rows.length?Number(now)-Number(rows.at(-1).closeTime):null;
+  const future=raw.some(c=>hasFiniteValue(c?.openTime)&&Number(c.openTime)>Number(now));
+  let status='LIVE_DATA',reason=null;
+  if(future){status='DATA_FUTURE';reason='FUTURE_CANDLE_START'}
+  else if(rows.length<minCount){status='DATA_INSUFFICIENT';reason='INSUFFICIENT_CLOSED_CANDLES'}
+  else if(!Number.isFinite(ageMs)||ageMs<0||ageMs>maxAgeMs){status='DATA_STALE';reason='STALE_CLOSED_CANDLES'}
+  else if(maxGapMs>intervalMs*1.5){status='DATA_GAP';reason='CLOSED_CANDLE_GAP'}
+  else if(quality<85){status='DATA_QUALITY_LOW';reason='TRADE_OR_TAKER_FIELDS_INCOMPLETE'}
+  return {rows,status,reason,data_quality:quality,age_ms:ageMs,candle_gaps:{gap_count:gapCount,max_gap_ms:maxGapMs},closed_count:rows.length,raw_count:raw.length};
+}
 
 function ema(values,period){
   const xs=values.map(Number).filter(Number.isFinite); if(!xs.length)return null;
@@ -173,10 +192,29 @@ function derivativesQuality(futures,previousFutures,spotQuoteVolume,liquidations
 export function buildFalconEyeAnalysis({
   ticker={},oneMinute=[],fiveMinute=[],btcOneMinute=[],btcFiveMinute=[],futures={},previousFutures=null,liquidations=[],now=Date.now(),config={}
 }={}){
-  const one=safeRows(oneMinute,now),five=safeRows(fiveMinute,now),btc1=safeRows(btcOneMinute,now),btc5=safeRows(btcFiveMinute,now);
+  const oneHealth=inspectFalconSeries(oneMinute,now,{intervalMs:60_000,minCount:70,maxAgeMs:3*60_000});
+  const fiveHealth=inspectFalconSeries(fiveMinute,now,{intervalMs:5*60_000,minCount:30,maxAgeMs:12*60_000});
+  const btc1Health=inspectFalconSeries(btcOneMinute,now,{intervalMs:60_000,minCount:10,maxAgeMs:3*60_000});
+  const btc5Health=inspectFalconSeries(btcFiveMinute,now,{intervalMs:5*60_000,minCount:10,maxAgeMs:12*60_000});
+  const one=oneHealth.rows,five=fiveHealth.rows,btc1=btc1Health.rows,btc5=btc5Health.rows;
+  const dataQuality=Number((oneHealth.data_quality*.4+fiveHealth.data_quality*.3+btc1Health.data_quality*.15+btc5Health.data_quality*.15).toFixed(1));
+  const sourceStates=[oneHealth.status,fiveHealth.status,btc1Health.status,btc5Health.status];
+  const priority=['DATA_FUTURE','DATA_STALE','DATA_GAP','DATA_INSUFFICIENT','DATA_QUALITY_LOW'];
+  let dataStatus=priority.find(x=>sourceStates.includes(x))||'LIVE_DATA';
+  if(dataStatus==='LIVE_DATA'&&dataQuality<85)dataStatus='DATA_QUALITY_LOW';
+  const dataReasons=[oneHealth.reason,fiveHealth.reason,btc1Health.reason,btc5Health.reason].filter(Boolean);
+  if(dataStatus==='DATA_QUALITY_LOW')dataReasons.push('COMPOSITE_DATA_QUALITY_LOW');
   const activityShock=assessQuietBaseActivityShock({fiveMinute:five,ticker,now,config});
-  if(one.length<70||five.length<30){
-    return {eligible:false,stage:'INSUFFICIENT_DATA',pre_expansion_stage:'DATA_INSUFFICIENT',pre_expansion_fingerprint:{stage:'DATA_INSUFFICIENT',reason:'CLOSED_CANDLES_INSUFFICIENT'},activity_shock:activityShock,score:null,closed_candles_only:true,one_minute_count:one.length,five_minute_count:five.length};
+  if(dataStatus!=='LIVE_DATA'){
+    const emptyScores={quietness:0,compression:0,momentum:0,volume:0,trades:0,taker:0,structure:0,resistance:0,relative_strength:0,derivatives:0,breakout:0,atr:0,range:0};
+    return {eligible:false,stage:dataStatus,pre_expansion_stage:dataStatus,
+      pre_expansion_fingerprint:{stage:dataStatus,reason:dataReasons[0]||dataStatus},activity_shock:activityShock,
+      score:null,closed_candles_only:true,one_minute_count:one.length,five_minute_count:five.length,
+      data_quality:0,data_status:dataStatus,data_stale:dataStatus==='DATA_STALE',reason_codes:[...new Set(dataReasons)],
+      candle_freshness:{one_minute_age_ms:oneHealth.age_ms,five_minute_age_ms:fiveHealth.age_ms,btc_one_minute_age_ms:btc1Health.age_ms,btc_five_minute_age_ms:btc5Health.age_ms},
+      candle_gaps:{one_minute:oneHealth.candle_gaps,five_minute:fiveHealth.candle_gaps,btc_one_minute:btc1Health.candle_gaps,btc_five_minute:btc5Health.candle_gaps},
+      confirmation_count:0,not_chasing:false,anti_chase_penalty:0,metrics:{},component_scores:emptyScores,derivatives:{futures_available:false},
+      reasons:[],risk_flags:[dataStatus],source:'Binance Public REST'};
   }
   const price=finite(ticker.lastPrice,null);
   const move24=hasFiniteValue(ticker.priceChange24h)?Number(ticker.priceChange24h):null;
@@ -320,7 +358,7 @@ export function buildFalconEyeAnalysis({
     return5mPct:r5,return10mPct:r10,return15mPct:pct(Number(one.at(-1)?.close),Number(one.at(-16)?.close)),
     alreadyExtended:!notChasing
   });
-  const eligible=Boolean((earlyStructure||ignition)&&
+  const eligible=Boolean(dataStatus==='LIVE_DATA'&&(earlyStructure||ignition)&&
     (preExpansion.stage==='PRE_EXPANSION'||preExpansion.stage==='BREAKOUT_DEVELOPING'));
   const stage=ignition?'IGNITION':earlyStructure?'PRE_ATTACK':score>=68?'BUILDING':'WATCH';
   const reasons=[];
@@ -341,6 +379,9 @@ export function buildFalconEyeAnalysis({
   push(expansionScore>=70,'انتقال نظام التذبذب إلى توسع');
   return {
     eligible,stage,pre_expansion_stage:preExpansion.stage,pre_expansion_fingerprint:preExpansion,activity_shock:activityShock,market_regime_label:marketRegimeLabel,closed_candles_only:true,score:Number(score.toFixed(1)),
+    data_quality:dataQuality,data_status:dataStatus,data_stale:false,reason_codes:[],
+    candle_freshness:{one_minute_age_ms:oneHealth.age_ms,five_minute_age_ms:fiveHealth.age_ms,btc_one_minute_age_ms:btc1Health.age_ms,btc_five_minute_age_ms:btc5Health.age_ms},
+    candle_gaps:{one_minute:oneHealth.candle_gaps,five_minute:fiveHealth.candle_gaps,btc_one_minute:btc1Health.candle_gaps,btc_five_minute:btc5Health.candle_gaps},
     confirmation_count:confirmations,not_chasing:notChasing,
     anti_chase_penalty:Number(antiChasePenalty.toFixed(1)),
     metrics:{
@@ -383,7 +424,10 @@ export function buildFalconEyeAlert(input,now=Date.now(),config={}){
     price:finite(t.lastPrice),price_change_24h:hasFiniteValue(t.priceChange24h)?Number(t.priceChange24h):null,
     opportunity_score:a.score,potential_label:a.pre_expansion_stage??a.stage,
     falcon_eye:a,reasons:a.reasons,activity_shock:a.activity_shock??null,
-    data_quality:90,liquidity_quality:clamp(62+Math.log10(Math.max(1,(Number(t.quoteVolume24h)||0)/1000000))*22),
+    data_quality:Number.isFinite(Number(a.data_quality))?Number(a.data_quality):0,
+    data_status:{status:a.data_status||'DATA_UNAVAILABLE',stale:Boolean(a.data_stale),source:'Binance Public REST'},
+    candle_freshness:a.candle_freshness,candle_gaps:a.candle_gaps,reason_codes:a.reason_codes||[],
+    liquidity_quality:clamp(62+Math.log10(Math.max(1,(Number(t.quoteVolume24h)||0)/1000000))*22),
     confirmation_count:a.confirmation_count,
     pre_breakout_fingerprint:{
       ready:a.eligible,score:a.score,late:!a.not_chasing,pre_expansion_stage:a.pre_expansion_stage??'DATA_INSUFFICIENT',micro_move:false,
@@ -397,7 +441,7 @@ export function buildFalconEyeAlert(input,now=Date.now(),config={}){
       Number(a.metrics?.resistance_gap_pct)<-1.2?'RESISTANCE_BROKEN_EXTENDED':null
     ].filter(Boolean),
     source:a.source,detected_at:now,processed_at:now,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
-    eligible:Boolean(a.eligible),pre_expansion_stage:a.pre_expansion_stage??'DATA_INSUFFICIENT',
+    eligible:Boolean(a.eligible&&a.data_status==='LIVE_DATA'),pre_expansion_stage:a.pre_expansion_stage??'DATA_INSUFFICIENT',
     disclaimer:'عين الصقر تبحث عن تشابهات ما قبل انفجار OGN: قاعدة + توسع مشاركة + ضغط شراء + مقاومة/اختراق + مشتقات عند توفرها. لا تضمن ارتفاعًا أو ربحًا.'
   };
 }

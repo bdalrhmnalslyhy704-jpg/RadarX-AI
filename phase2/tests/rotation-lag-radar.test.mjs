@@ -2,14 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {buildRotationAnalysis,buildRotationAlert,RotationLagRadar} from '../core/rotation-lag-radar.mjs';
 
-function candle(i,{price=100,move=0,volume=100000,span=0.4}={}){
-  const openTime=i*900000;
+function candle(i,{price=100,move=0,volume=100000,span=0.4,baseOpenTime=0}={}){
+  const openTime=baseOpenTime+i*900000;
   const close=price*(1+move);
   return {openTime,closeTime:openTime+899000,open:price,high:Math.max(price,close)*(1+span/100),low:Math.min(price,close)*(1-span/100),close,volume,closed:true};
 }
 
 function makeSeries(n,base,{tailMove=0,tailVolume=100000,tailSpan=0.4}={}){
   const out=[];
+  const baseOpenTime=Math.floor(Date.now()/900000)*900000-n*900000;
   let price=base;
   for(let i=0;i<n;i++){
     const tail=i>=n-5;
@@ -18,7 +19,8 @@ function makeSeries(n,base,{tailMove=0,tailVolume=100000,tailSpan=0.4}={}){
       price,
       move,
       volume:tail?tailVolume:100000,
-      span:tail?tailSpan:0.4
+      span:tail?tailSpan:0.4,
+      baseOpenTime
     }));
     price*=1+move;
   }
@@ -29,7 +31,8 @@ const n=90;
 const symbol=makeSeries(n,100,{tailMove:0.0005,tailVolume:220000,tailSpan:0.55});
 const btc=makeSeries(n,100,{tailMove:0.02,tailVolume:180000,tailSpan:0.6});
 const eth=makeSeries(n,100,{tailMove:0.015,tailVolume:160000,tailSpan:0.6});
-const oneHour=Array.from({length:40},(_,i)=>candle(i,{price:100}));
+const oneHourBase=Math.floor(Date.now()/900000)*900000-40*900000;
+const oneHour=Array.from({length:40},(_,i)=>candle(i,{price:100,baseOpenTime:oneHourBase}));
 
 const now=Date.now();
 const result=buildRotationAnalysis(symbol,oneHour,{
@@ -64,6 +67,35 @@ const closedOnly=buildRotationAnalysis(openLast,oneHour,{
 },{symbol:'TESTUSDT',lastPrice:100,priceChange24h:0.4},now);
 assert.equal(closedOnly.closed_candles_only,true);
 assert.equal(closedOnly.counts.fifteen_min,n-1);
+const shiftOld=(rows,delayMs)=>rows.map(x=>({...x,openTime:x.openTime-delayMs,closeTime:x.closeTime-delayMs}));
+const staleDelay=2*60*60*1000;
+const stale=buildRotationAnalysis(
+  shiftOld(symbol,staleDelay),
+  shiftOld(oneHour,staleDelay),
+  {
+    BTCUSDT:{fifteen_min:shiftOld(btc,staleDelay),one_hour:shiftOld(oneHour,staleDelay)},
+    ETHUSDT:{fifteen_min:shiftOld(eth,staleDelay),one_hour:shiftOld(oneHour,staleDelay)}
+  },
+  {symbol:'TESTUSDT',lastPrice:100,priceChange24h:0.4,quoteVolume24h:2_000_000},
+  now
+);
+assert.equal(stale.eligible,false,'stale source candles must never produce a rotation signal');
+assert.equal(stale.stage,'STALE_DATA');
+assert.equal(stale.data_quality,0);
+assert.ok(stale.reason_codes.includes('STALE_CLOSED_CANDLES'));
+const staleAlert=buildRotationAlert({
+  ticker:{symbol:'TESTUSDT',lastPrice:100,priceChange24h:0.4,quoteVolume24h:2_000_000},
+  fifteen_min:shiftOld(symbol,staleDelay),
+  one_hour:shiftOld(oneHour,staleDelay),
+  benchmarks:{
+    BTCUSDT:{fifteen_min:shiftOld(btc,staleDelay),one_hour:shiftOld(oneHour,staleDelay)},
+    ETHUSDT:{fifteen_min:shiftOld(eth,staleDelay),one_hour:shiftOld(oneHour,staleDelay)}
+  }
+},now);
+assert.equal(staleAlert.eligible,false,'stale candles must remain rejected at alert construction');
+assert.equal(staleAlert.data_status.status,'DATA_STALE');
+
+
 
 const extended=buildRotationAlert({
   ticker:{symbol:'TESTUSDT',lastPrice:100,priceChange24h:35},

@@ -1,6 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {ProfessorRadar,calculateProfessorOpinion,classifyStreamClaim,classifyNewsEvent} from '../core/professor-radar.mjs';
+import {ProfessorRadar,calculateProfessorOpinion,classifyStreamClaim,classifyNewsEvent,filterFreshProfessorNews} from '../core/professor-radar.mjs';
+
+test('TEST_PROFESSOR: old, future and undated articles are excluded from live signal evidence',()=>{
+  const now=1700000000000;
+  const result=filterFreshProfessorNews([
+    {id:'fresh-general',published_at:now-60*60*1000,watch_scope:'GENERAL_CRYPTO_NEWS'},
+    {id:'stale-general',published_at:now-3*60*60*1000,watch_scope:'GENERAL_CRYPTO_NEWS'},
+    {id:'fresh-listing',published_at:now-23*60*60*1000,watch_scope:'EXCHANGE_LISTING_WATCH'},
+    {id:'stale-listing',published_at:now-25*60*60*1000,watch_scope:'EXCHANGE_LISTING_WATCH'},
+    {id:'future',published_at:now+6*60*1000,watch_scope:'GENERAL_CRYPTO_NEWS'},
+    {id:'missing',published_at:null,watch_scope:'GENERAL_CRYPTO_NEWS'}
+  ],{now});
+  assert.deepEqual(result.fresh.map(x=>x.id),['fresh-general','fresh-listing']);
+  assert.deepEqual(result.rejected.map(x=>[x.item.id,x.reason]),[
+    ['stale-general','NEWS_TOO_OLD'],
+    ['stale-listing','NEWS_TOO_OLD'],
+    ['future','NEWS_TIMESTAMP_IN_FUTURE'],
+    ['missing','NEWS_TIMESTAMP_MISSING']
+  ]);
+});
 
 test('TEST_PROFESSOR: exchange listing headlines are classified as context, not as a guaranteed catalyst',()=>{
   assert.equal(classifyNewsEvent('KAIA spot trading opens on Upbit','upbit.com'),'EXCHANGE_LISTING_OR_MARKET_OPEN');
@@ -46,10 +65,11 @@ test('TEST_PROFESSOR: scan fuses public stream + news + Binance technical confir
     return {status:'ok',symbol,price:{last:100,last_closed_15m:100},assessment:{direction_score:82,trap_risk:20},zones:{support:96,resistance:108}};
   }};
   const ytData={contents:{twoColumnSearchResultsRenderer:{primaryContents:{sectionListRenderer:{contents:[{itemSectionRenderer:{contents:[
-    {videoRenderer:{videoId:'abc123',title:{simpleText:'BTC buy long breakout LIVE'},descriptionSnippet:{runs:[{text:'BTC entry now'}]},ownerText:{simpleText:'Test Trader'},viewCountText:{simpleText:'1K'},badges:[{metadataBadgeRenderer:{label:{simpleText:'LIVE NOW'}}}],thumbnailOverlays:[]}}
+    {videoRenderer:{videoId:'abc123',title:{simpleText:'BTC buy long breakout LIVE'},descriptionSnippet:{runs:[{text:'BTC entry now'}]},ownerText:{simpleText:'Test Trader'},viewCountText:{simpleText:'1K'},badges:[{metadataBadgeRenderer:{label:{simpleText:'LIVE NOW'}}}],thumbnailOverlays:[]}},
+    {videoRenderer:{videoId:'replay999',title:{simpleText:'BTC buy long breakout LIVE'},descriptionSnippet:{runs:[{text:'BTC entry now from replay'}]},ownerText:{simpleText:'Old Replay'},publishedTimeText:{simpleText:'2 days ago'},viewCountText:{simpleText:'20K'},badges:[],thumbnailOverlays:[]}}
   ]}}]}}}}};
   const player={};
-  const gdelt={articles:[{title:'Bitcoin partnership boosts market growth',url:'https://example.com/news/1',domain:'example.com',datetime:'2026-10-04T18:00:00Z',tone:4}]};
+  const gdelt={articles:[{title:'Bitcoin partnership boosts market growth',url:'https://example.com/news/1',domain:'example.com',datetime:new Date(1700000000000-10*60*1000).toISOString(),tone:4}]};
   const fetchImpl=async url=>{
     const u=String(url);
     if(u.includes('youtube.com/results?search_query='))return new Response('var ytInitialData = '+JSON.stringify(ytData)+';',{status:200});
@@ -64,9 +84,12 @@ test('TEST_PROFESSOR: scan fuses public stream + news + Binance technical confir
   assert.equal(ok,true);
   const snap=radar.snapshot(10);
   assert.equal(snap.radar,'PROFESSOR_RADAR');
+  assert.equal(snap.streams.count,2);
   assert.equal(snap.streams.live_count,1);
   assert.equal(snap.news.count,1);
   assert.equal(snap.candidates[0].symbol,'BTCUSDT');
+  assert.equal(snap.candidates[0].stream_mentions,1,'the old replay must not be counted as a live trade claim');
+  assert.equal(snap.candidates[0].trade_claims.length,1);
   assert.equal(snap.candidates[0].opinion.action,'PAPER_ENTRY_CANDIDATE');
   assert.equal(alerts.length,1);
   assert.equal(alerts[0].radar_name,'Radar 6 — البروفيسور');

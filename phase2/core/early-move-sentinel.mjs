@@ -59,6 +59,41 @@ function component(candidate,keyPaths,fallback=50){
   return fallback;
 }
 
+export function resolveAlertConfirmationCount(alert){
+  const explicit=[
+    alert?.pre_explosion?.confirmation_count,
+    alert?.confirmation_count,
+    alert?.early_wake?.leader_count
+  ];
+  const supplied=explicit.find(value=>
+    value!==null&&value!==undefined&&
+    !(typeof value==='string'&&value.trim()==='')&&
+    Number.isFinite(Number(value))
+  );
+  if(supplied!==undefined)return Math.max(0,Math.trunc(Number(supplied)));
+
+  // Ordinary movement alerts have no dedicated count. Count independent,
+  // measured evidence instead of silently handing the final gate a zero.
+  const c=alert?.components||{};
+  const s=alert?.strategy_confluence||{};
+  return [
+    Number(c.pre_move)>=72,
+    Number(c.structure)>=70,
+    Number(c.buying_pressure)>=70,
+    Number(c.selling_exhaustion)>=70,
+    Number(c.squeeze)>=70,
+    Number(c.volume)>=70,
+    Number(c.relative_strength)>=70,
+    Number(c.whale_pressure)>=72,
+    Number(c.atr_expansion)>=65,
+    Number(c.liquidity)>=70,
+    Number(c.data_quality)>=80,
+    Number(s.best_score)>=75,
+    Number(s.accepted_count)>=2,
+    Number(alert?.opportunity_score)>=82
+  ].filter(Boolean).length;
+}
+
 export function buildMoveAlert(candidate,trigger,{now=Date.now()}={}) {
   const direction=Number(trigger?.movePct)>=0?'UP_MOVE':'DOWN_MOVE';
   const ctx=candidate?.pre_move_context||{};
@@ -693,11 +728,26 @@ export class EarlyMoveSentinel {
     }
     this.preExplosionRotationTotal+=visits;
     for(const row of selected){
+      const pending=this.deepQueue.find(x=>x.symbol===row.symbol);
+      if(pending){
+        // One deep scan can evaluate wake/pre-explosion/move evidence together.
+        // Refresh its market snapshot without downgrading a stronger trigger.
+        pending.row=this.lastTicker.get(row.symbol)||row;
+        this.lastEarlyScanAt.set(row.symbol,now);
+        if(pending.mode==='PRE_EXPLOSION'){
+          pending.trigger={
+            ...pending.trigger,
+            movePct:pending.row.priceChange24h,
+            discoveryScore:row.pre_explosion_discovery_score
+          };
+        }
+        continue;
+      }
       if(this.deepQueue.length>=queueLimit)break;
       this.lastEarlyScanAt.set(row.symbol,now);
       this.deepQueue.push({
         symbol:row.symbol,
-        row,
+        row:this.lastTicker.get(row.symbol)||row,
         trigger:{movePct:row.priceChange24h,discoveryScore:row.pre_explosion_discovery_score},
         queuedAt:now,
         mode:'PRE_EXPLOSION'
@@ -733,11 +783,30 @@ export class EarlyMoveSentinel {
 
   queueDeep(symbol,row,trigger,mode='MOVE'){
     const now=this.clock();
+    const pending=this.deepQueue.find(x=>x.symbol===symbol);
+    if(pending){
+      // Keep a single queued scan per symbol, but never let a routine trigger
+      // suppress a more urgent early-wake event. Always retain the newest ticker.
+      pending.row=this.lastTicker.get(symbol)||row;
+      const priority={PRE_EXPLOSION:1,MOVE:2,EARLY_WAKE:3};
+      const currentPriority=priority[pending.mode]||0;
+      const incomingPriority=priority[mode]||0;
+      if(incomingPriority>currentPriority){
+        pending.mode=mode;
+        pending.trigger=trigger;
+      }else if(mode===pending.mode){
+        pending.trigger=trigger;
+      }
+      this.drainDeepQueue().catch(e=>{
+        this.lastError=String(e?.message??e);
+        this.logger.warn?.('MOVE_DEEP',this.lastError);
+      });
+      return;
+    }
     const last=this.lastAlertAt.get(`${symbol}:${mode==='EARLY_WAKE'?'EARLY_WAKE_ALERT':'EARLY_MOVE_ALERT'}`)||0;
     const cooldown=mode==='EARLY_WAKE'?this.config.earlyWakeAlertCooldownMs:this.config.cooldownMs;
     if(now-last<cooldown)return;
-    if(this.deepQueue.some(x=>x.symbol===symbol))return;
-    this.deepQueue.push({symbol,row,trigger,queuedAt:now,mode});
+    this.deepQueue.push({symbol,row:this.lastTicker.get(symbol)||row,trigger,queuedAt:now,mode});
     this.drainDeepQueue().catch(e=>{
       this.lastError=String(e?.message??e);
       this.logger.warn?.('MOVE_DEEP',this.lastError);
@@ -746,7 +815,10 @@ export class EarlyMoveSentinel {
 
   async drainDeepQueue(){
     while(this.running&&this.deepActive<this.config.maxDeepPerCycle&&this.deepQueue.length){
-      const job=this.deepQueue.shift();
+      const queued=this.deepQueue.shift();
+      // Tickers may have changed while this item waited behind other deep scans.
+      // Scan with the freshest known public ticker, not the enqueue-time snapshot.
+      const job={...queued,row:this.lastTicker.get(queued.symbol)||queued.row};
       this.deepActive++;
       try{
         const candidate=await this.scanner.scanSymbol(job.row,1,{exchangeInfo:'Binance Public REST',ticker:'Binance Public REST'},{klinesLimit:this.config.deepKlines,fastInterval:this.config.fastInterval,fastKlines:this.config.fastKlines});
@@ -770,7 +842,7 @@ export class EarlyMoveSentinel {
           relativeScore:Math.max(Number(cc.relative_strength)||0,Number(cc.mtf_alignment)||0),
           momentumScore:Number(cc.momentum)||50,
           compressionScore:Number(cc.squeeze)||50,
-          confirmations:Number(alert.pre_explosion?.confirmation_count||alert.confirmation_count||0),
+          confirmations:resolveAlertConfirmationCount(alert),
           minConfirmations:7,minScore:88,max24hMovePct:2.5,requireTrigger:true,minCategoryHits:5
         });
         alert.elite_gate=gate;

@@ -12,6 +12,8 @@ import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
 import android.graphics.Color;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.IBinder;
 import android.util.Log;
 
@@ -34,6 +36,7 @@ import java.util.Collections;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.Locale;
 import java.util.List;
 
@@ -75,7 +78,9 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     private ScheduledExecutorService executor;
     private volatile boolean stopping;
+    private volatile boolean stopRequested;
     private volatile boolean loggedFirstScan;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final DecimalFormat scoreFmt = new DecimalFormat("0.0");
 
     @Override
@@ -92,10 +97,14 @@ public final class RadarXBackgroundMonitorService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (ACTION_STOP.equals(intent != null ? intent.getAction() : null)) {
-            stopMonitoring();
+            Log.i(TAG, "BACKGROUND_STOP_ACTION_RECEIVED");
+            requestStopMonitoring();
             return START_NOT_STICKY;
         }
 
+        // A new explicit start supersedes a stop that has not yet reached its
+        // checkpoint boundary; the queued stop callback checks this flag again.
+        stopRequested = false;
         if (stopping) {
             stopping = false;
         }
@@ -123,8 +132,10 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     private void scheduleScan() {
-        if (executor == null || executor.isShutdown()) return;
-        executor.shutdownNow();
+        // A rapid STOP -> START can reuse the Service instance after its executor
+        // has been shut down. Recreate that executor instead of leaving a live-looking
+        // foreground notification with no future scans.
+        if (executor != null && !executor.isShutdown()) executor.shutdownNow();
         executor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "RadarX-Background");
             t.setDaemon(true);
@@ -145,6 +156,12 @@ public final class RadarXBackgroundMonitorService extends Service {
     private void scanOnceSafe() {
         synchronized (SCAN_LOCK) {
         if (stopping) return;
+        if (stopRequested) {
+            mainHandler.post(() -> {
+                if (stopRequested) stopMonitoring();
+            });
+            return;
+        }
         touchHeartbeat();
         try {
             long cursor = currentAlertCursor();
@@ -775,7 +792,36 @@ public final class RadarXBackgroundMonitorService extends Service {
         manager.createNotificationChannel(radarAlerts);
     }
 
+    /**
+     * Defer an explicit stop until the currently running scan has returned from
+     * per-alert durable cursor commits. Stopping the executor from onStartCommand
+     * in the middle of notifyNewRadarAlerts can invalidate a checkpoint and make
+     * a replay event appear processed without a durable cursor advance.
+     */
+    private void requestStopMonitoring() {
+        if (stopping || stopRequested) return;
+        stopRequested = true;
+        ScheduledExecutorService current = executor;
+        if (current != null && !current.isShutdown()) {
+            try {
+                current.execute(() -> {
+                    Log.i(TAG, "BACKGROUND_STOP_CHECKPOINT_BOUNDARY_REACHED");
+                    mainHandler.post(() -> {
+                        if (stopRequested) stopMonitoring();
+                    });
+                });
+                return;
+            } catch (RejectedExecutionException rejected) {
+                Log.w(TAG, "Background executor rejected graceful stop; posting stop to main", rejected);
+            }
+        }
+        mainHandler.post(() -> {
+            if (stopRequested) stopMonitoring();
+        });
+    }
+
     private void stopMonitoring() {
+        stopRequested = true;
         stopping = true;
         if (executor != null) executor.shutdownNow();
         saveRunning(false);
@@ -787,6 +833,7 @@ public final class RadarXBackgroundMonitorService extends Service {
     @Override
     public void onDestroy() {
         stopping = true;
+        stopRequested = true;
         if (executor != null) executor.shutdownNow();
         saveRunning(false);
         super.onDestroy();
@@ -795,6 +842,8 @@ public final class RadarXBackgroundMonitorService extends Service {
     @Override
     public void onTimeout(int startId, int fgsType) {
         Log.w(TAG, "Android 15 FGS timeout; stopping cleanly");
+        stopRequested = true;
+        stopping = true;
         updateStatus("المراقبة توقفت تلقائيًا بحد نظام Android 15؛ افتح التطبيق لاستئنافها");
         saveRunning(false);
         stopSelf();

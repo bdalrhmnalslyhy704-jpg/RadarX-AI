@@ -127,12 +127,21 @@ start_app_and_wait_ready() {
   fi
   echo "RadarX Activity/process/UI ready: pid=${pid}"
 
+  if printf '%s\n' "${logs}" | grep -Fq 'BACKGROUND_START_REQUEST'; then
+    echo "::error::Background monitor was started through the user-initiated path during automatic-start smoke"
+    printf '%s\n' "${logs}" | tail -n 120
+    return 1
+  fi
+
   PHASE="wait for background foreground-service startup"
   local service_ready=0
   for attempt in $(seq 1 30); do
     logs="$(cat "${APP_LOG_FILE}" 2>/dev/null || true)"
-    if printf '%s\n' "${logs}" | grep -Fq "BACKGROUND_AUTO_START_REQUEST" &&
-       printf '%s\n' "${logs}" | grep -Fq "BACKGROUND_SERVICE_READY"; then
+    # Service may be restored by the native boot/continuity path before
+    # MainActivity emits BACKGROUND_AUTO_START_REQUEST. Require a fresh ready
+    # marker from this clean launch; actual foreground-service/process state is
+    # independently asserted immediately after the online screenshot.
+    if printf '%s\n' "${logs}" | grep -Fq "BACKGROUND_SERVICE_READY"; then
       service_ready=1
       break
     fi
@@ -150,7 +159,7 @@ start_app_and_wait_ready() {
     return 1
   fi
   if [[ "${service_ready}" -ne 1 ]]; then
-    echo "::error::Expected automatic monitor startup markers were not observed"
+    echo "::error::Background monitor did not emit BACKGROUND_SERVICE_READY after clean launch"
     printf '%s\n' "${logs}" | tail -n 180
     return 1
   fi
@@ -244,7 +253,7 @@ start_app_and_wait_ready
 # The monitor may auto-start, but it must not be misclassified as a user-initiated request.
 PHASE="verify offline startup is not user-initiated"
 LOGS="$(cat "${APP_LOG_FILE:-/nonexistent}" 2>/dev/null || true)"
-! printf '%s\\n' "${LOGS}" | grep -Fq "BACKGROUND_START_REQUEST"
+! printf '%s\n' "${LOGS}" | grep -Fq "BACKGROUND_START_REQUEST"
 
 assert_background_service_declared
 test -n "$(timeout 12s adb shell pidof com.radarx.app | tr -d '\\r' || true)"
@@ -314,6 +323,12 @@ launch_replay_test_app() {
   timeout 25s adb shell am start -n com.radarx.app/.MainActivity \
     --es radarx_test_alert_feed_url "${REPLAY_TEST_FEED_URL}" \
     --el radarx_test_scan_interval_ms 1000
+}
+request_background_service_stop_for_replay() {
+  # Receiver is declared only in src/debug and calls the non-exported service under the app UID.
+  timeout 15s adb shell am broadcast \
+    -a com.radarx.app.action.DEBUG_REPLAY_STOP_BACKGROUND \
+    -p com.radarx.app
 }
 
 PHASE="clear emulator app data and establish an empty-feed cursor"
@@ -385,30 +400,74 @@ timeout 10s adb shell cmd connectivity airplane-mode disable >/dev/null 2>&1 || 
 timeout 5s adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false >/dev/null 2>&1 || true
 restart_done=0
 replay_complete=0
-for attempt in $(seq 1 120); do
+for attempt in $(seq 1 180); do
   accepted="$(accepted_log_count)"
   if [[ "${accepted}" -ge 150 && "${restart_done}" -eq 0 ]]; then
-    # Stop only the service, keeping app notifications in Android's tray so restart reconciliation is tested faithfully.
+    # Deliver the service's supported STOP action instead of ActivityManager's
+    # stopservice command, which returns exit 255 for this foreground service on API 29.
+    # Alert notifications remain in the tray; only the background service is stopped.
     sleep 2
     before_ready="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
     old_service_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
-    timeout 15s adb shell am stopservice -n com.radarx.app/.RadarXBackgroundMonitorService
+    if [[ -z "${old_service_pid}" ]]; then
+      echo "::error::Background service was not running at the planned mid-run restart"
+      tail -n 120 "${REPLAY_LOG_FILE}" || true
+      exit 1
+    fi
+    request_background_service_stop_for_replay
+    service_stopped=0
+    stop_prefs=""
+    for stop_attempt in $(seq 1 25); do
+      stop_prefs="$(timeout 5s adb shell run-as com.radarx.app cat shared_prefs/radarx_background.xml 2>/dev/null || true)"
+      # Service process residency is not a stop signal: Android may retain an empty
+      # app process. Require the service's persisted running flag to be false and
+      # the foreground-service heartbeat to be removed.
+      stop_logs="$(replay_logs)"
+      if printf '%s\n' "${stop_logs}" | grep -Fq 'REPLAY_TEST_STOP_BROADCAST_RECEIVED' &&
+         printf '%s\n' "${stop_logs}" | grep -Fq 'BACKGROUND_STOP_ACTION_RECEIVED' &&
+         printf '%s\n' "${stop_prefs}" | grep -Eq '<boolean name="running" value="false" ?/>' &&
+         ! printf '%s\n' "${stop_prefs}" | grep -Fq 'name="monitor_heartbeat_at_ms"'; then
+        service_stopped=1
+        break
+      fi
+      sleep 1
+    done
+    if [[ "${service_stopped}" -ne 1 ]]; then
+      echo "::error::Service STOP action did not clear persisted state or receiver/service markers"
+      printf '%s\n' "${stop_prefs}" | grep -E 'name="running"|monitor_heartbeat_at_ms' || true
+      timeout 8s adb shell dumpsys activity services com.radarx.app 2>&1 | grep -Ei 'RadarXBackgroundMonitorService|ServiceRecord|isForeground|startRequested' | tail -n 100 || true
+      tail -n 120 "${REPLAY_LOG_FILE}" || true
+      exit 1
+    fi
+    echo "REPLAY_TEST_STOP_CONFIRMED: running=false heartbeat=absent"
+    # Snapshot counters only after stop was confirmed so posts from the stopping
+    # instance cannot masquerade as proof that the restarted service resumed.
+    accepted_before_resume="$(accepted_log_count)"
+    feed_before_resume="$(grep -F 'DEBUG_REPLAY_TEST_FEED_ACTIVE' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
     sleep 2
     launch_replay_test_app
     restarted_ready=0
     for restart_attempt in $(seq 1 30); do
       new_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
-      ready_count="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
       logs="$(replay_logs)"
-      if [[ -n "${new_pid}" && "${ready_count}" -gt "${before_ready}" ]] &&
-         printf '%s\n' "${logs}" | grep -Fq 'REPLAY_TEST_OVERRIDE_CONFIGURED'; then
+      restart_prefs="$(timeout 5s adb shell run-as com.radarx.app cat shared_prefs/radarx_background.xml 2>/dev/null || true)"
+      feed_after_resume="$(printf '%s\n' "${logs}" | grep -F 'DEBUG_REPLAY_TEST_FEED_ACTIVE' | wc -l | tr -d ' ')"
+      accepted_after_resume="$(accepted_log_count)"
+      if [[ -n "${new_pid}" ]] &&
+         printf '%s\n' "${restart_prefs}" | grep -Eq '<boolean name="running" value="true" ?/>' &&
+         printf '%s\n' "${restart_prefs}" | grep -Fq 'name="monitor_heartbeat_at_ms"' &&
+         [[ "${feed_after_resume}" -gt "${feed_before_resume}" ]] &&
+         [[ "${accepted_after_resume}" -gt "${accepted_before_resume}" ]]; then
         restarted_ready=1
+        echo "REPLAY_TEST_RESUME_CONFIRMED: pid=${new_pid} accepted_before=${accepted_before_resume} accepted_after=${accepted_after_resume} new_feed_fetch=yes"
         break
       fi
       sleep 2
     done
     if [[ "${restarted_ready}" -ne 1 ]]; then
-      echo "::error::Background service failed to resume with its saved cursor after service stop/start"
+      echo "::error::Background service did not resume polling from its saved cursor after service stop/start"
+      echo "restart_pid=${new_pid:-NONE} accepted_before=${accepted_before_resume} accepted_after=${accepted_after_resume:-NONE} feed_before=${feed_before_resume} feed_after=${feed_after_resume:-NONE}"
+      printf '%s\n' "${restart_prefs:-}" | grep -E 'name="running"|monitor_heartbeat_at_ms|radar_alert_cursor_(at|id)' || true
       tail -n 180 "${REPLAY_LOG_FILE}" || true
       exit 1
     fi
@@ -416,6 +475,9 @@ for attempt in $(seq 1 120); do
   fi
 
   handled="$(handled_unique_count)"
+  if (( attempt == 1 || attempt % 15 == 0 )); then
+    echo "DURABLE_REPLAY_PROGRESS: attempt=${attempt}/180 accepted=$(accepted_log_count) handled=${handled} $(fixture_stats 2>/dev/null || true)"
+  fi
   if [[ "${handled}" -ge 623 ]]; then
     stats="$(fixture_stats)"
     drained="$(stat_field "${stats}" drainedRequests)"

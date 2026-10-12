@@ -132,6 +132,34 @@ test('Kahir rejects stale closed candles instead of treating cached movement as 
   assert.equal(result.eligible,false);
   assert.equal(result.stage,'STALE_DATA');
   assert.equal(result.data_stale,true);
+  assert.equal(result.data_status,'DATA_STALE');
+});
+
+test('Kahir separates insufficient candles from stale market data',()=>{
+  const result=buildKahirAnalysis({
+    oneMinute:candles(25,60000),fiveMinute:fiveMinuteImpulse().slice(0,10),
+    ticker:{lastPrice:101.2,priceChange24h:1,quoteVolume24h:5_000_000},now:NOW
+  });
+  assert.equal(result.eligible,false);
+  assert.equal(result.stage,'WARMING_UP');
+  assert.equal(result.data_stale,false);
+  assert.equal(result.data_status,'DATA_INSUFFICIENT');
+});
+
+test('Kahir blocks data gaps and missing core market fields',()=>{
+  const m1=candles(150,60000);
+  m1.splice(132,1);
+  const gap=buildKahirAnalysis({oneMinute:m1,fiveMinute:fiveMinuteImpulse(),ticker:{lastPrice:101.2,priceChange24h:1},now:NOW});
+  assert.equal(gap.eligible,false);
+  assert.equal(gap.stage,'DATA_GAP');
+  assert.equal(gap.data_status,'DATA_GAP');
+
+  const weak1=candles(150,60000).map(({tradeCount,quoteVolume,...row})=>row);
+  const weak5=fiveMinuteImpulse().map(({tradeCount,quoteVolume,...row})=>row);
+  const weak=buildKahirAnalysis({oneMinute:weak1,fiveMinute:weak5,ticker:{lastPrice:101.2,priceChange24h:1,quoteVolume24h:5_000_000},now:NOW});
+  assert.equal(weak.data_quality,50);
+  assert.equal(weak.eligible,false);
+  assert.equal(weak.data_status,'DATA_QUALITY_LOW');
 });
 
 test('Kahir rotates deep-scan slots beyond the same highest-activity candidates',()=>{

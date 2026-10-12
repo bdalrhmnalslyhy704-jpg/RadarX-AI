@@ -1414,6 +1414,10 @@ export class MarketUniverseScanner {
       const fastLimit=Math.max(40,Math.trunc(Number(options.fastKlines)||96));
       // Core candle timeframes are mandatory; depth/fast candles are optional enrichments.
       // A single 451/429/timeout from an optional endpoint must not collapse the whole 20-analyst run.
+      // Start order-book retrieval alongside the mandatory closed-candle reads.
+      // These inputs are independent; serializing them adds one full network timeout
+      // to every selected symbol and makes the on-demand market radar appear hung.
+      const depthTask = Promise.allSettled([this.fetchDepth(ticker.symbol)]);
       const tfSettled = await Promise.allSettled(
         ['4h','1h','15m'].map(async tf => {
           const r = await this.fetchSeries(ticker.symbol, tf, klinesLimit);
@@ -1438,7 +1442,7 @@ export class MarketUniverseScanner {
         }
       }
 
-      const depthSettled=await Promise.allSettled([this.fetchDepth(ticker.symbol)]);
+      const depthSettled=await depthTask;
       if(depthSettled[0]?.status==='fulfilled') {
         const depth=depthSettled[0].value;
         depthRaw = depth?.data ?? depth;

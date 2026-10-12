@@ -112,5 +112,29 @@ const stale=buildStrongMoveAnalysis(stale1,stale5,ticker,NOW);
 assert.equal(stale.eligible,false);
 assert.equal(stale.stage,'STALE_DATA');
 assert.equal(stale.data_stale,true);
+assert.equal(stale.data_status,'DATA_STALE');
+
+const insufficient=buildStrongMoveAnalysis(make1m().slice(0,25),make5m().slice(0,10),ticker,NOW);
+assert.equal(insufficient.eligible,false);
+assert.equal(insufficient.stage,'INSUFFICIENT_DATA');
+assert.equal(insufficient.data_stale,false,'missing candles are not the same as stale data');
+assert.equal(insufficient.data_status,'DATA_INSUFFICIENT');
+
+const noCoreFlow=buildStrongMoveAnalysis(
+  make1m().map(({tradeCount,takerBuyBaseVolume,...row})=>row),
+  make5m().map(({tradeCount,takerBuyBaseVolume,...row})=>row),
+  ticker,NOW
+);
+assert.equal(noCoreFlow.data_quality,50);
+assert.equal(noCoreFlow.eligible,false,'missing trade-count and taker-flow evidence must block strong-move alerts');
+assert.equal(noCoreFlow.data_status,'DATA_QUALITY_LOW');
+
+const gapRows=make1m();
+gapRows.splice(90,1);
+const gap=buildStrongMoveAnalysis(gapRows,make5m(),ticker,NOW);
+assert.equal(gap.eligible,false);
+assert.equal(gap.stage,'DATA_GAP');
+assert.equal(gap.data_stale,false);
+assert.ok(gap.reason_codes.includes('CLOSED_CANDLE_GAP'));
 
 console.log('Strong Move Radar tests passed');

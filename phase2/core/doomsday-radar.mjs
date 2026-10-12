@@ -19,6 +19,11 @@ function closed(rows,now){
     Number(c.low)>0 && Number(c.close)>0 && Number(c.volume)>=0
   ).sort((a,b)=>Number(a.openTime)-Number(b.openTime));
 }
+function latestCandleAgeMs(rows,now){
+  const closeTime=Number(rows?.at(-1)?.closeTime);
+  return Number.isFinite(closeTime)&&closeTime<=now?Math.max(0,now-closeTime):Infinity;
+}
+
 function returns(rows,n){
   if(rows.length<=n)return null;
   return pct(rows.at(-1).close,rows.at(-(n+1)).close);
@@ -130,9 +135,34 @@ function recentImpulse5m(rows){
 
 export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=[],ticker={},instantChangePct=0,now=Date.now(),max24hMovePct=18}={}){
   const m1=closed(oneMinute,now),m5=closed(fiveMinute,now),btc=closed(btcFiveMinute,now);
-  if(m1.length<60||m5.length<50||btc.length<20)return {eligible:false,stage:'WARMING_UP',score:null,early_score:null,closed_candles_only:true};
+  if(m1.length<60||m5.length<50||btc.length<20)return {
+    eligible:false,stage:'WARMING_UP',score:null,early_score:null,closed_candles_only:true,
+    data_quality:0,data_stale:false,reason_codes:['INSUFFICIENT_CLOSED_CANDLES'],
+    candle_counts:{one_minute:m1.length,five_minute:m5.length,btc_five_minute:btc.length}
+  };
+  const candleFreshness={
+    one_minute_age_ms:latestCandleAgeMs(m1,now),
+    five_minute_age_ms:latestCandleAgeMs(m5,now),
+    btc_five_minute_age_ms:latestCandleAgeMs(btc,now)
+  };
+  const staleReasons=[];
+  if(candleFreshness.one_minute_age_ms>3*60*1000)staleReasons.push('ONE_MINUTE_CANDLES_STALE');
+  if(candleFreshness.five_minute_age_ms>12*60*1000)staleReasons.push('FIVE_MINUTE_CANDLES_STALE');
+  if(candleFreshness.btc_five_minute_age_ms>12*60*1000)staleReasons.push('BTC_REFERENCE_CANDLES_STALE');
+  if(staleReasons.length)return {
+    eligible:false,stage:'STALE_DATA',score:null,early_score:null,ignition_score:null,
+    closed_candles_only:true,data_quality:0,data_stale:true,reason_codes:staleReasons,
+    candle_freshness:candleFreshness,
+    candle_counts:{one_minute:m1.length,five_minute:m5.length,btc_five_minute:btc.length}
+  };
+  const freshnessRatio=Math.max(
+    candleFreshness.one_minute_age_ms/(3*60*1000),
+    candleFreshness.five_minute_age_ms/(12*60*1000),
+    candleFreshness.btc_five_minute_age_ms/(12*60*1000)
+  );
+  const dataQuality=clamp(100-8*freshnessRatio);
   const price=finite(ticker.lastPrice,0);
-  if(!(price>0))return {eligible:false,stage:'INVALID_PRICE',score:null,early_score:null,closed_candles_only:true};
+  if(!(price>0))return {eligible:false,stage:'INVALID_PRICE',score:null,early_score:null,closed_candles_only:true,data_quality:0,data_stale:false,reason_codes:['INVALID_PRICE']};
 
   const r1=returns(m1,1),r3=returns(m1,3),r5=returns(m5,1),r10=returns(m1,10);
   const btc5=returns(btc,1);
@@ -281,6 +311,9 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
 
   return {
     eligible,stage,score:Number(score.toFixed(1)),early_score:Number(earlyScore.toFixed(1)),ignition_score:Number(ignitionScore.toFixed(1)),
+    data_quality:Number(dataQuality.toFixed(1)),data_stale:false,candle_freshness:candleFreshness,
+    alert_quality:{sniper_freshness:sniperFreshness,confirmation_bars:confirmationBars,not_chasing:notChasing},
+    reason_codes:[],
     direction:ignitionScore>=earlyScore?'UP':'WATCH',closed_candles_only:true,
     confirmation_count:earlyEvidence,ignition_confirmations:ignitionEvidence,confirmation_total:9,
     metrics:{
@@ -335,8 +368,16 @@ function buildAlert(candidate,analysis,now){
       analysis.component_scores.relative_strength<45?'BTC_RELATIVE_STRENGTH_WEAK':null
     ].filter(Boolean),
     source:analysis.source,detected_at:now,processed_at:now,
+    data_quality:finite(analysis.data_quality,0),
+    data_status:{
+      status:analysis.data_stale?'DATA_STALE':analysis.stage==='WARMING_UP'||analysis.stage==='INVALID_PRICE'?'DATA_INSUFFICIENT':'LIVE_DATA',
+      stale:Boolean(analysis.data_stale),data_quality:finite(analysis.data_quality,0),
+      data_valid:analysis.data_stale!==true&&!['WARMING_UP','INVALID_PRICE'].includes(analysis.stage),
+      reason_codes:Array.isArray(analysis.reason_codes)?analysis.reason_codes:[],
+      source:'Binance Public REST'
+    },
     paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
-    eligible:true,
+    eligible:analysis.eligible===true,
     disclaimer:'رادار يوم القيامة يلتقط بصمة توسع/استيقاظ قصيرة المدى؛ لا يضمن استمرار السعر، وكل الإشارات ورقية فقط.'
   };
 }
@@ -406,7 +447,7 @@ export class DoomsdayRadar{
       baseScore:analysis.score,
       priceChange24h:row.priceChange24h,
       liquidityScore:Math.min(100,60+Math.log10(Math.max(1,row.quoteVolume24h/500000))*32),
-      dataQualityScore:90,
+      dataQualityScore:Number(analysis.data_quality)||0,
       triggerScore:Math.max(Number(cs.acceleration)||0,Number(cs.breakout)||0,Number(cs.impulse)||0),
       structureScore:Math.max(Number(cs.breakout)||0,Number(cs.ema)||0,Number(cs.acceptance)||0),
       participationScore:Math.max(Number(cs.volume)||0,Number(cs.trades)||0),

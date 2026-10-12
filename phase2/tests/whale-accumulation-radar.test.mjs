@@ -1,6 +1,87 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {WhaleAccumulationRadar} from '../core/whale-accumulation-radar.mjs';
+import {WhaleAccumulationRadar,buildWhaleAccumulationAnalysis,buildWhaleAccumulationAlert} from '../core/whale-accumulation-radar.mjs';
+
+
+const WHALE_NOW=1700000000000;
+const WHALE_MINUTE=60_000;
+const WHALE_FIVE_MINUTE=5*60_000;
+function whaleCandles(count,intervalMs,now=WHALE_NOW,ageMs=10_000){
+  return Array.from({length:count},(_,i)=>{
+    const closeTime=now-ageMs-(count-1-i)*intervalMs;
+    const openTime=closeTime-intervalMs+1;
+    const close=100+i*.002;
+    const volume=5000+i*100;
+    return {openTime,closeTime,open:close-.01,high:close+.08,low:close-.05,close,volume,
+      tradeCount:150+i,takerBuyBaseVolume:volume*.58,closed:true};
+  });
+}
+function whaleTrades(count=40,now=WHALE_NOW,ageMs=1000){
+  return Array.from({length:count},(_,i)=>({a:i+1,p:'100',q:'300',T:now-ageMs-(count-1-i)*100,m:i%5===0}));
+}
+function whaleBook(price=100){
+  return {
+    bids:Array.from({length:12},(_,i)=>[(price-.001*(i+1)).toFixed(5),String(1200-i*10)]),
+    asks:Array.from({length:12},(_,i)=>[(price+.001*(i+1)).toFixed(5),String(500-i*5)])
+  };
+}
+function whaleInput(overrides={}){
+  return {
+    ticker:{symbol:'TESTUSDT',lastPrice:100,priceChange24h:.5,quoteVolume24h:5_000_000},
+    oneMinute:whaleCandles(90,WHALE_MINUTE),fiveMinute:whaleCandles(36,WHALE_FIVE_MINUTE),
+    aggTrades:whaleTrades(),book:whaleBook(),now:WHALE_NOW,config:{},...overrides
+  };
+}
+test('Whale radar blocks old 1m / 5m data and marks it explicitly stale',()=>{
+  const oldOne=buildWhaleAccumulationAnalysis(whaleInput({oneMinute:whaleCandles(90,WHALE_MINUTE,WHALE_NOW,4*WHALE_MINUTE)}));
+  assert.equal(oldOne.eligible,false);
+  assert.equal(oldOne.data_status,'DATA_STALE');
+  assert.equal(oldOne.data_stale,true);
+  assert.ok(oldOne.reason_codes.includes('STALE_CLOSED_CANDLES'));
+
+  const oldFive=buildWhaleAccumulationAnalysis(whaleInput({fiveMinute:whaleCandles(36,WHALE_FIVE_MINUTE,WHALE_NOW,15*WHALE_MINUTE)}));
+  assert.equal(oldFive.eligible,false);
+  assert.equal(oldFive.data_status,'DATA_STALE');
+});
+test('Whale radar distinguishes insufficient candle and aggregate-trade history',()=>{
+  const shortCandles=buildWhaleAccumulationAnalysis(whaleInput({oneMinute:whaleCandles(10,WHALE_MINUTE)}));
+  assert.equal(shortCandles.eligible,false);
+  assert.equal(shortCandles.data_status,'DATA_INSUFFICIENT');
+
+  const oldTrades=buildWhaleAccumulationAnalysis(whaleInput({aggTrades:whaleTrades(40,WHALE_NOW,5*WHALE_MINUTE)}));
+  assert.equal(oldTrades.eligible,false);
+  assert.equal(oldTrades.data_status,'DATA_STALE');
+
+  const shortTrades=buildWhaleAccumulationAnalysis(whaleInput({aggTrades:whaleTrades(4)}));
+  assert.equal(shortTrades.eligible,false);
+  assert.equal(shortTrades.data_status,'DATA_INSUFFICIENT');
+});
+test('Whale radar blocks candle gaps and missing order-book depth instead of assuming a healthy feed',()=>{
+  const gapRows=whaleCandles(90,WHALE_MINUTE);
+  gapRows.splice(70,1);
+  const gap=buildWhaleAccumulationAnalysis(whaleInput({oneMinute:gapRows}));
+  assert.equal(gap.eligible,false);
+  assert.equal(gap.data_status,'DATA_GAP');
+
+  const noBook=buildWhaleAccumulationAnalysis(whaleInput({book:{bids:[],asks:[]}}));
+  assert.equal(noBook.eligible,false);
+  assert.equal(noBook.data_status,'DATA_UNAVAILABLE');
+});
+test('Whale radar ignores stale prior book snapshots when scoring persistence',()=>{
+  const input=whaleInput({previousBook:whaleBook(100),previousBookAt:WHALE_NOW-10*WHALE_MINUTE});
+  const a=buildWhaleAccumulationAnalysis(input);
+  assert.equal(a.orderbook_persistence.has_previous,false);
+  assert.ok(a.risk_flags.includes('NO_RECENT_DEPTH_PERSISTENCE'));
+});
+test('Whale alert passes calculated quality to the elite gate and preserves read-only invariants',()=>{
+  const alert=buildWhaleAccumulationAlert(whaleInput({oneMinute:[],fiveMinute:[],aggTrades:[],book:{bids:[],asks:[]}}),WHALE_NOW);
+  assert.equal(alert.eligible,false);
+  assert.equal(alert.data_quality,0);
+  assert.equal(alert.data_status.status,'DATA_INSUFFICIENT');
+  assert.equal(alert.paper_trading,true);
+  assert.equal(alert.real_order_execution,false);
+  assert.equal(alert.confidence_score,'UNKNOWN');
+});
 
 test('Whale radar fills unique rotation slots when patrol overlaps quiet high-volume anchors',()=>{
   const radar=new WhaleAccumulationRadar({

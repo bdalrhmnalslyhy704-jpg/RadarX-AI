@@ -2,8 +2,9 @@ import {decorateRadarAlert} from './radar-alert-meta.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-const clamp = (x, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, Number(x)));
-const finite = x => Number.isFinite(Number(x)) ? Number(x) : null;
+const clamp = (x, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, Number.isFinite(Number(x)) ? Number(x) : lo));
+const hasNumber = x => x !== null && x !== undefined && !(typeof x === 'string' && !x.trim()) && Number.isFinite(Number(x));
+const finite = x => hasNumber(x) ? Number(x) : null;
 const avg = a => {
   const xs = a.map(Number).filter(Number.isFinite);
   return xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : null;
@@ -30,15 +31,58 @@ function std(values) {
 function closedCandles(rows, now) {
   return (Array.isArray(rows) ? rows : []).filter(c =>
     c && c.closed !== false &&
-    Number.isFinite(Number(c.closeTime)) &&
-    Number(c.closeTime) <= now &&
-    Number(c.openTime) < Number(c.closeTime) &&
-    Number.isFinite(Number(c.open)) &&
-    Number.isFinite(Number(c.high)) &&
-    Number.isFinite(Number(c.low)) &&
-    Number.isFinite(Number(c.close)) &&
-    Number(c.volume) >= 0
-  );
+    hasNumber(c.openTime) && Number(c.openTime) > 0 &&
+    hasNumber(c.closeTime) && Number(c.closeTime) > Number(c.openTime) &&
+    Number(c.closeTime) <= Number(now) &&
+    hasNumber(c.open) && Number(c.open) > 0 &&
+    hasNumber(c.high) && Number(c.high) > 0 &&
+    hasNumber(c.low) && Number(c.low) > 0 &&
+    hasNumber(c.close) && Number(c.close) > 0 &&
+    Number(c.high) >= Number(c.low) &&
+    hasNumber(c.volume) && Number(c.volume) >= 0
+  ).sort((a,b) => Number(a.openTime) - Number(b.openTime));
+}
+
+function measureCandleGaps(rows, intervalMs) {
+  const recent = rows.slice(-48);
+  let maxGapMs = 0, gapCount = 0;
+  for (let i=1; i<recent.length; i++) {
+    const gap = Number(recent[i].openTime) - Number(recent[i-1].openTime);
+    if (gap > intervalMs * 1.5) {
+      gapCount++;
+      maxGapMs = Math.max(maxGapMs, gap);
+    }
+  }
+  return {gap_count:gapCount,max_gap_ms:maxGapMs};
+}
+
+export function assessCoinHunterSeries(rows, {
+  now=Date.now(), intervalMs=60*60*1000, minCount=16,
+  maxAgeIntervals=3, minQuality=85
+}={}) {
+  const raw = Array.isArray(rows) ? rows : [];
+  const candles = closedCandles(raw, now);
+  const futureStart = raw.some(c => hasNumber(c?.openTime) && Number(c.openTime) > Number(now) + intervalMs);
+  if (futureStart) return {eligible:false,data_status:'DATA_FUTURE',data_stale:false,data_quality:0,
+    reason_codes:['FUTURE_CANDLE_START'],candles,age_ms:null,candle_gaps:{gap_count:0,max_gap_ms:0}};
+  if (candles.length < minCount) return {eligible:false,data_status:'DATA_INSUFFICIENT',data_stale:false,data_quality:0,
+    reason_codes:['INSUFFICIENT_CLOSED_CANDLES'],candles,age_ms:null,candle_gaps:{gap_count:0,max_gap_ms:0}};
+  const ageMs = Number(now) - Number(candles.at(-1).closeTime);
+  if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > intervalMs * maxAgeIntervals) {
+    return {eligible:false,data_status:'DATA_STALE',data_stale:true,data_quality:0,
+      reason_codes:['STALE_CLOSED_CANDLES'],candles,age_ms:ageMs,candle_gaps:{gap_count:0,max_gap_ms:0}};
+  }
+  const gaps = measureCandleGaps(candles, intervalMs);
+  const rowCoverage = raw.length ? Math.min(1,candles.length/raw.length) : 0;
+  const tradeCoverage = candles.length ? candles.filter(c=>hasNumber(c.tradeCount)&&Number(c.tradeCount)>=0).length/candles.length : 0;
+  const takerCoverage = candles.length ? candles.filter(c=>hasNumber(c.takerBuyBaseVolume)&&Number(c.takerBuyBaseVolume)>=0&&Number(c.takerBuyBaseVolume)<=Number(c.volume)*1.02).length/candles.length : 0;
+  const quality = Math.round(clamp(100*(rowCoverage*.50+tradeCoverage*.25+takerCoverage*.25)));
+  if (gaps.max_gap_ms > intervalMs*1.5) return {eligible:false,data_status:'DATA_GAP',data_stale:false,data_quality:Math.min(60,quality),
+    reason_codes:['CLOSED_CANDLE_GAP'],candles,age_ms:ageMs,candle_gaps:gaps};
+  if (quality < minQuality) return {eligible:false,data_status:'DATA_QUALITY_LOW',data_stale:false,data_quality:quality,
+    reason_codes:['TRADE_OR_TAKER_FIELDS_INCOMPLETE'],candles,age_ms:ageMs,candle_gaps:gaps};
+  return {eligible:true,data_status:'LIVE_DATA',data_stale:false,data_quality:quality,reason_codes:[],
+    candles,age_ms:ageMs,candle_gaps:gaps};
 }
 
 export function findPreMoveCheckpoint(closed,dayStart,thresholdPct=2){
@@ -55,8 +99,8 @@ export function findPreMoveCheckpoint(closed,dayStart,thresholdPct=2){
   return null;
 }
 
-export function featureSet(candles, ticker, btcChange = null) {
-  const c = closedCandles(candles, Date.now());
+export function featureSet(candles, ticker, btcChange = null, now = Date.now()) {
+  const c = closedCandles(candles, now);
   if (c.length < 16) return null;
 
   const closes = c.map(x => Number(x.close));
@@ -123,12 +167,13 @@ export function featureSet(candles, ticker, btcChange = null) {
     volumeAcceleration, tradeAcceleration, takerRatio, compressionRatio,
     ema9, ema20, ema50, emaSlope, higherLowCount,
     rangePosition, roc1h, roc4h, roc12h, bbWidth, breakoutRoom,
+    candle_count:c.length,
     btcChange
   };
 }
 
-function earlyTimingFingerprint(candles) {
-  const c=closedCandles(candles,Date.now());
+function earlyTimingFingerprint(candles, now = Date.now()) {
+  const c=closedCandles(candles,now);
   if(c.length<24)return null;
   const closes=c.map(x=>Number(x.close)).filter(Number.isFinite);
   const vols=c.map(x=>Number(x.volume)).filter(Number.isFinite);
@@ -484,10 +529,14 @@ export class CoinHunterRadar {
         .slice(0, Math.max(Number(this.config.leaderCount) * 3, 24));
 
       const leaderRows = [];
+      const dataRejects = {};
+      const recordDataReject = status => { dataRejects[status] = (dataRejects[status] || 0) + 1; };
       for (const t of leaderCandidates) {
         try {
           const k = await this.rest.klines(t.symbol, '1h', {limit: 72});
-          const closed = closedCandles(k.candles, Date.now());
+          const leaderData = assessCoinHunterSeries(k.candles, {now:Date.now(),intervalMs:60*60*1000,minCount:16});
+          if (!leaderData.eligible) { recordDataReject('leader_'+leaderData.data_status); continue; }
+          const closed = leaderData.candles;
           const day = closed.filter(x=>Number(x.openTime)>=Number(dayStart));
           const dayPct = day.length >= 1 ? pct(Number(day.at(-1).close), Number(day[0].open)) : null;
           const checkpoint = findPreMoveCheckpoint(closed, dayStart, 2);
@@ -536,9 +585,16 @@ export class CoinHunterRadar {
               this.rest.klines(t.symbol, '1h', {limit: 72}),
               this.rest.klines(t.symbol, '15m', {limit: 96})
             ]);
-            const closed = closedCandles(k1h.candles, Date.now());
-            const micro = earlyTimingFingerprint(k15m.candles);
-            const features = featureSet(closed, t, btcToday);
+            const scanNow = Date.now();
+            const hourlyData = assessCoinHunterSeries(k1h.candles, {now:scanNow,intervalMs:60*60*1000,minCount:16});
+            const quarterData = assessCoinHunterSeries(k15m.candles, {now:scanNow,intervalMs:15*60*1000,minCount:24});
+            if (!hourlyData.eligible || !quarterData.eligible) {
+              recordDataReject('candidate_'+(!hourlyData.eligible?hourlyData.data_status:quarterData.data_status));
+              return null;
+            }
+            const closed = hourlyData.candles;
+            const micro = earlyTimingFingerprint(quarterData.candles,scanNow);
+            const features = featureSet(closed, t, btcToday, scanNow);
             if (!features || !micro) return null;
             scanned += 1;
             const day = closed.filter(x=>Number(x.openTime)>=Number(dayStart));
@@ -557,6 +613,10 @@ export class CoinHunterRadar {
               price:Number(t.lastPrice),
               quote_volume_24h:Number(t.quoteVolume),
               trade_count_24h:Number(t.count),
+              data_quality:Math.min(hourlyData.data_quality,quarterData.data_quality),
+              data_status:{status:'LIVE_DATA',stale:false,source:'Binance Public REST'},
+              candle_freshness:{'1h_age_ms':hourlyData.age_ms,'15m_age_ms':quarterData.age_ms},
+              candle_gaps:{'1h':hourlyData.candle_gaps,'15m':quarterData.candle_gaps},
               factors:{...score.metrics,early_timing_fingerprint:micro},
               reasons:score.reasons,
               risk_flags:score.risk_flags,
@@ -596,6 +656,7 @@ export class CoinHunterRadar {
         qualifying_leaders: leaderRows.filter(x=>Number(x.todayPct)>=Number(this.config.minLeaderMovePct)).length,
         candidate_pool: pool.length,
         deep_scanned_total: scanned,
+        data_rejected: dataRejects,
         hunter_hits: this.latestCandidates.filter(x => x.decision === 'قنص').length,
         learned_samples: leaderRows.length
       };

@@ -14,6 +14,10 @@ function closed(rows,now){
     Number(c.open)>0&&Number(c.high)>=Number(c.low)&&Number(c.low)>0&&Number(c.close)>0&&Number(c.volume)>=0
   ).sort((a,b)=>Number(a.openTime)-Number(b.openTime));
 }
+function latestClosedAgeMs(rows,now){
+  const closeTime=Number(rows?.at(-1)?.closeTime);
+  return Number.isFinite(closeTime)&&closeTime<=now?Math.max(0,now-closeTime):Infinity;
+}
 function vwap(rows){
   let den=0,num=0;
   for(const c of rows){
@@ -126,8 +130,35 @@ function auctionBalance(rows){
 export function buildLiquidityAbsorptionAnalysis(oneM,fiveM,ticker,book,now=Date.now()){
   const a=closed(oneM,now),b=closed(fiveM,now);
   if(a.length<60||b.length<24){
-    return {eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true};
+    return {
+      eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true,
+      data_quality:0,data_stale:false,reason_codes:['INSUFFICIENT_CLOSED_CANDLES'],
+      candle_counts:{one_minute:a.length,five_minute:b.length}
+    };
   }
+  const candleFreshness={
+    one_minute_age_ms:latestClosedAgeMs(a,now),
+    five_minute_age_ms:latestClosedAgeMs(b,now)
+  };
+  const stale=[];
+  if(candleFreshness.one_minute_age_ms>3*60*1000)stale.push('ONE_MINUTE_CANDLES_STALE');
+  if(candleFreshness.five_minute_age_ms>12*60*1000)stale.push('FIVE_MINUTE_CANDLES_STALE');
+  if(stale.length){
+    return {
+      eligible:false,stage:'STALE_DATA',score:null,closed_candles_only:true,
+      data_quality:0,data_stale:true,reason_codes:stale,candle_freshness:candleFreshness,
+      candle_counts:{one_minute:a.length,five_minute:b.length}
+    };
+  }
+  const freshnessRatio=Math.max(
+    candleFreshness.one_minute_age_ms/(3*60*1000),
+    candleFreshness.five_minute_age_ms/(12*60*1000)
+  );
+  const dataQuality=clamp(100-8*freshnessRatio);
+  const tickerVolume=Number(ticker?.quoteVolume24h);
+  const liquidityQuality=Number.isFinite(tickerVolume)&&tickerVolume>=1500000
+    ?clamp(70+Math.log10(Math.max(1,tickerVolume/1500000))*30)
+    :0;
   const price=finite(ticker?.lastPrice,null);
   const absorption=sellerAbsorption(a);
   const structure=localStructure(a);
@@ -192,6 +223,8 @@ export function buildLiquidityAbsorptionAnalysis(oneM,fiveM,ticker,book,now=Date
   const stage=score>=90?'ABSORPTION_CONFIRMED':score>=84?'LIQUIDITY_WAKE':'MICROSTRUCTURE_WATCH';
   return {
     eligible,stage,score:Math.round(score*10)/10,closed_candles_only:true,
+    data_quality:Number(dataQuality.toFixed(1)),liquidity_quality:Number(liquidityQuality.toFixed(1)),
+    data_stale:false,candle_freshness:candleFreshness,
     confirmation_count:confirmationCount,confirmation_total:confirmations.length,
     algorithms:{
       SELLER_ABSORPTION:absorption,
@@ -253,6 +286,14 @@ export function buildLiquidityAbsorptionAlert(candidate,now=Date.now()){
     detected_time_12h:formatRadarTime12h(now),
     detected_timezone:'Asia/Aden',
     paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+    data_quality:finite(a.data_quality,0),liquidity_quality:finite(a.liquidity_quality,0),
+    data_status:{
+      status:a.data_stale?'DATA_STALE':a.stage==='INSUFFICIENT_DATA'?'DATA_INSUFFICIENT':'LIVE_DATA',
+      stale:Boolean(a.data_stale),data_quality:finite(a.data_quality,0),
+      data_valid:a.stage!=='INSUFFICIENT_DATA'&&a.data_stale!==true,
+      reason_codes:Array.isArray(a.reason_codes)?a.reason_codes:[],
+      source:'Binance Public REST'
+    },
     eligible:a.eligible,
     disclaimer:'رادار 4 لا يلاحق القفزة السعرية؛ يبحث عن امتصاص البيع واختلال السيولة وبداية تحسن بنية السوق. النتائج مراقبة فقط وليست ضمانًا.'
   };
@@ -334,7 +375,7 @@ export class LiquidityAbsorptionRadar{
       baseScore:Number(analysis.opportunity_score)||0,
       priceChange24h:row.priceChange24h,
       liquidityScore:Math.min(100,60+Math.log10(Math.max(1,row.quoteVolume24h/1500000))*35),
-      dataQualityScore:90,
+      dataQualityScore:Number(analysis.data_quality)||0,
       triggerScore:Math.max(Number(cs.absorption)||0,Number(cs.absorption_score)||0),
       structureScore:Math.max(Number(cs.structure)||0,Number(cs.structure_score)||0,Number(cs.local_structure)||0),
       participationScore:Number(cs.silent_volume)||Number(cs.absorption)||Number(m.volume_score)||50,

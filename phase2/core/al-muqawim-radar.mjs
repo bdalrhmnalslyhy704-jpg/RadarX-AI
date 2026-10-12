@@ -2,17 +2,30 @@ import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.m
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
-const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
+const finite=(v,d=null)=>v!==null&&v!==undefined&&!(typeof v==='string'&&!v.trim())&&Number.isFinite(Number(v))?Number(v):d;
+
+function hasNumber(v){return v!==null&&v!==undefined&&!(typeof v==='string'&&!v.trim())&&Number.isFinite(Number(v));}
 
 function closedCandles(rows,now){
   return (Array.isArray(rows)?rows:[]).filter(c=>
-    c?.closed!==false &&
-    Number.isFinite(Number(c?.openTime)) &&
-    Number.isFinite(Number(c?.closeTime)) &&
-    Number(c.closeTime)<=now &&
-    Number(c.open)>0 && Number(c.high)>=Number(c.low) && Number(c.low)>0 &&
-    Number(c.close)>0
+    c?.closed!==false&&hasNumber(c?.openTime)&&hasNumber(c?.closeTime)&&
+    Number(c.closeTime)<=now&&hasNumber(c.open)&&Number(c.open)>0&&
+    hasNumber(c.high)&&hasNumber(c.low)&&Number(c.high)>=Number(c.low)&&Number(c.low)>0&&
+    hasNumber(c.close)&&Number(c.close)>0&&hasNumber(c.volume)&&Number(c.volume)>=0
   ).sort((a,b)=>Number(a.openTime)-Number(b.openTime));
+}
+
+function candleGap(rows,intervalMs){
+  const recent=rows.slice(-36);
+  let maxGapMs=0,gapCount=0;
+  for(let i=1;i<recent.length;i++){
+    const gap=Number(recent[i].openTime)-Number(recent[i-1].openTime);
+    if(gap>intervalMs*1.5){gapCount++;maxGapMs=Math.max(maxGapMs,gap);}
+  }
+  return {gap_count:gapCount,max_gap_ms:maxGapMs};
+}
+function timeframeDataQuality(raw,rows){
+  return Math.round(clamp(100*(raw.length?rows.length/raw.length:0)));
 }
 
 function ema(values,period=50){
@@ -72,9 +85,16 @@ function trendlineScore(candles,direction){
   return {score:aligned?Math.min(100,78+Math.abs(slopePctPerBar)*180):32,slopePctPerBar};
 }
 
-function timeframeAnalysis(candles,maPeriod=50,now=Date.now()){
-  const rows=closedCandles(candles,now);
-  if(rows.length<Math.max(30,maPeriod+5))return {direction:'INSUFFICIENT',score:null,structure:null};
+function timeframeAnalysis(candles,maPeriod=50,now=Date.now(),intervalMs=60_000){
+  const raw=Array.isArray(candles)?candles:[];
+  const rows=closedCandles(raw,now);
+  const dataQuality=timeframeDataQuality(raw,rows);
+  if(rows.length<Math.max(30,maPeriod+5))return {direction:'INSUFFICIENT',score:null,structure:null,data_quality:dataQuality,data_status:'DATA_INSUFFICIENT',reason_codes:['INSUFFICIENT_CLOSED_CANDLES']};
+  const ageMs=Number(now)-Number(rows.at(-1)?.closeTime);
+  if(!Number.isFinite(ageMs)||ageMs>intervalMs*3)return {direction:'STALE_DATA',score:null,structure:null,data_quality:0,data_stale:true,data_status:'DATA_STALE',reason_codes:['STALE_CLOSED_CANDLES'],age_ms:ageMs};
+  const gaps=candleGap(rows,intervalMs);
+  if(gaps.max_gap_ms>intervalMs*1.5)return {direction:'DATA_GAP',score:null,structure:null,data_quality:Math.min(60,dataQuality),data_stale:false,data_status:'DATA_GAP',reason_codes:['CLOSED_CANDLE_GAP'],candle_gaps:gaps};
+  if(dataQuality<85)return {direction:'DATA_QUALITY_LOW',score:null,structure:null,data_quality:dataQuality,data_stale:false,data_status:'DATA_QUALITY_LOW',reason_codes:['OHLCV_COVERAGE_LOW']};
   const closes=rows.map(c=>Number(c.close));
   const current=closes.at(-1);
   const ma=ema(closes,maPeriod),prevMa=emaPrev(closes,maPeriod);
@@ -103,7 +123,8 @@ function timeframeAnalysis(candles,maPeriod=50,now=Date.now()){
     moving_average:{period:maPeriod,value:ma,previous:prevMa,price_vs_ma_pct:Number.isFinite(ma)?(current-ma)/ma*100:null,direction:maDirection},
     confirmations:parts,
     latest_close:current,
-    candle_count:rows.length
+    candle_count:rows.length,
+    data_quality:dataQuality,data_stale:false,data_status:'LIVE_DATA',age_ms:ageMs,candle_gaps:gaps
   };
 }
 
@@ -151,12 +172,19 @@ function entryTiming(candles,price,ma,now=Date.now()){
 
 export function buildAlMuqawimAnalysis(series,ticker,now=Date.now(),config={}){
   const maPeriod=Math.max(10,Math.trunc(Number(config.maPeriod)||50));
-  const m15=timeframeAnalysis(series?.['15m']||[],maPeriod,now);
-  const h1=timeframeAnalysis(series?.['1h']||[],maPeriod,now);
-  const h4=timeframeAnalysis(series?.['4h']||[],maPeriod,now);
+  const m15=timeframeAnalysis(series?.['15m']||[],maPeriod,now,15*60_000);
+  const h1=timeframeAnalysis(series?.['1h']||[],maPeriod,now,60*60_000);
+  const h4=timeframeAnalysis(series?.['4h']||[],maPeriod,now,4*60*60_000);
   const tfs=[h4,h1,m15];
-  if(tfs.some(x=>x.direction==='INSUFFICIENT')){
-    return {eligible:false,stage:'INSUFFICIENT_DATA',direction:'NONE',score:null,closed_candles_only:true,timeframes:{'4h':h4,'1h':h1,'15m':m15}};
+  const dataQuality=Math.min(...tfs.map(x=>Number.isFinite(Number(x.data_quality))?Number(x.data_quality):0));
+  const blocked=tfs.find(x=>['INSUFFICIENT','STALE_DATA','DATA_GAP','DATA_QUALITY_LOW'].includes(x.direction));
+  if(blocked){
+    const dataStatus=blocked.data_status||'DATA_UNAVAILABLE';
+    const stage=blocked.direction==='INSUFFICIENT'?'INSUFFICIENT_DATA':blocked.direction;
+    return {eligible:false,stage,direction:'NONE',score:null,closed_candles_only:true,
+      data_quality:Math.min(...tfs.map(x=>Number.isFinite(Number(x.data_quality))?Number(x.data_quality):0)),
+      data_stale:dataStatus==='DATA_STALE',data_status:dataStatus,reason_codes:blocked.reason_codes||[],
+      timeframes:{'4h':h4,'1h':h1,'15m':m15}};
   }
   const price=finite(ticker?.lastPrice);
   const timing=entryTiming(series?.['15m']||[],price,m15.moving_average?.value,now);
@@ -203,8 +231,10 @@ export function buildAlMuqawimAnalysis(series,ticker,now=Date.now(),config={}){
   const entryReady=timing.score>=78&&timing.freshness>=72&&timing.notExtended&&dailyMove<=8&&
     (timing.nearResistance||timing.recent4>=0.15)&&timing.distanceMa<=3.5;
   return {
-    eligible:score>=86&&major==='UP'&&htfAligned===100&&structureScore>=90&&lowerAgreement>=90&&entryReady,
+    eligible:dataQuality>=85&&score>=86&&major==='UP'&&htfAligned===100&&structureScore>=90&&lowerAgreement>=90&&entryReady,
     closed_candles_only:true,
+    data_quality:Math.min(h4.data_quality,h1.data_quality,m15.data_quality),
+    data_stale:false,data_status:'LIVE_DATA',reason_codes:[],
     direction:major,
     stage,
     score:Number(score.toFixed(1)),
@@ -244,7 +274,14 @@ export function buildAlMuqawimAlert(ticker,series,now,config={}){
     potential_label:analysis.stage,
     almuqawim:analysis,
     reasons:analysis.reasons,
-    risk_flags:analysis.entry_risk==='AGAINST_HTF_TREND'?['AGAINST_HIGHER_TIMEFRAME']:[],
+    risk_flags:[
+      analysis.entry_risk==='AGAINST_HTF_TREND'?'AGAINST_HIGHER_TIMEFRAME':null,
+      analysis.data_status==='DATA_STALE'?'STALE_DATA':null,
+      analysis.data_status==='DATA_GAP'?'CLOSED_CANDLE_GAP':null,
+      analysis.data_status==='DATA_QUALITY_LOW'?'DATA_QUALITY_LOW':null
+    ].filter(Boolean),
+    data_quality:finite(analysis.data_quality,0),
+    data_status:{status:analysis.data_status||'DATA_UNAVAILABLE',stale:Boolean(analysis.data_stale),source:'Binance Public REST'},
     eligible:analysis.eligible,
     source:'Binance Public REST',
     detected_at:now,processed_at:now,

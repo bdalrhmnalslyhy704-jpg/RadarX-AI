@@ -66,6 +66,28 @@ test('Radar 4 excludes an open trigger candle',()=>{
   assert.equal(a.closed_candles_only,true);
   assert.ok(a.eligible===false || a.score!==null);
 });
+test('Radar 4 rejects stale closed candles and reports DATA_STALE',()=>{
+  const delay=20*60*1000;
+  const staleOne=make1m().map(c=>({...c,openTime:c.openTime-delay,closeTime:c.closeTime-delay}));
+  const staleFive=make5m().map(c=>({...c,openTime:c.openTime-delay,closeTime:c.closeTime-delay}));
+  const a=buildLiquidityAbsorptionAnalysis(staleOne,staleFive,ticker,book,NOW);
+  assert.equal(a.eligible,false);
+  assert.equal(a.stage,'STALE_DATA');
+  assert.equal(a.data_quality,0);
+  assert.ok(a.reason_codes.includes('ONE_MINUTE_CANDLES_STALE'));
+  const alert=buildLiquidityAbsorptionAlert({one_minute:staleOne,five_minute:staleFive,ticker,book},NOW);
+  assert.equal(alert.eligible,false);
+  assert.equal(alert.data_status.status,'DATA_STALE');
+  assert.equal(alert.data_status.data_valid,false);
+});
+
+test('Radar 4 marks insufficient candle history as unavailable, not live',()=>{
+  const a=buildLiquidityAbsorptionAlert({one_minute:make1m().slice(-20),five_minute:make5m().slice(-10),ticker,book},NOW);
+  assert.equal(a.eligible,false);
+  assert.equal(a.data_status.status,'DATA_INSUFFICIENT');
+  assert.equal(a.data_status.data_valid,false);
+  assert.equal(a.data_quality,0);
+});
 
 test('Radar 4 alert identifies source and 12-hour discovery time',()=>{
   const alert=buildLiquidityAbsorptionAlert({one_minute:make1m(),five_minute:make5m(),ticker,book},NOW);

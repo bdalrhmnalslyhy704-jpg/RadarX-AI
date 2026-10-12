@@ -202,6 +202,36 @@ test('dedicated Bottom Radar scan uses the optimized discovery path',async()=>{
   assert.equal(result.candidates.length,2);
 });
 
+test('market scanner overlaps order-book retrieval with closed-candle requests',async()=>{
+  const rest=makeRest();
+  const originalKlines=rest.klines.bind(rest);
+  const originalDepth=rest.depth.bind(rest);
+  let activeKlineRequests=0;
+  let depthOverlappedKlines=false;
+  rest.klines=async(...args)=>{
+    activeKlineRequests++;
+    try{
+      await new Promise(resolve=>setTimeout(resolve,25));
+      return await originalKlines(...args);
+    }finally{
+      activeKlineRequests--;
+    }
+  };
+  rest.depth=async(...args)=>{
+    await new Promise(resolve=>setTimeout(resolve,10));
+    depthOverlappedKlines=activeKlineRequests>0;
+    return originalDepth(...args);
+  };
+  const scanner=new MarketUniverseScanner({
+    rest,
+    config:{minQuoteVolume24h:750000,scanLimit:1,returnLimit:1,deepConcurrency:2},
+    strategyEvaluator:evaluator
+  });
+  const result=await scanner.scan({quote:'USDT',limit:1});
+  assert.equal(result.universe.scanned,1);
+  assert.equal(depthOverlappedKlines,true,'depth should overlap the mandatory 4h/1h/15m candle network wait');
+});
+
 test('market scanner deduplicates symbols and only deep-scans selected rows',async()=>{
   const rest=makeRest();
   const scanner=new MarketUniverseScanner({rest,config:{minQuoteVolume24h:750000,scanLimit:2,returnLimit:2,deepConcurrency:2},strategyEvaluator:evaluator});

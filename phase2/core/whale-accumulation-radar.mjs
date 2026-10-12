@@ -10,13 +10,51 @@ const mean=xs=>{const a=xs.map(Number).filter(Number.isFinite);return a.length?a
 const median=xs=>{const a=xs.map(Number).filter(Number.isFinite).sort((a,b)=>a-b);if(!a.length)return null;const m=Math.floor(a.length/2);return a.length%2?a[m]:(a[m-1]+a[m])/2};
 const pct=(a,b)=>Number.isFinite(a)&&Number.isFinite(b)&&b!==0?(a-b)/b*100:null;
 const sum=xs=>xs.reduce((s,x)=>s+(Number.isFinite(Number(x))?Number(x):0),0);
+const hasNumber=v=>v!==null&&v!==undefined&&!(typeof v==='string'&&!v.trim())&&Number.isFinite(Number(v));
 
 function closed(rows,now){
   return (Array.isArray(rows)?rows:[]).filter(c=>
-    c&&c.closed!==false&&Number.isFinite(Number(c.openTime))&&Number.isFinite(Number(c.closeTime))&&
-    Number(c.closeTime)<=now&&Number(c.open)>0&&Number(c.high)>=Number(c.low)&&
-    Number(c.low)>0&&Number(c.close)>0&&Number(c.volume)>=0
+    c&&c.closed!==false&&hasNumber(c.openTime)&&Number(c.openTime)>0&&
+    hasNumber(c.closeTime)&&Number(c.closeTime)>Number(c.openTime)&&Number(c.closeTime)<=Number(now)&&
+    hasNumber(c.open)&&Number(c.open)>0&&hasNumber(c.high)&&hasNumber(c.low)&&Number(c.high)>=Number(c.low)&&
+    Number(c.low)>0&&hasNumber(c.close)&&Number(c.close)>0&&hasNumber(c.volume)&&Number(c.volume)>=0
   ).sort((a,b)=>Number(a.openTime)-Number(b.openTime));
+}
+
+function candleGapStats(rows,intervalMs){
+  const recent=rows.slice(-48);let maxGapMs=0,gapCount=0;
+  for(let i=1;i<recent.length;i++){
+    const gap=Number(recent[i].openTime)-Number(recent[i-1].openTime);
+    if(gap>intervalMs*1.5){gapCount++;maxGapMs=Math.max(maxGapMs,gap);}
+  }
+  return {gap_count:gapCount,max_gap_ms:maxGapMs};
+}
+
+function inspectCandleSeries(rawRows,{now,intervalMs,minCount,maxAgeMs}){
+  const raw=Array.isArray(rawRows)?rawRows:[];
+  const rows=closed(raw,now);
+  const rowCoverage=raw.length?rows.length/raw.length:0;
+  const tradeCoverage=rows.length?rows.filter(c=>hasNumber(c.tradeCount)&&Number(c.tradeCount)>=0).length/rows.length:0;
+  const takerCoverage=rows.length?rows.filter(c=>hasNumber(c.takerBuyBaseVolume)&&Number(c.takerBuyBaseVolume)>=0&&Number(c.takerBuyBaseVolume)<=Number(c.volume)*1.02).length/rows.length:0;
+  const quality=Math.round(clamp(100*(rowCoverage*.5+tradeCoverage*.25+takerCoverage*.25)));
+  const gaps=candleGapStats(rows,intervalMs);
+  const ageMs=rows.length?Number(now)-Number(rows.at(-1).closeTime):null;
+  let status='LIVE_DATA',reason=null;
+  if(rows.length<minCount){status='DATA_INSUFFICIENT';reason='INSUFFICIENT_CLOSED_CANDLES';}
+  else if(!Number.isFinite(ageMs)||ageMs<0||ageMs>maxAgeMs){status='DATA_STALE';reason='STALE_CLOSED_CANDLES';}
+  else if(gaps.max_gap_ms>intervalMs*1.5){status='DATA_GAP';reason='CLOSED_CANDLE_GAP';}
+  else if(quality<85){status='DATA_QUALITY_LOW';reason='TRADE_OR_TAKER_FIELDS_INCOMPLETE';}
+  return {rows,status,reason,data_quality:quality,age_ms:ageMs,candle_gaps:gaps,closed_count:rows.length,raw_count:raw.length};
+}
+
+function inspectOrderBook(book,price){
+  const bids=Array.isArray(book?.bids)?book.bids:[],asks=Array.isArray(book?.asks)?book.asks:[];
+  const validSide=side=>side.filter(x=>Array.isArray(x)&&hasNumber(x[0])&&Number(x[0])>0&&hasNumber(x[1])&&Number(x[1])>0);
+  const validBids=validSide(bids),validAsks=validSide(asks);
+  const bestBid=validBids.length?Number(validBids[0][0]):null;
+  const bestAsk=validAsks.length?Number(validAsks[0][0]):null;
+  const valid=Number(price)>0&&validBids.length>=5&&validAsks.length>=5&&bestBid>0&&bestAsk>bestBid;
+  return {valid,bid_levels:validBids.length,ask_levels:validAsks.length,best_bid:bestBid,best_ask:bestAsk};
 }
 
 function depthStats(book,price){
@@ -55,11 +93,13 @@ function depthStats(book,price){
 
 function tradeRows(rows){
   return (Array.isArray(rows)?rows:[]).map(x=>{
-    const price=Number(x&&x.p),qty=Number(x&&x.q),time=Number(x&&x.T);
-    if(!(price>0)&&!(qty>0))return null;
+    const price=hasNumber(x?.p)?Number(x.p):NaN;
+    const qty=hasNumber(x?.q)?Number(x.q):NaN;
+    const time=hasNumber(x?.T)?Number(x.T):NaN;
+    if(!(price>0)||!(qty>0)||!(time>0))return null;
     const notional=price*qty;
-    return {id:Number(x&&x.a)||null,price,qty,notional,time,buyerIsMaker:Boolean(x&&x.m)};
-  }).filter(x=>x&&x.notional>0&&Number.isFinite(x.time)).sort((a,b)=>a.time-b.time);
+    return {id:hasNumber(x?.a)?Number(x.a):null,price,qty,notional,time,buyerIsMaker:Boolean(x?.m)};
+  }).filter(x=>x&&Number.isFinite(x.notional)&&x.notional>0&&Number.isFinite(x.time)).sort((a,b)=>a.time-b.time);
 }
 
 function largePrintStats(rows,ticker,now,config){
@@ -166,16 +206,46 @@ function relativeContext(ticker,btc){
   };
 }
 
-export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggTrades,book,previousBook=null,now=Date.now(),config={}}={}){
+export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggTrades,book,previousBook=null,previousBookAt=null,now=Date.now(),config={}}={}){
   const t=ticker||{},price=finite(t.lastPrice,0);
+  const oneData=inspectCandleSeries(oneMinute,{now,intervalMs:60_000,minCount:30,maxAgeMs:3*60_000});
+  const fiveData=inspectCandleSeries(fiveMinute,{now,intervalMs:5*60_000,minCount:12,maxAgeMs:12*60_000});
   const prints=largePrintStats(aggTrades,t,now,config);
   const candles=candleAccumulation(oneMinute,now);
-  const five=closed(fiveMinute,now);
+  const five=fiveData.rows;
   const depth=depthStats(book,price);
   const previous=depthStats(previousBook,price);
-  const depthPersistence=previousBook
+  const depthMaxAgeMs=Math.max(60_000,Number(config.maxDepthPersistenceAgeMs)||2*60_000);
+  const hasRecentPreviousBook=Boolean(previousBook&&hasNumber(previousBookAt)&&Number(previousBookAt)<=Number(now)&&Number(now)-Number(previousBookAt)<=depthMaxAgeMs);
+  const depthPersistence=hasRecentPreviousBook
     ? clamp(50+(depth.nearImbalance>=previous.nearImbalance?28:0)+(depth.midImbalance>=previous.midImbalance?22:0))
     : 50;
+  const rawTrades=Array.isArray(aggTrades)?aggTrades:[];
+  const cleanTrades=tradeRows(rawTrades).filter(x=>x.time<=Number(now));
+  const futureTrade=rawTrades.some(x=>hasNumber(x?.T)&&Number(x.T)>Number(now)+60_000);
+  const latestTradeAt=cleanTrades.length?cleanTrades.at(-1).time:null;
+  const tradeAgeMs=latestTradeAt===null?null:Number(now)-latestTradeAt;
+  const minTradeCount=Math.max(10,Number(config.minRecentTradeCount)||10);
+  const maxTradeAgeMs=Math.max(30_000,Number(config.maxTradeAgeMs)||3*60_000);
+  const tradeStatus=futureTrade?'DATA_FUTURE':cleanTrades.length<minTradeCount?'DATA_INSUFFICIENT':
+    (!Number.isFinite(tradeAgeMs)||tradeAgeMs<0||tradeAgeMs>maxTradeAgeMs)?'DATA_STALE':'LIVE_DATA';
+  const bookHealth=inspectOrderBook(book,price);
+  const bookStatus=bookHealth.valid?'LIVE_DATA':'DATA_UNAVAILABLE';
+  const dataQuality=Math.round(clamp(
+    oneData.data_quality*.25+fiveData.data_quality*.20+
+    (tradeStatus==='LIVE_DATA'?100:0)*.30+(bookHealth.valid?100:0)*.25
+  ));
+  const allStatuses=[oneData.status,fiveData.status,tradeStatus,bookStatus];
+  const priority=['DATA_FUTURE','DATA_STALE','DATA_GAP','DATA_INSUFFICIENT','DATA_UNAVAILABLE','DATA_QUALITY_LOW'];
+  let dataStatus=priority.find(status=>allStatuses.includes(status))||'LIVE_DATA';
+  if(dataStatus==='LIVE_DATA'&&dataQuality<85)dataStatus='DATA_QUALITY_LOW';
+  const dataReasons=[oneData.reason,fiveData.reason,
+    tradeStatus==='DATA_FUTURE'?'FUTURE_AGG_TRADE_TIMESTAMP':
+    tradeStatus==='DATA_STALE'?'STALE_AGG_TRADES':
+    tradeStatus==='DATA_INSUFFICIENT'?'INSUFFICIENT_RECENT_AGG_TRADES':null,
+    bookHealth.valid?null:'ORDER_BOOK_UNAVAILABLE',
+    dataStatus==='DATA_QUALITY_LOW'?'COMPOSITE_DATA_QUALITY_LOW':null
+  ].filter(Boolean);
   const quiet24=Math.abs(Number(t.priceChange24h)||0)<=3.5;
   const notExtended=Math.abs(Number(t.priceChange24h)||0)<Number(config.maxExtended24hPct||8);
   const spreadOk=depth.spreadBps===null||depth.spreadBps<=Number(config.maxSpreadBps||15);
@@ -224,7 +294,7 @@ export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggT
     relativeNeutrality(quiet24)*.03
   );
   const eligible=
-    price>0&&
+    dataStatus==='LIVE_DATA'&&dataQuality>=85&&price>0&&
     score>=Number(config.minScore||84)&&
     confirmationCount>=Number(config.minConfirmations||8)&&
     prints.largeBuyRatio>=Number(config.minLargeBuyRatio||0.60)&&
@@ -235,7 +305,7 @@ export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggT
     supportScore>=Number(config.minSupportScore||65)&&
     spreadOk&&
     notExtended;
-  const stage=eligible&&score>=92?'WHALE_ACCUMULATION_CONFIRMED':score>=87?'WHALE_ACCUMULATION_ACTIVE':score>=78?'WHALE_BUILDING':'WATCH';
+  const stage=dataStatus!=='LIVE_DATA'?dataStatus:eligible&&score>=92?'WHALE_ACCUMULATION_CONFIRMED':score>=87?'WHALE_ACCUMULATION_ACTIVE':score>=78?'WHALE_BUILDING':'WATCH';
   const direction=buyDominance>=65?'BUY_SIDE':'BALANCED';
   const reasons=[];
   const push=(ok,s)=>{if(ok)reasons.push(s)};
@@ -258,12 +328,24 @@ export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggT
   if(depth.spreadBps!==null&&depth.spreadBps>10)risk.push('SPREAD_ATTENTION');
   if(prints.largeNotionalRatio<0)risk.push('LARGE_SELL_PRESSURE');
   if(depth.nearImbalance<0)risk.push('ASK_DEPTH_DOMINANT');
-  if(!previousBook)risk.push('NO_DEPTH_PERSISTENCE_YET');
+  if(!hasRecentPreviousBook)risk.push('NO_RECENT_DEPTH_PERSISTENCE');
   return {
     eligible,stage,score:Number(score.toFixed(1)),direction,
+    data_quality:dataQuality,data_status:dataStatus,data_stale:dataStatus==='DATA_STALE',
+    reason_codes:[...new Set(dataReasons)],
+    candle_freshness:{
+      one_minute_age_ms:oneData.age_ms,five_minute_age_ms:fiveData.age_ms,
+      one_minute_count:oneData.closed_count,five_minute_count:fiveData.closed_count,
+      latest_agg_trade_age_ms:tradeAgeMs,latest_agg_trade_at:latestTradeAt
+    },
+    candle_gaps:{one_minute:oneData.candle_gaps,five_minute:fiveData.candle_gaps},
+    data_sources:{one_minute:oneData.status,five_minute:fiveData.status,agg_trades:tradeStatus,order_book:bookStatus,
+      order_book_levels:{bids:bookHealth.bid_levels,asks:bookHealth.ask_levels}},
     confirmation_count:confirmationCount,confirmation_total:confirmations.length,
     large_prints:prints,candle_flow:candles,orderbook:depth,
-    orderbook_persistence:{score:Number(depthPersistence.toFixed(1)),has_previous:Boolean(previousBook),previous_near_imbalance:Number(previous.nearImbalance.toFixed(4)),current_near_imbalance:Number(depth.nearImbalance.toFixed(4))},
+    orderbook_persistence:{score:Number(depthPersistence.toFixed(1)),has_previous:hasRecentPreviousBook,
+      previous_captured_at:hasRecentPreviousBook?Number(previousBookAt):null,
+      previous_near_imbalance:Number(previous.nearImbalance.toFixed(4)),current_near_imbalance:Number(depth.nearImbalance.toFixed(4))},
     price_context:{price,price_change_24h:finite(t.priceChange24h,0),five_minute_move_pct:fiveMove,quiet_24h:quiet24,not_extended:notExtended},
     support_score:Number(supportScore.toFixed(1)),stability_score:Number(stabilityScore.toFixed(1)),
     relative:{score:50},
@@ -293,7 +375,7 @@ export function buildWhaleAccumulationAlert(input,now=Date.now()){
     baseScore:a.score,
     priceChange24h:finite(t.priceChange24h,0),
     liquidityScore:clamp(50+Math.log10(Math.max(1,(Number(t.quoteVolume24h)||1)/1500000))*30),
-    dataQualityScore:100,
+    dataQualityScore:Number(a.data_quality)||0,
     triggerScore:a.large_prints.score,
     structureScore:a.candle_flow.higherLowScore,
     participationScore:a.candle_flow.absorptionScore,
@@ -320,6 +402,9 @@ export function buildWhaleAccumulationAlert(input,now=Date.now()){
     price_change_24h:finite(t.priceChange24h,null),
     opportunity_score:a.score,potential_label:a.stage,
     whale_accumulation:a,reasons:a.reasons,risk_flags:a.risk_flags,
+    data_quality:a.data_quality,
+    data_status:{status:a.data_status||'DATA_UNAVAILABLE',stale:Boolean(a.data_stale),source:'Binance Public REST'},
+    candle_freshness:a.candle_freshness,candle_gaps:a.candle_gaps,reason_codes:a.reason_codes,
     source:a.source,limitation:a.limitation,
     detected_at:now,processed_at:now,detected_at_iso:new Date(now).toISOString(),
     detected_time_12h:formatRadarTime12h(now),detected_timezone:'Asia/Aden',
@@ -350,7 +435,7 @@ export class WhaleAccumulationRadar{
     this.clock=clock;this.logger=logger;this.running=false;this.busy=false;this.timer=null;
     this.pendingTick=false;this.pendingTickAt=null;this.coalescedTickCount=0;this.nextCyclePendingWaitMs=0;
     this.universe=[];this.universeAt=0;this.cursor=0;this.scans=0;this.alertCount=0;this.lastError=null;this.lastScanAtMs=null;
-    this.latestCandidates=[];this.previousDepth=new Map();this.lastAlertAt=new Map();this.lastCoverage={};
+    this.latestCandidates=[];this.previousDepth=new Map();this.previousDepthAt=new Map();this.lastAlertAt=new Map();this.lastCoverage={};
     this.lastRowTimings=new Map();
     this.scheduler=new ScanSchedulerJournal({radar:'RADAR_9',store,clock,logger});
     this.fastHistoryBySymbol=new Map();this.lastSelectionDistribution={};
@@ -506,10 +591,14 @@ export class WhaleAccumulationRadar{
       timing.data_fetch_ms=Math.max(0,this.clock()-dataStartedAt);
       const analysisStartedAt=this.clock();
       const prev=this.previousDepth.get(row.symbol)||null;
+      const prevAt=this.previousDepthAt.get(row.symbol)||null;
+      const analysisNow=this.clock();
       const alert=buildWhaleAccumulationAlert({
-        ticker:row,oneMinute:one.candles,fiveMinute:five.candles,aggTrades:agg.data,book:depth.data,previousBook:prev
-      },this.clock());
+        ticker:row,oneMinute:one.candles,fiveMinute:five.candles,aggTrades:agg.data,book:depth.data,
+        previousBook:prev,previousBookAt:prevAt
+      },analysisNow);
       this.previousDepth.set(row.symbol,depth.data);
+      this.previousDepthAt.set(row.symbol,analysisNow);
       this.latestCandidates.push(alert);
       this.latestCandidates.sort((a,b)=>Number(b.opportunity_score||0)-Number(a.opportunity_score||0));
       this.latestCandidates=this.latestCandidates.slice(0,60);

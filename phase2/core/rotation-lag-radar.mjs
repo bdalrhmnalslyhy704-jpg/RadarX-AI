@@ -16,6 +16,11 @@ function closedCandles(rows,now){
   ).sort((a,b)=>Number(a.openTime)-Number(b.openTime));
 }
 
+function candleAgeMs(rows,now){
+  const closeTime=Number(rows?.at(-1)?.closeTime);
+  return Number.isFinite(closeTime)&&closeTime<=now?Math.max(0,now-closeTime):Infinity;
+}
+
 function rollingVwap(candles,n){
   const rows=candles.slice(-n);
   let den=0,num=0;
@@ -113,10 +118,46 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
   const btc1h=closedCandles(benchmarks?.BTCUSDT?.one_hour,now);
   const eth1h=closedCandles(benchmarks?.ETHUSDT?.one_hour,now);
 
-  if(m15.length<60||h1.length<30||btc15.length<12||eth15.length<12){
-    return {eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true,
-      counts:{fifteen_min:m15.length,one_hour:h1.length,btc15:btc15.length,eth15:eth15.length}};
+  if(m15.length<60||h1.length<30||btc15.length<12||eth15.length<12||btc1h.length<2||eth1h.length<2){
+    return {
+      eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true,
+      data_quality:0,data_stale:false,reason_codes:['INSUFFICIENT_CLOSED_CANDLES'],
+      counts:{fifteen_min:m15.length,one_hour:h1.length,btc15:btc15.length,eth15:eth15.length,btc1h:btc1h.length,eth1h:eth1h.length}
+    };
   }
+  const freshness={
+    symbol_15m_age_ms:candleAgeMs(m15,now),
+    symbol_1h_age_ms:candleAgeMs(h1,now),
+    btc_15m_age_ms:candleAgeMs(btc15,now),
+    eth_15m_age_ms:candleAgeMs(eth15,now),
+    btc_1h_age_ms:candleAgeMs(btc1h,now),
+    eth_1h_age_ms:candleAgeMs(eth1h,now)
+  };
+  const staleFrames=Object.entries(freshness).filter(([key,age])=>
+    age>(key.includes('1h')?75:25)*60*1000
+  );
+  if(staleFrames.length){
+    return {
+      eligible:false,stage:'STALE_DATA',score:null,closed_candles_only:true,
+      data_quality:0,data_stale:true,reason_codes:['STALE_CLOSED_CANDLES'],
+      stale_timeframes:staleFrames.map(([key])=>key),candle_freshness:freshness,
+      counts:{fifteen_min:m15.length,one_hour:h1.length,btc15:btc15.length,eth15:eth15.length}
+    };
+  }
+  const maxFreshnessRatio=Math.max(
+    freshness.symbol_15m_age_ms/(25*60*1000),
+    freshness.btc_15m_age_ms/(25*60*1000),
+    freshness.eth_15m_age_ms/(25*60*1000),
+    freshness.symbol_1h_age_ms/(75*60*1000),
+    freshness.btc_1h_age_ms/(75*60*1000),
+    freshness.eth_1h_age_ms/(75*60*1000)
+  );
+  const dataQuality=clamp(100-10*maxFreshnessRatio);
+  const quoteVolume=Number(ticker?.quoteVolume24h);
+  const liquidityQuality=Number.isFinite(quoteVolume)&&quoteVolume>=750000
+    ?clamp(70+Math.log10(Math.max(1,quoteVolume/750000))*30)
+    :0;
+
 
   const close15=m15.map(c=>Number(c.close));
   const r15=pct(close15.at(-1),close15.at(-2));
@@ -269,6 +310,7 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
 
   return {
     eligible:rotationTrigger,
+    data_quality:Number(dataQuality.toFixed(1)),data_stale:false,candle_freshness:freshness,
     closed_candles_only:true,
     stage,
     direction,
@@ -331,8 +373,8 @@ export function buildRotationAlert(candidate,now=Date.now()){
     reasons:a.reasons,
     risk_flags:[
       Math.abs(finite(ticker.priceChange24h,0))>=10?'24H_ALREADY_EXTENDED':null,
-      a.metrics.volume_ratio<0.8?'LOW_ACTIVITY':null,
-      a.metrics.range_ratio>1.8?'VOLATILITY_ELEVATED':null
+      Number(a.metrics?.volume_ratio)<0.8?'LOW_ACTIVITY':null,
+      Number(a.metrics?.range_ratio)>1.8?'VOLATILITY_ELEVATED':null
     ].filter(Boolean),
     source:a.source,
     detected_at:now,
@@ -340,6 +382,8 @@ export function buildRotationAlert(candidate,now=Date.now()){
     paper_trading:true,
     real_order_execution:false,
     confidence_score:'UNKNOWN',
+    data_quality:finite(a.data_quality,0),liquidity_quality:finite(ticker.quoteVolume24h,0)>=750000?clamp(70+Math.log10(Math.max(1,Number(ticker.quoteVolume24h)/750000))*30):0,
+    data_status:{status:a.data_stale?'DATA_STALE':a.stage==='INSUFFICIENT_DATA'?'DATA_INSUFFICIENT':'LIVE_DATA',stale:Boolean(a.data_stale),data_quality:finite(a.data_quality,0),data_valid:a.stage!=='INSUFFICIENT_DATA'&&a.data_stale!==true,source:'Binance Public REST'},
     eligible:a.eligible,
     disclaimer:'رادار Rotation/Lag يبحث عن دوران/لحاق نسبي وتحول سلوكي قبل اتساع الحركة؛ لا يضمن اتجاه الحركة أو استمرارها.'
   };
@@ -455,7 +499,7 @@ export class RotationLagRadar {
       baseScore:a.score,
       priceChange24h:row.priceChange24h,
       liquidityScore:clamp(70+Math.log10(Math.max(1,row.quoteVolume24h/this.config.minQuoteVolume24h))*30),
-      dataQualityScore:90,
+      dataQualityScore:Number(a.data_quality)||0,
       triggerScore:a.activation_score||50,
       structureScore:Math.max(Number(cs.reclaim_or_reject)||0,Number(cs.value_acceptance)||0),
       participationScore:Number(cs.silent_volume)||50,
