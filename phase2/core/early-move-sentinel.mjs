@@ -769,11 +769,36 @@ export class EarlyMoveSentinel {
 
   queueDeep(symbol,row,trigger,mode='MOVE'){
     const now=this.clock();
-    const last=this.lastAlertAt.get(`${symbol}:${mode==='EARLY_WAKE'?'EARLY_WAKE_ALERT':'EARLY_MOVE_ALERT'}`)||0;
+    const key=String(symbol||'').trim().toUpperCase();
+    if(!key||!row)return;
+    const last=this.lastAlertAt.get(`${key}:${mode==='EARLY_WAKE'?'EARLY_WAKE_ALERT':'EARLY_MOVE_ALERT'}`)||0;
     const cooldown=mode==='EARLY_WAKE'?this.config.earlyWakeAlertCooldownMs:this.config.cooldownMs;
-    if(now-last<cooldown)return;
-    if(this.deepQueue.some(x=>x.symbol===symbol))return;
-    this.deepQueue.push({symbol,row,trigger,queuedAt:now,mode});
+    const queuedIndex=this.deepQueue.findIndex(x=>String(x?.symbol||'').toUpperCase()===key);
+    if(now-last<cooldown){
+      if(queuedIndex>=0)this.deepQueue[queuedIndex].row={...(this.deepQueue[queuedIndex].row||{}),...row};
+      return;
+    }
+
+    const priorityOf=value=>value==='EARLY_WAKE'?3:value==='MOVE'?2:1;
+    const incomingPriority=priorityOf(mode);
+    let nextJob={symbol:key,row:{...row},trigger:{...(trigger||{})},queuedAt:now,mode};
+    if(queuedIndex>=0){
+      const existing=this.deepQueue[queuedIndex];
+      const existingPriority=priorityOf(existing.mode);
+      nextJob.row={...(existing.row||{}),...row};
+      nextJob.queuedAt=existing.queuedAt??now;
+      // Fast ticker events must not be discarded behind a routine discovery for
+      // the same symbol. Keep the highest-priority trigger and refresh the row.
+      if(incomingPriority<existingPriority){
+        nextJob.mode=existing.mode;
+        nextJob.trigger=existing.trigger;
+      }
+      this.deepQueue.splice(queuedIndex,1);
+    }
+    const insertAt=this.deepQueue.findIndex(x=>priorityOf(x.mode)<priorityOf(nextJob.mode));
+    if(insertAt<0)this.deepQueue.push(nextJob);
+    else this.deepQueue.splice(insertAt,0,nextJob);
+
     this.drainDeepQueue().catch(e=>{
       this.lastError=String(e?.message??e);
       this.logger.warn?.('MOVE_DEEP',this.lastError);
@@ -785,6 +810,18 @@ export class EarlyMoveSentinel {
       const job=this.deepQueue.shift();
       this.deepActive++;
       try{
+        // A queued candidate may wait while other deep scans finish. Always score
+        // the freshest ticker we have, not the stale row captured when it queued.
+        const latestRow=this.lastTicker.get(String(job.symbol||'').toUpperCase());
+        if(latestRow){
+          job.row={...(job.row||{}),...latestRow};
+          const latestMove=Number(latestRow.priceChange24h??latestRow.price_change_24h);
+          if(Number.isFinite(latestMove)){
+            job.trigger={...(job.trigger||{}),movePct:latestMove};
+            const previousMove=Number(job.trigger.previousMovePct);
+            if(Number.isFinite(previousMove))job.trigger.deltaPct=latestMove-previousMove;
+          }
+        }
         const candidate=await this.scanner.scanSymbol(job.row,1,{exchangeInfo:'Binance Public REST',ticker:'Binance Public REST'},{klinesLimit:this.config.deepKlines,fastInterval:this.config.fastInterval,fastKlines:this.config.fastKlines});
         const wakeAlert=buildEarlyWakeAlert(candidate,job.trigger,{now:this.clock()});
         const preAlert=buildPreExplosionAlert(candidate,job.trigger,{now:this.clock()});
