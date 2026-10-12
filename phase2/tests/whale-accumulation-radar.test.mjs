@@ -16,6 +16,26 @@ test('Whale radar fills unique rotation slots when patrol overlaps quiet high-vo
   assert.equal(selected.length,7);
   assert.equal(new Set(selected.map(x=>x.symbol)).size,7);
 });
+test('Whale scan excludes stablecoins, wrapped majors and tokenized equities before Deep selection',()=>{
+  const radar=new WhaleAccumulationRadar({
+    rest:{},store:{},clock:()=>Date.now(),
+    config:{topAnchors:4,rotationBatchSize:4,quote:'USDT'}
+  });
+  const symbols=['PLUMEUSDT','RSRUSDT','CKBUSDT','RLUSDUSDT','USDCUSDT','FDUSDUSDT','USD1USDT','QQQBUSDT','SOXLBUSDT','WBTCUSDT'];
+  radar.universe=symbols;
+  const rows=symbols.map((symbol,i)=>({
+    symbol,lastPrice:1+i,priceChange24h:.1+i*.03,
+    quoteVolume24h:25_000_000-i*100_000,tradeCount24h:20000
+  }));
+  const selected=radar.selectBatch(rows);
+  assert.ok(selected.length>0);
+  assert.ok(selected.every(x=>!['RLUSDUSDT','USDCUSDT','FDUSDUSDT','USD1USDT',
+    'QQQBUSDT','SOXLBUSDT','WBTCUSDT'].includes(x.symbol)));
+  assert.ok(selected.some(x=>x.symbol==='PLUMEUSDT'));
+  assert.ok(selected.some(x=>x.symbol==='RSRUSDT'));
+  assert.ok(selected.some(x=>x.symbol==='CKBUSDT'));
+});
+
 test('Whale scan falls back to the shared REST request for aggTrades when no wrapper exists',async()=>{
   const calls=[];
   const now=Date.now();
@@ -79,13 +99,14 @@ test('Radar 9 bounds deep concurrency, preserves all selected coins, and coalesc
     assert.equal(report.deep_attempted,4);
     assert.equal(report.duplicate_selected_count,0);
     assert.equal(report.deep_concurrency,2);
-    assert.equal(report.micro_scan_status,'NOT_APPLICABLE_RADAR_9_HAS_NO_MICRO_STAGE');
+    assert.equal(report.radar,'WHALE_ACCUMULATION_RADAR');
+    assert.equal(report.micro_scan_status,'NOT_APPLICABLE_WHALE_ACCUMULATION_HAS_NO_MICRO_STAGE');
     assert.ok(report.deep_scan_wall_ms>0);
     assert.ok(Number.isFinite(report.scheduler_archive_write_ms));
     assert.equal(report.paper_trading,true);
     assert.equal(report.real_order_execution,false);
   }
-  assert.ok(archive.some(x=>x.stage==='CYCLE'&&x.reason_code==='RADAR9_CYCLE_TIMINGS'));
+  assert.ok(archive.some(x=>x.stage==='CYCLE'&&x.reason_code==='WHALE_ACCUMULATION_CYCLE_TIMINGS'));
 });
 
 test('Radar 9 records separate deep fetch, signal analysis, signal archive and result-send timings',async()=>{
