@@ -90,6 +90,8 @@ test('incomplete aggregate-trade coverage fails closed without scoring', () => {
     evaluate() { called = true; return {accepted: true}; }
   });
   assert.equal(called, false);
+  assert.equal(replay.summary.premove_50_status, 'TRADE_COVERAGE_INCOMPLETE');
+  assert.equal(replay.summary.first_actual_window_50pct_at, null);
   assert.ok(replay.steps.length > 0);
   assert.ok(replay.steps.every(x => x.decision === 'REJECTED' &&
     x.reason_codes.includes('AGG_TRADES_HISTORY_INCOMPLETE')));
@@ -99,9 +101,10 @@ test('forward +50/+70 percent labels are outcomes, separate from evaluator input
   const rows = candles(300);
   let sawOutcomeOnlyLeak = false;
   const start = rows[190].openTime;
+  const trades = syntheticTrades(rows);
   const replay = runHistoricalReplay({
-    symbol: 'WUSDT', oneMinuteCandles: rows, startTime: start,
-    endTime: rows[299].closeTime,
+    symbol: 'WUSDT', oneMinuteCandles: rows, aggTrades: trades, startTime: start,
+    endTime: rows[299].closeTime, tradeCoverageComplete: true,
     evaluate(input) {
       if ('outcome' in input || 'forward_max_upside_pct' in input) sawOutcomeOnlyLeak = true;
       return {accepted: false, stage: 'WATCH'};
@@ -110,6 +113,14 @@ test('forward +50/+70 percent labels are outcomes, separate from evaluator input
   assert.equal(sawOutcomeOnlyLeak, false);
   assert.ok(replay.steps.every(x => 'outcome' in x && x.outcome.is_future_data_for_scoring === false));
   assert.notEqual(replay.summary.first_actual_window_50pct_at, null);
+  const baseline = rows.find(x=>x.openTime>=start&&x.closeTime<=rows[299].closeTime).open;
+  const expectedCross = trades.find(x=>x.T>=start&&x.T<=rows[299].closeTime&&Number(x.p)>=baseline*1.5).T;
+  assert.equal(replay.summary.first_actual_window_50pct_at, expectedCross,
+    'target crossing must use the first public aggregate-trade timestamp at or above the threshold');
+  assert.equal(replay.summary.actual_window_50pct_timestamp_source, 'BINANCE_PUBLIC_AGG_TRADES');
+  assert.equal(replay.summary.actual_window_50pct_alignment, 'BINANCE_AGGTRADE_TIMESTAMP');
+  assert.ok(replay.summary.first_actual_window_50pct_at < replay.summary.first_actual_window_50pct_candle_close_at,
+    'trade crossing time should be more precise than minute candle close time');
   assert.equal(replay.summary.first_accepted_at, null);
   assert.equal(replay.summary.premove_50_status, 'NO_CORE_TRIGGER_BEFORE_PLUS_50_PERCENT');
 });
