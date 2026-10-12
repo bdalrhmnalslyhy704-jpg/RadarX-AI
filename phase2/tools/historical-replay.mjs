@@ -69,7 +69,7 @@ async function fetchAggregateTrades(client, symbol, start, end, {maxPages, maxTr
     const remaining = maxTrades - all.size;
     const result = await client.aggTrades(symbol, fromId == null
       ? {startTime: cursor, endTime: end, limit: Math.min(1000, remaining)}
-      : {fromId, endTime: end, limit: Math.min(1000, remaining)});
+      : {fromId, limit: Math.min(1000, remaining)});
     const page = normalizedTrades(result.trades ?? result.data ?? []);
     pages++;
     if (!page.length) { complete = true; break; }
