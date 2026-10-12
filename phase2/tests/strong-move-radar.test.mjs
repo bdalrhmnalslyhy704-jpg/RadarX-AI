@@ -121,6 +121,28 @@ const closedOnly=buildStrongMoveAnalysis(openRows,make5m(),ticker,NOW);
 assert.equal(closedOnly.closed_candles_only,true);
 assert.ok(closedOnly.metrics.return_1m!==analysis.metrics.return_1m);
 
+const concurrencyRadar=new StrongMoveRadar({
+  rest:{},store:{},config:{pollMs:60_000,scanConcurrency:2,topMoverCount:4,rotationBatchSize:0},
+  clock:()=>NOW
+});
+concurrencyRadar.running=true;
+concurrencyRadar.universe=['AUSDT','BUSDT','CUSDT','DUSDT'];
+concurrencyRadar.universeAt=NOW;
+concurrencyRadar.tickerRows=async()=>concurrencyRadar.universe.map((symbol,index)=>({
+  symbol,priceChange24h:index+1,quoteVolume24h:5_000_000
+}));
+let activeScans=0,maxActiveScans=0;
+concurrencyRadar.scanRow=async()=>{
+  activeScans++;maxActiveScans=Math.max(maxActiveScans,activeScans);
+  await Promise.resolve();
+  activeScans--;
+};
+await concurrencyRadar.tick();
+assert.equal(maxActiveScans,2,'symbol scans should overlap at the configured bounded concurrency');
+assert.equal(concurrencyRadar.busy,false);
+assert.equal(concurrencyRadar.health().scan_concurrency,2);
+await concurrencyRadar.stop();
+
 const radar=new StrongMoveRadar({
   rest:{},
   store:{},
