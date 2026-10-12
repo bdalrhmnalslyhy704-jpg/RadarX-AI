@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import {buildStrongMoveAnalysis,buildStrongMoveAlert,StrongMoveRadar} from '../core/strong-move-radar.mjs';
+import {buildStrongMoveAnalysis,buildStrongMoveAlert,finalizeStrongMoveCandidate,StrongMoveRadar} from '../core/strong-move-radar.mjs';
+import {radarTelemetry} from '../core/radar-telemetry.mjs';
 
 const NOW=10_000_000_000;
 
@@ -92,6 +93,22 @@ assert.equal(alert.eligible,true);
 assert.equal(alert.paper_trading,true);
 assert.equal(alert.real_order_execution,false);
 assert.equal(alert.confidence_score,'UNKNOWN');
+
+// End-to-end timing: do not reuse the observation timestamp as the final gate timestamp.
+const observedAt=NOW+100;
+alert.observed_at=observedAt;
+alert.source_event_at=NOW;
+const telemetryCountBefore=radarTelemetry.totalRecorded;
+const finalizedTiming=finalizeStrongMoveCandidate(alert,{...ticker,minQuoteVolume24h:1_000_000},{
+  now:NOW+120,clock:()=>NOW+125,minScore:76,lastAlertAt:0,alertCooldownMs:0,telemetry:true
+});
+assert.equal(finalizedTiming.decisionStartedAt,NOW+120);
+assert.equal(finalizedTiming.decisionCompletedAt,NOW+125);
+assert.equal(radarTelemetry.totalRecorded,telemetryCountBefore+1);
+const timingEvent=radarTelemetry.events.at(-1);
+assert.equal(timingEvent.symbol,'BURSTUSDT');
+assert.equal(timingEvent.pipeline_latency_ms,25);
+assert.equal(timingEvent.source_data_age_ms,125);
 const lowBuy=make1m();
 for(const c of lowBuy.slice(-3))c.takerBuyQuoteVolume=c.quoteVolume*0.69;
 const rejectedBuy=buildStrongMoveAnalysis(lowBuy,make5m(),ticker,NOW,aggTrades);
