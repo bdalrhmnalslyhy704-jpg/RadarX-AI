@@ -96,3 +96,18 @@ assert.ok(service.includes('at > 0L && at >= cursor'),
   'fallback must not omit events with the current timestamp when stable IDs differ');
 assert.ok(service.includes('sortAlertsChronologically(root)') && service.includes('root.put("oldest_first", true)'),
   'bounded fallback candidates must be notified in chronological order without moving the durable cursor');
+
+assert.match(service, /radar_alert_pending_notification_ids/,
+  'a durable replay row must be checkpointed as pending before posting to Android');
+assert.match(service, /getActiveNotifications\(\)/,
+  'a restart must reconcile a previously accepted notification before attempting another post');
+assert.match(service, /ALERT_POST_RECONCILED_ACTIVE/,
+  'reconciled notifications must be distinguishable from new NotificationManager posts');
+const smokeReplay = await readFile('android/smoke-test.sh','utf8');
+assert.match(smokeReplay, /handled_unique_count/,
+  'the 623-event replay must count notifications reconciled after restart as handled without requiring duplicate posts');
+assert.match(smokeReplay, /reconciled_log_keys/,
+  'the replay audit must prove every accepted or reconciled alert has a unique stable identity');
+assert.match(smokeReplay, /Duplicate NotificationManager post requests/,
+  'the replay smoke test must reject duplicate notification post requests');
+
