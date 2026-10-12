@@ -170,6 +170,9 @@ async function main() {
         if (finalized.accepted) lastAlertAt.value = input.now;
         return {
           accepted: finalized.accepted,
+          accepted_mode: finalized.acceptedByMode ?? (finalized.accepted ? 'STRICT' : 'NONE'),
+          early_warning: finalized.earlyGate ?? null,
+          strict_gate_failures: finalized.notificationGate.standard_gate_failures ?? finalized.notificationGate.failures ?? [],
           alert,
           score: finalized.alertScore,
           stage: alert.potential_label ?? alert.strong_move?.stage,
@@ -213,7 +216,12 @@ async function main() {
     output, generated_at: report.generated_at,
     symbols: report.results.map(x => ({
       symbol: x.symbol, steps: x.summary.replay_steps, accepted: x.summary.accepted,
+      accepted_modes: x.summary.accepted_mode_counts ?? [],
       rejected: x.summary.rejected, trade_coverage_complete: x.data_quality.trade_coverage_complete,
+      premove_50_status: x.summary.premove_50_status,
+      first_accepted_at: x.summary.first_accepted_at,
+      first_early_warning_accepted_at: x.summary.first_early_warning_accepted_at,
+      first_strict_accepted_at: x.summary.first_strict_accepted_at,
       first_window_50pct_at: x.summary.first_actual_window_50pct_at,
       first_window_70pct_at: x.summary.first_actual_window_70pct_at
     })),
