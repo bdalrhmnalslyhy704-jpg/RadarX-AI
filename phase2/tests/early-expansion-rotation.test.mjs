@@ -186,6 +186,19 @@ test('Radar 8 does not classify missing daily change as a quiet candidate',()=>{
   assert.equal(selected.some(x=>x.symbol==='UNKNOWN24HUSDT'&&x._selection_lane==='quiet'),false);
 });
 
+test('Radar 8 excludes benchmarks and tokenized-equity symbols even before the full-market cache is ready',()=>{
+  const radar=makeRadar({microScanCandidates:12,quietReserve:4,rotationReserve:3});
+  const input=rows(24);
+  input.push(
+    {symbol:'BTCUSDT',lastPrice:65000,priceChange24h:1,quoteVolume24h:50_000_000,tradeCount24h:100000},
+    {symbol:'BNBUSDT',lastPrice:600,priceChange24h:2,quoteVolume24h:10_000_000,tradeCount24h:50000},
+    {symbol:'SOXLBUSDT',lastPrice:14,priceChange24h:5,quoteVolume24h:5_000_000,tradeCount24h:30000}
+  );
+  const selected=radar.selectMicro(input,fastMap(input),11);
+  assert.equal(selected.length,12);
+  assert.ok(selected.every(x=>!['BTCUSDT','BNBUSDT','SOXLBUSDT'].includes(x.symbol)));
+});
+
 test('Radar 8 prioritizes symbols not covered in the prior rotation cycle',()=>{
   const radar=makeRadar({microScanCandidates:10,quietReserve:0,rotationReserve:5});
   const input=rows(50),fast=fastMap(input);
