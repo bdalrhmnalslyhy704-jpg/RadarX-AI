@@ -52,6 +52,7 @@ public final class MainActivity extends Activity {
     private static final String PREF_REPLAY_TEST_FEED_URL = "radarx_test_alert_feed_url";
     private static final String PREF_REPLAY_TEST_SCAN_MS = "radarx_test_scan_interval_ms";
     private boolean pendingBackgroundStart;
+    private boolean suppressAutoStartForSmokeStop;
 
     private WebView webView;
     private WebViewAssetLoader assetLoader;
@@ -134,7 +135,9 @@ public final class MainActivity extends Activity {
 
         setContentView(webView);
         webView.loadUrl(APP_URL);
-        webView.postDelayed(this::ensureContinuousMonitoring, 1400);
+        webView.postDelayed(() -> {
+            if (!suppressAutoStartForSmokeStop) ensureContinuousMonitoring();
+        }, 1400);
     }
 
     @Override
@@ -295,6 +298,21 @@ public final class MainActivity extends Activity {
                 .commit();
         if (saved) Log.i("RadarXSmoke", "REPLAY_TEST_OVERRIDE_CONFIGURED");
         else Log.e("RadarXSmoke", "REPLAY_TEST_OVERRIDE_PERSIST_FAILED");
+
+        // Debug-emulator-only control for deterministic background-service restart tests.
+        // This exercises the service's non-exported STOP action from inside the app UID;
+        // adb shell cannot directly start this non-exported service on Android 10.
+        if (launchIntent.getBooleanExtra("radarx_test_stop_background_service", false)) {
+            suppressAutoStartForSmokeStop = true;
+            Intent stopIntent = new Intent(this, RadarXBackgroundMonitorService.class);
+            stopIntent.setAction(RadarXBackgroundMonitorService.ACTION_STOP);
+            try {
+                startService(stopIntent);
+                Log.i("RadarXBackground", "REPLAY_TEST_STOP_BACKGROUND_REQUEST");
+            } catch (Exception error) {
+                Log.e("RadarXBackground", "REPLAY_TEST_STOP_BACKGROUND_REQUEST_FAILED", error);
+            }
+        }
     }
 
     private void startBackgroundMonitor() {
