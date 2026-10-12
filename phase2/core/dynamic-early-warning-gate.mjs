@@ -49,9 +49,18 @@ export function evaluateDynamicEarlyWarningGate(alert={},row={},{
   const triggerCodes=(Array.isArray(coreTriggerFailures)?coreTriggerFailures:[]).map(x=>String(x));
   const flow3Available=m.three_second_liquidity?.available===true&&taker3s!==null;
   const missing3sOnly=!flow3Available&&triggerCodes.length===1&&triggerCodes[0]===MISSING_3S_FAILURE;
-  const fallback=missing3sOnly&&takerRatio!==null&&takerRatio>=0.85&&score>=84&&confirmations>=8&&
-    (volumeRatio??0)>=2&&(tradeRatio??0)>=1.8&&(return1??0)>=0.45&&(return3??0)>=0.45&&
+  // When the 3-second bucket is unavailable, require exceptional independent evidence.
+  // This rejects borderline fallback candidates (e.g. ~2x volume and ~2x trades) while
+  // preserving the high-flow/high-participation GTC-like historical candidate.
+  const fallback=missing3sOnly&&takerRatio!==null&&takerRatio>=0.90&&score>=84&&confirmations>=8&&
+    (volumeRatio??0)>=5&&(tradeRatio??0)>=4&&(return1??0)>=0.45&&(return3??0)>=0.45&&
     (acceleration??0)>=0.25&&(m.breakout_up===true||m.micro_breakout===true);
+  // Low 24h movement is not itself a reason to reject pre-breakout opportunities, but
+  // it demands exceptional flow/participation evidence rather than ordinary confluence.
+  const exceptionalLowBaselineEvidence=score>=84&&takerRatio!==null&&takerRatio>=0.90&&
+    (volumeRatio??0)>=5&&(tradeRatio??0)>=4&&confirmations>=8&&
+    (return1??0)>=0.45&&(return3??0)>=0.45&&(acceleration??0)>=0.25&&
+    (m.breakout_up===true||m.micro_breakout===true);
 
   if(!direction.startsWith('UP'))failures.push('EARLY_WARNING_DIRECTION_NOT_UP');
   if(score<82)failures.push('EARLY_WARNING_SCORE_TOO_LOW');
@@ -69,6 +78,9 @@ export function evaluateDynamicEarlyWarningGate(alert={},row={},{
   if(sourceClose===null||sourceAgeMs===null||sourceAgeMs<0||sourceAgeMs>90_000)failures.push('EARLY_WARNING_SOURCE_CANDLE_STALE');
   if(quoteVolume===null||quoteVolume<minQuote)failures.push('EARLY_WARNING_LIQUIDITY_BELOW_MINIMUM');
   if(priceChange24h===null||priceChange24h>35)failures.push('EARLY_WARNING_24H_EXTENSION_TOO_LARGE');
+  if(priceChange24h!==null&&priceChange24h<12&&!exceptionalLowBaselineEvidence) {
+    failures.push('EARLY_WARNING_LOW_BASELINE_MOVE_REQUIRES_EXCEPTIONAL_EVIDENCE');
+  }
   if(risks.some(x=>/SELLING_PRESSURE_HIGH|TAKER_BUY_PRESSURE_NOT_CONFIRMED|DATA_QUALITY|FUTURE_DATA|STALE_DATA|CANDLE_STALE|CANDLE_GAP|WIDE_SPREAD|LOW_LIQUIDITY|LIQUIDITY_TOO_WEAK|NO_PRIMARY_TRIGGER|FLOW_WITHOUT_RELATIVE_SUPPORT|VOLUME_WITHOUT_PRICE_FOLLOW_THROUGH|DISJOINTED_SIGNAL/.test(x))) {
     failures.push('EARLY_WARNING_HARD_RISK_PRESENT');
   }
