@@ -30,6 +30,31 @@ test('telemetry records latency, candle age, rejection reason, phase and liquidi
   assert.equal(telemetry.snapshot().summary.gate_accepted, 1);
 });
 
+test('telemetry distinguishes dynamic early-warning accepts and keeps softened risks visible',()=>{
+  const now=1_800_000_000_000;
+  const telemetry=new RadarTelemetry({capacity:100,clock:()=>now});
+  const event=telemetry.recordDecision({
+    radar:'STRONG_MOVE_RADAR',symbol:'WUSDT',potential_label:'PRE_EXPANSION_WATCH',
+    notification_mode:'DYNAMIC_EARLY_WARNING',observed_at:now-50,source_event_at:now-1050,
+    early_warning:{score:79.4,soft_failures:['RISK:ADVANCED_CHASE_RISK','24H_MOVE_EXTENSION_SOFT_RISK']},
+    price:0.02153
+  },{
+    eligible:true,accepted_mode:'DYNAMIC_EARLY_WARNING',score:82.2,failures:[],
+    soft_failures:['RISK:ADVANCED_CHASE_RISK'],
+    dynamic_early_gate:{score:79.4,soft_failures:['RISK:ADVANCED_CHASE_RISK','24H_MOVE_EXTENSION_SOFT_RISK']}
+  },{now});
+  assert.equal(event.accepted,true);
+  assert.equal(event.accepted_mode,'DYNAMIC_EARLY_WARNING');
+  assert.equal(event.stage_decision,'EARLY_WARNING_ACCEPTED');
+  assert.equal(event.score,79.4);
+  assert.ok(event.soft_reason_codes.includes('RISK:ADVANCED_CHASE_RISK'));
+  assert.ok(event.soft_reason_codes.includes('24H_MOVE_EXTENSION_SOFT_RISK'));
+  const snapshot=telemetry.snapshot();
+  assert.equal(snapshot.summary.gate_accepted,1);
+  assert.equal(snapshot.summary.rejected,0);
+  assert.equal(snapshot.top_rejection_reasons.length,0);
+});
+
 test('telemetry ring buffer is bounded and reports missing ages as null, not zero', () => {
   const telemetry = new RadarTelemetry({capacity: 100, clock: () => 1_800_000_000_000});
   for (let i = 0; i < 130; i++) {
