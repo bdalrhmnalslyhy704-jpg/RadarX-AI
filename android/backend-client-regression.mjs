@@ -21,11 +21,13 @@ const falconRead=await getFalconEyeRadar({limit:12,since:123,scan:false},async u
 assert.equal(falconRead.ok,true);
 assert.equal(falconRead.body.candidates[0].symbol,'PLUMEUSDT');
 assert.match(falconRequestUrl,/\\/api\\/falcon-eye-radar\\?limit=12&since=123&scan=0/);
-assert.throws(()=>getFalconEyeRadar({limit:51,scan:false},async()=>({ok:true,status:200,json:async()=>({})})),/INVALID_LIMIT/);
+await assert.rejects(getFalconEyeRadar({limit:51,scan:false},async()=>({ok:true,status:200,json:async()=>({})})),/INVALID_LIMIT/);
 
 const falconScreen=await readFile(new URL('./app/src/main/assets/radarx-radar-screen.mjs',import.meta.url),'utf8');
 assert.match(falconScreen,/getFalconEyeRadar/);
 assert.match(falconScreen,/مرشحون تحت المراقبة/);
+assert.match(falconScreen,/data-c/);
+assert.match(falconScreen,/getFalconEyeRadar\(\{limit:50,scan:false\}\)/);
 assert.match(falconScreen,/ليس تنبيه شراء أو أمر تداول/);
 const index=await readFile(new URL('./app/src/main/assets/index.html',import.meta.url),'utf8');
 assert.match(index,/radarx-market-radar-screen.mjs/);
