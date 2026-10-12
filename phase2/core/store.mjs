@@ -1,11 +1,11 @@
-import {mkdir,readFile,writeFile,rename,appendFile} from 'node:fs/promises';
+import {mkdir,readFile,writeFile,rename,appendFile,open} from 'node:fs/promises';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 
 export class DurableStore {
   constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.ready=false;this.lastWriteAt=null;
     this.files={subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
-      signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),strongMoveAlerts:join(dir,'strong-move-alerts.jsonl'),rotationAlerts:join(dir,'rotation-alerts.jsonl'),liquidityAbsorptionAlerts:join(dir,'liquidity-absorption-alerts.jsonl'),kahirAlerts:join(dir,'kahir-alerts.jsonl'),doomsdayAlerts:join(dir,'doomsday-alerts.jsonl'),professorAlerts:join(dir,'professor-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),earlyExpansionEvents:join(dir,'early-expansion-events.jsonl'),agentMemory:join(dir,'agent-memory.jsonl'),agentMarketState:join(dir,'agent-market-state.json')};}
+      signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),strongMoveAlerts:join(dir,'strong-move-alerts.jsonl'),rotationAlerts:join(dir,'rotation-alerts.jsonl'),liquidityAbsorptionAlerts:join(dir,'liquidity-absorption-alerts.jsonl'),kahirAlerts:join(dir,'kahir-alerts.jsonl'),doomsdayAlerts:join(dir,'doomsday-alerts.jsonl'),professorAlerts:join(dir,'professor-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),earlyExpansionEvents:join(dir,'early-expansion-events.jsonl'),agentMemory:join(dir,'agent-memory.jsonl'),agentMarketState:join(dir,'agent-market-state.json'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),alMuqawimAlerts:join(dir,'al-muqawim-alerts.jsonl'),coinHunterAlerts:join(dir,'coin-hunter-alerts.jsonl'),whaleAccumulationAlerts:join(dir,'whale-accumulation-alerts.jsonl'),falconEyeAlerts:join(dir,'falcon-eye-alerts.jsonl'),schedulerEvents:join(dir,'scan-scheduler-events.jsonl')};}
   async init(){await mkdir(this.dir,{recursive:true});
     for(const [k,p] of Object.entries(this.files)){try{await readFile(p,'utf8');}catch{
       await writeFile(p,p.endsWith('.jsonl')?'':'{}',{flag:'wx'}).catch(()=>{});
@@ -57,16 +57,48 @@ export class DurableStore {
   async appendKahirAlert(v){return this.lock(async()=>{await appendFile(this.files.kahirAlerts,JSON.stringify(v)+'\\n');this.lastWriteAt=Date.now();});}
   async readKahirAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('kahirAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
 
+  async getPreExpansionOutcomes(){return this.readJson(this.files.preExpansionOutcomes);}
+  async updatePreExpansionOutcomes(updater){return this.lock(async()=>{const current=await this.readJson(this.files.preExpansionOutcomes);const next=typeof updater==='function'?await updater(current):updater;if(!next||typeof next!=='object'||Array.isArray(next))throw new Error('INVALID_PRE_EXPANSION_OUTCOME_STATE');await this.writeJson(this.files.preExpansionOutcomes,next);return next;});}
+  async appendAlMuqawimAlert(v){return this.lock(async()=>{await appendFile(this.files.alMuqawimAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async readAlMuqawimAlerts({sinceMs=0,limit=100}={}){return (await this.readRecent('alMuqawimAlerts',Math.min(500,Math.max(1,Number(limit)||100)))).filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
+  async appendCoinHunterAlert(v){return this.lock(async()=>{await appendFile(this.files.coinHunterAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async readCoinHunterAlerts({sinceMs=0,limit=100}={}){return (await this.readRecent('coinHunterAlerts',Math.min(500,Math.max(1,Number(limit)||100)))).filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
+  async appendWhaleAccumulationAlert(v){return this.lock(async()=>{await appendFile(this.files.whaleAccumulationAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async readWhaleAccumulationAlerts({sinceMs=0,limit=100}={}){return (await this.readRecent('whaleAccumulationAlerts',Math.min(500,Math.max(1,Number(limit)||100)))).filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
+  async appendFalconEyeAlert(v){return this.lock(async()=>{await appendFile(this.files.falconEyeAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  async readFalconEyeAlerts({sinceMs=0,limit=100}={}){return (await this.readRecent('falconEyeAlerts',Math.min(500,Math.max(1,Number(limit)||100)))).filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).sort((a,b)=>Number(a?.processed_at??a?.detected_at??0)-Number(b?.processed_at??b?.detected_at??0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
+  async appendScanSchedulerEvents(events){const rows=(Array.isArray(events)?events:[events]).filter(x=>x&&typeof x==='object'&&!Array.isArray(x));if(!rows.length)return {written:0};return this.lock(async()=>{await appendFile(this.files.schedulerEvents,rows.map(x=>JSON.stringify(x)).join('\n')+'\n');this.lastWriteAt=Date.now();return {written:rows.length};});}
+  async readScanSchedulerEvents({radar=null,symbol=null,sinceMs=0,limit=1000}={}){const take=Math.min(5000,Math.max(1,Math.trunc(Number(limit)||1000)));const radarKey=radar?String(radar).toUpperCase():null,symbolKey=symbol?String(symbol).toUpperCase():null;return (await this.readRecent('schedulerEvents',5000)).filter(x=>(!radarKey||String(x?.radar||'').toUpperCase()===radarKey)&&(!symbolKey||String(x?.symbol||'').toUpperCase()===symbolKey)&&Number(x?.event_at??0)>=Number(sinceMs||0)).sort((a,b)=>Number(a?.event_at??0)-Number(b?.event_at??0)).slice(-take);}
   async readRecent(kind,limit=100){
     const file=this.files[kind];
     if(!file)return[];
-    let s='';
-    try{s=await readFile(file,'utf8');}catch{return[];}
-    const rows=[];
-    for(const line of s.split('\n').filter(Boolean).slice(-Math.max(1,Number(limit)||100))){
-      try{rows.push(JSON.parse(line));}catch{}
-    }
-    return rows.reverse();
+    // Read backwards from the end of JSONL journals. Reading the entire file and
+    // then splitting it caused multi-hundred-MB transient strings/arrays at startup.
+    const take=Math.min(5000,Math.max(1,Math.trunc(Number(limit)||100)));
+    let handle=null;
+    try{
+      handle=await open(file,'r');
+      const {size}=await handle.stat();
+      let position=size,newlineCount=0;
+      const chunks=[];
+      const blockSize=64*1024;
+      while(position>0&&newlineCount<=take){
+        const length=Math.min(blockSize,position);
+        position-=length;
+        const buffer=Buffer.allocUnsafe(length);
+        const {bytesRead}=await handle.read(buffer,0,length,position);
+        if(!bytesRead)break;
+        const chunk=buffer.subarray(0,bytesRead);
+        for(let index=0;(index=chunk.indexOf(10,index))!==-1;index++)newlineCount++;
+        chunks.unshift(chunk);
+      }
+      const tail=Buffer.concat(chunks).toString('utf8');
+      const lines=tail.split('\n').filter(Boolean).slice(-take);
+      const rows=[];
+      for(const line of lines){try{rows.push(JSON.parse(line));}catch{}}
+      return rows.reverse();
+    }catch{return[];}
+    finally{await handle?.close().catch(()=>{});}
   }
   async health(){try{await mkdir(this.dir,{recursive:true});return{state:this.ready?'LIVE':'INIT',path:this.dir,last_write_at:this.lastWriteAt};}
     catch(e){return{state:'ERROR',path:this.dir,error:String(e?.message??e),last_write_at:this.lastWriteAt};}}

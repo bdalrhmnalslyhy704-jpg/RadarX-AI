@@ -17,7 +17,7 @@ permissions:
 jobs:
   radar8-validation:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 240
     steps:
       - name: Checkout Build 224 Radar 8 branch
         uses: actions/checkout@v4
@@ -53,6 +53,12 @@ jobs:
           node --check phase2/core/historical-replay.mjs
           node --check phase2/tools/historical-replay.mjs
           node --check phase2/tests/historical-replay.test.mjs
+          node --check phase2/core/spot-market-snapshot-hub.mjs
+          node --check phase2/tests/spot-market-snapshot-hub.test.mjs
+          node --check phase2/core/radar-swarm-coordinator.mjs
+          node --check phase2/core/historical-replay-matrix.mjs
+          node --check phase2/tools/historical-replay-matrix.mjs
+          node --check phase2/tests/historical-replay-matrix.test.mjs
           node --check phase2/tests/radar-telemetry.test.mjs
 
       - name: Run Binance REST rate-limit tests
@@ -132,17 +138,65 @@ jobs:
           fi
           exit 0
 
+      - name: Run 90-case public Spot historical replay matrix
+        id: wide-historical-matrix
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p reports
+          node phase2/tools/historical-replay-matrix.mjs \
+            --max-trade-pages 500 \
+            --max-trades 500000 \
+            --timeout-ms 3600000 \
+            --output reports/radarx-historical-matrix
+          matrix_status=$?
+          printf 'exit_code=%s\\n' "$matrix_status" > reports/radarx-historical-matrix-status.txt
+          {
+            echo "## 90-case public Spot historical matrix"
+            echo ""
+            echo "- CLI exit code: $matrix_status (0 means all three windows have complete coverage; 2 means incomplete coverage; 1 means execution error)."
+            echo "- Scope: 30 Spot USDT symbols × 3 historical windows; public market data only."
+            echo "- Incomplete symbol/window coverage is diagnostic and must not be counted as a successful test."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -f reports/radarx-historical-matrix/matrix-summary.json ]; then
+            node --input-type=module >> "$GITHUB_STEP_SUMMARY" <<'NODE'
+          import {readFile} from 'node:fs/promises';
+          const report = JSON.parse(await readFile('reports/radarx-historical-matrix/matrix-summary.json','utf8'));
+          console.log('- Matrix status: ' + report.matrix_summary.status);
+          console.log('- Planned symbol-window replays: ' + report.planned_symbol_window_replays);
+          console.log('- Completed windows: ' + report.matrix_summary.completed_windows + '/' + report.matrix_summary.window_count);
+          console.log('- Incomplete windows: ' + report.matrix_summary.coverage_incomplete_windows);
+          console.log('- Observed market regimes: ' + report.matrix_summary.regimes_observed.join(', '));
+          for (const window of report.windows || []) {
+            console.log('');
+            console.log('### ' + window.id + ' — ' + window.market_regime.regime);
+            console.log('- Coverage: ' + window.summary.coverage_status);
+            console.log('- Complete symbols: ' + window.summary.coverage_complete_symbols + '/' + window.summary.requested_symbols);
+            console.log('- Accepted/rejected decisions: ' + window.summary.accepted_decisions + '/' + window.summary.rejected_decisions);
+          }
+          NODE
+          fi
+          exit "$matrix_status"
+
       - name: Upload forensic report
         uses: actions/upload-artifact@v4
         with:
-          name: radar8-forensic-2026-10-06
+          name: radar8-forensic-and-market-matrix
+          if-no-files-found: error
           path: |
             reports/radar8-forensic-2026-10-06.json
             reports/radar8-forensic-2026-10-06.md
             reports/historical-replay-gtc-w.json
             reports/historical-replay-status.txt
-          if-no-files-found: error
+            reports/radarx-historical-matrix/**
+            reports/radarx-historical-matrix-status.txt
           retention-days: 14
+
+      - name: Require complete 90-case matrix coverage
+        if: steps.wide-historical-matrix.outcome == 'failure'
+        run: |
+          echo "The wide historical market matrix failed or had incomplete coverage. Review the uploaded matrix report; this is not a green validation."
+          exit 1
 
       - name: No deployment guard
         run: |

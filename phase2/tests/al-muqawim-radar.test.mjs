@@ -1,0 +1,112 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {buildAlMuqawimAnalysis,AlMuqawimRadar} from '../core/al-muqawim-radar.mjs';
+
+function makeSeries(count,tfMs,trend=1,anchor=Date.now()){
+  const now=anchor;
+  const rows=[];
+  const pattern=[0,2,1,-1];
+  for(let i=0;i<count;i++){
+    const close=100+trend*i*0.55+pattern[i%4]*0.9;
+    const open=close-0.15;
+    rows.push({
+      openTime:now-(count-i)*tfMs,
+      closeTime:now-(count-i-1)*tfMs,
+      open,high:close+0.55,low:close-0.55,close,volume:1000,closed:true
+    });
+  }
+  return rows;
+}
+
+test('Al Muqawim confirms aligned bullish multi-timeframe structure',()=>{
+  const now=Date.now();
+  const series={
+    '4h':makeSeries(100,4*60*60*1000,0.04,now),
+    '1h':makeSeries(120,60*60*1000,0.04,now),
+    '15m':makeSeries(160,15*60*1000,0.04,now)
+  };
+  const latestHour=series['1h'].at(-1);
+  latestHour.close+=1.25;
+  latestHour.high=Math.max(latestHour.high,latestHour.close+0.55);
+  const a=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:105.46,priceChange24h:1},now,{maPeriod:50});
+  assert.equal(a.direction,'UP');
+  assert.equal(a.closed_candles_only,true);
+  assert.equal(a.eligible,true);
+  assert.ok(Number.isFinite(a.entry_timing.score));
+  assert.ok(Number.isFinite(a.entry_timing.freshness));
+  assert.equal(a.timeframes['4h'].structure.direction,'UP');
+  assert.equal(a.timeframes['1h'].moving_average.direction.startsWith('UP'),true);
+  assert.equal(a.data_status,'LIVE_DATA');
+  assert.ok(a.data_quality>=85);
+});
+
+test('Al Muqawim flags a lower-timeframe conflict',()=>{
+  const now=Date.now();
+  const series={
+    '4h':makeSeries(100,4*60*60*1000,1,now),
+    '1h':makeSeries(120,60*60*1000,1,now),
+    '15m':makeSeries(160,15*60*1000,-1,now)
+  };
+  const a=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:90},now,{maPeriod:50});
+  assert.equal(a.direction,'UP');
+  assert.equal(a.entry_risk,'AGAINST_HTF_TREND');
+  assert.equal(a.eligible,false);
+});
+
+
+test('Al Muqawim rejects a technically bullish but already-extended entry',()=>{
+  const now=Date.now();
+  const series={
+    '4h':makeSeries(100,4*60*60*1000,1,now),
+    '1h':makeSeries(120,60*60*1000,1,now),
+    '15m':makeSeries(160,15*60*1000,1,now)
+  };
+  const a=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:105.46,priceChange24h:12},now,{maPeriod:50});
+  assert.equal(a.direction,'UP');
+  assert.equal(a.eligible,false);
+  assert.ok(a.reasons.some(x=>String(x).includes('ممتدة')));
+});
+
+test('Al Muqawim rejects stale higher-timeframe data rather than labeling it live',()=>{
+  const now=Date.now();
+  const series={
+    '4h':makeSeries(100,4*60*60*1000,0.04,now-24*60*60*1000),
+    '1h':makeSeries(120,60*60*1000,0.04,now),
+    '15m':makeSeries(160,15*60*1000,0.04,now)
+  };
+  const a=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:105.46,priceChange24h:1},now,{maPeriod:50});
+  assert.equal(a.eligible,false);
+  assert.equal(a.stage,'STALE_DATA');
+  assert.equal(a.data_status,'DATA_STALE');
+  assert.equal(a.data_stale,true);
+});
+
+test('Al Muqawim refuses discontinuous 15m candles and distinguishes insufficient candles',()=>{
+  const now=Date.now();
+  const series={
+    '4h':makeSeries(100,4*60*60*1000,0.04,now),
+    '1h':makeSeries(120,60*60*1000,0.04,now),
+    '15m':makeSeries(160,15*60*1000,0.04,now)
+  };
+  series['15m'].splice(135,1);
+  const gap=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:105.46,priceChange24h:1},now,{maPeriod:50});
+  assert.equal(gap.eligible,false);
+  assert.equal(gap.stage,'DATA_GAP');
+  assert.equal(gap.data_status,'DATA_GAP');
+
+  const short={...series,'15m':makeSeries(25,15*60*1000,0.04,now)};
+  const insufficient=buildAlMuqawimAnalysis(short,{symbol:'TESTUSDT',lastPrice:105.46,priceChange24h:1},now,{maPeriod:50});
+  assert.equal(insufficient.eligible,false);
+  assert.equal(insufficient.stage,'INSUFFICIENT_DATA');
+  assert.equal(insufficient.data_status,'DATA_INSUFFICIENT');
+});
+
+test('Al Muqawim preserves its rotation budget when the top three overlap patrol symbols',()=>{
+  const now=Date.now();
+  const radar=new AlMuqawimRadar({rest:{},store:{},config:{batchSize:5},clock:()=>now});
+  radar.universe=Array.from({length:16},(_,i)=>`M${String(i).padStart(2,'0')}USDT`);
+  const rows=radar.universe.map((symbol,i)=>({symbol,lastPrice:1+i,priceChange24h:12-i,quoteVolume24h:2_000_000+i}));
+  const selected=radar.selectBatch(rows);
+  assert.equal(selected.length,8);
+  assert.equal(new Set(selected.map(x=>x.symbol)).size,8);
+});

@@ -51,6 +51,14 @@ function categoryHitsOf(alert){
   const gate=alert?.elite_gate;
   if(Number.isFinite(Number(gate?.category_hits)))return Number(gate.category_hits);
   const r=radarId(alert);
+  // Falcon Eye keeps its scores nested to preserve the alert schema. Reading only
+  // alert.components yielded zero category hits and blocked valid Falcon pushes.
+  if(r==='FALCON_EYE_RADAR'){
+    const scores=alert?.falcon_eye?.component_scores||{};
+    return ['quietness','compression','momentum','volume','trades','taker','structure',
+      'resistance','relative_strength','derivatives','breakout','atr','range']
+      .filter(key=>num(scores[key],0)>=70).length;
+  }
   const c=alert?.components||{};
   const checks=r==='EARLY_MOVE_RADAR'
     ? [c.momentum,c.volume,c.buying_pressure,c.orderbook_pressure,c.structure,c.squeeze,c.relative_strength,c.mtf_alignment,c.ema_reclaim,c.rsi_score,c.obv_accumulation,c.wyckoff_spring].filter(v=>num(v,0)>=65)

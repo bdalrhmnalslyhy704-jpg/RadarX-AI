@@ -270,3 +270,17 @@ test('TEST_FIXTURE: Kahir immediate scan failure returns resilient status instea
     assert.match(String(body.scan.error),/TRANSIENT_BINANCE_FAILURE/);
   }finally{await new Promise(resolve=>server.close(resolve));}
 });
+
+
+test('TEST_FIXTURE: market coverage API reports source completeness and strict freshness metadata',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-market-coverage-api-')),store=await new DurableStore({dir}).init();
+  const hub={health:()=>({ticker_status:'LIVE',ticker_age_ms:100,ticker_ttl_ms:1500}),coverage:async quote=>({quote,eligible_spot_symbols:3,ticker_symbols_received:3,eligible_symbols_with_ticker:3,missing_ticker_count:0,missing_ticker_samples:[],ticker_snapshot_age_ms:100,ticker_ttl_ms:1500,ticker_source:'BINANCE_PUBLIC_REST',status:'COMPLETE',observed_at:Date.now()})};
+  const server=createApiServer({config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},store,
+    monitor:{health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})},pushProvider:new NoopPushProvider(),marketSnapshotHub:hub});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const res=await fetch('http://127.0.0.1:'+server.address().port+'/api/market-coverage?quote=USDT');
+    assert.equal(res.status,200);const body=await res.json();assert.equal(body.coverage.status,'COMPLETE');assert.equal(body.coverage.missing_ticker_count,0);assert.equal(body.meta.live,true);assert.equal(body.meta.expired_ticker_data_served,false);assert.equal(body.meta.real_order_execution,false);
+    const bad=await fetch('http://127.0.0.1:'+server.address().port+'/api/market-coverage?quote=USDT%2F');assert.equal(bad.status,400);
+  }finally{await new Promise(resolve=>server.close(resolve));}
+});

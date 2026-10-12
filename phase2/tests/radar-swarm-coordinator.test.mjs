@@ -1,0 +1,16 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {RadarSwarmCoordinator} from '../core/radar-swarm-coordinator.mjs';
+function makeRunner({fail=false}={}){const state={running:false,starts:0,stops:0};return {state,instance:{start(){state.starts++;if(fail)return Promise.reject(new Error('synthetic start failure'));state.running=true;},stop(){state.stops++;state.running=false;},health(){return {running:state.running};}}};}
+test('swarm launches twelve independent radars and isolates a failed worker',async()=>{const workers=Array.from({length:12},(_,i)=>makeRunner({fail:i===4}));const swarm=new RadarSwarmCoordinator({runners:workers.map((w,i)=>({id:'RADAR_'+(i+1),instance:w.instance})),startupSpacingMs:0,logger:{warn(){},error(){}}});const first=swarm.start(),second=swarm.start();assert.equal(first,second,'repeated start reuses the launch plan');await first;await new Promise(resolve=>setImmediate(resolve));const state=swarm.snapshot();assert.equal(state.expected_count,12);assert.equal(state.registered_count,12);assert.equal(state.running_count,11);assert.equal(state.failed_count,1);assert.equal(state.status,'DEGRADED');assert.ok(workers.every(w=>w.state.starts===1));await swarm.stop();assert.ok(workers.every(w=>w.state.stops===1));});
+test('swarm rejects duplicate worker ownership and reports missing slots',()=>{const a=makeRunner(),b=makeRunner();assert.throws(()=>new RadarSwarmCoordinator({runners:[{id:'dup',instance:a.instance},{id:'DUP',instance:b.instance}]}),/RADAR_SWARM_DUPLICATE_ID/);const swarm=new RadarSwarmCoordinator({runners:[{id:'RADAR_1',instance:a.instance}],expectedCount:12});assert.equal(swarm.snapshot().status,'INCOMPLETE');assert.equal(swarm.snapshot().missing_count,11);});
+
+test('an asynchronously failed bootstrap stays failed and is stopped even if it set running first',async()=>{
+  const state={running:false,starts:0,stops:0};
+  const instance={start(){state.starts++;state.running=true;return Promise.reject(new Error('bootstrap failed after timer start'));},stop(){state.stops++;state.running=false;},health(){return {running:state.running};}};
+  const swarm=new RadarSwarmCoordinator({runners:[{id:'EARLY',instance}],expectedCount:1,startupSpacingMs:0,logger:{warn(){},error(){}}});
+  await swarm.start();await new Promise(resolve=>setImmediate(resolve));
+  const snapshot=swarm.snapshot();
+  assert.equal(snapshot.radars[0].status,'FAILED');assert.equal(snapshot.running_count,0);assert.equal(state.stops,1);assert.equal(state.running,false);
+  await swarm.stop();
+});

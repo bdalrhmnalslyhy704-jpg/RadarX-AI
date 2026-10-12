@@ -240,10 +240,10 @@ function buildKahirAlert(candidate,analysis,now=Date.now()){
 }
 
 export class KahirRadar{
-  constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
+  constructor({rest,marketData=null,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
-    this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
+    this.rest=rest;this.marketData=marketData;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={...KAHIR_RADAR_DEFAULTS,...config};
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.busy=false;
     this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
@@ -260,12 +260,12 @@ export class KahirRadar{
   async stop(){this.running=false;if(this.timer)clearInterval(this.timer);this.timer=null;}
   noteError(e,where='scan'){this.lastError=String(e?.message??e);this.logger.warn?.('KAHIR_RADAR_'+where,this.lastError);}
   async refreshUniverse(){
-    const r=await this.rest.request('/api/v3/exchangeInfo');
+    const r=this.marketData?await this.marketData.exchangeInfo():await this.rest.request('/api/v3/exchangeInfo');
     this.universe=buildSpotUniverse(r.data,this.config.quote).map(x=>x.symbol);
     this.universeAt=this.clock();
   }
   async tickerRows(){
-    const r=await this.rest.request('/api/v3/ticker/24hr');
+    const r=this.marketData?await this.marketData.ticker24h():await this.rest.request('/api/v3/ticker/24hr');
     return (Array.isArray(r.data)?r.data:[])
       .map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
       .filter(x=>this.universe.includes(x.symbol))

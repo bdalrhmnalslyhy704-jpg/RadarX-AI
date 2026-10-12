@@ -1178,6 +1178,7 @@ export async function withRetry(task, {
 export class MarketUniverseScanner {
   constructor({
     rest,
+    marketData = null,
     strategyConfig,
     config = {},
     clock = () => Date.now(),
@@ -1186,6 +1187,7 @@ export class MarketUniverseScanner {
   } = {}) {
     if (!rest || typeof rest.request !== 'function') throw new Error('REST_CLIENT_REQUIRED');
     this.rest = rest;
+    this.marketData = marketData;
     this.config = { ...MARKET_RADAR_DEFAULTS, ...config };
     this.strategyConfig = strategyConfig;
     this.clock = clock;
@@ -1209,18 +1211,21 @@ export class MarketUniverseScanner {
     this._requests.set(key, promise);
     try {
       return await promise;
-    } catch (error) {
-      this._requests.delete(key);
-      throw error;
+    } finally {
+      // Coalesce only overlapping reads. Retaining a successful promise here would
+      // turn a request de-duplication map into an unbounded stale-data cache.
+      if(this._requests.get(key)===promise)this._requests.delete(key);
     }
   }
 
   async exchangeInfo() {
+    if(this.marketData)return this.marketData.exchangeInfo();
     const r = await this.requestOnce('/api/v3/exchangeInfo');
     return { data: r.data, source: r.source, receivedAt: this.clock() };
   }
 
   async ticker24h() {
+    if(this.marketData)return this.marketData.ticker24h();
     const r = await this.requestOnce('/api/v3/ticker/24hr');
     return { data: r.data, source: r.source, receivedAt: this.clock() };
   }

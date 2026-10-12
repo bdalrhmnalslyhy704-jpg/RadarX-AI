@@ -6,7 +6,11 @@ export const RADAR_NAMES=Object.freeze({
   KAHIR_RADAR:'Radar 5 — القاهر',
   DOOMSDAY_RADAR:'Radar 6 — يوم القيامة',
   PROFESSOR_RADAR:'Radar 7 — البروفيسور',
-  EARLY_EXPANSION_RADAR:'Radar 8 — البرق'
+  EARLY_EXPANSION_RADAR:'Radar 8 — البرق',
+  ALMUQAWIM_RADAR:'المقاوم',
+  COIN_HUNTER_RADAR:'صائد العملات',
+  WHALE_ACCUMULATION_RADAR:'تجمع الحيتان',
+  FALCON_EYE_RADAR:'عين الصقر'
 });
 export const RADAR_PROFILES=Object.freeze({
   EARLY_MOVE_RADAR:Object.freeze({

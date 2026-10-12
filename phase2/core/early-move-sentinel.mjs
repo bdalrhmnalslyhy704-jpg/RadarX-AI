@@ -539,10 +539,10 @@ export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
 }
 
 export class EarlyMoveSentinel {
-  constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console,tickerWsFactory=null,scannerFactory=null}){
+  constructor({rest,marketData=null,store,pushManager=null,config={},clock=()=>Date.now(),logger=console,tickerWsFactory=null,scannerFactory=null}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
-    this.rest=rest;
+    this.rest=rest;this.marketData=marketData;
     this.store=store;
     this.pushManager=pushManager;
     this.config={...MOVE_RADAR_DEFAULTS,...config};
@@ -635,10 +635,10 @@ export class EarlyMoveSentinel {
 
   async reconcile(initial=false){
     if(!this.running)return;
-    const info=await this.rest.request('/api/v3/exchangeInfo');
+    const info=this.marketData?await this.marketData.exchangeInfo():await this.rest.request('/api/v3/exchangeInfo');
     const universe=buildSpotUniverse(info.data,this.config.quote);
     this.spotSymbols=new Set(universe.map(x=>x.symbol));
-    const tick=await this.rest.request('/api/v3/ticker/24hr');
+    const tick=this.marketData?await this.marketData.ticker24h():await this.rest.request('/api/v3/ticker/24hr');
     const rows=Array.isArray(tick.data)?tick.data:[];
     this.lastReconcileAt=this.clock();
     for(const raw of rows){

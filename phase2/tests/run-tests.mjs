@@ -25,6 +25,7 @@ const phase2=[
   'phase2/tests/end-to-end.test.mjs',
   'phase2/tests/frontend-contract.test.mjs',
   'phase2/tests/historical-replay.test.mjs',
+  'phase2/tests/historical-replay-matrix.test.mjs',
   'phase2/tests/integration-failures.test.mjs',
   'phase2/tests/ai-agent-hub.test.mjs',
   'phase2/tests/king-intelligence.test.mjs',
@@ -46,6 +47,12 @@ const phase2=[
   'phase2/tests/store.test.mjs',
   'phase2/tests/strategy-market-radar-integration.test.mjs',
   'phase2/tests/strong-move-radar.test.mjs',
+  'phase2/tests/spot-market-snapshot-hub.test.mjs',
+  'phase2/tests/radar-swarm-coordinator.test.mjs',
+  'phase2/tests/al-muqawim-radar.test.mjs',
+  'phase2/tests/coin-hunter-radar.test.mjs',
+  'phase2/tests/whale-accumulation-radar.test.mjs',
+  'phase2/tests/falcon-eye-radar.test.mjs',
   'phase2/tests/symbol-deep-scan.test.mjs',
   'phase2/tests/ws.test.mjs'
 ];
