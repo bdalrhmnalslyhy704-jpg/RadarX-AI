@@ -20,7 +20,7 @@ const falconRead=await getFalconEyeRadar({limit:12,since:123,scan:false},async u
 });
 assert.equal(falconRead.ok,true);
 assert.equal(falconRead.body.candidates[0].symbol,'PLUMEUSDT');
-assert.match(falconRequestUrl,/\\/api\\/falcon-eye-radar\\?limit=12&since=123&scan=0/);
+assert.ok(falconRequestUrl.includes('/api/falcon-eye-radar?limit=12&since=123&scan=0'),falconRequestUrl);
 await assert.rejects(getFalconEyeRadar({limit:51,scan:false},async()=>({ok:true,status:200,json:async()=>({})})),/INVALID_LIMIT/);
 
 const falconScreen=await readFile(new URL('./app/src/main/assets/radarx-radar-screen.mjs',import.meta.url),'utf8');
