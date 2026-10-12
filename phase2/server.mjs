@@ -173,7 +173,7 @@ export async function startServer({
   // Falcon Eye uses public Binance Spot + public Futures market data. No API keys are required.
   const falconFuturesRest=new RestClient({...config.rest,baseUrls:['https://fapi.binance.com']});
   const falconEyeRadar=new FalconEyeRadar({rest, futuresRest:falconFuturesRest, store, pushManager:push, config:config.falconEyeRadar||{}, logger});
-  const radarSwarm=new RadarSwarmCoordinator({expectedCount:12,startupSpacingMs:config.radarSwarm?.startupSpacingMs??150,logger,runners:[
+  const radarSwarm=new RadarSwarmCoordinator({expectedCount:12,startupSpacingMs:config.radarSwarm?.startupSpacingMs??700,logger,runners:[
     {id:'RADAR1',name:'المدمر',instance:moveSentinel},
     {id:'RADAR2',name:'ملك الظلام',instance:strongMoveRadar},
     {id:'RADAR3',name:'الجوكر',instance:rotationLagRadar},
@@ -199,15 +199,25 @@ export async function startServer({
     }
   };
   safeStart('MONITOR',monitor);
-  // Keep the 20-analyst intelligence cache warm continuously so the Android center opens on recent work.
-  safeStart('MULTI_ANALYST_XFACTOR',multiAnalystRadar);
-  const autoStart=config.radarControl?.autostart!==false;
+  // Staging smoke tests must never start live market polling unless explicitly opted in.
+  // Production retains the continuous analyst worker and all twelve coordinated radars.
+  const explicitStagingRadarStart=process.env.RADARX_RADARS_AUTOSTART==='true';
+  const stagingSmokeMode=config.environment==='staging'&&!explicitStagingRadarStart;
+  if(!stagingSmokeMode){
+    // Keep the 20-analyst intelligence cache warm continuously in real runtime environments.
+    safeStart('MULTI_ANALYST_XFACTOR',multiAnalystRadar);
+  } else {
+    logger.info('Staging smoke mode: live market workers are disabled unless RADARX_RADARS_AUTOSTART=true.');
+  }
+  const autoStart=!stagingSmokeMode&&config.radarControl?.autostart!==false;
   if(autoStart){
     const swarmStatus=await radarSwarm.start();
     logger.info('[RADAR_SWARM_START] '+JSON.stringify({status:swarmStatus.status,expected:swarmStatus.expected_count,registered:swarmStatus.registered_count,spacing_ms:swarmStatus.startup_spacing_ms}));
+  } else if(stagingSmokeMode){
+    logger.info('[RADAR_SWARM_START] '+JSON.stringify({status:'DISABLED_FOR_STAGING_SMOKE',expected:12,registered:12,spacing_ms:config.radarSwarm?.startupSpacingMs??700}));
   } else {
     logger.info('Optional radar auto-start disabled; Falcon Eye remains an independent continuous recorder.');
-    // Preserve Build 224's background discovery invariant when optional auto-start is disabled.
+    // Preserve Build 224's background discovery invariant when optional auto-start is disabled in production.
     safeStart('RADAR9',falconEyeRadar);
   }
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
