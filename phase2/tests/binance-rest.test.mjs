@@ -72,7 +72,7 @@ test('overlapping identical public GETs are coalesced without caching later requ
   let calls=0,releaseFetch;
   const responseWait=new Promise(resolve=>{releaseFetch=resolve;});
   const client=new RestClient({
-    baseUrls:['https://example.test'],minIntervalMs:0,maxWeightPerMinute:100,safetyMarginWeight:0,
+    baseUrls:['https://example.test'],minIntervalMs:0,maxWeightPerMinute:6000,safetyMarginWeight:0,
     clock:()=>1_900_000_000_000,sleepFn:async()=>{},
     fetchImpl:async()=>{calls++;await responseWait;return response(200,[{symbol:'GTCUSDT'}]);}
   });
