@@ -42,6 +42,8 @@ public final class RadarXBackgroundMonitorService extends Service {
     public static final String ACTION_STOP = "com.radarx.app.action.STOP_BACKGROUND_MONITOR";
 
     private static final String TAG = "RadarXBackground";
+    // Serialize fetch/replay cycles across executor replacement and service re-starts.
+    private static final Object SCAN_LOCK = new Object();
     private static final String BACKEND_RADAR_ALERTS =
             "https://radarx-ai-triple-production.up.railway.app/api/radar-alerts?radar=ALL&limit=50";
     private static final String BACKEND_RADAR_ALERTS_FALLBACK =
@@ -141,6 +143,7 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     private void scanOnceSafe() {
+        synchronized (SCAN_LOCK) {
         if (stopping) return;
         touchHeartbeat();
         try {
@@ -166,6 +169,7 @@ public final class RadarXBackgroundMonitorService extends Service {
             if (!loggedFirstScan) { loggedFirstScan = true; Log.w(TAG, "BACKGROUND_SCAN_ERROR", error); }
             Log.w(TAG, "Background unified radar fetch failed", error);
             updateStatus("لا يوجد اتصال بالخادم الآن • تعذر التحقق من التنبيهات • ستستأنف المراقبة ويُراجع السجل الدائم عند عودة الاتصال");
+        }
         }
     }
 
