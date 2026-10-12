@@ -67,6 +67,58 @@ test('very strong long-window buy flow may emit only a watch when the completed 
   assert.equal(result.flow_evidence.three_second_bucket_available,false);
 });
 
+test('ordinary low-baseline confluence is withheld unless flow, volume and trade participation are exceptional',()=>{
+  const alert=wLike({
+    price_change_24h:3.37,
+    risk_flags:['VOLATILITY_EXTREME'],
+    strong_move:{
+      ...wLike().strong_move,score:87.2,
+      metrics:{
+        ...wLike().strong_move.metrics,
+        return_1m:0.9955,return_3m:1.9488,acceleration:1.4592,
+        volume_ratio:1.8822,trade_ratio:2.1507,taker_buy_ratio:0.7611,
+        three_second_taker_buy_ratio:1,
+        three_second_liquidity:{available:true,taker_buy_ratio:1},
+        independent_confirmations:9,breakout_up:true,micro_breakout:true
+      }
+    }
+  });
+  const result=evaluateDynamicEarlyWarningGate(alert,{...row,priceChange24h:3.37},{
+    now:NOW,alertScore:87.2
+  });
+  assert.equal(result.eligible,false);
+  assert.ok(result.failures.includes('EARLY_WARNING_LOW_BASELINE_MOVE_REQUIRES_EXCEPTIONAL_EVIDENCE'));
+});
+
+test('borderline missing-3s fallback is rejected; only exceptional long-flow evidence can replace that bucket',()=>{
+  const alert=wLike({
+    price_change_24h:10.09,
+    eligible:false,
+    risk_flags:['THREE_SECOND_FLOW_UNAVAILABLE','VOLATILITY_EXTREME'],
+    strong_move:{
+      ...wLike().strong_move,score:88.3,
+      trigger_diagnostics:{eligible:false,failed_checks:['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']},
+      metrics:{
+        ...wLike().strong_move.metrics,
+        return_1m:1.3741,return_3m:1.7384,acceleration:1.816,
+        volume_ratio:2.0306,trade_ratio:2.4018,taker_buy_ratio:0.9139,
+        three_second_taker_buy_ratio:null,
+        three_second_liquidity:{available:false,taker_buy_ratio:null},
+        independent_confirmations:8,breakout_up:true,micro_breakout:true
+      }
+    }
+  });
+  const result=evaluateDynamicEarlyWarningGate(alert,{...row,priceChange24h:10.09},{
+    now:NOW,alertScore:88.3,
+    strictFailures:['BASE_ALERT_NOT_ELIGIBLE'],
+    coreTriggerFailures:['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']
+  });
+  assert.equal(result.eligible,false);
+  assert.equal(result.fallback_3s_flow,false);
+  assert.ok(result.failures.includes('EARLY_WARNING_CORE_GATE_FAILED'));
+  assert.ok(result.failures.includes('EARLY_WARNING_LOW_BASELINE_MOVE_REQUIRES_EXCEPTIONAL_EVIDENCE'));
+});
+
 test('weak or absent buyer flow cannot pass the early-warning lane',()=>{
   const alert=wLike();
   alert.strong_move.metrics.taker_buy_ratio=0.69;
