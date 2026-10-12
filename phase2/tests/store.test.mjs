@@ -186,7 +186,7 @@ test('a stalled scheduler journal compaction cannot block user-visible radar ale
     store.appendKahirAlert({id:'KAHIR:TESTUSDT:1000',radar:'KAHIR_RADAR',symbol:'TESTUSDT',processed_at:1000,price:1}),
     new Promise((_,reject)=>setTimeout(()=>reject(new Error('MAIN_STORE_BLOCKED_BY_SCHEDULER_JOURNAL')),750))
   ]);
-  assert.equal(persisted,undefined);
+  assert.deepEqual(persisted,{written:1});
   const rows=await store.readKahirAlerts({sinceMs:0,limit:10});
   assert.equal(rows.length,1);
   assert.equal(rows[0].symbol,'TESTUSDT');
