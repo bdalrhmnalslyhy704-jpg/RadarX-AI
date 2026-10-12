@@ -293,10 +293,10 @@ export function buildAlMuqawimAlert(ticker,series,now,config={}){
 const STABLE_BASES=new Set(['USDC','BUSD','FDUSD','TUSD','USDP','DAI','USDE','USD1']);
 
 export class AlMuqawimRadar{
-  constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
+  constructor({rest,marketData=null,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
-    this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
+    this.rest=rest;this.marketData=marketData;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={quote:'USDT',pollMs:60000,universeRefreshMs:5*60*1000,minQuoteVolume24h:1000000,batchSize:5,alertCooldownMs:45*60*1000,minScore:86,minEntryTimingScore:78,minEntryFreshness:72,maxAlert24hMovePct:8,maxAlertsPerHour:3,maPeriod:50,...config};
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;this.lastAlertAt=new Map();this.alertTimestamps=[];this.alertCount=0;this.scans=0;this.lastError=null;this.lastScanAtMs=null;this.busy=false;
   }
@@ -309,13 +309,13 @@ export class AlMuqawimRadar{
   async stop(){this.running=false;if(this.timer)clearInterval(this.timer);this.timer=null;}
   noteError(e){this.lastError=String(e?.message??e);this.logger.warn?.('ALMUQAWIM',this.lastError);}
   async refreshUniverse(){
-    const r=await this.rest.request('/api/v3/exchangeInfo');
+    const r=this.marketData?await this.marketData.exchangeInfo():await this.rest.request('/api/v3/exchangeInfo');
     const symbols=buildSpotUniverse(r.data,this.config.quote);
     this.universe=symbols.map(x=>x.symbol).filter(s=>{const base=s.endsWith(this.config.quote)?s.slice(0,-this.config.quote.length):s;return !STABLE_BASES.has(base);});
     this.universeAt=this.clock();this.cursor=0;
   }
   async tickerRows(){
-    const r=await this.rest.request('/api/v3/ticker/24hr');
+    const r=this.marketData?await this.marketData.ticker24h():await this.rest.request('/api/v3/ticker/24hr');
     return (Array.isArray(r.data)?r.data:[]).map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
       .filter(x=>this.universe.includes(x.symbol))
       .filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h);
