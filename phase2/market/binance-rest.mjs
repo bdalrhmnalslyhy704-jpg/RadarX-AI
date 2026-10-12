@@ -111,6 +111,8 @@ export class RestClient {
     this.queueWaitSamples=[];
     this.lastQueueWaitMs=null;
     this.maxQueueWaitMs=0;
+    this.inflightRequests=new Map();
+    this.coalescedRequestCount=0;
   }
 
   get budgetLimit() {
@@ -128,6 +130,8 @@ export class RestClient {
     queue_wait_ms_p95:this.queueWaitSamples.length ? [...this.queueWaitSamples].sort((a,b)=>a-b)[Math.ceil(this.queueWaitSamples.length*0.95)-1] : null,
     queue_wait_ms_max:this.queueWaitSamples.length ? this.maxQueueWaitMs : null,
     queue_wait_samples:this.queueWaitSamples.length,
+    inflight_request_count:this.inflightRequests.size,
+    coalesced_request_count:this.coalescedRequestCount,
     request_weight_used_last_minute:this.localWeightUsed(),
     observed_request_weight_1m:this.observedWeight,
     observed_request_weight_at:this.observedWeightAt,
@@ -233,7 +237,21 @@ export class RestClient {
   }
 
   request(path,query={}) {
-    return this.enqueue(()=>this._request(path,query));
+    const normalized=Object.entries(query||{}).filter(([,value])=>value!=null)
+      .map(([key,value])=>[key,String(value)]).sort(([a],[b])=>a.localeCompare(b));
+    const key=String(path)+'?'+new URLSearchParams(normalized).toString();
+    const existing=this.inflightRequests.get(key);
+    if(existing){
+      this.coalescedRequestCount++;
+      return existing;
+    }
+    const work=this.enqueue(()=>this._request(path,query));
+    let tracked;
+    tracked=work.finally(()=>{
+      if(this.inflightRequests.get(key)===tracked)this.inflightRequests.delete(key);
+    });
+    this.inflightRequests.set(key,tracked);
+    return tracked;
   }
 
   async klines(symbol,interval,opts={}) {
