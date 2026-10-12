@@ -32,7 +32,7 @@ test('Whale scan falls back to the shared REST request for aggTrades when no wra
   assert.deepEqual(calls,[{path:'/api/v3/aggTrades',query:{symbol:'TESTUSDT',limit:1000}}]);
 });
 
-test('Radar 9 bounds deep concurrency, preserves all selected coins, and coalesces overdue timer ticks without overlapping cycles',async()=>{
+test('Whale Accumulation bounds deep concurrency, preserves all selected coins, and coalesces overdue timer ticks without overlapping cycles',async()=>{
   const archive=[],logs=[];
   const store={
     async readScanSchedulerEvents({radar=null}={}){return archive.filter(x=>!radar||x.radar===radar);},
@@ -78,17 +78,18 @@ test('Radar 9 bounds deep concurrency, preserves all selected coins, and coalesc
     assert.equal(report.deep_selected,4);
     assert.equal(report.deep_attempted,4);
     assert.equal(report.duplicate_selected_count,0);
+    assert.equal(report.radar,'WHALE_ACCUMULATION_RADAR');
     assert.equal(report.deep_concurrency,2);
-    assert.equal(report.micro_scan_status,'NOT_APPLICABLE_RADAR_9_HAS_NO_MICRO_STAGE');
+    assert.equal(report.micro_scan_status,'NOT_APPLICABLE_WHALE_RADAR_HAS_NO_MICRO_STAGE');
     assert.ok(report.deep_scan_wall_ms>0);
     assert.ok(Number.isFinite(report.scheduler_archive_write_ms));
     assert.equal(report.paper_trading,true);
     assert.equal(report.real_order_execution,false);
   }
-  assert.ok(archive.some(x=>x.stage==='CYCLE'&&x.reason_code==='RADAR9_CYCLE_TIMINGS'));
+  assert.ok(archive.some(x=>x.stage==='CYCLE'&&x.reason_code==='WHALE_ACCUMULATION_CYCLE_TIMINGS'));
 });
 
-test('Radar 9 records separate deep fetch, signal analysis, signal archive and result-send timings',async()=>{
+test('Whale Accumulation records separate deep fetch, signal analysis, signal archive and result-send timings',async()=>{
   const now=Date.now(),calls=[];
   const radar=new WhaleAccumulationRadar({
     rest:{
@@ -111,7 +112,7 @@ test('Radar 9 records separate deep fetch, signal analysis, signal archive and r
 });
 
 
-test('Radar 9 uses a bounded five-worker Deep batch to meet its 60-second cadence without dropping selected symbols',async()=>{
+test('Whale Accumulation uses a bounded five-worker Deep batch to meet its 60-second cadence without dropping selected symbols',async()=>{
   const archive=[],logs=[];
   const store={
     async readScanSchedulerEvents({radar=null}={}){return archive.filter(x=>!radar||x.radar===radar);},
@@ -143,11 +144,12 @@ test('Radar 9 uses a bounded five-worker Deep batch to meet its 60-second cadenc
   radar.running=true;
   await radar.tick();
   await radar.stop();
-  assert.equal(maxActive,5,'Radar 9 may run at most five concurrent deep workers');
+  assert.equal(maxActive,5,'Whale Accumulation may run at most five concurrent deep workers');
   assert.equal(completedRows,6,'all six selected symbols must finish');
   assert.equal(radar.lastCoverage.deep_attempted,6);
   assert.equal(radar.lastCoverage.scanned_successfully,6);
   const report=logs.filter(x=>x.startsWith('[RADARX_SCHEDULER_REPORT]')).map(x=>JSON.parse(x.slice(x.indexOf('{')))).at(-1);
+  assert.equal(report.radar,'WHALE_ACCUMULATION_RADAR');
   assert.equal(report.deep_concurrency,5);
   assert.equal(report.deep_selected,6);
   assert.equal(report.deep_completed,6);

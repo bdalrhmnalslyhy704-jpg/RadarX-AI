@@ -351,7 +351,7 @@ export class WhaleAccumulationRadar{
     this.universe=[];this.universeAt=0;this.cursor=0;this.scans=0;this.alertCount=0;this.lastError=null;this.lastScanAtMs=null;
     this.latestCandidates=[];this.previousDepth=new Map();this.lastAlertAt=new Map();this.lastCoverage={};
     this.lastRowTimings=new Map();
-    this.scheduler=new ScanSchedulerJournal({radar:'RADAR_9',store,clock,logger});
+    this.scheduler=new ScanSchedulerJournal({radar:'WHALE_ACCUMULATION_RADAR',store,clock,logger});
     this.fastHistoryBySymbol=new Map();this.lastSelectionDistribution={};
   }
   start(){
@@ -544,11 +544,11 @@ export class WhaleAccumulationRadar{
     const cycleStartedAt=this.clock();
     const pollMs=Math.max(30000,Number(this.config.pollMs)||60000);
     const metrics={
-      radar:'RADAR_9',cycle:Math.max(1,Math.trunc(Number(this.lastCoverage?.cycle||0))+1),
+      radar:'WHALE_ACCUMULATION_RADAR',cycle:Math.max(1,Math.trunc(Number(this.lastCoverage?.cycle||0))+1),
       cadence_ms:pollMs,started_at:new Date(cycleStartedAt).toISOString(),
       archive_hydration_ms:0,universe_refresh_ms:0,ticker_collection_ms:0,data_collection_ms:0,
       fast_snapshot_ms:0,fast_selection_ms:0,fast_scan_ms:0,
-      micro_scan_ms:null,micro_scan_status:'NOT_APPLICABLE_RADAR_9_HAS_NO_MICRO_STAGE',
+      micro_scan_ms:null,micro_scan_status:'NOT_APPLICABLE_WHALE_RADAR_HAS_NO_MICRO_STAGE',
       deep_scan_wall_ms:0,deep_row_time_sum_ms:0,deep_data_fetch_sum_ms:0,
       signal_analysis_sum_ms:0,signal_archive_write_ms:0,result_send_ms:0,
       scheduler_archive_write_ms:0,fast_symbols:0,deep_selected:0,deep_attempted:0,
@@ -607,7 +607,7 @@ export class WhaleAccumulationRadar{
         this.scheduler.record({stage:'FAST',symbol:row.symbol,eventType:'COMPLETED',cycle:metrics.cycle,
           at:fastSeenAt,queuedAt:collectionStartedAt,startedAt:collectionStartedAt,
           elapsedMs:metrics.ticker_collection_ms,fastSeenAt,
-          reasonCode:'RADAR9_FAST_TICKER_SNAPSHOT_RECEIVED',extra:fastSnapshot});
+          reasonCode:'WHALE_ACCUMULATION_FAST_TICKER_SNAPSHOT_RECEIVED',extra:fastSnapshot});
         if(!selectedSymbols.has(symbol)){
           const reason=row._exceptional?'EXCEPTIONAL_FAST_PATH_CAPACITY':row._quiet?'QUIET_ANCHOR_CAPACITY':'OVERDUE_ROTATION_CAPACITY';
           this.scheduler.defer('DEEP',symbol,{cycle:metrics.cycle,at:fastSeenAt,fastSeenAt,reasonCode:reason,
@@ -615,7 +615,7 @@ export class WhaleAccumulationRadar{
         }
       }
       this.scheduler.record({stage:'FAST',eventType:'CYCLE_COMPLETE',cycle:metrics.cycle,at:fastSeenAt,
-        elapsedMs:metrics.ticker_collection_ms,reasonCode:'RADAR9_TICKER_SNAPSHOT_RECEIVED',
+        elapsedMs:metrics.ticker_collection_ms,reasonCode:'WHALE_ACCUMULATION_TICKER_SNAPSHOT_RECEIVED',
         extra:{symbols_total:rows.length,data_collection_ms:metrics.data_collection_ms,
           fast_snapshot_ms:metrics.fast_snapshot_ms,selection_ms:metrics.fast_selection_ms}});
       for(const row of selected){
@@ -673,11 +673,11 @@ export class WhaleAccumulationRadar{
             metrics.result_send_ms+=Number(outcomeTiming.result_send_ms)||0;
             metrics.failed++;
             this.lastError=String(e?.message??e);
-            this.logger.warn?.('[RADARX_RADAR9_SCAN_FAILED] '+JSON.stringify({
+            this.logger.warn?.('[RADARX_WHALE_ACCUMULATION_SCAN_FAILED] '+JSON.stringify({
               cycle:metrics.cycle,symbol,error:String(e?.message??e),stack:e?.stack||null
             }));
             this.scheduler.finished('DEEP',symbol,{cycle:metrics.cycle,at:this.clock(),startedAt,outcome:'FAILED',lane,
-              reasonCode:'RADAR9_SCAN_EXCEPTION',failureCounted:true,fastSeenAt,
+              reasonCode:'WHALE_ACCUMULATION_SCAN_EXCEPTION',failureCounted:true,fastSeenAt,
               extra:{error:String(e?.message??e),row_timings_ms:outcomeTiming}});
           }
         }
@@ -701,7 +701,7 @@ export class WhaleAccumulationRadar{
       cycleError=error;
       this.lastError=String(error?.message??error);
       metrics.cycle_error=this.lastError;
-      this.logger.warn?.('[RADARX_RADAR9_CYCLE_ERROR] '+JSON.stringify({cycle:metrics.cycle,error:this.lastError}));
+      this.logger.warn?.('[RADARX_WHALE_ACCUMULATION_CYCLE_ERROR] '+JSON.stringify({cycle:metrics.cycle,error:this.lastError}));
     }finally{
       metrics.coalesced_tick_count=this.coalescedTickCount;
       metrics.pending_tick_age_ms=this.pendingTickAt===null?0:Math.max(0,this.clock()-this.pendingTickAt);
@@ -713,7 +713,7 @@ export class WhaleAccumulationRadar{
       metrics.cycle_overrun_ms=Math.max(0,metrics.cycle_duration_ms-pollMs);
       metrics.ended_at=new Date(this.clock()).toISOString();
       this.scheduler.record({stage:'CYCLE',eventType:'COMPLETED',cycle:metrics.cycle,at:this.clock(),
-        elapsedMs:metrics.cycle_duration_ms,reasonCode:'RADAR9_CYCLE_TIMINGS',
+        elapsedMs:metrics.cycle_duration_ms,reasonCode:'WHALE_ACCUMULATION_CYCLE_TIMINGS',
         extra:{...metrics,cycle_error:cycleError?this.lastError:null}});
       const summaryFlushStartedAt=this.clock();
       const summaryFlush=await this.scheduler.flush();
@@ -744,7 +744,7 @@ export class WhaleAccumulationRadar{
         this.nextCyclePendingWaitMs=pendingAt===null?0:Math.max(0,this.clock()-pendingAt);
         queueMicrotask(()=>this.tick().catch(error=>{
           this.lastError=String(error?.message??error);
-          this.logger.warn?.('[RADARX_RADAR9_PENDING_CYCLE_FAILED] '+JSON.stringify({error:this.lastError}));
+          this.logger.warn?.('[RADARX_WHALE_ACCUMULATION_PENDING_CYCLE_FAILED] '+JSON.stringify({error:this.lastError}));
         }));
       }
     }
