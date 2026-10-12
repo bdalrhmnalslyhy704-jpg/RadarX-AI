@@ -5,20 +5,42 @@ import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
 import {isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)||0));
-const finite=(x,d=null)=>Number.isFinite(Number(x))?Number(x):d;
+const finite=(x,d=null)=>x!==null&&x!==undefined&&!(typeof x==='string'&&!x.trim())&&Number.isFinite(Number(x))?Number(x):d;
 const mean=xs=>{const a=xs.filter(Number.isFinite);return a.length?a.reduce((s,x)=>s+x,0)/a.length:null};
 const median=xs=>{const a=xs.filter(Number.isFinite).sort((a,b)=>a-b);if(!a.length)return null;const m=Math.floor(a.length/2);return a.length%2?a[m]:(a[m-1]+a[m])/2};
 const std=xs=>{const a=xs.filter(Number.isFinite);if(a.length<2)return null;const m=mean(a);return Math.sqrt(mean(a.map(x=>(x-m)**2)))};
 const pct=(a,b)=>Number.isFinite(a)&&Number.isFinite(b)&&a!==0?(b/a-1)*100:null;
+const hasNumber=v=>v!==null&&v!==undefined&&!(typeof v==='string'&&!v.trim())&&Number.isFinite(Number(v));
 const closed=(rows,now)=> (Array.isArray(rows)?rows:[]).filter(c=>
   c?.closed!==false &&
-  Number.isFinite(Number(c?.openTime)) &&
-  Number.isFinite(Number(c?.closeTime)) &&
+  hasNumber(c?.openTime) &&
+  hasNumber(c?.closeTime) &&
   Number(c.closeTime)<=now &&
-  Number(c.open)>0 && Number(c.high)>=Number(c.low) &&
-  Number(c.low)>0 && Number(c.close)>0 &&
-  Number(c.volume)>=0
+  hasNumber(c.open)&&Number(c.open)>0&&
+  hasNumber(c.high)&&hasNumber(c.low)&&Number(c.high)>=Number(c.low)&&
+  Number(c.low)>0&&hasNumber(c.close)&&Number(c.close)>0&&
+  hasNumber(c.volume)&&Number(c.volume)>=0
 ).sort((a,b)=>Number(a.openTime)-Number(b.openTime));
+
+function candleGap(rows,intervalMs){
+  const recent=rows.slice(-(intervalMs===60_000?36:21));
+  let maxGapMs=0,gapCount=0;
+  for(let i=1;i<recent.length;i++){
+    const gap=Number(recent[i].openTime)-Number(recent[i-1].openTime);
+    if(gap>intervalMs*1.5){gapCount++;maxGapMs=Math.max(maxGapMs,gap);}
+  }
+  return {gap_count:gapCount,max_gap_ms:maxGapMs};
+}
+function coverage(rows,key,valid=()=>true){
+  return rows.length?rows.filter(row=>hasNumber(row?.[key])&&valid(Number(row[key]),row)).length/rows.length:0;
+}
+function computeKahirDataQuality(raw1,raw5,m1,m5){
+  const candleCoverage=((raw1.length?m1.length/raw1.length:0)+(raw5.length?m5.length/raw5.length:0))/2;
+  const all=[...m1,...m5];
+  const tradeCoverage=coverage(all,'tradeCount',v=>v>=0);
+  const quoteCoverage=coverage(all,'quoteVolume',v=>v>=0);
+  return Math.round(clamp(100*(candleCoverage*.50+tradeCoverage*.25+quoteCoverage*.25)));
+}
 
 function returns(rows){
   const out=[];
@@ -93,15 +115,25 @@ export const KAHIR_RADAR_DEFAULTS=Object.freeze({
 });
 
 export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHistory=[],marketVelocityBps=0,now=Date.now()}={}){
-  const m1=closed(oneMinute,now),m5=closed(fiveMinute,now);
-  if(m1.length<80||m5.length<50)return {eligible:false,stage:'WARMING_UP',score:null,closed_candles_only:true,data_quality:0,data_stale:true};
-  const oneAge=Math.max(0,Number(now)-Number(m1.at(-1)?.closeTime));
-  const fiveAge=Math.max(0,Number(now)-Number(m5.at(-1)?.closeTime));
+  const raw1=Array.isArray(oneMinute)?oneMinute:[],raw5=Array.isArray(fiveMinute)?fiveMinute:[];
+  const m1=closed(raw1,now),m5=closed(raw5,now);
+  if(m1.length<80||m5.length<50)return {eligible:false,stage:'WARMING_UP',score:null,closed_candles_only:true,
+    data_quality:0,data_stale:false,data_status:'DATA_INSUFFICIENT',reason_codes:['INSUFFICIENT_CLOSED_CANDLES']};
+  const oneAge=Number(now)-Number(m1.at(-1)?.closeTime);
+  const fiveAge=Number(now)-Number(m5.at(-1)?.closeTime);
   if(!Number.isFinite(oneAge)||!Number.isFinite(fiveAge)||oneAge>3*60*1000||fiveAge>10*60*1000)
-    return {eligible:false,stage:'STALE_DATA',score:null,closed_candles_only:true,data_quality:0,data_stale:true,
+    return {eligible:false,stage:'STALE_DATA',score:null,closed_candles_only:true,data_quality:0,data_stale:true,data_status:'DATA_STALE',
       reason_codes:['STALE_CLOSED_CANDLES'],metrics:{one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge}};
+  const dataQuality=computeKahirDataQuality(raw1,raw5,m1,m5);
+  const oneMinuteGaps=candleGap(m1,60_000),fiveMinuteGaps=candleGap(m5,300_000);
+  if(oneMinuteGaps.max_gap_ms>90_000||fiveMinuteGaps.max_gap_ms>450_000)
+    return {eligible:false,stage:'DATA_GAP',score:null,closed_candles_only:true,
+      data_quality:Math.min(60,dataQuality),data_stale:false,data_status:'DATA_GAP',reason_codes:['CLOSED_CANDLE_GAP'],
+      candle_gaps:{one_minute:oneMinuteGaps,five_minute:fiveMinuteGaps}};
+  const dataQualityOkay=dataQuality>=85;
   const price=finite(ticker.lastPrice,0);
-  if(!(price>0))return {eligible:false,stage:'INVALID_PRICE',score:null,closed_candles_only:true};
+  if(!(price>0))return {eligible:false,stage:'INVALID_PRICE',score:null,closed_candles_only:true,
+    data_quality:dataQuality,data_stale:false,data_status:'DATA_UNAVAILABLE',reason_codes:['INVALID_TICKER_PRICE']};
 
   const r1=returns(m1),r5=returns(m5);
   const current1=r1.at(-1)??0,current5=r5.at(-1)??0;
@@ -150,7 +182,7 @@ export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHis
     selfAccelerationScore*.10
   );
 
-  const eligible=direction==='UP'&&!extended&&
+  const eligible=dataQualityOkay&&direction==='UP'&&!extended&&
     score>=KAHIR_RADAR_DEFAULTS.minScore&&
     (z1>=KAHIR_RADAR_DEFAULTS.minOneMinuteZ||z5>=KAHIR_RADAR_DEFAULTS.minFiveMinuteZ)&&
     volumeRatio>=KAHIR_RADAR_DEFAULTS.minVolumeRatio&&
@@ -160,7 +192,7 @@ export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHis
     persistence>=68&&
     relativeAccelerationBps>=KAHIR_RADAR_DEFAULTS.minRelativeAccelerationBps;
 
-  const stage=eligible?(score>=92?'POWER_SURGE':'IGNITION'):score>=76?'BUILDING_PRESSURE':'WATCH';
+  const stage=!dataQualityOkay?'DATA_QUALITY_LOW':eligible?(score>=92?'POWER_SURGE':'IGNITION'):score>=76?'BUILDING_PRESSURE':'WATCH';
   const confirmations=[
     z1>=KAHIR_RADAR_DEFAULTS.minOneMinuteZ,
     z5>=KAHIR_RADAR_DEFAULTS.minFiveMinuteZ,
@@ -188,7 +220,10 @@ export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHis
 
   return {
     eligible,stage,score:Math.round(score*10)/10,closed_candles_only:true,
-    data_quality:90,data_stale:false,candle_freshness:{one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge},
+    data_quality:dataQuality,data_stale:false,data_status:dataQualityOkay?'LIVE_DATA':'DATA_QUALITY_LOW',
+    reason_codes:dataQualityOkay?[]:['CORE_MARKET_FIELDS_MISSING'],
+    candle_gaps:{one_minute:oneMinuteGaps,five_minute:fiveMinuteGaps},
+    candle_freshness:{one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge},
     confirmation_count:confirmations.length,confirmation_total:9,direction,
     algorithms:{
       SELF_BASELINE_Z:{one_minute_z:z1,five_minute_z:z5,self_acceleration_pct:selfAccelerationPct,relative_acceleration_bps:relativeAccelerationBps},
@@ -245,7 +280,7 @@ function buildKahirAlert(candidate,analysis,now=Date.now()){
     detected_at_iso:new Date(now).toISOString(),detected_time_12h:formatRadarTime12h(now),
     detected_timezone:'Asia/Aden',
     data_quality:Number.isFinite(Number(analysis.data_quality))?Number(analysis.data_quality):0,
-    data_status:{status:analysis.data_stale?'DATA_STALE':'LIVE_DATA',stale:Boolean(analysis.data_stale),source:'Binance Public REST'},
+    data_status:{status:analysis.data_status||(analysis.data_stale?'DATA_STALE':'LIVE_DATA'),stale:Boolean(analysis.data_stale),source:'Binance Public REST'},
     paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
     eligible:Boolean(analysis.eligible),
     disclaimer:'القاهر يرصد تغيرًا غير اعتيادي في سلوك العملة ويجمع عوامل تأكيد؛ ليس ضمانًا لارتفاع مستقبلي ولا إشارة تنفيذ.'
@@ -369,7 +404,7 @@ export class KahirRadar{
       baseScore:analysis.score,
       priceChange24h:row.priceChange24h,
       liquidityScore:clamp(70+Math.log10(Math.max(1,row.quoteVolume24h/this.config.minQuoteVolume24h))*30),
-      dataQualityScore:90,
+      dataQualityScore:finite(analysis.data_quality,0),
       triggerScore:clamp(50+Math.max(Number(analysis.metrics?.one_minute_z)||0,Number(analysis.metrics?.five_minute_z)||0)*14),
       structureScore:analysis.algorithms?.RANGE_ACCEPTANCE?.score||50,
       participationScore:analysis.algorithms?.PARTICIPATION_REGIME?.score||50,
