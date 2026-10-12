@@ -72,6 +72,26 @@ test('Falcon Eye turns the OGN fingerprint into an early, multi-factor setup',()
   assert.ok(a.metrics.funding_rate<0);
 });
 
+test('Falcon Eye reports why a strong technical pattern is blocked by the fingerprint stage',()=>{
+  const a=buildFalconEyeAnalysis({
+    ...(()=>{
+      const now=1_800_000_000_000+240*60_000,one=risingBase(),five=flat(80),btc=flat(80);
+      return {
+        ticker:{symbol:'OGNUSDT',lastPrice:one.at(-1).close,priceChange24h:2.8,quoteVolume24h:2_500_000},
+        oneMinute:one,fiveMinute:five,btcFiveMinute:btc,
+        futures:{quoteVolume:25_000_000,openInterest:1_030_000,fundingRate:-0.004},
+        previousFutures:{openInterest:1_000_000},
+        liquidations:[{time:now-10_000,price:'101',origQty:'1000',side:'BUY'}],now
+      };
+    })()
+  });
+  assert.ok(a.eligibility_diagnostics);
+  assert.equal(typeof a.eligibility_diagnostics.early_structure_pass,'boolean');
+  assert.equal(typeof a.eligibility_diagnostics.fingerprint_stage_eligible,'boolean');
+  assert.equal(typeof a.eligibility_diagnostics.fingerprint_stage_reason,'string');
+  assert.equal(a.eligible,Boolean((a.eligibility_diagnostics.early_structure_pass||a.eligibility_diagnostics.ignition_pass)&&a.eligibility_diagnostics.fingerprint_stage_eligible));
+});
+
 test('Falcon Eye vetoes OGN-style post-explosion chasing',()=>{
   const now=1_800_000_000_000+240*60_000;
   const one=risingBase();
