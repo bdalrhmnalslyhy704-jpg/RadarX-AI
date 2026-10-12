@@ -1249,7 +1249,7 @@ export class EarlyExpansionRadar{
     const requestedRotation=Math.max(0,Math.trunc(this.config.rotationReserve??3));
     const quietCap=target>1?Math.floor(target/3):0;
     const q=Math.min(requestedQuiet,quietCap,Math.max(0,target-1));
-    const coreReserve=Math.max(3,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2))+1);
+    const coreReserve=Math.max(3,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2))+2);
     const rotationCap=Math.max(0,target-q-(target>=6?coreReserve:2));
     const r=Math.min(requestedRotation,rotationCap);
     const core=target-q-r;
@@ -1333,7 +1333,10 @@ export class EarlyExpansionRadar{
       exceptionSlots=Math.min(byExceptional.length,maxEventSlots);
       const remaining=Math.max(0,target-exceptionSlots);
       quietSlots=Math.min(q,Math.floor(remaining/3));
-      rotationSlots=Math.min(r,Math.max(0,remaining-quietSlots));
+      // For Deep batches of four or more, reserve one score-ranked slot even
+      // when multiple burst events arrive together; use the rest for fair rotation.
+      const scoreReserve=target>=4?1:0;
+      rotationSlots=Math.min(r,Math.max(0,remaining-quietSlots-scoreReserve));
       scoreSlots=Math.max(0,remaining-quietSlots-rotationSlots);
     }
     takeUniqueLane(selected,seen,byExceptional,exceptionSlots,'exceptional');
