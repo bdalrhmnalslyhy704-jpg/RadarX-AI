@@ -9,6 +9,7 @@ function response(status=200,body={},headers={}){
 test('Binance Spot request weights match the current endpoint policy',()=>{
   assert.equal(requestWeightFor('/api/v3/exchangeInfo'),20);
   assert.equal(requestWeightFor('/api/v3/klines',{limit:180}),2);
+  assert.equal(requestWeightFor('/api/v3/aggTrades',{symbol:'BTCUSDT',limit:1000}),4);
   assert.equal(requestWeightFor('/api/v3/depth',{limit:100}),5);
   assert.equal(requestWeightFor('/api/v3/depth',{limit:500}),25);
   assert.equal(requestWeightFor('/api/v3/depth',{limit:1000}),50);

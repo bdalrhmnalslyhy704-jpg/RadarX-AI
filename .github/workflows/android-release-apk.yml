@@ -29,6 +29,8 @@ concurrency:
 
 jobs:
   release-apk:
+    # Pull requests against the release baseline are code-review-only; never sign or publish an APK from a PR head.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
