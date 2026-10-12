@@ -60,6 +60,17 @@ export class RadarTelemetry {
     const eventType=alert?.telemetry_type==="BACKGROUND_CYCLE"||symbol==="SYSTEM"||observedStage==="TICK_CYCLE"
       ? "BACKGROUND_CYCLE" : "CANDIDATE_DECISION";
     const accepted=eventType==="CANDIDATE_DECISION" ? gate?.eligible===true : null;
+    const acceptedMode=eventType==="BACKGROUND_CYCLE"?"NONE":String(
+      gate?.accepted_mode??alert?.notification_mode??(accepted===true?"STRICT":"NONE")
+    );
+    const softReasons=[...new Set([
+      ...(Array.isArray(gate?.soft_failures)?gate.soft_failures:[]),
+      ...(Array.isArray(gate?.dynamic_early_gate?.soft_failures)?gate.dynamic_early_gate.soft_failures:[]),
+      ...(Array.isArray(alert?.early_warning?.soft_failures)?alert.early_warning.soft_failures:[])
+    ].map(x=>String(x).slice(0,120)))].slice(0,20);
+    const decisionStage=eventType==="BACKGROUND_CYCLE"?"NO_GATE_DECISION":
+      accepted===true&&acceptedMode==="DYNAMIC_EARLY_WARNING"?"EARLY_WARNING_ACCEPTED":
+      accepted===true?"GATE_ACCEPTED":"REJECTED";
     const event = {
       id: String(alert?.id ?? (radarOf(alert, gate) + ":" + String(alert?.symbol ?? "UNKNOWN") + ":" + decisionAt + ":" + this.totalRecorded)).slice(0, 180),
       radar: radarOf(alert, gate),
@@ -74,12 +85,14 @@ export class RadarTelemetry {
       queue_depth: finite(alert?.rest_queue_depth ?? alert?.rest?.queue_depth ?? null),
       queue_wait_ms: finite(alert?.rest_queue_wait_ms ?? alert?.rest?.queue_wait_ms_last ?? null),
       stage_observed: observedStage,
-      stage_decision: eventType==="BACKGROUND_CYCLE" ? "NO_GATE_DECISION" : String(accepted===true ? "GATE_ACCEPTED" : "REJECTED"),
-      decision: eventType==="BACKGROUND_CYCLE" ? "CYCLE_NO_GATE_DECISION" : String(accepted===true ? "GATE_ACCEPTED" : "REJECTED"),
-      score: round(finite(gate?.score ?? alert?.opportunity_score ?? alert?.strong_move?.score)),
+      stage_decision:decisionStage,
+      decision:eventType==="BACKGROUND_CYCLE"?"CYCLE_NO_GATE_DECISION":decisionStage,
+      accepted_mode:acceptedMode,
+      score:round(finite(gate?.dynamic_early_gate?.score??alert?.early_warning?.score??gate?.score??alert?.opportunity_score??alert?.strong_move?.score)),
       price: finite(alert?.price ?? alert?.ticker?.lastPrice ?? alert?.strong_move?.price),
       liquidity_acceleration: round(liquidityAccelerationOf(alert), 6),
       reason_codes: failures,
+      soft_reason_codes:softReasons,
       accepted,
       market: "SPOT",
       paper_trading: true,
@@ -266,7 +279,7 @@ try{
  const radarIds=[...new Set([...(data.radars||[]).map(x=>x.radar),...(data.by_radar||[]).map(x=>x.radar)])];
  const byRadar=radarIds.map(id=>{const x=eventMap.get(id)||{radar:id,cycles:0,candidate_decisions:0,gate_accepted:0,rejected:0,latency_ms_p95:null,queue_depth:null,queue_wait_ms:null,top_reasons:[]};const h=health.get(id);const state=h&&h.mode==="ON_DEMAND"?"عند الطلب":h?(h.running?"يعمل":"متوقف"):(x.cycles?"دورة مسجلة":"لا توجد دورة مسجلة");const scans=h&&h.health?(h.health.scans??h.health.cycles??"—"):"—";const acceptedRejected=String(x.gate_accepted)+"/"+String(x.rejected);const queueDepth=x.queue_depth??h?.health?.rest?.queue_depth??h?.health?.queue_depth??null;const queueWait=x.queue_wait_ms??h?.health?.rest?.queue_wait_ms_last??h?.health?.queue_wait_ms_last??null;const reasons=(x.top_reasons||[]).map(v=>v.reason+" ("+v.count+")").join("، ");return [x.radar,state,String(scans)+" / "+String(x.candidate_decisions??0)+" قرار / "+String(x.cycles??0)+" دورة بلا قرار",acceptedRejected,fmt(x.latency_ms_p95," ms")+" / "+fmt(x.cycle_duration_ms_p95," ms"),queueDepth===null?"—":String(queueDepth),fmt(queueWait," ms"),reasons||"—"];});
  rows($("radars"),byRadar,8,"لا توجد دورات أو قرارات مسجلة");
- const ev=(data.events||[]).map(x=>[time(x.source_event_at),time(x.observed_at),time(x.decision_at),x.radar,x.symbol,x.stage_observed,x.stage_decision||"—",(x.event_type==="BACKGROUND_CYCLE"?"دورة بلا قرار":x.accepted===true?"قبول":"رفض")+" · "+String(x.score??"—"),x.price==null?"—":String(x.price),fmt(x.liquidity_acceleration,""),(x.reason_codes||[]).join("، ")||"—"]);
+ const ev=(data.events||[]).map(x=>[time(x.source_event_at),time(x.observed_at),time(x.decision_at),x.radar,x.symbol,x.stage_observed,x.stage_decision||"—",(x.event_type==="BACKGROUND_CYCLE"?"دورة بلا قرار":x.accepted===true?"قبول":"رفض")+" · "+String(x.score??"—"),x.price==null?"—":String(x.price),fmt(x.liquidity_acceleration,""),[...(x.reason_codes||[]),...(x.soft_reason_codes||[])].join("، ")||"—"]);
  rows($("events"),ev,11,"لا توجد بيانات بعد");
  const rs=data.top_rejection_reasons||[];$("reasons").replaceChildren();if(!rs.length){const li=document.createElement("li");li.textContent="لا توجد أسباب رفض مسجلة بعد";$("reasons").appendChild(li);}else for(const x of rs){const li=document.createElement("li");li.textContent=x.reason+" — "+x.count;$("reasons").appendChild(li);}
  $("state").textContent="آخر تحديث: "+time(Date.now())+" · قرارات المرشحين: "+String(s.candidate_decisions??0)+" · دورات بلا قرار: "+String(s.background_cycles_no_candidate??0)+" · أحداث الذاكرة: "+String(data.retained_events??0)+" / "+String(data.buffer_capacity??0);
