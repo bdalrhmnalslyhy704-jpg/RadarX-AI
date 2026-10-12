@@ -132,8 +132,10 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     private void scheduleScan() {
-        if (executor == null || executor.isShutdown()) return;
-        executor.shutdownNow();
+        // A rapid STOP -> START can reuse the Service instance after its executor
+        // has been shut down. Recreate that executor instead of leaving a live-looking
+        // foreground notification with no future scans.
+        if (executor != null && !executor.isShutdown()) executor.shutdownNow();
         executor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "RadarX-Background");
             t.setDaemon(true);
