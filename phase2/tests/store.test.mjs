@@ -412,7 +412,7 @@ test('TEST_FIXTURE: large JSONL scheduler journals read only the recent tail in 
   try{
     const store=await new DurableStore({dir}).init();
     const lines=Array.from({length:20000},(_,i)=>JSON.stringify({
-      event_at:i+1,radar:i%2===0?'RADAR_8':'RADAR_9',symbol:'S'+i+'USDT',payload:'x'.repeat(200)
+      event_at:i+1,radar:i%2===0?'RADAR_8':'RADAR_9',symbol:'S'+i+'USDT',payload:'x'.repeat(500)
     }));
     await writeFile(store.files.schedulerEvents,lines.join('\n')+'\n');
     const recent=await store.readRecent('schedulerEvents',3);
