@@ -72,16 +72,9 @@ export function evaluateAdvancedConfluence({
   const antiChase=scoreAntiChase(priceChange24h);
 
   // 7) Adaptive composite: no new network calls; all work is O(1).
-  const score=clamp(
-    safe(baseScore)*0.30+
-    directionalCore*0.19+
-    ignitionCoherence*0.13+
-    participationIntegrity*0.14+
-    coherence*0.10+
-    relative*0.06+
-    confirmationBreadth*0.05+
-    antiChase*0.03
-  );
+  // Separate coherence-veto score; do not add an already-composite base score again.
+  const score=clamp(directionalCore*0.24+ignitionCoherence*0.16+participationIntegrity*0.20+
+    coherence*0.15+relative*0.08+confirmationBreadth*0.10+antiChase*0.07);
 
   const regime =
     ignitionCoherence>=82 && compression>=72 ? 'COMPRESSION_IGNITION' :
