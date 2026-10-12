@@ -421,6 +421,9 @@ export class MarketWideKlineCache {
   health() {
     const now = this.clock();
     const states = this.symbols.map(symbol => ({symbol, ...assessCachedEntry(this.cache.get(symbol), now, this.maxCandleAgeMs)}));
+    const notReadyStates = states.filter(item => !item.ready)
+      .map(item => ({symbol:item.symbol,state:item.state,closed_candles:item.closedCandles,age_ms:item.ageMs}))
+      .sort((a,b) => String(a.state).localeCompare(String(b.state)) || a.symbol.localeCompare(b.symbol));
     const readySymbols = states.filter(item => item.ready).length;
     const missingSymbols = states.filter(item => item.state === 'CANDLE_CACHE_MISSING').length;
     const staleSymbols = states.filter(item => item.state === 'STALE_DATA').length;
@@ -462,6 +465,8 @@ export class MarketWideKlineCache {
       missing_symbols: missingSymbols,
       stale_symbols: staleSymbols,
       incomplete_symbols: incompleteSymbols,
+      not_ready_symbol_count: notReadyStates.length,
+      not_ready_symbol_samples: notReadyStates.slice(0, 25),
       cache_coverage_ready: this.symbols.length > 0 && readySymbols === this.symbols.length,
       websocket_live: websocketCoverage.live,
       websocket_subscription_complete: websocketCoverage.subscription_complete,

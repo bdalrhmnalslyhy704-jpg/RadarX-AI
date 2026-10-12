@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {ProfessorRadar,calculateProfessorOpinion,classifyStreamClaim,classifyNewsEvent} from '../core/professor-radar.mjs';
+import {ProfessorRadar,calculateProfessorOpinion,classifyStreamClaim,classifyNewsEvent,assessNewsFreshness} from '../core/professor-radar.mjs';
 
 test('TEST_PROFESSOR: exchange listing headlines are classified as context, not as a guaranteed catalyst',()=>{
   assert.equal(classifyNewsEvent('KAIA spot trading opens on Upbit','upbit.com'),'EXCHANGE_LISTING_OR_MARKET_OPEN');
@@ -57,7 +57,7 @@ test('TEST_PROFESSOR: scan fuses public stream + news + Binance technical confir
     if(u.includes('api.gdeltproject.org'))return new Response(JSON.stringify(gdelt),{status:200,headers:{'content-type':'application/json'}});
     throw new Error('UNEXPECTED_URL');
   };
-  const radar=new ProfessorRadar({rest,store,deepAnalyzer,fetchImpl,config:{liveSearchLimit:8,transcriptStreams:1,newsLimit:10,deepCandidates:5,deepConcurrency:1,alertCooldownMs:0,minEntryScore:78,minWatchScore:66},clock:()=>1700000000000,logger:{warn(){}}});
+  const radar=new ProfessorRadar({rest,store,deepAnalyzer,fetchImpl,config:{liveSearchLimit:8,transcriptStreams:1,newsLimit:10,deepCandidates:5,deepConcurrency:1,alertCooldownMs:0,minEntryScore:78,minWatchScore:66},clock:()=>Date.parse('2026-10-04T19:00:00Z'),logger:{warn(){}}});
   radar.running=true;
   const ok=await radar.tick();
   radar.running=false;
@@ -66,10 +66,23 @@ test('TEST_PROFESSOR: scan fuses public stream + news + Binance technical confir
   assert.equal(snap.radar,'PROFESSOR_RADAR');
   assert.equal(snap.streams.live_count,1);
   assert.equal(snap.news.count,1);
+  assert.equal(snap.news.items[0].freshness_status,'AVAILABLE');
+  assert.equal(snap.news.items[0].eligible_for_scoring,true);
+  assert.equal(snap.news.items[0].received_at,Date.parse('2026-10-04T19:00:00Z'));
+  assert.equal(snap.news.items[0].age_at_receive_ms,60*60*1000);
   assert.equal(snap.candidates[0].symbol,'BTCUSDT');
   assert.equal(snap.candidates[0].opinion.action,'PAPER_ENTRY_CANDIDATE');
   assert.equal(alerts.length,1);
-  assert.equal(alerts[0].radar_name,'Radar 6 — البروفيسور');
+  assert.equal(alerts[0].radar_name,'البروفيسور — استخبارات عامة');
   assert.equal(alerts[0].paper_trading,true);
   assert.equal(alerts[0].real_order_execution,false);
+});
+
+test('Professor excludes stale, undated, or future-published news from scoring',()=>{
+  const now=Date.parse('2026-10-11T16:00:00Z');
+  assert.deepEqual(assessNewsFreshness(now-30*60*1000,now,2*60*60*1000),
+    {status:'AVAILABLE',eligible_for_scoring:true,age_ms:30*60*1000});
+  assert.equal(assessNewsFreshness(now-3*60*60*1000,now,2*60*60*1000).status,'STALE_DATA');
+  assert.equal(assessNewsFreshness(null,now,2*60*60*1000).status,'PUBLISHED_AT_UNAVAILABLE');
+  assert.equal(assessNewsFreshness(now+10*60*1000,now,2*60*60*1000).status,'PUBLISHED_AT_IN_FUTURE');
 });

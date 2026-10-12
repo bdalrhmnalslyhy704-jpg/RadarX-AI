@@ -32,6 +32,14 @@ function rawFor({valid=true,price=130,liq=85,dq=100}={}){
 assert.equal(MULTI_ANALYST_NAMES.length,20);
 const good=analyzeMultiAnalystCandidate(rawFor(),{btc15:series(120,{base:90,trend:.0008}),btc1:series(100,{base:90,trend:.0008}),marketMedian24h:1,breadthPct:62});
 assert.equal(good.specialist.a.length,19);
+assert.ok(good.specialist.a.every(function(a){return typeof a.evidence_family==='string'&&a.evidence_family.length>0;}));
+assert.ok(good.final.evidence_family_count<good.specialist.a.length,
+  'correlated analysts are grouped into fewer independent evidence families');
+assert.equal(good.final.evidence_family_consensus.VOLUME_FLOW.members,3,
+  'volume, large-player proxy, and absorption share one evidence family');
+assert.ok(good.final.evidence_family_consensus.PRICE_STRUCTURE.members>=3,
+  'structure, pre-breakout, and support/resistance do not count as independent families');
+
 assert.equal(good.final.totalAnalysts,19);
 assert.ok(['STRONG_CANDIDATE','CANDIDATE','WATCH','REJECT'].includes(good.final.verdict));
 assert.ok(Number.isFinite(good.final.score));

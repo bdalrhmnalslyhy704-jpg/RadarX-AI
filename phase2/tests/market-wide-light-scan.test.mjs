@@ -358,6 +358,11 @@ test('cache readiness requires all expected symbols to have fresh continuous clo
   assert.equal(status.ready_symbols,1);
   assert.equal(status.missing_symbols,1);
   assert.equal(status.cache_coverage_ready,false);
+  assert.equal(status.not_ready_symbol_count,1);
+  assert.deepEqual(status.not_ready_symbol_samples.map(item=>({symbol:item.symbol,state:item.state,closed_candles:item.closed_candles})),
+    [{symbol:'BBBUSDT',state:'CANDLE_CACHE_MISSING',closed_candles:0}],
+    'health must identify the exact unready symbol and readiness reason');
+
   now += 9 * 60_000;
   status = cache.health();
   assert.equal(status.stale_symbols,1);
