@@ -62,6 +62,9 @@ const aggTrades=makeAggTrades();
 const analysis=buildStrongMoveAnalysis(make1m(),make5m(),ticker,NOW,aggTrades);
 assert.equal(analysis.closed_candles_only,true);
 assert.equal(analysis.eligible,true);
+assert.equal(analysis.trigger_diagnostics.eligible,true);
+assert.deepEqual(analysis.trigger_diagnostics.failed_checks,[]);
+assert.ok(analysis.trigger_diagnostics.checks.every(x=>x.eligible===true));
 assert.ok(analysis.score>=76);
 assert.ok(analysis.component_scores.velocity>=70);
 assert.ok(analysis.component_scores.volume>50,'MAD winsorization should cap isolated volume spikes');
@@ -93,6 +96,7 @@ const lowBuy=make1m();
 for(const c of lowBuy.slice(-3))c.takerBuyQuoteVolume=c.quoteVolume*0.69;
 const rejectedBuy=buildStrongMoveAnalysis(lowBuy,make5m(),ticker,NOW,aggTrades);
 assert.equal(rejectedBuy.eligible,false,'69% taker-buy flow must fail closed');
+assert.ok(rejectedBuy.trigger_diagnostics.failed_checks.includes('TAKER_BUY_QUOTE_RATIO_GT_70_PERCENT'));
 
 const openRows=make1m();
 openRows.at(-1).closed=false;
