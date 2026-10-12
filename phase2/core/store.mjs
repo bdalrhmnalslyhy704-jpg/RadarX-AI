@@ -13,6 +13,160 @@ const JSONL_ARCHIVE_POLICIES=Object.freeze({
 });
 const ORPHAN_TEMP_SUFFIX=/\.(?:tmp|repair|outcome|compact)-\d+-\d+$/;
 
+// Tokenize JSON values directly from the file stream. This is deliberately a
+// small purpose-built reader for startup compaction: it parses one outcome row
+// at a time instead of materializing the old 5,000-row ledger in one JSON.parse.
+class StreamingJsonValueReader{
+  constructor(path){
+    this.iterator=createReadStream(path,{encoding:'utf8'})[Symbol.asyncIterator]();
+    this.buffer='';this.index=0;this.ended=false;
+  }
+  async fill(){
+    while(this.index>=this.buffer.length&&!this.ended){
+      const next=await this.iterator.next();
+      if(next.done){this.buffer='';this.index=0;this.ended=true;return false;}
+      this.buffer=next.value;this.index=0;
+    }
+    return this.index<this.buffer.length;
+  }
+  async peek(){return await this.fill()?this.buffer[this.index]:null;}
+  async take(){const value=await this.peek();if(value!==null)this.index++;return value;}
+  async skipWhitespace(){
+    while(await this.fill()&&/\s/.test(this.buffer[this.index]))this.index++;
+  }
+  async consume(expected){
+    await this.skipWhitespace();
+    const actual=await this.take();
+    if(actual!==expected)throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');
+  }
+  async readRawValue(){
+    await this.skipWhitespace();
+    if(!await this.fill())throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');
+    const first=this.buffer[this.index];
+    if(first==='"'){
+      const parts=[];let escaped=false;
+      this.index++;
+      while(true){
+        if(!await this.fill())throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');
+        const start=this.index;
+        for(let i=start;i<this.buffer.length;i++){
+          const char=this.buffer[i];
+          if(escaped)escaped=false;
+          else if(char==='\\')escaped=true;
+          else if(char==='"'){
+            this.index=i+1;parts.push(this.buffer.slice(start,i+1));return '"'+parts.join('');
+          }
+        }
+        parts.push(this.buffer.slice(start));this.index=this.buffer.length;
+      }
+    }
+    if(first!=='{'&&first!=='['){
+      const parts=[];
+      while(await this.fill()){
+        const start=this.index;let i=start;
+        for(;i<this.buffer.length;i++){
+          const char=this.buffer[i];
+          if(char===','||char===']'||char==='}'||/\s/.test(char))break;
+        }
+        if(i>start)parts.push(this.buffer.slice(start,i));
+        this.index=i;
+        if(i<this.buffer.length)break;
+      }
+      const raw=parts.join('').trim();
+      if(!raw)throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');
+      return raw;
+    }
+    const stack=[];const parts=[];let inString=false;let escaped=false;
+    while(true){
+      if(!await this.fill())throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');
+      const start=this.index;
+      for(let i=start;i<this.buffer.length;i++){
+        const char=this.buffer[i];
+        if(inString){
+          if(escaped)escaped=false;
+          else if(char==='\\')escaped=true;
+          else if(char==='"')inString=false;
+        }else if(char==='"')inString=true;
+        else if(char==='{'||char==='[')stack.push(char==='{'?'}':']');
+        else if(char==='}'||char===']'){
+          if(stack.pop()!==char)throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');
+          if(stack.length===0){
+            this.index=i+1;parts.push(this.buffer.slice(start,i+1));return parts.join('');
+          }
+        }
+      }
+      parts.push(this.buffer.slice(start));this.index=this.buffer.length;
+    }
+  }
+}
+
+async function readBoundedJsonArray(reader,limit){
+  await reader.consume('[');
+  const ring=[];let total=0;let afterComma=false;
+  while(true){
+    await reader.skipWhitespace();
+    const next=await reader.peek();
+    if(next===']'){
+      if(afterComma)throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');
+      await reader.take();break;
+    }
+    if(next===null)throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');
+    let value;
+    try{value=JSON.parse(await reader.readRawValue());}
+    catch{throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');}
+    if(total<limit)ring.push(value);
+    else ring[total%limit]=value;
+    total++;afterComma=false;
+    await reader.skipWhitespace();
+    const delimiter=await reader.peek();
+    if(delimiter===','){await reader.take();afterComma=true;continue;}
+    if(delimiter===']'){await reader.take();break;}
+    throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');
+  }
+  const offset=total>limit?total%limit:0;
+  const rows=total>limit?ring.slice(offset).concat(ring.slice(0,offset)):ring;
+  return {rows,total};
+}
+
+async function readBoundedOutcomeLedger(path,recordLimit){
+  const reader=new StreamingJsonValueReader(path);const state={};
+  let totalRecords=0;let recordsSeen=false;let firstProperty=true;let afterComma=false;
+  await reader.consume('{');
+  while(true){
+    await reader.skipWhitespace();
+    const next=await reader.peek();
+    if(next==='}'){
+      if(afterComma)throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');
+      await reader.take();break;
+    }
+    if(next===null)throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');
+    if(!firstProperty&&!afterComma)throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');
+    let key;
+    try{key=JSON.parse(await reader.readRawValue());}
+    catch{throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');}
+    if(typeof key!=='string')throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');
+    await reader.consume(':');
+    if(key==='records'){
+      const bounded=await readBoundedJsonArray(reader,recordLimit);
+      state.records=bounded.rows;totalRecords=bounded.total;recordsSeen=true;
+    }else{
+      try{state[key]=JSON.parse(await reader.readRawValue());}
+      catch{throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');}
+    }
+    firstProperty=false;afterComma=false;
+    await reader.skipWhitespace();
+    const delimiter=await reader.peek();
+    if(delimiter===','){await reader.take();afterComma=true;continue;}
+    if(delimiter==='}'){await reader.take();break;}
+    throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');
+  }
+  await reader.skipWhitespace();
+  if(await reader.peek()!==null)throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_JSON');
+  if(!recordsSeen)state.records=[];
+  if(!state||typeof state!=='object'||Array.isArray(state))throw new Error('PRE_EXPANSION_OUTCOME_LEDGER_INVALID_STATE');
+  return {state,totalRecords};
+}
+
 
 
 export class DurableStore {
