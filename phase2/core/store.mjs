@@ -1,6 +1,6 @@
 import {createReadStream} from 'node:fs';
 import {createInterface} from 'node:readline';
-import {mkdir,readFile,writeFile,rename,appendFile,stat,unlink,readdir} from 'node:fs/promises';
+import {mkdir,readFile,writeFile,rename,appendFile,stat,unlink,readdir,open} from 'node:fs/promises';
 import {basename,join,resolve} from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
 import {gzipSync,gunzipSync} from 'node:zlib';
@@ -894,13 +894,35 @@ export class DurableStore {
   async readRecent(kind,limit=100){
     const file=this.files[kind];
     if(!file)return[];
-    let s='';
-    try{s=await readFile(file,'utf8');}catch{return[];}
-    const rows=[];
-    for(const line of s.split('\n').filter(Boolean).slice(-Math.max(1,Number(limit)||100))){
-      try{rows.push(JSON.parse(line));}catch{}
-    }
-    return rows.reverse();
+    const take=Math.min(5000,Math.max(1,Math.trunc(Number(limit)||100)));
+    let handle=null;
+    try{
+      handle=await open(file,'r');
+      const {size}=await handle.stat();
+      let position=size,newlineCount=0;
+      const chunks=[];
+      const blockSize=64*1024;
+      // Walk backward in bounded blocks; never materialize the full unbounded JSONL archive.
+      while(position>0&&newlineCount<=take){
+        const length=Math.min(blockSize,position);
+        position-=length;
+        const buffer=Buffer.allocUnsafe(length);
+        const {bytesRead}=await handle.read(buffer,0,length,position);
+        if(!bytesRead)break;
+        const chunk=buffer.subarray(0,bytesRead);
+        for(let index=0;(index=chunk.indexOf(10,index))!==-1;index++)newlineCount++;
+        chunks.unshift(chunk);
+      }
+      const lines=Buffer.concat(chunks).toString('utf8').split('\\n');
+      // The first block boundary may land in the middle of a record.
+      if(position>0)lines.shift();
+      const rows=[];
+      for(const line of lines.filter(Boolean).slice(-take)){
+        try{rows.push(JSON.parse(line));}catch{}
+      }
+      return rows.reverse();
+    }catch{return[];}
+    finally{if(handle)await handle.close().catch(()=>{});}
   }
   async health(){try{await mkdir(this.dir,{recursive:true});return{state:this.ready?'LIVE':'INIT',path:this.dir,last_write_at:this.lastWriteAt};}
     catch(e){return{state:'ERROR',path:this.dir,error:String(e?.message??e),last_write_at:this.lastWriteAt};}}
