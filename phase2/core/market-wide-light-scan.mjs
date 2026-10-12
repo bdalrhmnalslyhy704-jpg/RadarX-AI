@@ -19,9 +19,11 @@ const symbolOf = row => String(row?.symbol || '').trim().toUpperCase();
 // early-expansion scanner. They are still audited for full-market coverage;
 // they cannot consume the candidate/rotation slots.
 const NON_DIRECTIONAL_BASE_ASSETS = new Set([
-  'AEUR','BFUSD','BUSD','DAI','EURI','EUR','EURCV','EURS','FDUSD','PAXG','PYUSD','RLUSD',
-  'TUSD','USDC','USDD','USD0','USD1','USDE','USDP','USDS','USDX','USYC',
-  'USDF','USDT','USDY','XAUT','XUSD'
+  'AEUR','BFUSD','BUSD','DAI','EURI','EUR','EURCV','EURS','FDUSD','FRAX','PAXG','PYUSD','RLUSD',
+  'TUSD','USDC','USDD','USD0','USD1','USDE','USDP','USDS','USDX','USYC','USDF','USDT','USDY','XAUT','XUSD',
+  // Wrapped majors and tokenized equities remain in market coverage, but do not
+  // consume scarce pre-move scanning slots intended for directional crypto assets.
+  'WBTC','WBETH','AAPLB','AMZNB','COINB','CRCLB','GOOGLB','MSTRB','MSFTB','NVDAB','QQQB','SOXLB','SPXLB','TSLAB'
 ]);
 
 export function isDirectionalCandidateSymbol(value) {
