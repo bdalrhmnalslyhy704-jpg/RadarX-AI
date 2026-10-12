@@ -428,10 +428,10 @@ export const WHALE_ACCUMULATION_DEFAULTS=Object.freeze({
 });
 
 export class WhaleAccumulationRadar{
-  constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
+  constructor({rest,marketData=null,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
-    this.rest=rest;this.store=store;this.pushManager=pushManager;this.config={...WHALE_ACCUMULATION_DEFAULTS,...config};
+    this.rest=rest;this.marketData=marketData;this.store=store;this.pushManager=pushManager;this.config={...WHALE_ACCUMULATION_DEFAULTS,...config};
     this.clock=clock;this.logger=logger;this.running=false;this.busy=false;this.timer=null;
     this.pendingTick=false;this.pendingTickAt=null;this.coalescedTickCount=0;this.nextCyclePendingWaitMs=0;
     this.universe=[];this.universeAt=0;this.cursor=0;this.scans=0;this.alertCount=0;this.lastError=null;this.lastScanAtMs=null;
@@ -449,13 +449,13 @@ export class WhaleAccumulationRadar{
   }
   async stop(){this.running=false;if(this.timer)clearInterval(this.timer);this.timer=null;}
   async refreshUniverse(){
-    const r=await this.rest.request('/api/v3/exchangeInfo');
+    const r=this.marketData?await this.marketData.exchangeInfo():await this.rest.request('/api/v3/exchangeInfo');
     this.universe=buildSpotUniverse(r.data,this.config.quote).map(x=>x.symbol).filter(isDirectionalCandidateSymbol);
     this.universeAt=this.clock();
     if(this.universe.length)this.cursor=this.cursor%this.universe.length;
   }
   async tickerRows(){
-    const r=await this.rest.request('/api/v3/ticker/24hr');
+    const r=this.marketData?await this.marketData.ticker24h():await this.rest.request('/api/v3/ticker/24hr');
     const rows=(Array.isArray(r.data)?r.data:[]).map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
       .filter(x=>isDirectionalCandidateSymbol(x.symbol))
       .filter(x=>this.universe.includes(x.symbol)&&Number(x.quoteVolume24h)>=Number(this.config.minQuoteVolume24h));
