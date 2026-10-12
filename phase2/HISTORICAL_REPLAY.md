@@ -6,8 +6,8 @@
 node phase2/tools/historical-replay.mjs \
   --symbols GTCUSDT,WUSDT \
   --lookback-hours 24 \
-  --max-trade-pages 300 \
-  --max-trades 250000 \
+  --max-trade-pages 500 \
+  --max-trades 500000 \
   --output reports/historical-replay-gtc-w.json
 ```
 
