@@ -1,7 +1,7 @@
 import {fileURLToPath} from 'node:url';
 import {resolve} from 'node:path';
 import {CONFIG} from './config.mjs';
-import {RestClient} from './market/binance-rest.mjs';
+import {RestClient,createRestRequestBudget} from './market/binance-rest.mjs';
 import {BinanceStreamClient} from './market/binance-ws.mjs';
 import {BinanceAllMarketTickerClient} from './market/binance-market-ticker-ws.mjs';
 import {DurableStore} from './core/store.mjs';
@@ -40,7 +40,8 @@ export async function startServer({
     assertReadOnlyStagingConfig(config);
   }
   const store=await new DurableStore({dir:process.env.RADARX_DATA_DIR||'./.radarx-data'}).init();
-  const rest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  const spotRestBudget=createRestRequestBudget();
+  const rest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls,budget:spotRestBudget});
   const dedup=new SignalDeduplicator({store,windowMs:15*60*1000});
   const provider=createPushProvider(config.push);
   const push=new PushManager({provider,store,deduplicator:dedup,retryBaseMs:config.monitoring.pushRetryMs});
@@ -59,13 +60,13 @@ export async function startServer({
     scannerFactory:()=>moveScanner,
     tickerWsFactory:opts=>new BinanceAllMarketTickerClient(opts)
   });
-  const strongRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  const strongRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls,budget:spotRestBudget});
   const strongMoveRadar=new StrongMoveRadar({rest:strongRadarRest,store,pushManager:push,config:config.strongMoveRadar||{},logger});
-  const rotationRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  const rotationRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls,budget:spotRestBudget});
   const rotationLagRadar=new RotationLagRadar({rest:rotationRadarRest,store,pushManager:push,config:config.rotationRadar||{},logger});
-  const liquidityRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  const liquidityRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls,budget:spotRestBudget});
   const liquidityAbsorptionRadar=new LiquidityAbsorptionRadar({rest:liquidityRadarRest,store,pushManager:push,config:config.liquidityAbsorptionRadar||{},logger});
-  const kahirRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  const kahirRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls,budget:spotRestBudget});
   const kahirRadar=new KahirRadar({rest:kahirRadarRest,store,pushManager:push,config:config.kahirRadar||{},logger});
   // The deep symbol scanner gets its own REST client so background radar traffic cannot
   // race its endpoint selection. Prefer Binance's market-data-only mirror first; it is
@@ -74,11 +75,11 @@ export async function startServer({
     'https://data-api.binance.vision',
     ...(config.rest.baseUrls??config.rest.urls??[])
   ].filter((url,index,arr)=>arr.indexOf(url)===index);
-  const deepScanRest=new RestClient({...config.rest,baseUrls:deepRestUrls});
+  const deepScanRest=new RestClient({...config.rest,baseUrls:deepRestUrls,budget:spotRestBudget});
   const symbolDeepAnalyzer=new SymbolDeepAnalyzer({rest:deepScanRest,config:config.symbolDeepScan||{}});
   const professorRadar=new ProfessorRadar({rest,store,pushManager:push,deepAnalyzer:symbolDeepAnalyzer,config:config.professorRadar||{},logger});
   const doomsdayRadar=new DoomsdayRadar({rest,store,pushManager:push,config:config.doomsdayRadar||{},logger});
-  const earlyExpansionRadarRest=new RestClient({...config.rest,baseUrls:deepRestUrls});
+  const earlyExpansionRadarRest=new RestClient({...config.rest,baseUrls:deepRestUrls,budget:spotRestBudget});
   const earlyExpansionRadar=new EarlyExpansionRadar({rest:earlyExpansionRadarRest,store,pushManager:push,config:config.earlyExpansionRadar||{},logger});
   // These workers use public market data only; one shared Spot REST client keeps the request budget coordinated.
   const alMuqawimRadar=new AlMuqawimRadar({rest,store,pushManager:push,config:config.alMuqawimRadar||{},logger});
@@ -100,7 +101,7 @@ export async function startServer({
     {id:'RADAR11_WHALE',name:'تجمع الحيتان',instance:whaleAccumulationRadar},
     {id:'RADAR12_PROFESSOR',name:'البروفيسور',instance:professorRadar}
   ]});
-  const agentMarketRest=new RestClient({...config.rest,baseUrls:deepRestUrls});
+  const agentMarketRest=new RestClient({...config.rest,baseUrls:deepRestUrls,budget:spotRestBudget});
   const agentMarketScanner=new MarketUniverseScanner({rest:agentMarketRest,config:{quote:config.aiAgents?.quote||'USDT',minQuoteVolume24h:Number(config.aiAgents?.minQuoteVolume24h??750000),deepCandidates:Number(config.aiAgents?.deepCandidates??6),deepConcurrency:Number(config.aiAgents?.deepConcurrency??3),deepKlines:Number(config.aiAgents?.deepKlines??220),scanLimit:Math.max(10,Number(config.aiAgents?.deepCandidates??6)),returnLimit:Math.max(10,Number(config.aiAgents?.resultLimit??20))}});
   const agentMarket=new AutonomousAgentMarket({scanner:agentMarketScanner,store,config:config.aiAgents||{},logger});
   for (const [radarId,instance] of [
