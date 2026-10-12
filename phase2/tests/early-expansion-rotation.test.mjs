@@ -154,7 +154,7 @@ test('Radar 8 quiet micro lane orders lowest valid daily change when participati
   const fast=fastMap(input,overrides);
   const selected=radar.selectMicro(input,fast,1);
   const quiet=selected.filter(x=>x._selection_lane==='quiet');
-  assert.equal(quiet.length,5);
+  assert.equal(quiet.length,3);
   const quietMoves=quiet.map(x=>Math.abs(x.priceChange24h));
   assert.deepEqual(quietMoves,[...quietMoves].sort((a,b)=>a-b));
   assert.ok(quietMoves.every(x=>x<=8));
@@ -177,8 +177,8 @@ test('Radar 8 prioritizes symbols not covered in the prior rotation cycle',()=>{
   const firstSymbols=new Set(first.map(x=>x.symbol));
   assert.equal(first.length,10);
   assert.equal(second.length,10);
-  assert.equal(second.filter(x=>!firstSymbols.has(x.symbol)).length,5,JSON.stringify({first:first.map(x=>({s:x.symbol,l:x._selection_lane,age:x._rotationAge})),second:second.map(x=>({s:x.symbol,l:x._selection_lane,age:x._rotationAge})),overlap:second.filter(x=>firstSymbols.has(x.symbol)).map(x=>x.symbol)}));
-  assert.equal(second.filter(x=>x._selection_lane==='rotation').length,5);
+  assert.equal(second.filter(x=>!firstSymbols.has(x.symbol)).length,2,JSON.stringify({first:first.map(x=>({s:x.symbol,l:x._selection_lane,age:x._rotationAge})),second:second.map(x=>({s:x.symbol,l:x._selection_lane,age:x._rotationAge})),overlap:second.filter(x=>firstSymbols.has(x.symbol)).map(x=>x.symbol)}));
+  assert.equal(second.filter(x=>x._selection_lane==='rotation').length,2);
 });
 
 test('Radar 8 exceptional acceleration may bypass rotation without changing batch size',()=>{
@@ -218,7 +218,7 @@ test('Radar 8 deep scan preserves score capacity while selecting quiet bases fro
   assert.equal(selected.length,10);
   assert.equal(new Set(selected.map(x=>x.row.symbol)).size,10);
   const quiet=selected.filter(x=>x._selection_lane==='quiet');
-  assert.equal(quiet.length,5);
+  assert.equal(quiet.length,3);
   assert.equal(quiet[0].row.symbol,'ZZZQUIETUSDT');
 });
 
@@ -282,4 +282,40 @@ test('Radar 8 deep rotation prioritizes never-scanned eligible symbols over rece
   const selected=radar.selectDeepFromMicro(items,30);
   assert.ok(selected.some(x=>x.row.symbol===target&&x._selection_lane==='rotation'),
     JSON.stringify({target,selected:selected.map(x=>({symbol:x.row.symbol,lane:x._selection_lane,neverDeep:x._neverScanned,wait:x._deepWaitAgeMs}))}));
+});
+
+
+test('Radar 8 preserves score-ranked Deep slots when exceptional, quiet, and rotation candidates compete',()=>{
+  const radar=makeRadar({deepCandidates:5,quietReserve:8,rotationReserve:8,exceptionalRotationBypassSlots:2});
+  const items=Array.from({length:18},(_,i)=>candidate('MIX'+String(i).padStart(2,'0')+'USDT',0.4+(i%5)*0.1,{
+    score:91-i,volume:1.7,trades:1.5,participation:76,tradeParticipation:74,structure:78,compression:82
+  }));
+  items[0].micro_fingerprint.activity_shock={detected:true,stage:'EVENT_DRIVEN_BREAKOUT',score:94,watch_only:true,entry_eligible:false,extended:false};
+  const selected=radar.selectDeepFromMicro(items,50);
+  assert.equal(selected.length,5);
+  assert.equal(new Set(selected.map(x=>x.row.symbol)).size,5);
+  assert.ok(selected.some(x=>x._selection_lane==='exceptional'));
+  assert.ok(selected.some(x=>x._selection_lane==='score'||x._selection_lane==='fill_score'),
+    'a high-scoring coin must retain a Deep slot even when an activity shock is present');
+  assert.ok(selected.some(x=>x._selection_lane==='quiet'||x._selection_lane==='fill_quiet'));
+  assert.ok(selected.some(x=>x._selection_lane==='rotation'||x._selection_lane==='fill_rotation'));
+});
+
+test('Radar 8 skips non-directional instruments from Micro slots while retaining genuine alternative-coin candidates',()=>{
+  const radar=makeRadar({microScanCandidates:18,quietReserve:8,rotationReserve:8});
+  const pairs=[
+    ...['W','RSR','S','IO','ZRO','CKB','METIS','PLUME'].map((base,i)=>({
+      symbol:base+'USDT',lastPrice:1+i,priceChange24h:1,quoteVolume24h:5_000_000,tradeCount24h:20_000
+    })),
+    ...['USDC','RLUSD','PAXG','NVDAB','QQQB'].map((base,i)=>({
+      symbol:base+'USDT',lastPrice:1+i,priceChange24h:1,quoteVolume24h:50_000_000,tradeCount24h:200_000
+    }))
+  ];
+  radar.universe=pairs.map(x=>x.symbol);
+  const selected=radar.selectMicro(pairs,fastMap(pairs),2);
+  assert.ok(selected.some(x=>x.symbol==='WUSDT'));
+  assert.ok(selected.some(x=>x.symbol==='RSRUSDT'));
+  assert.ok(selected.some(x=>x.symbol==='PLUMEUSDT'));
+  assert.equal(selected.some(x=>['USDCUSDT','RLUSDUSDT','PAXGUSDT','NVDABUSDT','QQQBUSDT'].includes(x.symbol)),false);
+  assert.ok(selected.some(x=>x._selection_lane==='score'||x._selection_lane==='fill_score'));
 });
