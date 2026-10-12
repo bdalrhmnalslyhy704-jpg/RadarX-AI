@@ -102,7 +102,7 @@ async function main() {
     process.stdout.write([
       'RadarX historical replay (public Binance Spot data; read-only)',
       'Usage: node phase2/tools/historical-replay.mjs [--symbols GTCUSDT,WUSDT] [--start ISO|ms] [--end ISO|ms]',
-      '       [--lookback-hours 24] [--max-trade-pages 300] [--max-trades 250000] [--output path]',
+      '       [--lookback-hours 24] [--max-trade-pages 500] [--max-trades 500000] [--output path]',
       'Default window: last completed minute minus 24 hours. Maximum window: 7 days.',
       'Trade-history pagination that reaches a cap is flagged incomplete and fails closed.',
       'No orders are created, no keys are read, and no Railway deploy is performed.'
@@ -117,8 +117,8 @@ async function main() {
   const lookbackHours = integerArg(flag(args, '--lookback-hours', '24'), 24, 1, 168, 'lookback-hours');
   const start = timeArg(flag(args, '--start'), 'start') ?? (end - lookbackHours * HOUR_MS);
   if (start >= end || end > now + MINUTE_MS || end - start > 7 * 24 * HOUR_MS) throw new Error('INVALID_REPLAY_WINDOW');
-  const maxPages = integerArg(flag(args, '--max-trade-pages', '300'), 300, 1, 1000, 'max-trade-pages');
-  const maxTrades = integerArg(flag(args, '--max-trades', '250000'), 250000, 1000, 1000000, 'max-trades');
+  const maxPages = integerArg(flag(args, '--max-trade-pages', '500'), 500, 1, 1000, 'max-trade-pages');
+  const maxTrades = integerArg(flag(args, '--max-trades', '500000'), 500000, 1000, 1000000, 'max-trades');
   const output = resolve(flag(args, '--output', './.radarx-data/historical-replay-' + new Date(now).toISOString().replace(/[:.]/g, '-') + '.json'));
   const config = CONFIG;
   const client = new RestClient({...config.rest, baseUrls: config.rest.baseUrls ?? config.rest.urls});
