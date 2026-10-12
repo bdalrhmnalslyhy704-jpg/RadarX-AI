@@ -74,7 +74,7 @@ jobs:
         run: |
           set +e
           mkdir -p reports
-          node phase2/tools/historical-replay.mjs --symbols GTCUSDT,WUSDT --lookback-hours 24 --max-trade-pages 300 --max-trades 250000 --output reports/historical-replay-gtc-w.json
+          node phase2/tools/historical-replay.mjs --symbols GTCUSDT,WUSDT --lookback-hours 24 --max-trade-pages 500 --max-trades 500000 --output reports/historical-replay-gtc-w.json
           replay_status=$?
           printf 'exit_code=%s\n' "$replay_status" > reports/historical-replay-status.txt
           {
