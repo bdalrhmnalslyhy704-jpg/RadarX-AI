@@ -1,7 +1,7 @@
 export const HISTORICAL_MATRIX_DEFAULT_SYMBOLS=Object.freeze([
   'BTCUSDT','ETHUSDT','BNBUSDT','SOLUSDT','XRPUSDT','ADAUSDT','DOGEUSDT','LINKUSDT','AVAXUSDT','DOTUSDT',
   'LTCUSDT','BCHUSDT','TRXUSDT','NEARUSDT','APTUSDT','ARBUSDT','OPUSDT','INJUSDT','SUIUSDT','FETUSDT',
-  'RLCUSDT','RADUSDT','ORCAUSDT','API3USDT','DIAUSDT','OGNUSDT','CTSIUSDT','GTCUSDT','WUSDT','TSTUSDT'
+  'RLCUSDT','RADUSDT','ORCAUSDT','API3USDT','DIAUSDT','OGNUSDT','CTSIUSDT','GTCUSDT','WUSDT','FILUSDT'
 ]);
 const HOUR_MS=60*60*1000;
 const MAX_WINDOW_MS=7*24*HOUR_MS;
@@ -63,5 +63,6 @@ export function summarizeHistoricalWindowReport(report={}){
   const firstAccepted=rows.map(x=>x?.summary?.first_accepted_at).filter(Boolean).sort()[0]??null;
   const first50=rows.map(x=>x?.summary?.first_actual_window_50pct_at).filter(Boolean).sort()[0]??null;
   const first70=rows.map(x=>x?.summary?.first_actual_window_70pct_at).filter(Boolean).sort()[0]??null;
-  return {requested_symbols:Number(report?.symbol_count)||rows.length,returned_symbol_results:rows.length,coverage_complete_symbols:complete.length,coverage_incomplete_symbols:Math.max(0,rows.length-complete.length),accepted_decisions:accepted,rejected_decisions:rejected,first_accepted_at:firstAccepted,first_actual_window_50pct_at:first50,first_actual_window_70pct_at:first70,coverage_status:rows.length>0&&complete.length===rows.length?'COMPLETE':'INCOMPLETE_OR_EMPTY'};
+  const requestedSymbols=Math.max(0,Math.trunc(Number(report?.symbol_count)||rows.length));
+  return {requested_symbols:requestedSymbols,returned_symbol_results:rows.length,coverage_complete_symbols:complete.length,coverage_incomplete_symbols:Math.max(0,requestedSymbols-complete.length),accepted_decisions:accepted,rejected_decisions:rejected,first_accepted_at:firstAccepted,first_actual_window_50pct_at:first50,first_actual_window_70pct_at:first70,coverage_status:rows.length>0&&rows.length===requestedSymbols&&complete.length===rows.length?'COMPLETE':'INCOMPLETE_OR_EMPTY'};
 }
