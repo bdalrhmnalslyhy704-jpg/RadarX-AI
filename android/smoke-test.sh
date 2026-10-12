@@ -392,7 +392,7 @@ for attempt in $(seq 1 120); do
     sleep 2
     before_ready="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
     old_service_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
-    timeout 15s adb shell am stopservice -n com.radarx.app/.RadarXBackgroundMonitorService
+    timeout 15s adb shell am startservice -n com.radarx.app/.RadarXBackgroundMonitorService -a com.radarx.app.action.STOP_BACKGROUND_MONITOR
     sleep 2
     launch_replay_test_app
     restarted_ready=0
