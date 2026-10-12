@@ -167,6 +167,7 @@ export function featureSet(candles, ticker, btcChange = null, now = Date.now()) 
     volumeAcceleration, tradeAcceleration, takerRatio, compressionRatio,
     ema9, ema20, ema50, emaSlope, higherLowCount,
     rangePosition, roc1h, roc4h, roc12h, bbWidth, breakoutRoom,
+    candle_count:c.length,
     btcChange
   };
 }

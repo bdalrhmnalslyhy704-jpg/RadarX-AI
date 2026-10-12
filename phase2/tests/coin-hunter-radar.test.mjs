@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {assessCoinHunterSeries,closedCandles,featureSet} from '../core/coin-hunter-radar.mjs';
+import {assessCoinHunterSeries,featureSet} from '../core/coin-hunter-radar.mjs';
 
 const NOW=1700000000000;
 const HOUR=60*60*1000;
@@ -22,7 +22,8 @@ test('Coin Hunter only uses valid closed candles in chronological order',()=>{
   const rows=makeCandles(30,HOUR).reverse();
   rows.push({...rows[0],openTime:null,closeTime:NOW,open:null});
   rows.push({...rows[0],openTime:NOW+HOUR,closeTime:NOW+2*HOUR});
-  const closed=closedCandles(rows,NOW);
+  const result=assessCoinHunterSeries(rows,{now:NOW,intervalMs:HOUR,minCount:16});
+  const closed=result.candles;
   assert.equal(closed.length,30);
   assert.ok(closed.every((c,i)=>i===0||Number(c.openTime)>Number(closed[i-1].openTime)));
   assert.ok(closed.every(c=>Number(c.close)>0&&Number(c.volume)>=0));
