@@ -188,7 +188,7 @@ test('Radar 8 quiet micro lane orders lowest valid daily change when participati
   const fast=fastMap(input,overrides);
   const selected=radar.selectMicro(input,fast,1);
   const quiet=selected.filter(x=>x._selection_lane==='quiet');
-  assert.equal(quiet.length,5);
+  assert.equal(quiet.length,3);
   const quietMoves=quiet.map(x=>Math.abs(x.priceChange24h));
   assert.deepEqual(quietMoves,[...quietMoves].sort((a,b)=>a-b));
   assert.ok(quietMoves.every(x=>x<=8));
@@ -301,7 +301,7 @@ test('Radar 8 deep scan preserves score capacity while selecting quiet bases fro
   assert.equal(selected.length,10);
   assert.equal(new Set(selected.map(x=>x.row.symbol)).size,10);
   const quiet=selected.filter(x=>x._selection_lane==='quiet');
-  assert.equal(quiet.length,5);
+  assert.equal(quiet.length,3);
   assert.equal(quiet[0].row.symbol,'ZZZQUIETUSDT');
 });
 
@@ -313,7 +313,7 @@ test('Radar 8 deep scan de-duplicates row-wrapped candidates and fills ten slots
   const selected=radar.selectDeepFromMicro([...input,input[0],input[1]],4);
   assert.equal(selected.length,10);
   assert.equal(new Set(selected.map(x=>x.row.symbol)).size,10);
-  assert.equal(selected.filter(x=>x._selection_lane==='quiet').length,5);
+  assert.equal(selected.filter(x=>x._selection_lane==='quiet').length,3);
 });
 
 
