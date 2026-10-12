@@ -95,8 +95,11 @@ test('Radar 8 logs a full-cycle duration and phase timing breakdown',async()=>{
     rest,store,config:{pollMs:45000,microScanCandidates:8,deepCandidates:3},
     clock:()=>now,logger:{info:x=>events.push(String(x)),warn:x=>events.push(String(x))}
   });
+  // A stuck scheduler journal write must not hold the background cycle latch.
+  radar.scheduler.flush=()=>new Promise(()=>{});
   radar.running=true;
   assert.equal(await radar.tick(),true);
+  assert.equal(radar.busy,false,'scan latch must release even if archive flush never resolves');
   const line=events.find(x=>x.startsWith('[RADARX_SCAN_COMPLETE] '));
   assert.ok(line,'complete scan timing log must be emitted');
   const report=JSON.parse(line.slice(line.indexOf('{')));
@@ -110,6 +113,20 @@ test('Radar 8 logs a full-cycle duration and phase timing breakdown',async()=>{
   assert.equal(report.real_order_execution,false);
   for(const key of ['universe_refresh_ms','ticker_fast_selection_ms','market_context_ms','outcome_maintenance_ms','micro_scan_ms','market_micro_overlap_ms','deep_scan_ms','signal_archive_ms','notification_ms','other_ms'])
     assert.ok(Number.isFinite(report.phase_timings_ms[key]),key);
+});
+
+test('Radar 8 always releases the cycle latch when scheduler hydration fails',async()=>{
+  const events=[];
+  const radar=new EarlyExpansionRadar({
+    rest:{},store:{},
+    clock:()=>now,
+    logger:{info:x=>events.push(String(x)),warn:x=>events.push(String(x))}
+  });
+  radar.running=true;
+  radar.scheduler.hydrate=async()=>{throw new Error('SIMULATED_SCHEDULER_HYDRATE_FAILURE');};
+  assert.equal(await radar.tick(),false);
+  assert.equal(radar.busy,false,'failed hydration must not leave the scanner permanently busy');
+  assert.match(radar.lastError,/SIMULATED_SCHEDULER_HYDRATE_FAILURE/);
 });
 
 test('Radar 8 starts 15m, 1h, 4h and depth reads concurrently for each deep candidate',async()=>{
@@ -169,6 +186,19 @@ test('Radar 8 does not classify missing daily change as a quiet candidate',()=>{
   assert.equal(selected.some(x=>x.symbol==='UNKNOWN24HUSDT'&&x._selection_lane==='quiet'),false);
 });
 
+test('Radar 8 excludes benchmarks and tokenized-equity symbols even before the full-market cache is ready',()=>{
+  const radar=makeRadar({microScanCandidates:12,quietReserve:4,rotationReserve:3});
+  const input=rows(24);
+  input.push(
+    {symbol:'BTCUSDT',lastPrice:65000,priceChange24h:1,quoteVolume24h:50_000_000,tradeCount24h:100000},
+    {symbol:'BNBUSDT',lastPrice:600,priceChange24h:2,quoteVolume24h:10_000_000,tradeCount24h:50000},
+    {symbol:'SOXLBUSDT',lastPrice:14,priceChange24h:5,quoteVolume24h:5_000_000,tradeCount24h:30000}
+  );
+  const selected=radar.selectMicro(input,fastMap(input),11);
+  assert.equal(selected.length,12);
+  assert.ok(selected.every(x=>!['BTCUSDT','BNBUSDT','SOXLBUSDT'].includes(x.symbol)));
+});
+
 test('Radar 8 prioritizes symbols not covered in the prior rotation cycle',()=>{
   const radar=makeRadar({microScanCandidates:10,quietReserve:0,rotationReserve:5});
   const input=rows(50),fast=fastMap(input);
@@ -201,6 +231,42 @@ test('Radar 8 gives confirmed activity shocks a deep-scan bypass without grantin
   const selected=radar.selectDeepFromMicro([event,...others],9);
   assert.ok(selected.some(x=>x.row.symbol==='EVENTUSDT'&&x._selection_lane==='exceptional'));
   assert.equal(event.micro_fingerprint.activity_shock.entry_eligible,false);
+});
+
+test('Radar 8 gives a market-wide confirmed burst deep priority even when Micro score is weak',()=>{
+  const radar=makeRadar({deepCandidates:3,quietReserve:1,rotationReserve:1,exceptionalRotationBypassSlots:2});
+  const event=candidate('PLUMEUSDT',16,{score:18,participation:48,tradeParticipation:48,structure:42,compression:42,volume:1.0,trades:1.0});
+  event.fast={
+    price_change_pct:.42,price_acceleration_pct:.21,volume_accel_ratio:2.8,trade_accel_ratio:2.0,
+    market_wide_event_driven_breakout:{detected:true,stage:'EVENT_DRIVEN_BREAKOUT',needs_micro_confirmation:true}
+  };
+  const others=[
+    candidate('HIGH1USDT',10,{score:95}),candidate('HIGH2USDT',11,{score:91}),
+    candidate('HIGH3USDT',12,{score:87}),candidate('HIGH4USDT',13,{score:85})
+  ];
+  radar.lastDeepScanCycleBySymbol.set('PLUMEUSDT',30);
+  radar.lastDeepAtBySymbol.set('PLUMEUSDT',now-1000);
+  radar.scheduler.lastStartedAt.set('DEEP:PLUMEUSDT',now-1000);
+  const selected=radar.selectDeepFromMicro([event,...others],31);
+  assert.ok(selected.some(x=>x.row.symbol==='PLUMEUSDT'&&x._selection_lane==='exceptional'));
+  assert.equal(event.micro_fingerprint.eligible,false,'Deep priority does not grant alert eligibility');
+});
+
+test('Radar 8 gives two simultaneous confirmed bursts two deep slots while preserving rotation',()=>{
+  const radar=makeRadar({deepCandidates:3,quietReserve:1,rotationReserve:1,exceptionalRotationBypassSlots:2});
+  const mkEvent=(symbol,score)=> {
+    const item=candidate(symbol,16,{score,participation:48,tradeParticipation:48,structure:42,compression:42,volume:1.0,trades:1.0});
+    item.fast={price_change_pct:.40,price_acceleration_pct:.20,volume_accel_ratio:2.8,trade_accel_ratio:2.0,
+      market_wide_event_driven_breakout:{detected:true,stage:'EVENT_DRIVEN_BREAKOUT',needs_micro_confirmation:true}};
+    radar.lastDeepScanCycleBySymbol.set(symbol,30);radar.lastDeepAtBySymbol.set(symbol,now-1000);
+    return item;
+  };
+  const a=mkEvent('EVENTAUSDT',20),b=mkEvent('EVENTBUSDT',19);
+  const others=[candidate('HIGH1USDT',10,{score:95}),candidate('HIGH2USDT',11,{score:91}),candidate('HIGH3USDT',12,{score:87})];
+  const selected=radar.selectDeepFromMicro([a,b,...others],31);
+  assert.equal(selected.filter(x=>x._selection_lane==='exceptional').length,2);
+  assert.ok(selected.some(x=>x.row.symbol==='EVENTAUSDT'));
+  assert.ok(selected.some(x=>x.row.symbol==='EVENTBUSDT'));
 });
 
 test('Radar 8 deep scan preserves score capacity while selecting quiet bases from smallest move first',()=>{

@@ -79,6 +79,27 @@ test('fast ticker activity can reserve a micro-scan slot even after the daily mo
 });
 
 
+test('Micro selection caps reserves so three event-priority slots survive oversized configured reserves',()=>{
+  const now=1_900_000_000_000;
+  const radar=new EarlyExpansionRadar({
+    rest:{},store:{},
+    config:{microScanCandidates:12,quietReserve:8,rotationReserve:8,exceptionalRotationBypassSlots:3},
+    clock:()=>now,logger:{warn(){}}
+  });
+  const rows=Array.from({length:30},(_,i)=>({
+    symbol:(i<6?'BURST':'BASE')+String(i).padStart(2,'0')+'USDT',
+    lastPrice:1+i*.01,priceChange24h:1,quoteVolume24h:2_000_000,tradeCount24h:20000
+  }));
+  const fast=new Map(rows.map((row,i)=>[row.symbol,i<6
+    ?{price_change_pct:.42,price_acceleration_pct:.20,volume_accel_ratio:3.2,trade_accel_ratio:2.1}
+    :{price_change_pct:.01,price_acceleration_pct:0,volume_accel_ratio:1,trade_accel_ratio:1}
+  ]));
+  const selected=radar.selectMicro(rows,fast,1);
+  assert.equal(selected.length,12);
+  assert.equal(new Set(selected.map(x=>x.symbol)).size,12);
+  assert.equal(selected.filter(x=>x._selection_lane==='exceptional').length,3);
+});
+
 test('keeps a fast-shock symbol in the micro queue while waiting for its 5m candle to close',()=>{
   const now=1_900_000_000_000;
   const rest={request:async()=>({data:[]}),klines:async()=>({candles:[]}),depth:async()=>({data:{bids:[],asks:[]}})};

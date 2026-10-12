@@ -170,6 +170,28 @@ test('scheduler archive hydrates each radar independently when another radar dom
 });
 
 
+test('a stalled scheduler journal compaction cannot block user-visible radar alert persistence',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-scheduler-write-isolation-'));
+  const store=await new DurableStore({dir}).init();
+  const original=store._compactJsonlArchive.bind(store);
+  store._compactJsonlArchive=async(kind,options)=>{
+    if(kind==='schedulerEvents')return new Promise(()=>{});
+    return original(kind,options);
+  };
+  const pendingJournalWrite=store.appendScanSchedulerEvents([
+    {radar:'RADAR_8',stage:'DEEP',symbol:'PLUMEUSDT',event_type:'DEFERRED',event_at:1000}
+  ]);
+  pendingJournalWrite.catch(()=>{});
+  const persisted=await Promise.race([
+    store.appendKahirAlert({id:'KAHIR:TESTUSDT:1000',radar:'KAHIR_RADAR',symbol:'TESTUSDT',processed_at:1000,price:1}),
+    new Promise((_,reject)=>setTimeout(()=>reject(new Error('MAIN_STORE_BLOCKED_BY_SCHEDULER_JOURNAL')),750))
+  ]);
+  assert.deepEqual(persisted,{written:1});
+  const rows=await store.readKahirAlerts({sinceMs:0,limit:10});
+  assert.equal(rows.length,1);
+  assert.equal(rows[0].symbol,'TESTUSDT');
+});
+
 test('scheduler journal automatically compacts its tail per radar before unbounded growth',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-scheduler-bounded-archive-'));
   const store=await new DurableStore({dir}).init();

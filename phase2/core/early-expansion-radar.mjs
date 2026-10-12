@@ -8,7 +8,7 @@ import {assessQuietBasePreExpansion,summarizeQuietBasePreExpansion} from './quie
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
 import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId,normalizeMissing,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,reconcileEligibilityQueueAge} from './scan-journey-ledger.mjs';
 import {ScanSchedulerJournal, schedulerLaneReason} from './scan-scheduler.mjs';
-import {MarketWideLightScan} from './market-wide-light-scan.mjs';
+import {MarketWideLightScan, isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
 
 function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
@@ -171,9 +171,9 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   maxSpreadBps:22,
   minDataQuality:70,
   microScanCandidates:12,
-  rotationReserve:8,
+  rotationReserve:3,
   deepCandidates:3,
-  quietReserve:8,
+  quietReserve:4,
   microConcurrency:6,
   deepConcurrency:4,
   oneMinuteKlines:180,
@@ -191,7 +191,7 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   quietMinParticipationRatio:1.12,
   quietMinPriceAccelerationPct:0.03,
   quietDeepMinParticipationScore:58,
-  exceptionalRotationBypassSlots:2,
+  exceptionalRotationBypassSlots:3,
   exceptionalVolumeAccelRatio:2.2,
   exceptionalTradeAccelRatio:1.8,
   exceptionalPriceAccelerationPct:0.15,
@@ -818,8 +818,18 @@ function quietDeepRank(item,cfg){
 }
 function isExceptionalDeepCandidate(item,cfg){
   const move=absolute24hMove(item?.row),fp=item?.micro_fingerprint,m=fp?.metrics||{},c=fp?.category_scores||{};
-  // A verified closed-candle activity shock earns a deep confirmation slot even after a large daily move.
-  // This changes observation priority only; it does not grant signal or entry eligibility.
+  const fast=item?.fast||{};
+  const cachedEvent=fast.market_wide_event_driven_breakout||fast.event_driven_breakout||null;
+  const fastMove=hasFiniteNumber(fast.price_change_pct)?Number(fast.price_change_pct):null;
+  const fastAcceleration=hasFiniteNumber(fast.price_acceleration_pct)?Number(fast.price_acceleration_pct):null;
+  const fastVolume=hasFiniteNumber(fast.volume_accel_ratio)?Number(fast.volume_accel_ratio):0;
+  const fastTrades=hasFiniteNumber(fast.trade_accel_ratio)?Number(fast.trade_accel_ratio):0;
+  // Market-wide event evidence and high-confidence short-term bursts get Deep
+  // confirmation priority before the daily anti-chase gate. This is observation
+  // priority only; final alert eligibility still rejects already-extended prices.
+  if(cachedEvent?.detected===true&&cachedEvent?.stage==='EVENT_DRIVEN_BREAKOUT')return true;
+  if(fastVolume>=Number(cfg.exceptionalVolumeAccelRatio??2.2)&&fastAcceleration>=Number(cfg.exceptionalPriceAccelerationPct??.15)&&fastMove>0)return true;
+  if(fastVolume>=Number(cfg.exceptionalVolumeAccelRatio??2.2)&&fastTrades>=Number(cfg.exceptionalTradeAccelRatio??1.8)&&fastAcceleration>0&&fastMove>0)return true;
   if(fp?.activity_shock?.detected===true)return true;
   if(move===null||move>=Number(cfg.hardExtended24hMovePct||18))return false;
   const volume=Math.max(hasFiniteNumber(m.rvol_1m)?Number(m.rvol_1m):0,hasFiniteNumber(m.rvol_5m)?Number(m.rvol_5m):0);
@@ -1180,7 +1190,9 @@ export class EarlyExpansionRadar{
   selectMicro(rows,fastBySymbol,cycle=0){
     const currentCycle=Math.max(0,Math.trunc(Number(cycle)||0));
     const selectionAt=this.clock();
-    const all=(rows||[]).filter(row=>row&&row.symbol).map(row=>{
+    // Benchmark, wrapped, pegged and tokenized-equity symbols remain in market
+    // coverage but must not consume the limited directional-altcoin scan capacity.
+    const all=(rows||[]).filter(row=>row&&row.symbol&&isDirectionalCandidateSymbol(row.symbol)).map(row=>{
       const fast=fastBySymbol.get(row.symbol)||{};
       const quiet=quietCandidateScore(row,fast,this.config);
       const fastScore=fastCandidateScore(row,fast,this.config);
@@ -1218,9 +1230,20 @@ export class EarlyExpansionRadar{
     const n=Math.max(1,Math.trunc(this.config.microScanCandidates||36));
     const target=Math.min(n,new Set(all.map(x=>String(x.symbol).toUpperCase())).size);
     if(!target)return [];
-    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve??8)),Math.max(0,target-1));
-    const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve??8)),Math.max(0,target-q-1));
-    const core=target-q-r;
+    // Keep event/score lanes alive: fixed quiet+rotation reserves previously
+    // consumed 11 of 12 Micro slots, leaving only one slot for every fast event.
+    // Cap quiet to one third and rotation to one quarter for larger batches.
+    // A 3-symbol Deep batch keeps one quiet, one rotation, and one core slot.
+    const configuredQuiet=Math.min(Math.max(0,Math.trunc(this.config.quietReserve??4)),Math.max(0,target-1));
+    const configuredRotation=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve??3)),Math.max(0,target-configuredQuiet-1));
+    let q=configuredQuiet,r=configuredRotation,core=target-q-r;
+    if(core<2&&target>1){
+      const quietCap=target>=6?Math.floor(target/3):Math.floor(target/2);
+      const rotationCap=target>=6?Math.floor(target/4):1;
+      q=Math.min(configuredQuiet,Math.max(0,Math.min(target-1,quietCap)));
+      r=Math.min(configuredRotation,Math.max(0,Math.min(target-q-1,rotationCap)));
+      core=target-q-r;
+    }
     const byScore=[...all].sort((a,b)=>b._microPreScore-a._microPreScore||a.symbol.localeCompare(b.symbol));
     const byQuiet=all.filter(x=>x._quietEligible).sort((a,b)=>
       (absolute24hMove(a)??Infinity)-(absolute24hMove(b)??Infinity)||b._quietScore-a._quietScore||a.symbol.localeCompare(b.symbol));
@@ -1249,7 +1272,8 @@ export class EarlyExpansionRadar{
   selectDeepFromMicro(results,cycle=0){
     const currentCycle=Math.max(0,Math.trunc(Number(cycle)||0));
     const selectionAt=this.clock();
-    const valid=(results||[]).filter(x=>x&&!x.failed&&selectionSymbol(x)&&x.micro_fingerprint?.score!=null&&hasFiniteNumber(x.micro_fingerprint.score));
+    const valid=(results||[]).filter(x=>x&&!x.failed&&selectionSymbol(x)&&
+      isDirectionalCandidateSymbol(selectionSymbol(x))&&x.micro_fingerprint?.score!=null&&hasFiniteNumber(x.micro_fingerprint.score));
     const n=Math.max(1,Math.trunc(this.config.deepCandidates||10));
     const target=Math.min(n,new Set(valid.map(selectionSymbol)).size);
     if(!target)return [];
@@ -1284,11 +1308,24 @@ export class EarlyExpansionRadar{
     const byExceptional=valid.filter(x=>isExceptionalDeepCandidate(x,this.config)).sort((a,b)=>
       Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const selected=[],seen=new Set();
-    const exceptionSlots=Math.min(core,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2)));
+    const configuredExceptionSlots=Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2));
+    let exceptionSlots=Math.min(core,configuredExceptionSlots),quietSlots=q,rotationSlots=r,scoreSlots=core;
+    // When at least two independent fast events are present, shrink the quiet
+    // reserve for this cycle so a three-symbol Deep budget can confirm two bursts
+    // and still preserve one rotation slot for symbols not previously Deep-scanned.
+    if(byExceptional.length>=2&&configuredExceptionSlots>0&&target>=3){
+      const maxEventSlots=target>=6?Math.min(configuredExceptionSlots,Math.max(2,Math.floor(target*.35))):
+        Math.min(configuredExceptionSlots,target-1);
+      exceptionSlots=Math.min(byExceptional.length,maxEventSlots);
+      const remaining=Math.max(0,target-exceptionSlots);
+      quietSlots=Math.min(q,Math.floor(remaining/3));
+      rotationSlots=Math.min(r,Math.max(0,remaining-quietSlots));
+      scoreSlots=Math.max(0,remaining-quietSlots-rotationSlots);
+    }
     takeUniqueLane(selected,seen,byExceptional,exceptionSlots,'exceptional');
-    takeUniqueLane(selected,seen,byScore,Math.max(0,core-selected.length),'score');
-    takeUniqueLane(selected,seen,byQuiet,q,'quiet');
-    takeUniqueLane(selected,seen,byRotation,r,'rotation');
+    takeUniqueLane(selected,seen,byScore,Math.max(0,scoreSlots-selected.filter(x=>x._selection_lane==='score').length),'score');
+    takeUniqueLane(selected,seen,byQuiet,quietSlots,'quiet');
+    takeUniqueLane(selected,seen,byRotation,rotationSlots,'rotation');
     takeUniqueLane(selected,seen,byScore,target-selected.length,'fill_score');
     takeUniqueLane(selected,seen,byQuiet,target-selected.length,'fill_quiet');
     takeUniqueLane(selected,seen,byRotation,target-selected.length,'fill_rotation');
@@ -1391,7 +1428,6 @@ export class EarlyExpansionRadar{
   async tick({quote=this.config.quote}={}){
     if(!this.running||this.busy)return false;
     this.busy=true;const scanStartedAt=this.clock();
-    await this.scheduler.hydrate();
     const journeyEntries=new Map(),journeyMicroBySymbol=new Map(),journeyDeepBySymbol=new Map(),journeyDeepCandlesBySymbol=new Map();
     const journey={cycle_id:null,cycle_number:null,quote:INCOMPLETE,source:INCOMPLETE,expected_symbols:[],received_symbols:[],eligible_symbols:[],status:'RUNNING'};
     const makeJourneyEntry=(symbol)=>({
@@ -1413,6 +1449,8 @@ export class EarlyExpansionRadar{
       outcome_maintenance_ms:0,micro_scan_ms:0,market_micro_overlap_ms:0,
       deep_scan_ms:0,signal_archive_ms:0,notification_ms:0};
     try{
+      // Hydration must be protected by the same lifecycle guard as the scan.
+      await this.scheduler.hydrate();
       const q=this.normalizeQuote(quote);
       await this.hydrateScanJourneyState();
       const now=this.clock();
@@ -2142,7 +2180,15 @@ export class EarlyExpansionRadar{
       }
       this.lastResult={...emptyEarlyExpansionSnapshot(this.config,quote,this.lastError),schema_version:'RADAR8_V2',as_of:new Date(scanStartedAt).toISOString()};
       return false;
-    }finally{await this.scheduler.flush();this.busy=false;}
+    }finally{
+      // Release the cycle latch before scheduling archive writes. A slow queued
+      // durable-store append must never prevent future background scan cycles.
+      this.busy=false;
+      try{
+        const flushing=this.scheduler.flush();
+        Promise.resolve(flushing).catch(error=>this.noteError(error,'scheduler-flush'));
+      }catch(error){this.noteError(error,'scheduler-flush');}
+    }
   }
   snapshot(limit=100,quote=this.config.quote){
     const q=this.normalizeQuote(quote);

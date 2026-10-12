@@ -1,6 +1,7 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {formatRadarTime12h} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
+import {isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)||0));
 const finite=(x,d=null)=>Number.isFinite(Number(x))?Number(x):d;
@@ -147,7 +148,10 @@ export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHis
     score>=KAHIR_RADAR_DEFAULTS.minScore&&
     (z1>=KAHIR_RADAR_DEFAULTS.minOneMinuteZ||z5>=KAHIR_RADAR_DEFAULTS.minFiveMinuteZ)&&
     volumeRatio>=KAHIR_RADAR_DEFAULTS.minVolumeRatio&&
+    tradeRatio>=1.20&&
     eff>=KAHIR_RADAR_DEFAULTS.minEfficiency&&
+    acceptance>=65&&
+    persistence>=68&&
     relativeAccelerationBps>=KAHIR_RADAR_DEFAULTS.minRelativeAccelerationBps;
 
   const stage=eligible?(score>=92?'POWER_SURGE':'IGNITION'):score>=76?'BUILDING_PRESSURE':'WATCH';
@@ -268,6 +272,7 @@ export class KahirRadar{
     const r=await this.rest.request('/api/v3/ticker/24hr');
     return (Array.isArray(r.data)?r.data:[])
       .map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
+      .filter(x=>isDirectionalCandidateSymbol(x.symbol))
       .filter(x=>this.universe.includes(x.symbol))
       .filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h);
   }

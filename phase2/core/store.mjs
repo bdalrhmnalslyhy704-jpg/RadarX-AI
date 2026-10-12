@@ -16,7 +16,7 @@ const ORPHAN_TEMP_SUFFIX=/\.(?:tmp|repair|outcome|compact)-\d+-\d+$/;
 
 
 export class DurableStore {
-  constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
+  constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.schedulerEventsQueue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
     this.scanJourneyDir=join(dir,'scan-journeys');
     this.files={scanJourneyManifest:join(dir,'scan-journey-manifest.json'),subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
       signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),
@@ -50,6 +50,14 @@ export class DurableStore {
     this.ready=true;return this;
   }
   async lock(fn){const p=this.queue.then(fn);this.queue=p.catch(()=>{});return p;}
+  // Operational scheduler history has its own queue: slow compaction/readback of
+  // this bounded journal must never block user-visible alert persistence or the
+  // scan-journey ledger, which use the primary DurableStore queue.
+  async schedulerEventsLock(fn){
+    const p=this.schedulerEventsQueue.then(fn);
+    this.schedulerEventsQueue=p.catch(()=>{});
+    return p;
+  }
   async readJson(p){try{return JSON.parse(await readFile(p,'utf8'));}catch{return{};}}
   async writeJson(p,v){
     const t=p+'.tmp-'+process.pid+'-'+Date.now();
@@ -86,6 +94,7 @@ export class DurableStore {
   }
 
   async compactJsonlArchive(kind,{force=false}={}){
+    if(kind==='schedulerEvents')return this.schedulerEventsLock(()=>this._compactJsonlArchive(kind,{force}));
     return this.lock(()=>this._compactJsonlArchive(kind,{force}));
   }
   async _compactJsonlArchive(kind,{force=false}={}){
@@ -244,7 +253,14 @@ export class DurableStore {
   async appendEarlyExpansionAlert(v){return this.lock(async()=>{await appendFile(this.files.earlyExpansionAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readEarlyExpansionAlerts({sinceMs=0,limit=100}={}){const safeLimit=Math.min(500,Math.max(1,Number(limit)||100));const rows=await this.readRecent('earlyExpansionAlerts',500);return rows.filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).sort((a,b)=>Number(a?.processed_at??a?.detected_at??0)-Number(b?.processed_at??b?.detected_at??0)).slice(0,safeLimit);}
   async appendScanSchedulerEvents(events){
-    return this.appendJsonlArchive('schedulerEvents',events);
+    const rows=(Array.isArray(events)?events:[events]).filter(x=>x&&typeof x==='object'&&!Array.isArray(x));
+    if(!rows.length)return {written:0};
+    return this.schedulerEventsLock(async()=>{
+      await this._compactJsonlArchive('schedulerEvents');
+      await appendFile(this.files.schedulerEvents,rows.map(x=>JSON.stringify(x)).join('\n')+'\n');
+      this.lastWriteAt=Date.now();
+      return {written:rows.length};
+    });
   }
   async readScanSchedulerEvents({radar=null,symbol=null,sinceMs=0,limit=1000}={}){
     const safeLimit=Math.min(5000,Math.max(1,Number(limit)||1000));
@@ -255,7 +271,7 @@ export class DurableStore {
     const rows=[];
     let cursor=0;
     try{
-      await this.lock(async()=>{
+      await this.schedulerEventsLock(async()=>{
         const input=createReadStream(this.files.schedulerEvents,{encoding:'utf8'});
         const reader=createInterface({input,crlfDelay:Infinity});
         try{

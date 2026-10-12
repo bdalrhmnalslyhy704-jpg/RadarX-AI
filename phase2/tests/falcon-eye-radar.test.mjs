@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {buildFalconEyeAnalysis,FalconEyeRadar} from '../core/falcon-eye-radar.mjs';
+import {evaluateRadarNotificationGate} from '../core/radar-notification-gate.mjs';
 
 function candle(openTime,close,{open=close-0.02,high=close+0.06,low=close-0.06,volume=900,tradeCount=80,taker=0.50}={}) {
   return {openTime,closeTime:openTime+59_999,open,high,low,close,volume,quoteVolume:close*volume,tradeCount,takerBuyBaseVolume:volume*taker,closed:true};
@@ -24,6 +25,25 @@ function flat(n=40,start=100,step=300_000){
     return {openTime:1_800_000_000_000+i*step,closeTime:1_800_000_000_000+i*step+step-1,open:close-0.005,high:close+0.02,low:close-0.02,close,volume:1200,quoteVolume:close*1200,tradeCount:120,takerBuyBaseVolume:600,closed:true};
   });
 }
+
+test('Falcon Eye notification diversity reads the actual nested component scores',()=>{
+  const now=1_900_000_000_000;
+  const alert={
+    radar:'FALCON_EYE_RADAR',symbol:'PLUMEUSDT',direction:'UP_PREBREAKOUT',
+    opportunity_score:90,price_change_24h:2.5,data_quality:95,liquidity_quality:80,
+    confirmation_count:10,detected_at:now,processed_at:now,reasons:['compression','volume','trades','structure'],
+    risk_flags:[],
+    falcon_eye:{
+      score:90,eligible:true,not_chasing:true,confirmation_count:10,
+      component_scores:{quietness:82,compression:84,momentum:79,volume:88,trades:78,taker:81,structure:83,resistance:78,relative_strength:76,derivatives:54,breakout:77,atr:74,range:73},
+      metrics:{move_24h_pct:2.5,return_5m:.4,return_10m:.7,ema21_distance_pct:.8,resistance_gap_pct:.3},
+      derivatives:{futures_available:false}
+    }
+  };
+  const result=evaluateRadarNotificationGate(alert,{now,commit:false});
+  assert.ok(result.category_hits>=5,JSON.stringify({category_hits:result.category_hits,failures:result.failures}));
+  assert.equal(result.failures.includes('CATEGORY_DIVERSITY_LOW'),false);
+});
 
 test('Falcon Eye turns the OGN fingerprint into an early, multi-factor setup',()=>{
   const now=1_800_000_000_000+240*60_000;
