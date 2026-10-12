@@ -122,7 +122,13 @@ function domainScores(alert){
   const strong=alert?.strong_move||{};
   const rotation=alert?.rotation||{};
   const professor=alert?.professor_opinion||{};
-  const whale=alert?.analysis||{};
+  const falcon=alert?.falcon_eye||{};
+  const falconScores=falcon.component_scores||{};
+  const falconMetrics=falcon.metrics||{};
+  const kahir=alert?.kahir_analysis||alert?.analysis||{};
+  const kahirAlgorithms=kahir.algorithms||{};
+  const kahirMetrics=kahir.metrics||{};
+  const whale=alert?.analysis||alert?.kahir_analysis||{};
   const pulse=alert?.market_pulse||{};
 
   const pick=(paths,fallback=50)=>firstNumber(alert,paths,
@@ -134,7 +140,10 @@ function domainScores(alert){
     num(fp.structure_score,null),
     num(elite.categories?.structure,null),
     num(liq.metrics?.structure_score,null),
-    num(rotation.metrics?.resilience,null)
+    num(rotation.metrics?.resilience,null),
+    num(falconScores.structure,null),
+    num(falconMetrics.higher_low_score,null),
+    num(kahirAlgorithms.RANGE_ACCEPTANCE?.score,null)
   ],50);
 
   const flow=average([
@@ -145,6 +154,8 @@ function domainScores(alert){
     num(elite.categories?.flow,null),
     num(liq.metrics?.absorption_score,null),
     num(whale.score,null),
+    num(falconScores.taker,null),
+    num(falconMetrics.taker_buy_ratio,null)!==null?clamp(50+(Number(falconMetrics.taker_buy_ratio)-.5)*250):null,
     Number.isFinite(Number(pulse?.priceDeltaPct))?clamp(50+Number(pulse.priceDeltaPct)*40):null
   ],50);
 
@@ -154,6 +165,9 @@ function domainScores(alert){
     num(fp.acceleration_score,null),
     num(strong.metrics?.return_3m,null)!=null?clamp(50+Number(strong.metrics.return_3m)*30):null,
     num(elite.categories?.momentum,null),
+    num(falconScores.momentum,null),
+    num(kahirMetrics.one_minute_z,null)!==null?clamp(50+Number(kahirMetrics.one_minute_z)*15):null,
+    num(kahirMetrics.five_minute_z,null)!==null?clamp(50+Number(kahirMetrics.five_minute_z)*18):null,
     num(pulse?.accelerationScore,null),
     num(pulse?.score,null)
   ],50);
@@ -162,7 +176,10 @@ function domainScores(alert){
     pick(['compression_score']),
     pick(['compression']),
     num(fp.compression_score,null),
-    num(elite.categories?.compression,null)
+    num(elite.categories?.compression,null),
+    num(falconScores.quietness,null),
+    num(falconScores.compression,null),
+    num(kahirAlgorithms.VOLATILITY_REGIME_TRANSITION?.score,null)
   ],50);
 
   const relative=average([
@@ -170,7 +187,10 @@ function domainScores(alert){
     pick(['relative_strength']),
     num(fp.relative_strength_score,null),
     num(elite.categories?.relative,null),
-    num(rotation.metrics?.lag,null)
+    num(rotation.metrics?.lag,null),
+    num(falconScores.relative_strength,null),
+    num(falconMetrics.relative_strength_5m_spread_pct,null)!==null?clamp(50+Number(falconMetrics.relative_strength_5m_spread_pct)*36):null,
+    num(kahirMetrics.relative_acceleration_bps,null)!==null?clamp(50+Number(kahirMetrics.relative_acceleration_bps)*5):null
   ],50);
 
   const trigger=average([
@@ -178,7 +198,11 @@ function domainScores(alert){
     pick(['breakout_score']),
     num(elite.categories?.trigger,null),
     num(elite.score,null),
-    num(fp.score,null)
+    num(fp.score,null),
+    num(falconScores.breakout,null),
+    num(falconScores.resistance,null),
+    num(falcon.score,null),
+    num(kahirMetrics.one_minute_z,null)!==null?clamp(50+Number(kahirMetrics.one_minute_z)*15):null
   ],50);
 
   const participation=average([
@@ -187,6 +211,11 @@ function domainScores(alert){
     pick(['trade_score']),
     num(fp.participation_score,null),
     num(elite.categories?.participation,null),
+    num(falconScores.volume,null),
+    num(falconScores.trades,null),
+    num(kahirAlgorithms.PARTICIPATION_REGIME?.score,null),
+    num(falconMetrics.volume_ratio,null)!=null?clamp(46+(Number(falconMetrics.volume_ratio)-1)*31):null,
+    num(falconMetrics.trade_ratio,null)!=null?clamp(46+(Number(falconMetrics.trade_ratio)-1)*30):null,
     num(liq.metrics?.volume_ratio,null)!=null?clamp(50+(Number(liq.metrics.volume_ratio)-1)*55):null,
     num(pulse?.score,null),
     num(pulse?.volumeBurstRatio,null)!=null?clamp(50+Math.log2(Math.max(.25,Number(pulse.volumeBurstRatio)))*18):null,
@@ -197,13 +226,15 @@ function domainScores(alert){
     num(alert?.liquidity_quality,null),
     num(c?.liquidity,null),
     num(alert?.deep_scan?.assessment?.liquidity_score,null),
-    num(liq.metrics?.depth_score,null)
+    num(liq.metrics?.depth_score,null),
+    num(falcon?.liquidity_quality,null)
   ],50);
 
   const data=average([
     num(alert?.data_quality,null),
     num(alert?.data_status?.data_quality,null),
     num(c?.data_quality,null),
+    num(falcon?.data_quality,null),
     num(alert?.deep_scan?.assessment?.data_quality,null)
   ],100);
 
@@ -211,7 +242,9 @@ function domainScores(alert){
     num(professor?.technical_score,null),
     num(professor?.stream_score,null),
     num(professor?.news_score,null),
-    num(alert?.historical_followthrough?.score,null)
+    num(alert?.historical_followthrough?.score,null),
+    num(falcon?.derivatives?.derivatives_volume_score,null),
+    num(falcon?.derivatives?.oi_score,null)
   ],50);
 
   return {
