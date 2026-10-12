@@ -268,3 +268,58 @@ test('failed pre-explosion scan releases its cooldown so it can be retried',asyn
   assert.equal(sentinel.lastEarlyScanAt.has('RETRYUSDT'),false);
   assert.match(sentinel.lastError,/TRANSIENT_FIXTURE_FAILURE/);
 });
+
+
+test('pending move job is upgraded by a fast wake event without duplicating or downgrading it',()=>{
+  const now=1710003000000;
+  const symbol='QUEUEDUSDT';
+  const staleRow={symbol,lastPrice:1,priceChange24h:0.4,quoteVolume24h:2_000_000,tradeCount24h:1200};
+  const latestRow={symbol,lastPrice:1.07,priceChange24h:0.9,quoteVolume24h:2_500_000,tradeCount24h:1600};
+  const wakeTrigger={movePct:0.9,previousMovePct:0.45,deltaPct:0.45,type:'EARLY_WAKE_TICKER_PULSE'};
+  const sentinel=new EarlyMoveSentinel({
+    rest:{},store:{},
+    config:{cooldownMs:0,earlyWakeAlertCooldownMs:0},
+    clock:()=>now,logger:{warn(){}},
+    tickerWsFactory:()=>({start(){},stop(){},health(){return{state:'STOPPED'}}})
+  });
+  sentinel.running=true;
+  sentinel.lastTicker.set(symbol,latestRow);
+  sentinel.deepQueue.push({symbol,row:staleRow,trigger:{movePct:0.4},queuedAt:now-100,mode:'MOVE'});
+  sentinel.drainDeepQueue=async()=>{};
+
+  sentinel.queueDeep(symbol,latestRow,wakeTrigger,'EARLY_WAKE');
+  assert.equal(sentinel.deepQueue.length,1,'one symbol must have at most one pending deep scan');
+  assert.equal(sentinel.deepQueue[0].mode,'EARLY_WAKE','fast wake must promote the pending scan');
+  assert.equal(sentinel.deepQueue[0].trigger,wakeTrigger,'the promoted trigger must carry the fast event evidence');
+  assert.equal(sentinel.deepQueue[0].row,latestRow,'queued work must use the latest ticker row');
+
+  sentinel.queueDeep(symbol,staleRow,{movePct:0.2,discoveryScore:75},'PRE_EXPLOSION');
+  assert.equal(sentinel.deepQueue.length,1);
+  assert.equal(sentinel.deepQueue[0].mode,'EARLY_WAKE','a lower-priority discovery event must not downgrade the fast wake');
+  assert.equal(sentinel.deepQueue[0].trigger,wakeTrigger);
+  assert.equal(sentinel.deepQueue[0].row,latestRow);
+});
+
+test('deep scan refreshes the ticker snapshot after a job has waited in the queue',async()=>{
+  const now=1710004000000;
+  const symbol='FRESHUSDT';
+  const staleRow={symbol,lastPrice:1,priceChange24h:0.2,quoteVolume24h:1_000_000,tradeCount24h:500};
+  const latestRow={symbol,lastPrice:1.08,priceChange24h:0.85,quoteVolume24h:1_800_000,tradeCount24h:950};
+  let scannedRow=null;
+  const sentinel=new EarlyMoveSentinel({
+    rest:{},store:{},
+    config:{maxDeepPerCycle:1,cooldownMs:0,earlyWakeAlertCooldownMs:0},
+    clock:()=>now,logger:{warn(){}}
+  });
+  sentinel.running=true;
+  sentinel.scanner={scanSymbol:async row=>{
+    scannedRow=row;
+    return {symbol,price_change_24h:0,data_quality:0,liquidity_quality:0,strategies:[]};
+  }};
+  sentinel.lastTicker.set(symbol,latestRow);
+  sentinel.deepQueue.push({symbol,row:staleRow,trigger:{movePct:0.2},queuedAt:now-500,mode:'MOVE'});
+
+  await sentinel.drainDeepQueue();
+  assert.equal(scannedRow,latestRow,'scanSymbol must receive the newest known ticker, not the enqueue-time snapshot');
+  assert.equal(sentinel.deepActive,0,'active-scan accounting must return to zero');
+});
