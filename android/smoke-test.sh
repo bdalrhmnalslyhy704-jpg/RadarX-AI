@@ -231,6 +231,14 @@ head -c 8 "${RUNNER_TEMP}/radarx-offline.png" | od -An -t x1 | tr -d ' ' | grep 
 
 echo "Android emulator online/offline UI + continuous-auto-start/background-service registration smoke tests passed."
 
+# The signed Release APK is intentionally non-debuggable; debug replay overrides
+# are tested by the full Triple CI job using a Debug APK. Keep Release smoke
+# focused on actual signed-build launch, resumed Activity, UI readiness and the
+# background service in both online and offline conditions.
+if [[ "${RADARX_SKIP_DURABLE_REPLAY:-0}" == "1" ]]; then
+  echo "ANDROID_RELEASE_SMOKE_PASS: signed Release APK online/offline UI + background service verified; debug-only replay runs in Triple CI."
+  exit 0
+fi
 
 # Deterministic reconnect/restart regression: 623 durable alerts including
 # same-timestamp groups and rows with no source id. The test override is debug-only.
