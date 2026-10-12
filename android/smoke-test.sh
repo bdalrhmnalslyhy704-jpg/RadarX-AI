@@ -127,12 +127,21 @@ start_app_and_wait_ready() {
   fi
   echo "RadarX Activity/process/UI ready: pid=${pid}"
 
+  if printf '%s\n' "${logs}" | grep -Fq 'BACKGROUND_START_REQUEST'; then
+    echo "::error::Background monitor was started through the user-initiated path during automatic-start smoke"
+    printf '%s\n' "${logs}" | tail -n 120
+    return 1
+  fi
+
   PHASE="wait for background foreground-service startup"
   local service_ready=0
   for attempt in $(seq 1 30); do
     logs="$(cat "${APP_LOG_FILE}" 2>/dev/null || true)"
-    if printf '%s\n' "${logs}" | grep -Fq "BACKGROUND_AUTO_START_REQUEST" &&
-       printf '%s\n' "${logs}" | grep -Fq "BACKGROUND_SERVICE_READY"; then
+    # Service may be restored by the native boot/continuity path before
+    # MainActivity emits BACKGROUND_AUTO_START_REQUEST. Require a fresh ready
+    # marker from this clean launch; actual foreground-service/process state is
+    # independently asserted immediately after the online screenshot.
+    if printf '%s\n' "${logs}" | grep -Fq "BACKGROUND_SERVICE_READY"; then
       service_ready=1
       break
     fi
@@ -150,7 +159,7 @@ start_app_and_wait_ready() {
     return 1
   fi
   if [[ "${service_ready}" -ne 1 ]]; then
-    echo "::error::Expected automatic monitor startup markers were not observed"
+    echo "::error::Background monitor did not emit BACKGROUND_SERVICE_READY after clean launch"
     printf '%s\n' "${logs}" | tail -n 180
     return 1
   fi
