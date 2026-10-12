@@ -137,7 +137,7 @@ function subscriptionValid(x){
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null, kahirRadar=null,professorRadar=null,doomsdayRadar=null,earlyExpansionRadar=null,symbolDeepAnalyzer=null,agentMarket=null,alMuqawimRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,radarSwarm=null}= {} ){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null, kahirRadar=null,professorRadar=null,doomsdayRadar=null,earlyExpansionRadar=null,symbolDeepAnalyzer=null,agentMarket=null,alMuqawimRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,radarSwarm=null,marketSnapshotHub=null}= {} ){
   const counters=new Map();
   const moveConfig=config.moveRadar||{thresholdPct:1};
   const originList=config.auth.allowedOrigins;
@@ -200,7 +200,19 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(!rateOk(key))return send(res,429,{error:'RATE_LIMITED'});
     try{
       const u=new URL(req.url,'http://localhost');
-      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false},kahir_radar:kahirRadar?.health?.()||{running:false},doomsday_radar:doomsdayRadar?.health?.()||{running:false},professor_radar:professorRadar?.health?.()||{running:false},early_expansion_radar:earlyExpansionRadar?.health?.()||{running:false},autonomous_ai_market:agentMarket?.health?.()||{running:false},radar_swarm:radarSwarm?.snapshot?.()||{status:'UNAVAILABLE',expected_count:12,registered_count:0},spot_rest_budget:monitor?.rest?.health?.()||{state:'UNAVAILABLE'}});
+      if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{...monitor.health(),move_radar:moveSentinel?.health?.()||{running:false},strong_move_radar:strongMoveRadar?.health?.()||{running:false},rotation_lag_radar:rotationLagRadar?.health?.()||{running:false},liquidity_absorption_radar:liquidityAbsorptionRadar?.health?.()||{running:false},kahir_radar:kahirRadar?.health?.()||{running:false},doomsday_radar:doomsdayRadar?.health?.()||{running:false},professor_radar:professorRadar?.health?.()||{running:false},early_expansion_radar:earlyExpansionRadar?.health?.()||{running:false},autonomous_ai_market:agentMarket?.health?.()||{running:false},radar_swarm:radarSwarm?.snapshot?.()||{status:'UNAVAILABLE',expected_count:12,registered_count:0},spot_rest_budget:monitor?.rest?.health?.()||{state:'UNAVAILABLE'},market_snapshot_hub:marketSnapshotHub?.health?.()||{status:'UNAVAILABLE'}});
+      if(u.pathname==='/api/market-coverage'&&req.method==='GET'){
+        if(!marketSnapshotHub)return send(res,503,{error:'MARKET_SNAPSHOT_HUB_UNAVAILABLE',coverage:{status:'UNAVAILABLE'},meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        const quote=String(u.searchParams.get('quote')||'USDT').trim().toUpperCase();
+        if(!/^[A-Z0-9]{2,10}$/.test(quote))return send(res,400,{error:'INVALID_QUOTE',meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        try{
+          const coverage=await marketSnapshotHub.coverage(quote);
+          const hubHealth=marketSnapshotHub.health();
+          return send(res,coverage.status==='UNAVAILABLE'?503:200,{coverage,hub:hubHealth,meta:{live:coverage.ticker_snapshot_age_ms<=coverage.ticker_ttl_ms,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',source:'BINANCE_PUBLIC_REST',expired_ticker_data_served:false}});
+        }catch(error){
+          return send(res,503,{error:String(error?.message??error).slice(0,240),coverage:{status:'UNAVAILABLE',quote},hub:marketSnapshotHub.health(),meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',expired_ticker_data_served:false}});
+        }
+      }
       if(u.pathname==='/api/radar-status'&&req.method==='GET')return send(res,200,{radars:radarStatus(),swarm:radarSwarm?.snapshot?.()??null,meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
       if(u.pathname==='/api/radar-telemetry'&&req.method==='GET'){
         const limit=Math.max(1,Math.min(500,Math.trunc(Number(u.searchParams.get('limit')||100))));
