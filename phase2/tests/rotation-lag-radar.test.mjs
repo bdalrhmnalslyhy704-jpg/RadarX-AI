@@ -83,6 +83,18 @@ assert.equal(stale.eligible,false,'stale source candles must never produce a rot
 assert.equal(stale.stage,'STALE_DATA');
 assert.equal(stale.data_quality,0);
 assert.ok(stale.reason_codes.includes('STALE_CLOSED_CANDLES'));
+const staleAlert=buildRotationAlert({
+  ticker:{symbol:'TESTUSDT',lastPrice:100,priceChange24h:0.4,quoteVolume24h:2_000_000},
+  fifteen_min:shiftOld(symbol,staleDelay),
+  one_hour:shiftOld(oneHour,staleDelay),
+  benchmarks:{
+    BTCUSDT:{fifteen_min:shiftOld(btc,staleDelay),one_hour:shiftOld(oneHour,staleDelay)},
+    ETHUSDT:{fifteen_min:shiftOld(eth,staleDelay),one_hour:shiftOld(oneHour,staleDelay)}
+  }
+},now);
+assert.equal(staleAlert.eligible,false,'stale candles must remain rejected at alert construction');
+assert.equal(staleAlert.data_status.status,'DATA_STALE');
+
 
 
 const extended=buildRotationAlert({
