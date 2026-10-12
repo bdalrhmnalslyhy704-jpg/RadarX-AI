@@ -89,29 +89,29 @@ test('market-wide light scan covers all eligible symbols once and keeps candidat
   assert.equal(fullyWarmed.coverageReady,true,'only complete fresh-candle coverage can activate ranking');
 });
 
-test('market-wide light pool can operate at production-observed 58 percent verified coverage without dropping an unready burst candidate',()=>{
+test('market-wide light pool can operate at post-restart 13.6 percent verified coverage without dropping an unready burst candidate',()=>{
   const now=1_900_000_000_000;
-  const eligible=Array.from({length:330},(_,i)=>row(i));
+  const eligible=Array.from({length:337},(_,i)=>row(i));
   const light=new MarketWideLightScan({
-    config:{candidateLimit:48,rotationReserve:12,minimumReadyCandidates:24,minimumCoverageRatio:.55},clock:()=>now
+    config:{candidateLimit:48,rotationReserve:12,minimumReadyCandidates:24,minimumCoverageRatio:.10},clock:()=>now
   });
   const result=light.scan({
     eligible,now,cycle:20,
     getSeries:symbol=>{
       const index=Number(symbol.match(/(\d+)USDT$/)?.[1]||0);
-      return index<190?cacheSeries(symbol,now):null;
+      return index<46?cacheSeries(symbol,now):null;
     },
-    isExceptional:item=>item.symbol==='LIGHT329USDT',
+    isExceptional:item=>item.symbol==='LIGHT336USDT',
     lastMicroScannedAt:()=>null
   });
-  assert.equal(result.summary.evaluated_total,190);
-  assert.equal(result.summary.fresh_cache_coverage_ratio,190/330);
-  assert.equal(result.coverageReady,true,'verified partial market coverage above 55 percent clears the candidate-pool threshold');
+  assert.equal(result.summary.evaluated_total,46);
+  assert.equal(result.summary.fresh_cache_coverage_ratio,46/337);
+  assert.equal(result.coverageReady,true,'46 fresh evaluations are above the required 24-symbol minimum and 10 percent coverage floor');
   assert.equal(result.summary.full_universe_evaluation_complete,false,'the remaining symbols stay explicitly visible as incomplete');
   assert.equal(result.summary.minimum_ready_candidates,24);
-  assert.equal(result.summary.minimum_cache_coverage_ratio,.55);
-  assert.ok(result.candidateSymbols.includes('LIGHT329USDT'),'a fast exceptional symbol without light-cache data must remain eligible for Micro confirmation');
-  assert.equal(result.audit.get('LIGHT329USDT').candidate_selection_reason,'EXCEPTIONAL_PRESERVED');
+  assert.equal(result.summary.minimum_cache_coverage_ratio,.10);
+  assert.ok(result.candidateSymbols.includes('LIGHT336USDT'),'a fast exceptional symbol without light-cache data must remain eligible for Micro confirmation');
+  assert.equal(result.audit.get('LIGHT336USDT').candidate_selection_reason,'EXCEPTIONAL_PRESERVED');
   assert.equal(result.summary.binance_rest_calls_added_by_light_scan,0);
 });
 
