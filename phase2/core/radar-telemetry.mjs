@@ -44,6 +44,7 @@ export class RadarTelemetry {
     this.clock = clock;
     this.events = [];
     this.totalRecorded = 0;
+    this.totalByRadar = new Map();
     this.lastEventAt = null;
   }
 
@@ -82,8 +83,13 @@ export class RadarTelemetry {
     this.events.push(event);
     if (this.events.length > this.capacity) this.events.splice(0, this.events.length - this.capacity);
     this.totalRecorded += 1;
+    this.totalByRadar.set(event.radar, (this.totalByRadar.get(event.radar) || 0) + 1);
     this.lastEventAt = decisionAt;
     return event;
+  }
+
+  countForRadar(radar) {
+    return this.totalByRadar.get(String(radar || "UNKNOWN").toUpperCase()) || 0;
   }
 
   snapshot({limit = 100} = {}) {
@@ -120,7 +126,7 @@ export class RadarTelemetry {
       retained_events: this.events.length,
       total_recorded: this.totalRecorded,
       summary: {
-        cycles: this.events.length, gate_accepted: accepted.length, rejected: rejected.length,
+        cycles: this.events.length, total_cycles_recorded: this.totalRecorded, gate_accepted: accepted.length, rejected: rejected.length,
         latency_ms_p50: percentile(latencies, 0.50), latency_ms_p95: percentile(latencies, 0.95),
         latency_ms_max: latencies.length ? Math.max(...latencies) : null,
         source_data_age_ms_p95: percentile(ages, 0.95),
@@ -144,6 +150,41 @@ export const radarTelemetry = new RadarTelemetry();
 
 export function recordRadarDecision(alert, gate, options = {}) {
   return radarTelemetry.recordDecision(alert, gate, options);
+}
+
+const instrumentedRadarInstances = new WeakSet();
+export function instrumentRadarCycle(instance, radarId, {clock = () => Date.now()} = {}) {
+  if (!instance || typeof instance.tick !== "function" || instrumentedRadarInstances.has(instance)) return false;
+  const radar = String(radarId || "UNKNOWN").toUpperCase();
+  const originalTick = instance.tick.bind(instance);
+  instrumentedRadarInstances.add(instance);
+  instance.tick = async function(...args) {
+    if (instance.running !== true || instance.busy === true) return originalTick(...args);
+    const before = radarTelemetry.countForRadar(radar);
+    const beganAt = clock();
+    let cycleError = null;
+    try {
+      return await originalTick(...args);
+    } catch (error) {
+      const raw = String(error?.message ?? error ?? "UNKNOWN_ERROR");
+      cycleError = "CYCLE_ERROR:" + raw.replace(/[^a-z0-9_.:-]/gi, "_").slice(0, 70);
+      throw error;
+    } finally {
+      if (radarTelemetry.countForRadar(radar) === before) {
+        const finishedAt = clock();
+        try {
+          recordRadarDecision({
+            radar, symbol: "SYSTEM", observed_at: beganAt, processed_at: finishedAt,
+            stage: "TICK_CYCLE", price: null, source_event_at: null
+          }, {
+            radar, eligible: false, score: null,
+            failures: [cycleError || "CYCLE_COMPLETED_WITHOUT_GATE_DECISION"]
+          }, {now: finishedAt, source: "LIVE"});
+        } catch {}
+      }
+    }
+  };
+  return true;
 }
 
 export function renderRadarTelemetryDashboard() {
