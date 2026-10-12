@@ -50,9 +50,14 @@ test('identical overlapping reads are coalesced across RestClient instances shar
   const secondClient=new RestClient({...common,fetchImpl:async()=>{secondCalls++;return response(200,[{symbol:'GTCUSDT',fresh:true}]);}});
   const first=firstClient.request('/api/v3/ticker/24hr');
   const second=secondClient.request('/api/v3/ticker/24hr');
-  assert.equal(firstCalls,0);
-  assert.equal(secondCalls,0);
-  releaseFirst();
+  try {
+    assert.equal(firstCalls,0);
+    assert.equal(secondCalls,0);
+  } finally {
+    // Never leave the mocked fetch blocked if an assertion fails; otherwise the test
+    // hangs until Node's global timeout and hides the real assertion error.
+    releaseFirst();
+  }
   const [a,b]=await Promise.all([first,second]);
   assert.deepEqual(a.data,b.data);
   assert.equal(firstCalls,1);
@@ -73,9 +78,13 @@ test('overlapping identical public GETs are coalesced without caching later requ
   });
   const first=client.ticker24h();
   const second=client.ticker24h();
-  assert.equal(calls,0);
-  assert.equal(client.health().inflight_request_count,1);
-  releaseFetch();
+  try {
+    assert.equal(calls,0);
+    assert.equal(client.health().inflight_request_count,1);
+  } finally {
+    // Ensure an early assertion cannot strand fetchImpl on responseWait forever.
+    releaseFetch();
+  }
   const [a,b]=await Promise.all([first,second]);
   assert.equal(calls,1);
   assert.deepEqual(a.data,b.data);
