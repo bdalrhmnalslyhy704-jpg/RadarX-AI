@@ -60,9 +60,10 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
   if(!root||!p)return{destroy(){}};
 
   let dead=false,busy=false,timer=null;
+  let refreshRadar=()=>{};
   const startPolling=()=>{
     if(dead||timer)return;
-    timer=setInterval(refresh,20000);
+    timer=setInterval(()=>{if(!document.hidden)refreshRadar();},20000);
   };
   const onPageHide=()=>{
     dead=true;
@@ -76,10 +77,10 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
     window.addEventListener('pagehide',onPageHide,{once:true,capture:true});
     if(timer){clearInterval(timer);timer=null;}
     startPolling();
-    refresh(true);
+    refreshRadar(true);
   };
   const onVisibilityChange=()=>{
-    if(!document.hidden&&!dead)refresh(true);
+    if(!document.hidden&&!dead)refreshRadar(true);
   };
   const CACHE_KEY='radarx.radar.cache.'+id;
   const CACHE_TTL_MS=5*60*1000;
@@ -227,6 +228,8 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
       }finally{busy=false;}
     };
 
+    refreshRadar=refresh;
+
     async function control(action){
       on.disabled=true;off.disabled=true;
       stn.className='status';
@@ -253,7 +256,7 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
   }
 
   return {
-    refresh:()=>refresh(),
+    refresh:()=>refreshRadar(),
     destroy(){
       dead=true;
       if(timer){clearInterval(timer);timer=null;}
