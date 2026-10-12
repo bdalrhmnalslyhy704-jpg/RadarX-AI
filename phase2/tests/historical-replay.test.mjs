@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {aggregateFiveMinuteCandles, normalizeHistoricalCandles, runHistoricalReplay} from '../core/historical-replay.mjs';
+import {fetchAggregateTrades} from '../tools/historical-replay.mjs';
 
 const MINUTE = 60_000;
 const ORIGIN = Math.floor((Date.now() - 400 * MINUTE) / (5 * MINUTE)) * (5 * MINUTE);
@@ -195,4 +196,25 @@ test('replay preserves core, elite and notification rejection stages for forensi
   assert.ok(row.core_reasons.includes('price trigger incomplete'));
   assert.ok(row.elite_gate.risk_flags.includes('LOW_CATEGORY_DIVERSITY'));
   assert.ok(replay.summary.rejection_groups.some(x => x.group === 'STRONG_MOVE_CORE_GATE'));
+});
+
+
+test('historical trade fetch uses the production generic REST client and carries symbol across fromId pages',async()=>{
+  const calls=[];
+  const firstPage=Array.from({length:1000},(_,i)=>({a:10+i,T:10_000+i*10,p:'1.25',q:'2',m:i%2===0}));
+  const lastPage=[{a:1010,T:50_000,p:'1.5',q:'3',m:false}];
+  const client={async request(path,query){
+    calls.push({path,query});
+    return {data:calls.length===1?firstPage:lastPage,source:'TEST_FIXTURE',receivedAt:Date.now()};
+  }};
+  const result=await fetchAggregateTrades(client,'GTCUSDT',10_000,50_000,{maxPages:3,maxTrades:2000});
+  assert.equal(result.complete,true);
+  assert.equal(result.coverage.pages,2);
+  assert.equal(result.trades.length,1001);
+  assert.deepEqual(calls.map(x=>x.path),['/api/v3/aggTrades','/api/v3/aggTrades']);
+  assert.ok(calls.every(x=>x.query.symbol==='GTCUSDT'));
+  assert.equal(calls[0].query.startTime,10_000);
+  assert.equal(calls[0].query.endTime,50_000);
+  assert.equal(calls[1].query.fromId,1010);
+  assert.equal(result.trades.at(-1).T,50_000);
 });
