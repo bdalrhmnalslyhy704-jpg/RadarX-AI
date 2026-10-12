@@ -29,6 +29,7 @@ export function requestWeightFor(path,query={}) {
   const p=String(path||'').split('?')[0];
   if(p==='/api/v3/exchangeInfo')return 20;
   if(p==='/api/v3/klines')return 2;
+  if(p==='/api/v3/aggTrades')return 4;
   if(p==='/api/v3/depth'){
     const n=Math.trunc(Number(query?.limit??100));
     if(n<=100)return 5;
@@ -235,5 +236,9 @@ export class RestClient {
     }))};
   }
   depth(symbol,limit=100){return this.request('/api/v3/depth',{symbol,limit});}
+  aggTrades(symbol,opts={}){
+    return this.request('/api/v3/aggTrades',{symbol,limit:Math.min(1000,Math.max(1,Math.trunc(Number(opts.limit)||1000))),startTime:opts.startTime,endTime:opts.endTime})
+      .then(r=>({source:r.source,receivedAt:this.clock(),trades:r.data,data:r.data}));
+  }
   ticker24h(symbol){return this.request('/api/v3/ticker/24hr',symbol?{symbol}:{});}
 }
