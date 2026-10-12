@@ -1336,7 +1336,7 @@ export class EarlyExpansionRadar{
       // For Deep batches of four or more, reserve one score-ranked slot even
       // when multiple burst events arrive together; use the rest for fair rotation.
       const scoreReserve=target>=4?1:0;
-      rotationSlots=Math.min(r,Math.max(0,remaining-quietSlots-scoreReserve));
+      rotationSlots=Math.min(Math.max(r,1),Math.max(0,remaining-quietSlots-scoreReserve));
       scoreSlots=Math.max(0,remaining-quietSlots-rotationSlots);
     }
     takeUniqueLane(selected,seen,byExceptional,exceptionSlots,'exceptional');
