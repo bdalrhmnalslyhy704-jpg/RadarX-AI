@@ -370,8 +370,8 @@ export function buildRotationAlert(candidate,now=Date.now()){
     reasons:a.reasons,
     risk_flags:[
       Math.abs(finite(ticker.priceChange24h,0))>=10?'24H_ALREADY_EXTENDED':null,
-      a.metrics.volume_ratio<0.8?'LOW_ACTIVITY':null,
-      a.metrics.range_ratio>1.8?'VOLATILITY_ELEVATED':null
+      Number(a.metrics?.volume_ratio)<0.8?'LOW_ACTIVITY':null,
+      Number(a.metrics?.range_ratio)>1.8?'VOLATILITY_ELEVATED':null
     ].filter(Boolean),
     source:a.source,
     detected_at:now,
