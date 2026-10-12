@@ -382,6 +382,9 @@ export function finalizeStrongMoveCandidate(alert,row,{now=Date.now(),clock=()=>
   alert.elite_gate=gate;
   const notificationGate=evaluateRadarNotificationGate(alert,{now,telemetry:false});
   const failures=[...(notificationGate.failures||[])];
+  const coreTriggerFailures=Array.isArray(a?.trigger_diagnostics?.failed_checks)
+    ? a.trigger_diagnostics.failed_checks.map(code=>'CORE_TRIGGER:'+String(code).slice(0,100)) : [];
+  failures.push(...coreTriggerFailures);
   if(!alert?.eligible)failures.push('BASE_ALERT_NOT_ELIGIBLE');
   if(alertScore<Number(minScore))failures.push('RADAR_SCORE_BELOW_MINIMUM');
   if(!gate.eligible)failures.push('ELITE_GATE_NOT_ELIGIBLE');
