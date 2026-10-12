@@ -1218,13 +1218,18 @@ export class EarlyExpansionRadar{
     const n=Math.max(1,Math.trunc(this.config.microScanCandidates||36));
     const target=Math.min(n,new Set(all.map(x=>String(x.symbol).toUpperCase())).size);
     if(!target)return [];
-    const requestedQuiet=Math.max(0,Math.trunc(this.config.quietReserve??8));
-    const requestedRotation=Math.max(0,Math.trunc(this.config.rotationReserve??8));
-    const quietBudget=target>1?Math.max(1,Math.floor(target*.35)):0;
-    const rotationBudget=target>=3?Math.max(1,Math.floor(target*.25)):0;
-    const q=Math.min(requestedQuiet,quietBudget,Math.max(0,target-1));
-    const r=Math.min(requestedRotation,rotationBudget,Math.max(0,target-q-2));
-    const core=target-q-r;
+    // Keep configured lanes when they are healthy; trim reserves only when they
+    // leave fewer than two score/event slots. This preserves small-batch rotation.
+    const configuredQuiet=Math.min(Math.max(0,Math.trunc(this.config.quietReserve??4)),Math.max(0,target-1));
+    const configuredRotation=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve??3)),Math.max(0,target-configuredQuiet-1));
+    let q=configuredQuiet,r=configuredRotation,core=target-q-r;
+    if(core<2&&target>1){
+      const quietCap=target>=6?Math.floor(target/3):Math.floor(target/2);
+      const rotationCap=target>=6?Math.floor(target/4):1;
+      q=Math.min(configuredQuiet,Math.max(0,Math.min(target-1,quietCap)));
+      r=Math.min(configuredRotation,Math.max(0,Math.min(target-q-1,rotationCap)));
+      core=target-q-r;
+    }
     const byScore=[...all].sort((a,b)=>b._microPreScore-a._microPreScore||a.symbol.localeCompare(b.symbol));
     const byQuiet=all.filter(x=>x._quietEligible).sort((a,b)=>
       (absolute24hMove(a)??Infinity)-(absolute24hMove(b)??Infinity)||b._quietScore-a._quietScore||a.symbol.localeCompare(b.symbol));
@@ -1257,14 +1262,17 @@ export class EarlyExpansionRadar{
     const n=Math.max(1,Math.trunc(this.config.deepCandidates||10));
     const target=Math.min(n,new Set(valid.map(selectionSymbol)).size);
     if(!target)return [];
-    // 8 quiet slots by default would crowd out all but one scored candidate in a 10-wide batch.
-    const requestedQuiet=Math.max(0,Math.trunc(this.config.quietReserve??8));
-    const requestedRotation=Math.max(0,Math.trunc(this.config.rotationReserve??2));
-    const quietBudget=target>1?Math.max(1,Math.floor(target*.35)):0;
-    const rotationBudget=target>=3?Math.max(1,Math.floor(target*.25)):0;
-    const q=Math.min(requestedQuiet,quietBudget,Math.max(0,target-1));
-    const r=Math.min(requestedRotation,rotationBudget,Math.max(0,target-q-2));
-    const core=target-q-r;
+    // Preserve explicit quiet/rotation reserves unless they starve score/event lanes.
+    const configuredQuiet=Math.min(Math.max(0,Math.trunc(this.config.quietReserve??4)),Math.max(0,target-1),Math.floor(target*.5));
+    const configuredRotation=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve??3)),Math.max(0,target-configuredQuiet-1));
+    let q=configuredQuiet,r=configuredRotation,core=target-q-r;
+    if(core<2&&target>1){
+      const quietCap=target>=6?Math.floor(target/3):Math.floor(target/2);
+      const rotationCap=target>=6?Math.floor(target/4):1;
+      q=Math.min(configuredQuiet,Math.max(0,Math.min(target-1,quietCap)));
+      r=Math.min(configuredRotation,Math.max(0,Math.min(target-q-1,rotationCap)));
+      core=target-q-r;
+    }
     const byScore=[...valid].sort((a,b)=>Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const byQuiet=valid.map(item=>({...item,_quietScore:quietDeepRank(item,this.config)}))
       .filter(item=>item._quietScore!==null)
