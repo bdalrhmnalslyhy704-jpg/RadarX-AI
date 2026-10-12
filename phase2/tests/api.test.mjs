@@ -220,7 +220,7 @@ test('TEST_FIXTURE: Professor route exposes fused live intelligence and is indep
   try{
     const status=await (await fetch('http://127.0.0.1:'+server.address().port+'/api/radar-status')).json();
     assert.equal(status.radars.length,12);assert.equal(status.radars.find(x=>x.radar==='PROFESSOR_RADAR').radar_name,'Radar 7 — البروفيسور');
-    assert.equal(status.radars.at(-1).radar_name,'Radar 8 — البرق');
+    assert.equal(status.radars.find(x=>x.radar==='EARLY_EXPANSION_RADAR')?.radar_name,'Radar 8 — البرق');
     const res=await fetch('http://127.0.0.1:'+server.address().port+'/api/professor-radar?scan=1&limit=10');
     assert.equal(res.status,200);const body=await res.json();assert.equal(ticked,1);assert.equal(body.meta.radar,'PROFESSOR_RADAR');assert.equal(body.alerts.length,1);assert.equal(body.alerts[0].radar_name,'Radar 7 — البروفيسور');
     assert.equal(body.meta.real_order_execution,false);
