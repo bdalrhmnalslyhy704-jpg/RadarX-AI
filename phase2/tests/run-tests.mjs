@@ -13,6 +13,7 @@ const phase2=[
   'phase2/tests/autonomous-agent-market.test.mjs',
   'phase2/tests/market-surge-gate.test.mjs',
   'phase2/tests/data-quality.test.mjs',
+  'phase2/tests/dynamic-early-warning-gate.test.mjs',
   'phase2/tests/elite-confluence-gate.test.mjs',
   'phase2/tests/radar-advanced-confluence.test.mjs',
   'phase2/tests/radar-telemetry.test.mjs',
