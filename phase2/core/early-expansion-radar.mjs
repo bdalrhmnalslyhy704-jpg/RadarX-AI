@@ -818,8 +818,18 @@ function quietDeepRank(item,cfg){
 }
 function isExceptionalDeepCandidate(item,cfg){
   const move=absolute24hMove(item?.row),fp=item?.micro_fingerprint,m=fp?.metrics||{},c=fp?.category_scores||{};
-  // A verified closed-candle activity shock earns a deep confirmation slot even after a large daily move.
-  // This changes observation priority only; it does not grant signal or entry eligibility.
+  const fast=item?.fast||{};
+  const cachedEvent=fast.market_wide_event_driven_breakout||fast.event_driven_breakout||null;
+  const fastMove=hasFiniteNumber(fast.price_change_pct)?Number(fast.price_change_pct):null;
+  const fastAcceleration=hasFiniteNumber(fast.price_acceleration_pct)?Number(fast.price_acceleration_pct):null;
+  const fastVolume=hasFiniteNumber(fast.volume_accel_ratio)?Number(fast.volume_accel_ratio):0;
+  const fastTrades=hasFiniteNumber(fast.trade_accel_ratio)?Number(fast.trade_accel_ratio):0;
+  // Market-wide event evidence and high-confidence short-term bursts get Deep
+  // confirmation priority before the daily anti-chase gate. This is observation
+  // priority only; final alert eligibility still rejects already-extended prices.
+  if(cachedEvent?.detected===true&&cachedEvent?.stage==='EVENT_DRIVEN_BREAKOUT')return true;
+  if(fastVolume>=Number(cfg.exceptionalVolumeAccelRatio??2.2)&&fastAcceleration>=Number(cfg.exceptionalPriceAccelerationPct??.15)&&fastMove>0)return true;
+  if(fastVolume>=Number(cfg.exceptionalVolumeAccelRatio??2.2)&&fastTrades>=Number(cfg.exceptionalTradeAccelRatio??1.8)&&fastAcceleration>0&&fastMove>0)return true;
   if(fp?.activity_shock?.detected===true)return true;
   if(move===null||move>=Number(cfg.hardExtended24hMovePct||18))return false;
   const volume=Math.max(hasFiniteNumber(m.rvol_1m)?Number(m.rvol_1m):0,hasFiniteNumber(m.rvol_5m)?Number(m.rvol_5m):0);
@@ -1180,7 +1190,9 @@ export class EarlyExpansionRadar{
   selectMicro(rows,fastBySymbol,cycle=0){
     const currentCycle=Math.max(0,Math.trunc(Number(cycle)||0));
     const selectionAt=this.clock();
-    const all=(rows||[]).filter(row=>row&&row.symbol).map(row=>{
+    // Benchmark, wrapped, pegged and tokenized-equity symbols remain in market
+    // coverage but must not consume the limited directional-altcoin scan capacity.
+    const all=(rows||[]).filter(row=>row&&row.symbol&&isDirectionalCandidateSymbol(row.symbol)).map(row=>{
       const fast=fastBySymbol.get(row.symbol)||{};
       const quiet=quietCandidateScore(row,fast,this.config);
       const fastScore=fastCandidateScore(row,fast,this.config);
@@ -1260,7 +1272,8 @@ export class EarlyExpansionRadar{
   selectDeepFromMicro(results,cycle=0){
     const currentCycle=Math.max(0,Math.trunc(Number(cycle)||0));
     const selectionAt=this.clock();
-    const valid=(results||[]).filter(x=>x&&!x.failed&&selectionSymbol(x)&&x.micro_fingerprint?.score!=null&&hasFiniteNumber(x.micro_fingerprint.score));
+    const valid=(results||[]).filter(x=>x&&!x.failed&&selectionSymbol(x)&&
+      isDirectionalCandidateSymbol(selectionSymbol(x))&&x.micro_fingerprint?.score!=null&&hasFiniteNumber(x.micro_fingerprint.score));
     const n=Math.max(1,Math.trunc(this.config.deepCandidates||10));
     const target=Math.min(n,new Set(valid.map(selectionSymbol)).size);
     if(!target)return [];
@@ -1295,11 +1308,24 @@ export class EarlyExpansionRadar{
     const byExceptional=valid.filter(x=>isExceptionalDeepCandidate(x,this.config)).sort((a,b)=>
       Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const selected=[],seen=new Set();
-    const exceptionSlots=Math.min(core,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2)));
+    const configuredExceptionSlots=Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2));
+    let exceptionSlots=Math.min(core,configuredExceptionSlots),quietSlots=q,rotationSlots=r,scoreSlots=core;
+    // When at least two independent fast events are present, shrink the quiet
+    // reserve for this cycle so a three-symbol Deep budget can confirm two bursts
+    // and still preserve one rotation slot for symbols not previously Deep-scanned.
+    if(byExceptional.length>=2&&configuredExceptionSlots>0&&target>=3){
+      const maxEventSlots=target>=6?Math.min(configuredExceptionSlots,Math.max(2,Math.floor(target*.35))):
+        Math.min(configuredExceptionSlots,target-1);
+      exceptionSlots=Math.min(byExceptional.length,maxEventSlots);
+      const remaining=Math.max(0,target-exceptionSlots);
+      quietSlots=Math.min(q,Math.floor(remaining/3));
+      rotationSlots=Math.min(r,Math.max(0,remaining-quietSlots));
+      scoreSlots=Math.max(0,remaining-quietSlots-rotationSlots);
+    }
     takeUniqueLane(selected,seen,byExceptional,exceptionSlots,'exceptional');
-    takeUniqueLane(selected,seen,byScore,Math.max(0,core-selected.length),'score');
-    takeUniqueLane(selected,seen,byQuiet,q,'quiet');
-    takeUniqueLane(selected,seen,byRotation,r,'rotation');
+    takeUniqueLane(selected,seen,byScore,Math.max(0,scoreSlots-selected.filter(x=>x._selection_lane==='score').length),'score');
+    takeUniqueLane(selected,seen,byQuiet,quietSlots,'quiet');
+    takeUniqueLane(selected,seen,byRotation,rotationSlots,'rotation');
     takeUniqueLane(selected,seen,byScore,target-selected.length,'fill_score');
     takeUniqueLane(selected,seen,byQuiet,target-selected.length,'fill_quiet');
     takeUniqueLane(selected,seen,byRotation,target-selected.length,'fill_rotation');
