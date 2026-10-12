@@ -360,7 +360,7 @@ export class DurableStore {
   // intentionally smaller than the immutable Scan Journey archive: completed scan
   // evidence remains in Scan Journey, while this working set keeps the most recent
   // outcomes so recurring full-file reads cannot exhaust the bounded Node heap.
-  async compactPreExpansionOutcomes({maxRecords=2500,maxStageKeys=6000}={}){
+  async compactPreExpansionOutcomes({maxRecords=1500,maxStageKeys=4000}={}){
     const recordLimit=Math.max(100,Math.min(5000,Math.trunc(Number(maxRecords)||2500)));
     const stageLimit=Math.max(100,Math.min(10000,Math.trunc(Number(maxStageKeys)||6000)));
     return this.lock(async()=>{
