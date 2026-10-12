@@ -51,7 +51,7 @@ export const MARKET_WIDE_LIGHT_SCAN_DEFAULTS = Object.freeze({
   candidateLimit: 48,
   rotationReserve: 12,
   minimumReadyCandidates: 24,
-  minimumCoverageRatio: 0.85,
+  minimumCoverageRatio: 0.55,
   maxEligibleSymbols: 1200
 });
 
@@ -668,7 +668,7 @@ export class MarketWideLightScan {
     const scanRows = [...audit.values()];
     const minimumReady = Math.max(1, Math.trunc(Number(this.config.minimumReadyCandidates) || 24));
     const minimumCoverageRatio = Math.max(0.5, Math.min(1,
-      Number.isFinite(Number(this.config.minimumCoverageRatio)) ? Number(this.config.minimumCoverageRatio) : 0.85));
+      Number.isFinite(Number(this.config.minimumCoverageRatio)) ? Number(this.config.minimumCoverageRatio) : 0.55));
     const freshCoverageRatio = eligibleTotal ? evaluatedTotal / eligibleTotal : 0;
     const fullUniverseEvaluationComplete = eligibleTotal > 0 && evaluatedTotal === eligibleTotal;
     // Candidate selection is allowed with a sufficiently broad verified cache;
