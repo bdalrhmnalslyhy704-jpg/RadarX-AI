@@ -253,7 +253,7 @@ start_app_and_wait_ready
 # The monitor may auto-start, but it must not be misclassified as a user-initiated request.
 PHASE="verify offline startup is not user-initiated"
 LOGS="$(cat "${APP_LOG_FILE:-/nonexistent}" 2>/dev/null || true)"
-! printf '%s\\n' "${LOGS}" | grep -Fq "BACKGROUND_START_REQUEST"
+! printf '%s\n' "${LOGS}" | grep -Fq "BACKGROUND_START_REQUEST"
 
 assert_background_service_declared
 test -n "$(timeout 12s adb shell pidof com.radarx.app | tr -d '\\r' || true)"
@@ -423,10 +423,10 @@ for attempt in $(seq 1 420); do
       # app process. Require the service's persisted running flag to be false and
       # the foreground-service heartbeat to be removed.
       stop_logs="$(replay_logs)"
-      if printf '%s\\n' "${stop_logs}" | grep -Fq 'REPLAY_TEST_STOP_BROADCAST_RECEIVED' &&
-         printf '%s\\n' "${stop_logs}" | grep -Fq 'BACKGROUND_STOP_ACTION_RECEIVED' &&
-         printf '%s\\n' "${stop_prefs}" | grep -Eq '<boolean name="running" value="false" ?/>' &&
-         ! printf '%s\\n' "${stop_prefs}" | grep -Fq 'name="monitor_heartbeat_at_ms"' then
+      if printf '%s\n' "${stop_logs}" | grep -Fq 'REPLAY_TEST_STOP_BROADCAST_RECEIVED' &&
+         printf '%s\n' "${stop_logs}" | grep -Fq 'BACKGROUND_STOP_ACTION_RECEIVED' &&
+         printf '%s\n' "${stop_prefs}" | grep -Eq '<boolean name="running" value="false" ?/>' &&
+         ! printf '%s\n' "${stop_prefs}" | grep -Fq 'name="monitor_heartbeat_at_ms"'; then
         service_stopped=1
         break
       fi
