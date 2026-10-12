@@ -436,8 +436,9 @@ export const COIN_HUNTER_DEFAULTS = Object.freeze({
 });
 
 export class CoinHunterRadar {
-  constructor({rest, store, config = {}, logger = console} = {}) {
+  constructor({rest, marketData = null, store, config = {}, logger = console} = {}) {
     this.rest = rest;
+    this.marketData = marketData;
     this.store = store;
     this.config = {...COIN_HUNTER_DEFAULTS, ...config};
     this.logger = logger;
@@ -491,7 +492,7 @@ export class CoinHunterRadar {
       this.universe = [...symbols].map(symbol => ({symbol}));
       this.universeAt = now;
     }
-    const ticker = await this.rest.request('/api/v3/ticker/24hr');
+    const ticker = this.marketData ? await this.marketData.ticker24h() : await this.rest.request('/api/v3/ticker/24hr');
     const allowed = new Set(this.universe.map(x => x.symbol));
     const tickers = (Array.isArray(ticker.data) ? ticker.data : [])
       .map(x => ({
