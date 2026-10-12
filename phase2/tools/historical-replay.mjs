@@ -212,12 +212,16 @@ async function main() {
           lastAlertAt:lastAlertAt.value,
           earlyCooldownMs:Number(tickerConfig.alertCooldownMs ?? 12 * MINUTE_MS)
         });
-        const accepted = Boolean(alert.eligible && alertScore >= Number(tickerConfig.minScore ?? 76) &&
+        const strictAccepted = Boolean(alert.eligible && alertScore >= Number(tickerConfig.minScore ?? 76) &&
           eliteGate.eligible && notificationGate.eligible && !cooldownBlocked);
+        // Historical replay records early warnings as their own accepted lane without
+        // pretending that they passed the strict entry gate.
+        const earlyWarningAccepted = Boolean(!strictAccepted && earlyGate.eligible && !cooldownBlocked);
+        const accepted = strictAccepted || earlyWarningAccepted;
         if (accepted) lastAlertAt.value = input.now;
         return {
           accepted,
-          accepted_mode: accepted ? 'STRICT' : (earlyGate.eligible ? 'EARLY_WARNING' : 'NONE'),
+          accepted_mode: strictAccepted ? 'STRICT' : (earlyWarningAccepted ? 'EARLY_WARNING' : 'NONE'),
           early_warning: earlyGate,
           strict_gate_failures: notificationGate.standard_gate_failures ?? notificationGate.failures ?? strictFailures,
           alert,
