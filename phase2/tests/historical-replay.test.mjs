@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {aggregateFiveMinuteCandles, normalizeHistoricalCandles, runHistoricalReplay} from '../core/historical-replay.mjs';
 
 const MINUTE = 60_000;
-const ORIGIN = Math.floor((Date.now() - 10 * 60 * MINUTE) / (5 * MINUTE)) * (5 * MINUTE);
+const ORIGIN = Math.floor((Date.now() - 400 * MINUTE) / (5 * MINUTE)) * (5 * MINUTE);
 
 function candles(count = 300) {
   const rows = [];
