@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {RestClient,RestRateLimitError,requestWeightFor,observedRequestWeight} from '../market/binance-rest.mjs';
+import {RestClient,RestRateLimitError,requestWeightFor,observedRequestWeight,createRestRequestBudget} from '../market/binance-rest.mjs';
 
 function response(status=200,body={},headers={}){
   return new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json',...headers}});
@@ -39,6 +39,21 @@ test('Concurrent REST calls are serialized by one queue and local REQUEST_WEIGHT
   assert.ok(client.health().request_weight_used_last_minute<=20);
   assert.ok(now>=1000000+60000);
   assert.equal(client.health().observed_request_weight_1m,4);
+});
+
+test('separate Spot clients atomically share the one-minute weight ceiling',async()=>{
+  let now=1_000_000;const started=[];
+  const budget=createRestRequestBudget();
+  const shared={baseUrls:['https://shared-budget.example'],minIntervalMs:0,maxWeightPerMinute:4,safetyMarginWeight:0,budget,
+    clock:()=>now,sleepFn:async ms=>{now+=Math.max(1,Number(ms)||1);}};
+  const clientA=new RestClient({...shared,fetchImpl:async url=>{started.push({url:String(url),at:now});return response(200,[],{'X-MBX-USED-WEIGHT-1M':'2'});}});
+  const clientB=new RestClient({...shared,fetchImpl:async url=>{started.push({url:String(url),at:now});return response(200,[],{'X-MBX-USED-WEIGHT-1M':'4'});}});
+  await Promise.all([clientA.ticker24h('BTCUSDT'),clientB.ticker24h('ETHUSDT'),clientA.ticker24h('SOLUSDT')]);
+  assert.equal(started.length,3);
+  assert.equal(clientA.usedAt,clientB.usedAt,'all clients must retain the shared reservation array');
+  assert.ok(Math.max(...started.map(x=>x.at))-Math.min(...started.map(x=>x.at))>=60_000,'third weight-2 request must wait for the shared 4-weight window to expire');
+  assert.equal(clientA.health().request_weight_used_last_minute,clientB.health().request_weight_used_last_minute);
+  assert.ok(clientA.health().shared_budget_waiters>=0);
 });
 
 test('identical overlapping reads are coalesced across RestClient instances sharing endpoint routes',async()=>{
