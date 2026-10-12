@@ -1249,7 +1249,8 @@ export class EarlyExpansionRadar{
     const requestedRotation=Math.max(0,Math.trunc(this.config.rotationReserve??3));
     const quietCap=target>1?Math.floor(target/3):0;
     const q=Math.min(requestedQuiet,quietCap,Math.max(0,target-1));
-    const rotationCap=Math.max(0,target-q-(target>=6?3:2));
+    const coreReserve=Math.max(3,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2))+1);
+    const rotationCap=Math.max(0,target-q-(target>=6?coreReserve:2));
     const r=Math.min(requestedRotation,rotationCap);
     const core=target-q-r;
     const byScore=[...all].sort((a,b)=>b._microPreScore-a._microPreScore||a.symbol.localeCompare(b.symbol));
@@ -1290,7 +1291,8 @@ export class EarlyExpansionRadar{
     const requestedRotation=Math.max(0,Math.trunc(this.config.rotationReserve??3));
     const quietCap=target>1?Math.floor(target/3):0;
     const q=Math.min(requestedQuiet,quietCap,Math.max(0,target-1));
-    const rotationCap=Math.max(0,target-q-(target>=6?3:2));
+    const coreReserve=Math.max(3,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2))+1);
+    const rotationCap=Math.max(0,target-q-(target>=6?coreReserve:2));
     const r=Math.min(requestedRotation,rotationCap);
     const core=target-q-r;
     const byScore=[...valid].sort((a,b)=>Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
