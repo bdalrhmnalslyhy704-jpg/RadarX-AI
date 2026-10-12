@@ -11,6 +11,7 @@ test('TEST_FIXTURE: each REST client keeps its independent conservative request 
 });
 
 test('TEST_FIXTURE: REST weight estimator is conservative for shared market-data endpoints',()=>{
+  assert.equal(estimateBinanceRequestWeight('/api/v3/aggTrades',{symbol:'BTCUSDT',limit:1000}),4);
   assert.equal(estimateBinanceRequestWeight('/api/v3/ticker/24hr',{}),80);
   assert.equal(estimateBinanceRequestWeight('/api/v3/ticker/24hr',{symbol:'BTCUSDT'}),2);
   assert.equal(estimateBinanceRequestWeight('/api/v3/ticker/24hr',{symbols:'["BTCUSDT","ETHUSDT"]'}),2);
