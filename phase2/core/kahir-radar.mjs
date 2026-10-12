@@ -154,7 +154,10 @@ export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHis
     score>=KAHIR_RADAR_DEFAULTS.minScore&&
     (z1>=KAHIR_RADAR_DEFAULTS.minOneMinuteZ||z5>=KAHIR_RADAR_DEFAULTS.minFiveMinuteZ)&&
     volumeRatio>=KAHIR_RADAR_DEFAULTS.minVolumeRatio&&
+    tradeRatio>=1.20&&
     eff>=KAHIR_RADAR_DEFAULTS.minEfficiency&&
+    acceptance>=65&&
+    persistence>=68&&
     relativeAccelerationBps>=KAHIR_RADAR_DEFAULTS.minRelativeAccelerationBps;
 
   const stage=eligible?(score>=92?'POWER_SURGE':'IGNITION'):score>=76?'BUILDING_PRESSURE':'WATCH';
