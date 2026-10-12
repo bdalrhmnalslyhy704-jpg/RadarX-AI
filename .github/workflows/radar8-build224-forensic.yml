@@ -6,6 +6,11 @@ on:
       - feature/build224-radar8-early-expansion-20261006
   pull_request:
 
+# A new PR head supersedes old forensic runs; do not consume REST/network quota replaying obsolete commits in parallel.
+concurrency:
+  group: radarx-build224-forensic-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
