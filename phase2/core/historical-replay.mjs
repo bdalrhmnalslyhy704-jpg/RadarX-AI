@@ -128,7 +128,7 @@ function stageFrom(result) {
  */
 export function runHistoricalReplay({
   symbol, oneMinuteCandles, aggTrades = [], startTime, endTime, evaluate,
-  tradeCoverageComplete = true, tradeCoverage = null,
+  tradeCoverageComplete = false, tradeCoverage = null,
   alertCooldownMs = 12 * 60 * 1000, outcomeHorizonMs = 24 * 60 * 60 * 1000
 } = {}) {
   const start = finite(startTime), end = finite(endTime);
@@ -352,6 +352,12 @@ export function runHistoricalReplay({
         return counts;
       }, {})).map(([code, count]) => ({code, count})).sort((a,b) => b.count - a.count),
       first_actual_window_50pct_at: actual50At, first_actual_window_70pct_at: actual70At,
+      first_actual_window_50pct_candle_close_at:actual50CandleCloseAt,
+      first_actual_window_70pct_candle_close_at:actual70CandleCloseAt,
+      actual_window_50pct_timestamp_source:targetCrossingSource,
+      actual_window_70pct_timestamp_source:targetCrossingSource,
+      actual_window_50pct_alignment:actual50Alignment,
+      actual_window_70pct_alignment:actual70Alignment,
       minutes_from_first_accepted_to_actual_50pct: rows.find(x => x.decision === "ACCEPTED") && actual50At !== null
         ? Math.round((actual50At - rows.find(x => x.decision === "ACCEPTED").timestamp) / MINUTE_MS * 100) / 100 : null,
       minutes_from_first_core_trigger_to_actual_50pct: rows.find(x => x.core_trigger_eligible === true) && actual50At !== null
