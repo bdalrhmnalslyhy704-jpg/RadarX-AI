@@ -152,10 +152,25 @@ public final class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        boolean stopForReplay = intent != null
+                && intent.getBooleanExtra("radarx_test_stop_background_service", false);
         // Android can deliver a repeated explicit launch to the existing top Activity
         // instead of creating a new instance. Debug replay controls must be handled in
         // both paths so the CI restart test actually issues the requested service STOP.
+        if (!stopForReplay) {
+            // Do not let a stop-test flag leak into the subsequent relaunch: Android may
+            // reuse this Activity, and the normal replay relaunch must restore monitoring.
+            suppressAutoStartForSmokeStop = false;
+        }
         configureDebugReplayTest(intent);
+        if (!stopForReplay && (getApplicationInfo().flags
+                & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            String replayFeed = intent == null ? null
+                    : intent.getStringExtra("radarx_test_alert_feed_url");
+            if (replayFeed != null && !replayFeed.isEmpty()) {
+                webView.post(this::ensureContinuousMonitoring);
+            }
+        }
     }
 
     @Override
