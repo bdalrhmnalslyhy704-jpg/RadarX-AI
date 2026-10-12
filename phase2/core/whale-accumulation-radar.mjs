@@ -351,7 +351,7 @@ export class WhaleAccumulationRadar{
     this.universe=[];this.universeAt=0;this.cursor=0;this.scans=0;this.alertCount=0;this.lastError=null;this.lastScanAtMs=null;
     this.latestCandidates=[];this.previousDepth=new Map();this.lastAlertAt=new Map();this.lastCoverage={};
     this.lastRowTimings=new Map();
-    this.scheduler=new ScanSchedulerJournal({radar:'RADAR_9',store,clock,logger});
+    this.scheduler=new ScanSchedulerJournal({radar:'WHALE_ACCUMULATION_RADAR',store,clock,logger});
     this.fastHistoryBySymbol=new Map();this.lastSelectionDistribution={};
   }
   start(){
@@ -544,11 +544,11 @@ export class WhaleAccumulationRadar{
     const cycleStartedAt=this.clock();
     const pollMs=Math.max(30000,Number(this.config.pollMs)||60000);
     const metrics={
-      radar:'RADAR_9',cycle:Math.max(1,Math.trunc(Number(this.lastCoverage?.cycle||0))+1),
+      radar:'WHALE_ACCUMULATION_RADAR',cycle:Math.max(1,Math.trunc(Number(this.lastCoverage?.cycle||0))+1),
       cadence_ms:pollMs,started_at:new Date(cycleStartedAt).toISOString(),
       archive_hydration_ms:0,universe_refresh_ms:0,ticker_collection_ms:0,data_collection_ms:0,
       fast_snapshot_ms:0,fast_selection_ms:0,fast_scan_ms:0,
-      micro_scan_ms:null,micro_scan_status:'NOT_APPLICABLE_RADAR_9_HAS_NO_MICRO_STAGE',
+      micro_scan_ms:null,micro_scan_status:'NOT_APPLICABLE_WHALE_RADAR_HAS_NO_MICRO_STAGE',
       deep_scan_wall_ms:0,deep_row_time_sum_ms:0,deep_data_fetch_sum_ms:0,
       signal_analysis_sum_ms:0,signal_archive_write_ms:0,result_send_ms:0,
       scheduler_archive_write_ms:0,fast_symbols:0,deep_selected:0,deep_attempted:0,
