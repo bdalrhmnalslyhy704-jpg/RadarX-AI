@@ -23,6 +23,7 @@ import {MarketUniverseScanner} from './market/universe-scanner.mjs';
 import {createApiServer} from './http/api.mjs';
 import {assertDeploymentEnvironment,assertReadOnlyStagingConfig} from './deploy/preflight.mjs';
 import {sanitizeLogMessage} from './runtime.mjs';
+import {instrumentRadarCycle} from './core/radar-telemetry.mjs';
 
 export async function startServer({
   config=CONFIG,
@@ -77,6 +78,18 @@ export async function startServer({
   const agentMarketRest=new RestClient({...config.rest,baseUrls:deepRestUrls});
   const agentMarketScanner=new MarketUniverseScanner({rest:agentMarketRest,config:{quote:config.aiAgents?.quote||'USDT',minQuoteVolume24h:Number(config.aiAgents?.minQuoteVolume24h??750000),deepCandidates:Number(config.aiAgents?.deepCandidates??6),deepConcurrency:Number(config.aiAgents?.deepConcurrency??3),deepKlines:Number(config.aiAgents?.deepKlines??220),scanLimit:Math.max(10,Number(config.aiAgents?.deepCandidates??6)),returnLimit:Math.max(10,Number(config.aiAgents?.resultLimit??20))}});
   const agentMarket=new AutonomousAgentMarket({scanner:agentMarketScanner,store,config:config.aiAgents||{},logger});
+  for (const [radarId,instance] of [
+    ['EARLY_MOVE_RADAR',moveSentinel],
+    ['STRONG_MOVE_RADAR',strongMoveRadar],
+    ['ROTATION_LAG_RADAR',rotationLagRadar],
+    ['LIQUIDITY_ABSORPTION_RADAR',liquidityAbsorptionRadar],
+    ['KAHIR_RADAR',kahirRadar],
+    ['PROFESSOR_RADAR',professorRadar],
+    ['DOOMSDAY_RADAR',doomsdayRadar],
+    ['EARLY_EXPANSION_RADAR',earlyExpansionRadar],
+    ['AUTONOMOUS_AI_MARKET',agentMarket],
+    ['MARKET_MONITOR',monitor]
+  ]) instrumentRadarCycle(instance,radarId);
   const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,symbolDeepAnalyzer,agentMarket,earlyExpansionRadar});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
