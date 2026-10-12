@@ -278,3 +278,57 @@ test('failed pre-explosion scan releases its cooldown so it can be retried',asyn
   assert.equal(sentinel.lastEarlyScanAt.has('RETRYUSDT'),false);
   assert.match(sentinel.lastError,/TRANSIENT_FIXTURE_FAILURE/);
 });
+
+test('urgent Radar 1 wake pulses upgrade queued discovery jobs and jump ahead of routine work',()=>{
+  const now=1710003000000;
+  const sentinel=new EarlyMoveSentinel({
+    rest:{},store:{},config:{cooldownMs:0,earlyWakeAlertCooldownMs:0},
+    clock:()=>now,logger:{warn(){}}
+  });
+  sentinel.running=true;
+  sentinel.deepQueue.push(
+    {symbol:'WATCHUSDT',row:{symbol:'WATCHUSDT',lastPrice:1,priceChange24h:0.3},
+      trigger:{movePct:0.3,discoveryScore:80},queuedAt:now-10000,mode:'PRE_EXPLOSION'},
+    {symbol:'ROUTINEUSDT',row:{symbol:'ROUTINEUSDT',lastPrice:2,priceChange24h:0.2},
+      trigger:{movePct:0.2,discoveryScore:78},queuedAt:now-5000,mode:'PRE_EXPLOSION'}
+  );
+  sentinel.drainDeepQueue=async()=>{};
+  const fresh={symbol:'WATCHUSDT',lastPrice:1.1,priceChange24h:0.9,tickerTime:now};
+  sentinel.lastTicker.set('WATCHUSDT',fresh);
+  sentinel.queueDeep('WATCHUSDT',fresh,
+    {type:'EARLY_WAKE_TICKER_PULSE',movePct:0.9,previousMovePct:0.4,deltaPct:0.5},'EARLY_WAKE');
+  assert.equal(sentinel.deepQueue.length,2,'an urgent pulse upgrades the existing symbol job instead of duplicating or dropping it');
+  assert.equal(sentinel.deepQueue[0].symbol,'WATCHUSDT','urgent event must be ahead of routine discovery jobs');
+  assert.equal(sentinel.deepQueue[0].mode,'EARLY_WAKE');
+  assert.equal(sentinel.deepQueue[0].row.lastPrice,1.1);
+  assert.equal(sentinel.deepQueue[0].trigger.type,'EARLY_WAKE_TICKER_PULSE');
+  assert.equal(sentinel.deepQueue[0].queuedAt,now-10000,'upgrading preserves the original wait age');
+});
+
+test('Radar 1 refreshes a queued ticker row immediately before deep analysis',async()=>{
+  const now=1710004000000;
+  let scannedRow=null;
+  const sentinel=new EarlyMoveSentinel({
+    rest:{},store:{},config:{maxDeepPerCycle:1},
+    clock:()=>now,logger:{warn(){}}
+  });
+  sentinel.running=true;
+  sentinel.lastTicker.set('REFRESHUSDT',{
+    symbol:'REFRESHUSDT',lastPrice:1.25,priceChange24h:1.1,tickerTime:now
+  });
+  sentinel.scanner={scanSymbol:async row=>{
+    scannedRow={...row};
+    throw new Error('STOP_AFTER_FRESHNESS_CAPTURE');
+  }};
+  sentinel.deepQueue.push({
+    symbol:'REFRESHUSDT',
+    row:{symbol:'REFRESHUSDT',lastPrice:1,priceChange24h:0.4,tickerTime:now-60000},
+    trigger:{movePct:0.4,previousMovePct:0.2,deltaPct:0.2},
+    queuedAt:now-30000,mode:'PRE_EXPLOSION'
+  });
+  await sentinel.drainDeepQueue();
+  assert.equal(scannedRow.lastPrice,1.25);
+  assert.equal(scannedRow.priceChange24h,1.1);
+  assert.equal(sentinel.lastError,'STOP_AFTER_FRESHNESS_CAPTURE');
+});
+
