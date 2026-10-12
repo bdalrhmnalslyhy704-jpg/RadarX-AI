@@ -2,6 +2,7 @@ import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.m
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 import {evaluateRadarNotificationGate,rememberRadarAlert} from './radar-notification-gate.mjs';
+import {recordRadarDecision} from './radar-telemetry.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -271,6 +272,7 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now,aggTrades=[]){
   return {
     eligible:strongTrigger,
     closed_candles_only:true,
+    source_candle_close_at:finite(last?.closeTime),
     stage,
     direction,
     score:Math.round(score*10)/10,
@@ -336,6 +338,7 @@ export function buildStrongMoveAlert(candidate,now=Date.now()){
       a.component_scores.range>90?'VOLATILITY_EXTREME':null
     ].filter(Boolean),
     source:a.source,
+    source_candle_close_at:a.source_candle_close_at??null,
     detected_at:now,
     processed_at:now,
     paper_trading:true,
@@ -344,6 +347,42 @@ export function buildStrongMoveAlert(candidate,now=Date.now()){
     eligible:a.eligible,
     disclaimer:'رادار الحركة القوية يلتقط توسعًا/تسارعًا ظهر فعليًا؛ لا يضمن استمرار الحركة أو اتجاهها لاحقًا.'
   };
+}
+
+
+export function finalizeStrongMoveCandidate(alert,row,{now=Date.now(),minScore=76,lastAlertAt=0,alertCooldownMs=0,telemetry=true}={}){
+  const alertScore=Math.max(Number(alert?.strong_move?.score)||0,Number(alert?.strong_move?.component_scores?.flash)||0);
+  const a=alert?.strong_move||{},cs=a.component_scores||{},m=a.metrics||{};
+  const minQuoteVolume=Math.max(1,Number(row?.minQuoteVolume24h)||1_000_000);
+  const gate=evaluateEliteGate({
+    radar:'STRONG_MOVE_RADAR',
+    direction:a.direction,
+    baseScore:alertScore,
+    priceChange24h:row?.priceChange24h,
+    liquidityScore:clamp(70+Math.log10(Math.max(1,Number(row?.quoteVolume24h||0)/minQuoteVolume))*30),
+    dataQualityScore:90,
+    triggerScore:Number(cs.breakout)||0,structureScore:Number(cs.ema)||0,
+    participationScore:mean([Number(cs.volume),Number(cs.trades)])||50,flowScore:Number(cs.taker)||0,
+    relativeScore:Number(m.five_min_trend)||50,momentumScore:Number(cs.velocity)||0,compressionScore:Number(cs.bollinger)||0,
+    confirmations:Number(m.independent_confirmations)||0,takerBuyRatio:m.taker_buy_ratio,
+    requireTakerBuyRatio:true,minTakerBuyRatio:0.70,
+    minConfirmations:4,minScore:86,max24hMovePct:8,requireTrigger:true,minCategoryHits:5
+  });
+  alert.elite_gate=gate;
+  const notificationGate=evaluateRadarNotificationGate(alert,{now,telemetry:false});
+  const failures=[...(notificationGate.failures||[])];
+  if(!alert?.eligible)failures.push('BASE_ALERT_NOT_ELIGIBLE');
+  if(alertScore<Number(minScore))failures.push('RADAR_SCORE_BELOW_MINIMUM');
+  if(!gate.eligible)failures.push('ELITE_GATE_NOT_ELIGIBLE');
+  const cooldownAt=Number(lastAlertAt)||0;
+  const cooldown=Math.max(0,Number(alertCooldownMs)||0);
+  const inCooldown=cooldownAt>0&&now-cooldownAt<cooldown;
+  if(inCooldown)failures.push('SYMBOL_ALERT_COOLDOWN');
+  const accepted=Boolean(alert?.eligible)&&alertScore>=Number(minScore)&&gate.eligible&&notificationGate.eligible&&!inCooldown;
+  const finalGate={...notificationGate,eligible:accepted,failures:[...new Set(failures)],stage_decision:accepted?'GATE_ACCEPTED':'REJECTED'};
+  alert.notification_gate=finalGate;
+  if(telemetry)recordRadarDecision(alert,finalGate,{now,extraReasons:[]});
+  return {accepted,alertScore,gate,notificationGate:finalGate,alert};
 }
 
 export class StrongMoveRadar {
@@ -413,34 +452,19 @@ export class StrongMoveRadar {
       ticker:row,one_minute:one.candles,five_minute:five.candles,agg_trades:tradeFlow.trades??tradeFlow.data??[]
     },this.clock());
     this.scans++;
-    const alertScore=Math.max(
-      Number(alert?.strong_move?.score)||0,
-      Number(alert?.strong_move?.component_scores?.flash)||0
-    );
-    const a=alert?.strong_move||{};
-    const cs=a.component_scores||{};
-    const m=a.metrics||{};
-    const gate=evaluateEliteGate({
-      radar:'STRONG_MOVE_RADAR',
-      direction:a.direction,
-      baseScore:alertScore,
-      priceChange24h:row.priceChange24h,
-      liquidityScore:clamp(70+Math.log10(Math.max(1,row.quoteVolume24h/this.config.minQuoteVolume24h))*30),
-      dataQualityScore:90,
-      triggerScore:Number(cs.breakout)||0,structureScore:Number(cs.ema)||0,
-      participationScore:mean([Number(cs.volume),Number(cs.trades)])||50,flowScore:Number(cs.taker)||0,
-      relativeScore:Number(m.five_min_trend)||50,momentumScore:Number(cs.velocity)||0,compressionScore:Number(cs.bollinger)||0,
-      confirmations:Number(m.independent_confirmations)||0,takerBuyRatio:m.taker_buy_ratio,
-      requireTakerBuyRatio:true,minTakerBuyRatio:0.70,
-      minConfirmations:4,minScore:86,max24hMovePct:8,requireTrigger:true,minCategoryHits:5
+    const observedAt=this.clock();
+    alert.observed_at=observedAt;
+    alert.source_event_at=finite(alert.source_candle_close_at);
+    alert.source_data_age_ms=alert.source_event_at==null?null:Math.max(0,observedAt-alert.source_event_at);
+    const restHealth=this.rest?.health?.()||{};
+    alert.rest_queue_depth=finite(restHealth.queue_depth);
+    alert.rest_queue_wait_ms=finite(restHealth.queue_wait_ms_last);
+    const finalized=finalizeStrongMoveCandidate(alert,{...row,minQuoteVolume24h:this.config.minQuoteVolume24h},{
+      now:observedAt,minScore:this.config.minScore,lastAlertAt:this.lastAlertAt.get(row.symbol)||0,
+      alertCooldownMs:this.config.alertCooldownMs,telemetry:true
     });
-    alert.elite_gate=gate;
-    const notificationGate=evaluateRadarNotificationGate(alert,{now:this.clock()});
-    alert.notification_gate=notificationGate;
-    if(!alert.eligible||alertScore<this.config.minScore||!gate.eligible||!notificationGate.eligible)return alert;
-    const lastAlert=this.lastAlertAt.get(row.symbol)||0;
-    if(this.clock()-lastAlert<this.config.alertCooldownMs)return alert;
-    this.lastAlertAt.set(row.symbol,this.clock());
+    if(!finalized.accepted)return alert;
+    this.lastAlertAt.set(row.symbol,observedAt);
     const decorated=decorateRadarAlert(alert,'Radar 2 — Strong-Move');
     await this.store.appendStrongMoveAlert(decorated);
     if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
