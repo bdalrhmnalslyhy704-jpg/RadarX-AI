@@ -447,11 +447,11 @@ export function buildFalconEyeAlert(input,now=Date.now(),config={}){
 }
 
 export class FalconEyeRadar {
-  constructor({rest,futuresRest=null,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
+  constructor({rest,marketData=null,futuresRest=null,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
     this.clock=typeof clock==='function'?clock:()=>Date.now();
-    this.rest=rest;this.futuresRest=futuresRest;this.store=store;this.pushManager=pushManager;this.config={
+    this.rest=rest;this.marketData=marketData;this.futuresRest=futuresRest;this.store=store;this.pushManager=pushManager;this.config={
       quote:'USDT',pollMs:30000,universeRefreshMs:5*60*1000,minQuoteVolume24h:750000,fastMinQuoteVolume24h:750000,
       scanBatchSize:8,pulseTopCandidates:3,quietCandidates:2,patrolBatchSize:2,deepScanMinIntervalMs:90_000,deepConcurrency:3,
       maxExtended24hMovePct:18,maxQuiet24hMovePct:8,quietMinBaseScore:55,quietMinCompressionScore:60,
@@ -475,13 +475,13 @@ export class FalconEyeRadar {
   }
   async stop(){this.running=false;if(this.timer)clearInterval(this.timer);this.timer=null;}
   async refreshUniverse(){
-    const info=await this.rest.request('/api/v3/exchangeInfo');
+    const info=this.marketData?await this.marketData.exchangeInfo():await this.rest.request('/api/v3/exchangeInfo');
     const symbols=buildSpotUniverse(info.data,this.config.quote);
     this.universe=symbols.filter(x=>x.symbol&&isDirectionalCandidateSymbol(x.symbol)).map(x=>x.symbol);
     this.universeAt=this.clock();this.cursor=0;
   }
   async tickerRows(){
-    const r=await this.rest.request('/api/v3/ticker/24hr');
+    const r=this.marketData?await this.marketData.ticker24h():await this.rest.request('/api/v3/ticker/24hr');
     const raw=(Array.isArray(r.data)?r.data:[]).map(x=>normalizeRadarTickerRow(x,this.config.quote)).filter(Boolean)
       .filter(x=>isDirectionalCandidateSymbol(x.symbol))
       .filter(x=>x.quoteVolume24h>=this.config.fastMinQuoteVolume24h&&this.universe.includes(x.symbol)&&isDirectionalCandidateSymbol(x.symbol));
