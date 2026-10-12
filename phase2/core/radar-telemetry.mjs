@@ -154,11 +154,14 @@ export function recordRadarDecision(alert, gate, options = {}) {
 
 const instrumentedRadarInstances = new WeakSet();
 export function instrumentRadarCycle(instance, radarId, {clock = () => Date.now()} = {}) {
-  if (!instance || typeof instance.tick !== "function" || instrumentedRadarInstances.has(instance)) return false;
+  if (!instance || instrumentedRadarInstances.has(instance)) return false;
+  const methodName = typeof instance.tick === "function" ? "tick" :
+    (typeof instance.cycle === "function" ? "cycle" : null);
+  if (!methodName) return false;
   const radar = String(radarId || "UNKNOWN").toUpperCase();
-  const originalTick = instance.tick.bind(instance);
+  const originalTick = instance[methodName].bind(instance);
   instrumentedRadarInstances.add(instance);
-  instance.tick = async function(...args) {
+  instance[methodName] = async function(...args) {
     if (instance.running !== true || instance.busy === true) return originalTick(...args);
     const before = radarTelemetry.countForRadar(radar);
     const beganAt = clock();
