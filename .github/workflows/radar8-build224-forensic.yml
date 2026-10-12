@@ -104,8 +104,12 @@ jobs:
             console.log('- First elite-gate eligible: ' + when(item.summary?.first_elite_gate_eligible_at));
             console.log('- First final accepted decision: ' + when(item.summary?.first_accepted_at));
             console.log('- Maximum score/time: ' + String(item.summary?.maximum_score ?? 'n/a') + ' / ' + when(item.summary?.maximum_score_at));
-            console.log('- Actual window +50% time: ' + when(item.summary?.first_actual_window_50pct_at));
-            console.log('- Actual window +70% time: ' + when(item.summary?.first_actual_window_70pct_at));
+            console.log('- Actual window +50% first aggTrade timestamp: ' + when(item.summary?.first_actual_window_50pct_at));
+            console.log('- +50% candle-close estimate (lower precision): ' + when(item.summary?.first_actual_window_50pct_candle_close_at));
+            console.log('- +50% timestamp source/alignment: ' + String(item.summary?.actual_window_50pct_timestamp_source ?? 'UNKNOWN') + ' / ' + String(item.summary?.actual_window_50pct_alignment ?? 'UNKNOWN'));
+            console.log('- Actual window +70% first aggTrade timestamp: ' + when(item.summary?.first_actual_window_70pct_at));
+            console.log('- +70% candle-close estimate (lower precision): ' + when(item.summary?.first_actual_window_70pct_candle_close_at));
+            console.log('- +70% timestamp source/alignment: ' + String(item.summary?.actual_window_70pct_timestamp_source ?? 'UNKNOWN') + ' / ' + String(item.summary?.actual_window_70pct_alignment ?? 'UNKNOWN'));
             console.log('- Pre-move +50% classification: ' + String(item.summary?.premove_50_status ?? 'not available'));
             if (item.summary?.premove_50_status !== 'PREMOVE_ALERT_ACCEPTED') {
               console.log('- Prediction validation: NOT PASSED — no accepted alert is recorded before the +50% crossing in this replay window.');
