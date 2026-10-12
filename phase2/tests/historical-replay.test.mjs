@@ -110,3 +110,53 @@ test('forward +50/+70 percent labels are outcomes, separate from evaluator input
   assert.equal(sawOutcomeOnlyLeak, false);
   assert.ok(replay.steps.every(x => 'outcome' in x && x.outcome.is_future_data_for_scoring === false));
 });
+
+
+test('replay preserves core, elite and notification rejection stages for forensic review', () => {
+  const rows = candles(260);
+  const replay = runHistoricalReplay({
+    symbol: 'GTCUSDT', oneMinuteCandles: rows,
+    startTime: rows[180].openTime, endTime: rows[184].closeTime,
+    evaluate(input) {
+      return {
+        accepted: false,
+        score: 87.1,
+        stage: 'BUILDING',
+        reason_codes: ['BASE_ALERT_NOT_ELIGIBLE'],
+        alert: {
+          eligible: false,
+          risk_flags: ['LOW_CONFLUENCE'],
+          strong_move: {
+            eligible: false, stage: 'BUILDING', score: 87.1,
+            reasons: ['liquidity rising', 'price trigger incomplete'],
+            metrics: {
+              return_1m: 0.18, return_3m: 0.61, acceleration: 0.21,
+              volume_ratio: 1.8, trade_ratio: 1.4,
+              taker_buy_ratio: 0.68, three_second_taker_buy_ratio: 0.72,
+              taker_buy_pressure_confirmed: false, independent_confirmations: 3,
+              flash_score: 87.1, flash_confirmations: 3,
+              liquidity_acceleration: {three_minute_acceleration: 0.3, score: 79},
+              breakout_up: true
+            }
+          },
+          elite_gate: {
+            eligible: false, score: 83.2, confirmations: 3, category_hits: 4,
+            risk_flags: ['LOW_CONFLUENCE', 'LOW_CATEGORY_DIVERSITY']
+          },
+          notification_gate: {eligible: false, failures: ['BASE_ALERT_NOT_ELIGIBLE']}
+        }
+      };
+    }
+  });
+  const row = replay.steps[0];
+  assert.equal(row.decision, 'REJECTED');
+  assert.equal(row.rejection_group, 'STRONG_MOVE_CORE_GATE');
+  assert.equal(row.candidate_eligible, false);
+  assert.equal(row.core_trigger_eligible, false);
+  assert.equal(row.signal_metrics.taker_buy_ratio_1m_3m, 0.68);
+  assert.equal(row.signal_metrics.taker_buy_ratio_3s, 0.72);
+  assert.equal(row.signal_metrics.liquidity_acceleration_3m, 0.3);
+  assert.ok(row.core_reasons.includes('price trigger incomplete'));
+  assert.ok(row.elite_gate.risk_flags.includes('LOW_CATEGORY_DIVERSITY'));
+  assert.ok(replay.summary.rejection_groups.some(x => x.group === 'STRONG_MOVE_CORE_GATE'));
+});
