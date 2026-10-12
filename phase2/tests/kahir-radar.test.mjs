@@ -139,3 +139,17 @@ test('Kahir keeps its loop alive when a transient market request fails',async()=
   assert.ok(calls>=1);
   await radar.stop();
 });
+
+
+test('Kahir rejects stale closed candles instead of treating a cached move as live',()=>{
+  const m1=candles(150,60000).map(row=>({...row,openTime:row.openTime-20*60*1000,closeTime:row.closeTime-20*60*1000}));
+  const m5=fiveMinuteImpulse().map(row=>({...row,openTime:row.openTime-20*60*1000,closeTime:row.closeTime-20*60*1000}));
+  const result=buildKahirAnalysis({
+    oneMinute:m1,fiveMinute:m5,ticker:{lastPrice:101.2,priceChange24h:1,quoteVolume24h:5_000_000},
+    selfHistory:[{price:100,velocity_bps:1,selfChangePct:.01},{price:100.05,velocity_bps:2,selfChangePct:.05}],
+    marketVelocityBps:1,now:NOW
+  });
+  assert.equal(result.eligible,false);
+  assert.equal(result.stage,'STALE_DATA');
+  assert.equal(result.data_stale,true);
+});
