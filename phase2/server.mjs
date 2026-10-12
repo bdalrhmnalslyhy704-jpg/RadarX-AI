@@ -46,6 +46,10 @@ export async function startServer({
   logger.info?.('[RADARX_ARCHIVE_TEMP_CLEANUP] '+JSON.stringify({
     build_version:'Build 224',store_dir:store.dir,...(store.tempCleanup||{deleted_files:0,freed_bytes:0,failed_files:0})
   }));
+  const outcomeLedgerCompaction=await store.compactPreExpansionOutcomes({maxRecords:2500,maxStageKeys:6000});
+  logger.info?.('[RADARX_OUTCOME_LEDGER_COMPACTION] '+JSON.stringify({
+    build_version:'Build 224',store_dir:store.dir,...outcomeLedgerCompaction
+  }));
   const archiveState=await store.getPreExpansionOutcomes().catch(()=>({}));
   const archiveRecords=Array.isArray(archiveState?.records)?archiveState.records:[];
   let archiveVolumeMounted=null;
@@ -58,10 +62,21 @@ export async function startServer({
       });
     }catch{archiveVolumeMounted=false;}
   }
-  const archiveDigest=createHash('sha256').update(JSON.stringify(archiveRecords.map(row=>({
-    signal_id:row?.signal_id,radar:row?.radar,symbol:row?.symbol,detected_at:row?.detected_at,
-    marks:row?.marks,horizon_status:row?.horizon_status
-  })))).digest('hex');
+  // Stream the exact JSON array representation into SHA-256. Building both a
+  // second 5,000-row mapped array and one giant JSON string briefly duplicated
+  // the whole outcome ledger in memory during startup.
+  const archiveDigestHash=createHash('sha256');
+  archiveDigestHash.update('[');
+  for(let index=0;index<archiveRecords.length;index++){
+    if(index)archiveDigestHash.update(',');
+    const row=archiveRecords[index];
+    archiveDigestHash.update(JSON.stringify({
+      signal_id:row?.signal_id,radar:row?.radar,symbol:row?.symbol,detected_at:row?.detected_at,
+      marks:row?.marks,horizon_status:row?.horizon_status
+    }));
+  }
+  archiveDigestHash.update(']');
+  const archiveDigest=archiveDigestHash.digest('hex');
   const archiveAnchor=[...archiveRecords].sort((a,b)=>Number(a?.detected_at||0)-Number(b?.detected_at||0))[0]||null;
   const archiveLatest=archiveRecords.reduce((latest,row)=>
     Number(row?.detected_at||0)>Number(latest?.detected_at||0)?row:latest,null);
