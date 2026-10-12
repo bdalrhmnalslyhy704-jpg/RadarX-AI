@@ -71,8 +71,8 @@ test('replay applies alert cooldown deterministically per symbol', () => {
   const rows = candles(260);
   const start = rows[180].openTime;
   const replay = runHistoricalReplay({
-    symbol: 'WUSDT', oneMinuteCandles: rows, startTime: start,
-    endTime: rows[190].closeTime, alertCooldownMs: 2 * MINUTE,
+    symbol: 'WUSDT', oneMinuteCandles: rows, aggTrades: syntheticTrades(rows), startTime: start,
+    endTime: rows[190].closeTime, tradeCoverageComplete:true, alertCooldownMs: 2 * MINUTE,
     evaluate() { return {accepted: true, stage: 'PRE_EXPANSION', score: 90}; }
   });
   assert.equal(replay.steps[0].decision, 'ACCEPTED');
@@ -129,7 +129,7 @@ test('forward +50/+70 percent labels are outcomes, separate from evaluator input
 test('replay preserves core, elite and notification rejection stages for forensic review', () => {
   const rows = candles(260);
   const replay = runHistoricalReplay({
-    symbol: 'GTCUSDT', oneMinuteCandles: rows,
+    symbol: 'GTCUSDT', oneMinuteCandles: rows, aggTrades:syntheticTrades(rows), tradeCoverageComplete:true,
     startTime: rows[180].openTime, endTime: rows[184].closeTime,
     evaluate(input) {
       return {
