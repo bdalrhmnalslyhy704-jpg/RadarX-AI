@@ -38,7 +38,10 @@ export function evaluateEliteGate({
     compression:clamp(compressionScore)
   };
   const hits=Object.entries(categories).filter(([,v])=>hit(v,70)).map(([name])=>name);
-  const extended=Math.abs(Number(priceChange24h)||0)>max24hMovePct;
+  const change24h=Number(priceChange24h)||0;
+  const side=String(direction||'UP').toUpperCase();
+  const extended=side.startsWith('UP')?change24h>max24hMovePct:
+    side.startsWith('DOWN')?change24h < -max24hMovePct:Math.abs(change24h)>max24hMovePct;
   const weakLiquidity=clamp(liquidityScore)<60;
   const weakData=clamp(dataQualityScore)<80;
   const missingTrigger=requireTrigger&&!hit(triggerScore,72);
@@ -47,7 +50,7 @@ export function evaluateEliteGate({
   // A single weighted vote per independent evidence family; baseScore is composite/diagnostic only.
   const legacyScore=clamp(categories.trigger*0.18+categories.structure*0.17+categories.participation*0.15+
     categories.flow*0.16+categories.relative*0.10+categories.momentum*0.16+categories.compression*0.08);
-  const advanced=evaluateAdvancedConfluence({categories,priceChange24h,confirmations,minConfirmations,baseScore:0});
+  const advanced=evaluateAdvancedConfluence({categories,priceChange24h,direction,confirmations,minConfirmations,baseScore:0});
   // Advanced confluence acts as a separate veto, not a second weighted copy of these same components.
   const score=legacyScore;
   const takerRatioAvailable=takerBuyRatio!=null&&Number.isFinite(Number(takerBuyRatio));
