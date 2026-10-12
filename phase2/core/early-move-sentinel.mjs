@@ -693,11 +693,26 @@ export class EarlyMoveSentinel {
     }
     this.preExplosionRotationTotal+=visits;
     for(const row of selected){
+      const pending=this.deepQueue.find(x=>x.symbol===row.symbol);
+      if(pending){
+        // One deep scan can evaluate wake/pre-explosion/move evidence together.
+        // Refresh its market snapshot without downgrading a stronger trigger.
+        pending.row=this.lastTicker.get(row.symbol)||row;
+        this.lastEarlyScanAt.set(row.symbol,now);
+        if(pending.mode==='PRE_EXPLOSION'){
+          pending.trigger={
+            ...pending.trigger,
+            movePct:pending.row.priceChange24h,
+            discoveryScore:row.pre_explosion_discovery_score
+          };
+        }
+        continue;
+      }
       if(this.deepQueue.length>=queueLimit)break;
       this.lastEarlyScanAt.set(row.symbol,now);
       this.deepQueue.push({
         symbol:row.symbol,
-        row,
+        row:this.lastTicker.get(row.symbol)||row,
         trigger:{movePct:row.priceChange24h,discoveryScore:row.pre_explosion_discovery_score},
         queuedAt:now,
         mode:'PRE_EXPLOSION'
@@ -733,11 +748,30 @@ export class EarlyMoveSentinel {
 
   queueDeep(symbol,row,trigger,mode='MOVE'){
     const now=this.clock();
+    const pending=this.deepQueue.find(x=>x.symbol===symbol);
+    if(pending){
+      // Keep a single queued scan per symbol, but never let a routine trigger
+      // suppress a more urgent early-wake event. Always retain the newest ticker.
+      pending.row=this.lastTicker.get(symbol)||row;
+      const priority={PRE_EXPLOSION:1,MOVE:2,EARLY_WAKE:3};
+      const currentPriority=priority[pending.mode]||0;
+      const incomingPriority=priority[mode]||0;
+      if(incomingPriority>currentPriority){
+        pending.mode=mode;
+        pending.trigger=trigger;
+      }else if(mode===pending.mode){
+        pending.trigger=trigger;
+      }
+      this.drainDeepQueue().catch(e=>{
+        this.lastError=String(e?.message??e);
+        this.logger.warn?.('MOVE_DEEP',this.lastError);
+      });
+      return;
+    }
     const last=this.lastAlertAt.get(`${symbol}:${mode==='EARLY_WAKE'?'EARLY_WAKE_ALERT':'EARLY_MOVE_ALERT'}`)||0;
     const cooldown=mode==='EARLY_WAKE'?this.config.earlyWakeAlertCooldownMs:this.config.cooldownMs;
     if(now-last<cooldown)return;
-    if(this.deepQueue.some(x=>x.symbol===symbol))return;
-    this.deepQueue.push({symbol,row,trigger,queuedAt:now,mode});
+    this.deepQueue.push({symbol,row:this.lastTicker.get(symbol)||row,trigger,queuedAt:now,mode});
     this.drainDeepQueue().catch(e=>{
       this.lastError=String(e?.message??e);
       this.logger.warn?.('MOVE_DEEP',this.lastError);
@@ -746,7 +780,10 @@ export class EarlyMoveSentinel {
 
   async drainDeepQueue(){
     while(this.running&&this.deepActive<this.config.maxDeepPerCycle&&this.deepQueue.length){
-      const job=this.deepQueue.shift();
+      const queued=this.deepQueue.shift();
+      // Tickers may have changed while this item waited behind other deep scans.
+      // Scan with the freshest known public ticker, not the enqueue-time snapshot.
+      const job={...queued,row:this.lastTicker.get(queued.symbol)||queued.row};
       this.deepActive++;
       try{
         const candidate=await this.scanner.scanSymbol(job.row,1,{exchangeInfo:'Binance Public REST',ticker:'Binance Public REST'},{klinesLimit:this.config.deepKlines,fastInterval:this.config.fastInterval,fastKlines:this.config.fastKlines});
