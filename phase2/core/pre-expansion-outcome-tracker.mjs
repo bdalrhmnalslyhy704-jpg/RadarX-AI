@@ -20,7 +20,7 @@ const RADAR_ALIASES=new Map([
 // Keep the mutable outcome working set smaller than the durable Scan Journey archive.
 // The previous 5,000 deep records plus repeated normalize/serialize copies exhausted
 // the ~410 MiB Node heap in production. Scan Journey keeps the wider evidence history.
-const MAX_RECORDS=2500;
+const MAX_RECORDS=1500;
 const REARM_MS=60*60*1000;
 const HISTORICAL_WINDOW_MS=45*24*60*60*1000;
 const HISTORICAL_IMPORT_INTERVAL_MS=60*60*1000;
