@@ -94,9 +94,15 @@ jobs:
             console.log('### ' + item.symbol);
             console.log('- Steps: ' + (item.summary?.replay_steps ?? 0) + '; accepted: ' + (item.summary?.accepted ?? 0) + '; rejected: ' + (item.summary?.rejected ?? 0));
             console.log('- Trade coverage complete: ' + String(item.data_quality?.trade_coverage_complete === true));
-            console.log('- First accepted decision: ' + when(item.summary?.first_accepted_at));
+            console.log('- First core trigger: ' + when(item.summary?.first_core_trigger_at));
+            console.log('- First candidate eligible: ' + when(item.summary?.first_candidate_eligible_at));
+            console.log('- First elite-gate eligible: ' + when(item.summary?.first_elite_gate_eligible_at));
+            console.log('- First final accepted decision: ' + when(item.summary?.first_accepted_at));
+            console.log('- Maximum score/time: ' + String(item.summary?.maximum_score ?? 'n/a') + ' / ' + when(item.summary?.maximum_score_at));
             console.log('- Actual window +50% time: ' + when(item.summary?.first_actual_window_50pct_at));
             console.log('- Actual window +70% time: ' + when(item.summary?.first_actual_window_70pct_at));
+            console.log('- Minutes core trigger lead to +50%: ' + String(item.summary?.minutes_from_first_core_trigger_to_actual_50pct ?? 'not detected'));
+            console.log('- Rejection groups: ' + JSON.stringify(item.summary?.rejection_groups ?? []));
           }
           NODE
           fi
