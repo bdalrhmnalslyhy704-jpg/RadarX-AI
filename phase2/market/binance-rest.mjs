@@ -179,7 +179,7 @@ export class RestClient {
         const previous=this.budget.reservationQueue;
         this.budget.reservationQueue=new Promise(resolve=>{release=resolve;});
         await previous;
-        let reserved=false,waitMs=0;
+        let reservation=null,waitMs=0;
         try{
           const now=this.clock();
           if(this.rateLimitedUntil>now)waitMs=this.rateLimitedUntil-now;
@@ -193,10 +193,9 @@ export class RestClient {
               else{
                 // Reserve weight atomically across all clients using this budget, before
                 // the network await begins; independent clients can still fetch in parallel.
-                const reservedAt=this.clock();
-                this.usedAt.push({at:reservedAt,weight:w});
-                this.lastRequestAt=reservedAt;
-                reserved=true;
+                reservation={at:this.clock(),weight:w};
+                this.usedAt.push(reservation);
+                this.lastRequestAt=reservation.at;
               }
             }else{
               const oldest=this.usedAt[0]?.at;
@@ -205,10 +204,17 @@ export class RestClient {
             }
           }
         }finally{release();}
-        if(reserved)return;
+        if(reservation)return reservation;
         await this.sleepFn(Math.max(1,waitMs||100));
       }
     }finally{this.budget.reservationQueueDepth=Math.max(0,this.budget.reservationQueueDepth-1);}
+  }
+
+  cancelBudgetReservation(reservation){
+    if(!reservation)return false;
+    const index=this.usedAt.indexOf(reservation);
+    if(index<0)return false;
+    this.usedAt.splice(index,1);return true;
   }
 
   async enqueue(task) {
@@ -263,8 +269,19 @@ export class RestClient {
     const weight=requestWeightFor(path,query);
     let error=null;
     for(let attempt=0;attempt<this.baseUrls.length;attempt++){
-      await this.waitBudget(weight);
-      const releaseSlot=await this.acquireRequestSlot();
+      let reservation=null,releaseSlot=null;
+      while(true){
+        reservation=await this.waitBudget(weight);
+        releaseSlot=await this.acquireRequestSlot();
+        const now=this.clock();
+        if(this.rateLimitedUntil>now||!this.usedAt.includes(reservation)){
+          releaseSlot();releaseSlot=null;
+          this.cancelBudgetReservation(reservation);
+          if(this.rateLimitedUntil>now)await this.sleepFn(this.rateLimitedUntil-now);
+          continue;
+        }
+        break;
+      }
       const idx=(this.currentBaseIndex+attempt)%this.baseUrls.length;
       const url=this.baseUrls[idx]+path+(qs.toString()?'?'+qs:'');
       const ac=new AbortController();
