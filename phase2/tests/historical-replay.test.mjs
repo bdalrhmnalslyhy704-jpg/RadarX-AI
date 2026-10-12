@@ -130,7 +130,7 @@ test('replay reports dynamic early warnings separately from strict acceptances',
   const rows=candles(260);
   const replay=runHistoricalReplay({
     symbol:'WUSDT',oneMinuteCandles:rows,aggTrades:syntheticTrades(rows),
-    startTime:rows[180].openTime,endTime:rows[184].closeTime,tradeCoverageComplete:true,
+    startTime:rows[180].openTime,endTime:rows[184].closeTime,tradeCoverageComplete:true,alertCooldownMs:0,
     evaluate(input){
       return {
         accepted:true,accepted_mode:'DYNAMIC_EARLY_WARNING',
