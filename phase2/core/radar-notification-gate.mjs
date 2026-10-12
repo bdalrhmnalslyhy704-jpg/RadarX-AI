@@ -204,10 +204,10 @@ function radarSpecificChecks(alert,p){
     if(Number(a.confirmation_count||0)<8)failures.push('FALCON_CONFIRMATION_BREADTH_LOW');
     if(a.market_pulse && Number(a.market_pulse.score||0)<54)failures.push('FALCON_MARKET_PULSE_WEAK');
     if(Number(cs.quietness||0)<65)failures.push('FALCON_QUIET_BASE_WEAK');
-    if(Number(cs.compression||0)<58&&!validatedEarly)failures.push('FALCON_COMPRESSION_WEAK');
+    if(Number(cs.compression||0)<58&&!validatedEarlySetup)failures.push('FALCON_COMPRESSION_WEAK');
     if(Number(cs.structure||0)<65)failures.push('FALCON_STRUCTURE_WEAK');
     if(Number(cs.taker||0)<58)failures.push('FALCON_TAKER_FLOW_WEAK');
-    if(Number(cs.relative_strength||0)<55&&!validatedEarly)failures.push('FALCON_RELATIVE_STRENGTH_WEAK');
+    if(Number(cs.relative_strength||0)<55&&!validatedEarlySetup)failures.push('FALCON_RELATIVE_STRENGTH_WEAK');
     if(Number(m.move_24h_pct)>8)failures.push('FALCON_ALREADY_MOVED');
     if(Number(m.return_10m)>3.8)failures.push('FALCON_10M_CHASE');
     if(Number(m.return_5m)>2.5)failures.push('FALCON_5M_CHASE');
