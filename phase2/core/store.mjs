@@ -913,7 +913,7 @@ export class DurableStore {
         for(let index=0;(index=chunk.indexOf(10,index))!==-1;index++)newlineCount++;
         chunks.unshift(chunk);
       }
-      const lines=Buffer.concat(chunks).toString('utf8').split('\\n');
+      const lines=Buffer.concat(chunks).toString('utf8').split('\n');
       // The first block boundary may land in the middle of a record.
       if(position>0)lines.shift();
       const rows=[];
