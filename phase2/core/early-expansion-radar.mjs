@@ -1402,7 +1402,6 @@ export class EarlyExpansionRadar{
   async tick({quote=this.config.quote}={}){
     if(!this.running||this.busy)return false;
     this.busy=true;const scanStartedAt=this.clock();
-    await this.scheduler.hydrate();
     const journeyEntries=new Map(),journeyMicroBySymbol=new Map(),journeyDeepBySymbol=new Map(),journeyDeepCandlesBySymbol=new Map();
     const journey={cycle_id:null,cycle_number:null,quote:INCOMPLETE,source:INCOMPLETE,expected_symbols:[],received_symbols:[],eligible_symbols:[],status:'RUNNING'};
     const makeJourneyEntry=(symbol)=>({
@@ -1424,6 +1423,8 @@ export class EarlyExpansionRadar{
       outcome_maintenance_ms:0,micro_scan_ms:0,market_micro_overlap_ms:0,
       deep_scan_ms:0,signal_archive_ms:0,notification_ms:0};
     try{
+      // Hydration must be protected by the same lifecycle guard as the scan.
+      await this.scheduler.hydrate();
       const q=this.normalizeQuote(quote);
       await this.hydrateScanJourneyState();
       const now=this.clock();
@@ -2153,7 +2154,15 @@ export class EarlyExpansionRadar{
       }
       this.lastResult={...emptyEarlyExpansionSnapshot(this.config,quote,this.lastError),schema_version:'RADAR8_V2',as_of:new Date(scanStartedAt).toISOString()};
       return false;
-    }finally{await this.scheduler.flush();this.busy=false;}
+    }finally{
+      // Release the cycle latch before scheduling archive writes. A slow queued
+      // durable-store append must never prevent future background scan cycles.
+      this.busy=false;
+      try{
+        const flushing=this.scheduler.flush();
+        Promise.resolve(flushing).catch(error=>this.noteError(error,'scheduler-flush'));
+      }catch(error){this.noteError(error,'scheduler-flush');}
+    }
   }
   snapshot(limit=100,quote=this.config.quote){
     const q=this.normalizeQuote(quote);
