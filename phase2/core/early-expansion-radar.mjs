@@ -8,7 +8,7 @@ import {assessQuietBasePreExpansion,summarizeQuietBasePreExpansion} from './quie
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
 import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId,normalizeMissing,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,reconcileEligibilityQueueAge} from './scan-journey-ledger.mjs';
 import {ScanSchedulerJournal, schedulerLaneReason} from './scan-scheduler.mjs';
-import {MarketWideLightScan} from './market-wide-light-scan.mjs';
+import {MarketWideLightScan, isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
 
 function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
@@ -166,13 +166,13 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   quote:'USDT',
   pollMs:45000,
   universeRefreshMs:15*60*1000,
-  minQuoteVolume24h:350000,
+  minQuoteVolume24h:750000,
   minLiquidityQuality:58,
   maxSpreadBps:22,
   minDataQuality:70,
-  microScanCandidates:12,
+  microScanCandidates:18,
   rotationReserve:8,
-  deepCandidates:3,
+  deepCandidates:5,
   quietReserve:8,
   microConcurrency:6,
   deepConcurrency:4,
@@ -1180,7 +1180,7 @@ export class EarlyExpansionRadar{
   selectMicro(rows,fastBySymbol,cycle=0){
     const currentCycle=Math.max(0,Math.trunc(Number(cycle)||0));
     const selectionAt=this.clock();
-    const all=(rows||[]).filter(row=>row&&row.symbol).map(row=>{
+    const all=(rows||[]).filter(row=>row&&row.symbol&&isDirectionalCandidateSymbol(row.symbol)).map(row=>{
       const fast=fastBySymbol.get(row.symbol)||{};
       const quiet=quietCandidateScore(row,fast,this.config);
       const fastScore=fastCandidateScore(row,fast,this.config);
@@ -1218,8 +1218,12 @@ export class EarlyExpansionRadar{
     const n=Math.max(1,Math.trunc(this.config.microScanCandidates||36));
     const target=Math.min(n,new Set(all.map(x=>String(x.symbol).toUpperCase())).size);
     if(!target)return [];
-    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve??8)),Math.max(0,target-1));
-    const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve??8)),Math.max(0,target-q-1));
+    const requestedQuiet=Math.max(0,Math.trunc(this.config.quietReserve??8));
+    const requestedRotation=Math.max(0,Math.trunc(this.config.rotationReserve??8));
+    const quietBudget=target>1?Math.max(1,Math.floor(target*.35)):0;
+    const rotationBudget=target>=3?Math.max(1,Math.floor(target*.25)):0;
+    const q=Math.min(requestedQuiet,quietBudget,Math.max(0,target-1));
+    const r=Math.min(requestedRotation,rotationBudget,Math.max(0,target-q-2));
     const core=target-q-r;
     const byScore=[...all].sort((a,b)=>b._microPreScore-a._microPreScore||a.symbol.localeCompare(b.symbol));
     const byQuiet=all.filter(x=>x._quietEligible).sort((a,b)=>
@@ -1233,7 +1237,7 @@ export class EarlyExpansionRadar{
       b._rotationAge-a._rotationAge||a._rotation-b._rotation||a.symbol.localeCompare(b.symbol));
     const byExceptional=all.filter(x=>x._exceptional).sort((a,b)=>b._microPreScore-a._microPreScore||b._rotationAge-a._rotationAge||a.symbol.localeCompare(b.symbol));
     const selected=[],seen=new Set();
-    const exceptionSlots=Math.min(core,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2)));
+    const exceptionSlots=Math.min(Math.max(0,core-1),Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2)));
     takeUniqueLane(selected,seen,byExceptional,exceptionSlots,'exceptional');
     takeUniqueLane(selected,seen,byScore,Math.max(0,core-selected.length),'score');
     takeUniqueLane(selected,seen,byQuiet,q,'quiet');
@@ -1254,8 +1258,12 @@ export class EarlyExpansionRadar{
     const target=Math.min(n,new Set(valid.map(selectionSymbol)).size);
     if(!target)return [];
     // 8 quiet slots by default would crowd out all but one scored candidate in a 10-wide batch.
-    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve??8)),Math.max(0,target-1),Math.floor(target*.5));
-    const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve??2)),Math.max(0,target-q-1));
+    const requestedQuiet=Math.max(0,Math.trunc(this.config.quietReserve??8));
+    const requestedRotation=Math.max(0,Math.trunc(this.config.rotationReserve??2));
+    const quietBudget=target>1?Math.max(1,Math.floor(target*.35)):0;
+    const rotationBudget=target>=3?Math.max(1,Math.floor(target*.25)):0;
+    const q=Math.min(requestedQuiet,quietBudget,Math.max(0,target-1));
+    const r=Math.min(requestedRotation,rotationBudget,Math.max(0,target-q-2));
     const core=target-q-r;
     const byScore=[...valid].sort((a,b)=>Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const byQuiet=valid.map(item=>({...item,_quietScore:quietDeepRank(item,this.config)}))
@@ -1284,7 +1292,7 @@ export class EarlyExpansionRadar{
     const byExceptional=valid.filter(x=>isExceptionalDeepCandidate(x,this.config)).sort((a,b)=>
       Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const selected=[],seen=new Set();
-    const exceptionSlots=Math.min(core,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2)));
+    const exceptionSlots=Math.min(Math.max(0,core-1),Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2)));
     takeUniqueLane(selected,seen,byExceptional,exceptionSlots,'exceptional');
     takeUniqueLane(selected,seen,byScore,Math.max(0,core-selected.length),'score');
     takeUniqueLane(selected,seen,byQuiet,q,'quiet');
