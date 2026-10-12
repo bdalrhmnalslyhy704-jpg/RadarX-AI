@@ -41,6 +41,27 @@ test('Concurrent REST calls are serialized by one queue and local REQUEST_WEIGHT
   assert.equal(client.health().observed_request_weight_1m,4);
 });
 
+test('aggTrades fromId pagination is supported and REST queue wait is observable',async()=>{
+  let requestedUrl='';
+  const client=new RestClient({
+    baseUrls:['https://example.test'],minIntervalMs:0,maxWeightPerMinute:100,safetyMarginWeight:0,
+    clock:()=>1_900_000_000_000,sleepFn:async()=>{},
+    fetchImpl:async url=>{
+      requestedUrl=String(url);
+      return response(200,[{a:77,p:'0.5',q:'12',T:1_899_999_999_999,m:false}]);
+    }
+  });
+  const result=await client.aggTrades('GTCUSDT',{fromId:77,limit:1000});
+  const url=new URL(requestedUrl);
+  assert.equal(url.searchParams.get('fromId'),'77');
+  assert.equal(url.searchParams.has('startTime'),false);
+  assert.equal(url.searchParams.has('endTime'),false);
+  assert.equal(result.trades[0].a,77);
+  assert.equal(client.health().queue_wait_samples,1);
+  assert.equal(client.health().queue_wait_ms_last,0);
+  assert.equal(client.health().queue_wait_ms_p95,0);
+});
+
 test('429 and 418 responses establish explicit backoff and the queue honors Retry-After',async()=>{
   let now=2000000,attempt=0,slept=0;
   const sleepFn=async ms=>{slept+=ms;now+=Math.max(0,Number(ms)||0);};
