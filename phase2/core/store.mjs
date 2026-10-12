@@ -936,7 +936,7 @@ export class DurableStore {
         if(newline<0)break;
         end=newline;
       }
-      return rows.reverse();
+      return rows;
     }catch{return[];}
     finally{if(handle)await handle.close().catch(()=>{});}
   }
