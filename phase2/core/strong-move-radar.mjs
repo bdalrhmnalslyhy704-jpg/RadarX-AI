@@ -407,7 +407,7 @@ export class StrongMoveRadar {
     this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={
       quote:'USDT',pollMs:30000,universeRefreshMs:60000,minQuoteVolume24h:1000000,
-      rotationBatchSize:4,topMoverCount:3,alertCooldownMs:12*60*1000,
+      rotationBatchSize:4,topMoverCount:3,scanConcurrency:2,alertCooldownMs:12*60*1000,
       minScore:76, ...config
     };
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
@@ -499,10 +499,19 @@ export class StrongMoveRadar {
       const rows=await this.tickerRows();
       const selected=this.selectBatch(rows);
       this.lastScanAtMs=this.clock();
-      for(const row of selected){
-        if(!this.running)break;
-        try{await this.scanRow(row);}catch(e){this.lastError=String(e?.message??e);}
-      }
+      // Keep a small number of symbol scans in flight so network waits overlap, while
+      // RestClient still serializes requests and enforces the global weight budget.
+      const concurrency=Math.max(1,Math.min(4,Math.trunc(Number(this.config.scanConcurrency)||2)));
+      let next=0;
+      const worker=async()=>{
+        while(this.running){
+          const index=next++;
+          if(index>=selected.length)return;
+          try{await this.scanRow(selected[index]);}
+          catch(e){this.lastError=String(e?.message??e);}
+        }
+      };
+      await Promise.all(Array.from({length:Math.min(concurrency,selected.length)},()=>worker()));
     }finally{
       this.busy=false;
     }
@@ -515,6 +524,7 @@ export class StrongMoveRadar {
       last_universe_refresh_at:this.universeAt||null,
       last_scan_at:this.lastScanAtMs,
       scans:this.scans,
+      scan_concurrency:Math.max(1,Math.min(4,Math.trunc(Number(this.config.scanConcurrency)||2))),
       alerts_emitted:this.alertCount,
       last_error:this.lastError,
       busy:this.busy,
