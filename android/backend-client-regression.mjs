@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {classifyBackendState,isFreshLiveSignal,isFreshLiveState} from './app/src/main/assets/radarx-backend-client.mjs';
+import {classifyBackendState,isFreshLiveSignal,isFreshLiveState,getFalconEyeRadar} from './app/src/main/assets/radarx-backend-client.mjs';
 import {readFile} from 'node:fs/promises';
 
 const freshSignal={status:200,body:{signal:{data_status:{data_stale:false,data_valid:true,last_error:null}},meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}}};
@@ -11,6 +11,22 @@ const staleSignal={status:200,body:{signal:{data_status:{data_stale:true,data_va
 assert.equal(classifyBackendState({health:{status:200},readiness:ready503,signal:staleSignal}),'DATA_STALE');
 assert.equal(classifyBackendState({health:{status:500},readiness:{status:500},signal:{status:500}}),'DISCONNECTED');
 assert.equal(classifyBackendState({health:{status:0},readiness:{status:200},signal:{status:0}}),'DISCONNECTED');
+let falconRequestUrl='';
+const falconRead=await getFalconEyeRadar({limit:12,since:123,scan:false},async url=>{
+  falconRequestUrl=String(url);
+  return {ok:true,status:200,json:async()=>({radar:'FALCON_EYE_RADAR',
+    candidates:[{symbol:'PLUMEUSDT',eligible:true}],alerts:[],
+    monitoring:{running:true},scan:{requested:false,completed:true}})};
+});
+assert.equal(falconRead.ok,true);
+assert.equal(falconRead.body.candidates[0].symbol,'PLUMEUSDT');
+assert.match(falconRequestUrl,/\\/api\\/falcon-eye-radar\\?limit=12&since=123&scan=0/);
+assert.throws(()=>getFalconEyeRadar({limit:51,scan:false},async()=>({ok:true,status:200,json:async()=>({})})),/INVALID_LIMIT/);
+
+const falconScreen=await readFile(new URL('./app/src/main/assets/radarx-radar-screen.mjs',import.meta.url),'utf8');
+assert.match(falconScreen,/getFalconEyeRadar/);
+assert.match(falconScreen,/مرشحون تحت المراقبة/);
+assert.match(falconScreen,/ليس تنبيه شراء أو أمر تداول/);
 const index=await readFile(new URL('./app/src/main/assets/index.html',import.meta.url),'utf8');
 assert.match(index,/radarx-market-radar-screen.mjs/);
 assert.match(index,/UI_READY/);
