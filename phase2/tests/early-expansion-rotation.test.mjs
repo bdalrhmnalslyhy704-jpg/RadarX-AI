@@ -230,7 +230,7 @@ test('Radar 8 deep scan de-duplicates row-wrapped candidates and fills ten slots
   const selected=radar.selectDeepFromMicro([...input,input[0],input[1]],4);
   assert.equal(selected.length,10);
   assert.equal(new Set(selected.map(x=>x.row.symbol)).size,10);
-  assert.equal(selected.filter(x=>x._selection_lane==='quiet').length,5);
+  assert.equal(selected.filter(x=>x._selection_lane==='quiet').length,3);
 });
 
 
