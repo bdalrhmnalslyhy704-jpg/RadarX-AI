@@ -211,17 +211,60 @@ export function runHistoricalReplay({
     const f50 = outcomeAtPrice(forwardRows, close * 1.5, at + horizon);
     const f70 = outcomeAtPrice(forwardRows, close * 1.7, at + horizon);
     const maxHigh = forwardRows.reduce((best, x) => Math.max(best, x.high), close);
+    const alert = raw?.alert ?? null;
+    const strong = alert?.strong_move ?? {};
+    const elite = alert?.elite_gate ?? raw?.eliteGate ?? {};
+    const notification = raw?.notificationGate ?? raw?.notification_gate ?? raw?.gate ?? alert?.notification_gate ?? {};
+    const metrics = strong?.metrics ?? {};
+    const rejectionGroup = accepted ? "ACCEPTED" :
+      !tradeCoverageComplete ? "HISTORICAL_TRADE_COVERAGE_INCOMPLETE" :
+      alert?.eligible === false ? "STRONG_MOVE_CORE_GATE" :
+      elite?.eligible === false ? "ELITE_CONFLUENCE_GATE" :
+      notification?.eligible === false ? "NOTIFICATION_GATE" :
+      failure ? "REPLAY_EVALUATOR_ERROR" : "REJECTED_OTHER";
     rows.push({
       symbol: sym, timestamp: at, timestamp_iso: new Date(at).toISOString(),
       source_candle_open_time: candle.openTime, source_candle_close_at: candle.closeTime,
       price_at_decision: close, last_price_at_observation: ticker.lastPrice,
+      price_change_24h_pct: finite(ticker.priceChange24h),
       stage_observed: String(stageFrom(raw)).slice(0, 80),
-      decision: accepted ? "ACCEPTED" : "REJECTED", reason_codes: reasons,
-      score: finite(raw?.score ?? raw?.alert?.opportunity_score ?? raw?.alert?.strong_move?.score),
+      strong_move_stage: strong?.stage ?? null,
+      decision: accepted ? "ACCEPTED" : "REJECTED", rejection_group: rejectionGroup, reason_codes: reasons,
+      score: finite(raw?.score ?? alert?.opportunity_score ?? strong?.score),
+      candidate_eligible: typeof alert?.eligible === "boolean" ? alert.eligible : null,
+      core_trigger_eligible: typeof strong?.eligible === "boolean" ? strong.eligible : null,
+      core_reasons: Array.isArray(strong?.reasons) ? strong.reasons.slice(0, 12) : [],
+      risk_flags: Array.isArray(alert?.risk_flags) ? alert.risk_flags.slice(0, 16) : [],
+      elite_gate: {
+        eligible: typeof elite?.eligible === "boolean" ? elite.eligible : null,
+        score: finite(elite?.score), confirmations: finite(elite?.confirmations),
+        category_hits: finite(elite?.category_hits),
+        risk_flags: Array.isArray(elite?.risk_flags) ? elite.risk_flags.slice(0, 16) : []
+      },
+      notification_gate: {
+        eligible: typeof notification?.eligible === "boolean" ? notification.eligible : null,
+        failures: Array.isArray(notification?.failures) ? notification.failures.slice(0, 20) : reasons
+      },
+      signal_metrics: {
+        return_1m_pct: finite(metrics?.return_1m),
+        return_3m_pct: finite(metrics?.return_3m),
+        acceleration: finite(metrics?.acceleration),
+        volume_ratio: finite(metrics?.volume_ratio),
+        trade_ratio: finite(metrics?.trade_ratio),
+        taker_buy_ratio_1m_3m: finite(metrics?.taker_buy_ratio),
+        taker_buy_ratio_3s: finite(metrics?.three_second_taker_buy_ratio),
+        taker_buy_pressure_confirmed: typeof metrics?.taker_buy_pressure_confirmed === "boolean" ? metrics.taker_buy_pressure_confirmed : null,
+        independent_confirmations: finite(metrics?.independent_confirmations),
+        flash_score: finite(metrics?.flash_score),
+        flash_confirmations: finite(metrics?.flash_confirmations),
+        liquidity_acceleration_3m: finite(metrics?.liquidity_acceleration?.three_minute_acceleration),
+        liquidity_acceleration_score: finite(metrics?.liquidity_acceleration?.score),
+        breakout_up: typeof metrics?.breakout_up === "boolean" ? metrics.breakout_up : null
+      },
       observed_price_change_24h_pct: finite(ticker.priceChange24h),
       liquidity_acceleration: finite(raw?.liquidity_acceleration ??
-        raw?.alert?.strong_move?.metrics?.liquidity_acceleration?.three_minute_acceleration ??
-        raw?.alert?.metrics?.liquidity_acceleration?.three_minute_acceleration),
+        alert?.strong_move?.metrics?.liquidity_acceleration?.three_minute_acceleration ??
+        alert?.metrics?.liquidity_acceleration?.three_minute_acceleration),
       used_1m_candles: available1m.length, used_5m_candles: fiveEnd.length,
       input_max_candle_close_at: Math.max(...available1m.map(x => x.closeTime), ...fiveEnd.map(x => x.closeTime)),
       trade_window: {from: boundary - 60_000, to_exclusive: boundary, rows: tradeWindow.length, coverage_complete: Boolean(tradeCoverageComplete)},
@@ -254,9 +297,20 @@ export function runHistoricalReplay({
     summary: {
       replay_steps: rows.length, accepted: acceptedCount, rejected: rejectedCount,
       first_accepted_at: rows.find(x => x.decision === "ACCEPTED")?.timestamp ?? null,
+      first_core_trigger_at: rows.find(x => x.core_trigger_eligible === true)?.timestamp ?? null,
+      first_candidate_eligible_at: rows.find(x => x.candidate_eligible === true)?.timestamp ?? null,
+      first_elite_gate_eligible_at: rows.find(x => x.elite_gate.eligible === true)?.timestamp ?? null,
+      first_observed_score_ge_86_at: rows.find(x => Number(x.score) >= 86)?.timestamp ?? null,
+      maximum_score: rows.reduce((best, row) => Number.isFinite(row.score) && (best === null || row.score > best) ? row.score : best, null),
+      maximum_score_at: rows.reduce((best, row) => Number.isFinite(row.score) && (!best || row.score > best.score) ? {score: row.score, timestamp: row.timestamp} : best, null)?.timestamp ?? null,
+      rejection_groups: Object.entries(rows.reduce((groups, row) => {
+        groups[row.rejection_group] = (groups[row.rejection_group] || 0) + 1; return groups;
+      }, {})).map(([group, count]) => ({group, count})).sort((a,b) => b.count - a.count),
       first_actual_window_50pct_at: actual50At, first_actual_window_70pct_at: actual70At,
       minutes_from_first_accepted_to_actual_50pct: rows.find(x => x.decision === "ACCEPTED") && actual50At !== null
-        ? Math.round((actual50At - rows.find(x => x.decision === "ACCEPTED").timestamp) / MINUTE_MS * 100) / 100 : null
+        ? Math.round((actual50At - rows.find(x => x.decision === "ACCEPTED").timestamp) / MINUTE_MS * 100) / 100 : null,
+      minutes_from_first_core_trigger_to_actual_50pct: rows.find(x => x.core_trigger_eligible === true) && actual50At !== null
+        ? Math.round((actual50At - rows.find(x => x.core_trigger_eligible === true).timestamp) / MINUTE_MS * 100) / 100 : null
     },
     steps: rows,
     policy: {market: "SPOT", paper_trading: true, real_order_execution: false, confidence_score: "UNKNOWN"}
