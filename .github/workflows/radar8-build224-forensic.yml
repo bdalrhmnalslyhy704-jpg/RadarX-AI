@@ -68,6 +68,40 @@ jobs:
           mkdir -p reports
           node phase2/tools/early-expansion-forensic.mjs
 
+      - name: Run GTC/W public Spot historical replay
+        id: gtc-w-replay
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p reports
+          node phase2/tools/historical-replay.mjs --symbols GTCUSDT,WUSDT --lookback-hours 24 --max-trade-pages 300 --max-trades 250000 --output reports/historical-replay-gtc-w.json
+          replay_status=$?
+          printf 'exit_code=%s\n' "$replay_status" > reports/historical-replay-status.txt
+          {
+            echo "## GTC/W historical replay"
+            echo ""
+            echo "- CLI exit code: $replay_status (2 means the engine deliberately failed closed because historical coverage is incomplete; 1 means execution error; 0 means full requested coverage.)"
+            echo "- The report compares per-minute decisions to the first +50%/+70% window moves using public Binance Spot data only."
+            echo "- An artifact with incomplete trade coverage is diagnostic only; it is not a successful prediction replay."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -f reports/historical-replay-gtc-w.json ]; then
+            node --input-type=module >> "$GITHUB_STEP_SUMMARY" <<'NODE'
+          import {readFile} from 'node:fs/promises';
+          const report = JSON.parse(await readFile('reports/historical-replay-gtc-w.json','utf8'));
+          for (const item of report.results || []) {
+            const when = value => value ? new Date(value).toISOString() : 'not observed';
+            console.log('');
+            console.log('### ' + item.symbol);
+            console.log('- Steps: ' + (item.summary?.replay_steps ?? 0) + '; accepted: ' + (item.summary?.accepted ?? 0) + '; rejected: ' + (item.summary?.rejected ?? 0));
+            console.log('- Trade coverage complete: ' + String(item.data_quality?.trade_coverage_complete === true));
+            console.log('- First accepted decision: ' + when(item.summary?.first_accepted_at));
+            console.log('- Actual window +50% time: ' + when(item.summary?.first_actual_window_50pct_at));
+            console.log('- Actual window +70% time: ' + when(item.summary?.first_actual_window_70pct_at));
+          }
+          NODE
+          fi
+          exit 0
+
       - name: Upload forensic report
         uses: actions/upload-artifact@v4
         with:
@@ -75,6 +109,8 @@ jobs:
           path: |
             reports/radar8-forensic-2026-10-06.json
             reports/radar8-forensic-2026-10-06.md
+            reports/historical-replay-gtc-w.json
+            reports/historical-replay-status.txt
           if-no-files-found: error
           retention-days: 14
 
