@@ -1222,11 +1222,16 @@ export class EarlyExpansionRadar{
     // consumed 11 of 12 Micro slots, leaving only one slot for every fast event.
     // Cap quiet to one third and rotation to one quarter for larger batches.
     // A 3-symbol Deep batch keeps one quiet, one rotation, and one core slot.
-    const quietCap=target>=6?Math.floor(target/3):Math.floor(target/2);
-    const rotationCap=target>=6?Math.floor(target/4):(target>1?1:0);
-    const q=Math.min(Math.max(0,Math.trunc(this.config.quietReserve??4)),Math.max(0,Math.min(target-1,quietCap)));
-    const r=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve??3)),Math.max(0,Math.min(target-q-1,rotationCap)));
-    const core=target-q-r;
+    const configuredQuiet=Math.min(Math.max(0,Math.trunc(this.config.quietReserve??4)),Math.max(0,target-1));
+    const configuredRotation=Math.min(Math.max(0,Math.trunc(this.config.rotationReserve??3)),Math.max(0,target-configuredQuiet-1));
+    let q=configuredQuiet,r=configuredRotation,core=target-q-r;
+    if(core<2&&target>1){
+      const quietCap=target>=6?Math.floor(target/3):Math.floor(target/2);
+      const rotationCap=target>=6?Math.floor(target/4):1;
+      q=Math.min(configuredQuiet,Math.max(0,Math.min(target-1,quietCap)));
+      r=Math.min(configuredRotation,Math.max(0,Math.min(target-q-1,rotationCap)));
+      core=target-q-r;
+    }
     const byScore=[...all].sort((a,b)=>b._microPreScore-a._microPreScore||a.symbol.localeCompare(b.symbol));
     const byQuiet=all.filter(x=>x._quietEligible).sort((a,b)=>
       (absolute24hMove(a)??Infinity)-(absolute24hMove(b)??Infinity)||b._quietScore-a._quietScore||a.symbol.localeCompare(b.symbol));
