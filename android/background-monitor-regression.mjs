@@ -96,3 +96,18 @@ assert.ok(service.includes('at > 0L && at >= cursor'),
   'fallback must not omit events with the current timestamp when stable IDs differ');
 assert.ok(service.includes('sortAlertsChronologically(root)') && service.includes('root.put("oldest_first", true)'),
   'bounded fallback candidates must be notified in chronological order without moving the durable cursor');
+
+assert.match(service, /radar_alert_pending_notification_ids/,
+  'a durable replay row must be checkpointed as pending before posting to Android');
+assert.match(service, /private boolean notifyRadarAlert\(JSONObject alert, String replayIdentity, boolean durableCursor\)/,
+  'replay posting must carry the stable identity and know whether the feed owns the durable cursor');
+assert.match(service, /getActiveNotifications\(\)/,
+  'a restart must reconcile a previously accepted notification before attempting another post');
+assert.match(service, /wasPendingReservation = pendingNotificationIds\.contains\(notificationIdentity\)/,
+  'active tray inspection must be limited to identities whose cursor checkpoint was interrupted');
+assert.match(service, /if \(\(!durableCursor \|\| wasPendingReservation\) &&\s*hasActiveAlertNotification/,
+  'ordinary polls must avoid repeatedly enumerating the full Android notification tray');
+assert.match(service, /ALERT_POST_RECONCILED_ACTIVE/,
+  'reconciled notifications must be distinguishable from new NotificationManager posts');
+
+
