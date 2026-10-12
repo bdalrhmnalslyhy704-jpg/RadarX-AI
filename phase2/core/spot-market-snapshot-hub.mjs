@@ -61,7 +61,7 @@ export class SpotMarketSnapshotHub {
     const eligible=(info.data.symbols||[]).filter(s=>s.status==='TRADING'&&s.isSpotTradingAllowed!==false&&s.quoteAsset===q&&s.symbol&&/^[A-Z0-9]{5,30}$/.test(s.symbol));
     const available=new Set(tickers.data.map(x=>String(x?.symbol??'').toUpperCase()).filter(Boolean));
     const missing=eligible.filter(s=>!available.has(s.symbol)).map(s=>s.symbol);
-    return {quote:q,eligible_spot_symbols:eligible.length,ticker_symbols_received:tickers.data.length,eligible_symbols_with_ticker:eligible.length-missing.length,missing_ticker_count:missing.length,missing_ticker_samples:missing.slice(0,25),ticker_snapshot_age_ms:tickers.ageMs,ticker_ttl_ms:this.tickerTtlMs,ticker_source:tickers.source,status:missing.length===0?'COMPLETE':missing.length<eligible.length?'PARTIAL':'UNAVAILABLE',observed_at:tickers.receivedAt};
+    return {quote:q,eligible_spot_symbols:eligible.length,ticker_symbols_received:tickers.data.length,eligible_symbols_with_ticker:eligible.length-missing.length,missing_ticker_count:missing.length,missing_ticker_samples:missing.slice(0,25),ticker_snapshot_age_ms:tickers.ageMs,ticker_ttl_ms:this.tickerTtlMs,ticker_source:tickers.source,status:eligible.length===0?'UNAVAILABLE':missing.length===0?'COMPLETE':missing.length<eligible.length?'PARTIAL':'UNAVAILABLE',observed_at:tickers.receivedAt};
   }
   health(){
     const now=nowMs(this.clock),tickerAge=this.tickerSnapshot?now-this.tickerSnapshot.receivedAt:null,infoAge=this.exchangeInfoSnapshot?now-this.exchangeInfoSnapshot.receivedAt:null;
