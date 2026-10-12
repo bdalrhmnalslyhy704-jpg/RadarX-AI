@@ -11,6 +11,7 @@ const P = {
 
 function e(v){return String(v||'').replace(/[&<>"]/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[x]));}
 function q(v){return Number.isFinite(Number(v))?Number(v).toFixed(1):'—';}
+function priceFmt(v){return Number.isFinite(Number(v))?new Intl.NumberFormat('en-US',{maximumFractionDigits:8}).format(Number(v)):'—';}
 
 function idFromPath(){
   const f=String(location.pathname||'').split('/').pop().toLowerCase();
@@ -157,7 +158,7 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
         return '<article class="alert">'+
           '<div class="top"><b>'+e(x.symbol||'—')+'</b><span class="score">'+score+'/100</span></div>'+
           '<div class="muted">'+e(label)+' • '+e(x.direction||rotation.direction||'—')+' • '+e(timeValue)+extra+'</div>'+
-          '<div class="muted">'+(priceValue!==null&&priceValue!==undefined?'السعر وقت التحليل: '+e(q(priceValue))+' • ':'')+e(Array.isArray(x.reasons)?x.reasons.slice(0,4).join(' • '):Array.isArray(rotation.reasons)?rotation.reasons.slice(0,4).join(' • '):'')+'</div>'+rejectionNote+shockNote+
+          '<div class="muted">'+(priceValue!==null&&priceValue!==undefined?'السعر وقت التحليل: '+e(priceFmt(priceValue))+' • ':'')+e(Array.isArray(x.reasons)?x.reasons.slice(0,4).join(' • '):Array.isArray(rotation.reasons)?rotation.reasons.slice(0,4).join(' • '):'')+'</div>'+rejectionNote+shockNote+
         '</article>';
       }).join('');
     };
