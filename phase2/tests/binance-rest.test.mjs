@@ -31,7 +31,7 @@ test('Concurrent REST calls are serialized by one queue and local REQUEST_WEIGHT
     clock:()=>now,sleepFn,
     fetchImpl:async()=>{calls++;active++;maxActive=Math.max(maxActive,active);await Promise.resolve();active--;const used=(calls%10||10)*2;return response(200,[],{'X-MBX-USED-WEIGHT-1M':String(used)});}
   });
-  await Promise.all(Array.from({length:12},()=>client.klines('AAAUSDT','1m',{limit:180})));
+  await Promise.all(Array.from({length:12},(_,i)=>client.klines('A'+String(i).padStart(3,'0')+'USDT','1m',{limit:180})));
   maxWeightSeen=Math.max(maxWeightSeen,...client.usedAt.map(x=>x.weight));
   assert.equal(maxActive,1);
   assert.equal(calls,12);
@@ -39,6 +39,28 @@ test('Concurrent REST calls are serialized by one queue and local REQUEST_WEIGHT
   assert.ok(client.health().request_weight_used_last_minute<=20);
   assert.ok(now>=1000000+60000);
   assert.equal(client.health().observed_request_weight_1m,4);
+});
+
+test('overlapping identical public GETs are coalesced without caching later requests',async()=>{
+  let calls=0,releaseFetch;
+  const responseWait=new Promise(resolve=>{releaseFetch=resolve;});
+  const client=new RestClient({
+    baseUrls:['https://example.test'],minIntervalMs:0,maxWeightPerMinute:100,safetyMarginWeight:0,
+    clock:()=>1_900_000_000_000,sleepFn:async()=>{},
+    fetchImpl:async()=>{calls++;await responseWait;return response(200,[{symbol:'GTCUSDT'}]);}
+  });
+  const first=client.ticker24h();
+  const second=client.ticker24h();
+  assert.equal(calls,0);
+  assert.equal(client.health().inflight_request_count,1);
+  releaseFetch();
+  const [a,b]=await Promise.all([first,second]);
+  assert.equal(calls,1);
+  assert.deepEqual(a.data,b.data);
+  assert.equal(client.health().coalesced_request_count,1);
+  assert.equal(client.health().inflight_request_count,0);
+  await client.ticker24h();
+  assert.equal(calls,2,'subsequent non-overlapping calls must fetch fresh data');
 });
 
 test('aggTrades fromId pagination is supported and REST queue wait is observable',async()=>{
