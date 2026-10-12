@@ -40,6 +40,13 @@ jobs:
           node --check phase2/tests/early-expansion-radar.test.mjs
           node --check phase2/tests/binance-rest.test.mjs
           node --check phase2/tests/early-expansion-api-contract.test.mjs
+          node --check phase2/core/strong-move-radar.mjs
+          node --check phase2/core/radar-notification-gate.mjs
+          node --check phase2/core/radar-telemetry.mjs
+          node --check phase2/core/historical-replay.mjs
+          node --check phase2/tools/historical-replay.mjs
+          node --check phase2/tests/historical-replay.test.mjs
+          node --check phase2/tests/radar-telemetry.test.mjs
 
       - name: Run Binance REST rate-limit tests
         run: node --test --test-timeout=60000 phase2/tests/binance-rest.test.mjs
