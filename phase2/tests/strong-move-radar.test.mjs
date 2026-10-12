@@ -171,4 +171,58 @@ await radar.stop();
 assert.equal(radar.running,false);
 radar.tick=originalTick;
 
-// CI trigger: independent radar regression coverage stays on this branch.\nconsole.log('Strong Move Radar tests passed');
+// Historical W-like candidate: high evidence, but the strict Elite lane rejects it solely
+// because the day has already advanced. The smart lane must emit a clearly labelled watch.
+const wLikeCandidate={
+  radar:'STRONG_MOVE_RADAR',symbol:'WUSDT',event:'STRONG_MOVE_ALERT',direction:'UP_MOVE',
+  opportunity_score:87.33,eligible:true,price:0.02153,price_change_24h:21.5,
+  source_candle_close_at:NOW-1000,source_event_at:NOW-1000,observed_at:NOW-900,
+  risk_flags:['24H_ALREADY_EXTENDED','VOLATILITY_EXTREME'],
+  strong_move:{
+    score:87.33,direction:'UP_MOVE',source_candle_close_at:NOW-1000,
+    trigger_diagnostics:{eligible:true,failed_checks:[]},
+    component_scores:{breakout:88,ema:78,volume:82,trades:82,taker:82,velocity:85,bollinger:80},
+    metrics:{
+      return_1m:2.0863,return_3m:2.3289,acceleration:2.3289,volume_ratio:2.063,trade_ratio:1.744,
+      taker_buy_ratio:0.7604,three_second_taker_buy_ratio:0.7306,
+      three_second_liquidity:{available:true,taker_buy_ratio:0.7306},
+      independent_confirmations:9,five_min_trend:72,five_min_return:0.4,breakout_up:true,micro_breakout:true
+    }
+  }
+};
+const smartW=finalizeStrongMoveCandidate(wLikeCandidate,{
+  symbol:'WUSDT',priceChange24h:21.5,quoteVolume24h:8_000_000,minQuoteVolume24h:1_000_000
+},{now:NOW+120,clock:()=>NOW+125,minScore:76,lastAlertAt:0,alertCooldownMs:0,telemetry:false});
+assert.equal(smartW.accepted,true,JSON.stringify({strict:smartW.notificationGate.standard_gate_failures,early:smartW.earlyGate}));
+assert.equal(smartW.acceptedByMode,'DYNAMIC_EARLY_WARNING');
+assert.equal(smartW.notificationGate.stage_decision,'EARLY_WARNING_ACCEPTED');
+assert.equal(smartW.alert.potential_label,'PRE_EXPANSION_WATCH');
+assert.ok(smartW.earlyGate.soft_failures.includes('RISK:ADVANCED_CHASE_RISK'));
+
+// Historical GTC-like case: all broad evidence is strong, while only the completed
+// 3-second bucket is unavailable. Permit an informational watch, never a strict entry.
+const gtcLikeCandidate={
+  ...wLikeCandidate,
+  symbol:'GTCUSDT',direction:'UP_MOVE',opportunity_score:86.87,eligible:false,price:0.18316,price_change_24h:0.39,
+  risk_flags:['THREE_SECOND_FLOW_UNAVAILABLE','VOLATILITY_EXTREME'],
+  strong_move:{
+    ...wLikeCandidate.strong_move,score:86.87,direction:'UP_MOVE',eligible:false,
+    trigger_diagnostics:{eligible:false,failed_checks:['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']},
+    component_scores:{breakout:95,ema:95,volume:95,trades:95,taker:95,velocity:90,bollinger:90},
+    metrics:{
+      return_1m:0.665,return_3m:0.6484,acceleration:0.3342,volume_ratio:43.5548,trade_ratio:11.0909,
+      taker_buy_ratio:0.9315,three_second_taker_buy_ratio:null,
+      three_second_liquidity:{available:false,taker_buy_ratio:null},
+      independent_confirmations:8,five_min_trend:90,five_min_return:0.7,breakout_up:true,micro_breakout:true
+    }
+  }
+};
+const smartGtc=finalizeStrongMoveCandidate(gtcLikeCandidate,{
+  symbol:'GTCUSDT',priceChange24h:0.39,quoteVolume24h:8_000_000,minQuoteVolume24h:1_000_000
+},{now:NOW+120,clock:()=>NOW+125,minScore:76,lastAlertAt:0,alertCooldownMs:0,telemetry:false});
+assert.equal(smartGtc.accepted,true,JSON.stringify({strict:smartGtc.notificationGate.standard_gate_failures,early:smartGtc.earlyGate}));
+assert.equal(smartGtc.acceptedByMode,'DYNAMIC_EARLY_WARNING');
+assert.equal(smartGtc.earlyGate.fallback_3s_flow,true);
+assert.ok(smartGtc.earlyGate.soft_failures.includes('STRICT_CORE_MISSING_COMPLETED_3S_BUCKET_HIGHER_FLOW_EVIDENCE_USED'));
+
+console.log('Strong Move Radar tests passed');
