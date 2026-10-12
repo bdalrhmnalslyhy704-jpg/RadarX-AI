@@ -603,10 +603,12 @@ export class MarketWideLightScan {
       lastCandidate(a) - lastCandidate(b) ||
       a.symbol.localeCompare(b.symbol);
 
+    // Confirmed fast shocks can be lost before the Micro stage if this lane is capped too tightly.
+    // Reserve up to 35% of the bounded pool, without displacing the remaining score/rotation lanes.
     const exceptionLimit = Math.min(
       exceptional.length,
       Math.max(0, limit - rotationReserve),
-      Math.max(1, Math.min(4, Math.floor(limit * 0.2)))
+      Math.max(1, Math.min(12, Math.floor(limit * 0.35)))
     );
     for (const item of [...exceptional].sort(fairOrder)) {
       if (selected.filter(row => row.selectionReason === 'EXCEPTIONAL_PRESERVED').length >= exceptionLimit) break;
