@@ -1,0 +1,204 @@
+name: RadarX Build 224 — Radar 8 Forensic Gate
+
+on:
+  push:
+    branches:
+      - feature/build224-radar8-early-expansion-20261006
+  pull_request:
+
+# A new PR head supersedes old forensic runs; do not consume REST/network quota replaying obsolete commits in parallel.
+concurrency:
+  group: radarx-build224-forensic-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  radar8-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Checkout Build 224 Radar 8 branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install locked Node dependencies
+        run: npm ci
+
+      - name: Validate JavaScript syntax
+        run: |
+          set -euo pipefail
+          node --check phase2/core/early-expansion-radar.mjs
+          node --check phase2/core/radar-alert-meta.mjs
+          node --check phase2/core/store.mjs
+          node --check phase2/config.mjs
+          node --check phase2/server.mjs
+          node --check phase2/http/api.mjs
+          node --check phase2/tools/early-expansion-forensic.mjs
+          node --check phase2/tests/early-expansion-radar.test.mjs
+          node --check phase2/tests/binance-rest.test.mjs
+          node --check phase2/tests/early-expansion-api-contract.test.mjs
+          node --check phase2/core/strong-move-radar.mjs
+          node --check phase2/core/dynamic-early-warning-gate.mjs
+          node --check phase2/tests/dynamic-early-warning-gate.test.mjs
+          node --check phase2/core/radar-notification-gate.mjs
+          node --check phase2/core/radar-telemetry.mjs
+          node --check phase2/core/historical-replay.mjs
+          node --check phase2/tools/historical-replay.mjs
+          node --check phase2/tests/historical-replay.test.mjs
+          node --check phase2/core/spot-market-snapshot-hub.mjs
+          node --check phase2/tests/spot-market-snapshot-hub.test.mjs
+          node --check phase2/core/radar-swarm-coordinator.mjs
+          node --check phase2/core/historical-replay-matrix.mjs
+          node --check phase2/tools/historical-replay-matrix.mjs
+          node --check phase2/tests/historical-replay-matrix.test.mjs
+          node --check phase2/tests/radar-telemetry.test.mjs
+
+      - name: Run Binance REST rate-limit tests
+        run: node --test --test-timeout=60000 phase2/tests/binance-rest.test.mjs
+
+      - name: Run Radar 8 unit tests
+        run: node --test --test-timeout=60000 phase2/tests/early-expansion-radar.test.mjs
+
+      - name: Run Radar 8 API contract tests
+        run: node --test --test-timeout=60000 phase2/tests/early-expansion-api-contract.test.mjs
+
+      - name: Run dynamic early-warning gate tests
+        run: node --test --test-timeout=60000 phase2/tests/dynamic-early-warning-gate.test.mjs
+
+      - name: Run full Phase 2 test suite
+        run: node phase2/tests/run-tests.mjs phase2
+
+      - name: Run 2026-10-06 forensic replay
+        env:
+          RADAR8_FORENSIC_THROUGH: "2026-10-06T14:45:00Z"
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          node phase2/tools/early-expansion-forensic.mjs
+
+      - name: Run GTC/W public Spot historical replay
+        id: gtc-w-replay
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p reports
+          node phase2/tools/historical-replay.mjs --symbols GTCUSDT,WUSDT,RLCUSDT,RADUSDT,ORCAUSDT,API3USDT,DIAUSDT,OGNUSDT --start 2026-10-11T21:27:59.999Z --end 2026-10-12T21:27:59.999Z --max-trade-pages 500 --max-trades 500000 --output reports/historical-replay-gtc-w.json
+          replay_status=$?
+          printf 'exit_code=%s\n' "$replay_status" > reports/historical-replay-status.txt
+          {
+            echo "## GTC/W historical replay"
+            echo ""
+            echo "- CLI exit code: $replay_status (2 means the engine deliberately failed closed because historical coverage is incomplete; 1 means execution error; 0 means full requested coverage.)"
+            echo "- The report compares per-minute decisions to the first +50%/+70% window moves using public Binance Spot data only."
+            echo "- An artifact with incomplete trade coverage is diagnostic only; it is not a successful prediction replay."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -f reports/historical-replay-gtc-w.json ]; then
+            node --input-type=module >> "$GITHUB_STEP_SUMMARY" <<'NODE'
+          import {readFile} from 'node:fs/promises';
+          const report = JSON.parse(await readFile('reports/historical-replay-gtc-w.json','utf8'));
+          for (const item of report.results || []) {
+            const when = value => value ? new Date(value).toISOString() : 'not observed';
+            console.log('');
+            console.log('### ' + item.symbol);
+            console.log('- Steps: ' + (item.summary?.replay_steps ?? 0) + '; accepted: ' + (item.summary?.accepted ?? 0) + '; rejected: ' + (item.summary?.rejected ?? 0));
+            console.log('- Trade coverage complete: ' + String(item.data_quality?.trade_coverage_complete === true));
+            console.log('- First core trigger: ' + when(item.summary?.first_core_trigger_at));
+            console.log('- First candidate eligible: ' + when(item.summary?.first_candidate_eligible_at));
+            console.log('- First elite-gate eligible: ' + when(item.summary?.first_elite_gate_eligible_at));
+            console.log('- First accepted decision: ' + when(item.summary?.first_accepted_at));
+            console.log('- First smart early-warning accepted decision: ' + when(item.summary?.first_early_warning_accepted_at));
+            console.log('- First strict-gate accepted decision: ' + when(item.summary?.first_strict_accepted_at));
+            console.log('- Accepted decision modes: ' + JSON.stringify(item.summary?.accepted_mode_counts ?? []));
+            console.log('- Maximum score/time: ' + String(item.summary?.maximum_score ?? 'n/a') + ' / ' + when(item.summary?.maximum_score_at));
+            console.log('- Actual window +50% first aggTrade timestamp: ' + when(item.summary?.first_actual_window_50pct_at));
+            console.log('- +50% candle-close estimate (lower precision): ' + when(item.summary?.first_actual_window_50pct_candle_close_at));
+            console.log('- +50% timestamp source/alignment: ' + String(item.summary?.actual_window_50pct_timestamp_source ?? 'UNKNOWN') + ' / ' + String(item.summary?.actual_window_50pct_alignment ?? 'UNKNOWN'));
+            console.log('- Actual window +70% first aggTrade timestamp: ' + when(item.summary?.first_actual_window_70pct_at));
+            console.log('- +70% candle-close estimate (lower precision): ' + when(item.summary?.first_actual_window_70pct_candle_close_at));
+            console.log('- +70% timestamp source/alignment: ' + String(item.summary?.actual_window_70pct_timestamp_source ?? 'UNKNOWN') + ' / ' + String(item.summary?.actual_window_70pct_alignment ?? 'UNKNOWN'));
+            console.log('- Pre-move +50% classification: ' + String(item.summary?.premove_50_status ?? 'not available'));
+            if (item.summary?.premove_50_status !== 'PREMOVE_ALERT_ACCEPTED') {
+              console.log('- Prediction validation: NOT PASSED — no accepted alert is recorded before the +50% crossing in this replay window.');
+            } else {
+              console.log('- Prediction validation: pre-move accepted alert observed; this is one historical case, not proof of general predictive accuracy.');
+            }
+            console.log('- Minutes core trigger lead to +50%: ' + String(item.summary?.minutes_from_first_core_trigger_to_actual_50pct ?? 'not detected'));
+            console.log('- Strong Move trigger failure counts: ' + JSON.stringify(item.summary?.core_trigger_failure_counts ?? []));
+            console.log('- Rejection groups: ' + JSON.stringify(item.summary?.rejection_groups ?? []));
+          }
+          NODE
+          fi
+          exit 0
+
+      - name: Run 90-case public Spot historical replay matrix
+        id: wide-historical-matrix
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p reports
+          node phase2/tools/historical-replay-matrix.mjs \
+            --max-trade-pages 500 \
+            --max-trades 500000 \
+            --timeout-ms 3600000 \
+            --output reports/radarx-historical-matrix
+          matrix_status=$?
+          printf 'exit_code=%s\\n' "$matrix_status" > reports/radarx-historical-matrix-status.txt
+          {
+            echo "## 90-case public Spot historical matrix"
+            echo ""
+            echo "- CLI exit code: $matrix_status (0 means all three windows have complete coverage; 2 means incomplete coverage; 1 means execution error)."
+            echo "- Scope: 30 Spot USDT symbols × 3 historical windows; public market data only."
+            echo "- Incomplete symbol/window coverage is diagnostic and must not be counted as a successful test."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -f reports/radarx-historical-matrix/matrix-summary.json ]; then
+            node --input-type=module >> "$GITHUB_STEP_SUMMARY" <<'NODE'
+          import {readFile} from 'node:fs/promises';
+          const report = JSON.parse(await readFile('reports/radarx-historical-matrix/matrix-summary.json','utf8'));
+          console.log('- Matrix status: ' + report.matrix_summary.status);
+          console.log('- Planned symbol-window replays: ' + report.planned_symbol_window_replays);
+          console.log('- Completed windows: ' + report.matrix_summary.completed_windows + '/' + report.matrix_summary.window_count);
+          console.log('- Incomplete windows: ' + report.matrix_summary.coverage_incomplete_windows);
+          console.log('- Observed market regimes: ' + report.matrix_summary.regimes_observed.join(', '));
+          for (const window of report.windows || []) {
+            console.log('');
+            console.log('### ' + window.id + ' — ' + window.market_regime.regime);
+            console.log('- Coverage: ' + window.summary.coverage_status);
+            console.log('- Complete symbols: ' + window.summary.coverage_complete_symbols + '/' + window.summary.requested_symbols);
+            console.log('- Accepted/rejected decisions: ' + window.summary.accepted_decisions + '/' + window.summary.rejected_decisions);
+          }
+          NODE
+          fi
+          exit "$matrix_status"
+
+      - name: Upload forensic report
+        uses: actions/upload-artifact@v4
+        with:
+          name: radar8-forensic-and-market-matrix
+          if-no-files-found: error
+          path: |
+            reports/radar8-forensic-2026-10-06.json
+            reports/radar8-forensic-2026-10-06.md
+            reports/historical-replay-gtc-w.json
+            reports/historical-replay-status.txt
+            reports/radarx-historical-matrix/**
+            reports/radarx-historical-matrix-status.txt
+          retention-days: 14
+
+      - name: Require complete 90-case matrix coverage
+        if: steps.wide-historical-matrix.outcome == 'failure'
+        run: |
+          echo "The wide historical market matrix failed or had incomplete coverage. Review the uploaded matrix report; this is not a green validation."
+          exit 1
+
+      - name: No deployment guard
+        run: |
+          echo "Radar 8 CI is validation-only."
+          echo "No Railway deployment, no Android APK build, and no merge are performed by this workflow."
