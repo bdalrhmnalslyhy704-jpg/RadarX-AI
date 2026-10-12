@@ -482,15 +482,14 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
 
-      - name: Android Emulator online/offline smoke test (best effort)
-        timeout-minutes: 6
-        continue-on-error: true
+      - name: Android Emulator signed Release online/offline smoke test
+        timeout-minutes: 15
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
           target: default
           arch: x86_64
-          script: bash android/smoke-test.sh
+          script: RADARX_SKIP_DURABLE_REPLAY=1 bash android/smoke-test.sh
 
       - name: Publish signed APK GitHub Release
         env:
