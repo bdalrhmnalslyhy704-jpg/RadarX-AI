@@ -160,17 +160,18 @@ export function runHistoricalReplay({
   let acceptedCount = 0, rejectedCount = 0;
 
   for (const index of activeIndices) {
-    const candle = candles[index], at = candle.closeTime;
+    const candle = candles[index], at = candle.closeTime + 1;
     while (fiveIndex < five.length && five[fiveIndex].closeTime <= at) fiveIndex++;
     while (tradeIndex < trades.length && trades[tradeIndex].T < Math.floor(at / 3000) * 3000 - 60_000) tradeIndex++;
     const available1m = candles.slice(Math.max(0, index - 119), index + 1);
+    const tickerHistory = candles.slice(Math.max(0, index - 1440), index + 1);
     const fiveEnd = five.slice(Math.max(0, fiveIndex - 60), fiveIndex);
     const boundary = Math.floor(at / 3000) * 3000;
     const tradeWindow = [];
     for (let t = tradeIndex; t < trades.length && trades[t].T < boundary; t++) {
       if (trades[t].T >= boundary - 60_000) tradeWindow.push(trades[t]);
     }
-    const ticker = derivedTicker(available1m, sym, at);
+    const ticker = derivedTicker(tickerHistory, sym, at);
     let raw = null;
     let reasons = [];
     let accepted = false;
