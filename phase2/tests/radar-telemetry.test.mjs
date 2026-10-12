@@ -50,6 +50,10 @@ test('dashboard is RTL, reads telemetry endpoint and safely renders values as te
   const html = renderRadarTelemetryDashboard();
   assert.match(html, /dir="rtl"/);
   assert.match(html, /\/api\/radar-telemetry\?limit=80/);
+  assert.match(html, /إغلاق حدث السوق/);
+  assert.match(html, /وقت الرصد/);
+  assert.match(html, /وقت قرار الإشعار/);
+  assert.match(html, /stage_decision/);
   assert.match(html, /setInterval\(update,5000\)/);
   assert.match(html, /textContent/);
   assert.match(html, /ليس زمن الشبكة الكامل|ليس زمن الشبكة/);
