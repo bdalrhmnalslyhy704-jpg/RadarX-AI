@@ -147,7 +147,7 @@ export function recordRadarDecision(alert, gate, options = {}) {
 }
 
 export function renderRadarTelemetryDashboard() {
-  return String.raw\`<!doctype html>
+  return String.raw`<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -205,5 +205,5 @@ try{
 }
 update();setInterval(update,5000);
 })();
-</script></body></html>\`;
+</script></body></html>`;
 }
