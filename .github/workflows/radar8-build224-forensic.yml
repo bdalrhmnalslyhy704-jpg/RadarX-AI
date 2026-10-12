@@ -53,6 +53,8 @@ jobs:
           node --check phase2/core/historical-replay.mjs
           node --check phase2/tools/historical-replay.mjs
           node --check phase2/tests/historical-replay.test.mjs
+          node --check phase2/core/spot-market-snapshot-hub.mjs
+          node --check phase2/tests/spot-market-snapshot-hub.test.mjs
           node --check phase2/core/radar-swarm-coordinator.mjs
           node --check phase2/core/historical-replay-matrix.mjs
           node --check phase2/tools/historical-replay-matrix.mjs
