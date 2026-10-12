@@ -104,3 +104,12 @@ const selectedBatch=batchRadar.selectBatch(batchRows);
 assert.equal(selectedBatch.length,7,'Strong Move should fill its top+rotation budget when enough market rows exist');
 assert.equal(new Set(selectedBatch.map(x=>x.symbol)).size,7,'Strong Move must not waste rotation slots on duplicate top movers');
 console.log('Strong Move Radar tests passed');
+
+test('Strong-Move marks old candle input as stale',()=>{
+  const stale1=make1m().map(row=>({...row,openTime:row.openTime-20*60_000,closeTime:row.closeTime-20*60_000}));
+  const stale5=make5m().map(row=>({...row,openTime:row.openTime-20*60_000,closeTime:row.closeTime-20*60_000}));
+  const stale=buildStrongMoveAnalysis(stale1,stale5,ticker,NOW);
+  assert.equal(stale.eligible,false);
+  assert.equal(stale.stage,'STALE_DATA');
+  assert.equal(stale.data_stale,true);
+});
