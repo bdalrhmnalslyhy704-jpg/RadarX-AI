@@ -13,8 +13,13 @@ function dispersion(values){
   return Math.sqrt(xs.reduce((s,x)=>(s+(x-mean)**2),0)/xs.length);
 }
 
-function scoreAntiChase(priceChange24h){
-  const move=Math.abs(Number(priceChange24h)||0);
+function scoreAntiChase(priceChange24h,direction='UP'){
+  const change=Number(priceChange24h)||0;
+  const side=String(direction||'UP').toUpperCase();
+  // Only count extension in the candidate's direction. A negative 24h return is not
+  // evidence that an upward candidate has already chased an upside move.
+  const move=side.startsWith('UP')?Math.max(0,change):
+    side.startsWith('DOWN')?Math.max(0,-change):Math.abs(change);
   if(move<=2)return 100;
   if(move>=18)return 18;
   const excess=move-2;
@@ -24,6 +29,7 @@ function scoreAntiChase(priceChange24h){
 export function evaluateAdvancedConfluence({
   categories={},
   priceChange24h=0,
+  direction='UP',
   confirmations=0,
   minConfirmations=6,
   baseScore=0
@@ -69,7 +75,7 @@ export function evaluateAdvancedConfluence({
   );
 
   // 6) Anti-chase guard: early radars should prefer room before extension.
-  const antiChase=scoreAntiChase(priceChange24h);
+  const antiChase=scoreAntiChase(priceChange24h,direction);
 
   // 7) Adaptive composite: no new network calls; all work is O(1).
   // Separate coherence-veto score; do not add an already-composite base score again.
