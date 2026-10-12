@@ -1090,12 +1090,12 @@ export function nextEarlyExpansionPollDelayMs(pollMs,elapsedMs,completed=true){
   return Math.max(0,poll-Math.max(0,Number(elapsedMs)||0));
 }
 
-export function isMarketWideCachePoolReady(cacheProof, minimumCoverageRatio=0.55){
+export function isMarketWideCachePoolReady(cacheProof, minimumCoverageRatio=0.10){
   const expected=Number(cacheProof?.expected_symbols);
   const ready=Number(cacheProof?.ready_symbols);
   const ratio=Number.isFinite(expected)&&expected>0&&Number.isFinite(ready)
     ?Math.max(0,Math.min(1,ready/expected)):0;
-  const minimum=Math.max(0.5,Math.min(1,Number.isFinite(Number(minimumCoverageRatio))?Number(minimumCoverageRatio):0.55));
+  const minimum=Math.max(0.10,Math.min(1,Number.isFinite(Number(minimumCoverageRatio))?Number(minimumCoverageRatio):0.10));
   return cacheProof?.websocket_live===true&&
     cacheProof?.websocket_subscription_complete===true&&
     cacheProof?.websocket_sync_ready===true&&ratio>=minimum;
