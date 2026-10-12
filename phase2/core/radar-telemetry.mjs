@@ -55,10 +55,16 @@ export class RadarTelemetry {
     const latency = Math.max(0, decisionAt - observedAt);
     const sourceAge = sourceEventAt == null ? null : Math.max(0, decisionAt - sourceEventAt);
     const failures = [...new Set([...reasonsOf(gate), ...extraReasons.map(x => String(x).slice(0, 120))])];
+    const symbol=String(alert?.symbol ?? "UNKNOWN").toUpperCase().slice(0, 30);
+    const observedStage=String(stageOf(alert) ?? "UNKNOWN").slice(0, 80);
+    const eventType=alert?.telemetry_type==="BACKGROUND_CYCLE"||symbol==="SYSTEM"||observedStage==="TICK_CYCLE"
+      ? "BACKGROUND_CYCLE" : "CANDIDATE_DECISION";
+    const accepted=eventType==="CANDIDATE_DECISION" ? gate?.eligible===true : null;
     const event = {
       id: String(alert?.id ?? (radarOf(alert, gate) + ":" + String(alert?.symbol ?? "UNKNOWN") + ":" + decisionAt + ":" + this.totalRecorded)).slice(0, 180),
       radar: radarOf(alert, gate),
-      symbol: String(alert?.symbol ?? "UNKNOWN").toUpperCase().slice(0, 30),
+      symbol,
+      event_type:eventType,
       source: source === "REPLAY" ? "REPLAY" : "LIVE",
       observed_at: observedAt,
       source_event_at: sourceEventAt,
@@ -67,14 +73,14 @@ export class RadarTelemetry {
       source_data_age_ms: sourceAge,
       queue_depth: finite(alert?.rest_queue_depth ?? alert?.rest?.queue_depth ?? null),
       queue_wait_ms: finite(alert?.rest_queue_wait_ms ?? alert?.rest?.queue_wait_ms_last ?? null),
-      stage_observed: String(stageOf(alert) ?? "UNKNOWN").slice(0, 80),
-      stage_decision: String(gate?.eligible === true ? "GATE_ACCEPTED" : "REJECTED"),
-      decision: gate?.eligible === true ? "GATE_ACCEPTED" : "REJECTED",
+      stage_observed: observedStage,
+      stage_decision: eventType==="BACKGROUND_CYCLE" ? "NO_GATE_DECISION" : String(accepted===true ? "GATE_ACCEPTED" : "REJECTED"),
+      decision: eventType==="BACKGROUND_CYCLE" ? "CYCLE_NO_GATE_DECISION" : String(accepted===true ? "GATE_ACCEPTED" : "REJECTED"),
       score: round(finite(gate?.score ?? alert?.opportunity_score ?? alert?.strong_move?.score)),
       price: finite(alert?.price ?? alert?.ticker?.lastPrice ?? alert?.strong_move?.price),
       liquidity_acceleration: round(liquidityAccelerationOf(alert), 6),
       reason_codes: failures,
-      accepted: gate?.eligible === true,
+      accepted,
       market: "SPOT",
       paper_trading: true,
       real_order_execution: false,
@@ -95,40 +101,57 @@ export class RadarTelemetry {
   snapshot({limit = 100} = {}) {
     const n = Math.max(1, Math.min(500, Math.trunc(Number(limit) || 100)));
     const sorted = [...this.events].sort((a, b) => b.decision_at - a.decision_at);
-    const accepted = this.events.filter(x => x.accepted);
-    const rejected = this.events.filter(x => !x.accepted);
-    const latencies = this.events.map(x => x.pipeline_latency_ms).filter(Number.isFinite);
-    const ages = this.events.map(x => x.source_data_age_ms).filter(Number.isFinite);
+    const decisions=this.events.filter(x=>x.event_type==="CANDIDATE_DECISION");
+    const backgroundCycles=this.events.filter(x=>x.event_type==="BACKGROUND_CYCLE");
+    const accepted=decisions.filter(x=>x.accepted===true);
+    const rejected=decisions.filter(x=>x.accepted===false);
+    const latencies=decisions.map(x=>x.pipeline_latency_ms).filter(Number.isFinite);
+    const cycleDurations=backgroundCycles.map(x=>x.pipeline_latency_ms).filter(Number.isFinite);
+    const ages=decisions.map(x=>x.source_data_age_ms).filter(Number.isFinite);
     const byRadarMap = new Map();
     const reasons = new Map();
     for (const event of this.events) {
       if (!byRadarMap.has(event.radar)) byRadarMap.set(event.radar, []);
       byRadarMap.get(event.radar).push(event);
-      for (const reason of event.reason_codes) reasons.set(reason, (reasons.get(reason) || 0) + 1);
+      if(event.event_type==="CANDIDATE_DECISION"&&event.accepted===false){
+        for (const reason of event.reason_codes) reasons.set(reason, (reasons.get(reason) || 0) + 1);
+      }
     }
     const byRadar = [...byRadarMap.entries()].map(([radar, rows]) => {
-      const rowLatencies = rows.map(x => x.pipeline_latency_ms).filter(Number.isFinite);
+      const rowDecisions=rows.filter(x=>x.event_type==="CANDIDATE_DECISION");
+      const rowCycles=rows.filter(x=>x.event_type==="BACKGROUND_CYCLE");
+      const rowLatencies=rowDecisions.map(x=>x.pipeline_latency_ms).filter(Number.isFinite);
+      const rowCycleDurations=rowCycles.map(x=>x.pipeline_latency_ms).filter(Number.isFinite);
       const top = new Map();
-      for (const row of rows) for (const reason of row.reason_codes) top.set(reason, (top.get(reason) || 0) + 1);
+      for (const row of rowDecisions) if(row.accepted===false) for (const reason of row.reason_codes) top.set(reason, (top.get(reason) || 0) + 1);
       const latest = [...rows].sort((a, b) => b.decision_at - a.decision_at)[0];
+      const latestWithQueue=[...rows].filter(x=>x.queue_depth!==null||x.queue_wait_ms!==null).sort((a,b)=>b.decision_at-a.decision_at)[0];
       return {
-        radar, cycles: rows.length, gate_accepted: rows.filter(x => x.accepted).length,
-        rejected: rows.filter(x => !x.accepted).length,
+        radar, cycles: rowCycles.length, telemetry_events: rows.length,
+        candidate_decisions:rowDecisions.length,
+        gate_accepted: rowDecisions.filter(x => x.accepted===true).length,
+        rejected: rowDecisions.filter(x => x.accepted===false).length,
         latency_ms_p50: percentile(rowLatencies, 0.50), latency_ms_p95: percentile(rowLatencies, 0.95),
-        last_seen_at: latest?.decision_at ?? null, queue_depth: latest?.queue_depth ?? null,
-        queue_wait_ms: latest?.queue_wait_ms ?? null,
+        cycle_duration_ms_p95:percentile(rowCycleDurations,0.95),
+        last_seen_at: latest?.decision_at ?? null, queue_depth: latestWithQueue?.queue_depth ?? null,
+        queue_wait_ms: latestWithQueue?.queue_wait_ms ?? null,
         top_reasons: [...top.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([reason, count]) => ({reason, count}))
       };
-    }).sort((a, b) => b.cycles - a.cycles);
+    }).sort((a, b) => b.candidate_decisions + b.cycles - (a.candidate_decisions + a.cycles));
     return {
       as_of: new Date(this.clock()).toISOString(),
       buffer_capacity: this.capacity,
       retained_events: this.events.length,
       total_recorded: this.totalRecorded,
       summary: {
-        cycles: this.events.length, total_cycles_recorded: this.totalRecorded, gate_accepted: accepted.length, rejected: rejected.length,
+        // Keep "cycles" as a backwards-compatible retained telemetry-event count.
+        cycles: this.events.length, telemetry_events:this.events.length,total_recorded:this.totalRecorded,
+        candidate_decisions:decisions.length,background_cycles_no_candidate:backgroundCycles.length,
+        background_cycles_with_error:backgroundCycles.filter(x=>x.reason_codes.some(code=>code.startsWith("CYCLE_ERROR:"))).length,
+        total_cycles_recorded: this.totalRecorded, gate_accepted: accepted.length, rejected: rejected.length,
         latency_ms_p50: percentile(latencies, 0.50), latency_ms_p95: percentile(latencies, 0.95),
         latency_ms_max: latencies.length ? Math.max(...latencies) : null,
+        cycle_duration_ms_p95:percentile(cycleDurations,0.95),
         source_data_age_ms_p95: percentile(ages, 0.95),
         newest_event_at: this.lastEventAt
       },
@@ -139,7 +162,7 @@ export class RadarTelemetry {
         pipeline_latency_ms: "Software time from observation/processing timestamp to notification-gate decision; not exchange/network end-to-end latency.",
         source_data_age_ms: "Age of the source candle close at decision time; unavailable where no source candle timestamp is exposed.",
         liquidity_acceleration: "Derived from public market-data metrics when that radar exposes the field; null means not supplied, not zero.",
-        cycles: "Gate evaluations observed by telemetry, not a count of every internal loop iteration in each radar."
+        cycles: "Backward-compatible count of retained telemetry events; use candidate_decisions and background_cycles_no_candidate to distinguish gate outcomes from engine cycles."
       },
       policy: {market: "SPOT", paper_trading: true, real_order_execution: false, confidence_score: "UNKNOWN"}
     };
@@ -177,7 +200,7 @@ export function instrumentRadarCycle(instance, radarId, {clock = () => Date.now(
         const finishedAt = clock();
         try {
           recordRadarDecision({
-            radar, symbol: "SYSTEM", observed_at: beganAt, processed_at: finishedAt,
+            radar, symbol: "SYSTEM", telemetry_type:"BACKGROUND_CYCLE",observed_at: beganAt, processed_at: finishedAt,
             stage: "TICK_CYCLE", price: null, source_event_at: null
           }, {
             radar, eligible: false, score: null,
