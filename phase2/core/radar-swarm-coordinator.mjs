@@ -17,7 +17,18 @@ export class RadarSwarmCoordinator {
       this.states.set(id,{id,name:runner.name,status:'IDLE',launch_attempts:0,started_at:null,stopped_at:null,last_error:null});
     }
   }
-  _failed(runner,error){const state=this.states.get(runner.id);if(!state)return;state.status='FAILED';state.last_error=describeError(error);state.last_error_at=this.clock();try{this.logger.warn?.('[RADAR_SWARM_START_FAILED] '+runner.id+' '+state.last_error);}catch{}}
+  _failed(runner,error,generation=null){
+    const state=this.states.get(runner.id);if(!state)return;
+    if(generation!==null&&generation!==this.generation&&state.status==='STOPPED')return;
+    state.status='FAILED';state.last_error=describeError(error);state.last_error_at=this.clock();
+    try{this.logger.warn?.('[RADAR_SWARM_START_FAILED] '+runner.id+' '+state.last_error);}catch{}
+    // A failed async bootstrap may already have created a timer. Stop that worker
+    // without waiting for it; one cleanup failure must not block the other radars.
+    try{
+      const cleanup=runner.instance.stop();
+      if(cleanup&&typeof cleanup.then==='function')cleanup.catch(stopError=>{state.cleanup_error=describeError(stopError);});
+    }catch(stopError){state.cleanup_error=describeError(stopError);}
+  }
   _launch(runner,generation){
     if(!this.running||generation!==this.generation)return;const state=this.states.get(runner.id);if(!state||['STARTING','RUNNING'].includes(state.status))return;
     state.status='STARTING';state.launch_attempts++;state.last_error=null;state.last_start_attempt_at=this.clock();let result;
@@ -27,7 +38,7 @@ export class RadarSwarmCoordinator {
       if(generation!==this.generation)return;const current=healthOf(runner.instance);
       if(current.running===true||current.running===undefined){state.status='RUNNING';state.started_at=state.started_at??this.clock();state.last_error=null;}
       else if(state.status==='STARTING'){state.status='DEGRADED';state.last_error='START_RESOLVED_BUT_HEALTH_NOT_RUNNING';}
-    }).catch(error=>this._failed(runner,error));
+    }).catch(error=>this._failed(runner,error,generation));
     else if(health.running===true||health.running===undefined){state.status='RUNNING';state.started_at=this.clock();}
     else{state.status='DEGRADED';state.last_error=health.health_error??'START_RETURNED_NOT_RUNNING';}
   }
@@ -37,7 +48,7 @@ export class RadarSwarmCoordinator {
     return this.startPromise;
   }
   snapshot(){
-    const radars=this.runners.map(r=>{const state=this.states.get(r.id)||{},health=healthOf(r.instance);const status=health.running===true?'RUNNING':state.status;return {id:r.id,name:r.name,status,running:health.running===true,launch_attempts:state.launch_attempts||0,started_at:state.started_at??null,last_start_attempt_at:state.last_start_attempt_at??null,last_error:state.last_error??health.health_error??null,health};});
+    const radars=this.runners.map(r=>{const state=this.states.get(r.id)||{},health=healthOf(r.instance);const failed=['FAILED','DEGRADED'].includes(state.status);const isRunning=health.running===true&&!failed;const status=failed?state.status:(isRunning?'RUNNING':state.status);return {id:r.id,name:r.name,status,running:isRunning,launch_attempts:state.launch_attempts||0,started_at:state.started_at??null,last_start_attempt_at:state.last_start_attempt_at??null,last_error:state.last_error??health.health_error??null,health};});
     const running_count=radars.filter(r=>r.running).length,failed_count=radars.filter(r=>['FAILED','DEGRADED'].includes(r.status)).length,missing_count=Math.max(0,this.expectedCount-radars.length);
     const status=missing_count>0||radars.length!==this.expectedCount?'INCOMPLETE':failed_count>0?'DEGRADED':running_count===this.expectedCount?'RUNNING':this.running?'STARTING':'STOPPED';
     return {coordinator:'RADAR_SWARM_12',status,expected_count:this.expectedCount,registered_count:radars.length,running_count,failed_count,missing_count,startup_spacing_ms:this.startupSpacingMs,lifecycle_running:this.running,updated_at:this.clock(),radars};
