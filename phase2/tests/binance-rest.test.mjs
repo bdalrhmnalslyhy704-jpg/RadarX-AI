@@ -41,6 +41,28 @@ test('Concurrent REST calls are serialized by one queue and local REQUEST_WEIGHT
   assert.equal(client.health().observed_request_weight_1m,4);
 });
 
+test('identical overlapping reads are coalesced across RestClient instances sharing endpoint routes',async()=>{
+  let firstCalls=0,secondCalls=0,releaseFirst;
+  const firstResponse=new Promise(resolve=>{releaseFirst=resolve;});
+  const common={baseUrls:['https://shared-market.example'],minIntervalMs:0,maxWeightPerMinute:100,safetyMarginWeight:0,
+    clock:()=>1_900_100_000_000,sleepFn:async()=>{}};
+  const firstClient=new RestClient({...common,fetchImpl:async()=>{firstCalls++;await firstResponse;return response(200,[{symbol:'GTCUSDT'}]);}});
+  const secondClient=new RestClient({...common,fetchImpl:async()=>{secondCalls++;return response(200,[{symbol:'GTCUSDT',fresh:true}]);}});
+  const first=firstClient.request('/api/v3/ticker/24hr');
+  const second=secondClient.request('/api/v3/ticker/24hr');
+  assert.equal(firstCalls,0);
+  assert.equal(secondCalls,0);
+  releaseFirst();
+  const [a,b]=await Promise.all([first,second]);
+  assert.deepEqual(a.data,b.data);
+  assert.equal(firstCalls,1);
+  assert.equal(secondCalls,0);
+  assert.equal(secondClient.health().coalesced_request_count,1);
+  const fresh=await secondClient.request('/api/v3/ticker/24hr');
+  assert.equal(secondCalls,1,'a later call must use the second client and fetch fresh market data');
+  assert.equal(fresh.data[0].fresh,true);
+});
+
 test('overlapping identical public GETs are coalesced without caching later requests',async()=>{
   let calls=0,releaseFetch;
   const responseWait=new Promise(resolve=>{releaseFetch=resolve;});
