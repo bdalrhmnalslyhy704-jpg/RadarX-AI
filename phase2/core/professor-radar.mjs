@@ -131,7 +131,8 @@ export function filterFreshProfessorNews(items,{now=Date.now(),maxFutureSkewMs=5
   const fresh=[],rejected=[];
   for(const item of Array.isArray(items)?items:[]){
     const raw=item?.published_at;
-    const publishedAt=typeof raw==='string'&&!/^\\d+(?:\\.\\d+)?$/.test(raw.trim())?Date.parse(raw):Number(raw);
+    const numeric=raw!==null&&raw!==undefined&&!(typeof raw==='string'&&!raw.trim())?Number(raw):NaN;
+    const publishedAt=Number.isFinite(numeric)&&numeric>0?numeric:(typeof raw==='string'&&raw.trim()?Date.parse(raw):NaN);
     if(!Number.isFinite(publishedAt)||publishedAt<=0){
       rejected.push({item,reason:'NEWS_TIMESTAMP_MISSING'});
       continue;
