@@ -424,9 +424,9 @@ function dataGate(series,now,config,{historicalReplay=false,allowMissingDepth=fa
     if(rows.length){const age=now-Number(rows.at(-1).closeTime);const key=tf==='1m'?1:tf==='5m'?5:tf==='15m'?15:tf==='1h'?60:240;if(age>Number(limits[key]??config.freshness15mMs))issues.push('STALE_DATA:'+tf);}
   }
   const required=['1m','5m','15m','1h','4h'];
+  if(missing.length)issues.push('MISSING_TIMEFRAME:'+missing.join(','));
   const ratio=available.length/required.length;
   const quality=issues.length?0:clamp(55+ratio*45);
-  if(missing.length)issues.push('MISSING_TIMEFRAME:'+missing.join(','));
   return {valid:issues.length===0&&ratio===1&&quality>=config.minDataQuality,quality,issues,available,missing,latest_closed:{
     '1m':closed(series['1m']||[],now).at(-1)?.closeTime??null,
     '5m':closed(series['5m']||[],now).at(-1)?.closeTime??null,

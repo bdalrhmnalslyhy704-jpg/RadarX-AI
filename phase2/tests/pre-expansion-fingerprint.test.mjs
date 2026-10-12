@@ -156,6 +156,7 @@ test('Radar 8 exposes DATA_INSUFFICIENT when its daily-change value is missing',
   const result=buildEarlyExpansionEvidence({series:{},ticker:{symbol:'UNKNOWNUSDT',lastPrice:1,priceChange24h:null},now:1_900_000_000_000});
   assert.equal(result.pre_expansion_stage,'DATA_INSUFFICIENT');
   assert.equal(result.decision_band,'DATA_INSUFFICIENT');
+  assert.equal(result.data_quality,0,'missing required timeframes must not retain a full quality score');
 });
 
 
