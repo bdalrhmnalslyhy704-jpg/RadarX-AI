@@ -7,6 +7,10 @@ const replayFixture = await readFile('android/background-replay-test-server.mjs'
 const api = await readFile('phase2/http/api.mjs', 'utf8');
 const store = await readFile('phase2/core/store.mjs', 'utf8');
 
+assert.match(service, /private static final Object SCAN_LOCK\\s*=\\s*new Object\\(\\)/,
+  'background scans must be serialized even when onStartCommand replaces the scheduled executor');
+assert.match(service, /synchronized \\(SCAN_LOCK\\) \\{/,
+  'a second scheduler must not fetch/replay the same alert while the previous scan is still draining');
 assert.match(service, /\/api\/falcon-eye-radar\?since=/,
   'native background monitoring must query Radar 9 history directly');
 assert.match(service, /mergeFalconEyeHistory\(root, cursor\)/,
