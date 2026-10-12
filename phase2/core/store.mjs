@@ -899,26 +899,42 @@ export class DurableStore {
     try{
       handle=await open(file,'r');
       const {size}=await handle.stat();
-      let position=size,newlineCount=0;
+      let position=size,newlineCount=0,bytesScanned=0;
       const chunks=[];
       const blockSize=64*1024;
-      // Walk backward in bounded blocks; never materialize the full unbounded JSONL archive.
-      while(position>0&&newlineCount<=take){
-        const length=Math.min(blockSize,position);
-        position-=length;
+      const maxTailBytes=8*MiB;
+      // Bound both transient memory and archive work, including malformed files
+      // with no newline separators or an unexpectedly huge JSONL row.
+      while(position>0&&newlineCount<=take&&bytesScanned<maxTailBytes){
+        const length=Math.min(blockSize,position,maxTailBytes-bytesScanned);
+        if(length<=0)break;
         const buffer=Buffer.allocUnsafe(length);
-        const {bytesRead}=await handle.read(buffer,0,length,position);
+        const {bytesRead}=await handle.read(buffer,0,length,position-length);
         if(!bytesRead)break;
+        position-=length;
+        bytesScanned+=bytesRead;
         const chunk=buffer.subarray(0,bytesRead);
         for(let index=0;(index=chunk.indexOf(10,index))!==-1;index++)newlineCount++;
         chunks.unshift(chunk);
       }
-      const lines=Buffer.concat(chunks).toString('utf8').split('\n');
-      // The first block boundary may land in the middle of a record.
-      if(position>0)lines.shift();
+      let tail=Buffer.concat(chunks).toString('utf8');
+      // If the bounded read began mid-record, discard only that incomplete prefix.
+      if(position>0){
+        const firstBreak=tail.indexOf('\n');
+        tail=firstBreak>=0?tail.slice(firstBreak+1):'';
+      }
+      // Parse backward so memory is proportional to the requested rows, not the
+      // number of lines present in the last buffer.
       const rows=[];
-      for(const line of lines.filter(Boolean).slice(-take)){
-        try{rows.push(JSON.parse(line));}catch{}
+      let end=tail.length;
+      while(end>0&&rows.length<take){
+        const newline=tail.lastIndexOf('\n',end-1);
+        const line=tail.slice(newline+1,end);
+        if(line){
+          try{rows.push(JSON.parse(line));}catch{}
+        }
+        if(newline<0)break;
+        end=newline;
       }
       return rows.reverse();
     }catch{return[];}
