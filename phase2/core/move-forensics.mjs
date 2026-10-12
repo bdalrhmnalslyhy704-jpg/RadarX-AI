@@ -28,7 +28,8 @@ export function buildMoveForensics(alert={},now=Date.now()){
   const c=alert?.components||{};
   const fp=alert?.pre_breakout_fingerprint||{};
   const strong=alert?.strong_move?.metrics||{};
-  const whale=alert?.analysis||{};
+  const strongComponents=alert?.strong_move?.component_scores||{};
+  const whale=alert?.analysis||alert?.kahir_analysis||{};
   const liq=alert?.liquidity_absorption||{};
   const opinion=alert?.professor_opinion||{};
 
