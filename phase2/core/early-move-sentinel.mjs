@@ -59,6 +59,41 @@ function component(candidate,keyPaths,fallback=50){
   return fallback;
 }
 
+export function resolveAlertConfirmationCount(alert){
+  const explicit=[
+    alert?.pre_explosion?.confirmation_count,
+    alert?.confirmation_count,
+    alert?.early_wake?.leader_count
+  ];
+  const supplied=explicit.find(value=>
+    value!==null&&value!==undefined&&
+    !(typeof value==='string'&&value.trim()==='')&&
+    Number.isFinite(Number(value))
+  );
+  if(supplied!==undefined)return Math.max(0,Math.trunc(Number(supplied)));
+
+  // Ordinary movement alerts have no dedicated count. Count independent,
+  // measured evidence instead of silently handing the final gate a zero.
+  const c=alert?.components||{};
+  const s=alert?.strategy_confluence||{};
+  return [
+    Number(c.pre_move)>=72,
+    Number(c.structure)>=70,
+    Number(c.buying_pressure)>=70,
+    Number(c.selling_exhaustion)>=70,
+    Number(c.squeeze)>=70,
+    Number(c.volume)>=70,
+    Number(c.relative_strength)>=70,
+    Number(c.whale_pressure)>=72,
+    Number(c.atr_expansion)>=65,
+    Number(c.liquidity)>=70,
+    Number(c.data_quality)>=80,
+    Number(s.best_score)>=75,
+    Number(s.accepted_count)>=2,
+    Number(alert?.opportunity_score)>=82
+  ].filter(Boolean).length;
+}
+
 export function buildMoveAlert(candidate,trigger,{now=Date.now()}={}) {
   const direction=Number(trigger?.movePct)>=0?'UP_MOVE':'DOWN_MOVE';
   const ctx=candidate?.pre_move_context||{};
@@ -807,7 +842,7 @@ export class EarlyMoveSentinel {
           relativeScore:Math.max(Number(cc.relative_strength)||0,Number(cc.mtf_alignment)||0),
           momentumScore:Number(cc.momentum)||50,
           compressionScore:Number(cc.squeeze)||50,
-          confirmations:Number(alert.pre_explosion?.confirmation_count||alert.confirmation_count||0),
+          confirmations:resolveAlertConfirmationCount(alert),
           minConfirmations:7,minScore:88,max24hMovePct:2.5,requireTrigger:true,minCategoryHits:5
         });
         alert.elite_gate=gate;
