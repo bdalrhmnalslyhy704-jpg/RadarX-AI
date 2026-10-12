@@ -1178,6 +1178,7 @@ export async function withRetry(task, {
 export class MarketUniverseScanner {
   constructor({
     rest,
+    marketData = null,
     strategyConfig,
     config = {},
     clock = () => Date.now(),
@@ -1186,6 +1187,7 @@ export class MarketUniverseScanner {
   } = {}) {
     if (!rest || typeof rest.request !== 'function') throw new Error('REST_CLIENT_REQUIRED');
     this.rest = rest;
+    this.marketData = marketData;
     this.config = { ...MARKET_RADAR_DEFAULTS, ...config };
     this.strategyConfig = strategyConfig;
     this.clock = clock;
@@ -1216,11 +1218,13 @@ export class MarketUniverseScanner {
   }
 
   async exchangeInfo() {
+    if(this.marketData)return this.marketData.exchangeInfo();
     const r = await this.requestOnce('/api/v3/exchangeInfo');
     return { data: r.data, source: r.source, receivedAt: this.clock() };
   }
 
   async ticker24h() {
+    if(this.marketData)return this.marketData.ticker24h();
     const r = await this.requestOnce('/api/v3/ticker/24hr');
     return { data: r.data, source: r.source, receivedAt: this.clock() };
   }
