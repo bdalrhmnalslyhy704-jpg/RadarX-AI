@@ -120,13 +120,14 @@ test('Radar 8 refreshes stale BTC 1h cache data from REST without reusing an old
 
 test('Radar 8 requests enough BTC 5m rows to retain 120 closed candles and reuses them until the next close',async()=>{
   const requested=[];
+  let restNow=now;
   const rest={async klines(symbol,interval,options){
     requested.push({symbol,interval,limit:options?.limit});
     const intervalMs=interval==='1h'?60*60_000:5*60_000;
     const count=interval==='1h'?61:120;
-    const closed=makeClosedCandles(symbol,intervalMs,count,now,'BINANCE_PUBLIC_REST');
+    const closed=makeClosedCandles(symbol,intervalMs,count,restNow,'BINANCE_PUBLIC_REST');
     if(interval==='5m'){
-      const openTime=Math.floor(now/intervalMs)*intervalMs;
+      const openTime=Math.floor(restNow/intervalMs)*intervalMs;
       closed.push({
         symbol,openTime,closeTime:openTime+intervalMs-1,
         open:100,high:101,low:99,close:100.5,volume:100,quoteVolume:10000,tradeCount:100,
@@ -164,6 +165,7 @@ test('Radar 8 requests enough BTC 5m rows to retain 120 closed candles and reuse
 
   requested.length=0;
   const nextFiveMinuteClose=Math.floor(now/(5*60_000))*5*60_000+5*60_000+1_000;
+  restNow=nextFiveMinuteClose;
   const third=await fetchRadar8MarketContext({
     rest,marketWideKlineCache,cachedFiveMinuteContext:first.fiveMinuteContextCache,
     cachedOneHourContext:first.oneHourContextCache,
