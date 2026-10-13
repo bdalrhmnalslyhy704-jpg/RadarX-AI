@@ -60,8 +60,13 @@ export function classifyBtcMarketRegime(candles,{minTrendPct=2,maxSidewaysRangeP
 
 export function summarizeHistoricalWindowReport(report={}) {
   const rows=Array.isArray(report?.results)?report.results:[];
-  const fullTrade=rows.filter(x=>x?.data_quality?.trade_coverage_complete===true&&x?.data_quality?.candle_fetch_complete===true&&Number(x?.summary?.replay_steps)>0);
-  const candleFallback=rows.filter(x=>x?.data_quality?.replay_mode==='CANDLE_ONLY_FALLBACK'&&x?.data_quality?.candle_only_fallback_used===true&&x?.data_quality?.candle_fetch_complete===true&&x?.data_quality?.synthetic_data_used===false&&Number(x?.summary?.replay_steps)>0);
+  const windowCandlesCovered=x=>{
+    const expected=Number(x?.data_quality?.window_candles_expected);
+    const observed=Number(x?.data_quality?.window_candles_observed);
+    return expected>0 ? observed>=expected : Number(x?.summary?.replay_steps)>0;
+  };
+  const fullTrade=rows.filter(x=>x?.data_quality?.trade_coverage_complete===true&&x?.data_quality?.replay_mode==='FULL_TRADE'&&x?.data_quality?.candle_fetch_complete===true&&windowCandlesCovered(x));
+  const candleFallback=rows.filter(x=>x?.data_quality?.replay_mode==='CANDLE_ONLY_FALLBACK'&&x?.data_quality?.candle_only_fallback_used===true&&x?.data_quality?.candle_fetch_complete===true&&x?.data_quality?.synthetic_data_used===false&&windowCandlesCovered(x));
   const usable=new Map();
   for(const row of fullTrade)usable.set(row, 'FULL_TRADE');
   for(const row of candleFallback)usable.set(row, 'CANDLE_ONLY_FALLBACK');
