@@ -43,9 +43,9 @@ const SHARED = {
 // Keep conservative count and request-weight ceilings. The request-budget
 // lock is held only while checking/reserving a slot, never during rate-limit sleep;
 // otherwise one heavy request can block lighter requests that still fit the budget.
-const SHARED_MAX_REQUESTS_PER_MINUTE = 420;
+const SHARED_MAX_REQUESTS_PER_MINUTE = 600;
 const SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE = 4000;
-const SHARED_MIN_INTERVAL_MS = 143;
+const SHARED_MIN_INTERVAL_MS = 100;
 // Cache recent public Klines long enough for overlapping radars to reuse them,
 // but keep a strict entry cap so cross-radar reuse cannot grow process RSS without bound.
 const SHARED_MAX_CACHE_ENTRIES = 256;
