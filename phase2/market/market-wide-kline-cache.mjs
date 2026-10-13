@@ -1,6 +1,7 @@
 import {BinanceStreamClient} from './binance-ws.mjs';
 
-const DEFAULT_MAX_CANDLES_PER_SYMBOL = 180;
+// 120 closed bars cover Radar 8 BTC context; market-wide light scans need 96.
+const DEFAULT_MAX_CANDLES_PER_SYMBOL = 120;
 const DEFAULT_MAX_SYMBOLS = 1024;
 const FIVE_MINUTE_MS = 5 * 60_000;
 const MIN_READY_CLOSED_CANDLES = 60;
