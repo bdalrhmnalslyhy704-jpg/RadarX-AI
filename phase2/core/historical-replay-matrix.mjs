@@ -58,14 +58,34 @@ export function classifyBtcMarketRegime(candles,{minTrendPct=2,maxSidewaysRangeP
   return {regime,sample_count:rows.length,net_return_pct:Number(netReturnPct.toFixed(4)),range_pct:Number(rangePct.toFixed(4)),thresholds:{min_trend_pct:trend,max_sideways_range_pct:sidewaysRange},reason};
 }
 
-export function summarizeHistoricalWindowReport(report={}){
+export function summarizeHistoricalWindowReport(report={}) {
   const rows=Array.isArray(report?.results)?report.results:[];
-  const complete=rows.filter(x=>x?.data_quality?.trade_coverage_complete===true&&x?.data_quality?.candle_fetch_complete===true);
+  const fullTrade=rows.filter(x=>x?.data_quality?.trade_coverage_complete===true&&x?.data_quality?.candle_fetch_complete===true&&Number(x?.summary?.replay_steps)>0);
+  const candleFallback=rows.filter(x=>x?.data_quality?.replay_mode==='CANDLE_ONLY_FALLBACK'&&x?.data_quality?.candle_only_fallback_used===true&&x?.data_quality?.candle_fetch_complete===true&&x?.data_quality?.synthetic_data_used===false&&Number(x?.summary?.replay_steps)>0);
+  const usable=new Map();
+  for(const row of fullTrade)usable.set(row, 'FULL_TRADE');
+  for(const row of candleFallback)usable.set(row, 'CANDLE_ONLY_FALLBACK');
   const accepted=rows.reduce((n,x)=>n+Math.max(0,Number(x?.summary?.accepted)||0),0);
   const rejected=rows.reduce((n,x)=>n+Math.max(0,Number(x?.summary?.rejected)||0),0);
   const firstAccepted=rows.map(x=>x?.summary?.first_accepted_at).filter(Boolean).sort()[0]??null;
   const first50=rows.map(x=>x?.summary?.first_actual_window_50pct_at).filter(Boolean).sort()[0]??null;
   const first70=rows.map(x=>x?.summary?.first_actual_window_70pct_at).filter(Boolean).sort()[0]??null;
   const requestedSymbols=Math.max(0,Math.trunc(Number(report?.symbol_count)||rows.length));
-  return {requested_symbols:requestedSymbols,returned_symbol_results:rows.length,coverage_complete_symbols:complete.length,coverage_incomplete_symbols:Math.max(0,requestedSymbols-complete.length),accepted_decisions:accepted,rejected_decisions:rejected,first_accepted_at:firstAccepted,first_actual_window_50pct_at:first50,first_actual_window_70pct_at:first70,coverage_status:rows.length>0&&rows.length===requestedSymbols&&complete.length===rows.length?'COMPLETE':'INCOMPLETE_OR_EMPTY'};
+  const allReturned=rows.length>0&&rows.length===requestedSymbols;
+  const allUsable=allReturned&&usable.size===rows.length;
+  const fallbackCount=[...usable.values()].filter(mode=>mode==='CANDLE_ONLY_FALLBACK').length;
+  return {
+    requested_symbols:requestedSymbols,
+    returned_symbol_results:rows.length,
+    coverage_complete_symbols:usable.size,
+    coverage_incomplete_symbols:Math.max(0,requestedSymbols-usable.size),
+    trade_coverage_complete_symbols:fullTrade.length,
+    candle_fallback_symbols:fallbackCount,
+    accepted_decisions:accepted,
+    rejected_decisions:rejected,
+    first_accepted_at:firstAccepted,
+    first_actual_window_50pct_at:first50,
+    first_actual_window_70pct_at:first70,
+    coverage_status:!allUsable?'INCOMPLETE_OR_EMPTY':(fallbackCount>0?'COMPLETE_WITH_CANDLE_FALLBACK':'COMPLETE')
+  };
 }
