@@ -136,6 +136,8 @@ jobs:
             const row = bySymbol.get(symbol);
             if (!row || row.data_quality?.candle_fetch_complete !== true ||
                 Number(row.data_quality?.closed_1m_candles) <= 0 ||
+                Number(row.data_quality?.window_candles_expected) <= 0 ||
+                Number(row.data_quality?.window_candles_observed) < Number(row.data_quality?.window_candles_expected) ||
                 Number(row.summary?.replay_steps) <= 0 ||
                 row.data_quality?.synthetic_data_used !== false) return true;
             const fullTrade = row.data_quality?.trade_coverage_complete === true &&
