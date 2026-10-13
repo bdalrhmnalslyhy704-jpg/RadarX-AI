@@ -1120,7 +1120,7 @@ export function isMarketWideCachePoolReady(cacheProof, minimumCoverageRatio=0.10
 const FIVE_MINUTE_MS = 5 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const RADAR8_MICRO_5M_CACHE_MAX_WINDOWS = 36;
-const RADAR8_DEEP_CANDLE_CACHE_MAX_WINDOWS = 192;
+const RADAR8_DEEP_CANDLE_CACHE_MAX_WINDOWS = 128;
 const TRUSTED_FIVE_MINUTE_CACHE_SOURCES = new Set([
   'BINANCE_PUBLIC_WS', 'BINANCE_PUBLIC_REST', 'BINANCE_PUBLIC_REST_CACHE'
 ]);
@@ -1687,6 +1687,81 @@ export class EarlyExpansionRadar{
     return {deep_removed:deepRemoved,micro_5m_removed:micro5mRemoved,
       deep_entries:this.deepCandleWindowCache.size,micro_5m_entries:this.microFiveMinuteWindowCache.size};
   }
+  trimLowMomentumCandleWindows(now=this.clock()){
+    const activeSymbols=new Set((this.universe||[])
+      .map(symbol=>String(symbol||'').trim().toUpperCase()).filter(Boolean));
+    if(activeSymbols.size===0)return {
+      skipped:true,reason:'AUTHORITATIVE_SPOT_UNIVERSE_UNAVAILABLE',
+      cached_symbols_evaluated:0,inactive_symbols_removed:0,low_momentum_symbols_removed:0,
+      deep_windows_removed:0,micro_5m_windows_removed:0,candle_rows_released:0
+    };
+    const cachedSymbols=new Set([
+      ...[...this.deepCandleWindowCache.keys()].map(key=>String(key).split(':')[0].trim().toUpperCase()),
+      ...[...this.microFiveMinuteWindowCache.keys()].map(symbol=>String(symbol).trim().toUpperCase())
+    ].filter(Boolean));
+    const lowMomentumSymbols=new Set();
+    let inactiveSymbolsRemoved=0;
+    const isLowMomentum=(symbol)=>{
+      if(!activeSymbols.has(symbol))return false;
+      if(Number(this.fastShockPendingUntil.get(symbol)||0)>Number(now))return false;
+      const lastMicro=Number(this.lastMicroScanCycleBySymbol.get(symbol)||0);
+      const lastDeep=Number(this.lastDeepScanCycleBySymbol.get(symbol)||0);
+      const lastScanned=Math.max(lastMicro,lastDeep);
+      if(lastScanned>0&&this.scans-lastScanned<=2)return false;
+      const history=this.fastState.get(symbol);
+      if(!Array.isArray(history)||history.length<8)return false;
+      const recent=history.slice(-3),baseline=history.slice(-8,-3);
+      if(recent.length!==3||baseline.length!==5)return false;
+      const finiteValues=(rows,key)=>rows.map(row=>Number(row?.[key]));
+      const recentMove=finiteValues(recent,'priceChange');
+      const baselineQuotes=finiteValues(baseline,'qDelta');
+      const baselineTrades=finiteValues(baseline,'tDelta');
+      const recentQuotes=finiteValues(recent,'qDelta');
+      const recentTrades=finiteValues(recent,'tDelta');
+      if([...recentMove,...baselineQuotes,...baselineTrades,...recentQuotes,...recentTrades].some(v=>!Number.isFinite(v)))return false;
+      const quoteBase=median(baselineQuotes),tradeBase=median(baselineTrades);
+      const quoteRecent=median(recentQuotes),tradeRecent=median(recentTrades);
+      // Require a real activity baseline. Unknown/flat counters never qualify for
+      // pruning, and a growing quote/trade delta keeps a quiet-base candidate warm.
+      if(!(quoteBase>0)||!(tradeBase>0)||quoteRecent===null||tradeRecent===null)return false;
+      const priceQuiet=recentMove.every(change=>Math.abs(change)<=0.025);
+      const volumeNotGrowing=quoteRecent<=quoteBase*1.05;
+      const tradesNotGrowing=tradeRecent<=tradeBase*1.05;
+      return priceQuiet&&volumeNotGrowing&&tradesNotGrowing;
+    };
+    for(const symbol of cachedSymbols){
+      if(!activeSymbols.has(symbol)){
+        inactiveSymbolsRemoved++;
+        continue;
+      }
+      if(isLowMomentum(symbol))lowMomentumSymbols.add(symbol);
+    }
+    let deepWindowsRemoved=0,micro5mWindowsRemoved=0,candleRowsReleased=0;
+    for(const [key,entry] of this.deepCandleWindowCache){
+      const symbol=String(key).split(':')[0].trim().toUpperCase();
+      if(!activeSymbols.has(symbol)||lowMomentumSymbols.has(symbol)){
+        candleRowsReleased+=Array.isArray(entry?.candles)?entry.candles.length:0;
+        this.deepCandleWindowCache.delete(key);
+        deepWindowsRemoved++;
+      }
+    }
+    for(const [symbol,entry] of this.microFiveMinuteWindowCache){
+      const normalized=String(symbol||'').trim().toUpperCase();
+      if(!activeSymbols.has(normalized)||lowMomentumSymbols.has(normalized)){
+        candleRowsReleased+=Array.isArray(entry?.candles)?entry.candles.length:0;
+        this.microFiveMinuteWindowCache.delete(symbol);
+        micro5mWindowsRemoved++;
+      }
+    }
+    return {
+      skipped:false,cached_symbols_evaluated:cachedSymbols.size,
+      inactive_symbols_removed:inactiveSymbolsRemoved,
+      low_momentum_symbols_removed:lowMomentumSymbols.size,
+      deep_windows_removed:deepWindowsRemoved,
+      micro_5m_windows_removed:micro5mWindowsRemoved,
+      candle_rows_released:candleRowsReleased
+    };
+  }
   async microScan(row,fast,btcFiveMinute){
     const now=this.clock();
     const cachedFive=usableCachedFiveMinuteSeries(
@@ -1753,7 +1828,7 @@ export class EarlyExpansionRadar{
     if(cacheable){
       this.deepCandleWindowCache.set(key,{candles:rows,source:response.source||rows.at(-1)?.source||'BINANCE_PUBLIC_REST',
         latestCloseTime:Number(latest.closeTime),cachedAt:completedAt});
-      // At most 384 symbol/timeframe windows remain resident; oldest entries are
+      // At most 128 symbol/timeframe windows remain resident; oldest entries are
       // evicted first so this cache cannot grow with the life of the service.
       while(this.deepCandleWindowCache.size>RADAR8_DEEP_CANDLE_CACHE_MAX_WINDOWS){
         const oldest=this.deepCandleWindowCache.keys().next();
@@ -1825,6 +1900,7 @@ export class EarlyExpansionRadar{
       this.schedulerBufferEventsDroppedTotal+=schedulerBufferDropped;
     }
     const candleCacheCleanup=this.pruneCandleWindowCaches(now);
+    const lowMomentumCacheTrim=this.trimLowMomentumCandleWindows(now);
     return {
       active_symbols:activeSymbols.size,
       removed_inactive_symbol_entries:removedInactiveEntries,
@@ -1841,7 +1917,8 @@ export class EarlyExpansionRadar{
         scheduler_queued:this.scheduler?.queuedAt?.size??0,scheduler_deferred:this.scheduler?.lastDeferredAt?.size??0,
         local_5m_candles:this.microFiveMinuteWindowCache.size,deep_candle_windows:this.deepCandleWindowCache.size
       },
-      candle_cache_cleanup:candleCacheCleanup
+      candle_cache_cleanup:candleCacheCleanup,
+      low_momentum_cache_trim:lowMomentumCacheTrim
     };
   }
   async rehydrateMarketWideCacheFromArchive(eligible,now=this.clock()){
