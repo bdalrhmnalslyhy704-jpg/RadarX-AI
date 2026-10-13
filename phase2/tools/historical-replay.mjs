@@ -257,14 +257,19 @@ async function main() {
         };
       }
     });
+    const expectedWindowCandles = Math.floor((end - start) / MINUTE_MS) + 1;
+    const observedWindowCandles = replay.steps.length;
+    const windowCandlesComplete = candleFetch.complete && observedWindowCandles >= expectedWindowCandles;
     replay.data_quality.candle_pages = candleFetch.pages;
-    replay.data_quality.candle_fetch_complete = candleFetch.complete;
+    replay.data_quality.candle_fetch_complete = windowCandlesComplete;
+    replay.data_quality.window_candles_expected = expectedWindowCandles;
+    replay.data_quality.window_candles_observed = observedWindowCandles;
     replay.data_quality.trade_coverage_complete = tradeFetch.complete;
     replay.data_quality.trade_coverage = tradeFetch.coverage;
     replay.data_quality.trades_missing = !tradeFetch.complete;
-    replay.data_quality.candle_only_fallback_used = !tradeFetch.complete && candleFetch.complete && replay.steps.length > 0;
-    replay.data_quality.replay_mode = tradeFetch.complete ? 'FULL_TRADE' :
-      (replay.data_quality.candle_only_fallback_used ? 'CANDLE_ONLY_FALLBACK' : 'BLOCKED_INCOMPLETE');
+    replay.data_quality.candle_only_fallback_used = !tradeFetch.complete && windowCandlesComplete && replay.steps.length > 0;
+    replay.data_quality.replay_mode = !windowCandlesComplete ? 'BLOCKED_INCOMPLETE' :
+      (tradeFetch.complete ? 'FULL_TRADE' : (replay.data_quality.candle_only_fallback_used ? 'CANDLE_ONLY_FALLBACK' : 'BLOCKED_INCOMPLETE'));
     replay.data_quality.coverage_status = replay.data_quality.replay_mode === 'BLOCKED_INCOMPLETE'
       ? 'INCOMPLETE' : (tradeFetch.complete ? 'COMPLETE' : 'COMPLETE_WITH_CANDLE_FALLBACK');
     replay.data_quality.synthetic_data_used = false;
