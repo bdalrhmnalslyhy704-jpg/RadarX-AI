@@ -191,7 +191,7 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   quietMinParticipationRatio:1.12,
   quietMinPriceAccelerationPct:0.03,
   quietDeepMinParticipationScore:58,
-  exceptionalRotationBypassSlots:3,
+  exceptionalRotationBypassSlots:5,
   exceptionalVolumeAccelRatio:2.2,
   exceptionalTradeAccelRatio:1.8,
   exceptionalPriceAccelerationPct:0.15,
@@ -1568,7 +1568,7 @@ export class EarlyExpansionRadar{
     // and still preserve one rotation slot for symbols not previously Deep-scanned.
     if(byExceptional.length>=2&&configuredExceptionSlots>0&&target>=3){
       const maxEventSlots=target>=6?Math.min(configuredExceptionSlots,Math.max(2,Math.floor(target*.35))):
-        Math.min(configuredExceptionSlots,target-1);
+        target>=4?Math.min(configuredExceptionSlots,target-2):Math.min(configuredExceptionSlots,target-1);
       exceptionSlots=Math.min(byExceptional.length,maxEventSlots);
       const remaining=Math.max(0,target-exceptionSlots);
       quietSlots=Math.min(q,Math.floor(remaining/3));
@@ -2304,6 +2304,7 @@ export class EarlyExpansionRadar{
       coverage.micro_five_minute_cache_fallbacks_total=microScanned.filter(x=>x&&!x.failed&&x.five_minute_cache_hit!==true).length;
       coverage.micro_effective_concurrency=microConcurrency;
       coverage.micro_concurrency_inputs=microConcurrencyInputs;
+      coverage.micro_burst_priority_slots_configured=Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2));
       coverage.deep_effective_concurrency=deepConcurrency;
       coverage.discovery_mode='TICKER_ALL + ROTATING_1M_5M_MICRO + DEEP_15M_1H_4H_DEPTH';
       this.lastCoverage=coverage;this.failedSymbols=[...new Set(failedSymbols)];
@@ -2327,6 +2328,7 @@ export class EarlyExpansionRadar{
         micro_five_minute_cache_fallbacks_total:coverage.micro_five_minute_cache_fallbacks_total,
         micro_effective_concurrency:coverage.micro_effective_concurrency,
         micro_concurrency_inputs:coverage.micro_concurrency_inputs,
+        micro_burst_priority_slots_configured:coverage.micro_burst_priority_slots_configured,
         deep_effective_concurrency:coverage.deep_effective_concurrency,
         deep_timeframe_cache_hits_total:coverage.deep_timeframe_cache_hits_total,
         deep_timeframe_cache_misses_total:coverage.deep_timeframe_cache_misses_total,
@@ -2476,6 +2478,7 @@ export class EarlyExpansionRadar{
         micro_five_minute_cache_fallbacks_total:coverage.micro_five_minute_cache_fallbacks_total,
         micro_effective_concurrency:coverage.micro_effective_concurrency,
         micro_concurrency_inputs:coverage.micro_concurrency_inputs,
+        micro_burst_priority_slots_configured:coverage.micro_burst_priority_slots_configured,
         deep_effective_concurrency:coverage.deep_effective_concurrency,
         deep_timeframe_cache_hits_total:coverage.deep_timeframe_cache_hits_total,
         deep_timeframe_cache_misses_total:coverage.deep_timeframe_cache_misses_total,
