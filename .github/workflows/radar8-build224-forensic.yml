@@ -1,0 +1,203 @@
+name: RadarX Build 224 production-aligned integration gate
+
+on:
+  push:
+    branches:
+      - integration/build224-radar-swarm-production-20261013
+  pull_request:
+    branches:
+      - build224-multi-analyst-20261007
+
+concurrency:
+  group: radarx-production-alignment-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate-production-alignment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Checkout production-aligned integration
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Validate syntax for production and integrated modules
+        run: |
+          set -euo pipefail
+          for file in \
+            phase2/server.mjs \
+            phase2/core/store.mjs \
+            phase2/http/api.mjs \
+            phase2/market/binance-rest.mjs \
+            phase2/core/radar-swarm-coordinator.mjs \
+            phase2/core/historical-replay.mjs \
+            phase2/core/historical-replay-matrix.mjs \
+            phase2/core/radar-notification-gate.mjs \
+            phase2/core/radar-telemetry.mjs \
+            phase2/core/dynamic-early-warning-gate.mjs \
+            phase2/tools/historical-replay.mjs \
+            phase2/tools/historical-replay-matrix.mjs \
+            phase2/tests/store.test.mjs \
+            phase2/tests/radar-swarm-coordinator.test.mjs \
+            phase2/tests/historical-replay-matrix.test.mjs \
+            phase2/tests/historical-replay.test.mjs \
+            phase2/tests/dynamic-early-warning-gate.test.mjs \
+            phase2/tests/run-tests.mjs; do
+            test -f "$file"
+            node --check "$file"
+          done
+
+      - name: Run REST client and request policy regression tests
+        run: node --test --test-timeout=60000 phase2/tests/rest.test.mjs
+
+      - name: Run coordinator, bounded JSONL and matrix-specific tests
+        run: |
+          set -euo pipefail
+          node --max-old-space-size=256 --test --test-timeout=60000 phase2/tests/store.test.mjs
+          node --test --test-timeout=60000 phase2/tests/radar-swarm-coordinator.test.mjs
+          node --test --test-timeout=60000 phase2/tests/historical-replay-matrix.test.mjs
+          node --test --test-timeout=60000 phase2/tests/historical-replay.test.mjs
+          node --test --test-timeout=60000 phase2/tests/dynamic-early-warning-gate.test.mjs
+
+      - name: Run full Phase 2 test suite
+        run: node phase2/tests/run-tests.mjs phase2
+
+      - name: Run GTC/W and missed-move historical Spot replay
+        id: gtc-w-replay
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p reports
+          node phase2/tools/historical-replay.mjs \
+            --symbols GTCUSDT,WUSDT,RLCUSDT,RADUSDT,ORCAUSDT,API3USDT,DIAUSDT,OGNUSDT,CTSIUSDT \
+            --start 2026-10-11T21:27:59.999Z \
+            --end 2026-10-12T21:27:59.999Z \
+            --max-trade-pages 10 \
+            --max-trades 10000 \
+            --output reports/historical-replay-gtc-w.json
+          replay_status=$?
+          printf 'exit_code=%s\n' "$replay_status" > reports/historical-replay-status.txt
+          echo "GTC/W replay process exit code: $replay_status"
+          exit 0
+
+      - name: Run 90-case public Spot historical replay matrix
+        id: historical-matrix
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p reports
+          node phase2/tools/historical-replay-matrix.mjs \
+            --max-trade-pages 8 \
+            --max-trades 8000 \
+            --timeout-ms 1800000 \
+            --output reports/radarx-historical-matrix
+          matrix_status=$?
+          printf 'exit_code=%s\n' "$matrix_status" > reports/radarx-historical-matrix-exit.txt
+          echo "90-case matrix process exit code: $matrix_status"
+          exit 0
+
+      - name: Upload historical and memory regression evidence
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-production-alignment-evidence
+          path: |
+            reports/historical-replay-gtc-w.json
+            reports/historical-replay-status.txt
+            reports/radarx-historical-matrix/**
+            reports/radarx-historical-matrix-exit.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Require complete GTC/W historical coverage
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFile} from 'node:fs/promises';
+          const report = JSON.parse(await readFile('reports/historical-replay-gtc-w.json', 'utf8'));
+          const expected = ['GTCUSDT','WUSDT','RLCUSDT','RADUSDT','ORCAUSDT','API3USDT','DIAUSDT','OGNUSDT','CTSIUSDT'];
+          const bySymbol = new Map((report.results || []).map(row => [row.symbol, row]));
+          const missing = expected.filter(symbol => {
+            const row = bySymbol.get(symbol);
+            if (!row || row.data_quality?.candle_fetch_complete !== true ||
+                Number(row.data_quality?.closed_1m_candles) <= 0 ||
+                Number(row.data_quality?.window_candles_expected) <= 0 ||
+                Number(row.data_quality?.window_candles_observed) < Number(row.data_quality?.window_candles_expected) ||
+                Number(row.summary?.replay_steps) <= 0 ||
+                row.data_quality?.synthetic_data_used !== false) return true;
+            const fullTrade = row.data_quality?.trade_coverage_complete === true &&
+              row.data_quality?.replay_mode === 'FULL_TRADE';
+            const candleFallback = row.data_quality?.replay_mode === 'CANDLE_ONLY_FALLBACK' &&
+              row.data_quality?.candle_only_fallback_used === true;
+            return !(fullTrade || candleFallback);
+          });
+          if (missing.length) {
+            console.error('Historical replay coverage incomplete for: ' + missing.join(', '));
+            process.exit(1);
+          }
+          console.log('All ' + expected.length + ' symbols have complete closed-candle replay coverage; trade-limited rows are explicitly marked candle-only and exact aggTrade crossing times remain unknown.');
+          NODE
+
+      - name: Require complete 90-case matrix coverage
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFile} from 'node:fs/promises';
+          const path = 'reports/radarx-historical-matrix/matrix-summary.json';
+          const report = JSON.parse(await readFile(path, 'utf8'));
+          const expectedSymbols = 30;
+          const expectedWindows = 3;
+          const windows = report.windows || [];
+          const badWindows = windows.filter(window =>
+            window.market_regime?.regime === 'UNKNOWN' ||
+            !['COMPLETE', 'COMPLETE_WITH_CANDLE_FALLBACK'].includes(window.summary?.coverage_status) ||
+            window.summary?.requested_symbols !== expectedSymbols ||
+            window.summary?.returned_symbol_results !== expectedSymbols ||
+            window.process?.exit_code !== 0 ||
+            window.process?.timed_out === true
+          );
+          const complete = ['COMPLETE', 'COMPLETE_WITH_FALLBACK'].includes(report.matrix_summary?.status) &&
+            report.symbol_count === expectedSymbols &&
+            report.window_count === expectedWindows &&
+            windows.length === expectedWindows &&
+            badWindows.length === 0 &&
+            report.matrix_summary?.completed_windows === expectedWindows;
+          if (!complete) {
+            console.error(JSON.stringify({
+              status: report.matrix_summary?.status ?? 'MISSING',
+              symbol_count: report.symbol_count ?? null,
+              window_count: report.window_count ?? windows.length,
+              completed_windows: report.matrix_summary?.completed_windows ?? null,
+              bad_windows: badWindows.map(window => ({
+                id: window.id,
+                regime: window.market_regime?.regime,
+                coverage: window.summary?.coverage_status,
+                symbols: window.summary?.returned_symbol_results,
+                exit_code: window.process?.exit_code,
+                timed_out: window.process?.timed_out
+              }))
+            }, null, 2));
+            process.exit(1);
+          }
+          console.log('Complete evidence: 30 symbols × 3 observed market windows = 90 symbol-window cases with complete closed candles. Candle-only fallbacks remain explicitly labeled; exact aggTrade crossing times are not fabricated.');
+          NODE
+
+      - name: Production deploy guard
+        run: |
+          echo "CI validation only. No Railway deployment occurs from this workflow."
+          echo "paper_trading=true; real_order_execution=false; confidence_score=UNKNOWN."

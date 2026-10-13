@@ -138,6 +138,27 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+
+        // An explicit stop action may be delivered to the existing top Activity
+        // instead of creating a new instance. Handle it on this lifecycle path too.
+        configureDebugReplayTest(intent);
+        if (intent != null &&
+                intent.getBooleanExtra("radarx_test_stop_background_monitor", false)) {
+            return; // Do not auto-start immediately after the test requested a stop.
+        }
+
+        // A replay/relaunch intent delivered to this existing Activity won't run
+        // onCreate(). Apply the saved test feed and ensure the background service
+        // resumes, so the lifecycle smoke test covers the real singleTop path.
+        if (intent != null && intent.hasExtra("radarx_test_alert_feed_url")) {
+            ensureContinuousMonitoring();
+        }
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
         if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
@@ -269,6 +290,13 @@ public final class MainActivity extends Activity {
             return; // Release APKs never read or honor this test-only override.
         }
         SharedPreferences prefs = getSharedPreferences(PREFS_BACKGROUND, MODE_PRIVATE);
+        // CI invokes this explicit lifecycle hook only in a debuggable APK. Keep the
+        // service non-exported; the activity delivers ACTION_STOP from the app UID.
+        if (launchIntent != null &&
+                launchIntent.getBooleanExtra("radarx_test_stop_background_monitor", false)) {
+            Log.i("RadarXSmoke", "TEST_STOP_BACKGROUND_MONITOR_REQUEST");
+            stopBackgroundMonitor();
+        }
         String feedUrl = launchIntent == null ? null : launchIntent.getStringExtra("radarx_test_alert_feed_url");
         if (feedUrl == null || feedUrl.isEmpty()) {
             prefs.edit().remove(PREF_REPLAY_TEST_FEED_URL).remove(PREF_REPLAY_TEST_SCAN_MS).commit();
@@ -292,6 +320,8 @@ public final class MainActivity extends Activity {
         boolean saved = prefs.edit()
                 .putString(PREF_REPLAY_TEST_FEED_URL, feedUrl)
                 .putLong(PREF_REPLAY_TEST_SCAN_MS, intervalMs)
+                // The next Activity launch after the test-only stop must auto-resume.
+                .putBoolean(PREF_AUTO_ENABLED, true)
                 .commit();
         if (saved) Log.i("RadarXSmoke", "REPLAY_TEST_OVERRIDE_CONFIGURED");
         else Log.e("RadarXSmoke", "REPLAY_TEST_OVERRIDE_PERSIST_FAILED");

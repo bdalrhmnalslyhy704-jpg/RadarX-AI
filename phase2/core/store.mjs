@@ -1,6 +1,6 @@
 import {createReadStream} from 'node:fs';
 import {createInterface} from 'node:readline';
-import {mkdir,readFile,writeFile,rename,appendFile,stat,unlink,readdir} from 'node:fs/promises';
+import {mkdir,readFile,writeFile,rename,appendFile,stat,unlink,readdir,open} from 'node:fs/promises';
 import {basename,join,resolve} from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
 import {gzipSync,gunzipSync} from 'node:zlib';
@@ -894,13 +894,51 @@ export class DurableStore {
   async readRecent(kind,limit=100){
     const file=this.files[kind];
     if(!file)return[];
-    let s='';
-    try{s=await readFile(file,'utf8');}catch{return[];}
-    const rows=[];
-    for(const line of s.split('\n').filter(Boolean).slice(-Math.max(1,Number(limit)||100))){
-      try{rows.push(JSON.parse(line));}catch{}
-    }
-    return rows.reverse();
+    const take=Math.min(5000,Math.max(1,Math.trunc(Number(limit)||100)));
+    let handle=null;
+    try{
+      handle=await open(file,'r');
+      const {size}=await handle.stat();
+      let position=size,newlineCount=0,bytesScanned=0;
+      const chunks=[];
+      const blockSize=64*1024;
+      const maxTailBytes=8*MiB;
+      // Bound both transient memory and archive work, including malformed files
+      // with no newline separators or an unexpectedly huge JSONL row.
+      while(position>0&&newlineCount<=take&&bytesScanned<maxTailBytes){
+        const length=Math.min(blockSize,position,maxTailBytes-bytesScanned);
+        if(length<=0)break;
+        const buffer=Buffer.allocUnsafe(length);
+        const {bytesRead}=await handle.read(buffer,0,length,position-length);
+        if(!bytesRead)break;
+        position-=length;
+        bytesScanned+=bytesRead;
+        const chunk=buffer.subarray(0,bytesRead);
+        for(let index=0;(index=chunk.indexOf(10,index))!==-1;index++)newlineCount++;
+        chunks.unshift(chunk);
+      }
+      let tail=Buffer.concat(chunks).toString('utf8');
+      // If the bounded read began mid-record, discard only that incomplete prefix.
+      if(position>0){
+        const firstBreak=tail.indexOf('\n');
+        tail=firstBreak>=0?tail.slice(firstBreak+1):'';
+      }
+      // Parse backward so memory is proportional to the requested rows, not the
+      // number of lines present in the last buffer.
+      const rows=[];
+      let end=tail.length;
+      while(end>0&&rows.length<take){
+        const newline=tail.lastIndexOf('\n',end-1);
+        const line=tail.slice(newline+1,end);
+        if(line){
+          try{rows.push(JSON.parse(line));}catch{}
+        }
+        if(newline<0)break;
+        end=newline;
+      }
+      return rows;
+    }catch{return[];}
+    finally{if(handle)await handle.close().catch(()=>{});}
   }
   async health(){try{await mkdir(this.dir,{recursive:true});return{state:this.ready?'LIVE':'INIT',path:this.dir,last_write_at:this.lastWriteAt};}
     catch(e){return{state:'ERROR',path:this.dir,error:String(e?.message??e),last_write_at:this.lastWriteAt};}}

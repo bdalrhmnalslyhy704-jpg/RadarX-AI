@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 const service = await readFile('android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java', 'utf8');
 const main = await readFile('android/app/src/main/java/com/radarx/app/MainActivity.java', 'utf8');
+const manifest = await readFile('android/app/src/main/AndroidManifest.xml', 'utf8');
 const replayFixture = await readFile('android/background-replay-test-server.mjs', 'utf8');
 const api = await readFile('phase2/http/api.mjs', 'utf8');
 const store = await readFile('phase2/core/store.mjs', 'utf8');
@@ -121,5 +122,19 @@ assert.match(smokeReplay, /reconciled_log_keys/,
   'the replay audit must prove every accepted or reconciled alert has a unique stable identity');
 assert.match(smokeReplay, /Duplicate NotificationManager post requests/,
   'the replay smoke test must reject duplicate notification post requests');
+assert.match(smokeReplay, /radarx_test_stop_background_monitor/,
+  'restart replay must request the stop action through the app-owned debug-only Activity hook');
+assert.match(smokeReplay, /TEST_STOP_BACKGROUND_MONITOR_REQUEST/,
+  'the restart replay must verify that the app accepted the lifecycle stop request');
+assert.match(main, /radarx_test_stop_background_monitor/,
+  'the debug-only Activity hook must expose service stop only to emulator test launch intents');
+assert.match(smokeReplay, /was absent before the restart checkpoint/,
+  'the service restart replay must prove its process was alive before trying to stop it');
+assert.match(smokeReplay, /Background service remained registered after MainActivity stop intent/,
+  'the service restart replay must verify Android removed the real ServiceRecord after the stop request');
+assert.match(smokeReplay, /BACKGROUND_STOP_ACTION_RECEIVED/,
+  'the service restart replay must confirm the service itself received ACTION_STOP');
+assert.match(manifest, /android:launchMode="singleTop"/,
+  'the manifest must deliver repeated test intents to MainActivity.onNewIntent');
 
 

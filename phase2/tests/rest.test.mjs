@@ -11,6 +11,7 @@ test('TEST_FIXTURE: each REST client keeps its independent conservative request 
 });
 
 test('TEST_FIXTURE: REST weight estimator is conservative for shared market-data endpoints',()=>{
+  assert.equal(estimateBinanceRequestWeight('/api/v3/aggTrades',{symbol:'BTCUSDT',limit:1000}),4);
   assert.equal(estimateBinanceRequestWeight('/api/v3/ticker/24hr',{}),80);
   assert.equal(estimateBinanceRequestWeight('/api/v3/ticker/24hr',{symbol:'BTCUSDT'}),2);
   assert.equal(estimateBinanceRequestWeight('/api/v3/ticker/24hr',{symbols:'["BTCUSDT","ETHUSDT"]'}),2);
@@ -62,7 +63,8 @@ test('TEST_FIXTURE: Binance kline timestamps are milliseconds; seconds are rejec
 
 test('TEST_FIXTURE: Binance millisecond kline timestamps normalize and current open candle stays open',async()=>{
   const now=Date.now();
-  const open=Math.floor((now-5000)/900000)*900000;
+  // Use the current 15-minute bucket; subtracting 5s made this flaky at interval boundaries.
+  const open=Math.floor(now/900000)*900000;
   const fetchImpl=async()=>({status:200,ok:true,headers:new Map(),json:async()=>[
     [open,'100','101','99','100','1000',open+899999,100000,10,500,50000,'0']
   ]});

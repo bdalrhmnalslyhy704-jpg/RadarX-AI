@@ -28,6 +28,7 @@ function withEnv(values){
 function safeStagingConfig(host,port,dataDir){
   return {...CONFIG,
     environment:'staging',host,port,confidenceMode:'UNKNOWN',
+    radarControl:{...(CONFIG.radarControl||{}),autostart:false},
     paper:{...CONFIG.paper,paperTrading:true,realOrderExecution:false},
     push:{...CONFIG.push,provider:'webpush',vapidSubject:'mailto:operator@example.test',vapidPublicKey:'TEST_FIXTURE_VAPID_PUBLIC',vapidPrivateKey:'TEST_FIXTURE_VAPID_PRIVATE'},
     auth:{...CONFIG.auth,secret:'TEST_FIXTURE_AUTH_SECRET_12345678901234567890',allowedOrigins:['https://staging.example.test']},

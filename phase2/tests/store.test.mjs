@@ -405,3 +405,21 @@ test('scan-journey candle history rehydrates only newest fresh continuous closed
     await import('node:fs/promises').then(fs=>fs.rm(dir,{recursive:true,force:true}));
   }
 });
+
+
+test('TEST_FIXTURE: large JSONL scheduler journals read only the recent tail in newest-first order',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-large-journal-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    const lines=Array.from({length:20000},(_,i)=>JSON.stringify({
+      event_at:i+1,radar:i%2===0?'RADAR_8':'RADAR_9',symbol:'S'+i+'USDT',payload:'x'.repeat(500)
+    }));
+    await writeFile(store.files.schedulerEvents,lines.join('\n')+'\n');
+    const recent=await store.readRecent('schedulerEvents',3);
+    assert.deepEqual(recent.map(x=>x.event_at),[20000,19999,19998]);
+    const radar8=await store.readScanSchedulerEvents({radar:'RADAR_8',limit:3});
+    assert.deepEqual(radar8.map(x=>x.event_at),[19995,19997,19999]);
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});

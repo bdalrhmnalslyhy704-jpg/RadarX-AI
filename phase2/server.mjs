@@ -30,6 +30,7 @@ import {createApiServer} from './http/api.mjs';
 import {assertDeploymentEnvironment,assertReadOnlyStagingConfig} from './deploy/preflight.mjs';
 import {sanitizeLogMessage} from './runtime.mjs';
 import {MultiAnalystEngine} from './core/multi-analyst-engine.mjs';
+import {RadarSwarmCoordinator} from './core/radar-swarm-coordinator.mjs';
 
 export async function startServer({
   config=CONFIG,
@@ -172,7 +173,21 @@ export async function startServer({
   // Falcon Eye uses public Binance Spot + public Futures market data. No API keys are required.
   const falconFuturesRest=new RestClient({...config.rest,baseUrls:['https://fapi.binance.com']});
   const falconEyeRadar=new FalconEyeRadar({rest, futuresRest:falconFuturesRest, store, pushManager:push, config:config.falconEyeRadar||{}, logger});
-  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,multiAnalystRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,marketRadarRest});
+  const radarSwarm=new RadarSwarmCoordinator({expectedCount:12,startupSpacingMs:config.radarSwarm?.startupSpacingMs??700,logger,runners:[
+    {id:'RADAR1',name:'المدمر',instance:moveSentinel},
+    {id:'RADAR2',name:'ملك الظلام',instance:strongMoveRadar},
+    {id:'RADAR3',name:'الجوكر',instance:rotationLagRadar},
+    {id:'RADAR4',name:'الكاسح',instance:liquidityAbsorptionRadar},
+    {id:'RADAR5',name:'القاهر',instance:kahirRadar},
+    {id:'RADAR6',name:'يوم القيامة',instance:doomsdayRadar},
+    {id:'RADAR7',name:'المقاوم',instance:alMuqawimRadar},
+    {id:'RADAR8',name:'البرق',instance:earlyExpansionRadar},
+    {id:'RADAR9_FALCON_EYE',name:'عين الصقر',instance:falconEyeRadar},
+    {id:'RADAR10_COIN_HUNTER',name:'صائد العملات',instance:coinHunterRadar},
+    {id:'RADAR11_WHALE',name:'تجمع الحيتان',instance:whaleAccumulationRadar},
+    {id:'RADAR12_PROFESSOR',name:'البروفيسور',instance:professorRadar}
+  ]});
+  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,multiAnalystRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,marketRadarRest,radarSwarm});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
   const safeStart=(name,instance)=>{
@@ -184,26 +199,29 @@ export async function startServer({
     }
   };
   safeStart('MONITOR',monitor);
-  // Keep the 20-analyst intelligence cache warm continuously so the Android center opens on recent work.
-  safeStart('MULTI_ANALYST_XFACTOR',multiAnalystRadar);
-  const autoStart=config.radarControl?.autostart!==false;
+  // Staging smoke tests must never start live market polling unless explicitly opted in.
+  // Production retains the continuous analyst worker and all twelve coordinated radars.
+  const explicitStagingRadarStart=process.env.RADARX_RADARS_AUTOSTART==='true';
+  const stagingSmokeMode=config.environment==='staging'&&!explicitStagingRadarStart;
+  if(!stagingSmokeMode){
+    // Keep the 20-analyst intelligence cache warm continuously in real runtime environments.
+    safeStart('MULTI_ANALYST_XFACTOR',multiAnalystRadar);
+  } else {
+    logger.info('Staging smoke mode: live market workers are disabled unless RADARX_RADARS_AUTOSTART=true.');
+  }
+  const autoStart=!stagingSmokeMode&&config.radarControl?.autostart!==false;
   if(autoStart){
-    const startup=[
-      ['RADAR1',moveSentinel],['RADAR2',strongMoveRadar],['RADAR3',rotationLagRadar],
-      ['RADAR4',liquidityAbsorptionRadar],['RADAR5',kahirRadar],['RADAR6',doomsdayRadar],
-      ['RADAR7',alMuqawimRadar],['PROFESSOR_INTELLIGENCE',professorRadar],
-      ['RADAR8',earlyExpansionRadar],['COIN_HUNTER',coinHunterRadar],
-      ['WHALE_ACCUMULATION',whaleAccumulationRadar]
-    ];
-    startup.forEach(([name,instance],index)=>setTimeout(()=>safeStart(name,instance),index*700));
+    const swarmStatus=await radarSwarm.start();
+    logger.info('[RADAR_SWARM_START] '+JSON.stringify({status:swarmStatus.status,expected:swarmStatus.expected_count,registered:swarmStatus.registered_count,spacing_ms:swarmStatus.startup_spacing_ms}));
+  } else if(stagingSmokeMode){
+    logger.info('[RADAR_SWARM_START] '+JSON.stringify({status:'DISABLED_FOR_STAGING_SMOKE',expected:12,registered:12,spacing_ms:config.radarSwarm?.startupSpacingMs??700}));
   } else {
     logger.info('Optional radar auto-start disabled; Falcon Eye remains an independent continuous recorder.');
+    // Preserve Build 224's background discovery invariant when optional auto-start is disabled in production.
+    safeStart('RADAR9',falconEyeRadar);
   }
-  // Falcon Eye must keep recording real Spot discoveries for Android background replay even
-  // when RADARX_RADARS_AUTOSTART is unset/false for the other optional radars.
-  safeStart('RADAR9',falconEyeRadar);
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
-  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,marketWideKlineCache,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,multiAnalystRadar,symbolDeepAnalyzer,store,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,multiAnalystRest,coinHunterRest,whaleAccumulationRest,marketRadarRest,push,close:async()=>{multiAnalystRadar.stop();await falconEyeRadar.stop();await whaleAccumulationRadar.stop();await coinHunterRadar.stop();await earlyExpansionRadar.stop();await professorRadar.stop();await alMuqawimRadar.stop();await doomsdayRadar.stop();await kahirRadar.stop();await liquidityAbsorptionRadar.stop();await rotationLagRadar.stop();await strongMoveRadar.stop();await moveSentinel.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
+  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,marketWideKlineCache,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,radarSwarm,multiAnalystRadar,symbolDeepAnalyzer,store,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,multiAnalystRest,coinHunterRest,whaleAccumulationRest,marketRadarRest,push,close:async()=>{await radarSwarm.stop();multiAnalystRadar.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
 }
 
 if(process.argv[1]&&resolve(fileURLToPath(import.meta.url))===resolve(process.argv[1])){

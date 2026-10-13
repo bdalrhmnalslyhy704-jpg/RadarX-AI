@@ -136,7 +136,7 @@ function subscriptionValid(x){
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,marketRadarRest=null}= {}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,marketRadarRest=null,radarSwarm=null}= {}){
   const counters=new Map();
   const moveConfig=config.moveRadar||{thresholdPct:1};
   const originList=config.auth.allowedOrigins;
@@ -217,6 +217,11 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         falcon_eye_radar:safeHealth('FALCON_EYE_RADAR',RADAR_NAMES.FALCON_EYE_RADAR,falconEyeRadar)
       });
       if(u.pathname==='/api/radar-status'&&req.method==='GET')return send(res,200,{radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+      if(u.pathname==='/api/radar-swarm-status'&&req.method==='GET'){
+        let swarm={status:'UNAVAILABLE',expected_count:12,registered_count:0,running_count:0,failed_count:0,missing_count:12,radars:[]};
+        try{if(typeof radarSwarm?.snapshot==='function')swarm=radarSwarm.snapshot();}catch(error){swarm={...swarm,status:'ERROR',error:String(error?.message??error)};}
+        return send(res,200,{swarm,meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+      }
       if(u.pathname==='/api/radar-control'&&(req.method==='POST'||req.method==='GET')){
         const radar=String(u.searchParams.get('radar')||'').trim().toUpperCase();
         const action=String(u.searchParams.get('action')||'').trim().toLowerCase();

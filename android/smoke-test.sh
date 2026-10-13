@@ -392,8 +392,52 @@ for attempt in $(seq 1 120); do
     sleep 2
     before_ready="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
     old_service_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
-    timeout 15s adb shell am stopservice -n com.radarx.app/.RadarXBackgroundMonitorService
-    sleep 2
+    if [[ -z "${old_service_pid}" ]]; then
+      echo "::error::Background service process was absent before the restart checkpoint"
+      timeout 10s adb shell dumpsys activity services com.radarx.app 2>&1 | tail -n 100 || true
+      exit 1
+    fi
+
+    # MainActivity is singleTop, so the stop test exercises its real onNewIntent path.
+    stop_output="$(timeout 15s adb shell am start -n com.radarx.app/.MainActivity --ez radarx_test_stop_background_monitor true 2>&1)" || {
+      echo "::error::Could not deliver the app-owned background stop intent to MainActivity"
+      echo "${stop_output}"
+      exit 1
+    }
+    echo "${stop_output}"
+    service_stopped=0
+    stop_request_seen=0
+    stop_action_seen=0
+    current_service_pid="${old_service_pid}"
+    service_registered=1
+    for stop_attempt in $(seq 1 20); do
+      current_service_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\\r' || true)"
+      logs="$(replay_logs)"
+      if printf '%s\\n' "${logs}" | grep -Fq 'TEST_STOP_BACKGROUND_MONITOR_REQUEST'; then
+        stop_request_seen=1
+      fi
+      if printf '%s\\n' "${logs}" | grep -Fq 'BACKGROUND_STOP_ACTION_RECEIVED'; then
+        stop_action_seen=1
+      fi
+      service_state="$(timeout 4s adb shell dumpsys activity services com.radarx.app 2>/dev/null || true)"
+      service_registered=1
+      if ! printf '%s\\n' "${service_state}" | grep -Fq 'RadarXBackgroundMonitorService'; then
+        service_registered=0
+      fi
+      # Android may keep an empty process cached after its ServiceRecord is removed.
+      # Verify the lifecycle callback, service-side action, and removal from dumpsys.
+      if [[ "${service_registered}" -eq 0 && "${stop_request_seen}" -eq 1 && "${stop_action_seen}" -eq 1 ]]; then
+        service_stopped=1
+        break
+      fi
+      sleep 1
+    done
+    if [[ "${service_stopped}" -ne 1 ]]; then
+      echo "::error::Background service remained registered after MainActivity stop intent"
+      echo "STOP_REQUEST_SEEN=${stop_request_seen} STOP_ACTION_SEEN=${stop_action_seen} OLD_PID=${old_service_pid} CURRENT_PID=${current_service_pid:-NONE} SERVICE_REGISTERED=${service_registered:-UNKNOWN}"
+      timeout 10s adb shell dumpsys activity services com.radarx.app 2>&1 | tail -n 100 || true
+      exit 1
+    fi
     launch_replay_test_app
     restarted_ready=0
     for restart_attempt in $(seq 1 30); do
