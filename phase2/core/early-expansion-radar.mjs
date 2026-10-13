@@ -1140,7 +1140,9 @@ function usableCachedFiveMinuteSeries(cache, symbol, now, requestedLimit, freshn
     if (index > 0 && openTime - Number(rows[index - 1].openTime) !== FIVE_MINUTE_MS) return null;
   }
   const latest = rows.at(-1);
-  if (now - Number(latest.closeTime) > Math.max(FIVE_MINUTE_MS, Number(freshnessMs) || 8 * 60 * 1000)) {
+  const expectedCloseTime = Math.floor(Number(now) / FIVE_MINUTE_MS) * FIVE_MINUTE_MS - 1;
+  if (Number(latest?.closeTime) !== expectedCloseTime ||
+      Number(now) - Number(latest.closeTime) > Math.max(FIVE_MINUTE_MS, Number(freshnessMs) || 8 * 60 * 1000)) {
     return null;
   }
   return { candles: rows, source: String(latest.source || series?.source || 'BINANCE_PUBLIC_REST_CACHE') };
@@ -1189,25 +1191,39 @@ function usableCachedClosedOneHourSeries(cache, now, requestedLimit=60) {
  * closed, contiguous REST window until a new hour closes. Any failed check falls
  * back to public REST without lowering coverage or signal-quality gates.
  */
-export async function fetchRadar8MarketContext({rest, marketWideKlineCache=null, cachedOneHourContext=null, config={}, eligible=[], now=Date.now()}={}) {
+export async function fetchRadar8MarketContext({rest, marketWideKlineCache=null, cachedFiveMinuteContext=null, cachedOneHourContext=null, config={}, eligible=[], now=Date.now()}={}) {
   if (!rest || typeof rest.klines !== 'function') throw new Error('RADAR8_MARKET_CONTEXT_REST_REQUIRED');
   const fiveMinuteLimit = Math.max(80, Math.trunc(Number(config.fiveMinuteKlines) || 120));
   const oneHourLimit = 60;
-  const cachedFiveMinute = usableCachedFiveMinuteSeries(
+  const sharedFiveMinute = usableCachedFiveMinuteSeries(
     marketWideKlineCache, 'BTCUSDT', Number(now), fiveMinuteLimit, config.freshness5mMs
   );
+  const localFiveMinute = sharedFiveMinute ? null : usableCachedFiveMinuteSeries({
+    getSeries: () => cachedFiveMinuteContext
+  }, 'BTCUSDT', Number(now), fiveMinuteLimit, config.freshness5mMs);
+  const cachedFiveMinute = sharedFiveMinute || localFiveMinute;
   const cachedOneHour = usableCachedClosedOneHourSeries(
     cachedOneHourContext, Number(now), oneHourLimit
   );
   const [m5, m1] = await Promise.all([
     cachedFiveMinute
       ? Promise.resolve(cachedFiveMinute)
-      : rest.klines('BTCUSDT', '5m', {limit:fiveMinuteLimit}),
+      // One extra row ensures 120 CLOSED candles remain available when REST also
+      // returns the current open 5m candle. Open candles are filtered before use.
+      : rest.klines('BTCUSDT', '5m', {limit:fiveMinuteLimit + 1}),
     cachedOneHour
       ? Promise.resolve(cachedOneHour)
       : rest.klines('BTCUSDT', '1h', {limit:oneHourLimit + 1})
   ]);
-  const btcFive = Array.isArray(m5?.candles) ? m5.candles : [];
+  const fiveMinuteFromRest = Array.isArray(m5?.candles)
+    ? m5.candles.filter(row => row?.closed === true && Number(row?.closeTime) <= Number(now)).slice(-fiveMinuteLimit)
+    : [];
+  const fiveMinuteSource = String(m5?.source || 'BINANCE_PUBLIC_REST');
+  const fiveMinuteContextCache = cachedFiveMinute || usableCachedFiveMinuteSeries({
+    getSeries: () => ({candles:fiveMinuteFromRest,source:fiveMinuteSource})
+  }, 'BTCUSDT', Number(now), fiveMinuteLimit, config.freshness5mMs);
+  const btcFive = Array.isArray(fiveMinuteContextCache?.candles)
+    ? fiveMinuteContextCache.candles : fiveMinuteFromRest;
   const oneHourFromRest = Array.isArray(m1?.candles)
     ? m1.candles.filter(row => row?.closed === true && Number(row?.closeTime) <= Number(now)).slice(-oneHourLimit)
     : [];
@@ -1220,6 +1236,7 @@ export async function fetchRadar8MarketContext({rest, marketWideKlineCache=null,
     .map(row => row?.priceChange24h).filter(hasFiniteNumber).map(Number);
   return {
     btcFive,
+    fiveMinuteContextCache,
     oneHourContextCache,
     marketContext: {
       fiveMinute:btcFive,
@@ -1227,7 +1244,8 @@ export async function fetchRadar8MarketContext({rest, marketWideKlineCache=null,
       marketMedianChange24hPct:median(marketMoves),
       marketBreadthPct:marketMoves.length ? marketMoves.filter(value => value > 0).length / marketMoves.length * 100 : null
     },
-    fiveMinuteCacheHit:Boolean(cachedFiveMinute),
+    fiveMinuteCacheHit:Boolean(sharedFiveMinute),
+    fiveMinuteContextCacheHit:Boolean(cachedFiveMinute),
     oneHourCacheHit:Boolean(cachedOneHour)
   };
 }
@@ -1285,6 +1303,7 @@ export class EarlyExpansionRadar{
     this.rest=rest;this.store=store;this.pushManager=pushManager;this.marketWideKlineCache=marketWideKlineCache;
     this.config={...EARLY_EXPANSION_RADAR_DEFAULTS,...config};
     this.clock=clock;this.logger=logger;
+    this.cachedBtcFiveMinuteContext=null;
     this.cachedBtcOneHourContext=null;
     this.marketWideLightScan=new MarketWideLightScan({config:{
       candidateLimit:this.config.marketWideLightScanCandidateLimit,
@@ -1919,20 +1938,23 @@ export class EarlyExpansionRadar{
         if(entry){entry.micro_selected_at=this.clock();entry.micro_selection_lane=row._selection_lane||INCOMPLETE;entry.rejection_reason=INCOMPLETE;}
       }
       phaseTimings.ticker_fast_selection_ms=Math.max(0,this.clock()-tickerFastStartedAt);
-      let btcFive=[],marketContext={},btcFiveMinuteCacheHit=false,btcOneHourContextCacheHit=false;
+      let btcFive=[],marketContext={},btcFiveMinuteCacheHit=false,btcFiveMinuteContextCacheHit=false,btcOneHourContextCacheHit=false;
       const marketContextStartedAt=this.clock();
       let marketContextCompletedAt=marketContextStartedAt;
       const marketContextPromise=(async()=>{
         try{
           const result=await fetchRadar8MarketContext({
             rest:this.rest,marketWideKlineCache:this.marketWideKlineCache,
+            cachedFiveMinuteContext:this.cachedBtcFiveMinuteContext,
             cachedOneHourContext:this.cachedBtcOneHourContext,config:this.config,
             eligible,now:this.clock()
           });
           btcFive=result.btcFive;
           marketContext=result.marketContext;
+          this.cachedBtcFiveMinuteContext=result.fiveMinuteContextCache;
           this.cachedBtcOneHourContext=result.oneHourContextCache;
           btcFiveMinuteCacheHit=result.fiveMinuteCacheHit;
+          btcFiveMinuteContextCacheHit=result.fiveMinuteContextCacheHit;
           btcOneHourContextCacheHit=result.oneHourCacheHit;
         }catch(e){this.noteError(e,'market-context');}
         finally{marketContextCompletedAt=this.clock();}
@@ -2194,6 +2216,7 @@ export class EarlyExpansionRadar{
       }
       const coverage=buildEarlyExpansionUniverseCoverage({expectedSymbols:expected,receivedSymbols,eligibleTotal:eligible.length,fastScannedTotal:eligible.length,scannedTotal:eligible.length,deepScannedTotal,skippedTotal:Math.max(0,eligible.length-deepScannedTotal),failedTotal:deepFailures,failedSymbols,quote:q,minQuoteVolume24h:this.config.minQuoteVolume24h});
       coverage.btc_five_minute_cache_hit=btcFiveMinuteCacheHit;
+      coverage.btc_five_minute_context_cache_hit=this.cachedBtcFiveMinuteContext!==null&&btcFiveMinuteContextCacheHit;
       coverage.btc_one_hour_context_cache_hit=btcOneHourContextCacheHit;
       coverage.micro_scanned_total=microScanned.filter(x=>x&&!x.failed).length;coverage.micro_scan_candidates=selected.length;
       coverage.micro_candidate_target=Math.min(Math.max(1,Math.trunc(this.config.microScanCandidates||36)),eligible.length);
@@ -2245,6 +2268,7 @@ export class EarlyExpansionRadar{
         deep_timeframe_cache_misses_total:coverage.deep_timeframe_cache_misses_total,
         deep_timeframe_cache_entries:coverage.deep_timeframe_cache_entries,
         btc_five_minute_cache_hit:btcFiveMinuteCacheHit,
+        btc_five_minute_context_cache_hit:btcFiveMinuteContextCacheHit,
         btc_one_hour_context_cache_hit:btcOneHourContextCacheHit,
         runtime_memory_bytes:runtimeMemoryBytes,
         quiet_selected_total:coverage.micro_quiet_selected_total,

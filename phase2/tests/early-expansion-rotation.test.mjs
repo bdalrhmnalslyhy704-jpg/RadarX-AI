@@ -118,6 +118,64 @@ test('Radar 8 refreshes stale BTC 1h cache data from REST without reusing an old
   assert.equal(result.marketContext.oneHour.at(-1).closeTime,Math.floor(now/(60*60_000))*60*60_000-1);
 });
 
+test('Radar 8 requests enough BTC 5m rows to retain 120 closed candles and reuses them until the next close',async()=>{
+  const requested=[];
+  let restNow=now;
+  const rest={async klines(symbol,interval,options){
+    requested.push({symbol,interval,limit:options?.limit});
+    const intervalMs=interval==='1h'?60*60_000:5*60_000;
+    const count=interval==='1h'?61:120;
+    const closed=makeClosedCandles(symbol,intervalMs,count,restNow,'BINANCE_PUBLIC_REST');
+    if(interval==='5m'){
+      const openTime=Math.floor(restNow/intervalMs)*intervalMs;
+      closed.push({
+        symbol,openTime,closeTime:openTime+intervalMs-1,
+        open:100,high:101,low:99,close:100.5,volume:100,quoteVolume:10000,tradeCount:100,
+        takerBuyBaseVolume:60,takerBuyQuoteVolume:6000,closed:false,source:'BINANCE_PUBLIC_REST',receivedAt:now
+      });
+    }
+    return {source:'BINANCE_PUBLIC_REST',candles:closed};
+  }};
+  const marketWideKlineCache={getSeries(){return {candles:[],source:'BINANCE_PUBLIC_WS'};}};
+  const first=await fetchRadar8MarketContext({
+    rest,marketWideKlineCache,config:{fiveMinuteKlines:120,freshness5mMs:8*60_000},
+    eligible:[],now
+  });
+  assert.deepEqual(requested.map(x=>x.interval).sort(),['1h','5m']);
+  assert.equal(requested.find(x=>x.interval==='5m').limit,121);
+  assert.equal(first.btcFive.length,120);
+  assert.equal(first.btcFive.every(candle=>candle.closed===true),true);
+  assert.equal(first.fiveMinuteCacheHit,false);
+  assert.equal(first.fiveMinuteContextCacheHit,false);
+  assert.equal(first.fiveMinuteContextCache.candles.length,120);
+  assert.equal(first.oneHourContextCache.candles.length,60);
+
+  requested.length=0;
+  const second=await fetchRadar8MarketContext({
+    rest,marketWideKlineCache,cachedFiveMinuteContext:first.fiveMinuteContextCache,
+    cachedOneHourContext:first.oneHourContextCache,
+    config:{fiveMinuteKlines:120,freshness5mMs:8*60_000},eligible:[],now:now+1_000
+  });
+  assert.deepEqual(requested,[]);
+  assert.equal(second.fiveMinuteCacheHit,false,'local validated cache must not be misreported as shared WebSocket cache');
+  assert.equal(second.fiveMinuteContextCacheHit,true);
+  assert.equal(second.oneHourCacheHit,true);
+  assert.equal(second.btcFive.length,120);
+  assert.equal(second.btcFive.every(candle=>candle.closed===true),true);
+
+  requested.length=0;
+  const nextFiveMinuteClose=Math.floor(now/(5*60_000))*5*60_000+5*60_000+1_000;
+  restNow=nextFiveMinuteClose;
+  const third=await fetchRadar8MarketContext({
+    rest,marketWideKlineCache,cachedFiveMinuteContext:first.fiveMinuteContextCache,
+    cachedOneHourContext:first.oneHourContextCache,
+    config:{fiveMinuteKlines:120,freshness5mMs:8*60_000},eligible:[],now:nextFiveMinuteClose
+  });
+  assert.deepEqual(new Set(requested.map(x=>x.interval)),new Set(['5m']));
+  assert.equal(third.fiveMinuteContextCacheHit,false,'close boundary invalidates the old BTC 5m window');
+  assert.equal(third.fiveMinuteContextCache.candles.length,120);
+});
+
 test('Radar 8 falls back to BTC 5m REST when the shared cache is incomplete',async()=>{
   const requested=[];
   const result=await fetchRadar8MarketContext({
