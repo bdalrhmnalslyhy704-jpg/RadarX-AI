@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import {MULTI_ANALYST_NAMES,analyzeMultiAnalystCandidate,MultiAnalystEngine} from '../core/multi-analyst-engine.mjs';
+import {MULTI_ANALYST_NAMES,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs} from '../core/multi-analyst-engine.mjs';
+
+// Continuous analyst cycles target one minute start-to-start, subtracting the
+// time spent scanning and never scheduling a negative delay after a slow cycle.
+assert.equal(nextContinuousScanDelayMs(60000,0),60000);
+assert.equal(nextContinuousScanDelayMs(60000,12500),47500);
+assert.equal(nextContinuousScanDelayMs(60000,60000),0);
+assert.equal(nextContinuousScanDelayMs(60000,93000),0);
+assert.equal(nextContinuousScanDelayMs(1000,0),15000);
 
 function candle(i,{tf='15m',base=100,trend=0.001,volume=1000}={}){
   const openTime=i*900000,close=base*(1+trend*i);
