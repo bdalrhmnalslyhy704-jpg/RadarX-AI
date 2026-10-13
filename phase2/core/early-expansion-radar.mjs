@@ -1140,7 +1140,9 @@ function usableCachedFiveMinuteSeries(cache, symbol, now, requestedLimit, freshn
     if (index > 0 && openTime - Number(rows[index - 1].openTime) !== FIVE_MINUTE_MS) return null;
   }
   const latest = rows.at(-1);
-  if (now - Number(latest.closeTime) > Math.max(FIVE_MINUTE_MS, Number(freshnessMs) || 8 * 60 * 1000)) {
+  const expectedCloseTime = Math.floor(Number(now) / FIVE_MINUTE_MS) * FIVE_MINUTE_MS - 1;
+  if (Number(latest?.closeTime) !== expectedCloseTime ||
+      Number(now) - Number(latest.closeTime) > Math.max(FIVE_MINUTE_MS, Number(freshnessMs) || 8 * 60 * 1000)) {
     return null;
   }
   return { candles: rows, source: String(latest.source || series?.source || 'BINANCE_PUBLIC_REST_CACHE') };
