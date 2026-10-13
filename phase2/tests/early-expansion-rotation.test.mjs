@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,pruneInactiveSymbolStateMap} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -807,6 +807,23 @@ test('Radar 8 post-cycle ring cleanup prunes inactive symbols and bounds schedul
   assert.equal(radar.schedulerBufferEventsDroppedTotal,2);
   assert.equal(cleanup.scheduler_buffer_dropped_this_cycle,2);
   assert.ok(cleanup.removed_inactive_symbol_entries>=6);
+});
+
+test('Radar 8 post-cycle cleanup preserves rehydrated state when the universe snapshot is unavailable',()=>{
+  const radar=makeRadar();
+  radar.universe=[];
+  radar.lastMicroScanCycleBySymbol.set('RESTOREDUSDT',12);
+  radar.lastDeepScanCycleBySymbol.set('RESTOREDUSDT',10);
+  radar.scheduler.lastStartedAt.set('MICRO:RESTOREDUSDT',now-1000);
+  radar.scheduler.queuedAt.set('DEEP:RESTOREDUSDT',now-2000);
+  radar.marketWideCacheArchiveLastEligibleSymbols.add('RESTOREDUSDT');
+  const cleanup=radar.cleanupRuntimeRingBuffers(now);
+  assert.equal(cleanup.active_symbols,0);
+  assert.equal(radar.lastMicroScanCycleBySymbol.has('RESTOREDUSDT'),true);
+  assert.equal(radar.lastDeepScanCycleBySymbol.has('RESTOREDUSDT'),true);
+  assert.equal(radar.scheduler.lastStartedAt.has('MICRO:RESTOREDUSDT'),true);
+  assert.equal(radar.scheduler.queuedAt.has('DEEP:RESTOREDUSDT'),true);
+  assert.equal(radar.marketWideCacheArchiveLastEligibleSymbols.has('RESTOREDUSDT'),true);
 });
 
 test('Radar 8 scheduled cycles force GC after tick and report post-GC RSS',async()=>{
