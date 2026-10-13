@@ -157,7 +157,14 @@ function cacheTtlMs(path, query = {}) {
 }
 
 function cacheKey(baseUrls, path, query) {
-  return JSON.stringify([baseUrls.slice().sort(), path, normalizedQuery(query)]);
+  // GET /api/v3/ticker/24hr without symbol(s) is Binance's full-market batch
+  // endpoint. Its public Spot payload is interchangeable across the configured
+  // Binance REST mirrors, so all radar-specific RestClient instances can share
+  // one in-flight fetch and one short-lived snapshot instead of each downloading
+  // the same price/volume array through its own fallback list.
+  const allMarketTickerSnapshot=path==='/api/v3/ticker/24hr'&&query.symbol==null&&query.symbols==null;
+  const sourceScope=allMarketTickerSnapshot?'BINANCE_PUBLIC_ALL_TICKERS':baseUrls.slice().sort();
+  return JSON.stringify([sourceScope, path, normalizedQuery(query)]);
 }
 
 function pruneSharedCache(now = Date.now(), force = false) {

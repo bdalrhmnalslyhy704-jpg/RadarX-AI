@@ -8,6 +8,15 @@ const mean=xs=>{const a=xs.filter(Number.isFinite);return a.length?a.reduce((s,x
 const pct=(a,b)=>Number.isFinite(a)&&Number.isFinite(b)&&b>0?(a-b)/b*100:null;
 const sign=v=>Number.isFinite(v)?(v>0?1:v<0?-1:0):0;
 
+async function mapLimit(items,limit,worker){
+  const rows=Array.from(items||[]),out=Array(rows.length);let next=0;
+  const concurrency=Math.max(1,Math.min(rows.length,Math.trunc(Number(limit)||1)));
+  await Promise.all(Array.from({length:concurrency},async()=>{
+    while(true){const index=next++;if(index>=rows.length)return;out[index]=await worker(rows[index],index);}
+  }));
+  return out;
+}
+
 function closedCandles(rows,now){
   return (Array.isArray(rows)?rows:[]).filter(c=>
     c?.closed!==false&&Number.isFinite(Number(c?.openTime))&&Number.isFinite(Number(c?.closeTime))&&
@@ -331,8 +340,8 @@ export function buildRotationAlert(candidate,now=Date.now()){
     reasons:a.reasons,
     risk_flags:[
       Math.abs(finite(ticker.priceChange24h,0))>=10?'24H_ALREADY_EXTENDED':null,
-      a.metrics.volume_ratio<0.8?'LOW_ACTIVITY':null,
-      a.metrics.range_ratio>1.8?'VOLATILITY_ELEVATED':null
+      Number.isFinite(a.metrics?.volume_ratio)&&a.metrics.volume_ratio<0.8?'LOW_ACTIVITY':null,
+      Number.isFinite(a.metrics?.range_ratio)&&a.metrics.range_ratio>1.8?'VOLATILITY_ELEVATED':null
     ].filter(Boolean),
     source:a.source,
     detected_at:now,
@@ -354,7 +363,7 @@ export class RotationLagRadar {
     this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={
       quote:'USDT',pollMs:45000,universeRefreshMs:5*60*1000,minQuoteVolume24h:1000000,
-      rotationBatchSize:5,topLaggers:2,maxAbs24hMovePct:6,alertCooldownMs:15*60*1000,
+      rotationBatchSize:5,topLaggers:2,rotationConcurrency:4,maxAbs24hMovePct:6,alertCooldownMs:15*60*1000,
       minScore:82,minConfirmations:5,...config
     };
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
@@ -486,10 +495,12 @@ export class RotationLagRadar {
       const [rows,benchmarks]=await Promise.all([this.tickerRows(),this.benchmarkData()]);
       const selected=this.selectBatch(rows);
       this.lastScanAtMs=this.clock();
-      for(const row of selected){
-        if(!this.running)break;
-        try{await this.scanRow(row,benchmarks);}catch(e){this.noteError(e);}
-      }
+      // Keep a bounded worker pool: symbols are independent, but a full fan-out
+      // would compete with the other eleven radars for the process-wide REST budget.
+      await mapLimit(selected,Math.max(1,Math.min(6,this.config.rotationConcurrency)),async row=>{
+        if(!this.running)return null;
+        try{return await this.scanRow(row,benchmarks);}catch(e){this.noteError(e);return null;}
+      });
     }finally{this.busy=false;}
   }
 

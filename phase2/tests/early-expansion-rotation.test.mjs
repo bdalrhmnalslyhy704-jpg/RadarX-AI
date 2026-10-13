@@ -513,3 +513,53 @@ test('Radar 8 deep rotation prioritizes never-scanned eligible symbols over rece
   assert.ok(selected.some(x=>x.row.symbol===target&&x._selection_lane==='rotation'),
     JSON.stringify({target,selected:selected.map(x=>({symbol:x.row.symbol,lane:x._selection_lane,neverDeep:x._neverScanned,wait:x._deepWaitAgeMs}))}));
 });
+
+
+function alignedClosedCandles(symbol, intervalMs, count, at=now) {
+  const latestClose=Math.floor(at/intervalMs)*intervalMs-1;
+  return Array.from({length:count},(_,i)=>{
+    const openTime=latestClose-intervalMs+1-(count-1-i)*intervalMs;
+    return {
+      symbol,openTime,closeTime:openTime+intervalMs-1,
+      open:100,high:101,low:99,close:100.5,volume:100,
+      quoteVolume:10000,tradeCount:100,takerBuyBaseVolume:60,takerBuyQuoteVolume:6000,
+      closed:true,source:'BINANCE_PUBLIC_REST',receivedAt:at-1000
+    };
+  });
+}
+
+test('Radar 8 reuses a validated local closed 5m window on the next cycle',async()=>{
+  const calls={'1m':0,'5m':0};
+  const rest={
+    health:()=>({shared_estimated_weight_last_minute:0,shared_max_weight_per_minute:4000}),
+    async klines(symbol,interval,{limit}={}){
+      calls[interval]=(calls[interval]||0)+1;
+      const step=interval==='1m'?60_000:interval==='5m'?300_000:900_000;
+      return {source:'https://data-api.binance.vision',candles:alignedClosedCandles(symbol,step,limit||3,now)};
+    }
+  };
+  const radar=new EarlyExpansionRadar({rest,store:{},config:{
+    oneMinuteKlines:3,fiveMinuteKlines:3,retryAttempts:0
+  },clock:()=>now,logger:{warn(){}}});
+  const row={symbol:'CACHE5MUSDT',lastPrice:100,priceChange24h:0.5,quoteVolume24h:2_000_000,tradeCount24h:5000};
+  const first=await radar.microScan(row,{},[]);
+  assert.equal(first.five_minute_cache_hit,false);
+  assert.equal(calls['5m'],1);
+  assert.equal(radar.microFiveMinuteWindowCache.size,1);
+  const second=await radar.microScan(row,{},[]);
+  assert.equal(second.five_minute_cache_hit,true);
+  assert.equal(second.five_minute_cache_tier,'RADAR8_LOCAL');
+  assert.equal(calls['5m'],1,'fresh validated 5m data must not incur a duplicate REST request');
+  assert.equal(calls['1m'],2,'1m remains live each cycle');
+});
+
+test('Radar 8 cache cleanup evicts stale timeframe windows and remains bounded',()=>{
+  const radar=makeRadar({fiveMinuteKlines:3});
+  radar.deepCandleWindowCache.set('OLDUSDT:15m:160',{candles:[{}],latestCloseTime:0});
+  radar.microFiveMinuteWindowCache.set('OLDUSDT',{candles:[{}],latestCloseTime:0});
+  const report=radar.pruneCandleWindowCaches(now);
+  assert.equal(report.deep_removed,1);
+  assert.equal(report.micro_5m_removed,1);
+  assert.equal(report.deep_entries,0);
+  assert.equal(report.micro_5m_entries,0);
+});
