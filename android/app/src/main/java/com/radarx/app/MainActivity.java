@@ -269,6 +269,13 @@ public final class MainActivity extends Activity {
             return; // Release APKs never read or honor this test-only override.
         }
         SharedPreferences prefs = getSharedPreferences(PREFS_BACKGROUND, MODE_PRIVATE);
+        // CI invokes this explicit lifecycle hook only in a debuggable APK. Keep the
+        // service non-exported; the activity delivers ACTION_STOP from the app UID.
+        if (launchIntent != null &&
+                launchIntent.getBooleanExtra("radarx_test_stop_background_monitor", false)) {
+            Log.i("RadarXSmoke", "TEST_STOP_BACKGROUND_MONITOR_REQUEST");
+            stopBackgroundMonitor();
+        }
         String feedUrl = launchIntent == null ? null : launchIntent.getStringExtra("radarx_test_alert_feed_url");
         if (feedUrl == null || feedUrl.isEmpty()) {
             prefs.edit().remove(PREF_REPLAY_TEST_FEED_URL).remove(PREF_REPLAY_TEST_SCAN_MS).commit();
@@ -292,6 +299,8 @@ public final class MainActivity extends Activity {
         boolean saved = prefs.edit()
                 .putString(PREF_REPLAY_TEST_FEED_URL, feedUrl)
                 .putLong(PREF_REPLAY_TEST_SCAN_MS, intervalMs)
+                // The next Activity launch after the test-only stop must auto-resume.
+                .putBoolean(PREF_AUTO_ENABLED, true)
                 .commit();
         if (saved) Log.i("RadarXSmoke", "REPLAY_TEST_OVERRIDE_CONFIGURED");
         else Log.e("RadarXSmoke", "REPLAY_TEST_OVERRIDE_PERSIST_FAILED");
