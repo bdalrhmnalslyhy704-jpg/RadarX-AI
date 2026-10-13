@@ -348,7 +348,7 @@ export function runHistoricalReplay({
       replay_mode: tradeCoverageComplete ? "FULL_TRADE" : (candleOnlyFallback ? "CANDLE_ONLY_FALLBACK" : "BLOCKED_INCOMPLETE"),
       candle_only_fallback_used: Boolean(candleOnlyFallback),
       closed_1m_candles: candles.length, complete_5m_candles: five.length,
-      aggregate_trades: trades.length, trade_coverage_complete: Boolean(tradeCoverageComplete),
+      aggregate_trades: tradeCoverageComplete ? trades.length : 0, trade_coverage_complete: Boolean(tradeCoverageComplete),
       target_crossing_timestamp_source: targetCrossingSource,
       target_crossing_alignment: {plus_50:actual50Alignment,plus_70:actual70Alignment},
       trade_coverage: tradeCoverage, lookahead_guard: "evaluator receives only candles/trades timestamped before or at each decision; forward outcomes are calculated afterward"
