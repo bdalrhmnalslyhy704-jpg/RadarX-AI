@@ -398,9 +398,9 @@ for attempt in $(seq 1 120); do
       exit 1
     fi
 
-    # Invoke the stop action through MainActivity inside the app UID. The
-    # service deliberately remains non-exported, so adb shell must not start it directly.
-    stop_output="$(timeout 15s adb shell am start -n com.radarx.app/.MainActivity --ez radarx_test_stop_background_monitor true 2>&1)" || {
+    # Ask a debug-only in-app receiver to dispatch ACTION_STOP from the app UID.
+    # The production service remains non-exported, and the receiver is excluded from release APKs.
+    stop_output="$(timeout 15s adb shell am broadcast -n com.radarx.app/.DebugBackgroundStopReceiver -a com.radarx.app.DEBUG_STOP_BACKGROUND_MONITOR 2>&1)" || {
       echo "::error::Could not request the debug-only app-owned background stop action"
       echo "${stop_output}"
       exit 1
@@ -408,21 +408,34 @@ for attempt in $(seq 1 120); do
     echo "${stop_output}"
     service_stopped=0
     stop_request_seen=0
+    stop_action_seen=0
+    current_service_pid="${old_service_pid}"
+    service_registered=1
     for stop_attempt in $(seq 1 20); do
-      current_service_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
+      current_service_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\\r' || true)"
       logs="$(replay_logs)"
-      if printf '%s\n' "${logs}" | grep -Fq 'TEST_STOP_BACKGROUND_MONITOR_REQUEST'; then
+      if printf '%s\\n' "${logs}" | grep -Fq 'TEST_STOP_BACKGROUND_MONITOR_REQUEST'; then
         stop_request_seen=1
       fi
-      if [[ -z "${current_service_pid}" && "${stop_request_seen}" -eq 1 ]]; then
+      if printf '%s\\n' "${logs}" | grep -Fq 'BACKGROUND_STOP_ACTION_RECEIVED'; then
+        stop_action_seen=1
+      fi
+      service_state="$(timeout 4s adb shell dumpsys activity services com.radarx.app 2>/dev/null || true)"
+      service_registered=1
+      if ! printf '%s\\n' "${service_state}" | grep -Fq 'RadarXBackgroundMonitorService'; then
+        service_registered=0
+      fi
+      # Android may keep an empty process cached after its ServiceRecord is removed.
+      # Confirm the real stop action and service removal, not Linux process exit.
+      if [[ "${service_registered}" -eq 0 && "${stop_request_seen}" -eq 1 && "${stop_action_seen}" -eq 1 ]]; then
         service_stopped=1
         break
       fi
       sleep 1
     done
     if [[ "${service_stopped}" -ne 1 ]]; then
-      echo "::error::Background service did not exit after app-owned stop action"
-      echo "STOP_REQUEST_SEEN=${stop_request_seen} OLD_PID=${old_service_pid} CURRENT_PID=${current_service_pid:-NONE}"
+      echo "::error::Background service remained registered after app-owned stop action"
+      echo "STOP_REQUEST_SEEN=${stop_request_seen} STOP_ACTION_SEEN=${stop_action_seen} OLD_PID=${old_service_pid} CURRENT_PID=${current_service_pid:-NONE} SERVICE_REGISTERED=${service_registered:-UNKNOWN}"
       timeout 10s adb shell dumpsys activity services com.radarx.app 2>&1 | tail -n 100 || true
       exit 1
     fi
