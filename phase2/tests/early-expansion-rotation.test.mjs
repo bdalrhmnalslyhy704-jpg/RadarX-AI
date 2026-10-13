@@ -190,38 +190,47 @@ test('Radar 8 falls back to BTC 5m REST when the shared cache is incomplete',asy
   assert.equal(result.marketContext.marketBreadthPct,null);
 });
 
-test('Radar 8 adaptive Micro concurrency respects cache readiness, REST headroom and candidate bounds',()=>{
+test('Radar 8 adaptive Micro concurrency respects cache readiness, shared REST request/weight headroom and candidate bounds',()=>{
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
-    {shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},18),10);
+    {shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},18),10);
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:10},
-    {shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000},18),4);
+    {shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000},18),4);
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
-    {shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000},18),6);
+    {shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000},18),6);
   // A partially warmed cache can use two extra workers only when REST weight is healthy.
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:40},
-    {shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},18),8);
+    {shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},18),8);
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:40},
-    {shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000},18),6);
+    {shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000},18),6);
   // Near the headroom boundary, the conservative 8-worker tier stays active.
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
-    {shared_estimated_weight_last_minute:2200,shared_max_weight_per_minute:4000},18),8);
+    {shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:2200,shared_max_weight_per_minute:4000},18),8);
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
-    {shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},3),3);
+    {shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},3),3);
   assert.equal(adaptiveRadar8MicroConcurrency(0,{}, {},18),6);
   assert.equal(adaptiveRadar8MicroConcurrency(99,{expected_symbols:100,ready_symbols:100},
-    {shared_estimated_weight_last_minute:0,shared_max_weight_per_minute:4000},18),10);
+    {shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:0,shared_max_weight_per_minute:4000},18),10);
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:100},
+    {shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},18),6,
+    'unknown shared request pressure must not promote concurrency');
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:100},
+    {shared_requests_last_minute:350,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},18),6,
+    'high request-count pressure blocks the extra tier even when request weight is low');
 });
 
 test('Radar 8 adaptive Deep concurrency adds one worker only with full cache readiness and measured REST headroom',()=>{
   const ready={expected_symbols:100,ready_symbols:80};
-  const headroom={shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000};
-  const pressure={shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000};
+  const headroom={shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000};
+  const pressure={shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000};
   assert.equal(adaptiveRadar8DeepConcurrency(4,ready,headroom,5),5);
   assert.equal(adaptiveRadar8DeepConcurrency(4,ready,pressure,5),4);
   assert.equal(adaptiveRadar8DeepConcurrency(4,{expected_symbols:100,ready_symbols:40},headroom,5),4);
   assert.equal(adaptiveRadar8DeepConcurrency(4,ready,headroom,3),3);
   assert.equal(adaptiveRadar8DeepConcurrency(4,ready,headroom,0),1);
   assert.equal(adaptiveRadar8DeepConcurrency(0,{}, {},5),4);
+  assert.equal(adaptiveRadar8DeepConcurrency(4,ready,
+    {shared_requests_last_minute:350,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},5),4,
+    'deep worker promotion is blocked by high shared request-count pressure');
 });
 
 test('Radar 8 reuses only a complete fresh closed 5m cache window and keeps 1m REST fresh',async()=>{
@@ -681,7 +690,7 @@ function alignedClosedCandles(symbol, intervalMs, count, at=now) {
 test('Radar 8 reuses a validated local closed 5m window on the next cycle',async()=>{
   const calls={'1m':0,'5m':0};
   const rest={
-    health:()=>({shared_estimated_weight_last_minute:0,shared_max_weight_per_minute:4000}),
+    health:()=>({shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:0,shared_max_weight_per_minute:4000}),
     async klines(symbol,interval,{limit}={}){
       calls[interval]=(calls[interval]||0)+1;
       const step=interval==='1m'?60_000:interval==='5m'?300_000:900_000;
