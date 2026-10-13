@@ -886,6 +886,12 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   };
 };
 
+export function nextContinuousScanDelayMs(intervalMs, elapsedMs=0){
+  const interval=Math.max(15000,Number(intervalMs)||60000);
+  const elapsed=Number(elapsedMs);
+  return Math.max(0,interval-(Number.isFinite(elapsed)?Math.max(0,elapsed):0));
+}
+
 export class MultiAnalystEngine {
   constructor({rest,config={},clock=()=>Date.now(),store=null}={}){
     this.store=store;
@@ -894,7 +900,7 @@ export class MultiAnalystEngine {
     this.config={
       quote:'USDT',discoveryPool:28,deepScanPool:16,returnLimit:8,deepConcurrency:3,deepKlines:220,
       minQuoteVolume24h:300000,minDataQuality:70,minLiquidityQuality:60,
-      ttlMs:45000,...config
+      ttlMs:45000,continuousIntervalMs:60000,continuousWarmupMs:8000,...config
     };
     this.scanner=new MarketUniverseScanner({
       rest,
@@ -1148,11 +1154,14 @@ export class MultiAnalystEngine {
       this.monitorStats.scan_count=Number(this.monitorStats.scan_count||0)+1;
       this.monitorStats.last_scan_at=value.as_of;
       this.monitorStats.last_error=null;
-      this.monitorStats.next_scan_at=new Date(this.clock()+Math.max(15000,Number(this.config.continuousIntervalMs)||90000)).toISOString();
+      const monitorIntervalMs=Math.max(15000,Number(this.config.continuousIntervalMs)||60000);
+      const elapsedMs=Math.max(0,this.clock()-startedAt);
+      const nextDelayMs=nextContinuousScanDelayMs(monitorIntervalMs,elapsedMs);
+      this.monitorStats.next_scan_at=this.running?new Date(this.clock()+nextDelayMs).toISOString():null;
       value.monitoring={
         continuous:true,
         running:this.running,
-        interval_ms:Math.max(15000,Number(this.config.continuousIntervalMs)||90000),
+        interval_ms:monitorIntervalMs,
         scan_count:this.monitorStats.scan_count,
         last_scan_at:this.monitorStats.last_scan_at,
         last_error:null,
@@ -1170,18 +1179,22 @@ export class MultiAnalystEngine {
     if(this.running)return;
     this.running=true;
     this.monitorStartedAt=this.clock();
-    const interval=Math.max(15000,Number(this.config.continuousIntervalMs)||90000);
+    const interval=Math.max(15000,Number(this.config.continuousIntervalMs)||60000);
     const warmup=Math.max(0,Number(this.config.continuousWarmupMs)||8000);
     const loop=async()=>{
       if(!this.running)return;
+      const cycleStartedAt=this.clock();
       try{
         await this.scan({quote:this.config.quote,limit:this.config.returnLimit});
       }catch(error){
         this.monitorStats.last_error=String(error?.message||error);
       }
       if(!this.running)return;
-      this.monitorStats.next_scan_at=new Date(this.clock()+interval).toISOString();
-      this.monitorTimer=setTimeout(loop,interval);
+      // Schedule against the cycle start, not cycle completion, so scan work does
+      // not silently stretch a requested 60-second cadence into 2–3 minutes.
+      const delayMs=nextContinuousScanDelayMs(interval,this.clock()-cycleStartedAt);
+      this.monitorStats.next_scan_at=new Date(this.clock()+delayMs).toISOString();
+      this.monitorTimer=setTimeout(loop,delayMs);
     };
     this.monitorTimer=setTimeout(loop,warmup);
   }
