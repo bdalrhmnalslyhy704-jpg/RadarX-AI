@@ -36,6 +36,7 @@ test('TEST_FIXTURE: concurrent distinct REST requests reserve the shared budget 
   assert.ok(starts[2]-starts[1]>=130,JSON.stringify(starts));
   const health=client.health();
   assert.equal(health.binance_reported_used_weight_1m,103);
+  assert.equal(health.shared_max_requests_per_minute,420);
   assert.equal(health.shared_max_weight_per_minute,4000);
   assert.ok(Number(health.shared_estimated_weight_last_minute)>=6);
 });
