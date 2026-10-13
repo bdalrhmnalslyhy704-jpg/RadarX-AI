@@ -1115,10 +1115,13 @@ const TRUSTED_FIVE_MINUTE_CACHE_SOURCES = new Set([
  * forces the original REST path; cache state can never silently reduce coverage.
  */
 function usableCachedFiveMinuteSeries(cache, symbol, now, requestedLimit, freshnessMs) {
-  let series;
-  try { series = cache?.getSeries?.(symbol); } catch { return null; }
-  const all = Array.isArray(series?.candles) ? series.candles : [];
   const limit = Math.max(1, Math.trunc(Number(requestedLimit) || 180));
+  let series;
+  // Real cache implementations accept a tail limit, allowing BTC context to ask
+  // for 120 bars while smaller consumers avoid cloning the entire cache. Test
+  // doubles or legacy providers may ignore the optional second argument safely.
+  try { series = cache?.getSeries?.(symbol, limit); } catch { return null; }
+  const all = Array.isArray(series?.candles) ? series.candles : [];
   if (all.length < limit) return null;
   const rows = all.slice(-limit);
   const trusted = row => TRUSTED_FIVE_MINUTE_CACHE_SOURCES.has(String(row?.source || series?.source || ''));
@@ -1878,7 +1881,7 @@ export class EarlyExpansionRadar{
       if(this.config.marketWideLightScanEnabled!==false){
         try{
           marketWideLightResult=this.marketWideLightScan.scan({
-            eligible,getSeries:symbol=>this.marketWideKlineCache?.getSeries(symbol)||null,
+            eligible,getSeries:symbol=>this.marketWideKlineCache?.getSeries(symbol,96)||null,
             now:fastSeenAt,cycle,
             isExceptional:row=>{
               const fast=fastBySymbol.get(row.symbol)||{};
