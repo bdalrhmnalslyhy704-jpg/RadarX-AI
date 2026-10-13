@@ -106,6 +106,25 @@ test('TEST_FIXTURE: short market-data cache reuses fresh identical requests',asy
 });
 
 
+test('TEST_FIXTURE: a very short Kline response cache reduces duplicate calls without promoting open candles',async()=>{
+  const now=Date.now(),step=5*60_000,currentOpen=Math.floor(now/step)*step,previousOpen=currentOpen-step;
+  let calls=0;
+  const raw=[
+    [previousOpen,'100','101','99','100','1000',previousOpen+step-1,100000,10,500,50000,'0'],
+    [currentOpen,'100','101','99','100','1000',currentOpen+step-1,100000,10,500,50000,'0']
+  ];
+  const client=new RestClient({
+    baseUrls:['https://kline-cache.test'],timeoutMs:200,minIntervalMs:0,maxRequestsPerMinute:100,
+    fetchImpl:async()=>{calls++;return{status:200,ok:true,headers:new Map(),json:async()=>raw};}
+  });
+  const first=await client.klines('CACHEKLINEUSDT','5m',{limit:96});
+  const second=await client.klines('CACHEKLINEUSDT','5m',{limit:96});
+  assert.equal(calls,1,'identical public Kline requests within the short cache window are reused');
+  assert.equal(first.candles.length,2);
+  assert.equal(second.candles[0].closed,true,'completed candles remain available from the shared cache');
+  assert.equal(second.candles[1].closed,false,'a cached in-progress candle remains open and downstream gates must reject it');
+});
+
 test('TEST_FIXTURE: shared REST cache prunes expired rotating-symbol payloads instead of retaining them indefinitely',async()=>{
   let calls=0;
   const fetchImpl=async url=>{
