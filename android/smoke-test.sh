@@ -193,7 +193,7 @@ assert_background_service_declared() {
   # alone must not fail a correctly running service. Conversely, a manifest or log
   # marker alone is not enough: Android must currently hold the service instance.
   local logs runtime_state service_pid service_pid_source
-  logs="$(cat "\${APP_LOG_FILE:-/nonexistent}" 2>/dev/null || true)"
+  logs="$(cat "${APP_LOG_FILE:-/nonexistent}" 2>/dev/null || true)"
   runtime_state="$(timeout 15s adb shell dumpsys activity services com.radarx.app 2>/dev/null || true)"
   service_pid="$(timeout 12s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
   service_pid_source="pidof"
@@ -207,7 +207,7 @@ assert_background_service_declared() {
   fi
   if ! printf '%s\n' "$runtime_state" | grep -Fq 'RadarXBackgroundMonitorService' || [[ -z "$service_pid" ]]; then
     echo "::error::Manifest is valid but Android does not show a live background-monitor service process"
-    echo "BACKGROUND_SERVICE_PID=\${service_pid:-NONE} PID_SOURCE=$service_pid_source"
+    echo "BACKGROUND_SERVICE_PID=${service_pid:-NONE} PID_SOURCE=$service_pid_source"
     if printf '%s\n' "$logs" | grep -Fq 'BACKGROUND_SERVICE_READY'; then
       echo "BACKGROUND_READY_MARKER=present"
     else
