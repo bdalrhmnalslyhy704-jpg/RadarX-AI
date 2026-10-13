@@ -339,6 +339,39 @@ test('Radar 8 activates guarded candidate pooling at 10 percent verified cache c
     'coverage thresholds are clamped to the valid range');
 });
 
+test('Radar 8 burst-priority mode gives five Micro slots to verified early activity bursts without expanding the batch',()=>{
+  assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.exceptionalRotationBypassSlots,5);
+  const radar=makeRadar({microScanCandidates:18,quietReserve:8,rotationReserve:8,exceptionalRotationBypassSlots:5});
+  const input=rows(60),fast=fastMap(input);
+  for(const row of input.slice(0,8)){
+    fast.set(row.symbol,{price_change_pct:.42,price_acceleration_pct:.20,volume_accel_ratio:3.2,trade_accel_ratio:2.1});
+  }
+  const selected=radar.selectMicro(input,fast,7);
+  const lane=name=>selected.filter(x=>x._selection_lane===name).length;
+  assert.equal(selected.length,18,'burst priority cannot increase REST workload per cycle');
+  assert.equal(new Set(selected.map(x=>x.symbol)).size,18);
+  assert.equal(lane('exceptional'),5,'prioritize up to five independent fast-activity bursts');
+  assert.equal(lane('score'),2,'retain ranked-score observations');
+  assert.equal(lane('quiet'),6,'retain quiet-base observations');
+  assert.equal(lane('rotation'),5,'retain fair rotation coverage');
+});
+
+test('Radar 8 Deep burst prioritization still preserves one score slot and one rotation slot',()=>{
+  const radar=makeRadar({deepCandidates:5,quietReserve:8,rotationReserve:8,exceptionalRotationBypassSlots:5});
+  const items=Array.from({length:12},(_,i)=>candidate('BURST'+String(i).padStart(2,'0')+'USDT',1+i*.1,{score:90-i}));
+  for(const item of items.slice(0,5)){
+    item.micro_fingerprint.activity_shock={detected:true,stage:'EVENT_DRIVEN_BREAKOUT',score:92,
+      watch_only:true,entry_eligible:false,extended:false};
+  }
+  const selected=radar.selectDeepFromMicro(items,17);
+  assert.equal(selected.length,5);
+  assert.equal(new Set(selected.map(x=>x.row.symbol)).size,5);
+  assert.equal(selected.filter(x=>x._selection_lane==='exceptional').length,3,
+    'reserve Deep capacity for score and fair rotation even during simultaneous bursts');
+  assert.equal(selected.filter(x=>x._selection_lane==='score'||x._selection_lane==='fill_score').length,1);
+  assert.equal(selected.filter(x=>x._selection_lane==='rotation'||x._selection_lane==='fill_rotation').length,1);
+});
+
 test('Radar 8 capacity of 18 preserves event, ranked-score, quiet, and rotation lanes',()=>{
   const radar=makeRadar({microScanCandidates:18,quietReserve:8,rotationReserve:8,exceptionalRotationBypassSlots:3});
   const input=rows(60),fast=fastMap(input);
