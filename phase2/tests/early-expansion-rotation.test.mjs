@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -45,6 +45,118 @@ function candidate(symbol,move,{score=65,participation=75,tradeParticipation=70,
   };
 }
 
+
+
+function makeClosedCandles(symbol, intervalMs, count, at=now, source='BINANCE_PUBLIC_REST') {
+  const latestOpen = Math.floor((at - intervalMs) / intervalMs) * intervalMs;
+  return Array.from({length:count},(_,i)=>{
+    const openTime=latestOpen-(count-1-i)*intervalMs;
+    return {
+      symbol,openTime,closeTime:openTime+intervalMs-1,
+      open:100,high:101,low:99,close:100.5,volume:100,
+      quoteVolume:10000,tradeCount:100,takerBuyBaseVolume:60,takerBuyQuoteVolume:6000,
+      closed:true,source,receivedAt:at-1000
+    };
+  });
+}
+
+test('Radar 8 adaptive Micro concurrency respects cache readiness, shared REST pressure and candidate bounds',()=>{
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
+    {shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},18),8);
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:10},
+    {shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000},18),4);
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
+    {shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000},18),6);
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
+    {shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},3),3);
+  assert.equal(adaptiveRadar8MicroConcurrency(0,{}, {},18),6);
+  assert.equal(adaptiveRadar8MicroConcurrency(99,{expected_symbols:100,ready_symbols:100},
+    {shared_estimated_weight_last_minute:0,shared_max_weight_per_minute:4000},18),8);
+});
+
+test('Radar 8 reuses only a complete fresh closed 5m cache window and keeps 1m REST fresh',async()=>{
+  const requested=[];
+  const oneMinute=makeClosedCandles('CACHEUSDT',60_000,180,now);
+  const fiveMinute=makeClosedCandles('CACHEUSDT',5*60_000,180,now,'BINANCE_PUBLIC_WS');
+  const btcFiveMinute=makeClosedCandles('BTCUSDT',5*60_000,180,now,'BINANCE_PUBLIC_WS');
+  const radar=new EarlyExpansionRadar({
+    rest:{
+      async klines(symbol,interval){
+        requested.push(interval);
+        return {candles:interval==='1m'?oneMinute:fiveMinute,source:'BINANCE_PUBLIC_REST'};
+      }
+    },
+    store:{},
+    marketWideKlineCache:{getSeries(symbol){return {symbol,candles:fiveMinute,source:'BINANCE_PUBLIC_WS'};}},
+    config:{oneMinuteKlines:180,fiveMinuteKlines:180},
+    clock:()=>now,logger:{warn(){}}
+  });
+  const result=await radar.microScan({
+    symbol:'CACHEUSDT',lastPrice:100.5,priceChange24h:1,quoteVolume24h:1_000_000,tradeCount24h:1000
+  },{},btcFiveMinute);
+  assert.deepEqual(requested,['1m'],'cache reuse must remove only the duplicated 5m REST request');
+  assert.equal(result.five_minute_cache_hit,true);
+  assert.equal(result.five_minute_cache_source,'BINANCE_PUBLIC_WS');
+  assert.equal(result.fiveMinute.length,180);
+  assert.equal(result.micro_fingerprint.closed_candles_only,true);
+});
+
+test('Radar 8 falls back to Binance REST when its cached 5m history is incomplete',async()=>{
+  const requested=[];
+  const oneMinute=makeClosedCandles('CACHEFALLBACKUSDT',60_000,180,now);
+  const fiveMinute=makeClosedCandles('CACHEFALLBACKUSDT',5*60_000,180,now,'BINANCE_PUBLIC_REST');
+  const staleWindow=fiveMinute.slice(1);
+  const btcFiveMinute=makeClosedCandles('BTCUSDT',5*60_000,180,now,'BINANCE_PUBLIC_WS');
+  const radar=new EarlyExpansionRadar({
+    rest:{
+      async klines(symbol,interval){
+        requested.push(interval);
+        return {candles:interval==='1m'?oneMinute:fiveMinute,source:'BINANCE_PUBLIC_REST'};
+      }
+    },
+    store:{},
+    marketWideKlineCache:{getSeries(symbol){return {symbol,candles:staleWindow,source:'BINANCE_PUBLIC_REST'};}},
+    config:{oneMinuteKlines:180,fiveMinuteKlines:180},
+    clock:()=>now,logger:{warn(){}}
+  });
+  const result=await radar.microScan({
+    symbol:'CACHEFALLBACKUSDT',lastPrice:100.5,priceChange24h:1,quoteVolume24h:1_000_000,tradeCount24h:1000
+  },{},btcFiveMinute);
+  assert.deepEqual(new Set(requested),new Set(['1m','5m']));
+  assert.equal(requested.length,2);
+  assert.equal(result.five_minute_cache_hit,false);
+  assert.equal(result.fiveMinute.length,180);
+});
+
+
+test('Radar 8 caches only a complete closed higher-timeframe window until the next candle closes',async()=>{
+  let clockNow=now;
+  const requests=[];
+  const step=15*60_000;
+  const radar=new EarlyExpansionRadar({
+    rest:{
+      async klines(symbol,interval,{limit}){
+        requests.push({symbol,interval,limit});
+        return {source:'BINANCE_PUBLIC_REST',candles:makeClosedCandles(symbol,step,limit-1,clockNow,'BINANCE_PUBLIC_REST')};
+      }
+    },
+    store:{},clock:()=>clockNow,logger:{warn(){}},
+    config:{retryAttempts:0,fifteenMinuteKlines:160,freshness15mMs:20*60_000}
+  });
+  const first=await radar.deepTimeframeKlines('DEEPCACHEUSDT','15m',160,20*60_000);
+  assert.equal(first.cache_hit,false);
+  assert.equal(first.candles.length,159);
+  const sameInterval=await radar.deepTimeframeKlines('DEEPCACHEUSDT','15m',160,20*60_000);
+  assert.equal(sameInterval.cache_hit,true);
+  assert.equal(sameInterval.candles.length,first.candles.length);
+  assert.equal(requests.length,1,'the same fully closed 15m window must not trigger duplicate REST requests');
+  clockNow+=step;
+  const nextInterval=await radar.deepTimeframeKlines('DEEPCACHEUSDT','15m',160,20*60_000);
+  assert.equal(nextInterval.cache_hit,false,'a newly closed candle must force a fresh Binance response');
+  assert.equal(requests.length,2);
+  assert.equal(radar.deepCandleCacheHitTotal,1);
+  assert.equal(radar.deepCandleCacheMissTotal,2);
+});
 
 test('Radar 8 activates guarded candidate pooling at 10 percent verified cache coverage but never with an unhealthy stream',()=>{
   assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.marketWideLightScanMinCoverageRatio,0.10,

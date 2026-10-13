@@ -1101,6 +1101,71 @@ export function isMarketWideCachePoolReady(cacheProof, minimumCoverageRatio=0.10
     cacheProof?.websocket_sync_ready===true&&ratio>=minimum;
 }
 
+const FIVE_MINUTE_MS = 5 * 60 * 1000;
+const TRUSTED_FIVE_MINUTE_CACHE_SOURCES = new Set([
+  'BINANCE_PUBLIC_WS', 'BINANCE_PUBLIC_REST', 'BINANCE_PUBLIC_REST_CACHE'
+]);
+
+/**
+ * Reuse only a complete, contiguous, fresh Binance 5m CLOSED-candle window.
+ * Any gap, open/future candle, weak source, missing activity field or stale tail
+ * forces the original REST path; cache state can never silently reduce coverage.
+ */
+function usableCachedFiveMinuteSeries(cache, symbol, now, requestedLimit, freshnessMs) {
+  let series;
+  try { series = cache?.getSeries?.(symbol); } catch { return null; }
+  const all = Array.isArray(series?.candles) ? series.candles : [];
+  const limit = Math.max(1, Math.trunc(Number(requestedLimit) || 180));
+  if (all.length < limit) return null;
+  const rows = all.slice(-limit);
+  const trusted = row => TRUSTED_FIVE_MINUTE_CACHE_SOURCES.has(String(row?.source || series?.source || ''));
+  for (let index = 0; index < rows.length; index++) {
+    const row = rows[index];
+    const openTime = Number(row?.openTime), closeTime = Number(row?.closeTime);
+    const open = Number(row?.open), high = Number(row?.high), low = Number(row?.low), close = Number(row?.close);
+    const volume = Number(row?.volume), tradeCount = Number(row?.tradeCount);
+    const takerBase = Number(row?.takerBuyBaseVolume), takerQuote = Number(row?.takerBuyQuoteVolume);
+    if (row?.closed !== true || !trusted(row) ||
+        !Number.isFinite(openTime) || !Number.isFinite(closeTime) ||
+        closeTime !== openTime + FIVE_MINUTE_MS - 1 || closeTime >= now ||
+        !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close) ||
+        open <= 0 || close <= 0 || low <= 0 || high < Math.max(open, close) || low > Math.min(open, close) ||
+        !Number.isFinite(volume) || volume < 0 || !Number.isFinite(tradeCount) || tradeCount < 0 ||
+        !Number.isFinite(takerBase) || takerBase < 0 || !Number.isFinite(takerQuote) || takerQuote < 0) {
+      return null;
+    }
+    if (index > 0 && openTime - Number(rows[index - 1].openTime) !== FIVE_MINUTE_MS) return null;
+  }
+  const latest = rows.at(-1);
+  if (now - Number(latest.closeTime) > Math.max(FIVE_MINUTE_MS, Number(freshnessMs) || 8 * 60 * 1000)) {
+    return null;
+  }
+  return { candles: rows, source: String(latest.source || series?.source || 'BINANCE_PUBLIC_REST_CACHE') };
+}
+
+export function adaptiveRadar8MicroConcurrency(configuredConcurrency, cacheHealth = {}, restHealth = {}, candidateCount = 18) {
+  const base = Math.max(1, Math.min(12, Math.trunc(Number(configuredConcurrency) || 6)));
+  const candidates = Math.max(0, Math.trunc(Number(candidateCount) || 0));
+  if (!candidates) return 1;
+  const expected = Number(cacheHealth?.expected_symbols);
+  const ready = Number(cacheHealth?.ready_symbols);
+  const readyRatio = Number.isFinite(expected) && expected > 0 && Number.isFinite(ready)
+    ? Math.max(0, Math.min(1, ready / expected)) : 0;
+  const weight = Number(restHealth?.shared_estimated_weight_last_minute);
+  const weightLimit = Math.max(1, Number(restHealth?.shared_max_weight_per_minute) || 4000);
+  const weightRatio = Number.isFinite(weight) ? Math.max(0, weight / weightLimit) : null;
+  let target = base;
+  // Raise concurrency only when the closed-candle cache is broadly warm and
+  // shared Binance request headroom is healthy; never exceed eight workers.
+  if (readyRatio >= 0.65 && (weightRatio === null || weightRatio < 0.70)) {
+    target = Math.min(8, base + 2);
+  } else if (readyRatio < 0.25 && weightRatio !== null && weightRatio >= 0.75) {
+    // Cold-cache/high-pressure cycles stay bounded to avoid piling up REST waiters.
+    target = Math.max(2, Math.min(base, 4));
+  }
+  return Math.max(1, Math.min(candidates, target));
+}
+
 export class EarlyExpansionRadar{
   constructor({rest,store,pushManager=null,marketWideKlineCache=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
@@ -1126,6 +1191,7 @@ export class EarlyExpansionRadar{
     this.journeyStateHydrated=false;this.lastJourneyArchive=null;this.lastJourneyError=null;
     this.outcomeBackfillTask=null;
     this.marketWideCacheArchiveHydrationAttempted=false;this.marketWideCacheArchiveHydration=null;this.marketWideCacheArchiveHydrationAttemptAtBySymbol=new Map();this.marketWideCacheArchiveLastEligibleSymbols=new Set();
+    this.deepCandleWindowCache=new Map();this.deepCandleCacheHitTotal=0;this.deepCandleCacheMissTotal=0;
     this.latestCandidates=[];this.lastResult=null;this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
     this.fastScannedTotal=0;this.failedTotal=0;this.failedSymbols=[];this.lastCoverage=emptyEarlyExpansionUniverse(this.config,this.config.quote);
   }
@@ -1352,24 +1418,84 @@ export class EarlyExpansionRadar{
     return selected.slice(0,target);
   }
   async microScan(row,fast,btcFiveMinute){
-    const [m1,m5]=await Promise.all([
-      withRetry(()=>this.rest.klines(row.symbol,'1m',{limit:this.config.oneMinuteKlines}),{attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep}),
-      withRetry(()=>this.rest.klines(row.symbol,'5m',{limit:this.config.fiveMinuteKlines}),{attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep})
-    ]);
+    const now=this.clock();
+    const cachedFive=usableCachedFiveMinuteSeries(
+      this.marketWideKlineCache,row.symbol,now,this.config.fiveMinuteKlines,this.config.freshness5mMs
+    );
+    const oneMinutePromise=withRetry(
+      ()=>this.rest.klines(row.symbol,'1m',{limit:this.config.oneMinuteKlines}),
+      {attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep}
+    );
+    const fiveMinutePromise=cachedFive
+      ? Promise.resolve(cachedFive)
+      : withRetry(
+          ()=>this.rest.klines(row.symbol,'5m',{limit:this.config.fiveMinuteKlines}),
+          {attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep}
+        );
+    const [m1,m5]=await Promise.all([oneMinutePromise,fiveMinutePromise]);
     // Accept either an already-resolved context array (tests/callers) or a shared
     // in-flight BTC context promise so candle reads overlap without losing BTC-relative scoring.
     const btcRows=await Promise.resolve(btcFiveMinute);
-    return {row,fast,oneMinute:m1.candles,fiveMinute:m5.candles,micro_fingerprint:buildMicroFingerprint({oneMinute:m1.candles,fiveMinute:m5.candles,btcFiveMinute:btcRows,ticker:row,now:this.clock(),config:this.config}),source:sourceList([m1.source,m5.source])};
+    return {
+      row,fast,oneMinute:m1.candles,fiveMinute:m5.candles,
+      five_minute_cache_hit:Boolean(cachedFive),
+      five_minute_cache_source:cachedFive?.source||null,
+      micro_fingerprint:buildMicroFingerprint({oneMinute:m1.candles,fiveMinute:m5.candles,btcFiveMinute:btcRows,ticker:row,now:this.clock(),config:this.config}),
+      source:sourceList([m1.source,m5.source])
+    };
   }
 
+  async deepTimeframeKlines(symbol,interval,limit,freshnessMs){
+    const steps={'15m':15*60*1000,'1h':60*60*1000,'4h':4*60*60*1000};
+    const step=steps[interval],normalizedSymbol=String(symbol||'').trim().toUpperCase();
+    if(!step)return withRetry(()=>this.rest.klines(normalizedSymbol,interval,{limit}),
+      {attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep});
+    const requested=Math.max(1,Math.trunc(Number(limit)||1));
+    const key=normalizedSymbol+':'+interval+':'+requested,now=this.clock();
+    const expectedClose=Math.floor(now/step)*step-1;
+    const cached=this.deepCandleWindowCache.get(key);
+    if(cached&&cached.latestCloseTime===expectedClose&&now-expectedClose<=Math.max(step,Number(freshnessMs)||step)&&
+      Array.isArray(cached.candles)&&cached.candles.length>=Math.max(1,requested-1)&&
+      cached.candles.every(c=>c?.closed===true&&Number(c.closeTime)<=now&&
+        String(c.source||'').startsWith('BINANCE_PUBLIC_'))&&
+      validateSeries(cached.candles,interval).valid&&!futureIssues(cached.candles,now).length){
+      this.deepCandleWindowCache.delete(key);this.deepCandleWindowCache.set(key,cached);
+      this.deepCandleCacheHitTotal++;
+      return {candles:cached.candles,source:cached.source,receivedAt:now,cache_hit:true};
+    }
+    if(cached)this.deepCandleWindowCache.delete(key);
+    this.deepCandleCacheMissTotal++;
+    const response=await withRetry(()=>this.rest.klines(normalizedSymbol,interval,{limit:requested}),
+      {attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep});
+    const completedAt=this.clock(),rows=closed(response?.candles||[],completedAt);
+    const latest=rows.at(-1)||null,expectedAtCompletion=Math.floor(completedAt/step)*step-1;
+    const cacheable=latest&&Number(latest.closeTime)===expectedAtCompletion&&
+      completedAt-Number(latest.closeTime)<=Math.max(step,Number(freshnessMs)||step)&&
+      rows.length>=Math.max(1,requested-1)&&rows.every(c=>c?.closed===true&&
+        Number(c.closeTime)<=completedAt&&String(c.source||'').startsWith('BINANCE_PUBLIC_'))&&
+      validateSeries(rows,interval).valid&&!futureIssues(rows,completedAt).length;
+    if(cacheable){
+      this.deepCandleWindowCache.set(key,{candles:rows,source:response.source||rows.at(-1)?.source||'BINANCE_PUBLIC_REST',
+        latestCloseTime:Number(latest.closeTime),cachedAt:completedAt});
+      // At most 384 symbol/timeframe windows remain resident; oldest entries are
+      // evicted first so this cache cannot grow with the life of the service.
+      while(this.deepCandleWindowCache.size>384){
+        const oldest=this.deepCandleWindowCache.keys().next();
+        if(oldest.done)break;
+        this.deepCandleWindowCache.delete(oldest.value);
+      }
+    }
+    return {...response,cache_hit:false};
+  }
   async deepScan(row,fast,marketContext,micro,onClosedCandles=null){
     const cfg=this.config,series={'1m':micro.oneMinute,'5m':micro.fiveMinute},sources=[micro.source];
-    // These reads are independent. Start them together; the shared weighted REST
-    // scheduler still enforces the process-wide public-Binance budget.
+    // Closed higher-timeframe windows are reused only until a new Binance candle
+    // closes. The newest closed timestamp is checked against the UTC interval edge;
+    // depth remains live because order-book liquidity can change between cycles.
     const [r15,r1h,r4h,dd]=await Promise.all([
-      withRetry(()=>this.rest.klines(row.symbol,'15m',{limit:cfg.fifteenMinuteKlines}),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep}),
-      withRetry(()=>this.rest.klines(row.symbol,'1h',{limit:cfg.oneHourKlines}),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep}),
-      withRetry(()=>this.rest.klines(row.symbol,'4h',{limit:cfg.fourHourKlines}),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep}),
+      this.deepTimeframeKlines(row.symbol,'15m',cfg.fifteenMinuteKlines,cfg.freshness15mMs),
+      this.deepTimeframeKlines(row.symbol,'1h',cfg.oneHourKlines,cfg.freshness1hMs),
+      this.deepTimeframeKlines(row.symbol,'4h',cfg.fourHourKlines,cfg.freshness4hMs),
       withRetry(()=>this.rest.depth(row.symbol,100),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep})
     ]);
     series['15m']=r15.candles;series['1h']=r1h.candles;series['4h']=r4h.candles;
@@ -1445,6 +1571,7 @@ export class EarlyExpansionRadar{
   async tick({quote=this.config.quote}={}){
     if(!this.running||this.busy)return false;
     this.busy=true;const scanStartedAt=this.clock();
+    const deepCacheHitStart=this.deepCandleCacheHitTotal,deepCacheMissStart=this.deepCandleCacheMissTotal;
     const journeyEntries=new Map(),journeyMicroBySymbol=new Map(),journeyDeepBySymbol=new Map(),journeyDeepCandlesBySymbol=new Map();
     const journey={cycle_id:null,cycle_number:null,quote:INCOMPLETE,source:INCOMPLETE,expected_symbols:[],received_symbols:[],eligible_symbols:[],status:'RUNNING'};
     const makeJourneyEntry=(symbol)=>({
@@ -1646,7 +1773,12 @@ export class EarlyExpansionRadar{
       const microScanStartedAt=this.clock();
       let microScanCompletedAt=microScanStartedAt;
       const btcFivePromise=marketContextPromise.then(result=>result.btcFive);
-      const microScanPromise=boundedMap(selected,this.config.microConcurrency,async row=>{
+      const cacheHealthForConcurrency=this.marketWideKlineCache?.health?.()||{};
+      const restHealthForConcurrency=this.rest.health?.()||{};
+      const microConcurrency=adaptiveRadar8MicroConcurrency(
+        this.config.microConcurrency,cacheHealthForConcurrency,restHealthForConcurrency,selected.length
+      );
+      const microScanPromise=boundedMap(selected,microConcurrency,async row=>{
         const entry=journeyEntries.get(row.symbol),startedAt=this.clock(),lane=row._selection_lane||'score';
         const started=this.scheduler.started('MICRO',row.symbol,{cycle,at:startedAt,lane,
           reasonCode:schedulerLaneReason(lane,'MICRO'),fastSeenAt});
@@ -1897,8 +2029,21 @@ export class EarlyExpansionRadar{
       coverage.deep_quiet_selected_total=deepTargets.filter(x=>x._selection_lane==='quiet'||x._selection_lane==='fill_quiet').length;
       coverage.deep_rotation_selected_total=deepTargets.filter(x=>x._selection_lane==='rotation'||x._selection_lane==='fill_rotation').length;
       coverage.deep_exceptional_bypass_total=deepTargets.filter(x=>x._selection_lane==='exceptional').length;
-      coverage.micro_scan_coverage_ratio=eligible.length?coverage.micro_scanned_total/eligible.length:0;coverage.discovery_mode='TICKER_ALL + ROTATING_1M_5M_MICRO + DEEP_15M_1H_4H_DEPTH';
+      coverage.deep_timeframe_cache_hits_total=this.deepCandleCacheHitTotal-deepCacheHitStart;
+      coverage.deep_timeframe_cache_misses_total=this.deepCandleCacheMissTotal-deepCacheMissStart;
+      coverage.deep_timeframe_cache_entries=this.deepCandleWindowCache.size;
+      coverage.micro_scan_coverage_ratio=eligible.length?coverage.micro_scanned_total/eligible.length:0;
+      coverage.micro_five_minute_cache_hits_total=microScanned.filter(x=>x&&!x.failed&&x.five_minute_cache_hit===true).length;
+      coverage.micro_five_minute_cache_fallbacks_total=microScanned.filter(x=>x&&!x.failed&&x.five_minute_cache_hit!==true).length;
+      coverage.micro_effective_concurrency=microConcurrency;
+      coverage.discovery_mode='TICKER_ALL + ROTATING_1M_5M_MICRO + DEEP_15M_1H_4H_DEPTH';
       this.lastCoverage=coverage;this.failedSymbols=[...new Set(failedSymbols)];
+      const runtimeMemoryUsage=typeof process!=='undefined'&&typeof process.memoryUsage==='function'?process.memoryUsage():{};
+      const runtimeMemoryBytes={
+        rss:Number(runtimeMemoryUsage.rss)||null,heap_used:Number(runtimeMemoryUsage.heapUsed)||null,
+        heap_total:Number(runtimeMemoryUsage.heapTotal)||null,external:Number(runtimeMemoryUsage.external)||null,
+        array_buffers:Number(runtimeMemoryUsage.arrayBuffers)||null
+      };
       this.logger.info?.('[RADARX_SCAN_COVERAGE] '+JSON.stringify({
         radar:'RADAR_8',build_version:'Build 224',quote:q,observed_at:new Date(now).toISOString(),
         rotation_cycle:coverage.rotation_cycle,
@@ -1909,6 +2054,13 @@ export class EarlyExpansionRadar{
         deep_scanned_total:coverage.deep_scanned_total,skipped_total:coverage.skipped_total,
         failed_total:coverage.failed_total,coverage_ratio:coverage.coverage_ratio,
         deep_coverage_ratio:coverage.deep_coverage_ratio,
+        micro_five_minute_cache_hits_total:coverage.micro_five_minute_cache_hits_total,
+        micro_five_minute_cache_fallbacks_total:coverage.micro_five_minute_cache_fallbacks_total,
+        micro_effective_concurrency:coverage.micro_effective_concurrency,
+        deep_timeframe_cache_hits_total:coverage.deep_timeframe_cache_hits_total,
+        deep_timeframe_cache_misses_total:coverage.deep_timeframe_cache_misses_total,
+        deep_timeframe_cache_entries:coverage.deep_timeframe_cache_entries,
+        runtime_memory_bytes:runtimeMemoryBytes,
         quiet_selected_total:coverage.micro_quiet_selected_total,
         rotation_selected_total:coverage.micro_rotation_selected_total,
         exceptional_bypass_total:coverage.micro_exceptional_bypass_total,
@@ -2046,6 +2198,13 @@ export class EarlyExpansionRadar{
         fast_scanned_total:coverage.fast_scanned_total,micro_scanned_total:coverage.micro_scanned_total,
         deep_scanned_total:coverage.deep_scanned_total,failed_total:coverage.failed_total,
         coverage_ratio:coverage.coverage_ratio,deep_coverage_ratio:coverage.deep_coverage_ratio,
+        micro_five_minute_cache_hits_total:coverage.micro_five_minute_cache_hits_total,
+        micro_five_minute_cache_fallbacks_total:coverage.micro_five_minute_cache_fallbacks_total,
+        micro_effective_concurrency:coverage.micro_effective_concurrency,
+        deep_timeframe_cache_hits_total:coverage.deep_timeframe_cache_hits_total,
+        deep_timeframe_cache_misses_total:coverage.deep_timeframe_cache_misses_total,
+        deep_timeframe_cache_entries:coverage.deep_timeframe_cache_entries,
+        runtime_memory_bytes:runtimeMemoryBytes,
         paper_trading:true,real_order_execution:false
       }));
       if(typeof this.store.appendScanJourneyCycle==='function'&&journey.cycle_id){
