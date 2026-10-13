@@ -128,7 +128,7 @@ function stageFrom(result) {
  */
 export function runHistoricalReplay({
   symbol, oneMinuteCandles, aggTrades = [], startTime, endTime, evaluate,
-  tradeCoverageComplete = false, tradeCoverage = null,
+  tradeCoverageComplete = false, tradeCoverage = null, allowCandleOnlyFallback = false,
   alertCooldownMs = 12 * 60 * 1000, outcomeHorizonMs = 24 * 60 * 60 * 1000
 } = {}) {
   const start = finite(startTime), end = finite(endTime);
@@ -141,6 +141,9 @@ export function runHistoricalReplay({
   const candles = normalizeHistoricalCandles(oneMinuteCandles, {endTime: end});
   const five = aggregateFiveMinuteCandles(candles).filter(x => x.closeTime <= end);
   const trades = normalizeTrades(aggTrades, end);
+  // Missing aggregate-trade history must remain explicitly partial. In the opt-in
+  // fallback mode, evaluate only verified closed candles and never substitute fake trades.
+  const candleOnlyFallback = !tradeCoverageComplete && allowCandleOnlyFallback === true && candles.length > 0;
   const activeIndices = [];
   for (let i = 0; i < candles.length; i++) {
     if (candles[i].closeTime >= start && candles[i].closeTime <= end) activeIndices.push(i);
@@ -192,16 +195,20 @@ export function runHistoricalReplay({
     let reasons = [];
     let accepted = false;
     let failure = null;
-    if (!tradeCoverageComplete) {
+    if (!tradeCoverageComplete && !candleOnlyFallback) {
       reasons = ["AGG_TRADES_HISTORY_INCOMPLETE"];
       failure = "AGG_TRADES_HISTORY_INCOMPLETE";
     } else {
       try {
         raw = awaitlessEvaluate(evaluate, {
           symbol: sym, now: at, oneMinute: available1m, fiveMinute: fiveEnd,
-          ticker, aggTrades: tradeWindow, currentCandle: candle,
+          ticker, aggTrades: tradeCoverageComplete ? tradeWindow : [], currentCandle: candle,
           source: "BINANCE_PUBLIC_HISTORICAL_REPLAY",
-          dataPolicy: {closedCandlesOnly: true, allowFutureData: false, currentCloseTime: at}
+          dataPolicy: {
+            closedCandlesOnly: true, allowFutureData: false, currentCloseTime: at,
+            tradeCoverageComplete: Boolean(tradeCoverageComplete),
+            replayMode: candleOnlyFallback ? "CANDLE_ONLY_FALLBACK" : "FULL_TRADE"
+          }
         });
         const gate = raw?.notificationGate ?? raw?.notification_gate ?? raw?.gate;
         accepted = Boolean(raw?.accepted ?? raw?.eligible ?? gate?.eligible === true);
@@ -233,7 +240,7 @@ export function runHistoricalReplay({
     const notification = raw?.notificationGate ?? raw?.notification_gate ?? raw?.gate ?? alert?.notification_gate ?? {};
     const metrics = strong?.metrics ?? {};
     const rejectionGroup = accepted ? "ACCEPTED" :
-      !tradeCoverageComplete ? "HISTORICAL_TRADE_COVERAGE_INCOMPLETE" :
+      (!tradeCoverageComplete && !candleOnlyFallback) ? "HISTORICAL_TRADE_COVERAGE_INCOMPLETE" :
       alert?.eligible === false ? "STRONG_MOVE_CORE_GATE" :
       elite?.eligible === false ? "ELITE_CONFLUENCE_GATE" :
       notification?.eligible === false ? "NOTIFICATION_GATE" :
@@ -338,6 +345,8 @@ export function runHistoricalReplay({
     range: {start_time: start, start_time_iso: new Date(start).toISOString(), end_time: end, end_time_iso: new Date(end).toISOString()},
     data_quality: {
       source: "BINANCE_PUBLIC_REST", real_market_data_required: true, synthetic_data_used: false,
+      replay_mode: tradeCoverageComplete ? "FULL_TRADE" : (candleOnlyFallback ? "CANDLE_ONLY_FALLBACK" : "BLOCKED_INCOMPLETE"),
+      candle_only_fallback_used: Boolean(candleOnlyFallback),
       closed_1m_candles: candles.length, complete_5m_candles: five.length,
       aggregate_trades: trades.length, trade_coverage_complete: Boolean(tradeCoverageComplete),
       target_crossing_timestamp_source: targetCrossingSource,
