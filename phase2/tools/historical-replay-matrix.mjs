@@ -42,7 +42,7 @@ async function main(){
       '       [--max-trade-pages 60] [--max-trades 60000] [--output reports/radarx-matrix] [--dry-run]',
       'Default coverage: 30 Spot USDT symbols × 3 one-day candidate windows (maximum 90 symbol-window replays).',
       'Each window is classified from observed closed BTCUSDT candles: BULL_TREND, BEAR_TREND, SIDEWAYS, MIXED, or UNKNOWN.',
-      'Coverage-limited replay is reported as INCOMPLETE; it is never counted as a positive test. No orders or Railway deployments.'
+      'Each symbol must have complete closed-candle coverage. Missing aggregate trades use an explicit candle-only fallback; exact trade-crossing timestamps remain unavailable. No synthetic data or orders.'
     ].join('\n')+'\n');return;
   }
   const symbols=normalizeMatrixSymbols(flag(args,'--symbols',HISTORICAL_MATRIX_DEFAULT_SYMBOLS.join(',')));
@@ -69,12 +69,13 @@ async function main(){
     const summary=rawReport?summarizeHistoricalWindowReport(rawReport):{requested_symbols:symbols.length,returned_symbol_results:0,coverage_complete_symbols:0,coverage_incomplete_symbols:symbols.length,coverage_status:'INCOMPLETE_OR_EMPTY'};
     results.push({id:window.id,label:window.label,window:{start:window.start,end:window.end},market_regime:marketRegime,process:{exit_code:child.exitCode,timed_out:child.timedOut,error:child.error??parseError},report_path:rawPath,summary});
   }
-  const complete=results.filter(x=>x.summary.coverage_status==='COMPLETE'&&x.market_regime.regime!=='UNKNOWN');
-  const matrix={...plan,generated_at:new Date().toISOString(),output_dir:outputDir,windows:results,matrix_summary:{window_count:results.length,completed_windows:complete.length,coverage_incomplete_windows:results.length-complete.length,regimes_observed:[...new Set(results.map(x=>x.market_regime.regime))],status:complete.length===results.length?'COMPLETE':'INCOMPLETE_OR_PARTIAL'},};
+  const complete=results.filter(x=>['COMPLETE','COMPLETE_WITH_CANDLE_FALLBACK'].includes(x.summary.coverage_status)&&x.market_regime.regime!=='UNKNOWN');
+  const hasCandleFallback=complete.some(x=>x.summary.coverage_status==='COMPLETE_WITH_CANDLE_FALLBACK');
+  const matrix={...plan,generated_at:new Date().toISOString(),output_dir:outputDir,windows:results,matrix_summary:{window_count:results.length,completed_windows:complete.length,coverage_incomplete_windows:results.length-complete.length,trade_fallback_windows:complete.filter(x=>x.summary.coverage_status==='COMPLETE_WITH_CANDLE_FALLBACK').length,regimes_observed:[...new Set(results.map(x=>x.market_regime.regime))],status:complete.length!==results.length?'INCOMPLETE_OR_PARTIAL':(hasCandleFallback?'COMPLETE_WITH_FALLBACK':'COMPLETE')},};
   const finalPath=resolve(outputDir,'matrix-summary.json');
   const {writeFile}=await import('node:fs/promises');
   await writeFile(finalPath,JSON.stringify(matrix,null,2)+'\n');
   process.stdout.write('[MATRIX_SUMMARY] '+finalPath+'\n'+JSON.stringify(matrix.matrix_summary)+'\n');
-  if(matrix.matrix_summary.status!=='COMPLETE'||results.some(x=>x.process.exit_code===1||x.process.timed_out))process.exitCode=2;
+  if(!['COMPLETE','COMPLETE_WITH_FALLBACK'].includes(matrix.matrix_summary.status)||results.some(x=>x.process.exit_code===1||x.process.timed_out))process.exitCode=2;
 }
 main().catch(error=>{process.stderr.write('[MATRIX_ERROR] '+String(error?.stack??error)+'\n');process.exitCode=1;});
