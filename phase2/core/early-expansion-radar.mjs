@@ -9,6 +9,7 @@ import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansio
 import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId,normalizeMissing,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,reconcileEligibilityQueueAge} from './scan-journey-ledger.mjs';
 import {ScanSchedulerJournal, schedulerLaneReason} from './scan-scheduler.mjs';
 import {MarketWideLightScan, isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
+import {performance} from 'node:perf_hooks';
 
 function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
@@ -862,6 +863,19 @@ function trimCycleMemory(map,maxSize=5000){
   for(let i=0;i<oldest.length-maxSize;i++)map.delete(oldest[i][0]);
 }
 
+export function pruneInactiveSymbolStateMap(map,activeSymbols,{stageQualifiedKeys=false}={}){
+  if(!(map instanceof Map))return 0;
+  const active=activeSymbols instanceof Set?activeSymbols:new Set(activeSymbols||[]);
+  let removed=0;
+  for(const key of map.keys()){
+    const normalized=String(key);
+    const separator=stageQualifiedKeys?normalized.indexOf(':'):-1;
+    const symbol=separator>=0?normalized.slice(separator+1):normalized;
+    if(!active.has(symbol)){map.delete(key);removed++;}
+  }
+  return removed;
+}
+
 function sourceList(values){return [...new Set(values.flatMap(v=>Array.isArray(v)?v:[v]).filter(Boolean))];}
 
 function alertEligible(candidate,cfg){
@@ -1367,6 +1381,7 @@ export class EarlyExpansionRadar{
     this.microFiveMinuteWindowCache=new Map();
     this.marketWideCacheArchiveHydrationAttempted=false;this.marketWideCacheArchiveHydration=null;this.marketWideCacheArchiveHydrationAttemptAtBySymbol=new Map();this.marketWideCacheArchiveLastEligibleSymbols=new Set();
     this.deepCandleWindowCache=new Map();this.deepCandleCacheHitTotal=0;this.deepCandleCacheMissTotal=0;
+    this.schedulerBufferEventsDroppedTotal=0;
     this.latestCandidates=[];this.lastResult=null;this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
     this.fastScannedTotal=0;this.failedTotal=0;this.failedSymbols=[];this.lastCoverage=emptyEarlyExpansionUniverse(this.config,this.config.quote);
   }
@@ -1390,11 +1405,35 @@ export class EarlyExpansionRadar{
     };
     const runCycle=async()=>{
       if(!this.running)return;
-      const cycleStartedAt=this.clock();
+      const cycleStartedPerf=performance.now();
       let completed=false;
       try{completed=await this.tick();}
       catch(e){this.noteError(e,'scheduled-tick');}
-      const elapsedMs=Math.max(0,this.clock()-cycleStartedAt);
+      const scanDurationMs=Math.max(0,performance.now()-cycleStartedPerf);
+      try{
+        const cleanupStarted=performance.now();
+        const cleanup=this.cleanupRuntimeRingBuffers(this.clock());
+        const ringCleanupMs=Math.max(0,performance.now()-cleanupStarted);
+        const beforeGc=process.memoryUsage();
+        const gcAvailable=typeof globalThis.gc==='function';
+        const gcStarted=performance.now();
+        if(gcAvailable)globalThis.gc();
+        const gcDurationMs=Math.max(0,performance.now()-gcStarted);
+        const afterGc=process.memoryUsage();
+        const cycleTotalMs=Math.max(0,performance.now()-cycleStartedPerf);
+        const rssCapBytes=Math.floor(.360*1024*1024*1024);
+        this.logger.info?.('[RADARX_POST_CYCLE_MEMORY] '+JSON.stringify({
+          radar:'RADAR_8',build_version:'Build 224',cycle:this.scans,completed,
+          scan_duration_ms:Math.round(scanDurationMs),ring_cleanup_ms:Number(ringCleanupMs.toFixed(2)),
+          forced_gc_available:gcAvailable,forced_gc_ran:gcAvailable,
+          forced_gc_ms:Number(gcDurationMs.toFixed(2)),cycle_with_gc_ms:Math.round(cycleTotalMs),
+          memory_before_gc_bytes:{rss:beforeGc.rss,heap_used:beforeGc.heapUsed,heap_total:beforeGc.heapTotal,external:beforeGc.external,array_buffers:beforeGc.arrayBuffers},
+          memory_after_gc_bytes:{rss:afterGc.rss,heap_used:afterGc.heapUsed,heap_total:afterGc.heapTotal,external:afterGc.external,array_buffers:afterGc.arrayBuffers},
+          rss_cap_bytes:rssCapBytes,rss_after_gc_gib:Number((afterGc.rss/(1024**3)).toFixed(4)),
+          rss_under_036_gib:afterGc.rss<=rssCapBytes,cleanup
+        }));
+      }catch(e){this.noteError(e,'post-cycle-memory-maintenance');}
+      const elapsedMs=Math.max(0,performance.now()-cycleStartedPerf);
       scheduleNext(nextEarlyExpansionPollDelayMs(this.config.pollMs,elapsedMs,completed));
     };
     // tick() refreshes the universe when it is first empty. Starting immediately
@@ -1742,6 +1781,68 @@ export class EarlyExpansionRadar{
       Object.entries(series).map(([tf,rows])=>[tf,closedCandleSnapshot(closed(rows,candleAsOf),candleAsOf)])
     ));
     return buildEarlyExpansionEvidence({series,ticker:row,depth:dd.data,marketContext,fastContext:fast,now:candleAsOf,config:cfg,historicalReplay:false,sourceList:sources});
+  }
+  cleanupRuntimeRingBuffers(now=this.clock()){
+    const activeSymbols=new Set((this.universe||[]).map(symbol=>String(symbol||'').trim().toUpperCase()).filter(Boolean));
+    let removedInactiveEntries=0;
+    // An empty universe means exchangeInfo has not been successfully restored yet.
+    // In that state, preserve rehydrated fairness/alert state rather than treating all
+    // symbols as delisted. Once a non-empty authoritative Spot universe is available,
+    // stale-symbol pruning is safe.
+    if(activeSymbols.size>0){
+      const stateMaps=[
+        this.fastState,this.lastAlertAt,this.lastAlertScore,this.lastBand,
+        this.lastActivityShockAt,this.lastActivityShockKeyBySymbol,this.fastShockPendingUntil,
+        this.lastMicroScanCycleBySymbol,this.lastDeepScanCycleBySymbol,
+        this.lastDeepAtBySymbol,this.firstEligibleAtBySymbol,
+        this.marketWideCacheArchiveHydrationAttemptAtBySymbol
+      ];
+      for(const map of stateMaps)removedInactiveEntries+=pruneInactiveSymbolStateMap(map,activeSymbols);
+      const schedulerMaps=[this.scheduler?.lastStartedAt,this.scheduler?.queuedAt,this.scheduler?.lastDeferredAt];
+      for(const map of schedulerMaps)removedInactiveEntries+=pruneInactiveSymbolStateMap(map,activeSymbols,{stageQualifiedKeys:true});
+    }
+    for(const [symbol,until] of this.fastShockPendingUntil){
+      if(Number(until)<=Number(now)){this.fastShockPendingUntil.delete(symbol);}
+    }
+    const beforeShockTimestamps=this.activityShockTimestamps.length;
+    this.activityShockTimestamps=this.activityShockTimestamps.filter(at=>Number(at)>Number(now)-60*60*1000);
+    const maxShockHistory=Math.max(1,Math.trunc(Number(this.config.maxActivityShockAlertsPerHour)||6));
+    if(this.activityShockTimestamps.length>maxShockHistory)this.activityShockTimestamps=this.activityShockTimestamps.slice(-maxShockHistory);
+    const shockTimestampsRemoved=beforeShockTimestamps-this.activityShockTimestamps.length;
+    if(activeSymbols.size>0){
+      for(const symbol of this.marketWideCacheArchiveLastEligibleSymbols){
+        if(!activeSymbols.has(symbol))this.marketWideCacheArchiveLastEligibleSymbols.delete(symbol);
+      }
+    }
+    // Scheduler writes are normally flushed after each tick. If durable storage is
+    // unavailable for a prolonged period, preserve the newest 5,000 audit events
+    // rather than letting a failed-write retry buffer grow without bound.
+    const schedulerBuffer=this.scheduler?.buffer;
+    let schedulerBufferDropped=0;
+    if(Array.isArray(schedulerBuffer)&&schedulerBuffer.length>5000){
+      schedulerBufferDropped=schedulerBuffer.length-5000;
+      schedulerBuffer.splice(0,schedulerBufferDropped);
+      this.schedulerBufferEventsDroppedTotal+=schedulerBufferDropped;
+    }
+    const candleCacheCleanup=this.pruneCandleWindowCaches(now);
+    return {
+      active_symbols:activeSymbols.size,
+      removed_inactive_symbol_entries:removedInactiveEntries,
+      expired_shock_timestamps_removed:shockTimestampsRemoved,
+      scheduler_buffer_entries:schedulerBuffer?.length??0,
+      scheduler_buffer_dropped_this_cycle:schedulerBufferDropped,
+      scheduler_buffer_dropped_total:this.schedulerBufferEventsDroppedTotal,
+      map_entries:{
+        fast_state:this.fastState.size,last_alert_at:this.lastAlertAt.size,last_alert_score:this.lastAlertScore.size,
+        last_band:this.lastBand.size,last_activity_shock_at:this.lastActivityShockAt.size,
+        fast_shock_pending:this.fastShockPendingUntil.size,last_micro_cycle:this.lastMicroScanCycleBySymbol.size,
+        last_deep_cycle:this.lastDeepScanCycleBySymbol.size,last_deep_at:this.lastDeepAtBySymbol.size,
+        first_eligible_at:this.firstEligibleAtBySymbol.size,scheduler_started:this.scheduler?.lastStartedAt?.size??0,
+        scheduler_queued:this.scheduler?.queuedAt?.size??0,scheduler_deferred:this.scheduler?.lastDeferredAt?.size??0,
+        local_5m_candles:this.microFiveMinuteWindowCache.size,deep_candle_windows:this.deepCandleWindowCache.size
+      },
+      candle_cache_cleanup:candleCacheCleanup
+    };
   }
   async rehydrateMarketWideCacheFromArchive(eligible,now=this.clock()){
     if(!this.marketWideKlineCache||typeof this.store.readScanJourneyCandleHistory!=='function')return null;

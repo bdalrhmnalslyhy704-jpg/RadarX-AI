@@ -7,7 +7,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "start": "node phase2/server.mjs",
+    "start": "node --expose-gc phase2/server.mjs",
     "test:all": "node phase2/tests/run-tests.mjs all",
     "test:phase2": "node phase2/tests/run-tests.mjs phase2",
     "issue-token": "node phase2/tools/issue-token.mjs",
