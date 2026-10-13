@@ -40,16 +40,15 @@ const SHARED = {
   klineObservers: new Set()
 };
 
-// Let the shared broker schedule at most seven raw requests per second while
-// retaining a stricter weighted budget of 4,000/minute (below Binance's documented 6,000).
-// This only removes avoidable queue delay for the same requested work; the shared
-// weight ceiling and 429/418 cooldown still block requests before they are sent.
+// Keep conservative count and request-weight ceilings. The request-budget
+// lock is held only while checking/reserving a slot, never during rate-limit sleep;
+// otherwise one heavy request can block lighter requests that still fit the budget.
 const SHARED_MAX_REQUESTS_PER_MINUTE = 420;
 const SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE = 4000;
 const SHARED_MIN_INTERVAL_MS = 143;
-// TTL only helps if expired entries are removed. Symbols rotate continuously,
-// so prune expired market-data payloads and cap the shared cache to bound heap use.
-const SHARED_MAX_CACHE_ENTRIES = 512;
+// Cache recent public Klines long enough for overlapping radars to reuse them,
+// but keep a strict entry cap so cross-radar reuse cannot grow process RSS without bound.
+const SHARED_MAX_CACHE_ENTRIES = 256;
 const SHARED_CACHE_PRUNE_INTERVAL_MS = 1000;
 
 export function estimateBinanceRequestWeight(path, query = {}) {
@@ -92,42 +91,47 @@ function waitUntilMs(entries, now, requiredWeight) {
 }
 
 async function waitSharedBudget(path, query = {}) {
-  // A small promise lock makes budget checks + reservations atomic. Without it,
-  // concurrent scan workers could all pass the same check and burst together.
-  let release;
-  const previous = SHARED.budgetQueue;
-  SHARED.budgetQueue = new Promise(resolve => { release = resolve; });
-  await previous;
-  try {
-    const weight = estimateBinanceRequestWeight(path, query);
-    for (;;) {
+  const weight = estimateBinanceRequestWeight(path, query);
+  for (;;) {
+    // Serialize only the budget decision and reservation. Never sleep while
+    // owning the global queue: a heavy request awaiting weight headroom must not
+    // head-of-line block a light request that can safely use the remaining budget.
+    let release;
+    const previous = SHARED.budgetQueue;
+    SHARED.budgetQueue = new Promise(resolve => { release = resolve; });
+    let waitMs = 0;
+    let reservedAt = null;
+    try {
+      await previous;
       const now = Date.now();
       const cooldown = SHARED.rateLimitedUntil - now;
       if (cooldown > 0) {
-        await sleep(cooldown);
-        continue;
+        waitMs = cooldown;
+      } else {
+        SHARED.usedAt = SHARED.usedAt.filter(item => item.at > now - 60000);
+        const usedWeight = SHARED.usedAt.reduce((sum, item) => sum + item.weight, 0);
+        const requestWait = SHARED.usedAt.length >= SHARED_MAX_REQUESTS_PER_MINUTE
+          ? Math.max(0, SHARED.usedAt[0].at + 60000 - now)
+          : 0;
+        const weightWait = usedWeight + weight > SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE
+          ? waitUntilMs(SHARED.usedAt, now, weight)
+          : 0;
+        const spacingWait = Math.max(0, SHARED.lastRequestAt + SHARED_MIN_INTERVAL_MS - now);
+        waitMs = Math.max(requestWait, weightWait, spacingWait);
+        if (waitMs === 0) {
+          reservedAt = Date.now();
+          SHARED.lastRequestAt = reservedAt;
+          SHARED.usedAt.push({ at: reservedAt, weight });
+        }
       }
-      SHARED.usedAt = SHARED.usedAt.filter(item => item.at > now - 60000);
-      const usedWeight = SHARED.usedAt.reduce((sum, item) => sum + item.weight, 0);
-      const requestWait = SHARED.usedAt.length >= SHARED_MAX_REQUESTS_PER_MINUTE
-        ? Math.max(0, SHARED.usedAt[0].at + 60000 - now)
-        : 0;
-      const weightWait = usedWeight + weight > SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE
-        ? waitUntilMs(SHARED.usedAt, now, weight)
-        : 0;
-      const spacingWait = Math.max(0, SHARED.lastRequestAt + SHARED_MIN_INTERVAL_MS - now);
-      const waitMs = Math.max(requestWait, weightWait, spacingWait);
-      if (waitMs > 0) {
-        await sleep(waitMs);
-        continue;
-      }
-      const reservedAt = Date.now();
-      SHARED.lastRequestAt = reservedAt;
-      SHARED.usedAt.push({ at: reservedAt, weight });
-      return reservedAt;
+    } finally {
+      release();
     }
-  } finally {
-    release();
+    if (reservedAt !== null) return reservedAt;
+    // Re-enter the atomic reservation path after sleeping. The budget may have
+    // changed while this request was waiting, so never assume the old reservation
+    // is still valid.
+    await sleep(Math.max(1, waitMs));
   }
 }
 
@@ -148,13 +152,23 @@ function normalizedQuery(query = {}) {
     .map(([k, v]) => [k, String(v)]);
 }
 
-function cacheTtlMs(path, query = {}) {
+export function sharedResponseCacheTtlMs(path, query = {}) {
   if (path === '/api/v3/exchangeInfo') return 5 * 60 * 1000;
   if (path === '/api/v3/ticker/24hr') return query.symbol ? 1500 : 2500;
   if (path === '/api/v3/depth') return 700;
-  // A 2.5s cache coalesces overlapping public-data scans. Consumers still reject
-  // open/future candles, so cached in-progress candles can never become signals.
-  if (path === '/api/v3/klines') return 2500;
+  if (path === '/api/v3/klines') {
+    // Closed-candle timestamps, not cache receive time, remain the freshness
+    // authority downstream. These short interval-specific TTLs reduce duplicate
+    // Kline requests across RadarX clients without allowing open/stale candles
+    // through existing candle-quality gates.
+    const ttlByInterval = {
+      '1m': 12_000, '3m': 15_000, '5m': 20_000,
+      '15m': 30_000, '30m': 30_000,
+      '1h': 45_000, '2h': 45_000, '4h': 45_000,
+      '6h': 45_000, '8h': 45_000, '12h': 45_000, '1d': 45_000
+    };
+    return ttlByInterval[String(query.interval || '').toLowerCase()] ?? 5_000;
+  }
   return 0;
 }
 
@@ -255,7 +269,7 @@ export class RestClient {
   async request(path,query={}) {
     if(!String(path).startsWith('/api/v3/')) throw new Error('REST_PATH_NOT_ALLOWED');
     const key=cacheKey(this.baseUrls,path,query);
-    const ttl=cacheTtlMs(path,query);
+    const ttl=sharedResponseCacheTtlMs(path,query);
     const hit=cachedValue(key);
     if(hit){
       return annotateClientSuccess(this,{data:hit.data,source:hit.source,receivedAt:Date.now()},null);
