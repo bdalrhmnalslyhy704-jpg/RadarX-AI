@@ -143,17 +143,37 @@ async function main() {
     try {
     process.stderr.write('[REPLAY] ' + symbol + ' fetching closed 1m candles…\n');
     const candleFetch = await fetchOneMinute(client, symbol, start - 24 * HOUR_MS - 125 * MINUTE_MS, end);
-    const tradeFetch = await fetchAggregateTrades(client, symbol, start - 65_000, end, {maxPages, maxTrades});
+    let tradeFetch;
+    try {
+      tradeFetch = await fetchAggregateTrades(client, symbol, start - 65_000, end, {maxPages, maxTrades});
+    } catch (error) {
+      // Public aggTrade history can be unavailable or capped even when closed klines
+      // are complete. Keep the failure explicit and continue with candle-only replay.
+      tradeFetch = {
+        trades: [], complete: false,
+        coverage: {
+          complete: false, pages: 0, rows: 0,
+          requested_start_time: start - 65_000, requested_end_time: end,
+          last_trade_time: null, limit_reached: false,
+          pagination: 'aggTrade ID cursor; unique aggregate trade IDs',
+          fallback_reason: String(error?.message ?? error).slice(0, 240)
+        }
+      };
+    }
     const tickerConfig = config.strongMoveRadar || {};
     const minQuoteVolume24h = Number(tickerConfig.minQuoteVolume24h ?? 1_000_000);
     const lastAlertAt = {value: 0};
     const replay = runHistoricalReplay({
       symbol,
       oneMinuteCandles: candleFetch.candles,
-      aggTrades: tradeFetch.trades,
+      // Partial aggTrade pages are deliberately discarded: mixing partial flow into
+      // a decision could bias ratios. Candle-only replay uses actual closed Binance
+      // candles and marks every result with the exact-trade-timestamp limitation.
+      aggTrades: tradeFetch.complete ? tradeFetch.trades : [],
       startTime: start,
       endTime: end,
       tradeCoverageComplete: tradeFetch.complete,
+      allowCandleOnlyFallback: true,
       tradeCoverage: {...tradeFetch.coverage, candle_pages: candleFetch.pages, candles_complete: candleFetch.complete},
       alertCooldownMs: Number(tickerConfig.alertCooldownMs ?? 12 * MINUTE_MS),
       evaluate: input => {
@@ -242,6 +262,12 @@ async function main() {
     replay.data_quality.trade_coverage_complete = tradeFetch.complete;
     replay.data_quality.trade_coverage = tradeFetch.coverage;
     replay.data_quality.trades_missing = !tradeFetch.complete;
+    replay.data_quality.candle_only_fallback_used = !tradeFetch.complete && candleFetch.complete && replay.steps.length > 0;
+    replay.data_quality.replay_mode = tradeFetch.complete ? 'FULL_TRADE' :
+      (replay.data_quality.candle_only_fallback_used ? 'CANDLE_ONLY_FALLBACK' : 'BLOCKED_INCOMPLETE');
+    replay.data_quality.coverage_status = replay.data_quality.replay_mode === 'BLOCKED_INCOMPLETE'
+      ? 'INCOMPLETE' : (tradeFetch.complete ? 'COMPLETE' : 'COMPLETE_WITH_CANDLE_FALLBACK');
+    replay.data_quality.synthetic_data_used = false;
     report.results.push(replay);
     process.stderr.write('[REPLAY] ' + symbol + ' steps=' + replay.summary.replay_steps +
       ' accepted=' + replay.summary.accepted + ' rejected=' + replay.summary.rejected +
@@ -273,6 +299,8 @@ async function main() {
       symbol: x.symbol, steps: x.summary.replay_steps, accepted: x.summary.accepted,
       accepted_modes: x.summary.accepted_mode_counts ?? [],
       rejected: x.summary.rejected, trade_coverage_complete: x.data_quality.trade_coverage_complete,
+      replay_mode: x.data_quality.replay_mode ?? 'BLOCKED_INCOMPLETE',
+      candle_only_fallback_used: x.data_quality.candle_only_fallback_used === true,
       premove_50_status: x.summary.premove_50_status,
       first_accepted_at: x.summary.first_accepted_at,
       first_early_warning_accepted_at: x.summary.first_early_warning_accepted_at,
@@ -282,7 +310,12 @@ async function main() {
     })),
     policy: report.policy
   }, null, 2) + '\n');
-  if (report.results.some(x => !x.data_quality.trade_coverage_complete || !x.data_quality.candle_fetch_complete)) {
+  // The batch succeeds when every symbol has a complete closed-candle replay.
+  // Incomplete aggregate-trade history remains visible in each row and cannot be
+  // mistaken for precise trade-crossing timestamps; missing candle coverage still fails.
+  if (report.results.some(x => x.data_quality.candle_fetch_complete !== true ||
+      !(Number(x.summary.replay_steps) > 0) ||
+      !['FULL_TRADE', 'CANDLE_ONLY_FALLBACK'].includes(x.data_quality.replay_mode))) {
     process.exitCode = 2;
   }
 }
