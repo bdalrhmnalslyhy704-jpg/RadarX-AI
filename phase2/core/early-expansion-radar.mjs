@@ -176,8 +176,8 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   quietReserve:8,
   microConcurrency:6,
   deepConcurrency:4,
-  oneMinuteKlines:180,
-  fiveMinuteKlines:180,
+  oneMinuteKlines:120,
+  fiveMinuteKlines:120,
   fifteenMinuteKlines:160,
   oneHourKlines:260,
   fourHourKlines:220,
@@ -1145,6 +1145,39 @@ function usableCachedFiveMinuteSeries(cache, symbol, now, requestedLimit, freshn
   return { candles: rows, source: String(latest.source || series?.source || 'BINANCE_PUBLIC_REST_CACHE') };
 }
 
+/**
+ * Share a complete, fresh, closed BTC 5m cache window with the radar's market
+ * context. Fall back to the existing public REST read when any cache check fails;
+ * the BTC 1h context remains live on every cycle.
+ */
+export async function fetchRadar8MarketContext({rest, marketWideKlineCache=null, config={}, eligible=[], now=Date.now()}={}) {
+  if (!rest || typeof rest.klines !== 'function') throw new Error('RADAR8_MARKET_CONTEXT_REST_REQUIRED');
+  const fiveMinuteLimit = Math.max(80, Math.trunc(Number(config.fiveMinuteKlines) || 120));
+  const cachedFiveMinute = usableCachedFiveMinuteSeries(
+    marketWideKlineCache, 'BTCUSDT', Number(now), fiveMinuteLimit, config.freshness5mMs
+  );
+  const [m5, m1] = await Promise.all([
+    cachedFiveMinute
+      ? Promise.resolve(cachedFiveMinute)
+      : rest.klines('BTCUSDT', '5m', {limit:fiveMinuteLimit}),
+    rest.klines('BTCUSDT', '1h', {limit:60})
+  ]);
+  const btcFive = Array.isArray(m5?.candles) ? m5.candles : [];
+  const oneHour = Array.isArray(m1?.candles) ? m1.candles : [];
+  const marketMoves = (Array.isArray(eligible) ? eligible : [])
+    .map(row => row?.priceChange24h).filter(hasFiniteNumber).map(Number);
+  return {
+    btcFive,
+    marketContext: {
+      fiveMinute:btcFive,
+      oneHour,
+      marketMedianChange24hPct:median(marketMoves),
+      marketBreadthPct:marketMoves.length ? marketMoves.filter(value => value > 0).length / marketMoves.length * 100 : null
+    },
+    fiveMinuteCacheHit:Boolean(cachedFiveMinute)
+  };
+}
+
 function usableLocalFiveMinuteSeries(entry, now, requestedLimit, freshnessMs) {
   const all=Array.isArray(entry?.candles)?entry.candles:[];
   const limit=Math.max(1,Math.trunc(Number(requestedLimit)||180));
@@ -1180,9 +1213,9 @@ export function adaptiveRadar8MicroConcurrency(configuredConcurrency, cacheHealt
   const weightLimit = Math.max(1, Number(restHealth?.shared_max_weight_per_minute) || 4000);
   const weightRatio = Number.isFinite(weight) ? Math.max(0, weight / weightLimit) : null;
   let target = base;
-  // Raise concurrency only when the closed-candle cache is broadly warm and
-  // shared Binance request headroom is healthy; never exceed eight workers.
-  if (readyRatio >= 0.65 && (weightRatio === null || weightRatio < 0.70)) {
+  // Raise concurrency once a material part of the cache is ready, but only while
+  // the shared Binance REST budget has headroom; never exceed eight workers.
+  if (readyRatio >= 0.35 && (weightRatio === null || weightRatio < 0.70)) {
     target = Math.min(8, base + 2);
   } else if (readyRatio < 0.25 && weightRatio !== null && weightRatio >= 0.75) {
     // Cold-cache/high-pressure cycles stay bounded to avoid piling up REST waiters.
@@ -1831,15 +1864,18 @@ export class EarlyExpansionRadar{
         if(entry){entry.micro_selected_at=this.clock();entry.micro_selection_lane=row._selection_lane||INCOMPLETE;entry.rejection_reason=INCOMPLETE;}
       }
       phaseTimings.ticker_fast_selection_ms=Math.max(0,this.clock()-tickerFastStartedAt);
-      let btcFive=[],marketContext={};
+      let btcFive=[],marketContext={},btcFiveMinuteCacheHit=false;
       const marketContextStartedAt=this.clock();
       let marketContextCompletedAt=marketContextStartedAt;
       const marketContextPromise=(async()=>{
         try{
-          const [m5,m1]=await Promise.all([this.rest.klines('BTCUSDT','5m',{limit:Math.max(80,this.config.fiveMinuteKlines||180)}),this.rest.klines('BTCUSDT','1h',{limit:60})]);
-          btcFive=m5.candles||[];
-          const marketMoves=eligible.map(x=>x.priceChange24h).filter(hasFiniteNumber).map(Number);
-          marketContext={fiveMinute:m5.candles||[],oneHour:m1.candles||[],marketMedianChange24hPct:median(marketMoves),marketBreadthPct:marketMoves.length?marketMoves.filter(x=>x>0).length/marketMoves.length*100:null};
+          const result=await fetchRadar8MarketContext({
+            rest:this.rest,marketWideKlineCache:this.marketWideKlineCache,config:this.config,
+            eligible,now:this.clock()
+          });
+          btcFive=result.btcFive;
+          marketContext=result.marketContext;
+          btcFiveMinuteCacheHit=result.fiveMinuteCacheHit;
         }catch(e){this.noteError(e,'market-context');}
         finally{marketContextCompletedAt=this.clock();}
         return {btcFive,marketContext};
@@ -2099,6 +2135,7 @@ export class EarlyExpansionRadar{
           other.length?INCOMPLETE:INCOMPLETE;
       }
       const coverage=buildEarlyExpansionUniverseCoverage({expectedSymbols:expected,receivedSymbols,eligibleTotal:eligible.length,fastScannedTotal:eligible.length,scannedTotal:eligible.length,deepScannedTotal,skippedTotal:Math.max(0,eligible.length-deepScannedTotal),failedTotal:deepFailures,failedSymbols,quote:q,minQuoteVolume24h:this.config.minQuoteVolume24h});
+      coverage.btc_five_minute_cache_hit=btcFiveMinuteCacheHit;
       coverage.micro_scanned_total=microScanned.filter(x=>x&&!x.failed).length;coverage.micro_scan_candidates=selected.length;
       coverage.micro_candidate_target=Math.min(Math.max(1,Math.trunc(this.config.microScanCandidates||36)),eligible.length);
       coverage.micro_candidate_shortfall=Math.max(0,coverage.micro_candidate_target-selected.length);
@@ -2148,6 +2185,7 @@ export class EarlyExpansionRadar{
         deep_timeframe_cache_hits_total:coverage.deep_timeframe_cache_hits_total,
         deep_timeframe_cache_misses_total:coverage.deep_timeframe_cache_misses_total,
         deep_timeframe_cache_entries:coverage.deep_timeframe_cache_entries,
+        btc_five_minute_cache_hit:btcFiveMinuteCacheHit,
         runtime_memory_bytes:runtimeMemoryBytes,
         quiet_selected_total:coverage.micro_quiet_selected_total,
         rotation_selected_total:coverage.micro_rotation_selected_total,
