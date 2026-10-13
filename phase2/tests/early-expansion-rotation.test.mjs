@@ -866,3 +866,45 @@ test('Radar 8 cache cleanup evicts stale timeframe windows and remains bounded',
   assert.equal(report.deep_entries,0);
   assert.equal(report.micro_5m_entries,0);
 });
+
+test('Radar 8 post-cycle trimming evicts inactive and low-momentum candle windows but preserves rising activity and recent scans',()=>{
+  const radar=makeRadar({fiveMinuteKlines:3});
+  radar.scans=20;
+  radar.universe=['SLEEPYUSDT','QUIETBASEUSDT','ACTIVEUSDT'];
+  const makeHistory=(baseline,recent)=>[
+    ...Array.from({length:5},(_,i)=>({price:1,quote:1000,trades:1000,qDelta:baseline.quote,tDelta:baseline.trades,priceChange:0.001,at:now-(8-i)*45_000})),
+    ...Array.from({length:3},(_,i)=>({price:1,quote:1000,trades:1000,qDelta:recent.quote,tDelta:recent.trades,
+      priceChange:recent.move??0.001,at:now-(2-i)*45_000}))
+  ];
+  radar.fastState.set('SLEEPYUSDT',makeHistory({quote:100,trades:10},{quote:100,trades:10}));
+  // Low price movement alone must not evict a quiet base whose participation is rising.
+  radar.fastState.set('QUIETBASEUSDT',makeHistory({quote:100,trades:10},{quote:160,trades:18}));
+  // A moving or just-scanned symbol must keep its cache for immediate deep analysis.
+  radar.fastState.set('ACTIVEUSDT',makeHistory({quote:100,trades:10},{quote:100,trades:10,move:0.15}));
+  radar.lastDeepScanCycleBySymbol.set('ACTIVEUSDT',20);
+  const latest15m=Math.floor(now/(15*60_000))*(15*60_000)-1;
+  const latest5m=Math.floor(now/(5*60_000))*(5*60_000)-1;
+  const putCache=(symbol)=>{
+    radar.deepCandleWindowCache.set(symbol+':15m:160',{
+      candles:Array.from({length:60},()=>({closed:true})),latestCloseTime:latest15m,cachedAt:now
+    });
+    radar.microFiveMinuteWindowCache.set(symbol,{
+      candles:Array.from({length:3},()=>({closed:true})),latestCloseTime:latest5m,cachedAt:now
+    });
+  };
+  for(const symbol of ['SLEEPYUSDT','QUIETBASEUSDT','ACTIVEUSDT','GONEUSDT'])putCache(symbol);
+  const cleanup=radar.cleanupRuntimeRingBuffers(now);
+  assert.equal(radar.deepCandleWindowCache.has('SLEEPYUSDT:15m:160'),false);
+  assert.equal(radar.microFiveMinuteWindowCache.has('SLEEPYUSDT'),false);
+  assert.equal(radar.deepCandleWindowCache.has('GONEUSDT:15m:160'),false);
+  assert.equal(radar.microFiveMinuteWindowCache.has('GONEUSDT'),false);
+  assert.equal(radar.deepCandleWindowCache.has('QUIETBASEUSDT:15m:160'),true);
+  assert.equal(radar.microFiveMinuteWindowCache.has('QUIETBASEUSDT'),true);
+  assert.equal(radar.deepCandleWindowCache.has('ACTIVEUSDT:15m:160'),true);
+  assert.equal(radar.microFiveMinuteWindowCache.has('ACTIVEUSDT'),true);
+  assert.equal(cleanup.low_momentum_cache_trim.low_momentum_symbols_removed,1);
+  assert.equal(cleanup.low_momentum_cache_trim.inactive_symbols_removed,1);
+  assert.equal(cleanup.low_momentum_cache_trim.deep_windows_removed,2);
+  assert.equal(cleanup.low_momentum_cache_trim.micro_5m_windows_removed,2);
+  assert.equal(cleanup.low_momentum_cache_trim.candle_rows_released,126);
+});
