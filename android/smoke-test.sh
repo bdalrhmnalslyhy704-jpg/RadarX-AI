@@ -398,26 +398,31 @@ for attempt in $(seq 1 120); do
       exit 1
     fi
 
-    # Use the service's declared stop action first. "am stopservice" returns
-    # exit 255 on some emulator builds for this isolated-process foreground
-    # service even when its app-owned lifecycle action is available.
-    stop_output="$(timeout 15s adb shell am startservice -n com.radarx.app/.RadarXBackgroundMonitorService -a com.radarx.app.action.STOP_BACKGROUND_MONITOR 2>&1)" || {
-      echo "App-owned stop action failed; falling back to ActivityManager stopservice:"
+    # Invoke the stop action through MainActivity inside the app UID. The
+    # service deliberately remains non-exported, so adb shell must not start it directly.
+    stop_output="$(timeout 15s adb shell am start -n com.radarx.app/.MainActivity --ez radarx_test_stop_background_monitor true 2>&1)" || {
+      echo "::error::Could not request the debug-only app-owned background stop action"
       echo "${stop_output}"
-      timeout 15s adb shell am stopservice -n com.radarx.app/.RadarXBackgroundMonitorService >/dev/null 2>&1 || true
+      exit 1
     }
+    echo "${stop_output}"
     service_stopped=0
-    for stop_attempt in $(seq 1 15); do
+    stop_request_seen=0
+    for stop_attempt in $(seq 1 20); do
       current_service_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
-      if [[ -z "${current_service_pid}" ]]; then
+      logs="$(replay_logs)"
+      if printf '%s\n' "${logs}" | grep -Fq 'TEST_STOP_BACKGROUND_MONITOR_REQUEST'; then
+        stop_request_seen=1
+      fi
+      if [[ -z "${current_service_pid}" && "${stop_request_seen}" -eq 1 ]]; then
         service_stopped=1
         break
       fi
       sleep 1
     done
     if [[ "${service_stopped}" -ne 1 ]]; then
-      echo "::error::Background service did not exit after both supported stop paths"
-      echo "OLD_PID=${old_service_pid} CURRENT_PID=${current_service_pid:-NONE}"
+      echo "::error::Background service did not exit after app-owned stop action"
+      echo "STOP_REQUEST_SEEN=${stop_request_seen} OLD_PID=${old_service_pid} CURRENT_PID=${current_service_pid:-NONE}"
       timeout 10s adb shell dumpsys activity services com.radarx.app 2>&1 | tail -n 100 || true
       exit 1
     fi
