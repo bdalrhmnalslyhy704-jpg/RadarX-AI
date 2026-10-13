@@ -1115,10 +1115,13 @@ const TRUSTED_FIVE_MINUTE_CACHE_SOURCES = new Set([
  * forces the original REST path; cache state can never silently reduce coverage.
  */
 function usableCachedFiveMinuteSeries(cache, symbol, now, requestedLimit, freshnessMs) {
-  let series;
-  try { series = cache?.getSeries?.(symbol); } catch { return null; }
-  const all = Array.isArray(series?.candles) ? series.candles : [];
   const limit = Math.max(1, Math.trunc(Number(requestedLimit) || 180));
+  let series;
+  // Real cache implementations accept a tail limit, allowing BTC context to ask
+  // for 120 bars while smaller consumers avoid cloning the entire cache. Test
+  // doubles or legacy providers may ignore the optional second argument safely.
+  try { series = cache?.getSeries?.(symbol, limit); } catch { return null; }
+  const all = Array.isArray(series?.candles) ? series.candles : [];
   if (all.length < limit) return null;
   const rows = all.slice(-limit);
   const trusted = row => TRUSTED_FIVE_MINUTE_CACHE_SOURCES.has(String(row?.source || series?.source || ''));
@@ -1273,6 +1276,18 @@ function usableLocalFiveMinuteSeries(entry, now, requestedLimit, freshnessMs) {
   return {candles:rows,source:String(latest.source||entry?.source||'BINANCE_PUBLIC_REST_CACHE')};
 }
 
+function radar8RestPressureRatios(restHealth = {}) {
+  const rawWeight=restHealth?.shared_estimated_weight_last_minute;
+  const weight=Number(rawWeight);
+  const weightLimit=Math.max(1,Number(restHealth?.shared_max_weight_per_minute)||4000);
+  const weightRatio=rawWeight!=null&&Number.isFinite(weight)?Math.max(0,weight/weightLimit):null;
+  const rawRequests=restHealth?.shared_requests_last_minute;
+  const requests=Number(rawRequests);
+  const requestLimit=Math.max(1,Number(restHealth?.shared_max_requests_per_minute)||420);
+  const requestRatio=rawRequests!=null&&Number.isFinite(requests)?Math.max(0,requests/requestLimit):null;
+  return {weightRatio,requestRatio};
+}
+
 export function adaptiveRadar8MicroConcurrency(configuredConcurrency, cacheHealth = {}, restHealth = {}, candidateCount = 18) {
   const base = Math.max(1, Math.min(12, Math.trunc(Number(configuredConcurrency) || 6)));
   const candidates = Math.max(0, Math.trunc(Number(candidateCount) || 0));
@@ -1281,18 +1296,20 @@ export function adaptiveRadar8MicroConcurrency(configuredConcurrency, cacheHealt
   const ready = Number(cacheHealth?.ready_symbols);
   const readyRatio = Number.isFinite(expected) && expected > 0 && Number.isFinite(ready)
     ? Math.max(0, Math.min(1, ready / expected)) : 0;
-  const weight = Number(restHealth?.shared_estimated_weight_last_minute);
-  const weightLimit = Math.max(1, Number(restHealth?.shared_max_weight_per_minute) || 4000);
-  const weightRatio = Number.isFinite(weight) ? Math.max(0, weight / weightLimit) : null;
+  const {weightRatio,requestRatio}=radar8RestPressureRatios(restHealth);
+  const measuredRequestAndWeightHeadroom=weightRatio!==null&&requestRatio!==null;
   let target = base;
-  // Fully warmed market cache + verified REST headroom can safely spend more of
-  // the existing candidate budget in parallel. Unknown/high request pressure never
-  // activates the extra tier, and this does not reduce universe or quality gates.
-  if (readyRatio >= 0.70 && weightRatio !== null && weightRatio < 0.55) {
+  // Extra workers are useful only when both shared REST request count and weight
+  // have verified headroom; either exhausted budget can otherwise create waiters.
+  if (readyRatio >= 0.70 && measuredRequestAndWeightHeadroom &&
+      weightRatio < 0.55 && requestRatio < 0.55) {
     target = Math.min(10, base + 4);
-  } else if (readyRatio >= 0.35 && (weightRatio === null || weightRatio < 0.70)) {
+  } else if (readyRatio >= 0.35 && measuredRequestAndWeightHeadroom &&
+      weightRatio < 0.70 && requestRatio < 0.70) {
     target = Math.min(8, base + 2);
-  } else if (readyRatio < 0.25 && weightRatio !== null && weightRatio >= 0.75) {
+  } else if (readyRatio < 0.25 &&
+      ((weightRatio !== null && weightRatio >= 0.75) ||
+       (requestRatio !== null && requestRatio >= 0.75))) {
     // Cold-cache/high-pressure cycles stay bounded to avoid piling up REST waiters.
     target = Math.max(2, Math.min(base, 4));
   }
@@ -1307,12 +1324,11 @@ export function adaptiveRadar8DeepConcurrency(configuredConcurrency, cacheHealth
   const ready = Number(cacheHealth?.ready_symbols);
   const readyRatio = Number.isFinite(expected) && expected > 0 && Number.isFinite(ready)
     ? Math.max(0, Math.min(1, ready / expected)) : 0;
-  const weight = Number(restHealth?.shared_estimated_weight_last_minute);
-  const weightLimit = Math.max(1, Number(restHealth?.shared_max_weight_per_minute) || 4000);
-  const weightRatio = Number.isFinite(weight) ? Math.max(0, weight / weightLimit) : null;
-  // Deep scans have four independent public-data reads per symbol. Add one worker
-  // only when the shared market cache is mature and recent REST weight proves room.
-  const target = readyRatio >= 0.70 && weightRatio !== null && weightRatio < 0.55
+  const {weightRatio,requestRatio}=radar8RestPressureRatios(restHealth);
+  // Deep scans promote by one worker only with measured headroom in both shared
+  // budgets; a healthy weight number alone is not enough under count-based limits.
+  const target = readyRatio >= 0.70 && weightRatio !== null && requestRatio !== null &&
+      weightRatio < 0.55 && requestRatio < 0.55
     ? Math.min(6, base + 1) : base;
   return Math.max(1, Math.min(candidates, target));
 }
@@ -1878,7 +1894,7 @@ export class EarlyExpansionRadar{
       if(this.config.marketWideLightScanEnabled!==false){
         try{
           marketWideLightResult=this.marketWideLightScan.scan({
-            eligible,getSeries:symbol=>this.marketWideKlineCache?.getSeries(symbol)||null,
+            eligible,getSeries:symbol=>this.marketWideKlineCache?.getSeries(symbol,96)||null,
             now:fastSeenAt,cycle,
             isExceptional:row=>{
               const fast=fastBySymbol.get(row.symbol)||{};

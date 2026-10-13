@@ -152,7 +152,9 @@ function cacheTtlMs(path, query = {}) {
   if (path === '/api/v3/exchangeInfo') return 5 * 60 * 1000;
   if (path === '/api/v3/ticker/24hr') return query.symbol ? 1500 : 2500;
   if (path === '/api/v3/depth') return 700;
-  if (path === '/api/v3/klines') return 0;
+  // A 2.5s cache coalesces overlapping public-data scans. Consumers still reject
+  // open/future candles, so cached in-progress candles can never become signals.
+  if (path === '/api/v3/klines') return 2500;
   return 0;
 }
 
@@ -231,6 +233,7 @@ export class RestClient {
     shared_queue_depth:SHARED.inflight.size,
     shared_cache_entries:SHARED.cache.size,
     shared_requests_last_minute:SHARED.usedAt.length,
+    shared_max_requests_per_minute:SHARED_MAX_REQUESTS_PER_MINUTE,
     shared_estimated_weight_last_minute:SHARED.usedAt.reduce((sum,item)=>sum+item.weight,0),
     shared_max_weight_per_minute:SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE,
     binance_reported_used_weight_1m:SHARED.observedUsedWeight1m,
@@ -290,7 +293,15 @@ export class RestClient {
           recordObservedUsedWeight(r.headers);
           const data=await r.json();
           const result={data,source:this.baseUrls[idx],receivedAt:Date.now()};
-          if(ttl>0) cacheSharedValue(key,{expiresAt:Date.now()+ttl,value:result});
+          // Do not retain malformed/seconds-based Kline payloads in the short
+          // shared cache: another consumer must be able to try REST fallback.
+          const cacheableKlines=path!=='/api/v3/klines' || (
+            Array.isArray(data) && data.length>0 && data.every(row =>
+              Array.isArray(row) && Number.isFinite(Number(row[0])) &&
+              Number(row[0])>1e12 && Number.isFinite(Number(row[6])) && Number(row[6])>1e12
+            )
+          );
+          if(ttl>0 && cacheableKlines) cacheSharedValue(key,{expiresAt:Date.now()+ttl,value:result});
           this.currentBaseIndex=idx; this.lastSuccessAt=Date.now();
           this.lastError=null; this.state='LIVE';
           return result;
