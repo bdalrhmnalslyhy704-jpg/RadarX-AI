@@ -398,10 +398,9 @@ for attempt in $(seq 1 120); do
       exit 1
     fi
 
-    # Ask a debug-only in-app receiver to dispatch ACTION_STOP from the app UID.
-    # The production service remains non-exported, and the receiver is excluded from release APKs.
-    stop_output="$(timeout 15s adb shell am broadcast -n com.radarx.app/.DebugBackgroundStopReceiver -a com.radarx.app.DEBUG_STOP_BACKGROUND_MONITOR 2>&1)" || {
-      echo "::error::Could not request the debug-only app-owned background stop action"
+    # MainActivity is singleTop, so the stop test exercises its real onNewIntent path.
+    stop_output="$(timeout 15s adb shell am start -n com.radarx.app/.MainActivity --ez radarx_test_stop_background_monitor true 2>&1)" || {
+      echo "::error::Could not deliver the app-owned background stop intent to MainActivity"
       echo "${stop_output}"
       exit 1
     }
@@ -426,7 +425,7 @@ for attempt in $(seq 1 120); do
         service_registered=0
       fi
       # Android may keep an empty process cached after its ServiceRecord is removed.
-      # Confirm the real stop action and service removal, not Linux process exit.
+      # Verify the lifecycle callback, service-side action, and removal from dumpsys.
       if [[ "${service_registered}" -eq 0 && "${stop_request_seen}" -eq 1 && "${stop_action_seen}" -eq 1 ]]; then
         service_stopped=1
         break
@@ -434,7 +433,7 @@ for attempt in $(seq 1 120); do
       sleep 1
     done
     if [[ "${service_stopped}" -ne 1 ]]; then
-      echo "::error::Background service remained registered after app-owned stop action"
+      echo "::error::Background service remained registered after MainActivity stop intent"
       echo "STOP_REQUEST_SEEN=${stop_request_seen} STOP_ACTION_SEEN=${stop_action_seen} OLD_PID=${old_service_pid} CURRENT_PID=${current_service_pid:-NONE} SERVICE_REGISTERED=${service_registered:-UNKNOWN}"
       timeout 10s adb shell dumpsys activity services com.radarx.app 2>&1 | tail -n 100 || true
       exit 1
