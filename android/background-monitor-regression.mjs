@@ -121,11 +121,15 @@ assert.match(smokeReplay, /reconciled_log_keys/,
   'the replay audit must prove every accepted or reconciled alert has a unique stable identity');
 assert.match(smokeReplay, /Duplicate NotificationManager post requests/,
   'the replay smoke test must reject duplicate notification post requests');
-assert.match(smokeReplay, /STOP_BACKGROUND_MONITOR/,
-  'restart replay must use the service-owned stop action before falling back to ActivityManager');
+assert.match(smokeReplay, /radarx_test_stop_background_monitor/,
+  'restart replay must request the stop action through the app-owned debug-only Activity hook');
+assert.match(smokeReplay, /TEST_STOP_BACKGROUND_MONITOR_REQUEST/,
+  'the restart replay must verify that the app accepted the lifecycle stop request');
+assert.match(main, /radarx_test_stop_background_monitor/,
+  'the debug-only Activity hook must expose service stop only to emulator test launch intents');
 assert.match(smokeReplay, /was absent before the restart checkpoint/,
   'the service restart replay must prove its process was alive before trying to stop it');
-assert.match(smokeReplay, /did not exit after both supported stop paths/,
-  'the restart replay must verify actual process exit rather than trusting the stop command exit code');
+assert.match(smokeReplay, /did not exit after app-owned stop action/,
+  'the service restart replay must verify actual process exit after the app-owned stop request');
 
 
