@@ -322,11 +322,19 @@ export class MarketWideKlineCache {
     return accepted;
   }
 
-  getSeries(symbol) {
+  // Return only the requested tail window when a consumer needs a smaller
+  // analysis horizon. Keep the full bounded cache internally for BTC context and
+  // diagnostics, but avoid allocating/cloning 180 candle objects for every
+  // eligible symbol on each market-wide light scan.
+  getSeries(symbol, maxCandles = this.maxCandlesPerSymbol) {
     const key = String(symbol || '').trim().toUpperCase();
     const entry = this.cache.get(key);
     if (!entry) return null;
-    const candles = entry.candles.map(row => ({...row}));
+    const requested = Math.trunc(Number(maxCandles));
+    const limit = Number.isFinite(requested) && requested > 0
+      ? Math.min(this.maxCandlesPerSymbol, requested)
+      : this.maxCandlesPerSymbol;
+    const candles = entry.candles.slice(-limit).map(row => ({...row}));
     const last = candles.at(-1) || null;
     return {
       symbol: key,
@@ -335,7 +343,8 @@ export class MarketWideKlineCache {
       receivedAt: last?.receivedAt ?? null,
       latestCloseTime: last?.closeTime ?? null,
       latestCandleAgeMs: last ? Math.max(0, this.clock() - Number(last.closeTime)) : null,
-      cachedCandleCount: candles.length,
+      cachedCandleCount: entry.candles.length,
+      returnedCandleCount: candles.length,
       lastSeenAt: entry.lastSeenAt
     };
   }
