@@ -60,7 +60,7 @@ function makeClosedCandles(symbol, intervalMs, count, at=now, source='BINANCE_PU
   });
 }
 
-test('Radar 8 reuses only a complete fresh closed BTC 5m cache and keeps BTC 1h context live',async()=>{
+test('Radar 8 falls back to fresh BTC 1h REST context when no verified hour cache exists',async()=>{
   const fiveMinute=makeClosedCandles('BTCUSDT',5*60_000,120,now,'BINANCE_PUBLIC_WS');
   const requested=[];
   const result=await fetchRadar8MarketContext({
@@ -76,6 +76,46 @@ test('Radar 8 reuses only a complete fresh closed BTC 5m cache and keeps BTC 1h 
   assert.equal(result.marketContext.oneHour.length,60);
   assert.equal(result.marketContext.marketMedianChange24hPct,0.5);
   assert.equal(result.marketContext.marketBreadthPct,50);
+  assert.equal(result.oneHourCacheHit,false);
+  assert.equal(result.oneHourContextCache.candles.length,60);
+});
+
+test('Radar 8 reuses only a verified closed BTC 1h context until the next hour closes',async()=>{
+  const fiveMinute=makeClosedCandles('BTCUSDT',5*60_000,120,now,'BINANCE_PUBLIC_WS');
+  const oneHour=makeClosedCandles('BTCUSDT',60*60_000,60,now,'BINANCE_PUBLIC_REST');
+  const requested=[];
+  const result=await fetchRadar8MarketContext({
+    rest:{async klines(symbol,interval,options){requested.push({symbol,interval,options});throw new Error('REST_SHOULD_NOT_BE_NEEDED_FOR_VALID_CACHES');}},
+    marketWideKlineCache:{getSeries(symbol){assert.equal(symbol,'BTCUSDT');return {symbol,candles:fiveMinute,source:'BINANCE_PUBLIC_WS'};}},
+    cachedOneHourContext:{candles:oneHour,source:'BINANCE_PUBLIC_REST'},
+    config:{fiveMinuteKlines:120,freshness5mMs:8*60_000,freshness1hMs:75*60_000},
+    eligible:[],now
+  });
+  assert.deepEqual(requested,[]);
+  assert.equal(result.fiveMinuteCacheHit,true);
+  assert.equal(result.oneHourCacheHit,true);
+  assert.equal(result.marketContext.oneHour.length,60);
+  assert.equal(result.marketContext.oneHour.at(-1).closeTime,Math.floor(now/(60*60_000))*60*60_000-1);
+});
+
+test('Radar 8 refreshes stale BTC 1h cache data from REST without reusing an old closed candle',async()=>{
+  const fiveMinute=makeClosedCandles('BTCUSDT',5*60_000,120,now,'BINANCE_PUBLIC_WS');
+  const staleOneHour=makeClosedCandles('BTCUSDT',60*60_000,60,now-60*60_000,'BINANCE_PUBLIC_REST');
+  const requested=[];
+  const result=await fetchRadar8MarketContext({
+    rest:{async klines(symbol,interval,options){requested.push({symbol,interval,options});return {
+      candles:makeClosedCandles(symbol,interval==='1h'?60*60_000:5*60_000,interval==='1h'?60:120,now,'BINANCE_PUBLIC_REST'),
+      source:'BINANCE_PUBLIC_REST'
+    };}},
+    marketWideKlineCache:{getSeries(symbol){assert.equal(symbol,'BTCUSDT');return {symbol,candles:fiveMinute,source:'BINANCE_PUBLIC_WS'};}},
+    cachedOneHourContext:{candles:staleOneHour,source:'BINANCE_PUBLIC_REST'},
+    config:{fiveMinuteKlines:120,freshness5mMs:8*60_000,freshness1hMs:75*60_000},
+    eligible:[],now
+  });
+  assert.deepEqual(requested.map(x=>x.interval),['1h']);
+  assert.equal(result.oneHourCacheHit,false);
+  assert.equal(result.oneHourContextCache.candles.length,60);
+  assert.equal(result.marketContext.oneHour.at(-1).closeTime,Math.floor(now/(60*60_000))*60*60_000-1);
 });
 
 test('Radar 8 falls back to BTC 5m REST when the shared cache is incomplete',async()=>{
