@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 const service = await readFile('android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java', 'utf8');
 const main = await readFile('android/app/src/main/java/com/radarx/app/MainActivity.java', 'utf8');
+const manifest = await readFile('android/app/src/main/AndroidManifest.xml', 'utf8');
 const replayFixture = await readFile('android/background-replay-test-server.mjs', 'utf8');
 const api = await readFile('phase2/http/api.mjs', 'utf8');
 const store = await readFile('phase2/core/store.mjs', 'utf8');
@@ -133,7 +134,7 @@ assert.match(smokeReplay, /Background service remained registered after MainActi
   'the service restart replay must verify Android removed the real ServiceRecord after the stop request');
 assert.match(smokeReplay, /BACKGROUND_STOP_ACTION_RECEIVED/,
   'the service restart replay must confirm the service itself received ACTION_STOP');
-assert.match(smokeReplay, /android:launchMode="singleTop"/,
+assert.match(manifest, /android:launchMode="singleTop"/,
   'the manifest must deliver repeated test intents to MainActivity.onNewIntent');
 
 
