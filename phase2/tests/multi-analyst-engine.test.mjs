@@ -7,7 +7,7 @@ assert.equal(nextContinuousScanDelayMs(60000,0),60000);
 assert.equal(nextContinuousScanDelayMs(60000,12500),47500);
 assert.equal(nextContinuousScanDelayMs(60000,60000),0);
 assert.equal(nextContinuousScanDelayMs(60000,93000),0);
-assert.equal(nextContinuousScanDelayMs(1000,0),14000);
+assert.equal(nextContinuousScanDelayMs(1000,0),15000);
 
 function candle(i,{tf='15m',base=100,trend=0.001,volume=1000}={}){
   const openTime=i*900000,close=base*(1+trend*i);
