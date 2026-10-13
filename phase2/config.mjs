@@ -268,7 +268,7 @@ export const CONFIG = Object.freeze({
     microConcurrency: int(process.env.RADARX_EARLY_EXPANSION_MICRO_CONCURRENCY, 6),
     deepConcurrency: int(process.env.RADARX_EARLY_EXPANSION_DEEP_CONCURRENCY, 4),
     oneMinuteKlines: int(process.env.RADARX_EARLY_EXPANSION_1M_KLINES, 120),
-    fiveMinuteKlines: int(process.env.RADARX_EARLY_EXPANSION_5M_KLINES, 120),
+    fiveMinuteKlines: int(process.env.RADARX_EARLY_EXPANSION_5M_KLINES, 60),
     fifteenMinuteKlines: int(process.env.RADARX_EARLY_EXPANSION_15M_KLINES, 160),
     oneHourKlines: int(process.env.RADARX_EARLY_EXPANSION_1H_KLINES, 260),
     fourHourKlines: int(process.env.RADARX_EARLY_EXPANSION_4H_KLINES, 220),
