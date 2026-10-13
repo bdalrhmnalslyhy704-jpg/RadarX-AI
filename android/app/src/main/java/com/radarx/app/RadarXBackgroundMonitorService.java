@@ -92,6 +92,7 @@ public final class RadarXBackgroundMonitorService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (ACTION_STOP.equals(intent != null ? intent.getAction() : null)) {
+            Log.i(TAG, "BACKGROUND_STOP_ACTION_RECEIVED");
             stopMonitoring();
             return START_NOT_STICKY;
         }
