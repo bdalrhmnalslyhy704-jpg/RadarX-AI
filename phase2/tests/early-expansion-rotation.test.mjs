@@ -191,22 +191,23 @@ test('Radar 8 falls back to BTC 5m REST when the shared cache is incomplete',asy
 });
 
 test('Radar 8 adaptive Micro concurrency respects cache readiness, shared REST request/weight headroom and candidate bounds',()=>{
-  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
-    {shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},18),10);
-  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:10},
-    {shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000},18),4);
-  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
-    {shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000},18),6);
-  // A partially warmed cache can use two extra workers only when REST weight is healthy.
-  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:40},
-    {shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},18),8);
-  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:40},
-    {shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000},18),6);
+  const lowPressure={shared_requests_last_minute:100,shared_max_requests_per_minute:420,
+    shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000};
+  const highWeightPressure={shared_requests_last_minute:100,shared_max_requests_per_minute:420,
+    shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000};
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},lowPressure,18),10);
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:10},highWeightPressure,18),4);
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},highWeightPressure,18),4,
+    'high REST weight pressure caps workers even when the WebSocket cache is warm');
+  // A partly warmed production cache can use two extra workers when both shared budgets have headroom.
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:40},lowPressure,18),8);
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:31},lowPressure,18),8,
+    '25-35% cache readiness should not leave the scanner at its base concurrency');
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:40},highWeightPressure,18),4);
   // Near the headroom boundary, the conservative 8-worker tier stays active.
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
     {shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:2200,shared_max_weight_per_minute:4000},18),8);
-  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
-    {shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},3),3);
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},lowPressure,3),3);
   assert.equal(adaptiveRadar8MicroConcurrency(0,{}, {},18),6);
   assert.equal(adaptiveRadar8MicroConcurrency(99,{expected_symbols:100,ready_symbols:100},
     {shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:0,shared_max_weight_per_minute:4000},18),10);
@@ -214,8 +215,8 @@ test('Radar 8 adaptive Micro concurrency respects cache readiness, shared REST r
     {shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},18),6,
     'unknown shared request pressure must not promote concurrency');
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:100},
-    {shared_requests_last_minute:350,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},18),6,
-    'high request-count pressure blocks the extra tier even when request weight is low');
+    {shared_requests_last_minute:350,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},18),4,
+    'high request-count pressure caps workers even when request weight is low');
 });
 
 test('Radar 8 adaptive Deep concurrency adds one worker only with full cache readiness and measured REST headroom',()=>{
