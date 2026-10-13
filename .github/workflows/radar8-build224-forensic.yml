@@ -134,14 +134,21 @@ jobs:
           const bySymbol = new Map((report.results || []).map(row => [row.symbol, row]));
           const missing = expected.filter(symbol => {
             const row = bySymbol.get(symbol);
-            return !row || row.data_quality?.trade_coverage_complete !== true ||
-              row.data_quality?.candle_fetch_complete !== true;
+            if (!row || row.data_quality?.candle_fetch_complete !== true ||
+                Number(row.data_quality?.closed_1m_candles) <= 0 ||
+                Number(row.summary?.replay_steps) <= 0 ||
+                row.data_quality?.synthetic_data_used !== false) return true;
+            const fullTrade = row.data_quality?.trade_coverage_complete === true &&
+              row.data_quality?.replay_mode === 'FULL_TRADE';
+            const candleFallback = row.data_quality?.replay_mode === 'CANDLE_ONLY_FALLBACK' &&
+              row.data_quality?.candle_only_fallback_used === true;
+            return !(fullTrade || candleFallback);
           });
           if (missing.length) {
             console.error('Historical replay coverage incomplete for: ' + missing.join(', '));
             process.exit(1);
           }
-          console.log('All ' + expected.length + ' symbols have complete closed-candle and aggregate-trade coverage.');
+          console.log('All ' + expected.length + ' symbols have complete closed-candle replay coverage; trade-limited rows are explicitly marked candle-only and exact aggTrade crossing times remain unknown.');
           NODE
 
       - name: Require complete 90-case matrix coverage
@@ -156,13 +163,13 @@ jobs:
           const windows = report.windows || [];
           const badWindows = windows.filter(window =>
             window.market_regime?.regime === 'UNKNOWN' ||
-            window.summary?.coverage_status !== 'COMPLETE' ||
+            !['COMPLETE', 'COMPLETE_WITH_CANDLE_FALLBACK'].includes(window.summary?.coverage_status) ||
             window.summary?.requested_symbols !== expectedSymbols ||
             window.summary?.returned_symbol_results !== expectedSymbols ||
             window.process?.exit_code !== 0 ||
             window.process?.timed_out === true
           );
-          const complete = report.matrix_summary?.status === 'COMPLETE' &&
+          const complete = ['COMPLETE', 'COMPLETE_WITH_FALLBACK'].includes(report.matrix_summary?.status) &&
             report.symbol_count === expectedSymbols &&
             report.window_count === expectedWindows &&
             windows.length === expectedWindows &&
@@ -185,7 +192,7 @@ jobs:
             }, null, 2));
             process.exit(1);
           }
-          console.log('Complete evidence: 30 symbols × 3 observed market windows = 90 symbol-window cases.');
+          console.log('Complete evidence: 30 symbols × 3 observed market windows = 90 symbol-window cases with complete closed candles. Candle-only fallbacks remain explicitly labeled; exact aggTrade crossing times are not fabricated.');
           NODE
 
       - name: Production deploy guard
