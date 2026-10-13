@@ -172,6 +172,28 @@ export function sharedResponseCacheTtlMs(path, query = {}) {
   return 0;
 }
 
+// A cached REST snapshot must expire before any candle that was still open at
+// receive time reaches its close timestamp. Otherwise a later cache hit could
+// relabel a partial candle as closed merely because wall time advanced.
+export function sharedResponseCacheExpiresAt(path, query = {}, result = {}, now = Date.now()) {
+  const ttl = sharedResponseCacheTtlMs(path, query);
+  if (!(ttl > 0)) return Number(now);
+  let expiresAt = Number(now) + ttl;
+  if (path !== '/api/v3/klines' || !Array.isArray(result?.data)) return expiresAt;
+  const receivedAt = Number(result?.receivedAt);
+  const snapshotAt = Number.isFinite(receivedAt) ? receivedAt : Number(now);
+  let firstOpenCandleCloseTime = Infinity;
+  for (const row of result.data) {
+    if (!Array.isArray(row) || Number(row[0]) > snapshotAt) continue;
+    const closeTime = Number(row[6]);
+    if (Number.isFinite(closeTime) && closeTime >= snapshotAt && closeTime < firstOpenCandleCloseTime) {
+      firstOpenCandleCloseTime = closeTime;
+    }
+  }
+  if (Number.isFinite(firstOpenCandleCloseTime)) expiresAt = Math.min(expiresAt, firstOpenCandleCloseTime);
+  return expiresAt;
+}
+
 function cacheKey(baseUrls, path, query) {
   // GET /api/v3/ticker/24hr without symbol(s) is Binance's full-market batch
   // endpoint. Its public Spot payload is interchangeable across the configured
@@ -315,7 +337,11 @@ export class RestClient {
               Number(row[0])>1e12 && Number.isFinite(Number(row[6])) && Number(row[6])>1e12
             )
           );
-          if(ttl>0 && cacheableKlines) cacheSharedValue(key,{expiresAt:Date.now()+ttl,value:result});
+          if(ttl>0 && cacheableKlines) {
+            const cacheNow=Date.now();
+            const expiresAt=sharedResponseCacheExpiresAt(path,query,result,cacheNow);
+            if(expiresAt>cacheNow) cacheSharedValue(key,{expiresAt,value:result},cacheNow);
+          }
           this.currentBaseIndex=idx; this.lastSuccessAt=Date.now();
           this.lastError=null; this.state='LIVE';
           return result;
