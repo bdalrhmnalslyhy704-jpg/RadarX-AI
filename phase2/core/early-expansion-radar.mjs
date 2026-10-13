@@ -1677,10 +1677,10 @@ export class EarlyExpansionRadar{
       outcome_maintenance_ms:0,micro_scan_ms:0,market_micro_overlap_ms:0,
       deep_scan_ms:0,signal_archive_ms:0,notification_ms:0};
     let cacheCleanupSummary={deep_removed:0,micro_5m_removed:0,deep_entries:this.deepCandleWindowCache.size,micro_5m_entries:this.microFiveMinuteWindowCache.size};
-    const cacheCleanupStartedAt=this.clock();
-    cacheCleanupSummary=this.pruneCandleWindowCaches(cacheCleanupStartedAt);
-    phaseTimings.cache_cleanup_ms=Math.max(0,this.clock()-cacheCleanupStartedAt);
     try{
+      const cacheCleanupStartedAt=this.clock();
+      cacheCleanupSummary=this.pruneCandleWindowCaches(cacheCleanupStartedAt);
+      phaseTimings.cache_cleanup_ms=Math.max(0,this.clock()-cacheCleanupStartedAt);
       // Hydration must be protected by the same lifecycle guard as the scan.
       await this.scheduler.hydrate();
       const q=this.normalizeQuote(quote);
