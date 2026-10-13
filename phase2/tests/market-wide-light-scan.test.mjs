@@ -376,7 +376,7 @@ test('verified scan-journey closed candles can seed live cache without any added
 
 
 
-test('getSeries returns a bounded tail window without discarding full cached closed history', () => {
+test('getSeries returns bounded tails from the retained closed-candle window', () => {
   const now = 1_900_000_000_000;
   const cache = new MarketWideKlineCache({
     urls:['wss://stream.test/stream'], WebSocketImpl:FakeSocket,
@@ -388,14 +388,14 @@ test('getSeries returns a bounded tail window without discarding full cached clo
   const full = cache.getSeries('AAAUSDT');
   const ninetySix = cache.getSeries('AAAUSDT',96);
   const oneTwenty = cache.getSeries('AAAUSDT',120);
-  assert.equal(full.candles.length,150);
+  assert.equal(full.candles.length,120,'storage stays bounded while retaining Radar 8 BTC context history');
   assert.equal(ninetySix.candles.length,96);
   assert.equal(oneTwenty.candles.length,120);
-  assert.equal(ninetySix.cachedCandleCount,150,'the underlying cache remains complete');
+  assert.equal(ninetySix.cachedCandleCount,120,'the cache retains the complete 120-bar context window');
   assert.equal(ninetySix.returnedCandleCount,96,'the copied series reports its bounded return size');
-  assert.equal(ninetySix.candles[0].openTime,full.candles[54].openTime,'bounded data is the newest tail, not the oldest prefix');
+  assert.equal(ninetySix.candles[0].openTime,full.candles[24].openTime,'bounded data is the newest tail, not the oldest prefix');
   assert.ok(ninetySix.candles.every(candle=>candle.closed===true&&candle.closeTime<=now));
-  assert.equal(cache.getSeries('AAAUSDT').candles.length,150,'tail reads never mutate the stored cache');
+  assert.equal(cache.getSeries('AAAUSDT').candles.length,120,'tail reads never mutate the stored cache or exceed the retention bound');
 });
 
 test('market-wide websocket cache bounds/deduplicates streams and keeps only closed candles', () => {
