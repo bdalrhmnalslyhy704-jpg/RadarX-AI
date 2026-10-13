@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,fetchRadar8MarketContext} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -60,12 +60,49 @@ function makeClosedCandles(symbol, intervalMs, count, at=now, source='BINANCE_PU
   });
 }
 
+test('Radar 8 reuses only a complete fresh closed BTC 5m cache and keeps BTC 1h context live',async()=>{
+  const fiveMinute=makeClosedCandles('BTCUSDT',5*60_000,120,now,'BINANCE_PUBLIC_WS');
+  const requested=[];
+  const result=await fetchRadar8MarketContext({
+    rest:{async klines(symbol,interval,options){requested.push({symbol,interval,options});return {candles:makeClosedCandles(symbol,interval==='1h'?60*60_000:5*60_000,interval==='1h'?60:120,now,'BINANCE_PUBLIC_REST'),source:'BINANCE_PUBLIC_REST'};}},
+    marketWideKlineCache:{getSeries(symbol){assert.equal(symbol,'BTCUSDT');return {symbol,candles:fiveMinute,source:'BINANCE_PUBLIC_WS'};}},
+    config:{fiveMinuteKlines:120,freshness5mMs:8*60_000},
+    eligible:[{priceChange24h:2},{priceChange24h:-1},{priceChange24h:null}],now
+  });
+  assert.deepEqual(requested.map(x=>x.interval),['1h']);
+  assert.equal(result.fiveMinuteCacheHit,true);
+  assert.equal(result.btcFive.length,120);
+  assert.equal(result.marketContext.fiveMinute.length,120);
+  assert.equal(result.marketContext.oneHour.length,60);
+  assert.equal(result.marketContext.marketMedianChange24hPct,0.5);
+  assert.equal(result.marketContext.marketBreadthPct,50);
+});
+
+test('Radar 8 falls back to BTC 5m REST when the shared cache is incomplete',async()=>{
+  const requested=[];
+  const result=await fetchRadar8MarketContext({
+    rest:{async klines(symbol,interval,options){requested.push(interval);return {candles:makeClosedCandles(symbol,interval==='1h'?60*60_000:5*60_000,interval==='1h'?60:120,now,'BINANCE_PUBLIC_REST'),source:'BINANCE_PUBLIC_REST'};}},
+    marketWideKlineCache:{getSeries(symbol){return {symbol,candles:makeClosedCandles(symbol,5*60_000,119,now,'BINANCE_PUBLIC_WS'),source:'BINANCE_PUBLIC_WS'};}},
+    config:{fiveMinuteKlines:120,freshness5mMs:8*60_000},eligible:[],now
+  });
+  assert.deepEqual(new Set(requested),new Set(['5m','1h']));
+  assert.equal(result.fiveMinuteCacheHit,false);
+  assert.equal(result.btcFive.length,120);
+  assert.equal(result.marketContext.marketMedianChange24hPct,null);
+  assert.equal(result.marketContext.marketBreadthPct,null);
+});
+
 test('Radar 8 adaptive Micro concurrency respects cache readiness, shared REST pressure and candidate bounds',()=>{
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
     {shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},18),8);
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:10},
     {shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000},18),4);
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
+    {shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000},18),6);
+  // A partially warmed cache can use two extra workers only when REST weight is healthy.
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:40},
+    {shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},18),8);
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:40},
     {shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000},18),6);
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
     {shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},3),3);
