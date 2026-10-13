@@ -1405,7 +1405,6 @@ export class EarlyExpansionRadar{
     };
     const runCycle=async()=>{
       if(!this.running)return;
-      const cycleStartedAt=this.clock();
       const cycleStartedPerf=performance.now();
       let completed=false;
       try{completed=await this.tick();}
@@ -1785,17 +1784,23 @@ export class EarlyExpansionRadar{
   }
   cleanupRuntimeRingBuffers(now=this.clock()){
     const activeSymbols=new Set((this.universe||[]).map(symbol=>String(symbol||'').trim().toUpperCase()).filter(Boolean));
-    const stateMaps=[
-      this.fastState,this.lastAlertAt,this.lastAlertScore,this.lastBand,
-      this.lastActivityShockAt,this.lastActivityShockKeyBySymbol,this.fastShockPendingUntil,
-      this.lastMicroScanCycleBySymbol,this.lastDeepScanCycleBySymbol,
-      this.lastDeepAtBySymbol,this.firstEligibleAtBySymbol,
-      this.marketWideCacheArchiveHydrationAttemptAtBySymbol
-    ];
     let removedInactiveEntries=0;
-    for(const map of stateMaps)removedInactiveEntries+=pruneInactiveSymbolStateMap(map,activeSymbols);
-    const schedulerMaps=[this.scheduler?.lastStartedAt,this.scheduler?.queuedAt,this.scheduler?.lastDeferredAt];
-    for(const map of schedulerMaps)removedInactiveEntries+=pruneInactiveSymbolStateMap(map,activeSymbols,{stageQualifiedKeys:true});
+    // An empty universe means exchangeInfo has not been successfully restored yet.
+    // In that state, preserve rehydrated fairness/alert state rather than treating all
+    // symbols as delisted. Once a non-empty authoritative Spot universe is available,
+    // stale-symbol pruning is safe.
+    if(activeSymbols.size>0){
+      const stateMaps=[
+        this.fastState,this.lastAlertAt,this.lastAlertScore,this.lastBand,
+        this.lastActivityShockAt,this.lastActivityShockKeyBySymbol,this.fastShockPendingUntil,
+        this.lastMicroScanCycleBySymbol,this.lastDeepScanCycleBySymbol,
+        this.lastDeepAtBySymbol,this.firstEligibleAtBySymbol,
+        this.marketWideCacheArchiveHydrationAttemptAtBySymbol
+      ];
+      for(const map of stateMaps)removedInactiveEntries+=pruneInactiveSymbolStateMap(map,activeSymbols);
+      const schedulerMaps=[this.scheduler?.lastStartedAt,this.scheduler?.queuedAt,this.scheduler?.lastDeferredAt];
+      for(const map of schedulerMaps)removedInactiveEntries+=pruneInactiveSymbolStateMap(map,activeSymbols,{stageQualifiedKeys:true});
+    }
     for(const [symbol,until] of this.fastShockPendingUntil){
       if(Number(until)<=Number(now)){this.fastShockPendingUntil.delete(symbol);}
     }
@@ -1804,8 +1809,10 @@ export class EarlyExpansionRadar{
     const maxShockHistory=Math.max(1,Math.trunc(Number(this.config.maxActivityShockAlertsPerHour)||6));
     if(this.activityShockTimestamps.length>maxShockHistory)this.activityShockTimestamps=this.activityShockTimestamps.slice(-maxShockHistory);
     const shockTimestampsRemoved=beforeShockTimestamps-this.activityShockTimestamps.length;
-    for(const symbol of this.marketWideCacheArchiveLastEligibleSymbols){
-      if(!activeSymbols.has(symbol))this.marketWideCacheArchiveLastEligibleSymbols.delete(symbol);
+    if(activeSymbols.size>0){
+      for(const symbol of this.marketWideCacheArchiveLastEligibleSymbols){
+        if(!activeSymbols.has(symbol))this.marketWideCacheArchiveLastEligibleSymbols.delete(symbol);
+      }
     }
     // Scheduler writes are normally flushed after each tick. If durable storage is
     // unavailable for a prolonged period, preserve the newest 5,000 audit events
