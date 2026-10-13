@@ -1490,7 +1490,11 @@ export class EarlyExpansionRadar{
     const requestedRotation=Math.max(0,Math.trunc(this.config.rotationReserve??3));
     const quietCap=target>1?Math.floor(target/3):0;
     const q=Math.min(requestedQuiet,quietCap,Math.max(0,target-1));
-    const coreReserve=Math.max(3,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2))+2);
+    const requestedExceptionSlots=Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2));
+    // Scale the reserved core to the batch size; five Micro slots are available
+    // on the production 18-slot batch without starving smaller configured batches.
+    const reservedExceptionSlots=Math.min(requestedExceptionSlots,Math.max(2,Math.floor(target*.35)));
+    const coreReserve=Math.max(3,reservedExceptionSlots+2);
     const rotationCap=Math.max(0,target-q-(target>=6?coreReserve:2));
     const r=Math.min(requestedRotation,rotationCap);
     const core=target-q-r;
@@ -1506,7 +1510,7 @@ export class EarlyExpansionRadar{
       b._rotationAge-a._rotationAge||a._rotation-b._rotation||a.symbol.localeCompare(b.symbol));
     const byExceptional=all.filter(x=>x._exceptional).sort((a,b)=>b._microPreScore-a._microPreScore||b._rotationAge-a._rotationAge||a.symbol.localeCompare(b.symbol));
     const selected=[],seen=new Set();
-    const exceptionSlots=Math.min(core,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2)));
+    const exceptionSlots=Math.min(core,requestedExceptionSlots);
     takeUniqueLane(selected,seen,byExceptional,exceptionSlots,'exceptional');
     takeUniqueLane(selected,seen,byScore,Math.max(0,core-selected.length),'score');
     takeUniqueLane(selected,seen,byQuiet,q,'quiet');
