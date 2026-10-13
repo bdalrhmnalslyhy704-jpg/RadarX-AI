@@ -179,7 +179,7 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   microConcurrency:6,
   deepConcurrency:4,
   oneMinuteKlines:120,
-  fiveMinuteKlines:120,
+  fiveMinuteKlines:60,
   fifteenMinuteKlines:160,
   oneHourKlines:260,
   fourHourKlines:220,
