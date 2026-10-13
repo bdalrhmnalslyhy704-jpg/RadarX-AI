@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,fetchRadar8MarketContext} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -190,9 +190,9 @@ test('Radar 8 falls back to BTC 5m REST when the shared cache is incomplete',asy
   assert.equal(result.marketContext.marketBreadthPct,null);
 });
 
-test('Radar 8 adaptive Micro concurrency respects cache readiness, shared REST pressure and candidate bounds',()=>{
+test('Radar 8 adaptive Micro concurrency respects cache readiness, REST headroom and candidate bounds',()=>{
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
-    {shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},18),8);
+    {shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},18),10);
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:10},
     {shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000},18),4);
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
@@ -202,11 +202,26 @@ test('Radar 8 adaptive Micro concurrency respects cache readiness, shared REST p
     {shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},18),8);
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:40},
     {shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000},18),6);
+  // Near the headroom boundary, the conservative 8-worker tier stays active.
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
+    {shared_estimated_weight_last_minute:2200,shared_max_weight_per_minute:4000},18),8);
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
     {shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},3),3);
   assert.equal(adaptiveRadar8MicroConcurrency(0,{}, {},18),6);
   assert.equal(adaptiveRadar8MicroConcurrency(99,{expected_symbols:100,ready_symbols:100},
-    {shared_estimated_weight_last_minute:0,shared_max_weight_per_minute:4000},18),8);
+    {shared_estimated_weight_last_minute:0,shared_max_weight_per_minute:4000},18),10);
+});
+
+test('Radar 8 adaptive Deep concurrency adds one worker only with full cache readiness and measured REST headroom',()=>{
+  const ready={expected_symbols:100,ready_symbols:80};
+  const headroom={shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000};
+  const pressure={shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000};
+  assert.equal(adaptiveRadar8DeepConcurrency(4,ready,headroom,5),5);
+  assert.equal(adaptiveRadar8DeepConcurrency(4,ready,pressure,5),4);
+  assert.equal(adaptiveRadar8DeepConcurrency(4,{expected_symbols:100,ready_symbols:40},headroom,5),4);
+  assert.equal(adaptiveRadar8DeepConcurrency(4,ready,headroom,3),3);
+  assert.equal(adaptiveRadar8DeepConcurrency(4,ready,headroom,0),1);
+  assert.equal(adaptiveRadar8DeepConcurrency(0,{}, {},5),4);
 });
 
 test('Radar 8 reuses only a complete fresh closed 5m cache window and keeps 1m REST fresh',async()=>{
