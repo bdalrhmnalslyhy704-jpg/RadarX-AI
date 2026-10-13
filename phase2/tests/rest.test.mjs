@@ -126,3 +126,21 @@ test('TEST_FIXTURE: shared REST cache prunes expired rotating-symbol payloads in
   assert.ok(health.shared_cache_entries<=12,
     `expired symbol payloads must be pruned after the bounded cleanup interval; current entries=${health.shared_cache_entries}`);
 });
+
+
+test('TEST_FIXTURE: full-market batch ticker snapshot is multiplexed across radar REST clients',async()=>{
+  let calls=0;
+  const makeFetch=label=>async url=>{
+    calls++;
+    assert.ok(url.endsWith('/api/v3/ticker/24hr'));
+    return {status:200,ok:true,headers:new Map(),json:async()=>[{symbol:label+'USDT',lastPrice:'1',quoteVolume:'1000'}]};
+  };
+  const a=new RestClient({baseUrls:['https://ticker-primary.test','https://ticker-fallback.test'],fetchImpl:makeFetch('A'),timeoutMs:200,minIntervalMs:0,maxRequestsPerMinute:100});
+  const b=new RestClient({baseUrls:['https://data-api.binance.vision','https://ticker-fallback.test'],fetchImpl:makeFetch('B'),timeoutMs:200,minIntervalMs:0,maxRequestsPerMinute:100});
+  const [first,second]=await Promise.all([
+    a.request('/api/v3/ticker/24hr'),
+    b.request('/api/v3/ticker/24hr')
+  ]);
+  assert.equal(calls,1,'all radar clients should share one all-symbol ticker REST request');
+  assert.deepEqual(second.data,first.data);
+});
