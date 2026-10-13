@@ -392,8 +392,35 @@ for attempt in $(seq 1 120); do
     sleep 2
     before_ready="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
     old_service_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
-    timeout 15s adb shell am stopservice -n com.radarx.app/.RadarXBackgroundMonitorService
-    sleep 2
+    if [[ -z "${old_service_pid}" ]]; then
+      echo "::error::Background service process was absent before the restart checkpoint"
+      timeout 10s adb shell dumpsys activity services com.radarx.app 2>&1 | tail -n 100 || true
+      exit 1
+    fi
+
+    # Use the service's declared stop action first. "am stopservice" returns
+    # exit 255 on some emulator builds for this isolated-process foreground
+    # service even when its app-owned lifecycle action is available.
+    stop_output="$(timeout 15s adb shell am startservice -n com.radarx.app/.RadarXBackgroundMonitorService -a com.radarx.app.action.STOP_BACKGROUND_MONITOR 2>&1)" || {
+      echo "App-owned stop action failed; falling back to ActivityManager stopservice:"
+      echo "${stop_output}"
+      timeout 15s adb shell am stopservice -n com.radarx.app/.RadarXBackgroundMonitorService >/dev/null 2>&1 || true
+    }
+    service_stopped=0
+    for stop_attempt in $(seq 1 15); do
+      current_service_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
+      if [[ -z "${current_service_pid}" ]]; then
+        service_stopped=1
+        break
+      fi
+      sleep 1
+    done
+    if [[ "${service_stopped}" -ne 1 ]]; then
+      echo "::error::Background service did not exit after both supported stop paths"
+      echo "OLD_PID=${old_service_pid} CURRENT_PID=${current_service_pid:-NONE}"
+      timeout 10s adb shell dumpsys activity services com.radarx.app 2>&1 | tail -n 100 || true
+      exit 1
+    fi
     launch_replay_test_app
     restarted_ready=0
     for restart_attempt in $(seq 1 30); do
