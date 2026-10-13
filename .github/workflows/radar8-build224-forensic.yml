@@ -77,6 +77,7 @@ jobs:
 
       - name: Run GTC/W and missed-move historical Spot replay
         id: gtc-w-replay
+        if: github.event_name == 'pull_request'
         continue-on-error: true
         run: |
           set +e
@@ -95,6 +96,7 @@ jobs:
 
       - name: Run 90-case public Spot historical replay matrix
         id: historical-matrix
+        if: github.event_name == 'pull_request'
         continue-on-error: true
         run: |
           set +e
@@ -110,7 +112,7 @@ jobs:
           exit 0
 
       - name: Upload historical and memory regression evidence
-        if: always()
+        if: always() && github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: radarx-production-alignment-evidence
@@ -123,7 +125,7 @@ jobs:
           retention-days: 14
 
       - name: Require complete GTC/W historical coverage
-        if: always()
+        if: always() && github.event_name == 'pull_request'
         run: |
           node --input-type=module <<'NODE'
           import {readFile} from 'node:fs/promises';
@@ -143,7 +145,7 @@ jobs:
           NODE
 
       - name: Require complete 90-case matrix coverage
-        if: always()
+        if: always() && github.event_name == 'pull_request'
         run: |
           node --input-type=module <<'NODE'
           import {readFile} from 'node:fs/promises';
