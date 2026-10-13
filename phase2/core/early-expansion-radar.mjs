@@ -92,7 +92,9 @@ export function emptyEarlyExpansionSnapshot(config=EARLY_EXPANSION_RADAR_DEFAULT
       source:[],closed_candles_only:true,
       fast_scan:'ALL_ELIGIBLE_TICKERS_EVERY_CYCLE',
       deep_scan:'TOP_FAST_ACCELERATION_PLUS_QUIET_RESERVE',
-      universe_scope:'ALL_ELIGIBLE_SPOT_USDT'
+      universe_scope:'ALL_ELIGIBLE_SPOT_USDT',
+      burst_priority_mode:'CLOSED_1M_5M_ACTIVITY_BURST',
+      burst_priority_slots:Math.max(0,Math.trunc(Number(config.exceptionalRotationBypassSlots??5)))
     },
     error:error??null
   };
@@ -2304,7 +2306,8 @@ export class EarlyExpansionRadar{
       coverage.micro_five_minute_cache_fallbacks_total=microScanned.filter(x=>x&&!x.failed&&x.five_minute_cache_hit!==true).length;
       coverage.micro_effective_concurrency=microConcurrency;
       coverage.micro_concurrency_inputs=microConcurrencyInputs;
-      coverage.micro_burst_priority_slots_configured=Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2));
+      coverage.micro_burst_priority_slots_configured=Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??5));
+      coverage.micro_burst_priority_mode='CLOSED_1M_5M_ACTIVITY_BURST';
       coverage.deep_effective_concurrency=deepConcurrency;
       coverage.discovery_mode='TICKER_ALL + ROTATING_1M_5M_MICRO + DEEP_15M_1H_4H_DEPTH';
       this.lastCoverage=coverage;this.failedSymbols=[...new Set(failedSymbols)];
@@ -2329,6 +2332,7 @@ export class EarlyExpansionRadar{
         micro_effective_concurrency:coverage.micro_effective_concurrency,
         micro_concurrency_inputs:coverage.micro_concurrency_inputs,
         micro_burst_priority_slots_configured:coverage.micro_burst_priority_slots_configured,
+        micro_burst_priority_mode:coverage.micro_burst_priority_mode,
         deep_effective_concurrency:coverage.deep_effective_concurrency,
         deep_timeframe_cache_hits_total:coverage.deep_timeframe_cache_hits_total,
         deep_timeframe_cache_misses_total:coverage.deep_timeframe_cache_misses_total,
@@ -2434,7 +2438,7 @@ export class EarlyExpansionRadar{
       }
       phaseTimings.notification_ms=Math.max(0,this.clock()-notificationStartedAt);
       this.scans++;this.lastScanAtMs=now;this.lastError=null;
-      this.lastResult={schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',as_of:new Date(now).toISOString(),quote:q,universe:coverage,candidates:this.latestCandidates,alerts_emitted_this_cycle:alertsThisCycle,meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',source:sourceList([tickerSource]),closed_candles_only:true,fast_scan:'ALL_ELIGIBLE_TICKERS_EVERY_CYCLE',micro_scan:'ROTATING_1M_5M_ACROSS_ELIGIBLE_UNIVERSE',deep_scan:'TOP_MICRO_FINGERPRINT_PLUS_QUIET_PLUS_ROTATION',universe_scope:'ALL_ELIGIBLE_SPOT_USDT'}};
+      this.lastResult={schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',as_of:new Date(now).toISOString(),quote:q,universe:coverage,candidates:this.latestCandidates,alerts_emitted_this_cycle:alertsThisCycle,meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',source:sourceList([tickerSource]),closed_candles_only:true,fast_scan:'ALL_ELIGIBLE_TICKERS_EVERY_CYCLE',micro_scan:'ROTATING_1M_5M_ACROSS_ELIGIBLE_UNIVERSE',deep_scan:'TOP_MICRO_FINGERPRINT_PLUS_QUIET_PLUS_ROTATION',universe_scope:'ALL_ELIGIBLE_SPOT_USDT',burst_priority_mode:'CLOSED_1M_5M_ACTIVITY_BURST',burst_priority_slots:Math.max(0,Math.trunc(Number(this.config.exceptionalRotationBypassSlots??5)))}};
       const scanCompletedAt=this.clock(),scanDurationMs=Math.max(0,scanCompletedAt-scanStartedAt);
       const explicitlyTimedMs=Object.entries(phaseTimings)
         .filter(([key])=>key!=='market_micro_overlap_ms'&&key!=='other_ms')
@@ -2479,6 +2483,7 @@ export class EarlyExpansionRadar{
         micro_effective_concurrency:coverage.micro_effective_concurrency,
         micro_concurrency_inputs:coverage.micro_concurrency_inputs,
         micro_burst_priority_slots_configured:coverage.micro_burst_priority_slots_configured,
+        micro_burst_priority_mode:coverage.micro_burst_priority_mode,
         deep_effective_concurrency:coverage.deep_effective_concurrency,
         deep_timeframe_cache_hits_total:coverage.deep_timeframe_cache_hits_total,
         deep_timeframe_cache_misses_total:coverage.deep_timeframe_cache_misses_total,
