@@ -1102,6 +1102,8 @@ export function isMarketWideCachePoolReady(cacheProof, minimumCoverageRatio=0.10
 }
 
 const FIVE_MINUTE_MS = 5 * 60 * 1000;
+const RADAR8_MICRO_5M_CACHE_MAX_WINDOWS = 36;
+const RADAR8_DEEP_CANDLE_CACHE_MAX_WINDOWS = 192;
 const TRUSTED_FIVE_MINUTE_CACHE_SOURCES = new Set([
   'BINANCE_PUBLIC_WS', 'BINANCE_PUBLIC_REST', 'BINANCE_PUBLIC_REST_CACHE'
 ]);
@@ -1141,6 +1143,29 @@ function usableCachedFiveMinuteSeries(cache, symbol, now, requestedLimit, freshn
     return null;
   }
   return { candles: rows, source: String(latest.source || series?.source || 'BINANCE_PUBLIC_REST_CACHE') };
+}
+
+function usableLocalFiveMinuteSeries(entry, now, requestedLimit, freshnessMs) {
+  const all=Array.isArray(entry?.candles)?entry.candles:[];
+  const limit=Math.max(1,Math.trunc(Number(requestedLimit)||180));
+  if(all.length<limit)return null;
+  const rows=all.slice(-limit),expectedClose=Math.floor(now/FIVE_MINUTE_MS)*FIVE_MINUTE_MS-1;
+  for(let index=0;index<rows.length;index++){
+    const row=rows[index],openTime=Number(row?.openTime),closeTime=Number(row?.closeTime);
+    const open=Number(row?.open),high=Number(row?.high),low=Number(row?.low),close=Number(row?.close);
+    const volume=Number(row?.volume),tradeCount=Number(row?.tradeCount);
+    const takerBase=Number(row?.takerBuyBaseVolume),takerQuote=Number(row?.takerBuyQuoteVolume);
+    if(row?.closed!==true||!TRUSTED_FIVE_MINUTE_CACHE_SOURCES.has(String(row?.source||entry?.source||''))||
+      !Number.isFinite(openTime)||!Number.isFinite(closeTime)||closeTime!==openTime+FIVE_MINUTE_MS-1||closeTime>=now||
+      !Number.isFinite(open)||!Number.isFinite(high)||!Number.isFinite(low)||!Number.isFinite(close)||
+      open<=0||close<=0||low<=0||high<Math.max(open,close)||low>Math.min(open,close)||
+      !Number.isFinite(volume)||volume<0||!Number.isFinite(tradeCount)||tradeCount<0||
+      !Number.isFinite(takerBase)||takerBase<0||!Number.isFinite(takerQuote)||takerQuote<0)return null;
+    if(index>0&&openTime-Number(rows[index-1].openTime)!==FIVE_MINUTE_MS)return null;
+  }
+  const latest=rows.at(-1);
+  if(Number(latest?.closeTime)!==expectedClose||now-Number(latest.closeTime)>Math.max(FIVE_MINUTE_MS,Number(freshnessMs)||8*60*1000))return null;
+  return {candles:rows,source:String(latest.source||entry?.source||'BINANCE_PUBLIC_REST_CACHE')};
 }
 
 export function adaptiveRadar8MicroConcurrency(configuredConcurrency, cacheHealth = {}, restHealth = {}, candidateCount = 18) {
@@ -1190,6 +1215,7 @@ export class EarlyExpansionRadar{
     this.lastDeepAtBySymbol=new Map();this.firstEligibleAtBySymbol=new Map();
     this.journeyStateHydrated=false;this.lastJourneyArchive=null;this.lastJourneyError=null;
     this.outcomeBackfillTask=null;
+    this.microFiveMinuteWindowCache=new Map();
     this.marketWideCacheArchiveHydrationAttempted=false;this.marketWideCacheArchiveHydration=null;this.marketWideCacheArchiveHydrationAttemptAtBySymbol=new Map();this.marketWideCacheArchiveLastEligibleSymbols=new Set();
     this.deepCandleWindowCache=new Map();this.deepCandleCacheHitTotal=0;this.deepCandleCacheMissTotal=0;
     this.latestCandidates=[];this.lastResult=null;this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
@@ -1417,29 +1443,87 @@ export class EarlyExpansionRadar{
     trimCycleMemory(this.lastDeepScanCycleBySymbol);
     return selected.slice(0,target);
   }
+  getLocalFiveMinuteWindow(symbol,now=this.clock()){
+    const key=String(symbol||'').trim().toUpperCase(),entry=this.microFiveMinuteWindowCache.get(key);
+    if(!entry)return null;
+    const usable=usableLocalFiveMinuteSeries(entry,now,this.config.fiveMinuteKlines,this.config.freshness5mMs);
+    if(!usable){this.microFiveMinuteWindowCache.delete(key);return null;}
+    this.microFiveMinuteWindowCache.delete(key);this.microFiveMinuteWindowCache.set(key,entry);
+    return usable;
+  }
+  rememberLocalFiveMinuteWindow(symbol,candles,source,now=this.clock()){
+    const key=String(symbol||'').trim().toUpperCase();
+    const limit=Math.max(1,Math.trunc(Number(this.config.fiveMinuteKlines)||180));
+    const closedRows=(Array.isArray(candles)?candles:[]).filter(row=>row?.closed===true).slice(-limit);
+    if(!key||closedRows.length<limit)return false;
+    const entry={candles:closedRows,source:String(source||closedRows.at(-1)?.source||'BINANCE_PUBLIC_REST'),
+      latestCloseTime:Number(closedRows.at(-1)?.closeTime),cachedAt:now};
+    if(!usableLocalFiveMinuteSeries(entry,now,limit,this.config.freshness5mMs))return false;
+    this.microFiveMinuteWindowCache.delete(key);this.microFiveMinuteWindowCache.set(key,entry);
+    while(this.microFiveMinuteWindowCache.size>RADAR8_MICRO_5M_CACHE_MAX_WINDOWS){
+      const oldest=this.microFiveMinuteWindowCache.keys().next();if(oldest.done)break;this.microFiveMinuteWindowCache.delete(oldest.value);
+    }
+    return true;
+  }
+  pruneCandleWindowCaches(now=this.clock()){
+    const steps={'15m':15*60*1000,'1h':60*60*1000,'4h':4*60*60*1000};
+    const freshness={'15m':Number(this.config.freshness15mMs)||20*60*1000,
+      '1h':Number(this.config.freshness1hMs)||75*60*1000,'4h':Number(this.config.freshness4hMs)||5*60*60*1000};
+    let deepRemoved=0,micro5mRemoved=0;
+    for(const [key,entry] of this.deepCandleWindowCache){
+      const [,interval]=String(key).split(':'),step=steps[interval];
+      const expectedClose=step?Math.floor(now/step)*step-1:null;
+      if(!step||!entry||Number(entry.latestCloseTime)!==expectedClose||!Array.isArray(entry.candles)||
+        !entry.candles.length||now-Number(entry.latestCloseTime)>Math.max(step,freshness[interval])){
+        this.deepCandleWindowCache.delete(key);deepRemoved++;
+      }
+    }
+    while(this.deepCandleWindowCache.size>RADAR8_DEEP_CANDLE_CACHE_MAX_WINDOWS){
+      const oldest=this.deepCandleWindowCache.keys().next();if(oldest.done)break;this.deepCandleWindowCache.delete(oldest.value);deepRemoved++;
+    }
+    const expectedFiveMinuteClose=Math.floor(now/FIVE_MINUTE_MS)*FIVE_MINUTE_MS-1;
+    for(const [symbol,entry] of this.microFiveMinuteWindowCache){
+      if(!entry||Number(entry.latestCloseTime)!==expectedFiveMinuteClose||!Array.isArray(entry.candles)||
+        entry.candles.length<Math.max(1,Math.trunc(Number(this.config.fiveMinuteKlines)||180))||
+        now-Number(entry.latestCloseTime)>Math.max(FIVE_MINUTE_MS,Number(this.config.freshness5mMs)||8*60*1000)){
+        this.microFiveMinuteWindowCache.delete(symbol);micro5mRemoved++;
+      }
+    }
+    while(this.microFiveMinuteWindowCache.size>RADAR8_MICRO_5M_CACHE_MAX_WINDOWS){
+      const oldest=this.microFiveMinuteWindowCache.keys().next();if(oldest.done)break;this.microFiveMinuteWindowCache.delete(oldest.value);micro5mRemoved++;
+    }
+    return {deep_removed:deepRemoved,micro_5m_removed:micro5mRemoved,
+      deep_entries:this.deepCandleWindowCache.size,micro_5m_entries:this.microFiveMinuteWindowCache.size};
+  }
   async microScan(row,fast,btcFiveMinute){
     const now=this.clock();
     const cachedFive=usableCachedFiveMinuteSeries(
       this.marketWideKlineCache,row.symbol,now,this.config.fiveMinuteKlines,this.config.freshness5mMs
     );
+    const localFive=cachedFive?null:this.getLocalFiveMinuteWindow(row.symbol,now);
+    const reusableFive=cachedFive||localFive;
     const oneMinutePromise=withRetry(
       ()=>this.rest.klines(row.symbol,'1m',{limit:this.config.oneMinuteKlines}),
       {attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep}
     );
-    const fiveMinutePromise=cachedFive
-      ? Promise.resolve(cachedFive)
+    const fiveMinutePromise=reusableFive
+      ? Promise.resolve(reusableFive)
       : withRetry(
-          ()=>this.rest.klines(row.symbol,'5m',{limit:this.config.fiveMinuteKlines}),
+          // One extra row retains the requested count of CLOSED candles when the
+          // exchange response also includes the currently open 5m candle.
+          ()=>this.rest.klines(row.symbol,'5m',{limit:this.config.fiveMinuteKlines+1}),
           {attempts:this.config.retryAttempts,baseMs:this.config.retryBaseMs,maxBackoffMs:this.config.maxBackoffMs,sleepFn:sleep}
         );
     const [m1,m5]=await Promise.all([oneMinutePromise,fiveMinutePromise]);
+    if(!reusableFive)this.rememberLocalFiveMinuteWindow(row.symbol,m5.candles,m5.source,this.clock());
     // Accept either an already-resolved context array (tests/callers) or a shared
     // in-flight BTC context promise so candle reads overlap without losing BTC-relative scoring.
     const btcRows=await Promise.resolve(btcFiveMinute);
     return {
       row,fast,oneMinute:m1.candles,fiveMinute:m5.candles,
-      five_minute_cache_hit:Boolean(cachedFive),
-      five_minute_cache_source:cachedFive?.source||null,
+      five_minute_cache_hit:Boolean(reusableFive),
+      five_minute_cache_tier:cachedFive?'MARKET_WIDE':localFive?'RADAR8_LOCAL':reusableFive?'CACHE':'REST',
+      five_minute_cache_source:reusableFive?.source||null,
       micro_fingerprint:buildMicroFingerprint({oneMinute:m1.candles,fiveMinute:m5.candles,btcFiveMinute:btcRows,ticker:row,now:this.clock(),config:this.config}),
       source:sourceList([m1.source,m5.source])
     };
@@ -1479,7 +1563,7 @@ export class EarlyExpansionRadar{
         latestCloseTime:Number(latest.closeTime),cachedAt:completedAt});
       // At most 384 symbol/timeframe windows remain resident; oldest entries are
       // evicted first so this cache cannot grow with the life of the service.
-      while(this.deepCandleWindowCache.size>384){
+      while(this.deepCandleWindowCache.size>RADAR8_DEEP_CANDLE_CACHE_MAX_WINDOWS){
         const oldest=this.deepCandleWindowCache.keys().next();
         if(oldest.done)break;
         this.deepCandleWindowCache.delete(oldest.value);
@@ -1589,9 +1673,13 @@ export class EarlyExpansionRadar{
       notification_sent_at:INCOMPLETE,notification_status:INCOMPLETE,
       outcomes:incompleteHorizons('NO_SIGNAL_OUTCOME_FOR_THIS_CYCLE')
     });
-    const phaseTimings={universe_refresh_ms:0,ticker_fast_selection_ms:0,market_wide_light_scan_ms:0,market_context_ms:0,
+    const phaseTimings={cache_cleanup_ms:0,universe_refresh_ms:0,ticker_fast_selection_ms:0,market_wide_light_scan_ms:0,market_context_ms:0,
       outcome_maintenance_ms:0,micro_scan_ms:0,market_micro_overlap_ms:0,
       deep_scan_ms:0,signal_archive_ms:0,notification_ms:0};
+    let cacheCleanupSummary={deep_removed:0,micro_5m_removed:0,deep_entries:this.deepCandleWindowCache.size,micro_5m_entries:this.microFiveMinuteWindowCache.size};
+    const cacheCleanupStartedAt=this.clock();
+    cacheCleanupSummary=this.pruneCandleWindowCaches(cacheCleanupStartedAt);
+    phaseTimings.cache_cleanup_ms=Math.max(0,this.clock()-cacheCleanupStartedAt);
     try{
       // Hydration must be protected by the same lifecycle guard as the scan.
       await this.scheduler.hydrate();
@@ -2204,6 +2292,8 @@ export class EarlyExpansionRadar{
         deep_timeframe_cache_hits_total:coverage.deep_timeframe_cache_hits_total,
         deep_timeframe_cache_misses_total:coverage.deep_timeframe_cache_misses_total,
         deep_timeframe_cache_entries:coverage.deep_timeframe_cache_entries,
+        cache_cleanup:cacheCleanupSummary,
+        radar8_local_5m_cache_entries:this.microFiveMinuteWindowCache.size,
         runtime_memory_bytes:runtimeMemoryBytes,
         paper_trading:true,real_order_execution:false
       }));
