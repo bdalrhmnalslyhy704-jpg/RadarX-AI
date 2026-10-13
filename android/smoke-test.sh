@@ -192,13 +192,22 @@ assert_background_service_declared() {
   # rotate the log buffer after the service-ready marker, so a missing old log line
   # alone must not fail a correctly running service. Conversely, a manifest or log
   # marker alone is not enough: Android must currently hold the service instance.
-  local logs runtime_state service_pid
-  logs="$(cat "${APP_LOG_FILE:-/nonexistent}" 2>/dev/null || true)"
+  local logs runtime_state service_pid service_pid_source
+  logs="$(cat "\${APP_LOG_FILE:-/nonexistent}" 2>/dev/null || true)"
   runtime_state="$(timeout 15s adb shell dumpsys activity services com.radarx.app 2>/dev/null || true)"
   service_pid="$(timeout 12s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
+  service_pid_source="pidof"
+  # Some Android API 29 / toybox pidof builds do not resolve long colon-suffixed
+  # app process names, even while dumpsys reports the live ServiceRecord and its
+  # ProcessRecord. In that case, derive the PID only from that same live service
+  # snapshot; still require both the registered service and its concrete process.
+  if [[ -z "$service_pid" ]]; then
+    service_pid="$(printf '%s\n' "$runtime_state" | sed -nE 's/.*ProcessRecord\{[^}]* ([0-9]+):com\.radarx\.app:radar_background\/.*/\1/p' | head -n 1 | tr -d '\r')"
+    service_pid_source="dumpsys"
+  fi
   if ! printf '%s\n' "$runtime_state" | grep -Fq 'RadarXBackgroundMonitorService' || [[ -z "$service_pid" ]]; then
     echo "::error::Manifest is valid but Android does not show a live background-monitor service process"
-    echo "BACKGROUND_SERVICE_PID=\${service_pid:-NONE}"
+    echo "BACKGROUND_SERVICE_PID=\${service_pid:-NONE} PID_SOURCE=$service_pid_source"
     if printf '%s\n' "$logs" | grep -Fq 'BACKGROUND_SERVICE_READY'; then
       echo "BACKGROUND_READY_MARKER=present"
     else
@@ -209,9 +218,9 @@ assert_background_service_declared() {
     return 1
   fi
   if printf '%s\n' "$logs" | grep -Fq 'BACKGROUND_SERVICE_READY'; then
-    echo "Android background service confirmed live: pid=$service_pid; ready-marker=present"
+    echo "Android background service confirmed live: pid=$service_pid source=$service_pid_source; ready-marker=present"
   else
-    echo "Android background service confirmed live: pid=$service_pid; ready-marker=rotated-after-runtime-confirmation"
+    echo "Android background service confirmed live: pid=$service_pid source=$service_pid_source; ready-marker=rotated-after-runtime-confirmation"
   fi
 }
 
