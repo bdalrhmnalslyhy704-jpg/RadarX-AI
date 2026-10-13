@@ -293,7 +293,15 @@ export class RestClient {
           recordObservedUsedWeight(r.headers);
           const data=await r.json();
           const result={data,source:this.baseUrls[idx],receivedAt:Date.now()};
-          if(ttl>0) cacheSharedValue(key,{expiresAt:Date.now()+ttl,value:result});
+          // Do not retain malformed/seconds-based Kline payloads in the short
+          // shared cache: another consumer must be able to try REST fallback.
+          const cacheableKlines=path!=='/api/v3/klines' || (
+            Array.isArray(data) && data.length>0 && data.every(row =>
+              Array.isArray(row) && Number.isFinite(Number(row[0])) &&
+              Number(row[0])>1e12 && Number.isFinite(Number(row[6])) && Number(row[6])>1e12
+            )
+          );
+          if(ttl>0 && cacheableKlines) cacheSharedValue(key,{expiresAt:Date.now()+ttl,value:result});
           this.currentBaseIndex=idx; this.lastSuccessAt=Date.now();
           this.lastError=null; this.state='LIVE';
           return result;
