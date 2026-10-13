@@ -128,6 +128,36 @@ test('Radar 8 falls back to Binance REST when its cached 5m history is incomplet
   assert.equal(result.fiveMinute.length,180);
 });
 
+
+test('Radar 8 caches only a complete closed higher-timeframe window until the next candle closes',async()=>{
+  let clockNow=now;
+  const requests=[];
+  const step=15*60_000;
+  const radar=new EarlyExpansionRadar({
+    rest:{
+      async klines(symbol,interval,{limit}){
+        requests.push({symbol,interval,limit});
+        return {source:'BINANCE_PUBLIC_REST',candles:makeClosedCandles(symbol,step,limit-1,clockNow,'BINANCE_PUBLIC_REST')};
+      }
+    },
+    store:{},clock:()=>clockNow,logger:{warn(){}},
+    config:{retryAttempts:0,fifteenMinuteKlines:160,freshness15mMs:20*60_000}
+  });
+  const first=await radar.deepTimeframeKlines('DEEPCACHEUSDT','15m',160,20*60_000);
+  assert.equal(first.cache_hit,false);
+  assert.equal(first.candles.length,159);
+  const sameInterval=await radar.deepTimeframeKlines('DEEPCACHEUSDT','15m',160,20*60_000);
+  assert.equal(sameInterval.cache_hit,true);
+  assert.equal(sameInterval.candles.length,first.candles.length);
+  assert.equal(requests.length,1,'the same fully closed 15m window must not trigger duplicate REST requests');
+  clockNow+=step;
+  const nextInterval=await radar.deepTimeframeKlines('DEEPCACHEUSDT','15m',160,20*60_000);
+  assert.equal(nextInterval.cache_hit,false,'a newly closed candle must force a fresh Binance response');
+  assert.equal(requests.length,2);
+  assert.equal(radar.deepCandleCacheHitTotal,1);
+  assert.equal(radar.deepCandleCacheMissTotal,2);
+});
+
 test('Radar 8 activates guarded candidate pooling at 10 percent verified cache coverage but never with an unhealthy stream',()=>{
   assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.marketWideLightScanMinCoverageRatio,0.10,
     'the actual Radar 8 runtime default must use the verified post-restart coverage floor');
