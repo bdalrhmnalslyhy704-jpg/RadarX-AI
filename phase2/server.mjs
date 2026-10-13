@@ -161,6 +161,7 @@ export async function startServer({
     jitterRatio:config.websocket.jitterRatio,
     heartbeatTimeoutMs:config.websocket.heartbeatTimeoutMs,
     maxConnectionMs:config.websocket.maxConnectionMs,
+    maxCandlesPerSymbol:120,
     logger
   });
   const earlyExpansionRadar=new EarlyExpansionRadar({rest,store,pushManager:push,marketWideKlineCache,config:config.earlyExpansionRadar||{},logger});
