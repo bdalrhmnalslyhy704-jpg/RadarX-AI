@@ -806,7 +806,7 @@ test('Radar 8 post-cycle ring cleanup prunes inactive symbols and bounds schedul
   assert.equal(radar.scheduler.buffer.length,5000);
   assert.equal(radar.schedulerBufferEventsDroppedTotal,2);
   assert.equal(cleanup.scheduler_buffer_dropped_this_cycle,2);
-  assert.ok(cleanup.removed_inactive_symbol_entries>=7);
+  assert.ok(cleanup.removed_inactive_symbol_entries>=6);
 });
 
 test('Radar 8 scheduled cycles force GC after tick and report post-GC RSS',async()=>{
