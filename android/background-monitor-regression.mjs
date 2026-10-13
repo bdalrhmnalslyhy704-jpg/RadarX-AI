@@ -121,5 +121,11 @@ assert.match(smokeReplay, /reconciled_log_keys/,
   'the replay audit must prove every accepted or reconciled alert has a unique stable identity');
 assert.match(smokeReplay, /Duplicate NotificationManager post requests/,
   'the replay smoke test must reject duplicate notification post requests');
+assert.match(smokeReplay, /STOP_BACKGROUND_MONITOR/,
+  'restart replay must use the service-owned stop action before falling back to ActivityManager');
+assert.match(smokeReplay, /was absent before the restart checkpoint/,
+  'the service restart replay must prove its process was alive before trying to stop it');
+assert.match(smokeReplay, /did not exit after both supported stop paths/,
+  'the restart replay must verify actual process exit rather than trusting the stop command exit code');
 
 
