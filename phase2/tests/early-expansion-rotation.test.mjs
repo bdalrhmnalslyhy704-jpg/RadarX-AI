@@ -261,6 +261,27 @@ test('Radar 8 reuses only a complete fresh closed 5m cache window and keeps 1m R
   assert.equal(result.micro_fingerprint.closed_candles_only,true);
 });
 
+test('Radar 8 default Micro window reuses 60 closed candles from the shared market cache',async()=>{
+  assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.fiveMinuteKlines,60);
+  const requested=[];
+  const oneMinute=makeClosedCandles('CACHE60USDT',60_000,120,now,'BINANCE_PUBLIC_REST');
+  const fiveMinute=makeClosedCandles('CACHE60USDT',5*60_000,60,now,'BINANCE_PUBLIC_WS');
+  const btcFiveMinute=makeClosedCandles('BTCUSDT',5*60_000,60,now,'BINANCE_PUBLIC_WS');
+  const radar=new EarlyExpansionRadar({
+    rest:{async klines(symbol,interval){requested.push(interval);return {candles:oneMinute,source:'BINANCE_PUBLIC_REST'};}},
+    store:{},
+    marketWideKlineCache:{getSeries(symbol){return {symbol,candles:fiveMinute,source:'BINANCE_PUBLIC_WS'};}},
+    clock:()=>now,logger:{warn(){}}
+  });
+  const result=await radar.microScan({
+    symbol:'CACHE60USDT',lastPrice:100.5,priceChange24h:1,quoteVolume24h:1_000_000,tradeCount24h:1000
+  },{},btcFiveMinute);
+  assert.deepEqual(requested,['1m'],'a valid shared 5m cache window must avoid the redundant 5m REST request');
+  assert.equal(result.five_minute_cache_hit,true);
+  assert.equal(result.fiveMinute.length,60);
+  assert.equal(result.micro_fingerprint.closed_candles_only,true);
+});
+
 test('Radar 8 falls back to Binance REST when its cached 5m history is incomplete',async()=>{
   const requested=[];
   const oneMinute=makeClosedCandles('CACHEFALLBACKUSDT',60_000,180,now);
