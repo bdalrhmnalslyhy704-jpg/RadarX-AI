@@ -1477,7 +1477,7 @@ export class EarlyExpansionRadar{
     if(cacheable){
       this.deepCandleWindowCache.set(key,{candles:rows,source:response.source||rows.at(-1)?.source||'BINANCE_PUBLIC_REST',
         latestCloseTime:Number(latest.closeTime),cachedAt:completedAt});
-      // At most 128 symbol/timeframe windows remain resident; oldest entries are
+      // At most 384 symbol/timeframe windows remain resident; oldest entries are
       // evicted first so this cache cannot grow with the life of the service.
       while(this.deepCandleWindowCache.size>384){
         const oldest=this.deepCandleWindowCache.keys().next();
@@ -2038,6 +2038,12 @@ export class EarlyExpansionRadar{
       coverage.micro_effective_concurrency=microConcurrency;
       coverage.discovery_mode='TICKER_ALL + ROTATING_1M_5M_MICRO + DEEP_15M_1H_4H_DEPTH';
       this.lastCoverage=coverage;this.failedSymbols=[...new Set(failedSymbols)];
+      const runtimeMemoryUsage=typeof process!=='undefined'&&typeof process.memoryUsage==='function'?process.memoryUsage():{};
+      const runtimeMemoryBytes={
+        rss:Number(runtimeMemoryUsage.rss)||null,heap_used:Number(runtimeMemoryUsage.heapUsed)||null,
+        heap_total:Number(runtimeMemoryUsage.heapTotal)||null,external:Number(runtimeMemoryUsage.external)||null,
+        array_buffers:Number(runtimeMemoryUsage.arrayBuffers)||null
+      };
       this.logger.info?.('[RADARX_SCAN_COVERAGE] '+JSON.stringify({
         radar:'RADAR_8',build_version:'Build 224',quote:q,observed_at:new Date(now).toISOString(),
         rotation_cycle:coverage.rotation_cycle,
@@ -2048,6 +2054,13 @@ export class EarlyExpansionRadar{
         deep_scanned_total:coverage.deep_scanned_total,skipped_total:coverage.skipped_total,
         failed_total:coverage.failed_total,coverage_ratio:coverage.coverage_ratio,
         deep_coverage_ratio:coverage.deep_coverage_ratio,
+        micro_five_minute_cache_hits_total:coverage.micro_five_minute_cache_hits_total,
+        micro_five_minute_cache_fallbacks_total:coverage.micro_five_minute_cache_fallbacks_total,
+        micro_effective_concurrency:coverage.micro_effective_concurrency,
+        deep_timeframe_cache_hits_total:coverage.deep_timeframe_cache_hits_total,
+        deep_timeframe_cache_misses_total:coverage.deep_timeframe_cache_misses_total,
+        deep_timeframe_cache_entries:coverage.deep_timeframe_cache_entries,
+        runtime_memory_bytes:runtimeMemoryBytes,
         quiet_selected_total:coverage.micro_quiet_selected_total,
         rotation_selected_total:coverage.micro_rotation_selected_total,
         exceptional_bypass_total:coverage.micro_exceptional_bypass_total,
@@ -2185,6 +2198,13 @@ export class EarlyExpansionRadar{
         fast_scanned_total:coverage.fast_scanned_total,micro_scanned_total:coverage.micro_scanned_total,
         deep_scanned_total:coverage.deep_scanned_total,failed_total:coverage.failed_total,
         coverage_ratio:coverage.coverage_ratio,deep_coverage_ratio:coverage.deep_coverage_ratio,
+        micro_five_minute_cache_hits_total:coverage.micro_five_minute_cache_hits_total,
+        micro_five_minute_cache_fallbacks_total:coverage.micro_five_minute_cache_fallbacks_total,
+        micro_effective_concurrency:coverage.micro_effective_concurrency,
+        deep_timeframe_cache_hits_total:coverage.deep_timeframe_cache_hits_total,
+        deep_timeframe_cache_misses_total:coverage.deep_timeframe_cache_misses_total,
+        deep_timeframe_cache_entries:coverage.deep_timeframe_cache_entries,
+        runtime_memory_bytes:runtimeMemoryBytes,
         paper_trading:true,real_order_execution:false
       }));
       if(typeof this.store.appendScanJourneyCycle==='function'&&journey.cycle_id){
