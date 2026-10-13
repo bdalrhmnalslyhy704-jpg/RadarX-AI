@@ -82,3 +82,14 @@ test('Rotation Lag fills rotation slots when the cursor overlaps the ranked shor
   assert.equal(selected.length,7);
   assert.equal(new Set(selected.map(x=>x.symbol)).size,7);
 });
+
+
+test('Rotation Lag tolerates insufficient closed-candle data without crashing risk-flag construction',()=>{
+  const incomplete=buildRotationAlert({
+    ticker:{symbol:'SPARSEUSDT',lastPrice:1,priceChange24h:0.5},
+    fifteen_min:[],one_hour:[],benchmarks:{}
+  },now);
+  assert.equal(incomplete.rotation.stage,'INSUFFICIENT_DATA');
+  assert.equal(incomplete.eligible,false);
+  assert.deepEqual(incomplete.risk_flags,[]);
+});
