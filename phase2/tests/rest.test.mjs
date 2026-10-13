@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {RestClient,RestRateLimitError,retryAfterMs,estimateBinanceRequestWeight} from '../market/binance-rest.mjs';
+import {RestClient,RestRateLimitError,retryAfterMs,estimateBinanceRequestWeight,sharedResponseCacheTtlMs,sharedResponseCacheExpiresAt} from '../market/binance-rest.mjs';
 import {CONFIG} from '../config.mjs';
 
 
@@ -39,6 +39,34 @@ test('TEST_FIXTURE: concurrent distinct REST requests reserve the shared budget 
   assert.equal(health.shared_max_requests_per_minute,420);
   assert.equal(health.shared_max_weight_per_minute,4000);
   assert.ok(Number(health.shared_estimated_weight_last_minute)>=6);
+});
+
+test('TEST_FIXTURE: Kline cache uses interval-aware bounded TTLs while depth stays short-lived',()=>{
+  assert.equal(sharedResponseCacheTtlMs('/api/v3/klines',{interval:'1m'}),12_000);
+  assert.equal(sharedResponseCacheTtlMs('/api/v3/klines',{interval:'5m'}),20_000);
+  assert.equal(sharedResponseCacheTtlMs('/api/v3/klines',{interval:'15m'}),30_000);
+  assert.equal(sharedResponseCacheTtlMs('/api/v3/klines',{interval:'1h'}),45_000);
+  assert.equal(sharedResponseCacheTtlMs('/api/v3/klines',{interval:'4h'}),45_000);
+  assert.equal(sharedResponseCacheTtlMs('/api/v3/klines',{interval:'unknown'}),5_000);
+  assert.equal(sharedResponseCacheTtlMs('/api/v3/depth',{symbol:'BTCUSDT'}),700);
+  assert.equal(sharedResponseCacheTtlMs('/api/v3/exchangeInfo'),300_000);
+});
+
+test('TEST_FIXTURE: open Kline cache entries expire before the candle can be mistaken for closed',()=>{
+  const receivedAt=1_800_000_000_000;
+  const openCandleCloseTime=receivedAt+5_000;
+  const openKline=[receivedAt-60_000,'100','101','99','100','1000',openCandleCloseTime,100000,10,500,50000,'0'];
+  const openSnapshot={receivedAt,data:[openKline]};
+  const expiresBeforeClose=sharedResponseCacheExpiresAt(
+    '/api/v3/klines',{interval:'1m'},openSnapshot,receivedAt
+  );
+  assert.equal(expiresBeforeClose,openCandleCloseTime);
+  assert.ok(expiresBeforeClose<receivedAt+12_000,'open candle must shorten the nominal 1m cache TTL');
+
+  const closedSnapshot={receivedAt,data:[[receivedAt-60_000,'100','101','99','100','1000',receivedAt-1,100000,10,500,50000,'0']]};
+  assert.equal(sharedResponseCacheExpiresAt(
+    '/api/v3/klines',{interval:'1m'},closedSnapshot,receivedAt
+  ),receivedAt+12_000,'already-closed candles may use the interval TTL');
 });
 
 test('TEST_FIXTURE: HTTP 429 records rate limit and retry-after without spamming fallback',async()=>{
