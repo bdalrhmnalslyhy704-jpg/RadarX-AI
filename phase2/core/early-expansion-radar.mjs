@@ -1285,7 +1285,7 @@ function radar8RestPressureRatios(restHealth = {}) {
   const weightRatio=rawWeight!=null&&Number.isFinite(weight)?Math.max(0,weight/weightLimit):null;
   const rawRequests=restHealth?.shared_requests_last_minute;
   const requests=Number(rawRequests);
-  const requestLimit=Math.max(1,Number(restHealth?.shared_max_requests_per_minute)||420);
+  const requestLimit=Math.max(1,Number(restHealth?.shared_max_requests_per_minute)||600);
   const requestRatio=rawRequests!=null&&Number.isFinite(requests)?Math.max(0,requests/requestLimit):null;
   return {weightRatio,requestRatio};
 }

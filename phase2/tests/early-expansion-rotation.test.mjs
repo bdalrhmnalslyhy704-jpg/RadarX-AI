@@ -208,6 +208,9 @@ test('Radar 8 adaptive Micro concurrency respects cache readiness, shared REST r
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},
     {shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:2200,shared_max_weight_per_minute:4000},18),8);
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},lowPressure,3),3);
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:30},
+    {shared_requests_last_minute:375,shared_max_requests_per_minute:600,shared_estimated_weight_last_minute:1300,shared_max_weight_per_minute:4000},18),8,
+    'the wider internal request headroom allows extra workers only when measured weight and request ratios remain below pressure thresholds');
   assert.equal(adaptiveRadar8MicroConcurrency(0,{}, {},18),6);
   assert.equal(adaptiveRadar8MicroConcurrency(99,{expected_symbols:100,ready_symbols:100},
     {shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:0,shared_max_weight_per_minute:4000},18),10);
