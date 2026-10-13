@@ -218,3 +218,29 @@ test('historical trade fetch uses the production generic REST client and carries
   assert.equal(calls[1].query.fromId,1010);
   assert.equal(result.trades.at(-1).T,50_000);
 });
+
+test('opt-in candle-only fallback replays verified candles without inventing aggTrades', () => {
+  const rows = candles(250);
+  let called = false;
+  const replay = runHistoricalReplay({
+    symbol: 'GTCUSDT', oneMinuteCandles: rows, aggTrades: [{a:1,T:rows[180].openTime+1000,p:'1',q:'10',m:false}],
+    startTime: rows[180].openTime, endTime: rows[184].closeTime,
+    tradeCoverageComplete: false, allowCandleOnlyFallback: true,
+    evaluate(input) {
+      called = true;
+      assert.equal(input.aggTrades.length, 0, 'partial public trades must be discarded rather than biasing flow metrics');
+      assert.equal(input.dataPolicy.replayMode, 'CANDLE_ONLY_FALLBACK');
+      assert.equal(input.dataPolicy.tradeCoverageComplete, false);
+      assert.ok(input.oneMinute.every(c => c.closed === true && c.closeTime <= input.now));
+      return {accepted:false, reason_codes:['NO_AGGTRADE_FLOW_CONFIRMATION']};
+    }
+  });
+  assert.equal(called, true);
+  assert.equal(replay.data_quality.replay_mode, 'CANDLE_ONLY_FALLBACK');
+  assert.equal(replay.data_quality.candle_only_fallback_used, true);
+  assert.equal(replay.data_quality.synthetic_data_used, false);
+  assert.equal(replay.data_quality.trade_coverage_complete, false);
+  assert.equal(replay.summary.first_actual_window_50pct_at, null,
+    'exact event time must remain unknown without complete aggregate trades');
+  assert.ok(replay.steps.every(x => x.decision === 'REJECTED'));
+});
