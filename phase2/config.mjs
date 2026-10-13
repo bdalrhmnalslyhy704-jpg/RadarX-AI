@@ -261,6 +261,7 @@ export const CONFIG = Object.freeze({
     maxSpreadBps: int(process.env.RADARX_EARLY_EXPANSION_MAX_SPREAD_BPS, 22),
     minDataQuality: int(process.env.RADARX_EARLY_EXPANSION_MIN_DATA_QUALITY, 70),
     microScanCandidates: int(process.env.RADARX_EARLY_EXPANSION_MICRO_SCAN_CANDIDATES, 18),
+    exceptionalRotationBypassSlots: 5,
     rotationReserve: int(process.env.RADARX_EARLY_EXPANSION_ROTATION_RESERVE, 8),
     deepCandidates: int(process.env.RADARX_EARLY_EXPANSION_DEEP_CANDIDATES, 5),
     quietReserve: int(process.env.RADARX_EARLY_EXPANSION_QUIET_RESERVE, 8),
