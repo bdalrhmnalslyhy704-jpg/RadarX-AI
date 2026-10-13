@@ -1299,19 +1299,22 @@ export function adaptiveRadar8MicroConcurrency(configuredConcurrency, cacheHealt
   const {weightRatio,requestRatio}=radar8RestPressureRatios(restHealth);
   const measuredRequestAndWeightHeadroom=weightRatio!==null&&requestRatio!==null;
   let target = base;
-  // Extra workers are useful only when both shared REST request count and weight
-  // have verified headroom; either exhausted budget can otherwise create waiters.
-  if (readyRatio >= 0.70 && measuredRequestAndWeightHeadroom &&
+
+  // Enforce the shared budget guard first: approaching either quota caps worker
+  // pressure even when the market cache is warm, rather than letting a larger
+  // configured base keep spawning requests into a saturated budget.
+  if (measuredRequestAndWeightHeadroom &&
+      (weightRatio >= 0.75 || requestRatio >= 0.75)) {
+    target = Math.max(2, Math.min(base, 4));
+  } else if (readyRatio >= 0.70 && measuredRequestAndWeightHeadroom &&
       weightRatio < 0.55 && requestRatio < 0.55) {
     target = Math.min(10, base + 4);
-  } else if (readyRatio >= 0.35 && measuredRequestAndWeightHeadroom &&
+  } else if (readyRatio >= 0.25 && measuredRequestAndWeightHeadroom &&
       weightRatio < 0.70 && requestRatio < 0.70) {
+    // A partially warmed cache (>=25%) still benefits from two workers when both
+    // REST counters show headroom; the former 35% gate left cold-start cycles at
+    // six workers while half the selected symbols were falling back to REST.
     target = Math.min(8, base + 2);
-  } else if (readyRatio < 0.25 &&
-      ((weightRatio !== null && weightRatio >= 0.75) ||
-       (requestRatio !== null && requestRatio >= 0.75))) {
-    // Cold-cache/high-pressure cycles stay bounded to avoid piling up REST waiters.
-    target = Math.max(2, Math.min(base, 4));
   }
   return Math.max(1, Math.min(candidates, target));
 }
@@ -2016,6 +2019,21 @@ export class EarlyExpansionRadar{
       const btcFivePromise=marketContextPromise.then(result=>result.btcFive);
       const cacheHealthForConcurrency=this.marketWideKlineCache?.health?.()||{};
       const restHealthForConcurrency=this.rest.health?.()||{};
+      const numericMetric=value=>value!==null&&value!==undefined&&value!==''&&Number.isFinite(Number(value))?Number(value):null;
+      const readyCacheSymbols=numericMetric(cacheHealthForConcurrency.ready_symbols);
+      const expectedCacheSymbols=numericMetric(cacheHealthForConcurrency.expected_symbols);
+      const {weightRatio:restWeightRatio,requestRatio:restRequestRatio}=radar8RestPressureRatios(restHealthForConcurrency);
+      const microConcurrencyInputs={
+        market_wide_ready_ratio:readyCacheSymbols!==null&&expectedCacheSymbols>0?readyCacheSymbols/expectedCacheSymbols:null,
+        rest_request_ratio:restRequestRatio,
+        rest_weight_ratio:restWeightRatio,
+        shared_requests_last_minute:numericMetric(restHealthForConcurrency.shared_requests_last_minute),
+        shared_max_requests_per_minute:numericMetric(restHealthForConcurrency.shared_max_requests_per_minute),
+        shared_estimated_weight_last_minute:numericMetric(restHealthForConcurrency.shared_estimated_weight_last_minute),
+        shared_max_weight_per_minute:numericMetric(restHealthForConcurrency.shared_max_weight_per_minute),
+        shared_inflight_requests:numericMetric(restHealthForConcurrency.shared_queue_depth),
+        shared_cache_entries:numericMetric(restHealthForConcurrency.shared_cache_entries)
+      };
       const microConcurrency=adaptiveRadar8MicroConcurrency(
         this.config.microConcurrency,cacheHealthForConcurrency,restHealthForConcurrency,selected.length
       );
@@ -2285,6 +2303,7 @@ export class EarlyExpansionRadar{
       coverage.micro_five_minute_cache_hits_total=microScanned.filter(x=>x&&!x.failed&&x.five_minute_cache_hit===true).length;
       coverage.micro_five_minute_cache_fallbacks_total=microScanned.filter(x=>x&&!x.failed&&x.five_minute_cache_hit!==true).length;
       coverage.micro_effective_concurrency=microConcurrency;
+      coverage.micro_concurrency_inputs=microConcurrencyInputs;
       coverage.deep_effective_concurrency=deepConcurrency;
       coverage.discovery_mode='TICKER_ALL + ROTATING_1M_5M_MICRO + DEEP_15M_1H_4H_DEPTH';
       this.lastCoverage=coverage;this.failedSymbols=[...new Set(failedSymbols)];
@@ -2307,6 +2326,7 @@ export class EarlyExpansionRadar{
         micro_five_minute_cache_hits_total:coverage.micro_five_minute_cache_hits_total,
         micro_five_minute_cache_fallbacks_total:coverage.micro_five_minute_cache_fallbacks_total,
         micro_effective_concurrency:coverage.micro_effective_concurrency,
+        micro_concurrency_inputs:coverage.micro_concurrency_inputs,
         deep_effective_concurrency:coverage.deep_effective_concurrency,
         deep_timeframe_cache_hits_total:coverage.deep_timeframe_cache_hits_total,
         deep_timeframe_cache_misses_total:coverage.deep_timeframe_cache_misses_total,
@@ -2455,6 +2475,7 @@ export class EarlyExpansionRadar{
         micro_five_minute_cache_hits_total:coverage.micro_five_minute_cache_hits_total,
         micro_five_minute_cache_fallbacks_total:coverage.micro_five_minute_cache_fallbacks_total,
         micro_effective_concurrency:coverage.micro_effective_concurrency,
+        micro_concurrency_inputs:coverage.micro_concurrency_inputs,
         deep_effective_concurrency:coverage.deep_effective_concurrency,
         deep_timeframe_cache_hits_total:coverage.deep_timeframe_cache_hits_total,
         deep_timeframe_cache_misses_total:coverage.deep_timeframe_cache_misses_total,
