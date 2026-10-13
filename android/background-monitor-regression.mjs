@@ -129,7 +129,11 @@ assert.match(main, /radarx_test_stop_background_monitor/,
   'the debug-only Activity hook must expose service stop only to emulator test launch intents');
 assert.match(smokeReplay, /was absent before the restart checkpoint/,
   'the service restart replay must prove its process was alive before trying to stop it');
-assert.match(smokeReplay, /did not exit after app-owned stop action/,
-  'the service restart replay must verify actual process exit after the app-owned stop request');
+assert.match(smokeReplay, /Background service remained registered after MainActivity stop intent/,
+  'the service restart replay must verify Android removed the real ServiceRecord after the stop request');
+assert.match(smokeReplay, /BACKGROUND_STOP_ACTION_RECEIVED/,
+  'the service restart replay must confirm the service itself received ACTION_STOP');
+assert.match(smokeReplay, /android:launchMode="singleTop"/,
+  'the manifest must deliver repeated test intents to MainActivity.onNewIntent');
 
 
