@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,pruneInactiveSymbolStateMap} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -768,6 +768,75 @@ test('Radar 8 reuses a validated local closed 5m window on the next cycle',async
   assert.equal(second.five_minute_cache_tier,'RADAR8_LOCAL');
   assert.equal(calls['5m'],1,'fresh validated 5m data must not incur a duplicate REST request');
   assert.equal(calls['1m'],2,'1m remains live each cycle');
+});
+
+test('Radar 8 post-cycle ring cleanup prunes inactive symbols and bounds scheduler retry buffers',()=>{
+  const radar=makeRadar({fiveMinuteKlines:3,maxActivityShockAlertsPerHour:6});
+  radar.universe=['LIVEUSDT','KEEPUSDT'];
+  radar.fastState.set('LIVEUSDT',[{price:1}]);
+  radar.fastState.set('DELISTEDUSDT',Array.from({length:20},(_,i)=>({price:i+1})));
+  radar.lastAlertAt.set('LIVEUSDT',now-1000);
+  radar.lastAlertAt.set('DELISTEDUSDT',now-1000);
+  radar.lastMicroScanCycleBySymbol.set('LIVEUSDT',10);
+  radar.lastMicroScanCycleBySymbol.set('DELISTEDUSDT',1);
+  radar.scheduler.lastStartedAt.set('MICRO:LIVEUSDT',now-1000);
+  radar.scheduler.lastStartedAt.set('MICRO:DELISTEDUSDT',now-1000);
+  radar.scheduler.queuedAt.set('DEEP:KEEPUSDT',now-1000);
+  radar.scheduler.queuedAt.set('DEEP:DELISTEDUSDT',now-1000);
+  radar.fastShockPendingUntil.set('LIVEUSDT',now+60_000);
+  radar.fastShockPendingUntil.set('DELISTEDUSDT',now+60_000);
+  radar.fastShockPendingUntil.set('KEEPUSDT',now-1);
+  radar.activityShockTimestamps=[now-2*60*60*1000,now-1000];
+  radar.scheduler.buffer=Array.from({length:5002},(_,i)=>({event_at:i}));
+  const cleanup=radar.cleanupRuntimeRingBuffers(now);
+  assert.equal(radar.fastState.has('LIVEUSDT'),true);
+  assert.equal(radar.fastState.has('DELISTEDUSDT'),false);
+  assert.equal(radar.lastAlertAt.has('LIVEUSDT'),true);
+  assert.equal(radar.lastAlertAt.has('DELISTEDUSDT'),false);
+  assert.equal(radar.lastMicroScanCycleBySymbol.has('LIVEUSDT'),true);
+  assert.equal(radar.lastMicroScanCycleBySymbol.has('DELISTEDUSDT'),false);
+  assert.equal(radar.scheduler.lastStartedAt.has('MICRO:LIVEUSDT'),true);
+  assert.equal(radar.scheduler.lastStartedAt.has('MICRO:DELISTEDUSDT'),false);
+  assert.equal(radar.scheduler.queuedAt.has('DEEP:KEEPUSDT'),true);
+  assert.equal(radar.scheduler.queuedAt.has('DEEP:DELISTEDUSDT'),false);
+  assert.equal(radar.fastShockPendingUntil.has('LIVEUSDT'),true);
+  assert.equal(radar.fastShockPendingUntil.has('DELISTEDUSDT'),false);
+  assert.equal(radar.fastShockPendingUntil.has('KEEPUSDT'),false);
+  assert.equal(radar.activityShockTimestamps.length,1);
+  assert.equal(radar.scheduler.buffer.length,5000);
+  assert.equal(radar.schedulerBufferEventsDroppedTotal,2);
+  assert.equal(cleanup.scheduler_buffer_dropped_this_cycle,2);
+  assert.ok(cleanup.removed_inactive_symbol_entries>=7);
+});
+
+test('Radar 8 scheduled cycles force GC after tick and report post-GC RSS',async()=>{
+  const originalGc=globalThis.gc;
+  let gcCalls=0;
+  const logRows=[];
+  try{
+    globalThis.gc=()=>{gcCalls++;};
+    const radar=makeRadar();
+    radar.tick=async()=>{radar.scans++;return true;};
+    radar.logger={info(message){logRows.push(String(message));},warn(){}};
+    radar.config={...radar.config,pollMs:45_000};
+    radar.start();
+    const stopAt=Date.now()+500;
+    while(Date.now()<stopAt&&!logRows.some(row=>row.startsWith('[RADARX_POST_CYCLE_MEMORY]')))
+      await new Promise(resolve=>setTimeout(resolve,10));
+    await radar.stop();
+    const reportLine=logRows.find(row=>row.startsWith('[RADARX_POST_CYCLE_MEMORY]'));
+    assert.ok(reportLine,'scheduled cycle must emit post-GC memory telemetry');
+    const report=JSON.parse(reportLine.slice(reportLine.indexOf('{')));
+    assert.equal(gcCalls,1);
+    assert.equal(report.forced_gc_available,true);
+    assert.equal(report.forced_gc_ran,true);
+    assert.equal(report.completed,true);
+    assert.equal(report.cycle,1);
+    assert.equal(typeof report.rss_under_036_gib,'boolean');
+    assert.equal(report.cleanup.active_symbols,0);
+  }finally{
+    if(originalGc===undefined)delete globalThis.gc;else globalThis.gc=originalGc;
+  }
 });
 
 test('Radar 8 cache cleanup evicts stale timeframe windows and remains bounded',()=>{
