@@ -92,10 +92,10 @@ function normalizeClosedCandle(input, now, fallbackSource = null) {
 /**
  * A bounded, in-memory 5m closed-candle cache.
  *
- * It makes no REST calls. The market-wide feed uses one combined Binance
- * WebSocket connection (one kline_5m stream per eligible symbol); Micro may
- * seed the same cache with its existing 5m REST response, so this feature
- * does not add a per-symbol REST warm-up loop.
+ * The market-wide feed uses one combined Binance WebSocket connection (one
+ * kline_5m stream per eligible symbol). Live Radar 8 may request a bounded REST
+ * warm-up for only missing/stale entries; calls share the existing REST broker,
+ * run at limited concurrency, and are not awaited by the live scan cycle.
  */
 export class MarketWideKlineCache {
   constructor({
