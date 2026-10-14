@@ -1044,17 +1044,38 @@ export class MultiAnalystEngine {
       priority_slots_per_cycle:Math.max(1,Math.min(5,Math.trunc(Number(this.config.radarReviewSlotsPerCycle)||4))),
       retry_cooldown_ms:Math.max(15000,Number(this.config.radarReviewRetryCooldownMs)||60000),
       oldest_pending_age_ms:oldest===null?0:Math.max(0,now-oldest),
+      pending_reviews:rows.slice().sort((a,b)=>a.first_queued_at-b.first_queued_at).slice(0,50).map(item=>({
+        symbol:item.symbol,
+        age_ms:Math.max(0,now-Number(item.first_queued_at||now)),
+        attempts:Number(item.attempts||0),
+        source_radars:(item.source_radars||[]).slice(0,8),
+        last_error:item.last_error||null
+      })),
       last_selected_symbols:this.lastRadarReviewSelection.slice(),
-      recent_assessment_count:rows.length?this.latestAnalystAssessments.size:this.latestAnalystAssessments.size,
+      recent_assessment_count:this.latestAnalystAssessments.size,
       assessment_ttl_ms:assessmentTtl
     };
+  }
+
+  latestAssessments({limit=40,symbols=[]}={}){
+    const now=this.clock();
+    this._pruneRadarReviewState(now);
+    const wanted=[...new Set((Array.isArray(symbols)?symbols:[]).map(x=>String(x||'').trim().toUpperCase()).filter(x=>/^[A-Z0-9]{2,30}$/.test(x)))].slice(0,30);
+    let rows;
+    if(wanted.length){
+      rows=wanted.map(symbol=>this.latestAnalystAssessments.get(symbol)).filter(Boolean);
+    }else{
+      rows=[...this.latestAnalystAssessments.values()].sort((a,b)=>b.assessed_at_ms-a.assessed_at_ms)
+        .slice(0,Math.max(1,Math.min(100,Math.trunc(Number(limit)||40))));
+    }
+    return rows.map(row=>({...row,age_ms:Math.max(0,now-Number(row.assessed_at_ms||0))}));
   }
 
   _recordLatestAssessment(item,now=this.clock()){
     const analysts=Array.isArray(item?.analysts)?item.analysts:[];
     const ids=analysts.map(x=>String(x?.id||'')).filter(Boolean);
     const uniqueIds=new Set(ids);
-    const placeholderIds=ids.filter(id=>/^ANALYST_\\d+$/i.test(id));
+    const placeholderIds=ids.filter(id=>/^ANALYST_\d+$/i.test(id));
     const analysisFailed=(Array.isArray(item?.reason_codes)?item.reason_codes:[]).includes('MULTI_ANALYST_ANALYSIS_FAILED');
     const execution=item?.analyst_execution||{};
     const assessment={
@@ -1206,7 +1227,6 @@ export class MultiAnalystEngine {
         if(!row||seen.has(row.symbol))continue;
         seen.add(row.symbol);selected.push(row);
       }
-      this.lastRadarReviewSelection=radarPriorityRows.map(row=>String(row.symbol||'').toUpperCase()).slice(0,reviewSlots);
       let bucketIndex=0;
       while(selected.length<this.config.discoveryPool&&buckets.some(b=>b.length)){
         const bucket=buckets[bucketIndex%buckets.length];
@@ -1219,6 +1239,8 @@ export class MultiAnalystEngine {
       if(!selected.length)throw new Error('NO_SPOT_CANDIDATES');
       const deepPool=Math.max(1,Math.min(selected.length,Math.trunc(Number(this.config.deepScanPool)||selected.length)));
       const deepSelected=selected.slice(0,deepPool);
+      this.lastRadarReviewSelection=deepSelected.filter(row=>row?._radar_review_priority===true)
+        .map(row=>String(row.symbol||'').toUpperCase()).slice(0,reviewSlots);
       // Record attempt time before requests so a repeatedly failing symbol cannot monopolize
       // the priority lane. Failed symbols become eligible again after the retry cooldown.
       const attemptedRadarReviews=deepSelected.map(ticker=>this.pendingRadarReviews.get(String(ticker?.symbol||'').toUpperCase())).filter(Boolean);
@@ -1319,11 +1341,18 @@ export class MultiAnalystEngine {
       for(const ticker of deepSelected){
         const symbol=String(ticker?.symbol||'').toUpperCase();
         if(!this.pendingRadarReviews.has(symbol))continue;
-        if(failedRadarReviewSymbols.has(symbol)){
-          const review=this.pendingRadarReviews.get(symbol);
-          if(review)review.last_error=String(scanErrors.find(x=>String(x?.symbol||'').toUpperCase()===symbol)?.error||'SCAN_FAILED').slice(0,160);
-        }else{
+        const reviewed=live.find(item=>String(item?.symbol||'').toUpperCase()===symbol);
+        const execution=reviewed?.analyst_execution||{};
+        const reviewComplete=!failedRadarReviewSymbols.has(symbol)&&
+          execution.specialists_complete===true&&execution.final_analyst_complete===true&&!execution.analysis_failed;
+        if(reviewComplete){
           this.pendingRadarReviews.delete(symbol);
+        }else{
+          const review=this.pendingRadarReviews.get(symbol);
+          if(review)review.last_error=String(
+            scanErrors.find(x=>String(x?.symbol||'').toUpperCase()===symbol)?.error||
+            (reviewed?.analyst_execution?.analysis_failed?'ANALYST_ANALYSIS_FAILED':'ANALYST_REVIEW_INCOMPLETE')
+          ).slice(0,160);
         }
       }
       const assessmentAt=this.clock();
