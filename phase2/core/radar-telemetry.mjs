@@ -192,7 +192,9 @@ const instrumentedRadarInstances = new WeakSet();
 export function instrumentRadarCycle(instance, radarId, {clock = () => Date.now()} = {}) {
   if (!instance || instrumentedRadarInstances.has(instance)) return false;
   const methodName = typeof instance.tick === "function" ? "tick" :
-    (typeof instance.cycle === "function" ? "cycle" : null);
+    (typeof instance.cycle === "function" ? "cycle" :
+      (typeof instance.scan === "function" ? "scan" :
+        (typeof instance.reconcile === "function" ? "reconcile" : null)));
   if (!methodName) return false;
   const radar = String(radarId || "UNKNOWN").toUpperCase();
   const originalTick = instance[methodName].bind(instance);
