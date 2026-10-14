@@ -47,15 +47,21 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
         String title = remoteNotification != null ? remoteNotification.getTitle() : null;
         String body = remoteNotification != null ? remoteNotification.getBody() : null;
         if (title == null || title.trim().isEmpty()) {
-            String radar = dataValue(message.getData(), "radar_name", "RadarX");
-            String symbol = dataValue(message.getData(), "symbol", "تنبيه");
-            title = radar + " • " + symbol;
+            title = dataValue(message.getData(), "title", "");
+            if (title.trim().isEmpty()) {
+                String radar = dataValue(message.getData(), "radar_name", "RadarX");
+                String symbol = dataValue(message.getData(), "symbol", "تنبيه");
+                title = radar + " • " + symbol;
+            }
         }
         if (body == null || body.trim().isEmpty()) {
-            String symbol = dataValue(message.getData(), "symbol", "");
-            String event = dataValue(message.getData(), "event", "اكتشاف جديد");
-            body = (symbol.isEmpty() ? event : symbol + " • " + event)
-                    + " | تداول ورقي فقط";
+            body = dataValue(message.getData(), "body", "");
+            if (body.trim().isEmpty()) {
+                String symbol = dataValue(message.getData(), "symbol", "");
+                String event = dataValue(message.getData(), "event", "اكتشاف جديد");
+                body = (symbol.isEmpty() ? event : symbol + " • " + event)
+                        + " | تداول ورقي فقط";
+            }
         }
 
         String symbol = dataValue(message.getData(), "symbol", "");
