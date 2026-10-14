@@ -36,6 +36,30 @@ export function selectWithPriorityRotation(rows,limit,cursor=0){
     nextCursor:(start+rotationSize)%tail.length
   };
 }
+
+/** Reserve existing discovery capacity for queued radar symbols before round-robin buckets. */
+export function selectDiscoveryWithRadarReviewPriority(priorityRows,buckets,limit){
+  const max=Math.max(0,Math.trunc(Number(limit)||0));
+  if(!max)return [];
+  const selected=[],seen=new Set();
+  for(const row of Array.isArray(priorityRows)?priorityRows:[]){
+    const symbol=String(row?.symbol||'').toUpperCase();
+    if(!symbol||seen.has(symbol))continue;
+    seen.add(symbol);selected.push(row);
+    if(selected.length>=max)return selected;
+  }
+  const lanes=(Array.isArray(buckets)?buckets:[]).map(rows=>Array.isArray(rows)?rows.slice():[]);
+  let bucketIndex=0;
+  while(selected.length<max&&lanes.some(rows=>rows.length)){
+    const lane=lanes[bucketIndex%lanes.length];
+    if(lane.length){
+      const row=lane.shift(),symbol=String(row?.symbol||'').toUpperCase();
+      if(row&&symbol&&!seen.has(symbol)){seen.add(symbol);selected.push(row);}
+    }
+    bucketIndex++;
+  }
+  return selected;
+}
 const mean=(xs)=>avg(xs);
 const safe=(x,d=null)=>Number.isFinite(Number(x))?Number(x):d;
 const pct=(a,b)=>Number.isFinite(Number(a))&&Number.isFinite(Number(b))&&Number(b)>0?(Number(a)-Number(b))/Number(b)*100:null;
@@ -1226,20 +1250,8 @@ export class MultiAnalystEngine {
       }).sort((a,b)=>b.quiet_discovery_score-a.quiet_discovery_score);
       const quiet=this._rotatingDiscoveryBucket('quiet',quietCandidates,Math.max(5,Math.trunc(this.config.discoveryPool*.28)));
       // Round-robin the discovery buckets so volume leaders cannot consume the full deep-scan budget.
-      const buckets=[top,wake,surge,quiet,bottom],selected=[],seen=new Set();
-      for(const row of radarPriorityRows){
-        if(!row||seen.has(row.symbol))continue;
-        seen.add(row.symbol);selected.push(row);
-      }
-      let bucketIndex=0;
-      while(selected.length<this.config.discoveryPool&&buckets.some(b=>b.length)){
-        const bucket=buckets[bucketIndex%buckets.length];
-        if(bucket.length){
-          const row=bucket.shift();
-          if(row&&!seen.has(row.symbol)){seen.add(row.symbol);selected.push(row);}
-        }
-        bucketIndex++;
-      }
+      const buckets=[top,wake,surge,quiet,bottom];
+      const selected=selectDiscoveryWithRadarReviewPriority(radarPriorityRows,buckets,this.config.discoveryPool);
       if(!selected.length)throw new Error('NO_SPOT_CANDIDATES');
       const deepPool=Math.max(1,Math.min(selected.length,Math.trunc(Number(this.config.deepScanPool)||selected.length)));
       const deepSelected=selected.slice(0,deepPool);
