@@ -136,7 +136,7 @@ radar.tick=originalTick;
 const batchRadar = new StrongMoveRadar({rest:{},store:{},config:{topMoverCount:3,rotationBatchSize:4},clock:()=>NOW});
 batchRadar.universe=Array.from({length:16},(_,i)=>`B${String(i).padStart(2,'0')}USDT`);
 const batchRows=batchRadar.universe.map((symbol,i)=>({symbol,lastPrice:10+i,priceChange24h:16-i,quoteVolume24h:2_000_000+i}));
-const lowVolumeSurge={...batchRows[8],symbol:'LOWVOLUSDT',priceChange24h:12,recent_move_pct:2.2,quoteVolume24h:100};
+const lowVolumeSurge={...batchRows[8],symbol:'LOWVOLUSDT',priceChange24h:12,recent_move_pct:1.1,quoteVolume24h:100};
 const selectedBatch=batchRadar.selectBatch([...batchRows,lowVolumeSurge]);
 assert.equal(selectedBatch.length,7,'Strong Move should fill its top+rotation budget when enough market rows exist');
 assert.equal(new Set(selectedBatch.map(x=>x.symbol)).size,7,'Strong Move must not waste rotation slots on duplicate top movers');
