@@ -133,6 +133,7 @@ public final class MainActivity extends Activity {
         });
 
         setContentView(webView);
+        RadarXPushRegistration.syncIfConfigured(this);
         webView.loadUrl(APP_URL);
         webView.postDelayed(this::ensureContinuousMonitoring, 1400);
     }
@@ -448,6 +449,7 @@ public final class MainActivity extends Activity {
         if (requestCode == REQUEST_POST_NOTIFICATIONS) {
             boolean granted = grantResults.length > 0 &&
                     grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED;
+            if (granted) RadarXPushRegistration.syncIfConfigured(this);
             if (pendingBackgroundStart && granted) {
                 pendingBackgroundStart = false;
                 startBackgroundMonitor(false);
