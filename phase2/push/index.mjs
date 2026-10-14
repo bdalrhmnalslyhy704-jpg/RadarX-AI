@@ -69,14 +69,18 @@ export class FcmPushProvider extends PushProvider{
         const value=payload?.[key];
         if(value!==undefined&&value!==null)data[key]=String(value).slice(0,500);
       }
+      // Send data-only HIGH priority messages so Android's native service can post
+      // one notification, set a deterministic tap target, and record device receipt
+      // even when the application process is in the background.
+      data.title=title;
+      data.body=body;
       data.paper_trading='true';data.real_order_execution='false';data.confidence_score='UNKNOWN';
       const response=await this.fetchImpl(FCM_API_BASE+encodeURIComponent(this.projectId)+'/messages:send',{
         method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},
         body:JSON.stringify({message:{
           token:subscription.fcm_token,
-          notification:{title,body},
           data,
-          android:{priority:'HIGH',ttl:'30s',notification:{channel_id:'radarx_radar_alerts_v2',sound:'default'}}
+          android:{priority:'HIGH',ttl:'30s'}
         }}),
         signal:AbortSignal.timeout(8000)
       });
