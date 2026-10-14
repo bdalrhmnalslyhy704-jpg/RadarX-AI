@@ -750,7 +750,12 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         if(token.length<100||token.length>4096||!/^[A-Za-z0-9:._~-]+$/.test(token))
           return send(res,400,{error:'INVALID_FCM_TOKEN'});
         if(typeof store?.upsertFcmDevice!=='function')return send(res,503,{error:'FCM_DEVICE_STORE_UNAVAILABLE'});
-        const registration=await store.upsertFcmDevice(installationId,token);
+        let registration;
+        try{registration=await store.upsertFcmDevice(installationId,token);}
+        catch(error){
+          if(String(error?.message||'')==='FCM_DEVICE_CAPACITY_REACHED')return send(res,503,{error:'FCM_DEVICE_CAPACITY_REACHED'});
+          throw error;
+        }
         return send(res,201,{ok:true,provider:'fcm',registered:true,installation_id:registration.installation_id,subscription_id:registration.id});
       }
       if(u.pathname.startsWith('/api/push/device/')&&req.method==='DELETE'){
