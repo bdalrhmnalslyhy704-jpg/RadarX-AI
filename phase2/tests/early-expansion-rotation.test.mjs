@@ -496,6 +496,57 @@ test('Radar 8 logs a full-cycle duration and phase timing breakdown',async()=>{
     assert.ok(Number.isFinite(report.phase_timings_ms[key]),key);
 });
 
+test('Radar 8 never awaits optional archive cache rehydration on the live scan path',async()=>{
+  let finishHydration;
+  let hydrationStarted=false;
+  let hydrationCompleted=false;
+  const hydrationWait=new Promise(resolve=>{finishHydration=resolve;});
+  const store={
+    state:{records:[],last_historical_import_at:0,last_historical_backfill_at:0,last_report_log_at:0,updated_at:now},
+    async updatePreExpansionOutcomes(update){
+      const next=update(this.state);
+      if(next&&next!==false)this.state=next;
+      return this.state;
+    },
+    async readEarlyExpansionAlerts(){return[];},
+    async readFalconEyeAlerts(){return[];}
+  };
+  const rest={
+    async request(path){return path.includes('exchangeInfo')?{data:{symbols:[]}}:{data:[]};},
+    async klines(){return {candles:[]};},
+    async depth(){return {data:{bids:[],asks:[]}};}
+  };
+  const cache={
+    running:true,
+    setSymbols(){},
+    getSeries(){return null;},
+    coverageReport(){return {symbols:[]};},
+    health(){return {
+      running:true,expected_symbols:0,ready_symbols:0,full_market_coverage_ready:false,
+      cache_coverage_ready:false,websocket_live:false,websocket_subscription_complete:false,
+      websocket_sync_ready:false,websocket_advanced_symbols:0
+    };}
+  };
+  const radar=new EarlyExpansionRadar({
+    rest,store,marketWideKlineCache:cache,
+    config:{pollMs:45000,marketWideCacheWarmupEnabled:false},
+    clock:()=>now,logger:{info(){},warn(){}}
+  });
+  radar.rehydrateMarketWideCacheFromArchive=async()=>{
+    hydrationStarted=true;
+    await hydrationWait;
+    hydrationCompleted=true;
+    return {status:'COMPLETE'};
+  };
+  radar.running=true;
+  assert.equal(await radar.tick(),true);
+  assert.equal(hydrationStarted,true,'archive hydration should be dispatched');
+  assert.equal(hydrationCompleted,false,'the live scan must finish without waiting for archive file reads/decompression');
+  finishHydration();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(hydrationCompleted,true,'the lower-priority archive task can finish independently');
+});
+
 test('Radar 8 always releases the cycle latch when scheduler hydration fails',async()=>{
   const events=[];
   const radar=new EarlyExpansionRadar({
