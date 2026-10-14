@@ -65,7 +65,7 @@ export class FcmPushProvider extends PushProvider{
       const title=String(payload?.title||((payload?.radar_name||'RadarX')+' • '+(payload?.symbol||'تنبيه'))).slice(0,120);
       const body=String(payload?.message||[payload?.symbol,payload?.event||payload?.potential_label||payload?.type].filter(Boolean).join(' • ')||'تنبيه جديد من RadarX').slice(0,220);
       const data={};
-      for(const key of ['type','event_class','event','radar','radar_name','symbol','market','direction','price','opportunity_score','potential_label','detected_at','detected_at_iso','detected_time_12h','detected_timezone','source','test_id','event_id']){
+      for(const key of ['type','event_class','event','radar','radar_name','symbol','market','direction','price','opportunity_score','potential_label','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id']){
         const value=payload?.[key];
         if(value!==undefined&&value!==null)data[key]=String(value).slice(0,500);
       }
