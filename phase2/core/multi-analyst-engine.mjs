@@ -15,6 +15,27 @@ const avg=(xs)=>{
   const a=xs.map(Number).filter(Number.isFinite);
   return a.length?a.reduce((s,x)=>s+x,0)/a.length:null;
 };
+
+// Keep the top half of each early-move bucket, then rotate its remaining slots
+// through lower-ranked eligible symbols so the same quiet coins do not monopolize deep analysis.
+export function selectWithPriorityRotation(rows,limit,cursor=0){
+  const source=Array.isArray(rows)?rows:[];
+  const count=Math.max(0,Math.trunc(Number(limit)||0));
+  if(!count||!source.length)return {rows:[],nextCursor:0};
+  if(source.length<=count)return {rows:source.slice(),nextCursor:0};
+  const priorityCount=Math.min(count,Math.max(1,Math.floor(count*.5)));
+  const rotatingCount=count-priorityCount;
+  if(!rotatingCount)return {rows:source.slice(0,count),nextCursor:0};
+  const tail=source.slice(priorityCount);
+  const start=((Math.trunc(Number(cursor)||0)%tail.length)+tail.length)%tail.length;
+  const rotationSize=Math.min(rotatingCount,tail.length);
+  const rotated=[];
+  for(let i=0;i<rotationSize;i++)rotated.push(tail[(start+i)%tail.length]);
+  return {
+    rows:[...source.slice(0,priorityCount),...rotated],
+    nextCursor:(start+rotationSize)%tail.length
+  };
+}
 const mean=(xs)=>avg(xs);
 const safe=(x,d=null)=>Number.isFinite(Number(x))?Number(x):d;
 const pct=(a,b)=>Number.isFinite(Number(a))&&Number.isFinite(Number(b))&&Number(b)>0?(Number(a)-Number(b))/Number(b)*100:null;
@@ -941,11 +962,17 @@ export class MultiAnalystEngine {
     this.universeCacheByQuote=new Map();
     this.busy=null;
     this.calibration=new SelfCalibrator(30);
+    this.discoveryRotationCursors=new Map();
     this.pendingOutcomes=new Map();
     this.running=false;
     this.monitorTimer=null;
     this.monitorStartedAt=null;
     this.monitorStats={scan_count:0,last_scan_at:null,last_error:null,next_scan_at:null,last_scan_successful:false};
+  }
+  _rotatingDiscoveryBucket(key,rows,limit){
+    const selected=selectWithPriorityRotation(rows,limit,this.discoveryRotationCursors.get(key)||0);
+    this.discoveryRotationCursors.set(key,selected.nextCursor);
+    return selected.rows;
   }
   _settleOutcome(symbol,currentPrice,now){
     const list=this.pendingOutcomes.get(symbol);
@@ -1010,11 +1037,12 @@ export class MultiAnalystEngine {
 
       const top=rankTickerRows(tickers.data,universe,{minQuoteVolume24h:this.config.minQuoteVolume24h,limit:Math.max(7,Math.trunc(this.config.discoveryPool*.36))});
       const bottom=rankBottomTickerRows(tickers.data,universe,{minQuoteVolume24h:this.config.minQuoteVolume24h,limit:Math.max(4,Math.trunc(this.config.discoveryPool*.20))});
-      const wake=normalized.filter(x=>x.priceChange24h>=0.35&&x.priceChange24h<=7).sort((a,b)=>{
+      const wakeCandidates=normalized.filter(x=>x.priceChange24h>=0.35&&x.priceChange24h<=7).sort((a,b)=>{
         const sa=Math.log10(Math.max(1,a.quoteVolume24h))*0.6+Math.min(7,a.priceChange24h)*8;
         const sb=Math.log10(Math.max(1,b.quoteVolume24h))*0.6+Math.min(7,b.priceChange24h)*8;
         return sb-sa;
-      }).slice(0,Math.max(6,Math.trunc(this.config.discoveryPool*.30)));
+      });
+      const wake=this._rotatingDiscoveryBucket('wake',wakeCandidates,Math.max(6,Math.trunc(this.config.discoveryPool*.30)));
       // Preserve real scan capacity for coins that are liquid but still relatively quiet.
       const surge=normalized.filter(x=>
         x.quoteVolume24h>=Math.max(1_000_000,this.config.minQuoteVolume24h)&&
@@ -1025,7 +1053,7 @@ export class MultiAnalystEngine {
         return sb-sa||b.quoteVolume24h-a.quoteVolume24h;
       }).slice(0,Math.max(3,Math.trunc(this.config.discoveryPool*.34)));
       // Keep extended movers visible to the lab without removing the final anti-chase/data gates.
-      const quiet=normalized.filter(x=>
+      const quietCandidates=normalized.filter(x=>
         x.quoteVolume24h>=this.config.minQuoteVolume24h &&
         x.priceChange24h>=-1.5&&x.priceChange24h<=3.5
       ).map(x=>{
@@ -1037,8 +1065,8 @@ export class MultiAnalystEngine {
         const activity=clamp(Math.log10(Math.max(1,x.tradeCount24h))*16);
         const liquidity=clamp(Math.log10(Math.max(1,x.quoteVolume24h))*7);
         return {...x,quiet_discovery_score:baseProximity*.35+moderateMove*.25+activity*.18+liquidity*.22};
-      }).sort((a,b)=>b.quiet_discovery_score-a.quiet_discovery_score)
-        .slice(0,Math.max(5,Math.trunc(this.config.discoveryPool*.28)));
+      }).sort((a,b)=>b.quiet_discovery_score-a.quiet_discovery_score);
+      const quiet=this._rotatingDiscoveryBucket('quiet',quietCandidates,Math.max(5,Math.trunc(this.config.discoveryPool*.28)));
       // Round-robin the discovery buckets so volume leaders cannot consume the full deep-scan budget.
       const buckets=[top,wake,surge,quiet,bottom],selected=[],seen=new Set();
       let bucketIndex=0;
