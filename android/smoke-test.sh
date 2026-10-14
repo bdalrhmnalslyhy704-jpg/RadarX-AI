@@ -162,14 +162,14 @@ start_app_and_wait_ready() {
 }
 background_service_pid() {
   local pid
-  pid="$(timeout 8s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\\r' || true)"
+  pid="$(timeout 8s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
   if [[ -n "$pid" ]]; then
-    printf '%s\\n' "$pid"
+    printf '%s\n' "$pid"
     return 0
   fi
   # Some Android emulator/toybox versions omit colon-suffixed names from pidof.
-  pid="$(timeout 8s adb shell ps -A 2>/dev/null | awk '$NF == "com.radarx.app:radar_background" {print $2; exit}' | tr -d '\\r' || true)"
-  printf '%s\\n' "$pid"
+  pid="$(timeout 8s adb shell ps -A 2>/dev/null | awk '$NF == "com.radarx.app:radar_background" {print $2; exit}' | tr -d '\r' || true)"
+  printf '%s\n' "$pid"
 }
 
 assert_background_service_declared() {
