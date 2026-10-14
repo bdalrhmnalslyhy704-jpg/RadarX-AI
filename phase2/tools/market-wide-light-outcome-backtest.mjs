@@ -7,12 +7,14 @@ import {MarketWideLightScan, isDirectionalCandidateSymbol} from '../core/market-
 const API_ROOT = 'https://data-api.binance.vision';
 const MIN_QUOTE_VOLUME = 750000;
 const KLINE_LIMIT = 1000;
+const HISTORY_PAGE_COUNT = 4;
+const REQUESTED_HISTORY_BARS = KLINE_LIMIT * HISTORY_PAGE_COUNT;
 const CANDLE_MS = 5 * 60 * 1000;
 const SAMPLE_STEP_MS = 60 * 60 * 1000;
 const LOOKBACK_BARS = 96;
 const FUTURE_BARS = 48;
 const HORIZONS = {m15: 3, h1: 12, h4: 48};
-const MIN_HISTORY_BARS = 800;
+const MIN_HISTORY_BARS = 3600;
 const MIN_SAMPLE_UNIVERSE = 100;
 const MIN_SAMPLE_COUNT = 24;
 const MIN_COVERAGE_RATIO = 0.70;
@@ -306,6 +308,10 @@ function normalizedKlines(symbol, rawRows, fetchedAt) {
     .sort((a, b) => a.openTime - b.openTime)
     .filter((row, index, rows) => index === 0 || row.openTime !== rows[index - 1].openTime);
 }
+function mergeKlinePages(pages) {
+  return pages.flat().filter(Boolean).sort((a, b) => a.openTime - b.openTime)
+    .filter((row, index, rows) => index === 0 || row.openTime !== rows[index - 1].openTime);
+}
 async function getJson(url) {
   const previous = requestQueue;
   let release;
@@ -349,6 +355,25 @@ async function getJson(url) {
     release();
   }
 }
+async function fetchHistoricalKlines(symbol, fetchedAt) {
+  const pages = [];
+  let endTime = null;
+  for (let page = 0; page < HISTORY_PAGE_COUNT; page++) {
+    let url = API_ROOT + '/api/v3/klines?symbol=' + encodeURIComponent(symbol) +
+      '&interval=5m&limit=' + KLINE_LIMIT;
+    if (endTime !== null) url += '&endTime=' + endTime;
+    const rawRows = await getJson(url);
+    if (!Array.isArray(rawRows)) throw new Error('KLINE_RESPONSE_NOT_ARRAY:' + symbol);
+    if (!rawRows.length) break;
+    pages.push(normalizedKlines(symbol, rawRows, fetchedAt));
+    if (rawRows.length < KLINE_LIMIT) break;
+    const oldestOpenTime = Math.min(...rawRows.map(row => Number(row?.[0])).filter(Number.isFinite));
+    if (!Number.isFinite(oldestOpenTime)) throw new Error('KLINE_PAGE_MISSING_OPEN_TIME:' + symbol);
+    endTime = oldestOpenTime - 1;
+  }
+  return mergeKlinePages(pages);
+}
+
 function forwardOutcome(symbol, candles, index) {
   const previous = candles.slice(index - 12, index + 1);
   const current = candles[index];
@@ -386,6 +411,9 @@ function selfTest() {
       open,high:open * 1.01,low:open * 0.99,close:open * 1.005,volume:10,tradeCount:20,closed:true,source:'BINANCE_PUBLIC_REST'});
   }
   assert.equal(continuous(fake.slice(0, 12)), true);
+  const merged = mergeKlinePages([fake.slice(15, 30), fake.slice(0, 20), fake.slice(20, 40)]);
+  assert.equal(merged.length, 40);
+  assert.equal(continuous(merged), true);
   assert.equal(isDirectionalCandidateSymbol('OGNUSDT'), true);
   assert.equal(isDirectionalCandidateSymbol('USDCUSDT'), false);
   const ci = movingBlockBootstrapCI([0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8], {iterations:100,seed:224});
@@ -408,7 +436,10 @@ const report = {
   settings: {
     minimum_quote_volume_24h_usdt: MIN_QUOTE_VOLUME,
     klines_interval: '5m',
-    requested_history_limit_per_symbol: KLINE_LIMIT,
+    kline_page_limit: KLINE_LIMIT,
+    historical_pages_per_symbol: HISTORY_PAGE_COUNT,
+    requested_history_bars_per_symbol: REQUESTED_HISTORY_BARS,
+    approximate_requested_history_days: round(REQUESTED_HISTORY_BARS * CANDLE_MS / 86400000, 2),
     snapshot_spacing_minutes: 60,
     indicator_history_bars: LOOKBACK_BARS,
     forward_horizons_minutes: {m15:15,h1:60,h4:240},
@@ -421,7 +452,7 @@ const report = {
     comparator: 'All historically evaluable eligible symbols and a separate top-12 1h-momentum comparator; this is not claimed to reproduce the legacy Micro selector.',
     selection: 'MarketWideLightScan 48-symbol pool and a score-ranked 12-symbol shortlist from that pool; no alerts or orders are generated.',
     known_limitations: [
-      'Current active symbols and current 24h quote-volume eligibility are used for a bounded recent-history replay, so delisted coins and historical eligibility are not reconstructed.',
+      'Current active symbols and current 24h quote-volume eligibility are used for an approximately 14-day replay, so delisted coins and point-in-time historical eligibility are not reconstructed.',
       'The 4-hour forward windows overlap across hourly snapshots; confidence intervals use a deterministic circular 4-snapshot moving-block bootstrap, but results remain observational rather than proof of future profitability.',
       'A light-scan candidate is a prefilter only; this replay does not authorize trades or claim trading profitability.'
     ]
@@ -454,7 +485,9 @@ try {
     directional_eligible_symbols: currentUniverse.filter(row => isDirectionalCandidateSymbol(row.symbol)).length,
     history_ready_symbols: 0,
     history_ready_ratio_pct: 0,
-    candles_requested_per_symbol: KLINE_LIMIT,
+    candles_requested_per_symbol: REQUESTED_HISTORY_BARS,
+    kline_page_limit: KLINE_LIMIT,
+    kline_pages_per_symbol: HISTORY_PAGE_COUNT,
     candles_received_total: 0,
     candles_received_min_per_symbol: null,
     candles_received_median_per_symbol: null,
@@ -466,10 +499,8 @@ try {
   const collectionStartedAt = Date.now();
   const history = new Map();
   for (const entry of currentUniverse) {
-    const url = API_ROOT + '/api/v3/klines?symbol=' + encodeURIComponent(entry.symbol) + '&interval=5m&limit=' + KLINE_LIMIT;
     try {
-      const raw = await getJson(url);
-      const candles = normalizedKlines(entry.symbol, raw, collectionStartedAt);
+      const candles = await fetchHistoricalKlines(entry.symbol, collectionStartedAt);
       history.set(entry.symbol, {entry, candles, error:null});
     } catch (error) {
       const failure = {symbol:entry.symbol,reason:String(error?.message || error).slice(0, 220)};
@@ -490,7 +521,9 @@ try {
   report.data.candles_received_median_per_symbol = median(perSymbolCounts);
   report.data.candles_received_max_per_symbol = perSymbolCounts.length ? Math.max(...perSymbolCounts) : null;
   report.data.collection_finished_at_ms = Date.now();
-  report.data.kline_download_requests = currentUniverse.length;
+  const klineRequests = requestAudit.filter(item => item.url.includes('/api/v3/klines?'));
+  report.data.kline_download_requests = new Set(klineRequests.map(item => item.url)).size;
+  report.data.kline_http_attempts = klineRequests.length;
   report.data.http_attempts_total = requestAudit.length;
   if (historyReady.length < Math.max(MIN_SAMPLE_UNIVERSE, Math.ceil(currentUniverse.length * MIN_COVERAGE_RATIO))) {
     throw new Error('HISTORICAL_UNIVERSE_COVERAGE_INSUFFICIENT:' + historyReady.length + '/' + currentUniverse.length);
