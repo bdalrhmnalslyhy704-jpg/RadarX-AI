@@ -1380,7 +1380,7 @@ export class EarlyExpansionRadar{
     this.journeyStateHydrated=false;this.lastJourneyArchive=null;this.lastJourneyError=null;
     this.outcomeBackfillTask=null;
     this.microFiveMinuteWindowCache=new Map();
-    this.marketWideCacheArchiveHydrationAttempted=false;this.marketWideCacheArchiveHydration=null;this.marketWideCacheArchiveHydrationAttemptAtBySymbol=new Map();this.marketWideCacheArchiveLastEligibleSymbols=new Set();
+    this.marketWideCacheArchiveHydrationAttempted=false;this.marketWideCacheArchiveHydration=null;this.marketWideCacheArchiveHydrationTask=null;this.marketWideCacheArchiveHydrationAttemptAtBySymbol=new Map();this.marketWideCacheArchiveLastEligibleSymbols=new Set();
     this.deepCandleWindowCache=new Map();this.deepCandleCacheHitTotal=0;this.deepCandleCacheMissTotal=0;
     this.schedulerBufferEventsDroppedTotal=0;
     this.latestCandidates=[];this.lastResult=null;this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
@@ -2076,7 +2076,17 @@ export class EarlyExpansionRadar{
         try{
           this.marketWideKlineCache.setSymbols(eligible.map(row=>row.symbol));
           if(!this.marketWideKlineCache.running)this.marketWideKlineCache.start();
-          await this.rehydrateMarketWideCacheFromArchive(eligible,fastSeenAt);
+          // Archive hydration can inspect and decompress up to 50 historical journey files.
+          // Keep this lower-priority cache recovery off the live scan's critical path and
+          // coalesce attempts so only one archive read is active at a time. The bounded
+          // Binance REST warm-up below remains responsible for missing fresh cache windows.
+          if(!this.marketWideCacheArchiveHydrationTask){
+            const task=Promise.resolve()
+              .then(()=>this.rehydrateMarketWideCacheFromArchive(eligible,fastSeenAt))
+              .catch(error=>{this.noteError(error,'market-wide-cache-archive-rehydrate');return null;})
+              .finally(()=>{if(this.marketWideCacheArchiveHydrationTask===task)this.marketWideCacheArchiveHydrationTask=null;});
+            this.marketWideCacheArchiveHydrationTask=task;
+          }
           // Cache missing/stale 5m windows in the background using the shared, bounded
           // REST budget. Keep the current scan non-blocking while the remaining symbols warm.
           if(this.config.marketWideCacheWarmupEnabled!==false&&
