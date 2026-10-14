@@ -27,8 +27,8 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
     @Override
     public void onMessageReceived(RemoteMessage message) {
         super.onMessageReceived(message);
-        String serverAt = message.getData().getOrDefault("sent_at",
-                message.getData().getOrDefault("server_processed_at", ""));
+        String serverAt = dataValue(message.getData(), "sent_at",
+                dataValue(message.getData(), "server_processed_at", ""));
         try {
             long timestamp = Long.parseLong(serverAt);
             long latency = System.currentTimeMillis() - timestamp;
@@ -47,19 +47,19 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
         String title = remoteNotification != null ? remoteNotification.getTitle() : null;
         String body = remoteNotification != null ? remoteNotification.getBody() : null;
         if (title == null || title.trim().isEmpty()) {
-            String radar = message.getData().getOrDefault("radar_name", "RadarX");
-            String symbol = message.getData().getOrDefault("symbol", "تنبيه");
+            String radar = dataValue(message.getData(), "radar_name", "RadarX");
+            String symbol = dataValue(message.getData(), "symbol", "تنبيه");
             title = radar + " • " + symbol;
         }
         if (body == null || body.trim().isEmpty()) {
-            String symbol = message.getData().getOrDefault("symbol", "");
-            String event = message.getData().getOrDefault("event", "اكتشاف جديد");
+            String symbol = dataValue(message.getData(), "symbol", "");
+            String event = dataValue(message.getData(), "event", "اكتشاف جديد");
             body = (symbol.isEmpty() ? event : symbol + " • " + event)
                     + " | تداول ورقي فقط";
         }
 
-        String symbol = message.getData().getOrDefault("symbol", "");
-        String radar = message.getData().getOrDefault("radar", "");
+        String symbol = dataValue(message.getData(), "symbol", "");
+        String radar = dataValue(message.getData(), "radar", "");
         Intent openApp = new Intent(this, MainActivity.class);
         openApp.setAction("com.radarx.app.OPEN_RADAR_ALERT");
         openApp.putExtra("radarx_push_open", true);
@@ -89,6 +89,11 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
             manager.notify(requestCode == 0 ? 42099 : requestCode, builder.build());
             Log.i(TAG, "FCM_NOTIFICATION_POSTED");
         }
+    }
+
+    private static String dataValue(java.util.Map<String, String> data, String key, String fallback) {
+        String value = data == null ? null : data.get(key);
+        return value == null ? fallback : value;
     }
 
     private void createChannel() {
