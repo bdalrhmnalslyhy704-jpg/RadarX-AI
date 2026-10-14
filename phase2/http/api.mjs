@@ -598,25 +598,28 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         const quote=String(u.searchParams.get('quote')||config.multiAnalyst?.quote||'USDT').trim().toUpperCase();
         const limit=Math.max(1,Math.min(15,Math.trunc(Number(u.searchParams.get('limit')||config.multiAnalyst?.returnLimit||10))));
         const runNow=String(u.searchParams.get('scan')||'').trim()==='1';
+        const rawRequestId=String(u.searchParams.get('_ts')||'').trim();
+        const requestId=/^[A-Za-z0-9_-]{1,64}$/.test(rawRequestId)?rawRequestId:null;
         try{
           let snapshot=multiAnalystRadar.getCached({quote});
           if(runNow){
-            snapshot=await multiAnalystRadar.scan({quote,limit});
-            return send(res,200,{...snapshot,radar:'MULTI_ANALYST',meta:{...(snapshot.meta||{}),analysis_mode:'FORCED_SCAN',served_from_cache_while_scan:false}});
+            snapshot=await multiAnalystRadar.scan({quote,limit,forceRefresh:true,requestId});
+            return send(res,200,{...snapshot,radar:'MULTI_ANALYST',meta:{...(snapshot.meta||{}),analysis_mode:'FORCED_SCAN',force_refresh_requested:true,request_id:requestId,served_from_cache_while_scan:false}});
           }
           if(!snapshot){
-            return send(res,503,{error:'MULTI_ANALYST_WARMING_UP',message:'X-FACTOR is warming its background market snapshot.',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analysis_mode:'WARMING_UP'},monitoring:multiAnalystRadar.monitorStats||null});
+            snapshot=await multiAnalystRadar.scan({quote,limit,forceRefresh:false,requestId});
+            return send(res,200,{...snapshot,radar:'MULTI_ANALYST',meta:{...(snapshot.meta||{}),analysis_mode:'LIVE_REFRESH',request_id:requestId,force_refresh_requested:false,served_from_cache_while_scan:false}});
           }
-          return send(res,200,{...snapshot,radar:'MULTI_ANALYST',meta:{...(snapshot.meta||{}),analysis_mode:'CACHE',served_from_cache_while_scan:false}});
+          return send(res,200,{...snapshot,radar:'MULTI_ANALYST',meta:{...(snapshot.meta||{}),analysis_mode:'CACHE',request_id:requestId,force_refresh_requested:false,served_from_cache_while_scan:false}});
         }catch(e){
           const cached=multiAnalystRadar.getCached({quote})||null;
+          const errorMessage=String(e?.message??e);
           return send(res,200,{
-            ...(cached||{}),
-            status:'not_ready',
+            ...(cached||{}),status:'not_ready',
             candidates:Array.isArray(cached?.candidates)?cached.candidates:[],
-            error:String(e?.message??e),
-            scan:{requested:runNow,completed:false,error:String(e?.message??e)},
-            meta:{...(cached?.meta||{}),live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST'}
+            error:errorMessage,
+            scan:{requested:runNow,completed:false,error:errorMessage,request_id:requestId},
+            meta:{...(cached?.meta||{}),live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analysis_mode:'SCAN_FAILED',request_id:requestId,force_refresh_requested:runNow}
           });
         }
       }

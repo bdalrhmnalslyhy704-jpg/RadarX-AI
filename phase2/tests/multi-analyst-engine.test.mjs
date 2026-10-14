@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {MULTI_ANALYST_NAMES,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs} from '../core/multi-analyst-engine.mjs';
+import {MULTI_ANALYST_NAMES,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible} from '../core/multi-analyst-engine.mjs';
 
 // Continuous analyst cycles target one minute start-to-start, subtracting the
 // time spent scanning and never scheduling a negative delay after a slow cycle.
@@ -8,6 +8,11 @@ assert.equal(nextContinuousScanDelayMs(60000,12500),47500);
 assert.equal(nextContinuousScanDelayMs(60000,60000),0);
 assert.equal(nextContinuousScanDelayMs(60000,93000),0);
 assert.equal(nextContinuousScanDelayMs(1000,0),15000);
+assert.equal(isMomentumLiquidityEligible(1_000_000,2.5),true);
+assert.equal(isMomentumLiquidityEligible(4_060_000,2.6),true);
+assert.equal(isMomentumLiquidityEligible(999_999,3.2),false);
+assert.equal(isMomentumLiquidityEligible(4_060_000,2.49),false);
+assert.equal(isMomentumLiquidityEligible('N/A',4.0),false);
 
 function candle(i,{tf='15m',base=100,trend=0.001,volume=1000}={}){
   const openTime=i*900000,close=base*(1+trend*i);
@@ -70,24 +75,31 @@ console.log('multi-analyst-engine.test.mjs: PASS');
 // Regression: a discovered coin must not disappear before the 19-specialist lab.
 // Invalid data is handled fail-closed by the final judge, but remains visible as a rejected lab result.
 {
+  let exchangeInfoCalls=0,tickerCalls=0;
   const engine = new MultiAnalystEngine({
     rest: {request: async () => ({data: []})},
-    config: {discoveryPool: 1, returnLimit: 1, deepConcurrency: 1}
+    config: {discoveryPool: 1, returnLimit: 1, deepConcurrency: 1,universeRefreshMs:30*60*1000}
   });
   engine.scanner = {
-    exchangeInfo: async () => ({
+    exchangeInfo: async () => {
+      exchangeInfoCalls++;
+      return ({
       data: {symbols: [
         {symbol:'TESTUSDT',baseAsset:'TEST',quoteAsset:'USDT',status:'TRADING',isSpotTradingAllowed:true,permissions:['SPOT']}
       ]},
       source: 'TEST'
-    }),
-    ticker24h: async () => ({
+      });
+    },
+    ticker24h: async () => {
+      tickerCalls++;
+      return ({
       data: [{
         symbol:'TESTUSDT',lastPrice:'1',quoteVolume:'1000000',count:'1000',
         priceChangePercent:'1',highPrice:'1.1',lowPrice:'0.9',closeTime:Date.now()
       }],
       source:'TEST'
-    }),
+      });
+    },
     scanSymbol: async () => ({
       symbol:'TESTUSDT',rank:1,last_price:1,price_change_24h:1,
       quote_volume_24h:1000000,liquidity_quality:0,data_quality:0,
@@ -108,6 +120,17 @@ console.log('multi-analyst-engine.test.mjs: PASS');
   assert.equal(out.diagnostics.attempted_analyses, 1);
   assert.equal(out.diagnostics.successful_analyses, 0);
   assert.equal(out.diagnostics.gate_rejected, 1);
+  assert.equal(exchangeInfoCalls,1,'the live Spot universe is fetched initially');
+  assert.equal(tickerCalls,1,'ticker data is fetched for the analysis');
+  const cached=await engine.scan({quote:'USDT',limit:1});
+  assert.equal(cached.as_of,out.as_of,'normal request may reuse unexpired snapshot');
+  assert.equal(tickerCalls,1,'normal request may reuse unexpired completed analysis');
+  const forced=await engine.scan({quote:'USDT',limit:1,forceRefresh:true,requestId:'forced-test-2'});
+  assert.equal(tickerCalls,2,'forced request bypasses analysis result TTL');
+  assert.equal(exchangeInfoCalls,1,'universe refresh cadence is independent of forced market scans');
+  assert.equal(forced.meta.force_refresh_requested,true);
+  assert.equal(forced.meta.request_id,'forced-test-2');
+  assert.equal(forced.meta.analysis_mode,'FORCED_SCAN');
 }
 
 console.log('multi-analyst-engine lab-entry regression: PASS');

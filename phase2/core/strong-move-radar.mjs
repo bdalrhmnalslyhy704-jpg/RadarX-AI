@@ -119,8 +119,11 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
   const atrNow=mean(trueRanges.slice(-14)),atrBase=median(trueRanges.slice(-44,-14));
   const atrRatio=Number.isFinite(atrNow)&&Number.isFinite(atrBase)&&atrBase>0?atrNow/atrBase:null;
 
-  const fiveClose=Number(b.at(-1)?.close),fivePrev=Number(b.at(-3)?.close);
+  const latestFiveCandle=b.at(-1);
+  const fiveClose=Number(latestFiveCandle?.close),fivePrev=Number(b.at(-3)?.close);
   const fiveReturn=pct(fiveClose,fivePrev);
+  const closedFiveCandleReturnPct=Number(latestFiveCandle?.open)>0
+    ?(Number(latestFiveCandle.close)-Number(latestFiveCandle.open))/Number(latestFiveCandle.open)*100:null;
   const fiveEma20=ema(b.map(x=>Number(x.close)),20);
   const fiveTrend=Number.isFinite(fiveEma20)&&fiveClose>fiveEma20?75:35;
 
@@ -220,7 +223,9 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
       range_ratio:rangeRatio,breakout_up:breakUp,breakout_down:breakDown,breakout_distance_up_pct:breakoutDistanceUp,
       breakout_distance_down_pct:breakoutDistanceDown,ema9,ema21,ema55,vwap,vwap_distance_pct:vwapDistance,
       bb_width:bbWidth,bb_expansion_ratio:bbExpansion,efficiency_ratio:efficiency,atr_ratio:atrRatio,
-      five_min_return:fiveReturn,five_min_trend:fiveTrend
+      five_min_return:fiveReturn,five_min_trend:fiveTrend,
+      closed_5m_candle_return_pct:Number.isFinite(closedFiveCandleReturnPct)?Math.round(closedFiveCandleReturnPct*1000)/1000:null,
+      closed_5m_candle_close_time_ms:Number.isFinite(Number(latestFiveCandle?.closeTime))?Number(latestFiveCandle.closeTime):null
     },
     component_scores:{
       velocity:velocityScore,volume:volumeScore,trades:tradeScore,taker:takerScore,range:rangeScore,
@@ -281,19 +286,68 @@ export function buildStrongMoveAlert(candidate,now=Date.now()){
   };
 }
 
+export function buildEmergencyBreakoutAlert({five_minute,ticker}={},now=Date.now()){
+  const symbol=String(ticker?.symbol||'').trim().toUpperCase();
+  if(!/^[A-Z0-9]{2,25}USDT$/.test(symbol))return null;
+  const quoteVolume=Number(ticker?.quoteVolume24h);
+  if(!Number.isFinite(quoteVolume)||quoteVolume<1_000_000)return null;
+  const rows=(Array.isArray(five_minute)?five_minute:[])
+    .filter(c=>c?.closed===true&&Number.isFinite(Number(c.openTime))&&
+      Number.isFinite(Number(c.closeTime))&&Number(c.closeTime)<=now&&
+      Number.isFinite(Number(c.open))&&Number.isFinite(Number(c.high))&&
+      Number.isFinite(Number(c.low))&&Number.isFinite(Number(c.close))&&
+      Number(c.open)>0&&Number(c.low)>0&&Number(c.high)>=Math.max(Number(c.open),Number(c.close))&&
+      Number(c.low)<=Math.min(Number(c.open),Number(c.close)))
+    .sort((a,b)=>Number(a.openTime)-Number(b.openTime));
+  const candle=rows.at(-1);
+  if(!candle)return null;
+  const closeTime=Number(candle.closeTime),ageMs=now-closeTime;
+  if(!Number.isFinite(ageMs)||ageMs<0||ageMs>8*60_000)return null;
+  const movePct=(Number(candle.close)-Number(candle.open))/Number(candle.open)*100;
+  if(!Number.isFinite(movePct)||movePct<7)return null;
+  const score=Math.min(100,80+Math.max(0,movePct-7)*1.25);
+  return {
+    id:'EMERGENCY:'+symbol+':'+closeTime,event:'EMERGENCY_BREAKOUT_ALERT',
+    radar:'STRONG_MOVE_RADAR',symbol,market:'SPOT',direction:'UP_SURGE',
+    price:Number(candle.close),last_price:Number(candle.close),
+    price_change_24h:Number.isFinite(Number(ticker?.priceChange24h))?Number(ticker.priceChange24h):null,
+    opportunity_score:Math.round(score*10)/10,potential_label:'EMERGENCY_BREAKOUT',
+    strong_move:{
+      eligible:true,emergency:true,stage:'EMERGENCY_BREAKOUT',direction:'UP_SURGE',
+      score:Math.round(score*10)/10,data_quality:90,data_stale:false,closed_candles_only:true,
+      metrics:{
+        closed_5m_candle_return_pct:Math.round(movePct*1000)/1000,
+        closed_5m_candle_close_time_ms:closeTime,closed_5m_candle_age_ms:ageMs,
+        closed_5m_candle_volume:Number.isFinite(Number(candle.volume))?Number(candle.volume):null,
+        closed_5m_candle_quote_volume:Number.isFinite(Number(candle.quoteVolume))?Number(candle.quoteVolume):null,
+        closed_5m_candle_trade_count:Number.isFinite(Number(candle.tradeCount??candle.count))?Number(candle.tradeCount??candle.count):null
+      },
+      reasons:['شمعة 5 دقائق مغلقة ارتفعت 7% أو أكثر','تم تجاوز فحص إجماع المحللين لهذا التنبيه الطارئ']
+    },
+    reasons:['EMERGENCY_CLOSED_5M_BREAKOUT','ANALYST_CONSENSUS_BYPASSED'],
+    risk_flags:['EMERGENCY_BREAKOUT_VOLATILITY',...(Math.abs(Number(ticker?.priceChange24h)||0)>15?['24H_ALREADY_EXTENDED']:[])],
+    data_quality:90,
+    data_status:{status:'LIVE_DATA',stale:false,data_stale:false,future_data_detected:false,source:'Binance Public REST',last_error:null},
+    liquidity_quality:clamp(70+Math.log10(Math.max(1,quoteVolume/1_000_000))*30),
+    eligible:true,emergency:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+    disclaimer:'تنبيه طارئ من شمعة 5 دقائق مغلقة؛ ليس أمر شراء ولا ضمانًا لاستمرار الارتفاع. تحقق من التقلب ومخاطر الانزلاق السعري.'
+  };
+}
+
 export class StrongMoveRadar {
   constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
     this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={
-      quote:'USDT',pollMs:30000,universeRefreshMs:60000,minQuoteVolume24h:1000000,
+      quote:'USDT',pollMs:30000,universeRefreshMs:30*60*1000,minQuoteVolume24h:1000000,
       rotationBatchSize:4,topMoverCount:3,alertCooldownMs:12*60*1000,
-      minScore:76, ...config
+      emergencyAlertCooldownMs:5*60*1000,minScore:76, ...config
     };
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
     this.lastTickerMap=new Map();this.lastScanAt=new Map();this.lastAlertAt=new Map();
-    this.alertCount=0;this.lastError=null;this.scans=0;this.lastScanAtMs=null;this.busy=false;
+    this.lastEmergencyCandleAt=new Map();this.lastEmergencyAlertAt=new Map();
+    this.emergencyAlertCount=0;this.alertCount=0;this.lastError=null;this.scans=0;this.lastScanAtMs=null;this.busy=false;
   }
   start(){
     if(this.running)return;
@@ -320,9 +374,24 @@ export class StrongMoveRadar {
   }
   async tickerRows(){
     const r=await this.rest.request('/api/v3/ticker/24hr');
-    return (Array.isArray(r.data)?r.data:[]).map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
-      .filter(x=>isDirectionalCandidateSymbol(x.symbol))
-      .filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h&&this.universe.includes(x.symbol));
+    const now=this.clock();
+    const rows=(Array.isArray(r.data)?r.data:[]).map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
+      .filter(x=>isDirectionalCandidateSymbol(x.symbol)&&this.universe.includes(x.symbol));
+    const present=new Set();
+    const enriched=rows.map(row=>{
+      const symbol=String(row.symbol||'').toUpperCase();
+      const previous=this.lastTickerMap.get(symbol);
+      const ageMs=previous?Math.max(0,now-Number(previous.at)):null;
+      const recentMovePct=previous&&Number(previous.lastPrice)>0&&Number.isFinite(ageMs)&&ageMs<=Math.max(90_000,this.config.pollMs*3)
+        ?(Number(row.lastPrice)-Number(previous.lastPrice))/Number(previous.lastPrice)*100:null;
+      this.lastTickerMap.set(symbol,{lastPrice:Number(row.lastPrice),priceChange24h:Number(row.priceChange24h),at:now});
+      present.add(symbol);
+      return {...row,recent_move_pct:Number.isFinite(recentMovePct)?recentMovePct:null,recent_observation_age_ms:ageMs};
+    }).filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h);
+    if(this.lastTickerMap.size>1200){
+      for(const [symbol,item] of this.lastTickerMap)if(!present.has(symbol)&&now-Number(item.at)>30*60*1000)this.lastTickerMap.delete(symbol);
+    }
+    return enriched;
   }
   selectBatch(rows){
     const byMove=[...(Array.isArray(rows)?rows:[])].sort((a,b)=>{
@@ -336,8 +405,29 @@ export class StrongMoveRadar {
     const take=row=>{if(row?.symbol&&!seen.has(row.symbol)){selected.push(row);seen.add(row.symbol);return true;}return false;};
     const topCount=Math.max(0,Math.trunc(Number(this.config.topMoverCount)||0));
     const rotationCount=Math.max(0,Math.trunc(Number(this.config.rotationBatchSize)||0));
-    for(const row of byMove.slice(0,topCount))take(row);
     const target=Math.min(new Set(byMove.map(x=>x.symbol)).size,topCount+rotationCount);
+    // A fresh quote-price pulse gets first access to Micro even when its 24h change is extended.
+    const pulseLane=byMove.filter(row=>row.quoteVolume24h>=1_000_000&&Number.isFinite(Number(row.recent_move_pct))&&Number(row.recent_move_pct)>=1.5)
+      .sort((a,b)=>Number(b.recent_move_pct)-Number(a.recent_move_pct)).slice(0,Math.min(2,target));
+    for(const row of pulseLane)take(row);
+    const earlyLane=byMove.filter(row=>Math.abs(Number(row.priceChange24h)||0)<=8);
+    for(const row of earlyLane){
+      if(selected.length>=Math.min(topCount,target))break;
+      take(row);
+    }
+    for(const row of byMove){
+      if(selected.length>=Math.min(topCount,target))break;
+      take(row);
+    }
+    // Reserve two scan slots for daily surge candidates; without this, early movers can starve the emergency lane.
+    const surgeLane=byMove.filter(row=>row.quoteVolume24h>=1_000_000&&Number(row.priceChange24h)>=7&&Number(row.priceChange24h)<=50)
+      .sort((a,b)=>(Number(b.recent_move_pct)||0)-(Number(a.recent_move_pct)||0)||
+        Number(b.priceChange24h)-Number(a.priceChange24h)||Number(b.quoteVolume24h)-Number(a.quoteVolume24h))
+      .slice(0,2);
+    for(const row of surgeLane){
+      if(selected.length>=Math.max(0,target-2))break;
+      take(row);
+    }
     let visited=0;
     while(selected.length<target&&visited<this.universe.length){
       const symbol=this.universe[this.cursor%this.universe.length];this.cursor=(this.cursor+1)%this.universe.length;visited++;
@@ -349,14 +439,43 @@ export class StrongMoveRadar {
     const last=this.lastScanAt.get(row.symbol)||0;
     if(this.clock()-last<Math.max(5000,Number(this.config.pollMs)*0.75))return null;
     this.lastScanAt.set(row.symbol,this.clock());
-    const [one,five]=await Promise.all([
-      this.rest.klines(row.symbol,'1m',{limit:120}),
-      this.rest.klines(row.symbol,'5m',{limit:60})
-    ]);
-    const alert=buildStrongMoveAlert({
-      ticker:row,one_minute:one.candles,five_minute:five.candles
-    },this.clock());
+    // Launch the normal 1m analysis in parallel, but never let it delay a 5m emergency.
+    const oneResultPromise=this.rest.klines(row.symbol,'1m',{limit:120})
+      .then(value=>({status:'fulfilled',value}),reason=>({status:'rejected',reason}));
+    const five=this.rest.klines(row.symbol,'5m',{limit:60});
+    const fiveResult=await five;
+    const now=this.clock();
+    const emergency=buildEmergencyBreakoutAlert({ticker:row,five_minute:fiveResult.candles},now);
     this.scans++;
+    if(emergency){
+      const candleCloseTime=Number(emergency.strong_move.metrics.closed_5m_candle_close_time_ms);
+      const previousCandle=Number(this.lastEmergencyCandleAt.get(row.symbol)||0);
+      const lastEmergencyAt=Number(this.lastEmergencyAlertAt.get(row.symbol)||0);
+      if(previousCandle===candleCloseTime)return {...emergency,emergency_deduplicated:true};
+      if(now-lastEmergencyAt<Math.max(60_000,Number(this.config.emergencyAlertCooldownMs)||5*60*1000))
+        return {...emergency,emergency_suppressed_by_cooldown:true};
+      const decoratedEmergency=decorateRadarAlert(emergency,'Radar 2 — Strong-Move / Emergency');
+      await this.store.appendStrongMoveAlert(decoratedEmergency);
+      // Mark the persisted candle before push delivery, so a push outage cannot duplicate the stored alert.
+      this.lastEmergencyCandleAt.set(row.symbol,candleCloseTime);
+      this.lastEmergencyAlertAt.set(row.symbol,now);
+      this.lastAlertAt.set(row.symbol,now);
+      this.alertCount++;
+      this.emergencyAlertCount++;
+      try{
+        if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decoratedEmergency);
+      }catch(pushError){
+        this.lastError=String(pushError?.message??pushError);
+        this.logger.warn?.('STRONG_MOVE_EMERGENCY_PUSH',this.lastError);
+      }
+      return emergency;
+    }
+    const oneResult=await oneResultPromise;
+    if(oneResult.status!=='fulfilled')throw oneResult.reason||new Error('ONE_MINUTE_KLINES_UNAVAILABLE');
+    const one=oneResult.value;
+    const alert=buildStrongMoveAlert({
+      ticker:row,one_minute:one.candles,five_minute:fiveResult.candles
+    },now);
     const alertScore=Math.max(
       Number(alert?.strong_move?.score)||0,
       Number(alert?.strong_move?.component_scores?.flash)||0
@@ -423,6 +542,8 @@ export class StrongMoveRadar {
       last_scan_at:this.lastScanAtMs,
       scans:this.scans,
       alerts_emitted:this.alertCount,
+      emergency_alerts_emitted:this.emergencyAlertCount,
+      emergency_trigger:'CLOSED_5M_CANDLE_RETURN_GTE_7_PERCENT_WITH_1M_USDT_24H_QUOTE_VOLUME',
       last_error:this.lastError,
       busy:this.busy,
       rest:this.rest?.health?.()||null,

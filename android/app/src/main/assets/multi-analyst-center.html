@@ -139,7 +139,7 @@ const dEls={
 let busy=false;
 let latest=null;
 let lastLiveAt=0;
-const cacheKey='radarx.multiAnalyst.v3';
+const cacheKey='radarx.multiAnalyst.v4';
 const cacheTtl=50*1000;
 
 function esc(v){
@@ -150,7 +150,7 @@ function num(v,d){
 }
 function pct(v){return Number.isFinite(Number(v))?num(v,0).toFixed(1)+'%':'—';}
 function cap(v){return Math.max(0,Math.min(100,num(v,0)));}
-function verdict(v){return v==='STRONG_CANDIDATE'?'مرشح قوي':v==='CANDIDATE'?'مرشح':v==='WATCH'?'مراقبة':'مرفوض';}
+function verdict(v){return v==='STRONG_CANDIDATE'?'مرشح قوي':v==='CANDIDATE'?'مرشح':v==='WATCH'?'مراقبة':v==='EMERGENCY_BREAKOUT'?'اختراق طارئ':'مرفوض';}
 function tagClass(v){return v==='STRONG_CANDIDATE'||v==='CANDIDATE'?'good':v==='REJECT'?'bad':'warn';}
 function cacheLoad(){
   try{
@@ -272,22 +272,34 @@ function render(body){
 }
 async function run(force){
   if(busy)return;
-  if(!force){
-    const cached=cacheLoad();
-    if(cached){render(cached);status.textContent='● عُرضت آخر لقطة محلية، وسيتم تحديثها تلقائيًا من السوق.';return;}
+  const cached=!force?cacheLoad():null;
+  if(cached){
+    render(cached);
+    status.textContent='◌ لقطة محفوظة للعرض فقط — يجري الآن التحقق من لقطة السوق الجديدة عبر الخادم.';
   }
   busy=true;
-  status.textContent='🧠 مركز القيادة يفحص السوق… 20 محللًا يعملون على كل مرشح.';
+  const requestId=String(Date.now());
+  status.textContent=force
+    ?'⚡ فحص حي إجباري من Binance… يجري تجاوز كاش نتائج التحليل.'
+    :'🧠 يجري جلب أحدث لقطة من الخادم وفحص صلاحيتها…';
   try{
-    const r=await getMultiAnalyst({quote:'USDT',limit:10,scan:force});
+    const r=await getMultiAnalyst({quote:'USDT',limit:10,scan:Boolean(force),requestId:requestId});
     if(!r||!r.ok||!r.body)throw new Error((r&&r.error)||('HTTP_'+num(r&&r.status,0)));
-    cacheSave(r.body);render(r.body);lastLiveAt=Date.now();
+    cacheSave(r.body);
+    render(r.body);
     const d=r.body.diagnostics||{},u=r.body.universe||{},s=r.body.summary||{},meta=r.body.meta||{};
+    const mode=String(meta.analysis_mode||'UNKNOWN');
+    const asOf=String(r.body.as_of||'');
+    if(meta.live===true&&mode!=='CACHE')lastLiveAt=Date.now();
     status.textContent=meta.live
-      ? '● تحليل حي مكتمل • '+num(u.scanned,0)+' دخلت المختبر • '+num(s.strong_candidates,0)+' مرشح قوي • '+num(d.failed_analyses,0)+' أخطاء تنفيذ'
-      : '● الفحص اكتمل • '+num(u.scanned,0)+' دخلت المختبر • البوابة منعت النتائج غير الموثوقة • '+num(d.failed_analyses,0)+' أخطاء تنفيذ';
+      ? (mode==='FORCED_SCAN'
+          ? '⚡ فحص حي إجباري مكتمل • الطلب '+esc(meta.request_id||requestId)+' • '+num(u.scanned,0)+' عملة فُحصت • '+num(s.strong_candidates,0)+' مرشح قوي • '+num(d.failed_analyses,0)+' أخطاء تنفيذ'
+          : mode==='CACHE'
+            ? '◉ لقطة صالحة من الخادم • وضع '+mode+' • وقت البيانات '+esc(asOf)+' • '+num(u.scanned,0)+' عملة فُحصت'
+            : '● فحص الخادم اكتمل • وضع '+mode+' • '+num(u.scanned,0)+' عملة فُحصت • '+num(s.strong_candidates,0)+' مرشح قوي • '+num(d.failed_analyses,0)+' أخطاء تنفيذ')
+      : '⚠ لا توجد لقطة بيانات صالحة مكتملة الآن • وضع '+esc(mode)+' • '+num(u.scanned,0)+' عملة فُحصت • '+num(d.failed_analyses,0)+' أخطاء تنفيذ'+(r.body.error?' • '+esc(r.body.error):'');
   }catch(e){
-    status.textContent='تعذر التحليل الآن — '+String(e&&e.message||e);
+    status.textContent='تعذر التحقق من لقطة جديدة — '+String(e&&e.message||e);
   }finally{busy=false;}
 }
 document.getElementById('scanBtn').addEventListener('click',function(){run(true);});

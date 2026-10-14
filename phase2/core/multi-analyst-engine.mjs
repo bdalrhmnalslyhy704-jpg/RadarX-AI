@@ -655,6 +655,7 @@ function specialistAnalysis(candidate, market={}){
 
   const features={
     price,priceChange24h:safe(candidate?.price_change_24h,0),
+    quoteVolume24h:safe(candidate?.quote_volume_24h,0),
     high24:safe(candidate?.high_price_24h,null),low24:safe(candidate?.low_price_24h,null),
     rsi,rsi1,rsiSlope15,rsiSlope1,rv,volBurst,bb,ar,tRatio,
     structure:sm,book,roc4,roc16,trend4,trend1,rangePos,
@@ -744,6 +745,11 @@ const buildGroupConsensus=(analysts)=>{
   return out;
 };
 
+export function isMomentumLiquidityEligible(quoteVolume24h,volumeSpikeRatio){
+  const quoteVolume=Number(quoteVolume24h),spike=Number(volumeSpikeRatio);
+  return Number.isFinite(quoteVolume)&&quoteVolume>=1_000_000&&Number.isFinite(spike)&&spike>=2.5;
+}
+
 const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibration=null)=>{
   const regime=marketRegime(market);
   const weights=adaptiveWeights(regime);
@@ -776,6 +782,11 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   const setup=features?.setupFingerprint||{};
   const early=earlyOpportunity({...features,setupFingerprint:setup},memory);
   const fingerprint=Number(features?.fingerprintScore);
+  const volumeSpikeValues=[features?.volBurst,features?.rv].map(Number).filter(Number.isFinite);
+  const volumeSpikeRatio=volumeSpikeValues.length?Math.max(...volumeSpikeValues):null;
+  const momentumLiquidityEligible=dataValid&&isMomentumLiquidityEligible(features?.quoteVolume24h,volumeSpikeRatio);
+  const momentumWindow=momentumLiquidityEligible&&Number(features?.roc4)>=0.35&&
+    (Number(features?.tRatio)>=0.51||Number(features?.priceAccel)>=0.15);
   const move24=Number(early.move24),head=Number(early.head),emaDist=Number(early.emaDist);
   const pumpHeat=Number(early.pump_heat),freshness=Number(early.sniper_freshness);
   const recent4Gain=Number(features?.recent_move?.recent4Gain),recent8Gain=Number(features?.recent_move?.recent8Gain);
@@ -820,6 +831,11 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   let verdict='REJECT';
   if(!hardReasons.length&&direction==='LONG'&&balancedScore>=84&&positive>=12&&strong>=5&&positiveGroups>=6&&criticalGood&&earlyCoreGood&&agreement>=74&&early.score>=76&&(Number.isFinite(fingerprint)?fingerprint:0)>=75&&early.trajectory_score>=48&&sniperScore>=82)
     verdict='STRONG_CANDIDATE';
+  else if(!hardReasons.length&&direction==='LONG'&&momentumWindow&&balancedScore>=70&&
+    positive>=Math.ceil(safeAnalysts.length*0.62)&&positiveGroups>=4&&criticalGood&&earlyCoreGood&&
+    agreement>=60&&early.score>=60&&(Number.isFinite(fingerprint)?fingerprint:0)>=60&&
+    early.trajectory_score>=40&&sniperScore>=65)
+    verdict='CANDIDATE';
   else if(!hardReasons.length&&direction==='LONG'&&balancedScore>=76&&positive>=10&&strong>=3&&positiveGroups>=5&&criticalGood&&earlyCoreGood&&agreement>=64&&early.score>=64&&(Number.isFinite(fingerprint)?fingerprint:0)>=64&&early.trajectory_score>=45&&sniperScore>=72)
     verdict='CANDIDATE';
   else if(!hardReasons.length&&direction==='LONG'&&balancedScore>=65&&positive>=8&&positiveGroups>=4&&agreement>=52&&early.score>=52&&sniperScore>=60)
@@ -841,6 +857,11 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
     early_window_open:!chase,
     agreement_ok:agreement>=64,
     group_agreement_ok:positiveGroups>=5,
+    momentum_window:momentumWindow,
+    momentum_liquidity_eligible:momentumLiquidityEligible,
+    momentum_volume_spike_ratio:Number.isFinite(Number(volumeSpikeRatio))?Math.round(Number(volumeSpikeRatio)*100)/100:null,
+    momentum_consensus_ratio_required:momentumWindow?0.62:null,
+    positive_consensus_ratio:safeAnalysts.length?Math.round(positive/safeAnalysts.length*1000)/1000:0,
     contradiction_count:bearishStrong,
     evidence_coverage_ok:avgCoverage>=.78,
     early_core_ok:earlyCoreGood,
@@ -900,7 +921,7 @@ export class MultiAnalystEngine {
     this.config={
       quote:'USDT',discoveryPool:28,deepScanPool:16,returnLimit:8,deepConcurrency:3,deepKlines:220,
       minQuoteVolume24h:300000,minDataQuality:70,minLiquidityQuality:60,
-      ttlMs:45000,continuousIntervalMs:60000,continuousWarmupMs:8000,...config
+      ttlMs:45000,universeRefreshMs:30*60*1000,continuousIntervalMs:60000,continuousWarmupMs:8000,...config
     };
     this.scanner=new MarketUniverseScanner({
       rest,
@@ -917,6 +938,7 @@ export class MultiAnalystEngine {
       }
     });
     this.cache=null;
+    this.universeCacheByQuote=new Map();
     this.busy=null;
     this.calibration=new SelfCalibrator(30);
     this.pendingOutcomes=new Map();
@@ -950,30 +972,41 @@ export class MultiAnalystEngine {
     existing.push({...item,asOf:now,evaluated:{'15m':false,'1h':false,'4h':false}});
     this.pendingOutcomes.set(item.symbol,existing.slice(-2));
   }
-  async scan({quote=this.config.quote,limit=this.config.returnLimit}={}){
+  async scan({quote=this.config.quote,limit=this.config.returnLimit,forceRefresh=false,requestId=null}={}){
     const now=this.clock();
     const q=String(quote||this.config.quote).trim().toUpperCase();
     const requested=Math.max(1,Math.min(15,Math.trunc(Number(limit)||this.config.returnLimit)));
+    const refreshRequested=Boolean(forceRefresh);
+    const safeRequestId=typeof requestId==='string'&&/^[A-Za-z0-9_-]{1,64}$/.test(requestId)?requestId:null;
     if(!/^[A-Z]{2,10}$/.test(q))throw new Error('INVALID_QUOTE');
-    if(this.cache&&this.cache.quote===q&&this.cache.expiresAt>now)return this.cache.value;
+    if(!refreshRequested&&this.cache&&this.cache.quote===q&&this.cache.expiresAt>now)return this.cache.value;
     if(this.busy){
-      if(this.cache&&this.cache.quote===q){
-        const cached=this.cache.value;
-        return {...cached,meta:{...(cached.meta||{}),served_from_cache_while_scan:true,analysis_mode:'CACHE'}};
-      }
-      return this.busy;
+      const active=this.busy;
+      return active.then(value=>refreshRequested
+        ?{...value,meta:{...(value.meta||{}),analysis_mode:'FORCED_SCAN',force_refresh_requested:true,forced_scan_coalesced:true,request_id:safeRequestId,served_from_cache_while_scan:false}}
+        :value);
     }
     this.busy=(async()=>{
       const startedAt=this.clock();
       this.scanner._requests=new Map();
-      const info=await this.scanner.exchangeInfo();
-      const universe=buildSpotUniverse(info.data,q);
+      const universeRefreshMs=Math.max(60_000,Number(this.config.universeRefreshMs)||30*60*1000);
+      let universeEntry=this.universeCacheByQuote.get(q);
+      if(!universeEntry||this.clock()-universeEntry.fetchedAt>=universeRefreshMs){
+        const info=await this.scanner.exchangeInfo();
+        const symbols=buildSpotUniverse(info.data,q);
+        if(!symbols.length)throw new Error('EMPTY_SPOT_UNIVERSE');
+        universeEntry={symbols,fetchedAt:this.clock(),source:info.source||'Binance Public REST'};
+        this.universeCacheByQuote.set(q,universeEntry);
+      }
+      const universe=universeEntry.symbols;
+      const universeRefreshedAt=universeEntry.fetchedAt;
+      const exchangeInfoSource=universeEntry.source;
       const tickers=await this.scanner.ticker24h();
       const normalized=tickers.data.map(x=>({
         symbol:String(x.symbol||'').toUpperCase(),lastPrice:Number(x.lastPrice),quoteVolume24h:Number(x.quoteVolume),
         tradeCount24h:Number(x.count),priceChange24h:Number(x.priceChangePercent),
         highPrice24h:Number(x.highPrice),lowPrice24h:Number(x.lowPrice),tickerTime:Number(x.closeTime||x.eventTime||x.openTime||0)
-      })).filter(x=>/^[A-Z0-9]{2,30}$/.test(x.symbol)&&Number.isFinite(x.lastPrice)&&x.lastPrice>0&&Number.isFinite(x.quoteVolume24h));
+      })).filter(x=>/^[A-Z0-9]{2,30}$/.test(x.symbol)&&universe.includes(x.symbol)&&Number.isFinite(x.lastPrice)&&x.lastPrice>0&&Number.isFinite(x.quoteVolume24h));
 
       const top=rankTickerRows(tickers.data,universe,{minQuoteVolume24h:this.config.minQuoteVolume24h,limit:Math.max(7,Math.trunc(this.config.discoveryPool*.36))});
       const bottom=rankBottomTickerRows(tickers.data,universe,{minQuoteVolume24h:this.config.minQuoteVolume24h,limit:Math.max(4,Math.trunc(this.config.discoveryPool*.20))});
@@ -983,6 +1016,15 @@ export class MultiAnalystEngine {
         return sb-sa;
       }).slice(0,Math.max(6,Math.trunc(this.config.discoveryPool*.30)));
       // Preserve real scan capacity for coins that are liquid but still relatively quiet.
+      const surge=normalized.filter(x=>
+        x.quoteVolume24h>=Math.max(1_000_000,this.config.minQuoteVolume24h)&&
+        x.priceChange24h>7&&x.priceChange24h<=50
+      ).sort((a,b)=>{
+        const sa=Math.log10(Math.max(1,a.quoteVolume24h))*0.7+Math.min(50,a.priceChange24h)*1.2;
+        const sb=Math.log10(Math.max(1,b.quoteVolume24h))*0.7+Math.min(50,b.priceChange24h)*1.2;
+        return sb-sa||b.quoteVolume24h-a.quoteVolume24h;
+      }).slice(0,Math.max(3,Math.trunc(this.config.discoveryPool*.34)));
+      // Keep extended movers visible to the lab without removing the final anti-chase/data gates.
       const quiet=normalized.filter(x=>
         x.quoteVolume24h>=this.config.minQuoteVolume24h &&
         x.priceChange24h>=-1.5&&x.priceChange24h<=3.5
@@ -998,7 +1040,7 @@ export class MultiAnalystEngine {
       }).sort((a,b)=>b.quiet_discovery_score-a.quiet_discovery_score)
         .slice(0,Math.max(5,Math.trunc(this.config.discoveryPool*.28)));
       // Round-robin the discovery buckets so volume leaders cannot consume the full deep-scan budget.
-      const buckets=[top,wake,quiet,bottom],selected=[],seen=new Set();
+      const buckets=[top,wake,surge,quiet,bottom],selected=[],seen=new Set();
       let bucketIndex=0;
       while(selected.length<this.config.discoveryPool&&buckets.some(b=>b.length)){
         const bucket=buckets[bucketIndex%buckets.length];
@@ -1025,7 +1067,7 @@ export class MultiAnalystEngine {
       const scanErrors=[];
       const scanned=await boundedMap(deepSelected,Math.max(1,Math.min(4,this.config.deepConcurrency)),async(ticker,index)=>{
         try{
-          const row=await this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:info.source,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'',includeAnalysisPayload:true});
+          const row=await this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:exchangeInfoSource,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'',includeAnalysisPayload:true});
           if(!row)throw new Error('SYMBOL_SCAN_RETURNED_EMPTY');
           // A candidate must reach the 19 specialist analysts even when the data gate fails.
           // The final judge remains fail-closed: invalid/stale/future/incomplete data is rejected there.
@@ -1125,10 +1167,10 @@ export class MultiAnalystEngine {
       const watchlist=live.filter(x=>x.verdict==='WATCH').slice(0,Math.min(requested,3)).map((x,i)=>({...x,rank:i+1}));
       const strongCount=live.filter(x=>x.verdict==='STRONG_CANDIDATE').length;
       const value={
-        meta:{live:live.some(x=>x.data_status?.data_valid===true),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analyst_count:20,specialist_count:19,engine_revision:'ELITE_SNIPER_V1'},
+        meta:{live:live.some(x=>x.data_status?.data_valid===true),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analyst_count:20,specialist_count:19,engine_revision:'ELITE_SNIPER_V1',analysis_mode:refreshRequested?'FORCED_SCAN':'LIVE_SCAN',force_refresh_requested:refreshRequested,request_id:safeRequestId},
         as_of:new Date(this.clock()).toISOString(),
         source:'Binance Public REST',
-        universe:{quote:q,eligible_spot_symbols:universe.length,discovery_pool:selected.length,deep_scan_pool:deepSelected.length,scanned:live.length,returned:candidates.length,min_quote_volume_24h:this.config.minQuoteVolume24h},
+        universe:{quote:q,eligible_spot_symbols:universe.length,discovery_pool:selected.length,deep_scan_pool:deepSelected.length,scanned:live.length,returned:candidates.length,min_quote_volume_24h:this.config.minQuoteVolume24h,universe_refreshed_at:new Date(universeRefreshedAt).toISOString(),universe_refresh_interval_ms:universeRefreshMs,surge_lane_candidates:surge.length},
         market_context:{regime:marketRegime({marketMedian24h,breadthPct}),median_24h_change_pct:marketMedian24h,positive_breadth_pct:breadthPct},
         summary:{strong_candidates:strongCount,candidates:live.filter(x=>x.verdict==='CANDIDATE').length,qualified:qualified.length,watch:live.filter(x=>x.verdict==='WATCH').length,rejected:live.filter(x=>x.verdict==='REJECT').length},
         candidates,watchlist,
@@ -1173,7 +1215,9 @@ export class MultiAnalystEngine {
     try{return await this.busy}finally{this.busy=null;}
   }
   getCached({quote=this.config.quote}={}){
-    return this.cache?.quote===String(quote).toUpperCase()?this.cache.value:null;
+    const key=String(quote||this.config.quote).toUpperCase();
+    if(!this.cache||this.cache.quote!==key||this.cache.expiresAt<=this.clock())return null;
+    return this.cache.value;
   }
   start(){
     if(this.running)return;
