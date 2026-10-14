@@ -701,6 +701,27 @@ test('Radar 8 gives two simultaneous confirmed bursts two deep slots while prese
   assert.ok(selected.some(x=>x.row.symbol==='EVENTBUSDT'));
 });
 
+test('Radar 8 ten-slot Deep batch preserves three fair-rotation slots during concurrent burst events',()=>{
+  const radar=makeRadar({deepCandidates:10,quietReserve:8,rotationReserve:8,exceptionalRotationBypassSlots:5});
+  const items=Array.from({length:24},(_,i)=>candidate(
+    'FAIR'+String(i).padStart(2,'0')+'USDT',
+    .15+i*.18,
+    {score:94-i,participation:82,tradeParticipation:78,structure:80,compression:84,volume:1.8,trades:1.6}
+  ));
+  for(const item of items.slice(0,8)){
+    item.micro_fingerprint.activity_shock={detected:true,stage:'EVENT_DRIVEN_BREAKOUT',score:92,
+      watch_only:true,entry_eligible:false,extended:false};
+  }
+  const selected=radar.selectDeepFromMicro(items,44);
+  const lane=name=>selected.filter(x=>x._selection_lane===name||x._selection_lane==='fill_'+name).length;
+  assert.equal(selected.length,10);
+  assert.equal(new Set(selected.map(x=>x.row.symbol)).size,10);
+  assert.equal(lane('exceptional'),3,'retain the capped fast-event reserve');
+  assert.equal(lane('quiet'),2,'retain quiet-base early detection');
+  assert.equal(lane('rotation'),3,'rotate three never/longest-waiting symbols into deep analysis');
+  assert.equal(lane('score'),2,'retain score-ranked capacity after event and fairness reserves');
+});
+
 test('Radar 8 deep scan preserves score capacity while selecting quiet bases from smallest move first',()=>{
   const radar=makeRadar({deepCandidates:10,quietReserve:8,rotationReserve:2});
   const candidates=[

@@ -1576,8 +1576,10 @@ export class EarlyExpansionRadar{
     const requestedRotation=Math.max(0,Math.trunc(this.config.rotationReserve??3));
     const quietCap=target>1?Math.floor(target/3):0;
     const q=Math.min(requestedQuiet,quietCap,Math.max(0,target-1));
-    const coreReserve=Math.max(3,Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2))+1);
-    const rotationCap=Math.max(0,target-q-(target>=6?coreReserve:2));
+    // Reserve fixed score/event capacity without letting the event-bypass setting
+    // starve the oldest/never-deep-scanned rotation lane as the batch grows.
+    const coreReserve=target>=8?4:target>=6?3:2;
+    const rotationCap=Math.max(0,target-q-coreReserve);
     const r=Math.min(requestedRotation,rotationCap);
     const core=target-q-r;
     const byScore=[...valid].sort((a,b)=>Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
