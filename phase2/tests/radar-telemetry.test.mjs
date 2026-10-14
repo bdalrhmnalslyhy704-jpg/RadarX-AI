@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {instrumentRadarCycle,radarTelemetry} from '../core/radar-telemetry.mjs';
+import {instrumentRadarCycle,radarTelemetry,recordRadarDecision} from '../core/radar-telemetry.mjs';
 
 function clockSequence(values){
   let index=0;
@@ -53,4 +53,26 @@ test('stopped radar ticks run normally without fake cycle telemetry',async()=>{
   instrumentRadarCycle(instance,radarId,{clock:clockSequence([4000,4001])});
   assert.equal(await instance.tick(),'stopped');
   assert.equal(radarTelemetry.totalRecorded,before);
+});
+
+
+test('instrumentRadarCycle records duration even when the tick emits candidate decisions',async()=>{
+  const radarId='TEST_RADAR_TELEMETRY_WITH_DECISION';
+  const before=radarTelemetry.totalRecorded;
+  const radar={running:true,busy:false,async tick(){
+    recordRadarDecision(
+      {radar:radarId,symbol:'BTCUSDT',observed_at:2000,processed_at:2010,stage:'EARLY'},
+      {radar:radarId,eligible:true,score:90},
+      {now:2010,source:'LIVE'}
+    );
+    return 'signal-result';
+  }};
+  instrumentRadarCycle(radar,radarId,{clock:clockSequence([2000,2037])});
+  assert.equal(await radar.tick(),'signal-result');
+  const rows=radarTelemetry.events.filter(row=>row.radar===radarId);
+  assert.equal(rows.filter(row=>row.event_type==='CANDIDATE_DECISION').length,1);
+  const cycle=rows.find(row=>row.event_type==='BACKGROUND_CYCLE');
+  assert.ok(cycle,'signal-producing ticks must still record cycle timing');
+  assert.equal(cycle.pipeline_latency_ms,37);
+  assert.equal(radarTelemetry.totalRecorded,before+2);
 });
