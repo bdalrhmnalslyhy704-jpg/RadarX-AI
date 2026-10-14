@@ -236,7 +236,12 @@ export const CONFIG = Object.freeze({
     minLiquidityQuality: int(process.env.RADARX_MIN_LIQUIDITY_QUALITY, 60),
     ttlMs: int(process.env.RADARX_MULTI_ANALYST_TTL_MS, 45000),
     continuousIntervalMs: int(process.env.RADARX_MULTI_ANALYST_CONTINUOUS_INTERVAL_MS, 60000),
-    continuousWarmupMs: int(process.env.RADARX_MULTI_ANALYST_CONTINUOUS_WARMUP_MS, 8000)
+    continuousWarmupMs: int(process.env.RADARX_MULTI_ANALYST_CONTINUOUS_WARMUP_MS, 8000),
+    radarReviewMaxQueue: int(process.env.RADARX_MULTI_ANALYST_RADAR_REVIEW_MAX_QUEUE, 200),
+    radarReviewSlotsPerCycle: int(process.env.RADARX_MULTI_ANALYST_RADAR_REVIEW_SLOTS_PER_CYCLE, 4),
+    radarReviewQueueTtlMs: int(process.env.RADARX_MULTI_ANALYST_RADAR_REVIEW_QUEUE_TTL_MS, 300000),
+    radarReviewRetryCooldownMs: int(process.env.RADARX_MULTI_ANALYST_RADAR_REVIEW_RETRY_COOLDOWN_MS, 60000),
+    radarReviewAssessmentTtlMs: int(process.env.RADARX_MULTI_ANALYST_RADAR_REVIEW_ASSESSMENT_TTL_MS, 180000)
   },
   professorRadar: {
     quote: 'USDT',
