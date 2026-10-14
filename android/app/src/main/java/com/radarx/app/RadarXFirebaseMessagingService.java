@@ -27,6 +27,15 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
     @Override
     public void onMessageReceived(RemoteMessage message) {
         super.onMessageReceived(message);
+        String serverAt = message.getData().getOrDefault("sent_at",
+                message.getData().getOrDefault("server_processed_at", ""));
+        try {
+            long timestamp = Long.parseLong(serverAt);
+            long latency = System.currentTimeMillis() - timestamp;
+            if (timestamp > 0L && latency >= 0L) Log.i(TAG, "FCM_DEVICE_RECEIVED_LATENCY_MS=" + latency);
+        } catch (NumberFormatException ignored) {
+            // External provider acceptance is not a device-receipt guarantee; log only measured values.
+        }
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                     != PackageManager.PERMISSION_GRANTED) {
