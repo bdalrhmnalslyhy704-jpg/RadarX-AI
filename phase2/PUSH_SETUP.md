@@ -75,8 +75,9 @@ FCM is implemented in the native Android client and in the Phase 2 backend provi
 
 1. Create or select a Firebase project and register the Android app with application ID `com.radarx.app`.
 2. Enable Firebase Cloud Messaging (HTTP v1) for that project.
-3. Download the app's `google-services.json` and place it at `android/app/google-services.json` only in a private build workspace/CI secret. The Gradle plugin is automatically applied when that file exists. Do not commit the file unless the project owner explicitly chooses to publish the Firebase client configuration.
-4. Build/install the APK from that configured workspace. Without this file, the APK deliberately logs `FCM_NOT_CONFIGURED_LOCAL_NOTIFICATION_FALLBACK_ACTIVE` and continues the existing local polling path.
+3. Download the app's `google-services.json` and place it at `android/app/google-services.json` only in a private build workspace. The Gradle plugin is automatically applied when that file exists. Do not commit the file; it is ignored by Git.
+4. For the signed Build 224 APK workflow, add a GitHub Actions repository secret named `FIREBASE_GOOGLE_SERVICES_JSON_BASE64` containing the single-line Base64 encoding of that JSON file (on Linux, create it with `base64 -w0 google-services.json`). The release workflow validates project/app IDs and refuses to publish an APK if this secret is absent.
+5. Build/install the APK from that configured workspace. Without the file, development/debug APKs deliberately log `FCM_NOT_CONFIGURED_LOCAL_NOTIFICATION_FALLBACK_ACTIVE` and continue the existing local polling path.
 
 ### 2. Railway backend secrets
 
