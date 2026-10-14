@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {MULTI_ANALYST_NAMES,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible} from '../core/multi-analyst-engine.mjs';
+import {MULTI_ANALYST_NAMES,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible,selectWithPriorityRotation} from '../core/multi-analyst-engine.mjs';
 
 // Continuous analyst cycles target one minute start-to-start, subtracting the
 // time spent scanning and never scheduling a negative delay after a slow cycle.
@@ -69,7 +69,26 @@ const badLiq=analyzeMultiAnalystCandidate(rawFor({liq:20}),{});
 assert.equal(badLiq.final.verdict,'REJECT');
 assert.ok(badLiq.final.hardReasons.includes('LIQUIDITY_TOO_WEAK'));
 
+
 console.log('multi-analyst-engine.test.mjs: PASS');
+
+// A fixed priority head is retained while lower-ranked wake/quiet candidates rotate.
+{
+  const rows=Array.from({length:12},(_,i)=>({symbol:'QUIET'+String(i).padStart(2,'0')+'USDT'}));
+  const seen=new Set();
+  let cursor=0;
+  for(let cycle=0;cycle<3;cycle++){
+    const selected=selectWithPriorityRotation(rows,6,cursor);
+    assert.deepEqual(selected.rows.slice(0,3).map(x=>x.symbol),
+      ['QUIET00USDT','QUIET01USDT','QUIET02USDT'],
+      'top-ranked opportunities must remain in every cycle');
+    for(const row of selected.rows.slice(3))seen.add(row.symbol);
+    cursor=selected.nextCursor;
+  }
+  assert.equal(seen.size,9,'the rotating half should expose all nine lower-ranked candidates in three cycles');
+}
+console.log('multi-analyst fair candidate rotation: PASS');
+
 
 
 // Regression: a discovered coin must not disappear before the 19-specialist lab.
