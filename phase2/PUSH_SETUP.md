@@ -80,13 +80,22 @@ FCM is implemented in the native Android client and in the Phase 2 backend provi
 
 ### 2. Railway backend secrets
 
-On the existing `RadarX-AI-Triple` service, add these variables through Railway's secret-variable UI. Do not create another service or volume:
+On the existing `RadarX-AI-Triple` service, set the runtime guardrails and the FCM variables through Railway's secret-variable UI. Do not create another service or volume:
 
 ```text
+RADARX_ENV=production
+RADARX_STAGING_TEST_PUSH_ENABLED=false
 RADARX_PUSH_PROVIDER=fcm
+RADARX_AUTH_SECRET=<random secret with at least 32 characters>
+RADARX_ALLOWED_ORIGINS=https://appassets.androidplatform.net
+RADARX_PAPER_TRADING=true
+RADARX_REAL_ORDER_EXECUTION=false
+RADARX_CONFIDENCE_MODE=UNKNOWN
 FCM_PROJECT_ID=<Firebase project ID>
 FCM_SERVICE_ACCOUNT_JSON=<single-line JSON for a service account>
 ```
+
+Use a password manager or secret generator for `RADARX_AUTH_SECRET`. Keep the allowed-origin value aligned with the real installed PWA origin if that origin changes. The production startup preflight validates the provider-specific credentials and the read-only safety flags; add all required values together, then verify the deployment rather than setting `RADARX_ENV=production` by itself.
 
 The service account must be permitted to send FCM messages (Firebase Cloud Messaging API Admin or a narrower equivalent role). Enable the FCM HTTP v1 API. The backend exchanges the private service-account key for a short-lived OAuth access token and caches that token in memory; it does not store the access token in the archive. The service-account JSON contains a private key and must never be committed, logged, placed in the APK, or returned by any API. The Firebase Android client config and the server service-account credentials are different things.
 
