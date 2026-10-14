@@ -605,6 +605,35 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           return send(res,200,{...snapshot,status:'not_ready',error:String(e?.message??e),monitoring:health,scan:{requested:runNow,completed:false,error:String(e?.message??e)},meta:{...(snapshot.meta||{}),live:false,radar:'EARLY_EXPANSION_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         }
       }
+      if(u.pathname==='/api/analyst-review-queue'&&req.method==='GET'){
+        if(!multiAnalystRadar)return send(res,503,{
+          error:'MULTI_ANALYST_UNAVAILABLE',
+          queue:{pending_count:0},
+          latest_assessments:[],
+          meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}
+        });
+        const limit=Math.max(1,Math.min(100,Math.trunc(Number(u.searchParams.get('limit')||40))));
+        const rawSymbols=String(u.searchParams.get('symbols')||'');
+        const symbols=[...new Set(rawSymbols.split(',').map(x=>x.trim().toUpperCase())
+          .filter(x=>/^[A-Z0-9]{2,30}$/.test(x)))].slice(0,30);
+        const queue=typeof multiAnalystRadar.radarReviewQueueSnapshot==='function'
+          ?multiAnalystRadar.radarReviewQueueSnapshot():{pending_count:0};
+        const assessments=typeof multiAnalystRadar.latestAssessments==='function'
+          ?multiAnalystRadar.latestAssessments({limit,symbols}):[];
+        const health=typeof multiAnalystRadar.health==='function'?multiAnalystRadar.health():null;
+        return send(res,200,{
+          radar:'MULTI_ANALYST_REVIEW_QUEUE',
+          as_of:new Date().toISOString(),
+          queue,
+          latest_assessments:assessments,
+          execution_model:{analyst_count:20,specialist_count:19,final_analyst_count:1,
+            independent_generative_models:0,method:'DETERMINISTIC_SPECIALIST_RULES_PLUS_FINAL_CONSENSUS'},
+          monitoring:health,
+          meta:{live:assessments.some(x=>x.data_valid===true),mode:'NON_BLOCKING_REVIEW_ONLY',
+            paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+            note:'Queued radar alerts are prioritized during the next bounded analyst scan; original radar notifications are not delayed or suppressed.'}
+        });
+      }
       if(u.pathname==='/api/multi-analyst'&&req.method==='GET'){
         if(!multiAnalystRadar)return send(res,503,{error:'MULTI_ANALYST_UNAVAILABLE',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST'}});
         const quote=String(u.searchParams.get('quote')||config.multiAnalyst?.quote||'USDT').trim().toUpperCase();
