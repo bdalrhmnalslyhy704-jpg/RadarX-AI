@@ -1,5 +1,10 @@
 plugins { id("com.android.application") }
 
+// Firebase configuration is project-specific. Keep CI builds possible before it is supplied.
+if (file("google-services.json").isFile) {
+  apply(plugin = "com.google.gms.google-services")
+}
+
 val radarxWebAssetsDir = layout.buildDirectory.dir("generated/radarxWebAssets").get().asFile
 
 tasks.register<Copy>("prepareRadarXWebAssets") {
@@ -52,4 +57,6 @@ android {
 dependencies {
   implementation("androidx.webkit:webkit:1.17.1")
   implementation("com.squareup.okhttp3:okhttp:5.5.0")
+  implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
+  implementation("com.google.firebase:firebase-messaging")
 }

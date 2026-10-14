@@ -106,6 +106,7 @@ public final class MainActivity extends Activity {
                 );
         root.addView(progress, progressLp);
         setContentView(root);
+        FcmDeviceRegistrar.syncIfAllowed(getApplicationContext());
 
         webView.addJavascriptInterface(new RadarXAndroidBridge(this, streamHub, httpQueue), "RadarXAndroid");
         webView.loadUrl(APP_URL);
@@ -257,6 +258,14 @@ public final class MainActivity extends Activity {
         statusView.setText(message + "\n\nأعد تشغيل التطبيق للمحاولة مرة أخرى.");
         statusView.setTextColor(Color.rgb(255, 150, 165));
         statusView.setVisibility(View.VISIBLE);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 9017) {
+            FcmDeviceRegistrar.syncIfAllowed(getApplicationContext());
+        }
     }
 
     @Override public void onBackPressed() {
