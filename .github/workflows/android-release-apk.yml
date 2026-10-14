@@ -528,7 +528,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="radarx-native-build224-radar8-v2-hawkeye-${GITHUB_RUN_NUMBER}"
+          TAG="radarx-native-build224-radar8-v2-hawkeye-${GITHUB_RUN_NUMBER}-attempt-${GITHUB_RUN_ATTEMPT}"
           APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
           if [[ "${RADARX_APK_FCM_CONFIGURED:-false}" == "true" ]]; then
             PUSH_MODE="Native FCM configured"
@@ -538,13 +538,13 @@ jobs:
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "RadarX Native — Build 224 + Radar 8 V2 + عين الصقر Hawkeye V2 1.4.9 ${GITHUB_RUN_NUMBER}" \
+            --title "RadarX Native — Build 224 + Radar 8 V2 + عين الصقر Hawkeye V2 1.4.9 ${GITHUB_RUN_NUMBER} attempt ${GITHUB_RUN_ATTEMPT}" \
             --notes "Signed universal APK built on Build 224 lineage. Version 1.4.9. Push mode: $PUSH_MODE. Includes Radar 8 V2 + Whale Accumulation + X-Factor 20-Analyst Command Center + Radar 9 — عين الصقر Hawkeye V2 + OGN-inspired Move Forensics + Evidence Trajectory Memory, continuous independent background monitoring (auto-start enabled by default), redesigned premium main dashboard, embedded Android UI, Spot/Paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
 
       - name: Verify published HTTPS download
         run: |
           set -euo pipefail
-          TAG="radarx-native-build224-radar8-v2-hawkeye-${GITHUB_RUN_NUMBER}"
+          TAG="radarx-native-build224-radar8-v2-hawkeye-${GITHUB_RUN_NUMBER}-attempt-${GITHUB_RUN_ATTEMPT}"
           APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
           DOWNLOADED="${RUNNER_TEMP}/radarx-release-downloaded.apk"
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/radarx-release.apk"
