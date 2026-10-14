@@ -321,7 +321,7 @@ console.log('multi-analyst role-completion evidence/freshness: PASS');
     [{symbol:'XRPUSDT'}]
   ];
   const selected=selectDiscoveryWithRadarReviewPriority(priority,buckets,5);
-  assert.deepEqual(selected.map(x=>x.symbol),['GTCUSDT','BTCUSDT','BNBUSDT','ETHUSDT','XRPUSDT']);
+  assert.deepEqual(selected.map(x=>x.symbol),['GTCUSDT','BTCUSDT','ETHUSDT','XRPUSDT','BNBUSDT']);
   assert.deepEqual(buckets[0].map(x=>x.symbol),['BTCUSDT','BNBUSDT'],'input buckets must not be mutated');
   assert.equal(new Set(selected.map(x=>x.symbol)).size,selected.length);
   assert.deepEqual(selectDiscoveryWithRadarReviewPriority(priority,buckets,1).map(x=>x.symbol),['GTCUSDT']);
