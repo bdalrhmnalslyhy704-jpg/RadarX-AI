@@ -7,6 +7,7 @@ import {RADAR_NAMES,RADAR_PROFILES,formatRadarTime12h,decorateRadarAlert} from '
 import {SymbolDeepAnalyzer,normalizeDeepScanSymbol} from '../core/symbol-deep-analyzer.mjs';
 import {buildKingVerdict,rankKingMarket} from '../core/king-intelligence.mjs';
 import {MultiAnalystEngine} from '../core/multi-analyst-engine.mjs';
+import {radarTelemetry,renderRadarTelemetryDashboard} from '../core/radar-telemetry.mjs';
 
 function send(res,status,body,extra={}){
   const data=JSON.stringify(body);
@@ -216,6 +217,17 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         whale_accumulation_radar:safeHealth('WHALE_ACCUMULATION_RADAR',RADAR_NAMES.WHALE_ACCUMULATION_RADAR,whaleAccumulationRadar),
         falcon_eye_radar:safeHealth('FALCON_EYE_RADAR',RADAR_NAMES.FALCON_EYE_RADAR,falconEyeRadar)
       });
+      if(u.pathname==='/api/radar-telemetry'&&req.method==='GET'){
+        const limit=Math.max(1,Math.min(500,Math.trunc(Number(u.searchParams.get('limit')||100))));
+        let swarm=null;
+        try{swarm=typeof radarSwarm?.snapshot==='function'?radarSwarm.snapshot():null;}catch{}
+        return send(res,200,{...radarTelemetry.snapshot({limit}),radars:radarStatus(),swarm,
+          meta:{build_version:'Build 224',market:'SPOT',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+      }
+      if(u.pathname==='/radar-telemetry'&&req.method==='GET'){
+        res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff','x-frame-options':'DENY'});
+        res.end(renderRadarTelemetryDashboard());return;
+      }
       if(u.pathname==='/api/radar-status'&&req.method==='GET')return send(res,200,{radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
       if(u.pathname==='/api/radar-swarm-status'&&req.method==='GET'){
         let swarm={status:'UNAVAILABLE',expected_count:12,registered_count:0,running_count:0,failed_count:0,missing_count:12,radars:[]};

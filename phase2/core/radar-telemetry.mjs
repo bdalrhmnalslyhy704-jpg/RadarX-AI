@@ -192,14 +192,15 @@ const instrumentedRadarInstances = new WeakSet();
 export function instrumentRadarCycle(instance, radarId, {clock = () => Date.now()} = {}) {
   if (!instance || instrumentedRadarInstances.has(instance)) return false;
   const methodName = typeof instance.tick === "function" ? "tick" :
-    (typeof instance.cycle === "function" ? "cycle" : null);
+    (typeof instance.cycle === "function" ? "cycle" :
+      (typeof instance.scan === "function" ? "scan" :
+        (typeof instance.reconcile === "function" ? "reconcile" : null)));
   if (!methodName) return false;
   const radar = String(radarId || "UNKNOWN").toUpperCase();
   const originalTick = instance[methodName].bind(instance);
   instrumentedRadarInstances.add(instance);
   instance[methodName] = async function(...args) {
     if (instance.running !== true || instance.busy === true) return originalTick(...args);
-    const before = radarTelemetry.countForRadar(radar);
     const beganAt = clock();
     let cycleError = null;
     try {
@@ -209,18 +210,19 @@ export function instrumentRadarCycle(instance, radarId, {clock = () => Date.now(
       cycleError = "CYCLE_ERROR:" + raw.replace(/[^a-z0-9_.:-]/gi, "_").slice(0, 70);
       throw error;
     } finally {
-      if (radarTelemetry.countForRadar(radar) === before) {
-        const finishedAt = clock();
-        try {
-          recordRadarDecision({
-            radar, symbol: "SYSTEM", telemetry_type:"BACKGROUND_CYCLE",observed_at: beganAt, processed_at: finishedAt,
-            stage: "TICK_CYCLE", price: null, source_event_at: null
-          }, {
-            radar, eligible: false, score: null,
-            failures: [cycleError || "CYCLE_COMPLETED_WITHOUT_GATE_DECISION"]
-          }, {now: finishedAt, source: "LIVE"});
-        } catch {}
-      }
+      // Always retain cycle timing, even if this tick also recorded one or more
+      // candidate decisions. Otherwise successful signal-producing cycles vanish
+      // from the cycle-duration sample and make latency look artificially better.
+      const finishedAt = clock();
+      try {
+        recordRadarDecision({
+          radar, symbol: "SYSTEM", telemetry_type:"BACKGROUND_CYCLE",observed_at: beganAt, processed_at: finishedAt,
+          stage: "TICK_CYCLE", price: null, source_event_at: null
+        }, {
+          radar, eligible: false, score: null,
+          failures: [cycleError || "CYCLE_COMPLETED_WITHOUT_GATE_DECISION"]
+        }, {now: finishedAt, source: "LIVE"});
+      } catch {}
     }
   };
   return true;
