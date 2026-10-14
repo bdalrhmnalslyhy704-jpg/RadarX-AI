@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createSign,createVerify,generateKeyPairSync} from 'node:crypto';
+import {createVerify,generateKeyPairSync} from 'node:crypto';
 import {mkdtemp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -49,7 +49,9 @@ test('FCM provider signs a short-lived OAuth assertion and sends high-priority, 
     assert.equal(options.headers.authorization,'Bearer TEST_FIXTURE_ACCESS_TOKEN');
     const body=JSON.parse(options.body);
     assert.equal(body.message.token,TOKEN);
-    assert.equal(body.message.notification.title,'Radar 1 • BTCUSDT');
+    assert.equal(body.message.notification,undefined,'native data-only messages must be handled by our service in foreground and background');
+    assert.equal(body.message.data.title,'Radar 1 • BTCUSDT');
+    assert.equal(body.message.data.body,'BTCUSDT • EARLY_WAKE');
     assert.equal(body.message.android.priority,'HIGH');
     assert.equal(body.message.android.ttl,'30s');
     assert.equal(body.message.data.paper_trading,'true');
