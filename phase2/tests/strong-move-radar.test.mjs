@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {buildStrongMoveAnalysis,buildStrongMoveAlert,StrongMoveRadar} from '../core/strong-move-radar.mjs';
+import {buildStrongMoveAnalysis,buildStrongMoveAlert,buildEmergencyBreakoutAlert,StrongMoveRadar} from '../core/strong-move-radar.mjs';
 
 const NOW=10_000_000_000;
 
@@ -47,6 +47,28 @@ function make5m(){
 }
 
 const ticker={symbol:'BURSTUSDT',lastPrice:107,priceChange24h:4.2,quoteVolume24h:8_000_000,tradeCount24h:200_000};
+
+function makeEmergency5m(){
+  const rows=make5m();
+  const last=rows.at(-1);
+  last.close=Number(last.open)*1.075;
+  last.high=Math.max(Number(last.high),last.close*1.001);
+  last.low=Math.min(Number(last.low),Number(last.open)*0.999);
+  last.volume=3_000_000;last.quoteVolume=3_200_000;last.tradeCount=12_000;
+  return rows;
+}
+const emergencyAlert=buildEmergencyBreakoutAlert({ticker,five_minute:makeEmergency5m()},NOW);
+assert.ok(emergencyAlert,'a fresh closed 5m candle at +7% or more should activate emergency path');
+assert.equal(emergencyAlert.event,'EMERGENCY_BREAKOUT_ALERT');
+assert.equal(emergencyAlert.strong_move.stage,'EMERGENCY_BREAKOUT');
+assert.ok(emergencyAlert.strong_move.metrics.closed_5m_candle_return_pct>=7);
+assert.equal(emergencyAlert.paper_trading,true);
+assert.equal(emergencyAlert.real_order_execution,false);
+assert.equal(buildEmergencyBreakoutAlert({ticker:{...ticker,quoteVolume24h:999_999},five_minute:makeEmergency5m()},NOW),null);
+const openEmergency=makeEmergency5m();openEmergency.at(-1).closed=false;
+assert.equal(buildEmergencyBreakoutAlert({ticker,five_minute:openEmergency},NOW),null);
+const staleEmergency=makeEmergency5m().map(row=>({...row,closeTime:row.closeTime-9*60_000,openTime:row.openTime-9*60_000}));
+assert.equal(buildEmergencyBreakoutAlert({ticker,five_minute:staleEmergency},NOW),null);
 const analysis=buildStrongMoveAnalysis(make1m(),make5m(),ticker,NOW);
 assert.equal(analysis.closed_candles_only,true);
 assert.equal(analysis.eligible,true);
@@ -113,4 +135,22 @@ assert.equal(stale.eligible,false);
 assert.equal(stale.stage,'STALE_DATA');
 assert.equal(stale.data_stale,true);
 
+// Emergency alerts bypass analyst/elite consensus but still require fresh closed 5m data and $1M quote volume.
+{
+  const stored=[],pushed=[];
+  const emergencyRadar=new StrongMoveRadar({
+    rest:{klines:async(_symbol,tf)=>({candles:tf==='5m'?makeEmergency5m():make1m(),source:'TEST'})},
+    store:{appendStrongMoveAlert:async row=>stored.push(row)},
+    pushManager:{notifyRadarAlert:async row=>pushed.push(row)},
+    config:{pollMs:15_000,emergencyAlertCooldownMs:60_000},
+    clock:()=>NOW
+  });
+  const result=await emergencyRadar.scanRow({...ticker,priceChange24h:29.5});
+  assert.equal(result.event,'EMERGENCY_BREAKOUT_ALERT');
+  assert.equal(stored.length,1);assert.equal(pushed.length,1);
+  assert.equal(stored[0].real_order_execution,false);
+  assert.equal(emergencyRadar.health().emergency_alerts_emitted,1);
+  const repeated=await emergencyRadar.scanRow({...ticker,priceChange24h:29.5});
+  assert.equal(repeated,null,'per-symbol scan pacing prevents duplicate work inside one poll interval');
+}
 console.log('Strong Move Radar tests passed');

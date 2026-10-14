@@ -104,7 +104,7 @@ export const CONFIG = Object.freeze({
   strongMoveRadar: {
     quote: 'USDT',
     pollMs: int(process.env.RADARX_STRONG_MOVE_POLL_MS, 15000),
-    universeRefreshMs: int(process.env.RADARX_STRONG_MOVE_UNIVERSE_REFRESH_MS, 60000),
+    universeRefreshMs: int(process.env.RADARX_STRONG_MOVE_UNIVERSE_REFRESH_MS, 30 * 60 * 1000),
     minQuoteVolume24h: int(process.env.RADARX_STRONG_MOVE_MIN_QUOTE_VOLUME_24H, 1000000),
     rotationBatchSize: int(process.env.RADARX_STRONG_MOVE_ROTATION_BATCH, 7),
     topMoverCount: int(process.env.RADARX_STRONG_MOVE_TOP_MOVERS, 6),
@@ -231,6 +231,7 @@ export const CONFIG = Object.freeze({
     deepConcurrency: int(process.env.RADARX_MULTI_ANALYST_DEEP_CONCURRENCY, 3),
     deepKlines: int(process.env.RADARX_MULTI_ANALYST_DEEP_KLINES, 220),
     minQuoteVolume24h: int(process.env.RADARX_MULTI_ANALYST_MIN_QUOTE_VOLUME_24H, 300000),
+    universeRefreshMs: int(process.env.RADARX_MULTI_ANALYST_UNIVERSE_REFRESH_MS, 30 * 60 * 1000),
     minDataQuality: int(process.env.RADARX_MIN_DATA_QUALITY, 70),
     minLiquidityQuality: int(process.env.RADARX_MIN_LIQUIDITY_QUALITY, 60),
     ttlMs: int(process.env.RADARX_MULTI_ANALYST_TTL_MS, 45000),
