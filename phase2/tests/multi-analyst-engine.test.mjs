@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {MULTI_ANALYST_NAMES,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible,selectWithPriorityRotation} from '../core/multi-analyst-engine.mjs';
+import {MULTI_ANALYST_NAMES,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible,selectWithPriorityRotation,selectDiscoveryWithRadarReviewPriority} from '../core/multi-analyst-engine.mjs';
 
 // Continuous analyst cycles target one minute start-to-start, subtracting the
 // time spent scanning and never scheduling a negative delay after a slow cycle.
@@ -251,3 +251,80 @@ console.log('multi-analyst scan fail-closed regression: PASS');
 
 console.log('multi-analyst scan payload regression: PASS');
 
+
+
+// Build 224 radar alerts are queued for a later bounded analyst review without
+// changing the original notification. Queue deduplication and capacity stay bounded.
+{
+  let now=1_800_000_000_000;
+  const engine=new MultiAnalystEngine({
+    rest:{request:async()=>({data:[]})},
+    clock:()=>now,
+    config:{radarReviewMaxQueue:2,radarReviewSlotsPerCycle:1,radarReviewQueueTtlMs:10000}
+  });
+  assert.equal(engine.enqueueRadarReview('BTCUSDT',{sourceRadar:'RADAR1'}).queued,true);
+  assert.equal(engine.enqueueRadarReview('BTCUSDT',{sourceRadar:'RADAR8'}).already_queued,true);
+  assert.equal(engine.enqueueRadarReview('ETHUSDT',{sourceRadar:'RADAR9'}).queued,true);
+  let snapshot=engine.radarReviewQueueSnapshot();
+  assert.equal(snapshot.pending_count,2);
+  assert.deepEqual(snapshot.pending_reviews[0].source_radars,['RADAR1','RADAR8']);
+  assert.equal(engine.enqueueRadarReview('SOLUSDT',{sourceRadar:'RADAR11'}).queued,true);
+  snapshot=engine.radarReviewQueueSnapshot();
+  assert.equal(snapshot.pending_count,2);
+  assert.deepEqual(snapshot.pending_reviews.map(x=>x.symbol),['ETHUSDT','SOLUSDT']);
+  assert.equal(engine.enqueueRadarReview('NOT/A/SYMBOL',{sourceRadar:'RADAR1'}).queued,false);
+  now+=11000;
+  assert.equal(engine.radarReviewQueueSnapshot().pending_count,0);
+}
+
+console.log('multi-analyst radar-review queue bounds/dedupe/expiry: PASS');
+
+// Expose whether every named specialist and the final judge actually ran; a list
+// of 19 placeholder analysts must never be recorded as a complete result.
+{
+  let now=1_800_000_100_000;
+  const engine=new MultiAnalystEngine({
+    rest:{request:async()=>({data:[]})},clock:()=>now,
+    config:{radarReviewAssessmentTtlMs:60000}
+  });
+  const analysts=Array.from({length:19},(_,i)=>({id:'SPECIALIST_'+String(i+1).padStart(2,'0'),score:75,direction:'LONG'}));
+  engine._recordLatestAssessment({
+    symbol:'TESTUSDT',verdict:'WATCH',direction:'LONG',final_score:76,
+    analysts,analyst_execution:{specialists_complete:true,final_analyst_complete:true,analysis_failed:false},
+    final_judge:{sniper_score:79,hardReasons:[]},intelligence:{early_score:74,analyst_agreement:82},
+    data_status:{data_valid:true},reason_codes:[]
+  },now);
+  const result=engine.latestAssessments({symbols:['TESTUSDT']})[0];
+  assert.ok(result);
+  assert.equal(result.specialists_complete,true);
+  assert.equal(result.final_analyst_complete,true);
+  assert.equal(result.unique_specialists,19);
+  assert.equal(result.data_valid,true);
+  now+=61000;
+  assert.equal(engine.getLatestAssessment('TESTUSDT'),null);
+}
+
+console.log('multi-analyst role-completion evidence/freshness: PASS');
+
+
+// Queued radar alerts get first access to existing deep-analysis slots, with no
+// duplicated symbols and the ordinary round-robin universe kept behind them.
+{
+  const priority=[
+    {symbol:'GTCUSDT',_radar_review_priority:true},
+    {symbol:'BTCUSDT',_radar_review_priority:true},
+    {symbol:'GTCUSDT',_radar_review_priority:true}
+  ];
+  const buckets=[
+    [{symbol:'BTCUSDT'},{symbol:'BNBUSDT'}],
+    [{symbol:'ETHUSDT'},{symbol:'SOLUSDT'}],
+    [{symbol:'XRPUSDT'}]
+  ];
+  const selected=selectDiscoveryWithRadarReviewPriority(priority,buckets,5);
+  assert.deepEqual(selected.map(x=>x.symbol),['GTCUSDT','BTCUSDT','ETHUSDT','XRPUSDT','BNBUSDT']);
+  assert.deepEqual(buckets[0].map(x=>x.symbol),['BTCUSDT','BNBUSDT'],'input buckets must not be mutated');
+  assert.equal(new Set(selected.map(x=>x.symbol)).size,selected.length);
+  assert.deepEqual(selectDiscoveryWithRadarReviewPriority(priority,buckets,1).map(x=>x.symbol),['GTCUSDT']);
+}
+
+console.log('multi-analyst queued radar priority/capacity preservation: PASS');

@@ -60,6 +60,7 @@ const phase2=[
   'phase2/tests/strong-move-radar.test.mjs',
   'phase2/tests/whale-accumulation-radar.test.mjs',
   'phase2/tests/radar-telemetry.test.mjs',
+  'phase2/tests/radar-analyst-bridge.test.mjs',
   'phase2/tests/scan-scheduler.test.mjs',
   'phase2/tests/scan-scheduler.test.mjs',
   'phase2/tests/symbol-deep-scan.test.mjs',

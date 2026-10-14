@@ -385,3 +385,38 @@ test('TEST_FIXTURE: unified radar alert replay returns all historical pages olde
     await new Promise(resolve=>server.close(resolve));
   }
 });
+
+
+test('TEST_FIXTURE: analyst review queue exposes bounded review status and fresh assessments only as live',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-analyst-review-api-')),store=await new DurableStore({dir}).init();
+  let requestedSymbols=[];
+  const multiAnalystRadar={
+    radarReviewQueueSnapshot:()=>({pending_count:1,max_queue:200,pending_reviews:[{symbol:'BTCUSDT',age_ms:500}]}),
+    latestAssessments:({limit,symbols}={})=>{
+      requestedSymbols=symbols;
+      return [{symbol:'BTCUSDT',age_ms:500,fresh:true,data_valid:true,specialists_complete:true,final_analyst_complete:true}];
+    },
+    health:()=>({running:true,scan_count:4,last_error:null})
+  };
+  const config={auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}};
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),multiAnalystRadar});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const base='http://127.0.0.1:'+server.address().port;
+    const response=await fetch(base+'/api/analyst-review-queue?symbols=BTCUSDT,BOGUS!,ETHUSDT&limit=10');
+    assert.equal(response.status,200);
+    const body=await response.json();
+    assert.equal(body.radar,'MULTI_ANALYST_REVIEW_QUEUE');
+    assert.equal(body.queue.pending_count,1);
+    assert.deepEqual(requestedSymbols,['BTCUSDT','ETHUSDT']);
+    assert.equal(body.latest_assessments[0].specialists_complete,true);
+    assert.equal(body.meta.live,true);
+    assert.equal(body.meta.paper_trading,true);
+    assert.equal(body.meta.real_order_execution,false);
+    assert.equal(body.execution_model.analyst_count,20);
+    assert.equal(body.execution_model.independent_generative_models,0);
+  }finally{
+    await new Promise(resolve=>server.close(resolve));
+  }
+});

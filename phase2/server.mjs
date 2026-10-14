@@ -34,6 +34,7 @@ import {RadarSwarmCoordinator} from './core/radar-swarm-coordinator.mjs';
 
 
 import {instrumentRadarCycle} from './core/radar-telemetry.mjs';
+import {connectRadarAlertsToAnalysts} from './core/radar-analyst-bridge.mjs';
 
 export async function startServer({
   config=CONFIG,
@@ -202,6 +203,13 @@ export async function startServer({
   logger.info?.('[RADAR_CYCLE_TELEMETRY_SETUP] '+JSON.stringify({
     expected:12,instrumented:radarCycleTelemetrySetup.filter(x=>x.instrumented).length,
     skipped:radarCycleTelemetrySetup.filter(x=>!x.instrumented).map(x=>x.radar)
+  }));
+  // Queue emitted radar symbols for the next bounded analyst scan without waiting
+  // for that scan or changing the existing push-delivery decision.
+  const analystReviewBridge=connectRadarAlertsToAnalysts({pushManager:push,multiAnalystRadar,logger});
+  logger.info?.('[RADAR_ANALYST_REVIEW_BRIDGE] '+JSON.stringify({
+    ...analystReviewBridge,expected_specialists:19,expected_final_analyst:1,
+    mode:'NON_BLOCKING_REVIEW_ONLY',paper_trading:true,real_order_execution:false
   }));
   const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,multiAnalystRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,marketRadarRest,radarSwarm});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
