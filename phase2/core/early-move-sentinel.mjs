@@ -59,6 +59,42 @@ function component(candidate,keyPaths,fallback=50){
   return fallback;
 }
 
+export function resolveAlertConfirmationCount(alert){
+  const explicit=[
+    alert?.pre_explosion?.confirmation_count,
+    alert?.confirmation_count,
+    alert?.early_wake?.leader_count
+  ];
+  const supplied=explicit.find(value=>
+    value!==null&&value!==undefined&&
+    !(typeof value==='string'&&value.trim()==='')&&
+    Number.isFinite(Number(value))
+  );
+  if(supplied!==undefined)return Math.max(0,Math.trunc(Number(supplied)));
+
+  // The ordinary movement alert does not have a dedicated confirmation field.
+  // Count independently checked evidence instead of silently passing zero to
+  // the final confluence gate.
+  const c=alert?.components||{};
+  const s=alert?.strategy_confluence||{};
+  return [
+    Number(c.pre_move)>=72,
+    Number(c.structure)>=70,
+    Number(c.buying_pressure)>=70,
+    Number(c.selling_exhaustion)>=70,
+    Number(c.squeeze)>=70,
+    Number(c.volume)>=70,
+    Number(c.relative_strength)>=70,
+    Number(c.whale_pressure)>=72,
+    Number(c.atr_expansion)>=65,
+    Number(c.liquidity)>=70,
+    Number(c.data_quality)>=80,
+    Number(s.best_score)>=75,
+    Number(s.accepted_count)>=2,
+    Number(alert?.opportunity_score)>=82
+  ].filter(Boolean).length;
+}
+
 export function buildMoveAlert(candidate,trigger,{now=Date.now()}={}) {
   const direction=Number(trigger?.movePct)>=0?'UP_MOVE':'DOWN_MOVE';
   const ctx=candidate?.pre_move_context||{};
@@ -733,11 +769,36 @@ export class EarlyMoveSentinel {
 
   queueDeep(symbol,row,trigger,mode='MOVE'){
     const now=this.clock();
-    const last=this.lastAlertAt.get(`${symbol}:${mode==='EARLY_WAKE'?'EARLY_WAKE_ALERT':'EARLY_MOVE_ALERT'}`)||0;
+    const key=String(symbol||'').trim().toUpperCase();
+    if(!key||!row)return;
+    const last=this.lastAlertAt.get(`${key}:${mode==='EARLY_WAKE'?'EARLY_WAKE_ALERT':'EARLY_MOVE_ALERT'}`)||0;
     const cooldown=mode==='EARLY_WAKE'?this.config.earlyWakeAlertCooldownMs:this.config.cooldownMs;
-    if(now-last<cooldown)return;
-    if(this.deepQueue.some(x=>x.symbol===symbol))return;
-    this.deepQueue.push({symbol,row,trigger,queuedAt:now,mode});
+    const queuedIndex=this.deepQueue.findIndex(x=>String(x?.symbol||'').toUpperCase()===key);
+    if(now-last<cooldown){
+      if(queuedIndex>=0)this.deepQueue[queuedIndex].row={...(this.deepQueue[queuedIndex].row||{}),...row};
+      return;
+    }
+
+    const priorityOf=value=>value==='EARLY_WAKE'?3:value==='MOVE'?2:1;
+    const incomingPriority=priorityOf(mode);
+    let nextJob={symbol:key,row:{...row},trigger:{...(trigger||{})},queuedAt:now,mode};
+    if(queuedIndex>=0){
+      const existing=this.deepQueue[queuedIndex];
+      const existingPriority=priorityOf(existing.mode);
+      nextJob.row={...(existing.row||{}),...row};
+      nextJob.queuedAt=existing.queuedAt??now;
+      // Fast ticker events must not be discarded behind a routine discovery for
+      // the same symbol. Keep the highest-priority trigger and refresh the row.
+      if(incomingPriority<existingPriority){
+        nextJob.mode=existing.mode;
+        nextJob.trigger=existing.trigger;
+      }
+      this.deepQueue.splice(queuedIndex,1);
+    }
+    const insertAt=this.deepQueue.findIndex(x=>priorityOf(x.mode)<priorityOf(nextJob.mode));
+    if(insertAt<0)this.deepQueue.push(nextJob);
+    else this.deepQueue.splice(insertAt,0,nextJob);
+
     this.drainDeepQueue().catch(e=>{
       this.lastError=String(e?.message??e);
       this.logger.warn?.('MOVE_DEEP',this.lastError);
@@ -749,6 +810,18 @@ export class EarlyMoveSentinel {
       const job=this.deepQueue.shift();
       this.deepActive++;
       try{
+        // A queued candidate may wait while other deep scans finish. Always score
+        // the freshest ticker we have, not the stale row captured when it queued.
+        const latestRow=this.lastTicker.get(String(job.symbol||'').toUpperCase());
+        if(latestRow){
+          job.row={...(job.row||{}),...latestRow};
+          const latestMove=Number(latestRow.priceChange24h??latestRow.price_change_24h);
+          if(Number.isFinite(latestMove)){
+            job.trigger={...(job.trigger||{}),movePct:latestMove};
+            const previousMove=Number(job.trigger.previousMovePct);
+            if(Number.isFinite(previousMove))job.trigger.deltaPct=latestMove-previousMove;
+          }
+        }
         const candidate=await this.scanner.scanSymbol(job.row,1,{exchangeInfo:'Binance Public REST',ticker:'Binance Public REST'},{klinesLimit:this.config.deepKlines,fastInterval:this.config.fastInterval,fastKlines:this.config.fastKlines});
         const wakeAlert=buildEarlyWakeAlert(candidate,job.trigger,{now:this.clock()});
         const preAlert=buildPreExplosionAlert(candidate,job.trigger,{now:this.clock()});
@@ -770,7 +843,7 @@ export class EarlyMoveSentinel {
           relativeScore:Math.max(Number(cc.relative_strength)||0,Number(cc.mtf_alignment)||0),
           momentumScore:Number(cc.momentum)||50,
           compressionScore:Number(cc.squeeze)||50,
-          confirmations:Number(alert.pre_explosion?.confirmation_count||alert.confirmation_count||0),
+          confirmations:resolveAlertConfirmationCount(alert),
           minConfirmations:7,minScore:88,max24hMovePct:2.5,requireTrigger:true,minCategoryHits:5
         });
         alert.elite_gate=gate;
