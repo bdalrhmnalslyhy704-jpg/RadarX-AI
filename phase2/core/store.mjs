@@ -338,6 +338,24 @@ export class DurableStore {
     a[id]={id,user_id:userId,endpoint:String(s.endpoint),expirationTime:s.expirationTime??null,
       keys:{p256dh:String(s?.keys?.p256dh||''),auth:String(s?.keys?.auth||'')},disabled:false,
       created_at:old?.created_at||Date.now(),updated_at:Date.now()};await this.writeJson(this.files.subscriptions,a);return a[id];});}
+  async upsertFcmDevice(installationId,token){return this.lock(async()=>{
+    const a=await this.readJson(this.files.subscriptions),now=Date.now();
+    const matching=Object.values(a).find(x=>x.provider==='fcm'&&(x.installation_id===installationId||x.fcm_token===token));
+    const id=matching?.id||('fcm:'+installationId);
+    for(const [key,row] of Object.entries(a)){
+      if(row.provider==='fcm'&&row.fcm_token===token&&row.installation_id!==installationId&&key!==id)delete a[key];
+    }
+    a[id]={id,user_id:'android:'+installationId,provider:'fcm',installation_id:installationId,
+      endpoint:'fcm://device/'+installationId,fcm_token:token,expirationTime:null,keys:{},
+      disabled:false,created_at:matching?.created_at||now,updated_at:now};
+    await this.writeJson(this.files.subscriptions,a);
+    return{id,installation_id:installationId,provider:'fcm',created_at:a[id].created_at,updated_at:now};
+  });}
+  async getFcmDevice(installationId){const rows=await this.readJson(this.files.subscriptions);return Object.values(rows).find(x=>x.provider==='fcm'&&x.installation_id===installationId&&!x.disabled)||null;}
+  async deleteFcmDevice(installationId){return this.lock(async()=>{
+    const a=await this.readJson(this.files.subscriptions),row=Object.values(a).find(x=>x.provider==='fcm'&&x.installation_id===installationId);
+    if(!row)return false;delete a[row.id];await this.writeJson(this.files.subscriptions,a);return true;
+  });}
   async deleteSubscription(userId,id){return this.lock(async()=>{const a=await this.readJson(this.files.subscriptions);
     if(!a[id]||a[id].user_id!==userId)return false;delete a[id];await this.writeJson(this.files.subscriptions,a);return true;});}
   async disableSubscription(id){return this.lock(async()=>{const a=await this.readJson(this.files.subscriptions);if(!a[id])return false;
