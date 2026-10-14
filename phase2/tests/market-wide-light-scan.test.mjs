@@ -376,6 +376,38 @@ test('verified scan-journey closed candles can seed live cache without any added
 
 
 
+
+test('bounded market-wide warm-up backfills every missing symbol with fresh closed REST candles', async () => {
+  FakeSocket.instances.length = 0;
+  const now = 1_900_000_000_000;
+  const requests = [];
+  const fakeRest = {
+    async klines(symbol, interval, options) {
+      requests.push({symbol, interval, limit:options?.limit});
+      return {source:SOURCE,candles:candles({now,count:72}).map(candle=>({...candle,closed:true}))};
+    }
+  };
+  const cache = new MarketWideKlineCache({
+    rest:fakeRest,urls:['wss://stream.test/stream'],WebSocketImpl:FakeSocket,
+    clock:()=>now,logger:{warn(){},info(){}}
+  });
+  try {
+    cache.setSymbols(['AAAUSDT','BBBUSDT','CCCUSDT']);
+    cache.start();
+    const report = await cache.warmupMissing({force:true,concurrency:2,limit:72});
+    assert.equal(requests.length,3,'each missing symbol should get one bounded backfill request');
+    assert.ok(requests.every(row=>row.interval==='5m'&&row.limit===72));
+    assert.equal(report.requested_symbols,3);
+    assert.equal(report.ready_after,3);
+    assert.equal(report.status,'CACHE_COVERAGE_READY');
+    assert.equal(cache.health().ready_symbols,3);
+    assert.equal(cache.health().cache_coverage_ready,true);
+    assert.ok(['BINANCE_PUBLIC_REST','BINANCE_PUBLIC_WS'].includes(cache.getSeries('AAAUSDT').source));
+  } finally {
+    cache.stop();
+  }
+});
+
 test('getSeries returns bounded tails from the retained closed-candle window', () => {
   const now = 1_900_000_000_000;
   const cache = new MarketWideKlineCache({
