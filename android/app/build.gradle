@@ -2,6 +2,12 @@ plugins {
     id "com.android.application"
 }
 
+// Build and development branches remain usable without the owner's Firebase project.
+// When android/app/google-services.json is provisioned, enable the plugin automatically.
+if (file("google-services.json").isFile()) {
+    apply plugin: "com.google.gms.google-services"
+}
+
 def isReleaseBuildRequested = gradle.startParameter.taskNames.any { taskName ->
     taskName.toLowerCase().contains("release") || taskName.toLowerCase().contains("bundle")
 }
@@ -71,4 +77,6 @@ android {
 
 dependencies {
     implementation "androidx.webkit:webkit:1.13.0"
+    implementation platform("com.google.firebase:firebase-bom:34.19.0")
+    implementation "com.google.firebase:firebase-messaging"
 }
