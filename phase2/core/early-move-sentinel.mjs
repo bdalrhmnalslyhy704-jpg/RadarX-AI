@@ -736,8 +736,39 @@ export class EarlyMoveSentinel {
     const last=this.lastAlertAt.get(`${symbol}:${mode==='EARLY_WAKE'?'EARLY_WAKE_ALERT':'EARLY_MOVE_ALERT'}`)||0;
     const cooldown=mode==='EARLY_WAKE'?this.config.earlyWakeAlertCooldownMs:this.config.cooldownMs;
     if(now-last<cooldown)return;
-    if(this.deepQueue.some(x=>x.symbol===symbol))return;
-    this.deepQueue.push({symbol,row,trigger,queuedAt:now,mode});
+    const existingIndex=this.deepQueue.findIndex(x=>String(x?.symbol||'').toUpperCase()===String(symbol||'').toUpperCase());
+    if(existingIndex>=0){
+      const pending=this.deepQueue[existingIndex];
+      const priorityOf=value=>value==='MOVE'?3:value==='EARLY_WAKE'?2:value==='PRE_EXPLOSION'?1:0;
+      const timestamp=(sample,fallback)=>{
+        const value=Number(sample?.tickerTime??sample?.eventTime??sample?.closeTime);
+        return Number.isFinite(value)&&value>0?value:fallback;
+      };
+      const incomingAt=timestamp(row,now);
+      const pendingAt=timestamp(pending?.row,Number(pending?.queuedAt)||0);
+      const incomingFresh=incomingAt>=pendingAt;
+      const impulse=value=>Math.abs(Number.isFinite(Number(value?.deltaPct))?Number(value.deltaPct):0);
+      const move=value=>Math.abs(Number.isFinite(Number(value?.movePct))?Number(value.movePct):0);
+      const incomingDelta=impulse(trigger),pendingDelta=impulse(pending?.trigger);
+      const incomingMove=move(trigger),pendingMove=move(pending?.trigger);
+      const higherPriority=priorityOf(mode)>priorityOf(pending?.mode);
+      const stronger=incomingDelta>pendingDelta+1e-9||
+        (incomingDelta>=pendingDelta&&incomingMove>pendingMove+1e-9);
+      const replaceTrigger=incomingFresh&&(higherPriority||stronger);
+      const refreshed={
+        ...pending,
+        row:incomingFresh?row:pending.row,
+        trigger:replaceTrigger?trigger:pending.trigger,
+        mode:replaceTrigger&&higherPriority?mode:pending.mode,
+        updatedAt:now,
+        refreshCount:(Number(pending?.refreshCount)||0)+1
+      };
+      this.deepQueue.splice(existingIndex,1);
+      if(replaceTrigger)this.deepQueue.unshift(refreshed);
+      else this.deepQueue.splice(existingIndex,0,refreshed);
+    }else{
+      this.deepQueue.push({symbol,row,trigger,queuedAt:now,mode});
+    }
     this.drainDeepQueue().catch(e=>{
       this.lastError=String(e?.message??e);
       this.logger.warn?.('MOVE_DEEP',this.lastError);

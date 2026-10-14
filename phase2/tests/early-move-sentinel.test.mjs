@@ -268,3 +268,59 @@ test('failed pre-explosion scan releases its cooldown so it can be retried',asyn
   assert.equal(sentinel.lastEarlyScanAt.has('RETRYUSDT'),false);
   assert.match(sentinel.lastError,/TRANSIENT_FIXTURE_FAILURE/);
 });
+
+test('fresh stronger ticker pulse promotes an already-queued symbol instead of losing the move',()=>{
+  const now=1710003000000;
+  const sentinel=new EarlyMoveSentinel({
+    rest:{},store:{},clock:()=>now,
+    config:{cooldownMs:0,earlyWakeAlertCooldownMs:0},
+    logger:{warn(){}}
+  });
+  sentinel.running=true;
+  sentinel.drainDeepQueue=async()=>{};
+  sentinel.deepQueue.push({
+    symbol:'PUMPUSDT',
+    row:{symbol:'PUMPUSDT',lastPrice:1.01,priceChange24h:0.45,tickerTime:now-1000},
+    trigger:{movePct:0.45,previousMovePct:0.30,deltaPct:0.15},
+    queuedAt:now-1000,
+    mode:'EARLY_WAKE'
+  });
+  sentinel.queueDeep('PUMPUSDT',
+    {symbol:'PUMPUSDT',lastPrice:1.04,priceChange24h:1.4,tickerTime:now},
+    {movePct:1.4,previousMovePct:0.7,deltaPct:0.7,type:'SURGE'},
+    'MOVE'
+  );
+  assert.equal(sentinel.deepQueue.length,1,'same symbol must not be duplicated');
+  assert.equal(sentinel.deepQueue[0].mode,'MOVE','higher-priority move trigger should replace early wake');
+  assert.equal(sentinel.deepQueue[0].row.lastPrice,1.04,'latest ticker snapshot must be scanned');
+  assert.equal(sentinel.deepQueue[0].trigger.deltaPct,0.7,'stronger trigger must be preserved');
+  assert.equal(sentinel.deepQueue[0].queuedAt,now-1000,'promotion must preserve the original wait time');
+});
+
+test('newer ticker refreshes a queued snapshot without downgrading a stronger trigger',()=>{
+  const now=1710004000000;
+  const sentinel=new EarlyMoveSentinel({
+    rest:{},store:{},clock:()=>now,
+    config:{cooldownMs:0,earlyWakeAlertCooldownMs:0},
+    logger:{warn(){}}
+  });
+  sentinel.running=true;
+  sentinel.drainDeepQueue=async()=>{};
+  sentinel.deepQueue.push({
+    symbol:'FASTUSDT',
+    row:{symbol:'FASTUSDT',lastPrice:2.01,priceChange24h:1.7,tickerTime:now-1000},
+    trigger:{movePct:1.7,previousMovePct:0.8,deltaPct:0.9},
+    queuedAt:now-1000,
+    mode:'MOVE'
+  });
+  sentinel.queueDeep('FASTUSDT',
+    {symbol:'FASTUSDT',lastPrice:2.05,priceChange24h:1.8,tickerTime:now},
+    {movePct:1.8,previousMovePct:1.6,deltaPct:0.2},
+    'MOVE'
+  );
+  assert.equal(sentinel.deepQueue.length,1);
+  assert.equal(sentinel.deepQueue[0].row.lastPrice,2.05,'queued job should use the newest price');
+  assert.equal(sentinel.deepQueue[0].trigger.deltaPct,0.9,'weaker later pulse must not replace the stronger trigger');
+  assert.equal(sentinel.deepQueue[0].queuedAt,now-1000);
+});
+
