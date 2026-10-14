@@ -120,6 +120,28 @@ jobs:
           test -x "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner"
           test -d "$ANDROID_SDK_ROOT/platforms/android-35"
 
+      - name: Provision Firebase Android app configuration
+        timeout-minutes: 2
+        env:
+          FIREBASE_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${FIREBASE_GOOGLE_SERVICES_JSON_BASE64:-}" ]]; then
+            echo "::error::Refusing to publish a Build 224 APK without FIREBASE_GOOGLE_SERVICES_JSON_BASE64; native FCM would otherwise be unavailable."
+            exit 1
+          fi
+          printf '%s' "$FIREBASE_GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > android/app/google-services.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const config = JSON.parse(fs.readFileSync('android/app/google-services.json', 'utf8'));
+          const app = config.client?.find(x => x.client_info?.android_client_info?.package_name === 'com.radarx.app');
+          if (!config.project_info?.project_id || !app) {
+            console.error('::error::Firebase config is missing project_id or the com.radarx.app client.');
+            process.exit(1);
+          }
+          console.log(JSON.stringify({firebase_project_id: config.project_info.project_id, android_package: 'com.radarx.app', config_present: true}));
+          NODE
+
       - name: Verify Railway backend and Radar 8 public contract
         timeout-minutes: 5
         env:
