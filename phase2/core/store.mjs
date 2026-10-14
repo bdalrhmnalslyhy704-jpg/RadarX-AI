@@ -341,6 +341,8 @@ export class DurableStore {
   async upsertFcmDevice(installationId,token){return this.lock(async()=>{
     const a=await this.readJson(this.files.subscriptions),now=Date.now();
     const matching=Object.values(a).find(x=>x.provider==='fcm'&&(x.installation_id===installationId||x.fcm_token===token));
+    const activeFcmDevices=Object.values(a).filter(x=>x.provider==='fcm'&&!x.disabled).length;
+    if(!matching&&activeFcmDevices>=1000)throw new Error('FCM_DEVICE_CAPACITY_REACHED');
     const id=matching?.id||('fcm:'+installationId);
     for(const [key,row] of Object.entries(a)){
       if(row.provider==='fcm'&&row.fcm_token===token&&row.installation_id!==installationId&&key!==id)delete a[key];
