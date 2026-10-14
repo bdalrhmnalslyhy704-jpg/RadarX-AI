@@ -629,7 +629,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           execution_model:{analyst_count:20,specialist_count:19,final_analyst_count:1,
             independent_generative_models:0,method:'DETERMINISTIC_SPECIALIST_RULES_PLUS_FINAL_CONSENSUS'},
           monitoring:health,
-          meta:{live:assessments.some(x=>x.data_valid===true),mode:'NON_BLOCKING_REVIEW_ONLY',
+          meta:{live:assessments.some(x=>x.data_valid===true&&x.fresh===true),mode:'NON_BLOCKING_REVIEW_ONLY',
             paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
             note:'Queued radar alerts are prioritized during the next bounded analyst scan; original radar notifications are not delayed or suppressed.'}
         });
