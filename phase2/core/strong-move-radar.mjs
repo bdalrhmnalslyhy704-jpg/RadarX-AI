@@ -419,6 +419,15 @@ export class StrongMoveRadar {
       if(selected.length>=Math.min(topCount,target))break;
       take(row);
     }
+    // Reserve two scan slots for daily surge candidates; without this, early movers can starve the emergency lane.
+    const surgeLane=byMove.filter(row=>row.quoteVolume24h>=1_000_000&&Number(row.priceChange24h)>=7&&Number(row.priceChange24h)<=50)
+      .sort((a,b)=>(Number(b.recent_move_pct)||0)-(Number(a.recent_move_pct)||0)||
+        Number(b.priceChange24h)-Number(a.priceChange24h)||Number(b.quoteVolume24h)-Number(a.quoteVolume24h))
+      .slice(0,2);
+    for(const row of surgeLane){
+      if(selected.length>=Math.max(0,target-2))break;
+      take(row);
+    }
     let visited=0;
     while(selected.length<target&&visited<this.universe.length){
       const symbol=this.universe[this.cursor%this.universe.length];this.cursor=(this.cursor+1)%this.universe.length;visited++;

@@ -127,6 +127,8 @@ assert.equal(selectedBatch.length,7,'Strong Move should fill its top+rotation bu
 assert.equal(new Set(selectedBatch.map(x=>x.symbol)).size,7,'Strong Move must not waste rotation slots on duplicate top movers');
 assert.ok(selectedBatch.slice(0,3).every(x=>x.priceChange24h>0&&x.priceChange24h<=8),
   'early positive movers must outrank already-extended daily movers for the top-Micro scan lane');
+assert.ok(selectedBatch.some(x=>x.priceChange24h>=7&&x.quoteVolume24h>=1_000_000),
+  'the rotation budget must reserve access for liquid surge candidates rather than starving the emergency lane');
 
 const stale1=make1m().map(row=>({...row,openTime:row.openTime-20*60_000,closeTime:row.closeTime-20*60_000}));
 const stale5=make5m().map(row=>({...row,openTime:row.openTime-20*60_000,closeTime:row.closeTime-20*60_000}));
