@@ -92,10 +92,10 @@ function normalizeClosedCandle(input, now, fallbackSource = null) {
 /**
  * A bounded, in-memory 5m closed-candle cache.
  *
- * It makes no REST calls. The market-wide feed uses one combined Binance
- * WebSocket connection (one kline_5m stream per eligible symbol); Micro may
- * seed the same cache with its existing 5m REST response, so this feature
- * does not add a per-symbol REST warm-up loop.
+ * The market-wide feed uses one combined Binance WebSocket connection (one
+ * kline_5m stream per eligible symbol). Live Radar 8 may request a bounded REST
+ * warm-up for only missing/stale entries; calls share the existing REST broker,
+ * run at limited concurrency, and are not awaited by the live scan cycle.
  */
 export class MarketWideKlineCache {
   constructor({
@@ -142,6 +142,9 @@ export class MarketWideKlineCache {
     this.firstRestBackfillCloseTimeBySymbol = new Map();
     this.latestWebSocketClosedTimeBySymbol = new Map();
     this.streamGeneration = 0;
+    this.warmupPromise = null;
+    this.warmupRetryAtBySymbol = new Map();
+    this.lastWarmupReport = null;
     this.attachRestKlineObserver();
   }
 
@@ -170,6 +173,7 @@ export class MarketWideKlineCache {
     for (const symbol of this.cache.keys()) if (!eligible.has(symbol)) this.cache.delete(symbol);
     for (const symbol of this.firstRestBackfillCloseTimeBySymbol.keys()) if (!eligible.has(symbol)) this.firstRestBackfillCloseTimeBySymbol.delete(symbol);
     for (const symbol of this.latestWebSocketClosedTimeBySymbol.keys()) if (!eligible.has(symbol)) this.latestWebSocketClosedTimeBySymbol.delete(symbol);
+    for (const symbol of this.warmupRetryAtBySymbol.keys()) if (!eligible.has(symbol)) this.warmupRetryAtBySymbol.delete(symbol);
     for (const map of [this.duplicateClosedCandleFramesBySymbol,this.ignoredOpenCandleFramesBySymbol,this.rejectedFutureCandlesBySymbol]) {
       for (const symbol of map.keys()) if (!eligible.has(symbol)) map.delete(symbol);
     }
@@ -364,6 +368,88 @@ export class MarketWideKlineCache {
       expected_symbols: this.symbols.length,
       ready: live && subscriptionComplete
     };
+  }
+
+  /**
+   * Fill missing/stale 5m history using Binance public REST in a bounded background
+   * batch. The existing shared REST client provides the request budget and observer
+   * seeds the same in-memory cache; this method never marks a symbol ready without
+   * 60 contiguous, fresh, closed candles.
+   */
+  async warmupMissing({force = false, concurrency = 3, limit = 96, retryMs = 90_000} = {}) {
+    if (this.warmupPromise) return this.warmupPromise;
+    if (!this.rest || typeof this.rest.klines !== 'function') {
+      return {status:'SKIPPED', reason:'REST_CLIENT_UNAVAILABLE', expected_symbols:this.symbols.length};
+    }
+    const run = async () => {
+      const now = this.clock();
+      const workerCount = Math.max(1, Math.min(6, Math.trunc(Number(concurrency) || 3)));
+      const requestLimit = Math.max(60, Math.min(120, Math.trunc(Number(limit) || 96)));
+      const retryCooldownMs = Math.max(15_000, Math.trunc(Number(retryMs) || 90_000));
+      const before = this.health();
+      const candidates = this.symbols.filter(symbol => {
+        const state = assessCachedEntry(this.cache.get(symbol), now, this.maxCandleAgeMs);
+        if (state.ready) return false;
+        const attemptedAt = Number(this.warmupRetryAtBySymbol.get(symbol) || 0);
+        return force || !attemptedAt || now - attemptedAt >= retryCooldownMs;
+      });
+      if (!candidates.length) {
+        return {
+          status: before.expected_symbols > 0 && before.ready_symbols === before.expected_symbols
+            ? 'CACHE_COVERAGE_READY' : 'NO_SYMBOLS_DUE',
+          requested_symbols:0,ready_before:before.ready_symbols,expected_symbols:before.expected_symbols,
+          ready_after:before.ready_symbols,failed_symbols:0,extra_rest_requests:0
+        };
+      }
+      let cursor = 0, fetched = 0, errors = 0, stillNotReady = 0;
+      const failures = [];
+      await Promise.all(Array.from({length:Math.min(workerCount,candidates.length)}, async () => {
+        while (cursor < candidates.length) {
+          const index = cursor++;
+          const symbol = candidates[index];
+          if (!this.symbols.includes(symbol)) continue;
+          this.warmupRetryAtBySymbol.set(symbol, this.clock());
+          try {
+            const response = await this.rest.klines(symbol, '5m', {limit:requestLimit});
+            fetched++;
+            // RestClient's observer normally seeds the cache before the request resolves.
+            // Keep support for injected clients that do not expose the observer contract.
+            if (!this.unsubscribeKlines && Array.isArray(response?.candles)) {
+              this.seed(symbol, response.candles, 'BINANCE_PUBLIC_REST');
+            }
+            if (this.symbols.includes(symbol) &&
+                !assessCachedEntry(this.cache.get(symbol), this.clock(), this.maxCandleAgeMs).ready) {
+              stillNotReady++;
+              failures.push({symbol, reason:assessCachedEntry(this.cache.get(symbol), this.clock(), this.maxCandleAgeMs).state});
+            }
+          } catch (error) {
+            errors++;
+            failures.push({symbol, reason:String(error?.code || error?.message || 'REST_KLINE_FAILED').slice(0,120)});
+          }
+        }
+      }));
+      const after = this.health();
+      const report = {
+        status:after.expected_symbols > 0 && after.ready_symbols === after.expected_symbols
+          ? 'CACHE_COVERAGE_READY' : 'PARTIAL',
+        requested_symbols:candidates.length,ready_before:before.ready_symbols,
+        expected_symbols:after.expected_symbols,ready_after:after.ready_symbols,
+        missing_after:after.missing_symbols,stale_after:after.stale_symbols,
+        incomplete_after:after.incomplete_symbols,fetch_successes:fetched,
+        fetch_errors:errors,still_not_ready:stillNotReady,
+        websocket_live:after.websocket_live,websocket_sync_ready:after.websocket_sync_ready,
+        extra_rest_requests:fetched,failures:failures.slice(0,25),
+        completed_at_ms:this.clock()
+      };
+      this.lastWarmupReport = report;
+      this.logger?.info?.('[MARKET_WIDE_KLINE_WARMUP] '+JSON.stringify(report));
+      return report;
+    };
+    const task = run().finally(() => {
+      if (this.warmupPromise === task) this.warmupPromise = null;
+    });
+    this.warmupPromise = task;
+    return task;
   }
 
   coverageReport() {

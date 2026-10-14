@@ -160,6 +160,18 @@ start_app_and_wait_ready() {
   wait "${APP_LOGCAT_PID}" 2>/dev/null || true
   APP_LOGCAT_PID=""
 }
+background_service_pid() {
+  local pid
+  pid="$(timeout 8s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
+  if [[ -n "$pid" ]]; then
+    printf '%s\n' "$pid"
+    return 0
+  fi
+  # Some Android emulator/toybox versions omit colon-suffixed names from pidof.
+  pid="$(timeout 8s adb shell ps -A 2>/dev/null | awk '$NF == "com.radarx.app:radar_background" {print $2; exit}' | tr -d '\r' || true)"
+  printf '%s\n' "$pid"
+}
+
 assert_background_service_declared() {
   PHASE="verify background service registration in the built APK manifest"
   local aapt manifest_tree permissions
@@ -195,8 +207,8 @@ assert_background_service_declared() {
   local logs runtime_state service_pid service_pid_source
   logs="$(cat "${APP_LOG_FILE:-/nonexistent}" 2>/dev/null || true)"
   runtime_state="$(timeout 15s adb shell dumpsys activity services com.radarx.app 2>/dev/null || true)"
-  service_pid="$(timeout 12s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
-  service_pid_source="pidof"
+  service_pid="$(background_service_pid)"
+  service_pid_source="pidof-or-ps"
   # Some Android API 29 / toybox pidof builds do not resolve long colon-suffixed
   # app process names, even while dumpsys reports the live ServiceRecord and its
   # ProcessRecord. In that case, derive the PID only from that same live service
@@ -400,7 +412,7 @@ for attempt in $(seq 1 120); do
     # Stop only the service, keeping app notifications in Android's tray so restart reconciliation is tested faithfully.
     sleep 2
     before_ready="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
-    old_service_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
+    old_service_pid="$(background_service_pid)"
     if [[ -z "${old_service_pid}" ]]; then
       echo "::error::Background service process was absent before the restart checkpoint"
       timeout 10s adb shell dumpsys activity services com.radarx.app 2>&1 | tail -n 100 || true
@@ -420,7 +432,7 @@ for attempt in $(seq 1 120); do
     current_service_pid="${old_service_pid}"
     service_registered=1
     for stop_attempt in $(seq 1 20); do
-      current_service_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\\r' || true)"
+      current_service_pid="$(background_service_pid)"
       logs="$(replay_logs)"
       if printf '%s\\n' "${logs}" | grep -Fq 'TEST_STOP_BACKGROUND_MONITOR_REQUEST'; then
         stop_request_seen=1
@@ -450,7 +462,7 @@ for attempt in $(seq 1 120); do
     launch_replay_test_app
     restarted_ready=0
     for restart_attempt in $(seq 1 30); do
-      new_pid="$(timeout 4s adb shell pidof com.radarx.app:radar_background 2>/dev/null | tr -d '\r' || true)"
+      new_pid="$(background_service_pid)"
       ready_count="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
       logs="$(replay_logs)"
       if [[ -n "${new_pid}" && "${ready_count}" -gt "${before_ready}" ]] &&

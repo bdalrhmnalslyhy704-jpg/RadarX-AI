@@ -64,7 +64,21 @@ assert.equal(emergencyAlert.strong_move.stage,'EMERGENCY_BREAKOUT');
 assert.ok(emergencyAlert.strong_move.metrics.closed_5m_candle_return_pct>=7);
 assert.equal(emergencyAlert.paper_trading,true);
 assert.equal(emergencyAlert.real_order_execution,false);
-assert.equal(buildEmergencyBreakoutAlert({ticker:{...ticker,quoteVolume24h:999_999},five_minute:makeEmergency5m()},NOW),null);
+const lowLiquidityEmergency=buildEmergencyBreakoutAlert({ticker:{...ticker,quoteVolume24h:999},five_minute:makeEmergency5m()},NOW);
+assert.ok(lowLiquidityEmergency,'a fresh +7% closed candle must not be rejected for low 24h turnover');
+assert.ok(lowLiquidityEmergency.risk_flags.includes('LOW_24H_QUOTE_VOLUME_ADVISORY'));
+const volumeSpikeBars=makeEmergency5m();
+for(const row of volumeSpikeBars){row.open=100;row.close=100.2;row.high=101;row.low=99;row.quoteVolume=1_000;row.volume=10;}
+const volumeSpikeLast=volumeSpikeBars.at(-1);
+volumeSpikeLast.open=100;volumeSpikeLast.close=102;volumeSpikeLast.high=103;volumeSpikeLast.low=99;
+volumeSpikeLast.quoteVolume=5_000;volumeSpikeLast.volume=50;
+const lowTurnoverVolumeSpike=buildEmergencyBreakoutAlert({
+  ticker:{...ticker,quoteVolume24h:1},five_minute:volumeSpikeBars
+},NOW);
+assert.ok(lowTurnoverVolumeSpike,'a fresh positive 3x 5m volume spike must bypass the 24h volume floor');
+assert.equal(lowTurnoverVolumeSpike.event,'EMERGENCY_VOLUME_SPIKE_ALERT');
+assert.ok(lowTurnoverVolumeSpike.strong_move.metrics.volume_spike_ratio>=3);
+assert.ok(lowTurnoverVolumeSpike.risk_flags.includes('LOW_24H_QUOTE_VOLUME_ADVISORY'));
 const openEmergency=makeEmergency5m();openEmergency.at(-1).closed=false;
 assert.equal(buildEmergencyBreakoutAlert({ticker,five_minute:openEmergency},NOW),null);
 const staleEmergency=makeEmergency5m().map(row=>({...row,closeTime:row.closeTime-9*60_000,openTime:row.openTime-9*60_000}));
@@ -122,13 +136,16 @@ radar.tick=originalTick;
 const batchRadar = new StrongMoveRadar({rest:{},store:{},config:{topMoverCount:3,rotationBatchSize:4},clock:()=>NOW});
 batchRadar.universe=Array.from({length:16},(_,i)=>`B${String(i).padStart(2,'0')}USDT`);
 const batchRows=batchRadar.universe.map((symbol,i)=>({symbol,lastPrice:10+i,priceChange24h:16-i,quoteVolume24h:2_000_000+i}));
-const selectedBatch=batchRadar.selectBatch(batchRows);
+const lowVolumeSurge={...batchRows[8],symbol:'LOWVOLUSDT',priceChange24h:12,recent_move_pct:1.1,quoteVolume24h:100};
+const selectedBatch=batchRadar.selectBatch([...batchRows,lowVolumeSurge]);
 assert.equal(selectedBatch.length,7,'Strong Move should fill its top+rotation budget when enough market rows exist');
 assert.equal(new Set(selectedBatch.map(x=>x.symbol)).size,7,'Strong Move must not waste rotation slots on duplicate top movers');
 assert.ok(selectedBatch.slice(0,3).every(x=>x.priceChange24h>0&&x.priceChange24h<=8),
   'early positive movers must outrank already-extended daily movers for the top-Micro scan lane');
-assert.ok(selectedBatch.some(x=>x.priceChange24h>=7&&x.quoteVolume24h>=1_000_000),
-  'the rotation budget must reserve access for liquid surge candidates rather than starving the emergency lane');
+assert.ok(selectedBatch.some(x=>x.priceChange24h>=7),
+  'the rotation budget must reserve access for surge candidates regardless of 24h quote volume');
+assert.ok(selectedBatch.some(x=>x.symbol==='LOWVOLUSDT'),
+  'a fresh low-turnover surge candidate must retain emergency scan access');
 
 const stale1=make1m().map(row=>({...row,openTime:row.openTime-20*60_000,closeTime:row.closeTime-20*60_000}));
 const stale5=make5m().map(row=>({...row,openTime:row.openTime-20*60_000,closeTime:row.closeTime-20*60_000}));

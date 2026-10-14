@@ -218,6 +218,7 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   fastShockHoldMs:8*60*1000,
   maxBackoffMs:1500,
   marketWideLightScanEnabled:true,
+  marketWideCacheWarmupEnabled:true,
   marketWideLightScanCandidateLimit:48,
   marketWideLightScanRotationReserve:12,
   marketWideLightScanMinReadyCandidates:24,
@@ -2076,6 +2077,13 @@ export class EarlyExpansionRadar{
           this.marketWideKlineCache.setSymbols(eligible.map(row=>row.symbol));
           if(!this.marketWideKlineCache.running)this.marketWideKlineCache.start();
           await this.rehydrateMarketWideCacheFromArchive(eligible,fastSeenAt);
+          // Cache missing/stale 5m windows in the background using the shared, bounded
+          // REST budget. Keep the current scan non-blocking while the remaining symbols warm.
+          if(this.config.marketWideCacheWarmupEnabled!==false&&
+              typeof this.marketWideKlineCache.warmupMissing==='function'){
+            this.marketWideKlineCache.warmupMissing({concurrency:3,limit:96,retryMs:90_000})
+              .catch(error=>this.noteError(error,'market-wide-candle-warmup'));
+          }
         }catch(error){this.noteError(error,'market-wide-light-stream');}
       }
       if(this.config.marketWideLightScanEnabled!==false){

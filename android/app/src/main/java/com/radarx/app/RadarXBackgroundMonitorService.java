@@ -68,7 +68,7 @@ public final class RadarXBackgroundMonitorService extends Service {
     private static final int ALERT_NOTIFICATION_BASE = 42000;
     private static final int STRONG_ALERT_NOTIFICATION_BASE = 43000;
     private static final int ROTATION_ALERT_NOTIFICATION_BASE = 44000;
-    private static final long SCAN_MS = 15_000L;
+    private static final long SCAN_MS = 5_000L;
     private static final long ALERT_COOLDOWN_MS = 30 * 60_000L;
     private static final String HEARTBEAT_KEY = "monitor_heartbeat_at_ms";
     private static final long HEARTBEAT_STALE_MS = 5 * 60_000L;

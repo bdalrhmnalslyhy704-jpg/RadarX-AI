@@ -289,8 +289,9 @@ export function buildStrongMoveAlert(candidate,now=Date.now()){
 export function buildEmergencyBreakoutAlert({five_minute,ticker}={},now=Date.now()){
   const symbol=String(ticker?.symbol||'').trim().toUpperCase();
   if(!/^[A-Z0-9]{2,25}USDT$/.test(symbol))return null;
+  // Liquidity is disclosed as a risk flag, never used as an emergency eligibility floor.
   const quoteVolume=Number(ticker?.quoteVolume24h);
-  if(!Number.isFinite(quoteVolume)||quoteVolume<1_000_000)return null;
+  const quoteVolumeKnown=Number.isFinite(quoteVolume)&&quoteVolume>=0;
   const rows=(Array.isArray(five_minute)?five_minute:[])
     .filter(c=>c?.closed===true&&Number.isFinite(Number(c.openTime))&&
       Number.isFinite(Number(c.closeTime))&&Number(c.closeTime)<=now&&
@@ -303,34 +304,71 @@ export function buildEmergencyBreakoutAlert({five_minute,ticker}={},now=Date.now
   if(!candle)return null;
   const closeTime=Number(candle.closeTime),ageMs=now-closeTime;
   if(!Number.isFinite(ageMs)||ageMs<0||ageMs>8*60_000)return null;
-  const movePct=(Number(candle.close)-Number(candle.open))/Number(candle.open)*100;
-  if(!Number.isFinite(movePct)||movePct<7)return null;
-  const score=Math.min(100,80+Math.max(0,movePct-7)*1.25);
+  const open=Number(candle.open),close=Number(candle.close);
+  const movePct=(close-open)/open*100;
+  const candleQuoteVolume=row=>{
+    const q=Number(row?.quoteVolume);
+    if(Number.isFinite(q)&&q>0)return q;
+    const volume=Number(row?.volume),price=Number(row?.close);
+    return Number.isFinite(volume)&&volume>0&&Number.isFinite(price)&&price>0?volume*price:null;
+  };
+  const currentQuoteVolume=candleQuoteVolume(candle);
+  const priorVolumes=rows.slice(Math.max(0,rows.length-13),-1)
+    .map(candleQuoteVolume).filter(value=>Number.isFinite(value)&&value>0);
+  const baselineQuoteVolume=median(priorVolumes);
+  const volumeRatio=Number.isFinite(currentQuoteVolume)&&Number.isFinite(baselineQuoteVolume)&&baselineQuoteVolume>0
+    ?currentQuoteVolume/baselineQuoteVolume:null;
+  const volumeSpike=Number.isFinite(volumeRatio)&&volumeRatio>=3;
+  const priceBreakout=Number.isFinite(movePct)&&movePct>=7;
+  // A closed +7% candle qualifies at any turnover; alternatively, a >=3x candle-volume
+  // expansion with a positive >=1.5% close is an early shock candidate.
+  if(!priceBreakout&&!(Number.isFinite(movePct)&&movePct>=1.5&&volumeSpike))return null;
+  const volumeTriggered=!priceBreakout;
+  const score=priceBreakout
+    ?Math.min(100,80+Math.max(0,movePct-7)*1.25)
+    :Math.min(100,76+Math.min(24,Math.max(0,volumeRatio-3)*4));
+  const lowDailyLiquidity=!quoteVolumeKnown||quoteVolume<1_000_000;
+  const flags=[
+    'EMERGENCY_BREAKOUT_VOLATILITY',
+    ...(lowDailyLiquidity?['LOW_24H_QUOTE_VOLUME_ADVISORY']:[]),
+    ...(Number.isFinite(currentQuoteVolume)&&currentQuoteVolume<100_000?['LOW_ABSOLUTE_CANDLE_VOLUME_ADVISORY']:[]),
+    ...(Math.abs(Number(ticker?.priceChange24h)||0)>15?['24H_ALREADY_EXTENDED']:[])
+  ];
   return {
-    id:'EMERGENCY:'+symbol+':'+closeTime,event:'EMERGENCY_BREAKOUT_ALERT',
+    id:(volumeTriggered?'EMERGENCY_VOLUME_SPIKE:':'EMERGENCY:')+symbol+':'+closeTime,
+    event:volumeTriggered?'EMERGENCY_VOLUME_SPIKE_ALERT':'EMERGENCY_BREAKOUT_ALERT',
     radar:'STRONG_MOVE_RADAR',symbol,market:'SPOT',direction:'UP_SURGE',
-    price:Number(candle.close),last_price:Number(candle.close),
+    price:close,last_price:close,
     price_change_24h:Number.isFinite(Number(ticker?.priceChange24h))?Number(ticker.priceChange24h):null,
-    opportunity_score:Math.round(score*10)/10,potential_label:'EMERGENCY_BREAKOUT',
+    opportunity_score:Math.round(score*10)/10,
+    potential_label:volumeTriggered?'EMERGENCY_VOLUME_SPIKE':'EMERGENCY_BREAKOUT',
     strong_move:{
-      eligible:true,emergency:true,stage:'EMERGENCY_BREAKOUT',direction:'UP_SURGE',
-      score:Math.round(score*10)/10,data_quality:90,data_stale:false,closed_candles_only:true,
+      eligible:true,emergency:true,stage:volumeTriggered?'EMERGENCY_VOLUME_SPIKE':'EMERGENCY_BREAKOUT',
+      direction:'UP_SURGE',score:Math.round(score*10)/10,data_quality:90,data_stale:false,closed_candles_only:true,
       metrics:{
         closed_5m_candle_return_pct:Math.round(movePct*1000)/1000,
         closed_5m_candle_close_time_ms:closeTime,closed_5m_candle_age_ms:ageMs,
         closed_5m_candle_volume:Number.isFinite(Number(candle.volume))?Number(candle.volume):null,
-        closed_5m_candle_quote_volume:Number.isFinite(Number(candle.quoteVolume))?Number(candle.quoteVolume):null,
-        closed_5m_candle_trade_count:Number.isFinite(Number(candle.tradeCount??candle.count))?Number(candle.tradeCount??candle.count):null
+        closed_5m_candle_quote_volume:currentQuoteVolume,
+        closed_5m_candle_trade_count:Number.isFinite(Number(candle.tradeCount??candle.count))?Number(candle.tradeCount??candle.count):null,
+        baseline_5m_quote_volume:Number.isFinite(baselineQuoteVolume)?baselineQuoteVolume:null,
+        volume_spike_ratio:Number.isFinite(volumeRatio)?Math.round(volumeRatio*100)/100:null,
+        low_daily_liquidity_advisory:lowDailyLiquidity
       },
-      reasons:['شمعة 5 دقائق مغلقة ارتفعت 7% أو أكثر','تم تجاوز فحص إجماع المحللين لهذا التنبيه الطارئ']
+      reasons:volumeTriggered
+        ?['شمعة 5 دقائق مغلقة بإغلاق إيجابي ≥1.5% وتوسع حجم ≥3x','تم تجاوز شرط السيولة اليومي؛ راجع تحذير السيولة']
+        :['شمعة 5 دقائق مغلقة ارتفعت 7% أو أكثر','تم تجاوز شرط السيولة اليومي وإجماع المحللين لهذا التنبيه الطارئ']
     },
-    reasons:['EMERGENCY_CLOSED_5M_BREAKOUT','ANALYST_CONSENSUS_BYPASSED'],
-    risk_flags:['EMERGENCY_BREAKOUT_VOLATILITY',...(Math.abs(Number(ticker?.priceChange24h)||0)>15?['24H_ALREADY_EXTENDED']:[])],
+    reasons:volumeTriggered
+      ?['EMERGENCY_CLOSED_5M_VOLUME_SPIKE','VOLUME_RATIO_GTE_3X','LOW_LIQUIDITY_IS_WARNING_ONLY']
+      :['EMERGENCY_CLOSED_5M_BREAKOUT','ANALYST_CONSENSUS_BYPASSED','LOW_LIQUIDITY_IS_WARNING_ONLY'],
+    risk_flags:flags,
     data_quality:90,
     data_status:{status:'LIVE_DATA',stale:false,data_stale:false,future_data_detected:false,source:'Binance Public REST',last_error:null},
-    liquidity_quality:clamp(70+Math.log10(Math.max(1,quoteVolume/1_000_000))*30),
+    liquidity_quality:quoteVolumeKnown&&quoteVolume>0
+      ?clamp(30+Math.log10(Math.max(1,quoteVolume/1_000_000))*20,0,100):0,
     eligible:true,emergency:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
-    disclaimer:'تنبيه طارئ من شمعة 5 دقائق مغلقة؛ ليس أمر شراء ولا ضمانًا لاستمرار الارتفاع. تحقق من التقلب ومخاطر الانزلاق السعري.'
+    disclaimer:'تنبيه طارئ من شمعة 5 دقائق مغلقة أو تضاعف حجمها؛ لا يوجد حد سيولة للالتقاط، والسيولة المنخفضة تحذير مخاطر وليست تأكيد شراء أو ضمان ربح.'
   };
 }
 
@@ -340,7 +378,7 @@ export class StrongMoveRadar {
     if(!store)throw new Error('STORE_REQUIRED');
     this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={
-      quote:'USDT',pollMs:30000,universeRefreshMs:30*60*1000,minQuoteVolume24h:1000000,
+      quote:'USDT',pollMs:30000,universeRefreshMs:30*60*1000,minQuoteVolume24h:0,
       rotationBatchSize:4,topMoverCount:3,alertCooldownMs:12*60*1000,
       emergencyAlertCooldownMs:5*60*1000,minScore:76, ...config
     };
@@ -387,7 +425,7 @@ export class StrongMoveRadar {
       this.lastTickerMap.set(symbol,{lastPrice:Number(row.lastPrice),priceChange24h:Number(row.priceChange24h),at:now});
       present.add(symbol);
       return {...row,recent_move_pct:Number.isFinite(recentMovePct)?recentMovePct:null,recent_observation_age_ms:ageMs};
-    }).filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h);
+    });
     if(this.lastTickerMap.size>1200){
       for(const [symbol,item] of this.lastTickerMap)if(!present.has(symbol)&&now-Number(item.at)>30*60*1000)this.lastTickerMap.delete(symbol);
     }
@@ -407,7 +445,7 @@ export class StrongMoveRadar {
     const rotationCount=Math.max(0,Math.trunc(Number(this.config.rotationBatchSize)||0));
     const target=Math.min(new Set(byMove.map(x=>x.symbol)).size,topCount+rotationCount);
     // A fresh quote-price pulse gets first access to Micro even when its 24h change is extended.
-    const pulseLane=byMove.filter(row=>row.quoteVolume24h>=1_000_000&&Number.isFinite(Number(row.recent_move_pct))&&Number(row.recent_move_pct)>=1.5)
+    const pulseLane=byMove.filter(row=>Number.isFinite(Number(row.recent_move_pct))&&Number(row.recent_move_pct)>=1.5)
       .sort((a,b)=>Number(b.recent_move_pct)-Number(a.recent_move_pct)).slice(0,Math.min(2,target));
     for(const row of pulseLane)take(row);
     const earlyLane=byMove.filter(row=>Math.abs(Number(row.priceChange24h)||0)<=8);
@@ -420,7 +458,7 @@ export class StrongMoveRadar {
       take(row);
     }
     // Reserve two scan slots for daily surge candidates; without this, early movers can starve the emergency lane.
-    const surgeLane=byMove.filter(row=>row.quoteVolume24h>=1_000_000&&Number(row.priceChange24h)>=7&&Number(row.priceChange24h)<=50)
+    const surgeLane=byMove.filter(row=>Number.isFinite(Number(row.priceChange24h))&&Number(row.priceChange24h)>=7)
       .sort((a,b)=>(Number(b.recent_move_pct)||0)-(Number(a.recent_move_pct)||0)||
         Number(b.priceChange24h)-Number(a.priceChange24h)||Number(b.quoteVolume24h)-Number(a.quoteVolume24h))
       .slice(0,2);
@@ -543,7 +581,7 @@ export class StrongMoveRadar {
       scans:this.scans,
       alerts_emitted:this.alertCount,
       emergency_alerts_emitted:this.emergencyAlertCount,
-      emergency_trigger:'CLOSED_5M_CANDLE_RETURN_GTE_7_PERCENT_WITH_1M_USDT_24H_QUOTE_VOLUME',
+      emergency_trigger:'CLOSED_5M_MOVE_GTE_7_PERCENT_OR_POSITIVE_MOVE_GTE_1_5_PERCENT_WITH_3X_VOLUME_SPIKE; NO_24H_QUOTE_VOLUME_FLOOR',
       last_error:this.lastError,
       busy:this.busy,
       rest:this.rest?.health?.()||null,

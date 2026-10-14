@@ -248,6 +248,7 @@ try {
       microConcurrency:6,
       retryAttempts:1,
       marketWideLightScanEnabled:true,
+      marketWideCacheWarmupEnabled:false,
       marketWideLightScanPoolActivationEnabled:false,
       marketWideLightScanMaxCandleAgeMs:8*60_000,
       marketWideLightScanMinClosedCandles:60
