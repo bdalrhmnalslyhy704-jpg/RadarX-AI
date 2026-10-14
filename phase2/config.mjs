@@ -356,7 +356,9 @@ export const CONFIG = Object.freeze({
     provider: (process.env.RADARX_PUSH_PROVIDER ?? 'none').toLowerCase(),
     vapidSubject: process.env.VAPID_SUBJECT ?? '',
     vapidPublicKey: process.env.VAPID_PUBLIC_KEY ?? '',
-    vapidPrivateKey: process.env.VAPID_PRIVATE_KEY ?? ''
+    vapidPrivateKey: process.env.VAPID_PRIVATE_KEY ?? '',
+    fcmProjectId: process.env.FCM_PROJECT_ID ?? '',
+    fcmServiceAccountJson: process.env.FCM_SERVICE_ACCOUNT_JSON ?? ''
   },
   auth: {
     secret: process.env.RADARX_AUTH_SECRET ?? '',
