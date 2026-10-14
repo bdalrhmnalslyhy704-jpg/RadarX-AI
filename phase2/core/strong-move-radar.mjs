@@ -430,13 +430,13 @@ export class StrongMoveRadar {
     const last=this.lastScanAt.get(row.symbol)||0;
     if(this.clock()-last<Math.max(5000,Number(this.config.pollMs)*0.75))return null;
     this.lastScanAt.set(row.symbol,this.clock());
-    const [oneResult,fiveResult]=await Promise.allSettled([
-      this.rest.klines(row.symbol,'1m',{limit:120}),
-      this.rest.klines(row.symbol,'5m',{limit:60})
-    ]);
-    if(fiveResult.status!=='fulfilled')throw fiveResult.reason||new Error('FIVE_MINUTE_KLINES_UNAVAILABLE');
-    const five=fiveResult.value,now=this.clock();
-    const emergency=buildEmergencyBreakoutAlert({ticker:row,five_minute:five.candles},now);
+    // Launch the normal 1m analysis in parallel, but never let it delay a 5m emergency.
+    const oneResultPromise=this.rest.klines(row.symbol,'1m',{limit:120})
+      .then(value=>({status:'fulfilled',value}),reason=>({status:'rejected',reason}));
+    const five=this.rest.klines(row.symbol,'5m',{limit:60});
+    const fiveResult=await five;
+    const now=this.clock();
+    const emergency=buildEmergencyBreakoutAlert({ticker:row,five_minute:fiveResult.candles},now);
     this.scans++;
     if(emergency){
       const candleCloseTime=Number(emergency.strong_move.metrics.closed_5m_candle_close_time_ms);
@@ -447,18 +447,25 @@ export class StrongMoveRadar {
         return {...emergency,emergency_suppressed_by_cooldown:true};
       const decoratedEmergency=decorateRadarAlert(emergency,'Radar 2 — Strong-Move / Emergency');
       await this.store.appendStrongMoveAlert(decoratedEmergency);
-      if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decoratedEmergency);
+      // Mark the persisted candle before push delivery, so a push outage cannot duplicate the stored alert.
       this.lastEmergencyCandleAt.set(row.symbol,candleCloseTime);
       this.lastEmergencyAlertAt.set(row.symbol,now);
       this.lastAlertAt.set(row.symbol,now);
       this.alertCount++;
       this.emergencyAlertCount++;
+      try{
+        if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decoratedEmergency);
+      }catch(pushError){
+        this.lastError=String(pushError?.message??pushError);
+        this.logger.warn?.('STRONG_MOVE_EMERGENCY_PUSH',this.lastError);
+      }
       return emergency;
     }
+    const oneResult=await oneResultPromise;
     if(oneResult.status!=='fulfilled')throw oneResult.reason||new Error('ONE_MINUTE_KLINES_UNAVAILABLE');
     const one=oneResult.value;
     const alert=buildStrongMoveAlert({
-      ticker:row,one_minute:one.candles,five_minute:five.candles
+      ticker:row,one_minute:one.candles,five_minute:fiveResult.candles
     },now);
     const alertScore=Math.max(
       Number(alert?.strong_move?.score)||0,

@@ -1006,7 +1006,7 @@ export class MultiAnalystEngine {
         symbol:String(x.symbol||'').toUpperCase(),lastPrice:Number(x.lastPrice),quoteVolume24h:Number(x.quoteVolume),
         tradeCount24h:Number(x.count),priceChange24h:Number(x.priceChangePercent),
         highPrice24h:Number(x.highPrice),lowPrice24h:Number(x.lowPrice),tickerTime:Number(x.closeTime||x.eventTime||x.openTime||0)
-      })).filter(x=>/^[A-Z0-9]{2,30}$/.test(x.symbol)&&Number.isFinite(x.lastPrice)&&x.lastPrice>0&&Number.isFinite(x.quoteVolume24h));
+      })).filter(x=>/^[A-Z0-9]{2,30}$/.test(x.symbol)&&universe.includes(x.symbol)&&Number.isFinite(x.lastPrice)&&x.lastPrice>0&&Number.isFinite(x.quoteVolume24h));
 
       const top=rankTickerRows(tickers.data,universe,{minQuoteVolume24h:this.config.minQuoteVolume24h,limit:Math.max(7,Math.trunc(this.config.discoveryPool*.36))});
       const bottom=rankBottomTickerRows(tickers.data,universe,{minQuoteVolume24h:this.config.minQuoteVolume24h,limit:Math.max(4,Math.trunc(this.config.discoveryPool*.20))});

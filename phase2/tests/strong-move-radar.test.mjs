@@ -139,7 +139,10 @@ assert.equal(stale.data_stale,true);
 {
   const stored=[],pushed=[];
   const emergencyRadar=new StrongMoveRadar({
-    rest:{klines:async(_symbol,tf)=>({candles:tf==='5m'?makeEmergency5m():make1m(),source:'TEST'})},
+    rest:{klines:async(_symbol,tf)=>{
+      if(tf==='1m')throw new Error('SIMULATED_1M_DATA_OUTAGE');
+      return {candles:makeEmergency5m(),source:'TEST'};
+    }},
     store:{appendStrongMoveAlert:async row=>stored.push(row)},
     pushManager:{notifyRadarAlert:async row=>pushed.push(row)},
     config:{pollMs:15_000,emergencyAlertCooldownMs:60_000},
