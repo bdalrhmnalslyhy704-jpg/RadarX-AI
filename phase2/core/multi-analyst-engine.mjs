@@ -1068,7 +1068,11 @@ export class MultiAnalystEngine {
       rows=[...this.latestAnalystAssessments.values()].sort((a,b)=>b.assessed_at_ms-a.assessed_at_ms)
         .slice(0,Math.max(1,Math.min(100,Math.trunc(Number(limit)||40))));
     }
-    return rows.map(row=>({...row,age_ms:Math.max(0,now-Number(row.assessed_at_ms||0))}));
+    const freshAfterMs=Math.max(1000,Number(this.config.radarReviewAssessmentTtlMs)||180000);
+    return rows.map(row=>{
+      const age=Math.max(0,now-Number(row.assessed_at_ms||0));
+      return {...row,age_ms:age,fresh:age<=freshAfterMs};
+    });
   }
 
   _recordLatestAssessment(item,now=this.clock()){
