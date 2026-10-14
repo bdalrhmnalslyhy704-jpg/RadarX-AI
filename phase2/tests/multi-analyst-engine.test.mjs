@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {MULTI_ANALYST_NAMES,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible,selectWithPriorityRotation} from '../core/multi-analyst-engine.mjs';
+import {MULTI_ANALYST_NAMES,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible,selectWithPriorityRotation,selectDiscoveryWithRadarReviewPriority} from '../core/multi-analyst-engine.mjs';
 
 // Continuous analyst cycles target one minute start-to-start, subtracting the
 // time spent scanning and never scheduling a negative delay after a slow cycle.
@@ -305,3 +305,26 @@ console.log('multi-analyst radar-review queue bounds/dedupe/expiry: PASS');
 }
 
 console.log('multi-analyst role-completion evidence/freshness: PASS');
+
+
+// Queued radar alerts get first access to existing deep-analysis slots, with no
+// duplicated symbols and the ordinary round-robin universe kept behind them.
+{
+  const priority=[
+    {symbol:'GTCUSDT',_radar_review_priority:true},
+    {symbol:'BTCUSDT',_radar_review_priority:true},
+    {symbol:'GTCUSDT',_radar_review_priority:true}
+  ];
+  const buckets=[
+    [{symbol:'BTCUSDT'},{symbol:'BNBUSDT'}],
+    [{symbol:'ETHUSDT'},{symbol:'SOLUSDT'}],
+    [{symbol:'XRPUSDT'}]
+  ];
+  const selected=selectDiscoveryWithRadarReviewPriority(priority,buckets,5);
+  assert.deepEqual(selected.map(x=>x.symbol),['GTCUSDT','BTCUSDT','BNBUSDT','ETHUSDT','XRPUSDT']);
+  assert.deepEqual(buckets[0].map(x=>x.symbol),['BTCUSDT','BNBUSDT'],'input buckets must not be mutated');
+  assert.equal(new Set(selected.map(x=>x.symbol)).size,selected.length);
+  assert.deepEqual(selectDiscoveryWithRadarReviewPriority(priority,buckets,1).map(x=>x.symbol),['GTCUSDT']);
+}
+
+console.log('multi-analyst queued radar priority/capacity preservation: PASS');
