@@ -32,36 +32,7 @@ import {sanitizeLogMessage} from './runtime.mjs';
 import {MultiAnalystEngine} from './core/multi-analyst-engine.mjs';
 import {RadarSwarmCoordinator} from './core/radar-swarm-coordinator.mjs';
 
-function instrumentRadarCycleTiming(radarSwarm,{logger=console,clock=()=>Date.now()}={}){
-  for(const runner of radarSwarm.runners){
-    const instance=runner.instance;
-    const methodName=typeof instance.tick==='function'?'tick':
-      (typeof instance.cycle==='function'?'cycle':null);
-    if(!methodName||instance.__radarxCycleTimingInstrumented)continue;
-    const original=instance[methodName].bind(instance);
-    Object.defineProperty(instance,'__radarxCycleTimingInstrumented',{value:true,configurable:true});
-    instance[methodName]=async function(...args){
-      const startedAt=clock();
-      let cycleError=null;
-      try{
-        return await original(...args);
-      }catch(error){
-        cycleError=String(error?.message??error??'UNKNOWN_ERROR').replace(/[^a-z0-9_.:-]/gi,'_').slice(0,160);
-        throw error;
-      }finally{
-        const finishedAt=clock();
-        try{
-          logger.info?.('[RADARX_RADAR_CYCLE_TIMING] '+JSON.stringify({
-            build_version:'Build 224',radar:runner.id,name:runner.name,method:methodName,
-            duration_ms:Math.max(0,Math.round(finishedAt-startedAt)),
-            outcome:cycleError?'ERROR':'OK',error:cycleError,
-            at:new Date(finishedAt).toISOString()
-          }));
-        }catch{}
-      }
-    };
-  }
-}
+
 import {instrumentRadarCycle} from './core/radar-telemetry.mjs';
 
 export async function startServer({
@@ -232,9 +203,6 @@ export async function startServer({
     expected:12,instrumented:radarCycleTelemetrySetup.filter(x=>x.instrumented).length,
     skipped:radarCycleTelemetrySetup.filter(x=>!x.instrumented).map(x=>x.radar)
   }));
-  // Record real wall-clock duration and failures for every coordinated radar cycle.
-  // This is diagnostic only: it does not change scan budgets, candidate ranking, or alert gates.
-  instrumentRadarCycleTiming(radarSwarm,{logger});
   const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,multiAnalystRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,marketRadarRest,radarSwarm});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
