@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createSign} from 'node:crypto';
 import {defaultSettings} from '../core/signal-service.mjs';
 import {EVENT_CLASS,marketEventClass} from '../core/event-types.mjs';
 import {formatRadarTime12h} from '../core/radar-alert-meta.mjs';
@@ -20,7 +20,83 @@ export class WebPushProvider extends PushProvider{
   }
   status(){return{provider:'webpush',enabled:Boolean(this.subject&&this.publicKey&&this.privateKey)};}
 }
-export function createPushProvider(c){return c?.provider==='webpush'?new WebPushProvider({subject:c.vapidSubject,publicKey:c.vapidPublicKey,privateKey:c.vapidPrivateKey}):new NoopPushProvider();}
+
+const FCM_SCOPE='https://www.googleapis.com/auth/firebase.messaging';
+const FCM_TOKEN_URL='https://oauth2.googleapis.com/token';
+const FCM_API_BASE='https://fcm.googleapis.com/v1/projects/';
+const b64url=value=>Buffer.from(value).toString('base64url');
+
+export class FcmPushProvider extends PushProvider{
+  constructor({projectId='',serviceAccountJson='',fetchImpl=globalThis.fetch,clock=()=>Date.now()}={}){
+    super();
+    this.serviceAccount=null;this.fetchImpl=fetchImpl;this.clock=clock;
+    try{this.serviceAccount=typeof serviceAccountJson==='string'?JSON.parse(serviceAccountJson):serviceAccountJson;}catch{}
+    this.projectId=String(projectId||this.serviceAccount?.project_id||'').trim();
+    this.cachedAccessToken='';this.accessTokenExpiresAt=0;
+  }
+  status(){return{provider:'fcm',enabled:Boolean(this.projectId&&this.serviceAccount?.client_email&&this.serviceAccount?.private_key&&this.fetchImpl)};}
+  async getAccessToken(){
+    const now=this.clock();
+    if(this.cachedAccessToken&&this.accessTokenExpiresAt>now+60000)return this.cachedAccessToken;
+    if(!this.status().enabled)throw new Error('FCM_CONFIGURATION_MISSING');
+    const issuedAt=Math.floor(now/1000);
+    const head=b64url(JSON.stringify({alg:'RS256',typ:'JWT'}));
+    const claims=b64url(JSON.stringify({iss:this.serviceAccount.client_email,scope:FCM_SCOPE,aud:FCM_TOKEN_URL,iat:issuedAt,exp:issuedAt+3600}));
+    const unsigned=head+'.'+claims;
+    const signature=createSign('RSA-SHA256').update(unsigned).sign(this.serviceAccount.private_key).toString('base64url');
+    const assertion=unsigned+'.'+signature;
+    const response=await this.fetchImpl(FCM_TOKEN_URL,{
+      method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},
+      body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion}).toString(),
+      signal:AbortSignal.timeout(8000)
+    });
+    let data={};try{data=await response.json();}catch{}
+    if(!response.ok||typeof data.access_token!=='string'||!data.access_token)throw new Error('FCM_OAUTH_TOKEN_FAILED_'+Number(response.status||0));
+    this.cachedAccessToken=data.access_token;
+    this.accessTokenExpiresAt=now+Math.max(60000,Number(data.expires_in||3600)*1000-60000);
+    return this.cachedAccessToken;
+  }
+  async send(subscription,payload){
+    if(!this.status().enabled)return{ok:false,status:'DISABLED',reason:'FCM_CONFIGURATION_MISSING'};
+    if(subscription?.provider!=='fcm'||typeof subscription?.fcm_token!=='string'||!subscription.fcm_token)
+      return{ok:false,status:'SKIPPED',reason:'FCM_DEVICE_TOKEN_MISSING'};
+    try{
+      const token=await this.getAccessToken();
+      const title=String(payload?.title||((payload?.radar_name||'RadarX')+' • '+(payload?.symbol||'تنبيه'))).slice(0,120);
+      const body=String(payload?.message||[payload?.symbol,payload?.event||payload?.potential_label||payload?.type].filter(Boolean).join(' • ')||'تنبيه جديد من RadarX').slice(0,220);
+      const data={};
+      for(const key of ['type','event_class','event','radar','radar_name','symbol','market','direction','price','opportunity_score','potential_label','detected_at','detected_at_iso','detected_time_12h','detected_timezone','source','test_id','event_id']){
+        const value=payload?.[key];
+        if(value!==undefined&&value!==null)data[key]=String(value).slice(0,500);
+      }
+      data.paper_trading='true';data.real_order_execution='false';data.confidence_score='UNKNOWN';
+      const response=await this.fetchImpl(FCM_API_BASE+encodeURIComponent(this.projectId)+'/messages:send',{
+        method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},
+        body:JSON.stringify({message:{
+          token:subscription.fcm_token,
+          notification:{title,body},
+          data,
+          android:{priority:'HIGH',ttl:'30s',notification:{channel_id:'radarx_radar_alerts_v2',sound:'default'}}
+        }}),
+        signal:AbortSignal.timeout(8000)
+      });
+      let result={};try{result=await response.json();}catch{}
+      if(response.ok)return{ok:true,status:'SENT',httpStatus:Number(response.status||200),messageId:result?.name||null};
+      const details=Array.isArray(result?.error?.details)?result.error.details:[];
+      const fcmCode=details.find(x=>String(x?.['@type']||'').endsWith('.FcmError'))?.errorCode;
+      if(fcmCode==='UNREGISTERED')return{ok:false,status:'GONE',reason:'FCM_TOKEN_UNREGISTERED',httpStatus:Number(response.status||404)};
+      return{ok:false,status:'FAILED',reason:String(result?.error?.status||'FCM_SEND_FAILED').slice(0,120),httpStatus:Number(response.status||0)||null};
+    }catch(error){
+      return{ok:false,status:'FAILED',reason:String(error?.message||'FCM_SEND_FAILED').replace(/[^A-Z0-9_:-]/gi,'_').slice(0,120),httpStatus:null};
+    }
+  }
+}
+
+export function createPushProvider(c){
+  if(c?.provider==='fcm')return new FcmPushProvider({projectId:c.fcmProjectId,serviceAccountJson:c.fcmServiceAccountJson});
+  if(c?.provider==='webpush')return new WebPushProvider({subject:c.vapidSubject,publicKey:c.vapidPublicKey,privateKey:c.vapidPrivateKey});
+  return new NoopPushProvider();
+}
 
 
 const radarTitle=s=>s?.radar_name||({
@@ -74,8 +150,14 @@ const testPayload=(eventId,testId,processedAt=Date.now())=>({
 export class PushManager{
   constructor({provider,store,deduplicator=null,retryBaseMs=15000}){this.provider=provider;this.store=store;this.deduplicator=deduplicator;this.retryBaseMs=retryBaseMs;this.retryQueue=new Map();}
   status(){return this.provider.status();}
+  providerSubscriptions(rows){
+    const provider=this.provider.status()?.provider;
+    if(provider==='fcm')return rows.filter(row=>row.provider==='fcm');
+    if(provider==='webpush')return rows.filter(row=>(row.provider||'webpush')==='webpush');
+    return rows;
+  }
   async notifySignal(signal){
-    const rows=await this.store.getSubscriptions(),cache=new Map(),out=[];
+    const rows=this.providerSubscriptions(await this.store.getSubscriptions()),cache=new Map(),out=[];
     for(const sub of rows){
       let settings=cache.get(sub.user_id);if(!settings){settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();cache.set(sub.user_id,settings);}
       if(!settings.enabled||!settings.symbols.includes(signal.symbol)||!settings.timeframes.includes(signal.candle?.timeframe)||!settings.signalTypes.includes(signal.signal_type))continue;
@@ -91,7 +173,7 @@ export class PushManager{
   }
 
   async notifyRadarAlert(alert){
-    const rows=await this.store.getSubscriptions(),out=[];
+    const rows=this.providerSubscriptions(await this.store.getSubscriptions()),out=[];
     for(const sub of rows){
       const settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();
       if(!settings.enabled)continue;
@@ -124,7 +206,7 @@ export class PushManager{
       return{status:'DUPLICATE',event_id:eventId,test_id:clean,notifications:[]};
     }
     await this.deduplicator.markEmitted(synthetic,now);
-    const rows=await this.store.getSubscriptions(String(userId));
+    const rows=this.providerSubscriptions(await this.store.getSubscriptions(String(userId)));
     await this.store.appendSignalAudit({event:'TEST_PUSH_ONLY',event_class:EVENT_CLASS.TEST_PUSH_ONLY,event_id:eventId,test_id:clean,
       user_id:String(userId),status:rows.length?'QUEUED':'NO_SUBSCRIPTIONS',source:'TEST_PUSH_ONLY',source_time:null,processed_at:now,
       confidence_score:'UNKNOWN',paper_trading:true,real_order_execution:false,signal_id:null});
