@@ -942,7 +942,9 @@ export class MultiAnalystEngine {
     this.config={
       quote:'USDT',discoveryPool:28,deepScanPool:16,returnLimit:8,deepConcurrency:3,deepKlines:220,
       minQuoteVolume24h:300000,minDataQuality:70,minLiquidityQuality:60,
-      ttlMs:45000,universeRefreshMs:30*60*1000,continuousIntervalMs:60000,continuousWarmupMs:8000,...config
+      ttlMs:45000,universeRefreshMs:30*60*1000,continuousIntervalMs:60000,continuousWarmupMs:8000,
+      radarReviewMaxQueue:200,radarReviewSlotsPerCycle:4,radarReviewQueueTtlMs:300000,
+      radarReviewRetryCooldownMs:60000,radarReviewAssessmentTtlMs:180000,...config
     };
     this.scanner=new MarketUniverseScanner({
       rest,
@@ -968,7 +970,115 @@ export class MultiAnalystEngine {
     this.monitorTimer=null;
     this.monitorStartedAt=null;
     this.monitorStats={scan_count:0,last_scan_at:null,last_error:null,next_scan_at:null,last_scan_successful:false};
+    this.pendingRadarReviews=new Map();
+    this.latestAnalystAssessments=new Map();
+    this.lastRadarReviewSelection=[];
   }
+
+  _pruneRadarReviewState(now=this.clock()){
+    const queueTtl=Math.max(10000,Number(this.config.radarReviewQueueTtlMs)||300000);
+    for(const [symbol,item] of this.pendingRadarReviews){
+      if(now-Number(item?.last_queued_at||item?.first_queued_at||0)>queueTtl)this.pendingRadarReviews.delete(symbol);
+    }
+    const assessmentTtl=Math.max(60000,Number(this.config.radarReviewAssessmentTtlMs)||180000);
+    const retention=Math.max(10*60*1000,assessmentTtl*4);
+    for(const [symbol,item] of this.latestAnalystAssessments){
+      if(now-Number(item?.assessed_at_ms||0)>retention)this.latestAnalystAssessments.delete(symbol);
+    }
+    while(this.pendingRadarReviews.size>Math.max(1,Math.trunc(Number(this.config.radarReviewMaxQueue)||200))){
+      const oldest=[...this.pendingRadarReviews.values()].sort((a,b)=>a.first_queued_at-b.first_queued_at)[0];
+      if(!oldest)break;
+      this.pendingRadarReviews.delete(oldest.symbol);
+    }
+    while(this.latestAnalystAssessments.size>1000){
+      const oldest=[...this.latestAnalystAssessments.values()].sort((a,b)=>a.assessed_at_ms-b.assessed_at_ms)[0];
+      if(!oldest)break;
+      this.latestAnalystAssessments.delete(oldest.symbol);
+    }
+  }
+
+  enqueueRadarReview(symbol,{sourceRadar='UNKNOWN_RADAR'}={}){
+    const clean=String(symbol||'').trim().toUpperCase();
+    if(!/^[A-Z0-9]{2,30}$/.test(clean))return {queued:false,reason:'INVALID_SYMBOL',pending_count:this.pendingRadarReviews.size};
+    const now=this.clock();
+    this._pruneRadarReviewState(now);
+    const source=String(sourceRadar||'UNKNOWN_RADAR').trim().toUpperCase().slice(0,80)||'UNKNOWN_RADAR';
+    const existing=this.pendingRadarReviews.get(clean);
+    if(existing){
+      existing.last_queued_at=now;
+      if(!existing.source_radars.includes(source)&&existing.source_radars.length<8)existing.source_radars.push(source);
+      return {queued:true,already_queued:true,symbol:clean,pending_count:this.pendingRadarReviews.size};
+    }
+    const capacity=Math.max(1,Math.min(1000,Math.trunc(Number(this.config.radarReviewMaxQueue)||200)));
+    if(this.pendingRadarReviews.size>=capacity){
+      const oldest=[...this.pendingRadarReviews.values()].sort((a,b)=>a.first_queued_at-b.first_queued_at)[0];
+      if(oldest)this.pendingRadarReviews.delete(oldest.symbol);
+    }
+    this.pendingRadarReviews.set(clean,{
+      symbol:clean,first_queued_at:now,last_queued_at:now,last_attempt_at:null,
+      attempts:0,last_error:null,source_radars:[source]
+    });
+    return {queued:true,already_queued:false,symbol:clean,pending_count:this.pendingRadarReviews.size};
+  }
+
+  getLatestAssessment(symbol,{maxAgeMs=Number(this.config.radarReviewAssessmentTtlMs)||180000}={}){
+    const clean=String(symbol||'').trim().toUpperCase();
+    const now=this.clock();
+    this._pruneRadarReviewState(now);
+    const row=this.latestAnalystAssessments.get(clean);
+    if(!row)return null;
+    const age=Math.max(0,now-Number(row.assessed_at_ms||0));
+    if(age>Math.max(1000,Number(maxAgeMs)||180000))return null;
+    return {...row,age_ms:age};
+  }
+
+  radarReviewQueueSnapshot(now=this.clock()){
+    this._pruneRadarReviewState(now);
+    const rows=[...this.pendingRadarReviews.values()];
+    const oldest=rows.length?Math.min(...rows.map(x=>Number(x.first_queued_at)||now)):null;
+    const assessmentTtl=Math.max(60000,Number(this.config.radarReviewAssessmentTtlMs)||180000);
+    return {
+      pending_count:rows.length,
+      max_queue:Math.max(1,Math.min(1000,Math.trunc(Number(this.config.radarReviewMaxQueue)||200))),
+      queue_ttl_ms:Math.max(10000,Number(this.config.radarReviewQueueTtlMs)||300000),
+      priority_slots_per_cycle:Math.max(1,Math.min(5,Math.trunc(Number(this.config.radarReviewSlotsPerCycle)||4))),
+      retry_cooldown_ms:Math.max(15000,Number(this.config.radarReviewRetryCooldownMs)||60000),
+      oldest_pending_age_ms:oldest===null?0:Math.max(0,now-oldest),
+      last_selected_symbols:this.lastRadarReviewSelection.slice(),
+      recent_assessment_count:rows.length?this.latestAnalystAssessments.size:this.latestAnalystAssessments.size,
+      assessment_ttl_ms:assessmentTtl
+    };
+  }
+
+  _recordLatestAssessment(item,now=this.clock()){
+    const analysts=Array.isArray(item?.analysts)?item.analysts:[];
+    const ids=analysts.map(x=>String(x?.id||'')).filter(Boolean);
+    const uniqueIds=new Set(ids);
+    const placeholderIds=ids.filter(id=>/^ANALYST_\\d+$/i.test(id));
+    const analysisFailed=(Array.isArray(item?.reason_codes)?item.reason_codes:[]).includes('MULTI_ANALYST_ANALYSIS_FAILED');
+    const execution=item?.analyst_execution||{};
+    const assessment={
+      symbol:String(item?.symbol||'').toUpperCase(),
+      assessed_at:new Date(now).toISOString(),
+      assessed_at_ms:now,
+      verdict:String(item?.verdict||'UNKNOWN'),
+      direction:String(item?.direction||'NEUTRAL'),
+      final_score:Number.isFinite(Number(item?.final_score))?Number(item.final_score):null,
+      early_score:Number.isFinite(Number(item?.intelligence?.early_score))?Number(item.intelligence.early_score):null,
+      sniper_score:Number.isFinite(Number(item?.final_judge?.sniper_score))?Number(item.final_judge.sniper_score):null,
+      analyst_agreement:Number.isFinite(Number(item?.intelligence?.analyst_agreement))?Number(item.intelligence.analyst_agreement):null,
+      specialist_count:analysts.length,
+      unique_specialists:uniqueIds.size,
+      specialists_complete:execution.specialists_complete===true&&!analysisFailed&&placeholderIds.length===0,
+      final_analyst_complete:execution.final_analyst_complete===true,
+      analysis_failed:analysisFailed,
+      data_valid:item?.data_status?.data_valid===true,
+      hard_reasons:(item?.final_judge?.hardReasons||item?.final_judge?.hard_reasons||[]).slice(0,12)
+    };
+    if(assessment.symbol)this.latestAnalystAssessments.set(assessment.symbol,assessment);
+    this._pruneRadarReviewState(now);
+  }
+
   _rotatingDiscoveryBucket(key,rows,limit){
     const selected=selectWithPriorityRotation(rows,limit,this.discoveryRotationCursors.get(key)||0);
     this.discoveryRotationCursors.set(key,selected.nextCursor);
@@ -1035,6 +1145,29 @@ export class MultiAnalystEngine {
         highPrice24h:Number(x.highPrice),lowPrice24h:Number(x.lowPrice),tickerTime:Number(x.closeTime||x.eventTime||x.openTime||0)
       })).filter(x=>/^[A-Z0-9]{2,30}$/.test(x.symbol)&&universe.includes(x.symbol)&&Number.isFinite(x.lastPrice)&&x.lastPrice>0&&Number.isFinite(x.quoteVolume24h));
 
+      // Radar alerts enter a bounded, fair review queue. They keep notification latency
+      // unchanged; at most a small fixed share of the existing deep-scan budget is reserved
+      // for these symbols while the rest of the market-discovery slots remain available.
+      this._pruneRadarReviewState(this.clock());
+      const normalizedBySymbol=new Map(normalized.map(row=>[row.symbol,row]));
+      const rawTickerBySymbol=new Map(tickers.data.map(row=>[String(row?.symbol||'').toUpperCase(),row]));
+      const configuredDeepPool=Math.max(1,Math.trunc(Number(this.config.deepScanPool)||this.config.discoveryPool));
+      const plannedDeepPool=Math.max(1,Math.min(Math.max(1,Math.trunc(Number(this.config.discoveryPool)||1)),configuredDeepPool));
+      const reviewSlots=Math.min(
+        Math.max(1,Math.min(5,Math.trunc(Number(this.config.radarReviewSlotsPerCycle)||4))),
+        Math.max(0,plannedDeepPool-1)
+      );
+      const dueRadarReviews=[...this.pendingRadarReviews.values()]
+        .filter(item=>this.clock()-Number(item.last_queued_at||item.first_queued_at||0)<=Math.max(10000,Number(this.config.radarReviewQueueTtlMs)||300000))
+        .filter(item=>item.last_attempt_at==null||this.clock()-Number(item.last_attempt_at)>=Math.max(15000,Number(this.config.radarReviewRetryCooldownMs)||60000))
+        .sort((a,b)=>a.first_queued_at-b.first_queued_at)
+        .map(item=>({item,normalized:normalizedBySymbol.get(item.symbol),raw:rawTickerBySymbol.get(item.symbol)}))
+        .filter(row=>row.normalized&&row.raw)
+        .slice(0,reviewSlots);
+      const radarPriorityRows=dueRadarReviews.map(({item,normalized:row,raw})=>({
+        ...raw,...row,_radar_review_priority:true,_radar_review_sources:item.source_radars.slice()
+      }));
+
       const top=rankTickerRows(tickers.data,universe,{minQuoteVolume24h:this.config.minQuoteVolume24h,limit:Math.max(7,Math.trunc(this.config.discoveryPool*.36))});
       const bottom=rankBottomTickerRows(tickers.data,universe,{minQuoteVolume24h:this.config.minQuoteVolume24h,limit:Math.max(4,Math.trunc(this.config.discoveryPool*.20))});
       const wakeCandidates=normalized.filter(x=>x.priceChange24h>=0.35&&x.priceChange24h<=7).sort((a,b)=>{
@@ -1069,6 +1202,11 @@ export class MultiAnalystEngine {
       const quiet=this._rotatingDiscoveryBucket('quiet',quietCandidates,Math.max(5,Math.trunc(this.config.discoveryPool*.28)));
       // Round-robin the discovery buckets so volume leaders cannot consume the full deep-scan budget.
       const buckets=[top,wake,surge,quiet,bottom],selected=[],seen=new Set();
+      for(const row of radarPriorityRows){
+        if(!row||seen.has(row.symbol))continue;
+        seen.add(row.symbol);selected.push(row);
+      }
+      this.lastRadarReviewSelection=radarPriorityRows.map(row=>String(row.symbol||'').toUpperCase()).slice(0,reviewSlots);
       let bucketIndex=0;
       while(selected.length<this.config.discoveryPool&&buckets.some(b=>b.length)){
         const bucket=buckets[bucketIndex%buckets.length];
@@ -1081,6 +1219,11 @@ export class MultiAnalystEngine {
       if(!selected.length)throw new Error('NO_SPOT_CANDIDATES');
       const deepPool=Math.max(1,Math.min(selected.length,Math.trunc(Number(this.config.deepScanPool)||selected.length)));
       const deepSelected=selected.slice(0,deepPool);
+      // Record attempt time before requests so a repeatedly failing symbol cannot monopolize
+      // the priority lane. Failed symbols become eligible again after the retry cooldown.
+      const attemptedRadarReviews=deepSelected.map(ticker=>this.pendingRadarReviews.get(String(ticker?.symbol||'').toUpperCase())).filter(Boolean);
+      const reviewAttemptAt=this.clock();
+      for(const review of attemptedRadarReviews){review.last_attempt_at=reviewAttemptAt;review.attempts=Number(review.attempts||0)+1;}
       let btc15=[],btc1=[];
       try{
         const [b15,b1]=await Promise.all([
@@ -1128,6 +1271,18 @@ export class MultiAnalystEngine {
           const specialist=analysis.specialist;
           const final=analysis.final;
           const publicAnalysts=specialist.a.map(x=>({...x}));
+          const specialistIds=publicAnalysts.map(x=>String(x?.id||'')).filter(Boolean);
+          const uniqueSpecialistIds=new Set(specialistIds);
+          const specialistPlaceholders=specialistIds.filter(id=>/^ANALYST_\\d+$/i.test(id));
+          const analystFailed=(Array.isArray(row.reason_codes)?row.reason_codes:[]).includes('MULTI_ANALYST_ANALYSIS_FAILED');
+          const analystExecution={
+            expected_analysts:20,
+            specialist_count:publicAnalysts.length,
+            unique_specialists:uniqueSpecialistIds.size,
+            specialists_complete:publicAnalysts.length===19&&uniqueSpecialistIds.size===19&&specialistPlaceholders.length===0&&!analystFailed,
+            final_analyst_complete:Boolean(final&&Number(final.totalAnalysts)===19&&typeof final.verdict==='string'),
+            analysis_failed:analystFailed
+          };
           delete row._analysis;
           this._registerOutcome({
             symbol:row.symbol,entryPrice:row.last_price,direction:final.direction,
@@ -1138,7 +1293,7 @@ export class MultiAnalystEngine {
             quote_volume_24h:row.quote_volume_24h,liquidity_quality:row.liquidity_quality,data_quality:row.data_quality,
             direction:final.direction,verdict:final.verdict,final_score:final.score,
             consensus:{positive:final.positiveAnalysts,strong:final.strongAnalysts,total:final.totalAnalysts,ratio:final.totalAnalysts>0?final.positiveAnalysts/final.totalAnalysts:0,bearish_strong:Number(final.bearishStrongAnalysts||0)},
-            analysts:publicAnalysts,final_judge:final,
+            analysts:publicAnalysts,analyst_execution:analystExecution,final_judge:final,
             highlights:specialist.a.filter(x=>x.score>=72).sort((a,b)=>b.score-a.score).slice(0,6),
             risk_flags:row.risk_flags||[],reason_codes:row.reason_codes||[],
             intelligence:{
@@ -1160,6 +1315,19 @@ export class MultiAnalystEngine {
         }
       });
       const live=scanned.filter(Boolean);
+      const failedRadarReviewSymbols=new Set(scanErrors.map(x=>String(x?.symbol||'').toUpperCase()));
+      for(const ticker of deepSelected){
+        const symbol=String(ticker?.symbol||'').toUpperCase();
+        if(!this.pendingRadarReviews.has(symbol))continue;
+        if(failedRadarReviewSymbols.has(symbol)){
+          const review=this.pendingRadarReviews.get(symbol);
+          if(review)review.last_error=String(scanErrors.find(x=>String(x?.symbol||'').toUpperCase()===symbol)?.error||'SCAN_FAILED').slice(0,160);
+        }else{
+          this.pendingRadarReviews.delete(symbol);
+        }
+      }
+      const assessmentAt=this.clock();
+      for(const item of live)this._recordLatestAssessment(item,assessmentAt);
       const validLive=live.filter(x=>x?.data_status?.data_valid===true);
       const gateRejected=live.filter(x=>x?.data_status?.data_valid!==true);
 
@@ -1213,6 +1381,7 @@ export class MultiAnalystEngine {
           gate_rejected:gateRejected.length,
           failed_analyses:scanErrors.length,
           scan_errors:scanErrors.slice(0,20),
+          radar_review_queue:this.radarReviewQueueSnapshot(this.clock()),
           gate_rejections:gateRejected.slice(0,20).map(x=>({
             symbol:x.symbol,
             reasons:x.reason_codes||[],
@@ -1245,7 +1414,8 @@ export class MultiAnalystEngine {
   getCached({quote=this.config.quote}={}){
     const key=String(quote||this.config.quote).toUpperCase();
     if(!this.cache||this.cache.quote!==key||this.cache.expiresAt<=this.clock())return null;
-    return this.cache.value;
+    const value=this.cache.value;
+    return {...value,diagnostics:{...(value?.diagnostics||{}),radar_review_queue:this.radarReviewQueueSnapshot(this.clock())}};
   }
   start(){
     if(this.running)return;
