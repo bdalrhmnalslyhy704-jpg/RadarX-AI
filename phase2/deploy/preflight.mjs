@@ -1,4 +1,5 @@
 import {mkdirSync,accessSync,constants} from 'node:fs';
+import {createPrivateKey} from 'node:crypto';
 import {resolvePort,assertAllowedHost} from '../runtime.mjs';
 
 const TRUE='true';
@@ -28,14 +29,26 @@ export function assertDeploymentEnvironment(env=process.env){
   if(testFlag!==TRUE&&testFlag!==FALSE) throw new Error('RADARX_STAGING_TEST_PUSH_ENABLED_MUST_BE_EXPLICIT_TRUE_OR_FALSE');
 
   const provider=String(env.RADARX_PUSH_PROVIDER??'').trim().toLowerCase();
-  if(provider!=='webpush') throw new Error('RADARX_PUSH_PROVIDER_WEBPUSH_REQUIRED');
+  if(!['webpush','fcm'].includes(provider)) throw new Error('RADARX_PUSH_PROVIDER_WEBPUSH_OR_FCM_REQUIRED');
 
   const auth=required('RADARX_AUTH_SECRET',env.RADARX_AUTH_SECRET);
   if(auth.length<32) throw new Error('RADARX_AUTH_SECRET_TOO_SHORT');
 
-  required('VAPID_SUBJECT',env.VAPID_SUBJECT);
-  required('VAPID_PUBLIC_KEY',env.VAPID_PUBLIC_KEY);
-  required('VAPID_PRIVATE_KEY',env.VAPID_PRIVATE_KEY);
+  if(provider==='webpush'){
+    required('VAPID_SUBJECT',env.VAPID_SUBJECT);
+    required('VAPID_PUBLIC_KEY',env.VAPID_PUBLIC_KEY);
+    required('VAPID_PRIVATE_KEY',env.VAPID_PRIVATE_KEY);
+  }else{
+    required('FCM_PROJECT_ID',env.FCM_PROJECT_ID);
+    const rawServiceAccount=required('FCM_SERVICE_ACCOUNT_JSON',env.FCM_SERVICE_ACCOUNT_JSON);
+    let serviceAccount;
+    try{serviceAccount=JSON.parse(rawServiceAccount);}catch{throw new Error('FCM_SERVICE_ACCOUNT_JSON_INVALID');}
+    if(serviceAccount?.type!=='service_account'||typeof serviceAccount?.client_email!=='string'||!serviceAccount.client_email.includes('@')||
+       typeof serviceAccount?.private_key!=='string'||!serviceAccount.private_key.includes('BEGIN PRIVATE KEY')||
+       !serviceAccount.private_key.includes('END PRIVATE KEY'))
+      throw new Error('FCM_SERVICE_ACCOUNT_JSON_INVALID');
+    try{createPrivateKey(serviceAccount.private_key);}catch{throw new Error('FCM_SERVICE_ACCOUNT_PRIVATE_KEY_INVALID');}
+  }
 
   const origins=String(env.RADARX_ALLOWED_ORIGINS??'').split(',').map(x=>x.trim()).filter(Boolean);
   if(!origins.length) throw new Error('RADARX_ALLOWED_ORIGINS_REQUIRED');

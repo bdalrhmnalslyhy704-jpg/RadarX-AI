@@ -76,6 +76,20 @@ Use this checklist for staging only. Mark an item complete only after it is obse
 - [ ] Test notification click opens Settings.
 - [ ] LIVE_MARKET_SIGNAL delivered physically to iPhone, or explicitly marked NOT TESTED.
 
+## Native Android FCM field gate
+
+- [ ] Firebase project has Android app ID `com.radarx.app` and FCM HTTP v1 enabled.
+- [ ] `android/app/google-services.json` was supplied privately for the configured APK build and was not committed.
+- [ ] Railway uses the existing `RadarX-AI-Triple` service and existing `/data` volume only.
+- [ ] `RADARX_PUSH_PROVIDER=fcm`, `FCM_PROJECT_ID`, and valid `FCM_SERVICE_ACCOUNT_JSON` are present as Railway secrets.
+- [ ] Runtime guardrails pass: `RADARX_ENV=production`, `RADARX_STAGING_TEST_PUSH_ENABLED=false`, `RADARX_AUTH_SECRET` is at least 32 characters, `RADARX_ALLOWED_ORIGINS` is exact, `paper_trading=true`, `real_order_execution=false`, and `confidence_score=UNKNOWN`.
+- [ ] APK notification permission is granted and the device registration API returned HTTP 201.
+- [ ] FCM registration token is stored on the server but absent from API responses and logs.
+- [ ] A staging-configured test build receives `TEST_PUSH_ONLY` while foreground and background; production test endpoint remains disabled.
+- [ ] A real eligible RadarX alert reaches the physical device and has matching server/device timestamps.
+- [ ] Logcat recorded `FCM_DEVICE_RECEIVED_LATENCY_MS`; report measured percentiles instead of promising a universal sub-second SLA.
+- [ ] Token rotation re-registers the device, and the delete endpoint removes its registration.
+
 ## G. Evidence log
 - Staging PWA URL: ______________________________
 - Staging API URL: _______________________________

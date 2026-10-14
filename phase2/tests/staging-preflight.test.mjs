@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {generateKeyPairSync} from 'node:crypto';
 import {mkdtemp,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -29,6 +30,29 @@ test('TEST_FIXTURE: staging preflight accepts complete safe configuration and st
   const out=assertDeploymentEnvironment(env);
   assert.deepEqual(out,{environment:'staging',pushProvider:'webpush',testPushEnabled:true,allowedOrigins:['https://staging.example.test'],
     host:'127.0.0.1',port:18087,dataDir:env.RADARX_DATA_DIR,paperTrading:true,realOrderExecution:false,confidenceMode:'UNKNOWN'});
+});
+
+test('TEST_FIXTURE: preflight accepts FCM credentials without requiring VAPID keys',async()=>{
+  const {privateKey}=generateKeyPairSync('rsa',{modulusLength:2048});
+  const serviceAccount={type:'service_account',project_id:'radarx-fixture-project',
+    client_email:'radarx-push-fixture@radarx-fixture-project.iam.gserviceaccount.com',
+    private_key:privateKey.export({type:'pkcs8',format:'pem'})};
+  const env=await validEnv({RADARX_PUSH_PROVIDER:'fcm',VAPID_SUBJECT:'',VAPID_PUBLIC_KEY:'',VAPID_PRIVATE_KEY:'',
+    FCM_PROJECT_ID:'radarx-fixture-project',FCM_SERVICE_ACCOUNT_JSON:JSON.stringify(serviceAccount)});
+  const out=assertDeploymentEnvironment(env);
+  assert.equal(out.pushProvider,'fcm');
+  assert.equal(out.paperTrading,true);
+  assert.equal(out.realOrderExecution,false);
+  assert.equal(out.confidenceMode,'UNKNOWN');
+});
+
+test('TEST_FIXTURE: FCM preflight rejects malformed service-account JSON and private keys',async()=>{
+  const malformed=await validEnv({RADARX_PUSH_PROVIDER:'fcm',FCM_PROJECT_ID:'radarx-fixture-project',
+    FCM_SERVICE_ACCOUNT_JSON:'not-json'});
+  assert.throws(()=>assertDeploymentEnvironment(malformed),/FCM_SERVICE_ACCOUNT_JSON_INVALID/);
+  const invalidKey=await validEnv({RADARX_PUSH_PROVIDER:'fcm',FCM_PROJECT_ID:'radarx-fixture-project',
+    FCM_SERVICE_ACCOUNT_JSON:JSON.stringify({type:'service_account',client_email:'x@example.test',private_key:'not-a-private-key'})});
+  assert.throws(()=>assertDeploymentEnvironment(invalidKey),/FCM_SERVICE_ACCOUNT_JSON_INVALID/);
 });
 
 test('TEST_FIXTURE: staging preflight accepts explicit 0.0.0.0 for managed runtime',async()=>{

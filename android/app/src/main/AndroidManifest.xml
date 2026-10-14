@@ -29,6 +29,15 @@
                 android:value="continuous RadarX market alert monitoring requested by the user" />
         </service>
 
+        <service
+            android:name=".RadarXFirebaseMessagingService"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
         <receiver
             android:name=".RadarXBootReceiver"
             android:enabled="true"
