@@ -120,15 +120,16 @@ jobs:
           test -x "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner"
           test -d "$ANDROID_SDK_ROOT/platforms/android-35"
 
-      - name: Provision Firebase Android app configuration
+      - name: Provision Firebase Android app configuration (optional fallback)
         timeout-minutes: 2
         env:
           FIREBASE_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON_BASE64 }}
         run: |
           set -euo pipefail
           if [[ -z "${FIREBASE_GOOGLE_SERVICES_JSON_BASE64:-}" ]]; then
-            echo "::error::Refusing to publish a Build 224 APK without FIREBASE_GOOGLE_SERVICES_JSON_BASE64; native FCM would otherwise be unavailable."
-            exit 1
+            echo "RADARX_APK_FCM_CONFIGURED=false" >> "$GITHUB_ENV"
+            echo "::warning::Firebase secret is not configured. Building signed Build 224 APK with the existing local-polling notification fallback; native FCM delivery is not enabled."
+            exit 0
           fi
           printf '%s' "$FIREBASE_GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > android/app/google-services.json
           node --input-type=module <<'NODE'
@@ -140,7 +141,9 @@ jobs:
             process.exit(1);
           }
           console.log(JSON.stringify({firebase_project_id: config.project_info.project_id, android_package: 'com.radarx.app', config_present: true}));
+          console.log("RADARX_APK_FCM_CONFIGURED=true");
           NODE
+          echo "RADARX_APK_FCM_CONFIGURED=true" >> "$GITHUB_ENV"
 
       - name: Verify Railway backend and Radar 8 public contract
         timeout-minutes: 5
@@ -521,11 +524,16 @@ jobs:
           set -euo pipefail
           TAG="radarx-native-build224-radar8-v2-hawkeye-${GITHUB_RUN_NUMBER}"
           APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
+          if [[ "${RADARX_APK_FCM_CONFIGURED:-false}" == "true" ]]; then
+            PUSH_MODE="Native FCM configured"
+          else
+            PUSH_MODE="Local polling fallback; Firebase FCM credentials not configured"
+          fi
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "RadarX Native — Build 224 + Radar 8 V2 + عين الصقر Hawkeye V2 1.4.9 ${GITHUB_RUN_NUMBER}" \
-            --notes "Signed universal APK built on Build 224 lineage. Version 1.4.9. Includes Radar 8 V2 + Whale Accumulation + X-Factor 20-Analyst Command Center + Radar 9 — عين الصقر Hawkeye V2 + OGN-inspired Move Forensics + Evidence Trajectory Memory, continuous independent background monitoring (auto-start enabled by default), redesigned premium main dashboard, embedded Android UI, Spot/Paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
+            --notes "Signed universal APK built on Build 224 lineage. Version 1.4.9. Push mode: $PUSH_MODE. Includes Radar 8 V2 + Whale Accumulation + X-Factor 20-Analyst Command Center + Radar 9 — عين الصقر Hawkeye V2 + OGN-inspired Move Forensics + Evidence Trajectory Memory, continuous independent background monitoring (auto-start enabled by default), redesigned premium main dashboard, embedded Android UI, Spot/Paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
 
       - name: Verify published HTTPS download
         run: |
