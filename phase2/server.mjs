@@ -31,6 +31,7 @@ import {assertDeploymentEnvironment,assertReadOnlyStagingConfig} from './deploy/
 import {sanitizeLogMessage} from './runtime.mjs';
 import {MultiAnalystEngine} from './core/multi-analyst-engine.mjs';
 import {RadarSwarmCoordinator} from './core/radar-swarm-coordinator.mjs';
+import {instrumentRadarCycle} from './core/radar-telemetry.mjs';
 
 export async function startServer({
   config=CONFIG,
@@ -188,6 +189,18 @@ export async function startServer({
     {id:'RADAR11_WHALE',name:'تجمع الحيتان',instance:whaleAccumulationRadar},
     {id:'RADAR12_PROFESSOR',name:'البروفيسور',instance:professorRadar}
   ]});
+  // Install cycle timing before any radar starts so the first real cycle is measured.
+  const radarCycleTelemetrySetup=[
+    ['RADAR1',moveSentinel],['RADAR2',strongMoveRadar],['RADAR3',rotationLagRadar],
+    ['RADAR4',liquidityAbsorptionRadar],['RADAR5',kahirRadar],['RADAR6',doomsdayRadar],
+    ['RADAR7',alMuqawimRadar],['RADAR8',earlyExpansionRadar],['RADAR9_FALCON_EYE',falconEyeRadar],
+    ['RADAR10_COIN_HUNTER',coinHunterRadar],['RADAR11_WHALE',whaleAccumulationRadar],
+    ['RADAR12_PROFESSOR',professorRadar]
+  ].map(([radar,instance])=>({radar,instrumented:instrumentRadarCycle(instance,radar)}));
+  logger.info?.('[RADAR_CYCLE_TELEMETRY_SETUP] '+JSON.stringify({
+    expected:12,instrumented:radarCycleTelemetrySetup.filter(x=>x.instrumented).length,
+    skipped:radarCycleTelemetrySetup.filter(x=>!x.instrumented).map(x=>x.radar)
+  }));
   const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,multiAnalystRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,marketRadarRest,radarSwarm});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
