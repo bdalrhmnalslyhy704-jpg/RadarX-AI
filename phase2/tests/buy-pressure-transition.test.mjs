@@ -29,8 +29,10 @@ function makeBase() {
 
 function makeTransition({ takerShare = 0.56, volume = 1800, trades = 140 } = {}) {
   const rows = makeBase();
-  for (const candle of rows.slice(-12)) {
-    const close = candle.close;
+  for (const [index, candle] of rows.slice(-12).entries()) {
+    // A modest positive hourly drift, still well below the late-move guard.
+    const close = candle.close * (1 + index * 0.0003);
+    candle.close = close;
     candle.open = close * 0.9994;
     candle.high = close * 1.001;
     candle.low = close * 0.995;
