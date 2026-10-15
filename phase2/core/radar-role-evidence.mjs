@@ -75,3 +75,25 @@ export function buildRadarRoleEvidence({candles=[],relativeCandles=candles,bench
    evidence:excess!==null?'CLOSED_CANDLE_RETURN_SPREAD':marketDaily!==null||peerDaily!==null?'DAILY_MARKET_AND_LIQUIDITY_PEER_SPREAD':'BENCHMARK_CLOSED_CANDLES_UNAVAILABLE'},
   failed_breakout:failedBreakout(candles,{now,lookbackBars,volumeRatio,tradeRatio,takerBuyRatio}),continuation:continuation(candles,{now,lookbackBars})};
 }
+
+
+export function attachDailyRelativeStrength(rows=[]) {
+  const list=Array.isArray(rows)?rows.filter(row=>row&&row.symbol):[];
+  const changes=list.map(row=>row.priceChange24h).filter(finite).map(Number);
+  const marketMedian=median(changes);
+  return list.map(row=>{
+    const move=Number(row.priceChange24h), q=Number(row.quoteVolume24h)||0;
+    const peers=list.filter(peer=>{
+      if(String(peer.symbol).toUpperCase()===String(row.symbol).toUpperCase()||q<=0||!finite(peer.priceChange24h))return false;
+      const v=Number(peer.quoteVolume24h)||0;
+      return v>=q*0.5&&v<=q*2;
+    });
+    const peerMedian=median(peers.map(peer=>Number(peer.priceChange24h)));
+    return {...row,
+      marketMedianChange24hPct:marketMedian,
+      relativeStrengthMarket24hPct:finite(row.priceChange24h)&&marketMedian!==null?move-marketMedian:null,
+      relativeStrengthPeer24hPct:finite(row.priceChange24h)&&peerMedian!==null?move-peerMedian:null,
+      comparableLiquidityPeers:peers.length
+    };
+  });
+}

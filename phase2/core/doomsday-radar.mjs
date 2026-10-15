@@ -346,6 +346,11 @@ function buildAlert(candidate,analysis,now){
     symbol,market:'SPOT',direction:'UP_MOVE',
     price:finite(candidate.lastPrice),price_change_24h:finite(candidate.priceChange24h),
     opportunity_score:analysis.score,potential_label:analysis.stage,
+    data_quality:Number.isFinite(Number(analysis.data_quality))?Number(analysis.data_quality):0,
+    data_stale:analysis.data_stale===true,
+    data_quality_reasons:Array.isArray(analysis.data_quality_reasons)?analysis.data_quality_reasons:[],
+    data_status:{status:analysis.data_stale?'DATA_STALE':analysis.data_quality===90?'LIVE_DATA':'DATA_UNAVAILABLE',stale:analysis.data_stale===true,source:analysis.source},
+    liquidity_quality:Math.min(100,60+Math.log10(Math.max(1,(Number(candidate.quoteVolume24h)||0)/500000))*32),
     doomsday:analysis,reasons:analysis.reasons,
     risk_flags:[
       Math.abs(finite(candidate.priceChange24h,0))>=12?'DAILY_EXTENSION_ATTENTION':null,

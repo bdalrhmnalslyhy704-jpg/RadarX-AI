@@ -1,6 +1,6 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
-import {validateClosedCandleSeries} from './radar-role-evidence.mjs';
+import {validateClosedCandleSeries,attachDailyRelativeStrength} from './radar-role-evidence.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -192,6 +192,13 @@ export function buildAlMuqawimAnalysis(series,ticker,now=Date.now(),config={}){
     trendlineScore*.15+
     maScore*.15
   );
+  const marketMove=finite(ticker?.marketMedianChange24hPct,null);
+  const marketExcess=finite(ticker?.relativeStrengthMarket24hPct,null);
+  const peerExcess=finite(ticker?.relativeStrengthPeer24hPct,null);
+  const relativeStatus=marketExcess===null&&peerExcess===null?'UNKNOWN':
+    ((marketExcess??-Infinity)>=0.75||(peerExcess??-Infinity)>=0.75)?'OUTPERFORMING':
+    ((marketExcess??Infinity)<=-0.75&&(peerExcess??Infinity)<=-0.75)?'UNDERPERFORMING':'IN_LINE';
+  const resilientDuringDecline=marketMove!==null&&marketMove<=-0.5&&marketExcess!==null&&marketExcess>=0.75&&peerExcess!==null&&peerExcess>=0.5;
   const entryRisk=major==='UP'
     ?(m15.direction==='DOWN'?'AGAINST_HTF_TREND':'ALIGNED')
     :(major==='DOWN'
@@ -222,10 +229,13 @@ export function buildAlMuqawimAnalysis(series,ticker,now=Date.now(),config={}){
     score:Number(score.toFixed(1)),
     entry_risk:entryRisk,
     timeframes:{'4h':h4,'1h':h1,'15m':m15},
+    relative_strength:{market_median_change_24h_pct:marketMove,excess_vs_market_24h_pct:marketExcess,excess_vs_liquidity_peers_24h_pct:peerExcess,status:relativeStatus,resilient_during_market_decline:resilientDuringDecline,evidence:marketExcess!==null||peerExcess!==null?'24H_MARKET_AND_LIQUIDITY_PEER_SPREAD':'UNAVAILABLE'},
     components:{market_structure:structureScore,higher_timeframe_alignment:htfAligned,lower_timeframe_agreement:lowerAgreement,trendline:trendlineScore,moving_average:maScore,entry_timing:timing.score,entry_freshness:timing.freshness},
     trigger:{min_score:86,required_htf_alignment:'4h+1h',required_structure:'HH+HL',entry_timing_min:78,entry_freshness_min:72,max_24h_move_pct:8,max_distance_from_15m_ma_pct:3.5,closed_candles_only:true},
     reasons:[
       ...reasons,
+      relativeStatus==='OUTPERFORMING'?'تفوق نسبي على متوسط السوق أو العملات المماثلة في السيولة':null,
+      resilientDuringDecline?'صمود نسبي أثناء تراجع السوق مع تفوق على العملات المشابهة':null,
       timing.notExtended?'عدم مطاردة بعد اندفاعة قصيرة':'تحذير: الحركة القصيرة ممتدة',
       timing.nearResistance?'اختبار مقاومة قريب':'المقاومة ليست في نقطة اختبار مثالية',
       Number.isFinite(timing.volumeRatio)&&timing.volumeRatio>=1.12?'عودة مشاركة الحجم':'الحجم لا يثبت التجدد',
@@ -254,6 +264,11 @@ export function buildAlMuqawimAlert(ticker,series,now,config={}){
     price_change_24h:finite(ticker?.priceChange24h),
     opportunity_score:analysis.score,
     potential_label:analysis.stage,
+    data_quality:Number.isFinite(Number(analysis.data_quality))?Number(analysis.data_quality):0,
+    data_stale:analysis.data_stale===true,
+    data_quality_reasons:Array.isArray(analysis.data_quality_reasons)?analysis.data_quality_reasons:[],
+    data_status:{status:analysis.data_stale?'DATA_STALE':analysis.data_quality===90?'LIVE_DATA':'DATA_UNAVAILABLE',stale:analysis.data_stale===true,source:analysis.source},
+    relative_strength:analysis.relative_strength||null,
     almuqawim:analysis,
     reasons:analysis.reasons,
     risk_flags:analysis.entry_risk==='AGAINST_HTF_TREND'?['AGAINST_HIGHER_TIMEFRAME']:[],
@@ -273,7 +288,7 @@ export class AlMuqawimRadar{
     if(!store)throw new Error('STORE_REQUIRED');
     this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={quote:'USDT',pollMs:60000,universeRefreshMs:5*60*1000,minQuoteVolume24h:1000000,batchSize:5,alertCooldownMs:45*60*1000,minScore:86,minEntryTimingScore:78,minEntryFreshness:72,maxAlert24hMovePct:8,maxAlertsPerHour:3,maPeriod:50,...config};
-    this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;this.lastAlertAt=new Map();this.alertTimestamps=[];this.alertCount=0;this.scans=0;this.lastError=null;this.lastScanAtMs=null;this.busy=false;
+    this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;this.lastAlertAt=new Map();this.alertTimestamps=[];this.alertCount=0;this.scans=0;this.lastError=null;this.lastScanAtMs=null;this.busy=false;this.latestResults=[];
   }
   start(){
     if(this.running)return;
@@ -291,9 +306,10 @@ export class AlMuqawimRadar{
   }
   async tickerRows(){
     const r=await this.rest.request('/api/v3/ticker/24hr');
-    return (Array.isArray(r.data)?r.data:[]).map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
+    const rows=(Array.isArray(r.data)?r.data:[]).map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
       .filter(x=>this.universe.includes(x.symbol))
       .filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h);
+    return attachDailyRelativeStrength(rows);
   }
   selectBatch(rows){
     if(!Array.isArray(rows)||!rows.length)return [];
@@ -323,6 +339,7 @@ export class AlMuqawimRadar{
     ]);
     const alert=buildAlMuqawimAlert(row,{ '4h':r4.candles,'1h':r1.candles,'15m':r15.candles },this.clock(),this.config);
     this.scans++;
+    this.latestResults=[{symbol:alert.symbol,stage:alert.potential_label,score:alert.opportunity_score,eligible:alert.eligible,relative_strength:alert.relative_strength,reason_codes:(alert.data_quality_reasons?.length?alert.data_quality_reasons:(alert.reasons||[]))},...this.latestResults.filter(x=>x.symbol!==alert.symbol)].slice(0,20);
     const timing=alert.entry_timing||{};
     const ageCutoff=this.clock()-60*60*1000;
     this.alertTimestamps=this.alertTimestamps.filter(ts=>Number(ts)>ageCutoff);
@@ -356,7 +373,7 @@ export class AlMuqawimRadar{
     }finally{this.busy=false;}
   }
   health(){
-    return {running:this.running,radar:'ALMUQAWIM_RADAR',universe:this.universe.length,last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,busy:this.busy,
+    return {running:this.running,radar:'ALMUQAWIM_RADAR',universe:this.universe.length,last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,busy:this.busy,latest_results:this.latestResults.slice(0,10),relative_resilient_candidates:this.latestResults.filter(x=>x.relative_strength?.resilient_during_market_decline).map(x=>x.symbol),
       rest:this.rest?.health?.()||null,
       algorithms:['MARKET_STRUCTURE_HH_HL_LH_LL','TRENDLINE_DIRECTION','MOVING_AVERAGE_FILTER','HIGHER_TIMEFRAME_ALIGNMENT','LOWER_TIMEFRAME_RISK_GUARD','ENTRY_TIMING_FRESHNESS','LOCAL_RESISTANCE_TEST','ANTI_CHASE_DISTANCE','HOURLY_ALERT_BUDGET'],
       source:'Binance Public REST',closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'};

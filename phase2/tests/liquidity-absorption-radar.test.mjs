@@ -78,6 +78,9 @@ test('Radar 4 alert identifies source and 12-hour discovery time',()=>{
   assert.equal(alert.paper_trading,true);
   assert.equal(alert.real_order_execution,false);
   assert.equal(alert.confidence_score,'UNKNOWN');
+  assert.equal(alert.data_quality,90);
+  assert.equal(alert.data_stale,false);
+  assert.ok(alert.liquidity_quality>=60);
   const decorated=decorateRadarAlert(alert);
   assert.equal(decorated.detected_at_iso,new Date(NOW).toISOString());
 });

@@ -4,7 +4,7 @@ import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
 import {assessQuietBaseActivityShock} from './activity-shock.mjs';
-import {buildRadarRoleEvidence} from './radar-role-evidence.mjs';
+import {buildRadarRoleEvidence,attachDailyRelativeStrength} from './radar-role-evidence.mjs';
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
 import {isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
 
@@ -458,6 +458,7 @@ export class FalconEyeRadar {
     this.lastAlertAt=new Map();this.lastFutures=new Map();this.alertTimestamps=[];
     this.scans=0;this.alertCount=0;this.lastScanAtMs=null;this.lastError=null;this.busy=false;this.latestCandidates=[];this.lastBatchSymbols=[];this.lastBatchAt=null;this.lastPatrolVisits=0;
     this.pulseHistory=new Map();this.marketCoverage=0;this.pulseReadyCount=0;this.marketBreadthPct=0;this.fastCandidates=0;
+    this.decisionTrail=[];
     this.lastSelectionStats={cycle:0,input_rows:0,eligible_total:0,target:0,selected_total:0,quiet_selected:0,patrol_selected:0,exceptional_bypass_selected:0,incomplete_selected:0,shortfall:0,selected_symbols:[]};
   }
   start(){
@@ -478,21 +479,7 @@ export class FalconEyeRadar {
     const raw=(Array.isArray(r.data)?r.data:[]).map(x=>normalizeRadarTickerRow(x,this.config.quote)).filter(Boolean)
       .filter(x=>isDirectionalCandidateSymbol(x.symbol))
       .filter(x=>x.quoteVolume24h>=this.config.fastMinQuoteVolume24h&&this.universe.includes(x.symbol)&&isDirectionalCandidateSymbol(x.symbol));
-    const marketMoves=raw.map(x=>x.priceChange24h).filter(hasFiniteValue).map(Number);
-    const marketMedianChange24hPct=median(marketMoves);
-    const benchmarked=raw.map(row=>{
-      const q=Number(row.quoteVolume24h)||0;
-      const comparable=raw.filter(peer=>peer.symbol!==row.symbol&&q>0&&Number(peer.quoteVolume24h)>=q*.5&&Number(peer.quoteVolume24h)<=q*2);
-      const peerMedian=median(comparable.map(peer=>peer.priceChange24h).filter(hasFiniteValue).map(Number));
-      return {...row,
-        marketMedianChange24hPct,
-        relativeStrengthMarket24hPct:hasFiniteValue(row.priceChange24h)&&Number.isFinite(marketMedianChange24hPct)
-          ?Number(row.priceChange24h)-marketMedianChange24hPct:null,
-        relativeStrengthPeer24hPct:hasFiniteValue(row.priceChange24h)&&Number.isFinite(peerMedian)
-          ?Number(row.priceChange24h)-peerMedian:null,
-        comparableLiquidityPeers:comparable.length
-      };
-    });
+    const benchmarked=attachDailyRelativeStrength(raw);
     const pulse=updateMarketPulseHistory(benchmarked,this.pulseHistory,this.clock(),{intervalMs:this.config.pollMs});
     this.marketCoverage=pulse.coverage;this.pulseReadyCount=pulse.readyCount;this.marketBreadthPct=pulse.breadthPct;
     this.fastCandidates=pulse.rows.filter(x=>x.market_pulse?.fast_trigger).length;
@@ -682,6 +669,7 @@ export class FalconEyeRadar {
     this.scans++;
     const gate=evaluateRadarNotificationGate(alert,{now});
     alert.elite_gate=gate;
+    this.recordDecisionDiagnostics(alert,gate,now);
     this.latestCandidates=[alert,...this.latestCandidates.filter(x=>x.symbol!==alert.symbol)].sort((a,b)=>
       Number(b.opportunity_score||0)-Number(a.opportunity_score||0)
     ).slice(0,20);
@@ -695,6 +683,14 @@ export class FalconEyeRadar {
     if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
     this.lastAlertAt.set(row.symbol,now);this.alertTimestamps.push(now);this.alertCount++;
     return decorated;
+  }
+  recordDecisionDiagnostics(alert,gate,now=this.clock()){
+    const failures=Array.isArray(gate?.failures)?gate.failures.map(String):[];
+    this.decisionTrail.push({at:Number(now),symbol:String(alert?.symbol||'UNKNOWN'),
+      stage:String(alert?.pre_expansion_stage??alert?.falcon_eye?.stage??alert?.potential_label??'UNKNOWN'),
+      score:hasFiniteValue(alert?.opportunity_score)?Number(alert.opportunity_score):null,
+      analysis_eligible:alert?.eligible===true,gate_eligible:gate?.eligible===true,failures:failures.slice(0,20)});
+    if(this.decisionTrail.length>240)this.decisionTrail.splice(0,this.decisionTrail.length-240);
   }
   async tick(){
     if(!this.running||this.busy)return;
@@ -738,12 +734,22 @@ export class FalconEyeRadar {
   }
   async readFalconEyeAlerts({sinceMs=0,limit=100}={}){return this.store.readFalconEyeAlerts({sinceMs,limit});}
   health(){
-    const now=this.clock();
+    const now=this.clock(),windowMs=15*60_000;
+    const recent=this.decisionTrail.filter(item=>Number.isFinite(item.at)&&now-item.at>=0&&now-item.at<=windowMs);
+    const failures=new Map(),stages=new Map();
+    for(const item of recent){stages.set(item.stage,(stages.get(item.stage)||0)+1);for(const reason of item.failures)failures.set(reason,(failures.get(reason)||0)+1);}
+    const decisionDiagnostics={window_ms:windowMs,candidates_observed:recent.length,
+      analysis_eligible:recent.filter(item=>item.analysis_eligible).length,
+      notification_gate_accepted:recent.filter(item=>item.gate_eligible).length,
+      notification_gate_rejected:recent.filter(item=>!item.gate_eligible).length,
+      stage_counts:Object.fromEntries([...stages.entries()].sort((a,b)=>b[1]-a[1])),
+      top_rejection_reasons:[...failures.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,10).map(([reason,count])=>({reason,count})),
+      last_decision:recent.at(-1)||null};
     return {
       running:this.running,radar:'FALCON_EYE_RADAR',radar_name:'Radar 9 — عين الصقر',universe:this.universe.length,last_batch_symbols:this.lastBatchSymbols.slice(),last_batch_count:this.lastBatchSymbols.length,last_batch_at:this.lastBatchAt,last_patrol_visits:this.lastPatrolVisits,deep_scan_min_interval_ms:Math.max(90_000,Number(this.config.deepScanMinIntervalMs)||0,Number(this.config.pollMs||30_000)*2),
       market_coverage:this.marketCoverage,pulse_ready_count:this.pulseReadyCount,market_breadth_pct:this.marketBreadthPct,fast_candidates:this.fastCandidates,
       last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,scans:this.scans,alerts:this.alertCount,
-      last_error:this.lastError,latest_candidates:this.latestCandidates.slice(0,10),selection:this.lastSelectionStats,active_alerts_last_hour:this.alertTimestamps.filter(t=>now-t<60*60*1000).length,
+      last_error:this.lastError,latest_candidates:this.latestCandidates.slice(0,10),selection:this.lastSelectionStats,decision_diagnostics:decisionDiagnostics,active_alerts_last_hour:this.alertTimestamps.filter(t=>now-t<60*60*1000).length,
       alert_budget_per_hour:this.config.maxAlertsPerHour,features:['OGN pre-explosion fingerprint','Quiet-base activity shock (taker buy is not mandatory)','Spot/Futures volume ratio','Open Interest','Funding squeeze context','Forced-liquidation context','Higher-Lows','Compression→Expansion','Relative Strength vs BTC','Anti-chase']
     };
   }

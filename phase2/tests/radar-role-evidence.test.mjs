@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildRadarRoleEvidence,validateClosedCandleSeries} from '../core/radar-role-evidence.mjs';
+import {buildRadarRoleEvidence,validateClosedCandleSeries,attachDailyRelativeStrength} from '../core/radar-role-evidence.mjs';
 const START=1_800_000_000_000;
 function bars({n=45,interval=60_000,endAt=START+n*interval-1,startPrice=100,delta=0.002,vol=1000,trades=100}={}){
  const origin=endAt-(n-1)*interval-(interval-1);
@@ -32,4 +32,19 @@ test('continuation reports weak when a recent breakout loses its level and parti
  for(const c of data.slice(-3)){c.open=resistance*1.002;c.high=resistance*1.012;c.low=resistance*0.98;c.quoteVolume=c.close*c.volume;}
  const r=buildRadarRoleEvidence({candles:data,now,intervalMs:60_000,volumeRatio:0.9,tradeRatio:0.8,takerBuyRatio:0.46});
  assert.equal(r.continuation.status,'WEAK');assert.equal(r.continuation.confirmed,false);
+});
+
+
+test('daily relative strength compares broad market median and a same-liquidity peer cohort',()=>{
+ const rows=attachDailyRelativeStrength([
+  {symbol:'COINUSDT',priceChange24h:3,quoteVolume24h:1_000_000},
+  {symbol:'PEERAUSDT',priceChange24h:0,quoteVolume24h:800_000},
+  {symbol:'PEERBUSDT',priceChange24h:1,quoteVolume24h:1_500_000},
+  {symbol:'OUTLIERUSDT',priceChange24h:9,quoteVolume24h:90_000_000}
+ ]);
+ const coin=rows.find(x=>x.symbol==='COINUSDT');
+ assert.equal(coin.marketMedianChange24hPct,2);
+ assert.equal(coin.relativeStrengthMarket24hPct,1);
+ assert.equal(coin.relativeStrengthPeer24hPct,2.5);
+ assert.equal(coin.comparableLiquidityPeers,2);
 });
