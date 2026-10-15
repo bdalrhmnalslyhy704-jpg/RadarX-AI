@@ -211,11 +211,11 @@ test('archive pagination advances beyond 200 same-timestamp alerts without dupli
     state=await store.getRadarSignalOutcomes();
     assert.equal(first.imported,100);
     assert.equal(state.records.length,100);
-    const second=await runRadarSignalOutcomePass({store,rest,now:BASE+2*minute,maxRestCalls:0,logger:{warn(){}}});
+    const second=await runRadarSignalOutcomePass({store,rest,now:BASE+8*minute,maxRestCalls:0,logger:{warn(){}}});
     state=await store.getRadarSignalOutcomes();
     assert.equal(second.imported,100);
     assert.equal(state.records.length,200);
-    const third=await runRadarSignalOutcomePass({store,rest,now:BASE+2*minute,maxRestCalls:0,logger:{warn(){}}});
+    const third=await runRadarSignalOutcomePass({store,rest,now:BASE+14*minute,maxRestCalls:0,logger:{warn(){}}});
     state=await store.getRadarSignalOutcomes();
     assert.equal(third.imported,5);
     assert.equal(state.records.length,205);
