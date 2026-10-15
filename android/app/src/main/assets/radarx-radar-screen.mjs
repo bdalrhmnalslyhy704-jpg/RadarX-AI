@@ -90,24 +90,40 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
     const off=root.querySelector('[data-off]');
     const box=root.querySelector('[data-a]');
     const ref=root.querySelector('[data-ref]');
+    let diagnosticsHtml='';
+    const buildDiagnostics=(entry)=>{
+      if(id!=='FALCON_EYE_RADAR')return '';
+      const h=entry&&entry.health&&typeof entry.health==='object'?entry.health:(entry||{});
+      const d=h.decision_diagnostics;
+      if(!d||typeof d!=='object')return '<section style="margin:8px 0;padding:10px;border-radius:12px;background:#17130c;border:1px solid #6d5428;font-size:10px;color:#f6d89b"><b>تشخيص عين الصقر</b><div>تفاصيل أسباب الرفض غير متاحة في استجابة الحالة الحالية.</div></section>';
+      const count=(v)=>Number.isFinite(Number(v))?String(Number(v)):'—';
+      const fails=Array.isArray(d.top_gate_failures)?d.top_gate_failures:(Array.isArray(d.top_rejection_reasons)?d.top_rejection_reasons:[]);
+      const failText=fails.slice(0,5).map(x=>e(x.reason||x.code||'سبب غير معروف')+' ('+count(x.count)+')').join(' • ')||'لا توجد أسباب رفض مسجلة بعد';
+      const error=h.last_error?'<div style="margin-top:4px;color:#ffb4a8">آخر خطأ: '+e(h.last_error)+'</div>':'';
+      return '<section style="margin:8px 0;padding:10px;border-radius:12px;background:#17130c;border:1px solid #6d5428;font-size:10px;color:#f6d89b">'+
+        '<b>تشخيص عين الصقر — آخر دورة</b><div style="margin-top:5px">فُحص '+count(d.evaluated)+' • رفض التحليل '+count(d.analysis_rejected)+' • رفض النقاط '+count(d.score_rejected)+' • رفض بوابة التنبيه '+count(d.notification_gate_rejected)+' • حد التنبيهات '+count(d.rate_limited)+' • محفوظ '+count(d.alerts_stored)+'</div>'+
+        '<div class="muted" style="margin-top:5px;color:#d8bd82">أكثر أسباب الرفض: '+failText+'</div>'+error+'</section>';
+    };
 
     const setStatus=(x)=>{
-      const live=x && x.running===true;
+      diagnosticsHtml=buildDiagnostics(x);
+      const health=x&&x.health&&typeof x.health==='object'?x.health:x;
+      const live=health && health.running===true;
       stn.className='status '+(live?'live':'');
-      const coverage=live&&x.market_coverage!=null?' • تغطية '+String(x.market_coverage):'';
-      const fast=live&&x.fast_candidates!=null?' • شرارات '+String(x.fast_candidates):'';
-      const ready=live&&x.pulse_ready_count!=null?' • جاهز '+String(x.pulse_ready_count):'';
+      const coverage=live&&health.market_coverage!=null?' • تغطية '+String(health.market_coverage):'';
+      const fast=live&&health.fast_candidates!=null?' • شرارات '+String(health.fast_candidates):'';
+      const ready=live&&health.pulse_ready_count!=null?' • جاهز '+String(health.pulse_ready_count):'';
       stn.textContent=live?'● '+p.n+' يعمل مستقلًا'+coverage+fast+ready:'○ '+p.n+' متوقف';
       on.disabled=live;off.disabled=!live;
     };
 
     const show=(rows)=>{
       if(!Array.isArray(rows)||!rows.length){
-        box.innerHTML='<div class="muted">لا يوجد مرشح أو اكتشاف محفوظ حاليًا.</div>';
+        box.innerHTML=diagnosticsHtml+'<div class="muted">لا يوجد مرشح أو اكتشاف محفوظ حاليًا.</div>';
         return;
       }
       const sorted=[...rows].sort((a,b)=>Number(b.radar_power_score||b.opportunity_score||b.score||0)-Number(a.radar_power_score||a.opportunity_score||a.score||0));
-      box.innerHTML=sorted.slice(0,20).map(x=>{
+      box.innerHTML=diagnosticsHtml+sorted.slice(0,20).map(x=>{
         const rotation=x.rotation||{};
         const isJoker=id==='ROTATION_LAG_RADAR';
         const score=q(x.radar_power_score||x.radar_v2 && x.radar_v2.score||x.opportunity_score||x.score);
@@ -128,7 +144,7 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
 
     async function refresh(force=false){
       if(dead||busy)return;
-      if(!force){
+      if(!force&&id!=='FALCON_EYE_RADAR'){
         const cached=readRadarCache();
         if(cached){
           const body=cached.body||{};
