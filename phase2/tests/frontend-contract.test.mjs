@@ -5,6 +5,15 @@ import vm from 'node:vm';
 
 const root=new URL('../../phase1/',import.meta.url);
 
+test('TEST_FIXTURE: Doomsday radar displays the estimated confirmed activity-start time',async()=>{
+  const text=await readFile(new URL('../../android/app/src/main/assets/radarx-doomsday-radar.mjs',import.meta.url),'utf8');
+  assert.ok(text.includes('movement_start_time_ms'));
+  assert.ok(text.includes('movementStartText'));
+  assert.ok(text.includes('Asia/Aden'));
+  assert.ok(text.includes('بداية سلسلة النشاط المقدّرة'));
+  assert.ok(text.includes('شموع مغلقة'));
+});
+
 test('TEST_FIXTURE: frontend never contains Binance credentials or VAPID private key',async()=>{
   const files=['app.html','settings.html','signal.html','phase2-api.mjs'];
   for(const f of files){
