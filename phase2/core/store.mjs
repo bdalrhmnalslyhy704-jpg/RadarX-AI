@@ -458,11 +458,8 @@ export class DurableStore {
       const result=await updater(current);
       if(result===false)return current;
       const next=result&&typeof result==='object'&&!Array.isArray(result)?result:current;
-      if(next!==current){
-        // The bounded all-radar outcome ledger is compact to keep long-lived
-        // JSON serialization from inflating the production working set.
-        await new Promise(resolve=>setImmediate(resolve));
-      }
+      // The bounded all-radar outcome ledger is compact to keep long-lived
+      // JSON serialization from inflating the production working set.
       await this.writeJson(this.files.radarSignalOutcomes,next);
       return next;
     });
