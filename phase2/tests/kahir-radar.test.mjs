@@ -134,6 +134,20 @@ test('Kahir rejects stale closed candles instead of treating cached movement as 
   assert.equal(result.data_stale,true);
 });
 
+test('Kahir rejects gaps inside its scoring candle window',()=>{
+  const one=candles(150,60000);
+  one.splice(90,1);
+  const result=buildKahirAnalysis({
+    oneMinute:one,fiveMinute:fiveMinuteImpulse(),
+    ticker:{lastPrice:101.2,priceChange24h:1,quoteVolume24h:5_000_000},
+    selfHistory:[{price:100,velocity_bps:1,selfChangePct:.01},{price:100.05,velocity_bps:2,selfChangePct:.05}],
+    marketVelocityBps:1,now:NOW
+  });
+  assert.equal(result.eligible,false);
+  assert.equal(result.stage,'INCOMPLETE_DATA');
+  assert.ok(result.data_quality_reasons.includes('ONE_MINUTE_CLOSED_CANDLE_SEQUENCE_HAS_GAPS'));
+});
+
 test('Kahir rotates deep-scan slots beyond the same highest-activity candidates',()=>{
   const radar=new KahirRadar({rest:{},store:{},config:{deepCandidates:4,deepRotationReserve:2,deepConcurrency:2},clock:()=>NOW,logger:{warn(){}}});
   const rows=Array.from({length:12},(_,i)=>({
