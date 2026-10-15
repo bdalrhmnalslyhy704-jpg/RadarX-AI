@@ -5,7 +5,7 @@ import {mkdtemp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {resolveHost,resolvePort,assertAllowedHost,sanitizeLogMessage} from '../runtime.mjs';
-import {CONFIG} from '../config.mjs';
+import {CONFIG,resolvePushProvider} from '../config.mjs';
 import {startServer} from '../server.mjs';
 
 async function freePort(){
@@ -115,4 +115,24 @@ test('server binds locally on 127.0.0.1 and health/readiness succeed',async()=>{
 
 test('server binds on 0.0.0.0 with staging PORT and health/readiness succeed',async()=>{
   await startAndCheck({host:'0.0.0.0',port:await freePort()});
+});
+
+
+test('push provider is inferred from complete Firebase credentials when no provider is explicitly selected',()=>{
+  assert.equal(resolvePushProvider({FCM_PROJECT_ID:'fixture-project',FCM_SERVICE_ACCOUNT_JSON:'{"project_id":"fixture-project","client_email":"fixture@example.test","private_key":"TEST_PRIVATE_KEY"}'}),'fcm');
+});
+
+test('push provider remains disabled when Firebase credentials are incomplete',()=>{
+  assert.equal(resolvePushProvider({FCM_PROJECT_ID:'fixture-project'}),'none');
+  assert.equal(resolvePushProvider({FCM_SERVICE_ACCOUNT_JSON:'{}'}),'none');
+});
+
+test('explicit push provider selection overrides automatic provider inference',()=>{
+  assert.equal(resolvePushProvider({RADARX_PUSH_PROVIDER:'none',FCM_PROJECT_ID:'fixture-project',FCM_SERVICE_ACCOUNT_JSON:'{}'}),'none');
+  assert.equal(resolvePushProvider({RADARX_PUSH_PROVIDER:'FCM'}),'fcm');
+});
+
+test('complete Web Push credentials are inferred only when Firebase credentials are absent',()=>{
+  assert.equal(resolvePushProvider({VAPID_SUBJECT:'mailto:test@example.test',VAPID_PUBLIC_KEY:'TEST_PUBLIC',VAPID_PRIVATE_KEY:'TEST_PRIVATE'}),'webpush');
+  assert.equal(resolvePushProvider({FCM_PROJECT_ID:'fixture-project',FCM_SERVICE_ACCOUNT_JSON:'{}',VAPID_SUBJECT:'mailto:test@example.test',VAPID_PUBLIC_KEY:'TEST_PUBLIC',VAPID_PRIVATE_KEY:'TEST_PRIVATE'}),'fcm');
 });
