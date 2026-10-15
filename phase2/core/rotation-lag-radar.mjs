@@ -1,6 +1,7 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
+import {assessClosedCandleSeries,assessCandleReadinessSet} from './closed-candle-quality.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -122,9 +123,23 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
   const btc1h=closedCandles(benchmarks?.BTCUSDT?.one_hour,now);
   const eth1h=closedCandles(benchmarks?.ETHUSDT?.one_hour,now);
 
-  if(m15.length<60||h1.length<30||btc15.length<12||eth15.length<12){
-    return {eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true,
-      counts:{fifteen_min:m15.length,one_hour:h1.length,btc15:btc15.length,eth15:eth15.length}};
+  if(m15.length<60||h1.length<30||btc15.length<12||eth15.length<12||btc1h.length<2||eth1h.length<2){
+    return {eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true,data_quality:0,
+      counts:{fifteen_min:m15.length,one_hour:h1.length,btc15:btc15.length,eth15:eth15.length,btc1h:btc1h.length,eth1h:eth1h.length}};
+  }
+  const freshness=assessCandleReadinessSet({
+    fifteen_min:assessClosedCandleSeries(m15,{now,intervalMs:15*60_000,minCount:60,maxAgeMs:30*60_000,label:'ROTATION_15M'}),
+    one_hour:assessClosedCandleSeries(h1,{now,intervalMs:60*60_000,minCount:30,maxAgeMs:75*60_000,label:'ROTATION_1H'}),
+    btc_fifteen_min:assessClosedCandleSeries(btc15,{now,intervalMs:15*60_000,minCount:12,maxAgeMs:30*60_000,label:'BTC_15M'}),
+    eth_fifteen_min:assessClosedCandleSeries(eth15,{now,intervalMs:15*60_000,minCount:12,maxAgeMs:30*60_000,label:'ETH_15M'}),
+    btc_one_hour:assessClosedCandleSeries(btc1h,{now,intervalMs:60*60_000,minCount:2,maxAgeMs:75*60_000,label:'BTC_1H'}),
+    eth_one_hour:assessClosedCandleSeries(eth1h,{now,intervalMs:60*60_000,minCount:2,maxAgeMs:75*60_000,label:'ETH_1H'})
+  });
+  if(!freshness.ready){
+    return {eligible:false,stage:freshness.status==='STALE_DATA'?'STALE_DATA':'INCOMPLETE_DATA',
+      score:null,closed_candles_only:true,data_quality:0,data_stale:freshness.status==='STALE_DATA',
+      reason_codes:freshness.reason_codes,data_quality_checks:freshness.checks,
+      counts:{fifteen_min:m15.length,one_hour:h1.length,btc15:btc15.length,eth15:eth15.length,btc1h:btc1h.length,eth1h:eth1h.length}};
   }
 
   const close15=m15.map(c=>Number(c.close));
