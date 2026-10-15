@@ -8,7 +8,7 @@ const IDS = [
   'FALCON_EYE_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','PROFESSOR_RADAR'
 ];
 function fixture({missingCache = false, stopped = null, staleCycle = false} = {}) {
-  const now = 100_000;
+  const now = 1_000_000;
   const radars = IDS.map(radar => ({
     radar, radar_name: radar, running: radar !== stopped,
     health: {running: radar !== stopped, last_error: null}
