@@ -6,6 +6,10 @@ on:
       - research/build224-monthly-move-forensics-20261015
     paths:
       - phase2/tools/monthly-move-forensics.mjs
+      - phase2/core/quiet-base-pre-expansion.mjs
+      - phase2/tests/buy-pressure-transition.test.mjs
+      - phase2/tests/quiet-base-pre-expansion.test.mjs
+      - phase2/tests/run-tests.mjs
       - .github/workflows/radarx-monthly-market-forensics.yml
   workflow_dispatch:
 
@@ -31,6 +35,9 @@ jobs:
 
       - name: Validate script syntax
         run: node --check phase2/tools/monthly-move-forensics.mjs
+
+      - name: Run closed-candle buy-pressure regression tests
+        run: node --test phase2/tests/quiet-base-pre-expansion.test.mjs phase2/tests/buy-pressure-transition.test.mjs
 
       - name: Download and analyze 30 days of public Spot candles
         env:
