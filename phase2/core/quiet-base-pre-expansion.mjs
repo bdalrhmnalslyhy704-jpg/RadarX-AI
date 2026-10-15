@@ -287,6 +287,9 @@ export function assessQuietBasePreExpansion({
     transitionReturn1hPct >= Number(cfg.minBuyPressureTransitionReturn1hPct) &&
     transitionReturn1hPct <= Number(cfg.maxBuyPressureTransitionReturn1hPct) &&
     transitionBaseRangePct <= Number(cfg.maxBuyPressureTransitionBaseRangePct);
+  const transitionResistanceNear = Number.isFinite(resistanceDistancePct) &&
+    resistanceDistancePct >= -0.75 && resistanceDistancePct <= Number(cfg.maxResistanceDistancePct);
+  const buyPressureTransition = transitionPressureConfirmed && structureConfirmed && transitionResistanceNear;
 
   const recentVolume = mean(recent12.map(row => Math.max(0, Number(row.volume) || 0)));
   const recentTakerBuy = mean(recent12.map(row => {
@@ -350,9 +353,6 @@ export function assessQuietBasePreExpansion({
     }
   };
   const coreBase = compressionConfirmed && structureConfirmed && nearResistance;
-  const transitionResistanceNear = Number.isFinite(resistanceDistancePct) &&
-    resistanceDistancePct >= -0.75 && resistanceDistancePct <= Number(cfg.maxResistanceDistancePct);
-  const buyPressureTransition = transitionPressureConfirmed && structureConfirmed && transitionResistanceNear;
   if (extended) {
     result.classification = 'ALREADY_EXTENDED';
     result.reason = 'ANTI_CHASE_MOVE_ALREADY_EXTENDED';
