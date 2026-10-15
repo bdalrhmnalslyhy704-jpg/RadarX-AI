@@ -19,6 +19,15 @@ function closed(rows,now){
     Number(c.low)>0 && Number(c.close)>0 && Number(c.volume)>=0
   ).sort((a,b)=>Number(a.openTime)-Number(b.openTime));
 }
+function closedSequenceIssue(rows,intervalMs,required){
+  const recent=rows.slice(-required);
+  if(recent.length<required)return 'CLOSED_CANDLE_WINDOW_INCOMPLETE';
+  for(let i=1;i<recent.length;i++){
+    const delta=Number(recent[i].openTime)-Number(recent[i-1].openTime);
+    if(!Number.isFinite(delta)||Math.abs(delta-intervalMs)>1)return 'CLOSED_CANDLE_SEQUENCE_HAS_GAPS';
+  }
+  return null;
+}
 function returns(rows,n){
   if(rows.length<=n)return null;
   return pct(rows.at(-1).close,rows.at(-(n+1)).close);
@@ -130,7 +139,26 @@ function recentImpulse5m(rows){
 
 export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=[],ticker={},instantChangePct=0,now=Date.now(),max24hMovePct=18}={}){
   const m1=closed(oneMinute,now),m5=closed(fiveMinute,now),btc=closed(btcFiveMinute,now);
-  if(m1.length<60||m5.length<50||btc.length<20)return {eligible:false,stage:'WARMING_UP',score:null,early_score:null,closed_candles_only:true};
+  if(m1.length<60||m5.length<50||btc.length<20)return {eligible:false,stage:'WARMING_UP',score:null,early_score:null,closed_candles_only:true,data_quality:0,data_stale:false,data_quality_reasons:['CLOSED_CANDLE_WINDOW_INCOMPLETE']};
+  const oneIssue=closedSequenceIssue(m1,60_000,60);
+  const fiveIssue=closedSequenceIssue(m5,300_000,50);
+  const btcIssue=closedSequenceIssue(btc,300_000,20);
+  const oneAge=Number(now)-Number(m1.at(-1)?.closeTime);
+  const fiveAge=Number(now)-Number(m5.at(-1)?.closeTime);
+  const btcAge=Number(now)-Number(btc.at(-1)?.closeTime);
+  const sequenceIssues=[
+    oneIssue?'ONE_MINUTE_'+oneIssue:null,
+    fiveIssue?'FIVE_MINUTE_'+fiveIssue:null,
+    btcIssue?'BTC_FIVE_MINUTE_'+btcIssue:null
+  ].filter(Boolean);
+  if(sequenceIssues.length){
+    return {eligible:false,stage:'INCOMPLETE_DATA',score:null,early_score:null,closed_candles_only:true,data_quality:0,data_stale:false,
+      data_quality_reasons:sequenceIssues, candle_freshness:{one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge,btc_five_minute_age_ms:btcAge}};
+  }
+  if(![oneAge,fiveAge,btcAge].every(Number.isFinite)||oneAge<0||oneAge>3*60_000||fiveAge<0||fiveAge>10*60_000||btcAge<0||btcAge>10*60_000){
+    return {eligible:false,stage:'DATA_STALE',score:null,early_score:null,closed_candles_only:true,data_quality:0,data_stale:true,
+      data_quality_reasons:['STALE_CLOSED_CANDLES'],candle_freshness:{one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge,btc_five_minute_age_ms:btcAge}};
+  }
   const price=finite(ticker.lastPrice,0);
   if(!(price>0))return {eligible:false,stage:'INVALID_PRICE',score:null,early_score:null,closed_candles_only:true};
 
