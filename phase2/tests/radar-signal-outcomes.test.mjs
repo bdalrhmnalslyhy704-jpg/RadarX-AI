@@ -55,7 +55,7 @@ test('horizon outcomes use complete closed candles and report OHLC excursions wi
   const now=detectedAt+horizon.ms+horizon.intervalMs+minute;
   const record={detected_at:detectedAt,entry_price:100};
   const rows=Array.from({length:5},(_,i)=>candle(detectedAt+i*minute,minute,{
-    open:100,high:i===2?104:101,low:i===3?98:99,close:i===4?102:100.5
+    open:100,high:i===2?104:(i===4?102.5:101),low:i===3?98:99,close:i===4?102:100.5
   }));
   const outcome=evaluateRadarOutcomeHorizon(record,rows,horizon,now);
   assert.equal(outcome.status,'COMPLETE');
