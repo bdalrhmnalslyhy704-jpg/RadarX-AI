@@ -75,6 +75,22 @@ test('high volume and trade count do not pass the new lane when taker-buy pressu
   assert.ok(result.evidence.some(x => x.key === 'buy_pressure_transition_last_closed_hour' && !x.passed));
 });
 
+test('medium-mover-sized buy-share improvement can qualify when structure and participation align', () => {
+  const rows = makeTransition({ takerShare: 0.5492, volume: 1800, trades: 140 });
+  for (const candle of rows.slice(-48, -12)) {
+    candle.takerBuyBaseVolume = candle.volume * 0.5367;
+    candle.takerBuyQuoteVolume = candle.quoteVolume * 0.5367;
+  }
+  const result = run(rows);
+  const metrics = result.metrics.buy_pressure_transition;
+  assert.equal(metrics.available, true, JSON.stringify(metrics));
+  assert.ok(metrics.taker_buy_share >= 0.53);
+  assert.ok(metrics.taker_buy_share_delta >= 0.01, JSON.stringify(metrics));
+  assert.equal(metrics.confirmed, true, JSON.stringify(metrics));
+  assert.equal(result.classification, 'PRE_EXPANSION');
+  assert.equal(result.reason, 'QUIET_BASE_WITH_BUY_PRESSURE_TRANSITION_BEFORE_EXPANSION');
+});
+
 test('high absolute buy share without a fresh increase versus the prior base does not pass', () => {
   const rows = makeTransition({ takerShare: 0.56, volume: 1800, trades: 140 });
   for (const candle of rows.slice(-48, -12)) {
