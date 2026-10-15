@@ -140,5 +140,5 @@ test('explicit push provider selection overrides automatic provider inference',(
 
 test('complete Web Push credentials are inferred only when Firebase credentials are absent',()=>{
   assert.equal(resolvePushProvider({VAPID_SUBJECT:'mailto:test@example.test',VAPID_PUBLIC_KEY:'TEST_PUBLIC',VAPID_PRIVATE_KEY:'TEST_PRIVATE'}),'webpush');
-  assert.equal(resolvePushProvider({FCM_PROJECT_ID:'fixture-project',FCM_SERVICE_ACCOUNT_JSON:'{}',VAPID_SUBJECT:'mailto:test@example.test',VAPID_PUBLIC_KEY:'TEST_PUBLIC',VAPID_PRIVATE_KEY:'TEST_PRIVATE'}),'fcm');
+  assert.equal(resolvePushProvider({FCM_PROJECT_ID:'fixture-project',FCM_SERVICE_ACCOUNT_JSON:'{}',VAPID_SUBJECT:'mailto:test@example.test',VAPID_PUBLIC_KEY:'TEST_PUBLIC',VAPID_PRIVATE_KEY:'TEST_PRIVATE'}),'webpush');
 });
