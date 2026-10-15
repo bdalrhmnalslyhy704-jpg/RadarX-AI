@@ -74,3 +74,27 @@ test('Al Muqawim preserves its rotation budget when the top three overlap patrol
   assert.equal(selected.length,8);
   assert.equal(new Set(selected.map(x=>x.symbol)).size,8);
 });
+
+
+test('Al Muqawim refuses gaps in a required timeframe instead of using discontinuous structure',()=>{
+ const now=Date.now(),series={
+  '4h':makeSeries(100,4*60*60*1000,0.04,now),
+  '1h':makeSeries(120,60*60*1000,0.04,now),
+  '15m':makeSeries(160,15*60*1000,0.04,now)
+ };
+ series['15m'].splice(151,1);
+ const a=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:105.46,priceChange24h:1},now,{maPeriod:50});
+ assert.equal(a.eligible,false);assert.equal(a.stage,'INSUFFICIENT_DATA');
+ assert.ok(a.data_quality_reasons.includes('CLOSED_CANDLE_SEQUENCE_HAS_GAPS'));
+});
+
+test('Al Muqawim refuses stale higher-timeframe candles',()=>{
+ const now=Date.now(),old=now-48*60*60*1000,series={
+  '4h':makeSeries(100,4*60*60*1000,0.04,old),
+  '1h':makeSeries(120,60*60*1000,0.04,old),
+  '15m':makeSeries(160,15*60*1000,0.04,old)
+ };
+ const a=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:105.46,priceChange24h:1},now,{maPeriod:50});
+ assert.equal(a.eligible,false);assert.equal(a.stage,'DATA_STALE');assert.equal(a.data_stale,true);
+ assert.ok(a.data_quality_reasons.includes('STALE_CLOSED_CANDLES'));
+});

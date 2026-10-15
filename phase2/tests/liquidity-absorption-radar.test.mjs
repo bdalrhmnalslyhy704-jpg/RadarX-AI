@@ -110,3 +110,11 @@ test('Radar 4 fills unique rotation slots even when the patrol cursor starts on 
   assert.equal(selected.length,7);
   assert.equal(new Set(selected.map(x=>x.symbol)).size,7);
 });
+
+
+test('Radar 4 refuses gapped closed candles instead of scoring a broken absorption window',()=>{
+  const rows=make1m(); rows.splice(86,1);
+  const a=buildLiquidityAbsorptionAnalysis(rows,make5m(),ticker,book,NOW);
+  assert.equal(a.eligible,false); assert.equal(a.stage,'DATA_INCOMPLETE');
+  assert.ok(a.data_quality_reasons.includes('CLOSED_CANDLE_SEQUENCE_HAS_GAPS'));
+});

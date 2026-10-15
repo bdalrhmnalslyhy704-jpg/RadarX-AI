@@ -3,6 +3,7 @@ import {formatRadarTime12h} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
 import {isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
+import {validateClosedCandleSeries} from './radar-role-evidence.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)||0));
 const finite=(x,d=null)=>Number.isFinite(Number(x))?Number(x):d;
@@ -99,7 +100,15 @@ export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHis
   const fiveAge=Math.max(0,Number(now)-Number(m5.at(-1)?.closeTime));
   if(!Number.isFinite(oneAge)||!Number.isFinite(fiveAge)||oneAge>3*60*1000||fiveAge>10*60*1000)
     return {eligible:false,stage:'STALE_DATA',score:null,closed_candles_only:true,data_quality:0,data_stale:true,
-      reason_codes:['STALE_CLOSED_CANDLES'],metrics:{one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge}};
+      reason_codes:['STALE_CLOSED_CANDLES'],data_quality_reasons:['STALE_CLOSED_CANDLES'],metrics:{one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge}};
+  const dataChecks=[
+    validateClosedCandleSeries(oneMinute,{now,intervalMs:60_000,minCount:80,windowBars:40,maxAgeMs:3*60_000}),
+    validateClosedCandleSeries(fiveMinute,{now,intervalMs:5*60_000,minCount:50,windowBars:30,maxAgeMs:10*60_000})
+  ];
+  const dataReasons=[...new Set(dataChecks.flatMap(check=>check.reasons))];
+  if(dataReasons.length)return {eligible:false,stage:dataReasons.includes('STALE_CLOSED_CANDLES')?'STALE_DATA':'INSUFFICIENT_DATA',
+    score:null,closed_candles_only:true,data_quality:0,data_stale:dataReasons.includes('STALE_CLOSED_CANDLES'),
+    reason_codes:dataReasons,data_quality_reasons:dataReasons,data_quality_checks:dataChecks};
   const price=finite(ticker.lastPrice,0);
   if(!(price>0))return {eligible:false,stage:'INVALID_PRICE',score:null,closed_candles_only:true};
 
@@ -188,7 +197,7 @@ export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHis
 
   return {
     eligible,stage,score:Math.round(score*10)/10,closed_candles_only:true,
-    data_quality:90,data_stale:false,candle_freshness:{one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge},
+    data_quality:90,data_stale:false,data_quality_reasons:[],data_quality_checks:dataChecks,candle_freshness:{one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge},
     confirmation_count:confirmations.length,confirmation_total:9,direction,
     algorithms:{
       SELF_BASELINE_Z:{one_minute_z:z1,five_minute_z:z5,self_acceleration_pct:selfAccelerationPct,relative_acceleration_bps:relativeAccelerationBps},

@@ -1,5 +1,6 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
+import {validateClosedCandleSeries} from './radar-role-evidence.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -151,6 +152,17 @@ function entryTiming(candles,price,ma,now=Date.now()){
 
 export function buildAlMuqawimAnalysis(series,ticker,now=Date.now(),config={}){
   const maPeriod=Math.max(10,Math.trunc(Number(config.maPeriod)||50));
+  const dataChecks=[
+    validateClosedCandleSeries(series?.['15m']||[],{now,intervalMs:15*60_000,minCount:Math.max(30,maPeriod+5),windowBars:20,maxAgeMs:37.5*60_000}),
+    validateClosedCandleSeries(series?.['1h']||[],{now,intervalMs:60*60_000,minCount:Math.max(30,maPeriod+5),windowBars:20,maxAgeMs:2.5*60*60_000}),
+    validateClosedCandleSeries(series?.['4h']||[],{now,intervalMs:4*60*60_000,minCount:Math.max(30,maPeriod+5),windowBars:20,maxAgeMs:10*60*60_000})
+  ];
+  const dataReasons=[...new Set(dataChecks.flatMap(check=>check.reasons))];
+  if(dataReasons.length){
+    const stale=dataReasons.includes('STALE_CLOSED_CANDLES');
+    return {eligible:false,stage:stale?'DATA_STALE':'INSUFFICIENT_DATA',direction:'NONE',score:null,closed_candles_only:true,
+      data_quality:0,data_stale:stale,data_quality_reasons:dataReasons,reason_codes:dataReasons,data_quality_checks:dataChecks};
+  }
   const m15=timeframeAnalysis(series?.['15m']||[],maPeriod,now);
   const h1=timeframeAnalysis(series?.['1h']||[],maPeriod,now);
   const h4=timeframeAnalysis(series?.['4h']||[],maPeriod,now);
@@ -204,7 +216,7 @@ export function buildAlMuqawimAnalysis(series,ticker,now=Date.now(),config={}){
     (timing.nearResistance||timing.recent4>=0.15)&&timing.distanceMa<=3.5;
   return {
     eligible:score>=86&&major==='UP'&&htfAligned===100&&structureScore>=90&&lowerAgreement>=90&&entryReady,
-    closed_candles_only:true,
+    closed_candles_only:true,data_quality:90,data_stale:false,data_quality_reasons:[],data_quality_checks:dataChecks,
     direction:major,
     stage,
     score:Number(score.toFixed(1)),

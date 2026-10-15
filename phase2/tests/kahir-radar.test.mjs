@@ -171,3 +171,12 @@ test('Kahir keeps its loop alive when a transient market request fails',async()=
   assert.ok(calls>=1);
   await radar.stop();
 });
+
+
+test('Kahir rejects gaps inside the closed-candle scoring window',()=>{
+ const one=candles(150,60000);one.splice(143,1);
+ const result=buildKahirAnalysis({oneMinute:one,fiveMinute:fiveMinuteImpulse(),ticker:{lastPrice:101.2,priceChange24h:1,quoteVolume24h:5_000_000},
+  selfHistory:[{price:100,selfChangePct:.01},{price:100.05,selfChangePct:.05}],marketVelocityBps:1,now:NOW});
+ assert.equal(result.eligible,false);assert.equal(result.stage,'INSUFFICIENT_DATA');
+ assert.ok(result.data_quality_reasons.includes('CLOSED_CANDLE_SEQUENCE_HAS_GAPS'));
+});
