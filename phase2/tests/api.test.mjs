@@ -448,7 +448,7 @@ test('TEST_FIXTURE: Market Radar returns a quick warming response, caches real s
   const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   try{
     const first=await fetch(base);
-    assert.equal(first.status,503);
+    assert.equal(first.status,200);
     const warming=await first.json();
     assert.equal(warming.meta.response_cache.mode,'SCAN_IN_PROGRESS');
     assert.equal(warming.meta.live,false);
