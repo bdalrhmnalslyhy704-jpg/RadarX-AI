@@ -270,7 +270,7 @@ export class KahirRadar{
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.busy=false;
     this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
     this.latestCandidates=[];this.selfSnapshots=new Map();this.lastMarketVelocityBps=0;this.deepCursor=0;
-    this.lastResult=null;this.lastAlertAt=new Map();
+    this.lastResult=null;this.lastAlertAt=new Map();this.decisionTrail=[];
   }
 
   start(){
@@ -390,22 +390,53 @@ export class KahirRadar{
       minConfirmations:7,minScore:88,max24hMovePct:6,requireTrigger:true,minCategoryHits:4
     });
     result.elite_gate=gate;
-    if(analysis.eligible&&gate.eligible){
-      const lastAlert=this.lastAlertAt.get(row.symbol)||0;
-      if(this.clock()-lastAlert>=this.config.alertCooldownMs){
-        const alert=buildKahirAlert(candidate,analysis,this.clock());
-        alert.elite_gate=gate;
-        const notificationGate=evaluateRadarNotificationGate(alert,{now:alert.detected_at,commit:true});
-        result.notification_gate=notificationGate;
-        if(!notificationGate.eligible){result.eligible=false;result.blocked_reasons=notificationGate.failures;return result;}
-        alert.notification_gate=notificationGate;
-        this.lastAlertAt.set(row.symbol,alert.detected_at);
-        await this.store.appendKahirAlert(alert);
-        if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(alert);
-        this.alertCount++;
-      }
+    result.data_quality=Number.isFinite(Number(analysis.data_quality))?Number(analysis.data_quality):0;
+    result.data_stale=analysis.data_stale===true;
+    result.data_quality_reasons=Array.isArray(analysis.data_quality_reasons)?analysis.data_quality_reasons:[];
+    result.blocked_reasons=[
+      ...result.data_quality_reasons,
+      ...(Array.isArray(analysis.reason_codes)?analysis.reason_codes:[]),
+      ...(!analysis.eligible?[String(analysis.stage||'ANALYSIS_NOT_ELIGIBLE')]:[]),
+      ...(Array.isArray(gate.risk_flags)?gate.risk_flags.map(x=>'ELITE_GATE_'+x):[]),
+      ...(!gate.eligible?['ELITE_GATE_NOT_ELIGIBLE']:[ ])
+    ];
+    if(!analysis.eligible||!gate.eligible){
+      this.recordDecisionDiagnostics(result,'BLOCKED_ANALYSIS_OR_ELITE_GATE');
+      return result;
     }
+    const lastAlert=this.lastAlertAt.get(row.symbol)||0;
+    if(this.clock()-lastAlert<this.config.alertCooldownMs){
+      result.blocked_reasons=[...result.blocked_reasons,'ALERT_COOLDOWN'];
+      this.recordDecisionDiagnostics(result,'BLOCKED_COOLDOWN');
+      return result;
+    }
+    const alert=buildKahirAlert(candidate,analysis,this.clock());
+    alert.elite_gate=gate;
+    const notificationGate=evaluateRadarNotificationGate(alert,{now:alert.detected_at,commit:true});
+    result.notification_gate=notificationGate;
+    if(!notificationGate.eligible){
+      result.eligible=false;
+      result.blocked_reasons=[...result.blocked_reasons,...(notificationGate.failures||[])];
+      this.recordDecisionDiagnostics(result,'BLOCKED_NOTIFICATION_GATE');
+      return result;
+    }
+    alert.notification_gate=notificationGate;
+    this.lastAlertAt.set(row.symbol,alert.detected_at);
+    await this.store.appendKahirAlert(alert);
+    this.recordDecisionDiagnostics({...result,notification_gate:notificationGate},'ALERT_STORED');
+    if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(alert);
+    this.alertCount++;
     return result;
+  }
+  recordDecisionDiagnostics(result,status,now=this.clock()){
+    const reasons=[...new Set((Array.isArray(result?.blocked_reasons)?result.blocked_reasons:[]).map(String))].slice(0,20);
+    this.decisionTrail.push({at:Number(now),symbol:String(result?.symbol||'UNKNOWN'),stage:String(result?.stage||'UNKNOWN'),
+      score:Number.isFinite(Number(result?.score))?Number(result.score):null,
+      analysis_eligible:result?.analysis?.eligible===true,elite_gate_eligible:result?.elite_gate?.eligible===true,
+      notification_gate_eligible:result?.notification_gate?.eligible===true,
+      data_quality:Number.isFinite(Number(result?.data_quality))?Number(result.data_quality):0,
+      data_stale:result?.data_stale===true,status,blocked_reasons:reasons});
+    if(this.decisionTrail.length>240)this.decisionTrail.splice(0,this.decisionTrail.length-240);
   }
   async tick(){
     if(!this.running||this.busy)return false;
@@ -460,11 +491,22 @@ export class KahirRadar{
     };
   }
   health(){
+    const now=this.clock(),windowMs=15*60_000;
+    const recent=this.decisionTrail.filter(item=>Number.isFinite(item.at)&&now-item.at>=0&&now-item.at<=windowMs);
+    const reasons=new Map(),stages=new Map();
+    for(const item of recent){stages.set(item.stage,(stages.get(item.stage)||0)+1);for(const reason of item.blocked_reasons)reasons.set(reason,(reasons.get(reason)||0)+1);}
+    const decisionDiagnostics={window_ms:windowMs,candidates_observed:recent.length,
+      analysis_eligible:recent.filter(x=>x.analysis_eligible).length,elite_gate_accepted:recent.filter(x=>x.elite_gate_eligible).length,
+      notification_gate_accepted:recent.filter(x=>x.notification_gate_eligible).length,
+      blocked:recent.filter(x=>x.status.startsWith('BLOCKED')).length,
+      stage_counts:Object.fromEntries([...stages.entries()].sort((a,b)=>b[1]-a[1])),
+      top_block_reasons:[...reasons.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,10).map(([reason,count])=>({reason,count})),
+      last_decision:recent.at(-1)||null};
     return {
       running:this.running,radar:'KAHIR_RADAR',radar_name:'Radar 5 — القاهر',
       universe:this.universe.length,last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,
       scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,busy:this.busy,
-      market_velocity_bps:this.lastMarketVelocityBps,
+      market_velocity_bps:this.lastMarketVelocityBps,decision_diagnostics:decisionDiagnostics,
       algorithms:['SELF_BASELINE_Z','PARTICIPATION_REGIME','VOLATILITY_REGIME_TRANSITION','KAUFMAN_EFFICIENCY_SHIFT','RANGE_ACCEPTANCE','IMPULSE_PERSISTENCE','MARKET_SPEED_SPREAD'],
       source:'Binance Public REST',closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
     };

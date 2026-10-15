@@ -180,3 +180,17 @@ test('Kahir rejects gaps inside the closed-candle scoring window',()=>{
  assert.equal(result.eligible,false);assert.equal(result.stage,'INSUFFICIENT_DATA');
  assert.ok(result.data_quality_reasons.includes('CLOSED_CANDLE_SEQUENCE_HAS_GAPS'));
 });
+
+
+test('Kahir health explains whether an analyzed candidate was blocked before notification',()=>{
+ const radar=new KahirRadar({rest:{},store:{},clock:()=>NOW,logger:{warn(){}}});
+ radar.recordDecisionDiagnostics({symbol:'BLOCKEDUSDT',stage:'WATCH',score:70,eligible:false,
+   analysis:{eligible:false,data_quality:90,data_stale:false},elite_gate:{eligible:false,risk_flags:['LOW_CONFLUENCE']},
+   blocked_reasons:['WATCH','ELITE_GATE_LOW_CONFLUENCE','ELITE_GATE_NOT_ELIGIBLE']},'BLOCKED_ANALYSIS_OR_ELITE_GATE',NOW);
+ const diagnostics=radar.health().decision_diagnostics;
+ assert.equal(diagnostics.candidates_observed,1);
+ assert.equal(diagnostics.analysis_eligible,0);
+ assert.equal(diagnostics.blocked,1);
+ assert.equal(diagnostics.top_block_reasons[0].count,1);
+ assert.equal(diagnostics.last_decision.symbol,'BLOCKEDUSDT');
+});
