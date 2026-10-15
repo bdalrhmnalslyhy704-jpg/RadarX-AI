@@ -125,6 +125,43 @@ function consecutiveMicroConfirmations(rows,now=Date.now()){
   }
   return streak;
 }
+export function estimateDoomsdayMovementStart(rows,now=Date.now(),lookbackBars=30){
+  const a=closed(rows,now);
+  if(a.length<22)return {started_at_ms:null,started_at_iso:null,lag_ms:null,observed_bars:0,
+    method:'CLOSED_CANDLE_ACTIVITY_STREAK',reason:'INSUFFICIENT_CLOSED_CANDLES'};
+  const lower=Math.max(20,a.length-Math.max(5,Math.min(60,Math.trunc(Number(lookbackBars)||30))));
+  const candleEvidence=(i)=>{
+    if(i<20||i>=a.length)return null;
+    const row=a[i],prev=a[i-1];
+    const q=Number(row.quoteVolume??Number(row.volume)*Number(row.close));
+    const trades=Number(row.tradeCount);
+    const qBase=median(a.slice(Math.max(0,i-20),i).map(x=>Number(x.quoteVolume??Number(x.volume)*Number(x.close))));
+    const tradeBase=median(a.slice(Math.max(0,i-20),i).map(x=>Number(x.tradeCount)));
+    const buy=Number(row.volume)>0?Number(row.takerBuyBaseVolume)/Number(row.volume):null;
+    const returnPct=pct(row.close,prev.close);
+    const volumeRatio=qBase>0?q/qBase:null;
+    const tradeRatio=tradeBase>0?trades/tradeBase:null;
+    const ok=Number.isFinite(returnPct)&&returnPct>0&&Number.isFinite(volumeRatio)&&volumeRatio>=1.10&&
+      Number.isFinite(tradeRatio)&&tradeRatio>=1.08&&Number.isFinite(buy)&&buy>=0.505;
+    return {ok,volume_ratio:volumeRatio,trade_ratio:tradeRatio,taker_buy_ratio:buy,return_1m_pct:returnPct,
+      open_time_ms:Number(row.openTime)};
+  };
+  const recent=[];
+  for(let i=lower;i<a.length;i++)recent.push({index:i,evidence:candleEvidence(i)});
+  let end=a.length-1;
+  while(end>=lower&&!candleEvidence(end)?.ok)end--;
+  if(end<lower)return {started_at_ms:null,started_at_iso:null,lag_ms:null,observed_bars:0,
+    method:'CLOSED_CANDLE_ACTIVITY_STREAK',reason:'NO_RECENT_CONFIRMED_ACTIVITY_STREAK'};
+  let start=end;
+  while(start>lower&&candleEvidence(start-1)?.ok)start--;
+  const ev=candleEvidence(end);
+  const at=Number(a[start].openTime);
+  return {started_at_ms:at,started_at_iso:Number.isFinite(at)?new Date(at).toISOString():null,
+    lag_ms:Number.isFinite(at)?Math.max(0,Number(now)-at):null,observed_bars:end-start+1,
+    method:'CLOSED_CANDLE_ACTIVITY_STREAK',reason:null,
+    latest_evidence:{volume_ratio:ev.volume_ratio,trade_ratio:ev.trade_ratio,taker_buy_ratio:ev.taker_buy_ratio,return_1m_pct:ev.return_1m_pct}};
+}
+
 function sniperFreshnessFromMetrics({tenMinuteMove=0,fiveMinuteMove=0,distanceFromEma=0,breakoutDistance=0}={}){
   const movePenalty=Math.max(0,Math.abs(Number(tenMinuteMove)||0)-0.8)*10;
   const fastPenalty=Math.max(0,Math.abs(Number(fiveMinuteMove)||0)-0.5)*18;
@@ -215,6 +252,7 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
   const e21DistancePct=(e21>0)?(price/e21-1)*100:null;
   const localFiveMove=Number.isFinite(r5)?r5:recentImpulse5m(m5);
   const confirmationBars=consecutiveMicroConfirmations(m1,now);
+  const movementStart=estimateDoomsdayMovementStart(m1,now,30);
   const sniperFreshness=sniperFreshnessFromMetrics({
     tenMinuteMove:r10,
     fiveMinuteMove:localFiveMove,
@@ -320,6 +358,11 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
       breakout_distance_pct:breakoutDistancePct,micro_breakout:microBreakout,close_location_pct:location,
       volume_score:volumeScore,trade_score:tradeScore,taker_score:takerScore,
       confirmation_bars:confirmationBars,
+      movement_start_time_ms:movementStart.started_at_ms,
+      movement_start_lag_ms:movementStart.lag_ms,
+      movement_start_observed_bars:movementStart.observed_bars,
+      movement_start_method:movementStart.method,
+      movement_start_reason:movementStart.reason,
       sniper_freshness:sniperFreshness,
       ten_minute_move_pct:r10,
       five_minute_move_pct:r5,
@@ -330,6 +373,7 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
       ema:emaBurstScore,vwap:vwapScore,squeeze:squeezeScore,relative_strength:rsScore,
       acceleration:accelerationScore,range:rangeScore,atr:atrScore,acceptance:closeScore
     },
+    movement_start:movementStart,
     alert_quality:{not_chasing:notChasing,confirmation_bars:confirmationBars,sniper_freshness:sniperFreshness},
     triggers:{
       min_early_score:DOOMSDAY_RADAR_DEFAULTS.minEarlyScore,min_ignition_score:DOOMSDAY_RADAR_DEFAULTS.minIgnitionScore,
@@ -358,6 +402,9 @@ function buildAlert(candidate,analysis,now){
     price:finite(candidate.lastPrice),price_change_24h:finite(candidate.priceChange24h),
     opportunity_score:analysis.score,potential_label:analysis.stage,
     doomsday:analysis,reasons:analysis.reasons,
+    movement_start:analysis.movement_start||null,
+    movement_started_at:analysis.movement_start?.started_at_iso??null,
+    movement_start_lag_ms:analysis.movement_start?.lag_ms??null,
     risk_flags:[
       Math.abs(finite(candidate.priceChange24h,0))>=12?'DAILY_EXTENSION_ATTENTION':null,
       analysis.metrics.taker_buy_ratio<0.50?'TAKER_BALANCE_WEAK':null,
