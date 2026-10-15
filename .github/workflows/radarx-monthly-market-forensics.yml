@@ -1,0 +1,56 @@
+name: RadarX Build 224 Monthly Market Forensics
+
+on:
+  push:
+    branches:
+      - research/build224-monthly-move-forensics-20261015
+    paths:
+      - phase2/tools/monthly-move-forensics.mjs
+      - .github/workflows/radarx-monthly-market-forensics.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: radarx-monthly-market-forensics-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  collect-and-compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout Build 224 forensics branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Validate script syntax
+        run: node --check phase2/tools/monthly-move-forensics.mjs
+
+      - name: Download and analyze 30 days of public Spot candles
+        env:
+          FORENSICS_DAYS: "30"
+          FORENSICS_JSON_PATH: reports/monthly-move-forensics/monthly-move-forensics.json
+          FORENSICS_MARKDOWN_PATH: reports/monthly-move-forensics/monthly-move-forensics.md
+        run: |
+          set -euo pipefail
+          mkdir -p reports/monthly-move-forensics
+          node phase2/tools/monthly-move-forensics.mjs
+          test -s reports/monthly-move-forensics/monthly-move-forensics.json
+          test -s reports/monthly-move-forensics/monthly-move-forensics.md
+          echo "----- MONTHLY SPOT MOVE FORENSICS -----"
+          cat reports/monthly-move-forensics/monthly-move-forensics.md
+
+      - name: Upload reproducible raw case data and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-monthly-move-forensics
+          path: reports/monthly-move-forensics/
+          if-no-files-found: warn
+          retention-days: 14
