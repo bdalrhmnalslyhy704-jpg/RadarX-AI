@@ -23,6 +23,9 @@ test('Doomsday keeps closed-candle policy and exposes the early/ignition fingerp
   assert.ok(a.metrics.volume_ratio>1);
   assert.ok(a.metrics.trade_ratio>1);
   assert.ok(Number.isFinite(a.metrics.relative_strength_pct));
+  assert.equal(typeof a.alert_quality.not_chasing,'boolean');
+  assert.ok(Number.isFinite(a.alert_quality.sniper_freshness));
+  assert.ok(Number.isFinite(a.alert_quality.confirmation_bars));
 });
 
 test('Doomsday rejects an already extreme 24h extension',()=>{

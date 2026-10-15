@@ -312,6 +312,14 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
       max_five_minute_move_pct:DOOMSDAY_RADAR_DEFAULTS.maxFiveMinuteMovePct,
       breakout_proximity_pct:DOOMSDAY_RADAR_DEFAULTS.breakoutProximityPct,max_24h_move_pct:max24hMovePct
     },
+    alert_quality:{
+      sniper_freshness:sniperFreshness,
+      confirmation_bars:confirmationBars,
+      not_chasing:notChasing,
+      extended,
+      early_trigger:earlyTrigger,
+      ignition_trigger:ignitionTrigger
+    },
     reasons:[...new Set(reasons)].slice(0,15),
     source:'Binance Public REST',detected_at:now,processed_at:now,
     paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
