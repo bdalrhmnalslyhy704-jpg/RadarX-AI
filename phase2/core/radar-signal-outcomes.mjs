@@ -190,13 +190,15 @@ function expectedOpenTimes(detectedAt, horizonMs, intervalMs) {
   for (let open = firstOpen; open <= lastOpen; open += intervalMs) times.push(open);
   return { firstOpen, lastOpen, endAt, times };
 }
-function validClosedCandle(row, now) {
+function validClosedCandle(row, now, intervalMs) {
   const c = object(row);
   const openTime = finite(c.openTime), closeTime = finite(c.closeTime);
   const open = finite(c.open), high = finite(c.high), low = finite(c.low), close = finite(c.close);
   const volume = finite(c.volume);
   if (c.closed === false || openTime === null || closeTime === null || closeTime >= now ||
-      closeTime < openTime || openTime > closeTime || open === null || high === null ||
+      !Number.isFinite(intervalMs) || intervalMs <= 0 || openTime % intervalMs !== 0 ||
+      closeTime !== openTime + intervalMs - 1 ||
+      openTime > closeTime || open === null || high === null ||
       low === null || close === null || volume === null || open <= 0 || high <= 0 ||
       low <= 0 || close <= 0 || volume < 0 || high < Math.max(open, close) ||
       low > Math.min(open, close)) return null;
@@ -215,7 +217,7 @@ export function evaluateRadarOutcomeHorizon(record, rows, horizon, now) {
   if (!expected.times.length) return { status: 'INCOMPLETE', reason: 'NO_EXPECTED_CLOSED_CANDLES', expected_bars: 0, observed_bars: 0 };
   const byOpen = new Map();
   for (const raw of Array.isArray(rows) ? rows : []) {
-    const candle = validClosedCandle(raw, now);
+    const candle = validClosedCandle(raw, now, horizon.intervalMs);
     if (candle && candle.openTime >= expected.firstOpen && candle.openTime <= expected.lastOpen && candle.closeTime <= expected.endAt) {
       const prior = byOpen.get(candle.openTime);
       if (!prior || candle.closeTime > prior.closeTime) byOpen.set(candle.openTime, candle);
