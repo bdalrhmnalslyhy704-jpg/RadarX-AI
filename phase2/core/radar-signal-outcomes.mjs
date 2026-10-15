@@ -1,5 +1,6 @@
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
+const ARCHIVE_IMPORT_INTERVAL_MS = 5 * MINUTE_MS;
 const MAX_RECORDS = 1800;
 const ARCHIVE_LIMIT_PER_RADAR = 100;
 const DEFAULT_LOOKBACK_DAYS = 45;
@@ -453,7 +454,9 @@ export async function runRadarSignalOutcomePass({
   const priorState = normalizeState(await store.getRadarSignalOutcomes());
   const nextCursors = { ...priorState.last_archive_cursors };
   const pageLimit = Math.max(1, Math.min(100, Number(archiveLimit) || 100));
-  for (const radar of RADAR_OUTCOME_ARCHIVES) {
+  const lastImportAt = finite(priorState.last_import_at);
+  const importDue = lastImportAt === null || Number(now) - lastImportAt >= ARCHIVE_IMPORT_INTERVAL_MS;
+  if (importDue) for (const radar of RADAR_OUTCOME_ARCHIVES) {
     const cursor = object(priorState.last_archive_cursors[radar.id]);
     const cursorAt = Math.max(cutoff, finite(cursor.at) ?? cutoff);
     const cursorId = cursorAt === finite(cursor.at) ? String(cursor.id || '') : '';
@@ -504,9 +507,11 @@ export async function runRadarSignalOutcomePass({
       importCounts[row.radar].imported = (importCounts[row.radar].imported || 0) + 1;
     }
     state.records = trimRecords(state.records);
-    state.last_import_at = Number(now);
-    state.last_import_counts = importCounts;
-    state.last_archive_cursors = nextCursors;
+    if (importDue) {
+      state.last_import_at = Number(now);
+      state.last_import_counts = importCounts;
+      state.last_archive_cursors = nextCursors;
+    }
     state.updated_at = Number(now);
     return state;
   });
@@ -567,6 +572,8 @@ export async function runRadarSignalOutcomePass({
   }
   const pass = {
     ok: true, at: Number(now), imported: newlyImported, archives_scanned: incoming.length,
+    archive_import_performed: importDue,
+    next_archive_import_due_at: (importDue ? Number(now) : (lastImportAt ?? Number(now))) + ARCHIVE_IMPORT_INTERVAL_MS,
     rest_requests: requests, records_evaluated: evaluatedRecords, completed_horizons: completeHorizons,
     failed_requests: failedRequests, request_budget: requestBudget
   };
