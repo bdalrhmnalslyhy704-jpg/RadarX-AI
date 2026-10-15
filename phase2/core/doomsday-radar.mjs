@@ -302,6 +302,7 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
       ema:emaBurstScore,vwap:vwapScore,squeeze:squeezeScore,relative_strength:rsScore,
       acceleration:accelerationScore,range:rangeScore,atr:atrScore,acceptance:closeScore
     },
+    alert_quality:{not_chasing:notChasing,confirmation_bars:confirmationBars,sniper_freshness:sniperFreshness},
     triggers:{
       min_early_score:DOOMSDAY_RADAR_DEFAULTS.minEarlyScore,min_ignition_score:DOOMSDAY_RADAR_DEFAULTS.minIgnitionScore,
       min_volume_ratio:DOOMSDAY_RADAR_DEFAULTS.minVolumeRatio,min_trade_ratio:DOOMSDAY_RADAR_DEFAULTS.minTradeRatio,
