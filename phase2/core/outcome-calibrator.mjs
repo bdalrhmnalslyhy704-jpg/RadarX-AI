@@ -31,10 +31,10 @@ function safeMemory(raw,symbol){
 
 function emptyStats(){
   return {
-    '15m':{samples:0,hits:0,neutral:0,unavailable:0},
-    '1h':{samples:0,hits:0,neutral:0,unavailable:0},
-    '4h':{samples:0,hits:0,neutral:0,unavailable:0},
-    '24h':{samples:0,hits:0,neutral:0,unavailable:0}
+    '15m':{samples:0,hits:0,misses:0,neutral:0,unavailable:0},
+    '1h':{samples:0,hits:0,misses:0,neutral:0,unavailable:0},
+    '4h':{samples:0,hits:0,misses:0,neutral:0,unavailable:0},
+    '24h':{samples:0,hits:0,misses:0,neutral:0,unavailable:0}
   };
 }
 
@@ -87,6 +87,7 @@ export async function updateSignalOutcomes(store,{symbol,price,now=Date.now()}={
   const keep=[];
   for(const pred of m.predictions){
     if(!pred||pred.symbol!==s||num(pred.entry_price,null)==null||Number(pred.entry_price)<=0||!pred.direction){
+      changed=true;
       continue;
     }
     const createdAt=Number(pred.created_at);
@@ -141,9 +142,8 @@ export async function updateSignalOutcomes(store,{symbol,price,now=Date.now()}={
       keep.push({...pred,returns,outcomes});
     }
   }
-  const priorHistoryLength=Array.isArray(m.history)?m.history.length:0;
   m.predictions=keep;
-  if(changed||updated>0||m.history.length!==priorHistoryLength)await save(store,m);
+  if(changed)await save(store,m);
   return {
     symbol:s,updated,unavailable,
     calibration_score:Number(scoreStats(m.stats).toFixed(1)),
