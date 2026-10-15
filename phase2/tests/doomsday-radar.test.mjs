@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildDoomsdayAnalysis,DoomsdayRadar} from '../core/doomsday-radar.mjs';
+import {buildDoomsdayAnalysis,DoomsdayRadar,estimateDoomsdayMovementStart} from '../core/doomsday-radar.mjs';
 
 function candle(openTime,close,opts={}){
   const open=opts.open??close-0.02,high=opts.high??close+0.05,low=opts.low??close-0.05;
@@ -29,6 +29,8 @@ test('Doomsday keeps closed-candle policy and exposes the early/ignition fingerp
   assert.equal(typeof a.alert_quality.not_chasing,'boolean');
   assert.ok(Number.isFinite(a.alert_quality.confirmation_bars));
   assert.ok(Number.isFinite(a.alert_quality.sniper_freshness));
+  assert.ok(Number.isFinite(a.metrics.movement_start_time_ms));
+  assert.ok(['CLOSED_CANDLE_ACTIVITY_STREAK','NO_RECENT_CONFIRMED_ACTIVITY_STREAK'].includes(a.metrics.movement_start_method));
 });
 
 test('Doomsday rejects closed-candle gaps instead of scoring incomplete history',()=>{
@@ -50,6 +52,26 @@ test('Doomsday rejects stale closed candles',()=>{
   assert.equal(a.stage,'DATA_STALE');
   assert.equal(a.data_stale,true);
   assert.ok(a.data_quality_reasons.includes('STALE_CLOSED_CANDLES'));
+});
+
+test('Doomsday estimates when the current confirmed activity streak began',()=>{
+  const one=series(120,100,60_000,.08,TEST_NOW);
+  const start=estimateDoomsdayMovementStart(one,TEST_NOW,30);
+  assert.equal(start.method,'CLOSED_CANDLE_ACTIVITY_STREAK');
+  assert.ok(Number.isFinite(start.started_at_ms));
+  assert.equal(start.started_at_ms,one.at(-7).openTime);
+  assert.equal(start.observed_bars,7);
+  assert.ok(start.lag_ms>=0);
+});
+
+test('Doomsday leaves movement start unknown when there is no recent confirmed activity',()=>{
+  const one=series(120,100,60_000,0,TEST_NOW);
+  for(const row of one.slice(-30)){
+    row.volume=900;row.quoteVolume=90_000;row.tradeCount=80;row.takerBuyBaseVolume=450;
+  }
+  const start=estimateDoomsdayMovementStart(one,TEST_NOW,30);
+  assert.equal(start.started_at_ms,null);
+  assert.equal(start.reason,'NO_RECENT_CONFIRMED_ACTIVITY_STREAK');
 });
 
 test('Doomsday rejects an already extreme 24h extension',()=>{
