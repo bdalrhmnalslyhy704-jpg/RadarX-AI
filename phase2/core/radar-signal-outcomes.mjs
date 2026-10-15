@@ -176,15 +176,15 @@ function normalizeState(raw) {
     last_pass: s.last_pass === null ? null : object(s.last_pass)
   };
 }
-function missingOutcomes(record) {
-  return object(record?.outcomes);
-}
 function expectedOpenTimes(detectedAt, horizonMs, intervalMs) {
   const endAt = Number(detectedAt) + Number(horizonMs);
+  // Use only interval candles that close on or before the target horizon.
+  // This excludes a bar that begins before the deadline but closes after it.
   const firstOpen = Math.ceil(Number(detectedAt) / Number(intervalMs)) * Number(intervalMs);
+  const lastOpen = Math.floor((endAt - (intervalMs - 1)) / intervalMs) * intervalMs;
   const times = [];
-  for (let open = firstOpen; open < endAt; open += intervalMs) times.push(open);
-  return { firstOpen, endAt, times };
+  for (let open = firstOpen; open <= lastOpen; open += intervalMs) times.push(open);
+  return { firstOpen, lastOpen, endAt, times };
 }
 function validClosedCandle(row, now) {
   const c = object(row);
@@ -212,7 +212,7 @@ export function evaluateRadarOutcomeHorizon(record, rows, horizon, now) {
   const byOpen = new Map();
   for (const raw of Array.isArray(rows) ? rows : []) {
     const candle = validClosedCandle(raw, now);
-    if (candle && candle.openTime >= expected.firstOpen && candle.openTime < expected.endAt) {
+    if (candle && candle.openTime >= expected.firstOpen && candle.openTime <= expected.lastOpen && candle.closeTime <= expected.endAt) {
       const prior = byOpen.get(candle.openTime);
       if (!prior || candle.closeTime > prior.closeTime) byOpen.set(candle.openTime, candle);
     }
@@ -261,6 +261,7 @@ export function evaluateRadarOutcomeHorizon(record, rows, horizon, now) {
     last_close_time: final.closeTime,
     target_end_time: expected.endAt,
     end_offset_ms: final.closeTime - expected.endAt,
+    horizon_window_complete_through: final.closeTime,
     close_return_pct: pct(final.close, entry),
     max_favorable_pct: pct(maxHigh, entry),
     max_adverse_pct: pct(minLow, entry),
