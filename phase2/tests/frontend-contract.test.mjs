@@ -16,6 +16,11 @@ test('TEST_FIXTURE: Doomsday radar displays the estimated confirmed activity-sta
   assert.ok(text.includes('شموع مغلقة'));
 });
 
+test('TEST_FIXTURE: embedded Doomsday WebView asset avoids unsupported modern operators',async()=>{
+  const text=await readFile(new URL('../../android/app/src/main/assets/radarx-doomsday-radar.mjs',import.meta.url),'utf8');
+  assert.equal(/\?\.|\?\?/.test(text),false,'embedded WebView JavaScript must not use optional chaining or nullish coalescing');
+});
+
 test('TEST_FIXTURE: changed Android radar assets parse as valid JavaScript modules',()=>{
   for(const asset of [
     '../../android/app/src/main/assets/radarx-doomsday-radar.mjs',
