@@ -1,17 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildDoomsdayAnalysis,DoomsdayRadar} from '../core/doomsday-radar.mjs';
+import {buildDoomsdayAnalysis,DoomsdayRadar,estimateDoomsdayMovementStart} from '../core/doomsday-radar.mjs';
 
 function candle(openTime,close,opts={}){
   const open=opts.open??close-0.02,high=opts.high??close+0.05,low=opts.low??close-0.05;
   return {openTime,closeTime:openTime+(opts.step??59_999),open,high,low,close,volume:opts.volume??1000,quoteVolume:opts.quoteVolume??close*(opts.volume??1000),tradeCount:opts.tradeCount??100,takerBuyBaseVolume:opts.takerBuyBaseVolume??(opts.volume??1000)*0.54,closed:true};
 }
-function series(n,base=100,step=60_000,boost=0){
-  const out=[];for(let i=0;i<n;i++){const c=base+i*.01+(i>n-8?(i-(n-8))*boost:0);out.push(candle(1_700_000_000_000+i*step,c,{step:step-1,volume:i>n-8?2600:900,tradeCount:i>n-8?220:80,takerBuyBaseVolume:i>n-8?1500:430}));}return out;
+const TEST_NOW=1_700_000_000_000+119*60_000;
+function series(n,base=100,step=60_000,boost=0,endAt=TEST_NOW){
+  const out=[],origin=endAt-n*step;
+  for(let i=0;i<n;i++){const close=base+i*.01+(i>n-8?(i-(n-8))*boost:0);out.push(candle(origin+i*step,close,{step:step-1,volume:i>n-8?2600:900,tradeCount:i>n-8?220:80,takerBuyBaseVolume:i>n-8?1500:430}));}
+  return out;
 }
 
 test('Doomsday keeps closed-candle policy and exposes the early/ignition fingerprint',()=>{
-  const now=1_700_000_000_000+119*60_000;
+  const now=TEST_NOW;
   const one=series(120,100,60_000,.08);
   const five=series(80,100,300_000,.12);
   const btc=series(80,100,300_000,.02);
@@ -23,10 +26,56 @@ test('Doomsday keeps closed-candle policy and exposes the early/ignition fingerp
   assert.ok(a.metrics.volume_ratio>1);
   assert.ok(a.metrics.trade_ratio>1);
   assert.ok(Number.isFinite(a.metrics.relative_strength_pct));
+  assert.equal(typeof a.alert_quality.not_chasing,'boolean');
+  assert.ok(Number.isFinite(a.alert_quality.confirmation_bars));
+  assert.ok(Number.isFinite(a.alert_quality.sniper_freshness));
+  assert.ok(Number.isFinite(a.metrics.movement_start_time_ms));
+  assert.ok(['CLOSED_CANDLE_ACTIVITY_STREAK','NO_RECENT_CONFIRMED_ACTIVITY_STREAK'].includes(a.metrics.movement_start_method));
+});
+
+test('Doomsday rejects closed-candle gaps instead of scoring incomplete history',()=>{
+  const one=series(120);
+  one.splice(80,1);
+  const a=buildDoomsdayAnalysis({oneMinute:one,fiveMinute:series(80,100,300_000,.02),btcFiveMinute:series(80,100,300_000,.01),
+    ticker:{lastPrice:101,priceChange24h:2},now:TEST_NOW});
+  assert.equal(a.eligible,false);
+  assert.equal(a.stage,'INCOMPLETE_DATA');
+  assert.ok(a.data_quality_reasons.includes('ONE_MINUTE_CLOSED_CANDLE_SEQUENCE_HAS_GAPS'));
+});
+
+test('Doomsday rejects stale closed candles',()=>{
+  const one=series(120).map(c=>({...c,openTime:c.openTime-10*60_000,closeTime:c.closeTime-10*60_000}));
+  const five=series(80,100,300_000,.02).map(c=>({...c,openTime:c.openTime-10*60_000,closeTime:c.closeTime-10*60_000}));
+  const btc=series(80,100,300_000,.01).map(c=>({...c,openTime:c.openTime-10*60_000,closeTime:c.closeTime-10*60_000}));
+  const a=buildDoomsdayAnalysis({oneMinute:one,fiveMinute:five,btcFiveMinute:btc,ticker:{lastPrice:101,priceChange24h:2},now:TEST_NOW});
+  assert.equal(a.eligible,false);
+  assert.equal(a.stage,'DATA_STALE');
+  assert.equal(a.data_stale,true);
+  assert.ok(a.data_quality_reasons.includes('STALE_CLOSED_CANDLES'));
+});
+
+test('Doomsday estimates when the current confirmed activity streak began',()=>{
+  const one=series(120,100,60_000,.08,TEST_NOW);
+  const start=estimateDoomsdayMovementStart(one,TEST_NOW,30);
+  assert.equal(start.method,'CLOSED_CANDLE_ACTIVITY_STREAK');
+  assert.ok(Number.isFinite(start.started_at_ms));
+  assert.equal(start.started_at_ms,one.at(-7).openTime);
+  assert.equal(start.observed_bars,7);
+  assert.ok(start.lag_ms>=0);
+});
+
+test('Doomsday leaves movement start unknown when there is no recent confirmed activity',()=>{
+  const one=series(120,100,60_000,0,TEST_NOW);
+  for(const row of one.slice(-30)){
+    row.volume=900;row.quoteVolume=90_000;row.tradeCount=80;row.takerBuyBaseVolume=450;
+  }
+  const start=estimateDoomsdayMovementStart(one,TEST_NOW,30);
+  assert.equal(start.started_at_ms,null);
+  assert.equal(start.reason,'NO_RECENT_CONFIRMED_ACTIVITY_STREAK');
 });
 
 test('Doomsday rejects an already extreme 24h extension',()=>{
-  const now=1_700_000_000_000+119*60_000;
+  const now=TEST_NOW;
   const one=series(120),five=series(80),btc=series(80);
   const a=buildDoomsdayAnalysis({oneMinute:one,fiveMinute:five,btcFiveMinute:btc,ticker:{lastPrice:120,priceChange24h:25},now});
   assert.equal(a.eligible,false);
@@ -60,7 +109,7 @@ test('Doomsday class is paper-only and can select forced watchlist rows',async()
 
 
 test('Doomsday rejects a fresh-looking setup after a short-term pump',()=>{
-  const now=1_700_000_000_000+119*60_000;
+  const now=TEST_NOW;
   const one=[];
   for(let i=0;i<120;i++){
     const close=i<109?100+i*.01:101.1+(i-109)*0.42;

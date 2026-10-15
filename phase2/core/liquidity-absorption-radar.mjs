@@ -14,6 +14,26 @@ function closed(rows,now){
     Number(c.open)>0&&Number(c.high)>=Number(c.low)&&Number(c.low)>0&&Number(c.close)>0&&Number(c.volume)>=0
   ).sort((a,b)=>Number(a.openTime)-Number(b.openTime));
 }
+function validateClosedSequence(rows,intervalMs,required,freshnessMs,now){
+  const recent=rows.slice(-required);
+  if(recent.length<required)return {valid:false,reason:'CLOSED_CANDLE_WINDOW_INCOMPLETE',count:recent.length,required,latest_close_time:null,age_ms:null};
+  for(let i=1;i<recent.length;i++){
+    const delta=Number(recent[i].openTime)-Number(recent[i-1].openTime);
+    if(!Number.isFinite(delta)||Math.abs(delta-intervalMs)>1){
+      return {valid:false,reason:'CLOSED_CANDLE_SEQUENCE_HAS_GAPS',count:recent.length,required,
+        gap_before_open_time:Number(recent[i].openTime),expected_interval_ms:intervalMs,observed_interval_ms:delta};
+    }
+  }
+  const latestClose=Number(recent.at(-1)?.closeTime);
+  const age=Number(now)-latestClose;
+  if(!Number.isFinite(latestClose)||!Number.isFinite(age)||age<0||age>freshnessMs){
+    return {valid:false,reason:'STALE_CLOSED_CANDLES',count:recent.length,required,
+      latest_close_time:Number.isFinite(latestClose)?latestClose:null,age_ms:Number.isFinite(age)?age:null,
+      max_age_ms:freshnessMs};
+  }
+  return {valid:true,count:recent.length,required,latest_close_time:latestClose,age_ms:age,expected_interval_ms:intervalMs};
+}
+
 function vwap(rows){
   let den=0,num=0;
   for(const c of rows){
@@ -126,7 +146,24 @@ function auctionBalance(rows){
 export function buildLiquidityAbsorptionAnalysis(oneM,fiveM,ticker,book,now=Date.now()){
   const a=closed(oneM,now),b=closed(fiveM,now);
   if(a.length<60||b.length<24){
-    return {eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true};
+    return {eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true,
+      data_quality:0,data_stale:false,data_quality_reasons:['CLOSED_CANDLE_WINDOW_INCOMPLETE'],
+      candle_freshness:{one_minute:{count:a.length,required:60},five_minute:{count:b.length,required:24}}};
+  }
+  const oneQuality=validateClosedSequence(a,60_000,60,3*60_000,now);
+  const fiveQuality=validateClosedSequence(b,300_000,24,10*60_000,now);
+  const qualityReasons=[
+    !oneQuality.valid?'ONE_MINUTE_'+oneQuality.reason:null,
+    !fiveQuality.valid?'FIVE_MINUTE_'+fiveQuality.reason:null
+  ].filter(Boolean);
+  if(qualityReasons.length){
+    const stale=qualityReasons.some(x=>x.endsWith('STALE_CLOSED_CANDLES'));
+    return {eligible:false,stage:stale?'DATA_STALE':'INCOMPLETE_DATA',score:null,
+      closed_candles_only:true,data_quality:0,data_stale:stale,
+      data_quality_reasons:qualityReasons,
+      candle_freshness:{one_minute:oneQuality,five_minute:fiveQuality},
+      source:'Binance Public REST',detected_at:now,processed_at:now,
+      paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'};
   }
   const price=finite(ticker?.lastPrice,null);
   const absorption=sellerAbsorption(a);

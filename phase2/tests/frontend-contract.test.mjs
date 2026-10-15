@@ -1,9 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import vm from 'node:vm';
 
 const root=new URL('../../phase1/',import.meta.url);
+
+test('TEST_FIXTURE: Doomsday radar displays the estimated confirmed activity-start time',async()=>{
+  const text=await readFile(new URL('../../android/app/src/main/assets/radarx-doomsday-radar.mjs',import.meta.url),'utf8');
+  assert.ok(text.includes('movement_start_time_ms'));
+  assert.ok(text.includes('movementStartText'));
+  assert.ok(text.includes('Asia/Aden'));
+  assert.ok(text.includes('بداية سلسلة النشاط المقدّرة'));
+  assert.ok(text.includes('شموع مغلقة'));
+});
+
+test('TEST_FIXTURE: changed Android radar assets parse as valid JavaScript modules',()=>{
+  for(const asset of [
+    '../../android/app/src/main/assets/radarx-doomsday-radar.mjs',
+    '../../android/app/src/main/assets/radarx-radar-screen.mjs'
+  ]){
+    const path=fileURLToPath(new URL(asset,import.meta.url));
+    const check=spawnSync(process.execPath,['--check',path],{encoding:'utf8'});
+    assert.equal(check.status,0,asset+' syntax failed: '+String(check.stderr||check.stdout||''));
+  }
+});
 
 test('TEST_FIXTURE: frontend never contains Binance credentials or VAPID private key',async()=>{
   const files=['app.html','settings.html','signal.html','phase2-api.mjs'];
@@ -21,6 +43,16 @@ test('TEST_FIXTURE: frontend keeps confidence UNKNOWN and does not numerically d
   }
   const app=await readFile(new URL('app.html',root),'utf8');
   assert.ok(app.includes('confidence_score'));assert.ok(app.includes('UNKNOWN'));
+});
+
+test('TEST_FIXTURE: Hawkeye UI shows live pipeline rejection reasons even when no alert is available',async()=>{
+  const text=await readFile(new URL('../../android/app/src/main/assets/radarx-radar-screen.mjs',import.meta.url),'utf8');
+  assert.ok(text.includes('decision_diagnostics'));
+  assert.ok(text.includes('top_gate_failures'));
+  assert.ok(text.includes('رفض التحليل'));
+  assert.ok(text.includes('رفض بوابة التنبيه'));
+  assert.ok(text.includes('أكثر أسباب الرفض'));
+  assert.ok(text.includes("id!=='FALCON_EYE_RADAR'"));
 });
 
 test('TEST_FIXTURE: settings requests notification permission only from the enable action and handles unsupported/VAPID failures',async()=>{

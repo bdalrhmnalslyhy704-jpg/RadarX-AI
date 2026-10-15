@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -59,6 +59,34 @@ function makeClosedCandles(symbol, intervalMs, count, at=now, source='BINANCE_PU
     };
   });
 }
+
+test('Radar 8 confirms continuation only when price holds or retests breakout and activity persists',()=>{
+  const candles=[
+    {openTime:1,closeTime:60,open:99.2,high:99.8,low:98.9,close:99.5,closed:true},
+    {openTime:61,closeTime:120,open:99.6,high:100.2,low:99.4,close:100.05,closed:true},
+    {openTime:121,closeTime:180,open:100.02,high:100.5,low:99.8,close:100.3,closed:true}
+  ];
+  const result=assessContinuationConfirmation({candles,breakoutLevel:100,volumeRatio:1.4,tradeRatio:1.2,takerBuyRatio:.56});
+  assert.equal(result.stage,'CONTINUATION_CONFIRMED');
+  assert.equal(result.confirmed,true);
+  assert.equal(result.level_held,true);
+  assert.equal(result.retest_held,true);
+  assert.ok(result.score>=90);
+});
+
+test('Radar 8 refuses continuation confirmation when activity collapses or a fakeout is present',()=>{
+  const candles=[
+    {openTime:1,closeTime:60,open:99.2,high:100,low:99,close:99.7,closed:true},
+    {openTime:61,closeTime:120,open:99.7,high:100.2,low:99.6,close:100.02,closed:true},
+    {openTime:121,closeTime:180,open:100.02,high:100.3,low:99.8,close:100.1,closed:true}
+  ];
+  const lowActivity=assessContinuationConfirmation({candles,breakoutLevel:100,volumeRatio:.9,tradeRatio:.8,takerBuyRatio:.48});
+  assert.equal(lowActivity.confirmed,false);
+  assert.equal(lowActivity.stage,'BREAKOUT_UNCONFIRMED');
+  const fakeout=assessContinuationConfirmation({candles,breakoutLevel:100,volumeRatio:1.5,tradeRatio:1.3,takerBuyRatio:.56,falseBreakout:true});
+  assert.equal(fakeout.confirmed,false);
+  assert.ok(fakeout.reasons.includes('FALSE_BREAKOUT_DETECTED'));
+});
 
 test('Radar 8 falls back to fresh BTC 1h REST context when no verified hour cache exists',async()=>{
   const fiveMinute=makeClosedCandles('BTCUSDT',5*60_000,120,now,'BINANCE_PUBLIC_WS');

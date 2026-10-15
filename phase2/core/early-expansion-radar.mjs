@@ -402,6 +402,43 @@ function fakeoutFlag(rows,len=20){
   const flag=prevHigh>res&&prevClose<res&&lastClose<res;
   return {flag,score:flag?22:50};
 }
+export function assessContinuationConfirmation({
+  candles=[],breakoutLevel=null,volumeRatio=null,tradeRatio=null,takerBuyRatio=null,falseBreakout=false
+}={}){
+  const rows=Array.isArray(candles)?candles:[];
+  const level=Number(breakoutLevel);
+  if(rows.length<3||!Number.isFinite(level)||level<=0){
+    return {stage:'DATA_INSUFFICIENT',confirmed:false,score:null,level_held:false,
+      reasons:['CONTINUATION_EVIDENCE_INSUFFICIENT']};
+  }
+  const previous=rows.at(-2),last=rows.at(-1);
+  const lastClose=Number(last?.close),previousClose=Number(previous?.close),previousLow=Number(previous?.low);
+  const broke=Number.isFinite(lastClose)&&lastClose>=level;
+  const previousCloseHeld=Number.isFinite(previousClose)&&previousClose>=level*.997;
+  const retestHeld=Number.isFinite(previousLow)&&previousLow>=level*.985&&previousLow<=level*1.005&&broke;
+  const levelHeld=broke&&(previousCloseHeld||retestHeld)&&!falseBreakout;
+  const volumeConfirmed=Number.isFinite(Number(volumeRatio))&&Number(volumeRatio)>=1.10;
+  const tradesConfirmed=Number.isFinite(Number(tradeRatio))&&Number(tradeRatio)>=1.05;
+  const flowConfirmed=Number.isFinite(Number(takerBuyRatio))&&Number(takerBuyRatio)>=0.515;
+  const score=clamp((levelHeld?40:0)+(volumeConfirmed?20:0)+(tradesConfirmed?15:0)+(flowConfirmed?15:0)+(falseBreakout?0:10));
+  const confirmed=levelHeld&&volumeConfirmed&&tradesConfirmed&&flowConfirmed;
+  const reasons=[
+    !broke?'BREAKOUT_LEVEL_NOT_HELD':null,
+    broke&&!levelHeld?'BREAKOUT_HOLD_OR_RETEST_NOT_CONFIRMED':null,
+    !volumeConfirmed?'VOLUME_PARTICIPATION_NOT_SUSTAINED':null,
+    !tradesConfirmed?'TRADE_PARTICIPATION_NOT_SUSTAINED':null,
+    !flowConfirmed?'AGGRESSIVE_BUY_FLOW_NOT_CONFIRMED':null,
+    falseBreakout?'FALSE_BREAKOUT_DETECTED':null,
+    confirmed?'BREAKOUT_CONTINUATION_CONFIRMED':null
+  ].filter(Boolean);
+  return {stage:confirmed?'CONTINUATION_CONFIRMED':broke?'BREAKOUT_UNCONFIRMED':'WAITING_FOR_BREAKOUT',
+    confirmed,score,level_held:levelHeld,breakout_level:level,last_close:lastClose,previous_close:previousClose,
+    previous_low:previousLow,volume_ratio:Number.isFinite(Number(volumeRatio))?Number(volumeRatio):null,
+    trade_ratio:Number.isFinite(Number(tradeRatio))?Number(tradeRatio):null,
+    taker_buy_ratio:Number.isFinite(Number(takerBuyRatio))?Number(takerBuyRatio):null,
+    retest_held:retestHeld,false_breakout:Boolean(falseBreakout),reasons};
+}
+
 function depthSignals(book,price,config){
   if(!book||!Array.isArray(book.bids)||!Array.isArray(book.asks)||!book.bids.length||!book.asks.length)return {available:false,score:null,imbalance:null,spread_bps:null,depth_notional:null};
   const mid=(Number(book.bids[0]?.[0])+Number(book.asks[0]?.[0]))/2;
@@ -599,6 +636,11 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     preExpansion.reason='QUIET_BASE_PRE_EXPANSION_CONFIRMED';
   }
   const decisionBand=preExpansion.stage;
+  const continuation=assessContinuationConfirmation({
+    candles:s['5m'],breakoutLevel:br5.resistance,volumeRatio:rv5,
+    tradeRatio:tradeRatios.length?Math.max(...tradeRatios):microTradeRvol(s['1m'])??microTradeRvol(s['5m']),
+    takerBuyRatio:pressure.buy_ratio,falseBreakout
+  });
 
   const riskFlags=[
     extended?'ALREADY_EXTENDED':null,
@@ -609,6 +651,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     gate.issues.find(x=>x.startsWith('STALE_DATA'))?'STALE_DATA':null,
     gate.issues.find(x=>x.startsWith('MISSING_TIMEFRAME'))?'MISSING_TIMEFRAME':null,
     fakeoutFlag(s['5m']).flag?'RECENT_FAKEOUT':null,
+    br5.broken&&!continuation.confirmed?'CONTINUATION_NOT_CONFIRMED':null,
     market.label==='BEARISH'?'MARKET_REGIME_BEARISH':null,
     historicalWeak?'HISTORICAL_FOLLOWTHROUGH_WEAK':null
   ].filter(Boolean);
@@ -670,6 +713,11 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
       orderbook_imbalance:liq.imbalance,spread_bps:liq.spread_bps,depth_notional:liq.depth_notional,
       historical_followthrough_score:historicalScore,
       historical_followthrough_samples:historicalFollowThrough.samples,
+      continuation_confirmation_score:continuation.score,
+      continuation_confirmation_stage:continuation.stage,
+      continuation_confirmed:continuation.confirmed,
+      breakout_level_held:continuation.level_held,
+      continuation_reasons:continuation.reasons,
       historical_hit_rate_30m:historicalFollowThrough.hit_rate_short,
       historical_hit_rate_2h:historicalFollowThrough.hit_rate_long
     },
@@ -730,7 +778,8 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
       highRisk?'HIGH_RISK_PUMP':null,
       dumpRisk?'HIGH_RISK_DUMP':null,
       historicalReplay?'HISTORICAL_ORDERBOOK_UNAVAILABLE':null,
-      activityShock.detected?'ACTIVITY_SHOCK_WATCH_ONLY':null
+      activityShock.detected?'ACTIVITY_SHOCK_WATCH_ONLY':null,
+      br5.broken&&!continuation.confirmed?'CONTINUATION_NOT_CONFIRMED':null
     ].filter(Boolean))],
     invalidation:[
       'CLOSED_CANDLES_ONLY',
@@ -886,7 +935,7 @@ function alertEligible(candidate,cfg){
     (band==='PRE_EXPANSION'||band==='BREAKOUT_DEVELOPING')&&
     candidate.data_quality>=cfg.minDataQuality&&
     !candidate.data_stale&&
-    candidate.risk_flags.every(x=>!['ALREADY_EXTENDED','HIGH_RISK_PUMP','WIDE_SPREAD','RECENT_FAKEOUT'].includes(x));
+    candidate.risk_flags.every(x=>!['ALREADY_EXTENDED','HIGH_RISK_PUMP','WIDE_SPREAD','RECENT_FAKEOUT','CONTINUATION_NOT_CONFIRMED'].includes(x));
 }
 
 export function buildEarlyExpansionAlert(candidate,now=Date.now()){

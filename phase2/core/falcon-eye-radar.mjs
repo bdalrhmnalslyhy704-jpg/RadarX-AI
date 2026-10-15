@@ -419,7 +419,7 @@ export function buildFalconEyeAlert(input,now=Date.now(),config={}){
     confirmation_count:a.confirmation_count,
     pre_breakout_fingerprint:{
       ready:a.eligible,score:a.score,late:!a.not_chasing,pre_expansion_stage:a.pre_expansion_stage??'DATA_INSUFFICIENT',micro_move:false,
-      impulse_quality_score:a.component_scores.momentum,
+      impulse_quality_score:a.component_scores?.momentum??null,
       confirmation_count:a.confirmation_count
     },
     risk_flags:[
@@ -454,6 +454,8 @@ export class FalconEyeRadar {
     this.scans=0;this.alertCount=0;this.lastScanAtMs=null;this.lastError=null;this.busy=false;this.latestCandidates=[];this.lastBatchSymbols=[];this.lastBatchAt=null;this.lastPatrolVisits=0;
     this.pulseHistory=new Map();this.marketCoverage=0;this.pulseReadyCount=0;this.marketBreadthPct=0;this.fastCandidates=0;
     this.lastSelectionStats={cycle:0,input_rows:0,eligible_total:0,target:0,selected_total:0,quiet_selected:0,patrol_selected:0,exceptional_bypass_selected:0,incomplete_selected:0,shortfall:0,selected_symbols:[]};
+    this.lastDecisionDiagnostics={cycle_started_at:null,evaluated:0,analysis_rejected:0,score_rejected:0,notification_gate_rejected:0,notification_gate_accepted:0,rate_limited:0,alerts_stored:0};
+    this.gateFailureCounts={};
   }
   start(){
     if(this.running)return;
@@ -668,6 +670,15 @@ export class FalconEyeRadar {
     this.lastFutures.set(row.symbol,fd.futures);
     this.scans++;
     const gate=evaluateRadarNotificationGate(alert,{now});
+    this.lastDecisionDiagnostics.evaluated++;
+    if(!alert.eligible)this.lastDecisionDiagnostics.analysis_rejected++;
+    else if(!Number.isFinite(Number(alert.opportunity_score))||Number(alert.opportunity_score)<Number(this.config.minScore))this.lastDecisionDiagnostics.score_rejected++;
+    else if(!gate.eligible)this.lastDecisionDiagnostics.notification_gate_rejected++;
+    else this.lastDecisionDiagnostics.notification_gate_accepted++;
+    for(const failure of Array.isArray(gate.failures)?gate.failures:[]){
+      const key=String(failure||'UNKNOWN_GATE_FAILURE');
+      this.gateFailureCounts[key]=(this.gateFailureCounts[key]||0)+1;
+    }
     alert.elite_gate=gate;
     this.latestCandidates=[alert,...this.latestCandidates.filter(x=>x.symbol!==alert.symbol)].sort((a,b)=>
       Number(b.opportunity_score||0)-Number(a.opportunity_score||0)
@@ -676,11 +687,11 @@ export class FalconEyeRadar {
     const lastAlert=this.lastAlertAt.get(row.symbol)||0;
     if(now-lastAlert<this.config.alertCooldownMs)return alert;
     this.alertTimestamps=this.alertTimestamps.filter(t=>now-t<60*60*1000);
-    if(this.alertTimestamps.length>=this.config.maxAlertsPerHour)return alert;
+    if(this.alertTimestamps.length>=this.config.maxAlertsPerHour){this.lastDecisionDiagnostics.rate_limited++;return alert;}
     const decorated=decorateRadarAlert(alert,'Radar 9 — عين الصقر');
     await this.store.appendFalconEyeAlert(decorated);
     if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
-    this.lastAlertAt.set(row.symbol,now);this.alertTimestamps.push(now);this.alertCount++;
+    this.lastAlertAt.set(row.symbol,now);this.alertTimestamps.push(now);this.alertCount++;this.lastDecisionDiagnostics.alerts_stored++;
     return decorated;
   }
   async tick(){
@@ -708,6 +719,8 @@ export class FalconEyeRadar {
       await updatePreExpansionMarkouts(this.store,rows,{now:outcomeNow,marketContext,logger:this.logger}).catch(e=>{this.lastError=String(e?.message??e);});
       await backfillHistoricalPreExpansionOutcomes(this.store,this.rest,{now:outcomeNow,logger:this.logger}).catch(e=>{this.lastError=String(e?.message??e);});
       await maybeLogPreExpansionOutcomeReport(this.store,{logger:this.logger,now:this.clock()}).catch(e=>{this.lastError=String(e?.message??e);});
+      this.lastDecisionDiagnostics={cycle_started_at:this.clock(),evaluated:0,analysis_rejected:0,score_rejected:0,notification_gate_rejected:0,notification_gate_accepted:0,rate_limited:0,alerts_stored:0};
+      this.gateFailureCounts={};
       const selected=this.selectBatch(rows);
       this.lastScanAtMs=this.clock();
       const concurrency=Math.max(1,Math.min(this.config.deepConcurrency||3,selected.length||1));
@@ -730,7 +743,9 @@ export class FalconEyeRadar {
       running:this.running,radar:'FALCON_EYE_RADAR',radar_name:'Radar 9 — عين الصقر',universe:this.universe.length,last_batch_symbols:this.lastBatchSymbols.slice(),last_batch_count:this.lastBatchSymbols.length,last_batch_at:this.lastBatchAt,last_patrol_visits:this.lastPatrolVisits,deep_scan_min_interval_ms:Math.max(90_000,Number(this.config.deepScanMinIntervalMs)||0,Number(this.config.pollMs||30_000)*2),
       market_coverage:this.marketCoverage,pulse_ready_count:this.pulseReadyCount,market_breadth_pct:this.marketBreadthPct,fast_candidates:this.fastCandidates,
       last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,scans:this.scans,alerts:this.alertCount,
-      last_error:this.lastError,latest_candidates:this.latestCandidates.slice(0,10),selection:this.lastSelectionStats,active_alerts_last_hour:this.alertTimestamps.filter(t=>now-t<60*60*1000).length,
+      last_error:this.lastError,latest_candidates:this.latestCandidates.slice(0,10),selection:this.lastSelectionStats,
+      decision_diagnostics:{...this.lastDecisionDiagnostics,top_gate_failures:Object.entries(this.gateFailureCounts).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([reason,count])=>({reason,count}))},
+      active_alerts_last_hour:this.alertTimestamps.filter(t=>now-t<60*60*1000).length,
       alert_budget_per_hour:this.config.maxAlertsPerHour,features:['OGN pre-explosion fingerprint','Quiet-base activity shock (taker buy is not mandatory)','Spot/Futures volume ratio','Open Interest','Funding squeeze context','Forced-liquidation context','Higher-Lows','Compression→Expansion','Relative Strength vs BTC','Anti-chase']
     };
   }
