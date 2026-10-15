@@ -72,6 +72,7 @@ test('Kahir rejects a single-candle volume spike without trade participation',()
   });
   assert.ok(result.metrics.trade_ratio<1.2);
   assert.equal(result.eligible,false);
+  assert.ok(result.rejection_reasons.includes('TRADE_PARTICIPATION_BELOW_THRESHOLD'));
 });
 
 test('Kahir refuses an already-extended daily move even when short-term momentum is strong',()=>{

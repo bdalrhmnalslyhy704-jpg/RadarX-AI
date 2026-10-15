@@ -181,6 +181,18 @@ export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHis
     persistence>=68,
     relativeAccelerationBps>=KAHIR_RADAR_DEFAULTS.minRelativeAccelerationBps
   ].filter(Boolean);
+  const rejectionReasons=[];
+  if(direction!=='UP')rejectionReasons.push('DIRECTION_NOT_UP');
+  if(extended)rejectionReasons.push('DAILY_MOVE_ALREADY_EXTENDED');
+  if(score<KAHIR_RADAR_DEFAULTS.minScore)rejectionReasons.push('SCORE_BELOW_MINIMUM');
+  if(z1<KAHIR_RADAR_DEFAULTS.minOneMinuteZ&&z5<KAHIR_RADAR_DEFAULTS.minFiveMinuteZ)rejectionReasons.push('SELF_ACCELERATION_BELOW_THRESHOLD');
+  if(volumeRatio<KAHIR_RADAR_DEFAULTS.minVolumeRatio)rejectionReasons.push('VOLUME_PARTICIPATION_BELOW_THRESHOLD');
+  if(tradeRatio<1.2)rejectionReasons.push('TRADE_PARTICIPATION_BELOW_THRESHOLD');
+  if(eff<KAHIR_RADAR_DEFAULTS.minEfficiency)rejectionReasons.push('PRICE_PATH_EFFICIENCY_BELOW_THRESHOLD');
+  if(acceptance<65)rejectionReasons.push('RANGE_ACCEPTANCE_BELOW_THRESHOLD');
+  if(persistence<68)rejectionReasons.push('IMPULSE_PERSISTENCE_BELOW_THRESHOLD');
+  if(relativeAccelerationBps<KAHIR_RADAR_DEFAULTS.minRelativeAccelerationBps)rejectionReasons.push('RELATIVE_ACCELERATION_BELOW_THRESHOLD');
+  if(confirmations.length<7)rejectionReasons.push('CONFIRMATION_BREADTH_LOW');
 
   const reasons=[];
   const push=(ok,s)=>{if(ok)reasons.push(s)};
@@ -199,6 +211,7 @@ export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHis
     eligible,stage,score:Math.round(score*10)/10,closed_candles_only:true,
     data_quality:90,data_stale:false,data_quality_reasons:[],data_quality_checks:dataChecks,candle_freshness:{one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge},
     confirmation_count:confirmations.length,confirmation_total:9,direction,
+    rejection_reasons:[...new Set(rejectionReasons)],
     algorithms:{
       SELF_BASELINE_Z:{one_minute_z:z1,five_minute_z:z5,self_acceleration_pct:selfAccelerationPct,relative_acceleration_bps:relativeAccelerationBps},
       PARTICIPATION_REGIME:{volume_ratio:volumeRatio,trade_ratio:tradeRatio,score:participationScore},
@@ -396,8 +409,9 @@ export class KahirRadar{
     result.blocked_reasons=[
       ...result.data_quality_reasons,
       ...(Array.isArray(analysis.reason_codes)?analysis.reason_codes:[]),
+      ...(Array.isArray(analysis.rejection_reasons)?analysis.rejection_reasons:[]),
       ...(!analysis.eligible?[String(analysis.stage||'ANALYSIS_NOT_ELIGIBLE')]:[]),
-      ...(Array.isArray(gate.risk_flags)?gate.risk_flags.map(x=>'ELITE_GATE_'+x):[]),
+      ...(!gate.eligible&&Array.isArray(gate.risk_flags)?gate.risk_flags.map(x=>'ELITE_GATE_'+x):[]),
       ...(!gate.eligible?['ELITE_GATE_NOT_ELIGIBLE']:[ ])
     ];
     if(!analysis.eligible||!gate.eligible){
@@ -435,7 +449,19 @@ export class KahirRadar{
       analysis_eligible:result?.analysis?.eligible===true,elite_gate_eligible:result?.elite_gate?.eligible===true,
       notification_gate_eligible:result?.notification_gate?.eligible===true,
       data_quality:Number.isFinite(Number(result?.data_quality))?Number(result.data_quality):0,
-      data_stale:result?.data_stale===true,status,blocked_reasons:reasons});
+      data_stale:result?.data_stale===true,status,blocked_reasons:reasons,
+      thresholds:result?.analysis?.trigger||null,
+      metrics:{
+        one_minute_z:result?.analysis?.metrics?.one_minute_z??null,
+        five_minute_z:result?.analysis?.metrics?.five_minute_z??null,
+        volume_ratio:result?.analysis?.metrics?.volume_ratio??null,
+        trade_ratio:result?.analysis?.metrics?.trade_ratio??null,
+        efficiency:result?.analysis?.metrics?.efficiency??null,
+        range_acceptance_pct:result?.analysis?.metrics?.range_acceptance_pct??null,
+        persistence_score:result?.analysis?.metrics?.persistence_score??null,
+        relative_acceleration_bps:result?.analysis?.metrics?.relative_acceleration_bps??null
+      },
+      evidence_reasons:Array.isArray(result?.analysis?.reasons)?result.analysis.reasons.slice(0,10):[]});
     if(this.decisionTrail.length>240)this.decisionTrail.splice(0,this.decisionTrail.length-240);
   }
   async tick(){
