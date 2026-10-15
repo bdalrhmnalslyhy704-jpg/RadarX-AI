@@ -419,7 +419,7 @@ export function buildFalconEyeAlert(input,now=Date.now(),config={}){
     confirmation_count:a.confirmation_count,
     pre_breakout_fingerprint:{
       ready:a.eligible,score:a.score,late:!a.not_chasing,pre_expansion_stage:a.pre_expansion_stage??'DATA_INSUFFICIENT',micro_move:false,
-      impulse_quality_score:a.component_scores.momentum,
+      impulse_quality_score:a.component_scores?.momentum??null,
       confirmation_count:a.confirmation_count
     },
     risk_flags:[
