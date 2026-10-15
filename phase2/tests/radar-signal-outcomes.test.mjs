@@ -53,6 +53,18 @@ test('archive normalization never substitutes missing price or timestamp with ze
   assert.ok(missing.baseline_missing_reasons.includes('SIGNAL_TIMESTAMP_MISSING'));
 });
 
+test('outcome evaluation rejects an invalid entry baseline instead of awarding false threshold hits',()=>{
+  const horizon=RADAR_OUTCOME_HORIZONS.find(x=>x.key==='5m');
+  const now=BASE+horizon.ms+horizon.intervalMs+minute;
+  const rows=Array.from({length:5},(_,i)=>candle(BASE+i*minute,minute,{open:100,high:150,low:90,close:100}));
+  const missing=evaluateRadarOutcomeHorizon({detected_at:BASE,entry_price:null},rows,horizon,now);
+  const zero=evaluateRadarOutcomeHorizon({detected_at:BASE,entry_price:0},rows,horizon,now);
+  assert.equal(missing.status,'INCOMPLETE');
+  assert.equal(missing.reason,'INVALID_SIGNAL_BASELINE');
+  assert.equal(zero.status,'INCOMPLETE');
+  assert.equal(zero.reason,'INVALID_SIGNAL_BASELINE');
+});
+
 test('horizon outcomes use complete closed candles and report OHLC excursions without claiming exact trade times',()=>{
   const detectedAt=BASE;
   const horizon=RADAR_OUTCOME_HORIZONS.find(x=>x.key==='5m');
