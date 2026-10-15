@@ -210,7 +210,14 @@ function pct(value, base) {
     ? Number(((value / base - 1) * 100).toFixed(5)) : null;
 }
 export function evaluateRadarOutcomeHorizon(record, rows, horizon, now) {
-  const endAt = Number(record.detected_at) + horizon.ms;
+  const detectedAt = finite(record?.detected_at);
+  const entry = finite(record?.entry_price);
+  if (detectedAt === null || detectedAt <= 0 || entry === null || entry <= 0 ||
+      detectedAt > Number(now) || !Number.isFinite(horizon?.ms) ||
+      !Number.isFinite(horizon?.intervalMs) || horizon.ms <= 0 || horizon.intervalMs <= 0) {
+    return { status: 'INCOMPLETE', reason: 'INVALID_SIGNAL_BASELINE' };
+  }
+  const endAt = detectedAt + horizon.ms;
   if (Number(now) < endAt + horizon.intervalMs) {
     return { status: 'PENDING', reason: 'HORIZON_NOT_MATURED_WITH_CLOSED_CANDLE_TOLERANCE' };
   }
@@ -247,7 +254,6 @@ export function evaluateRadarOutcomeHorizon(record, rows, horizon, now) {
       };
     }
   }
-  const entry = Number(record.entry_price);
   const maxHigh = Math.max(...bars.map(x => x.high));
   const minLow = Math.min(...bars.map(x => x.low));
   const final = bars[bars.length - 1];
