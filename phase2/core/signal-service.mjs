@@ -29,7 +29,14 @@ export class SignalService{
     const r=evaluateSymbolSnapshot({symbol:input.symbol,series4h:input.series4h,series1h:input.series1h,series15m:input.series15m,
       bookRaw:input.bookRaw,ticker24hRaw:input.ticker24hRaw,source:input.source||'UNKNOWN',now},{config:engineConfig});
     let calibration=null;
-    try{calibration=await updateSignalOutcomes(this.store,{symbol:input.symbol,price:r.signal?.price?.reference,now});}catch{}
+    try{
+      calibration=await updateSignalOutcomes(this.store,{
+        symbol:input.symbol,price:r.signal?.price?.reference,now,
+        // Preserve historical closed candles so each prediction is marked
+        // against its own 15m/1h/4h/24h horizon, never today's price reused.
+        priceHistory:Array.isArray(input.series15m)?input.series15m:undefined
+      });
+    }catch{}
     const triggerCandle=latestClosed(Array.isArray(input.series15m)?input.series15m:[]);
     const signal={...r.signal,event_class:eventClass,scores:{...r.signal.scores,data_quality:dg.quality,liquidity_quality:liq.quality,confidence_score:'UNKNOWN'},
       data_status:{...r.signal.data_status,status:dg.status,source:input.source||'UNKNOWN',
@@ -64,8 +71,6 @@ export class SignalService{
     const notifications=this.pushManager?await this.pushManager.notifySignal(signal):[];
     const status=notifications.some(x=>x.status==='SENT')?'SENT_OR_ATTEMPTED':notifications.length?'FAILED_OR_DISABLED':'NO_SUBSCRIBERS';
     await this.store.appendSignalAudit({...audit,event:'SIGNAL_NOTIFICATION_RESULT',notification_status:status});
-    return{emitted:true,signal,blocked:[],audit,notificationStatus:status,notifications,dataGate:dg,liquidity:liq,strategies:r.strategies};
+    return{emitted:true,signal,blocked,audit,dataGate:dg,liquidity:liq,strategies:r.strategies,notifications,status};
   }
 }
-export function assertReadOnlySignal(s){if(s?.paper_trade?.real_order_execution!==false)throw new Error('READ_ONLY_POLICY_VIOLATION');if(s?.paper_trade?.enabled!==true)throw new Error('PAPER_TRADING_POLICY_VIOLATION');}
-export {EVENT_CLASS};
