@@ -127,6 +127,8 @@ export function normalizeArchivedRadarSignal(row, radarId, now = Date.now()) {
     baseline_status: validBaseline ? 'COMPLETE' : 'INCOMPLETE',
     baseline_missing_reasons: reasons,
     alert_archive: RADAR_OUTCOME_ARCHIVES.find(x => x.id === radar)?.archive || null,
+    archive_cursor_at: timestamp(raw.replay_cursor_at, raw.processed_at, raw.detected_at, raw.detectedAt, raw.event_at, raw.timestamp),
+    archive_cursor_id: String(raw.replay_cursor_id || '').slice(0, 300),
     source: 'ARCHIVED_RADAR_ALERT',
     outcomes: Object.fromEntries(RADAR_OUTCOME_HORIZONS.map(h => [h.key, {
       status: validBaseline ? 'PENDING' : 'EXCLUDED_INCOMPLETE_BASELINE',
@@ -160,6 +162,7 @@ export function emptyRadarSignalOutcomeState() {
     records: [],
     last_import_at: null,
     last_import_counts: {},
+    last_archive_cursors: {},
     last_pass_at: null,
     last_pass: null,
     updated_at: 0
@@ -173,6 +176,7 @@ function normalizeState(raw) {
     version: 'RADAR_SIGNAL_OUTCOMES_V1',
     records: Array.isArray(s.records) ? s.records.filter(x => x && typeof x === 'object' && !Array.isArray(x)) : [],
     last_import_counts: object(s.last_import_counts),
+    last_archive_cursors: object(s.last_archive_cursors),
     last_pass: s.last_pass === null ? null : object(s.last_pass)
   };
 }
@@ -367,6 +371,7 @@ export function buildRadarSignalOutcomeReport(input = {}, now = Date.now()) {
     },
     last_import_at: state.last_import_at,
     last_import_counts: state.last_import_counts,
+    last_archive_cursors: state.last_archive_cursors,
     last_pass_at: state.last_pass_at,
     last_pass: state.last_pass,
     by_radar: byRadar,
@@ -443,19 +448,45 @@ export async function runRadarSignalOutcomePass({
   const cutoff = Number(now) - Math.max(1, Math.min(180, Number(lookbackDays) || DEFAULT_LOOKBACK_DAYS)) * DAY_MS;
   const incoming = [];
   const importCounts = {};
+  const priorState = normalizeState(await store.getRadarSignalOutcomes());
+  const nextCursors = { ...priorState.last_archive_cursors };
+  const pageLimit = Math.max(1, Math.min(100, Number(archiveLimit) || 100));
   for (const radar of RADAR_OUTCOME_ARCHIVES) {
-    const reader = store[radar.reader];
-    if (typeof reader !== 'function') {
-      importCounts[radar.id] = { scanned: 0, imported: 0, status: 'READER_UNAVAILABLE' };
-      continue;
-    }
+    const cursor = object(priorState.last_archive_cursors[radar.id]);
+    const cursorAt = Math.max(cutoff, finite(cursor.at) ?? cutoff);
+    const cursorId = cursorAt === finite(cursor.at) ? String(cursor.id || '') : '';
     try {
-      const rows = await reader.call(store, { sinceMs: cutoff, limit: Math.max(1, Math.min(100, Number(archiveLimit) || 100)) });
+      let rows = [];
+      if (typeof store.readAlertPage === 'function') {
+        rows = await store.readAlertPage(radar.archive, {
+          sinceMs: cursorAt, sinceId: cursorId, radar: radar.id, limit: pageLimit
+        });
+      } else {
+        const reader = store[radar.reader];
+        if (typeof reader !== 'function') {
+          importCounts[radar.id] = { scanned: 0, imported: 0, status: 'READER_UNAVAILABLE' };
+          continue;
+        }
+        rows = await reader.call(store, { sinceMs: cursorAt, limit: pageLimit });
+      }
       const normalized = (Array.isArray(rows) ? rows : []).map(row => normalizeArchivedRadarSignal(row, radar.id, now));
       incoming.push(...normalized);
-      importCounts[radar.id] = { scanned: normalized.length, status: 'OK' };
+      const finalRow = Array.isArray(rows) ? rows.at(-1) : null;
+      const finalAt = timestamp(finalRow?.replay_cursor_at, finalRow?.processed_at, finalRow?.detected_at, finalRow?.detectedAt, finalRow?.event_at, finalRow?.timestamp);
+      const finalId = String(finalRow?.replay_cursor_id || '');
+      if (finalAt !== null) {
+        const previousAt = finite(cursor.at) ?? cutoff;
+        if (finalAt > previousAt || (finalAt === previousAt && finalId && finalId > String(cursor.id || ''))) {
+          nextCursors[radar.id] = { at: finalAt, id: finalId };
+        }
+      }
+      importCounts[radar.id] = {
+        scanned: normalized.length, status: 'OK',
+        page_cursor_at: nextCursors[radar.id]?.at ?? null,
+        has_more_possible: normalized.length >= pageLimit
+      };
     } catch (error) {
-      importCounts[radar.id] = { scanned: 0, status: 'READ_FAILED', reason: safeError(error) };
+      importCounts[radar.id] = { scanned: 0, imported: 0, status: 'READ_FAILED', reason: safeError(error) };
     }
   }
   let newlyImported = 0;
@@ -473,6 +504,7 @@ export async function runRadarSignalOutcomePass({
     state.records = trimRecords(state.records);
     state.last_import_at = Number(now);
     state.last_import_counts = importCounts;
+    state.last_archive_cursors = nextCursors;
     state.updated_at = Number(now);
     return state;
   });
