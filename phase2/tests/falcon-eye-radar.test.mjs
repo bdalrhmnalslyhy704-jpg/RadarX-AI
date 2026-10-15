@@ -26,6 +26,25 @@ function flat(n=40,start=100,step=300_000){
   });
 }
 
+test('Falcon Eye does not treat explicit null futures metrics as available zero-valued data',()=>{
+  const now=1_800_000_000_000+240*60_000;
+  const one=risingBase();
+  const five=flat(80);
+  const a=buildFalconEyeAnalysis({
+    ticker:{symbol:'NODATAUSDT',lastPrice:one.at(-1).close,priceChange24h:2.8,quoteVolume24h:2_500_000},
+    oneMinute:one,fiveMinute:five,
+    futures:{quoteVolume:null,openInterest:null,fundingRate:null},
+    previousFutures:{openInterest:null},
+    now
+  });
+  assert.equal(a.derivatives.futures_available,false);
+  assert.equal(a.derivatives.futures_quote_volume,null);
+  assert.equal(a.derivatives.open_interest,null);
+  assert.equal(a.derivatives.funding_rate,null);
+  assert.equal(a.metrics.funding_rate,null);
+  assert.equal(a.reasons.includes('Funding سلبي: ضغط شورت قابل للانقلاب'),false);
+});
+
 test('Falcon Eye notification diversity reads the actual nested component scores',()=>{
   const now=1_900_000_000_000;
   const alert={
