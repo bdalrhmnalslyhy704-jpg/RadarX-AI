@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {MULTI_ANALYST_NAMES,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible,selectWithPriorityRotation,selectDiscoveryWithRadarReviewPriority} from '../core/multi-analyst-engine.mjs';
+import {MULTI_ANALYST_NAMES,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible,selectWithPriorityRotation,selectDiscoveryWithRadarReviewPriority,countAnalystEvidenceCoverage} from '../core/multi-analyst-engine.mjs';
 
 // Continuous analyst cycles target one minute start-to-start, subtracting the
 // time spent scanning and never scheduling a negative delay after a slow cycle.
@@ -328,3 +328,36 @@ console.log('multi-analyst role-completion evidence/freshness: PASS');
 }
 
 console.log('multi-analyst queued radar priority/capacity preservation: PASS');
+
+
+// Missing/null/blank evidence must not inflate the analysts' own coverage score.
+{
+  const coverage=countAnalystEvidenceCoverage({missing:null,blank:' ',flag:false,zero:0,nested:{missing:null,score:82}});
+  assert.deepEqual(coverage,{used:2,total:5});
+  const allMissing=countAnalystEvidenceCoverage({price:null,volume:'',signal:false});
+  assert.deepEqual(allMissing,{used:0,total:3});
+}
+console.log('analyst evidence integrity regression: PASS');
+
+// Per-horizon calibration must use its own closed candle, not a much later ticker price.
+{
+  const engine=new MultiAnalystEngine({rest:{request:async()=>({data:[]})}});
+  const asOf=1_900_000_000_000;
+  const at=(minutes,close)=>({closed:true,openTime:asOf+minutes*60_000-15*60_000+1,
+    closeTime:asOf+minutes*60_000,open:100,high:Math.max(100,close)+0.2,low:Math.min(100,close)-0.2,
+    close,volume:1000});
+  engine.pendingOutcomes.set('TESTUSDT',[{
+    symbol:'TESTUSDT',entryPrice:100,direction:'LONG',earlyScore:80,asOf,
+    analysts:[{id:'PRE_BREAKOUT',direction:'LONG',score:90}],
+    evaluated:{'15m':false,'1h':false,'4h':false}
+  }]);
+  engine._settleOutcome('TESTUSDT',asOf+7*60*60*1000,[at(15,100.5),at(60,101.5),at(240,104.5)]);
+  const self=engine.calibration.summary().find(x=>x.id==='PRE_BREAKOUT');
+  assert.ok(self,'analyst calibration should have a sample from the matured 4h horizon');
+  assert.equal(self.wins,1,'only the 4h candle reaches its own +4% target');
+  assert.equal(self.losses,0);
+  assert.equal(self.neutral,2,'the 15m and 1h markouts remain neutral at their own horizons');
+  assert.equal(self.samples,1);
+  assert.equal(engine.pendingOutcomes.has('TESTUSDT'),false,'matured work items should release their memory');
+}
+console.log('per-horizon analyst self-calibration regression: PASS');
