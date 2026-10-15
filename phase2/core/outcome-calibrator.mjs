@@ -9,6 +9,7 @@ const HORIZONS=Object.freeze([
   ['4h',4*60*60*1000,0.025,30*60*1000],
   ['24h',24*60*60*1000,0.05,2*60*60*1000]
 ]);
+const CANDLE_MARKOUT_GRACE_MS=15*60*1000;
 const MAX_PENDING=36;
 const MAX_HISTORY=120;
 
@@ -54,6 +55,17 @@ function scoreStats(stats){
   return xs.length?xs.reduce((a,b)=>a+b,0)/xs.length*100:50;
 }
 
+function horizonCandle(rows,dueAt,now){
+  if(!Array.isArray(rows))return null;
+  return rows.filter(c=>{
+    if(c?.closed!==true)return false;
+    const closeTime=Number(c?.closeTime),close=Number(c?.close);
+    return Number.isFinite(closeTime)&&closeTime>=dueAt&&
+      closeTime<=dueAt+CANDLE_MARKOUT_GRACE_MS&&closeTime<=now&&
+      Number.isFinite(close)&&close>0;
+  }).sort((a,b)=>Number(a.closeTime)-Number(b.closeTime))[0]||null;
+}
+
 async function load(store,symbol){
   const raw=await store.getPredictionCalibration(symbol);
   const m=safeMemory(raw,symbol);
@@ -74,7 +86,7 @@ async function save(store,m){
   return slim;
 }
 
-export async function updateSignalOutcomes(store,{symbol,price,now=Date.now()}={}){
+export async function updateSignalOutcomes(store,{symbol,price,now=Date.now(),priceHistory}={}){
   const s=String(symbol||'').trim().toUpperCase();
   const p=num(price,null);
   const at=num(now,null);
@@ -99,20 +111,36 @@ export async function updateSignalOutcomes(store,{symbol,price,now=Date.now()}={
     const age=at-createdAt;
     const returns={...pred.returns};
     const outcomes={...pred.outcomes};
+    const markoutSources={...pred.markout_sources};
     for(const [h,ms,target,toleranceMs] of HORIZONS){
       if(outcomes[h])continue;
       if(age<ms)continue;
-      // We only have the current price, not a historical price series here.
-      // If the observation missed this horizon's bounded window, record it as
-      // unavailable rather than incorrectly assigning today's return to it.
-      if(age-ms>toleranceMs){
+      const dueAt=createdAt+ms;
+      // Prefer a genuine closed 15m candle at the forecast horizon. This lets
+      // a later scan backfill the correct historical mark instead of using its
+      // current price for several older horizons.
+      const candle=horizonCandle(priceHistory,dueAt,at);
+      let markPrice=null;
+      if(candle){
+        markPrice=Number(candle.close);
+        markoutSources[h]='CLOSED_15M_CANDLE';
+      }else if(!Array.isArray(priceHistory)&&age-ms<=toleranceMs){
+        // Compatibility path for callers that can provide only a current
+        // snapshot. Its bounded time window prevents late-price leakage.
+        markPrice=p;
+        markoutSources[h]='CURRENT_SNAPSHOT_WITHIN_WINDOW';
+      }else if(age-ms>toleranceMs){
         outcomes[h]='UNAVAILABLE';
         m.stats[h].unavailable=num(m.stats[h].unavailable,0)+1;
         unavailable++;
         changed=true;
         continue;
+      }else{
+        // The horizon's sample window is not over yet; allow a later update
+        // to supply the matching closed candle.
+        continue;
       }
-      returns[h]=Number(((p/Number(pred.entry_price)-1)*100).toFixed(4));
+      returns[h]=Number(((markPrice/Number(pred.entry_price)-1)*100).toFixed(4));
       outcomes[h]=outcomeFor(pred.direction,returns[h]/100,target);
       if(['HIT','MISS','NEUTRAL'].includes(outcomes[h])){
         m.stats[h].samples=num(m.stats[h].samples,0)+1;
@@ -135,11 +163,12 @@ export async function updateSignalOutcomes(store,{symbol,price,now=Date.now()}={
         score:pred.score,
         outcomes,
         returns,
+        markout_sources:markoutSources,
         unavailable_horizons:HORIZONS.filter(([h])=>outcomes[h]==='UNAVAILABLE').map(([h])=>h)
       });
       changed=true;
     }else{
-      keep.push({...pred,returns,outcomes});
+      keep.push({...pred,returns,outcomes,markout_sources:markoutSources});
     }
   }
   m.predictions=keep;
@@ -165,7 +194,7 @@ export async function recordSignalPrediction(store,{symbol,direction,entryPrice,
     radar:String(radar||'SIGNAL_SERVICE'),
     reason_codes:arr(reasonCodes).slice(0,12).map(String),
     created_at:Number(at),
-    returns:{},outcomes:{}
+    returns:{},outcomes:{},markout_sources:{}
   });
   await save(store,m);
   return {
