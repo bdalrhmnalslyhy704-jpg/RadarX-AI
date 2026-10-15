@@ -73,9 +73,21 @@ function trendlineScore(candles,direction){
   return {score:aligned?Math.min(100,78+Math.abs(slopePctPerBar)*180):32,slopePctPerBar};
 }
 
-function timeframeAnalysis(candles,maPeriod=50,now=Date.now()){
+function timeframeAnalysis(candles,maPeriod=50,now=Date.now(),intervalMs=null){
   const rows=closedCandles(candles,now);
-  if(rows.length<Math.max(30,maPeriod+5))return {direction:'INSUFFICIENT',score:null,structure:null};
+  const required=Math.max(30,maPeriod+5);
+  if(rows.length<required)return {direction:'INSUFFICIENT',score:null,structure:null,data_quality:0,data_stale:false,reason_codes:['CLOSED_CANDLE_WINDOW_INCOMPLETE'],candle_count:rows.length,required_candles:required};
+  if(Number.isFinite(Number(intervalMs))&&Number(intervalMs)>0){
+    const issues=[];
+    for(let i=1;i<rows.length;i++){
+      const delta=Number(rows[i].openTime)-Number(rows[i-1].openTime);
+      if(!Number.isFinite(delta)||Math.abs(delta-Number(intervalMs))>1){issues.push('CLOSED_CANDLE_SEQUENCE_HAS_GAPS');break;}
+    }
+    const age=Number(now)-Number(rows.at(-1)?.closeTime);
+    if(!Number.isFinite(age)||age<0||age>Number(intervalMs)*2)issues.push('STALE_CLOSED_CANDLES');
+    if(issues.length)return {direction:'INSUFFICIENT',score:null,structure:null,data_quality:0,data_stale:issues.includes('STALE_CLOSED_CANDLES'),
+      reason_codes:[...new Set(issues)],candle_count:rows.length,required_candles:required,latest_close_age_ms:age,interval_ms:Number(intervalMs)};
+  }
   const closes=rows.map(c=>Number(c.close));
   const current=closes.at(-1);
   const ma=ema(closes,maPeriod),prevMa=emaPrev(closes,maPeriod);
@@ -152,9 +164,9 @@ function entryTiming(candles,price,ma,now=Date.now()){
 
 export function buildAlMuqawimAnalysis(series,ticker,now=Date.now(),config={}){
   const maPeriod=Math.max(10,Math.trunc(Number(config.maPeriod)||50));
-  const m15=timeframeAnalysis(series?.['15m']||[],maPeriod,now);
-  const h1=timeframeAnalysis(series?.['1h']||[],maPeriod,now);
-  const h4=timeframeAnalysis(series?.['4h']||[],maPeriod,now);
+  const m15=timeframeAnalysis(series?.['15m']||[],maPeriod,now,15*60_000);
+  const h1=timeframeAnalysis(series?.['1h']||[],maPeriod,now,60*60_000);
+  const h4=timeframeAnalysis(series?.['4h']||[],maPeriod,now,4*60*60_000);
   const tfs=[h4,h1,m15];
   if(tfs.some(x=>x.direction==='INSUFFICIENT')){
     return {eligible:false,stage:'INSUFFICIENT_DATA',direction:'NONE',score:null,closed_candles_only:true,timeframes:{'4h':h4,'1h':h1,'15m':m15}};
