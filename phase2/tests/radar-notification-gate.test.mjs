@@ -10,6 +10,22 @@ function baseline(radar,extra={}){
     detected_at:NOW,processed_at:NOW,eligible:true,direction:'UP',reasons:['closed candle','volume participation'],reason_codes:['VOLUME_PARTICIPATION'],
     risk_flags:[],components:{momentum:90,volume:90,trades:90,taker:90,range:90,breakout:90,ema:90,vwap:90,bollinger:90,efficiency:90,atr:90},...extra};
 }
+test('missing or invalid market-quality measurements fail closed instead of inheriting perfect scores',()=>{
+  resetRadarNotificationGateForTests();
+  const alert=baseline('STRONG_MOVE_RADAR',{
+    data_quality:null,
+    liquidity_quality:null,
+    data_status:{data_quality:null},
+    deep_scan:{assessment:{data_quality:null,liquidity_score:null}}
+  });
+  const result=evaluateRadarNotificationGate(alert,{now:NOW});
+  assert.equal(result.data_quality,0);
+  assert.equal(result.liquidity_quality,0);
+  assert.ok(result.failures.includes('DATA_QUALITY_BELOW_STRICT_THRESHOLD'));
+  assert.ok(result.failures.includes('LIQUIDITY_BELOW_STRICT_THRESHOLD'));
+  assert.equal(result.eligible,false);
+});
+
 test('all twelve declared radar profiles are present and health reports them',()=>{
   resetRadarNotificationGateForTests();const h=notificationGateHealth();assert.equal(h.registered_profile_count,12);
   for(const radar of ['EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR','LIQUIDITY_ABSORPTION_RADAR','KAHIR_RADAR','DOOMSDAY_RADAR','PROFESSOR_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','FALCON_EYE_RADAR'])assert.ok(h.registered_profiles.includes(radar),radar);
