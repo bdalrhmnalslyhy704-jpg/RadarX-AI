@@ -412,7 +412,12 @@ export class KahirRadar{
       ...(Array.isArray(analysis.rejection_reasons)?analysis.rejection_reasons:[]),
       ...(!analysis.eligible?[String(analysis.stage||'ANALYSIS_NOT_ELIGIBLE')]:[]),
       ...(!gate.eligible&&Array.isArray(gate.risk_flags)?gate.risk_flags.map(x=>'ELITE_GATE_'+x):[]),
-      ...(!gate.eligible?['ELITE_GATE_NOT_ELIGIBLE']:[ ])
+      ...(!gate.eligible?[
+        ...(Number(gate.score)<88?['ELITE_SCORE_BELOW_MINIMUM']:[]),
+        ...(Number(gate.category_hits)<4?['ELITE_CATEGORY_DIVERSITY_LOW']:[]),
+        ...(!String(analysis.direction||'').startsWith('UP')?['ELITE_DIRECTION_NOT_UP']:[]),
+        'ELITE_GATE_NOT_ELIGIBLE'
+      ]:[ ])
     ];
     if(!analysis.eligible||!gate.eligible){
       this.recordDecisionDiagnostics(result,'BLOCKED_ANALYSIS_OR_ELITE_GATE');
@@ -447,6 +452,8 @@ export class KahirRadar{
     this.decisionTrail.push({at:Number(now),symbol:String(result?.symbol||'UNKNOWN'),stage:String(result?.stage||'UNKNOWN'),
       score:Number.isFinite(Number(result?.score))?Number(result.score):null,
       analysis_eligible:result?.analysis?.eligible===true,elite_gate_eligible:result?.elite_gate?.eligible===true,
+      elite_gate_score:result?.elite_gate?.score??null,elite_gate_category_hits:result?.elite_gate?.category_hits??null,
+      elite_gate_risk_flags:Array.isArray(result?.elite_gate?.risk_flags)?result.elite_gate.risk_flags:[],
       notification_gate_eligible:result?.notification_gate?.eligible===true,
       data_quality:Number.isFinite(Number(result?.data_quality))?Number(result.data_quality):0,
       data_stale:result?.data_stale===true,status,blocked_reasons:reasons,
