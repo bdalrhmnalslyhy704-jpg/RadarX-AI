@@ -31,6 +31,7 @@ import {assertDeploymentEnvironment,assertReadOnlyStagingConfig} from './deploy/
 import {sanitizeLogMessage} from './runtime.mjs';
 import {MultiAnalystEngine} from './core/multi-analyst-engine.mjs';
 import {RadarSwarmCoordinator} from './core/radar-swarm-coordinator.mjs';
+import {RadarSignalOutcomeWorker} from './core/radar-signal-outcomes.mjs';
 
 
 import {instrumentRadarCycle} from './core/radar-telemetry.mjs';
@@ -108,6 +109,9 @@ export async function startServer({
     migrated_legacy_files:store.migratedFiles,records_sha256:archiveDigest
   }));
   const rest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  // Outcome work is deliberately bounded: at most two public-Spot kline requests
+  // per minute, using stored alerts and real closed candles only.
+  const radarSignalOutcomeWorker=new RadarSignalOutcomeWorker({store,rest,logger,pollMs:60_000,maxRestCalls:2});
   const dedup=new SignalDeduplicator({store,windowMs:15*60*1000});
   const provider=createPushProvider(config.push);
   const push=new PushManager({provider,store,deduplicator:dedup,retryBaseMs:config.monitoring.pushRetryMs});
@@ -211,7 +215,7 @@ export async function startServer({
     ...analystReviewBridge,expected_specialists:19,expected_final_analyst:1,
     mode:'NON_BLOCKING_REVIEW_ONLY',paper_trading:true,real_order_execution:false
   }));
-  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,multiAnalystRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,marketRadarRest,radarSwarm});
+  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,multiAnalystRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,marketRadarRest,radarSwarm,radarSignalOutcomeWorker});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
   const safeStart=(name,instance)=>{
@@ -244,8 +248,9 @@ export async function startServer({
     // Preserve Build 224's background discovery invariant when optional auto-start is disabled in production.
     safeStart('RADAR9',falconEyeRadar);
   }
+  if(!stagingSmokeMode)safeStart('RADAR_SIGNAL_OUTCOME_WORKER',radarSignalOutcomeWorker);
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
-  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,marketWideKlineCache,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,radarSwarm,multiAnalystRadar,symbolDeepAnalyzer,store,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,multiAnalystRest,coinHunterRest,whaleAccumulationRest,marketRadarRest,push,close:async()=>{await radarSwarm.stop();multiAnalystRadar.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
+  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,marketWideKlineCache,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,radarSwarm,multiAnalystRadar,symbolDeepAnalyzer,store,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,multiAnalystRest,coinHunterRest,whaleAccumulationRest,marketRadarRest,radarSignalOutcomeWorker,push,close:async()=>{radarSignalOutcomeWorker.stop();await radarSwarm.stop();multiAnalystRadar.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
 }
 
 if(process.argv[1]&&resolve(fileURLToPath(import.meta.url))===resolve(process.argv[1])){

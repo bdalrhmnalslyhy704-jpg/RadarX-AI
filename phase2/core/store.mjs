@@ -178,7 +178,7 @@ export class DurableStore {
   constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.schedulerEventsQueue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
     this.scanJourneyDir=join(dir,'scan-journeys');
     this.files={scanJourneyManifest:join(dir,'scan-journey-manifest.json'),subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
-      signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),
+      signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),radarSignalOutcomes:join(dir,'radar-signal-outcomes.json'),
       intelligenceMemory:join(dir,'intelligence-memory.json'),strongMoveAlerts:join(dir,'strong-move-alerts.jsonl'),predictionCalibration:join(dir,'prediction-calibration.json'),rotationAlerts:join(dir,'rotation-alerts.jsonl'),liquidityAbsorptionAlerts:join(dir,'liquidity-absorption-alerts.jsonl'),kahirAlerts:join(dir,'kahir-alerts.jsonl'),doomsdayAlerts:join(dir,'doomsday-alerts.jsonl'),professorAlerts:join(dir,'professor-alerts.jsonl'),alMuqawimAlerts:join(dir,'al-muqawim-alerts.jsonl'),coinHunterAlerts:join(dir,'coin-hunter-alerts.jsonl'),whaleAccumulationAlerts:join(dir,'whale-accumulation-alerts.jsonl'),falconEyeAlerts:join(dir,'falcon-eye-alerts.jsonl'),schedulerEvents:join(dir,'scan-scheduler-events.jsonl')};}
   async init({legacyDir=null}={}){
     await mkdir(this.dir,{recursive:true});
@@ -223,7 +223,7 @@ export class DurableStore {
     // The outcome ledger is a large, internal 5,000-record file. Compact JSON
     // preserves the schema while avoiding a large whitespace-heavy serialization
     // buffer on every live markout update. Other JSON files remain human-readable.
-    const serialized=JSON.stringify(v,null,p===this.files.preExpansionOutcomes?0:2)+'\n';
+    const serialized=JSON.stringify(v,null,(p===this.files.preExpansionOutcomes||p===this.files.radarSignalOutcomes)?0:2)+'\n';
     try{
       await writeFile(t,serialized);
       await rename(t,p);
@@ -445,6 +445,22 @@ export class DurableStore {
         await new Promise(resolve=>setImmediate(resolve));
       }
       await this.writeJson(this.files.preExpansionOutcomes,next);
+      return next;
+    });
+  }
+  async getRadarSignalOutcomes(){
+    return this.readJson(this.files.radarSignalOutcomes);
+  }
+  async updateRadarSignalOutcomes(updater){
+    if(typeof updater!=='function')throw new Error('RADAR_SIGNAL_OUTCOME_UPDATER_REQUIRED');
+    return this.lock(async()=>{
+      const current=await this.readJson(this.files.radarSignalOutcomes);
+      const result=await updater(current);
+      if(result===false)return current;
+      const next=result&&typeof result==='object'&&!Array.isArray(result)?result:current;
+      // The bounded all-radar outcome ledger is compact to keep long-lived
+      // JSON serialization from inflating the production working set.
+      await this.writeJson(this.files.radarSignalOutcomes,next);
       return next;
     });
   }
