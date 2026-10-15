@@ -65,6 +65,45 @@ test('Al Muqawim rejects a technically bullish but already-extended entry',()=>{
   assert.ok(a.reasons.some(x=>String(x).includes('ممتدة')));
 });
 
+test('Al Muqawim identifies a resilient coin during a broad market drawdown',()=>{
+  const now=Date.now();
+  const series={
+    '4h':makeSeries(100,4*60*60*1000,0.04,now),
+    '1h':makeSeries(120,60*60*1000,0.04,now),
+    '15m':makeSeries(160,15*60*1000,0.04,now)
+  };
+  const latestHour=series['1h'].at(-1);
+  latestHour.close+=1.25;
+  latestHour.high=Math.max(latestHour.high,latestHour.close+0.55);
+  const a=buildAlMuqawimAnalysis(series,{
+    symbol:'RESILIENTUSDT',lastPrice:105.46,priceChange24h:-1,marketMedianChange24hPct:-5
+  },now,{maPeriod:50});
+  assert.equal(a.eligible,true);
+  assert.equal(a.components.market_drawdown,true);
+  assert.equal(a.components.relative_strength_vs_market_24h_pct,4);
+  assert.equal(a.components.relative_strength_gate,true);
+  assert.ok(a.reasons.some(x=>String(x).includes('صمود نسبي')));
+});
+
+test('Al Muqawim rejects relative weakness during a market drawdown',()=>{
+  const now=Date.now();
+  const series={
+    '4h':makeSeries(100,4*60*60*1000,0.04,now),
+    '1h':makeSeries(120,60*60*1000,0.04,now),
+    '15m':makeSeries(160,15*60*1000,0.04,now)
+  };
+  const latestHour=series['1h'].at(-1);
+  latestHour.close+=1.25;
+  latestHour.high=Math.max(latestHour.high,latestHour.close+0.55);
+  const a=buildAlMuqawimAnalysis(series,{
+    symbol:'WEAKRELATIVEUSDT',lastPrice:105.46,priceChange24h:-5,marketMedianChange24hPct:-3
+  },now,{maPeriod:50});
+  assert.equal(a.components.market_drawdown,true);
+  assert.equal(a.components.relative_strength_vs_market_24h_pct,-2);
+  assert.equal(a.components.relative_strength_gate,false);
+  assert.equal(a.eligible,false);
+});
+
 test('Al Muqawim preserves its rotation budget when the top three overlap patrol symbols',()=>{
   const now=Date.now();
   const radar=new AlMuqawimRadar({rest:{},store:{},config:{batchSize:5},clock:()=>now});
