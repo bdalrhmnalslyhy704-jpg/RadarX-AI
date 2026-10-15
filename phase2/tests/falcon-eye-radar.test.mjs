@@ -153,6 +153,18 @@ test('Falcon Eye vetoes OGN-style post-explosion chasing',()=>{
 // Fixture uses enough closed 5m candles for the pre-breakout window.
 
 
+test('Falcon Eye health reports why a symbol was rejected before notification',async()=>{
+  const radar=selectionRadar();
+  const row=selectTicker('EMPTYDATAUSDT',0,selectionPulse({ready:false,score:45,compression:null,higherLow:null,participation:null,volume:null,trades:null}));
+  const result=await radar.scanRow(row);
+  assert.equal(result.eligible,false);
+  const diag=radar.health().decision_diagnostics;
+  assert.equal(diag.evaluated,1);
+  assert.equal(diag.analysis_rejected,1);
+  assert.ok(diag.top_gate_failures.length>0);
+  assert.ok(diag.top_gate_failures.some(x=>/DATA|SCORE|CONFIRMATION|FALCON/.test(x.reason)));
+});
+
 test('Falcon Eye health reports scanner state using the injected clock',()=>{
   const now=1_800_000_000_000;
   const radar=new FalconEyeRadar({
