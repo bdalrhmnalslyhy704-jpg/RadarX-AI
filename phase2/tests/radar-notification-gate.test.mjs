@@ -34,7 +34,7 @@ test('Coin Hunter cannot pass without its own micro-participation and anti-chase
 test('Kahir category diversity reads scores from nested analysis',()=>{
   resetRadarNotificationGateForTests();const a=baseline('KAHIR_RADAR',{components:undefined,kahir_analysis:{eligible:true,score:90,direction:'UP',data_quality:92,confirmation_count:8,metrics:{one_minute_z:2.2,five_minute_z:2},algorithms:{
     PARTICIPATION_REGIME:{score:86},VOLATILITY_REGIME_TRANSITION:{score:78},KAUFMAN_EFFICIENCY_SHIFT:{score:80},RANGE_ACCEPTANCE:{score:77},IMPULSE_PERSISTENCE:{score:82}}}});
-  const r=evaluateRadarNotificationGate(a,{now:NOW});assert.equal(r.confirmations,8,'read confirmation count from kahir_analysis');assert.ok(!r.failures.includes('CONFIRMATION_BREADTH_LOW'));assert.ok(r.category_hits>=5,'nested Kahir scores count: '+r.category_hits);
+  const r=evaluateRadarNotificationGate(a,{now:NOW});assert.equal(r.confirmations,8,'read confirmation count from kahir_analysis');assert.ok(!r.failures.includes('CONFIRMATION_BREADTH_LOW'));assert.ok(r.category_hits>=5,'nested Kahir scores count: '+r.category_hits);assert.equal(r.profile_thresholds.min_score,88);assert.equal(r.profile_thresholds.min_confirmations,7);assert.equal(r.profile_thresholds.min_category_hits,4);
 });
 test('null or blank component values do not inflate evidence count',()=>{
   const missing=evaluateRadarQuality({radar:'STRONG_MOVE_RADAR',components:{volume:null,breakout:'',trades:undefined}});
@@ -82,6 +82,8 @@ test('Rotation Lag reads actual component_scores for category diversity and rela
   assert.ok(result.category_hits>=5,'Rotation component scores should count as independent category evidence');
   assert.ok(!result.failures.includes('CATEGORY_DIVERSITY_LOW'));
   assert.ok(!result.failures.includes('RELATIVE_STRENGTH_NOT_CONFIRMED'));
+  assert.equal(result.profile_thresholds.min_score,82);
+  assert.equal(result.profile_thresholds.min_confirmations,5);
 });
 
 test('Liquidity Absorption reads the actual SELLER_ABSORPTION and FIVE_MINUTE_CONFIRMATION algorithm outputs',()=>{
@@ -104,6 +106,8 @@ test('Liquidity Absorption reads the actual SELLER_ABSORPTION and FIVE_MINUTE_CO
   assert.ok(result.category_hits>=5);
   assert.ok(!result.failures.includes('ABSORPTION_NOT_STRONG_ENOUGH'));
   assert.ok(!result.failures.includes('FIVE_MINUTE_CONFIRMATION_WEAK'));
+  assert.equal(result.profile_thresholds.min_score,83);
+  assert.equal(result.profile_thresholds.min_confirmations,6);
 });
 
 test('Doomsday permits a valid pre-breakout candidate without requiring ignition score',()=>{
@@ -122,4 +126,32 @@ test('Doomsday permits a valid pre-breakout candidate without requiring ignition
   assert.ok(!result.failures.includes('DOOMSDAY_CONFIRMATION_BREADTH_LOW'));
   assert.ok(!result.failures.includes('IGNITION_SCORE_NOT_CONFIRMED'));
   assert.ok(!result.failures.includes('DOOMSDAY_EARLY_SCORE_NOT_CONFIRMED'));
+});
+
+test('Falcon Eye reads its eight confirmations from the nested alert payload',()=>{
+  resetRadarNotificationGateForTests();
+  const alert=baseline('FALCON_EYE_RADAR',{
+    falcon_eye:{eligible:true,score:88,confirmation_count:8,not_chasing:true,
+      pre_expansion_fingerprint:{ready:true,late:false,micro_move:false,score:82},
+      component_scores:{quietness:82,compression:80,momentum:78,volume:82,trades:78,taker:74,structure:82,resistance:76,relative_strength:78,derivatives:72,breakout:80,atr:75,range:74},
+      metrics:{taker_buy_ratio:0.56}}
+  });
+  const result=evaluateRadarNotificationGate(alert,{now:NOW});
+  assert.equal(result.confirmations,8);
+  assert.ok(!result.failures.includes('CONFIRMATION_BREADTH_LOW'));
+  assert.ok(!result.failures.includes('FALCON_CONFIRMATION_BREADTH_LOW'));
+});
+
+test('Whale Accumulation reads confirmations from its nested analysis payload',()=>{
+  resetRadarNotificationGateForTests();
+  const alert=baseline('WHALE_ACCUMULATION_RADAR',{
+    whale_accumulation:{eligible:true,score:90,confirmation_count:8,
+      large_prints:{available:true,largeCount:5,largeBuyRatio:0.72,largeNotionalRatio:0.18,score:82,repeatBuyScore:80,burstScore:74},
+      candle_flow:{available:true,absorptionScore:80,higherLowScore:76},
+      orderbook:{spreadBps:6,nearImbalance:0.15,midImbalance:0.10},
+      orderbook_persistence:{score:78},support_score:80,stability_score:82,price_context:{not_extended:true}}
+  });
+  const result=evaluateRadarNotificationGate(alert,{now:NOW});
+  assert.equal(result.confirmations,8);
+  assert.ok(!result.failures.includes('CONFIRMATION_BREADTH_LOW'));
 });

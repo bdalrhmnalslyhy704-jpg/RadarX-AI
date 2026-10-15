@@ -9,15 +9,15 @@ const arr=v=>Array.isArray(v)?v:[];
 const PROFILES=Object.freeze({
   EARLY_MOVE_RADAR:{minScore:84,minData:85,minConfirmations:7,minCategoryHits:5,minAcceptedStrategies:2,minLiquidity:75,globalCooldownMs:12*60*1000,priority:3},
   STRONG_MOVE_RADAR:{minScore:88,minData:85,minConfirmations:5,minCategoryHits:5,minLiquidity:75,globalCooldownMs:15*60*1000,priority:4},
-  ROTATION_LAG_RADAR:{minScore:89,minData:85,minConfirmations:7,minCategoryHits:5,minLiquidity:75,globalCooldownMs:18*60*1000,priority:3},
-  LIQUIDITY_ABSORPTION_RADAR:{minScore:91,minData:88,minConfirmations:8,minCategoryHits:5,minLiquidity:78,globalCooldownMs:18*60*1000,priority:3},
-  KAHIR_RADAR:{minScore:91,minData:88,minConfirmations:8,minCategoryHits:5,minLiquidity:78,globalCooldownMs:18*60*1000,priority:4},
+  ROTATION_LAG_RADAR:{minScore:82,minData:85,minConfirmations:5,minCategoryHits:5,minLiquidity:75,globalCooldownMs:18*60*1000,priority:3},
+  LIQUIDITY_ABSORPTION_RADAR:{minScore:83,minData:88,minConfirmations:6,minCategoryHits:5,minLiquidity:78,globalCooldownMs:18*60*1000,priority:3},
+  KAHIR_RADAR:{minScore:88,minData:88,minConfirmations:7,minCategoryHits:4,minLiquidity:78,globalCooldownMs:18*60*1000,priority:4},
   DOOMSDAY_RADAR:{minScore:82,minData:88,minConfirmations:6,minCategoryHits:5,minLiquidity:78,globalCooldownMs:15*60*1000,priority:5},
   PROFESSOR_RADAR:{minScore:82,minData:85,minConfirmations:0,minCategoryHits:0,minLiquidity:0,globalCooldownMs:30*60*1000,priority:3},
   ALMUQAWIM_RADAR:{minScore:86,minData:85,minConfirmations:0,minCategoryHits:0,minLiquidity:0,globalCooldownMs:20*60*1000,priority:4},
   EARLY_EXPANSION_RADAR:{minScore:82,minData:70,minConfirmations:0,minCategoryHits:0,minLiquidity:60,globalCooldownMs:10*60*1000,priority:4},
   COIN_HUNTER_RADAR:{minScore:86,minData:80,minConfirmations:0,minCategoryHits:0,minLiquidity:65,globalCooldownMs:12*60*1000,priority:4},
-  WHALE_ACCUMULATION_RADAR:{minScore:88,minData:80,minConfirmations:7,minCategoryHits:5,minLiquidity:70,globalCooldownMs:14*60*1000,priority:5},
+  WHALE_ACCUMULATION_RADAR:{minScore:84,minData:80,minConfirmations:8,minCategoryHits:5,minLiquidity:70,globalCooldownMs:14*60*1000,priority:5},
   FALCON_EYE_RADAR:{minScore:78,minData:82,minConfirmations:8,minCategoryHits:5,minLiquidity:65,globalCooldownMs:12*60*1000,priority:5}
 });
 
@@ -46,6 +46,8 @@ function confirmationsOf(alert){
     alert?.strong_move?.metrics?.flash_confirmations ??
     alert?.rotation?.confirmations ??
     alert?.liquidity_absorption?.confirmation_count ??
+    alert?.whale_accumulation?.confirmation_count ??
+    alert?.falcon_eye?.confirmation_count ??
     alert?.confirmation_count ??
     alert?.doomsday?.confirmation_count ??
     alert?.doomsday?.ignition_confirmations ??
