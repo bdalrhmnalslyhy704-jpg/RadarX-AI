@@ -67,6 +67,25 @@ test('Radar 4 excludes an open trigger candle',()=>{
   assert.ok(a.eligible===false || a.score!==null);
 });
 
+test('Radar 4 rejects a recent candle window with a missing closed candle',()=>{
+  const rows=make1m();
+  rows.splice(55,1);
+  const a=buildLiquidityAbsorptionAnalysis(rows,make5m(),ticker,book,NOW);
+  assert.equal(a.eligible,false);
+  assert.equal(a.stage,'INCOMPLETE_DATA');
+  assert.ok(a.data_quality_reasons.includes('ONE_MINUTE_CLOSED_CANDLE_SEQUENCE_HAS_GAPS'));
+});
+
+test('Radar 4 rejects stale closed candles instead of scoring cached conditions',()=>{
+  const rows=make1m();
+  rows.at(-1).closeTime=NOW-4*60_000;
+  const a=buildLiquidityAbsorptionAnalysis(rows,make5m(),ticker,book,NOW);
+  assert.equal(a.eligible,false);
+  assert.equal(a.stage,'DATA_STALE');
+  assert.equal(a.data_stale,true);
+  assert.ok(a.data_quality_reasons.includes('ONE_MINUTE_STALE_CLOSED_CANDLES'));
+});
+
 test('Radar 4 alert identifies source and 12-hour discovery time',()=>{
   const alert=buildLiquidityAbsorptionAlert({one_minute:make1m(),five_minute:make5m(),ticker,book},NOW);
   assert.equal(alert.event,'LIQUIDITY_ABSORPTION_ALERT');
