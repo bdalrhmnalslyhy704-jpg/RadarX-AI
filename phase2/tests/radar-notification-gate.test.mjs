@@ -105,3 +105,21 @@ test('Liquidity Absorption reads the actual SELLER_ABSORPTION and FIVE_MINUTE_CO
   assert.ok(!result.failures.includes('ABSORPTION_NOT_STRONG_ENOUGH'));
   assert.ok(!result.failures.includes('FIVE_MINUTE_CONFIRMATION_WEAK'));
 });
+
+test('Doomsday permits a valid pre-breakout candidate without requiring ignition score',()=>{
+  resetRadarNotificationGateForTests();
+  const alert=baseline('DOOMSDAY_RADAR',{
+    opportunity_score:84,
+    potential_label:'PRE_BREAKOUT',
+    doomsday:{eligible:true,stage:'PRE_BREAKOUT',score:84,early_score:84,ignition_score:74,
+      confirmation_count:6,ignition_confirmations:3,confirmation_total:9,
+      component_scores:{impulse:70,volume:82,trades:78,taker:76,breakout:86,ema:80,vwap:72,squeeze:74,relative_strength:73,acceleration:84,range:70,atr:71,acceptance:80},
+      metrics:{volume_ratio:1.5,trade_ratio:1.4,taker_buy_ratio:0.53,return_3m:0.2,return_5m:0.1,relative_strength_pct:0.3}}
+  });
+  const result=evaluateRadarNotificationGate(alert,{now:NOW});
+  assert.equal(result.profile_thresholds.min_score,82);
+  assert.ok(result.category_hits>=5);
+  assert.ok(!result.failures.includes('DOOMSDAY_CONFIRMATION_BREADTH_LOW'));
+  assert.ok(!result.failures.includes('IGNITION_SCORE_NOT_CONFIRMED'));
+  assert.ok(!result.failures.includes('DOOMSDAY_EARLY_SCORE_NOT_CONFIRMED'));
+});

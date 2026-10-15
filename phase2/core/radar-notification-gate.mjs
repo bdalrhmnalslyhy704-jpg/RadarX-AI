@@ -12,7 +12,7 @@ const PROFILES=Object.freeze({
   ROTATION_LAG_RADAR:{minScore:89,minData:85,minConfirmations:7,minCategoryHits:5,minLiquidity:75,globalCooldownMs:18*60*1000,priority:3},
   LIQUIDITY_ABSORPTION_RADAR:{minScore:91,minData:88,minConfirmations:8,minCategoryHits:5,minLiquidity:78,globalCooldownMs:18*60*1000,priority:3},
   KAHIR_RADAR:{minScore:91,minData:88,minConfirmations:8,minCategoryHits:5,minLiquidity:78,globalCooldownMs:18*60*1000,priority:4},
-  DOOMSDAY_RADAR:{minScore:92,minData:88,minConfirmations:8,minCategoryHits:5,minLiquidity:78,globalCooldownMs:15*60*1000,priority:5},
+  DOOMSDAY_RADAR:{minScore:82,minData:88,minConfirmations:6,minCategoryHits:5,minLiquidity:78,globalCooldownMs:15*60*1000,priority:5},
   PROFESSOR_RADAR:{minScore:82,minData:85,minConfirmations:0,minCategoryHits:0,minLiquidity:0,globalCooldownMs:30*60*1000,priority:3},
   ALMUQAWIM_RADAR:{minScore:86,minData:85,minConfirmations:0,minCategoryHits:0,minLiquidity:0,globalCooldownMs:20*60*1000,priority:4},
   EARLY_EXPANSION_RADAR:{minScore:82,minData:70,minConfirmations:0,minCategoryHits:0,minLiquidity:60,globalCooldownMs:10*60*1000,priority:4},
@@ -78,6 +78,11 @@ function categoryHitsOf(alert){
   }
   if(r==='ROTATION_LAG_RADAR'){
     const c=alert?.rotation?.component_scores||{};
+    const scores=Object.values(c).filter(x=>x!==null&&x!==undefined&&x!==''&&Number.isFinite(Number(x))).map(Number);
+    return scores.filter(x=>x>=70).length;
+  }
+  if(r==='DOOMSDAY_RADAR'){
+    const c=alert?.doomsday?.component_scores||{};
     const scores=Object.values(c).filter(x=>x!==null&&x!==undefined&&x!==''&&Number.isFinite(Number(x))).map(Number);
     return scores.filter(x=>x>=70).length;
   }
@@ -310,11 +315,18 @@ function radarSpecificChecks(alert,p,now){
 
   if(r==='DOOMSDAY_RADAR'){
     const a=alert?.doomsday||{};
-    const ignition=num(a.ignition_confirmations,0);
-    const early=num(a.confirmation_count,0);
-    const ignitionScore=num(alert?.ignition_score ?? a.ignition_score,0);
-    if(Math.max(ignition,early)<8)failures.push('DOOMSDAY_CONFIRMATION_BREADTH_LOW');
-    if(ignitionScore<82)failures.push('IGNITION_SCORE_NOT_CONFIRMED');
+    const stage=String(a.stage??alert?.potential_label??'').toUpperCase();
+    const ignitionConfirmations=num(a.ignition_confirmations,0);
+    const earlyConfirmations=num(a.confirmation_count,0);
+    const earlyScore=num(a.early_score,0);
+    const ignitionScore=num(alert?.ignition_score??a.ignition_score,0);
+    if(stage==='PRE_BREAKOUT'){
+      if(earlyConfirmations<6)failures.push('DOOMSDAY_EARLY_CONFIRMATION_BREADTH_LOW');
+      if(earlyScore<80)failures.push('DOOMSDAY_EARLY_SCORE_NOT_CONFIRMED');
+    }else{
+      if(ignitionConfirmations<5)failures.push('DOOMSDAY_IGNITION_CONFIRMATION_BREADTH_LOW');
+      if(ignitionScore<86)failures.push('IGNITION_SCORE_NOT_CONFIRMED');
+    }
   }
 
   if(r!=='EARLY_MOVE_RADAR'&&r!=='PROFESSOR_RADAR'&&fingerprint&&!fingerprint.late&&!fingerprint.micro_move&&Number(fingerprint.score)>0&&Number(fingerprint.score)<68)failures.push('PRE_BREAKOUT_QUALITY_WEAK');
