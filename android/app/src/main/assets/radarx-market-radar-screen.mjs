@@ -500,7 +500,7 @@ export function mountMarketRadarScreen(root, options = {}) {
       setStatus(mode, 'المصدر استجاب، لكن لا يوجد مرشح حديث وصالح للعرض.');
       nodes.validList.innerHTML = '<div class="rx-empty"><b>لا يوجد مرشح صالح</b><div class="rx-muted" style="margin-top:6px">غير متاح بسبب جودة البيانات أو عدم اجتياز الشروط.</div><button type="button" class="rx-btn rx-btn--secondary" data-rx-inline-retry style="margin-top:10px">إعادة الفحص</button></div>';
       bindInlineRetry();
-      return;
+      return mode;
     }
 
     if (cachedMode==='LOCAL_CACHE') {
