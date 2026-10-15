@@ -20,7 +20,7 @@ function evidenceCount(alert){
   let numeric=0;
   if(components&&typeof components==='object'){
     for(const value of Object.values(components)){
-      if(Number.isFinite(Number(value)))numeric++;
+      if(value!==null&&value!==undefined&&!(typeof value==='string'&&value.trim()==='')&&typeof value!=='boolean'&&Number.isFinite(Number(value)))numeric++;
     }
   }
   return Math.min(12,reasons+Math.min(5,codes)+Math.min(5,numeric));

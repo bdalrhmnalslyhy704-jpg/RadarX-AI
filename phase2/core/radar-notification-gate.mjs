@@ -14,6 +14,7 @@ const PROFILES=Object.freeze({
   KAHIR_RADAR:{minScore:91,minData:88,minConfirmations:8,minCategoryHits:5,minLiquidity:78,globalCooldownMs:18*60*1000,priority:4},
   DOOMSDAY_RADAR:{minScore:92,minData:88,minConfirmations:8,minCategoryHits:5,minLiquidity:78,globalCooldownMs:15*60*1000,priority:5},
   PROFESSOR_RADAR:{minScore:82,minData:85,minConfirmations:0,minCategoryHits:0,minLiquidity:0,globalCooldownMs:30*60*1000,priority:3},
+  ALMUQAWIM_RADAR:{minScore:86,minData:85,minConfirmations:0,minCategoryHits:0,minLiquidity:0,globalCooldownMs:20*60*1000,priority:4},
   EARLY_EXPANSION_RADAR:{minScore:82,minData:70,minConfirmations:0,minCategoryHits:0,minLiquidity:60,globalCooldownMs:10*60*1000,priority:4},
   COIN_HUNTER_RADAR:{minScore:86,minData:80,minConfirmations:0,minCategoryHits:0,minLiquidity:65,globalCooldownMs:12*60*1000,priority:4},
   WHALE_ACCUMULATION_RADAR:{minScore:88,minData:80,minConfirmations:7,minCategoryHits:5,minLiquidity:70,globalCooldownMs:14*60*1000,priority:5},
@@ -24,7 +25,8 @@ const recentBySymbol=new Map();
 const preBreakoutStreakBySymbol=new Map();
 
 function radarId(alert){return String(alert?.radar||'').toUpperCase();}
-function profileFor(alert){return PROFILES[radarId(alert)]||PROFILES.PROFESSOR_RADAR;}
+const UNKNOWN_PROFILE=Object.freeze({minScore:90,minData:90,minConfirmations:8,minCategoryHits:6,minLiquidity:75,globalCooldownMs:20*60*1000,priority:1});
+function profileFor(alert){return PROFILES[radarId(alert)]||UNKNOWN_PROFILE;}
 
 function dataQualityOf(alert){
   return clamp(alert?.data_quality ?? alert?.data_status?.data_quality ??
@@ -64,6 +66,33 @@ function categoryHitsOf(alert){
       'resistance','relative_strength','derivatives','breakout','atr','range']
       .filter(key=>num(scores[key],0)>=70).length;
   }
+  if(r==='KAHIR_RADAR'){
+    const a=alert?.kahir_analysis||alert?.analysis||{};
+    return Object.values(a.algorithms||{}).filter(x=>x&&typeof x==='object'&&Number(x.score)>=68).length;
+  }
+  if(r==='ALMUQAWIM_RADAR'){
+    const c=alert?.almuqawim?.components||alert?.components||{};
+    return ['market_structure','higher_timeframe_alignment','lower_timeframe_agreement','trendline','moving_average','entry_timing','entry_freshness']
+      .filter(key=>c[key]!==null&&c[key]!==undefined&&c[key]!==''&&Number.isFinite(Number(c[key]))&&Number(c[key])>=70).length;
+  }
+  if(r==='WHALE_ACCUMULATION_RADAR'){
+    const a=alert?.whale_accumulation||{};
+    const p=a.large_prints||{},f=a.candle_flow||{},d=a.orderbook||{};
+    const values=[p.score,p.repeatBuyScore,p.burstScore,f.absorptionScore,f.higherLowScore,a.support_score,a.stability_score,a.orderbook_persistence?.score,
+      d.nearImbalance==null?null:50+Number(d.nearImbalance)*170,
+      d.midImbalance==null?null:50+Number(d.midImbalance)*140];
+    return values.filter(x=>x!==null&&x!==undefined&&x!==''&&Number.isFinite(Number(x))&&Number(x)>=70).length;
+  }
+  if(r==='LIQUIDITY_ABSORPTION_RADAR'||r==='ROTATION_LAG_RADAR'||r==='DOOMSDAY_RADAR'){
+    const nested=r==='LIQUIDITY_ABSORPTION_RADAR'?(alert?.liquidity_absorption||{}):r==='ROTATION_LAG_RADAR'?(alert?.rotation||{}):(alert?.doomsday||{});
+    const values=[];
+    const visit=node=>{if(!node||typeof node!=='object')return;for(const [name,value] of Object.entries(node)){
+      if(value&&typeof value==='object')visit(value);
+      else if(/score|strength|potential/i.test(name)&&!/min|max|threshold|count|total/i.test(name)&&value!==null&&value!==''&&Number.isFinite(Number(value)))values.push(Number(value));
+    }};
+    visit(nested);
+    return values.filter(x=>x>=70).length;
+  }
   const c=alert?.components||{};
   const checks=r==='EARLY_MOVE_RADAR'
     ? [c.momentum,c.volume,c.buying_pressure,c.orderbook_pressure,c.structure,c.squeeze,c.relative_strength,c.mtf_alignment,c.ema_reclaim,c.rsi_score,c.obv_accumulation,c.wyckoff_spring].filter(v=>num(v,0)>=65)
@@ -93,22 +122,29 @@ function criticalRisk(alert){
   return all.filter(x=>/ALREADY_MOVED|ALREADY_EXTENDED|EXTENDED_CHASE|DATA_QUALITY|NO_PRIMARY_TRIGGER|LOW_CONFLUENCE|DISJOINTED|FLOW_WITHOUT|VOLUME_WITHOUT|LIQUIDITY_TOO_WEAK|RESISTANCE_TOO_NEAR|CHAS(E|ING)/.test(x));
 }
 
+function fingerprintOf(alert){
+  return alert?.pre_breakout_fingerprint ?? alert?.pre_expansion_fingerprint ??
+    alert?.early_expansion?.pre_expansion_fingerprint ?? alert?.falcon_eye?.pre_expansion_fingerprint ??
+    alert?.falcon_eye?.pre_breakout_fingerprint ?? null;
+}
+
 function updatePreBreakoutStreak(alert,now){
   const symbol=String(alert?.symbol||'').toUpperCase();
-  const fp=alert?.pre_breakout_fingerprint;
+  const fp=fingerprintOf(alert);
   if(!symbol||!fp)return null;
   const valid=Boolean(fp.ready)&&!Boolean(fp.late)&&!Boolean(fp.micro_move)&&Number(fp.score)>=72;
-  const prev=preBreakoutStreakBySymbol.get(symbol);
+  const key=radarId(alert)+'|'+symbol;
+  const prev=preBreakoutStreakBySymbol.get(key);
   const within=prev&&Number(now)-Number(prev.lastAt)<=8*60*1000;
   const streak=valid?(within?Number(prev.streak||0)+1:1):0;
-  const next={streak,lastAt:Number(now)||Date.now(),score:Number(fp.score)||0};
-  preBreakoutStreakBySymbol.set(symbol,next);
+  const next={streak,lastAt:Number(now)||Date.now(),score:Number(fp.score)||0,radar:radarId(alert)};
+  preBreakoutStreakBySymbol.set(key,next);
   return next;
 }
 
-function radarSpecificChecks(alert,p){
+function radarSpecificChecks(alert,p,now){
   const r=radarId(alert);
-  const fingerprint=alert?.pre_breakout_fingerprint||null;
+  const fingerprint=fingerprintOf(alert);
   const failures=[];
   const confirmations=confirmationsOf(alert);
   const score=scoreOf(alert);
@@ -126,7 +162,7 @@ function radarSpecificChecks(alert,p){
 
   if(r==='EARLY_MOVE_RADAR'){
     const accepted=acceptedStrategiesOf(alert);
-    const streak=updatePreBreakoutStreak(alert,Date.now());
+    const streak=updatePreBreakoutStreak(alert,now);
     const pre=alert?.pre_explosion;
     const wake=alert?.early_wake;
     const hasPreConfirm=num(pre?.confirmation_count,0)>=8 && accepted>=p.minAcceptedStrategies;
@@ -166,7 +202,7 @@ function radarSpecificChecks(alert,p){
   }
 
   if(r==='KAHIR_RADAR'){
-    const a=alert?.analysis||{};
+    const a=alert?.kahir_analysis||alert?.analysis||{};
     const m=a.metrics||{};
     const z=Math.max(num(m.one_minute_z,0),num(m.five_minute_z,0));
     const participation=num(a.algorithms?.PARTICIPATION_REGIME?.score,0);
@@ -193,6 +229,70 @@ function radarSpecificChecks(alert,p){
     if(Number(m.ema21_distance_pct)>4.2)failures.push('FALCON_EMA_EXTENSION');
     if(Number(m.resistance_gap_pct)<-1.2)failures.push('FALCON_BREAKOUT_EXTENSION');
     if(Boolean(d.futures_available) && Number(d.funding_rate)>0.004)failures.push('FALCON_POSITIVE_FUNDING_CROWDING');
+  }
+
+  if(r==='ALMUQAWIM_RADAR'){
+    const a=alert?.almuqawim||{};
+    const c=a.components||{};
+    if(a.eligible!==true)failures.push('ALMUQAWIM_ANALYSIS_NOT_ELIGIBLE');
+    if(!String(a.direction??alert?.direction??'').toUpperCase().startsWith('UP'))failures.push('ALMUQAWIM_UP_TREND_NOT_CONFIRMED');
+    if(num(c.higher_timeframe_alignment,0)<100)failures.push('ALMUQAWIM_HIGHER_TIMEFRAME_ALIGNMENT_WEAK');
+    if(num(c.market_structure,0)<90)failures.push('ALMUQAWIM_MARKET_STRUCTURE_WEAK');
+    if(num(c.lower_timeframe_agreement,0)<90)failures.push('ALMUQAWIM_LOWER_TIMEFRAME_DISAGREEMENT');
+    if(num(c.entry_timing,0)<78||num(c.entry_freshness,0)<72)failures.push('ALMUQAWIM_ENTRY_TIMING_STALE');
+    const daily=num(alert?.price_change_24h,null);
+    if(daily===null||Math.abs(daily)>8)failures.push('ALMUQAWIM_24H_EXTENSION_OR_UNKNOWN');
+  }
+
+  if(r==='EARLY_EXPANSION_RADAR'){
+    const a=alert?.early_expansion||alert;
+    const m=a?.metrics||alert?.metrics||{};
+    const stage=String(a?.pre_expansion_stage??alert?.pre_expansion_stage??a?.decision_band??alert?.potential_label??'').toUpperCase();
+    const fp=fingerprintOf(alert);
+    if(!fp&&!stage)failures.push('EARLY_EXPANSION_FINGERPRINT_MISSING');
+    if(stage==='ALREADY_EXTENDED'||stage==='DATA_INSUFFICIENT')failures.push('EARLY_EXPANSION_STAGE_NOT_NOTIFIABLE');
+    if(a?.data_stale===true||alert?.data_status?.stale===true||a?.gates?.data_gate?.valid===false)failures.push('EARLY_EXPANSION_DATA_GATE_FAILED');
+    if(a?.gates?.liquidity_gate?.allowed===false&&alert?.historical_replay!==true)failures.push('EARLY_EXPANSION_LIQUIDITY_GATE_FAILED');
+    const rvol=num(m.rvol_5m??m.rvol_1m??m.volume_ratio,null);
+    const trades=num(m.trade_ratio,null);
+    const taker=num(m.taker_buy_ratio,null);
+    if(rvol===null||rvol<1.10)failures.push('EARLY_EXPANSION_VOLUME_PARTICIPATION_WEAK');
+    if(trades===null||trades<1.02)failures.push('EARLY_EXPANSION_TRADE_PARTICIPATION_WEAK');
+    if(taker===null||taker<0.50)failures.push('EARLY_EXPANSION_BUY_FLOW_UNCONFIRMED');
+    const daily=num(alert?.price_change_24h??m.price_change_24h_pct,null);
+    if(daily===null||Math.abs(daily)>12)failures.push('EARLY_EXPANSION_24H_EXTENSION_OR_UNKNOWN');
+    const five=num(m.price_change_5m_pct,null);
+    if(five!==null&&five>3)failures.push('EARLY_EXPANSION_5M_CHASE_GUARD');
+  }
+
+  if(r==='COIN_HUNTER_RADAR'){
+    const m=alert?.factors||alert?.coin_hunter||{};
+    const early=num(m.early_setup_score??m.early_timing_fingerprint?.earlySetupScore,null);
+    const vol=num(m.micro_volume_acceleration??m.volume_acceleration,null);
+    const trades=num(m.micro_trade_acceleration??m.trade_acceleration,null);
+    const taker=num(m.micro_taker_buy_ratio??m.taker_buy_ratio,null);
+    const room=num(m.micro_resistance_distance_pct??m.resistance_distance_pct,null);
+    if(early===null||early<68)failures.push('COIN_HUNTER_EARLY_FINGERPRINT_WEAK');
+    if(vol===null||trades===null||taker===null)failures.push('COIN_HUNTER_MICRO_PARTICIPATION_MISSING');
+    if(vol!==null&&vol<1.05)failures.push('COIN_HUNTER_VOLUME_ACCELERATION_WEAK');
+    if(trades!==null&&trades<1.02)failures.push('COIN_HUNTER_TRADE_ACCELERATION_WEAK');
+    if(taker!==null&&taker<0.505)failures.push('COIN_HUNTER_BUY_FLOW_WEAK');
+    if(room===null||room<0.35)failures.push('COIN_HUNTER_RESISTANCE_ROOM_INSUFFICIENT');
+    const daily=num(m.today_pct??alert?.price_change_24h,null);
+    const hour=num(m.one_hour_pct,null),four=num(m.four_hour_pct,null);
+    if(daily===null||daily>8||hour===null||hour>2.5||four===null||four>5)failures.push('COIN_HUNTER_ANTI_CHASE_OR_UNKNOWN');
+  }
+
+  if(r==='WHALE_ACCUMULATION_RADAR'){
+    const a=alert?.whale_accumulation||{};
+    const p=a.large_prints||{},f=a.candle_flow||{},d=a.orderbook||{};
+    if(p.available!==true)failures.push('WHALE_LARGE_PRINT_DATA_UNAVAILABLE');
+    if(num(p.largeCount,0)<4)failures.push('WHALE_LARGE_PRINT_COUNT_LOW');
+    if(p.largeBuyRatio===null||p.largeBuyRatio===undefined||num(p.largeBuyRatio,0)<0.60)failures.push('WHALE_BUY_SIDE_NOT_CONFIRMED');
+    if(p.largeNotionalRatio===null||p.largeNotionalRatio===undefined||num(p.largeNotionalRatio,0)<0.12)failures.push('WHALE_LARGE_NOTIONAL_IMBALANCE_WEAK');
+    if(f.available!==true||num(f.absorptionScore,0)<67)failures.push('WHALE_CANDLE_ABSORPTION_WEAK');
+    if(d.spreadBps!==null&&d.spreadBps!==undefined&&num(d.spreadBps,Infinity)>15)failures.push('WHALE_SPREAD_TOO_WIDE');
+    if(a.price_context?.not_extended!==true)failures.push('WHALE_ANTI_CHASE_NOT_CONFIRMED');
   }
 
   if(r==='DOOMSDAY_RADAR'){
@@ -231,7 +331,7 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
   const falcon=evaluateFalconEye(alert,{now});
   const forensics=buildMoveForensics(alert,now);
   const trajectory=alert?.evidence_trajectory||{};
-  const failures=[...radarSpecificChecks(alert,p),...risks.map(x=>'RISK:'+x)];
+  const failures=[...(!PROFILES[r] ? ['RADAR_PROFILE_MISSING'] : []),...radarSpecificChecks(alert,p,now),...risks.map(x=>'RISK:'+x)];
 
   if(falcon.hard_fail)failures.push('FALCON_HARD_FAIL');
   if(falcon.quality<60&&r!=='PROFESSOR_RADAR')failures.push('FALCON_QUALITY_TOO_LOW');
@@ -300,6 +400,7 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
     liquidity_quality:Number(liquidity.toFixed(1)),
     confirmations,
     category_hits:categoryHits,
+    profile_thresholds:{min_score:p.minScore,min_data_quality:p.minData,min_confirmations:p.minConfirmations,min_category_hits:p.minCategoryHits,min_liquidity_quality:p.minLiquidity,global_cooldown_ms:p.globalCooldownMs},
     falcon_eye:falcon,
     move_forensics:forensics,
     evidence_trajectory:trajectory,
@@ -327,5 +428,5 @@ export function rememberRadarAlert(alert,now=Date.now()){
 export function resetRadarNotificationGateForTests(){recentBySymbol.clear();preBreakoutStreakBySymbol.clear();}
 
 export function notificationGateHealth(){
-  return {tracked_symbols:recentBySymbol.size,mode:'FALCON_EYE_V1_STRICT_PLUS_EARLY_TRACK',cross_radar_suppression:true,no_extra_network_calls:true};
+  return {tracked_symbols:recentBySymbol.size,mode:'FALCON_EYE_V1_STRICT_PLUS_EARLY_TRACK',cross_radar_suppression:true,no_extra_network_calls:true,registered_profile_count:Object.keys(PROFILES).length,registered_profiles:Object.keys(PROFILES)};
 }
