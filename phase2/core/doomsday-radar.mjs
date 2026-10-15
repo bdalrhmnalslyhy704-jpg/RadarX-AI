@@ -1,7 +1,7 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
-import {validateClosedCandleSeries} from './radar-role-evidence.mjs';
+import {buildRadarRoleEvidence,validateClosedCandleSeries} from './radar-role-evidence.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number.isFinite(Number(x))?Number(x):0));
 const finite=(x,d=null)=>Number.isFinite(Number(x))?Number(x):d;
@@ -254,7 +254,8 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
   const notChasing=Math.abs(Number(r10)||0)<=DOOMSDAY_RADAR_DEFAULTS.maxTenMinuteMovePct &&
     Math.abs(Number(r5)||0)<=DOOMSDAY_RADAR_DEFAULTS.maxFiveMinuteMovePct &&
     sniperFreshness>=DOOMSDAY_RADAR_DEFAULTS.minAlertFreshness;
-  const falseBreakout=Number.isFinite(d?.high)&&Number(m1.at(-1)?.high)>d.high*1.001&&Number(m1.at(-1)?.close)<d.high&&Number.isFinite(location)&&location<55;
+  const roleEvidence=buildRadarRoleEvidence({candles:m1,relativeCandles:m5,benchmarkCandles:btc,now,intervalMs:60_000,relativeIntervalMs:5*60_000,volumeRatio,tradeRatio,takerBuyRatio:currentBuy,lookbackBars:20});
+  const falseBreakout=roleEvidence.failed_breakout.detected||(Number.isFinite(d?.high)&&Number(m1.at(-1)?.high)>d.high*1.001&&Number(m1.at(-1)?.close)<d.high&&Number.isFinite(location)&&location<55);
   const earlyTrigger=!extended&&!falseBreakout&&earlyScore>=DOOMSDAY_RADAR_DEFAULTS.minEarlyScore &&
     volumeRatio>=DOOMSDAY_RADAR_DEFAULTS.minVolumeRatio &&
     tradeRatio>=DOOMSDAY_RADAR_DEFAULTS.minTradeRatio &&
@@ -299,7 +300,7 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
     data_quality:90,data_stale:false,data_quality_reasons:[],data_quality_checks:dataChecks,
     confirmation_count:earlyEvidence,ignition_confirmations:ignitionEvidence,confirmation_total:9,
     alert_quality:{sniper_freshness:sniperFreshness,confirmation_bars:confirmationBars,not_chasing:notChasing},
-    role_evidence:{failed_breakout:{available:true,detected:false,status:falseBreakout?'FAILED_BREAKOUT_TRAP':'NO_CONFIRMED_TRAP',resistance:d?.high??null,reason_codes:falseBreakout?['RECENT_RESISTANCE_PIERCE','CLOSE_BACK_BELOW_RESISTANCE','WEAK_CLOSE_LOCATION']:['NO_FAILED_BREAKOUT_PATTERN']},continuation:{available:true,status:microBreakout?'BREAKOUT_DEVELOPING':'NO_BREAKOUT',confirmed:false}},
+    role_evidence:roleEvidence,
     metrics:{
       return_1m:r1,return_3m:r3,return_5m:r5,return_10m:r10,btc_5m_return:btc5,relative_strength_pct:relStrength,
       acceleration_z:accelZ,instant_change_pct:Number(instantChangePct||0),

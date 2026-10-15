@@ -3,6 +3,7 @@ import {assessLiquidity, validateSeries, futureIssues} from './data-quality.mjs'
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notification-gate.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
+import {buildRadarRoleEvidence} from './radar-role-evidence.mjs';
 import {assessQuietBaseActivityShock,isFastActivityShockCandidate} from './activity-shock.mjs';
 import {assessQuietBasePreExpansion,summarizeQuietBasePreExpansion} from './quiet-base-pre-expansion.mjs';
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
@@ -474,6 +475,8 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   const liq=depthSignals(depth,p??0,cfg);
   const liqQuality=historicalReplay?null:(Number.isFinite(depth?.bids?.length)&&Number.isFinite(depth?.asks?.length)?finite(assessLiquidity({book:depth,ticker24h:{quoteVolume:Number(ticker.quoteVolume24h),count:Number(ticker.tradeCount24h)}},cfg.minLiquidityQuality).quality,null):null);
   const market=marketRegime(marketContext);
+  const btcRows=closed(marketContext?.fiveMinute||[],now);
+  const roleEvidence=buildRadarRoleEvidence({candles:s['5m'],relativeCandles:s['5m'],benchmarkCandles:btcRows,now,intervalMs:5*60_000,relativeIntervalMs:5*60_000,volumeRatio:rv5,tradeRatio:microTradeRvol(s['5m']),takerBuyRatio:pressure.buy_ratio,lookbackBars:20});
   const rsi1h=rsi(s['1h'],14);
   const historicalFollowThrough=buildHistoricalFollowThrough(s['5m'],now,{shortBars:6,longBars:24});
   const historicalScore=Number(historicalFollowThrough.score)||50;
@@ -558,7 +561,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   if(!historicalReplay&&(!liq.available||liquidityScore<cfg.minLiquidityQuality))gateIssues.push('LIQUIDITY_INSUFFICIENT');
   if(!historicalReplay&&liq.available&&Number(liq.spread_bps)>cfg.maxSpreadBps)gateIssues.push('WIDE_SPREAD');
   if(extended)gateIssues.push('ALREADY_EXTENDED');
-  if(fakeoutFlag(s['5m']).flag)gateIssues.push('RECENT_FAKEOUT');
+  if(fakeoutFlag(s['5m']).flag||roleEvidence.failed_breakout.detected)gateIssues.push('RECENT_FAKEOUT');
   if(historicalWeak)gateIssues.push('HISTORICAL_FOLLOWTHROUGH_WEAK');
   const earlyScore=gate.valid&&gateIssues.every(x=>!['ALREADY_EXTENDED','LIQUIDITY_INSUFFICIENT','WIDE_SPREAD','RECENT_FAKEOUT','HISTORICAL_FOLLOWTHROUGH_WEAK'].includes(x))&&!highRisk&&!dumpRisk&&!historicalReplay
     ? Number(clamp(rawScore).toFixed(1)):null;
@@ -567,7 +570,6 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     gateValid:gate.valid,gateIssues:gate.issues,policyIssues,highRiskPump:highRisk,extended,
     historicalReplay,earlyScore,breakoutBroken:br5.broken,r5_3,atrRatio:atrx.ratio,cfg
   });
-  const btcRows=closed(marketContext?.fiveMinute||[],now);
   const coinReturn15m=returns(s['5m'],3),btcReturn15m=returns(btcRows,3);
   const relativeStrengthBtcPct=Number.isFinite(coinReturn15m)&&Number.isFinite(btcReturn15m)?coinReturn15m-btcReturn15m:
     (hasFiniteNumber(fastContext?.micro_fingerprint?.metrics?.relative_strength_5m_pct)?Number(fastContext.micro_fingerprint.metrics.relative_strength_5m_pct):null);
@@ -577,7 +579,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   const tradeRatios=[fastContext.trade_accel_ratio,fastContext.micro_fingerprint?.metrics?.trade_rvol_1m,fastContext.micro_fingerprint?.metrics?.trade_rvol_5m].filter(Number.isFinite);
   const atrPct=Number.isFinite(atrx.current_atr)&&p>0?atrx.current_atr/p*100:null;
   const resistanceDistanceAtr=Number.isFinite(br5.distance_pct)&&Number.isFinite(atrPct)&&atrPct>0?-br5.distance_pct/atrPct:null;
-  const falseBreakout=fakeoutFlag(s['5m']).flag||fakeoutFlag(s['15m']).flag;
+  const falseBreakout=fakeoutFlag(s['5m']).flag||fakeoutFlag(s['15m']).flag||roleEvidence.failed_breakout.detected;
   const preExpansion=assessPreExpansionFingerprint({
     dataReady:gate.valid&&p>0,dailyChangePct:ticker.priceChange24h,lastPrice:p,
     maxMove24hPct:Math.min(8,Number(cfg.maxQuiet24hMovePct??8)),
@@ -610,7 +612,8 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     gate.issues.find(x=>x.startsWith('MISSING_TIMEFRAME'))?'MISSING_TIMEFRAME':null,
     fakeoutFlag(s['5m']).flag?'RECENT_FAKEOUT':null,
     market.label==='BEARISH'?'MARKET_REGIME_BEARISH':null,
-    historicalWeak?'HISTORICAL_FOLLOWTHROUGH_WEAK':null
+    historicalWeak?'HISTORICAL_FOLLOWTHROUGH_WEAK':null,
+    roleEvidence.failed_breakout.detected?'FAILED_BREAKOUT_TRAP_RISK':null
   ].filter(Boolean);
   const reasons=[
     rv5>=1.2?'RVOL_5M_ACCELERATION':null,
@@ -640,6 +643,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     pre_expansion_stage:preExpansion.stage,
     pre_expansion_fingerprint:preExpansion,
     activity_shock:activityShock,
+    role_evidence:roleEvidence,
     legacy_decision_band:legacyDecisionBand,
     data_quality:Number(gate.quality.toFixed(1)),
     data_stale:Boolean(gate.issues.some(x=>x.startsWith('STALE_DATA'))),
