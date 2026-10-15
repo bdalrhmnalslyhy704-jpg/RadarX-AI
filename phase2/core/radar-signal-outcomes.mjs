@@ -202,7 +202,7 @@ function pct(value, base) {
   return Number.isFinite(value) && Number.isFinite(base) && base > 0
     ? Number(((value / base - 1) * 100).toFixed(5)) : null;
 }
-function evaluateClosedHorizon(record, rows, horizon, now) {
+export function evaluateRadarOutcomeHorizon(record, rows, horizon, now) {
   const endAt = Number(record.detected_at) + horizon.ms;
   if (Number(now) < endAt + horizon.intervalMs) {
     return { status: 'PENDING', reason: 'HORIZON_NOT_MATURED_WITH_CLOSED_CANDLE_TOLERANCE' };
@@ -400,7 +400,7 @@ function applyGroupResult(record, family, due, candles, error, now) {
     const previous = record.outcomes?.[h.key];
     if (previous?.status !== 'PENDING') continue;
     let outcome = error ? { status: 'INCOMPLETE', reason: 'BINANCE_KLINE_FETCH_FAILED' } :
-      evaluateClosedHorizon(record, candles, h, now);
+      evaluateRadarOutcomeHorizon(record, candles, h, now);
     if (outcome.status === 'INCOMPLETE' && attempts < MAX_FETCH_ATTEMPTS) {
       stillPending = true;
       record.outcomes[h.key] = {
@@ -590,7 +590,6 @@ export class RadarSignalOutcomeWorker {
     }
   }
   snapshot() {
-    const state = typeof this.store?.getRadarSignalOutcomes === 'function' ? null : null;
     return {
       service: 'RADAR_SIGNAL_OUTCOME_WORKER_V1',
       running: this.running,
