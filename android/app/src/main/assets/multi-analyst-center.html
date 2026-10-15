@@ -306,7 +306,7 @@ document.getElementById('scanBtn').addEventListener('click',function(){run(true)
 document.getElementById('refreshBtn').addEventListener('click',function(){run(true);});
 run(false);
 setInterval(function(){run(false);},45000);
-document.addEventListener('visibilitychange',function(){if(!document.hidden&&(Date.now()-lastLiveAt>30000))run(true);});
+document.addEventListener('visibilitychange',function(){if(!document.hidden&&(Date.now()-lastLiveAt>30000))run(false);});
 </script>
 </body>
 </html>
