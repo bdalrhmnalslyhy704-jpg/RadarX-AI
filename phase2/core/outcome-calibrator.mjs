@@ -129,7 +129,7 @@ export async function updateSignalOutcomes(store,{symbol,price,now=Date.now(),pr
         // snapshot. Its bounded time window prevents late-price leakage.
         markPrice=p;
         markoutSources[h]='CURRENT_SNAPSHOT_WITHIN_WINDOW';
-      }else if(age-ms>toleranceMs){
+      }else if(age-ms>(Array.isArray(priceHistory)?CANDLE_MARKOUT_GRACE_MS:toleranceMs)){
         outcomes[h]='UNAVAILABLE';
         m.stats[h].unavailable=num(m.stats[h].unavailable,0)+1;
         unavailable++;
