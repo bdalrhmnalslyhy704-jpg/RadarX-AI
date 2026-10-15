@@ -33,6 +33,7 @@ export const QUIET_BASE_PRE_EXPANSION_DEFAULTS = Object.freeze({
   minBuyPressureTransitionVolumeRatio: 1.12,
   minBuyPressureTransitionTradeRatio: 1.05,
   minBuyPressureTransitionShare: 0.53,
+  minBuyPressureTransitionShareDelta: 0.02,
   minBuyPressureTransitionCloseLocation: 0.54,
   maxBuyPressureTransitionBaseRangePct: 3.5,
   minBuyPressureTransitionReturn1hPct: 0.15,
@@ -283,6 +284,7 @@ export function assessQuietBasePreExpansion({
     transitionVolumeRatio >= Number(cfg.minBuyPressureTransitionVolumeRatio) &&
     transitionTradeRatio >= Number(cfg.minBuyPressureTransitionTradeRatio) &&
     transitionTakerBuyShare >= Number(cfg.minBuyPressureTransitionShare) &&
+    transitionBuyShareDelta !== null && transitionBuyShareDelta >= Number(cfg.minBuyPressureTransitionShareDelta) &&
     transitionMeanCloseLocation >= Number(cfg.minBuyPressureTransitionCloseLocation) &&
     transitionReturn1hPct >= Number(cfg.minBuyPressureTransitionReturn1hPct) &&
     transitionReturn1hPct <= Number(cfg.maxBuyPressureTransitionReturn1hPct) &&
@@ -322,7 +324,9 @@ export function assessQuietBasePreExpansion({
       resistance_near: transitionResistanceNear, confirmed: buyPressureTransition
     }, {
       min_volume_ratio: Number(cfg.minBuyPressureTransitionVolumeRatio), min_trade_ratio: Number(cfg.minBuyPressureTransitionTradeRatio),
-      min_taker_buy_share: Number(cfg.minBuyPressureTransitionShare), min_mean_close_location: Number(cfg.minBuyPressureTransitionCloseLocation),
+      min_taker_buy_share: Number(cfg.minBuyPressureTransitionShare),
+      min_taker_buy_share_delta: Number(cfg.minBuyPressureTransitionShareDelta),
+      min_mean_close_location: Number(cfg.minBuyPressureTransitionCloseLocation),
       min_return_1h_pct: Number(cfg.minBuyPressureTransitionReturn1hPct), max_return_1h_pct: Number(cfg.maxBuyPressureTransitionReturn1hPct),
       max_prior_base_range_pct: Number(cfg.maxBuyPressureTransitionBaseRangePct), minimum_rows: 48
     }, buyPressureTransition, 'BUY_FLOW_AND_PARTICIPATION_TRANSITION_CONFIRMED',
