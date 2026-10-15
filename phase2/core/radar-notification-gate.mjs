@@ -28,14 +28,20 @@ function radarId(alert){return String(alert?.radar||'').toUpperCase();}
 const UNKNOWN_PROFILE=Object.freeze({minScore:90,minData:90,minConfirmations:8,minCategoryHits:6,minLiquidity:75,globalCooldownMs:20*60*1000,priority:1});
 function profileFor(alert){return PROFILES[radarId(alert)]||UNKNOWN_PROFILE;}
 
+function numericQuality(value){
+  if(value===null||value===undefined||typeof value==='boolean'||(typeof value==='string'&&value.trim()===''))return 0;
+  const n=Number(value);
+  return Number.isFinite(n)?clamp(n):0;
+}
+
 function dataQualityOf(alert){
-  return clamp(alert?.data_quality ?? alert?.data_status?.data_quality ??
-    alert?.components?.data_quality ?? alert?.components?.dataQuality ?? alert?.deep_scan?.assessment?.data_quality ?? 100);
+  return numericQuality(alert?.data_quality ?? alert?.data_status?.data_quality ??
+    alert?.components?.data_quality ?? alert?.components?.dataQuality ?? alert?.deep_scan?.assessment?.data_quality);
 }
 
 function liquidityOf(alert){
-  return clamp(alert?.liquidity_quality ?? alert?.components?.liquidity ??
-    alert?.deep_scan?.assessment?.liquidity_score ?? 100);
+  return numericQuality(alert?.liquidity_quality ?? alert?.components?.liquidity ??
+    alert?.deep_scan?.assessment?.liquidity_score);
 }
 
 function confirmationsOf(alert){
