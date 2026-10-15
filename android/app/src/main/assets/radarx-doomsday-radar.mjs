@@ -6,11 +6,16 @@ const esc=v=>String(v||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 const n=v=>Number.isFinite(Number(v))?Number(v).toFixed(1):'—';
 const p=v=>Number.isFinite(Number(v))?Number(v).toFixed(4):'—';
 function movementStartText(analysis,metrics){
- const at=Number(analysis?.movement_start?.started_at_ms??metrics?.movement_start_time_ms);
+ const a=analysis&&typeof analysis==='object'?analysis:{};
+ const m=metrics&&typeof metrics==='object'?metrics:{};
+ const move=a.movement_start&&typeof a.movement_start==='object'?a.movement_start:{};
+ const atValue=move.started_at_ms!==null&&move.started_at_ms!==undefined?move.started_at_ms:m.movement_start_time_ms;
+ const at=Number(atValue);
  if(!Number.isFinite(at)||at<=0)return 'بداية سلسلة النشاط المقدّرة: غير مؤكدة من الشموع الحالية';
  const label=new Date(at).toLocaleString('ar-YE',{timeZone:'Asia/Aden',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
- const lag=Number(analysis?.movement_start?.lag_ms??metrics?.movement_start_lag_ms);
- const bars=Number(analysis?.movement_start?.observed_bars??metrics?.movement_start_observed_bars);
+ const lagValue=move.lag_ms!==null&&move.lag_ms!==undefined?move.lag_ms:m.movement_start_lag_ms;
+ const barsValue=move.observed_bars!==null&&move.observed_bars!==undefined?move.observed_bars:m.movement_start_observed_bars;
+ const lag=Number(lagValue),bars=Number(barsValue);
  return 'بداية سلسلة النشاط المقدّرة: '+label+
    (Number.isFinite(lag)?' • مضى '+(lag/60000).toFixed(1)+' دقيقة':'')+
    (Number.isFinite(bars)?' • '+bars+' شموع مغلقة':'');
