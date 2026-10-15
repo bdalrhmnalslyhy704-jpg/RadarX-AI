@@ -8,6 +8,7 @@ import {SymbolDeepAnalyzer,normalizeDeepScanSymbol} from '../core/symbol-deep-an
 import {buildKingVerdict,rankKingMarket} from '../core/king-intelligence.mjs';
 import {MultiAnalystEngine} from '../core/multi-analyst-engine.mjs';
 import {radarTelemetry,renderRadarTelemetryDashboard} from '../core/radar-telemetry.mjs';
+import {buildRadarReadinessAudit} from '../core/radar-readiness-audit.mjs';
 
 function send(res,status,body,extra={}){
   const data=JSON.stringify(body);
@@ -312,6 +313,19 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       if(u.pathname==='/radar-telemetry'&&req.method==='GET'){
         res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff','x-frame-options':'DENY'});
         res.end(renderRadarTelemetryDashboard());return;
+      }
+      if(u.pathname==='/api/radar-readiness-audit'&&req.method==='GET'){
+        let swarm=null,candleCache=null,warmupReport=null;
+        try{swarm=typeof radarSwarm?.snapshot==='function'?radarSwarm.snapshot():null;}catch{}
+        try{
+          const cache=earlyExpansionRadar?.marketWideKlineCache;
+          candleCache=typeof cache?.health==='function'?cache.health():null;
+          warmupReport=cache?.lastWarmupReport||null;
+        }catch{}
+        return send(res,200,buildRadarReadinessAudit({
+          radars:radarStatus(),swarm,telemetry:radarTelemetry.snapshot({limit:500}),
+          candleCache,warmupReport,now:Date.now()
+        }));
       }
       if(u.pathname==='/api/radar-status'&&req.method==='GET')return send(res,200,{radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
       if(u.pathname==='/api/radar-swarm-status'&&req.method==='GET'){
