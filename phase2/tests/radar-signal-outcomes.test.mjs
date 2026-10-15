@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {DurableStore} from '../core/store.mjs';
 import {
   RADAR_OUTCOME_ARCHIVES,
   RADAR_OUTCOME_HORIZONS,
@@ -67,6 +71,21 @@ test('horizon outcomes use complete closed candles and report OHLC excursions wi
   assert.equal(outcome.max_adverse_pct,-2);
   assert.ok(outcome.hit_3pct_at);
   assert.equal(outcome.future_trade_time_claimed,false);
+});
+
+test('candles whose close falls after the requested horizon are excluded',()=>{
+  const horizon=RADAR_OUTCOME_HORIZONS.find(x=>x.key==='5m');
+  const now=BASE+horizon.ms+horizon.intervalMs+minute;
+  const rows=Array.from({length:6},(_,i)=>candle(BASE+i*minute,minute,{
+    open:100,high:i===5?150:101,low:99,close:100.5
+  }));
+  const outcome=evaluateRadarOutcomeHorizon({detected_at:BASE,entry_price:100},rows,horizon,now);
+  assert.equal(outcome.status,'COMPLETE');
+  assert.equal(outcome.expected_bars,5);
+  assert.equal(outcome.observed_bars,5);
+  assert.equal(outcome.max_favorable_pct,1);
+  assert.equal(outcome.hit_10pct_at,null);
+  assert.equal(outcome.horizon_window_complete_through,BASE+5*minute-1);
 });
 
 test('missing candle windows fail closed instead of making a partial horizon look complete',()=>{
@@ -137,6 +156,24 @@ test('bounded maintenance imports archived alerts and respects the per-pass REST
   assert.equal(row.outcomes['4h'].status,'COMPLETE');
   assert.equal(row.outcomes['24h'].status,'COMPLETE');
   assert.equal(result.report.summary.completed_24h_outcomes,1);
+});
+
+test('outcome ledger persists atomically through DurableStore updates',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-radar-outcomes-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    await store.updateRadarSignalOutcomes(raw=>{
+      const state={...emptyRadarSignalOutcomeState(),...raw};
+      state.records.push({signal_id:'RADAR_6|PERSIST_TEST',radar:'RADAR_6',baseline_status:'COMPLETE',
+        detected_at:BASE,entry_price:100,outcomes:{'5m':completeOutcome()}});
+      return state;
+    });
+    const reloaded=await new DurableStore({dir}).init();
+    const saved=await reloaded.getRadarSignalOutcomes();
+    assert.equal(saved.version,'RADAR_SIGNAL_OUTCOMES_V1');
+    assert.equal(saved.records.length,1);
+    assert.equal(saved.records[0].outcomes['5m'].sample_quality,'HISTORICAL_CLOSED_OHLC');
+  }finally{await rm(dir,{recursive:true,force:true});}
 });
 
 test('performance rates become eligible only at the documented minimum sample size',()=>{
