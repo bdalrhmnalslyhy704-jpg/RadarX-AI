@@ -782,14 +782,14 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           return send(res,200,marketRadarCachedSnapshot(cached.snapshot,'STALE_WHILE_REVALIDATING',ageMs));
         }
         if(marketRadarRefreshFlights.has(key)){
-          return send(res,503,marketRadarRefreshPendingBody(quote,limit,'SCAN_IN_PROGRESS',ageMs));
+          return send(res,200,marketRadarRefreshPendingBody(quote,limit,'SCAN_IN_PROGRESS',ageMs));
         }
         if(Number(marketRadarRefreshRetryAfter.get(key)||0)>now){
-          return send(res,503,marketRadarRefreshPendingBody(quote,limit,'RETRY_COOLDOWN',ageMs));
+          return send(res,200,marketRadarRefreshPendingBody(quote,limit,'RETRY_COOLDOWN',ageMs));
         }
         const refresh=refreshMarketRadarSnapshot(key,quote,limit);
         if(refresh)refresh.catch(()=>{});
-        return send(res,503,marketRadarRefreshPendingBody(quote,limit,'SCAN_IN_PROGRESS',ageMs));
+        return send(res,200,marketRadarRefreshPendingBody(quote,limit,'SCAN_IN_PROGRESS',ageMs));
       }
       if(u.pathname==='/api/symbol-deep-scan'&&req.method==='GET'){
         if(!deepSymbolScanner)return send(res,503,{error:'SYMBOL_DEEP_SCAN_UNAVAILABLE'});
