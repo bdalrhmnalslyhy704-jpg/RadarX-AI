@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import vm from 'node:vm';
 
 const root=new URL('../../phase1/',import.meta.url);
@@ -12,6 +14,17 @@ test('TEST_FIXTURE: Doomsday radar displays the estimated confirmed activity-sta
   assert.ok(text.includes('Asia/Aden'));
   assert.ok(text.includes('بداية سلسلة النشاط المقدّرة'));
   assert.ok(text.includes('شموع مغلقة'));
+});
+
+test('TEST_FIXTURE: changed Android radar assets parse as valid JavaScript modules',()=>{
+  for(const asset of [
+    '../../android/app/src/main/assets/radarx-doomsday-radar.mjs',
+    '../../android/app/src/main/assets/radarx-radar-screen.mjs'
+  ]){
+    const path=fileURLToPath(new URL(asset,import.meta.url));
+    const check=spawnSync(process.execPath,['--check',path],{encoding:'utf8'});
+    assert.equal(check.status,0,asset+' syntax failed: '+String(check.stderr||check.stdout||''));
+  }
 });
 
 test('TEST_FIXTURE: frontend never contains Binance credentials or VAPID private key',async()=>{
