@@ -5,6 +5,7 @@ export const HISTORICAL_MATRIX_DEFAULT_SYMBOLS=Object.freeze([
 ]);
 const HOUR_MS=60*60*1000;
 const MAX_WINDOW_MS=7*24*HOUR_MS;
+export const HISTORICAL_MATRIX_REQUIRED_REGIMES=Object.freeze(['BULL_TREND','BEAR_TREND','SIDEWAYS']);
 function toMs(value){if(typeof value==='number'&&Number.isFinite(value))return value;const n=Date.parse(String(value??''));return Number.isFinite(n)?n:NaN;}
 function clampNumber(value,min,max,fallback){const n=Number(value);return Number.isFinite(n)?Math.max(min,Math.min(max,n)):fallback;}
 
@@ -13,7 +14,7 @@ function clampNumber(value,min,max,fallback){const n=Number(value);return Number
 // still covers 30 independent Spot USDT symbols across three historical regimes.
 export const HISTORICAL_MATRIX_DEFAULT_WINDOWS=Object.freeze([
   Object.freeze({id:'late-2024-rally-candidate',label:'Late 2024 rally candidate — 6h slice',start:'2024-11-06T00:00:00.000Z',end:'2024-11-06T06:00:00.000Z'}),
-  Object.freeze({id:'early-2025-selloff-candidate',label:'Early 2025 selloff candidate — 6h slice',start:'2025-02-25T00:00:00.000Z',end:'2025-02-25T06:00:00.000Z'}),
+  Object.freeze({id:'early-2025-selloff-candidate',label:'Feb 25 2025 BTC selloff — observed 6h bearish window',start:'2025-02-25T06:00:00.000Z',end:'2025-02-25T12:00:00.000Z'}),
   Object.freeze({id:'late-2024-range-candidate',label:'Late 2024 range candidate — 6h slice',start:'2024-09-10T00:00:00.000Z',end:'2024-09-10T06:00:00.000Z'})
 ]);
 

@@ -5,7 +5,7 @@ import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {CONFIG} from '../config.mjs';
 import {RestClient} from '../market/binance-rest.mjs';
-import {HISTORICAL_MATRIX_DEFAULT_SYMBOLS,HISTORICAL_MATRIX_DEFAULT_WINDOWS,normalizeMatrixSymbols,normalizeMatrixWindows,classifyBtcMarketRegime,summarizeHistoricalWindowReport} from '../core/historical-replay-matrix.mjs';
+import {HISTORICAL_MATRIX_DEFAULT_SYMBOLS,HISTORICAL_MATRIX_DEFAULT_WINDOWS,HISTORICAL_MATRIX_REQUIRED_REGIMES,normalizeMatrixSymbols,normalizeMatrixWindows,classifyBtcMarketRegime,summarizeHistoricalWindowReport} from '../core/historical-replay-matrix.mjs';
 
 const HOUR_MS=60*60*1000;
 const here=dirname(fileURLToPath(import.meta.url));
@@ -71,7 +71,18 @@ async function main(){
   }
   const complete=results.filter(x=>['COMPLETE','COMPLETE_WITH_CANDLE_FALLBACK'].includes(x.summary.coverage_status)&&x.market_regime.regime!=='UNKNOWN');
   const hasCandleFallback=complete.some(x=>x.summary.coverage_status==='COMPLETE_WITH_CANDLE_FALLBACK');
-  const matrix={...plan,generated_at:new Date().toISOString(),output_dir:outputDir,windows:results,matrix_summary:{window_count:results.length,completed_windows:complete.length,coverage_incomplete_windows:results.length-complete.length,trade_fallback_windows:complete.filter(x=>x.summary.coverage_status==='COMPLETE_WITH_CANDLE_FALLBACK').length,regimes_observed:[...new Set(results.map(x=>x.market_regime.regime))],status:complete.length!==results.length?'INCOMPLETE_OR_PARTIAL':(hasCandleFallback?'COMPLETE_WITH_FALLBACK':'COMPLETE')},};
+  const regimesObserved=[...new Set(results.map(x=>x.market_regime.regime))];
+  const missingRequiredRegimes=HISTORICAL_MATRIX_REQUIRED_REGIMES.filter(regime=>!regimesObserved.includes(regime));
+  const regimeCoverageComplete=missingRequiredRegimes.length===0;
+  const status=complete.length!==results.length?'INCOMPLETE_OR_PARTIAL':
+    !regimeCoverageComplete?'INCOMPLETE_REGIME_COVERAGE':
+      (hasCandleFallback?'COMPLETE_WITH_FALLBACK':'COMPLETE');
+  const matrix={...plan,generated_at:new Date().toISOString(),output_dir:outputDir,windows:results,matrix_summary:{
+    window_count:results.length,completed_windows:complete.length,coverage_incomplete_windows:results.length-complete.length,
+    trade_fallback_windows:complete.filter(x=>x.summary.coverage_status==='COMPLETE_WITH_CANDLE_FALLBACK').length,
+    regimes_observed:regimesObserved,required_regimes:HISTORICAL_MATRIX_REQUIRED_REGIMES,
+    missing_required_regimes:missingRequiredRegimes,regime_coverage_complete:regimeCoverageComplete,status
+  }};
   const finalPath=resolve(outputDir,'matrix-summary.json');
   const {writeFile}=await import('node:fs/promises');
   await writeFile(finalPath,JSON.stringify(matrix,null,2)+'\n');

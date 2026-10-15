@@ -7,24 +7,45 @@ function candle(openTime,close,{open=close-0.02,high=close+0.06,low=close-0.06,v
   return {openTime,closeTime:openTime+59_999,open,high,low,close,volume,quoteVolume:close*volume,tradeCount,takerBuyBaseVolume:volume*taker,closed:true};
 }
 
-function risingBase(n=100,start=100,step=60_000){
+function risingBase(n=100,start=100,step=60_000,endAt=1_800_000_000_000+240*60_000){
   const rows=[];
+  const origin=endAt-n*step+1;
   for(let i=0;i<n;i++){
     const close=start+i*0.004;
     const early=i<n-8;
     const lift=early?0:(i-(n-8)+1)*0.09;
     const value=close+lift;
-    rows.push(candle(1_800_000_000_000+i*step,value,{volume:early?850:2500,tradeCount:early?75:230,taker:early?0.50:0.56}));
+    rows.push(candle(origin+i*step,value,{volume:early?850:2500,tradeCount:early?75:230,taker:early?0.50:0.56}));
   }
   return rows;
 }
 
-function flat(n=40,start=100,step=300_000){
+function flat(n=40,start=100,step=300_000,endAt=1_800_000_000_000+240*60_000){
+  const origin=endAt-n*step+1;
   return Array.from({length:n},(_,i)=>{
-    const close=start+i*0.001;
-    return {openTime:1_800_000_000_000+i*step,closeTime:1_800_000_000_000+i*step+step-1,open:close-0.005,high:close+0.02,low:close-0.02,close,volume:1200,quoteVolume:close*1200,tradeCount:120,takerBuyBaseVolume:600,closed:true};
+    const close=start+i*0.001,openTime=origin+i*step;
+    return {openTime,closeTime:openTime+step-1,open:close-0.005,high:close+0.02,low:close-0.02,close,volume:1200,quoteVolume:close*1200,tradeCount:120,takerBuyBaseVolume:600,closed:true};
   });
 }
+
+test('Falcon Eye does not treat explicit null futures metrics as available zero-valued data',()=>{
+  const now=1_800_000_000_000+240*60_000;
+  const one=risingBase();
+  const five=flat(80);
+  const a=buildFalconEyeAnalysis({
+    ticker:{symbol:'NODATAUSDT',lastPrice:one.at(-1).close,priceChange24h:2.8,quoteVolume24h:2_500_000},
+    oneMinute:one,fiveMinute:five,
+    futures:{quoteVolume:null,openInterest:null,fundingRate:null},
+    previousFutures:{openInterest:null},
+    now
+  });
+  assert.equal(a.derivatives.futures_available,false);
+  assert.equal(a.derivatives.futures_quote_volume,null);
+  assert.equal(a.derivatives.open_interest,null);
+  assert.equal(a.derivatives.funding_rate,null);
+  assert.equal(a.metrics.funding_rate,null);
+  assert.equal(a.reasons.includes('Funding سلبي: ضغط شورت قابل للانقلاب'),false);
+});
 
 test('Falcon Eye notification diversity reads the actual nested component scores',()=>{
   const now=1_900_000_000_000;
@@ -70,6 +91,36 @@ test('Falcon Eye turns the OGN fingerprint into an early, multi-factor setup',()
   assert.ok(a.metrics.futures_spot_volume_ratio>=8);
   assert.ok(a.metrics.oi_change_pct>2);
   assert.ok(a.metrics.funding_rate<0);
+});
+
+test('Falcon Eye rejects stale closed candles and marks data quality unavailable',()=>{
+  const now=1_800_000_000_000+240*60_000;
+  const staleOne=risingBase(100,100,60_000,now-10*60_000);
+  const freshFive=flat(80,100,5*60_000,now);
+  const a=buildFalconEyeAnalysis({
+    ticker:{symbol:'STALEUSDT',lastPrice:staleOne.at(-1).close,priceChange24h:2.8,quoteVolume24h:2_500_000},
+    oneMinute:staleOne,fiveMinute:freshFive,now
+  });
+  assert.equal(a.eligible,false);
+  assert.equal(a.stage,'DATA_STALE');
+  assert.equal(a.data_quality,0);
+  assert.equal(a.data_stale,true);
+  assert.ok(a.data_quality_reasons.includes('ONE_MINUTE_STALE_CLOSED_CANDLES'));
+});
+
+test('Falcon Eye rejects candle gaps inside the scoring window',()=>{
+  const now=1_800_000_000_000+240*60_000;
+  const one=risingBase(100,100,60_000,now);
+  one.splice(85,1);
+  const five=flat(80,100,5*60_000,now);
+  const a=buildFalconEyeAnalysis({
+    ticker:{symbol:'GAPUSDT',lastPrice:one.at(-1).close,priceChange24h:2.8,quoteVolume24h:2_500_000},
+    oneMinute:one,fiveMinute:five,now
+  });
+  assert.equal(a.eligible,false);
+  assert.equal(a.stage,'INSUFFICIENT_DATA');
+  assert.equal(a.data_quality,0);
+  assert.ok(a.data_quality_reasons.includes('ONE_MINUTE_CLOSED_CANDLE_SEQUENCE_HAS_GAPS'));
 });
 
 test('Falcon Eye vetoes OGN-style post-explosion chasing',()=>{

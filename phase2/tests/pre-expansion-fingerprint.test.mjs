@@ -70,20 +70,21 @@ test('a failed resistance wick is not promoted to pre-expansion or breakout-deve
 function candle(openTime,close,{open=close-.02,high=close+.06,low=close-.06,volume=900,tradeCount=80,taker=.50,step=60_000}={}){
   return {openTime,closeTime:openTime+step-1,open,high,low,close,volume,quoteVolume:close*volume,tradeCount,takerBuyBaseVolume:volume*taker,closed:true};
 }
-function risingBase(n=100,start=100,step=60_000){
-  const out=[];
+function risingBase(n=100,start=100,step=60_000,endAt=1_800_000_000_000+240*60_000){
+  const out=[],origin=endAt-n*step+1;
   for(let i=0;i<n;i++){
     const close=start+i*.004;
     const early=i<n-8;
     const lift=early?0:(i-(n-8)+1)*.09;
     const value=close+lift;
-    out.push(candle(1_800_000_000_000+i*step,value,{volume:early?850:2500,tradeCount:early?75:230,taker:early ? 0.50 : 0.56,step}));
+    out.push(candle(origin+i*step,value,{volume:early?850:2500,tradeCount:early?75:230,taker:early ? 0.50 : 0.56,step}));
   }
   return out;
 }
-function flat(n=80,start=100,step=300_000){
+function flat(n=80,start=100,step=300_000,endAt=1_800_000_000_000+240*60_000){
+  const origin=endAt-n*step+1;
   return Array.from({length:n},(_,i)=>{
-    const close=start+i*.001,openTime=1_800_000_000_000+i*step;
+    const close=start+i*.001,openTime=origin+i*step;
     return {openTime,closeTime:openTime+step-1,open:close-.005,high:close+.02,low:close-.02,close,volume:1200,quoteVolume:close*1200,tradeCount:120,takerBuyBaseVolume:600,closed:true};
   });
 }
