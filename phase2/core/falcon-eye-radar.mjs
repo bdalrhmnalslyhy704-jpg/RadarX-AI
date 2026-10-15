@@ -2,6 +2,7 @@ import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.m
 import {updateMarketPulseHistory} from './falcon-market-pulse.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
+import {buildRadarRoleEvidence} from './radar-role-evidence.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
 import {assessQuietBaseActivityShock} from './activity-shock.mjs';
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
@@ -319,14 +320,16 @@ export function buildFalconEyeAnalysis({
     (!Number.isFinite(r5)||Math.abs(r5)<=2.5) &&
     (!Number.isFinite(e21Distance)||e21Distance<=4.2) &&
     (!Number.isFinite(resistanceGap)||resistanceGap>=-1.2);
+  const roleEvidence=buildRadarRoleEvidence({candles:one,relativeCandles:five,benchmarkCandles:btc5,now,intervalMs:60_000,relativeIntervalMs:5*60_000,volumeRatio:va.volume_ratio,tradeRatio:va.trade_ratio,takerBuyRatio:tk.ratio,marketExcessPct:hasFiniteValue(ticker.relativeStrengthMarket24hPct)?Number(ticker.relativeStrengthMarket24hPct):null,peerExcessPct:hasFiniteValue(ticker.relativeStrengthPeer24hPct)?Number(ticker.relativeStrengthPeer24hPct):null,lookbackBars:20});
+  const failedBreakout=roleEvidence.failed_breakout.detected===true;
   const independentFlowConfirmation=takerScore>=60||(activityShock.detected===true&&activityShock.score>=76&&!activityShock.extended);
   const earlyStructure=
-    score>=78&&confirmations>=8&&notChasing&&
+    !failedBreakout&&score>=78&&confirmations>=8&&notChasing&&
     volumeScore>=60&&tradeScore>=58&&independentFlowConfirmation&&
     (structureScore>=68||hl>=70)&&
     (Number.isFinite(resistanceGap)&&resistanceGap<=1.4||br.break_up);
   const ignition=
-    score>=84&&confirmations>=9&&notChasing&&
+    !failedBreakout&&(!br.break_up||roleEvidence.continuation.confirmed)&&score>=84&&confirmations>=9&&notChasing&&
     (br.break_up||Number.isFinite(r3)&&r3>=0.35)&&
     volumeScore>=62&&(takerScore>=62||(activityShock.detected===true&&activityShock.score>=76&&!activityShock.extended));
   const volumeTrend=measureGradualParticipation(one.map(x=>x.quoteVolume??x.volume));
@@ -374,6 +377,7 @@ export function buildFalconEyeAnalysis({
     eligible,stage,pre_expansion_stage:preExpansion.stage,pre_expansion_fingerprint:preExpansion,activity_shock:activityShock,market_regime_label:marketRegimeLabel,closed_candles_only:true,score:Number(score.toFixed(1)),
     data_quality:90,data_stale:false,data_quality_reasons:[],data_quality_checks:freshness,
     confirmation_count:confirmations,not_chasing:notChasing,
+    role_evidence:roleEvidence,
     anti_chase_penalty:Number(antiChasePenalty.toFixed(1)),
     metrics:{
       price,last_price:lastClose,move_24h_pct:move24,return_1m:r1,return_3m:r3,return_5m:r5,return_10m:r10,return_20m:r20,acceleration:accel,
