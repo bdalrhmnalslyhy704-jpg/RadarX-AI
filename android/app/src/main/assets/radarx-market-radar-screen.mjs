@@ -387,8 +387,8 @@ export function mountMarketRadarScreen(root, options = {}) {
   const CACHE_TTL_MS=5*60*1000;
   function readCache(){try{const raw=sessionStorage.getItem(CACHE_KEY);if(!raw)return null;const x=JSON.parse(raw);return x&&Number.isFinite(Number(x.savedAt))&&x.response&&(Date.now()-Number(x.savedAt)<CACHE_TTL_MS)?x:null;}catch(error){return null;}}
   function writeCache(response){try{sessionStorage.setItem(CACHE_KEY,JSON.stringify({savedAt:Date.now(),response:response}));}catch(error){}}
-  const state = {candidates: [], response:null, lastUpdate:null, mode:'FETCHING', destroyed:false};
-  const pageHide = () => { state.destroyed = true; };
+  const state = {candidates: [], response:null, lastUpdate:null, mode:'FETCHING', destroyed:false, loading:false, retryTimer:null, retryAttempt:0, pollTimer:null};
+  const pageHide = () => { state.destroyed = true; clearRetryTimer(); if(state.pollTimer)clearInterval(state.pollTimer); };
 
   const nodes = {
     statusText: root.querySelector('[data-rx-status-text]'),
@@ -479,10 +479,13 @@ export function mountMarketRadarScreen(root, options = {}) {
       return;
     }
     const normalized = normalizeMarketRadarResponse(response, 20);
-    const mode = classifyMarketRadarResponse(response, navigator.onLine);
+    const responseCache=response&&response.body&&response.body.meta&&response.body.meta.response_cache;
+    const cachedMode=responseCache&&responseCache.mode;
+    const mode=(cachedMode==='LOCAL_CACHE'||cachedMode==='STALE_WHILE_REVALIDATING')
+      ?'PARTIAL_DATA':classifyMarketRadarResponse(response, navigator.onLine);
     state.candidates = normalized.candidates;
     state.response = response;
-    writeCache(response);
+    if(cachedMode!=='LOCAL_CACHE')writeCache(response);
     state.lastUpdate = normalized.updatedAt || new Date().toISOString();
     const split = splitCandidates(state.candidates);
     nodes.updated.textContent = time(state.lastUpdate);
@@ -500,20 +503,29 @@ export function mountMarketRadarScreen(root, options = {}) {
       return;
     }
 
-    if (mode === 'DATA_STALE') {
+    if (cachedMode==='LOCAL_CACHE') {
+      setStatus('PARTIAL_DATA','لقطة محفوظة محليًا من '+time(state.lastUpdate)+'؛ يجري التحقق من بيانات الخادم قبل اعتبارها حديثة.');
+    } else if (cachedMode==='STALE_WHILE_REVALIDATING') {
+      setStatus('PARTIAL_DATA','هذه آخر لقطة حقيقية محفوظة منذ '+Math.round(Number(responseCache.age_ms||0)/1000)+' ثانية؛ يجري تحديث السوق بالخلفية.');
+    } else if (mode === 'DATA_STALE') {
       setStatus(mode, 'لا يوجد مرشح صالح حديث يمكن عرضه كبيانات حية.');
     } else if (mode === 'PARTIAL_DATA') {
       setStatus(mode, 'توجد نتائج صالحة، وبعض النتائج الأخرى مستبعدة بسبب جودة البيانات أو freshness.');
     } else {
       setStatus(mode, mode === 'LIVE_DATA' ? 'النتائج المعروضة حديثة وصالحة واجتازت شروط العرض.' : 'تم استلام استجابة قابلة للعرض.');
     }
+    return mode;
   }
 
   function bindInlineRetry() {
     (function(){var n=root.querySelector('[data-rx-inline-retry]');if(n)n.addEventListener('click', load, {once:true});})();
   }
 
-  function fail(mode, detail) {
+  function fail(mode, detail, preserveCurrent=false) {
+    if(preserveCurrent&&state.response){
+      setStatus(mode,detail||'تعذر تحديث السوق. تبقى اللقطة السابقة ظاهرة مؤقتًا، ولا تُعامل كتأكيد حي.');
+      return;
+    }
     state.candidates = [];
     state.response = null;
     nodes.updated.textContent = 'غير متاح';
@@ -528,12 +540,24 @@ export function mountMarketRadarScreen(root, options = {}) {
     bindInlineRetry();
   }
 
+  function clearRetryTimer() {
+    if(state.retryTimer){clearTimeout(state.retryTimer);state.retryTimer=null;}
+  }
+
+  function scheduleRetry() {
+    if(state.destroyed||state.retryTimer||!navigator.onLine)return;
+    const delay=Math.min(30000,5000*Math.pow(2,Math.min(state.retryAttempt,3)));
+    state.retryAttempt=Math.min(state.retryAttempt+1,8);
+    state.retryTimer=setTimeout(function(){state.retryTimer=null;load();},delay);
+  }
+
   async function load() {
-    if (state.destroyed) return;
+    if (state.destroyed||state.loading) return;
     if (!navigator.onLine) {
-      fail('OFFLINE');
+      fail('OFFLINE',null,Boolean(state.response));
       return;
     }
+    state.loading=true;
     closeDetail();
     setStatus('FETCHING', 'يتم جلب البيانات من Backend؛ الشمعة غير المغلقة لا تدخل التحليل.');
     try {
@@ -550,24 +574,44 @@ export function mountMarketRadarScreen(root, options = {}) {
       });
       if (state.destroyed) return;
       const response = result.response;
+      const responseCache=response&&response.body&&response.body.meta&&response.body.meta.response_cache;
+      if(responseCache&&(responseCache.mode==='SCAN_IN_PROGRESS'||responseCache.mode==='RETRY_COOLDOWN')){
+        if(!state.response){
+          nodes.validList.innerHTML='<div class="rx-empty"><b>يجري جلب بيانات السوق الحقيقية</b><div class="rx-muted" style="margin-top:6px">فحص السوق العميق يعمل في الخادم؛ ستُعاد المحاولة تلقائيًا دون اختراع بيانات.</div></div>';
+          nodes.excludedList.innerHTML='';
+        }
+        setStatus('RETRY','الخادم يجلب البيانات الآن؛ ستُعاد المحاولة تلقائيًا خلال ثوانٍ.');
+        scheduleRetry();
+        return;
+      }
       const mode = classifyMarketRadarResponse(response, navigator.onLine);
       if (mode === 'RETRY') {
-        fail(navigator.onLine ? 'DATA_UNAVAILABLE' : 'OFFLINE', response && response.error || 'RETRY_EXHAUSTED');
+        fail(navigator.onLine ? 'DATA_UNAVAILABLE' : 'OFFLINE', response && response.error || 'RETRY_EXHAUSTED',Boolean(state.response));
+        if(navigator.onLine)scheduleRetry();
         return;
       }
       if (mode === 'OFFLINE') {
-        fail('OFFLINE');
+        fail('OFFLINE',null,Boolean(state.response));
         return;
       }
       if (mode === 'DATA_UNAVAILABLE') {
-        fail('DATA_UNAVAILABLE', response && response.error || response && response.body && response.body.error || 'تعذر الوصول إلى Market Radar.');
+        fail('DATA_UNAVAILABLE', response && response.error || response && response.body && response.body.error || 'تعذر الوصول إلى Market Radar.',Boolean(state.response));
+        scheduleRetry();
         return;
       }
-      applyResponse(response);
+      const appliedMode=applyResponse(response);
+      if(responseCache&&responseCache.mode==='STALE_WHILE_REVALIDATING'||appliedMode==='DATA_STALE'||!appliedMode){
+        scheduleRetry();
+      } else {
+        clearRetryTimer();
+        state.retryAttempt=0;
+      }
     } catch (error) {
       console.error('RadarX Dashboard error:', error);
-      fail(navigator.onLine ? 'DATA_UNAVAILABLE' : 'OFFLINE', String(error && error.message || error || 'UNKNOWN_ERROR'));
+      fail(navigator.onLine ? 'DATA_UNAVAILABLE' : 'OFFLINE', String(error && error.message || error || 'UNKNOWN_ERROR'),Boolean(state.response));
+      if(navigator.onLine)scheduleRetry();
     } finally {
+      state.loading=false;
       if (window.RadarXSmoke) {
         window.RadarXSmoke.state('SCAN_COMPLETE');
       }
@@ -582,7 +626,7 @@ export function mountMarketRadarScreen(root, options = {}) {
 
   const online = () => load();
   const offline = () => {
-    fail('OFFLINE');
+    fail('OFFLINE',null,Boolean(state.response));
     if (window.RadarXSmoke) window.RadarXSmoke.state('BACKEND_DISCONNECTED');
   };
   window.addEventListener('online', online);
@@ -591,16 +635,30 @@ export function mountMarketRadarScreen(root, options = {}) {
 
   const cached=readCache();
   if(cached){
-    applyResponse(cached.response);
+    const cacheAge=Math.max(0,Date.now()-Number(cached.savedAt));
+    const cachedBody=cached.response&&cached.response.body&&typeof cached.response.body==='object'?cached.response.body:{};
+    const localCacheResponse={
+      ...cached.response,
+      body:{
+        ...cachedBody,
+        meta:{...(cachedBody.meta||{}),live:false,response_cache:{mode:'LOCAL_CACHE',age_ms:cacheAge}}
+      }
+    };
+    applyResponse(localCacheResponse);
     if(window.RadarXSmoke)window.RadarXSmoke.state('SCAN_CACHED');
-  }else{
-    load();
   }
+  load();
+  state.pollTimer=setInterval(function(){
+    if(state.destroyed||state.loading||state.retryTimer)return;
+    load();
+  },45000);
 
   return {
     refresh: load,
     destroy() {
       state.destroyed = true;
+      clearRetryTimer();
+      if(state.pollTimer)clearInterval(state.pollTimer);
       window.removeEventListener('online', online);
       window.removeEventListener('offline', offline);
       window.removeEventListener('pagehide', pageHide, true);
