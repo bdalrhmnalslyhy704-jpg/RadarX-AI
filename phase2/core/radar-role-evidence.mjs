@@ -60,14 +60,18 @@ function continuation(rows,{now=Date.now(),lookbackBars=20,minVolumeRatio=1.05,m
   holding_closes:holds,current_close_above_resistance:currentAbove,under_then_reclaimed:retest,volume_ratio:vr===null?null:Number(vr.toFixed(3)),
   trade_ratio:tr===null?null:Number(tr.toFixed(3)),taker_buy_ratio:taker===null?null:Number(taker.toFixed(3)),reason_codes:reasons,lookback_bars:lookback};
 }
-export function buildRadarRoleEvidence({candles=[],relativeCandles=candles,benchmarkCandles=[],peerReturns=[],now=Date.now(),intervalMs=60_000,relativeIntervalMs=intervalMs,volumeRatio=null,tradeRatio=null,takerBuyRatio=null,lookbackBars=20}={}){
+export function buildRadarRoleEvidence({candles=[],relativeCandles=candles,benchmarkCandles=[],peerReturns=[],marketExcessPct=null,peerExcessPct=null,now=Date.now(),intervalMs=60_000,relativeIntervalMs=intervalMs,volumeRatio=null,tradeRatio=null,takerBuyRatio=null,lookbackBars=20}={}){
  const coin=closedRows(relativeCandles,now),bench=closedRows(benchmarkCandles,now),coinReturn=returnOver(coin,3),benchReturn=returnOver(bench,3);
  const excess=Number.isFinite(coinReturn)&&Number.isFinite(benchReturn)?coinReturn-benchReturn:null;
  const peerMedian=median((Array.isArray(peerReturns)?peerReturns:[]).filter(finite).map(Number)),peerExcess=excess!==null&&peerMedian!==null?excess-peerMedian:null;
- return {version:'RADAR_ROLE_EVIDENCE_V1',relative_strength:{available:excess!==null,coin_return_pct:coinReturn===null?null:Number(coinReturn.toFixed(4)),
+ const marketDaily=finite(marketExcessPct)?Number(marketExcessPct):null,peerDaily=finite(peerExcessPct)?Number(peerExcessPct):null;
+ const statusExcess=excess??marketDaily??peerDaily;
+ return {version:'RADAR_ROLE_EVIDENCE_V1',relative_strength:{available:excess!==null||marketDaily!==null||peerDaily!==null,coin_return_pct:coinReturn===null?null:Number(coinReturn.toFixed(4)),
    benchmark_return_pct:benchReturn===null?null:Number(benchReturn.toFixed(4)),excess_vs_benchmark_pct:excess===null?null:Number(excess.toFixed(4)),
    peer_median_excess_pct:peerMedian,excess_vs_peer_median_pct:peerExcess===null?null:Number(peerExcess.toFixed(4)),
-   status:excess===null?'UNKNOWN':excess>=.25?'OUTPERFORMING':excess<=-.25?'UNDERPERFORMING':'IN_LINE',
-   evidence:excess===null?'BENCHMARK_CLOSED_CANDLES_UNAVAILABLE':'CLOSED_CANDLE_RETURN_SPREAD'},
+   excess_vs_market_24h_pct:marketDaily===null?null:Number(marketDaily.toFixed(4)),
+   excess_vs_liquidity_peers_24h_pct:peerDaily===null?null:Number(peerDaily.toFixed(4)),
+   status:statusExcess===null?'UNKNOWN':statusExcess>=.25?'OUTPERFORMING':statusExcess<=-.25?'UNDERPERFORMING':'IN_LINE',
+   evidence:excess!==null?'CLOSED_CANDLE_RETURN_SPREAD':marketDaily!==null||peerDaily!==null?'DAILY_MARKET_AND_LIQUIDITY_PEER_SPREAD':'BENCHMARK_CLOSED_CANDLES_UNAVAILABLE'},
   failed_breakout:failedBreakout(candles,{now,lookbackBars,volumeRatio,tradeRatio,takerBuyRatio}),continuation:continuation(candles,{now,lookbackBars})};
 }

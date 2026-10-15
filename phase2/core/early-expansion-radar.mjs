@@ -476,7 +476,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   const liqQuality=historicalReplay?null:(Number.isFinite(depth?.bids?.length)&&Number.isFinite(depth?.asks?.length)?finite(assessLiquidity({book:depth,ticker24h:{quoteVolume:Number(ticker.quoteVolume24h),count:Number(ticker.tradeCount24h)}},cfg.minLiquidityQuality).quality,null):null);
   const market=marketRegime(marketContext);
   const btcRows=closed(marketContext?.fiveMinute||[],now);
-  const roleEvidence=buildRadarRoleEvidence({candles:s['5m'],relativeCandles:s['5m'],benchmarkCandles:btcRows,now,intervalMs:5*60_000,relativeIntervalMs:5*60_000,volumeRatio:rv5,tradeRatio:microTradeRvol(s['5m']),takerBuyRatio:pressure.buy_ratio,lookbackBars:20});
+  const roleEvidence=buildRadarRoleEvidence({candles:s['5m'],relativeCandles:s['5m'],benchmarkCandles:btcRows,now,intervalMs:5*60_000,relativeIntervalMs:5*60_000,volumeRatio:rv5,tradeRatio:microTradeRvol(s['5m']),takerBuyRatio:pressure.buy_ratio,marketExcessPct:hasFiniteNumber(ticker.priceChange24h)&&hasFiniteNumber(marketContext?.marketMedianChange24hPct)?Number(ticker.priceChange24h)-Number(marketContext.marketMedianChange24hPct):null,peerExcessPct:hasFiniteNumber(ticker.relativeStrengthPeer24hPct)?Number(ticker.relativeStrengthPeer24hPct):null,lookbackBars:20});
   const rsi1h=rsi(s['1h'],14);
   const historicalFollowThrough=buildHistoricalFollowThrough(s['5m'],now,{shortBars:6,longBars:24});
   const historicalScore=Number(historicalFollowThrough.score)||50;

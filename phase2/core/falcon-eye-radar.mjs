@@ -228,7 +228,7 @@ export function buildFalconEyeAnalysis({
   const vwapDistance=Number.isFinite(v)&&v>0?(lastClose-v)/v*100:null;
   const hl=higherLowScore(one);
   const rel=relativeStrength(one,five,btc1,btc5);
-  const roleEvidence=buildRadarRoleEvidence({candles:one,relativeCandles:five,benchmarkCandles:btc5,now,intervalMs:60_000,relativeIntervalMs:5*60_000,volumeRatio:va.volume_ratio,tradeRatio:va.trade_ratio,takerBuyRatio:tk.ratio,lookbackBars:20});
+  const roleEvidence=buildRadarRoleEvidence({candles:one,relativeCandles:five,benchmarkCandles:btc5,now,intervalMs:60_000,relativeIntervalMs:5*60_000,volumeRatio:va.volume_ratio,tradeRatio:va.trade_ratio,takerBuyRatio:tk.ratio,marketExcessPct:hasFiniteValue(ticker.relativeStrengthMarket24hPct)?Number(ticker.relativeStrengthMarket24hPct):null,peerExcessPct:hasFiniteValue(ticker.relativeStrengthPeer24hPct)?Number(ticker.relativeStrengthPeer24hPct):null,lookbackBars:20});
   const liq=liquidationStats(liquidations,now);
   const d=derivativesQuality(futures,previousFutures,Math.max(1,Number(ticker.quoteVolume24h)||0),liq);
   const recentRange=avg(one.slice(-5).map(x=>Number(x.high)-Number(x.low)));
@@ -480,11 +480,19 @@ export class FalconEyeRadar {
       .filter(x=>x.quoteVolume24h>=this.config.fastMinQuoteVolume24h&&this.universe.includes(x.symbol)&&isDirectionalCandidateSymbol(x.symbol));
     const marketMoves=raw.map(x=>x.priceChange24h).filter(hasFiniteValue).map(Number);
     const marketMedianChange24hPct=median(marketMoves);
-    const benchmarked=raw.map(row=>({...row,
-      marketMedianChange24hPct,
-      relativeStrengthMarket24hPct:hasFiniteValue(row.priceChange24h)&&Number.isFinite(marketMedianChange24hPct)
-        ?Number(row.priceChange24h)-marketMedianChange24hPct:null
-    }));
+    const benchmarked=raw.map(row=>{
+      const q=Number(row.quoteVolume24h)||0;
+      const comparable=raw.filter(peer=>peer.symbol!==row.symbol&&q>0&&Number(peer.quoteVolume24h)>=q*.5&&Number(peer.quoteVolume24h)<=q*2);
+      const peerMedian=median(comparable.map(peer=>peer.priceChange24h).filter(hasFiniteValue).map(Number));
+      return {...row,
+        marketMedianChange24hPct,
+        relativeStrengthMarket24hPct:hasFiniteValue(row.priceChange24h)&&Number.isFinite(marketMedianChange24hPct)
+          ?Number(row.priceChange24h)-marketMedianChange24hPct:null,
+        relativeStrengthPeer24hPct:hasFiniteValue(row.priceChange24h)&&Number.isFinite(peerMedian)
+          ?Number(row.priceChange24h)-peerMedian:null,
+        comparableLiquidityPeers:comparable.length
+      };
+    });
     const pulse=updateMarketPulseHistory(benchmarked,this.pulseHistory,this.clock(),{intervalMs:this.config.pollMs});
     this.marketCoverage=pulse.coverage;this.pulseReadyCount=pulse.readyCount;this.marketBreadthPct=pulse.breadthPct;
     this.fastCandidates=pulse.rows.filter(x=>x.market_pulse?.fast_trigger).length;

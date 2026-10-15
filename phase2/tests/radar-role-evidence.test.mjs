@@ -16,8 +16,9 @@ test('closed candle validator explicitly rejects gaps, stale candles and future 
 });
 test('relative strength compares matched closed-candle returns to a benchmark',()=>{
  const now=START+60*60_000-1,coin=bars({n:50,interval:300_000,endAt:now,delta:0.006}),btc=bars({n:50,interval:300_000,endAt:now,delta:0.001});
- const r=buildRadarRoleEvidence({candles:coin,relativeCandles:coin,benchmarkCandles:btc,now,intervalMs:300_000,relativeIntervalMs:300_000});
+ const r=buildRadarRoleEvidence({candles:coin,relativeCandles:coin,benchmarkCandles:btc,now,intervalMs:300_000,relativeIntervalMs:300_000,marketExcessPct:0.9,peerExcessPct:1.1});
  assert.equal(r.relative_strength.status,'OUTPERFORMING');assert.ok(r.relative_strength.excess_vs_benchmark_pct>0);
+ assert.equal(r.relative_strength.excess_vs_market_24h_pct,0.9);assert.equal(r.relative_strength.excess_vs_liquidity_peers_24h_pct,1.1);
 });
 test('failed breakout requires a resistance pierce, weak close and selling or fading activity',()=>{
  const now=START+50*60_000-1,data=bars({n:50,endAt:now,delta:0.0005}),resistance=Math.max(...data.slice(-24,-4).map(c=>c.high));
