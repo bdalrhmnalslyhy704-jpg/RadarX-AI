@@ -26,7 +26,7 @@ function normalizeRadarTickerRow(row,quote){
   };
 }
 const clamp=(v,min=0,max=100)=>Math.max(min,Math.min(max,Number.isFinite(Number(v))?Number(v):min));
-const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
+const finite=(v,d=null)=>v!==null&&v!==undefined&&!(typeof v==='string'&&v.trim()==='')&&typeof v!=='boolean'&&Number.isFinite(Number(v))?Number(v):d;
 const hasFiniteValue=v=>v!==null&&v!==undefined&&!(typeof v==='string'&&v.trim()==='')&&Number.isFinite(Number(v));
 const dailyMoveAbs=row=>hasFiniteValue(row?.priceChange24h)?Math.abs(Number(row.priceChange24h)):null;
 const avg=xs=>{const a=xs.map(Number).filter(Number.isFinite);return a.length?a.reduce((s,x)=>s+x,0)/a.length:null;};
