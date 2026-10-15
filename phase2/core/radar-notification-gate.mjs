@@ -42,6 +42,7 @@ function confirmationsOf(alert){
   const r=radarId(alert);
   return num(
     alert?.elite_gate?.confirmations ??
+    alert?.kahir_analysis?.confirmation_count ??
     alert?.strong_move?.metrics?.flash_confirmations ??
     alert?.rotation?.confirmations ??
     alert?.liquidity_absorption?.confirmation_count ??
