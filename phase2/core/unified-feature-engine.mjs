@@ -101,6 +101,11 @@ function orderBookMetrics(bookTicker, depth) {
   }, 0) : null;
   const depthAvailable = bids.length > 0 && asks.length > 0 && mid !== null;
   const totalDepth = depthAvailable ? bidDepth + askDepth : null;
+  const bidQty = num(bookTicker?.bidQty), askQty = num(bookTicker?.askQty);
+  const topBidQuote = validTop && bidQty !== null && bidQty >= 0 ? bid * bidQty : null;
+  const topAskQuote = validTop && askQty !== null && askQty >= 0 ? ask * askQty : null;
+  const topQuoteTotal = topBidQuote !== null && topAskQuote !== null ? topBidQuote + topAskQuote : null;
+  const topQuoteImbalance = topQuoteTotal > 0 ? (topBidQuote - topAskQuote) / topQuoteTotal : null;
   return {
     available: validTop,
     bid_price: round(bid, 10), ask_price: round(ask, 10),
@@ -109,7 +114,11 @@ function orderBookMetrics(bookTicker, depth) {
     bid_quote_depth_within_1pct: depthAvailable ? round(bidDepth, 2) : null,
     ask_quote_depth_within_1pct: depthAvailable ? round(askDepth, 2) : null,
     total_quote_depth_within_1pct: depthAvailable ? round(totalDepth, 2) : null,
-    depth_imbalance: depthAvailable && totalDepth > 0 ? round((bidDepth - askDepth) / totalDepth, 4) : null
+    top_bid_quote_notional: round(topBidQuote, 2),
+    top_ask_quote_notional: round(topAskQuote, 2),
+    top_quote_imbalance: round(topQuoteImbalance, 4),
+    depth_imbalance: depthAvailable && totalDepth > 0 ? round((bidDepth - askDepth) / totalDepth, 4) : round(topQuoteImbalance, 4),
+    depth_imbalance_source: depthAvailable ? 'DEPTH_WITHIN_1_PERCENT' : topQuoteImbalance !== null ? 'TOP_OF_BOOK_ONLY' : 'UNAVAILABLE'
   };
 }
 
@@ -226,8 +235,11 @@ export function buildUnifiedFeatureSnapshot({
     ? clamp(50 + Math.log10(Math.max(1, quoteVolume24h / 750_000)) * 22) : null;
   const spreadScore = book.spread_bps !== null
     ? clamp(100 - Math.max(0, book.spread_bps - 5) * 3.5) : null;
-  const depthScore = book.total_quote_depth_within_1pct !== null
-    ? clamp(25 + Math.log10(Math.max(1, book.total_quote_depth_within_1pct)) * 18) : null;
+  const depthReference = book.total_quote_depth_within_1pct ??
+    (book.top_bid_quote_notional !== null && book.top_ask_quote_notional !== null
+      ? book.top_bid_quote_notional + book.top_ask_quote_notional : null);
+  const depthScore = depthReference !== null
+    ? clamp(25 + Math.log10(Math.max(1, depthReference)) * (book.depth_available ? 18 : 8)) : null;
   const liquidityParts = [[quoteTurnoverScore, 0.55], [spreadScore, 0.25], [depthScore, 0.20]]
     .filter(([v]) => v !== null);
   const liquidityWeight = liquidityParts.reduce((sum, [, w]) => sum + w, 0);
