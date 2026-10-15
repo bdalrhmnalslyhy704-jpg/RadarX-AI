@@ -162,6 +162,9 @@ jobs:
           const report = JSON.parse(await readFile(path, 'utf8'));
           const expectedSymbols = 30;
           const expectedWindows = 3;
+          const expectedRegimes = ['BULL_TREND', 'BEAR_TREND', 'SIDEWAYS'];
+          const observedRegimes = report.matrix_summary?.regimes_observed || [];
+          const missingRequiredRegimes = expectedRegimes.filter(regime => !observedRegimes.includes(regime));
           const windows = report.windows || [];
           const badWindows = windows.filter(window =>
             window.market_regime?.regime === 'UNKNOWN' ||
@@ -172,6 +175,8 @@ jobs:
             window.process?.timed_out === true
           );
           const complete = ['COMPLETE', 'COMPLETE_WITH_FALLBACK'].includes(report.matrix_summary?.status) &&
+            report.matrix_summary?.regime_coverage_complete === true &&
+            missingRequiredRegimes.length === 0 &&
             report.symbol_count === expectedSymbols &&
             report.window_count === expectedWindows &&
             windows.length === expectedWindows &&
@@ -183,6 +188,8 @@ jobs:
               symbol_count: report.symbol_count ?? null,
               window_count: report.window_count ?? windows.length,
               completed_windows: report.matrix_summary?.completed_windows ?? null,
+              observed_regimes: observedRegimes,
+              missing_required_regimes: missingRequiredRegimes,
               bad_windows: badWindows.map(window => ({
                 id: window.id,
                 regime: window.market_regime?.regime,
