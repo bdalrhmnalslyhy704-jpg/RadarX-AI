@@ -121,6 +121,25 @@ test('Kahir scans a full Spot universe before selecting a bounded deep set',asyn
 
 
 
+test('Kahir exposes rejection reasons for the full signal-decision path',async()=>{
+  const one=candles(150,60000);
+  one.splice(90,1);
+  const five=fiveMinuteImpulse();
+  const rest={
+    async klines(symbol,interval){
+      return {candles:interval==='1m'?one:five,source:'TEST_FIXTURE'};
+    },
+    health(){return {state:'LIVE'};}
+  };
+  const radar=new KahirRadar({rest,store:{appendKahirAlert:async()=>{}},clock:()=>NOW,logger:{warn(){}}});
+  const result=await radar.scanRow({symbol:'GAPPEDUSDT',lastPrice:101.2,priceChange24h:1,quoteVolume24h:5_000_000});
+  assert.equal(result.eligible,false);
+  const diagnostics=radar.health().decision_diagnostics;
+  assert.equal(diagnostics.evaluated,1);
+  assert.equal(diagnostics.analysis_rejected,1);
+  assert.ok(diagnostics.top_rejection_reasons.some(x=>x.reason==='ONE_MINUTE_CLOSED_CANDLE_SEQUENCE_HAS_GAPS'));
+});
+
 test('Kahir rejects stale closed candles instead of treating cached movement as live',()=>{
   const m1=candles(150,60000).map(row=>({...row,openTime:row.openTime-20*60*1000,closeTime:row.closeTime-20*60*1000}));
   const m5=fiveMinuteImpulse().map(row=>({...row,openTime:row.openTime-20*60*1000,closeTime:row.closeTime-20*60*1000}));
