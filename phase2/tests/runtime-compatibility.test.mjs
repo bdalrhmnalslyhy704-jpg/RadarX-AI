@@ -125,6 +125,12 @@ test('push provider is inferred from complete Firebase credentials when no provi
 test('push provider remains disabled when Firebase credentials are incomplete',()=>{
   assert.equal(resolvePushProvider({FCM_PROJECT_ID:'fixture-project'}),'none');
   assert.equal(resolvePushProvider({FCM_SERVICE_ACCOUNT_JSON:'{}'}),'none');
+  assert.equal(resolvePushProvider({FCM_PROJECT_ID:'fixture-project',FCM_SERVICE_ACCOUNT_JSON:Buffer.from('{\"project_id\":\"fixture-project\"}').toString('base64')}),'none');
+});
+
+test('push provider infers FCM from a base64-encoded Firebase service-account file',()=>{
+  const account={project_id:'fixture-project',client_email:'fixture@example.test',private_key:'TEST_PRIVATE_KEY'};
+  assert.equal(resolvePushProvider({FCM_SERVICE_ACCOUNT_JSON:Buffer.from(JSON.stringify(account)).toString('base64')}),'fcm');
 });
 
 test('explicit push provider selection overrides automatic provider inference',()=>{
