@@ -145,3 +145,16 @@ test('native FCM registration rejects invalid installation IDs and malformed tok
     await new Promise(resolve=>server.close(resolve));
   }
 });
+
+
+test('FCM provider accepts a base64-encoded Firebase service-account file',()=>{
+  const {serviceAccount}=accountFixture();
+  const encoded=Buffer.from(JSON.stringify(serviceAccount),'utf8').toString('base64');
+  const provider=new FcmPushProvider({projectId:'',serviceAccountJson:encoded,fetchImpl:async()=>mockResponse(200,{})});
+  assert.deepEqual(provider.status(),{provider:'fcm',enabled:true});
+});
+
+test('FCM provider still fails closed for malformed or incomplete base64 service-account data',()=>{
+  assert.deepEqual(new FcmPushProvider({projectId:'fixture-project',serviceAccountJson:Buffer.from('{}').toString('base64')}).status(),{provider:'fcm',enabled:false});
+  assert.deepEqual(new FcmPushProvider({projectId:'fixture-project',serviceAccountJson:'not-base64-json'}).status(),{provider:'fcm',enabled:false});
+});

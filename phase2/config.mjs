@@ -1,4 +1,5 @@
 import {resolvePort,resolveHost} from './runtime.mjs';
+import {parseFcmServiceAccount} from './push/fcm-service-account.mjs';
 
 const int = (v, d) => Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : d;
 const float = (v, d) => Number.isFinite(Number(v)) ? Number(v) : d;
@@ -13,6 +14,18 @@ export function resolveRadarAutostart(env=process.env){
   const productionMarkers=[env.RADARX_ENV,env.NODE_ENV,env.RAILWAY_ENVIRONMENT,env.RAILWAY_ENVIRONMENT_NAME]
     .map(x=>String(x??'').trim().toLowerCase());
   return productionMarkers.some(x=>x==='production'||x==='prod');
+}
+
+export function resolvePushProvider(env=process.env){
+  const explicit=String(env.RADARX_PUSH_PROVIDER??'').trim().toLowerCase();
+  if(explicit)return explicit;
+  const serviceAccount=parseFcmServiceAccount(env.FCM_SERVICE_ACCOUNT_JSON);
+  const fcmProject=String(env.FCM_PROJECT_ID||serviceAccount?.project_id||'').trim();
+  const fcmReady=Boolean(fcmProject&&serviceAccount);
+  if(fcmReady)return 'fcm';
+  const webPushReady=Boolean(String(env.VAPID_SUBJECT??'').trim()&&String(env.VAPID_PUBLIC_KEY??'').trim()&&String(env.VAPID_PRIVATE_KEY??'').trim());
+  if(webPushReady)return 'webpush';
+  return 'none';
 }
 
 export const CONFIG = Object.freeze({
@@ -358,7 +371,7 @@ export const CONFIG = Object.freeze({
     realOrderExecution: false
   },
   push: {
-    provider: (process.env.RADARX_PUSH_PROVIDER ?? 'none').toLowerCase(),
+    provider: resolvePushProvider(process.env),
     vapidSubject: process.env.VAPID_SUBJECT ?? '',
     vapidPublicKey: process.env.VAPID_PUBLIC_KEY ?? '',
     vapidPrivateKey: process.env.VAPID_PRIVATE_KEY ?? '',

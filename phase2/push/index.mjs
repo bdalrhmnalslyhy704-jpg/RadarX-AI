@@ -1,4 +1,5 @@
 import {randomUUID,createSign} from 'node:crypto';
+import {parseFcmServiceAccount} from './fcm-service-account.mjs';
 import {defaultSettings} from '../core/signal-service.mjs';
 import {EVENT_CLASS,marketEventClass} from '../core/event-types.mjs';
 import {formatRadarTime12h} from '../core/radar-alert-meta.mjs';
@@ -30,7 +31,7 @@ export class FcmPushProvider extends PushProvider{
   constructor({projectId='',serviceAccountJson='',fetchImpl=globalThis.fetch,clock=()=>Date.now()}={}){
     super();
     this.serviceAccount=null;this.fetchImpl=fetchImpl;this.clock=clock;
-    try{this.serviceAccount=typeof serviceAccountJson==='string'?JSON.parse(serviceAccountJson):serviceAccountJson;}catch{}
+    this.serviceAccount=parseFcmServiceAccount(serviceAccountJson);
     this.projectId=String(projectId||this.serviceAccount?.project_id||'').trim();
     this.cachedAccessToken='';this.accessTokenExpiresAt=0;
   }
