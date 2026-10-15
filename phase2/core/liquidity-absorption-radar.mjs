@@ -1,6 +1,7 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {formatRadarTime12h} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
+import {assessClosedCandleSeries,assessCandleReadinessSet} from './closed-candle-quality.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -126,7 +127,17 @@ function auctionBalance(rows){
 export function buildLiquidityAbsorptionAnalysis(oneM,fiveM,ticker,book,now=Date.now()){
   const a=closed(oneM,now),b=closed(fiveM,now);
   if(a.length<60||b.length<24){
-    return {eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true};
+    return {eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true,data_quality:0,data_stale:true,
+      reason_codes:['LIQUIDITY_CANDLE_COUNT_BELOW_MINIMUM']};
+  }
+  const freshness=assessCandleReadinessSet({
+    one_minute:assessClosedCandleSeries(a,{now,intervalMs:60_000,minCount:60,maxAgeMs:3*60_000,label:'ABSORPTION_1M'}),
+    five_minute:assessClosedCandleSeries(b,{now,intervalMs:5*60_000,minCount:24,maxAgeMs:10*60_000,label:'ABSORPTION_5M'})
+  });
+  if(!freshness.ready){
+    return {eligible:false,stage:freshness.status==='STALE_DATA'?'STALE_DATA':'INCOMPLETE_DATA',
+      score:null,closed_candles_only:true,data_quality:0,data_stale:freshness.status==='STALE_DATA',
+      reason_codes:freshness.reason_codes,data_quality_checks:freshness.checks};
   }
   const price=finite(ticker?.lastPrice,null);
   const absorption=sellerAbsorption(a);
@@ -192,6 +203,7 @@ export function buildLiquidityAbsorptionAnalysis(oneM,fiveM,ticker,book,now=Date
   const stage=score>=90?'ABSORPTION_CONFIRMED':score>=84?'LIQUIDITY_WAKE':'MICROSTRUCTURE_WATCH';
   return {
     eligible,stage,score:Math.round(score*10)/10,closed_candles_only:true,
+    data_quality:100,data_stale:false,data_quality_reasons:[],data_quality_checks:freshness.checks,
     confirmation_count:confirmationCount,confirmation_total:confirmations.length,
     algorithms:{
       SELLER_ABSORPTION:absorption,
