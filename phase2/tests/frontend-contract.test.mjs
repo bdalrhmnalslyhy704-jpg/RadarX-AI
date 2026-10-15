@@ -7,6 +7,12 @@ import vm from 'node:vm';
 
 const root=new URL('../../phase1/',import.meta.url);
 
+test('TEST_FIXTURE: Doomsday Android WebView asset avoids optional chaining and nullish coalescing',async()=>{
+  const text=await readFile(new URL('../../android/app/src/main/assets/radarx-doomsday-radar.mjs',import.meta.url),'utf8');
+  assert.equal(text.includes('?.'),false,'optional chaining is not supported by this WebView release gate');
+  assert.equal(text.includes('??'),false,'nullish coalescing is not supported by this WebView release gate');
+});
+
 test('TEST_FIXTURE: Doomsday radar displays the estimated confirmed activity-start time',async()=>{
   const text=await readFile(new URL('../../android/app/src/main/assets/radarx-doomsday-radar.mjs',import.meta.url),'utf8');
   assert.ok(text.includes('movement_start_time_ms'));
