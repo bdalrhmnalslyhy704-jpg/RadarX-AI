@@ -192,9 +192,9 @@ export function buildAlMuqawimAnalysis(series,ticker,now=Date.now(),config={}){
     trendlineScore*.15+
     maScore*.15
   );
-  const marketMove=finite(ticker?.marketMedianChange24hPct,null);
-  const marketExcess=finite(ticker?.relativeStrengthMarket24hPct,null);
-  const peerExcess=finite(ticker?.relativeStrengthPeer24hPct,null);
+  const marketMove=ticker?.marketMedianChange24hPct===null||ticker?.marketMedianChange24hPct===undefined?null:finite(ticker.marketMedianChange24hPct,null);
+  const marketExcess=ticker?.relativeStrengthMarket24hPct===null||ticker?.relativeStrengthMarket24hPct===undefined?null:finite(ticker.relativeStrengthMarket24hPct,null);
+  const peerExcess=ticker?.relativeStrengthPeer24hPct===null||ticker?.relativeStrengthPeer24hPct===undefined?null:finite(ticker.relativeStrengthPeer24hPct,null);
   const relativeStatus=marketExcess===null&&peerExcess===null?'UNKNOWN':
     ((marketExcess??-Infinity)>=0.75||(peerExcess??-Infinity)>=0.75)?'OUTPERFORMING':
     ((marketExcess??Infinity)<=-0.75&&(peerExcess??Infinity)<=-0.75)?'UNDERPERFORMING':'IN_LINE';
@@ -314,8 +314,13 @@ export class AlMuqawimRadar{
   selectBatch(rows){
     if(!Array.isArray(rows)||!rows.length)return [];
     const ranked=[...rows].sort((a,b)=>{
-      const sa=Math.abs(a.priceChange24h)*3+Math.log10(Math.max(1,a.quoteVolume24h))*4;
-      const sb=Math.abs(b.priceChange24h)*3+Math.log10(Math.max(1,b.quoteVolume24h))*4;
+      const rank=row=>{
+        const marketExcess=Number(row.relativeStrengthMarket24hPct)||0,peerExcess=Number(row.relativeStrengthPeer24hPct)||0;
+        const resilient=Number(row.marketMedianChange24hPct)<=-0.5&&marketExcess>=0.75&&peerExcess>=0.5?30:0;
+        return Math.abs(Number(row.priceChange24h)||0)*3+Math.log10(Math.max(1,Number(row.quoteVolume24h)||0))*4+Math.max(0,marketExcess)*4+Math.max(0,peerExcess)*3+resilient;
+      };
+      const sa=rank(a);
+      const sb=rank(b);
       return sb-sa||b.quoteVolume24h-a.quoteVolume24h;
     });
     const selected=[],seen=new Set();
