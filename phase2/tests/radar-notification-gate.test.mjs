@@ -171,3 +171,60 @@ test('Whale Accumulation reads confirmations from its nested analysis payload',(
   assert.equal(result.confirmations,8);
   assert.ok(!result.failures.includes('CONFIRMATION_BREADTH_LOW'));
 });
+
+
+test('final notification gates reject failed-breakout evidence for Radars 6, 8 and 9',()=>{
+  resetRadarNotificationGateForTests();
+  const trap={version:'RADAR_ROLE_EVIDENCE_V1',failed_breakout:{available:true,detected:true,status:'FAILED_BREAKOUT_TRAP'},continuation:{available:true,confirmed:true,status:'CONFIRMED'}};
+  const doomsday=evaluateRadarNotificationGate(baseline('DOOMSDAY_RADAR',{
+    opportunity_score:90,potential_label:'PRE_BREAKOUT',
+    doomsday:{eligible:true,stage:'PRE_BREAKOUT',score:90,early_score:90,ignition_score:90,confirmation_count:8,ignition_confirmations:8,
+      component_scores:{impulse:85,volume:90,trades:88,taker:86,breakout:90,ema:84,vwap:82,squeeze:82,relative_strength:80,acceleration:88,range:84,atr:82,acceptance:85},
+      role_evidence:trap,metrics:{volume_ratio:1.8,trade_ratio:1.6,taker_buy_ratio:.58}}
+  }),{now:NOW,commit:false});
+  assert.ok(doomsday.failures.includes('DOOMSDAY_FAILED_BREAKOUT_TRAP_RISK'));
+
+  const early=evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{
+    pre_expansion_stage:'BREAKOUT_DEVELOPING',
+    pre_expansion_fingerprint:{stage:'BREAKOUT_DEVELOPING',ready:true,late:false,micro_move:false,score:86},
+    metrics:{rvol_5m:1.8,trade_ratio:1.5,taker_buy_ratio:.58,price_change_5m_pct:.8},
+    role_evidence:trap
+  }),{now:NOW,commit:false});
+  assert.ok(early.failures.includes('EARLY_EXPANSION_FAILED_BREAKOUT_TRAP_RISK'));
+
+  const falcon=evaluateRadarNotificationGate(baseline('FALCON_EYE_RADAR',{
+    falcon_eye:{eligible:true,score:92,confirmation_count:10,not_chasing:true,pre_expansion_stage:'BREAKOUT_DEVELOPING',
+      component_scores:{quietness:85,compression:84,momentum:82,volume:88,trades:82,taker:84,structure:86,resistance:82,relative_strength:83,derivatives:75,breakout:85,atr:78,range:77},
+      metrics:{move_24h_pct:2,return_5m:.7,return_10m:1.0,ema21_distance_pct:.8,resistance_gap_pct:.5},
+      derivatives:{futures_available:false},role_evidence:trap}
+  }),{now:NOW,commit:false});
+  assert.ok(falcon.failures.includes('FALCON_FAILED_BREAKOUT_TRAP_RISK'));
+});
+
+test('final notification gates reject active breakouts without closed-candle continuation confirmation',()=>{
+  resetRadarNotificationGateForTests();
+  const evidence={failed_breakout:{detected:false,status:'NO_CONFIRMED_TRAP'},continuation:{status:'DATA_INSUFFICIENT',confirmed:false}};
+  const doomsday=evaluateRadarNotificationGate(baseline('DOOMSDAY_RADAR',{
+    potential_label:'IGNITION',
+    doomsday:{eligible:true,stage:'IGNITION',score:92,early_score:92,ignition_score:92,confirmation_count:9,ignition_confirmations:8,
+      component_scores:{impulse:88,volume:90,trades:90,taker:88,breakout:90,ema:85,vwap:82,squeeze:80,relative_strength:82,acceleration:90,range:85,atr:80,acceptance:86},
+      role_evidence:evidence,metrics:{micro_breakout:true,volume_ratio:1.8,trade_ratio:1.6,taker_buy_ratio:.58}}
+  }),{now:NOW,commit:false});
+  assert.ok(doomsday.failures.includes('DOOMSDAY_BREAKOUT_CONTINUATION_UNCONFIRMED'));
+
+  const early=evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{
+    pre_expansion_stage:'BREAKOUT_DEVELOPING',
+    pre_expansion_fingerprint:{stage:'BREAKOUT_DEVELOPING',ready:true,late:false,micro_move:false,score:86},
+    metrics:{rvol_5m:1.8,trade_ratio:1.5,taker_buy_ratio:.58,price_change_5m_pct:.8},
+    role_evidence:evidence
+  }),{now:NOW,commit:false});
+  assert.ok(early.failures.includes('EARLY_EXPANSION_BREAKOUT_CONTINUATION_UNCONFIRMED'));
+
+  const falcon=evaluateRadarNotificationGate(baseline('FALCON_EYE_RADAR',{
+    falcon_eye:{eligible:true,score:92,confirmation_count:10,not_chasing:true,pre_expansion_stage:'BREAKOUT_DEVELOPING',
+      component_scores:{quietness:85,compression:84,momentum:82,volume:88,trades:82,taker:84,structure:86,resistance:82,relative_strength:83,derivatives:75,breakout:85,atr:78,range:77},
+      metrics:{move_24h_pct:2,return_5m:.7,return_10m:1.0,ema21_distance_pct:.8,resistance_gap_pct:.5},
+      derivatives:{futures_available:false},role_evidence:evidence}
+  }),{now:NOW,commit:false});
+  assert.ok(falcon.failures.includes('FALCON_BREAKOUT_CONTINUATION_UNCONFIRMED'));
+});
