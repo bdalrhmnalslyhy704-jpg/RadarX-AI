@@ -119,6 +119,8 @@ export function buildRadarReadinessAudit({
     if (!radar.running) readinessReasons.push('RADAR_NOT_RUNNING:' + radar.radar);
     if (radar.cycle_is_stale) readinessReasons.push('RADAR_CYCLE_STALE:' + radar.radar);
   }
+  const missingCycleTelemetry = perRadar.filter(radar => radar.cycles_observed === 0);
+  for (const radar of missingCycleTelemetry) readinessReasons.push('RADAR_CYCLE_TELEMETRY_MISSING:' + radar.radar);
   if (swarm?.status && swarm.status !== 'RUNNING') readinessReasons.push('RADAR_SWARM_' + String(swarm.status).toUpperCase());
   if (!fullCacheReady) readinessReasons.push('CLOSED_CANDLE_CACHE_' + cacheStatus);
   if (candleCache?.websocket_live !== true) readinessReasons.push('CANDLE_WEBSOCKET_NOT_LIVE');
@@ -126,10 +128,10 @@ export function buildRadarReadinessAudit({
 
   const allWorkersRunning = registered === expected && running === expected &&
     failed === 0 && (!swarm?.status || swarm.status === 'RUNNING');
-  const status = allWorkersRunning && fullCacheReady &&
-    !perRadar.some(radar => radar.cycle_is_stale) ? 'READY'
-    : allWorkersRunning && cacheStatus === 'WARMING' &&
-      !perRadar.some(radar => radar.cycle_is_stale) ? 'WARMING'
+  const allCyclesObserved = missingCycleTelemetry.length === 0;
+  const noStaleCycles = !perRadar.some(radar => radar.cycle_is_stale);
+  const status = allWorkersRunning && allCyclesObserved && fullCacheReady && noStaleCycles ? 'READY'
+    : allWorkersRunning && allCyclesObserved && cacheStatus === 'WARMING' && noStaleCycles ? 'WARMING'
       : 'DEGRADED';
 
   const warmup = warmupReport && typeof warmupReport === 'object' ? {
@@ -155,6 +157,7 @@ export function buildRadarReadinessAudit({
       running_radars: running,
       failed_radars: failed,
       radars_with_stale_cycles: perRadar.filter(radar => radar.cycle_is_stale).length,
+      radars_without_cycle_telemetry: missingCycleTelemetry.length,
       candle_cache_status: cacheStatus,
       candle_cache_ready_symbols: cacheReady,
       candle_cache_expected_symbols: cacheExpected,
