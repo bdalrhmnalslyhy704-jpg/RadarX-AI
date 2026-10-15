@@ -15,6 +15,16 @@ export function resolveRadarAutostart(env=process.env){
   return productionMarkers.some(x=>x==='production'||x==='prod');
 }
 
+export function resolvePushProvider(env=process.env){
+  const explicit=String(env.RADARX_PUSH_PROVIDER??'').trim().toLowerCase();
+  if(explicit)return explicit;
+  const fcmReady=Boolean(String(env.FCM_PROJECT_ID??'').trim()&&String(env.FCM_SERVICE_ACCOUNT_JSON??'').trim());
+  if(fcmReady)return 'fcm';
+  const webPushReady=Boolean(String(env.VAPID_SUBJECT??'').trim()&&String(env.VAPID_PUBLIC_KEY??'').trim()&&String(env.VAPID_PRIVATE_KEY??'').trim());
+  if(webPushReady)return 'webpush';
+  return 'none';
+}
+
 export const CONFIG = Object.freeze({
   environment: (process.env.RADARX_ENV ?? 'development').toLowerCase(),
   confidenceMode: String(process.env.RADARX_CONFIDENCE_MODE ?? 'UNKNOWN').toUpperCase(),
@@ -358,7 +368,7 @@ export const CONFIG = Object.freeze({
     realOrderExecution: false
   },
   push: {
-    provider: (process.env.RADARX_PUSH_PROVIDER ?? 'none').toLowerCase(),
+    provider: resolvePushProvider(process.env),
     vapidSubject: process.env.VAPID_SUBJECT ?? '',
     vapidPublicKey: process.env.VAPID_PUBLIC_KEY ?? '',
     vapidPrivateKey: process.env.VAPID_PRIVATE_KEY ?? '',
