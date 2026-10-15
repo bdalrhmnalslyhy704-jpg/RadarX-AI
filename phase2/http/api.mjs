@@ -9,6 +9,7 @@ import {buildKingVerdict,rankKingMarket} from '../core/king-intelligence.mjs';
 import {MultiAnalystEngine} from '../core/multi-analyst-engine.mjs';
 import {radarTelemetry,renderRadarTelemetryDashboard} from '../core/radar-telemetry.mjs';
 import {buildRadarReadinessAudit} from '../core/radar-readiness-audit.mjs';
+import {buildRadarSignalOutcomeReport,emptyRadarSignalOutcomeState} from '../core/radar-signal-outcomes.mjs';
 
 function send(res,status,body,extra={}){
   const data=JSON.stringify(body);
@@ -138,7 +139,7 @@ function subscriptionValid(x){
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,marketRadarRest=null,radarSwarm=null}= {}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,marketRadarRest=null,radarSwarm=null,radarSignalOutcomeWorker=null}= {}){
   const counters=new Map();
   const moveConfig=config.moveRadar||{thresholdPct:1};
   const originList=config.auth.allowedOrigins;
@@ -326,6 +327,18 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           radars:radarStatus(),swarm,telemetry:radarTelemetry.snapshot({limit:500}),
           candleCache,warmupReport,now:Date.now()
         }));
+      }
+      if(u.pathname==='/api/radar-outcomes'&&req.method==='GET'){
+        try{
+          const state=typeof store?.getRadarSignalOutcomes==='function'
+            ? await store.getRadarSignalOutcomes() : emptyRadarSignalOutcomeState();
+          const worker=typeof radarSignalOutcomeWorker?.snapshot==='function'
+            ? radarSignalOutcomeWorker.snapshot() : {service:'RADAR_SIGNAL_OUTCOME_WORKER_V1',running:false,last_error:'WORKER_NOT_CONFIGURED'};
+          return send(res,200,{...buildRadarSignalOutcomeReport(state,Date.now()),worker});
+        }catch(error){
+          return send(res,503,{error:String(error?.message??error),scope:'EMITTED_ARCHIVED_ALERTS_ONLY',
+            policy:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        }
       }
       if(u.pathname==='/api/radar-status'&&req.method==='GET')return send(res,200,{radars:radarStatus(),meta:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
       if(u.pathname==='/api/radar-swarm-status'&&req.method==='GET'){
