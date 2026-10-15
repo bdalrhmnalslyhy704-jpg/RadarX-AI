@@ -27,7 +27,16 @@ export const QUIET_BASE_PRE_EXPANSION_DEFAULTS = Object.freeze({
   maxSupportUndercutPct: 0.3,
   minParticipationRatio: 1.08,
   minMiddleParticipationRatio: 0.98,
-  minStepParticipationRatio: 1.01
+  minStepParticipationRatio: 1.01,
+  // Empirical transition lane from the last-30d cohort study: price is still near its base,
+  // but one-hour participation and taker-buy pressure turn before the larger move.
+  minBuyPressureTransitionVolumeRatio: 1.12,
+  minBuyPressureTransitionTradeRatio: 1.05,
+  minBuyPressureTransitionShare: 0.53,
+  minBuyPressureTransitionCloseLocation: 0.54,
+  maxBuyPressureTransitionBaseRangePct: 3.5,
+  minBuyPressureTransitionReturn1hPct: 0.15,
+  maxBuyPressureTransitionReturn1hPct: 4.5
 });
 
 function validClosedCandles(input, now) {
@@ -225,6 +234,60 @@ export function assessQuietBasePreExpansion({
   const participationConfirmed = volumeImproving && tradesImproving;
   const someParticipation = volumeImproving || tradesImproving;
 
+  // Research-led alternate lane: compare the last closed hour (12 x 5m candles)
+  // with the preceding three closed hours. The 30-day event study showed that strong/mid
+  // movers often lift taker-buy share and participation before they satisfy the strict
+  // three-bucket gradual-ramp rule. It is still watch/early-warning only; anti-chase,
+  // support and a compact prior base remain mandatory.
+  const transitionRows = rows.slice(-12);
+  const transitionBaselineRows = rows.slice(-48, -12);
+  const quoteVolumeOf = row => {
+    const q = num(row?.quoteVolume);
+    return q !== null && q >= 0 ? q : Math.max(0, Number(row?.volume) || 0) * Math.max(0, Number(row?.close) || 0);
+  };
+  const tradeCountOf = row => num(row?.tradeCount ?? row?.count);
+  const takerBuyQuoteOf = row => {
+    const quote = num(row?.takerBuyQuoteVolume);
+    if (quote !== null && quote >= 0) return quote;
+    const base = num(row?.takerBuyBaseVolume), close = Number(row?.close);
+    return base !== null && base >= 0 && Number.isFinite(close) && close > 0 ? base * close : null;
+  };
+  const weightedBuyShare = window => {
+    const rowsWithFlow = window.filter(row => takerBuyQuoteOf(row) !== null);
+    if (rowsWithFlow.length !== window.length) return null;
+    const quoteTotal = window.reduce((sum, row) => sum + quoteVolumeOf(row), 0);
+    return quoteTotal > 0 ? window.reduce((sum, row) => sum + takerBuyQuoteOf(row), 0) / quoteTotal : null;
+  };
+  const transitionVolumeRatio = transitionRows.length === 12 && transitionBaselineRows.length === 36
+    ? (median(transitionRows.map(quoteVolumeOf)) / (median(transitionBaselineRows.map(quoteVolumeOf)) || 0) || null) : null;
+  const transitionTradeRatio = transitionRows.length === 12 && transitionBaselineRows.length === 36
+    ? (median(transitionRows.map(tradeCountOf).filter(Number.isFinite)) / (median(transitionBaselineRows.map(tradeCountOf).filter(Number.isFinite)) || 0) || null) : null;
+  const transitionTakerBuyShare = transitionRows.length === 12 ? weightedBuyShare(transitionRows) : null;
+  const transitionBaselineTakerBuyShare = transitionBaselineRows.length === 36 ? weightedBuyShare(transitionBaselineRows) : null;
+  const transitionBuyShareDelta = transitionTakerBuyShare !== null && transitionBaselineTakerBuyShare !== null
+    ? transitionTakerBuyShare - transitionBaselineTakerBuyShare : null;
+  const transitionCloseLocations = transitionRows.map(row => {
+    const high = Number(row.high), low = Number(row.low), close = Number(row.close);
+    return high > low ? (close - low) / (high - low) : null;
+  }).filter(Number.isFinite);
+  const transitionMeanCloseLocation = mean(transitionCloseLocations);
+  const transitionBaseRangePct = transitionBaselineRows.length === 36 ? candleRangePct(transitionBaselineRows) : null;
+  const transitionReturn1hPct = transitionRows.length === 12 && Number(transitionRows[0].open) > 0
+    ? (lastClose / Number(transitionRows[0].open) - 1) * 100 : null;
+  const transitionDataAvailable = transitionRows.length === 12 && transitionBaselineRows.length === 36 &&
+    transitionRows.every(row => tradeCountOf(row) !== null && quoteVolumeOf(row) >= 0 && takerBuyQuoteOf(row) !== null) &&
+    transitionBaselineRows.every(row => tradeCountOf(row) !== null && quoteVolumeOf(row) >= 0 && takerBuyQuoteOf(row) !== null) &&
+    Number.isFinite(transitionVolumeRatio) && Number.isFinite(transitionTradeRatio) &&
+    Number.isFinite(transitionTakerBuyShare) && Number.isFinite(transitionBaselineTakerBuyShare);
+  const transitionPressureConfirmed = transitionDataAvailable &&
+    transitionVolumeRatio >= Number(cfg.minBuyPressureTransitionVolumeRatio) &&
+    transitionTradeRatio >= Number(cfg.minBuyPressureTransitionTradeRatio) &&
+    transitionTakerBuyShare >= Number(cfg.minBuyPressureTransitionShare) &&
+    transitionMeanCloseLocation >= Number(cfg.minBuyPressureTransitionCloseLocation) &&
+    transitionReturn1hPct >= Number(cfg.minBuyPressureTransitionReturn1hPct) &&
+    transitionReturn1hPct <= Number(cfg.maxBuyPressureTransitionReturn1hPct) &&
+    transitionBaseRangePct <= Number(cfg.maxBuyPressureTransitionBaseRangePct);
+
   const recentVolume = mean(recent12.map(row => Math.max(0, Number(row.volume) || 0)));
   const recentTakerBuy = mean(recent12.map(row => {
     const volume = Number(row.volume), buy = num(row.takerBuyBaseVolume);
@@ -247,6 +310,20 @@ export function assessQuietBasePreExpansion({
     makeEvidence('resistance_proximity_pct', round(resistanceDistancePct), { min_pct: -0.1, max_pct: Number(cfg.maxResistanceDistancePct) }, nearResistance, 'PRICE_NEAR_PRIOR_RESISTANCE', 'RESISTANCE_NOT_NEAR_OR_ALREADY_CROSSED', closeTime),
     makeEvidence('gradual_volume_vs_same_coin', volumeTrend, { min_recent_vs_baseline: Number(cfg.minParticipationRatio), min_middle_vs_oldest: Number(cfg.minMiddleParticipationRatio), min_recent_vs_middle: Number(cfg.minStepParticipationRatio) }, volumeImproving, 'VOLUME_GRADUALLY_IMPROVING_VS_OWN_BASELINE', 'VOLUME_TREND_NOT_GRADUALLY_IMPROVING', closeTime),
     makeEvidence('gradual_trades_vs_same_coin', tradeTrend, { min_recent_vs_baseline: Number(cfg.minParticipationRatio), min_middle_vs_oldest: Number(cfg.minMiddleParticipationRatio), min_recent_vs_middle: Number(cfg.minStepParticipationRatio) }, tradesImproving, 'TRADE_COUNT_GRADUALLY_IMPROVING_VS_OWN_BASELINE', 'TRADE_COUNT_TREND_NOT_GRADUALLY_IMPROVING', closeTime),
+    makeEvidence('buy_pressure_transition_last_closed_hour', {
+      available: transitionDataAvailable, volume_median_ratio: round(transitionVolumeRatio),
+      trade_median_ratio: round(transitionTradeRatio), taker_buy_share: round(transitionTakerBuyShare),
+      prior_taker_buy_share: round(transitionBaselineTakerBuyShare), taker_buy_share_delta: round(transitionBuyShareDelta),
+      mean_close_location: round(transitionMeanCloseLocation), return_1h_pct: round(transitionReturn1hPct),
+      prior_base_range_pct: round(transitionBaseRangePct), support_confirmed: structureConfirmed,
+      resistance_near: transitionResistanceNear, confirmed: buyPressureTransition
+    }, {
+      min_volume_ratio: Number(cfg.minBuyPressureTransitionVolumeRatio), min_trade_ratio: Number(cfg.minBuyPressureTransitionTradeRatio),
+      min_taker_buy_share: Number(cfg.minBuyPressureTransitionShare), min_mean_close_location: Number(cfg.minBuyPressureTransitionCloseLocation),
+      min_return_1h_pct: Number(cfg.minBuyPressureTransitionReturn1hPct), max_return_1h_pct: Number(cfg.maxBuyPressureTransitionReturn1hPct),
+      max_prior_base_range_pct: Number(cfg.maxBuyPressureTransitionBaseRangePct), minimum_rows: 48
+    }, buyPressureTransition, 'BUY_FLOW_AND_PARTICIPATION_TRANSITION_CONFIRMED',
+      transitionDataAvailable ? 'BUY_FLOW_TRANSITION_NOT_CONFIRMED' : 'BUY_FLOW_TRANSITION_DATA_UNAVAILABLE', closeTime),
     makeEvidence('anti_chase', { daily_change_24h_pct: round(dailyMove), move_5m_pct: round(move5m), move_15m_pct: round(move15m) }, { max_abs_24h_pct: Number(cfg.maxQuietMove24hPct), max_abs_5m_pct: Number(cfg.maxMove5mPct), max_abs_15m_pct: Number(cfg.maxMove15mPct) }, !extended, 'MOVE_NOT_EXTENDED', 'ALREADY_EXTENDED', closeTime)
   ];
   result.evidence = evidence;
@@ -262,9 +339,20 @@ export function assessQuietBasePreExpansion({
     excluded_input_candles: (Array.isArray(fiveMinute) ? fiveMinute.length : 0) - rows.length,
     last_closed_price: round(lastClose, 8), last_closed_volume: round(Number(last.volume)),
     last_closed_trade_count: num(last.tradeCount ?? last.count),
-    recent_volume_mean: round(recentVolume)
+    recent_volume_mean: round(recentVolume),
+    buy_pressure_transition: {
+      available: transitionDataAvailable, confirmed: buyPressureTransition,
+      volume_median_ratio: round(transitionVolumeRatio), trade_median_ratio: round(transitionTradeRatio),
+      taker_buy_share: round(transitionTakerBuyShare), prior_taker_buy_share: round(transitionBaselineTakerBuyShare),
+      taker_buy_share_delta: round(transitionBuyShareDelta), mean_close_location: round(transitionMeanCloseLocation),
+      return_1h_pct: round(transitionReturn1hPct), prior_base_range_pct: round(transitionBaseRangePct),
+      transition_rows: transitionRows.length, baseline_rows: transitionBaselineRows.length
+    }
   };
   const coreBase = compressionConfirmed && structureConfirmed && nearResistance;
+  const transitionResistanceNear = Number.isFinite(resistanceDistancePct) &&
+    resistanceDistancePct >= -0.75 && resistanceDistancePct <= Number(cfg.maxResistanceDistancePct);
+  const buyPressureTransition = transitionPressureConfirmed && structureConfirmed && transitionResistanceNear;
   if (extended) {
     result.classification = 'ALREADY_EXTENDED';
     result.reason = 'ANTI_CHASE_MOVE_ALREADY_EXTENDED';
@@ -272,6 +360,11 @@ export function assessQuietBasePreExpansion({
     result.classification = 'PRE_EXPANSION';
     result.reason = 'QUIET_COMPRESSED_BASE_WITH_GRADUAL_VOLUME_AND_TRADE_BUILD';
     result.detected = true;
+  } else if (buyPressureTransition) {
+    result.classification = 'PRE_EXPANSION';
+    result.reason = 'QUIET_BASE_WITH_BUY_PRESSURE_TRANSITION_BEFORE_EXPANSION';
+    result.detected = true;
+    result.flow_state = 'BUY_PRESSURE_TRANSITION';
   } else if (coreBase && someParticipation) {
     result.classification = 'WATCH_EARLY';
     result.reason = 'QUIET_BASE_CONFIRMED_BUT_PARTICIPATION_IS_PARTIAL';
@@ -306,6 +399,7 @@ export function summarizeQuietBasePreExpansion(results = []) {
     evaluated_total: rows.length,
     base_conditions_passed_total: rows.filter(row => requiredBaseKeys.every(key => evidence(row, key)?.passed === true)).length,
     pre_expansion_total: count('PRE_EXPANSION'),
+    buy_pressure_transition_total: rows.filter(row => row.fingerprint.classification === 'PRE_EXPANSION' && row.fingerprint.reason === 'QUIET_BASE_WITH_BUY_PRESSURE_TRANSITION_BEFORE_EXPANSION').length,
     watch_early_total: count('WATCH_EARLY'),
     already_extended_total: count('ALREADY_EXTENDED'),
     data_insufficient_total: count('DATA_INSUFFICIENT'),
