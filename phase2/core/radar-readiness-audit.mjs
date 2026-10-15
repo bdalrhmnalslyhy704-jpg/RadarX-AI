@@ -118,6 +118,7 @@ export function buildRadarReadinessAudit({
   for (const radar of perRadar) {
     if (!radar.running) readinessReasons.push('RADAR_NOT_RUNNING:' + radar.radar);
     if (radar.cycle_is_stale) readinessReasons.push('RADAR_CYCLE_STALE:' + radar.radar);
+    if (radar.cycle_state === 'LAST_CYCLE_ERROR') readinessReasons.push('RADAR_LAST_CYCLE_ERROR:' + radar.radar);
   }
   const missingCycleTelemetry = perRadar.filter(radar => radar.cycles_observed === 0);
   for (const radar of missingCycleTelemetry) readinessReasons.push('RADAR_CYCLE_TELEMETRY_MISSING:' + radar.radar);
@@ -130,8 +131,11 @@ export function buildRadarReadinessAudit({
     failed === 0 && (!swarm?.status || swarm.status === 'RUNNING');
   const allCyclesObserved = missingCycleTelemetry.length === 0;
   const noStaleCycles = !perRadar.some(radar => radar.cycle_is_stale);
-  const status = allWorkersRunning && allCyclesObserved && fullCacheReady && noStaleCycles ? 'READY'
-    : allWorkersRunning && allCyclesObserved && cacheStatus === 'WARMING' && noStaleCycles ? 'WARMING'
+  const noLatestCycleErrors = !perRadar.some(radar => radar.cycle_state === 'LAST_CYCLE_ERROR');
+  const websocketHealthy = candleCache?.websocket_live === true && candleCache?.websocket_sync_ready === true;
+  const status = allWorkersRunning && allCyclesObserved && fullCacheReady && noStaleCycles && noLatestCycleErrors ? 'READY'
+    : allWorkersRunning && allCyclesObserved && cacheStatus === 'WARMING' && noStaleCycles &&
+      noLatestCycleErrors && websocketHealthy ? 'WARMING'
       : 'DEGRADED';
 
   const warmup = warmupReport && typeof warmupReport === 'object' ? {
