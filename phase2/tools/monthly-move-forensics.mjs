@@ -83,9 +83,11 @@ function monthly(daily){
 }
 function pickCohorts(coins){
   const sorted=coins.filter(x=>Number.isFinite(x.monthlyReturnPct)&&x.quoteVolume24h>=MIN_QV).sort((a,b)=>b.monthlyReturnPct-a.monthlyReturnPct);
-  const strong=sorted.filter(x=>x.monthlyReturnPct>=20).slice(0,12);
+  // Deep-study every currently eligible pair in the strong (>=20%) and medium
+  // (+5% to <20%) rolling 30-day cohorts, rather than only a small top-N shortlist.
+  const strong=sorted.filter(x=>x.monthlyReturnPct>=20);
   const s=new Set(strong.map(x=>x.symbol));
-  const mid=sorted.filter(x=>!s.has(x.symbol)&&x.monthlyReturnPct>=5&&x.monthlyReturnPct<20).slice(0,12);
+  const mid=sorted.filter(x=>!s.has(x.symbol)&&x.monthlyReturnPct>=5&&x.monthlyReturnPct<20);
   const p=new Set([...s,...mid.map(x=>x.symbol)]);
   const target=med([...strong,...mid].map(x=>x.quoteVolume24h))||1000000;
   const control=sorted.filter(x=>!p.has(x.symbol)&&x.monthlyReturnPct>=-5&&x.monthlyReturnPct<=5)
@@ -120,6 +122,22 @@ function summarizeWindow(rows,baseline,at){
 }
 function forensics(raw,at,symbol){
   const a=klines(raw,M5),base=a.filter(c=>c.openTime>=at-48*HOUR&&c.closeTime<at-24*HOUR),wins={};
+  const referenceQuote=med(base.map(c=>c.quoteVolume));
+  const referenceTrades=med(base.map(c=>c.trades));
+  // Preserve actual closed 5m bars around the event for candle-by-candle audit.
+  const candleTimeline=a.filter(c=>c.openTime>=at-24*HOUR&&c.openTime<at+24*HOUR).map(c=>({
+    time:time(c.openTime),
+    phase:c.openTime<at?'PRE_MARKER':'POST_MARKER',
+    minutes_from_marker:Math.round((c.openTime-at)/60000),
+    open:c.open,high:c.high,low:c.low,close:c.close,
+    candle_return_pct:rnd(pct(c.close,c.open)),
+    quote_volume_usdt:rnd(c.quoteVolume,2),
+    quote_volume_vs_pre_move_baseline:rnd(ratio(c.quoteVolume,referenceQuote)),
+    trade_count:c.trades,
+    trades_vs_pre_move_baseline:rnd(ratio(c.trades,referenceTrades)),
+    taker_buy_quote_share:rnd(taker(c),4),
+    close_location:rnd(loc(c),3)
+  }));
   for(const [name,dur] of [['pre_24h',24*HOUR],['pre_12h',12*HOUR],['pre_6h',6*HOUR],['pre_3h',3*HOUR],['pre_1h',HOUR],['pre_30m',30*60*1000]])
     wins[name]=summarizeWindow(a.filter(c=>c.openTime>=at-dur&&c.closeTime<at),base,at);
   const bar=a.find(c=>c.openTime>=at)||null,pre=a.filter(c=>c.openTime>=at-DAY&&c.closeTime<at),p4=a.filter(c=>c.openTime>=at&&c.closeTime<=at+4*HOUR),p24=a.filter(c=>c.openTime>=at&&c.closeTime<=at+DAY);
@@ -137,7 +155,9 @@ function forensics(raw,at,symbol){
       next_24h_mfe_pct:start>0&&p24.length?rnd((Math.max(...p24.map(c=>c.high))/start-1)*100):null,
       next_24h_mae_pct:start>0&&p24.length?rnd((Math.min(...p24.map(c=>c.low))/start-1)*100):null,
       complete_4h:p4.length>=48,complete_24h:p24.length>=288},
-    quality:{closed_5m_candles:a.length,baseline_complete:base.length>=288,full_24h_phase:wins.pre_24h?.bars===288,orderbook_depth:'NOT_AVAILABLE_FROM_STANDARD_KLINES'}};
+    candle_timeline:candleTimeline,
+    quality:{closed_5m_candles:a.length,baseline_complete:base.length>=288,full_24h_phase:wins.pre_24h?.bars===288,
+      candle_timeline_rows:candleTimeline.length,orderbook_depth:'NOT_AVAILABLE_FROM_STANDARD_KLINES'}};
 }
 function aggregate(cases,cohort){
   const a=cases.filter(c=>c.cohort===cohort&&c.forensics),out={cohort,cases:a.length,phases:{},outcomes:{}};
@@ -154,7 +174,7 @@ function markdown(report){
   const lines=['# RadarX Build 224 — rolling 30-day Spot move forensics','',
     '- Window: '+report.window.start_utc+' → '+report.window.end_utc,
     '- Eligible pairs above the existing '+MIN_QV.toLocaleString('en-US')+' USDT 24h quote-volume floor: '+report.universe.eligible_symbols,
-    '- Deep cases: '+report.cases.filter(c=>c.forensics).length+'; failures: '+report.cases.filter(c=>c.error).length,
+    '- Deep cases across all eligible monthly gainers (>=20%) and medium movers (+5% to <20%): '+report.cases.filter(c=>c.forensics).length+'; failures: '+report.cases.filter(c=>c.error).length,
     '- Data: closed Binance Spot daily, hourly and 5m klines. No account endpoints, keys, fabricated candles or unfinished candles.',
     '- Kline taker-buy ratio is an aggressor-flow proxy. Historical order-book depth/imbalance cannot be reconstructed from the standard kline endpoint.',
     '- Anchor is an ex-post event alignment only; it is not a model alert or proof of predictiveness. Only outcomes observed after the anchor are reported.','',
