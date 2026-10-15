@@ -26,6 +26,7 @@ const phase2=[
   'phase2/tests/quiet-base-pre-expansion.test.mjs',
   'phase2/tests/buy-pressure-transition.test.mjs',
   'phase2/tests/pre-expansion-outcome-tracker.test.mjs',
+  'phase2/tests/radar-signal-outcomes.test.mjs',
   'phase2/tests/early-expansion-rotation.test.mjs',
   'phase2/tests/falcon-radar-core.test.mjs',
   'phase2/tests/move-forensics.test.mjs',
