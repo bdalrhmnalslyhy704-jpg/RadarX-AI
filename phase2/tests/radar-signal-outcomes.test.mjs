@@ -193,3 +193,32 @@ test('performance rates become eligible only at the documented minimum sample si
   assert.equal(stats.max_favorable_gte_3pct_rate,100);
   assert.equal(stats.max_adverse_lte_minus_2pct_rate,0);
 });
+
+
+test('archive pagination advances beyond 200 same-timestamp alerts without duplication',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-radar-outcomes-pages-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    for(let i=0;i<205;i++){
+      await store.appendMoveAlert({
+        id:'PAGE-'+String(i).padStart(3,'0'),symbol:'ABCUSDT',
+        event:'MOVE_ALERT',processed_at:BASE,detected_at:BASE,price:1,stage:'EARLY_MOVE'
+      });
+    }
+    const rest={klines:async()=>({source:'BINANCE_PUBLIC_REST',candles:[]})};
+    let state;
+    const first=await runRadarSignalOutcomePass({store,rest,now:BASE+2*minute,maxRestCalls:0,logger:{warn(){}}});
+    state=await store.getRadarSignalOutcomes();
+    assert.equal(first.imported,100);
+    assert.equal(state.records.length,100);
+    const second=await runRadarSignalOutcomePass({store,rest,now:BASE+2*minute,maxRestCalls:0,logger:{warn(){}}});
+    state=await store.getRadarSignalOutcomes();
+    assert.equal(second.imported,100);
+    assert.equal(state.records.length,200);
+    const third=await runRadarSignalOutcomePass({store,rest,now:BASE+2*minute,maxRestCalls:0,logger:{warn(){}}});
+    state=await store.getRadarSignalOutcomes();
+    assert.equal(third.imported,5);
+    assert.equal(state.records.length,205);
+    assert.equal(new Set(state.records.map(row=>row.source_alert_id)).size,205);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
