@@ -59,10 +59,16 @@ function horizonCandle(rows,dueAt,now){
   if(!Array.isArray(rows))return null;
   return rows.filter(c=>{
     if(c?.closed!==true)return false;
-    const closeTime=Number(c?.closeTime),close=Number(c?.close);
-    return Number.isFinite(closeTime)&&closeTime>=dueAt&&
-      closeTime<=dueAt+CANDLE_MARKOUT_GRACE_MS&&closeTime<=now&&
-      Number.isFinite(close)&&close>0;
+    const openTime=Number(c?.openTime),closeTime=Number(c?.closeTime);
+    const open=Number(c?.open),high=Number(c?.high),low=Number(c?.low),close=Number(c?.close);
+    // Validate the entire OHLC candle before trusting its markout price.
+    // Spot candle timestamps must be epoch milliseconds, never seconds.
+    const timestampsValid=Number.isFinite(openTime)&&Number.isFinite(closeTime)&&
+      openTime>=100_000_000_000&&closeTime>=100_000_000_000&&openTime<closeTime;
+    const pricesValid=[open,high,low,close].every(Number.isFinite)&&
+      open>0&&close>0&&low>0&&high>=low&&high>=Math.max(open,close)&&low<=Math.min(open,close);
+    return timestampsValid&&pricesValid&&closeTime>=dueAt&&
+      closeTime<=dueAt+CANDLE_MARKOUT_GRACE_MS&&closeTime<=now;
   }).sort((a,b)=>Number(a.closeTime)-Number(b.closeTime))[0]||null;
 }
 
