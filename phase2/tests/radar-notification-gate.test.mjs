@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {evaluateRadarNotificationGate,notificationGateHealth,resetRadarNotificationGateForTests} from '../core/radar-notification-gate.mjs';
 import {evaluateRadarQuality} from '../core/radar-quality-v3.mjs';
+import {buildEarlyExpansionAlert} from '../core/early-expansion-radar.mjs';
 
 const NOW=1_900_000_000_000;
 function baseline(radar,extra={}){
@@ -39,4 +40,32 @@ test('null or blank component values do not inflate evidence count',()=>{
   const missing=evaluateRadarQuality({radar:'STRONG_MOVE_RADAR',components:{volume:null,breakout:'',trades:undefined}});
   const measured=evaluateRadarQuality({radar:'STRONG_MOVE_RADAR',components:{volume:0,breakout:82,trades:undefined}});
   assert.equal(missing.evidence_count,0);assert.equal(measured.evidence_count,2);
+});
+
+test('Radar 8 alert carries the actual pre-expansion fingerprint and metrics into the notification gate',()=>{
+  const candidate={
+    symbol:'XYZUSDT',last_price:1.23,price_change_24h:2.0,early_expansion_score:84,
+    decision_band:'PRE_EXPANSION',pre_expansion_stage:'PRE_EXPANSION',
+    pre_expansion_fingerprint:{stage:'PRE_EXPANSION',ready:true,late:false,micro_move:false,score:82},
+    metrics:{rvol_1m:1.4,rvol_5m:2.1,trade_ratio:1.7,taker_buy_ratio:0.58,price_change_5m_pct:0.8},
+    data_quality:92,data_stale:false,liquidity_quality:80,
+    risk_flags:[],reason_codes:[],source:'Binance Public REST'
+  };
+  const alert=buildEarlyExpansionAlert(candidate,NOW);
+  assert.equal(alert.pre_expansion_fingerprint.score,82);
+  assert.equal(alert.pre_expansion_fingerprint.late,false);
+  assert.deepEqual(alert.metrics,candidate.metrics);
+  assert.deepEqual(alert.price_change_windows,candidate.metrics);
+});
+
+test('Radar 8 rejects missing live liquidity evidence rather than defaulting it to perfect quality',()=>{
+  resetRadarNotificationGateForTests();
+  const alert=baseline('EARLY_EXPANSION_RADAR',{
+    pre_expansion_fingerprint:{stage:'PRE_EXPANSION',ready:true,late:false,micro_move:false,score:85},
+    pre_expansion_stage:'PRE_EXPANSION',
+    metrics:{rvol_5m:2.1,trade_ratio:1.7,taker_buy_ratio:0.58,price_change_5m_pct:0.8},
+    liquidity_quality:null,liquidity_metrics:{liquidity_quality:null},source:'Binance Public REST'
+  });
+  const result=evaluateRadarNotificationGate(alert,{now:NOW});
+  assert.ok(result.failures.includes('EARLY_EXPANSION_LIQUIDITY_QUALITY_UNKNOWN_OR_LOW'));
 });

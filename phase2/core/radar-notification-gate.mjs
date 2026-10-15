@@ -246,13 +246,18 @@ function radarSpecificChecks(alert,p,now){
 
   if(r==='EARLY_EXPANSION_RADAR'){
     const a=alert?.early_expansion||alert;
-    const m=a?.metrics||alert?.metrics||{};
+    const m=a?.metrics||alert?.metrics||alert?.price_change_windows||{};
     const stage=String(a?.pre_expansion_stage??alert?.pre_expansion_stage??a?.decision_band??alert?.potential_label??'').toUpperCase();
     const fp=fingerprintOf(alert);
     if(!fp&&!stage)failures.push('EARLY_EXPANSION_FINGERPRINT_MISSING');
     if(stage==='ALREADY_EXTENDED'||stage==='DATA_INSUFFICIENT')failures.push('EARLY_EXPANSION_STAGE_NOT_NOTIFIABLE');
     if(a?.data_stale===true||alert?.data_status?.stale===true||a?.gates?.data_gate?.valid===false)failures.push('EARLY_EXPANSION_DATA_GATE_FAILED');
+    const qualityRaw=alert?.data_quality;
+    if(qualityRaw===null||qualityRaw===undefined||qualityRaw===''||!Number.isFinite(Number(qualityRaw))||Number(qualityRaw)<70)failures.push('EARLY_EXPANSION_DATA_QUALITY_UNKNOWN_OR_LOW');
     if(a?.gates?.liquidity_gate?.allowed===false&&alert?.historical_replay!==true)failures.push('EARLY_EXPANSION_LIQUIDITY_GATE_FAILED');
+    const liquidityRaw=alert?.liquidity_quality??alert?.liquidity_metrics?.liquidity_quality;
+    const historicalSource=Boolean(alert?.historical_replay)||/historical|replay/i.test(String(alert?.source??''));
+    if(!historicalSource&&(liquidityRaw===null||liquidityRaw===undefined||liquidityRaw===''||!Number.isFinite(Number(liquidityRaw))||Number(liquidityRaw)<60))failures.push('EARLY_EXPANSION_LIQUIDITY_QUALITY_UNKNOWN_OR_LOW');
     const rvol=num(m.rvol_5m??m.rvol_1m??m.volume_ratio,null);
     const trades=num(m.trade_ratio,null);
     const taker=num(m.taker_buy_ratio,null);
