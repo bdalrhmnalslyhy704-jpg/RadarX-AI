@@ -20,6 +20,16 @@ const closed=(rows,now)=> (Array.isArray(rows)?rows:[]).filter(c=>
   Number(c.volume)>=0
 ).sort((a,b)=>Number(a.openTime)-Number(b.openTime));
 
+function closedSequenceIssue(rows,intervalMs,required){
+  const recent=rows.slice(-required);
+  if(recent.length<required)return 'CLOSED_CANDLE_WINDOW_INCOMPLETE';
+  for(let i=1;i<recent.length;i++){
+    const delta=Number(recent[i].openTime)-Number(recent[i-1].openTime);
+    if(!Number.isFinite(delta)||Math.abs(delta-intervalMs)>1)return 'CLOSED_CANDLE_SEQUENCE_HAS_GAPS';
+  }
+  return null;
+}
+
 function returns(rows){
   const out=[];
   for(let i=1;i<rows.length;i++){
@@ -94,8 +104,16 @@ export const KAHIR_RADAR_DEFAULTS=Object.freeze({
 
 export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHistory=[],marketVelocityBps=0,now=Date.now()}={}){
   const m1=closed(oneMinute,now),m5=closed(fiveMinute,now);
-  if(m1.length<80||m5.length<50)return {eligible:false,stage:'WARMING_UP',score:null,closed_candles_only:true,data_quality:0,data_stale:true};
-  const oneAge=Math.max(0,Number(now)-Number(m1.at(-1)?.closeTime));
+  if(m1.length<80||m5.length<50)return {eligible:false,stage:'WARMING_UP',score:null,closed_candles_only:true,data_quality:0,data_stale:true,data_quality_reasons:['CLOSED_CANDLE_WINDOW_INCOMPLETE']};
+  const oneIssue=closedSequenceIssue(m1,60_000,80);
+  const fiveIssue=closedSequenceIssue(m5,300_000,50);
+  const sequenceIssues=[
+    oneIssue?'ONE_MINUTE_'+oneIssue:null,
+    fiveIssue?'FIVE_MINUTE_'+fiveIssue:null
+  ].filter(Boolean);
+  if(sequenceIssues.length)return {eligible:false,stage:'INCOMPLETE_DATA',score:null,closed_candles_only:true,data_quality:0,data_stale:false,
+    data_quality_reasons:sequenceIssues,reason_codes:sequenceIssues};
+  const oneAge=Number(now)-Number(m1.at(-1)?.closeTime);
   const fiveAge=Math.max(0,Number(now)-Number(m5.at(-1)?.closeTime));
   if(!Number.isFinite(oneAge)||!Number.isFinite(fiveAge)||oneAge>3*60*1000||fiveAge>10*60*1000)
     return {eligible:false,stage:'STALE_DATA',score:null,closed_candles_only:true,data_quality:0,data_stale:true,
