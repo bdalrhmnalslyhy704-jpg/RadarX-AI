@@ -32,13 +32,29 @@ const dailyMoveAbs=row=>hasFiniteValue(row?.priceChange24h)?Math.abs(Number(row.
 const avg=xs=>{const a=xs.map(Number).filter(Number.isFinite);return a.length?a.reduce((s,x)=>s+x,0)/a.length:null;};
 const median=xs=>{const a=xs.map(Number).filter(Number.isFinite).sort((a,b)=>a-b);if(!a.length)return null;const m=Math.floor(a.length/2);return a.length%2?a[m]:(a[m-1]+a[m])/2;};
 const pct=(a,b)=>Number.isFinite(Number(a))&&Number.isFinite(Number(b))&&Number(b)!==0?(Number(a)-Number(b))/Math.abs(Number(b))*100:null;
-const safeRows=(rows,now)=> (Array.isArray(rows)?rows:[]).filter(c=>
-  c?.closed!==false &&
-  Number.isFinite(Number(c?.openTime)) && Number.isFinite(Number(c?.closeTime)) &&
-  Number(c.closeTime)<=Number(now) &&
-  Number(c.close)>0 && Number(c.high)>=Number(c.low) && Number(c.low)>0 &&
-  Number.isFinite(Number(c.volume))
-).sort((a,b)=>Number(a.openTime)-Number(b.openTime));
+const safeRows=(rows,now)=> (Array.isArray(rows)?rows:[]).filter(c=>{
+  const openTime=Number(c?.openTime),closeTime=Number(c?.closeTime);
+  const open=Number(c?.open),high=Number(c?.high),low=Number(c?.low),close=Number(c?.close),volume=Number(c?.volume);
+  return c?.closed!==false &&
+    hasFiniteValue(c?.openTime)&&hasFiniteValue(c?.closeTime)&&
+    closeTime>=openTime&&closeTime<=Number(now)&&
+    hasFiniteValue(c?.open)&&hasFiniteValue(c?.high)&&hasFiniteValue(c?.low)&&hasFiniteValue(c?.close)&&
+    open>0&&close>0&&low>0&&high>=Math.max(open,close)&&low<=Math.min(open,close)&&
+    hasFiniteValue(c?.volume)&&volume>=0;
+}).sort((a,b)=>Number(a.openTime)-Number(b.openTime));
+
+function assessClosedSeries(rows,{intervalMs,minCount,freshnessMs,now}){
+  if(rows.length<minCount)return {ready:false,reason:'CLOSED_CANDLES_INSUFFICIENT',count:rows.length,required:minCount,latest_close_time:null,age_ms:null};
+  const recent=rows.slice(-minCount);
+  for(let i=1;i<recent.length;i++){
+    if(Number(recent[i].openTime)-Number(recent[i-1].openTime)!==intervalMs)
+      return {ready:false,reason:'CLOSED_CANDLE_SEQUENCE_HAS_GAPS',count:recent.length,required:minCount,latest_close_time:Number(recent.at(-1).closeTime),age_ms:Math.max(0,Number(now)-Number(recent.at(-1).closeTime))};
+  }
+  const latest=recent.at(-1),latestClose=Number(latest.closeTime),age=Number(now)-latestClose;
+  if(!Number.isFinite(age)||age<0)return {ready:false,reason:'CLOSED_CANDLE_TIME_INVALID',count:recent.length,required:minCount,latest_close_time:Number.isFinite(latestClose)?latestClose:null,age_ms:null};
+  if(age>freshnessMs)return {ready:false,reason:'STALE_CLOSED_CANDLES',count:recent.length,required:minCount,latest_close_time:latestClose,age_ms:age};
+  return {ready:true,reason:null,count:recent.length,required:minCount,latest_close_time:latestClose,age_ms:age};
+}
 
 function ema(values,period){
   const xs=values.map(Number).filter(Number.isFinite); if(!xs.length)return null;
@@ -175,8 +191,23 @@ export function buildFalconEyeAnalysis({
 }={}){
   const one=safeRows(oneMinute,now),five=safeRows(fiveMinute,now),btc1=safeRows(btcOneMinute,now),btc5=safeRows(btcFiveMinute,now);
   const activityShock=assessQuietBaseActivityShock({fiveMinute:five,ticker,now,config});
-  if(one.length<70||five.length<30){
-    return {eligible:false,stage:'INSUFFICIENT_DATA',pre_expansion_stage:'DATA_INSUFFICIENT',pre_expansion_fingerprint:{stage:'DATA_INSUFFICIENT',reason:'CLOSED_CANDLES_INSUFFICIENT'},activity_shock:activityShock,score:null,closed_candles_only:true,one_minute_count:one.length,five_minute_count:five.length};
+  const freshness={
+    one_minute:assessClosedSeries(one,{intervalMs:60_000,minCount:70,freshnessMs:Number(config.freshness1mMs??3*60_000),now}),
+    five_minute:assessClosedSeries(five,{intervalMs:5*60_000,minCount:30,freshnessMs:Number(config.freshness5mMs??8*60_000),now})
+  };
+  const failedFreshness=Object.entries(freshness).filter(([,v])=>!v.ready);
+  if(failedFreshness.length){
+    const reasons=failedFreshness.map(([horizon,result])=>horizon.toUpperCase()+'_'+result.reason);
+    const stale=failedFreshness.some(([,result])=>result.reason==='STALE_CLOSED_CANDLES');
+    const reason=reasons[0]||'CLOSED_CANDLES_INSUFFICIENT';
+    return {
+      eligible:false,stage:stale?'DATA_STALE':'INSUFFICIENT_DATA',
+      pre_expansion_stage:'DATA_INSUFFICIENT',
+      pre_expansion_fingerprint:{stage:'DATA_INSUFFICIENT',reason},
+      activity_shock:activityShock,score:null,closed_candles_only:true,
+      data_quality:0,data_stale:stale,data_quality_reasons:reasons,data_quality_checks:freshness,
+      one_minute_count:one.length,five_minute_count:five.length
+    };
   }
   const price=finite(ticker.lastPrice,null);
   const move24=hasFiniteValue(ticker.priceChange24h)?Number(ticker.priceChange24h):null;
@@ -341,6 +372,7 @@ export function buildFalconEyeAnalysis({
   push(expansionScore>=70,'انتقال نظام التذبذب إلى توسع');
   return {
     eligible,stage,pre_expansion_stage:preExpansion.stage,pre_expansion_fingerprint:preExpansion,activity_shock:activityShock,market_regime_label:marketRegimeLabel,closed_candles_only:true,score:Number(score.toFixed(1)),
+    data_quality:90,data_stale:false,data_quality_reasons:[],data_quality_checks:freshness,
     confirmation_count:confirmations,not_chasing:notChasing,
     anti_chase_penalty:Number(antiChasePenalty.toFixed(1)),
     metrics:{
@@ -383,7 +415,7 @@ export function buildFalconEyeAlert(input,now=Date.now(),config={}){
     price:finite(t.lastPrice),price_change_24h:hasFiniteValue(t.priceChange24h)?Number(t.priceChange24h):null,
     opportunity_score:a.score,potential_label:a.pre_expansion_stage??a.stage,
     falcon_eye:a,reasons:a.reasons,activity_shock:a.activity_shock??null,
-    data_quality:90,liquidity_quality:clamp(62+Math.log10(Math.max(1,(Number(t.quoteVolume24h)||0)/1000000))*22),
+    data_quality:finite(a.data_quality,0),data_stale:a.data_stale===true,liquidity_quality:clamp(62+Math.log10(Math.max(1,(Number(t.quoteVolume24h)||0)/1000000))*22),
     confirmation_count:a.confirmation_count,
     pre_breakout_fingerprint:{
       ready:a.eligible,score:a.score,late:!a.not_chasing,pre_expansion_stage:a.pre_expansion_stage??'DATA_INSUFFICIENT',micro_move:false,
