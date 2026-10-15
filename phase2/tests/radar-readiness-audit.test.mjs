@@ -7,7 +7,7 @@ const IDS = [
   'KAHIR_RADAR','DOOMSDAY_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR',
   'FALCON_EYE_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','PROFESSOR_RADAR'
 ];
-function fixture({missingCache = false, stopped = null, staleCycle = false} = {}) {
+function fixture({missingCache = false, stopped = null, staleCycle = false, missingCycleTelemetry = false} = {}) {
   const now = 1_000_000;
   const radars = IDS.map(radar => ({
     radar, radar_name: radar, running: radar !== stopped,
@@ -15,7 +15,7 @@ function fixture({missingCache = false, stopped = null, staleCycle = false} = {}
   }));
   const aliases = ['RADAR1','RADAR2','RADAR3','RADAR4','RADAR5','RADAR6','RADAR7','RADAR8',
     'RADAR9_FALCON_EYE','RADAR10_COIN_HUNTER','RADAR11_WHALE','RADAR12_PROFESSOR'];
-  const events = aliases.map((radar,index) => ({
+  const events = aliases.filter((radar,index)=>!missingCycleTelemetry||index<11).map((radar,index) => ({
     id: 'cycle-'+index, radar, symbol:'SYSTEM', event_type:'BACKGROUND_CYCLE',
     decision_at: staleCycle && index===0 ? 1 : now - 1000,
     pipeline_latency_ms: 200 + index,
@@ -75,4 +75,12 @@ test('audit surfaces stale cycles and per-radar rejection evidence',()=>{
   assert.equal(radar8.candidate_decisions_observed,1);
   assert.equal(radar8.gate_rejected,1);
   assert.equal(radar8.top_rejection_reasons[0].reason,'VOLUME_NOT_IMPROVING');
+});
+
+
+test('audit never reports READY when a registered radar has no observed cycle telemetry',()=>{
+  const {audit}=fixture({missingCycleTelemetry:true});
+  assert.equal(audit.status,'DEGRADED');
+  assert.equal(audit.summary.radars_without_cycle_telemetry,1);
+  assert.ok(audit.readiness_reasons.includes('RADAR_CYCLE_TELEMETRY_MISSING:PROFESSOR_RADAR'));
 });
