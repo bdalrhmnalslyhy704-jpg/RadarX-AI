@@ -122,6 +122,28 @@ function summarizeWindow(rows,baseline,at){
 }
 function forensics(raw,at,symbol){
   const a=klines(raw,M5),base=a.filter(c=>c.openTime>=at-48*HOUR&&c.closeTime<at-24*HOUR),wins={};
+  // Match the live Radar 8 transition lane: last 12 closed 5m bars vs preceding 36.
+  const beforeAnchor=a.filter(c=>c.openTime<at&&c.closeTime<at);
+  const transitionRows=beforeAnchor.slice(-12),transitionBaselineRows=beforeAnchor.slice(-48,-12);
+  const transitionRatio=(rows,field)=>rows.length?ratio(med(rows.map(c=>c[field])),med(transitionBaselineRows.map(c=>c[field]))):null;
+  const transitionBuyShare=rows=>rows.length&&rows.every(c=>c.quoteVolume>0)
+    ?rows.reduce((sum,c)=>sum+c.buyQuote,0)/rows.reduce((sum,c)=>sum+c.quoteVolume,0):null;
+  const currentBuyShare=transitionBuyShare(transitionRows),priorBuyShare=transitionBuyShare(transitionBaselineRows);
+  const transitionCloseLocations=transitionRows.map(loc).filter(Number.isFinite);
+  const priorBaseRange=transitionBaselineRows.length
+    ?(Math.max(...transitionBaselineRows.map(c=>c.high))-Math.min(...transitionBaselineRows.map(c=>c.low)))/
+      Math.max(1e-12,avg(transitionBaselineRows.map(c=>c.close)))*100:null;
+  const transitionSnapshot={
+    current_closed_5m_bars:transitionRows.length,prior_closed_5m_bars:transitionBaselineRows.length,
+    volume_median_ratio:rnd(transitionRatio(transitionRows,'quoteVolume')),
+    trades_median_ratio:rnd(transitionRatio(transitionRows,'trades')),
+    taker_buy_share:rnd(currentBuyShare,4),prior_taker_buy_share:rnd(priorBuyShare,4),
+    taker_buy_share_delta:rnd(currentBuyShare!==null&&priorBuyShare!==null?currentBuyShare-priorBuyShare:null,4),
+    mean_close_location:rnd(avg(transitionCloseLocations),4),
+    return_1h_pct:rnd(transitionRows.length&&transitionRows[0].open>0?pct(transitionRows.at(-1).close,transitionRows[0].open):null,4),
+    prior_base_range_pct:rnd(priorBaseRange,4),
+    closed_candle_only:true
+  };
   const referenceQuote=med(base.map(c=>c.quoteVolume));
   const referenceTrades=med(base.map(c=>c.trades));
   // Preserve actual closed 5m bars around the event for candle-by-candle audit.
@@ -150,6 +172,7 @@ function forensics(raw,at,symbol){
       taker_buy_share:rnd(base.reduce((s,c)=>s+c.buyQuote,0)/Math.max(1,base.reduce((s,c)=>s+c.quoteVolume,0)),4),
       preceding_low:rnd(pre.length?Math.min(...pre.map(c=>c.low)):null,10),preceding_high:rnd(pre.length?Math.max(...pre.map(c=>c.high)):null,10),
       higher_lows_last_12:pre.slice(-12).slice(1).filter((c,i)=>c.low>pre.slice(-12)[i].low).length},
+    transition_snapshot:transitionSnapshot,
     windows:wins,outcomes:{next_4h_mfe_pct:start>0&&p4.length?rnd((Math.max(...p4.map(c=>c.high))/start-1)*100):null,
       next_4h_mae_pct:start>0&&p4.length?rnd((Math.min(...p4.map(c=>c.low))/start-1)*100):null,
       next_24h_mfe_pct:start>0&&p24.length?rnd((Math.max(...p24.map(c=>c.high))/start-1)*100):null,
@@ -160,12 +183,14 @@ function forensics(raw,at,symbol){
       candle_timeline_rows:candleTimeline.length,orderbook_depth:'NOT_AVAILABLE_FROM_STANDARD_KLINES'}};
 }
 function aggregate(cases,cohort){
-  const a=cases.filter(c=>c.cohort===cohort&&c.forensics),out={cohort,cases:a.length,phases:{},outcomes:{}};
+  const a=cases.filter(c=>c.cohort===cohort&&c.forensics),out={cohort,cases:a.length,phases:{},transition:{},outcomes:{}};
   for(const phase of ['pre_24h','pre_12h','pre_6h','pre_3h','pre_1h','pre_30m']){
     out.phases[phase]={};
     for(const key of ['volume_median_ratio','trades_median_ratio','taker_buy_share','mean_close_location','green_candle_pct','range_vs_baseline','phase_return_pct'])
       out.phases[phase][key]=rnd(med(a.map(c=>c.forensics.windows[phase]?.[key]).filter(Number.isFinite)),4);
   }
+  for(const key of ['volume_median_ratio','trades_median_ratio','taker_buy_share','prior_taker_buy_share','taker_buy_share_delta','mean_close_location','return_1h_pct','prior_base_range_pct'])
+    out.transition[key]=rnd(med(a.map(c=>c.forensics.transition_snapshot?.[key]).filter(Number.isFinite)),4);
   for(const key of ['next_4h_mfe_pct','next_4h_mae_pct','next_24h_mfe_pct','next_24h_mae_pct'])
     out.outcomes[key]=rnd(med(a.map(c=>c.forensics.outcomes[key]).filter(Number.isFinite)));
   return out;
@@ -190,6 +215,8 @@ function markdown(report){
   for(const c of report.cohort_summary)for(const p of ['pre_24h','pre_12h','pre_6h','pre_3h','pre_1h','pre_30m']){
     const f=c.phases[p];lines.push('| '+c.cohort+' | '+p+' | '+(f.volume_median_ratio??'n/a')+' | '+(f.trades_median_ratio??'n/a')+' | '+(f.taker_buy_share??'n/a')+' | '+(f.mean_close_location??'n/a')+' | '+(f.green_candle_pct??'n/a')+' | '+(f.range_vs_baseline??'n/a')+' | '+(f.phase_return_pct??'n/a')+' |');
   }
+  lines.push('','## Live-feature-aligned last-hour transition (last 12 closed 5m candles vs prior 36)','','| Cohort | Cases | Volume median ratio | Trade median ratio | Current buy share | Prior buy share | Buy-share delta | Mean close location | 1h return % | Prior base range % |','|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|');
+  for(const c of report.cohort_summary){const t=c.transition;lines.push('| '+c.cohort+' | '+c.cases+' | '+(t.volume_median_ratio??'n/a')+' | '+(t.trades_median_ratio??'n/a')+' | '+(t.taker_buy_share??'n/a')+' | '+(t.prior_taker_buy_share??'n/a')+' | '+(t.taker_buy_share_delta??'n/a')+' | '+(t.mean_close_location??'n/a')+' | '+(t.return_1h_pct??'n/a')+' | '+(t.prior_base_range_pct??'n/a')+' |');}
   lines.push('','## Top gainers within the eligible universe','','| Pair | 30d return | 24h quote volume | trades in 24h |','|---|---:|---:|---:|');
   for(const x of report.top_20)lines.push('| '+x.symbol+' | '+fmt(x.return_pct)+' | '+Math.round(x.quote_volume_24h)+' | '+x.trades_24h+' |');
   lines.push('','## Guardrails','','- The selected strong/mid cohorts and control group are not a full unbiased backtest; cohort selection uses the completed 30-day return window.',
