@@ -1,6 +1,7 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
+import {buildRadarRoleEvidence} from './radar-role-evidence.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number.isFinite(Number(x))?Number(x):0));
 const finite=(x,d=null)=>Number.isFinite(Number(x))?Number(x):d;
@@ -215,6 +216,8 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
   const tradeRatio=ratio(currentT,tv.slice(-31,-1))??1;
   const buyBaseline=median(buyRatios.slice(-31,-1))??0.5;
   const buyDelta=currentBuy-buyBaseline;
+  const roleEvidence=buildRadarRoleEvidence({candles:m1,relativeCandles:m5,benchmarkCandles:btc,now,intervalMs:60_000,relativeIntervalMs:5*60_000,volumeRatio,tradeRatio,takerBuyRatio:currentBuy,lookbackBars:20});
+  const failedBreakout=roleEvidence.failed_breakout.detected===true;
 
   const ranges=trueRanges(m1);
   const rangeRatio=ratio(ranges.at(-1),ranges.slice(-31,-1))??1;
@@ -308,7 +311,7 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
   const notChasing=Math.abs(Number(r10)||0)<=DOOMSDAY_RADAR_DEFAULTS.maxTenMinuteMovePct &&
     Math.abs(Number(r5)||0)<=DOOMSDAY_RADAR_DEFAULTS.maxFiveMinuteMovePct &&
     sniperFreshness>=DOOMSDAY_RADAR_DEFAULTS.minAlertFreshness;
-  const earlyTrigger=!extended&&earlyScore>=DOOMSDAY_RADAR_DEFAULTS.minEarlyScore &&
+  const earlyTrigger=!extended&&!failedBreakout&&earlyScore>=DOOMSDAY_RADAR_DEFAULTS.minEarlyScore &&
     volumeRatio>=DOOMSDAY_RADAR_DEFAULTS.minVolumeRatio &&
     tradeRatio>=DOOMSDAY_RADAR_DEFAULTS.minTradeRatio &&
     currentBuy>=DOOMSDAY_RADAR_DEFAULTS.minTakerRatio &&
@@ -317,7 +320,7 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
     notChasing &&
     (breakoutProximityScore>=82||accelerationScore>=70);
 
-  const ignitionTrigger=!extended&&ignitionScore>=DOOMSDAY_RADAR_DEFAULTS.minIgnitionScore &&
+  const ignitionTrigger=!extended&&!failedBreakout&&(!microBreakout||roleEvidence.continuation.confirmed)&&ignitionScore>=DOOMSDAY_RADAR_DEFAULTS.minIgnitionScore &&
     ignitionEvidence>=5 &&
     confirmationBars>=DOOMSDAY_RADAR_DEFAULTS.minAlertConfirmationBars &&
     notChasing &&
@@ -343,11 +346,13 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
   push(Number.isFinite(rangeRatio)&&rangeRatio>=1.3,'اتساع النطاق');
   push(Number.isFinite(atrRatio)&&atrRatio>=1.08,'انتقال ATR إلى نظام أعلى');
   push(accelerationScore>=65,'تسارع فوري فوق خط الأساس');
+  if(failedBreakout)reasons.push('رفض: اختراق فاشل وتراجع أسفل المقاومة');
   if(extended)reasons.push('رفض: الحركة اليومية ممتدة');
 
   return {
     eligible,stage,score:Number(score.toFixed(1)),early_score:Number(earlyScore.toFixed(1)),ignition_score:Number(ignitionScore.toFixed(1)),
     direction:ignitionScore>=earlyScore?'UP':'WATCH',closed_candles_only:true,
+    role_evidence:roleEvidence,
     confirmation_count:earlyEvidence,ignition_confirmations:ignitionEvidence,confirmation_total:9,
     metrics:{
       return_1m:r1,return_3m:r3,return_5m:r5,return_10m:r10,btc_5m_return:btc5,relative_strength_pct:relStrength,
@@ -506,6 +511,8 @@ export class DoomsdayRadar{
     this.alertTimestamps=this.alertTimestamps.filter(ts=>Number(ts)>ageCutoff);
     const budgetOk=this.alertTimestamps.length<Math.max(1,Number(this.config.maxAlertsPerHour)||4);
     const strictAlertReady=analysis.eligible&&gate.eligible&&allowedStage&&!recentMoveBlocked &&
+      analysis.role_evidence?.failed_breakout?.detected!==true &&
+      (!analysis.metrics?.micro_breakout||analysis.role_evidence?.continuation?.confirmed===true) &&
       Number.isFinite(freshness)&&freshness>=Number(this.config.minAlertFreshness||72) &&
       Number.isFinite(confirmationBars)&&confirmationBars>=Number(this.config.minAlertConfirmationBars||2) &&
       Math.abs(Number(row.priceChange24h)||0)<=Number(this.config.maxAlert24hMovePct||8) &&
