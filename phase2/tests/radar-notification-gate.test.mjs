@@ -171,3 +171,20 @@ test('Whale Accumulation reads confirmations from its nested analysis payload',(
   assert.equal(result.confirmations,8);
   assert.ok(!result.failures.includes('CONFIRMATION_BREADTH_LOW'));
 });
+
+
+test('Doomsday and Hawkeye gates reject weak continuation when reporting an active breakout',()=>{
+ const doomsday=evaluateRadarNotificationGate({radar:'DOOMSDAY_RADAR',symbol:'TRAPUSDT',opportunity_score:90,data_quality:95,
+   liquidity_quality:90,price_change_24h:2,confirmation_count:9,doomsday:{stage:'IGNITION',score:90,early_score:90,ignition_score:90,
+   ignition_confirmations:8,confirmation_count:8,component_scores:{momentum:90,breakout:90,volume:90,trades:90,taker:90,relative_strength:80},
+   role_evidence:{failed_breakout:{detected:false},continuation:{status:'WEAK',confirmed:false}},
+   alert_quality:{not_chasing:true,sniper_freshness:90,confirmation_bars:3}} ,reasons:['volume','breakout','flow']},{commit:false});
+ assert.ok(doomsday.failures.includes('DOOMSDAY_BREAKOUT_CONTINUATION_WEAK'));
+ const hawkeye=evaluateRadarNotificationGate({radar:'FALCON_EYE_RADAR',symbol:'TRAPUSDT',opportunity_score:90,data_quality:95,
+   liquidity_quality:90,price_change_24h:2,confirmation_count:9,reasons:['quiet','flow','volume','structure','relative'],
+   falcon_eye:{stage:'IGNITION',pre_expansion_stage:'BREAKOUT_DEVELOPING',score:90,eligible:true,not_chasing:true,confirmation_count:9,
+   component_scores:{quietness:90,compression:90,structure:90,taker:90,relative_strength:85,volume:90,trades:90,momentum:90,breakout:90},
+   metrics:{move_24h_pct:2,return_5m:.5,return_10m:.8,ema21_distance_pct:.8,resistance_gap_pct:.5},
+   derivatives:{futures_available:false},role_evidence:{failed_breakout:{detected:false},continuation:{status:'WEAK',confirmed:false}}}},{commit:false});
+ assert.ok(hawkeye.failures.includes('FALCON_BREAKOUT_CONTINUATION_WEAK'));
+});

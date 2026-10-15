@@ -3,6 +3,7 @@ import {formatRadarTime12h} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
 import {isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
+import {validateClosedCandleSeries} from './radar-role-evidence.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)||0));
 const finite=(x,d=null)=>Number.isFinite(Number(x))?Number(x):d;
@@ -99,7 +100,15 @@ export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHis
   const fiveAge=Math.max(0,Number(now)-Number(m5.at(-1)?.closeTime));
   if(!Number.isFinite(oneAge)||!Number.isFinite(fiveAge)||oneAge>3*60*1000||fiveAge>10*60*1000)
     return {eligible:false,stage:'STALE_DATA',score:null,closed_candles_only:true,data_quality:0,data_stale:true,
-      reason_codes:['STALE_CLOSED_CANDLES'],metrics:{one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge}};
+      reason_codes:['STALE_CLOSED_CANDLES'],data_quality_reasons:['STALE_CLOSED_CANDLES'],metrics:{one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge}};
+  const dataChecks=[
+    validateClosedCandleSeries(oneMinute,{now,intervalMs:60_000,minCount:80,windowBars:40,maxAgeMs:3*60_000}),
+    validateClosedCandleSeries(fiveMinute,{now,intervalMs:5*60_000,minCount:50,windowBars:30,maxAgeMs:10*60_000})
+  ];
+  const dataReasons=[...new Set(dataChecks.flatMap(check=>check.reasons))];
+  if(dataReasons.length)return {eligible:false,stage:dataReasons.includes('STALE_CLOSED_CANDLES')?'STALE_DATA':'INSUFFICIENT_DATA',
+    score:null,closed_candles_only:true,data_quality:0,data_stale:dataReasons.includes('STALE_CLOSED_CANDLES'),
+    reason_codes:dataReasons,data_quality_reasons:dataReasons,data_quality_checks:dataChecks};
   const price=finite(ticker.lastPrice,0);
   if(!(price>0))return {eligible:false,stage:'INVALID_PRICE',score:null,closed_candles_only:true};
 
@@ -172,6 +181,18 @@ export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHis
     persistence>=68,
     relativeAccelerationBps>=KAHIR_RADAR_DEFAULTS.minRelativeAccelerationBps
   ].filter(Boolean);
+  const rejectionReasons=[];
+  if(direction!=='UP')rejectionReasons.push('DIRECTION_NOT_UP');
+  if(extended)rejectionReasons.push('DAILY_MOVE_ALREADY_EXTENDED');
+  if(score<KAHIR_RADAR_DEFAULTS.minScore)rejectionReasons.push('SCORE_BELOW_MINIMUM');
+  if(z1<KAHIR_RADAR_DEFAULTS.minOneMinuteZ&&z5<KAHIR_RADAR_DEFAULTS.minFiveMinuteZ)rejectionReasons.push('SELF_ACCELERATION_BELOW_THRESHOLD');
+  if(volumeRatio<KAHIR_RADAR_DEFAULTS.minVolumeRatio)rejectionReasons.push('VOLUME_PARTICIPATION_BELOW_THRESHOLD');
+  if(tradeRatio<1.2)rejectionReasons.push('TRADE_PARTICIPATION_BELOW_THRESHOLD');
+  if(eff<KAHIR_RADAR_DEFAULTS.minEfficiency)rejectionReasons.push('PRICE_PATH_EFFICIENCY_BELOW_THRESHOLD');
+  if(acceptance<65)rejectionReasons.push('RANGE_ACCEPTANCE_BELOW_THRESHOLD');
+  if(persistence<68)rejectionReasons.push('IMPULSE_PERSISTENCE_BELOW_THRESHOLD');
+  if(relativeAccelerationBps<KAHIR_RADAR_DEFAULTS.minRelativeAccelerationBps)rejectionReasons.push('RELATIVE_ACCELERATION_BELOW_THRESHOLD');
+  if(confirmations.length<7)rejectionReasons.push('CONFIRMATION_BREADTH_LOW');
 
   const reasons=[];
   const push=(ok,s)=>{if(ok)reasons.push(s)};
@@ -188,8 +209,9 @@ export function buildKahirAnalysis({oneMinute=[],fiveMinute=[],ticker={},selfHis
 
   return {
     eligible,stage,score:Math.round(score*10)/10,closed_candles_only:true,
-    data_quality:90,data_stale:false,candle_freshness:{one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge},
+    data_quality:90,data_stale:false,data_quality_reasons:[],data_quality_checks:dataChecks,candle_freshness:{one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge},
     confirmation_count:confirmations.length,confirmation_total:9,direction,
+    rejection_reasons:[...new Set(rejectionReasons)],
     algorithms:{
       SELF_BASELINE_Z:{one_minute_z:z1,five_minute_z:z5,self_acceleration_pct:selfAccelerationPct,relative_acceleration_bps:relativeAccelerationBps},
       PARTICIPATION_REGIME:{volume_ratio:volumeRatio,trade_ratio:tradeRatio,score:participationScore},
@@ -261,7 +283,7 @@ export class KahirRadar{
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.busy=false;
     this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
     this.latestCandidates=[];this.selfSnapshots=new Map();this.lastMarketVelocityBps=0;this.deepCursor=0;
-    this.lastResult=null;this.lastAlertAt=new Map();
+    this.lastResult=null;this.lastAlertAt=new Map();this.decisionTrail=[];
   }
 
   start(){
@@ -381,22 +403,73 @@ export class KahirRadar{
       minConfirmations:7,minScore:88,max24hMovePct:6,requireTrigger:true,minCategoryHits:4
     });
     result.elite_gate=gate;
-    if(analysis.eligible&&gate.eligible){
-      const lastAlert=this.lastAlertAt.get(row.symbol)||0;
-      if(this.clock()-lastAlert>=this.config.alertCooldownMs){
-        const alert=buildKahirAlert(candidate,analysis,this.clock());
-        alert.elite_gate=gate;
-        const notificationGate=evaluateRadarNotificationGate(alert,{now:alert.detected_at,commit:true});
-        result.notification_gate=notificationGate;
-        if(!notificationGate.eligible){result.eligible=false;result.blocked_reasons=notificationGate.failures;return result;}
-        alert.notification_gate=notificationGate;
-        this.lastAlertAt.set(row.symbol,alert.detected_at);
-        await this.store.appendKahirAlert(alert);
-        if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(alert);
-        this.alertCount++;
-      }
+    result.data_quality=Number.isFinite(Number(analysis.data_quality))?Number(analysis.data_quality):0;
+    result.data_stale=analysis.data_stale===true;
+    result.data_quality_reasons=Array.isArray(analysis.data_quality_reasons)?analysis.data_quality_reasons:[];
+    result.blocked_reasons=[
+      ...result.data_quality_reasons,
+      ...(Array.isArray(analysis.reason_codes)?analysis.reason_codes:[]),
+      ...(Array.isArray(analysis.rejection_reasons)?analysis.rejection_reasons:[]),
+      ...(!analysis.eligible?[String(analysis.stage||'ANALYSIS_NOT_ELIGIBLE')]:[]),
+      ...(!gate.eligible&&Array.isArray(gate.risk_flags)?gate.risk_flags.map(x=>'ELITE_GATE_'+x):[]),
+      ...(!gate.eligible?[
+        ...(Number(gate.score)<88?['ELITE_SCORE_BELOW_MINIMUM']:[]),
+        ...(Number(gate.category_hits)<4?['ELITE_CATEGORY_DIVERSITY_LOW']:[]),
+        ...(!String(analysis.direction||'').startsWith('UP')?['ELITE_DIRECTION_NOT_UP']:[]),
+        'ELITE_GATE_NOT_ELIGIBLE'
+      ]:[ ])
+    ];
+    if(!analysis.eligible||!gate.eligible){
+      this.recordDecisionDiagnostics(result,'BLOCKED_ANALYSIS_OR_ELITE_GATE');
+      return result;
     }
+    const lastAlert=this.lastAlertAt.get(row.symbol)||0;
+    if(this.clock()-lastAlert<this.config.alertCooldownMs){
+      result.blocked_reasons=[...result.blocked_reasons,'ALERT_COOLDOWN'];
+      this.recordDecisionDiagnostics(result,'BLOCKED_COOLDOWN');
+      return result;
+    }
+    const alert=buildKahirAlert(candidate,analysis,this.clock());
+    alert.elite_gate=gate;
+    const notificationGate=evaluateRadarNotificationGate(alert,{now:alert.detected_at,commit:true});
+    result.notification_gate=notificationGate;
+    if(!notificationGate.eligible){
+      result.eligible=false;
+      result.blocked_reasons=[...result.blocked_reasons,...(notificationGate.failures||[])];
+      this.recordDecisionDiagnostics(result,'BLOCKED_NOTIFICATION_GATE');
+      return result;
+    }
+    alert.notification_gate=notificationGate;
+    this.lastAlertAt.set(row.symbol,alert.detected_at);
+    await this.store.appendKahirAlert(alert);
+    this.recordDecisionDiagnostics({...result,notification_gate:notificationGate},'ALERT_STORED');
+    if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(alert);
+    this.alertCount++;
     return result;
+  }
+  recordDecisionDiagnostics(result,status,now=this.clock()){
+    const reasons=[...new Set((Array.isArray(result?.blocked_reasons)?result.blocked_reasons:[]).map(String))].slice(0,20);
+    this.decisionTrail.push({at:Number(now),symbol:String(result?.symbol||'UNKNOWN'),stage:String(result?.stage||'UNKNOWN'),
+      score:Number.isFinite(Number(result?.score))?Number(result.score):null,
+      analysis_eligible:result?.analysis?.eligible===true,elite_gate_eligible:result?.elite_gate?.eligible===true,
+      elite_gate_score:result?.elite_gate?.score??null,elite_gate_category_hits:result?.elite_gate?.category_hits??null,
+      elite_gate_risk_flags:Array.isArray(result?.elite_gate?.risk_flags)?result.elite_gate.risk_flags:[],
+      notification_gate_eligible:result?.notification_gate?.eligible===true,
+      data_quality:Number.isFinite(Number(result?.data_quality))?Number(result.data_quality):0,
+      data_stale:result?.data_stale===true,status,blocked_reasons:reasons,
+      thresholds:result?.analysis?.trigger||null,
+      metrics:{
+        one_minute_z:result?.analysis?.metrics?.one_minute_z??null,
+        five_minute_z:result?.analysis?.metrics?.five_minute_z??null,
+        volume_ratio:result?.analysis?.metrics?.volume_ratio??null,
+        trade_ratio:result?.analysis?.metrics?.trade_ratio??null,
+        efficiency:result?.analysis?.metrics?.efficiency??null,
+        range_acceptance_pct:result?.analysis?.metrics?.range_acceptance_pct??null,
+        persistence_score:result?.analysis?.metrics?.persistence_score??null,
+        relative_acceleration_bps:result?.analysis?.metrics?.relative_acceleration_bps??null
+      },
+      evidence_reasons:Array.isArray(result?.analysis?.reasons)?result.analysis.reasons.slice(0,10):[]});
+    if(this.decisionTrail.length>240)this.decisionTrail.splice(0,this.decisionTrail.length-240);
   }
   async tick(){
     if(!this.running||this.busy)return false;
@@ -451,11 +524,22 @@ export class KahirRadar{
     };
   }
   health(){
+    const now=this.clock(),windowMs=15*60_000;
+    const recent=this.decisionTrail.filter(item=>Number.isFinite(item.at)&&now-item.at>=0&&now-item.at<=windowMs);
+    const reasons=new Map(),stages=new Map();
+    for(const item of recent){stages.set(item.stage,(stages.get(item.stage)||0)+1);for(const reason of item.blocked_reasons)reasons.set(reason,(reasons.get(reason)||0)+1);}
+    const decisionDiagnostics={window_ms:windowMs,candidates_observed:recent.length,
+      analysis_eligible:recent.filter(x=>x.analysis_eligible).length,elite_gate_accepted:recent.filter(x=>x.elite_gate_eligible).length,
+      notification_gate_accepted:recent.filter(x=>x.notification_gate_eligible).length,
+      blocked:recent.filter(x=>x.status.startsWith('BLOCKED')).length,
+      stage_counts:Object.fromEntries([...stages.entries()].sort((a,b)=>b[1]-a[1])),
+      top_block_reasons:[...reasons.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,10).map(([reason,count])=>({reason,count})),
+      last_decision:recent.at(-1)||null};
     return {
       running:this.running,radar:'KAHIR_RADAR',radar_name:'Radar 5 — القاهر',
       universe:this.universe.length,last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,
       scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,busy:this.busy,
-      market_velocity_bps:this.lastMarketVelocityBps,
+      market_velocity_bps:this.lastMarketVelocityBps,decision_diagnostics:decisionDiagnostics,
       algorithms:['SELF_BASELINE_Z','PARTICIPATION_REGIME','VOLATILITY_REGIME_TRANSITION','KAUFMAN_EFFICIENCY_SHIFT','RANGE_ACCEPTANCE','IMPULSE_PERSISTENCE','MARKET_SPEED_SPREAD'],
       source:'Binance Public REST',closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
     };

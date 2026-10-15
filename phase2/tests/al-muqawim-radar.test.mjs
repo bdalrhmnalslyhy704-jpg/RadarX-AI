@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildAlMuqawimAnalysis,AlMuqawimRadar} from '../core/al-muqawim-radar.mjs';
+import {buildAlMuqawimAnalysis,buildAlMuqawimAlert,AlMuqawimRadar} from '../core/al-muqawim-radar.mjs';
 
 function makeSeries(count,tfMs,trend=1,anchor=Date.now()){
   const now=anchor;
@@ -73,4 +73,45 @@ test('Al Muqawim preserves its rotation budget when the top three overlap patrol
   const selected=radar.selectBatch(rows);
   assert.equal(selected.length,8);
   assert.equal(new Set(selected.map(x=>x.symbol)).size,8);
+});
+
+
+test('Al Muqawim refuses gaps in a required timeframe instead of using discontinuous structure',()=>{
+ const now=Date.now(),series={
+  '4h':makeSeries(100,4*60*60*1000,0.04,now),
+  '1h':makeSeries(120,60*60*1000,0.04,now),
+  '15m':makeSeries(160,15*60*1000,0.04,now)
+ };
+ series['15m'].splice(151,1);
+ const a=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:105.46,priceChange24h:1},now,{maPeriod:50});
+ assert.equal(a.eligible,false);assert.equal(a.stage,'INSUFFICIENT_DATA');
+ assert.ok(a.data_quality_reasons.includes('CLOSED_CANDLE_SEQUENCE_HAS_GAPS'));
+});
+
+test('Al Muqawim refuses stale higher-timeframe candles',()=>{
+ const now=Date.now(),old=now-48*60*60*1000,series={
+  '4h':makeSeries(100,4*60*60*1000,0.04,old),
+  '1h':makeSeries(120,60*60*1000,0.04,old),
+  '15m':makeSeries(160,15*60*1000,0.04,old)
+ };
+ const a=buildAlMuqawimAnalysis(series,{symbol:'TESTUSDT',lastPrice:105.46,priceChange24h:1},now,{maPeriod:50});
+ assert.equal(a.eligible,false);assert.equal(a.stage,'DATA_STALE');assert.equal(a.data_stale,true);
+ assert.ok(a.data_quality_reasons.includes('STALE_CLOSED_CANDLES'));
+});
+
+
+test('Al Muqawim measures relative resilience during market decline without weakening entry requirements',()=>{
+ const now=Date.now(),series={
+  '4h':makeSeries(100,4*60*60*1000,0.04,now),
+  '1h':makeSeries(120,60*60*1000,0.04,now),
+  '15m':makeSeries(160,15*60*1000,0.04,now)
+ };
+ const ticker={symbol:'RESILIENTUSDT',lastPrice:105.46,priceChange24h:0.2,marketMedianChange24hPct:-1,
+  relativeStrengthMarket24hPct:1.2,relativeStrengthPeer24hPct:0.7};
+ const a=buildAlMuqawimAnalysis(series,ticker,now,{maPeriod:50});
+ assert.equal(a.relative_strength.resilient_during_market_decline,true);
+ assert.equal(a.relative_strength.status,'OUTPERFORMING');
+ const alert=buildAlMuqawimAlert(ticker,series,now,{maPeriod:50});
+ assert.equal(alert.data_quality,90);
+ assert.equal(alert.data_stale,false);
 });

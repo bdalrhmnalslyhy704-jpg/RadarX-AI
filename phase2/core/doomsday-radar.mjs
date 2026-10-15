@@ -1,6 +1,7 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
+import {buildRadarRoleEvidence,validateClosedCandleSeries} from './radar-role-evidence.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number.isFinite(Number(x))?Number(x):0));
 const finite=(x,d=null)=>Number.isFinite(Number(x))?Number(x):d;
@@ -130,7 +131,18 @@ function recentImpulse5m(rows){
 
 export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=[],ticker={},instantChangePct=0,now=Date.now(),max24hMovePct=18}={}){
   const m1=closed(oneMinute,now),m5=closed(fiveMinute,now),btc=closed(btcFiveMinute,now);
-  if(m1.length<60||m5.length<50||btc.length<20)return {eligible:false,stage:'WARMING_UP',score:null,early_score:null,closed_candles_only:true};
+  if(m1.length<60||m5.length<50||btc.length<20)return {eligible:false,stage:'WARMING_UP',score:null,early_score:null,closed_candles_only:true,data_quality:0,data_stale:true,data_quality_reasons:['CLOSED_CANDLE_COUNT_INSUFFICIENT']};
+  const dataChecks=[
+    validateClosedCandleSeries(oneMinute,{now,intervalMs:60_000,minCount:60,windowBars:30,maxAgeMs:3*60_000}),
+    validateClosedCandleSeries(fiveMinute,{now,intervalMs:5*60_000,minCount:50,windowBars:20,maxAgeMs:10*60_000}),
+    validateClosedCandleSeries(btcFiveMinute,{now,intervalMs:5*60_000,minCount:20,windowBars:20,maxAgeMs:10*60_000})
+  ];
+  const dataReasons=[...new Set(dataChecks.flatMap(check=>check.reasons))];
+  if(dataReasons.length){
+    const stale=dataReasons.includes('STALE_CLOSED_CANDLES');
+    return {eligible:false,stage:stale?'DATA_STALE':'INSUFFICIENT_DATA',score:null,early_score:null,closed_candles_only:true,
+      data_quality:0,data_stale:stale,data_quality_reasons:dataReasons,reason_codes:dataReasons,data_quality_checks:dataChecks};
+  }
   const price=finite(ticker.lastPrice,0);
   if(!(price>0))return {eligible:false,stage:'INVALID_PRICE',score:null,early_score:null,closed_candles_only:true};
 
@@ -242,7 +254,9 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
   const notChasing=Math.abs(Number(r10)||0)<=DOOMSDAY_RADAR_DEFAULTS.maxTenMinuteMovePct &&
     Math.abs(Number(r5)||0)<=DOOMSDAY_RADAR_DEFAULTS.maxFiveMinuteMovePct &&
     sniperFreshness>=DOOMSDAY_RADAR_DEFAULTS.minAlertFreshness;
-  const earlyTrigger=!extended&&earlyScore>=DOOMSDAY_RADAR_DEFAULTS.minEarlyScore &&
+  const roleEvidence=buildRadarRoleEvidence({candles:m1,relativeCandles:m5,benchmarkCandles:btc,now,intervalMs:60_000,relativeIntervalMs:5*60_000,volumeRatio,tradeRatio,takerBuyRatio:currentBuy,lookbackBars:20});
+  const falseBreakout=roleEvidence.failed_breakout.detected||(Number.isFinite(d?.high)&&Number(m1.at(-1)?.high)>d.high*1.001&&Number(m1.at(-1)?.close)<d.high&&Number.isFinite(location)&&location<55);
+  const earlyTrigger=!extended&&!falseBreakout&&earlyScore>=DOOMSDAY_RADAR_DEFAULTS.minEarlyScore &&
     volumeRatio>=DOOMSDAY_RADAR_DEFAULTS.minVolumeRatio &&
     tradeRatio>=DOOMSDAY_RADAR_DEFAULTS.minTradeRatio &&
     currentBuy>=DOOMSDAY_RADAR_DEFAULTS.minTakerRatio &&
@@ -251,7 +265,7 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
     notChasing &&
     (breakoutProximityScore>=82||accelerationScore>=70);
 
-  const ignitionTrigger=!extended&&ignitionScore>=DOOMSDAY_RADAR_DEFAULTS.minIgnitionScore &&
+  const ignitionTrigger=!extended&&!falseBreakout&&(!microBreakout||roleEvidence.continuation.confirmed)&&ignitionScore>=DOOMSDAY_RADAR_DEFAULTS.minIgnitionScore &&
     ignitionEvidence>=5 &&
     confirmationBars>=DOOMSDAY_RADAR_DEFAULTS.minAlertConfirmationBars &&
     notChasing &&
@@ -262,6 +276,7 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
   const stage=!eligible?'WATCH':ignitionTrigger?'IGNITION':'PRE_BREAKOUT';
   const reasons=[];
   const push=(ok,s)=>{if(ok)reasons.push(s)};
+  if(falseBreakout)reasons.push('رفض: اختراق فاشل وإغلاق ضعيف أسفل المقاومة');
   push(volumeRatio>=1.35,'تسارع الحجم مقارنة بخط العملة');
   push(tradeRatio>=1.25,'تسارع عدد الصفقات');
   push(currentBuy>=0.515,'تفوق تدفق الشراء taker');
@@ -282,7 +297,10 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
   return {
     eligible,stage,score:Number(score.toFixed(1)),early_score:Number(earlyScore.toFixed(1)),ignition_score:Number(ignitionScore.toFixed(1)),
     direction:ignitionScore>=earlyScore?'UP':'WATCH',closed_candles_only:true,
+    data_quality:90,data_stale:false,data_quality_reasons:[],data_quality_checks:dataChecks,
     confirmation_count:earlyEvidence,ignition_confirmations:ignitionEvidence,confirmation_total:9,
+    alert_quality:{sniper_freshness:sniperFreshness,confirmation_bars:confirmationBars,not_chasing:notChasing},
+    role_evidence:roleEvidence,
     metrics:{
       return_1m:r1,return_3m:r3,return_5m:r5,return_10m:r10,btc_5m_return:btc5,relative_strength_pct:relStrength,
       acceleration_z:accelZ,instant_change_pct:Number(instantChangePct||0),
@@ -328,11 +346,17 @@ function buildAlert(candidate,analysis,now){
     symbol,market:'SPOT',direction:'UP_MOVE',
     price:finite(candidate.lastPrice),price_change_24h:finite(candidate.priceChange24h),
     opportunity_score:analysis.score,potential_label:analysis.stage,
+    data_quality:Number.isFinite(Number(analysis.data_quality))?Number(analysis.data_quality):0,
+    data_stale:analysis.data_stale===true,
+    data_quality_reasons:Array.isArray(analysis.data_quality_reasons)?analysis.data_quality_reasons:[],
+    data_status:{status:analysis.data_stale?'DATA_STALE':analysis.data_quality===90?'LIVE_DATA':'DATA_UNAVAILABLE',stale:analysis.data_stale===true,source:analysis.source},
+    liquidity_quality:Math.min(100,60+Math.log10(Math.max(1,(Number(candidate.quoteVolume24h)||0)/500000))*32),
     doomsday:analysis,reasons:analysis.reasons,
     risk_flags:[
       Math.abs(finite(candidate.priceChange24h,0))>=12?'DAILY_EXTENSION_ATTENTION':null,
       analysis.metrics.taker_buy_ratio<0.50?'TAKER_BALANCE_WEAK':null,
-      analysis.component_scores.relative_strength<45?'BTC_RELATIVE_STRENGTH_WEAK':null
+      analysis.component_scores.relative_strength<45?'BTC_RELATIVE_STRENGTH_WEAK':null,
+      analysis.role_evidence?.failed_breakout?.detected?'FAILED_BREAKOUT_TRAP_RISK':null
     ].filter(Boolean),
     source:analysis.source,detected_at:now,processed_at:now,
     paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
@@ -430,6 +454,7 @@ export class DoomsdayRadar{
     this.alertTimestamps=this.alertTimestamps.filter(ts=>Number(ts)>ageCutoff);
     const budgetOk=this.alertTimestamps.length<Math.max(1,Number(this.config.maxAlertsPerHour)||4);
     const strictAlertReady=analysis.eligible&&gate.eligible&&allowedStage&&!recentMoveBlocked &&
+      analysis.role_evidence?.failed_breakout?.detected!==true &&
       Number.isFinite(freshness)&&freshness>=Number(this.config.minAlertFreshness||72) &&
       Number.isFinite(confirmationBars)&&confirmationBars>=Number(this.config.minAlertConfirmationBars||2) &&
       Math.abs(Number(row.priceChange24h)||0)<=Number(this.config.maxAlert24hMovePct||8) &&

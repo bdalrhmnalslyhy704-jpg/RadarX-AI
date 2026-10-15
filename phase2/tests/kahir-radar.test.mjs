@@ -72,6 +72,7 @@ test('Kahir rejects a single-candle volume spike without trade participation',()
   });
   assert.ok(result.metrics.trade_ratio<1.2);
   assert.equal(result.eligible,false);
+  assert.ok(result.rejection_reasons.includes('TRADE_PARTICIPATION_BELOW_THRESHOLD'));
 });
 
 test('Kahir refuses an already-extended daily move even when short-term momentum is strong',()=>{
@@ -170,4 +171,27 @@ test('Kahir keeps its loop alive when a transient market request fails',async()=
   assert.match(radar.health().last_error,/TRANSIENT_BINANCE_FAILURE/);
   assert.ok(calls>=1);
   await radar.stop();
+});
+
+
+test('Kahir rejects gaps inside the closed-candle scoring window',()=>{
+ const one=candles(150,60000);one.splice(143,1);
+ const result=buildKahirAnalysis({oneMinute:one,fiveMinute:fiveMinuteImpulse(),ticker:{lastPrice:101.2,priceChange24h:1,quoteVolume24h:5_000_000},
+  selfHistory:[{price:100,selfChangePct:.01},{price:100.05,selfChangePct:.05}],marketVelocityBps:1,now:NOW});
+ assert.equal(result.eligible,false);assert.equal(result.stage,'INSUFFICIENT_DATA');
+ assert.ok(result.data_quality_reasons.includes('CLOSED_CANDLE_SEQUENCE_HAS_GAPS'));
+});
+
+
+test('Kahir health explains whether an analyzed candidate was blocked before notification',()=>{
+ const radar=new KahirRadar({rest:{},store:{},clock:()=>NOW,logger:{warn(){}}});
+ radar.recordDecisionDiagnostics({symbol:'BLOCKEDUSDT',stage:'WATCH',score:70,eligible:false,
+   analysis:{eligible:false,data_quality:90,data_stale:false},elite_gate:{eligible:false,risk_flags:['LOW_CONFLUENCE']},
+   blocked_reasons:['WATCH','ELITE_GATE_LOW_CONFLUENCE','ELITE_GATE_NOT_ELIGIBLE']},'BLOCKED_ANALYSIS_OR_ELITE_GATE',NOW);
+ const diagnostics=radar.health().decision_diagnostics;
+ assert.equal(diagnostics.candidates_observed,1);
+ assert.equal(diagnostics.analysis_eligible,0);
+ assert.equal(diagnostics.blocked,1);
+ assert.equal(diagnostics.top_block_reasons[0].count,1);
+ assert.equal(diagnostics.last_decision.symbol,'BLOCKEDUSDT');
 });

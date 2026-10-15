@@ -236,6 +236,9 @@ function radarSpecificChecks(alert,p,now){
     const m=a.metrics||{};
     const cs=a.component_scores||{};
     const d=a.derivatives||{};
+    if(a.role_evidence?.failed_breakout?.detected===true)failures.push('FALCON_FAILED_BREAKOUT_TRAP_RISK');
+    const hawkeyeStage=String(a.pre_expansion_stage??a.stage??'').toUpperCase();
+    if(['IGNITION','BREAKOUT_DEVELOPING'].includes(hawkeyeStage)&&a.role_evidence?.continuation?.status==='WEAK')failures.push('FALCON_BREAKOUT_CONTINUATION_WEAK');
     if(Boolean(a.not_chasing)===false)failures.push('FALCON_ANTI_CHASE_FAIL');
     if(Number(a.confirmation_count||0)<8)failures.push('FALCON_CONFIRMATION_BREADTH_LOW');
     if(a.market_pulse && Number(a.market_pulse.score||0)<54)failures.push('FALCON_MARKET_PULSE_WEAK');
@@ -267,8 +270,10 @@ function radarSpecificChecks(alert,p,now){
 
   if(r==='EARLY_EXPANSION_RADAR'){
     const a=alert?.early_expansion||alert;
+    if(a?.role_evidence?.failed_breakout?.detected===true)failures.push('EARLY_EXPANSION_FAILED_BREAKOUT_TRAP_RISK');
     const m=a?.metrics||alert?.metrics||alert?.price_change_windows||{};
     const stage=String(a?.pre_expansion_stage??alert?.pre_expansion_stage??a?.decision_band??alert?.potential_label??'').toUpperCase();
+    if(stage==='BREAKOUT_DEVELOPING'&&a?.role_evidence?.continuation?.status==='WEAK')failures.push('EARLY_EXPANSION_BREAKOUT_CONTINUATION_WEAK');
     const fp=fingerprintOf(alert);
     if(!fp&&!stage)failures.push('EARLY_EXPANSION_FINGERPRINT_MISSING');
     if(stage==='ALREADY_EXTENDED'||stage==='DATA_INSUFFICIENT')failures.push('EARLY_EXPANSION_STAGE_NOT_NOTIFIABLE');
@@ -323,7 +328,9 @@ function radarSpecificChecks(alert,p,now){
 
   if(r==='DOOMSDAY_RADAR'){
     const a=alert?.doomsday||{};
+    if(a.role_evidence?.failed_breakout?.detected===true)failures.push('DOOMSDAY_FAILED_BREAKOUT_TRAP_RISK');
     const stage=String(a.stage??alert?.potential_label??'').toUpperCase();
+    if(stage==='IGNITION'&&a.role_evidence?.continuation?.status==='WEAK')failures.push('DOOMSDAY_BREAKOUT_CONTINUATION_WEAK');
     const ignitionConfirmations=num(a.ignition_confirmations,0);
     const earlyConfirmations=num(a.confirmation_count,0);
     const earlyScore=num(a.early_score,0);

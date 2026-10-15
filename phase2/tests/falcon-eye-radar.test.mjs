@@ -161,6 +161,8 @@ test('Falcon Eye health reports scanner state using the injected clock',()=>{
     clock:()=>now
   });
   const health=radar.health();
+  assert.equal(health.decision_diagnostics.candidates_observed,0);
+  assert.deepEqual(health.decision_diagnostics.top_rejection_reasons,[]);
   assert.equal(health.running,false);
   assert.equal(health.radar,'FALCON_EYE_RADAR');
   assert.equal(health.last_scan_at,null);
@@ -283,4 +285,16 @@ test('Falcon Eye patrol rotates toward symbols not selected in the last cycle',(
   assert.equal(first.length,8);
   assert.equal(second.length,8);
   assert.equal(second.some(x=>first.some(y=>y.symbol===x.symbol)),false);
+});
+
+
+test('Falcon Eye health explains rejected candidates instead of leaving empty alerts ambiguous',()=>{
+ const radar=selectionRadar(),now=radar.clock();
+ radar.recordDecisionDiagnostics({symbol:'WHYUSDT',pre_expansion_stage:'WATCH',opportunity_score:61,eligible:false},
+   {eligible:false,failures:['FALCON_COMPRESSION_WEAK','FALCON_QUIET_BASE_WEAK']},now);
+ const diagnostics=radar.health().decision_diagnostics;
+ assert.equal(diagnostics.candidates_observed,1);
+ assert.equal(diagnostics.notification_gate_rejected,1);
+ assert.equal(diagnostics.top_rejection_reasons[0].count,1);
+ assert.equal(diagnostics.last_decision.symbol,'WHYUSDT');
 });

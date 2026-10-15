@@ -78,6 +78,9 @@ test('Radar 4 alert identifies source and 12-hour discovery time',()=>{
   assert.equal(alert.paper_trading,true);
   assert.equal(alert.real_order_execution,false);
   assert.equal(alert.confidence_score,'UNKNOWN');
+  assert.equal(alert.data_quality,90);
+  assert.equal(alert.data_stale,false);
+  assert.ok(alert.liquidity_quality>=60);
   const decorated=decorateRadarAlert(alert);
   assert.equal(decorated.detected_at_iso,new Date(NOW).toISOString());
 });
@@ -109,4 +112,12 @@ test('Radar 4 fills unique rotation slots even when the patrol cursor starts on 
   const selected=radar.selectBatch(rows);
   assert.equal(selected.length,7);
   assert.equal(new Set(selected.map(x=>x.symbol)).size,7);
+});
+
+
+test('Radar 4 refuses gapped closed candles instead of scoring a broken absorption window',()=>{
+  const rows=make1m(); rows.splice(86,1);
+  const a=buildLiquidityAbsorptionAnalysis(rows,make5m(),ticker,book,NOW);
+  assert.equal(a.eligible,false); assert.equal(a.stage,'DATA_INCOMPLETE');
+  assert.ok(a.data_quality_reasons.includes('CLOSED_CANDLE_SEQUENCE_HAS_GAPS'));
 });

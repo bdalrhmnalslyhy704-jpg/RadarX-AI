@@ -1,6 +1,7 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {formatRadarTime12h} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
+import {validateClosedCandleSeries} from './radar-role-evidence.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -126,7 +127,17 @@ function auctionBalance(rows){
 export function buildLiquidityAbsorptionAnalysis(oneM,fiveM,ticker,book,now=Date.now()){
   const a=closed(oneM,now),b=closed(fiveM,now);
   if(a.length<60||b.length<24){
-    return {eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true};
+    return {eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true,data_quality:0,data_stale:true,data_quality_reasons:['CLOSED_CANDLE_COUNT_INSUFFICIENT']};
+  }
+  const dataChecks=[
+    validateClosedCandleSeries(oneM,{now,intervalMs:60_000,minCount:60,windowBars:36,maxAgeMs:3*60_000}),
+    validateClosedCandleSeries(fiveM,{now,intervalMs:5*60_000,minCount:24,windowBars:20,maxAgeMs:10*60_000})
+  ];
+  const dataReasons=[...new Set(dataChecks.flatMap(check=>check.reasons))];
+  if(dataReasons.length){
+    const stale=dataReasons.includes('STALE_CLOSED_CANDLES');
+    return {eligible:false,stage:stale?'DATA_STALE':'DATA_INCOMPLETE',score:null,closed_candles_only:true,
+      data_quality:0,data_stale:stale,data_quality_reasons:dataReasons,reason_codes:dataReasons,data_quality_checks:dataChecks};
   }
   const price=finite(ticker?.lastPrice,null);
   const absorption=sellerAbsorption(a);
@@ -191,7 +202,7 @@ export function buildLiquidityAbsorptionAnalysis(oneM,fiveM,ticker,book,now=Date
 
   const stage=score>=90?'ABSORPTION_CONFIRMED':score>=84?'LIQUIDITY_WAKE':'MICROSTRUCTURE_WATCH';
   return {
-    eligible,stage,score:Math.round(score*10)/10,closed_candles_only:true,
+    eligible,stage,score:Math.round(score*10)/10,closed_candles_only:true,data_quality:90,data_stale:false,data_quality_reasons:[],data_quality_checks:dataChecks,
     confirmation_count:confirmationCount,confirmation_total:confirmations.length,
     algorithms:{
       SELLER_ABSORPTION:absorption,
@@ -244,6 +255,11 @@ export function buildLiquidityAbsorptionAlert(candidate,now=Date.now()){
     price_change_24h:finite(ticker.priceChange24h),
     opportunity_score:a.score,
     potential_label:a.stage,
+    data_quality:Number.isFinite(Number(a.data_quality))?Number(a.data_quality):0,
+    data_stale:a.data_stale===true,
+    data_quality_reasons:Array.isArray(a.data_quality_reasons)?a.data_quality_reasons:[],
+    data_status:{status:a.data_stale?'DATA_STALE':a.data_quality===90?'LIVE_DATA':'DATA_UNAVAILABLE',stale:a.data_stale===true,source:a.source},
+    liquidity_quality:Math.min(100,60+Math.log10(Math.max(1,(Number(ticker.quoteVolume24h)||0)/1500000))*35),
     liquidity_absorption:a,
     reasons:a.reasons,
     risk_flags:a.risk_flags,
