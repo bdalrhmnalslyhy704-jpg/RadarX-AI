@@ -280,6 +280,9 @@ export class KahirRadar{
     this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
     this.latestCandidates=[];this.selfSnapshots=new Map();this.lastMarketVelocityBps=0;this.deepCursor=0;
     this.lastResult=null;this.lastAlertAt=new Map();
+    this.lastDecisionDiagnostics={cycle_started_at:null,evaluated:0,analysis_accepted:0,analysis_rejected:0,
+      elite_gate_rejected:0,notification_gate_rejected:0,notification_gate_accepted:0,cooldown_blocked:0,alerts_stored:0};
+    this.decisionRejectionCounts={};
   }
 
   start(){
@@ -371,8 +374,41 @@ export class KahirRadar{
       marketVelocityBps:this.lastMarketVelocityBps,now:this.clock()
     });
   }
+  recordDecisionRejections(reasons=[]){
+    for(const reason of Array.isArray(reasons)?reasons:[]){
+      const key=String(reason||'UNKNOWN_REJECTION').slice(0,120);
+      this.decisionRejectionCounts[key]=(this.decisionRejectionCounts[key]||0)+1;
+    }
+  }
+  analysisRejectionReasons(analysis,row){
+    const reasons=[];
+    const codes=Array.isArray(analysis?.data_quality_reasons)?analysis.data_quality_reasons:[];
+    const rawCodes=Array.isArray(analysis?.reason_codes)?analysis.reason_codes:[];
+    reasons.push(...codes,...rawCodes);
+    if(!analysis?.eligible){
+      if(!reasons.length)reasons.push('ANALYSIS_NOT_ELIGIBLE');
+      const m=analysis?.metrics||{},t=analysis?.trigger||KAHIR_RADAR_DEFAULTS;
+      if(analysis?.direction!=='UP')reasons.push('DIRECTION_NOT_UP');
+      if(Number(analysis?.score)<Number(t.minScore??this.config.minScore))reasons.push('SCORE_BELOW_RADAR_THRESHOLD');
+      if(Number(m.one_minute_z)<Number(t.min_1m_z??this.config.minOneMinuteZ))reasons.push('ONE_MINUTE_ACCELERATION_WEAK');
+      if(Number(m.five_minute_z)<Number(t.min_5m_z??this.config.minFiveMinuteZ))reasons.push('FIVE_MINUTE_ACCELERATION_WEAK');
+      if(Number(m.volume_ratio)<Number(t.min_volume_ratio??this.config.minVolumeRatio))reasons.push('VOLUME_RATIO_LOW');
+      if(Number(m.trade_ratio)<1.2)reasons.push('TRADE_PARTICIPATION_LOW');
+      if(Number(m.efficiency)<Number(t.min_efficiency??this.config.minEfficiency))reasons.push('PRICE_EFFICIENCY_LOW');
+      if(Number(m.range_acceptance_pct)<65)reasons.push('RANGE_ACCEPTANCE_WEAK');
+      if(Number(m.persistence_score)<68)reasons.push('FOLLOW_THROUGH_WEAK');
+      if(Number(m.relative_acceleration_bps)<Number(t.min_relative_acceleration_bps??this.config.minRelativeAccelerationBps))reasons.push('RELATIVE_ACCELERATION_WEAK');
+      if(Math.abs(Number(row?.priceChange24h)||0)>=Number(t.max_abs_24h_move_pct??this.config.maxAbs24hMovePct))reasons.push('ALREADY_EXTENDED_24H');
+    }
+    return [...new Set(reasons)];
+  }
   async scanRow(row){
     const analysis=await this.deepScan(row);
+    this.lastDecisionDiagnostics.evaluated++;
+    const analysisReasons=this.analysisRejectionReasons(analysis,row);
+    if(analysis?.eligible)this.lastDecisionDiagnostics.analysis_accepted++;
+    else {this.lastDecisionDiagnostics.analysis_rejected++;this.recordDecisionRejections(analysisReasons);}
+
     this.scans++;
     const u=row._kahir||{};
     const candidate={
@@ -399,6 +435,11 @@ export class KahirRadar{
       minConfirmations:7,minScore:88,max24hMovePct:6,requireTrigger:true,minCategoryHits:4
     });
     result.elite_gate=gate;
+    if(analysis.eligible&&!gate.eligible){
+      this.lastDecisionDiagnostics.elite_gate_rejected++;
+      this.recordDecisionRejections(gate.risk_flags||['ELITE_GATE_REJECTED']);
+      result.blocked_reasons=gate.risk_flags||[];
+    }
     if(analysis.eligible&&gate.eligible){
       const lastAlert=this.lastAlertAt.get(row.symbol)||0;
       if(this.clock()-lastAlert>=this.config.alertCooldownMs){
@@ -406,12 +447,21 @@ export class KahirRadar{
         alert.elite_gate=gate;
         const notificationGate=evaluateRadarNotificationGate(alert,{now:alert.detected_at,commit:true});
         result.notification_gate=notificationGate;
-        if(!notificationGate.eligible){result.eligible=false;result.blocked_reasons=notificationGate.failures;return result;}
+        if(!notificationGate.eligible){
+          this.lastDecisionDiagnostics.notification_gate_rejected++;
+          this.recordDecisionRejections(notificationGate.failures||['NOTIFICATION_GATE_REJECTED']);
+          result.eligible=false;result.blocked_reasons=notificationGate.failures;return result;
+        }
+        this.lastDecisionDiagnostics.notification_gate_accepted++;
         alert.notification_gate=notificationGate;
         this.lastAlertAt.set(row.symbol,alert.detected_at);
         await this.store.appendKahirAlert(alert);
         if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(alert);
         this.alertCount++;
+        this.lastDecisionDiagnostics.alerts_stored++;
+      }else{
+        this.lastDecisionDiagnostics.cooldown_blocked++;
+        this.recordDecisionRejections(['ALERT_COOLDOWN_ACTIVE']);
       }
     }
     return result;
@@ -422,6 +472,9 @@ export class KahirRadar{
     try{
       if(this.clock()-this.universeAt>this.config.universeRefreshMs)await this.refreshUniverse();
       const rows=await this.tickerRows();
+      this.lastDecisionDiagnostics={cycle_started_at:this.clock(),evaluated:0,analysis_accepted:0,analysis_rejected:0,
+        elite_gate_rejected:0,notification_gate_rejected:0,notification_gate_accepted:0,cooldown_blocked:0,alerts_stored:0};
+      this.decisionRejectionCounts={};
       const {updates}=this.buildDiscovery(rows);
       const selected=this.selectDeep(rows,updates);
       const limit=Math.max(1,Math.min(8,Math.trunc(this.config.deepConcurrency)||4));
@@ -474,6 +527,8 @@ export class KahirRadar{
       universe:this.universe.length,last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,
       scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,busy:this.busy,
       market_velocity_bps:this.lastMarketVelocityBps,
+      decision_diagnostics:{...this.lastDecisionDiagnostics,
+        top_rejection_reasons:Object.entries(this.decisionRejectionCounts).sort((a,b)=>b[1]-a[1]).slice(0,12).map(([reason,count])=>({reason,count}))},
       algorithms:['SELF_BASELINE_Z','PARTICIPATION_REGIME','VOLATILITY_REGIME_TRANSITION','KAUFMAN_EFFICIENCY_SHIFT','RANGE_ACCEPTANCE','IMPULSE_PERSISTENCE','MARKET_SPEED_SPREAD'],
       source:'Binance Public REST',closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
     };
