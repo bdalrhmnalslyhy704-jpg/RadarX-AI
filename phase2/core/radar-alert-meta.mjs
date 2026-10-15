@@ -143,7 +143,11 @@ export function radarPowerScore(alert){
     ALMUQAWIM_RADAR:alert?.almuqawim,
     PROFESSOR_RADAR:alert?.professor,
     COIN_HUNTER_RADAR:alert?.factors||alert?.coin_hunter||{},
-    WHALE_ACCUMULATION_RADAR:alert?.whale_accumulation||{}
+    WHALE_ACCUMULATION_RADAR:alert?.whale_accumulation||{},
+    KAHIR_RADAR:alert?.kahir_analysis||{},
+    ALMUQAWIM_RADAR:alert?.almuqawim||{},
+    EARLY_EXPANSION_RADAR:alert?.early_expansion||alert||{},
+    FALCON_EYE_RADAR:alert?.falcon_eye||{}
   };
   const componentMean=meanNumbers(collectObjectScores(blocks[id]));
   const dataQuality=clamp100(alert?.data_quality??alert?.data_status?.data_quality??100);
@@ -151,7 +155,7 @@ export function radarPowerScore(alert){
   let power=base*.60+(componentMean??base)*.25+dataQuality*.15;
   if(riskCount)power-=Math.min(12,riskCount*2);
   const thresholds={
-    EARLY_MOVE_RADAR:72,STRONG_MOVE_RADAR:76,ROTATION_LAG_RADAR:78,LIQUIDITY_ABSORPTION_RADAR:82,KAHIR_RADAR:84,DOOMSDAY_RADAR:82,PROFESSOR_RADAR:80,ALMUQAWIM_RADAR:82,COIN_HUNTER_RADAR:86
+    EARLY_MOVE_RADAR:72,STRONG_MOVE_RADAR:76,ROTATION_LAG_RADAR:78,LIQUIDITY_ABSORPTION_RADAR:82,KAHIR_RADAR:84,DOOMSDAY_RADAR:82,PROFESSOR_RADAR:80,ALMUQAWIM_RADAR:86,EARLY_EXPANSION_RADAR:82,COIN_HUNTER_RADAR:86,WHALE_ACCUMULATION_RADAR:88,FALCON_EYE_RADAR:78
   };
   const gate=power>=Number(thresholds[id]??80);
   return {

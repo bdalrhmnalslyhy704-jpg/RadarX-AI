@@ -347,16 +347,19 @@ const ANALYST_PROFILES=Object.freeze({
   DATA_INTEGRITY:{group:'DATA',role:'سلامة البيانات'}
 });
 
-const finiteEvidenceCount=(evidence)=>{
-  const values=Object.values(evidence||{});
-  let used=0;
-  for(const v of values){
-    if(Number.isFinite(Number(v))) used++;
-    else if(Array.isArray(v)&&v.some(x=>Number.isFinite(Number(x)))) used++;
-    else if(v&&typeof v==='object'&&Object.values(v).some(x=>Number.isFinite(Number(x)))) used++;
-  }
-  return {used,total:values.length};
+const finiteScalar=value=>value!==null&&value!==undefined&&!(typeof value==='string'&&value.trim()==='')&&typeof value!=='boolean'&&Number.isFinite(Number(value));
+const hasFiniteEvidence=(value,depth=0)=>{
+  if(finiteScalar(value))return true;
+  if(depth>=5||value===null||value===undefined)return false;
+  if(Array.isArray(value))return value.some(item=>hasFiniteEvidence(item,depth+1));
+  if(typeof value==='object')return Object.values(value).some(item=>hasFiniteEvidence(item,depth+1));
+  return false;
 };
+export const countAnalystEvidenceCoverage=evidence=>{
+  const values=Object.values(evidence&&typeof evidence==='object'?evidence:{});
+  return {used:values.filter(value=>hasFiniteEvidence(value)).length,total:values.length};
+};
+const finiteEvidenceCount=countAnalystEvidenceCoverage;
 
 const analyst=(id,name,score,direction='NEUTRAL',evidence={},risks=[])=>{
   const profile=ANALYST_PROFILES[id]||{group:'OTHER',role:'محلل متخصص'};
@@ -734,6 +737,17 @@ const CALIBRATION_HORIZONS=Object.freeze([
   {key:'1h',ms:60*60*1000,target:.020,stop:-.012},
   {key:'4h',ms:4*60*60*1000,target:.040,stop:-.025}
 ]);
+const CALIBRATION_MARKOUT_GRACE_MS=20*60*1000;
+function closedHorizonMarkout(rows,dueAt,now){
+  const candles=closed(rows,now).filter(c=>{
+    const open=Number(c.open),high=Number(c.high),low=Number(c.low),close=Number(c.close),volume=Number(c.volume),closeTime=Number(c.closeTime);
+    return Number.isFinite(closeTime)&&closeTime>=dueAt&&closeTime<=dueAt+CALIBRATION_MARKOUT_GRACE_MS&&
+      [open,high,low,close,volume].every(Number.isFinite)&&open>0&&high>0&&low>0&&close>0&&volume>=0&&
+      high>=Math.max(open,low,close)&&low<=Math.min(open,high,close);
+  }).sort((a,b)=>Number(a.closeTime)-Number(b.closeTime));
+  const candle=candles[0];
+  return candle?{price:Number(candle.close),closeTime:Number(candle.closeTime),source:'CLOSED_15M_CANDLE'}:null;
+}
 const calibrationFactor=(stats,minSamples=30)=>{
   const wins=Number(stats?.wins)||0,losses=Number(stats?.losses)||0,samples=wins+losses;
   if(samples<minSamples)return 1;
@@ -852,6 +866,8 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   const hardReasons=[];
   if(!dataValid)hardReasons.push('DATA_GATE_FAILED');
   if(safeAnalysts.length!==19)hardReasons.push('SPECIALIST_COUNT_INVALID');
+  if(new Set(safeAnalysts.map(x=>String(x?.id||''))).size!==19||safeAnalysts.some(x=>!Object.prototype.hasOwnProperty.call(ANALYST_PROFILES,String(x?.id||''))))hardReasons.push('SPECIALIST_IDS_INVALID');
+  if(safeAnalysts.some(x=>!Number.isFinite(Number(x?.score))||!['LONG','BEARISH','NEUTRAL'].includes(x?.direction)))hardReasons.push('SPECIALIST_OUTPUT_INVALID');
   if(safeAnalysts.find(x=>x.id==='RISK_TRAPS')?.score<42)hardReasons.push('RISK_TOO_HIGH');
   if(safeAnalysts.find(x=>x.id==='EXTENSION')?.score<40)hardReasons.push('PRICE_ALREADY_EXTENDED');
   if(safeAnalysts.find(x=>x.id==='LIQUIDITY_QUALITY')?.score<60)hardReasons.push('LIQUIDITY_TOO_WEAK');
@@ -1133,19 +1149,30 @@ export class MultiAnalystEngine {
     this.discoveryRotationCursors.set(key,selected.nextCursor);
     return selected.rows;
   }
-  _settleOutcome(symbol,currentPrice,now){
+  _settleOutcome(symbol,now,priceHistory=[]){
     const list=this.pendingOutcomes.get(symbol);
     if(!Array.isArray(list)||!list.length)return;
     const keep=[];
     for(const item of list){
       const age=now-item.asOf;
-      const entry=Number(item.entryPrice),current=Number(currentPrice);
+      const entry=Number(item.entryPrice);
+      item.markoutSources??={};
+      item.unavailableHorizons??=[];
       for(const h of CALIBRATION_HORIZONS){
         if(item.evaluated[h.key]||age<h.ms)continue;
-        item.evaluated[h.key]=true;
-        if(entry>0&&current>0)this.calibration.settle(item.analysts,(current-entry)/entry,h);
+        const dueAt=Number(item.asOf)+h.ms;
+        const markout=entry>0?closedHorizonMarkout(priceHistory,dueAt,now):null;
+        if(markout&&markout.price>0){
+          item.evaluated[h.key]=true;
+          item.markoutSources[h.key]=markout.source;
+          this.calibration.settle(item.analysts,(markout.price-entry)/entry,h);
+        }else if(now>dueAt+CALIBRATION_MARKOUT_GRACE_MS){
+          item.evaluated[h.key]=true;
+          item.markoutSources[h.key]='UNAVAILABLE';
+          item.unavailableHorizons.push(h.key);
+        }
       }
-      if(now-item.asOf<5*60*60*1000)keep.push(item);
+      if(now-item.asOf<5*60*60*1000&&!CALIBRATION_HORIZONS.every(h=>item.evaluated[h.key]))keep.push(item);
     }
     if(keep.length)this.pendingOutcomes.set(symbol,keep.slice(-2));
     else this.pendingOutcomes.delete(symbol);
@@ -1280,7 +1307,7 @@ export class MultiAnalystEngine {
           if(!row)throw new Error('SYMBOL_SCAN_RETURNED_EMPTY');
           // A candidate must reach the 19 specialist analysts even when the data gate fails.
           // The final judge remains fail-closed: invalid/stale/future/incomplete data is rejected there.
-          this._settleOutcome(ticker.symbol,row?.last_price,this.clock());
+          this._settleOutcome(ticker.symbol,this.clock(),row?._analysis?.series?.['15m']||[]);
           let prior=null;
           try{ prior=await this.store?.getIntelligenceMemory?.(ticker.symbol) || null; }catch{ prior=null; }
           let analysis;

@@ -905,6 +905,8 @@ export function buildEarlyExpansionAlert(candidate,now=Date.now()){
     early_expansion_score:finite(candidate.early_expansion_score,null),
     potential_label:band,
     decision_band:band,
+    pre_expansion_fingerprint:candidate.pre_expansion_fingerprint??null,
+    metrics:candidate.metrics??{},
     price_change_windows:candidate.metrics,
     volume_metrics:{
       rvol_1m:candidate.metrics?.rvol_1m,

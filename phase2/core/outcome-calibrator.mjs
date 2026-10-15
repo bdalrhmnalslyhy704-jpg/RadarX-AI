@@ -1,12 +1,15 @@
 const num=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
 const arr=v=>Array.isArray(v)?v:[];
 
+// Resolve a markout only from a market observation close to its actual horizon.
+// A later price must never be reused as if it were the 15m, 1h, or 4h price.
 const HORIZONS=Object.freeze([
-  ['15m',15*60*1000,0.005],
-  ['1h',60*60*1000,0.012],
-  ['4h',4*60*60*1000,0.025],
-  ['24h',24*60*60*1000,0.05]
+  ['15m',15*60*1000,0.005,5*60*1000],
+  ['1h',60*60*1000,0.012,10*60*1000],
+  ['4h',4*60*60*1000,0.025,30*60*1000],
+  ['24h',24*60*60*1000,0.05,2*60*60*1000]
 ]);
+const CANDLE_MARKOUT_GRACE_MS=15*60*1000;
 const MAX_PENDING=36;
 const MAX_HISTORY=120;
 
@@ -27,7 +30,14 @@ function safeMemory(raw,symbol){
   };
 }
 
-function emptyStats(){return {'15m':{samples:0,hits:0,neutral:0},'1h':{samples:0,hits:0,neutral:0},'4h':{samples:0,hits:0,neutral:0},'24h':{samples:0,hits:0,neutral:0}};}
+function emptyStats(){
+  return {
+    '15m':{samples:0,hits:0,misses:0,neutral:0,unavailable:0},
+    '1h':{samples:0,hits:0,misses:0,neutral:0,unavailable:0},
+    '4h':{samples:0,hits:0,misses:0,neutral:0,unavailable:0},
+    '24h':{samples:0,hits:0,misses:0,neutral:0,unavailable:0}
+  };
+}
 
 function outcomeFor(direction,ret,target){
   const r=num(ret,null);
@@ -38,11 +48,28 @@ function outcomeFor(direction,ret,target){
 
 function scoreStats(stats){
   const xs=[];
-  for(const [h,s] of Object.entries(stats||{})){
+  for(const [,s] of Object.entries(stats||{})){
     const n=num(s.samples,0),hits=num(s.hits,0);
     if(n>0)xs.push(hits/n);
   }
   return xs.length?xs.reduce((a,b)=>a+b,0)/xs.length*100:50;
+}
+
+function horizonCandle(rows,dueAt,now){
+  if(!Array.isArray(rows))return null;
+  return rows.filter(c=>{
+    if(c?.closed!==true)return false;
+    const openTime=Number(c?.openTime),closeTime=Number(c?.closeTime);
+    const open=Number(c?.open),high=Number(c?.high),low=Number(c?.low),close=Number(c?.close);
+    // Validate the entire OHLC candle before trusting its markout price.
+    // Spot candle timestamps must be epoch milliseconds, never seconds.
+    const timestampsValid=Number.isFinite(openTime)&&Number.isFinite(closeTime)&&
+      openTime>=100_000_000_000&&closeTime>=100_000_000_000&&openTime<closeTime;
+    const pricesValid=[open,high,low,close].every(Number.isFinite)&&
+      open>0&&close>0&&low>0&&high>=low&&high>=Math.max(open,close)&&low<=Math.min(open,close);
+    return timestampsValid&&pricesValid&&closeTime>=dueAt&&
+      closeTime<=dueAt+CANDLE_MARKOUT_GRACE_MS&&closeTime<=now;
+  }).sort((a,b)=>Number(a.closeTime)-Number(b.closeTime))[0]||null;
 }
 
 async function load(store,symbol){
@@ -65,65 +92,115 @@ async function save(store,m){
   return slim;
 }
 
-export async function updateSignalOutcomes(store,{symbol,price,now=Date.now()}={}){
+export async function updateSignalOutcomes(store,{symbol,price,now=Date.now(),priceHistory}={}){
   const s=String(symbol||'').trim().toUpperCase();
   const p=num(price,null);
-  if(!s||p==null||p<=0||!store?.getPredictionCalibration||!store?.putPredictionCalibration)return null;
+  const at=num(now,null);
+  if(!s||p==null||p<=0||at==null||at<=0||!store?.getPredictionCalibration||!store?.putPredictionCalibration)return null;
   const m=await load(store,s);
-  if(!m.predictions.length)return {symbol:s,updated:0,calibration_score:scoreStats(m.stats),stats:m.stats};
+  if(!m.predictions.length)return {symbol:s,updated:0,unavailable:0,calibration_score:scoreStats(m.stats),stats:m.stats};
   let updated=0;
+  let unavailable=0;
+  let changed=false;
   const keep=[];
   for(const pred of m.predictions){
-    if(!pred||pred.symbol!==s||num(pred.entry_price,null)==null||!pred.direction){continue;}
-    const age=Math.max(0,Number(now)-Number(pred.created_at));
+    if(!pred||pred.symbol!==s||num(pred.entry_price,null)==null||Number(pred.entry_price)<=0||!pred.direction){
+      changed=true;
+      continue;
+    }
+    const createdAt=Number(pred.created_at);
+    // Invalid/future timestamps cannot be used to produce markouts.
+    if(!Number.isFinite(createdAt)||createdAt<=0||at<createdAt){
+      keep.push(pred);
+      continue;
+    }
+    const age=at-createdAt;
     const returns={...pred.returns};
     const outcomes={...pred.outcomes};
-    for(const [h,ms,target] of HORIZONS){
+    const markoutSources={...pred.markout_sources};
+    for(const [h,ms,target,toleranceMs] of HORIZONS){
       if(outcomes[h])continue;
       if(age<ms)continue;
-      returns[h]=Number(((p/Number(pred.entry_price)-1)*100).toFixed(4));
+      const dueAt=createdAt+ms;
+      // Prefer a genuine closed 15m candle at the forecast horizon. This lets
+      // a later scan backfill the correct historical mark instead of using its
+      // current price for several older horizons.
+      const candle=horizonCandle(priceHistory,dueAt,at);
+      let markPrice=null;
+      if(candle){
+        markPrice=Number(candle.close);
+        markoutSources[h]='CLOSED_15M_CANDLE';
+      }else if(!Array.isArray(priceHistory)&&age-ms<=toleranceMs){
+        // Compatibility path for callers that can provide only a current
+        // snapshot. Its bounded time window prevents late-price leakage.
+        markPrice=p;
+        markoutSources[h]='CURRENT_SNAPSHOT_WITHIN_WINDOW';
+      }else if(age-ms>(Array.isArray(priceHistory)?CANDLE_MARKOUT_GRACE_MS:toleranceMs)){
+        outcomes[h]='UNAVAILABLE';
+        m.stats[h].unavailable=num(m.stats[h].unavailable,0)+1;
+        unavailable++;
+        changed=true;
+        continue;
+      }else{
+        // The horizon's sample window is not over yet; allow a later update
+        // to supply the matching closed candle.
+        continue;
+      }
+      returns[h]=Number(((markPrice/Number(pred.entry_price)-1)*100).toFixed(4));
       outcomes[h]=outcomeFor(pred.direction,returns[h]/100,target);
-      if(outcomes[h]!=='PENDING'){
+      if(['HIT','MISS','NEUTRAL'].includes(outcomes[h])){
         m.stats[h].samples=num(m.stats[h].samples,0)+1;
         if(outcomes[h]==='HIT')m.stats[h].hits=num(m.stats[h].hits,0)+1;
+        if(outcomes[h]==='MISS')m.stats[h].misses=num(m.stats[h].misses,0)+1;
         if(outcomes[h]==='NEUTRAL')m.stats[h].neutral=num(m.stats[h].neutral,0)+1;
         updated++;
       }
+      changed=true;
     }
     const complete=HORIZONS.every(([h])=>Boolean(outcomes[h]));
     if(complete){
       m.history.push({
         prediction_id:pred.prediction_id,
         created_at:pred.created_at,
-        resolved_at:Number(now),
+        resolved_at:at,
         direction:pred.direction,
         strategy:pred.strategy,
+        radar:pred.radar||'SIGNAL_SERVICE',
         score:pred.score,
         outcomes,
-        returns
+        returns,
+        markout_sources:markoutSources,
+        unavailable_horizons:HORIZONS.filter(([h])=>outcomes[h]==='UNAVAILABLE').map(([h])=>h)
       });
+      changed=true;
     }else{
-      keep.push({...pred,returns,outcomes});
+      keep.push({...pred,returns,outcomes,markout_sources:markoutSources});
     }
   }
   m.predictions=keep;
-  if(updated>0||m.history.length!==((await store.getPredictionCalibration(s))?.history?.length||0))await save(store,m);
-  return {symbol:s,updated,calibration_score:Number(scoreStats(m.stats).toFixed(1)),stats:m.stats,pending:m.predictions.length};
+  if(changed)await save(store,m);
+  return {
+    symbol:s,updated,unavailable,
+    calibration_score:Number(scoreStats(m.stats).toFixed(1)),
+    stats:m.stats,pending:m.predictions.length
+  };
 }
 
 export async function recordSignalPrediction(store,{symbol,direction,entryPrice,score,strategy,radar,reasonCodes=[],now=Date.now()}={}){
   const s=String(symbol||'').trim().toUpperCase();
   const p=num(entryPrice,null);
   const d=normalizeDirection(direction);
-  if(!s||p==null||p<=0||!d||!store?.getPredictionCalibration||!store?.putPredictionCalibration)return null;
+  const at=num(now,null);
+  if(!s||p==null||p<=0||!d||at==null||at<=0||!store?.getPredictionCalibration||!store?.putPredictionCalibration)return null;
   const m=await load(store,s);
-  const prediction_id=`${s}:${Number(now)}:${m.predictions.length+1}`;
+  const prediction_id=`${s}:${Number(at)}:${m.predictions.length+1}`;
   m.predictions.push({
     prediction_id,symbol:s,direction:d,entry_price:p,score:num(score,50),
     strategy:String(strategy||'UNKNOWN'),
     radar:String(radar||'SIGNAL_SERVICE'),
     reason_codes:arr(reasonCodes).slice(0,12).map(String),
-    created_at:Number(now)||Date.now(),returns:{},outcomes:{}
+    created_at:Number(at),
+    returns:{},outcomes:{},markout_sources:{}
   });
   await save(store,m);
   return {
@@ -139,7 +216,7 @@ export async function getPredictionCalibration(store,symbol){
   if(!s||!store?.getPredictionCalibration)return null;
   const m=await load(store,s);
   return {
-    version:'OUTCOME_CALIBRATION_V1',
+    version:'OUTCOME_CALIBRATION_V2',
     symbol:s,
     score:Number(scoreStats(m.stats).toFixed(1)),
     stats:m.stats,

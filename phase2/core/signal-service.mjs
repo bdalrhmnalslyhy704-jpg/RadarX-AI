@@ -29,7 +29,7 @@ export class SignalService{
     const r=evaluateSymbolSnapshot({symbol:input.symbol,series4h:input.series4h,series1h:input.series1h,series15m:input.series15m,
       bookRaw:input.bookRaw,ticker24hRaw:input.ticker24hRaw,source:input.source||'UNKNOWN',now},{config:engineConfig});
     let calibration=null;
-    try{calibration=await updateSignalOutcomes(this.store,{symbol:input.symbol,price:r.signal?.price?.reference,now});}catch{}
+    try{calibration=await updateSignalOutcomes(this.store,{symbol:input.symbol,price:r.signal?.price?.reference,now,priceHistory:Array.isArray(input.series15m)?input.series15m:undefined});}catch{}
     const triggerCandle=latestClosed(Array.isArray(input.series15m)?input.series15m:[]);
     const signal={...r.signal,event_class:eventClass,scores:{...r.signal.scores,data_quality:dg.quality,liquidity_quality:liq.quality,confidence_score:'UNKNOWN'},
       data_status:{...r.signal.data_status,status:dg.status,source:input.source||'UNKNOWN',
