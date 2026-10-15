@@ -73,12 +73,15 @@ test('late prices are not falsely reused for missed 15m, 1h, or 4h markouts',asy
 test('late evaluation backfills each horizon from its own closed historical candle',async()=>{
   const {dir,store}=await testStore();
   try{
-    const createdAt=1000;
+    const createdAt=1700000000000;
     await recordSignalPrediction(store,{symbol:'TESTUSDT',direction:'UP',entryPrice:100,score:90,strategy:'TEST',radar:'TEST_RADAR',now:createdAt});
+    const candle=(minutes,close)=>({closed:true,openTime:createdAt+minutes*60*1000-15*60*1000+1,
+      closeTime:createdAt+minutes*60*1000,open:100,high:close+0.5,low:99,close});
     const priceHistory=[
-      {closed:true,closeTime:createdAt+15*60*1000,close:102},
-      {closed:true,closeTime:createdAt+60*60*1000,close:103},
-      {closed:true,closeTime:createdAt+4*60*60*1000,close:104}
+      // Malformed candles at the matching timestamp must be ignored.
+      {...candle(15,102),high:101},
+      {...candle(15,102),openTime:(createdAt+15*60*1000)/1000,closeTime:(createdAt+15*60*1000)/1000},
+      candle(15,102),candle(60,103),candle(240,104)
     ];
     const r=await updateSignalOutcomes(store,{symbol:'TESTUSDT',price:110,now:createdAt+7*60*60*1000,priceHistory});
     const raw=await store.getPredictionCalibration('TESTUSDT');
@@ -96,5 +99,24 @@ test('late evaluation backfills each horizon from its own closed historical cand
     assert.equal(raw.stats['15m'].samples,1);
     assert.equal(raw.stats['1h'].samples,1);
     assert.equal(raw.stats['4h'].samples,1);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+
+test('malformed closed candles cannot create calibration samples',async()=>{
+  const {dir,store}=await testStore();
+  try{
+    const createdAt=1700000000000;
+    await recordSignalPrediction(store,{symbol:'TESTUSDT',direction:'UP',entryPrice:100,score:80,strategy:'TEST',radar:'TEST_RADAR',now:createdAt});
+    const dueAt=createdAt+15*60*1000;
+    const malformed=[
+      {closed:true,openTime:dueAt-15*60*1000+1,closeTime:dueAt,open:100,high:101,low:99,close:102},
+      {closed:true,openTime:(dueAt-900000)/1000,closeTime:dueAt/1000,open:100,high:103,low:99,close:102}
+    ];
+    const result=await updateSignalOutcomes(store,{symbol:'TESTUSDT',price:102,now:createdAt+20*60*1000,priceHistory:malformed});
+    const raw=await store.getPredictionCalibration('TESTUSDT');
+    assert.equal(result.updated,0);
+    assert.equal(raw.stats['15m'].samples,0);
+    assert.equal(raw.predictions[0].outcomes['15m'],undefined);
   }finally{await rm(dir,{recursive:true,force:true});}
 });
