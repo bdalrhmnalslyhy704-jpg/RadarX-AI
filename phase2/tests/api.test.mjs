@@ -8,6 +8,7 @@ import {DurableStore} from '../core/store.mjs';
 import {createSessionToken} from '../core/auth.mjs';
 import {NoopPushProvider} from '../push/index.mjs';
 import {pushSubscription} from './fixtures.mjs';
+import {emptyRadarSignalOutcomeState} from '../core/radar-signal-outcomes.mjs';
 
 test('TEST_FIXTURE: subscription/settings API requires auth and never returns push keys',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-api-')),store=await new DurableStore({dir}).init();
@@ -488,6 +489,44 @@ test('TEST_FIXTURE: Market Radar returns a quick warming response, caches real s
     assert.equal(refreshed,true,'stale snapshot should refresh asynchronously and then become a cache hit');
     assert.equal(calls['/api/v3/exchangeInfo'],2);
     assert.equal(calls['/api/v3/ticker/24hr'],2);
+  }finally{
+    await new Promise(resolve=>server.close(resolve));
+  }
+});
+
+
+test('read-only radar outcome endpoint reports all twelve archives and worker status without inventing rates',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-radar-outcomes-api-')),store=await new DurableStore({dir}).init();
+  const config={auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}};
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const state=emptyRadarSignalOutcomeState();
+  state.records.push({
+    signal_id:'RADAR_9|API_TEST',radar:'RADAR_9',symbol:'ABCUSDT',stage:'WATCH_EARLY',
+    detected_at:Date.now()-60_000,entry_price:1,baseline_status:'COMPLETE',
+    outcomes:{'5m':{status:'COMPLETE',sample_quality:'HISTORICAL_CLOSED_OHLC',close_return_pct:0.5,
+      max_favorable_pct:1.2,max_adverse_pct:-0.4}}
+  });
+  await store.updateRadarSignalOutcomes(()=>state);
+  const worker={snapshot:()=>({service:'RADAR_SIGNAL_OUTCOME_WORKER_V1',running:true,busy:false,last_error:null,
+    last_pass:{ok:true,rest_requests:1,request_budget:2},policy:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}})};
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),radarSignalOutcomeWorker:worker});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  server.unref();
+  try{
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/radar-outcomes');
+    assert.equal(response.status,200);
+    const body=await response.json();
+    assert.equal(body.version,'RADAR_SIGNAL_OUTCOME_REPORT_V1');
+    assert.equal(body.scope,'EMITTED_ARCHIVED_ALERTS_ONLY');
+    assert.equal(body.by_radar.length,12);
+    const hawkeye=body.by_radar.find(x=>x.radar==='RADAR_9');
+    assert.equal(hawkeye.archived_signals,1);
+    assert.equal(hawkeye.horizons['5m'].completed_samples,1);
+    assert.equal(hawkeye.horizons['5m'].rate_status,'INSUFFICIENT_SAMPLE');
+    assert.equal(hawkeye.horizons['5m'].max_favorable_gte_1pct_rate,null);
+    assert.equal(body.worker.running,true);
+    assert.equal(body.policy.real_order_execution,false);
+    assert.equal(body.interpretation.misses_not_measured_by_this_report,true);
   }finally{
     await new Promise(resolve=>server.close(resolve));
   }
