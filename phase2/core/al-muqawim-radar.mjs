@@ -3,6 +3,7 @@ import {decorateRadarAlert} from './radar-alert-meta.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
+const median=values=>{const xs=(values||[]).map(Number).filter(Number.isFinite).sort((a,b)=>a-b);if(!xs.length)return null;const m=Math.floor(xs.length/2);return xs.length%2?xs[m]:(xs[m-1]+xs[m])/2;};
 
 function closedCandles(rows,now){
   return (Array.isArray(rows)?rows:[]).filter(c=>
@@ -173,13 +174,23 @@ export function buildAlMuqawimAnalysis(series,ticker,now=Date.now(),config={}){
   const trendlineScore=clamp(50+trendlineAgreement*16+(h4.trendline?.score>=80?8:0));
   const maAgreement=tfs.reduce((s,x)=>s+((major==='UP'&&x.moving_average?.direction?.startsWith('UP'))||(major==='DOWN'&&x.moving_average?.direction?.startsWith('DOWN'))?1:0),0);
   const maScore=clamp(40+maAgreement*20+(h4.moving_average?.direction===major?10:0));
-  const score=clamp(
+  const structuralScore=clamp(
     structureScore*.30+
     htfAligned*.25+
     lowerAgreement*.15+
     trendlineScore*.15+
     maScore*.15
   );
+  const marketMedianChange=Number.isFinite(Number(ticker?.marketMedianChange24hPct))&&ticker?.marketMedianChange24hPct!==null
+    ?Number(ticker.marketMedianChange24hPct):null;
+  const dailyChange=Number.isFinite(Number(ticker?.priceChange24h))&&ticker?.priceChange24h!==null
+    ?Number(ticker.priceChange24h):null;
+  const relativeStrength24hPct=marketMedianChange!==null&&dailyChange!==null?dailyChange-marketMedianChange:null;
+  const relativeStrengthScore=relativeStrength24hPct===null?null:clamp(50+relativeStrength24hPct*8);
+  const marketDrawdown=marketMedianChange!==null&&marketMedianChange<=-1.5;
+  const relativeStrengthGate=relativeStrength24hPct===null||
+    (marketDrawdown?relativeStrength24hPct>=0.75:relativeStrength24hPct>=-0.5);
+  const score=relativeStrengthScore===null?structuralScore:clamp(structuralScore*.90+relativeStrengthScore*.10);
   const entryRisk=major==='UP'
     ?(m15.direction==='DOWN'?'AGAINST_HTF_TREND':'ALIGNED')
     :(major==='DOWN'
@@ -203,21 +214,24 @@ export function buildAlMuqawimAnalysis(series,ticker,now=Date.now(),config={}){
   const entryReady=timing.score>=78&&timing.freshness>=72&&timing.notExtended&&dailyMove<=8&&
     (timing.nearResistance||timing.recent4>=0.15)&&timing.distanceMa<=3.5;
   return {
-    eligible:score>=86&&major==='UP'&&htfAligned===100&&structureScore>=90&&lowerAgreement>=90&&entryReady,
+    eligible:score>=86&&major==='UP'&&htfAligned===100&&structureScore>=90&&lowerAgreement>=90&&entryReady&&relativeStrengthGate,
     closed_candles_only:true,
     direction:major,
     stage,
     score:Number(score.toFixed(1)),
     entry_risk:entryRisk,
     timeframes:{'4h':h4,'1h':h1,'15m':m15},
-    components:{market_structure:structureScore,higher_timeframe_alignment:htfAligned,lower_timeframe_agreement:lowerAgreement,trendline:trendlineScore,moving_average:maScore,entry_timing:timing.score,entry_freshness:timing.freshness},
-    trigger:{min_score:86,required_htf_alignment:'4h+1h',required_structure:'HH+HL',entry_timing_min:78,entry_freshness_min:72,max_24h_move_pct:8,max_distance_from_15m_ma_pct:3.5,closed_candles_only:true},
+    components:{market_structure:structureScore,higher_timeframe_alignment:htfAligned,lower_timeframe_agreement:lowerAgreement,trendline:trendlineScore,moving_average:maScore,entry_timing:timing.score,entry_freshness:timing.freshness,
+      relative_strength_vs_market_24h_pct:relativeStrength24hPct,relative_strength_score:relativeStrengthScore,market_median_change_24h_pct:marketMedianChange,market_drawdown:marketDrawdown,relative_strength_gate:relativeStrengthGate},
+    trigger:{min_score:86,required_htf_alignment:'4h+1h',required_structure:'HH+HL',entry_timing_min:78,entry_freshness_min:72,max_24h_move_pct:8,max_distance_from_15m_ma_pct:3.5,
+      relative_strength_vs_market_min_pct:marketMedianChange!==null&&marketMedianChange<=-1.5?0.75:-0.5,closed_candles_only:true},
     reasons:[
       ...reasons,
       timing.notExtended?'عدم مطاردة بعد اندفاعة قصيرة':'تحذير: الحركة القصيرة ممتدة',
       timing.nearResistance?'اختبار مقاومة قريب':'المقاومة ليست في نقطة اختبار مثالية',
       Number.isFinite(timing.volumeRatio)&&timing.volumeRatio>=1.12?'عودة مشاركة الحجم':'الحجم لا يثبت التجدد',
-      dailyMove<=8?'الحركة اليومية ما زالت قابلة للدخول':'رفض: الحركة اليومية ممتدة'
+      dailyMove<=8?'الحركة اليومية ما زالت قابلة للدخول':'رفض: الحركة اليومية ممتدة',
+      relativeStrength24hPct===null?'بيانات القوة النسبية للسوق غير متاحة':marketDrawdown?(relativeStrengthGate?'صمود نسبي أمام تراجع السوق':'رفض: العملة لا تصمد نسبيًا أمام هبوط السوق'):(relativeStrengthGate?'القوة النسبية مقابل وسيط السوق مقبولة':'رفض: ضعف نسبي مقارنة بوسيط السوق')
     ],
     entry_timing:timing,
     source:'Binance Public REST',
@@ -279,9 +293,11 @@ export class AlMuqawimRadar{
   }
   async tickerRows(){
     const r=await this.rest.request('/api/v3/ticker/24hr');
-    return (Array.isArray(r.data)?r.data:[]).map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
-      .filter(x=>this.universe.includes(x.symbol))
-      .filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h);
+    const normalized=(Array.isArray(r.data)?r.data:[]).map(x=>normalizeTickerRow(x,this.config.quote)).filter(Boolean)
+      .filter(x=>this.universe.includes(x.symbol));
+    const marketMedianChange24hPct=median(normalized.map(x=>x.priceChange24h));
+    return normalized.filter(x=>x.quoteVolume24h>=this.config.minQuoteVolume24h)
+      .map(x=>({...x,marketMedianChange24hPct}));
   }
   selectBatch(rows){
     if(!Array.isArray(rows)||!rows.length)return [];
