@@ -265,7 +265,7 @@ export function buildDoomsdayAnalysis({oneMinute=[],fiveMinute=[],btcFiveMinute=
     notChasing &&
     (breakoutProximityScore>=82||accelerationScore>=70);
 
-  const ignitionTrigger=!extended&&!falseBreakout&&ignitionScore>=DOOMSDAY_RADAR_DEFAULTS.minIgnitionScore &&
+  const ignitionTrigger=!extended&&!falseBreakout&&(!microBreakout||roleEvidence.continuation.confirmed)&&ignitionScore>=DOOMSDAY_RADAR_DEFAULTS.minIgnitionScore &&
     ignitionEvidence>=5 &&
     confirmationBars>=DOOMSDAY_RADAR_DEFAULTS.minAlertConfirmationBars &&
     notChasing &&
