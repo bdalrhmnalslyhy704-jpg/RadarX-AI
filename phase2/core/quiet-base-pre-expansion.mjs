@@ -33,7 +33,7 @@ export const QUIET_BASE_PRE_EXPANSION_DEFAULTS = Object.freeze({
   minBuyPressureTransitionVolumeRatio: 1.12,
   minBuyPressureTransitionTradeRatio: 1.05,
   minBuyPressureTransitionShare: 0.53,
-  minBuyPressureTransitionShareDelta: 0.02,
+  minBuyPressureTransitionShareDelta: 0.01,
   minBuyPressureTransitionCloseLocation: 0.54,
   maxBuyPressureTransitionBaseRangePct: 3.5,
   minBuyPressureTransitionReturn1hPct: 0.15,
