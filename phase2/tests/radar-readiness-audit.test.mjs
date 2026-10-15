@@ -7,7 +7,7 @@ const IDS = [
   'KAHIR_RADAR','DOOMSDAY_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR',
   'FALCON_EYE_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','PROFESSOR_RADAR'
 ];
-function fixture({missingCache = false, stopped = null, staleCycle = false, missingCycleTelemetry = false} = {}) {
+function fixture({missingCache = false, stopped = null, staleCycle = false, missingCycleTelemetry = false, cycleError = false, websocketDown = false} = {}) {
   const now = 1_000_000;
   const radars = IDS.map(radar => ({
     radar, radar_name: radar, running: radar !== stopped,
@@ -19,7 +19,7 @@ function fixture({missingCache = false, stopped = null, staleCycle = false, miss
     id: 'cycle-'+index, radar, symbol:'SYSTEM', event_type:'BACKGROUND_CYCLE',
     decision_at: staleCycle && index===0 ? 1 : now - 1000,
     pipeline_latency_ms: 200 + index,
-    accepted: null, reason_codes:['CYCLE_COMPLETED_WITHOUT_GATE_DECISION']
+    accepted: null, reason_codes:[cycleError && index===0 ? 'CYCLE_ERROR:TEST_FAILURE' : 'CYCLE_COMPLETED_WITHOUT_GATE_DECISION']
   }));
   events.push({id:'decision-1',radar:'RADAR8',symbol:'HBARUSDT',event_type:'CANDIDATE_DECISION',
     decision_at:now-500,pipeline_latency_ms:31,accepted:false,reason_codes:['VOLUME_NOT_IMPROVING']});
@@ -28,9 +28,9 @@ function fixture({missingCache = false, stopped = null, staleCycle = false, miss
   const candleCache = {
     state:'LIVE',running:true,expected_symbols:282,ready_symbols:missingCache?280:282,
     missing_symbols:missingCache?2:0,stale_symbols:0,incomplete_symbols:missingCache?2:0,
-    cached_closed_candles:282*96,websocket_live:true,websocket_subscription_complete:true,
-    websocket_subscribed_symbols:282,websocket_sync_ready:true,websocket_advanced_symbols:282,
-    full_market_coverage_ready:!missingCache,last_error:null
+    cached_closed_candles:282*96,websocket_live:!websocketDown,websocket_subscription_complete:!websocketDown,
+    websocket_subscribed_symbols:websocketDown?0:282,websocket_sync_ready:!websocketDown,websocket_advanced_symbols:websocketDown?0:282,
+    full_market_coverage_ready:!missingCache&&!websocketDown,last_error:websocketDown?'WS_DISCONNECTED':null
   };
   const audit=buildRadarReadinessAudit({radars,swarm,telemetry:{events,total_recorded:events.length},candleCache,now});
   return {audit, now};
@@ -47,6 +47,19 @@ test('live audit reports READY only when all 12 workers and the full fresh candl
   assert.equal(audit.radars.length,12);
   assert.equal(audit.policy.paper_trading,true);
   assert.equal(audit.policy.real_order_execution,false);
+});
+
+test('live audit is DEGRADED if the latest observed radar cycle failed',()=>{
+  const {audit}=fixture({cycleError:true});
+  assert.equal(audit.status,'DEGRADED');
+  assert.ok(audit.readiness_reasons.includes('RADAR_LAST_CYCLE_ERROR:EARLY_MOVE_RADAR'));
+});
+
+test('live audit is DEGRADED rather than WARMING when the candle websocket is down',()=>{
+  const {audit}=fixture({websocketDown:true});
+  assert.equal(audit.status,'DEGRADED');
+  assert.ok(audit.readiness_reasons.includes('CANDLE_WEBSOCKET_NOT_LIVE'));
+  assert.ok(audit.readiness_reasons.includes('CANDLE_WEBSOCKET_NOT_SYNC_READY'));
 });
 
 test('live audit remains WARMING rather than claiming full readiness while candles are missing',()=>{
