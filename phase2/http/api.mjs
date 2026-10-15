@@ -145,6 +145,91 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     rest: marketRadarRest||monitor.rest,
     config: config.marketRadar ?? {}
   }) : null;
+  const marketRadarResponseCache=new Map();
+  const marketRadarRefreshFlights=new Map();
+  const marketRadarRefreshRetryAfter=new Map();
+  const marketRadarCacheTtlMs=Math.max(5000,Math.min(120000,Number(config.marketRadar?.responseCacheTtlMs)||30000));
+  const marketRadarCacheMaxStaleMs=Math.max(marketRadarCacheTtlMs,Math.min(300000,Number(config.marketRadar?.responseCacheMaxStaleMs)||180000));
+  const marketRadarRefreshCooldownMs=Math.max(5000,Math.min(60000,Number(config.marketRadar?.responseCacheRetryMs)||15000));
+  const marketRadarMaxTriggerAgeMs=Math.max(60000,Number(config.marketRadar?.maxTriggerAgeMs)||30*60*1000);
+
+  function marketRadarCachedSnapshot(snapshot,mode,ageMs=0){
+    const effectiveAge=Math.max(0,Number(ageMs)||0);
+    const candidates=(Array.isArray(snapshot?.candidates)?snapshot.candidates:[]).map(candidate=>{
+      const sourceStatus=candidate?.data_status&&typeof candidate.data_status==='object'?candidate.data_status:{};
+      const originalFetchAge=Number(sourceStatus.fetch_age_ms);
+      const fetchAgeMs=Number.isFinite(originalFetchAge)?Math.max(0,originalFetchAge+effectiveAge):null;
+      const agedOut=fetchAgeMs!==null&&fetchAgeMs>marketRadarMaxTriggerAgeMs;
+      const dataStale=Boolean(sourceStatus.data_stale)||agedOut;
+      return {
+        ...candidate,
+        data_status:{
+          ...sourceStatus,
+          ...(fetchAgeMs!==null?{fetch_age_ms:fetchAgeMs}:{}),
+          data_stale:dataStale,
+          data_valid:sourceStatus.data_valid===true&&!dataStale,
+          ...(agedOut?{last_error:sourceStatus.last_error||'STALE_SERVER_CACHE'}:{})
+        }
+      };
+    });
+    const live=mode!=='STALE_WHILE_REVALIDATING'&&Boolean(snapshot?.meta?.live)&&
+      candidates.some(candidate=>candidate?.data_status?.data_valid===true&&candidate?.data_status?.data_stale===false);
+    return {
+      ...snapshot,
+      candidates,
+      meta:{
+        ...(snapshot?.meta||{}),
+        live,
+        paper_trading:true,
+        real_order_execution:false,
+        confidence_score:'UNKNOWN',
+        response_cache:{mode,age_ms:effectiveAge,fresh_ttl_ms:marketRadarCacheTtlMs,max_stale_ms:marketRadarCacheMaxStaleMs}
+      }
+    };
+  }
+
+  function refreshMarketRadarSnapshot(key,quote,limit){
+    const active=marketRadarRefreshFlights.get(key);
+    if(active)return active;
+    const retryAfter=Number(marketRadarRefreshRetryAfter.get(key)||0);
+    if(retryAfter>Date.now())return null;
+    const task=Promise.resolve().then(()=>marketRadar.scan({quote,limit})).then(snapshot=>{
+      if(!snapshot||typeof snapshot.as_of!=='string'||!snapshot.universe||!Array.isArray(snapshot.candidates))
+        throw new Error('MARKET_RADAR_SNAPSHOT_INVALID');
+      if(!marketRadarResponseCache.has(key)&&marketRadarResponseCache.size>=12){
+        const oldest=[...marketRadarResponseCache.entries()].sort((a,b)=>a[1].savedAt-b[1].savedAt)[0];
+        if(oldest)marketRadarResponseCache.delete(oldest[0]);
+      }
+      marketRadarResponseCache.set(key,{snapshot,savedAt:Date.now()});
+      marketRadarRefreshRetryAfter.delete(key);
+      return snapshot;
+    }).catch(error=>{
+      marketRadarRefreshRetryAfter.set(key,Date.now()+marketRadarRefreshCooldownMs);
+      console.warn?.('RADARX_MARKET_RADAR_REFRESH_FAILED '+JSON.stringify({
+        quote,limit,error:String(error?.message||error).slice(0,160)
+      }));
+      throw error;
+    }).finally(()=>{
+      if(marketRadarRefreshFlights.get(key)===task)marketRadarRefreshFlights.delete(key);
+    });
+    marketRadarRefreshFlights.set(key,task);
+    return task;
+  }
+
+  function marketRadarRefreshPendingBody(quote,limit,mode='SCAN_IN_PROGRESS',ageMs=null){
+    return {
+      error:mode==='RETRY_COOLDOWN'?'MARKET_RADAR_REFRESH_COOLDOWN':'MARKET_RADAR_SCAN_IN_PROGRESS',
+      status:'refreshing',
+      source:'Binance Public REST',
+      as_of:new Date().toISOString(),
+      universe:{requested:limit,scanned:0,returned:0,eligible_spot_symbols:0,ticker_rows:0,min_quote_volume_24h:Number(config.marketRadar?.minQuoteVolume24h)||750000},
+      candidates:[],
+      meta:{
+        live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+        response_cache:{mode,age_ms:Number.isFinite(Number(ageMs))?Number(ageMs):null,retry_after_ms:Math.max(0,Number(marketRadarRefreshRetryAfter.get(quote+':'+limit)||0)-Date.now())}
+      }
+    };
+  }
   const deepSymbolScanner = symbolDeepAnalyzer || (monitor?.rest ? new SymbolDeepAnalyzer({
     rest: monitor.rest,
     config: config.symbolDeepScan ?? {}
@@ -679,14 +764,32 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       if(u.pathname==='/api/market-radar'&&req.method==='GET'){
         if(!marketRadar)return send(res,503,{error:'MARKET_RADAR_UNAVAILABLE'});
         const quote=String(u.searchParams.get('quote')||'USDT').trim().toUpperCase();
-        const limit=u.searchParams.get('limit')||'20';
-        try{
-          return send(res,200,await marketRadar.scan({quote,limit}));
-        }catch(e){
-          const m=String(e?.message??e);
-          const status=/INVALID_QUOTE|INVALID_EXCHANGE_INFO/.test(m)?400:/RATE_LIMIT|TIMEOUT|UNAVAILABLE|FAILED/.test(m)?502:500;
-          return send(res,status,{error:m,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},source:'Binance Public REST',candidates:[]});
+        const rawLimit=Number(u.searchParams.get('limit')||20);
+        const limit=Number.isFinite(rawLimit)?Math.max(1,Math.min(50,Math.trunc(rawLimit))):20;
+        if(!/^[A-Z]{2,10}$/.test(quote))return send(res,400,{error:'INVALID_QUOTE',source:'Binance Public REST',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        const key=quote+':'+limit;
+        const now=Date.now();
+        const cached=marketRadarResponseCache.get(key);
+        const ageMs=cached?Math.max(0,now-cached.savedAt):null;
+        if(cached&&ageMs<=marketRadarCacheTtlMs){
+          return send(res,200,marketRadarCachedSnapshot(cached.snapshot,'HIT',ageMs));
         }
+        if(cached&&ageMs<=marketRadarCacheMaxStaleMs){
+          if(!marketRadarRefreshFlights.has(key)&&Number(marketRadarRefreshRetryAfter.get(key)||0)<=now){
+            const refresh=refreshMarketRadarSnapshot(key,quote,limit);
+            if(refresh)refresh.catch(()=>{});
+          }
+          return send(res,200,marketRadarCachedSnapshot(cached.snapshot,'STALE_WHILE_REVALIDATING',ageMs));
+        }
+        if(marketRadarRefreshFlights.has(key)){
+          return send(res,200,marketRadarRefreshPendingBody(quote,limit,'SCAN_IN_PROGRESS',ageMs));
+        }
+        if(Number(marketRadarRefreshRetryAfter.get(key)||0)>now){
+          return send(res,200,marketRadarRefreshPendingBody(quote,limit,'RETRY_COOLDOWN',ageMs));
+        }
+        const refresh=refreshMarketRadarSnapshot(key,quote,limit);
+        if(refresh)refresh.catch(()=>{});
+        return send(res,200,marketRadarRefreshPendingBody(quote,limit,'SCAN_IN_PROGRESS',ageMs));
       }
       if(u.pathname==='/api/symbol-deep-scan'&&req.method==='GET'){
         if(!deepSymbolScanner)return send(res,503,{error:'SYMBOL_DEEP_SCAN_UNAVAILABLE'});

@@ -420,3 +420,75 @@ test('TEST_FIXTURE: analyst review queue exposes bounded review status and fresh
     await new Promise(resolve=>server.close(resolve));
   }
 });
+
+
+test('TEST_FIXTURE: Market Radar returns a quick warming response, caches real scans, and refreshes stale snapshots once',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-market-radar-cache-')),store=await new DurableStore({dir}).init();
+  const calls={'/api/v3/exchangeInfo':0,'/api/v3/ticker/24hr':0};
+  const marketRest={
+    request:async path=>{
+      if(Object.hasOwn(calls,path))calls[path]++;
+      if(path==='/api/v3/exchangeInfo')return{data:{symbols:[]},source:'TEST_FIXTURE'};
+      if(path==='/api/v3/ticker/24hr')return{data:[],source:'TEST_FIXTURE'};
+      throw new Error('UNEXPECTED_PATH');
+    },
+    klines:async()=>{throw new Error('UNEXPECTED_KLINES');},
+    depth:async()=>{throw new Error('UNEXPECTED_DEPTH');}
+  };
+  const config={
+    auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},
+    api:{maxBodyBytes:65536,rateLimitPerMinute:100},
+    marketRadar:{responseCacheTtlMs:5000,responseCacheMaxStaleMs:30000,responseCacheRetryMs:5000}
+  };
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),marketRadarRest:marketRest});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  server.unref();
+  const base='http://127.0.0.1:'+server.address().port+'/api/market-radar?quote=USDT&limit=6';
+  const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  try{
+    const first=await fetch(base);
+    assert.equal(first.status,200);
+    const warming=await first.json();
+    assert.equal(warming.meta.response_cache.mode,'SCAN_IN_PROGRESS');
+    assert.equal(warming.meta.live,false);
+    assert.equal(warming.meta.paper_trading,true);
+    assert.equal(warming.meta.real_order_execution,false);
+
+    let fresh=null;
+    for(let attempt=0;attempt<30;attempt++){
+      await delay(20);
+      const response=await fetch(base);
+      const body=await response.json();
+      if(response.status===200&&body.meta?.response_cache?.mode==='HIT'){
+        fresh={response,body};break;
+      }
+    }
+    assert.ok(fresh,'market scan must become available from cache after the background scan');
+    assert.deepEqual(fresh.body.candidates,[]);
+    assert.equal(calls['/api/v3/exchangeInfo'],1);
+    assert.equal(calls['/api/v3/ticker/24hr'],1);
+
+    await delay(5200);
+    const staleResponse=await fetch(base);
+    assert.equal(staleResponse.status,200);
+    const stale=await staleResponse.json();
+    assert.equal(stale.meta.response_cache.mode,'STALE_WHILE_REVALIDATING');
+    assert.equal(stale.meta.live,false);
+
+    let refreshed=false;
+    for(let attempt=0;attempt<30;attempt++){
+      await delay(20);
+      const response=await fetch(base);
+      const body=await response.json();
+      if(response.status===200&&body.meta?.response_cache?.mode==='HIT'){
+        refreshed=true;break;
+      }
+    }
+    assert.equal(refreshed,true,'stale snapshot should refresh asynchronously and then become a cache hit');
+    assert.equal(calls['/api/v3/exchangeInfo'],2);
+    assert.equal(calls['/api/v3/ticker/24hr'],2);
+  }finally{
+    await new Promise(resolve=>server.close(resolve));
+  }
+});
