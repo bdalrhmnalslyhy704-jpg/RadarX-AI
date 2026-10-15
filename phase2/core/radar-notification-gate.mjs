@@ -76,6 +76,11 @@ function categoryHitsOf(alert){
     return ['market_structure','higher_timeframe_alignment','lower_timeframe_agreement','trendline','moving_average','entry_timing','entry_freshness']
       .filter(key=>c[key]!==null&&c[key]!==undefined&&c[key]!==''&&Number.isFinite(Number(c[key]))&&Number(c[key])>=70).length;
   }
+  if(r==='ROTATION_LAG_RADAR'){
+    const c=alert?.rotation?.component_scores||{};
+    const scores=Object.values(c).filter(x=>x!==null&&x!==undefined&&x!==''&&Number.isFinite(Number(x))).map(Number);
+    return scores.filter(x=>x>=70).length;
+  }
   if(r==='WHALE_ACCUMULATION_RADAR'){
     const a=alert?.whale_accumulation||{};
     const p=a.large_prints||{},f=a.candle_flow||{},d=a.orderbook||{};
@@ -186,7 +191,9 @@ function radarSpecificChecks(alert,p,now){
 
   if(r==='ROTATION_LAG_RADAR'){
     const a=alert?.rotation||{};
-    if(num(a.metrics?.lag,0)<58 && num(a.metrics?.resilience,0)<65)failures.push('RELATIVE_STRENGTH_NOT_CONFIRMED');
+    const lag=num(a.component_scores?.lag??a.metrics?.lag_score??a.metrics?.lag,null);
+    const resilience=num(a.component_scores?.resilience??a.metrics?.resilience_score??a.metrics?.resilience,null);
+    if((lag===null||lag<58)&&(resilience===null||resilience<65))failures.push('RELATIVE_STRENGTH_NOT_CONFIRMED');
     if(num(a.activation_score,0)<72)failures.push('ROTATION_ACTIVATION_WEAK');
   }
 
@@ -194,10 +201,10 @@ function radarSpecificChecks(alert,p,now){
     const a=alert?.liquidity_absorption||{};
     const c=a.component_scores||a.algorithms||{};
     const m=a.metrics||{};
-    const absorption=Math.max(num(c.absorption,0),num(c.absorption_score,0));
-    const depth=Math.max(num(c.depth,0),num(c.depth_imbalance,0),num(m.depth_score,0));
-    const follow=num(c.five_minute_confirmation,0)||num(m.five_minute_confirmation,0);
-    if(absorption<78)failures.push('ABSORPTION_NOT_STRONG_ENOUGH');
+    const absorption=Math.max(num(c.absorption,0),num(c.absorption_score,0),num(c.SELLER_ABSORPTION?.score,0),num(m.absorption_score,0));
+    const depth=Math.max(num(c.depth,0),num(c.depth_imbalance,0),num(c.DEPTH_IMBALANCE_VACUUM?.score,0),num(m.depth_score,0));
+    const follow=num(c.FIVE_MINUTE_CONFIRMATION?.score??c.five_minute_confirmation??m.five_minute_confirmation,0);
+    if(absorption<76)failures.push('ABSORPTION_NOT_STRONG_ENOUGH');
     if(depth<68)failures.push('ORDERBOOK_CONFIRMATION_WEAK');
     if(follow<65)failures.push('FIVE_MINUTE_CONFIRMATION_WEAK');
   }

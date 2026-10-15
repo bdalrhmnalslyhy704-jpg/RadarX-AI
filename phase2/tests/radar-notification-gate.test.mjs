@@ -69,3 +69,39 @@ test('Radar 8 rejects missing live liquidity evidence rather than defaulting it 
   const result=evaluateRadarNotificationGate(alert,{now:NOW});
   assert.ok(result.failures.includes('EARLY_EXPANSION_LIQUIDITY_QUALITY_UNKNOWN_OR_LOW'));
 });
+
+test('Rotation Lag reads actual component_scores for category diversity and relative-strength evidence',()=>{
+  resetRadarNotificationGateForTests();
+  const alert=baseline('ROTATION_LAG_RADAR',{
+    direction:'UP_ROTATION',
+    rotation:{eligible:true,score:92,activation_score:82,confirmations:6,
+      component_scores:{lag:72,resilience:70,silent_volume:78,reclaim_or_reject:76,value_acceptance:73,rsi_turn:72,mfi_turn:70,stochastic_turn:70,persistence:75,compression:78},
+      metrics:{relative_30m_pct:0.8,resilience_score:70,volume_ratio:1.4,range_ratio:0.8}}
+  });
+  const result=evaluateRadarNotificationGate(alert,{now:NOW});
+  assert.ok(result.category_hits>=5,'Rotation component scores should count as independent category evidence');
+  assert.ok(!result.failures.includes('CATEGORY_DIVERSITY_LOW'));
+  assert.ok(!result.failures.includes('RELATIVE_STRENGTH_NOT_CONFIRMED'));
+});
+
+test('Liquidity Absorption reads the actual SELLER_ABSORPTION and FIVE_MINUTE_CONFIRMATION algorithm outputs',()=>{
+  resetRadarNotificationGateForTests();
+  const alert=baseline('LIQUIDITY_ABSORPTION_RADAR',{
+    direction:'UP_SETUP',
+    liquidity_absorption:{eligible:true,score:94,confirmation_count:8,
+      algorithms:{
+        SELLER_ABSORPTION:{score:84,volumeRatio:1.8,netMovePct:0.6},
+        DEPTH_IMBALANCE_VACUUM:{score:76,imbalance:0.16,spreadBps:5},
+        TRAPPED_SELLER_RELEASE:{score:78},
+        MICROSTRUCTURE_DISLOCATION:{score:74},
+        LOCAL_AUCTION_BALANCE:{score:75},
+        FRACTAL_MICRO_STRUCTURE:{score:80},
+        FIVE_MINUTE_CONFIRMATION:{score:72,returnPct:0.4}
+      },
+      metrics:{absorption_score:84,depth_score:76,trapped_seller_score:78,dislocation_score:74,auction_score:75,structure_score:80,depth_imbalance:0.16,spread_bps:5,volume_ratio:1.8,net_move_pct:0.6}},
+  });
+  const result=evaluateRadarNotificationGate(alert,{now:NOW});
+  assert.ok(result.category_hits>=5);
+  assert.ok(!result.failures.includes('ABSORPTION_NOT_STRONG_ENOUGH'));
+  assert.ok(!result.failures.includes('FIVE_MINUTE_CONFIRMATION_WEAK'));
+});
