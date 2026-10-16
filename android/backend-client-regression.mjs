@@ -47,3 +47,6 @@ assert.match(manifest,/android:process=":radar_background"/);
 // UI_READY is emitted from the WebView bridge and is verified by the native emulator smoke test, not by this source-level regression suite.
 assert.equal(mainActivity.includes('BACKGROUND_START_DELAY_MS'),false);
 assert.equal(mainActivity.includes('postDelayed(backgroundStartRunnable, BACKGROUND_START_DELAY_MS)'),false);
+// The singleTop stop intent must not clear the debug replay URL before the service
+// is actually stopped; otherwise an in-flight scan can escape to the live backend.
+assert.match(mainActivity,/getBooleanExtra\("radarx_test_stop_background_monitor", false\)\) \{[\s\S]*?stopBackgroundMonitor\(\);[\s\S]*?return;[\s\S]*?\n        \}\n        String feedUrl = launchIntent == null/);

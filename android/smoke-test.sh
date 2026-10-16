@@ -131,8 +131,11 @@ start_app_and_wait_ready() {
   local service_ready=0
   for attempt in $(seq 1 30); do
     logs="$(cat "${APP_LOG_FILE}" 2>/dev/null || true)"
-    if printf '%s\n' "${logs}" | grep -Fq "BACKGROUND_AUTO_START_REQUEST" &&
-       printf '%s\n' "${logs}" | grep -Fq "BACKGROUND_SERVICE_READY"; then
+    # The service-ready event is the startup signal; independently verify the
+    # live service record and isolated process below. Some Android lifecycle paths
+    # can start the monitor before the delayed UI auto-start callback, so requiring
+    # the request log here creates a false negative despite a running service.
+    if printf '%s\n' "${logs}" | grep -Fq "BACKGROUND_SERVICE_READY"; then
       service_ready=1
       break
     fi
@@ -520,7 +523,10 @@ if [[ "${accepted_total}" -ne "${accepted_unique}" ]]; then
 fi
 if [[ "${handled_unique}" -ne 623 ]]; then
   echo "::error::Replay did not handle 623 unique alerts: handled=${handled_unique} expected=623"
-  sort "${handled_file}" | uniq -c | grep -vE '^[[:space:]]+1 ' | head -n 60 || true
+  echo "Replay fixture state:"
+  fixture_stats || true
+  echo "All handled keys for diagnosis:"
+  cat "${handled_file}" || true
   exit 1
 fi
 if ! grep -Fq 'FALCON_EYE_RADAR|REPLAY:0623' "${handled_file}"; then

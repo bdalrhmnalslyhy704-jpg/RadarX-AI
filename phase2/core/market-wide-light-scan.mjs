@@ -1,4 +1,5 @@
 import {assessQuietBaseActivityShock} from './activity-shock.mjs';
+import {buildUnifiedFeatureSnapshot} from './unified-feature-engine.mjs';
 const KNOWN = value => value !== null && value !== undefined &&
   !(typeof value === 'string' && value.trim() === '') && Number.isFinite(Number(value));
 const numberOrNull = value => KNOWN(value) ? Number(value) : null;
@@ -223,7 +224,8 @@ function gradualParticipation(rows, field, cfg) {
 
 /** Light ranking only. It never emits, stores, or authorizes a trading alert. */
 export function evaluateMarketWideLightCandidate({
-  symbol, series = null, now = Date.now(), config = {}
+  symbol, series = null, ticker = {}, benchmarkCandles = [], benchmarkTicker = null,
+  marketBaseline24hPct = null, bookTicker = null, depth = null, now = Date.now(), config = {}
 } = {}) {
   const cfg = {...MARKET_WIDE_LIGHT_SCAN_DEFAULTS, ...config};
   const key = String(symbol || series?.symbol || '').trim().toUpperCase();
@@ -361,6 +363,32 @@ export function evaluateMarketWideLightCandidate({
   ].filter(([score]) => score !== null);
   const weight = parts.reduce((sum, [, w]) => sum + w, 0);
   const score = weight > 0 ? parts.reduce((sum, [partScore, w]) => sum + partScore * w, 0) / weight : null;
+  const featureEngine = buildUnifiedFeatureSnapshot({
+    symbol: key, candles: rows, ticker, benchmarkCandles, benchmarkTicker,
+    marketBaseline24hPct, bookTicker, depth, now: at,
+    config: {
+      minClosedCandles: Math.min(20, Number(cfg.minClosedCandles) || 20),
+      maxCandleAgeMs: cfg.maxCandleAgeMs,
+      maxMove24hPct: cfg.maxMove24hPct ?? 12,
+      maxMove15mPct: cfg.maxMove15mPct ?? 4,
+      maxMove1hPct: cfg.maxMove1hPct ?? 7,
+      maxMove1hAtr: cfg.maxMove1hAtr ?? 4,
+      maxMove15mAtr: cfg.maxMove15mAtr ?? 2.8,
+      minBuyShare: cfg.minBuyShare ?? 0.53,
+      minBuyShareDelta: cfg.minBuyShareDelta ?? 0.01,
+      maxSpreadBps: cfg.maxSpreadBps ?? 22
+    }
+  });
+  const featureStageBonus = featureEngine.stage === 'PRE_EXPANSION' ? 10 :
+    featureEngine.stage === 'BREAKOUT_DEVELOPING' ? 6 :
+    featureEngine.stage === 'WATCH_EARLY' ? 2 : 0;
+  if (featureEngine.score !== null) {
+    expansionScore = clamp((expansionScore === null ? featureEngine.score :
+      expansionScore * 0.60 + featureEngine.score * 0.40) +
+      featureStageBonus - (featureEngine.stage === 'ALREADY_EXTENDED' ? 20 : 0));
+  }
+  const combinedCandidateScore = featureEngine.score === null ? score :
+    score === null ? featureEngine.score : clamp(score * 0.55 + featureEngine.score * 0.45);
   const compressionConfirmed = (atrRatio !== null && atrRatio <= cfg.maxAtrRatio) ||
     (bollingerWidthRatio !== null && bollingerWidthRatio <= cfg.maxBollingerWidthRatio);
   const coreConditions = {
@@ -369,9 +397,10 @@ export function evaluateMarketWideLightCandidate({
     support_structure: supportConfirmed,
     resistance_proximity: nearResistance
   };
-  const candidate = Object.values(coreConditions).filter(Boolean).length >= 2 ||
+  const existingCandidate = Object.values(coreConditions).filter(Boolean).length >= 2 ||
     (coreConditions.narrow_base && coreConditions.volatility_compression && coreConditions.support_structure) ||
     (coreConditions.narrow_base && coreConditions.support_structure && coreConditions.resistance_proximity);
+  const candidate = existingCandidate || ['PRE_EXPANSION', 'BREAKOUT_DEVELOPING'].includes(featureEngine.stage);
   const failedConditions = Object.entries(coreConditions).filter(([, passed]) => !passed).map(([name]) => name);
   return {
     symbol: key, layer_visited: true, evaluated: true, scanned: true, scanned_at: at,
@@ -380,8 +409,9 @@ export function evaluateMarketWideLightCandidate({
     reason: candidate ? 'LIGHT_FEATURES_RANK_ONLY' : 'INSUFFICIENT_LIGHT_CONFLUENCE',
     rejection_reason: candidate ? null : (failedConditions[0] || 'INSUFFICIENT_LIGHT_CONFLUENCE'),
     candidate,
-    candidate_score: score === null ? null : Number(score.toFixed(4)),
+    candidate_score: combinedCandidateScore === null ? null : Number(combinedCandidateScore.toFixed(4)),
     expansion_score: expansionScore === null ? null : Number(expansionScore.toFixed(4)),
+    feature_engine: featureEngine,
     light_rank: null, rank_basis: 'LIGHT_EVIDENCE', candidate_rank: null,
     closed_candles_only: true, future_candles_excluded: normalized.futureExcluded,
     metrics: {
@@ -403,7 +433,9 @@ export function evaluateMarketWideLightCandidate({
         score: expansionScore
       },
       core_conditions: coreConditions,
-      optional_participation_available: volumeParticipation.available || tradeParticipation.available
+      optional_participation_available: volumeParticipation.available || tradeParticipation.available,
+      unified_feature_engine_stage: featureEngine.stage,
+      unified_feature_engine_score: featureEngine.score
     },
     details: dataDetails
   };
@@ -444,12 +476,19 @@ export class MarketWideLightScan {
   }
 
   scan({
-    eligible = [], getSeries = () => null, now = this.clock(), cycle = 0,
+    eligible = [], getSeries = () => null, getBookTicker = () => null, getDepth = () => null,
+    benchmarkTicker = null, now = this.clock(), cycle = 0,
     isExceptional = () => false, lastMicroScannedAt = () => null
   } = {}) {
     const at = Number(now), cycleNumber = Math.max(0, Math.trunc(Number(cycle) || 0));
     const uniqueRows = [], duplicateSymbols = [];
     const seen = new Set();
+    const seriesBySymbol = new Map();
+    const getSeriesOnce = value => {
+      const symbol = String(value || '').trim().toUpperCase();
+      if (!seriesBySymbol.has(symbol)) seriesBySymbol.set(symbol, getSeries(symbol));
+      return seriesBySymbol.get(symbol);
+    };
     for (const row of Array.isArray(eligible) ? eligible : []) {
       const symbol = symbolOf(row);
       if (!symbol) continue;
@@ -457,6 +496,9 @@ export class MarketWideLightScan {
       seen.add(symbol); uniqueRows.push(row);
     }
     const eligibleTotal = uniqueRows.length;
+    const marketBaseline24hPct = median(uniqueRows.map(row => numberOrNull(row?.priceChange24h)).filter(Number.isFinite));
+    const btcTicker = benchmarkTicker || uniqueRows.find(row => symbolOf(row) === 'BTCUSDT') || null;
+    const btcSeries = uniqueRows.some(row => symbolOf(row) === 'BTCUSDT') ? getSeriesOnce('BTCUSDT') : null;
     const maxSymbols = Math.max(1, Math.trunc(Number(this.config.maxEligibleSymbols) || 1200));
     if (eligibleTotal > maxSymbols) throw new Error('MARKET_WIDE_LIGHT_ELIGIBLE_LIMIT_EXCEEDED');
     for (const symbol of this.lastEvaluationBySymbol.keys()) {
@@ -468,7 +510,8 @@ export class MarketWideLightScan {
     const exceptional = [];
     for (const row of uniqueRows) {
       const symbol = symbolOf(row);
-      const series = getSeries(symbol);
+      const series = getSeriesOnce(symbol);
+      const bookTicker = getBookTicker(symbol) || null;
       const eventShock = assessCachedEventDrivenBreakout({symbol, series, ticker: row, now: at, config: this.config});
       const latestClosed = Array.isArray(series?.candles)
         ? series.candles.filter(candle => candle?.closed === true && KNOWN(candle.openTime) &&
@@ -482,6 +525,16 @@ export class MarketWideLightScan {
       ].map(value => String(value)).join(':') : null;
       const previous = this.lastEvaluationBySymbol.get(symbol);
       const sameCandle = Boolean(signature && previous?.signature === signature);
+      const btcLast = btcSeries?.candles?.filter(c => c?.closed === true && KNOWN(c.closeTime) && Number(c.closeTime) <= at).at(-1) || null;
+      const bookTickerTimestamp = numberOrNull(bookTicker?.asOf ?? bookTicker?.receivedAt ?? bookTicker?.timestamp);
+      const bookTickerFreshness = bookTickerTimestamp === null ? 'UNKNOWN_TIMESTAMP' :
+        at - bookTickerTimestamp < -1_000 || at - bookTickerTimestamp > (this.config.maxBookTickerAgeMs ?? 60_000)
+          ? 'STALE' : 'FRESH';
+      const featureSignature = [row?.lastPrice,row?.priceChange24h,row?.quoteVolume24h,row?.tradeCount24h,
+        marketBaseline24hPct,btcTicker?.lastPrice,btcTicker?.priceChange24h,btcLast?.closeTime,btcLast?.close,
+        bookTicker?.bidPrice,bookTicker?.askPrice,bookTicker?.bidQty,bookTicker?.askQty,bookTickerTimestamp,bookTickerFreshness]
+        .map(value => value === null || value === undefined ? 'UNKNOWN' : String(value)).join(':');
+      const dynamicFeaturesChanged = Boolean(previous && previous.featureSignature !== featureSignature);
       const age = latestCloseTime === null ? null : Math.max(0, at - latestCloseTime);
       const cacheRegression = Boolean(signature && previous &&
         latestCloseTime < Number(previous.latestCloseTime));
@@ -503,7 +556,7 @@ export class MarketWideLightScan {
           cache_state: 'STALE_DATA',
           evaluation_kind: cacheRegression ? 'CACHE_REGRESSION' : 'CANDLE_REVISION'
         };
-      } else if (sameCandle && age <= this.config.maxCandleAgeMs && previous.result?.evaluated === true) {
+      } else if (sameCandle && !dynamicFeaturesChanged && age <= this.config.maxCandleAgeMs && previous.result?.evaluated === true) {
         result = {
           ...previous.result,
           data_age_ms: age,
@@ -515,7 +568,7 @@ export class MarketWideLightScan {
           data_is_fresh: true,
           evaluation_kind: 'REUSED_CLOSED_CANDLE'
         };
-      } else if (sameCandle && previous.result?.reason === 'STALE_CLOSED_5M_CACHE') {
+      } else if (sameCandle && !dynamicFeaturesChanged && previous.result?.reason === 'STALE_CLOSED_5M_CACHE') {
         result = {
           ...previous.result,
           data_age_ms: age,
@@ -528,7 +581,10 @@ export class MarketWideLightScan {
           evaluation_kind: 'REUSED_STALE_REJECTION'
         };
       } else {
-        result = evaluateMarketWideLightCandidate({symbol, series, now: at, config: this.config});
+        result = evaluateMarketWideLightCandidate({
+          symbol, series, ticker: row, benchmarkCandles: btcSeries?.candles || [], benchmarkTicker: btcTicker,
+          marketBaseline24hPct, bookTicker, depth: getDepth(symbol), now: at, config: this.config
+        });
         const newClosedCandle = latestCloseTime !== null &&
           (!previous || latestCloseTime > Number(previous.latestCloseTime));
         const cacheBecameReady = Boolean(previous && previous.result?.evaluated !== true && result.evaluated === true);
@@ -541,12 +597,14 @@ export class MarketWideLightScan {
           new_closed_candle: newClosedCandle,
           data_is_fresh: result.evaluated === true,
           evaluation_kind: newClosedCandle ? 'NEW_CLOSED_CANDLE' :
+            dynamicFeaturesChanged ? 'LIVE_MARKET_FEATURES_REFRESHED' :
             cacheBecameReady ? 'CACHE_BECAME_READY' :
             incompleteCacheRechecked ? 'RECHECKED_INCOMPLETE_CACHE' : 'NO_NEW_CLOSED_CANDLE'
         };
         if (signature) {
           this.lastEvaluationBySymbol.set(symbol, {
             signature,
+            featureSignature,
             latestCloseTime,
             evaluatedAt: at,
             result: {...result}
@@ -707,6 +765,13 @@ export class MarketWideLightScan {
       event_driven_breakout_extended_total: scanRows.filter(item =>
         item.event_driven_breakout?.detected === true && item.event_driven_breakout?.extended === true).length,
       cache_coverage_ready: coverageReady,
+      unified_feature_engine_available_total: scanRows.filter(item => item.feature_engine?.data_ready === true).length,
+      unified_pre_expansion_total: scanRows.filter(item => item.feature_engine?.stage === 'PRE_EXPANSION').length,
+      unified_breakout_developing_total: scanRows.filter(item => item.feature_engine?.stage === 'BREAKOUT_DEVELOPING').length,
+      unified_watch_early_total: scanRows.filter(item => item.feature_engine?.stage === 'WATCH_EARLY').length,
+      unified_already_extended_total: scanRows.filter(item => item.feature_engine?.stage === 'ALREADY_EXTENDED').length,
+      book_ticker_spread_available_total: scanRows.filter(item => item.feature_engine?.features?.liquidity?.actual_top_of_book_and_depth?.available === true).length,
+      book_ticker_depth_available_total: scanRows.filter(item => item.feature_engine?.features?.liquidity?.actual_top_of_book_and_depth?.depth_available === true).length,
       selection_mode: coverageReady ? 'MARKET_WIDE_CANDIDATE_POOL' : 'BOOTSTRAP_FULL_UNIVERSE',
       candidate_to_micro_total: null,
       candidate_to_deep_total: null,

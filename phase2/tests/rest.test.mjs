@@ -17,6 +17,8 @@ test('TEST_FIXTURE: REST weight estimator is conservative for shared market-data
   assert.equal(estimateBinanceRequestWeight('/api/v3/ticker/24hr',{symbols:'["BTCUSDT","ETHUSDT"]'}),2);
   assert.equal(estimateBinanceRequestWeight('/api/v3/klines',{symbol:'BTCUSDT',interval:'1m',limit:180}),2);
   assert.equal(estimateBinanceRequestWeight('/api/v3/klines',{symbol:'BTCUSDT',interval:'1m',limit:1000}),5);
+  assert.equal(estimateBinanceRequestWeight('/api/v3/ticker/bookTicker',{}),4);
+  assert.equal(estimateBinanceRequestWeight('/api/v3/ticker/bookTicker',{symbol:'BTCUSDT'}),2);
   assert.equal(estimateBinanceRequestWeight('/api/v3/depth',{symbol:'BTCUSDT',limit:100}),5);
   assert.equal(estimateBinanceRequestWeight('/api/v3/depth',{symbol:'BTCUSDT',limit:500}),25);
 });

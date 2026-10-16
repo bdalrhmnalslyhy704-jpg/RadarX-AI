@@ -53,6 +53,8 @@ const SHARED_CACHE_PRUNE_INTERVAL_MS = 1000;
 
 export function estimateBinanceRequestWeight(path, query = {}) {
   if (path === '/api/v3/exchangeInfo') return 20;
+  // Current Binance Spot weight: 2 with one symbol, 4 for all book tickers.
+  if (path === '/api/v3/ticker/bookTicker') return query.symbol ? 2 : 4;
   // Binance Spot GET /api/v3/aggTrades has a request weight of 4.
   if (path === '/api/v3/aggTrades') return 4;
   if (path === '/api/v3/ticker/24hr') {

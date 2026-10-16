@@ -10,6 +10,7 @@ import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansio
 import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId,normalizeMissing,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,reconcileEligibilityQueueAge} from './scan-journey-ledger.mjs';
 import {ScanSchedulerJournal, schedulerLaneReason} from './scan-scheduler.mjs';
 import {MarketWideLightScan, isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
+import {buildUnifiedFeatureSnapshot} from './unified-feature-engine.mjs';
 import {performance} from 'node:perf_hooks';
 
 function normalizeRadarTickerRow(row,quote){
@@ -478,7 +479,7 @@ function dataGate(series,now,config,{historicalReplay=false,allowMissingDepth=fa
   },historical_replay:historicalReplay,allow_missing_depth:allowMissingDepth};
 }
 
-export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,marketContext={},fastContext={},now=Date.now(),config={},historicalReplay=false}={}){
+export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,liveAggTrades=null,marketContext={},fastContext={},now=Date.now(),config={},historicalReplay=false}={}){
   const cfg={...EARLY_EXPANSION_RADAR_DEFAULTS,...config};
   const s={
     '1m':closed(series['1m']||[],now),
@@ -513,6 +514,15 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   const liqQuality=historicalReplay?null:(Number.isFinite(depth?.bids?.length)&&Number.isFinite(depth?.asks?.length)?finite(assessLiquidity({book:depth,ticker24h:{quoteVolume:Number(ticker.quoteVolume24h),count:Number(ticker.tradeCount24h)}},cfg.minLiquidityQuality).quality,null):null);
   const market=marketRegime(marketContext);
   const btcRows=closed(marketContext?.fiveMinute||[],now);
+  const unifiedFeatureEngine=buildUnifiedFeatureSnapshot({
+    symbol:ticker.symbol,candles:s['5m'],ticker,benchmarkCandles:btcRows,
+    marketBaseline24hPct:marketContext?.marketMedianChange24hPct,depth,liveAggTrades,
+    now,config:{minClosedCandles:20,maxCandleAgeMs:cfg.freshness5mMs??8*60_000,
+      maxMove24hPct:cfg.maxQuiet24hMovePct??8,
+      maxMove15mPct:cfg.hardExtended15mMovePct??6,
+      maxMove1hPct:cfg.hardExtended1hMovePct??8,
+      maxMove1hAtr:4,maxMove15mAtr:2.8,maxSpreadBps:cfg.maxSpreadBps??22}
+  });
   const roleEvidence=buildRadarRoleEvidence({candles:s['5m'],relativeCandles:s['5m'],benchmarkCandles:btcRows,now,intervalMs:5*60_000,relativeIntervalMs:5*60_000,volumeRatio:rv5,tradeRatio:microTradeRvol(s['5m']),takerBuyRatio:pressure.buy_ratio,marketExcessPct:hasFiniteNumber(ticker.priceChange24h)&&hasFiniteNumber(marketContext?.marketMedianChange24hPct)?Number(ticker.priceChange24h)-Number(marketContext.marketMedianChange24hPct):null,peerExcessPct:hasFiniteNumber(ticker.relativeStrengthPeer24hPct)?Number(ticker.relativeStrengthPeer24hPct):null,lookbackBars:20});
   const rsi1h=rsi(s['1h'],14);
   const historicalFollowThrough=buildHistoricalFollowThrough(s['5m'],now,{shortBars:6,longBars:24});
@@ -566,10 +576,13 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     (liquidityScore<cfg.minLiquidityQuality || Number(ticker.priceChange24h||0)<=-cfg.hardExtended24hMovePct)
   );
   const highRisk=pumpRisk;
+  // Anti-chase is directional: a mature upward move is extended, while a prior selloff
+  // is handled by dump-risk and market/liquidity gates rather than mislabeled as a late pump.
   const extended=(
-    Math.abs(Number(ticker.priceChange24h)||0)>=cfg.hardExtended24hMovePct||
-    Math.abs(Number(r1h)||0)>=cfg.hardExtended1hMovePct||
-    Math.abs(Number(r15)||0)>=cfg.hardExtended15mMovePct
+    (Number(ticker.priceChange24h)||0)>=cfg.hardExtended24hMovePct||
+    (Number(r1h)||0)>=cfg.hardExtended1hMovePct||
+    (Number(r15)||0)>=cfg.hardExtended15mMovePct||
+    unifiedFeatureEngine.stage==='ALREADY_EXTENDED'
   );
   const scoreParts={
     volume_acceleration:volumeAccel,
@@ -584,13 +597,15 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     mtf_alignment:mtf.score,
     market_regime:market.score,
     freshness_data_quality:dataScore,
-    historical_followthrough:historicalScore
+    historical_followthrough:historicalScore,
+    unified_feature_engine:unifiedFeatureEngine.score
   };
   const weighted=[
     ['volume_acceleration',.12],['rvol_persistence',.11],['compression_expansion',.12],
     ['breakout_proximity',.10],['higher_low',.07],['buy_sell_pressure',.08],['orderbook_imbalance',.08],
     ['liquidity_quality',.08],['volatility_expansion',.09],['mtf_alignment',.09],
-    ['market_regime',.04],['freshness_data_quality',.02],['historical_followthrough',.07]
+    ['market_regime',.04],['freshness_data_quality',.02],['historical_followthrough',.07],
+    ['unified_feature_engine',.10]
   ];
   const usable=weighted.filter(([k])=>Number.isFinite(scoreParts[k]));
   const rawScore=usable.reduce((sum,[k,w])=>sum+scoreParts[k]*w,0)/usable.reduce((sum,[,w])=>sum+w,0);
@@ -633,16 +648,32 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     alreadyExtended:extended
   });
   preExpansion.quiet_base_pre_expansion=quietBasePreExpansion;
+  preExpansion.unified_feature_engine=unifiedFeatureEngine;
   if(quietBasePreExpansion.classification==='PRE_EXPANSION'&&earlyScore!==null&&gate.valid&&!extended&&!historicalReplay){
     preExpansion.stage='PRE_EXPANSION';
     preExpansion.reason='QUIET_BASE_PRE_EXPANSION_CONFIRMED';
   }
-  const decisionBand=preExpansion.stage;
+  let decisionBand=preExpansion.stage;
   const continuation=assessContinuationConfirmation({
     candles:s['5m'],breakoutLevel:br5.resistance,volumeRatio:rv5,
     tradeRatio:tradeRatios.length?Math.max(...tradeRatios):microTradeRvol(s['1m'])??microTradeRvol(s['5m']),
     takerBuyRatio:pressure.buy_ratio,falseBreakout
   });
+  // Promote only an independently qualified, non-extended setup. The existing
+  // data/liquidity gates, anti-chase filter and failed-breakout veto stay mandatory.
+  if(gate.valid&&earlyScore!==null&&!extended&&!falseBreakout&&!historicalReplay&&
+     preExpansion.stage!=='ALREADY_EXTENDED'&&preExpansion.stage!=='DATA_INSUFFICIENT'){
+    if(unifiedFeatureEngine.stage==='PRE_EXPANSION'&&
+       ['WATCH_EARLY','NO_SIGNAL'].includes(preExpansion.stage)){
+      preExpansion.stage='PRE_EXPANSION';
+      preExpansion.reason='UNIFIED_FEATURE_ENGINE_COMPRESSED_BASE_AND_BUY_FLOW';
+    }else if(unifiedFeatureEngine.stage==='BREAKOUT_DEVELOPING'&&continuation.confirmed&&
+       ['WATCH_EARLY','NO_SIGNAL','PRE_EXPANSION'].includes(preExpansion.stage)){
+      preExpansion.stage='BREAKOUT_DEVELOPING';
+      preExpansion.reason='UNIFIED_FEATURE_ENGINE_CLOSED_BREAKOUT_WITH_CONTINUATION';
+    }
+  }
+  decisionBand=preExpansion.stage;
 
   const riskFlags=[
     extended?'ALREADY_EXTENDED':null,
@@ -685,6 +716,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
     decision_band:decisionBand,
     pre_expansion_stage:preExpansion.stage,
     pre_expansion_fingerprint:preExpansion,
+    unified_feature_engine:unifiedFeatureEngine,
     role_evidence:roleEvidence,
     activity_shock:activityShock,
     legacy_decision_band:legacyDecisionBand,
@@ -707,6 +739,8 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
       ema9_15m:ema15a,ema21_15m:ema15b,ema20_1h:ema1a,ema50_1h:ema1b,
       adx:adxv?.adx??null,plus_di:adxv?.pdi??null,minus_di:adxv?.mdi??null,
       macd_line:mac?.line??null,macd_signal:mac?.signal??null,macd_histogram:mac?.histogram??null,
+      unified_feature_engine_stage:unifiedFeatureEngine.stage,
+      unified_feature_engine_score:unifiedFeatureEngine.score,
       rsi_1h:rsi1h,obv_slope:obv,
       five_min_resistance:br5.resistance,five_min_breakout_distance_pct:br5.distance_pct,five_min_broken:br5.broken,
       fifteen_min_resistance:br15.resistance,fifteen_min_breakout_distance_pct:br15.distance_pct,
@@ -1417,6 +1451,9 @@ export class EarlyExpansionRadar{
     this.clock=clock;this.logger=logger;
     this.cachedBtcFiveMinuteContext=null;
     this.cachedBtcOneHourContext=null;
+    this.marketWideBookTickerCache=new Map();
+    this.marketWideBookTickerAt=0;
+    this.marketWideBookTickerTask=null;
     this.marketWideLightScan=new MarketWideLightScan({config:{
       candidateLimit:this.config.marketWideLightScanCandidateLimit,
       rotationReserve:this.config.marketWideLightScanRotationReserve,
@@ -1515,6 +1552,43 @@ export class EarlyExpansionRadar{
     const q=this.normalizeQuote(quote);
     const r=await this.rest.request('/api/v3/ticker/24hr');
     return {rows:(Array.isArray(r.data)?r.data:[]).map(x=>normalizeRadarTickerRow(x,q)).filter(Boolean),source:r.source};
+  }
+  async refreshMarketWideBookTickerSnapshot(maxAgeMs=20_000){
+    const now=this.clock();
+    if(this.marketWideBookTickerCache.size&&now-this.marketWideBookTickerAt<=maxAgeMs)
+      return this.marketWideBookTickerCache;
+    if(this.marketWideBookTickerTask)return this.marketWideBookTickerTask;
+    const task=(async()=>{
+      try{
+        // One public all-symbol bookTicker snapshot supplies the real best bid/ask
+        // without issuing a depth request for every eligible symbol.
+        const response=await this.rest.request('/api/v3/ticker/bookTicker');
+        const raw=Array.isArray(response?.data)?response.data:[];
+        const next=new Map();
+        for(const row of raw){
+          const symbol=String(row?.symbol||'').trim().toUpperCase();
+          const bid=Number(row?.bidPrice),ask=Number(row?.askPrice);
+          if(!symbol||!Number.isFinite(bid)||bid<=0||!Number.isFinite(ask)||ask<bid)continue;
+          next.set(symbol,{
+            bidPrice:row.bidPrice,askPrice:row.askPrice,
+            bidQty:row.bidQty??null,askQty:row.askQty??null,
+            source:'BINANCE_PUBLIC_REST_BOOK_TICKER',
+            asOf:Number(response?.receivedAt)||this.clock()
+          });
+        }
+        if(next.size){
+          this.marketWideBookTickerCache=next;
+          this.marketWideBookTickerAt=Number(response?.receivedAt)||this.clock();
+          return next;
+        }
+      }catch(error){
+        this.noteError(error,'market-wide-book-ticker');
+      }
+      return this.marketWideBookTickerAt>0&&this.clock()-this.marketWideBookTickerAt<=60_000
+        ?this.marketWideBookTickerCache:new Map();
+    })().finally(()=>{if(this.marketWideBookTickerTask===task)this.marketWideBookTickerTask=null;});
+    this.marketWideBookTickerTask=task;
+    return task;
   }
   updateFastState(row){
     const now=this.clock(),history=this.fastState.get(row.symbol)||[],prev=history.at(-1),prev2=history.at(-2);
@@ -1901,19 +1975,38 @@ export class EarlyExpansionRadar{
     // Closed higher-timeframe windows are reused only until a new Binance candle
     // closes. The newest closed timestamp is checked against the UTC interval edge;
     // depth remains live because order-book liquidity can change between cycles.
-    const [r15,r1h,r4h,dd]=await Promise.all([
+    const tradeFlowAsOf=this.clock();
+    // Optional recent trade microstructure is fetched separately from Klines. If
+    // the public endpoint fails or is stale, candle-based evidence still runs.
+    const liveTradesTask=cfg.liveAggTradesEnabled===false
+      ?Promise.resolve({data:[],source:'LIVE_AGG_TRADES_DISABLED'})
+      :(async()=>{
+        try{
+          return await this.rest.request('/api/v3/aggTrades',{
+            symbol:row.symbol,startTime:tradeFlowAsOf-(Number(cfg.liveAggTradeLookbackMs)||10*60_000),
+            endTime:tradeFlowAsOf,limit:1000
+          });
+        }catch(error){
+          this.noteError(error,'live-agg-trades');
+          return {data:[],source:'BINANCE_PUBLIC_REST_AGG_TRADES_UNAVAILABLE',error:String(error?.message??error)};
+        }
+      })();
+    const [r15,r1h,r4h,dd,ag]=await Promise.all([
       this.deepTimeframeKlines(row.symbol,'15m',cfg.fifteenMinuteKlines,cfg.freshness15mMs),
       this.deepTimeframeKlines(row.symbol,'1h',cfg.oneHourKlines,cfg.freshness1hMs),
       this.deepTimeframeKlines(row.symbol,'4h',cfg.fourHourKlines,cfg.freshness4hMs),
-      withRetry(()=>this.rest.depth(row.symbol,100),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep})
+      withRetry(()=>this.rest.depth(row.symbol,100),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep}),
+      liveTradesTask
     ]);
     series['15m']=r15.candles;series['1h']=r1h.candles;series['4h']=r4h.candles;
-    sources.push(r15.source,r1h.source,r4h.source,dd.source);
+    sources.push(r15.source,r1h.source,r4h.source,dd.source,ag.source);
     const candleAsOf=this.clock();
     if(typeof onClosedCandles==='function')onClosedCandles(Object.fromEntries(
       Object.entries(series).map(([tf,rows])=>[tf,closedCandleSnapshot(closed(rows,candleAsOf),candleAsOf)])
     ));
-    return buildEarlyExpansionEvidence({series,ticker:row,depth:dd.data,marketContext,fastContext:fast,now:candleAsOf,config:cfg,historicalReplay:false,sourceList:sources});
+    return buildEarlyExpansionEvidence({series,ticker:row,depth:dd.data,
+      liveAggTrades:Array.isArray(ag?.data)?ag.data:[],marketContext,fastContext:fast,
+      now:candleAsOf,config:cfg,historicalReplay:false,sourceList:sources});
   }
   cleanupRuntimeRingBuffers(now=this.clock()){
     const activeSymbols=new Set((this.universe||[]).map(symbol=>String(symbol||'').trim().toUpperCase()).filter(Boolean));
@@ -2129,7 +2222,9 @@ export class EarlyExpansionRadar{
       let marketWideLightResult=null,marketWideLightApplied=false;
       let microSelectionInput=eligible;
       const marketWideLightStartedAt=this.clock();
+      let bookTickerBySymbol=new Map();
       if(this.config.marketWideLightScanEnabled!==false&&this.marketWideKlineCache){
+        bookTickerBySymbol=await this.refreshMarketWideBookTickerSnapshot();
         try{
           this.marketWideKlineCache.setSymbols(eligible.map(row=>row.symbol));
           if(!this.marketWideKlineCache.running)this.marketWideKlineCache.start();
@@ -2157,6 +2252,8 @@ export class EarlyExpansionRadar{
         try{
           marketWideLightResult=this.marketWideLightScan.scan({
             eligible,getSeries:symbol=>this.marketWideKlineCache?.getSeries(symbol,96)||null,
+            benchmarkTicker:rawBySymbol.get('BTCUSDT')||null,
+            getBookTicker:symbol=>bookTickerBySymbol.get(String(symbol||'').toUpperCase())||null,
             now:fastSeenAt,cycle,
             isExceptional:row=>{
               const fast=fastBySymbol.get(row.symbol)||{};
