@@ -294,6 +294,7 @@ export function evaluateHistoricalLearningMetrics(dataset,{moderateMovePct=5,str
   const ece=calibrationRows.length?populated.reduce((sum,bin)=>sum+bin.count/calibrationRows.length*bin.absolute_calibration_error,0):null;
   const byRadar={};
   const byRegime={};
+  const byMarketCohort={};
   for(const row of evaluable){
     const radar=row.radar||'UNKNOWN_RADAR',regime=row.market_regime||'UNKNOWN';
     if(!byRadar[radar])byRadar[radar]={rows:0,accepted:0,successes:0,false_alerts:0,missed_move_decisions:0,unavailable:0};
@@ -307,6 +308,15 @@ export function evaluateHistoricalLearningMetrics(dataset,{moderateMovePct=5,str
     if(row.decision==='ACCEPTED'&&row.success_label===true)rg.successful_alerts++;
     if(['FALSE_ALERT','EARLY_SIGNAL_FAILED'].includes(row.outcome_class))rg.false_alerts++;
     if(row.outcome_class==='MISSED_MOVE_DECISION')rg.missed_move_decisions++;
+    const cohort=row.market_event_cohort||'';
+    if(cohort){
+      if(!byMarketCohort[cohort])byMarketCohort[cohort]={rows:0,accepted:0,successful_alerts:0,false_alerts:0,missed_move_decisions:0};
+      const cg=byMarketCohort[cohort];cg.rows++;
+      if(row.decision==='ACCEPTED')cg.accepted++;
+      if(row.decision==='ACCEPTED'&&row.success_label===true)cg.successful_alerts++;
+      if(['FALSE_ALERT','EARLY_SIGNAL_FAILED'].includes(row.outcome_class))cg.false_alerts++;
+      if(row.outcome_class==='MISSED_MOVE_DECISION')cg.missed_move_decisions++;
+    }
   }
   for(const [radar,value] of Object.entries(byRadar)){
     value.precision_pct=pct(value.successes,value.successes+value.false_alerts);
@@ -314,6 +324,10 @@ export function evaluateHistoricalLearningMetrics(dataset,{moderateMovePct=5,str
   }
   for(const value of Object.values(byRegime)){
     value.precision_pct=pct(value.successful_alerts,value.successful_alerts+value.false_alerts);
+  }
+  for(const value of Object.values(byMarketCohort)){
+    value.precision_pct=pct(value.successful_alerts,value.successful_alerts+value.false_alerts);
+    value.false_alert_rate_pct=pct(value.false_alerts,value.successful_alerts+value.false_alerts);
   }
   return {
     schema_version:'RADARX_HISTORICAL_LEARNING_METRICS_V1',
@@ -345,6 +359,7 @@ export function evaluateHistoricalLearningMetrics(dataset,{moderateMovePct=5,str
     },
     by_radar:byRadar,
     by_market_regime:byRegime,
+    by_market_cohort:byMarketCohort,
     market_events:events,
     limitations:[
       'Precision is computed only for accepted decisions with a fully observed outcome horizon.',
