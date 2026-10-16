@@ -492,7 +492,7 @@ export class MarketWideLightScan {
     const eligibleTotal = uniqueRows.length;
     const marketBaseline24hPct = median(uniqueRows.map(row => numberOrNull(row?.priceChange24h)).filter(Number.isFinite));
     const btcTicker = benchmarkTicker || uniqueRows.find(row => symbolOf(row) === 'BTCUSDT') || null;
-    const btcSeries = getSeries('BTCUSDT');
+    const btcSeries = uniqueRows.some(row => symbolOf(row) === 'BTCUSDT') ? getSeries('BTCUSDT') : null;
     const maxSymbols = Math.max(1, Math.trunc(Number(this.config.maxEligibleSymbols) || 1200));
     if (eligibleTotal > maxSymbols) throw new Error('MARKET_WIDE_LIGHT_ELIGIBLE_LIMIT_EXCEEDED');
     for (const symbol of this.lastEvaluationBySymbol.keys()) {
