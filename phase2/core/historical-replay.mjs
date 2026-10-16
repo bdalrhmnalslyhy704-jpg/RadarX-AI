@@ -277,8 +277,9 @@ export function runHistoricalReplay({
     const maxHigh = forwardRows.reduce((best, x) => Math.max(best, x.high), close);
     const minLow = forwardRows.reduce((best, x) => Math.min(best, x.low), close);
     const targetClose = horizonObserved ? forwardRows.findLast(x=>x.closeTime>=horizonEndAt-1)?.close : null;
-    const maxAdversePct = close>0 ? Number(((minLow-close)/close*100).toFixed(4)) : null;
-    const pre5DrawdownPct = adverseExcursionBeforeTarget(forwardRows,close,close*1.05,horizonEndAt);
+    const maxAdversePct = horizonObserved&&close>0 ? Number(((minLow-close)/close*100).toFixed(4)) : null;
+    const pre5DrawdownPct = (f5!==null||horizonObserved)
+      ? adverseExcursionBeforeTarget(forwardRows,close,close*1.05,horizonEndAt) : null;
     const alert = raw?.alert ?? null;
     const strong = alert?.strong_move ?? {};
     const elite = alert?.elite_gate ?? raw?.eliteGate ?? {};
