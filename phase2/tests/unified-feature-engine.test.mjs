@@ -23,8 +23,8 @@ function makeQuietBase({now=1_900_000_000_000,n=80}={}) {
     const quiet=i>=68;
     const close=i<56
       ? 100 + (i%8)*0.22
-      : 101.45 + (i-56)*0.025;
-    const finalClose=quiet ? 102.02 + (i-68)*0.006 : close;
+      : 101.5 + (i-56)*0.03;
+    const finalClose=quiet ? 101.84 + (i-68)*0.002 : close;
     rows.push(candle(origin+i*STEP,finalClose,{
       open:finalClose-0.006,
       high:finalClose+(quiet?0.018:0.13),
