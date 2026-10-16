@@ -268,7 +268,8 @@ async function main() {
     const expectedWindowCandles = Math.floor((end - start) / MINUTE_MS) + 1;
     const observedWindowCandles = replay.steps.length;
     const windowCandlesComplete = observedWindowCandles >= expectedWindowCandles;
-    const outcomeObservationComplete = observationEnd >= end + outcomeHorizonHours * HOUR_MS && candleFetch.complete;
+    const outcomeObservationComplete = observationEnd >= end + outcomeHorizonHours * HOUR_MS && candleFetch.complete &&
+      replay.steps.length>0 && replay.steps.every(step=>step?.outcome?.horizon_observed===true);
     replay.data_quality.candle_pages = candleFetch.pages;
     replay.data_quality.candle_fetch_complete = windowCandlesComplete;
     replay.data_quality.outcome_candle_fetch_complete = outcomeObservationComplete;
