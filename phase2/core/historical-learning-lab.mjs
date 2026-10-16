@@ -89,6 +89,7 @@ export function classifyHistoricalLearningRow(row={},{
     move_class:moveClass,
     outcome_class:outcomeClass,
     horizon_observed:horizonObserved,
+    outcome_horizon_ms:finite(outcome.horizon_ms),
     forward_max_upside_pct_from_decision:move,
     max_adverse_excursion_pct_from_decision:finite(outcome.max_adverse_excursion_pct_from_decision),
     max_adverse_excursion_before_moderate_target_pct:finite(outcome.max_adverse_excursion_before_moderate_target_pct),
@@ -316,7 +317,7 @@ function temporalSplit(rows,{trainFraction=0.6,validationFraction=0.2,embargoMs=
     purged_rows:0,embargo_ms:Math.max(0,Number(embargoMs)||0)
   };
   for(const row of sorted){
-    const at=timeOf(row),horizon=Math.max(0,finite(row?.outcome?.horizon_ms)??0);
+    const at=timeOf(row),horizon=Math.max(0,finite(row?.outcome_horizon_ms??row?.outcome?.horizon_ms)??0);
     const labelEnd=at+horizon;
     if(at<validationStart){
       if(labelEnd+split.embargo_ms>=validationStart){split.purged_rows++;continue;}
@@ -338,8 +339,10 @@ function temporalSplit(rows,{trainFraction=0.6,validationFraction=0.2,embargoMs=
 
 export function splitHistoricalLearningRows(rows,options={}){
   const result=temporalSplit(rows,options);
-  return {...result,train_count:result.train.length,validation_count:result.validation.length,test_count:result.test.length,
-    train:result.train.map(row=>row.timestamp),validation:result.validation.map(row=>row.timestamp),test:result.test.map(row=>row.timestamp)};
+  const trainRows=result.train,validationRows=result.validation,testRows=result.test;
+  return {...result,train_rows:trainRows,validation_rows:validationRows,test_rows:testRows,
+    train_count:trainRows.length,validation_count:validationRows.length,test_count:testRows.length,
+    train:trainRows.map(row=>row.timestamp),validation:validationRows.map(row=>row.timestamp),test:testRows.map(row=>row.timestamp)};
 }
 
 export function auditHistoricalMatrixCoverage(matrixReport,{expectedSymbols=[],expectedWindows=[],requiredRegimes=['BULL_TREND','BEAR_TREND','SIDEWAYS']}={}){
