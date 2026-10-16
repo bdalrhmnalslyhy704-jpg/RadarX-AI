@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
-import {dirname,resolve,basename,extname} from 'node:path';
+import {dirname,resolve} from 'node:path';
 import {
   buildHistoricalLearningDataset,evaluateHistoricalLearningMetrics,
   splitHistoricalLearningRows,auditHistoricalMatrixCoverage,
@@ -87,7 +87,8 @@ async function main(){
   const expectedWindowsArg=flag(args,'--expected-windows');
   const regimeMapArg=flag(args,'--regime-map');
   const output=resolve(flag(args,'--output','./reports/radarx-historical-learning-lab-'+new Date().toISOString().replace(/[:.]/g,'-')+'.json'));
-  const datasetOutput=resolve(flag(args,'--dataset-output',output.replace(/\.json$/i,'-dataset.json')));
+  const defaultDatasetOutput=/\.json$/i.test(output)?output.replace(/\.json$/i,'-dataset.json'):output+'-dataset.json';
+  const datasetOutput=resolve(flag(args,'--dataset-output',defaultDatasetOutput));
   if(args.includes('--dry-run')){
     process.stdout.write(JSON.stringify({
       status:'DRY_RUN_NO_NETWORK',
@@ -103,9 +104,9 @@ async function main(){
     },null,2)+'\n');return;
   }
   if(!reportsArg&&!matrixArg)throw new Error('HISTORICAL_REPLAY_REPORTS_REQUIRED');
-  const loadPaths=[...listArg(reportsArg)];
-  if(matrixArg&&!loadPaths.includes(matrixArg))loadPaths.push(matrixArg);
+  const loadPaths=reportsArg?listArg(reportsArg):[matrixArg];
   const expanded=await expandReports(loadPaths);
+  const loadedMatrixSummary=matrixArg?(await readJson(matrixArg)).value:null;
   const reportMetadata={...expanded.windowMetadata};
   if(regimeMapArg){
     const regimeDoc=(await readJson(regimeMapArg)).value;
@@ -115,16 +116,20 @@ async function main(){
     }
   }
   let matrixMetadata=expanded.matrixWindows;
-  if(matrixArg){
-    const loadedMatrix=(await readJson(matrixArg)).value;
-    if(Array.isArray(loadedMatrix?.windows)){
-      matrixMetadata=loadedMatrix.windows.map(win=>{
-        const id=String(win.id??win.window_id??'');
-        const start=startMs({window:win.window??{}});
-        const matching=expanded.matrixWindows.find(other=>start!==null&&startMs(other)===start);
-        return matching??{...win,id,results:[]};
-      });
-    }
+  if(Array.isArray(loadedMatrixSummary?.windows)){
+    matrixMetadata=loadedMatrixSummary.windows.map(win=>{
+      const id=String(win.id??win.window_id??'');
+      const start=startMs({window:win.window??win});
+      const matching=expanded.matrixWindows.find(other=>start!==null&&startMs(other)===start);
+      const report=expanded.reports.find(item=>start!==null&&startMs(item)===start);
+      if(report){
+        report.id=id;
+        report.window={...(report.window??report.range??{}),id};
+        reportMetadata[id]={...(reportMetadata[id]??{}),window_id:id,market_regime:win.market_regime?.regime??win.market_regime??'UNKNOWN'};
+      }
+      return {...(matching??{}),...win,id,window:win.window??matching?.window??report?.window??{},
+        results:matching?.results??report?.results??[],market_regime:win.market_regime??reportMetadata[id]?.market_regime??'UNKNOWN'};
+    });
   }
   const reports=expanded.reports.map(report=>{
     const id=String(report.id??stableWindowId(report));
@@ -135,13 +140,15 @@ async function main(){
   const metrics=evaluateHistoricalLearningMetrics(dataset,{moderateMovePct,strongMovePct});
   const symbols=listArg(expectedSymbolsArg).map(x=>x.toUpperCase());
   const windows=listArg(expectedWindowsArg);
-  const expectationsExplicit=Boolean(expectedSymbolsArg&&expectedWindowsArg);
   const inferredSymbols=[...new Set(reports.flatMap(report=>(report.results??[]).map(row=>String(row.symbol??'').toUpperCase())).filter(Boolean))];
   const inferredWindows=[...new Set(reports.map(stableWindowId))];
+  const plannedSymbols=Array.isArray(loadedMatrixSummary?.symbols)?loadedMatrixSummary.symbols.map(x=>String(x).toUpperCase()):[];
+  const plannedWindows=Array.isArray(loadedMatrixSummary?.windows)?loadedMatrixSummary.windows.map(w=>String(w.id??w.window_id??'' )).filter(Boolean):[];
+  const expectedSymbols=symbols.length?symbols:(plannedSymbols.length?plannedSymbols:inferredSymbols);
+  const expectedWindows=windows.length?windows:(plannedWindows.length?plannedWindows:inferredWindows);
+  const expectationsExplicit=Boolean((expectedSymbolsArg||plannedSymbols.length)&&(expectedWindowsArg||plannedWindows.length));
   const coverage=auditHistoricalMatrixCoverage({windows:matrixMetadata},{
-    expectedSymbols:symbols.length?symbols:inferredSymbols,
-    expectedWindows:windows.length?windows:inferredWindows,
-    requiredRegimes:HISTORICAL_MATRIX_REQUIRED_REGIMES
+    expectedSymbols,expectedWindows,requiredRegimes:HISTORICAL_MATRIX_REQUIRED_REGIMES
   });
   const coverageGate={
     ...coverage,
