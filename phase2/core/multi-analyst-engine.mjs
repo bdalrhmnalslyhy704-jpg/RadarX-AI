@@ -734,10 +734,10 @@ function specialistAnalysis(candidate, market={}, calibration=null){
       Number.isFinite(priceAccel)?clamp(50+priceAccel*18):null
     ])||50),
     pressure:clamp(avg([
-      volumeScore,bookScore,absorptionScore,
+      volumeScore,bookScore,buyPressureScore,
       Number.isFinite(tRatio)?clamp(50+(tRatio-.5)*280):null
     ])||50),
-    structure:clamp(avg([structureScore,srScore,mtf])||50),
+    structure:clamp(avg([structureScore,breakoutPressure,mtf])||50),
     timing:clamp(avg([
       Number.isFinite(resistanceGap)?clamp(100-Math.max(0,resistanceGap)*15):50,
       Number.isFinite(sm.headroom)?clamp(100-Math.max(0,sm.headroom)*12):50,
