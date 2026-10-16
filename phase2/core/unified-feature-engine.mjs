@@ -325,10 +325,11 @@ export function buildUnifiedFeatureSnapshot({
   const failedBreakout = Number(last.high) > (resistance ?? Infinity) && recentClose <= (resistance ?? -Infinity) &&
     resistance !== null;
   const return5m = returnPct(rows, 1), return15m = returnPct(rows, 3), return1h = returnPct(rows, 12), return4h = returnPct(rows, 48);
+  // Anti-chase applies to upward extension only; large selloffs can be a different setup.
   const move1hAtr = currentAtr !== null && currentAtr > 0 && rows.length > 12
-    ? Math.abs(Number(rows.at(-1).close) - Number(rows.at(-13).close)) / currentAtr : null;
+    ? (Number(rows.at(-1).close) - Number(rows.at(-13).close)) / currentAtr : null;
   const move15mAtr = currentAtr !== null && currentAtr > 0 && rows.length > 3
-    ? Math.abs(Number(rows.at(-1).close) - Number(rows.at(-4).close)) / currentAtr : null;
+    ? (Number(rows.at(-1).close) - Number(rows.at(-4).close)) / currentAtr : null;
 
   const benchmark5m = returnPct(benchmarkRows, 1);
   const benchmark15m = returnPct(benchmarkRows, 3);
@@ -367,9 +368,9 @@ export function buildUnifiedFeatureSnapshot({
   const relativeWeak = (relative15m !== null && relative15m < -0.75) ||
     (relative1h !== null && relative1h < -1.5) ||
     (relativeMarket24h !== null && relativeMarket24h < -3.0);
-  const extended = Math.abs(daily) >= Number(config.maxMove24hPct ?? 12) ||
-    (return15m !== null && Math.abs(return15m) >= Number(config.maxMove15mPct ?? 4)) ||
-    (return1h !== null && Math.abs(return1h) >= Number(config.maxMove1hPct ?? 7)) ||
+  const extended = daily >= Number(config.maxMove24hPct ?? 12) ||
+    (return15m !== null && return15m >= Number(config.maxMove15mPct ?? 4)) ||
+    (return1h !== null && return1h >= Number(config.maxMove1hPct ?? 7)) ||
     (move1hAtr !== null && move1hAtr >= Number(config.maxMove1hAtr ?? 4)) ||
     (move15mAtr !== null && move15mAtr >= Number(config.maxMove15mAtr ?? 2.8));
   const structureScore = higherLows ? 85 : recentLow !== null ? 55 : null;
