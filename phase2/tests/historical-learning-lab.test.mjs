@@ -33,6 +33,7 @@ test('historical labels separate successful early setups, failed early setups, f
   assert.equal(classifyHistoricalLearningRow(row({decision:'ACCEPTED',mode:'EARLY_WARNING',move:8})).outcome_class,'EARLY_SIGNAL_SUCCESS');
   assert.equal(classifyHistoricalLearningRow(row({decision:'ACCEPTED',mode:'EARLY_WARNING',move:1})).outcome_class,'EARLY_SIGNAL_FAILED');
   assert.equal(classifyHistoricalLearningRow(row({decision:'ACCEPTED',mode:'STRICT',move:1})).outcome_class,'FALSE_ALERT');
+  assert.equal(classifyHistoricalLearningRow(row({decision:'ACCEPTED',mode:'STRICT',move:18})).outcome_class,'SIGNAL_SUCCESS');
   assert.equal(classifyHistoricalLearningRow(row({decision:'REJECTED',move:18})).outcome_class,'MISSED_MOVE_DECISION');
   assert.equal(classifyHistoricalLearningRow(row({decision:'REJECTED',move:1})).outcome_class,'CORRECT_REJECTION');
   assert.equal(classifyHistoricalLearningRow(row({decision:'ACCEPTED',move:1,horizon:false})).outcome_class,'OUTCOME_UNAVAILABLE');
@@ -69,6 +70,18 @@ test('metrics count lead time and unique missed market events separately from mi
   assert.equal(metrics.move_event_capture_pct,50);
   assert.equal(metrics.median_lead_time_minutes,5);
   assert.equal(metrics.median_max_drawdown_pct,-1.8);
+});
+
+test('false-alert rate does not double-count failed early setups',()=>{
+  const dataset=buildHistoricalLearningDataset([{window:{start_time:5},results:[{symbol:'EARLYUSDT',steps:[
+    row({symbol:'EARLYUSDT',decision:'ACCEPTED',mode:'EARLY_WARNING',move:1}),
+    row({symbol:'EARLYUSDT',timestamp:1_800_000_060_000,decision:'ACCEPTED',mode:'STRICT',move:1})
+  ]}]}]);
+  const metrics=evaluateHistoricalLearningMetrics(dataset);
+  assert.equal(metrics.accepted_decisions,2);
+  assert.equal(metrics.early_signal_failed,1);
+  assert.equal(metrics.false_alerts,2);
+  assert.equal(metrics.false_alert_rate_pct,100);
 });
 
 test('score values do not masquerade as probabilities; explicit probabilities get Brier and ECE scores',()=>{
