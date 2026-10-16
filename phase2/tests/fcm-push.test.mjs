@@ -162,11 +162,6 @@ test('FCM provider still fails closed for malformed or incomplete base64 service
 test('FCM data-only payload carries shared lifecycle state and uses the lifecycle label in notification copy',async()=>{
   const {serviceAccount}=accountFixture();
   let sent=null;
-  const fetchImpl=async url=>{
-    if(String(url)==='https://oauth2.googleapis.com/token')return mockResponse(200,{access_token:'TEST_FIXTURE_ACCESS_TOKEN',expires_in:3600});
-    sent=JSON.parse(arguments[1]?.body||'{}');
-    return mockResponse(200,{name:'projects/radarx-fixture-project/messages/lifecycle-id'});
-  };
   const saferFetch=async(url,options)=>{
     if(String(url)==='https://oauth2.googleapis.com/token')return mockResponse(200,{access_token:'TEST_FIXTURE_ACCESS_TOKEN',expires_in:3600});
     sent=JSON.parse(options.body);
