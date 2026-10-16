@@ -143,3 +143,65 @@ test('paper-only flags remain explicit and output identifies real closed-candle 
   assert.equal(result.features.data_quality.closed_candles_only,true);
   assert.equal(result.features.data_quality.taker_flow_available,true);
 });
+
+
+function aggTrade(id,time,buyerInitiated,{price=101,qty=1}={}) {
+  return {a:id,p:String(price),q:String(qty),f:id,l:id,T:time,m:!buyerInitiated,M:true};
+}
+function liveAggSample(now,{
+  baseBuyer=6,baseSeller=6,currentBuyer=14,currentSeller=6,latestOffsetMs=60_000
+}={}) {
+  const out=[];let id=1;
+  const baseTotal=baseBuyer+baseSeller;
+  for(let i=0;i<baseTotal;i++){
+    const buyer=i<baseBuyer;
+    out.push(aggTrade(id++,now-590_000+i*4_000,buyer));
+  }
+  const currentTotal=currentBuyer+currentSeller;
+  const start=now-290_000,end=now-latestOffsetMs;
+  for(let i=0;i<currentTotal;i++){
+    const buyer=i<currentBuyer;
+    const time=currentTotal===1?end:start+(end-start)*i/(currentTotal-1);
+    out.push(aggTrade(id++,Math.floor(time),buyer));
+  }
+  return out;
+}
+
+test('fresh aggregate trades compare buyer-initiated execution share against the preceding five-minute baseline without contaminating closed candles',()=>{
+  const base=makeQuietBase();
+  const liveAggTrades=liveAggSample(base.now);
+  const result=snapshot({liveAggTrades});
+  const flow=result.features.live_trade_flow;
+  assert.equal(flow.available,true,JSON.stringify(flow));
+  assert.equal(flow.status,'FRESH_COMPLETE_10M_SAMPLE');
+  assert.equal(flow.previous_5m.buyer_execution_share,0.5);
+  assert.equal(flow.current.buyer_execution_share,0.7);
+  assert.equal(flow.deltas.buyer_execution_share,0.2);
+  assert.ok(flow.deltas.execution_count_vs_previous_5m>1.12);
+  assert.equal(result.closed_candle_count,base.rows.length,'trade records remain separate from the finalized candle series');
+  assert.equal(result.features.data_quality.live_trade_flow_available,true);
+});
+
+test('stale or truncated live aggregate trades never confirm current buyer pressure',()=>{
+  const base=makeQuietBase();
+  const stale=snapshot({liveAggTrades:liveAggSample(base.now,{latestOffsetMs:180_000})});
+  assert.equal(stale.features.live_trade_flow.available,false);
+  assert.equal(stale.features.live_trade_flow.status,'STALE_LIVE_TRADE_SAMPLE');
+  const truncatedSample=liveAggSample(base.now);
+  truncatedSample.push(...Array.from({length:1000-truncatedSample.length},(_,i)=>
+    aggTrade(10000+i,base.now-1000,true)));
+  const truncated=snapshot({liveAggTrades:truncatedSample});
+  assert.equal(truncated.features.live_trade_flow.available,false);
+  assert.equal(truncated.features.live_trade_flow.status,'SAMPLE_TRUNCATED');
+});
+
+test('future and malformed aggregate trades are excluded from the live flow window',()=>{
+  const base=makeQuietBase();
+  const raw=liveAggSample(base.now);
+  raw.push(aggTrade(99001,base.now+5000,true));
+  raw.push({a:99002,p:'not-a-price',q:'1',f:99002,l:99002,T:base.now-1000,m:false});
+  const result=snapshot({liveAggTrades:raw});
+  assert.equal(result.features.live_trade_flow.available,true);
+  assert.equal(result.features.live_trade_flow.current.execution_count,20);
+  assert.equal(result.closed_candle_count,base.rows.length);
+});
