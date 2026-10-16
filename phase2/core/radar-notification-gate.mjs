@@ -370,7 +370,7 @@ const SIGNAL_LIFECYCLE_TTL_MS=6*60*60*1000;
 const SIGNAL_LIFECYCLE_MAX=5000;
 const lifecycleText=v=>String(v??'').trim().toUpperCase();
 const lifecycleUnique=xs=>[...new Set(xs.filter(Boolean).map(x=>String(x).slice(0,120)))];
-function advanceSignalLifecycle(alert,gate,{now=Date.now()}={}){
+export function advanceSignalLifecycle(alert,gate,{now=Date.now()}={}){
   const ts=Number.isFinite(Number(now))?Number(now):Date.now();
   for(const [k,v] of signalLifecycleByCandidate)if(ts-Number(v.observed_at)>SIGNAL_LIFECYCLE_TTL_MS)signalLifecycleByCandidate.delete(k);
   const symbol=lifecycleText(alert?.symbol??alert?.asset);
