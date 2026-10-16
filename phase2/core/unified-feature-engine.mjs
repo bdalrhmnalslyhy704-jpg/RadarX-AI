@@ -81,6 +81,105 @@ function buyShare(rows) {
   const buy = valid.reduce((sum, c) => sum + Number(c.takerBuyQuoteVolume), 0);
   return quote > 0 ? buy / quote : null;
 }
+
+function summarizeLiveAggTradeFlow(input, closedRows, now, config = {}) {
+  const raw = Array.isArray(input) ? input : [];
+  const lookbackMs = Math.max(60_000, Number(config.liveAggTradeLookbackMs) || 10 * 60_000);
+  const windowMs = Math.max(30_000, Number(config.liveAggTradeWindowMs) || 5 * 60_000);
+  const maxRows = Math.max(1, Math.trunc(Number(config.liveAggTradeLimit) || 1000));
+  const maxAgeMs = Math.max(1_000, Number(config.liveAggTradeMaxAgeMs) || 90_000);
+  const windowStart = now - windowMs;
+  const baselineStart = now - lookbackMs;
+  const sampleTruncated = raw.length >= maxRows;
+  const valid = raw.map(trade => {
+    const time = num(trade?.T);
+    const price = num(trade?.p);
+    const qty = num(trade?.q);
+    const firstId = num(trade?.f);
+    const lastId = num(trade?.l);
+    if (time === null || price === null || qty === null || price <= 0 || qty <= 0 ||
+        typeof trade?.m !== 'boolean' || time < baselineStart || time > now) return null;
+    const fills = firstId !== null && lastId !== null && Number.isInteger(firstId) &&
+      Number.isInteger(lastId) && lastId >= firstId ? lastId - firstId + 1 : 1;
+    return {time, price, qty, quote: price * qty, buyerMaker: trade.m, fills};
+  }).filter(Boolean).sort((a, b) => a.time - b.time);
+  const base = valid.filter(t => t.time >= baselineStart && t.time < windowStart);
+  const recent = valid.filter(t => t.time >= windowStart && t.time <= now);
+  const summarize = rows => {
+    const fills = rows.reduce((sum, t) => sum + t.fills, 0);
+    const buyerFills = rows.reduce((sum, t) => sum + (t.buyerMaker ? 0 : t.fills), 0);
+    const quote = rows.reduce((sum, t) => sum + t.quote, 0);
+    const buyQuote = rows.reduce((sum, t) => sum + (t.buyerMaker ? 0 : t.quote), 0);
+    return {
+      aggregate_rows: rows.length,
+      execution_count: fills,
+      buyer_initiated_execution_count: buyerFills,
+      buyer_execution_share: fills > 0 ? buyerFills / fills : null,
+      quote_notional: quote,
+      buyer_initiated_quote_notional: buyQuote,
+      buyer_quote_share: quote > 0 ? buyQuote / quote : null
+    };
+  };
+  const b = summarize(base), c = summarize(recent);
+  const latestTime = recent.length ? recent.at(-1).time : null;
+  const ageMs = latestTime === null ? null : Math.max(0, now - latestTime);
+  const baselineClosedBuyShare = buyShare(closedRows.slice(-27, -3));
+  const tradeShareDelta = c.buyer_execution_share !== null && b.buyer_execution_share !== null
+    ? c.buyer_execution_share - b.buyer_execution_share : null;
+  const quoteShareDelta = c.buyer_quote_share !== null && b.buyer_quote_share !== null
+    ? c.buyer_quote_share - b.buyer_quote_share : null;
+  const baselineExecutionCount = b.execution_count;
+  const baselineQuoteNotional = b.quote_notional;
+  const executionRatio = !sampleTruncated && baselineExecutionCount > 0
+    ? c.execution_count / baselineExecutionCount : null;
+  const quoteRatio = !sampleTruncated && baselineQuoteNotional > 0
+    ? c.quote_notional / baselineQuoteNotional : null;
+  const minRows = Math.max(1, Math.trunc(Number(config.liveAggTradeMinExecutions) || 10));
+  const enoughRows = c.execution_count >= minRows && baselineExecutionCount >= minRows;
+  const fresh = ageMs !== null && ageMs <= maxAgeMs;
+  const validBaselineWindow = lookbackMs >= windowMs * 2;
+  let status = 'UNAVAILABLE';
+  if (!raw.length) status = 'NO_LIVE_TRADE_SAMPLE';
+  else if (sampleTruncated) status = 'SAMPLE_TRUNCATED';
+  else if (!validBaselineWindow) status = 'INVALID_WINDOW_CONFIG';
+  else if (!enoughRows) status = 'INSUFFICIENT_EXECUTIONS_FOR_COMPARISON';
+  else if (!fresh) status = 'STALE_LIVE_TRADE_SAMPLE';
+  else status = 'FRESH_COMPLETE_10M_SAMPLE';
+  const available = status === 'FRESH_COMPLETE_10M_SAMPLE' &&
+    c.buyer_execution_share !== null && c.buyer_quote_share !== null &&
+    b.buyer_execution_share !== null && b.buyer_quote_share !== null;
+  return {
+    available, status, source: 'BINANCE_PUBLIC_REST_AGG_TRADES',
+    as_of_ms: now, window_start_ms: windowStart, baseline_window_start_ms: baselineStart,
+    latest_trade_time_ms: latestTime, latest_trade_age_ms: ageMs,
+    raw_aggregate_rows: raw.length, sample_truncated: sampleTruncated,
+    current: {
+      aggregate_rows: c.aggregate_rows, execution_count: c.execution_count,
+      buyer_initiated_execution_count: c.buyer_initiated_execution_count,
+      buyer_execution_share: round(c.buyer_execution_share, 4),
+      quote_notional: round(c.quote_notional, 4),
+      buyer_initiated_quote_notional: round(c.buyer_initiated_quote_notional, 4),
+      buyer_quote_share: round(c.buyer_quote_share, 4)
+    },
+    previous_5m: {
+      aggregate_rows: b.aggregate_rows, execution_count: b.execution_count,
+      buyer_initiated_execution_count: b.buyer_initiated_execution_count,
+      buyer_execution_share: round(b.buyer_execution_share, 4),
+      quote_notional: round(b.quote_notional, 4),
+      buyer_initiated_quote_notional: round(b.buyer_initiated_quote_notional, 4),
+      buyer_quote_share: round(b.buyer_quote_share, 4)
+    },
+    deltas: {
+      buyer_execution_share: round(tradeShareDelta, 4),
+      buyer_quote_share: round(quoteShareDelta, 4),
+      execution_count_vs_previous_5m: round(executionRatio, 4),
+      quote_notional_vs_previous_5m: round(quoteRatio, 4),
+      buyer_quote_share_vs_closed_baseline: baselineClosedBuyShare !== null && c.buyer_quote_share !== null
+        ? round(c.buyer_quote_share - baselineClosedBuyShare, 4) : null
+    }
+  };
+}
+
 function orderBookMetrics(bookTicker, depth) {
   const bids = Array.isArray(depth?.bids) ? depth.bids : [];
   const asks = Array.isArray(depth?.asks) ? depth.asks : [];
@@ -130,7 +229,7 @@ function orderBookMetrics(bookTicker, depth) {
 export function buildUnifiedFeatureSnapshot({
   symbol = '', candles = [], ticker = {}, benchmarkCandles = [],
   benchmarkTicker = null, marketBaseline24hPct = null,
-  bookTicker = null, depth = null, now = Date.now(), config = {}
+  bookTicker = null, depth = null, liveAggTrades = null, now = Date.now(), config = {}
 } = {}) {
   const asOf = Number(now);
   const rows = cleanClosedCandles(candles, asOf, config.maxCandles ?? 96);
@@ -194,8 +293,19 @@ export function buildUnifiedFeatureSnapshot({
   const baselineBuyShare = buyShare(rows.slice(-27, -3));
   const buyShareDelta = recentBuyShare !== null && baselineBuyShare !== null
     ? recentBuyShare - baselineBuyShare : null;
-  const buyPressureImproving = recentBuyShare !== null && recentBuyShare >= Number(config.minBuyShare ?? 0.53) &&
-    (buyShareDelta === null || buyShareDelta >= Number(config.minBuyShareDelta ?? 0.01));
+  // REST aggTrades are a distinct recent-execution sample. They are never
+  // appended to candles, and they only supersede candle flow when a full,
+  // fresh 10-minute sample covers both 5-minute windows.
+  const liveTradeFlow = summarizeLiveAggTradeFlow(liveAggTrades, rows, asOf, config);
+  const minBuyShare = Number(config.minBuyShare ?? 0.53);
+  const minBuyShareDelta = Number(config.minBuyShareDelta ?? 0.01);
+  const buyPressureImproving = liveTradeFlow.available
+    ? liveTradeFlow.current.buyer_execution_share >= minBuyShare &&
+      liveTradeFlow.deltas.buyer_execution_share >= minBuyShareDelta &&
+      liveTradeFlow.current.buyer_quote_share >= minBuyShare &&
+      liveTradeFlow.deltas.buyer_quote_share >= minBuyShareDelta
+    : recentBuyShare !== null && baselineBuyShare !== null && recentBuyShare >= minBuyShare &&
+      buyShareDelta !== null && buyShareDelta >= minBuyShareDelta;
 
   const recentSix = rows.slice(-6);
   const earlierSix = rows.slice(-12, -6);
@@ -250,7 +360,9 @@ export function buildUnifiedFeatureSnapshot({
     (bollingerCompressionRatio !== null && bollingerCompressionRatio <= 0.88) ||
     (atrRatio !== null && atrRatio <= 0.85);
   const participationImproving = (volume.ratio !== null && volume.ratio >= 1.12) ||
-    (trades.ratio !== null && trades.ratio >= 1.08);
+    (trades.ratio !== null && trades.ratio >= 1.08) ||
+    (liveTradeFlow.available && liveTradeFlow.deltas.execution_count_vs_previous_5m !== null &&
+      liveTradeFlow.deltas.execution_count_vs_previous_5m >= 1.12);
   const nearResistance = resistanceDistanceAtr !== null && resistanceDistanceAtr >= -0.5 && resistanceDistanceAtr <= 3.0;
   const relativeWeak = (relative15m !== null && relative15m < -0.75) ||
     (relative1h !== null && relative1h < -1.5) ||
@@ -268,7 +380,12 @@ export function buildUnifiedFeatureSnapshot({
   ].filter(Number.isFinite));
   const volumeScore = volume.ratio !== null ? clamp(50 + Math.log2(Math.max(0.125, volume.ratio)) * 24) : null;
   const tradeScore = trades.ratio !== null ? clamp(50 + Math.log2(Math.max(0.125, trades.ratio)) * 24) : null;
-  const flowScore = recentBuyShare !== null ? clamp((recentBuyShare - 0.4) * 500 + (buyShareDelta ?? 0) * 250) : null;
+  const flowScore = liveTradeFlow.available
+    ? clamp((liveTradeFlow.current.buyer_execution_share - 0.4) * 300 +
+      (liveTradeFlow.deltas.buyer_execution_share ?? 0) * 500 +
+      (liveTradeFlow.current.buyer_quote_share - 0.4) * 200 +
+      (liveTradeFlow.deltas.buyer_quote_share ?? 0) * 250)
+    : recentBuyShare !== null ? clamp((recentBuyShare - 0.4) * 500 + (buyShareDelta ?? 0) * 250) : null;
   const resistanceScore = nearResistance ? clamp(100 - Math.max(0, resistanceDistanceAtr) * 18) : 20;
   const relativeScore = mean([relative5m, relative15m, relative1h, relativeMarket24h, relativeBtc24h]
     .filter(Number.isFinite).map(value => clamp(50 + value * 12)));
@@ -320,6 +437,7 @@ export function buildUnifiedFeatureSnapshot({
       taker_buy_quote_share_recent: round(recentBuyShare, 4),
       taker_buy_quote_share_baseline: round(baselineBuyShare, 4),
       taker_buy_quote_share_delta: round(buyShareDelta, 4),
+      live_trade_flow: liveTradeFlow,
       buy_pressure_improving: buyPressureImproving,
       range_compression_ratio: round(rangeCompressionRatio, 4),
       bollinger_compression_ratio: round(bollingerCompressionRatio, 4),
@@ -340,7 +458,8 @@ export function buildUnifiedFeatureSnapshot({
         actual_top_of_book_and_depth: book},
       data_quality: {closed_candles_only: true, rows_used: rows.length, latest_close_time_ms: closeTime,
         age_ms: candleAge, quote_volume_available: quoteVolume24h !== null,
-        taker_flow_available: recentBuyShare !== null, spread_available: book.spread_bps !== null,
+        taker_flow_available: recentBuyShare !== null, live_trade_flow_available: liveTradeFlow.available,
+        live_trade_flow_status: liveTradeFlow.status, spread_available: book.spread_bps !== null,
         depth_available: book.depth_available}
     },
     components: {compression: round(compressionScore, 2), structure: round(structureScore, 2),
