@@ -66,7 +66,7 @@ export class FcmPushProvider extends PushProvider{
       const title=String(payload?.title||((payload?.radar_name||'RadarX')+' • '+(payload?.symbol||'تنبيه'))).slice(0,120);
       const body=String(payload?.message||[payload?.symbol,payload?.event||payload?.potential_label||payload?.type].filter(Boolean).join(' • ')||'تنبيه جديد من RadarX').slice(0,220);
       const data={};
-      for(const key of ['type','event_class','event','radar','radar_name','symbol','market','direction','price','opportunity_score','potential_label','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id']){
+      for(const key of ['type','event_class','event','radar','radar_name','symbol','market','direction','price','opportunity_score','potential_label','signal_lifecycle_state','signal_lifecycle_label','signal_lifecycle_transition','signal_lifecycle_reason_codes','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id']){
         const value=payload?.[key];
         if(value!==undefined&&value!==null)data[key]=String(value).slice(0,500);
       }
@@ -114,6 +114,13 @@ const radarPayload=(alert,processedAt=Date.now())=>({
   type:'RADARX_RADAR_ALERT',
   event_class:EVENT_CLASS.RADAR_ALERT??'RADAR_ALERT',
   event:alert.event||'RADAR_ALERT',
+  signal_lifecycle_state:alert?.signal_lifecycle?.state??null,
+  signal_lifecycle_label:alert?.signal_lifecycle?.label??null,
+  signal_lifecycle_transition:alert?.signal_lifecycle?.transition??null,
+  signal_lifecycle_reason_codes:Array.isArray(alert?.signal_lifecycle?.reason_codes)?alert.signal_lifecycle.reason_codes.slice(0,8):[],
+  message:alert?.signal_lifecycle?.state&&alert.signal_lifecycle.state!=='MONITOR'&&alert?.signal_lifecycle?.label
+    ?[alert.symbol,alert.signal_lifecycle.label].filter(Boolean).join(' • ')
+    :undefined,
   radar:alert.radar||'UNKNOWN_RADAR',
   radar_name:radarTitle(alert),
   symbol:alert.symbol,

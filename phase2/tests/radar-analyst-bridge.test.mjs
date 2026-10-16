@@ -1,3 +1,4 @@
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import {connectRadarAlertsToAnalysts} from '../core/radar-analyst-bridge.mjs';
 
@@ -31,6 +32,7 @@ import {connectRadarAlertsToAnalysts} from '../core/radar-analyst-bridge.mjs';
   assert.equal(alerts.length,1);
   assert.equal(alerts[0].alert,alert);
   assert.deepEqual(alerts[0].extra,{trace:'kept'});
+  assert.equal(alerts[0].alert.signal_lifecycle.state,'MONITOR','missing evidence must not be presented as early or confirmed');
   assert.equal(queued.length,1);
   assert.deepEqual(queued[0],{symbol:'BTCUSDT',options:{sourceRadar:'RADAR8'}});
   assert.equal(decisions.length,1);
@@ -62,3 +64,20 @@ console.log('radar analyst bridge preserves original push and enqueues review: P
 }
 
 console.log('radar analyst bridge fails open and validates symbol: PASS');
+test('non-blocking bridge attaches a meaningful early lifecycle without changing delivery eligibility',async()=>{
+  const decisions=[],alerts=[];
+  const pushManager={async notifyRadarAlert(alert){alerts.push(alert);return {status:'delivered'};}};
+  const multiAnalystRadar={enqueueRadarReview(){return {queued:true,already_queued:false,pending_count:1};}};
+  const installed=connectRadarAlertsToAnalysts({pushManager,multiAnalystRadar,logger:{info(){},warn(){}},clock:()=>1_800_000_200_000,
+    decisionRecorder:(alert,gate,options)=>decisions.push({alert,gate,options})});
+  assert.equal(installed.installed,true);
+  const alert={symbol:'EARLYUSDT',radar:'RADAR8',pre_expansion_stage:'PRE_EXPANSION',
+    potential_label:'PRE_EXPANSION',data_quality:95,liquidity_quality:88,
+    pre_expansion_fingerprint:{stage:'PRE_EXPANSION',ready:true,late:false,score:82}};
+  const response=await pushManager.notifyRadarAlert(alert);
+  assert.deepEqual(response,{status:'delivered'});
+  assert.equal(alerts[0],alert);
+  assert.equal(alert.signal_lifecycle.state,'EARLY_SETUP',JSON.stringify(alert.signal_lifecycle));
+  assert.equal(alert.signal_lifecycle.label,'إعداد مبكر');
+  assert.equal(decisions.length,1);
+});

@@ -37,3 +37,23 @@ test('TEST_FIXTURE: low data quality prevents push attempt',async()=>{
   const out=await m.notifySignal(s);
   assert.equal(out.length,0);assert.equal(p.calls,0);
 });
+
+test('TEST_FIXTURE: radar notifications forward lifecycle labels and reasons to the push provider',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-lifecycle-push-')),store=await new DurableStore({dir}).init();
+  await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70});
+  await store.upsertSubscription('u1',pushSubscription());
+  const sent=[];
+  const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){sent.push(payload);return{ok:true,status:'SENT'};}};
+  const m=new PushManager({provider,store});
+  await m.notifyRadarAlert({
+    radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8',symbol:'EARLYUSDT',data_quality:95,
+    signal_lifecycle:{state:'EARLY_SETUP',label:'إعداد مبكر',transition:'EARLY_EVIDENCE_CONVERGED',reason_codes:['RELATED_EARLY_EVIDENCE']}
+  });
+  assert.equal(sent.length,1);
+  assert.equal(sent[0].signal_lifecycle_state,'EARLY_SETUP');
+  assert.equal(sent[0].signal_lifecycle_label,'إعداد مبكر');
+  assert.equal(sent[0].signal_lifecycle_transition,'EARLY_EVIDENCE_CONVERGED');
+  assert.deepEqual(sent[0].signal_lifecycle_reason_codes,['RELATED_EARLY_EVIDENCE']);
+  assert.equal(sent[0].message,'EARLYUSDT • إعداد مبكر');
+});
+
