@@ -57,6 +57,8 @@ jobs:
           node --test phase2/tests/historical-learning-lab.test.mjs
           node --test phase2/tests/historical-learning-lab-cli.test.mjs
           node --test phase2/tests/monthly-historical-replay-lab.test.mjs
+          node --check phase2/tools/monthly-move-forensics.mjs
+          node --check phase2/tools/monthly-historical-replay-lab.mjs
       - name: Download and analyze the rolling 30-day Spot mover archive
         id: monthly-forensics
         continue-on-error: true
@@ -91,6 +93,7 @@ jobs:
           const errors=[];
           if(report.coverage?.complete!==true) errors.push('MONTHLY_CASE_COVERAGE_INCOMPLETE');
           if(report.coverage?.failed_or_skipped_cases>0) errors.push('MONTHLY_CASES_FAILED_OR_SKIPPED');
+          if(!(report.coverage?.positive_anchor_cases>0)) errors.push('NO_CONFIRMED_POSITIVE_EVENT_ANCHORS');
           if(report.walk_forward?.status!=='READY') errors.push('MONTHLY_WALK_FORWARD_SPLIT_NOT_READY');
           if(!(report.walk_forward?.train_count>0 && report.walk_forward?.validation_count>0 && report.walk_forward?.test_count>0)) errors.push('MONTHLY_TEMPORAL_SPLIT_EMPTY');
           if(report.detector_replay_scope?.replayed_profiles?.length!==1) errors.push('REPLAY_SCOPE_NOT_EXPLICIT');
