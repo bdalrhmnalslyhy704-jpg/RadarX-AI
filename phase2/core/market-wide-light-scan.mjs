@@ -528,7 +528,7 @@ export class MarketWideLightScan {
       const btcLast = btcSeries?.candles?.filter(c => c?.closed === true && KNOWN(c.closeTime) && Number(c.closeTime) <= at).at(-1) || null;
       const featureSignature = [row?.lastPrice,row?.priceChange24h,row?.quoteVolume24h,row?.tradeCount24h,
         marketBaseline24hPct,btcTicker?.lastPrice,btcTicker?.priceChange24h,btcLast?.closeTime,btcLast?.close,
-        bookTicker?.bidPrice,bookTicker?.askPrice,bookTicker?.bidQty,bookTicker?.askQty]
+        bookTicker?.bidPrice,bookTicker?.askPrice,bookTicker?.bidQty,bookTicker?.askQty,bookTicker?.asOf]
         .map(value => value === null || value === undefined ? 'UNKNOWN' : String(value)).join(':');
       const dynamicFeaturesChanged = Boolean(previous && previous.featureSignature !== featureSignature);
       const age = latestCloseTime === null ? null : Math.max(0, at - latestCloseTime);
