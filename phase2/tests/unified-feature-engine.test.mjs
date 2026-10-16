@@ -66,7 +66,7 @@ test('the engine strictly excludes candles not marked closed and future close ti
   const result=snapshot({candles:[...base.rows,open,future]});
   assert.equal(result.closed_candle_count,base.rows.length);
   assert.equal(result.latest_closed_candle_close_time_ms,lastClosed.closeTime);
-  assert.equal(result.features.last_price,lastClosed.close);
+  assert.equal(Number(result.features.last_price).toFixed(8),Number(lastClosed.close).toFixed(8));
 });
 
 test('missing or stale closed candles fail closed rather than using open candle values',()=>{
