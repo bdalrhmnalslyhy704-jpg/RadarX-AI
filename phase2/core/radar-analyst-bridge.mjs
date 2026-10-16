@@ -38,12 +38,15 @@ export function connectRadarAlertsToAnalysts({
       .trim().toUpperCase().slice(0,80)||'RADAR_ALERT';
     if(/^[A-Z0-9]{2,30}$/.test(symbol)){
       const embeddedGate=alert?.notification_gate??alert?.radar_notification_gate??alert?.gate_result??{};
-      const lifecycle=advanceSignalLifecycle(alert,{
-        ...embeddedGate,radar:sourceRadar,
-        eligible:embeddedGate?.eligible===true,
-        mode:embeddedGate?.mode??alert?.notification_mode??'NO_GATE_DECISION',
-        failures:Array.isArray(embeddedGate?.failures)?embeddedGate.failures:[]
-      },{now});
+      const knownStates=['MONITOR','EARLY_SETUP','SIGNAL_REVIEW','CONFIRMED','INVALIDATED'];
+      const lifecycle=knownStates.includes(embeddedGate?.signal_lifecycle?.state)
+        ?embeddedGate.signal_lifecycle
+        :advanceSignalLifecycle(alert,{
+          ...embeddedGate,radar:sourceRadar,
+          eligible:embeddedGate?.eligible===true,
+          mode:embeddedGate?.mode??alert?.notification_mode??'NO_GATE_DECISION',
+          failures:Array.isArray(embeddedGate?.failures)?embeddedGate.failures:[]
+        },{now});
       try{alert.signal_lifecycle=lifecycle;}catch{}
       try{
         const queued=multiAnalystRadar.enqueueRadarReview(symbol,{sourceRadar});
