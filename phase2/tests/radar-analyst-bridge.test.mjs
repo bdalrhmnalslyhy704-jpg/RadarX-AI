@@ -1,3 +1,4 @@
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import {connectRadarAlertsToAnalysts} from '../core/radar-analyst-bridge.mjs';
 
@@ -67,7 +68,7 @@ test('non-blocking bridge attaches a meaningful early lifecycle without changing
   const decisions=[],alerts=[];
   const pushManager={async notifyRadarAlert(alert){alerts.push(alert);return {status:'delivered'};}};
   const multiAnalystRadar={enqueueRadarReview(){return {queued:true,already_queued:false,pending_count:1};}};
-  const installed=connectRadarAlertsToAnalysts({pushManager,multiAnalystRadar,logger:{info(){},warn(){}},clock:()=>NOW_TEST,
+  const installed=connectRadarAlertsToAnalysts({pushManager,multiAnalystRadar,logger:{info(){},warn(){}},clock:()=>1_800_000_200_000,
     decisionRecorder:(alert,gate,options)=>decisions.push({alert,gate,options})});
   assert.equal(installed.installed,true);
   const alert={symbol:'EARLYUSDT',radar:'RADAR8',pre_expansion_stage:'PRE_EXPANSION',
