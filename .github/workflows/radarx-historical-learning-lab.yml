@@ -41,7 +41,7 @@ jobs:
       - name: Checkout Build 224 branch
         uses: actions/checkout@v4
         with:
-          ref: build224-multi-analyst-20261007
+          ref: ${{ github.ref }}
       - name: Set up Node 22
         uses: actions/setup-node@v4
         with:
@@ -66,6 +66,7 @@ jobs:
             --output "$MATRIX_DIR" \
             --max-trade-pages "$MAX_TRADE_PAGES" \
             --max-trades "$MAX_TRADES" \
+            --outcome-horizon-hours "$OUTCOME_HORIZON_HOURS" \
             --timeout-ms 1800000
       - name: Score outcomes and produce the chronological holdout report
         id: lab
