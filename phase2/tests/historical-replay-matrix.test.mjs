@@ -18,13 +18,14 @@ test('historical coverage summaries never convert incomplete data into success',
 
 test('matrix CLI dry-run validates the 30-symbol by three-window plan without network access',()=>{
   const script=resolve(dirname(fileURLToPath(import.meta.url)),'../tools/historical-replay-matrix.mjs');
-  const run=spawnSync(process.execPath,[script,'--dry-run'],{encoding:'utf8',timeout:10_000});
+  const run=spawnSync(process.execPath,[script,'--dry-run','--outcome-horizon-hours','48'],{encoding:'utf8',timeout:10_000});
   assert.equal(run.status,0,run.stderr||run.stdout);
   const plan=JSON.parse(run.stdout);
   assert.equal(plan.status,'DRY_RUN_NO_NETWORK');
   assert.equal(plan.symbol_count,30);
   assert.equal(plan.window_count,3);
   assert.equal(plan.planned_symbol_window_replays,90);
+  assert.equal(plan.limits.outcome_horizon_hours,48);
   assert.equal(plan.policy.real_order_execution,false);
 });
 test('matrix counts explicit closed-candle fallback without mislabeling exact trade coverage',()=>{
