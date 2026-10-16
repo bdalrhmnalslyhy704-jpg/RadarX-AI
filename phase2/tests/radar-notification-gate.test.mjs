@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {evaluateRadarNotificationGate,notificationGateHealth,resetRadarNotificationGateForTests,getRadarSignalLifecycleState,radarSignalLifecycleHealth} from '../core/radar-notification-gate.mjs';
+import {evaluateRadarNotificationGate,notificationGateHealth,resetRadarNotificationGateForTests,getRadarSignalLifecycleState,radarSignalLifecycleHealth,advanceSignalLifecycle} from '../core/radar-notification-gate.mjs';
 import {evaluateRadarQuality} from '../core/radar-quality-v3.mjs';
 import {buildEarlyExpansionAlert} from '../core/early-expansion-radar.mjs';
 
@@ -314,3 +314,17 @@ test('an invalidated setup is retained until a materially new early setup appear
   assert.equal(renewed.signal_lifecycle.transition,'NEW_SETUP_AFTER_INVALIDATION');
 });
 
+test('only a strict pass becomes confirmed; confirmation remains explicitly non-predictive',()=>{
+  resetRadarNotificationGateForTests();
+  const confirmed=advanceSignalLifecycle({symbol:'ATOMUSDT',radar:'TEST_RADAR',data_quality:96},{
+    radar:'TEST_RADAR',eligible:true,mode:'STRICT_NOTIFICATION',failures:[],score:94,data_quality:96,liquidity_quality:90,
+    confirmations:8,category_hits:6,
+    profile_thresholds:{min_score:90,min_data_quality:90,min_liquidity_quality:70,min_confirmations:6,min_category_hits:4},
+    falcon_eye:{capture:82,quality:84,independent_domains:5}
+  },{now:NOW});
+  assert.equal(confirmed.state,'CONFIRMED');
+  assert.equal(confirmed.label,'تأكيد مستوفٍ للشروط');
+  assert.ok(confirmed.reason_codes.includes('STRICT_GATES_PASSED'));
+  assert.equal(confirmed.terminal,false);
+});
+\n
