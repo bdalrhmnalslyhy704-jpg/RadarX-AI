@@ -71,10 +71,10 @@ export function classifyHistoricalLearningRow(row={},{
     outcomeClass='DATA_COVERAGE_BLOCKED';
   }else if(move!==null&&move>=strong){
     moveClass='STRONG_MOVE';
-    outcomeClass=accepted?'EARLY_SIGNAL_SUCCESS':'MISSED_MOVE_DECISION';
+    outcomeClass=accepted?(hasEarlyStage?'EARLY_SIGNAL_SUCCESS':'SIGNAL_SUCCESS'):'MISSED_MOVE_DECISION';
   }else if(move!==null&&move>=moderate){
     moveClass='MODERATE_MOVE';
-    outcomeClass=accepted?'EARLY_SIGNAL_SUCCESS':'MISSED_MOVE_DECISION';
+    outcomeClass=accepted?(hasEarlyStage?'EARLY_SIGNAL_SUCCESS':'SIGNAL_SUCCESS'):'MISSED_MOVE_DECISION';
   }else if(horizonObserved&&move!==null){
     moveClass='NO_TARGET_MOVE';
     outcomeClass=accepted?(hasEarlyStage?'EARLY_SIGNAL_FAILED':'FALSE_ALERT'):'CORRECT_REJECTION';
@@ -151,7 +151,7 @@ export function buildHistoricalLearningDataset(reports=[],{
   const classified=rows.map(row=>classifyHistoricalLearningRow(row,{moderateMovePct,strongMovePct}));
   const byDecisionTime=classified.slice().sort((a,b)=>(a.timestamp??Infinity)-(b.timestamp??Infinity)||a.symbol.localeCompare(b.symbol));
   const counts={STRONG_MOVE:0,MODERATE_MOVE:0,NO_TARGET_MOVE:0,UNKNOWN:0};
-  const decisions={EARLY_SIGNAL_SUCCESS:0,EARLY_SIGNAL_FAILED:0,FALSE_ALERT:0,MISSED_MOVE_DECISION:0,CORRECT_REJECTION:0,OUTCOME_UNAVAILABLE:0,DATA_INTEGRITY_REJECTED:0,DATA_COVERAGE_BLOCKED:0};
+  const decisions={EARLY_SIGNAL_SUCCESS:0,SIGNAL_SUCCESS:0,EARLY_SIGNAL_FAILED:0,FALSE_ALERT:0,MISSED_MOVE_DECISION:0,CORRECT_REJECTION:0,OUTCOME_UNAVAILABLE:0,DATA_INTEGRITY_REJECTED:0,DATA_COVERAGE_BLOCKED:0};
   for(const row of classified){
     counts[row.move_class]=(counts[row.move_class]??0)+1;
     decisions[row.outcome_class]=(decisions[row.outcome_class]??0)+1;
@@ -251,13 +251,13 @@ export function evaluateHistoricalLearningMetrics(dataset,{moderateMovePct=5,str
     const radar=row.radar||'UNKNOWN_RADAR',regime=row.market_regime||'UNKNOWN';
     if(!byRadar[radar])byRadar[radar]={rows:0,accepted:0,successes:0,false_alerts:0,missed_move_decisions:0,unavailable:0};
     const rr=byRadar[radar];rr.rows++;if(row.decision==='ACCEPTED')rr.accepted++;
-    if(row.outcome_class==='EARLY_SIGNAL_SUCCESS')rr.successes++;
+    if(row.success_label===true)rr.successes++;
     if(['FALSE_ALERT','EARLY_SIGNAL_FAILED'].includes(row.outcome_class))rr.false_alerts++;
     if(row.outcome_class==='MISSED_MOVE_DECISION')rr.missed_move_decisions++;
     if(!row.horizon_observed)rr.unavailable++;
     if(!byRegime[regime])byRegime[regime]={rows:0,accepted:0,successful_alerts:0,false_alerts:0,missed_move_decisions:0};
     const rg=byRegime[regime];rg.rows++;if(row.decision==='ACCEPTED')rg.accepted++;
-    if(row.outcome_class==='EARLY_SIGNAL_SUCCESS')rg.successful_alerts++;
+    if(row.success_label===true)rg.successful_alerts++;
     if(['FALSE_ALERT','EARLY_SIGNAL_FAILED'].includes(row.outcome_class))rg.false_alerts++;
     if(row.outcome_class==='MISSED_MOVE_DECISION')rg.missed_move_decisions++;
   }
@@ -280,7 +280,7 @@ export function evaluateHistoricalLearningMetrics(dataset,{moderateMovePct=5,str
     missed_move_decisions:missedMoveDecisions.length,
     correct_rejections:evaluable.filter(row=>row.outcome_class==='CORRECT_REJECTION').length,
     precision_pct:pct(alertsWithMove.length,accepted.length),
-    false_alert_rate_pct:pct(falseAlerts.length+accepted.filter(row=>row.outcome_class==='EARLY_SIGNAL_FAILED').length,accepted.length),
+    false_alert_rate_pct:pct(falseAlerts.length,accepted.length),
     missed_move_events:misses.length,
     observed_move_events:events.length,
     move_event_capture_pct:pct(captured.length,events.length),
