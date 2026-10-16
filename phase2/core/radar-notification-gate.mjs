@@ -357,6 +357,96 @@ function radarSpecificChecks(alert,p,now){
   return failures;
 }
 
+
+const SIGNAL_LIFECYCLE_LABELS=Object.freeze({
+  MONITOR:'مراقبة',
+  EARLY_SETUP:'إعداد مبكر',
+  SIGNAL_REVIEW:'إشارة تستحق الفحص',
+  CONFIRMED:'تأكيد مستوفٍ للشروط',
+  INVALIDATED:'إلغاء الإعداد'
+});
+const signalLifecycleByCandidate=new Map();
+const SIGNAL_LIFECYCLE_TTL_MS=6*60*60*1000;
+const SIGNAL_LIFECYCLE_MAX=5000;
+const lifecycleText=v=>String(v??'').trim().toUpperCase();
+const lifecycleUnique=xs=>[...new Set(xs.filter(Boolean).map(x=>String(x).slice(0,120)))];
+function advanceSignalLifecycle(alert,gate,{now=Date.now()}={}){
+  const ts=Number.isFinite(Number(now))?Number(now):Date.now();
+  for(const [k,v] of signalLifecycleByCandidate)if(ts-Number(v.observed_at)>SIGNAL_LIFECYCLE_TTL_MS)signalLifecycleByCandidate.delete(k);
+  const symbol=lifecycleText(alert?.symbol??alert?.asset);
+  const radar=lifecycleText(gate?.radar??alert?.radar??alert?.radar_id??alert?.radar_name??'UNKNOWN_RADAR');
+  const key=symbol?radar+':'+symbol:null;
+  const previous=key?signalLifecycleByCandidate.get(key)||null:null;
+  const stage=lifecycleText(alert?.pre_expansion_stage??alert?.pre_expansion_fingerprint?.stage??alert?.strong_move?.stage??alert?.potential_label??alert?.stage??alert?.signal_type??alert?.decision_band);
+  const failures=Array.isArray(gate?.failures)?gate.failures.map(lifecycleText):[];
+  const stageInvalid=/^(ALREADY_EXTENDED|EXTENDED|INVALIDATED|SETUP_INVALIDATED|CANCELLED|CANCELED|EXPIRED|SETUP_LOST|BASE_BROKEN|CONDITION_FAILED|MOMENTUM_COLLAPSED)$/.test(stage);
+  const invalidationCodes=failures.filter(x=>/(SETUP_INVALIDATED|INVALIDATION_CONFIRMED|BASE_BROKEN|SUPPORT_LOST|MOMENTUM_COLLAPSED|BUY_PRESSURE_COLLAPSED|LATE_SETUP_CHASE_GUARD|EARLY_SETUP_ALREADY_MOVED|ANTI_CHASE_EXTENSION_LIMIT|PRICE_ALREADY_EXTENDED|RECENT_PUMP_EXHAUSTION|EARLY_WINDOW_LOST|BREAKOUT_FAILED|SETUP_CONDITION_FAILED)/.test(x));
+  const explicitInvalid=alert?.setup_invalidated===true||alert?.signal_invalidated===true||alert?.invalidation_confirmed===true||alert?.core_condition_failed===true||alert?.momentum_lost===true||alert?.support_condition_lost===true;
+  const thresholds=gate?.profile_thresholds||{};
+  const score=Number(gate?.score??alert?.score??alert?.signal_score??alert?.opportunity_score??alert?.early_warning?.score)||0;
+  const data=Number(gate?.data_quality??alert?.data_quality??alert?.data_status?.quality)||0;
+  const liq=Number(gate?.liquidity_quality??alert?.liquidity_quality??alert?.liquidity_score)||0;
+  const minScore=Number(thresholds.min_score)||90, minData=Number(thresholds.min_data_quality)||90;
+  const minLiq=Number(thresholds.min_liquidity_quality)||0;
+  const conf=Number(gate?.confirmations??alert?.confirmation_count??alert?.confirmations)||0;
+  const hits=Number(gate?.category_hits??alert?.category_hits)||0;
+  const minConf=Number(thresholds.min_confirmations)||0, minHits=Number(thresholds.min_category_hits)||0;
+  const falcon=gate?.falcon_eye||{};
+  const dataReady=data>=Math.max(50,minData-12)&&(minLiq<=0||liq>=Math.max(45,minLiq-15));
+  const hasTrigger=alert?.trigger_confirmed===true||alert?.breakout_confirmed===true||alert?.ignition_confirmed===true||
+    alert?.pre_breakout_fingerprint?.confirmed===true||
+    (alert?.pre_breakout_fingerprint?.ready===true&&alert?.pre_breakout_fingerprint?.late===false)||
+    /BREAKOUT_DEVELOPING|PRE_BREAKOUT|CONFIRMING_SETUP|TRIGGER_CONFIRMED|IGNITION_CONFIRMED/.test(stage)||
+    (dataReady&&conf>=Math.max(1,minConf)&&hits>=Math.max(1,minHits)&&score>=minScore-8&&Number(falcon.capture)>=66&&Number(falcon.quality)>=60);
+  let state='MONITOR', reasons=[];
+  if(explicitInvalid||stageInvalid||invalidationCodes.length){
+    state='INVALIDATED';
+    reasons=[...(explicitInvalid?['EXPLICIT_SETUP_INVALIDATION']:[]),...(stageInvalid?['SETUP_STAGE_'+stage]:[]),...invalidationCodes];
+  }else if(!dataReady||failures.some(x=>/DATA_QUALITY|DATA_GATE|DATA_STATUS|CANDLE|COVERAGE|SPREAD_EVIDENCE|PRIMARY_EVIDENCE|SNAPSHOT|STALE|INSUFFICIENT_DATA/.test(x))){
+    state='MONITOR';reasons=['EVIDENCE_NOT_READY'];
+  }else if(gate?.eligible===true&&gate?.mode==='STRICT_NOTIFICATION'&&failures.length===0){
+    state='CONFIRMED';reasons=['STRICT_GATES_PASSED'];
+  }else if(hasTrigger){
+    state='SIGNAL_REVIEW';reasons=['TRIGGER_REQUIRES_CONFIRMATION',...failures];
+  }else if(/WATCH_EARLY|PRE_EXPANSION|QUIET_BASE_PRE_EXPANSION|EARLY_SETUP|PERSISTENT_EARLY_TRACK|FALCON_EARLY_TRACK/.test(stage)||
+    ['PERSISTENT_EARLY_TRACK','FALCON_EARLY_TRACK'].includes(lifecycleText(gate?.mode))||
+    (score>=minScore-15&&hits>=2&&data>=minData-8&&(minLiq<=0||liq>=minLiq-10))){
+    state='EARLY_SETUP';reasons=['RELATED_EARLY_EVIDENCE',...failures];
+  }else reasons=[failures.length?'WAITING_FOR_CONFIRMATION':'INITIAL_SIGNS_ONLY',...failures];
+  let generation=Number(previous?.generation)||1, transition=previous?(previous.state===state?'UNCHANGED':'STATE_CHANGED'):'INITIAL', previousState=previous?.state??null;
+  if(previous?.state==='INVALIDATED'&&state!=='INVALIDATED'){
+    if(['EARLY_SETUP','SIGNAL_REVIEW','CONFIRMED'].includes(state)){
+      generation++;transition='NEW_SETUP_AFTER_INVALIDATION';previousState='INVALIDATED';
+    }else{
+      state='INVALIDATED';reasons.push('AWAITING_NEW_SETUP_EVIDENCE');transition='INVALIDATION_RETAINED';
+    }
+  }
+  if(previous&&previous.state!==state&&transition==='STATE_CHANGED'){
+    transition=state==='INVALIDATED'?'SETUP_INVALIDATED':state==='CONFIRMED'?'SETUP_CONFIRMED':
+      state==='SIGNAL_REVIEW'?'TRIGGER_DETECTED':state==='EARLY_SETUP'?'EARLY_EVIDENCE_CONVERGED':'EVIDENCE_WEAKENED_OR_UNAVAILABLE';
+  }
+  const rank={MONITOR:0,EARLY_SETUP:1,SIGNAL_REVIEW:2,CONFIRMED:3,INVALIDATED:4};
+  const result={state,label:SIGNAL_LIFECYCLE_LABELS[state],rank:rank[state],terminal:state==='INVALIDATED',
+    transition,previous_state:previousState,generation,radar,symbol,observed_at:ts,
+    age_ms:previous?Math.max(0,ts-Number(previous.observed_at)):0,score,
+    data_quality:data,liquidity_quality:liq,reason_codes:lifecycleUnique(reasons),gate_failures:lifecycleUnique(failures)};
+  if(key)signalLifecycleByCandidate.set(key,result);
+  while(signalLifecycleByCandidate.size>SIGNAL_LIFECYCLE_MAX)signalLifecycleByCandidate.delete(signalLifecycleByCandidate.keys().next().value);
+  return result;
+}
+export function getRadarSignalLifecycleState({symbol,radar}={}){
+  const s=lifecycleText(symbol),r=lifecycleText(radar||'UNKNOWN_RADAR');
+  const value=s?signalLifecycleByCandidate.get(r+':'+s):null;
+  return value?{...value,reason_codes:[...value.reason_codes],gate_failures:[...value.gate_failures]}:null;
+}
+export function radarSignalLifecycleHealth({now=Date.now()}={}){
+  const ts=Number.isFinite(Number(now))?Number(now):Date.now();
+  for(const [k,v] of signalLifecycleByCandidate)if(ts-Number(v.observed_at)>SIGNAL_LIFECYCLE_TTL_MS)signalLifecycleByCandidate.delete(k);
+  const counts={MONITOR:0,EARLY_SETUP:0,SIGNAL_REVIEW:0,CONFIRMED:0,INVALIDATED:0};
+  for(const value of signalLifecycleByCandidate.values())counts[value.state]=(counts[value.state]||0)+1;
+  return {tracked_candidates:signalLifecycleByCandidate.size,max_tracked:SIGNAL_LIFECYCLE_MAX,state_ttl_ms:SIGNAL_LIFECYCLE_TTL_MS,counts};
+}
+
 const EARLY_RADARS=new Set(['EARLY_MOVE_RADAR','EARLY_EXPANSION_RADAR','COIN_HUNTER_RADAR']);
 
 export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false}={}){
@@ -450,6 +540,7 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
     mode,
     no_extra_network_calls:true
   };
+  result.signal_lifecycle=advanceSignalLifecycle(alert,result,{now});
   if(eligible&&commit&&symbol)rememberRadarAlert(alert,now);
   return result;
 }
@@ -465,7 +556,7 @@ export function rememberRadarAlert(alert,now=Date.now()){
   }
 }
 
-export function resetRadarNotificationGateForTests(){recentBySymbol.clear();preBreakoutStreakBySymbol.clear();}
+export function resetRadarNotificationGateForTests(){recentBySymbol.clear();preBreakoutStreakBySymbol.clear();signalLifecycleByCandidate.clear();}
 
 export function notificationGateHealth(){
   return {tracked_symbols:recentBySymbol.size,mode:'FALCON_EYE_V1_STRICT_PLUS_EARLY_TRACK',cross_radar_suppression:true,no_extra_network_calls:true,registered_profile_count:Object.keys(PROFILES).length,registered_profiles:Object.keys(PROFILES)};
