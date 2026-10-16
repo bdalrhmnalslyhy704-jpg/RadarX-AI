@@ -244,3 +244,62 @@ test('opt-in candle-only fallback replays verified candles without inventing agg
     'exact event time must remain unknown without complete aggregate trades');
   assert.ok(replay.steps.every(x => x.decision === 'REJECTED'));
 });
+
+test('future closed candles score 5%/15% labels and drawdown only after the decision, never in evaluator input',()=>{
+  const rows=candles(300);
+  const start=rows[292].openTime,end=rows[292].closeTime,observationEnd=rows[299].closeTime;
+  let calls=0;
+  const replay=runHistoricalReplay({
+    symbol:'WUSDT',oneMinuteCandles:rows,aggTrades:syntheticTrades(rows),
+    startTime:start,endTime:end,outcomeEndTime:observationEnd,outcomeHorizonMs:7*MINUTE,
+    tradeCoverageComplete:true,alertCooldownMs:0,
+    evaluate(input){
+      calls++;
+      assert.ok(input.oneMinute.every(c=>c.closed===true&&c.closeTime<=input.now));
+      assert.ok(input.fiveMinute.every(c=>c.closed===true&&c.closeTime<=input.now));
+      assert.ok(input.aggTrades.every(t=>t.T<Math.floor(input.now/3000)*3000));
+      assert.ok(input.oneMinute.every(c=>c.openTime<=rows[292].openTime));
+      assert.equal('outcome' in input,false);
+      return {accepted:false,stage:'WATCH',score:50,reason_codes:['NO_SIGNAL']};
+    }
+  });
+  assert.equal(calls,1);
+  const step=replay.steps[0];
+  assert.equal(step.outcome.horizon_observed,true);
+  assert.notEqual(step.outcome.first_future_hit_5pct_at,null);
+  assert.notEqual(step.outcome.first_future_hit_15pct_at,null);
+  assert.ok(step.outcome.forward_max_drawdown_pct_from_decision<=0);
+  assert.ok(step.outcome.forward_return_pct_at_horizon>0);
+  assert.equal(step.outcome.is_future_data_for_scoring,false);
+  assert.ok(replay.data_quality.outcome_future_candles_loaded>0);
+  assert.ok(step.input_max_candle_close_at<=step.timestamp);
+});
+
+test('incomplete future candle horizon stays unavailable instead of fabricating a no-move label',()=>{
+  const rows=candles(300).filter((_,i)=>i!==295);
+  const replay=runHistoricalReplay({
+    symbol:'WUSDT',oneMinuteCandles:rows,startTime:rows.find(x=>x.openTime===ORIGIN+292*MINUTE).openTime,
+    endTime:rows.find(x=>x.openTime===ORIGIN+292*MINUTE).closeTime,
+    outcomeEndTime:ORIGIN+299*MINUTE+MINUTE-1,outcomeHorizonMs:7*MINUTE,
+    tradeCoverageComplete:false,allowCandleOnlyFallback:true,
+    evaluate(){return {accepted:false,reason_codes:['CANDLE_ONLY_TEST']};}
+  });
+  assert.equal(replay.steps.length,1);
+  assert.equal(replay.steps[0].outcome.horizon_observed,false);
+  assert.equal(replay.steps[0].outcome.forward_return_pct_at_horizon,null);
+});
+
+test('exact +5/+15 event timestamps remain unavailable when aggregate-trade coverage is incomplete',()=>{
+  const rows=candles(250);
+  const first={...rows[180],high:rows[180].open*1.06,close:rows[180].open*1.02};
+  const fixed=rows.map(x=>x.openTime===rows[180].openTime?first:x);
+  const replay=runHistoricalReplay({
+    symbol:'GTCUSDT',oneMinuteCandles:fixed,startTime:first.openTime,endTime:first.closeTime,
+    tradeCoverageComplete:false,allowCandleOnlyFallback:true,
+    evaluate(){return {accepted:false,reason_codes:['NO_TRADE_COVERAGE']};}
+  });
+  assert.equal(replay.summary.first_actual_window_5pct_at,null);
+  assert.equal(replay.summary.first_actual_window_5pct_candle_close_at,first.closeTime);
+  assert.equal(replay.steps[0].outcome.actual_window_5pct_timestamp_source,'UNAVAILABLE_INCOMPLETE_TRADE_COVERAGE');
+});
+

@@ -14,23 +14,24 @@ test('required historical regime coverage includes a bearish-market window',()=>
   const withBear=[...observed,'BEAR_TREND'];
   assert.equal(HISTORICAL_MATRIX_REQUIRED_REGIMES.every(x=>withBear.includes(x)),true);
 });
-test('historical coverage summaries never convert incomplete data into success',()=>{const summary=summarizeHistoricalWindowReport({symbol_count:2,results:[{data_quality:{trade_coverage_complete:true,candle_fetch_complete:true,replay_mode:'FULL_TRADE',synthetic_data_used:false},summary:{replay_steps:10,accepted:2,rejected:4,first_accepted_at:'2025-01-01T00:00:00.000Z'}},{data_quality:{trade_coverage_complete:false,candle_fetch_complete:true},summary:{accepted:1,rejected:3}}]});assert.equal(summary.coverage_status,'INCOMPLETE_OR_EMPTY');assert.equal(summary.coverage_complete_symbols,1);assert.equal(summary.coverage_incomplete_symbols,1);assert.equal(summary.accepted_decisions,3);assert.equal(summary.rejected_decisions,7);const missing=summarizeHistoricalWindowReport({symbol_count:3,results:[{data_quality:{trade_coverage_complete:true,candle_fetch_complete:true,replay_mode:'FULL_TRADE',synthetic_data_used:false},summary:{replay_steps:10}}]});assert.equal(missing.coverage_status,'INCOMPLETE_OR_EMPTY');assert.equal(missing.coverage_incomplete_symbols,2);});
+test('historical coverage summaries never convert incomplete data into success',()=>{const summary=summarizeHistoricalWindowReport({symbol_count:2,results:[{data_quality:{trade_coverage_complete:true,candle_fetch_complete:true,outcome_candle_fetch_complete:true,replay_mode:'FULL_TRADE',synthetic_data_used:false},summary:{replay_steps:10,accepted:2,rejected:4,first_accepted_at:'2025-01-01T00:00:00.000Z'}},{data_quality:{trade_coverage_complete:false,candle_fetch_complete:true},summary:{accepted:1,rejected:3}}]});assert.equal(summary.coverage_status,'INCOMPLETE_OR_EMPTY');assert.equal(summary.coverage_complete_symbols,1);assert.equal(summary.coverage_incomplete_symbols,1);assert.equal(summary.accepted_decisions,3);assert.equal(summary.rejected_decisions,7);const missing=summarizeHistoricalWindowReport({symbol_count:3,results:[{data_quality:{trade_coverage_complete:true,candle_fetch_complete:true,outcome_candle_fetch_complete:true,replay_mode:'FULL_TRADE',synthetic_data_used:false},summary:{replay_steps:10}}]});assert.equal(missing.coverage_status,'INCOMPLETE_OR_EMPTY');assert.equal(missing.coverage_incomplete_symbols,2);});
 
 test('matrix CLI dry-run validates the 30-symbol by three-window plan without network access',()=>{
   const script=resolve(dirname(fileURLToPath(import.meta.url)),'../tools/historical-replay-matrix.mjs');
-  const run=spawnSync(process.execPath,[script,'--dry-run'],{encoding:'utf8',timeout:10_000});
+  const run=spawnSync(process.execPath,[script,'--dry-run','--outcome-horizon-hours','48'],{encoding:'utf8',timeout:10_000});
   assert.equal(run.status,0,run.stderr||run.stdout);
   const plan=JSON.parse(run.stdout);
   assert.equal(plan.status,'DRY_RUN_NO_NETWORK');
   assert.equal(plan.symbol_count,30);
   assert.equal(plan.window_count,3);
   assert.equal(plan.planned_symbol_window_replays,90);
+  assert.equal(plan.limits.outcome_horizon_hours,48);
   assert.equal(plan.policy.real_order_execution,false);
 });
 test('matrix counts explicit closed-candle fallback without mislabeling exact trade coverage',()=>{
   const summary=summarizeHistoricalWindowReport({symbol_count:2,results:[
-    {data_quality:{trade_coverage_complete:true,candle_fetch_complete:true,replay_mode:'FULL_TRADE',synthetic_data_used:false},summary:{replay_steps:10,accepted:1,rejected:9}},
-    {data_quality:{trade_coverage_complete:false,candle_fetch_complete:true,replay_mode:'CANDLE_ONLY_FALLBACK',candle_only_fallback_used:true,synthetic_data_used:false},summary:{replay_steps:10,accepted:0,rejected:10}}
+    {data_quality:{trade_coverage_complete:true,candle_fetch_complete:true,outcome_candle_fetch_complete:true,replay_mode:'FULL_TRADE',synthetic_data_used:false},summary:{replay_steps:10,accepted:1,rejected:9}},
+    {data_quality:{trade_coverage_complete:false,candle_fetch_complete:true,outcome_candle_fetch_complete:true,replay_mode:'CANDLE_ONLY_FALLBACK',candle_only_fallback_used:true,synthetic_data_used:false},summary:{replay_steps:10,accepted:0,rejected:10}}
   ]});
   assert.equal(summary.coverage_status,'COMPLETE_WITH_CANDLE_FALLBACK');
   assert.equal(summary.coverage_complete_symbols,2);

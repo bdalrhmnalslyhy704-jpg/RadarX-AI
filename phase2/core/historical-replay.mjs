@@ -111,6 +111,31 @@ function outcomeAtPrice(futureRows, target, until) {
   const row = futureRows.find(x => x.openTime <= until && x.high >= target);
   return row ? row.closeTime : null;
 }
+function isContiguousHorizonObserved(candles,index,decisionAt,horizonMs,observationEndTime){
+  const targetAt=decisionAt+horizonMs;
+  if(horizonMs<=0)return true;
+  if(observationEndTime<targetAt-1)return false;
+  let expectedOpen=Number(candles[index]?.openTime)+MINUTE_MS;
+  if(!Number.isFinite(expectedOpen))return false;
+  for(let i=index+1;i<candles.length;i++){
+    const candle=candles[i];
+    if(candle.closeTime>targetAt-1)return false;
+    if(candle.openTime!==expectedOpen)return false;
+    expectedOpen=candle.openTime+MINUTE_MS;
+    if(candle.closeTime>=targetAt-1)return true;
+  }
+  return false;
+}
+function adverseExcursionBeforeTarget(futureRows,entryPrice,targetPrice,until){
+  const inHorizon=futureRows.filter(row=>row.openTime<=until);
+  const hitIndex=inHorizon.findIndex(row=>row.high>=targetPrice);
+  // Include the target candle low conservatively because OHLC does not reveal
+  // whether the high or low happened first inside the same one-minute candle.
+  const rows=hitIndex>=0?inHorizon.slice(0,hitIndex+1):inHorizon;
+  if(!rows.length||!(entryPrice>0))return null;
+  const lowest=Math.min(...rows.map(row=>row.low));
+  return Number(((lowest-entryPrice)/entryPrice*100).toFixed(4));
+}
 function reasonsFrom(result) {
   const values = result?.reason_codes ?? result?.notificationGate?.failures ??
     result?.notification_gate?.failures ?? result?.gate?.failures ??
@@ -129,7 +154,8 @@ function stageFrom(result) {
 export function runHistoricalReplay({
   symbol, oneMinuteCandles, aggTrades = [], startTime, endTime, evaluate,
   tradeCoverageComplete = false, tradeCoverage = null, allowCandleOnlyFallback = false,
-  alertCooldownMs = 12 * 60 * 1000, outcomeHorizonMs = 24 * 60 * 60 * 1000
+  alertCooldownMs = 12 * 60 * 1000, outcomeHorizonMs = 24 * 60 * 60 * 1000,
+  outcomeEndTime = null
 } = {}) {
   const start = finite(startTime), end = finite(endTime);
   if (!/^[A-Z0-9]{5,20}$/.test(String(symbol ?? "").toUpperCase())) throw new Error("INVALID_SYMBOL");
@@ -137,10 +163,14 @@ export function runHistoricalReplay({
   if (typeof evaluate !== "function") throw new Error("REPLAY_EVALUATOR_REQUIRED");
   if (end > Date.now() + MINUTE_MS) throw new Error("REPLAY_END_IN_FUTURE");
   if (end - start > 7 * 24 * 60 * MINUTE_MS) throw new Error("REPLAY_WINDOW_EXCEEDS_7_DAYS");
+  const observationEnd = finite(outcomeEndTime) ?? end;
+  if (observationEnd < end) throw new Error("OUTCOME_OBSERVATION_END_BEFORE_REPLAY_END");
+  if (observationEnd > Date.now() + MINUTE_MS) throw new Error("OUTCOME_OBSERVATION_END_IN_FUTURE");
+  if (observationEnd - end > 7 * 24 * 60 * MINUTE_MS) throw new Error("OUTCOME_OBSERVATION_WINDOW_EXCEEDS_7_DAYS");
   const sym = String(symbol).toUpperCase();
-  const candles = normalizeHistoricalCandles(oneMinuteCandles, {endTime: end});
-  const five = aggregateFiveMinuteCandles(candles).filter(x => x.closeTime <= end);
-  const trades = normalizeTrades(aggTrades, end);
+  const candles = normalizeHistoricalCandles(oneMinuteCandles, {endTime: observationEnd});
+  const five = aggregateFiveMinuteCandles(candles).filter(x => x.closeTime <= observationEnd);
+  const trades = normalizeTrades(aggTrades, observationEnd);
   // Missing aggregate-trade history must remain explicitly partial. In the opt-in
   // fallback mode, evaluate only verified closed candles and never substitute fake trades.
   const candleOnlyFallback = !tradeCoverageComplete && allowCandleOnlyFallback === true && candles.length > 0;
@@ -154,6 +184,10 @@ export function runHistoricalReplay({
     x.openTime >= start && x.closeTime <= end && x.high >= windowBaseline * 1.5)?.closeTime ?? null;
   const actual70CandleCloseAt = windowBaseline === null ? null : candles.find(x =>
     x.openTime >= start && x.closeTime <= end && x.high >= windowBaseline * 1.7)?.closeTime ?? null;
+  const actual5CandleCloseAt = windowBaseline === null ? null : candles.find(x =>
+    x.openTime >= start && x.closeTime <= end && x.high >= windowBaseline * 1.05)?.closeTime ?? null;
+  const actual15CandleCloseAt = windowBaseline === null ? null : candles.find(x =>
+    x.openTime >= start && x.closeTime <= end && x.high >= windowBaseline * 1.15)?.closeTime ?? null;
   // Exact crossing times come from public aggTrades, not minute-candle close times.
   // Incomplete trade history makes the exact timestamp unknown rather than guessed.
   const firstTradeAtTarget = target => trades.find(x =>
@@ -162,6 +196,10 @@ export function runHistoricalReplay({
     ? null : firstTradeAtTarget(windowBaseline * 1.5);
   const actual70At = windowBaseline === null || !tradeCoverageComplete
     ? null : firstTradeAtTarget(windowBaseline * 1.7);
+  const actual5At = windowBaseline === null || !tradeCoverageComplete
+    ? null : firstTradeAtTarget(windowBaseline * 1.05);
+  const actual15At = windowBaseline === null || !tradeCoverageComplete
+    ? null : firstTradeAtTarget(windowBaseline * 1.15);
   const targetCrossingSource = !tradeCoverageComplete
     ? "UNAVAILABLE_INCOMPLETE_TRADE_COVERAGE" : "BINANCE_PUBLIC_AGG_TRADES";
   const actual50Alignment = !tradeCoverageComplete ? "TRADE_COVERAGE_INCOMPLETE" :
@@ -228,12 +266,20 @@ export function runHistoricalReplay({
     else rejectedCount++;
 
     // Outcome-only fields are calculated separately, after evaluate() has finished.
-    const forwardRows = candles.slice(index + 1).filter(x => x.closeTime <= at + horizon);
-    const horizonObserved = candles.length > index + 1 && candles[candles.length - 1].closeTime >= at + horizon;
+    const horizonEndAt = at + horizon;
+    const forwardRows = candles.slice(index + 1).filter(x => x.closeTime <= Math.min(horizonEndAt,observationEnd));
+    const horizonObserved = isContiguousHorizonObserved(candles,index,at,horizon,observationEnd);
     const close = candle.close;
-    const f50 = outcomeAtPrice(forwardRows, close * 1.5, at + horizon);
-    const f70 = outcomeAtPrice(forwardRows, close * 1.7, at + horizon);
+    const f5 = outcomeAtPrice(forwardRows, close * 1.05, horizonEndAt);
+    const f15 = outcomeAtPrice(forwardRows, close * 1.15, horizonEndAt);
+    const f50 = outcomeAtPrice(forwardRows, close * 1.5, horizonEndAt);
+    const f70 = outcomeAtPrice(forwardRows, close * 1.7, horizonEndAt);
     const maxHigh = forwardRows.reduce((best, x) => Math.max(best, x.high), close);
+    const minLow = forwardRows.reduce((best, x) => Math.min(best, x.low), close);
+    const targetClose = horizonObserved ? forwardRows.findLast(x=>x.closeTime>=horizonEndAt-1)?.close : null;
+    const maxAdversePct = horizonObserved&&close>0 ? Number(((minLow-close)/close*100).toFixed(4)) : null;
+    const pre5DrawdownPct = (f5!==null||horizonObserved)
+      ? adverseExcursionBeforeTarget(forwardRows,close,close*1.05,horizonEndAt) : null;
     const alert = raw?.alert ?? null;
     const strong = alert?.strong_move ?? {};
     const elite = alert?.elite_gate ?? raw?.eliteGate ?? {};
@@ -255,6 +301,7 @@ export function runHistoricalReplay({
       core_trigger_diagnostics: strong?.trigger_diagnostics ?? null,
       decision: accepted ? "ACCEPTED" : "REJECTED",
       accepted_mode:String(raw?.accepted_mode ?? alert?.notification_mode ?? (accepted ? "STRICT" : "NONE")),
+      replay_data_mode:tradeCoverageComplete?'FULL_TRADE':(candleOnlyFallback?'CANDLE_ONLY_FALLBACK':'BLOCKED_INCOMPLETE'),
       rejection_group: rejectionGroup, reason_codes: reasons,
       strict_gate_failures:Array.isArray(raw?.strict_gate_failures)?raw.strict_gate_failures.slice(0,20):[],
       early_warning:raw?.early_warning??alert?.early_warning??null,
@@ -301,12 +348,26 @@ export function runHistoricalReplay({
       outcome: {
         is_future_data_for_scoring: false,
         horizon_ms: horizon, horizon_observed: horizonObserved,
-        forward_max_upside_pct_from_decision: close > 0 ? (maxHigh - close) / close * 100 : null,
+        forward_max_upside_pct_from_decision: close > 0 ? Number(((maxHigh - close) / close * 100).toFixed(4)) : null,
+        forward_max_drawdown_pct_from_decision:maxAdversePct,
+        max_adverse_excursion_pct_from_decision:maxAdversePct,
+        max_adverse_excursion_before_moderate_target_pct:pre5DrawdownPct,
+        forward_return_pct_at_horizon:targetClose!==null&&close>0?Number(((targetClose-close)/close*100).toFixed(4)):null,
+        observation_end_time:observationEnd,
+        first_future_hit_5pct_at:f5,
+        first_future_hit_15pct_at:f15,
         first_future_hit_50pct_at: f50,
         first_future_hit_70pct_at: f70,
+        minutes_to_moderate_target:f5===null?null:Math.round((f5-at)/MINUTE_MS*100)/100,
+        minutes_to_strong_target:f15===null?null:Math.round((f15-at)/MINUTE_MS*100)/100,
         minutes_to_future_50pct: f50 === null ? null : Math.round((f50 - at) / MINUTE_MS * 100) / 100,
         minutes_to_future_70pct: f70 === null ? null : Math.round((f70 - at) / MINUTE_MS * 100) / 100,
         window_baseline_price: windowBaseline,
+        actual_window_5pct_at:actual5At,actual_window_15pct_at:actual15At,
+        actual_window_5pct_candle_close_at:actual5CandleCloseAt,
+        actual_window_15pct_candle_close_at:actual15CandleCloseAt,
+        actual_window_5pct_timestamp_source:!tradeCoverageComplete?'UNAVAILABLE_INCOMPLETE_TRADE_COVERAGE':'BINANCE_PUBLIC_AGG_TRADES',
+        actual_window_15pct_timestamp_source:!tradeCoverageComplete?'UNAVAILABLE_INCOMPLETE_TRADE_COVERAGE':'BINANCE_PUBLIC_AGG_TRADES',
         actual_window_50pct_at: actual50At, actual_window_70pct_at: actual70At,
         actual_window_50pct_candle_close_at: actual50CandleCloseAt,
         actual_window_70pct_candle_close_at: actual70CandleCloseAt,
@@ -351,7 +412,9 @@ export function runHistoricalReplay({
       aggregate_trades: tradeCoverageComplete ? trades.length : 0, trade_coverage_complete: Boolean(tradeCoverageComplete),
       target_crossing_timestamp_source: targetCrossingSource,
       target_crossing_alignment: {plus_50:actual50Alignment,plus_70:actual70Alignment},
-      trade_coverage: tradeCoverage, lookahead_guard: "evaluator receives only candles/trades timestamped before or at each decision; forward outcomes are calculated afterward"
+      trade_coverage: tradeCoverage, outcome_observation_end_time:observationEnd,
+      outcome_horizon_ms:horizon, outcome_future_candles_loaded:candles.filter(x=>x.openTime>end).length,
+      lookahead_guard: "evaluator receives only candles/trades timestamped before or at each decision; forward outcomes are calculated afterward"
     },
     summary: {
       replay_steps: rows.length, accepted: acceptedCount, rejected: rejectedCount,
@@ -373,6 +436,9 @@ export function runHistoricalReplay({
         for (const code of row.core_trigger_diagnostics?.failed_checks ?? []) counts[code] = (counts[code] || 0) + 1;
         return counts;
       }, {})).map(([code, count]) => ({code, count})).sort((a,b) => b.count - a.count),
+      first_actual_window_5pct_at:actual5At,first_actual_window_15pct_at:actual15At,
+      first_actual_window_5pct_candle_close_at:actual5CandleCloseAt,
+      first_actual_window_15pct_candle_close_at:actual15CandleCloseAt,
       first_actual_window_50pct_at: actual50At, first_actual_window_70pct_at: actual70At,
       first_actual_window_50pct_candle_close_at:actual50CandleCloseAt,
       first_actual_window_70pct_candle_close_at:actual70CandleCloseAt,
