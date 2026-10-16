@@ -84,6 +84,18 @@ test('false-alert rate does not double-count failed early setups',()=>{
   assert.equal(metrics.false_alert_rate_pct,100);
 });
 
+test('lead time uses exact aggregate-trade crossing time when complete trade coverage exists',()=>{
+  const accepted=row({symbol:'EXACTUSDT',timestamp:1_700_000_000_000,decision:'ACCEPTED',mode:'EARLY_WARNING',move:8,window:'exact-window',eventAt:1_700_000_300_000});
+  accepted.outcome.actual_window_5pct_at=1_700_000_240_000;
+  accepted.outcome.actual_window_5pct_timestamp_source='BINANCE_PUBLIC_AGG_TRADES';
+  const metrics=evaluateHistoricalLearningMetrics(buildHistoricalLearningDataset([{id:'exact-window',window:{start_time:1_700_000_000_000},results:[{symbol:'EXACTUSDT',steps:[accepted]}]}]));
+  const event=metrics.market_events[0];
+  assert.equal(event.event_at,1_700_000_240_000);
+  assert.equal(event.event_at_candle_close,1_700_000_300_000);
+  assert.equal(event.lead_time_basis,'EXACT_AGGTRADE_TIMESTAMP');
+  assert.equal(event.lead_time_minutes,4);
+});
+
 test('score values do not masquerade as probabilities; explicit probabilities get Brier and ECE scores',()=>{
   const rows=[
     row({symbol:'AUSDT',decision:'ACCEPTED',move:10,probability:0.8}),
