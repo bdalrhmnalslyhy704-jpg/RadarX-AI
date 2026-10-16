@@ -920,3 +920,30 @@ test('archive rehydration retries newly eligible and re-entering symbols with a 
   assert.equal(calls.flat().includes('AAAUSDT')&&calls.length===4,true,
     'already-ready symbols are not redundantly re-read from the archive');
 });
+
+
+test('live best-bid/ask changes refresh unified features even while the closed candle is unchanged',()=>{
+  const now=1_900_000_000_000;
+  const symbol='LIGHT-SPREAD-USDT';
+  const eligible=[{symbol,lastPrice:100,priceChange24h:1,quoteVolume24h:5_000_000,tradeCount24h:20_000}];
+  const series=cacheSeries(symbol,now);
+  const light=new MarketWideLightScan({clock:()=>now});
+  const first=light.scan({
+    eligible,now,cycle:1,getSeries:()=>series,
+    getBookTicker:()=>({bidPrice:'99.99',askPrice:'100.01',bidQty:'100',askQty:'90'})
+  });
+  const firstRow=first.audit.get(symbol);
+  const firstSpread=firstRow.feature_engine.features.liquidity.actual_top_of_book_and_depth.spread_bps;
+  assert.equal(firstSpread,2);
+  const second=light.scan({
+    eligible,now:now+1000,cycle:2,getSeries:()=>series,
+    getBookTicker:()=>({bidPrice:'99.90',askPrice:'100.10',bidQty:'10',askQty:'100'})
+  });
+  const secondRow=second.audit.get(symbol);
+  const secondSpread=secondRow.feature_engine.features.liquidity.actual_top_of_book_and_depth.spread_bps;
+  assert.equal(secondRow.evaluation_reused,false);
+  assert.equal(secondRow.evaluation_kind,'LIVE_MARKET_FEATURES_REFRESHED');
+  assert.ok(secondSpread>firstSpread,JSON.stringify({firstSpread,secondSpread}));
+  assert.equal(secondRow.feature_engine.features.liquidity.actual_top_of_book_and_depth.depth_available,false,
+    'top-of-book sizes must not be misrepresented as full depth');
+});
