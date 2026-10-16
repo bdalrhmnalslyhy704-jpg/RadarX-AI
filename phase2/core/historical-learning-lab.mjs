@@ -31,7 +31,7 @@ const mean=values=>{
 const pct=(n,d)=>d>0?Number((n/d*100).toFixed(4)):null;
 const normSymbol=value=>String(value??'').trim().toUpperCase();
 const timeOf=row=>finite(row?.timestamp??row?.decision_at??row?.at);
-const regimeOf=(row,fallback='UNKNOWN')=>String(row?.market_regime??row?.regime??fallback??'UNKNOWN').toUpperCase();
+const regimeOf=(row,fallback='UNKNOWN')=>String(row?.market_regime?.regime??row?.market_regime??row?.regime?.regime??row?.regime??fallback??'UNKNOWN').toUpperCase();
 
 function integrityIssues(row){
   const issues=[];
@@ -347,7 +347,7 @@ export function auditHistoricalMatrixCoverage(matrixReport,{expectedSymbols=[],e
   const symbols=[...new Set(arr(expectedSymbols).map(normSymbol).filter(Boolean))];
   const windowsWanted=[...new Set(arr(expectedWindows).map(x=>String(typeof x==='object'?(x.id??x.window_id??x.start??''):x)).filter(Boolean))];
   const seenPairs=new Set(),missingPairs=[];
-  const windowById=new Map(windows.map(w=>[String(w.id??w.window_id??w.window?.id??w.window?.start??w.window?.start_time??''),w]));
+  const windowById=new Map(windows.flatMap(w=>{const window=w?.window??{};const ids=[w.id,w.window_id,window.id,window.start,window.start_time,window.start_iso].filter(x=>x!==null&&x!==undefined).map(String);return ids.map(id=>[id,w]);}));
   const regimes=new Set(windows.map(w=>String(w.market_regime?.regime??w.market_regime??'UNKNOWN').toUpperCase()));
   for(const symbol of symbols){
     for(const id of windowsWanted){
