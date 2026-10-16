@@ -414,8 +414,9 @@ export function advanceSignalLifecycle(alert,gate,{now=Date.now()}={}){
     state='EARLY_SETUP';reasons=['RELATED_EARLY_EVIDENCE',...failures];
   }else reasons=[failures.length?'WAITING_FOR_CONFIRMATION':'INITIAL_SIGNS_ONLY',...failures];
   let generation=Number(previous?.generation)||1, transition=previous?(previous.state===state?'UNCHANGED':'STATE_CHANGED'):'INITIAL', previousState=previous?.state??null;
+  const freshSetupEvidence=alert?.new_setup_detected===true||/^(WATCH_EARLY|PRE_EXPANSION|QUIET_BASE_PRE_EXPANSION|EARLY_SETUP|BREAKOUT_DEVELOPING|PRE_BREAKOUT|CONFIRMING_SETUP|IGNITION|TRIGGER_CONFIRMED)$/.test(stage);
   if(previous?.state==='INVALIDATED'&&state!=='INVALIDATED'){
-    if(['EARLY_SETUP','SIGNAL_REVIEW','CONFIRMED'].includes(state)){
+    if(freshSetupEvidence&&['EARLY_SETUP','SIGNAL_REVIEW','CONFIRMED'].includes(state)){
       generation++;transition='NEW_SETUP_AFTER_INVALIDATION';previousState='INVALIDATED';
     }else{
       state='INVALIDATED';reasons.push('AWAITING_NEW_SETUP_EVIDENCE');transition='INVALIDATION_RETAINED';
