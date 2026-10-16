@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {evaluateRadarNotificationGate,notificationGateHealth,resetRadarNotificationGateForTests} from '../core/radar-notification-gate.mjs';
+import {evaluateRadarNotificationGate,notificationGateHealth,resetRadarNotificationGateForTests,getRadarSignalLifecycleState,radarSignalLifecycleHealth} from '../core/radar-notification-gate.mjs';
 import {evaluateRadarQuality} from '../core/radar-quality-v3.mjs';
 import {buildEarlyExpansionAlert} from '../core/early-expansion-radar.mjs';
 
@@ -255,3 +255,62 @@ test('final notification gate fails closed when continuation evidence is missing
   }),{now:NOW,commit:false});
   assert.ok(falcon.failures.includes('FALCON_BREAKOUT_CONTINUATION_UNCONFIRMED'));
 });
+
+test('shared signal lifecycle progresses from early setup to review then invalidation without replacing radar-specific eligibility',()=>{
+  resetRadarNotificationGateForTests();
+  const early=evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{
+    pre_expansion_stage:'PRE_EXPANSION',
+    potential_label:'PRE_EXPANSION',
+    pre_expansion_fingerprint:{stage:'PRE_EXPANSION',ready:true,late:false,micro_move:false,score:82}
+  }),{now:NOW});
+  assert.equal(early.signal_lifecycle.state,'EARLY_SETUP',JSON.stringify(early.signal_lifecycle));
+  assert.equal(early.signal_lifecycle.label,'إعداد مبكر');
+  assert.equal(typeof early.eligible,'boolean','existing per-radar eligibility remains independently evaluated');
+
+  const review=evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{
+    pre_expansion_stage:'BREAKOUT_DEVELOPING',
+    potential_label:'BREAKOUT_DEVELOPING',
+    pre_expansion_fingerprint:{stage:'BREAKOUT_DEVELOPING',ready:true,late:false,micro_move:false,score:86}
+  }),{now:NOW+1000});
+  assert.equal(review.signal_lifecycle.state,'SIGNAL_REVIEW',JSON.stringify(review.signal_lifecycle));
+  assert.equal(review.signal_lifecycle.transition,'TRIGGER_DETECTED');
+
+  const invalid=evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{
+    pre_expansion_stage:'ALREADY_EXTENDED',
+    potential_label:'ALREADY_EXTENDED'
+  }),{now:NOW+2000});
+  assert.equal(invalid.signal_lifecycle.state,'INVALIDATED',JSON.stringify(invalid.signal_lifecycle));
+  assert.equal(invalid.signal_lifecycle.terminal,true);
+  assert.ok(invalid.signal_lifecycle.reason_codes.includes('SETUP_STAGE_ALREADY_EXTENDED'));
+  const stored=getRadarSignalLifecycleState({symbol:'TESTUSDT',radar:'EARLY_EXPANSION_RADAR'});
+  assert.equal(stored.state,'INVALIDATED');
+  assert.equal(stored.generation,1);
+});
+
+test('missing market evidence stays in monitoring instead of falsely invalidating the setup',()=>{
+  resetRadarNotificationGateForTests();
+  const result=evaluateRadarNotificationGate(baseline('STRONG_MOVE_RADAR',{
+    data_quality:null,liquidity_quality:null,data_status:{data_quality:null,stale:true}
+  }),{now:NOW});
+  assert.equal(result.signal_lifecycle.state,'MONITOR',JSON.stringify(result.signal_lifecycle));
+  assert.equal(result.signal_lifecycle.terminal,false);
+  assert.ok(result.signal_lifecycle.reason_codes.includes('EVIDENCE_NOT_READY'));
+  assert.equal(radarSignalLifecycleHealth({now:NOW}).tracked_candidates,1);
+});
+
+test('an invalidated setup is retained until a materially new early setup appears',()=>{
+  resetRadarNotificationGateForTests();
+  evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{pre_expansion_stage:'ALREADY_EXTENDED'}),{now:NOW});
+  const weak=evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{}),{now:NOW+1000});
+  assert.equal(weak.signal_lifecycle.state,'INVALIDATED');
+  assert.equal(weak.signal_lifecycle.transition,'INVALIDATION_RETAINED');
+
+  const renewed=evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{
+    pre_expansion_stage:'PRE_EXPANSION',
+    pre_expansion_fingerprint:{stage:'PRE_EXPANSION',ready:true,late:false,score:84}
+  }),{now:NOW+2000});
+  assert.ok(['EARLY_SETUP','SIGNAL_REVIEW','CONFIRMED'].includes(renewed.signal_lifecycle.state),JSON.stringify(renewed.signal_lifecycle));
+  assert.equal(renewed.signal_lifecycle.generation,2);
+  assert.equal(renewed.signal_lifecycle.transition,'NEW_SETUP_AFTER_INVALIDATION');
+});
+
