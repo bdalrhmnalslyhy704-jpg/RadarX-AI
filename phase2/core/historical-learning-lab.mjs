@@ -263,13 +263,13 @@ export function evaluateHistoricalLearningMetrics(dataset,{moderateMovePct=5,str
     const radar=row.radar||'UNKNOWN_RADAR',regime=row.market_regime||'UNKNOWN';
     if(!byRadar[radar])byRadar[radar]={rows:0,accepted:0,successes:0,false_alerts:0,missed_move_decisions:0,unavailable:0};
     const rr=byRadar[radar];rr.rows++;if(row.decision==='ACCEPTED')rr.accepted++;
-    if(row.success_label===true)rr.successes++;
+    if(row.decision==='ACCEPTED'&&row.success_label===true)rr.successes++;
     if(['FALSE_ALERT','EARLY_SIGNAL_FAILED'].includes(row.outcome_class))rr.false_alerts++;
     if(row.outcome_class==='MISSED_MOVE_DECISION')rr.missed_move_decisions++;
     if(!row.horizon_observed)rr.unavailable++;
     if(!byRegime[regime])byRegime[regime]={rows:0,accepted:0,successful_alerts:0,false_alerts:0,missed_move_decisions:0};
     const rg=byRegime[regime];rg.rows++;if(row.decision==='ACCEPTED')rg.accepted++;
-    if(row.success_label===true)rg.successful_alerts++;
+    if(row.decision==='ACCEPTED'&&row.success_label===true)rg.successful_alerts++;
     if(['FALSE_ALERT','EARLY_SIGNAL_FAILED'].includes(row.outcome_class))rg.false_alerts++;
     if(row.outcome_class==='MISSED_MOVE_DECISION')rg.missed_move_decisions++;
   }
