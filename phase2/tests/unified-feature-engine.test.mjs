@@ -205,13 +205,22 @@ test('stale or truncated live aggregate trades never confirm current buyer press
   assert.equal(truncated.features.live_trade_flow.status,'SAMPLE_TRUNCATED');
 });
 
-test('future and malformed aggregate trades are excluded from the live flow window',()=>{
+test('future aggregate trades are excluded from the live flow window',()=>{
   const base=makeQuietBase();
   const raw=liveAggSample(base.now);
   raw.push(aggTrade(99001,base.now+5000,true));
-  raw.push({a:99002,p:'not-a-price',q:'1',f:99002,l:99002,T:base.now-1000,m:false});
   const result=snapshot({liveAggTrades:raw});
   assert.equal(result.features.live_trade_flow.available,true);
   assert.equal(result.features.live_trade_flow.current.execution_count,20);
   assert.equal(result.closed_candle_count,base.rows.length);
+});
+
+test('malformed in-window aggregate trade data fails closed rather than fabricating buyer flow',()=>{
+  const base=makeQuietBase();
+  const raw=liveAggSample(base.now);
+  raw.push({a:99002,p:'not-a-price',q:'1',f:99002,l:99002,T:base.now-1000,m:false});
+  const result=snapshot({liveAggTrades:raw});
+  assert.equal(result.features.live_trade_flow.available,false);
+  assert.equal(result.features.live_trade_flow.status,'INVALID_TRADE_RECORDS');
+  assert.equal(result.features.live_trade_flow.malformed_trade_rows,1);
 });
