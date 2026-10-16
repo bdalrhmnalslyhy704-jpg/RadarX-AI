@@ -93,7 +93,10 @@ function summarizeLiveAggTradeFlow(input, closedRows, now, config = {}) {
   const sampleTruncated = raw.length >= maxRows;
   const malformedRows = raw.filter(trade => {
     const time = num(trade?.T);
-    if (time === null || time < baselineStart || time > now) return false;
+    // An un-timestamped row cannot safely be proven outside the live window.
+    // Fail closed rather than scoring a sample whose temporal coverage is unknown.
+    if (time === null) return true;
+    if (time < baselineStart || time > now) return false;
     const price = num(trade?.p), qty = num(trade?.q);
     return price === null || qty === null || price <= 0 || qty <= 0 || typeof trade?.m !== 'boolean';
   }).length;

@@ -226,6 +226,16 @@ test('malformed in-window aggregate trade data fails closed rather than fabricat
 });
 
 
+test('untimestamped aggregate trades invalidate the live-flow sample',()=>{
+  const base=makeQuietBase();
+  const raw=liveAggSample(base.now);
+  raw.push({a:99003,p:'101',q:'1',f:99003,l:99003,m:false});
+  const result=snapshot({liveAggTrades:raw});
+  assert.equal(result.features.live_trade_flow.available,false);
+  assert.equal(result.features.live_trade_flow.status,'INVALID_TRADE_RECORDS');
+  assert.equal(result.features.live_trade_flow.malformed_trade_rows,1);
+});
+
 test('stale best-bid/ask snapshots are ignored instead of being scored as current liquidity',()=>{
   const base=makeQuietBase();
   const result=snapshot({
