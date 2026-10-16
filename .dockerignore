@@ -1,0 +1,16 @@
+# Build/test infrastructure is retained in GitHub, not shipped with the live backend.
+.git/
+.github/
+.vscode/
+.idea/
+
+# The backend does not execute the test suites; GitHub Actions still has these files.
+**/tests/
+
+# Native Android sources and release artifacts are built by GitHub Actions, not the Node backend.
+android/
+**/*.apk
+**/*.aab
+
+# Runtime archives belong on the mounted persistent volume (/data), never in an image.
+.radarx-data/
