@@ -502,7 +502,7 @@ function specialistAnalysis(candidate, market={}, calibration=null){
   const symbol=String(candidate?.symbol||'').toUpperCase();
   const symbolValid=/^[A-Z0-9]{1,20}USDT$/.test(symbol)&&candidate?.data_status?.symbol_valid!==false&&candidate?.data_status?.spot_trading_allowed!==false&&candidate?.isSpotTradingAllowed!==false&&(!candidate?.quote_asset&&!candidate?.quoteAsset||String(candidate?.quote_asset??candidate?.quoteAsset).toUpperCase()==='USDT');
   const quoteVolume24h=safe(candidate?.quote_volume_24h,0);
-  const sharedSnapshot={id:String(market?.snapshot_id||''),as_of:Number.isFinite(Number(market?.as_of))?Number(market.as_of):null,source:String(market?.snapshot_source||'UNKNOWN'),available:Boolean(market?.snapshot_id&&Number.isFinite(Number(market?.as_of))),btc_15m_count:Array.isArray(market?.btc15)?market.btc15.length:0,btc_1h_count:Array.isArray(market?.btc1)?market.btc1.length:0,market_median_24h:Number.isFinite(Number(market?.marketMedian24h))?Number(market.marketMedian24h):null,breadth_pct:Number.isFinite(Number(market?.breadthPct))?Number(market.breadthPct):null};
+  const sharedSnapshot={id:String(market?.snapshot_id||''),as_of:Number.isFinite(Number(market?.as_of))?Number(market.as_of):null,source:String(market?.snapshot_source||'UNKNOWN'),available:Boolean(market?.snapshot_id&&market?.as_of!==null&&market?.as_of!==undefined&&Number.isFinite(Number(market?.as_of))),btc_15m_count:Array.isArray(market?.btc15)?market.btc15.length:0,btc_1h_count:Array.isArray(market?.btc1)?market.btc1.length:0,market_median_24h:Number.isFinite(Number(market?.marketMedian24h))?Number(market.marketMedian24h):null,breadth_pct:Number.isFinite(Number(market?.breadthPct))?Number(market.breadthPct):null};
   const rowDataValid=candidate?.data_status?.data_valid===true;
   const c4=closes(s4),c1=closes(s1),c15=closes(s15);
   const price=safe(candidate?.last_price,null);
@@ -928,7 +928,7 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   if(features?.symbol_valid!==true)hardReasons.push('SPOT_SYMBOL_INVALID');
   if(features?.coverage_report?.ready!==true)hardReasons.push('CANDLE_COVERAGE_INCOMPLETE');
   if(Number(features?.quoteVolume24h)<300000)hardReasons.push('LIQUIDITY_NOTIONAL_TOO_LOW');
-  if(!Number.isFinite(Number(features?.book?.spreadBps)))hardReasons.push('SPREAD_EVIDENCE_UNAVAILABLE');
+  if(!Number.isFinite(features?.book?.spreadBps))hardReasons.push('SPREAD_EVIDENCE_UNAVAILABLE');
   else if(Number(features.book.spreadBps)>35)hardReasons.push('SPREAD_TOO_WIDE');
   if(features?.primary_evidence_complete!==true)hardReasons.push('PRIMARY_EVIDENCE_INCOMPLETE');
   if(features?.shared_snapshot?.available!==true)hardReasons.push('SHARED_MARKET_SNAPSHOT_UNAVAILABLE');
@@ -1398,7 +1398,7 @@ export class MultiAnalystEngine {
               evidence:{error:msg},risks:[msg]
             })),features:{price:safe(row?.last_price,Number(ticker?.lastPrice)||null),priceChange24h:safe(row?.price_change_24h,0),structure:{bull:0,bear:0,headroom:null},book:{imbalance:null,bidWallShare:null,askWallShare:null}},dataValid:false};
             const final={
-              score:0,verdict:'REJECT',direction:'NEUTRAL',positiveAnalysts:0,strongAnalysts:0,totalAnalysts:19,
+              score:0,verdict:'REJECT',decision:'REJECT',direction:'NEUTRAL',positiveAnalysts:0,strongAnalysts:0,totalAnalysts:19,
               hardReasons:['DATA_GATE_FAILED',msg],reasons:[],risks:[msg],agreement:0,
               market_regime:'MIXED',early_score:0,timing:'NO_SETUP',temporal_persistence:0,
               decision_gate:{critical_good:false,early_window_open:false,agreement_ok:false},
