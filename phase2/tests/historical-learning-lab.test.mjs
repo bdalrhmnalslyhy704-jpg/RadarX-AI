@@ -101,8 +101,8 @@ test('walk-forward split keeps timestamps ordered and purges labels crossing spl
 
 test('matrix audit flags a missing symbol-window pair and missing market regimes',()=>{
   const matrix={windows:[
-    {id:'bull',market_regime:{regime:'BULL_TREND'},results:[{symbol:'AUSDT',data_quality:{candle_fetch_complete:true,synthetic_data_used:false,replay_mode:'FULL_TRADE'}}]},
-    {id:'bear',market_regime:{regime:'BEAR_TREND'},results:[{symbol:'AUSDT',data_quality:{candle_fetch_complete:true,synthetic_data_used:false,replay_mode:'FULL_TRADE'}}]}
+    {id:'bull',market_regime:{regime:'BULL_TREND'},results:[{symbol:'AUSDT',data_quality:{candle_fetch_complete:true,outcome_candle_fetch_complete:true,synthetic_data_used:false,replay_mode:'FULL_TRADE'}}]},
+    {id:'bear',market_regime:{regime:'BEAR_TREND'},results:[{symbol:'AUSDT',data_quality:{candle_fetch_complete:true,outcome_candle_fetch_complete:true,synthetic_data_used:false,replay_mode:'FULL_TRADE'}}]}
   ]};
   const audit=auditHistoricalMatrixCoverage(matrix,{expectedSymbols:['AUSDT','BUSDT'],expectedWindows:['bull','bear','sideways']});
   assert.equal(audit.status,'INCOMPLETE_OR_PARTIAL');
