@@ -155,12 +155,18 @@ test('monthly ex-post event anchors score lead time without counting control coh
   const reports=[
     {id:'strong-case',window:{id:'strong-case'},market_event:{at:anchor,cohort:'STRONG',is_positive:true,anchor_type:'FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH',monthly_return_pct:31},
       results:[{symbol:'CAPTUREUSDT',steps:[
-        row({symbol:'CAPTUREUSDT',timestamp:start,decision:'ACCEPTED',mode:'EARLY_WARNING',move:8,window:'strong-case'}),
-        row({symbol:'CAPTUREUSDT',timestamp:start+MINUTE,decision:'REJECTED',move:1,window:'strong-case'})
+        {...row({symbol:'CAPTUREUSDT',timestamp:start,decision:'ACCEPTED',mode:'EARLY_WARNING',move:8,window:'strong-case'}),
+          market_event_at:anchor,market_event_cohort:'STRONG',market_event_is_positive:true,
+          market_event_anchor_type:'FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH',market_event_monthly_return_pct:31},
+        {...row({symbol:'CAPTUREUSDT',timestamp:start+MINUTE,decision:'REJECTED',move:1,window:'strong-case'}),
+          market_event_at:anchor,market_event_cohort:'STRONG',market_event_is_positive:true,
+          market_event_anchor_type:'FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH',market_event_monthly_return_pct:31}
       ]}]},
     {id:'control-case',window:{id:'control-case'},market_event:{at:anchor,cohort:'CONTROL',is_positive:false,anchor_type:'CONTROL_REFERENCE',monthly_return_pct:1},
       results:[{symbol:'CONTROLUSDT',steps:[
-        row({symbol:'CONTROLUSDT',timestamp:start,decision:'ACCEPTED',mode:'STRICT',move:1,window:'control-case'})
+        {...row({symbol:'CONTROLUSDT',timestamp:start,decision:'ACCEPTED',mode:'STRICT',move:1,window:'control-case'}),
+          market_event_at:anchor,market_event_cohort:'CONTROL',market_event_is_positive:false,
+          market_event_anchor_type:'CONTROL_REFERENCE',market_event_monthly_return_pct:1}
       ]}]}
   ];
   const dataset=buildHistoricalLearningDataset(reports);
