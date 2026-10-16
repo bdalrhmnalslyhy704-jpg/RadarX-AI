@@ -30,10 +30,11 @@ jobs:
   replay-and-score:
     name: Historical Spot replay, coverage audit and walk-forward metrics
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 360
     env:
       REPORT_DIR: reports/radarx-historical-learning-lab
       MATRIX_DIR: reports/radarx-historical-learning-lab/matrix
+      MONTHLY_REPORT: reports/radarx-historical-learning-lab/monthly-forensics.json
       MAX_TRADE_PAGES: ${{ inputs.max_trade_pages || '20' }}
       MAX_TRADES: ${{ inputs.max_trades || '20000' }}
       OUTCOME_HORIZON_HOURS: ${{ inputs.outcome_horizon_hours || '24' }}
@@ -55,6 +56,48 @@ jobs:
           node --test phase2/tests/historical-replay-matrix.test.mjs
           node --test phase2/tests/historical-learning-lab.test.mjs
           node --test phase2/tests/historical-learning-lab-cli.test.mjs
+          node --test phase2/tests/monthly-historical-replay-lab.test.mjs
+      - name: Download and analyze the rolling 30-day Spot mover archive
+        id: monthly-forensics
+        continue-on-error: true
+        env:
+          FORENSICS_DAYS: "30"
+          FORENSICS_JSON_PATH: reports/radarx-historical-learning-lab/monthly-forensics.json
+          FORENSICS_MARKDOWN_PATH: reports/radarx-historical-learning-lab/monthly-forensics.md
+        run: |
+          mkdir -p "$REPORT_DIR"
+          node phase2/tools/monthly-move-forensics.mjs
+          test -s "$MONTHLY_REPORT"
+
+      - name: Replay Strong Move decisions before monthly mover event anchors
+        id: monthly-replay
+        if: always() && hashFiles('reports/radarx-historical-learning-lab/monthly-forensics.json') != ''
+        continue-on-error: true
+        run: |
+          node phase2/tools/monthly-historical-replay-lab.mjs \
+            --input "$MONTHLY_REPORT" \
+            --output-dir "$REPORT_DIR/monthly" \
+            --max-trade-pages "$MAX_TRADE_PAGES" \
+            --max-trades "$MAX_TRADES" \
+            --outcome-horizon-hours "$OUTCOME_HORIZON_HOURS" \
+            --case-timeout-ms 1800000
+
+      - name: Require complete rolling-month case replays and matured outcome horizons
+        if: always() && hashFiles('reports/radarx-historical-learning-lab/monthly/monthly-learning-summary.json') != ''
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const report=JSON.parse(fs.readFileSync('reports/radarx-historical-learning-lab/monthly/monthly-learning-summary.json','utf8'));
+          const errors=[];
+          if(report.coverage?.complete!==true) errors.push('MONTHLY_CASE_COVERAGE_INCOMPLETE');
+          if(report.coverage?.failed_or_skipped_cases>0) errors.push('MONTHLY_CASES_FAILED_OR_SKIPPED');
+          if(report.walk_forward?.status!=='READY') errors.push('MONTHLY_WALK_FORWARD_SPLIT_NOT_READY');
+          if(!(report.walk_forward?.train_count>0 && report.walk_forward?.validation_count>0 && report.walk_forward?.test_count>0)) errors.push('MONTHLY_TEMPORAL_SPLIT_EMPTY');
+          if(report.detector_replay_scope?.replayed_profiles?.length!==1) errors.push('REPLAY_SCOPE_NOT_EXPLICIT');
+          console.log(JSON.stringify({coverage:report.coverage,scope:report.detector_replay_scope,metrics:{accepted:report.metrics?.accepted_decisions,success:report.metrics?.successful_alerts,false_alerts:report.metrics?.false_alerts,missed_events:report.metrics?.missed_move_events,lead_minutes:report.metrics?.median_lead_time_minutes},walk_forward:report.walk_forward,errors},null,2));
+          if(errors.length) process.exit(1);
+          NODE
+
       - name: Validate the bounded 90-case plan without network
         run: node phase2/tools/historical-replay-matrix.mjs --dry-run
       - name: Replay closed public Spot history
@@ -109,5 +152,7 @@ jobs:
       - name: Enforce coverage and replay success
         if: always()
         run: |
+          test "${{ steps.monthly-forensics.outcome }}" = "success"
+          test "${{ steps.monthly-replay.outcome }}" = "success"
           test "${{ steps.matrix.outcome }}" = "success"
           test "${{ steps.lab.outcome }}" = "success"
