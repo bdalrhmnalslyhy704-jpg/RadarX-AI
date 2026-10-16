@@ -576,10 +576,13 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,live
     (liquidityScore<cfg.minLiquidityQuality || Number(ticker.priceChange24h||0)<=-cfg.hardExtended24hMovePct)
   );
   const highRisk=pumpRisk;
+  // Anti-chase is directional: a mature upward move is extended, while a prior selloff
+  // is handled by dump-risk and market/liquidity gates rather than mislabeled as a late pump.
   const extended=(
-    Math.abs(Number(ticker.priceChange24h)||0)>=cfg.hardExtended24hMovePct||
-    Math.abs(Number(r1h)||0)>=cfg.hardExtended1hMovePct||
-    Math.abs(Number(r15)||0)>=cfg.hardExtended15mMovePct
+    (Number(ticker.priceChange24h)||0)>=cfg.hardExtended24hMovePct||
+    (Number(r1h)||0)>=cfg.hardExtended1hMovePct||
+    (Number(r15)||0)>=cfg.hardExtended15mMovePct||
+    unifiedFeatureEngine.stage==='ALREADY_EXTENDED'
   );
   const scoreParts={
     volume_acceleration:volumeAccel,
