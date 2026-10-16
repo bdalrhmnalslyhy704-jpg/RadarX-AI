@@ -1,0 +1,112 @@
+name: RadarX Historical Learning Lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_trade_pages:
+        description: Maximum aggregate-trade pages per symbol/window (bounded public Spot requests)
+        required: false
+        default: "20"
+        type: string
+      max_trades:
+        description: Maximum aggregate trades per symbol/window
+        required: false
+        default: "20000"
+        type: string
+      outcome_horizon_hours:
+        description: Forward outcome horizon for each historical decision
+        required: false
+        default: "24"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: radarx-historical-learning-lab
+  cancel-in-progress: false
+
+jobs:
+  replay-and-score:
+    name: Historical Spot replay, coverage audit and walk-forward metrics
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      REPORT_DIR: reports/radarx-historical-learning-lab
+      MATRIX_DIR: reports/radarx-historical-learning-lab/matrix
+      MAX_TRADE_PAGES: ${{ inputs.max_trade_pages || '20' }}
+      MAX_TRADES: ${{ inputs.max_trades || '20000' }}
+      OUTCOME_HORIZON_HOURS: ${{ inputs.outcome_horizon_hours || '24' }}
+    steps:
+      - name: Checkout Build 224 branch
+        uses: actions/checkout@v4
+        with:
+          ref: build224-multi-analyst-20261007
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Test historical replay and learning lab
+        run: |
+          node --test phase2/tests/historical-replay.test.mjs
+          node --test phase2/tests/historical-replay-matrix.test.mjs
+          node --test phase2/tests/historical-learning-lab.test.mjs
+          node --test phase2/tests/historical-learning-lab-cli.test.mjs
+      - name: Validate the bounded 90-case plan without network
+        run: node phase2/tools/historical-replay-matrix.mjs --dry-run
+      - name: Replay closed public Spot history
+        id: matrix
+        continue-on-error: true
+        run: |
+          mkdir -p "$MATRIX_DIR"
+          node phase2/tools/historical-replay-matrix.mjs \
+            --output "$MATRIX_DIR" \
+            --max-trade-pages "$MAX_TRADE_PAGES" \
+            --max-trades "$MAX_TRADES" \
+            --timeout-ms 1800000
+      - name: Score outcomes and produce the chronological holdout report
+        id: lab
+        if: always() && hashFiles('reports/radarx-historical-learning-lab/matrix/matrix-summary.json') != ''
+        continue-on-error: true
+        run: |
+          node phase2/tools/historical-learning-lab.mjs \
+            --matrix-summary "$MATRIX_DIR/matrix-summary.json" \
+            --moderate-move-pct 5 \
+            --strong-move-pct 15 \
+            --train-fraction 0.6 \
+            --validation-fraction 0.2 \
+            --embargo-hours "$OUTCOME_HORIZON_HOURS" \
+            --output "$REPORT_DIR/learning-summary.json" \
+            --dataset-output "$REPORT_DIR/learning-dataset.json"
+      - name: Require complete symbol-window outcomes and walk-forward slices
+        if: always() && hashFiles('reports/radarx-historical-learning-lab/learning-summary.json') != ''
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const report=JSON.parse(fs.readFileSync('reports/radarx-historical-learning-lab/learning-summary.json','utf8'));
+          const errors=[];
+          if(report.coverage_gate?.complete!==true) errors.push('SYMBOL_WINDOW_OR_REGIME_COVERAGE_INCOMPLETE');
+          if(report.coverage_gate?.release_grade!==true) errors.push('COVERAGE_EXPECTATIONS_NOT_RELEASE_GRADE');
+          if(report.walk_forward?.status!=='READY') errors.push('WALK_FORWARD_SPLIT_NOT_READY');
+          if(!(report.walk_forward?.train_count>0 && report.walk_forward?.validation_count>0 && report.walk_forward?.test_count>0)) errors.push('TEMPORAL_SPLIT_EMPTY');
+          if(report.dataset_summary?.decision_rows<=0) errors.push('NO_DECISION_ROWS');
+          if(report.metrics?.calibration?.status==='ESTIMATED_FROM_EXPLICIT_PROBABILITIES' && report.metrics.calibration.samples<=0) errors.push('CALIBRATION_HAS_NO_SAMPLES');
+          console.log(JSON.stringify({coverage:report.coverage_gate,walk_forward:report.walk_forward,decision_rows:report.dataset_summary?.decision_rows,evaluable_decisions:report.metrics?.evaluable_decisions,calibration:report.metrics?.calibration,errors},null,2));
+          if(errors.length) process.exit(1);
+          NODE
+      - name: Upload reports even when coverage is incomplete
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-historical-learning-lab-${{ github.run_number }}
+          path: reports/radarx-historical-learning-lab/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Enforce coverage and replay success
+        if: always()
+        run: |
+          test "${{ steps.matrix.outcome }}" = "success"
+          test "${{ steps.lab.outcome }}" = "success"
