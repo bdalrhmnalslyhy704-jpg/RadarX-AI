@@ -88,6 +88,16 @@ test('extended price movement is classified as ALREADY_EXTENDED instead of chase
   assert.ok(result.reasons.includes('ANTI_CHASE_EXTENSION_LIMIT'));
 });
 
+
+test('a large prior selloff is not misclassified as a late upward extension',()=>{
+  const base=makeQuietBase();
+  const result=snapshot({
+    ticker:{symbol:'TESTUSDT',lastPrice:base.rows.at(-1).close,priceChange24h:-15,quoteVolume24h:8_000_000,tradeCount24h:40_000}
+  });
+  assert.notEqual(result.stage,'ALREADY_EXTENDED');
+  assert.equal(result.reasons.includes('ANTI_CHASE_EXTENSION_LIMIT'),false);
+});
+
 test('no fabricated buyer flow: missing taker-buy data cannot create PRE_EXPANSION',()=>{
   const base=makeQuietBase();
   const rows=base.rows.map(c=>({...c,takerBuyQuoteVolume:null,takerBuyBaseVolume:null}));
