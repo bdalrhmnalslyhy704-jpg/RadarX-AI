@@ -364,7 +364,7 @@ export function auditHistoricalMatrixCoverage(matrixReport,{expectedSymbols=[],e
       const w=windowById.get(id);
       const rows=arr(w?.report?.results??w?.results);
       const found=rows.find(x=>normSymbol(x.symbol)===symbol);
-      if(found&&found.data_quality?.candle_fetch_complete===true&&found.data_quality?.synthetic_data_used===false&&['FULL_TRADE','CANDLE_ONLY_FALLBACK'].includes(found.data_quality?.replay_mode)){
+      if(found&&found.data_quality?.candle_fetch_complete===true&&found.data_quality?.outcome_candle_fetch_complete===true&&found.data_quality?.synthetic_data_used===false&&['FULL_TRADE','CANDLE_ONLY_FALLBACK'].includes(found.data_quality?.replay_mode)){
         seenPairs.add(symbol+'|'+id);
       }else missingPairs.push({symbol,window_id:id,reason:found?'DATA_COVERAGE_INVALID':'SYMBOL_WINDOW_RESULT_MISSING'});
     }
