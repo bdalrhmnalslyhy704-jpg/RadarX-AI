@@ -7,10 +7,12 @@ import {
 } from '../core/historical-learning-lab.mjs';
 
 const MINUTE=60_000;
-function row({symbol='TESTUSDT',timestamp=1_800_000_000_000,decision='REJECTED',mode='NONE',move=0,horizon=true,score=90,window='window-a',eventAt=null,probability=null,leak=false,dataMode='FULL_TRADE',rejectionGroup=null}={}){
+function row({symbol='TESTUSDT',timestamp=1_800_000_000_000,decision='REJECTED',mode='NONE',move=0,horizon=true,score=90,window='window-a',eventAt=null,probability=null,leak=false,dataMode='FULL_TRADE',rejectionGroup=null,marketEventAt=null,marketCohort=null,marketEventPositive=false,anchorType=null,monthlyReturn=null}={}){
   return {
     symbol,timestamp,decision,accepted_mode:mode,score,stage_observed:mode.includes('EARLY')?'PRE_EXPANSION':'WATCH',
     window_id:window,market_regime:'BULL_TREND',replay_data_mode:dataMode,rejection_group:rejectionGroup,
+    market_event_at:marketEventAt,market_event_cohort:marketCohort,market_event_is_positive:marketEventPositive,
+    market_event_anchor_type:anchorType,market_event_monthly_return_pct:monthlyReturn,
     input_max_candle_close_at:timestamp-(leak?-1:1),
     trade_window:{from:timestamp-60_000,to_exclusive:timestamp-1},
     calibrated_probability:probability,
@@ -146,5 +148,29 @@ test('incomplete-trade blocked scans are reported but never scored as false aler
   assert.equal(metrics.evaluable_decisions,0);
   assert.equal(metrics.missed_move_decisions,0);
   assert.equal(metrics.false_alerts,0);
+});
+
+test('monthly ex-post event anchors score lead time without counting control cohorts as missed market events',()=>{
+  const start=1_700_000_000_000,anchor=start+5*MINUTE;
+  const reports=[
+    {id:'strong-case',window:{id:'strong-case'},market_event:{at:anchor,cohort:'STRONG',is_positive:true,anchor_type:'FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH',monthly_return_pct:31},
+      results:[{symbol:'CAPTUREUSDT',steps:[
+        row({symbol:'CAPTUREUSDT',timestamp:start,decision:'ACCEPTED',mode:'EARLY_WARNING',move:8,window:'strong-case'}),
+        row({symbol:'CAPTUREUSDT',timestamp:start+MINUTE,decision:'REJECTED',move:1,window:'strong-case'})
+      ]}]},
+    {id:'control-case',window:{id:'control-case'},market_event:{at:anchor,cohort:'CONTROL',is_positive:false,anchor_type:'CONTROL_REFERENCE',monthly_return_pct:1},
+      results:[{symbol:'CONTROLUSDT',steps:[
+        row({symbol:'CONTROLUSDT',timestamp:start,decision:'ACCEPTED',mode:'STRICT',move:1,window:'control-case'})
+      ]}]}
+  ];
+  const dataset=buildHistoricalLearningDataset(reports);
+  const metrics=evaluateHistoricalLearningMetrics(dataset);
+  assert.equal(metrics.observed_move_events,1);
+  assert.equal(metrics.move_event_capture_pct,100);
+  assert.equal(metrics.median_lead_time_minutes,5);
+  assert.equal(metrics.market_events[0].event_timestamp_source,'EX_POST_MONTHLY_FORENSICS_ANCHOR');
+  assert.equal(metrics.market_events[0].exact_event_time_available,false);
+  assert.equal(metrics.by_market_cohort.CONTROL.rows,1);
+  assert.equal(metrics.by_market_cohort.STRONG.rows,2);
 });
 
