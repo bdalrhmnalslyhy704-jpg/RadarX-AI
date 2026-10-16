@@ -69,6 +69,9 @@ export function classifyHistoricalLearningRow(row={},{
     outcomeClass='DATA_INTEGRITY_REJECTED';
   }else if(coverageBlocked){
     outcomeClass='DATA_COVERAGE_BLOCKED';
+  }else if(!horizonObserved){
+    // Do not count a partial forward window as either a win or a false alert.
+    outcomeClass='OUTCOME_UNAVAILABLE';
   }else if(move!==null&&move>=strong){
     moveClass='STRONG_MOVE';
     outcomeClass=accepted?(hasEarlyStage?'EARLY_SIGNAL_SUCCESS':'SIGNAL_SUCCESS'):'MISSED_MOVE_DECISION';
