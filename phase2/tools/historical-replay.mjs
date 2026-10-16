@@ -109,7 +109,7 @@ async function main() {
     process.stdout.write([
       'RadarX historical replay (public Binance Spot data; read-only)',
       'Usage: node phase2/tools/historical-replay.mjs [--symbols GTCUSDT,WUSDT] [--start ISO|ms] [--end ISO|ms]',
-      '       [--lookback-hours 24] [--max-trade-pages 500] [--max-trades 500000] [--output path]',
+      '       [--lookback-hours 24] [--outcome-horizon-hours 24] [--max-trade-pages 500] [--max-trades 500000] [--output path]',
       'Default window: last completed minute minus 24 hours. Maximum window: 7 days.',
       'Trade-history pagination that reaches a cap is flagged incomplete and fails closed.',
       'No orders are created, no keys are read, and no Railway deploy is performed.'
@@ -122,8 +122,13 @@ async function main() {
   const now = Date.now();
   const end = timeArg(flag(args, '--end'), 'end') ?? (Math.floor(now / MINUTE_MS) * MINUTE_MS - 1);
   const lookbackHours = integerArg(flag(args, '--lookback-hours', '24'), 24, 1, 168, 'lookback-hours');
+  const outcomeHorizonHours = integerArg(flag(args, '--outcome-horizon-hours', '24'), 24, 1, 168, 'outcome-horizon-hours');
   const start = timeArg(flag(args, '--start'), 'start') ?? (end - lookbackHours * HOUR_MS);
   if (start >= end || end > now + MINUTE_MS || end - start > 7 * 24 * HOUR_MS) throw new Error('INVALID_REPLAY_WINDOW');
+  const latestClosedMinuteEnd = Math.floor(now / MINUTE_MS) * MINUTE_MS - 1;
+  const requestedOutcomeEnd = end + outcomeHorizonHours * HOUR_MS;
+  const observationEnd = Math.min(latestClosedMinuteEnd, requestedOutcomeEnd);
+  if (observationEnd < end) throw new Error('OUTCOME_OBSERVATION_WINDOW_INVALID');
   const maxPages = integerArg(flag(args, '--max-trade-pages', '500'), 500, 1, 1000, 'max-trade-pages');
   const maxTrades = integerArg(flag(args, '--max-trades', '500000'), 500000, 1000, 1000000, 'max-trades');
   const output = resolve(flag(args, '--output', './.radarx-data/historical-replay-' + new Date(now).toISOString().replace(/[:.]/g, '-') + '.json'));
@@ -132,7 +137,8 @@ async function main() {
   const report = {
     engine: 'RADARX_HISTORICAL_REPLAY_BATCH_V1',
     generated_at: new Date(now).toISOString(),
-    window: {start, start_iso: new Date(start).toISOString(), end, end_iso: new Date(end).toISOString()},
+    window: {start, start_iso: new Date(start).toISOString(), end, end_iso: new Date(end).toISOString(),
+      outcome_horizon_hours:outcomeHorizonHours,observation_end:observationEnd,observation_end_iso:new Date(observationEnd).toISOString()},
     symbol_count: symbols.length,
     note: 'The evaluator receives only history available by each candle close. Outcome labels use later candles only after a decision has been recorded.',
     results: [],
@@ -142,7 +148,7 @@ async function main() {
   for (const symbol of symbols) {
     try {
     process.stderr.write('[REPLAY] ' + symbol + ' fetching closed 1m candles…\n');
-    const candleFetch = await fetchOneMinute(client, symbol, start - 24 * HOUR_MS - 125 * MINUTE_MS, end);
+    const candleFetch = await fetchOneMinute(client, symbol, start - 24 * HOUR_MS - 125 * MINUTE_MS, observationEnd);
     let tradeFetch;
     try {
       tradeFetch = await fetchAggregateTrades(client, symbol, start - 65_000, end, {maxPages, maxTrades});
@@ -172,6 +178,8 @@ async function main() {
       aggTrades: tradeFetch.complete ? tradeFetch.trades : [],
       startTime: start,
       endTime: end,
+      outcomeEndTime:observationEnd,
+      outcomeHorizonMs:outcomeHorizonHours*HOUR_MS,
       tradeCoverageComplete: tradeFetch.complete,
       allowCandleOnlyFallback: true,
       tradeCoverage: {...tradeFetch.coverage, candle_pages: candleFetch.pages, candles_complete: candleFetch.complete},
@@ -259,13 +267,18 @@ async function main() {
     });
     const expectedWindowCandles = Math.floor((end - start) / MINUTE_MS) + 1;
     const observedWindowCandles = replay.steps.length;
-    const windowCandlesComplete = candleFetch.complete && observedWindowCandles >= expectedWindowCandles;
+    const windowCandlesComplete = observedWindowCandles >= expectedWindowCandles;
+    const outcomeObservationComplete = observationEnd >= end + outcomeHorizonHours * HOUR_MS && candleFetch.complete;
     replay.data_quality.candle_pages = candleFetch.pages;
     replay.data_quality.candle_fetch_complete = windowCandlesComplete;
+    replay.data_quality.outcome_candle_fetch_complete = outcomeObservationComplete;
+    replay.data_quality.outcome_observation_end_time = observationEnd;
+    replay.data_quality.outcome_horizon_hours = outcomeHorizonHours;
     replay.data_quality.window_candles_expected = expectedWindowCandles;
     replay.data_quality.window_candles_observed = observedWindowCandles;
     replay.data_quality.trade_coverage_complete = tradeFetch.complete;
     replay.data_quality.trade_coverage = tradeFetch.coverage;
+    replay.data_quality.trade_coverage_window_end = end;
     replay.data_quality.trades_missing = !tradeFetch.complete;
     replay.data_quality.candle_only_fallback_used = !tradeFetch.complete && windowCandlesComplete && replay.steps.length > 0;
     replay.data_quality.replay_mode = !windowCandlesComplete ? 'BLOCKED_INCOMPLETE' :
@@ -310,6 +323,8 @@ async function main() {
       first_accepted_at: x.summary.first_accepted_at,
       first_early_warning_accepted_at: x.summary.first_early_warning_accepted_at,
       first_strict_accepted_at: x.summary.first_strict_accepted_at,
+      first_window_5pct_at:x.summary.first_actual_window_5pct_at,
+      first_window_15pct_at:x.summary.first_actual_window_15pct_at,
       first_window_50pct_at: x.summary.first_actual_window_50pct_at,
       first_window_70pct_at: x.summary.first_actual_window_70pct_at
     })),
