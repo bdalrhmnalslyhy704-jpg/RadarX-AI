@@ -326,26 +326,47 @@ const earlyOpportunity=(features,memory)=>{
   return {score:clamp(score),persistence:persistence+trajectoryBonus,move24,head,emaDist,trajectory_score:trajectory.score,trajectory_observations:trajectory.observations,pump_heat:pumpHeat,sniper_freshness:freshness};
 };
 const ANALYST_PROFILES=Object.freeze({
-  MARKET_REGIME:{group:'MACRO',role:'اتجاه السوق العام'},
-  MTF_ALIGNMENT:{group:'TREND',role:'توافق الأطر'},
-  MARKET_STRUCTURE:{group:'STRUCTURE',role:'هيكل السعر'},
-  BOTTOM_TURN:{group:'REVERSAL',role:'القاع والتحول'},
-  MOMENTUM:{group:'MOMENTUM',role:'قوة الحركة'},
-  VOLUME_CONFIRMATION:{group:'FLOW',role:'تأكيد التدفق والحجم'},
-  VOLATILITY_COMPRESSION:{group:'VOLATILITY',role:'الضغط والانفراج'},
-  PRE_BREAKOUT:{group:'BREAKOUT',role:'ما قبل الاختراق'},
-  SUPPORT_RESISTANCE:{group:'PRICE_ACTION',role:'الدعم والمقاومة'},
+  MARKET_REGIME:{group:'MACRO',role:'حالة السوق العام'},
+  MTF_ALIGNMENT:{group:'TREND',role:'توافق الفترات الزمنية'},
+  MARKET_STRUCTURE:{group:'STRUCTURE',role:'بنية السعر'},
+  BOTTOM_TURN:{group:'COVERAGE',role:'اكتمال التغطية'},
+  MOMENTUM:{group:'FLOW',role:'تسارع الصفقات'},
+  VOLUME_CONFIRMATION:{group:'FLOW',role:'شذوذ الحجم'},
+  VOLATILITY_COMPRESSION:{group:'VOLATILITY',role:'القاعدة الهادئة'},
+  PRE_BREAKOUT:{group:'BREAKOUT',role:'تأكيد الاختراق'},
+  SUPPORT_RESISTANCE:{group:'RISK',role:'التقلب والمخاطر'},
   RELATIVE_STRENGTH:{group:'RELATIVE',role:'القوة النسبية'},
-  ORDERBOOK_PRESSURE:{group:'MICROSTRUCTURE',role:'ضغط دفتر الأوامر'},
-  LIQUIDITY_QUALITY:{group:'MICROSTRUCTURE',role:'جودة التنفيذ والسيولة'},
-  LARGE_PLAYER_PROXY:{group:'FLOW',role:'سلوك اللاعبين الكبار'},
-  ABSORPTION:{group:'FLOW',role:'امتصاص العرض والطلب'},
-  RISK_TRAPS:{group:'RISK',role:'الفخاخ والإرهاق'},
-  EXTENSION:{group:'RISK',role:'خطر مطاردة السعر'},
-  STRATEGY_CONSENSUS:{group:'STRATEGY',role:'إجماع الاستراتيجيات'},
-  MARKET_BREADTH:{group:'MACRO',role:'اتساع السوق'},
+  ORDERBOOK_PRESSURE:{group:'MICROSTRUCTURE',role:'تماسك عمق السوق'},
+  LIQUIDITY_QUALITY:{group:'MICROSTRUCTURE',role:'السيولة'},
+  LARGE_PLAYER_PROXY:{group:'HISTORY',role:'التشابه التاريخي'},
+  ABSORPTION:{group:'FLOW',role:'ضغط الشراء'},
+  RISK_TRAPS:{group:'RISK',role:'كشف المصائد'},
+  EXTENSION:{group:'RISK',role:'منع المطاردة'},
+  STRATEGY_CONSENSUS:{group:'CALIBRATION',role:'معايرة الثقة'},
+  MARKET_BREADTH:{group:'CONSISTENCY',role:'تعارض الإشارات والتكرار'},
   DATA_INTEGRITY:{group:'DATA',role:'سلامة البيانات'}
 });
+export const MULTI_ANALYST_ROLE_CONTRACT=Object.freeze([
+  {id:'DATA_INTEGRITY',role:'سلامة البيانات',hardGate:true},
+  {id:'BOTTOM_TURN',role:'اكتمال التغطية',hardGate:true},
+  {id:'LIQUIDITY_QUALITY',role:'السيولة',hardGate:true},
+  {id:'VOLUME_CONFIRMATION',role:'شذوذ الحجم',hardGate:false},
+  {id:'MOMENTUM',role:'تسارع الصفقات',hardGate:false},
+  {id:'ABSORPTION',role:'ضغط الشراء',hardGate:false},
+  {id:'MARKET_STRUCTURE',role:'بنية السعر',hardGate:false},
+  {id:'VOLATILITY_COMPRESSION',role:'القاعدة الهادئة',hardGate:false},
+  {id:'PRE_BREAKOUT',role:'تأكيد الاختراق',hardGate:false},
+  {id:'EXTENSION',role:'منع المطاردة',hardGate:true},
+  {id:'RISK_TRAPS',role:'كشف المصائد',hardGate:true},
+  {id:'ORDERBOOK_PRESSURE',role:'تماسك عمق السوق',hardGate:false},
+  {id:'MARKET_REGIME',role:'حالة السوق العام',hardGate:false},
+  {id:'RELATIVE_STRENGTH',role:'القوة النسبية',hardGate:false},
+  {id:'MTF_ALIGNMENT',role:'توافق الفترات الزمنية',hardGate:false},
+  {id:'LARGE_PLAYER_PROXY',role:'التشابه التاريخي',hardGate:false},
+  {id:'SUPPORT_RESISTANCE',role:'التقلب والمخاطر',hardGate:false},
+  {id:'STRATEGY_CONSENSUS',role:'معايرة الثقة',hardGate:false},
+  {id:'MARKET_BREADTH',role:'تعارض الإشارات والتكرار',hardGate:false}
+]);
 
 const finiteScalar=value=>value!==null&&value!==undefined&&!(typeof value==='string'&&value.trim()==='')&&typeof value!=='boolean'&&Number.isFinite(Number(value));
 const hasFiniteEvidence=(value,depth=0)=>{
@@ -432,10 +453,56 @@ const rsiSlope=(rows,period=14,n=5)=>{
   return Number.isFinite(now)&&Number.isFinite(prev)?now-prev:null;
 };
 
-function specialistAnalysis(candidate, market={}){
+function inspectAnalystCandleCoverage(rows,{intervalMs,minCount,maxAgeMs,now}={}){
+  const valid=(Array.isArray(rows)?rows:[]).filter(c=>c&&c.closed===true&&
+    Number.isFinite(Number(c.openTime))&&Number.isFinite(Number(c.closeTime))&&
+    Number(c.openTime)<=Number(c.closeTime)&&Number(c.closeTime)<=Number(now)&&
+    Number(c.open)>0&&Number(c.low)>0&&Number(c.high)>=Math.max(Number(c.open),Number(c.close))&&
+    Number(c.low)<=Math.min(Number(c.open),Number(c.close))&&Number(c.close)>0&&
+    Number.isFinite(Number(c.volume))&&Number(c.volume)>=0)
+    .slice().sort((a,b)=>Number(a.openTime)-Number(b.openTime));
+  const unique=[];
+  for(const c of valid){if(unique.length&&Number(unique.at(-1).openTime)===Number(c.openTime))continue;unique.push(c);}
+  const tail=unique.slice(-20);let gapCount=0;
+  for(let i=1;i<tail.length;i++){const delta=Number(tail[i].openTime)-Number(tail[i-1].openTime);if(delta<Number(intervalMs)*.5||delta>Number(intervalMs)*1.5)gapCount++;}
+  const latest=unique.length?Number(unique.at(-1).closeTime):null,age=latest===null?null:Math.max(0,Number(now)-latest);
+  const enough=unique.length>=Math.max(1,Number(minCount)||1),fresh=age!==null&&age<=Number(maxAgeMs),ready=enough&&fresh&&gapCount===0;
+  const reasons=[];if(!enough)reasons.push('CLOSED_CANDLE_COUNT_INSUFFICIENT');if(!fresh)reasons.push('CLOSED_CANDLES_STALE');if(gapCount)reasons.push('CLOSED_CANDLE_SEQUENCE_HAS_GAPS');
+  return {ready,count:unique.length,required_count:Math.max(1,Number(minCount)||1),coverage_pct:Math.round(Math.min(100,unique.length/Math.max(1,Number(minCount)||1)*100)*10)/10,latest_close_time_ms:latest,age_ms:age,gap_count:gapCount,interval_ms:Number(intervalMs),status:ready?'READY':'INCOMPLETE',reason_codes:reasons};
+}
+function historicalPatternSimilarity(rows,{windowBars=8,forwardBars=4}={}){
+  const bars=(Array.isArray(rows)?rows:[]).filter(c=>c&&c.closed===true&&Number.isFinite(Number(c.close))&&Number(c.close)>0&&Number.isFinite(Number(c.volume))&&Number(c.volume)>=0);
+  const n=bars.length,w=Math.max(6,Math.trunc(Number(windowBars)||8)),f=Math.max(2,Math.trunc(Number(forwardBars)||4));
+  if(n<w+f+12)return {available:false,score:50,samples:0,win_rate:null,mean_forward_return_pct:null,nearest_distance:null,reason:'HISTORY_TOO_SHORT'};
+  const cs=bars.map(c=>Number(c.close)),vs=bars.map(c=>Number(c.volume));
+  const vector=end=>{const base=cs[end-w+1];if(!(base>0))return null;const ret=k=>end-k>=0&&cs[end-k]>0?(cs[end]/cs[end-k]-1)*100:null;const prior=vs.slice(Math.max(0,end-27),Math.max(0,end-3)),recent=vs.slice(Math.max(0,end-3),end+1),bv=median(prior),rv0=avg(recent);return [ret(2),ret(4),ret(w-1),bv>0&&Number.isFinite(rv0)?rv0/bv:null];};
+  const current=vector(n-1);if(!current||current.some(v=>!Number.isFinite(v)))return {available:false,score:50,samples:0,win_rate:null,mean_forward_return_pct:null,nearest_distance:null,reason:'CURRENT_PATTERN_INCOMPLETE'};
+  const scales=[1.25,2,3.5,1.25],matches=[];
+  for(let end=w-1;end<=n-f-w-1;end++){const prior=vector(end);if(!prior||prior.some(v=>!Number.isFinite(v)))continue;const distance=avg(prior.map((v,i)=>Math.abs(v-current[i])/scales[i]));if(!Number.isFinite(distance)||distance>2.5)continue;const entry=cs[end],future=cs[end+f];if(entry>0&&future>0)matches.push({distance,forward_return_pct:(future/entry-1)*100});}
+  matches.sort((a,b)=>a.distance-b.distance);const selected=matches.slice(0,12),count=selected.length;
+  if(count<3)return {available:false,score:50,samples:count,win_rate:null,mean_forward_return_pct:null,nearest_distance:count?selected[0].distance:null,reason:'TOO_FEW_SIMILAR_HISTORICAL_PATTERNS'};
+  const winRate=selected.filter(x=>x.forward_return_pct>0).length/count,meanReturn=avg(selected.map(x=>x.forward_return_pct))||0;
+  return {available:true,score:Math.round(clamp(50+(winRate-.5)*70+meanReturn*9)*10)/10,samples:count,win_rate:Math.round(winRate*1000)/10,mean_forward_return_pct:Math.round(meanReturn*1000)/1000,nearest_distance:Math.round(selected[0].distance*1000)/1000,reason:'MATCHED_CLOSED_CANDLE_OUTCOMES'};
+}
+function calibrationReliability(calibration){
+  let rows=[];try{rows=Array.isArray(calibration?.summary?.())?calibration.summary():[];}catch{}
+  const usable=rows.filter(x=>Number(x?.samples)>0&&Number.isFinite(Number(x?.precision))),samples=usable.reduce((sum,x)=>sum+Number(x.samples||0),0),precision=samples?usable.reduce((sum,x)=>sum+Number(x.precision)*Number(x.samples),0)/samples:null;
+  return {available:samples>0,samples,precision_pct:precision===null?null:Math.round(precision*10)/10,calibrated:samples>=30,score:samples>=10&&precision!==null?Math.round(clamp(50+(precision-50)*1.15)*10)/10:50,sources:'CLOSED_CANDLE_FORWARD_MARKOUTS'};
+}
+function specialistAnalysis(candidate, market={}, calibration=null){
   const raw=candidate?._analysis||{};
   const now=Number(raw?.completedAt)||Date.now();
   const s4=closed(raw?.series?.['4h'],now),s1=closed(raw?.series?.['1h'],now),s15=closed(raw?.series?.['15m'],now);
+  const coverageReport={
+    '4h':inspectAnalystCandleCoverage(s4,{intervalMs:4*60*60*1000,minCount:50,maxAgeMs:5*60*60*1000,now}),
+    '1h':inspectAnalystCandleCoverage(s1,{intervalMs:60*60*1000,minCount:50,maxAgeMs:75*60*1000,now}),
+    '15m':inspectAnalystCandleCoverage(s15,{intervalMs:15*60*1000,minCount:80,maxAgeMs:35*60*1000,now})
+  };
+  const coverageReady=Object.values(coverageReport).every(x=>x.ready===true);
+  const symbol=String(candidate?.symbol||'').toUpperCase();
+  const symbolValid=/^[A-Z0-9]{1,20}USDT$/.test(symbol)&&candidate?.data_status?.symbol_valid!==false&&candidate?.data_status?.spot_trading_allowed!==false&&candidate?.isSpotTradingAllowed!==false&&(!candidate?.quote_asset&&!candidate?.quoteAsset||String(candidate?.quote_asset??candidate?.quoteAsset).toUpperCase()==='USDT');
+  const quoteVolume24h=safe(candidate?.quote_volume_24h,0);
+  const sharedSnapshot={id:String(market?.snapshot_id||''),as_of:Number.isFinite(Number(market?.as_of))?Number(market.as_of):null,source:String(market?.snapshot_source||'UNKNOWN'),available:Boolean(market?.snapshot_id&&Number.isFinite(Number(market?.as_of))),btc_15m_count:Array.isArray(market?.btc15)?market.btc15.length:0,btc_1h_count:Array.isArray(market?.btc1)?market.btc1.length:0,market_median_24h:Number.isFinite(Number(market?.marketMedian24h))?Number(market.marketMedian24h):null,breadth_pct:Number.isFinite(Number(market?.breadthPct))?Number(market.breadthPct):null};
   const rowDataValid=candidate?.data_status?.data_valid===true;
   const c4=closes(s4),c1=closes(s1),c15=closes(s15);
   const price=safe(candidate?.last_price,null);
@@ -443,6 +510,12 @@ function specialistAnalysis(candidate, market={}){
   const dq=safe(candidate?.data_quality,0);
 
   const tRatio=takerRatio(s15),rv=rvol(s15),uv=upVolRatio(s15),bb=bbRatio(s15),ar=atrRatio(s15);
+  const recentTradeCount=avg(s15.slice(-4).map(c=>Number(c?.tradeCount??c?.count)).filter(Number.isFinite));
+  const baselineTradeCount=median(s15.slice(-28,-4).map(c=>Number(c?.tradeCount??c?.count)).filter(Number.isFinite));
+  const tradeAccelerationRatio=Number.isFinite(recentTradeCount)&&Number.isFinite(baselineTradeCount)&&baselineTradeCount>0?recentTradeCount/baselineTradeCount:null;
+  const quoteVolumeRecent=s15.slice(-8).reduce((sum,c)=>sum+Math.max(0,Number(c?.quoteVolume)||0),0);
+  const takerBuyQuoteRecent=s15.slice(-8).reduce((sum,c)=>sum+Math.max(0,Number(c?.takerBuyQuoteVolume)||0),0);
+  const quoteBuyShare=quoteVolumeRecent>0&&takerBuyQuoteRecent<=quoteVolumeRecent*1.001?takerBuyQuoteRecent/quoteVolumeRecent:null;
   const ema20=emaLast(c1,20),ema50=emaLast(c1,50),ema20_15=emaLast(c15,20),ema50_15=emaLast(c15,50);
   const ema200=emaLast(c4,200),ema50_4=emaLast(c4,50);
   const rsi=rsiLast(c15),rsi1=rsiLast(c1),rsiSlope15=rsiSlope(s15),rsiSlope1=rsiSlope(s1);
@@ -508,31 +581,16 @@ function specialistAnalysis(candidate, market={}){
       efficiency15m:eff15,closeLocationPct:Number.isFinite(closeLocation)?closeLocation*100:null
     }));
 
-  const drawdown=safe(candidate?.high_price_24h,null)&&price?Math.max(0,(Number(candidate.high_price_24h)-price)/Number(candidate.high_price_24h)*100):0;
-  const recovery=Number.isFinite(Number(candidate?.low_price_24h))&&price?Math.max(0,(price-Number(candidate.low_price_24h))/Number(candidate.low_price_24h)*100):0;
-  const bottomScore=clamp(
-    62+Math.min(28,drawdown*1.8)-Math.min(24,recovery*1.0)+
-    (sm.bull>sm.bear?9:-2)+
-    (Number.isFinite(rsi)&&rsi<=40?10:Number.isFinite(rsi)&&rsi<=50?5:0)+
-    (Number.isFinite(avgLowerWick)&&avgLowerWick>.26?6:0)+
-    (Number.isFinite(rsiSlope15)&&rsiSlope15>3?7:0)
-  );
-  a.push(analyst('BOTTOM_TURN','محلل القاع والتحول',bottomScore,
-    bottomScore>=64?'LONG':bottomScore<=32?'BEARISH':'NEUTRAL',{
-      drawdownFromHighPct:drawdown,recoveryFromLowPct:recovery,rsi,rsiSlope15,lowerWickAvg:avgLowerWick
-    }));
-
-  const momentumScore=avg([
-    Number.isFinite(roc4)?clamp(50+roc4*12):null,
-    Number.isFinite(roc16)?clamp(50+roc16*7):null,
-    Number.isFinite(rsi)?clamp(50+(rsi-50)*1.5):null,
-    Number.isFinite(rsiSlope15)?clamp(50+rsiSlope15*6):null,
-    Number.isFinite(eff15)?clamp(45+eff15*55):null,
-    Number.isFinite(priceAccel)?clamp(50+priceAccel*18):null
-  ])||50;
-  a.push(analyst('MOMENTUM','محلل الزخم',momentumScore,momentumScore>=63?'LONG':momentumScore<=37?'BEARISH':'NEUTRAL',{
-    roc4,roc16,rsi,rsiSlope15,efficiency15m:eff15,acceleration:priceAccel
-  }));
+  const coverageItems=Object.entries(coverageReport);
+  const coverageScore=clamp(avg(coverageItems.map(([,item])=>item.ready?100:Math.max(0,item.coverage_pct-item.gap_count*12-(item.age_ms!==null&&item.age_ms>item.interval_ms*2?25:0))))||0);
+  const coverageReasons=coverageItems.flatMap(([tf,item])=>item.reason_codes.map(code=>tf+':'+code));
+  a.push(analyst('BOTTOM_TURN','محلل اكتمال التغطية',coverageScore,coverageReady?'LONG':coverageScore<55?'BEARISH':'NEUTRAL',{
+    ready:coverageReady,score:coverageScore,fourHour:coverageReport['4h'],oneHour:coverageReport['1h'],fifteenMinute:coverageReport['15m'],gaps:coverageItems.reduce((sum,[,item])=>sum+item.gap_count,0),missingReasons:coverageReasons
+  },coverageReasons));
+  const tradeAccelerationScore=Number.isFinite(tradeAccelerationRatio)?clamp(50+(tradeAccelerationRatio-1)*42):50;
+  a.push(analyst('MOMENTUM','محلل تسارع الصفقات',tradeAccelerationScore,tradeAccelerationScore>=62?'LONG':tradeAccelerationScore<=36?'BEARISH':'NEUTRAL',{
+    recent_mean_trade_count:recentTradeCount,baseline_median_trade_count:baselineTradeCount,trade_count_acceleration_ratio:tradeAccelerationRatio,acceleration_pct:Number.isFinite(tradeAccelerationRatio)?(tradeAccelerationRatio-1)*100:null,recent_closed_candles:s15.slice(-4).length,baseline_closed_candles:s15.slice(-28,-4).length
+  },tradeAccelerationRatio===null?['TRADE_COUNT_BASELINE_UNAVAILABLE']:[]));
 
   const volumeScore=avg([
     Number.isFinite(rv)?clamp(50+(rv-1)*85):null,
@@ -545,33 +603,34 @@ function specialistAnalysis(candidate, market={}){
     rvol:rv,volumeBurst:volBurst,upDownBias:uv.bias,volumeAcceleration:uv.acceleration,takerBuyRatio:tRatio
   }));
 
-  const squeezeScore=avg([
-    Number.isFinite(bb)?clamp(105-bb*95):null,
-    Number.isFinite(ar)?clamp(105-ar*90):null,
-    Number.isFinite(rangeBurst15)?clamp(92-(rangeBurst15-1)*70):null
-  ])||50;
-  a.push(analyst('VOLATILITY_COMPRESSION','محلل الانكماش والتجهيز',squeezeScore,squeezeScore>=66?'LONG':'NEUTRAL',{
-    bbWidthRatio:bb,atrRatio:ar,rangeBurst:rangeBurst15
-  }));
+  const compressionScore=avg([Number.isFinite(bb)?clamp(105-bb*95):null,Number.isFinite(ar)?clamp(105-ar*90):null,Number.isFinite(rangeBurst15)?clamp(92-(rangeBurst15-1)*70):null])||50;
+  const dailyMoveAbs=Math.abs(Number(candidate?.price_change_24h)||0);
+  const quietnessScore=clamp(100-Math.max(0,dailyMoveAbs-1.5)*10-Math.max(0,dailyMoveAbs-4)*8);
+  const squeezeScore=clamp(compressionScore*.62+quietnessScore*.38);
+  a.push(analyst('VOLATILITY_COMPRESSION','محلل القاعدة الهادئة',squeezeScore,squeezeScore>=70&&dailyMoveAbs<=6?'LONG':squeezeScore<38?'BEARISH':'NEUTRAL',{
+    compression_score:compressionScore,quietness_score:quietnessScore,bb_width_ratio:bb,atr_ratio:ar,range_burst:rangeBurst15,abs_move_24h_pct:dailyMoveAbs,anti_chase_compatible:dailyMoveAbs<=6,own_volume_baseline_ratio:rv,own_trade_baseline_ratio:tradeAccelerationRatio
+  },dailyMoveAbs>6?['QUIET_BASE_ALREADY_MOVED_TOO_FAR']:[]));
 
   const resistanceGap=Number.isFinite(price)&&Number.isFinite(sm.recentHigh)&&price>0?(sm.recentHigh-price)/price*100:null;
   const supportGap=Number.isFinite(price)&&Number.isFinite(sm.recentLow)&&price>0?(price-sm.recentLow)/price*100:null;
   const proximity=Number.isFinite(resistanceGap)?clamp(100-Math.max(0,resistanceGap)*14):50;
-  const breakoutPressure=avg([proximity,squeezeScore,volumeScore,structureScore,Number.isFinite(closeLocation)?clamp(closeLocation*100):50])||50;
-  a.push(analyst('PRE_BREAKOUT','محلل ما قبل الاختراق',breakoutPressure,breakoutPressure>=68?'LONG':'NEUTRAL',{
-    resistanceDistancePct:resistanceGap,headroomPct:sm.headroom,squeezeScore,volumeScore,closeLocationPct:Number.isFinite(closeLocation)?closeLocation*100:null
-  }));
+  const priorResistanceRows=s15.slice(-12,-3),priorResistance=priorResistanceRows.length?Math.max(...priorResistanceRows.map(c=>Number(c.high)).filter(Number.isFinite)):null;
+  const recentBreakoutBars=s15.slice(-3),closesAboveResistance=Number.isFinite(priorResistance)?recentBreakoutBars.filter(c=>Number(c.close)>priorResistance).length:0;
+  const latestClose=Number(s15.at(-1)?.close),currentLevelHeld=Number.isFinite(priorResistance)&&latestClose>=priorResistance;
+  const recentActivityReady=Number.isFinite(rv)&&rv>=1.05&&Number.isFinite(tradeAccelerationRatio)&&tradeAccelerationRatio>=1.05;
+  const buyFlowReady=Number.isFinite(quoteBuyShare??tRatio)&&Number(quoteBuyShare??tRatio)>=.50;
+  const breakoutConfirmed=recentBreakoutBars.length===3&&closesAboveResistance>=2&&currentLevelHeld&&recentActivityReady&&buyFlowReady;
+  const breakoutPressure=breakoutConfirmed?clamp(82+Math.min(8,Math.max(0,closesAboveResistance-1)*3)+(recentActivityReady?4:0)+(buyFlowReady?3:0)):clamp(Math.min(64,38+proximity*.12+(closesAboveResistance>0?8:0)+squeezeScore*.08+(Number.isFinite(rv)?Math.min(8,rv*2):0)));
+  a.push(analyst('PRE_BREAKOUT','محلل تأكيد الاختراق',breakoutPressure,breakoutConfirmed?'LONG':breakoutPressure<35?'BEARISH':'NEUTRAL',{
+    confirmed:breakoutConfirmed,resistance:priorResistance,closes_above_resistance:closesAboveResistance,recent_closed_candles:recentBreakoutBars.length,current_level_held:currentLevelHeld,volume_ratio:rv,trade_count_acceleration_ratio:tradeAccelerationRatio,buyer_quote_share:quoteBuyShare,taker_buy_ratio:tRatio
+  },breakoutConfirmed?[]:['BREAKOUT_CONTINUATION_NOT_CONFIRMED']));
 
-  const srScore=avg([
-    Number.isFinite(supportGap)?clamp(92-supportGap*10):50,
-    Number.isFinite(resistanceGap)?clamp(42+resistanceGap*11):50,
-    structureScore,
-    Number.isFinite(lastCandle.lowerWick)&&lastCandle.lowerWick>.22&&Number.isFinite(closeLocation)&&closeLocation>.55?78:50
-  ])||50;
-  a.push(analyst('SUPPORT_RESISTANCE','محلل الدعم والمقاومة',srScore,srScore>=63?'LONG':srScore<=36?'BEARISH':'NEUTRAL',{
-    supportDistancePct:supportGap,resistanceDistancePct:resistanceGap,headroomPct:sm.headroom,
-    lowerWick:lastCandle.lowerWick,closeLocationPct:Number.isFinite(closeLocation)?closeLocation*100:null
-  }));
+  const atrValue=atrLast(s15,14),atrPct=Number.isFinite(atrValue)&&price>0?atrValue/price*100:null;
+  const volatilityRiskPenalty=Math.max(0,(Number(ar)||1)-1)*22+Math.max(0,(Number(candidate?.price_change_24h)||0)-5)*3.5+Math.max(0,(Number(atrPct)||0)-1.4)*12;
+  const volatilityRiskScore=clamp(100-volatilityRiskPenalty);
+  a.push(analyst('SUPPORT_RESISTANCE','محلل التقلب والمخاطر',volatilityRiskScore,volatilityRiskScore>=66?'LONG':volatilityRiskScore<38?'BEARISH':'NEUTRAL',{
+    atr_14:atrValue,atr_pct:atrPct,atr_regime_ratio:ar,range_burst_ratio:rangeBurst15,price_change_24h_pct:candidate?.price_change_24h,normalized_risk_penalty:volatilityRiskPenalty
+  },volatilityRiskScore<45?['VOLATILITY_OR_EXTENSION_RISK_HIGH']:[]));
 
   const relativeScore=avg([
     Number.isFinite(rs15)?clamp(50+rs15*14):null,
@@ -596,28 +655,19 @@ function specialistAnalysis(candidate, market={}){
     liquidityQuality:liq,spreadBps:book.spreadBps,depthBid:book.bidDepth,depthAsk:book.askDepth
   }));
 
-  const whaleProxyScore=avg([
-    bookScore,volumeScore,
-    Number.isFinite(tRatio)?clamp(50+(tRatio-.5)*280):null,
-    structureScore,
-    Number.isFinite(volBurst)?clamp(50+(volBurst-1)*70):null
-  ])||50;
-  a.push(analyst('LARGE_PLAYER_PROXY','محلل سلوك اللاعبين الكبار',whaleProxyScore,whaleProxyScore>=66?'LONG':whaleProxyScore<=35?'BEARISH':'NEUTRAL',{
-    bookImbalance:book.imbalance,takerBuyRatio:tRatio,volumeBurst:volBurst,structureScore
-  }));
+  const historicalSimilarity=historicalPatternSimilarity(s15),historicalSimilarityScore=historicalSimilarity.score;
+  a.push(analyst('LARGE_PLAYER_PROXY','محلل التشابه التاريخي',historicalSimilarityScore,historicalSimilarity.available&&historicalSimilarityScore>=62?'LONG':historicalSimilarity.available&&historicalSimilarityScore<38?'BEARISH':'NEUTRAL',{
+    available:historicalSimilarity.available,similar_pattern_samples:historicalSimilarity.samples,historical_win_rate_pct:historicalSimilarity.win_rate,mean_forward_return_pct:historicalSimilarity.mean_forward_return_pct,nearest_pattern_distance:historicalSimilarity.nearest_distance,comparison_source:'SAME_SYMBOL_CLOSED_CANDLE_WINDOWS',reason:historicalSimilarity.reason
+  },historicalSimilarity.available?[]:['HISTORICAL_ANALOG_SAMPLE_INSUFFICIENT']));
 
-  const change15=Math.abs(Number.isFinite(Number(c15.at(-1)?.close))&&Number.isFinite(Number(c15.at(-8)?.close))
-    ? (Number(c15.at(-1).close)-Number(c15.at(-8).close))/Math.max(1e-12,Number(c15.at(-8).close))*100 : NaN);
-  const absorptionScore=avg([
-    Number.isFinite(rv)?clamp(88-Math.abs(rv-1.8)*33):null,
-    Number.isFinite(change15)?clamp(95-change15*17):null,
-    Number.isFinite(uv.bias)?clamp(55+uv.bias*85):null,
-    Number.isFinite(book.imbalance)?clamp(50+book.imbalance*150):null,
-    Number.isFinite(closeLocation)?clamp(45+closeLocation*65):null
-  ])||50;
-  a.push(analyst('ABSORPTION','محلل امتصاص السيولة',absorptionScore,absorptionScore>=66?'LONG':'NEUTRAL',{
-    rvol:rv,priceChangeWindowPct:change15,volumeBias:uv.bias,bookImbalance:book.imbalance,closeLocationPct:Number.isFinite(closeLocation)?closeLocation*100:null
-  }));
+  const priorBuyShareRows=s15.slice(-16,-8),priorQuote=priorBuyShareRows.reduce((sum,c)=>sum+Math.max(0,Number(c?.quoteVolume)||0),0),priorBuy=priorBuyShareRows.reduce((sum,c)=>sum+Math.max(0,Number(c?.takerBuyQuoteVolume)||0),0);
+  const priorBuyShare=priorQuote>0&&priorBuy<=priorQuote*1.001?priorBuy/priorQuote:null;
+  const buyShare=Number.isFinite(quoteBuyShare)?quoteBuyShare:tRatio,priorShare=Number.isFinite(priorBuyShare)?priorBuyShare:null;
+  const buyerShareDelta=Number.isFinite(buyShare)&&Number.isFinite(priorShare)?buyShare-priorShare:null;
+  const buyPressureScore=Number.isFinite(buyShare)?clamp(50+(buyShare-.5)*250+(Number.isFinite(buyerShareDelta)?buyerShareDelta*120:0)):50;
+  a.push(analyst('ABSORPTION','محلل ضغط الشراء',buyPressureScore,buyPressureScore>=62?'LONG':buyPressureScore<=38?'BEARISH':'NEUTRAL',{
+    recent_buyer_initiated_quote_share:buyShare,previous_buyer_initiated_quote_share:priorShare,buyer_share_delta:buyerShareDelta,taker_buy_base_share:tRatio,quote_volume_recent:quoteVolumeRecent,taker_buy_quote_volume_recent:takerBuyQuoteRecent,buyer_flow_available:Number.isFinite(buyShare)
+  },Number.isFinite(buyShare)?[]:['BUYER_FLOW_UNAVAILABLE']));
 
   const extRisk=clamp(
     62
@@ -643,29 +693,33 @@ function specialistAnalysis(candidate, market={}){
     recentMoveHeat:sniperFreshness.pumpHeat,sniperFreshness:sniperFreshness.freshness,recent4Gain:sniperFreshness.recent4Gain,recent8Gain:sniperFreshness.recent8Gain
   }));
 
-  const strategyScores=(candidate?.strategies||[]).map(x=>Number(x?.score?.value)).filter(Number.isFinite);
-  const strategyScore=avg(strategyScores)||50;
-  const accepted=Number(candidate?.accepted_strategies?.length)||0;
-  const strategyCoverage=Number(candidate?.coverage?.ratio);
-  a.push(analyst('STRATEGY_CONSENSUS','محلل إجماع الاستراتيجيات',strategyScore,strategyScore>=66?'LONG':strategyScore<=34?'BEARISH':'NEUTRAL',{
-    strategyMean:strategyScore,activeStrategies:candidate?.coverage?.strategy_count||strategyScores.length,
-    evaluatedStrategies:strategyScores.length,acceptedStrategies:accepted,coverageRatio:strategyCoverage
-  }));
+  const calibrationStats=calibrationReliability(calibration),calibratedConfidenceScore=calibrationStats.score;
+  a.push(analyst('STRATEGY_CONSENSUS','محلل معايرة الثقة',calibratedConfidenceScore,calibratedConfidenceScore>=62?'LONG':calibratedConfidenceScore<38?'BEARISH':'NEUTRAL',{
+    calibration_available:calibrationStats.available,closed_candle_markout_samples:calibrationStats.samples,realized_precision_pct:calibrationStats.precision_pct,calibration_mature:calibrationStats.calibrated,calibration_source:calibrationStats.sources,confidence_factor:calibrationStats.available?clamp(1+(Number(calibrationStats.precision_pct)-50)*.005,.86,1.14):1
+  },calibrationStats.calibrated?[]:['CALIBRATION_SAMPLE_NOT_MATURE']));
 
-  const breadthScore=avg([
-    Number.isFinite(Number(market.breadthPct))?Number(market.breadthPct):50,
-    Number.isFinite(rel24)?clamp(50+rel24*8):50,
-    Number.isFinite(median24)?clamp(50+median24*7):50
-  ])||50;
-  a.push(analyst('MARKET_BREADTH','محلل اتساع السوق',breadthScore,breadthScore>=63?'LONG':breadthScore<=37?'BEARISH':'NEUTRAL',{
-    positiveBreadthPct:market.breadthPct,relative24h:rel24,marketMedian24h:median24
-  }));
+  const priorDirectional=a.filter(x=>x.id!=='DATA_INTEGRITY'&&x.direction!=='NEUTRAL'&&x.score>=60);
+  const bullishVotes=priorDirectional.filter(x=>x.direction==='LONG').length,bearishVotes=priorDirectional.filter(x=>x.direction==='BEARISH').length,directionalVotes=bullishVotes+bearishVotes;
+  const conflictRatio=directionalVotes?2*Math.min(bullishVotes,bearishVotes)/directionalVotes:0;
+  const sourceRadars=[...new Set((Array.isArray(candidate?._analyst_context?.source_radars)?candidate._analyst_context.source_radars:[]).map(x=>String(x||'').trim().toUpperCase()).filter(Boolean))].slice(0,8);
+  const duplicateSourceCount=Math.max(0,sourceRadars.length-1),priorReview=Boolean(candidate?._analyst_context?.radar_review_priority),conflictScore=clamp(100-conflictRatio*100);
+  a.push(analyst('MARKET_BREADTH','محلل تعارض الإشارات والتكرار',conflictScore,conflictScore>=68?'LONG':conflictScore<35?'BEARISH':'NEUTRAL',{
+    directional_specialists:directionalVotes,bullish_specialists:bullishVotes,bearish_specialists:bearishVotes,directional_conflict_ratio:Math.round(conflictRatio*1000)/1000,source_radars:sourceRadars,unique_source_radar_count:sourceRadars.length,duplicate_source_count:duplicateSourceCount,one_symbol_one_review:true,radar_review_priority:priorReview,duplicate_notification_policy:'CONSOLIDATE_BY_SYMBOL_AND_USE_NOTIFICATION_GATE'
+  },conflictRatio>=.65?['SPECIALIST_DIRECTION_CONFLICT_HIGH']:[]));
 
-  const dataScore=clamp(avg([dq,liq,Number.isFinite(book.spreadBps)?clamp(94-book.spreadBps*2.5):null])||Math.min(dq,liq));
-  a.push(analyst('DATA_INTEGRITY','حارس سلامة البيانات',dataScore,dq>=85&&liq>=70?'LONG':dq<50||liq<45?'BEARISH':'NEUTRAL',{
-    dataQuality:dq,liquidityQuality:liq,spreadBps:book.spreadBps,
-    closedCandles:{'4h':s4.length,'1h':s1.length,'15m':s15.length}
-  }));
+  const spreadAvailable=Number.isFinite(book.spreadBps),spreadAcceptable=spreadAvailable&&book.spreadBps<=35;
+  const primaryEvidenceComplete=Boolean(rowDataValid&&symbolValid&&coverageReady&&quoteVolume24h>=300000&&liq>=60&&spreadAcceptable&&Number.isFinite(rv)&&Number.isFinite(tradeAccelerationRatio)&&Number.isFinite(buyShare));
+  const dataScoreRaw=clamp(avg([dq,liq,coverageScore,spreadAvailable?clamp(94-book.spreadBps*2.5):null])||Math.min(dq,liq));
+  const dataScore=primaryEvidenceComplete?dataScoreRaw:Math.min(45,dataScoreRaw);
+  const dataRisks=[
+    !rowDataValid?'DATA_STATUS_NOT_VALID':null,!symbolValid?'INVALID_SPOT_SYMBOL':null,!coverageReady?'CLOSED_CANDLE_COVERAGE_NOT_READY':null,
+    quoteVolume24h<300000?'QUOTE_VOLUME_BELOW_MINIMUM':null,!spreadAvailable?'SPREAD_UNAVAILABLE':null,spreadAvailable&&!spreadAcceptable?'SPREAD_TOO_WIDE':null,
+    !Number.isFinite(rv)?'VOLUME_BASELINE_UNAVAILABLE':null,!Number.isFinite(tradeAccelerationRatio)?'TRADE_COUNT_BASELINE_UNAVAILABLE':null,!Number.isFinite(buyShare)?'BUY_PRESSURE_UNAVAILABLE':null
+  ].filter(Boolean);
+  a.push(analyst('DATA_INTEGRITY','حارس سلامة البيانات',dataScore,primaryEvidenceComplete&&dq>=85&&liq>=70?'LONG':!primaryEvidenceComplete?'BEARISH':'NEUTRAL',{
+    data_quality:dq,liquidity_quality:liq,quote_volume_24h:quoteVolume24h,spread_bps:book.spreadBps,spread_available:spreadAvailable,symbol_valid:symbolValid,source_status:candidate?.data_status||null,
+    closed_candles:{'4h':s4.length,'1h':s1.length,'15m':s15.length},coverage_report:coverageReport,primary_evidence_complete:primaryEvidenceComplete,shared_snapshot:sharedSnapshot
+  },dataRisks));
 
   const setupFingerprint={
     base_quality:clamp(avg([
@@ -703,7 +757,12 @@ function specialistAnalysis(candidate, market={}){
 
   const features={
     price,priceChange24h:safe(candidate?.price_change_24h,0),
-    quoteVolume24h:safe(candidate?.quote_volume_24h,0),
+    quoteVolume24h:quoteVolume24h,
+    symbol_valid:symbolValid,
+    coverage_report:{ready:coverageReady,by_timeframe:coverageReport},
+    primary_evidence_complete:primaryEvidenceComplete,
+    shared_snapshot:sharedSnapshot,
+    trade_acceleration_ratio:tradeAccelerationRatio,
     high24:safe(candidate?.high_price_24h,null),low24:safe(candidate?.low_price_24h,null),
     rsi,rsi1,rsiSlope15,rsiSlope1,rv,volBurst,bb,ar,tRatio,
     structure:sm,book,roc4,roc16,trend4,trend1,rangePos,
@@ -716,12 +775,13 @@ function specialistAnalysis(candidate, market={}){
     pump_heat:sniperFreshness.pumpHeat,
     sniper_freshness:sniperFreshness.freshness
   };
-  return {a,features,dataValid:rowDataValid&&dq>=70&&liq>=60&&s4.length>=50&&s1.length>=50&&s15.length>=80};
+  const dataValid=primaryEvidenceComplete&&dq>=70&&liq>=60&&coverageReady&&symbolValid;
+  return {a,features,dataValid,sharedSnapshot};
 }
 
 
 export function analyzeMultiAnalystCandidate(candidate, market={}, memory=null, calibration=null){
-  const specialist=specialistAnalysis(candidate,market);
+  const specialist=specialistAnalysis(candidate,market,calibration);
   const final=finalVerdict(specialist.a,specialist.features,specialist.dataValid,market,memory,calibration);
   return {specialist,final};
 }
@@ -780,10 +840,10 @@ class SelfCalibrator{
       return {id,samples,wins:s.wins,losses:s.losses,neutral:s.neutral,
         precision:samples?Math.round(s.wins/samples*1000)/10:null,
         factor:Math.round(this.factor(id)*1000)/1000};
-    }).sort((a,b)=>b.samples-a.samples).slice(0,8);
+    }).sort((a,b)=>b.samples-a.samples).slice(0,19);
   }
 }
-const GROUPS=['MACRO','TREND','STRUCTURE','REVERSAL','MOMENTUM','FLOW','VOLATILITY','BREAKOUT','PRICE_ACTION','RELATIVE','MICROSTRUCTURE','RISK','STRATEGY','DATA'];
+const GROUPS=['MACRO','TREND','STRUCTURE','COVERAGE','MOMENTUM','FLOW','VOLATILITY','BREAKOUT','PRICE_ACTION','RELATIVE','MICROSTRUCTURE','RISK','STRATEGY','DATA','HISTORY','CALIBRATION','CONSISTENCY'];
 
 const buildGroupConsensus=(analysts)=>{
   const out={};
@@ -865,6 +925,13 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   const earlyCoreGood=earlyCoreScores.filter(x=>x>=58).length>=4&&Number(setup.base_quality)>=55&&Number(setup.pressure)>=55&&Number(setup.timing)>=55&&Number(setup.risk)>=55;
   const hardReasons=[];
   if(!dataValid)hardReasons.push('DATA_GATE_FAILED');
+  if(features?.symbol_valid!==true)hardReasons.push('SPOT_SYMBOL_INVALID');
+  if(features?.coverage_report?.ready!==true)hardReasons.push('CANDLE_COVERAGE_INCOMPLETE');
+  if(Number(features?.quoteVolume24h)<300000)hardReasons.push('LIQUIDITY_NOTIONAL_TOO_LOW');
+  if(!Number.isFinite(Number(features?.book?.spreadBps)))hardReasons.push('SPREAD_EVIDENCE_UNAVAILABLE');
+  else if(Number(features.book.spreadBps)>35)hardReasons.push('SPREAD_TOO_WIDE');
+  if(features?.primary_evidence_complete!==true)hardReasons.push('PRIMARY_EVIDENCE_INCOMPLETE');
+  if(features?.shared_snapshot?.available!==true)hardReasons.push('SHARED_MARKET_SNAPSHOT_UNAVAILABLE');
   if(safeAnalysts.length!==19)hardReasons.push('SPECIALIST_COUNT_INVALID');
   if(new Set(safeAnalysts.map(x=>String(x?.id||''))).size!==19||safeAnalysts.some(x=>!Object.prototype.hasOwnProperty.call(ANALYST_PROFILES,String(x?.id||''))))hardReasons.push('SPECIALIST_IDS_INVALID');
   if(safeAnalysts.some(x=>!Number.isFinite(Number(x?.score))||!['LONG','BEARISH','NEUTRAL'].includes(x?.direction)))hardReasons.push('SPECIALIST_OUTPUT_INVALID');
@@ -934,9 +1001,10 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
     pump_exhaustion_blocked:pumpExhaustion
   };
 
+  const decision=hardReasons.length?'REJECT':(verdict==='STRONG_CANDIDATE'||verdict==='CANDIDATE')?'ACCEPT':verdict==='WATCH'?'WAIT':'REDUCE_CONFIDENCE';
   return {
     score:Math.round(balancedScore*10)/10,
-    verdict,direction,
+    verdict,direction,decision,
     positiveAnalysts:positive,strongAnalysts:strong,bearishStrongAnalysts:bearishStrong,totalAnalysts:safeAnalysts.length,
     hardReasons,reasons,risks,
     agreement:Math.round(agreement*10)/10,
@@ -1127,13 +1195,17 @@ export class MultiAnalystEngine {
       assessed_at:new Date(now).toISOString(),
       assessed_at_ms:now,
       verdict:String(item?.verdict||'UNKNOWN'),
+      decision:String(item?.final_judge?.decision||item?.decision||'UNKNOWN'),
       direction:String(item?.direction||'NEUTRAL'),
+      source_radars:Array.isArray(item?.source_radars)?item.source_radars.slice(0,8):[],
+      shared_snapshot:item?.shared_snapshot||null,
       final_score:Number.isFinite(Number(item?.final_score))?Number(item.final_score):null,
       early_score:Number.isFinite(Number(item?.intelligence?.early_score))?Number(item.intelligence.early_score):null,
       sniper_score:Number.isFinite(Number(item?.final_judge?.sniper_score))?Number(item.final_judge.sniper_score):null,
       analyst_agreement:Number.isFinite(Number(item?.intelligence?.analyst_agreement))?Number(item.intelligence.analyst_agreement):null,
       specialist_count:analysts.length,
       unique_specialists:uniqueIds.size,
+      unique_roles:new Set(analysts.map(x=>String(x?.role||'')).filter(Boolean)).size,
       specialists_complete:execution.specialists_complete===true&&!analysisFailed&&placeholderIds.length===0,
       final_analyst_complete:execution.final_analyst_complete===true,
       analysis_failed:analysisFailed,
@@ -1300,6 +1372,8 @@ export class MultiAnalystEngine {
       const validTickerReturns=selected.map(x=>Number(x.priceChange24h)).filter(Number.isFinite).sort((a,b)=>a-b);
       const marketMedian24h=validTickerReturns.length?validTickerReturns[Math.floor(validTickerReturns.length/2)]:null;
       const breadthPct=validTickerReturns.length?validTickerReturns.filter(x=>x>0).length/validTickerReturns.length*100:null;
+      const marketSnapshotAt=this.clock();
+      const sharedMarketSnapshot={snapshot_id:'SPOT-'+Math.trunc(marketSnapshotAt)+'-'+selected.length+'-'+btc15.length+'-'+btc1.length,as_of:marketSnapshotAt,snapshot_source:String(tickers?.source||'BINANCE_PUBLIC_REST'),btc15,btc1,marketMedian24h,breadthPct};
       const scanErrors=[];
       const scanned=await boundedMap(deepSelected,Math.max(1,Math.min(4,this.config.deepConcurrency)),async(ticker,index)=>{
         try{
@@ -1308,11 +1382,13 @@ export class MultiAnalystEngine {
           // A candidate must reach the 19 specialist analysts even when the data gate fails.
           // The final judge remains fail-closed: invalid/stale/future/incomplete data is rejected there.
           this._settleOutcome(ticker.symbol,this.clock(),row?._analysis?.series?.['15m']||[]);
+          const reviewContext=this.pendingRadarReviews.get(String(ticker?.symbol||'').toUpperCase());
+          row._analyst_context={snapshot_id:sharedMarketSnapshot.snapshot_id,snapshot_as_of:sharedMarketSnapshot.as_of,source_radars:Array.isArray(reviewContext?.source_radars)?reviewContext.source_radars.slice(0,8):[],radar_review_priority:ticker?._radar_review_priority===true,duplicate_alert_suppressed:false};
           let prior=null;
           try{ prior=await this.store?.getIntelligenceMemory?.(ticker.symbol) || null; }catch{ prior=null; }
           let analysis;
           try{
-            analysis=analyzeMultiAnalystCandidate(row,{btc15,btc1,marketMedian24h,breadthPct},prior,this.calibration);
+            analysis=analyzeMultiAnalystCandidate(row,sharedMarketSnapshot,prior,this.calibration);
           }catch(analysisError){
             const msg='MULTI_ANALYST_ANALYSIS_FAILED:'+String(analysisError?.message||analysisError);
             const specialist={a:Array.from({length:19},(_,i)=>({
@@ -1338,13 +1414,16 @@ export class MultiAnalystEngine {
           const publicAnalysts=specialist.a.map(x=>({...x}));
           const specialistIds=publicAnalysts.map(x=>String(x?.id||'')).filter(Boolean);
           const uniqueSpecialistIds=new Set(specialistIds);
+          const specialistRoles=publicAnalysts.map(x=>String(x?.role||'')).filter(Boolean);
+          const uniqueSpecialistRoles=new Set(specialistRoles);
           const specialistPlaceholders=specialistIds.filter(id=>/^ANALYST_\\d+$/i.test(id));
           const analystFailed=(Array.isArray(row.reason_codes)?row.reason_codes:[]).includes('MULTI_ANALYST_ANALYSIS_FAILED');
           const analystExecution={
             expected_analysts:20,
             specialist_count:publicAnalysts.length,
             unique_specialists:uniqueSpecialistIds.size,
-            specialists_complete:publicAnalysts.length===19&&uniqueSpecialistIds.size===19&&specialistPlaceholders.length===0&&!analystFailed,
+            unique_roles:uniqueSpecialistRoles.size,
+            specialists_complete:publicAnalysts.length===19&&uniqueSpecialistIds.size===19&&uniqueSpecialistRoles.size===19&&specialistPlaceholders.length===0&&!analystFailed,
             final_analyst_complete:Boolean(final&&Number(final.totalAnalysts)===19&&typeof final.verdict==='string'),
             analysis_failed:analystFailed
           };
@@ -1356,7 +1435,8 @@ export class MultiAnalystEngine {
           return {
             symbol:row.symbol,rank:index+1,last_price:row.last_price,price_change_24h:row.price_change_24h,
             quote_volume_24h:row.quote_volume_24h,liquidity_quality:row.liquidity_quality,data_quality:row.data_quality,
-            direction:final.direction,verdict:final.verdict,final_score:final.score,
+            direction:final.direction,verdict:final.verdict,decision:final.decision,final_score:final.score,
+            shared_snapshot:specialist.sharedSnapshot,source_radars:row._analyst_context.source_radars,
             consensus:{positive:final.positiveAnalysts,strong:final.strongAnalysts,total:final.totalAnalysts,ratio:final.totalAnalysts>0?final.positiveAnalysts/final.totalAnalysts:0,bearish_strong:Number(final.bearishStrongAnalysts||0)},
             analysts:publicAnalysts,analyst_execution:analystExecution,final_judge:final,
             highlights:specialist.a.filter(x=>x.score>=72).sort((a,b)=>b.score-a.score).slice(0,6),
@@ -1521,8 +1601,8 @@ export class MultiAnalystEngine {
 }
 
 export const MULTI_ANALYST_NAMES=Object.freeze([
-  'نظام السوق','توافق الأطر','هيكل القمم والقيعان','القاع والتحول','الزخم','تأكيد الحجم',
-  'الانكماش والتجهيز','ما قبل الاختراق','الدعم والمقاومة','القوة النسبية','دفتر الأوامر',
-  'جودة السيولة','سلوك اللاعبين الكبار','امتصاص السيولة','الفخاخ والإرهاق','عدم مطاردة السعر',
-  'إجماع الاستراتيجيات','اتساع السوق','سلامة البيانات','المحلل النهائي'
-]);
+  'حارس سلامة البيانات','مراقب اكتمال التغطية','محلل السيولة','راصد شذوذ الحجم','راصد تسارع الصفقات',
+  'محلل ضغط الشراء','محلل بنية السعر','كاشف القاعدة الهادئة','مؤكد الاختراق','مانع مطاردة السعر',
+  'كاشف المصائد','مراقب تماسك عمق السوق','محلل حالة السوق العام','محلل القوة النسبية','محلل توافق الفترات الزمنية',
+  'محلل التشابه التاريخي','محلل التقلب والمخاطر','معاير الثقة بالنتائج','كاشف تعارض الإشارات والتكرار','المحلل النهائي'
+]);]);
