@@ -187,13 +187,18 @@ function summarizeLiveAggTradeFlow(input, closedRows, now, config = {}) {
   };
 }
 
-function orderBookMetrics(bookTicker, depth) {
+function orderBookMetrics(bookTicker, depth, now, config = {}) {
   const bids = Array.isArray(depth?.bids) ? depth.bids : [];
   const asks = Array.isArray(depth?.asks) ? depth.asks : [];
   const bidFromDepth = num(bids[0]?.[0]);
   const askFromDepth = num(asks[0]?.[0]);
-  const bid = num(bookTicker?.bidPrice) ?? bidFromDepth;
-  const ask = num(bookTicker?.askPrice) ?? askFromDepth;
+  const bookTime = num(bookTicker?.asOf ?? bookTicker?.receivedAt ?? bookTicker?.timestamp);
+  const bookAge = bookTime !== null ? Math.max(0, now - bookTime) : null;
+  const bookMaxAge = Math.max(1_000, Number(config.maxBookTickerAgeMs) || 60_000);
+  const bookTickerStale = bookTime !== null && (bookTime > now + 1_000 || now - bookTime > bookMaxAge);
+  const bookTickerFresh = !bookTickerStale;
+  const bid = (bookTickerFresh ? num(bookTicker?.bidPrice) : null) ?? bidFromDepth;
+  const ask = (bookTickerFresh ? num(bookTicker?.askPrice) : null) ?? askFromDepth;
   const validTop = bid !== null && ask !== null && bid > 0 && ask >= bid;
   const mid = validTop ? (bid + ask) / 2 : null;
   const spreadBps = validTop && mid > 0 ? (ask - bid) / mid * 10_000 : null;
@@ -207,13 +212,19 @@ function orderBookMetrics(bookTicker, depth) {
   }, 0) : null;
   const depthAvailable = bids.length > 0 && asks.length > 0 && mid !== null;
   const totalDepth = depthAvailable ? bidDepth + askDepth : null;
-  const bidQty = num(bookTicker?.bidQty), askQty = num(bookTicker?.askQty);
+  const bidQty = (bookTickerFresh ? num(bookTicker?.bidQty) : null) ?? num(bids[0]?.[1]);
+  const askQty = (bookTickerFresh ? num(bookTicker?.askQty) : null) ?? num(asks[0]?.[1]);
   const topBidQuote = validTop && bidQty !== null && bidQty >= 0 ? bid * bidQty : null;
   const topAskQuote = validTop && askQty !== null && askQty >= 0 ? ask * askQty : null;
   const topQuoteTotal = topBidQuote !== null && topAskQuote !== null ? topBidQuote + topAskQuote : null;
   const topQuoteImbalance = topQuoteTotal > 0 ? (topBidQuote - topAskQuote) / topQuoteTotal : null;
   return {
     available: validTop,
+    book_ticker_timestamp_known: bookTime !== null,
+    book_ticker_fresh: bookTime === null ? null : !bookTickerStale,
+    book_ticker_age_ms: round(bookAge, 0),
+    bid_ask_source: bookTickerFresh && num(bookTicker?.bidPrice) !== null && num(bookTicker?.askPrice) !== null
+      ? 'BINANCE_PUBLIC_BOOK_TICKER' : bids.length > 0 && asks.length > 0 ? 'BINANCE_PUBLIC_DEPTH' : 'UNAVAILABLE',
     bid_price: round(bid, 10), ask_price: round(ask, 10),
     spread_bps: round(spreadBps, 3),
     depth_available: depthAvailable,
@@ -251,7 +262,7 @@ export function buildUnifiedFeatureSnapshot({
   const trades24h = num(ticker?.tradeCount24h);
   const source = String(last?.source || ticker?.source || 'UNKNOWN').toUpperCase();
   const benchmarkRows = cleanClosedCandles(benchmarkCandles, asOf, config.maxCandles ?? 96);
-  const book = orderBookMetrics(bookTicker, depth);
+  const book = orderBookMetrics(bookTicker, depth, asOf, config);
   const empty = {
     version: 'RADARX_FEATURE_ENGINE_V1', symbol: String(symbol || ticker?.symbol || '').toUpperCase(),
     as_of_ms: Number.isFinite(asOf) ? asOf : null, source,
