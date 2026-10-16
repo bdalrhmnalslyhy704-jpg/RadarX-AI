@@ -13,6 +13,7 @@ const phase2=[
   'phase2/tests/api.test.mjs',
   'phase2/tests/radar-swarm-coordinator.test.mjs',
   'phase2/tests/historical-replay-matrix.test.mjs',
+  'phase2/tests/historical-learning-lab.test.mjs',
   'phase2/tests/dynamic-early-warning-gate.test.mjs',
   'phase2/tests/radar-notification-gate.test.mjs',
   'phase2/tests/radar-role-evidence.test.mjs',
