@@ -91,6 +91,11 @@ export function classifyHistoricalLearningRow(row={},{
     window_id:String(row?.window_id??row?.windowId??row?.report_window_id??'UNSPECIFIED_WINDOW'),
     radar:String(row?.radar??row?.radar_id??row?.radar_name??'UNKNOWN_RADAR').slice(0,80),
     market_regime:regimeOf(row),
+    market_event_at:finite(row?.market_event_at??row?.external_event_at),
+    market_event_cohort:String(row?.market_event_cohort??row?.external_event_cohort??'').toUpperCase(),
+    market_event_is_positive:row?.market_event_is_positive===true,
+    market_event_anchor_type:String(row?.market_event_anchor_type??'').slice(0,100),
+    market_event_monthly_return_pct:finite(row?.market_event_monthly_return_pct),
     decision:accepted?'ACCEPTED':'REJECTED',
     accepted_mode:String(row?.accepted_mode??'NONE').slice(0,60),
     replay_data_mode:replayDataMode,coverage_blocked:coverageBlocked,
@@ -128,6 +133,11 @@ function extractReportRows(report,metadata={}){
         radar:row?.radar??metadata.radar??'STRONG_MOVE_RADAR',
         window_id:row?.window_id??windowId,
         market_regime:row?.market_regime??metadata.market_regime??report?.market_regime??'UNKNOWN',
+        market_event_at:row?.market_event_at??report?.market_event?.at??metadata.market_event_at??null,
+        market_event_cohort:row?.market_event_cohort??report?.market_event?.cohort??metadata.market_event_cohort??null,
+        market_event_is_positive:row?.market_event_is_positive??report?.market_event?.is_positive??metadata.market_event_is_positive??false,
+        market_event_anchor_type:row?.market_event_anchor_type??report?.market_event?.anchor_type??metadata.market_event_anchor_type??null,
+        market_event_monthly_return_pct:row?.market_event_monthly_return_pct??report?.market_event?.monthly_return_pct??metadata.market_event_monthly_return_pct??null,
         timestamp:row?.timestamp??row?.decision_at,
         outcome:{...(row?.outcome??{}),
           actual_window_5pct_candle_close_at:row?.outcome?.actual_window_5pct_candle_close_at??result?.summary?.first_actual_window_5pct_candle_close_at,
@@ -195,41 +205,63 @@ function groupMarketEvents(rows,moderateMovePct,strongMovePct){
     const moderateExact=row.actual_window_moderate_target_exact_at;
     const strongExact=row.actual_window_strong_target_exact_at;
     const key=row.window_id+'|'+row.symbol;
+    const externalAt=finite(row.market_event_at);
     if(!groups.has(key))groups.set(key,{key,window_id:row.window_id,symbol:row.symbol,
       moderate_at:moderateCandle,strong_at:strongCandle,
-      moderate_exact_at:moderateExact,strong_exact_at:strongExact,rows:[]});
+      moderate_exact_at:moderateExact,strong_exact_at:strongExact,
+      external_event_at:externalAt,
+      external_event_cohort:row.market_event_cohort||'',
+      external_event_is_positive:row.market_event_is_positive===true,
+      external_event_anchor_type:row.market_event_anchor_type||'',
+      external_event_monthly_return_pct:finite(row.market_event_monthly_return_pct),
+      rows:[]});
     const group=groups.get(key);
     if(group.moderate_at===null&&moderateCandle!==null)group.moderate_at=moderateCandle;
     if(group.strong_at===null&&strongCandle!==null)group.strong_at=strongCandle;
     if(group.moderate_exact_at===null&&moderateExact!==null)group.moderate_exact_at=moderateExact;
     if(group.strong_exact_at===null&&strongExact!==null)group.strong_exact_at=strongExact;
+    if(group.external_event_at===null&&externalAt!==null)group.external_event_at=externalAt;
+    if(!group.external_event_cohort&&row.market_event_cohort)group.external_event_cohort=row.market_event_cohort;
+    if(!group.external_event_anchor_type&&row.market_event_anchor_type)group.external_event_anchor_type=row.market_event_anchor_type;
+    if(group.external_event_monthly_return_pct===null)group.external_event_monthly_return_pct=finite(row.market_event_monthly_return_pct);
+    if(row.market_event_is_positive===true)group.external_event_is_positive=true;
     group.rows.push(row);
   }
   return [...groups.values()].map(group=>{
+    const hasExternalAnchor=group.external_event_at!==null;
+    // Controls and fallback anchors are not positive events. They remain useful for
+    // alert precision/false-positive analysis but never inflate event-capture counts.
+    if(hasExternalAnchor&&!group.external_event_is_positive)return null;
     const moderate=group.moderate_at!==null||group.moderate_exact_at!==null;
     const strong=group.strong_at!==null||group.strong_exact_at!==null;
     const candleEventAt=group.moderate_at??group.strong_at;
     const exactEventAt=group.moderate_exact_at??group.strong_exact_at;
-    const eventAt=exactEventAt??candleEventAt;
-    const before=eventAt===null?[]:group.rows.filter(row=>row.decision==='ACCEPTED'&&row.timestamp<eventAt);
+    const eventAt=hasExternalAnchor?group.external_event_at:(exactEventAt??candleEventAt);
+    if(eventAt===null)return null;
+    const before=group.rows.filter(row=>row.decision==='ACCEPTED'&&row.timestamp<eventAt);
     const first=before.sort((a,b)=>a.timestamp-b.timestamp)[0]??null;
-    const exactSource=exactEventAt!==null&&group.rows.some(row=>row.target_timestamp_source==='BINANCE_PUBLIC_AGG_TRADES');
+    const exactSource=!hasExternalAnchor&&exactEventAt!==null&&group.rows.some(row=>row.target_timestamp_source==='BINANCE_PUBLIC_AGG_TRADES');
     return {
       event_id:group.key,
       symbol:group.symbol,window_id:group.window_id,
-      move_class:strong?'STRONG_MOVE':moderate?'MODERATE_MOVE':'NO_OBSERVED_TARGET',
+      move_class:hasExternalAnchor
+        ?(group.external_event_cohort==='STRONG'?'STRONG_MOVE':group.external_event_cohort==='MEDIUM'?'MODERATE_MOVE':'EXTERNAL_EVENT')
+        :(strong?'STRONG_MOVE':moderate?'MODERATE_MOVE':'NO_OBSERVED_TARGET'),
+      event_cohort:hasExternalAnchor?group.external_event_cohort:null,
+      event_anchor_type:hasExternalAnchor?group.external_event_anchor_type:null,
+      event_monthly_return_pct:hasExternalAnchor?group.external_event_monthly_return_pct:null,
       event_at:eventAt,
-      event_at_candle_close:candleEventAt,
+      event_at_candle_close:hasExternalAnchor?null:candleEventAt,
       event_at_exact:exactSource?exactEventAt:null,
-      event_timestamp_source:exactSource?'BINANCE_PUBLIC_AGG_TRADES':(candleEventAt!==null?'CLOSED_CANDLE_CLOSE':'UNAVAILABLE'),
-      lead_time_basis:exactSource?'EXACT_AGGTRADE_TIMESTAMP':'CANDLE_CLOSE_TIMESTAMP',
+      event_timestamp_source:hasExternalAnchor?'EX_POST_MONTHLY_FORENSICS_ANCHOR':(exactSource?'BINANCE_PUBLIC_AGG_TRADES':(candleEventAt!==null?'CLOSED_CANDLE_CLOSE':'UNAVAILABLE')),
+      lead_time_basis:hasExternalAnchor?'EX_POST_EVENT_ANCHOR':(exactSource?'EXACT_AGGTRADE_TIMESTAMP':'CANDLE_CLOSE_TIMESTAMP'),
       exact_event_time_available:exactSource,
       first_accepted_before_event_at:first?.timestamp??null,
       captured_before_event:Boolean(first),
-      lead_time_minutes:first&&eventAt!==null?Number(((eventAt-first.timestamp)/60000).toFixed(2)):null,
+      lead_time_minutes:first?Number(((eventAt-first.timestamp)/60000).toFixed(2)):null,
       decision_rows:group.rows.length
     };
-  });
+  }).filter(Boolean);
 }
 
 export function evaluateHistoricalLearningMetrics(dataset,{moderateMovePct=5,strongMovePct=15,calibrationBins=10}={}){
