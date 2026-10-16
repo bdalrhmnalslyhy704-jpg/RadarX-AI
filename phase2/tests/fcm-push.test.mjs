@@ -158,3 +158,35 @@ test('FCM provider still fails closed for malformed or incomplete base64 service
   assert.deepEqual(new FcmPushProvider({projectId:'fixture-project',serviceAccountJson:Buffer.from('{}').toString('base64')}).status(),{provider:'fcm',enabled:false});
   assert.deepEqual(new FcmPushProvider({projectId:'fixture-project',serviceAccountJson:'not-base64-json'}).status(),{provider:'fcm',enabled:false});
 });
+
+test('FCM data-only payload carries shared lifecycle state and uses the lifecycle label in notification copy',async()=>{
+  const {serviceAccount}=accountFixture();
+  let sent=null;
+  const fetchImpl=async url=>{
+    if(String(url)==='https://oauth2.googleapis.com/token')return mockResponse(200,{access_token:'TEST_FIXTURE_ACCESS_TOKEN',expires_in:3600});
+    sent=JSON.parse(arguments[1]?.body||'{}');
+    return mockResponse(200,{name:'projects/radarx-fixture-project/messages/lifecycle-id'});
+  };
+  const saferFetch=async(url,options)=>{
+    if(String(url)==='https://oauth2.googleapis.com/token')return mockResponse(200,{access_token:'TEST_FIXTURE_ACCESS_TOKEN',expires_in:3600});
+    sent=JSON.parse(options.body);
+    return mockResponse(200,{name:'projects/radarx-fixture-project/messages/lifecycle-id'});
+  };
+  const provider=new FcmPushProvider({projectId:serviceAccount.project_id,serviceAccountJson:JSON.stringify(serviceAccount),fetchImpl:saferFetch,clock:()=>1700000000000});
+  const result=await provider.send({provider:'fcm',fcm_token:TOKEN},{
+    type:'RADARX_RADAR_ALERT',event_class:'RADAR_ALERT',event:'RADAR_ALERT',symbol:'EARLYUSDT',
+    title:'Radar 8 • EARLYUSDT',message:'EARLYUSDT • إعداد مبكر',
+    signal_lifecycle_state:'EARLY_SETUP',signal_lifecycle_label:'إعداد مبكر',
+    signal_lifecycle_transition:'EARLY_EVIDENCE_CONVERGED',
+    signal_lifecycle_reason_codes:['RELATED_EARLY_EVIDENCE'],
+    paper_trading:true,real_order_execution:false
+  });
+  assert.equal(result.status,'SENT');
+  assert.equal(sent.message.data.signal_lifecycle_state,'EARLY_SETUP');
+  assert.equal(sent.message.data.signal_lifecycle_label,'إعداد مبكر');
+  assert.equal(sent.message.data.signal_lifecycle_transition,'EARLY_EVIDENCE_CONVERGED');
+  assert.equal(sent.message.data.signal_lifecycle_reason_codes,'RELATED_EARLY_EVIDENCE');
+  assert.equal(sent.message.data.body,'EARLYUSDT • إعداد مبكر');
+  assert.equal(sent.message.data.real_order_execution,'false');
+});
+
