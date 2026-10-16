@@ -327,4 +327,3 @@ test('only a strict pass becomes confirmed; confirmation remains explicitly non-
   assert.ok(confirmed.reason_codes.includes('STRICT_GATES_PASSED'));
   assert.equal(confirmed.terminal,false);
 });
-\n
