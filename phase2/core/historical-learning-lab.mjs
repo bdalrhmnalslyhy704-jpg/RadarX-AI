@@ -59,11 +59,15 @@ export function classifyHistoricalLearningRow(row={},{
   const horizonObserved=outcome.horizon_observed===true;
   const accepted=String(row?.decision??'').toUpperCase()==='ACCEPTED';
   const acceptedMode=String(row?.accepted_mode??'').toUpperCase();
+  const replayDataMode=String(row?.replay_data_mode??row?.data_mode??(row?.rejection_group==='HISTORICAL_TRADE_COVERAGE_INCOMPLETE'?'BLOCKED_INCOMPLETE':row?.trade_window?.coverage_complete===false?'CANDLE_ONLY_FALLBACK':'FULL_TRADE')).toUpperCase();
+  const coverageBlocked=replayDataMode==='BLOCKED_INCOMPLETE'||row?.rejection_group==='HISTORICAL_TRADE_COVERAGE_INCOMPLETE';
   const hasEarlyStage=/EARLY|PRE_EXPANSION|PRE_BREAKOUT|WATCH/.test(String(row?.stage_observed??'').toUpperCase())||
     /EARLY|PRE_EXPANSION/.test(acceptedMode);
   let outcomeClass='OUTCOME_UNAVAILABLE',moveClass='UNKNOWN';
   if(issues.length){
     outcomeClass='DATA_INTEGRITY_REJECTED';
+  }else if(coverageBlocked){
+    outcomeClass='DATA_COVERAGE_BLOCKED';
   }else if(move!==null&&move>=strong){
     moveClass='STRONG_MOVE';
     outcomeClass=accepted?'EARLY_SIGNAL_SUCCESS':'MISSED_MOVE_DECISION';
@@ -85,6 +89,7 @@ export function classifyHistoricalLearningRow(row={},{
     market_regime:regimeOf(row),
     decision:accepted?'ACCEPTED':'REJECTED',
     accepted_mode:String(row?.accepted_mode??'NONE').slice(0,60),
+    replay_data_mode:replayDataMode,coverage_blocked:coverageBlocked,
     score:finite(row?.score),
     move_class:moveClass,
     outcome_class:outcomeClass,
@@ -100,7 +105,7 @@ export function classifyHistoricalLearningRow(row={},{
     actual_window_moderate_target_exact_at:finite(outcome.actual_window_moderate_target_at??outcome.actual_window_5pct_at),
     target_timestamp_source:String(outcome.actual_window_moderate_target_timestamp_source??outcome.actual_window_5pct_timestamp_source??'UNAVAILABLE'),
     calibrated_probability:probabilityValid?calibratedProbability:null,
-    success_label:issues.length?null:success,
+    success_label:issues.length||coverageBlocked?null:success,
     integrity_issues:issues
   };
 }
@@ -145,7 +150,7 @@ export function buildHistoricalLearningDataset(reports=[],{
   const classified=rows.map(row=>classifyHistoricalLearningRow(row,{moderateMovePct,strongMovePct}));
   const byDecisionTime=classified.slice().sort((a,b)=>(a.timestamp??Infinity)-(b.timestamp??Infinity)||a.symbol.localeCompare(b.symbol));
   const counts={STRONG_MOVE:0,MODERATE_MOVE:0,NO_TARGET_MOVE:0,UNKNOWN:0};
-  const decisions={EARLY_SIGNAL_SUCCESS:0,EARLY_SIGNAL_FAILED:0,FALSE_ALERT:0,MISSED_MOVE_DECISION:0,CORRECT_REJECTION:0,OUTCOME_UNAVAILABLE:0,DATA_INTEGRITY_REJECTED:0};
+  const decisions={EARLY_SIGNAL_SUCCESS:0,EARLY_SIGNAL_FAILED:0,FALSE_ALERT:0,MISSED_MOVE_DECISION:0,CORRECT_REJECTION:0,OUTCOME_UNAVAILABLE:0,DATA_INTEGRITY_REJECTED:0,DATA_COVERAGE_BLOCKED:0};
   for(const row of classified){
     counts[row.move_class]=(counts[row.move_class]??0)+1;
     decisions[row.outcome_class]=(decisions[row.outcome_class]??0)+1;
@@ -159,6 +164,7 @@ export function buildHistoricalLearningDataset(reports=[],{
       integrity_rejected_rows:byDecisionTime.filter(x=>x.integrity_issues.length>0).length,
       outcome_labeled_rows:byDecisionTime.filter(x=>['STRONG_MOVE','MODERATE_MOVE','NO_TARGET_MOVE'].includes(x.move_class)).length,
       outcome_unavailable_rows:byDecisionTime.filter(x=>x.outcome_class==='OUTCOME_UNAVAILABLE').length,
+    data_coverage_blocked_rows:byDecisionTime.filter(x=>x.outcome_class==='DATA_COVERAGE_BLOCKED').length,
       move_class_counts:counts,
       decision_outcome_counts:decisions,
       thresholds:{moderate_move_pct:Math.max(0.1,Number(moderateMovePct)||5),strong_move_pct:Math.max(Number(moderateMovePct)||5,Number(strongMovePct)||15)},
@@ -174,7 +180,7 @@ export function buildHistoricalLearningDataset(reports=[],{
 }
 
 function validMetricRows(dataset){
-  return arr(dataset?.rows).filter(row=>row.integrity_issues?.length===0&&row.outcome_class!=='OUTCOME_UNAVAILABLE'&&row.timestamp!==null);
+  return arr(dataset?.rows).filter(row=>row.integrity_issues?.length===0&&!row.coverage_blocked&&row.outcome_class!=='DATA_COVERAGE_BLOCKED'&&row.outcome_class!=='OUTCOME_UNAVAILABLE'&&row.timestamp!==null);
 }
 
 function groupMarketEvents(rows,moderateMovePct,strongMovePct){
@@ -266,6 +272,7 @@ export function evaluateHistoricalLearningMetrics(dataset,{moderateMovePct=5,str
     dataset_rows:all.length,evaluable_decisions:evaluable.length,
     outcome_coverage_pct:pct(evaluable.length,Math.max(1,all.length)),
     accepted_decisions:accepted.length,
+    data_coverage_blocked_decisions:all.filter(row=>row.outcome_class==='DATA_COVERAGE_BLOCKED').length,
     successful_alerts:alertsWithMove.length,
     false_alerts:falseAlerts.length,
     early_signal_failed:accepted.filter(row=>row.outcome_class==='EARLY_SIGNAL_FAILED').length,
