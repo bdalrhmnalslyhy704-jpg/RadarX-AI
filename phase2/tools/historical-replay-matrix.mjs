@@ -39,7 +39,7 @@ async function main(){
     process.stdout.write([
       'RadarX multi-window historical replay matrix (public Binance Spot, read-only)',
       'Usage: node phase2/tools/historical-replay-matrix.mjs [--symbols BTCUSDT,ETHUSDT,...] [--windows windows.json]',
-      '       [--max-trade-pages 60] [--max-trades 60000] [--output reports/radarx-matrix] [--dry-run]',
+      '       [--max-trade-pages 60] [--max-trades 60000] [--outcome-horizon-hours 24] [--output reports/radarx-matrix] [--dry-run]',
       'Default coverage: 30 Spot USDT symbols × 3 one-day candidate windows (maximum 90 symbol-window replays).',
       'Each window is classified from observed closed BTCUSDT candles: BULL_TREND, BEAR_TREND, SIDEWAYS, MIXED, or UNKNOWN.',
       'Each symbol must have complete closed-candle coverage. Missing aggregate trades use an explicit candle-only fallback; exact trade-crossing timestamps remain unavailable. No synthetic data or orders.'
@@ -50,9 +50,10 @@ async function main(){
   const windows=normalizeMatrixWindows(windowsInput,{now:Date.now()});
   const maxTradePages=integer(flag(args,'--max-trade-pages','60'),60,1,1000,'max-trade-pages');
   const maxTrades=integer(flag(args,'--max-trades','60000'),60000,1000,1000000,'max-trades');
+  const outcomeHorizonHours=integer(flag(args,'--outcome-horizon-hours','24'),24,1,168,'outcome-horizon-hours');
   const timeoutMs=integer(flag(args,'--timeout-ms','1800000'),1800000,60000,7200000,'timeout-ms');
   const outputDir=resolve(flag(args,'--output','./reports/radarx-historical-matrix-'+new Date().toISOString().replace(/[:.]/g,'-')));
-  const plan={engine:'RADARX_HISTORICAL_REPLAY_MATRIX_V1',created_at:new Date().toISOString(),symbol_count:symbols.length,window_count:windows.length,planned_symbol_window_replays:symbols.length*windows.length,symbols,windows:windows.map(w=>({id:w.id,label:w.label,start:w.start,end:w.end})),limits:{max_trade_pages_per_symbol:maxTradePages,max_trades_per_symbol:maxTrades,timeout_ms_per_window:timeoutMs},policy:{market:'BINANCE_SPOT',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};
+  const plan={engine:'RADARX_HISTORICAL_REPLAY_MATRIX_V1',created_at:new Date().toISOString(),symbol_count:symbols.length,window_count:windows.length,planned_symbol_window_replays:symbols.length*windows.length,symbols,windows:windows.map(w=>({id:w.id,label:w.label,start:w.start,end:w.end})),limits:{max_trade_pages_per_symbol:maxTradePages,max_trades_per_symbol:maxTrades,outcome_horizon_hours:outcomeHorizonHours,timeout_ms_per_window:timeoutMs},policy:{market:'BINANCE_SPOT',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};
   if(args.includes('--dry-run')){process.stdout.write(JSON.stringify({...plan,status:'DRY_RUN_NO_NETWORK'},null,2)+'\n');return;}
   await mkdir(outputDir,{recursive:true});
   const client=new RestClient({...CONFIG.rest,baseUrls:CONFIG.rest.baseUrls??CONFIG.rest.urls});
@@ -62,7 +63,7 @@ async function main(){
     process.stderr.write('[MATRIX] '+window.id+' '+window.start+' .. '+window.end+' ('+(i+1)+'/'+windows.length+')\n');
     const marketRegime=await classifyWindow(client,window);
     const rawPath=resolve(outputDir,window.id+'.json');
-    const childArgs=[replayScript,'--symbols',symbols.join(','),'--start',String(window.startMs),'--end',String(window.endMs-1),'--max-trade-pages',String(maxTradePages),'--max-trades',String(maxTrades),'--output',rawPath];
+    const childArgs=[replayScript,'--symbols',symbols.join(','),'--start',String(window.startMs),'--end',String(window.endMs-1),'--max-trade-pages',String(maxTradePages),'--max-trades',String(maxTrades),'--outcome-horizon-hours',String(outcomeHorizonHours),'--output',rawPath];
     const child=await runChild(childArgs,{timeoutMs,windowId:window.id});
     let rawReport=null,parseError=null;
     try{rawReport=JSON.parse(await readFile(rawPath,'utf8'));}catch(error){parseError=String(error?.message??error);}
