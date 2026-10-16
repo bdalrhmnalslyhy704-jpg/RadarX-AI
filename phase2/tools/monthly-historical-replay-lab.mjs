@@ -23,8 +23,9 @@ async function readJson(path){const absolute=resolve(path);return{path:absolute,
 function safeId(value){return String(value??'case').trim().toLowerCase().replace(/[^a-z0-9_-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,90)||'case';}
 function validSymbol(value){return /^[A-Z0-9]{5,20}$/.test(String(value??'').toUpperCase());}
 function isConfirmedAnchor(caseRow){
-  return ['STRONG','MEDIUM'].includes(String(caseRow?.cohort??'').toUpperCase())&&
-    String(caseRow?.anchorMarker??'')==='FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH'&&
+  // The event label is derived from price action/outcome only, not from the monthly cohort.
+  // A CONTROL-month coin can still contain a genuinely confirmed short-term move.
+  return String(caseRow?.anchorMarker??'')==='FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH'&&
     caseRow?.forensics?.outcomes?.complete_24h===true;
 }
 function childRun(args,{timeoutMs}) {
@@ -197,7 +198,7 @@ async function main(){
     await writeFile(replayPath,JSON.stringify(report,null,2)+'\n',{encoding:'utf8'});
     reports.push(report);
     if(eventPositive)positiveAnchors++;
-    if(eventPositive&&report.results?.[0]?.summary?.first_accepted_at!==null&&report.results?.[0]?.summary?.first_accepted_at<anchorAt)positiveAnchorsCaptured++;
+    if(eventPositive&&baseRecord.status==='COMPLETE'&&report.results?.[0]?.summary?.first_accepted_at!==null&&report.results?.[0]?.summary?.first_accepted_at<anchorAt)positiveAnchorsCaptured++;
     process.stdout.write('[MONTHLY_REPLAY] '+(index+1)+'/'+allCases.length+' '+cohort+' '+symbol+
       ' '+baseRecord.status+' steps='+(report.results?.[0]?.summary?.replay_steps??0)+'\n');
   }
