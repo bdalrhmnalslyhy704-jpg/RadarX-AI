@@ -483,6 +483,12 @@ export class MarketWideLightScan {
     const at = Number(now), cycleNumber = Math.max(0, Math.trunc(Number(cycle) || 0));
     const uniqueRows = [], duplicateSymbols = [];
     const seen = new Set();
+    const seriesBySymbol = new Map();
+    const getSeriesOnce = value => {
+      const symbol = String(value || '').trim().toUpperCase();
+      if (!seriesBySymbol.has(symbol)) seriesBySymbol.set(symbol, getSeries(symbol));
+      return seriesBySymbol.get(symbol);
+    };
     for (const row of Array.isArray(eligible) ? eligible : []) {
       const symbol = symbolOf(row);
       if (!symbol) continue;
@@ -492,7 +498,7 @@ export class MarketWideLightScan {
     const eligibleTotal = uniqueRows.length;
     const marketBaseline24hPct = median(uniqueRows.map(row => numberOrNull(row?.priceChange24h)).filter(Number.isFinite));
     const btcTicker = benchmarkTicker || uniqueRows.find(row => symbolOf(row) === 'BTCUSDT') || null;
-    const btcSeries = uniqueRows.some(row => symbolOf(row) === 'BTCUSDT') ? getSeries('BTCUSDT') : null;
+    const btcSeries = uniqueRows.some(row => symbolOf(row) === 'BTCUSDT') ? getSeriesOnce('BTCUSDT') : null;
     const maxSymbols = Math.max(1, Math.trunc(Number(this.config.maxEligibleSymbols) || 1200));
     if (eligibleTotal > maxSymbols) throw new Error('MARKET_WIDE_LIGHT_ELIGIBLE_LIMIT_EXCEEDED');
     for (const symbol of this.lastEvaluationBySymbol.keys()) {
@@ -504,7 +510,7 @@ export class MarketWideLightScan {
     const exceptional = [];
     for (const row of uniqueRows) {
       const symbol = symbolOf(row);
-      const series = getSeries(symbol);
+      const series = getSeriesOnce(symbol);
       const bookTicker = getBookTicker(symbol) || null;
       const eventShock = assessCachedEventDrivenBreakout({symbol, series, ticker: row, now: at, config: this.config});
       const latestClosed = Array.isArray(series?.candles)
