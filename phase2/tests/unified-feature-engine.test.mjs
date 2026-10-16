@@ -224,3 +224,20 @@ test('malformed in-window aggregate trade data fails closed rather than fabricat
   assert.equal(result.features.live_trade_flow.status,'INVALID_TRADE_RECORDS');
   assert.equal(result.features.live_trade_flow.malformed_trade_rows,1);
 });
+
+
+test('stale best-bid/ask snapshots are ignored instead of being scored as current liquidity',()=>{
+  const base=makeQuietBase();
+  const result=snapshot({
+    bookTicker:{
+      asOf:base.now-120_000,
+      bidPrice:'101.80',askPrice:'101.81',bidQty:'100',askQty:'100',
+      source:'BINANCE_PUBLIC_REST_BOOK_TICKER'
+    }
+  });
+  const book=result.features.liquidity.actual_top_of_book_and_depth;
+  assert.equal(book.book_ticker_timestamp_known,true);
+  assert.equal(book.book_ticker_fresh,false);
+  assert.equal(book.spread_bps,null);
+  assert.equal(result.features.data_quality.spread_available,false);
+});
