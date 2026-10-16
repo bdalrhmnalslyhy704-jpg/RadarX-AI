@@ -61,7 +61,8 @@ export function classifyHistoricalLearningRow(row={},{
   const acceptedMode=String(row?.accepted_mode??'').toUpperCase();
   const replayDataMode=String(row?.replay_data_mode??row?.data_mode??(row?.rejection_group==='HISTORICAL_TRADE_COVERAGE_INCOMPLETE'?'BLOCKED_INCOMPLETE':row?.trade_window?.coverage_complete===false?'CANDLE_ONLY_FALLBACK':'FULL_TRADE')).toUpperCase();
   const coverageBlocked=replayDataMode==='BLOCKED_INCOMPLETE'||row?.rejection_group==='HISTORICAL_TRADE_COVERAGE_INCOMPLETE';
-  const hasEarlyStage=/EARLY|PRE_EXPANSION|PRE_BREAKOUT|WATCH/.test(String(row?.stage_observed??'').toUpperCase())||
+  const observedStage=String(row?.stage_observed??'').toUpperCase();
+  const hasEarlyStage=/EARLY|PRE_EXPANSION|PRE_BREAKOUT|QUIET_BASE_PRE_EXPANSION|FALCON_EARLY_TRACK|PERSISTENT_EARLY_TRACK/.test(observedStage)||
     /EARLY|PRE_EXPANSION/.test(acceptedMode);
   let outcomeClass='OUTCOME_UNAVAILABLE',moveClass='UNKNOWN';
   if(issues.length){
