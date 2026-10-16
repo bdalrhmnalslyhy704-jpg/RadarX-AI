@@ -43,7 +43,8 @@ async function fetchOneMinute(client, symbol, start, end) {
   const rows = [];
   let cursor = start;
   let pages = 0;
-  while (cursor <= end && pages < 20) {
+  const maxPages=Math.min(40,Math.max(1,Math.ceil((end-start+1)/(1000*MINUTE_MS))+1));
+  while (cursor <= end && pages < maxPages) {
     const result = await client.klines(symbol, '1m', {limit: 1000, startTime: cursor, endTime: end});
     const page = Array.isArray(result.candles) ? result.candles : [];
     pages++;
@@ -59,7 +60,7 @@ async function fetchOneMinute(client, symbol, start, end) {
     const openTime = Number(candle.openTime);
     if (Number.isFinite(openTime)) byOpen.set(openTime, candle);
   }
-  return {candles: [...byOpen.values()].sort((a, b) => a.openTime - b.openTime), pages, complete: cursor > end || rows.length < pages * 1000};
+  return {candles: [...byOpen.values()].sort((a, b) => a.openTime - b.openTime), pages, complete: cursor > end};
 }
 
 export async function fetchAggregateTrades(client, symbol, start, end, {maxPages, maxTrades}) {
