@@ -947,3 +947,22 @@ test('live best-bid/ask changes refresh unified features even while the closed c
   assert.equal(secondRow.feature_engine.features.liquidity.actual_top_of_book_and_depth.depth_available,false,
     'top-of-book sizes must not be misrepresented as full depth');
 });
+
+
+test('an unchanged book ticker is re-evaluated when its timestamp becomes stale',()=>{
+  const now=1_900_000_000_000;
+  const symbol='LIGHT-STALE-BOOK-USDT';
+  const eligible=[{symbol,lastPrice:100,priceChange24h:1,quoteVolume24h:5_000_000,tradeCount24h:20_000}];
+  const series=cacheSeries(symbol,now);
+  const oldBook={asOf:now-5_000,bidPrice:'99.99',askPrice:'100.01',bidQty:'100',askQty:'90'};
+  const light=new MarketWideLightScan({clock:()=>now});
+  const first=light.scan({eligible,now,cycle:1,getSeries:()=>series,getBookTicker:()=>oldBook});
+  const firstRow=first.audit.get(symbol);
+  assert.equal(firstRow.feature_engine.features.data_quality.spread_available,true);
+  const second=light.scan({eligible,now:now+70_000,cycle:2,getSeries:()=>series,getBookTicker:()=>oldBook});
+  const secondRow=second.audit.get(symbol);
+  assert.equal(secondRow.evaluation_reused,false);
+  assert.equal(secondRow.evaluation_kind,'LIVE_MARKET_FEATURES_REFRESHED');
+  assert.equal(secondRow.feature_engine.features.data_quality.spread_available,false);
+  assert.equal(secondRow.feature_engine.features.liquidity.actual_top_of_book_and_depth.book_ticker_fresh,false);
+});
