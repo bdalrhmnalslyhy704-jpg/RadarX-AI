@@ -187,27 +187,39 @@ function validMetricRows(dataset){
 function groupMarketEvents(rows,moderateMovePct,strongMovePct){
   const groups=new Map();
   for(const row of rows){
-    const eventAt=row.actual_window_moderate_target_at;
-    const strongAt=row.actual_window_strong_target_at;
+    const moderateCandle=row.actual_window_moderate_target_at;
+    const strongCandle=row.actual_window_strong_target_at;
+    const moderateExact=row.actual_window_moderate_target_exact_at;
+    const strongExact=row.actual_window_strong_target_exact_at;
     const key=row.window_id+'|'+row.symbol;
-    if(!groups.has(key))groups.set(key,{key,window_id:row.window_id,symbol:row.symbol,moderate_at:eventAt,strong_at:strongAt,rows:[]});
+    if(!groups.has(key))groups.set(key,{key,window_id:row.window_id,symbol:row.symbol,
+      moderate_at:moderateCandle,strong_at:strongCandle,
+      moderate_exact_at:moderateExact,strong_exact_at:strongExact,rows:[]});
     const group=groups.get(key);
-    if(group.moderate_at===null&&eventAt!==null)group.moderate_at=eventAt;
-    if(group.strong_at===null&&strongAt!==null)group.strong_at=strongAt;
+    if(group.moderate_at===null&&moderateCandle!==null)group.moderate_at=moderateCandle;
+    if(group.strong_at===null&&strongCandle!==null)group.strong_at=strongCandle;
+    if(group.moderate_exact_at===null&&moderateExact!==null)group.moderate_exact_at=moderateExact;
+    if(group.strong_exact_at===null&&strongExact!==null)group.strong_exact_at=strongExact;
     group.rows.push(row);
   }
   return [...groups.values()].map(group=>{
-    const moderate=group.moderate_at!==null;
-    const strong=group.strong_at!==null;
-    const eventAt=group.moderate_at??group.strong_at;
+    const moderate=group.moderate_at!==null||group.moderate_exact_at!==null;
+    const strong=group.strong_at!==null||group.strong_exact_at!==null;
+    const candleEventAt=group.moderate_at??group.strong_at;
+    const exactEventAt=group.moderate_exact_at??group.strong_exact_at;
+    const eventAt=exactEventAt??candleEventAt;
     const before=eventAt===null?[]:group.rows.filter(row=>row.decision==='ACCEPTED'&&row.timestamp<eventAt);
     const first=before.sort((a,b)=>a.timestamp-b.timestamp)[0]??null;
-    const exactSource=group.rows.find(row=>row.target_timestamp_source==='BINANCE_PUBLIC_AGG_TRADES')!==undefined;
+    const exactSource=exactEventAt!==null&&group.rows.some(row=>row.target_timestamp_source==='BINANCE_PUBLIC_AGG_TRADES');
     return {
       event_id:group.key,
       symbol:group.symbol,window_id:group.window_id,
       move_class:strong?'STRONG_MOVE':moderate?'MODERATE_MOVE':'NO_OBSERVED_TARGET',
       event_at:eventAt,
+      event_at_candle_close:candleEventAt,
+      event_at_exact:exactSource?exactEventAt:null,
+      event_timestamp_source:exactSource?'BINANCE_PUBLIC_AGG_TRADES':(candleEventAt!==null?'CLOSED_CANDLE_CLOSE':'UNAVAILABLE'),
+      lead_time_basis:exactSource?'EXACT_AGGTRADE_TIMESTAMP':'CANDLE_CLOSE_TIMESTAMP',
       exact_event_time_available:exactSource,
       first_accepted_before_event_at:first?.timestamp??null,
       captured_before_event:Boolean(first),
