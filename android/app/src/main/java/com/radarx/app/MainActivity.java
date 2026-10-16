@@ -297,6 +297,11 @@ public final class MainActivity extends Activity {
                 launchIntent.getBooleanExtra("radarx_test_stop_background_monitor", false)) {
             Log.i("RadarXSmoke", "TEST_STOP_BACKGROUND_MONITOR_REQUEST");
             stopBackgroundMonitor();
+            // Preserve the debug replay feed while the test-only stop intent is
+            // delivered through singleTop/onNewIntent. Clearing it here lets an
+            // in-flight scan briefly fall back to the live backend before STOP is
+            // processed, contaminating the deterministic 623-alert replay.
+            return;
         }
         String feedUrl = launchIntent == null ? null : launchIntent.getStringExtra("radarx_test_alert_feed_url");
         if (feedUrl == null || feedUrl.isEmpty()) {
