@@ -65,6 +65,7 @@ test('metrics count lead time and unique missed market events separately from mi
   const metrics=evaluateHistoricalLearningMetrics(dataset);
   assert.equal(metrics.successful_alerts,1);
   assert.equal(metrics.missed_move_decisions,2);
+  assert.equal(metrics.by_market_regime.BULL_TREND.successful_alerts,1,'rejected movers must not be counted as successful alerts');
   assert.equal(metrics.observed_move_events,2);
   assert.equal(metrics.missed_move_events,1);
   assert.equal(metrics.move_event_capture_pct,50);
