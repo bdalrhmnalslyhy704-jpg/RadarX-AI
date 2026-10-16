@@ -523,6 +523,32 @@ if [[ "${accepted_total}" -ne "${accepted_unique}" ]]; then
 fi
 if [[ "${handled_unique}" -ne 623 ]]; then
   echo "::error::Replay did not handle 623 unique alerts: handled=${handled_unique} expected=623"
+  echo "Replay fixture state:"
+  fixture_stats || true
+  echo "Handled keys outside the 623-row fixture namespace (first 80):"
+  grep -Ev '^FALCON_EYE_RADAR\\|(REPLAY:[0-9]{4}|TESTUSDT:REPLAY_TEST_[0-9]{4}:[0-9]+)
+if ! grep -Fq 'FALCON_EYE_RADAR|REPLAY:0623' "${handled_file}"; then
+  echo "::error::Last archived alert was neither posted nor reconciled as already active"
+  exit 1
+fi
+prefs_xml="$(timeout 8s adb shell run-as com.radarx.app cat shared_prefs/radarx_background.xml 2>/dev/null || true)"
+if ! printf '%s\n' "${prefs_xml}" | grep -Fq 'FALCON_EYE_RADAR|REPLAY:0623'; then
+  echo "::error::The persisted compound cursor did not reach the final event"
+  printf '%s\n' "${prefs_xml}" | grep -E 'radar_alert_cursor_(at|id)|cursor_initialized' || true
+  exit 1
+fi
+final_stats="$(fixture_stats)"
+final_pages="$(stat_field "${final_stats}" queuedRequests)"
+final_drained="$(stat_field "${final_stats}" drainedRequests)"
+if [[ "${final_pages}" -lt 13 || "${final_drained}" -lt 1 ]]; then
+  echo "::error::Replay pagination incomplete: pages=${final_pages} drained=${final_drained}"
+  exit 1
+fi
+echo "ANDROID_DURABLE_REPLAY_PASS: alerts=623 handled_unique=${handled_unique} new_post_requests=${accepted_total} reconciled_active=${reconciled_total} duplicate_post_requests=0 missing=0 same_timestamp=yes no_id_rows=yes offline_reconnect=yes force_stop_restart=yes final_cursor=verified pages=${final_pages}"
+ "${handled_file}" | head -n 80 || true
+  echo "Replay key summary:"
+  echo "first keys:"; head -n 8 "${handled_file}" || true
+  echo "last keys:"; tail -n 8 "${handled_file}" || true
   sort "${handled_file}" | uniq -c | grep -vE '^[[:space:]]+1 ' | head -n 60 || true
   exit 1
 fi
