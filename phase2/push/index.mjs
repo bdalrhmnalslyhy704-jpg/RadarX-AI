@@ -120,7 +120,7 @@ const radarPayload=(alert,processedAt=Date.now())=>({
   signal_lifecycle_reason_codes:Array.isArray(alert?.signal_lifecycle?.reason_codes)?alert.signal_lifecycle.reason_codes.slice(0,8):[],
   message:alert?.signal_lifecycle?.state&&alert.signal_lifecycle.state!=='MONITOR'&&alert?.signal_lifecycle?.label
     ?[alert.symbol,alert.signal_lifecycle.label].filter(Boolean).join(' • ')
-    :[alert.symbol,alert.event||alert.potential_label||alert.type].filter(Boolean).join(' • '),
+    :undefined,
   radar:alert.radar||'UNKNOWN_RADAR',
   radar_name:radarTitle(alert),
   symbol:alert.symbol,
