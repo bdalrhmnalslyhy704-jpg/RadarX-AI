@@ -479,7 +479,7 @@ function dataGate(series,now,config,{historicalReplay=false,allowMissingDepth=fa
   },historical_replay:historicalReplay,allow_missing_depth:allowMissingDepth};
 }
 
-export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,marketContext={},fastContext={},now=Date.now(),config={},historicalReplay=false}={}){
+export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,liveAggTrades=null,marketContext={},fastContext={},now=Date.now(),config={},historicalReplay=false}={}){
   const cfg={...EARLY_EXPANSION_RADAR_DEFAULTS,...config};
   const s={
     '1m':closed(series['1m']||[],now),
@@ -516,7 +516,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,mark
   const btcRows=closed(marketContext?.fiveMinute||[],now);
   const unifiedFeatureEngine=buildUnifiedFeatureSnapshot({
     symbol:ticker.symbol,candles:s['5m'],ticker,benchmarkCandles:btcRows,
-    marketBaseline24hPct:marketContext?.marketMedianChange24hPct,depth,
+    marketBaseline24hPct:marketContext?.marketMedianChange24hPct,depth,liveAggTrades,
     now,config:{minClosedCandles:20,maxCandleAgeMs:cfg.freshness5mMs??8*60_000,
       maxMove24hPct:cfg.maxQuiet24hMovePct??8,
       maxMove15mPct:cfg.hardExtended15mMovePct??6,
@@ -1972,19 +1972,38 @@ export class EarlyExpansionRadar{
     // Closed higher-timeframe windows are reused only until a new Binance candle
     // closes. The newest closed timestamp is checked against the UTC interval edge;
     // depth remains live because order-book liquidity can change between cycles.
-    const [r15,r1h,r4h,dd]=await Promise.all([
+    const tradeFlowAsOf=this.clock();
+    // Optional recent trade microstructure is fetched separately from Klines. If
+    // the public endpoint fails or is stale, candle-based evidence still runs.
+    const liveTradesTask=cfg.liveAggTradesEnabled===false
+      ?Promise.resolve({data:[],source:'LIVE_AGG_TRADES_DISABLED'})
+      :(async()=>{
+        try{
+          return await this.rest.request('/api/v3/aggTrades',{
+            symbol:row.symbol,startTime:tradeFlowAsOf-(Number(cfg.liveAggTradeLookbackMs)||10*60_000),
+            endTime:tradeFlowAsOf,limit:1000
+          });
+        }catch(error){
+          this.noteError(error,'live-agg-trades');
+          return {data:[],source:'BINANCE_PUBLIC_REST_AGG_TRADES_UNAVAILABLE',error:String(error?.message??error)};
+        }
+      })();
+    const [r15,r1h,r4h,dd,ag]=await Promise.all([
       this.deepTimeframeKlines(row.symbol,'15m',cfg.fifteenMinuteKlines,cfg.freshness15mMs),
       this.deepTimeframeKlines(row.symbol,'1h',cfg.oneHourKlines,cfg.freshness1hMs),
       this.deepTimeframeKlines(row.symbol,'4h',cfg.fourHourKlines,cfg.freshness4hMs),
-      withRetry(()=>this.rest.depth(row.symbol,100),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep})
+      withRetry(()=>this.rest.depth(row.symbol,100),{attempts:cfg.retryAttempts,baseMs:cfg.retryBaseMs,maxBackoffMs:cfg.maxBackoffMs,sleepFn:sleep}),
+      liveTradesTask
     ]);
     series['15m']=r15.candles;series['1h']=r1h.candles;series['4h']=r4h.candles;
-    sources.push(r15.source,r1h.source,r4h.source,dd.source);
+    sources.push(r15.source,r1h.source,r4h.source,dd.source,ag.source);
     const candleAsOf=this.clock();
     if(typeof onClosedCandles==='function')onClosedCandles(Object.fromEntries(
       Object.entries(series).map(([tf,rows])=>[tf,closedCandleSnapshot(closed(rows,candleAsOf),candleAsOf)])
     ));
-    return buildEarlyExpansionEvidence({series,ticker:row,depth:dd.data,marketContext,fastContext:fast,now:candleAsOf,config:cfg,historicalReplay:false,sourceList:sources});
+    return buildEarlyExpansionEvidence({series,ticker:row,depth:dd.data,
+      liveAggTrades:Array.isArray(ag?.data)?ag.data:[],marketContext,fastContext:fast,
+      now:candleAsOf,config:cfg,historicalReplay:false,sourceList:sources});
   }
   cleanupRuntimeRingBuffers(now=this.clock()){
     const activeSymbols=new Set((this.universe||[]).map(symbol=>String(symbol||'').trim().toUpperCase()).filter(Boolean));
