@@ -505,6 +505,7 @@ export class MarketWideLightScan {
     for (const row of uniqueRows) {
       const symbol = symbolOf(row);
       const series = getSeries(symbol);
+      const bookTicker = getBookTicker(symbol) || null;
       const eventShock = assessCachedEventDrivenBreakout({symbol, series, ticker: row, now: at, config: this.config});
       const latestClosed = Array.isArray(series?.candles)
         ? series.candles.filter(candle => candle?.closed === true && KNOWN(candle.openTime) &&
@@ -518,6 +519,12 @@ export class MarketWideLightScan {
       ].map(value => String(value)).join(':') : null;
       const previous = this.lastEvaluationBySymbol.get(symbol);
       const sameCandle = Boolean(signature && previous?.signature === signature);
+      const btcLast = btcSeries?.candles?.filter(c => c?.closed === true && KNOWN(c.closeTime) && Number(c.closeTime) <= at).at(-1) || null;
+      const featureSignature = [row?.lastPrice,row?.priceChange24h,row?.quoteVolume24h,row?.tradeCount24h,
+        marketBaseline24hPct,btcTicker?.lastPrice,btcTicker?.priceChange24h,btcLast?.closeTime,btcLast?.close,
+        bookTicker?.bidPrice,bookTicker?.askPrice,bookTicker?.bidQty,bookTicker?.askQty]
+        .map(value => value === null || value === undefined ? 'UNKNOWN' : String(value)).join(':');
+      const dynamicFeaturesChanged = Boolean(previous && previous.featureSignature !== featureSignature);
       const age = latestCloseTime === null ? null : Math.max(0, at - latestCloseTime);
       const cacheRegression = Boolean(signature && previous &&
         latestCloseTime < Number(previous.latestCloseTime));
@@ -539,7 +546,7 @@ export class MarketWideLightScan {
           cache_state: 'STALE_DATA',
           evaluation_kind: cacheRegression ? 'CACHE_REGRESSION' : 'CANDLE_REVISION'
         };
-      } else if (sameCandle && age <= this.config.maxCandleAgeMs && previous.result?.evaluated === true) {
+      } else if (sameCandle && !dynamicFeaturesChanged && age <= this.config.maxCandleAgeMs && previous.result?.evaluated === true) {
         result = {
           ...previous.result,
           data_age_ms: age,
@@ -551,7 +558,7 @@ export class MarketWideLightScan {
           data_is_fresh: true,
           evaluation_kind: 'REUSED_CLOSED_CANDLE'
         };
-      } else if (sameCandle && previous.result?.reason === 'STALE_CLOSED_5M_CACHE') {
+      } else if (sameCandle && !dynamicFeaturesChanged && previous.result?.reason === 'STALE_CLOSED_5M_CACHE') {
         result = {
           ...previous.result,
           data_age_ms: age,
@@ -566,7 +573,7 @@ export class MarketWideLightScan {
       } else {
         result = evaluateMarketWideLightCandidate({
           symbol, series, ticker: row, benchmarkCandles: btcSeries?.candles || [], benchmarkTicker: btcTicker,
-          marketBaseline24hPct, bookTicker: getBookTicker(symbol), depth: getDepth(symbol), now: at, config: this.config
+          marketBaseline24hPct, bookTicker, depth: getDepth(symbol), now: at, config: this.config
         });
         const newClosedCandle = latestCloseTime !== null &&
           (!previous || latestCloseTime > Number(previous.latestCloseTime));
@@ -580,12 +587,14 @@ export class MarketWideLightScan {
           new_closed_candle: newClosedCandle,
           data_is_fresh: result.evaluated === true,
           evaluation_kind: newClosedCandle ? 'NEW_CLOSED_CANDLE' :
+            dynamicFeaturesChanged ? 'LIVE_MARKET_FEATURES_REFRESHED' :
             cacheBecameReady ? 'CACHE_BECAME_READY' :
             incompleteCacheRechecked ? 'RECHECKED_INCOMPLETE_CACHE' : 'NO_NEW_CLOSED_CANDLE'
         };
         if (signature) {
           this.lastEvaluationBySymbol.set(symbol, {
             signature,
+            featureSignature,
             latestCloseTime,
             evaluatedAt: at,
             result: {...result}
@@ -746,6 +755,13 @@ export class MarketWideLightScan {
       event_driven_breakout_extended_total: scanRows.filter(item =>
         item.event_driven_breakout?.detected === true && item.event_driven_breakout?.extended === true).length,
       cache_coverage_ready: coverageReady,
+      unified_feature_engine_available_total: scanRows.filter(item => item.feature_engine?.data_ready === true).length,
+      unified_pre_expansion_total: scanRows.filter(item => item.feature_engine?.stage === 'PRE_EXPANSION').length,
+      unified_breakout_developing_total: scanRows.filter(item => item.feature_engine?.stage === 'BREAKOUT_DEVELOPING').length,
+      unified_watch_early_total: scanRows.filter(item => item.feature_engine?.stage === 'WATCH_EARLY').length,
+      unified_already_extended_total: scanRows.filter(item => item.feature_engine?.stage === 'ALREADY_EXTENDED').length,
+      book_ticker_spread_available_total: scanRows.filter(item => item.feature_engine?.features?.liquidity?.actual_top_of_book_and_depth?.available === true).length,
+      book_ticker_depth_available_total: scanRows.filter(item => item.feature_engine?.features?.liquidity?.actual_top_of_book_and_depth?.depth_available === true).length,
       selection_mode: coverageReady ? 'MARKET_WIDE_CANDIDATE_POOL' : 'BOOTSTRAP_FULL_UNIVERSE',
       candidate_to_micro_total: null,
       candidate_to_deep_total: null,
