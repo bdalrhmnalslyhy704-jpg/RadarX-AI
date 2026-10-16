@@ -109,7 +109,7 @@ export function classifyHistoricalLearningRow(row={},{
     actual_window_moderate_target_exact_at:finite(outcome.actual_window_moderate_target_at??outcome.actual_window_5pct_at),
     target_timestamp_source:String(outcome.actual_window_moderate_target_timestamp_source??outcome.actual_window_5pct_timestamp_source??'UNAVAILABLE'),
     calibrated_probability:probabilityValid?calibratedProbability:null,
-    success_label:issues.length||coverageBlocked?null:success,
+    success_label:issues.length||coverageBlocked||outcomeClass==='OUTCOME_UNAVAILABLE'?null:success,
     integrity_issues:issues
   };
 }
