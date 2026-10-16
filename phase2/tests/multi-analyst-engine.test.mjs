@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {MULTI_ANALYST_NAMES,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible,selectWithPriorityRotation,selectDiscoveryWithRadarReviewPriority,countAnalystEvidenceCoverage} from '../core/multi-analyst-engine.mjs';
+import {MULTI_ANALYST_NAMES,MULTI_ANALYST_ROLE_CONTRACT,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible,selectWithPriorityRotation,selectDiscoveryWithRadarReviewPriority,countAnalystEvidenceCoverage} from '../core/multi-analyst-engine.mjs';
 
 // Continuous analyst cycles target one minute start-to-start, subtracting the
 // time spent scanning and never scheduling a negative delay after a slow cycle.
@@ -43,8 +43,17 @@ function rawFor({valid=true,price=130,liq=85,dq=100}={}){
 }
 
 assert.equal(MULTI_ANALYST_NAMES.length,20);
-const good=analyzeMultiAnalystCandidate(rawFor(),{btc15:series(120,{base:90,trend:.0008}),btc1:series(100,{base:90,trend:.0008}),marketMedian24h:1,breadthPct:62});
+assert.equal(MULTI_ANALYST_ROLE_CONTRACT.length,19,'exactly 19 specialist functions must precede the final analyst');
+assert.equal(new Set(MULTI_ANALYST_ROLE_CONTRACT.map(x=>x.role)).size,19,'all specialist roles must be distinct');
+const sharedTestMarket={btc15:series(120,{base:90,trend:.0008}),btc1:series(100,{base:90,trend:.0008}),marketMedian24h:1,breadthPct:62,snapshot_id:'TEST-SPOT-SNAPSHOT-1',as_of:Date.now(),snapshot_source:'TEST'};
+const good=analyzeMultiAnalystCandidate(rawFor(),sharedTestMarket);
 assert.equal(good.specialist.a.length,19);
+assert.equal(new Set(good.specialist.a.map(x=>x.role)).size,19,'all 19 specialists must return unique roles');
+assert.deepEqual([...good.specialist.a.map(x=>x.role)].sort(),MULTI_ANALYST_ROLE_CONTRACT.map(x=>x.role).sort(),'the returned team must implement the declared specialist contract');
+assert.equal(good.specialist.sharedSnapshot.available,true,'specialists must share one timestamped market context');
+assert.equal(good.final.decision,'REJECT','specialist agreement cannot override invalid or incomplete market data');
+assert.ok(good.final.hardReasons.includes('DATA_GATE_FAILED'));
+assert.ok(good.final.hardReasons.includes('CANDLE_COVERAGE_INCOMPLETE'),'missing/stale/gapped closed candles must be a hard block');
 assert.equal(good.final.totalAnalysts,19);
 assert.ok(['STRONG_CANDIDATE','CANDIDATE','WATCH','REJECT'].includes(good.final.verdict));
 assert.ok(Number.isFinite(good.final.score));
