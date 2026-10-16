@@ -66,8 +66,8 @@ export function summarizeHistoricalWindowReport(report={}) {
     const observed=Number(x?.data_quality?.window_candles_observed);
     return expected>0 ? observed>=expected : Number(x?.summary?.replay_steps)>0;
   };
-  const fullTrade=rows.filter(x=>x?.data_quality?.trade_coverage_complete===true&&x?.data_quality?.replay_mode==='FULL_TRADE'&&x?.data_quality?.candle_fetch_complete===true&&windowCandlesCovered(x));
-  const candleFallback=rows.filter(x=>x?.data_quality?.replay_mode==='CANDLE_ONLY_FALLBACK'&&x?.data_quality?.candle_only_fallback_used===true&&x?.data_quality?.candle_fetch_complete===true&&x?.data_quality?.synthetic_data_used===false&&windowCandlesCovered(x));
+  const fullTrade=rows.filter(x=>x?.data_quality?.trade_coverage_complete===true&&x?.data_quality?.replay_mode==='FULL_TRADE'&&x?.data_quality?.candle_fetch_complete===true&&x?.data_quality?.outcome_candle_fetch_complete===true&&windowCandlesCovered(x));
+  const candleFallback=rows.filter(x=>x?.data_quality?.replay_mode==='CANDLE_ONLY_FALLBACK'&&x?.data_quality?.candle_only_fallback_used===true&&x?.data_quality?.candle_fetch_complete===true&&x?.data_quality?.outcome_candle_fetch_complete===true&&x?.data_quality?.synthetic_data_used===false&&windowCandlesCovered(x));
   const usable=new Map();
   for(const row of fullTrade)usable.set(row, 'FULL_TRADE');
   for(const row of candleFallback)usable.set(row, 'CANDLE_ONLY_FALLBACK');
