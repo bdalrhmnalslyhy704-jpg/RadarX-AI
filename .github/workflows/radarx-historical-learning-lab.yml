@@ -1,6 +1,23 @@
 name: RadarX Historical Learning Lab
 
 on:
+  push:
+    branches:
+      - feature/build224-historical-learning-lab-20261016
+    paths:
+      - phase2/core/historical-learning-lab.mjs
+      - phase2/core/historical-replay.mjs
+      - phase2/tools/historical-learning-lab.mjs
+      - phase2/tools/historical-replay.mjs
+      - phase2/tools/historical-replay-matrix.mjs
+      - phase2/tools/monthly-move-forensics.mjs
+      - phase2/tools/monthly-historical-replay-lab.mjs
+      - phase2/tests/historical-learning-lab.test.mjs
+      - phase2/tests/historical-learning-lab-cli.test.mjs
+      - phase2/tests/monthly-historical-replay-lab.test.mjs
+      - phase2/tests/historical-replay.test.mjs
+      - phase2/tests/historical-replay-matrix.test.mjs
+      - .github/workflows/radarx-historical-learning-lab.yml
   workflow_dispatch:
     inputs:
       max_trade_pages:
