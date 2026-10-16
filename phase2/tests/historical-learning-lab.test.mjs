@@ -37,6 +37,7 @@ test('historical labels separate successful early setups, failed early setups, f
   assert.equal(classifyHistoricalLearningRow(row({decision:'REJECTED',move:18})).outcome_class,'MISSED_MOVE_DECISION');
   assert.equal(classifyHistoricalLearningRow(row({decision:'REJECTED',move:1})).outcome_class,'CORRECT_REJECTION');
   assert.equal(classifyHistoricalLearningRow(row({decision:'ACCEPTED',move:1,horizon:false})).outcome_class,'OUTCOME_UNAVAILABLE');
+  assert.equal(classifyHistoricalLearningRow(row({decision:'ACCEPTED',mode:'EARLY_WARNING',move:50,horizon:false})).outcome_class,'OUTCOME_UNAVAILABLE','a partial horizon cannot be scored as a success');
 });
 
 test('future leakage and unproven label isolation are excluded from scored rows',()=>{
