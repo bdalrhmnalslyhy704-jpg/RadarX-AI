@@ -91,6 +91,12 @@ function summarizeLiveAggTradeFlow(input, closedRows, now, config = {}) {
   const windowStart = now - windowMs;
   const baselineStart = now - lookbackMs;
   const sampleTruncated = raw.length >= maxRows;
+  const malformedRows = raw.filter(trade => {
+    const time = num(trade?.T);
+    if (time === null || time < baselineStart || time > now) return false;
+    const price = num(trade?.p), qty = num(trade?.q);
+    return price === null || qty === null || price <= 0 || qty <= 0 || typeof trade?.m !== 'boolean';
+  }).length;
   const valid = raw.map(trade => {
     const time = num(trade?.T);
     const price = num(trade?.p);
@@ -141,6 +147,7 @@ function summarizeLiveAggTradeFlow(input, closedRows, now, config = {}) {
   let status = 'UNAVAILABLE';
   if (!raw.length) status = 'NO_LIVE_TRADE_SAMPLE';
   else if (sampleTruncated) status = 'SAMPLE_TRUNCATED';
+  else if (malformedRows > 0) status = 'INVALID_TRADE_RECORDS';
   else if (!validBaselineWindow) status = 'INVALID_WINDOW_CONFIG';
   else if (!enoughRows) status = 'INSUFFICIENT_EXECUTIONS_FOR_COMPARISON';
   else if (!fresh) status = 'STALE_LIVE_TRADE_SAMPLE';
@@ -152,7 +159,7 @@ function summarizeLiveAggTradeFlow(input, closedRows, now, config = {}) {
     available, status, source: 'BINANCE_PUBLIC_REST_AGG_TRADES',
     as_of_ms: now, window_start_ms: windowStart, baseline_window_start_ms: baselineStart,
     latest_trade_time_ms: latestTime, latest_trade_age_ms: ageMs,
-    raw_aggregate_rows: raw.length, sample_truncated: sampleTruncated,
+    raw_aggregate_rows: raw.length, malformed_trade_rows: malformedRows, sample_truncated: sampleTruncated,
     current: {
       aggregate_rows: c.aggregate_rows, execution_count: c.execution_count,
       buyer_initiated_execution_count: c.buyer_initiated_execution_count,
