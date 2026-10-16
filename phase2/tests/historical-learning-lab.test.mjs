@@ -7,10 +7,10 @@ import {
 } from '../core/historical-learning-lab.mjs';
 
 const MINUTE=60_000;
-function row({symbol='TESTUSDT',timestamp=1_800_000_000_000,decision='REJECTED',mode='NONE',move=0,horizon=true,score=90,window='window-a',eventAt=null,probability=null,leak=false}={}){
+function row({symbol='TESTUSDT',timestamp=1_800_000_000_000,decision='REJECTED',mode='NONE',move=0,horizon=true,score=90,window='window-a',eventAt=null,probability=null,leak=false,dataMode='FULL_TRADE',rejectionGroup=null}={}){
   return {
     symbol,timestamp,decision,accepted_mode:mode,score,stage_observed:mode.includes('EARLY')?'PRE_EXPANSION':'WATCH',
-    window_id:window,market_regime:'BULL_TREND',
+    window_id:window,market_regime:'BULL_TREND',replay_data_mode:dataMode,rejection_group:rejectionGroup,
     input_max_candle_close_at:timestamp-(leak?-1:1),
     trade_window:{from:timestamp-60_000,to_exclusive:timestamp-1},
     calibrated_probability:probability,
@@ -110,3 +110,13 @@ test('matrix audit flags a missing symbol-window pair and missing market regimes
   assert.ok(audit.missing_symbol_window_pairs>0);
   assert.ok(audit.missing_required_regimes.includes('SIDEWAYS'));
 });
+
+test('incomplete-trade blocked scans are reported but never scored as false alerts or missed moves',()=>{
+  const blocked=row({symbol:'GTCUSDT',decision:'REJECTED',move:45,dataMode:'BLOCKED_INCOMPLETE',rejectionGroup:'HISTORICAL_TRADE_COVERAGE_INCOMPLETE'});
+  const metrics=evaluateHistoricalLearningMetrics(buildHistoricalLearningDataset([{window:{start_time:10},results:[{symbol:'GTCUSDT',steps:[blocked]}]}]));
+  assert.equal(metrics.data_coverage_blocked_decisions,1);
+  assert.equal(metrics.evaluable_decisions,0);
+  assert.equal(metrics.missed_move_decisions,0);
+  assert.equal(metrics.false_alerts,0);
+});
+
