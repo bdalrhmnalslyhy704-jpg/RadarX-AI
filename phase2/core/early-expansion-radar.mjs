@@ -1041,6 +1041,11 @@ function alertEligible(candidate,cfg){
     candidate.risk_flags.every(x=>!['ALREADY_EXTENDED','HIGH_RISK_PUMP','WIDE_SPREAD','RECENT_FAKEOUT','CONTINUATION_NOT_CONFIRMED'].includes(x));
 }
 
+export function isEarlyExpansionCandidateAlertEligible(candidate,cfg=EARLY_EXPANSION_RADAR_DEFAULTS){
+  return alertEligible(candidate,cfg)&&candidate?.micro_fingerprint?.eligible===true&&
+    candidate?.low_liquidity_burst_bypass!==true;
+}
+
 export function buildEarlyExpansionAlert(candidate,now=Date.now()){
   const band=candidate.decision_band;
   return decorateRadarAlert({
@@ -2833,8 +2838,8 @@ export class EarlyExpansionRadar{
       const previousActivityShockKeys=new Set(historyAlerts.filter(x=>x?.activity_shock?.detected===true)
         .map(x=>'RADAR8_ACTIVITY_SHOCK:'+String(x?.symbol||'').toUpperCase()+':'+Number(x?.activity_shock?.detected_candle_close_time||0)));
       for(const candidate of ok){
-        const alert=buildEarlyExpansionAlert(candidate,now),eligibleAlert=alertEligible(candidate,this.config)&&
-          candidate.micro_fingerprint?.eligible===true&&candidate.low_liquidity_burst_bypass!==true;
+        const alert=buildEarlyExpansionAlert(candidate,now),
+          eligibleAlert=isEarlyExpansionCandidateAlertEligible(candidate,this.config);
         const shock=candidate.activity_shock;
         if(!eligibleAlert&&shock?.detected===true&&shock.watch_only===true&&Number(shock.score)>=Number(this.config.minActivityShockScore??76)&&
           Number(candidate.data_quality)>=Number(this.config.minDataQuality??70)&&candidate.data_stale!==true){
