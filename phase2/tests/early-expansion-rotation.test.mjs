@@ -704,6 +704,10 @@ test('Radar 8 gives confirmed activity shocks a deep-scan bypass without grantin
   const others=[candidate('AAAUSDT',2,{score:89}),candidate('BBBUSTDT',3,{score:88}),candidate('CCCUSDT',1,{score:84}),candidate('DDDUSDT',4,{score:82})];
   const selected=radar.selectDeepFromMicro([event,...others],9);
   assert.ok(selected.some(x=>x.row.symbol==='EVENTUSDT'&&x._selection_lane==='exceptional'));
+  assert.equal(selected.length,4,'one exceptional event must not overfill a four-slot Deep batch');
+  assert.equal(selected.filter(x=>x._selection_lane==='rotation'||x._selection_lane==='fill_rotation').length,1,
+    'an exceptional event replaces one score slot; it must not erase fair rotation');
+  assert.equal(selected.filter(x=>x._selection_lane==='score'||x._selection_lane==='fill_score').length,1);
   assert.equal(event.micro_fingerprint.activity_shock.entry_eligible,false);
 });
 
@@ -1126,6 +1130,46 @@ test('Radar 8 under-floor bypass rejects expired or unconfirmed ticker shocks',(
   }),[]);
 });
 
+
+
+test('Radar 8 reserves at most one Deep watch slot for a qualified under-floor burst',()=>{
+  const radar=makeRadar({deepCandidates:4,quietReserve:1,rotationReserve:1,exceptionalRotationBypassSlots:2});
+  const mkUnderfloor=(symbol,score,volume,trades)=>{
+    const item=candidate(symbol,1.2,{score,participation:78,tradeParticipation:76,structure:70,compression:76,volume,trades});
+    item.row.quoteVolume24h=55_000;
+    item.row._low_liquidity_burst_bypass=true;
+    item.fast={price_change_pct:.22,price_acceleration_pct:.04,volume_accel_ratio:1.5,trade_accel_ratio:1.4};
+    item.micro_fingerprint.closed_candles_only=true;
+    item.micro_fingerprint.stage='WATCH';
+    item.micro_fingerprint.eligible=false;
+    item.micro_fingerprint.confirmation_count=4;
+    item.micro_fingerprint.metrics={
+      ...item.micro_fingerprint.metrics,
+      return_1m:.18,return_5m:.42,acceleration_1m_pct:.03,acceleration_5m_pct:.08,
+      rvol_1m:volume,rvol_5m:Math.max(1.1,volume-.1),
+      trade_rvol_1m:trades,trade_rvol_5m:Math.max(1.05,trades-.1),taker_buy_ratio:.56
+    };
+    return item;
+  };
+  const top=mkUnderfloor('BURSTAUSDT',72,1.65,1.45);
+  const second=mkUnderfloor('BURSTBUSDT',68,1.45,1.3);
+  const others=[
+    candidate('HIGH1USDT',2,{score:95}),
+    candidate('HIGH2USDT',3,{score:91}),
+    candidate('HIGH3USDT',1,{score:87}),
+    candidate('HIGH4USDT',4,{score:84})
+  ];
+  const selected=radar.selectDeepFromMicro([top,second,...others],31);
+  assert.equal(selected.length,4,'Deep capacity is fixed; this must not create extra candle requests');
+  const underfloor=selected.filter(x=>x.row?._low_liquidity_burst_bypass===true);
+  assert.equal(underfloor.length,1,'no more than one under-floor burst consumes a Deep slot per cycle');
+  assert.equal(underfloor[0].row.symbol,'BURSTAUSDT','pick the strongest qualified closed-candle evidence');
+  assert.equal(underfloor[0]._selection_lane,'exceptional');
+  assert.equal(isEarlyExpansionCandidateAlertEligible({
+    early_expansion_score:99,decision_band:'PRE_EXPANSION',data_quality:100,data_stale:false,
+    risk_flags:[],micro_fingerprint:{eligible:true},low_liquidity_burst_bypass:true
+  },{minAlertScore:82,minDataQuality:70}),false,'Deep watch priority must never bypass the public alert gate');
+});
 
 test('Radar 8 under-floor burst can never satisfy the public buy-alert eligibility gate',()=>{
   const qualified={
