@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -1124,4 +1124,20 @@ test('Radar 8 under-floor bypass rejects expired or unconfirmed ticker shocks',(
     rows:input,fastBySymbol,pendingUntilBySymbol:new Map(),now,
     minQuoteVolume24h:floor,minQuoteVolumeRatio:.10,limit:2
   }),[]);
+});
+
+
+test('Radar 8 under-floor burst can never satisfy the public buy-alert eligibility gate',()=>{
+  const qualified={
+    early_expansion_score:95,decision_band:'PRE_EXPANSION',data_quality:100,data_stale:false,
+    risk_flags:[],micro_fingerprint:{eligible:true}
+  };
+  assert.equal(isEarlyExpansionCandidateAlertEligible(qualified,{minAlertScore:82,minDataQuality:70}),true);
+  assert.equal(isEarlyExpansionCandidateAlertEligible({
+    ...qualified,low_liquidity_burst_bypass:true
+  },{minAlertScore:82,minDataQuality:70}),false,
+  'even a fully qualified downstream fingerprint remains watch-only when it came through the under-floor lane');
+  assert.equal(isEarlyExpansionCandidateAlertEligible({
+    ...qualified,risk_flags:['WIDE_SPREAD']
+  },{minAlertScore:82,minDataQuality:70}),false);
 });
