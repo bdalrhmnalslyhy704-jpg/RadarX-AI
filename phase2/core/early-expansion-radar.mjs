@@ -2812,8 +2812,10 @@ export class EarlyExpansionRadar{
         signal_score_source:candidate.signal_score_source,
         source_score:candidate.micro_fingerprint_score,
         source_score_type:'MICRO_FINGERPRINT_SCORE',
-        source_score_eligible:candidate.micro_fingerprint_eligible===true,
-        source_score_status:candidate.source_score_status,
+        source_score_eligible:candidate.micro_fingerprint_eligible===true&&candidate.low_liquidity_burst_bypass!==true,
+        source_score_status:candidate.low_liquidity_burst_bypass===true?
+          'LOW_LIQUIDITY_BURST_WATCH_ONLY':candidate.source_score_status,
+        low_liquidity_burst_bypass:candidate.low_liquidity_burst_bypass===true,
         pre_expansion_stage:candidate.pre_expansion_stage||candidate.decision_band,
         decision_band:candidate.decision_band,data_quality:candidate.data_quality,
         data_stale:candidate.data_stale,closed_candles_only:true,
