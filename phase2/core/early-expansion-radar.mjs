@@ -1702,9 +1702,13 @@ export class EarlyExpansionRadar{
     // Within that group, scan least-recently-seen Micro symbols first to avoid repeatedly
     // selecting the same oldest symbol while the Deep stage has limited capacity.
     const byRotation=[...all].sort((a,b)=>Number(b._neverDeepScanned)-Number(a._neverDeepScanned)||
-      Number(b._neverScanned)-Number(a._neverScanned)||b._rotationAgeMs-a._rotationAgeMs||
+      Number(b._neverScanned)-Number(a._neverScanned)||
+      // Among symbols that have already reached Deep, pay down the oldest successful-Deep
+      // wait before using last-Micro time as a tie-breaker. Repeated Micro selection alone
+      // must not keep a candidate from receiving its next Deep pass.
       b._deepWaitAgeMs-a._deepWaitAgeMs||b._queueAgeMs-a._queueAgeMs||
-      b._rotationAge-a._rotationAge||a._rotation-b._rotation||a.symbol.localeCompare(b.symbol));
+      b._rotationAgeMs-a._rotationAgeMs||b._rotationAge-a._rotationAge||
+      a._rotation-b._rotation||a.symbol.localeCompare(b.symbol));
     const byExceptional=all.filter(x=>x._exceptional).sort((a,b)=>b._microPreScore-a._microPreScore||b._rotationAge-a._rotationAge||a.symbol.localeCompare(b.symbol));
     const selected=[],seen=new Set();
     const exceptionSlots=Math.min(core,requestedExceptionSlots);
