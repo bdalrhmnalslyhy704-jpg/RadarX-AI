@@ -2632,7 +2632,7 @@ export class EarlyExpansionRadar{
               micro_scan_wait_ms:Number(micro.scheduler_wait_ms)||0,deep_scan_wait_ms:deepSchedulerStarted.wait_ms}});
           return {
             symbol:row.symbol,last_price:row.lastPrice,price_change_24h:row.priceChange24h,
-            low_liquidity_burst_bypass:micro._low_liquidity_burst_bypass===true,
+            low_liquidity_burst_bypass:micro.row?._low_liquidity_burst_bypass===true,
             quiet_base_scan_latency_ms:hasFiniteNumber(entry?.fast_scan_at)?Math.max(0,deepStarted-Number(entry.fast_scan_at)):null,
             early_expansion_score:finalScore!==null?Number(finalScore.toFixed(1)):null,
             signal_score_source:signalScoreSource,micro_fingerprint_score:microScore,
