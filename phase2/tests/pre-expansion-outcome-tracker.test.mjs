@@ -655,7 +655,7 @@ test('historical outcome backfill processes four mature signals per bounded batc
   await withStore(async store=>{
     const detected=NOW,now=NOW+25*60*60_000;
     const signals=Array.from({length:4},(_,i)=>signal({
-      symbol:'BATCH'+i+'USDT',stage:'PRE_EXPANSION',at:detected,price:100,move:1.1
+      symbol:'BATCH'+i+'USDT',stage:'PRE_EXPANSION',at:detected,price:100,move:1.1,regime:'RANGING'
     }));
     await recordPreExpansionSignals(store,signals,{now:detected});
     const one=Array.from({length:100},(_,i)=>{
