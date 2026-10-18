@@ -81,6 +81,8 @@ public final class RadarXBackgroundMonitorService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        Log.i(TAG, "BACKGROUND_SERVICE_ON_CREATE pid=" + android.os.Process.myPid()
+            + " process=" + android.app.Application.getProcessName());
         createChannels();
         executor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "RadarX-Background");
@@ -91,6 +93,9 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        Log.i(TAG, "BACKGROUND_SERVICE_ON_START pid=" + android.os.Process.myPid()
+            + " action=" + (intent == null ? "NULL" : String.valueOf(intent.getAction()))
+            + " startId=" + startId);
         if (ACTION_STOP.equals(intent != null ? intent.getAction() : null)) {
             Log.i(TAG, "BACKGROUND_STOP_ACTION_RECEIVED");
             stopMonitoring();
@@ -723,7 +728,8 @@ public final class RadarXBackgroundMonitorService extends Service {
             startForeground(STATUS_NOTIFICATION_ID, builder.build());
         }
         saveRunning(true);
-        Log.i(TAG, "BACKGROUND_SERVICE_READY");
+        Log.i(TAG, "BACKGROUND_SERVICE_READY pid=" + android.os.Process.myPid()
+            + " process=" + android.app.Application.getProcessName());
     }
 
     private void updateStatus(String text) {
@@ -787,6 +793,8 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     @Override
     public void onDestroy() {
+        Log.w(TAG, "BACKGROUND_SERVICE_ON_DESTROY pid=" + android.os.Process.myPid()
+            + " stopping=" + stopping + " wasRunning=" + prefs().getBoolean("running", false));
         stopping = true;
         if (executor != null) executor.shutdownNow();
         saveRunning(false);
