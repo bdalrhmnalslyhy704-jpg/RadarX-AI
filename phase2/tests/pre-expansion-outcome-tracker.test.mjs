@@ -682,3 +682,18 @@ test('historical outcome backfill processes four mature signals per bounded batc
     assert.ok(state.records.every(row=>row.marks['24h']?.sample_quality==='HISTORICAL_CLOSED_OHLC'));
   });
 });
+
+
+test('research-only under-floor burst observations never enter public signal outcome cohorts',async()=>{
+  await withStore(async store=>{
+    const watch=signal({symbol:'LOWVOLUSDT',stage:'PRE_EXPANSION',at:NOW,price:1.2});
+    watch.low_liquidity_burst_bypass=true;
+    watch.source_score_eligible=false;
+    watch.source_score_status='LOW_LIQUIDITY_BURST_WATCH_ONLY';
+    const result=await recordPreExpansionSignals(store,[watch],{now:NOW});
+    assert.deepEqual(result,{recorded:0,skipped:1});
+    const state=await store.getPreExpansionOutcomes();
+    assert.equal(state.records.some(row=>row.symbol==='LOWVOLUSDT'),false);
+    assert.equal(state.last_stage_by_key['RADAR_8|LOWVOLUSDT'],undefined);
+  });
+});
