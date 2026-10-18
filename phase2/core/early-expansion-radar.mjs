@@ -2746,14 +2746,25 @@ export class EarlyExpansionRadar{
              now-lastAt>=Number(this.config.activityShockCooldownMs??45*60*1000)&&
              this.activityShockTimestamps.length<Number(this.config.maxActivityShockAlertsPerHour??6)){
             const watchAlert=buildActivityShockWatchAlert(candidate,now);
-            await this.store.appendEarlyExpansionAlert(watchAlert);
-            if(typeof this.store.appendEarlyExpansionEvent==='function')await this.store.appendEarlyExpansionEvent({...watchAlert,event_type:'ACTIVITY_SHOCK_WATCH_TRACE'});
+            // Activity Shock is explicitly research/watch-only. Keep it in the event
+            // ledger for later outcome analysis, but never publish it to the user-alert
+            // feed or push channel; it has not earned entry eligibility.
+            const watchTrace={...watchAlert,event_type:'ACTIVITY_SHOCK_WATCH_TRACE',notification_status:'WATCH_ONLY_NOT_PUSHED'};
+            if(typeof this.store.appendEarlyExpansionEvent==='function'){
+              await this.store.appendEarlyExpansionEvent(watchTrace);
+            }else{
+              this.logger.info?.('[RADAR8_ACTIVITY_SHOCK_WATCH_ONLY]',JSON.stringify({
+                symbol,close_time:closeTime,score:shock.score,notification_status:'WATCH_ONLY_NOT_PUSHED'
+              }));
+            }
             const journeyEntry=journeyEntries.get(symbol);
-            if(journeyEntry){journeyEntry.notification_attempted_at=this.clock();journeyEntry.notification_status='ACTIVITY_SHOCK_WATCH';journeyEntry.alert_id=String(watchAlert.id||INCOMPLETE);}
-            if(this.pushManager?.notifyRadarAlert){await this.pushManager.notifyRadarAlert(watchAlert);if(journeyEntry){journeyEntry.notification_request_resolved_at=this.clock();journeyEntry.notification_status='PUSH_REQUEST_RESOLVED_DELIVERY_UNCONFIRMED';}}
+            if(journeyEntry){
+              journeyEntry.notification_status='WATCH_ONLY_NOT_PUSHED';
+              journeyEntry.notification_gate_rejection_reason='WATCH_ONLY_NOT_ENTRY_ELIGIBLE';
+              journeyEntry.alert_id=String(watchAlert.id||INCOMPLETE);
+            }
             this.lastActivityShockAt.set(symbol,now);this.lastActivityShockKeyBySymbol.set(symbol,shockKey);
             this.activityShockTimestamps.push(now);previousActivityShockKeys.add(shockKey);
-            this.alertCount++;alertsThisCycle++;
           }
         }
         const previousScore=this.lastAlertScore.get(candidate.symbol)||null,bandChanged=this.lastBand.get(candidate.symbol)!==candidate.decision_band;

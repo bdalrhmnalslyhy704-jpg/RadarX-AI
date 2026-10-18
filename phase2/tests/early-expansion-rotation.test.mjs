@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -59,6 +59,20 @@ function makeClosedCandles(symbol, intervalMs, count, at=now, source='BINANCE_PU
     };
   });
 }
+
+test('Radar 8 Activity Shock watch observations are explicitly non-entry signals',()=>{
+  const watch=buildActivityShockWatchAlert({
+    symbol:'SHOCKUSDT',last_price:1.25,price_change_24h:2.2,data_quality:100,data_stale:false,
+    source:'BINANCE_PUBLIC_WS',
+    activity_shock:{detected:true,stage:'EVENT_DRIVEN_BREAKOUT',score:94,watch_only:true,
+      entry_eligible:false,detected_candle_close_time:now}
+  },now);
+  assert.equal(watch.event,'ACTIVITY_SHOCK_WATCH_ONLY');
+  assert.equal(watch.watch_only,true);
+  assert.equal(watch.entry_eligible,false);
+  assert.ok(watch.risk_flags.includes('ACTIVITY_SHOCK_WATCH_ONLY'));
+  assert.ok(watch.reason_codes.includes('MONITOR_ONLY_NOT_ENTRY'));
+});
 
 test('Radar 8 confirms continuation only when price holds or retests breakout and activity persists',()=>{
   const candles=[

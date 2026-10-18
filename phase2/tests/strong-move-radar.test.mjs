@@ -54,7 +54,8 @@ function makeEmergency5m(){
   last.close=Number(last.open)*1.075;
   last.high=Math.max(Number(last.high),last.close*1.001);
   last.low=Math.min(Number(last.low),Number(last.open)*0.999);
-  last.volume=3_000_000;last.quoteVolume=3_200_000;last.tradeCount=12_000;
+  last.volume=3_000_000;last.quoteVolume=320_000_000;last.tradeCount=12_000;
+  last.takerBuyBaseVolume=1_800_000;
   return rows;
 }
 const emergencyAlert=buildEmergencyBreakoutAlert({ticker,five_minute:makeEmergency5m()},NOW);
@@ -64,14 +65,25 @@ assert.equal(emergencyAlert.strong_move.stage,'EMERGENCY_BREAKOUT');
 assert.ok(emergencyAlert.strong_move.metrics.closed_5m_candle_return_pct>=7);
 assert.equal(emergencyAlert.paper_trading,true);
 assert.equal(emergencyAlert.real_order_execution,false);
+const isolatedPriceSpike=makeEmergency5m();
+{
+  const last=isolatedPriceSpike.at(-1);
+  last.quoteVolume=1_000;last.volume=10;last.tradeCount=10;last.takerBuyBaseVolume=2;
+}
+assert.equal(buildEmergencyBreakoutAlert({ticker,five_minute:isolatedPriceSpike},NOW),null,
+  'a 7% candle without relative volume/trade participation must not trigger an emergency alert');
+const sellerDominatedSpike=makeEmergency5m();
+sellerDominatedSpike.at(-1).takerBuyBaseVolume=300_000;
+assert.equal(buildEmergencyBreakoutAlert({ticker,five_minute:sellerDominatedSpike},NOW),null,
+  'a strong candle with weak taker-buy share must not bypass buyer-flow confirmation');
 const lowLiquidityEmergency=buildEmergencyBreakoutAlert({ticker:{...ticker,quoteVolume24h:999},five_minute:makeEmergency5m()},NOW);
 assert.ok(lowLiquidityEmergency,'a fresh +7% closed candle must not be rejected for low 24h turnover');
 assert.ok(lowLiquidityEmergency.risk_flags.includes('LOW_24H_QUOTE_VOLUME_ADVISORY'));
 const volumeSpikeBars=makeEmergency5m();
-for(const row of volumeSpikeBars){row.open=100;row.close=100.2;row.high=101;row.low=99;row.quoteVolume=1_000;row.volume=10;}
+for(const row of volumeSpikeBars){row.open=100;row.close=100.2;row.high=101;row.low=99;row.quoteVolume=1_000;row.volume=10;row.takerBuyBaseVolume=5;}
 const volumeSpikeLast=volumeSpikeBars.at(-1);
 volumeSpikeLast.open=100;volumeSpikeLast.close=102;volumeSpikeLast.high=103;volumeSpikeLast.low=99;
-volumeSpikeLast.quoteVolume=5_000;volumeSpikeLast.volume=50;
+volumeSpikeLast.quoteVolume=5_000;volumeSpikeLast.volume=50;volumeSpikeLast.takerBuyBaseVolume=30;
 const lowTurnoverVolumeSpike=buildEmergencyBreakoutAlert({
   ticker:{...ticker,quoteVolume24h:1},five_minute:volumeSpikeBars
 },NOW);

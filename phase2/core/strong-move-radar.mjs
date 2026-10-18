@@ -301,7 +301,7 @@ export function buildEmergencyBreakoutAlert({five_minute,ticker}={},now=Date.now
       Number(c.low)<=Math.min(Number(c.open),Number(c.close)))
     .sort((a,b)=>Number(a.openTime)-Number(b.openTime));
   const candle=rows.at(-1);
-  if(!candle)return null;
+  if(!candle||rows.length<13)return null;
   const closeTime=Number(candle.closeTime),ageMs=now-closeTime;
   if(!Number.isFinite(ageMs)||ageMs<0||ageMs>8*60_000)return null;
   const open=Number(candle.open),close=Number(candle.close);
@@ -312,18 +312,53 @@ export function buildEmergencyBreakoutAlert({five_minute,ticker}={},now=Date.now
     const volume=Number(row?.volume),price=Number(row?.close);
     return Number.isFinite(volume)&&volume>0&&Number.isFinite(price)&&price>0?volume*price:null;
   };
+  const history=rows.slice(-13);
+  for(let i=1;i<history.length;i++){
+    if(Math.abs((Number(history[i].openTime)-Number(history[i-1].openTime))-5*60_000)>1_000)return null;
+  }
+  const priorRows=history.slice(0,-1);
   const currentQuoteVolume=candleQuoteVolume(candle);
-  const priorVolumes=rows.slice(Math.max(0,rows.length-13),-1)
-    .map(candleQuoteVolume).filter(value=>Number.isFinite(value)&&value>0);
+  const priorVolumes=priorRows.map(candleQuoteVolume).filter(value=>Number.isFinite(value)&&value>0);
   const baselineQuoteVolume=median(priorVolumes);
   const volumeRatio=Number.isFinite(currentQuoteVolume)&&Number.isFinite(baselineQuoteVolume)&&baselineQuoteVolume>0
     ?currentQuoteVolume/baselineQuoteVolume:null;
-  const volumeSpike=Number.isFinite(volumeRatio)&&volumeRatio>=3;
-  const priceBreakout=Number.isFinite(movePct)&&movePct>=7;
-  // A closed +7% candle qualifies at any turnover; alternatively, a >=3x candle-volume
-  // expansion with a positive >=1.5% close is an early shock candidate.
-  if(!priceBreakout&&!(Number.isFinite(movePct)&&movePct>=1.5&&volumeSpike))return null;
-  const volumeTriggered=!priceBreakout;
+  const currentTradesRaw=candle?.tradeCount??candle?.count;
+  const currentTrades=currentTradesRaw!==null&&currentTradesRaw!==undefined&&currentTradesRaw!==''&&Number.isFinite(Number(currentTradesRaw))&&Number(currentTradesRaw)>=0
+    ?Number(currentTradesRaw):null;
+  const priorTradeCounts=priorRows.map(row=>{
+    const raw=row?.tradeCount??row?.count;
+    return raw!==null&&raw!==undefined&&raw!==''&&Number.isFinite(Number(raw))&&Number(raw)>=0?Number(raw):null;
+  }).filter(value=>value!==null);
+  const baselineTrades=median(priorTradeCounts);
+  const tradeRatio=currentTrades!==null&&Number.isFinite(baselineTrades)&&baselineTrades>0?currentTrades/baselineTrades:null;
+  const takerShareOf=row=>{
+    const volume=Number(row?.volume),buy=Number(row?.takerBuyBaseVolume);
+    if(row?.takerBuyBaseVolume===null||row?.takerBuyBaseVolume===undefined||row?.takerBuyBaseVolume===''||
+       !Number.isFinite(volume)||volume<=0||!Number.isFinite(buy)||buy<0||buy>volume)return null;
+    return buy/volume;
+  };
+  const takerBuyShare=takerShareOf(candle);
+  const baselineTakerBuyShare=median(priorRows.map(takerShareOf).filter(value=>value!==null));
+  const takerBuyShareDelta=takerBuyShare!==null&&Number.isFinite(baselineTakerBuyShare)
+    ?takerBuyShare-baselineTakerBuyShare:null;
+  const priorHigh=Math.max(...priorRows.map(row=>Number(row.high)).filter(Number.isFinite));
+  const brokePriorResistance=Number.isFinite(priorHigh)&&close>priorHigh;
+  const closeLocationPct=Number(candle.high)>Number(candle.low)
+    ?(close-Number(candle.low))/(Number(candle.high)-Number(candle.low))*100:50;
+  const buyerFlowConfirmed=takerBuyShare!==null&&
+    (takerBuyShare>=0.50||(takerBuyShare>=0.48&&Number.isFinite(takerBuyShareDelta)&&takerBuyShareDelta>=0.02));
+  const participationConfirmed=Number.isFinite(volumeRatio)&&volumeRatio>=1.8&&
+    Number.isFinite(tradeRatio)&&tradeRatio>=1.3;
+  const largeMoveCandle=Number.isFinite(movePct)&&movePct>=7;
+  // Keep low absolute turnover eligible as an advisory, but demand relative turnover,
+  // trade participation, buyer pressure and a closed-candle resistance break.
+  const priceBreakout=largeMoveCandle&&participationConfirmed&&buyerFlowConfirmed&&
+    brokePriorResistance&&closeLocationPct>=70;
+  const volumeSpike=Number.isFinite(volumeRatio)&&volumeRatio>=3&&
+    Number.isFinite(tradeRatio)&&tradeRatio>=2;
+  const volumeTriggered=!priceBreakout&&Number.isFinite(movePct)&&movePct>=1.5&&
+    volumeSpike&&buyerFlowConfirmed&&brokePriorResistance&&closeLocationPct>=65;
+  if(!priceBreakout&&!volumeTriggered)return null;
   const score=priceBreakout
     ?Math.min(100,80+Math.max(0,movePct-7)*1.25)
     :Math.min(100,76+Math.min(24,Math.max(0,volumeRatio-3)*4));
@@ -353,15 +388,24 @@ export function buildEmergencyBreakoutAlert({five_minute,ticker}={},now=Date.now
         closed_5m_candle_trade_count:Number.isFinite(Number(candle.tradeCount??candle.count))?Number(candle.tradeCount??candle.count):null,
         baseline_5m_quote_volume:Number.isFinite(baselineQuoteVolume)?baselineQuoteVolume:null,
         volume_spike_ratio:Number.isFinite(volumeRatio)?Math.round(volumeRatio*100)/100:null,
+        trade_spike_ratio:Number.isFinite(tradeRatio)?Math.round(tradeRatio*100)/100:null,
+        closed_5m_taker_buy_share:Number.isFinite(takerBuyShare)?Math.round(takerBuyShare*1000)/1000:null,
+        baseline_taker_buy_share:Number.isFinite(baselineTakerBuyShare)?Math.round(baselineTakerBuyShare*1000)/1000:null,
+        taker_buy_share_delta:Number.isFinite(takerBuyShareDelta)?Math.round(takerBuyShareDelta*1000)/1000:null,
+        close_location_pct:Number.isFinite(closeLocationPct)?Math.round(closeLocationPct*10)/10:null,
+        prior_5m_resistance:Number.isFinite(priorHigh)?priorHigh:null,
+        broke_prior_5m_resistance:brokePriorResistance,
+        buyer_flow_confirmed:buyerFlowConfirmed,
+        participation_confirmed:participationConfirmed,
         low_daily_liquidity_advisory:lowDailyLiquidity
       },
       reasons:volumeTriggered
-        ?['شمعة 5 دقائق مغلقة بإغلاق إيجابي ≥1.5% وتوسع حجم ≥3x','تم تجاوز شرط السيولة اليومي؛ راجع تحذير السيولة']
-        :['شمعة 5 دقائق مغلقة ارتفعت 7% أو أكثر','تم تجاوز شرط السيولة اليومي وإجماع المحللين لهذا التنبيه الطارئ']
+        ?['شمعة 5 دقائق مغلقة بإغلاق إيجابي ≥1.5%','توسع الحجم والصفقات مقابل خط أساس العملة مع ضغط شراء واختراق مقاومة']
+        :['شمعة 5 دقائق مغلقة ارتفعت 7% أو أكثر','تأكد الحجم والصفقات وضغط الشراء والإغلاق فوق المقاومة السابقة']
     },
     reasons:volumeTriggered
-      ?['EMERGENCY_CLOSED_5M_VOLUME_SPIKE','VOLUME_RATIO_GTE_3X','LOW_LIQUIDITY_IS_WARNING_ONLY']
-      :['EMERGENCY_CLOSED_5M_BREAKOUT','ANALYST_CONSENSUS_BYPASSED','LOW_LIQUIDITY_IS_WARNING_ONLY'],
+      ?['EMERGENCY_CLOSED_5M_VOLUME_SPIKE','VOLUME_RATIO_GTE_3X','TRADE_RATIO_GTE_2X','BUY_FLOW_CONFIRMED','PRIOR_RESISTANCE_BROKEN','LOW_LIQUIDITY_IS_WARNING_ONLY']
+      :['EMERGENCY_CLOSED_5M_BREAKOUT','VOLUME_AND_TRADES_CONFIRMED','BUY_FLOW_CONFIRMED','PRIOR_RESISTANCE_BROKEN','LOW_LIQUIDITY_IS_WARNING_ONLY'],
     risk_flags:flags,
     data_quality:90,
     data_status:{status:'LIVE_DATA',stale:false,data_stale:false,future_data_detected:false,source:'Binance Public REST',last_error:null},
