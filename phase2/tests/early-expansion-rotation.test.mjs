@@ -1048,3 +1048,24 @@ test('Deep starvation telemetry ignores non-directional assets but preserves dir
   assert.equal(pending[0].wait_ms,5*60_000);
   assert.equal(pending[0].wait_cycles,8109);
 });
+
+
+test('Radar 8 Micro rotation pays down the oldest Deep wait even when that symbol was recently micro-scanned',()=>{
+  const radar=makeRadar({microScanCandidates:4,quietReserve:0,rotationReserve:3,exceptionalRotationBypassSlots:0});
+  const input=rows(12),fast=fastMap(input);
+  const target=input[0].symbol;
+  for(let i=0;i<input.length;i++){
+    const symbol=input[i].symbol;
+    // Target was micro-scanned 1 second ago but has waited two days for a successful Deep scan.
+    // Other symbols have older Micro scans, but each completed Deep within the last 15 minutes.
+    radar.scheduler.lastStartedAt.set(`MICRO:${symbol}`,now-(symbol===target?1000:60_000+i*1000));
+    radar.lastMicroScanCycleBySymbol.set(symbol,30-i);
+    radar.lastDeepScanCycleBySymbol.set(symbol,25);
+    radar.lastDeepAtBySymbol.set(symbol,now-(symbol===target?48*60*60*1000:15*60*1000));
+    radar.firstEligibleAtBySymbol.set(symbol,now-(symbol===target?72*60*60*1000:60*60*1000));
+  }
+  fast.set(target,{price_change_pct:0.001,price_acceleration_pct:0,volume_accel_ratio:1,trade_accel_ratio:1});
+  const selected=radar.selectMicro(input,fast,31);
+  assert.ok(selected.some(x=>x.symbol===target&&x._selection_lane==='rotation'),
+    JSON.stringify({target,selected:selected.map(x=>({symbol:x.symbol,lane:x._selection_lane,deepWaitMs:x._deepWaitAgeMs,microAgeMs:x._rotationAgeMs}))}));
+});
