@@ -649,3 +649,36 @@ test('compacts already saved benchmark/stablecoin rows even when live markout po
     assert.deepEqual(state.records.map(x=>x.symbol),['SOLUSDT']);
   });
 });
+
+
+test('historical outcome backfill processes four mature signals per bounded batch',async()=>{
+  await withStore(async store=>{
+    const detected=NOW,now=NOW+25*60*60_000;
+    const signals=Array.from({length:4},(_,i)=>signal({
+      symbol:'BATCH'+i+'USDT',stage:'PRE_EXPANSION',at:detected+i,price:100,move:1.1
+    }));
+    await recordPreExpansionSignals(store,signals,{now:detected});
+    const one=Array.from({length:100},(_,i)=>{
+      const close=100+i*.025;
+      return candle(detected+i*60_000,close,{step:60_000,high:close+.2,low:close-.15});
+    });
+    const five=Array.from({length:300},(_,i)=>{
+      const close=100+i*.015;
+      return candle(detected+i*5*60_000,close,{step:5*60_000,high:close+.25,low:close-.2});
+    });
+    const requests=[];
+    const fakeRest={async klines(symbol,interval,options){
+      requests.push({symbol,interval,options});
+      return {candles:interval==='1m'?one:five};
+    }};
+    const result=await backfillHistoricalPreExpansionOutcomes(store,fakeRest,{now,intervalMs:0});
+    assert.equal(result.evaluated,4,'the default batch should advance four records, not just two');
+    assert.equal(result.skipped,0);
+    assert.equal(requests.length,8,'two bounded historical kline requests per signal');
+    const state=await store.getPreExpansionOutcomes();
+    assert.equal(state.records.length,4);
+    assert.ok(state.records.every(row=>row.historical_evaluation===true));
+    assert.ok(state.records.every(row=>row.outcome_status==='COMPLETE'));
+    assert.ok(state.records.every(row=>row.marks['24h']?.sample_quality==='HISTORICAL_CLOSED_OHLC'));
+  });
+});
