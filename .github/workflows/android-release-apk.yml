@@ -127,7 +127,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${FIREBASE_GOOGLE_SERVICES_JSON_BASE64:-}" ]]; then
-            echo "RADARX_APK_FCM_CONFIGURED=false" >> "$GITHUB_ENV"
+            echo "RADARX_FIREBASE_CLIENT_CONFIGURED=false" >> "$GITHUB_ENV"
             echo "::warning::Firebase secret is not configured. Building signed Build 224 APK with the existing local-polling notification fallback; native FCM delivery is not enabled."
             exit 0
           fi
@@ -141,9 +141,9 @@ jobs:
             process.exit(1);
           }
           console.log(JSON.stringify({firebase_project_id: config.project_info.project_id, android_package: 'com.radarx.app', config_present: true}));
-          console.log("RADARX_APK_FCM_CONFIGURED=true");
+          console.log("RADARX_FIREBASE_CLIENT_CONFIGURED=true");
           NODE
-          echo "RADARX_APK_FCM_CONFIGURED=true" >> "$GITHUB_ENV"
+          echo "RADARX_FIREBASE_CLIENT_CONFIGURED=true" >> "$GITHUB_ENV"
 
       - name: Verify Railway backend and Radar 8 public contract
         timeout-minutes: 5
@@ -339,6 +339,21 @@ jobs:
           node --test phase2/tests/falcon-eye-radar.test.mjs
           node --test phase2/tests/king-intelligence.test.mjs
 
+      - name: Detect live server push configuration
+        timeout-minutes: 1
+        env:
+          BASE: https://radarx-ai-triple-production.up.railway.app
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error "$BASE/v1/push/status" --output "$RUNNER_TEMP/push-status.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const status = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/push-status.json', 'utf8'));
+          const enabled = status.provider === 'fcm' && status.enabled === true;
+          console.log(JSON.stringify({provider: status.provider ?? 'unknown', enabled: status.enabled === true, server_fcm_enabled: enabled}));
+          fs.appendFileSync(process.env.GITHUB_ENV, 'RADARX_SERVER_FCM_ENABLED=' + String(enabled) + '\\n');
+          NODE
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -530,10 +545,12 @@ jobs:
           set -euo pipefail
           TAG="radarx-native-build224-radar8-v2-hawkeye-${GITHUB_RUN_NUMBER}-attempt-${GITHUB_RUN_ATTEMPT}"
           APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
-          if [[ "${RADARX_APK_FCM_CONFIGURED:-false}" == "true" ]]; then
-            PUSH_MODE="Native FCM configured"
+          if [[ "${RADARX_FIREBASE_CLIENT_CONFIGURED:-false}" == "true" && "${RADARX_SERVER_FCM_ENABLED:-false}" == "true" ]]; then
+            PUSH_MODE="Native FCM client config and enabled server provider verified"
+          elif [[ "${RADARX_FIREBASE_CLIENT_CONFIGURED:-false}" == "true" ]]; then
+            PUSH_MODE="Firebase Android client config embedded; server-side FCM disabled; local polling fallback"
           else
-            PUSH_MODE="Local polling fallback; Firebase FCM credentials not configured"
+            PUSH_MODE="Local polling fallback; Firebase Android client config missing; server-side FCM requires separate Railway credentials"
           fi
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
