@@ -1803,8 +1803,18 @@ export class EarlyExpansionRadar{
   selectDeepFromMicro(results,cycle=0){
     const currentCycle=Math.max(0,Math.trunc(Number(cycle)||0));
     const selectionAt=this.clock();
-    const valid=(results||[]).filter(x=>x&&!x.failed&&selectionSymbol(x)&&
+    const observedValid=(results||[]).filter(x=>x&&!x.failed&&selectionSymbol(x)&&
       isDirectionalCandidateSymbol(selectionSymbol(x))&&x.micro_fingerprint?.score!=null&&hasFiniteNumber(x.micro_fingerprint.score));
+    // Under-floor observations must earn Deep capacity with real closed-candle
+    // participation. Keep only the strongest single qualified burst in this batch;
+    // unqualified under-floor rows cannot slip back in through score/quiet/rotation fill lanes.
+    const underfloorDeepWatchSymbols=new Set(observedValid
+      .filter(x=>isQualifiedUnderfloorDeepWatch(x,this.config))
+      .sort((a,b)=>Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||
+        selectionSymbol(a).localeCompare(selectionSymbol(b)))
+      .slice(0,1).map(selectionSymbol));
+    const valid=observedValid.filter(x=>x?.row?._low_liquidity_burst_bypass!==true||
+      underfloorDeepWatchSymbols.has(selectionSymbol(x)));
     const n=Math.max(1,Math.trunc(this.config.deepCandidates||10));
     const target=Math.min(n,new Set(valid.map(selectionSymbol)).size);
     if(!target)return [];
@@ -1843,15 +1853,6 @@ export class EarlyExpansionRadar{
     }).sort((a,b)=>Number(b._neverScanned)-Number(a._neverScanned)||b._deepWaitAgeMs-a._deepWaitAgeMs||
       b._rotationAgeMs-a._rotationAgeMs||b._queueAgeMs-a._queueAgeMs||
       b._rotationAge-a._rotationAge||a._rotation-b._rotation||selectionSymbol(a).localeCompare(selectionSymbol(b)));
-    // Admit at most one under-floor symbol to the existing Deep budget, and only
-    // after its Micro stage supplies fresh CLOSED-candle participation plus positive
-    // momentum. This reserves observation capacity; the downstream public alert gate
-    // continues to reject every under-floor bypass candidate.
-    const underfloorDeepWatchSymbols=new Set(valid
-      .filter(x=>isQualifiedUnderfloorDeepWatch(x,this.config))
-      .sort((a,b)=>Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||
-        selectionSymbol(a).localeCompare(selectionSymbol(b)))
-      .slice(0,1).map(selectionSymbol));
     const byExceptional=valid.filter(x=>underfloorDeepWatchSymbols.has(selectionSymbol(x))||
       isExceptionalDeepCandidate(x,this.config)).sort((a,b)=>
         Number(underfloorDeepWatchSymbols.has(selectionSymbol(b)))-Number(underfloorDeepWatchSymbols.has(selectionSymbol(a)))||
