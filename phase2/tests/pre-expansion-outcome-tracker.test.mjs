@@ -693,7 +693,7 @@ test('research-only under-floor burst observations never enter public signal out
     const result=await recordPreExpansionSignals(store,[watch],{now:NOW});
     assert.deepEqual(result,{recorded:0,skipped:1});
     const state=await store.getPreExpansionOutcomes();
-    assert.equal(state.records.some(row=>row.symbol==='LOWVOLUSDT'),false);
-    assert.equal(state.last_stage_by_key['RADAR_8|LOWVOLUSDT'],undefined);
+    assert.equal(state?.records?.some(row=>row.symbol==='LOWVOLUSDT')??false,false);
+    assert.equal(state?.last_stage_by_key?.['RADAR_8|LOWVOLUSDT'],undefined);
   });
 });
