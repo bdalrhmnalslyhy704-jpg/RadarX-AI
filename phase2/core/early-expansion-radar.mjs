@@ -59,6 +59,34 @@ export function localAlertCooldown(lastAt,now,cooldownMs){
   return {allowed:elapsed>=cd,remaining_ms:Math.max(0,cd-elapsed)};
 }
 
+export function buildDirectionalDeepPendingQueue({
+  eligible=[],deepThisCycle=new Set(),lastDeepAtBySymbol=new Map(),
+  firstEligibleAtBySymbol=new Map(),priorDeepCycles=new Map(),
+  fastScanAt=Date.now(),completedAt=Date.now(),cycle=0
+}={}){
+  const deepSet=new Set(Array.from(deepThisCycle||[],symbol=>String(symbol||'').trim().toUpperCase()).filter(Boolean));
+  return (Array.isArray(eligible)?eligible:[])
+    .filter(row=>{
+      const symbol=String(row?.symbol||'').trim().toUpperCase();
+      // Non-directional assets stay in full-market coverage, but do not count as
+      // starving Deep candidates because the candidate selector intentionally excludes them.
+      return Boolean(symbol)&&isDirectionalCandidateSymbol(symbol)&&!deepSet.has(symbol);
+    })
+    .map(row=>{
+      const symbol=String(row.symbol).trim().toUpperCase();
+      const lastDeepAt=Number(lastDeepAtBySymbol?.get?.(symbol)||0);
+      const firstEligible=Number(firstEligibleAtBySymbol?.get?.(symbol)||fastScanAt);
+      const waitFrom=lastDeepAt>0?lastDeepAt:firstEligible;
+      const lastCycle=Number(priorDeepCycles?.get?.(symbol)||0);
+      return {
+        symbol,wait_from:waitFrom,wait_ms:Math.max(0,completedAt-waitFrom),
+        wait_cycles:lastCycle>0?Math.max(0,cycle-lastCycle):cycle,
+        last_deep_cycle:lastCycle||INCOMPLETE,never_deep_scanned:lastCycle<=0
+      };
+    })
+    .sort((a,b)=>a.wait_from-b.wait_from||b.wait_ms-a.wait_ms||a.symbol.localeCompare(b.symbol));
+}
+
 export async function boundedMap(items,concurrency,worker){
   const a=Array.from(items||[]),out=Array(a.length);let next=0;
   const n=Math.max(1,Math.min(Number(concurrency)||1,a.length));
@@ -2882,15 +2910,11 @@ export class EarlyExpansionRadar{
             entry.outcomes=scanJourneyOutcomesFromRecord(outcome);
           }
           const deepThisCycle=new Set(scanned.filter(x=>x&&!x.failed).map(x=>String(x.symbol||'').toUpperCase()));
-          const pending=eligible.filter(x=>!deepThisCycle.has(x.symbol)).map(x=>{
-            const lastDeepAt=Number(this.lastDeepAtBySymbol.get(x.symbol)||0);
-            const firstEligible=Number(this.firstEligibleAtBySymbol.get(x.symbol)||fastScanAt);
-            const waitFrom=lastDeepAt>0?lastDeepAt:firstEligible;
-            const lastCycle=Number(priorDeepCycles.get(x.symbol)||0);
-            return {symbol:x.symbol,wait_from:waitFrom,wait_ms:Math.max(0,completedAt-waitFrom),
-              wait_cycles:lastCycle>0?Math.max(0,cycle-lastCycle):cycle,last_deep_cycle:lastCycle||INCOMPLETE,
-              never_deep_scanned:lastCycle<=0};
-          }).sort((a,b)=>a.wait_from-b.wait_from||b.wait_ms-a.wait_ms||a.symbol.localeCompare(b.symbol));
+          const pending=buildDirectionalDeepPendingQueue({
+            eligible,deepThisCycle,lastDeepAtBySymbol:this.lastDeepAtBySymbol,
+            firstEligibleAtBySymbol:this.firstEligibleAtBySymbol,priorDeepCycles,
+            fastScanAt,completedAt,cycle
+          });
           const oldestNever=pending.filter(x=>x.never_deep_scanned).sort((a,b)=>a.wait_from-b.wait_from||a.symbol.localeCompare(b.symbol))[0]||null;
           const oldestPending=pending[0]||null;
           const coins=[...journeyEntries.values()].map(entry=>{
