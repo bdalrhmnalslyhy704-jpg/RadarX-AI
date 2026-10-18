@@ -973,6 +973,40 @@ function quietDeepRank(item,cfg){
     !(compression>=65||structure>=62||resistanceNear))return null;
   return (100-move*6)*.35+participation*.25+structure*.20+compression*.20;
 }
+function isQualifiedUnderfloorDeepWatch(item,cfg){
+  const row=item?.row,fp=item?.micro_fingerprint,m=fp?.metrics||{};
+  if(row?._low_liquidity_burst_bypass!==true||fp?.closed_candles_only!==true||
+    !hasFiniteNumber(fp?.score)||Number(fp.score)<Number(cfg.lowLiquidityBurstDeepMinScore??58))return false;
+  const move=absolute24hMove(row);
+  if(move===null||move>=Number(cfg.hardExtended24hMovePct??18))return false;
+  const stage=String(fp.stage||'').trim().toUpperCase();
+  if(['DATA_INSUFFICIENT','WARMING_UP','INCOMPLETE','ANTI_CHASE'].includes(stage))return false;
+  if(!hasFiniteNumber(fp.confirmation_count)||
+    Number(fp.confirmation_count)<Number(cfg.lowLiquidityBurstDeepMinConfirmations??3))return false;
+  const volume=Math.max(
+    hasFiniteNumber(m.rvol_1m)?Number(m.rvol_1m):0,
+    hasFiniteNumber(m.rvol_5m)?Number(m.rvol_5m):0
+  );
+  const trades=Math.max(
+    hasFiniteNumber(m.trade_rvol_1m)?Number(m.trade_rvol_1m):0,
+    hasFiniteNumber(m.trade_rvol_5m)?Number(m.trade_rvol_5m):0
+  );
+  const taker=hasFiniteNumber(m.taker_buy_ratio)?Number(m.taker_buy_ratio):0;
+  const acceleration=Math.max(
+    hasFiniteNumber(m.acceleration_1m_pct)?Number(m.acceleration_1m_pct):-Infinity,
+    hasFiniteNumber(m.acceleration_5m_pct)?Number(m.acceleration_5m_pct):-Infinity
+  );
+  const recentReturn=Math.max(
+    hasFiniteNumber(m.return_1m)?Number(m.return_1m):-Infinity,
+    hasFiniteNumber(m.return_5m)?Number(m.return_5m):-Infinity
+  );
+  const participationConfirmed=volume>=Number(cfg.lowLiquidityBurstDeepMinRvol??1.20)||
+    trades>=Number(cfg.lowLiquidityBurstDeepMinTradeRvol??1.15)||
+    (taker>=Number(cfg.lowLiquidityBurstDeepMinTakerBuyRatio??0.54)&&(volume>=1||trades>=1));
+  const momentumConfirmed=acceleration>0||recentReturn>0;
+  return participationConfirmed&&momentumConfirmed;
+}
+
 function isExceptionalDeepCandidate(item,cfg){
   const move=absolute24hMove(item?.row),fp=item?.micro_fingerprint,m=fp?.metrics||{},c=fp?.category_scores||{};
   const fast=item?.fast||{};
@@ -1809,8 +1843,19 @@ export class EarlyExpansionRadar{
     }).sort((a,b)=>Number(b._neverScanned)-Number(a._neverScanned)||b._deepWaitAgeMs-a._deepWaitAgeMs||
       b._rotationAgeMs-a._rotationAgeMs||b._queueAgeMs-a._queueAgeMs||
       b._rotationAge-a._rotationAge||a._rotation-b._rotation||selectionSymbol(a).localeCompare(selectionSymbol(b)));
-    const byExceptional=valid.filter(x=>isExceptionalDeepCandidate(x,this.config)).sort((a,b)=>
-      Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
+    // Admit at most one under-floor symbol to the existing Deep budget, and only
+    // after its Micro stage supplies fresh CLOSED-candle participation plus positive
+    // momentum. This reserves observation capacity; the downstream public alert gate
+    // continues to reject every under-floor bypass candidate.
+    const underfloorDeepWatchSymbols=new Set(valid
+      .filter(x=>isQualifiedUnderfloorDeepWatch(x,this.config))
+      .sort((a,b)=>Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||
+        selectionSymbol(a).localeCompare(selectionSymbol(b)))
+      .slice(0,1).map(selectionSymbol));
+    const byExceptional=valid.filter(x=>underfloorDeepWatchSymbols.has(selectionSymbol(x))||
+      isExceptionalDeepCandidate(x,this.config)).sort((a,b)=>
+        Number(underfloorDeepWatchSymbols.has(selectionSymbol(b)))-Number(underfloorDeepWatchSymbols.has(selectionSymbol(a)))||
+        Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const selected=[],seen=new Set();
     const configuredExceptionSlots=Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2));
     let exceptionSlots=Math.min(core,configuredExceptionSlots),quietSlots=q,rotationSlots=r,scoreSlots=core;
@@ -1829,7 +1874,11 @@ export class EarlyExpansionRadar{
       rotationSlots=Math.min(Math.max(r,1),Math.max(0,remaining-quietSlots-scoreReserve));
       scoreSlots=Math.max(0,remaining-quietSlots-rotationSlots);
     }
-    takeUniqueLane(selected,seen,byExceptional,exceptionSlots,'exceptional');
+    const exceptionalSelected=takeUniqueLane(selected,seen,byExceptional,exceptionSlots,'exceptional');
+    // When fewer than two exceptional candidates arrive, each actual event slot
+    // replaces a score slot. Otherwise the old arithmetic overfilled the batch
+    // and the final slice silently discarded the fair-rotation slot.
+    if(byExceptional.length<2)scoreSlots=Math.max(0,scoreSlots-exceptionalSelected);
     takeUniqueLane(selected,seen,byScore,Math.max(0,scoreSlots-selected.filter(x=>x._selection_lane==='score').length),'score');
     takeUniqueLane(selected,seen,byQuiet,quietSlots,'quiet');
     takeUniqueLane(selected,seen,byRotation,rotationSlots,'rotation');
