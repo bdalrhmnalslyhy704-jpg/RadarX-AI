@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -1068,4 +1068,76 @@ test('Radar 8 Micro rotation pays down the oldest Deep wait even when that symbo
   const selected=radar.selectMicro(input,fast,31);
   assert.ok(selected.some(x=>x.symbol===target&&x._selection_lane==='rotation'),
     JSON.stringify({target,selected:selected.map(x=>({symbol:x.symbol,lane:x._selection_lane,deepWaitMs:x._deepWaitAgeMs,microAgeMs:x._rotationAgeMs}))}));
+});
+
+
+test('Radar 8 admits only a bounded under-floor activity burst to Micro watch',()=>{
+  const floor=100_000;
+  const input=[
+    {symbol:'LOWAUSDT',lastPrice:1.2,priceChange24h:1.1,quoteVolume24h:55_000,tradeCount24h:1000},
+    {symbol:'LOWBUSDT',lastPrice:2.4,priceChange24h:2.0,quoteVolume24h:90_000,tradeCount24h:2500},
+    {symbol:'TOOLOWUSDT',lastPrice:1,priceChange24h:.5,quoteVolume24h:9_000,tradeCount24h:100},
+    {symbol:'BTCUSDT',lastPrice:65_000,priceChange24h:.7,quoteVolume24h:60_000,tradeCount24h:5000},
+    {symbol:'STALEUSDT',lastPrice:1,priceChange24h:.5,quoteVolume24h:60_000,tradeCount24h:1000},
+    {symbol:'FLOORUSDT',lastPrice:1,priceChange24h:.5,quoteVolume24h:floor,tradeCount24h:1000},
+    {symbol:'NOFASTUSDT',lastPrice:1,priceChange24h:.2,quoteVolume24h:60_000,tradeCount24h:1000}
+  ];
+  const fastBySymbol=new Map(input.map(row=>[row.symbol,{
+    price_change_pct:.5,price_acceleration_pct:.2,volume_accel_ratio:8,trade_accel_ratio:5
+  }]));
+  fastBySymbol.set('NOFASTUSDT',{
+    price_change_pct:.01,price_acceleration_pct:0,volume_accel_ratio:1.1,trade_accel_ratio:1.05
+  });
+  const pendingUntilBySymbol=new Map([
+    ['LOWAUSDT',now+60_000],['LOWBUSDT',now+60_000],
+    ['TOOLOWUSDT',now+60_000],['BTCUSDT',now+60_000],
+    ['STALEUSDT',now-1],['FLOORUSDT',now+60_000],['NOFASTUSDT',now+60_000]
+  ]);
+  const selected=selectUnderfloorFastShockCandidates({
+    rows:input,fastBySymbol,pendingUntilBySymbol,now,
+    minQuoteVolume24h:floor,minQuoteVolumeRatio:.10,limit:1
+  });
+  assert.equal(selected.length,1,'the under-floor burst capacity remains explicitly capped');
+  assert.ok(['LOWAUSDT','LOWBUSDT'].includes(selected[0].symbol));
+  assert.equal(selected[0]._low_liquidity_burst_bypass,true);
+  assert.ok(selected[0].quoteVolume24h>=floor*.10&&selected[0].quoteVolume24h<floor);
+  assert.ok(!selected.some(row=>['TOOLOWUSDT','BTCUSDT','STALEUSDT','FLOORUSDT','NOFASTUSDT'].includes(row.symbol)));
+});
+
+test('Radar 8 under-floor bypass rejects expired or unconfirmed ticker shocks',()=>{
+  const floor=100_000;
+  const input=[
+    {symbol:'EXPIREDUSDT',lastPrice:1,priceChange24h:1,quoteVolume24h:50_000},
+    {symbol:'QUIETUSDT',lastPrice:1,priceChange24h:1,quoteVolume24h:60_000}
+  ];
+  const fastBySymbol=new Map([
+    ['EXPIREDUSDT',{price_change_pct:.5,price_acceleration_pct:.2,volume_accel_ratio:8,trade_accel_ratio:5}],
+    ['QUIETUSDT',{price_change_pct:.01,price_acceleration_pct:0,volume_accel_ratio:1.1,trade_accel_ratio:1.05}]
+  ]);
+  const result=selectUnderfloorFastShockCandidates({
+    rows:input,fastBySymbol,
+    pendingUntilBySymbol:new Map([['EXPIREDUSDT',now-1],['QUIETUSDT',now+60_000]]),
+    now,minQuoteVolume24h:floor,minQuoteVolumeRatio:.10,limit:2
+  });
+  assert.deepEqual(result,[]);
+  assert.deepEqual(selectUnderfloorFastShockCandidates({
+    rows:input,fastBySymbol,pendingUntilBySymbol:new Map(),now,
+    minQuoteVolume24h:floor,minQuoteVolumeRatio:.10,limit:2
+  }),[]);
+});
+
+
+test('Radar 8 under-floor burst can never satisfy the public buy-alert eligibility gate',()=>{
+  const qualified={
+    early_expansion_score:95,decision_band:'PRE_EXPANSION',data_quality:100,data_stale:false,
+    risk_flags:[],micro_fingerprint:{eligible:true}
+  };
+  assert.equal(isEarlyExpansionCandidateAlertEligible(qualified,{minAlertScore:82,minDataQuality:70}),true);
+  assert.equal(isEarlyExpansionCandidateAlertEligible({
+    ...qualified,low_liquidity_burst_bypass:true
+  },{minAlertScore:82,minDataQuality:70}),false,
+  'even a fully qualified downstream fingerprint remains watch-only when it came through the under-floor lane');
+  assert.equal(isEarlyExpansionCandidateAlertEligible({
+    ...qualified,risk_flags:['WIDE_SPREAD']
+  },{minAlertScore:82,minDataQuality:70}),false);
 });

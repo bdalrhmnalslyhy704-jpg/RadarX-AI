@@ -9,7 +9,7 @@ debug_on_error() {
   set +e
   echo "::error::RadarX Android smoke test failed during: ${PHASE} (exit ${rc})"
   timeout 5s adb devices -l 2>&1 | tail -n 40 || true
-  timeout 10s adb logcat -d -b all -s RadarXSmoke:I RadarXWeb:I RadarXBackground:I AndroidRuntime:E ActivityTaskManager:E '*:S' 2>&1 | tail -n 180 || true
+  timeout 12s adb logcat -d -b all -s RadarXSmoke:I RadarXWeb:I RadarXBackground:I AndroidRuntime:E ActivityTaskManager:E ActivityManager:I ActivityManagerService:I lmkd:I '*:S' 2>&1 | tail -n 260 || true
   timeout 8s adb shell dumpsys activity activities 2>&1 | tail -n 80 || true
   exit "${rc}"
 }

@@ -250,6 +250,9 @@ function fieldCoverage({radar,symbol,stage,entry,detectedAt,signalScore,marketRe
 }
 
 function makeSignal(alert,now,marketContext){
+  // Research-only under-floor burst observations must never contaminate the
+  // public-alert performance cohort; full scan evidence remains in Scan Journey.
+  if(alert?.low_liquidity_burst_bypass===true)return null;
   const radar=normalizedRadar(alert),stage=inferStage(alert);
   const symbol=String(alert?.symbol||'').trim().toUpperCase();
   const entry=num(alert?.price??alert?.last_price??alert?.lastPrice??alert?.falcon_eye?.metrics?.last_price);
