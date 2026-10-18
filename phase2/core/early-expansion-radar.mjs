@@ -200,6 +200,11 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   pollMs:45000,
   universeRefreshMs:15*60*1000,
   minQuoteVolume24h:750000,
+  // A very small, capped Micro-only lane watches strong short-term bursts below
+  // the regular daily-liquidity floor. It never relaxes entry/alert gates.
+  lowLiquidityBurstBypassEnabled:true,
+  lowLiquidityBurstMinQuoteVolumeRatio:0.10,
+  lowLiquidityBurstBypassMaxCandidates:2,
   minLiquidityQuality:58,
   maxSpreadBps:22,
   minDataQuality:70,
@@ -875,6 +880,38 @@ function fastCandidateScore(row,fast,cfg){
   const tradeActivity=Number.isFinite(trades)?clamp(50+(trades-1)*30):50;
   return instant*.27+accel*.25+activity*.18+tradeActivity*.12+quiet*.12+
     clamp(50+Math.log10(Math.max(1,Number(row.quoteVolume24h)/cfg.minQuoteVolume24h))*22)*.06;
+}
+
+/**
+ * Select at most a few under-floor symbols for a confirming Micro scan when
+ * recent ticker deltas show a strong positive price/activity shock. This is a
+ * watch-only capacity bypass; it does not change eligibility or alert rules.
+ */
+export function selectUnderfloorFastShockCandidates({
+  rows=[],fastBySymbol=new Map(),pendingUntilBySymbol=new Map(),now=Date.now(),
+  minQuoteVolume24h=750000,minQuoteVolumeRatio=0.10,limit=2,config={}
+}={}){
+  const floor=Number(minQuoteVolume24h);
+  if(!(Number.isFinite(floor)&&floor>0))return [];
+  const ratio=Math.max(0,Math.min(0.99,Number(minQuoteVolumeRatio)||0));
+  const minimum=floor*ratio,at=Number(now);
+  const count=Math.max(0,Math.min(5,Math.trunc(Number(limit)||0)));
+  if(!Number.isFinite(at)||count===0)return [];
+  const fastMap=fastBySymbol instanceof Map?fastBySymbol:new Map();
+  const pendingMap=pendingUntilBySymbol instanceof Map?pendingUntilBySymbol:new Map();
+  const cfg={...EARLY_EXPANSION_RADAR_DEFAULTS,...config,minQuoteVolume24h:floor};
+  return (Array.isArray(rows)?rows:[]).filter(row=>{
+    const symbol=String(row?.symbol||'').trim().toUpperCase();
+    const quoteVolume=Number(row?.quoteVolume24h);
+    const fast=fastMap.get(symbol)||{};
+    return symbol.endsWith('USDT')&&symbol.length>4&&isDirectionalCandidateSymbol(symbol)&&
+      Number.isFinite(quoteVolume)&&quoteVolume>=minimum&&quoteVolume<floor&&
+      Number(pendingMap.get(symbol)||0)>at&&isFastActivityShockCandidate(row,fast,cfg);
+  }).sort((a,b)=>{
+    const scoreB=fastCandidateScore(b,fastMap.get(String(b?.symbol||'').toUpperCase())||{},cfg);
+    const scoreA=fastCandidateScore(a,fastMap.get(String(a?.symbol||'').toUpperCase())||{},cfg);
+    return scoreB-scoreA||String(a?.symbol||'').localeCompare(String(b?.symbol||''));
+  }).slice(0,count).map(row=>({...row,_low_liquidity_burst_bypass:true}));
 }
 
 function quietCandidateScore(row,fast,cfg){
@@ -2211,9 +2248,12 @@ export class EarlyExpansionRadar{
       const expected=[...this.universe],set=new Set(expected);
       const receivedSymbols=[...new Set(rawRows.map(x=>x.symbol).filter(x=>set.has(x)))];
       const rawBySymbol=new Map(rawRows.filter(x=>set.has(x.symbol)).map(x=>[x.symbol,x]));
+      // Track bounded ticker-delta history across the whole received Spot USDT
+      // universe so an early burst below the normal liquidity floor is visible.
+      const fastBySymbol=new Map();
+      for(const row of rawBySymbol.values())fastBySymbol.set(row.symbol,this.updateFastState(row));
       const eligible=rawRows.filter(x=>set.has(x.symbol)&&x.quoteVolume24h>=this.config.minQuoteVolume24h);
       const eligibleBySymbol=new Map(eligible.map(x=>[x.symbol,x]));
-      const fastBySymbol=new Map();for(const row of eligible)fastBySymbol.set(row.symbol,this.updateFastState(row));
       const fastScanAt=this.clock(),eligibleSet=new Set(eligible.map(x=>x.symbol));
       this.firstEligibleAtBySymbol=reconcileEligibilityQueueAge({
         previous:this.firstEligibleAtBySymbol,universeSymbols:expected,
@@ -2249,7 +2289,15 @@ export class EarlyExpansionRadar{
       }
       this.fastScannedTotal=eligible.length;
       const fastSeenAt=fastScanAt;
+      const underfloorBurstCandidates=this.config.lowLiquidityBurstBypassEnabled===false?[]:
+        selectUnderfloorFastShockCandidates({
+          rows:[...rawBySymbol.values()],fastBySymbol,pendingUntilBySymbol:this.fastShockPendingUntil,
+          now:fastSeenAt,minQuoteVolume24h:this.config.minQuoteVolume24h,
+          minQuoteVolumeRatio:this.config.lowLiquidityBurstMinQuoteVolumeRatio??0.10,
+          limit:this.config.lowLiquidityBurstBypassMaxCandidates??2,config:this.config
+        });
       for(const row of eligible)this.scheduler.ensureQueued('MICRO',row.symbol,fastSeenAt);
+      for(const row of underfloorBurstCandidates)this.scheduler.ensureQueued('MICRO',row.symbol,fastSeenAt);
       const cycle=this.scans+1;
       let marketWideLightResult=null,marketWideLightApplied=false;
       let microSelectionInput=eligible;
@@ -2336,6 +2384,17 @@ export class EarlyExpansionRadar{
       }
       phaseTimings.market_wide_light_scan_ms=Math.max(0,this.clock()-marketWideLightStartedAt);
       if(marketWideLightResult)marketWideLightResult.summary.scan_duration_ms=phaseTimings.market_wide_light_scan_ms;
+      // These candidates bypass only the market-wide light pool so a strong,
+      // confirmed ticker shock below the daily volume floor gets Micro evidence.
+      // They remain ineligible for alerts unless they later pass normal gates.
+      if(underfloorBurstCandidates.length){
+        const combined=[...microSelectionInput,...underfloorBurstCandidates],seen=new Set();
+        microSelectionInput=combined.filter(row=>{
+          const symbol=selectionSymbol(row);
+          if(!symbol||seen.has(symbol))return false;
+          seen.add(symbol);return true;
+        });
+      }
       const selected=this.selectMicro(microSelectionInput,fastBySymbol,cycle);
       const lightCandidateSymbols=new Set(marketWideLightResult?.candidateSymbols||[]);
       const lightEligibleCandidateSet=new Set(marketWideLightResult?.selected?.map(item=>item.symbol)||[]);
@@ -2363,7 +2422,13 @@ export class EarlyExpansionRadar{
       }
       for(const row of selected){
         const entry=journeyEntries.get(row.symbol);
-        if(entry){entry.micro_selected_at=this.clock();entry.micro_selection_lane=row._selection_lane||INCOMPLETE;entry.rejection_reason=INCOMPLETE;}
+        if(entry){
+          entry.micro_selected_at=this.clock();entry.micro_selection_lane=row._selection_lane||INCOMPLETE;entry.rejection_reason=INCOMPLETE;
+          if(row._low_liquidity_burst_bypass===true){
+            entry.low_liquidity_burst_bypass=true;
+            entry.low_liquidity_burst_policy='MICRO_ONLY_NORMAL_ENTRY_GATES_REQUIRED';
+          }
+        }
       }
       phaseTimings.ticker_fast_selection_ms=Math.max(0,this.clock()-tickerFastStartedAt);
       let btcFive=[],marketContext={},btcFiveMinuteCacheHit=false,btcFiveMinuteContextCacheHit=false,btcOneHourContextCacheHit=false;
@@ -2567,6 +2632,7 @@ export class EarlyExpansionRadar{
               micro_scan_wait_ms:Number(micro.scheduler_wait_ms)||0,deep_scan_wait_ms:deepSchedulerStarted.wait_ms}});
           return {
             symbol:row.symbol,last_price:row.lastPrice,price_change_24h:row.priceChange24h,
+            low_liquidity_burst_bypass:micro._low_liquidity_burst_bypass===true,
             quiet_base_scan_latency_ms:hasFiniteNumber(entry?.fast_scan_at)?Math.max(0,deepStarted-Number(entry.fast_scan_at)):null,
             early_expansion_score:finalScore!==null?Number(finalScore.toFixed(1)):null,
             signal_score_source:signalScoreSource,micro_fingerprint_score:microScore,
@@ -2765,7 +2831,8 @@ export class EarlyExpansionRadar{
       const previousActivityShockKeys=new Set(historyAlerts.filter(x=>x?.activity_shock?.detected===true)
         .map(x=>'RADAR8_ACTIVITY_SHOCK:'+String(x?.symbol||'').toUpperCase()+':'+Number(x?.activity_shock?.detected_candle_close_time||0)));
       for(const candidate of ok){
-        const alert=buildEarlyExpansionAlert(candidate,now),eligibleAlert=alertEligible(candidate,this.config)&&candidate.micro_fingerprint?.eligible===true;
+        const alert=buildEarlyExpansionAlert(candidate,now),eligibleAlert=alertEligible(candidate,this.config)&&
+          candidate.micro_fingerprint?.eligible===true&&candidate.low_liquidity_burst_bypass!==true;
         const shock=candidate.activity_shock;
         if(!eligibleAlert&&shock?.detected===true&&shock.watch_only===true&&Number(shock.score)>=Number(this.config.minActivityShockScore??76)&&
           Number(candidate.data_quality)>=Number(this.config.minDataQuality??70)&&candidate.data_stale!==true){
@@ -2857,6 +2924,9 @@ export class EarlyExpansionRadar{
         micro_duplicate_count:schedulerMicroSymbols.length-new Set(schedulerMicroSymbols).size,
         deep_selected:schedulerDeepSymbols.length,deep_unique:new Set(schedulerDeepSymbols).size,
         deep_duplicate_count:schedulerDeepSymbols.length-new Set(schedulerDeepSymbols).size,
+        low_liquidity_burst_candidates:underfloorBurstCandidates.map(x=>x.symbol),
+        low_liquidity_burst_micro_selected:selected.filter(x=>x._low_liquidity_burst_bypass===true).map(x=>x.symbol),
+        low_liquidity_burst_deep_selected:deepTargets.filter(x=>x.row?._low_liquidity_burst_bypass===true).map(selectionSymbol),
         micro_lane_counts:schedulerMicroLanes,deep_lane_counts:schedulerDeepLanes,
         micro_wait_ms:microScanned.map(x=>Number(x?.scheduler_wait_ms)||0),
         deep_wait_ms:deepTargets.map(x=>deepWaitBySymbol.get(selectionSymbol(x))??null),
@@ -2965,6 +3035,9 @@ export class EarlyExpansionRadar{
             micro_attempted_total:coins.filter(x=>x.micro_scan_completed_at!==INCOMPLETE).length,
             micro_success_total:microScanned.filter(x=>x&&!x.failed).length,
             deep_selected_total:deepTargets.length,
+            low_liquidity_burst_candidate_total:underfloorBurstCandidates.length,
+            low_liquidity_burst_micro_selected_total:selected.filter(x=>x._low_liquidity_burst_bypass===true).length,
+            low_liquidity_burst_deep_selected_total:deepTargets.filter(x=>x.row?._low_liquidity_burst_bypass===true).length,
             deep_attempted_total:coins.filter(x=>x.deep_scan_started_at!==INCOMPLETE).length,
             deep_completed_total:deepThisCycle.size,
             deep_failed_total:deepTargets.length-deepThisCycle.size,
