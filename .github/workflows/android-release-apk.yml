@@ -345,13 +345,20 @@ jobs:
           BASE: https://radarx-ai-triple-production.up.railway.app
         run: |
           set -euo pipefail
-          curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error "$BASE/v1/push/status" --output "$RUNNER_TEMP/push-status.json"
+          HTTP_CODE="$(curl --location --silent --show-error --max-time 20 --output "$RUNNER_TEMP/push-status.json" --write-out "%{http_code}" "$BASE/v1/push/status" || true)"
+          if [[ "$HTTP_CODE" != "200" ]]; then
+            echo "RADARX_SERVER_FCM_STATUS=UNVERIFIED" >> "$GITHUB_ENV"
+            echo "::warning::Server push status endpoint is not public (HTTP ${HTTP_CODE:-unknown}); release notes will not claim native FCM is enabled."
+            exit 0
+          fi
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           const status = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/push-status.json', 'utf8'));
-          const enabled = status.provider === 'fcm' && status.enabled === true;
-          console.log(JSON.stringify({provider: status.provider ?? 'unknown', enabled: status.enabled === true, server_fcm_enabled: enabled}));
-          fs.appendFileSync(process.env.GITHUB_ENV, 'RADARX_SERVER_FCM_ENABLED=' + String(enabled) + '\n');
+          let label = 'UNVERIFIED';
+          if (status.provider === 'fcm' && status.enabled === true) label = 'ENABLED';
+          else if (status.provider && status.enabled === false) label = 'DISABLED';
+          console.log(JSON.stringify({provider: status.provider ?? 'unknown', enabled: status.enabled === true, server_fcm_status: label}));
+          fs.appendFileSync(process.env.GITHUB_ENV, 'RADARX_SERVER_FCM_STATUS=' + label + '\n');
           NODE
 
       - name: Set up Gradle
@@ -545,10 +552,12 @@ jobs:
           set -euo pipefail
           TAG="radarx-native-build224-radar8-v2-hawkeye-${GITHUB_RUN_NUMBER}-attempt-${GITHUB_RUN_ATTEMPT}"
           APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
-          if [[ "${RADARX_FIREBASE_CLIENT_CONFIGURED:-false}" == "true" && "${RADARX_SERVER_FCM_ENABLED:-false}" == "true" ]]; then
-            PUSH_MODE="Native FCM client config and enabled server provider verified"
+          if [[ "${RADARX_FIREBASE_CLIENT_CONFIGURED:-false}" == "true" && "${RADARX_SERVER_FCM_STATUS:-UNVERIFIED}" == "ENABLED" ]]; then
+            PUSH_MODE="Firebase Android client config embedded and native FCM server provider verified enabled"
+          elif [[ "${RADARX_FIREBASE_CLIENT_CONFIGURED:-false}" == "true" && "${RADARX_SERVER_FCM_STATUS:-UNVERIFIED}" == "DISABLED" ]]; then
+            PUSH_MODE="Firebase Android client config embedded; server FCM provider reports disabled; local polling fallback"
           elif [[ "${RADARX_FIREBASE_CLIENT_CONFIGURED:-false}" == "true" ]]; then
-            PUSH_MODE="Firebase Android client config embedded; server-side FCM disabled; local polling fallback"
+            PUSH_MODE="Firebase Android client config embedded; server FCM status unverified because endpoint requires authentication; local polling fallback"
           else
             PUSH_MODE="Local polling fallback; Firebase Android client config missing; server-side FCM requires separate Railway credentials"
           fi
