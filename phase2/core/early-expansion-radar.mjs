@@ -4,7 +4,7 @@ import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notification-gate.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
 import {buildRadarRoleEvidence} from './radar-role-evidence.mjs';
-import {assessQuietBaseActivityShock,isFastActivityShockCandidate} from './activity-shock.mjs';
+import {assessQuietBaseActivityShock,isFastActivityShockCandidate,isFastEarlyWatchCandidate} from './activity-shock.mjs';
 import {assessQuietBasePreExpansion,summarizeQuietBasePreExpansion} from './quiet-base-pre-expansion.mjs';
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
 import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId,normalizeMissing,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,reconcileEligibilityQueueAge} from './scan-journey-ledger.mjs';
@@ -204,7 +204,22 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   // the regular daily-liquidity floor. It never relaxes entry/alert gates.
   lowLiquidityBurstBypassEnabled:true,
   lowLiquidityBurstMinQuoteVolumeRatio:0.10,
-  lowLiquidityBurstBypassMaxCandidates:2,
+  lowLiquidityBurstBypassMaxCandidates:4,
+  // Relaxed thresholds create extra bounded WATCH-only observations; they never lower alert gates.
+  fastEarlyWatchEnabled:true,
+  fastEarlyWatchMinQuoteDeltaUsd:0,
+  fastEarlyWatchMinTradeDelta:2,
+  fastEarlyWatchMinPriceChangePct:-0.12,
+  fastEarlyWatchMinAccelerationPct:-0.10,
+  fastEarlyWatchMinVolumeRatio:1.8,
+  fastEarlyWatchMinTradeRatio:1.25,
+  fastEarlyWatchTradeLedMinVolumeRatio:1.2,
+  fastEarlyWatchTradeLedMinTradeRatio:1.8,
+  fastEarlyWatchFlatBaseMinVolumeRatio:1.5,
+  fastEarlyWatchFlatBaseMinTradeRatio:1.4,
+  fastEarlyWatchFlatBaseMaxAbsChangePct:0.12,
+  fastEarlyWatchDeepMinScore:58,
+  fastEarlyWatchDeepMinConfirmations:3,
   minLiquidityQuality:58,
   maxSpreadBps:22,
   minDataQuality:70,
@@ -906,7 +921,8 @@ export function selectUnderfloorFastShockCandidates({
     const fast=fastMap.get(symbol)||{};
     return symbol.endsWith('USDT')&&symbol.length>4&&isDirectionalCandidateSymbol(symbol)&&
       Number.isFinite(quoteVolume)&&quoteVolume>=minimum&&quoteVolume<floor&&
-      Number(pendingMap.get(symbol)||0)>at&&isFastActivityShockCandidate(row,fast,cfg);
+      Number(pendingMap.get(symbol)||0)>at&&(
+        isFastActivityShockCandidate(row,fast,cfg)||isFastEarlyWatchCandidate(row,fast,cfg));
   }).sort((a,b)=>{
     const scoreB=fastCandidateScore(b,fastMap.get(String(b?.symbol||'').toUpperCase())||{},cfg);
     const scoreA=fastCandidateScore(a,fastMap.get(String(a?.symbol||'').toUpperCase())||{},cfg);
@@ -1011,6 +1027,27 @@ function isExceptionalDeepCandidate(item,cfg){
   const move=absolute24hMove(item?.row),fp=item?.micro_fingerprint,m=fp?.metrics||{},c=fp?.category_scores||{};
   const fast=item?.fast||{};
   const cachedEvent=fast.market_wide_event_driven_breakout||fast.event_driven_breakout||null;
+  // A moderate fast-flow anomaly earns Deep WATCH priority only after fresh closed-candle
+  // Micro evidence confirms participation and upward momentum. This does not imply eligibility.
+  const earlyStage=String(fp?.stage||'').trim().toUpperCase();
+  const earlyVolume=Math.max(hasFiniteNumber(m.rvol_1m)?Number(m.rvol_1m):0,
+    hasFiniteNumber(m.rvol_5m)?Number(m.rvol_5m):0);
+  const earlyTrades=Math.max(hasFiniteNumber(m.trade_rvol_1m)?Number(m.trade_rvol_1m):0,
+    hasFiniteNumber(m.trade_rvol_5m)?Number(m.trade_rvol_5m):0);
+  const earlyTaker=hasFiniteNumber(m.taker_buy_ratio)?Number(m.taker_buy_ratio):0;
+  const earlyAcceleration=Math.max(hasFiniteNumber(m.acceleration_1m_pct)?Number(m.acceleration_1m_pct):-Infinity,
+    hasFiniteNumber(m.acceleration_5m_pct)?Number(m.acceleration_5m_pct):-Infinity);
+  const earlyReturn=Math.max(hasFiniteNumber(m.return_1m)?Number(m.return_1m):-Infinity,
+    hasFiniteNumber(m.return_5m)?Number(m.return_5m):-Infinity);
+  if(move!==null&&move<Number(cfg.hardExtended24hMovePct??18)&&
+    isFastEarlyWatchCandidate(item?.row,fast,cfg)&&fp?.closed_candles_only===true&&
+    hasFiniteNumber(fp?.score)&&Number(fp.score)>=Number(cfg.fastEarlyWatchDeepMinScore??58)&&
+    hasFiniteNumber(fp?.confirmation_count)&&Number(fp.confirmation_count)>=Number(cfg.fastEarlyWatchDeepMinConfirmations??3)&&
+    !['DATA_INSUFFICIENT','WARMING_UP','INCOMPLETE','ANTI_CHASE','ALREADY_EXTENDED'].includes(earlyStage)&&
+    (earlyVolume>=Number(cfg.lowLiquidityBurstDeepMinRvol??1.20)||
+      earlyTrades>=Number(cfg.lowLiquidityBurstDeepMinTradeRvol??1.15)||
+      (earlyTaker>=Number(cfg.lowLiquidityBurstDeepMinTakerBuyRatio??0.54)&&(earlyVolume>=1||earlyTrades>=1)))&&
+    (earlyAcceleration>0||earlyReturn>0))return true;
   const fastMove=hasFiniteNumber(fast.price_change_pct)?Number(fast.price_change_pct):null;
   const fastAcceleration=hasFiniteNumber(fast.price_acceleration_pct)?Number(fast.price_acceleration_pct):null;
   const fastVolume=hasFiniteNumber(fast.volume_accel_ratio)?Number(fast.volume_accel_ratio):0;
@@ -1707,7 +1744,7 @@ export class EarlyExpansionRadar{
     const volumeRatio=Number.isFinite(qBase)&&qBase>0?Math.max(0,qDelta)/qBase:null;
     const tradeRatio=Number.isFinite(tBase)&&tBase>0?Math.max(0,tDelta)/tBase:null;
     const fast={price_change_pct:priceChange,price_acceleration_pct:acceleration,volume_delta_quote:qDelta,trade_delta:tDelta,volume_accel_ratio:volumeRatio,trade_accel_ratio:tradeRatio,at:now,warmed_up:Boolean(prev)};
-    if(isFastActivityShockCandidate(row,fast,this.config))this.fastShockPendingUntil.set(row.symbol,now+Math.max(Number(this.config.fastShockHoldMs??8*60*1000),Number(this.config.pollMs||45000)*2));
+    if(isFastActivityShockCandidate(row,fast,this.config)||isFastEarlyWatchCandidate(row,fast,this.config))this.fastShockPendingUntil.set(row.symbol,now+Math.max(Number(this.config.fastShockHoldMs??8*60*1000),Number(this.config.pollMs||45000)*2));
     for(const [symbol,until] of this.fastShockPendingUntil)if(Number(until)<=now)this.fastShockPendingUntil.delete(symbol);
     history.push({price:row.lastPrice,quote:row.quoteVolume24h,trades:row.tradeCount24h,qDelta,tDelta,priceChange,at:now});
     while(history.length>20)history.shift();
@@ -1748,6 +1785,7 @@ export class EarlyExpansionRadar{
         _microPreScore:fastScore*.55+(quiet??0)*.45,
         _quietScore:quiet??-1,_quietEligible:isQuietEarlyCandidate(row,fast,this.config),
         _exceptional:isExceptionalMicroCandidate(row,fast,this.config)||isFastActivityShockCandidate(row,fast,this.config)||
+          isFastEarlyWatchCandidate(row,fast,this.config)||
           fast?.market_wide_event_driven_breakout?.needs_micro_confirmation===true||
           Number(this.fastShockPendingUntil.get(key)||0)>this.clock(),
         _lastActuallyScannedAt:lastAt,_neverScanned:neverScanned,_neverDeepScanned:neverDeepScanned,
@@ -2393,6 +2431,7 @@ export class EarlyExpansionRadar{
             isExceptional:row=>{
               const fast=fastBySymbol.get(row.symbol)||{};
               return isExceptionalMicroCandidate(row,fast,this.config)||isFastActivityShockCandidate(row,fast,this.config)||
+                isFastEarlyWatchCandidate(row,fast,this.config)||
                 Number(this.fastShockPendingUntil.get(String(row.symbol).toUpperCase())||0)>fastSeenAt;
             },
             lastMicroScannedAt:symbol=>this.scheduler.lastScanAt('MICRO',symbol)

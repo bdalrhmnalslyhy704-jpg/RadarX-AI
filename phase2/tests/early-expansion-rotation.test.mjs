@@ -1185,3 +1185,42 @@ test('Radar 8 under-floor burst can never satisfy the public buy-alert eligibili
     ...qualified,risk_flags:['WIDE_SPREAD']
   },{minAlertScore:82,minDataQuality:70}),false);
 });
+
+
+test('Radar 8 routes moderate near-base relative-flow anomalies into under-floor WATCH Micro',()=>{
+  const floor=100_000;
+  const input=[{symbol:'EARLYFLOWUSDT',lastPrice:1.002,priceChange24h:.4,quoteVolume24h:55_000,tradeCount24h:900}];
+  const fastBySymbol=new Map([['EARLYFLOWUSDT',{
+    warmed_up:true,price_change_pct:.01,price_acceleration_pct:0,
+    volume_accel_ratio:1.65,trade_accel_ratio:1.45,volume_delta_quote:45,trade_delta:5
+  }]]);
+  const selected=selectUnderfloorFastShockCandidates({
+    rows:input,fastBySymbol,pendingUntilBySymbol:new Map([['EARLYFLOWUSDT',now+60_000]]),
+    now,minQuoteVolume24h:floor,minQuoteVolumeRatio:.10,limit:4
+  });
+  assert.deepEqual(selected.map(x=>x.symbol),['EARLYFLOWUSDT']);
+  assert.equal(selected[0]._low_liquidity_burst_bypass,true);
+});
+
+test('Radar 8 gives moderate early-watch flow bounded Deep priority only after closed-candle confirmation',()=>{
+  const radar=makeRadar({deepCandidates:4,quietReserve:1,rotationReserve:1,exceptionalRotationBypassSlots:2});
+  const early=candidate('EARLYFLOWUSDT',1.2,{score:68,participation:72,tradeParticipation:68,volume:1.3,trades:1.2});
+  early.row.quoteVolume24h=1_000_000;
+  early.fast={warmed_up:true,price_change_pct:.01,price_acceleration_pct:.02,
+    volume_accel_ratio:1.8,trade_accel_ratio:1.35,volume_delta_quote:600,trade_delta:22};
+  early.micro_fingerprint.closed_candles_only=true;
+  early.micro_fingerprint.stage='WATCH';
+  early.micro_fingerprint.confirmation_count=4;
+  early.micro_fingerprint.metrics={
+    ...early.micro_fingerprint.metrics,rvol_1m:1.3,rvol_5m:1.2,
+    trade_rvol_1m:1.2,trade_rvol_5m:1.15,
+    acceleration_1m_pct:.03,acceleration_5m_pct:.04,return_1m:.02,return_5m:.05
+  };
+  const others=[
+    candidate('SCOREAUSDT',2,{score:95}),candidate('SCOREBUSDT',3,{score:91}),
+    candidate('SCORECUSDT',1,{score:87}),candidate('SCOREDUSDT',4,{score:84})
+  ];
+  const selected=radar.selectDeepFromMicro([early,...others],44);
+  assert.ok(selected.some(x=>x.row.symbol==='EARLYFLOWUSDT'&&x._selection_lane==='exceptional'));
+  assert.equal(selected.length,4,'early-watch priority must reuse an existing Deep slot');
+});

@@ -119,3 +119,34 @@ export function isFastActivityShockCandidate(row={},fast={},config={}){
   return (Number.isFinite(volume)&&volume>=volumeMin&&Number.isFinite(trades)&&trades>=tradeMin)||
     (Number.isFinite(volume)&&volume>=volumeMin*2&&Number.isFinite(accel)&&accel>0.05);
 }
+
+/**
+ * Broader early-activity observer for bounded WATCH-only scanning.
+ * It intentionally accepts near-flat price action when relative trade/quote flow
+ * starts to rise; Micro closed-candle evidence and the independent alert gate
+ * remain mandatory before any public signal. This function never grants entry.
+ */
+export function isFastEarlyWatchCandidate(row={},fast={},config={}){
+  if(config.fastEarlyWatchEnabled===false)return false;
+  const price=Number(row?.lastPrice);
+  const change=Number(fast?.price_change_pct);
+  const acceleration=Number(fast?.price_acceleration_pct);
+  const volume=Number(fast?.volume_accel_ratio);
+  const trades=Number(fast?.trade_accel_ratio);
+  const quoteDelta=Number(fast?.volume_delta_quote);
+  const tradeDelta=Number(fast?.trade_delta);
+  if(!(Number.isFinite(price)&&price>0)||fast?.warmed_up!==true)return false;
+  if(![change,acceleration,volume,trades,quoteDelta,tradeDelta].every(Number.isFinite))return false;
+  if(quoteDelta<=Number(config.fastEarlyWatchMinQuoteDeltaUsd??0)||
+    tradeDelta<Number(config.fastEarlyWatchMinTradeDelta??2))return false;
+  if(change<Number(config.fastEarlyWatchMinPriceChangePct??-0.12)||
+    acceleration<Number(config.fastEarlyWatchMinAccelerationPct??-0.10))return false;
+  const volumeLed=volume>=Number(config.fastEarlyWatchMinVolumeRatio??1.8)&&
+    trades>=Number(config.fastEarlyWatchMinTradeRatio??1.25);
+  const tradeLed=trades>=Number(config.fastEarlyWatchTradeLedMinTradeRatio??1.8)&&
+    volume>=Number(config.fastEarlyWatchTradeLedMinVolumeRatio??1.2);
+  const flatBase=volume>=Number(config.fastEarlyWatchFlatBaseMinVolumeRatio??1.5)&&
+    trades>=Number(config.fastEarlyWatchFlatBaseMinTradeRatio??1.4)&&
+    Math.abs(change)<=Number(config.fastEarlyWatchFlatBaseMaxAbsChangePct??0.12);
+  return volumeLed||tradeLed||flatBase;
+}
