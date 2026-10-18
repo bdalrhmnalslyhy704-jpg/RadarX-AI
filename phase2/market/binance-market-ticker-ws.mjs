@@ -53,6 +53,16 @@ export class BinanceAllMarketTickerClient {
     this.lastMessageAt = null;
     this.lastConnectedAt = null;
     this.reconnectCount = 0;
+    this.messageCount = 0;
+    this.tickerCount = 0;
+    this.messagesAtConnect = 0;
+    this.tickersAtConnect = 0;
+    this.lastConnectionFailure = null;
+    this.lastDisconnectReason = null;
+    this.lastCloseCode = null;
+    this.lastCloseReason = null;
+    this.lastConnectionDurationMs = null;
+    this.connectionOpenedAt = null;
     this.state = 'STOPPED';
     this.connectionId = null;
   }
@@ -63,6 +73,12 @@ export class BinanceAllMarketTickerClient {
       last_message_at: this.lastMessageAt,
       last_connected_at: this.lastConnectedAt,
       reconnect_attempts: this.reconnectCount,
+      messages_received: this.messageCount,
+      tickers_received: this.tickerCount,
+      last_disconnect_reason: this.lastDisconnectReason,
+      last_close_code: this.lastCloseCode,
+      last_close_reason: this.lastCloseReason,
+      last_connection_duration_ms: this.lastConnectionDurationMs,
       url: this.urls[this.urlIndex] ?? null
     };
   }
@@ -111,6 +127,10 @@ export class BinanceAllMarketTickerClient {
     this.onState(this.state);
     const id = randomUUID();
     this.connectionId = id;
+    this.lastConnectionFailure = null;
+    this.connectionOpenedAt = null;
+    this.messagesAtConnect = this.messageCount;
+    this.tickersAtConnect = this.tickerCount;
     let socket;
     try {
       socket = new this.WebSocketImpl(this.url());
@@ -123,24 +143,38 @@ export class BinanceAllMarketTickerClient {
 
     socket.on('open', guard(() => {
       this.lastConnectedAt = Date.now();
+      this.connectionOpenedAt = this.lastConnectedAt;
       this.lastMessageAt = this.lastConnectedAt;
-      this.attempt = 0;
       this.state = 'LIVE';
       this.onState(this.state);
-      this.connectionTimer = setTimeout(() => { try { socket.close(); } catch {} }, this.maxConnectionMs);
+      this.connectionTimer = setTimeout(() => {
+        this.lastConnectionFailure = 'WS_MAX_CONNECTION_AGE_REACHED';
+        try { socket.close(); } catch {}
+      }, this.maxConnectionMs);
       this.heartbeatTimer = setTimeout(() => this.checkHeartbeat(socket), this.heartbeatTimeoutMs);
     }));
 
     socket.on('message', guard(raw => {
+      this.messageCount++;
       this.lastMessageAt = Date.now();
       this.state = 'LIVE';
       try {
         const parsed = JSON.parse(raw.toString());
         const payload = parsed?.data ?? parsed;
-        const rows = Array.isArray(payload) ? payload : [];
-        for (const row of rows) {
+        if (!Array.isArray(payload)) {
+          this.onState(this.state, 'INVALID_TICKER_WS_SHAPE');
+          return;
+        }
+        // A WebSocket upgrade alone is not proof of a healthy market feed.
+        // Reset exponential backoff only after an actual combined-ticker payload arrives.
+        this.attempt = 0;
+        this.lastConnectionFailure = null;
+        for (const row of payload) {
           const ticker = normalizeTicker(row);
-          if (ticker) this.onTicker(ticker);
+          if (ticker) {
+            this.tickerCount++;
+            this.onTicker(ticker);
+          }
         }
       } catch (error) {
         this.onState(this.state, 'INVALID_TICKER_WS_JSON:' + String(error?.message ?? error));
@@ -148,18 +182,52 @@ export class BinanceAllMarketTickerClient {
     }));
 
     socket.on('ping', guard(() => { try { socket.pong?.(); } catch {} }));
-    socket.on('error', guard(error => this.onState(this.state, 'WS_ERROR:' + String(error?.message ?? error))));
-    socket.on('close', guard(() => {
+    socket.on('unexpected-response', guard((request, response) => {
+      const status = Number(response?.statusCode);
+      const reason = Number.isFinite(status) && status > 0 ? 'WS_HTTP_' + status : 'WS_UNEXPECTED_RESPONSE';
+      this.lastConnectionFailure = reason;
+      this.onState(this.state, reason);
+      try { response?.resume?.(); } catch {}
+      try { socket.terminate?.(); } catch { try { socket.close(); } catch {} }
+    }));
+    socket.on('error', guard(error => {
+      const reason = 'WS_ERROR:' + String(error?.message ?? error);
+      this.lastConnectionFailure = reason.slice(0, 180);
+      this.onState(this.state, this.lastConnectionFailure);
+    }));
+    socket.on('close', guard((code, reasonBuffer) => {
       for (const t of [this.heartbeatTimer, this.connectionTimer]) if (t) clearTimeout(t);
       this.heartbeatTimer = this.connectionTimer = null;
       this.socket = null;
-      if (this.running) this.scheduleReconnect('WS_CLOSED');
+      this.lastCloseCode = Number.isFinite(Number(code)) && code !== undefined ? Number(code) : null;
+      this.lastCloseReason = String(reasonBuffer?.toString?.() ?? reasonBuffer ?? '').slice(0, 120);
+      this.lastConnectionDurationMs = this.connectionOpenedAt ? Date.now() - this.connectionOpenedAt : null;
+      const messageAgeMs = this.lastMessageAt === null ? null : Date.now() - this.lastMessageAt;
+      const fallbackReason = [
+        'WS_CLOSED',
+        'code=' + (this.lastCloseCode ?? 'unknown'),
+        'reason=' + (this.lastCloseReason || 'none'),
+        'connected_ms=' + (this.lastConnectionDurationMs ?? 'unknown'),
+        'message_age_ms=' + (messageAgeMs ?? 'unknown'),
+        'messages_since_connect=' + (this.messageCount - this.messagesAtConnect),
+        'tickers_since_connect=' + (this.tickerCount - this.tickersAtConnect)
+      ].join(' ');
+      this.lastDisconnectReason = String(this.lastConnectionFailure || fallbackReason).slice(0, 240);
+      this.lastConnectionFailure = null;
+      if (this.running) this.scheduleReconnect(this.lastDisconnectReason);
     }));
   }
 
   checkHeartbeat(socket) {
     if (!this.running || this.socket !== socket) return;
     if (this.lastMessageAt && Date.now() - this.lastMessageAt > this.heartbeatTimeoutMs) {
+      const ageMs = Date.now() - this.lastMessageAt;
+      const reason = 'WS_HEARTBEAT_TIMEOUT:message_age_ms=' + ageMs +
+        ':messages_since_connect=' + (this.messageCount - this.messagesAtConnect) +
+        ':tickers_since_connect=' + (this.tickerCount - this.tickersAtConnect);
+      this.lastConnectionFailure = reason;
+      this.lastDisconnectReason = reason;
+      this.onState(this.state, reason);
       try { socket.terminate?.(); } catch { try { socket.close(); } catch {} }
       return;
     }
