@@ -100,7 +100,7 @@ test('TEST_FIXTURE: ticker heartbeat timeout is explicit and backoff resets only
   assert.equal(client.attempt,0,'a valid ticker payload resets backoff');
   assert.equal(tickers.length,1);
   assert.equal(tickers[0].symbol,'BTCUSDT');
-  assert.equal(client.health().ticker_count,1);
+  assert.equal(client.health().tickers_received,1);
   assert.match(client.health().last_disconnect_reason,/WS_HEARTBEAT_TIMEOUT/);
   client.stop();
 });
