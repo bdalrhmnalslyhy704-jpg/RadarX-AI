@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -1021,4 +1021,30 @@ test('Radar 8 post-cycle trimming evicts inactive and low-momentum candle window
   assert.equal(cleanup.low_momentum_cache_trim.deep_windows_removed,2);
   assert.equal(cleanup.low_momentum_cache_trim.micro_5m_windows_removed,2);
   assert.equal(cleanup.low_momentum_cache_trim.candle_rows_released,126);
+});
+
+
+test('Deep starvation telemetry ignores non-directional assets but preserves directional rotation debt',()=>{
+  const pending=buildDirectionalDeepPendingQueue({
+    eligible:[
+      {symbol:'XUSDUSDT'},
+      {symbol:'ADAUSDT'},
+      {symbol:'TRXUSDT'}
+    ],
+    deepThisCycle:new Set(['TRXUSDT']),
+    lastDeepAtBySymbol:new Map(),
+    firstEligibleAtBySymbol:new Map([
+      ['XUSDUSDT',now-9_740*60_000],
+      ['ADAUSDT',now-5*60_000],
+      ['TRXUSDT',now-10*60_000]
+    ]),
+    priorDeepCycles:new Map([['XUSDUSDT',12],['ADAUSDT',0],['TRXUSDT',8108]]),
+    fastScanAt:now-1_000,
+    completedAt:now,
+    cycle:8109
+  });
+  assert.deepEqual(pending.map(row=>row.symbol),['ADAUSDT']);
+  assert.equal(pending[0].never_deep_scanned,true);
+  assert.equal(pending[0].wait_ms,5*60_000);
+  assert.equal(pending[0].wait_cycles,8109);
 });
