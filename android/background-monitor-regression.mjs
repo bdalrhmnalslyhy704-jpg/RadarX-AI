@@ -42,6 +42,17 @@ assert.match(service, /oldest_first=1&since_id=/,
   'background sync must request chronological replay pages from its durable cursor');
 assert.match(service, /radar_alert_cursor_id/,
   'equal-timestamp detections must be paginated without advancing past unseen alerts');
+assert.doesNotMatch(service, /candidates = body\.optJSONArray\("candidates"\)/,
+  'unqualified radar analysis candidates must never be promoted into Android notifications');
+assert.match(service, /private static boolean isActionableRadarAlert\(JSONObject alert\)/,
+  'Android must enforce a shared last-mile notification eligibility gate');
+assert.match(service, /boolean eligible = isActionableRadarAlert\(alert\)/,
+  'durable and fallback feeds must use the shared notification gate');
+assert.match(service, /alert\.optBoolean\("watch_only", false\)/);
+assert.match(service, /alert\.optBoolean\("entry_eligible", false\)/);
+assert.match(service, /case "WATCH_EARLY":/);
+assert.match(service, /case "ALREADY_EXTENDED":/);
+assert.match(service, /risk\.contains\("LOW_LIQUIDITY"\)/);
 assert.match(service, /notifyNewRadarAlerts\(JSONArray alerts, boolean oldestFirst, boolean cursorAdvanceAllowed\)/,
   'notifications must preserve oldest-first replay order after reconnect');
 assert.match(service, /persistDurableAlertCursor\(at, replayKey, seen\)/,
@@ -101,7 +112,7 @@ assert.ok(service.includes('meta.put("feed_mode", "NON_DURABLE_LEGACY_FALLBACK")
 assert.ok(service.includes('at > 0L && at >= cursor'),
   'fallback must not omit events with the current timestamp when stable IDs differ');
 assert.ok(service.includes('sortAlertsChronologically(root)') && service.includes('root.put("oldest_first", true)'),
-  'bounded fallback candidates must be notified in chronological order without moving the durable cursor');
+  'bounded fallback alerts must be sorted chronologically without moving the durable cursor');
 
 assert.match(service, /radar_alert_pending_notification_ids/,
   'a durable replay row must be checkpointed as pending before posting to Android');
