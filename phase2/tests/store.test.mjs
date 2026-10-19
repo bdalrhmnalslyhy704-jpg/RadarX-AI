@@ -423,3 +423,35 @@ test('TEST_FIXTURE: large JSONL scheduler journals read only the recent tail in 
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+
+test('Radar 8 watch-only traces persist in bounded diagnostics and never enter actionable alerts',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-watch-only-trace-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    const trace={
+      id:'RADAR8_EARLY_FLOW_WATCH:AAAUSDT:1234',
+      symbol:'AAAUSDT',
+      event:'EARLY_FLOW_WATCH_ONLY',
+      event_type:'MICRO_EARLY_FLOW_WATCH_TRACE',
+      trace_at:1234,
+      watch_only:true,
+      entry_eligible:false,
+      notification_status:'WATCH_ONLY_NOT_SENT',
+      feed_status:'TRACE_ONLY'
+    };
+    const persisted=await store.appendEarlyExpansionEvent(trace);
+    assert.equal(persisted.written,1);
+    const rows=await store.readScanSchedulerEvents({radar:'RADAR_8',symbol:'AAAUSDT',sinceMs:0,limit:10});
+    assert.equal(rows.length,1);
+    assert.equal(rows[0].event_at,1234);
+    assert.equal(rows[0].watch_only,true);
+    assert.equal(rows[0].entry_eligible,false);
+    assert.equal(rows[0].notification_status,'WATCH_ONLY_NOT_SENT');
+    assert.equal(rows[0].payload.id,trace.id);
+    assert.deepEqual(await store.readEarlyExpansionAlerts({sinceMs:0,limit:10}),[],
+      'watch-only diagnostics must never be promoted into the Android actionable alert feed');
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
