@@ -21,7 +21,7 @@ def resolveBackendOrigin = { name, defaultValue ->
         (parsed.port != -1 && parsed.port != 443)) {
         throw new GradleException(name + " must be an HTTPS origin without a path, credentials, query, or fragment")
     }
-    return parsed.scheme + "://" + parsed.rawAuthority
+    return parsed.scheme + "://" + parsed.host
 }
 
 def radarxBackendOrigin = resolveBackendOrigin("RADARX_BACKEND_ORIGIN", "https://radarx-ai-triple-production.up.railway.app")
