@@ -381,8 +381,8 @@ public final class RadarXBackgroundMonitorService extends Service {
                         if (!radarName.isEmpty()) radarNames.put(radarName);
                     }
                     JSONArray candidates = body.optJSONArray("alerts");
-                    if (candidates == null) candidates = body.optJSONArray("discoveries");
-                    if (candidates == null) candidates = body.optJSONArray("candidates");
+                    // Only an explicit persisted alerts array is allowed into the notification replay.
+                    // snapshots, discoveries, and candidate lists are analysis, not alert history.
                     if (candidates != null) {
                         for (int i = 0; i < candidates.length(); i++) {
                             JSONObject row = candidates.optJSONObject(i);
@@ -441,6 +441,86 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     /**
+     * Reject monitor-only, stale-data and non-actionable setup states at the last-mile
+     * notification boundary. Older radar endpoints can omit explicit eligibility fields,
+     * so known invalid states and failed gates must never default into a user notification.
+     */
+    private static boolean isActionableRadarAlert(JSONObject alert) {
+        if (alert == null) return false;
+        if (alert.optBoolean("watch_only", false) || alert.optBoolean("monitor_only", false)) return false;
+        if (alert.has("eligible") && !alert.optBoolean("eligible", false)) return false;
+        if (alert.has("entry_eligible") && !alert.optBoolean("entry_eligible", false)) return false;
+        if (alert.optBoolean("data_stale", false)) return false;
+        JSONObject dataStatus = alert.optJSONObject("data_status");
+        if (dataStatus != null && (dataStatus.optBoolean("stale", false) ||
+                dataStatus.optBoolean("data_stale", false) ||
+                "DATA_STALE".equalsIgnoreCase(dataStatus.optString("status", "")) ||
+                "DATA_UNAVAILABLE".equalsIgnoreCase(dataStatus.optString("status", "")))) return false;
+        JSONObject eliteGate = alert.optJSONObject("elite_gate");
+        if (eliteGate != null && eliteGate.has("eligible") && !eliteGate.optBoolean("eligible", false)) return false;
+        JSONObject notificationGate = alert.optJSONObject("notification_gate");
+        if (notificationGate != null && notificationGate.has("eligible") &&
+                !notificationGate.optBoolean("eligible", false)) return false;
+        if (alert.has("data_quality") && alert.optDouble("data_quality", 0.0) < 70.0) return false;
+        if (alert.has("market") && !"SPOT".equalsIgnoreCase(alert.optString("market", ""))) return false;
+
+        String event = alert.optString("event", alert.optString("type", "")).toUpperCase(Locale.ROOT);
+        if (event.contains("WATCH_ONLY") || event.contains("MONITOR_ONLY")) return false;
+
+        String stage = alert.optString("potential_label", "");
+        if (stage.isEmpty()) stage = alert.optString("decision_band", "");
+        if (stage.isEmpty()) stage = alert.optString("pre_expansion_stage", "");
+        if (stage.isEmpty()) stage = alert.optString("signal_type", "");
+        stage = stage.toUpperCase(Locale.ROOT);
+        switch (stage) {
+            case "WATCH_EARLY":
+            case "EARLY_FLOW_WATCH_ONLY":
+            case "ACTIVITY_SHOCK_WATCH_ONLY":
+            case "ALREADY_EXTENDED":
+            case "EXTENDED":
+            case "HIGH_RISK_PUMP":
+            case "DATA_INSUFFICIENT":
+            case "STALE_DATA":
+            case "DATA_STALE":
+            case "DATA_UNAVAILABLE":
+            case "INSUFFICIENT_DATA":
+            case "INCOMPLETE_DATA":
+            case "WARMING_UP":
+            case "INVALID_PRICE":
+            case "DATA_GAP":
+            case "STALE_CLOSED_CANDLES":
+            case "CLOSED_CANDLE_GAP":
+            case "NO_SIGNAL":
+            case "INVALIDATED":
+            case "CANCELLED":
+            case "CANCELED":
+            case "FAILED_BREAKOUT":
+            case "BREAKOUT_UNCONFIRMED":
+                return false;
+            default:
+                break;
+        }
+
+        JSONArray riskFlags = alert.optJSONArray("risk_flags");
+        if (riskFlags != null) {
+            for (int i = 0; i < riskFlags.length(); i++) {
+                String risk = riskFlags.optString(i, "").toUpperCase(Locale.ROOT);
+                if (risk.contains("WATCH_ONLY") || risk.contains("MONITOR_ONLY_NOT_ENTRY") ||
+                        risk.contains("ALREADY_EXTENDED") || risk.contains("HIGH_RISK_PUMP") ||
+                        risk.contains("WIDE_SPREAD") || risk.contains("DATA_INSUFFICIENT") ||
+                        risk.contains("STALE_DATA") || risk.contains("STALE_CLOSED_CANDLES") ||
+                        risk.contains("CLOSED_CANDLE_GAP") || risk.contains("DATA_GAP") ||
+                        risk.contains("CONTINUATION_NOT_CONFIRMED") || risk.contains("FAILED_BREAKOUT") ||
+                        risk.contains("LOW_LIQUIDITY") || risk.contains("LOW_24H_QUOTE_VOLUME_ADVISORY") ||
+                        risk.contains("24H_ALREADY_EXTENDED") || risk.contains("EXTENDED_CHASE")) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
      * Process a replay page monotonically. The server's next_cursor is never
      * committed up front: every row must first be safely skipped as already handled
      * or accepted by Android's NotificationManager, otherwise the durable cursor
@@ -486,7 +566,7 @@ public final class RadarXBackgroundMonitorService extends Service {
                 (!id.isEmpty() && seen.contains(id)) ||
                 fallbackSeen.contains(replayKey) ||
                 (!id.isEmpty() && fallbackSeen.contains(id));
-            boolean eligible = alert.optBoolean("eligible", true);
+            boolean eligible = isActionableRadarAlert(alert);
 
             if (cursorAdvanceAllowed) {
                 if (eligible && !alreadyHandled) {

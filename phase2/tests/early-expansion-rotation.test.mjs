@@ -60,6 +60,14 @@ function makeClosedCandles(symbol, intervalMs, count, at=now, source='BINANCE_PU
   });
 }
 
+test('Radar 8 uses a 20-second target with bounded fair-rotating work batches',()=>{
+  assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.pollMs,20000);
+  assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.microScanCandidates,12);
+  assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.deepCandidates,3);
+  assert.ok(EARLY_EXPANSION_RADAR_DEFAULTS.microConcurrency>=8);
+  assert.ok(EARLY_EXPANSION_RADAR_DEFAULTS.deepConcurrency>=6);
+});
+
 test('Radar 8 Activity Shock watch observations are explicitly non-entry signals',()=>{
   const watch=buildActivityShockWatchAlert({
     symbol:'SHOCKUSDT',last_price:1.25,price_change_24h:2.2,data_quality:100,data_stale:false,
@@ -1338,7 +1346,7 @@ test('Radar 8 confirmed early-flow observations create a separate monitor-only a
 });
 
 
-test('Radar 8 persists watch-only observations in the alert feed and reports disabled push honestly',async()=>{
+test('Radar 8 keeps watch-only observations out of the actionable alert feed and never pushes them',async()=>{
   const storedAlerts=[],storedEvents=[],pushCalls=[];
   const store={
     async appendEarlyExpansionAlert(alert){storedAlerts.push({...alert});},
@@ -1360,14 +1368,12 @@ test('Radar 8 persists watch-only observations in the alert feed and reports dis
   },now);
   const result=await radar.recordWatchOnlyAlert(alert,'EARLY_FLOW_WATCH_TRACE');
   assert.equal(result.stored,true);
-  assert.equal(result.pushStatus,'PUSH_DISABLED_OR_UNCONFIGURED');
-  assert.equal(storedAlerts.length,1);
-  assert.equal(storedAlerts[0].event,'EARLY_FLOW_WATCH_ONLY');
-  assert.equal(storedAlerts[0].watch_only,true);
-  assert.equal(storedAlerts[0].entry_eligible,false);
-  assert.equal(storedEvents.length,1);
+  assert.equal(result.pushStatus,'WATCH_ONLY_NOT_SENT');
+  assert.equal(storedAlerts.length,0,'watch-only observations must not enter the feed polled by Android');
+  assert.equal(storedEvents.length,1,'diagnostic events remain available for outcome analysis');
   assert.equal(storedEvents[0].event_type,'EARLY_FLOW_WATCH_TRACE');
-  assert.equal(storedEvents[0].notification_status,'PUSH_DISABLED_OR_UNCONFIGURED');
+  assert.equal(storedEvents[0].feed_status,'TRACE_ONLY');
+  assert.equal(storedEvents[0].notification_status,'WATCH_ONLY_NOT_SENT');
   assert.equal(pushCalls.length,0,'a disabled provider must not be called');
 });
 

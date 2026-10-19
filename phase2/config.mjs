@@ -273,7 +273,7 @@ export const CONFIG = Object.freeze({
   },
   earlyExpansionRadar: {
     quote: 'USDT',
-    pollMs: int(process.env.RADARX_EARLY_EXPANSION_POLL_MS, 45000),
+    pollMs: int(process.env.RADARX_EARLY_EXPANSION_POLL_MS, 20000),
     universeRefreshMs: int(process.env.RADARX_EARLY_EXPANSION_UNIVERSE_REFRESH_MS, 15 * 60 * 1000),
     minQuoteVolume24h: int(process.env.RADARX_EARLY_EXPANSION_MIN_QUOTE_VOLUME_24H, 750000),
     minLiquidityQuality: int(process.env.RADARX_EARLY_EXPANSION_MIN_LIQUIDITY_QUALITY, 58),

@@ -197,7 +197,9 @@ export function decideEarlyExpansionBand({
 
 export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   quote:'USDT',
-  pollMs:45000,
+  // Target a 20-second launch cadence; telemetry remains authoritative because REST
+  // latency can still make an individual complete cycle exceed the target.
+  pollMs:20000,
   universeRefreshMs:15*60*1000,
   minQuoteVolume24h:750000,
   // A very small, capped Micro-only lane watches strong short-term bursts below
@@ -227,12 +229,13 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   minLiquidityQuality:58,
   maxSpreadBps:22,
   minDataQuality:70,
-  microScanCandidates:18,
-  rotationReserve:8,
-  deepCandidates:5,
-  quietReserve:8,
-  microConcurrency:6,
-  deepConcurrency:4,
+  // Smaller fair-rotating batches increase opportunities per minute and limit tail latency.
+  microScanCandidates:12,
+  rotationReserve:5,
+  deepCandidates:3,
+  quietReserve:4,
+  microConcurrency:8,
+  deepConcurrency:6,
   oneMinuteKlines:120,
   fiveMinuteKlines:60,
   fifteenMinuteKlines:160,
@@ -1845,35 +1848,22 @@ export class EarlyExpansionRadar{
   async stop(){this.running=false;if(this.timer)clearTimeout(this.timer);this.timer=null;this.marketWideKlineCache?.stop?.();}
   async recordWatchOnlyAlert(alert,eventType='RADAR8_WATCH_ONLY_TRACE'){
     const symbol=String(alert?.symbol||'').trim().toUpperCase();
+    const pushStatus='WATCH_ONLY_NOT_SENT';
+    // Watch-only observations belong in diagnostics, never in the actionable feed
+    // polled by Android. They do not invoke a push provider even if one is configured.
+    alert.notification_status=pushStatus;
+    alert.watch_only=true;
+    alert.entry_eligible=false;
+    const trace={...alert,event_type:eventType,feed_status:'TRACE_ONLY',
+      notification_status:pushStatus,trace_at:this.clock()};
     let stored=false;
     try{
-      if(typeof this.store.appendEarlyExpansionAlert==='function'){
-        await this.store.appendEarlyExpansionAlert(alert);
-        stored=true;
-      }else{
-        throw new Error('WATCH_ALERT_FEED_WRITER_UNAVAILABLE');
-      }
-    }catch(error){this.noteError(error,'watch-only-alert-store');}
-    const providerStatus=typeof this.pushManager?.status==='function'?this.pushManager.status():null;
-    let pushStatus=providerStatus?.enabled===true?'PUSH_ENABLED_NOT_REQUESTED':'PUSH_DISABLED_OR_UNCONFIGURED';
-    if(stored&&providerStatus?.enabled===true&&typeof this.pushManager?.notifyRadarAlert==='function'){
-      try{
-        const attempts=await this.pushManager.notifyRadarAlert(alert);
-        pushStatus=attempts.some(x=>x?.status==='SENT')?'PUSH_ACCEPTED_BY_PROVIDER_DELIVERY_UNCONFIRMED':
-          attempts.length?'PUSH_ATTEMPTED_NO_PROVIDER_ACCEPTANCE':'PUSH_ENABLED_NO_ELIGIBLE_SUBSCRIPTIONS';
-      }catch(error){
-        pushStatus='PUSH_ATTEMPT_FAILED';
-        this.noteError(error,'watch-only-alert-push');
-      }
-    }
-    alert.notification_status=pushStatus;
-    const trace={...alert,event_type:eventType,feed_status:stored?'STORED':'STORE_FAILED',
-      notification_status:pushStatus,trace_at:this.clock()};
-    try{
-      if(typeof this.store.appendEarlyExpansionEvent==='function')await this.store.appendEarlyExpansionEvent(trace);
+      if(typeof this.store.appendEarlyExpansionEvent!=='function')throw new Error('WATCH_TRACE_WRITER_UNAVAILABLE');
+      await this.store.appendEarlyExpansionEvent(trace);
+      stored=true;
     }catch(error){this.noteError(error,'watch-only-alert-trace');}
     this.logger.info?.('[RADAR8_WATCH_ONLY_ALERT]',JSON.stringify({
-      id:alert?.id||null,symbol,event:alert?.event||null,feed_status:stored?'STORED':'STORE_FAILED',
+      id:alert?.id||null,symbol,event:alert?.event||null,feed_status:stored?'TRACE_ONLY':'TRACE_STORE_FAILED',
       notification_status:pushStatus,entry_eligible:false
     }));
     return {stored,pushStatus};
