@@ -72,7 +72,8 @@ assert.ok(service.includes('alert.optString("replay_cursor_id", "")'),
   'notification identity must follow the compound cursor for rows that lack a source id');
 assert.ok(service.includes('testFeed.matches("http://10\\\\.0\\\\.2\\\\.2:18[0-9]{3}/api/radar-alerts\\\\?radar=ALL")'),
   'the local replay test feed must be restricted to the emulator host and radar-alert route');
-assert.ok(service.includes('isDebugBuild() && testFeed.matches'),
+assert.ok(service.includes('boolean replayTestFeed = isDebugBuild() &&') &&
+  service.includes('if (replayTestFeed)'),
   'release builds must never honor the debug replay fixture URL');
 assert.ok(main.includes('FLAG_DEBUGGABLE') && main.includes('REPLAY_TEST_OVERRIDE_CONFIGURED'),
   'MainActivity must gate and report persisted debug-only test overrides');
