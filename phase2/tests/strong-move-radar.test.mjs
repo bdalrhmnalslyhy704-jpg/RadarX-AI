@@ -166,6 +166,16 @@ assert.equal(stale.eligible,false);
 assert.equal(stale.stage,'STALE_DATA');
 assert.equal(stale.data_stale,true);
 
+const oneMinuteGap=buildStrongMoveAnalysis(make1m().filter((_,i)=>i!==116),make5m(),ticker,NOW);
+assert.equal(oneMinuteGap.eligible,false);
+assert.equal(oneMinuteGap.stage,'DATA_GAP');
+assert.ok(oneMinuteGap.reason_codes.includes('ONE_MINUTE_CLOSED_CANDLE_GAP'));
+
+const fiveMinuteGap=buildStrongMoveAnalysis(make1m(),make5m().filter((_,i)=>i!==38),ticker,NOW);
+assert.equal(fiveMinuteGap.eligible,false);
+assert.equal(fiveMinuteGap.stage,'DATA_GAP');
+assert.ok(fiveMinuteGap.reason_codes.includes('FIVE_MINUTE_CLOSED_CANDLE_GAP'));
+
 // Emergency alerts bypass analyst/elite consensus but still require fresh closed 5m data and $1M quote volume.
 {
   const stored=[],pushed=[];
