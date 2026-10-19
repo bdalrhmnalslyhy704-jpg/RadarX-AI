@@ -48,11 +48,13 @@ export function evaluateDynamicEarlyWarningGate(alert={},row={},{
   const risks=[...(Array.isArray(alert?.risk_flags)?alert.risk_flags:[]),...(Array.isArray(alert?.elite_gate?.risk_flags)?alert.elite_gate.risk_flags:[])].map(x=>String(x).toUpperCase());
   const triggerCodes=(Array.isArray(coreTriggerFailures)?coreTriggerFailures:[]).map(x=>String(x));
   const flow3Available=m.three_second_liquidity?.available===true&&taker3s!==null;
-  const missing3sOnly=!flow3Available&&triggerCodes.length===1&&triggerCodes[0]===MISSING_3S_FAILURE;
-  // When the 3-second bucket is unavailable, require exceptional independent evidence.
-  // This rejects borderline fallback candidates (e.g. ~2x volume and ~2x trades) while
-  // preserving the high-flow/high-participation GTC-like historical candidate.
-  const fallback=missing3sOnly&&takerRatio!==null&&takerRatio>=0.90&&score>=84&&confirmations>=8&&
+  // The shared strong-move score does not guarantee a completed 3-second flow bucket;
+  // callers may also expose only elite-gate failures rather than a dedicated 3s reason.
+  // Treat missing 3s as fallback-eligible only when every long-window signal is exceptional.
+  const missing3sFallbackCandidate=!flow3Available;
+  // This rejects borderline candidates (e.g. ~2x volume and ~2x trades); it grants only
+  // PRE_EXPANSION_WATCH, never a strict entry or executable order.
+  const fallback=missing3sFallbackCandidate&&takerRatio!==null&&takerRatio>=0.90&&score>=84&&confirmations>=8&&
     (volumeRatio??0)>=5&&(tradeRatio??0)>=4&&(return1??0)>=0.45&&(return3??0)>=0.45&&
     (acceleration??0)>=0.25&&(m.breakout_up===true||m.micro_breakout===true);
   // Low 24h movement is not itself a reason to reject pre-breakout opportunities, but
@@ -90,6 +92,7 @@ export function evaluateDynamicEarlyWarningGate(alert={},row={},{
   const unknownStrictFailures=[];
   for(const code of [...new Set((Array.isArray(strictFailures)?strictFailures:[]).map(String))]){
     if(SOFT_STRICT_FAILURES.has(code))softFailures.push(code);
+    else if(code==='STRONG_MOVE_CORE_GATE_FAILED'&&fallback)softFailures.push('STRICT_CORE_GATE_FAILED_EXCEPTIONAL_FLOW_WATCH_ONLY');
     else if(code==='BASE_ALERT_NOT_ELIGIBLE'&&fallback)softFailures.push(code);
     else unknownStrictFailures.push(code);
   }
