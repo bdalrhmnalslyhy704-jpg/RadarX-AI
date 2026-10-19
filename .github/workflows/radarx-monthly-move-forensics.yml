@@ -1,6 +1,12 @@
 name: RadarX Build 224 monthly move forensics
 
 on:
+  push:
+    branches:
+      - research/build224-monthly-move-forensics-20261019
+    paths:
+      - '.github/workflows/radarx-monthly-move-forensics.yml'
+      - 'phase2/tools/monthly-move-forensics.mjs'
   pull_request:
     branches:
       - build224-multi-analyst-20261007
@@ -9,10 +15,10 @@ on:
       - 'phase2/tools/monthly-move-forensics.mjs'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: radarx-monthly-move-forensics-pr-${{ github.event.pull_request.number }}
+  group: radarx-monthly-move-forensics-pr
   cancel-in-progress: false
 
 jobs:
@@ -25,11 +31,10 @@ jobs:
       FORENSICS_JSON_PATH: reports/monthly-move-forensics.json
       FORENSICS_MARKDOWN_PATH: reports/monthly-move-forensics.md
     steps:
-      - name: Check out Build 224 PR head
+      - name: Check out Build 224 research head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -56,7 +61,20 @@ jobs:
             if (deep.length === 0) throw new Error('NO_DEEP_FORENSIC_CASES');
           "
 
-      - name: Upload JSON and Markdown reports
+      - name: Persist compact Markdown result to research branch
+        if: success()
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add reports/monthly-move-forensics.md
+          if ! git diff --cached --quiet; then
+            git commit -m 'research(build224): record rolling monthly mover forensics'
+            git push origin HEAD
+          else
+            echo 'Markdown report unchanged; no report commit needed.'
+          fi
+
+      - name: Upload full JSON and Markdown reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
