@@ -203,7 +203,7 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   // A very small, capped Micro-only lane watches strong short-term bursts below
   // the regular daily-liquidity floor. It never relaxes entry/alert gates.
   lowLiquidityBurstBypassEnabled:true,
-  lowLiquidityBurstMinQuoteVolumeRatio:0.001,
+  lowLiquidityBurstMinQuoteVolumeRatio:0.000001,
   lowLiquidityBurstBypassMaxCandidates:4,
   // Relaxed thresholds create extra bounded WATCH-only observations; they never lower alert gates.
   fastEarlyWatchEnabled:true,
@@ -931,7 +931,7 @@ export function ensureRadar8ScoreContainer(entry,fastScore=INCOMPLETE){
 
 export function selectUnderfloorFastShockCandidates({
   rows=[],fastBySymbol=new Map(),pendingUntilBySymbol=new Map(),now=Date.now(),
-  minQuoteVolume24h=750000,minQuoteVolumeRatio=0.001,limit=4,config={},lastMicroScannedAt=()=>null
+  minQuoteVolume24h=750000,minQuoteVolumeRatio=0.000001,limit=4,config={},lastMicroScannedAt=()=>null
 }={}){
   const floor=Number(minQuoteVolume24h);
   if(!(Number.isFinite(floor)&&floor>0))return [];
@@ -2425,7 +2425,7 @@ export class EarlyExpansionRadar{
         selectUnderfloorFastShockCandidates({
           rows:[...rawBySymbol.values()],fastBySymbol,pendingUntilBySymbol:this.fastShockPendingUntil,
           now:fastSeenAt,minQuoteVolume24h:this.config.minQuoteVolume24h,
-          minQuoteVolumeRatio:this.config.lowLiquidityBurstMinQuoteVolumeRatio??0.001,
+          minQuoteVolumeRatio:this.config.lowLiquidityBurstMinQuoteVolumeRatio??0.000001,
           limit:this.config.lowLiquidityBurstBypassMaxCandidates??4,config:this.config,
           lastMicroScannedAt:symbol=>this.scheduler.lastScanAt('MICRO',symbol)
         });

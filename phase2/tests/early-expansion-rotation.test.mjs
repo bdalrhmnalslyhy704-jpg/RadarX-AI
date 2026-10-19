@@ -1226,18 +1226,19 @@ test('Radar 8 gives moderate early-watch flow bounded Deep priority only after c
 });
 
 
-test('Radar 8 watches sub-10%-floor micro-liquidity bursts without relaxing public eligibility',()=>{
+test('Radar 8 watches very-low-liquidity coins with observed flow while keeping the public alert gate closed',()=>{
   const floor=100_000;
-  const row={symbol:'MICROCAPUSDT',lastPrice:.008,priceChange24h:.2,quoteVolume24h:9_000,tradeCount24h:500};
+  const row={symbol:'MICROCAPUSDT',lastPrice:.008,priceChange24h:.2,quoteVolume24h:9,tradeCount24h:500};
   const fastBySymbol=new Map([['MICROCAPUSDT',{
     warmed_up:true,price_change_pct:.5,price_acceleration_pct:.2,
-    volume_accel_ratio:8,trade_accel_ratio:5,volume_delta_quote:900,trade_delta:20
+    volume_accel_ratio:8,trade_accel_ratio:5,volume_delta_quote:.9,trade_delta:20
   }]]);
   const selected=selectUnderfloorFastShockCandidates({
     rows:[row],fastBySymbol,pendingUntilBySymbol:new Map([['MICROCAPUSDT',now+60_000]]),
-    now,minQuoteVolume24h:floor,minQuoteVolumeRatio:.001,limit:4
+    now,minQuoteVolume24h:floor,limit:4
   });
-  assert.deepEqual(selected.map(x=>x.symbol),['MICROCAPUSDT']);
+  assert.deepEqual(selected.map(x=>x.symbol),['MICROCAPUSDT'],
+    'the default watch floor is near zero but still requires observed live activity');
   assert.equal(selected[0]._low_liquidity_burst_bypass,true);
   assert.equal(isEarlyExpansionCandidateAlertEligible({
     early_expansion_score:99,decision_band:'PRE_EXPANSION',data_quality:100,data_stale:false,
