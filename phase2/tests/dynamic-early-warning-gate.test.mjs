@@ -52,7 +52,7 @@ test('very strong long-window buy flow may emit only a watch when the completed 
         volume_ratio:43.5548,trade_ratio:11.0909,
         taker_buy_ratio:0.9315,three_second_taker_buy_ratio:null,
         three_second_liquidity:{available:false,taker_buy_ratio:null},
-        independent_confirmations:8,breakout_up:true,micro_breakout:true
+        flash_confirmations:8,breakout_up:true,micro_breakout:true
       }
     }
   });
