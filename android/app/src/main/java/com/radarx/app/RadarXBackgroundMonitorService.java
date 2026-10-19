@@ -441,15 +441,28 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     /**
-     * Reject observations and stale/non-actionable setup states at the last-mile
-     * notification boundary. Older radar endpoints can omit an explicit eligible
-     * field; only explicit negative eligibility and known monitor-only states block.
+     * Reject monitor-only, stale-data and non-actionable setup states at the last-mile
+     * notification boundary. Older radar endpoints can omit explicit eligibility fields,
+     * so known invalid states and failed gates must never default into a user notification.
      */
     private static boolean isActionableRadarAlert(JSONObject alert) {
         if (alert == null) return false;
         if (alert.optBoolean("watch_only", false) || alert.optBoolean("monitor_only", false)) return false;
         if (alert.has("eligible") && !alert.optBoolean("eligible", false)) return false;
         if (alert.has("entry_eligible") && !alert.optBoolean("entry_eligible", false)) return false;
+        if (alert.optBoolean("data_stale", false)) return false;
+        JSONObject dataStatus = alert.optJSONObject("data_status");
+        if (dataStatus != null && (dataStatus.optBoolean("stale", false) ||
+                dataStatus.optBoolean("data_stale", false) ||
+                "DATA_STALE".equalsIgnoreCase(dataStatus.optString("status", "")) ||
+                "DATA_UNAVAILABLE".equalsIgnoreCase(dataStatus.optString("status", "")))) return false;
+        JSONObject eliteGate = alert.optJSONObject("elite_gate");
+        if (eliteGate != null && eliteGate.has("eligible") && !eliteGate.optBoolean("eligible", false)) return false;
+        JSONObject notificationGate = alert.optJSONObject("notification_gate");
+        if (notificationGate != null && notificationGate.has("eligible") &&
+                !notificationGate.optBoolean("eligible", false)) return false;
+        if (alert.has("data_quality") && alert.optDouble("data_quality", 0.0) < 70.0) return false;
+        if (alert.has("market") && !"SPOT".equalsIgnoreCase(alert.optString("market", ""))) return false;
 
         String event = alert.optString("event", alert.optString("type", "")).toUpperCase(Locale.ROOT);
         if (event.contains("WATCH_ONLY") || event.contains("MONITOR_ONLY")) return false;
@@ -467,6 +480,16 @@ public final class RadarXBackgroundMonitorService extends Service {
             case "EXTENDED":
             case "HIGH_RISK_PUMP":
             case "DATA_INSUFFICIENT":
+            case "STALE_DATA":
+            case "DATA_STALE":
+            case "DATA_UNAVAILABLE":
+            case "INSUFFICIENT_DATA":
+            case "INCOMPLETE_DATA":
+            case "WARMING_UP":
+            case "INVALID_PRICE":
+            case "DATA_GAP":
+            case "STALE_CLOSED_CANDLES":
+            case "CLOSED_CANDLE_GAP":
             case "NO_SIGNAL":
             case "INVALIDATED":
             case "CANCELLED":
@@ -485,8 +508,11 @@ public final class RadarXBackgroundMonitorService extends Service {
                 if (risk.contains("WATCH_ONLY") || risk.contains("MONITOR_ONLY_NOT_ENTRY") ||
                         risk.contains("ALREADY_EXTENDED") || risk.contains("HIGH_RISK_PUMP") ||
                         risk.contains("WIDE_SPREAD") || risk.contains("DATA_INSUFFICIENT") ||
+                        risk.contains("STALE_DATA") || risk.contains("STALE_CLOSED_CANDLES") ||
+                        risk.contains("CLOSED_CANDLE_GAP") || risk.contains("DATA_GAP") ||
                         risk.contains("CONTINUATION_NOT_CONFIRMED") || risk.contains("FAILED_BREAKOUT") ||
-                        risk.contains("LOW_LIQUIDITY")) {
+                        risk.contains("LOW_LIQUIDITY") || risk.contains("LOW_24H_QUOTE_VOLUME_ADVISORY") ||
+                        risk.contains("24H_ALREADY_EXTENDED") || risk.contains("EXTENDED_CHASE")) {
                     return false;
                 }
             }
