@@ -51,10 +51,24 @@ assert.match(background,/CHANNEL_ROTATION_ALERTS/);
 assert.match(background,/KAHIR_RADAR/);
 
 const tradliActivity = await readFile(new URL('./app/src/main/java/com/radarx/app/TradliActivity.java', import.meta.url), 'utf8');
-assert.match(tradliActivity,/PRIMARY_BACKEND_ORIGIN\s*=\s*"https:\/\/radarx-ai-triple-production\.up\.railway\.app"/);
-assert.match(tradliActivity,/FALLBACK_BACKEND_ORIGIN\s*=\s*"https:\/\/radarx-ai-production\.up\.railway\.app"/);
+assert.match(tradliActivity,/PRIMARY_BACKEND_ORIGIN\s*=\s*BuildConfig\.RADARX_BACKEND_ORIGIN/);
+assert.match(tradliActivity,/FALLBACK_BACKEND_ORIGIN\s*=\s*BuildConfig\.RADARX_BACKEND_FALLBACK_ORIGIN/);
 assert.match(tradliActivity,/PRIMARY_BACKEND_ORIGIN\.equalsIgnoreCase\(origin\)/);
 assert.match(tradliActivity,/FALLBACK_BACKEND_ORIGIN\.equalsIgnoreCase\(origin\)/);
+const mainActivitySource = await readFile(new URL('./app/src/main/java/com/radarx/app/MainActivity.java', import.meta.url), 'utf8');
+const monitorSource = await readFile(new URL('./app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java', import.meta.url), 'utf8');
+const pushRegistrationSource = await readFile(new URL('./app/src/main/java/com/radarx/app/RadarXPushRegistration.java', import.meta.url), 'utf8');
+const backendConfigBridgeSource = await readFile(new URL('./app/src/main/java/com/radarx/app/RadarXBackendConfigBridge.java', import.meta.url), 'utf8');
+const androidBuildFile = await readFile(new URL('./app/build.gradle', import.meta.url), 'utf8');
+assert.match(mainActivitySource,/BACKEND_ORIGIN\s*=\s*BuildConfig\.RADARX_BACKEND_ORIGIN/);
+assert.match(mainActivitySource,/new RadarXBackendConfigBridge\(\),\s*"RadarXBackendConfig"/);
+assert.match(monitorSource,/BuildConfig\.RADARX_BACKEND_ORIGIN/);
+assert.match(pushRegistrationSource,/BACKEND\s*=\s*BuildConfig\.RADARX_BACKEND_ORIGIN/);
+assert.match(backendConfigBridgeSource,/getBackendOrigin\(\)[\s\S]*?BuildConfig\.RADARX_BACKEND_ORIGIN/);
+assert.match(backendConfigBridgeSource,/getBackendFallbackOrigin\(\)[\s\S]*?BuildConfig\.RADARX_BACKEND_FALLBACK_ORIGIN/);
+assert.match(androidBuildFile,/buildConfigField\s+"String",\s+"RADARX_BACKEND_ORIGIN"/);
+assert.match(androidBuildFile,/buildConfigField\s+"String",\s+"RADARX_BACKEND_FALLBACK_ORIGIN"/);
+
 const manifest = await readFile(new URL('./app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
 const mainActivity = await readFile(new URL('./app/src/main/java/com/radarx/app/MainActivity.java', import.meta.url), 'utf8');
 assert.match(manifest,/android:foregroundServiceType="dataSync\\|specialUse"/);
