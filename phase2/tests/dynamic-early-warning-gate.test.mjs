@@ -67,6 +67,34 @@ test('very strong long-window buy flow may emit only a watch when the completed 
   assert.equal(result.flow_evidence.three_second_bucket_available,false);
 });
 
+test('exceptional historical flow can pass the watch-only fallback when the caller has no dedicated missing-3s failure code',()=>{
+  const alert=wLike({
+    eligible:false,
+    risk_flags:['THREE_SECOND_FLOW_UNAVAILABLE','VOLATILITY_EXTREME'],
+    strong_move:{
+      ...wLike().strong_move,score:86.87,
+      trigger_diagnostics:{eligible:false,failed_checks:[]},
+      metrics:{
+        return_1m:0.6650,return_3m:0.6484,acceleration:0.3342,
+        volume_ratio:43.5548,trade_ratio:11.0909,
+        taker_buy_ratio:0.9315,three_second_taker_buy_ratio:null,
+        three_second_liquidity:{available:false,taker_buy_ratio:null},
+        independent_confirmations:8,breakout_up:true,micro_breakout:true
+      }
+    }
+  });
+  const result=evaluateDynamicEarlyWarningGate(alert,{...row,priceChange24h:0.39},{
+    now:NOW,alertScore:86.87,minQuoteVolume24h:1_000_000,
+    strictFailures:['STRONG_MOVE_CORE_GATE_FAILED','ELITE_GATE_NOT_ELIGIBLE'],
+    coreTriggerFailures:[]
+  });
+  assert.equal(result.eligible,true,JSON.stringify(result.failures));
+  assert.equal(result.fallback_3s_flow,true);
+  assert.ok(result.soft_failures.includes('STRICT_CORE_GATE_FAILED_EXCEPTIONAL_FLOW_WATCH_ONLY'));
+  assert.equal(result.flow_evidence.three_second_bucket_available,false);
+  assert.equal(result.alert_class,'PRE_EXPANSION_WATCH');
+});
+
 test('ordinary low-baseline confluence is withheld unless flow, volume and trade participation are exceptional',()=>{
   const alert=wLike({
     price_change_24h:3.37,
