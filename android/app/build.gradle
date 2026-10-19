@@ -1,6 +1,118 @@
+import java.net.URI
+
 plugins {
     id "com.android.application"
 }
+
+// Configurable HTTPS backend origins. Defaults keep existing Build 224 behavior;
+// the DHDTech origin can be supplied via GitHub Actions variables/environment.
+def resolveBackendOrigin = { name, defaultValue ->
+    def raw = (project.findProperty(name) ?: System.getenv(name) ?: defaultValue)
+        .toString().trim().replaceAll('/+
+// Build and development branches remain usable without the owner's Firebase project.
+// When android/app/google-services.json is provisioned, enable the plugin automatically.
+if (file("google-services.json").isFile()) {
+    apply plugin: "com.google.gms.google-services"
+}
+
+def isReleaseBuildRequested = gradle.startParameter.taskNames.any { taskName ->
+    taskName.toLowerCase().contains("release") || taskName.toLowerCase().contains("bundle")
+}
+
+def requiredReleaseSigningEnv = [
+    "ANDROID_RELEASE_STORE_PASSWORD",
+    "ANDROID_RELEASE_KEY_ALIAS",
+    "ANDROID_RELEASE_KEY_PASSWORD"
+]
+
+def missingReleaseSigningEnv = requiredReleaseSigningEnv.findAll { name ->
+    !(System.getenv(name) ?: "").trim()
+}
+
+def releaseKeystoreFile = System.getenv("ANDROID_RELEASE_KEYSTORE_FILE")
+def releaseKeystoreReady = releaseKeystoreFile && file(releaseKeystoreFile).isFile()
+
+if (isReleaseBuildRequested && (!missingReleaseSigningEnv.isEmpty() || !releaseKeystoreReady)) {
+    def missing = new ArrayList(missingReleaseSigningEnv)
+    if (!releaseKeystoreReady) {
+        missing.add("ANDROID_RELEASE_KEYSTORE_FILE (temporary Runner path)")
+    }
+    throw new GradleException(
+        "Secure Release signing is required. Missing signing inputs: " +
+        missing.join(", ") +
+        ". Configure the four GitHub Actions Secrets and let the Release workflow create the temporary keystore file."
+    )
+}
+
+android {
+    namespace "com.radarx.app"
+    compileSdk 35
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    defaultConfig {
+        applicationId "com.radarx.app"
+        minSdk 23
+        targetSdk 35
+        versionCode 15
+        versionName "1.4.9"
+        buildConfigField "String", "RADARX_BACKEND_ORIGIN", "\"\${radarxBackendOrigin}\""
+        buildConfigField "String", "RADARX_BACKEND_FALLBACK_ORIGIN", "\"\${radarxBackendFallbackOrigin}\""
+    }
+
+    signingConfigs {
+        release {
+            if (releaseKeystoreReady && missingReleaseSigningEnv.isEmpty()) {
+                storeFile file(releaseKeystoreFile)
+                storePassword System.getenv("ANDROID_RELEASE_STORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_RELEASE_KEY_ALIAS")
+                keyPassword System.getenv("ANDROID_RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+            signingConfig signingConfigs.release
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation "androidx.webkit:webkit:1.13.0"
+    implementation platform("com.google.firebase:firebase-bom:34.19.0")
+    implementation "com.google.firebase:firebase-messaging"
+}
+, '')
+    URI parsed
+    try {
+        parsed = new URI(raw)
+    } catch (Exception ignored) {
+        throw new GradleException("${name} must be a valid HTTPS origin")
+    }
+    if (parsed.scheme != 'https' || !parsed.host || parsed.rawUserInfo != null ||
+        parsed.rawQuery != null || parsed.rawFragment != null ||
+        (parsed.rawPath != null && parsed.rawPath != '' && parsed.rawPath != '/') ||
+        (parsed.port != -1 && parsed.port != 443)) {
+        throw new GradleException("${name} must be an HTTPS origin without a path, credentials, query, or fragment")
+    }
+    return "${parsed.scheme}://${parsed.rawAuthority}"
+}
+
+def radarxBackendOrigin = resolveBackendOrigin(
+    "RADARX_BACKEND_ORIGIN", "https://radarx-ai-triple-production.up.railway.app")
+def radarxBackendFallbackOrigin = resolveBackendOrigin(
+    "RADARX_BACKEND_FALLBACK_ORIGIN", "https://radarx-ai-production.up.railway.app")
 
 // Build and development branches remain usable without the owner's Firebase project.
 // When android/app/google-services.json is provisioned, enable the plugin automatically.
