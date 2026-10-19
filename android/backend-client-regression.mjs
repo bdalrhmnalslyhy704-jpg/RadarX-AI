@@ -25,6 +25,21 @@ assert.doesNotMatch(moveService,/عند انقطاع الإنترنت: حُفظ 
 const screen=await readFile(new URL('./app/src/main/assets/radarx-market-radar-screen.mjs',import.meta.url),'utf8');
 assert.match(screen,/SCAN_COMPLETE/);
 assert.match(screen,/Paper Trading/);
+// Android WebView may provide a validated, build-time backend origin through the native bridge.
+// Verify the client honors that origin while rejecting any unlisted destination.
+globalThis.window = {
+  RadarXBackendConfig: {
+    getBackendOrigin: () => 'https://api.radarx-build224-test.invalid',
+    getBackendFallbackOrigin: () => 'https://backup.radarx-build224-test.invalid'
+  },
+  addEventListener() {}
+};
+const configuredClient = await import('./app/src/main/assets/radarx-backend-client.mjs?backend-origin-regression');
+assert.equal(configuredClient.DEFAULT_BACKEND_BASE_URL, 'https://api.radarx-build224-test.invalid');
+assert.equal(configuredClient.normalizeBackendBaseUrl('https://backup.radarx-build224-test.invalid/'), 'https://backup.radarx-build224-test.invalid');
+assert.throws(() => configuredClient.normalizeBackendBaseUrl('https://unapproved.example'), /BACKEND_ORIGIN_NOT_ALLOWED/);
+delete globalThis.window;
+
 console.log('Android backend-client regression tests passed');
 
 // Dashboard CI trigger; no runtime behavior.
