@@ -979,7 +979,7 @@ export function isConfirmedEarlyFlowWatchCandidate({
 export function buildMicroEarlyFlowWatchCandidate(micro,now=Date.now(),config=EARLY_EXPANSION_RADAR_DEFAULTS){
   const row=micro?.row||{},fast=micro?.fast||{},fp=micro?.micro_fingerprint||{};
   const symbol=String(row?.symbol||'').trim().toUpperCase();
-  if(!symbol||micro?.failed===true)return null;
+  if(!symbol||micro?.failed===true||fp?.eligible===true)return null;
   const lastOne=closed(micro?.oneMinute,Number(now)).at(-1)||null;
   const lastFive=closed(micro?.fiveMinute,Number(now)).at(-1)||null;
   const closeTime=hasFiniteNumber(lastOne?.closeTime)?Number(lastOne.closeTime):
@@ -2864,6 +2864,32 @@ export class EarlyExpansionRadar{
 
       const microScanned=await microScanPromise;
       const microFlowWatchCandidates=microScanned.map(item=>buildMicroEarlyFlowWatchCandidate(item,this.clock(),this.config)).filter(Boolean);
+      let watchAlertsThisCycle=0;
+      const previousEarlyFlowWatchKeys=new Set(historyAlerts.filter(x=>x?.event==='EARLY_FLOW_WATCH_ONLY').map(x=>String(x?.id||'')));
+      // Persist Micro-confirmed watch-only observations before spending time on the
+      // bounded Deep batch. The selector has already enforced closed candle, score,
+      // confirmations, participation, positive flow and anti-chase constraints.
+      for(const candidate of microFlowWatchCandidates){
+        const symbol=String(candidate.symbol||'').toUpperCase();
+        const watchAlert=buildEarlyFlowWatchAlert(candidate,now);
+        const watchKey=String(watchAlert.id||'');
+        const lastAt=Number(this.lastEarlyFlowWatchAt.get(symbol)||0);
+        const cooldown=Math.max(0,Number(this.config.earlyFlowWatchCooldownMs??10*60*1000));
+        if(previousEarlyFlowWatchKeys.has(watchKey)||this.lastEarlyFlowWatchKeyBySymbol.get(symbol)===watchKey||now-lastAt<cooldown)continue;
+        const watchStatus=await this.recordWatchOnlyAlert(watchAlert,'MICRO_EARLY_FLOW_WATCH_TRACE');
+        if(!watchStatus.stored)continue;
+        this.lastEarlyFlowWatchAt.set(symbol,now);
+        this.lastEarlyFlowWatchKeyBySymbol.set(symbol,watchKey);
+        previousEarlyFlowWatchKeys.add(watchKey);
+        watchAlertsThisCycle++;
+        const journeyEntry=journeyEntries.get(symbol);
+        if(journeyEntry){
+          journeyEntry.notification_status=watchStatus.pushStatus;
+          journeyEntry.notification_gate_rejection_reason='WATCH_ONLY_NOT_ENTRY_ELIGIBLE';
+          journeyEntry.alert_id=watchKey;
+          journeyEntry.alert_stage='WATCH_EARLY';
+        }
+      }
       phaseTimings.micro_scan_ms=Math.max(0,microScanCompletedAt-microScanStartedAt);
       phaseTimings.market_micro_overlap_ms=Math.max(0,
         Math.min(marketContextCompletedAt,microScanCompletedAt)-Math.max(marketContextStartedAt,microScanStartedAt));
@@ -3162,8 +3188,7 @@ export class EarlyExpansionRadar{
       await recordPreExpansionSignals(this.store,evaluationObservations,{now,marketContext,logger:this.logger}).catch(e=>this.noteError(e,'outcome-record'));
       phaseTimings.signal_archive_ms=Math.max(0,this.clock()-signalArchiveStartedAt);
       const notificationStartedAt=this.clock();
-      let alertsThisCycle=0,watchAlertsThisCycle=0;
-      const previousEarlyFlowWatchKeys=new Set(historyAlerts.filter(x=>x?.event==='EARLY_FLOW_WATCH_ONLY').map(x=>String(x?.id||'')));
+      let alertsThisCycle=0;
       const previousActivityShockKeys=new Set(historyAlerts.filter(x=>x?.activity_shock?.detected===true)
         .map(x=>'RADAR8_ACTIVITY_SHOCK:'+String(x?.symbol||'').toUpperCase()+':'+Number(x?.activity_shock?.detected_candle_close_time||0)));
       for(const candidate of ok){
@@ -3252,30 +3277,6 @@ export class EarlyExpansionRadar{
           }
         }
         if(!this.lastBand.has(candidate.symbol)||bandChanged)this.lastBand.set(candidate.symbol,candidate.decision_band);
-      }
-      const publicEligibleWatchSymbols=new Set(ok.filter(candidate=>
-        isEarlyExpansionCandidateAlertEligible(candidate,this.config)).map(candidate=>String(candidate.symbol||'').toUpperCase()));
-      for(const candidate of microFlowWatchCandidates){
-        const symbol=String(candidate.symbol||'').toUpperCase();
-        if(publicEligibleWatchSymbols.has(symbol))continue;
-        const watchAlert=buildEarlyFlowWatchAlert(candidate,now);
-        const watchKey=String(watchAlert.id||'');
-        const lastAt=Number(this.lastEarlyFlowWatchAt.get(symbol)||0);
-        const cooldown=Math.max(0,Number(this.config.earlyFlowWatchCooldownMs??10*60*1000));
-        if(previousEarlyFlowWatchKeys.has(watchKey)||this.lastEarlyFlowWatchKeyBySymbol.get(symbol)===watchKey||now-lastAt<cooldown)continue;
-        const watchStatus=await this.recordWatchOnlyAlert(watchAlert,'MICRO_EARLY_FLOW_WATCH_TRACE');
-        if(!watchStatus.stored)continue;
-        this.lastEarlyFlowWatchAt.set(symbol,now);
-        this.lastEarlyFlowWatchKeyBySymbol.set(symbol,watchKey);
-        previousEarlyFlowWatchKeys.add(watchKey);
-        watchAlertsThisCycle++;
-        const journeyEntry=journeyEntries.get(symbol);
-        if(journeyEntry){
-          journeyEntry.notification_status=watchStatus.pushStatus;
-          journeyEntry.notification_gate_rejection_reason='WATCH_ONLY_NOT_ENTRY_ELIGIBLE';
-          journeyEntry.alert_id=watchKey;
-          journeyEntry.alert_stage='WATCH_EARLY';
-        }
       }
       phaseTimings.notification_ms=Math.max(0,this.clock()-notificationStartedAt);
       this.scans++;this.lastScanAtMs=now;this.lastError=null;
