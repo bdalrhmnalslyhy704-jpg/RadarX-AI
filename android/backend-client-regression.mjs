@@ -71,6 +71,10 @@ const backendConfigBridgeSource = await readFile(new URL('./app/src/main/java/co
 const androidBuildFile = await readFile(new URL('./app/build.gradle', import.meta.url), 'utf8');
 assert.match(mainActivitySource,/BACKEND_ORIGIN\s*=\s*BuildConfig\.RADARX_BACKEND_ORIGIN/);
 assert.match(mainActivitySource,/new RadarXBackendConfigBridge\(\),\s*"RadarXBackendConfig"/);
+const bottomRadarActivitySource = await readFile(new URL('./app/src/main/java/com/radarx/app/BottomRadarActivity.java', import.meta.url), 'utf8');
+assert.match(bottomRadarActivitySource,/BACKEND_ORIGIN\s*=\s*BuildConfig\.RADARX_BACKEND_ORIGIN/);
+assert.match(bottomRadarActivitySource,/new RadarXBackendConfigBridge\(\),\s*"RadarXBackendConfig"/);
+assert.match(bottomRadarActivitySource,/if \(isAllowedBackendUri\(uri\)\) return fetchBackend\(request\)/);
 assert.match(monitorSource,/BuildConfig\.RADARX_BACKEND_ORIGIN/);
 assert.match(pushRegistrationSource,/BACKEND\s*=\s*BuildConfig\.RADARX_BACKEND_ORIGIN/);
 assert.match(backendConfigBridgeSource,/getBackendOrigin\(\)[\s\S]*?BuildConfig\.RADARX_BACKEND_ORIGIN/);
