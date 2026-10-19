@@ -19,6 +19,22 @@ function closed(rows,now){
   ).sort((a,b)=>Number(a.openTime)-Number(b.openTime));
 }
 
+function candleWindowIssue(rows,now,intervalMs,required,label){
+  if(rows.length<required)return {stage:'INSUFFICIENT_DATA',reason:label+'_INSUFFICIENT_CLOSED_CANDLES'};
+  const tail=rows.slice(-required);
+  const latestClose=Number(tail.at(-1)?.closeTime);
+  if(!Number.isFinite(latestClose)||latestClose>now||now-latestClose>intervalMs*2+15_000){
+    return {stage:'DATA_STALE',reason:label+'_STALE_CLOSED_CANDLES'};
+  }
+  for(let i=1;i<tail.length;i++){
+    const delta=Number(tail[i].openTime)-Number(tail[i-1].openTime);
+    if(!Number.isFinite(delta)||Math.abs(delta-intervalMs)>1000){
+      return {stage:'DATA_GAP',reason:label+'_CLOSED_CANDLE_GAP'};
+    }
+  }
+  return null;
+}
+
 function depthStats(book,price){
   if(!(price>0)||!book)return {
     spreadBps:null,nearBid:0,nearAsk:0,midBid:0,midAsk:0,
@@ -169,8 +185,13 @@ function relativeContext(ticker,btc){
 export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggTrades,book,previousBook=null,now=Date.now(),config={}}={}){
   const t=ticker||{},price=finite(t.lastPrice,0);
   const prints=largePrintStats(aggTrades,t,now,config);
-  const candles=candleAccumulation(oneMinute,now);
+  const one=closed(oneMinute,now);
+  const candles=candleAccumulation(one,now);
   const five=closed(fiveMinute,now);
+  // The whale score combines short-window volume/flow with 5m confirmation.
+  // Reject stale caches or missing intervals before a candle-derived score can alert.
+  const candleIssue=candleWindowIssue(one,now,60_000,30,'ONE_MINUTE')||
+    candleWindowIssue(five,now,300_000,6,'FIVE_MINUTE');
   const depth=depthStats(book,price);
   const previous=depthStats(previousBook,price);
   const depthPersistence=previousBook
@@ -224,6 +245,7 @@ export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggT
     relativeNeutrality(quiet24)*.03
   );
   const eligible=
+    !candleIssue&&
     price>0&&
     score>=Number(config.minScore||84)&&
     confirmationCount>=Number(config.minConfirmations||8)&&
@@ -235,7 +257,8 @@ export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggT
     supportScore>=Number(config.minSupportScore||65)&&
     spreadOk&&
     notExtended;
-  const stage=eligible&&score>=92?'WHALE_ACCUMULATION_CONFIRMED':score>=87?'WHALE_ACCUMULATION_ACTIVE':score>=78?'WHALE_BUILDING':'WATCH';
+  const stage=candleIssue?candleIssue.stage:
+    eligible&&score>=92?'WHALE_ACCUMULATION_CONFIRMED':score>=87?'WHALE_ACCUMULATION_ACTIVE':score>=78?'WHALE_BUILDING':'WATCH';
   const direction=buyDominance>=65?'BUY_SIDE':'BALANCED';
   const reasons=[];
   const push=(ok,s)=>{if(ok)reasons.push(s)};
@@ -259,8 +282,12 @@ export function buildWhaleAccumulationAnalysis({ticker,oneMinute,fiveMinute,aggT
   if(prints.largeNotionalRatio<0)risk.push('LARGE_SELL_PRESSURE');
   if(depth.nearImbalance<0)risk.push('ASK_DEPTH_DOMINANT');
   if(!previousBook)risk.push('NO_DEPTH_PERSISTENCE_YET');
+  if(candleIssue)risk.push(candleIssue.reason);
   return {
-    eligible,stage,score:Number(score.toFixed(1)),direction,
+    eligible,stage,score:candleIssue?null:Number(score.toFixed(1)),direction,
+    data_stale:candleIssue?.stage==='DATA_STALE',
+    data_quality:candleIssue?0:90,
+    data_quality_reasons:candleIssue?[candleIssue.reason]:[],
     confirmation_count:confirmationCount,confirmation_total:confirmations.length,
     large_prints:prints,candle_flow:candles,orderbook:depth,
     orderbook_persistence:{score:Number(depthPersistence.toFixed(1)),has_previous:Boolean(previousBook),previous_near_imbalance:Number(previous.nearImbalance.toFixed(4)),current_near_imbalance:Number(depth.nearImbalance.toFixed(4))},
