@@ -13,7 +13,11 @@ WORKDIR /src
 RUN git clone --depth 1 --filter=blob:none --sparse \
       --branch build224-multi-analyst-20261007 \
       https://github.com/bdalrhmnalslyhy704-jpg/RadarX-AI.git . \
-    && git sparse-checkout set phase1 phase2
+    && git sparse-checkout set --no-cone \
+      '/package.json' \
+      '/package-lock.json' \
+      '/phase1/**' \
+      '/phase2/**'
 
 FROM node:22-bookworm-slim
 
