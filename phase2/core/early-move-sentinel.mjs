@@ -49,6 +49,17 @@ function strategyScore(candidate) {
   return {acceptedCount:accepted.length,bestScore:best,acceptedMean};
 }
 
+function marketEvidenceValid(candidate){
+  const status=candidate?.data_status||{};
+  const normalized=String(status.status||'').toUpperCase();
+  return candidate?.data_stale!==true &&
+    status.data_valid!==false &&
+    status.data_stale!==true &&
+    status.stale!==true &&
+    status.future_data_detected!==true &&
+    !['DATA_STALE','DATA_UNAVAILABLE','OFFLINE'].includes(normalized);
+}
+
 function component(candidate,keyPaths,fallback=50){
   for(const path of keyPaths){
     let node=candidate;
@@ -113,14 +124,15 @@ export function buildMoveAlert(candidate,trigger,{now=Date.now()}={}) {
   );
 
   const opportunityScore=direction==='UP_MOVE'?clamp(setupScore*0.6+expansionPotential*0.4):reversalPotential;
-  const eligible=direction==='UP_MOVE'
+  const evidenceValid=marketEvidenceValid(candidate);
+  const eligible=evidenceValid&&(direction==='UP_MOVE'
     ? dataQuality>=MOVE_RADAR_DEFAULTS.minDataQuality &&
       liquidity>=MOVE_RADAR_DEFAULTS.minLiquidityQuality &&
       strategies.bestScore>=65 &&
       opportunityScore>=70
     : dataQuality>=MOVE_RADAR_DEFAULTS.minDataQuality &&
       liquidity>=MOVE_RADAR_DEFAULTS.minLiquidityQuality &&
-      reversalPotential>=72;
+      reversalPotential>=72);
 
   const reasons=[];
   const push=(ok,text)=>{if(ok)reasons.push(text)};
@@ -301,7 +313,7 @@ export function buildEarlyWakeAlert(candidate,trigger,{now=Date.now()}={}) {
     mtf*0.01+
     preMove*0.04
   );
-  const eligible=!alreadyMoved&&calmEnough&&
+  const eligible=marketEvidenceValid(candidate)&&!alreadyMoved&&calmEnough&&
     dataQuality>=75&&
     liquidity>=65&&
     leaders.length>=MOVE_RADAR_DEFAULTS.earlyWakeMinLeaders&&
@@ -449,7 +461,7 @@ export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
     liquidity*0.03
   );
 
-  const eligible=!alreadyMoved&&calmEnough&&
+  const eligible=marketEvidenceValid(candidate)&&!alreadyMoved&&calmEnough&&
     dataQuality>=80&&
     liquidity>=70&&
     strategies.bestScore>=MOVE_RADAR_DEFAULTS.earlyMinStrategyScore&&

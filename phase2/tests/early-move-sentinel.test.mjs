@@ -324,3 +324,17 @@ test('newer ticker refreshes a queued snapshot without downgrading a stronger tr
   assert.equal(sentinel.deepQueue[0].queuedAt,now-1000);
 });
 
+
+
+test('Early Move, Early Wake and Pre-Explosion never qualify explicitly stale or future market evidence',()=>{
+  const stale={...candidate,data_quality:99,liquidity_quality:99,data_status:{status:'DATA_STALE',data_valid:true,data_stale:true,stale:true,future_data_detected:false}};
+  const move=buildMoveAlert(stale,{movePct:1.2,previousMovePct:.7},{now:1710000000000});
+  assert.equal(move.eligible,false);
+  const pre=buildPreExplosionAlert({...earlyCandidate,...stale,price_change_24h:.4},{movePct:.4,discoveryScore:91},{now:1710000001000});
+  assert.equal(pre.eligible,false);
+  const wake=buildEarlyWakeAlert({...wakeCandidate,...stale,price_change_24h:.55},{movePct:.55,previousMovePct:.30,deltaPct:.25},{now:1710000010000});
+  assert.equal(wake.eligible,false);
+
+  const future={...candidate,data_status:{data_valid:true,future_data_detected:true}};
+  assert.equal(buildMoveAlert(future,{movePct:1.2,previousMovePct:.7},{now:1710000000000}).eligible,false);
+});
