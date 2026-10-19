@@ -15,3 +15,17 @@ test('KING includes Falcon Eye as an independent radar instead of dropping its e
   assert.equal(x.data_policy.paper_trading,true);
   assert.equal(x.data_policy.real_order_execution,false);
 });
+
+
+test('KING ignores stale and future radar alerts when calculating independent agreement',()=>{
+  const now=Date.now();
+  const fresh=base('EARLY_MOVE_RADAR','SANDUSDT',90);
+  fresh.processed_at=now-30_000;
+  const stale=base('KAHIR_RADAR','SANDUSDT',99);
+  stale.processed_at=now-16*60_000;
+  const future=base('DOOMSDAY_RADAR','SANDUSDT',99);
+  future.processed_at=now+5*60_000;
+  const result=buildKingVerdict({symbol:'SANDUSDT',alerts:[fresh,stale,future],now});
+  assert.equal(result.independent_radar_count,1);
+  assert.deepEqual(result.independent_radars,['EARLY_MOVE_RADAR']);
+});
