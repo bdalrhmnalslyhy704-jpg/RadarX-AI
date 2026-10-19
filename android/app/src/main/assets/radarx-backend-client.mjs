@@ -1,39 +1,59 @@
-export const DEFAULT_BACKEND_BASE_URL = 'https://radarx-ai-triple-production.up.railway.app';
-export const BACKEND_FALLBACK_URLS = Object.freeze([
-  'https://radarx-ai-production.up.railway.app'
-]);
+const LEGACY_DEFAULT_BACKEND_BASE_URL = 'https://radarx-ai-triple-production.up.railway.app';
+const LEGACY_BACKEND_FALLBACK_URL = 'https://radarx-ai-production.up.railway.app';
+
+function configuredOrigin(method, fallback) {
+  try {
+    const bridge = typeof window !== 'undefined' ? window.RadarXBackendConfig : null;
+    const raw = bridge && typeof bridge[method] === 'function' ? bridge[method]() : '';
+    const value = String(raw || fallback).trim();
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || !url.hostname || url.username || url.password ||
+        (url.pathname !== '' && url.pathname !== '/') || url.search || url.hash ||
+        (url.port !== '' && url.port !== '443')) return fallback;
+    return url.origin;
+  } catch {
+    return fallback;
+  }
+}
+
+export const DEFAULT_BACKEND_BASE_URL = configuredOrigin('getBackendOrigin', LEGACY_DEFAULT_BACKEND_BASE_URL);
+const CONFIGURED_BACKEND_FALLBACK_URL = configuredOrigin('getBackendFallbackOrigin', LEGACY_BACKEND_FALLBACK_URL);
+export const BACKEND_FALLBACK_URLS = Object.freeze(
+  [CONFIGURED_BACKEND_FALLBACK_URL, LEGACY_BACKEND_FALLBACK_URL]
+    .filter((value, index, all) => value !== DEFAULT_BACKEND_BASE_URL && all.indexOf(value) === index)
+);
 
 function assertAllowedBackend(url) {
   const allowed = new Set([DEFAULT_BACKEND_BASE_URL, ...BACKEND_FALLBACK_URLS]);
-  if (!allowed.has(url.origin) || url.pathname !== '/' || url.username || url.password) {
+  if (!allowed.has(url.origin) || (url.pathname !== '' && url.pathname !== '/') || url.username || url.password ||
+      url.search || url.hash || (url.port !== '' && url.port !== '443')) {
     throw new Error('BACKEND_ORIGIN_NOT_ALLOWED');
   }
 }
 
 export function normalizeBackendBaseUrl(raw = DEFAULT_BACKEND_BASE_URL) {
-  const value = String(raw || '').trim().replace(/\/+$/, '');
+  let value = String(raw || '').trim();
+  while (value.endsWith('/')) value = value.slice(0, -1);
   if (!value) return DEFAULT_BACKEND_BASE_URL;
   const url = new URL(value);
-  if (!['http:', 'https:'].includes(url.protocol)) {
-    throw new Error('BACKEND_BASE_URL_MUST_USE_HTTP_OR_HTTPS');
-  }
+  if (url.protocol !== 'https:') throw new Error('BACKEND_BASE_URL_MUST_USE_HTTPS');
   assertAllowedBackend(url);
-  return DEFAULT_BACKEND_BASE_URL;
+  return url.origin;
 }
 
 const ACTIVE_BACKEND_CONTROLLERS = new Set();
 let PAGE_HIDDEN = false;
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', () => { PAGE_HIDDEN = true; cancelAllBackendRequests(); }, {capture:true});
+  window.addEventListener('pageshow', () => { PAGE_HIDDEN = false; }, {capture:true});
+}
 
 export function cancelAllBackendRequests() {
   for (const controller of ACTIVE_BACKEND_CONTROLLERS) {
     try { controller.abort(); } catch {}
   }
   ACTIVE_BACKEND_CONTROLLERS.clear();
-}
-
-if (typeof window !== 'undefined') {
-  window.addEventListener('pagehide', () => { PAGE_HIDDEN = true; cancelAllBackendRequests(); }, {capture:true});
-  window.addEventListener('pageshow', () => { PAGE_HIDDEN = false; }, {capture:true});
 }
 
 export async function requestJson(baseUrl, path, fetchImpl = globalThis.fetch, timeoutMs = 65000) {
