@@ -53,6 +53,13 @@ assert.match(service, /alert\.optBoolean\("entry_eligible", false\)/);
 assert.match(service, /case "WATCH_EARLY":/);
 assert.match(service, /case "ALREADY_EXTENDED":/);
 assert.match(service, /risk\.contains\("LOW_LIQUIDITY"\)/);
+assert.match(service, /alert\.optBoolean\("data_stale", false\)/);
+assert.match(service, /optJSONObject\("elite_gate"\)/);
+assert.match(service, /optJSONObject\("notification_gate"\)/);
+assert.match(service, /case "STALE_DATA":/);
+assert.match(service, /case "DATA_GAP":/);
+assert.match(service, /risk\.contains\("24H_ALREADY_EXTENDED"\)/);
+assert.match(service, /risk\.contains\("LOW_24H_QUOTE_VOLUME_ADVISORY"\)/);
 assert.match(service, /notifyNewRadarAlerts\(JSONArray alerts, boolean oldestFirst, boolean cursorAdvanceAllowed\)/,
   'notifications must preserve oldest-first replay order after reconnect');
 assert.match(service, /persistDurableAlertCursor\(at, replayKey, seen\)/,
