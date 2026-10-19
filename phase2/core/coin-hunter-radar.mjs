@@ -1,4 +1,6 @@
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
+import {isSpotTradableSymbol} from '../market/universe-scanner.mjs';
+import {isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -428,10 +430,12 @@ export class CoinHunterRadar {
   }
 
   isSpotSymbol(x, quote) {
-    return String(x?.status || '').toUpperCase() === 'TRADING' &&
-      String(x?.quoteAsset || '').toUpperCase() === quote &&
-      x?.isSpotTradingAllowed !== false &&
-      String(x?.baseAsset || '').toUpperCase() !== quote;
+    const q = String(quote || '').trim().toUpperCase();
+    const symbol = String(x?.symbol || '').trim().toUpperCase();
+    // Use the shared Binance Spot contract (including permissions and pair identity),
+    // then keep non-directional USDT instruments out of scarce altcoin scan slots.
+    return isSpotTradableSymbol(x, q) &&
+      (q !== 'USDT' || isDirectionalCandidateSymbol(symbol));
   }
 
   async refreshUniverse(quote) {
