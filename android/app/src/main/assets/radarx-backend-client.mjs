@@ -19,8 +19,7 @@ function configuredOrigin(method, fallback) {
 export const DEFAULT_BACKEND_BASE_URL = configuredOrigin('getBackendOrigin', LEGACY_DEFAULT_BACKEND_BASE_URL);
 const CONFIGURED_BACKEND_FALLBACK_URL = configuredOrigin('getBackendFallbackOrigin', LEGACY_BACKEND_FALLBACK_URL);
 export const BACKEND_FALLBACK_URLS = Object.freeze(
-  [CONFIGURED_BACKEND_FALLBACK_URL, LEGACY_BACKEND_FALLBACK_URL]
-    .filter((value, index, all) => value !== DEFAULT_BACKEND_BASE_URL && all.indexOf(value) === index)
+  CONFIGURED_BACKEND_FALLBACK_URL === DEFAULT_BACKEND_BASE_URL ? [] : [CONFIGURED_BACKEND_FALLBACK_URL]
 );
 
 function assertAllowedBackend(url) {
