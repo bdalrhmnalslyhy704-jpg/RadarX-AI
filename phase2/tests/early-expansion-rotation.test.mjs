@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible,ensureRadar8ScoreContainer,isConfirmedEarlyFlowWatchCandidate,buildEarlyFlowWatchAlert} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible,ensureRadar8ScoreContainer,isConfirmedEarlyFlowWatchCandidate,buildEarlyFlowWatchAlert,buildMicroEarlyFlowWatchCandidate} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -1369,4 +1369,46 @@ test('Radar 8 persists watch-only observations in the alert feed and reports dis
   assert.equal(storedEvents[0].event_type,'EARLY_FLOW_WATCH_TRACE');
   assert.equal(storedEvents[0].notification_status,'PUSH_DISABLED_OR_UNCONFIGURED');
   assert.equal(pushCalls.length,0,'a disabled provider must not be called');
+});
+
+
+test('Radar 8 produces a monitor-only flow alert candidate from validated Micro candles without waiting for Deep',()=>{
+  const micro={
+    row:{symbol:'MICROEARLYUSDT',lastPrice:.008,priceChange24h:.4,quoteVolume24h:9_000,_low_liquidity_burst_bypass:true},
+    fast:{warmed_up:true,at:now-1000,price_change_pct:.01,price_acceleration_pct:.02,
+      volume_accel_ratio:1.65,trade_accel_ratio:1.45,volume_delta_quote:45,trade_delta:5},
+    oneMinute:[{openTime:now-120_000,closeTime:now-60_001,open:.0079,high:.0081,low:.0078,close:.008,volume:500,tradeCount:20,closed:true}],
+    fiveMinute:[{openTime:now-360_000,closeTime:now-60_001,open:.0078,high:.0081,low:.0077,close:.008,volume:2500,tradeCount:100,closed:true}],
+    source:'BINANCE_PUBLIC_REST',
+    micro_fingerprint:{
+      closed_candles_only:true,score:68,confirmation_count:4,stage:'WATCH',
+      metrics:{rvol_1m:1.3,rvol_5m:1.2,trade_rvol_1m:1.2,trade_rvol_5m:1.15,
+        taker_buy_ratio:.55,acceleration_1m_pct:.03,acceleration_5m_pct:.04,return_1m:.02,return_5m:.05},
+      risk_flags:['LOW_LIQUIDITY_WATCH_ONLY'],reasons:['MICRO_EARLY_FLOW']
+    }
+  };
+  const candidate=buildMicroEarlyFlowWatchCandidate(micro,now,{});
+  assert.ok(candidate,'validated Micro evidence should be surfaced without consuming Deep selection');
+  assert.equal(candidate.early_flow_watch,true);
+  assert.equal(candidate.low_liquidity_burst_bypass,true);
+  assert.equal(candidate.data_quality,null,'a Micro-only observation must not fabricate a numerical quality score');
+  const alert=buildEarlyFlowWatchAlert(candidate,now);
+  assert.equal(alert.event,'EARLY_FLOW_WATCH_ONLY');
+  assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+  assert.equal(alert.paper_trading,true);
+  assert.equal(alert.real_order_execution,false);
+  assert.equal(alert.data_quality,null);
+});
+
+test('Radar 8 refuses Micro-only flow watches without validated candles or a qualified fingerprint',()=>{
+  const micro={
+    row:{symbol:'BADMICROUSDT',lastPrice:1,priceChange24h:.4,quoteVolume24h:100_000},
+    fast:{warmed_up:true,price_change_pct:.01,price_acceleration_pct:.02,volume_accel_ratio:1.65,
+      trade_accel_ratio:1.45,volume_delta_quote:45,trade_delta:5},
+    oneMinute:[{openTime:now-120_000,closeTime:now-60_001,open:1,high:1.01,low:.99,close:1,closed:true}],
+    fiveMinute:[],
+    micro_fingerprint:{closed_candles_only:true,stage:'WARMING_UP',score:null,confirmation_count:0,metrics:{}}
+  };
+  assert.equal(buildMicroEarlyFlowWatchCandidate(micro,now,{}),null);
 });

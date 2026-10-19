@@ -940,7 +940,7 @@ export function ensureRadar8ScoreContainer(entry,fastScore=INCOMPLETE){
  */
 export function isConfirmedEarlyFlowWatchCandidate({
   row={},fast={},microFingerprint={},decisionBand=null,dataQuality=null,dataStale=false,
-  closedCandleCloseTime=null
+  closedCandleCloseTime=null,microDataValidated=false
 }={},config={}){
   if(config.earlyFlowWatchEnabled===false||!isFastEarlyWatchCandidate(row,fast,config))return false;
   if(!hasFiniteNumber(closedCandleCloseTime)||Number(closedCandleCloseTime)<=0)return false;
@@ -949,7 +949,8 @@ export function isConfirmedEarlyFlowWatchCandidate({
     Number(microFingerprint.score)<Number(config.earlyFlowWatchMinScore??58)||
     !hasFiniteNumber(microFingerprint?.confirmation_count)||
     Number(microFingerprint.confirmation_count)<Number(config.earlyFlowWatchMinConfirmations??3))return false;
-  if(!hasFiniteNumber(dataQuality)||Number(dataQuality)<Number(config.minDataQuality??70)||dataStale===true)return false;
+  if(dataStale===true)return false;
+  if(microDataValidated!==true&&(!hasFiniteNumber(dataQuality)||Number(dataQuality)<Number(config.minDataQuality??70)))return false;
   const move=absolute24hMove(row);
   if(move===null||move>=Number(config.hardExtended24hMovePct??18))return false;
   const stage=String(decisionBand||microFingerprint.stage||'').trim().toUpperCase();
@@ -968,6 +969,58 @@ export function isConfirmedEarlyFlowWatchCandidate({
     trades>=Number(config.lowLiquidityBurstDeepMinTradeRvol??1.15)||
     (taker>=Number(config.lowLiquidityBurstDeepMinTakerBuyRatio??0.54)&&(volume>=1||trades>=1));
   return participation&&(acceleration>0||recentReturn>0);
+}
+
+/**
+ * Build a watch-only candidate from a successful Micro scan without waiting for
+ * one of the four Deep slots. The Micro fingerprint only reaches a usable stage
+ * after the closed 1m/5m series and BTC reference passed the scanner's validators.
+ */
+export function buildMicroEarlyFlowWatchCandidate(micro,now=Date.now(),config=EARLY_EXPANSION_RADAR_DEFAULTS){
+  const row=micro?.row||{},fast=micro?.fast||{},fp=micro?.micro_fingerprint||{};
+  const symbol=String(row?.symbol||'').trim().toUpperCase();
+  if(!symbol||micro?.failed===true)return null;
+  const lastOne=closed(micro?.oneMinute,Number(now)).at(-1)||null;
+  const lastFive=closed(micro?.fiveMinute,Number(now)).at(-1)||null;
+  const closeTime=hasFiniteNumber(lastOne?.closeTime)?Number(lastOne.closeTime):
+    hasFiniteNumber(lastFive?.closeTime)?Number(lastFive.closeTime):null;
+  if(!isConfirmedEarlyFlowWatchCandidate({
+    row,fast,microFingerprint:fp,decisionBand:fp?.stage,
+    dataQuality:null,dataStale:false,closedCandleCloseTime:closeTime,microDataValidated:true
+  },config))return null;
+  const m=fp.metrics||{};
+  return {
+    symbol,last_price:hasFiniteNumber(row.lastPrice)?Number(row.lastPrice):null,
+    price_change_24h:hasFiniteNumber(row.priceChange24h)?Number(row.priceChange24h):null,
+    data_quality:null,data_stale:false,
+    source:micro.source||row.source||'Binance Public REST',
+    low_liquidity_burst_bypass:row._low_liquidity_burst_bypass===true,
+    micro_fingerprint_score:hasFiniteNumber(fp.score)?Number(fp.score):null,
+    risk_flags:[...(fp.risk_flags||[])],
+    reason_codes:[...(fp.reason_codes||fp.reasons||[])],
+    early_flow_watch:true,
+    early_flow_watch_evidence:{
+      closed_candle_close_time:closeTime,
+      observed_ticker_at:hasFiniteNumber(fast.at)?Number(fast.at):null,
+      fast_price_change_pct:hasFiniteNumber(fast.price_change_pct)?Number(fast.price_change_pct):null,
+      fast_price_acceleration_pct:hasFiniteNumber(fast.price_acceleration_pct)?Number(fast.price_acceleration_pct):null,
+      volume_accel_ratio:hasFiniteNumber(fast.volume_accel_ratio)?Number(fast.volume_accel_ratio):null,
+      trade_accel_ratio:hasFiniteNumber(fast.trade_accel_ratio)?Number(fast.trade_accel_ratio):null,
+      quote_volume_delta:hasFiniteNumber(fast.volume_delta_quote)?Number(fast.volume_delta_quote):null,
+      trade_delta:hasFiniteNumber(fast.trade_delta)?Number(fast.trade_delta):null,
+      micro_score:hasFiniteNumber(fp.score)?Number(fp.score):null,
+      confirmation_count:hasFiniteNumber(fp.confirmation_count)?Number(fp.confirmation_count):null,
+      rvol_1m:hasFiniteNumber(m.rvol_1m)?Number(m.rvol_1m):null,
+      rvol_5m:hasFiniteNumber(m.rvol_5m)?Number(m.rvol_5m):null,
+      trade_rvol_1m:hasFiniteNumber(m.trade_rvol_1m)?Number(m.trade_rvol_1m):null,
+      trade_rvol_5m:hasFiniteNumber(m.trade_rvol_5m)?Number(m.trade_rvol_5m):null,
+      acceleration_1m_pct:hasFiniteNumber(m.acceleration_1m_pct)?Number(m.acceleration_1m_pct):null,
+      acceleration_5m_pct:hasFiniteNumber(m.acceleration_5m_pct)?Number(m.acceleration_5m_pct):null,
+      return_1m:hasFiniteNumber(m.return_1m)?Number(m.return_1m):null,
+      return_5m:hasFiniteNumber(m.return_5m)?Number(m.return_5m):null,
+      closed_candles_only:true
+    }
+  };
 }
 
 export function selectUnderfloorFastShockCandidates({
@@ -1303,7 +1356,7 @@ export function buildEarlyFlowWatchAlert(candidate,now=Date.now()){
     low_liquidity_burst_bypass:lowLiquidity,
     risk_flags:[...new Set([...(candidate?.risk_flags||[]),'EARLY_FLOW_WATCH_ONLY',lowLiquidity?'LOW_LIQUIDITY_WATCH_ONLY':null].filter(Boolean))],
     reason_codes:[...new Set([...(candidate?.reason_codes||[]),'FAST_RELATIVE_FLOW_EXPANSION','MICRO_CLOSED_CANDLE_CONFIRMATION','MONITOR_ONLY_NOT_ENTRY'])],
-    data_quality:finite(candidate?.data_quality,0),
+    data_quality:hasFiniteNumber(candidate?.data_quality)?Number(candidate.data_quality):null,
     data_stale:Boolean(candidate?.data_stale),
     source:candidate?.source||'Binance Public REST',
     detected_at:now,processed_at:now,detected_candle_close_time:closeTime,
@@ -2810,6 +2863,7 @@ export class EarlyExpansionRadar{
       phaseTimings.outcome_maintenance_ms=outcomeMaintenanceWorkMs;
 
       const microScanned=await microScanPromise;
+      const microFlowWatchCandidates=microScanned.map(item=>buildMicroEarlyFlowWatchCandidate(item,this.clock(),this.config)).filter(Boolean);
       phaseTimings.micro_scan_ms=Math.max(0,microScanCompletedAt-microScanStartedAt);
       phaseTimings.market_micro_overlap_ms=Math.max(0,
         Math.min(marketContextCompletedAt,microScanCompletedAt)-Math.max(marketContextStartedAt,microScanStartedAt));
@@ -3198,6 +3252,30 @@ export class EarlyExpansionRadar{
           }
         }
         if(!this.lastBand.has(candidate.symbol)||bandChanged)this.lastBand.set(candidate.symbol,candidate.decision_band);
+      }
+      const publicEligibleWatchSymbols=new Set(ok.filter(candidate=>
+        isEarlyExpansionCandidateAlertEligible(candidate,this.config)).map(candidate=>String(candidate.symbol||'').toUpperCase()));
+      for(const candidate of microFlowWatchCandidates){
+        const symbol=String(candidate.symbol||'').toUpperCase();
+        if(publicEligibleWatchSymbols.has(symbol))continue;
+        const watchAlert=buildEarlyFlowWatchAlert(candidate,now);
+        const watchKey=String(watchAlert.id||'');
+        const lastAt=Number(this.lastEarlyFlowWatchAt.get(symbol)||0);
+        const cooldown=Math.max(0,Number(this.config.earlyFlowWatchCooldownMs??10*60*1000));
+        if(previousEarlyFlowWatchKeys.has(watchKey)||this.lastEarlyFlowWatchKeyBySymbol.get(symbol)===watchKey||now-lastAt<cooldown)continue;
+        const watchStatus=await this.recordWatchOnlyAlert(watchAlert,'MICRO_EARLY_FLOW_WATCH_TRACE');
+        if(!watchStatus.stored)continue;
+        this.lastEarlyFlowWatchAt.set(symbol,now);
+        this.lastEarlyFlowWatchKeyBySymbol.set(symbol,watchKey);
+        previousEarlyFlowWatchKeys.add(watchKey);
+        watchAlertsThisCycle++;
+        const journeyEntry=journeyEntries.get(symbol);
+        if(journeyEntry){
+          journeyEntry.notification_status=watchStatus.pushStatus;
+          journeyEntry.notification_gate_rejection_reason='WATCH_ONLY_NOT_ENTRY_ELIGIBLE';
+          journeyEntry.alert_id=watchKey;
+          journeyEntry.alert_stage='WATCH_EARLY';
+        }
       }
       phaseTimings.notification_ms=Math.max(0,this.clock()-notificationStartedAt);
       this.scans++;this.lastScanAtMs=now;this.lastError=null;
