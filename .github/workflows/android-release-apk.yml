@@ -34,6 +34,9 @@ jobs:
   # Publish only from the official Build 224 branch after its backend and Android checks pass.
   release-apk:
     runs-on: ubuntu-latest
+    env:
+      RADARX_BACKEND_ORIGIN: ${{ vars.RADARX_BACKEND_ORIGIN || 'https://radarx-ai-triple-production.up.railway.app' }}
+      RADARX_BACKEND_FALLBACK_ORIGIN: ${{ vars.RADARX_BACKEND_FALLBACK_ORIGIN || 'https://radarx-ai-production.up.railway.app' }}
     timeout-minutes: 30
 
     steps:
@@ -48,7 +51,9 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF_NAME" = "feature-coin-hunter-20261006-android" || test "$GITHUB_REF_NAME" = "android-build224-radar8-v2-20261006" || test "$GITHUB_REF_NAME" = "android-whale-intelligence-v2-build224-20261007" || test "$GITHUB_REF_NAME" = "android-build224-final-stable-20261007" || test "$GITHUB_REF_NAME" = "build224-multi-analyst-20261007"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          grep -Fq "https://radarx-ai-triple-production.up.railway.app" android/app/src/main/assets/radarx-backend-client.mjs
+          grep -Fq "RadarXBackendConfig" android/app/src/main/assets/radarx-backend-client.mjs
+          grep -Fq "RADARX_BACKEND_ORIGIN" android/app/build.gradle
+          grep -Fq "BuildConfig.RADARX_BACKEND_ORIGIN" android/app/src/main/java/com/radarx/app/MainActivity.java
           ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
           grep -Fq 'versionCode 15' android/app/build.gradle
           grep -Fq 'versionName "1.4.9"' android/app/build.gradle
@@ -151,7 +156,7 @@ jobs:
           RADAR8_JSON: ${{ runner.temp }}/radar8.json
         run: |
           set -euo pipefail
-          BASE="https://radarx-ai-triple-production.up.railway.app"
+          BASE="${RADARX_BACKEND_ORIGIN%/}"
           HEALTH="$(curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/healthz.json" -w "%{http_code}" "$BASE/healthz")"
           READY="$(curl --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/readyz.json" -w "%{http_code}" "$BASE/readyz")"
           test "$HEALTH" = "200"
@@ -221,7 +226,7 @@ jobs:
         timeout-minutes: 4
         run: |
           set -euo pipefail
-          BASE="https://radarx-ai-triple-production.up.railway.app"
+          BASE="${RADARX_BACKEND_ORIGIN%/}"
           for path in \
             "/api/radar-status" \
             "/api/move-radar?limit=1" \
@@ -244,7 +249,7 @@ jobs:
         timeout-minutes: 3
         run: |
           set -euo pipefail
-          BASE="https://radarx-ai-triple-production.up.railway.app"
+          BASE="${RADARX_BACKEND_ORIGIN%/}"
           CODE="$(curl --location --silent --show-error --max-time 60 -o "$RUNNER_TEMP/coin-hunter.json" -w "%{http_code}" "$BASE/api/coin-hunter-radar?quote=USDT&limit=5&scan=0")"
           case "$CODE" in 200|503) ;; *) echo "::error::Coin Hunter returned HTTP $CODE"; cat "$RUNNER_TEMP/coin-hunter.json"; exit 1 ;; esac
           node --input-type=module <<'NODE'
@@ -265,7 +270,7 @@ jobs:
       - name: Verify Whale Accumulation public contract
         timeout-minutes: 3
         env:
-          BASE: https://radarx-ai-triple-production.up.railway.app
+          BASE: ${{ vars.RADARX_BACKEND_ORIGIN || 'https://radarx-ai-triple-production.up.railway.app' }}
         run: |
           set -euo pipefail
           CODE="$(curl --location --silent --show-error --max-time 60 -o "$RUNNER_TEMP/whale.json" -w "%{http_code}" "$BASE/api/whale-accumulation-radar?limit=5&scan=0")"
@@ -286,7 +291,7 @@ jobs:
       - name: Verify Multi-Analyst public contract
         timeout-minutes: 4
         env:
-          BASE: https://radarx-ai-triple-production.up.railway.app
+          BASE: ${{ vars.RADARX_BACKEND_ORIGIN || 'https://radarx-ai-triple-production.up.railway.app' }}
         run: |
           set -euo pipefail
           CURL_EXIT=0
@@ -342,7 +347,7 @@ jobs:
       - name: Detect live server push configuration
         timeout-minutes: 1
         env:
-          BASE: https://radarx-ai-triple-production.up.railway.app
+          BASE: ${{ vars.RADARX_BACKEND_ORIGIN || 'https://radarx-ai-triple-production.up.railway.app' }}
         run: |
           set -euo pipefail
           HTTP_CODE="$(curl --location --silent --show-error --max-time 20 --output "$RUNNER_TEMP/push-status.json" --write-out "%{http_code}" "$BASE/v1/push/status" || true)"
@@ -406,7 +411,9 @@ jobs:
           node android/backend-client-regression.mjs
           node android/background-monitor-regression.mjs
           node android/app/src/main/assets/tests/market-radar-integration.test.mjs
-          grep -Fq "https://radarx-ai-triple-production.up.railway.app" android/app/src/main/assets/radarx-backend-client.mjs
+          grep -Fq "RadarXBackendConfig" android/app/src/main/assets/radarx-backend-client.mjs
+          grep -Fq "RADARX_BACKEND_ORIGIN" android/app/build.gradle
+          grep -Fq "BuildConfig.RADARX_BACKEND_ORIGIN" android/app/src/main/java/com/radarx/app/MainActivity.java
           ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
           grep -RInq "Paper Trading" android/app/src/main/assets
           grep -RInq "paper_trading=true" android/app/src/main/assets
