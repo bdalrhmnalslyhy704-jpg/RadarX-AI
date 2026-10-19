@@ -19,6 +19,17 @@ function closedCandles(rows,now){
   ).sort((a,b)=>Number(a.openTime)-Number(b.openTime));
 }
 
+function candleGap(rows, intervalMs, required, label) {
+  const tail=rows.slice(-required);
+  for(let i=1;i<tail.length;i++){
+    const delta=Number(tail[i].openTime)-Number(tail[i-1].openTime);
+    if(!Number.isFinite(delta)||Math.abs(delta-intervalMs)>1000){
+      return label+'_CLOSED_CANDLE_GAP';
+    }
+  }
+  return null;
+}
+
 function ema(xs,p){
   const a=xs.filter(Number.isFinite);if(!a.length)return null;
   const n=Math.max(2,Math.trunc(p));let out=mean(a.slice(0,Math.min(n,a.length)));
@@ -43,6 +54,12 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
     return {eligible:false,stage:'STALE_DATA',direction:'NONE',score:null,closed_candles_only:true,
       one_minute_count:a.length,five_minute_count:b.length,data_quality:0,data_stale:true,
       reason_codes:['STALE_CLOSED_CANDLES'],one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge};
+  }
+  const gapReason=candleGap(a,60_000,40,'ONE_MINUTE')||candleGap(b,300_000,20,'FIVE_MINUTE');
+  if(gapReason){
+    return {eligible:false,stage:'DATA_GAP',direction:'NONE',score:null,closed_candles_only:true,
+      one_minute_count:a.length,five_minute_count:b.length,data_quality:0,data_stale:false,
+      reason_codes:[gapReason],one_minute_age_ms:oneAge,five_minute_age_ms:fiveAge};
   }
 
   const closes=a.map(x=>Number(x.close));
