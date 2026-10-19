@@ -182,8 +182,10 @@ public final class RadarXBackgroundMonitorService extends Service {
     private JSONObject fetchRadarAlertsFeed(long cursor, String cursorId) throws Exception {
         Exception last = null;
         String testFeed = prefs().getString("radarx_test_alert_feed_url", "");
+        boolean replayTestFeed = isDebugBuild() &&
+            testFeed.matches("http://10\\.0\\.2\\.2:18[0-9]{3}/api/radar-alerts\\?radar=ALL");
         String[] unifiedBases;
-        if (isDebugBuild() && testFeed.matches("http://10\\.0\\.2\\.2:18[0-9]{3}/api/radar-alerts\\?radar=ALL")) {
+        if (replayTestFeed) {
             unifiedBases = new String[] { testFeed };
             Log.i(TAG, "DEBUG_REPLAY_TEST_FEED_ACTIVE");
         } else {
@@ -228,6 +230,14 @@ public final class RadarXBackgroundMonitorService extends Service {
             } finally {
                 if (connection != null) connection.disconnect();
             }
+        }
+        // A configured replay fixture is an isolated test source. If it fails,
+        // fail closed rather than polling production radar endpoints and contaminating
+        // the deterministic replay with unrelated live alerts.
+        if (replayTestFeed) {
+            throw last == null
+                ? new IllegalStateException("DEBUG_REPLAY_TEST_FEED_UNAVAILABLE")
+                : new IllegalStateException("DEBUG_REPLAY_TEST_FEED_UNAVAILABLE", last);
         }
         return fetchIndividualRadarAlerts(cursor, cursorId, last);
     }
