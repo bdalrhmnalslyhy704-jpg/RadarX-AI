@@ -203,7 +203,7 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   // A very small, capped Micro-only lane watches strong short-term bursts below
   // the regular daily-liquidity floor. It never relaxes entry/alert gates.
   lowLiquidityBurstBypassEnabled:true,
-  lowLiquidityBurstMinQuoteVolumeRatio:0.10,
+  lowLiquidityBurstMinQuoteVolumeRatio:0.001,
   lowLiquidityBurstBypassMaxCandidates:4,
   // Relaxed thresholds create extra bounded WATCH-only observations; they never lower alert gates.
   fastEarlyWatchEnabled:true,
@@ -904,7 +904,7 @@ function fastCandidateScore(row,fast,cfg){
  */
 export function selectUnderfloorFastShockCandidates({
   rows=[],fastBySymbol=new Map(),pendingUntilBySymbol=new Map(),now=Date.now(),
-  minQuoteVolume24h=750000,minQuoteVolumeRatio=0.10,limit=2,config={}
+  minQuoteVolume24h=750000,minQuoteVolumeRatio=0.001,limit=4,config={},lastMicroScannedAt=()=>null
 }={}){
   const floor=Number(minQuoteVolume24h);
   if(!(Number.isFinite(floor)&&floor>0))return [];
@@ -915,6 +915,12 @@ export function selectUnderfloorFastShockCandidates({
   const fastMap=fastBySymbol instanceof Map?fastBySymbol:new Map();
   const pendingMap=pendingUntilBySymbol instanceof Map?pendingUntilBySymbol:new Map();
   const cfg={...EARLY_EXPANSION_RADAR_DEFAULTS,...config,minQuoteVolume24h:floor};
+  const lastScanAt=row=>{
+    try{
+      const value=lastMicroScannedAt(String(row?.symbol||'').trim().toUpperCase());
+      return value===null||value===undefined||value===''?null:(Number.isFinite(Number(value))?Number(value):null);
+    }catch{return null;}
+  };
   return (Array.isArray(rows)?rows:[]).filter(row=>{
     const symbol=String(row?.symbol||'').trim().toUpperCase();
     const quoteVolume=Number(row?.quoteVolume24h);
@@ -924,6 +930,12 @@ export function selectUnderfloorFastShockCandidates({
       Number(pendingMap.get(symbol)||0)>at&&(
         isFastActivityShockCandidate(row,fast,cfg)||isFastEarlyWatchCandidate(row,fast,cfg));
   }).sort((a,b)=>{
+    // Never-scanned/oldest-scanned candidates go first so repeated hot symbols cannot
+    // monopolize the tiny under-floor lane; fast anomaly score breaks equal-age ties.
+    const scanA=lastScanAt(a),scanB=lastScanAt(b);
+    if(scanA===null&&scanB!==null)return -1;
+    if(scanB===null&&scanA!==null)return 1;
+    if(scanA!==null&&scanB!==null&&scanA!==scanB)return scanA-scanB;
     const scoreB=fastCandidateScore(b,fastMap.get(String(b?.symbol||'').toUpperCase())||{},cfg);
     const scoreA=fastCandidateScore(a,fastMap.get(String(a?.symbol||'').toUpperCase())||{},cfg);
     return scoreB-scoreA||String(a?.symbol||'').localeCompare(String(b?.symbol||''));
@@ -2386,8 +2398,9 @@ export class EarlyExpansionRadar{
         selectUnderfloorFastShockCandidates({
           rows:[...rawBySymbol.values()],fastBySymbol,pendingUntilBySymbol:this.fastShockPendingUntil,
           now:fastSeenAt,minQuoteVolume24h:this.config.minQuoteVolume24h,
-          minQuoteVolumeRatio:this.config.lowLiquidityBurstMinQuoteVolumeRatio??0.10,
-          limit:this.config.lowLiquidityBurstBypassMaxCandidates??2,config:this.config
+          minQuoteVolumeRatio:this.config.lowLiquidityBurstMinQuoteVolumeRatio??0.001,
+          limit:this.config.lowLiquidityBurstBypassMaxCandidates??4,config:this.config,
+          lastMicroScannedAt:symbol=>this.scheduler.lastScanAt('MICRO',symbol)
         });
       for(const row of eligible)this.scheduler.ensureQueued('MICRO',row.symbol,fastSeenAt);
       for(const row of underfloorBurstCandidates)this.scheduler.ensureQueued('MICRO',row.symbol,fastSeenAt);

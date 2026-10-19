@@ -1224,3 +1224,44 @@ test('Radar 8 gives moderate early-watch flow bounded Deep priority only after c
   assert.ok(selected.some(x=>x.row.symbol==='EARLYFLOWUSDT'&&x._selection_lane==='exceptional'));
   assert.equal(selected.length,4,'early-watch priority must reuse an existing Deep slot');
 });
+
+
+test('Radar 8 watches sub-10%-floor micro-liquidity bursts without relaxing public eligibility',()=>{
+  const floor=100_000;
+  const row={symbol:'MICROCAPUSDT',lastPrice:.008,priceChange24h:.2,quoteVolume24h:9_000,tradeCount24h:500};
+  const fastBySymbol=new Map([['MICROCAPUSDT',{
+    warmed_up:true,price_change_pct:.5,price_acceleration_pct:.2,
+    volume_accel_ratio:8,trade_accel_ratio:5,volume_delta_quote:900,trade_delta:20
+  }]]);
+  const selected=selectUnderfloorFastShockCandidates({
+    rows:[row],fastBySymbol,pendingUntilBySymbol:new Map([['MICROCAPUSDT',now+60_000]]),
+    now,minQuoteVolume24h:floor,minQuoteVolumeRatio:.001,limit:4
+  });
+  assert.deepEqual(selected.map(x=>x.symbol),['MICROCAPUSDT']);
+  assert.equal(selected[0]._low_liquidity_burst_bypass,true);
+  assert.equal(isEarlyExpansionCandidateAlertEligible({
+    early_expansion_score:99,decision_band:'PRE_EXPANSION',data_quality:100,data_stale:false,
+    risk_flags:[],micro_fingerprint:{eligible:true},low_liquidity_burst_bypass:true
+  },{minAlertScore:82,minDataQuality:70}),false);
+});
+
+test('Radar 8 rotates never-scanned under-floor events ahead of recently scanned stronger events',()=>{
+  const floor=100_000;
+  const rows=[
+    {symbol:'REPEATFLOWUSDT',lastPrice:1.2,priceChange24h:2,quoteVolume24h:90_000,tradeCount24h:4000},
+    {symbol:'NEWFLOWUSDT',lastPrice:.8,priceChange24h:.1,quoteVolume24h:5_000,tradeCount24h:500}
+  ];
+  const fastBySymbol=new Map([
+    ['REPEATFLOWUSDT',{warmed_up:true,price_change_pct:.5,price_acceleration_pct:.2,
+      volume_accel_ratio:8,trade_accel_ratio:5,volume_delta_quote:2000,trade_delta:30}],
+    ['NEWFLOWUSDT',{warmed_up:true,price_change_pct:.01,price_acceleration_pct:0,
+      volume_accel_ratio:1.65,trade_accel_ratio:1.45,volume_delta_quote:45,trade_delta:5}]
+  ]);
+  const selected=selectUnderfloorFastShockCandidates({
+    rows,fastBySymbol,pendingUntilBySymbol:new Map(rows.map(row=>[row.symbol,now+60_000])),
+    lastMicroScannedAt:symbol=>symbol==='REPEATFLOWUSDT'?now-1_000:null,
+    now,minQuoteVolume24h:floor,minQuoteVolumeRatio:.001,limit:1
+  });
+  assert.deepEqual(selected.map(x=>x.symbol),['NEWFLOWUSDT'],
+    'fairness by actual scan age must beat repeated score rank when the slot is scarce');
+});
