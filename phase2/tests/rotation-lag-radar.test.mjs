@@ -2,13 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {buildRotationAnalysis,buildRotationAlert,RotationLagRadar} from '../core/rotation-lag-radar.mjs';
 
-function candle(i,{price=100,move=0,volume=100000,span=0.4}={}){
-  const openTime=i*900000;
+const now=Date.now();
+
+function candle(i,{price=100,move=0,volume=100000,span=0.4,intervalMs=900000,seriesLength=90,clock=now}={}){
+  const closeTime=clock-(seriesLength-i-1)*intervalMs-1000;
+  const openTime=closeTime-intervalMs+1000;
   const close=price*(1+move);
-  return {openTime,closeTime:openTime+899000,open:price,high:Math.max(price,close)*(1+span/100),low:Math.min(price,close)*(1-span/100),close,volume,closed:true};
+  return {openTime,closeTime,open:price,high:Math.max(price,close)*(1+span/100),low:Math.min(price,close)*(1-span/100),close,volume,closed:true};
 }
 
-function makeSeries(n,base,{tailMove=0,tailVolume=100000,tailSpan=0.4}={}){
+function makeSeries(n,base,{tailMove=0,tailVolume=100000,tailSpan=0.4,intervalMs=900000,clock=now}={}){
   const out=[];
   let price=base;
   for(let i=0;i<n;i++){
@@ -18,7 +21,10 @@ function makeSeries(n,base,{tailMove=0,tailVolume=100000,tailSpan=0.4}={}){
       price,
       move,
       volume:tail?tailVolume:100000,
-      span:tail?tailSpan:0.4
+      span:tail?tailSpan:0.4,
+      intervalMs,
+      seriesLength:n,
+      clock
     }));
     price*=1+move;
   }
@@ -29,9 +35,7 @@ const n=90;
 const symbol=makeSeries(n,100,{tailMove:0.0005,tailVolume:220000,tailSpan:0.55});
 const btc=makeSeries(n,100,{tailMove:0.02,tailVolume:180000,tailSpan:0.6});
 const eth=makeSeries(n,100,{tailMove:0.015,tailVolume:160000,tailSpan:0.6});
-const oneHour=Array.from({length:40},(_,i)=>candle(i,{price:100}));
-
-const now=Date.now();
+const oneHour=Array.from({length:40},(_,i)=>candle(i,{price:100,intervalMs:3600000,seriesLength:40}));
 const result=buildRotationAnalysis(symbol,oneHour,{
   BTCUSDT:{fifteen_min:btc,one_hour:oneHour},
   ETHUSDT:{fifteen_min:eth,one_hour:oneHour}
@@ -83,6 +87,29 @@ test('Rotation Lag fills rotation slots when the cursor overlaps the ranked shor
   assert.equal(new Set(selected.map(x=>x.symbol)).size,7);
 });
 
+
+test('Rotation Lag rejects stale closed candles instead of scoring cached data',()=>{
+  const stale=makeSeries(n,100,{tailMove:0.0005,tailVolume:220000,tailSpan:0.55,clock:now-45*60_000});
+  const a=buildRotationAnalysis(stale,oneHour,{
+    BTCUSDT:{fifteen_min:btc,one_hour:oneHour},
+    ETHUSDT:{fifteen_min:eth,one_hour:oneHour}
+  },{symbol:'STALEUSDT',lastPrice:100,priceChange24h:0.4},now);
+  assert.equal(a.eligible,false);
+  assert.equal(a.stage,'DATA_STALE');
+  assert.equal(a.data_stale,true);
+  assert.ok(a.data_quality_reasons.includes('SYMBOL_15M_STALE_CLOSED_CANDLES'));
+});
+
+test('Rotation Lag rejects gaps in the scoring window rather than compressing missing intervals',()=>{
+  const gapped=symbol.filter((_,i)=>i!==45);
+  const a=buildRotationAnalysis(gapped,oneHour,{
+    BTCUSDT:{fifteen_min:btc,one_hour:oneHour},
+    ETHUSDT:{fifteen_min:eth,one_hour:oneHour}
+  },{symbol:'GAPUSDT',lastPrice:100,priceChange24h:0.4},now);
+  assert.equal(a.eligible,false);
+  assert.equal(a.stage,'DATA_GAP');
+  assert.ok(a.data_quality_reasons.includes('SYMBOL_15M_CLOSED_CANDLE_GAP'));
+});
 
 test('Rotation Lag tolerates insufficient closed-candle data without crashing risk-flag construction',()=>{
   const incomplete=buildRotationAlert({
