@@ -220,6 +220,10 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   fastEarlyWatchFlatBaseMaxAbsChangePct:0.12,
   fastEarlyWatchDeepMinScore:58,
   fastEarlyWatchDeepMinConfirmations:3,
+  earlyFlowWatchEnabled:true,
+  earlyFlowWatchMinScore:58,
+  earlyFlowWatchMinConfirmations:3,
+  earlyFlowWatchCooldownMs:10*60*1000,
   minLiquidityQuality:58,
   maxSpreadBps:22,
   minDataQuality:70,
@@ -929,6 +933,43 @@ export function ensureRadar8ScoreContainer(entry,fastScore=INCOMPLETE){
   return scores;
 }
 
+/**
+ * Early-flow watch-only qualification. It requires a warmed ticker baseline,
+ * observed flow expansion, fresh closed-candle Micro evidence and current data
+ * quality. It never grants public buy/entry eligibility.
+ */
+export function isConfirmedEarlyFlowWatchCandidate({
+  row={},fast={},microFingerprint={},decisionBand=null,dataQuality=null,dataStale=false,
+  closedCandleCloseTime=null
+}={},config={}){
+  if(config.earlyFlowWatchEnabled===false||!isFastEarlyWatchCandidate(row,fast,config))return false;
+  if(!hasFiniteNumber(closedCandleCloseTime)||Number(closedCandleCloseTime)<=0)return false;
+  if(microFingerprint?.closed_candles_only!==true||
+    !hasFiniteNumber(microFingerprint?.score)||
+    Number(microFingerprint.score)<Number(config.earlyFlowWatchMinScore??58)||
+    !hasFiniteNumber(microFingerprint?.confirmation_count)||
+    Number(microFingerprint.confirmation_count)<Number(config.earlyFlowWatchMinConfirmations??3))return false;
+  if(!hasFiniteNumber(dataQuality)||Number(dataQuality)<Number(config.minDataQuality??70)||dataStale===true)return false;
+  const move=absolute24hMove(row);
+  if(move===null||move>=Number(config.hardExtended24hMovePct??18))return false;
+  const stage=String(decisionBand||microFingerprint.stage||'').trim().toUpperCase();
+  if(['DATA_INSUFFICIENT','WARMING_UP','INCOMPLETE','ANTI_CHASE','ALREADY_EXTENDED','HIGH_RISK_PUMP'].includes(stage))return false;
+  const m=microFingerprint.metrics||{};
+  const volume=Math.max(hasFiniteNumber(m.rvol_1m)?Number(m.rvol_1m):0,
+    hasFiniteNumber(m.rvol_5m)?Number(m.rvol_5m):0);
+  const trades=Math.max(hasFiniteNumber(m.trade_rvol_1m)?Number(m.trade_rvol_1m):0,
+    hasFiniteNumber(m.trade_rvol_5m)?Number(m.trade_rvol_5m):0);
+  const taker=hasFiniteNumber(m.taker_buy_ratio)?Number(m.taker_buy_ratio):0;
+  const acceleration=Math.max(hasFiniteNumber(m.acceleration_1m_pct)?Number(m.acceleration_1m_pct):-Infinity,
+    hasFiniteNumber(m.acceleration_5m_pct)?Number(m.acceleration_5m_pct):-Infinity);
+  const recentReturn=Math.max(hasFiniteNumber(m.return_1m)?Number(m.return_1m):-Infinity,
+    hasFiniteNumber(m.return_5m)?Number(m.return_5m):-Infinity);
+  const participation=volume>=Number(config.lowLiquidityBurstDeepMinRvol??1.20)||
+    trades>=Number(config.lowLiquidityBurstDeepMinTradeRvol??1.15)||
+    (taker>=Number(config.lowLiquidityBurstDeepMinTakerBuyRatio??0.54)&&(volume>=1||trades>=1));
+  return participation&&(acceleration>0||recentReturn>0);
+}
+
 export function selectUnderfloorFastShockCandidates({
   rows=[],fastBySymbol=new Map(),pendingUntilBySymbol=new Map(),now=Date.now(),
   minQuoteVolume24h=750000,minQuoteVolumeRatio=0.000001,limit=4,config={},lastMicroScannedAt=()=>null
@@ -1236,6 +1277,40 @@ export function buildActivityShockWatchAlert(candidate,now=Date.now()){
     paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
     closed_candles_only:true,watch_only:true,entry_eligible:false,
     disclaimer:'تنبيه رصد فقط: انكشاف قفزة مؤكدة بالحجم وعدد الصفقات على شمعة مغلقة. ليس توصية شراء ولا إثباتًا لخبر أو تجميع حيتان. إذا كانت الحركة ممتدة فالمطلوب مراقبة المخاطر لا مطاردة السعر.'
+  },'Radar 8 — البرق');
+}
+
+/**
+ * A separate feed item for early-flow monitoring, never an actionable/buy signal.
+ */
+export function buildEarlyFlowWatchAlert(candidate,now=Date.now()){
+  const symbol=String(candidate?.symbol||'').trim().toUpperCase();
+  const evidence=candidate?.early_flow_watch_evidence||{};
+  const closeTime=hasFiniteNumber(evidence.closed_candle_close_time)?Number(evidence.closed_candle_close_time):Number(now);
+  const lowLiquidity=candidate?.low_liquidity_burst_bypass===true;
+  return decorateRadarAlert({
+    id:'RADAR8_EARLY_FLOW_WATCH:'+symbol+':'+closeTime,
+    event:'EARLY_FLOW_WATCH_ONLY',
+    radar:'EARLY_EXPANSION_RADAR',
+    radar_name:'Radar 8 — البرق',
+    symbol,market:'SPOT',direction:'UP_BIAS',
+    price:hasFiniteNumber(candidate?.last_price)?Number(candidate.last_price):null,
+    price_change_24h:hasFiniteNumber(candidate?.price_change_24h)?Number(candidate.price_change_24h):null,
+    opportunity_score:null,early_expansion_score:null,
+    potential_label:'EARLY_FLOW_WATCH_ONLY',decision_band:'WATCH_EARLY',
+    early_flow_watch_evidence:evidence,
+    micro_fingerprint_score:hasFiniteNumber(candidate?.micro_fingerprint_score)?Number(candidate.micro_fingerprint_score):null,
+    low_liquidity_burst_bypass:lowLiquidity,
+    risk_flags:[...new Set([...(candidate?.risk_flags||[]),'EARLY_FLOW_WATCH_ONLY',lowLiquidity?'LOW_LIQUIDITY_WATCH_ONLY':null].filter(Boolean))],
+    reason_codes:[...new Set([...(candidate?.reason_codes||[]),'FAST_RELATIVE_FLOW_EXPANSION','MICRO_CLOSED_CANDLE_CONFIRMATION','MONITOR_ONLY_NOT_ENTRY'])],
+    data_quality:finite(candidate?.data_quality,0),
+    data_stale:Boolean(candidate?.data_stale),
+    source:candidate?.source||'Binance Public REST',
+    detected_at:now,processed_at:now,detected_candle_close_time:closeTime,
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+    closed_candles_only:true,watch_only:true,entry_eligible:false,
+    notification_status:'WATCH_ONLY_FEED_RECORDED_DELIVERY_UNCONFIRMED',
+    disclaimer:'تنبيه مراقبة مبكرة مبني على تدفق تداول مرصود وشموع مغلقة؛ ليس توصية شراء ولا أمر تنفيذ. قد يفشل الزخم أو تكون السيولة ضعيفة؛ تحقق من السبريد والسيولة قبل أي قرار.'
   },'Radar 8 — البرق');
 }
 
@@ -1646,6 +1721,7 @@ export class EarlyExpansionRadar{
     this.running=false;this.busy=false;this.timer=null;this.universe=[];this.universeAt=0;
     this.fastState=new Map();this.lastAlertAt=new Map();this.lastAlertScore=new Map();this.lastBand=new Map();
     this.lastActivityShockAt=new Map();this.lastActivityShockKeyBySymbol=new Map();this.activityShockTimestamps=[];this.fastShockPendingUntil=new Map();
+    this.lastEarlyFlowWatchAt=new Map();this.lastEarlyFlowWatchKeyBySymbol=new Map();
     this.lastMicroScanCycleBySymbol=new Map();this.lastDeepScanCycleBySymbol=new Map();
     this.scheduler=new ScanSchedulerJournal({radar:'RADAR_8',store,clock,logger});
     this.lastDeepAtBySymbol=new Map();this.firstEligibleAtBySymbol=new Map();
@@ -1714,6 +1790,41 @@ export class EarlyExpansionRadar{
     scheduleNext(0);
   }
   async stop(){this.running=false;if(this.timer)clearTimeout(this.timer);this.timer=null;this.marketWideKlineCache?.stop?.();}
+  async recordWatchOnlyAlert(alert,eventType='RADAR8_WATCH_ONLY_TRACE'){
+    const symbol=String(alert?.symbol||'').trim().toUpperCase();
+    let stored=false;
+    try{
+      if(typeof this.store.appendEarlyExpansionAlert==='function'){
+        await this.store.appendEarlyExpansionAlert(alert);
+        stored=true;
+      }else{
+        throw new Error('WATCH_ALERT_FEED_WRITER_UNAVAILABLE');
+      }
+    }catch(error){this.noteError(error,'watch-only-alert-store');}
+    const providerStatus=typeof this.pushManager?.status==='function'?this.pushManager.status():null;
+    let pushStatus=providerStatus?.enabled===true?'PUSH_ENABLED_NOT_REQUESTED':'PUSH_DISABLED_OR_UNCONFIGURED';
+    if(stored&&providerStatus?.enabled===true&&typeof this.pushManager?.notifyRadarAlert==='function'){
+      try{
+        const attempts=await this.pushManager.notifyRadarAlert(alert);
+        pushStatus=attempts.some(x=>x?.status==='SENT')?'PUSH_ACCEPTED_BY_PROVIDER_DELIVERY_UNCONFIRMED':
+          attempts.length?'PUSH_ATTEMPTED_NO_PROVIDER_ACCEPTANCE':'PUSH_ENABLED_NO_ELIGIBLE_SUBSCRIPTIONS';
+      }catch(error){
+        pushStatus='PUSH_ATTEMPT_FAILED';
+        this.noteError(error,'watch-only-alert-push');
+      }
+    }
+    alert.notification_status=pushStatus;
+    const trace={...alert,event_type:eventType,feed_status:stored?'STORED':'STORE_FAILED',
+      notification_status:pushStatus,trace_at:this.clock()};
+    try{
+      if(typeof this.store.appendEarlyExpansionEvent==='function')await this.store.appendEarlyExpansionEvent(trace);
+    }catch(error){this.noteError(error,'watch-only-alert-trace');}
+    this.logger.info?.('[RADAR8_WATCH_ONLY_ALERT]',JSON.stringify({
+      id:alert?.id||null,symbol,event:alert?.event||null,feed_status:stored?'STORED':'STORE_FAILED',
+      notification_status:pushStatus,entry_eligible:false
+    }));
+    return {stored,pushStatus};
+  }
   noteError(e,where='scan'){this.lastError=String(e?.message??e);this.logger.warn?.('EARLY_EXPANSION_RADAR_'+where,this.lastError);}
   normalizeQuote(quote=this.config.quote){
     const q=String(quote||this.config.quote).trim().toUpperCase();
@@ -2219,7 +2330,7 @@ export class EarlyExpansionRadar{
     if(activeSymbols.size>0){
       const stateMaps=[
         this.fastState,this.lastAlertAt,this.lastAlertScore,this.lastBand,
-        this.lastActivityShockAt,this.lastActivityShockKeyBySymbol,this.fastShockPendingUntil,
+        this.lastActivityShockAt,this.lastActivityShockKeyBySymbol,this.lastEarlyFlowWatchAt,this.lastEarlyFlowWatchKeyBySymbol,this.fastShockPendingUntil,
         this.lastMicroScanCycleBySymbol,this.lastDeepScanCycleBySymbol,
         this.lastDeepAtBySymbol,this.firstEligibleAtBySymbol,
         this.marketWideCacheArchiveHydrationAttemptAtBySymbol
@@ -2755,6 +2866,38 @@ export class EarlyExpansionRadar{
           const sourceScoreStatus=microScore===null?'SOURCE_SCORE_MISSING':
             promoted?'MICRO_FINGERPRINT_SCORE_QUALIFIED':'MICRO_FINGERPRINT_SCORE_UNQUALIFIED';
           const finalBand=evidence.pre_expansion_stage||evidence.decision_band;
+          const latestClosedMicroOne=(Array.isArray(micro?.oneMinute)?micro.oneMinute:[])
+            .filter(c=>c?.closed===true&&hasFiniteNumber(c.closeTime)).at(-1)||null;
+          const latestClosedMicroFive=(Array.isArray(micro?.fiveMinute)?micro.fiveMinute:[])
+            .filter(c=>c?.closed===true&&hasFiniteNumber(c.closeTime)).at(-1)||null;
+          const watchCloseTime=hasFiniteNumber(latestClosedMicroOne?.closeTime)?Number(latestClosedMicroOne.closeTime):
+            hasFiniteNumber(latestClosedMicroFive?.closeTime)?Number(latestClosedMicroFive.closeTime):null;
+          const earlyFlowWatch=isConfirmedEarlyFlowWatchCandidate({
+            row,fast,microFingerprint:fp,decisionBand:finalBand,
+            dataQuality:evidence.data_quality,dataStale:evidence.data_stale,
+            closedCandleCloseTime:watchCloseTime
+          },this.config);
+          const earlyFlowWatchEvidence=earlyFlowWatch?{
+            closed_candle_close_time:watchCloseTime,
+            observed_ticker_at:hasFiniteNumber(fast?.at)?Number(fast.at):null,
+            fast_price_change_pct:hasFiniteNumber(fast?.price_change_pct)?Number(fast.price_change_pct):null,
+            fast_price_acceleration_pct:hasFiniteNumber(fast?.price_acceleration_pct)?Number(fast.price_acceleration_pct):null,
+            volume_accel_ratio:hasFiniteNumber(fast?.volume_accel_ratio)?Number(fast.volume_accel_ratio):null,
+            trade_accel_ratio:hasFiniteNumber(fast?.trade_accel_ratio)?Number(fast.trade_accel_ratio):null,
+            quote_volume_delta:hasFiniteNumber(fast?.volume_delta_quote)?Number(fast.volume_delta_quote):null,
+            trade_delta:hasFiniteNumber(fast?.trade_delta)?Number(fast.trade_delta):null,
+            micro_score:hasFiniteNumber(fp?.score)?Number(fp.score):null,
+            confirmation_count:hasFiniteNumber(fp?.confirmation_count)?Number(fp.confirmation_count):null,
+            rvol_1m:hasFiniteNumber(fp?.metrics?.rvol_1m)?Number(fp.metrics.rvol_1m):null,
+            rvol_5m:hasFiniteNumber(fp?.metrics?.rvol_5m)?Number(fp.metrics.rvol_5m):null,
+            trade_rvol_1m:hasFiniteNumber(fp?.metrics?.trade_rvol_1m)?Number(fp.metrics.trade_rvol_1m):null,
+            trade_rvol_5m:hasFiniteNumber(fp?.metrics?.trade_rvol_5m)?Number(fp.metrics.trade_rvol_5m):null,
+            acceleration_1m_pct:hasFiniteNumber(fp?.metrics?.acceleration_1m_pct)?Number(fp.metrics.acceleration_1m_pct):null,
+            acceleration_5m_pct:hasFiniteNumber(fp?.metrics?.acceleration_5m_pct)?Number(fp.metrics.acceleration_5m_pct):null,
+            return_1m:hasFiniteNumber(fp?.metrics?.return_1m)?Number(fp.metrics.return_1m):null,
+            return_5m:hasFiniteNumber(fp?.metrics?.return_5m)?Number(fp.metrics.return_5m):null,
+            closed_candles_only:true
+          }:null;
           const incomplete=finalBand==='DATA_INSUFFICIENT'||finalBand==='INCOMPLETE'||
             evidence.data_stale===true||!hasFiniteNumber(evidence.data_quality)||
             Number(evidence.data_quality)<Number(this.config.minDataQuality);
@@ -2768,6 +2911,7 @@ export class EarlyExpansionRadar{
           return {
             symbol:row.symbol,last_price:row.lastPrice,price_change_24h:row.priceChange24h,
             low_liquidity_burst_bypass:micro.row?._low_liquidity_burst_bypass===true,
+            early_flow_watch:earlyFlowWatch,early_flow_watch_evidence:earlyFlowWatchEvidence,
             quiet_base_scan_latency_ms:hasFiniteNumber(entry?.fast_scan_at)?Math.max(0,deepStarted-Number(entry.fast_scan_at)):null,
             early_expansion_score:finalScore!==null?Number(finalScore.toFixed(1)):null,
             signal_score_source:signalScoreSource,micro_fingerprint_score:microScore,
@@ -2964,7 +3108,8 @@ export class EarlyExpansionRadar{
       await recordPreExpansionSignals(this.store,evaluationObservations,{now,marketContext,logger:this.logger}).catch(e=>this.noteError(e,'outcome-record'));
       phaseTimings.signal_archive_ms=Math.max(0,this.clock()-signalArchiveStartedAt);
       const notificationStartedAt=this.clock();
-      let alertsThisCycle=0;
+      let alertsThisCycle=0,watchAlertsThisCycle=0;
+      const previousEarlyFlowWatchKeys=new Set(historyAlerts.filter(x=>x?.event==='EARLY_FLOW_WATCH_ONLY').map(x=>String(x?.id||'')));
       const previousActivityShockKeys=new Set(historyAlerts.filter(x=>x?.activity_shock?.detected===true)
         .map(x=>'RADAR8_ACTIVITY_SHOCK:'+String(x?.symbol||'').toUpperCase()+':'+Number(x?.activity_shock?.detected_candle_close_time||0)));
       for(const candidate of ok){
@@ -2982,25 +3127,42 @@ export class EarlyExpansionRadar{
              now-lastAt>=Number(this.config.activityShockCooldownMs??45*60*1000)&&
              this.activityShockTimestamps.length<Number(this.config.maxActivityShockAlertsPerHour??6)){
             const watchAlert=buildActivityShockWatchAlert(candidate,now);
-            // Activity Shock is explicitly research/watch-only. Keep it in the event
-            // ledger for later outcome analysis, but never publish it to the user-alert
-            // feed or push channel; it has not earned entry eligibility.
-            const watchTrace={...watchAlert,event_type:'ACTIVITY_SHOCK_WATCH_TRACE',notification_status:'WATCH_ONLY_NOT_PUSHED'};
-            if(typeof this.store.appendEarlyExpansionEvent==='function'){
-              await this.store.appendEarlyExpansionEvent(watchTrace);
-            }else{
-              this.logger.info?.('[RADAR8_ACTIVITY_SHOCK_WATCH_ONLY]',JSON.stringify({
-                symbol,close_time:closeTime,score:shock.score,notification_status:'WATCH_ONLY_NOT_PUSHED'
-              }));
-            }
-            const journeyEntry=journeyEntries.get(symbol);
+             // This stays monitor-only but is visible in the alert feed; push is attempted
+             // only when a notification provider is explicitly enabled.
+             const watchStatus=await this.recordWatchOnlyAlert(watchAlert,'ACTIVITY_SHOCK_WATCH_TRACE');
+             if(watchStatus.stored)watchAlertsThisCycle++;
+             const journeyEntry=journeyEntries.get(symbol);
             if(journeyEntry){
-              journeyEntry.notification_status='WATCH_ONLY_NOT_PUSHED';
+              journeyEntry.notification_status=watchStatus.pushStatus;
               journeyEntry.notification_gate_rejection_reason='WATCH_ONLY_NOT_ENTRY_ELIGIBLE';
               journeyEntry.alert_id=String(watchAlert.id||INCOMPLETE);
             }
             this.lastActivityShockAt.set(symbol,now);this.lastActivityShockKeyBySymbol.set(symbol,shockKey);
             this.activityShockTimestamps.push(now);previousActivityShockKeys.add(shockKey);
+          }
+        }
+        if(!eligibleAlert&&candidate.early_flow_watch===true&&candidate.activity_shock?.detected!==true){
+          const symbol=String(candidate.symbol||'').trim().toUpperCase();
+          const watchAlert=buildEarlyFlowWatchAlert(candidate,now);
+          const watchKey=String(watchAlert.id||'');
+          const lastAt=Number(this.lastEarlyFlowWatchAt.get(symbol)||0);
+          const cooldown=Math.max(0,Number(this.config.earlyFlowWatchCooldownMs??10*60*1000));
+          if(!previousEarlyFlowWatchKeys.has(watchKey)&&this.lastEarlyFlowWatchKeyBySymbol.get(symbol)!==watchKey&&
+             now-lastAt>=cooldown){
+            const watchStatus=await this.recordWatchOnlyAlert(watchAlert,'EARLY_FLOW_WATCH_TRACE');
+            if(watchStatus.stored){
+              this.lastEarlyFlowWatchAt.set(symbol,now);
+              this.lastEarlyFlowWatchKeyBySymbol.set(symbol,watchKey);
+              previousEarlyFlowWatchKeys.add(watchKey);
+              watchAlertsThisCycle++;
+              const journeyEntry=journeyEntries.get(symbol);
+              if(journeyEntry){
+                journeyEntry.notification_status=watchStatus.pushStatus;
+                journeyEntry.notification_gate_rejection_reason='WATCH_ONLY_NOT_ENTRY_ELIGIBLE';
+                journeyEntry.alert_id=watchKey;
+                journeyEntry.alert_stage='WATCH_EARLY';
+              }
+            }
           }
         }
         const previousScore=this.lastAlertScore.get(candidate.symbol)||null,bandChanged=this.lastBand.get(candidate.symbol)!==candidate.decision_band;
@@ -3039,7 +3201,7 @@ export class EarlyExpansionRadar{
       }
       phaseTimings.notification_ms=Math.max(0,this.clock()-notificationStartedAt);
       this.scans++;this.lastScanAtMs=now;this.lastError=null;
-      this.lastResult={schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',as_of:new Date(now).toISOString(),quote:q,universe:coverage,candidates:this.latestCandidates,alerts_emitted_this_cycle:alertsThisCycle,meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',source:sourceList([tickerSource]),closed_candles_only:true,fast_scan:'ALL_ELIGIBLE_TICKERS_EVERY_CYCLE',micro_scan:'ROTATING_1M_5M_ACROSS_ELIGIBLE_UNIVERSE',deep_scan:'TOP_MICRO_FINGERPRINT_PLUS_QUIET_PLUS_ROTATION',universe_scope:'ALL_ELIGIBLE_SPOT_USDT',burst_priority_mode:'CLOSED_1M_5M_ACTIVITY_BURST',burst_priority_slots:Math.max(0,Math.trunc(Number(this.config.exceptionalRotationBypassSlots??5)))}};
+      this.lastResult={schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',as_of:new Date(now).toISOString(),quote:q,universe:coverage,candidates:this.latestCandidates,alerts_emitted_this_cycle:alertsThisCycle,watch_alerts_recorded_this_cycle:watchAlertsThisCycle,meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',source:sourceList([tickerSource]),closed_candles_only:true,fast_scan:'ALL_ELIGIBLE_TICKERS_EVERY_CYCLE',micro_scan:'ROTATING_1M_5M_ACROSS_ELIGIBLE_UNIVERSE',deep_scan:'TOP_MICRO_FINGERPRINT_PLUS_QUIET_PLUS_ROTATION',universe_scope:'ALL_ELIGIBLE_SPOT_USDT',burst_priority_mode:'CLOSED_1M_5M_ACTIVITY_BURST',burst_priority_slots:Math.max(0,Math.trunc(Number(this.config.exceptionalRotationBypassSlots??5)))}};
       const scanCompletedAt=this.clock(),scanDurationMs=Math.max(0,scanCompletedAt-scanStartedAt);
       const explicitlyTimedMs=Object.entries(phaseTimings)
         .filter(([key])=>key!=='market_micro_overlap_ms'&&key!=='other_ms')

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible,ensureRadar8ScoreContainer} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible,ensureRadar8ScoreContainer,isConfirmedEarlyFlowWatchCandidate,buildEarlyFlowWatchAlert} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -1292,4 +1292,47 @@ test('Radar 8 score-container repair handles a malformed parent field without th
   assert.equal(scores.fast_score,'.INCOMPLETE');
   scores.micro_score=60;
   assert.equal(entry.radar_scores.RADAR_8.micro_score,60);
+});
+
+
+test('Radar 8 confirmed early-flow observations create a separate monitor-only alert',()=>{
+  const row={symbol:'EARLYFLOWUSDT',lastPrice:1.002,priceChange24h:.4,quoteVolume24h:9_000};
+  const fast={warmed_up:true,price_change_pct:.01,price_acceleration_pct:.02,
+    volume_accel_ratio:1.65,trade_accel_ratio:1.45,volume_delta_quote:45,trade_delta:5};
+  const microFingerprint={
+    closed_candles_only:true,score:68,confirmation_count:4,stage:'WATCH',
+    metrics:{rvol_1m:1.3,rvol_5m:1.2,trade_rvol_1m:1.2,trade_rvol_5m:1.15,
+      taker_buy_ratio:.55,acceleration_1m_pct:.03,acceleration_5m_pct:.04,return_1m:.02,return_5m:.05}
+  };
+  const qualifies=isConfirmedEarlyFlowWatchCandidate({
+    row,fast,microFingerprint,decisionBand:'WATCH_EARLY',dataQuality:88,dataStale:false,
+    closedCandleCloseTime:now-60_000
+  });
+  assert.equal(qualifies,true);
+  assert.equal(isConfirmedEarlyFlowWatchCandidate({
+    row,fast,microFingerprint,decisionBand:'ALREADY_EXTENDED',dataQuality:88,dataStale:false,
+    closedCandleCloseTime:now-60_000
+  }),false);
+  assert.equal(isConfirmedEarlyFlowWatchCandidate({
+    row,fast,microFingerprint:{...microFingerprint,closed_candles_only:false},
+    decisionBand:'WATCH_EARLY',dataQuality:88,dataStale:false,closedCandleCloseTime:now-60_000
+  }),false);
+  assert.equal(isConfirmedEarlyFlowWatchCandidate({
+    row,fast,microFingerprint,decisionBand:'WATCH_EARLY',dataQuality:88,dataStale:false,
+    closedCandleCloseTime:null
+  }),false,'a monitor alert requires a concrete closed-candle timestamp');
+  const alert=buildEarlyFlowWatchAlert({
+    symbol:'EARLYFLOWUSDT',last_price:1.002,price_change_24h:.4,data_quality:88,data_stale:false,
+    source:'BINANCE_PUBLIC_WS',low_liquidity_burst_bypass:true,micro_fingerprint_score:68,
+    early_flow_watch_evidence:{closed_candle_close_time:now-60_000,volume_accel_ratio:1.65,trade_accel_ratio:1.45},
+    risk_flags:[],reason_codes:[]
+  },now);
+  assert.equal(alert.event,'EARLY_FLOW_WATCH_ONLY');
+  assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+  assert.equal(alert.paper_trading,true);
+  assert.equal(alert.real_order_execution,false);
+  assert.equal(alert.low_liquidity_burst_bypass,true);
+  assert.ok(alert.risk_flags.includes('LOW_LIQUIDITY_WATCH_ONLY'));
+  assert.ok(alert.reason_codes.includes('MONITOR_ONLY_NOT_ENTRY'));
 });
