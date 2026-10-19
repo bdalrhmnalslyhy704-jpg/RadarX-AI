@@ -166,3 +166,30 @@ test('the 30-minute same-symbol early-warning cooldown prevents duplicate watche
   assert.equal(result.eligible,false);
   assert.ok(result.failures.includes('EARLY_WARNING_SYMBOL_COOLDOWN'));
 });
+
+test('watch-only fallback reads flash_confirmations when the 3-second bucket is unavailable and no dedicated rejection code is passed',()=>{
+  const alert=wLike({
+    eligible:false,
+    risk_flags:['THREE_SECOND_FLOW_UNAVAILABLE','VOLATILITY_EXTREME'],
+    strong_move:{
+      ...wLike().strong_move,score:86.87,
+      trigger_diagnostics:{eligible:false,failed_checks:[]},
+      metrics:{
+        return_1m:0.6650,return_3m:0.6484,acceleration:0.3342,
+        volume_ratio:43.5548,trade_ratio:11.0909,
+        taker_buy_ratio:0.9315,three_second_taker_buy_ratio:null,
+        three_second_liquidity:{available:false,taker_buy_ratio:null},
+        flash_confirmations:8,breakout_up:true,micro_breakout:true
+      }
+    }
+  });
+  const result=evaluateDynamicEarlyWarningGate(alert,{...row,priceChange24h:0.39},{
+    now:NOW,alertScore:86.87,
+    strictFailures:['STRONG_MOVE_CORE_GATE_FAILED'],
+    coreTriggerFailures:[]
+  });
+  assert.equal(result.eligible,true,JSON.stringify(result.failures));
+  assert.equal(result.fallback_3s_flow,true);
+  assert.equal(result.flow_evidence.three_second_bucket_available,false);
+  assert.ok(result.soft_failures.includes('STRICT_CORE_GATE_FAILED_EXCEPTIONAL_FLOW_WATCH_ONLY'));
+});
