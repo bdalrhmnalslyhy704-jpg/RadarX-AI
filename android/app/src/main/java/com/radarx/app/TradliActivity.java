@@ -36,10 +36,8 @@ public final class TradliActivity extends Activity {
             "https://appassets.androidplatform.net/assets/tradli.html";
     private static final String APP_ORIGIN =
             "https://appassets.androidplatform.net";
-    private static final String PRIMARY_BACKEND_ORIGIN =
-            "https://radarx-ai-triple-production.up.railway.app";
-    private static final String FALLBACK_BACKEND_ORIGIN =
-            "https://radarx-ai-production.up.railway.app";
+    private static final String PRIMARY_BACKEND_ORIGIN = BuildConfig.RADARX_BACKEND_ORIGIN;
+    private static final String FALLBACK_BACKEND_ORIGIN = BuildConfig.RADARX_BACKEND_FALLBACK_ORIGIN;
 
     private WebView webView;
     private WebViewAssetLoader assetLoader;
@@ -153,6 +151,7 @@ public final class TradliActivity extends Activity {
         ));
         setContentView(root);
 
+        webView.addJavascriptInterface(new RadarXBackendConfigBridge(), "RadarXBackendConfig");
         webView.loadUrl(APP_URL);
     }
 

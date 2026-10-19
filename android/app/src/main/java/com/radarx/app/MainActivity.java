@@ -41,10 +41,8 @@ public final class MainActivity extends Activity {
             "https://appassets.androidplatform.net/assets/index.html";
     private static final String APP_ORIGIN =
             "https://appassets.androidplatform.net";
-    private static final String BACKEND_ORIGIN =
-            "https://radarx-ai-triple-production.up.railway.app";
-    private static final String BACKEND_FALLBACK_ORIGIN =
-            "https://radarx-ai-production.up.railway.app";
+    private static final String BACKEND_ORIGIN = BuildConfig.RADARX_BACKEND_ORIGIN;
+    private static final String BACKEND_FALLBACK_ORIGIN = BuildConfig.RADARX_BACKEND_FALLBACK_ORIGIN;
     private static final int REQUEST_POST_NOTIFICATIONS = 7301;
     private static final String PREFS_BACKGROUND = "radarx_background";
     private static final String PREF_AUTO_ENABLED = "auto_enabled";
@@ -89,6 +87,7 @@ public final class MainActivity extends Activity {
 
         webView.addJavascriptInterface(new RadarXSmokeBridge(), "RadarXSmoke");
         webView.addJavascriptInterface(new RadarXNativeBridge(), "RadarXNative");
+        webView.addJavascriptInterface(new RadarXBackendConfigBridge(), "RadarXBackendConfig");
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
@@ -193,7 +192,9 @@ public final class MainActivity extends Activity {
         HttpURLConnection connection = null;
         try {
             URL url = new URL(request.getUrl().toString());
-            if (!BACKEND_ORIGIN.equalsIgnoreCase(url.getProtocol() + "://" + url.getHost())) {
+            String requestOrigin = url.getProtocol() + "://" + url.getHost();
+            if (!BACKEND_ORIGIN.equalsIgnoreCase(requestOrigin) &&
+                    !BACKEND_FALLBACK_ORIGIN.equalsIgnoreCase(requestOrigin)) {
                 return blockedResponse("Backend destination blocked");
             }
             connection = (HttpURLConnection) url.openConnection();

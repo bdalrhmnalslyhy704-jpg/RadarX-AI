@@ -1,6 +1,35 @@
+import java.net.URI
+
 plugins {
     id "com.android.application"
 }
+
+// Configurable HTTPS backend origins. Defaults keep existing Build 224 behavior;
+// GitHub Actions can supply RADARX_BACKEND_ORIGIN and RADARX_BACKEND_FALLBACK_ORIGIN.
+def resolveBackendOrigin = { name, defaultValue ->
+    def raw = (project.findProperty(name) ?: System.getenv(name) ?: defaultValue).toString().trim()
+    while (raw.endsWith("/")) raw = raw.substring(0, raw.length() - 1)
+    URI parsed
+    try {
+        parsed = new URI(raw)
+    } catch (Exception ignored) {
+        throw new GradleException(name + " must be a valid HTTPS origin")
+    }
+    if (parsed.scheme != "https" || !parsed.host || parsed.rawUserInfo != null ||
+        parsed.rawQuery != null || parsed.rawFragment != null ||
+        (parsed.rawPath != null && parsed.rawPath != "" && parsed.rawPath != "/") ||
+        (parsed.port != -1 && parsed.port != 443)) {
+        throw new GradleException(name + " must be an HTTPS origin without a path, credentials, query, or fragment")
+    }
+    return parsed.scheme + "://" + parsed.host
+}
+
+def legacyRadarxBackendOrigin = "https://radarx-ai-triple-production.up.railway.app"
+def legacyRadarxBackendFallbackOrigin = "https://radarx-ai-production.up.railway.app"
+def radarxBackendOrigin = resolveBackendOrigin("RADARX_BACKEND_ORIGIN", legacyRadarxBackendOrigin)
+// When switching hosts, never silently fall back to a different, potentially stale backend.
+def fallbackDefault = radarxBackendOrigin == legacyRadarxBackendOrigin ? legacyRadarxBackendFallbackOrigin : radarxBackendOrigin
+def radarxBackendFallbackOrigin = resolveBackendOrigin("RADARX_BACKEND_FALLBACK_ORIGIN", fallbackDefault)
 
 // Build and development branches remain usable without the owner's Firebase project.
 // When android/app/google-services.json is provisioned, enable the plugin automatically.
@@ -41,12 +70,18 @@ android {
     namespace "com.radarx.app"
     compileSdk 35
 
+    buildFeatures {
+        buildConfig true
+    }
+
     defaultConfig {
         applicationId "com.radarx.app"
         minSdk 23
         targetSdk 35
         versionCode 15
         versionName "1.4.9"
+        buildConfigField "String", "RADARX_BACKEND_ORIGIN", '"'+radarxBackendOrigin+'"'
+        buildConfigField "String", "RADARX_BACKEND_FALLBACK_ORIGIN", '"'+radarxBackendFallbackOrigin+'"'
     }
 
     signingConfigs {

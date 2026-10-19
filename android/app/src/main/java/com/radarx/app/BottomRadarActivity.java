@@ -36,10 +36,8 @@ public final class BottomRadarActivity extends Activity {
             "https://appassets.androidplatform.net/assets/bottom-radar.html";
     private static final String APP_ORIGIN =
             "https://appassets.androidplatform.net";
-    private static final String BACKEND_ORIGIN =
-            "https://radarx-ai-triple-production.up.railway.app";
-    private static final String BACKEND_FALLBACK_ORIGIN =
-            "https://radarx-ai-production.up.railway.app";
+    private static final String BACKEND_ORIGIN = BuildConfig.RADARX_BACKEND_ORIGIN;
+    private static final String BACKEND_FALLBACK_ORIGIN = BuildConfig.RADARX_BACKEND_FALLBACK_ORIGIN;
 
     private WebView webView;
     private WebViewAssetLoader assetLoader;
@@ -120,9 +118,11 @@ public final class BottomRadarActivity extends Activity {
             @Override
             public WebResourceResponse shouldInterceptRequest(
                     WebView view, WebResourceRequest request) {
-                WebResourceResponse local = assetLoader.shouldInterceptRequest(request.getUrl());
+                Uri uri = request.getUrl();
+                WebResourceResponse local = assetLoader.shouldInterceptRequest(uri);
                 if (local != null) return local;
-                return null;
+                if (isAllowedBackendUri(uri)) return fetchBackend(request);
+                return blockedResponse("Network destination blocked");
             }
 
             @Override
@@ -150,6 +150,7 @@ public final class BottomRadarActivity extends Activity {
         ));
         setContentView(root);
 
+        webView.addJavascriptInterface(new RadarXBackendConfigBridge(), "RadarXBackendConfig");
         webView.loadUrl(APP_URL);
     }
 
