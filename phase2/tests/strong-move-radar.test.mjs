@@ -30,7 +30,10 @@ function make1m(){
 function makeEarly1m(){
   const rows=[];let price=100;
   for(let i=0;i<120;i++){
-    const burst=i>=114,open=price,step=burst?0.8:0.03,close=open+step;
+    // Build a real acceleration transition: moderate impulse, then a stronger final 3-candle burst.
+    const step=i>=117?1.0:i>=114?0.1:0.03;
+    const open=price,close=open+step;
+    const burst=i>=114;
     price=close;
     rows.push({
       openTime:NOW-(120-i)*60_000,closeTime:NOW-(120-i)*60_000+60_000,
