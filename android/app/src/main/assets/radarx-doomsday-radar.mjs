@@ -1,5 +1,5 @@
-import {requestJson,setRadarState} from './radarx-backend-client.mjs';
-const DOOMSDAY_BACKEND='https://radarx-ai-triple-production.up.railway.app';
+import {DEFAULT_BACKEND_BASE_URL,requestJson,setRadarState} from './radarx-backend-client.mjs';
+const DOOMSDAY_BACKEND=DEFAULT_BACKEND_BASE_URL;
 async function getDoomsdayRadar({quote='USDT',limit=10,scan=true,symbols=''}={}){const qp='?quote='+encodeURIComponent(String(quote).toUpperCase())+'&limit='+encodeURIComponent(String(limit))+(scan?'&scan=1':'')+(symbols?'&symbols='+encodeURIComponent(symbols):'');return requestJson(DOOMSDAY_BACKEND,'/api/doomsday-radar'+qp,globalThis.fetch,120000);}
 
 const esc=v=>String(v||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
