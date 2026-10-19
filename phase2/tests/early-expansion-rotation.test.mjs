@@ -1336,3 +1336,37 @@ test('Radar 8 confirmed early-flow observations create a separate monitor-only a
   assert.ok(alert.risk_flags.includes('LOW_LIQUIDITY_WATCH_ONLY'));
   assert.ok(alert.reason_codes.includes('MONITOR_ONLY_NOT_ENTRY'));
 });
+
+
+test('Radar 8 persists watch-only observations in the alert feed and reports disabled push honestly',async()=>{
+  const storedAlerts=[],storedEvents=[],pushCalls=[];
+  const store={
+    async appendEarlyExpansionAlert(alert){storedAlerts.push({...alert});},
+    async appendEarlyExpansionEvent(event){storedEvents.push({...event});}
+  };
+  const pushManager={
+    status(){return {provider:'none',enabled:false};},
+    async notifyRadarAlert(alert){pushCalls.push(alert);return [];}
+  };
+  const radar=new EarlyExpansionRadar({
+    rest:{request:async()=>({data:[]}),klines:async()=>({candles:[]}),depth:async()=>({data:{bids:[],asks:[]}})},
+    store,pushManager,config:{},clock:()=>now,logger:{info(){},warn(){}}
+  });
+  const alert=buildEarlyFlowWatchAlert({
+    symbol:'EARLYFLOWUSDT',last_price:1.002,price_change_24h:.4,data_quality:88,data_stale:false,
+    source:'BINANCE_PUBLIC_WS',low_liquidity_burst_bypass:true,micro_fingerprint_score:68,
+    early_flow_watch_evidence:{closed_candle_close_time:now-60_000,volume_accel_ratio:1.65,trade_accel_ratio:1.45},
+    risk_flags:[],reason_codes:[]
+  },now);
+  const result=await radar.recordWatchOnlyAlert(alert,'EARLY_FLOW_WATCH_TRACE');
+  assert.equal(result.stored,true);
+  assert.equal(result.pushStatus,'PUSH_DISABLED_OR_UNCONFIGURED');
+  assert.equal(storedAlerts.length,1);
+  assert.equal(storedAlerts[0].event,'EARLY_FLOW_WATCH_ONLY');
+  assert.equal(storedAlerts[0].watch_only,true);
+  assert.equal(storedAlerts[0].entry_eligible,false);
+  assert.equal(storedEvents.length,1);
+  assert.equal(storedEvents[0].event_type,'EARLY_FLOW_WATCH_TRACE');
+  assert.equal(storedEvents[0].notification_status,'PUSH_DISABLED_OR_UNCONFIGURED');
+  assert.equal(pushCalls.length,0,'a disabled provider must not be called');
+});

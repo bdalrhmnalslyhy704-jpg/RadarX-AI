@@ -3137,8 +3137,8 @@ export class EarlyExpansionRadar{
               journeyEntry.notification_gate_rejection_reason='WATCH_ONLY_NOT_ENTRY_ELIGIBLE';
               journeyEntry.alert_id=String(watchAlert.id||INCOMPLETE);
             }
-            this.lastActivityShockAt.set(symbol,now);this.lastActivityShockKeyBySymbol.set(symbol,shockKey);
-            this.activityShockTimestamps.push(now);previousActivityShockKeys.add(shockKey);
+            if(watchStatus.stored){this.lastActivityShockAt.set(symbol,now);this.lastActivityShockKeyBySymbol.set(symbol,shockKey);
+            this.activityShockTimestamps.push(now);previousActivityShockKeys.add(shockKey);}
           }
         }
         if(!eligibleAlert&&candidate.early_flow_watch===true&&candidate.activity_shock?.detected!==true){
