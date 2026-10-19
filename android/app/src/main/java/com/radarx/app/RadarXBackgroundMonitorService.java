@@ -45,16 +45,16 @@ public final class RadarXBackgroundMonitorService extends Service {
     // Serialize fetch/replay cycles across executor replacement and service re-starts.
     private static final Object SCAN_LOCK = new Object();
     private static final String BACKEND_RADAR_ALERTS =
-            "https://radarx-ai-triple-production.up.railway.app/api/radar-alerts?radar=ALL&limit=50";
+            BuildConfig.RADARX_BACKEND_ORIGIN + "/api/radar-alerts?radar=ALL&limit=50";
     private static final String BACKEND_RADAR_ALERTS_FALLBACK =
-            "https://radarx-ai-production.up.railway.app/api/radar-alerts?radar=ALL&limit=50";
+            BuildConfig.RADARX_BACKEND_FALLBACK_ORIGIN + "/api/radar-alerts?radar=ALL&limit=50";
     // Compatibility routes kept as immutable read-only references; active polling uses the unified feed above.
     private static final String BACKEND_MOVE_RADAR =
-            "https://radarx-ai-triple-production.up.railway.app/api/move-radar?quote=USDT&limit=50";
+            BuildConfig.RADARX_BACKEND_ORIGIN + "/api/move-radar?quote=USDT&limit=50";
     private static final String BACKEND_STRONG_MOVE_RADAR =
-            "https://radarx-ai-triple-production.up.railway.app/api/strong-move-radar?quote=USDT&limit=50";
+            BuildConfig.RADARX_BACKEND_ORIGIN + "/api/strong-move-radar?quote=USDT&limit=50";
     private static final String BACKEND_ROTATION_RADAR =
-            "https://radarx-ai-triple-production.up.railway.app/api/rotation-radar?quote=USDT&limit=50";
+            BuildConfig.RADARX_BACKEND_ORIGIN + "/api/rotation-radar?quote=USDT&limit=50";
 
     // Legacy per-radar cursor key retained for migration/backward-compatible local state.
     private static final String ROTATION_ALERT_CURSOR_KEY = "rotation_alert_cursor_at";
@@ -292,8 +292,8 @@ public final class RadarXBackgroundMonitorService extends Service {
     private JSONArray fetchFalconEyeHistory(long cursor) throws Exception {
         Exception last = null;
         String[] bases = {
-            "https://radarx-ai-triple-production.up.railway.app",
-            "https://radarx-ai-production.up.railway.app"
+            BuildConfig.RADARX_BACKEND_ORIGIN,
+            BuildConfig.RADARX_BACKEND_FALLBACK_ORIGIN
         };
         for (String base : bases) {
             HttpURLConnection connection = null;
@@ -342,7 +342,7 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     private JSONObject fetchIndividualRadarAlerts(long cursor, String cursorId, Exception prior) throws Exception {
-        String base = "https://radarx-ai-triple-production.up.railway.app";
+        String base = BuildConfig.RADARX_BACKEND_ORIGIN;
         String[] paths = {
             "/api/move-radar?quote=USDT&limit=50",
             "/api/strong-move-radar?quote=USDT&limit=50",
