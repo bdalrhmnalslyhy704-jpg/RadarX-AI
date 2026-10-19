@@ -203,23 +203,30 @@ assert_background_service_declared() {
     return 1
   fi
 
-  # Verify live service state independently of logcat. Heavy WebView output can
-  # rotate the log buffer after the service-ready marker, so a missing old log line
-  # alone must not fail a correctly running service. Conversely, a manifest or log
-  # marker alone is not enough: Android must currently hold the service instance.
+  # Verify live service state independently of logcat. Startup logs show that Android
+  # can emit BACKGROUND_SERVICE_READY slightly before dumpsys/pidof exposes the
+  # isolated :radar_background ProcessRecord. Retry a bounded number of times to
+  # handle this startup race; a manifest or log marker alone still never passes.
   local logs runtime_state service_pid service_pid_source
   logs="$(cat "${APP_LOG_FILE:-/nonexistent}" 2>/dev/null || true)"
-  runtime_state="$(timeout 15s adb shell dumpsys activity services com.radarx.app 2>/dev/null || true)"
-  service_pid="$(background_service_pid)"
+  runtime_state=""
+  service_pid=""
   service_pid_source="pidof-or-ps"
-  # Some Android API 29 / toybox pidof builds do not resolve long colon-suffixed
-  # app process names, even while dumpsys reports the live ServiceRecord and its
-  # ProcessRecord. In that case, derive the PID only from that same live service
-  # snapshot; still require both the registered service and its concrete process.
-  if [[ -z "$service_pid" ]]; then
-    service_pid="$(printf '%s\n' "$runtime_state" | sed -nE 's/.*ProcessRecord\{[^}]* ([0-9]+):com\.radarx\.app:radar_background\/.*/\1/p' | head -n 1 | tr -d '\r')"
-    service_pid_source="dumpsys"
-  fi
+  for attempt in $(seq 1 15); do
+    runtime_state="$(timeout 8s adb shell dumpsys activity services com.radarx.app 2>/dev/null || true)"
+    service_pid="$(background_service_pid)"
+    service_pid_source="pidof-or-ps"
+    # Some Android API 29 / toybox pidof builds omit colon-suffixed names. Derive
+    # the PID only from the same live ServiceRecord/ProcessRecord snapshot.
+    if [[ -z "$service_pid" ]]; then
+      service_pid="$(printf '%s\n' "$runtime_state" | sed -nE 's/.*ProcessRecord\{[^}]* ([0-9]+):com\.radarx\.app:radar_background\/.*/\1/p' | head -n 1 | tr -d '\r')"
+      if [[ -n "$service_pid" ]]; then service_pid_source="dumpsys"; fi
+    fi
+    if printf '%s\n' "$runtime_state" | grep -Fq 'RadarXBackgroundMonitorService' && [[ -n "$service_pid" ]]; then
+      break
+    fi
+    sleep 1
+  done
   if ! printf '%s\n' "$runtime_state" | grep -Fq 'RadarXBackgroundMonitorService' || [[ -z "$service_pid" ]]; then
     echo "::error::Manifest is valid but Android does not show a live background-monitor service process"
     echo "BACKGROUND_SERVICE_PID=${service_pid:-NONE} PID_SOURCE=$service_pid_source"
