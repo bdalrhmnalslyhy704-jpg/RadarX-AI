@@ -40,6 +40,15 @@ assert.equal(configuredClient.normalizeBackendBaseUrl('https://backup.radarx-bui
 assert.throws(() => configuredClient.normalizeBackendBaseUrl('https://unapproved.example'), /BACKEND_ORIGIN_NOT_ALLOWED/);
 delete globalThis.window;
 
+const radar8Page = await readFile(new URL('./app/src/main/assets/radar8-lightning.html', import.meta.url), 'utf8');
+assert.match(radar8Page,/RadarXBackendConfig/);
+assert.match(radar8Page,/getBackendOrigin/);
+assert.match(radar8Page,/getBackendFallbackOrigin/);
+assert.doesNotMatch(radar8Page,/const BASES=\['https:\/\/radarx-ai-triple-production\.up\.railway\.app'/);
+const doomsdayClient = await readFile(new URL('./app/src/main/assets/radarx-doomsday-radar.mjs', import.meta.url), 'utf8');
+assert.match(doomsdayClient,/DEFAULT_BACKEND_BASE_URL/);
+assert.doesNotMatch(doomsdayClient,/const DOOMSDAY_BACKEND='https:\/\/radarx-ai-triple-production\.up\.railway\.app'/);
+
 console.log('Android backend-client regression tests passed');
 
 // Dashboard CI trigger; no runtime behavior.
