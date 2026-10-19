@@ -100,7 +100,7 @@ jobs:
           "
 
       - name: Commit actual Markdown summary to the research branch
-        if: always()
+        if: always() && github.event_name == 'push'
         run: |
           if [ -f reports/missed-mover-replay/monthly-learning-summary.md ]; then
             git config user.name 'github-actions[bot]'
@@ -108,7 +108,7 @@ jobs:
             git add reports/missed-mover-replay/monthly-learning-summary.md
             if ! git diff --cached --quiet; then
               git commit -m 'research(build224): record missed-mover replay results'
-              git push origin HEAD
+              git push origin HEAD:refs/heads/research/build224-monthly-move-forensics-20261019
             else
               echo 'Replay Markdown unchanged; no report commit needed.'
             fi
