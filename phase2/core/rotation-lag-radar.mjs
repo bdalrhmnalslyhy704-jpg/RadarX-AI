@@ -25,6 +25,31 @@ function closedCandles(rows,now){
   ).sort((a,b)=>Number(a.openTime)-Number(b.openTime));
 }
 
+function candleWindowIssue(rows, now, intervalMs, required, label) {
+  if (rows.length < required) return null; // Preserve the existing insufficient-data result.
+  const tail = rows.slice(-required);
+  const latestClose = Number(tail.at(-1)?.closeTime);
+  if (!Number.isFinite(latestClose) || latestClose > now ||
+      now - latestClose > intervalMs * 2 + 10_000) {
+    return {stage:'DATA_STALE', reason:label + '_STALE_CLOSED_CANDLES'};
+  }
+  for (let i = 1; i < tail.length; i++) {
+    const delta = Number(tail[i].openTime) - Number(tail[i - 1].openTime);
+    if (!Number.isFinite(delta) || Math.abs(delta - intervalMs) > 1000) {
+      return {stage:'DATA_GAP', reason:label + '_CLOSED_CANDLE_GAP'};
+    }
+  }
+  return null;
+}
+
+function invalidWindowResult(issue, counts) {
+  return {
+    eligible:false, stage:issue.stage, score:null, activation_score:null,
+    closed_candles_only:true, data_stale:issue.stage==='DATA_STALE',
+    data_quality:0, data_quality_reasons:[issue.reason], counts
+  };
+}
+
 function rollingVwap(candles,n){
   const rows=candles.slice(-n);
   let den=0,num=0;
@@ -122,9 +147,20 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
   const btc1h=closedCandles(benchmarks?.BTCUSDT?.one_hour,now);
   const eth1h=closedCandles(benchmarks?.ETHUSDT?.one_hour,now);
 
+  const counts={fifteen_min:m15.length,one_hour:h1.length,btc15:btc15.length,eth15:eth15.length};
   if(m15.length<60||h1.length<30||btc15.length<12||eth15.length<12){
-    return {eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true,
-      counts:{fifteen_min:m15.length,one_hour:h1.length,btc15:btc15.length,eth15:eth15.length}};
+    return {eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true,counts};
+  }
+
+  const windows=[
+    [m15,now,15*60_000,60,'SYMBOL_15M'],
+    [h1,now,60*60_000,30,'SYMBOL_1H'],
+    [btc15,now,15*60_000,12,'BTC_15M'],
+    [eth15,now,15*60_000,12,'ETH_15M']
+  ];
+  for(const [rows,clock,interval,required,label] of windows){
+    const issue=candleWindowIssue(rows,clock,interval,required,label);
+    if(issue)return invalidWindowResult(issue,counts);
   }
 
   const close15=m15.map(c=>Number(c.close));
