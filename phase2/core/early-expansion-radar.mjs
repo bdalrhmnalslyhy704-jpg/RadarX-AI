@@ -902,6 +902,33 @@ function fastCandidateScore(row,fast,cfg){
  * recent ticker deltas show a strong positive price/activity shock. This is a
  * watch-only capacity bypass; it does not change eligibility or alert rules.
  */
+/**
+ * Ensure a journey row has an object at radar_scores.RADAR_8 before any stage
+ * writes a per-radar score. Under-floor WATCH rows are deliberately non-eligible
+ * for the regular universe lane, so their initial value may still be ".INCOMPLETE".
+ */
+export function ensureRadar8ScoreContainer(entry,fastScore=INCOMPLETE){
+  if(!entry||typeof entry!=='object')return null;
+  if(!entry.radar_scores||typeof entry.radar_scores!=='object'||Array.isArray(entry.radar_scores)){
+    entry.radar_scores={};
+  }
+  let scores=entry.radar_scores.RADAR_8;
+  if(!scores||typeof scores!=='object'||Array.isArray(scores)){
+    scores={
+      fast_score:hasFiniteNumber(fastScore)?Number(fastScore):INCOMPLETE,
+      micro_score:INCOMPLETE,deep_score:INCOMPLETE,final_score:INCOMPLETE
+    };
+    entry.radar_scores.RADAR_8=scores;
+  }else{
+    if(!Object.prototype.hasOwnProperty.call(scores,'fast_score'))
+      scores.fast_score=hasFiniteNumber(fastScore)?Number(fastScore):INCOMPLETE;
+    if(!Object.prototype.hasOwnProperty.call(scores,'micro_score'))scores.micro_score=INCOMPLETE;
+    if(!Object.prototype.hasOwnProperty.call(scores,'deep_score'))scores.deep_score=INCOMPLETE;
+    if(!Object.prototype.hasOwnProperty.call(scores,'final_score'))scores.final_score=INCOMPLETE;
+  }
+  return scores;
+}
+
 export function selectUnderfloorFastShockCandidates({
   rows=[],fastBySymbol=new Map(),pendingUntilBySymbol=new Map(),now=Date.now(),
   minQuoteVolume24h=750000,minQuoteVolumeRatio=0.001,limit=4,config={},lastMicroScannedAt=()=>null
@@ -2384,7 +2411,7 @@ export class EarlyExpansionRadar{
           entry.fast=normalizeMissing(fastBySymbol.get(symbol)||INCOMPLETE);
           entry.rejection_reason=INCOMPLETE;
           const fs=fastCandidateScore(ticker,entry.fast,this.config);
-          entry.radar_scores.RADAR_8={fast_score:hasFiniteNumber(fs)?Number(fs):INCOMPLETE,micro_score:INCOMPLETE,deep_score:INCOMPLETE,final_score:INCOMPLETE};
+          ensureRadar8ScoreContainer(entry,fs);
         } else {
           entry.rejection_reason=!ticker?'TICKER_MISSING_FROM_RECEIVED_UNIVERSE':
             !Number.isFinite(Number(ticker.quoteVolume24h))?'QUOTE_VOLUME_MISSING':
@@ -2531,6 +2558,7 @@ export class EarlyExpansionRadar{
         const entry=journeyEntries.get(row.symbol);
         if(entry){
           entry.micro_selected_at=this.clock();entry.micro_selection_lane=row._selection_lane||INCOMPLETE;entry.rejection_reason=INCOMPLETE;
+          ensureRadar8ScoreContainer(entry,fastCandidateScore(row,fastBySymbol.get(row.symbol)||{},this.config));
           if(row._low_liquidity_burst_bypass===true){
             entry.low_liquidity_burst_bypass=true;
             entry.low_liquidity_burst_policy='MICRO_ONLY_NORMAL_ENTRY_GATES_REQUIRED';
@@ -2610,7 +2638,7 @@ export class EarlyExpansionRadar{
             entry.micro_fingerprint=normalizeMissing(result.micro_fingerprint||INCOMPLETE);
             entry.candles_used['1m']=closedCandleSnapshot(result.oneMinute,completed);
             entry.candles_used['5m']=closedCandleSnapshot(result.fiveMinute,completed);
-            entry.radar_scores.RADAR_8.micro_score=hasFiniteNumber(result.micro_fingerprint?.score)?Number(result.micro_fingerprint.score):INCOMPLETE;
+            ensureRadar8ScoreContainer(entry,fastCandidateScore(row,fastBySymbol.get(row.symbol)||{},this.config)).micro_score=hasFiniteNumber(result.micro_fingerprint?.score)?Number(result.micro_fingerprint.score):INCOMPLETE;
             if(result.failed){entry.rejection_reason=result.error||'MICRO_SCAN_FAILED';entry.decision='DATA_INSUFFICIENT';}
           }
           const fp=result?.micro_fingerprint||{};
@@ -2783,7 +2811,7 @@ export class EarlyExpansionRadar{
         const microResult=journeyMicroBySymbol.get(row.symbol);
         if(microResult&&!microResult.failed){
           entry.micro_fingerprint=normalizeMissing(microResult.micro_fingerprint||INCOMPLETE);
-          entry.radar_scores.RADAR_8.micro_score=hasFiniteNumber(microResult.micro_fingerprint?.score)?Number(microResult.micro_fingerprint.score):INCOMPLETE;
+          ensureRadar8ScoreContainer(entry).micro_score=hasFiniteNumber(microResult.micro_fingerprint?.score)?Number(microResult.micro_fingerprint.score):INCOMPLETE;
         }
         if(!deepSelectedSet.has(row.symbol)&&selectedMicroSet.has(row.symbol)&&microCompletedSet.has(row.symbol)){
           const fp=microResult?.micro_fingerprint;

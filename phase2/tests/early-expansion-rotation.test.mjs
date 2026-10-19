@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible,ensureRadar8ScoreContainer} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -1264,4 +1264,31 @@ test('Radar 8 rotates never-scanned under-floor events ahead of recently scanned
   });
   assert.deepEqual(selected.map(x=>x.symbol),['NEWFLOWUSDT'],
     'fairness by actual scan age must beat repeated score rank when the slot is scarce');
+});
+
+
+test('Radar 8 safely initializes an incomplete score sentinel before under-floor Micro writes',()=>{
+  const entry={radar_scores:{
+    RADAR_1:'.INCOMPLETE',RADAR_2:'.INCOMPLETE',RADAR_8:'.INCOMPLETE'
+  }};
+  const scores=ensureRadar8ScoreContainer(entry,64.5);
+  assert.equal(typeof scores,'object');
+  assert.equal(scores.fast_score,64.5);
+  assert.equal(scores.micro_score,'.INCOMPLETE');
+  assert.equal(scores.deep_score,'.INCOMPLETE');
+  scores.micro_score=73;
+  assert.equal(entry.radar_scores.RADAR_8.micro_score,73);
+  assert.equal(isEarlyExpansionCandidateAlertEligible({
+    early_expansion_score:99,decision_band:'PRE_EXPANSION',data_quality:100,data_stale:false,
+    risk_flags:[],micro_fingerprint:{eligible:true},low_liquidity_burst_bypass:true
+  },{minAlertScore:82,minDataQuality:70}),false,'score-container repair must not grant entry eligibility');
+});
+
+test('Radar 8 score-container repair handles a malformed parent field without throwing',()=>{
+  const entry={radar_scores:'.INCOMPLETE'};
+  const scores=ensureRadar8ScoreContainer(entry);
+  assert.equal(typeof entry.radar_scores,'object');
+  assert.equal(scores.fast_score,'.INCOMPLETE');
+  scores.micro_score=60;
+  assert.equal(entry.radar_scores.RADAR_8.micro_score,60);
 });
