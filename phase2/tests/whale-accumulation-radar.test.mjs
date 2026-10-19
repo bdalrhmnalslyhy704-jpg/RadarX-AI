@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {WhaleAccumulationRadar} from '../core/whale-accumulation-radar.mjs';
+import {WhaleAccumulationRadar,buildWhaleAccumulationAnalysis} from '../core/whale-accumulation-radar.mjs';
 
 test('Whale radar fills unique rotation slots when patrol overlaps quiet high-volume anchors',()=>{
   const radar=new WhaleAccumulationRadar({
@@ -175,4 +175,44 @@ test('Radar 9 uses a bounded five-worker Deep batch to meet its 60-second cadenc
   assert.equal(report.failed,0);
   assert.equal(report.paper_trading,true);
   assert.equal(report.real_order_execution,false);
+});
+
+function candleWindow(count,intervalMs,now,offsetMs=0){
+  return Array.from({length:count},(_,i)=>{
+    const closeTime=now-offsetMs-(count-i-1)*intervalMs-1;
+    const openTime=closeTime-intervalMs+1;
+    return {openTime,closeTime,open:100,high:101,low:99,close:100,volume:100000,
+      tradeCount:100,takerBuyBaseVolume:60000,closed:true};
+  });
+}
+
+test('Whale radar fails closed when one-minute candle cache is stale',()=>{
+  const now=Date.now();
+  const result=buildWhaleAccumulationAnalysis({
+    ticker:{symbol:'STALEUSDT',lastPrice:100,priceChange24h:0.2,quoteVolume24h:2_000_000},
+    oneMinute:candleWindow(40,60_000,now,5*60_000),
+    fiveMinute:candleWindow(10,300_000,now),
+    aggTrades:[],book:{bids:[[99,100]],asks:[[101,100]]},now
+  });
+  assert.equal(result.eligible,false);
+  assert.equal(result.stage,'DATA_STALE');
+  assert.equal(result.score,null);
+  assert.equal(result.data_stale,true);
+  assert.ok(result.data_quality_reasons.includes('ONE_MINUTE_STALE_CLOSED_CANDLES'));
+});
+
+test('Whale radar rejects missing intervals in the candle windows it scores',()=>{
+  const now=Date.now();
+  const gapped=candleWindow(40,60_000,now).filter((_,i)=>i!==35);
+  const result=buildWhaleAccumulationAnalysis({
+    ticker:{symbol:'GAPUSDT',lastPrice:100,priceChange24h:0.2,quoteVolume24h:2_000_000},
+    oneMinute:gapped,
+    fiveMinute:candleWindow(10,300_000,now),
+    aggTrades:[],book:{bids:[[99,100]],asks:[[101,100]]},now
+  });
+  assert.equal(result.eligible,false);
+  assert.equal(result.stage,'DATA_GAP');
+  assert.equal(result.score,null);
+  assert.equal(result.data_stale,false);
+  assert.ok(result.data_quality_reasons.includes('ONE_MINUTE_CLOSED_CANDLE_GAP'));
 });
