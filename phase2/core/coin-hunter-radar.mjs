@@ -1,6 +1,25 @@
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
+import {isSpotTradableSymbol} from '../market/universe-scanner.mjs';
+import {isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const HOUR_MS = 60 * 60 * 1000;
+const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
+const CANDLE_TIME_TOLERANCE_MS = 1000;
+
+function hasFreshContinuousTail(rows, now, intervalMs, {minRows = 16, maxRows = 50} = {}) {
+  if (!Array.isArray(rows) || rows.length < minRows) return false;
+  const tail = rows.slice(-Math.min(maxRows, rows.length));
+  if (tail.length < minRows) return false;
+  const latestClose = Number(tail.at(-1)?.closeTime);
+  if (!Number.isFinite(latestClose) || latestClose > now ||
+      now - latestClose > 2 * intervalMs + 15_000) return false;
+  for (let i = 1; i < tail.length; i++) {
+    const delta = Number(tail[i]?.openTime) - Number(tail[i - 1]?.openTime);
+    if (!Number.isFinite(delta) || Math.abs(delta - intervalMs) > CANDLE_TIME_TOLERANCE_MS) return false;
+  }
+  return true;
+}
 
 const clamp = (x, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, Number(x)));
 const finite = x => Number.isFinite(Number(x)) ? Number(x) : null;
@@ -12,8 +31,9 @@ const pct = (a, b) => Number.isFinite(a) && Number.isFinite(b) && b !== 0 ? (a -
 
 function ema(values, period) {
   const xs = values.map(Number).filter(Number.isFinite);
-  if (!xs.length) return null;
-  const p = Math.max(2, Math.min(Math.trunc(period), xs.length));
+  const p = Math.trunc(Number(period));
+  // Do not silently relabel a shorter EMA as EMA20/EMA50 when history is insufficient.
+  if (!Number.isFinite(p) || p < 2 || xs.length < p) return null;
   let out = avg(xs.slice(0, p));
   const alpha = 2 / (p + 1);
   for (const x of xs.slice(p)) out = alpha * x + (1 - alpha) * out;
@@ -55,9 +75,11 @@ export function findPreMoveCheckpoint(closed,dayStart,thresholdPct=2){
   return null;
 }
 
-export function featureSet(candles, ticker, btcChange = null) {
-  const c = closedCandles(candles, Date.now());
-  if (c.length < 16) return null;
+export function featureSet(candles, ticker, btcChange = null, now = Date.now()) {
+  const c = closedCandles(candles, now);
+  // Coin Hunter consumes 1h klines. Reject stale or gapped closed history; cached
+  // rows must not be treated as live evidence even if their fields still parse.
+  if (c.length < 16 || !hasFreshContinuousTail(c, now, HOUR_MS, {minRows: 16, maxRows: 50})) return null;
 
   const closes = c.map(x => Number(x.close));
   const volumes = c.map(x => Number(x.volume));
@@ -127,9 +149,10 @@ export function featureSet(candles, ticker, btcChange = null) {
   };
 }
 
-function earlyTimingFingerprint(candles) {
-  const c=closedCandles(candles,Date.now());
-  if(c.length<24)return null;
+function earlyTimingFingerprint(candles, now = Date.now()) {
+  const c=closedCandles(candles,now);
+  // The 15m fingerprint has its own freshness and continuity gate.
+  if(c.length<24 || !hasFreshContinuousTail(c, now, FIFTEEN_MINUTES_MS, {minRows: 24, maxRows: 24}))return null;
   const closes=c.map(x=>Number(x.close)).filter(Number.isFinite);
   const vols=c.map(x=>Number(x.volume)).filter(Number.isFinite);
   const trades=c.map(x=>Number(x.tradeCount)).filter(Number.isFinite);
@@ -428,10 +451,12 @@ export class CoinHunterRadar {
   }
 
   isSpotSymbol(x, quote) {
-    return String(x?.status || '').toUpperCase() === 'TRADING' &&
-      String(x?.quoteAsset || '').toUpperCase() === quote &&
-      x?.isSpotTradingAllowed !== false &&
-      String(x?.baseAsset || '').toUpperCase() !== quote;
+    const q = String(quote || '').trim().toUpperCase();
+    const symbol = String(x?.symbol || '').trim().toUpperCase();
+    // Use the shared Binance Spot contract (including permissions and pair identity),
+    // then keep non-directional USDT instruments out of scarce altcoin scan slots.
+    return isSpotTradableSymbol(x, q) &&
+      (q !== 'USDT' || isDirectionalCandidateSymbol(symbol));
   }
 
   async refreshUniverse(quote) {
@@ -494,8 +519,9 @@ export class CoinHunterRadar {
           const sourceIndex = checkpoint ? closed.findIndex(x=>Number(x.closeTime)===checkpoint.time) : -1;
           const source = checkpoint ? closed.slice(0, Math.max(0,sourceIndex)) : [];
           const refPrice = checkpoint ? checkpoint.price : null;
-          const features = source.length>=16 && Number.isFinite(refPrice)
-            ? featureSet(source, {...t,referencePrice:refPrice}, null)
+          const historicalFeatureNow = Number(source.at(-1)?.closeTime) + 1;
+          const features = source.length>=16 && Number.isFinite(refPrice) && Number.isFinite(historicalFeatureNow)
+            ? featureSet(source, {...t,referencePrice:refPrice}, null, historicalFeatureNow)
             : null;
           if (features) leaderRows.push({symbol:t.symbol,todayPct:dayPct ?? Number(t.priceChangePercent),features,checkpoint});
         } catch (error) {
