@@ -11,7 +11,7 @@ const RADAR_IDS=[
   'EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR',
   'LIQUIDITY_ABSORPTION_RADAR','KAHIR_RADAR','DOOMSDAY_RADAR',
   'PROFESSOR_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR',
-  'COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR'
+  'COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','FALCON_EYE_RADAR'
 ];
 const alertSymbol=alert=>{const s=String(alert?.symbol||'').trim().toUpperCase();return /^[A-Z0-9]{5,20}$/.test(s)?s:null;};
 const radarId=alert=>{const r=String(alert?.radar||'').trim().toUpperCase();return RADAR_IDS.includes(r)?r:null;};
