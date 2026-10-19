@@ -425,7 +425,7 @@ test('TEST_FIXTURE: large JSONL scheduler journals read only the recent tail in 
 });
 
 
-test('Radar 8 watch-only traces persist in bounded diagnostics and never enter actionable alerts',async()=>{
+test('Radar 8 watch-only traces persist in their bounded diagnostic archive and never enter actionable alerts',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-watch-only-trace-'));
   try{
     const store=await new DurableStore({dir}).init();
@@ -435,6 +435,11 @@ test('Radar 8 watch-only traces persist in bounded diagnostics and never enter a
       event:'EARLY_FLOW_WATCH_ONLY',
       event_type:'MICRO_EARLY_FLOW_WATCH_TRACE',
       trace_at:1234,
+      price:0.125,
+      micro_fingerprint_score:72,
+      data_quality:92,
+      reason_codes:['BUY_FLOW_IMPROVING'],
+      risk_flags:['EARLY_FLOW_WATCH_ONLY'],
       watch_only:true,
       entry_eligible:false,
       notification_status:'WATCH_ONLY_NOT_SENT',
@@ -442,15 +447,19 @@ test('Radar 8 watch-only traces persist in bounded diagnostics and never enter a
     };
     const persisted=await store.appendEarlyExpansionEvent(trace);
     assert.equal(persisted.written,1);
-    const rows=await store.readScanSchedulerEvents({radar:'RADAR_8',symbol:'AAAUSDT',sinceMs:0,limit:10});
+    const rows=await store.readEarlyExpansionEvents({sinceMs:0,limit:10});
     assert.equal(rows.length,1);
     assert.equal(rows[0].event_at,1234);
+    assert.equal(rows[0].symbol,'AAAUSDT');
     assert.equal(rows[0].watch_only,true);
     assert.equal(rows[0].entry_eligible,false);
     assert.equal(rows[0].notification_status,'WATCH_ONLY_NOT_SENT');
-    assert.equal(rows[0].payload.id,trace.id);
+    assert.equal(rows[0].micro_fingerprint_score,72);
+    assert.deepEqual(rows[0].reason_codes,['BUY_FLOW_IMPROVING']);
     assert.deepEqual(await store.readEarlyExpansionAlerts({sinceMs:0,limit:10}),[],
       'watch-only diagnostics must never be promoted into the Android actionable alert feed');
+    assert.deepEqual(await store.readScanSchedulerEvents({radar:'RADAR_8',sinceMs:0,limit:10}),[],
+      'watch-only diagnostics must not consume the bounded scheduler journal');
   }finally{
     await rm(dir,{recursive:true,force:true});
   }
