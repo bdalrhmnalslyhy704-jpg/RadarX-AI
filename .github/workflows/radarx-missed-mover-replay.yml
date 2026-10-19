@@ -7,6 +7,16 @@ on:
     paths:
       - 'reports/missed-mover-replay-cohort.json'
       - '.github/workflows/radarx-missed-mover-replay.yml'
+      - 'phase2/core/dynamic-early-warning-gate.mjs'
+      - 'phase2/core/strong-move-radar.mjs'
+      - 'phase2/tools/historical-replay.mjs'
+      - 'phase2/tools/monthly-historical-replay-lab.mjs'
+      - 'phase2/tests/dynamic-early-warning-gate.test.mjs'
+      - 'phase2/core/dynamic-early-warning-gate.mjs'
+      - 'phase2/core/strong-move-radar.mjs'
+      - 'phase2/tools/historical-replay.mjs'
+      - 'phase2/tools/monthly-historical-replay-lab.mjs'
+      - 'phase2/tests/dynamic-early-warning-gate.test.mjs'
   pull_request:
     branches:
       - build224-multi-analyst-20261007
