@@ -76,7 +76,7 @@ test('Coin Hunter excludes non-directional USDT instruments before ranking or de
 });
 
 test('Coin Hunter feature engine measures volume, trade and taker-buy acceleration from closed candles', () => {
-  const candles = hourlyCandles(32);
+  const candles = hourlyCandles(64);
   const features = featureSet(candles, { lastPrice: candles.at(-1).close }, 1.2);
   assert.ok(features);
   assert.equal(features.volumeAcceleration, 2);
@@ -97,6 +97,20 @@ test('Coin Hunter refuses to score an insufficient or not-yet-closed hourly wind
     closeTime: Date.now() + 60_000
   };
   assert.equal(featureSet(withFutureTail, { lastPrice: withFutureTail.at(-1).close }), null);
+});
+
+test('Coin Hunter rejects stale hourly history and gaps inside the scored window', () => {
+  const now = Date.now();
+  const stale = hourlyCandles(64, now - 4 * HOUR);
+  assert.equal(featureSet(stale, { lastPrice: stale.at(-1).close }, null, now), null);
+
+  const gapped = hourlyCandles(64, now);
+  gapped[55] = {
+    ...gapped[55],
+    openTime: gapped[55].openTime + HOUR,
+    closeTime: gapped[55].closeTime + HOUR
+  };
+  assert.equal(featureSet(gapped, { lastPrice: gapped.at(-1).close }, null, now), null);
 });
 
 test('Coin Hunter records the first confirmed pre-move checkpoint, not a later candle', () => {
