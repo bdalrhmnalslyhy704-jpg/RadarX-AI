@@ -507,6 +507,7 @@ export class DurableStore {
     const rawAt=Number(alert.trace_at??alert.detected_at??alert.processed_at??Date.now());
     const eventAt=Number.isFinite(rawAt)&&rawAt>0?rawAt:Date.now();
     const shortList=value=>Array.isArray(value)?value.map(x=>String(x||'').trim()).filter(Boolean).slice(0,12):[];
+    const numericField=value=>value!==null&&value!==undefined&&value!==''&&Number.isFinite(Number(value))?Number(value):null;
     const trace={
       id:String(alert.id||''),radar:'RADAR_8',stage:'WATCH_ONLY',symbol,
       event:String(alert.event||'EARLY_FLOW_WATCH_ONLY'),
@@ -514,9 +515,9 @@ export class DurableStore {
       event_at:eventAt,trace_at:eventAt,
       watch_only:true,entry_eligible:false,
       notification_status:'WATCH_ONLY_NOT_SENT',feed_status:'TRACE_ONLY',
-      price:Number.isFinite(Number(alert.price))?Number(alert.price):null,
-      micro_fingerprint_score:Number.isFinite(Number(alert.micro_fingerprint_score))?Number(alert.micro_fingerprint_score):null,
-      data_quality:Number.isFinite(Number(alert.data_quality))?Number(alert.data_quality):null,
+      price:numericField(alert.price),
+      micro_fingerprint_score:numericField(alert.micro_fingerprint_score),
+      data_quality:numericField(alert.data_quality),
       data_stale:alert.data_stale===true,
       low_liquidity_burst_bypass:alert.low_liquidity_burst_bypass===true,
       closed_candles_only:alert.closed_candles_only===true,
