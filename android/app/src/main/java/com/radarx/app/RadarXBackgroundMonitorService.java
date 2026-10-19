@@ -381,8 +381,8 @@ public final class RadarXBackgroundMonitorService extends Service {
                         if (!radarName.isEmpty()) radarNames.put(radarName);
                     }
                     JSONArray candidates = body.optJSONArray("alerts");
-                    if (candidates == null) candidates = body.optJSONArray("discoveries");
-                    // Analysis candidates are not alerts; never turn a radar snapshot into notifications.
+                    // Only an explicit persisted alerts array is allowed into the notification replay.
+                    // snapshots, discoveries, and candidate lists are analysis, not alert history.
                     if (candidates != null) {
                         for (int i = 0; i < candidates.length(); i++) {
                             JSONObject row = candidates.optJSONObject(i);
