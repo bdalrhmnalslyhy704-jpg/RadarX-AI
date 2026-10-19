@@ -24,8 +24,12 @@ def resolveBackendOrigin = { name, defaultValue ->
     return parsed.scheme + "://" + parsed.host
 }
 
-def radarxBackendOrigin = resolveBackendOrigin("RADARX_BACKEND_ORIGIN", "https://radarx-ai-triple-production.up.railway.app")
-def radarxBackendFallbackOrigin = resolveBackendOrigin("RADARX_BACKEND_FALLBACK_ORIGIN", "https://radarx-ai-production.up.railway.app")
+def legacyRadarxBackendOrigin = "https://radarx-ai-triple-production.up.railway.app"
+def legacyRadarxBackendFallbackOrigin = "https://radarx-ai-production.up.railway.app"
+def radarxBackendOrigin = resolveBackendOrigin("RADARX_BACKEND_ORIGIN", legacyRadarxBackendOrigin)
+// When switching hosts, never silently fall back to a different, potentially stale backend.
+def fallbackDefault = radarxBackendOrigin == legacyRadarxBackendOrigin ? legacyRadarxBackendFallbackOrigin : radarxBackendOrigin
+def radarxBackendFallbackOrigin = resolveBackendOrigin("RADARX_BACKEND_FALLBACK_ORIGIN", fallbackDefault)
 
 // Build and development branches remain usable without the owner's Firebase project.
 // When android/app/google-services.json is provisioned, enable the plugin automatically.
