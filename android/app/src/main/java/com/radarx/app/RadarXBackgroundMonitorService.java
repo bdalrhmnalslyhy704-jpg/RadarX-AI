@@ -382,7 +382,7 @@ public final class RadarXBackgroundMonitorService extends Service {
                     }
                     JSONArray candidates = body.optJSONArray("alerts");
                     if (candidates == null) candidates = body.optJSONArray("discoveries");
-                    if (candidates == null) candidates = body.optJSONArray("candidates");
+                    // Analysis candidates are not alerts; never turn a radar snapshot into notifications.
                     if (candidates != null) {
                         for (int i = 0; i < candidates.length(); i++) {
                             JSONObject row = candidates.optJSONObject(i);
@@ -441,6 +441,60 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     /**
+     * Reject observations and stale/non-actionable setup states at the last-mile
+     * notification boundary. Older radar endpoints can omit an explicit eligible
+     * field; only explicit negative eligibility and known monitor-only states block.
+     */
+    private static boolean isActionableRadarAlert(JSONObject alert) {
+        if (alert == null) return false;
+        if (alert.optBoolean("watch_only", false) || alert.optBoolean("monitor_only", false)) return false;
+        if (alert.has("eligible") && !alert.optBoolean("eligible", false)) return false;
+        if (alert.has("entry_eligible") && !alert.optBoolean("entry_eligible", false)) return false;
+
+        String event = alert.optString("event", alert.optString("type", "")).toUpperCase(Locale.ROOT);
+        if (event.contains("WATCH_ONLY") || event.contains("MONITOR_ONLY")) return false;
+
+        String stage = alert.optString("potential_label", "");
+        if (stage.isEmpty()) stage = alert.optString("decision_band", "");
+        if (stage.isEmpty()) stage = alert.optString("pre_expansion_stage", "");
+        if (stage.isEmpty()) stage = alert.optString("signal_type", "");
+        stage = stage.toUpperCase(Locale.ROOT);
+        switch (stage) {
+            case "WATCH_EARLY":
+            case "EARLY_FLOW_WATCH_ONLY":
+            case "ACTIVITY_SHOCK_WATCH_ONLY":
+            case "ALREADY_EXTENDED":
+            case "EXTENDED":
+            case "HIGH_RISK_PUMP":
+            case "DATA_INSUFFICIENT":
+            case "NO_SIGNAL":
+            case "INVALIDATED":
+            case "CANCELLED":
+            case "CANCELED":
+            case "FAILED_BREAKOUT":
+            case "BREAKOUT_UNCONFIRMED":
+                return false;
+            default:
+                break;
+        }
+
+        JSONArray riskFlags = alert.optJSONArray("risk_flags");
+        if (riskFlags != null) {
+            for (int i = 0; i < riskFlags.length(); i++) {
+                String risk = riskFlags.optString(i, "").toUpperCase(Locale.ROOT);
+                if (risk.contains("WATCH_ONLY") || risk.contains("MONITOR_ONLY_NOT_ENTRY") ||
+                        risk.contains("ALREADY_EXTENDED") || risk.contains("HIGH_RISK_PUMP") ||
+                        risk.contains("WIDE_SPREAD") || risk.contains("DATA_INSUFFICIENT") ||
+                        risk.contains("CONTINUATION_NOT_CONFIRMED") || risk.contains("FAILED_BREAKOUT") ||
+                        risk.contains("LOW_LIQUIDITY")) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
      * Process a replay page monotonically. The server's next_cursor is never
      * committed up front: every row must first be safely skipped as already handled
      * or accepted by Android's NotificationManager, otherwise the durable cursor
@@ -486,7 +540,7 @@ public final class RadarXBackgroundMonitorService extends Service {
                 (!id.isEmpty() && seen.contains(id)) ||
                 fallbackSeen.contains(replayKey) ||
                 (!id.isEmpty() && fallbackSeen.contains(id));
-            boolean eligible = alert.optBoolean("eligible", true);
+            boolean eligible = isActionableRadarAlert(alert);
 
             if (cursorAdvanceAllowed) {
                 if (eligible && !alreadyHandled) {
