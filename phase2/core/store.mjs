@@ -497,6 +497,25 @@ export class DurableStore {
   async appendAlMuqawimAlert(v){return this.lock(async()=>{await appendFile(this.files.alMuqawimAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readAlMuqawimAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('alMuqawimAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
   async appendEarlyExpansionAlert(v){return this.lock(async()=>{await appendFile(this.files.earlyExpansionAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
+  // Watch-only Radar 8 observations are diagnostic events, never actionable alert-feed rows.
+  // Reuse the bounded per-radar scheduler journal so tracing cannot create an unbounded file.
+  async appendEarlyExpansionEvent(v){
+    const alert=v&&typeof v==='object'&&!Array.isArray(v)?v:{};
+    const symbol=String(alert.symbol||'').trim().toUpperCase();
+    if(!symbol)return {written:0,reason:'WATCH_ONLY_TRACE_SYMBOL_REQUIRED'};
+    const at=Number(alert.trace_at??alert.detected_at??alert.processed_at??Date.now());
+    const event={
+      radar:'RADAR_8',stage:'WATCH_ONLY',symbol,
+      event_type:String(alert.event_type||'RADAR8_WATCH_ONLY_TRACE'),
+      event_at:Number.isFinite(at)&&at>0?at:Date.now(),
+      reason_code:'WATCH_ONLY_NOT_ACTIONABLE',
+      watch_only:true,entry_eligible:false,
+      notification_status:'WATCH_ONLY_NOT_SENT',feed_status:'TRACE_ONLY',
+      alert_id:String(alert.id||''),
+      payload:alert
+    };
+    return this.appendScanSchedulerEvents([event]);
+  }
   async readEarlyExpansionAlerts({sinceMs=0,limit=100}={}){const safeLimit=Math.min(500,Math.max(1,Number(limit)||100));const rows=await this.readRecent('earlyExpansionAlerts',500);return rows.filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).sort((a,b)=>Number(a?.processed_at??a?.detected_at??0)-Number(b?.processed_at??b?.detected_at??0)).slice(0,safeLimit);}
   async appendScanSchedulerEvents(events){
     const rows=(Array.isArray(events)?events:[events]).filter(x=>x&&typeof x==='object'&&!Array.isArray(x));
