@@ -4,7 +4,7 @@ import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notification-gate.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
 import {buildRadarRoleEvidence} from './radar-role-evidence.mjs';
-import {assessQuietBaseActivityShock,isFastActivityShockCandidate} from './activity-shock.mjs';
+import {assessQuietBaseActivityShock,isFastActivityShockCandidate,isFastEarlyWatchCandidate} from './activity-shock.mjs';
 import {assessQuietBasePreExpansion,summarizeQuietBasePreExpansion} from './quiet-base-pre-expansion.mjs';
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
 import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId,normalizeMissing,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,reconcileEligibilityQueueAge} from './scan-journey-ledger.mjs';
@@ -203,8 +203,27 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   // A very small, capped Micro-only lane watches strong short-term bursts below
   // the regular daily-liquidity floor. It never relaxes entry/alert gates.
   lowLiquidityBurstBypassEnabled:true,
-  lowLiquidityBurstMinQuoteVolumeRatio:0.10,
-  lowLiquidityBurstBypassMaxCandidates:2,
+  lowLiquidityBurstMinQuoteVolumeRatio:0.000001,
+  lowLiquidityBurstBypassMaxCandidates:4,
+  // Relaxed thresholds create extra bounded WATCH-only observations; they never lower alert gates.
+  fastEarlyWatchEnabled:true,
+  fastEarlyWatchMinQuoteDeltaUsd:0,
+  fastEarlyWatchMinTradeDelta:2,
+  fastEarlyWatchMinPriceChangePct:-0.12,
+  fastEarlyWatchMinAccelerationPct:-0.10,
+  fastEarlyWatchMinVolumeRatio:1.8,
+  fastEarlyWatchMinTradeRatio:1.25,
+  fastEarlyWatchTradeLedMinVolumeRatio:1.2,
+  fastEarlyWatchTradeLedMinTradeRatio:1.8,
+  fastEarlyWatchFlatBaseMinVolumeRatio:1.5,
+  fastEarlyWatchFlatBaseMinTradeRatio:1.4,
+  fastEarlyWatchFlatBaseMaxAbsChangePct:0.12,
+  fastEarlyWatchDeepMinScore:58,
+  fastEarlyWatchDeepMinConfirmations:3,
+  earlyFlowWatchEnabled:true,
+  earlyFlowWatchMinScore:58,
+  earlyFlowWatchMinConfirmations:3,
+  earlyFlowWatchCooldownMs:10*60*1000,
   minLiquidityQuality:58,
   maxSpreadBps:22,
   minDataQuality:70,
@@ -887,9 +906,126 @@ function fastCandidateScore(row,fast,cfg){
  * recent ticker deltas show a strong positive price/activity shock. This is a
  * watch-only capacity bypass; it does not change eligibility or alert rules.
  */
+/**
+ * Ensure a journey row has an object at radar_scores.RADAR_8 before any stage
+ * writes a per-radar score. Under-floor WATCH rows are deliberately non-eligible
+ * for the regular universe lane, so their initial value may still be ".INCOMPLETE".
+ */
+export function ensureRadar8ScoreContainer(entry,fastScore=INCOMPLETE){
+  if(!entry||typeof entry!=='object')return null;
+  if(!entry.radar_scores||typeof entry.radar_scores!=='object'||Array.isArray(entry.radar_scores)){
+    entry.radar_scores={};
+  }
+  let scores=entry.radar_scores.RADAR_8;
+  if(!scores||typeof scores!=='object'||Array.isArray(scores)){
+    scores={
+      fast_score:hasFiniteNumber(fastScore)?Number(fastScore):INCOMPLETE,
+      micro_score:INCOMPLETE,deep_score:INCOMPLETE,final_score:INCOMPLETE
+    };
+    entry.radar_scores.RADAR_8=scores;
+  }else{
+    if(!Object.prototype.hasOwnProperty.call(scores,'fast_score'))
+      scores.fast_score=hasFiniteNumber(fastScore)?Number(fastScore):INCOMPLETE;
+    if(!Object.prototype.hasOwnProperty.call(scores,'micro_score'))scores.micro_score=INCOMPLETE;
+    if(!Object.prototype.hasOwnProperty.call(scores,'deep_score'))scores.deep_score=INCOMPLETE;
+    if(!Object.prototype.hasOwnProperty.call(scores,'final_score'))scores.final_score=INCOMPLETE;
+  }
+  return scores;
+}
+
+/**
+ * Early-flow watch-only qualification. It requires a warmed ticker baseline,
+ * observed flow expansion, fresh closed-candle Micro evidence and current data
+ * quality. It never grants public buy/entry eligibility.
+ */
+export function isConfirmedEarlyFlowWatchCandidate({
+  row={},fast={},microFingerprint={},decisionBand=null,dataQuality=null,dataStale=false,
+  closedCandleCloseTime=null,microDataValidated=false
+}={},config={}){
+  if(config.earlyFlowWatchEnabled===false||!isFastEarlyWatchCandidate(row,fast,config))return false;
+  if(!hasFiniteNumber(closedCandleCloseTime)||Number(closedCandleCloseTime)<=0)return false;
+  if(microFingerprint?.closed_candles_only!==true||
+    !hasFiniteNumber(microFingerprint?.score)||
+    Number(microFingerprint.score)<Number(config.earlyFlowWatchMinScore??58)||
+    !hasFiniteNumber(microFingerprint?.confirmation_count)||
+    Number(microFingerprint.confirmation_count)<Number(config.earlyFlowWatchMinConfirmations??3))return false;
+  if(dataStale===true)return false;
+  if(microDataValidated!==true&&(!hasFiniteNumber(dataQuality)||Number(dataQuality)<Number(config.minDataQuality??70)))return false;
+  const move=absolute24hMove(row);
+  if(move===null||move>=Number(config.hardExtended24hMovePct??18))return false;
+  const stage=String(decisionBand||microFingerprint.stage||'').trim().toUpperCase();
+  if(['DATA_INSUFFICIENT','WARMING_UP','INCOMPLETE','ANTI_CHASE','ALREADY_EXTENDED','HIGH_RISK_PUMP'].includes(stage))return false;
+  const m=microFingerprint.metrics||{};
+  const volume=Math.max(hasFiniteNumber(m.rvol_1m)?Number(m.rvol_1m):0,
+    hasFiniteNumber(m.rvol_5m)?Number(m.rvol_5m):0);
+  const trades=Math.max(hasFiniteNumber(m.trade_rvol_1m)?Number(m.trade_rvol_1m):0,
+    hasFiniteNumber(m.trade_rvol_5m)?Number(m.trade_rvol_5m):0);
+  const taker=hasFiniteNumber(m.taker_buy_ratio)?Number(m.taker_buy_ratio):0;
+  const acceleration=Math.max(hasFiniteNumber(m.acceleration_1m_pct)?Number(m.acceleration_1m_pct):-Infinity,
+    hasFiniteNumber(m.acceleration_5m_pct)?Number(m.acceleration_5m_pct):-Infinity);
+  const recentReturn=Math.max(hasFiniteNumber(m.return_1m)?Number(m.return_1m):-Infinity,
+    hasFiniteNumber(m.return_5m)?Number(m.return_5m):-Infinity);
+  const participation=volume>=Number(config.lowLiquidityBurstDeepMinRvol??1.20)||
+    trades>=Number(config.lowLiquidityBurstDeepMinTradeRvol??1.15)||
+    (taker>=Number(config.lowLiquidityBurstDeepMinTakerBuyRatio??0.54)&&(volume>=1||trades>=1));
+  return participation&&(acceleration>0||recentReturn>0);
+}
+
+/**
+ * Build a watch-only candidate from a successful Micro scan without waiting for
+ * one of the four Deep slots. The Micro fingerprint only reaches a usable stage
+ * after the closed 1m/5m series and BTC reference passed the scanner's validators.
+ */
+export function buildMicroEarlyFlowWatchCandidate(micro,now=Date.now(),config=EARLY_EXPANSION_RADAR_DEFAULTS){
+  const row=micro?.row||{},fast=micro?.fast||{},fp=micro?.micro_fingerprint||{};
+  const symbol=String(row?.symbol||'').trim().toUpperCase();
+  if(!symbol||micro?.failed===true||fp?.eligible===true)return null;
+  const lastOne=closed(micro?.oneMinute,Number(now)).at(-1)||null;
+  const lastFive=closed(micro?.fiveMinute,Number(now)).at(-1)||null;
+  const closeTime=hasFiniteNumber(lastOne?.closeTime)?Number(lastOne.closeTime):
+    hasFiniteNumber(lastFive?.closeTime)?Number(lastFive.closeTime):null;
+  if(!isConfirmedEarlyFlowWatchCandidate({
+    row,fast,microFingerprint:fp,decisionBand:fp?.stage,
+    dataQuality:null,dataStale:false,closedCandleCloseTime:closeTime,microDataValidated:true
+  },config))return null;
+  const m=fp.metrics||{};
+  return {
+    symbol,last_price:hasFiniteNumber(row.lastPrice)?Number(row.lastPrice):null,
+    price_change_24h:hasFiniteNumber(row.priceChange24h)?Number(row.priceChange24h):null,
+    data_quality:null,data_stale:false,
+    source:micro.source||row.source||'Binance Public REST',
+    low_liquidity_burst_bypass:row._low_liquidity_burst_bypass===true,
+    micro_fingerprint_score:hasFiniteNumber(fp.score)?Number(fp.score):null,
+    risk_flags:[...(fp.risk_flags||[])],
+    reason_codes:[...(fp.reason_codes||fp.reasons||[])],
+    early_flow_watch:true,
+    early_flow_watch_evidence:{
+      closed_candle_close_time:closeTime,
+      observed_ticker_at:hasFiniteNumber(fast.at)?Number(fast.at):null,
+      fast_price_change_pct:hasFiniteNumber(fast.price_change_pct)?Number(fast.price_change_pct):null,
+      fast_price_acceleration_pct:hasFiniteNumber(fast.price_acceleration_pct)?Number(fast.price_acceleration_pct):null,
+      volume_accel_ratio:hasFiniteNumber(fast.volume_accel_ratio)?Number(fast.volume_accel_ratio):null,
+      trade_accel_ratio:hasFiniteNumber(fast.trade_accel_ratio)?Number(fast.trade_accel_ratio):null,
+      quote_volume_delta:hasFiniteNumber(fast.volume_delta_quote)?Number(fast.volume_delta_quote):null,
+      trade_delta:hasFiniteNumber(fast.trade_delta)?Number(fast.trade_delta):null,
+      micro_score:hasFiniteNumber(fp.score)?Number(fp.score):null,
+      confirmation_count:hasFiniteNumber(fp.confirmation_count)?Number(fp.confirmation_count):null,
+      rvol_1m:hasFiniteNumber(m.rvol_1m)?Number(m.rvol_1m):null,
+      rvol_5m:hasFiniteNumber(m.rvol_5m)?Number(m.rvol_5m):null,
+      trade_rvol_1m:hasFiniteNumber(m.trade_rvol_1m)?Number(m.trade_rvol_1m):null,
+      trade_rvol_5m:hasFiniteNumber(m.trade_rvol_5m)?Number(m.trade_rvol_5m):null,
+      acceleration_1m_pct:hasFiniteNumber(m.acceleration_1m_pct)?Number(m.acceleration_1m_pct):null,
+      acceleration_5m_pct:hasFiniteNumber(m.acceleration_5m_pct)?Number(m.acceleration_5m_pct):null,
+      return_1m:hasFiniteNumber(m.return_1m)?Number(m.return_1m):null,
+      return_5m:hasFiniteNumber(m.return_5m)?Number(m.return_5m):null,
+      closed_candles_only:true
+    }
+  };
+}
+
 export function selectUnderfloorFastShockCandidates({
   rows=[],fastBySymbol=new Map(),pendingUntilBySymbol=new Map(),now=Date.now(),
-  minQuoteVolume24h=750000,minQuoteVolumeRatio=0.10,limit=2,config={}
+  minQuoteVolume24h=750000,minQuoteVolumeRatio=0.000001,limit=4,config={},lastMicroScannedAt=()=>null
 }={}){
   const floor=Number(minQuoteVolume24h);
   if(!(Number.isFinite(floor)&&floor>0))return [];
@@ -900,14 +1036,27 @@ export function selectUnderfloorFastShockCandidates({
   const fastMap=fastBySymbol instanceof Map?fastBySymbol:new Map();
   const pendingMap=pendingUntilBySymbol instanceof Map?pendingUntilBySymbol:new Map();
   const cfg={...EARLY_EXPANSION_RADAR_DEFAULTS,...config,minQuoteVolume24h:floor};
+  const lastScanAt=row=>{
+    try{
+      const value=lastMicroScannedAt(String(row?.symbol||'').trim().toUpperCase());
+      return value===null||value===undefined||value===''?null:(Number.isFinite(Number(value))?Number(value):null);
+    }catch{return null;}
+  };
   return (Array.isArray(rows)?rows:[]).filter(row=>{
     const symbol=String(row?.symbol||'').trim().toUpperCase();
     const quoteVolume=Number(row?.quoteVolume24h);
     const fast=fastMap.get(symbol)||{};
     return symbol.endsWith('USDT')&&symbol.length>4&&isDirectionalCandidateSymbol(symbol)&&
       Number.isFinite(quoteVolume)&&quoteVolume>=minimum&&quoteVolume<floor&&
-      Number(pendingMap.get(symbol)||0)>at&&isFastActivityShockCandidate(row,fast,cfg);
+      Number(pendingMap.get(symbol)||0)>at&&(
+        isFastActivityShockCandidate(row,fast,cfg)||isFastEarlyWatchCandidate(row,fast,cfg));
   }).sort((a,b)=>{
+    // Never-scanned/oldest-scanned candidates go first so repeated hot symbols cannot
+    // monopolize the tiny under-floor lane; fast anomaly score breaks equal-age ties.
+    const scanA=lastScanAt(a),scanB=lastScanAt(b);
+    if(scanA===null&&scanB!==null)return -1;
+    if(scanB===null&&scanA!==null)return 1;
+    if(scanA!==null&&scanB!==null&&scanA!==scanB)return scanA-scanB;
     const scoreB=fastCandidateScore(b,fastMap.get(String(b?.symbol||'').toUpperCase())||{},cfg);
     const scoreA=fastCandidateScore(a,fastMap.get(String(a?.symbol||'').toUpperCase())||{},cfg);
     return scoreB-scoreA||String(a?.symbol||'').localeCompare(String(b?.symbol||''));
@@ -973,10 +1122,65 @@ function quietDeepRank(item,cfg){
     !(compression>=65||structure>=62||resistanceNear))return null;
   return (100-move*6)*.35+participation*.25+structure*.20+compression*.20;
 }
+function isQualifiedUnderfloorDeepWatch(item,cfg){
+  const row=item?.row,fp=item?.micro_fingerprint,m=fp?.metrics||{};
+  if(row?._low_liquidity_burst_bypass!==true||fp?.closed_candles_only!==true||
+    !hasFiniteNumber(fp?.score)||Number(fp.score)<Number(cfg.lowLiquidityBurstDeepMinScore??58))return false;
+  const move=absolute24hMove(row);
+  if(move===null||move>=Number(cfg.hardExtended24hMovePct??18))return false;
+  const stage=String(fp.stage||'').trim().toUpperCase();
+  if(['DATA_INSUFFICIENT','WARMING_UP','INCOMPLETE','ANTI_CHASE'].includes(stage))return false;
+  if(!hasFiniteNumber(fp.confirmation_count)||
+    Number(fp.confirmation_count)<Number(cfg.lowLiquidityBurstDeepMinConfirmations??3))return false;
+  const volume=Math.max(
+    hasFiniteNumber(m.rvol_1m)?Number(m.rvol_1m):0,
+    hasFiniteNumber(m.rvol_5m)?Number(m.rvol_5m):0
+  );
+  const trades=Math.max(
+    hasFiniteNumber(m.trade_rvol_1m)?Number(m.trade_rvol_1m):0,
+    hasFiniteNumber(m.trade_rvol_5m)?Number(m.trade_rvol_5m):0
+  );
+  const taker=hasFiniteNumber(m.taker_buy_ratio)?Number(m.taker_buy_ratio):0;
+  const acceleration=Math.max(
+    hasFiniteNumber(m.acceleration_1m_pct)?Number(m.acceleration_1m_pct):-Infinity,
+    hasFiniteNumber(m.acceleration_5m_pct)?Number(m.acceleration_5m_pct):-Infinity
+  );
+  const recentReturn=Math.max(
+    hasFiniteNumber(m.return_1m)?Number(m.return_1m):-Infinity,
+    hasFiniteNumber(m.return_5m)?Number(m.return_5m):-Infinity
+  );
+  const participationConfirmed=volume>=Number(cfg.lowLiquidityBurstDeepMinRvol??1.20)||
+    trades>=Number(cfg.lowLiquidityBurstDeepMinTradeRvol??1.15)||
+    (taker>=Number(cfg.lowLiquidityBurstDeepMinTakerBuyRatio??0.54)&&(volume>=1||trades>=1));
+  const momentumConfirmed=acceleration>0||recentReturn>0;
+  return participationConfirmed&&momentumConfirmed;
+}
+
 function isExceptionalDeepCandidate(item,cfg){
   const move=absolute24hMove(item?.row),fp=item?.micro_fingerprint,m=fp?.metrics||{},c=fp?.category_scores||{};
   const fast=item?.fast||{};
   const cachedEvent=fast.market_wide_event_driven_breakout||fast.event_driven_breakout||null;
+  // A moderate fast-flow anomaly earns Deep WATCH priority only after fresh closed-candle
+  // Micro evidence confirms participation and upward momentum. This does not imply eligibility.
+  const earlyStage=String(fp?.stage||'').trim().toUpperCase();
+  const earlyVolume=Math.max(hasFiniteNumber(m.rvol_1m)?Number(m.rvol_1m):0,
+    hasFiniteNumber(m.rvol_5m)?Number(m.rvol_5m):0);
+  const earlyTrades=Math.max(hasFiniteNumber(m.trade_rvol_1m)?Number(m.trade_rvol_1m):0,
+    hasFiniteNumber(m.trade_rvol_5m)?Number(m.trade_rvol_5m):0);
+  const earlyTaker=hasFiniteNumber(m.taker_buy_ratio)?Number(m.taker_buy_ratio):0;
+  const earlyAcceleration=Math.max(hasFiniteNumber(m.acceleration_1m_pct)?Number(m.acceleration_1m_pct):-Infinity,
+    hasFiniteNumber(m.acceleration_5m_pct)?Number(m.acceleration_5m_pct):-Infinity);
+  const earlyReturn=Math.max(hasFiniteNumber(m.return_1m)?Number(m.return_1m):-Infinity,
+    hasFiniteNumber(m.return_5m)?Number(m.return_5m):-Infinity);
+  if(move!==null&&move<Number(cfg.hardExtended24hMovePct??18)&&
+    isFastEarlyWatchCandidate(item?.row,fast,cfg)&&fp?.closed_candles_only===true&&
+    hasFiniteNumber(fp?.score)&&Number(fp.score)>=Number(cfg.fastEarlyWatchDeepMinScore??58)&&
+    hasFiniteNumber(fp?.confirmation_count)&&Number(fp.confirmation_count)>=Number(cfg.fastEarlyWatchDeepMinConfirmations??3)&&
+    !['DATA_INSUFFICIENT','WARMING_UP','INCOMPLETE','ANTI_CHASE','ALREADY_EXTENDED'].includes(earlyStage)&&
+    (earlyVolume>=Number(cfg.lowLiquidityBurstDeepMinRvol??1.20)||
+      earlyTrades>=Number(cfg.lowLiquidityBurstDeepMinTradeRvol??1.15)||
+      (earlyTaker>=Number(cfg.lowLiquidityBurstDeepMinTakerBuyRatio??0.54)&&(earlyVolume>=1||earlyTrades>=1)))&&
+    (earlyAcceleration>0||earlyReturn>0))return true;
   const fastMove=hasFiniteNumber(fast.price_change_pct)?Number(fast.price_change_pct):null;
   const fastAcceleration=hasFiniteNumber(fast.price_acceleration_pct)?Number(fast.price_acceleration_pct):null;
   const fastVolume=hasFiniteNumber(fast.volume_accel_ratio)?Number(fast.volume_accel_ratio):0;
@@ -1126,6 +1330,40 @@ export function buildActivityShockWatchAlert(candidate,now=Date.now()){
     paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
     closed_candles_only:true,watch_only:true,entry_eligible:false,
     disclaimer:'تنبيه رصد فقط: انكشاف قفزة مؤكدة بالحجم وعدد الصفقات على شمعة مغلقة. ليس توصية شراء ولا إثباتًا لخبر أو تجميع حيتان. إذا كانت الحركة ممتدة فالمطلوب مراقبة المخاطر لا مطاردة السعر.'
+  },'Radar 8 — البرق');
+}
+
+/**
+ * A separate feed item for early-flow monitoring, never an actionable/buy signal.
+ */
+export function buildEarlyFlowWatchAlert(candidate,now=Date.now()){
+  const symbol=String(candidate?.symbol||'').trim().toUpperCase();
+  const evidence=candidate?.early_flow_watch_evidence||{};
+  const closeTime=hasFiniteNumber(evidence.closed_candle_close_time)?Number(evidence.closed_candle_close_time):Number(now);
+  const lowLiquidity=candidate?.low_liquidity_burst_bypass===true;
+  return decorateRadarAlert({
+    id:'RADAR8_EARLY_FLOW_WATCH:'+symbol+':'+closeTime,
+    event:'EARLY_FLOW_WATCH_ONLY',
+    radar:'EARLY_EXPANSION_RADAR',
+    radar_name:'Radar 8 — البرق',
+    symbol,market:'SPOT',direction:'UP_BIAS',
+    price:hasFiniteNumber(candidate?.last_price)?Number(candidate.last_price):null,
+    price_change_24h:hasFiniteNumber(candidate?.price_change_24h)?Number(candidate.price_change_24h):null,
+    opportunity_score:null,early_expansion_score:null,
+    potential_label:'EARLY_FLOW_WATCH_ONLY',decision_band:'WATCH_EARLY',
+    early_flow_watch_evidence:evidence,
+    micro_fingerprint_score:hasFiniteNumber(candidate?.micro_fingerprint_score)?Number(candidate.micro_fingerprint_score):null,
+    low_liquidity_burst_bypass:lowLiquidity,
+    risk_flags:[...new Set([...(candidate?.risk_flags||[]),'EARLY_FLOW_WATCH_ONLY',lowLiquidity?'LOW_LIQUIDITY_WATCH_ONLY':null].filter(Boolean))],
+    reason_codes:[...new Set([...(candidate?.reason_codes||[]),'FAST_RELATIVE_FLOW_EXPANSION','MICRO_CLOSED_CANDLE_CONFIRMATION','MONITOR_ONLY_NOT_ENTRY'])],
+    data_quality:hasFiniteNumber(candidate?.data_quality)?Number(candidate.data_quality):null,
+    data_stale:Boolean(candidate?.data_stale),
+    source:candidate?.source||'Binance Public REST',
+    detected_at:now,processed_at:now,detected_candle_close_time:closeTime,
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+    closed_candles_only:true,watch_only:true,entry_eligible:false,
+    notification_status:'WATCH_ONLY_FEED_RECORDED_DELIVERY_UNCONFIRMED',
+    disclaimer:'تنبيه مراقبة مبكرة مبني على تدفق تداول مرصود وشموع مغلقة؛ ليس توصية شراء ولا أمر تنفيذ. قد يفشل الزخم أو تكون السيولة ضعيفة؛ تحقق من السبريد والسيولة قبل أي قرار.'
   },'Radar 8 — البرق');
 }
 
@@ -1536,6 +1774,7 @@ export class EarlyExpansionRadar{
     this.running=false;this.busy=false;this.timer=null;this.universe=[];this.universeAt=0;
     this.fastState=new Map();this.lastAlertAt=new Map();this.lastAlertScore=new Map();this.lastBand=new Map();
     this.lastActivityShockAt=new Map();this.lastActivityShockKeyBySymbol=new Map();this.activityShockTimestamps=[];this.fastShockPendingUntil=new Map();
+    this.lastEarlyFlowWatchAt=new Map();this.lastEarlyFlowWatchKeyBySymbol=new Map();
     this.lastMicroScanCycleBySymbol=new Map();this.lastDeepScanCycleBySymbol=new Map();
     this.scheduler=new ScanSchedulerJournal({radar:'RADAR_8',store,clock,logger});
     this.lastDeepAtBySymbol=new Map();this.firstEligibleAtBySymbol=new Map();
@@ -1604,6 +1843,41 @@ export class EarlyExpansionRadar{
     scheduleNext(0);
   }
   async stop(){this.running=false;if(this.timer)clearTimeout(this.timer);this.timer=null;this.marketWideKlineCache?.stop?.();}
+  async recordWatchOnlyAlert(alert,eventType='RADAR8_WATCH_ONLY_TRACE'){
+    const symbol=String(alert?.symbol||'').trim().toUpperCase();
+    let stored=false;
+    try{
+      if(typeof this.store.appendEarlyExpansionAlert==='function'){
+        await this.store.appendEarlyExpansionAlert(alert);
+        stored=true;
+      }else{
+        throw new Error('WATCH_ALERT_FEED_WRITER_UNAVAILABLE');
+      }
+    }catch(error){this.noteError(error,'watch-only-alert-store');}
+    const providerStatus=typeof this.pushManager?.status==='function'?this.pushManager.status():null;
+    let pushStatus=providerStatus?.enabled===true?'PUSH_ENABLED_NOT_REQUESTED':'PUSH_DISABLED_OR_UNCONFIGURED';
+    if(stored&&providerStatus?.enabled===true&&typeof this.pushManager?.notifyRadarAlert==='function'){
+      try{
+        const attempts=await this.pushManager.notifyRadarAlert(alert);
+        pushStatus=attempts.some(x=>x?.status==='SENT')?'PUSH_ACCEPTED_BY_PROVIDER_DELIVERY_UNCONFIRMED':
+          attempts.length?'PUSH_ATTEMPTED_NO_PROVIDER_ACCEPTANCE':'PUSH_ENABLED_NO_ELIGIBLE_SUBSCRIPTIONS';
+      }catch(error){
+        pushStatus='PUSH_ATTEMPT_FAILED';
+        this.noteError(error,'watch-only-alert-push');
+      }
+    }
+    alert.notification_status=pushStatus;
+    const trace={...alert,event_type:eventType,feed_status:stored?'STORED':'STORE_FAILED',
+      notification_status:pushStatus,trace_at:this.clock()};
+    try{
+      if(typeof this.store.appendEarlyExpansionEvent==='function')await this.store.appendEarlyExpansionEvent(trace);
+    }catch(error){this.noteError(error,'watch-only-alert-trace');}
+    this.logger.info?.('[RADAR8_WATCH_ONLY_ALERT]',JSON.stringify({
+      id:alert?.id||null,symbol,event:alert?.event||null,feed_status:stored?'STORED':'STORE_FAILED',
+      notification_status:pushStatus,entry_eligible:false
+    }));
+    return {stored,pushStatus};
+  }
   noteError(e,where='scan'){this.lastError=String(e?.message??e);this.logger.warn?.('EARLY_EXPANSION_RADAR_'+where,this.lastError);}
   normalizeQuote(quote=this.config.quote){
     const q=String(quote||this.config.quote).trim().toUpperCase();
@@ -1673,7 +1947,7 @@ export class EarlyExpansionRadar{
     const volumeRatio=Number.isFinite(qBase)&&qBase>0?Math.max(0,qDelta)/qBase:null;
     const tradeRatio=Number.isFinite(tBase)&&tBase>0?Math.max(0,tDelta)/tBase:null;
     const fast={price_change_pct:priceChange,price_acceleration_pct:acceleration,volume_delta_quote:qDelta,trade_delta:tDelta,volume_accel_ratio:volumeRatio,trade_accel_ratio:tradeRatio,at:now,warmed_up:Boolean(prev)};
-    if(isFastActivityShockCandidate(row,fast,this.config))this.fastShockPendingUntil.set(row.symbol,now+Math.max(Number(this.config.fastShockHoldMs??8*60*1000),Number(this.config.pollMs||45000)*2));
+    if(isFastActivityShockCandidate(row,fast,this.config)||isFastEarlyWatchCandidate(row,fast,this.config))this.fastShockPendingUntil.set(row.symbol,now+Math.max(Number(this.config.fastShockHoldMs??8*60*1000),Number(this.config.pollMs||45000)*2));
     for(const [symbol,until] of this.fastShockPendingUntil)if(Number(until)<=now)this.fastShockPendingUntil.delete(symbol);
     history.push({price:row.lastPrice,quote:row.quoteVolume24h,trades:row.tradeCount24h,qDelta,tDelta,priceChange,at:now});
     while(history.length>20)history.shift();
@@ -1714,6 +1988,7 @@ export class EarlyExpansionRadar{
         _microPreScore:fastScore*.55+(quiet??0)*.45,
         _quietScore:quiet??-1,_quietEligible:isQuietEarlyCandidate(row,fast,this.config),
         _exceptional:isExceptionalMicroCandidate(row,fast,this.config)||isFastActivityShockCandidate(row,fast,this.config)||
+          isFastEarlyWatchCandidate(row,fast,this.config)||
           fast?.market_wide_event_driven_breakout?.needs_micro_confirmation===true||
           Number(this.fastShockPendingUntil.get(key)||0)>this.clock(),
         _lastActuallyScannedAt:lastAt,_neverScanned:neverScanned,_neverDeepScanned:neverDeepScanned,
@@ -1769,8 +2044,18 @@ export class EarlyExpansionRadar{
   selectDeepFromMicro(results,cycle=0){
     const currentCycle=Math.max(0,Math.trunc(Number(cycle)||0));
     const selectionAt=this.clock();
-    const valid=(results||[]).filter(x=>x&&!x.failed&&selectionSymbol(x)&&
+    const observedValid=(results||[]).filter(x=>x&&!x.failed&&selectionSymbol(x)&&
       isDirectionalCandidateSymbol(selectionSymbol(x))&&x.micro_fingerprint?.score!=null&&hasFiniteNumber(x.micro_fingerprint.score));
+    // Under-floor observations must earn Deep capacity with real closed-candle
+    // participation. Keep only the strongest single qualified burst in this batch;
+    // unqualified under-floor rows cannot slip back in through score/quiet/rotation fill lanes.
+    const underfloorDeepWatchSymbols=new Set(observedValid
+      .filter(x=>isQualifiedUnderfloorDeepWatch(x,this.config))
+      .sort((a,b)=>Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||
+        selectionSymbol(a).localeCompare(selectionSymbol(b)))
+      .slice(0,1).map(selectionSymbol));
+    const valid=observedValid.filter(x=>x?.row?._low_liquidity_burst_bypass!==true||
+      underfloorDeepWatchSymbols.has(selectionSymbol(x)));
     const n=Math.max(1,Math.trunc(this.config.deepCandidates||10));
     const target=Math.min(n,new Set(valid.map(selectionSymbol)).size);
     if(!target)return [];
@@ -1809,8 +2094,10 @@ export class EarlyExpansionRadar{
     }).sort((a,b)=>Number(b._neverScanned)-Number(a._neverScanned)||b._deepWaitAgeMs-a._deepWaitAgeMs||
       b._rotationAgeMs-a._rotationAgeMs||b._queueAgeMs-a._queueAgeMs||
       b._rotationAge-a._rotationAge||a._rotation-b._rotation||selectionSymbol(a).localeCompare(selectionSymbol(b)));
-    const byExceptional=valid.filter(x=>isExceptionalDeepCandidate(x,this.config)).sort((a,b)=>
-      Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
+    const byExceptional=valid.filter(x=>underfloorDeepWatchSymbols.has(selectionSymbol(x))||
+      isExceptionalDeepCandidate(x,this.config)).sort((a,b)=>
+        Number(underfloorDeepWatchSymbols.has(selectionSymbol(b)))-Number(underfloorDeepWatchSymbols.has(selectionSymbol(a)))||
+        Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const selected=[],seen=new Set();
     const configuredExceptionSlots=Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2));
     let exceptionSlots=Math.min(core,configuredExceptionSlots),quietSlots=q,rotationSlots=r,scoreSlots=core;
@@ -1829,7 +2116,11 @@ export class EarlyExpansionRadar{
       rotationSlots=Math.min(Math.max(r,1),Math.max(0,remaining-quietSlots-scoreReserve));
       scoreSlots=Math.max(0,remaining-quietSlots-rotationSlots);
     }
-    takeUniqueLane(selected,seen,byExceptional,exceptionSlots,'exceptional');
+    const exceptionalSelected=takeUniqueLane(selected,seen,byExceptional,exceptionSlots,'exceptional');
+    // When fewer than two exceptional candidates arrive, each actual event slot
+    // replaces a score slot. Otherwise the old arithmetic overfilled the batch
+    // and the final slice silently discarded the fair-rotation slot.
+    if(byExceptional.length<2)scoreSlots=Math.max(0,scoreSlots-exceptionalSelected);
     takeUniqueLane(selected,seen,byScore,Math.max(0,scoreSlots-selected.filter(x=>x._selection_lane==='score').length),'score');
     takeUniqueLane(selected,seen,byQuiet,quietSlots,'quiet');
     takeUniqueLane(selected,seen,byRotation,rotationSlots,'rotation');
@@ -2092,7 +2383,7 @@ export class EarlyExpansionRadar{
     if(activeSymbols.size>0){
       const stateMaps=[
         this.fastState,this.lastAlertAt,this.lastAlertScore,this.lastBand,
-        this.lastActivityShockAt,this.lastActivityShockKeyBySymbol,this.fastShockPendingUntil,
+        this.lastActivityShockAt,this.lastActivityShockKeyBySymbol,this.lastEarlyFlowWatchAt,this.lastEarlyFlowWatchKeyBySymbol,this.fastShockPendingUntil,
         this.lastMicroScanCycleBySymbol,this.lastDeepScanCycleBySymbol,
         this.lastDeepAtBySymbol,this.firstEligibleAtBySymbol,
         this.marketWideCacheArchiveHydrationAttemptAtBySymbol
@@ -2284,7 +2575,7 @@ export class EarlyExpansionRadar{
           entry.fast=normalizeMissing(fastBySymbol.get(symbol)||INCOMPLETE);
           entry.rejection_reason=INCOMPLETE;
           const fs=fastCandidateScore(ticker,entry.fast,this.config);
-          entry.radar_scores.RADAR_8={fast_score:hasFiniteNumber(fs)?Number(fs):INCOMPLETE,micro_score:INCOMPLETE,deep_score:INCOMPLETE,final_score:INCOMPLETE};
+          ensureRadar8ScoreContainer(entry,fs);
         } else {
           entry.rejection_reason=!ticker?'TICKER_MISSING_FROM_RECEIVED_UNIVERSE':
             !Number.isFinite(Number(ticker.quoteVolume24h))?'QUOTE_VOLUME_MISSING':
@@ -2298,8 +2589,9 @@ export class EarlyExpansionRadar{
         selectUnderfloorFastShockCandidates({
           rows:[...rawBySymbol.values()],fastBySymbol,pendingUntilBySymbol:this.fastShockPendingUntil,
           now:fastSeenAt,minQuoteVolume24h:this.config.minQuoteVolume24h,
-          minQuoteVolumeRatio:this.config.lowLiquidityBurstMinQuoteVolumeRatio??0.10,
-          limit:this.config.lowLiquidityBurstBypassMaxCandidates??2,config:this.config
+          minQuoteVolumeRatio:this.config.lowLiquidityBurstMinQuoteVolumeRatio??0.000001,
+          limit:this.config.lowLiquidityBurstBypassMaxCandidates??4,config:this.config,
+          lastMicroScannedAt:symbol=>this.scheduler.lastScanAt('MICRO',symbol)
         });
       for(const row of eligible)this.scheduler.ensureQueued('MICRO',row.symbol,fastSeenAt);
       for(const row of underfloorBurstCandidates)this.scheduler.ensureQueued('MICRO',row.symbol,fastSeenAt);
@@ -2343,6 +2635,7 @@ export class EarlyExpansionRadar{
             isExceptional:row=>{
               const fast=fastBySymbol.get(row.symbol)||{};
               return isExceptionalMicroCandidate(row,fast,this.config)||isFastActivityShockCandidate(row,fast,this.config)||
+                isFastEarlyWatchCandidate(row,fast,this.config)||
                 Number(this.fastShockPendingUntil.get(String(row.symbol).toUpperCase())||0)>fastSeenAt;
             },
             lastMicroScannedAt:symbol=>this.scheduler.lastScanAt('MICRO',symbol)
@@ -2429,6 +2722,7 @@ export class EarlyExpansionRadar{
         const entry=journeyEntries.get(row.symbol);
         if(entry){
           entry.micro_selected_at=this.clock();entry.micro_selection_lane=row._selection_lane||INCOMPLETE;entry.rejection_reason=INCOMPLETE;
+          ensureRadar8ScoreContainer(entry,fastCandidateScore(row,fastBySymbol.get(row.symbol)||{},this.config));
           if(row._low_liquidity_burst_bypass===true){
             entry.low_liquidity_burst_bypass=true;
             entry.low_liquidity_burst_policy='MICRO_ONLY_NORMAL_ENTRY_GATES_REQUIRED';
@@ -2508,7 +2802,7 @@ export class EarlyExpansionRadar{
             entry.micro_fingerprint=normalizeMissing(result.micro_fingerprint||INCOMPLETE);
             entry.candles_used['1m']=closedCandleSnapshot(result.oneMinute,completed);
             entry.candles_used['5m']=closedCandleSnapshot(result.fiveMinute,completed);
-            entry.radar_scores.RADAR_8.micro_score=hasFiniteNumber(result.micro_fingerprint?.score)?Number(result.micro_fingerprint.score):INCOMPLETE;
+            ensureRadar8ScoreContainer(entry,fastCandidateScore(row,fastBySymbol.get(row.symbol)||{},this.config)).micro_score=hasFiniteNumber(result.micro_fingerprint?.score)?Number(result.micro_fingerprint.score):INCOMPLETE;
             if(result.failed){entry.rejection_reason=result.error||'MICRO_SCAN_FAILED';entry.decision='DATA_INSUFFICIENT';}
           }
           const fp=result?.micro_fingerprint||{};
@@ -2569,6 +2863,33 @@ export class EarlyExpansionRadar{
       phaseTimings.outcome_maintenance_ms=outcomeMaintenanceWorkMs;
 
       const microScanned=await microScanPromise;
+      const microFlowWatchCandidates=microScanned.map(item=>buildMicroEarlyFlowWatchCandidate(item,this.clock(),this.config)).filter(Boolean);
+      let watchAlertsThisCycle=0;
+      const previousEarlyFlowWatchKeys=new Set(historyAlerts.filter(x=>x?.event==='EARLY_FLOW_WATCH_ONLY').map(x=>String(x?.id||'')));
+      // Persist Micro-confirmed watch-only observations before spending time on the
+      // bounded Deep batch. The selector has already enforced closed candle, score,
+      // confirmations, participation, positive flow and anti-chase constraints.
+      for(const candidate of microFlowWatchCandidates){
+        const symbol=String(candidate.symbol||'').toUpperCase();
+        const watchAlert=buildEarlyFlowWatchAlert(candidate,now);
+        const watchKey=String(watchAlert.id||'');
+        const lastAt=Number(this.lastEarlyFlowWatchAt.get(symbol)||0);
+        const cooldown=Math.max(0,Number(this.config.earlyFlowWatchCooldownMs??10*60*1000));
+        if(previousEarlyFlowWatchKeys.has(watchKey)||this.lastEarlyFlowWatchKeyBySymbol.get(symbol)===watchKey||now-lastAt<cooldown)continue;
+        const watchStatus=await this.recordWatchOnlyAlert(watchAlert,'MICRO_EARLY_FLOW_WATCH_TRACE');
+        if(!watchStatus.stored)continue;
+        this.lastEarlyFlowWatchAt.set(symbol,now);
+        this.lastEarlyFlowWatchKeyBySymbol.set(symbol,watchKey);
+        previousEarlyFlowWatchKeys.add(watchKey);
+        watchAlertsThisCycle++;
+        const journeyEntry=journeyEntries.get(symbol);
+        if(journeyEntry){
+          journeyEntry.notification_status=watchStatus.pushStatus;
+          journeyEntry.notification_gate_rejection_reason='WATCH_ONLY_NOT_ENTRY_ELIGIBLE';
+          journeyEntry.alert_id=watchKey;
+          journeyEntry.alert_stage='WATCH_EARLY';
+        }
+      }
       phaseTimings.micro_scan_ms=Math.max(0,microScanCompletedAt-microScanStartedAt);
       phaseTimings.market_micro_overlap_ms=Math.max(0,
         Math.min(marketContextCompletedAt,microScanCompletedAt)-Math.max(marketContextStartedAt,microScanStartedAt));
@@ -2625,6 +2946,38 @@ export class EarlyExpansionRadar{
           const sourceScoreStatus=microScore===null?'SOURCE_SCORE_MISSING':
             promoted?'MICRO_FINGERPRINT_SCORE_QUALIFIED':'MICRO_FINGERPRINT_SCORE_UNQUALIFIED';
           const finalBand=evidence.pre_expansion_stage||evidence.decision_band;
+          const latestClosedMicroOne=(Array.isArray(micro?.oneMinute)?micro.oneMinute:[])
+            .filter(c=>c?.closed===true&&hasFiniteNumber(c.closeTime)).at(-1)||null;
+          const latestClosedMicroFive=(Array.isArray(micro?.fiveMinute)?micro.fiveMinute:[])
+            .filter(c=>c?.closed===true&&hasFiniteNumber(c.closeTime)).at(-1)||null;
+          const watchCloseTime=hasFiniteNumber(latestClosedMicroOne?.closeTime)?Number(latestClosedMicroOne.closeTime):
+            hasFiniteNumber(latestClosedMicroFive?.closeTime)?Number(latestClosedMicroFive.closeTime):null;
+          const earlyFlowWatch=isConfirmedEarlyFlowWatchCandidate({
+            row,fast,microFingerprint:fp,decisionBand:finalBand,
+            dataQuality:evidence.data_quality,dataStale:evidence.data_stale,
+            closedCandleCloseTime:watchCloseTime
+          },this.config);
+          const earlyFlowWatchEvidence=earlyFlowWatch?{
+            closed_candle_close_time:watchCloseTime,
+            observed_ticker_at:hasFiniteNumber(fast?.at)?Number(fast.at):null,
+            fast_price_change_pct:hasFiniteNumber(fast?.price_change_pct)?Number(fast.price_change_pct):null,
+            fast_price_acceleration_pct:hasFiniteNumber(fast?.price_acceleration_pct)?Number(fast.price_acceleration_pct):null,
+            volume_accel_ratio:hasFiniteNumber(fast?.volume_accel_ratio)?Number(fast.volume_accel_ratio):null,
+            trade_accel_ratio:hasFiniteNumber(fast?.trade_accel_ratio)?Number(fast.trade_accel_ratio):null,
+            quote_volume_delta:hasFiniteNumber(fast?.volume_delta_quote)?Number(fast.volume_delta_quote):null,
+            trade_delta:hasFiniteNumber(fast?.trade_delta)?Number(fast.trade_delta):null,
+            micro_score:hasFiniteNumber(fp?.score)?Number(fp.score):null,
+            confirmation_count:hasFiniteNumber(fp?.confirmation_count)?Number(fp.confirmation_count):null,
+            rvol_1m:hasFiniteNumber(fp?.metrics?.rvol_1m)?Number(fp.metrics.rvol_1m):null,
+            rvol_5m:hasFiniteNumber(fp?.metrics?.rvol_5m)?Number(fp.metrics.rvol_5m):null,
+            trade_rvol_1m:hasFiniteNumber(fp?.metrics?.trade_rvol_1m)?Number(fp.metrics.trade_rvol_1m):null,
+            trade_rvol_5m:hasFiniteNumber(fp?.metrics?.trade_rvol_5m)?Number(fp.metrics.trade_rvol_5m):null,
+            acceleration_1m_pct:hasFiniteNumber(fp?.metrics?.acceleration_1m_pct)?Number(fp.metrics.acceleration_1m_pct):null,
+            acceleration_5m_pct:hasFiniteNumber(fp?.metrics?.acceleration_5m_pct)?Number(fp.metrics.acceleration_5m_pct):null,
+            return_1m:hasFiniteNumber(fp?.metrics?.return_1m)?Number(fp.metrics.return_1m):null,
+            return_5m:hasFiniteNumber(fp?.metrics?.return_5m)?Number(fp.metrics.return_5m):null,
+            closed_candles_only:true
+          }:null;
           const incomplete=finalBand==='DATA_INSUFFICIENT'||finalBand==='INCOMPLETE'||
             evidence.data_stale===true||!hasFiniteNumber(evidence.data_quality)||
             Number(evidence.data_quality)<Number(this.config.minDataQuality);
@@ -2638,6 +2991,7 @@ export class EarlyExpansionRadar{
           return {
             symbol:row.symbol,last_price:row.lastPrice,price_change_24h:row.priceChange24h,
             low_liquidity_burst_bypass:micro.row?._low_liquidity_burst_bypass===true,
+            early_flow_watch:earlyFlowWatch,early_flow_watch_evidence:earlyFlowWatchEvidence,
             quiet_base_scan_latency_ms:hasFiniteNumber(entry?.fast_scan_at)?Math.max(0,deepStarted-Number(entry.fast_scan_at)):null,
             early_expansion_score:finalScore!==null?Number(finalScore.toFixed(1)):null,
             signal_score_source:signalScoreSource,micro_fingerprint_score:microScore,
@@ -2681,7 +3035,7 @@ export class EarlyExpansionRadar{
         const microResult=journeyMicroBySymbol.get(row.symbol);
         if(microResult&&!microResult.failed){
           entry.micro_fingerprint=normalizeMissing(microResult.micro_fingerprint||INCOMPLETE);
-          entry.radar_scores.RADAR_8.micro_score=hasFiniteNumber(microResult.micro_fingerprint?.score)?Number(microResult.micro_fingerprint.score):INCOMPLETE;
+          ensureRadar8ScoreContainer(entry).micro_score=hasFiniteNumber(microResult.micro_fingerprint?.score)?Number(microResult.micro_fingerprint.score):INCOMPLETE;
         }
         if(!deepSelectedSet.has(row.symbol)&&selectedMicroSet.has(row.symbol)&&microCompletedSet.has(row.symbol)){
           const fp=microResult?.micro_fingerprint;
@@ -2852,25 +3206,42 @@ export class EarlyExpansionRadar{
              now-lastAt>=Number(this.config.activityShockCooldownMs??45*60*1000)&&
              this.activityShockTimestamps.length<Number(this.config.maxActivityShockAlertsPerHour??6)){
             const watchAlert=buildActivityShockWatchAlert(candidate,now);
-            // Activity Shock is explicitly research/watch-only. Keep it in the event
-            // ledger for later outcome analysis, but never publish it to the user-alert
-            // feed or push channel; it has not earned entry eligibility.
-            const watchTrace={...watchAlert,event_type:'ACTIVITY_SHOCK_WATCH_TRACE',notification_status:'WATCH_ONLY_NOT_PUSHED'};
-            if(typeof this.store.appendEarlyExpansionEvent==='function'){
-              await this.store.appendEarlyExpansionEvent(watchTrace);
-            }else{
-              this.logger.info?.('[RADAR8_ACTIVITY_SHOCK_WATCH_ONLY]',JSON.stringify({
-                symbol,close_time:closeTime,score:shock.score,notification_status:'WATCH_ONLY_NOT_PUSHED'
-              }));
-            }
-            const journeyEntry=journeyEntries.get(symbol);
+             // This stays monitor-only but is visible in the alert feed; push is attempted
+             // only when a notification provider is explicitly enabled.
+             const watchStatus=await this.recordWatchOnlyAlert(watchAlert,'ACTIVITY_SHOCK_WATCH_TRACE');
+             if(watchStatus.stored)watchAlertsThisCycle++;
+             const journeyEntry=journeyEntries.get(symbol);
             if(journeyEntry){
-              journeyEntry.notification_status='WATCH_ONLY_NOT_PUSHED';
+              journeyEntry.notification_status=watchStatus.pushStatus;
               journeyEntry.notification_gate_rejection_reason='WATCH_ONLY_NOT_ENTRY_ELIGIBLE';
               journeyEntry.alert_id=String(watchAlert.id||INCOMPLETE);
             }
-            this.lastActivityShockAt.set(symbol,now);this.lastActivityShockKeyBySymbol.set(symbol,shockKey);
-            this.activityShockTimestamps.push(now);previousActivityShockKeys.add(shockKey);
+            if(watchStatus.stored){this.lastActivityShockAt.set(symbol,now);this.lastActivityShockKeyBySymbol.set(symbol,shockKey);
+            this.activityShockTimestamps.push(now);previousActivityShockKeys.add(shockKey);}
+          }
+        }
+        if(!eligibleAlert&&candidate.early_flow_watch===true&&candidate.activity_shock?.detected!==true){
+          const symbol=String(candidate.symbol||'').trim().toUpperCase();
+          const watchAlert=buildEarlyFlowWatchAlert(candidate,now);
+          const watchKey=String(watchAlert.id||'');
+          const lastAt=Number(this.lastEarlyFlowWatchAt.get(symbol)||0);
+          const cooldown=Math.max(0,Number(this.config.earlyFlowWatchCooldownMs??10*60*1000));
+          if(!previousEarlyFlowWatchKeys.has(watchKey)&&this.lastEarlyFlowWatchKeyBySymbol.get(symbol)!==watchKey&&
+             now-lastAt>=cooldown){
+            const watchStatus=await this.recordWatchOnlyAlert(watchAlert,'EARLY_FLOW_WATCH_TRACE');
+            if(watchStatus.stored){
+              this.lastEarlyFlowWatchAt.set(symbol,now);
+              this.lastEarlyFlowWatchKeyBySymbol.set(symbol,watchKey);
+              previousEarlyFlowWatchKeys.add(watchKey);
+              watchAlertsThisCycle++;
+              const journeyEntry=journeyEntries.get(symbol);
+              if(journeyEntry){
+                journeyEntry.notification_status=watchStatus.pushStatus;
+                journeyEntry.notification_gate_rejection_reason='WATCH_ONLY_NOT_ENTRY_ELIGIBLE';
+                journeyEntry.alert_id=watchKey;
+                journeyEntry.alert_stage='WATCH_EARLY';
+              }
+            }
           }
         }
         const previousScore=this.lastAlertScore.get(candidate.symbol)||null,bandChanged=this.lastBand.get(candidate.symbol)!==candidate.decision_band;
@@ -2909,7 +3280,7 @@ export class EarlyExpansionRadar{
       }
       phaseTimings.notification_ms=Math.max(0,this.clock()-notificationStartedAt);
       this.scans++;this.lastScanAtMs=now;this.lastError=null;
-      this.lastResult={schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',as_of:new Date(now).toISOString(),quote:q,universe:coverage,candidates:this.latestCandidates,alerts_emitted_this_cycle:alertsThisCycle,meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',source:sourceList([tickerSource]),closed_candles_only:true,fast_scan:'ALL_ELIGIBLE_TICKERS_EVERY_CYCLE',micro_scan:'ROTATING_1M_5M_ACROSS_ELIGIBLE_UNIVERSE',deep_scan:'TOP_MICRO_FINGERPRINT_PLUS_QUIET_PLUS_ROTATION',universe_scope:'ALL_ELIGIBLE_SPOT_USDT',burst_priority_mode:'CLOSED_1M_5M_ACTIVITY_BURST',burst_priority_slots:Math.max(0,Math.trunc(Number(this.config.exceptionalRotationBypassSlots??5)))}};
+      this.lastResult={schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',as_of:new Date(now).toISOString(),quote:q,universe:coverage,candidates:this.latestCandidates,alerts_emitted_this_cycle:alertsThisCycle,watch_alerts_recorded_this_cycle:watchAlertsThisCycle,meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',source:sourceList([tickerSource]),closed_candles_only:true,fast_scan:'ALL_ELIGIBLE_TICKERS_EVERY_CYCLE',micro_scan:'ROTATING_1M_5M_ACROSS_ELIGIBLE_UNIVERSE',deep_scan:'TOP_MICRO_FINGERPRINT_PLUS_QUIET_PLUS_ROTATION',universe_scope:'ALL_ELIGIBLE_SPOT_USDT',burst_priority_mode:'CLOSED_1M_5M_ACTIVITY_BURST',burst_priority_slots:Math.max(0,Math.trunc(Number(this.config.exceptionalRotationBypassSlots??5)))}};
       const scanCompletedAt=this.clock(),scanDurationMs=Math.max(0,scanCompletedAt-scanStartedAt);
       const explicitlyTimedMs=Object.entries(phaseTimings)
         .filter(([key])=>key!=='market_micro_overlap_ms'&&key!=='other_ms')

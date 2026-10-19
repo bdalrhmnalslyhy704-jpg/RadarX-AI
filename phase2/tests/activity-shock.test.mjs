@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {assessQuietBaseActivityShock,isFastActivityShockCandidate} from '../core/activity-shock.mjs';
+import {assessQuietBaseActivityShock,isFastActivityShockCandidate,isFastEarlyWatchCandidate} from '../core/activity-shock.mjs';
 import {EarlyExpansionRadar} from '../core/early-expansion-radar.mjs';
 
 const start=1_800_000_000_000,step=5*60_000;
@@ -145,4 +145,16 @@ test('cached market-wide event breakout consumes only an existing bounded except
   assert.equal(event._selection_lane,'exceptional');
   assert.equal(event.fast.market_wide_event_driven_breakout.entry_eligible,false);
   assert.ok(selected.length<=8,'event priority must not exceed the existing Micro batch cap');
+});
+
+
+test('fast early-watch observer catches rising relative flow near a flat base without authorizing entry',()=>{
+  const row={symbol:'EARLYFLOWUSDT',lastPrice:1.002,priceChange24h:0.4,quoteVolume24h:55_000};
+  const fast={warmed_up:true,price_change_pct:.01,price_acceleration_pct:0,
+    volume_accel_ratio:1.65,trade_accel_ratio:1.45,volume_delta_quote:45,trade_delta:5};
+  assert.equal(isFastActivityShockCandidate(row,fast),false,'this is deliberately below the older strong-shock cutoffs');
+  assert.equal(isFastEarlyWatchCandidate(row,fast),true,'relative flow expansion near a flat base should reach bounded Micro watch');
+  assert.equal(isFastEarlyWatchCandidate(row,{...fast,warmed_up:false}),false,'never infer an anomaly from an un-warmed baseline');
+  assert.equal(isFastEarlyWatchCandidate(row,{...fast,volume_delta_quote:0}),false,'require actual positive observed quote flow');
+  assert.equal(isFastEarlyWatchCandidate(row,{...fast,price_change_pct:-0.8}),false,'a sharp negative move must not be mislabeled as pre-expansion');
 });

@@ -68,3 +68,64 @@ test('TEST_FIXTURE: websocket kline timestamps are milliseconds; seconds are rej
   c.stop();
   assert.ok(errors.some(x=>/INVALID_WS_JSON:openTime_TIMESTAMP_UNIT_SECONDS/.test(x)));
 });
+
+import {BinanceAllMarketTickerClient} from '../market/binance-market-ticker-ws.mjs';
+
+test('TEST_FIXTURE: ticker heartbeat timeout is explicit and backoff resets only after feed data',async()=>{
+  Socket.instances.length=0;
+  const states=[];
+  const tickers=[];
+  const client=new BinanceAllMarketTickerClient({
+    urls:['wss://one.test/stream','wss://two.test/stream'],
+    WebSocketImpl:Socket,
+    heartbeatTimeoutMs:20,
+    maxConnectionMs:1000,
+    initialBackoffMs:5,
+    maxBackoffMs:20,
+    jitterRatio:0,
+    onTicker:t=>tickers.push(t),
+    onState:(state,reason)=>states.push({state,reason})
+  });
+  client.start();
+  Socket.instances[0].emit('open');
+  await new Promise(resolve=>setTimeout(resolve,55));
+  assert.ok(states.some(x=>x.reason?.includes('WS_HEARTBEAT_TIMEOUT')));
+  assert.ok(Socket.instances.length>=2);
+  const second=Socket.instances[1];
+  second.emit('open');
+  assert.equal(client.attempt,1,'opening a silent socket must not reset backoff');
+  second.emit('message',Buffer.from(JSON.stringify({stream:'!ticker@arr',data:[{
+    s:'BTCUSDT',c:'100',o:'99',P:'1',h:'101',l:'98',q:'1000000',n:500,E:Date.now()
+  }]})));
+  assert.equal(client.attempt,0,'a valid ticker payload resets backoff');
+  assert.equal(tickers.length,1);
+  assert.equal(tickers[0].symbol,'BTCUSDT');
+  assert.equal(client.health().tickers_received,1);
+  assert.match(client.health().last_disconnect_reason,/WS_HEARTBEAT_TIMEOUT/);
+  client.stop();
+});
+
+test('TEST_FIXTURE: ticker websocket records HTTP rejection status before retry',()=>{
+  Socket.instances.length=0;
+  const states=[];
+  const client=new BinanceAllMarketTickerClient({
+    urls:['wss://one.test/stream','wss://two.test/stream'],
+    WebSocketImpl:Socket,
+    heartbeatTimeoutMs:1000,
+    maxConnectionMs:1000,
+    initialBackoffMs:5,
+    maxBackoffMs:20,
+    jitterRatio:0,
+    onState:(state,reason)=>states.push({state,reason})
+  });
+  client.start();
+  let resumed=false;
+  Socket.instances[0].emit('unexpected-response',{},{
+    statusCode:451,
+    resume(){resumed=true;}
+  });
+  assert.equal(resumed,true);
+  assert.ok(states.some(x=>x.reason==='WS_HTTP_451'));
+  assert.equal(client.health().last_disconnect_reason,'WS_HTTP_451');
+  client.stop();
+});

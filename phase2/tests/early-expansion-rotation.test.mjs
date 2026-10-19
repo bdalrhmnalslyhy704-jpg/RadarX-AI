@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible,ensureRadar8ScoreContainer,isConfirmedEarlyFlowWatchCandidate,buildEarlyFlowWatchAlert,buildMicroEarlyFlowWatchCandidate} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -704,6 +704,10 @@ test('Radar 8 gives confirmed activity shocks a deep-scan bypass without grantin
   const others=[candidate('AAAUSDT',2,{score:89}),candidate('BBBUSTDT',3,{score:88}),candidate('CCCUSDT',1,{score:84}),candidate('DDDUSDT',4,{score:82})];
   const selected=radar.selectDeepFromMicro([event,...others],9);
   assert.ok(selected.some(x=>x.row.symbol==='EVENTUSDT'&&x._selection_lane==='exceptional'));
+  assert.equal(selected.length,4,'one exceptional event must not overfill a four-slot Deep batch');
+  assert.equal(selected.filter(x=>x._selection_lane==='rotation'||x._selection_lane==='fill_rotation').length,1,
+    'an exceptional event replaces one score slot; it must not erase fair rotation');
+  assert.equal(selected.filter(x=>x._selection_lane==='score'||x._selection_lane==='fill_score').length,1);
   assert.equal(event.micro_fingerprint.activity_shock.entry_eligible,false);
 });
 
@@ -1127,6 +1131,46 @@ test('Radar 8 under-floor bypass rejects expired or unconfirmed ticker shocks',(
 });
 
 
+
+test('Radar 8 reserves at most one Deep watch slot for a qualified under-floor burst',()=>{
+  const radar=makeRadar({deepCandidates:4,quietReserve:1,rotationReserve:1,exceptionalRotationBypassSlots:2});
+  const mkUnderfloor=(symbol,score,volume,trades)=>{
+    const item=candidate(symbol,1.2,{score,participation:78,tradeParticipation:76,structure:70,compression:76,volume,trades});
+    item.row.quoteVolume24h=55_000;
+    item.row._low_liquidity_burst_bypass=true;
+    item.fast={price_change_pct:.22,price_acceleration_pct:.04,volume_accel_ratio:1.5,trade_accel_ratio:1.4};
+    item.micro_fingerprint.closed_candles_only=true;
+    item.micro_fingerprint.stage='WATCH';
+    item.micro_fingerprint.eligible=false;
+    item.micro_fingerprint.confirmation_count=4;
+    item.micro_fingerprint.metrics={
+      ...item.micro_fingerprint.metrics,
+      return_1m:.18,return_5m:.42,acceleration_1m_pct:.03,acceleration_5m_pct:.08,
+      rvol_1m:volume,rvol_5m:Math.max(1.1,volume-.1),
+      trade_rvol_1m:trades,trade_rvol_5m:Math.max(1.05,trades-.1),taker_buy_ratio:.56
+    };
+    return item;
+  };
+  const top=mkUnderfloor('BURSTAUSDT',72,1.65,1.45);
+  const second=mkUnderfloor('BURSTBUSDT',68,1.45,1.3);
+  const others=[
+    candidate('HIGH1USDT',2,{score:95}),
+    candidate('HIGH2USDT',3,{score:91}),
+    candidate('HIGH3USDT',1,{score:87}),
+    candidate('HIGH4USDT',4,{score:84})
+  ];
+  const selected=radar.selectDeepFromMicro([top,second,...others],31);
+  assert.equal(selected.length,4,'Deep capacity is fixed; this must not create extra candle requests');
+  const underfloor=selected.filter(x=>x.row?._low_liquidity_burst_bypass===true);
+  assert.equal(underfloor.length,1,'no more than one under-floor burst consumes a Deep slot per cycle');
+  assert.equal(underfloor[0].row.symbol,'BURSTAUSDT','pick the strongest qualified closed-candle evidence');
+  assert.equal(underfloor[0]._selection_lane,'exceptional');
+  assert.equal(isEarlyExpansionCandidateAlertEligible({
+    early_expansion_score:99,decision_band:'PRE_EXPANSION',data_quality:100,data_stale:false,
+    risk_flags:[],micro_fingerprint:{eligible:true},low_liquidity_burst_bypass:true
+  },{minAlertScore:82,minDataQuality:70}),false,'Deep watch priority must never bypass the public alert gate');
+});
+
 test('Radar 8 under-floor burst can never satisfy the public buy-alert eligibility gate',()=>{
   const qualified={
     early_expansion_score:95,decision_band:'PRE_EXPANSION',data_quality:100,data_stale:false,
@@ -1140,4 +1184,231 @@ test('Radar 8 under-floor burst can never satisfy the public buy-alert eligibili
   assert.equal(isEarlyExpansionCandidateAlertEligible({
     ...qualified,risk_flags:['WIDE_SPREAD']
   },{minAlertScore:82,minDataQuality:70}),false);
+});
+
+
+test('Radar 8 routes moderate near-base relative-flow anomalies into under-floor WATCH Micro',()=>{
+  const floor=100_000;
+  const input=[{symbol:'EARLYFLOWUSDT',lastPrice:1.002,priceChange24h:.4,quoteVolume24h:55_000,tradeCount24h:900}];
+  const fastBySymbol=new Map([['EARLYFLOWUSDT',{
+    warmed_up:true,price_change_pct:.01,price_acceleration_pct:0,
+    volume_accel_ratio:1.65,trade_accel_ratio:1.45,volume_delta_quote:45,trade_delta:5
+  }]]);
+  const selected=selectUnderfloorFastShockCandidates({
+    rows:input,fastBySymbol,pendingUntilBySymbol:new Map([['EARLYFLOWUSDT',now+60_000]]),
+    now,minQuoteVolume24h:floor,minQuoteVolumeRatio:.10,limit:4
+  });
+  assert.deepEqual(selected.map(x=>x.symbol),['EARLYFLOWUSDT']);
+  assert.equal(selected[0]._low_liquidity_burst_bypass,true);
+});
+
+test('Radar 8 gives moderate early-watch flow bounded Deep priority only after closed-candle confirmation',()=>{
+  const radar=makeRadar({deepCandidates:4,quietReserve:1,rotationReserve:1,exceptionalRotationBypassSlots:2});
+  const early=candidate('EARLYFLOWUSDT',1.2,{score:68,participation:72,tradeParticipation:68,volume:1.3,trades:1.2});
+  early.row.quoteVolume24h=1_000_000;
+  early.fast={warmed_up:true,price_change_pct:.01,price_acceleration_pct:.02,
+    volume_accel_ratio:1.8,trade_accel_ratio:1.35,volume_delta_quote:600,trade_delta:22};
+  early.micro_fingerprint.closed_candles_only=true;
+  early.micro_fingerprint.stage='WATCH';
+  early.micro_fingerprint.confirmation_count=4;
+  early.micro_fingerprint.metrics={
+    ...early.micro_fingerprint.metrics,rvol_1m:1.3,rvol_5m:1.2,
+    trade_rvol_1m:1.2,trade_rvol_5m:1.15,
+    acceleration_1m_pct:.03,acceleration_5m_pct:.04,return_1m:.02,return_5m:.05
+  };
+  const others=[
+    candidate('SCOREAUSDT',2,{score:95}),candidate('SCOREBUSDT',3,{score:91}),
+    candidate('SCORECUSDT',1,{score:87}),candidate('SCOREDUSDT',4,{score:84})
+  ];
+  const selected=radar.selectDeepFromMicro([early,...others],44);
+  assert.ok(selected.some(x=>x.row.symbol==='EARLYFLOWUSDT'&&x._selection_lane==='exceptional'));
+  assert.equal(selected.length,4,'early-watch priority must reuse an existing Deep slot');
+});
+
+
+test('Radar 8 watches very-low-liquidity coins with observed flow while keeping the public alert gate closed',()=>{
+  const floor=100_000;
+  const row={symbol:'MICROCAPUSDT',lastPrice:.008,priceChange24h:.2,quoteVolume24h:9,tradeCount24h:500};
+  const fastBySymbol=new Map([['MICROCAPUSDT',{
+    warmed_up:true,price_change_pct:.5,price_acceleration_pct:.2,
+    volume_accel_ratio:8,trade_accel_ratio:5,volume_delta_quote:.9,trade_delta:20
+  }]]);
+  const selected=selectUnderfloorFastShockCandidates({
+    rows:[row],fastBySymbol,pendingUntilBySymbol:new Map([['MICROCAPUSDT',now+60_000]]),
+    now,minQuoteVolume24h:floor,limit:4
+  });
+  assert.deepEqual(selected.map(x=>x.symbol),['MICROCAPUSDT'],
+    'the default watch floor is near zero but still requires observed live activity');
+  assert.equal(selected[0]._low_liquidity_burst_bypass,true);
+  assert.equal(isEarlyExpansionCandidateAlertEligible({
+    early_expansion_score:99,decision_band:'PRE_EXPANSION',data_quality:100,data_stale:false,
+    risk_flags:[],micro_fingerprint:{eligible:true},low_liquidity_burst_bypass:true
+  },{minAlertScore:82,minDataQuality:70}),false);
+});
+
+test('Radar 8 rotates never-scanned under-floor events ahead of recently scanned stronger events',()=>{
+  const floor=100_000;
+  const rows=[
+    {symbol:'REPEATFLOWUSDT',lastPrice:1.2,priceChange24h:2,quoteVolume24h:90_000,tradeCount24h:4000},
+    {symbol:'NEWFLOWUSDT',lastPrice:.8,priceChange24h:.1,quoteVolume24h:5_000,tradeCount24h:500}
+  ];
+  const fastBySymbol=new Map([
+    ['REPEATFLOWUSDT',{warmed_up:true,price_change_pct:.5,price_acceleration_pct:.2,
+      volume_accel_ratio:8,trade_accel_ratio:5,volume_delta_quote:2000,trade_delta:30}],
+    ['NEWFLOWUSDT',{warmed_up:true,price_change_pct:.01,price_acceleration_pct:0,
+      volume_accel_ratio:1.65,trade_accel_ratio:1.45,volume_delta_quote:45,trade_delta:5}]
+  ]);
+  const selected=selectUnderfloorFastShockCandidates({
+    rows,fastBySymbol,pendingUntilBySymbol:new Map(rows.map(row=>[row.symbol,now+60_000])),
+    lastMicroScannedAt:symbol=>symbol==='REPEATFLOWUSDT'?now-1_000:null,
+    now,minQuoteVolume24h:floor,minQuoteVolumeRatio:.001,limit:1
+  });
+  assert.deepEqual(selected.map(x=>x.symbol),['NEWFLOWUSDT'],
+    'fairness by actual scan age must beat repeated score rank when the slot is scarce');
+});
+
+
+test('Radar 8 safely initializes an incomplete score sentinel before under-floor Micro writes',()=>{
+  const entry={radar_scores:{
+    RADAR_1:'.INCOMPLETE',RADAR_2:'.INCOMPLETE',RADAR_8:'.INCOMPLETE'
+  }};
+  const scores=ensureRadar8ScoreContainer(entry,64.5);
+  assert.equal(typeof scores,'object');
+  assert.equal(scores.fast_score,64.5);
+  assert.equal(scores.micro_score,'.INCOMPLETE');
+  assert.equal(scores.deep_score,'.INCOMPLETE');
+  scores.micro_score=73;
+  assert.equal(entry.radar_scores.RADAR_8.micro_score,73);
+  assert.equal(isEarlyExpansionCandidateAlertEligible({
+    early_expansion_score:99,decision_band:'PRE_EXPANSION',data_quality:100,data_stale:false,
+    risk_flags:[],micro_fingerprint:{eligible:true},low_liquidity_burst_bypass:true
+  },{minAlertScore:82,minDataQuality:70}),false,'score-container repair must not grant entry eligibility');
+});
+
+test('Radar 8 score-container repair handles a malformed parent field without throwing',()=>{
+  const entry={radar_scores:'.INCOMPLETE'};
+  const scores=ensureRadar8ScoreContainer(entry);
+  assert.equal(typeof entry.radar_scores,'object');
+  assert.equal(scores.fast_score,'.INCOMPLETE');
+  scores.micro_score=60;
+  assert.equal(entry.radar_scores.RADAR_8.micro_score,60);
+});
+
+
+test('Radar 8 confirmed early-flow observations create a separate monitor-only alert',()=>{
+  const row={symbol:'EARLYFLOWUSDT',lastPrice:1.002,priceChange24h:.4,quoteVolume24h:9_000};
+  const fast={warmed_up:true,price_change_pct:.01,price_acceleration_pct:.02,
+    volume_accel_ratio:1.65,trade_accel_ratio:1.45,volume_delta_quote:45,trade_delta:5};
+  const microFingerprint={
+    closed_candles_only:true,score:68,confirmation_count:4,stage:'WATCH',
+    metrics:{rvol_1m:1.3,rvol_5m:1.2,trade_rvol_1m:1.2,trade_rvol_5m:1.15,
+      taker_buy_ratio:.55,acceleration_1m_pct:.03,acceleration_5m_pct:.04,return_1m:.02,return_5m:.05}
+  };
+  const qualifies=isConfirmedEarlyFlowWatchCandidate({
+    row,fast,microFingerprint,decisionBand:'WATCH_EARLY',dataQuality:88,dataStale:false,
+    closedCandleCloseTime:now-60_000
+  });
+  assert.equal(qualifies,true);
+  assert.equal(isConfirmedEarlyFlowWatchCandidate({
+    row,fast,microFingerprint,decisionBand:'ALREADY_EXTENDED',dataQuality:88,dataStale:false,
+    closedCandleCloseTime:now-60_000
+  }),false);
+  assert.equal(isConfirmedEarlyFlowWatchCandidate({
+    row,fast,microFingerprint:{...microFingerprint,closed_candles_only:false},
+    decisionBand:'WATCH_EARLY',dataQuality:88,dataStale:false,closedCandleCloseTime:now-60_000
+  }),false);
+  assert.equal(isConfirmedEarlyFlowWatchCandidate({
+    row,fast,microFingerprint,decisionBand:'WATCH_EARLY',dataQuality:88,dataStale:false,
+    closedCandleCloseTime:null
+  }),false,'a monitor alert requires a concrete closed-candle timestamp');
+  const alert=buildEarlyFlowWatchAlert({
+    symbol:'EARLYFLOWUSDT',last_price:1.002,price_change_24h:.4,data_quality:88,data_stale:false,
+    source:'BINANCE_PUBLIC_WS',low_liquidity_burst_bypass:true,micro_fingerprint_score:68,
+    early_flow_watch_evidence:{closed_candle_close_time:now-60_000,volume_accel_ratio:1.65,trade_accel_ratio:1.45},
+    risk_flags:[],reason_codes:[]
+  },now);
+  assert.equal(alert.event,'EARLY_FLOW_WATCH_ONLY');
+  assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+  assert.equal(alert.paper_trading,true);
+  assert.equal(alert.real_order_execution,false);
+  assert.equal(alert.low_liquidity_burst_bypass,true);
+  assert.ok(alert.risk_flags.includes('LOW_LIQUIDITY_WATCH_ONLY'));
+  assert.ok(alert.reason_codes.includes('MONITOR_ONLY_NOT_ENTRY'));
+});
+
+
+test('Radar 8 persists watch-only observations in the alert feed and reports disabled push honestly',async()=>{
+  const storedAlerts=[],storedEvents=[],pushCalls=[];
+  const store={
+    async appendEarlyExpansionAlert(alert){storedAlerts.push({...alert});},
+    async appendEarlyExpansionEvent(event){storedEvents.push({...event});}
+  };
+  const pushManager={
+    status(){return {provider:'none',enabled:false};},
+    async notifyRadarAlert(alert){pushCalls.push(alert);return [];}
+  };
+  const radar=new EarlyExpansionRadar({
+    rest:{request:async()=>({data:[]}),klines:async()=>({candles:[]}),depth:async()=>({data:{bids:[],asks:[]}})},
+    store,pushManager,config:{},clock:()=>now,logger:{info(){},warn(){}}
+  });
+  const alert=buildEarlyFlowWatchAlert({
+    symbol:'EARLYFLOWUSDT',last_price:1.002,price_change_24h:.4,data_quality:88,data_stale:false,
+    source:'BINANCE_PUBLIC_WS',low_liquidity_burst_bypass:true,micro_fingerprint_score:68,
+    early_flow_watch_evidence:{closed_candle_close_time:now-60_000,volume_accel_ratio:1.65,trade_accel_ratio:1.45},
+    risk_flags:[],reason_codes:[]
+  },now);
+  const result=await radar.recordWatchOnlyAlert(alert,'EARLY_FLOW_WATCH_TRACE');
+  assert.equal(result.stored,true);
+  assert.equal(result.pushStatus,'PUSH_DISABLED_OR_UNCONFIGURED');
+  assert.equal(storedAlerts.length,1);
+  assert.equal(storedAlerts[0].event,'EARLY_FLOW_WATCH_ONLY');
+  assert.equal(storedAlerts[0].watch_only,true);
+  assert.equal(storedAlerts[0].entry_eligible,false);
+  assert.equal(storedEvents.length,1);
+  assert.equal(storedEvents[0].event_type,'EARLY_FLOW_WATCH_TRACE');
+  assert.equal(storedEvents[0].notification_status,'PUSH_DISABLED_OR_UNCONFIGURED');
+  assert.equal(pushCalls.length,0,'a disabled provider must not be called');
+});
+
+
+test('Radar 8 produces a monitor-only flow alert candidate from validated Micro candles without waiting for Deep',()=>{
+  const micro={
+    row:{symbol:'MICROEARLYUSDT',lastPrice:.008,priceChange24h:.4,quoteVolume24h:9_000,_low_liquidity_burst_bypass:true},
+    fast:{warmed_up:true,at:now-1000,price_change_pct:.01,price_acceleration_pct:.02,
+      volume_accel_ratio:1.65,trade_accel_ratio:1.45,volume_delta_quote:45,trade_delta:5},
+    oneMinute:[{openTime:now-120_000,closeTime:now-60_001,open:.0079,high:.0081,low:.0078,close:.008,volume:500,tradeCount:20,closed:true}],
+    fiveMinute:[{openTime:now-360_000,closeTime:now-60_001,open:.0078,high:.0081,low:.0077,close:.008,volume:2500,tradeCount:100,closed:true}],
+    source:'BINANCE_PUBLIC_REST',
+    micro_fingerprint:{
+      closed_candles_only:true,score:68,confirmation_count:4,stage:'WATCH',
+      metrics:{rvol_1m:1.3,rvol_5m:1.2,trade_rvol_1m:1.2,trade_rvol_5m:1.15,
+        taker_buy_ratio:.55,acceleration_1m_pct:.03,acceleration_5m_pct:.04,return_1m:.02,return_5m:.05},
+      risk_flags:['LOW_LIQUIDITY_WATCH_ONLY'],reasons:['MICRO_EARLY_FLOW']
+    }
+  };
+  const candidate=buildMicroEarlyFlowWatchCandidate(micro,now,{});
+  assert.ok(candidate,'validated Micro evidence should be surfaced without consuming Deep selection');
+  assert.equal(candidate.early_flow_watch,true);
+  assert.equal(candidate.low_liquidity_burst_bypass,true);
+  assert.equal(candidate.data_quality,null,'a Micro-only observation must not fabricate a numerical quality score');
+  const alert=buildEarlyFlowWatchAlert(candidate,now);
+  assert.equal(alert.event,'EARLY_FLOW_WATCH_ONLY');
+  assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+  assert.equal(alert.paper_trading,true);
+  assert.equal(alert.real_order_execution,false);
+  assert.equal(alert.data_quality,null);
+});
+
+test('Radar 8 refuses Micro-only flow watches without validated candles or a qualified fingerprint',()=>{
+  const micro={
+    row:{symbol:'BADMICROUSDT',lastPrice:1,priceChange24h:.4,quoteVolume24h:100_000},
+    fast:{warmed_up:true,price_change_pct:.01,price_acceleration_pct:.02,volume_accel_ratio:1.65,
+      trade_accel_ratio:1.45,volume_delta_quote:45,trade_delta:5},
+    oneMinute:[{openTime:now-120_000,closeTime:now-60_001,open:1,high:1.01,low:.99,close:1,closed:true}],
+    fiveMinute:[],
+    micro_fingerprint:{closed_candles_only:true,stage:'WARMING_UP',score:null,confirmation_count:0,metrics:{}}
+  };
+  assert.equal(buildMicroEarlyFlowWatchCandidate(micro,now,{}),null);
 });
