@@ -415,6 +415,7 @@ for attempt in $(seq 1 120); do
     # Stop only the service, keeping app notifications in Android's tray so restart reconciliation is tested faithfully.
     sleep 2
     before_ready="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
+    before_feed_active="$(grep -F 'DEBUG_REPLAY_TEST_FEED_ACTIVE' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
     old_service_pid="$(background_service_pid)"
     if [[ -z "${old_service_pid}" ]]; then
       echo "::error::Background service process was absent before the restart checkpoint"
@@ -467,9 +468,9 @@ for attempt in $(seq 1 120); do
     for restart_attempt in $(seq 1 30); do
       new_pid="$(background_service_pid)"
       ready_count="$(grep -F 'BACKGROUND_SERVICE_READY' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
-      logs="$(replay_logs)"
-      if [[ -n "${new_pid}" && "${ready_count}" -gt "${before_ready}" ]] &&
-         printf '%s\n' "${logs}" | grep -Fq 'REPLAY_TEST_OVERRIDE_CONFIGURED'; then
+      feed_active_count="$(grep -F 'DEBUG_REPLAY_TEST_FEED_ACTIVE' "${REPLAY_LOG_FILE}" | wc -l | tr -d ' ')"
+      if [[ -n "${new_pid}" && "${ready_count}" -gt "${before_ready}" &&
+            "${feed_active_count}" -gt "${before_feed_active}" ]]; then
         restarted_ready=1
         break
       fi
