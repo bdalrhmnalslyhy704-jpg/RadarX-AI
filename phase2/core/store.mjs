@@ -10,6 +10,7 @@ const MiB=1024*1024;
 // rows per radar; full scan decisions remain in the Scan Journey ledger.
 const JSONL_ARCHIVE_POLICIES=Object.freeze({
   schedulerEvents:{compactAtBytes:12*MiB,retainRowsPerKey:5000,keyField:'radar',maxRetainedBytesPerKey:512*1024}
+  earlyExpansionEvents:{compactAtBytes:4*MiB,retainRowsPerKey:2000,keyField:'radar',maxRetainedBytesPerKey:512*1024}
 });
 const ORPHAN_TEMP_SUFFIX=/\.(?:tmp|repair|outcome|compact)-\d+-\d+$/;
 
@@ -179,7 +180,7 @@ export class DurableStore {
     this.scanJourneyDir=join(dir,'scan-journeys');
     this.files={scanJourneyManifest:join(dir,'scan-journey-manifest.json'),subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
       signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),radarSignalOutcomes:join(dir,'radar-signal-outcomes.json'),
-      intelligenceMemory:join(dir,'intelligence-memory.json'),strongMoveAlerts:join(dir,'strong-move-alerts.jsonl'),predictionCalibration:join(dir,'prediction-calibration.json'),rotationAlerts:join(dir,'rotation-alerts.jsonl'),liquidityAbsorptionAlerts:join(dir,'liquidity-absorption-alerts.jsonl'),kahirAlerts:join(dir,'kahir-alerts.jsonl'),doomsdayAlerts:join(dir,'doomsday-alerts.jsonl'),professorAlerts:join(dir,'professor-alerts.jsonl'),alMuqawimAlerts:join(dir,'al-muqawim-alerts.jsonl'),coinHunterAlerts:join(dir,'coin-hunter-alerts.jsonl'),whaleAccumulationAlerts:join(dir,'whale-accumulation-alerts.jsonl'),falconEyeAlerts:join(dir,'falcon-eye-alerts.jsonl'),schedulerEvents:join(dir,'scan-scheduler-events.jsonl')};}
+      intelligenceMemory:join(dir,'intelligence-memory.json'),strongMoveAlerts:join(dir,'strong-move-alerts.jsonl'),predictionCalibration:join(dir,'prediction-calibration.json'),rotationAlerts:join(dir,'rotation-alerts.jsonl'),liquidityAbsorptionAlerts:join(dir,'liquidity-absorption-alerts.jsonl'),kahirAlerts:join(dir,'kahir-alerts.jsonl'),doomsdayAlerts:join(dir,'doomsday-alerts.jsonl'),professorAlerts:join(dir,'professor-alerts.jsonl'),alMuqawimAlerts:join(dir,'al-muqawim-alerts.jsonl'),coinHunterAlerts:join(dir,'coin-hunter-alerts.jsonl'),whaleAccumulationAlerts:join(dir,'whale-accumulation-alerts.jsonl'),falconEyeAlerts:join(dir,'falcon-eye-alerts.jsonl'),schedulerEvents:join(dir,'scan-scheduler-events.jsonl'),earlyExpansionEvents:join(dir,'early-expansion-events.jsonl')};}
   async init({legacyDir=null}={}){
     await mkdir(this.dir,{recursive:true});
     await mkdir(this.scanJourneyDir,{recursive:true});
@@ -497,24 +498,39 @@ export class DurableStore {
   async appendAlMuqawimAlert(v){return this.lock(async()=>{await appendFile(this.files.alMuqawimAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
   async readAlMuqawimAlerts({sinceMs=0,limit=100}={}){const rows=await this.readRecent('alMuqawimAlerts',Math.min(500,Math.max(1,Number(limit)||100)));return rows.filter(x=>Number(x?.processed_at)>Number(sinceMs||0)).slice(0,Math.min(100,Math.max(1,Number(limit)||100)));}
   async appendEarlyExpansionAlert(v){return this.lock(async()=>{await appendFile(this.files.earlyExpansionAlerts,JSON.stringify(v)+'\n');this.lastWriteAt=Date.now();});}
-  // Watch-only Radar 8 observations are diagnostic events, never actionable alert-feed rows.
-  // Reuse the bounded per-radar scheduler journal so tracing cannot create an unbounded file.
+  // Persist watch-only observations in their own bounded diagnostic archive.
+  // They must never enter the actionable feed polled by Android or crowd out scheduler state.
   async appendEarlyExpansionEvent(v){
     const alert=v&&typeof v==='object'&&!Array.isArray(v)?v:{};
     const symbol=String(alert.symbol||'').trim().toUpperCase();
     if(!symbol)return {written:0,reason:'WATCH_ONLY_TRACE_SYMBOL_REQUIRED'};
-    const at=Number(alert.trace_at??alert.detected_at??alert.processed_at??Date.now());
-    const event={
-      radar:'RADAR_8',stage:'WATCH_ONLY',symbol,
+    const rawAt=Number(alert.trace_at??alert.detected_at??alert.processed_at??Date.now());
+    const eventAt=Number.isFinite(rawAt)&&rawAt>0?rawAt:Date.now();
+    const shortList=value=>Array.isArray(value)?value.map(x=>String(x||'').trim()).filter(Boolean).slice(0,12):[];
+    const trace={
+      id:String(alert.id||''),radar:'RADAR_8',stage:'WATCH_ONLY',symbol,
+      event:String(alert.event||'EARLY_FLOW_WATCH_ONLY'),
       event_type:String(alert.event_type||'RADAR8_WATCH_ONLY_TRACE'),
-      event_at:Number.isFinite(at)&&at>0?at:Date.now(),
-      reason_code:'WATCH_ONLY_NOT_ACTIONABLE',
+      event_at:eventAt,trace_at:eventAt,
       watch_only:true,entry_eligible:false,
       notification_status:'WATCH_ONLY_NOT_SENT',feed_status:'TRACE_ONLY',
-      alert_id:String(alert.id||''),
-      payload:alert
+      price:Number.isFinite(Number(alert.price))?Number(alert.price):null,
+      micro_fingerprint_score:Number.isFinite(Number(alert.micro_fingerprint_score))?Number(alert.micro_fingerprint_score):null,
+      data_quality:Number.isFinite(Number(alert.data_quality))?Number(alert.data_quality):null,
+      data_stale:alert.data_stale===true,
+      low_liquidity_burst_bypass:alert.low_liquidity_burst_bypass===true,
+      closed_candles_only:alert.closed_candles_only===true,
+      reason_codes:shortList(alert.reason_codes),
+      risk_flags:shortList(alert.risk_flags),
+      source:String(alert.source||'UNKNOWN')
     };
-    return this.appendScanSchedulerEvents([event]);
+    return this.appendJsonlArchive('earlyExpansionEvents',[trace]);
+  }
+  async readEarlyExpansionEvents({sinceMs=0,limit=100}={}){
+    const take=Math.min(1000,Math.max(1,Math.trunc(Number(limit)||100)));
+    const rows=await this.readRecent('earlyExpansionEvents',Math.min(5000,take));
+    return rows.filter(x=>Number(x?.event_at??x?.trace_at??0)>=Number(sinceMs||0))
+      .sort((a,b)=>Number(a?.event_at||0)-Number(b?.event_at||0)).slice(0,take);
   }
   async readEarlyExpansionAlerts({sinceMs=0,limit=100}={}){const safeLimit=Math.min(500,Math.max(1,Number(limit)||100));const rows=await this.readRecent('earlyExpansionAlerts',500);return rows.filter(x=>Number(x?.processed_at??x?.detected_at??0)>Number(sinceMs||0)).sort((a,b)=>Number(a?.processed_at??a?.detected_at??0)-Number(b?.processed_at??b?.detected_at??0)).slice(0,safeLimit);}
   async appendScanSchedulerEvents(events){
