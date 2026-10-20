@@ -102,7 +102,20 @@ export class BinanceAllMarketTickerClient {
 
   url() {
     const url = new URL(this.urls[this.urlIndex]);
-    url.searchParams.set('streams', '!ticker@arr');
+    // This client consumes exactly one stream. Use Binance's raw-stream endpoint
+    // (/ws/<stream>) instead of the combined-stream query, which has been rejected
+    // by some hosted egress paths even when the kline stream endpoint is reachable.
+    // Keep any non-stream options (for example timeUnit) but remove a stale
+    // combined-stream selector supplied in the base URL.
+    const path = url.pathname.replace(/\/+$/, '');
+    if (path.endsWith('/stream')) {
+      url.pathname = path.slice(0, -'/stream'.length) + '/ws/!ticker@arr';
+    } else if (path.endsWith('/ws')) {
+      url.pathname = path + '/!ticker@arr';
+    } else if (!path.endsWith('/ws/!ticker@arr')) {
+      url.pathname = (path || '') + '/ws/!ticker@arr';
+    }
+    url.searchParams.delete('streams');
     return url.toString();
   }
 
