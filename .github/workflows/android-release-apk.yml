@@ -67,25 +67,52 @@ jobs:
             process.exit(1);
           }
           const origin=url.origin;
-          const file='android/app/src/main/assets/radarx-backend-client.mjs';
-          let source=fs.readFileSync(file,'utf8');
-          const before=source;
-          source=source.replace(/export const DEFAULT_BACKEND_BASE_URL = '[^']+';/,`export const DEFAULT_BACKEND_BASE_URL = '${origin}';`);
-          const fallbackStart='export const BACKEND_FALLBACK_URLS = Object.freeze([';
-          const fallbackStartIndex=source.indexOf(fallbackStart);
-          const fallbackEndIndex=source.indexOf(']);',fallbackStartIndex);
-          if(fallbackStartIndex<0||fallbackEndIndex<0){
-            console.error('::error::Could not find the expected backend fallback list.');
+          if(raw!==origin){
+            console.error('::error::Set RADARX_BACKEND_BASE_URL to the bare HTTPS origin without a trailing slash.');
             process.exit(1);
           }
-          source=source.slice(0,fallbackStartIndex)+'export const BACKEND_FALLBACK_URLS = Object.freeze([]);'+source.slice(fallbackEndIndex+3);
-          if(source===before||!source.includes(`DEFAULT_BACKEND_BASE_URL = '${origin}'`)||!source.includes('BACKEND_FALLBACK_URLS = Object.freeze([])')){
-            console.error('::error::Could not safely apply DHDTech backend configuration to the Android client asset.');
+          const assetPaths=[
+            'android/app/src/main/assets/radarx-backend-client.mjs',
+            'android/app/src/main/assets/radarx-backend-client.js'
+          ];
+          for(const path of assetPaths){
+            let source=fs.readFileSync(path,'utf8');
+            const original=source;
+            source=source.replace(/export const DEFAULT_BACKEND_BASE_URL = '[^']+';/,`export const DEFAULT_BACKEND_BASE_URL = '${origin}';`);
+            const fallbackStart='export const BACKEND_FALLBACK_URLS = Object.freeze([';
+            const fallbackStartIndex=source.indexOf(fallbackStart);
+            const fallbackEndIndex=source.indexOf(']);',fallbackStartIndex);
+            if(fallbackStartIndex<0||fallbackEndIndex<0){
+              console.error('::error::Could not find the expected backend fallback list in '+path);
+              process.exit(1);
+            }
+            source=source.slice(0,fallbackStartIndex)+'export const BACKEND_FALLBACK_URLS = Object.freeze([]);'+source.slice(fallbackEndIndex+3);
+            if(source===original||!source.includes(`DEFAULT_BACKEND_BASE_URL = '${origin}'`)||source.includes('railway.app')){
+              console.error('::error::Could not safely apply DHDTech backend configuration to '+path);
+              process.exit(1);
+            }
+            fs.writeFileSync(path,source);
+          }
+          const javaPath='android/app/src/main/java/com/radarx/app/TradliActivity.java';
+          let javaSource=fs.readFileSync(javaPath,'utf8');
+          const originalJava=javaSource;
+          javaSource=javaSource.replace(/private static final String PRIMARY_BACKEND_ORIGIN\\s*=\\s*"[^"]+"\\s*;/,`private static final String PRIMARY_BACKEND_ORIGIN = "${origin}";`);
+          javaSource=javaSource.replace(/private static final String FALLBACK_BACKEND_ORIGIN\\s*=\\s*"[^"]+"\\s*;/,'private static final String FALLBACK_BACKEND_ORIGIN = "";');
+          if(javaSource===originalJava||!javaSource.includes(`PRIMARY_BACKEND_ORIGIN = "${origin}"`)||!javaSource.includes('FALLBACK_BACKEND_ORIGIN = ""')||javaSource.includes('railway.app')){
+            console.error('::error::Could not safely apply the DHDTech origin to TradliActivity.java');
             process.exit(1);
           }
-          fs.writeFileSync(file,source);
+          fs.writeFileSync(javaPath,javaSource);
           fs.appendFileSync(process.env.GITHUB_ENV,'RADARX_BACKEND_BASE_URL='+origin+String.fromCharCode(10));
-          console.log(JSON.stringify({backend_origin:origin,railway_fallbacks:0,client_asset_updated:true}));
+          const remaining=[];
+          for(const path of [...assetPaths,javaPath]){
+            if(fs.readFileSync(path,'utf8').includes('railway.app'))remaining.push(path);
+          }
+          if(remaining.length){
+            console.error('::error::Railway URLs remain in the packaged Android source: '+remaining.join(', '));
+            process.exit(1);
+          }
+          console.log(JSON.stringify({backend_origin:origin,railway_fallbacks:0,android_files_configured:assetPaths.length+1}));
           NODE
 
       - name: Verify release branch checkout and backend URL
