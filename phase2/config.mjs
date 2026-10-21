@@ -13,7 +13,8 @@ export const DEFAULT_PUBLIC_SPOT_WS_URLS = Object.freeze([
   'wss://stream.binance.com:9443/stream'
 ]);
 export function resolvePublicSpotWsUrls(env=process.env){
-  return list(env.BINANCE_WS_URLS, DEFAULT_PUBLIC_SPOT_WS_URLS);
+  const configured=String(env.BINANCE_WS_URLS??'').split(',').map(x=>x.trim()).filter(Boolean);
+  return [...new Set([...configured,...DEFAULT_PUBLIC_SPOT_WS_URLS])];
 }
 
 export function resolveRadarAutostart(env=process.env){
