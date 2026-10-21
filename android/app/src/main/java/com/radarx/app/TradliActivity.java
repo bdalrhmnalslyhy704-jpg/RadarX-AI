@@ -37,9 +37,8 @@ public final class TradliActivity extends Activity {
     private static final String APP_ORIGIN =
             "https://appassets.androidplatform.net";
     private static final String PRIMARY_BACKEND_ORIGIN =
-            "https://radarx-ai-triple-production.up.railway.app";
-    private static final String FALLBACK_BACKEND_ORIGIN =
-            "https://radarx-ai-production.up.railway.app";
+            "https://dhdtech-url-required.invalid";
+    private static final String FALLBACK_BACKEND_ORIGIN = "";
 
     private WebView webView;
     private WebViewAssetLoader assetLoader;
