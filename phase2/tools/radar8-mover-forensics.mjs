@@ -304,7 +304,7 @@ async function main() {
   }
   const nowFloor=Math.floor(Date.now()/MINUTE_MS)*MINUTE_MS;
   const endMs=flag(args,'--end')?isoMs(flag(args,'--end'),'END'):(nowFloor-1);
-  const startMs=flag(args,'--start')?isoMs(flag(args,'--start'),'START'):(endMs-DAY_MS);
+  const startMs=flag(args,'--start')?Math.floor(isoMs(flag(args,'--start'),'START')/MINUTE_MS)*MINUTE_MS:(nowFloor-DAY_MS);
   const lookbackHours=Math.trunc(Number(flag(args,'--lookback-hours','26')));
   if(!Number.isFinite(startMs)||!Number.isFinite(endMs)||startMs>=endMs)throw new Error('INVALID_REPLAY_RANGE');
   if(endMs>Date.now())throw new Error('REPLAY_END_IN_FUTURE');
