@@ -13,6 +13,8 @@ COPY phase2/ ./phase2/
 
 ENV NODE_ENV=production
 ENV RADARX_HOST=0.0.0.0
+ENV PORT=8787
+EXPOSE 8787
 
 # Boot with safe read-only defaults on hosts that provide no environment panel values.
 CMD ["sh", "phase2/deploy/dhdtech-entrypoint.sh"]
