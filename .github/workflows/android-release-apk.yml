@@ -278,7 +278,18 @@ jobs:
           BASE="$RADARX_BACKEND_BASE_URL"
           INFO_STATUS="$(curl --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/deployment-info.json" -w "%{http_code}" "$BASE/api/deployment-info")"
           if [ "$INFO_STATUS" != "200" ]; then
-            echo "::error::DHDTech is not serving the current Build 224 API contract (deployment-info HTTP $INFO_STATUS). Rebuild the DHDTech container from the selected Build 224 branch."
+            echo "::warning::Deployment-info returned HTTP $INFO_STATUS; probing root and independent API paths to distinguish stale container from domain/ingress routing."
+            for PROBE_PATH in "/" "/healthz" "/api/radar-status" "/api/early-expansion-radar?quote=USDT&limit=1"; do
+              SAFE_NAME="$(printf '%s' "$PROBE_PATH" | tr '/?=&' '____' | tr -cd 'A-Za-z0-9_.-' | cut -c1-70)"
+              HEADERS_FILE="$RUNNER_TEMP/dhdtech-probe-$SAFE_NAME.headers"
+              BODY_FILE="$RUNNER_TEMP/dhdtech-probe-$SAFE_NAME.body"
+              PROBE_STATUS="$(curl --location --connect-timeout 8 --max-time 12 --silent --show-error -D "$HEADERS_FILE" -o "$BODY_FILE" -w "%{http_code}" "$BASE$PROBE_PATH" || true)"
+              CONTENT_TYPE="$(awk 'BEGIN{IGNORECASE=1} /^content-type:/ {gsub(/\r/,""); sub(/^[^:]*:[[:space:]]*/,""); value=$0} END{print value}' "$HEADERS_FILE" 2>/dev/null || true)"
+              SERVER_HEADER="$(awk 'BEGIN{IGNORECASE=1} /^server:/ {gsub(/\r/,""); sub(/^[^:]*:[[:space:]]*/,""); value=$0} END{print value}' "$HEADERS_FILE" 2>/dev/null || true)"
+              BODY_PREVIEW="$(tr '\n\r' '  ' < "$BODY_FILE" 2>/dev/null | cut -c1-180 || true)"
+              printf 'DHDTECH_ROUTE_DIAG path=%s status=%s content_type=%s server=%s body=%s\n' "$PROBE_PATH" "$PROBE_STATUS" "$CONTENT_TYPE" "$SERVER_HEADER" "$BODY_PREVIEW"
+            done
+            echo "::error::DHDTech is not serving the current Build 224 API contract (deployment-info HTTP $INFO_STATUS). Diagnostic route results above identify whether the hostname reaches the Node API."
             cat "$RUNNER_TEMP/deployment-info.json" || true
             exit 1
           fi
