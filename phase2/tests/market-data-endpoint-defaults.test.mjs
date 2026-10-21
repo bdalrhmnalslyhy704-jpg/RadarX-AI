@@ -9,10 +9,12 @@ const {CONFIG} = await import('../config.mjs?market-data-endpoint-defaults');
 
 test('default Spot WebSocket endpoints use the official public market-data stream', () => {
   assert.deepEqual(CONFIG.websocket.urls, [
-    'wss://data-stream.binance.vision/stream'
+    'wss://data-stream.binance.vision/stream',
+    'wss://stream.binance.com:9443/stream'
   ]);
   assert.deepEqual(CONFIG.moveRadar.websocket.urls, [
-    'wss://data-stream.binance.vision/stream'
+    'wss://data-stream.binance.vision/stream',
+    'wss://stream.binance.com:9443/stream'
   ]);
 });
 
