@@ -96,8 +96,18 @@ jobs:
           const javaPath='android/app/src/main/java/com/radarx/app/TradliActivity.java';
           let javaSource=fs.readFileSync(javaPath,'utf8');
           const originalJava=javaSource;
-          javaSource=javaSource.replace(/private static final String PRIMARY_BACKEND_ORIGIN\\s*=\\s*"[^"]+"\\s*;/,`private static final String PRIMARY_BACKEND_ORIGIN = "${origin}";`);
-          javaSource=javaSource.replace(/private static final String FALLBACK_BACKEND_ORIGIN\\s*=\\s*"[^"]+"\\s*;/,'private static final String FALLBACK_BACKEND_ORIGIN = "";');
+          const oldPrimary='private static final String PRIMARY_BACKEND_ORIGIN = "https://dhdtech-url-required.invalid";';
+          if(!javaSource.includes(oldPrimary)){
+            console.error('::error::TradliActivity.java does not contain the expected DHDTech placeholder.');
+            process.exit(1);
+          }
+          javaSource=javaSource.replace(oldPrimary,`private static final String PRIMARY_BACKEND_ORIGIN = "${origin}";`);
+          const oldFallback='private static final String FALLBACK_BACKEND_ORIGIN = "";';
+          if(!javaSource.includes(oldFallback)){
+            console.error('::error::TradliActivity.java does not contain the expected empty fallback.');
+            process.exit(1);
+          }
+          javaSource=javaSource.replace(oldFallback,'private static final String FALLBACK_BACKEND_ORIGIN = "";');
           if(javaSource===originalJava||!javaSource.includes(`PRIMARY_BACKEND_ORIGIN = "${origin}"`)||!javaSource.includes('FALLBACK_BACKEND_ORIGIN = ""')||javaSource.includes('railway.app')){
             console.error('::error::Could not safely apply the DHDTech origin to TradliActivity.java');
             process.exit(1);
@@ -121,6 +131,7 @@ jobs:
           test "$GITHUB_REF_NAME" = "feature-coin-hunter-20261006-android" || test "$GITHUB_REF_NAME" = "android-build224-radar8-v2-20261006" || test "$GITHUB_REF_NAME" = "android-whale-intelligence-v2-build224-20261007" || test "$GITHUB_REF_NAME" = "android-build224-final-stable-20261007" || test "$GITHUB_REF_NAME" = "build224-multi-analyst-20261007"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           grep -Fq "$RADARX_BACKEND_BASE_URL" android/app/src/main/assets/radarx-backend-client.mjs
+          ! grep -RIn --exclude-dir=build "railway.app" android/app/src/main
           ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
           grep -Fq 'versionCode 15' android/app/build.gradle
           grep -Fq 'versionName "1.4.9"' android/app/build.gradle
