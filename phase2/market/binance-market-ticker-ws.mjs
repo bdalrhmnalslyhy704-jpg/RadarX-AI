@@ -102,23 +102,21 @@ export class BinanceAllMarketTickerClient {
 
   url() {
     const url = new URL(this.urls[this.urlIndex]);
-    // This client consumes exactly one stream. Use Binance's raw-stream endpoint
-    // (/ws/<stream>) instead of the combined-stream query, which has been rejected
-    // by some hosted egress paths even when the kline stream endpoint is reachable.
-    // Keep any non-stream options (for example timeUnit) but remove a stale
-    // combined-stream selector supplied in the base URL.
-    const path = url.pathname.replace(/\/+$/, '');
-    if (path.endsWith('/stream')) {
-      url.pathname = path.slice(0, -'/stream'.length) + '/ws/!ticker@arr';
+    // Use the combined-stream endpoint used by the working market-data path.
+    // Runtime logs showed the raw /ws/!ticker@arr socket could open but receive
+    // zero messages/tickers until heartbeat timeout. Combined streams wrap the
+    // ticker array under {stream, data}, which the message handler already unwraps.
+    const path = url.pathname.replace(/\\/+$/, '');
+    if (path.endsWith('/ws/!ticker@arr')) {
+      url.pathname = path.slice(0, -'/ws/!ticker@arr'.length) + '/stream';
     } else if (path.endsWith('/ws')) {
-      url.pathname = path + '/!ticker@arr';
-    } else if (!path.endsWith('/ws/!ticker@arr')) {
-      url.pathname = (path || '') + '/ws/!ticker@arr';
+      url.pathname = path.slice(0, -'/ws'.length) + '/stream';
+    } else if (!path.endsWith('/stream')) {
+      url.pathname = (path || '') + '/stream';
     }
-    url.searchParams.delete('streams');
+    url.searchParams.set('streams', '!ticker@arr');
     return url.toString();
   }
-
   scheduleReconnect(reason) {
     if (!this.running) return;
     this.state = 'BACKING_OFF';
