@@ -14,6 +14,7 @@ import {isFastActivityShockCandidate,isFastEarlyWatchCandidate} from '../core/ac
 import {
   buildReplayFastSnapshot,
   classifyForRadar8MoverForensics,
+  evaluateProposedExtendedContinuationWatch,
   firstClosedCandleCrossing,
   minutesBeforeClosedCandleCrossing
 } from '../core/radar8-mover-forensics.mjs';
@@ -143,6 +144,9 @@ async function replaySymbol({client,symbol,startMs,endMs,historyStartMs,btcFiveM
         .filter(c=>c?.closed===true&&Number(c.closeTime)<=input.now).at(-1) || null;
       const fastEarly = isFastEarlyWatchCandidate(input.ticker,fast,config);
       const fastShock = isFastActivityShockCandidate(input.ticker,fast,config);
+      const proposedExtendedWatch = evaluateProposedExtendedContinuationWatch({
+        ticker:input.ticker,fast,microFingerprint:fp,fastActivityShockCandidate:fastShock,config
+      });
       const earlyFlowWatch = isConfirmedEarlyFlowWatchCandidate({
         row:input.ticker,fast,microFingerprint:fp,decisionBand:fp?.stage,
         dataQuality:null,dataStale:false,
@@ -177,6 +181,7 @@ async function replaySymbol({client,symbol,startMs,endMs,historyStartMs,btcFiveM
         activity_shock_watch:activityShockWatch,
         fast_early_watch_candidate:fastEarly,
         fast_activity_shock_candidate:fastShock,
+        proposed_extended_continuation_watch:proposedExtendedWatch,
         accepted_mode:acceptedMode,
         risk_flags:Array.isArray(fp?.risk_flags)?fp.risk_flags.slice(0,12):[],
         reason_codes:Array.isArray(fp?.reasons)?fp.reasons.slice(0,16):[],
@@ -229,6 +234,8 @@ async function replaySymbol({client,symbol,startMs,endMs,historyStartMs,btcFiveM
   const firstMicro = firstOf(x=>x.micro_qualified);
   const firstFlowWatch = firstOf(x=>x.early_flow_watch);
   const firstShockWatch = firstOf(x=>x.activity_shock_watch);
+  const firstExtendedWatch = firstOf(x=>x.proposed_extended_continuation_watch?.eligible===true);
+  const proposedExtendedWatchRows = observations.filter(x=>x.proposed_extended_continuation_watch?.eligible===true);
   const firstAccepted = observations.find(x=>x.accepted_mode!=='NONE') || null;
   const accepted = observations.filter(x=>x.accepted_mode!=='NONE');
   const topScores = observations.filter(x=>x.micro_score!==null)
@@ -240,6 +247,7 @@ async function replaySymbol({client,symbol,startMs,endMs,historyStartMs,btcFiveM
       confirmations:x.micro_confirmations,stage:x.micro_stage,mode:x.micro_mode,
       micro_qualified:x.micro_qualified,early_flow_watch:x.early_flow_watch,
       activity_shock_watch:x.activity_shock_watch,
+      proposed_extended_continuation_watch:x.proposed_extended_continuation_watch,
       fast:x.fast,reasons:x.reason_codes,risk_flags:x.risk_flags
     }));
   const signalRows = accepted.map(x=>({
@@ -268,6 +276,13 @@ async function replaySymbol({client,symbol,startMs,endMs,historyStartMs,btcFiveM
       micro_qualified_count:observations.filter(x=>x.micro_qualified).length,
       early_flow_watch_observations:observations.filter(x=>x.early_flow_watch).length,
       activity_shock_watch_observations:observations.filter(x=>x.activity_shock_watch).length,
+      proposed_extended_continuation_watch_observations:proposedExtendedWatchRows.length,
+      first_proposed_extended_continuation_watch_at:firstExtendedWatch?.timestamp??null,
+      first_proposed_extended_continuation_watch_at_iso:firstExtendedWatch?new Date(firstExtendedWatch.timestamp).toISOString():null,
+      minutes_before_plus_5pct_proposed_watch:signalLead(firstExtendedWatch,crosses.plus_5pct_close_at),
+      minutes_before_plus_15pct_proposed_watch:signalLead(firstExtendedWatch,crosses.plus_15pct_close_at),
+      proposed_watch_before_plus_15pct:Boolean(firstExtendedWatch&&crosses.plus_15pct_close_at&&firstExtendedWatch.timestamp<crosses.plus_15pct_close_at),
+      proposed_extended_continuation_watch_policy:'DIAGNOSTIC_ONLY_NOT_A_PRODUCTION_ALERT_OR_ENTRY',
       accepted_watch_or_micro_events:signalRows.length,
       first_micro_qualified_at:firstMicro?.timestamp??null,
       first_micro_qualified_at_iso:firstMicro?new Date(firstMicro.timestamp).toISOString():null,
@@ -286,6 +301,12 @@ async function replaySymbol({client,symbol,startMs,endMs,historyStartMs,btcFiveM
       flow_watch_before_plus_15pct:Boolean(firstFlowWatch&&crosses.plus_15pct_close_at&&firstFlowWatch.timestamp<crosses.plus_15pct_close_at)
     },
     signal_rows:signalRows,
+    proposed_extended_continuation_watch_rows:proposedExtendedWatchRows.slice(0,100).map(x=>({
+      timestamp:x.timestamp,timestamp_iso:new Date(x.timestamp).toISOString(),price:x.price,
+      price_change_24h_pct:x.price_change_24h_pct,micro_score:x.micro_score,
+      confirmations:x.micro_confirmations,stage:x.micro_stage,fast:x.fast,
+      proposed_gate:x.proposed_extended_continuation_watch
+    })),
     top_micro_observations:topScores
   };
 }
@@ -362,9 +383,11 @@ async function main() {
       requested_symbols:symbols.length,
       completed_symbols:results.filter(x=>x.data_quality?.complete===true).length,
       incomplete_symbols:incomplete.map(x=>({symbol:x.symbol,reason:x.data_quality?.error||'CANDLE_COVERAGE_INCOMPLETE'})),
-      signals_before_plus_15pct:results.filter(x=>x.detection?.watch_before_plus_15pct===true).map(x=>x.symbol),
+      existing_micro_or_watch_candidate_before_plus_15pct:results.filter(x=>x.detection?.watch_before_plus_15pct===true).map(x=>x.symbol),
+      proposed_extended_continuation_watch_before_plus_15pct:results.filter(x=>x.detection?.proposed_watch_before_plus_15pct===true).map(x=>x.symbol),
       micro_qualified_before_plus_15pct:results.filter(x=>x.detection?.micro_qualified_before_plus_15pct===true).map(x=>x.symbol),
-      flow_watch_before_plus_15pct:results.filter(x=>x.detection?.flow_watch_before_plus_15pct===true).map(x=>x.symbol)
+      flow_watch_before_plus_15pct:results.filter(x=>x.detection?.flow_watch_before_plus_15pct===true).map(x=>x.symbol),
+      proposed_watch_incomplete_symbols:incomplete.map(x=>x.symbol)
     },
     results
   };
