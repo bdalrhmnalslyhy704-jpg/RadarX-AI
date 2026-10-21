@@ -69,7 +69,7 @@ test('TEST_FIXTURE: websocket kline timestamps are milliseconds; seconds are rej
   assert.ok(errors.some(x=>/INVALID_WS_JSON:openTime_TIMESTAMP_UNIT_SECONDS/.test(x)));
 });
 
-import {BinanceAllMarketTickerClient} from '../market/binance-market-ticker-ws.mjs';
+import {BinanceAllMarketTickerClient,normalizeTicker} from '../market/binance-market-ticker-ws.mjs';
 
 test('TEST_FIXTURE: ticker heartbeat timeout is explicit and backoff resets only after feed data',async()=>{
   Socket.instances.length=0;
@@ -96,15 +96,19 @@ test('TEST_FIXTURE: ticker heartbeat timeout is explicit and backoff resets only
   second.emit('open');
   assert.equal(client.state,'WAITING_FOR_DATA');
   assert.equal(client.attempt,1,'opening a silent socket must not reset backoff');
-  second.emit('message',Buffer.from(JSON.stringify({stream:'!ticker@arr',data:[{
-    s:'BTCUSDT',c:'100',o:'99',P:'1',h:'101',l:'98',q:'1000000',n:500,E:Date.now()
-  }]})));
+  second.emit('message',Buffer.from(JSON.stringify([{
+    e:'24hrMiniTicker',E:Date.now(),s:'BTCUSDT',
+    c:'100',o:'99',h:'101',l:'98',v:'12000',q:'1000000'
+  }])));
   assert.equal(client.state,'LIVE','a valid ticker payload changes feed state to LIVE');
   assert.equal(client.attempt,0,'a valid ticker payload resets backoff');
   assert.ok(states.some(x=>x.state==='WAITING_FOR_DATA'));
   assert.ok(states.some(x=>x.state==='LIVE'&&x.reason==='WS_FIRST_VALID_TICKER_RECEIVED'));
   assert.equal(tickers.length,1);
   assert.equal(tickers[0].symbol,'BTCUSDT');
+  assert.ok(Math.abs(tickers[0].priceChange24h-((100/99-1)*100))<1e-9);
+  assert.equal(tickers[0].quoteVolume24h,1000000);
+  assert.equal(tickers[0].tradeCount24h,null,'mini-ticker does not provide a trade count');
   assert.equal(client.health().tickers_received,1);
   assert.match(client.health().last_disconnect_reason,/WS_HEARTBEAT_TIMEOUT/);
   client.stop();
@@ -137,6 +141,19 @@ test('TEST_FIXTURE: silent ticker socket is rejected at the configured deadline 
   client.stop();
 });
 
+test('TEST_FIXTURE: mini-ticker is normalized without fabricating missing trade counts',()=>{
+  const ticker=normalizeTicker({
+    e:'24hrMiniTicker',E:1900000000000,s:'ETHUSDT',
+    c:'2100',o:'2000',h:'2200',l:'1950',v:'1234.5',q:'2600000'
+  });
+  assert.ok(ticker);
+  assert.equal(ticker.priceChange24h,5);
+  assert.equal(ticker.highPrice24h,2200);
+  assert.equal(ticker.lowPrice24h,1950);
+  assert.equal(ticker.quoteVolume24h,2600000);
+  assert.equal(ticker.tradeCount24h,null);
+});
+
 test('TEST_FIXTURE: ticker websocket records HTTP rejection status before retry',()=>{
   Socket.instances.length=0;
   const states=[];
@@ -167,8 +184,8 @@ test('TEST_FIXTURE: all-market ticker stream uses the raw Binance /ws endpoint',
     WebSocketImpl:Socket,
     onState:()=>{}
   });
-  assert.equal(client.url(),'wss://data-stream.binance.vision/ws/!ticker@arr?timeUnit=MICROSECOND');
+  assert.equal(client.url(),'wss://data-stream.binance.vision/ws/!miniTicker@arr?timeUnit=MICROSECOND');
   client.urlIndex=1;
-  assert.equal(client.url(),'wss://stream.binance.com:9443/ws/!ticker@arr');
+  assert.equal(client.url(),'wss://stream.binance.com:9443/ws/!miniTicker@arr');
   client.stop();
 });
