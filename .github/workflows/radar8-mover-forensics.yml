@@ -1,0 +1,52 @@
+name: RadarX Build 224 Radar 8 mover forensics
+
+on:
+  pull_request:
+    branches:
+      - build224-multi-analyst-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: radar8-mover-forensics-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  replay-listed-movers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Check syntax and unit tests
+        run: |
+          set -euo pipefail
+          node --check phase2/core/radar8-mover-forensics.mjs
+          node --check phase2/tools/radar8-mover-forensics.mjs
+          node --test phase2/tests/radar8-mover-forensics.test.mjs
+      - name: Replay recent 24-hour move window from real Binance Spot closed candles
+        id: replay
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          node phase2/tools/radar8-mover-forensics.mjs \
+            --symbols IOSTUSDT,ALTUSDT,CVXUSDT,WUSDT,ENAUSDT,CYPHBUSDT \
+            --lookback-hours 26 \
+            --output reports/radar8-mover-forensics.json
+      - name: Publish replay evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radar8-mover-forensics-build224
+          path: reports/radar8-mover-forensics.json
+          if-no-files-found: warn
+          retention-days: 14
