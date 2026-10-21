@@ -2905,6 +2905,68 @@ export class EarlyExpansionRadar{
       const microScanned=await microScanPromise;
       const microFlowWatchCandidates=microScanned.map(item=>buildMicroEarlyFlowWatchCandidate(item,this.clock(),this.config)).filter(Boolean);
       let watchAlertsThisCycle=0;
+      let extendedContinuationWatchesThisCycle=0;
+      if(this.config.extendedContinuationWatchEnabled!==false){
+        const watchNow=this.clock();
+        this.extendedContinuationWatchTimestamps=this.extendedContinuationWatchTimestamps.filter(at=>Number(at)>watchNow-60*60*1000);
+        const hourlyCap=Math.max(1,Math.trunc(Number(this.config.extendedContinuationWatchMaxPerHour)||6));
+        const perCycleCap=Math.max(1,Math.trunc(Number(this.config.extendedContinuationWatchMaxPerCycle)||3));
+        const cooldown=Math.max(0,Number(this.config.extendedContinuationWatchCooldownMs)||10*60*1000);
+        const priorWatchKeys=new Set(historyAlerts.filter(x=>x?.event==='EXTENDED_CONTINUATION_WATCH_ONLY').map(x=>String(x?.id||'')));
+        const proposed=[];
+        for(const item of microScanned){
+          if(!item||item.failed||!item.row?.symbol)continue;
+          const row=item.row,symbol=String(row.symbol).trim().toUpperCase();
+          const fp=item.micro_fingerprint||{},fast=fastBySymbol.get(symbol)||{};
+          const latestClosedOne=(Array.isArray(item.oneMinute)?item.oneMinute:[])
+            .filter(c=>c?.closed===true&&hasFiniteNumber(c.closeTime)&&Number(c.closeTime)<=watchNow).at(-1)||null;
+          if(!latestClosedOne)continue;
+          const gate=evaluateProposedExtendedContinuationWatch({
+            ticker:row,fast,microFingerprint:fp,
+            fastActivityShockCandidate:isFastActivityShockCandidate(row,fast,this.config),
+            config:this.config
+          });
+          if(!gate.eligible)continue;
+          const closeTime=Number(latestClosedOne.closeTime);
+          const key='RADAR8_EXTENDED_CONTINUATION_WATCH:'+symbol+':'+closeTime;
+          const lastAt=Number(this.lastExtendedContinuationWatchAt.get(symbol)||0);
+          if(priorWatchKeys.has(key)||this.lastExtendedContinuationWatchKeyBySymbol.get(symbol)===key||
+             watchNow-lastAt<cooldown)continue;
+          proposed.push({row,symbol,fast,fp,gate,closeTime,key});
+        }
+        proposed.sort((a,b)=>
+          ((Number(b.fast.volume_accel_ratio)||0)+(Number(b.fast.trade_accel_ratio)||0))-
+          ((Number(a.fast.volume_accel_ratio)||0)+(Number(a.fast.trade_accel_ratio)||0))||
+          (Number(b.fp.score)||0)-(Number(a.fp.score)||0)||a.symbol.localeCompare(b.symbol));
+        for(const candidate of proposed.slice(0,perCycleCap)){
+          this.extendedContinuationWatchTimestamps=this.extendedContinuationWatchTimestamps.filter(at=>Number(at)>this.clock()-60*60*1000);
+          if(this.extendedContinuationWatchTimestamps.length>=hourlyCap)break;
+          const alert=buildExtendedContinuationWatchAlert({
+            row:candidate.row,fast:candidate.fast,microFingerprint:candidate.fp,
+            gate:candidate.gate,closedCandleCloseTime:candidate.closeTime
+          },watchNow);
+          const status=await this.recordWatchOnlyAlert(alert,'EXTENDED_CONTINUATION_WATCH_TRACE');
+          if(!status.stored)continue;
+          this.lastExtendedContinuationWatchAt.set(candidate.symbol,watchNow);
+          this.lastExtendedContinuationWatchKeyBySymbol.set(candidate.symbol,candidate.key);
+          this.extendedContinuationWatchTimestamps.push(watchNow);
+          this.latestExtendedContinuationWatches=[
+            alert,
+            ...(this.latestExtendedContinuationWatches||[]).filter(x=>String(x?.symbol||'').toUpperCase()!==candidate.symbol&&
+              watchNow-Number(x?.detected_at||0)<=60*60*1000)
+          ].slice(0,20);
+          priorWatchKeys.add(candidate.key);
+          extendedContinuationWatchesThisCycle++;
+          watchAlertsThisCycle++;
+          const journeyEntry=journeyEntries.get(candidate.symbol);
+          if(journeyEntry){
+            journeyEntry.notification_status=status.pushStatus;
+            journeyEntry.notification_gate_rejection_reason='ANTI_CHASE_ENTRY_VETO_RETAINED_WATCH_ONLY';
+            journeyEntry.alert_id=alert.id;
+            journeyEntry.alert_stage='EXTENDED_CONTINUATION_WATCH_ONLY';
+          }
+        }
+      }
       const previousEarlyFlowWatchKeys=new Set(historyAlerts.filter(x=>x?.event==='EARLY_FLOW_WATCH_ONLY').map(x=>String(x?.id||'')));
       // Persist Micro-confirmed watch-only observations before spending time on the
       // bounded Deep batch. The selector has already enforced closed candle, score,
