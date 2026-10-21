@@ -37,6 +37,8 @@ assert.match(background,/KAHIR_RADAR/);
 
 const tradliActivity = await readFile(new URL('./app/src/main/java/com/radarx/app/TradliActivity.java', import.meta.url), 'utf8');
 assert.ok(tradliActivity.includes('PRIMARY_BACKEND_ORIGIN = "'+(process.env.RADARX_BACKEND_BASE_URL||'https://dhdtech-url-required.invalid')+'";'));
+assert.doesNotMatch(await readFile(new URL('./app/src/main/assets/radarx-backend-client.mjs', import.meta.url), 'utf8'),/railway\.app/i);
+assert.doesNotMatch(await readFile(new URL('./app/src/main/assets/radarx-backend-client.js', import.meta.url), 'utf8'),/railway\.app/i);
 assert.ok(tradliActivity.includes('FALLBACK_BACKEND_ORIGIN = "";'));
 assert.doesNotMatch(tradliActivity,/railway\.app/i);
 assert.match(tradliActivity,/PRIMARY_BACKEND_ORIGIN\.equalsIgnoreCase\(origin\)/);
