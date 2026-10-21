@@ -131,9 +131,12 @@ public final class MainActivity extends Activity {
         });
 
         setContentView(webView);
+        // Start the foreground monitor before WebView boots its heavy dashboard.
+        // The foreground-service start deadline must not depend on WebView startup
+        // or main-thread callbacks queued behind dashboard JavaScript.
+        ensureContinuousMonitoring();
         RadarXPushRegistration.syncIfConfigured(this);
         webView.loadUrl(APP_URL);
-        webView.postDelayed(this::ensureContinuousMonitoring, 1400);
     }
 
     @Override
