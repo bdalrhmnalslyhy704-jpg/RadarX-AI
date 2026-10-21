@@ -2617,11 +2617,15 @@ export class EarlyExpansionRadar{
       }
       if(this.config.marketWideLightScanEnabled!==false){
         try{
+          // Book-ticker REST arrives after the fast ticker snapshot. Use the
+          // actual light-scan timestamp here; using fastSeenAt can make a fresh
+          // book look >1s "from the future" and silently zero out spread coverage.
+          const lightScanAt=this.clock();
           marketWideLightResult=this.marketWideLightScan.scan({
             eligible,getSeries:symbol=>this.marketWideKlineCache?.getSeries(symbol,96)||null,
             benchmarkTicker:rawBySymbol.get('BTCUSDT')||null,
             getBookTicker:symbol=>bookTickerBySymbol.get(String(symbol||'').toUpperCase())||null,
-            now:fastSeenAt,cycle,
+            now:lightScanAt,cycle,
             isExceptional:row=>{
               const fast=fastBySymbol.get(row.symbol)||{};
               return isExceptionalMicroCandidate(row,fast,this.config)||isFastActivityShockCandidate(row,fast,this.config)||
