@@ -8,10 +8,9 @@ import {normalizeHistoricalCandles, aggregateFiveMinuteCandles, runHistoricalRep
 import {
   EARLY_EXPANSION_RADAR_DEFAULTS,
   buildMicroFingerprint,
-  isFastActivityShockCandidate,
-  isFastEarlyWatchCandidate,
   isConfirmedEarlyFlowWatchCandidate
 } from '../core/early-expansion-radar.mjs';
+import {isFastActivityShockCandidate,isFastEarlyWatchCandidate} from '../core/activity-shock.mjs';
 import {
   buildReplayFastSnapshot,
   classifyForRadar8MoverForensics,
