@@ -1,7 +1,5 @@
-export const DEFAULT_BACKEND_BASE_URL = 'https://radarx-ai-triple-production.up.railway.app';
-export const BACKEND_FALLBACK_URLS = Object.freeze([
-  'https://radarx-ai-production.up.railway.app'
-]);
+export const DEFAULT_BACKEND_BASE_URL = 'https://dhdtech-url-required.invalid';
+export const BACKEND_FALLBACK_URLS = Object.freeze([]);
 
 function assertAllowedBackend(url) {
   const allowed = new Set([DEFAULT_BACKEND_BASE_URL, ...BACKEND_FALLBACK_URLS]);
