@@ -8,6 +8,14 @@ const list = (v, d) => {
   return a.length ? a : d;
 };
 
+export const DEFAULT_PUBLIC_SPOT_WS_URLS = Object.freeze([
+  'wss://data-stream.binance.vision/stream',
+  'wss://stream.binance.com:9443/stream'
+]);
+export function resolvePublicSpotWsUrls(env=process.env){
+  return list(env.BINANCE_WS_URLS, DEFAULT_PUBLIC_SPOT_WS_URLS);
+}
+
 export function resolveRadarAutostart(env=process.env){
   const explicit=env.RADARX_RADARS_AUTOSTART;
   if(explicit!==undefined&&String(explicit).trim()!=='')return String(explicit).trim().toLowerCase()==='true';
@@ -38,9 +46,7 @@ export const CONFIG = Object.freeze({
   websocket: {
     // RadarX consumes public Spot market data, not user-data streams.
     // Binance documents data-stream.binance.vision for public market-data streams.
-    urls: list(process.env.BINANCE_WS_URLS, [
-      'wss://data-stream.binance.vision/stream'
-    ]),
+    urls: resolvePublicSpotWsUrls(),
     initialBackoffMs: int(process.env.RADARX_WS_BACKOFF_MS, 1000),
     maxBackoffMs: int(process.env.RADARX_WS_MAX_BACKOFF_MS, 60000),
     jitterRatio: float(process.env.RADARX_WS_JITTER, 0.2),
@@ -102,9 +108,7 @@ export const CONFIG = Object.freeze({
     websocket: {
       // RadarX consumes public Spot market data, not user-data streams.
       // Binance documents data-stream.binance.vision for public market-data streams.
-      urls: list(process.env.BINANCE_WS_URLS, [
-        'wss://data-stream.binance.vision/stream'
-      ]),
+      urls: resolvePublicSpotWsUrls(),
       initialBackoffMs: int(process.env.RADARX_WS_BACKOFF_MS, 1000),
       maxBackoffMs: int(process.env.RADARX_WS_MAX_BACKOFF_MS, 60000),
       jitterRatio: float(process.env.RADARX_WS_JITTER, 0.2),
