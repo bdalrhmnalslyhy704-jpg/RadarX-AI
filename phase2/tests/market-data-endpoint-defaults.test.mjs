@@ -18,15 +18,20 @@ test('default Spot WebSocket endpoints use the official public market-data strea
 
 test('default Spot REST endpoints use the official public market-data REST endpoint', () => {
   assert.deepEqual(CONFIG.rest.urls, [
-    'https://data-api.binance.vision'
+    'https://data-api.binance.vision',
+    'https://api.binance.com'
   ]);
 });
 
-test('deployment endpoint overrides remain honored', async () => {
+test('deployment REST primary override is retained before public fallback endpoints', async () => {
   process.env.BINANCE_WS_URLS = 'wss://custom-market-data.example/stream';
   process.env.BINANCE_REST_URLS = 'https://custom-market-data.example';
   const {CONFIG: overridden} = await import('../config.mjs?market-data-endpoint-override');
   assert.deepEqual(overridden.websocket.urls, ['wss://custom-market-data.example/stream']);
   assert.deepEqual(overridden.moveRadar.websocket.urls, ['wss://custom-market-data.example/stream']);
-  assert.deepEqual(overridden.rest.urls, ['https://custom-market-data.example']);
+  assert.deepEqual(overridden.rest.urls, [
+    'https://custom-market-data.example',
+    'https://data-api.binance.vision',
+    'https://api.binance.com'
+  ]);
 });

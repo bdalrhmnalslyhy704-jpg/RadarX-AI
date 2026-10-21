@@ -201,6 +201,25 @@ export class DurableStore {
           this.migratedFiles.push(basename(p));
         }catch{}
       }
+      // Scan-journey payloads live in a subdirectory, not in this.files. Copy
+      // them as well when moving from an ephemeral container directory to /data;
+      // never overwrite a durable copy already present at the destination.
+      const legacyJourneyDir=join(legacyDir,'scan-journeys');
+      try{
+        const entries=await readdir(legacyJourneyDir,{withFileTypes:true});
+        for(const entry of entries){
+          if(!entry.isFile())continue;
+          const destination=join(this.scanJourneyDir,entry.name);
+          let destinationExists=false;
+          try{await stat(destination);destinationExists=true;}catch{}
+          if(destinationExists)continue;
+          try{
+            const contents=await readFile(join(legacyJourneyDir,entry.name));
+            await writeFile(destination,contents,{flag:'wx'});
+            this.migratedFiles.push('scan-journeys/'+entry.name);
+          }catch{}
+        }
+      }catch{}
     }
     for(const p of Object.values(this.files)){
       try{await readFile(p,'utf8');}catch{

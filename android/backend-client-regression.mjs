@@ -36,8 +36,16 @@ assert.match(background,/CHANNEL_ROTATION_ALERTS/);
 assert.match(background,/KAHIR_RADAR/);
 
 const tradliActivity = await readFile(new URL('./app/src/main/java/com/radarx/app/TradliActivity.java', import.meta.url), 'utf8');
-assert.match(tradliActivity,/PRIMARY_BACKEND_ORIGIN\s*=\s*"https:\/\/radarx-ai-triple-production\.up\.railway\.app"/);
-assert.match(tradliActivity,/FALLBACK_BACKEND_ORIGIN\s*=\s*"https:\/\/radarx-ai-production\.up\.railway\.app"/);
+const configuredBackendOrigin = String(
+  process.env.RADARX_BACKEND_BASE_URL || 'https://radarx-ai-triple-production.up.railway.app'
+).replace(/\/+$/, '');
+const releaseOriginConfigured = Boolean(process.env.RADARX_BACKEND_BASE_URL);
+assert.ok(tradliActivity.includes('PRIMARY_BACKEND_ORIGIN =\n            "' + configuredBackendOrigin + '";'));
+if (releaseOriginConfigured) {
+  assert.ok(tradliActivity.includes('FALLBACK_BACKEND_ORIGIN = PRIMARY_BACKEND_ORIGIN;'));
+} else {
+  assert.match(tradliActivity,/FALLBACK_BACKEND_ORIGIN\s*=\s*"https:\/\/radarx-ai-production\.up\.railway\.app"/);
+}
 assert.match(tradliActivity,/PRIMARY_BACKEND_ORIGIN\.equalsIgnoreCase\(origin\)/);
 assert.match(tradliActivity,/FALLBACK_BACKEND_ORIGIN\.equalsIgnoreCase\(origin\)/);
 const manifest = await readFile(new URL('./app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');

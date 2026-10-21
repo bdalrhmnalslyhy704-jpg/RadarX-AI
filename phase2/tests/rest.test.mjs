@@ -71,6 +71,31 @@ test('TEST_FIXTURE: open Kline cache entries expire before the candle can be mis
   ),receivedAt+12_000,'already-closed candles may use the interval TTL');
 });
 
+test('TEST_FIXTURE: a timed-out primary REST endpoint falls through to the real configured backup',async()=>{
+  const called=[];
+  const fetchImpl=async url=>{
+    called.push(url);
+    if(url.startsWith('https://primary-timeout.test/')) {
+      const error=new Error('The operation was aborted');
+      error.name='AbortError';
+      throw error;
+    }
+    return {status:200,ok:true,headers:new Map(),json:async()=>({serverTime:1792600000000})};
+  };
+  const client=new RestClient({
+    baseUrls:['https://primary-timeout.test','https://backup-live.test'],
+    fetchImpl,timeoutMs:100,minIntervalMs:0,maxRequestsPerMinute:100
+  });
+  const result=await client.request('/api/v3/time');
+  assert.deepEqual(called,[
+    'https://primary-timeout.test/api/v3/time',
+    'https://backup-live.test/api/v3/time'
+  ]);
+  assert.equal(result.source,'https://backup-live.test');
+  assert.equal(result.data.serverTime,1792600000000);
+  assert.equal(client.health().state,'LIVE');
+});
+
 test('TEST_FIXTURE: HTTP 429 records rate limit and retry-after without spamming fallback',async()=>{
   let calls=0;
   const fetchImpl=async()=>{calls++;return{status:429,headers:new Map([['retry-after','0.001']]),ok:false,json:async()=>({})};};

@@ -36,6 +36,7 @@ import {RadarSignalOutcomeWorker} from './core/radar-signal-outcomes.mjs';
 
 import {instrumentRadarCycle} from './core/radar-telemetry.mjs';
 import {connectRadarAlertsToAnalysts} from './core/radar-analyst-bridge.mjs';
+import {isMountPoint,resolveArchiveStorage,resolveBuildMetadata} from './deploy/storage-path.mjs';
 
 export async function startServer({
   config=CONFIG,
@@ -47,8 +48,16 @@ export async function startServer({
     assertReadOnlyStagingConfig(config);
   }
   const onRailway=Boolean(process.env.RAILWAY_SERVICE_ID||process.env.RAILWAY_ENVIRONMENT);
-  const archiveDir=process.env.RADARX_DATA_DIR||(onRailway?'/data/.radarx-data':'./.radarx-data');
-  const store=await new DurableStore({dir:archiveDir}).init({legacyDir:onRailway?'./.radarx-data':null});
+  const mountTable=await readFile('/proc/mounts','utf8').catch(()=> '');
+  const archiveVolumeMounted=isMountPoint(mountTable,'/data');
+  const archiveStorage=resolveArchiveStorage({
+    configuredDir:process.env.RADARX_DATA_DIR,
+    onRailway,
+    dataVolumeMounted:archiveVolumeMounted
+  });
+  const archiveDir=archiveStorage.dir;
+  const buildMetadata=resolveBuildMetadata(process.env);
+  const store=await new DurableStore({dir:archiveDir}).init({legacyDir:archiveStorage.legacyDir});
   logger.info?.('[RADARX_ARCHIVE_TEMP_CLEANUP] '+JSON.stringify({
     build_version:'Build 224',store_dir:store.dir,...(store.tempCleanup||{deleted_files:0,freed_bytes:0,failed_files:0})
   }));
@@ -58,16 +67,6 @@ export async function startServer({
   }));
   const archiveState=await store.getPreExpansionOutcomes().catch(()=>({}));
   const archiveRecords=Array.isArray(archiveState?.records)?archiveState.records:[];
-  let archiveVolumeMounted=null;
-  if(onRailway){
-    try{
-      const mounts=await readFile('/proc/mounts','utf8');
-      archiveVolumeMounted=mounts.split('\n').some(line=>{
-        const mountPoint=line.split(' ')[1]?.replace(/\\040/g,' ');
-        return mountPoint==='/data'||mountPoint?.startsWith('/data/');
-      });
-    }catch{archiveVolumeMounted=false;}
-  }
   // Stream the exact JSON array representation into SHA-256. Building both a
   // second 5,000-row mapped array and one giant JSON string briefly duplicated
   // the whole outcome ledger in memory during startup.
@@ -96,11 +95,10 @@ export async function startServer({
       provisional,records:archiveRecords.length}];
   }));
   logger.info?.('[RADARX_ARCHIVE_READY] '+JSON.stringify({
-    build_version:'Build 224',build_commit:process.env.RAILWAY_GIT_COMMIT_SHA||process.env.GITHUB_SHA||null,
-    build_branch:process.env.RAILWAY_GIT_BRANCH||null,service_id:process.env.RAILWAY_SERVICE_ID||null,
-    deployment_id:process.env.RAILWAY_DEPLOYMENT_ID||null,store_dir:store.dir,
-    outcome_store_file:store.files.preExpansionOutcomes,volume_mount_path:onRailway?'/data':null,
-    volume_mount_detected:archiveVolumeMounted,persisted_signal_count:archiveRecords.length,
+    build_version:'Build 224',...buildMetadata,store_dir:store.dir,
+    outcome_store_file:store.files.preExpansionOutcomes,volume_mount_path:archiveStorage.volumeMountPath,
+    volume_mount_detected:archiveVolumeMounted,archive_path_override:Boolean(String(process.env.RADARX_DATA_DIR||'').trim()),
+    persisted_signal_count:archiveRecords.length,
     oldest_signal_id:archiveAnchor?.signal_id||null,oldest_signal_detected_at:archiveAnchor?.detected_at||null,
     latest_signal_id:archiveLatest?.signal_id||null,latest_signal_detected_at:archiveLatest?.detected_at||null,
     horizon_counts:archiveHorizonCounts,

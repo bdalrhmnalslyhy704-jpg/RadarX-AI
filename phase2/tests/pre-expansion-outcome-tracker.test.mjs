@@ -67,6 +67,36 @@ test('DurableStore migrates legacy archive files without overwriting persistent 
   }finally{await rm(root,{recursive:true,force:true});}
 });
 
+test('pre-expansion signal provenance uses nonblank platform-neutral build metadata aliases',async()=>{
+  await withStore(async store=>{
+    const names=[
+      'RADARX_BUILD_COMMIT','GIT_COMMIT_SHA','GIT_COMMIT','SOURCE_VERSION','VCS_REF',
+      'BUILD_COMMIT','DHDTECH_GIT_COMMIT','RAILWAY_GIT_COMMIT_SHA','GITHUB_SHA',
+      'RADARX_BUILD_BRANCH','GIT_BRANCH','SOURCE_BRANCH','BRANCH_NAME','BUILD_BRANCH',
+      'DHDTECH_GIT_BRANCH','RAILWAY_GIT_BRANCH','GITHUB_REF_NAME'
+    ];
+    const prior=Object.fromEntries(names.map(name=>[name,process.env[name]]));
+    try{
+      for(const name of names)delete process.env[name];
+      process.env.RAILWAY_GIT_COMMIT_SHA='';
+      process.env.RADARX_BUILD_COMMIT='build224-test-commit';
+      process.env.RADARX_BUILD_BRANCH='build224-test-branch';
+      await recordPreExpansionSignals(store,[signal({symbol:'PROVENANCEUSDT',stage:'WATCH_EARLY'})],{now:NOW});
+      const state=await store.getPreExpansionOutcomes();
+      const row=state.records.find(x=>x.symbol==='PROVENANCEUSDT');
+      assert.equal(row.build_commit,'build224-test-commit');
+      assert.equal(row.build_branch,'build224-test-branch');
+      assert.equal(row.archive_missing_fields.includes('build_commit'),false);
+      assert.equal(row.build_version,'Build 224');
+    }finally{
+      for(const name of names){
+        if(prior[name]===undefined)delete process.env[name];
+        else process.env[name]=prior[name];
+      }
+    }
+  });
+});
+
 test('market regime classifier separates bullish, bearish, and ranging conditions',()=>{
   assert.equal(classifyEvaluationMarketRegime({marketMedianChange24hPct:1.2,marketBreadthPct:70,btcReturn5mPct:.3,btcReturn1hPct:.8}),'BULLISH');
   assert.equal(classifyEvaluationMarketRegime({marketMedianChange24hPct:-1.1,marketBreadthPct:34,btcReturn5mPct:-.4,btcReturn1hPct:-1.2}),'BEARISH');

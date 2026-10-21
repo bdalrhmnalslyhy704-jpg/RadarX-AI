@@ -464,3 +464,23 @@ test('Radar 8 watch-only traces persist in their bounded diagnostic archive and 
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+test('legacy scan-journey archive files migrate to the persistent store without overwriting existing durable files',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'radarx-scan-journey-migration-'));
+  const legacyDir=join(root,'ephemeral','.radarx-data');
+  const durableDir=join(root,'persistent','.radarx-data');
+  const legacyJourneyDir=join(legacyDir,'scan-journeys');
+  const durableJourneyDir=join(durableDir,'scan-journeys');
+  await mkdir(legacyJourneyDir,{recursive:true});
+  await mkdir(durableJourneyDir,{recursive:true});
+  await writeFile(join(legacyJourneyDir,'RADAR8:USDT:old.json.gz'),'legacy-history');
+  await writeFile(join(legacyJourneyDir,'RADAR8:USDT:existing.json.gz'),'legacy-copy');
+  await writeFile(join(durableJourneyDir,'RADAR8:USDT:existing.json.gz'),'durable-copy');
+
+  const store=await new DurableStore({dir:durableDir}).init({legacyDir});
+  assert.equal(await readFile(join(durableJourneyDir,'RADAR8:USDT:old.json.gz'),'utf8'),'legacy-history');
+  assert.equal(await readFile(join(durableJourneyDir,'RADAR8:USDT:existing.json.gz'),'utf8'),'durable-copy');
+  assert.ok(store.migratedFiles.includes('scan-journeys/RADAR8:USDT:old.json.gz'));
+  assert.ok(!store.migratedFiles.includes('scan-journeys/RADAR8:USDT:existing.json.gz'));
+  await rm(root,{recursive:true,force:true});
+});
