@@ -18,7 +18,8 @@ test('default Spot WebSocket endpoints use the official public market-data strea
 
 test('default Spot REST endpoints use the official public market-data REST endpoint', () => {
   assert.deepEqual(CONFIG.rest.urls, [
-    'https://data-api.binance.vision'
+    'https://data-api.binance.vision',
+    'https://api.binance.com'
   ]);
 });
 
