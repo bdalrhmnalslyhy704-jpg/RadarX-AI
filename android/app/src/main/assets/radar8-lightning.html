@@ -40,6 +40,11 @@ header{position:sticky;top:0;z-index:5;margin:-18px -14px 14px;padding:calc(12px
 </div>
 
 <div class="card wide">
+  <div class="coin-top"><b>استئناف حركة بعد ارتفاع ممتد — مراقبة فقط</b><span class="pill">لا دخول • لا دفع</span></div>
+  <div class="muted" style="font-size:10px;margin-top:6px;line-height:1.7">هذا القسم يرصد تسارعًا جديدًا بعد ارتفاع قوي. منع مطاردة السعر يظل مفعّلًا؛ هذه ليست إشارة شراء ولا تنبيه دفع.</div>
+  <div id="watch-candidates" class="rows" style="margin-top:10px"><div class="empty">لا توجد مراقبات استئناف حديثة.</div></div>
+</div>
+<div class="card wide">
   <div class="coin-top"><b>أقوى بصمات ما قبل الحركة</b><span class="pill">V2</span></div>
   <div id="candidates" class="rows" style="margin-top:10px"><div class="empty">لم تصل بيانات بعد.</div></div>
 </div>
@@ -90,6 +95,29 @@ function render(data){
   $('state').className='state '+(live?'ok':'warn');
   $('updated').textContent='آخر تحديث: '+timeText(data && data.as_of);
   $('error').textContent=m.last_error?'خطأ: '+esc(m.last_error):'';
+  const watchRows=Array.isArray(data && data.watch_only_candidates)?data.watch_only_candidates:[];
+  if(!watchRows.length){
+    $('watch-candidates').innerHTML='<div class="empty">لا توجد مراقبات استئناف حديثة.</div>';
+  }else{
+    $('watch-candidates').innerHTML=watchRows.slice(0,12).map(w=>{
+      const e=w.extended_continuation_watch_evidence||{};
+      const closeTime=Number(e.closed_candle_close_time);
+      const closeIso=Number.isFinite(closeTime)?new Date(closeTime).toISOString():null;
+      return '<article class="coin">'+
+        '<div class="coin-top"><b>'+esc(w.symbol||'—')+'</b><span class="pill">مراقبة فقط</span></div>'+
+        '<div class="meta"><span class="pill">حركة ممتدة</span><span class="pill">الدخول ممنوع</span><span class="pill">Micro '+fmt(e.micro_score,1)+'</span><span class="pill">'+esc(String(e.micro_confirmations||0))+' تأكيدات</span></div>'+
+        '<div class="mini">'+
+          '<div><b>'+fmtPct(e.daily_move_pct)+'</b><small>تغير 24 ساعة</small></div>'+
+          '<div><b>'+fmt(e.volume_accel_ratio,2)+'x</b><small>تسارع الحجم</small></div>'+
+          '<div><b>'+fmt(e.trade_accel_ratio,2)+'x</b><small>تسارع الصفقات</small></div>'+
+          '<div><b>'+fmtPct(e.price_change_1m_pct)+'</b><small>حركة 1m</small></div>'+
+          '<div><b>'+fmtPct(e.price_acceleration_1m_pct)+'</b><small>تسارع السعر 1m</small></div>'+
+          '<div><b>'+esc(timeText(closeIso))+'</b><small>إغلاق الشمعة المؤكدة</small></div>'+
+        '</div>'+
+        '<div class="shock"><b>لا تطارد السعر.</b> تم رصد نشاط شراء متجدد، لكن مانع الدخول بعد الامتداد ما زال فعالًا. هذه المراقبة لا ترسل إشعار دفع.</div>'+
+      '</article>';
+    }).join('');
+  }
   const arr=Array.isArray(data && data.candidates)?data.candidates:[];
   if(!arr.length){$('candidates').innerHTML='<div class="empty">لا توجد بصمات عميقة مؤكدة في هذه الدورة.</div>';return;}
   $('candidates').innerHTML=arr.slice(0,20).map(c=>{
