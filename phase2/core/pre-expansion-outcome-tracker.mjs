@@ -39,6 +39,13 @@ const object=v=>v&&typeof v==='object'&&!Array.isArray(v)?v:{};
 const list=v=>Array.isArray(v)?v:[];
 const keyOf=(radar,symbol)=>radar+'|'+symbol;
 const pct=(price,entry)=>Number.isFinite(price)&&Number.isFinite(entry)&&entry>0?(price/entry-1)*100:null;
+const firstNonBlank=(...values)=>{
+  for(const value of values){
+    const text=String(value??'').trim();
+    if(text)return text;
+  }
+  return null;
+};
 
 export function emptyPreExpansionOutcomeState(){
   return {version:'PRE_EXPANSION_OUTCOMES_V2',records:[],last_stage_by_key:{},last_price_update_at:0,last_report_log_at:0,last_historical_import_at:0,last_historical_backfill_at:0,updated_at:0};
@@ -285,9 +292,21 @@ function makeSignal(alert,now,marketContext){
   const coverage=fieldCoverage({radar,symbol,stage,entry,detectedAt,signalScore,marketRegime,metrics:m,reasons,fingerprintReady});
   const quality=coverage.score;
   const reportedQuality=num(alert?.data_quality??alert?.falcon_eye?.data_quality);
-  const buildVersion='Build 224';
-  const buildCommit=String(process.env.RAILWAY_GIT_COMMIT_SHA??process.env.GITHUB_SHA??'').trim()||null;
-  const buildBranch=String(process.env.RAILWAY_GIT_BRANCH??'').trim()||null;
+  const buildVersion=firstNonBlank(alert?.build_version,process.env.RADARX_BUILD_VERSION)||'Build 224';
+  // Prefer attached provenance, then common DHDTech/CI/Git aliases.
+  // A blank legacy variable must not mask a later valid commit or branch source.
+  const buildCommit=firstNonBlank(
+    alert?.build_commit,
+    process.env.RADARX_BUILD_COMMIT,process.env.GIT_COMMIT_SHA,process.env.GIT_COMMIT,
+    process.env.SOURCE_VERSION,process.env.VCS_REF,process.env.BUILD_COMMIT,
+    process.env.DHDTECH_GIT_COMMIT,process.env.RAILWAY_GIT_COMMIT_SHA,process.env.GITHUB_SHA
+  );
+  const buildBranch=firstNonBlank(
+    alert?.build_branch,
+    process.env.RADARX_BUILD_BRANCH,process.env.GIT_BRANCH,process.env.SOURCE_BRANCH,
+    process.env.BRANCH_NAME,process.env.BUILD_BRANCH,process.env.DHDTECH_GIT_BRANCH,
+    process.env.RAILWAY_GIT_BRANCH,process.env.GITHUB_REF_NAME
+  );
   const archiveMissingFields=[...(signalScore===null?['signal_score']:[]),...(!buildCommit?['build_commit']:[])];
   const evaluationEligible=quality===100&&stage!=='DATA_INSUFFICIENT'&&!m.data_stale&&m.closed_candles_only;
   const evaluationStatus=evaluationEligible?'ELIGIBLE':'EXCLUDED_INCOMPLETE';
