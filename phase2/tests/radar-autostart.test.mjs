@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {resolveRadarAutostart} from '../config.mjs';
+import {resolveRadarAutostart,resolveRadarEnvironment} from '../config.mjs';
+
+test('deployment mode defaults to NODE_ENV when RADARX_ENV is omitted',()=>{
+  assert.equal(resolveRadarEnvironment({NODE_ENV:'production'}),'production');
+  assert.equal(resolveRadarEnvironment({NODE_ENV:'production',RADARX_ENV:'staging'}),'staging');
+  assert.equal(resolveRadarEnvironment({NODE_ENV:'production',RADARX_ENV:''}),'production');
+  assert.equal(resolveRadarEnvironment({NODE_ENV:'test'}),'test');
+  assert.equal(resolveRadarEnvironment({}),'development');
+});
 
 test('production runtime auto-starts optional radars when no explicit override exists',()=>{
   assert.equal(resolveRadarAutostart({NODE_ENV:'production'}),true);

@@ -9,10 +9,12 @@ const {CONFIG} = await import('../config.mjs?market-data-endpoint-defaults');
 
 test('default Spot WebSocket endpoints use the official public market-data stream', () => {
   assert.deepEqual(CONFIG.websocket.urls, [
-    'wss://data-stream.binance.vision/stream'
+    'wss://data-stream.binance.vision/stream',
+    'wss://stream.binance.com:9443/stream'
   ]);
   assert.deepEqual(CONFIG.moveRadar.websocket.urls, [
-    'wss://data-stream.binance.vision/stream'
+    'wss://data-stream.binance.vision/stream',
+    'wss://stream.binance.com:9443/stream'
   ]);
 });
 
@@ -26,7 +28,15 @@ test('deployment endpoint overrides remain honored', async () => {
   process.env.BINANCE_WS_URLS = 'wss://custom-market-data.example/stream';
   process.env.BINANCE_REST_URLS = 'https://custom-market-data.example';
   const {CONFIG: overridden} = await import('../config.mjs?market-data-endpoint-override');
-  assert.deepEqual(overridden.websocket.urls, ['wss://custom-market-data.example/stream']);
-  assert.deepEqual(overridden.moveRadar.websocket.urls, ['wss://custom-market-data.example/stream']);
+  assert.deepEqual(overridden.websocket.urls, [
+    'wss://custom-market-data.example/stream',
+    'wss://data-stream.binance.vision/stream',
+    'wss://stream.binance.com:9443/stream'
+  ]);
+  assert.deepEqual(overridden.moveRadar.websocket.urls, [
+    'wss://custom-market-data.example/stream',
+    'wss://data-stream.binance.vision/stream',
+    'wss://stream.binance.com:9443/stream'
+  ]);
   assert.deepEqual(overridden.rest.urls, ['https://custom-market-data.example']);
 });

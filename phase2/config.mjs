@@ -8,6 +8,21 @@ const list = (v, d) => {
   return a.length ? a : d;
 };
 
+export const DEFAULT_PUBLIC_SPOT_WS_URLS = Object.freeze([
+  'wss://data-stream.binance.vision/stream',
+  'wss://stream.binance.com:9443/stream'
+]);
+export function resolvePublicSpotWsUrls(env=process.env){
+  const configured=String(env.BINANCE_WS_URLS??'').split(',').map(x=>x.trim()).filter(Boolean);
+  return [...new Set([...configured,...DEFAULT_PUBLIC_SPOT_WS_URLS])];
+}
+
+export function resolveRadarEnvironment(env=process.env){
+  const explicit=String(env.RADARX_ENV??'').trim();
+  const nodeEnvironment=String(env.NODE_ENV??'').trim();
+  return (explicit||nodeEnvironment||'development').toLowerCase();
+}
+
 export function resolveRadarAutostart(env=process.env){
   const explicit=env.RADARX_RADARS_AUTOSTART;
   if(explicit!==undefined&&String(explicit).trim()!=='')return String(explicit).trim().toLowerCase()==='true';
@@ -29,7 +44,7 @@ export function resolvePushProvider(env=process.env){
 }
 
 export const CONFIG = Object.freeze({
-  environment: (process.env.RADARX_ENV ?? 'development').toLowerCase(),
+  environment: resolveRadarEnvironment(process.env),
   confidenceMode: String(process.env.RADARX_CONFIDENCE_MODE ?? 'UNKNOWN').toUpperCase(),
   host: resolveHost(process.env),
   port: resolvePort(process.env),
@@ -38,13 +53,11 @@ export const CONFIG = Object.freeze({
   websocket: {
     // RadarX consumes public Spot market data, not user-data streams.
     // Binance documents data-stream.binance.vision for public market-data streams.
-    urls: list(process.env.BINANCE_WS_URLS, [
-      'wss://data-stream.binance.vision/stream'
-    ]),
+    urls: resolvePublicSpotWsUrls(),
     initialBackoffMs: int(process.env.RADARX_WS_BACKOFF_MS, 1000),
     maxBackoffMs: int(process.env.RADARX_WS_MAX_BACKOFF_MS, 60000),
     jitterRatio: float(process.env.RADARX_WS_JITTER, 0.2),
-    heartbeatTimeoutMs: int(process.env.RADARX_WS_HEARTBEAT_TIMEOUT_MS, 90000),
+    heartbeatTimeoutMs: int(process.env.RADARX_WS_HEARTBEAT_TIMEOUT_MS, 30000),
     maxConnectionMs: int(process.env.RADARX_WS_MAX_CONNECTION_MS, 23 * 60 * 60 * 1000)
   },
   rest: {
@@ -102,13 +115,11 @@ export const CONFIG = Object.freeze({
     websocket: {
       // RadarX consumes public Spot market data, not user-data streams.
       // Binance documents data-stream.binance.vision for public market-data streams.
-      urls: list(process.env.BINANCE_WS_URLS, [
-        'wss://data-stream.binance.vision/stream'
-      ]),
+      urls: resolvePublicSpotWsUrls(),
       initialBackoffMs: int(process.env.RADARX_WS_BACKOFF_MS, 1000),
       maxBackoffMs: int(process.env.RADARX_WS_MAX_BACKOFF_MS, 60000),
       jitterRatio: float(process.env.RADARX_WS_JITTER, 0.2),
-      heartbeatTimeoutMs: int(process.env.RADARX_WS_HEARTBEAT_TIMEOUT_MS, 90000),
+      heartbeatTimeoutMs: int(process.env.RADARX_WS_HEARTBEAT_TIMEOUT_MS, 30000),
       maxConnectionMs: int(process.env.RADARX_WS_MAX_CONNECTION_MS, 23 * 60 * 60 * 1000)
     }
   },

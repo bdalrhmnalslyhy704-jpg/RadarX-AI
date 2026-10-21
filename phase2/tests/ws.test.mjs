@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {BinanceStreamClient} from '../market/binance-ws.mjs';
+import {resolvePublicSpotWsUrls} from '../config.mjs';
 
 class Socket{
   static instances=[];
@@ -11,6 +12,19 @@ class Socket{
   terminate(){this.terminated=true;this.emit('close');}
   pong(){}
 }
+
+test('default public Spot websocket configuration has a data-only endpoint and a standard endpoint fallback',()=>{
+  assert.deepEqual(resolvePublicSpotWsUrls({}),[
+    'wss://data-stream.binance.vision/stream',
+    'wss://stream.binance.com:9443/stream'
+  ]);
+  assert.deepEqual(resolvePublicSpotWsUrls({BINANCE_WS_URLS:'wss://one.test/stream, wss://two.test/stream'}),[
+    'wss://one.test/stream',
+    'wss://two.test/stream',
+    'wss://data-stream.binance.vision/stream',
+    'wss://stream.binance.com:9443/stream'
+  ]);
+});
 
 test('TEST_FIXTURE: websocket disconnect enters backoff and reconnects with another route',async()=>{
   Socket.instances.length=0;
