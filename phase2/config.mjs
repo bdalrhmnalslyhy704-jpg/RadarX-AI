@@ -36,9 +36,10 @@ export const CONFIG = Object.freeze({
   symbols: list(process.env.RADARX_SYMBOLS, ['BTCUSDT','ETHUSDT']).map(x => x.toUpperCase()),
   timeframes: ['4h','1h','15m'],
   websocket: {
+    // RadarX consumes public Spot market data, not user-data streams.
+    // Binance documents data-stream.binance.vision for public market-data streams.
     urls: list(process.env.BINANCE_WS_URLS, [
-      'wss://stream.binance.com:9443/stream',
-      'wss://stream.binance.com:443/stream'
+      'wss://data-stream.binance.vision/stream'
     ]),
     initialBackoffMs: int(process.env.RADARX_WS_BACKOFF_MS, 1000),
     maxBackoffMs: int(process.env.RADARX_WS_MAX_BACKOFF_MS, 60000),
@@ -47,13 +48,9 @@ export const CONFIG = Object.freeze({
     maxConnectionMs: int(process.env.RADARX_WS_MAX_CONNECTION_MS, 23 * 60 * 60 * 1000)
   },
   rest: {
+    // RadarX uses public Spot market-data REST paths only (/api/v3/*).
+    // Prefer Binance's documented market-data-only REST endpoint.
     urls: list(process.env.BINANCE_REST_URLS, [
-      'https://api.binance.com',
-      'https://api-gcp.binance.com',
-      'https://api1.binance.com',
-      'https://api2.binance.com',
-      'https://api3.binance.com',
-      'https://api4.binance.com',
       'https://data-api.binance.vision'
     ]),
     timeoutMs: int(process.env.RADARX_REST_TIMEOUT_MS, 9000),
@@ -103,9 +100,10 @@ export const CONFIG = Object.freeze({
     earlyMinAcceptedStrategies: int(process.env.RADARX_MOVE_EARLY_MIN_ACCEPTED, 2),
     earlyMinConfirmations: int(process.env.RADARX_MOVE_EARLY_MIN_CONFIRMATIONS, 6),
     websocket: {
+      // RadarX consumes public Spot market data, not user-data streams.
+      // Binance documents data-stream.binance.vision for public market-data streams.
       urls: list(process.env.BINANCE_WS_URLS, [
-        'wss://stream.binance.com:9443/stream',
-        'wss://stream.binance.com:443/stream'
+        'wss://data-stream.binance.vision/stream'
       ]),
       initialBackoffMs: int(process.env.RADARX_WS_BACKOFF_MS, 1000),
       maxBackoffMs: int(process.env.RADARX_WS_MAX_BACKOFF_MS, 60000),
