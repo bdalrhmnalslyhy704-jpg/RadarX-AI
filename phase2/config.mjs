@@ -17,6 +17,12 @@ export function resolvePublicSpotWsUrls(env=process.env){
   return [...new Set([...configured,...DEFAULT_PUBLIC_SPOT_WS_URLS])];
 }
 
+export function resolveRadarEnvironment(env=process.env){
+  const explicit=String(env.RADARX_ENV??'').trim();
+  const nodeEnvironment=String(env.NODE_ENV??'').trim();
+  return (explicit||nodeEnvironment||'development').toLowerCase();
+}
+
 export function resolveRadarAutostart(env=process.env){
   const explicit=env.RADARX_RADARS_AUTOSTART;
   if(explicit!==undefined&&String(explicit).trim()!=='')return String(explicit).trim().toLowerCase()==='true';
@@ -38,7 +44,7 @@ export function resolvePushProvider(env=process.env){
 }
 
 export const CONFIG = Object.freeze({
-  environment: (process.env.RADARX_ENV ?? 'development').toLowerCase(),
+  environment: resolveRadarEnvironment(process.env),
   confidenceMode: String(process.env.RADARX_CONFIDENCE_MODE ?? 'UNKNOWN').toUpperCase(),
   host: resolveHost(process.env),
   port: resolvePort(process.env),
