@@ -324,3 +324,20 @@ test('newer ticker refreshes a queued snapshot without downgrading a stronger tr
   assert.equal(sentinel.deepQueue[0].queuedAt,now-1000);
 });
 
+test('overlapping move reconcile ticks are coalesced into one run', async () => {
+  const sentinel = new EarlyMoveSentinel({rest:{},store:{},logger:{warn(){}}});
+  sentinel.running = true;
+  let release;
+  let calls = 0;
+  sentinel.reconcile = async () => {
+    calls++;
+    await new Promise(resolve => { release = resolve; });
+  };
+
+  const first = sentinel.runReconcile(false);
+  assert.equal(await sentinel.runReconcile(false), false, 'busy reconciliation should skip overlapping ticks');
+  assert.equal(calls, 1, 'only one full-market reconcile should be in flight');
+  release();
+  assert.equal(await first, true);
+  assert.equal(sentinel.reconcileInProgress, false, 'busy guard should always be released');
+});
