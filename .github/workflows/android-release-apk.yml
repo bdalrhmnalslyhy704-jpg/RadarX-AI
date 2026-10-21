@@ -115,18 +115,29 @@ jobs:
           fs.writeFileSync(javaPath,javaSource);
           const extraJavaPaths=[
             'android/app/src/main/java/com/radarx/app/MainActivity.java',
-            'android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java'
+            'android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java',
+            'android/app/src/main/java/com/radarx/app/BottomRadarActivity.java',
+            'android/app/src/main/java/com/radarx/app/RadarXPushRegistration.java'
           ];
           for(const path of extraJavaPaths){
             let source=fs.readFileSync(path,'utf8');
-            const placeholder='private static final String BACKEND_ORIGIN = "https://dhdtech-url-required.invalid";';
-            if(!source.includes(placeholder)){
-              console.error('::error::Missing DHDTech placeholder in '+path);
-              process.exit(1);
+            if(path.endsWith('RadarXPushRegistration.java')){
+              const placeholder='private static final String BACKEND = "https://dhdtech-url-required.invalid";';
+              if(!source.includes(placeholder)){
+                console.error('::error::Missing DHDTech placeholder in '+path);
+                process.exit(1);
+              }
+              source=source.replace(placeholder,`private static final String BACKEND = "${origin}";`);
+            }else{
+              const placeholder='private static final String BACKEND_ORIGIN = "https://dhdtech-url-required.invalid";';
+              if(!source.includes(placeholder)){
+                console.error('::error::Missing DHDTech placeholder in '+path);
+                process.exit(1);
+              }
+              source=source.replace(placeholder,`private static final String BACKEND_ORIGIN = "${origin}";`);
             }
-            source=source.replace(placeholder,`private static final String BACKEND_ORIGIN = "${origin}";`);
-            if(path.endsWith('MainActivity.java')&&!source.includes('BACKEND_FALLBACK_ORIGIN = "";')){
-              console.error('::error::MainActivity must have an empty backend fallback.');
+            if((path.endsWith('MainActivity.java')||path.endsWith('BottomRadarActivity.java'))&&!source.includes('BACKEND_FALLBACK_ORIGIN = "";')){
+              console.error('::error::Native WebView activity must have an empty backend fallback: '+path);
               process.exit(1);
             }
             if(path.endsWith('RadarXBackgroundMonitorService.java')&&source.includes('BACKEND_RADAR_ALERTS_FALLBACK')){
