@@ -158,3 +158,42 @@ test('fast early-watch observer catches rising relative flow near a flat base wi
   assert.equal(isFastEarlyWatchCandidate(row,{...fast,volume_delta_quote:0}),false,'require actual positive observed quote flow');
   assert.equal(isFastEarlyWatchCandidate(row,{...fast,price_change_pct:-0.8}),false,'a sharp negative move must not be mislabeled as pre-expansion');
 });
+
+
+test('strong quote-volume and trade acceleration reserve a mild-pullback setup for WATCH-only Micro analysis',()=>{
+  const row={symbol:'FLOWREVERSALUSDT',lastPrice:1.002,priceChange24h:0.4,quoteVolume24h:5_500_000};
+  const strongFlow={warmed_up:true,price_change_pct:-0.30,price_acceleration_pct:-0.20,
+    volume_accel_ratio:2.4,trade_accel_ratio:1.8,volume_delta_quote:4500,trade_delta:30};
+  assert.equal(isFastEarlyWatchCandidate(row,strongFlow),true,
+    'strong participation growth should receive a bounded scan despite a modest pullback');
+  assert.equal(isFastEarlyWatchCandidate(row,{...strongFlow,volume_accel_ratio:1.9,trade_accel_ratio:1.5}),false,
+    'the pullback lane requires strong volume AND trade acceleration');
+  assert.equal(isFastEarlyWatchCandidate(row,{...strongFlow,price_change_pct:-0.8}),false,
+    'a sharp decline must not be relabeled as an early expansion');
+  assert.equal(isFastEarlyWatchCandidate(row,{...strongFlow,trade_delta:0}),false,
+    'a scan requires observed positive trade flow');
+});
+
+
+test('accumulation reversal is selected in the bounded exceptional Micro lane',()=>{
+  const now=1_900_000_000_000;
+  const radar=new EarlyExpansionRadar({
+    rest:{},store:{},clock:()=>now,
+    config:{microScanCandidates:6,exceptionalRotationBypassSlots:2,quietReserve:1,rotationReserve:1}
+  });
+  const rows=Array.from({length:12},(_,i)=>({
+    symbol:i===0?'FLOWREVERSALUSDT':'BASE'+String(i).padStart(2,'0')+'USDT',
+    lastPrice:1,priceChange24h:.4,quoteVolume24h:2_000_000,tradeCount24h:10_000
+  }));
+  const fast=new Map(rows.map((row,i)=>[row.symbol,i===0
+    ?{warmed_up:true,price_change_pct:-.30,price_acceleration_pct:-.20,
+      volume_accel_ratio:2.4,trade_accel_ratio:1.8,volume_delta_quote:4500,trade_delta:30}
+    :{warmed_up:true,price_change_pct:0,price_acceleration_pct:0,
+      volume_accel_ratio:1,trade_accel_ratio:1,volume_delta_quote:0,trade_delta:1}
+  ]));
+  const selected=radar.selectMicro(rows,fast,1);
+  const candidate=selected.find(row=>row.symbol==='FLOWREVERSALUSDT');
+  assert.ok(candidate,'the candidate must survive the bounded Micro selector');
+  assert.equal(candidate._selection_lane,'exceptional');
+  assert.ok(selected.length<=6,'the watch lane must preserve the existing batch cap');
+});
