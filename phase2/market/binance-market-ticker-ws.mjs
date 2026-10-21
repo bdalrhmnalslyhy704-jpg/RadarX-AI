@@ -6,7 +6,17 @@ const normalizeTicker = x => {
   const symbol = String(x.s || '').trim().toUpperCase();
   const lastPrice = Number(x.c);
   const openPrice = Number(x.o);
-  const changePct = Number(x.P);
+  const explicitChange = x.P !== null && x.P !== undefined && String(x.P).trim() !== ''
+    ? Number(x.P) : NaN;
+  // Binance retired Spot's !ticker@arr stream on 2026-03-26.
+  // The supported !miniTicker@arr stream omits P and n, so derive the 24h
+  // percentage from c/o and leave trade count unknown for the caller to retain
+  // from its most recent REST ticker snapshot.
+  const changePct = Number.isFinite(explicitChange)
+    ? explicitChange
+    : lastPrice > 0 && openPrice > 0 ? Math.round((lastPrice / openPrice - 1) * 100 * 1e8) / 1e8 : NaN;
+  const tradeCount24h = x.n !== null && x.n !== undefined && String(x.n).trim() !== '' &&
+    Number.isFinite(Number(x.n)) ? Number(x.n) : null;
   if (!/^[A-Z0-9]{5,30}$/.test(symbol) || !(lastPrice > 0) || !(openPrice > 0) || !Number.isFinite(changePct)) return null;
   return {
     symbol,
@@ -16,7 +26,7 @@ const normalizeTicker = x => {
     highPrice24h: Number(x.h),
     lowPrice24h: Number(x.l),
     quoteVolume24h: Number(x.q),
-    tradeCount24h: Number(x.n),
+    tradeCount24h,
     eventTime: Number(x.E) || Date.now()
   };
 };
@@ -102,18 +112,17 @@ export class BinanceAllMarketTickerClient {
 
   url() {
     const url = new URL(this.urls[this.urlIndex]);
-    // This client consumes exactly one stream. Use Binance's raw-stream endpoint
-    // (/ws/<stream>) instead of the combined-stream query, which has been rejected
-    // by some hosted egress paths even when the kline stream endpoint is reachable.
-    // Keep any non-stream options (for example timeUnit) but remove a stale
-    // combined-stream selector supplied in the base URL.
+    // Binance retired Spot's !ticker@arr stream on 2026-03-26.
+    // Use the supported all-market mini ticker stream. Its missing 24h change
+    // percent is derived from c/o and its missing trade count is retained from
+    // the latest REST ticker snapshot by EarlyMoveSentinel.
     const path = url.pathname.replace(/\/+$/, '');
     if (path.endsWith('/stream')) {
-      url.pathname = path.slice(0, -'/stream'.length) + '/ws/!ticker@arr';
+      url.pathname = path.slice(0, -'/stream'.length) + '/ws/!miniTicker@arr';
     } else if (path.endsWith('/ws')) {
-      url.pathname = path + '/!ticker@arr';
-    } else if (!path.endsWith('/ws/!ticker@arr')) {
-      url.pathname = (path || '') + '/ws/!ticker@arr';
+      url.pathname = path + '/!miniTicker@arr';
+    } else if (!path.endsWith('/ws/!miniTicker@arr')) {
+      url.pathname = (path || '') + '/ws/!miniTicker@arr';
     }
     url.searchParams.delete('streams');
     return url.toString();

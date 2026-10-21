@@ -651,11 +651,23 @@ export class EarlyMoveSentinel {
 
   onTicker(ticker){
     if(!this.running||!this.eligibleSymbol(ticker?.symbol))return;
+    const symbol=String(ticker.symbol).toUpperCase();
+    const previous=this.lastTicker.get(symbol);
+    const incomingTradeCount=ticker.tradeCount24h;
+    // Binance's supported all-market mini ticker stream omits the 24h trade
+    // count. Keep the most recent count from the REST /ticker/24hr reconciliation
+    // rather than converting missing data to zero and corrupting liquidity scoring.
+    const tradeCount24h=incomingTradeCount!==null&&incomingTradeCount!==undefined&&
+      Number.isFinite(Number(incomingTradeCount))
+      ?Number(incomingTradeCount)
+      :previous?.tradeCount24h!==null&&previous?.tradeCount24h!==undefined&&
+        Number.isFinite(Number(previous.tradeCount24h))
+        ?Number(previous.tradeCount24h):null;
     const row={
-      symbol:String(ticker.symbol).toUpperCase(),
+      symbol,
       lastPrice:Number(ticker.lastPrice),
       quoteVolume24h:Number(ticker.quoteVolume24h),
-      tradeCount24h:Number(ticker.tradeCount24h),
+      tradeCount24h,
       priceChange24h:Number(ticker.priceChange24h),
       highPrice24h:Number(ticker.highPrice24h),
       lowPrice24h:Number(ticker.lowPrice24h),

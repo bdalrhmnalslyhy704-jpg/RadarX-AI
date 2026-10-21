@@ -69,7 +69,7 @@ test('TEST_FIXTURE: websocket kline timestamps are milliseconds; seconds are rej
   assert.ok(errors.some(x=>/INVALID_WS_JSON:openTime_TIMESTAMP_UNIT_SECONDS/.test(x)));
 });
 
-import {BinanceAllMarketTickerClient} from '../market/binance-market-ticker-ws.mjs';
+import {BinanceAllMarketTickerClient,normalizeTicker} from '../market/binance-market-ticker-ws.mjs';
 
 test('TEST_FIXTURE: ticker heartbeat timeout is explicit and backoff resets only after feed data',async()=>{
   Socket.instances.length=0;
@@ -94,8 +94,8 @@ test('TEST_FIXTURE: ticker heartbeat timeout is explicit and backoff resets only
   const second=Socket.instances[1];
   second.emit('open');
   assert.equal(client.attempt,1,'opening a silent socket must not reset backoff');
-  second.emit('message',Buffer.from(JSON.stringify({stream:'!ticker@arr',data:[{
-    s:'BTCUSDT',c:'100',o:'99',P:'1',h:'101',l:'98',q:'1000000',n:500,E:Date.now()
+  second.emit('message',Buffer.from(JSON.stringify({stream:'!miniTicker@arr',data:[{
+    s:'BTCUSDT',c:'100',o:'99',h:'101',l:'98',q:'1000000',E:Date.now()
   }]})));
   assert.equal(client.attempt,0,'a valid ticker payload resets backoff');
   assert.equal(tickers.length,1);
@@ -129,14 +129,22 @@ test('TEST_FIXTURE: ticker websocket records HTTP rejection status before retry'
   assert.equal(client.health().last_disconnect_reason,'WS_HTTP_451');
   client.stop();
 });
-test('TEST_FIXTURE: all-market ticker stream uses the raw Binance /ws endpoint',()=>{
+test('TEST_FIXTURE: normalizes Binance Spot mini tickers without pretending trade count is available',()=>{
+  const row=normalizeTicker({s:'BTCUSDT',c:'101',o:'100',h:'102',l:'99',q:'123456',E:1700000000000});
+  assert.equal(row.symbol,'BTCUSDT');
+  assert.equal(row.priceChange24h,1);
+  assert.equal(row.quoteVolume24h,123456);
+  assert.equal(row.tradeCount24h,null);
+});
+
+test('TEST_FIXTURE: supported all-market mini ticker stream uses the raw Binance /ws endpoint',()=>{
   const client=new BinanceAllMarketTickerClient({
     urls:['wss://data-stream.binance.vision/stream?streams=stale&timeUnit=MICROSECOND','wss://stream.binance.com:9443/stream'],
     WebSocketImpl:Socket,
     onState:()=>{}
   });
-  assert.equal(client.url(),'wss://data-stream.binance.vision/ws/!ticker@arr?timeUnit=MICROSECOND');
+  assert.equal(client.url(),'wss://data-stream.binance.vision/ws/!miniTicker@arr?timeUnit=MICROSECOND');
   client.urlIndex=1;
-  assert.equal(client.url(),'wss://stream.binance.com:9443/ws/!ticker@arr');
+  assert.equal(client.url(),'wss://stream.binance.com:9443/ws/!miniTicker@arr');
   client.stop();
 });
