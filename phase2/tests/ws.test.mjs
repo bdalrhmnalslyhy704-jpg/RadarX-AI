@@ -88,20 +88,52 @@ test('TEST_FIXTURE: ticker heartbeat timeout is explicit and backoff resets only
   });
   client.start();
   Socket.instances[0].emit('open');
+  assert.equal(client.state,'WAITING_FOR_DATA','an open socket is not proof that tickers are flowing');
   await new Promise(resolve=>setTimeout(resolve,55));
   assert.ok(states.some(x=>x.reason?.includes('WS_HEARTBEAT_TIMEOUT')));
   assert.ok(Socket.instances.length>=2);
   const second=Socket.instances[1];
   second.emit('open');
+  assert.equal(client.state,'WAITING_FOR_DATA');
   assert.equal(client.attempt,1,'opening a silent socket must not reset backoff');
   second.emit('message',Buffer.from(JSON.stringify({stream:'!ticker@arr',data:[{
     s:'BTCUSDT',c:'100',o:'99',P:'1',h:'101',l:'98',q:'1000000',n:500,E:Date.now()
   }]})));
+  assert.equal(client.state,'LIVE','a valid ticker payload changes feed state to LIVE');
   assert.equal(client.attempt,0,'a valid ticker payload resets backoff');
+  assert.ok(states.some(x=>x.state==='WAITING_FOR_DATA'));
+  assert.ok(states.some(x=>x.state==='LIVE'&&x.reason==='WS_FIRST_VALID_TICKER_RECEIVED'));
   assert.equal(tickers.length,1);
   assert.equal(tickers[0].symbol,'BTCUSDT');
   assert.equal(client.health().tickers_received,1);
   assert.match(client.health().last_disconnect_reason,/WS_HEARTBEAT_TIMEOUT/);
+  client.stop();
+});
+
+test('TEST_FIXTURE: silent ticker socket is rejected at the configured deadline and reports diagnostics',(t)=>{
+  Socket.instances.length=0;
+  const states=[];
+  const timeoutMs=90;
+  t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+  const client=new BinanceAllMarketTickerClient({
+    urls:['wss://one.test/stream','wss://two.test/stream'],
+    WebSocketImpl:Socket,
+    heartbeatTimeoutMs:timeoutMs,
+    maxConnectionMs:1_000_000,
+    initialBackoffMs:1000,
+    maxBackoffMs:2000,
+    jitterRatio:0,
+    onState:(state,reason)=>states.push({state,reason})
+  });
+  client.start();
+  Socket.instances[0].emit('open');
+  assert.equal(client.state,'WAITING_FOR_DATA');
+  t.mock.timers.tick(timeoutMs);
+  assert.ok(states.some(x=>x.reason?.includes('WS_HEARTBEAT_TIMEOUT')),
+    'the heartbeat must fail at one configured silence interval, not a second interval later');
+  assert.match(client.health().last_disconnect_reason,/heartbeat_timeout_ms=90/);
+  assert.equal(client.health().messages_since_connect,0);
+  assert.equal(client.health().tickers_since_connect,0);
   client.stop();
 });
 
