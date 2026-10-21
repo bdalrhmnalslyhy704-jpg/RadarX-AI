@@ -7,6 +7,11 @@ const list = (v, d) => {
   const a = String(v ?? '').split(',').map(x => x.trim()).filter(Boolean);
   return a.length ? a : d;
 };
+const restUrlList = v => [...new Set([
+  ...String(v ?? '').split(',').map(x => x.trim()).filter(Boolean),
+  'https://data-api.binance.vision',
+  'https://api.binance.com'
+])];
 
 export function resolveRadarAutostart(env=process.env){
   const explicit=env.RADARX_RADARS_AUTOSTART;
@@ -50,10 +55,7 @@ export const CONFIG = Object.freeze({
   rest: {
     // RadarX uses public Spot market-data REST paths only (/api/v3/*).
     // Prefer Binance's documented market-data-only REST endpoint.
-    urls: list(process.env.BINANCE_REST_URLS, [
-      'https://data-api.binance.vision',
-      'https://api.binance.com'
-    ]),
+    urls: restUrlList(process.env.BINANCE_REST_URLS),
     timeoutMs: int(process.env.RADARX_REST_TIMEOUT_MS, 9000),
     minIntervalMs: int(process.env.RADARX_REST_MIN_INTERVAL_MS, 100),
     maxRequestsPerMinute: int(process.env.RADARX_REST_MAX_REQUESTS_PER_MINUTE, 240)
