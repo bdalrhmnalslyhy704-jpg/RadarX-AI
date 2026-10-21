@@ -113,16 +113,43 @@ jobs:
             process.exit(1);
           }
           fs.writeFileSync(javaPath,javaSource);
+          const extraJavaPaths=[
+            'android/app/src/main/java/com/radarx/app/MainActivity.java',
+            'android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java'
+          ];
+          for(const path of extraJavaPaths){
+            let source=fs.readFileSync(path,'utf8');
+            const placeholder='private static final String BACKEND_ORIGIN = "https://dhdtech-url-required.invalid";';
+            if(!source.includes(placeholder)){
+              console.error('::error::Missing DHDTech placeholder in '+path);
+              process.exit(1);
+            }
+            source=source.replace(placeholder,`private static final String BACKEND_ORIGIN = "${origin}";`);
+            if(path.endsWith('MainActivity.java')&&!source.includes('BACKEND_FALLBACK_ORIGIN = "";')){
+              console.error('::error::MainActivity must have an empty backend fallback.');
+              process.exit(1);
+            }
+            if(path.endsWith('RadarXBackgroundMonitorService.java')&&source.includes('BACKEND_RADAR_ALERTS_FALLBACK')){
+              console.error('::error::Background service contains a retired backend fallback.');
+              process.exit(1);
+            }
+            if(!source.includes(`BACKEND_ORIGIN = "${origin}";`)||source.includes('railway.app')){
+              console.error('::error::Could not safely apply DHDTech backend configuration to '+path);
+              process.exit(1);
+            }
+            fs.writeFileSync(path,source);
+          }
           fs.appendFileSync(process.env.GITHUB_ENV,'RADARX_BACKEND_BASE_URL='+origin+String.fromCharCode(10));
+          const packagedPaths=[...assetPaths,javaPath,...extraJavaPaths];
           const remaining=[];
-          for(const path of [...assetPaths,javaPath]){
+          for(const path of packagedPaths){
             if(fs.readFileSync(path,'utf8').includes('railway.app'))remaining.push(path);
           }
           if(remaining.length){
             console.error('::error::Railway URLs remain in the packaged Android source: '+remaining.join(', '));
             process.exit(1);
           }
-          console.log(JSON.stringify({backend_origin:origin,railway_fallbacks:0,android_files_configured:assetPaths.length+1}));
+          console.log(JSON.stringify({backend_origin:origin,railway_fallbacks:0,android_files_configured:packagedPaths.length}));
           NODE
 
       - name: Verify release branch checkout and backend URL
