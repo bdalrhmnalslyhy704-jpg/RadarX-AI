@@ -41,10 +41,8 @@ public final class MainActivity extends Activity {
             "https://appassets.androidplatform.net/assets/index.html";
     private static final String APP_ORIGIN =
             "https://appassets.androidplatform.net";
-    private static final String BACKEND_ORIGIN =
-            "https://radarx-ai-triple-production.up.railway.app";
-    private static final String BACKEND_FALLBACK_ORIGIN =
-            "https://radarx-ai-production.up.railway.app";
+    private static final String BACKEND_ORIGIN = "https://dhdtech-url-required.invalid";
+    private static final String BACKEND_FALLBACK_ORIGIN = "";
     private static final int REQUEST_POST_NOTIFICATIONS = 7301;
     private static final String PREFS_BACKGROUND = "radarx_background";
     private static final String PREF_AUTO_ENABLED = "auto_enabled";
