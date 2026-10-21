@@ -20,7 +20,9 @@ test('default public Spot websocket configuration has a data-only endpoint and a
   ]);
   assert.deepEqual(resolvePublicSpotWsUrls({BINANCE_WS_URLS:'wss://one.test/stream, wss://two.test/stream'}),[
     'wss://one.test/stream',
-    'wss://two.test/stream'
+    'wss://two.test/stream',
+    'wss://data-stream.binance.vision/stream',
+    'wss://stream.binance.com:9443/stream'
   ]);
 });
 
