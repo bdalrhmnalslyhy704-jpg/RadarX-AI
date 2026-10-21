@@ -50,7 +50,7 @@ export const CONFIG = Object.freeze({
     initialBackoffMs: int(process.env.RADARX_WS_BACKOFF_MS, 1000),
     maxBackoffMs: int(process.env.RADARX_WS_MAX_BACKOFF_MS, 60000),
     jitterRatio: float(process.env.RADARX_WS_JITTER, 0.2),
-    heartbeatTimeoutMs: int(process.env.RADARX_WS_HEARTBEAT_TIMEOUT_MS, 90000),
+    heartbeatTimeoutMs: int(process.env.RADARX_WS_HEARTBEAT_TIMEOUT_MS, 30000),
     maxConnectionMs: int(process.env.RADARX_WS_MAX_CONNECTION_MS, 23 * 60 * 60 * 1000)
   },
   rest: {
@@ -112,7 +112,7 @@ export const CONFIG = Object.freeze({
       initialBackoffMs: int(process.env.RADARX_WS_BACKOFF_MS, 1000),
       maxBackoffMs: int(process.env.RADARX_WS_MAX_BACKOFF_MS, 60000),
       jitterRatio: float(process.env.RADARX_WS_JITTER, 0.2),
-      heartbeatTimeoutMs: int(process.env.RADARX_WS_HEARTBEAT_TIMEOUT_MS, 90000),
+      heartbeatTimeoutMs: int(process.env.RADARX_WS_HEARTBEAT_TIMEOUT_MS, 30000),
       maxConnectionMs: int(process.env.RADARX_WS_MAX_CONNECTION_MS, 23 * 60 * 60 * 1000)
     }
   },
