@@ -476,11 +476,15 @@ export class WhaleAccumulationRadar{
       b._schedulerRank-a._schedulerRank||a.symbol.localeCompare(b.symbol));
     const exceptional=all.filter(x=>x._exceptional).sort((a,b)=>
       b._schedulerRank-a._schedulerRank||b._deepWaitAgeMs-a._deepWaitAgeMs||a.symbol.localeCompare(b.symbol));
+    // Fast-path slots already protect the highest-impact exceptional activity.
+    // The remaining rotation slots must repay scan-wait debt first; otherwise a
+    // stream of secondary exceptional rows can repeatedly jump ahead of overdue
+    // symbols and stretch their next Deep pass across many patrol cycles.
     const rotation=[...all].sort((a,b)=>
-      Number(b._exceptional)-Number(a._exceptional)||
       Number(b._neverDeepScanned)-Number(a._neverDeepScanned)||
       b._deepWaitAgeMs-a._deepWaitAgeMs||
       b._queueAgeMs-a._queueAgeMs||
+      Number(b._exceptional)-Number(a._exceptional)||
       a._cursorDistance-b._cursorDistance||a.symbol.localeCompare(b.symbol));
     const topCount=Math.max(1,Math.trunc(Number(this.config.topAnchors)||8));
     const rotationCount=Math.max(1,Math.trunc(Number(this.config.rotationBatchSize)||10));
