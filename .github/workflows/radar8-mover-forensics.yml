@@ -42,11 +42,21 @@ jobs:
             --symbols IOSTUSDT,ALTUSDT,CVXUSDT,WUSDT,ENAUSDT,CYPHBUSDT \
             --lookback-hours 26 \
             --output reports/radar8-mover-forensics.json
-      - name: Publish replay evidence
+      - name: Replay a broader liquid-asset control panel from real Binance Spot candles
+        id: controls
+        run: |
+          set -euo pipefail
+          node phase2/tools/radar8-mover-forensics.mjs \
+            --symbols BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,LINKUSDT,DOTUSDT,AVAXUSDT,LTCUSDT,BCHUSDT,NEARUSDT,APTUSDT,ARBUSDT,OPUSDT,INJUSDT,SUIUSDT,FETUSDT \
+            --lookback-hours 26 \
+            --output reports/radar8-mover-forensics-controls.json
+      - name: Publish mover and control replay evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: radar8-mover-forensics-build224
-          path: reports/radar8-mover-forensics.json
+          path: |
+            reports/radar8-mover-forensics.json
+            reports/radar8-mover-forensics-controls.json
           if-no-files-found: warn
           retention-days: 14
