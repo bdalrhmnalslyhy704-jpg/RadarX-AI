@@ -27,7 +27,7 @@
 | REST errors | `MOVE_RECONCILE This operation was aborted` and `DOOMSDAY_RADAR_tick This operation was aborted` | Common REST transport/timeout problem is plausible. Use fallback hosts, prevent overlapping reconciliation, and confirm actual source/fallback from logs. |
 | Cycle duration | Radar 8 examples around 52s and 77s against a 20s cadence | Cycle overruns are real and need profiling; do not blindly raise concurrency or claim the target is met. |
 | Memory | Post-GC RSS about 0.240–0.257 GiB versus a 0.360 GiB target | Memory stayed below the observed target in these samples; keep tracking p95/peak, not just one post-GC reading. |
-| Light-scan microstructure | Spread and depth availability were both 0 for the 228-symbol light-scan sample | The light layer did not have live book/depth evidence at that moment. Keep such fields explicitly unavailable and let deep gates reject unsupported conclusions; investigate coverage before relying on order-book claims. |
+| Light-scan microstructure | Spread and depth availability were both 0 for the 228-symbol light-scan sample | Root cause found in code: the feature scan used the earlier `fastSeenAt` timestamp even though the all-symbol bookTicker REST snapshot arrived later. A fresh book timestamp could therefore appear >1s in the future and be rejected. The fix now timestamps the light analysis when it starts and adds a regression test; require the next live cycle to show fresh spread availability before treating this as resolved in production. |
 | Outcomes | Archive was healthy, with no missing/corrupt files; only a small number of emitted signals had outcome tracking in this snapshot | Check that emitted signals are tracked to complete 5m/15m/30m/60m/4h/24h outcomes. Do not count non-signals as missed outcomes without inspecting the ledger contract. |
 | APK release | The current release workflow still checks the legacy Railway host and its `/api/early-expansion-radar` endpoint returned HTTP 404 | APK/backend URL migration is a release blocker until the real public DHDTech backend URL is confirmed and wired into the Android allow-list, website CORS, and CI endpoint gate. Do not guess the host. |
 
@@ -99,8 +99,8 @@ The system is not declared stable because a container started or one scan comple
 
 - [x] Build 224 base branch preserved.
 - [x] Mini-ticker compatibility fix exists in the base branch.
-- [x] Phase 2 test suite passed for the REST fallback/reconciliation patch (recorded for the current PR head at the time of status capture).
-- [x] Production-aligned integration gate passed for that PR head.
+- [x] Phase 2 test suite and production-aligned 90-case historical gate passed before the book-ticker timestamp fix; all final-head checks must be re-run after that last fix.
+- [x] REST fallback, reconciliation coalescing, and delayed-book-ticker freshness fixes are isolated on this release PR.
 - [ ] Final Triple Radar CI including Android background smoke must pass on the exact final head.
 - [ ] Merge only after the exact-head gates pass.
 - [ ] DHDTech runtime must deploy/serve the merged commit and prove REST + ticker WS + Kline WS health.
