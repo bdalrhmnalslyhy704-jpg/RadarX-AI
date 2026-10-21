@@ -651,14 +651,23 @@ export class EarlyMoveSentinel {
 
   onTicker(ticker){
     if(!this.running||!this.eligibleSymbol(ticker?.symbol))return;
+    const symbol=String(ticker.symbol).toUpperCase();
+    const previous=this.lastTicker.get(symbol);
+    const reportedTradeCount=ticker.tradeCount24h;
+    const tradeCount=reportedTradeCount!==null&&reportedTradeCount!==undefined&&Number.isFinite(Number(reportedTradeCount))
+      ?Number(reportedTradeCount)
+      :previous?.tradeCount24h!==null&&previous?.tradeCount24h!==undefined&&Number.isFinite(Number(previous.tradeCount24h))
+        ?Number(previous.tradeCount24h):null;
     const row={
-      symbol:String(ticker.symbol).toUpperCase(),
+      symbol,
       lastPrice:Number(ticker.lastPrice),
-      quoteVolume24h:Number(ticker.quoteVolume24h),
-      tradeCount24h:Number(ticker.tradeCount24h),
+      quoteVolume24h:Number.isFinite(Number(ticker.quoteVolume24h))?Number(ticker.quoteVolume24h):previous?.quoteVolume24h??null,
+      // Mini-ticker has no trade count. Keep the last REST-provided value when
+      // available; otherwise leave it unknown until the next REST reconciliation.
+      tradeCount24h:tradeCount,
       priceChange24h:Number(ticker.priceChange24h),
-      highPrice24h:Number(ticker.highPrice24h),
-      lowPrice24h:Number(ticker.lowPrice24h),
+      highPrice24h:Number.isFinite(Number(ticker.highPrice24h))?Number(ticker.highPrice24h):previous?.highPrice24h??null,
+      lowPrice24h:Number.isFinite(Number(ticker.lowPrice24h))?Number(ticker.lowPrice24h):previous?.lowPrice24h??null,
       tickerTime:Number(ticker.eventTime)||this.clock(),
       quoteAsset:this.config.quote
     };
