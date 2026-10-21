@@ -3,6 +3,11 @@ set -eu
 
 # DHDTech may provide no application variables on first deployment.
 # Keep all defaults safe and avoid checking a credential into source control.
+
+# The DHDTech catalog exposes container port 8787; enforce the same listener port.
+# This prevents a platform-injected PORT value from silently targeting another port.
+export PORT=8787
+export RADARX_PORT=8787
 export RADARX_ENV="${RADARX_ENV:-production}"
 export RADARX_STAGING_TEST_PUSH_ENABLED="${RADARX_STAGING_TEST_PUSH_ENABLED:-false}"
 export RADARX_ALLOWED_ORIGINS="${RADARX_ALLOWED_ORIGINS:-https://appassets.androidplatform.net,https://radarx-backend.dhdtech.site}"
@@ -42,4 +47,5 @@ if [ -z "${RADARX_AUTH_SECRET:-}" ]; then
   export RADARX_AUTH_SECRET
 fi
 
+echo "[RADARX_DHDTECH_BOOT] build=224 host=$RADARX_HOST port=$PORT paper_trading=$RADARX_PAPER_TRADING real_order_execution=$RADARX_REAL_ORDER_EXECUTION push_provider=$RADARX_PUSH_PROVIDER"
 exec npm start
