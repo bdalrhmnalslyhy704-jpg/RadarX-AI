@@ -216,3 +216,35 @@ test('Whale radar rejects missing intervals in the candle windows it scores',()=
   assert.equal(result.data_stale,false);
   assert.ok(result.data_quality_reasons.includes('ONE_MINUTE_CLOSED_CANDLE_GAP'));
 });
+
+
+test('Whale rotation repays overdue Deep scans before secondary exceptional rows',()=>{
+  const now=1_900_000_000_000;
+  const radar=new WhaleAccumulationRadar({
+    rest:{},store:{},clock:()=>now,
+    config:{topAnchors:1,rotationBatchSize:3,schedulerFastPathSlots:1,schedulerQuietAnchorSlots:0}
+  });
+  const symbols=[
+    'BURST1USDT','BURST2USDT','BURST3USDT','BURST4USDT','OVERDUEUSDT',
+    'NORMAL1USDT','NORMAL2USDT','NORMAL3USDT','NORMAL4USDT'
+  ];
+  radar.universe=symbols;
+  for(const symbol of symbols){
+    const lastAt=symbol==='OVERDUEUSDT'?now-10*60_000:now-60_000;
+    radar.scheduler.lastStartedAt.set('DEEP:'+symbol,lastAt);
+    radar.scheduler.queuedAt.set('DEEP:'+symbol,now-12*60_000);
+  }
+  const rows=symbols.map((symbol,i)=>({
+    symbol,lastPrice:1+i,priceChange24h:0.1,
+    quoteVolume24h:20_000_000-i*100_000,
+    _schedulerFast:{
+      volume_accel_ratio:symbol.startsWith('BURST')?3.1:1.01,
+      trade_accel_ratio:symbol.startsWith('BURST')?2.2:1.01,
+      price_acceleration_pct:symbol.startsWith('BURST')?.2:.01
+    }
+  }));
+  const selected=radar.selectBatch(rows,now);
+  assert.equal(selected.length,4);
+  assert.ok(selected.some(row=>row.symbol==='OVERDUEUSDT'&&row._selection_lane==='rotation'),
+    'the old Deep scan must be selected in the fair rotation lane');
+});
