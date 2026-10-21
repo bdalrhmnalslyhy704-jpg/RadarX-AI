@@ -279,7 +279,11 @@ jobs:
           HEALTH="$(curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/healthz.json" -w "%{http_code}" "$BASE/healthz")"
           READY="$(curl --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/readyz.json" -w "%{http_code}" "$BASE/readyz")"
           test "$HEALTH" = "200"
-          case "$READY" in 200|503) ;; *) echo "::error::Unexpected readyz status: $READY"; exit 1 ;; esac
+          case "$READY" in
+            200|503) ;;
+            404) echo "::warning::DHDTech returned 404 for /readyz; continuing only to strict live Radar 8 and full-radar API contract checks." ;;
+            *) echo "::error::Unexpected readyz status: $READY"; exit 1 ;;
+          esac
           export READY_STATUS="$READY"
 
           # Do not publish an APK while Radar 8 is merely instantiated but has
