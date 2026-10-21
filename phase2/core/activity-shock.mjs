@@ -139,8 +139,18 @@ export function isFastEarlyWatchCandidate(row={},fast={},config={}){
   if(![change,acceleration,volume,trades,quoteDelta,tradeDelta].every(Number.isFinite))return false;
   if(quoteDelta<=Number(config.fastEarlyWatchMinQuoteDeltaUsd??0)||
     tradeDelta<Number(config.fastEarlyWatchMinTradeDelta??2))return false;
-  if(change<Number(config.fastEarlyWatchMinPriceChangePct??-0.12)||
-    acceleration<Number(config.fastEarlyWatchMinAccelerationPct??-0.10))return false;
+  // Normal near-flat/positive lane.
+  const normalPriceWindow=change>=Number(config.fastEarlyWatchMinPriceChangePct??-0.12)&&
+    acceleration>=Number(config.fastEarlyWatchMinAccelerationPct??-0.10);
+  // Strong-flow accumulation lane: tolerate a modest pullback only when BOTH
+  // quote-volume and trade-count acceleration are unusually high. This only
+  // reserves a bounded Micro WATCH scan; downstream candle/data/alert gates
+  // are unchanged and this lane never makes a signal entry-eligible.
+  const accumulationReversal=change>=Number(config.fastEarlyWatchAccumulationMinPriceChangePct??-0.55)&&
+    acceleration>=Number(config.fastEarlyWatchAccumulationMinAccelerationPct??-0.35)&&
+    volume>=Number(config.fastEarlyWatchAccumulationMinVolumeRatio??2.2)&&
+    trades>=Number(config.fastEarlyWatchAccumulationMinTradeRatio??1.7);
+  if(!normalPriceWindow&&!accumulationReversal)return false;
   const volumeLed=volume>=Number(config.fastEarlyWatchMinVolumeRatio??1.8)&&
     trades>=Number(config.fastEarlyWatchMinTradeRatio??1.25);
   const tradeLed=trades>=Number(config.fastEarlyWatchTradeLedMinTradeRatio??1.8)&&
@@ -148,5 +158,5 @@ export function isFastEarlyWatchCandidate(row={},fast={},config={}){
   const flatBase=volume>=Number(config.fastEarlyWatchFlatBaseMinVolumeRatio??1.5)&&
     trades>=Number(config.fastEarlyWatchFlatBaseMinTradeRatio??1.4)&&
     Math.abs(change)<=Number(config.fastEarlyWatchFlatBaseMaxAbsChangePct??0.12);
-  return volumeLed||tradeLed||flatBase;
+  return volumeLed||tradeLed||flatBase||accumulationReversal;
 }
