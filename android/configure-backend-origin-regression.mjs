@@ -22,7 +22,7 @@ const fixtureOrigin = 'https://radarx-fixture.example';
 try {
   for (const relative of paths) {
     const source = await readFile(new URL(relative, here), 'utf8');
-    const destination = join(root, relative);
+    const destination = join(root, 'android', relative);
     await mkdir(dirname(destination), {recursive:true});
     await writeFile(destination, source, 'utf8');
   }
@@ -52,7 +52,7 @@ try {
 
   const transformed = new Map();
   for (const relative of paths) {
-    const source = await readFile(join(root,relative),'utf8');
+    const source = await readFile(join(root,'android',relative),'utf8');
     transformed.set(relative,source);
     assert.ok(source.includes(fixtureOrigin),'configured origin missing from '+relative);
     assert.doesNotMatch(source,/https:\/\/radarx-ai-(?:triple-)?production\.up\.railway\.app/,
