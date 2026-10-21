@@ -91,6 +91,7 @@ jobs:
           test -f android/app/src/main/assets/doomsday-radar.html
           test -f android/app/src/main/assets/falcon-eye-radar.html
           node android/backend-client-regression.mjs
+          node android/configure-backend-origin-regression.mjs
           node android/background-monitor-regression.mjs
           node --test android/app/src/main/assets/tests/market-radar-integration.test.mjs
 
