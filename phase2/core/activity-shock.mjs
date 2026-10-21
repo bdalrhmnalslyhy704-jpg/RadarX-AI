@@ -107,6 +107,56 @@ export function assessQuietBaseActivityShock({fiveMinute=[],ticker={},now=Date.n
   };
 }
 
+
+/**
+ * Observe renewed upward acceleration after a coin is already extended, without
+ * weakening anti-chase entry safety. The caller must keep this WATCH-only:
+ * never feed it into actionable entry eligibility or automatic push delivery.
+ */
+export function evaluateProposedExtendedContinuationWatch({
+  ticker = {}, fast = {}, microFingerprint = {}, fastActivityShockCandidate = false, config = {}
+} = {}) {
+  const minimumDailyMove = Number(config.hardExtended24hMovePct ?? 18);
+  const minimumScore = Number(config.extendedContinuationWatchMinScore ?? 58);
+  const minimumConfirmations = Number(config.extendedContinuationWatchMinConfirmations ?? 4);
+  const minimumOneMinuteMove = Number(config.extendedContinuationWatchMinPriceChangePct ?? 0.5);
+  const dailyMove = known(ticker.priceChange24h) ? Number(ticker.priceChange24h) : null;
+  const score = known(microFingerprint.score) ? Number(microFingerprint.score) : null;
+  const confirmations = known(microFingerprint.confirmation_count) ? Number(microFingerprint.confirmation_count) : null;
+  const oneMinuteMove = known(fast.price_change_pct) ? Number(fast.price_change_pct) : null;
+  const oneMinuteAcceleration = known(fast.price_acceleration_pct) ? Number(fast.price_acceleration_pct) : null;
+  const checks = {
+    positive_extended_24h_move: dailyMove !== null && dailyMove >= minimumDailyMove,
+    anti_chase_entry_veto_retained: String(microFingerprint.stage || '').toUpperCase() === 'ANTI_CHASE',
+    micro_score_available: score !== null && score >= minimumScore,
+    micro_confirmations_available: confirmations !== null && confirmations >= minimumConfirmations,
+    warmed_fast_baseline: fast.warmed_up === true,
+    positive_short_term_price_step: oneMinuteMove !== null && oneMinuteMove >= minimumOneMinuteMove,
+    nonnegative_price_acceleration: oneMinuteAcceleration !== null && oneMinuteAcceleration >= 0,
+    exceptional_volume_and_trade_flow: fastActivityShockCandidate === true,
+    closed_candles_only: microFingerprint.closed_candles_only === true
+  };
+  const eligible = Object.values(checks).every(Boolean);
+  return {
+    eligible,
+    watch_only: true,
+    entry_eligible: false,
+    proposed_only: true,
+    stage: eligible ? 'PROPOSED_EXTENDED_CONTINUATION_WATCH' : 'NOT_QUALIFIED',
+    reason_codes: Object.entries(checks).filter(([,passed])=>passed).map(([key])=>'PASS_'+key.toUpperCase()),
+    failed_checks: Object.entries(checks).filter(([,passed])=>!passed).map(([key])=>key.toUpperCase()),
+    thresholds: {
+      minimum_daily_move_pct: minimumDailyMove,
+      minimum_micro_score: minimumScore,
+      minimum_confirmations: minimumConfirmations,
+      minimum_one_minute_price_change_pct: minimumOneMinuteMove
+    },
+    observed: {daily_move_pct:dailyMove,micro_score:score,confirmations,one_minute_price_change_pct:oneMinuteMove,
+      one_minute_acceleration_pct:oneMinuteAcceleration,fast_warmed_up:fast.warmed_up===true},
+    policy: 'DIAGNOSTIC_ONLY_DO_NOT_EMIT_PRODUCTION_PUSH_OR_AUTHORIZE_ENTRY'
+  };
+}
+
 /** Fast ticker-delta bypass: select shock candidates for candle confirmation even
  * when the daily move is already large. It never promotes them to entry eligibility. */
 export function isFastActivityShockCandidate(row={},fast={},config={}){
