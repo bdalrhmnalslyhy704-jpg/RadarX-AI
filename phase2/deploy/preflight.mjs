@@ -29,7 +29,7 @@ export function assertDeploymentEnvironment(env=process.env){
   if(testFlag!==TRUE&&testFlag!==FALSE) throw new Error('RADARX_STAGING_TEST_PUSH_ENABLED_MUST_BE_EXPLICIT_TRUE_OR_FALSE');
 
   const provider=String(env.RADARX_PUSH_PROVIDER??'').trim().toLowerCase();
-  if(!['webpush','fcm'].includes(provider)) throw new Error('RADARX_PUSH_PROVIDER_WEBPUSH_OR_FCM_REQUIRED');
+  if(!['webpush','fcm','none'].includes(provider)) throw new Error('RADARX_PUSH_PROVIDER_WEBPUSH_FCM_OR_NONE_REQUIRED');
 
   const auth=required('RADARX_AUTH_SECRET',env.RADARX_AUTH_SECRET);
   if(auth.length<32) throw new Error('RADARX_AUTH_SECRET_TOO_SHORT');
@@ -38,7 +38,7 @@ export function assertDeploymentEnvironment(env=process.env){
     required('VAPID_SUBJECT',env.VAPID_SUBJECT);
     required('VAPID_PUBLIC_KEY',env.VAPID_PUBLIC_KEY);
     required('VAPID_PRIVATE_KEY',env.VAPID_PRIVATE_KEY);
-  }else{
+  }else if(provider==='fcm'){
     required('FCM_PROJECT_ID',env.FCM_PROJECT_ID);
     const rawServiceAccount=required('FCM_SERVICE_ACCOUNT_JSON',env.FCM_SERVICE_ACCOUNT_JSON);
     let serviceAccount;

@@ -289,6 +289,15 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(!rateOk(key))return send(res,429,{error:'RATE_LIMITED'});
     try{
       const u=new URL(req.url,'http://localhost');
+      if(u.pathname==='/'&&req.method==='GET')return send(res,200,{
+        service:'RADARX_BACKEND',build_version:'Build 224',deployment_contract:'BUILD224_DHDTECH_V1',
+        paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+      });
+      if(u.pathname==='/api/deployment-info'&&req.method==='GET')return send(res,200,{
+        service:'RADARX_BACKEND',build_version:'Build 224',deployment_contract:'BUILD224_DHDTECH_V1',
+        expected_radars:12,market:'BINANCE_SPOT_USDT',paper_trading:true,real_order_execution:false,
+        confidence_score:'UNKNOWN',push:{provider:pushProvider?.status?.().provider??'unknown',enabled:pushProvider?.status?.().enabled===true}
+      });
       if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{
         ...safeHealth('MONITOR','MONITOR',monitor),
         move_radar:safeHealth('RADAR1',RADAR_NAMES.MOVE_RADAR,moveSentinel),

@@ -32,6 +32,17 @@ test('TEST_FIXTURE: staging preflight accepts complete safe configuration and st
     host:'127.0.0.1',port:18087,dataDir:env.RADARX_DATA_DIR,paperTrading:true,realOrderExecution:false,confidenceMode:'UNKNOWN'});
 });
 
+test('TEST_FIXTURE: production preflight allows read-only monitoring with push disabled',async()=>{
+  const env=await validEnv({RADARX_ENV:'production',RADARX_STAGING_TEST_PUSH_ENABLED:'false',RADARX_PUSH_PROVIDER:'none'});
+  const out=assertDeploymentEnvironment(env);
+  assert.equal(out.environment,'production');
+  assert.equal(out.pushProvider,'none');
+  assert.equal(out.testPushEnabled,false);
+  assert.equal(out.paperTrading,true);
+  assert.equal(out.realOrderExecution,false);
+  assert.equal(out.confidenceMode,'UNKNOWN');
+});
+
 test('TEST_FIXTURE: preflight accepts FCM credentials without requiring VAPID keys',async()=>{
   const {privateKey}=generateKeyPairSync('rsa',{modulusLength:2048});
   const serviceAccount={type:'service_account',project_id:'radarx-fixture-project',
