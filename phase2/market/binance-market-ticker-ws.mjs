@@ -14,7 +14,7 @@ const normalizeTicker = x => {
   // from its most recent REST ticker snapshot.
   const changePct = Number.isFinite(explicitChange)
     ? explicitChange
-    : lastPrice > 0 && openPrice > 0 ? (lastPrice / openPrice - 1) * 100 : NaN;
+    : lastPrice > 0 && openPrice > 0 ? Math.round((lastPrice / openPrice - 1) * 100 * 1e8) / 1e8 : NaN;
   const tradeCount24h = x.n !== null && x.n !== undefined && String(x.n).trim() !== '' &&
     Number.isFinite(Number(x.n)) ? Number(x.n) : null;
   if (!/^[A-Z0-9]{5,30}$/.test(symbol) || !(lastPrice > 0) || !(openPrice > 0) || !Number.isFinite(changePct)) return null;
