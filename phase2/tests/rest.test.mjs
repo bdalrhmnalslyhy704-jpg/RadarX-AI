@@ -194,3 +194,23 @@ test('TEST_FIXTURE: full-market batch ticker snapshot is multiplexed across rada
   assert.equal(calls,1,'all radar clients should share one all-symbol ticker REST request');
   assert.deepEqual(second.data,first.data);
 });
+
+
+test('TEST_FIXTURE: REST timeout errors identify the timed-out endpoint and fallback host',async()=>{
+  let attempts=0;
+  const baseUrls=['https://timeout-a.test','https://timeout-b.test'];
+  const fetchImpl=(_url,{signal})=>new Promise((resolve,reject)=>{
+    attempts++;
+    if(signal.aborted){reject(new Error('This operation was aborted'));return;}
+    signal.addEventListener('abort',()=>reject(new Error('This operation was aborted')),{once:true});
+  });
+  const client=new RestClient({
+    baseUrls,fetchImpl,timeoutMs:5,minIntervalMs:0,maxRequestsPerMinute:100
+  });
+  await assert.rejects(
+    ()=>client.request('/api/v3/klines',{symbol:'TIMEOUTDIAGUSDT',interval:'17m',limit:1}),
+    /REST_REQUEST_TIMEOUT path=\/api\/v3\/klines timeout_ms=5 base=https:\/\/timeout-b\.test/
+  );
+  assert.equal(attempts,2,'the bounded REST fallback should try each configured host');
+  assert.match(client.health().last_error,/REST_REQUEST_TIMEOUT/);
+});

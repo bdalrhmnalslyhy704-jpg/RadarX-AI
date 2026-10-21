@@ -563,6 +563,7 @@ export class EarlyMoveSentinel {
     this.ws=null;
     this.lastTickAt=null;
     this.lastReconcileAt=null;
+    this.reconciling=false;this.reconcileSkippedCount=0;
     this.alertCount=0;
     this.lastError=null;
   }
@@ -622,6 +623,8 @@ export class EarlyMoveSentinel {
       last_tick_at:this.lastTickAt,
       last_reconcile_at:this.lastReconcileAt,
       last_error:this.lastError,
+      reconcile_in_flight:this.reconciling,
+      reconcile_skipped_count:this.reconcileSkippedCount,
       queued_deep_scans:this.deepQueue.length,
       active_deep_scans:this.deepActive,
       pre_explosion_scans_tracked:this.lastEarlyScanAt.size,
@@ -636,17 +639,26 @@ export class EarlyMoveSentinel {
 
   async reconcile(initial=false){
     if(!this.running)return;
-    const info=await this.rest.request('/api/v3/exchangeInfo');
-    const universe=buildSpotUniverse(info.data,this.config.quote);
-    this.spotSymbols=new Set(universe.map(x=>x.symbol));
-    const tick=await this.rest.request('/api/v3/ticker/24hr');
-    const rows=Array.isArray(tick.data)?tick.data:[];
-    this.lastReconcileAt=this.clock();
-    for(const raw of rows){
-      const row=normalizeTickerRow(raw,this.config.quote);
-      if(row&&this.eligibleSymbol(row.symbol))this.processTicker(row,initial);
+    // The timer fires every 15s, but public REST fallback can take longer.
+    // Never overlap exchangeInfo/ticker reconciliations: overlapping runs amplify
+    // timeout aborts and race the shared ticker snapshot/candidate queue.
+    if(this.reconciling){this.reconcileSkippedCount++;return;}
+    this.reconciling=true;
+    try{
+      const info=await this.rest.request('/api/v3/exchangeInfo');
+      const universe=buildSpotUniverse(info.data,this.config.quote);
+      this.spotSymbols=new Set(universe.map(x=>x.symbol));
+      const tick=await this.rest.request('/api/v3/ticker/24hr');
+      const rows=Array.isArray(tick.data)?tick.data:[];
+      this.lastReconcileAt=this.clock();
+      for(const raw of rows){
+        const row=normalizeTickerRow(raw,this.config.quote);
+        if(row&&this.eligibleSymbol(row.symbol))this.processTicker(row,initial);
+      }
+      this.queuePreExplosionDiscovery(rows);
+    }finally{
+      this.reconciling=false;
     }
-    this.queuePreExplosionDiscovery(rows);
   }
 
   onTicker(ticker){

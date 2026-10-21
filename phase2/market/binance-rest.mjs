@@ -348,8 +348,13 @@ export class RestClient {
           this.lastError=null; this.state='LIVE';
           return result;
         }catch(e){
-          error=e; this.lastError=String(e?.message??e);
-          if(e?.name==='RestRateLimitError') break;
+          const timedOut=ac.signal.aborted||e?.name==='AbortError';
+          error=timedOut
+            ?new Error(`REST_REQUEST_TIMEOUT path=${path} timeout_ms=${this.timeoutMs} base=${this.baseUrls[idx]}`)
+            :e;
+          if(timedOut)error.name='RestTimeoutError';
+          this.lastError=String(error?.message??error);
+          if(error?.name==='RestRateLimitError') break;
         }finally{clearTimeout(tm);}
       }
       if(error?.name==='RestRateLimitError') throw error;

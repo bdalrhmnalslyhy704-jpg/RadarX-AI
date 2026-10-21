@@ -324,3 +324,32 @@ test('newer ticker refreshes a queued snapshot without downgrading a stronger tr
   assert.equal(sentinel.deepQueue[0].queuedAt,now-1000);
 });
 
+
+
+test('Move Sentinel skips overlapping REST reconciliations while a previous run is in flight',async()=>{
+  let exchangeCalls=0,tickerCalls=0,releaseTicker;
+  const tickerGate=new Promise(resolve=>{releaseTicker=resolve;});
+  const rest={
+    async request(path){
+      if(path==='/api/v3/exchangeInfo'){exchangeCalls++;return{data:{symbols:[]}};}
+      if(path==='/api/v3/ticker/24hr'){tickerCalls++;await tickerGate;return{data:[]};}
+      throw new Error('UNEXPECTED_REST_PATH:'+path);
+    }
+  };
+  const sentinel=new EarlyMoveSentinel({
+    rest,store:{},config:{},clock:()=>1710003000000,logger:{warn(){}},
+    tickerWsFactory:()=>({start(){},stop(){},health(){return{state:'STOPPED'}}})
+  });
+  sentinel.running=true;
+  const first=sentinel.reconcile(true);
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(exchangeCalls,1);
+  assert.equal(tickerCalls,1);
+  await sentinel.reconcile(false);
+  assert.equal(exchangeCalls,1,'second timer tick must not start a concurrent exchangeInfo request');
+  assert.equal(tickerCalls,1,'second timer tick must not start a concurrent ticker request');
+  assert.equal(sentinel.reconcileSkippedCount,1);
+  releaseTicker();
+  await first;
+  assert.equal(sentinel.reconciling,false);
+});
