@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      RADARX_BACKEND_BASE_URL: ${{ vars.RADARX_BACKEND_BASE_URL }}
+      RADARX_BACKEND_BASE_URL: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
 
     steps:
       - name: Checkout exact release-signing branch
@@ -47,7 +47,7 @@ jobs:
 
       - name: Configure Build 224 APK for DHDTech backend
         env:
-          RADARX_BACKEND_BASE_URL: ${{ vars.RADARX_BACKEND_BASE_URL }}
+          RADARX_BACKEND_BASE_URL: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
@@ -283,7 +283,7 @@ jobs:
           export READY_STATUS="$READY"
 
           # Do not publish an APK while Radar 8 is merely instantiated but has
-          # zero market coverage. Give a fresh Railway deploy time to complete
+          # zero market coverage. Give a fresh DHDTech deploy time to complete
           # its first real Spot-USDT scan before validating the contract.
           VERIFIED=false
           for attempt in $(seq 1 18); do
@@ -389,7 +389,7 @@ jobs:
       - name: Verify Whale Accumulation public contract
         timeout-minutes: 3
         env:
-          BASE: ${{ vars.RADARX_BACKEND_BASE_URL }}
+          BASE: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
         run: |
           set -euo pipefail
           CODE="$(curl --location --silent --show-error --max-time 60 -o "$RUNNER_TEMP/whale.json" -w "%{http_code}" "$BASE/api/whale-accumulation-radar?limit=5&scan=0")"
@@ -410,7 +410,7 @@ jobs:
       - name: Verify Multi-Analyst public contract
         timeout-minutes: 4
         env:
-          BASE: ${{ vars.RADARX_BACKEND_BASE_URL }}
+          BASE: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
         run: |
           set -euo pipefail
           CURL_EXIT=0
@@ -466,7 +466,7 @@ jobs:
       - name: Detect live server push configuration
         timeout-minutes: 1
         env:
-          BASE: ${{ vars.RADARX_BACKEND_BASE_URL }}
+          BASE: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
         run: |
           set -euo pipefail
           HTTP_CODE="$(curl --location --silent --show-error --max-time 20 --output "$RUNNER_TEMP/push-status.json" --write-out "%{http_code}" "$BASE/v1/push/status" || true)"
