@@ -4,7 +4,7 @@ import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notification-gate.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
 import {buildRadarRoleEvidence} from './radar-role-evidence.mjs';
-import {assessQuietBaseActivityShock,isFastActivityShockCandidate,isFastEarlyWatchCandidate} from './activity-shock.mjs';
+import {assessQuietBaseActivityShock,isFastActivityShockCandidate,isFastEarlyWatchCandidate,evaluateProposedExtendedContinuationWatch} from './activity-shock.mjs';
 import {assessQuietBasePreExpansion,summarizeQuietBasePreExpansion} from './quiet-base-pre-expansion.mjs';
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
 import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId,normalizeMissing,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,reconcileEligibilityQueueAge} from './scan-journey-ledger.mjs';
@@ -226,6 +226,15 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   earlyFlowWatchMinScore:58,
   earlyFlowWatchMinConfirmations:3,
   earlyFlowWatchCooldownMs:10*60*1000,
+  // Extended-move continuation is a separate in-app WATCH lane. It never changes
+  // anti-chase/actionable alert gates and never invokes push delivery.
+  extendedContinuationWatchEnabled:true,
+  extendedContinuationWatchCooldownMs:10*60*1000,
+  extendedContinuationWatchMaxPerCycle:3,
+  extendedContinuationWatchMaxPerHour:6,
+  extendedContinuationWatchMinScore:58,
+  extendedContinuationWatchMinConfirmations:4,
+  extendedContinuationWatchMinPriceChangePct:0.5,
   minLiquidityQuality:58,
   maxSpreadBps:22,
   minDataQuality:70,
@@ -1370,6 +1379,45 @@ export function buildEarlyFlowWatchAlert(candidate,now=Date.now()){
   },'Radar 8 — البرق');
 }
 
+export function buildExtendedContinuationWatchAlert({row={},fast={},microFingerprint={},gate={},closedCandleCloseTime=null}={},now=Date.now()){
+  const symbol=String(row?.symbol||'').trim().toUpperCase();
+  const quote=Number(row?.quoteVolume24h);
+  const daily=hasFiniteNumber(row?.priceChange24h)?Number(row.priceChange24h):null;
+  const score=hasFiniteNumber(microFingerprint?.score)?Number(microFingerprint.score):null;
+  const confirmations=hasFiniteNumber(microFingerprint?.confirmation_count)?Number(microFingerprint.confirmation_count):null;
+  const closeTime=hasFiniteNumber(closedCandleCloseTime)?Number(closedCandleCloseTime):null;
+  const evidence={
+    observed_at:now,closed_candle_close_time:closeTime,closed_candles_only:true,
+    daily_move_pct:daily,micro_score:score,micro_confirmations:confirmations,
+    volume_accel_ratio:hasFiniteNumber(fast?.volume_accel_ratio)?Number(fast.volume_accel_ratio):null,
+    trade_accel_ratio:hasFiniteNumber(fast?.trade_accel_ratio)?Number(fast.trade_accel_ratio):null,
+    price_change_1m_pct:hasFiniteNumber(fast?.price_change_pct)?Number(fast.price_change_pct):null,
+    price_acceleration_1m_pct:hasFiniteNumber(fast?.price_acceleration_pct)?Number(fast.price_acceleration_pct):null,
+    quote_volume_delta:hasFiniteNumber(fast?.volume_delta_quote)?Number(fast.volume_delta_quote):null,
+    trade_delta:hasFiniteNumber(fast?.trade_delta)?Number(fast.trade_delta):null,
+    entry_block_reason:'ANTI_CHASE_ENTRY_VETO_RETAINED',
+    proposed_gate:gate
+  };
+  return decorateRadarAlert({
+    id:'RADAR8_EXTENDED_CONTINUATION_WATCH:'+symbol+':'+(closeTime??now),
+    event:'EXTENDED_CONTINUATION_WATCH_ONLY',radar:'EARLY_EXPANSION_RADAR',
+    radar_name:'Radar 8 — البرق',symbol,market:'SPOT',direction:'UP_BIAS',
+    price:hasFiniteNumber(row?.lastPrice)?Number(row.lastPrice):null,
+    price_change_24h:daily,quote_volume_24h:hasFiniteNumber(quote)?quote:null,
+    opportunity_score:null,early_expansion_score:null,micro_fingerprint_score:score,
+    potential_label:'EXTENDED_CONTINUATION_WATCH_ONLY',decision_band:'WATCH_EARLY',
+    extended_continuation_watch_evidence:evidence,
+    metrics:{volume_accel_ratio:evidence.volume_accel_ratio,trade_accel_ratio:evidence.trade_accel_ratio,
+      price_change_1m_pct:evidence.price_change_1m_pct,price_acceleration_1m_pct:evidence.price_acceleration_1m_pct},
+    risk_flags:['EXTENDED_CONTINUATION_WATCH_ONLY','ANTI_CHASE_ENTRY_VETO_RETAINED','NO_ENTRY_ELIGIBILITY'],
+    reason_codes:['EXTENDED_MOVE_WITH_RENEWED_BUYING_ACTIVITY','CLOSED_CANDLE_MICRO_CONFIRMATION','WATCH_ONLY_NOT_ENTRY'],
+    detected_at:now,processed_at:now,detected_candle_close_time:closeTime,
+    closed_candles_only:true,watch_only:true,entry_eligible:false,notification_status:'WATCH_ONLY_NOT_SENT',
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+    disclaimer:'مراقبة فقط: العملة تحركت كثيرًا ويظهر تسارع جديد في الحجم والصفقات. مانع مطاردة السعر ما زال مفعلًا؛ هذا ليس دخولًا أو توصية شراء، ولن يرسل تنبيه دفع.'
+  },'Radar 8 — البرق');
+}
+
 function symbolHash(symbol){
   let h=2166136261>>>0;
   for(const ch of String(symbol||'')){h^=ch.charCodeAt(0);h=Math.imul(h,16777619);}
@@ -1778,6 +1826,8 @@ export class EarlyExpansionRadar{
     this.fastState=new Map();this.lastAlertAt=new Map();this.lastAlertScore=new Map();this.lastBand=new Map();
     this.lastActivityShockAt=new Map();this.lastActivityShockKeyBySymbol=new Map();this.activityShockTimestamps=[];this.fastShockPendingUntil=new Map();
     this.lastEarlyFlowWatchAt=new Map();this.lastEarlyFlowWatchKeyBySymbol=new Map();
+    this.lastExtendedContinuationWatchAt=new Map();this.lastExtendedContinuationWatchKeyBySymbol=new Map();
+    this.extendedContinuationWatchTimestamps=[];this.latestExtendedContinuationWatches=[];
     this.lastMicroScanCycleBySymbol=new Map();this.lastDeepScanCycleBySymbol=new Map();
     this.scheduler=new ScanSchedulerJournal({radar:'RADAR_8',store,clock,logger});
     this.lastDeepAtBySymbol=new Map();this.firstEligibleAtBySymbol=new Map();
