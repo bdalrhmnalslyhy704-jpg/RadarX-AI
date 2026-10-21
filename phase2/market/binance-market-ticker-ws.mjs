@@ -6,7 +6,14 @@ const normalizeTicker = x => {
   const symbol = String(x.s || '').trim().toUpperCase();
   const lastPrice = Number(x.c);
   const openPrice = Number(x.o);
-  const changePct = Number(x.P);
+  // Spot retired !ticker@arr in March 2026. The supported !miniTicker@arr
+  // omits P (24h change) and n (trade count), so derive price change from c/o
+  // and preserve missing trade count as unknown rather than inventing a value.
+  const reportedChangePct = Number(x.P);
+  const changePct = Number.isFinite(reportedChangePct)
+    ? reportedChangePct
+    : (lastPrice > 0 && openPrice > 0 ? (lastPrice / openPrice - 1) * 100 : NaN);
+  const reportedTradeCount = Number(x.n);
   if (!/^[A-Z0-9]{5,30}$/.test(symbol) || !(lastPrice > 0) || !(openPrice > 0) || !Number.isFinite(changePct)) return null;
   return {
     symbol,
@@ -16,7 +23,7 @@ const normalizeTicker = x => {
     highPrice24h: Number(x.h),
     lowPrice24h: Number(x.l),
     quoteVolume24h: Number(x.q),
-    tradeCount24h: Number(x.n),
+    tradeCount24h: Number.isFinite(reportedTradeCount) && reportedTradeCount >= 0 ? reportedTradeCount : null,
     eventTime: Number(x.E) || Date.now()
   };
 };
@@ -113,11 +120,11 @@ export class BinanceAllMarketTickerClient {
     // combined-stream selector supplied in the base URL.
     const path = url.pathname.replace(/\/+$/, '');
     if (path.endsWith('/stream')) {
-      url.pathname = path.slice(0, -'/stream'.length) + '/ws/!ticker@arr';
+      url.pathname = path.slice(0, -'/stream'.length) + '/ws/!miniTicker@arr';
     } else if (path.endsWith('/ws')) {
-      url.pathname = path + '/!ticker@arr';
-    } else if (!path.endsWith('/ws/!ticker@arr')) {
-      url.pathname = (path || '') + '/ws/!ticker@arr';
+      url.pathname = path + '/!miniTicker@arr';
+    } else if (!path.endsWith('/ws/!miniTicker@arr')) {
+      url.pathname = (path || '') + '/ws/!miniTicker@arr';
     }
     url.searchParams.delete('streams');
     return url.toString();
