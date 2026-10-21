@@ -276,6 +276,19 @@ jobs:
         run: |
           set -euo pipefail
           BASE="$RADARX_BACKEND_BASE_URL"
+          INFO_STATUS="$(curl --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/deployment-info.json" -w "%{http_code}" "$BASE/api/deployment-info")"
+          if [ "$INFO_STATUS" != "200" ]; then
+            echo "::error::DHDTech is not serving the current Build 224 API contract (deployment-info HTTP $INFO_STATUS). Rebuild the DHDTech container from the selected Build 224 branch."
+            cat "$RUNNER_TEMP/deployment-info.json" || true
+            exit 1
+          fi
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const info=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/deployment-info.json','utf8'));
+          if(info.service!=='RADARX_BACKEND'||info.build_version!=='Build 224'||info.deployment_contract!=='BUILD224_DHDTECH_V1') throw new Error('DHDTECH_BUILD224_CONTRACT_INVALID');
+          if(info.paper_trading!==true||info.real_order_execution!==false||info.confidence_score!=='UNKNOWN') throw new Error('DHDTECH_READ_ONLY_POLICY_INVALID');
+          console.log(JSON.stringify({service:info.service,build_version:info.build_version,deployment_contract:info.deployment_contract,expected_radars:info.expected_radars,push:info.push}));
+          NODE
           HEALTH="$(curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/healthz.json" -w "%{http_code}" "$BASE/healthz")"
           READY="$(curl --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/readyz.json" -w "%{http_code}" "$BASE/readyz")"
           test "$HEALTH" = "200"
