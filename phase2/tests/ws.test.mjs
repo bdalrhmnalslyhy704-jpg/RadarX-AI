@@ -129,14 +129,19 @@ test('TEST_FIXTURE: ticker websocket records HTTP rejection status before retry'
   assert.equal(client.health().last_disconnect_reason,'WS_HTTP_451');
   client.stop();
 });
-test('TEST_FIXTURE: all-market ticker stream uses the raw Binance /ws endpoint',()=>{
+test('TEST_FIXTURE: all-market ticker stream uses the combined market-data /stream endpoint',()=>{
   const client=new BinanceAllMarketTickerClient({
-    urls:['wss://data-stream.binance.vision/stream?streams=stale&timeUnit=MICROSECOND','wss://stream.binance.com:9443/stream'],
+    urls:['wss://data-stream.binance.vision/stream?streams=stale&timeUnit=MICROSECOND','wss://data-stream.binance.vision/stream'],
     WebSocketImpl:Socket,
     onState:()=>{}
   });
-  assert.equal(client.url(),'wss://data-stream.binance.vision/ws/!ticker@arr?timeUnit=MICROSECOND');
+  const first=new URL(client.url());
+  assert.equal(first.pathname,'/stream');
+  assert.equal(first.searchParams.get('streams'),'!ticker@arr');
+  assert.equal(first.searchParams.get('timeUnit'),'MICROSECOND');
   client.urlIndex=1;
-  assert.equal(client.url(),'wss://stream.binance.com:9443/ws/!ticker@arr');
+  const second=new URL(client.url());
+  assert.equal(second.pathname,'/stream');
+  assert.equal(second.searchParams.get('streams'),'!ticker@arr');
   client.stop();
 });
