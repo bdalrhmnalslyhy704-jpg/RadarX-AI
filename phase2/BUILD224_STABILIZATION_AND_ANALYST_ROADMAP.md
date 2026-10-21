@@ -29,6 +29,7 @@
 | Memory | Post-GC RSS about 0.240–0.257 GiB versus a 0.360 GiB target | Memory stayed below the observed target in these samples; keep tracking p95/peak, not just one post-GC reading. |
 | Light-scan microstructure | Spread and depth availability were both 0 for the 228-symbol light-scan sample | Root cause found in code: the feature scan used the earlier `fastSeenAt` timestamp even though the all-symbol bookTicker REST snapshot arrived later. A fresh book timestamp could therefore appear >1s in the future and be rejected. The fix now timestamps the light analysis when it starts and adds a regression test; require the next live cycle to show fresh spread availability before treating this as resolved in production. |
 | Outcomes | Archive was healthy, with no missing/corrupt files; only a small number of emitted signals had outcome tracking in this snapshot | Check that emitted signals are tracked to complete 5m/15m/30m/60m/4h/24h outcomes. Do not count non-signals as missed outcomes without inspecting the ledger contract. |
+| Persistent volume selection | DHDTech may mount `/data` without Railway environment markers | The server previously selected `/data` by default only when Railway variables existed. It now checks the exact `/data` mount on any host, honors `RADARX_DATA_DIR`, and migrates legacy `scan-journeys` payloads as well as ordinary archive files. Verify the startup log's actual mount status/path before claiming persistence. |
 | APK release | The current release workflow still checks the legacy Railway host and its `/api/early-expansion-radar` endpoint returned HTTP 404 | APK/backend URL migration is a release blocker until the real public DHDTech backend URL is confirmed and wired into the Android allow-list, website CORS, and CI endpoint gate. Do not guess the host. |
 
 ## Execution plan and gates
@@ -101,6 +102,7 @@ The system is not declared stable because a container started or one scan comple
 - [x] Mini-ticker compatibility fix exists in the base branch.
 - [x] Phase 2 test suite and production-aligned 90-case historical gate passed before the book-ticker timestamp fix; all final-head checks must be re-run after that last fix.
 - [x] REST fallback, reconciliation coalescing, and delayed-book-ticker freshness fixes are isolated on this release PR.
+- [x] Archive storage detects a mounted `/data` volume on DHDTech and migrates scan-journey files from a legacy local directory without overwriting durable files.
 - [ ] Final Triple Radar CI including Android background smoke must pass on the exact final head.
 - [ ] Merge only after the exact-head gates pass.
 - [ ] DHDTech runtime must deploy/serve the merged commit and prove REST + ticker WS + Kline WS health.
