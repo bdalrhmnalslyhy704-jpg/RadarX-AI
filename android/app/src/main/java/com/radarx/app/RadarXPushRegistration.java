@@ -24,7 +24,7 @@ final class RadarXPushRegistration {
     private static final String TAG = "RadarXPush";
     private static final String PREFS = "radarx_push";
     private static final String INSTALLATION_ID = "installation_id";
-    private static final String BACKEND = "https://radarx-ai-triple-production.up.railway.app";
+    private static final String BACKEND = "https://dhdtech-url-required.invalid";
     private static final ExecutorService NETWORK = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "RadarX-Push-Registration");
         thread.setDaemon(true);
