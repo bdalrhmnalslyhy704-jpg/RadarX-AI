@@ -286,8 +286,16 @@ function makeSignal(alert,now,marketContext){
   const quality=coverage.score;
   const reportedQuality=num(alert?.data_quality??alert?.falcon_eye?.data_quality);
   const buildVersion='Build 224';
-  const buildCommit=String(process.env.RAILWAY_GIT_COMMIT_SHA??process.env.GITHUB_SHA??'').trim()||null;
-  const buildBranch=String(process.env.RAILWAY_GIT_BRANCH??'').trim()||null;
+  const buildCommit=String(
+    process.env.RADARX_BUILD_COMMIT??process.env.SOURCE_COMMIT??process.env.GIT_COMMIT??
+    process.env.COMMIT_SHA??process.env.CI_COMMIT_SHA??process.env.SOURCE_VERSION??
+    process.env.RAILWAY_GIT_COMMIT_SHA??process.env.GITHUB_SHA??process.env.VERCEL_GIT_COMMIT_SHA??''
+  ).trim()||null;
+  const buildBranch=String(
+    process.env.RADARX_BUILD_BRANCH??process.env.SOURCE_BRANCH??process.env.GIT_BRANCH??
+    process.env.BRANCH_NAME??process.env.CI_COMMIT_BRANCH??process.env.RAILWAY_GIT_BRANCH??
+    process.env.GITHUB_REF_NAME??process.env.VERCEL_GIT_COMMIT_REF??''
+  ).trim()||null;
   const archiveMissingFields=[...(signalScore===null?['signal_score']:[]),...(!buildCommit?['build_commit']:[])];
   const evaluationEligible=quality===100&&stage!=='DATA_INSUFFICIENT'&&!m.data_stale&&m.closed_candles_only;
   const evaluationStatus=evaluationEligible?'ELIGIBLE':'EXCLUDED_INCOMPLETE';
@@ -914,12 +922,20 @@ export async function importHistoricalPreExpansionSignals(store,alerts,{now=Date
  */
 export async function backfillHistoricalPreExpansionOutcomes(store,rest,{now=Date.now(),logger=console,intervalMs=HISTORICAL_BACKFILL_INTERVAL_MS,maxSignals=HISTORICAL_BACKFILL_MAX_SIGNALS}={}){
   if(typeof store?.updatePreExpansionOutcomes!=='function'||typeof rest?.klines!=='function'){
-    return {evaluated:0,skipped:0,reason:'HISTORICAL_REST_OR_STORE_UNAVAILABLE'};
+    return {evaluated:0,skipped:0,reason:'HISTORICAL_REST_OR_STORE_UNAVAILABLE',throttled:false,next_eligible_at:null,retry_after_ms:null};
   }
   let selected=[];
+  let cooldownRemainingMs=0;
+  let nextEligibleAt=null;
   await store.updatePreExpansionOutcomes(raw=>{
     const state=normalizeState(raw);
-    if(now-state.last_historical_backfill_at<intervalMs)return false;
+    const lastBackfillAt=num(state.last_historical_backfill_at,0);
+    const elapsedSinceLastBackfill=Number(now)-lastBackfillAt;
+    if(elapsedSinceLastBackfill<Number(intervalMs)){
+      cooldownRemainingMs=Math.max(1,Number(intervalMs)-elapsedSinceLastBackfill);
+      nextEligibleAt=lastBackfillAt+Number(intervalMs);
+      return false;
+    }
     const hasDueUnmeasuredHorizon=r=>HORIZONS.some(([h,ms])=>{
       const detectedAt=num(r?.detected_at);
       if(detectedAt===null)return false;
@@ -940,7 +956,16 @@ export async function backfillHistoricalPreExpansionOutcomes(store,rest,{now=Dat
     if(!selected.length)return false;
     state.last_historical_backfill_at=now;state.updated_at=now;return state;
   });
-  if(!selected.length)return {evaluated:0,skipped:0,throttled:true};
+  if(!selected.length){
+    const throttled=cooldownRemainingMs>0;
+    const retryAfterMs=throttled?cooldownRemainingMs:Math.min(60_000,Math.max(15_000,Number(intervalMs)||HISTORICAL_BACKFILL_INTERVAL_MS));
+    return {
+      evaluated:0,skipped:0,
+      reason:throttled?'BACKFILL_COOLDOWN_ACTIVE':'NO_MATURE_UNMEASURED_HORIZONS',
+      throttled,next_eligible_at:nextEligibleAt??Number(now)+retryAfterMs,
+      retry_after_ms:retryAfterMs,selected:0
+    };
+  }
   let evaluated=0,skipped=0;
   for(const signal of selected){
     try{
@@ -1037,5 +1062,10 @@ export async function backfillHistoricalPreExpansionOutcomes(store,rest,{now=Dat
       logger?.warn?.('[PRE_EXPANSION_HISTORICAL_BACKFILL_ERROR] '+JSON.stringify({signal_id:signal.signal_id,symbol:signal.symbol,error:String(error?.message??error)}));
     }
   }
-  return {evaluated,skipped};
+  return {
+    evaluated,skipped,selected:selected.length,throttled:false,
+    reason:evaluated===0&&skipped>0?'SELECTED_SIGNALS_COULD_NOT_BE_EVALUATED':null,
+    next_eligible_at:Number(now)+Math.max(0,Number(intervalMs)||0),
+    retry_after_ms:Math.max(0,Number(intervalMs)||0)
+  };
 }

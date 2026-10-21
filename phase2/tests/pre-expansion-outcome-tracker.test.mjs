@@ -697,3 +697,38 @@ test('research-only under-floor burst observations never enter public signal out
     assert.equal(state?.last_stage_by_key?.['RADAR_8|LOWVOLUSDT'],undefined);
   });
 });
+
+
+test('historical backfill returns an explicit cooldown reason and retry time',async()=>{
+  await withStore(async store=>{
+    await store.updatePreExpansionOutcomes(raw=>({
+      ...raw,last_historical_backfill_at:NOW,updated_at:NOW
+    }));
+    let requests=0;
+    const rest={klines:async()=>{requests++;return {candles:[]};}};
+    const result=await backfillHistoricalPreExpansionOutcomes(store,rest,{now:NOW+30_000});
+    assert.equal(result.evaluated,0);
+    assert.equal(result.skipped,0);
+    assert.equal(result.throttled,true);
+    assert.equal(result.reason,'BACKFILL_COOLDOWN_ACTIVE');
+    assert.equal(result.next_eligible_at,NOW+3*60_000);
+    assert.equal(result.retry_after_ms,150_000);
+    assert.equal(result.selected,0);
+    assert.equal(requests,0,'cooldown must not spend REST requests');
+  });
+});
+
+test('historical backfill distinguishes no due records from throttling',async()=>{
+  await withStore(async store=>{
+    let requests=0;
+    const rest={klines:async()=>{requests++;return {candles:[]};}};
+    const result=await backfillHistoricalPreExpansionOutcomes(store,rest,{now:NOW});
+    assert.equal(result.evaluated,0);
+    assert.equal(result.skipped,0);
+    assert.equal(result.throttled,false);
+    assert.equal(result.reason,'NO_MATURE_UNMEASURED_HORIZONS');
+    assert.equal(result.next_eligible_at,NOW+60_000);
+    assert.equal(result.retry_after_ms,60_000);
+    assert.equal(requests,0,'an empty outcome archive must not make market requests');
+  });
+});

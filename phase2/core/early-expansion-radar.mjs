@@ -1783,6 +1783,8 @@ export class EarlyExpansionRadar{
     this.lastDeepAtBySymbol=new Map();this.firstEligibleAtBySymbol=new Map();
     this.journeyStateHydrated=false;this.lastJourneyArchive=null;this.lastJourneyError=null;
     this.outcomeBackfillTask=null;
+    this.outcomeBackfillNextAttemptAt=0;
+    this.lastOutcomeBackfillThrottleLogAt=0;
     this.microFiveMinuteWindowCache=new Map();
     this.marketWideCacheArchiveHydrationAttempted=false;this.marketWideCacheArchiveHydration=null;this.marketWideCacheArchiveHydrationTask=null;this.marketWideCacheArchiveHydrationAttemptAtBySymbol=new Map();this.marketWideCacheArchiveLastEligibleSymbols=new Set();
     this.deepCandleWindowCache=new Map();this.deepCandleCacheHitTotal=0;this.deepCandleCacheMissTotal=0;
@@ -2835,18 +2837,38 @@ export class EarlyExpansionRadar{
       // Historical closed-candle backfill is lower priority than live detection.
       // Run it asynchronously with a bounded cadence so slow archive catch-up cannot
       // hold a complete-market Radar 8 cycle hostage.
-      if(!this.outcomeBackfillTask){
+      if(!this.outcomeBackfillTask&&this.clock()>=this.outcomeBackfillNextAttemptAt){
         const backfillStartedAt=this.clock();
-        const task=backfillHistoricalPreExpansionOutcomes(this.store,this.rest,{now:this.clock(),logger:this.logger})
+        const task=backfillHistoricalPreExpansionOutcomes(this.store,this.rest,{now:backfillStartedAt,logger:this.logger})
           .then(result=>{
-            this.logger.info?.('[RADARX_OUTCOME_BACKFILL_COMPLETE] '+JSON.stringify({
-              started_at:new Date(backfillStartedAt).toISOString(),completed_at:new Date(this.clock()).toISOString(),
-              duration_ms:Math.max(0,this.clock()-backfillStartedAt),evaluated:Number(result?.evaluated||0),
-              skipped:Number(result?.skipped||0),reason:result?.reason||null,throttled:result?.throttled===true
-            }));
+            const completedAt=this.clock();
+            const advertisedNextAt=Number(result?.next_eligible_at);
+            const fallbackDelay=result?.throttled
+              ?Math.max(15_000,Number(result?.retry_after_ms)||60_000)
+              :60_000;
+            this.outcomeBackfillNextAttemptAt=Number.isFinite(advertisedNextAt)&&advertisedNextAt>completedAt
+              ?advertisedNextAt:completedAt+fallbackDelay;
+            const details={
+              started_at:new Date(backfillStartedAt).toISOString(),completed_at:new Date(completedAt).toISOString(),
+              duration_ms:Math.max(0,completedAt-backfillStartedAt),evaluated:Number(result?.evaluated||0),
+              skipped:Number(result?.skipped||0),selected:Number(result?.selected||0),
+              reason:result?.reason||null,throttled:result?.throttled===true,
+              next_eligible_at:this.outcomeBackfillNextAttemptAt,
+              retry_after_ms:Math.max(0,this.outcomeBackfillNextAttemptAt-completedAt)
+            };
+            if(result?.throttled===true){
+              if(completedAt-this.lastOutcomeBackfillThrottleLogAt>=3*60_000){
+                this.logger.info?.('[RADARX_OUTCOME_BACKFILL_SKIPPED] '+JSON.stringify(details));
+                this.lastOutcomeBackfillThrottleLogAt=completedAt;
+              }
+            }else if(result?.reason==='NO_MATURE_UNMEASURED_HORIZONS'){
+              this.logger.info?.('[RADARX_OUTCOME_BACKFILL_IDLE] '+JSON.stringify(details));
+            }else{
+              this.logger.info?.('[RADARX_OUTCOME_BACKFILL_COMPLETE] '+JSON.stringify(details));
+            }
             return result;
           })
-          .catch(e=>{this.noteError(e,'outcome-history-backfill');return null;})
+          .catch(e=>{this.noteError(e,'outcome-history-backfill');this.outcomeBackfillNextAttemptAt=this.clock()+60_000;return null;})
           .finally(()=>{if(this.outcomeBackfillTask===task)this.outcomeBackfillTask=null;});
         this.outcomeBackfillTask=task;
       }

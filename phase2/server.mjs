@@ -95,9 +95,19 @@ export async function startServer({
     return [h,{complete,incomplete,pending:Math.max(0,archiveRecords.length-complete-incomplete),
       provisional,records:archiveRecords.length}];
   }));
+  const runtimeBuildCommit=String(
+    process.env.RADARX_BUILD_COMMIT??process.env.SOURCE_COMMIT??process.env.GIT_COMMIT??
+    process.env.COMMIT_SHA??process.env.CI_COMMIT_SHA??process.env.SOURCE_VERSION??
+    process.env.RAILWAY_GIT_COMMIT_SHA??process.env.GITHUB_SHA??process.env.VERCEL_GIT_COMMIT_SHA??''
+  ).trim()||null;
+  const runtimeBuildBranch=String(
+    process.env.RADARX_BUILD_BRANCH??process.env.SOURCE_BRANCH??process.env.GIT_BRANCH??
+    process.env.BRANCH_NAME??process.env.CI_COMMIT_BRANCH??process.env.RAILWAY_GIT_BRANCH??
+    process.env.GITHUB_REF_NAME??process.env.VERCEL_GIT_COMMIT_REF??''
+  ).trim()||null;
   logger.info?.('[RADARX_ARCHIVE_READY] '+JSON.stringify({
-    build_version:'Build 224',build_commit:process.env.RAILWAY_GIT_COMMIT_SHA||process.env.GITHUB_SHA||null,
-    build_branch:process.env.RAILWAY_GIT_BRANCH||null,service_id:process.env.RAILWAY_SERVICE_ID||null,
+    build_version:'Build 224',build_commit:runtimeBuildCommit,
+    build_branch:runtimeBuildBranch,service_id:process.env.RAILWAY_SERVICE_ID||null,
     deployment_id:process.env.RAILWAY_DEPLOYMENT_ID||null,store_dir:store.dir,
     outcome_store_file:store.files.preExpansionOutcomes,volume_mount_path:onRailway?'/data':null,
     volume_mount_detected:archiveVolumeMounted,persisted_signal_count:archiveRecords.length,
