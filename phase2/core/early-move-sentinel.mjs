@@ -565,6 +565,7 @@ export class EarlyMoveSentinel {
     this.lastReconcileAt=null;
     this.alertCount=0;
     this.lastError=null;
+    this.reconcileInProgress=false;
   }
 
   async start(){
@@ -592,12 +593,12 @@ export class EarlyMoveSentinel {
       onState:(state,reason)=>this.logger.info?.('MOVE_WS',state,reason||'')
     });
     this.ws.start();
-    this.reconcileTimer=setInterval(()=>this.reconcile(false).catch(e=>{
+    this.reconcileTimer=setInterval(()=>this.runReconcile(false).catch(e=>{
       this.lastError=String(e?.message??e);
       this.logger.warn?.('MOVE_RECONCILE',this.lastError);
     }),this.config.reconcileMs);
     try{
-      await this.reconcile(true);
+      await this.runReconcile(true);
     }catch(e){
       this.lastError=String(e?.message??e);
       this.logger.warn?.('MOVE_BOOTSTRAP',this.lastError);
@@ -621,6 +622,7 @@ export class EarlyMoveSentinel {
       websocket:this.ws?.health?.()||{state:'STOPPED'},
       last_tick_at:this.lastTickAt,
       last_reconcile_at:this.lastReconcileAt,
+      reconcile_in_progress:this.reconcileInProgress,
       last_error:this.lastError,
       queued_deep_scans:this.deepQueue.length,
       active_deep_scans:this.deepActive,
@@ -632,6 +634,20 @@ export class EarlyMoveSentinel {
 
   eligibleSymbol(symbol){
     return this.spotSymbols.has(String(symbol||'').toUpperCase());
+  }
+
+  // REST reconciliation is slower than the fast ticker path. Coalesce timer
+  // ticks and bootstrap so a slow/aborted request cannot spawn overlapping full
+  // market snapshots and amplify outbound request pressure.
+  async runReconcile(initial=false){
+    if(!this.running||this.reconcileInProgress)return false;
+    this.reconcileInProgress=true;
+    try{
+      await this.reconcile(initial);
+      return true;
+    }finally{
+      this.reconcileInProgress=false;
+    }
   }
 
   async reconcile(initial=false){
