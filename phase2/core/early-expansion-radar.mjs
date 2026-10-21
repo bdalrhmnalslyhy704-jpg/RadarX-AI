@@ -2423,7 +2423,8 @@ export class EarlyExpansionRadar{
     if(activeSymbols.size>0){
       const stateMaps=[
         this.fastState,this.lastAlertAt,this.lastAlertScore,this.lastBand,
-        this.lastActivityShockAt,this.lastActivityShockKeyBySymbol,this.lastEarlyFlowWatchAt,this.lastEarlyFlowWatchKeyBySymbol,this.fastShockPendingUntil,
+        this.lastActivityShockAt,this.lastActivityShockKeyBySymbol,this.lastEarlyFlowWatchAt,this.lastEarlyFlowWatchKeyBySymbol,
+        this.lastExtendedContinuationWatchAt,this.lastExtendedContinuationWatchKeyBySymbol,this.fastShockPendingUntil,
         this.lastMicroScanCycleBySymbol,this.lastDeepScanCycleBySymbol,
         this.lastDeepAtBySymbol,this.firstEligibleAtBySymbol,
         this.marketWideCacheArchiveHydrationAttemptAtBySymbol
@@ -2435,6 +2436,8 @@ export class EarlyExpansionRadar{
     for(const [symbol,until] of this.fastShockPendingUntil){
       if(Number(until)<=Number(now)){this.fastShockPendingUntil.delete(symbol);}
     }
+    this.extendedContinuationWatchTimestamps=(this.extendedContinuationWatchTimestamps||[]).filter(at=>Number(at)>Number(now)-60*60*1000);
+    this.latestExtendedContinuationWatches=(this.latestExtendedContinuationWatches||[]).filter(x=>Number(now)-Number(x?.detected_at||0)<=60*60*1000).slice(0,20);
     const beforeShockTimestamps=this.activityShockTimestamps.length;
     this.activityShockTimestamps=this.activityShockTimestamps.filter(at=>Number(at)>Number(now)-60*60*1000);
     const maxShockHistory=Math.max(1,Math.trunc(Number(this.config.maxActivityShockAlertsPerHour)||6));
@@ -3215,6 +3218,7 @@ export class EarlyExpansionRadar{
       coverage.deep_timeframe_cache_misses_total=this.deepCandleCacheMissTotal-deepCacheMissStart;
       coverage.deep_timeframe_cache_entries=this.deepCandleWindowCache.size;
       coverage.micro_scan_coverage_ratio=eligible.length?coverage.micro_scanned_total/eligible.length:0;
+      coverage.extended_continuation_watch_only_emitted_this_cycle=extendedContinuationWatchesThisCycle;
       coverage.micro_five_minute_cache_hits_total=microScanned.filter(x=>x&&!x.failed&&x.five_minute_cache_hit===true).length;
       coverage.micro_five_minute_cache_fallbacks_total=microScanned.filter(x=>x&&!x.failed&&x.five_minute_cache_hit!==true).length;
       coverage.micro_effective_concurrency=microConcurrency;
@@ -3613,7 +3617,10 @@ export class EarlyExpansionRadar{
       schema_version:'RADAR8_V2',
       quote:q,
       universe:{...emptyEarlyExpansionUniverse(this.config,q),...(base.universe||{}),quote:q},
-      candidates:(this.latestCandidates||base.candidates||[]).slice(0,Math.max(1,Math.min(100,Number(limit)||100)))
+      candidates:(this.latestCandidates||base.candidates||[]).slice(0,Math.max(1,Math.min(100,Number(limit)||100))),
+      watch_only_candidates:(this.latestExtendedContinuationWatches||[])
+        .filter(x=>this.clock()-Number(x?.detected_at||0)<=60*60*1000)
+        .slice(0,20)
     };
   }
   health(){
@@ -3623,6 +3630,8 @@ export class EarlyExpansionRadar{
       universe_total:this.universe.length,universe_refreshed_at:this.universeAt||null,
       last_scan_at:this.lastScanAtMs,scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,
       fast_scanned_total:this.fastScannedTotal,failed_total:this.failedTotal,failed_symbols:this.failedSymbols,fast_shock_pending_total:[...this.fastShockPendingUntil.values()].filter(until=>Number(until)>now).length,micro_scanned_total:Number(this.lastCoverage?.micro_scanned_total||0),micro_scan_candidates:Number(this.lastCoverage?.micro_scan_candidates||0),rotation_cycle:Number(this.lastCoverage?.rotation_cycle||0),
+      extended_continuation_watch_enabled:this.config.extendedContinuationWatchEnabled!==false,
+      extended_continuation_watch_only_count:(this.latestExtendedContinuationWatches||[]).filter(x=>now-Number(x?.detected_at||0)<=60*60*1000).length,
       coverage:this.lastCoverage,
       poll_ms:this.config.pollMs,micro_scan_candidates:this.config.microScanCandidates,micro_concurrency:this.config.microConcurrency,rotation_reserve:this.config.rotationReserve,quiet_reserve:this.config.quietReserve,deep_candidates:this.config.deepCandidates,deep_concurrency:this.config.deepConcurrency,
       closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
