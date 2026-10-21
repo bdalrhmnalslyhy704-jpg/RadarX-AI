@@ -154,6 +154,34 @@ test('TEST_FIXTURE: mini-ticker is normalized without fabricating missing trade 
   assert.equal(ticker.tradeCount24h,null);
 });
 
+test('TEST_FIXTURE: empty ticker arrays cannot keep the market-feed watchdog alive',(t)=>{
+  Socket.instances.length=0;
+  const states=[];
+  const timeoutMs=90;
+  t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+  const client=new BinanceAllMarketTickerClient({
+    urls:['wss://one.test/stream','wss://two.test/stream'],
+    WebSocketImpl:Socket,
+    heartbeatTimeoutMs:timeoutMs,
+    maxConnectionMs:1_000_000,
+    initialBackoffMs:1000,
+    maxBackoffMs:2000,
+    jitterRatio:0,
+    onState:(state,reason)=>states.push({state,reason})
+  });
+  client.start();
+  Socket.instances[0].emit('open');
+  Socket.instances[0].emit('message',Buffer.from('[]'));
+  t.mock.timers.tick(timeoutMs);
+  const timeout=states.find(x=>x.reason?.includes('WS_HEARTBEAT_TIMEOUT'));
+  assert.ok(timeout,'empty application arrays must not reset the valid-ticker watchdog');
+  assert.match(timeout.reason,/feed_age_ms=90/);
+  assert.match(timeout.reason,/message_age_ms=90/);
+  assert.equal(client.health().tickers_since_connect,0);
+  assert.equal(client.health().messages_since_connect,1);
+  client.stop();
+});
+
 test('TEST_FIXTURE: ticker websocket records HTTP rejection status before retry',()=>{
   Socket.instances.length=0;
   const states=[];
