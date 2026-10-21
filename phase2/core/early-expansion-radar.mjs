@@ -1728,10 +1728,9 @@ export function adaptiveRadar8MicroConcurrency(configuredConcurrency, cacheHealt
     target = Math.min(10, base + 4);
   } else if (readyRatio >= 0.25 && measuredRequestAndWeightHeadroom &&
       weightRatio < 0.70 && requestRatio < 0.70) {
-    // A partially warmed cache (>=25%) still benefits from two workers when both
-    // REST counters show headroom; the former 35% gate left cold-start cycles at
-    // six workers while half the selected symbols were falling back to REST.
-    target = Math.min(8, base + 2);
+    // Both REST counters remain below 70%; allow the configured eight-worker
+    // tier to grow to ten instead of capping promotion at the base concurrency.
+    target = Math.min(10, base + 2);
   }
   return Math.max(1, Math.min(candidates, target));
 }
@@ -1745,10 +1744,11 @@ export function adaptiveRadar8DeepConcurrency(configuredConcurrency, cacheHealth
   const readyRatio = Number.isFinite(expected) && expected > 0 && Number.isFinite(ready)
     ? Math.max(0, Math.min(1, ready / expected)) : 0;
   const {weightRatio,requestRatio}=radar8RestPressureRatios(restHealth);
-  // Deep scans promote by one worker only with measured headroom in both shared
-  // budgets; a healthy weight number alone is not enough under count-based limits.
+  // Promote one Deep worker when both measured REST counters remain below 70%.
+  // This captures useful headroom at the observed ~59% request-count / ~29% weight
+  // point, but does not add parallel pressure near the 75% safety guard.
   const target = readyRatio >= 0.70 && weightRatio !== null && requestRatio !== null &&
-      weightRatio < 0.55 && requestRatio < 0.55
+      weightRatio < 0.70 && requestRatio < 0.70
     ? Math.min(6, base + 1) : base;
   return Math.max(1, Math.min(candidates, target));
 }

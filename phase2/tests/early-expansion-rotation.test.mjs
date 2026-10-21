@@ -246,6 +246,10 @@ test('Radar 8 adaptive Micro concurrency respects cache readiness, shared REST r
   const highWeightPressure={shared_requests_last_minute:100,shared_max_requests_per_minute:420,
     shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000};
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},lowPressure,18),10);
+  assert.equal(adaptiveRadar8MicroConcurrency(8,{expected_symbols:228,ready_symbols:228},
+    {shared_requests_last_minute:355,shared_max_requests_per_minute:600,
+      shared_estimated_weight_last_minute:1179,shared_max_weight_per_minute:4000},18),10,
+    'the observed 59% request / 29% weight load should allow ten Micro workers when the cache is fully ready');
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:10},highWeightPressure,18),4);
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},highWeightPressure,18),4,
     'high REST weight pressure caps workers even when the WebSocket cache is warm');
@@ -277,6 +281,10 @@ test('Radar 8 adaptive Deep concurrency adds one worker only with full cache rea
   const headroom={shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000};
   const pressure={shared_requests_last_minute:100,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000};
   assert.equal(adaptiveRadar8DeepConcurrency(4,ready,headroom,5),5);
+  assert.equal(adaptiveRadar8DeepConcurrency(4,ready,
+    {shared_requests_last_minute:355,shared_max_requests_per_minute:600,
+      shared_estimated_weight_last_minute:1179,shared_max_weight_per_minute:4000},5),5,
+    'the observed 59% request / 29% weight load should permit a fifth Deep worker');
   assert.equal(adaptiveRadar8DeepConcurrency(4,ready,pressure,5),4);
   assert.equal(adaptiveRadar8DeepConcurrency(4,{expected_symbols:100,ready_symbols:40},headroom,5),4);
   assert.equal(adaptiveRadar8DeepConcurrency(4,ready,headroom,3),3);
