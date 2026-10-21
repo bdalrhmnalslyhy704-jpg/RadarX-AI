@@ -949,6 +949,21 @@ test('live best-bid/ask changes refresh unified features even while the closed c
 });
 
 
+test('a fresh book-ticker snapshot fetched after the fast scan timestamp is not rejected as future data',()=>{
+  const fastSeenAt=1_900_000_000_000;
+  const scanAt=fastSeenAt+5_000;
+  const symbol='LIGHT-POST-FAST-BOOK-USDT';
+  const eligible=[{symbol,lastPrice:100,priceChange24h:1,quoteVolume24h:5_000_000,tradeCount24h:20_000}];
+  const series=cacheSeries(symbol,scanAt);
+  const fetchedBook={asOf:fastSeenAt+3_500,bidPrice:'99.99',askPrice:'100.01',bidQty:'100',askQty:'90'};
+  const light=new MarketWideLightScan({clock:()=>scanAt});
+  const result=light.scan({eligible,now:scanAt,cycle:1,getSeries:()=>series,getBookTicker:()=>fetchedBook});
+  const row=result.audit.get(symbol);
+  assert.equal(row.feature_engine.features.liquidity.actual_top_of_book_and_depth.book_ticker_fresh,true);
+  assert.equal(row.feature_engine.features.data_quality.spread_available,true);
+  assert.equal(row.feature_engine.features.liquidity.actual_top_of_book_and_depth.spread_bps,2);
+});
+
 test('an unchanged book ticker is re-evaluated when its timestamp becomes stale',()=>{
   const now=1_900_000_000_000;
   const symbol='LIGHT-STALE-BOOK-USDT';
