@@ -71,13 +71,20 @@ jobs:
           let source=fs.readFileSync(file,'utf8');
           const before=source;
           source=source.replace(/export const DEFAULT_BACKEND_BASE_URL = '[^']+';/,`export const DEFAULT_BACKEND_BASE_URL = '${origin}';`);
-          source=source.replace(/export const BACKEND_FALLBACK_URLS = Object\\.freeze\\(\\[\\s*[\\s\\S]*?\\]\\);/,'export const BACKEND_FALLBACK_URLS = Object.freeze([]);');
+          const fallbackStart='export const BACKEND_FALLBACK_URLS = Object.freeze([';
+          const fallbackStartIndex=source.indexOf(fallbackStart);
+          const fallbackEndIndex=source.indexOf(']);',fallbackStartIndex);
+          if(fallbackStartIndex<0||fallbackEndIndex<0){
+            console.error('::error::Could not find the expected backend fallback list.');
+            process.exit(1);
+          }
+          source=source.slice(0,fallbackStartIndex)+'export const BACKEND_FALLBACK_URLS = Object.freeze([]);'+source.slice(fallbackEndIndex+3);
           if(source===before||!source.includes(`DEFAULT_BACKEND_BASE_URL = '${origin}'`)||!source.includes('BACKEND_FALLBACK_URLS = Object.freeze([])')){
             console.error('::error::Could not safely apply DHDTech backend configuration to the Android client asset.');
             process.exit(1);
           }
           fs.writeFileSync(file,source);
-          fs.appendFileSync(process.env.GITHUB_ENV,`RADARX_BACKEND_BASE_URL=${origin}\\n`);
+          fs.appendFileSync(process.env.GITHUB_ENV,'RADARX_BACKEND_BASE_URL='+origin+String.fromCharCode(10));
           console.log(JSON.stringify({backend_origin:origin,railway_fallbacks:0,client_asset_updated:true}));
           NODE
 
@@ -396,7 +403,7 @@ jobs:
           if (status.provider === 'fcm' && status.enabled === true) label = 'ENABLED';
           else if (status.provider && status.enabled === false) label = 'DISABLED';
           console.log(JSON.stringify({provider: status.provider ?? 'unknown', enabled: status.enabled === true, server_fcm_status: label}));
-          fs.appendFileSync(process.env.GITHUB_ENV, 'RADARX_SERVER_FCM_STATUS=' + label + '\n');
+          fs.appendFileSync(process.env.GITHUB_ENV,'RADARX_BACKEND_BASE_URL='+origin+String.fromCharCode(10));
           NODE
 
       - name: Set up Gradle
