@@ -36,8 +36,8 @@ assert.match(background,/CHANNEL_ROTATION_ALERTS/);
 assert.match(background,/KAHIR_RADAR/);
 
 const tradliActivity = await readFile(new URL('./app/src/main/java/com/radarx/app/TradliActivity.java', import.meta.url), 'utf8');
-assert.match(tradliActivity,/PRIMARY_BACKEND_ORIGIN\\s*=\\s*\"https:\\/\\/dhdtech-url-required\\.invalid\"/);
-assert.match(tradliActivity,/FALLBACK_BACKEND_ORIGIN\\s*=\\s*\"\"/);
+assert.match(tradliActivity,new RegExp('PRIMARY_BACKEND_ORIGIN\\\\s*=\\\\s*"'+(process.env.RADARX_BACKEND_BASE_URL||'https://dhdtech-url-required.invalid').replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\assert.match(tradliActivity,/PRIMARY_BACKEND_ORIGIN\\s*=\\s*\"https:\\/\\/dhdtech-url-required\\.invalid\"/);')+'"'));
+assert.match(tradliActivity,/FALLBACK_BACKEND_ORIGIN\\s*=\\s*""/);
 assert.match(tradliActivity,/PRIMARY_BACKEND_ORIGIN\.equalsIgnoreCase\(origin\)/);
 assert.match(tradliActivity,/FALLBACK_BACKEND_ORIGIN\.equalsIgnoreCase\(origin\)/);
 const manifest = await readFile(new URL('./app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
