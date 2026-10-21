@@ -147,7 +147,7 @@ test('TEST_FIXTURE: mini-ticker is normalized without fabricating missing trade 
     c:'2100',o:'2000',h:'2200',l:'1950',v:'1234.5',q:'2600000'
   });
   assert.ok(ticker);
-  assert.equal(ticker.priceChange24h,5);
+  assert.ok(Math.abs(ticker.priceChange24h-5)<1e-9,'derived percentage should be 5% within floating-point precision');
   assert.equal(ticker.highPrice24h,2200);
   assert.equal(ticker.lowPrice24h,1950);
   assert.equal(ticker.quoteVolume24h,2600000);
