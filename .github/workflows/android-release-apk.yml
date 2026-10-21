@@ -269,7 +269,7 @@ jobs:
           NODE
           echo "RADARX_FIREBASE_CLIENT_CONFIGURED=true" >> "$GITHUB_ENV"
 
-      - name: Verify Railway backend and Radar 8 public contract
+      - name: Verify DHDTech backend and Radar 8 public contract
         timeout-minutes: 5
         env:
           RADAR8_JSON: ${{ runner.temp }}/radar8.json
@@ -482,7 +482,6 @@ jobs:
           if (status.provider === 'fcm' && status.enabled === true) label = 'ENABLED';
           else if (status.provider && status.enabled === false) label = 'DISABLED';
           console.log(JSON.stringify({provider: status.provider ?? 'unknown', enabled: status.enabled === true, server_fcm_status: label}));
-          fs.appendFileSync(process.env.GITHUB_ENV,'RADARX_BACKEND_BASE_URL='+origin+String.fromCharCode(10));
           NODE
 
       - name: Set up Gradle
