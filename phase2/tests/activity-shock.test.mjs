@@ -158,3 +158,18 @@ test('fast early-watch observer catches rising relative flow near a flat base wi
   assert.equal(isFastEarlyWatchCandidate(row,{...fast,volume_delta_quote:0}),false,'require actual positive observed quote flow');
   assert.equal(isFastEarlyWatchCandidate(row,{...fast,price_change_pct:-0.8}),false,'a sharp negative move must not be mislabeled as pre-expansion');
 });
+
+
+test('strong quote-volume and trade acceleration reserve a mild-pullback setup for WATCH-only Micro analysis',()=>{
+  const row={symbol:'FLOWREVERSALUSDT',lastPrice:1.002,priceChange24h:0.4,quoteVolume24h:5_500_000};
+  const strongFlow={warmed_up:true,price_change_pct:-0.30,price_acceleration_pct:-0.20,
+    volume_accel_ratio:2.4,trade_accel_ratio:1.8,volume_delta_quote:4500,trade_delta:30};
+  assert.equal(isFastEarlyWatchCandidate(row,strongFlow),true,
+    'strong participation growth should receive a bounded scan despite a modest pullback');
+  assert.equal(isFastEarlyWatchCandidate(row,{...strongFlow,volume_accel_ratio:1.9,trade_accel_ratio:1.5}),false,
+    'the pullback lane requires strong volume AND trade acceleration');
+  assert.equal(isFastEarlyWatchCandidate(row,{...strongFlow,price_change_pct:-0.8}),false,
+    'a sharp decline must not be relabeled as an early expansion');
+  assert.equal(isFastEarlyWatchCandidate(row,{...strongFlow,trade_delta:0}),false,
+    'a scan requires observed positive trade flow');
+});
