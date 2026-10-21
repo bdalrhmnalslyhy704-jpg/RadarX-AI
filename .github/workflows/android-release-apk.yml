@@ -35,6 +35,8 @@ jobs:
   release-apk:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      RADARX_BACKEND_BASE_URL: ${{ vars.RADARX_BACKEND_BASE_URL }}
 
     steps:
       - name: Checkout exact release-signing branch
@@ -43,12 +45,48 @@ jobs:
           fetch-depth: 1
           ref: ${{ github.ref_name }}
 
+      - name: Configure Build 224 APK for DHDTech backend
+        env:
+          RADARX_BACKEND_BASE_URL: ${{ vars.RADARX_BACKEND_BASE_URL }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const raw=String(process.env.RADARX_BACKEND_BASE_URL||'').trim();
+          if(!raw){
+            console.error('::error::Set the GitHub repository variable RADARX_BACKEND_BASE_URL to the deployed DHDTech HTTPS service URL before releasing the APK.');
+            process.exit(1);
+          }
+          let url;
+          try { url=new URL(raw); } catch {
+            console.error('::error::RADARX_BACKEND_BASE_URL is not a valid URL.');
+            process.exit(1);
+          }
+          if(url.protocol!=='https:'||url.pathname!=='/'||url.username||url.password||url.search||url.hash||/\.up\.railway\.app$/i.test(url.hostname)){
+            console.error('::error::RADARX_BACKEND_BASE_URL must be a public DHDTech HTTPS origin with no path, query, credentials, or Railway hostname.');
+            process.exit(1);
+          }
+          const origin=url.origin;
+          const file='android/app/src/main/assets/radarx-backend-client.mjs';
+          let source=fs.readFileSync(file,'utf8');
+          const before=source;
+          source=source.replace(/export const DEFAULT_BACKEND_BASE_URL = '[^']+';/,`export const DEFAULT_BACKEND_BASE_URL = '${origin}';`);
+          source=source.replace(/export const BACKEND_FALLBACK_URLS = Object\\.freeze\\(\\[\\s*[\\s\\S]*?\\]\\);/,'export const BACKEND_FALLBACK_URLS = Object.freeze([]);');
+          if(source===before||!source.includes(`DEFAULT_BACKEND_BASE_URL = '${origin}'`)||!source.includes('BACKEND_FALLBACK_URLS = Object.freeze([])')){
+            console.error('::error::Could not safely apply DHDTech backend configuration to the Android client asset.');
+            process.exit(1);
+          }
+          fs.writeFileSync(file,source);
+          fs.appendFileSync(process.env.GITHUB_ENV,`RADARX_BACKEND_BASE_URL=${origin}\\n`);
+          console.log(JSON.stringify({backend_origin:origin,railway_fallbacks:0,client_asset_updated:true}));
+          NODE
+
       - name: Verify release branch checkout and backend URL
         run: |
           set -euo pipefail
           test "$GITHUB_REF_NAME" = "feature-coin-hunter-20261006-android" || test "$GITHUB_REF_NAME" = "android-build224-radar8-v2-20261006" || test "$GITHUB_REF_NAME" = "android-whale-intelligence-v2-build224-20261007" || test "$GITHUB_REF_NAME" = "android-build224-final-stable-20261007" || test "$GITHUB_REF_NAME" = "build224-multi-analyst-20261007"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          grep -Fq "https://radarx-ai-triple-production.up.railway.app" android/app/src/main/assets/radarx-backend-client.mjs
+          grep -Fq "$RADARX_BACKEND_BASE_URL" android/app/src/main/assets/radarx-backend-client.mjs
           ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
           grep -Fq 'versionCode 15' android/app/build.gradle
           grep -Fq 'versionName "1.4.9"' android/app/build.gradle
@@ -151,7 +189,7 @@ jobs:
           RADAR8_JSON: ${{ runner.temp }}/radar8.json
         run: |
           set -euo pipefail
-          BASE="https://radarx-ai-triple-production.up.railway.app"
+          BASE="$RADARX_BACKEND_BASE_URL"
           HEALTH="$(curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/healthz.json" -w "%{http_code}" "$BASE/healthz")"
           READY="$(curl --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/readyz.json" -w "%{http_code}" "$BASE/readyz")"
           test "$HEALTH" = "200"
@@ -221,7 +259,7 @@ jobs:
         timeout-minutes: 4
         run: |
           set -euo pipefail
-          BASE="https://radarx-ai-triple-production.up.railway.app"
+          BASE="$RADARX_BACKEND_BASE_URL"
           for path in \
             "/api/radar-status" \
             "/api/move-radar?limit=1" \
@@ -244,7 +282,7 @@ jobs:
         timeout-minutes: 3
         run: |
           set -euo pipefail
-          BASE="https://radarx-ai-triple-production.up.railway.app"
+          BASE="$RADARX_BACKEND_BASE_URL"
           CODE="$(curl --location --silent --show-error --max-time 60 -o "$RUNNER_TEMP/coin-hunter.json" -w "%{http_code}" "$BASE/api/coin-hunter-radar?quote=USDT&limit=5&scan=0")"
           case "$CODE" in 200|503) ;; *) echo "::error::Coin Hunter returned HTTP $CODE"; cat "$RUNNER_TEMP/coin-hunter.json"; exit 1 ;; esac
           node --input-type=module <<'NODE'
@@ -265,7 +303,7 @@ jobs:
       - name: Verify Whale Accumulation public contract
         timeout-minutes: 3
         env:
-          BASE: https://radarx-ai-triple-production.up.railway.app
+          BASE: ${{ vars.RADARX_BACKEND_BASE_URL }}
         run: |
           set -euo pipefail
           CODE="$(curl --location --silent --show-error --max-time 60 -o "$RUNNER_TEMP/whale.json" -w "%{http_code}" "$BASE/api/whale-accumulation-radar?limit=5&scan=0")"
@@ -286,7 +324,7 @@ jobs:
       - name: Verify Multi-Analyst public contract
         timeout-minutes: 4
         env:
-          BASE: https://radarx-ai-triple-production.up.railway.app
+          BASE: ${{ vars.RADARX_BACKEND_BASE_URL }}
         run: |
           set -euo pipefail
           CURL_EXIT=0
@@ -342,7 +380,7 @@ jobs:
       - name: Detect live server push configuration
         timeout-minutes: 1
         env:
-          BASE: https://radarx-ai-triple-production.up.railway.app
+          BASE: ${{ vars.RADARX_BACKEND_BASE_URL }}
         run: |
           set -euo pipefail
           HTTP_CODE="$(curl --location --silent --show-error --max-time 20 --output "$RUNNER_TEMP/push-status.json" --write-out "%{http_code}" "$BASE/v1/push/status" || true)"
@@ -406,7 +444,7 @@ jobs:
           node android/backend-client-regression.mjs
           node android/background-monitor-regression.mjs
           node android/app/src/main/assets/tests/market-radar-integration.test.mjs
-          grep -Fq "https://radarx-ai-triple-production.up.railway.app" android/app/src/main/assets/radarx-backend-client.mjs
+          grep -Fq "$RADARX_BACKEND_BASE_URL" android/app/src/main/assets/radarx-backend-client.mjs
           ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
           grep -RInq "Paper Trading" android/app/src/main/assets
           grep -RInq "paper_trading=true" android/app/src/main/assets
@@ -559,7 +597,7 @@ jobs:
           elif [[ "${RADARX_FIREBASE_CLIENT_CONFIGURED:-false}" == "true" ]]; then
             PUSH_MODE="Firebase Android client config embedded; server FCM status unverified because endpoint requires authentication; local polling fallback"
           else
-            PUSH_MODE="Local polling fallback; Firebase Android client config missing; server-side FCM requires separate Railway credentials"
+            PUSH_MODE="Local polling fallback; Firebase Android client config missing; server-side FCM requires separate backend credentials"
           fi
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
