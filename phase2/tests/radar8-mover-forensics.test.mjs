@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildReplayFastSnapshot,
   classifyForRadar8MoverForensics,
+  evaluateProposedExtendedContinuationWatch,
   firstClosedCandleCrossing,
   minutesBeforeClosedCandleCrossing
 } from '../core/radar8-mover-forensics.mjs';
@@ -54,4 +55,33 @@ test('a signal on the target-crossing candle is not counted as an early detectio
   assert.equal(minutesBeforeClosedCandleCrossing(61000,119999),0.98);
   assert.equal(minutesBeforeClosedCandleCrossing(119999,119999),null);
   assert.equal(minutesBeforeClosedCandleCrossing(120000,119999),null);
+});
+
+test('proposed extended continuation watch catches resumed flow but never grants entry',()=>{
+  const result=evaluateProposedExtendedContinuationWatch({
+    ticker:{symbol:'IOSTUSDT',priceChange24h:35.7},
+    fast:{warmed_up:true,price_change_pct:1.30,price_acceleration_pct:0.18,
+      volume_accel_ratio:15.37,trade_accel_ratio:14.51},
+    microFingerprint:{stage:'ANTI_CHASE',score:100,confirmation_count:9,closed_candles_only:true},
+    fastActivityShockCandidate:true
+  });
+  assert.equal(result.eligible,true);
+  assert.equal(result.watch_only,true);
+  assert.equal(result.entry_eligible,false);
+  assert.equal(result.proposed_only,true);
+  assert.equal(result.policy,'DIAGNOSTIC_ONLY_DO_NOT_EMIT_PRODUCTION_PUSH_OR_AUTHORIZE_ENTRY');
+});
+
+test('proposed extended watch rejects stale/unwarmed, non-accelerating, or not-extended coins',()=>{
+  const base={
+    ticker:{priceChange24h:35},
+    fast:{warmed_up:true,price_change_pct:0.8,price_acceleration_pct:0.1},
+    microFingerprint:{stage:'ANTI_CHASE',score:90,confirmation_count:6,closed_candles_only:true},
+    fastActivityShockCandidate:true
+  };
+  assert.equal(evaluateProposedExtendedContinuationWatch({...base,fast:{...base.fast,warmed_up:false}}).eligible,false);
+  assert.equal(evaluateProposedExtendedContinuationWatch({...base,fast:{...base.fast,price_change_pct:0.1}}).eligible,false);
+  assert.equal(evaluateProposedExtendedContinuationWatch({...base,ticker:{priceChange24h:7}}).eligible,false);
+  assert.equal(evaluateProposedExtendedContinuationWatch({...base,fastActivityShockCandidate:false}).eligible,false);
+  assert.equal(evaluateProposedExtendedContinuationWatch({...base,microFingerprint:{...base.microFingerprint,stage:'PRE_BREAK'}}).eligible,false);
 });
