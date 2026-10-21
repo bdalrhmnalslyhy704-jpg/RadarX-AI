@@ -45,6 +45,12 @@ assert.match(tradliActivity,/PRIMARY_BACKEND_ORIGIN\.equalsIgnoreCase\(origin\)/
 assert.ok(tradliActivity.includes('FALLBACK_BACKEND_ORIGIN = "";'));
 const manifest = await readFile(new URL('./app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
 const mainActivity = await readFile(new URL('./app/src/main/java/com/radarx/app/MainActivity.java', import.meta.url), 'utf8');
+const expectedBackendOrigin=process.env.RADARX_BACKEND_BASE_URL||'https://dhdtech-url-required.invalid';
+assert.ok(mainActivity.includes('BACKEND_ORIGIN = "'+expectedBackendOrigin+'";'));
+assert.ok(background.includes('BACKEND_ORIGIN = "'+expectedBackendOrigin+'";'));
+assert.ok(background.includes('unifiedBases = new String[] { BACKEND_RADAR_ALERTS };'));
+assert.doesNotMatch(mainActivity,/railway\\.app/i);
+assert.doesNotMatch(background,/railway\\.app/i);
 assert.match(manifest,/android:foregroundServiceType="dataSync\\|specialUse"/);
 assert.match(manifest,/android:process=":radar_background"/);
 // UI_READY is emitted from the WebView bridge and is verified by the native emulator smoke test, not by this source-level regression suite.
