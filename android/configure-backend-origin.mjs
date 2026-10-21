@@ -53,6 +53,8 @@ await update('android/app/src/main/java/com/radarx/app/TradliActivity.java', sou
   return source.replace(fallbackPattern, 'private static final String FALLBACK_BACKEND_ORIGIN = PRIMARY_BACKEND_ORIGIN;');
 });
 
+await update('android/app/src/main/java/com/radarx/app/RadarXPushRegistration.java');
+
 await update('android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java', source => {
   const alertFallback = /private static final String BACKEND_RADAR_ALERTS_FALLBACK\s*=\s*"[^"]+";/;
   if (!alertFallback.test(source)) throw new Error('BACKEND_RADAR_ALERTS_FALLBACK declaration not found');
