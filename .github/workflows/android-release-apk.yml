@@ -144,7 +144,10 @@ jobs:
               console.error('::error::Background service contains a retired backend fallback.');
               process.exit(1);
             }
-            if(!source.includes(`BACKEND_ORIGIN = "${origin}";`)||source.includes('railway.app')){
+            const expectedBackendDeclaration=path.endsWith('RadarXPushRegistration.java')
+              ? `BACKEND = "${origin}";`
+              : `BACKEND_ORIGIN = "${origin}";`;
+            if(!source.includes(expectedBackendDeclaration)||source.includes('railway.app')){
               console.error('::error::Could not safely apply DHDTech backend configuration to '+path);
               process.exit(1);
             }
