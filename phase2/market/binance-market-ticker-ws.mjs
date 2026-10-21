@@ -106,7 +106,8 @@ export class BinanceAllMarketTickerClient {
     // Runtime logs showed the raw /ws/!ticker@arr socket could open but receive
     // zero messages/tickers until heartbeat timeout. Combined streams wrap the
     // ticker array under {stream, data}, which the message handler already unwraps.
-    const path = url.pathname.replace(/\\/+$/, '');
+    let path = url.pathname;
+    while (path.endsWith('/')) path = path.slice(0, -1);
     if (path.endsWith('/ws/!ticker@arr')) {
       url.pathname = path.slice(0, -'/ws/!ticker@arr'.length) + '/stream';
     } else if (path.endsWith('/ws')) {
