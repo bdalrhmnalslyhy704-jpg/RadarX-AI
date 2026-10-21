@@ -1,3 +1,6 @@
+import {evaluateProposedExtendedContinuationWatch} from './activity-shock.mjs';
+export {evaluateProposedExtendedContinuationWatch};
+
 const MINUTE_MS = 60_000;
 const finite = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
 const median = values => {
@@ -18,56 +21,6 @@ export const RADAR8_MOVER_FORENSICS_ASSET_CLASSES = Object.freeze({
   VSTBUSDT: 'BINANCE_BSTOCK_TOKENIZED_SECURITY'
 });
 
-
-/**
- * Experimental monitor-only lane for resumed acceleration after a move is already
- * extended. It must never override Radar 8's anti-chase entry veto. This is a
- * forensic hypothesis, not production behavior, until positive and control windows
- * establish its false-positive rate.
- */
-export function evaluateProposedExtendedContinuationWatch({
-  ticker = {}, fast = {}, microFingerprint = {}, fastActivityShockCandidate = false, config = {}
-} = {}) {
-  const minimumDailyMove = Number(config.hardExtended24hMovePct ?? 18);
-  const minimumScore = Number(config.extendedContinuationWatchMinScore ?? 58);
-  const minimumConfirmations = Number(config.extendedContinuationWatchMinConfirmations ?? 4);
-  const minimumOneMinuteMove = Number(config.extendedContinuationWatchMinPriceChangePct ?? 0.5);
-  const dailyMove = finite(ticker.priceChange24h) ? Number(ticker.priceChange24h) : null;
-  const score = finite(microFingerprint.score) ? Number(microFingerprint.score) : null;
-  const confirmations = finite(microFingerprint.confirmation_count) ? Number(microFingerprint.confirmation_count) : null;
-  const oneMinuteMove = finite(fast.price_change_pct) ? Number(fast.price_change_pct) : null;
-  const oneMinuteAcceleration = finite(fast.price_acceleration_pct) ? Number(fast.price_acceleration_pct) : null;
-  const checks = {
-    positive_extended_24h_move: dailyMove !== null && dailyMove >= minimumDailyMove,
-    anti_chase_entry_veto_retained: String(microFingerprint.stage || '').toUpperCase() === 'ANTI_CHASE',
-    micro_score_available: score !== null && score >= minimumScore,
-    micro_confirmations_available: confirmations !== null && confirmations >= minimumConfirmations,
-    warmed_fast_baseline: fast.warmed_up === true,
-    positive_short_term_price_step: oneMinuteMove !== null && oneMinuteMove >= minimumOneMinuteMove,
-    nonnegative_price_acceleration: oneMinuteAcceleration !== null && oneMinuteAcceleration >= 0,
-    exceptional_volume_and_trade_flow: fastActivityShockCandidate === true,
-    closed_candles_only: microFingerprint.closed_candles_only === true
-  };
-  const eligible = Object.values(checks).every(Boolean);
-  return {
-    eligible,
-    watch_only: true,
-    entry_eligible: false,
-    proposed_only: true,
-    stage: eligible ? 'PROPOSED_EXTENDED_CONTINUATION_WATCH' : 'NOT_QUALIFIED',
-    reason_codes: Object.entries(checks).filter(([,passed])=>passed).map(([key])=>'PASS_'+key.toUpperCase()),
-    failed_checks: Object.entries(checks).filter(([,passed])=>!passed).map(([key])=>key.toUpperCase()),
-    thresholds: {
-      minimum_daily_move_pct: minimumDailyMove,
-      minimum_micro_score: minimumScore,
-      minimum_confirmations: minimumConfirmations,
-      minimum_one_minute_price_change_pct: minimumOneMinuteMove
-    },
-    observed: {daily_move_pct:dailyMove,micro_score:score,confirmations,one_minute_price_change_pct:oneMinuteMove,
-      one_minute_acceleration_pct:oneMinuteAcceleration,fast_warmed_up:fast.warmed_up===true},
-    policy: 'DIAGNOSTIC_ONLY_DO_NOT_EMIT_PRODUCTION_PUSH_OR_AUTHORIZE_ENTRY'
-  };
-}
 
 export function classifyForRadar8MoverForensics(symbol) {
   const key = String(symbol || '').trim().toUpperCase();
