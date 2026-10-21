@@ -51,7 +51,8 @@ export const CONFIG = Object.freeze({
     // RadarX uses public Spot market-data REST paths only (/api/v3/*).
     // Prefer Binance's documented market-data-only REST endpoint.
     urls: list(process.env.BINANCE_REST_URLS, [
-      'https://data-api.binance.vision'
+      'https://data-api.binance.vision',
+      'https://api.binance.com'
     ]),
     timeoutMs: int(process.env.RADARX_REST_TIMEOUT_MS, 9000),
     minIntervalMs: int(process.env.RADARX_REST_MIN_INTERVAL_MS, 100),
