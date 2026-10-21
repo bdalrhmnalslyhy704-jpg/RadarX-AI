@@ -71,10 +71,14 @@ export class BinanceAllMarketTickerClient {
     return {
       state: this.state,
       last_message_at: this.lastMessageAt,
+      last_message_age_ms: this.lastMessageAt === null ? null : Math.max(0, Date.now() - this.lastMessageAt),
       last_connected_at: this.lastConnectedAt,
+      heartbeat_timeout_ms: this.heartbeatTimeoutMs,
       reconnect_attempts: this.reconnectCount,
       messages_received: this.messageCount,
       tickers_received: this.tickerCount,
+      messages_since_connect: this.messageCount - this.messagesAtConnect,
+      tickers_since_connect: this.tickerCount - this.tickersAtConnect,
       last_disconnect_reason: this.lastDisconnectReason,
       last_close_code: this.lastCloseCode,
       last_close_reason: this.lastCloseReason,
@@ -158,19 +162,22 @@ export class BinanceAllMarketTickerClient {
       this.lastConnectedAt = Date.now();
       this.connectionOpenedAt = this.lastConnectedAt;
       this.lastMessageAt = this.lastConnectedAt;
-      this.state = 'LIVE';
-      this.onState(this.state);
+      // An upgraded socket is not a live market feed until a valid ticker arrives.
+      this.state = 'WAITING_FOR_DATA';
+      this.onState(this.state, 'WS_CONNECTED_WAITING_FOR_FIRST_TICKER');
       this.connectionTimer = setTimeout(() => {
         this.lastConnectionFailure = 'WS_MAX_CONNECTION_AGE_REACHED';
         try { socket.close(); } catch {}
       }, this.maxConnectionMs);
-      this.heartbeatTimer = setTimeout(() => this.checkHeartbeat(socket), this.heartbeatTimeoutMs);
+      this.armHeartbeat(socket);
     }));
 
     socket.on('message', guard(raw => {
       this.messageCount++;
       this.lastMessageAt = Date.now();
-      this.state = 'LIVE';
+      // Reset the watchdog on inbound application data, so the silence threshold
+      // is measured from the last frame instead of a periodic timer's old deadline.
+      this.armHeartbeat(socket);
       try {
         const parsed = JSON.parse(raw.toString());
         const payload = parsed?.data ?? parsed;
@@ -178,16 +185,25 @@ export class BinanceAllMarketTickerClient {
           this.onState(this.state, 'INVALID_TICKER_WS_SHAPE');
           return;
         }
-        // A WebSocket upgrade alone is not proof of a healthy market feed.
-        // Reset exponential backoff only after an actual combined-ticker payload arrives.
-        this.attempt = 0;
-        this.lastConnectionFailure = null;
+        const tickersBefore = this.tickerCount;
         for (const row of payload) {
           const ticker = normalizeTicker(row);
           if (ticker) {
             this.tickerCount++;
             this.onTicker(ticker);
           }
+        }
+        // Socket open / JSON activity alone must not imply the feed is LIVE.
+        if (this.tickerCount > this.tickersAtConnect) {
+          const becameLive = this.state !== 'LIVE';
+          this.state = 'LIVE';
+          // Reset exponential backoff only after actual usable ticker data arrives.
+          this.attempt = 0;
+          this.lastConnectionFailure = null;
+          if (becameLive) this.onState(this.state, 'WS_FIRST_VALID_TICKER_RECEIVED');
+        } else if (this.state !== 'LIVE' && this.tickerCount === tickersBefore) {
+          this.state = 'WAITING_FOR_DATA';
+          this.onState(this.state, 'WS_MESSAGE_WITHOUT_VALID_TICKERS');
         }
       } catch (error) {
         this.onState(this.state, 'INVALID_TICKER_WS_JSON:' + String(error?.message ?? error));
@@ -231,11 +247,18 @@ export class BinanceAllMarketTickerClient {
     }));
   }
 
+  armHeartbeat(socket) {
+    if (!this.running || this.socket !== socket) return;
+    if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
+    this.heartbeatTimer = setTimeout(() => this.checkHeartbeat(socket), this.heartbeatTimeoutMs);
+  }
+
   checkHeartbeat(socket) {
     if (!this.running || this.socket !== socket) return;
-    if (this.lastMessageAt && Date.now() - this.lastMessageAt > this.heartbeatTimeoutMs) {
+    if (this.lastMessageAt !== null && Date.now() - this.lastMessageAt >= this.heartbeatTimeoutMs) {
       const ageMs = Date.now() - this.lastMessageAt;
       const reason = 'WS_HEARTBEAT_TIMEOUT:message_age_ms=' + ageMs +
+        ':heartbeat_timeout_ms=' + this.heartbeatTimeoutMs +
         ':messages_since_connect=' + (this.messageCount - this.messagesAtConnect) +
         ':tickers_since_connect=' + (this.tickerCount - this.tickersAtConnect);
       this.lastConnectionFailure = reason;
@@ -244,7 +267,7 @@ export class BinanceAllMarketTickerClient {
       try { socket.terminate?.(); } catch { try { socket.close(); } catch {} }
       return;
     }
-    this.heartbeatTimer = setTimeout(() => this.checkHeartbeat(socket), this.heartbeatTimeoutMs);
+    this.armHeartbeat(socket);
   }
 }
 
