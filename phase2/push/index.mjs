@@ -113,6 +113,8 @@ const radarTitle=s=>s?.radar_name||({
 const radarPayload=(alert,processedAt=Date.now())=>{
   const watchOnly=alert?.notification_gate?.watch_only===true||alert?.watch_only===true;
   const needsFollowUp=watchOnly||alert?.notification_gate?.requires_follow_up_confirmation===true;
+  const lowLiquidityWatch=alert?.low_liquidity_burst_bypass===true||
+    (Array.isArray(alert?.risk_flags)&&alert.risk_flags.includes('LOW_LIQUIDITY_WATCH_ONLY'));
   return {
   type:'RADARX_RADAR_ALERT',
   event_class:EVENT_CLASS.RADAR_ALERT??'RADAR_ALERT',
@@ -126,7 +128,7 @@ const radarPayload=(alert,processedAt=Date.now())=>{
   signal_lifecycle_transition:alert?.signal_lifecycle?.transition??null,
   signal_lifecycle_reason_codes:Array.isArray(alert?.signal_lifecycle?.reason_codes)?alert.signal_lifecycle.reason_codes.slice(0,8):[],
   message:watchOnly
-    ?[alert.symbol,'مراقبة مبكرة فقط — تحتاج تأكيدًا'].filter(Boolean).join(' • ')
+    ?[alert.symbol,lowLiquidityWatch?'مراقبة مبكرة فقط — سيولة ضعيفة — تحتاج تأكيدًا':'مراقبة مبكرة فقط — تحتاج تأكيدًا'].filter(Boolean).join(' • ')
     :alert?.signal_lifecycle?.state&&alert.signal_lifecycle.state!=='MONITOR'&&alert?.signal_lifecycle?.label
       ?[alert.symbol,alert.signal_lifecycle.label].filter(Boolean).join(' • ')
       :undefined,
