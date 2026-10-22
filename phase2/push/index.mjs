@@ -139,6 +139,11 @@ const radarPayload=(alert,processedAt=Date.now())=>{
   potential_label:alert.potential_label||null,
   price_change_24h:alert.price_change_24h??null,
   reasons:Array.isArray(alert.reasons)?alert.reasons.slice(0,8):[],
+  reason_codes:Array.isArray(alert.reason_codes)?alert.reason_codes.slice(0,10):[],
+  risk_flags:Array.isArray(alert.risk_flags)?alert.risk_flags.slice(0,10):[],
+  micro_fingerprint_score:alert.micro_fingerprint_score??null,
+  early_flow_watch_evidence:watchOnly&&alert?.early_flow_watch_evidence
+    ?alert.early_flow_watch_evidence:null,
   detected_at:Number(alert.detected_at)||processedAt,
   detected_at_iso:alert.detected_at_iso||new Date(Number(alert.detected_at)||processedAt).toISOString(),
   detected_time_12h:alert.detected_time_12h||formatRadarTime12h(alert.detected_at||processedAt),
@@ -191,6 +196,69 @@ export class PushManager{
       if(!r.ok&&r.status==='FAILED')this.retryQueue.set(sub.id+'|'+signal.signal_id,{subscription:sub,signal,nextAt:Date.now()+this.retryBaseMs,attempt:1});
     }
     return out;
+  }
+
+  async notifyRadarWatchOnlyAlert(alert){
+    const now=Date.now();
+    const evidence=alert?.early_flow_watch_evidence||{};
+    const source=String(alert?.source||'').toUpperCase();
+    const closeTime=Number(evidence.closed_candle_close_time);
+    const score=Number(evidence.micro_score??alert?.micro_fingerprint_score);
+    const confirmations=Number(evidence.confirmation_count);
+    const volume=Math.max(Number(evidence.rvol_1m)||0,Number(evidence.rvol_5m)||0);
+    const trades=Math.max(Number(evidence.trade_rvol_1m)||0,Number(evidence.trade_rvol_5m)||0);
+    const taker=Number(evidence.taker_buy_ratio)||0;
+    const acceleration=Math.max(Number(evidence.acceleration_1m_pct)||-Infinity,Number(evidence.acceleration_5m_pct)||-Infinity);
+    const recentReturn=Math.max(Number(evidence.return_1m)||-Infinity,Number(evidence.return_5m)||-Infinity);
+    const move=Number(alert?.price_change_24h);
+    const age=now-closeTime;
+    const participation=volume>=1.20||trades>=1.15||(taker>=0.54&&(volume>=1||trades>=1));
+    const sourceVerified=source.includes('BINANCE_PUBLIC')||source.includes('BINANCE PUBLIC');
+    const invalid=
+      alert?.event!=='EARLY_FLOW_WATCH_ONLY'||
+      alert?.radar!=='EARLY_EXPANSION_RADAR'||
+      alert?.watch_only!==true||alert?.entry_eligible!==false||
+      evidence.closed_candles_only!==true||
+      alert?.data_stale===true||
+      !sourceVerified||
+      !Number.isFinite(closeTime)||age<0||age>120_000||
+      !Number.isFinite(Number(alert?.price))||Number(alert.price)<=0||
+      !Number.isFinite(move)||Math.abs(move)>=18||
+      !Number.isFinite(score)||score<58||
+      !Number.isFinite(confirmations)||confirmations<3||
+      !participation||!(acceleration>0||recentReturn>0)||
+      (Array.isArray(alert?.risk_flags)&&alert.risk_flags.some(flag=>
+        ['MICRO_ANTI_CHASE','MICRO_FAST_EXTENSION_WARNING','MICRO_DAILY_EXTENSION_WARNING','DATA_STALE','DATA_GAP','FUTURE_DATA'].includes(String(flag))));
+    if(invalid)return{status:'BLOCKED_INVALID_WATCH_EVIDENCE',attempted:false,notifications:[]};
+    const providerStatus=this.provider.status?.()||{};
+    if(providerStatus.enabled!==true)return{status:'PROVIDER_DISABLED',attempted:false,notifications:[]};
+    const subscriptions=this.providerSubscriptions(await this.store.getSubscriptions());
+    if(!subscriptions.length)return{status:'NO_SUBSCRIPTIONS',attempted:false,notifications:[]};
+    const out=[];
+    for(const sub of subscriptions){
+      const settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();
+      if(!settings.enabled)continue;
+      const attemptAt=Date.now();
+      let result;
+      try{result=await this.provider.send(sub,radarPayload({...alert,watch_only:true,entry_eligible:false},attemptAt));}
+      catch(error){result={ok:false,status:'FAILED',reason:String(error?.message??error).slice(0,180)};}
+      const audit={
+        event:'RADAR_WATCH_ONLY_NOTIFICATION',event_class:EVENT_CLASS.RADAR_ALERT??'RADAR_ALERT',
+        radar:alert.radar,symbol:alert.symbol,alert_id:alert.id||null,
+        subscription_id:sub.id,user_id:sub.user_id,status:result.status||'FAILED',
+        attempted_at:attemptAt,watch_only:true,entry_eligible:false,
+        evidence_close_time:closeTime,micro_score:score,confirmation_count:confirmations,
+        reason:result.reason??null,http_status:result.httpStatus??null
+      };
+      await this.store.appendNotificationAudit(audit);
+      out.push(audit);
+      if(result.status==='GONE')await this.store.disableSubscription(sub.id);
+    }
+    const enabledCount=out.length;
+    const sent=out.filter(item=>item.status==='SENT').length;
+    const status=sent===enabledCount&&enabledCount>0?'SENT':
+      sent>0?'PARTIAL':enabledCount>0?'FAILED':'NO_ENABLED_SUBSCRIPTIONS';
+    return{status,attempted:enabledCount>0,notifications:out,sent_count:sent,attempted_count:enabledCount};
   }
 
   async notifyRadarAlert(alert){
