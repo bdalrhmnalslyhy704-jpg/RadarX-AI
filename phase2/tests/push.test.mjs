@@ -59,6 +59,31 @@ test('TEST_FIXTURE: early radar watch pushes explicitly say monitoring only, not
   assert.match(sent[0].title,/مراقبة مبكرة/);
 });
 
+
+test('TEST_FIXTURE: missing radar data quality fails closed instead of inheriting 100',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-radar-missing-dq-')),store=await new DurableStore({dir}).init();
+  await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70});
+  await store.upsertSubscription('u1',pushSubscription());
+  let calls=0;
+  const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(){calls++;return{ok:true,status:'SENT'};}};
+  const m=new PushManager({provider,store});
+  const out=await m.notifyRadarAlert({radar:'ROTATION_LAG_RADAR',symbol:'MISSINGDQUSDT',direction:'UP_ROTATION',eligible:true});
+  assert.equal(out.length,0);
+  assert.equal(calls,0);
+});
+
+test('TEST_FIXTURE: nested Al-Muqawim quality is honored by the shared push filter',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-radar-nested-dq-')),store=await new DurableStore({dir}).init();
+  await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70});
+  await store.upsertSubscription('u1',pushSubscription());
+  const sent=[];
+  const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){sent.push(payload);return{ok:true,status:'SENT'};}};
+  const m=new PushManager({provider,store});
+  const out=await m.notifyRadarAlert({radar:'ALMUQAWIM_RADAR',symbol:'RESILIENTUSDT',direction:'UP',almuqawim:{data_quality:88}});
+  assert.equal(out.length,1);
+  assert.equal(sent.length,1);
+});
+
 test('TEST_FIXTURE: radar notifications forward lifecycle labels and reasons to the push provider',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-lifecycle-push-')),store=await new DurableStore({dir}).init();
   await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70});
