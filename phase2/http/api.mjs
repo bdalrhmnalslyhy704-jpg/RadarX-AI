@@ -792,11 +792,80 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             snapshot=await multiAnalystRadar.scan({quote,limit,forceRefresh:true,requestId});
             return send(res,200,{...snapshot,radar:'MULTI_ANALYST',meta:{...(snapshot.meta||{}),analysis_mode:'FORCED_SCAN',force_refresh_requested:true,request_id:requestId,served_from_cache_while_scan:false}});
           }
-          if(!snapshot){
-            snapshot=await multiAnalystRadar.scan({quote,limit,forceRefresh:false,requestId});
-            return send(res,200,{...snapshot,radar:'MULTI_ANALYST',meta:{...(snapshot.meta||{}),analysis_mode:'LIVE_REFRESH',request_id:requestId,force_refresh_requested:false,served_from_cache_while_scan:false}});
+          if(snapshot){
+            return send(res,200,{...snapshot,radar:'MULTI_ANALYST',meta:{...(snapshot.meta||{}),analysis_mode:'CACHE',request_id:requestId,force_refresh_requested:false,served_from_cache_while_scan:false}});
           }
-          return send(res,200,{...snapshot,radar:'MULTI_ANALYST',meta:{...(snapshot.meta||{}),analysis_mode:'CACHE',request_id:requestId,force_refresh_requested:false,served_from_cache_while_scan:false}});
+
+          // A cold-cache request must not hold the Android app's HTTP call open for
+          // a complete 19-specialist scan. Start at most one background scan, return
+          // an explicit empty WARMING response, and let normal polling retrieve the
+          // completed snapshot. No stale candidate is represented as live data.
+          let warmingReason='SCAN_IN_PROGRESS';
+          if(!multiAnalystRadar.busy){
+            try{
+              const scanFlight=multiAnalystRadar.scan({quote,limit,forceRefresh:false,requestId});
+              if(scanFlight&&typeof scanFlight.catch==='function'){
+                scanFlight.catch(error=>{
+                  console.error('[MULTI_ANALYST_API] background scan failed:',String(error?.message??error));
+                });
+              }
+              warmingReason='SCAN_STARTED';
+            }catch(error){
+              warmingReason='SCAN_START_FAILED';
+              console.error('[MULTI_ANALYST_API] unable to start background scan:',String(error?.message??error));
+            }
+          }
+
+          const monitorStats=multiAnalystRadar.monitorStats&&typeof multiAnalystRadar.monitorStats==='object'
+            ?multiAnalystRadar.monitorStats:{};
+          let reviewQueue={pending_count:0};
+          try{
+            if(typeof multiAnalystRadar.radarReviewQueueSnapshot==='function'){
+              reviewQueue=multiAnalystRadar.radarReviewQueueSnapshot();
+            }
+          }catch{}
+          const monitoring={
+            continuous:true,
+            running:multiAnalystRadar.running===true,
+            interval_ms:Math.max(15000,Number(multiAnalystRadar.config?.continuousIntervalMs)||60000),
+            scan_count:Number(monitorStats.scan_count)||0,
+            last_scan_at:monitorStats.last_scan_at||null,
+            last_error:monitorStats.last_error||null,
+            next_scan_at:monitorStats.next_scan_at||null
+          };
+          return send(res,200,{
+            status:'warming',
+            radar:'MULTI_ANALYST',
+            as_of:new Date().toISOString(),
+            source:'Binance Public REST',
+            universe:{
+              quote,eligible_spot_symbols:0,discovery_pool:0,deep_scan_pool:0,scanned:0,returned:0,
+              min_quote_volume_24h:Number(multiAnalystRadar.config?.minQuoteVolume24h)||300000,
+              universe_refreshed_at:null,
+              universe_refresh_interval_ms:Math.max(60000,Number(multiAnalystRadar.config?.universeRefreshMs)||1800000),
+              surge_lane_candidates:0
+            },
+            market_context:{regime:'UNKNOWN',median_24h_change_pct:null,positive_breadth_pct:null},
+            summary:{strong_candidates:0,candidates:0,qualified:0,watch:0,rejected:0},
+            candidates:[],
+            watchlist:[],
+            pipeline:['Broad Discovery','Early-Opportunity Gate','Data Gate','19 Specialist Analysts','Chief Analyst','Sniper Freshness Gate'],
+            diagnostics:{
+              duration_ms:0,
+              deep_concurrency:Math.max(1,Number(multiAnalystRadar.config?.deepConcurrency)||3),
+              deep_klines:Math.max(1,Number(multiAnalystRadar.config?.deepKlines)||220),
+              attempted_analyses:0,successful_analyses:0,gate_rejected:0,failed_analyses:0,scan_errors:[],
+              radar_review_queue:reviewQueue
+            },
+            monitoring,
+            scan:{requested:false,completed:false,error:warmingReason,request_id:requestId},
+            meta:{
+              live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+              radar:'MULTI_ANALYST',analyst_count:20,specialist_count:19,engine_revision:'ELITE_SNIPER_V1',
+              analysis_mode:'WARMING',force_refresh_requested:false,request_id:requestId,
+              served_from_cache_while_scan:false,analyst_readiness:'WARMING'
+            }
+          });
         }catch(e){
           const cached=multiAnalystRadar.getCached({quote})||null;
           const errorMessage=String(e?.message??e);
