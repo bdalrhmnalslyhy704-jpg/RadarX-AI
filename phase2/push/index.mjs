@@ -198,8 +198,33 @@ export class PushManager{
     for(const sub of rows){
       const settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();
       if(!settings.enabled)continue;
-      const dq=Number(alert?.data_quality??alert?.strong_move?.data_quality??alert?.liquidity_absorption?.data_quality??100);
-      if(Number.isFinite(dq)&&dq<Number(settings.minDataQuality))continue;
+      // Missing quality is not perfect quality. Resolve the native payload field
+      // for each radar and fail closed when no measured value is present.
+      const dq=Number(
+        alert?.data_quality ??
+        alert?.data_status?.data_quality ??
+        alert?.components?.data_quality ??
+        alert?.components?.dataQuality ??
+        alert?.early_move?.data_quality ??
+        alert?.early_wake?.data_quality ??
+        alert?.pre_explosion?.data_quality ??
+        alert?.strong_move?.data_quality ??
+        alert?.rotation?.data_quality ??
+        alert?.liquidity_absorption?.data_quality ??
+        alert?.kahir_analysis?.data_quality ??
+        alert?.analysis?.data_quality ??
+        alert?.doomsday?.data_quality ??
+        alert?.professor_opinion?.data_quality ??
+        alert?.deep_scan?.assessment?.data_quality ??
+        alert?.almuqawim?.data_quality ??
+        alert?.early_expansion?.data_quality ??
+        alert?.coin_hunter?.data_quality ??
+        alert?.factors?.data_quality ??
+        alert?.whale_accumulation?.data_quality ??
+        alert?.falcon_eye?.data_quality ??
+        0
+      );
+      if(!Number.isFinite(dq)||dq<Number(settings.minDataQuality))continue;
       const r=await this.provider.send(sub,radarPayload(alert,Date.now()));
       const audit={event:'RADAR_ALERT_NOTIFICATION',event_class:'RADAR_ALERT',radar:alert.radar||'UNKNOWN_RADAR',radar_name:radarTitle(alert),
         symbol:alert.symbol,alert_id:alert.id||null,subscription_id:sub.id,user_id:sub.user_id,status:r.status,
