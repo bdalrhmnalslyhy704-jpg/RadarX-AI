@@ -800,6 +800,39 @@ test('extreme closed-candle breakouts get bounded Micro priority from cache with
   assert.equal(result.summary.binance_rest_calls_added_by_light_scan,0);
 });
 
+test('urgent event-driven breakouts outrank generic exceptional candidates when the bounded pool is crowded',()=>{
+  const now=1_900_000_000_000;
+  const rows=[
+    {symbol:'AAAUSDT',lastPrice:1,priceChange24h:0.2,quoteVolume24h:2_000_000,tradeCount24h:10000},
+    {symbol:'BBBUSDT',lastPrice:2,priceChange24h:0.2,quoteVolume24h:2_000_000,tradeCount24h:10000},
+    {symbol:'CCCUSDT',lastPrice:3,priceChange24h:0.2,quoteVolume24h:2_000_000,tradeCount24h:10000},
+    {symbol:'ZZZEVENTUSDT',lastPrice:101.2,priceChange24h:5,quoteVolume24h:5_000_000,tradeCount24h:50000}
+  ];
+  const cache=new Map(rows.map(row=>[row.symbol,{
+    symbol:row.symbol,source:SOURCE,candles:row.symbol==='ZZZEVENTUSDT'
+      ?eventDrivenCandles(row.symbol,now)
+      :candles({now,count:72}).map(candle=>({...candle,symbol:row.symbol}))
+  }]));
+  const light=new MarketWideLightScan({
+    config:{candidateLimit:3,rotationReserve:2,minimumReadyCandidates:2},
+    clock:()=>now
+  });
+  const result=light.scan({
+    eligible:rows,getSeries:symbol=>cache.get(symbol)||null,now,cycle:1,
+    isExceptional:row=>row.symbol!=='ZZZEVENTUSDT',
+    lastMicroScannedAt:()=>null
+  });
+  const event=result.audit.get('ZZZEVENTUSDT');
+  assert.equal(event.event_driven_breakout.needs_micro_confirmation,true);
+  assert.equal(event.event_driven_breakout.entry_eligible,false);
+  assert.equal(event.candidate_selected,true,
+    'an urgent closed-candle breakout must not be pushed out by generic exceptional candidates');
+  assert.equal(event.candidate_selection_reason,'EXCEPTIONAL_PRESERVED');
+  assert.equal(result.summary.event_driven_breakout_selected_total,1);
+  assert.deepEqual(result.summary.event_driven_breakout_selected_symbols,['ZZZEVENTUSDT']);
+  assert.equal(result.summary.event_driven_breakout_deferred_total,0);
+});
+
 test('event-driven breakout does not create repeated Micro priority after the event candle was scanned',()=>{
   const now=1_900_000_000_000;
   const row={symbol:'EVENTUSDT',lastPrice:101.2,priceChange24h:5,quoteVolume24h:5_000_000,tradeCount24h:50000};

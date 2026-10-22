@@ -672,7 +672,14 @@ export class MarketWideLightScan {
       Math.max(0, limit - rotationReserve),
       Math.max(1, Math.min(12, Math.floor(limit * 0.35)))
     );
-    for (const item of [...exceptional].sort(fairOrder)) {
+    // A newly detected closed-candle breakout that still needs Micro confirmation
+    // must rank ahead of generic exceptional flow. Without this tie-break, ordinary
+    // fast-shock candidates can consume the bounded exceptional slots first.
+    const exceptionalPriorityOrder = (a, b) =>
+      Number(b.result?.event_driven_breakout?.needs_micro_confirmation === true) -
+        Number(a.result?.event_driven_breakout?.needs_micro_confirmation === true) ||
+      fairOrder(a, b);
+    for (const item of [...exceptional].sort(exceptionalPriorityOrder)) {
       if (selected.filter(row => row.selectionReason === 'EXCEPTIONAL_PRESERVED').length >= exceptionLimit) break;
       add(item, 'EXCEPTIONAL_PRESERVED');
     }
@@ -762,6 +769,16 @@ export class MarketWideLightScan {
       event_driven_breakout_needs_micro_total: scanRows.filter(item => item.event_driven_breakout?.needs_micro_confirmation === true).length,
       event_driven_breakout_selected_total: selected.filter(item =>
         audit.get(item.symbol)?.event_driven_breakout?.needs_micro_confirmation === true).length,
+      event_driven_breakout_needs_micro_symbols: scanRows.filter(item =>
+        item.event_driven_breakout?.needs_micro_confirmation === true).map(item => item.symbol).slice(0, 12),
+      event_driven_breakout_selected_symbols: selected.filter(item =>
+        audit.get(item.symbol)?.event_driven_breakout?.needs_micro_confirmation === true).map(item => item.symbol).slice(0, 12),
+      event_driven_breakout_deferred_total: scanRows.filter(item =>
+        item.event_driven_breakout?.needs_micro_confirmation === true &&
+        audit.get(item.symbol)?.candidate_selected !== true).length,
+      event_driven_breakout_deferred_symbols: scanRows.filter(item =>
+        item.event_driven_breakout?.needs_micro_confirmation === true &&
+        audit.get(item.symbol)?.candidate_selected !== true).map(item => item.symbol).slice(0, 12),
       event_driven_breakout_extended_total: scanRows.filter(item =>
         item.event_driven_breakout?.detected === true && item.event_driven_breakout?.extended === true).length,
       cache_coverage_ready: coverageReady,
