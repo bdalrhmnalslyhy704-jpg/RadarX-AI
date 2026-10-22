@@ -7,8 +7,9 @@ function safeMessage(error){
 
 /**
  * Sends radar-emitted symbols into the bounded MultiAnalystEngine review queue.
- * This bridge is advisory only: it never waits for analysis, suppresses an alert,
- * edits its score, or changes PushManager's normal notification result.
+ * The review stays non-blocking, but the shared notification gate is enforced at
+ * the final delivery boundary. Rejected/unknown-gate alerts are logged for review,
+ * not sent as push notifications. Explicit watch-only alerts use the dedicated path.
  */
 export function connectRadarAlertsToAnalysts({
   pushManager,
@@ -38,10 +39,10 @@ export function connectRadarAlertsToAnalysts({
       .trim().toUpperCase().slice(0,80)||'RADAR_ALERT';
     if(/^[A-Z0-9]{2,30}$/.test(symbol)){
       let embeddedGate=alert?.notification_gate??alert?.radar_notification_gate??alert?.gate_result??{};
-      // Radar modules that have not yet wired the shared gate still receive the same
-      // advisory watch-only classification at the single notification boundary.
-      // It only labels eligible early watches; the existing delivery path never gets suppressed.
-      if(!Object.keys(embeddedGate).length){
+      // Attach a shared-gate decision at the notification boundary whenever the
+      // radar did not provide an explicit boolean eligibility decision. This gate
+      // is final: an unknown/failed gate must not fall through to push delivery.
+      if(typeof embeddedGate?.eligible!=='boolean'){
         try{
           const sharedGate=evaluateRadarNotificationGate({...alert,radar:sourceRadar},{now});
           if(sharedGate&&typeof sharedGate==='object'){
@@ -91,10 +92,28 @@ export function connectRadarAlertsToAnalysts({
         }catch{}
       }
 
+      const gateKnown=typeof embeddedGate?.eligible==='boolean';
+      const gateAccepted=gateKnown&&embeddedGate.eligible===true;
+      const explicitWatchOnly=alert?.watch_only===true||alert?.entry_eligible===false||embeddedGate?.entry_eligible===false;
+      const watchOnly=embeddedGate?.watch_only===true||explicitWatchOnly;
+      if(gateAccepted&&!explicitWatchOnly&&watchOnly){
+        // A shared-gate early corridor may still send a labelled watch alert, but it
+        // is never entry-eligible. Explicit watch-only inputs must use the separately
+        // validated notifyRadarWatchOnlyAlert path instead.
+        try{alert.watch_only=true;alert.entry_eligible=false;}catch{}
+      }
+      if(!/^[A-Z0-9]{2,30}$/.test(symbol)||!gateAccepted||explicitWatchOnly){
+        const blockedReasons=[
+          ...(!/^[A-Z0-9]{2,30}$/.test(symbol)?['INVALID_SYMBOL']:[]),
+          ...(!gateKnown?['SHARED_NOTIFICATION_GATE_UNKNOWN']:[]),
+          ...(gateKnown&&!gateAccepted?(Array.isArray(embeddedGate?.failures)?embeddedGate.failures:['SHARED_NOTIFICATION_GATE_REJECTED']):[]),
+          ...(explicitWatchOnly?['WATCH_ONLY_REQUIRES_DEDICATED_DELIVERY']:[])
+        ].slice(0,20);
+        try{logger.warn?.('[RADAR_PUSH_BLOCKED_SHARED_GATE] '+JSON.stringify({symbol:symbol||null,radar:sourceRadar,blocked_reasons:blockedReasons,at:new Date(now).toISOString()}));}catch{}
+        return {status:'BLOCKED_SHARED_NOTIFICATION_GATE',attempted:false,notifications:[],blocked_reasons:blockedReasons,watch_only:watchOnly,entry_eligible:false};
+      }
       try{
         const gateKnown=typeof embeddedGate?.eligible==='boolean';
-        const watchOnly=embeddedGate?.watch_only===true||alert?.watch_only===true||
-          alert?.entry_eligible===false||embeddedGate?.entry_eligible===false;
         const actuallyEligible=gateKnown&&embeddedGate.eligible===true&&!watchOnly;
         const acceptedMode=watchOnly
           ?'WATCH_ONLY_REVIEW_PENDING'
@@ -126,7 +145,11 @@ export function connectRadarAlertsToAnalysts({
         },{now,source:'LIVE'});
       }catch{}
     }
-    // Preserve the original notification path and its exact return/error behavior.
+    if(!/^[A-Z0-9]{2,30}$/.test(symbol)){
+      return {status:'BLOCKED_SHARED_NOTIFICATION_GATE',attempted:false,notifications:[],blocked_reasons:['INVALID_SYMBOL'],watch_only:false,entry_eligible:false};
+    }
+    // Push delivery is permitted only after a positive shared-gate decision. A
+    // radar alert can still be queued for multi-analyst review when rejected.
     return originalNotify(alert,...args);
   };
 
