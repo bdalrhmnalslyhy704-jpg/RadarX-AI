@@ -10,6 +10,10 @@ function baseline(radar,extra={}){
     detected_at:NOW,processed_at:NOW,eligible:true,direction:'UP',reasons:['closed candle','volume participation'],reason_codes:['VOLUME_PARTICIPATION'],
     risk_flags:[],components:{momentum:90,volume:90,trades:90,taker:90,range:90,breakout:90,ema:90,vwap:90,bollinger:90,efficiency:90,atr:90},...extra};
 }
+function quietBaseEvidence(stage){
+  return {pre_expansion_stage:stage,metrics:{rvol_5m:1.25,trade_ratio:1.15,taker_buy_ratio:0.56,
+    price_change_24h_pct:1.2,price_change_5m_pct:0.4},role_evidence:{failed_breakout:{detected:false},continuation:{confirmed:true}}};
+}
 test('missing or invalid market-quality measurements fail closed instead of inheriting perfect scores',()=>{
   resetRadarNotificationGateForTests();
   const alert=baseline('STRONG_MOVE_RADAR',{
@@ -291,7 +295,8 @@ test('shared signal lifecycle progresses from early setup to review then invalid
   const early=evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{
     pre_expansion_stage:'PRE_EXPANSION',
     potential_label:'PRE_EXPANSION',
-    pre_expansion_fingerprint:{stage:'PRE_EXPANSION',ready:true,late:false,micro_move:false,score:82}
+    pre_expansion_fingerprint:{stage:'PRE_EXPANSION',ready:true,late:false,micro_move:false,score:82},
+    early_expansion:quietBaseEvidence('PRE_EXPANSION')
   }),{now:NOW});
   assert.equal(early.signal_lifecycle.state,'EARLY_SETUP',JSON.stringify(early.signal_lifecycle));
   assert.equal(early.signal_lifecycle.label,'إعداد مبكر');
@@ -300,7 +305,8 @@ test('shared signal lifecycle progresses from early setup to review then invalid
   const review=evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{
     pre_expansion_stage:'BREAKOUT_DEVELOPING',
     potential_label:'BREAKOUT_DEVELOPING',
-    pre_expansion_fingerprint:{stage:'BREAKOUT_DEVELOPING',ready:true,late:false,micro_move:false,score:86}
+    pre_expansion_fingerprint:{stage:'BREAKOUT_DEVELOPING',ready:true,late:false,micro_move:false,score:86},
+    early_expansion:quietBaseEvidence('BREAKOUT_DEVELOPING')
   }),{now:NOW+1000});
   assert.equal(review.signal_lifecycle.state,'SIGNAL_REVIEW',JSON.stringify(review.signal_lifecycle));
   assert.equal(review.signal_lifecycle.transition,'TRIGGER_DETECTED');
@@ -337,7 +343,8 @@ test('an invalidated setup is retained until a materially new early setup appear
 
   const renewed=evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{
     pre_expansion_stage:'PRE_EXPANSION',
-    pre_expansion_fingerprint:{stage:'PRE_EXPANSION',ready:true,late:false,score:84}
+    pre_expansion_fingerprint:{stage:'PRE_EXPANSION',ready:true,late:false,score:84},
+    early_expansion:quietBaseEvidence('PRE_EXPANSION')
   }),{now:NOW+2000});
   assert.ok(['EARLY_SETUP','SIGNAL_REVIEW','CONFIRMED'].includes(renewed.signal_lifecycle.state),JSON.stringify(renewed.signal_lifecycle));
   assert.equal(renewed.signal_lifecycle.generation,2);
