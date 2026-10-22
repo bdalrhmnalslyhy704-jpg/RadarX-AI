@@ -1391,15 +1391,23 @@ test('Radar 8 confirmed early-flow observations create a separate monitor-only a
 });
 
 
-test('Radar 8 keeps watch-only observations out of the actionable alert feed and never pushes them',async()=>{
+test('Radar 8 keeps watch-only traces out of the actionable feed and uses the dedicated watch push route',async()=>{
   const storedAlerts=[],storedEvents=[],pushCalls=[];
   const store={
     async appendEarlyExpansionAlert(alert){storedAlerts.push({...alert});},
     async appendEarlyExpansionEvent(event){storedEvents.push({...event});}
   };
+  let watchPushCalls=0;
   const pushManager={
     status(){return {provider:'none',enabled:false};},
-    async notifyRadarAlert(alert){pushCalls.push(alert);return [];}
+    async notifyRadarAlert(alert){pushCalls.push(alert);return [];},
+    async notifyRadarWatchOnlyAlert(alert){
+      watchPushCalls++;
+      assert.equal(alert.event,'EARLY_FLOW_WATCH_ONLY');
+      assert.equal(alert.watch_only,true);
+      assert.equal(alert.entry_eligible,false);
+      return {status:'PROVIDER_DISABLED',attempted:false,notifications:[]};
+    }
   };
   const radar=new EarlyExpansionRadar({
     rest:{request:async()=>({data:[]}),klines:async()=>({candles:[]}),depth:async()=>({data:{bids:[],asks:[]}})},
@@ -1408,18 +1416,26 @@ test('Radar 8 keeps watch-only observations out of the actionable alert feed and
   const alert=buildEarlyFlowWatchAlert({
     symbol:'EARLYFLOWUSDT',last_price:1.002,price_change_24h:.4,data_quality:88,data_stale:false,
     source:'BINANCE_PUBLIC_WS',low_liquidity_burst_bypass:true,micro_fingerprint_score:68,
-    early_flow_watch_evidence:{closed_candle_close_time:now-60_000,volume_accel_ratio:1.65,trade_accel_ratio:1.45},
+    early_flow_watch_evidence:{
+      closed_candles_only:true,closed_candle_close_time:now-60_000,
+      micro_score:68,confirmation_count:4,rvol_1m:1.3,rvol_5m:1.2,
+      trade_rvol_1m:1.2,trade_rvol_5m:1.15,taker_buy_ratio:.55,
+      acceleration_1m_pct:.03,acceleration_5m_pct:.04,return_1m:.02,return_5m:.05,
+      volume_accel_ratio:1.65,trade_accel_ratio:1.45
+    },
     risk_flags:[],reason_codes:[]
   },now);
   const result=await radar.recordWatchOnlyAlert(alert,'EARLY_FLOW_WATCH_TRACE');
   assert.equal(result.stored,true);
-  assert.equal(result.pushStatus,'WATCH_ONLY_NOT_SENT');
+  assert.equal(result.pushStatus,'WATCH_ONLY_PUSH_PROVIDER_DISABLED');
+  assert.equal(result.pushAttempted,false);
   assert.equal(storedAlerts.length,0,'watch-only observations must not enter the feed polled by Android');
   assert.equal(storedEvents.length,1,'diagnostic events remain available for outcome analysis');
   assert.equal(storedEvents[0].event_type,'EARLY_FLOW_WATCH_TRACE');
   assert.equal(storedEvents[0].feed_status,'TRACE_ONLY');
-  assert.equal(storedEvents[0].notification_status,'WATCH_ONLY_NOT_SENT');
-  assert.equal(pushCalls.length,0,'a disabled provider must not be called');
+  assert.equal(storedEvents[0].notification_status,'WATCH_ONLY_PUSH_PROVIDER_DISABLED');
+  assert.equal(watchPushCalls,1,'the watch candidate reaches the dedicated provider status/evidence boundary');
+  assert.equal(pushCalls.length,0,'the standard actionable-alert path must not be called');
 });
 
 
