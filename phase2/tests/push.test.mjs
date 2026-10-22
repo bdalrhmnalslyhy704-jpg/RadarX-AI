@@ -38,6 +38,27 @@ test('TEST_FIXTURE: low data quality prevents push attempt',async()=>{
   assert.equal(out.length,0);assert.equal(p.calls,0);
 });
 
+
+test('TEST_FIXTURE: early radar watch pushes explicitly say monitoring only, not confirmation',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-watch-push-')),store=await new DurableStore({dir}).init();
+  await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70});
+  await store.upsertSubscription('u1',pushSubscription());
+  const sent=[];
+  const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){sent.push(payload);return{ok:true,status:'SENT'};}};
+  const m=new PushManager({provider,store});
+  await m.notifyRadarAlert({
+    radar:'STRONG_MOVE_RADAR',radar_name:'Radar 2',symbol:'EARLYUSDT',data_quality:95,
+    notification_gate:{eligible:true,watch_only:true,requires_follow_up_confirmation:true,mode:'RADAR_WATCH_ONLY_EARLY_TRACK'},
+    signal_lifecycle:{state:'EARLY_SETUP',label:'إعداد مبكر',transition:'EARLY_EVIDENCE_CONVERGED',reason_codes:['RELATED_EARLY_EVIDENCE']}
+  });
+  assert.equal(sent.length,1);
+  assert.equal(sent[0].notification_mode,'WATCH_ONLY_EARLY_TRACK');
+  assert.equal(sent[0].watch_only,true);
+  assert.equal(sent[0].requires_follow_up_confirmation,true);
+  assert.equal(sent[0].message,'EARLYUSDT • مراقبة مبكرة فقط — تحتاج تأكيدًا');
+  assert.match(sent[0].title,/مراقبة مبكرة/);
+});
+
 test('TEST_FIXTURE: radar notifications forward lifecycle labels and reasons to the push provider',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-lifecycle-push-')),store=await new DurableStore({dir}).init();
   await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70});
