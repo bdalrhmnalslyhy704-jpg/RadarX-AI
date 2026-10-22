@@ -1207,9 +1207,17 @@ function isExceptionalDeepCandidate(item,cfg){
 function deepBurstPriority(item,now=Date.now()){
   const fp=item?.micro_fingerprint||{},m=fp.metrics||{},fast=item?.fast||{};
   const shockCandidates=[fp.activity_shock,fast.market_wide_event_driven_breakout,fast.event_driven_breakout]
-    .filter(x=>x&&typeof x==='object');
-  const shock=shockCandidates.find(x=>x.detected===true||
-    String(x.stage||'').toUpperCase()==='EVENT_DRIVEN_BREAKOUT')||null;
+    .filter(x=>x&&typeof x==='object'&&(x.detected===true||
+      String(x.stage||'').toUpperCase()==='EVENT_DRIVEN_BREAKOUT'));
+  // Prefer the strongest stage before score/freshness so a generic shock field
+  // cannot hide a separately detected market-wide breakout event.
+  shockCandidates.sort((a,b)=>{
+    const eventRank=x=>String(x?.stage||'').toUpperCase()==='EVENT_DRIVEN_BREAKOUT'?2:1;
+    const score=x=>hasFiniteNumber(x?.score)?Number(x.score):0;
+    const at=x=>Number(x?.detected_candle_close_time??x?.detected_at??x?.timestamp)||0;
+    return eventRank(b)-eventRank(a)||score(b)-score(a)||at(b)-at(a);
+  });
+  const shock=shockCandidates[0]||null;
   const maxPositive=(...values)=>Math.max(0,...values.map(value=>hasFiniteNumber(value)?Number(value):0));
   const eventScore=shock&&hasFiniteNumber(shock.score)?clamp(shock.score,0,100):0;
   const volume=maxPositive(fast.volume_accel_ratio,m.rvol_1m,m.rvol_5m,shock?.metrics?.volume_shock_ratio);
