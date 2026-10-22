@@ -3420,7 +3420,7 @@ export class EarlyExpansionRadar{
         const quietBaseFingerprint=candidate?.pre_expansion_fingerprint?.quiet_base_pre_expansion;
         const quietBaseRiskFlags=Array.isArray(candidate?.risk_flags)?candidate.risk_flags:[];
         const quietBaseBlockingRisk=quietBaseRiskFlags.some(flag=>
-          /ALREADY_EXTENDED|HIGH_RISK|RECENT_FAKEOUT|STALE_DATA|WIDE_SPREAD|DATA_INSUFFICIENT/i.test(String(flag)));
+          /ALREADY_EXTENDED|HIGH_RISK|RECENT_FAKEOUT|STALE_DATA|DATA_STALE|DATA_GAP|FUTURE_DATA|WIDE_SPREAD|ORDERBOOK_UNAVAILABLE|HISTORICAL_FOLLOWTHROUGH_WEAK|DATA_INSUFFICIENT/i.test(String(flag)));
         const quietBaseLiquidity=Number(candidate?.liquidity_quality_live??candidate?.liquidity_quality);
         const quietBaseWatchQualified=!eligibleAlert&&
           quietBaseFingerprint?.watch_only===true&&
