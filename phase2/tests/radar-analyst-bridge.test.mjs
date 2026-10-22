@@ -33,7 +33,7 @@ import {evaluateRadarNotificationGate} from '../core/radar-notification-gate.mjs
   assert.equal(result.attempted,false);
   assert.ok(result.blocked_reasons.includes('DATA_QUALITY_BELOW_STRICT_THRESHOLD'));
   assert.equal(alerts.length,0,'a radar notification rejected by the shared gate must never be sent');
-  assert.equal(alerts[0].alert.signal_lifecycle.state,'MONITOR','missing evidence must not be presented as early or confirmed');
+  assert.equal(alert.signal_lifecycle.state,'MONITOR','missing evidence must not be presented as early or confirmed');
   assert.equal(queued.length,1);
   assert.deepEqual(queued[0],{symbol:'BTCUSDT',options:{sourceRadar:'RADAR8'}});
   assert.equal(decisions.length,1);
