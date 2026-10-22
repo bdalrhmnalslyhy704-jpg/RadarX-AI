@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible,ensureRadar8ScoreContainer,isConfirmedEarlyFlowWatchCandidate,buildEarlyFlowWatchAlert,buildMicroEarlyFlowWatchCandidate} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,isMarketWideCacheFallbackPoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible,ensureRadar8ScoreContainer,isConfirmedEarlyFlowWatchCandidate,buildEarlyFlowWatchAlert,buildMicroEarlyFlowWatchCandidate} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -411,6 +411,19 @@ test('Radar 8 activates guarded candidate pooling at 10 percent verified cache c
     'transport synchronization is still required');
   assert.equal(isMarketWideCachePoolReady({...partial,ready_symbols:337},1.01),true,
     'coverage thresholds are clamped to the valid range');
+});
+
+test('Radar 8 can use a fresh validated closed-candle cache during a WebSocket reconnect',()=>{
+  const partial={expected_symbols:232,ready_symbols:173,websocket_live:false,
+    websocket_subscription_complete:true,websocket_sync_ready:false,full_market_coverage_ready:false};
+  assert.equal(isMarketWideCachePoolReady(partial,.10),false,
+    'the strict WebSocket readiness check remains false during reconnect');
+  assert.equal(isMarketWideCacheFallbackPoolReady(partial,true,.10),true,
+    'verified fresh cache plus a coverage-ready light scan can retain candidate pooling during reconnect');
+  assert.equal(isMarketWideCacheFallbackPoolReady({...partial,ready_symbols:20},true,.10),false,
+    'a cache below the minimum fresh closed-candle coverage must fail closed');
+  assert.equal(isMarketWideCacheFallbackPoolReady(partial,false,.10),false,
+    'a cache fallback cannot override a light scan that failed its own coverage checks');
 });
 
 test('Radar 8 burst-priority mode gives five Micro slots to verified early activity bursts without expanding the batch',()=>{
