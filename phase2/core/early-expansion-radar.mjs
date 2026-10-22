@@ -1894,6 +1894,8 @@ export class EarlyExpansionRadar{
   async stop(){this.running=false;if(this.timer)clearTimeout(this.timer);this.timer=null;this.marketWideKlineCache?.stop?.();}
   async recordWatchOnlyAlert(alert,eventType='RADAR8_WATCH_ONLY_TRACE'){
     const symbol=String(alert?.symbol||'').trim().toUpperCase();
+    const evidence=alert?.early_flow_watch_evidence||{};
+    const traceAt=this.clock();
     const pushEvent=alert?.event==='EARLY_FLOW_WATCH_ONLY'&&
       ['MICRO_EARLY_FLOW_WATCH_TRACE','EARLY_FLOW_WATCH_TRACE'].includes(String(eventType));
     let pushStatus='WATCH_ONLY_NOT_SENT',pushAttempted=false,pushResult=null;
@@ -1919,17 +1921,35 @@ export class EarlyExpansionRadar{
       push_result_status:pushResult?.status??null,
       push_sent_count:Number(pushResult?.sent_count)||0,
       push_attempted_count:Number(pushResult?.attempted_count)||0,
-      trace_at:this.clock()};
+      trace_at:traceAt};
     let stored=false;
     try{
       if(typeof this.store.appendEarlyExpansionEvent!=='function')throw new Error('WATCH_TRACE_WRITER_UNAVAILABLE');
       await this.store.appendEarlyExpansionEvent(trace);
       stored=true;
     }catch(error){this.noteError(error,'watch-only-alert-trace');}
+    const closeTime=Number(evidence.closed_candle_close_time);
     this.logger.info?.('[RADAR8_WATCH_ONLY_ALERT]',JSON.stringify({
       id:alert?.id||null,symbol,event:alert?.event||null,feed_status:stored?'TRACE_ONLY':'TRACE_STORE_FAILED',
       notification_status:pushStatus,push_attempted:pushAttempted,
       push_result_status:pushResult?.status??null,push_sent_count:Number(pushResult?.sent_count)||0,
+      source:alert?.source||'UNKNOWN',price:Number(alert?.price)||null,
+      price_change_24h:Number.isFinite(Number(alert?.price_change_24h))?Number(alert.price_change_24h):null,
+      closed_candles_only:evidence.closed_candles_only===true,
+      closed_candle_close_time:Number.isFinite(closeTime)?closeTime:null,
+      closed_candle_age_ms:Number.isFinite(closeTime)?Math.max(0,traceAt-closeTime):null,
+      micro_score:Number.isFinite(Number(evidence.micro_score))?Number(evidence.micro_score):null,
+      confirmation_count:Number.isFinite(Number(evidence.confirmation_count))?Number(evidence.confirmation_count):null,
+      rvol_1m:Number.isFinite(Number(evidence.rvol_1m))?Number(evidence.rvol_1m):null,
+      rvol_5m:Number.isFinite(Number(evidence.rvol_5m))?Number(evidence.rvol_5m):null,
+      trade_rvol_1m:Number.isFinite(Number(evidence.trade_rvol_1m))?Number(evidence.trade_rvol_1m):null,
+      trade_rvol_5m:Number.isFinite(Number(evidence.trade_rvol_5m))?Number(evidence.trade_rvol_5m):null,
+      acceleration_1m_pct:Number.isFinite(Number(evidence.acceleration_1m_pct))?Number(evidence.acceleration_1m_pct):null,
+      acceleration_5m_pct:Number.isFinite(Number(evidence.acceleration_5m_pct))?Number(evidence.acceleration_5m_pct):null,
+      return_1m:Number.isFinite(Number(evidence.return_1m))?Number(evidence.return_1m):null,
+      return_5m:Number.isFinite(Number(evidence.return_5m))?Number(evidence.return_5m):null,
+      risk_flags:Array.isArray(alert?.risk_flags)?alert.risk_flags.slice(0,8):[],
+      reason_codes:Array.isArray(alert?.reason_codes)?alert.reason_codes.slice(0,8):[],
       entry_eligible:false
     }));
     return {stored,pushStatus,pushAttempted,pushResult};
