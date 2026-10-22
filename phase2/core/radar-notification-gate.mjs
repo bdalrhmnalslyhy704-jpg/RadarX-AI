@@ -489,10 +489,14 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
   const earlyHardFailures=failures.filter(x=>
     /^(RISK:)|DATA_QUALITY_BELOW|LIQUIDITY_BELOW|MICRO_MOVE_NOISE|LATE_SETUP_CHASE_GUARD|EARLY_SETUP_ALREADY_MOVED|EARLY_SETUP_NOT_CALM|FALCON_HARD_FAIL|MOVER_FORENSICS_HARD_FAIL|EVIDENCE_TRAJECTORY_DETERIORATING|EVIDENCE_TRAJECTORY_DISJOINTED|BASE_ALERT_NOT_ELIGIBLE|ELITE_GATE_NOT_ELIGIBLE|FAILED_BREAKOUT_TRAP_RISK|BREAKOUT_CONTINUATION_UNCONFIRMED|ALREADY_MOVED|ALREADY_EXTENDED|ANTI_CHASE|CHASE_GUARD|_CHASE|EXTENSION|ENTRY_TIMING_STALE|ENTRY_FRESHNESS|RESISTANCE_ROOM_INSUFFICIENT|FUTURE_DATA|CANDLE_SEQUENCE|CANDLE_WINDOW|PROFESSOR_(TECHNICAL_CONFIRMATION_WEAK|EXTERNAL_EVIDENCE_WEAK|SOURCE_BREADTH_LOW)|WHALE_(LARGE_PRINT_DATA_UNAVAILABLE|BUY_SIDE_NOT_CONFIRMED|SPREAD_TOO_WIDE)/.test(String(x))
   );
-  const bullishDirection=String(alert?.direction??alert?.bias??alert?.trend??'').trim().toUpperCase().startsWith('UP');
+  const directionValue=String(alert?.direction??alert?.bias??alert?.trend??'').trim().toUpperCase();
+  const bullishDirection=directionValue.startsWith('UP');
+  // Existing early radars historically omit direction in some validated alert payloads.
+  // Keep that compatibility only for those three; any new all-radar watch must be explicitly UP.
+  const earlyDirectionAllowed=bullishDirection || (!directionValue&&LEGACY_EARLY_TRACK_RADARS.has(r));
   const earlyCorridor=
     EARLY_RADARS.has(r) &&
-    bullishDirection &&
+    earlyDirectionAllowed &&
     earlyHardFailures.length===0 &&
     !falcon.hard_fail &&
     falcon.early_window &&
@@ -506,7 +510,7 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
 
   const persistentEarlyCorridor=
     EARLY_RADARS.has(r) &&
-    bullishDirection &&
+    earlyDirectionAllowed &&
     failures.length===0 &&
     trajectory.regime==='IGNITING' &&
     Number(trajectory.persistence)>=3 &&
