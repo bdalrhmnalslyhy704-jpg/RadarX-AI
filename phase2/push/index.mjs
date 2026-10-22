@@ -205,7 +205,14 @@ export class PushManager{
     const now=Date.now();
     const evidence=alert?.early_flow_watch_evidence||{};
     const source=String(alert?.source||'').toUpperCase();
-    const closeTime=Number(evidence.closed_candle_close_time);
+    const event=String(alert?.event||'');
+    const isEarlyFlowWatch=event==='EARLY_FLOW_WATCH_ONLY';
+    const isQuietBaseWatch=event==='QUIET_BASE_PRE_EXPANSION_WATCH_ONLY';
+    const fingerprint=alert?.quiet_base_pre_expansion||{};
+    const transition=fingerprint?.metrics?.buy_pressure_transition||{};
+    const closeTime=isQuietBaseWatch
+      ?Number(alert?.detected_candle_close_time??fingerprint?.candle_close_time_ms)
+      :Number(evidence.closed_candle_close_time);
     const score=Number(evidence.micro_score??alert?.micro_fingerprint_score);
     const confirmations=Number(evidence.confirmation_count);
     const volume=Math.max(Number(evidence.rvol_1m)||0,Number(evidence.rvol_5m)||0);
@@ -217,22 +224,54 @@ export class PushManager{
     const age=now-closeTime;
     const participation=volume>=1.20||trades>=1.15||(taker>=0.54&&(volume>=1||trades>=1));
     const sourceVerified=source.includes('BINANCE_PUBLIC')||source.includes('BINANCE PUBLIC');
-    const invalid=
-      alert?.event!=='EARLY_FLOW_WATCH_ONLY'||
+    const riskFlags=Array.isArray(alert?.risk_flags)?alert.risk_flags:[];
+    const hardRisk=riskFlags.some(flag=>[
+      'ALREADY_EXTENDED','HIGH_RISK_PUMP','HIGH_RISK_DUMP','RECENT_FAKEOUT',
+      'STALE_DATA','DATA_STALE','DATA_GAP','FUTURE_DATA','WIDE_SPREAD',
+      'ORDERBOOK_UNAVAILABLE','HISTORICAL_FOLLOWTHROUGH_WEAK','DATA_INSUFFICIENT',
+      'MICRO_ANTI_CHASE','MICRO_FAST_EXTENSION_WARNING','MICRO_DAILY_EXTENSION_WARNING'
+    ].includes(String(flag)));
+    const commonInvalid=
+      (!isEarlyFlowWatch&&!isQuietBaseWatch)||
       alert?.radar!=='EARLY_EXPANSION_RADAR'||
       alert?.watch_only!==true||alert?.entry_eligible!==false||
-      evidence.closed_candles_only!==true||
+      alert?.closed_candles_only!==true||
       alert?.data_stale===true||
       !sourceVerified||
-      !Number.isFinite(closeTime)||age<0||age>120_000||
+      !Number.isFinite(closeTime)||age<0||
       !Number.isFinite(Number(alert?.price))||Number(alert.price)<=0||
-      !Number.isFinite(move)||Math.abs(move)>=18||
+      !Number.isFinite(move)||hardRisk;
+    const earlyFlowInvalid=isEarlyFlowWatch&&(
+      evidence.closed_candles_only!==true||age>120_000||
+      Math.abs(move)>=18||
       !Number.isFinite(score)||score<58||
       !Number.isFinite(confirmations)||confirmations<3||
-      !participation||!(acceleration>0||recentReturn>0)||
-      (Array.isArray(alert?.risk_flags)&&alert.risk_flags.some(flag=>
-        ['MICRO_ANTI_CHASE','MICRO_FAST_EXTENSION_WARNING','MICRO_DAILY_EXTENSION_WARNING','DATA_STALE','DATA_GAP','FUTURE_DATA'].includes(String(flag))));
-    if(invalid)return{status:'BLOCKED_INVALID_WATCH_EVIDENCE',attempted:false,notifications:[]};
+      !participation||!(acceleration>0||recentReturn>0)
+    );
+    const fingerprintEvidence=Array.isArray(fingerprint?.evidence)?fingerprint.evidence:[];
+    const antiChaseEvidence=fingerprintEvidence.find(item=>item?.key==='anti_chase');
+    const fpMetrics=fingerprint?.metrics||{};
+    const quietBaseInvalid=isQuietBaseWatch&&(
+      age>8*60_000||
+      Math.abs(move)>=8||
+      Number(fingerprint?.classification)!==Number.NaN||
+      fingerprint?.classification!=='WATCH_EARLY'||
+      fingerprint?.reason!=='QUIET_BASE_NEAR_MISS_BUY_FLOW_TRANSITION'||
+      fingerprint?.detected!==true||
+      fingerprint?.watch_only!==true||fingerprint?.entry_eligible!==false||
+      transition?.available!==true||transition?.watch_only_qualified!==true||
+      Number(transition?.near_miss_signal_count)<4||
+      !Number.isFinite(Number(alert?.data_quality))||Number(alert.data_quality)<70||
+      !Number.isFinite(Number(alert?.liquidity_quality))||Number(alert.liquidity_quality)<60||
+      !Number.isFinite(Number(fpMetrics.daily_change_24h_pct))||Math.abs(Number(fpMetrics.daily_change_24h_pct))>=8||
+      !Number.isFinite(Number(fpMetrics.move_5m_pct))||Number(fpMetrics.move_5m_pct)>=2.5||
+      !Number.isFinite(Number(fpMetrics.move_15m_pct))||Number(fpMetrics.move_15m_pct)>=6||
+      antiChaseEvidence?.passed!==true||
+      !fingerprintEvidence.some(item=>item?.key==='higher_lows_or_stable_support'&&item?.passed===true)||
+      !fingerprintEvidence.some(item=>item?.key==='narrow_price_base_range_pct'&&item?.passed===true)
+    );
+    if(commonInvalid||earlyFlowInvalid||quietBaseInvalid)
+      return{status:'BLOCKED_INVALID_WATCH_EVIDENCE',attempted:false,notifications:[]};
     const providerStatus=this.provider.status?.()||{};
     if(providerStatus.enabled!==true)return{status:'PROVIDER_DISABLED',attempted:false,notifications:[]};
     const subscriptions=this.providerSubscriptions(await this.store.getSubscriptions());
@@ -250,7 +289,12 @@ export class PushManager{
         radar:alert.radar,symbol:alert.symbol,alert_id:alert.id||null,
         subscription_id:sub.id,user_id:sub.user_id,status:result.status||'FAILED',
         attempted_at:attemptAt,watch_only:true,entry_eligible:false,
-        evidence_close_time:closeTime,micro_score:score,confirmation_count:confirmations,
+        evidence_close_time:closeTime,micro_score:isQuietBaseWatch?null:score,
+        confirmation_count:isQuietBaseWatch?null:confirmations,
+        watch_type:isQuietBaseWatch?'QUIET_BASE_NEAR_MISS':'EARLY_FLOW_MICRO',
+        near_miss_transition_signal_count:isQuietBaseWatch?Number(transition.near_miss_signal_count):null,
+        data_quality:Number.isFinite(Number(alert?.data_quality))?Number(alert.data_quality):null,
+        liquidity_quality:Number.isFinite(Number(alert?.liquidity_quality))?Number(alert.liquidity_quality):null,
         reason:result.reason??null,http_status:result.httpStatus??null
       };
       await this.store.appendNotificationAudit(audit);
