@@ -1544,6 +1544,7 @@ export class MultiAnalystEngine {
       };
       this.monitorStats.scan_count=Number(this.monitorStats.scan_count||0)+1;
       this.monitorStats.last_scan_at=value.as_of;
+      this.monitorStats.last_scan_successful=true;
       this.monitorStats.last_error=null;
       const monitorIntervalMs=Math.max(15000,Number(this.config.continuousIntervalMs)||60000);
       const elapsedMs=Math.max(0,this.clock()-startedAt);
@@ -1581,6 +1582,7 @@ export class MultiAnalystEngine {
       try{
         await this.scan({quote:this.config.quote,limit:this.config.returnLimit});
       }catch(error){
+        this.monitorStats.last_scan_successful=false;
         this.monitorStats.last_error=String(error?.message||error);
       }
       if(!this.running)return;
