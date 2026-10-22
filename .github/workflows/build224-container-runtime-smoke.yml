@@ -1,0 +1,88 @@
+name: Build 224 Container Runtime API Smoke
+
+on:
+  pull_request:
+    branches:
+      - build224-multi-analyst-20261007
+    paths:
+      - Dockerfile
+      - package.json
+      - package-lock.json
+      - phase2/**
+      - .github/workflows/build224-container-runtime-smoke.yml
+  push:
+    branches:
+      - build224-multi-analyst-20261007
+    paths:
+      - Dockerfile
+      - package.json
+      - package-lock.json
+      - phase2/**
+      - .github/workflows/build224-container-runtime-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-api-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Build 224 source
+        uses: actions/checkout@v4
+      - name: Build exact container image
+        run: docker build --pull -t radarx-build224-smoke .
+      - name: Start exact container image
+        run: docker run --detach --name radarx-build224-smoke --publish 127.0.0.1:18787:8787 radarx-build224-smoke
+      - name: Verify routes are served by the Node API inside the container
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="http://127.0.0.1:18787"
+          status=""
+          for attempt in $(seq 1 45); do
+            status="$(curl --connect-timeout 2 --max-time 5 --silent --show-error -o "$RUNNER_TEMP/deployment-info.json" -w "%{http_code}" "$BASE/api/deployment-info" || true)"
+            if [[ "$status" == "200" ]]; then break; fi
+            sleep 2
+          done
+          if [[ "$status" != "200" ]]; then
+            echo "::error::Built container did not serve /api/deployment-info (HTTP ${status:-none})."
+            docker logs radarx-build224-smoke || true
+            exit 1
+          fi
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const x = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/deployment-info.json', 'utf8'));
+          if (x.service !== 'RADARX_BACKEND' || x.build_version !== 'Build 224' || x.deployment_contract !== 'BUILD224_DHDTECH_V1') {
+            throw new Error('CONTAINER_DEPLOYMENT_CONTRACT_INVALID');
+          }
+          if (x.paper_trading !== true || x.real_order_execution !== false || x.confidence_score !== 'UNKNOWN') {
+            throw new Error('CONTAINER_READ_ONLY_POLICY_INVALID');
+          }
+          console.log('CONTAINER_API_CONTRACT_OK ' + JSON.stringify({
+            service: x.service,
+            build_version: x.build_version,
+            deployment_contract: x.deployment_contract,
+            paper_trading: x.paper_trading,
+            real_order_execution: x.real_order_execution
+          }));
+          NODE
+          ROOT_STATUS="$(curl --connect-timeout 2 --max-time 5 --silent --show-error -o "$RUNNER_TEMP/root.json" -w "%{http_code}" "$BASE/")"
+          HEALTH_STATUS="$(curl --connect-timeout 2 --max-time 5 --silent --show-error -o "$RUNNER_TEMP/healthz.json" -w "%{http_code}" "$BASE/healthz")"
+          test "$ROOT_STATUS" = "200"
+          test "$HEALTH_STATUS" = "200"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          for (const path of ['root.json', 'healthz.json']) {
+            const raw = fs.readFileSync(process.env.RUNNER_TEMP + '/' + path, 'utf8');
+            const x = JSON.parse(raw);
+            if (path === 'root.json' && x.deployment_contract !== 'BUILD224_DHDTECH_V1') throw new Error('CONTAINER_ROOT_ROUTE_INVALID');
+            if (path === 'healthz.json' && !Object.hasOwn(x, 'database')) throw new Error('CONTAINER_HEALTH_ROUTE_NOT_NODE_API');
+          }
+          console.log('CONTAINER_ROOT_AND_HEALTH_ROUTES_OK');
+          NODE
+          docker logs radarx-build224-smoke
+      - name: Stop container
+        if: always()
+        run: docker rm --force radarx-build224-smoke || true
