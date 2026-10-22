@@ -119,6 +119,7 @@ const radarPayload=(alert,processedAt=Date.now())=>{
   event:alert.event||'RADAR_ALERT',
   notification_mode:watchOnly?'WATCH_ONLY_EARLY_TRACK':'STANDARD_RADAR_ALERT',
   watch_only:watchOnly,
+  entry_eligible:watchOnly?false:(alert?.entry_eligible??null),
   requires_follow_up_confirmation:needsFollowUp,
   signal_lifecycle_state:alert?.signal_lifecycle?.state??null,
   signal_lifecycle_label:alert?.signal_lifecycle?.label??null,
