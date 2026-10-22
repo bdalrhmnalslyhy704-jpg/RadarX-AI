@@ -462,6 +462,22 @@ test('Radar 8 capacity of 18 preserves event, ranked-score, quiet, and rotation 
   assert.equal(lane('rotation'),7);
 });
 
+test('Radar 8 Deep exceptional slots rank stronger closed activity events ahead of generic fingerprint score',()=>{
+  const radar=makeRadar({deepCandidates:3,quietReserve:0,rotationReserve:0,exceptionalRotationBypassSlots:3});
+  const weakerEvent=candidate('WEAKSHOCKUSDT',1,{score:99});
+  weakerEvent.micro_fingerprint.activity_shock={detected:true,stage:'EVENT_DRIVEN_BREAKOUT',score:62,
+    watch_only:true,entry_eligible:false,extended:false,detected_candle_close_time:now-60_000};
+  const strongerEvent=candidate('STRONGSHOCKUSDT',1,{score:60});
+  strongerEvent.micro_fingerprint.activity_shock={detected:true,stage:'EVENT_DRIVEN_BREAKOUT',score:98,
+    watch_only:true,entry_eligible:false,extended:false,detected_candle_close_time:now-5_000};
+  const ordinary=candidate('ORDINARYUSDT',1,{score:95});
+  const selected=radar.selectDeepFromMicro([weakerEvent,ordinary,strongerEvent],17);
+  assert.equal(selected.length,3);
+  assert.equal(selected[0].row.symbol,'STRONGSHOCKUSDT',
+    'the stronger and fresher closed activity event must outrank a higher generic fingerprint score');
+  assert.equal(selected[0]._selection_lane,'exceptional');
+});
+
 test('Radar 8 five-slot Deep batch preserves a score-ranked slot when burst events arrive together',()=>{
   const radar=makeRadar({deepCandidates:5,quietReserve:8,rotationReserve:8,exceptionalRotationBypassSlots:3});
   const items=Array.from({length:12},(_,i)=>candidate('DP'+String(i).padStart(2,'0')+'USDT',1+i*.1,{score:90-i}));
