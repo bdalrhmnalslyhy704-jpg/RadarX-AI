@@ -102,15 +102,15 @@ export function connectRadarAlertsToAnalysts({
         // validated notifyRadarWatchOnlyAlert path instead.
         try{alert.watch_only=true;alert.entry_eligible=false;}catch{}
       }
-      if(!/^[A-Z0-9]{2,30}$/.test(symbol)||!gateAccepted||explicitWatchOnly){
-        const blockedReasons=[
-          ...(!/^[A-Z0-9]{2,30}$/.test(symbol)?['INVALID_SYMBOL']:[]),
-          ...(!gateKnown?['SHARED_NOTIFICATION_GATE_UNKNOWN']:[]),
-          ...(gateKnown&&!gateAccepted?(Array.isArray(embeddedGate?.failures)?embeddedGate.failures:['SHARED_NOTIFICATION_GATE_REJECTED']):[]),
-          ...(explicitWatchOnly?['WATCH_ONLY_REQUIRES_DEDICATED_DELIVERY']:[])
-        ].slice(0,20);
+      const deliveryBlocked=!/^[A-Z0-9]{2,30}$/.test(symbol)||!gateAccepted||explicitWatchOnly;
+      const blockedReasons=[
+        ...(!/^[A-Z0-9]{2,30}$/.test(symbol)?['INVALID_SYMBOL']:[]),
+        ...(!gateKnown?['SHARED_NOTIFICATION_GATE_UNKNOWN']:[]),
+        ...(gateKnown&&!gateAccepted?(Array.isArray(embeddedGate?.failures)?embeddedGate.failures:['SHARED_NOTIFICATION_GATE_REJECTED']):[]),
+        ...(explicitWatchOnly?['WATCH_ONLY_REQUIRES_DEDICATED_DELIVERY']:[])
+      ].slice(0,20);
+      if(deliveryBlocked){
         try{logger.warn?.('[RADAR_PUSH_BLOCKED_SHARED_GATE] '+JSON.stringify({symbol:symbol||null,radar:sourceRadar,blocked_reasons:blockedReasons,at:new Date(now).toISOString()}));}catch{}
-        return {status:'BLOCKED_SHARED_NOTIFICATION_GATE',attempted:false,notifications:[],blocked_reasons:blockedReasons,watch_only:watchOnly,entry_eligible:false};
       }
       try{
         const gateKnown=typeof embeddedGate?.eligible==='boolean';
@@ -144,6 +144,9 @@ export function connectRadarAlertsToAnalysts({
           soft_failures:failureCodes
         },{now,source:'LIVE'});
       }catch{}
+      if(deliveryBlocked){
+        return {status:'BLOCKED_SHARED_NOTIFICATION_GATE',attempted:false,notifications:[],blocked_reasons:blockedReasons,watch_only:watchOnly,entry_eligible:false};
+      }
     }
     if(!/^[A-Z0-9]{2,30}$/.test(symbol)){
       return {status:'BLOCKED_SHARED_NOTIFICATION_GATE',attempted:false,notifications:[],blocked_reasons:['INVALID_SYMBOL'],watch_only:false,entry_eligible:false};
