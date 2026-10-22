@@ -313,10 +313,23 @@ export class AlMuqawimRadar{
   }
   selectBatch(rows){
     if(!Array.isArray(rows)||!rows.length)return [];
+    const selectionScore=row=>{
+      const change=finite(row?.priceChange24h)?Number(row.priceChange24h):null;
+      const volume=finite(row?.quoteVolume24h)?Math.max(1,Number(row.quoteVolume24h)):1;
+      const median=finite(row?.marketMedianChange24hPct)?Number(row.marketMedianChange24hPct):null;
+      const liquidity=Math.log10(volume)*4;
+      // Compatibility fallback when a trustworthy same-universe median is unavailable.
+      if(change===null||median===null)return (change===null?0:Math.abs(change)*3)+liquidity;
+      const relative=Math.max(-15,Math.min(15,change-median));
+      const extensionLimit=Math.max(5,Number(this.config.maxAlert24hMovePct)||8);
+      const extensionPenalty=Math.abs(change)>extensionLimit
+        ?50+(Math.abs(change)-extensionLimit)*3:0;
+      // Reward resilience vs the actual market median; penalize already-extended movers.
+      return relative*5+liquidity-Math.abs(change)*1.5-extensionPenalty;
+    };
     const ranked=[...rows].sort((a,b)=>{
-      const sa=Math.abs(a.priceChange24h)*3+Math.log10(Math.max(1,a.quoteVolume24h))*4;
-      const sb=Math.abs(b.priceChange24h)*3+Math.log10(Math.max(1,b.quoteVolume24h))*4;
-      return sb-sa||b.quoteVolume24h-a.quoteVolume24h;
+      const sa=selectionScore(a),sb=selectionScore(b);
+      return sb-sa||Number(b.quoteVolume24h||0)-Number(a.quoteVolume24h||0);
     });
     const selected=[],seen=new Set();
     const take=row=>{if(row?.symbol&&!seen.has(row.symbol)){selected.push(row);seen.add(row.symbol);return true;}return false;};
