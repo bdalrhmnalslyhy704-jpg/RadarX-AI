@@ -358,6 +358,37 @@ test('shared watch-only corridor never bypasses a failed-breakout trap or anti-c
   assert.equal(result.eligible,false);
 });
 
+
+test('shared early-watch corridor preserves Rotation/Lag thesis blockers',()=>{
+  resetRadarNotificationGateForTests();
+  const result=evaluateRadarNotificationGate(baseline('ROTATION_LAG_RADAR',{
+    opportunity_score:84,radar_power_score:84,direction:'UP',
+    rotation:{eligible:true,score:84,activation_score:40,confirmations:5,
+      component_scores:{lag:30,resilience:40},
+      metrics:{lag:30,resilience:40}}
+  }),{now:NOW,commit:false});
+  assert.ok(result.failures.includes('RELATIVE_STRENGTH_NOT_CONFIRMED'));
+  assert.ok(result.failures.includes('ROTATION_ACTIVATION_WEAK'));
+  assert.equal(result.eligible,false);
+  assert.equal(result.mode,'STRICT_NOTIFICATION');
+});
+
+test('shared early-watch corridor does not bypass Al-Muqawim multi-timeframe structure checks',()=>{
+  resetRadarNotificationGateForTests();
+  const result=evaluateRadarNotificationGate(baseline('ALMUQAWIM_RADAR',{
+    opportunity_score:82,radar_power_score:82,direction:'UP',
+    almuqawim:{eligible:false,direction:'UP',components:{
+      higher_timeframe_alignment:72,market_structure:78,lower_timeframe_agreement:70,entry_timing:60,entry_freshness:40
+    }}
+  }),{now:NOW,commit:false});
+  for(const code of ['ALMUQAWIM_ANALYSIS_NOT_ELIGIBLE','ALMUQAWIM_HIGHER_TIMEFRAME_ALIGNMENT_WEAK',
+    'ALMUQAWIM_MARKET_STRUCTURE_WEAK','ALMUQAWIM_LOWER_TIMEFRAME_DISAGREEMENT','ALMUQAWIM_ENTRY_TIMING_STALE']){
+    assert.ok(result.failures.includes(code),code);
+  }
+  assert.equal(result.eligible,false);
+  assert.equal(result.mode,'STRICT_NOTIFICATION');
+});
+
 test('watch-only early corridor requires an explicitly upward direction',()=>{
   resetRadarNotificationGateForTests();
   const result=evaluateRadarNotificationGate(strongEarlyWatchCandidate({direction:'DOWN'}),{now:NOW,commit:false});
