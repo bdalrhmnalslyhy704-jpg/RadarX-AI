@@ -1204,6 +1204,25 @@ function isExceptionalDeepCandidate(item,cfg){
   return (volume>=Number(cfg.exceptionalVolumeAccelRatio??2.2)&&(acceleration>=Number(cfg.exceptionalPriceAccelerationPct??.15)||pressure>=.58||structure>=72))||
     (trades>=Number(cfg.exceptionalTradeAccelRatio??1.8)&&(acceleration>0||pressure>=.58));
 }
+function deepBurstPriority(item,now=Date.now()){
+  const fp=item?.micro_fingerprint||{},m=fp.metrics||{},fast=item?.fast||{};
+  const shockCandidates=[fp.activity_shock,fast.market_wide_event_driven_breakout,fast.event_driven_breakout]
+    .filter(x=>x&&typeof x==='object');
+  const shock=shockCandidates.find(x=>x.detected===true||
+    String(x.stage||'').toUpperCase()==='EVENT_DRIVEN_BREAKOUT')||null;
+  const maxPositive=(...values)=>Math.max(0,...values.map(value=>hasFiniteNumber(value)?Number(value):0));
+  const eventScore=shock&&hasFiniteNumber(shock.score)?clamp(shock.score,0,100):0;
+  const volume=maxPositive(fast.volume_accel_ratio,m.rvol_1m,m.rvol_5m,shock?.metrics?.volume_shock_ratio);
+  const trades=maxPositive(fast.trade_accel_ratio,m.trade_rvol_1m,m.trade_rvol_5m,shock?.metrics?.trade_shock_ratio);
+  const acceleration=maxPositive(fast.price_acceleration_pct,m.acceleration_1m_pct,m.acceleration_5m_pct);
+  const shortMove=maxPositive(fast.price_change_pct,m.return_1m,m.return_5m);
+  const eventAt=Number(shock?.detected_candle_close_time??shock?.detected_at??shock?.timestamp);
+  const ageMs=Number.isFinite(eventAt)&&eventAt>0?Math.max(0,Number(now)-eventAt):null;
+  // Fresh confirmed events gain a bounded bonus; old events still retain their evidence score.
+  const freshnessBonus=ageMs===null?0:20*Math.max(0,1-ageMs/(10*60*1000));
+  return (shock?100:0)+eventScore*.5+Math.min(volume,8)*2+Math.min(trades,8)*2+
+    Math.min(acceleration,1)*10+Math.min(shortMove,2)*2+freshnessBonus;
+}
 function selectionSymbol(item){return String(item?.symbol??item?.row?.symbol??'').trim().toUpperCase();}
 function takeUniqueLane(selected,seen,pool,count,lane){
   const limit=Math.max(0,Math.trunc(Number(count)||0));
@@ -2089,7 +2108,9 @@ export class EarlyExpansionRadar{
     const byExceptional=valid.filter(x=>underfloorDeepWatchSymbols.has(selectionSymbol(x))||
       isExceptionalDeepCandidate(x,this.config)).sort((a,b)=>
         Number(underfloorDeepWatchSymbols.has(selectionSymbol(b)))-Number(underfloorDeepWatchSymbols.has(selectionSymbol(a)))||
-        Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
+        deepBurstPriority(b,selectionAt)-deepBurstPriority(a,selectionAt)||
+        Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||
+        selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const selected=[],seen=new Set();
     const configuredExceptionSlots=Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2));
     let exceptionSlots=Math.min(core,configuredExceptionSlots),quietSlots=q,rotationSlots=r,scoreSlots=core;
