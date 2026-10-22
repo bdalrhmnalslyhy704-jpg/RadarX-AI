@@ -1545,6 +1545,22 @@ export function isMarketWideCachePoolReady(cacheProof, minimumCoverageRatio=0.10
     cacheProof?.websocket_sync_ready===true&&ratio>=minimum;
 }
 
+/**
+ * Allow candidate pooling from a fresh, validated closed-candle cache while the
+ * WebSocket is connecting/rebuilding. The light scan and each downstream scan
+ * independently validate candle freshness/continuity; this is not permission to
+ * label old or missing data as live. A small/unready cache still fails closed.
+ */
+export function isMarketWideCacheFallbackPoolReady(cacheProof, lightScanCoverageReady=false, minimumCoverageRatio=0.10){
+  if(lightScanCoverageReady!==true)return false;
+  const expected=Number(cacheProof?.expected_symbols);
+  const ready=Number(cacheProof?.ready_symbols);
+  if(!Number.isFinite(expected)||expected<=0||!Number.isFinite(ready)||ready<0)return false;
+  const ratio=Math.max(0,Math.min(1,ready/expected));
+  const minimum=Math.max(0.10,Math.min(1,Number.isFinite(Number(minimumCoverageRatio))?Number(minimumCoverageRatio):0.10));
+  return ratio>=minimum;
+}
+
 const FIVE_MINUTE_MS = 5 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const RADAR8_MICRO_5M_CACHE_MAX_WINDOWS = 36;
@@ -2684,6 +2700,9 @@ export class EarlyExpansionRadar{
           const fullMarketCacheReady=cacheProof?.full_market_coverage_ready===true;
           const marketWideCachePoolReady=isMarketWideCachePoolReady(
             cacheProof,this.config.marketWideLightScanMinCoverageRatio);
+          const marketWideCacheFallbackReady=isMarketWideCacheFallbackPoolReady(
+            cacheProof,marketWideLightResult.coverageReady,this.config.marketWideLightScanMinCoverageRatio);
+          const marketWideCacheSelectionReady=marketWideCachePoolReady||marketWideCacheFallbackReady;
           const expectedCacheSymbols=Number(cacheProof?.expected_symbols)||0;
           const readyCacheSymbols=Number(cacheProof?.ready_symbols)||0;
           const marketWideCacheReadyRatio=expectedCacheSymbols>0?readyCacheSymbols/expectedCacheSymbols:0;
@@ -2694,12 +2713,14 @@ export class EarlyExpansionRadar{
             marketWidePoolGateReason='POOL_ACTIVATION_DISABLED';
           }else if(!marketWideLightResult.coverageReady){
             marketWidePoolGateReason='LIGHT_SCAN_COVERAGE_NOT_READY';
-          }else if(!marketWideCachePoolReady){
-            if(cacheProof?.websocket_live!==true)marketWidePoolGateReason='WEBSOCKET_NOT_LIVE_AT_SELECTION';
-            else if(cacheProof?.websocket_subscription_complete!==true)marketWidePoolGateReason='WS_SUBSCRIPTION_INCOMPLETE';
-            else if(cacheProof?.websocket_sync_ready!==true)marketWidePoolGateReason='WS_SYNC_NOT_READY';
+          }else if(!marketWideCacheSelectionReady){
+            if(!marketWideLightResult.coverageReady)marketWidePoolGateReason='LIGHT_SCAN_COVERAGE_NOT_READY';
             else if(marketWideCacheReadyRatio<Math.max(0.10,Number(this.config.marketWideLightScanMinCoverageRatio)||0.10))
               marketWidePoolGateReason='CACHE_READY_RATIO_BELOW_MINIMUM';
+            else if(cacheProof?.websocket_subscription_complete!==true)
+              marketWidePoolGateReason='WS_SUBSCRIPTION_INCOMPLETE_AND_NO_FRESH_CACHE_FALLBACK';
+            else if(cacheProof?.websocket_sync_ready!==true)
+              marketWidePoolGateReason='WS_SYNC_NOT_READY_AND_NO_FRESH_CACHE_FALLBACK';
             else marketWidePoolGateReason='CACHE_POOL_GATE_NOT_READY';
           }else if(!this.marketWideKlineCache){
             marketWidePoolGateReason='KLINE_CACHE_UNAVAILABLE';
@@ -2709,7 +2730,8 @@ export class EarlyExpansionRadar{
             const pool=marketWideLightResult.candidateRows.filter(row=>lightPoolSet.has(selectionSymbol(row)));
             marketWidePoolCandidateRows=pool.length;
             if(pool.length>=marketWidePoolRequiredRows){
-              microSelectionInput=pool;marketWideLightApplied=true;marketWidePoolGateReason='APPLIED';
+              microSelectionInput=pool;marketWideLightApplied=true;
+              marketWidePoolGateReason=marketWideCachePoolReady?'APPLIED':'APPLIED_FRESH_CLOSED_CACHE_FALLBACK';
             }else marketWidePoolGateReason='CANDIDATE_POOL_TOO_SMALL';
           }
           marketWideLightResult.summary.micro_pool_applied=marketWideLightApplied;
@@ -2728,6 +2750,8 @@ export class EarlyExpansionRadar{
           marketWideLightResult.summary.book_ticker_snapshot_age_ms=this.marketWideBookTickerAt>0
             ?Math.max(0,fastSeenAt-this.marketWideBookTickerAt):null;
           marketWideLightResult.summary.market_wide_cache_coverage_ready=marketWideCachePoolReady;
+          marketWideLightResult.summary.market_wide_cache_fallback_pool_ready=marketWideCacheFallbackReady;
+          marketWideLightResult.summary.market_wide_cache_selection_ready=marketWideCacheSelectionReady;
           marketWideLightResult.summary.market_wide_cache_ready_ratio=marketWideCacheReadyRatio;
           marketWideLightResult.summary.full_market_cache_coverage_ready=fullMarketCacheReady;
           marketWideLightResult.summary.websocket_advanced_symbols=Number(cacheProof?.websocket_advanced_symbols)||0;
