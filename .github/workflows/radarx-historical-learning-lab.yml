@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - feature/build224-historical-learning-lab-20261016
+      - fix/build224-binance-host-failover-20261016
     paths:
       - phase2/core/historical-learning-lab.mjs
       - phase2/core/historical-replay.mjs
+      - phase2/core/binance-host-order.mjs
       - phase2/tools/historical-learning-lab.mjs
       - phase2/tools/historical-replay.mjs
       - phase2/tools/historical-replay-matrix.mjs
@@ -15,6 +17,8 @@ on:
       - phase2/tests/historical-learning-lab.test.mjs
       - phase2/tests/historical-learning-lab-cli.test.mjs
       - phase2/tests/monthly-historical-replay-lab.test.mjs
+      - phase2/tests/monthly-move-forensics-host-failover.test.mjs
+      - phase2/tests/run-tests.mjs
       - phase2/tests/historical-replay.test.mjs
       - phase2/tests/historical-replay-matrix.test.mjs
       - .github/workflows/radarx-historical-learning-lab.yml
@@ -74,6 +78,7 @@ jobs:
           node --test phase2/tests/historical-learning-lab.test.mjs
           node --test phase2/tests/historical-learning-lab-cli.test.mjs
           node --test phase2/tests/monthly-historical-replay-lab.test.mjs
+          node --test phase2/tests/monthly-move-forensics-host-failover.test.mjs
           node --check phase2/tools/monthly-move-forensics.mjs
           node --check phase2/tools/monthly-historical-replay-lab.mjs
       - name: Download and analyze the rolling 30-day Spot mover archive
