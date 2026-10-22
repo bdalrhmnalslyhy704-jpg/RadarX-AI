@@ -1894,14 +1894,32 @@ export class EarlyExpansionRadar{
   async stop(){this.running=false;if(this.timer)clearTimeout(this.timer);this.timer=null;this.marketWideKlineCache?.stop?.();}
   async recordWatchOnlyAlert(alert,eventType='RADAR8_WATCH_ONLY_TRACE'){
     const symbol=String(alert?.symbol||'').trim().toUpperCase();
-    const pushStatus='WATCH_ONLY_NOT_SENT';
-    // Watch-only observations belong in diagnostics, never in the actionable feed
-    // polled by Android. They do not invoke a push provider even if one is configured.
-    alert.notification_status=pushStatus;
+    const pushEvent=alert?.event==='EARLY_FLOW_WATCH_ONLY'&&
+      ['MICRO_EARLY_FLOW_WATCH_TRACE','EARLY_FLOW_WATCH_TRACE'].includes(String(eventType));
+    let pushStatus='WATCH_ONLY_NOT_SENT',pushAttempted=false,pushResult=null;
     alert.watch_only=true;
     alert.entry_eligible=false;
+    if(pushEvent&&typeof this.pushManager?.notifyRadarWatchOnlyAlert==='function'){
+      try{
+        pushResult=await this.pushManager.notifyRadarWatchOnlyAlert(alert);
+        pushAttempted=pushResult?.attempted===true;
+        pushStatus=String(pushResult?.status||'UNKNOWN').toUpperCase()==='SENT'
+          ?'WATCH_ONLY_PUSH_SENT'
+          :'WATCH_ONLY_PUSH_'+String(pushResult?.status||'UNKNOWN').toUpperCase();
+      }catch(error){
+        this.noteError(error,'watch-only-push');
+        pushStatus='WATCH_ONLY_PUSH_ERROR';
+      }
+    }else if(pushEvent){
+      pushStatus='WATCH_ONLY_PUSH_UNAVAILABLE';
+    }
+    alert.notification_status=pushStatus;
     const trace={...alert,event_type:eventType,feed_status:'TRACE_ONLY',
-      notification_status:pushStatus,trace_at:this.clock()};
+      notification_status:pushStatus,push_attempted:pushAttempted,
+      push_result_status:pushResult?.status??null,
+      push_sent_count:Number(pushResult?.sent_count)||0,
+      push_attempted_count:Number(pushResult?.attempted_count)||0,
+      trace_at:this.clock()};
     let stored=false;
     try{
       if(typeof this.store.appendEarlyExpansionEvent!=='function')throw new Error('WATCH_TRACE_WRITER_UNAVAILABLE');
@@ -1910,9 +1928,11 @@ export class EarlyExpansionRadar{
     }catch(error){this.noteError(error,'watch-only-alert-trace');}
     this.logger.info?.('[RADAR8_WATCH_ONLY_ALERT]',JSON.stringify({
       id:alert?.id||null,symbol,event:alert?.event||null,feed_status:stored?'TRACE_ONLY':'TRACE_STORE_FAILED',
-      notification_status:pushStatus,entry_eligible:false
+      notification_status:pushStatus,push_attempted:pushAttempted,
+      push_result_status:pushResult?.status??null,push_sent_count:Number(pushResult?.sent_count)||0,
+      entry_eligible:false
     }));
-    return {stored,pushStatus};
+    return {stored,pushStatus,pushAttempted,pushResult};
   }
   noteError(e,where='scan'){this.lastError=String(e?.message??e);this.logger.warn?.('EARLY_EXPANSION_RADAR_'+where,this.lastError);}
   normalizeQuote(quote=this.config.quote){
@@ -2991,7 +3011,7 @@ export class EarlyExpansionRadar{
         const cooldown=Math.max(0,Number(this.config.earlyFlowWatchCooldownMs??10*60*1000));
         if(previousEarlyFlowWatchKeys.has(watchKey)||this.lastEarlyFlowWatchKeyBySymbol.get(symbol)===watchKey||now-lastAt<cooldown)continue;
         const watchStatus=await this.recordWatchOnlyAlert(watchAlert,'MICRO_EARLY_FLOW_WATCH_TRACE');
-        if(!watchStatus.stored)continue;
+        if(!watchStatus.stored&&!watchStatus.pushAttempted)continue;
         this.lastEarlyFlowWatchAt.set(symbol,now);
         this.lastEarlyFlowWatchKeyBySymbol.set(symbol,watchKey);
         previousEarlyFlowWatchKeys.add(watchKey);
