@@ -314,6 +314,57 @@ test('an invalidated setup is retained until a materially new early setup appear
   assert.equal(renewed.signal_lifecycle.transition,'NEW_SETUP_AFTER_INVALIDATION');
 });
 
+
+function strongEarlyWatchCandidate(extra={}){
+  return baseline('STRONG_MOVE_RADAR',{
+    opportunity_score:84,radar_power_score:84,
+    structure_score:90,flow_score:90,momentum_score:90,compression_score:90,
+    relative_strength:90,trigger_score:90,participation_score:90,
+    confirmation_count:3,
+    strong_move:{score:84,metrics:{return_3m:0.7,micro_breakout:false,volume_ratio:1.8,trade_ratio:1.5,taker_buy_ratio:0.55,taker_buy_delta:0.02,five_min_trend:70,five_min_return:0.4}},
+    ...extra
+  });
+}
+
+test('evidence-gated watch-only early corridor can surface a strong fresh candidate across non-legacy radars',()=>{
+  resetRadarNotificationGateForTests();
+  const result=evaluateRadarNotificationGate(strongEarlyWatchCandidate(),{now:NOW,commit:false});
+  assert.equal(result.eligible,true,JSON.stringify({mode:result.mode,failures:result.failures,falcon:result.falcon_eye}));
+  assert.equal(result.mode,'RADAR_WATCH_ONLY_EARLY_TRACK');
+  assert.equal(result.watch_only,true);
+  assert.equal(result.requires_follow_up_confirmation,true);
+  assert.ok(result.failures.includes('SCORE_BELOW_STRICT_THRESHOLD'));
+  assert.notEqual(result.signal_lifecycle.state,'CONFIRMED');
+});
+
+test('shared watch-only corridor never bypasses a failed-breakout trap or anti-chase failure',()=>{
+  resetRadarNotificationGateForTests();
+  const result=evaluateRadarNotificationGate(baseline('FALCON_EYE_RADAR',{
+    opportunity_score:84,radar_power_score:84,
+    structure_score:90,flow_score:90,momentum_score:90,compression_score:90,
+    relative_strength:90,trigger_score:90,participation_score:90,
+    direction:'UP',confirmation_count:4,
+    falcon_eye:{
+      eligible:true,score:84,confirmation_count:4,not_chasing:true,
+      pre_expansion_fingerprint:{ready:true,late:false,micro_move:false,score:82},
+      component_scores:{quietness:82,compression:80,momentum:78,volume:82,trades:78,taker:74,structure:82,resistance:76,relative_strength:78,derivatives:72,breakout:80,atr:75,range:74},
+      metrics:{move_24h_pct:2,return_5m:0.7,return_10m:1.0,ema21_distance_pct:0.8,resistance_gap_pct:0.5},
+      derivatives:{futures_available:false},
+      role_evidence:{failed_breakout:{detected:true,status:'FAILED_BREAKOUT_TRAP'},continuation:{confirmed:false,status:'DATA_INSUFFICIENT'}}
+    }
+  }),{now:NOW,commit:false});
+  assert.ok(result.failures.includes('FALCON_FAILED_BREAKOUT_TRAP_RISK'));
+  assert.equal(result.mode,'STRICT_NOTIFICATION');
+  assert.equal(result.eligible,false);
+});
+
+test('watch-only early corridor requires an explicitly upward direction',()=>{
+  resetRadarNotificationGateForTests();
+  const result=evaluateRadarNotificationGate(strongEarlyWatchCandidate({direction:'DOWN'}),{now:NOW,commit:false});
+  assert.equal(result.eligible,false,JSON.stringify({mode:result.mode,failures:result.failures}));
+  assert.equal(result.mode,'STRICT_NOTIFICATION');
+});
+
 test('only a strict pass becomes confirmed; confirmation remains explicitly non-predictive',()=>{
   resetRadarNotificationGateForTests();
   const confirmed=advanceSignalLifecycle({symbol:'ATOMUSDT',radar:'TEST_RADAR',data_quality:96},{
