@@ -531,3 +531,59 @@ test('read-only radar outcome endpoint reports all twelve archives and worker st
     await new Promise(resolve=>server.close(resolve));
   }
 });
+
+
+test('TEST_FIXTURE: cold multi-analyst cache returns explicit WARMING without waiting for the full scan',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-multi-analyst-warming-')),store=await new DurableStore({dir}).init();
+  let resolveScan;
+  let scanCalls=0;
+  const pendingScan=new Promise(resolve=>{resolveScan=resolve;});
+  const multiAnalystRadar={
+    config:{quote:'USDT',returnLimit:1,minQuoteVolume24h:300000,universeRefreshMs:1800000,deepConcurrency:3,deepKlines:220,continuousIntervalMs:60000},
+    running:true,busy:null,
+    monitorStats:{scan_count:0,last_scan_at:null,last_error:null,next_scan_at:null,last_scan_successful:false},
+    getCached(){return null;},
+    scan(){
+      scanCalls++;
+      this.busy=pendingScan;
+      return pendingScan;
+    },
+    radarReviewQueueSnapshot(){return{pending_count:0,max_queue:200};}
+  };
+  const config={auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}};
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),multiAnalystRadar});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const base='http://127.0.0.1:'+server.address().port;
+  try{
+    const started=Date.now();
+    const response=await fetch(base+'/api/multi-analyst?quote=USDT&limit=1');
+    const elapsed=Date.now()-started;
+    assert.equal(response.status,200);
+    assert.ok(elapsed<1000,'cold-cache request should not block on the full analyst scan');
+    const body=await response.json();
+    assert.equal(body.status,'warming');
+    assert.equal(body.radar,'MULTI_ANALYST');
+    assert.equal(body.meta.live,false);
+    assert.equal(body.meta.analyst_readiness,'WARMING');
+    assert.equal(body.meta.analyst_count,20);
+    assert.equal(body.meta.specialist_count,19);
+    assert.equal(body.scan.completed,false);
+    assert.equal(body.scan.error,'SCAN_STARTED');
+    assert.deepEqual(body.candidates,[]);
+    assert.deepEqual(body.watchlist,[]);
+    assert.equal(scanCalls,1);
+
+    const second=await fetch(base+'/api/multi-analyst?quote=USDT&limit=1');
+    assert.equal(second.status,200);
+    const next=await second.json();
+    assert.equal(next.status,'warming');
+    assert.equal(next.meta.live,false);
+    assert.equal(next.scan.error,'SCAN_IN_PROGRESS');
+    assert.equal(scanCalls,1,'parallel cold requests must not start duplicate full scans');
+  }finally{
+    resolveScan?.({});
+    multiAnalystRadar.busy=null;
+    await new Promise(resolve=>server.close(resolve));
+  }
+});
