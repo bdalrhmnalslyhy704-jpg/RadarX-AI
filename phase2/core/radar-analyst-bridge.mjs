@@ -203,5 +203,5 @@ export function connectRadarAlertsToAnalysts({
     };
   }
 
-  return {installed:true,mode:'NON_BLOCKING_REVIEW_ONLY'};
+  return {installed:true,mode:'SHARED_GATE_ENFORCED_NON_BLOCKING_REVIEW'};
 }
