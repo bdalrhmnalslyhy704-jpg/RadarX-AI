@@ -225,17 +225,19 @@ export class PushManager{
     const participation=volume>=1.20||trades>=1.15||(taker>=0.54&&(volume>=1||trades>=1));
     const sourceVerified=source.includes('BINANCE_PUBLIC')||source.includes('BINANCE PUBLIC');
     const riskFlags=Array.isArray(alert?.risk_flags)?alert.risk_flags:[];
-    const hardRisk=riskFlags.some(flag=>[
+    const earlyFlowHardRisk=riskFlags.some(flag=>[
+      'MICRO_ANTI_CHASE','MICRO_FAST_EXTENSION_WARNING','MICRO_DAILY_EXTENSION_WARNING',
+      'DATA_STALE','DATA_GAP','FUTURE_DATA'
+    ].includes(String(flag)));
+    const quietBaseHardRisk=riskFlags.some(flag=>[
       'ALREADY_EXTENDED','HIGH_RISK_PUMP','HIGH_RISK_DUMP','RECENT_FAKEOUT',
       'STALE_DATA','DATA_STALE','DATA_GAP','FUTURE_DATA','WIDE_SPREAD',
-      'ORDERBOOK_UNAVAILABLE','HISTORICAL_FOLLOWTHROUGH_WEAK','DATA_INSUFFICIENT',
-      'MICRO_ANTI_CHASE','MICRO_FAST_EXTENSION_WARNING','MICRO_DAILY_EXTENSION_WARNING'
+      'ORDERBOOK_UNAVAILABLE','HISTORICAL_FOLLOWTHROUGH_WEAK','DATA_INSUFFICIENT'
     ].includes(String(flag)));
     const commonInvalid=
       (!isEarlyFlowWatch&&!isQuietBaseWatch)||
       alert?.radar!=='EARLY_EXPANSION_RADAR'||
       alert?.watch_only!==true||alert?.entry_eligible!==false||
-      alert?.closed_candles_only!==true||
       alert?.data_stale===true||
       !sourceVerified||
       !Number.isFinite(closeTime)||age<0||
@@ -246,7 +248,7 @@ export class PushManager{
       Math.abs(move)>=18||
       !Number.isFinite(score)||score<58||
       !Number.isFinite(confirmations)||confirmations<3||
-      !participation||!(acceleration>0||recentReturn>0)
+      !participation||!(acceleration>0||recentReturn>0)||earlyFlowHardRisk
     );
     const fingerprintEvidence=Array.isArray(fingerprint?.evidence)?fingerprint.evidence:[];
     const antiChaseEvidence=fingerprintEvidence.find(item=>item?.key==='anti_chase');
@@ -254,7 +256,7 @@ export class PushManager{
     const quietBaseInvalid=isQuietBaseWatch&&(
       age>8*60_000||
       Math.abs(move)>=8||
-      Number(fingerprint?.classification)!==Number.NaN||
+      alert?.closed_candles_only!==true||
       fingerprint?.classification!=='WATCH_EARLY'||
       fingerprint?.reason!=='QUIET_BASE_NEAR_MISS_BUY_FLOW_TRANSITION'||
       fingerprint?.detected!==true||
@@ -266,7 +268,7 @@ export class PushManager{
       !Number.isFinite(Number(fpMetrics.daily_change_24h_pct))||Math.abs(Number(fpMetrics.daily_change_24h_pct))>=8||
       !Number.isFinite(Number(fpMetrics.move_5m_pct))||Number(fpMetrics.move_5m_pct)>=2.5||
       !Number.isFinite(Number(fpMetrics.move_15m_pct))||Number(fpMetrics.move_15m_pct)>=6||
-      antiChaseEvidence?.passed!==true||
+      antiChaseEvidence?.passed!==true||quietBaseHardRisk||
       !fingerprintEvidence.some(item=>item?.key==='higher_lows_or_stable_support'&&item?.passed===true)||
       !fingerprintEvidence.some(item=>item?.key==='narrow_price_base_range_pct'&&item?.passed===true)
     );
