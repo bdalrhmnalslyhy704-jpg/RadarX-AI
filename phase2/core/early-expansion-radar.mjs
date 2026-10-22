@@ -2662,11 +2662,14 @@ export class EarlyExpansionRadar{
       }
       if(this.config.marketWideLightScanEnabled!==false){
         try{
+          // Book-ticker REST is fetched after the fast ticker snapshot. Use the
+          // actual evaluation timestamp so a fresh book is not rejected as future data.
+          const lightScanAt=this.clock();
           marketWideLightResult=this.marketWideLightScan.scan({
             eligible,getSeries:symbol=>this.marketWideKlineCache?.getSeries(symbol,96)||null,
             benchmarkTicker:rawBySymbol.get('BTCUSDT')||null,
             getBookTicker:symbol=>bookTickerBySymbol.get(String(symbol||'').toUpperCase())||null,
-            now:fastSeenAt,cycle,
+            now:lightScanAt,cycle,
             isExceptional:row=>{
               const fast=fastBySymbol.get(row.symbol)||{};
               return isExceptionalMicroCandidate(row,fast,this.config)||isFastActivityShockCandidate(row,fast,this.config)||
