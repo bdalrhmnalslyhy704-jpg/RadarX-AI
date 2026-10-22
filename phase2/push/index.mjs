@@ -242,7 +242,7 @@ export class PushManager{
       !sourceVerified||
       !Number.isFinite(closeTime)||age<0||
       !Number.isFinite(Number(alert?.price))||Number(alert.price)<=0||
-      !Number.isFinite(move);
+      alert?.price_change_24h==null||!Number.isFinite(move);
     const earlyFlowInvalid=isEarlyFlowWatch&&(
       evidence.closed_candles_only!==true||age>120_000||
       Math.abs(move)>=18||
@@ -262,12 +262,13 @@ export class PushManager{
       fingerprint?.detected!==true||
       fingerprint?.watch_only!==true||fingerprint?.entry_eligible!==false||
       transition?.available!==true||transition?.watch_only_qualified!==true||
-      Number(transition?.near_miss_signal_count)<4||
+      !Number.isFinite(Number(transition?.near_miss_signal_count))||
+      Number(transition.near_miss_signal_count)<4||
       !Number.isFinite(Number(alert?.data_quality))||Number(alert.data_quality)<70||
       !Number.isFinite(Number(alert?.liquidity_quality))||Number(alert.liquidity_quality)<60||
-      !Number.isFinite(Number(fpMetrics.daily_change_24h_pct))||Math.abs(Number(fpMetrics.daily_change_24h_pct))>=8||
-      !Number.isFinite(Number(fpMetrics.move_5m_pct))||Number(fpMetrics.move_5m_pct)>=2.5||
-      !Number.isFinite(Number(fpMetrics.move_15m_pct))||Number(fpMetrics.move_15m_pct)>=6||
+      fpMetrics.daily_change_24h_pct==null||!Number.isFinite(Number(fpMetrics.daily_change_24h_pct))||Math.abs(Number(fpMetrics.daily_change_24h_pct))>=8||
+      fpMetrics.move_5m_pct==null||!Number.isFinite(Number(fpMetrics.move_5m_pct))||Number(fpMetrics.move_5m_pct)>=2.5||
+      fpMetrics.move_15m_pct==null||!Number.isFinite(Number(fpMetrics.move_15m_pct))||Number(fpMetrics.move_15m_pct)>=6||
       antiChaseEvidence?.passed!==true||quietBaseHardRisk||
       !fingerprintEvidence.some(item=>item?.key==='higher_lows_or_stable_support'&&item?.passed===true)||
       !fingerprintEvidence.some(item=>item?.key==='narrow_price_base_range_pct'&&item?.passed===true)
