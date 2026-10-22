@@ -35,13 +35,42 @@ function numericQuality(value){
 }
 
 function dataQualityOf(alert){
-  return numericQuality(alert?.data_quality ?? alert?.data_status?.data_quality ??
-    alert?.components?.data_quality ?? alert?.components?.dataQuality ?? alert?.deep_scan?.assessment?.data_quality);
+  return numericQuality(
+    alert?.data_quality ??
+    alert?.data_status?.data_quality ??
+    alert?.components?.data_quality ??
+    alert?.components?.dataQuality ??
+    alert?.early_expansion?.data_quality ??
+    alert?.early_wake?.data_quality ??
+    alert?.kahir_analysis?.data_quality ??
+    alert?.doomsday?.data_quality ??
+    alert?.almuqawim?.data_quality ??
+    alert?.liquidity_absorption?.data_quality ??
+    alert?.coin_hunter?.data_quality ??
+    alert?.whale_accumulation?.data_quality ??
+    alert?.falcon_eye?.data_quality ??
+    alert?.analysis?.data_quality ??
+    alert?.deep_scan?.assessment?.data_quality
+  );
 }
 
 function liquidityOf(alert){
-  return numericQuality(alert?.liquidity_quality ?? alert?.components?.liquidity ??
-    alert?.deep_scan?.assessment?.liquidity_score);
+  return numericQuality(
+    alert?.liquidity_quality ??
+    alert?.liquidity_metrics?.liquidity_quality ??
+    alert?.components?.liquidity ??
+    alert?.early_expansion?.liquidity_quality ??
+    alert?.kahir_analysis?.liquidity_quality ??
+    alert?.doomsday?.liquidity_quality ??
+    alert?.almuqawim?.liquidity_quality ??
+    alert?.liquidity_absorption?.liquidity_quality ??
+    alert?.coin_hunter?.liquidity_quality ??
+    alert?.whale_accumulation?.liquidity_quality ??
+    alert?.falcon_eye?.liquidity_quality ??
+    alert?.analysis?.liquidity_quality ??
+    alert?.analysis?.liquidity_score ??
+    alert?.deep_scan?.assessment?.liquidity_score
+  );
 }
 
 function confirmationsOf(alert){
@@ -120,12 +149,32 @@ function categoryHitsOf(alert){
 }
 
 function scoreOf(alert){
-  return num(alert?.elite_gate?.score ??
+  // Resolve the native score field for each specialist radar before any generic
+  // fallback. Missing evidence stays zero; scores are never synthesized.
+  return num(
+    alert?.elite_gate?.score ??
     alert?.radar_power_score ??
     alert?.opportunity_score ??
     alert?.strong_move?.score ??
     alert?.rotation?.score ??
-    alert?.setup_score ?? 0,0);
+    alert?.liquidity_absorption?.score ??
+    alert?.kahir_analysis?.score ??
+    alert?.doomsday?.score ??
+    alert?.professor_opinion?.score ??
+    alert?.almuqawim?.score ??
+    alert?.early_expansion_score ??
+    alert?.early_expansion?.score ??
+    alert?.coin_hunter?.score ??
+    alert?.factors?.early_setup_score ??
+    alert?.whale_accumulation?.score ??
+    alert?.falcon_eye?.score ??
+    alert?.early_wake?.score ??
+    alert?.pre_explosion?.score ??
+    alert?.setup_score ??
+    alert?.score ??
+    alert?.signal_score ??
+    alert?.final_score ??
+    0,0);
 }
 
 function acceptedStrategiesOf(alert){
