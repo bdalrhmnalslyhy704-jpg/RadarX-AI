@@ -109,5 +109,55 @@ export function connectRadarAlertsToAnalysts({
     return originalNotify(alert,...args);
   };
 
+  // Route dedicated watch-only notifications into the same analyst review queue.
+  // They stay explicitly non-actionable and do not use the accepted-alert telemetry lane.
+  if(typeof pushManager.notifyRadarWatchOnlyAlert==='function'){
+    const originalWatchOnlyNotify=pushManager.notifyRadarWatchOnlyAlert.bind(pushManager);
+    pushManager.notifyRadarWatchOnlyAlert=async function(alert,...args){
+      const now=clock();
+      const symbol=String(alert?.symbol??alert?.asset??'').trim().toUpperCase();
+      const sourceRadar=String(alert?.radar??alert?.radar_id??alert?.radar_name??'RADAR_WATCH_ONLY')
+        .trim().toUpperCase().slice(0,80)||'RADAR_WATCH_ONLY';
+      if(/^[A-Z0-9]{2,30}$/.test(symbol)){
+        try{
+          const queued=multiAnalystRadar.enqueueRadarReview(symbol,{
+            sourceRadar,watchOnly:true,
+            stage:String(alert?.decision_band??alert?.potential_label??alert?.signal_type??'WATCH_EARLY')
+          });
+          if(queued?.queued&&queued?.already_queued!==true){
+            try{
+              logger.info?.('[RADAR_ANALYST_WATCH_REVIEW_QUEUED] '+JSON.stringify({
+                symbol,radar:sourceRadar,pending_count:queued.pending_count??null,
+                stage:String(alert?.decision_band??alert?.potential_label??alert?.signal_type??'WATCH_EARLY'),
+                watch_only:true,entry_eligible:false,at:new Date(now).toISOString()
+              }));
+            }catch{}
+          }
+        }catch(error){
+          try{
+            logger.warn?.('[RADAR_ANALYST_WATCH_REVIEW_QUEUE_FAILED] '+JSON.stringify({
+              symbol,radar:sourceRadar,error:safeMessage(error)
+            }));}catch{}
+        }
+        try{
+          decisionRecorder({
+            ...alert,radar:sourceRadar,symbol,
+            observed_at:alert?.observed_at??alert?.detected_at??alert?.created_at??now,
+            processed_at:now,
+            stage:alert?.decision_band??alert?.potential_label??alert?.signal_type??'WATCH_EARLY',
+            watch_only:true,entry_eligible:false
+          },{
+            radar:sourceRadar,eligible:false,
+            score:alert?.score??alert?.signal_score??alert?.final_score??null,
+            accepted_mode:'WATCH_ONLY_REVIEW_PENDING',
+            soft_failures:['WATCH_ONLY_NOT_ENTRY_ELIGIBLE','MULTI_ANALYST_REVIEW_QUEUED']
+          },{now,source:'LIVE'});
+        }catch{}
+      }
+      // Do not block or alter the dedicated watch-only delivery path.
+      return originalWatchOnlyNotify(alert,...args);
+    };
+  }
+
   return {installed:true,mode:'NON_BLOCKING_REVIEW_ONLY'};
 }
