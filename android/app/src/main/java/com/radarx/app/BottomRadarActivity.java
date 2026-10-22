@@ -36,7 +36,7 @@ public final class BottomRadarActivity extends Activity {
             "https://appassets.androidplatform.net/assets/bottom-radar.html";
     private static final String APP_ORIGIN =
             "https://appassets.androidplatform.net";
-    private static final String BACKEND_ORIGIN = "https://radarx-backend.dhdtech.site";
+    private static final String BACKEND_ORIGIN = "https://dhdtech-url-required.invalid";
     private static final String BACKEND_FALLBACK_ORIGIN = "";
 
     private WebView webView;
