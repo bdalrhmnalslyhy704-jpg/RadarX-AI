@@ -112,7 +112,7 @@ test('shared-gate rejection prevents ordinary push while preserving review telem
   assert.equal(response.status,'BLOCKED_SHARED_NOTIFICATION_GATE');
   assert.equal(response.attempted,false);
   assert.equal(alerts.length,0);
-  assert.ok(['MONITOR','INVALIDATED'].includes(alert.signal_lifecycle.state),JSON.stringify(alert.signal_lifecycle));
+  assert.equal(alert.signal_lifecycle.state,'MONITOR',JSON.stringify(alert.signal_lifecycle));
   assert.equal(decisions.length,1);
   assert.equal(decisions[0].gate.eligible,false);
 });
