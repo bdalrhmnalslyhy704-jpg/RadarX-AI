@@ -242,7 +242,7 @@ export class PushManager{
       !sourceVerified||
       !Number.isFinite(closeTime)||age<0||
       !Number.isFinite(Number(alert?.price))||Number(alert.price)<=0||
-      !Number.isFinite(move)||hardRisk;
+      !Number.isFinite(move);
     const earlyFlowInvalid=isEarlyFlowWatch&&(
       evidence.closed_candles_only!==true||age>120_000||
       Math.abs(move)>=18||
