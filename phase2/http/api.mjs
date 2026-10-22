@@ -332,9 +332,33 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           candleCache=typeof cache?.health==='function'?cache.health():null;
           warmupReport=cache?.lastWarmupReport||null;
         }catch{}
+        let analystRuntime={configured:false,running:false,monitorStats:null,assessments:[],queue:null};
+        if(multiAnalystRadar){
+          const monitorStats=multiAnalystRadar.monitorStats&&typeof multiAnalystRadar.monitorStats==='object'
+            ?{...multiAnalystRadar.monitorStats}:null;
+          let assessments=[],queue=null;
+          try{
+            assessments=typeof multiAnalystRadar.latestAssessments==='function'
+              ?multiAnalystRadar.latestAssessments({limit:100}):[];
+          }catch(error){
+            if(monitorStats)monitorStats.last_error='ASSESSMENT_READ_FAILED: '+String(error?.message??error).slice(0,160);
+            else analystRuntime.assessment_read_error=String(error?.message??error).slice(0,160);
+          }
+          try{
+            queue=typeof multiAnalystRadar.radarReviewQueueSnapshot==='function'
+              ?multiAnalystRadar.radarReviewQueueSnapshot():null;
+          }catch(error){
+            if(monitorStats)monitorStats.last_error='REVIEW_QUEUE_READ_FAILED: '+String(error?.message??error).slice(0,160);
+          }
+          analystRuntime={
+            configured:true,running:multiAnalystRadar.running===true,monitorStats,
+            assessments:Array.isArray(assessments)?assessments:[],queue,
+            maxAssessmentAgeMs:Number(multiAnalystRadar.config?.radarReviewAssessmentTtlMs)||180000
+          };
+        }
         return send(res,200,buildRadarReadinessAudit({
           radars:radarStatus(),swarm,telemetry:radarTelemetry.snapshot({limit:500}),
-          candleCache,warmupReport,now:Date.now()
+          candleCache,warmupReport,analystRuntime,now:Date.now()
         }));
       }
       if(u.pathname==='/api/radar-outcomes'&&req.method==='GET'){
