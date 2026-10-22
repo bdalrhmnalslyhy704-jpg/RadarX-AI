@@ -439,3 +439,27 @@ test('only a strict pass becomes confirmed; confirmation remains explicitly non-
   assert.ok(confirmed.reason_codes.includes('STRICT_GATES_PASSED'));
   assert.equal(confirmed.terminal,false);
 });
+
+
+test('a rejected shared gate keeps a PRE_EXPANSION-labelled candidate in MONITOR lifecycle',()=>{
+  resetRadarNotificationGateForTests();
+  const result=advanceSignalLifecycle({
+    radar:'EARLY_EXPANSION_RADAR',
+    symbol:'REJECTEDSETUPUSDT',
+    pre_expansion_stage:'PRE_EXPANSION',
+    data_quality:95,
+    liquidity_quality:88,
+    pre_expansion_fingerprint:{stage:'PRE_EXPANSION',ready:true,late:false,score:82}
+  },{
+    radar:'EARLY_EXPANSION_RADAR',
+    eligible:false,
+    mode:'STRICT_NOTIFICATION',
+    score:0,
+    data_quality:95,
+    liquidity_quality:88,
+    failures:['SCORE_BELOW_STRICT_THRESHOLD','BUY_FLOW_NOT_CONFIRMED']
+  },{now:NOW});
+  assert.equal(result.state,'MONITOR',JSON.stringify(result));
+  assert.ok(result.reason_codes.includes('SHARED_NOTIFICATION_GATE_REJECTED'));
+  assert.equal(result.terminal,false);
+});
