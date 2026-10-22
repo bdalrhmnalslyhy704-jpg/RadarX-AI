@@ -1,5 +1,5 @@
 import {recordRadarDecision} from './radar-telemetry.mjs';
-import {advanceSignalLifecycle,evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
+import {advanceSignalLifecycle,evaluateRadarNotificationGate,rememberRadarAlert} from './radar-notification-gate.mjs';
 
 function safeMessage(error){
   return String(error?.message??error??'UNKNOWN_ERROR').replace(/[^a-z0-9_.:-]/gi,'_').slice(0,160);
@@ -144,6 +144,11 @@ export function connectRadarAlertsToAnalysts({
           soft_failures:failureCodes
         },{now,source:'LIVE'});
       }catch{}
+      if(!deliveryBlocked){
+        // A final accepted notification owns the cross-radar cooldown even when the
+        // originating radar did not call the shared gate with commit=true.
+        try{rememberRadarAlert({...alert,radar:sourceRadar},now);}catch{}
+      }
       if(deliveryBlocked){
         return {status:'BLOCKED_SHARED_NOTIFICATION_GATE',attempted:false,notifications:[],blocked_reasons:blockedReasons,watch_only:watchOnly,entry_eligible:false};
       }
