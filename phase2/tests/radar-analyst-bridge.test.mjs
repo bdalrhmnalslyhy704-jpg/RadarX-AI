@@ -63,6 +63,36 @@ console.log('radar analyst bridge preserves original push and enqueues review: P
   assert.equal(decisionCalls,1,'telemetry is recorded for valid symbols without blocking push');
 }
 
+
+test('common bridge classifies direct notifications from non-gated radars as watch-only when early evidence qualifies',async()=>{
+  const alerts=[],logs=[];
+  const pushManager={async notifyRadarAlert(alert){alerts.push(alert);return {status:'delivered'};}};
+  const multiAnalystRadar={enqueueRadarReview(){return {queued:true,already_queued:false,pending_count:1};}};
+  const installed=connectRadarAlertsToAnalysts({
+    pushManager,multiAnalystRadar,logger:{info:x=>logs.push(x),warn:x=>logs.push(x)},clock:()=>1_800_000_300_000
+  });
+  assert.equal(installed.installed,true);
+  const alert={
+    symbol:'WATCHLANEUSDT',radar:'STRONG_MOVE_RADAR',radar_name:'Radar 2',direction:'UP',
+    opportunity_score:84,radar_power_score:84,data_quality:96,liquidity_quality:90,price_change_24h:1.2,
+    detected_at:1_800_000_299_000,eligible:true,
+    reasons:['closed candle','volume participation','buy pressure','structure','relative strength','compression'],
+    reason_codes:['VOLUME_PARTICIPATION','BUYING_PRESSURE_CONFIRMED'],
+    components:{momentum:90,volume:90,trades:90,taker:90,range:90,breakout:90,ema:90,vwap:90,bollinger:90,efficiency:90,atr:90},
+    structure_score:90,flow_score:90,momentum_score:90,compression_score:90,relative_strength:90,trigger_score:90,participation_score:90,
+    strong_move:{score:84,metrics:{return_3m:0.7,micro_breakout:false,volume_ratio:1.8,trade_ratio:1.5,taker_buy_ratio:0.55,taker_buy_delta:0.02,five_min_trend:70,five_min_return:0.4}}
+  };
+  const response=await pushManager.notifyRadarAlert(alert);
+  assert.deepEqual(response,{status:'delivered'});
+  assert.equal(alerts[0],alert,'classification preserves alert identity');
+  assert.equal(alert.notification_gate?.eligible,true,JSON.stringify({gate:alert.notification_gate}));
+  assert.equal(alert.notification_gate?.watch_only,true);
+  assert.equal(alert.notification_gate?.mode,'RADAR_WATCH_ONLY_EARLY_TRACK');
+  assert.equal(alert.signal_lifecycle.state,'EARLY_SETUP');
+  assert.equal(alert.signal_lifecycle.terminal,false);
+  assert.equal(JSON.stringify(logs).includes('RADAR_SHARED_WATCH_ONLY_CLASSIFIED'),true);
+});
+
 console.log('radar analyst bridge fails open and validates symbol: PASS');
 test('non-blocking bridge attaches a meaningful early lifecycle without changing delivery eligibility',async()=>{
   const decisions=[],alerts=[];
