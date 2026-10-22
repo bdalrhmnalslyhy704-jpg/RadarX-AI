@@ -26,13 +26,13 @@ import {evaluateRadarNotificationGate} from '../core/radar-notification-gate.mjs
     decisionRecorder:(alert,gate,options)=>decisions.push({alert,gate,options})
   });
   assert.equal(installed.installed,true);
-  assert.equal(installed.mode,'NON_BLOCKING_REVIEW_ONLY');
+  assert.equal(installed.mode,'SHARED_GATE_ENFORCED_NON_BLOCKING_REVIEW');
   const alert={symbol:'BTCUSDT',radar:'RADAR8',signal_type:'WATCH_EARLY',signal_score:81,detected_at:1799999999000};
   const result=await pushManager.notifyRadarAlert(alert,{trace:'kept'});
-  assert.deepEqual(result,{status:'delivered',marker:'ORIGINAL_PATH'});
-  assert.equal(alerts.length,1);
-  assert.equal(alerts[0].alert,alert);
-  assert.deepEqual(alerts[0].extra,{trace:'kept'});
+  assert.equal(result.status,'BLOCKED_SHARED_NOTIFICATION_GATE');
+  assert.equal(result.attempted,false);
+  assert.ok(result.blocked_reasons.includes('DATA_QUALITY_BELOW_STRICT_THRESHOLD'));
+  assert.equal(alerts.length,0,'a radar notification rejected by the shared gate must never be sent');
   assert.equal(alerts[0].alert.signal_lifecycle.state,'MONITOR','missing evidence must not be presented as early or confirmed');
   assert.equal(queued.length,1);
   assert.deepEqual(queued[0],{symbol:'BTCUSDT',options:{sourceRadar:'RADAR8'}});
@@ -46,7 +46,7 @@ import {evaluateRadarNotificationGate} from '../core/radar-notification-gate.mjs
   assert.deepEqual(connectRadarAlertsToAnalysts({pushManager,multiAnalystRadar}).reason,'ALREADY_INSTALLED');
 }
 
-console.log('radar analyst bridge preserves original push and enqueues review: PASS');
+console.log('radar analyst bridge blocks rejected pushes and enqueues review: PASS');
 
 {
   let pushCalls=0,queueCalls=0,decisionCalls=0;
@@ -58,11 +58,13 @@ console.log('radar analyst bridge preserves original push and enqueues review: P
     decisionRecorder(){decisionCalls++}
   });
   assert.equal(result.installed,true);
-  assert.equal(await pushManager.notifyRadarAlert({symbol:'BAD/SYMBOL',radar:'RADAR4'}),'sent');
-  assert.equal(await pushManager.notifyRadarAlert({symbol:'ETHUSDT',radar:'RADAR4'}),'sent');
-  assert.equal(pushCalls,2,'review bridge must not suppress the existing push path');
-  assert.equal(queueCalls,1);
-  assert.equal(decisionCalls,1,'telemetry is recorded for valid symbols without blocking push');
+  const malformed=await pushManager.notifyRadarAlert({symbol:'BAD/SYMBOL',radar:'RADAR4'});
+  const rejected=await pushManager.notifyRadarAlert({symbol:'ETHUSDT',radar:'RADAR4'});
+  assert.equal(malformed.status,'BLOCKED_SHARED_NOTIFICATION_GATE');
+  assert.equal(rejected.status,'BLOCKED_SHARED_NOTIFICATION_GATE');
+  assert.equal(pushCalls,0,'malformed or shared-gate-rejected alerts must not reach provider delivery');
+  assert.equal(queueCalls,1,'valid rejected symbols still enter the analyst review queue');
+  assert.equal(decisionCalls,1,'telemetry records the rejection without sending a false notification');
 }
 
 
@@ -95,8 +97,8 @@ test('common bridge classifies direct notifications from non-gated radars as wat
   assert.equal(JSON.stringify(logs).includes('RADAR_SHARED_WATCH_ONLY_CLASSIFIED'),true);
 });
 
-console.log('radar analyst bridge fails open and validates symbol: PASS');
-test('non-blocking bridge attaches a meaningful early lifecycle without changing delivery eligibility',async()=>{
+console.log('radar analyst bridge fails closed on invalid/rejected alerts: PASS');
+test('shared-gate rejection prevents ordinary push while preserving review telemetry',async()=>{
   const decisions=[],alerts=[];
   const pushManager={async notifyRadarAlert(alert){alerts.push(alert);return {status:'delivered'};}};
   const multiAnalystRadar={enqueueRadarReview(){return {queued:true,already_queued:false,pending_count:1};}};
@@ -107,11 +109,12 @@ test('non-blocking bridge attaches a meaningful early lifecycle without changing
     potential_label:'PRE_EXPANSION',data_quality:95,liquidity_quality:88,
     pre_expansion_fingerprint:{stage:'PRE_EXPANSION',ready:true,late:false,score:82}};
   const response=await pushManager.notifyRadarAlert(alert);
-  assert.deepEqual(response,{status:'delivered'});
-  assert.equal(alerts[0],alert);
-  assert.equal(alert.signal_lifecycle.state,'EARLY_SETUP',JSON.stringify(alert.signal_lifecycle));
-  assert.equal(alert.signal_lifecycle.label,'إعداد مبكر');
+  assert.equal(response.status,'BLOCKED_SHARED_NOTIFICATION_GATE');
+  assert.equal(response.attempted,false);
+  assert.equal(alerts.length,0);
+  assert.ok(['MONITOR','INVALIDATED'].includes(alert.signal_lifecycle.state),JSON.stringify(alert.signal_lifecycle));
   assert.equal(decisions.length,1);
+  assert.equal(decisions[0].gate.eligible,false);
 });
 
 
@@ -246,7 +249,8 @@ test('an emitted watch-only alert is never recorded as an accepted candidate',as
     }
   };
   const response=await pushManager.notifyRadarAlert(alert);
-  assert.equal(response.status,'delivered');
+  assert.equal(response.status,'BLOCKED_SHARED_NOTIFICATION_GATE');
+  assert.equal(response.attempted,false);
   assert.equal(decisions.length,1);
   assert.equal(decisions[0].gate.eligible,false);
   assert.equal(decisions[0].gate.accepted_mode,'WATCH_ONLY_REVIEW_PENDING');
