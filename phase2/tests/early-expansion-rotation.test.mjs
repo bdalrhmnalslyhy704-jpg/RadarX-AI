@@ -478,6 +478,22 @@ test('Radar 8 Deep exceptional slots rank stronger closed activity events ahead 
   assert.equal(selected[0]._selection_lane,'exceptional');
 });
 
+test('Radar 8 Deep ranks an explicit market-wide breakout above a weaker generic shock field',()=>{
+  const radar=makeRadar({deepCandidates:2,quietReserve:0,rotationReserve:0,exceptionalRotationBypassSlots:2});
+  const mixed=candidate('MIXEDEVENTUSDT',1,{score:98});
+  mixed.micro_fingerprint.activity_shock={detected:true,stage:'ACTIVITY_SHOCK',score:70,
+    watch_only:true,entry_eligible:false,extended:false,detected_candle_close_time:now-5_000};
+  mixed.fast={market_wide_event_driven_breakout:{detected:true,stage:'EVENT_DRIVEN_BREAKOUT',score:96,
+    detected_candle_close_time:now-1_000}};
+  const generic=candidate('GENERICSHOCKUSDT',1,{score:60});
+  generic.micro_fingerprint.activity_shock={detected:true,stage:'ACTIVITY_SHOCK',score:75,
+    watch_only:true,entry_eligible:false,extended:false,detected_candle_close_time:now-1_000};
+  const selected=radar.selectDeepFromMicro([generic,mixed],17);
+  assert.equal(selected.length,2);
+  assert.equal(selected[0].row.symbol,'MIXEDEVENTUSDT',
+    'the explicit event-driven breakout must not be hidden by the generic activity-shock field');
+});
+
 test('Radar 8 five-slot Deep batch preserves a score-ranked slot when burst events arrive together',()=>{
   const radar=makeRadar({deepCandidates:5,quietReserve:8,rotationReserve:8,exceptionalRotationBypassSlots:3});
   const items=Array.from({length:12},(_,i)=>candidate('DP'+String(i).padStart(2,'0')+'USDT',1+i*.1,{score:90-i}));
