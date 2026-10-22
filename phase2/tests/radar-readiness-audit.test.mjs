@@ -218,3 +218,20 @@ test('readiness detects a missing canonical radar role even when twelve workers 
   assert.ok(audit.summary.unexpected_radar_roles.includes('UNEXPECTED_RADAR'));
   assert.ok(audit.readiness_reasons.includes('RADAR_ROLE_COVERAGE_INCOMPLETE'));
 });
+
+
+test('readiness is DEGRADED when the latest analyst scan failed even if no error string was retained', () => {
+  const now = 1_000_000;
+  const runtime = healthyAnalystRuntime(now, {
+    monitorStats: {
+      scan_count: 4,
+      last_scan_at: new Date(now - 500).toISOString(),
+      last_scan_successful: false,
+      last_error: null
+    }
+  });
+  const {audit} = fixture({analystRuntime: runtime});
+  assert.equal(audit.status, 'DEGRADED');
+  assert.equal(audit.analysts.last_scan_error, 'LAST_SCAN_NOT_SUCCESSFUL');
+  assert.ok(audit.readiness_reasons.includes('MULTI_ANALYST_LAST_SCAN_ERROR'));
+});
