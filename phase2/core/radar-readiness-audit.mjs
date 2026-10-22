@@ -61,14 +61,16 @@ function buildAnalystReadiness(runtime, now) {
   const incompleteFresh = fresh.filter(row => !complete(row));
   const stale = rows.filter(row => !fresh.includes(row)).length;
   const queue = runtime.queue && typeof runtime.queue === 'object' ? runtime.queue : {};
-  const scanError = String(stats.last_error || '').slice(0, 200) || null;
+  const scanCount = Math.max(0, Math.trunc(numeric(stats.scan_count) ?? 0));
+  const rawScanError = String(stats.last_error || '').slice(0, 200) || null;
+  const scanError = rawScanError || (scanCount > 0 && stats.last_scan_successful === false ? 'LAST_SCAN_NOT_SUCCESSFUL' : null);
   let status;
   if (!configured || !running || scanError || incompleteFresh.length) status = 'DEGRADED';
   else if (completeFresh.length) status = 'READY';
   else status = 'WARMING';
   return {
     required:true,configured,status,expected_analysts:20,specialists_per_assessment:19,final_analyst_per_assessment:1,
-    worker_running:running,scan_count:numeric(stats.scan_count) ?? 0,
+    worker_running:running,scan_count:scanCount,
     last_scan_at:typeof stats.last_scan_at === 'string' ? stats.last_scan_at : null,
     next_scan_at:typeof stats.next_scan_at === 'string' ? stats.next_scan_at : null,
     last_scan_successful:stats.last_scan_successful === true,last_scan_error:scanError,
