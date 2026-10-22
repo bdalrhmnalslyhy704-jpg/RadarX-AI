@@ -2,6 +2,7 @@ import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.m
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
+import {evaluateDynamicEarlyWarningGate} from './dynamic-early-warning-gate.mjs';
 import {isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
@@ -441,12 +442,12 @@ export class StrongMoveRadar {
     this.config={
       quote:'USDT',pollMs:30000,universeRefreshMs:30*60*1000,minQuoteVolume24h:0,
       rotationBatchSize:4,topMoverCount:3,alertCooldownMs:12*60*1000,
-      emergencyAlertCooldownMs:5*60*1000,minScore:76, ...config
+      emergencyAlertCooldownMs:5*60*1000,minScore:76,earlyWarningCooldownMs:30*60*1000, ...config
     };
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
-    this.lastTickerMap=new Map();this.lastScanAt=new Map();this.lastAlertAt=new Map();
+    this.lastTickerMap=new Map();this.lastScanAt=new Map();this.lastAlertAt=new Map();this.lastEarlyWarningAt=new Map();
     this.lastEmergencyCandleAt=new Map();this.lastEmergencyAlertAt=new Map();
-    this.emergencyAlertCount=0;this.alertCount=0;this.lastError=null;this.scans=0;this.lastScanAtMs=null;this.busy=false;
+    this.emergencyAlertCount=0;this.earlyWarningCount=0;this.alertCount=0;this.lastError=null;this.scans=0;this.lastScanAtMs=null;this.busy=false;
   }
   start(){
     if(this.running)return;
@@ -575,6 +576,15 @@ export class StrongMoveRadar {
     const alert=buildStrongMoveAlert({
       ticker:row,one_minute:one.candles,five_minute:fiveResult.candles
     },now);
+    // The watch gate checks freshness against the last closed 1m candle actually used.
+    const sourceCandle=(Array.isArray(one.candles)?one.candles:[])
+      .filter(c=>c?.closed!==false&&Number.isFinite(Number(c?.closeTime))&&Number(c.closeTime)<=now)
+      .sort((a,b)=>Number(b.closeTime)-Number(a.closeTime))[0];
+    if(sourceCandle){
+      alert.source_candle_close_at=Number(sourceCandle.closeTime);
+      alert.source_event_at=Number(sourceCandle.closeTime);
+      if(alert.strong_move)alert.strong_move.source_candle_close_at=Number(sourceCandle.closeTime);
+    }
     const alertScore=Math.max(
       Number(alert?.strong_move?.score)||0,
       Number(alert?.strong_move?.component_scores?.flash)||0
@@ -603,8 +613,62 @@ export class StrongMoveRadar {
     alert.data_quality=finite(a.data_quality,0);
     alert.liquidity_quality=clamp(70+Math.log10(Math.max(1,Number(row.quoteVolume24h)/this.config.minQuoteVolume24h))*30);
     alert.data_status={status:a.data_stale?'DATA_STALE':'LIVE_DATA',stale:Boolean(a.data_stale),future_data_detected:false,source:'Binance Public REST'};
-    if(!alert.eligible||alertScore<this.config.minScore||!gate.eligible)return alert;
-    const notificationGate=evaluateRadarNotificationGate(alert,{now:this.clock(),commit:true});
+    const decisionAt=this.clock();
+    const strictReady=Boolean(alert.eligible&&alertScore>=Number(this.config.minScore)&&gate.eligible);
+    if(!strictReady){
+      const strictFailures=[];
+      if(!alert.eligible)strictFailures.push('STRONG_MOVE_CORE_GATE_FAILED');
+      if(alertScore<Number(this.config.minScore))strictFailures.push('SCORE_BELOW_STRICT_THRESHOLD');
+      if(!gate.eligible){
+        const detailedFailures=Array.isArray(gate.failures)?gate.failures.map(String):[];
+        strictFailures.push(...(detailedFailures.length?detailedFailures:['ELITE_GATE_NOT_ELIGIBLE']));
+      }
+      const previousAlertAt=Number(this.lastAlertAt.get(row.symbol)||0);
+      const previousWatchAt=Number(this.lastEarlyWarningAt.get(row.symbol)||0);
+      const earlyGate=evaluateDynamicEarlyWarningGate(alert,row,{
+        now:decisionAt,alertScore,
+        minQuoteVolume24h:Math.max(750_000,Number(this.config.minQuoteVolume24h)||0),
+        strictFailures,
+        coreTriggerFailures:Array.isArray(gate.failures)?gate.failures:[],
+        lastAlertAt:Math.max(previousAlertAt,previousWatchAt),
+        earlyCooldownMs:Math.max(30*60*1000,Number(this.config.earlyWarningCooldownMs)||0)
+      });
+      alert.early_warning_gate=earlyGate;
+      if(!earlyGate.eligible)return alert;
+      // The outer alert is eligible for WATCH notification only; its nested strong_move keeps the strict result.
+      alert.strict_entry_eligible=false;
+      alert.entry_eligible=false;
+      alert.execution_eligible=false;
+      alert.informational_only=true;
+      alert.alert_class='PRE_EXPANSION_WATCH';
+      alert.signal_type='PRE_EXPANSION_WATCH';
+      alert.pre_expansion_stage='PRE_EXPANSION_WATCH';
+      alert.potential_label='PRE_EXPANSION_WATCH';
+      alert.underlying_strong_move_score=alertScore;
+      alert.opportunity_score=earlyGate.score;
+      alert.event='PRE_EXPANSION_WATCH_ALERT';
+      alert.eligible=true;
+      alert.paper_trading=true;
+      alert.real_order_execution=false;
+      alert.notification_gate={
+        eligible:true,radar:'STRONG_MOVE_RADAR',mode:'DYNAMIC_EARLY_WARNING',score:earlyGate.score,
+        failures:[],standard_gate_failures:strictFailures,no_extra_network_calls:true
+      };
+      alert.disclaimer='تحذير مبكر للرصد فقط: لم يجتز مسار الإشارة الصارمة ولا يسمح بالتنفيذ؛ يلزم تأكيد مستقل قبل أي قرار.';
+      const decoratedWatch=decorateRadarAlert(alert,'Radar 2 — Strong-Move / Early Watch');
+      await this.store.appendStrongMoveAlert(decoratedWatch);
+      this.lastEarlyWarningAt.set(row.symbol,decisionAt);
+      this.alertCount++;
+      this.earlyWarningCount++;
+      try{
+        if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decoratedWatch);
+      }catch(pushError){
+        this.lastError=String(pushError?.message??pushError);
+        this.logger.warn?.('STRONG_MOVE_EARLY_WARNING_PUSH',this.lastError);
+      }
+      return alert;
+    }
+    const notificationGate=evaluateRadarNotificationGate(alert,{now:decisionAt,commit:true});
     alert.notification_gate=notificationGate;
     if(!notificationGate.eligible)return alert;
     const lastAlert=this.lastAlertAt.get(row.symbol)||0;
@@ -642,6 +706,7 @@ export class StrongMoveRadar {
       scans:this.scans,
       alerts_emitted:this.alertCount,
       emergency_alerts_emitted:this.emergencyAlertCount,
+      early_warning_alerts_emitted:this.earlyWarningCount,
       emergency_trigger:'CLOSED_5M_MOVE_GTE_7_PERCENT_OR_POSITIVE_MOVE_GTE_1_5_PERCENT_WITH_3X_VOLUME_SPIKE; NO_24H_QUOTE_VOLUME_FLOOR',
       last_error:this.lastError,
       busy:this.busy,

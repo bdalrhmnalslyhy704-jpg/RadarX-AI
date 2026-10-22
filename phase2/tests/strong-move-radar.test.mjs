@@ -27,6 +27,24 @@ function make1m(){
   return rows;
 }
 
+function makeEarly1m(){
+  const rows=[];let price=100;
+  for(let i=0;i<120;i++){
+    // Build a real acceleration transition: moderate impulse, then a stronger final 3-candle burst.
+    const step=i>=117?1.0:i>=114?0.1:0.03;
+    const open=price,close=open+step;
+    const burst=i>=114;
+    price=close;
+    rows.push({
+      openTime:NOW-(120-i)*60_000,closeTime:NOW-(120-i)*60_000+60_000,
+      open,high:close+(burst?0.12:0.02),low:open-0.02,close,
+      volume:burst?500_000:80_000,tradeCount:burst?4_000:700,
+      takerBuyBaseVolume:burst?485_000:41_600,closed:true
+    });
+  }
+  return rows;
+}
+
 function make5m(){
   const rows=[];let price=100;
   for(let i=0;i<40;i++){
@@ -197,4 +215,27 @@ assert.ok(fiveMinuteGap.reason_codes.includes('FIVE_MINUTE_CLOSED_CANDLE_GAP'));
   const repeated=await emergencyRadar.scanRow({...ticker,priceChange24h:29.5});
   assert.equal(repeated,null,'per-symbol scan pacing prevents duplicate work inside one poll interval');
 }
+
+{
+  const stored=[],pushed=[];
+  const watchRadar=new StrongMoveRadar({
+    rest:{klines:async(_symbol,tf)=>({candles:tf==='1m'?makeEarly1m():make5m(),source:'TEST'})},
+    store:{appendStrongMoveAlert:async row=>stored.push(row)},
+    pushManager:{notifyRadarAlert:async row=>pushed.push(row)},
+    config:{pollMs:15_000,minQuoteVolume24h:750_000,minScore:101,earlyWarningCooldownMs:30*60*1000},
+    clock:()=>NOW,logger:{warn(){}}
+  });
+  const watch=await watchRadar.scanRow({...ticker,priceChange24h:4.2,quoteVolume24h:8_000_000});
+  assert.equal(watch.event,'PRE_EXPANSION_WATCH_ALERT',JSON.stringify(watch.early_warning_gate?.failures));
+  assert.equal(watch.early_warning_gate.eligible,true);
+  assert.equal(watch.early_warning_gate.fallback_3s_flow,true);
+  assert.equal(watch.strict_entry_eligible,false);
+  assert.equal(watch.execution_eligible,false);
+  assert.equal(watch.real_order_execution,false);
+  assert.equal(stored.length,1);
+  assert.equal(pushed.length,1);
+  assert.equal(stored[0].informational_only,true);
+  assert.equal(watchRadar.health().early_warning_alerts_emitted,1);
+}
+
 console.log('Strong Move Radar tests passed');
