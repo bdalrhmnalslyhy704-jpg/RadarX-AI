@@ -1204,6 +1204,33 @@ function isExceptionalDeepCandidate(item,cfg){
   return (volume>=Number(cfg.exceptionalVolumeAccelRatio??2.2)&&(acceleration>=Number(cfg.exceptionalPriceAccelerationPct??.15)||pressure>=.58||structure>=72))||
     (trades>=Number(cfg.exceptionalTradeAccelRatio??1.8)&&(acceleration>0||pressure>=.58));
 }
+function deepBurstPriority(item,now=Date.now()){
+  const fp=item?.micro_fingerprint||{},m=fp.metrics||{},fast=item?.fast||{};
+  const shockCandidates=[fp.activity_shock,fast.market_wide_event_driven_breakout,fast.event_driven_breakout]
+    .filter(x=>x&&typeof x==='object'&&(x.detected===true||
+      String(x.stage||'').toUpperCase()==='EVENT_DRIVEN_BREAKOUT'));
+  // Prefer the strongest stage before score/freshness so a generic shock field
+  // cannot hide a separately detected market-wide breakout event.
+  shockCandidates.sort((a,b)=>{
+    const eventRank=x=>String(x?.stage||'').toUpperCase()==='EVENT_DRIVEN_BREAKOUT'?2:1;
+    const score=x=>hasFiniteNumber(x?.score)?Number(x.score):0;
+    const at=x=>Number(x?.detected_candle_close_time??x?.detected_at??x?.timestamp)||0;
+    return eventRank(b)-eventRank(a)||score(b)-score(a)||at(b)-at(a);
+  });
+  const shock=shockCandidates[0]||null;
+  const maxPositive=(...values)=>Math.max(0,...values.map(value=>hasFiniteNumber(value)?Number(value):0));
+  const eventScore=shock&&hasFiniteNumber(shock.score)?clamp(shock.score,0,100):0;
+  const volume=maxPositive(fast.volume_accel_ratio,m.rvol_1m,m.rvol_5m,shock?.metrics?.volume_shock_ratio);
+  const trades=maxPositive(fast.trade_accel_ratio,m.trade_rvol_1m,m.trade_rvol_5m,shock?.metrics?.trade_shock_ratio);
+  const acceleration=maxPositive(fast.price_acceleration_pct,m.acceleration_1m_pct,m.acceleration_5m_pct);
+  const shortMove=maxPositive(fast.price_change_pct,m.return_1m,m.return_5m);
+  const eventAt=Number(shock?.detected_candle_close_time??shock?.detected_at??shock?.timestamp);
+  const ageMs=Number.isFinite(eventAt)&&eventAt>0?Math.max(0,Number(now)-eventAt):null;
+  // Fresh confirmed events gain a bounded bonus; old events still retain their evidence score.
+  const freshnessBonus=ageMs===null?0:20*Math.max(0,1-ageMs/(10*60*1000));
+  return (shock?100:0)+eventScore*.5+Math.min(volume,8)*2+Math.min(trades,8)*2+
+    Math.min(acceleration,1)*10+Math.min(shortMove,2)*2+freshnessBonus;
+}
 function selectionSymbol(item){return String(item?.symbol??item?.row?.symbol??'').trim().toUpperCase();}
 function takeUniqueLane(selected,seen,pool,count,lane){
   const limit=Math.max(0,Math.trunc(Number(count)||0));
@@ -1518,6 +1545,22 @@ export function isMarketWideCachePoolReady(cacheProof, minimumCoverageRatio=0.10
     cacheProof?.websocket_sync_ready===true&&ratio>=minimum;
 }
 
+/**
+ * Allow candidate pooling from a fresh, validated closed-candle cache while the
+ * WebSocket is connecting/rebuilding. The light scan and each downstream scan
+ * independently validate candle freshness/continuity; this is not permission to
+ * label old or missing data as live. A small/unready cache still fails closed.
+ */
+export function isMarketWideCacheFallbackPoolReady(cacheProof, lightScanCoverageReady=false, minimumCoverageRatio=0.10){
+  if(lightScanCoverageReady!==true)return false;
+  const expected=Number(cacheProof?.expected_symbols);
+  const ready=Number(cacheProof?.ready_symbols);
+  if(!Number.isFinite(expected)||expected<=0||!Number.isFinite(ready)||ready<0)return false;
+  const ratio=Math.max(0,Math.min(1,ready/expected));
+  const minimum=Math.max(0.10,Math.min(1,Number.isFinite(Number(minimumCoverageRatio))?Number(minimumCoverageRatio):0.10));
+  return ratio>=minimum;
+}
+
 const FIVE_MINUTE_MS = 5 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const RADAR8_MICRO_5M_CACHE_MAX_WINDOWS = 36;
@@ -1765,6 +1808,7 @@ export class EarlyExpansionRadar{
     this.marketWideBookTickerCache=new Map();
     this.marketWideBookTickerAt=0;
     this.marketWideBookTickerTask=null;
+    this.marketWideBookTickerStats={status:'NOT_FETCHED',response_rows:0,valid_rows:0,checked_at_ms:0,error_code:null};
     this.marketWideLightScan=new MarketWideLightScan({config:{
       candidateLimit:this.config.marketWideLightScanCandidateLimit,
       rotationReserve:this.config.marketWideLightScanRotationReserve,
@@ -1850,25 +1894,65 @@ export class EarlyExpansionRadar{
   async stop(){this.running=false;if(this.timer)clearTimeout(this.timer);this.timer=null;this.marketWideKlineCache?.stop?.();}
   async recordWatchOnlyAlert(alert,eventType='RADAR8_WATCH_ONLY_TRACE'){
     const symbol=String(alert?.symbol||'').trim().toUpperCase();
-    const pushStatus='WATCH_ONLY_NOT_SENT';
-    // Watch-only observations belong in diagnostics, never in the actionable feed
-    // polled by Android. They do not invoke a push provider even if one is configured.
-    alert.notification_status=pushStatus;
+    const evidence=alert?.early_flow_watch_evidence||{};
+    const traceAt=this.clock();
+    const pushEvent=alert?.event==='EARLY_FLOW_WATCH_ONLY'&&
+      ['MICRO_EARLY_FLOW_WATCH_TRACE','EARLY_FLOW_WATCH_TRACE'].includes(String(eventType));
+    let pushStatus='WATCH_ONLY_NOT_SENT',pushAttempted=false,pushResult=null;
     alert.watch_only=true;
     alert.entry_eligible=false;
+    if(pushEvent&&typeof this.pushManager?.notifyRadarWatchOnlyAlert==='function'){
+      try{
+        pushResult=await this.pushManager.notifyRadarWatchOnlyAlert(alert);
+        pushAttempted=pushResult?.attempted===true;
+        pushStatus=String(pushResult?.status||'UNKNOWN').toUpperCase()==='SENT'
+          ?'WATCH_ONLY_PUSH_SENT'
+          :'WATCH_ONLY_PUSH_'+String(pushResult?.status||'UNKNOWN').toUpperCase();
+      }catch(error){
+        this.noteError(error,'watch-only-push');
+        pushStatus='WATCH_ONLY_PUSH_ERROR';
+      }
+    }else if(pushEvent){
+      pushStatus='WATCH_ONLY_PUSH_UNAVAILABLE';
+    }
+    alert.notification_status=pushStatus;
     const trace={...alert,event_type:eventType,feed_status:'TRACE_ONLY',
-      notification_status:pushStatus,trace_at:this.clock()};
+      notification_status:pushStatus,push_attempted:pushAttempted,
+      push_result_status:pushResult?.status??null,
+      push_sent_count:Number(pushResult?.sent_count)||0,
+      push_attempted_count:Number(pushResult?.attempted_count)||0,
+      trace_at:traceAt};
     let stored=false;
     try{
       if(typeof this.store.appendEarlyExpansionEvent!=='function')throw new Error('WATCH_TRACE_WRITER_UNAVAILABLE');
       await this.store.appendEarlyExpansionEvent(trace);
       stored=true;
     }catch(error){this.noteError(error,'watch-only-alert-trace');}
+    const closeTime=Number(evidence.closed_candle_close_time);
     this.logger.info?.('[RADAR8_WATCH_ONLY_ALERT]',JSON.stringify({
       id:alert?.id||null,symbol,event:alert?.event||null,feed_status:stored?'TRACE_ONLY':'TRACE_STORE_FAILED',
-      notification_status:pushStatus,entry_eligible:false
+      notification_status:pushStatus,push_attempted:pushAttempted,
+      push_result_status:pushResult?.status??null,push_sent_count:Number(pushResult?.sent_count)||0,
+      source:alert?.source||'UNKNOWN',price:Number(alert?.price)||null,
+      price_change_24h:Number.isFinite(Number(alert?.price_change_24h))?Number(alert.price_change_24h):null,
+      closed_candles_only:evidence.closed_candles_only===true,
+      closed_candle_close_time:Number.isFinite(closeTime)?closeTime:null,
+      closed_candle_age_ms:Number.isFinite(closeTime)?Math.max(0,traceAt-closeTime):null,
+      micro_score:Number.isFinite(Number(evidence.micro_score))?Number(evidence.micro_score):null,
+      confirmation_count:Number.isFinite(Number(evidence.confirmation_count))?Number(evidence.confirmation_count):null,
+      rvol_1m:Number.isFinite(Number(evidence.rvol_1m))?Number(evidence.rvol_1m):null,
+      rvol_5m:Number.isFinite(Number(evidence.rvol_5m))?Number(evidence.rvol_5m):null,
+      trade_rvol_1m:Number.isFinite(Number(evidence.trade_rvol_1m))?Number(evidence.trade_rvol_1m):null,
+      trade_rvol_5m:Number.isFinite(Number(evidence.trade_rvol_5m))?Number(evidence.trade_rvol_5m):null,
+      acceleration_1m_pct:Number.isFinite(Number(evidence.acceleration_1m_pct))?Number(evidence.acceleration_1m_pct):null,
+      acceleration_5m_pct:Number.isFinite(Number(evidence.acceleration_5m_pct))?Number(evidence.acceleration_5m_pct):null,
+      return_1m:Number.isFinite(Number(evidence.return_1m))?Number(evidence.return_1m):null,
+      return_5m:Number.isFinite(Number(evidence.return_5m))?Number(evidence.return_5m):null,
+      risk_flags:Array.isArray(alert?.risk_flags)?alert.risk_flags.slice(0,8):[],
+      reason_codes:Array.isArray(alert?.reason_codes)?alert.reason_codes.slice(0,8):[],
+      entry_eligible:false
     }));
-    return {stored,pushStatus};
+    return {stored,pushStatus,pushAttempted,pushResult};
   }
   noteError(e,where='scan'){this.lastError=String(e?.message??e);this.logger.warn?.('EARLY_EXPANSION_RADAR_'+where,this.lastError);}
   normalizeQuote(quote=this.config.quote){
@@ -1912,12 +1996,22 @@ export class EarlyExpansionRadar{
             asOf:Number(response?.receivedAt)||this.clock()
           });
         }
+        const checkedAt=Number(response?.receivedAt)||this.clock();
+        this.marketWideBookTickerStats={
+          status:next.size?'AVAILABLE':'NO_VALID_ROWS',response_rows:raw.length,valid_rows:next.size,
+          checked_at_ms:checkedAt,source:String(response?.source||'BINANCE_PUBLIC_REST_BOOK_TICKER').slice(0,60),
+          error_code:null
+        };
         if(next.size){
           this.marketWideBookTickerCache=next;
-          this.marketWideBookTickerAt=Number(response?.receivedAt)||this.clock();
+          this.marketWideBookTickerAt=checkedAt;
           return next;
         }
       }catch(error){
+        this.marketWideBookTickerStats={
+          status:'FAILED',response_rows:0,valid_rows:0,checked_at_ms:this.clock(),
+          error_code:String(error?.code||'REQUEST_FAILED').slice(0,80)
+        };
         this.noteError(error,'market-wide-book-ticker');
       }
       return this.marketWideBookTickerAt>0&&this.clock()-this.marketWideBookTickerAt<=60_000
@@ -2089,7 +2183,9 @@ export class EarlyExpansionRadar{
     const byExceptional=valid.filter(x=>underfloorDeepWatchSymbols.has(selectionSymbol(x))||
       isExceptionalDeepCandidate(x,this.config)).sort((a,b)=>
         Number(underfloorDeepWatchSymbols.has(selectionSymbol(b)))-Number(underfloorDeepWatchSymbols.has(selectionSymbol(a)))||
-        Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||selectionSymbol(a).localeCompare(selectionSymbol(b)));
+        deepBurstPriority(b,selectionAt)-deepBurstPriority(a,selectionAt)||
+        Number(b.micro_fingerprint?.score??-1)-Number(a.micro_fingerprint?.score??-1)||
+        selectionSymbol(a).localeCompare(selectionSymbol(b)));
     const selected=[],seen=new Set();
     const configuredExceptionSlots=Math.max(0,Math.trunc(this.config.exceptionalRotationBypassSlots??2));
     let exceptionSlots=Math.min(core,configuredExceptionSlots),quietSlots=q,rotationSlots=r,scoreSlots=core;
@@ -2589,6 +2685,9 @@ export class EarlyExpansionRadar{
       for(const row of underfloorBurstCandidates)this.scheduler.ensureQueued('MICRO',row.symbol,fastSeenAt);
       const cycle=this.scans+1;
       let marketWideLightResult=null,marketWideLightApplied=false;
+      let marketWidePoolGateReason='NOT_EVALUATED';
+      let marketWidePoolCandidateRows=0;
+      let marketWidePoolRequiredRows=Math.min(12,eligible.length);
       let microSelectionInput=eligible;
       const marketWideLightStartedAt=this.clock();
       let bookTickerBySymbol=new Map();
@@ -2619,11 +2718,14 @@ export class EarlyExpansionRadar{
       }
       if(this.config.marketWideLightScanEnabled!==false){
         try{
+          // Book-ticker REST is fetched after the fast ticker snapshot. Use the
+          // actual evaluation timestamp so a fresh book is not rejected as future data.
+          const lightScanAt=this.clock();
           marketWideLightResult=this.marketWideLightScan.scan({
             eligible,getSeries:symbol=>this.marketWideKlineCache?.getSeries(symbol,96)||null,
             benchmarkTicker:rawBySymbol.get('BTCUSDT')||null,
             getBookTicker:symbol=>bookTickerBySymbol.get(String(symbol||'').toUpperCase())||null,
-            now:fastSeenAt,cycle,
+            now:lightScanAt,cycle,
             isExceptional:row=>{
               const fast=fastBySymbol.get(row.symbol)||{};
               return isExceptionalMicroCandidate(row,fast,this.config)||isFastActivityShockCandidate(row,fast,this.config)||
@@ -2638,19 +2740,58 @@ export class EarlyExpansionRadar{
           const fullMarketCacheReady=cacheProof?.full_market_coverage_ready===true;
           const marketWideCachePoolReady=isMarketWideCachePoolReady(
             cacheProof,this.config.marketWideLightScanMinCoverageRatio);
+          const marketWideCacheFallbackReady=isMarketWideCacheFallbackPoolReady(
+            cacheProof,marketWideLightResult.coverageReady,this.config.marketWideLightScanMinCoverageRatio);
+          const marketWideCacheSelectionReady=marketWideCachePoolReady||marketWideCacheFallbackReady;
           const expectedCacheSymbols=Number(cacheProof?.expected_symbols)||0;
           const readyCacheSymbols=Number(cacheProof?.ready_symbols)||0;
           const marketWideCacheReadyRatio=expectedCacheSymbols>0?readyCacheSymbols/expectedCacheSymbols:0;
-          if(this.config.marketWideLightScanPoolActivationEnabled!==false&&
-              marketWideLightResult.coverageReady&&marketWideCachePoolReady&&this.marketWideKlineCache&&
-              eligible.length>=Math.min(12,Number(this.config.microScanCandidates)||12)){
+          marketWidePoolRequiredRows=Math.min(12,eligible.length);
+          if(this.config.marketWideLightScanEnabled===false){
+            marketWidePoolGateReason='LIGHT_SCAN_DISABLED';
+          }else if(this.config.marketWideLightScanPoolActivationEnabled===false){
+            marketWidePoolGateReason='POOL_ACTIVATION_DISABLED';
+          }else if(!marketWideLightResult.coverageReady){
+            marketWidePoolGateReason='LIGHT_SCAN_COVERAGE_NOT_READY';
+          }else if(!marketWideCacheSelectionReady){
+            if(!marketWideLightResult.coverageReady)marketWidePoolGateReason='LIGHT_SCAN_COVERAGE_NOT_READY';
+            else if(marketWideCacheReadyRatio<Math.max(0.10,Number(this.config.marketWideLightScanMinCoverageRatio)||0.10))
+              marketWidePoolGateReason='CACHE_READY_RATIO_BELOW_MINIMUM';
+            else if(cacheProof?.websocket_subscription_complete!==true)
+              marketWidePoolGateReason='WS_SUBSCRIPTION_INCOMPLETE_AND_NO_FRESH_CACHE_FALLBACK';
+            else if(cacheProof?.websocket_sync_ready!==true)
+              marketWidePoolGateReason='WS_SYNC_NOT_READY_AND_NO_FRESH_CACHE_FALLBACK';
+            else marketWidePoolGateReason='CACHE_POOL_GATE_NOT_READY';
+          }else if(!this.marketWideKlineCache){
+            marketWidePoolGateReason='KLINE_CACHE_UNAVAILABLE';
+          }else if(eligible.length<Math.min(12,Number(this.config.microScanCandidates)||12)){
+            marketWidePoolGateReason='ELIGIBLE_UNIVERSE_BELOW_MINIMUM';
+          }else{
             const pool=marketWideLightResult.candidateRows.filter(row=>lightPoolSet.has(selectionSymbol(row)));
-            if(pool.length>=Math.min(12,eligible.length)){
+            marketWidePoolCandidateRows=pool.length;
+            if(pool.length>=marketWidePoolRequiredRows){
               microSelectionInput=pool;marketWideLightApplied=true;
-            }
+              marketWidePoolGateReason=marketWideCachePoolReady?'APPLIED':'APPLIED_FRESH_CLOSED_CACHE_FALLBACK';
+            }else marketWidePoolGateReason='CANDIDATE_POOL_TOO_SMALL';
           }
           marketWideLightResult.summary.micro_pool_applied=marketWideLightApplied;
+          marketWideLightResult.summary.market_wide_pool_gate_reason=marketWidePoolGateReason;
+          marketWideLightResult.summary.market_wide_pool_candidate_rows=marketWidePoolCandidateRows;
+          marketWideLightResult.summary.market_wide_pool_required_rows=marketWidePoolRequiredRows;
+          marketWideLightResult.summary.market_wide_ws_live_at_selection=cacheProof?.websocket_live===true;
+          marketWideLightResult.summary.market_wide_ws_subscription_complete_at_selection=cacheProof?.websocket_subscription_complete===true;
+          marketWideLightResult.summary.market_wide_ws_sync_ready_at_selection=cacheProof?.websocket_sync_ready===true;
+          marketWideLightResult.summary.market_wide_cache_ready_symbols_at_selection=readyCacheSymbols;
+          marketWideLightResult.summary.market_wide_cache_expected_symbols_at_selection=expectedCacheSymbols;
+          marketWideLightResult.summary.book_ticker_snapshot_symbol_count=bookTickerBySymbol.size;
+          marketWideLightResult.summary.book_ticker_snapshot_status=this.marketWideBookTickerStats?.status??'NOT_RECORDED';
+          marketWideLightResult.summary.book_ticker_snapshot_response_rows=Number(this.marketWideBookTickerStats?.response_rows)||0;
+          marketWideLightResult.summary.book_ticker_snapshot_valid_rows=Number(this.marketWideBookTickerStats?.valid_rows)||0;
+          marketWideLightResult.summary.book_ticker_snapshot_age_ms=this.marketWideBookTickerAt>0
+            ?Math.max(0,fastSeenAt-this.marketWideBookTickerAt):null;
           marketWideLightResult.summary.market_wide_cache_coverage_ready=marketWideCachePoolReady;
+          marketWideLightResult.summary.market_wide_cache_fallback_pool_ready=marketWideCacheFallbackReady;
+          marketWideLightResult.summary.market_wide_cache_selection_ready=marketWideCacheSelectionReady;
           marketWideLightResult.summary.market_wide_cache_ready_ratio=marketWideCacheReadyRatio;
           marketWideLightResult.summary.full_market_cache_coverage_ready=fullMarketCacheReady;
           marketWideLightResult.summary.websocket_advanced_symbols=Number(cacheProof?.websocket_advanced_symbols)||0;
@@ -2669,6 +2810,7 @@ export class EarlyExpansionRadar{
           }
         }catch(error){
           this.noteError(error,'market-wide-light-scan');
+          marketWidePoolGateReason='LIGHT_SCAN_ERROR';
           marketWideLightResult=null;microSelectionInput=eligible;marketWideLightApplied=false;
         }
       }
@@ -2889,7 +3031,7 @@ export class EarlyExpansionRadar{
         const cooldown=Math.max(0,Number(this.config.earlyFlowWatchCooldownMs??10*60*1000));
         if(previousEarlyFlowWatchKeys.has(watchKey)||this.lastEarlyFlowWatchKeyBySymbol.get(symbol)===watchKey||now-lastAt<cooldown)continue;
         const watchStatus=await this.recordWatchOnlyAlert(watchAlert,'MICRO_EARLY_FLOW_WATCH_TRACE');
-        if(!watchStatus.stored)continue;
+        if(!watchStatus.stored&&!watchStatus.pushAttempted)continue;
         this.lastEarlyFlowWatchAt.set(symbol,now);
         this.lastEarlyFlowWatchKeyBySymbol.set(symbol,watchKey);
         previousEarlyFlowWatchKeys.add(watchKey);

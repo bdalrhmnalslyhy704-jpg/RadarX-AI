@@ -26,6 +26,36 @@ test('missing or invalid market-quality measurements fail closed instead of inhe
   assert.equal(result.eligible,false);
 });
 
+
+test('shared gate reads native score/data/liquidity fields for all twelve radar payload shapes without inventing values',()=>{
+  const cases=[
+    ['EARLY_MOVE_RADAR',{early_wake:{score:81,data_quality:91,liquidity_quality:82}},81],
+    ['STRONG_MOVE_RADAR',{strong_move:{score:82,data_quality:91,liquidity_quality:82}},82],
+    ['ROTATION_LAG_RADAR',{rotation:{score:83,data_quality:91,liquidity_quality:82}},83],
+    ['LIQUIDITY_ABSORPTION_RADAR',{liquidity_absorption:{score:84,data_quality:91,liquidity_quality:82}},84],
+    ['KAHIR_RADAR',{kahir_analysis:{score:85,data_quality:91,liquidity_quality:82}},85],
+    ['DOOMSDAY_RADAR',{doomsday:{score:86,data_quality:91,liquidity_quality:82}},86],
+    ['PROFESSOR_RADAR',{score:87,professor_opinion:{data_quality:91,liquidity_quality:82}},87],
+    ['ALMUQAWIM_RADAR',{almuqawim:{score:88,data_quality:91,liquidity_quality:82}},88],
+    ['EARLY_EXPANSION_RADAR',{early_expansion_score:89,early_expansion:{data_quality:91,liquidity_quality:82}},89],
+    ['COIN_HUNTER_RADAR',{factors:{early_setup_score:90},coin_hunter:{data_quality:91,liquidity_quality:82}},90],
+    ['WHALE_ACCUMULATION_RADAR',{whale_accumulation:{score:91,data_quality:91,liquidity_quality:82}},91],
+    ['FALCON_EYE_RADAR',{falcon_eye:{score:92,data_quality:91,liquidity_quality:82}},92]
+  ];
+  for(const [radar,extra,expectedScore] of cases){
+    resetRadarNotificationGateForTests();
+    const alert=baseline(radar,{
+      opportunity_score:undefined,radar_power_score:undefined,setup_score:undefined,
+      data_quality:undefined,data_status:{data_quality:undefined},liquidity_quality:undefined,
+      components:{},...extra
+    });
+    const result=evaluateRadarNotificationGate(alert,{now:NOW,commit:false});
+    assert.equal(result.score,expectedScore,radar+' score alias');
+    assert.equal(result.data_quality,91,radar+' data-quality alias');
+    assert.equal(result.liquidity_quality,82,radar+' liquidity-quality alias');
+  }
+});
+
 test('all twelve declared radar profiles are present and health reports them',()=>{
   resetRadarNotificationGateForTests();const h=notificationGateHealth();assert.equal(h.registered_profile_count,12);
   for(const radar of ['EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR','LIQUIDITY_ABSORPTION_RADAR','KAHIR_RADAR','DOOMSDAY_RADAR','PROFESSOR_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','FALCON_EYE_RADAR'])assert.ok(h.registered_profiles.includes(radar),radar);
@@ -312,6 +342,88 @@ test('an invalidated setup is retained until a materially new early setup appear
   assert.ok(['EARLY_SETUP','SIGNAL_REVIEW','CONFIRMED'].includes(renewed.signal_lifecycle.state),JSON.stringify(renewed.signal_lifecycle));
   assert.equal(renewed.signal_lifecycle.generation,2);
   assert.equal(renewed.signal_lifecycle.transition,'NEW_SETUP_AFTER_INVALIDATION');
+});
+
+
+function strongEarlyWatchCandidate(extra={}){
+  return baseline('STRONG_MOVE_RADAR',{
+    opportunity_score:84,radar_power_score:84,
+    structure_score:90,flow_score:90,momentum_score:90,compression_score:90,
+    relative_strength:90,trigger_score:90,participation_score:90,
+    confirmation_count:3,
+    strong_move:{score:84,metrics:{return_3m:0.7,micro_breakout:false,volume_ratio:1.8,trade_ratio:1.5,taker_buy_ratio:0.55,taker_buy_delta:0.02,five_min_trend:70,five_min_return:0.4}},
+    ...extra
+  });
+}
+
+test('evidence-gated watch-only early corridor can surface a strong fresh candidate across non-legacy radars',()=>{
+  resetRadarNotificationGateForTests();
+  const result=evaluateRadarNotificationGate(strongEarlyWatchCandidate(),{now:NOW,commit:false});
+  assert.equal(result.eligible,true,JSON.stringify({mode:result.mode,failures:result.failures,falcon:result.falcon_eye}));
+  assert.equal(result.mode,'RADAR_WATCH_ONLY_EARLY_TRACK');
+  assert.equal(result.watch_only,true);
+  assert.equal(result.requires_follow_up_confirmation,true);
+  assert.ok(result.failures.includes('SCORE_BELOW_STRICT_THRESHOLD'));
+  assert.notEqual(result.signal_lifecycle.state,'CONFIRMED');
+});
+
+test('shared watch-only corridor never bypasses a failed-breakout trap or anti-chase failure',()=>{
+  resetRadarNotificationGateForTests();
+  const result=evaluateRadarNotificationGate(baseline('FALCON_EYE_RADAR',{
+    opportunity_score:84,radar_power_score:84,
+    structure_score:90,flow_score:90,momentum_score:90,compression_score:90,
+    relative_strength:90,trigger_score:90,participation_score:90,
+    direction:'UP',confirmation_count:4,
+    falcon_eye:{
+      eligible:true,score:84,confirmation_count:4,not_chasing:true,
+      pre_expansion_fingerprint:{ready:true,late:false,micro_move:false,score:82},
+      component_scores:{quietness:82,compression:80,momentum:78,volume:82,trades:78,taker:74,structure:82,resistance:76,relative_strength:78,derivatives:72,breakout:80,atr:75,range:74},
+      metrics:{move_24h_pct:2,return_5m:0.7,return_10m:1.0,ema21_distance_pct:0.8,resistance_gap_pct:0.5},
+      derivatives:{futures_available:false},
+      role_evidence:{failed_breakout:{detected:true,status:'FAILED_BREAKOUT_TRAP'},continuation:{confirmed:false,status:'DATA_INSUFFICIENT'}}
+    }
+  }),{now:NOW,commit:false});
+  assert.ok(result.failures.includes('FALCON_FAILED_BREAKOUT_TRAP_RISK'));
+  assert.equal(result.mode,'STRICT_NOTIFICATION');
+  assert.equal(result.eligible,false);
+});
+
+
+test('shared early-watch corridor preserves Rotation/Lag thesis blockers',()=>{
+  resetRadarNotificationGateForTests();
+  const result=evaluateRadarNotificationGate(baseline('ROTATION_LAG_RADAR',{
+    opportunity_score:84,radar_power_score:84,direction:'UP',
+    rotation:{eligible:true,score:84,activation_score:40,confirmations:5,
+      component_scores:{lag:30,resilience:40},
+      metrics:{lag:30,resilience:40}}
+  }),{now:NOW,commit:false});
+  assert.ok(result.failures.includes('RELATIVE_STRENGTH_NOT_CONFIRMED'));
+  assert.ok(result.failures.includes('ROTATION_ACTIVATION_WEAK'));
+  assert.equal(result.eligible,false);
+  assert.equal(result.mode,'STRICT_NOTIFICATION');
+});
+
+test('shared early-watch corridor does not bypass Al-Muqawim multi-timeframe structure checks',()=>{
+  resetRadarNotificationGateForTests();
+  const result=evaluateRadarNotificationGate(baseline('ALMUQAWIM_RADAR',{
+    opportunity_score:82,radar_power_score:82,direction:'UP',
+    almuqawim:{eligible:false,direction:'UP',components:{
+      higher_timeframe_alignment:72,market_structure:78,lower_timeframe_agreement:70,entry_timing:60,entry_freshness:40
+    }}
+  }),{now:NOW,commit:false});
+  for(const code of ['ALMUQAWIM_ANALYSIS_NOT_ELIGIBLE','ALMUQAWIM_HIGHER_TIMEFRAME_ALIGNMENT_WEAK',
+    'ALMUQAWIM_MARKET_STRUCTURE_WEAK','ALMUQAWIM_LOWER_TIMEFRAME_DISAGREEMENT','ALMUQAWIM_ENTRY_TIMING_STALE']){
+    assert.ok(result.failures.includes(code),code);
+  }
+  assert.equal(result.eligible,false);
+  assert.equal(result.mode,'STRICT_NOTIFICATION');
+});
+
+test('watch-only early corridor requires an explicitly upward direction',()=>{
+  resetRadarNotificationGateForTests();
+  const result=evaluateRadarNotificationGate(strongEarlyWatchCandidate({direction:'DOWN'}),{now:NOW,commit:false});
+  assert.equal(result.eligible,false,JSON.stringify({mode:result.mode,failures:result.failures}));
+  assert.equal(result.mode,'STRICT_NOTIFICATION');
 });
 
 test('only a strict pass becomes confirmed; confirmation remains explicitly non-predictive',()=>{

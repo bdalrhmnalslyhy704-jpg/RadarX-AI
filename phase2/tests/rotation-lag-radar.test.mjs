@@ -78,6 +78,26 @@ assert.ok(!extended.risk_flags.includes('24H_ALREADY_EXTENDED')||extended.price_
 
 console.log('Rotation Lag Radar tests passed');
 
+
+test('Rotation Lag ranks higher-liquidity quiet candidates ahead of thin symbols with the same movement',()=>{
+  const radar=new RotationLagRadar({rest:{},store:{},config:{topLaggers:2,rotationBatchSize:2},clock:()=>now});
+  radar.universe=['THINUSDT','LIQUIDUSDT','QUIETUSDT','ROTATE1USDT','ROTATE2USDT','ROTATE3USDT'];
+  const rows=[
+    {symbol:'THINUSDT',lastPrice:1,priceChange24h:0.4,quoteVolume24h:120_000},
+    {symbol:'LIQUIDUSDT',lastPrice:1,priceChange24h:0.4,quoteVolume24h:12_000_000},
+    {symbol:'QUIETUSDT',lastPrice:1,priceChange24h:0.1,quoteVolume24h:4_000_000},
+    {symbol:'ROTATE1USDT',lastPrice:1,priceChange24h:0.8,quoteVolume24h:3_000_000},
+    {symbol:'ROTATE2USDT',lastPrice:1,priceChange24h:0.7,quoteVolume24h:2_000_000},
+    {symbol:'ROTATE3USDT',lastPrice:1,priceChange24h:0.6,quoteVolume24h:1_000_000}
+  ];
+  const selected=radar.selectBatch(rows);
+  assert.equal(selected.length,4);
+  assert.equal(selected[0].symbol,'QUIETUSDT');
+  assert.equal(selected[1].symbol,'LIQUIDUSDT');
+  assert.ok(!selected.slice(0,2).some(x=>x.symbol==='THINUSDT'),'thin candidates must not win the main slots solely because they are illiquid');
+  assert.equal(new Set(selected.map(x=>x.symbol)).size,4);
+});
+
 test('Rotation Lag fills rotation slots when the cursor overlaps the ranked shortlist',()=>{
   const radar=new RotationLagRadar({rest:{},store:{},config:{topLaggers:2,rotationBatchSize:5},clock:()=>now});
   radar.universe=Array.from({length:16},(_,i)=>`R${String(i).padStart(2,'0')}USDT`);

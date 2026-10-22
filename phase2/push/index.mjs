@@ -110,17 +110,28 @@ const radarTitle=s=>s?.radar_name||({
   ROTATION_LAG_RADAR:'Radar 3 — Rotation/Lag',
   LIQUIDITY_ABSORPTION_RADAR:'Radar 4 — Liquidity Absorption'
 }[String(s?.radar||'').toUpperCase()]||'RadarX');
-const radarPayload=(alert,processedAt=Date.now())=>({
+const radarPayload=(alert,processedAt=Date.now())=>{
+  const watchOnly=alert?.notification_gate?.watch_only===true||alert?.watch_only===true;
+  const needsFollowUp=watchOnly||alert?.notification_gate?.requires_follow_up_confirmation===true;
+  const lowLiquidityWatch=alert?.low_liquidity_burst_bypass===true||
+    (Array.isArray(alert?.risk_flags)&&alert.risk_flags.includes('LOW_LIQUIDITY_WATCH_ONLY'));
+  return {
   type:'RADARX_RADAR_ALERT',
   event_class:EVENT_CLASS.RADAR_ALERT??'RADAR_ALERT',
   event:alert.event||'RADAR_ALERT',
+  notification_mode:watchOnly?'WATCH_ONLY_EARLY_TRACK':'STANDARD_RADAR_ALERT',
+  watch_only:watchOnly,
+  entry_eligible:watchOnly?false:(alert?.entry_eligible??null),
+  requires_follow_up_confirmation:needsFollowUp,
   signal_lifecycle_state:alert?.signal_lifecycle?.state??null,
   signal_lifecycle_label:alert?.signal_lifecycle?.label??null,
   signal_lifecycle_transition:alert?.signal_lifecycle?.transition??null,
   signal_lifecycle_reason_codes:Array.isArray(alert?.signal_lifecycle?.reason_codes)?alert.signal_lifecycle.reason_codes.slice(0,8):[],
-  message:alert?.signal_lifecycle?.state&&alert.signal_lifecycle.state!=='MONITOR'&&alert?.signal_lifecycle?.label
-    ?[alert.symbol,alert.signal_lifecycle.label].filter(Boolean).join(' • ')
-    :undefined,
+  message:watchOnly
+    ?[alert.symbol,lowLiquidityWatch?'مراقبة مبكرة فقط — سيولة ضعيفة — تحتاج تأكيدًا':'مراقبة مبكرة فقط — تحتاج تأكيدًا'].filter(Boolean).join(' • ')
+    :alert?.signal_lifecycle?.state&&alert.signal_lifecycle.state!=='MONITOR'&&alert?.signal_lifecycle?.label
+      ?[alert.symbol,alert.signal_lifecycle.label].filter(Boolean).join(' • ')
+      :undefined,
   radar:alert.radar||'UNKNOWN_RADAR',
   radar_name:radarTitle(alert),
   symbol:alert.symbol,
@@ -131,6 +142,11 @@ const radarPayload=(alert,processedAt=Date.now())=>({
   potential_label:alert.potential_label||null,
   price_change_24h:alert.price_change_24h??null,
   reasons:Array.isArray(alert.reasons)?alert.reasons.slice(0,8):[],
+  reason_codes:Array.isArray(alert.reason_codes)?alert.reason_codes.slice(0,10):[],
+  risk_flags:Array.isArray(alert.risk_flags)?alert.risk_flags.slice(0,10):[],
+  micro_fingerprint_score:alert.micro_fingerprint_score??null,
+  early_flow_watch_evidence:watchOnly&&alert?.early_flow_watch_evidence
+    ?alert.early_flow_watch_evidence:null,
   detected_at:Number(alert.detected_at)||processedAt,
   detected_at_iso:alert.detected_at_iso||new Date(Number(alert.detected_at)||processedAt).toISOString(),
   detected_time_12h:alert.detected_time_12h||formatRadarTime12h(alert.detected_at||processedAt),
@@ -143,8 +159,9 @@ const radarPayload=(alert,processedAt=Date.now())=>({
   confidence_score:'UNKNOWN',
   paper_trading:true,
   real_order_execution:false,
-  title:radarTitle(alert)+' • '+String(alert.symbol||'UNKNOWN')
-});
+  title:radarTitle(alert)+(watchOnly?' • مراقبة مبكرة':'')+' • '+String(alert.symbol||'UNKNOWN')
+  };
+};
 
 const payload=(s,processedAt=Date.now())=>({type:'RADARX_SIGNAL',event_class:marketEventClass(s.data_status?.source??s.source),signal_id:s.signal_id,symbol:s.symbol,market:s.market,strategy:s.strategy,direction:s.direction,
   signal_type:s.signal_type,timeframe:s.candle?.timeframe,candle_open_time:s.candle?.open_time,candle_close_time:s.candle?.close_time,
@@ -184,13 +201,101 @@ export class PushManager{
     return out;
   }
 
+  async notifyRadarWatchOnlyAlert(alert){
+    const now=Date.now();
+    const evidence=alert?.early_flow_watch_evidence||{};
+    const source=String(alert?.source||'').toUpperCase();
+    const closeTime=Number(evidence.closed_candle_close_time);
+    const score=Number(evidence.micro_score??alert?.micro_fingerprint_score);
+    const confirmations=Number(evidence.confirmation_count);
+    const volume=Math.max(Number(evidence.rvol_1m)||0,Number(evidence.rvol_5m)||0);
+    const trades=Math.max(Number(evidence.trade_rvol_1m)||0,Number(evidence.trade_rvol_5m)||0);
+    const taker=Number(evidence.taker_buy_ratio)||0;
+    const acceleration=Math.max(Number(evidence.acceleration_1m_pct)||-Infinity,Number(evidence.acceleration_5m_pct)||-Infinity);
+    const recentReturn=Math.max(Number(evidence.return_1m)||-Infinity,Number(evidence.return_5m)||-Infinity);
+    const move=Number(alert?.price_change_24h);
+    const age=now-closeTime;
+    const participation=volume>=1.20||trades>=1.15||(taker>=0.54&&(volume>=1||trades>=1));
+    const sourceVerified=source.includes('BINANCE_PUBLIC')||source.includes('BINANCE PUBLIC');
+    const invalid=
+      alert?.event!=='EARLY_FLOW_WATCH_ONLY'||
+      alert?.radar!=='EARLY_EXPANSION_RADAR'||
+      alert?.watch_only!==true||alert?.entry_eligible!==false||
+      evidence.closed_candles_only!==true||
+      alert?.data_stale===true||
+      !sourceVerified||
+      !Number.isFinite(closeTime)||age<0||age>120_000||
+      !Number.isFinite(Number(alert?.price))||Number(alert.price)<=0||
+      !Number.isFinite(move)||Math.abs(move)>=18||
+      !Number.isFinite(score)||score<58||
+      !Number.isFinite(confirmations)||confirmations<3||
+      !participation||!(acceleration>0||recentReturn>0)||
+      (Array.isArray(alert?.risk_flags)&&alert.risk_flags.some(flag=>
+        ['MICRO_ANTI_CHASE','MICRO_FAST_EXTENSION_WARNING','MICRO_DAILY_EXTENSION_WARNING','DATA_STALE','DATA_GAP','FUTURE_DATA'].includes(String(flag))));
+    if(invalid)return{status:'BLOCKED_INVALID_WATCH_EVIDENCE',attempted:false,notifications:[]};
+    const providerStatus=this.provider.status?.()||{};
+    if(providerStatus.enabled!==true)return{status:'PROVIDER_DISABLED',attempted:false,notifications:[]};
+    const subscriptions=this.providerSubscriptions(await this.store.getSubscriptions());
+    if(!subscriptions.length)return{status:'NO_SUBSCRIPTIONS',attempted:false,notifications:[]};
+    const out=[];
+    for(const sub of subscriptions){
+      const settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();
+      if(!settings.enabled)continue;
+      const attemptAt=Date.now();
+      let result;
+      try{result=await this.provider.send(sub,radarPayload({...alert,watch_only:true,entry_eligible:false},attemptAt));}
+      catch(error){result={ok:false,status:'FAILED',reason:String(error?.message??error).slice(0,180)};}
+      const audit={
+        event:'RADAR_WATCH_ONLY_NOTIFICATION',event_class:EVENT_CLASS.RADAR_ALERT??'RADAR_ALERT',
+        radar:alert.radar,symbol:alert.symbol,alert_id:alert.id||null,
+        subscription_id:sub.id,user_id:sub.user_id,status:result.status||'FAILED',
+        attempted_at:attemptAt,watch_only:true,entry_eligible:false,
+        evidence_close_time:closeTime,micro_score:score,confirmation_count:confirmations,
+        reason:result.reason??null,http_status:result.httpStatus??null
+      };
+      await this.store.appendNotificationAudit(audit);
+      out.push(audit);
+      if(result.status==='GONE')await this.store.disableSubscription(sub.id);
+    }
+    const enabledCount=out.length;
+    const sent=out.filter(item=>item.status==='SENT').length;
+    const status=sent===enabledCount&&enabledCount>0?'SENT':
+      sent>0?'PARTIAL':enabledCount>0?'FAILED':'NO_ENABLED_SUBSCRIPTIONS';
+    return{status,attempted:enabledCount>0,notifications:out,sent_count:sent,attempted_count:enabledCount};
+  }
+
   async notifyRadarAlert(alert){
     const rows=this.providerSubscriptions(await this.store.getSubscriptions()),out=[];
     for(const sub of rows){
       const settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();
       if(!settings.enabled)continue;
-      const dq=Number(alert?.data_quality??alert?.strong_move?.data_quality??alert?.liquidity_absorption?.data_quality??100);
-      if(Number.isFinite(dq)&&dq<Number(settings.minDataQuality))continue;
+      // Missing quality is not perfect quality. Resolve the native payload field
+      // for each radar and fail closed when no measured value is present.
+      const dq=Number(
+        alert?.data_quality ??
+        alert?.data_status?.data_quality ??
+        alert?.components?.data_quality ??
+        alert?.components?.dataQuality ??
+        alert?.early_move?.data_quality ??
+        alert?.early_wake?.data_quality ??
+        alert?.pre_explosion?.data_quality ??
+        alert?.strong_move?.data_quality ??
+        alert?.rotation?.data_quality ??
+        alert?.liquidity_absorption?.data_quality ??
+        alert?.kahir_analysis?.data_quality ??
+        alert?.analysis?.data_quality ??
+        alert?.doomsday?.data_quality ??
+        alert?.professor_opinion?.data_quality ??
+        alert?.deep_scan?.assessment?.data_quality ??
+        alert?.almuqawim?.data_quality ??
+        alert?.early_expansion?.data_quality ??
+        alert?.coin_hunter?.data_quality ??
+        alert?.factors?.data_quality ??
+        alert?.whale_accumulation?.data_quality ??
+        alert?.falcon_eye?.data_quality ??
+        0
+      );
+      if(!Number.isFinite(dq)||dq<Number(settings.minDataQuality))continue;
       const r=await this.provider.send(sub,radarPayload(alert,Date.now()));
       const audit={event:'RADAR_ALERT_NOTIFICATION',event_class:'RADAR_ALERT',radar:alert.radar||'UNKNOWN_RADAR',radar_name:radarTitle(alert),
         symbol:alert.symbol,alert_id:alert.id||null,subscription_id:sub.id,user_id:sub.user_id,status:r.status,

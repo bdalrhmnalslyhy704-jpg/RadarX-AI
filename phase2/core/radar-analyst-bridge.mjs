@@ -1,5 +1,5 @@
 import {recordRadarDecision} from './radar-telemetry.mjs';
-import {advanceSignalLifecycle} from './radar-notification-gate.mjs';
+import {advanceSignalLifecycle,evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
 
 function safeMessage(error){
   return String(error?.message??error??'UNKNOWN_ERROR').replace(/[^a-z0-9_.:-]/gi,'_').slice(0,160);
@@ -37,7 +37,29 @@ export function connectRadarAlertsToAnalysts({
     const sourceRadar=String(alert?.radar??alert?.radar_id??alert?.radar_name??'RADAR_ALERT')
       .trim().toUpperCase().slice(0,80)||'RADAR_ALERT';
     if(/^[A-Z0-9]{2,30}$/.test(symbol)){
-      const embeddedGate=alert?.notification_gate??alert?.radar_notification_gate??alert?.gate_result??{};
+      let embeddedGate=alert?.notification_gate??alert?.radar_notification_gate??alert?.gate_result??{};
+      // Radar modules that have not yet wired the shared gate still receive the same
+      // advisory watch-only classification at the single notification boundary.
+      // It only labels eligible early watches; the existing delivery path never gets suppressed.
+      if(!Object.keys(embeddedGate).length){
+        try{
+          const sharedGate=evaluateRadarNotificationGate({...alert,radar:sourceRadar},{now});
+          if(sharedGate?.eligible===true&&sharedGate?.watch_only===true){
+            embeddedGate=sharedGate;
+            try{alert.notification_gate=sharedGate;}catch{}
+            try{
+              logger.info?.('[RADAR_SHARED_WATCH_ONLY_CLASSIFIED] '+JSON.stringify({
+                symbol,radar:sourceRadar,mode:sharedGate.mode,score:sharedGate.score,
+                failures:sharedGate.failures?.slice(0,8)||[],at:new Date(now).toISOString()
+              }));
+            }catch{}
+          }
+        }catch(error){
+          try{logger.warn?.('[RADAR_SHARED_WATCH_CLASSIFIER_FAILED] '+JSON.stringify({
+            symbol,radar:sourceRadar,error:safeMessage(error)
+          }));}catch{}
+        }
+      }
       const knownStates=['MONITOR','EARLY_SETUP','SIGNAL_REVIEW','CONFIRMED','INVALIDATED'];
       const lifecycle=knownStates.includes(embeddedGate?.signal_lifecycle?.state)
         ?embeddedGate.signal_lifecycle

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible,ensureRadar8ScoreContainer,isConfirmedEarlyFlowWatchCandidate,buildEarlyFlowWatchAlert,buildMicroEarlyFlowWatchCandidate} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,isMarketWideCacheFallbackPoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible,ensureRadar8ScoreContainer,isConfirmedEarlyFlowWatchCandidate,buildEarlyFlowWatchAlert,buildMicroEarlyFlowWatchCandidate} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -413,6 +413,19 @@ test('Radar 8 activates guarded candidate pooling at 10 percent verified cache c
     'coverage thresholds are clamped to the valid range');
 });
 
+test('Radar 8 can use a fresh validated closed-candle cache during a WebSocket reconnect',()=>{
+  const partial={expected_symbols:232,ready_symbols:173,websocket_live:false,
+    websocket_subscription_complete:true,websocket_sync_ready:false,full_market_coverage_ready:false};
+  assert.equal(isMarketWideCachePoolReady(partial,.10),false,
+    'the strict WebSocket readiness check remains false during reconnect');
+  assert.equal(isMarketWideCacheFallbackPoolReady(partial,true,.10),true,
+    'verified fresh cache plus a coverage-ready light scan can retain candidate pooling during reconnect');
+  assert.equal(isMarketWideCacheFallbackPoolReady({...partial,ready_symbols:20},true,.10),false,
+    'a cache below the minimum fresh closed-candle coverage must fail closed');
+  assert.equal(isMarketWideCacheFallbackPoolReady(partial,false,.10),false,
+    'a cache fallback cannot override a light scan that failed its own coverage checks');
+});
+
 test('Radar 8 burst-priority mode gives five Micro slots to verified early activity bursts without expanding the batch',()=>{
   assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.exceptionalRotationBypassSlots,5);
   const radar=makeRadar({microScanCandidates:18,quietReserve:8,rotationReserve:8,exceptionalRotationBypassSlots:5});
@@ -460,6 +473,38 @@ test('Radar 8 capacity of 18 preserves event, ranked-score, quiet, and rotation 
   assert.equal(lane('score'),2,'two score-ranked slots remain after the event bypass');
   assert.equal(lane('quiet'),6);
   assert.equal(lane('rotation'),7);
+});
+
+test('Radar 8 Deep exceptional slots rank stronger closed activity events ahead of generic fingerprint score',()=>{
+  const radar=makeRadar({deepCandidates:3,quietReserve:0,rotationReserve:0,exceptionalRotationBypassSlots:3});
+  const weakerEvent=candidate('WEAKSHOCKUSDT',1,{score:99});
+  weakerEvent.micro_fingerprint.activity_shock={detected:true,stage:'EVENT_DRIVEN_BREAKOUT',score:62,
+    watch_only:true,entry_eligible:false,extended:false,detected_candle_close_time:now-60_000};
+  const strongerEvent=candidate('STRONGSHOCKUSDT',1,{score:60});
+  strongerEvent.micro_fingerprint.activity_shock={detected:true,stage:'EVENT_DRIVEN_BREAKOUT',score:98,
+    watch_only:true,entry_eligible:false,extended:false,detected_candle_close_time:now-5_000};
+  const ordinary=candidate('ORDINARYUSDT',1,{score:95});
+  const selected=radar.selectDeepFromMicro([weakerEvent,ordinary,strongerEvent],17);
+  assert.equal(selected.length,3);
+  assert.equal(selected[0].row.symbol,'STRONGSHOCKUSDT',
+    'the stronger and fresher closed activity event must outrank a higher generic fingerprint score');
+  assert.equal(selected[0]._selection_lane,'exceptional');
+});
+
+test('Radar 8 Deep ranks an explicit market-wide breakout above a weaker generic shock field',()=>{
+  const radar=makeRadar({deepCandidates:2,quietReserve:0,rotationReserve:0,exceptionalRotationBypassSlots:2});
+  const mixed=candidate('MIXEDEVENTUSDT',1,{score:98});
+  mixed.micro_fingerprint.activity_shock={detected:true,stage:'ACTIVITY_SHOCK',score:70,
+    watch_only:true,entry_eligible:false,extended:false,detected_candle_close_time:now-5_000};
+  mixed.fast={market_wide_event_driven_breakout:{detected:true,stage:'EVENT_DRIVEN_BREAKOUT',score:96,
+    detected_candle_close_time:now-1_000}};
+  const generic=candidate('GENERICSHOCKUSDT',1,{score:60});
+  generic.micro_fingerprint.activity_shock={detected:true,stage:'ACTIVITY_SHOCK',score:75,
+    watch_only:true,entry_eligible:false,extended:false,detected_candle_close_time:now-1_000};
+  const selected=radar.selectDeepFromMicro([generic,mixed],17);
+  assert.equal(selected.length,2);
+  assert.equal(selected[0].row.symbol,'MIXEDEVENTUSDT',
+    'the explicit event-driven breakout must not be hidden by the generic activity-shock field');
 });
 
 test('Radar 8 five-slot Deep batch preserves a score-ranked slot when burst events arrive together',()=>{
@@ -1346,15 +1391,23 @@ test('Radar 8 confirmed early-flow observations create a separate monitor-only a
 });
 
 
-test('Radar 8 keeps watch-only observations out of the actionable alert feed and never pushes them',async()=>{
+test('Radar 8 keeps watch-only traces out of the actionable feed and uses the dedicated watch push route',async()=>{
   const storedAlerts=[],storedEvents=[],pushCalls=[];
   const store={
     async appendEarlyExpansionAlert(alert){storedAlerts.push({...alert});},
     async appendEarlyExpansionEvent(event){storedEvents.push({...event});}
   };
+  let watchPushCalls=0;
   const pushManager={
     status(){return {provider:'none',enabled:false};},
-    async notifyRadarAlert(alert){pushCalls.push(alert);return [];}
+    async notifyRadarAlert(alert){pushCalls.push(alert);return [];},
+    async notifyRadarWatchOnlyAlert(alert){
+      watchPushCalls++;
+      assert.equal(alert.event,'EARLY_FLOW_WATCH_ONLY');
+      assert.equal(alert.watch_only,true);
+      assert.equal(alert.entry_eligible,false);
+      return {status:'PROVIDER_DISABLED',attempted:false,notifications:[]};
+    }
   };
   const radar=new EarlyExpansionRadar({
     rest:{request:async()=>({data:[]}),klines:async()=>({candles:[]}),depth:async()=>({data:{bids:[],asks:[]}})},
@@ -1363,18 +1416,26 @@ test('Radar 8 keeps watch-only observations out of the actionable alert feed and
   const alert=buildEarlyFlowWatchAlert({
     symbol:'EARLYFLOWUSDT',last_price:1.002,price_change_24h:.4,data_quality:88,data_stale:false,
     source:'BINANCE_PUBLIC_WS',low_liquidity_burst_bypass:true,micro_fingerprint_score:68,
-    early_flow_watch_evidence:{closed_candle_close_time:now-60_000,volume_accel_ratio:1.65,trade_accel_ratio:1.45},
+    early_flow_watch_evidence:{
+      closed_candles_only:true,closed_candle_close_time:now-60_000,
+      micro_score:68,confirmation_count:4,rvol_1m:1.3,rvol_5m:1.2,
+      trade_rvol_1m:1.2,trade_rvol_5m:1.15,taker_buy_ratio:.55,
+      acceleration_1m_pct:.03,acceleration_5m_pct:.04,return_1m:.02,return_5m:.05,
+      volume_accel_ratio:1.65,trade_accel_ratio:1.45
+    },
     risk_flags:[],reason_codes:[]
   },now);
   const result=await radar.recordWatchOnlyAlert(alert,'EARLY_FLOW_WATCH_TRACE');
   assert.equal(result.stored,true);
-  assert.equal(result.pushStatus,'WATCH_ONLY_NOT_SENT');
+  assert.equal(result.pushStatus,'WATCH_ONLY_PUSH_PROVIDER_DISABLED');
+  assert.equal(result.pushAttempted,false);
   assert.equal(storedAlerts.length,0,'watch-only observations must not enter the feed polled by Android');
   assert.equal(storedEvents.length,1,'diagnostic events remain available for outcome analysis');
   assert.equal(storedEvents[0].event_type,'EARLY_FLOW_WATCH_TRACE');
   assert.equal(storedEvents[0].feed_status,'TRACE_ONLY');
-  assert.equal(storedEvents[0].notification_status,'WATCH_ONLY_NOT_SENT');
-  assert.equal(pushCalls.length,0,'a disabled provider must not be called');
+  assert.equal(storedEvents[0].notification_status,'WATCH_ONLY_PUSH_PROVIDER_DISABLED');
+  assert.equal(watchPushCalls,1,'the watch candidate reaches the dedicated provider status/evidence boundary');
+  assert.equal(pushCalls.length,0,'the standard actionable-alert path must not be called');
 });
 
 
