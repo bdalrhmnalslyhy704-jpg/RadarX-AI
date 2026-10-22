@@ -14,3 +14,49 @@ test('an asynchronously failed bootstrap stays failed and is stopped even if it 
   assert.equal(snapshot.radars[0].status,'FAILED');assert.equal(snapshot.running_count,0);assert.equal(state.stops,1);assert.equal(state.running,false);
   await swarm.stop();
 });
+
+
+test('watchdog detects a running radar that stops after startup and restarts it within budget', async () => {
+  const worker = makeRunner();
+  const swarm = new RadarSwarmCoordinator({
+    runners: [{id: 'RADAR_8', name: 'Lightning', instance: worker.instance}],
+    expectedCount: 1,
+    startupSpacingMs: 0,
+    watchdogIntervalMs: 10,
+    restartCooldownMs: 0,
+    maxRestarts: 2,
+    logger: {warn() {}, error() {}}
+  });
+  await swarm.start();
+  assert.equal(swarm.snapshot().status, 'RUNNING');
+  worker.state.running = false; // simulate the interval/service unexpectedly stopping
+  await new Promise(resolve => setTimeout(resolve, 45));
+  const recovered = swarm.snapshot();
+  assert.equal(worker.state.starts, 2);
+  assert.equal(recovered.status, 'RUNNING');
+  assert.equal(recovered.running_count, 1);
+  assert.equal(recovered.failed_count, 0);
+  assert.equal(recovered.radars[0].restart_attempts, 1);
+  assert.equal(recovered.watchdog.enabled, true);
+  await swarm.stop();
+});
+
+test('snapshot immediately reports a stopped worker as DEGRADED even before watchdog recovery runs', async () => {
+  const worker = makeRunner();
+  const swarm = new RadarSwarmCoordinator({
+    runners: [{id: 'RADAR_1', instance: worker.instance}],
+    expectedCount: 1,
+    startupSpacingMs: 0,
+    watchdogIntervalMs: 10000,
+    maxRestarts: 0,
+    logger: {warn() {}, error() {}}
+  });
+  await swarm.start();
+  worker.state.running = false;
+  const snapshot = swarm.snapshot();
+  assert.equal(snapshot.status, 'DEGRADED');
+  assert.equal(snapshot.radars[0].status, 'DEGRADED');
+  assert.equal(snapshot.radars[0].running, false);
+  assert.equal(snapshot.radars[0].last_error, 'WORKER_HEALTH_NOT_RUNNING');
+  await swarm.stop();
+});
