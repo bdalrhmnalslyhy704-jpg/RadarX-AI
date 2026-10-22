@@ -37,8 +37,9 @@ import {connectRadarAlertsToAnalysts} from '../core/radar-analyst-bridge.mjs';
   assert.deepEqual(queued[0],{symbol:'BTCUSDT',options:{sourceRadar:'RADAR8'}});
   assert.equal(decisions.length,1);
   assert.equal(decisions[0].alert.symbol,'BTCUSDT');
-  assert.equal(decisions[0].gate.eligible,true);
-  assert.equal(decisions[0].gate.accepted_mode,'RADAR_ALERT_EMITTED_REVIEW_PENDING');
+  assert.equal(decisions[0].gate.eligible,false,'emitted alerts with missing/failed shared-gate evidence are not accepted signals');
+  assert.equal(decisions[0].gate.accepted_mode,'RADAR_ALERT_EMITTED_GATE_REJECTED_REVIEW_PENDING');
+  assert.ok(decisions[0].gate.soft_failures.includes('RADAR_PROFILE_MISSING'));
   assert.equal(decisions[0].options.source,'LIVE');
   assert.equal(JSON.stringify(logs).includes('RADAR_ANALYST_REVIEW_QUEUED'),true);
   assert.deepEqual(connectRadarAlertsToAnalysts({pushManager,multiAnalystRadar}).reason,'ALREADY_INSTALLED');
@@ -199,5 +200,29 @@ test('watch-only review bridge accepts watch observations from all twelve radar 
     assert.equal(decisions[i].gate.eligible,false);
     assert.equal(decisions[i].gate.accepted_mode,'WATCH_ONLY_REVIEW_PENDING');
     assert.equal(decisions[i].alert.entry_eligible,false);
+  }
+});
+
+
+test('all numeric radar aliases resolve to their canonical profile',()=>{
+  const aliases={
+    RADAR1:'EARLY_MOVE_RADAR',RADAR_1:'EARLY_MOVE_RADAR',
+    RADAR2:'STRONG_MOVE_RADAR',RADAR_2:'STRONG_MOVE_RADAR',
+    RADAR3:'ROTATION_LAG_RADAR',RADAR_3:'ROTATION_LAG_RADAR',
+    RADAR4:'LIQUIDITY_ABSORPTION_RADAR',RADAR_4:'LIQUIDITY_ABSORPTION_RADAR',
+    RADAR5:'KAHIR_RADAR',RADAR_5:'KAHIR_RADAR',
+    RADAR6:'DOOMSDAY_RADAR',RADAR_6:'DOOMSDAY_RADAR',
+    RADAR7:'ALMUQAWIM_RADAR',RADAR_7:'ALMUQAWIM_RADAR',
+    RADAR8:'EARLY_EXPANSION_RADAR',RADAR_8:'EARLY_EXPANSION_RADAR',
+    RADAR9:'FALCON_EYE_RADAR',RADAR_9:'FALCON_EYE_RADAR',RADAR9_FALCON_EYE:'FALCON_EYE_RADAR',
+    RADAR10:'COIN_HUNTER_RADAR',RADAR_10:'COIN_HUNTER_RADAR',RADAR10_COIN_HUNTER:'COIN_HUNTER_RADAR',
+    RADAR11:'WHALE_ACCUMULATION_RADAR',RADAR_11:'WHALE_ACCUMULATION_RADAR',RADAR11_WHALE:'WHALE_ACCUMULATION_RADAR',
+    RADAR12:'PROFESSOR_RADAR',RADAR_12:'PROFESSOR_RADAR',RADAR12_PROFESSOR:'PROFESSOR_RADAR'
+  };
+  for(const [alias,canonical] of Object.entries(aliases)){
+    const event={symbol:'ALIASTESTUSDT',radar:alias,direction:'UP',data_quality:90,liquidity_quality:90};
+    const gate=evaluateRadarNotificationGate(event,{now:NOW,commit:false});
+    assert.equal(gate.radar,canonical,alias);
+    assert.ok(!gate.failures.includes('RADAR_PROFILE_MISSING'),alias);
   }
 });
