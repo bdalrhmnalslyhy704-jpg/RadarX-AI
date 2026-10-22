@@ -154,3 +154,50 @@ test('watch-only notifications reach analyst review without being recorded as ac
   assert.deepEqual(decisions[0].gate.soft_failures,['WATCH_ONLY_NOT_ENTRY_ELIGIBLE','MULTI_ANALYST_REVIEW_QUEUED']);
   assert.equal(JSON.stringify(logs).includes('RADAR_ANALYST_WATCH_REVIEW_QUEUED'),true);
 });
+
+test('watch-only review bridge accepts watch observations from all twelve radar roles',async()=>{
+  const radarRoles=[
+    'EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR',
+    'LIQUIDITY_ABSORPTION_RADAR','KAHIR_RADAR','DOOMSDAY_RADAR',
+    'PROFESSOR_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR',
+    'COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','FALCON_EYE_RADAR'
+  ];
+  const queued=[],decisions=[],delivered=[];
+  const pushManager={
+    async notifyRadarAlert(){throw new Error('WATCH_ONLY_MUST_NOT_USE_ACTIONABLE_NOTIFY');},
+    async notifyRadarWatchOnlyAlert(alert){delivered.push(alert);return {status:'sent',attempted:true};}
+  };
+  const multiAnalystRadar={
+    enqueueRadarReview(symbol,options){
+      queued.push({symbol,options});
+      return {queued:true,already_queued:false,pending_count:queued.length};
+    }
+  };
+  const installed=connectRadarAlertsToAnalysts({
+    pushManager,multiAnalystRadar,logger:{info(){},warn(){}},
+    clock:()=>1_800_000_600_000,
+    decisionRecorder:(alert,gate,options)=>decisions.push({alert,gate,options})
+  });
+  assert.equal(installed.installed,true);
+  for(let i=0;i<radarRoles.length;i++){
+    const alert={
+      symbol:'WATCH'+String(i).padStart(2,'0')+'USDT',
+      radar:radarRoles[i],event:'RADAR_WATCH_ONLY',decision_band:'WATCH_EARLY',
+      watch_only:true,entry_eligible:false
+    };
+    const response=await pushManager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(response.status,'sent');
+    assert.equal(response.attempted,true);
+  }
+  assert.equal(delivered.length,12);
+  assert.equal(queued.length,12);
+  assert.equal(decisions.length,12);
+  for(let i=0;i<radarRoles.length;i++){
+    assert.equal(queued[i].symbol,'WATCH'+String(i).padStart(2,'0')+'USDT');
+    assert.equal(queued[i].options.sourceRadar,radarRoles[i]);
+    assert.equal(queued[i].options.watchOnly,true);
+    assert.equal(decisions[i].gate.eligible,false);
+    assert.equal(decisions[i].gate.accepted_mode,'WATCH_ONLY_REVIEW_PENDING');
+    assert.equal(decisions[i].alert.entry_eligible,false);
+  }
+});
