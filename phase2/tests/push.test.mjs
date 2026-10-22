@@ -89,7 +89,7 @@ test('TEST_FIXTURE: validated Radar 8 early-flow watch is pushed as monitor-only
   assert.equal(sent[0].watch_only,true);
   assert.equal(sent[0].requires_follow_up_confirmation,true);
   assert.equal(sent[0].message,'TESTUSDT • مراقبة مبكرة فقط — تحتاج تأكيدًا');
-  assert.equal(sent[0].entry_eligible,undefined,'watch notifications do not become entry-eligible signals');
+  assert.equal(sent[0].entry_eligible,false,'watch notifications are explicitly entry-ineligible');
   assert.equal(sent[0].early_flow_watch_evidence.micro_score,68);
   const audits=await store.readRecent('notifications',10);
   assert.ok(audits.some(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION'&&x.status==='SENT'&&x.watch_only===true));
