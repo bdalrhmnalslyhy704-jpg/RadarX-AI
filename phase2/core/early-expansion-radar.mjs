@@ -3358,7 +3358,9 @@ export class EarlyExpansionRadar{
           const outcomeRecords=Array.isArray(outcomeState?.records)?outcomeState.records:[];
           if(typeof this.store.refreshScanJourneyOutcomes==='function'){
             try{
-              const refreshed=await this.store.refreshScanJourneyOutcomes(outcomeRecords,{limit:24,now:completedAt});
+              // Bound post-scan archive work: a 24-cycle refresh reads/decompresses thousands of rows synchronously.
+              // Six-cycle batches catch up over successive scans without stalling live micro/deep scheduling.
+              const refreshed=await this.store.refreshScanJourneyOutcomes(outcomeRecords,{limit:6,now:completedAt});
               if(refreshed.updated_cycles>0||refreshed.corrupt_files>0||refreshed.missing_files>0)
                 this.logger.info?.('[RADARX_SCAN_JOURNEY_OUTCOME_REFRESH] '+JSON.stringify(refreshed));
             }catch(e){this.noteError(e,'journey-outcome-refresh');}
