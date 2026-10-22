@@ -26,6 +26,36 @@ test('missing or invalid market-quality measurements fail closed instead of inhe
   assert.equal(result.eligible,false);
 });
 
+
+test('shared gate reads native score/data/liquidity fields for all twelve radar payload shapes without inventing values',()=>{
+  const cases=[
+    ['EARLY_MOVE_RADAR',{early_wake:{score:81,data_quality:91,liquidity_quality:82}},81],
+    ['STRONG_MOVE_RADAR',{strong_move:{score:82,data_quality:91,liquidity_quality:82}},82],
+    ['ROTATION_LAG_RADAR',{rotation:{score:83,data_quality:91,liquidity_quality:82}},83],
+    ['LIQUIDITY_ABSORPTION_RADAR',{liquidity_absorption:{score:84,data_quality:91,liquidity_quality:82}},84],
+    ['KAHIR_RADAR',{kahir_analysis:{score:85,data_quality:91,liquidity_quality:82}},85],
+    ['DOOMSDAY_RADAR',{doomsday:{score:86,data_quality:91,liquidity_quality:82}},86],
+    ['PROFESSOR_RADAR',{score:87,professor_opinion:{data_quality:91,liquidity_quality:82}},87],
+    ['ALMUQAWIM_RADAR',{almuqawim:{score:88,data_quality:91,liquidity_quality:82}},88],
+    ['EARLY_EXPANSION_RADAR',{early_expansion_score:89,early_expansion:{data_quality:91,liquidity_quality:82}},89],
+    ['COIN_HUNTER_RADAR',{factors:{early_setup_score:90},coin_hunter:{data_quality:91,liquidity_quality:82}},90],
+    ['WHALE_ACCUMULATION_RADAR',{whale_accumulation:{score:91,data_quality:91,liquidity_quality:82}},91],
+    ['FALCON_EYE_RADAR',{falcon_eye:{score:92,data_quality:91,liquidity_quality:82}},92]
+  ];
+  for(const [radar,extra,expectedScore] of cases){
+    resetRadarNotificationGateForTests();
+    const alert=baseline(radar,{
+      opportunity_score:undefined,radar_power_score:undefined,setup_score:undefined,
+      data_quality:undefined,data_status:{data_quality:undefined},liquidity_quality:undefined,
+      components:{},...extra
+    });
+    const result=evaluateRadarNotificationGate(alert,{now:NOW,commit:false});
+    assert.equal(result.score,expectedScore,radar+' score alias');
+    assert.equal(result.data_quality,91,radar+' data-quality alias');
+    assert.equal(result.liquidity_quality,82,radar+' liquidity-quality alias');
+  }
+});
+
 test('all twelve declared radar profiles are present and health reports them',()=>{
   resetRadarNotificationGateForTests();const h=notificationGateHealth();assert.equal(h.registered_profile_count,12);
   for(const radar of ['EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR','LIQUIDITY_ABSORPTION_RADAR','KAHIR_RADAR','DOOMSDAY_RADAR','PROFESSOR_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','FALCON_EYE_RADAR'])assert.ok(h.registered_profiles.includes(radar),radar);
