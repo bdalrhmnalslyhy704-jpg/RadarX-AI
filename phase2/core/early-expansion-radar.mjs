@@ -4,7 +4,7 @@ import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateRadarNotificationGate, rememberRadarAlert} from './radar-notification-gate.mjs';
 import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-expansion-fingerprint.mjs';
 import {buildRadarRoleEvidence} from './radar-role-evidence.mjs';
-import {assessQuietBaseActivityShock,isFastActivityShockCandidate,isFastEarlyWatchCandidate} from './activity-shock.mjs';
+import {assessQuietBaseActivityShock,isFastActivityShockCandidate,isFastEarlyWatchCandidate,evaluateProposedExtendedContinuationWatch} from './activity-shock.mjs';
 import {assessQuietBasePreExpansion,summarizeQuietBasePreExpansion} from './quiet-base-pre-expansion.mjs';
 import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
 import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId,normalizeMissing,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,reconcileEligibilityQueueAge} from './scan-journey-ledger.mjs';
@@ -226,6 +226,15 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   earlyFlowWatchMinScore:58,
   earlyFlowWatchMinConfirmations:3,
   earlyFlowWatchCooldownMs:10*60*1000,
+  // Extended-move continuation is a separate in-app WATCH lane. It never changes
+  // anti-chase/actionable alert gates and never invokes push delivery.
+  extendedContinuationWatchEnabled:true,
+  extendedContinuationWatchCooldownMs:10*60*1000,
+  extendedContinuationWatchMaxPerCycle:3,
+  extendedContinuationWatchMaxPerHour:6,
+  extendedContinuationWatchMinScore:58,
+  extendedContinuationWatchMinConfirmations:4,
+  extendedContinuationWatchMinPriceChangePct:0.5,
   minLiquidityQuality:58,
   maxSpreadBps:22,
   minDataQuality:70,
@@ -1370,6 +1379,45 @@ export function buildEarlyFlowWatchAlert(candidate,now=Date.now()){
   },'Radar 8 — البرق');
 }
 
+export function buildExtendedContinuationWatchAlert({row={},fast={},microFingerprint={},gate={},closedCandleCloseTime=null}={},now=Date.now()){
+  const symbol=String(row?.symbol||'').trim().toUpperCase();
+  const quote=Number(row?.quoteVolume24h);
+  const daily=hasFiniteNumber(row?.priceChange24h)?Number(row.priceChange24h):null;
+  const score=hasFiniteNumber(microFingerprint?.score)?Number(microFingerprint.score):null;
+  const confirmations=hasFiniteNumber(microFingerprint?.confirmation_count)?Number(microFingerprint.confirmation_count):null;
+  const closeTime=hasFiniteNumber(closedCandleCloseTime)?Number(closedCandleCloseTime):null;
+  const evidence={
+    observed_at:now,closed_candle_close_time:closeTime,closed_candles_only:true,
+    daily_move_pct:daily,micro_score:score,micro_confirmations:confirmations,
+    volume_accel_ratio:hasFiniteNumber(fast?.volume_accel_ratio)?Number(fast.volume_accel_ratio):null,
+    trade_accel_ratio:hasFiniteNumber(fast?.trade_accel_ratio)?Number(fast.trade_accel_ratio):null,
+    price_change_1m_pct:hasFiniteNumber(fast?.price_change_pct)?Number(fast.price_change_pct):null,
+    price_acceleration_1m_pct:hasFiniteNumber(fast?.price_acceleration_pct)?Number(fast.price_acceleration_pct):null,
+    quote_volume_delta:hasFiniteNumber(fast?.volume_delta_quote)?Number(fast.volume_delta_quote):null,
+    trade_delta:hasFiniteNumber(fast?.trade_delta)?Number(fast.trade_delta):null,
+    entry_block_reason:'ANTI_CHASE_ENTRY_VETO_RETAINED',
+    proposed_gate:gate
+  };
+  return decorateRadarAlert({
+    id:'RADAR8_EXTENDED_CONTINUATION_WATCH:'+symbol+':'+(closeTime??now),
+    event:'EXTENDED_CONTINUATION_WATCH_ONLY',radar:'EARLY_EXPANSION_RADAR',
+    radar_name:'Radar 8 — البرق',symbol,market:'SPOT',direction:'UP_BIAS',
+    price:hasFiniteNumber(row?.lastPrice)?Number(row.lastPrice):null,
+    price_change_24h:daily,quote_volume_24h:hasFiniteNumber(quote)?quote:null,
+    opportunity_score:null,early_expansion_score:null,micro_fingerprint_score:score,
+    potential_label:'EXTENDED_CONTINUATION_WATCH_ONLY',decision_band:'WATCH_EARLY',
+    extended_continuation_watch_evidence:evidence,
+    metrics:{volume_accel_ratio:evidence.volume_accel_ratio,trade_accel_ratio:evidence.trade_accel_ratio,
+      price_change_1m_pct:evidence.price_change_1m_pct,price_acceleration_1m_pct:evidence.price_acceleration_1m_pct},
+    risk_flags:['EXTENDED_CONTINUATION_WATCH_ONLY','ANTI_CHASE_ENTRY_VETO_RETAINED','NO_ENTRY_ELIGIBILITY'],
+    reason_codes:['EXTENDED_MOVE_WITH_RENEWED_BUYING_ACTIVITY','CLOSED_CANDLE_MICRO_CONFIRMATION','WATCH_ONLY_NOT_ENTRY'],
+    detected_at:now,processed_at:now,detected_candle_close_time:closeTime,
+    closed_candles_only:true,watch_only:true,entry_eligible:false,notification_status:'WATCH_ONLY_NOT_SENT',
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+    disclaimer:'مراقبة فقط: العملة تحركت كثيرًا ويظهر تسارع جديد في الحجم والصفقات. مانع مطاردة السعر ما زال مفعلًا؛ هذا ليس دخولًا أو توصية شراء، ولن يرسل تنبيه دفع.'
+  },'Radar 8 — البرق');
+}
+
 function symbolHash(symbol){
   let h=2166136261>>>0;
   for(const ch of String(symbol||'')){h^=ch.charCodeAt(0);h=Math.imul(h,16777619);}
@@ -1778,6 +1826,8 @@ export class EarlyExpansionRadar{
     this.fastState=new Map();this.lastAlertAt=new Map();this.lastAlertScore=new Map();this.lastBand=new Map();
     this.lastActivityShockAt=new Map();this.lastActivityShockKeyBySymbol=new Map();this.activityShockTimestamps=[];this.fastShockPendingUntil=new Map();
     this.lastEarlyFlowWatchAt=new Map();this.lastEarlyFlowWatchKeyBySymbol=new Map();
+    this.lastExtendedContinuationWatchAt=new Map();this.lastExtendedContinuationWatchKeyBySymbol=new Map();
+    this.extendedContinuationWatchTimestamps=[];this.latestExtendedContinuationWatches=[];
     this.lastMicroScanCycleBySymbol=new Map();this.lastDeepScanCycleBySymbol=new Map();
     this.scheduler=new ScanSchedulerJournal({radar:'RADAR_8',store,clock,logger});
     this.lastDeepAtBySymbol=new Map();this.firstEligibleAtBySymbol=new Map();
@@ -2375,7 +2425,8 @@ export class EarlyExpansionRadar{
     if(activeSymbols.size>0){
       const stateMaps=[
         this.fastState,this.lastAlertAt,this.lastAlertScore,this.lastBand,
-        this.lastActivityShockAt,this.lastActivityShockKeyBySymbol,this.lastEarlyFlowWatchAt,this.lastEarlyFlowWatchKeyBySymbol,this.fastShockPendingUntil,
+        this.lastActivityShockAt,this.lastActivityShockKeyBySymbol,this.lastEarlyFlowWatchAt,this.lastEarlyFlowWatchKeyBySymbol,
+        this.lastExtendedContinuationWatchAt,this.lastExtendedContinuationWatchKeyBySymbol,this.fastShockPendingUntil,
         this.lastMicroScanCycleBySymbol,this.lastDeepScanCycleBySymbol,
         this.lastDeepAtBySymbol,this.firstEligibleAtBySymbol,
         this.marketWideCacheArchiveHydrationAttemptAtBySymbol
@@ -2387,6 +2438,8 @@ export class EarlyExpansionRadar{
     for(const [symbol,until] of this.fastShockPendingUntil){
       if(Number(until)<=Number(now)){this.fastShockPendingUntil.delete(symbol);}
     }
+    this.extendedContinuationWatchTimestamps=(this.extendedContinuationWatchTimestamps||[]).filter(at=>Number(at)>Number(now)-60*60*1000);
+    this.latestExtendedContinuationWatches=(this.latestExtendedContinuationWatches||[]).filter(x=>Number(now)-Number(x?.detected_at||0)<=60*60*1000).slice(0,20);
     const beforeShockTimestamps=this.activityShockTimestamps.length;
     this.activityShockTimestamps=this.activityShockTimestamps.filter(at=>Number(at)>Number(now)-60*60*1000);
     const maxShockHistory=Math.max(1,Math.trunc(Number(this.config.maxActivityShockAlertsPerHour)||6));
@@ -2877,6 +2930,68 @@ export class EarlyExpansionRadar{
       const microScanned=await microScanPromise;
       const microFlowWatchCandidates=microScanned.map(item=>buildMicroEarlyFlowWatchCandidate(item,this.clock(),this.config)).filter(Boolean);
       let watchAlertsThisCycle=0;
+      let extendedContinuationWatchesThisCycle=0;
+      if(this.config.extendedContinuationWatchEnabled!==false){
+        const watchNow=this.clock();
+        this.extendedContinuationWatchTimestamps=this.extendedContinuationWatchTimestamps.filter(at=>Number(at)>watchNow-60*60*1000);
+        const hourlyCap=Math.max(1,Math.trunc(Number(this.config.extendedContinuationWatchMaxPerHour)||6));
+        const perCycleCap=Math.max(1,Math.trunc(Number(this.config.extendedContinuationWatchMaxPerCycle)||3));
+        const cooldown=Math.max(0,Number(this.config.extendedContinuationWatchCooldownMs)||10*60*1000);
+        const priorWatchKeys=new Set(historyAlerts.filter(x=>x?.event==='EXTENDED_CONTINUATION_WATCH_ONLY').map(x=>String(x?.id||'')));
+        const proposed=[];
+        for(const item of microScanned){
+          if(!item||item.failed||!item.row?.symbol)continue;
+          const row=item.row,symbol=String(row.symbol).trim().toUpperCase();
+          const fp=item.micro_fingerprint||{},fast=fastBySymbol.get(symbol)||{};
+          const latestClosedOne=(Array.isArray(item.oneMinute)?item.oneMinute:[])
+            .filter(c=>c?.closed===true&&hasFiniteNumber(c.closeTime)&&Number(c.closeTime)<=watchNow).at(-1)||null;
+          if(!latestClosedOne)continue;
+          const gate=evaluateProposedExtendedContinuationWatch({
+            ticker:row,fast,microFingerprint:fp,
+            fastActivityShockCandidate:isFastActivityShockCandidate(row,fast,this.config),
+            config:this.config
+          });
+          if(!gate.eligible)continue;
+          const closeTime=Number(latestClosedOne.closeTime);
+          const key='RADAR8_EXTENDED_CONTINUATION_WATCH:'+symbol+':'+closeTime;
+          const lastAt=Number(this.lastExtendedContinuationWatchAt.get(symbol)||0);
+          if(priorWatchKeys.has(key)||this.lastExtendedContinuationWatchKeyBySymbol.get(symbol)===key||
+             watchNow-lastAt<cooldown)continue;
+          proposed.push({row,symbol,fast,fp,gate,closeTime,key});
+        }
+        proposed.sort((a,b)=>
+          ((Number(b.fast.volume_accel_ratio)||0)+(Number(b.fast.trade_accel_ratio)||0))-
+          ((Number(a.fast.volume_accel_ratio)||0)+(Number(a.fast.trade_accel_ratio)||0))||
+          (Number(b.fp.score)||0)-(Number(a.fp.score)||0)||a.symbol.localeCompare(b.symbol));
+        for(const candidate of proposed.slice(0,perCycleCap)){
+          this.extendedContinuationWatchTimestamps=this.extendedContinuationWatchTimestamps.filter(at=>Number(at)>this.clock()-60*60*1000);
+          if(this.extendedContinuationWatchTimestamps.length>=hourlyCap)break;
+          const alert=buildExtendedContinuationWatchAlert({
+            row:candidate.row,fast:candidate.fast,microFingerprint:candidate.fp,
+            gate:candidate.gate,closedCandleCloseTime:candidate.closeTime
+          },watchNow);
+          const status=await this.recordWatchOnlyAlert(alert,'EXTENDED_CONTINUATION_WATCH_TRACE');
+          if(!status.stored)continue;
+          this.lastExtendedContinuationWatchAt.set(candidate.symbol,watchNow);
+          this.lastExtendedContinuationWatchKeyBySymbol.set(candidate.symbol,candidate.key);
+          this.extendedContinuationWatchTimestamps.push(watchNow);
+          this.latestExtendedContinuationWatches=[
+            alert,
+            ...(this.latestExtendedContinuationWatches||[]).filter(x=>String(x?.symbol||'').toUpperCase()!==candidate.symbol&&
+              watchNow-Number(x?.detected_at||0)<=60*60*1000)
+          ].slice(0,20);
+          priorWatchKeys.add(candidate.key);
+          extendedContinuationWatchesThisCycle++;
+          watchAlertsThisCycle++;
+          const journeyEntry=journeyEntries.get(candidate.symbol);
+          if(journeyEntry){
+            journeyEntry.notification_status=status.pushStatus;
+            journeyEntry.notification_gate_rejection_reason='ANTI_CHASE_ENTRY_VETO_RETAINED_WATCH_ONLY';
+            journeyEntry.alert_id=alert.id;
+            journeyEntry.alert_stage='EXTENDED_CONTINUATION_WATCH_ONLY';
+          }
+        }
+      }
       const previousEarlyFlowWatchKeys=new Set(historyAlerts.filter(x=>x?.event==='EARLY_FLOW_WATCH_ONLY').map(x=>String(x?.id||'')));
       // Persist Micro-confirmed watch-only observations before spending time on the
       // bounded Deep batch. The selector has already enforced closed candle, score,
@@ -3125,6 +3240,7 @@ export class EarlyExpansionRadar{
       coverage.deep_timeframe_cache_misses_total=this.deepCandleCacheMissTotal-deepCacheMissStart;
       coverage.deep_timeframe_cache_entries=this.deepCandleWindowCache.size;
       coverage.micro_scan_coverage_ratio=eligible.length?coverage.micro_scanned_total/eligible.length:0;
+      coverage.extended_continuation_watch_only_emitted_this_cycle=extendedContinuationWatchesThisCycle;
       coverage.micro_five_minute_cache_hits_total=microScanned.filter(x=>x&&!x.failed&&x.five_minute_cache_hit===true).length;
       coverage.micro_five_minute_cache_fallbacks_total=microScanned.filter(x=>x&&!x.failed&&x.five_minute_cache_hit!==true).length;
       coverage.micro_effective_concurrency=microConcurrency;
@@ -3525,7 +3641,10 @@ export class EarlyExpansionRadar{
       schema_version:'RADAR8_V2',
       quote:q,
       universe:{...emptyEarlyExpansionUniverse(this.config,q),...(base.universe||{}),quote:q},
-      candidates:(this.latestCandidates||base.candidates||[]).slice(0,Math.max(1,Math.min(100,Number(limit)||100)))
+      candidates:(this.latestCandidates||base.candidates||[]).slice(0,Math.max(1,Math.min(100,Number(limit)||100))),
+      watch_only_candidates:(this.latestExtendedContinuationWatches||[])
+        .filter(x=>this.clock()-Number(x?.detected_at||0)<=60*60*1000)
+        .slice(0,20)
     };
   }
   health(){
@@ -3535,6 +3654,8 @@ export class EarlyExpansionRadar{
       universe_total:this.universe.length,universe_refreshed_at:this.universeAt||null,
       last_scan_at:this.lastScanAtMs,scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,
       fast_scanned_total:this.fastScannedTotal,failed_total:this.failedTotal,failed_symbols:this.failedSymbols,fast_shock_pending_total:[...this.fastShockPendingUntil.values()].filter(until=>Number(until)>now).length,micro_scanned_total:Number(this.lastCoverage?.micro_scanned_total||0),micro_scan_candidates:Number(this.lastCoverage?.micro_scan_candidates||0),rotation_cycle:Number(this.lastCoverage?.rotation_cycle||0),
+      extended_continuation_watch_enabled:this.config.extendedContinuationWatchEnabled!==false,
+      extended_continuation_watch_only_count:(this.latestExtendedContinuationWatches||[]).filter(x=>now-Number(x?.detected_at||0)<=60*60*1000).length,
       coverage:this.lastCoverage,
       poll_ms:this.config.pollMs,micro_scan_candidates:this.config.microScanCandidates,micro_concurrency:this.config.microConcurrency,rotation_reserve:this.config.rotationReserve,quiet_reserve:this.config.quietReserve,deep_candidates:this.config.deepCandidates,deep_concurrency:this.config.deepConcurrency,
       closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
