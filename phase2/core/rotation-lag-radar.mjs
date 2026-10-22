@@ -456,9 +456,11 @@ export class RotationLagRadar {
   selectBatch(rows){
     if(!Array.isArray(rows)||!rows.length)return [];
     const active=[...rows].sort((a,b)=>{
-      const sa=Math.abs(a.priceChange24h)*4+Math.log10(Math.max(1,a.quoteVolume24h))*3;
-      const sb=Math.abs(b.priceChange24h)*4+Math.log10(Math.max(1,b.quoteVolume24h))*3;
-      return sa-sb||b.quoteVolume24h-a.quoteVolume24h;
+      // Rank quiet/lagging movement first, but among similar moves prefer the
+      // deeper quote-volume pool. Deep scans then verify relative strength vs BTC/ETH.
+      const sa=Math.abs(Number(a.priceChange24h)||0)*4-Math.log10(Math.max(1,Number(a.quoteVolume24h)||1))*1.5;
+      const sb=Math.abs(Number(b.priceChange24h)||0)*4-Math.log10(Math.max(1,Number(b.quoteVolume24h)||1))*1.5;
+      return sa-sb||Number(b.quoteVolume24h||0)-Number(a.quoteVolume24h||0);
     });
     const selected=[],seen=new Set();
     const take=row=>{if(row?.symbol&&!seen.has(row.symbol)){selected.push(row);seen.add(row.symbol);return true;}return false;};
