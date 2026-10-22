@@ -12,18 +12,23 @@ function quietBase({ participation = 'gradual', taker = 0.5, count = 90 } = {}) 
     const openTime = start + i * step;
     const baseClose = 1 + Math.min(i, count - 14) * 0.00025;
     const halfRange = i < count - 14 ? 0.004 : 0.0003;
-    let volume = 1000, tradeCount = 100;
+    let volume = 1000, tradeCount = 100, takerShare = taker;
     if (participation === 'gradual' && i >= count - 12) {
       const bucket = Math.floor((i - (count - 12)) / 4);
       volume = [1050, 1150, 1320][bucket];
       tradeCount = [105, 116, 134][bucket];
+    } else if (participation === 'near-miss' && i >= count - 12) {
+      const bucket = Math.floor((i - (count - 12)) / 4);
+      volume = [1020, 1030, 1040][bucket];
+      tradeCount = [102, 103, 104][bucket];
+      takerShare = 0.525;
     }
     rows.push({
       openTime, closeTime: openTime + step - 1,
       open: baseClose - 0.00008, high: baseClose + halfRange,
       low: baseClose - halfRange, close: baseClose,
       volume, quoteVolume: volume * baseClose, tradeCount,
-      takerBuyBaseVolume: volume * taker, closed: true
+      takerBuyBaseVolume: volume * takerShare, closed: true
     });
   }
   return rows;
@@ -76,6 +81,20 @@ test('quiet price alone does not create a pre-expansion signal when volume and t
   assert.equal(result.detected, false);
   assert.ok(result.evidence.some(item => item.key === 'gradual_volume_vs_same_coin' && item.passed === false));
   assert.ok(result.evidence.some(item => item.key === 'gradual_trades_vs_same_coin' && item.passed === false));
+});
+
+test('near-miss flow transition is surfaced as a watch-only observation without weakening confirmation', () => {
+  const result = analyze(quietBase({ participation: 'near-miss' }));
+  assert.equal(result.classification, 'WATCH_EARLY', JSON.stringify(result));
+  assert.equal(result.reason, 'QUIET_BASE_NEAR_MISS_BUY_FLOW_TRANSITION');
+  assert.equal(result.detected, true);
+  assert.equal(result.watch_only, true);
+  assert.equal(result.entry_eligible, false);
+  assert.equal(result.metrics.buy_pressure_transition.confirmed, false);
+  assert.equal(result.metrics.buy_pressure_transition.watch_only_qualified, true);
+  assert.ok(result.metrics.buy_pressure_transition.near_miss_signal_count >= 4);
+  assert.ok(result.evidence.some(item =>
+    item.key === 'near_miss_buy_pressure_transition' && item.passed === true));
 });
 
 test('extended setup is anti-chase, not relabeled as quiet pre-expansion', () => {
