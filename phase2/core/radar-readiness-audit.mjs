@@ -155,6 +155,14 @@ export function buildRadarReadinessAudit({
   });
 
   const expected = Math.max(1, Math.trunc(numeric(swarm?.expected_count) ?? 12));
+  const expectedRadarIds = Object.keys(RADAR_TELEMETRY_ALIASES);
+  const observedRadarIds = perRadar.map(radar => radar.radar);
+  const radarIdCounts = new Map();
+  for (const id of observedRadarIds) radarIdCounts.set(id, (radarIdCounts.get(id) || 0) + 1);
+  const missingRadarRoles = expectedRadarIds.filter(id => !radarIdCounts.has(id));
+  const unexpectedRadarRoles = observedRadarIds.filter(id => !expectedRadarIds.includes(id));
+  const duplicateRadarRoles = [...radarIdCounts.entries()].filter(([, count]) => count > 1).map(([id]) => id);
+  const radarRoleCoverageReady = missingRadarRoles.length === 0 && unexpectedRadarRoles.length === 0 && duplicateRadarRoles.length === 0;
   const registered = perRadar.length;
   const running = perRadar.filter(radar => radar.running).length;
   const failed = numeric(swarm?.failed_count) ?? perRadar.filter(radar => !radar.running).length;
@@ -171,6 +179,9 @@ export function buildRadarReadinessAudit({
   const analystReadiness = buildAnalystReadiness(analystRuntime, now);
   const readinessReasons = [];
   if (registered !== expected) readinessReasons.push('RADAR_REGISTRATION_INCOMPLETE');
+  if (missingRadarRoles.length || unexpectedRadarRoles.length || duplicateRadarRoles.length) {
+    readinessReasons.push('RADAR_ROLE_COVERAGE_INCOMPLETE');
+  }
   for (const radar of perRadar) {
     if (!radar.running) readinessReasons.push('RADAR_NOT_RUNNING:' + radar.radar);
     if (radar.cycle_is_stale) readinessReasons.push('RADAR_CYCLE_STALE:' + radar.radar);
@@ -191,7 +202,7 @@ export function buildRadarReadinessAudit({
       readinessReasons.push('MULTI_ANALYST_ASSESSMENTS_NOT_READY');
   }
 
-  const allWorkersRunning = registered === expected && running === expected &&
+  const allWorkersRunning = registered === expected && radarRoleCoverageReady && running === expected &&
     failed === 0 && (!swarm?.status || swarm.status === 'RUNNING');
   const allCyclesObserved = missingCycleTelemetry.length === 0;
   const noStaleCycles = !perRadar.some(radar => radar.cycle_is_stale);
@@ -227,6 +238,11 @@ export function buildRadarReadinessAudit({
     summary: {
       expected_radars: expected,
       registered_radars: registered,
+      expected_radar_roles: expectedRadarIds.length,
+      missing_radar_roles: missingRadarRoles,
+      unexpected_radar_roles: [...new Set(unexpectedRadarRoles)],
+      duplicate_radar_roles: duplicateRadarRoles,
+      radar_role_coverage_ready: radarRoleCoverageReady,
       running_radars: running,
       failed_radars: failed,
       radars_with_stale_cycles: perRadar.filter(radar => radar.cycle_is_stale).length,
