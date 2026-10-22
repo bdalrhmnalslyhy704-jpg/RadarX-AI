@@ -132,6 +132,28 @@ test('Al Muqawim rejects stale closed candles on a lower timeframe',()=>{
   assert.ok(a.timeframes['15m'].reason_codes.includes('STALE_CLOSED_CANDLES'));
 });
 
+
+test('Al Muqawim ranks market-relative resilience before an already-extended high-volume mover',()=>{
+  const radar=new AlMuqawimRadar({
+    rest:{},store:{},config:{batchSize:2,maxAlert24hMovePct:8},clock:()=>Date.now()
+  });
+  radar.universe=['LATEUSDT','RESILIENTUSDT','WEAKUSDT','NEUTRALUSDT','MEDIUMUSDT','ROTATE1USDT','ROTATE2USDT'];
+  const rows=[
+    {symbol:'LATEUSDT',lastPrice:1,priceChange24h:15,quoteVolume24h:50_000_000,marketMedianChange24hPct:-4},
+    {symbol:'RESILIENTUSDT',lastPrice:1,priceChange24h:-1,quoteVolume24h:20_000_000,marketMedianChange24hPct:-4},
+    {symbol:'WEAKUSDT',lastPrice:1,priceChange24h:-7,quoteVolume24h:10_000_000,marketMedianChange24hPct:-4},
+    {symbol:'NEUTRALUSDT',lastPrice:1,priceChange24h:-3,quoteVolume24h:5_000_000,marketMedianChange24hPct:-4},
+    {symbol:'MEDIUMUSDT',lastPrice:1,priceChange24h:-2,quoteVolume24h:1_500_000,marketMedianChange24hPct:-4},
+    {symbol:'ROTATE1USDT',lastPrice:1,priceChange24h:-4,quoteVolume24h:1_200_000,marketMedianChange24hPct:-4},
+    {symbol:'ROTATE2USDT',lastPrice:1,priceChange24h:-3,quoteVolume24h:1_100_000,marketMedianChange24hPct:-4}
+  ];
+  const selected=radar.selectBatch(rows);
+  assert.equal(selected[0].symbol,'RESILIENTUSDT');
+  assert.ok(!selected.slice(0,3).some(x=>x.symbol==='LATEUSDT'),'an already-extended gainer must not displace pre-entry relative-strength candidates from top scan slots');
+  assert.equal(selected.length,5,'relative-strength ranking must preserve the existing rotation budget');
+  assert.equal(new Set(selected.map(x=>x.symbol)).size,5);
+});
+
 test('Al Muqawim preserves its rotation budget when the top three overlap patrol symbols',()=>{
   const now=Date.now();
   const radar=new AlMuqawimRadar({rest:{},store:{},config:{batchSize:5},clock:()=>now});
