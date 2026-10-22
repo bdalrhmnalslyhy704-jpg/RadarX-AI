@@ -227,3 +227,29 @@ test('all numeric radar aliases resolve to their canonical profile',()=>{
     assert.ok(!gate.failures.includes('RADAR_PROFILE_MISSING'),alias);
   }
 });
+
+
+test('an emitted watch-only alert is never recorded as an accepted candidate',async()=>{
+  const decisions=[];
+  const pushManager={async notifyRadarAlert(alert){return {status:'delivered',alert};}};
+  const multiAnalystRadar={enqueueRadarReview(){return {queued:true,already_queued:false,pending_count:1};}};
+  connectRadarAlertsToAnalysts({
+    pushManager,multiAnalystRadar,logger:{info(){},warn(){}},clock:()=>1_800_000_700_000,
+    decisionRecorder:(alert,gate,options)=>decisions.push({alert,gate,options})
+  });
+  const alert={
+    symbol:'WATCHFLAGSUSDT',radar:'RADAR8',direction:'UP',data_quality:95,liquidity_quality:82,
+    watch_only:true,entry_eligible:false,signal_type:'WATCH_EARLY',
+    notification_gate:{
+      radar:'EARLY_EXPANSION_RADAR',eligible:true,watch_only:true,
+      mode:'RADAR_WATCH_ONLY_EARLY_TRACK',failures:['SCORE_BELOW_STRICT_THRESHOLD']
+    }
+  };
+  const response=await pushManager.notifyRadarAlert(alert);
+  assert.equal(response.status,'delivered');
+  assert.equal(decisions.length,1);
+  assert.equal(decisions[0].gate.eligible,false);
+  assert.equal(decisions[0].gate.accepted_mode,'WATCH_ONLY_REVIEW_PENDING');
+  assert.equal(decisions[0].alert.entry_eligible,false);
+  assert.ok(decisions[0].gate.soft_failures.includes('WATCH_ONLY_NOT_ENTRY_ELIGIBLE'));
+});
