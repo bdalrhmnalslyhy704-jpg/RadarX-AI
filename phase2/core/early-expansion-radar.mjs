@@ -1792,6 +1792,7 @@ export class EarlyExpansionRadar{
     this.marketWideBookTickerCache=new Map();
     this.marketWideBookTickerAt=0;
     this.marketWideBookTickerTask=null;
+    this.marketWideBookTickerStats={status:'NOT_FETCHED',response_rows:0,valid_rows:0,checked_at_ms:0,error_code:null};
     this.marketWideLightScan=new MarketWideLightScan({config:{
       candidateLimit:this.config.marketWideLightScanCandidateLimit,
       rotationReserve:this.config.marketWideLightScanRotationReserve,
@@ -1939,12 +1940,22 @@ export class EarlyExpansionRadar{
             asOf:Number(response?.receivedAt)||this.clock()
           });
         }
+        const checkedAt=Number(response?.receivedAt)||this.clock();
+        this.marketWideBookTickerStats={
+          status:next.size?'AVAILABLE':'NO_VALID_ROWS',response_rows:raw.length,valid_rows:next.size,
+          checked_at_ms:checkedAt,source:String(response?.source||'BINANCE_PUBLIC_REST_BOOK_TICKER').slice(0,60),
+          error_code:null
+        };
         if(next.size){
           this.marketWideBookTickerCache=next;
-          this.marketWideBookTickerAt=Number(response?.receivedAt)||this.clock();
+          this.marketWideBookTickerAt=checkedAt;
           return next;
         }
       }catch(error){
+        this.marketWideBookTickerStats={
+          status:'FAILED',response_rows:0,valid_rows:0,checked_at_ms:this.clock(),
+          error_code:String(error?.code||'REQUEST_FAILED').slice(0,80)
+        };
         this.noteError(error,'market-wide-book-ticker');
       }
       return this.marketWideBookTickerAt>0&&this.clock()-this.marketWideBookTickerAt<=60_000
@@ -2618,6 +2629,9 @@ export class EarlyExpansionRadar{
       for(const row of underfloorBurstCandidates)this.scheduler.ensureQueued('MICRO',row.symbol,fastSeenAt);
       const cycle=this.scans+1;
       let marketWideLightResult=null,marketWideLightApplied=false;
+      let marketWidePoolGateReason='NOT_EVALUATED';
+      let marketWidePoolCandidateRows=0;
+      let marketWidePoolRequiredRows=Math.min(12,eligible.length);
       let microSelectionInput=eligible;
       const marketWideLightStartedAt=this.clock();
       let bookTickerBySymbol=new Map();
@@ -2670,15 +2684,46 @@ export class EarlyExpansionRadar{
           const expectedCacheSymbols=Number(cacheProof?.expected_symbols)||0;
           const readyCacheSymbols=Number(cacheProof?.ready_symbols)||0;
           const marketWideCacheReadyRatio=expectedCacheSymbols>0?readyCacheSymbols/expectedCacheSymbols:0;
-          if(this.config.marketWideLightScanPoolActivationEnabled!==false&&
-              marketWideLightResult.coverageReady&&marketWideCachePoolReady&&this.marketWideKlineCache&&
-              eligible.length>=Math.min(12,Number(this.config.microScanCandidates)||12)){
+          marketWidePoolRequiredRows=Math.min(12,eligible.length);
+          if(this.config.marketWideLightScanEnabled===false){
+            marketWidePoolGateReason='LIGHT_SCAN_DISABLED';
+          }else if(this.config.marketWideLightScanPoolActivationEnabled===false){
+            marketWidePoolGateReason='POOL_ACTIVATION_DISABLED';
+          }else if(!marketWideLightResult.coverageReady){
+            marketWidePoolGateReason='LIGHT_SCAN_COVERAGE_NOT_READY';
+          }else if(!marketWideCachePoolReady){
+            if(cacheProof?.websocket_live!==true)marketWidePoolGateReason='WEBSOCKET_NOT_LIVE_AT_SELECTION';
+            else if(cacheProof?.websocket_subscription_complete!==true)marketWidePoolGateReason='WS_SUBSCRIPTION_INCOMPLETE';
+            else if(cacheProof?.websocket_sync_ready!==true)marketWidePoolGateReason='WS_SYNC_NOT_READY';
+            else if(marketWideCacheReadyRatio<Math.max(0.10,Number(this.config.marketWideLightScanMinCoverageRatio)||0.10))
+              marketWidePoolGateReason='CACHE_READY_RATIO_BELOW_MINIMUM';
+            else marketWidePoolGateReason='CACHE_POOL_GATE_NOT_READY';
+          }else if(!this.marketWideKlineCache){
+            marketWidePoolGateReason='KLINE_CACHE_UNAVAILABLE';
+          }else if(eligible.length<Math.min(12,Number(this.config.microScanCandidates)||12)){
+            marketWidePoolGateReason='ELIGIBLE_UNIVERSE_BELOW_MINIMUM';
+          }else{
             const pool=marketWideLightResult.candidateRows.filter(row=>lightPoolSet.has(selectionSymbol(row)));
-            if(pool.length>=Math.min(12,eligible.length)){
-              microSelectionInput=pool;marketWideLightApplied=true;
-            }
+            marketWidePoolCandidateRows=pool.length;
+            if(pool.length>=marketWidePoolRequiredRows){
+              microSelectionInput=pool;marketWideLightApplied=true;marketWidePoolGateReason='APPLIED';
+            }else marketWidePoolGateReason='CANDIDATE_POOL_TOO_SMALL';
           }
           marketWideLightResult.summary.micro_pool_applied=marketWideLightApplied;
+          marketWideLightResult.summary.market_wide_pool_gate_reason=marketWidePoolGateReason;
+          marketWideLightResult.summary.market_wide_pool_candidate_rows=marketWidePoolCandidateRows;
+          marketWideLightResult.summary.market_wide_pool_required_rows=marketWidePoolRequiredRows;
+          marketWideLightResult.summary.market_wide_ws_live_at_selection=cacheProof?.websocket_live===true;
+          marketWideLightResult.summary.market_wide_ws_subscription_complete_at_selection=cacheProof?.websocket_subscription_complete===true;
+          marketWideLightResult.summary.market_wide_ws_sync_ready_at_selection=cacheProof?.websocket_sync_ready===true;
+          marketWideLightResult.summary.market_wide_cache_ready_symbols_at_selection=readyCacheSymbols;
+          marketWideLightResult.summary.market_wide_cache_expected_symbols_at_selection=expectedCacheSymbols;
+          marketWideLightResult.summary.book_ticker_snapshot_symbol_count=bookTickerBySymbol.size;
+          marketWideLightResult.summary.book_ticker_snapshot_status=this.marketWideBookTickerStats?.status??'NOT_RECORDED';
+          marketWideLightResult.summary.book_ticker_snapshot_response_rows=Number(this.marketWideBookTickerStats?.response_rows)||0;
+          marketWideLightResult.summary.book_ticker_snapshot_valid_rows=Number(this.marketWideBookTickerStats?.valid_rows)||0;
+          marketWideLightResult.summary.book_ticker_snapshot_age_ms=this.marketWideBookTickerAt>0
+            ?Math.max(0,fastSeenAt-this.marketWideBookTickerAt):null;
           marketWideLightResult.summary.market_wide_cache_coverage_ready=marketWideCachePoolReady;
           marketWideLightResult.summary.market_wide_cache_ready_ratio=marketWideCacheReadyRatio;
           marketWideLightResult.summary.full_market_cache_coverage_ready=fullMarketCacheReady;
@@ -2698,6 +2743,7 @@ export class EarlyExpansionRadar{
           }
         }catch(error){
           this.noteError(error,'market-wide-light-scan');
+          marketWidePoolGateReason='LIGHT_SCAN_ERROR';
           marketWideLightResult=null;microSelectionInput=eligible;marketWideLightApplied=false;
         }
       }
