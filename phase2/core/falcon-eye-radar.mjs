@@ -684,6 +684,7 @@ export class FalconEyeRadar {
       this.gateFailureCounts[key]=(this.gateFailureCounts[key]||0)+1;
     }
     alert.elite_gate=gate;
+    alert.notification_gate=gate;
     this.latestCandidates=[alert,...this.latestCandidates.filter(x=>x.symbol!==alert.symbol)].sort((a,b)=>
       Number(b.opportunity_score||0)-Number(a.opportunity_score||0)
     ).slice(0,20);
