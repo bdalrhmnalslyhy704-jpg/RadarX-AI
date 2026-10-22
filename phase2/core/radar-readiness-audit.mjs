@@ -30,6 +30,61 @@ function percentile(values, p) {
   if (!sorted.length) return null;
   return Math.round(sorted[Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1)] * 100) / 100;
 }
+function buildAnalystReadiness(runtime, now) {
+  if (runtime === null || runtime === undefined) {
+    return {required:false,configured:null,status:'NOT_PROVIDED',expected_analysts:20,specialists_per_assessment:19,
+      final_analyst_per_assessment:1,worker_running:null,assessments_observed:0,fresh_assessments:0,
+      complete_fresh_assessments:0,incomplete_fresh_assessments:0,stale_assessments:0,
+      queue_pending_count:null,queue_oldest_pending_age_ms:null,last_scan_at:null,last_scan_error:null,
+      method:'DETERMINISTIC_SPECIALIST_RULES_PLUS_FINAL_CONSENSUS'};
+  }
+  const configured = runtime.configured !== false;
+  const running = runtime.running === true;
+  const stats = runtime.monitorStats && typeof runtime.monitorStats === 'object' ? runtime.monitorStats : {};
+  const rows = Array.isArray(runtime.assessments) ? runtime.assessments : [];
+  const maxAgeMs = Math.max(1000, Number(runtime.maxAssessmentAgeMs) || 180000);
+  const assessmentAge = row => {
+    const age = numeric(row?.age_ms);
+    if (age !== null) return Math.max(0, age);
+    const at = numeric(row?.assessed_at_ms);
+    return at !== null && at > 0 ? Math.max(0, Number(now) - at) : null;
+  };
+  const fresh = rows.filter(row => {
+    if (typeof row?.fresh === 'boolean') return row.fresh;
+    const age = assessmentAge(row);
+    return age !== null && age <= maxAgeMs;
+  });
+  const complete = row => Number(row?.specialist_count) === 19 &&
+    Number(row?.unique_specialists) === 19 && Number(row?.unique_roles) === 19 &&
+    row?.specialists_complete === true && row?.final_analyst_complete === true && row?.analysis_failed !== true;
+  const completeFresh = fresh.filter(complete);
+  const incompleteFresh = fresh.filter(row => !complete(row));
+  const stale = rows.filter(row => !fresh.includes(row)).length;
+  const queue = runtime.queue && typeof runtime.queue === 'object' ? runtime.queue : {};
+  const scanError = String(stats.last_error || '').slice(0, 200) || null;
+  let status;
+  if (!configured || !running || scanError || incompleteFresh.length) status = 'DEGRADED';
+  else if (completeFresh.length) status = 'READY';
+  else status = 'WARMING';
+  return {
+    required:true,configured,status,expected_analysts:20,specialists_per_assessment:19,final_analyst_per_assessment:1,
+    worker_running:running,scan_count:numeric(stats.scan_count) ?? 0,
+    last_scan_at:typeof stats.last_scan_at === 'string' ? stats.last_scan_at : null,
+    next_scan_at:typeof stats.next_scan_at === 'string' ? stats.next_scan_at : null,
+    last_scan_successful:stats.last_scan_successful === true,last_scan_error:scanError,
+    assessments_observed:rows.length,fresh_assessments:fresh.length,
+    complete_fresh_assessments:completeFresh.length,incomplete_fresh_assessments:incompleteFresh.length,
+    stale_assessments:stale,
+    data_valid_fresh_assessments:completeFresh.filter(row => row?.data_valid === true).length,
+    data_invalid_fresh_assessments:completeFresh.filter(row => row?.data_valid !== true).length,
+    queue_pending_count:numeric(queue.pending_count),queue_max_size:numeric(queue.max_queue),
+    queue_oldest_pending_age_ms:numeric(queue.oldest_pending_age_ms),
+    max_assessment_age_ms:maxAgeMs,
+    incomplete_symbols:incompleteFresh.slice(0,10).map(row => String(row?.symbol || 'UNKNOWN').slice(0,30)),
+    method:'DETERMINISTIC_SPECIALIST_RULES_PLUS_FINAL_CONSENSUS'
+  };
+}
+
 function safeTopReasons(events) {
   const counts = new Map();
   for (const event of events) {
@@ -49,7 +104,7 @@ function safeTopReasons(events) {
  */
 export function buildRadarReadinessAudit({
   radars = [], swarm = null, telemetry = null, candleCache = null,
-  warmupReport = null, now = Date.now(), staleCycleAfterMs = 10 * 60_000
+  warmupReport = null, analystRuntime = null, now = Date.now(), staleCycleAfterMs = 10 * 60_000
 } = {}) {
   const events = Array.isArray(telemetry?.events) ? telemetry.events : [];
   const aliasMap = new Map();
@@ -113,6 +168,7 @@ export function buildRadarReadinessAudit({
     : fullCacheReady ? 'READY'
       : cacheReady > 0 ? 'WARMING' : 'UNAVAILABLE';
 
+  const analystReadiness = buildAnalystReadiness(analystRuntime, now);
   const readinessReasons = [];
   if (registered !== expected) readinessReasons.push('RADAR_REGISTRATION_INCOMPLETE');
   for (const radar of perRadar) {
@@ -126,6 +182,14 @@ export function buildRadarReadinessAudit({
   if (!fullCacheReady) readinessReasons.push('CLOSED_CANDLE_CACHE_' + cacheStatus);
   if (candleCache?.websocket_live !== true) readinessReasons.push('CANDLE_WEBSOCKET_NOT_LIVE');
   if (candleCache?.websocket_sync_ready !== true) readinessReasons.push('CANDLE_WEBSOCKET_NOT_SYNC_READY');
+  if (analystRuntime !== null && analystRuntime !== undefined) {
+    if (!analystReadiness.configured) readinessReasons.push('MULTI_ANALYST_ENGINE_UNAVAILABLE');
+    else if (!analystReadiness.worker_running) readinessReasons.push('MULTI_ANALYST_WORKER_NOT_RUNNING');
+    if (analystReadiness.last_scan_error) readinessReasons.push('MULTI_ANALYST_LAST_SCAN_ERROR');
+    if (analystReadiness.incomplete_fresh_assessments > 0) readinessReasons.push('MULTI_ANALYST_ASSESSMENT_INCOMPLETE');
+    else if (analystReadiness.complete_fresh_assessments === 0 && analystReadiness.status !== 'DEGRADED')
+      readinessReasons.push('MULTI_ANALYST_ASSESSMENTS_NOT_READY');
+  }
 
   const allWorkersRunning = registered === expected && running === expected &&
     failed === 0 && (!swarm?.status || swarm.status === 'RUNNING');
@@ -133,10 +197,15 @@ export function buildRadarReadinessAudit({
   const noStaleCycles = !perRadar.some(radar => radar.cycle_is_stale);
   const noLatestCycleErrors = !perRadar.some(radar => radar.cycle_state === 'LAST_CYCLE_ERROR');
   const websocketHealthy = candleCache?.websocket_live === true && candleCache?.websocket_sync_ready === true;
-  const status = allWorkersRunning && allCyclesObserved && fullCacheReady && noStaleCycles && noLatestCycleErrors ? 'READY'
-    : allWorkersRunning && allCyclesObserved && cacheStatus === 'WARMING' && noStaleCycles &&
-      noLatestCycleErrors && websocketHealthy ? 'WARMING'
-      : 'DEGRADED';
+  const infrastructureReady = allWorkersRunning && allCyclesObserved && fullCacheReady && noStaleCycles && noLatestCycleErrors;
+  const analystRequired = analystRuntime !== null && analystRuntime !== undefined;
+  const analystReady = !analystRequired || analystReadiness.status === 'READY';
+  const analystWarming = analystRequired && analystReadiness.status === 'WARMING';
+  const status = infrastructureReady && analystReady ? 'READY'
+    : analystRequired && analystReadiness.status === 'DEGRADED' ? 'DEGRADED'
+      : allWorkersRunning && allCyclesObserved && noStaleCycles && noLatestCycleErrors && websocketHealthy &&
+        (cacheStatus === 'WARMING' || analystWarming) ? 'WARMING'
+        : 'DEGRADED';
 
   const warmup = warmupReport && typeof warmupReport === 'object' ? {
     status: String(warmupReport.status || 'UNKNOWN'),
@@ -169,6 +238,11 @@ export function buildRadarReadinessAudit({
       websocket_live: candleCache?.websocket_live === true,
       websocket_sync_ready: candleCache?.websocket_sync_ready === true,
       full_market_candle_coverage_ready: fullCacheReady,
+      analyst_status: analystReadiness.status,
+      analyst_worker_running: analystReadiness.worker_running,
+      analyst_fresh_assessments: analystReadiness.fresh_assessments,
+      analyst_complete_fresh_assessments: analystReadiness.complete_fresh_assessments,
+      analyst_incomplete_fresh_assessments: analystReadiness.incomplete_fresh_assessments,
       telemetry_events_retained: events.length,
       telemetry_total_recorded: numeric(telemetry?.total_recorded) ?? null
     },
@@ -191,6 +265,7 @@ export function buildRadarReadinessAudit({
       warmup
     },
     radars: perRadar,
+    analysts: analystReadiness,
     policy: {
       build_version: 'Build 224',
       market: 'SPOT',
