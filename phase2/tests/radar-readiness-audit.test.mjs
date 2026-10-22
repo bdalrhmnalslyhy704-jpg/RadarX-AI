@@ -7,9 +7,9 @@ const IDS = [
   'KAHIR_RADAR','DOOMSDAY_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR',
   'FALCON_EYE_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','PROFESSOR_RADAR'
 ];
-function fixture({missingCache = false, stopped = null, staleCycle = false, missingCycleTelemetry = false, cycleError = false, websocketDown = false, analystRuntime = null} = {}) {
+function fixture({missingCache = false, stopped = null, staleCycle = false, missingCycleTelemetry = false, cycleError = false, websocketDown = false, analystRuntime = null, radarIds = IDS} = {}) {
   const now = 1_000_000;
-  const radars = IDS.map(radar => ({
+  const radars = radarIds.map(radar => ({
     radar, radar_name: radar, running: radar !== stopped,
     health: {running: radar !== stopped, last_error: null}
   }));
@@ -205,4 +205,16 @@ test('stale analyst assessments are reported, not counted as currently ready', (
   assert.equal(audit.status, 'WARMING');
   assert.equal(audit.analysts.stale_assessments, 1);
   assert.equal(audit.analysts.complete_fresh_assessments, 0);
+});
+
+
+test('readiness detects a missing canonical radar role even when twelve workers are registered', () => {
+  const radarIds = [...IDS.slice(0, 11), 'UNEXPECTED_RADAR'];
+  const {audit} = fixture({radarIds});
+  assert.equal(audit.status, 'DEGRADED');
+  assert.equal(audit.summary.registered_radars, 12);
+  assert.equal(audit.summary.radar_role_coverage_ready, false);
+  assert.ok(audit.summary.missing_radar_roles.includes('PROFESSOR_RADAR'));
+  assert.ok(audit.summary.unexpected_radar_roles.includes('UNEXPECTED_RADAR'));
+  assert.ok(audit.readiness_reasons.includes('RADAR_ROLE_COVERAGE_INCOMPLETE'));
 });
