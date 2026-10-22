@@ -155,3 +155,83 @@ test('TEST_FIXTURE: radar notifications forward lifecycle labels and reasons to 
   assert.equal(sent[0].message,'EARLYUSDT • إعداد مبكر');
 });
 
+
+
+test('TEST_FIXTURE: quiet-base near-miss alert passes its own strict watch-only gate',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-quiet-base-watch-push-')),store=await new DurableStore({dir}).init();
+  await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70});
+  await store.upsertSubscription('u1',pushSubscription());
+  const sent=[];
+  const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};}};
+  const manager=new PushManager({provider,store});
+  const now=Date.now();
+  const fingerprint={
+    classification:'WATCH_EARLY',reason:'QUIET_BASE_NEAR_MISS_BUY_FLOW_TRANSITION',
+    detected:true,watch_only:true,entry_eligible:false,candle_close_time_ms:now-1000,
+    metrics:{
+      daily_change_24h_pct:2.1,move_5m_pct:0.3,move_15m_pct:0.7,
+      buy_pressure_transition:{available:true,watch_only_qualified:true,near_miss_signal_count:5}
+    },
+    evidence:[
+      {key:'anti_chase',passed:true},
+      {key:'higher_lows_or_stable_support',passed:true},
+      {key:'narrow_price_base_range_pct',passed:true}
+    ]
+  };
+  const alert={
+    id:'RADAR8_QUIET_BASE_WATCH:QUIETUSDT:'+String(now-1000),
+    event:'QUIET_BASE_PRE_EXPANSION_WATCH_ONLY',radar:'EARLY_EXPANSION_RADAR',
+    radar_name:'Radar 8 — البرق',symbol:'QUIETUSDT',market:'SPOT',direction:'UP_BIAS',
+    price:1.05,price_change_24h:2.1,data_quality:92,liquidity_quality:81,
+    source:'Binance Public REST',data_stale:false,closed_candles_only:true,
+    detected_candle_close_time:now-1000,watch_only:true,entry_eligible:false,
+    quiet_base_pre_expansion:fingerprint,risk_flags:['QUIET_BASE_WATCH_ONLY'],
+    reason_codes:['QUIET_BASE_NEAR_MISS_BUY_FLOW_TRANSITION']
+  };
+  const out=await manager.notifyRadarWatchOnlyAlert(alert);
+  assert.equal(out.status,'SENT',JSON.stringify(out));
+  assert.equal(out.sent_count,1);
+  assert.equal(sent.length,1);
+  assert.equal(sent[0].event,'QUIET_BASE_PRE_EXPANSION_WATCH_ONLY');
+  assert.equal(sent[0].notification_mode,'WATCH_ONLY_EARLY_TRACK');
+  assert.equal(sent[0].watch_only,true);
+  assert.equal(sent[0].entry_eligible,false);
+  assert.equal(sent[0].requires_follow_up_confirmation,true);
+  assert.match(sent[0].message,/مراقبة مبكرة فقط/);
+  assert.equal(sent[0].quiet_base_pre_expansion,undefined,'push data stays compact and does not serialize the full fingerprint');
+  const audits=await store.readRecent('notifications',10);
+  assert.ok(audits.some(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION'&&x.status==='SENT'&&
+    x.watch_type==='QUIET_BASE_NEAR_MISS'&&x.near_miss_transition_signal_count===5&&x.entry_eligible===false));
+});
+
+test('TEST_FIXTURE: quiet-base near-miss push fails closed for incomplete flow or missing anti-chase evidence',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-invalid-quiet-base-watch-')),store=await new DurableStore({dir}).init();
+  await store.putUserSettings('u1',{...defaultSettings(),enabled:true});
+  await store.upsertSubscription('u1',pushSubscription());
+  let calls=0;
+  const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(){calls++;return{ok:true,status:'SENT'};}};
+  const manager=new PushManager({provider,store});
+  const now=Date.now();
+  const fingerprint={
+    classification:'WATCH_EARLY',reason:'QUIET_BASE_NEAR_MISS_BUY_FLOW_TRANSITION',
+    detected:true,watch_only:true,entry_eligible:false,candle_close_time_ms:now-1000,
+    metrics:{
+      daily_change_24h_pct:2,move_5m_pct:0.2,move_15m_pct:0.4,
+      buy_pressure_transition:{available:true,watch_only_qualified:true,near_miss_signal_count:2}
+    },
+    evidence:[
+      {key:'anti_chase',passed:false},
+      {key:'higher_lows_or_stable_support',passed:true},
+      {key:'narrow_price_base_range_pct',passed:true}
+    ]
+  };
+  const out=await manager.notifyRadarWatchOnlyAlert({
+    event:'QUIET_BASE_PRE_EXPANSION_WATCH_ONLY',radar:'EARLY_EXPANSION_RADAR',
+    symbol:'INCOMPLETEUSDT',price:1.02,price_change_24h:2,data_quality:90,
+    liquidity_quality:80,source:'Binance Public REST',data_stale:false,
+    closed_candles_only:true,detected_candle_close_time:now-1000,
+    watch_only:true,entry_eligible:false,quiet_base_pre_expansion:fingerprint,risk_flags:[]
+  });
+  assert.equal(out.status,'BLOCKED_INVALID_WATCH_EVIDENCE');
+  assert.equal(calls,0);
+});
