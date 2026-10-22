@@ -410,6 +410,7 @@ export function advanceSignalLifecycle(alert,gate,{now=Date.now()}={}){
     state='SIGNAL_REVIEW';reasons=['TRIGGER_REQUIRES_CONFIRMATION',...failures];
   }else if(/WATCH_EARLY|PRE_EXPANSION|QUIET_BASE_PRE_EXPANSION|EARLY_SETUP|PERSISTENT_EARLY_TRACK|FALCON_EARLY_TRACK/.test(stage)||
     ['PERSISTENT_EARLY_TRACK','FALCON_EARLY_TRACK'].includes(lifecycleText(gate?.mode))||
+    ['RADAR_WATCH_ONLY_EARLY_TRACK','RADAR_WATCH_ONLY_PERSISTENT_EARLY_TRACK'].includes(lifecycleText(gate?.mode))||
     (score>=minScore-15&&hits>=2&&data>=minData-8&&(minLiq<=0||liq>=minLiq-10))){
     state='EARLY_SETUP';reasons=['RELATED_EARLY_EVIDENCE',...failures];
   }else reasons=[failures.length?'WAITING_FOR_CONFIRMATION':'INITIAL_SIGNS_ONLY',...failures];
@@ -448,7 +449,8 @@ export function radarSignalLifecycleHealth({now=Date.now()}={}){
   return {tracked_candidates:signalLifecycleByCandidate.size,max_tracked:SIGNAL_LIFECYCLE_MAX,state_ttl_ms:SIGNAL_LIFECYCLE_TTL_MS,counts};
 }
 
-const EARLY_RADARS=new Set(['EARLY_MOVE_RADAR','EARLY_EXPANSION_RADAR','COIN_HUNTER_RADAR']);
+const EARLY_RADARS=new Set(['EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR','LIQUIDITY_ABSORPTION_RADAR','KAHIR_RADAR','DOOMSDAY_RADAR','PROFESSOR_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','FALCON_EYE_RADAR']);
+const LEGACY_EARLY_TRACK_RADARS=new Set(['EARLY_MOVE_RADAR','EARLY_EXPANSION_RADAR','COIN_HUNTER_RADAR']);
 
 export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false}={}){
   const r=radarId(alert);
@@ -485,10 +487,12 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
   const trajectoryPersistence=Number.isFinite(Number(trajectory.persistence))?Number(trajectory.persistence):0;
   const trajectoryConvergence=Number.isFinite(Number(trajectory.convergence))?Number(trajectory.convergence):0;
   const earlyHardFailures=failures.filter(x=>
-    /^(RISK:)|DATA_QUALITY_BELOW|LIQUIDITY_BELOW|MICRO_MOVE_NOISE|LATE_SETUP_CHASE_GUARD|EARLY_SETUP_ALREADY_MOVED|EARLY_SETUP_NOT_CALM|FALCON_HARD_FAIL|MOVER_FORENSICS_HARD_FAIL|EVIDENCE_TRAJECTORY_DETERIORATING|BASE_ALERT_NOT_ELIGIBLE|ELITE_GATE_NOT_ELIGIBLE/.test(String(x))
+    /^(RISK:)|DATA_QUALITY_BELOW|LIQUIDITY_BELOW|MICRO_MOVE_NOISE|LATE_SETUP_CHASE_GUARD|EARLY_SETUP_ALREADY_MOVED|EARLY_SETUP_NOT_CALM|FALCON_HARD_FAIL|MOVER_FORENSICS_HARD_FAIL|EVIDENCE_TRAJECTORY_DETERIORATING|EVIDENCE_TRAJECTORY_DISJOINTED|BASE_ALERT_NOT_ELIGIBLE|ELITE_GATE_NOT_ELIGIBLE|FAILED_BREAKOUT_TRAP_RISK|BREAKOUT_CONTINUATION_UNCONFIRMED|ALREADY_MOVED|ALREADY_EXTENDED|ANTI_CHASE|CHASE_GUARD|_CHASE|EXTENSION|ENTRY_TIMING_STALE|ENTRY_FRESHNESS|RESISTANCE_ROOM_INSUFFICIENT|FUTURE_DATA|CANDLE_SEQUENCE|CANDLE_WINDOW|PROFESSOR_(TECHNICAL_CONFIRMATION_WEAK|EXTERNAL_EVIDENCE_WEAK|SOURCE_BREADTH_LOW)|WHALE_(LARGE_PRINT_DATA_UNAVAILABLE|BUY_SIDE_NOT_CONFIRMED|SPREAD_TOO_WIDE)/.test(String(x))
   );
+  const bullishDirection=String(alert?.direction??alert?.bias??alert?.trend??'').trim().toUpperCase().startsWith('UP');
   const earlyCorridor=
     EARLY_RADARS.has(r) &&
+    bullishDirection &&
     earlyHardFailures.length===0 &&
     !falcon.hard_fail &&
     falcon.early_window &&
@@ -502,6 +506,7 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
 
   const persistentEarlyCorridor=
     EARLY_RADARS.has(r) &&
+    bullishDirection &&
     failures.length===0 &&
     trajectory.regime==='IGNITING' &&
     Number(trajectory.persistence)>=3 &&
@@ -522,7 +527,11 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
     falcon.independent_domains>=4;
 
   const eligible=Boolean(strictEligible||earlyCorridor||persistentEarlyCorridor);
-  const mode=persistentEarlyCorridor?'PERSISTENT_EARLY_TRACK':earlyCorridor&&!strictEligible?'FALCON_EARLY_TRACK':'STRICT_NOTIFICATION';
+  const mode=persistentEarlyCorridor
+    ?(LEGACY_EARLY_TRACK_RADARS.has(r)?'PERSISTENT_EARLY_TRACK':'RADAR_WATCH_ONLY_PERSISTENT_EARLY_TRACK')
+    :earlyCorridor&&!strictEligible
+      ?(LEGACY_EARLY_TRACK_RADARS.has(r)?'FALCON_EARLY_TRACK':'RADAR_WATCH_ONLY_EARLY_TRACK')
+      :'STRICT_NOTIFICATION';
   const result={
     eligible,
     radar:r,
@@ -539,6 +548,8 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
     cooldown_remaining_ms:crossRadarBlocked?Math.max(0,p.globalCooldownMs-elapsed):0,
     failures:[...new Set(failures)],
     mode,
+    watch_only:mode!=='STRICT_NOTIFICATION',
+    requires_follow_up_confirmation:mode!=='STRICT_NOTIFICATION',
     no_extra_network_calls:true
   };
   result.signal_lifecycle=advanceSignalLifecycle(alert,result,{now});
@@ -560,5 +571,5 @@ export function rememberRadarAlert(alert,now=Date.now()){
 export function resetRadarNotificationGateForTests(){recentBySymbol.clear();preBreakoutStreakBySymbol.clear();signalLifecycleByCandidate.clear();}
 
 export function notificationGateHealth(){
-  return {tracked_symbols:recentBySymbol.size,mode:'FALCON_EYE_V1_STRICT_PLUS_EARLY_TRACK',cross_radar_suppression:true,no_extra_network_calls:true,registered_profile_count:Object.keys(PROFILES).length,registered_profiles:Object.keys(PROFILES)};
+  return {tracked_symbols:recentBySymbol.size,mode:'FALCON_EYE_V1_STRICT_PLUS_MULTI_RADAR_WATCH_TRACK',cross_radar_suppression:true,no_extra_network_calls:true,registered_profile_count:Object.keys(PROFILES).length,registered_profiles:Object.keys(PROFILES)};
 }
