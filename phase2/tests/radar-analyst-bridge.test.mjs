@@ -111,3 +111,46 @@ test('non-blocking bridge attaches a meaningful early lifecycle without changing
   assert.equal(alert.signal_lifecycle.label,'إعداد مبكر');
   assert.equal(decisions.length,1);
 });
+
+
+test('watch-only notifications reach analyst review without being recorded as accepted signals',async()=>{
+  const calls=[],decisions=[],logs=[];
+  let regularNotifyCalls=0,watchNotifyCalls=0;
+  const pushManager={
+    async notifyRadarAlert(){regularNotifyCalls++;return {status:'normal-delivery'};},
+    async notifyRadarWatchOnlyAlert(alert,options){watchNotifyCalls++;return {status:'sent',attempted:true,alert,options};}
+  };
+  const multiAnalystRadar={
+    enqueueRadarReview(symbol,options){
+      calls.push({symbol,options});
+      return {queued:true,already_queued:false,pending_count:calls.length};
+    }
+  };
+  const installed=connectRadarAlertsToAnalysts({
+    pushManager,multiAnalystRadar,logger:{info:x=>logs.push(x),warn:x=>logs.push(x)},
+    clock:()=>1_800_000_500_000,
+    decisionRecorder:(alert,gate,options)=>decisions.push({alert,gate,options})
+  });
+  assert.equal(installed.installed,true);
+  const alert={
+    symbol:'QUIETBASEUSDT',radar:'EARLY_EXPANSION_RADAR',
+    event:'QUIET_BASE_PRE_EXPANSION_WATCH_ONLY',decision_band:'WATCH_EARLY',
+    watch_only:true,entry_eligible:false,data_quality:92,liquidity_quality:81
+  };
+  const response=await pushManager.notifyRadarWatchOnlyAlert(alert,{trace:'kept'});
+  assert.equal(response.status,'sent');
+  assert.equal(response.alert,alert);
+  assert.deepEqual(response.options,{trace:'kept'});
+  assert.equal(regularNotifyCalls,0);
+  assert.equal(watchNotifyCalls,1);
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].symbol,'QUIETBASEUSDT');
+  assert.equal(calls[0].options.sourceRadar,'EARLY_EXPANSION_RADAR');
+  assert.equal(calls[0].options.watchOnly,true);
+  assert.equal(calls[0].options.stage,'WATCH_EARLY');
+  assert.equal(decisions.length,1);
+  assert.equal(decisions[0].gate.eligible,false);
+  assert.equal(decisions[0].gate.accepted_mode,'WATCH_ONLY_REVIEW_PENDING');
+  assert.deepEqual(decisions[0].gate.soft_failures,['WATCH_ONLY_NOT_ENTRY_ELIGIBLE','MULTI_ANALYST_REVIEW_QUEUED']);
+  assert.equal(JSON.stringify(logs).includes('RADAR_ANALYST_WATCH_REVIEW_QUEUED'),true);
+});
