@@ -44,7 +44,7 @@ public final class RadarXBackgroundMonitorService extends Service {
     private static final String TAG = "RadarXBackground";
     // Serialize fetch/replay cycles across executor replacement and service re-starts.
     private static final Object SCAN_LOCK = new Object();
-    private static final String BACKEND_ORIGIN = "https://dhdtech-url-required.invalid";
+    private static final String BACKEND_ORIGIN = "https://radarx-backend.dhdtech.site";
     private static final String BACKEND_RADAR_ALERTS =
             BACKEND_ORIGIN + "/api/radar-alerts?radar=ALL&limit=50";
     // Compatibility routes are read-only; all use the one configured DHDTech backend.
