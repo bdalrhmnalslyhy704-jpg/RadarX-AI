@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {connectRadarAlertsToAnalysts} from '../core/radar-analyst-bridge.mjs';
+import {evaluateRadarNotificationGate} from '../core/radar-notification-gate.mjs';
 
 {
   const alerts=[];
@@ -39,7 +40,7 @@ import {connectRadarAlertsToAnalysts} from '../core/radar-analyst-bridge.mjs';
   assert.equal(decisions[0].alert.symbol,'BTCUSDT');
   assert.equal(decisions[0].gate.eligible,false,'emitted alerts with missing/failed shared-gate evidence are not accepted signals');
   assert.equal(decisions[0].gate.accepted_mode,'RADAR_ALERT_EMITTED_GATE_REJECTED_REVIEW_PENDING');
-  assert.ok(decisions[0].gate.soft_failures.includes('RADAR_PROFILE_MISSING'));
+  assert.ok(decisions[0].gate.soft_failures.includes('DATA_QUALITY_BELOW_STRICT_THRESHOLD'));
   assert.equal(decisions[0].options.source,'LIVE');
   assert.equal(JSON.stringify(logs).includes('RADAR_ANALYST_REVIEW_QUEUED'),true);
   assert.deepEqual(connectRadarAlertsToAnalysts({pushManager,multiAnalystRadar}).reason,'ALREADY_INSTALLED');
