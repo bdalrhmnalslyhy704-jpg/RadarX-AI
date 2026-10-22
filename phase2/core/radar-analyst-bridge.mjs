@@ -93,7 +93,8 @@ export function connectRadarAlertsToAnalysts({
 
       try{
         const gateKnown=typeof embeddedGate?.eligible==='boolean';
-        const watchOnly=embeddedGate?.watch_only===true||alert?.watch_only===true;
+        const watchOnly=embeddedGate?.watch_only===true||alert?.watch_only===true||
+          alert?.entry_eligible===false||embeddedGate?.entry_eligible===false;
         const actuallyEligible=gateKnown&&embeddedGate.eligible===true&&!watchOnly;
         const acceptedMode=watchOnly
           ?'WATCH_ONLY_REVIEW_PENDING'
