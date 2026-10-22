@@ -2,26 +2,33 @@
 name: RadarX Android Release APK
 
 on:
-  push:
-    branches:
-      - android-early-wake-6.8.9
-      - phase3-triple-radar
-      - android-build224-radar8-v2-20261006
-      - phase4-symbol-deep-scan
-      - android-icon-6.8.8-release
-      - tradli-feature-integration
-      - premium-ui-manual-execution-safe
-      - background-prebreakout-engine
-      - tradli-separate-page-ui
-      - tradli-connectivity-native-screen
-      - bottom-reversal-radar-page
-      - phase6-radar4-independent-microstructure
-      - feature-coin-hunter-20261006-android
-      - android-whale-intelligence-v2-build224-20261007
-      - android-build224-whale-accumulation-v3-20261007
-      - android-build224-final-stable-20261007
-      - build224-multi-analyst-20261007
+  # Publishing is deliberately manual. A code merge alone is not final-stage approval.
   workflow_dispatch:
+    inputs:
+      approved_commit_sha:
+        description: "Exact Build 224 commit that passed every required CI and Docker gate"
+        required: true
+        type: string
+      ci_and_docker_evidence:
+        description: "HTTPS link proving same-SHA Phase 1/2, Triple CI, Docker and Android smoke"
+        required: true
+        type: string
+      outcome_report_evidence:
+        description: "HTTPS link to the matured closed-candle 5m/15m/30m/60m/4h/24h outcome report"
+        required: true
+        type: string
+      radar_audit_evidence:
+        description: "HTTPS link to the completed production audit of all radar/helper units"
+        required: true
+        type: string
+      analyst_audit_evidence:
+        description: "HTTPS link to the completed independent evidence-family analyst audit"
+        required: true
+        type: string
+      physical_device_test_evidence:
+        description: "HTTPS link to actual handset testing evidence (not emulator-only)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -39,6 +46,28 @@ jobs:
       RADARX_BACKEND_BASE_URL: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
 
     steps:
+      - name: Require same-SHA evidence for every final release gate
+        env:
+          APPROVED_SHA: ${{ inputs.approved_commit_sha }}
+          CI_DOCKER_EVIDENCE: ${{ inputs.ci_and_docker_evidence }}
+          OUTCOME_EVIDENCE: ${{ inputs.outcome_report_evidence }}
+          RADAR_AUDIT_EVIDENCE: ${{ inputs.radar_audit_evidence }}
+          ANALYST_AUDIT_EVIDENCE: ${{ inputs.analyst_audit_evidence }}
+          DEVICE_EVIDENCE: ${{ inputs.physical_device_test_evidence }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "build224-multi-analyst-20261007"
+          test -n "$APPROVED_SHA"
+          test "$APPROVED_SHA" = "$GITHUB_SHA"
+          for item in "$CI_DOCKER_EVIDENCE" "$OUTCOME_EVIDENCE" "$RADAR_AUDIT_EVIDENCE" "$ANALYST_AUDIT_EVIDENCE" "$DEVICE_EVIDENCE"; do
+            [[ "$item" =~ ^https://[^[:space:]]+$ ]] || {
+              echo "::error::Every final gate needs a verifiable HTTPS evidence link."
+              exit 1
+            }
+          done
+          echo "Final release evidence links and exact commit supplied; downstream release verification remains required."
+
       - name: Checkout exact release-signing branch
         uses: actions/checkout@v4
         with:
