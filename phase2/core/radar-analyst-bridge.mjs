@@ -44,15 +44,18 @@ export function connectRadarAlertsToAnalysts({
       if(!Object.keys(embeddedGate).length){
         try{
           const sharedGate=evaluateRadarNotificationGate({...alert,radar:sourceRadar},{now});
-          if(sharedGate?.eligible===true&&sharedGate?.watch_only===true){
+          if(sharedGate&&typeof sharedGate==='object'){
+            // Keep the actual outcome (including a rejection) for accurate telemetry.
             embeddedGate=sharedGate;
             try{alert.notification_gate=sharedGate;}catch{}
-            try{
-              logger.info?.('[RADAR_SHARED_WATCH_ONLY_CLASSIFIED] '+JSON.stringify({
-                symbol,radar:sourceRadar,mode:sharedGate.mode,score:sharedGate.score,
-                failures:sharedGate.failures?.slice(0,8)||[],at:new Date(now).toISOString()
-              }));
-            }catch{}
+            if(sharedGate.eligible===true&&sharedGate.watch_only===true){
+              try{
+                logger.info?.('[RADAR_SHARED_WATCH_ONLY_CLASSIFIED] '+JSON.stringify({
+                  symbol,radar:sourceRadar,mode:sharedGate.mode,score:sharedGate.score,
+                  failures:sharedGate.failures?.slice(0,8)||[],at:new Date(now).toISOString()
+                }));
+              }catch{}
+            }
           }
         }catch(error){
           try{logger.warn?.('[RADAR_SHARED_WATCH_CLASSIFIER_FAILED] '+JSON.stringify({
@@ -89,19 +92,36 @@ export function connectRadarAlertsToAnalysts({
       }
 
       try{
+        const gateKnown=typeof embeddedGate?.eligible==='boolean';
+        const watchOnly=embeddedGate?.watch_only===true||alert?.watch_only===true;
+        const actuallyEligible=gateKnown&&embeddedGate.eligible===true&&!watchOnly;
+        const acceptedMode=watchOnly
+          ?'WATCH_ONLY_REVIEW_PENDING'
+          :actuallyEligible
+            ?'STRICT_GATE_PASSED_REVIEW_PENDING'
+            :gateKnown
+              ?'RADAR_ALERT_EMITTED_GATE_REJECTED_REVIEW_PENDING'
+              :'RADAR_ALERT_EMITTED_GATE_UNKNOWN_REVIEW_PENDING';
+        const failureCodes=[
+          ...(Array.isArray(embeddedGate?.failures)?embeddedGate.failures:[]),
+          ...(watchOnly?['WATCH_ONLY_NOT_ENTRY_ELIGIBLE']:[]),
+          'MULTI_ANALYST_REVIEW_QUEUED'
+        ];
         decisionRecorder({
           ...alert,
           radar:sourceRadar,
           symbol,
           observed_at:alert?.observed_at??alert?.detected_at??alert?.created_at??now,
           processed_at:now,
-          stage:alert?.potential_label??alert?.stage??alert?.signal_type??'RADAR_ALERT_EMITTED'
+          stage:alert?.potential_label??alert?.stage??alert?.signal_type??'RADAR_ALERT_EMITTED',
+          watch_only:watchOnly,
+          entry_eligible:actuallyEligible
         },{
-          radar:sourceRadar,
-          eligible:true,
+          radar:embeddedGate?.radar??sourceRadar,
+          eligible:actuallyEligible,
           score:alert?.score??alert?.signal_score??alert?.final_score??alert?.strong_move?.score??null,
-          accepted_mode:'RADAR_ALERT_EMITTED_REVIEW_PENDING',
-          soft_failures:['MULTI_ANALYST_REVIEW_QUEUED']
+          accepted_mode:acceptedMode,
+          soft_failures:failureCodes
         },{now,source:'LIVE'});
       }catch{}
     }
