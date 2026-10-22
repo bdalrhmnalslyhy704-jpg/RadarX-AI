@@ -222,7 +222,7 @@ test('all numeric radar aliases resolve to their canonical profile',()=>{
   };
   for(const [alias,canonical] of Object.entries(aliases)){
     const event={symbol:'ALIASTESTUSDT',radar:alias,direction:'UP',data_quality:90,liquidity_quality:90};
-    const gate=evaluateRadarNotificationGate(event,{now:NOW,commit:false});
+    const gate=evaluateRadarNotificationGate(event,{now:1_800_000_300_000,commit:false});
     assert.equal(gate.radar,canonical,alias);
     assert.ok(!gate.failures.includes('RADAR_PROFILE_MISSING'),alias);
   }
