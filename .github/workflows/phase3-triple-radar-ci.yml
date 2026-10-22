@@ -111,12 +111,14 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Install Android SDK packages
+      - name: Set up Android SDK command-line tools
         uses: android-actions/setup-android@v3
         timeout-minutes: 5
         with:
-          # Recent Google SDK repositories no longer publish the legacy "tools" package.
-          packages: "platform-tools"
+          # Skip package installation here. platform-tools is installed together with
+          # the pinned platform/build-tools below to avoid a duplicate, unbounded
+          # remote-manifest fetch in the setup action.
+          packages: ""
 
       - name: Accept Android SDK licenses
         timeout-minutes: 3

@@ -10,6 +10,10 @@ function baseline(radar,extra={}){
     detected_at:NOW,processed_at:NOW,eligible:true,direction:'UP',reasons:['closed candle','volume participation'],reason_codes:['VOLUME_PARTICIPATION'],
     risk_flags:[],components:{momentum:90,volume:90,trades:90,taker:90,range:90,breakout:90,ema:90,vwap:90,bollinger:90,efficiency:90,atr:90},...extra};
 }
+function quietBaseEvidence(stage){
+  return {pre_expansion_stage:stage,metrics:{rvol_5m:1.25,trade_ratio:1.15,taker_buy_ratio:0.56,
+    price_change_24h_pct:1.2,price_change_5m_pct:0.4},role_evidence:{failed_breakout:{detected:false},continuation:{confirmed:true}}};
+}
 test('missing or invalid market-quality measurements fail closed instead of inheriting perfect scores',()=>{
   resetRadarNotificationGateForTests();
   const alert=baseline('STRONG_MOVE_RADAR',{
@@ -286,35 +290,53 @@ test('final notification gate fails closed when continuation evidence is missing
   assert.ok(falcon.failures.includes('FALCON_BREAKOUT_CONTINUATION_UNCONFIRMED'));
 });
 
-test('shared signal lifecycle progresses from early setup to review then invalidation without replacing radar-specific eligibility',()=>{
+test('shared signal lifecycle progresses only after accepted early evidence and records invalidation/renewal',()=>{
   resetRadarNotificationGateForTests();
-  const early=evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{
-    pre_expansion_stage:'PRE_EXPANSION',
-    potential_label:'PRE_EXPANSION',
-    pre_expansion_fingerprint:{stage:'PRE_EXPANSION',ready:true,late:false,micro_move:false,score:82}
-  }),{now:NOW});
-  assert.equal(early.signal_lifecycle.state,'EARLY_SETUP',JSON.stringify(early.signal_lifecycle));
-  assert.equal(early.signal_lifecycle.label,'إعداد مبكر');
-  assert.equal(typeof early.eligible,'boolean','existing per-radar eligibility remains independently evaluated');
+  const early=advanceSignalLifecycle({
+    radar:'EARLY_EXPANSION_RADAR',symbol:'TESTUSDT',pre_expansion_stage:'PRE_EXPANSION',
+    data_quality:96,liquidity_quality:90
+  },{
+    radar:'EARLY_EXPANSION_RADAR',eligible:true,mode:'RADAR_WATCH_ONLY_EARLY_TRACK',
+    score:84,data_quality:96,liquidity_quality:90,failures:[]
+  },{now:NOW});
+  assert.equal(early.state,'EARLY_SETUP',JSON.stringify(early));
+  assert.equal(early.label,'إعداد مبكر');
 
-  const review=evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{
-    pre_expansion_stage:'BREAKOUT_DEVELOPING',
-    potential_label:'BREAKOUT_DEVELOPING',
-    pre_expansion_fingerprint:{stage:'BREAKOUT_DEVELOPING',ready:true,late:false,micro_move:false,score:86}
-  }),{now:NOW+1000});
-  assert.equal(review.signal_lifecycle.state,'SIGNAL_REVIEW',JSON.stringify(review.signal_lifecycle));
-  assert.equal(review.signal_lifecycle.transition,'TRIGGER_DETECTED');
+  const review=advanceSignalLifecycle({
+    radar:'EARLY_EXPANSION_RADAR',symbol:'TESTUSDT',pre_expansion_stage:'BREAKOUT_DEVELOPING',
+    data_quality:96,liquidity_quality:90
+  },{
+    radar:'EARLY_EXPANSION_RADAR',eligible:true,mode:'RADAR_WATCH_ONLY_EARLY_TRACK',
+    score:88,data_quality:96,liquidity_quality:90,failures:[]
+  },{now:NOW+1000});
+  assert.equal(review.state,'SIGNAL_REVIEW',JSON.stringify(review));
+  assert.equal(review.transition,'TRIGGER_DETECTED');
 
-  const invalid=evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{
-    pre_expansion_stage:'ALREADY_EXTENDED',
-    potential_label:'ALREADY_EXTENDED'
-  }),{now:NOW+2000});
-  assert.equal(invalid.signal_lifecycle.state,'INVALIDATED',JSON.stringify(invalid.signal_lifecycle));
-  assert.equal(invalid.signal_lifecycle.terminal,true);
-  assert.ok(invalid.signal_lifecycle.reason_codes.includes('SETUP_STAGE_ALREADY_EXTENDED'));
+  const invalid=advanceSignalLifecycle({
+    radar:'EARLY_EXPANSION_RADAR',symbol:'TESTUSDT',pre_expansion_stage:'ALREADY_EXTENDED',
+    data_quality:96,liquidity_quality:90
+  },{
+    radar:'EARLY_EXPANSION_RADAR',eligible:false,mode:'STRICT_NOTIFICATION',
+    score:95,data_quality:96,liquidity_quality:90,failures:['RISK:ALREADY_EXTENDED']
+  },{now:NOW+2000});
+  assert.equal(invalid.state,'INVALIDATED',JSON.stringify(invalid));
+  assert.equal(invalid.terminal,true);
+  assert.ok(invalid.reason_codes.includes('SETUP_STAGE_ALREADY_EXTENDED'));
+
+  const renewed=advanceSignalLifecycle({
+    radar:'EARLY_EXPANSION_RADAR',symbol:'TESTUSDT',pre_expansion_stage:'PRE_EXPANSION',
+    new_setup_detected:true,data_quality:96,liquidity_quality:90
+  },{
+    radar:'EARLY_EXPANSION_RADAR',eligible:true,mode:'RADAR_WATCH_ONLY_EARLY_TRACK',
+    score:86,data_quality:96,liquidity_quality:90,failures:[]
+  },{now:NOW+3000});
+  assert.equal(renewed.state,'EARLY_SETUP',JSON.stringify(renewed));
+  assert.equal(renewed.generation,2);
+  assert.equal(renewed.transition,'NEW_SETUP_AFTER_INVALIDATION');
+
   const stored=getRadarSignalLifecycleState({symbol:'TESTUSDT',radar:'EARLY_EXPANSION_RADAR'});
-  assert.equal(stored.state,'INVALIDATED');
-  assert.equal(stored.generation,1);
+  assert.equal(stored.state,'EARLY_SETUP');
+  assert.equal(stored.generation,2);
 });
 
 test('missing market evidence stays in monitoring instead of falsely invalidating the setup',()=>{
@@ -328,22 +350,26 @@ test('missing market evidence stays in monitoring instead of falsely invalidatin
   assert.equal(radarSignalLifecycleHealth({now:NOW}).tracked_candidates,1);
 });
 
-test('an invalidated setup is retained until a materially new early setup appears',()=>{
+test('an invalidated setup cannot be renewed by a candidate the shared notification gate rejects',()=>{
   resetRadarNotificationGateForTests();
-  evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{pre_expansion_stage:'ALREADY_EXTENDED'}),{now:NOW});
+  const invalid=evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{
+    pre_expansion_stage:'ALREADY_EXTENDED',potential_label:'ALREADY_EXTENDED'
+  }),{now:NOW});
+  assert.equal(invalid.signal_lifecycle.state,'INVALIDATED');
+
   const weak=evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{}),{now:NOW+1000});
   assert.equal(weak.signal_lifecycle.state,'INVALIDATED');
   assert.equal(weak.signal_lifecycle.transition,'INVALIDATION_RETAINED');
 
-  const renewed=evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{
+  const rejectedRenewal=evaluateRadarNotificationGate(baseline('EARLY_EXPANSION_RADAR',{
     pre_expansion_stage:'PRE_EXPANSION',
     pre_expansion_fingerprint:{stage:'PRE_EXPANSION',ready:true,late:false,score:84}
   }),{now:NOW+2000});
-  assert.ok(['EARLY_SETUP','SIGNAL_REVIEW','CONFIRMED'].includes(renewed.signal_lifecycle.state),JSON.stringify(renewed.signal_lifecycle));
-  assert.equal(renewed.signal_lifecycle.generation,2);
-  assert.equal(renewed.signal_lifecycle.transition,'NEW_SETUP_AFTER_INVALIDATION');
+  assert.equal(rejectedRenewal.eligible,false);
+  assert.equal(rejectedRenewal.signal_lifecycle.state,'INVALIDATED');
+  assert.equal(rejectedRenewal.signal_lifecycle.generation,1);
+  assert.equal(rejectedRenewal.signal_lifecycle.transition,'INVALIDATION_RETAINED');
 });
-
 
 function strongEarlyWatchCandidate(extra={}){
   return baseline('STRONG_MOVE_RADAR',{
@@ -438,4 +464,28 @@ test('only a strict pass becomes confirmed; confirmation remains explicitly non-
   assert.equal(confirmed.label,'تأكيد مستوفٍ للشروط');
   assert.ok(confirmed.reason_codes.includes('STRICT_GATES_PASSED'));
   assert.equal(confirmed.terminal,false);
+});
+
+
+test('a rejected shared gate keeps a PRE_EXPANSION-labelled candidate in MONITOR lifecycle',()=>{
+  resetRadarNotificationGateForTests();
+  const result=advanceSignalLifecycle({
+    radar:'EARLY_EXPANSION_RADAR',
+    symbol:'REJECTEDSETUPUSDT',
+    pre_expansion_stage:'PRE_EXPANSION',
+    data_quality:95,
+    liquidity_quality:88,
+    pre_expansion_fingerprint:{stage:'PRE_EXPANSION',ready:true,late:false,score:82}
+  },{
+    radar:'EARLY_EXPANSION_RADAR',
+    eligible:false,
+    mode:'STRICT_NOTIFICATION',
+    score:0,
+    data_quality:95,
+    liquidity_quality:88,
+    failures:['SCORE_BELOW_STRICT_THRESHOLD','BUY_FLOW_NOT_CONFIRMED']
+  },{now:NOW});
+  assert.equal(result.state,'MONITOR',JSON.stringify(result));
+  assert.ok(result.reason_codes.includes('SHARED_NOTIFICATION_GATE_REJECTED'));
+  assert.equal(result.terminal,false);
 });

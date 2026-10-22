@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {connectRadarAlertsToAnalysts} from '../core/radar-analyst-bridge.mjs';
+import {evaluateRadarNotificationGate} from '../core/radar-notification-gate.mjs';
 
 {
   const alerts=[];
@@ -25,26 +26,27 @@ import {connectRadarAlertsToAnalysts} from '../core/radar-analyst-bridge.mjs';
     decisionRecorder:(alert,gate,options)=>decisions.push({alert,gate,options})
   });
   assert.equal(installed.installed,true);
-  assert.equal(installed.mode,'NON_BLOCKING_REVIEW_ONLY');
+  assert.equal(installed.mode,'SHARED_GATE_ENFORCED_NON_BLOCKING_REVIEW');
   const alert={symbol:'BTCUSDT',radar:'RADAR8',signal_type:'WATCH_EARLY',signal_score:81,detected_at:1799999999000};
   const result=await pushManager.notifyRadarAlert(alert,{trace:'kept'});
-  assert.deepEqual(result,{status:'delivered',marker:'ORIGINAL_PATH'});
-  assert.equal(alerts.length,1);
-  assert.equal(alerts[0].alert,alert);
-  assert.deepEqual(alerts[0].extra,{trace:'kept'});
-  assert.equal(alerts[0].alert.signal_lifecycle.state,'MONITOR','missing evidence must not be presented as early or confirmed');
+  assert.equal(result.status,'BLOCKED_SHARED_NOTIFICATION_GATE');
+  assert.equal(result.attempted,false);
+  assert.ok(result.blocked_reasons.includes('DATA_QUALITY_BELOW_STRICT_THRESHOLD'));
+  assert.equal(alerts.length,0,'a radar notification rejected by the shared gate must never be sent');
+  assert.equal(alert.signal_lifecycle.state,'MONITOR','missing evidence must not be presented as early or confirmed');
   assert.equal(queued.length,1);
   assert.deepEqual(queued[0],{symbol:'BTCUSDT',options:{sourceRadar:'RADAR8'}});
   assert.equal(decisions.length,1);
   assert.equal(decisions[0].alert.symbol,'BTCUSDT');
-  assert.equal(decisions[0].gate.eligible,true);
-  assert.equal(decisions[0].gate.accepted_mode,'RADAR_ALERT_EMITTED_REVIEW_PENDING');
+  assert.equal(decisions[0].gate.eligible,false,'emitted alerts with missing/failed shared-gate evidence are not accepted signals');
+  assert.equal(decisions[0].gate.accepted_mode,'RADAR_ALERT_EMITTED_GATE_REJECTED_REVIEW_PENDING');
+  assert.ok(decisions[0].gate.soft_failures.includes('DATA_QUALITY_BELOW_STRICT_THRESHOLD'));
   assert.equal(decisions[0].options.source,'LIVE');
   assert.equal(JSON.stringify(logs).includes('RADAR_ANALYST_REVIEW_QUEUED'),true);
   assert.deepEqual(connectRadarAlertsToAnalysts({pushManager,multiAnalystRadar}).reason,'ALREADY_INSTALLED');
 }
 
-console.log('radar analyst bridge preserves original push and enqueues review: PASS');
+console.log('radar analyst bridge blocks rejected pushes and enqueues review: PASS');
 
 {
   let pushCalls=0,queueCalls=0,decisionCalls=0;
@@ -56,11 +58,13 @@ console.log('radar analyst bridge preserves original push and enqueues review: P
     decisionRecorder(){decisionCalls++}
   });
   assert.equal(result.installed,true);
-  assert.equal(await pushManager.notifyRadarAlert({symbol:'BAD/SYMBOL',radar:'RADAR4'}),'sent');
-  assert.equal(await pushManager.notifyRadarAlert({symbol:'ETHUSDT',radar:'RADAR4'}),'sent');
-  assert.equal(pushCalls,2,'review bridge must not suppress the existing push path');
-  assert.equal(queueCalls,1);
-  assert.equal(decisionCalls,1,'telemetry is recorded for valid symbols without blocking push');
+  const malformed=await pushManager.notifyRadarAlert({symbol:'BAD/SYMBOL',radar:'RADAR4'});
+  const rejected=await pushManager.notifyRadarAlert({symbol:'ETHUSDT',radar:'RADAR4'});
+  assert.equal(malformed.status,'BLOCKED_SHARED_NOTIFICATION_GATE');
+  assert.equal(rejected.status,'BLOCKED_SHARED_NOTIFICATION_GATE');
+  assert.equal(pushCalls,0,'malformed or shared-gate-rejected alerts must not reach provider delivery');
+  assert.equal(queueCalls,1,'valid rejected symbols still enter the analyst review queue');
+  assert.equal(decisionCalls,1,'telemetry records the rejection without sending a false notification');
 }
 
 
@@ -93,8 +97,8 @@ test('common bridge classifies direct notifications from non-gated radars as wat
   assert.equal(JSON.stringify(logs).includes('RADAR_SHARED_WATCH_ONLY_CLASSIFIED'),true);
 });
 
-console.log('radar analyst bridge fails open and validates symbol: PASS');
-test('non-blocking bridge attaches a meaningful early lifecycle without changing delivery eligibility',async()=>{
+console.log('radar analyst bridge fails closed on invalid/rejected alerts: PASS');
+test('shared-gate rejection prevents ordinary push while preserving review telemetry',async()=>{
   const decisions=[],alerts=[];
   const pushManager={async notifyRadarAlert(alert){alerts.push(alert);return {status:'delivered'};}};
   const multiAnalystRadar={enqueueRadarReview(){return {queued:true,already_queued:false,pending_count:1};}};
@@ -105,9 +109,151 @@ test('non-blocking bridge attaches a meaningful early lifecycle without changing
     potential_label:'PRE_EXPANSION',data_quality:95,liquidity_quality:88,
     pre_expansion_fingerprint:{stage:'PRE_EXPANSION',ready:true,late:false,score:82}};
   const response=await pushManager.notifyRadarAlert(alert);
-  assert.deepEqual(response,{status:'delivered'});
-  assert.equal(alerts[0],alert);
-  assert.equal(alert.signal_lifecycle.state,'EARLY_SETUP',JSON.stringify(alert.signal_lifecycle));
-  assert.equal(alert.signal_lifecycle.label,'إعداد مبكر');
+  assert.equal(response.status,'BLOCKED_SHARED_NOTIFICATION_GATE');
+  assert.equal(response.attempted,false);
+  assert.equal(alerts.length,0);
+  assert.equal(alert.signal_lifecycle.state,'MONITOR',JSON.stringify(alert.signal_lifecycle));
   assert.equal(decisions.length,1);
+  assert.equal(decisions[0].gate.eligible,false);
+});
+
+
+test('watch-only notifications reach analyst review without being recorded as accepted signals',async()=>{
+  const calls=[],decisions=[],logs=[];
+  let regularNotifyCalls=0,watchNotifyCalls=0;
+  const pushManager={
+    async notifyRadarAlert(){regularNotifyCalls++;return {status:'normal-delivery'};},
+    async notifyRadarWatchOnlyAlert(alert,options){watchNotifyCalls++;return {status:'sent',attempted:true,alert,options};}
+  };
+  const multiAnalystRadar={
+    enqueueRadarReview(symbol,options){
+      calls.push({symbol,options});
+      return {queued:true,already_queued:false,pending_count:calls.length};
+    }
+  };
+  const installed=connectRadarAlertsToAnalysts({
+    pushManager,multiAnalystRadar,logger:{info:x=>logs.push(x),warn:x=>logs.push(x)},
+    clock:()=>1_800_000_500_000,
+    decisionRecorder:(alert,gate,options)=>decisions.push({alert,gate,options})
+  });
+  assert.equal(installed.installed,true);
+  const alert={
+    symbol:'QUIETBASEUSDT',radar:'EARLY_EXPANSION_RADAR',
+    event:'QUIET_BASE_PRE_EXPANSION_WATCH_ONLY',decision_band:'WATCH_EARLY',
+    watch_only:true,entry_eligible:false,data_quality:92,liquidity_quality:81
+  };
+  const response=await pushManager.notifyRadarWatchOnlyAlert(alert,{trace:'kept'});
+  assert.equal(response.status,'sent');
+  assert.equal(response.alert,alert);
+  assert.deepEqual(response.options,{trace:'kept'});
+  assert.equal(regularNotifyCalls,0);
+  assert.equal(watchNotifyCalls,1);
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].symbol,'QUIETBASEUSDT');
+  assert.equal(calls[0].options.sourceRadar,'EARLY_EXPANSION_RADAR');
+  assert.equal(calls[0].options.watchOnly,true);
+  assert.equal(calls[0].options.stage,'WATCH_EARLY');
+  assert.equal(decisions.length,1);
+  assert.equal(decisions[0].gate.eligible,false);
+  assert.equal(decisions[0].gate.accepted_mode,'WATCH_ONLY_REVIEW_PENDING');
+  assert.deepEqual(decisions[0].gate.soft_failures,['WATCH_ONLY_NOT_ENTRY_ELIGIBLE','MULTI_ANALYST_REVIEW_QUEUED']);
+  assert.equal(JSON.stringify(logs).includes('RADAR_ANALYST_WATCH_REVIEW_QUEUED'),true);
+});
+
+test('watch-only review bridge accepts watch observations from all twelve radar roles',async()=>{
+  const radarRoles=[
+    'EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR',
+    'LIQUIDITY_ABSORPTION_RADAR','KAHIR_RADAR','DOOMSDAY_RADAR',
+    'PROFESSOR_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR',
+    'COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','FALCON_EYE_RADAR'
+  ];
+  const queued=[],decisions=[],delivered=[];
+  const pushManager={
+    async notifyRadarAlert(){throw new Error('WATCH_ONLY_MUST_NOT_USE_ACTIONABLE_NOTIFY');},
+    async notifyRadarWatchOnlyAlert(alert){delivered.push(alert);return {status:'sent',attempted:true};}
+  };
+  const multiAnalystRadar={
+    enqueueRadarReview(symbol,options){
+      queued.push({symbol,options});
+      return {queued:true,already_queued:false,pending_count:queued.length};
+    }
+  };
+  const installed=connectRadarAlertsToAnalysts({
+    pushManager,multiAnalystRadar,logger:{info(){},warn(){}},
+    clock:()=>1_800_000_600_000,
+    decisionRecorder:(alert,gate,options)=>decisions.push({alert,gate,options})
+  });
+  assert.equal(installed.installed,true);
+  for(let i=0;i<radarRoles.length;i++){
+    const alert={
+      symbol:'WATCH'+String(i).padStart(2,'0')+'USDT',
+      radar:radarRoles[i],event:'RADAR_WATCH_ONLY',decision_band:'WATCH_EARLY',
+      watch_only:true,entry_eligible:false
+    };
+    const response=await pushManager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(response.status,'sent');
+    assert.equal(response.attempted,true);
+  }
+  assert.equal(delivered.length,12);
+  assert.equal(queued.length,12);
+  assert.equal(decisions.length,12);
+  for(let i=0;i<radarRoles.length;i++){
+    assert.equal(queued[i].symbol,'WATCH'+String(i).padStart(2,'0')+'USDT');
+    assert.equal(queued[i].options.sourceRadar,radarRoles[i]);
+    assert.equal(queued[i].options.watchOnly,true);
+    assert.equal(decisions[i].gate.eligible,false);
+    assert.equal(decisions[i].gate.accepted_mode,'WATCH_ONLY_REVIEW_PENDING');
+    assert.equal(decisions[i].alert.entry_eligible,false);
+  }
+});
+
+
+test('all numeric radar aliases resolve to their canonical profile',()=>{
+  const aliases={
+    RADAR1:'EARLY_MOVE_RADAR',RADAR_1:'EARLY_MOVE_RADAR',
+    RADAR2:'STRONG_MOVE_RADAR',RADAR_2:'STRONG_MOVE_RADAR',
+    RADAR3:'ROTATION_LAG_RADAR',RADAR_3:'ROTATION_LAG_RADAR',
+    RADAR4:'LIQUIDITY_ABSORPTION_RADAR',RADAR_4:'LIQUIDITY_ABSORPTION_RADAR',
+    RADAR5:'KAHIR_RADAR',RADAR_5:'KAHIR_RADAR',
+    RADAR6:'DOOMSDAY_RADAR',RADAR_6:'DOOMSDAY_RADAR',
+    RADAR7:'ALMUQAWIM_RADAR',RADAR_7:'ALMUQAWIM_RADAR',
+    RADAR8:'EARLY_EXPANSION_RADAR',RADAR_8:'EARLY_EXPANSION_RADAR',
+    RADAR9:'FALCON_EYE_RADAR',RADAR_9:'FALCON_EYE_RADAR',RADAR9_FALCON_EYE:'FALCON_EYE_RADAR',
+    RADAR10:'COIN_HUNTER_RADAR',RADAR_10:'COIN_HUNTER_RADAR',RADAR10_COIN_HUNTER:'COIN_HUNTER_RADAR',
+    RADAR11:'WHALE_ACCUMULATION_RADAR',RADAR_11:'WHALE_ACCUMULATION_RADAR',RADAR11_WHALE:'WHALE_ACCUMULATION_RADAR',
+    RADAR12:'PROFESSOR_RADAR',RADAR_12:'PROFESSOR_RADAR',RADAR12_PROFESSOR:'PROFESSOR_RADAR'
+  };
+  for(const [alias,canonical] of Object.entries(aliases)){
+    const event={symbol:'ALIASTESTUSDT',radar:alias,direction:'UP',data_quality:90,liquidity_quality:90};
+    const gate=evaluateRadarNotificationGate(event,{now:1_800_000_300_000,commit:false});
+    assert.equal(gate.radar,canonical,alias);
+    assert.ok(!gate.failures.includes('RADAR_PROFILE_MISSING'),alias);
+  }
+});
+
+
+test('an emitted watch-only alert is never recorded as an accepted candidate',async()=>{
+  const decisions=[];
+  const pushManager={async notifyRadarAlert(alert){return {status:'delivered',alert};}};
+  const multiAnalystRadar={enqueueRadarReview(){return {queued:true,already_queued:false,pending_count:1};}};
+  connectRadarAlertsToAnalysts({
+    pushManager,multiAnalystRadar,logger:{info(){},warn(){}},clock:()=>1_800_000_700_000,
+    decisionRecorder:(alert,gate,options)=>decisions.push({alert,gate,options})
+  });
+  const alert={
+    symbol:'WATCHFLAGSUSDT',radar:'RADAR8',direction:'UP',data_quality:95,liquidity_quality:82,
+    watch_only:true,entry_eligible:false,signal_type:'WATCH_EARLY',
+    notification_gate:{
+      radar:'EARLY_EXPANSION_RADAR',eligible:true,watch_only:true,
+      mode:'RADAR_WATCH_ONLY_EARLY_TRACK',failures:['SCORE_BELOW_STRICT_THRESHOLD']
+    }
+  };
+  const response=await pushManager.notifyRadarAlert(alert);
+  assert.equal(response.status,'BLOCKED_SHARED_NOTIFICATION_GATE');
+  assert.equal(response.attempted,false);
+  assert.equal(decisions.length,1);
+  assert.equal(decisions[0].gate.eligible,false);
+  assert.equal(decisions[0].gate.accepted_mode,'WATCH_ONLY_REVIEW_PENDING');
+  assert.equal(decisions[0].alert.entry_eligible,false);
+  assert.ok(decisions[0].gate.soft_failures.includes('WATCH_ONLY_NOT_ENTRY_ELIGIBLE'));
 });

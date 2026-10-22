@@ -24,7 +24,24 @@ const PROFILES=Object.freeze({
 const recentBySymbol=new Map();
 const preBreakoutStreakBySymbol=new Map();
 
-function radarId(alert){return String(alert?.radar||'').toUpperCase();}
+const RADAR_ID_ALIASES=Object.freeze({
+  RADAR1:'EARLY_MOVE_RADAR',RADAR_1:'EARLY_MOVE_RADAR',
+  RADAR2:'STRONG_MOVE_RADAR',RADAR_2:'STRONG_MOVE_RADAR',
+  RADAR3:'ROTATION_LAG_RADAR',RADAR_3:'ROTATION_LAG_RADAR',
+  RADAR4:'LIQUIDITY_ABSORPTION_RADAR',RADAR_4:'LIQUIDITY_ABSORPTION_RADAR',
+  RADAR5:'KAHIR_RADAR',RADAR_5:'KAHIR_RADAR',
+  RADAR6:'DOOMSDAY_RADAR',RADAR_6:'DOOMSDAY_RADAR',
+  RADAR7:'ALMUQAWIM_RADAR',RADAR_7:'ALMUQAWIM_RADAR',
+  RADAR8:'EARLY_EXPANSION_RADAR',RADAR_8:'EARLY_EXPANSION_RADAR',
+  RADAR9:'FALCON_EYE_RADAR',RADAR_9:'FALCON_EYE_RADAR',RADAR9_FALCON_EYE:'FALCON_EYE_RADAR',
+  RADAR10:'COIN_HUNTER_RADAR',RADAR_10:'COIN_HUNTER_RADAR',RADAR10_COIN_HUNTER:'COIN_HUNTER_RADAR',
+  RADAR11:'WHALE_ACCUMULATION_RADAR',RADAR_11:'WHALE_ACCUMULATION_RADAR',RADAR11_WHALE:'WHALE_ACCUMULATION_RADAR',
+  RADAR12:'PROFESSOR_RADAR',RADAR_12:'PROFESSOR_RADAR',RADAR12_PROFESSOR:'PROFESSOR_RADAR'
+});
+function radarId(alert){
+  const raw=String(alert?.radar||'').trim().toUpperCase();
+  return RADAR_ID_ALIASES[raw]||raw;
+}
 const UNKNOWN_PROFILE=Object.freeze({minScore:90,minData:90,minConfirmations:8,minCategoryHits:6,minLiquidity:75,globalCooldownMs:20*60*1000,priority:1});
 function profileFor(alert){return PROFILES[radarId(alert)]||UNKNOWN_PROFILE;}
 
@@ -462,6 +479,10 @@ export function advanceSignalLifecycle(alert,gate,{now=Date.now()}={}){
     reasons=[...(explicitInvalid?['EXPLICIT_SETUP_INVALIDATION']:[]),...(stageInvalid?['SETUP_STAGE_'+stage]:[]),...invalidationCodes];
   }else if(!dataReady||failures.some(x=>/DATA_QUALITY|DATA_GATE|DATA_STATUS|CANDLE|COVERAGE|SPREAD_EVIDENCE|PRIMARY_EVIDENCE|SNAPSHOT|STALE|INSUFFICIENT_DATA/.test(x))){
     state='MONITOR';reasons=['EVIDENCE_NOT_READY'];
+  }else if(gate?.eligible!==true){
+    // A plausible pre-expansion label is not enough: a rejected shared gate must
+    // remain a monitor-only observation, never an early setup or confirmation.
+    state='MONITOR';reasons=['SHARED_NOTIFICATION_GATE_REJECTED',...failures];
   }else if(gate?.eligible===true&&gate?.mode==='STRICT_NOTIFICATION'&&failures.length===0){
     state='CONFIRMED';reasons=['STRICT_GATES_PASSED'];
   }else if(hasTrigger){

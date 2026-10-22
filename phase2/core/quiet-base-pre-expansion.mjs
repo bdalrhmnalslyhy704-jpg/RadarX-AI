@@ -37,7 +37,15 @@ export const QUIET_BASE_PRE_EXPANSION_DEFAULTS = Object.freeze({
   minBuyPressureTransitionCloseLocation: 0.54,
   maxBuyPressureTransitionBaseRangePct: 3.5,
   minBuyPressureTransitionReturn1hPct: 0.15,
-  maxBuyPressureTransitionReturn1hPct: 4.5
+  maxBuyPressureTransitionReturn1hPct: 4.5,
+  // Monitor near-miss transitions separately; these never relax strict confirmation.
+  minNearMissTransitionSignals: 4,
+  minNearMissTransitionVolumeRatio: 1.02,
+  minNearMissTransitionTradeRatio: 1.02,
+  minNearMissTransitionShare: 0.51,
+  minNearMissTransitionShareDelta: 0.005,
+  minNearMissTransitionCloseLocation: 0.52,
+  minNearMissTransitionReturn1hPct: 0.05
 });
 
 function validClosedCandles(input, now) {
@@ -291,6 +299,29 @@ export function assessQuietBasePreExpansion({
     transitionBaseRangePct <= Number(cfg.maxBuyPressureTransitionBaseRangePct);
   const transitionResistanceNear = Number.isFinite(resistanceDistancePct) &&
     resistanceDistancePct >= -0.75 && resistanceDistancePct <= Number(cfg.maxResistanceDistancePct);
+  const nearMissTransitionChecks = {
+    volume_rising: Number.isFinite(transitionVolumeRatio) &&
+      transitionVolumeRatio >= Number(cfg.minNearMissTransitionVolumeRatio),
+    trades_rising: Number.isFinite(transitionTradeRatio) &&
+      transitionTradeRatio >= Number(cfg.minNearMissTransitionTradeRatio),
+    buyer_share_constructive: Number.isFinite(transitionTakerBuyShare) &&
+      transitionTakerBuyShare >= Number(cfg.minNearMissTransitionShare),
+    buyer_share_improving: Number.isFinite(transitionBuyShareDelta) &&
+      transitionBuyShareDelta >= Number(cfg.minNearMissTransitionShareDelta),
+    close_location_constructive: Number.isFinite(transitionMeanCloseLocation) &&
+      transitionMeanCloseLocation >= Number(cfg.minNearMissTransitionCloseLocation),
+    positive_hourly_return: Number.isFinite(transitionReturn1hPct) &&
+      transitionReturn1hPct >= Number(cfg.minNearMissTransitionReturn1hPct) &&
+      transitionReturn1hPct <= Number(cfg.maxBuyPressureTransitionReturn1hPct)
+  };
+  const nearMissTransitionSignalCount = Object.values(nearMissTransitionChecks)
+    .filter(Boolean).length;
+  const nearMissBuyPressureTransition = !transitionPressureConfirmed &&
+    transitionDataAvailable &&
+    nearMissTransitionSignalCount >= Number(cfg.minNearMissTransitionSignals) &&
+    compressionConfirmed && structureConfirmed && transitionResistanceNear &&
+    Number.isFinite(transitionBaseRangePct) &&
+    transitionBaseRangePct <= Number(cfg.maxBuyPressureTransitionBaseRangePct);
   const buyPressureTransition = transitionPressureConfirmed && structureConfirmed && transitionResistanceNear;
 
   const recentVolume = mean(recent12.map(row => Math.max(0, Number(row.volume) || 0)));
@@ -331,6 +362,25 @@ export function assessQuietBasePreExpansion({
       max_prior_base_range_pct: Number(cfg.maxBuyPressureTransitionBaseRangePct), minimum_rows: 48
     }, buyPressureTransition, 'BUY_FLOW_AND_PARTICIPATION_TRANSITION_CONFIRMED',
       transitionDataAvailable ? 'BUY_FLOW_TRANSITION_NOT_CONFIRMED' : 'BUY_FLOW_TRANSITION_DATA_UNAVAILABLE', closeTime),
+    makeEvidence('near_miss_buy_pressure_transition', {
+      available: transitionDataAvailable,
+      favorable_signal_count: nearMissTransitionSignalCount,
+      favorable_signals: nearMissTransitionChecks,
+      support_confirmed: structureConfirmed,
+      compression_confirmed: compressionConfirmed,
+      resistance_near: transitionResistanceNear,
+      watch_only_qualified: nearMissBuyPressureTransition
+    }, {
+      minimum_favorable_signals: Number(cfg.minNearMissTransitionSignals),
+      min_volume_ratio: Number(cfg.minNearMissTransitionVolumeRatio),
+      min_trade_ratio: Number(cfg.minNearMissTransitionTradeRatio),
+      min_taker_buy_share: Number(cfg.minNearMissTransitionShare),
+      min_taker_buy_share_delta: Number(cfg.minNearMissTransitionShareDelta),
+      min_mean_close_location: Number(cfg.minNearMissTransitionCloseLocation),
+      min_return_1h_pct: Number(cfg.minNearMissTransitionReturn1hPct),
+      max_prior_base_range_pct: Number(cfg.maxBuyPressureTransitionBaseRangePct)
+    }, nearMissBuyPressureTransition, 'QUIET_BASE_NEAR_MISS_BUY_FLOW_TRANSITION',
+      transitionDataAvailable ? 'NEAR_MISS_TRANSITION_SIGNAL_COUNT_TOO_LOW' : 'NEAR_MISS_TRANSITION_DATA_UNAVAILABLE', closeTime),
     makeEvidence('anti_chase', { daily_change_24h_pct: round(dailyMove), move_5m_pct: round(move5m), move_15m_pct: round(move15m) }, { max_abs_24h_pct: Number(cfg.maxQuietMove24hPct), max_abs_5m_pct: Number(cfg.maxMove5mPct), max_abs_15m_pct: Number(cfg.maxMove15mPct) }, !extended, 'MOVE_NOT_EXTENDED', 'ALREADY_EXTENDED', closeTime)
   ];
   result.evidence = evidence;
@@ -353,7 +403,10 @@ export function assessQuietBasePreExpansion({
       taker_buy_share: round(transitionTakerBuyShare), prior_taker_buy_share: round(transitionBaselineTakerBuyShare),
       taker_buy_share_delta: round(transitionBuyShareDelta), mean_close_location: round(transitionMeanCloseLocation),
       return_1h_pct: round(transitionReturn1hPct), prior_base_range_pct: round(transitionBaseRangePct),
-      transition_rows: transitionRows.length, baseline_rows: transitionBaselineRows.length
+      transition_rows: transitionRows.length, baseline_rows: transitionBaselineRows.length,
+      near_miss_signal_count: nearMissTransitionSignalCount,
+      near_miss_signals: nearMissTransitionChecks,
+      watch_only_qualified: nearMissBuyPressureTransition
     }
   };
   const coreBase = compressionConfirmed && structureConfirmed && nearResistance;
@@ -369,6 +422,14 @@ export function assessQuietBasePreExpansion({
     result.reason = 'QUIET_BASE_WITH_BUY_PRESSURE_TRANSITION_BEFORE_EXPANSION';
     result.detected = true;
     result.flow_state = 'BUY_PRESSURE_TRANSITION';
+  } else if (nearMissBuyPressureTransition) {
+    // Capture borderline evidence as a review-only observation; strict setup criteria stay intact.
+    result.classification = 'WATCH_EARLY';
+    result.reason = 'QUIET_BASE_NEAR_MISS_BUY_FLOW_TRANSITION';
+    result.detected = true;
+    result.watch_only = true;
+    result.entry_eligible = false;
+    result.flow_state = 'OBSERVE_BUY_PRESSURE_TRANSITION';
   } else if (coreBase && someParticipation) {
     result.classification = 'WATCH_EARLY';
     result.reason = 'QUIET_BASE_CONFIRMED_BUT_PARTICIPATION_IS_PARTIAL';

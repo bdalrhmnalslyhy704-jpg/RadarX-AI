@@ -1397,6 +1397,39 @@ export function buildEarlyFlowWatchAlert(candidate,now=Date.now()){
   },'Radar 8 — البرق');
 }
 
+export function buildQuietBaseWatchAlert(candidate,now=Date.now()){
+  const symbol=String(candidate?.symbol||'').trim().toUpperCase();
+  const fingerprint=candidate?.pre_expansion_fingerprint?.quiet_base_pre_expansion||
+    candidate?.quiet_base_pre_expansion||{};
+  const closeTime=hasFiniteNumber(fingerprint?.candle_close_time_ms)
+    ?Number(fingerprint.candle_close_time_ms):Number(now);
+  return decorateRadarAlert({
+    id:'RADAR8_QUIET_BASE_WATCH:'+symbol+':'+closeTime,
+    event:'QUIET_BASE_PRE_EXPANSION_WATCH_ONLY',
+    radar:'EARLY_EXPANSION_RADAR',
+    radar_name:'Radar 8 — البرق',
+    symbol,market:'SPOT',direction:'UP_BIAS',
+    price:hasFiniteNumber(candidate?.last_price)?Number(candidate.last_price):null,
+    price_change_24h:hasFiniteNumber(candidate?.price_change_24h)?Number(candidate.price_change_24h):null,
+    opportunity_score:null,early_expansion_score:null,
+    potential_label:'QUIET_BASE_NEAR_MISS_BUY_FLOW_TRANSITION',
+    decision_band:'WATCH_EARLY',
+    quiet_base_pre_expansion:fingerprint,
+    risk_flags:[...new Set([...(candidate?.risk_flags||[]),'QUIET_BASE_WATCH_ONLY'])],
+    reason_codes:[...new Set([...(candidate?.reason_codes||[]),
+      'QUIET_BASE_NEAR_MISS_BUY_FLOW_TRANSITION','MONITOR_ONLY_NOT_ENTRY'])],
+    data_quality:hasFiniteNumber(candidate?.data_quality)?Number(candidate.data_quality):null,
+    liquidity_quality:hasFiniteNumber(candidate?.liquidity_quality_live??candidate?.liquidity_quality)
+      ?Number(candidate.liquidity_quality_live??candidate.liquidity_quality):null,
+    data_stale:Boolean(candidate?.data_stale),
+    source:candidate?.source||'Binance Public REST',
+    detected_at:now,processed_at:now,detected_candle_close_time:closeTime,
+    closed_candles_only:true,watch_only:true,entry_eligible:false,
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+    disclaimer:'تنبيه مراقبة مبكرة فقط: قاعدة سعرية مضغوطة مع تحسن جزئي في تدفق التداول. لا يعني تأكيد اختراق أو توصية شراء، ويخضع لإعادة التحقق في الدورة التالية.'
+  },'Radar 8 — البرق');
+}
+
 function symbolHash(symbol){
   let h=2166136261>>>0;
   for(const ch of String(symbol||'')){h^=ch.charCodeAt(0);h=Math.imul(h,16777619);}
@@ -1822,6 +1855,7 @@ export class EarlyExpansionRadar{
     this.fastState=new Map();this.lastAlertAt=new Map();this.lastAlertScore=new Map();this.lastBand=new Map();
     this.lastActivityShockAt=new Map();this.lastActivityShockKeyBySymbol=new Map();this.activityShockTimestamps=[];this.fastShockPendingUntil=new Map();
     this.lastEarlyFlowWatchAt=new Map();this.lastEarlyFlowWatchKeyBySymbol=new Map();
+    this.lastQuietBaseWatchAt=new Map();this.lastQuietBaseWatchKeyBySymbol=new Map();
     this.lastMicroScanCycleBySymbol=new Map();this.lastDeepScanCycleBySymbol=new Map();
     this.scheduler=new ScanSchedulerJournal({radar:'RADAR_8',store,clock,logger});
     this.lastDeepAtBySymbol=new Map();this.firstEligibleAtBySymbol=new Map();
@@ -1894,10 +1928,13 @@ export class EarlyExpansionRadar{
   async stop(){this.running=false;if(this.timer)clearTimeout(this.timer);this.timer=null;this.marketWideKlineCache?.stop?.();}
   async recordWatchOnlyAlert(alert,eventType='RADAR8_WATCH_ONLY_TRACE'){
     const symbol=String(alert?.symbol||'').trim().toUpperCase();
-    const evidence=alert?.early_flow_watch_evidence||{};
+    const evidence=alert?.early_flow_watch_evidence||
+      alert?.quiet_base_pre_expansion?.metrics?.buy_pressure_transition||{};
     const traceAt=this.clock();
-    const pushEvent=alert?.event==='EARLY_FLOW_WATCH_ONLY'&&
-      ['MICRO_EARLY_FLOW_WATCH_TRACE','EARLY_FLOW_WATCH_TRACE'].includes(String(eventType));
+    const pushEvent=(alert?.event==='EARLY_FLOW_WATCH_ONLY'&&
+      ['MICRO_EARLY_FLOW_WATCH_TRACE','EARLY_FLOW_WATCH_TRACE'].includes(String(eventType)))||
+      (alert?.event==='QUIET_BASE_PRE_EXPANSION_WATCH_ONLY'&&
+      String(eventType)==='QUIET_BASE_PRE_EXPANSION_TRACE');
     let pushStatus='WATCH_ONLY_NOT_SENT',pushAttempted=false,pushResult=null;
     alert.watch_only=true;
     alert.entry_eligible=false;
@@ -1928,7 +1965,8 @@ export class EarlyExpansionRadar{
       await this.store.appendEarlyExpansionEvent(trace);
       stored=true;
     }catch(error){this.noteError(error,'watch-only-alert-trace');}
-    const closeTime=Number(evidence.closed_candle_close_time);
+    const closeTime=Number(alert?.detected_candle_close_time??evidence.closed_candle_close_time??
+      alert?.quiet_base_pre_expansion?.candle_close_time_ms);
     this.logger.info?.('[RADAR8_WATCH_ONLY_ALERT]',JSON.stringify({
       id:alert?.id||null,symbol,event:alert?.event||null,feed_status:stored?'TRACE_ONLY':'TRACE_STORE_FAILED',
       notification_status:pushStatus,push_attempted:pushAttempted,
@@ -1938,6 +1976,9 @@ export class EarlyExpansionRadar{
       closed_candles_only:evidence.closed_candles_only===true,
       closed_candle_close_time:Number.isFinite(closeTime)?closeTime:null,
       closed_candle_age_ms:Number.isFinite(closeTime)?Math.max(0,traceAt-closeTime):null,
+      quiet_base_classification:alert?.quiet_base_pre_expansion?.classification??null,
+      near_miss_transition_signal_count:Number.isFinite(Number(alert?.quiet_base_pre_expansion?.metrics?.buy_pressure_transition?.near_miss_signal_count))
+        ?Number(alert.quiet_base_pre_expansion.metrics.buy_pressure_transition.near_miss_signal_count):null,
       micro_score:Number.isFinite(Number(evidence.micro_score))?Number(evidence.micro_score):null,
       confirmation_count:Number.isFinite(Number(evidence.confirmation_count))?Number(evidence.confirmation_count):null,
       rvol_1m:Number.isFinite(Number(evidence.rvol_1m))?Number(evidence.rvol_1m):null,
@@ -2471,7 +2512,8 @@ export class EarlyExpansionRadar{
     if(activeSymbols.size>0){
       const stateMaps=[
         this.fastState,this.lastAlertAt,this.lastAlertScore,this.lastBand,
-        this.lastActivityShockAt,this.lastActivityShockKeyBySymbol,this.lastEarlyFlowWatchAt,this.lastEarlyFlowWatchKeyBySymbol,this.fastShockPendingUntil,
+        this.lastActivityShockAt,this.lastActivityShockKeyBySymbol,this.lastEarlyFlowWatchAt,this.lastEarlyFlowWatchKeyBySymbol,
+        this.lastQuietBaseWatchAt,this.lastQuietBaseWatchKeyBySymbol,this.fastShockPendingUntil,
         this.lastMicroScanCycleBySymbol,this.lastDeepScanCycleBySymbol,
         this.lastDeepAtBySymbol,this.firstEligibleAtBySymbol,
         this.marketWideCacheArchiveHydrationAttemptAtBySymbol
@@ -3020,6 +3062,7 @@ export class EarlyExpansionRadar{
       const microFlowWatchCandidates=microScanned.map(item=>buildMicroEarlyFlowWatchCandidate(item,this.clock(),this.config)).filter(Boolean);
       let watchAlertsThisCycle=0;
       const previousEarlyFlowWatchKeys=new Set(historyAlerts.filter(x=>x?.event==='EARLY_FLOW_WATCH_ONLY').map(x=>String(x?.id||'')));
+      const previousQuietBaseWatchKeys=new Set(historyAlerts.filter(x=>x?.event==='QUIET_BASE_PRE_EXPANSION_WATCH_ONLY').map(x=>String(x?.id||'')));
       // Persist Micro-confirmed watch-only observations before spending time on the
       // bounded Deep batch. The selector has already enforced closed candle, score,
       // confirmations, participation, positive flow and anti-chase constraints.
@@ -3372,6 +3415,45 @@ export class EarlyExpansionRadar{
             }
             if(watchStatus.stored){this.lastActivityShockAt.set(symbol,now);this.lastActivityShockKeyBySymbol.set(symbol,shockKey);
             this.activityShockTimestamps.push(now);previousActivityShockKeys.add(shockKey);}
+          }
+        }
+        const quietBaseFingerprint=candidate?.pre_expansion_fingerprint?.quiet_base_pre_expansion;
+        const quietBaseRiskFlags=Array.isArray(candidate?.risk_flags)?candidate.risk_flags:[];
+        const quietBaseBlockingRisk=quietBaseRiskFlags.some(flag=>
+          /ALREADY_EXTENDED|HIGH_RISK|RECENT_FAKEOUT|STALE_DATA|DATA_STALE|DATA_GAP|FUTURE_DATA|WIDE_SPREAD|ORDERBOOK_UNAVAILABLE|HISTORICAL_FOLLOWTHROUGH_WEAK|DATA_INSUFFICIENT/i.test(String(flag)));
+        const quietBaseLiquidity=Number(candidate?.liquidity_quality_live??candidate?.liquidity_quality);
+        const quietBaseWatchQualified=!eligibleAlert&&
+          quietBaseFingerprint?.watch_only===true&&
+          quietBaseFingerprint?.reason==='QUIET_BASE_NEAR_MISS_BUY_FLOW_TRANSITION'&&
+          candidate?.data_stale!==true&&
+          Number(candidate?.data_quality)>=Number(this.config.minDataQuality??70)&&
+          Number.isFinite(quietBaseLiquidity)&&
+          quietBaseLiquidity>=Number(this.config.minLiquidityQuality??60)&&
+          !quietBaseBlockingRisk&&
+          candidate?.pre_expansion_stage!=='ALREADY_EXTENDED';
+        if(quietBaseWatchQualified&&candidate.activity_shock?.detected!==true&&candidate.early_flow_watch!==true){
+          const symbol=String(candidate.symbol||'').trim().toUpperCase();
+          const watchAlert=buildQuietBaseWatchAlert(candidate,now);
+          const watchKey=String(watchAlert.id||'');
+          const lastAt=Number(this.lastQuietBaseWatchAt.get(symbol)||0);
+          const cooldown=Math.max(0,Number(this.config.quietBaseWatchCooldownMs??15*60*1000));
+          if(!previousQuietBaseWatchKeys.has(watchKey)&&
+             this.lastQuietBaseWatchKeyBySymbol.get(symbol)!==watchKey&&
+             now-lastAt>=cooldown){
+            const watchStatus=await this.recordWatchOnlyAlert(watchAlert,'QUIET_BASE_PRE_EXPANSION_TRACE');
+            if(watchStatus.stored||watchStatus.pushAttempted){
+              this.lastQuietBaseWatchAt.set(symbol,now);
+              this.lastQuietBaseWatchKeyBySymbol.set(symbol,watchKey);
+              previousQuietBaseWatchKeys.add(watchKey);
+              watchAlertsThisCycle++;
+              const journeyEntry=journeyEntries.get(symbol);
+              if(journeyEntry){
+                journeyEntry.notification_status=watchStatus.pushStatus;
+                journeyEntry.notification_gate_rejection_reason='WATCH_ONLY_NOT_ENTRY_ELIGIBLE';
+                journeyEntry.alert_id=watchKey;
+                journeyEntry.alert_stage='WATCH_EARLY';
+              }
+            }
           }
         }
         if(!eligibleAlert&&candidate.early_flow_watch===true&&candidate.activity_shock?.detected!==true){

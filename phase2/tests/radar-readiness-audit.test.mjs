@@ -7,9 +7,9 @@ const IDS = [
   'KAHIR_RADAR','DOOMSDAY_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR',
   'FALCON_EYE_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','PROFESSOR_RADAR'
 ];
-function fixture({missingCache = false, stopped = null, staleCycle = false, missingCycleTelemetry = false, cycleError = false, websocketDown = false} = {}) {
+function fixture({missingCache = false, stopped = null, staleCycle = false, missingCycleTelemetry = false, cycleError = false, websocketDown = false, analystRuntime = null, radarIds = IDS} = {}) {
   const now = 1_000_000;
-  const radars = IDS.map(radar => ({
+  const radars = radarIds.map(radar => ({
     radar, radar_name: radar, running: radar !== stopped,
     health: {running: radar !== stopped, last_error: null}
   }));
@@ -32,7 +32,7 @@ function fixture({missingCache = false, stopped = null, staleCycle = false, miss
     websocket_subscribed_symbols:websocketDown?0:282,websocket_sync_ready:!websocketDown,websocket_advanced_symbols:websocketDown?0:282,
     full_market_coverage_ready:!missingCache&&!websocketDown,last_error:websocketDown?'WS_DISCONNECTED':null
   };
-  const audit=buildRadarReadinessAudit({radars,swarm,telemetry:{events,total_recorded:events.length},candleCache,now});
+  const audit=buildRadarReadinessAudit({radars,swarm,telemetry:{events,total_recorded:events.length},candleCache,analystRuntime,now});
   return {audit, now};
 }
 
@@ -96,4 +96,142 @@ test('audit never reports READY when a registered radar has no observed cycle te
   assert.equal(audit.status,'DEGRADED');
   assert.equal(audit.summary.radars_without_cycle_telemetry,1);
   assert.ok(audit.readiness_reasons.includes('RADAR_CYCLE_TELEMETRY_MISSING:PROFESSOR_RADAR'));
+});
+
+
+function healthyAnalystRuntime(now, overrides = {}) {
+  const assessment = {
+    symbol: 'BTCUSDT',
+    assessed_at_ms: now - 500,
+    age_ms: 500,
+    fresh: true,
+    specialist_count: 19,
+    unique_specialists: 19,
+    unique_roles: 19,
+    specialists_complete: true,
+    final_analyst_complete: true,
+    analysis_failed: false,
+    data_valid: true
+  };
+  return {
+    configured: true,
+    running: true,
+    monitorStats: {
+      scan_count: 3,
+      last_scan_at: new Date(now - 1000).toISOString(),
+      next_scan_at: new Date(now + 59000).toISOString(),
+      last_scan_successful: true,
+      last_error: null
+    },
+    assessments: [assessment],
+    queue: {pending_count: 2, max_queue: 200, oldest_pending_age_ms: 1000},
+    ...overrides
+  };
+}
+
+test('readiness is READY only when the full twelve-radar swarm and fresh 19+1 analyst result are healthy', () => {
+  const now = 1_000_000;
+  const {audit} = fixture({analystRuntime: healthyAnalystRuntime(now)});
+  assert.equal(audit.status, 'READY');
+  assert.equal(audit.analysts.required, true);
+  assert.equal(audit.analysts.status, 'READY');
+  assert.equal(audit.analysts.expected_analysts, 20);
+  assert.equal(audit.analysts.specialists_per_assessment, 19);
+  assert.equal(audit.analysts.final_analyst_per_assessment, 1);
+  assert.equal(audit.analysts.complete_fresh_assessments, 1);
+  assert.equal(audit.summary.analyst_complete_fresh_assessments, 1);
+});
+
+test('readiness stays WARMING when the twenty-analyst worker has no fresh complete assessment yet', () => {
+  const now = 1_000_000;
+  const {audit} = fixture({
+    analystRuntime: healthyAnalystRuntime(now, {assessments: []})
+  });
+  assert.equal(audit.status, 'WARMING');
+  assert.equal(audit.analysts.status, 'WARMING');
+  assert.ok(audit.readiness_reasons.includes('MULTI_ANALYST_ASSESSMENTS_NOT_READY'));
+});
+
+test('readiness is DEGRADED when the continuous analyst worker is stopped', () => {
+  const now = 1_000_000;
+  const {audit} = fixture({
+    analystRuntime: healthyAnalystRuntime(now, {running: false})
+  });
+  assert.equal(audit.status, 'DEGRADED');
+  assert.equal(audit.analysts.status, 'DEGRADED');
+  assert.ok(audit.readiness_reasons.includes('MULTI_ANALYST_WORKER_NOT_RUNNING'));
+});
+
+test('readiness is DEGRADED when a fresh assessment has missing specialists or a missing final analyst', () => {
+  const now = 1_000_000;
+  const runtime = healthyAnalystRuntime(now, {
+    assessments: [{
+      symbol: 'ETHUSDT', age_ms: 250, fresh: true,
+      specialist_count: 18, unique_specialists: 18, unique_roles: 18,
+      specialists_complete: false, final_analyst_complete: false, analysis_failed: true,
+      data_valid: true
+    }]
+  });
+  const {audit} = fixture({analystRuntime: runtime});
+  assert.equal(audit.status, 'DEGRADED');
+  assert.equal(audit.analysts.incomplete_fresh_assessments, 1);
+  assert.ok(audit.readiness_reasons.includes('MULTI_ANALYST_ASSESSMENT_INCOMPLETE'));
+});
+
+test('readiness is DEGRADED on a live analyst scan error even if an older complete result is cached', () => {
+  const now = 1_000_000;
+  const runtime = healthyAnalystRuntime(now, {
+    monitorStats: {
+      scan_count: 4, last_scan_at: new Date(now - 500).toISOString(),
+      last_scan_successful: false, last_error: 'REST_TIMEOUT'
+    }
+  });
+  const {audit} = fixture({analystRuntime: runtime});
+  assert.equal(audit.status, 'DEGRADED');
+  assert.ok(audit.readiness_reasons.includes('MULTI_ANALYST_LAST_SCAN_ERROR'));
+});
+
+test('stale analyst assessments are reported, not counted as currently ready', () => {
+  const now = 1_000_000;
+  const runtime = healthyAnalystRuntime(now, {
+    assessments: [{
+      symbol: 'BTCUSDT', age_ms: 240000, fresh: false,
+      specialist_count: 19, unique_specialists: 19, unique_roles: 19,
+      specialists_complete: true, final_analyst_complete: true, analysis_failed: false,
+      data_valid: true
+    }]
+  });
+  const {audit} = fixture({analystRuntime: runtime});
+  assert.equal(audit.status, 'WARMING');
+  assert.equal(audit.analysts.stale_assessments, 1);
+  assert.equal(audit.analysts.complete_fresh_assessments, 0);
+});
+
+
+test('readiness detects a missing canonical radar role even when twelve workers are registered', () => {
+  const radarIds = [...IDS.slice(0, 11), 'UNEXPECTED_RADAR'];
+  const {audit} = fixture({radarIds});
+  assert.equal(audit.status, 'DEGRADED');
+  assert.equal(audit.summary.registered_radars, 12);
+  assert.equal(audit.summary.radar_role_coverage_ready, false);
+  assert.ok(audit.summary.missing_radar_roles.includes('PROFESSOR_RADAR'));
+  assert.ok(audit.summary.unexpected_radar_roles.includes('UNEXPECTED_RADAR'));
+  assert.ok(audit.readiness_reasons.includes('RADAR_ROLE_COVERAGE_INCOMPLETE'));
+});
+
+
+test('readiness is DEGRADED when the latest analyst scan failed even if no error string was retained', () => {
+  const now = 1_000_000;
+  const runtime = healthyAnalystRuntime(now, {
+    monitorStats: {
+      scan_count: 4,
+      last_scan_at: new Date(now - 500).toISOString(),
+      last_scan_successful: false,
+      last_error: null
+    }
+  });
+  const {audit} = fixture({analystRuntime: runtime});
+  assert.equal(audit.status, 'DEGRADED');
+  assert.equal(audit.analysts.last_scan_error, 'LAST_SCAN_NOT_SUCCESSFUL');
+  assert.ok(audit.readiness_reasons.includes('MULTI_ANALYST_LAST_SCAN_ERROR'));
 });
