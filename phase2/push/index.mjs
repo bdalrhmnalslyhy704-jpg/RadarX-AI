@@ -110,17 +110,25 @@ const radarTitle=s=>s?.radar_name||({
   ROTATION_LAG_RADAR:'Radar 3 — Rotation/Lag',
   LIQUIDITY_ABSORPTION_RADAR:'Radar 4 — Liquidity Absorption'
 }[String(s?.radar||'').toUpperCase()]||'RadarX');
-const radarPayload=(alert,processedAt=Date.now())=>({
+const radarPayload=(alert,processedAt=Date.now())=>{
+  const watchOnly=alert?.notification_gate?.watch_only===true||alert?.watch_only===true;
+  const needsFollowUp=watchOnly||alert?.notification_gate?.requires_follow_up_confirmation===true;
+  return {
   type:'RADARX_RADAR_ALERT',
   event_class:EVENT_CLASS.RADAR_ALERT??'RADAR_ALERT',
   event:alert.event||'RADAR_ALERT',
+  notification_mode:watchOnly?'WATCH_ONLY_EARLY_TRACK':'STANDARD_RADAR_ALERT',
+  watch_only:watchOnly,
+  requires_follow_up_confirmation:needsFollowUp,
   signal_lifecycle_state:alert?.signal_lifecycle?.state??null,
   signal_lifecycle_label:alert?.signal_lifecycle?.label??null,
   signal_lifecycle_transition:alert?.signal_lifecycle?.transition??null,
   signal_lifecycle_reason_codes:Array.isArray(alert?.signal_lifecycle?.reason_codes)?alert.signal_lifecycle.reason_codes.slice(0,8):[],
-  message:alert?.signal_lifecycle?.state&&alert.signal_lifecycle.state!=='MONITOR'&&alert?.signal_lifecycle?.label
-    ?[alert.symbol,alert.signal_lifecycle.label].filter(Boolean).join(' • ')
-    :undefined,
+  message:watchOnly
+    ?[alert.symbol,'مراقبة مبكرة فقط — تحتاج تأكيدًا'].filter(Boolean).join(' • ')
+    :alert?.signal_lifecycle?.state&&alert.signal_lifecycle.state!=='MONITOR'&&alert?.signal_lifecycle?.label
+      ?[alert.symbol,alert.signal_lifecycle.label].filter(Boolean).join(' • ')
+      :undefined,
   radar:alert.radar||'UNKNOWN_RADAR',
   radar_name:radarTitle(alert),
   symbol:alert.symbol,
@@ -143,8 +151,9 @@ const radarPayload=(alert,processedAt=Date.now())=>({
   confidence_score:'UNKNOWN',
   paper_trading:true,
   real_order_execution:false,
-  title:radarTitle(alert)+' • '+String(alert.symbol||'UNKNOWN')
-});
+  title:radarTitle(alert)+(watchOnly?' • مراقبة مبكرة':'')+' • '+String(alert.symbol||'UNKNOWN')
+  };
+};
 
 const payload=(s,processedAt=Date.now())=>({type:'RADARX_SIGNAL',event_class:marketEventClass(s.data_status?.source??s.source),signal_id:s.signal_id,symbol:s.symbol,market:s.market,strategy:s.strategy,direction:s.direction,
   signal_type:s.signal_type,timeframe:s.candle?.timeframe,candle_open_time:s.candle?.open_time,candle_close_time:s.candle?.close_time,
