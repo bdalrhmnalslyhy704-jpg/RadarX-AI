@@ -41,7 +41,10 @@ function dataQualityOf(alert){
     alert?.components?.data_quality ??
     alert?.components?.dataQuality ??
     alert?.early_expansion?.data_quality ??
+    alert?.early_move?.data_quality ??
     alert?.early_wake?.data_quality ??
+    alert?.strong_move?.data_quality ??
+    alert?.rotation?.data_quality ??
     alert?.kahir_analysis?.data_quality ??
     alert?.doomsday?.data_quality ??
     alert?.almuqawim?.data_quality ??
@@ -49,6 +52,7 @@ function dataQualityOf(alert){
     alert?.coin_hunter?.data_quality ??
     alert?.whale_accumulation?.data_quality ??
     alert?.falcon_eye?.data_quality ??
+    alert?.professor_opinion?.data_quality ??
     alert?.analysis?.data_quality ??
     alert?.deep_scan?.assessment?.data_quality
   );
@@ -60,6 +64,10 @@ function liquidityOf(alert){
     alert?.liquidity_metrics?.liquidity_quality ??
     alert?.components?.liquidity ??
     alert?.early_expansion?.liquidity_quality ??
+    alert?.early_move?.liquidity_quality ??
+    alert?.early_wake?.liquidity_quality ??
+    alert?.strong_move?.liquidity_quality ??
+    alert?.rotation?.liquidity_quality ??
     alert?.kahir_analysis?.liquidity_quality ??
     alert?.doomsday?.liquidity_quality ??
     alert?.almuqawim?.liquidity_quality ??
@@ -67,6 +75,7 @@ function liquidityOf(alert){
     alert?.coin_hunter?.liquidity_quality ??
     alert?.whale_accumulation?.liquidity_quality ??
     alert?.falcon_eye?.liquidity_quality ??
+    alert?.professor_opinion?.liquidity_quality ??
     alert?.analysis?.liquidity_quality ??
     alert?.analysis?.liquidity_score ??
     alert?.deep_scan?.assessment?.liquidity_score
