@@ -67,3 +67,5 @@ assert.equal(mainActivity.includes('postDelayed(backgroundStartRunnable, BACKGRO
 // The singleTop stop intent must not clear the debug replay URL before the service
 // is actually stopped; otherwise an in-flight scan can escape to the live backend.
 assert.match(mainActivity,/getBooleanExtra\("radarx_test_stop_background_monitor", false\)\) \{[\s\S]*?stopBackgroundMonitor\(\);[\s\S]*?return;[\s\S]*?\n        \}\n        String feedUrl = launchIntent == null/);
+assert.match(mainActivity,/setContentView\(webView\);[\s\S]{0,400}ensureContinuousMonitoring\(\);[\s\S]{0,250}webView\.loadUrl\(APP_URL\);/);
+assert.doesNotMatch(mainActivity,/webView\.postDelayed\(this::ensureContinuousMonitoring,\s*1400\)/);
