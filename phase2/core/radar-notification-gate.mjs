@@ -479,6 +479,10 @@ export function advanceSignalLifecycle(alert,gate,{now=Date.now()}={}){
     reasons=[...(explicitInvalid?['EXPLICIT_SETUP_INVALIDATION']:[]),...(stageInvalid?['SETUP_STAGE_'+stage]:[]),...invalidationCodes];
   }else if(!dataReady||failures.some(x=>/DATA_QUALITY|DATA_GATE|DATA_STATUS|CANDLE|COVERAGE|SPREAD_EVIDENCE|PRIMARY_EVIDENCE|SNAPSHOT|STALE|INSUFFICIENT_DATA/.test(x))){
     state='MONITOR';reasons=['EVIDENCE_NOT_READY'];
+  }else if(gate?.eligible!==true){
+    // A plausible pre-expansion label is not enough: a rejected shared gate must
+    // remain a monitor-only observation, never an early setup or confirmation.
+    state='MONITOR';reasons=['SHARED_NOTIFICATION_GATE_REJECTED',...failures];
   }else if(gate?.eligible===true&&gate?.mode==='STRICT_NOTIFICATION'&&failures.length===0){
     state='CONFIRMED';reasons=['STRICT_GATES_PASSED'];
   }else if(hasTrigger){
