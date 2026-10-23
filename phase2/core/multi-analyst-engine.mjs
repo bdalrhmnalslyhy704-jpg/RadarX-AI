@@ -38,25 +38,32 @@ export function selectWithPriorityRotation(rows,limit,cursor=0){
 }
 
 /** Reserve existing discovery capacity for queued radar symbols before round-robin buckets. */
-export function selectDiscoveryWithRadarReviewPriority(priorityRows,buckets,limit){
+export function selectDiscoveryWithRadarReviewPriority(priorityRows,buckets,limit,fallbackRows=[]){
   const max=Math.max(0,Math.trunc(Number(limit)||0));
   if(!max)return [];
   const selected=[],seen=new Set();
-  for(const row of Array.isArray(priorityRows)?priorityRows:[]){
+  const append=(row)=>{
     const symbol=String(row?.symbol||'').toUpperCase();
-    if(!symbol||seen.has(symbol))continue;
-    seen.add(symbol);selected.push(row);
+    if(!row||!symbol||seen.has(symbol))return false;
+    seen.add(symbol);selected.push(row);return true;
+  };
+  for(const row of Array.isArray(priorityRows)?priorityRows:[]){
+    append(row);
     if(selected.length>=max)return selected;
   }
   const lanes=(Array.isArray(buckets)?buckets:[]).map(rows=>Array.isArray(rows)?rows.slice():[]);
   let bucketIndex=0;
   while(selected.length<max&&lanes.some(rows=>rows.length)){
     const lane=lanes[bucketIndex%lanes.length];
-    if(lane.length){
-      const row=lane.shift(),symbol=String(row?.symbol||'').toUpperCase();
-      if(row&&symbol&&!seen.has(symbol)){seen.add(symbol);selected.push(row);}
-    }
+    if(lane.length)append(lane.shift());
     bucketIndex++;
+  }
+  // The specialist buckets are intentionally selective and often overlap. If their
+  // union is smaller than the scan budget, fill the unused slots from a rotating
+  // eligible-market lane rather than silently scanning fewer coins than configured.
+  for(const row of Array.isArray(fallbackRows)?fallbackRows:[]){
+    if(selected.length>=max)break;
+    append(row);
   }
   return selected;
 }
@@ -1350,7 +1357,12 @@ export class MultiAnalystEngine {
       const quiet=this._rotatingDiscoveryBucket('quiet',quietCandidates,Math.max(5,Math.trunc(this.config.discoveryPool*.28)));
       // Round-robin the discovery buckets so volume leaders cannot consume the full deep-scan budget.
       const buckets=[top,wake,surge,quiet,bottom];
-      const selected=selectDiscoveryWithRadarReviewPriority(radarPriorityRows,buckets,this.config.discoveryPool);
+      const coverageFallback=this._rotatingDiscoveryBucket(
+        'coverage',normalized,Math.min(normalized.length,this.config.discoveryPool)
+      );
+      const selected=selectDiscoveryWithRadarReviewPriority(
+        radarPriorityRows,buckets,this.config.discoveryPool,coverageFallback
+      );
       if(!selected.length)throw new Error('NO_SPOT_CANDIDATES');
       const deepPool=Math.max(1,Math.min(selected.length,Math.trunc(Number(this.config.deepScanPool)||selected.length)));
       const deepSelected=selected.slice(0,deepPool);
