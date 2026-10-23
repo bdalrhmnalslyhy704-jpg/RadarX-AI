@@ -16,7 +16,9 @@ const reasonMap={
 export function rankPreMoveCandidates(body){
   const rows=Array.isArray(body && body.candidates)?body.candidates:[];
   return rows
-    .filter(c=>c && c.data_status && c.data_status.data_valid===true && c.pre_move_context && Number.isFinite(Number(c.pre_move_context.score)))
+    .filter(c=>c && c.data_status && c.data_status.data_valid===true && c.pre_move_context &&
+      Number.isFinite(Number(c.pre_move_context.score)) &&
+      c.pre_move_context.already_moved!==true && c.pre_move_context.stage!=='ALREADY_MOVED')
     .map(c=>{
       const p=c.pre_move_context;
       const sessionReturn=num(p.session_return_pct,0);
@@ -45,8 +47,8 @@ export function rankPreMoveCandidates(body){
         closedCandlesOnly:p.closed_candles_only===true
       };
     })
+    // Do not let already-extended assets occupy the actionable Pre-Move ranking.
     .sort((a,b)=>
-      (Number(b.alreadyMoved)-Number(a.alreadyMoved))||
       b.score-a.score||
       (a.sessionReturn-b.sessionReturn)||
       b.volumeAcceleration-a.volumeAcceleration
