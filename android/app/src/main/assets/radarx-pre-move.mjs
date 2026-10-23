@@ -13,6 +13,58 @@ const reasonMap={
   RESISTANCE_NEAR:'مقاومة قريبة تحتاج اختراقًا مؤكدًا'
 };
 
+const watchReasonMap={
+  BELOW_MIN_QUOTE_VOLUME:'حجم التداول اليومي أقل من حد التنبيه',
+  LOW_LIQUIDITY:'السيولة أو عمق دفتر الطلبات أقل من حد التنبيه',
+  LIQUIDITY_UNVERIFIED:'تعذر تأكيد السيولة؛ مراقبة فقط'
+};
+
+export function rankPreMoveWatchCandidates(body){
+  const rows=Array.isArray(body&&body.watch_candidates)?body.watch_candidates:[];
+  return rows
+    .filter(c=>{
+      const p=c&&c.pre_move_context;
+      return Boolean(c&&c.watch_only===true&&c.alert_eligible===false&&
+        c.data_status&&c.data_status.candle_data_valid===true&&c.data_status.data_stale!==true&&
+        Number(c.data_quality)>=70&&p&&Number.isFinite(Number(p.score))&&
+        typeof p.session_return_pct==='number'&&Number.isFinite(p.session_return_pct)&&
+        p.evidence_complete===true&&p.closed_candles_only===true&&
+        p.flow_transition_confirmed===true&&p.price_window_valid===true&&
+        p.structure_confirmed===true&&p.already_moved!==true&&
+        !['ALREADY_MOVED','NO_SETUP'].includes(p.stage));
+    })
+    .map(c=>{
+      const p=c.pre_move_context;
+      return {
+        symbol:String(c.symbol||''),
+        price:num(c.last_price),
+        change24h:num(c.price_change_24h),
+        quoteVolume24h:num(c.quote_volume_24h),
+        score:Math.round(clamp(p.score)*10)/10,
+        stage:'WATCH_ONLY',
+        sessionReturn:num(p.session_return_pct,0),
+        relativeStrength:num(p.relative_strength_vs_market_pct),
+        relativeStrengthBtc:num(p.relative_strength_vs_btc_pct),
+        volumeAcceleration:num(p.volume_acceleration),
+        takerBuyRatio:num(p.taker_buy_ratio),
+        takerAcceleration:num(p.taker_buy_acceleration),
+        sessionPosition:num(p.session_position_pct),
+        resistanceDistance:num(p.resistance_distance_pct),
+        alreadyMoved:false,
+        components:p.components||{},
+        reasons:(p.reasons||[]).map(x=>reasonMap[x]||x),
+        rawReasons:p.reasons||[],
+        liquidity:num(c.liquidity_quality),
+        dataQuality:num(c.data_quality),
+        closedCandlesOnly:true,
+        watchOnly:true,
+        watchReason:watchReasonMap[c.watch_only_reason]||watchReasonMap.LIQUIDITY_UNVERIFIED
+      };
+    })
+    .sort((a,b)=>b.score-a.score||(a.sessionReturn-b.sessionReturn))
+    .slice(0,10);
+}
+
 export function rankPreMoveCandidates(body){
   const rows=Array.isArray(body && body.candidates)?body.candidates:[];
   return rows
@@ -63,6 +115,7 @@ export function rankPreMoveCandidates(body){
 export function stageLabel(stage){
   return ({
     READY:'جاهز للمراقبة',
+    WATCH_ONLY:'مراقبة فقط — ليس تنبيه دخول',
     EARLY_WAKE:'بدأ يستيقظ',
     QUIET_BUILD:'بناء هادئ',
     ALREADY_MOVED:'تحرك بالفعل',
@@ -72,7 +125,7 @@ export function stageLabel(stage){
 
 export function stageClass(stage){
   return stage==='READY'||stage==='EARLY_WAKE'?'good':
-    stage==='QUIET_BUILD'?'watch':
+    stage==='QUIET_BUILD'||stage==='WATCH_ONLY'?'watch':
     stage==='ALREADY_MOVED'?'late':'muted';
 }
 
