@@ -102,18 +102,47 @@ jobs:
           if (b.paper_trading !== true || b.real_order_execution !== false) throw new Error('READ_ONLY_POLICY_INVALID');
           NODE
 
-      - name: Run one real Pre-Move market scan against DHDTech
+      - name: Start and poll one real Pre-Move market scan on DHDTech
         run: |
           set -euo pipefail
-          CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 480 -o "$RUNNER_TEMP/pre-move-radar.json" -w "%{http_code}" "$BASE/api/pre-move-radar?quote=USDT&limit=10")"
-          if [ "$CODE" != "200" ]; then
-            echo "::error::DHDTech Pre-Move API returned HTTP $CODE"
-            cat "$RUNNER_TEMP/pre-move-radar.json"
+          URL="$BASE/api/pre-move-radar?quote=USDT&limit=10"
+          READY=false
+          for cycle in 1 2; do
+            START_CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$RUNNER_TEMP/pre-move-start.json" -w "%{http_code}" "$URL&scan=1" || true)"
+            if [ "$START_CODE" != "200" ]; then
+              echo "::error::Could not start DHDTech Pre-Move scan (HTTP $START_CODE)"
+              cat "$RUNNER_TEMP/pre-move-start.json" 2>/dev/null || true
+              exit 1
+            fi
+            for attempt in $(seq 1 36); do
+              CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$RUNNER_TEMP/pre-move-radar.json" -w "%{http_code}" "$URL" || true)"
+              if [ "$CODE" != "200" ]; then
+                echo "::error::DHDTech Pre-Move polling returned HTTP $CODE"
+                cat "$RUNNER_TEMP/pre-move-radar.json" 2>/dev/null || true
+                break
+              fi
+              STATE="$(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/pre-move-radar.json','utf8'));console.log(b.status||'unknown')")"
+              if [ "$STATE" = "ready" ]; then
+                READY=true
+                break 2
+              fi
+              if [ "$STATE" = "error" ]; then
+                echo "::warning::Pre-Move scan attempt failed: $(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/pre-move-radar.json','utf8'));console.log((b.reason||b.error||'unknown').replace(/[^A-Za-z0-9_:.-]/g,''))")"
+                break
+              fi
+              sleep 10
+            done
+            if [ "$cycle" -lt 2 ]; then sleep 20; fi
+          done
+          if [ "$READY" != "true" ]; then
+            echo "::error::DHDTech did not complete a live Pre-Move scan within the acceptance window"
+            cat "$RUNNER_TEMP/pre-move-radar.json" 2>/dev/null || true
             exit 1
           fi
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/pre-move-radar.json','utf8'));
+          if (b.status !== 'ready') throw new Error('PRE_MOVE_RESPONSE_NOT_READY');
           if (b.meta?.radar !== 'PRE_MOVE') throw new Error('PRE_MOVE_RADAR_ID_INVALID');
           if (b.meta?.live !== true || b.meta?.paper_trading !== true || b.meta?.real_order_execution !== false) throw new Error('PRE_MOVE_RADAR_LIVE_POLICY_INVALID');
           if (b.source !== 'Binance Public REST') throw new Error('PRE_MOVE_RADAR_SOURCE_INVALID');
@@ -122,11 +151,11 @@ jobs:
           for (const k of ['scanned','valid_data','evidence_incomplete_excluded','extended_excluded','no_setup_excluded','eligible_spot_symbols','discovered']) {
             if (typeof u[k] !== 'number' || !Number.isFinite(u[k])) throw new Error('PRE_MOVE_SCHEMA_OUTDATED:'+k);
           }
-          if (Number(u.scanned)<1 || Number(u.valid_data)<1 || Number(u.eligible_spot_symbols)<1 || Number(u.discovered)<1) throw new Error('PRE_MOVE_NO_VALID_LIVE_MARKET_DATA');
+          if (u.scanned<1 || u.valid_data<1 || u.eligible_spot_symbols<1 || u.discovered<1) throw new Error('PRE_MOVE_NO_VALID_LIVE_MARKET_DATA');
           if (!Array.isArray(b.candidates)) throw new Error('PRE_MOVE_CANDIDATES_MISSING');
           for (const x of b.candidates) {
             const p=x?.pre_move_context;
-            if (x?.data_status?.data_valid !== true || typeof x.data_quality !== 'number' || !Number.isFinite(x.data_quality) || x.data_quality<70 || typeof x.liquidity_quality !== 'number' || !Number.isFinite(x.liquidity_quality) || x.liquidity_quality<60) throw new Error('PRE_MOVE_DATA_QUALITY_GATE:'+String(x?.symbol||'UNKNOWN'));
+            if (x?.data_status?.data_valid !== true || typeof x.data_quality!=='number' || !Number.isFinite(x.data_quality) || x.data_quality<70 || typeof x.liquidity_quality!=='number' || !Number.isFinite(x.liquidity_quality) || x.liquidity_quality<60) throw new Error('PRE_MOVE_DATA_QUALITY_GATE:'+String(x?.symbol||'UNKNOWN'));
             if (!p || p.evidence_complete !== true || p.closed_candles_only !== true || p.already_moved === true || ['ALREADY_MOVED','NO_SETUP'].includes(p.stage)) throw new Error('PRE_MOVE_EARLY_STAGE_GATE:'+String(x?.symbol||'UNKNOWN'));
             for (const [key,value] of Object.entries({
               score:p.score,session_return_pct:p.session_return_pct,volume_acceleration:p.volume_acceleration,
@@ -134,10 +163,10 @@ jobs:
               compression:p.components?.squeeze,structure:p.components?.structure,
               buying_pressure:p.components?.buying_pressure
             })) if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error('PRE_MOVE_REQUIRED_EVIDENCE:'+String(x.symbol)+':'+key);
-            if (Number(p.session_return_pct)>9 || Number(x.price_change_24h)>20) throw new Error('PRE_MOVE_CHASE_FILTER:'+String(x.symbol));
+            if (p.session_return_pct>9 || x.price_change_24h>20) throw new Error('PRE_MOVE_CHASE_FILTER:'+String(x.symbol));
           }
           console.log(JSON.stringify({
-            build:b.meta.radar,live:b.meta.live,source:b.source,session:b.session,
+            status:b.status,radar:b.meta.radar,live:b.meta.live,source:b.source,session:b.session,
             universe:{scanned:u.scanned,valid_data:u.valid_data,returned:u.returned,actionable:u.actionable,
               evidence_incomplete_excluded:u.evidence_incomplete_excluded,extended_excluded:u.extended_excluded,no_setup_excluded:u.no_setup_excluded},
             candidates:b.candidates.map(x=>({symbol:x.symbol,score:x.pre_move_context.score,stage:x.pre_move_context.stage,session_return_pct:x.pre_move_context.session_return_pct,volume_acceleration:x.pre_move_context.volume_acceleration,taker_buy_ratio:x.pre_move_context.taker_buy_ratio,liquidity_quality:x.liquidity_quality,data_quality:x.data_quality})),
