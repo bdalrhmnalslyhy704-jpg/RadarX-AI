@@ -470,6 +470,32 @@ jobs:
               *) echo "::error::Triple backend returned HTTP $code for $path"; cat "$RUNNER_TEMP/radar-check.json"; exit 1 ;;
             esac
           done
+      - name: Verify Pre-Move Radar public contract on DHDTech
+        timeout-minutes: 4
+        run: |
+          set -euo pipefail
+          BASE="$RADARX_BACKEND_BASE_URL"
+          CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 180 -o "$RUNNER_TEMP/pre-move-radar.json" -w "%{http_code}" "$BASE/api/pre-move-radar?quote=USDT&limit=10")"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::Pre-Move Radar must return live API JSON, got HTTP $CODE"
+            cat "$RUNNER_TEMP/pre-move-radar.json"
+            exit 1
+          fi
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const body=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/pre-move-radar.json','utf8'));
+          if (body.meta?.radar !== 'PRE_MOVE') throw new Error('PRE_MOVE_RADAR_ID_INVALID');
+          if (body.meta?.paper_trading !== true || body.meta?.real_order_execution !== false) throw new Error('PRE_MOVE_RADAR_POLICY_INVALID');
+          if (body.source !== 'Binance Public REST') throw new Error('PRE_MOVE_RADAR_SOURCE_INVALID');
+          if (body.session?.timezone !== 'Asia/Aden' || body.session?.window !== '04:00–12:00 local') throw new Error('PRE_MOVE_RADAR_SESSION_INVALID');
+          if (!Array.isArray(body.candidates) || !body.universe || !Number.isFinite(Number(body.universe.scanned))) throw new Error('PRE_MOVE_RADAR_RESULT_SHAPE_INVALID');
+          for (const row of body.candidates) {
+            if (row?.data_status?.data_valid !== true || !row?.pre_move_context || !Number.isFinite(Number(row.pre_move_context.score))) {
+              throw new Error('PRE_MOVE_RADAR_INVALID_CANDIDATE:' + String(row?.symbol || 'UNKNOWN'));
+            }
+          }
+          console.log(JSON.stringify({radar:body.meta.radar,live:body.meta.live,candidates:body.candidates.length,scanned:body.universe.scanned,session:body.session,source:body.source,paper_trading:body.meta.paper_trading,real_order_execution:body.meta.real_order_execution}));
+          NODE
       - name: Verify Coin Hunter public contract
         timeout-minutes: 3
         run: |
