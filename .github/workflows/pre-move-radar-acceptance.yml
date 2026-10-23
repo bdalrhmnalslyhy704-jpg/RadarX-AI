@@ -148,6 +148,13 @@ jobs:
           if (b.source !== 'Binance Public REST') throw new Error('PRE_MOVE_RADAR_SOURCE_INVALID');
           if (b.session?.timezone !== 'Asia/Aden' || b.session?.window !== '04:00 local → latest closed candle') throw new Error('PRE_MOVE_SESSION_CONTRACT_INVALID');
           const u=b.universe||{};
+          console.log('PRE_MOVE_LIVE_SCAN_OBSERVATION '+JSON.stringify({
+            elapsed_ms:u.elapsed_ms,discovered:u.discovered,deep_scanned:u.deep_scanned,
+            valid_data:u.valid_data,observed_candle_data:u.observed_candle_data,
+            actionable:u.actionable,returned:u.returned,watch_only:u.watch_only,
+            candidates:b.candidates||[],watch_candidates:b.watch_candidates||[],
+            near_miss_audit:b.near_miss_audit||[]
+          }));
           for (const k of ['scanned','deep_scanned','valid_data','observed_candle_data','watch_only','evidence_incomplete_excluded','extended_excluded','no_setup_excluded','eligible_spot_symbols','discovered','actionable','returned','elapsed_ms','rotation_cycle','rotation_offset','rotation_width']) {
             if (typeof u[k] !== 'number' || !Number.isFinite(u[k])) throw new Error('PRE_MOVE_SCHEMA_OUTDATED:'+k);
           }
