@@ -415,17 +415,38 @@ test('Pre-Move low-volume and near-miss setups stay visible as explicit watch-on
     watch_reason_codes:['BELOW_MIN_QUOTE_VOLUME','PRICE_WINDOW_NOT_CONFIRMED','BUYING_PRESSURE_NOT_CONFIRMED'],
     ...overrides
   });
+  const lowScoreEarly=candidate('LOW_SCORE_EARLYUSDT',{
+    last_price:0.34,price_change_24h:0.579,quote_volume_24h:23223167,
+    liquidity_quality:96.21,data_quality:100,
+    data_status:{data_valid:true,data_stale:false,candle_data_valid:true,volume_gate_pass:true,last_error:null},
+    pre_move_context:{
+      stage:'WATCH_EARLY',original_stage:'NO_SETUP',score:48.5,session_return_pct:0.4259,
+      one_hour_return_pct:0.1516,evidence_complete:true,closed_candles_only:true,
+      watch_only:true,flow_transition_confirmed:false,price_window_valid:true,
+      structure_confirmed:false,already_moved:false,actionable:false,
+      components:{squeeze:45.2,structure:72.4,buying_pressure:100},
+      reasons:['VOLUME_ACCELERATING']
+    },
+    watch_only:true,alert_eligible:false,watch_only_reason:'TRADE_ACCELERATION_NOT_CONFIRMED',
+    watch_reason_codes:['TRADE_ACCELERATION_NOT_CONFIRMED','COMPRESSION_NOT_CONFIRMED','SCORE_BELOW_ACTIONABLE_THRESHOLD']
+  });
   const rows=rankPreMoveWatchCandidates({watch_candidates:[
     candidate('LOWVOLUSDT'),
+    lowScoreEarly,
     candidate('STALEUSDT',{data_status:{data_valid:false,data_stale:true,candle_data_valid:true,volume_gate_pass:false,last_error:null}}),
     candidate('LATEUSDT',{pre_move_context:{stage:'ALREADY_MOVED',score:99,session_return_pct:12,one_hour_return_pct:8,evidence_complete:true,closed_candles_only:true,watch_only:true,flow_transition_confirmed:true,price_window_valid:true,structure_confirmed:true,already_moved:true,components:{},reasons:[]}})
   ]});
-  assert.deepEqual(rows.map(x=>x.symbol),['LOWVOLUSDT']);
+  assert.deepEqual(rows.map(x=>x.symbol),['LOWVOLUSDT','LOW_SCORE_EARLYUSDT']);
   assert.equal(rows[0].stage,'WATCH_ONLY');
   assert.equal(rows[0].watchOnly,true);
   assert.equal(rows[0].watchReason,'حجم التداول اليومي أقل من حد التنبيه');
   assert.ok(rows[0].watchReasons.includes('حركة الساعة لم تدخل نطاق التأكيد'));
   assert.equal(rows[0].closedCandlesOnly,true);
+  assert.equal(rows[1].score,48.5,'the Android view must not hide qualifying early watch rows below the old 58-point cutoff');
+  assert.equal(rows[1].stage,'WATCH_ONLY');
+  assert.equal(rows[1].watchOnly,true);
+  assert.equal(rows[1].closedCandlesOnly,true);
+  assert.ok(rows[1].watchReasons.length>0);
   const page=await readFile(new URL('../pre-move-radar.html',import.meta.url),'utf8');
   assert.match(page,/rankPreMoveWatchCandidates/);
   assert.match(page,/مراقبة فقط وليست توصية دخول/);
