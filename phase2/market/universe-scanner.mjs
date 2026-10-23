@@ -1915,7 +1915,7 @@ export class MarketUniverseScanner {
     // This screen uses only the timeframes needed for early-flow evidence (1h + 15m)
     // and the order book; it does not run the unrelated general 20-strategy pipeline.
     // A rotating second half broadens coverage without repeatedly deep-scanning only the same top symbols.
-    const discoveryLimit=Math.min(24,Math.max(24,normalizedLimit));
+    const discoveryLimit=20;
     const rotationCycle=Math.max(0,Math.trunc(Number(this._preMoveRotationCycle)||0));
     this._preMoveRotationCycle=rotationCycle+1;
     const rotatingWidth=Math.max(1,discoveryLimit-Math.ceil(discoveryLimit/2));
