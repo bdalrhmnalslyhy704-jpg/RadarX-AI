@@ -39,7 +39,7 @@ header{position:sticky;top:0;z-index:20;margin:0 -14px;padding:calc(9px + env(sa
 <div class="note">النتيجة مؤشر مراقبة مبني على بيانات السوق الحالية وشموع مغلقة فقط. «ضغط الحيتان» الموجود ضمن المكونات استدلال من دفتر الأوامر وليس معرفة بهوية أي حوت، ولا يوجد توقع مضمون للسعر.</div>
 <script type="module">
 import {getPreMoveRadar} from './radarx-backend-client.mjs';
-import {rankPreMoveCandidates,stageLabel,stageClass} from './radarx-pre-move.mjs';
+import {rankPreMoveCandidates,rankPreMoveWatchCandidates,stageLabel,stageClass} from './radarx-pre-move.mjs';
 
 const scan=document.getElementById('scan');
 const limit=document.getElementById('limit');
@@ -54,17 +54,34 @@ function fmt(n){if(n===null||n===undefined||(typeof n==='string'&&n.trim()==='')
 function pct(n){return n!==null&&n!==undefined&&!(typeof n==='string'&&n.trim()==='')&&Number.isFinite(Number(n))?Number(n).toFixed(2)+'%':'—'}
 function num(n,d='—'){return n!==null&&n!==undefined&&!(typeof n==='string'&&n.trim()==='')&&Number.isFinite(Number(n))?Number(n).toFixed(1):d}
 function meter(label,v){const x=Math.max(0,Math.min(100,Number(v)||0));return '<div class="meter"><span>'+label+'</span><b>'+x.toFixed(0)+'</b><div class="track"><i style="width:'+x+'%"></i></div></div>'}
-function render(rows,meta){
+function render(rows,meta,watchRows=[]){
+ const watchHtml=(watchRows||[]).map((p,i)=>
+   '<article class="card">'+
+    '<div class="head"><div><div class="sym">مراقبة فقط · '+(i+1)+'. '+p.symbol+'</div><div class="price">السعر '+fmt(p.price)+' • 24h '+pct(p.change24h)+'</div></div><div style="text-align:left"><div class="score">'+p.score.toFixed(1)+'</div><span class="badge '+stageClass(p.stage)+'">'+stageLabel(p.stage)+'</span></div></div>'+
+    '<div class="grid">'+
+      '<div class="box"><span>حجم التداول 24h</span><b>'+fmt(p.quoteVolume24h)+' USDT</b><small>أقل من حد التنبيه أو يحتاج تأكيد سيولة</small></div>'+
+      '<div class="box"><span>حركة جلسة الصباح</span><b>'+pct(p.sessionReturn)+'</b><small>من 04:00 بتوقيت اليمن</small></div>'+
+      '<div class="box"><span>تسارع الحجم</span><b>'+num(p.volumeAcceleration, '—')+'×</b><small>آخر نافذة مقابل خط الأساس</small></div>'+
+      '<div class="box"><span>Taker Buy</span><b>'+pct((p.takerBuyRatio||0)*100)+'</b><small>نسبة الشراء في آخر النوافذ</small></div>'+
+      '<div class="box"><span>جودة البيانات</span><b>'+num(p.dataQuality)+'%</b><small>شموع مغلقة فقط</small></div>'+
+      '<div class="box"><span>جودة السيولة</span><b>'+num(p.liquidity)+'</b><small>لا تكفي لتأكيد تنبيه</small></div>'+
+    '</div>'+
+    '<div class="reasons"><span class="reason">'+p.watchReason+'</span></div>'+
+    '<div class="note">مراقبة فقط وليست توصية دخول ولا تنبيهًا مؤكدًا؛ انتظر تأكيد السيولة وبقاء إشارات التدفق.</div>'+
+   '</article>'
+ ).join('');
  if(!rows.length){
    const u=meta&&meta.universe?meta.universe:{};
    const validData=Number(u.valid_data!=null?u.valid_data:(u.scanned!=null?u.scanned:0))>0;
    const incomplete=Number(u.evidence_incomplete_excluded||0)>0;
-   const message=!validData
-     ? 'لم تصل بيانات سوق صالحة كافية من Backend.'
-     : incomplete
-       ? 'لا توجد الآن إعدادات مبكرة مكتملة الأدلة. بعض المرشحين استُبعدوا لأن بيانات الحجم أو تدفق الشراء أو الانكماش أو الهيكل لم تكن مكتملة؛ لن نعرضهم كفرص.'
-       : 'لا توجد الآن إعدادات مبكرة تستوفي الشروط. استُبعدت العملات المتمددة والضعيفة بدل عرض توصيات غير مؤهلة؛ أعد الفحص بعد وصول شموع مغلقة جديدة.';
-   cards.innerHTML='<div class="empty">'+message+'</div>';
+   const message=watchRows.length
+     ? 'لا توجد الآن عملات مؤهلة لتنبيه مؤكد. تظهر أدناه إعدادات مراقبة فقط لأن الحجم أو السيولة لم يحققا شرط التنبيه.'
+     : !validData
+       ? 'لم تصل بيانات سوق صالحة كافية من Backend.'
+       : incomplete
+         ? 'لا توجد الآن إعدادات مبكرة مكتملة الأدلة. بعض المرشحين استُبعدوا لأن بيانات الحجم أو تدفق الشراء أو الانكماش أو الهيكل لم تكن مكتملة؛ لن نعرضهم كفرص.'
+         : 'لا توجد الآن إعدادات مبكرة تستوفي الشروط. استُبعدت العملات المتمددة والضعيفة بدل عرض توصيات غير مؤهلة؛ أعد الفحص بعد وصول شموع مغلقة جديدة.';
+   cards.innerHTML='<div class="empty">'+message+'</div>'+watchHtml;
    return;
  }
  cards.innerHTML=rows.map((x,i)=>{
@@ -88,7 +105,7 @@ function render(rows,meta){
     '<div class="reasons">'+p.reasons.map(r=>'<span class="reason">'+r+'</span>').join('')+'</div>'+
     '<div class="note">موقع السعر في الجلسة '+num(p.sessionPosition)+'% • ضد BTC '+pct(p.relativeStrengthBtc)+' • 4h/1h/15m مغلقة: '+(p.closedCandlesOnly?'نعم':'لا')+'</div>'+
    '</article>';
- }).join('');
+ }).join('')+watchHtml;
 }
 const waitMs=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function requestPreMoveScan(force,requestedLimit){
@@ -114,16 +131,17 @@ async function requestPreMoveScan(force,requestedLimit){
 }
 async function run(force){
  if(busy)return;
- if(!force){const cached=readCache();if(cached){const rows=rankPreMoveCandidates(cached.body);status.innerHTML='<b>بيانات محفوظة</b> — '+rows.length+' مرشحًا • هذه ليست نتيجة مسح جديد؛ اضغط الفحص لتحديث السوق.';render(rows,cached.body);return;}}
+ if(!force){const cached=readCache();if(cached){const rows=rankPreMoveCandidates(cached.body);const watchRows=rankPreMoveWatchCandidates(cached.body);status.innerHTML='<b>بيانات محفوظة</b> — '+rows.length+' مرشحًا مؤهلًا و'+watchRows.length+' للمراقبة فقط • هذه ليست نتيجة مسح جديد؛ اضغط الفحص لتحديث السوق.';render(rows,cached.body,watchRows);return;}}
  busy=true;scan.disabled=true;scan.textContent='جاري الفحص…';
  status.innerHTML='<b>فحص حي</b> — نبدأ مسحًا خلفيًا وننتظر بيانات Binance المكتملة…';
  try{
    const body=await requestPreMoveScan(force,Number(limit.value)||30);
    writeCache(body);
    const rows=rankPreMoveCandidates(body);
+   const watchRows=rankPreMoveWatchCandidates(body);
    const s=body.session||{};
-   status.innerHTML='<b>تم التحقق من البيانات الحية</b> — '+rows.length+' إعدادات مبكرة مكتملة الأدلة • قوة السوق الصباحية '+num(s.positive_breadth_pct)+'% موجبة • متوسط الجلسة '+pct(s.market_median_return_pct)+' • BTC '+pct(s.btc_return_pct);
-   render(rows,body);
+   status.innerHTML='<b>تم التحقق من البيانات الحية</b> — '+rows.length+' مؤهلة للتنبيه و'+watchRows.length+' للمراقبة فقط • قوة السوق الصباحية '+num(s.positive_breadth_pct)+'% موجبة • متوسط الجلسة '+pct(s.market_median_return_pct)+' • BTC '+pct(s.btc_return_pct);
+   render(rows,body,watchRows);
  }catch(e){
    status.innerHTML='<b>تعذر الفحص</b> — '+String(e.message||e)+' • لن نعرض بيانات ناقصة على أنها فرصة.';
    cards.innerHTML='<div class="empty">لم تكتمل قراءة حية صالحة من Backend. لا تدخل صفقة اعتمادًا على فحص لم ينجح.</div>';
