@@ -1025,19 +1025,31 @@ export function buildPreMoveTargetPlan(candles,ticker={},now=Date.now()){
   const high24=Number(ticker?.highPrice24h);
   if(Number.isFinite(high24)&&high24>entry*1.0005)resistances.push(high24);
   const resistance=resistances.length?Math.min(...resistances):null;
-  const raw1=entry+1.25*risk,target1=Number.isFinite(resistance)?Math.min(raw1,resistance-0.1*atr):raw1,raw2=entry+2*risk;
-  const target2=Number.isFinite(resistance)?Math.max(entry+1.5*risk,Math.min(raw2,resistance+0.5*atr)):raw2;
+  const raw1=entry+1.25*risk,raw2=entry+2*risk;
+  // A nearby resistance must not pull target 1 back below entry and silently
+  // reject an otherwise valid early setup. When resistance leaves less than 1R
+  // of clear room, target 1 becomes a conditional projection after a confirmed breakout.
+  const conservativeResistanceTarget=Number.isFinite(resistance)?resistance-0.1*atr:null;
+  const target1RequiresBreakout=Number.isFinite(resistance)&&
+    !(Number.isFinite(conservativeResistanceTarget)&&conservativeResistanceTarget>=entry+risk);
+  const target1=Number.isFinite(resistance)
+    ?target1RequiresBreakout?Math.max(raw1,resistance+0.1*atr):Math.min(raw1,conservativeResistanceTarget)
+    :raw1;
+  const target2=Number.isFinite(resistance)
+    ?Math.max(raw2,target1+0.5*risk,resistance+0.5*atr)
+    :Math.max(raw2,target1+0.5*risk);
   const target1RR=Number.isFinite(target1)&&target1>entry?(target1-entry)/risk:null;
   const target2RR=Number.isFinite(target2)&&target2>entry?(target2-entry)/risk:null;
-  const valid=Number.isFinite(invalidation)&&invalidation>0&&risk>0&&Number.isFinite(target2)&&target2>entry&&Number.isFinite(riskPct);
+  const valid=Number.isFinite(invalidation)&&invalidation>0&&risk>0&&Number.isFinite(target1)&&target1>entry&&Number.isFinite(target2)&&target2>target1&&Number.isFinite(riskPct);
   const rewardRiskOk=valid&&Number.isFinite(target1RR)&&target1RR>=1&&Number.isFinite(target2RR)&&target2RR>=1.5&&riskPct>=0.2&&riskPct<=4.5;
   const reasons=[];
-  if(!Number.isFinite(target1)||target1<=entry)reasons.push('RESISTANCE_TOO_CLOSE_FOR_TARGET_1');
+  if(target1RequiresBreakout)reasons.push('TARGET_1_CONDITIONAL_ON_RESISTANCE_BREAKOUT');
   if(riskPct<0.2||riskPct>4.5)reasons.push('RISK_DISTANCE_OUTSIDE_ALLOWED_RANGE');
   if(!rewardRiskOk)reasons.push('TARGET_REWARD_RISK_NOT_CONFIRMED');
-  return {method:'ATR_15M_RISK_REWARD_V1',valid,actionable:false,status:'WATCH_ONLY_ESTIMATE',reference_price:entry,
+  return {method:'ATR_15M_RISK_REWARD_V2',valid,actionable:false,status:'WATCH_ONLY_ESTIMATE',reference_price:entry,
     atr_15m:atr,atr_15m_pct:atr/entry*100,support_price:support,resistance_price:Number.isFinite(resistance)?resistance:null,
-    invalidation_price:invalidation,risk_pct:riskPct,target_1_price:Number.isFinite(target1)&&target1>entry?target1:null,
+    invalidation_price:invalidation,risk_pct:riskPct,target_1_price:target1,
+    target_1_requires_resistance_breakout:target1RequiresBreakout,
     target_2_price:target2,target_1_rr:target1RR,target_2_rr:target2RR,reward_risk_ok:rewardRiskOk,
     reason_codes:[...new Set(reasons)],price_basis:'LAST_TICKER_PRICE_AT_SCAN',closed_candles_used:rows.length,
     closed_candles_only:true,paper_only:true,not_guaranteed:true};
@@ -2192,6 +2204,7 @@ export class MarketUniverseScanner {
         market_median_return_pct:Number.isFinite(marketMedianReturn)?marketMedianReturn:null,
         relative_strength_vs_market_pct:Number.isFinite(relReturn)?relReturn:null,
         relative_strength_vs_btc_pct:Number.isFinite(btcReturn)?Number(ctx.session_return_pct)-btcReturn:null,
+        components,
         score:Math.round(clamp(score)*10)/10,
         stage,
         reasons:[...new Set(reasons)]
