@@ -170,29 +170,70 @@ function groupScore(j){
 }
 function renderHeader(body){
   const u=body&&body.universe||{},s=body&&body.summary||{},d=body&&body.diagnostics||{};
-  dEls.scanned.textContent=String(num(u.scanned,0));
+  const meta=body&&body.meta||{},scan=body&&body.scan||{},monitoring=body&&body.monitoring||{};
+  const noErrorCodes=['SCAN_STARTED','SCAN_IN_PROGRESS'];
+  const cleanError=function(value){
+    const text=String(value||'').trim();
+    return text&&!noErrorCodes.includes(text)?text:'';
+  };
+  const symbolErrors=Array.isArray(d.scan_errors)?d.scan_errors:[];
+  const errorText=cleanError(body&&body.error)||
+    cleanError(scan.last_error)||
+    cleanError(monitoring.last_error)||
+    cleanError(d.last_scan_error)||
+    cleanError(scan.error)||
+    cleanError(symbolErrors[0]&&symbolErrors[0].error);
+  const mode=String(meta.analysis_mode||'UNKNOWN');
+  const isWarming=body.status==='warming'||mode==='WARMING'||
+    (scan.completed===false&&!errorText);
+  const scanned=num(u.scanned,0);
+  const attempted=num(d.attempted_analyses,0);
+  const rejected=num(s.rejected==null?s.rejected_candidates||0:s.rejected);
+  const watchCount=Array.isArray(body&&body.watchlist)?body.watchlist.length:num(s.watch,0);
+  const scanFailures=num(d.scan_failure_count,0)||((mode==='SCAN_FAILED'||body.status==='not_ready')?1:0);
+
+  dEls.scanned.textContent=String(scanned);
   dEls.strong.textContent=String(num(s.strong_candidates,0));
   dEls.candidate.textContent=String(num(s.candidates,0));
-  dEls.rejected.textContent=String(s.rejected==null?s.rejected_candidates||0:s.rejected);
+  dEls.rejected.textContent=String(rejected);
 
-  const meta=body&&body.meta||{};
   const m=body&&body.market_context||{};
   dEls.marketChips.innerHTML=
     '<span class="chip '+(meta.live?'ok':'warn')+'">'+(meta.live?'● LIVE DATA':'○ DATA LIMITED')+'</span>'+
-    '<span class="chip">السوق '+esc(String(m.regime||'MIXED'))+'</span>'+
+    '<span class="chip">السوق '+esc(String(m.regime||'UNKNOWN'))+'</span>'+
     '<span class="chip">Breadth '+pct(m.positive_breadth_pct)+'</span>'+
     '<span class="chip">Median 24h '+pct(m.median_24h_change_pct)+'</span>'+
     '<span class="chip">Paper only</span>';
 
   dEls.diagnostics.innerHTML=
     '<span class="chip">اكتشاف '+num(u.discovery_pool,0)+'</span>'+
-    '<span class="chip ok">المختبر '+num(d.attempted_analyses,0)+'</span>'+
+    '<span class="chip">المختبر '+attempted+'</span>'+
     '<span class="chip '+(num(d.successful_analyses,0)>0?'ok':'warn')+'">بوابة البيانات '+num(d.successful_analyses,0)+'</span>'+
     '<span class="chip '+(num(d.gate_rejected,0)>0?'warn':'ok')+'">بوابة مرفوضة '+num(d.gate_rejected,0)+'</span>'+
-    '<span class="chip '+(num(d.failed_analyses,0)>0?'bad':'ok')+'">أخطاء تنفيذ '+num(d.failed_analyses,0)+'</span>'+
-    '<span class="chip">زمن '+num(d.duration_ms,0)+'ms</span>';
+    '<span class="chip '+(watchCount>0?'ok':'warn')+'">مراقبة مبكرة '+watchCount+'</span>'+
+    '<span class="chip '+(num(d.failed_analyses,0)>0?'bad':'ok')+'">أخطاء العملات '+num(d.failed_analyses,0)+'</span>'+
+    '<span class="chip '+(scanFailures>0?'bad':'ok')+'">فشل دورة الفحص '+scanFailures+'</span>'+
+    '<span class="chip">زمن '+num(d.duration_ms,0)+'ms</span>'+
+    (errorText?'<span class="chip bad">سبب/آخر خطأ: '+esc(errorText)+'</span>':'');
 
-  liveText.textContent=meta.live?'● بيانات حيّة • آخر تحليل '+new Date(body.as_of).toLocaleTimeString('ar-SA',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'○ اللقطة مكتملة لكن بوابة البيانات لم تسمح بنتيجة حيّة';
+  if(meta.live===true){
+    liveText.textContent='● تحليل حي من بيانات السوق • آخر تحليل '+new Date(body.as_of||Date.now()).toLocaleTimeString('ar-SA',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  }else if(isWarming){
+    liveText.textContent='◌ فحص السوق قيد التنفيذ — هذه ليست نتيجة مكتملة.'+
+      (scanned||attempted?' تم حتى الآن تسجيل '+Math.max(scanned,attempted)+' عملة.':'')+
+      (errorText?' • آخر خطأ مسجل: '+errorText:' • تنتظر الواجهة اكتمال المسح.') ;
+  }else if(mode==='SCAN_FAILED'||body.status==='not_ready'||body.error){
+    liveText.textContent='⛔ فشل الفحص الحي — '+(errorText||'لم يرسل الخادم سبب الفشل')+
+      (monitoring.last_scan_at?' • آخر فحص مكتمل: '+String(monitoring.last_scan_at):'');
+  }else if(scanned>0||attempted>0){
+    liveText.textContent='⚠ اكتمل فحص '+Math.max(scanned,attempted)+' عملة، لكن لا توجد نتيجة حيّة مؤهلة.'+
+      ' • مرفوض عند بوابة البيانات '+num(d.gate_rejected,0)+
+      ' • مرشحو المراقبة '+watchCount+
+      (errorText?' • سبب/آخر خطأ: '+errorText:'');
+  }else{
+    liveText.textContent='⚠ لم تكتمل دورة فحص للسوق بعد؛ لا يمكن اعتبار الأصفار نتيجة تحليل.'+
+      (errorText?' • السبب: '+errorText:'');
+  }
 }
 function renderBest(body,list){
   const best=list&&list.length?list[0]:null;
@@ -262,13 +303,74 @@ function renderCard(x,idx){
     '</details>'+
   '</article>';
 }
+function renderLabRow(x,idx){
+  const status=x.data_status||{};
+  const blockers=Array.isArray(x.hard_reasons)&&x.hard_reasons.length
+    ?x.hard_reasons
+    :(Array.isArray(x.reason_codes)&&x.reason_codes.length?x.reason_codes:(status.last_error?[status.last_error]:[]));
+  return '<article class="card">'+
+    '<div class="cardHead"><div class="sym">🧪 '+(idx+1)+'. '+esc(x.symbol||'UNKNOWN')+' • غير مؤهل</div><div class="score">'+num(x.final_score,0).toFixed(1)+'/100</div></div>'+
+    '<div class="meta"><span class="tag bad">مرفوض</span>'+
+      '<span class="tag">الاتجاه '+esc(x.direction||'NEUTRAL')+'</span>'+
+      '<span class="tag">التوقيت '+esc(x.timing||'NO_SETUP')+'</span>'+
+      '<span class="tag">المبكر '+num(x.early_score,0).toFixed(0)+'</span>'+
+      '<span class="tag">الاتفاق '+num(x.analyst_agreement,0).toFixed(0)+'%</span>'+
+      '<span class="tag">الدليل '+num(x.evidence_coverage,0).toFixed(0)+'%</span></div>'+
+    '<div class="grid4">'+
+      '<div class="fact"><b>'+esc(x.last_price==null?'—':x.last_price)+'</b><span>السعر</span></div>'+
+      '<div class="fact"><b>'+pct(x.price_change_24h)+'</b><span>24h</span></div>'+
+      '<div class="fact"><b>'+num(x.liquidity_quality,0).toFixed(0)+'</b><span>السيولة</span></div>'+
+      '<div class="fact"><b>'+num(x.data_quality,0).toFixed(0)+'</b><span>جودة البيانات</span></div>'+
+    '</div>'+
+    '<div class="riskBox"><b>أسباب عدم التأهل:</b> '+esc(blockers.length?blockers.join(' • '):'لا توجد تفاصيل أسباب في الاستجابة')+
+      '<br><b>سلامة البيانات:</b> '+(status.data_valid===true?'صالحة':'غير صالحة')+
+      (status.data_stale?' • قديمة':'')+
+      (status.last_error?' • '+esc(status.last_error):'')+
+    '</div></article>';
+}
 function render(body){
   latest=body;
-  const list=Array.isArray(body&&body.candidates)?body.candidates:[];
+  const candidates=Array.isArray(body&&body.candidates)?body.candidates:[];
+  const candidateSymbols=new Set(candidates.map(x=>String(x&&x.symbol||'').toUpperCase()));
+  const watchlist=(Array.isArray(body&&body.watchlist)?body.watchlist:[])
+    .filter(x=>!candidateSymbols.has(String(x&&x.symbol||'').toUpperCase()));
+  const labResults=Array.isArray(body&&body.lab_results)?body.lab_results:[];
   renderHeader(body);
-  renderBest(body,list);
-  if(!list.length){cards.innerHTML='<div class="empty">لا توجد عملات في هذه اللقطة. لا يتم اختلاق نتيجة لتعويض غياب البيانات.</div>';return;}
-  cards.innerHTML=list.map(renderCard).join('');
+  renderBest(body,[...candidates,...watchlist]);
+
+  const sections=[];
+  if(candidates.length){
+    sections.push('<h3 style="font-size:12px;margin:12px 2px;color:#62f4c0">الفرص التي اجتازت شروط المحلل النهائي</h3>'+
+      candidates.map(renderCard).join(''));
+  }
+  if(watchlist.length){
+    sections.push('<h3 style="font-size:12px;margin:12px 2px;color:#ffd166">مراقبة مبكرة — ليست إشارة دخول أو تنبيهًا مؤكدًا</h3>'+
+      watchlist.map(renderCard).join(''));
+  }
+  if(!candidates.length&&!watchlist.length&&labResults.length){
+    sections.push('<div class="empty">لم يتأهل أي مرشح في هذه اللقطة. هذه عينات حقيقية من العملات التي دخلت المختبر وأسباب رفضها — لا تُعامل كفرص تداول.</div>'+
+      '<h3 style="font-size:12px;margin:12px 2px;color:#ff9ba8">عينات المختبر المرفوضة وأسبابها</h3>'+
+      labResults.map(renderLabRow).join(''));
+  }
+  if(!sections.length){
+    const u=body&&body.universe||{},d=body&&body.diagnostics||{},meta=body&&body.meta||{};
+    let message;
+    if(body&&body.status==='warming'||String(meta.analysis_mode||'')==='WARMING'){
+      message='فحص السوق جارٍ أو لم يكتمل بعد. لا توجد نتائج نهائية في هذه الاستجابة؛ ستظهر بعد اكتمال الفحص.';
+    }else if(body&&body.status==='not_ready'||String(meta.analysis_mode||'')==='SCAN_FAILED'||body&&body.error){
+      message='فشل فحص السوق قبل إكمال المختبر. راجع سبب الفشل المعروض أعلاه.';
+    }else if(num(u.scanned,0)>0||num(d.attempted_analyses,0)>0){
+      message='اكتمل فحص '+Math.max(num(u.scanned,0),num(d.attempted_analyses,0))+' عملة، ولم يتأهل أي مرشح أو مراقبة مبكرة ضمن شروط هذه اللقطة.';
+    }else{
+      message='لم تُسجّل أي عملة في دورة فحص مكتملة بعد. لا يمكن اعتبار الصفر نتيجة سوقية.';
+    }
+    sections.push('<div class="empty">'+esc(message)+
+      '<br>مُسجّل بالفحص: '+num(u.scanned,0)+' • رفض بوابة البيانات: '+num(d.gate_rejected,0)+
+      ' • فشل الفحص: '+num(d.scan_failure_count,0)+
+      (body&&body.error?' • '+esc(body.error):'')+
+      '</div>');
+  }
+  cards.innerHTML=sections.join('');
 }
 async function run(force){
   if(busy)return;
