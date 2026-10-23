@@ -392,6 +392,47 @@ jobs:
             exit 1
           fi
 
+      - name: Verify all twelve live radar workers on DHDTech
+        timeout-minutes: 2
+        env:
+          BASE: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
+        run: |
+          set -euo pipefail
+          READY=false
+          for attempt in {1..12}; do
+            CODE="$(curl --location --silent --show-error --connect-timeout 8 --max-time 15 --output "$RUNNER_TEMP/radar-swarm-status.json" --write-out "%{http_code}" "$BASE/api/radar-swarm-status" || true)"
+            if [[ "$CODE" == "200" ]] && node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const root = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/radar-swarm-status.json', 'utf8'));
+          const swarm = root.swarm ?? root;
+          const radars = Array.isArray(swarm.radars) ? swarm.radars : [];
+          const allRunning = radars.length === 12 && radars.every(x => x.running === true && x.status === 'RUNNING');
+          const healthy = swarm.expected_count === 12 && swarm.registered_count === 12 &&
+            swarm.running_count === 12 && swarm.failed_count === 0 && swarm.missing_count === 0 && allRunning;
+          console.log(JSON.stringify({
+            status: swarm.status ?? 'unknown',
+            expected_count: swarm.expected_count ?? null,
+            registered_count: swarm.registered_count ?? null,
+            running_count: swarm.running_count ?? null,
+            failed_count: swarm.failed_count ?? null,
+            missing_count: swarm.missing_count ?? null,
+            radar_statuses: radars.map(x => ({id:x.id,status:x.status,running:x.running,last_error:x.last_error??null}))
+          }));
+          if (!healthy) process.exit(1);
+          NODE
+            then
+              READY=true
+              break
+            fi
+            echo "DHDTech radar swarm not ready on attempt $attempt/12 (HTTP ${CODE:-unknown}); retrying."
+            sleep 5
+          done
+          if [[ "$READY" != "true" ]]; then
+            echo "::error::DHDTech has not demonstrated twelve healthy running radar workers; refusing to publish this APK as fully validated."
+            if [[ -s "$RUNNER_TEMP/radar-swarm-status.json" ]]; then cat "$RUNNER_TEMP/radar-swarm-status.json"; fi
+            exit 1
+          fi
+
       - name: Verify full-radar Triple backend contract
         timeout-minutes: 4
         run: |
@@ -514,25 +555,32 @@ jobs:
           node --test phase2/tests/falcon-eye-radar.test.mjs
           node --test phase2/tests/king-intelligence.test.mjs
 
-      - name: Detect live server push configuration
+      - name: Detect DHDTech FCM provider configuration
         timeout-minutes: 1
         env:
           BASE: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
         run: |
           set -euo pipefail
-          HTTP_CODE="$(curl --location --silent --show-error --max-time 20 --output "$RUNNER_TEMP/push-status.json" --write-out "%{http_code}" "$BASE/v1/push/status" || true)"
+          HTTP_CODE="$(curl --location --silent --show-error --max-time 20 --output "$RUNNER_TEMP/deployment-info.json" --write-out "%{http_code}" "$BASE/api/deployment-info" || true)"
           if [[ "$HTTP_CODE" != "200" ]]; then
             echo "RADARX_SERVER_FCM_STATUS=UNVERIFIED" >> "$GITHUB_ENV"
-            echo "::warning::Server push status endpoint is not public (HTTP ${HTTP_CODE:-unknown}); release notes will not claim native FCM is enabled."
+            echo "::warning::DHDTech public deployment-info unavailable (HTTP ${HTTP_CODE:-unknown}); native FCM remains unverified."
             exit 0
           fi
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const status = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/push-status.json', 'utf8'));
+          const info = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/deployment-info.json', 'utf8'));
           let label = 'UNVERIFIED';
-          if (status.provider === 'fcm' && status.enabled === true) label = 'ENABLED';
-          else if (status.provider && status.enabled === false) label = 'DISABLED';
-          console.log(JSON.stringify({provider: status.provider ?? 'unknown', enabled: status.enabled === true, server_fcm_status: label}));
+          if (info.deployment_contract === 'BUILD224_DHDTECH_V1' && info.push?.provider === 'fcm' && info.push?.enabled === true) label = 'ENABLED';
+          else if (info.push?.provider === 'fcm' && info.push?.enabled === false) label = 'DISABLED';
+          fs.appendFileSync(process.env.GITHUB_ENV, 'RADARX_SERVER_FCM_STATUS=' + label + String.fromCharCode(10));
+          console.log(JSON.stringify({
+            deployment_contract: info.deployment_contract ?? 'unknown',
+            provider: info.push?.provider ?? 'unknown',
+            provider_config_enabled: info.push?.enabled === true,
+            server_fcm_status: label,
+            physical_device_delivery_verified: false
+          }));
           NODE
 
       - name: Set up Gradle
@@ -736,13 +784,13 @@ jobs:
           TAG="radarx-native-build224-radar8-v2-hawkeye-${GITHUB_RUN_NUMBER}-attempt-${GITHUB_RUN_ATTEMPT}"
           APK="${RUNNER_TEMP}/radarx-release/radarx-release.apk"
           if [[ "${RADARX_FIREBASE_CLIENT_CONFIGURED:-false}" == "true" && "${RADARX_SERVER_FCM_STATUS:-UNVERIFIED}" == "ENABLED" ]]; then
-            PUSH_MODE="Firebase Android client config embedded and native FCM server provider verified enabled"
+            PUSH_MODE="Firebase Android client config embedded; DHDTech reports FCM provider configuration enabled; physical-device notification delivery not verified; local polling fallback retained"
           elif [[ "${RADARX_FIREBASE_CLIENT_CONFIGURED:-false}" == "true" && "${RADARX_SERVER_FCM_STATUS:-UNVERIFIED}" == "DISABLED" ]]; then
-            PUSH_MODE="Firebase Android client config embedded; server FCM provider reports disabled; local polling fallback"
+            PUSH_MODE="Firebase Android client config embedded; DHDTech reports FCM provider disabled; local polling fallback"
           elif [[ "${RADARX_FIREBASE_CLIENT_CONFIGURED:-false}" == "true" ]]; then
-            PUSH_MODE="Firebase Android client config embedded; server FCM status unverified because endpoint requires authentication; local polling fallback"
+            PUSH_MODE="Firebase Android client config embedded; DHDTech FCM provider status unverified; local polling fallback"
           else
-            PUSH_MODE="Local polling fallback; Firebase Android client config missing; server-side FCM requires separate backend credentials"
+            PUSH_MODE="Local polling fallback; Firebase Android client config missing; server-side FCM device delivery not verified"
           fi
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
