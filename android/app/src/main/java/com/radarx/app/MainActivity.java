@@ -50,6 +50,7 @@ public final class MainActivity extends Activity {
     private static final String PREF_REPLAY_TEST_FEED_URL = "radarx_test_alert_feed_url";
     private static final String PREF_REPLAY_TEST_SCAN_MS = "radarx_test_scan_interval_ms";
     private boolean pendingBackgroundStart;
+    private boolean hasResumedOnce;
 
     private WebView webView;
     private WebViewAssetLoader assetLoader;
@@ -163,6 +164,15 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        // Android may return here after the user grants notification permission in
+        // system settings, or after the OS reclaims the background process.
+        // Re-sync push registration and restore local polling only if auto-monitoring
+        // remains enabled. Skip the first resume because onCreate already does this.
+        if (hasResumedOnce) {
+            RadarXPushRegistration.syncIfConfigured(this);
+            ensureContinuousMonitoring();
+        }
+        hasResumedOnce = true;
         if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
             Log.i("RadarXSmoke", "ACTIVITY_RESUMED");
         }

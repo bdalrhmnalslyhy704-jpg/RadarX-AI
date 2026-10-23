@@ -338,7 +338,7 @@ jobs:
           # its first real Spot-USDT scan before validating the contract.
           VERIFIED=false
           for attempt in $(seq 1 18); do
-            RADAR8="$(curl --location --connect-timeout 10 --max-time 25 --silent --show-error -o "$RADAR8_JSON" -w "%{http_code}" "$BASE/api/early-expansion-radar?quote=USDT&limit=100" || true)"
+            RADAR8="$(curl --location --connect-timeout 10 --max-time 75 --silent --show-error -o "$RADAR8_JSON" -w "%{http_code}" "$BASE/api/early-expansion-radar?quote=USDT&limit=100&scan=1" || true)"
             if [ "$RADAR8" = "200" ] && node --input-type=module <<'NODE'
           import fs from 'node:fs';
           const body = JSON.parse(fs.readFileSync(process.env.RADAR8_JSON, 'utf8'));
@@ -353,7 +353,7 @@ jobs:
           for (const key of ['expected_total','received_total','missing_ticker_total','eligible_total','fast_scanned_total','scanned_total','deep_scanned_total','skipped_total','failed_total','coverage_ratio','deep_coverage_ratio']) {
             if (!Object.hasOwn(body.universe ?? {}, key)) problems.push('RADAR8_COVERAGE_FIELD_MISSING:'+key);
           }
-          for (const key of ['running','last_scan_at','failed_total','poll_ms','micro_scan_candidates','micro_concurrency','rotation_reserve','quiet_reserve','deep_candidates','deep_concurrency']) {
+          for (const key of ['running','busy','last_scan_at','failed_total','poll_ms','micro_scan_candidates','micro_concurrency','rotation_reserve','quiet_reserve','deep_candidates','deep_concurrency']) {
             if (!Object.hasOwn(body.monitoring ?? {}, key)) problems.push('RADAR8_MONITORING_FIELD_MISSING:'+key);
           }
           for (const key of ['requested','completed','error']) {
@@ -363,6 +363,12 @@ jobs:
           if (!(Number(body.universe?.received_total) > 0)) problems.push('RADAR8_RECEIVED_TICKERS_EMPTY');
           if (!(Number(body.universe?.coverage_ratio) >= 0.95)) problems.push('RADAR8_COVERAGE_BELOW_95_PERCENT');
           if (!(Number(body.monitoring?.last_scan_at) > 0)) problems.push('RADAR8_HAS_NOT_COMPLETED_A_SCAN');
+          if (body.scan?.requested !== true) problems.push('RADAR8_LIVE_SCAN_NOT_REQUESTED');
+          if (body.scan?.completed !== true) problems.push('RADAR8_LIVE_SCAN_NOT_COMPLETED');
+          if (body.monitoring?.busy !== false) problems.push('RADAR8_SCAN_STILL_BUSY');
+          const scanAgeMs = Date.now() - Number(body.monitoring?.last_scan_at);
+          if (!Number.isFinite(scanAgeMs) || scanAgeMs < 0 || scanAgeMs > 120000)
+            problems.push('RADAR8_LAST_SCAN_STALE');
           if (problems.length) {
             console.log('Radar 8 warm-up/integration check not ready:', problems.join(','));
             process.exit(1);

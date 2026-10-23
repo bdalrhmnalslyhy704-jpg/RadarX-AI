@@ -118,7 +118,14 @@ export async function startServer({
     incomplete_count:archiveRecords.filter(row=>row?.outcome_status==='INCOMPLETE').length,
     migrated_legacy_files:store.migratedFiles,records_sha256:archiveDigest
   }));
-  const rest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  // Use Binance's public market-data mirror first for every Spot radar. Some
+  // hosting regions cannot reach api.binance.com (HTTP 451); keep any configured
+  // endpoints as fallbacks rather than letting one blocked host disable most radars.
+  const publicSpotRestUrls=[
+    'https://data-api.binance.vision',
+    ...(config.rest.baseUrls??config.rest.urls??[])
+  ].filter((url,index,arr)=>arr.indexOf(url)===index);
+  const rest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
   // Outcome work is deliberately bounded: at most two public-Spot kline requests
   // per minute, using stored alerts and real closed candles only.
   const radarSignalOutcomeWorker=new RadarSignalOutcomeWorker({store,rest,logger,pollMs:60_000,maxRestCalls:2});
@@ -127,11 +134,7 @@ export async function startServer({
   const push=new PushManager({provider,store,deduplicator:dedup,retryBaseMs:config.monitoring.pushRetryMs});
   const service=new SignalService({deduplicator:dedup,store,pushManager:push,config});
   const monitor=monitorFactory({config,rest,signalService:service,store,pushManager:push,logger});
-  const marketRadarRestUrls=[
-    'https://data-api.binance.vision',
-    ...(config.rest.baseUrls??config.rest.urls??[])
-  ].filter((url,index,arr)=>arr.indexOf(url)===index);
-  const marketRadarRest=new RestClient({...config.rest,baseUrls:marketRadarRestUrls});
+  const marketRadarRest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
   const moveConfig={...(config.moveRadar||{})};
   const moveScanner=new MarketUniverseScanner({rest,config:{
     minQuoteVolume24h:moveConfig.minQuoteVolume24h,
@@ -145,13 +148,13 @@ export async function startServer({
     scannerFactory:()=>moveScanner,
     tickerWsFactory:opts=>new BinanceAllMarketTickerClient(opts)
   });
-  const strongRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  const strongRadarRest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
   const strongMoveRadar=new StrongMoveRadar({rest:strongRadarRest,store,pushManager:push,config:config.strongMoveRadar||{},logger});
-  const rotationRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  const rotationRadarRest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
   const rotationLagRadar=new RotationLagRadar({rest:rotationRadarRest,store,pushManager:push,config:config.rotationRadar||{},logger});
-  const liquidityRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  const liquidityRadarRest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
   const liquidityAbsorptionRadar=new LiquidityAbsorptionRadar({rest:liquidityRadarRest,store,pushManager:push,config:config.liquidityAbsorptionRadar||{},logger});
-  const kahirRadarRest=new RestClient({...config.rest,baseUrls:config.rest.baseUrls??config.rest.urls});
+  const kahirRadarRest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
   const kahirRadar=new KahirRadar({rest:kahirRadarRest,store,pushManager:push,config:config.kahirRadar||{},logger});
   // The deep symbol scanner gets its own REST client so background radar traffic cannot
   // race its endpoint selection. Prefer Binance's market-data-only mirror first; it is
