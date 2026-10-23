@@ -2037,7 +2037,7 @@ export class MarketUniverseScanner {
       limit:discoveryLimit,
       rotationOffset
     });
-    const preMoveConcurrency=24; // bounded concurrency supports the UI-selected 20–50 symbol scan under the latency gate.
+    const preMoveConcurrency=32; // I/O-bound candle/depth fetches are bounded at 32 to keep the 50-symbol pass inside 45s.
     const scanned=await boundedMap(
       discovery,
       preMoveConcurrency,
