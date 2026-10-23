@@ -105,7 +105,7 @@ jobs:
       - name: Start and poll one real Pre-Move market scan on DHDTech
         run: |
           set -euo pipefail
-          URL="$BASE/api/pre-move-radar?quote=USDT&limit=10"
+          URL="$BASE/api/pre-move-radar?quote=USDT&limit=30"
           READY=false
           for cycle in 1 2; do
             START_CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$RUNNER_TEMP/pre-move-start.json" -w "%{http_code}" "$URL&scan=1" || true)"
@@ -148,7 +148,7 @@ jobs:
           if (b.source !== 'Binance Public REST') throw new Error('PRE_MOVE_RADAR_SOURCE_INVALID');
           if (b.session?.timezone !== 'Asia/Aden' || b.session?.window !== '04:00 local → latest closed candle') throw new Error('PRE_MOVE_SESSION_CONTRACT_INVALID');
           const u=b.universe||{};
-          for (const k of ['scanned','deep_scanned','valid_data','evidence_incomplete_excluded','extended_excluded','no_setup_excluded','eligible_spot_symbols','discovered','actionable','returned','elapsed_ms','rotation_cycle','rotation_offset','rotation_width']) {
+          for (const k of ['scanned','deep_scanned','valid_data','observed_candle_data','watch_only','evidence_incomplete_excluded','extended_excluded','no_setup_excluded','eligible_spot_symbols','discovered','actionable','returned','elapsed_ms','rotation_cycle','rotation_offset','rotation_width']) {
             if (typeof u[k] !== 'number' || !Number.isFinite(u[k])) throw new Error('PRE_MOVE_SCHEMA_OUTDATED:'+k);
           }
           if (u.scanned<1 || u.valid_data<1 || u.eligible_spot_symbols<1 || u.discovered<1 || u.deep_scanned!==u.discovered) throw new Error('PRE_MOVE_NO_VALID_LIVE_MARKET_DATA');
@@ -156,6 +156,7 @@ jobs:
           if (u.rotation_width<1 || u.rotation_cycle<0 || u.rotation_offset<0) throw new Error('PRE_MOVE_ROTATION_METADATA_INVALID');
           if (u.elapsed_ms>45000) throw new Error('PRE_MOVE_SCAN_LATENCY_OVER_45_SECONDS:'+u.elapsed_ms);
           if (!Array.isArray(b.candidates)) throw new Error('PRE_MOVE_CANDIDATES_MISSING');
+          if (!Array.isArray(b.watch_candidates)) throw new Error('PRE_MOVE_WATCH_CANDIDATES_MISSING');
           for (const x of b.candidates) {
             const p=x?.pre_move_context;
             if (x?.data_status?.data_valid !== true || typeof x.data_quality!=='number' || !Number.isFinite(x.data_quality) || x.data_quality<70 || typeof x.liquidity_quality!=='number' || !Number.isFinite(x.liquidity_quality) || x.liquidity_quality<60) throw new Error('PRE_MOVE_DATA_QUALITY_GATE:'+String(x?.symbol||'UNKNOWN'));
@@ -177,12 +178,20 @@ jobs:
               throw new Error('PRE_MOVE_QUALIFICATION_THRESHOLD:'+String(x.symbol));
             
           }
+          for (const x of b.watch_candidates) {
+            const p=x?.pre_move_context;
+            if (x?.watch_only !== true || x?.alert_eligible !== false || p?.watch_only !== true || p?.stage !== 'WATCH_EARLY' || p?.actionable !== false || p?.already_moved === true ||
+                typeof x.data_quality !== 'number' || !Number.isFinite(x.data_quality) || x.data_quality < 70 ||
+                p?.evidence_complete !== true || p?.closed_candles_only !== true || !Array.isArray(x.watch_reason_codes) || x.watch_reason_codes.length < 1)
+              throw new Error('PRE_MOVE_WATCH_ONLY_GATE:'+String(x?.symbol||'UNKNOWN'));
+          }
           console.log(JSON.stringify({
             status:b.status,radar:b.meta.radar,live:b.meta.live,source:b.source,session:b.session,
-            universe:{scanned:u.scanned,deep_scanned:u.deep_scanned,valid_data:u.valid_data,returned:u.returned,actionable:u.actionable,
+            universe:{scanned:u.scanned,deep_scanned:u.deep_scanned,valid_data:u.valid_data,observed_candle_data:u.observed_candle_data,watch_only:u.watch_only,returned:u.returned,actionable:u.actionable,
               eligible_spot_symbols:u.eligible_spot_symbols,discovered:u.discovered,coverage_mode:u.coverage_mode,rotation_cycle:u.rotation_cycle,rotation_offset:u.rotation_offset,rotation_width:u.rotation_width,elapsed_ms:u.elapsed_ms,
               evidence_incomplete_excluded:u.evidence_incomplete_excluded,extended_excluded:u.extended_excluded,no_setup_excluded:u.no_setup_excluded},
             candidates:b.candidates.map(x=>({symbol:x.symbol,score:x.pre_move_context.score,stage:x.pre_move_context.stage,session_return_pct:x.pre_move_context.session_return_pct,one_hour_return_pct:x.pre_move_context.one_hour_return_pct,volume_acceleration:x.pre_move_context.volume_acceleration,trade_acceleration:x.pre_move_context.trade_acceleration,taker_buy_ratio:x.pre_move_context.taker_buy_ratio,taker_buy_acceleration:x.pre_move_context.taker_buy_acceleration,mean_close_location:x.pre_move_context.mean_close_location,flow_transition_confirmed:x.pre_move_context.flow_transition_confirmed,price_window_valid:x.pre_move_context.price_window_valid,structure_confirmed:x.pre_move_context.structure_confirmed,liquidity_quality:x.liquidity_quality,data_quality:x.data_quality})),
+            watch_candidates:b.watch_candidates.map(x=>({symbol:x.symbol,score:x.pre_move_context.score,stage:x.pre_move_context.stage,original_stage:x.pre_move_context.original_stage,session_return_pct:x.pre_move_context.session_return_pct,one_hour_return_pct:x.pre_move_context.one_hour_return_pct,volume_acceleration:x.pre_move_context.volume_acceleration,trade_acceleration:x.pre_move_context.trade_acceleration,taker_buy_ratio:x.pre_move_context.taker_buy_ratio,watch_reason_codes:x.watch_reason_codes,data_quality:x.data_quality,liquidity_quality:x.liquidity_quality,watch_only:x.watch_only,alert_eligible:x.alert_eligible})),
             paper_trading:b.meta.paper_trading,real_order_execution:b.meta.real_order_execution
           }));
           NODE
