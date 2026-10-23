@@ -143,8 +143,17 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
   const counters=new Map();
   const moveConfig=config.moveRadar||{thresholdPct:1};
   const originList=config.auth.allowedOrigins;
-  const marketRadar = (marketRadarRest||monitor?.rest) ? new MarketUniverseScanner({
-    rest: marketRadarRest||monitor.rest,
+  // Prefer the dedicated REST client, but reuse the same already-initialized market-data
+  // client from an active radar if this API is constructed without the optional argument.
+  // This keeps the interactive Pre-Move screen from failing simply because one wiring
+  // parameter was omitted by an older/alternate startup path.
+  const marketRadarRestClient = marketRadarRest || monitor?.rest || earlyExpansionRadar?.rest ||
+    moveSentinel?.rest || strongMoveRadar?.rest || rotationLagRadar?.rest ||
+    liquidityAbsorptionRadar?.rest || kahirRadar?.rest || professorRadar?.rest ||
+    doomsdayRadar?.rest || alMuqawimRadar?.rest || multiAnalystRadar?.rest ||
+    coinHunterRadar?.rest || whaleAccumulationRadar?.rest || falconEyeRadar?.rest || null;
+  const marketRadar = marketRadarRestClient ? new MarketUniverseScanner({
+    rest: marketRadarRestClient,
     config: config.marketRadar ?? {}
   }) : null;
   const marketRadarResponseCache=new Map();
@@ -879,14 +888,24 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         }
       }
       if(u.pathname==='/api/pre-move-radar'&&req.method==='GET'){
-        if(!marketRadar)return send(res,503,{error:'PRE_MOVE_RADAR_UNAVAILABLE'});
+        if(!marketRadar){
+          console.error?.('[PRE_MOVE_RADAR_DEPENDENCY_MISSING] '+JSON.stringify({
+            dedicated_rest:Boolean(marketRadarRest),monitor_rest:Boolean(monitor?.rest),
+            early_expansion_rest:Boolean(earlyExpansionRadar?.rest),move_radar_rest:Boolean(moveSentinel?.rest),
+            strong_move_rest:Boolean(strongMoveRadar?.rest)
+          }));
+          return send(res,503,{error:'PRE_MOVE_RADAR_UNAVAILABLE',reason:'MARKET_DATA_CLIENT_NOT_INITIALIZED',
+            meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PRE_MOVE'},
+            source:'Binance Public REST',candidates:[]});
+        }
         const quote=String(u.searchParams.get('quote')||'USDT').trim().toUpperCase();
         const limit=u.searchParams.get('limit')||'30';
         try{
           return send(res,200,await marketRadar.scanPreMove({quote,limit}));
         }catch(e){
           const m=String(e?.message??e);
-          const status=/INVALID_QUOTE|INVALID_EXCHANGE_INFO/.test(m)?400:/RATE_LIMIT|TIMEOUT|UNAVAILABLE|FAILED/.test(m)?502:500;
+          const status=/INVALID_QUOTE|INVALID_EXCHANGE_INFO/.test(m)?400:/RATE_LIMIT|TIMEOUT|UNAVAILABLE|FAILED|NETWORK|FETCH|ECONN|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|SOCKET/.test(m)?502:500;
+          console.warn?.('[PRE_MOVE_RADAR_SCAN_FAILED] '+JSON.stringify({error:m.slice(0,180),status}));
           return send(res,status,{error:m,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PRE_MOVE'},source:'Binance Public REST',candidates:[]});
         }
       }
