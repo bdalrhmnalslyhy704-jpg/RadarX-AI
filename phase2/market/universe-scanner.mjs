@@ -939,6 +939,92 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
   };
 }
 
+export function aggregateClosed15mIntoHourly(candles, now=Date.now()) {
+  const step=15*60*1000, hour=60*60*1000;
+  const rows=(Array.isArray(candles)?candles:[]).filter(c=>{
+    const open=Number(c?.openTime),close=Number(c?.closeTime);
+    return c?.closed===true&&Number.isFinite(open)&&Number.isFinite(close)&&close<=now&&close===open+step-1&&
+      Number.isFinite(Number(c?.open))&&Number.isFinite(Number(c?.high))&&Number.isFinite(Number(c?.low))&&
+      Number.isFinite(Number(c?.close))&&Number.isFinite(Number(c?.volume));
+  }).sort((a,b)=>Number(a.openTime)-Number(b.openTime));
+  const grouped=new Map();
+  for(const row of rows){
+    const open=Number(row.openTime),hourStart=Math.floor(open/hour)*hour,offset=open-hourStart;
+    if(offset<0||offset>=hour||offset%step!==0)continue;
+    if(!grouped.has(hourStart))grouped.set(hourStart,[]);
+    grouped.get(hourStart).push(row);
+  }
+  const hourly=[];
+  for(const [hourStart,group] of [...grouped.entries()].sort((a,b)=>a[0]-b[0])){
+    group.sort((a,b)=>Number(a.openTime)-Number(b.openTime));
+    if(group.length!==4)continue;
+    let complete=true;
+    for(let i=0;i<4;i++){
+      const expectedOpen=hourStart+i*step;
+      if(Number(group[i]?.openTime)!==expectedOpen||Number(group[i]?.closeTime)!==expectedOpen+step-1||group[i]?.closed!==true){complete=false;break;}
+    }
+    if(!complete)continue;
+    const nums=key=>group.map(c=>Number(c?.[key]));
+    const sum=key=>{const values=nums(key);return values.every(Number.isFinite)?values.reduce((a,b)=>a+b,0):null;};
+    const sourceTimes=group.map(c=>Number(c.sourceTime??c.receivedAt)).filter(Number.isFinite);
+    const time=sourceTimes.length?Math.max(...sourceTimes):null;
+    hourly.push({openTime:hourStart,closeTime:hourStart+hour-1,open:Number(group[0].open),
+      high:Math.max(...nums('high')),low:Math.min(...nums('low')),close:Number(group[3].close),
+      volume:sum('volume'),quoteVolume:sum('quoteVolume'),tradeCount:sum('tradeCount'),
+      takerBuyBaseVolume:sum('takerBuyBaseVolume'),takerBuyQuoteVolume:sum('takerBuyQuoteVolume'),
+      closed:true,source:'BINANCE_PUBLIC_REST_AGGREGATED_15M',sourceTime:time,receivedAt:time,
+      derived_from_timeframe:'15m',constituent_candles:4});
+  }
+  return hourly;
+}
+
+export function buildPreMoveTargetPlan(candles,ticker={},now=Date.now()){
+  const rows=(Array.isArray(candles)?candles:[]).filter(c=>c?.closed===true&&
+    Number.isFinite(Number(c?.closeTime))&&Number(c.closeTime)<=now&&
+    Number.isFinite(Number(c?.open))&&Number.isFinite(Number(c?.high))&&Number.isFinite(Number(c?.low))&&
+    Number.isFinite(Number(c?.close))&&Number(c.low)>0&&Number(c.close)>0)
+    .sort((a,b)=>Number(a.openTime)-Number(b.openTime));
+  const entry=Number(ticker?.lastPrice);
+  const fail=code=>({method:'ATR_15M_RISK_REWARD_V1',valid:false,actionable:false,status:'WATCH_ONLY_ESTIMATE',
+    reference_price:Number.isFinite(entry)&&entry>0?entry:null,target_1_price:null,target_2_price:null,
+    invalidation_price:null,risk_pct:null,target_1_rr:null,target_2_rr:null,reward_risk_ok:false,
+    reason_codes:[code],price_basis:'LAST_TICKER_PRICE_AT_SCAN',paper_only:true,not_guaranteed:true,closed_candles_only:true});
+  if(rows.length<48)return fail('TARGET_PLAN_NEEDS_48_CLOSED_15M_CANDLES');
+  if(!(entry>0&&Number.isFinite(entry)))return fail('TARGET_PLAN_INVALID_REFERENCE_PRICE');
+  const tr=[];
+  for(let i=Math.max(1,rows.length-14);i<rows.length;i++){
+    const c=rows[i],prevClose=Number(rows[i-1].close),high=Number(c.high),low=Number(c.low);
+    const value=Math.max(high-low,Math.abs(high-prevClose),Math.abs(low-prevClose));
+    if(Number.isFinite(value)&&value>0)tr.push(value);
+  }
+  const atr=tr.length?tr.reduce((a,b)=>a+b,0)/tr.length:null;
+  if(!(Number.isFinite(atr)&&atr>0))return fail('TARGET_PLAN_ATR_UNAVAILABLE');
+  const recent=rows.slice(-8),support=Math.min(...recent.map(c=>Number(c.low)).filter(Number.isFinite));
+  if(!(Number.isFinite(support)&&support>0))return fail('TARGET_PLAN_SUPPORT_UNAVAILABLE');
+  const invalidation=Math.min(support-atr*0.15,entry-atr*0.8),risk=entry-invalidation,riskPct=risk/entry*100;
+  const pivots=rows.slice(-96),resistances=[];
+  for(let i=1;i<pivots.length-1;i++){const h=Number(pivots[i].high);
+    if(Number.isFinite(h)&&h>entry*1.0005&&h>=Number(pivots[i-1].high)&&h>=Number(pivots[i+1].high))resistances.push(h);}
+  const high24=Number(ticker?.highPrice24h);
+  if(Number.isFinite(high24)&&high24>entry*1.0005)resistances.push(high24);
+  const resistance=resistances.length?Math.min(...resistances):null;
+  const raw1=entry+1.25*risk,target1=Number.isFinite(resistance)?Math.min(raw1,resistance-0.1*atr):raw1,raw2=entry+2*risk;
+  const target2=Number.isFinite(resistance)?Math.max(entry+1.5*risk,Math.min(raw2,resistance+0.5*atr)):raw2;
+  const target1RR=Number.isFinite(target1)&&target1>entry?(target1-entry)/risk:null;
+  const target2RR=Number.isFinite(target2)&&target2>entry?(target2-entry)/risk:null;
+  const valid=Number.isFinite(invalidation)&&invalidation>0&&risk>0&&Number.isFinite(target2)&&target2>entry&&Number.isFinite(riskPct);
+  const rewardRiskOk=valid&&Number.isFinite(target1RR)&&target1RR>=1&&Number.isFinite(target2RR)&&target2RR>=1.5&&riskPct>=0.2&&riskPct<=4.5;
+  const reasons=[];
+  if(!Number.isFinite(target1)||target1<=entry)reasons.push('RESISTANCE_TOO_CLOSE_FOR_TARGET_1');
+  if(riskPct<0.2||riskPct>4.5)reasons.push('RISK_DISTANCE_OUTSIDE_ALLOWED_RANGE');
+  if(!rewardRiskOk)reasons.push('TARGET_REWARD_RISK_NOT_CONFIRMED');
+  return {method:'ATR_15M_RISK_REWARD_V1',valid,actionable:false,status:'WATCH_ONLY_ESTIMATE',reference_price:entry,
+    atr_15m:atr,atr_15m_pct:atr/entry*100,support_price:support,resistance_price:Number.isFinite(resistance)?resistance:null,
+    invalidation_price:invalidation,risk_pct:riskPct,target_1_price:Number.isFinite(target1)&&target1>entry?target1:null,
+    target_2_price:target2,target_1_rr:target1RR,target_2_rr:target2RR,reward_risk_ok:rewardRiskOk,
+    reason_codes:[...new Set(reasons)],price_basis:'LAST_TICKER_PRICE_AT_SCAN',closed_candles_used:rows.length,
+    closed_candles_only:true,paper_only:true,not_guaranteed:true};
+}
 export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_RADAR_DEFAULTS.minQuoteVolume24h,limit=30,rotationOffset=0}={}){
   const allowed=new Set(symbols.map(x=>x.symbol));
   // Discovery is intentionally broader than the final alert liquidity gate. A
@@ -1910,10 +1996,9 @@ export class MarketUniverseScanner {
     const klinesSources=[];
     let depthRaw=null,depthSource=null;
     let scanError=null;
-    const limit1h=Math.max(50,Math.min(80,Math.trunc(Number(options.hourlyKlines)||60)));
-    const limit15m=Math.max(64,Math.min(120,Math.trunc(Number(options.fifteenMinuteKlines)||96)));
+    // 240 closed 15m candles provide 48+ complete hourly bars; replacing separate 1h and 15m requests with one 15m request preserves request weight and reduces network calls.
+    const limit15m=Math.max(200,Math.min(300,Math.trunc(Number(options.fifteenMinuteKlines)||240)));
     const requests=await Promise.allSettled([
-      this.fetchSeries(symbol,'1h',limit1h),
       this.fetchSeries(symbol,'15m',limit15m),
       this.fetchDepth(symbol)
     ]);
@@ -1924,21 +2009,21 @@ export class MarketUniverseScanner {
         ?result.candles.map(c=>({...c,symbol,timeframe:tf}))
         :normalizeRawKlines(result?.data,result?.source,fetchedAt);
     };
-    for(let i=0;i<2;i++){
-      const tf=i===0?'1h':'15m';
-      const item=requests[i];
-      if(item.status==='fulfilled'){
-        series[tf]=normalized(item.value,tf);
-      }else{
-        scanError=scanError||item.reason||new Error('PRE_MOVE_KLINES_FAILED:'+tf);
-      }
+    if(requests[0]?.status==='fulfilled'){
+      series['15m']=normalized(requests[0].value,'15m');
+    }else{
+      scanError=scanError||requests[0]?.reason||new Error('PRE_MOVE_KLINES_FAILED:15m');
     }
-    if(requests[2]?.status==='fulfilled'){
-      const depth=requests[2].value;
+    if(requests[1]?.status==='fulfilled'){
+      const depth=requests[1].value;
       depthRaw=depth?.data??depth;
       depthSource=depth?.source??null;
     }else{
-      scanError=scanError||requests[2]?.reason||new Error('PRE_MOVE_DEPTH_FAILED');
+      scanError=scanError||requests[1]?.reason||new Error('PRE_MOVE_DEPTH_FAILED');
+    }
+    series['1h']=aggregateClosed15mIntoHourly(series['15m'],this.clock());
+    if(series['15m'].length<180||series['1h'].length<48){
+      scanError=scanError||new Error('PRE_MOVE_HOURLY_AGGREGATION_INCOMPLETE');
     }
 
     const completedAt=this.clock();
@@ -1949,7 +2034,8 @@ export class MarketUniverseScanner {
       completedAt-Number(last15.closeTime)>this.config.maxTriggerAgeMs;
     const future=futureData([...series['1h'],...series['15m']],completedAt);
     const integrityIssues=(v1.issues?.length||0)+(v15.issues?.length||0);
-    const dataQuality=v1.valid&&v15.valid&&!future&&!stale
+    const hourlyCoverageValid=series['1h'].length>=48&&series['15m'].length>=180;
+    const dataQuality=v1.valid&&v15.valid&&hourlyCoverageValid&&!future&&!stale
       ?Math.max(0,Math.min(100,100-Math.min(30,integrityIssues*5))):0;
     let liquidity;
     try{
@@ -1971,7 +2057,7 @@ export class MarketUniverseScanner {
       scanError=scanError||new Error('PRE_MOVE_CONTEXT_FAILED:'+String(error?.message||error));
       preMoveContext={...preMoveContext,missing_evidence:[...(preMoveContext.missing_evidence||[]),'PRE_MOVE_CONTEXT_FAILED']};
     }
-    const candlesValid=v1.valid&&v15.valid&&!future&&!stale;
+    const candlesValid=v1.valid&&v15.valid&&hourlyCoverageValid&&!future&&!stale;
     const volumeGatePass=Number.isFinite(Number(ticker?.quoteVolume24h))&&Number(ticker.quoteVolume24h)>=this.config.minQuoteVolume24h;
     const dataValid=candlesValid&&!scanError&&volumeGatePass&&liquidity?.allowed===true&&
       Number(liquidity?.quality)>=this.config.minLiquidityQuality&&dataQuality>=this.config.minDataQuality;
@@ -1986,6 +2072,7 @@ export class MarketUniverseScanner {
       low_price_24h:Number.isFinite(Number(ticker?.lowPrice24h))?Number(ticker.lowPrice24h):null,
       quote_volume_24h:Number(ticker?.quoteVolume24h)||0,
       bottom_context:bottomContext,pre_move_context:preMoveContext,
+      target_plan:buildPreMoveTargetPlan(series['15m'],ticker,completedAt),
       liquidity_quality:Math.round((Number(liquidity?.quality)||0)*100)/100,
       data_quality:dataQuality,confidence_score:'UNKNOWN',market_regime:'UNKNOWN',overall_score:null,
       coverage:{
@@ -2080,7 +2167,10 @@ export class MarketUniverseScanner {
         score>=62?'QUIET_BUILD':'NO_SETUP';
       const reasons=[...(ctx.reasons||[])];
       if(Number.isFinite(relReturn)&&relReturn>=1&&!reasons.includes('RELATIVE_STRENGTH'))reasons.push('RELATIVE_STRENGTH');
-      return {...x,pre_move_context:{
+      const targetPlanActionable=x.data_status?.data_valid===true&&earlyConditions&&!alreadyMoved&&
+        !['ALREADY_MOVED','NO_SETUP'].includes(stage)&&x.target_plan?.valid===true&&x.target_plan?.reward_risk_ok===true;
+      return {...x,target_plan:{...(x.target_plan||{}),actionable:targetPlanActionable,
+        status:targetPlanActionable?'PAPER_PLAN_ONLY':'WATCH_ONLY_ESTIMATE'},pre_move_context:{
         ...ctx,
         market_median_return_pct:Number.isFinite(marketMedianReturn)?marketMedianReturn:null,
         relative_strength_vs_market_pct:Number.isFinite(relReturn)?relReturn:null,
@@ -2096,7 +2186,7 @@ export class MarketUniverseScanner {
       x.pre_move_context.evidence_complete===true&&
       x.pre_move_context.flow_transition_confirmed===true&&x.pre_move_context.price_window_valid===true&&
       x.pre_move_context.structure_confirmed===true&&x.pre_move_context.already_moved!==true&&
-      !['ALREADY_MOVED','NO_SETUP'].includes(x.pre_move_context.stage));
+      !['ALREADY_MOVED','NO_SETUP'].includes(x.pre_move_context.stage)&&x.target_plan?.actionable===true);
     const watchCandidates=buildPreMoveWatchCandidates(enriched,{
       minQuoteVolume24h:this.config.minQuoteVolume24h,
       minLiquidityQuality:this.config.minLiquidityQuality,
@@ -2124,6 +2214,7 @@ export class MarketUniverseScanner {
         add(Number(p.session_return_pct)>=0&&Number(p.session_return_pct)<=6,'SESSION_MOVE_NOT_CONFIRMED');
         add(Number(p.score)>=62,'SCORE_BELOW_ACTIONABLE_THRESHOLD');
         add(x.data_status?.data_valid===true,'DATA_OR_LIQUIDITY_GATE_NOT_PASSED');
+        add(x.target_plan?.reward_risk_ok===true,'TARGET_RISK_REWARD_NOT_CONFIRMED');
         return {
           symbol:String(x.symbol||'UNKNOWN'),
           diagnostic_only:true,

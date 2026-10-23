@@ -1,7 +1,7 @@
 /* Bottom Radar v2 regression coverage: live flow, squeeze, structure, whale heuristic. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {MarketUniverseScanner, buildSpotUniverse, rankTickerRows, rankBottomTickerRows, boundedMap, normalizeRadarLimit, normalizeTickerRow, buildBottomMarketContext, buildPreMoveContext, rankPreMoveTickerRows, buildPreMoveWatchCandidates} from '../market/universe-scanner.mjs';
+import {MarketUniverseScanner, buildSpotUniverse, rankTickerRows, rankBottomTickerRows, boundedMap, normalizeRadarLimit, normalizeTickerRow, buildBottomMarketContext, buildPreMoveContext, rankPreMoveTickerRows, buildPreMoveWatchCandidates, aggregateClosed15mIntoHourly, buildPreMoveTargetPlan} from '../market/universe-scanner.mjs';
 
 function candle(t, close=100, tfMs=900000) {
   return {
@@ -21,7 +21,7 @@ function candle(t, close=100, tfMs=900000) {
 }
 function series(tf, count=250, lastAgeMs=60_000) {
   const step = tf==='4h' ? 14_400_000 : tf==='1h' ? 3_600_000 : 900_000;
-  const lastOpen = Date.now() - lastAgeMs - step + 1;
+  const lastOpen = Math.floor((Date.now() - lastAgeMs - step) / step) * step;
   return Array.from({length:count},(_,i)=>candle(lastOpen-(count-1-i)*step,100+i*0.05,step));
 }
 
@@ -477,6 +477,51 @@ test('Pre-Move Radar detects quiet early acceleration instead of chasing large 2
   assert.equal(missingCore.components.buying_pressure,null);
 });
 
+
+test('Pre-Move aggregates hourly evidence only from four complete aligned closed 15m candles',()=>{
+  const hour=60*60*1000,step=15*60*1000;
+  const start=Math.floor((Date.now()-12*hour)/hour)*hour;
+  const candles=Array.from({length:16},(_,i)=>candle(start+i*step,100+i*0.25,step));
+  const hourly=aggregateClosed15mIntoHourly(candles,Date.now());
+  assert.equal(hourly.length,4);
+  assert.equal(hourly[0].openTime,start);
+  assert.equal(hourly[0].closeTime,start+hour-1);
+  assert.equal(hourly[0].open,candles[0].open);
+  assert.equal(hourly[0].close,candles[3].close);
+  assert.equal(hourly[0].constituent_candles,4);
+  assert.equal(hourly[0].source,'BINANCE_PUBLIC_REST_AGGREGATED_15M');
+  const gap=candles.filter((_,i)=>i!==5);
+  assert.equal(aggregateClosed15mIntoHourly(gap,Date.now()).length,3,'a 15m gap discards the containing hour rather than interpolating it');
+  const partial=candles.map((x,i)=>i===15?{...x,closed:false}:x);
+  assert.equal(aggregateClosed15mIntoHourly(partial,Date.now()).length,3,'an incomplete 15m candle must not complete an hourly bar');
+});
+
+test('Pre-Move target plan exposes ATR risk, invalidation and bounded targets without promising a rise',()=>{
+  const step=15*60*1000;
+  const start=Math.floor((Date.now()-100*step)/step)*step;
+  const candles=Array.from({length:80},(_,i)=>{
+    const close=100+i*0.035+Math.sin(i/3)*0.14;
+    return {
+      openTime:start+i*step,closeTime:start+(i+1)*step-1,
+      open:close-0.025,high:close+0.12+Math.sin(i)*0.015,
+      low:close-0.13,close,volume:1000+i*8,quoteVolume:100000+i*800,
+      tradeCount:600+i*4,takerBuyBaseVolume:550+i*4,
+      takerBuyQuoteVolume:55000+i*400,closed:true,sourceTime:Date.now()
+    };
+  });
+  const plan=buildPreMoveTargetPlan(candles,{lastPrice:102.1,highPrice24h:104.8},Date.now());
+  assert.equal(plan.method,'ATR_15M_RISK_REWARD_V1');
+  assert.equal(plan.valid,true);
+  assert.ok(plan.invalidation_price>0&&plan.invalidation_price<plan.reference_price);
+  assert.ok(plan.target_2_price>plan.reference_price);
+  assert.ok(plan.target_1_price===null||plan.target_1_price>plan.reference_price);
+  assert.ok(Number.isFinite(plan.risk_pct));
+  assert.equal(plan.price_basis,'LAST_TICKER_PRICE_AT_SCAN');
+  assert.equal(plan.closed_candles_only,true);
+  assert.equal(plan.paper_only,true);
+  assert.equal(plan.not_guaranteed,true);
+});
+
 // PRE_MOVE_RADAR_CI_TRIGGER
 
 
@@ -633,5 +678,6 @@ test('Pre-Move scan removes already-extended coins before limiting actionable re
   assert.equal(result.watch_candidates.length,0,'already-extended symbols must not leak into the watch-only list');
   const scannedTimeframes=rest.calls.filter(x=>x.type==='klines').map(x=>x.tf);
   assert.ok(scannedTimeframes.length>0);
+  assert.deepEqual([...new Set(scannedTimeframes)],['15m'],'Pre-Move fetches 15m candles once and aggregates closed hourly bars locally');
   assert.ok(!scannedTimeframes.includes('4h'),'Pre-Move must not pay for the unrelated 4h strategy timeframe');
 });

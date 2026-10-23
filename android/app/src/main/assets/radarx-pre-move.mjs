@@ -70,6 +70,7 @@ export function rankPreMoveWatchCandidates(body){
         liquidity:num(c.liquidity_quality),
         dataQuality:num(c.data_quality),
         closedCandlesOnly:true,
+        targetPlan:c.target_plan&&typeof c.target_plan==='object'?c.target_plan:null,
         watchOnly:true,
         watchReason:watchReasonMap[c.watch_only_reason]||watchReasonMap.ACTIONABLE_GATE_NOT_MET,
         watchReasons:(Array.isArray(c.watch_reason_codes)?c.watch_reason_codes:[])
@@ -115,7 +116,8 @@ export function rankPreMoveCandidates(body){
         rawReasons:p.reasons||[],
         liquidity:num(c.liquidity_quality),
         dataQuality:num(c.data_quality),
-        closedCandlesOnly:p.closed_candles_only===true
+        closedCandlesOnly:p.closed_candles_only===true,
+        targetPlan:c.target_plan&&typeof c.target_plan==='object'?c.target_plan:null
       };
     })
     // Do not let already-extended assets occupy the actionable Pre-Move ranking.

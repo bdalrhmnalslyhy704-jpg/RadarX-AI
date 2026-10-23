@@ -22,6 +22,7 @@ header{position:sticky;top:0;z-index:20;margin:0 -14px;padding:calc(9px + env(sa
 .reasons{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}.reason{padding:5px 7px;border:1px solid #294b63;border-radius:999px;background:#07111c;color:#c9d9e5;font-size:8px}
 .meters{margin-top:9px;display:grid;grid-template-columns:1fr 1fr;gap:7px}.meter{padding:8px;border:1px solid #17364d;border-radius:11px;background:#07111c}.meter span{display:block;color:#718ba2;font-size:8px}.track{height:5px;margin-top:6px;border-radius:99px;background:#132a3b;overflow:hidden}.track i{display:block;height:100%;background:linear-gradient(90deg,#35c9ff,#6f68ff)}.meter b{display:block;margin-top:3px;font-size:12px}
 .note{margin-top:10px;color:#70879b;font-size:9px;line-height:1.7}
+.target-plan{margin-top:8px}.target-plan .box b{font-variant-numeric:tabular-nums}.target-note{padding:9px;border:1px solid #2a4c65;border-radius:10px;margin-top:8px;color:#91a9bc;font-size:9px;line-height:1.7}
 @media(max-width:650px){.grid,.meters{grid-template-columns:1fr}.toolbar{top:59px}#limit{width:92px}}
 </style>
 </head>
@@ -54,6 +55,20 @@ function fmt(n){if(n===null||n===undefined||(typeof n==='string'&&n.trim()==='')
 function pct(n){return n!==null&&n!==undefined&&!(typeof n==='string'&&n.trim()==='')&&Number.isFinite(Number(n))?Number(n).toFixed(2)+'%':'—'}
 function num(n,d='—'){return n!==null&&n!==undefined&&!(typeof n==='string'&&n.trim()==='')&&Number.isFinite(Number(n))?Number(n).toFixed(1):d}
 function meter(label,v){const x=Math.max(0,Math.min(100,Number(v)||0));return '<div class="meter"><span>'+label+'</span><b>'+x.toFixed(0)+'</b><div class="track"><i style="width:'+x+'%"></i></div></div>'}
+function targetPlanHtml(p){
+ const t=p&&p.targetPlan;
+ if(!t||t.valid!==true)return '<div class="target-note">لا توجد مستويات هدف كافية من الشموع المغلقة بعد؛ لن نخترع هدفًا.</div>';
+ const rr=v=>Number.isFinite(Number(v))?Number(v).toFixed(2)+'R':'—';
+ const title=t.actionable===true?'خطة ورقية لمرشح اجتاز الشروط':'تقدير مراقبة فقط — ليس تنبيه دخول';
+ return '<div class="grid target-plan">'+
+   '<div class="box"><span>السعر المرجعي وقت الفحص</span><b>'+fmt(t.reference_price)+'</b><small>يتغير السعر ولا يمثل تنفيذًا</small></div>'+
+   '<div class="box"><span>مستوى إلغاء الفكرة</span><b>'+fmt(t.invalidation_price)+'</b><small>إذا كُسر، تتغير فرضية الحركة</small></div>'+
+   '<div class="box"><span>الهدف 1</span><b>'+fmt(t.target_1_price)+'</b><small>العائد إلى المخاطرة '+rr(t.target_1_rr)+'</small></div>'+
+   '<div class="box"><span>الهدف 2</span><b>'+fmt(t.target_2_price)+'</b><small>العائد إلى المخاطرة '+rr(t.target_2_rr)+'</small></div>'+
+   '<div class="box"><span>المخاطرة المحسوبة</span><b>'+pct(t.risk_pct)+'</b><small>من السعر المرجعي إلى الإلغاء</small></div>'+
+   '<div class="box"><span>مقاومة قريبة</span><b>'+fmt(t.resistance_price)+'</b><small>قُيّد الهدف الأول بها عند توفرها</small></div>'+
+  '</div><div class="target-note">'+title+' • تعتمد المستويات على ATR وقيعان ومقاومات الشموع المغلقة. ليست ضمانًا للصعود أو الربح؛ التنفيذ الحقيقي متوقف.</div>';
+}
 function render(rows,meta,watchRows=[]){
  const watchHtml=(watchRows||[]).map((p,i)=>
    '<article class="card">'+
@@ -67,6 +82,7 @@ function render(rows,meta,watchRows=[]){
       '<div class="box"><span>جودة السيولة</span><b>'+num(p.liquidity)+'</b><small>لا تكفي لتأكيد تنبيه</small></div>'+
     '</div>'+
     '<div class="reasons">'+(p.watchReasons||[p.watchReason]).map(r=>'<span class="reason">'+r+'</span>').join('')+'</div>'+
+    targetPlanHtml(p)+
     '<div class="note">مراقبة فقط وليست توصية دخول ولا تنبيهًا مؤكدًا؛ انتظر تأكيد السيولة وبقاء إشارات التدفق.</div>'+
    '</article>'
  ).join('');
@@ -103,7 +119,8 @@ function render(rows,meta,watchRows=[]){
       meter('الهيكل',comp.structure)+meter('ضغط الحيتان',comp.whale_pressure)+
     '</div>'+
     '<div class="reasons">'+p.reasons.map(r=>'<span class="reason">'+r+'</span>').join('')+'</div>'+
-    '<div class="note">موقع السعر في الجلسة '+num(p.sessionPosition)+'% • ضد BTC '+pct(p.relativeStrengthBtc)+' • 4h/1h/15m مغلقة: '+(p.closedCandlesOnly?'نعم':'لا')+'</div>'+
+    targetPlanHtml(p)+
+    '<div class="note">موقع السعر في الجلسة '+num(p.sessionPosition)+'% • ضد BTC '+pct(p.relativeStrengthBtc)+' • 1h مشتقة من 4 شموع 15m مغلقة: نعم</div>'+
    '</article>';
  }).join('')+watchHtml;
 }

@@ -259,6 +259,42 @@ assert.match(preMovePage,/لا توجد الآن إعدادات مبكرة تس�
 assert.match(preMoveEngine,/rankPreMoveCandidates/);
 assert.match(preMoveEngine,/ALREADY_MOVED/);
 assert.match(preMoveEngine,/VOLUME_ACCELERATING/);
+
+test('Pre-Move Android view carries target levels without promoting watch rows to alerts',async()=>{
+  const targetPlan={
+    method:'ATR_15M_RISK_REWARD_V1',valid:true,actionable:false,status:'WATCH_ONLY_ESTIMATE',
+    reference_price:1.25,invalidation_price:1.21,target_1_price:1.31,target_2_price:1.37,
+    risk_pct:3.2,target_1_rr:1.5,target_2_rr:3.0,resistance_price:1.33,
+    reward_risk_ok:true,paper_only:true,not_guaranteed:true
+  };
+  const ready={
+    symbol:'TARGETUSDT',last_price:1.25,price_change_24h:1.1,quote_volume_24h:2500000,
+    liquidity_quality:90,data_quality:98,data_status:{data_valid:true,data_stale:false,candle_data_valid:true},
+    pre_move_context:{stage:'EARLY_WAKE',already_moved:false,score:76,session_return_pct:1.2,
+      one_hour_return_pct:0.4,evidence_complete:true,closed_candles_only:true,components:{},reasons:[]},
+    target_plan:targetPlan
+  };
+  const ranked=rankPreMoveCandidates({candidates:[ready]});
+  assert.equal(ranked.length,1);
+  assert.equal(ranked[0].targetPlan.invalidation_price,1.21);
+  assert.equal(ranked[0].targetPlan.target_1_price,1.31);
+  const watch={
+    ...ready,watch_only:true,alert_eligible:false,watch_only_reason:'BUY_FLOW_NOT_CONFIRMED',
+    watch_reason_codes:['BUY_FLOW_NOT_CONFIRMED'],
+    pre_move_context:{...ready.pre_move_context,stage:'WATCH_EARLY',watch_only:true,actionable:false}
+  };
+  const watched=rankPreMoveWatchCandidates({watch_candidates:[watch]});
+  assert.equal(watched.length,1);
+  assert.equal(watched[0].watchOnly,true);
+  assert.equal(watched[0].targetPlan.actionable,false);
+  const page=await readFile(new URL('../pre-move-radar.html',import.meta.url),'utf8');
+  assert.match(page,/targetPlanHtml/);
+  assert.match(page,/مستوى إلغاء الفكرة/);
+  assert.match(page,/الهدف 1/);
+  assert.match(page,/الهدف 2/);
+  assert.match(page,/ليست ضمانًا للصعود أو الربح/);
+});
+
 const bottomPage=await readFile(new URL('../bottom-radar.html',import.meta.url),'utf8');
 const bottomSample={candidates:[{
   symbol:'TESTUSDT',last_price:1.25,price_change_24h:-6,liquidity_quality:88,data_quality:95,
