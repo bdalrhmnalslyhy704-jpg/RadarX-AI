@@ -141,6 +141,31 @@ function subscriptionValid(x){
 }
 export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,marketRadarRest=null,radarSwarm=null,radarSignalOutcomeWorker=null}= {}){
   const counters=new Map();
+  function recordMultiAnalystApiFailure(error){
+    const message=String(error?.message??error??'MULTI_ANALYST_SCAN_FAILED').slice(0,240);
+    const stats=multiAnalystRadar?.monitorStats;
+    if(stats&&typeof stats==='object'){
+      stats.last_scan_successful=false;
+      stats.last_error=message;
+      stats.last_failed_at=new Date().toISOString();
+    }
+    return message;
+  }
+  function multiAnalystMonitoringSnapshot(){
+    const stats=multiAnalystRadar?.monitorStats&&typeof multiAnalystRadar.monitorStats==='object'
+      ?multiAnalystRadar.monitorStats:{};
+    return {
+      continuous:true,
+      running:multiAnalystRadar?.running===true,
+      interval_ms:Math.max(15000,Number(multiAnalystRadar?.config?.continuousIntervalMs)||60000),
+      scan_count:Number(stats.scan_count)||0,
+      last_scan_at:stats.last_scan_at||null,
+      last_scan_successful:stats.last_scan_successful===true,
+      last_error:stats.last_error||null,
+      last_failed_at:stats.last_failed_at||null,
+      next_scan_at:stats.next_scan_at||null
+    };
+  }
   const moveConfig=config.moveRadar||{thresholdPct:1};
   const originList=config.auth.allowedOrigins;
   // Prefer the dedicated REST client, but reuse the same already-initialized market-data
@@ -872,10 +897,16 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           let snapshot=multiAnalystRadar.getCached({quote});
           if(runNow){
             snapshot=await multiAnalystRadar.scan({quote,limit,forceRefresh:true,requestId});
-            return send(res,200,{...snapshot,radar:'MULTI_ANALYST',meta:{...(snapshot.meta||{}),analysis_mode:'FORCED_SCAN',force_refresh_requested:true,request_id:requestId,served_from_cache_while_scan:false}});
+            return send(res,200,{...snapshot,radar:'MULTI_ANALYST',
+              scan:{requested:true,completed:true,error:null,request_id:requestId},
+              monitoring:multiAnalystMonitoringSnapshot(),
+              meta:{...(snapshot.meta||{}),analysis_mode:'FORCED_SCAN',force_refresh_requested:true,request_id:requestId,served_from_cache_while_scan:false}});
           }
           if(snapshot){
-            return send(res,200,{...snapshot,radar:'MULTI_ANALYST',meta:{...(snapshot.meta||{}),analysis_mode:'CACHE',request_id:requestId,force_refresh_requested:false,served_from_cache_while_scan:false}});
+            return send(res,200,{...snapshot,radar:'MULTI_ANALYST',
+              scan:{requested:false,completed:true,error:null,request_id:requestId},
+              monitoring:multiAnalystMonitoringSnapshot(),
+              meta:{...(snapshot.meta||{}),analysis_mode:'CACHE',request_id:requestId,force_refresh_requested:false,served_from_cache_while_scan:false}});
           }
 
           // A cold-cache request must not hold the Android app's HTTP call open for
@@ -888,33 +919,25 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
               const scanFlight=multiAnalystRadar.scan({quote,limit,forceRefresh:false,requestId});
               if(scanFlight&&typeof scanFlight.catch==='function'){
                 scanFlight.catch(error=>{
-                  console.error('[MULTI_ANALYST_API] background scan failed:',String(error?.message??error));
+                  const message=recordMultiAnalystApiFailure(error);
+                  console.error('[MULTI_ANALYST_API] background scan failed:',message);
                 });
               }
               warmingReason='SCAN_STARTED';
             }catch(error){
               warmingReason='SCAN_START_FAILED';
-              console.error('[MULTI_ANALYST_API] unable to start background scan:',String(error?.message??error));
+              const message=recordMultiAnalystApiFailure(error);
+              console.error('[MULTI_ANALYST_API] unable to start background scan:',message);
             }
           }
 
-          const monitorStats=multiAnalystRadar.monitorStats&&typeof multiAnalystRadar.monitorStats==='object'
-            ?multiAnalystRadar.monitorStats:{};
           let reviewQueue={pending_count:0};
           try{
             if(typeof multiAnalystRadar.radarReviewQueueSnapshot==='function'){
               reviewQueue=multiAnalystRadar.radarReviewQueueSnapshot();
             }
           }catch{}
-          const monitoring={
-            continuous:true,
-            running:multiAnalystRadar.running===true,
-            interval_ms:Math.max(15000,Number(multiAnalystRadar.config?.continuousIntervalMs)||60000),
-            scan_count:Number(monitorStats.scan_count)||0,
-            last_scan_at:monitorStats.last_scan_at||null,
-            last_error:monitorStats.last_error||null,
-            next_scan_at:monitorStats.next_scan_at||null
-          };
+          const monitoring=multiAnalystMonitoringSnapshot();
           return send(res,200,{
             status:'warming',
             radar:'MULTI_ANALYST',
@@ -937,10 +960,11 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
               deep_concurrency:Math.max(1,Number(multiAnalystRadar.config?.deepConcurrency)||3),
               deep_klines:Math.max(1,Number(multiAnalystRadar.config?.deepKlines)||220),
               attempted_analyses:0,successful_analyses:0,gate_rejected:0,failed_analyses:0,scan_errors:[],
+              scan_failure_count:monitoring.last_error?1:0,last_scan_error:monitoring.last_error,
               radar_review_queue:reviewQueue
             },
             monitoring,
-            scan:{requested:false,completed:false,error:warmingReason,request_id:requestId},
+            scan:{requested:false,completed:false,error:warmingReason,last_error:monitoring.last_error,request_id:requestId},
             meta:{
               live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
               radar:'MULTI_ANALYST',analyst_count:20,specialist_count:19,engine_revision:'ELITE_SNIPER_V1',
@@ -950,12 +974,23 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           });
         }catch(e){
           const cached=multiAnalystRadar.getCached({quote})||null;
-          const errorMessage=String(e?.message??e);
+          const errorMessage=recordMultiAnalystApiFailure(e);
+          const previousDiagnostics=cached?.diagnostics&&typeof cached.diagnostics==='object'?cached.diagnostics:{};
+          const previousScanErrors=Array.isArray(previousDiagnostics.scan_errors)?previousDiagnostics.scan_errors:[];
           return send(res,200,{
             ...(cached||{}),status:'not_ready',
             candidates:Array.isArray(cached?.candidates)?cached.candidates:[],
+            watchlist:Array.isArray(cached?.watchlist)?cached.watchlist:[],
+            lab_results:Array.isArray(cached?.lab_results)?cached.lab_results:[],
+            diagnostics:{
+              ...previousDiagnostics,
+              scan_failure_count:Math.max(0,Number(previousDiagnostics.scan_failure_count)||0)+1,
+              last_scan_error:errorMessage,
+              scan_errors:[...previousScanErrors.slice(-9),{stage:'MULTI_ANALYST_SCAN',error:errorMessage}]
+            },
+            monitoring:multiAnalystMonitoringSnapshot(),
             error:errorMessage,
-            scan:{requested:runNow,completed:false,error:errorMessage,request_id:requestId},
+            scan:{requested:runNow,completed:false,error:errorMessage,last_error:errorMessage,request_id:requestId},
             meta:{...(cached?.meta||{}),live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analysis_mode:'SCAN_FAILED',request_id:requestId,force_refresh_requested:runNow}
           });
         }
