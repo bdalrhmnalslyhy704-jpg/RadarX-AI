@@ -428,3 +428,29 @@ test('Pre-Move Radar detects quiet early acceleration instead of chasing large 2
 });
 
 // PRE_MOVE_RADAR_CI_TRIGGER
+
+
+test('Pre-Move scan removes already-extended coins before limiting actionable results',async()=>{
+  const rest=makeRest();
+  const originalRequest=rest.request;
+  rest.request=async path=>{
+    const response=await originalRequest(path);
+    if(path==='/api/v3/ticker/24hr'){
+      return {...response,data:response.data.map(row=>({...row,priceChangePercent:'25'}))};
+    }
+    return response;
+  };
+  const scanner=new MarketUniverseScanner({
+    rest,
+    config:{minQuoteVolume24h:750000,scanLimit:2,returnLimit:2,deepConcurrency:2,deepKlines:160},
+    strategyEvaluator:evaluator
+  });
+  const result=await scanner.scanPreMove({quote:'USDT',limit:10});
+  assert.equal(result.meta.radar,'PRE_MOVE');
+  assert.equal(result.meta.live,true,'live valid market data must stay live even if all symbols are too extended');
+  assert.equal(result.meta.paper_trading,true);
+  assert.equal(result.meta.real_order_execution,false);
+  assert.ok(result.universe.valid_data>0);
+  assert.equal(result.universe.extended_excluded,result.universe.valid_data);
+  assert.equal(result.candidates.length,0,'no already-extended symbol should be promoted as a Pre-Move candidate');
+});
