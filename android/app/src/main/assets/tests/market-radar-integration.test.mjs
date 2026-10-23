@@ -398,29 +398,33 @@ test('Pre-Move Radar excludes already-extended coins from actionable rankings',(
 });
 
 
-test('Pre-Move low-volume early setups remain visible as watch-only and never masquerade as alerts',async()=>{
+test('Pre-Move low-volume and near-miss setups stay visible as explicit watch-only rows, never alerts',async()=>{
   const candidate=(symbol,overrides={})=>({
     symbol,last_price:1.02,price_change_24h:1.6,quote_volume_24h:18000,
     liquidity_quality:42,data_quality:96,
-    data_status:{data_valid:false,data_stale:false,candle_data_valid:true,volume_gate_pass:false},
+    data_status:{data_valid:false,data_stale:false,candle_data_valid:true,volume_gate_pass:false,last_error:null},
     pre_move_context:{
-      stage:'EARLY_WAKE',score:75,session_return_pct:2.1,evidence_complete:true,
-      closed_candles_only:true,flow_transition_confirmed:true,price_window_valid:true,
-      structure_confirmed:true,already_moved:false,components:{acceleration:78},
+      stage:'WATCH_EARLY',original_stage:'NO_SETUP',score:65,session_return_pct:2.1,
+      one_hour_return_pct:0.1,evidence_complete:true,closed_candles_only:true,
+      watch_only:true,flow_transition_confirmed:true,price_window_valid:false,
+      structure_confirmed:false,already_moved:false,actionable:false,
+      components:{acceleration:78,squeeze:70,structure:65,buying_pressure:50},
       reasons:['VOLUME_ACCELERATING']
     },
     watch_only:true,alert_eligible:false,watch_only_reason:'BELOW_MIN_QUOTE_VOLUME',
+    watch_reason_codes:['BELOW_MIN_QUOTE_VOLUME','PRICE_WINDOW_NOT_CONFIRMED','STRUCTURE_NOT_CONFIRMED'],
     ...overrides
   });
   const rows=rankPreMoveWatchCandidates({watch_candidates:[
     candidate('LOWVOLUSDT'),
-    candidate('STALEUSDT',{data_status:{data_valid:false,data_stale:true,candle_data_valid:true,volume_gate_pass:false}}),
-    candidate('LATEUSDT',{pre_move_context:{stage:'ALREADY_MOVED',score:99,session_return_pct:12,evidence_complete:true,closed_candles_only:true,flow_transition_confirmed:true,price_window_valid:true,structure_confirmed:true,already_moved:true,components:{},reasons:[]}})
+    candidate('STALEUSDT',{data_status:{data_valid:false,data_stale:true,candle_data_valid:true,volume_gate_pass:false,last_error:null}}),
+    candidate('LATEUSDT',{pre_move_context:{stage:'ALREADY_MOVED',score:99,session_return_pct:12,one_hour_return_pct:8,evidence_complete:true,closed_candles_only:true,watch_only:true,flow_transition_confirmed:true,price_window_valid:true,structure_confirmed:true,already_moved:true,components:{},reasons:[]}})
   ]});
   assert.deepEqual(rows.map(x=>x.symbol),['LOWVOLUSDT']);
   assert.equal(rows[0].stage,'WATCH_ONLY');
   assert.equal(rows[0].watchOnly,true);
   assert.equal(rows[0].watchReason,'حجم التداول اليومي أقل من حد التنبيه');
+  assert.ok(rows[0].watchReasons.includes('حركة الساعة لم تدخل نطاق التأكيد'));
   assert.equal(rows[0].closedCandlesOnly,true);
   const page=await readFile(new URL('../pre-move-radar.html',import.meta.url),'utf8');
   assert.match(page,/rankPreMoveWatchCandidates/);
