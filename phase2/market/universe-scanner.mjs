@@ -2103,7 +2103,8 @@ export class MarketUniverseScanner {
     // Diagnostic-only audit of the strongest fresh, non-extended rows.
     // This does not feed the actionable candidate list or any phone notification path.
     const nearMissAudit=enriched
-      .filter(x=>x.data_status?.candle_data_valid===true&&x.data_status?.data_stale!==true&&
+      .filter(x=>!actionable.some(a=>a.symbol===x.symbol)&&
+        x.data_status?.candle_data_valid===true&&x.data_status?.data_stale!==true&&
         x.pre_move_context?.already_moved!==true&&Math.abs(Number(x.price_change_24h))<20)
       .map(x=>{
         const p=x.pre_move_context||{},c=p.components||{},blockers=[];
