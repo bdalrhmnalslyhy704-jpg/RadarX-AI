@@ -1,7 +1,7 @@
 /* Bottom Radar v2 regression coverage: live flow, squeeze, structure, whale heuristic. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {MarketUniverseScanner, buildSpotUniverse, rankTickerRows, rankBottomTickerRows, boundedMap, normalizeRadarLimit, normalizeTickerRow, buildBottomMarketContext, buildPreMoveContext, rankPreMoveTickerRows, buildPreMoveWatchCandidates, aggregateClosed15mIntoHourly, buildPreMoveTargetPlan} from '../market/universe-scanner.mjs';
+import {MarketUniverseScanner, buildSpotUniverse, rankTickerRows, rankBottomTickerRows, boundedMap, normalizeRadarLimit, normalizeTickerRow, buildBottomMarketContext, buildPreMoveContext, rankPreMoveTickerRows, buildPreMoveWatchCandidates, aggregateClosed15mIntoHourly, buildPreMoveTargetPlan, scorePreMoveComponents} from '../market/universe-scanner.mjs';
 
 function candle(t, close=100, tfMs=900000) {
   return {
@@ -477,6 +477,23 @@ test('Pre-Move Radar detects quiet early acceleration instead of chasing large 2
   assert.equal(missingCore.components.buying_pressure,null);
 });
 
+
+test('Pre-Move composite score uses only normalized 0-100 components, never raw flow ratios',()=>{
+  const scores={
+    calm:90,acceleration:80,relative_strength:70,low_reclaim:75,
+    resistance_proximity:65,squeeze:70,structure:65,buying_pressure:70,whale_pressure:60
+  };
+  const base=scorePreMoveComponents(scores);
+  const withRawMeasurements=scorePreMoveComponents({
+    ...scores,
+    volume_acceleration:1.8,trade_acceleration:2.1,taker_buy_ratio:0.62,
+    taker_buy_acceleration:0.08,mean_close_location:0.72
+  });
+  const expected=Number((Object.values(scores).reduce((sum,value)=>sum+value,0)/Object.values(scores).length).toFixed(1));
+  assert.equal(base,expected);
+  assert.equal(withRawMeasurements,base,'raw ratios must not dilute 0-100 score components');
+  assert.ok(base>=70,'a strong group of normalized components should not collapse below 50 due to ratio units');
+});
 
 test('Pre-Move aggregates hourly evidence only from four complete aligned closed 15m candles',()=>{
   const hour=60*60*1000,step=15*60*1000;

@@ -722,6 +722,23 @@ function currentAdenMorningStartMs(now){
   return start;
 }
 
+export function scorePreMoveComponents(components={}) {
+  // Only normalized 0-100 component scores belong in the composite. Raw ratios
+  // (volume acceleration, taker-buy share, candle close location) are evidence
+  // used by hard gates and must never be averaged as though they were scores.
+  return avgDefined([
+    components.calm,
+    components.acceleration,
+    components.relative_strength,
+    components.low_reclaim,
+    components.resistance_proximity,
+    components.squeeze,
+    components.structure,
+    components.buying_pressure,
+    components.whale_pressure
+  ],45);
+}
+
 export function buildPreMoveContext(series,ticker,now,bottomContext=null,{marketMedianReturn=null,btcReturn=null}={}){
   const raw15=Array.isArray(series?.['15m'])?series['15m']:[];
   const closed15=raw15.filter(c=>c?.closed===true&&Number.isFinite(Number(c?.closeTime))&&Number(c.closeTime)<=now&&
@@ -2155,7 +2172,7 @@ export class MarketUniverseScanner {
       const relReturn=Number.isFinite(marketMedianReturn)?Number(ctx.session_return_pct)-marketMedianReturn:null;
       const relScore=Number.isFinite(relReturn)?clamp(50+relReturn*18):Number.isFinite(btcReturn)?clamp(50+(Number(ctx.session_return_pct)-btcReturn)*18):50;
       const components={...ctx.components,relative_strength:relScore};
-      const score=avgDefined(Object.values(components),45);
+      const score=scorePreMoveComponents(components);
       const alreadyMoved=ctx.already_moved===true;
       const earlyConditions=ctx.evidence_complete===true&&ctx.flow_transition_confirmed===true&&
         ctx.price_window_valid===true&&ctx.structure_confirmed===true&&
