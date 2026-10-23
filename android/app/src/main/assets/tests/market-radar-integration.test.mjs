@@ -379,7 +379,7 @@ test('Pre-Move Radar excludes already-extended coins from actionable rankings',(
   const candidate=(symbol,{stage,already_moved,score,session_return_pct=3}={})=>({
     symbol,last_price:1,price_change_24h:4,liquidity_quality:85,data_quality:95,
     data_status:{data_valid:true,data_stale:false},
-    pre_move_context:{stage,already_moved,score,session_return_pct,components:{},reasons:[],closed_candles_only:true}
+    pre_move_context:{stage,already_moved,score,session_return_pct,evidence_complete:true,components:{},reasons:[],closed_candles_only:true}
   });
   const body={candidates:[
     candidate('LATEUSDT',{stage:'ALREADY_MOVED',already_moved:true,score:99,session_return_pct:14}),
