@@ -63,10 +63,10 @@ function targetPlanHtml(p){
  return '<div class="grid target-plan">'+
    '<div class="box"><span>السعر المرجعي وقت الفحص</span><b>'+fmt(t.reference_price)+'</b><small>يتغير السعر ولا يمثل تنفيذًا</small></div>'+
    '<div class="box"><span>مستوى إلغاء الفكرة</span><b>'+fmt(t.invalidation_price)+'</b><small>إذا كُسر، تتغير فرضية الحركة</small></div>'+
-   '<div class="box"><span>الهدف 1</span><b>'+fmt(t.target_1_price)+'</b><small>العائد إلى المخاطرة '+rr(t.target_1_rr)+'</small></div>'+
+   '<div class="box"><span>الهدف 1</span><b>'+fmt(t.target_1_price)+'</b><small>'+(t.target_1_requires_resistance_breakout?'مشروط باختراق المقاومة • ':'')+'العائد إلى المخاطرة '+rr(t.target_1_rr)+'</small></div>'+
    '<div class="box"><span>الهدف 2</span><b>'+fmt(t.target_2_price)+'</b><small>العائد إلى المخاطرة '+rr(t.target_2_rr)+'</small></div>'+
    '<div class="box"><span>المخاطرة المحسوبة</span><b>'+pct(t.risk_pct)+'</b><small>من السعر المرجعي إلى الإلغاء</small></div>'+
-   '<div class="box"><span>مقاومة قريبة</span><b>'+fmt(t.resistance_price)+'</b><small>قُيّد الهدف الأول بها عند توفرها</small></div>'+
+   '<div class="box"><span>مقاومة قريبة</span><b>'+fmt(t.resistance_price)+'</b><small>'+(t.target_1_requires_resistance_breakout?'يجب اختراقها قبل احتساب الهدف الأول':'قُيّد الهدف الأول بها عند توفرها')+'</small></div>'+
   '</div><div class="target-note">'+title+' • تعتمد المستويات على ATR وقيعان ومقاومات الشموع المغلقة. ليست ضمانًا للصعود أو الربح؛ التنفيذ الحقيقي متوقف.</div>';
 }
 function render(rows,meta,watchRows=[]){
