@@ -1391,7 +1391,7 @@ test('Radar 8 confirmed early-flow observations create a separate monitor-only a
 });
 
 
-test('Radar 8 keeps watch-only traces out of the actionable feed and uses the dedicated watch push route',async()=>{
+test('Radar 8 keeps watch-only traces feed-only and never calls a push route',async()=>{
   const storedAlerts=[],storedEvents=[],pushCalls=[];
   const store={
     async appendEarlyExpansionAlert(alert){storedAlerts.push({...alert});},
@@ -1427,14 +1427,14 @@ test('Radar 8 keeps watch-only traces out of the actionable feed and uses the de
   },now);
   const result=await radar.recordWatchOnlyAlert(alert,'EARLY_FLOW_WATCH_TRACE');
   assert.equal(result.stored,true);
-  assert.equal(result.pushStatus,'WATCH_ONLY_PUSH_PROVIDER_DISABLED');
+  assert.equal(result.pushStatus,'WATCH_ONLY_PUSH_DISABLED_BY_POLICY');
   assert.equal(result.pushAttempted,false);
   assert.equal(storedAlerts.length,0,'watch-only observations must not enter the feed polled by Android');
   assert.equal(storedEvents.length,1,'diagnostic events remain available for outcome analysis');
   assert.equal(storedEvents[0].event_type,'EARLY_FLOW_WATCH_TRACE');
   assert.equal(storedEvents[0].feed_status,'TRACE_ONLY');
-  assert.equal(storedEvents[0].notification_status,'WATCH_ONLY_PUSH_PROVIDER_DISABLED');
-  assert.equal(watchPushCalls,1,'the watch candidate reaches the dedicated provider status/evidence boundary');
+  assert.equal(storedEvents[0].notification_status,'WATCH_ONLY_PUSH_DISABLED_BY_POLICY');
+  assert.equal(watchPushCalls,0,'watch-only candidates never call the push provider');
   assert.equal(pushCalls.length,0,'the standard actionable-alert path must not be called');
 });
 
