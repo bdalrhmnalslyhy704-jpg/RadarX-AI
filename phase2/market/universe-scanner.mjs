@@ -1925,7 +1925,7 @@ export class MarketUniverseScanner {
       limit:discoveryLimit,
       rotationOffset
     });
-    const preMoveConcurrency=12; // two bounded waves for a 20-symbol shortlist; keep request pressure predictable.
+    const preMoveConcurrency=16; // bounded parallelism leaves margin under the live scan-latency gate.
     const scanned=await boundedMap(
       discovery,
       preMoveConcurrency,
