@@ -251,7 +251,7 @@ assert.match(preMovePage,/تسارع الحجم/);
 assert.match(preMovePage,/القوة النسبية/);
 assert.match(preMovePage,/ضغط الحيتان/);
 assert.match(preMovePage,/لا يوجد توقع مضمون/);
-assert.match(preMovePage,/لا توجد الآن عملات مؤهلة لمرحلة ما قبل الحركة/);
+assert.match(preMovePage,/لا توجد الآن إعدادات مبكرة تستوفي الشروط/);
 assert.match(preMoveEngine,/rankPreMoveCandidates/);
 assert.match(preMoveEngine,/ALREADY_MOVED/);
 assert.match(preMoveEngine,/VOLUME_ACCELERATING/);
@@ -384,7 +384,8 @@ test('Pre-Move Radar excludes already-extended coins from actionable rankings',(
   const body={candidates:[
     candidate('LATEUSDT',{stage:'ALREADY_MOVED',already_moved:true,score:99,session_return_pct:14}),
     candidate('EARLYUSDT',{stage:'EARLY_WAKE',already_moved:false,score:76,session_return_pct:2}),
-    candidate('LATE2USDT',{stage:'ALREADY_MOVED',already_moved:false,score:94,session_return_pct:4})
+    candidate('LATE2USDT',{stage:'ALREADY_MOVED',already_moved:false,score:94,session_return_pct:4}),
+    candidate('NOSETUPUSDT',{stage:'NO_SETUP',already_moved:false,score:61,session_return_pct:1})
   ]};
   const rows=rankPreMoveCandidates(body);
   assert.deepEqual(rows.map(row=>row.symbol),['EARLYUSDT']);
