@@ -97,6 +97,27 @@ test('ticker ranking prioritizes liquid rows and enforces minimum volume',()=>{
   assert.deepEqual(rows.map(x=>x.symbol),['BTCUSDT','ETHUSDT']);
 });
 
+test('Pre-Move discovery rotates half of its deep-scan shortlist across the eligible market',()=>{
+  const symbols=Array.from({length:80},(_,i)=>({
+    symbol:'C'+String(i).padStart(3,'0')+'USDT',
+    baseAsset:'C'+String(i).padStart(3,'0'),
+    quoteAsset:'USDT',
+    status:'TRADING'
+  }));
+  const rows=symbols.map((x,i)=>({
+    symbol:x.symbol,lastPrice:'10',highPrice:'12',lowPrice:'8',
+    quoteVolume:String(5_000_000+i*1000),count:50000+i*100,
+    priceChangePercent:'4'
+  }));
+  const first=rankPreMoveTickerRows(rows,symbols,{minQuoteVolume24h:750000,limit:24,rotationOffset:0});
+  const second=rankPreMoveTickerRows(rows,symbols,{minQuoteVolume24h:750000,limit:24,rotationOffset:12});
+  assert.equal(first.length,24);
+  assert.equal(second.length,24);
+  assert.equal(new Set(first.map(x=>x.symbol)).size,24);
+  assert.deepEqual(first.slice(0,12).map(x=>x.symbol),second.slice(0,12).map(x=>x.symbol),'the top half stays pinned for stable core coverage');
+  assert.notDeepEqual(first.slice(12).map(x=>x.symbol),second.slice(12).map(x=>x.symbol),'the second half must rotate rather than scan the same static list forever');
+});
+
 test('Bottom Radar discovery prioritizes symbols near the 24h low while retaining liquidity',()=>{
   const symbols=buildSpotUniverse(exchangeInfo(),'USDT');
   const rows=rankBottomTickerRows([
@@ -472,5 +493,10 @@ test('Pre-Move scan removes already-extended coins before limiting actionable re
   assert.equal(result.meta.real_order_execution,false);
   assert.ok(result.universe.valid_data>0);
   assert.equal(result.universe.extended_excluded,result.universe.valid_data);
+  assert.equal(result.universe.coverage_mode,'PINNED_PLUS_ROTATING_V1');
+  assert.equal(result.universe.rotation_cycle,0);
   assert.equal(result.candidates.length,0,'no already-extended symbol should be promoted as a Pre-Move candidate');
+  const scannedTimeframes=rest.calls.filter(x=>x.type==='klines').map(x=>x.tf);
+  assert.ok(scannedTimeframes.length>0);
+  assert.ok(!scannedTimeframes.includes('4h'),'Pre-Move must not pay for the unrelated 4h strategy timeframe');
 });
