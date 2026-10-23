@@ -18,7 +18,8 @@ export function rankPreMoveCandidates(body){
   return rows
     .filter(c=>c && c.data_status && c.data_status.data_valid===true && c.pre_move_context &&
       Number.isFinite(Number(c.pre_move_context.score)) &&
-      c.pre_move_context.already_moved!==true && c.pre_move_context.stage!=='ALREADY_MOVED')
+      c.pre_move_context.already_moved!==true &&
+      !['ALREADY_MOVED','NO_SETUP'].includes(c.pre_move_context.stage))
     .map(c=>{
       const p=c.pre_move_context;
       const sessionReturn=num(p.session_return_pct,0);
