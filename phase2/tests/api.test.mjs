@@ -615,12 +615,24 @@ test('TEST_FIXTURE: Pre-Move Radar reuses an active radar REST client when the d
     const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/pre-move-radar?quote=USDT&limit=10');
     assert.equal(response.status,200);
     const body=await response.json();
+    assert.equal(body.status,'refreshing','first request must return immediately while the expensive market scan runs in the background');
     assert.equal(body.meta.radar,'PRE_MOVE');
+    assert.equal(body.meta.response_cache.mode,'SCAN_IN_PROGRESS');
     assert.equal(body.source,'Binance Public REST');
     assert.equal(body.meta.paper_trading,true);
     assert.equal(body.meta.real_order_execution,false);
     assert.equal(body.meta.live,false);
     assert.deepEqual(body.candidates,[]);
+
+    let completed=null;
+    for(let attempt=0;attempt<30;attempt++){
+      await new Promise(resolve=>setTimeout(resolve,10));
+      const next=await fetch('http://127.0.0.1:'+server.address().port+'/api/pre-move-radar?quote=USDT&limit=10');
+      completed=await next.json();
+      if(completed.status==='error')break;
+    }
+    assert.equal(completed?.status,'error','a scan with no valid market data must fail closed rather than become a ready result');
+    assert.equal(completed?.reason,'PRE_MOVE_NO_VALID_LIVE_DATA');
   }finally{
     await new Promise(resolve=>server.close(resolve));
   }
