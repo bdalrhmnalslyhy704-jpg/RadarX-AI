@@ -521,6 +521,7 @@ test('Pre-Move scan removes already-extended coins before limiting actionable re
   assert.equal(result.universe.coverage_mode,'PINNED_PLUS_ROTATING_V1');
   assert.equal(result.universe.rotation_cycle,0);
   assert.equal(result.candidates.length,0,'no already-extended symbol should be promoted as a Pre-Move candidate');
+  assert.equal(result.watch_candidates.length,0,'already-extended symbols must not leak into the watch-only list');
   const scannedTimeframes=rest.calls.filter(x=>x.type==='klines').map(x=>x.tf);
   assert.ok(scannedTimeframes.length>0);
   assert.ok(!scannedTimeframes.includes('4h'),'Pre-Move must not pay for the unrelated 4h strategy timeframe');
