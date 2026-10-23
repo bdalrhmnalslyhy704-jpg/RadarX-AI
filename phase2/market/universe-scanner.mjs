@@ -2100,6 +2100,52 @@ export class MarketUniverseScanner {
       minLiquidityQuality:this.config.minLiquidityQuality,
       minDataQuality:this.config.minDataQuality
     });
+    // Diagnostic-only audit of the strongest fresh, non-extended rows.
+    // This does not feed the actionable candidate list or any phone notification path.
+    const nearMissAudit=enriched
+      .filter(x=>x.data_status?.candle_data_valid===true&&x.data_status?.data_stale!==true&&
+        x.pre_move_context?.already_moved!==true&&Math.abs(Number(x.price_change_24h))<20)
+      .map(x=>{
+        const p=x.pre_move_context||{},c=p.components||{},blockers=[];
+        const add=(passed,code)=>{if(!passed)blockers.push(code);};
+        add(p.evidence_complete===true,'EVIDENCE_INCOMPLETE');
+        add(p.closed_candles_only===true,'CLOSED_CANDLE_GUARD_FAILED');
+        add(Number(p.volume_acceleration)>=1.12,'VOLUME_ACCELERATION_NOT_CONFIRMED');
+        add(Number(p.trade_acceleration)>=1.05,'TRADE_ACCELERATION_NOT_CONFIRMED');
+        add(Number(p.taker_buy_ratio)>=0.53&&Number(p.taker_buy_acceleration)>=0.01,'BUY_FLOW_NOT_CONFIRMED');
+        add(Number(p.mean_close_location)>=0.54,'BUYER_CANDLE_CLOSES_NOT_CONFIRMED');
+        add(Number(p.one_hour_return_pct)>=0.15&&Number(p.one_hour_return_pct)<=4.5,'PRICE_WINDOW_NOT_CONFIRMED');
+        add(Number(c.squeeze)>=55,'COMPRESSION_NOT_CONFIRMED');
+        add(Number(c.structure)>=60,'STRUCTURE_NOT_CONFIRMED');
+        add(Number(c.buying_pressure)>=60,'BUYING_PRESSURE_NOT_CONFIRMED');
+        add(Number(p.session_return_pct)>=0&&Number(p.session_return_pct)<=6,'SESSION_MOVE_NOT_CONFIRMED');
+        add(Number(p.score)>=62,'SCORE_BELOW_ACTIONABLE_THRESHOLD');
+        add(x.data_status?.data_valid===true,'DATA_OR_LIQUIDITY_GATE_NOT_PASSED');
+        return {
+          symbol:String(x.symbol||'UNKNOWN'),
+          stage:String(p.stage||'NO_SETUP'),
+          score:Number.isFinite(Number(p.score))?Number(p.score):null,
+          price_change_24h:Number.isFinite(Number(x.price_change_24h))?Number(x.price_change_24h):null,
+          session_return_pct:Number.isFinite(Number(p.session_return_pct))?Number(p.session_return_pct):null,
+          one_hour_return_pct:Number.isFinite(Number(p.one_hour_return_pct))?Number(p.one_hour_return_pct):null,
+          volume_acceleration:Number.isFinite(Number(p.volume_acceleration))?Number(p.volume_acceleration):null,
+          trade_acceleration:Number.isFinite(Number(p.trade_acceleration))?Number(p.trade_acceleration):null,
+          taker_buy_ratio:Number.isFinite(Number(p.taker_buy_ratio))?Number(p.taker_buy_ratio):null,
+          taker_buy_acceleration:Number.isFinite(Number(p.taker_buy_acceleration))?Number(p.taker_buy_acceleration):null,
+          mean_close_location:Number.isFinite(Number(p.mean_close_location))?Number(p.mean_close_location):null,
+          compression:Number.isFinite(Number(c.squeeze))?Number(c.squeeze):null,
+          structure:Number.isFinite(Number(c.structure))?Number(c.structure):null,
+          buying_pressure:Number.isFinite(Number(c.buying_pressure))?Number(c.buying_pressure):null,
+          data_quality:Number.isFinite(Number(x.data_quality))?Number(x.data_quality):null,
+          liquidity_quality:Number.isFinite(Number(x.liquidity_quality))?Number(x.liquidity_quality):null,
+          quote_volume_24h:Number.isFinite(Number(x.quote_volume_24h))?Number(x.quote_volume_24h):null,
+          data_valid:x.data_status?.data_valid===true,
+          blocker_codes:[...new Set(blockers)]
+        };
+      })
+      .sort((a,b)=>(Number(b.score)||0)-(Number(a.score)||0)||
+        (Number(a.session_return_pct)||0)-(Number(b.session_return_pct)||0))
+      .slice(0,10);
     const evidenceIncompleteExcluded=observed.filter(x=>x.pre_move_context.evidence_complete!==true).length;
     const extendedExcluded=enriched.filter(x=>x.pre_move_context.already_moved===true||x.pre_move_context.stage==='ALREADY_MOVED').length;
     const noSetupExcluded=enriched.filter(x=>x.pre_move_context.stage==='NO_SETUP').length;
@@ -2111,7 +2157,8 @@ export class MarketUniverseScanner {
       session:{timezone:'Asia/Aden',window:'04:00 local → latest closed candle',market_median_return_pct:marketMedianReturn,btc_return_pct:Number.isFinite(btcReturn)?btcReturn:null,positive_breadth_pct:returns.length?positiveCount/returns.length*100:null},
       universe:{requested:normalizedLimit,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,observed_candle_data:observed.length,watch_only:watchCandidates.length,evidence_incomplete_excluded:evidenceIncompleteExcluded,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,discovery_volume_floor:0,rotation_cycle:rotationCycle,rotation_offset:rotationOffset,rotation_width:rotatingWidth,coverage_mode:'PINNED_PLUS_ROTATING_V1',elapsed_ms:Math.max(0,this.clock()-startedAt)},
       candidates:returned,
-      watch_candidates:watchCandidates.slice().sort((a,b)=>Number(b.pre_move_context.score)-Number(a.pre_move_context.score)||Number(a.pre_move_context.session_return_pct)-Number(b.pre_move_context.session_return_pct)).slice(0,10)
+      watch_candidates:watchCandidates.slice().sort((a,b)=>Number(b.pre_move_context.score)-Number(a.pre_move_context.score)||Number(a.pre_move_context.session_return_pct)-Number(b.pre_move_context.session_return_pct)).slice(0,10),
+      near_miss_audit:nearMissAudit
     };
   }
 
