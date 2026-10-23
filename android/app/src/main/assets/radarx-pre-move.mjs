@@ -16,7 +16,18 @@ const reasonMap={
 const watchReasonMap={
   BELOW_MIN_QUOTE_VOLUME:'حجم التداول اليومي أقل من حد التنبيه',
   LOW_LIQUIDITY:'السيولة أو عمق دفتر الطلبات أقل من حد التنبيه',
-  LIQUIDITY_UNVERIFIED:'تعذر تأكيد السيولة؛ مراقبة فقط'
+  LIQUIDITY_UNVERIFIED:'تعذر تأكيد السيولة؛ مراقبة فقط',
+  VOLUME_ACCELERATION_NOT_CONFIRMED:'تسارع الحجم لم يكتمل',
+  TRADE_ACCELERATION_NOT_CONFIRMED:'عدد الصفقات لم يؤكد الحركة بعد',
+  BUY_FLOW_NOT_CONFIRMED:'ضغط الشراء لم يكتمل',
+  BUYER_CANDLE_CLOSES_NOT_CONFIRMED:'إغلاق الشموع لا يؤكد سيطرة المشترين',
+  PRICE_WINDOW_NOT_CONFIRMED:'حركة الساعة لم تدخل نطاق التأكيد',
+  COMPRESSION_NOT_CONFIRMED:'الانكماش لم يكتمل',
+  STRUCTURE_NOT_CONFIRMED:'الهيكل السعري لم يتأكد',
+  BUYING_PRESSURE_NOT_CONFIRMED:'الضغط الشرائي لم يبلغ الحد',
+  SESSION_MOVE_NOT_CONFIRMED:'حركة الجلسة تحتاج تأكيدًا إضافيًا',
+  SCORE_BELOW_ACTIONABLE_THRESHOLD:'الدرجة أقل من حد التنبيه المؤكد',
+  ACTIONABLE_GATE_NOT_MET:'لم تجتز جميع شروط التنبيه المؤكد'
 };
 
 export function rankPreMoveWatchCandidates(body){
@@ -24,14 +35,16 @@ export function rankPreMoveWatchCandidates(body){
   return rows
     .filter(c=>{
       const p=c&&c.pre_move_context;
+      const ds=c&&c.data_status;
       return Boolean(c&&c.watch_only===true&&c.alert_eligible===false&&
-        c.data_status&&c.data_status.candle_data_valid===true&&c.data_status.data_stale!==true&&
-        Number(c.data_quality)>=70&&p&&Number.isFinite(Number(p.score))&&
+        ds&&ds.candle_data_valid===true&&ds.data_stale!==true&&!ds.last_error&&
+        Number(c.data_quality)>=70&&p&&Number.isFinite(Number(p.score))&&Number(p.score)>=58&&
         typeof p.session_return_pct==='number'&&Number.isFinite(p.session_return_pct)&&
-        p.evidence_complete===true&&p.closed_candles_only===true&&
-        p.flow_transition_confirmed===true&&p.price_window_valid===true&&
-        p.structure_confirmed===true&&p.already_moved!==true&&
-        !['ALREADY_MOVED','NO_SETUP'].includes(p.stage));
+        p.session_return_pct>=-1.5&&p.session_return_pct<=8&&
+        Number.isFinite(Number(p.one_hour_return_pct))&&Number(p.one_hour_return_pct)>=-1.25&&Number(p.one_hour_return_pct)<=4.5&&
+        p.evidence_complete===true&&p.closed_candles_only===true&&p.watch_only===true&&
+        p.already_moved!==true&&p.stage==='WATCH_EARLY'&&
+        Array.isArray(c.watch_reason_codes)&&c.watch_reason_codes.length>0);
     })
     .map(c=>{
       const p=c.pre_move_context;
@@ -58,7 +71,9 @@ export function rankPreMoveWatchCandidates(body){
         dataQuality:num(c.data_quality),
         closedCandlesOnly:true,
         watchOnly:true,
-        watchReason:watchReasonMap[c.watch_only_reason]||watchReasonMap.LIQUIDITY_UNVERIFIED
+        watchReason:watchReasonMap[c.watch_only_reason]||watchReasonMap.ACTIONABLE_GATE_NOT_MET,
+        watchReasons:(Array.isArray(c.watch_reason_codes)?c.watch_reason_codes:[])
+          .map(code=>watchReasonMap[code]||String(code)).filter(Boolean).slice(0,5)
       };
     })
     .sort((a,b)=>b.score-a.score||(a.sessionReturn-b.sessionReturn))
