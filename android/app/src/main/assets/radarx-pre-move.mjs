@@ -38,7 +38,7 @@ export function rankPreMoveWatchCandidates(body){
       const ds=c&&c.data_status;
       return Boolean(c&&c.watch_only===true&&c.alert_eligible===false&&
         ds&&ds.candle_data_valid===true&&ds.data_stale!==true&&!ds.last_error&&
-        Number(c.data_quality)>=70&&p&&Number.isFinite(Number(p.score))&&Number(p.score)>=58&&
+        Number(c.data_quality)>=70&&p&&Number.isFinite(Number(p.score))&&Number(p.score)>=45&&
         typeof p.session_return_pct==='number'&&Number.isFinite(p.session_return_pct)&&
         p.session_return_pct>=-1.5&&p.session_return_pct<=8&&
         Number.isFinite(Number(p.one_hour_return_pct))&&Number(p.one_hour_return_pct)>=-1.25&&Number(p.one_hour_return_pct)<=4.5&&
