@@ -102,6 +102,52 @@ jobs:
           if (b.paper_trading !== true || b.real_order_execution !== false) throw new Error('READ_ONLY_POLICY_INVALID');
           NODE
 
+      - name: Verify one live scan from the 20-analyst center on DHDTech
+        timeout-minutes: 4
+        run: |
+          set -euo pipefail
+          URL="$BASE/api/multi-analyst?quote=USDT&limit=10&scan=1&_ts=gha-${GITHUB_SHA}"
+          CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 180 -o "$RUNNER_TEMP/multi-analyst.json" -w "%{http_code}" "$URL" || true)"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::DHDTech 20-analyst scan returned HTTP $CODE"
+            cat "$RUNNER_TEMP/multi-analyst.json" 2>/dev/null || true
+            exit 1
+          fi
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/multi-analyst.json','utf8'));
+          const u=b.universe||{},d=b.diagnostics||{},m=b.meta||{},scan=b.scan||{},monitor=b.monitoring||{};
+          const summary={
+            status:b.status||'ready',
+            analysis_mode:m.analysis_mode,
+            live:m.live,
+            scan,
+            scanned:u.scanned,
+            deep_scan_pool:u.deep_scan_pool,
+            attempted_analyses:d.attempted_analyses,
+            successful_analyses:d.successful_analyses,
+            gate_rejected:d.gate_rejected,
+            failed_analyses:d.failed_analyses,
+            scan_failure_count:d.scan_failure_count||0,
+            candidates:Array.isArray(b.candidates)?b.candidates.length:null,
+            watchlist:Array.isArray(b.watchlist)?b.watchlist.length:null,
+            lab_results:Array.isArray(b.lab_results)?b.lab_results.length:null,
+            error:b.error||d.last_scan_error||monitor.last_error||scan.error||null,
+            last_error:monitor.last_error||null
+          };
+          console.log('MULTI_ANALYST_DHDTECH_LIVE_SCAN '+JSON.stringify(summary));
+          const problems=[];
+          if(m.analysis_mode!=='FORCED_SCAN')problems.push('MULTI_ANALYST_FORCED_SCAN_NOT_CONFIRMED');
+          if(scan.requested!==true||scan.completed!==true||scan.error)problems.push('MULTI_ANALYST_SCAN_NOT_COMPLETED');
+          if(m.live!==true)problems.push('MULTI_ANALYST_NO_VALID_LIVE_DATA');
+          if(m.paper_trading!==true||m.real_order_execution!==false||m.confidence_score!=='UNKNOWN')problems.push('MULTI_ANALYST_READ_ONLY_POLICY_INVALID');
+          if(!(Number(u.scanned)>0))problems.push('MULTI_ANALYST_ZERO_ROWS_SCANNED');
+          if(!(Number(d.attempted_analyses)>0))problems.push('MULTI_ANALYST_LAB_NOT_ENTERED');
+          if(!(Number(d.successful_analyses)>0))problems.push('MULTI_ANALYST_DATA_GATE_HAS_NO_VALID_ROWS');
+          for(const key of ['candidates','watchlist','lab_results'])if(!Array.isArray(b[key]))problems.push('MULTI_ANALYST_RESPONSE_FIELD_MISSING:'+key);
+          if(problems.length)throw new Error(JSON.stringify({problems,summary}));
+          NODE
+
       - name: Start and poll one real Pre-Move market scan on DHDTech
         run: |
           set -euo pipefail
