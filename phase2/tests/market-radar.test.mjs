@@ -519,7 +519,7 @@ test('Pre-Move near misses are surfaced as watch-only rows but never promoted to
   assert.equal(rows[0].pre_move_context.stage,'WATCH_EARLY');
   assert.equal(rows[0].pre_move_context.original_stage,'NO_SETUP');
   assert.ok(rows[0].watch_reason_codes.includes('PRICE_WINDOW_NOT_CONFIRMED'));
-  assert.ok(rows[0].watch_reason_codes.includes('STRUCTURE_NOT_CONFIRMED'));
+  assert.ok(rows[0].watch_reason_codes.includes('BUYING_PRESSURE_NOT_CONFIRMED'));
   assert.equal(rows[0].pre_move_context.actionable,false);
 
   const extended={
