@@ -247,7 +247,7 @@ assert.match(preMovePage,/Pre‑Move Radar/);
 assert.match(preMovePage,/قبل الحركة/);
 assert.match(preMovePage,/04:00/);
 assert.match(preMovePage,/Taker Buy/);
-assert.match(preMovePage,/r\.body\.meta\?\.live!==true/);
+assert.match(preMovePage,/if\(!r\.body\.meta\|\|r\.body\.meta\.live!==true\)/);
 assert.match(preMovePage,/r\.body\.status==='refreshing'/);
 assert.match(preMovePage,/PRE_MOVE_SCAN_WAIT_TIMEOUT/);
 assert.match(client,/const scanParam = scan \? '&scan=1' : '';/);
