@@ -489,8 +489,8 @@ test('Pre-Move composite score uses only normalized 0-100 components, never raw 
     volume_acceleration:1.8,trade_acceleration:2.1,taker_buy_ratio:0.62,
     taker_buy_acceleration:0.08,mean_close_location:0.72
   });
-  const expected=Number((Object.values(scores).reduce((sum,value)=>sum+value,0)/Object.values(scores).length).toFixed(1));
-  assert.equal(base,expected);
+  const expected=Object.values(scores).reduce((sum,value)=>sum+value,0)/Object.values(scores).length;
+  assert.ok(Math.abs(base-expected)<1e-9,'normalized score should equal the mean of normalized components');
   assert.equal(withRawMeasurements,base,'raw ratios must not dilute 0-100 score components');
   assert.ok(base>=70,'a strong group of normalized components should not collapse below 50 due to ratio units');
 });
