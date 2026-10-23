@@ -46,7 +46,7 @@ const limit=document.getElementById('limit');
 const status=document.getElementById('status');
 const cards=document.getElementById('cards');
 let busy=false;
-const CACHE_KEY='radarx.preMove.cache.v1';
+const CACHE_KEY='radarx.preMove.cache.v2';
 const CACHE_TTL_MS=5*60*1000;
 function readCache(){try{const raw=sessionStorage.getItem(CACHE_KEY);if(!raw)return null;const x=JSON.parse(raw);return x&&Number.isFinite(Number(x.savedAt))&&x.body&&(Date.now()-Number(x.savedAt)<CACHE_TTL_MS)?x:null;}catch(e){return null;}}
 function writeCache(body){try{sessionStorage.setItem(CACHE_KEY,JSON.stringify({savedAt:Date.now(),body:body}));}catch(e){}}
@@ -90,22 +90,43 @@ function render(rows,meta){
    '</article>';
  }).join('');
 }
+const waitMs=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function requestPreMoveScan(force,requestedLimit){
+ const deadline=Date.now()+8*60*1000;
+ let forceNext=force;
+ while(Date.now()<deadline){
+   const r=await getPreMoveRadar({quote:'USDT',limit:requestedLimit,scan:forceNext});
+   forceNext=false;
+   if(!r.ok||!r.body)throw new Error(r.body&&r.body.reason||r.body&&r.body.error||('PRE_MOVE_HTTP_'+r.status));
+   if(r.body.status==='refreshing'){
+     status.innerHTML='<b>الفحص مستمر في الخلفية</b> — ننتظر بيانات السوق المغلقة من الخادم، ولن نعرض نتائج قديمة كأنها حية…';
+     await waitMs(1800);
+     continue;
+   }
+   if(r.body.status==='error'){
+     throw new Error([r.body.error,r.body.reason].filter(Boolean).join(': ')||'PRE_MOVE_SCAN_FAILED');
+   }
+   if(r.body.status!=='ready')throw new Error('PRE_MOVE_RESPONSE_STATE_INVALID');
+   if(r.body.meta?.live!==true)throw new Error(r.body.error||'PRE_MOVE_DATA_UNAVAILABLE');
+   return r.body;
+ }
+ throw new Error('PRE_MOVE_SCAN_WAIT_TIMEOUT — لم يكتمل الفحص في الوقت المحدد؛ أعد المحاولة بعد التأكد من اتصال الخادم.');
+}
 async function run(force){
  if(busy)return;
- if(!force){const cached=readCache();if(cached){const rows=rankPreMoveCandidates(cached.body);const s=cached.body.session||{};status.innerHTML='<b>بيانات محفوظة</b> — '+rows.length+' مرشحًا • لم نُعد مسح السوق بعد الرجوع للرادار. اضغط الفحص لتحديث حي.';render(rows,cached.body);return;}}busy=true;scan.disabled=true;scan.textContent='جاري الفحص…';
- status.innerHTML='<b>فحص حي</b> — نبحث عن عملات هادئة بدأ حجمها وتدفقها وهيكلها يتحسن…';
+ if(!force){const cached=readCache();if(cached){const rows=rankPreMoveCandidates(cached.body);status.innerHTML='<b>بيانات محفوظة</b> — '+rows.length+' مرشحًا • هذه ليست نتيجة مسح جديد؛ اضغط الفحص لتحديث السوق.';render(rows,cached.body);return;}}
+ busy=true;scan.disabled=true;scan.textContent='جاري الفحص…';
+ status.innerHTML='<b>فحص حي</b> — نبدأ مسحًا خلفيًا وننتظر بيانات Binance المكتملة…';
  try{
-   const r=await getPreMoveRadar({quote:'USDT',limit:Number(limit.value)||30});
-   if(!r.ok||!r.body)throw new Error(r.body && r.body.error||'PRE_MOVE_RADAR_UNAVAILABLE');
-   if(r.body.meta?.live!==true)throw new Error(r.body.error||'PRE_MOVE_DATA_UNAVAILABLE');
-   writeCache(r.body);
-   const rows=rankPreMoveCandidates(r.body);
-   const s=r.body.session||{};
-   status.innerHTML='<b>تم التحديث</b> — '+rows.length+' مرشحًا • قوة السوق الصباحية '+num(s.positive_breadth_pct)+'% موجبة • متوسط الجلسة '+pct(s.market_median_return_pct)+' • BTC '+pct(s.btc_return_pct);
-   render(rows,r.body);
+   const body=await requestPreMoveScan(force,Number(limit.value)||30);
+   writeCache(body);
+   const rows=rankPreMoveCandidates(body);
+   const s=body.session||{};
+   status.innerHTML='<b>تم التحقق من البيانات الحية</b> — '+rows.length+' إعدادات مبكرة مكتملة الأدلة • قوة السوق الصباحية '+num(s.positive_breadth_pct)+'% موجبة • متوسط الجلسة '+pct(s.market_median_return_pct)+' • BTC '+pct(s.btc_return_pct);
+   render(rows,body);
  }catch(e){
-   status.innerHTML='<b>تعذر الفحص</b> — '+String(e.message||e)+' • تحقق من الإنترنت ثم أعد المحاولة.';
-   cards.innerHTML='<div class="empty">لم تصل بيانات صالحة من Backend.</div>';
+   status.innerHTML='<b>تعذر الفحص</b> — '+String(e.message||e)+' • لن نعرض بيانات ناقصة على أنها فرصة.';
+   cards.innerHTML='<div class="empty">لم تكتمل قراءة حية صالحة من Backend. لا تدخل صفقة اعتمادًا على فحص لم ينجح.</div>';
  }finally{busy=false;scan.disabled=false;scan.textContent='افحص من قد يستيقظ مبكرًا';}
 }
 scan.addEventListener('click',()=>run(true));
