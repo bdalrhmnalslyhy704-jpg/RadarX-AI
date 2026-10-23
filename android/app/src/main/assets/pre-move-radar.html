@@ -66,7 +66,7 @@ function render(rows,meta,watchRows=[]){
       '<div class="box"><span>جودة البيانات</span><b>'+num(p.dataQuality)+'%</b><small>شموع مغلقة فقط</small></div>'+
       '<div class="box"><span>جودة السيولة</span><b>'+num(p.liquidity)+'</b><small>لا تكفي لتأكيد تنبيه</small></div>'+
     '</div>'+
-    '<div class="reasons"><span class="reason">'+p.watchReason+'</span></div>'+
+    '<div class="reasons">'+(p.watchReasons||[p.watchReason]).map(r=>'<span class="reason">'+r+'</span>').join('')+'</div>'+
     '<div class="note">مراقبة فقط وليست توصية دخول ولا تنبيهًا مؤكدًا؛ انتظر تأكيد السيولة وبقاء إشارات التدفق.</div>'+
    '</article>'
  ).join('');
