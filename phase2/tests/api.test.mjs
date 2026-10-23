@@ -570,6 +570,9 @@ test('TEST_FIXTURE: cold multi-analyst cache returns explicit WARMING without wa
     assert.equal(body.meta.specialist_count,19);
     assert.equal(body.scan.completed,false);
     assert.equal(body.scan.error,'SCAN_STARTED');
+    assert.equal(body.scan.last_error,null);
+    assert.equal(body.monitoring.last_error,null);
+    assert.equal(body.diagnostics.scan_failure_count,0);
     assert.deepEqual(body.candidates,[]);
     assert.deepEqual(body.watchlist,[]);
     assert.equal(scanCalls,1);
@@ -585,6 +588,41 @@ test('TEST_FIXTURE: cold multi-analyst cache returns explicit WARMING without wa
     resolveScan?.({});
     multiAnalystRadar.busy=null;
     await new Promise(resolve=>server.close(resolve));
+  }
+});
+
+
+test('TEST_FIXTURE: forced multi-analyst scan failures expose the actual error instead of zeroed WARMING diagnostics',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-multi-analyst-scan-failure-')),store=await new DurableStore({dir}).init();
+  const multiAnalystRadar={
+    config:{quote:'USDT',returnLimit:1,minQuoteVolume24h:300000,universeRefreshMs:1800000,deepConcurrency:3,deepKlines:220,continuousIntervalMs:60000},
+    running:true,busy:null,
+    monitorStats:{scan_count:2,last_scan_at:'2026-10-23T20:00:00.000Z',last_error:null,next_scan_at:null,last_scan_successful:true},
+    getCached(){return null;},
+    async scan(){throw new Error('BINANCE_HTTP_451');},
+    radarReviewQueueSnapshot(){return{pending_count:0,max_queue:200};}
+  };
+  const config={auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}};
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),multiAnalystRadar});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/multi-analyst?quote=USDT&limit=1&scan=1&_ts=forced-failure-test');
+    assert.equal(response.status,200);
+    const body=await response.json();
+    assert.equal(body.status,'not_ready');
+    assert.equal(body.error,'BINANCE_HTTP_451');
+    assert.equal(body.scan.completed,false);
+    assert.equal(body.scan.error,'BINANCE_HTTP_451');
+    assert.equal(body.meta.analysis_mode,'SCAN_FAILED');
+    assert.equal(body.monitoring.last_error,'BINANCE_HTTP_451');
+    assert.equal(body.monitoring.last_scan_successful,false);
+    assert.equal(body.diagnostics.scan_failure_count,1);
+    assert.equal(body.diagnostics.last_scan_error,'BINANCE_HTTP_451');
+    assert.match(body.diagnostics.scan_errors.at(-1).error,/BINANCE_HTTP_451/);
+  }finally{
+    await new Promise(resolve=>server.close(resolve));
+    await rm(dir,{recursive:true,force:true});
   }
 });
 
