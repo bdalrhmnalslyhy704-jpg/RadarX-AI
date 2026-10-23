@@ -251,6 +251,7 @@ assert.match(preMovePage,/تسارع الحجم/);
 assert.match(preMovePage,/القوة النسبية/);
 assert.match(preMovePage,/ضغط الحيتان/);
 assert.match(preMovePage,/لا يوجد توقع مضمون/);
+assert.match(preMovePage,/لا توجد الآن عملات مؤهلة لمرحلة ما قبل الحركة/);
 assert.match(preMoveEngine,/rankPreMoveCandidates/);
 assert.match(preMoveEngine,/ALREADY_MOVED/);
 assert.match(preMoveEngine,/VOLUME_ACCELERATING/);
