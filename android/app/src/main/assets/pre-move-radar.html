@@ -56,8 +56,8 @@ function num(n,d='—'){return n!==null&&n!==undefined&&!(typeof n==='string'&&n
 function meter(label,v){const x=Math.max(0,Math.min(100,Number(v)||0));return '<div class="meter"><span>'+label+'</span><b>'+x.toFixed(0)+'</b><div class="track"><i style="width:'+x+'%"></i></div></div>'}
 function render(rows,meta){
  if(!rows.length){
-   const u=meta?.universe||{};
-   const validData=Number(u.valid_data??u.scanned??0)>0;
+   const u=meta&&meta.universe?meta.universe:{};
+   const validData=Number(u.valid_data!=null?u.valid_data:(u.scanned!=null?u.scanned:0))>0;
    const incomplete=Number(u.evidence_incomplete_excluded||0)>0;
    const message=!validData
      ? 'لم تصل بيانات سوق صالحة كافية من Backend.'
@@ -107,7 +107,7 @@ async function requestPreMoveScan(force,requestedLimit){
      throw new Error([r.body.error,r.body.reason].filter(Boolean).join(': ')||'PRE_MOVE_SCAN_FAILED');
    }
    if(r.body.status!=='ready')throw new Error('PRE_MOVE_RESPONSE_STATE_INVALID');
-   if(r.body.meta?.live!==true)throw new Error(r.body.error||'PRE_MOVE_DATA_UNAVAILABLE');
+   if(!r.body.meta||r.body.meta.live!==true)throw new Error(r.body.error||'PRE_MOVE_DATA_UNAVAILABLE');
    return r.body;
  }
  throw new Error('PRE_MOVE_SCAN_WAIT_TIMEOUT — لم يكتمل الفحص في الوقت المحدد؛ أعد المحاولة بعد التأكد من اتصال الخادم.');
