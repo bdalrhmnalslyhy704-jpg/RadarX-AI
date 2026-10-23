@@ -1522,6 +1522,31 @@ export class MultiAnalystEngine {
         market_context:{regime:marketRegime({marketMedian24h,breadthPct}),median_24h_change_pct:marketMedian24h,positive_breadth_pct:breadthPct},
         summary:{strong_candidates:strongCount,candidates:live.filter(x=>x.verdict==='CANDIDATE').length,qualified:qualified.length,watch:live.filter(x=>x.verdict==='WATCH').length,rejected:live.filter(x=>x.verdict==='REJECT').length},
         candidates,watchlist,
+        // Keep rejected deep-scan rows visible for audit so a zero-candidate cycle
+        // still explains what was actually tested and why each row failed to qualify.
+        lab_results:live.filter(x=>x.verdict==='REJECT').slice(0,8).map(x=>({
+          symbol:x.symbol,
+          rank:x.rank,
+          last_price:x.last_price,
+          price_change_24h:x.price_change_24h,
+          quote_volume_24h:x.quote_volume_24h,
+          liquidity_quality:x.liquidity_quality,
+          data_quality:x.data_quality,
+          verdict:'REJECT',
+          direction:x.direction,
+          final_score:x.final_score,
+          timing:x.final_judge?.timing??'NO_SETUP',
+          early_score:x.intelligence?.early_score??x.final_judge?.early_score??null,
+          analyst_agreement:x.intelligence?.analyst_agreement??x.final_judge?.agreement??null,
+          evidence_coverage:x.final_judge?.evidence_coverage??null,
+          hard_reasons:Array.isArray(x.final_judge?.hardReasons)?x.final_judge.hardReasons.slice(0,8):[],
+          reason_codes:Array.isArray(x.reason_codes)?x.reason_codes.slice(0,8):[],
+          data_status:{
+            data_valid:x.data_status?.data_valid===true,
+            data_stale:x.data_status?.data_stale===true,
+            last_error:x.data_status?.last_error??null
+          }
+        })),
         pipeline:['Broad Discovery','Early-Opportunity Gate','Data Gate','19 Specialist Analysts','Chief Analyst','Sniper Freshness Gate'],
         diagnostics:{
           scan_plan:{discovery:selected.length,deep:deepSelected.length,core_timeframes:['4h','1h','15m'],optional_fast_timeframe:null,shared_rest_broker:true},
