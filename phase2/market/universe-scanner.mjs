@@ -738,7 +738,15 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
   const sessionReturn=Number.isFinite(current)&&sessionOpen>0?(current-sessionOpen)/sessionOpen*100:null;
   const sessionPosition=Number.isFinite(current)&&Number.isFinite(sessionLow)&&sessionRange>0?(current-sessionLow)/sessionRange*100:null;
 
-  const early4=session.slice(0,4), late4=session.slice(-4), base8=session.slice(-12,-4);
+  // Before three hours have elapsed in the Yemen session, compare the newest closed
+  // candles with the most recent closed pre-session bars instead of waiting for a full
+  // in-session baseline. Never compare an overlapping recent window with itself.
+  const recentCount=Math.min(4,Math.max(2,Math.floor(session.length/2)));
+  const late4=session.slice(-recentCount);
+  const priorSession=session.slice(0,Math.max(0,session.length-late4.length));
+  const preSession=closed15.filter(c=>Number(c.closeTime)<sessionStartMs);
+  const early4=priorSession.slice(0,4);
+  const base8=(priorSession.length>=4?priorSession:preSession).slice(-8);
   const avgVol=rows=>rows.length?mean(rows.map(x=>Number(x.volume))):null;
   const earlyVol=avgVol(early4), lateVol=avgVol(late4), baseVol=avgVol(base8);
   const volumeAccel=Number.isFinite(lateVol)&&Number.isFinite(baseVol)&&baseVol>0?lateVol/baseVol:null;
@@ -788,11 +796,31 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
       : resistanceDistancePct<=9?65
       : 42
     : 48;
-  const squeeze=Number(bottomSnapshot?.metrics?.compression);
-  const structure=Number(bottomSnapshot?.metrics?.structure);
-  const buyPressure=Number(bottomSnapshot?.metrics?.buying_pressure);
-  const whalePressure=Number(bottomSnapshot?.metrics?.whale_pressure);
-  const dataQuality=Number(ticker?.dataQuality);
+  const optionalMetric=value=>{
+    if(value===null||value===undefined||(typeof value==='string'&&value.trim()===''))return null;
+    const n=Number(value);
+    return Number.isFinite(n)?n:null;
+  };
+  const squeeze=optionalMetric(bottomSnapshot?.metrics?.compression);
+  const structure=optionalMetric(bottomSnapshot?.metrics?.structure);
+  const buyPressure=optionalMetric(bottomSnapshot?.metrics?.buying_pressure);
+  const whalePressure=optionalMetric(bottomSnapshot?.metrics?.whale_pressure);
+  const dataQuality=optionalMetric(ticker?.dataQuality);
+  const coreEvidence={
+    volume_acceleration:volumeAccel,
+    taker_buy_ratio:lateBuy,
+    taker_buy_acceleration:takerAcceleration,
+    compression:squeeze,
+    structure,
+    buying_pressure:buyPressure
+  };
+  const missingCoreEvidence=Object.entries(coreEvidence)
+    .filter(([,value])=>!Number.isFinite(value))
+    .map(([name])=>name);
+  if(session.length<2)missingCoreEvidence.push('two_closed_session_candles');
+  if(late4.length<2)missingCoreEvidence.push('two_recent_closed_candles');
+  if(base8.length<4)missingCoreEvidence.push('four_baseline_closed_candles');
+  const evidenceComplete=missingCoreEvidence.length===0;
 
   const preMoveScore=avgDefined([
     calmScore,
@@ -830,6 +858,11 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
     window:'04:00 local → latest closed candle',
     session_start:new Date(sessionStartMs).toISOString(),
     session_close:Number.isFinite(Number(session.at(-1)?.closeTime))?Number(session.at(-1).closeTime):null,
+    session_candle_count:session.length,
+    recent_candle_count:late4.length,
+    baseline_candle_count:base8.length,
+    evidence_complete:evidenceComplete,
+    missing_evidence:[...new Set(missingCoreEvidence)],
     current_price:Number.isFinite(current)?current:null,
     session_open:Number.isFinite(sessionOpen)?sessionOpen:null,
     session_high:Number.isFinite(sessionHigh)?sessionHigh:null,
@@ -1756,8 +1789,10 @@ export class MarketUniverseScanner {
     }).sort((a,b)=>Number(b.pre_move_context.score)-Number(a.pre_move_context.score)||Number(a.pre_move_context.session_return_pct)-Number(b.pre_move_context.session_return_pct));
     // Exclude overextended symbols before applying the final result limit. Filtering only
     // in the client can otherwise allow the backend's top-N list to be filled with late movers.
-    const actionable=enriched.filter(x=>x.pre_move_context.already_moved!==true&&
+    const actionable=enriched.filter(x=>x.pre_move_context.evidence_complete===true&&
+      x.pre_move_context.already_moved!==true&&
       !['ALREADY_MOVED','NO_SETUP'].includes(x.pre_move_context.stage));
+    const evidenceIncompleteExcluded=enriched.filter(x=>x.pre_move_context.evidence_complete!==true).length;
     const extendedExcluded=enriched.filter(x=>x.pre_move_context.already_moved===true||x.pre_move_context.stage==='ALREADY_MOVED').length;
     const noSetupExcluded=enriched.filter(x=>x.pre_move_context.stage==='NO_SETUP').length;
     const returned=actionable.slice(0,Math.min(10,normalizedLimit));
@@ -1766,7 +1801,7 @@ export class MarketUniverseScanner {
       as_of:new Date(this.clock()).toISOString(),
       source:'Binance Public REST',
       session:{timezone:'Asia/Aden',window:'04:00 local → latest closed candle',market_median_return_pct:marketMedianReturn,btc_return_pct:Number.isFinite(btcReturn)?btcReturn:null,positive_breadth_pct:returns.length?positiveCount/returns.length*100:null},
-      universe:{requested:normalizedLimit,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,elapsed_ms:Math.max(0,this.clock()-startedAt)},
+      universe:{requested:normalizedLimit,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,evidence_incomplete_excluded:evidenceIncompleteExcluded,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,elapsed_ms:Math.max(0,this.clock()-startedAt)},
       candidates:returned
     };
   }
