@@ -105,7 +105,7 @@ jobs:
       - name: Start and poll one real Pre-Move market scan on DHDTech
         run: |
           set -euo pipefail
-          URL="$BASE/api/pre-move-radar?quote=USDT&limit=30"
+          URL="$BASE/api/pre-move-radar?quote=USDT&limit=50"
           READY=false
           for cycle in 1 2; do
             START_CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$RUNNER_TEMP/pre-move-start.json" -w "%{http_code}" "$URL&scan=1" || true)"
@@ -157,6 +157,11 @@ jobs:
           if (u.elapsed_ms>45000) throw new Error('PRE_MOVE_SCAN_LATENCY_OVER_45_SECONDS:'+u.elapsed_ms);
           if (!Array.isArray(b.candidates)) throw new Error('PRE_MOVE_CANDIDATES_MISSING');
           if (!Array.isArray(b.watch_candidates)) throw new Error('PRE_MOVE_WATCH_CANDIDATES_MISSING');
+          if (!Array.isArray(b.near_miss_audit)) throw new Error('PRE_MOVE_NEAR_MISS_AUDIT_MISSING');
+          for (const x of b.near_miss_audit) {
+            if (x?.diagnostic_only !== true || x?.watch_only !== true || x?.alert_eligible !== false || !Array.isArray(x.blocker_codes) || x.blocker_codes.length < 1)
+              throw new Error('PRE_MOVE_DIAGNOSTIC_AUDIT_GATE:'+String(x?.symbol||'UNKNOWN'));
+          }
           for (const x of b.candidates) {
             const p=x?.pre_move_context;
             if (x?.data_status?.data_valid !== true || typeof x.data_quality!=='number' || !Number.isFinite(x.data_quality) || x.data_quality<70 || typeof x.liquidity_quality!=='number' || !Number.isFinite(x.liquidity_quality) || x.liquidity_quality<60) throw new Error('PRE_MOVE_DATA_QUALITY_GATE:'+String(x?.symbol||'UNKNOWN'));
@@ -192,6 +197,7 @@ jobs:
               evidence_incomplete_excluded:u.evidence_incomplete_excluded,extended_excluded:u.extended_excluded,no_setup_excluded:u.no_setup_excluded},
             candidates:b.candidates.map(x=>({symbol:x.symbol,score:x.pre_move_context.score,stage:x.pre_move_context.stage,session_return_pct:x.pre_move_context.session_return_pct,one_hour_return_pct:x.pre_move_context.one_hour_return_pct,volume_acceleration:x.pre_move_context.volume_acceleration,trade_acceleration:x.pre_move_context.trade_acceleration,taker_buy_ratio:x.pre_move_context.taker_buy_ratio,taker_buy_acceleration:x.pre_move_context.taker_buy_acceleration,mean_close_location:x.pre_move_context.mean_close_location,flow_transition_confirmed:x.pre_move_context.flow_transition_confirmed,price_window_valid:x.pre_move_context.price_window_valid,structure_confirmed:x.pre_move_context.structure_confirmed,liquidity_quality:x.liquidity_quality,data_quality:x.data_quality})),
             watch_candidates:b.watch_candidates.map(x=>({symbol:x.symbol,score:x.pre_move_context.score,stage:x.pre_move_context.stage,original_stage:x.pre_move_context.original_stage,session_return_pct:x.pre_move_context.session_return_pct,one_hour_return_pct:x.pre_move_context.one_hour_return_pct,volume_acceleration:x.pre_move_context.volume_acceleration,trade_acceleration:x.pre_move_context.trade_acceleration,taker_buy_ratio:x.pre_move_context.taker_buy_ratio,watch_reason_codes:x.watch_reason_codes,data_quality:x.data_quality,liquidity_quality:x.liquidity_quality,watch_only:x.watch_only,alert_eligible:x.alert_eligible})),
+            near_miss_audit:b.near_miss_audit,
             paper_trading:b.meta.paper_trading,real_order_execution:b.meta.real_order_execution
           }));
           NODE
