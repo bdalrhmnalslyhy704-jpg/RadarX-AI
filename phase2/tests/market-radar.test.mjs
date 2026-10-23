@@ -537,6 +537,22 @@ test('Pre-Move target plan exposes ATR risk, invalidation and bounded targets wi
   assert.equal(plan.closed_candles_only,true);
   assert.equal(plan.paper_only,true);
   assert.equal(plan.not_guaranteed,true);
+
+  // When resistance is less than 1R above entry, target 1 must be an explicitly
+  // conditional projection beyond resistance rather than a target below entry.
+  const nearEntry=candles.at(-1).close+0.1;
+  const nearResistancePlan=buildPreMoveTargetPlan(
+    candles,
+    {lastPrice:nearEntry,highPrice24h:nearEntry+0.2},
+    Date.now()
+  );
+  assert.equal(nearResistancePlan.target_1_requires_resistance_breakout,true);
+  assert.ok(nearResistancePlan.target_1_price>nearResistancePlan.reference_price);
+  assert.ok(nearResistancePlan.target_1_price>nearResistancePlan.resistance_price);
+  assert.ok(nearResistancePlan.target_1_rr>=1);
+  assert.ok(nearResistancePlan.target_2_price>nearResistancePlan.target_1_price);
+  assert.ok(nearResistancePlan.target_2_rr>=1.5);
+  assert.equal(nearResistancePlan.reward_risk_ok,true);
 });
 
 // PRE_MOVE_RADAR_CI_TRIGGER
