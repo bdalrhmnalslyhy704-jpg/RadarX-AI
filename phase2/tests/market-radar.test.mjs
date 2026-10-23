@@ -1,7 +1,7 @@
 /* Bottom Radar v2 regression coverage: live flow, squeeze, structure, whale heuristic. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {MarketUniverseScanner, buildSpotUniverse, rankTickerRows, rankBottomTickerRows, boundedMap, normalizeRadarLimit, normalizeTickerRow, buildBottomMarketContext, buildPreMoveContext, rankPreMoveTickerRows} from '../market/universe-scanner.mjs';
+import {MarketUniverseScanner, buildSpotUniverse, rankTickerRows, rankBottomTickerRows, boundedMap, normalizeRadarLimit, normalizeTickerRow, buildBottomMarketContext, buildPreMoveContext, rankPreMoveTickerRows, buildPreMoveWatchCandidates} from '../market/universe-scanner.mjs';
 
 function candle(t, close=100, tfMs=900000) {
   return {
@@ -494,6 +494,44 @@ test('Pre-Move deep scan keeps a low-volume symbol non-actionable and records th
   assert.equal(result.data_status.volume_gate_pass,false);
   assert.equal(result.data_status.data_valid,false,'broad discovery must not weaken the minimum-volume gate for alert-eligible results');
   assert.ok(result.reason_codes.includes('BELOW_MIN_QUOTE_VOLUME'));
+});
+
+test('Pre-Move near misses are surfaced as watch-only rows but never promoted to actionable signals',()=>{
+  const base={
+    symbol:'EARLYUSDT',last_price:1.01,price_change_24h:1.2,quote_volume_24h:1_200_000,
+    liquidity_quality:82,data_quality:91,risk_flags:[],
+    data_status:{candle_data_valid:true,data_stale:false,data_valid:true,volume_gate_pass:true,last_error:null},
+    pre_move_context:{
+      score:65,evidence_complete:true,closed_candles_only:true,session_return_pct:2.1,
+      one_hour_return_pct:0.1,volume_acceleration:1.3,trade_acceleration:1.1,
+      taker_buy_ratio:0.54,taker_buy_acceleration:0.02,mean_close_location:0.56,
+      components:{squeeze:70,structure:65,buying_pressure:50},
+      flow_transition_confirmed:true,price_window_valid:false,structure_confirmed:false,
+      already_moved:false,stage:'NO_SETUP',reasons:['VOLUME_ACCELERATING']
+    }
+  };
+  const rows=buildPreMoveWatchCandidates([base],{
+    minQuoteVolume24h:750000,minLiquidityQuality:60,minDataQuality:70,minScore:58
+  });
+  assert.equal(rows.length,1);
+  assert.equal(rows[0].watch_only,true);
+  assert.equal(rows[0].alert_eligible,false);
+  assert.equal(rows[0].pre_move_context.stage,'WATCH_EARLY');
+  assert.equal(rows[0].pre_move_context.original_stage,'NO_SETUP');
+  assert.ok(rows[0].watch_reason_codes.includes('PRICE_WINDOW_NOT_CONFIRMED'));
+  assert.ok(rows[0].watch_reason_codes.includes('BUYING_PRESSURE_NOT_CONFIRMED'));
+  assert.equal(rows[0].pre_move_context.actionable,false);
+
+  const extended={
+    ...base,symbol:'LATEUSDT',
+    pre_move_context:{...base.pre_move_context,already_moved:true,stage:'ALREADY_MOVED'}
+  };
+  const stale={
+    ...base,symbol:'STALEUSDT',
+    data_status:{...base.data_status,candle_data_valid:false,data_stale:true}
+  };
+  const rejected=buildPreMoveWatchCandidates([extended,stale],{});
+  assert.equal(rejected.length,0,'late movers and stale candles must not leak into the early watch list');
 });
 
 test('Pre-Move scan removes already-extended coins before limiting actionable results',async()=>{

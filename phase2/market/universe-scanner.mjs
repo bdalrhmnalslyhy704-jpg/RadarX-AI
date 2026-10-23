@@ -981,6 +981,112 @@ export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_
   for(let i=0;i<rotateCount;i++)rotatingRows.push(rotating[(offset+i)%rotating.length]);
   return [...pinned,...rotatingRows].slice(0,take);
 }
+
+/**
+ * Builds non-notifying early-setup observations from fresh, closed-candle evidence.
+ * These rows never qualify as actionable Pre-Move candidates by themselves; the
+ * strict candidate path above remains unchanged. The purpose is to retain useful
+ * near-misses for the UI without converting them into phone alerts.
+ */
+export function buildPreMoveWatchCandidates(rows,{
+  minQuoteVolume24h=750000,
+  minLiquidityQuality=60,
+  minDataQuality=70,
+  minScore=58
+}={}) {
+  const out=[];
+  const hardRisks=new Set([
+    'ALREADY_EXTENDED','HIGH_RISK_PUMP','HIGH_RISK_DUMP','RECENT_FAKEOUT',
+    'STALE_DATA','DATA_STALE','DATA_GAP','FUTURE_DATA','WIDE_SPREAD',
+    'ORDERBOOK_UNAVAILABLE','HISTORICAL_FOLLOWTHROUGH_WEAK'
+  ]);
+  for(const x of (Array.isArray(rows)?rows:[])) {
+    const p=x?.pre_move_context||{};
+    const ds=x?.data_status||{};
+    const quality=Number(x?.data_quality);
+    const score=Number(p.score);
+    const sessionReturn=Number(p.session_return_pct);
+    const oneHourReturn=Number(p.one_hour_return_pct);
+    const dailyChange=Number(x?.price_change_24h);
+    const volume=Number(p.volume_acceleration);
+    const trades=Number(p.trade_acceleration);
+    const taker=Number(p.taker_buy_ratio);
+    const takerDelta=Number(p.taker_buy_acceleration);
+    const closeLocation=Number(p.mean_close_location);
+    const squeeze=Number(p.components?.squeeze);
+    const structure=Number(p.components?.structure);
+    const buying=Number(p.components?.buying_pressure);
+    const coreChecks=[
+      volume>=1.12,
+      trades>=1.05,
+      taker>=0.53&&takerDelta>=0.01,
+      closeLocation>=0.54,
+      oneHourReturn>=0.15&&oneHourReturn<=4.5
+    ];
+    const structureChecks=[squeeze>=55,structure>=60,buying>=60];
+    const riskFlags=Array.isArray(x?.risk_flags)?x.risk_flags.map(v=>String(v).toUpperCase()):[];
+    if(ds.candle_data_valid!==true||ds.data_stale===true||ds.last_error||
+       !Number.isFinite(quality)||quality<minDataQuality||
+       p.evidence_complete!==true||p.closed_candles_only!==true||
+       p.already_moved===true||p.stage==='ALREADY_MOVED'||
+       !Number.isFinite(score)||score<minScore||
+       !Number.isFinite(sessionReturn)||sessionReturn< -1.5||sessionReturn>8||
+       !Number.isFinite(oneHourReturn)||oneHourReturn< -1.25||oneHourReturn>4.5||
+       !Number.isFinite(dailyChange)||Math.abs(dailyChange)>=20||
+       coreChecks.filter(Boolean).length<3||
+       structureChecks.filter(Boolean).length<1||
+       riskFlags.some(flag=>hardRisks.has(flag))) continue;
+
+    const blockers=[];
+    if(ds.data_valid!==true) {
+      if(ds.volume_gate_pass!==true||Number(x?.quote_volume_24h)<minQuoteVolume24h)
+        blockers.push('BELOW_MIN_QUOTE_VOLUME');
+      if(!Number.isFinite(Number(x?.liquidity_quality))||Number(x.liquidity_quality)<minLiquidityQuality)
+        blockers.push('LOW_LIQUIDITY');
+      if(!blockers.some(v=>['BELOW_MIN_QUOTE_VOLUME','LOW_LIQUIDITY'].includes(v)))
+        blockers.push('LIQUIDITY_UNVERIFIED');
+    }
+    if(p.flow_transition_confirmed!==true) {
+      if(!(volume>=1.12))blockers.push('VOLUME_ACCELERATION_NOT_CONFIRMED');
+      if(!(trades>=1.05))blockers.push('TRADE_ACCELERATION_NOT_CONFIRMED');
+      if(!(taker>=0.53&&takerDelta>=0.01))blockers.push('BUY_FLOW_NOT_CONFIRMED');
+      if(!(closeLocation>=0.54))blockers.push('BUYER_CANDLE_CLOSES_NOT_CONFIRMED');
+      blockers.push('BUY_FLOW_NOT_CONFIRMED');
+    }
+    if(p.price_window_valid!==true)blockers.push('PRICE_WINDOW_NOT_CONFIRMED');
+    if(p.structure_confirmed!==true) {
+      if(!(squeeze>=55))blockers.push('COMPRESSION_NOT_CONFIRMED');
+      if(!(structure>=60))blockers.push('STRUCTURE_NOT_CONFIRMED');
+      if(!(buying>=60))blockers.push('BUYING_PRESSURE_NOT_CONFIRMED');
+    }
+    if(sessionReturn<0||sessionReturn>6)blockers.push('SESSION_MOVE_NOT_CONFIRMED');
+    if(score<62)blockers.push('SCORE_BELOW_ACTIONABLE_THRESHOLD');
+    const watchReasons=[...new Set(blockers.length?blockers:['ACTIONABLE_GATE_NOT_MET'])];
+    const cleanSymbol=String(x?.symbol||'').trim().toUpperCase();
+    if(!cleanSymbol)continue;
+    out.push({
+      ...x,
+      pre_move_context:{
+        ...p,
+        original_stage:p.stage||'NO_SETUP',
+        stage:'WATCH_EARLY',
+        watch_only:true,
+        actionable:false,
+        watch_reason_codes:watchReasons
+      },
+      watch_only:true,
+      alert_eligible:false,
+      watch_only_reason:watchReasons[0],
+      watch_reason_codes:watchReasons
+    });
+  }
+  return out.sort((a,b)=>
+    Number(b.pre_move_context?.score)-Number(a.pre_move_context?.score)||
+    Number(a.pre_move_context?.session_return_pct)-Number(b.pre_move_context?.session_return_pct)||
+    String(a.symbol).localeCompare(String(b.symbol))
+  );
+}
+
 export function buildHistoricalFollowThrough(candles,now=Date.now(),{
   matchThreshold=68,
   maxSamples=8,
@@ -1921,7 +2027,7 @@ export class MarketUniverseScanner {
     // This screen uses only the timeframes needed for early-flow evidence (1h + 15m)
     // and the order book; it does not run the unrelated general 20-strategy pipeline.
     // A rotating second half broadens coverage without repeatedly deep-scanning only the same top symbols.
-    const discoveryLimit=20;
+    const discoveryLimit=Math.max(20,normalizedLimit);
     const rotationCycle=Math.max(0,Math.trunc(Number(this._preMoveRotationCycle)||0));
     this._preMoveRotationCycle=rotationCycle+1;
     const rotatingWidth=Math.max(1,discoveryLimit-Math.ceil(discoveryLimit/2));
@@ -1931,7 +2037,7 @@ export class MarketUniverseScanner {
       limit:discoveryLimit,
       rotationOffset
     });
-    const preMoveConcurrency=16; // bounded parallelism leaves margin under the live scan-latency gate.
+    const preMoveConcurrency=24; // bounded concurrency supports the UI-selected 20–50 symbol scan under the latency gate.
     const scanned=await boundedMap(
       discovery,
       preMoveConcurrency,
@@ -1989,22 +2095,11 @@ export class MarketUniverseScanner {
       x.pre_move_context.flow_transition_confirmed===true&&x.pre_move_context.price_window_valid===true&&
       x.pre_move_context.structure_confirmed===true&&x.pre_move_context.already_moved!==true&&
       !['ALREADY_MOVED','NO_SETUP'].includes(x.pre_move_context.stage));
-    const watchCandidates=enriched.filter(x=>x.data_status?.data_valid!==true&&
-      x.data_status?.candle_data_valid===true&&Number(x.data_quality)>=this.config.minDataQuality&&
-      x.pre_move_context.evidence_complete===true&&
-      x.pre_move_context.flow_transition_confirmed===true&&x.pre_move_context.price_window_valid===true&&
-      x.pre_move_context.structure_confirmed===true&&x.pre_move_context.already_moved!==true&&
-      !['ALREADY_MOVED','NO_SETUP'].includes(x.pre_move_context.stage)&&
-      (Number(x.quote_volume_24h)<this.config.minQuoteVolume24h||
-       Number(x.liquidity_quality)<this.config.minLiquidityQuality||
-       x.data_status?.volume_gate_pass!==true)
-    ).map(x=>({
-      ...x,
-      watch_only:true,
-      watch_only_reason:Number(x.quote_volume_24h)<this.config.minQuoteVolume24h?'BELOW_MIN_QUOTE_VOLUME':
-        Number(x.liquidity_quality)<this.config.minLiquidityQuality?'LOW_LIQUIDITY':'LIQUIDITY_UNVERIFIED',
-      alert_eligible:false
-    }));
+    const watchCandidates=buildPreMoveWatchCandidates(enriched,{
+      minQuoteVolume24h:this.config.minQuoteVolume24h,
+      minLiquidityQuality:this.config.minLiquidityQuality,
+      minDataQuality:this.config.minDataQuality
+    });
     const evidenceIncompleteExcluded=observed.filter(x=>x.pre_move_context.evidence_complete!==true).length;
     const extendedExcluded=enriched.filter(x=>x.pre_move_context.already_moved===true||x.pre_move_context.stage==='ALREADY_MOVED').length;
     const noSetupExcluded=enriched.filter(x=>x.pre_move_context.stage==='NO_SETUP').length;
