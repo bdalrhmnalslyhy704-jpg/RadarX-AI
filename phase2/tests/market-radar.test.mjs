@@ -421,6 +421,7 @@ test('Pre-Move Radar detects quiet early acceleration instead of chasing large 2
   assert.ok(Number.isFinite(ctx.volume_acceleration));
   assert.ok(Number.isFinite(ctx.taker_buy_acceleration));
   assert.equal(ctx.closed_candles_only,true);
+  assert.equal(ctx.evidence_complete,true,'a candidate with full recent flow, baseline and core microstructure metrics should have complete evidence');
   assert.equal(ctx.timezone,'Asia/Aden');
   assert.ok(ctx.session_return_pct<=6);
   assert.ok(ctx.reasons.includes('NOT_EXTENDED'));
@@ -435,6 +436,15 @@ test('Pre-Move Radar detects quiet early acceleration instead of chasing large 2
   const strictCtx=buildPreMoveContext({'15m':[...b,unflagged]},lowChange,now,bottom);
   const lastExplicitlyClosed=b.filter(x=>x.closeTime<=now).at(-1);
   assert.equal(strictCtx.session_close,lastExplicitlyClosed.closeTime,'a candle with no explicit closed=true flag must not enter session metrics');
+
+  const missingCore=buildPreMoveContext({'15m':b},lowChange,now,{
+    last_rise:{high:106},metrics:{compression:null,structure:null,buying_pressure:null,whale_pressure:null}
+  });
+  assert.equal(missingCore.evidence_complete,false,'missing indicators must not be silently treated as numeric zero');
+  assert.ok(missingCore.missing_evidence.includes('compression'));
+  assert.ok(missingCore.missing_evidence.includes('structure'));
+  assert.ok(missingCore.missing_evidence.includes('buying_pressure'));
+  assert.equal(missingCore.components.buying_pressure,null);
 });
 
 // PRE_MOVE_RADAR_CI_TRIGGER
