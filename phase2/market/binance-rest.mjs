@@ -46,6 +46,8 @@ const SHARED = {
 const SHARED_MAX_REQUESTS_PER_MINUTE = 600;
 const SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE = 4000;
 const SHARED_MIN_INTERVAL_MS = 100;
+// Long exchange cooldowns must defer a scan, not block its busy latch for hours.
+const MAX_INLINE_RATE_LIMIT_WAIT_MS = 1500;
 // Cache recent public Klines long enough for overlapping radars to reuse them,
 // but keep a strict entry cap so cross-radar reuse cannot grow process RSS without bound.
 const SHARED_MAX_CACHE_ENTRIES = 256;
@@ -107,6 +109,9 @@ async function waitSharedBudget(path, query = {}) {
       await previous;
       const now = Date.now();
       const cooldown = SHARED.rateLimitedUntil - now;
+      if (cooldown > MAX_INLINE_RATE_LIMIT_WAIT_MS) {
+        throw new RestRateLimitError(cooldown);
+      }
       if (cooldown > 0) {
         waitMs = cooldown;
       } else {
@@ -266,7 +271,7 @@ export class RestClient {
   }
   health(){return {
     state:this.state,last_success_at:this.lastSuccessAt,last_error:this.lastError,
-    rate_limited_until:this.rateLimitedUntil||null,
+    rate_limited_until:Math.max(this.rateLimitedUntil||0,SHARED.rateLimitedUntil||0)||null,
     current_base_url:this.baseUrls[this.currentBaseIndex]??null,
     shared_queue_depth:SHARED.inflight.size,
     shared_cache_entries:SHARED.cache.size,
@@ -279,7 +284,14 @@ export class RestClient {
   };}
   async waitBudget(path, query = {}){
     let now=Date.now();
-    if(this.rateLimitedUntil>now) await sleep(this.rateLimitedUntil-now);
+    const cooldownUntil=Math.max(this.rateLimitedUntil||0,SHARED.rateLimitedUntil||0);
+    const cooldownMs=cooldownUntil-now;
+    if(cooldownMs>MAX_INLINE_RATE_LIMIT_WAIT_MS){
+      this.state='RATE_LIMITED';
+      this.lastError='BINANCE_RATE_LIMIT_WAIT_DEFERRED retry_ms='+Math.ceil(cooldownMs);
+      throw new RestRateLimitError(cooldownMs);
+    }
+    if(cooldownMs>0) await sleep(cooldownMs);
     const cutoff=Date.now()-60000;
     this.usedAt=this.usedAt.filter(x=>x>cutoff);
     if(this.usedAt.length>=this.maxRequestsPerMinute) {

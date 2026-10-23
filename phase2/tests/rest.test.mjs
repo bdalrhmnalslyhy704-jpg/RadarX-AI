@@ -214,3 +214,24 @@ test('TEST_FIXTURE: REST timeout errors identify the timed-out endpoint and fall
   assert.equal(attempts,2,'the bounded REST fallback should try each configured host');
   assert.match(client.health().last_error,/REST_REQUEST_TIMEOUT/);
 });
+
+test('TEST_FIXTURE: a long Retry-After never blocks a radar request for hours',async()=>{
+  let calls=0;
+  const fetchImpl=async()=>{
+    calls++;
+    return{status:429,headers:new Map([['retry-after','86400']]),ok:false,json:async()=>({})};
+  };
+  const client=new RestClient({baseUrls:['https://long-cooldown.test'],fetchImpl,timeoutMs:100,minIntervalMs:0,maxRequestsPerMinute:100});
+  await assert.rejects(
+    ()=>client.request('/api/v3/klines',{symbol:'COOLDOWNTESTUSDT',interval:'1m'}),
+    error=>error instanceof RestRateLimitError&&error.retryMs>=86_000_000
+  );
+  const started=Date.now();
+  await assert.rejects(
+    ()=>client.request('/api/v3/klines',{symbol:'COOLDOWNTESTUSDT',interval:'5m'}),
+    error=>error instanceof RestRateLimitError&&error.retryMs>80_000_000
+  );
+  assert.ok(Date.now()-started<250,'long server cooldown must defer to the next scan instead of sleeping inside it');
+  assert.equal(calls,1,'while the shared ban is active no extra request should be sent');
+  assert.ok(client.health().rate_limited_until>Date.now()+80_000_000);
+});
