@@ -390,16 +390,28 @@ async function run(force){
     cacheSave(r.body);
     render(r.body);
     const d=r.body.diagnostics||{},u=r.body.universe||{},s=r.body.summary||{},meta=r.body.meta||{};
+    const scan=r.body.scan||{},monitoring=r.body.monitoring||{};
     const mode=String(meta.analysis_mode||'UNKNOWN');
     const asOf=String(r.body.as_of||'');
+    const noErrorCodes=['SCAN_STARTED','SCAN_IN_PROGRESS'];
+    const cleanError=function(value){const text=String(value||'').trim();return text&&!noErrorCodes.includes(text)?text:'';};
+    const scanErrors=Array.isArray(d.scan_errors)?d.scan_errors:[];
+    const scanError=cleanError(r.body.error)||cleanError(scan.last_error)||cleanError(monitoring.last_error)||cleanError(d.last_scan_error)||cleanError(scan.error)||cleanError(scanErrors[0]&&scanErrors[0].error);
+    const warming=r.body.status==='warming'||mode==='WARMING'||(scan.completed===false&&!scanError);
     if(meta.live===true&&mode!=='CACHE')lastLiveAt=Date.now();
     status.textContent=meta.live
       ? (mode==='FORCED_SCAN'
-          ? '⚡ فحص حي إجباري مكتمل • الطلب '+esc(meta.request_id||requestId)+' • '+num(u.scanned,0)+' عملة فُحصت • '+num(s.strong_candidates,0)+' مرشح قوي • '+num(d.failed_analyses,0)+' أخطاء تنفيذ'
+          ? '⚡ فحص حي إجباري مكتمل • الطلب '+esc(meta.request_id||requestId)+' • '+num(u.scanned,0)+' عملة فُحصت • '+num(s.strong_candidates,0)+' مرشح قوي • '+num(d.failed_analyses,0)+' أخطاء عملات'
           : mode==='CACHE'
             ? '◉ لقطة صالحة من الخادم • وضع '+mode+' • وقت البيانات '+esc(asOf)+' • '+num(u.scanned,0)+' عملة فُحصت'
-            : '● فحص الخادم اكتمل • وضع '+mode+' • '+num(u.scanned,0)+' عملة فُحصت • '+num(s.strong_candidates,0)+' مرشح قوي • '+num(d.failed_analyses,0)+' أخطاء تنفيذ')
-      : '⚠ لا توجد لقطة بيانات صالحة مكتملة الآن • وضع '+esc(mode)+' • '+num(u.scanned,0)+' عملة فُحصت • '+num(d.failed_analyses,0)+' أخطاء تنفيذ'+(r.body.error?' • '+esc(r.body.error):'');
+            : '● فحص الخادم اكتمل • وضع '+mode+' • '+num(u.scanned,0)+' عملة فُحصت • '+num(s.strong_candidates,0)+' مرشح قوي • '+num(d.failed_analyses,0)+' أخطاء عملات')
+      : warming
+        ? '◌ الفحص لم يكتمل بعد — حالة مؤقتة وليست نتيجة نهائية • '+num(u.scanned,0)+' عملة مسجلة حتى الآن'+(scanError?' • آخر خطأ: '+esc(scanError):' • بانتظار اكتمال المسح')
+        : (mode==='SCAN_FAILED'||r.body.status==='not_ready'||r.body.error)
+          ? '⛔ فشل الفحص الحي • '+esc(scanError||'الخادم لم يرسل سببًا واضحًا')+' • لا تُعرض هذه الحالة كنتيجة سوق'
+          : (num(u.scanned,0)>0||num(d.attempted_analyses,0)>0)
+            ? '⚠ اكتمل الفحص دون مرشحين مؤهلين • '+num(u.scanned,0)+' عملة فُحصت • '+num(d.gate_rejected,0)+' رفض عند بوابة البيانات • '+num((r.body.watchlist||[]).length,0)+' مراقبة مبكرة'+(scanError?' • سبب/آخر خطأ: '+esc(scanError):'')
+            : '⚠ لم تكتمل دورة فحص للسوق بعد؛ الأصفار ليست نتيجة تحليل'+(scanError?' • السبب: '+esc(scanError):'');
   }catch(e){
     status.textContent='تعذر التحقق من لقطة جديدة — '+String(e&&e.message||e);
   }finally{busy=false;}
