@@ -412,7 +412,7 @@ test('Pre-Move low-volume and near-miss setups stay visible as explicit watch-on
       reasons:['VOLUME_ACCELERATING']
     },
     watch_only:true,alert_eligible:false,watch_only_reason:'BELOW_MIN_QUOTE_VOLUME',
-    watch_reason_codes:['BELOW_MIN_QUOTE_VOLUME','PRICE_WINDOW_NOT_CONFIRMED','STRUCTURE_NOT_CONFIRMED'],
+    watch_reason_codes:['BELOW_MIN_QUOTE_VOLUME','PRICE_WINDOW_NOT_CONFIRMED','BUYING_PRESSURE_NOT_CONFIRMED'],
     ...overrides
   });
   const rows=rankPreMoveWatchCandidates({watch_candidates:[
