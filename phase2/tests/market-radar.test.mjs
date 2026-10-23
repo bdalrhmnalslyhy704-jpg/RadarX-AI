@@ -425,6 +425,16 @@ test('Pre-Move Radar detects quiet early acceleration instead of chasing large 2
   assert.ok(ctx.session_return_pct<=6);
   assert.ok(ctx.reasons.includes('NOT_EXTENDED'));
   assert.ok(ctx.components.acceleration>=50);
+
+  const lateCtx=buildPreMoveContext({'15m':b},{...lowChange,lastPrice:112},now,bottom);
+  assert.equal(lateCtx.already_moved,true,'more than 9% since the Yemen morning-session start must be treated as extended');
+  assert.equal(lateCtx.stage,'ALREADY_MOVED');
+
+  const unflagged={...b.at(-1),openTime:now-900000,closeTime:now-100};
+  delete unflagged.closed;
+  const strictCtx=buildPreMoveContext({'15m':[...b,unflagged]},lowChange,now,bottom);
+  const lastExplicitlyClosed=b.filter(x=>x.closeTime<=now).at(-1);
+  assert.equal(strictCtx.session_close,lastExplicitlyClosed.closeTime,'a candle with no explicit closed=true flag must not enter session metrics');
 });
 
 // PRE_MOVE_RADAR_CI_TRIGGER
