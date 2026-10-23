@@ -527,7 +527,7 @@ test('Pre-Move target plan exposes ATR risk, invalidation and bounded targets wi
     };
   });
   const plan=buildPreMoveTargetPlan(candles,{lastPrice:102.1,highPrice24h:104.8},Date.now());
-  assert.equal(plan.method,'ATR_15M_RISK_REWARD_V1');
+  assert.equal(plan.method,'ATR_15M_RISK_REWARD_V2');
   assert.equal(plan.valid,true);
   assert.ok(plan.invalidation_price>0&&plan.invalidation_price<plan.reference_price);
   assert.ok(plan.target_2_price>plan.reference_price);
