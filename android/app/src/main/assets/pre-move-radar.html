@@ -50,9 +50,9 @@ const CACHE_KEY='radarx.preMove.cache.v1';
 const CACHE_TTL_MS=5*60*1000;
 function readCache(){try{const raw=sessionStorage.getItem(CACHE_KEY);if(!raw)return null;const x=JSON.parse(raw);return x&&Number.isFinite(Number(x.savedAt))&&x.body&&(Date.now()-Number(x.savedAt)<CACHE_TTL_MS)?x:null;}catch(e){return null;}}
 function writeCache(body){try{sessionStorage.setItem(CACHE_KEY,JSON.stringify({savedAt:Date.now(),body:body}));}catch(e){}}
-function fmt(n){if(!Number.isFinite(Number(n)))return '—';const x=Number(n);return x>=1?x.toFixed(4):x.toPrecision(5)}
-function pct(n){return Number.isFinite(Number(n))?Number(n).toFixed(2)+'%':'—'}
-function num(n,d='—'){return Number.isFinite(Number(n))?Number(n).toFixed(1):d}
+function fmt(n){if(n===null||n===undefined||(typeof n==='string'&&n.trim()==='')||!Number.isFinite(Number(n)))return '—';const x=Number(n);return x>=1?x.toFixed(4):x.toPrecision(5)}
+function pct(n){return n!==null&&n!==undefined&&!(typeof n==='string'&&n.trim()==='')&&Number.isFinite(Number(n))?Number(n).toFixed(2)+'%':'—'}
+function num(n,d='—'){return n!==null&&n!==undefined&&!(typeof n==='string'&&n.trim()==='')&&Number.isFinite(Number(n))?Number(n).toFixed(1):d}
 function meter(label,v){const x=Math.max(0,Math.min(100,Number(v)||0));return '<div class="meter"><span>'+label+'</span><b>'+x.toFixed(0)+'</b><div class="track"><i style="width:'+x+'%"></i></div></div>'}
 function render(rows,meta){
  if(!rows.length){
