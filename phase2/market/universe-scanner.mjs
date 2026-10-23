@@ -941,10 +941,14 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
 
 export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_RADAR_DEFAULTS.minQuoteVolume24h,limit=30,rotationOffset=0}={}){
   const allowed=new Set(symbols.map(x=>x.symbol));
+  // Discovery is intentionally broader than the final alert liquidity gate. A
+  // live, active Spot pair below the alert volume floor must still get a turn in
+  // the rotating deep scan; liquidity remains a separate hard gate downstream.
+  const discoveryVolumeFloor=Math.max(1,Math.min(Number(minQuoteVolume24h)||100000,100000));
   const ranked=(Array.isArray(tickers)?tickers:[])
     .map(x=>normalizeTickerRow(x,symbols[0]?.quoteAsset||'USDT'))
     .filter(Boolean)
-    .filter(x=>allowed.has(x.symbol)&&x.quoteVolume24h>=minQuoteVolume24h)
+    .filter(x=>allowed.has(x.symbol)&&(x.quoteVolume24h>0||x.tradeCount24h>0))
     .map(x=>{
       const change=Math.abs(x.priceChange24h);
       // A modestly active coin is more useful than a dead flat coin, but late movers
@@ -955,7 +959,7 @@ export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_
         ?Math.max(0,Math.min(100,(price-low)/(high-low)*100)):50;
       const basePosition=rangePosition<=75?100-Math.abs(rangePosition-48)*0.65:Math.max(15,70-(rangePosition-75)*2.2);
       return {...x,pre_move_discovery_score:
-        logNorm(x.quoteVolume24h,minQuoteVolume24h,Math.max(minQuoteVolume24h*1000,x.quoteVolume24h))*0.35+
+        logNorm(x.quoteVolume24h,discoveryVolumeFloor,Math.max(discoveryVolumeFloor*1000,x.quoteVolume24h))*0.35+
         logNorm(x.tradeCount24h,100,Math.max(1000000,x.tradeCount24h))*0.20+
         calm*0.25+
         clamp(basePosition)*0.20,
@@ -1860,7 +1864,8 @@ export class MarketUniverseScanner {
       preMoveContext={...preMoveContext,missing_evidence:[...(preMoveContext.missing_evidence||[]),'PRE_MOVE_CONTEXT_FAILED']};
     }
     const candlesValid=v1.valid&&v15.valid&&!future&&!stale;
-    const dataValid=candlesValid&&!scanError&&liquidity?.allowed===true&&
+    const volumeGatePass=Number.isFinite(Number(ticker?.quoteVolume24h))&&Number(ticker.quoteVolume24h)>=this.config.minQuoteVolume24h;
+    const dataValid=candlesValid&&!scanError&&volumeGatePass&&liquidity?.allowed===true&&
       Number(liquidity?.quality)>=this.config.minLiquidityQuality&&dataQuality>=this.config.minDataQuality;
     const source=combineSource([sources.exchangeInfo,sources.ticker,...klinesSources,depthSource]);
     const fetchAgeMs=last15&&Number.isFinite(Number(last15.closeTime))
@@ -1889,12 +1894,13 @@ export class MarketUniverseScanner {
         {type:'quality',code:'DATA_QUALITY',value:dataQuality},
         {type:'quality',code:'LIQUIDITY_QUALITY',value:Number(liquidity?.quality)||0}
       ],
-      reason_codes:[...(liquidity?.reasons||[]),...(preMoveContext?.missing_evidence||[])],
+      reason_codes:[...(liquidity?.reasons||[]),...(!volumeGatePass?['BELOW_MIN_QUOTE_VOLUME']:[]),...(preMoveContext?.missing_evidence||[])],
       invalidation:stale?['DATA_STALE']:future?['FUTURE_DATA_DETECTED']:[],
-      risk_flags:[...(liquidity?.reasons||[]),...(stale?['STALE_DATA']:[]),...(future?['FUTURE_DATA']:[])],
+      risk_flags:[...(liquidity?.reasons||[]),...(!volumeGatePass?['BELOW_MIN_QUOTE_VOLUME']:[]),...(stale?['STALE_DATA']:[]),...(future?['FUTURE_DATA']:[])],
       fast_impulse_context:{available:false,closed_candles_only:true,interval:null,candle_count:0},
       data_status:{
-        data_stale:stale||future,data_valid:dataValid,
+        data_stale:stale||future,data_valid:dataValid,candle_data_valid:candlesValid,
+        volume_gate_pass:volumeGatePass,
         last_error:scanError?String(scanError?.message||scanError).slice(0,180):null,
         source,fetch_age_ms:fetchAgeMs
       },
@@ -1935,12 +1941,21 @@ export class MarketUniverseScanner {
         {exchangeInfo:info.source,ticker:tickerResponse.source}
       )
     );
-    const valid=scanned.filter(Boolean).filter(x=>x.data_status?.data_valid===true&&typeof x.pre_move_context?.session_return_pct==='number'&&Number.isFinite(x.pre_move_context.session_return_pct));
-    const returns=valid.map(x=>Number(x.pre_move_context.session_return_pct)).filter(Number.isFinite);
+    // Use every fresh, valid candle set for market context, including low-volume
+    // pairs. Keep the alert-eligible subset separate so low liquidity cannot
+    // silently become an actionable signal.
+    const observed=scanned.filter(Boolean).filter(x=>
+      x.data_status?.candle_data_valid===true&&
+      Number(x.data_quality)>=this.config.minDataQuality&&
+      typeof x.pre_move_context?.session_return_pct==='number'&&
+      Number.isFinite(x.pre_move_context.session_return_pct)
+    );
+    const valid=observed.filter(x=>x.data_status?.data_valid===true);
+    const returns=observed.map(x=>Number(x.pre_move_context.session_return_pct)).filter(Number.isFinite);
     const marketMedianReturn=returns.length?([...returns].sort((a,b)=>a-b)[Math.floor(returns.length/2)]):null;
-    const btcReturn=Number(valid.find(x=>x.symbol==='BTCUSDT')?.pre_move_context?.session_return_pct);
+    const btcReturn=Number(observed.find(x=>x.symbol==='BTCUSDT')?.pre_move_context?.session_return_pct);
     const positiveCount=returns.filter(x=>x>0).length;
-    const enriched=valid.map(x=>{
+    const enriched=observed.map(x=>{
       const ctx=x.pre_move_context;
       const relReturn=Number.isFinite(marketMedianReturn)?Number(ctx.session_return_pct)-marketMedianReturn:null;
       const relScore=Number.isFinite(relReturn)?clamp(50+relReturn*18):Number.isFinite(btcReturn)?clamp(50+(Number(ctx.session_return_pct)-btcReturn)*18):50;
@@ -1969,11 +1984,28 @@ export class MarketUniverseScanner {
     }).sort((a,b)=>Number(b.pre_move_context.score)-Number(a.pre_move_context.score)||Number(a.pre_move_context.session_return_pct)-Number(b.pre_move_context.session_return_pct));
     // Exclude overextended symbols before applying the final result limit. Filtering only
     // in the client can otherwise allow the backend's top-N list to be filled with late movers.
-    const actionable=enriched.filter(x=>x.pre_move_context.evidence_complete===true&&
+    const actionable=enriched.filter(x=>x.data_status?.data_valid===true&&
+      x.pre_move_context.evidence_complete===true&&
       x.pre_move_context.flow_transition_confirmed===true&&x.pre_move_context.price_window_valid===true&&
       x.pre_move_context.structure_confirmed===true&&x.pre_move_context.already_moved!==true&&
       !['ALREADY_MOVED','NO_SETUP'].includes(x.pre_move_context.stage));
-    const evidenceIncompleteExcluded=enriched.filter(x=>x.pre_move_context.evidence_complete!==true).length;
+    const watchCandidates=enriched.filter(x=>x.data_status?.data_valid!==true&&
+      x.data_status?.candle_data_valid===true&&Number(x.data_quality)>=this.config.minDataQuality&&
+      x.pre_move_context.evidence_complete===true&&
+      x.pre_move_context.flow_transition_confirmed===true&&x.pre_move_context.price_window_valid===true&&
+      x.pre_move_context.structure_confirmed===true&&x.pre_move_context.already_moved!==true&&
+      !['ALREADY_MOVED','NO_SETUP'].includes(x.pre_move_context.stage)&&
+      (Number(x.quote_volume_24h)<this.config.minQuoteVolume24h||
+       Number(x.liquidity_quality)<this.config.minLiquidityQuality||
+       x.data_status?.volume_gate_pass!==true)
+    ).map(x=>({
+      ...x,
+      watch_only:true,
+      watch_only_reason:Number(x.quote_volume_24h)<this.config.minQuoteVolume24h?'BELOW_MIN_QUOTE_VOLUME':
+        Number(x.liquidity_quality)<this.config.minLiquidityQuality?'LOW_LIQUIDITY':'LIQUIDITY_UNVERIFIED',
+      alert_eligible:false
+    }));
+    const evidenceIncompleteExcluded=observed.filter(x=>x.pre_move_context.evidence_complete!==true).length;
     const extendedExcluded=enriched.filter(x=>x.pre_move_context.already_moved===true||x.pre_move_context.stage==='ALREADY_MOVED').length;
     const noSetupExcluded=enriched.filter(x=>x.pre_move_context.stage==='NO_SETUP').length;
     const returned=actionable.slice(0,Math.min(10,normalizedLimit));
@@ -1982,8 +2014,9 @@ export class MarketUniverseScanner {
       as_of:new Date(this.clock()).toISOString(),
       source:'Binance Public REST',
       session:{timezone:'Asia/Aden',window:'04:00 local → latest closed candle',market_median_return_pct:marketMedianReturn,btc_return_pct:Number.isFinite(btcReturn)?btcReturn:null,positive_breadth_pct:returns.length?positiveCount/returns.length*100:null},
-      universe:{requested:normalizedLimit,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,evidence_incomplete_excluded:evidenceIncompleteExcluded,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,rotation_cycle:rotationCycle,rotation_offset:rotationOffset,rotation_width:rotatingWidth,coverage_mode:'PINNED_PLUS_ROTATING_V1',elapsed_ms:Math.max(0,this.clock()-startedAt)},
-      candidates:returned
+      universe:{requested:normalizedLimit,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,observed_candle_data:observed.length,watch_only:watchCandidates.length,evidence_incomplete_excluded:evidenceIncompleteExcluded,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,discovery_volume_floor:0,rotation_cycle:rotationCycle,rotation_offset:rotationOffset,rotation_width:rotatingWidth,coverage_mode:'PINNED_PLUS_ROTATING_V1',elapsed_ms:Math.max(0,this.clock()-startedAt)},
+      candidates:returned,
+      watch_candidates:watchCandidates.slice().sort((a,b)=>Number(b.pre_move_context.score)-Number(a.pre_move_context.score)||Number(a.pre_move_context.session_return_pct)-Number(b.pre_move_context.session_return_pct)).slice(0,10)
     };
   }
 
