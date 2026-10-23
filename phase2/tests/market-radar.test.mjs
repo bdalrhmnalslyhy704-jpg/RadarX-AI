@@ -118,6 +118,15 @@ test('Pre-Move discovery rotates half of its deep-scan shortlist across the elig
   assert.notDeepEqual(first.slice(12).map(x=>x.symbol),second.slice(12).map(x=>x.symbol),'the second half must rotate rather than scan the same static list forever');
 });
 
+test('Pre-Move discovery includes active low-volume Spot pairs for rotating screening',()=>{
+  const symbols=[{symbol:'EARLYUSDT',baseAsset:'EARLY',quoteAsset:'USDT',status:'TRADING'}];
+  const rows=[{symbol:'EARLYUSDT',lastPrice:'1.02',highPrice:'1.05',lowPrice:'0.95',quoteVolume:'18000',count:420,priceChangePercent:'1.6'}];
+  const picked=rankPreMoveTickerRows(rows,symbols,{minQuoteVolume24h:750000,limit:1,rotationOffset:0});
+  assert.equal(picked.length,1,'active symbols must not disappear from discovery merely because they are below the final alert volume floor');
+  assert.equal(picked[0].symbol,'EARLYUSDT');
+  assert.equal(picked[0].quoteVolume24h,18000);
+});
+
 test('Bottom Radar discovery prioritizes symbols near the 24h low while retaining liquidity',()=>{
   const symbols=buildSpotUniverse(exchangeInfo(),'USDT');
   const rows=rankBottomTickerRows([
@@ -470,6 +479,22 @@ test('Pre-Move Radar detects quiet early acceleration instead of chasing large 2
 
 // PRE_MOVE_RADAR_CI_TRIGGER
 
+
+test('Pre-Move deep scan keeps a low-volume symbol non-actionable and records the reason',async()=>{
+  const rest=makeRest();
+  const scanner=new MarketUniverseScanner({
+    rest,
+    config:{minQuoteVolume24h:750000,minDataQuality:70,minLiquidityQuality:60,deepKlines:160},
+    strategyEvaluator:evaluator
+  });
+  const result=await scanner.scanPreMoveSymbol({
+    symbol:'BTCUSDT',lastPrice:100,priceChange24h:1,highPrice24h:102,lowPrice24h:98,
+    quoteVolume24h:18000,tradeCount24h:420,quoteAsset:'USDT'
+  },1,{});
+  assert.equal(result.data_status.volume_gate_pass,false);
+  assert.equal(result.data_status.data_valid,false,'broad discovery must not weaken the minimum-volume gate for alert-eligible results');
+  assert.ok(result.reason_codes.includes('BELOW_MIN_QUOTE_VOLUME'));
+});
 
 test('Pre-Move scan removes already-extended coins before limiting actionable results',async()=>{
   const rest=makeRest();
