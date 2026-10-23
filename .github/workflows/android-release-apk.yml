@@ -27,7 +27,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: radarx-android-release-${{ github.ref }}-${{ github.sha }}
+  group: radarx-android-release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -497,14 +497,14 @@ jobs:
           if (body.meta?.paper_trading !== true || body.meta?.real_order_execution !== false) throw new Error('PRE_MOVE_RADAR_POLICY_INVALID');
           if (body.source !== 'Binance Public REST') throw new Error('PRE_MOVE_RADAR_SOURCE_INVALID');
           if (body.session?.timezone !== 'Asia/Aden' || body.session?.window !== '04:00 local → latest closed candle') throw new Error('PRE_MOVE_RADAR_SESSION_INVALID');
-          if (!Array.isArray(body.candidates) || !body.universe || !Number.isFinite(Number(body.universe.scanned))) throw new Error('PRE_MOVE_RADAR_RESULT_SHAPE_INVALID');
+          if (!Array.isArray(body.candidates) || !body.universe || !Number.isFinite(body.universe.scanned)) throw new Error('PRE_MOVE_RADAR_RESULT_SHAPE_INVALID');
           // A valid scan may correctly find zero early setups; require live, valid market data,
           // not a forced recommendation. Empty candidate arrays are acceptable when nothing qualifies.
-          if (!Number.isFinite(Number(body.universe.valid_data)) || !Number.isFinite(Number(body.universe.evidence_incomplete_excluded)) || !Number.isFinite(Number(body.universe.extended_excluded)) || !Number.isFinite(Number(body.universe.no_setup_excluded))) throw new Error('PRE_MOVE_RADAR_BACKEND_BUILD_OUTDATED');
+          if (![body.universe.valid_data,body.universe.evidence_incomplete_excluded,body.universe.extended_excluded,body.universe.no_setup_excluded].every(Number.isFinite)) throw new Error('PRE_MOVE_RADAR_BACKEND_BUILD_OUTDATED');
           if (body.meta.live !== true || Number(body.universe.scanned) < 1 || Number(body.universe.valid_data) < 1) throw new Error('PRE_MOVE_RADAR_NO_VALID_LIVE_DATA');
           if (Number(body.universe.eligible_spot_symbols) < 1 || Number(body.universe.discovered) < 1) throw new Error('PRE_MOVE_RADAR_UNIVERSE_EMPTY');
           for (const row of body.candidates) {
-            if (row?.data_status?.data_valid !== true || !row?.pre_move_context || !Number.isFinite(Number(row.pre_move_context.score)) || row.pre_move_context.closed_candles_only !== true || row.pre_move_context.evidence_complete !== true || ['ALREADY_MOVED','NO_SETUP'].includes(row.pre_move_context.stage) || row.pre_move_context.already_moved === true) {
+            if (row?.data_status?.data_valid !== true || !row?.pre_move_context || !Number.isFinite(row.pre_move_context.score) || !Number.isFinite(row.pre_move_context.session_return_pct) || row.pre_move_context.closed_candles_only !== true || row.pre_move_context.evidence_complete !== true || ['ALREADY_MOVED','NO_SETUP'].includes(row.pre_move_context.stage) || row.pre_move_context.already_moved === true) {
               throw new Error('PRE_MOVE_RADAR_INVALID_CANDIDATE:' + String(row?.symbol || 'UNKNOWN'));
             }
           }
