@@ -339,6 +339,14 @@ console.log('multi-analyst role-completion evidence/freshness: PASS');
   assert.deepEqual(buckets[0].map(x=>x.symbol),['BTCUSDT','BNBUSDT'],'input buckets must not be mutated');
   assert.equal(new Set(selected.map(x=>x.symbol)).size,selected.length);
   assert.deepEqual(selectDiscoveryWithRadarReviewPriority(priority,buckets,1).map(x=>x.symbol),['GTCUSDT']);
+  const underfilled=selectDiscoveryWithRadarReviewPriority(
+    [{symbol:'GTCUSDT'}],
+    [[{symbol:'BTCUSDT'}],[{symbol:'ETHUSDT'}]],
+    5,
+    [{symbol:'BTCUSDT'},{symbol:'ETHUSDT'},{symbol:'ADAUSDT'},{symbol:'SOLUSDT'}]
+  );
+  assert.deepEqual(underfilled.map(x=>x.symbol),['GTCUSDT','BTCUSDT','ETHUSDT','ADAUSDT','SOLUSDT'],
+    'fallback rows must fill unused scan slots without duplicating bucket symbols');
 }
 
 console.log('multi-analyst queued radar priority/capacity preservation: PASS');
