@@ -45,6 +45,15 @@ jobs:
           fetch-depth: 1
           ref: ${{ github.ref_name }}
 
+      - name: Reject obsolete Build 224 branch commits
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$GITHUB_REF_NAME"
+          remote_tip="$(git rev-parse "origin/$GITHUB_REF_NAME")"
+          if [ "$remote_tip" != "$GITHUB_SHA" ]; then
+            echo "::error::Refusing to publish an APK from obsolete commit $GITHUB_SHA; current branch tip is $remote_tip."
+            exit 1
+          fi
       - name: Configure Build 224 APK for DHDTech backend
         env:
           RADARX_BACKEND_BASE_URL: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
@@ -491,6 +500,7 @@ jobs:
           if (!Array.isArray(body.candidates) || !body.universe || !Number.isFinite(Number(body.universe.scanned))) throw new Error('PRE_MOVE_RADAR_RESULT_SHAPE_INVALID');
           // A valid scan may correctly find zero early setups; require live, valid market data,
           // not a forced recommendation. Empty candidate arrays are acceptable when nothing qualifies.
+          if (!Number.isFinite(Number(body.universe.valid_data)) || !Number.isFinite(Number(body.universe.extended_excluded))) throw new Error('PRE_MOVE_RADAR_BACKEND_BUILD_OUTDATED');
           if (body.meta.live !== true || Number(body.universe.scanned) < 1 || Number(body.universe.valid_data) < 1) throw new Error('PRE_MOVE_RADAR_NO_VALID_LIVE_DATA');
           if (Number(body.universe.eligible_spot_symbols) < 1 || Number(body.universe.discovered) < 1) throw new Error('PRE_MOVE_RADAR_UNIVERSE_EMPTY');
           for (const row of body.candidates) {
