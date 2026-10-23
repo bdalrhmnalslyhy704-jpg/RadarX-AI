@@ -56,8 +56,15 @@ function num(n,d='—'){return n!==null&&n!==undefined&&!(typeof n==='string'&&n
 function meter(label,v){const x=Math.max(0,Math.min(100,Number(v)||0));return '<div class="meter"><span>'+label+'</span><b>'+x.toFixed(0)+'</b><div class="track"><i style="width:'+x+'%"></i></div></div>'}
 function render(rows,meta){
  if(!rows.length){
-   const validData=Number(meta?.universe?.valid_data??meta?.universe?.scanned??0)>0;
-   cards.innerHTML='<div class="empty">'+(validData?'لا توجد الآن إعدادات مبكرة تستوفي الشروط. استُبعدت العملات المتمددة والضعيفة بدل عرض توصيات غير مؤهلة؛ أعد الفحص بعد وصول شموع مغلقة جديدة.':'لم تصل بيانات سوق صالحة كافية من Backend.')+'</div>';
+   const u=meta?.universe||{};
+   const validData=Number(u.valid_data??u.scanned??0)>0;
+   const incomplete=Number(u.evidence_incomplete_excluded||0)>0;
+   const message=!validData
+     ? 'لم تصل بيانات سوق صالحة كافية من Backend.'
+     : incomplete
+       ? 'لا توجد الآن إعدادات مبكرة مكتملة الأدلة. بعض المرشحين استُبعدوا لأن بيانات الحجم أو تدفق الشراء أو الانكماش أو الهيكل لم تكن مكتملة؛ لن نعرضهم كفرص.'
+       : 'لا توجد الآن إعدادات مبكرة تستوفي الشروط. استُبعدت العملات المتمددة والضعيفة بدل عرض توصيات غير مؤهلة؛ أعد الفحص بعد وصول شموع مغلقة جديدة.';
+   cards.innerHTML='<div class="empty">'+message+'</div>';
    return;
  }
  cards.innerHTML=rows.map((x,i)=>{
@@ -90,6 +97,7 @@ async function run(force){
  try{
    const r=await getPreMoveRadar({quote:'USDT',limit:Number(limit.value)||30});
    if(!r.ok||!r.body)throw new Error(r.body && r.body.error||'PRE_MOVE_RADAR_UNAVAILABLE');
+   if(r.body.meta?.live!==true)throw new Error(r.body.error||'PRE_MOVE_DATA_UNAVAILABLE');
    writeCache(r.body);
    const rows=rankPreMoveCandidates(r.body);
    const s=r.body.session||{};
