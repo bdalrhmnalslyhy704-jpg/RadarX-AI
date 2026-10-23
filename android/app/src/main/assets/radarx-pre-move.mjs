@@ -1,5 +1,5 @@
 const clamp=(n,min=0,max=100)=>Math.max(min,Math.min(max,Number(n)||0));
-const num=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
+const num=(v,d=null)=>v===null||v===undefined||(typeof v==='string'&&v.trim()==='')?d:Number.isFinite(Number(v))?Number(v):d;
 
 const reasonMap={
   VOLUME_ACCELERATING:'الحجم بدأ يستيقظ',
@@ -17,7 +17,9 @@ export function rankPreMoveCandidates(body){
   const rows=Array.isArray(body && body.candidates)?body.candidates:[];
   return rows
     .filter(c=>c && c.data_status && c.data_status.data_valid===true && c.pre_move_context &&
+      c.pre_move_context.score!==null && c.pre_move_context.score!==undefined &&
       Number.isFinite(Number(c.pre_move_context.score)) &&
+      typeof c.pre_move_context.session_return_pct==='number' && Number.isFinite(c.pre_move_context.session_return_pct) &&
       c.pre_move_context.evidence_complete===true &&
       c.pre_move_context.already_moved!==true &&
       !['ALREADY_MOVED','NO_SETUP'].includes(c.pre_move_context.stage))
