@@ -217,8 +217,9 @@ export class PushManager{
     // Never allow explicit watch-only / rejected candidates to bypass the strict gate
     // through a radar's generic push route.
     const watchLabel=[alert?.event,alert?.decision_band,alert?.potential_label].filter(Boolean).join(' ').toUpperCase();
-    if(alert?.watch_only===true||alert?.notification_gate?.watch_only===true||
-       alert?.notification_gate?.eligible===false||/WATCH_ONLY|WATCH_EARLY/.test(watchLabel)){
+    if(alert?.watch_only===true||alert?.entry_eligible===false||
+       alert?.notification_gate?.watch_only===true||alert?.notification_gate?.eligible===false||
+       alert?.eligible===false||/WATCH_ONLY|WATCH_EARLY/.test(watchLabel)){
       return [];
     }
     const rows=this.providerSubscriptions(await this.store.getSubscriptions()),out=[];
