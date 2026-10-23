@@ -741,7 +741,7 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
   // Compare the most recent closed hour to the immediately preceding hour;
   // compare its volume/trade participation against the eight candles before that.
   // This avoids accidentally comparing today's last hour with the first hour of the session.
-  const recentCount=Math.min(4,Math.max(2,Math.floor(session.length/2)));
+  const recentCount=Math.min(4,Math.max(2,session.length));
   const late4=session.slice(-recentCount);
   const previousToLate=closed15.filter(c=>Number(c.closeTime)<Number(late4[0]?.closeTime));
   const early4=previousToLate.slice(-late4.length);
@@ -832,7 +832,7 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
   const missingCoreEvidence=Object.entries(coreEvidence)
     .filter(([,value])=>!Number.isFinite(value))
     .map(([name])=>name);
-  if(session.length<2)missingCoreEvidence.push('two_closed_session_candles');
+  if(session.length<4)missingCoreEvidence.push('four_closed_session_candles_for_one_hour_return');
   if(late4.length<2)missingCoreEvidence.push('two_recent_closed_candles');
   if(early4.length<late4.length)missingCoreEvidence.push('preceding_closed_window');
   if(base8.length<4)missingCoreEvidence.push('four_baseline_closed_candles');
