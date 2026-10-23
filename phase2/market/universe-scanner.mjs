@@ -992,7 +992,9 @@ export function buildPreMoveWatchCandidates(rows,{
   minQuoteVolume24h=750000,
   minLiquidityQuality=60,
   minDataQuality=70,
-  minScore=58
+  // Surface credible partial setups earlier for visual WATCH_EARLY review only.
+  // This lane never qualifies an actionable candidate or a phone notification.
+  minScore=45
 }={}) {
   const out=[];
   const hardRisks=new Set([

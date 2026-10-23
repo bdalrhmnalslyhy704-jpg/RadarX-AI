@@ -496,6 +496,32 @@ test('Pre-Move deep scan keeps a low-volume symbol non-actionable and records th
   assert.ok(result.reason_codes.includes('BELOW_MIN_QUOTE_VOLUME'));
 });
 
+test('Pre-Move default watch floor surfaces a qualified partial setup without making it actionable',()=>{
+  const nearMiss={
+    symbol:'TRXUSDT',last_price:0.34,price_change_24h:0.579,quote_volume_24h:23_223_167,
+    liquidity_quality:96.21,data_quality:100,risk_flags:[],
+    data_status:{candle_data_valid:true,data_stale:false,data_valid:true,volume_gate_pass:true,last_error:null},
+    pre_move_context:{
+      score:48.5,evidence_complete:true,closed_candles_only:true,session_return_pct:0.4259,
+      one_hour_return_pct:0.1516,volume_acceleration:1.1586,trade_acceleration:0.7319,
+      taker_buy_ratio:0.7872,taker_buy_acceleration:0.4877,mean_close_location:0.75,
+      components:{squeeze:45.2,structure:72.4,buying_pressure:100},
+      flow_transition_confirmed:false,price_window_valid:true,structure_confirmed:false,
+      already_moved:false,stage:'NO_SETUP',reasons:[]
+    }
+  };
+  // No custom minScore: exercises the production default watch floor.
+  const rows=buildPreMoveWatchCandidates([nearMiss]);
+  assert.equal(rows.length,1,'qualified early observations below the strict score threshold should remain visible for review');
+  assert.equal(rows[0].watch_only,true);
+  assert.equal(rows[0].alert_eligible,false);
+  assert.equal(rows[0].pre_move_context.stage,'WATCH_EARLY');
+  assert.equal(rows[0].pre_move_context.actionable,false);
+  assert.ok(rows[0].watch_reason_codes.includes('TRADE_ACCELERATION_NOT_CONFIRMED'));
+  assert.ok(rows[0].watch_reason_codes.includes('COMPRESSION_NOT_CONFIRMED'));
+  assert.ok(rows[0].watch_reason_codes.includes('SCORE_BELOW_ACTIONABLE_THRESHOLD'));
+});
+
 test('Pre-Move near misses are surfaced as watch-only rows but never promoted to actionable signals',()=>{
   const base={
     symbol:'EARLYUSDT',last_price:1.01,price_change_24h:1.2,quote_volume_24h:1_200_000,
