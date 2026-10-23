@@ -1925,7 +1925,7 @@ export class MarketUniverseScanner {
       limit:discoveryLimit,
       rotationOffset
     });
-    const preMoveConcurrency=Math.max(8,Math.min(12,Math.trunc(Number(this.config.deepConcurrency)||8)));
+    const preMoveConcurrency=12; // two bounded waves for a 20-symbol shortlist; keep request pressure predictable.
     const scanned=await boundedMap(
       discovery,
       preMoveConcurrency,
