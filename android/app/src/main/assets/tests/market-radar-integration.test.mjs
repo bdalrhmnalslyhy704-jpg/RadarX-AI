@@ -1,5 +1,6 @@
 import test from 'node:test';
 import {rankBottomCandidates} from '../radarx-bottom-reversal.mjs';
+import {rankPreMoveCandidates} from '../radarx-pre-move.mjs';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {
@@ -370,4 +371,21 @@ test('Radar 4 dedicated Android page exposes independent control and alert time 
   assert.match(page,/LIQUIDITY_ABSORPTION_RADAR/);
   assert.match(page,/detected_time_12h/);
   assert.match(page,/12h/);
+});
+
+
+test('Pre-Move Radar excludes already-extended coins from actionable rankings',()=>{
+  const candidate=(symbol,{stage,already_moved,score,session_return_pct=3}={})=>({
+    symbol,last_price:1,price_change_24h:4,liquidity_quality:85,data_quality:95,
+    data_status:{data_valid:true,data_stale:false},
+    pre_move_context:{stage,already_moved,score,session_return_pct,components:{},reasons:[],closed_candles_only:true}
+  });
+  const body={candidates:[
+    candidate('LATEUSDT',{stage:'ALREADY_MOVED',already_moved:true,score:99,session_return_pct:14}),
+    candidate('EARLYUSDT',{stage:'EARLY_WAKE',already_moved:false,score:76,session_return_pct:2}),
+    candidate('LATE2USDT',{stage:'ALREADY_MOVED',already_moved:false,score:94,session_return_pct:4})
+  ]};
+  const rows=rankPreMoveCandidates(body);
+  assert.deepEqual(rows.map(row=>row.symbol),['EARLYUSDT']);
+  assert.equal(rows.some(row=>row.alreadyMoved),false);
 });
