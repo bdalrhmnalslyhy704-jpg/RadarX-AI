@@ -534,6 +534,27 @@ test('Pre-Move near misses are surfaced as watch-only rows but never promoted to
   assert.equal(rejected.length,0,'late movers and stale candles must not leak into the early watch list');
 });
 
+
+test('Pre-Move diagnostic audit exposes blocker evidence but never promotes audit rows to candidates',async()=>{
+  const scanner=new MarketUniverseScanner({
+    rest:makeRest(),
+    config:{minQuoteVolume24h:750000,scanLimit:2,returnLimit:2,deepConcurrency:2,deepKlines:160},
+    strategyEvaluator:evaluator
+  });
+  const result=await scanner.scanPreMove({quote:'USDT',limit:10});
+  assert.ok(Array.isArray(result.near_miss_audit));
+  assert.ok(result.near_miss_audit.length>0,'fresh observed non-extended rows should explain why the strict path declined them');
+  for(const row of result.near_miss_audit){
+    assert.equal(row.diagnostic_only,true);
+    assert.equal(row.watch_only,true);
+    assert.equal(row.alert_eligible,false);
+    assert.ok(Array.isArray(row.blocker_codes)&&row.blocker_codes.length>0);
+    assert.ok(!result.candidates.some(candidate=>candidate.symbol===row.symbol),
+      'near-miss diagnostic rows are never promoted to actionable candidates');
+  }
+});
+
+
 test('Pre-Move scan removes already-extended coins before limiting actionable results',async()=>{
   const rest=makeRest();
   const originalRequest=rest.request;
