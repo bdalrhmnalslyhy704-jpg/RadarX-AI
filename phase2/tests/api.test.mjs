@@ -587,3 +587,41 @@ test('TEST_FIXTURE: cold multi-analyst cache returns explicit WARMING without wa
     await new Promise(resolve=>server.close(resolve));
   }
 });
+
+
+test('TEST_FIXTURE: Pre-Move Radar reuses an active radar REST client when the dedicated scanner client is omitted',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-fallback-api-')),store=await new DurableStore({dir}).init();
+  const marketRest={
+    request:async path=>{
+      if(String(path).includes('/api/v3/exchangeInfo'))return{data:{symbols:[]},source:'TEST_FIXTURE'};
+      if(String(path).includes('/api/v3/ticker/24hr'))return{data:[],source:'TEST_FIXTURE'};
+      throw new Error('UNEXPECTED_PATH '+path);
+    },
+    klines:async()=>{throw new Error('UNEXPECTED_KLINES');},
+    depth:async()=>{throw new Error('UNEXPECTED_DEPTH');}
+  };
+  const config={
+    auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},
+    api:{maxBodyBytes:65536,rateLimitPerMinute:100},
+    marketRadar:{minQuoteVolume24h:750000,deepConcurrency:2,deepKlines:160}
+  };
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({
+    config,store,monitor,pushProvider:new NoopPushProvider(),
+    earlyExpansionRadar:{rest:marketRest}
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/pre-move-radar?quote=USDT&limit=10');
+    assert.equal(response.status,200);
+    const body=await response.json();
+    assert.equal(body.meta.radar,'PRE_MOVE');
+    assert.equal(body.source,'Binance Public REST');
+    assert.equal(body.meta.paper_trading,true);
+    assert.equal(body.meta.real_order_execution,false);
+    assert.equal(body.meta.live,false);
+    assert.deepEqual(body.candidates,[]);
+  }finally{
+    await new Promise(resolve=>server.close(resolve));
+  }
+});
