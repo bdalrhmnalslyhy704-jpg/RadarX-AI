@@ -522,6 +522,30 @@ test('Pre-Move default watch floor surfaces a qualified partial setup without ma
   assert.ok(rows[0].watch_reason_codes.includes('SCORE_BELOW_ACTIONABLE_THRESHOLD'));
 });
 
+test('Pre-Move surfaces partial early-flow candidates with slightly negative one-hour return as watch-only',()=>{
+  const partial={
+    symbol:'SOXLBUSDT',last_price:100,price_change_24h:1.995,quote_volume_24h:42_209_579,
+    liquidity_quality:98.52,data_quality:100,risk_flags:[],
+    data_status:{candle_data_valid:true,data_stale:false,data_valid:true,volume_gate_pass:true,last_error:null},
+    pre_move_context:{
+      score:45.7,evidence_complete:true,closed_candles_only:true,session_return_pct:0.3928,
+      one_hour_return_pct:-0.4856,volume_acceleration:0.4582,trade_acceleration:0.4087,
+      taker_buy_ratio:0.8175,taker_buy_acceleration:0.1179,mean_close_location:0.5542,
+      components:{squeeze:57.89,structure:58.45,buying_pressure:100},
+      flow_transition_confirmed:false,price_window_valid:false,structure_confirmed:false,
+      already_moved:false,stage:'NO_SETUP',reasons:[]
+    }
+  };
+  const rows=buildPreMoveWatchCandidates([partial]);
+  assert.equal(rows.length,1,'partial, fresh, non-extended flow should be surfaced for visual monitoring');
+  assert.equal(rows[0].watch_only,true);
+  assert.equal(rows[0].alert_eligible,false);
+  assert.equal(rows[0].pre_move_context.stage,'WATCH_EARLY');
+  assert.equal(rows[0].pre_move_context.actionable,false);
+  assert.ok(rows[0].watch_reason_codes.includes('VOLUME_ACCELERATION_NOT_CONFIRMED'));
+  assert.ok(rows[0].watch_reason_codes.includes('TRADE_ACCELERATION_NOT_CONFIRMED'));
+});
+
 test('Pre-Move near misses are surfaced as watch-only rows but never promoted to actionable signals',()=>{
   const base={
     symbol:'EARLYUSDT',last_price:1.01,price_change_24h:1.2,quote_volume_24h:1_200_000,
