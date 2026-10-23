@@ -1759,7 +1759,7 @@ export class MarketUniverseScanner {
         {klinesLimit:preMoveKlines}
       )
     );
-    const valid=scanned.filter(Boolean).filter(x=>x.data_status?.data_valid===true&&Number.isFinite(Number(x.pre_move_context?.session_return_pct)));
+    const valid=scanned.filter(Boolean).filter(x=>x.data_status?.data_valid===true&&typeof x.pre_move_context?.session_return_pct==='number'&&Number.isFinite(x.pre_move_context.session_return_pct));
     const returns=valid.map(x=>Number(x.pre_move_context.session_return_pct)).filter(Number.isFinite);
     const marketMedianReturn=returns.length?([...returns].sort((a,b)=>a-b)[Math.floor(returns.length/2)]):null;
     const btcReturn=Number(valid.find(x=>x.symbol==='BTCUSDT')?.pre_move_context?.session_return_pct);
