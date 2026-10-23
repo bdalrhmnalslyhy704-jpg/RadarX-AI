@@ -939,24 +939,44 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
   };
 }
 
-export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_RADAR_DEFAULTS.minQuoteVolume24h,limit=30}={}){
+export export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_RADAR_DEFAULTS.minQuoteVolume24h,limit=30,rotationOffset=0}={}){
   const allowed=new Set(symbols.map(x=>x.symbol));
-  return (Array.isArray(tickers)?tickers:[])
+  const ranked=(Array.isArray(tickers)?tickers:[])
     .map(x=>normalizeTickerRow(x,symbols[0]?.quoteAsset||'USDT'))
     .filter(Boolean)
     .filter(x=>allowed.has(x.symbol)&&x.quoteVolume24h>=minQuoteVolume24h)
     .map(x=>{
       const change=Math.abs(x.priceChange24h);
-      const calm=change<=3?100:change<=6?88:change<=10?68:change<=15?45:change<=20?20:5;
+      // A modestly active coin is more useful than a dead flat coin, but late movers
+      // must lose priority. This is discovery ranking only; closed-candle gates decide signals.
+      const calm=change<=2?82:change<=6?100:change<=10?76:change<=15?45:change<=20?20:5;
+      const high=Number(x.highPrice24h),low=Number(x.lowPrice24h),price=Number(x.lastPrice);
+      const rangePosition=Number.isFinite(high)&&Number.isFinite(low)&&high>low&&Number.isFinite(price)
+        ?Math.max(0,Math.min(100,(price-low)/(high-low)*100)):50;
+      const basePosition=rangePosition<=75?100-Math.abs(rangePosition-48)*0.65:Math.max(15,70-(rangePosition-75)*2.2);
       return {...x,pre_move_discovery_score:
-        logNorm(x.quoteVolume24h,minQuoteVolume24h,Math.max(minQuoteVolume24h*1000,x.quoteVolume24h))*0.45+
-        logNorm(x.tradeCount24h,100,Math.max(1000000,x.tradeCount24h))*0.25+
-        calm*0.30};
+        logNorm(x.quoteVolume24h,minQuoteVolume24h,Math.max(minQuoteVolume24h*1000,x.quoteVolume24h))*0.35+
+        logNorm(x.tradeCount24h,100,Math.max(1000000,x.tradeCount24h))*0.20+
+        calm*0.25+
+        clamp(basePosition)*0.20,
+        pre_move_range_position_pct:Math.round(rangePosition*10)/10};
     })
-    .sort((a,b)=>b.pre_move_discovery_score-a.pre_move_discovery_score||b.quoteVolume24h-a.quoteVolume24h||a.symbol.localeCompare(b.symbol))
-    .slice(0,Math.max(1,Math.trunc(limit)));
+    .sort((a,b)=>b.pre_move_discovery_score-a.pre_move_discovery_score||b.quoteVolume24h-a.quoteVolume24h||a.symbol.localeCompare(b.symbol));
+  const take=Math.max(1,Math.trunc(Number(limit)||30));
+  if(ranked.length<=take)return ranked;
+  // Keep the highest-ranked half in every pass and rotate the other half through
+  // the eligible universe. This prevents a fixed top-N list from being the only
+  // group that ever receives the deeper closed-candle/flow examination.
+  const pinnedCount=Math.min(Math.ceil(take/2),ranked.length);
+  const pinned=ranked.slice(0,pinnedCount);
+  const rotating=ranked.slice(pinnedCount);
+  const rotateCount=Math.min(take-pinnedCount,rotating.length);
+  if(rotateCount<=0)return pinned.slice(0,take);
+  const offset=((Math.trunc(Number(rotationOffset)||0)%rotating.length)+rotating.length)%rotating.length;
+  const rotatingRows=[];
+  for(let i=0;i<rotateCount;i++)rotatingRows.push(rotating[(offset+i)%rotating.length]);
+  return [...pinned,...rotatingRows].slice(0,take);
 }
-
 export function buildHistoricalFollowThrough(candles,now=Date.now(),{
   matchThreshold=68,
   maxSamples=8,
@@ -1771,6 +1791,117 @@ export class MarketUniverseScanner {
     };
   }
 
+  async scanPreMoveSymbol(ticker,rank,sources={},options={}) {
+    const startedAt=this.clock();
+    const symbol=String(ticker?.symbol||'').toUpperCase();
+    const series={'1h':[],'15m':[]};
+    const klinesSources=[];
+    let depthRaw=null,depthSource=null;
+    let scanError=null;
+    const limit1h=Math.max(50,Math.min(80,Math.trunc(Number(options.hourlyKlines)||60)));
+    const limit15m=Math.max(64,Math.min(120,Math.trunc(Number(options.fifteenMinuteKlines)||96)));
+    const requests=await Promise.allSettled([
+      this.fetchSeries(symbol,'1h',limit1h),
+      this.fetchSeries(symbol,'15m',limit15m),
+      this.fetchDepth(symbol)
+    ]);
+    const normalized=(result,tf)=>{
+      const fetchedAt=Number(result?.receivedAt)||this.clock();
+      if(result?.source)klinesSources.push(result.source);
+      return Array.isArray(result?.candles)
+        ?result.candles.map(c=>({...c,symbol,timeframe:tf}))
+        :normalizeRawKlines(result?.data,result?.source,fetchedAt);
+    };
+    for(let i=0;i<2;i++){
+      const tf=i===0?'1h':'15m';
+      const item=requests[i];
+      if(item.status==='fulfilled'){
+        series[tf]=normalized(item.value,tf);
+      }else{
+        scanError=scanError||item.reason||new Error('PRE_MOVE_KLINES_FAILED:'+tf);
+      }
+    }
+    if(requests[2]?.status==='fulfilled'){
+      const depth=requests[2].value;
+      depthRaw=depth?.data??depth;
+      depthSource=depth?.source??null;
+    }else{
+      scanError=scanError||requests[2]?.reason||new Error('PRE_MOVE_DEPTH_FAILED');
+    }
+
+    const completedAt=this.clock();
+    const v1=validateSeries(series['1h'],'1h');
+    const v15=validateSeries(series['15m'],'15m');
+    const last15=latestClosed(series['15m']);
+    const stale=!last15||!Number.isFinite(Number(last15.closeTime))||
+      completedAt-Number(last15.closeTime)>this.config.maxTriggerAgeMs;
+    const future=futureData([...series['1h'],...series['15m']],completedAt);
+    const integrityIssues=(v1.issues?.length||0)+(v15.issues?.length||0);
+    const dataQuality=v1.valid&&v15.valid&&!future&&!stale
+      ?Math.max(0,Math.min(100,100-Math.min(30,integrityIssues*5))):0;
+    let liquidity;
+    try{
+      liquidity=this.computeLiquidity(depthRaw,ticker);
+    }catch(error){
+      scanError=scanError||error;
+      liquidity={quality:0,allowed:false,reasons:['LIQUIDITY_COMPUTATION_FAILED'],spreadBps:null};
+    }
+    let bottomContext={available:false,metrics:{},reasons:['PRE_MOVE_BOTTOM_CONTEXT_UNAVAILABLE']};
+    let preMoveContext={
+      available:false,closed_candles_only:true,evidence_complete:false,
+      missing_evidence:['PRE_MOVE_CANDLES_UNAVAILABLE'],stage:'NO_SETUP',already_moved:false,
+      reasons:['PRE_MOVE_CANDLES_UNAVAILABLE'],components:{}
+    };
+    try{
+      bottomContext=buildBottomMarketContext(series,ticker,completedAt,{book:depthRaw,liquidity});
+      preMoveContext=buildPreMoveContext(series,{...ticker,dataQuality},completedAt,bottomContext);
+    }catch(error){
+      scanError=scanError||new Error('PRE_MOVE_CONTEXT_FAILED:'+String(error?.message||error));
+      preMoveContext={...preMoveContext,missing_evidence:[...(preMoveContext.missing_evidence||[]),'PRE_MOVE_CONTEXT_FAILED']};
+    }
+    const candlesValid=v1.valid&&v15.valid&&!future&&!stale;
+    const dataValid=candlesValid&&!scanError&&liquidity?.allowed===true&&
+      Number(liquidity?.quality)>=this.config.minLiquidityQuality&&dataQuality>=this.config.minDataQuality;
+    const source=combineSource([sources.exchangeInfo,sources.ticker,...klinesSources,depthSource]);
+    const fetchAgeMs=last15&&Number.isFinite(Number(last15.closeTime))
+      ?Math.max(0,completedAt-Number(last15.closeTime)):Math.max(0,completedAt-startedAt);
+    return {
+      symbol,rank,
+      last_price:Number.isFinite(Number(ticker?.lastPrice))?Number(ticker.lastPrice):null,
+      price_change_24h:Number(ticker?.priceChange24h),
+      high_price_24h:Number.isFinite(Number(ticker?.highPrice24h))?Number(ticker.highPrice24h):null,
+      low_price_24h:Number.isFinite(Number(ticker?.lowPrice24h))?Number(ticker.lowPrice24h):null,
+      quote_volume_24h:Number(ticker?.quoteVolume24h)||0,
+      bottom_context:bottomContext,pre_move_context:preMoveContext,
+      liquidity_quality:Math.round((Number(liquidity?.quality)||0)*100)/100,
+      data_quality:dataQuality,confidence_score:'UNKNOWN',market_regime:'UNKNOWN',overall_score:null,
+      coverage:{
+        required_timeframes:['1h','15m'],
+        available_timeframes:['1h','15m'].filter(tf=>Array.isArray(series[tf])&&series[tf].length>0),
+        strategy_count:0,evaluated_strategy_count:0,ratio:1
+      },
+      decision_band:'insufficient',signal_state:'NO_SIGNAL',direction:'NONE',best_strategy:null,
+      strategies:[],accepted_strategies:[],rejected_strategies:[],insufficient_strategies:[],
+      evidence:[
+        {type:'market',code:'QUOTE_VOLUME_24H',value:Number(ticker?.quoteVolume24h)||0},
+        {type:'market',code:'TRADE_COUNT_24H',value:Number(ticker?.tradeCount24h)||0},
+        {type:'market',code:'PRICE_CHANGE_24H',value:Number(ticker?.priceChange24h)},
+        {type:'quality',code:'DATA_QUALITY',value:dataQuality},
+        {type:'quality',code:'LIQUIDITY_QUALITY',value:Number(liquidity?.quality)||0}
+      ],
+      reason_codes:[...(liquidity?.reasons||[]),...(preMoveContext?.missing_evidence||[])],
+      invalidation:stale?['DATA_STALE']:future?['FUTURE_DATA_DETECTED']:[],
+      risk_flags:[...(liquidity?.reasons||[]),...(stale?['STALE_DATA']:[]),...(future?['FUTURE_DATA']:[])],
+      fast_impulse_context:{available:false,closed_candles_only:true,interval:null,candle_count:0},
+      data_status:{
+        data_stale:stale||future,data_valid:dataValid,
+        last_error:scanError?String(scanError?.message||scanError).slice(0,180):null,
+        source,fetch_age_ms:fetchAgeMs
+      },
+      paper_trading:true,real_order_execution:false
+    };
+  }
+
   async scanPreMove({ quote = this.config.quote, limit = 30 } = {}) {
     const startedAt=this.clock();
     const normalizedQuote=String(quote||this.config.quote).trim().toUpperCase();
@@ -1781,23 +1912,27 @@ export class MarketUniverseScanner {
     const universe=buildSpotUniverse(info.data,normalizedQuote);
     const tickerResponse=await this.ticker24h();
     const normalizedLimit=Math.min(50,Math.max(10,normalizeRadarLimit(limit,{...this.config,maxScanLimit:50,scanLimit:30})));
-    // Pre-Move is an interactive screen: keep enough liquid symbols for breadth,
-    // but do not make the phone wait on a 40-symbol deep scan.
-    const discoveryLimit=Math.min(24,Math.max(20,normalizedLimit));
+    // This screen uses only the timeframes needed for early-flow evidence (1h + 15m)
+    // and the order book; it does not run the unrelated general 20-strategy pipeline.
+    // A rotating second half broadens coverage without repeatedly deep-scanning only the same top symbols.
+    const discoveryLimit=Math.min(24,Math.max(24,normalizedLimit));
+    const rotationCycle=Math.max(0,Math.trunc(Number(this._preMoveRotationCycle)||0));
+    this._preMoveRotationCycle=rotationCycle+1;
+    const rotatingWidth=Math.max(1,discoveryLimit-Math.ceil(discoveryLimit/2));
+    const rotationOffset=(rotationCycle*rotatingWidth);
     const discovery=rankPreMoveTickerRows(tickerResponse.data,universe,{
       minQuoteVolume24h:this.config.minQuoteVolume24h,
-      limit:discoveryLimit
+      limit:discoveryLimit,
+      rotationOffset
     });
-    const preMoveConcurrency=Math.max(this.config.deepConcurrency,8);
-    const preMoveKlines=Math.min(this.config.deepKlines,220);
+    const preMoveConcurrency=Math.max(8,Math.min(12,Math.trunc(Number(this.config.deepConcurrency)||8)));
     const scanned=await boundedMap(
       discovery,
       preMoveConcurrency,
-      (ticker,i)=>this.scanSymbol(
+      (ticker,i)=>this.scanPreMoveSymbol(
         ticker,
         i+1,
-        {exchangeInfo:info.source,ticker:tickerResponse.source},
-        {klinesLimit:preMoveKlines}
+        {exchangeInfo:info.source,ticker:tickerResponse.source}
       )
     );
     const valid=scanned.filter(Boolean).filter(x=>x.data_status?.data_valid===true&&typeof x.pre_move_context?.session_return_pct==='number'&&Number.isFinite(x.pre_move_context.session_return_pct));
@@ -1847,7 +1982,7 @@ export class MarketUniverseScanner {
       as_of:new Date(this.clock()).toISOString(),
       source:'Binance Public REST',
       session:{timezone:'Asia/Aden',window:'04:00 local → latest closed candle',market_median_return_pct:marketMedianReturn,btc_return_pct:Number.isFinite(btcReturn)?btcReturn:null,positive_breadth_pct:returns.length?positiveCount/returns.length*100:null},
-      universe:{requested:normalizedLimit,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,evidence_incomplete_excluded:evidenceIncompleteExcluded,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,elapsed_ms:Math.max(0,this.clock()-startedAt)},
+      universe:{requested:normalizedLimit,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,evidence_incomplete_excluded:evidenceIncompleteExcluded,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,rotation_cycle:rotationCycle,rotation_offset:rotationOffset,rotation_width:rotatingWidth,coverage_mode:'PINNED_PLUS_ROTATING_V1',elapsed_ms:Math.max(0,this.clock()-startedAt)},
       candidates:returned
     };
   }
