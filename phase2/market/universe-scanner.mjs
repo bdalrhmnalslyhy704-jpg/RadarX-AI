@@ -724,7 +724,7 @@ function currentAdenMorningStartMs(now){
 
 export function buildPreMoveContext(series,ticker,now,bottomContext=null,{marketMedianReturn=null,btcReturn=null}={}){
   const raw15=Array.isArray(series?.['15m'])?series['15m']:[];
-  const closed15=raw15.filter(c=>c?.closed!==false&&Number.isFinite(Number(c?.closeTime))&&Number(c.closeTime)<=now&&
+  const closed15=raw15.filter(c=>c?.closed===true&&Number.isFinite(Number(c?.closeTime))&&Number(c.closeTime)<=now&&
     Number.isFinite(Number(c?.open))&&Number.isFinite(Number(c?.close))&&Number.isFinite(Number(c?.high))&&Number.isFinite(Number(c?.low))&&
     Number.isFinite(Number(c?.volume)));
   const sessionStartMs=currentAdenMorningStartMs(now);
@@ -806,7 +806,8 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
     Number.isFinite(whalePressure)?whalePressure:null
   ],45);
 
-  const alreadyMoved=(Number.isFinite(sessionReturn)&&sessionReturn>12)||(Number(ticker?.priceChange24h)>20);
+  // Align the hard no-chase gate with the score's declining calmness above 9% session gain.
+  const alreadyMoved=(Number.isFinite(sessionReturn)&&sessionReturn>9)||(Number(ticker?.priceChange24h)>20);
   const stage=alreadyMoved?'ALREADY_MOVED':
     preMoveScore>=82&&Number.isFinite(sessionReturn)&&sessionReturn<=6?'READY':
     preMoveScore>=72?'EARLY_WAKE':
@@ -826,7 +827,7 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
 
   return {
     timezone:'Asia/Aden',
-    window:'04:00–12:00 local session',
+    window:'04:00 local → latest closed candle',
     session_start:new Date(sessionStartMs).toISOString(),
     session_close:Number.isFinite(Number(session.at(-1)?.closeTime))?Number(session.at(-1).closeTime):null,
     current_price:Number.isFinite(current)?current:null,
@@ -1755,15 +1756,17 @@ export class MarketUniverseScanner {
     }).sort((a,b)=>Number(b.pre_move_context.score)-Number(a.pre_move_context.score)||Number(a.pre_move_context.session_return_pct)-Number(b.pre_move_context.session_return_pct));
     // Exclude overextended symbols before applying the final result limit. Filtering only
     // in the client can otherwise allow the backend's top-N list to be filled with late movers.
-    const actionable=enriched.filter(x=>x.pre_move_context.already_moved!==true&&x.pre_move_context.stage!=='ALREADY_MOVED');
-    const extendedExcluded=enriched.length-actionable.length;
+    const actionable=enriched.filter(x=>x.pre_move_context.already_moved!==true&&
+      !['ALREADY_MOVED','NO_SETUP'].includes(x.pre_move_context.stage));
+    const extendedExcluded=enriched.filter(x=>x.pre_move_context.already_moved===true||x.pre_move_context.stage==='ALREADY_MOVED').length;
+    const noSetupExcluded=enriched.filter(x=>x.pre_move_context.stage==='NO_SETUP').length;
     const returned=actionable.slice(0,Math.min(10,normalizedLimit));
     return {
       meta:{live:valid.length>0,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PRE_MOVE'},
       as_of:new Date(this.clock()).toISOString(),
       source:'Binance Public REST',
-      session:{timezone:'Asia/Aden',window:'04:00–12:00 local',market_median_return_pct:marketMedianReturn,btc_return_pct:Number.isFinite(btcReturn)?btcReturn:null,positive_breadth_pct:returns.length?positiveCount/returns.length*100:null},
-      universe:{requested:normalizedLimit,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,extended_excluded:extendedExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,elapsed_ms:Math.max(0,this.clock()-startedAt)},
+      session:{timezone:'Asia/Aden',window:'04:00 local → latest closed candle',market_median_return_pct:marketMedianReturn,btc_return_pct:Number.isFinite(btcReturn)?btcReturn:null,positive_breadth_pct:returns.length?positiveCount/returns.length*100:null},
+      universe:{requested:normalizedLimit,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,elapsed_ms:Math.max(0,this.clock()-startedAt)},
       candidates:returned
     };
   }
