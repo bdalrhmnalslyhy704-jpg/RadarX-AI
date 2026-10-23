@@ -385,7 +385,8 @@ test('Pre-Move Radar excludes already-extended coins from actionable rankings',(
     candidate('LATEUSDT',{stage:'ALREADY_MOVED',already_moved:true,score:99,session_return_pct:14}),
     candidate('EARLYUSDT',{stage:'EARLY_WAKE',already_moved:false,score:76,session_return_pct:2}),
     candidate('LATE2USDT',{stage:'ALREADY_MOVED',already_moved:false,score:94,session_return_pct:4}),
-    candidate('NOSETUPUSDT',{stage:'NO_SETUP',already_moved:false,score:61,session_return_pct:1})
+    candidate('NOSETUPUSDT',{stage:'NO_SETUP',already_moved:false,score:61,session_return_pct:1}),
+    candidate('NULLMETRICS',{stage:'EARLY_WAKE',already_moved:false,score:null,session_return_pct:null})
   ]};
   const rows=rankPreMoveCandidates(body);
   assert.deepEqual(rows.map(row=>row.symbol),['EARLYUSDT']);
