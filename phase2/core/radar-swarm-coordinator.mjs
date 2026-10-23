@@ -69,8 +69,20 @@ export class RadarSwarmCoordinator {
         state.last_error_at=this.clock();
         try{this.logger.warn?.('[RADAR_SWARM_WORKER_UNHEALTHY] '+runner.id+' '+state.last_error);}catch{}
       }
+      const busySince=Number(health.busy_since_at);
+      const pollMs=Number(health.poll_ms)||20000;
+      const stuckScanLimitMs=Math.max(120000,Math.min(240000,pollMs*6));
+      const busyForMs=this.clock()-busySince;
+      const stuckScan=health.running===true&&health.busy===true&&Number.isFinite(busySince)&&busySince>0&&busyForMs>stuckScanLimitMs;
+      if(stuckScan&&state.status==='RUNNING'){
+        state.status='DEGRADED';
+        state.last_error='WORKER_SCAN_STUCK:busy_ms='+Math.max(0,Math.trunc(busyForMs));
+        state.last_error_at=this.clock();
+        try{this.logger.warn?.('[RADAR_SWARM_SCAN_STUCK] '+JSON.stringify({id:runner.id,busy_ms:Math.max(0,Math.trunc(busyForMs)),timeout_ms:stuckScanLimitMs,action:'BOUNDED_WORKER_RESTART',paper_trading:true,real_order_execution:false}));}catch{}
+      }
       if(!['FAILED','DEGRADED'].includes(state.status))continue;
-      if(health.running===true&&state.status!=='FAILED')continue;
+      const stuckRestart=String(state.last_error||'').startsWith('WORKER_SCAN_STUCK:');
+      if(health.running===true&&state.status!=='FAILED'&&!stuckRestart)continue;
       if(Number(state.restart_attempts||0)>=this.maxRestarts)continue;
       const now=this.clock();
       const last=Number(state.last_restart_attempt_at);

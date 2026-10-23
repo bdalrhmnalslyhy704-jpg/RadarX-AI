@@ -1851,7 +1851,7 @@ export class EarlyExpansionRadar{
       minClosedCandles:this.config.marketWideLightScanMinClosedCandles,
       maxClosedCandles:this.config.marketWideLightScanMaxClosedCandles
     },clock});
-    this.running=false;this.busy=false;this.timer=null;this.universe=[];this.universeAt=0;
+    this.running=false;this.busy=false;this.busySinceAtMs=null;this.lastScanCompletedAtMs=null;this.lastScanDurationMs=null;this.timer=null;this.universe=[];this.universeAt=0;
     this.fastState=new Map();this.lastAlertAt=new Map();this.lastAlertScore=new Map();this.lastBand=new Map();
     this.lastActivityShockAt=new Map();this.lastActivityShockKeyBySymbol=new Map();this.activityShockTimestamps=[];this.fastShockPendingUntil=new Map();
     this.lastEarlyFlowWatchAt=new Map();this.lastEarlyFlowWatchKeyBySymbol=new Map();
@@ -2645,7 +2645,7 @@ export class EarlyExpansionRadar{
   }
   async tick({quote=this.config.quote}={}){
     if(!this.running||this.busy)return false;
-    this.busy=true;const scanStartedAt=this.clock();
+    this.busy=true;const scanStartedAt=this.clock();this.busySinceAtMs=scanStartedAt;
     const deepCacheHitStart=this.deepCandleCacheHitTotal,deepCacheMissStart=this.deepCandleCacheMissTotal;
     const journeyEntries=new Map(),journeyMicroBySymbol=new Map(),journeyDeepBySymbol=new Map(),journeyDeepCandlesBySymbol=new Map();
     const journey={cycle_id:null,cycle_number:null,quote:INCOMPLETE,source:INCOMPLETE,expected_symbols:[],received_symbols:[],eligible_symbols:[],status:'RUNNING'};
@@ -3707,6 +3707,8 @@ export class EarlyExpansionRadar{
           this.noteError(archiveError,'journey-archive');
         }
       }
+      this.lastScanCompletedAtMs=this.clock();
+      this.lastScanDurationMs=Math.max(0,this.lastScanCompletedAtMs-scanStartedAt);
       return true;
     }catch(e){
       this.lastError=String(e?.message??e);this.lastScanAtMs=scanStartedAt;
@@ -3748,7 +3750,7 @@ export class EarlyExpansionRadar{
     }finally{
       // Release the cycle latch before scheduling archive writes. A slow queued
       // durable-store append must never prevent future background scan cycles.
-      this.busy=false;
+      this.busy=false;this.busySinceAtMs=null;
       try{
         const flushing=this.scheduler.flush();
         Promise.resolve(flushing).catch(error=>this.noteError(error,'scheduler-flush'));
@@ -3771,7 +3773,8 @@ export class EarlyExpansionRadar{
     return {
       running:this.running,busy:this.busy,radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',
       universe_total:this.universe.length,universe_refreshed_at:this.universeAt||null,
-      last_scan_at:this.lastScanAtMs,scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,
+      last_scan_at:this.lastScanAtMs,last_scan_completed_at:this.lastScanCompletedAtMs,last_scan_duration_ms:this.lastScanDurationMs,
+      busy_since_at:this.busySinceAtMs,scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,
       fast_scanned_total:this.fastScannedTotal,failed_total:this.failedTotal,failed_symbols:this.failedSymbols,fast_shock_pending_total:[...this.fastShockPendingUntil.values()].filter(until=>Number(until)>now).length,micro_scanned_total:Number(this.lastCoverage?.micro_scanned_total||0),micro_scan_candidates:Number(this.lastCoverage?.micro_scan_candidates||0),rotation_cycle:Number(this.lastCoverage?.rotation_cycle||0),
       coverage:this.lastCoverage,
       poll_ms:this.config.pollMs,micro_scan_candidates:this.config.microScanCandidates,micro_concurrency:this.config.microConcurrency,rotation_reserve:this.config.rotationReserve,quiet_reserve:this.config.quietReserve,deep_candidates:this.config.deepCandidates,deep_concurrency:this.config.deepConcurrency,

@@ -60,3 +60,28 @@ test('snapshot immediately reports a stopped worker as DEGRADED even before watc
   assert.equal(snapshot.radars[0].last_error, 'WORKER_HEALTH_NOT_RUNNING');
   await swarm.stop();
 });
+
+
+test('watchdog restarts a radar whose scan latch stays busy beyond its deadline', async () => {
+  let now = 1_000_000;
+  const state = {running: false, busy: false, busy_since_at: null, starts: 0, stops: 0};
+  const instance = {
+    start() { state.starts++; state.running = true; state.busy = false; state.busy_since_at = null; },
+    stop() { state.stops++; state.running = false; state.busy = false; state.busy_since_at = null; },
+    health() { return {running: state.running, busy: state.busy, busy_since_at: state.busy_since_at, poll_ms: 20_000}; }
+  };
+  const swarm = new RadarSwarmCoordinator({
+    runners: [{id: 'RADAR_8', name: 'Lightning', instance}], expectedCount: 1,
+    startupSpacingMs: 0, watchdogIntervalMs: 10_000, restartCooldownMs: 0,
+    maxRestarts: 1, clock: () => now, logger: {warn() {}, error() {}}
+  });
+  await swarm.start();
+  state.busy = true; state.busy_since_at = now - 130_000;
+  await swarm._runWatchdog(swarm.generation);
+  const recovered = swarm.snapshot();
+  assert.equal(state.starts, 2); assert.equal(state.stops, 1);
+  assert.equal(recovered.radars[0].restart_attempts, 1);
+  assert.equal(recovered.status, 'RUNNING'); assert.equal(recovered.running_count, 1);
+  assert.equal(recovered.failed_count, 0);
+  await swarm.stop();
+});

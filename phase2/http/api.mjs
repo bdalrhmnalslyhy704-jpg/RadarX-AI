@@ -743,7 +743,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           if(runNow&&before.busy!==true&&typeof earlyExpansionRadar.tick==='function')await earlyExpansionRadar.tick();
           const snapshot=earlyExpansionRadar.snapshot?.(limit,quote)||{schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',candidates:[]};
           const health=earlyExpansionRadar.health?.()||{running:false};
-          return send(res,200,{...snapshot,monitoring:health,scan:{requested:runNow,completed:health.last_scan_at!=null,error:health.last_error||null},meta:{...(snapshot.meta||{}),live:health.running===true,radar:'EARLY_EXPANSION_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',source:'Binance Public REST'}});
+          return send(res,200,{...snapshot,monitoring:health,scan:{requested:runNow,completed:health.last_scan_completed_at!=null,last_completed_at:health.last_scan_completed_at,error:health.last_error||null},meta:{...(snapshot.meta||{}),live:health.running===true,radar:'EARLY_EXPANSION_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',source:'Binance Public REST'}});
         }catch(e){
           const snapshot=earlyExpansionRadar.snapshot?.(limit,quote)||{schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',candidates:[]};
           const health=earlyExpansionRadar.health?.()||{running:false};
