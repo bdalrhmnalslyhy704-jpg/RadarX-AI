@@ -994,7 +994,7 @@ export function buildPreMoveWatchCandidates(rows,{
   minDataQuality=70,
   // Surface credible partial setups earlier for visual WATCH_EARLY review only.
   // This lane never qualifies an actionable candidate or a phone notification.
-  minScore=45
+  minScore=40
 }={}) {
   const out=[];
   const hardRisks=new Set([
@@ -1023,7 +1023,7 @@ export function buildPreMoveWatchCandidates(rows,{
       trades>=1.05,
       taker>=0.53&&takerDelta>=0.01,
       closeLocation>=0.54,
-      oneHourReturn>=0.15&&oneHourReturn<=4.5
+      oneHourReturn>=-1.25&&oneHourReturn<=4.5
     ];
     const structureChecks=[squeeze>=55,structure>=60,buying>=60];
     const riskFlags=Array.isArray(x?.risk_flags)?x.risk_flags.map(v=>String(v).toUpperCase()):[];
@@ -1035,7 +1035,7 @@ export function buildPreMoveWatchCandidates(rows,{
        !Number.isFinite(sessionReturn)||sessionReturn< -1.5||sessionReturn>8||
        !Number.isFinite(oneHourReturn)||oneHourReturn< -1.25||oneHourReturn>4.5||
        !Number.isFinite(dailyChange)||Math.abs(dailyChange)>=20||
-       coreChecks.filter(Boolean).length<3||
+       coreChecks.filter(Boolean).length<2||
        structureChecks.filter(Boolean).length<1||
        riskFlags.some(flag=>hardRisks.has(flag))) continue;
 
