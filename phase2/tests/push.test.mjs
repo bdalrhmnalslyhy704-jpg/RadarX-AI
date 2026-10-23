@@ -52,7 +52,12 @@ test('TEST_FIXTURE: generic Radar push rejects watch-only and gate-rejected aler
     signal_lifecycle:{state:'EARLY_SETUP',label:'إعداد مبكر',transition:'EARLY_EVIDENCE_CONVERGED',reason_codes:['RELATED_EARLY_EVIDENCE']}
   });
   assert.deepEqual(out,[]);
-  assert.equal(sent.length,0,'watch-only alerts must never reach a phone');
+  const rejected=await manager.notifyRadarAlert({
+    radar:'FALCON_EYE_RADAR',symbol:'NOENTRYUSDT',data_quality:95,
+    eligible:true,entry_eligible:false
+  });
+  assert.deepEqual(rejected,[]);
+  assert.equal(sent.length,0,'watch-only and entry-ineligible alerts must never reach a phone');
 });
 
 test('TEST_FIXTURE: Radar 8 early-flow watch stays feed-only even with valid evidence',async()=>{
