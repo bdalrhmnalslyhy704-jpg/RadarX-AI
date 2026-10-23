@@ -939,7 +939,7 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
   };
 }
 
-export export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_RADAR_DEFAULTS.minQuoteVolume24h,limit=30,rotationOffset=0}={}){
+export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_RADAR_DEFAULTS.minQuoteVolume24h,limit=30,rotationOffset=0}={}){
   const allowed=new Set(symbols.map(x=>x.symbol));
   const ranked=(Array.isArray(tickers)?tickers:[])
     .map(x=>normalizeTickerRow(x,symbols[0]?.quoteAsset||'USDT'))
