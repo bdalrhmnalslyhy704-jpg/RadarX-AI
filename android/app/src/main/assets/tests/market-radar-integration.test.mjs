@@ -247,6 +247,7 @@ assert.match(preMovePage,/Pre‑Move Radar/);
 assert.match(preMovePage,/قبل الحركة/);
 assert.match(preMovePage,/04:00/);
 assert.match(preMovePage,/Taker Buy/);
+assert.match(preMovePage,/r\.body\.meta\?\.live!==true/);
 assert.match(preMovePage,/تسارع الحجم/);
 assert.match(preMovePage,/القوة النسبية/);
 assert.match(preMovePage,/ضغط الحيتان/);
