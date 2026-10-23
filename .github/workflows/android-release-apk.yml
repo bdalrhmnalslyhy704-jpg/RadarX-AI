@@ -489,8 +489,10 @@ jobs:
           if (body.source !== 'Binance Public REST') throw new Error('PRE_MOVE_RADAR_SOURCE_INVALID');
           if (body.session?.timezone !== 'Asia/Aden' || body.session?.window !== '04:00–12:00 local') throw new Error('PRE_MOVE_RADAR_SESSION_INVALID');
           if (!Array.isArray(body.candidates) || !body.universe || !Number.isFinite(Number(body.universe.scanned))) throw new Error('PRE_MOVE_RADAR_RESULT_SHAPE_INVALID');
+          if (body.meta.live !== true || body.candidates.length < 1) throw new Error('PRE_MOVE_RADAR_NO_LIVE_CANDIDATES');
+          if (Number(body.universe.eligible_spot_symbols) < 1 || Number(body.universe.discovered) < 1) throw new Error('PRE_MOVE_RADAR_UNIVERSE_EMPTY');
           for (const row of body.candidates) {
-            if (row?.data_status?.data_valid !== true || !row?.pre_move_context || !Number.isFinite(Number(row.pre_move_context.score))) {
+            if (row?.data_status?.data_valid !== true || !row?.pre_move_context || !Number.isFinite(Number(row.pre_move_context.score)) || row.pre_move_context.closed_candles_only !== true) {
               throw new Error('PRE_MOVE_RADAR_INVALID_CANDIDATE:' + String(row?.symbol || 'UNKNOWN'));
             }
           }
