@@ -2010,7 +2010,7 @@ export class MarketUniverseScanner {
     const noSetupExcluded=enriched.filter(x=>x.pre_move_context.stage==='NO_SETUP').length;
     const returned=actionable.slice(0,Math.min(10,normalizedLimit));
     return {
-      meta:{live:valid.length>0,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PRE_MOVE'},
+      meta:{live:observed.length>0,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PRE_MOVE'},
       as_of:new Date(this.clock()).toISOString(),
       source:'Binance Public REST',
       session:{timezone:'Asia/Aden',window:'04:00 local → latest closed candle',market_median_return_pct:marketMedianReturn,btc_return_pct:Number.isFinite(btcReturn)?btcReturn:null,positive_breadth_pct:returns.length?positiveCount/returns.length*100:null},
