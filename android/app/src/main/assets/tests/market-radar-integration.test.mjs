@@ -1,6 +1,6 @@
 import test from 'node:test';
 import {rankBottomCandidates} from '../radarx-bottom-reversal.mjs';
-import {rankPreMoveCandidates} from '../radarx-pre-move.mjs';
+import {rankPreMoveCandidates,rankPreMoveWatchCandidates} from '../radarx-pre-move.mjs';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {
@@ -395,4 +395,34 @@ test('Pre-Move Radar excludes already-extended coins from actionable rankings',(
   const rows=rankPreMoveCandidates(body);
   assert.deepEqual(rows.map(row=>row.symbol),['EARLYUSDT']);
   assert.equal(rows.some(row=>row.alreadyMoved),false);
+});
+
+
+test('Pre-Move low-volume early setups remain visible as watch-only and never masquerade as alerts',async()=>{
+  const candidate=(symbol,overrides={})=>({
+    symbol,last_price:1.02,price_change_24h:1.6,quote_volume_24h:18000,
+    liquidity_quality:42,data_quality:96,
+    data_status:{data_valid:false,data_stale:false,candle_data_valid:true,volume_gate_pass:false},
+    pre_move_context:{
+      stage:'EARLY_WAKE',score:75,session_return_pct:2.1,evidence_complete:true,
+      closed_candles_only:true,flow_transition_confirmed:true,price_window_valid:true,
+      structure_confirmed:true,already_moved:false,components:{acceleration:78},
+      reasons:['VOLUME_ACCELERATING']
+    },
+    watch_only:true,alert_eligible:false,watch_only_reason:'BELOW_MIN_QUOTE_VOLUME',
+    ...overrides
+  });
+  const rows=rankPreMoveWatchCandidates({watch_candidates:[
+    candidate('LOWVOLUSDT'),
+    candidate('STALEUSDT',{data_status:{data_valid:false,data_stale:true,candle_data_valid:true,volume_gate_pass:false}}),
+    candidate('LATEUSDT',{pre_move_context:{stage:'ALREADY_MOVED',score:99,session_return_pct:12,evidence_complete:true,closed_candles_only:true,flow_transition_confirmed:true,price_window_valid:true,structure_confirmed:true,already_moved:true,components:{},reasons:[]}})
+  ]});
+  assert.deepEqual(rows.map(x=>x.symbol),['LOWVOLUSDT']);
+  assert.equal(rows[0].stage,'WATCH_ONLY');
+  assert.equal(rows[0].watchOnly,true);
+  assert.equal(rows[0].watchReason,'حجم التداول اليومي أقل من حد التنبيه');
+  assert.equal(rows[0].closedCandlesOnly,true);
+  const page=await readFile(new URL('../pre-move-radar.html',import.meta.url),'utf8');
+  assert.match(page,/rankPreMoveWatchCandidates/);
+  assert.match(page,/مراقبة فقط وليست توصية دخول/);
 });
