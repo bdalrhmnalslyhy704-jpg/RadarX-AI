@@ -1002,7 +1002,7 @@ export function buildPreMoveTargetPlan(candles,ticker={},now=Date.now()){
     Number.isFinite(Number(c?.close))&&Number(c.low)>0&&Number(c.close)>0)
     .sort((a,b)=>Number(a.openTime)-Number(b.openTime));
   const entry=Number(ticker?.lastPrice);
-  const fail=code=>({method:'ATR_15M_RISK_REWARD_V1',valid:false,actionable:false,status:'WATCH_ONLY_ESTIMATE',
+  const fail=code=>({method:'ATR_15M_RISK_REWARD_V2',valid:false,actionable:false,status:'WATCH_ONLY_ESTIMATE',
     reference_price:Number.isFinite(entry)&&entry>0?entry:null,target_1_price:null,target_2_price:null,
     invalidation_price:null,risk_pct:null,target_1_rr:null,target_2_rr:null,reward_risk_ok:false,
     reason_codes:[code],price_basis:'LAST_TICKER_PRICE_AT_SCAN',paper_only:true,not_guaranteed:true,closed_candles_only:true});
