@@ -59,6 +59,10 @@ jobs:
         run: npm test
         timeout-minutes: 25
 
+      - name: Run Android Pre-Move UI regression test
+        run: node android/app/src/main/assets/tests/market-radar-integration.test.mjs
+        timeout-minutes: 5
+
       - name: Audit critical vulnerabilities
         run: npm audit --audit-level=critical
         timeout-minutes: 5
