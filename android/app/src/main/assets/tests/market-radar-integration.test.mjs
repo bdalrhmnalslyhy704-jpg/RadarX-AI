@@ -289,6 +289,7 @@ test('Pre-Move Android view carries target levels without promoting watch rows t
   assert.equal(watched[0].targetPlan.actionable,false);
   const page=await readFile(new URL('../pre-move-radar.html',import.meta.url),'utf8');
   assert.match(page,/targetPlanHtml/);
+  assert.match(page,/مشروط باختراق المقاومة/,'conditional targets must not be displayed as unconditional targets');
   assert.match(page,/مستوى إلغاء الفكرة/);
   assert.match(page,/الهدف 1/);
   assert.match(page,/الهدف 2/);
