@@ -55,7 +55,11 @@ function pct(n){return Number.isFinite(Number(n))?Number(n).toFixed(2)+'%':'—'
 function num(n,d='—'){return Number.isFinite(Number(n))?Number(n).toFixed(1):d}
 function meter(label,v){const x=Math.max(0,Math.min(100,Number(v)||0));return '<div class="meter"><span>'+label+'</span><b>'+x.toFixed(0)+'</b><div class="track"><i style="width:'+x+'%"></i></div></div>'}
 function render(rows,meta){
- if(!rows.length){cards.innerHTML='<div class="empty">لم يصل أي مرشح صالح بجودة بيانات كافية.</div>';return;}
+ if(!rows.length){
+   const validData=Number(meta?.universe?.valid_data??meta?.universe?.scanned??0)>0;
+   cards.innerHTML='<div class="empty">'+(validData?'لا توجد الآن عملات مؤهلة لمرحلة ما قبل الحركة. تم استبعاد العملات المتمددة بدل مطاردتها؛ أعد الفحص بعد وصول شموع مغلقة جديدة.':'لم تصل بيانات سوق صالحة كافية من Backend.')+'</div>';
+   return;
+ }
  cards.innerHTML=rows.map((x,i)=>{
    const p=x;
    const comp=p.components||{};
