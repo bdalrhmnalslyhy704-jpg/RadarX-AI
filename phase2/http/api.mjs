@@ -156,9 +156,21 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     rest: marketRadarRestClient,
     config: config.marketRadar ?? {}
   }) : null;
+  // Keep the long-running Pre-Move scan's per-scan request bookkeeping isolated from
+  // the interactive Market Radar scanner; both still share the REST client's global budget/cache.
+  const preMoveRadarScanner = marketRadarRestClient ? new MarketUniverseScanner({
+    rest: marketRadarRestClient,
+    config: config.marketRadar ?? {}
+  }) : null;
   const marketRadarResponseCache=new Map();
   const marketRadarRefreshFlights=new Map();
   const marketRadarRefreshRetryAfter=new Map();
+  const preMoveRadarResponseCache=new Map();
+  const preMoveRadarRefreshFlights=new Map();
+  const preMoveRadarRefreshRetryAfter=new Map();
+  const preMoveRadarLastError=new Map();
+  const preMoveRadarCacheTtlMs=Math.max(10000,Math.min(120000,Number(config.marketRadar?.preMoveResponseCacheTtlMs)||30000));
+  const preMoveRadarRetryCooldownMs=Math.max(5000,Math.min(60000,Number(config.marketRadar?.preMoveResponseCacheRetryMs)||15000));
   const marketRadarCacheTtlMs=Math.max(5000,Math.min(120000,Number(config.marketRadar?.responseCacheTtlMs)||30000));
   const marketRadarCacheMaxStaleMs=Math.max(marketRadarCacheTtlMs,Math.min(300000,Number(config.marketRadar?.responseCacheMaxStaleMs)||180000));
   const marketRadarRefreshCooldownMs=Math.max(5000,Math.min(60000,Number(config.marketRadar?.responseCacheRetryMs)||15000));
@@ -224,6 +236,67 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       if(marketRadarRefreshFlights.get(key)===task)marketRadarRefreshFlights.delete(key);
     });
     marketRadarRefreshFlights.set(key,task);
+    return task;
+  }
+
+  function preMoveRadarPendingBody(quote,limit,key,mode='SCAN_IN_PROGRESS',ageMs=null){
+    const failed=mode==='RETRY_COOLDOWN';
+    const retryAfterMs=Math.max(0,Number(preMoveRadarRefreshRetryAfter.get(key)||0)-Date.now());
+    const lastError=String(preMoveRadarLastError.get(key)||'').slice(0,180);
+    return {
+      status:failed?'error':'refreshing',
+      error:failed?'PRE_MOVE_SCAN_FAILED':'PRE_MOVE_SCAN_IN_PROGRESS',
+      ...(failed&&lastError?{reason:lastError}:{}),
+      source:'Binance Public REST',
+      as_of:new Date().toISOString(),
+      session:{timezone:'Asia/Aden',window:'04:00 local → latest closed candle',market_median_return_pct:null,btc_return_pct:null,positive_breadth_pct:null},
+      universe:{
+        requested:limit,discovered:0,deep_scanned:0,scanned:0,valid_data:0,
+        evidence_incomplete_excluded:0,extended_excluded:0,no_setup_excluded:0,
+        actionable:0,returned:0,eligible_spot_symbols:0,
+        min_quote_volume_24h:Number(config.marketRadar?.minQuoteVolume24h)||750000
+      },
+      candidates:[],
+      meta:{
+        live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PRE_MOVE',
+        response_cache:{mode,age_ms:Number.isFinite(Number(ageMs))?Number(ageMs):null,retry_after_ms:retryAfterMs}
+      }
+    };
+  }
+
+  function refreshPreMoveRadarSnapshot(key,quote,limit){
+    const active=preMoveRadarRefreshFlights.get(key);
+    if(active)return active;
+    const retryAfter=Number(preMoveRadarRefreshRetryAfter.get(key)||0);
+    if(retryAfter>Date.now())return null;
+    const task=Promise.resolve().then(()=>preMoveRadarScanner.scanPreMove({quote,limit})).then(snapshot=>{
+      if(!snapshot||snapshot.meta?.radar!=='PRE_MOVE'||typeof snapshot.as_of!=='string'||
+         !snapshot.session||!snapshot.universe||!Array.isArray(snapshot.candidates))
+        throw new Error('PRE_MOVE_RADAR_SNAPSHOT_INVALID');
+      if(snapshot.session.timezone!=='Asia/Aden'||snapshot.session.window!=='04:00 local → latest closed candle'||
+         ![snapshot.universe.scanned,snapshot.universe.valid_data,snapshot.universe.evidence_incomplete_excluded,
+           snapshot.universe.extended_excluded,snapshot.universe.no_setup_excluded].every(Number.isFinite))
+        throw new Error('PRE_MOVE_SCANNER_SCHEMA_OUTDATED');
+      if(snapshot.meta.live!==true||snapshot.universe.valid_data<1)
+        throw new Error('PRE_MOVE_NO_VALID_LIVE_DATA');
+      if(!preMoveRadarResponseCache.has(key)&&preMoveRadarResponseCache.size>=6){
+        const oldest=[...preMoveRadarResponseCache.entries()].sort((a,b)=>a[1].savedAt-b[1].savedAt)[0];
+        if(oldest)preMoveRadarResponseCache.delete(oldest[0]);
+      }
+      preMoveRadarResponseCache.set(key,{snapshot,savedAt:Date.now()});
+      preMoveRadarRefreshRetryAfter.delete(key);
+      preMoveRadarLastError.delete(key);
+      return snapshot;
+    }).catch(error=>{
+      const message=String(error?.message??error).slice(0,180);
+      preMoveRadarRefreshRetryAfter.set(key,Date.now()+preMoveRadarRetryCooldownMs);
+      preMoveRadarLastError.set(key,message);
+      console.warn?.('[PRE_MOVE_RADAR_SCAN_FAILED] '+JSON.stringify({quote,limit,error:message}));
+      throw error;
+    }).finally(()=>{
+      if(preMoveRadarRefreshFlights.get(key)===task)preMoveRadarRefreshFlights.delete(key);
+    });
+    preMoveRadarRefreshFlights.set(key,task);
     return task;
   }
 
@@ -888,7 +961,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         }
       }
       if(u.pathname==='/api/pre-move-radar'&&req.method==='GET'){
-        if(!marketRadar){
+        if(!preMoveRadarScanner){
           console.error?.('[PRE_MOVE_RADAR_DEPENDENCY_MISSING] '+JSON.stringify({
             dedicated_rest:Boolean(marketRadarRest),monitor_rest:Boolean(monitor?.rest),
             early_expansion_rest:Boolean(earlyExpansionRadar?.rest),move_radar_rest:Boolean(moveSentinel?.rest),
@@ -899,15 +972,31 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             source:'Binance Public REST',candidates:[]});
         }
         const quote=String(u.searchParams.get('quote')||'USDT').trim().toUpperCase();
-        const limit=u.searchParams.get('limit')||'30';
-        try{
-          return send(res,200,await marketRadar.scanPreMove({quote,limit}));
-        }catch(e){
-          const m=String(e?.message??e);
-          const status=/INVALID_QUOTE|INVALID_EXCHANGE_INFO/.test(m)?400:/RATE_LIMIT|TIMEOUT|UNAVAILABLE|FAILED|NETWORK|FETCH|ECONN|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|SOCKET/.test(m)?502:500;
-          console.warn?.('[PRE_MOVE_RADAR_SCAN_FAILED] '+JSON.stringify({error:m.slice(0,180),status}));
-          return send(res,status,{error:m,meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PRE_MOVE'},source:'Binance Public REST',candidates:[]});
+        const rawLimit=Number(u.searchParams.get('limit')||30);
+        if(!/^[A-Z]{2,10}$/.test(quote))return send(res,400,{error:'INVALID_QUOTE',source:'Binance Public REST',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PRE_MOVE'}});
+        if(!Number.isInteger(rawLimit)||rawLimit<10||rawLimit>50)return send(res,400,{error:'INVALID_LIMIT',source:'Binance Public REST',candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PRE_MOVE'}});
+        const limit=rawLimit;
+        const key=quote+':'+limit;
+        const now=Date.now();
+        const force=u.searchParams.get('scan')==='1';
+        const cached=preMoveRadarResponseCache.get(key);
+        const ageMs=cached?Math.max(0,now-cached.savedAt):null;
+        if(preMoveRadarRefreshFlights.has(key)){
+          return send(res,200,preMoveRadarPendingBody(quote,limit,key,'SCAN_IN_PROGRESS',ageMs));
         }
+        if(!force&&cached&&ageMs<=preMoveRadarCacheTtlMs){
+          return send(res,200,{
+            ...cached.snapshot,status:'ready',
+            meta:{...cached.snapshot.meta,live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+              response_cache:{mode:'HIT',age_ms:ageMs,fresh_ttl_ms:preMoveRadarCacheTtlMs}}
+          });
+        }
+        if(Number(preMoveRadarRefreshRetryAfter.get(key)||0)>now){
+          return send(res,200,preMoveRadarPendingBody(quote,limit,key,'RETRY_COOLDOWN',ageMs));
+        }
+        const refresh=refreshPreMoveRadarSnapshot(key,quote,limit);
+        if(refresh)refresh.catch(()=>{});
+        return send(res,200,preMoveRadarPendingBody(quote,limit,key,'SCAN_IN_PROGRESS',ageMs));
       }
       if(u.pathname==='/api/market-radar'&&req.method==='GET'){
         if(!marketRadar)return send(res,503,{error:'MARKET_RADAR_UNAVAILABLE'});
