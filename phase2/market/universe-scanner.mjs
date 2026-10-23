@@ -738,18 +738,21 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
   const sessionReturn=Number.isFinite(current)&&sessionOpen>0?(current-sessionOpen)/sessionOpen*100:null;
   const sessionPosition=Number.isFinite(current)&&Number.isFinite(sessionLow)&&sessionRange>0?(current-sessionLow)/sessionRange*100:null;
 
-  // Before three hours have elapsed in the Yemen session, compare the newest closed
-  // candles with the most recent closed pre-session bars instead of waiting for a full
-  // in-session baseline. Never compare an overlapping recent window with itself.
+  // Compare the most recent closed hour to the immediately preceding hour;
+  // compare its volume/trade participation against the eight candles before that.
+  // This avoids accidentally comparing today's last hour with the first hour of the session.
   const recentCount=Math.min(4,Math.max(2,Math.floor(session.length/2)));
   const late4=session.slice(-recentCount);
-  const priorSession=session.slice(0,Math.max(0,session.length-late4.length));
-  const preSession=closed15.filter(c=>Number(c.closeTime)<sessionStartMs);
-  const early4=priorSession.slice(0,4);
-  const base8=(priorSession.length>=4?priorSession:preSession).slice(-8);
+  const previousToLate=closed15.filter(c=>Number(c.closeTime)<Number(late4[0]?.closeTime));
+  const early4=previousToLate.slice(-late4.length);
+  const base8=previousToLate.slice(0,Math.max(0,previousToLate.length-early4.length)).slice(-8);
   const avgVol=rows=>rows.length?mean(rows.map(x=>Number(x.volume))):null;
-  const earlyVol=avgVol(early4), lateVol=avgVol(late4), baseVol=avgVol(base8);
+  const avgTrades=rows=>rows.length&&rows.every(x=>x.tradeCount!==null&&x.tradeCount!==undefined&&Number.isFinite(Number(x.tradeCount)))
+    ?mean(rows.map(x=>Number(x.tradeCount))):null;
+  const earlyVol=avgVol(early4),lateVol=avgVol(late4),baseVol=avgVol(base8);
   const volumeAccel=Number.isFinite(lateVol)&&Number.isFinite(baseVol)&&baseVol>0?lateVol/baseVol:null;
+  const earlyTrades=avgTrades(early4),lateTrades=avgTrades(late4),baseTrades=avgTrades(base8);
+  const tradeAccel=Number.isFinite(lateTrades)&&Number.isFinite(baseTrades)&&baseTrades>0?lateTrades/baseTrades:null;
   const takerRatio=rows=>{
     const vol=rows.reduce((s,x)=>s+Math.max(0,Number(x.volume)||0),0);
     const buy=rows.reduce((s,x)=>s+Math.max(0,Number(x.takerBuyBaseVolume)||0),0);
@@ -757,12 +760,21 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
   };
   const earlyBuy=takerRatio(early4),lateBuy=takerRatio(late4),baseBuy=takerRatio(base8);
   const takerAcceleration=Number.isFinite(lateBuy)&&Number.isFinite(baseBuy)?lateBuy-baseBuy:null;
-
-  const earlyClose=Number(early4.at(-1)?.close);
-  const lateClose=Number(late4.at(-1)?.close);
-  const earlyReturn=Number.isFinite(earlyClose)&&sessionOpen>0?(earlyClose-sessionOpen)/sessionOpen*100:null;
-  const lateWindowReturn=Number.isFinite(lateClose)&&Number.isFinite(earlyClose)&&earlyClose>0?(lateClose-earlyClose)/earlyClose*100:null;
-  const priceAcceleration=Number.isFinite(lateWindowReturn)&&Number.isFinite(earlyReturn)?lateWindowReturn-earlyReturn:null;
+  const closeLocationRows=late4.map(x=>{
+    const high=Number(x.high),low=Number(x.low),close=Number(x.close);
+    return Number.isFinite(high)&&Number.isFinite(low)&&Number.isFinite(close)&&high>low
+      ?(close-low)/(high-low):null;
+  });
+  const meanCloseLocation=closeLocationRows.length===late4.length&&closeLocationRows.every(Number.isFinite)
+    ?mean(closeLocationRows):null;
+  const earlyWindowOpen=Number(early4[0]?.open),earlyWindowClose=Number(early4.at(-1)?.close);
+  const lateWindowOpen=Number(late4[0]?.open),lateWindowClose=Number(late4.at(-1)?.close);
+  const earlyWindowReturn=Number.isFinite(earlyWindowOpen)&&earlyWindowOpen>0&&Number.isFinite(earlyWindowClose)
+    ?(earlyWindowClose-earlyWindowOpen)/earlyWindowOpen*100:null;
+  const lateWindowReturn=Number.isFinite(lateWindowOpen)&&lateWindowOpen>0&&Number.isFinite(lateWindowClose)
+    ?(lateWindowClose-lateWindowOpen)/lateWindowOpen*100:null;
+  const priceAcceleration=Number.isFinite(lateWindowReturn)&&Number.isFinite(earlyWindowReturn)
+    ?lateWindowReturn-earlyWindowReturn:null;
 
   const calmScore=Number.isFinite(sessionReturn)
     ? sessionReturn<=3?100
@@ -808,8 +820,11 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
   const dataQuality=optionalMetric(ticker?.dataQuality);
   const coreEvidence={
     volume_acceleration:volumeAccel,
+    trade_acceleration:tradeAccel,
     taker_buy_ratio:lateBuy,
     taker_buy_acceleration:takerAcceleration,
+    mean_close_location:meanCloseLocation,
+    one_hour_return_pct:lateWindowReturn,
     compression:squeeze,
     structure,
     buying_pressure:buyPressure
@@ -819,8 +834,16 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
     .map(([name])=>name);
   if(session.length<2)missingCoreEvidence.push('two_closed_session_candles');
   if(late4.length<2)missingCoreEvidence.push('two_recent_closed_candles');
+  if(early4.length<late4.length)missingCoreEvidence.push('preceding_closed_window');
   if(base8.length<4)missingCoreEvidence.push('four_baseline_closed_candles');
   const evidenceComplete=missingCoreEvidence.length===0;
+  const flowTransitionConfirmed=evidenceComplete&&
+    volumeAccel>=1.12&&tradeAccel>=1.05&&lateBuy>=0.53&&
+    takerAcceleration>=0.01&&meanCloseLocation>=0.54;
+  const priceWindowValid=evidenceComplete&&lateWindowReturn>=0.15&&lateWindowReturn<=4.5;
+  const structureConfirmed=evidenceComplete&&
+    Number.isFinite(squeeze)&&squeeze>=55&&Number.isFinite(structure)&&structure>=60&&
+    Number.isFinite(buyPressure)&&buyPressure>=60;
 
   const preMoveScore=avgDefined([
     calmScore,
@@ -836,15 +859,21 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
 
   // Align the hard no-chase gate with the score's declining calmness above 9% session gain.
   const alreadyMoved=(Number.isFinite(sessionReturn)&&sessionReturn>9)||(Number(ticker?.priceChange24h)>20);
+  const earlyConditions=flowTransitionConfirmed&&priceWindowValid&&structureConfirmed&&
+    Number.isFinite(sessionReturn)&&sessionReturn>=0&&sessionReturn<=6;
   const stage=alreadyMoved?'ALREADY_MOVED':
-    preMoveScore>=82&&Number.isFinite(sessionReturn)&&sessionReturn<=6?'READY':
+    !earlyConditions?'NO_SETUP':
+    preMoveScore>=82&&sessionReturn<=4.5?'READY':
     preMoveScore>=72?'EARLY_WAKE':
     preMoveScore>=62?'QUIET_BUILD':
     'NO_SETUP';
 
   const reasons=[];
-  if(Number.isFinite(volumeAccel)&&volumeAccel>=1.25) reasons.push('VOLUME_ACCELERATING');
-  if(Number.isFinite(takerAcceleration)&&takerAcceleration>=0.025) reasons.push('TAKER_BUY_ACCELERATING');
+  if(Number.isFinite(volumeAccel)&&volumeAccel>=1.12) reasons.push('VOLUME_ACCELERATING');
+  if(Number.isFinite(tradeAccel)&&tradeAccel>=1.05) reasons.push('TRADE_COUNT_ACCELERATING');
+  if(Number.isFinite(takerAcceleration)&&takerAcceleration>=0.01) reasons.push('TAKER_BUY_ACCELERATING');
+  if(Number.isFinite(meanCloseLocation)&&meanCloseLocation>=0.54) reasons.push('BUYERS_HOLDING_CANDLE_CLOSES');
+  if(flowTransitionConfirmed&&priceWindowValid&&structureConfirmed) reasons.push('EARLY_FLOW_TRANSITION_CONFIRMED');
   if(Number.isFinite(relativeReturn)&&relativeReturn>=1) reasons.push('RELATIVE_STRENGTH');
   if(Number.isFinite(squeeze)&&squeeze>=65) reasons.push('COMPRESSION');
   if(structure>=65) reasons.push('STRUCTURE_IMPROVING');
@@ -860,8 +889,12 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
     session_close:Number.isFinite(Number(session.at(-1)?.closeTime))?Number(session.at(-1).closeTime):null,
     session_candle_count:session.length,
     recent_candle_count:late4.length,
+    prior_window_candle_count:early4.length,
     baseline_candle_count:base8.length,
     evidence_complete:evidenceComplete,
+    flow_transition_confirmed:flowTransitionConfirmed,
+    price_window_valid:priceWindowValid,
+    structure_confirmed:structureConfirmed,
     missing_evidence:[...new Set(missingCoreEvidence)],
     current_price:Number.isFinite(current)?current:null,
     session_open:Number.isFinite(sessionOpen)?sessionOpen:null,
@@ -869,10 +902,13 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
     session_low:Number.isFinite(sessionLow)?sessionLow:null,
     session_return_pct:Number.isFinite(sessionReturn)?sessionReturn:null,
     session_position_pct:Number.isFinite(sessionPosition)?clamp(sessionPosition):null,
-    early_return_pct:Number.isFinite(earlyReturn)?earlyReturn:null,
+    previous_window_return_pct:Number.isFinite(earlyWindowReturn)?earlyWindowReturn:null,
+    one_hour_return_pct:Number.isFinite(lateWindowReturn)?lateWindowReturn:null,
     late_window_return_pct:Number.isFinite(lateWindowReturn)?lateWindowReturn:null,
     price_acceleration_pct:Number.isFinite(priceAcceleration)?priceAcceleration:null,
     volume_acceleration:Number.isFinite(volumeAccel)?volumeAccel:null,
+    trade_acceleration:Number.isFinite(tradeAccel)?tradeAccel:null,
+    mean_close_location:Number.isFinite(meanCloseLocation)?meanCloseLocation:null,
     taker_buy_ratio:Number.isFinite(lateBuy)?lateBuy:null,
     taker_buy_acceleration:Number.isFinite(takerAcceleration)?takerAcceleration:null,
     market_median_return_pct:Number.isFinite(marketMedianReturn)?marketMedianReturn:null,
@@ -886,6 +922,11 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
     components:{
       calm:Number.isFinite(calmScore)?calmScore:null,
       acceleration:Number.isFinite(accelerationScore)?accelerationScore:null,
+      volume_acceleration:Number.isFinite(volumeAccel)?volumeAccel:null,
+      trade_acceleration:Number.isFinite(tradeAccel)?tradeAccel:null,
+      taker_buy_ratio:Number.isFinite(lateBuy)?lateBuy:null,
+      taker_buy_acceleration:Number.isFinite(takerAcceleration)?takerAcceleration:null,
+      mean_close_location:Number.isFinite(meanCloseLocation)?meanCloseLocation:null,
       relative_strength:Number.isFinite(relativeStrengthScore)?relativeStrengthScore:null,
       low_reclaim:lowReclaimScore,
       resistance_proximity:resistanceProximityScore,
@@ -1771,8 +1812,12 @@ export class MarketUniverseScanner {
       const components={...ctx.components,relative_strength:relScore};
       const score=avgDefined(Object.values(components),45);
       const alreadyMoved=ctx.already_moved===true;
+      const earlyConditions=ctx.evidence_complete===true&&ctx.flow_transition_confirmed===true&&
+        ctx.price_window_valid===true&&ctx.structure_confirmed===true&&
+        Number(ctx.session_return_pct)>=0&&Number(ctx.session_return_pct)<=6;
       const stage=alreadyMoved?'ALREADY_MOVED':
-        score>=82&&Number(ctx.session_return_pct)<=6?'READY':
+        !earlyConditions?'NO_SETUP':
+        score>=82&&Number(ctx.session_return_pct)<=4.5?'READY':
         score>=72?'EARLY_WAKE':
         score>=62?'QUIET_BUILD':'NO_SETUP';
       const reasons=[...(ctx.reasons||[])];
@@ -1790,7 +1835,8 @@ export class MarketUniverseScanner {
     // Exclude overextended symbols before applying the final result limit. Filtering only
     // in the client can otherwise allow the backend's top-N list to be filled with late movers.
     const actionable=enriched.filter(x=>x.pre_move_context.evidence_complete===true&&
-      x.pre_move_context.already_moved!==true&&
+      x.pre_move_context.flow_transition_confirmed===true&&x.pre_move_context.price_window_valid===true&&
+      x.pre_move_context.structure_confirmed===true&&x.pre_move_context.already_moved!==true&&
       !['ALREADY_MOVED','NO_SETUP'].includes(x.pre_move_context.stage));
     const evidenceIncompleteExcluded=enriched.filter(x=>x.pre_move_context.evidence_complete!==true).length;
     const extendedExcluded=enriched.filter(x=>x.pre_move_context.already_moved===true||x.pre_move_context.stage==='ALREADY_MOVED').length;
