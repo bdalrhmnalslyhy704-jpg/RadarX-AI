@@ -400,7 +400,7 @@ test('Pre-Move Radar detects quiet early acceleration instead of chasing large 2
   const make=(base,boost)=>Array.from({length:28},(_,i)=>{
     const t=start+i*step;
     const p=base+i*(i<20?.01:.18)+boost*(i>22?i-22:0);
-    return {openTime:t,closeTime:t+step-1,open:p-.03,high:p+.05,low:p-.05,close:p,volume:i<22?900:i%2?1700:2200,takerBuyBaseVolume:i<22?430:(i%2?1250:1600),closed:true};
+    return {openTime:t,closeTime:t+step-1,open:p-.03,high:p+.05,low:p-.05,close:p,volume:i<22?900:i%2?1700:2200,tradeCount:i<22?50:(i%2?65:70),takerBuyBaseVolume:i<22?430:(i%2?1250:1600),closed:true};
   });
   const a=make(100,0.0);
   const b=make(100,0.0).map((x,i)=>({...x,close:x.close+(i<22?2.5:2.5),open:x.open+2.5,high:x.high+2.5,low:x.low+2.5,volume:i<22?800:(i%2?2400:2800),takerBuyBaseVolume:i<22?380:(i%2?1750:2200)}));
