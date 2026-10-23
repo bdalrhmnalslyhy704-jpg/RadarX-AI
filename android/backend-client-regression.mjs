@@ -14,6 +14,13 @@ assert.equal(classifyBackendState({health:{status:0},readiness:{status:200},sign
 const index=await readFile(new URL('./app/src/main/assets/index.html',import.meta.url),'utf8');
 assert.match(index,/radarx-market-radar-screen.mjs/);
 assert.match(index,/UI_READY/);
+const analystCenter=await readFile(new URL('./app/src/main/assets/multi-analyst-center.html',import.meta.url),'utf8');
+assert.match(analystCenter,/body&&body\.watchlist/);
+assert.match(analystCenter,/body&&body\.lab_results/);
+assert.match(analystCenter,/monitoring\.last_error/);
+assert.match(analystCenter,/أسباب عدم التأهل/);
+assert.match(analystCenter,/هذه ليست نتيجة مكتملة/);
+assert.match(analystCenter,/فشل دورة الفحص/);
 const moveService=await readFile(new URL('./app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java',import.meta.url),'utf8');
 assert.match(moveService,/detectedAt = alert\.optLong\("detected_at", alert\.optLong\("processed_at"/);
 assert.match(moveService,/وقت اكتشاف الخادم/);
