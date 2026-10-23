@@ -6,6 +6,10 @@ on:
       - build224-multi-analyst-20261007
   workflow_dispatch:
 
+concurrency:
+  group: pre-move-radar-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   statuses: write
@@ -116,20 +120,20 @@ jobs:
           if (b.session?.timezone !== 'Asia/Aden' || b.session?.window !== '04:00 local → latest closed candle') throw new Error('PRE_MOVE_SESSION_CONTRACT_INVALID');
           const u=b.universe||{};
           for (const k of ['scanned','valid_data','evidence_incomplete_excluded','extended_excluded','no_setup_excluded','eligible_spot_symbols','discovered']) {
-            if (!Number.isFinite(Number(u[k]))) throw new Error('PRE_MOVE_SCHEMA_OUTDATED:'+k);
+            if (typeof u[k] !== 'number' || !Number.isFinite(u[k])) throw new Error('PRE_MOVE_SCHEMA_OUTDATED:'+k);
           }
           if (Number(u.scanned)<1 || Number(u.valid_data)<1 || Number(u.eligible_spot_symbols)<1 || Number(u.discovered)<1) throw new Error('PRE_MOVE_NO_VALID_LIVE_MARKET_DATA');
           if (!Array.isArray(b.candidates)) throw new Error('PRE_MOVE_CANDIDATES_MISSING');
           for (const x of b.candidates) {
             const p=x?.pre_move_context;
-            if (x?.data_status?.data_valid !== true || !(Number(x.data_quality)>=70) || !(Number(x.liquidity_quality)>=60)) throw new Error('PRE_MOVE_DATA_QUALITY_GATE:'+String(x?.symbol||'UNKNOWN'));
+            if (x?.data_status?.data_valid !== true || typeof x.data_quality !== 'number' || !Number.isFinite(x.data_quality) || x.data_quality<70 || typeof x.liquidity_quality !== 'number' || !Number.isFinite(x.liquidity_quality) || x.liquidity_quality<60) throw new Error('PRE_MOVE_DATA_QUALITY_GATE:'+String(x?.symbol||'UNKNOWN'));
             if (!p || p.evidence_complete !== true || p.closed_candles_only !== true || p.already_moved === true || ['ALREADY_MOVED','NO_SETUP'].includes(p.stage)) throw new Error('PRE_MOVE_EARLY_STAGE_GATE:'+String(x?.symbol||'UNKNOWN'));
             for (const [key,value] of Object.entries({
               score:p.score,session_return_pct:p.session_return_pct,volume_acceleration:p.volume_acceleration,
               taker_buy_ratio:p.taker_buy_ratio,taker_buy_acceleration:p.taker_buy_acceleration,
               compression:p.components?.squeeze,structure:p.components?.structure,
               buying_pressure:p.components?.buying_pressure
-            })) if (!Number.isFinite(Number(value))) throw new Error('PRE_MOVE_REQUIRED_EVIDENCE:'+String(x.symbol)+':'+key);
+            })) if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error('PRE_MOVE_REQUIRED_EVIDENCE:'+String(x.symbol)+':'+key);
             if (Number(p.session_return_pct)>9 || Number(x.price_change_24h)>20) throw new Error('PRE_MOVE_CHASE_FILTER:'+String(x.symbol));
           }
           console.log(JSON.stringify({
