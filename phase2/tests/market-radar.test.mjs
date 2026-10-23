@@ -517,7 +517,7 @@ test('Pre-Move scan removes already-extended coins before limiting actionable re
   assert.equal(result.meta.paper_trading,true);
   assert.equal(result.meta.real_order_execution,false);
   assert.ok(result.universe.valid_data>0);
-  assert.equal(result.universe.extended_excluded,result.universe.valid_data);
+  assert.equal(result.universe.extended_excluded,result.universe.observed_candle_data,'extended_exclusion counts all fresh observed symbols, including those below the alert-liquidity gate');
   assert.equal(result.universe.coverage_mode,'PINNED_PLUS_ROTATING_V1');
   assert.equal(result.universe.rotation_cycle,0);
   assert.equal(result.candidates.length,0,'no already-extended symbol should be promoted as a Pre-Move candidate');

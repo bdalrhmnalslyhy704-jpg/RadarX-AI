@@ -202,116 +202,26 @@ export class PushManager{
   }
 
   async notifyRadarWatchOnlyAlert(alert){
-    const now=Date.now();
-    const evidence=alert?.early_flow_watch_evidence||{};
-    const source=String(alert?.source||'').toUpperCase();
-    const event=String(alert?.event||'');
-    const isEarlyFlowWatch=event==='EARLY_FLOW_WATCH_ONLY';
-    const isQuietBaseWatch=event==='QUIET_BASE_PRE_EXPANSION_WATCH_ONLY';
-    const fingerprint=alert?.quiet_base_pre_expansion||{};
-    const transition=fingerprint?.metrics?.buy_pressure_transition||{};
-    const closeTime=isQuietBaseWatch
-      ?Number(alert?.detected_candle_close_time??fingerprint?.candle_close_time_ms)
-      :Number(evidence.closed_candle_close_time);
-    const score=Number(evidence.micro_score??alert?.micro_fingerprint_score);
-    const confirmations=Number(evidence.confirmation_count);
-    const volume=Math.max(Number(evidence.rvol_1m)||0,Number(evidence.rvol_5m)||0);
-    const trades=Math.max(Number(evidence.trade_rvol_1m)||0,Number(evidence.trade_rvol_5m)||0);
-    const taker=Number(evidence.taker_buy_ratio)||0;
-    const acceleration=Math.max(Number(evidence.acceleration_1m_pct)||-Infinity,Number(evidence.acceleration_5m_pct)||-Infinity);
-    const recentReturn=Math.max(Number(evidence.return_1m)||-Infinity,Number(evidence.return_5m)||-Infinity);
-    const move=Number(alert?.price_change_24h);
-    const age=now-closeTime;
-    const participation=volume>=1.20||trades>=1.15||(taker>=0.54&&(volume>=1||trades>=1));
-    const sourceVerified=source.includes('BINANCE_PUBLIC')||source.includes('BINANCE PUBLIC');
-    const riskFlags=Array.isArray(alert?.risk_flags)?alert.risk_flags:[];
-    const earlyFlowHardRisk=riskFlags.some(flag=>[
-      'MICRO_ANTI_CHASE','MICRO_FAST_EXTENSION_WARNING','MICRO_DAILY_EXTENSION_WARNING',
-      'DATA_STALE','DATA_GAP','FUTURE_DATA'
-    ].includes(String(flag)));
-    const quietBaseHardRisk=riskFlags.some(flag=>[
-      'ALREADY_EXTENDED','HIGH_RISK_PUMP','HIGH_RISK_DUMP','RECENT_FAKEOUT',
-      'STALE_DATA','DATA_STALE','DATA_GAP','FUTURE_DATA','WIDE_SPREAD',
-      'ORDERBOOK_UNAVAILABLE','HISTORICAL_FOLLOWTHROUGH_WEAK','DATA_INSUFFICIENT'
-    ].includes(String(flag)));
-    const commonInvalid=
-      (!isEarlyFlowWatch&&!isQuietBaseWatch)||
-      alert?.radar!=='EARLY_EXPANSION_RADAR'||
-      alert?.watch_only!==true||alert?.entry_eligible!==false||
-      alert?.data_stale===true||
-      !sourceVerified||
-      !Number.isFinite(closeTime)||age<0||
-      !Number.isFinite(Number(alert?.price))||Number(alert.price)<=0||
-      alert?.price_change_24h==null||!Number.isFinite(move);
-    const earlyFlowInvalid=isEarlyFlowWatch&&(
-      evidence.closed_candles_only!==true||age>120_000||
-      Math.abs(move)>=18||
-      !Number.isFinite(score)||score<58||
-      !Number.isFinite(confirmations)||confirmations<3||
-      !participation||!(acceleration>0||recentReturn>0)||earlyFlowHardRisk
-    );
-    const fingerprintEvidence=Array.isArray(fingerprint?.evidence)?fingerprint.evidence:[];
-    const antiChaseEvidence=fingerprintEvidence.find(item=>item?.key==='anti_chase');
-    const fpMetrics=fingerprint?.metrics||{};
-    const quietBaseInvalid=isQuietBaseWatch&&(
-      age>8*60_000||
-      Math.abs(move)>=8||
-      alert?.closed_candles_only!==true||
-      fingerprint?.classification!=='WATCH_EARLY'||
-      fingerprint?.reason!=='QUIET_BASE_NEAR_MISS_BUY_FLOW_TRANSITION'||
-      fingerprint?.detected!==true||
-      fingerprint?.watch_only!==true||fingerprint?.entry_eligible!==false||
-      transition?.available!==true||transition?.watch_only_qualified!==true||
-      !Number.isFinite(Number(transition?.near_miss_signal_count))||
-      Number(transition.near_miss_signal_count)<4||
-      !Number.isFinite(Number(alert?.data_quality))||Number(alert.data_quality)<70||
-      !Number.isFinite(Number(alert?.liquidity_quality))||Number(alert.liquidity_quality)<60||
-      fpMetrics.daily_change_24h_pct==null||!Number.isFinite(Number(fpMetrics.daily_change_24h_pct))||Math.abs(Number(fpMetrics.daily_change_24h_pct))>=8||
-      fpMetrics.move_5m_pct==null||!Number.isFinite(Number(fpMetrics.move_5m_pct))||Number(fpMetrics.move_5m_pct)>=2.5||
-      fpMetrics.move_15m_pct==null||!Number.isFinite(Number(fpMetrics.move_15m_pct))||Number(fpMetrics.move_15m_pct)>=6||
-      antiChaseEvidence?.passed!==true||quietBaseHardRisk||
-      !fingerprintEvidence.some(item=>item?.key==='higher_lows_or_stable_support'&&item?.passed===true)||
-      !fingerprintEvidence.some(item=>item?.key==='narrow_price_base_range_pct'&&item?.passed===true)
-    );
-    if(commonInvalid||earlyFlowInvalid||quietBaseInvalid)
-      return{status:'BLOCKED_INVALID_WATCH_EVIDENCE',attempted:false,notifications:[]};
-    const providerStatus=this.provider.status?.()||{};
-    if(providerStatus.enabled!==true)return{status:'PROVIDER_DISABLED',attempted:false,notifications:[]};
-    const subscriptions=this.providerSubscriptions(await this.store.getSubscriptions());
-    if(!subscriptions.length)return{status:'NO_SUBSCRIPTIONS',attempted:false,notifications:[]};
-    const out=[];
-    for(const sub of subscriptions){
-      const settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();
-      if(!settings.enabled)continue;
-      const attemptAt=Date.now();
-      let result;
-      try{result=await this.provider.send(sub,radarPayload({...alert,watch_only:true,entry_eligible:false},attemptAt));}
-      catch(error){result={ok:false,status:'FAILED',reason:String(error?.message??error).slice(0,180)};}
-      const audit={
-        event:'RADAR_WATCH_ONLY_NOTIFICATION',event_class:EVENT_CLASS.RADAR_ALERT??'RADAR_ALERT',
-        radar:alert.radar,symbol:alert.symbol,alert_id:alert.id||null,
-        subscription_id:sub.id,user_id:sub.user_id,status:result.status||'FAILED',
-        attempted_at:attemptAt,watch_only:true,entry_eligible:false,
-        evidence_close_time:closeTime,micro_score:isQuietBaseWatch?null:score,
-        confirmation_count:isQuietBaseWatch?null:confirmations,
-        watch_type:isQuietBaseWatch?'QUIET_BASE_NEAR_MISS':'EARLY_FLOW_MICRO',
-        near_miss_transition_signal_count:isQuietBaseWatch?Number(transition.near_miss_signal_count):null,
-        data_quality:Number.isFinite(Number(alert?.data_quality))?Number(alert.data_quality):null,
-        liquidity_quality:Number.isFinite(Number(alert?.liquidity_quality))?Number(alert.liquidity_quality):null,
-        reason:result.reason??null,http_status:result.httpStatus??null
-      };
-      await this.store.appendNotificationAudit(audit);
-      out.push(audit);
-      if(result.status==='GONE')await this.store.disableSubscription(sub.id);
-    }
-    const enabledCount=out.length;
-    const sent=out.filter(item=>item.status==='SENT').length;
-    const status=sent===enabledCount&&enabledCount>0?'SENT':
-      sent>0?'PARTIAL':enabledCount>0?'FAILED':'NO_ENABLED_SUBSCRIPTIONS';
-    return{status,attempted:enabledCount>0,notifications:out,sent_count:sent,attempted_count:enabledCount};
+    // WATCH_EARLY is an observational state, not a push-worthy signal.
+    // Fail closed even if a future radar accidentally calls this method directly.
+    return {
+      status:'WATCH_ONLY_PUSH_DISABLED_BY_POLICY',
+      attempted:false,
+      notifications:[],
+      sent_count:0,
+      attempted_count:0
+    };
   }
 
   async notifyRadarAlert(alert){
+    // Never allow explicit watch-only / rejected candidates to bypass the strict gate
+    // through a radar's generic push route.
+    const watchLabel=[alert?.event,alert?.decision_band,alert?.potential_label].filter(Boolean).join(' ').toUpperCase();
+    if(alert?.watch_only===true||alert?.entry_eligible===false||
+       alert?.notification_gate?.watch_only===true||alert?.notification_gate?.eligible===false||
+       alert?.eligible===false||/WATCH_ONLY|WATCH_EARLY/.test(watchLabel)){
+      return [];
+    }
     const rows=this.providerSubscriptions(await this.store.getSubscriptions()),out=[];
     for(const sub of rows){
       const settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();

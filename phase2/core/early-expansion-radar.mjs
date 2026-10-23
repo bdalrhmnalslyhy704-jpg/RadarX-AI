@@ -1945,27 +1945,13 @@ export class EarlyExpansionRadar{
     const evidence=alert?.early_flow_watch_evidence||
       alert?.quiet_base_pre_expansion?.metrics?.buy_pressure_transition||{};
     const traceAt=this.clock();
-    const pushEvent=(alert?.event==='EARLY_FLOW_WATCH_ONLY'&&
-      ['MICRO_EARLY_FLOW_WATCH_TRACE','EARLY_FLOW_WATCH_TRACE'].includes(String(eventType)))||
-      (alert?.event==='QUIET_BASE_PRE_EXPANSION_WATCH_ONLY'&&
-      String(eventType)==='QUIET_BASE_PRE_EXPANSION_TRACE');
-    let pushStatus='WATCH_ONLY_NOT_SENT',pushAttempted=false,pushResult=null;
+    // WATCH_EARLY observations belong in the radar's trace feed, not the phone's
+    // notification channel. Only the separate strict eligible-alert path below
+    // may send a Radar 8 push after evaluateRadarNotificationGate passes.
+    const pushStatus='WATCH_ONLY_PUSH_DISABLED_BY_POLICY';
+    const pushAttempted=false,pushResult=null;
     alert.watch_only=true;
     alert.entry_eligible=false;
-    if(pushEvent&&typeof this.pushManager?.notifyRadarWatchOnlyAlert==='function'){
-      try{
-        pushResult=await this.pushManager.notifyRadarWatchOnlyAlert(alert);
-        pushAttempted=pushResult?.attempted===true;
-        pushStatus=String(pushResult?.status||'UNKNOWN').toUpperCase()==='SENT'
-          ?'WATCH_ONLY_PUSH_SENT'
-          :'WATCH_ONLY_PUSH_'+String(pushResult?.status||'UNKNOWN').toUpperCase();
-      }catch(error){
-        this.noteError(error,'watch-only-push');
-        pushStatus='WATCH_ONLY_PUSH_ERROR';
-      }
-    }else if(pushEvent){
-      pushStatus='WATCH_ONLY_PUSH_UNAVAILABLE';
-    }
     alert.notification_status=pushStatus;
     const trace={...alert,event_type:eventType,feed_status:'TRACE_ONLY',
       notification_status:pushStatus,push_attempted:pushAttempted,

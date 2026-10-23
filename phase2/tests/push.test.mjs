@@ -39,28 +39,28 @@ test('TEST_FIXTURE: low data quality prevents push attempt',async()=>{
 });
 
 
-test('TEST_FIXTURE: early radar watch pushes explicitly say monitoring only, not confirmation',async()=>{
-  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-watch-push-')),store=await new DurableStore({dir}).init();
-  await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70});
+test('TEST_FIXTURE: generic Radar push rejects watch-only and gate-rejected alerts',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-early-watch-push-')),store=await new DurableStore({dir}).init();
+  await store.putUserSettings('u1',{...defaultSettings(),enabled:true});
   await store.upsertSubscription('u1',pushSubscription());
   const sent=[];
   const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){sent.push(payload);return{ok:true,status:'SENT'};}};
-  const m=new PushManager({provider,store});
-  await m.notifyRadarAlert({
+  const manager=new PushManager({provider,store});
+  const out=await manager.notifyRadarAlert({
     radar:'STRONG_MOVE_RADAR',radar_name:'Radar 2',symbol:'EARLYUSDT',data_quality:95,
     notification_gate:{eligible:true,watch_only:true,requires_follow_up_confirmation:true,mode:'RADAR_WATCH_ONLY_EARLY_TRACK'},
     signal_lifecycle:{state:'EARLY_SETUP',label:'إعداد مبكر',transition:'EARLY_EVIDENCE_CONVERGED',reason_codes:['RELATED_EARLY_EVIDENCE']}
   });
-  assert.equal(sent.length,1);
-  assert.equal(sent[0].notification_mode,'WATCH_ONLY_EARLY_TRACK');
-  assert.equal(sent[0].watch_only,true);
-  assert.equal(sent[0].requires_follow_up_confirmation,true);
-  assert.equal(sent[0].message,'EARLYUSDT • مراقبة مبكرة فقط — تحتاج تأكيدًا');
-  assert.match(sent[0].title,/مراقبة مبكرة/);
+  assert.deepEqual(out,[]);
+  const rejected=await manager.notifyRadarAlert({
+    radar:'FALCON_EYE_RADAR',symbol:'NOENTRYUSDT',data_quality:95,
+    eligible:true,entry_eligible:false
+  });
+  assert.deepEqual(rejected,[]);
+  assert.equal(sent.length,0,'watch-only and entry-ineligible alerts must never reach a phone');
 });
 
-
-test('TEST_FIXTURE: validated Radar 8 early-flow watch is pushed as monitor-only with evidence',async()=>{
+test('TEST_FIXTURE: Radar 8 early-flow watch stays feed-only even with valid evidence',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-verified-watch-push-')),store=await new DurableStore({dir}).init();
   await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70});
   await store.upsertSubscription('u1',pushSubscription());
@@ -82,17 +82,12 @@ test('TEST_FIXTURE: validated Radar 8 early-flow watch is pushed as monitor-only
     risk_flags:['LOW_LIQUIDITY_WATCH_ONLY'],reason_codes:['MICRO_EARLY_FLOW']
   };
   const out=await manager.notifyRadarWatchOnlyAlert(alert);
-  assert.equal(out.status,'SENT');
-  assert.equal(out.sent_count,1);
-  assert.equal(sent.length,1);
-  assert.equal(sent[0].notification_mode,'WATCH_ONLY_EARLY_TRACK');
-  assert.equal(sent[0].watch_only,true);
-  assert.equal(sent[0].requires_follow_up_confirmation,true);
-  assert.equal(sent[0].message,'TESTUSDT • مراقبة مبكرة فقط — سيولة ضعيفة — تحتاج تأكيدًا');
-  assert.equal(sent[0].entry_eligible,false,'watch notifications are explicitly entry-ineligible');
-  assert.equal(sent[0].early_flow_watch_evidence.micro_score,68);
+  assert.equal(out.status,'WATCH_ONLY_PUSH_DISABLED_BY_POLICY');
+  assert.equal(out.attempted,false);
+  assert.equal(out.sent_count,0);
+  assert.equal(sent.length,0,'valid watch-only evidence still must not trigger a push');
   const audits=await store.readRecent('notifications',10);
-  assert.ok(audits.some(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION'&&x.status==='SENT'&&x.watch_only===true));
+  assert.equal(audits.filter(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION').length,0);
 });
 
 test('TEST_FIXTURE: Radar 8 watch push fails closed on stale or incomplete evidence',async()=>{
@@ -108,7 +103,7 @@ test('TEST_FIXTURE: Radar 8 watch push fails closed on stale or incomplete evide
     early_flow_watch_evidence:{closed_candles_only:true,closed_candle_close_time:Date.now()-300_000,
       micro_score:90,confirmation_count:6,rvol_1m:2.5,trade_rvol_1m:2.0,acceleration_1m_pct:.3}
   });
-  assert.equal(out.status,'BLOCKED_INVALID_WATCH_EVIDENCE');
+  assert.equal(out.status,'WATCH_ONLY_PUSH_DISABLED_BY_POLICY');
   assert.equal(calls,0);
 });
 
@@ -157,7 +152,7 @@ test('TEST_FIXTURE: radar notifications forward lifecycle labels and reasons to 
 
 
 
-test('TEST_FIXTURE: quiet-base near-miss alert passes its own strict watch-only gate',async()=>{
+test('TEST_FIXTURE: quiet-base near-miss stays feed-only despite passing watch evidence checks',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-quiet-base-watch-push-')),store=await new DurableStore({dir}).init();
   await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70});
   await store.upsertSubscription('u1',pushSubscription());
@@ -189,19 +184,12 @@ test('TEST_FIXTURE: quiet-base near-miss alert passes its own strict watch-only 
     reason_codes:['QUIET_BASE_NEAR_MISS_BUY_FLOW_TRANSITION']
   };
   const out=await manager.notifyRadarWatchOnlyAlert(alert);
-  assert.equal(out.status,'SENT',JSON.stringify(out));
-  assert.equal(out.sent_count,1);
-  assert.equal(sent.length,1);
-  assert.equal(sent[0].event,'QUIET_BASE_PRE_EXPANSION_WATCH_ONLY');
-  assert.equal(sent[0].notification_mode,'WATCH_ONLY_EARLY_TRACK');
-  assert.equal(sent[0].watch_only,true);
-  assert.equal(sent[0].entry_eligible,false);
-  assert.equal(sent[0].requires_follow_up_confirmation,true);
-  assert.match(sent[0].message,/مراقبة مبكرة فقط/);
-  assert.equal(sent[0].quiet_base_pre_expansion,undefined,'push data stays compact and does not serialize the full fingerprint');
+  assert.equal(out.status,'WATCH_ONLY_PUSH_DISABLED_BY_POLICY',JSON.stringify(out));
+  assert.equal(out.attempted,false);
+  assert.equal(out.sent_count,0);
+  assert.equal(sent.length,0,'quiet-base watch observations must remain in the trace feed');
   const audits=await store.readRecent('notifications',10);
-  assert.ok(audits.some(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION'&&x.status==='SENT'&&
-    x.watch_type==='QUIET_BASE_NEAR_MISS'&&x.near_miss_transition_signal_count===5&&x.entry_eligible===false));
+  assert.equal(audits.filter(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION').length,0);
 });
 
 test('TEST_FIXTURE: quiet-base near-miss push fails closed for incomplete flow or missing anti-chase evidence',async()=>{
@@ -232,6 +220,6 @@ test('TEST_FIXTURE: quiet-base near-miss push fails closed for incomplete flow o
     closed_candles_only:true,detected_candle_close_time:now-1000,
     watch_only:true,entry_eligible:false,quiet_base_pre_expansion:fingerprint,risk_flags:[]
   });
-  assert.equal(out.status,'BLOCKED_INVALID_WATCH_EVIDENCE');
+  assert.equal(out.status,'WATCH_ONLY_PUSH_DISABLED_BY_POLICY');
   assert.equal(calls,0);
 });
