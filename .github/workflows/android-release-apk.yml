@@ -75,6 +75,8 @@ jobs:
             'android/app/src/main/assets/radarx-backend-client.mjs',
             'android/app/src/main/assets/radarx-backend-client.js'
           ];
+          const radar8Path='android/app/src/main/assets/radar8-lightning.html';
+          const doomsdayPath='android/app/src/main/assets/radarx-doomsday-radar.mjs';
           for(const path of assetPaths){
             let source=fs.readFileSync(path,'utf8');
             const original=source;
@@ -92,6 +94,19 @@ jobs:
               process.exit(1);
             }
             fs.writeFileSync(path,source);
+          }
+          // Keep standalone radar pages on the same verified DHDTech origin.
+          let radar8Source=fs.readFileSync(radar8Path,'utf8');
+          radar8Source=radar8Source.replace(/const BASES=\[[^\]]*\];/, "const BASES=['"+origin+"'];");
+          if(!radar8Source.includes("const BASES=['"+origin+"'];")||/railway\.app/i.test(radar8Source)){
+            console.error('::error::Could not safely configure the Radar 8 standalone page for DHDTech.');
+            process.exit(1);
+          }
+          fs.writeFileSync(radar8Path,radar8Source);
+          const doomsdaySource=fs.readFileSync(doomsdayPath,'utf8');
+          if(!doomsdaySource.includes('const DOOMSDAY_BACKEND=DEFAULT_BACKEND_BASE_URL;')||/railway\.app/i.test(doomsdaySource)){
+            console.error('::error::Doomsday must use the shared allowlisted DHDTech backend client.');
+            process.exit(1);
           }
           const javaPath='android/app/src/main/java/com/radarx/app/TradliActivity.java';
           let javaSource=fs.readFileSync(javaPath,'utf8');
@@ -154,7 +169,7 @@ jobs:
             fs.writeFileSync(path,source);
           }
           fs.appendFileSync(process.env.GITHUB_ENV,'RADARX_BACKEND_BASE_URL='+origin+String.fromCharCode(10));
-          const packagedPaths=[...assetPaths,javaPath,...extraJavaPaths];
+          const packagedPaths=[...assetPaths,radar8Path,doomsdayPath,javaPath,...extraJavaPaths];
           const remaining=[];
           for(const path of packagedPaths){
             if(fs.readFileSync(path,'utf8').includes('railway.app'))remaining.push(path);
@@ -172,8 +187,16 @@ jobs:
           test "$GITHUB_REF_NAME" = "feature-coin-hunter-20261006-android" || test "$GITHUB_REF_NAME" = "android-build224-radar8-v2-20261006" || test "$GITHUB_REF_NAME" = "android-whale-intelligence-v2-build224-20261007" || test "$GITHUB_REF_NAME" = "android-build224-final-stable-20261007" || test "$GITHUB_REF_NAME" = "build224-multi-analyst-20261007"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           grep -Fq "$RADARX_BACKEND_BASE_URL" android/app/src/main/assets/radarx-backend-client.mjs
-          ! grep -RIn --exclude-dir=build "railway.app" android/app/src/main
-          ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
+          grep -Fq "$RADARX_BACKEND_BASE_URL" android/app/src/main/assets/radar8-lightning.html
+          grep -Fq 'const DOOMSDAY_BACKEND=DEFAULT_BACKEND_BASE_URL;' android/app/src/main/assets/radarx-doomsday-radar.mjs
+          if grep -RIn --exclude-dir=build "railway.app" android/app/src/main; then
+            echo "::error::Legacy Railway URL found in Build 224 Android source; refusing to release."
+            exit 1
+          fi
+          if grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main; then
+            echo "::error::Legacy GitHub Pages dependency found in Android source; refusing to release."
+            exit 1
+          fi
           grep -Fq 'versionCode 15' android/app/build.gradle
           grep -Fq 'versionName "1.4.9"' android/app/build.gradle
           test -s android/app/src/main/assets/falcon-eye-radar.html
@@ -558,7 +581,16 @@ jobs:
           node android/background-monitor-regression.mjs
           node android/app/src/main/assets/tests/market-radar-integration.test.mjs
           grep -Fq "$RADARX_BACKEND_BASE_URL" android/app/src/main/assets/radarx-backend-client.mjs
-          ! grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main
+          grep -Fq "$RADARX_BACKEND_BASE_URL" android/app/src/main/assets/radar8-lightning.html
+          grep -Fq 'const DOOMSDAY_BACKEND=DEFAULT_BACKEND_BASE_URL;' android/app/src/main/assets/radarx-doomsday-radar.mjs
+          if grep -RIn --exclude-dir=build "railway.app" android/app/src/main; then
+            echo "::error::Legacy Railway URL found during APK smoke checks."
+            exit 1
+          fi
+          if grep -RIn --exclude-dir=build "github.io/RadarX-AI" android/app/src/main; then
+            echo "::error::Legacy GitHub Pages dependency found during APK smoke checks."
+            exit 1
+          fi
           grep -RInq "Paper Trading" android/app/src/main/assets
           grep -RInq "paper_trading=true" android/app/src/main/assets
           grep -RInq "real_order_execution=false" android/app/src/main/assets
