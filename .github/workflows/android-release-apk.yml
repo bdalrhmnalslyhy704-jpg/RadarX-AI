@@ -536,12 +536,19 @@ jobs:
               throw new Error('PRE_MOVE_RADAR_INVALID_CANDIDATE:' + String(row?.symbol || 'UNKNOWN'));
             }
             const p=row.pre_move_context;
-            for (const [key,value] of Object.entries({volume_acceleration:p.volume_acceleration,taker_buy_ratio:p.taker_buy_ratio,taker_buy_acceleration:p.taker_buy_acceleration,compression:p.components?.squeeze,structure:p.components?.structure,buying_pressure:p.components?.buying_pressure})) {
+            if (p.flow_transition_confirmed !== true || p.price_window_valid !== true || p.structure_confirmed !== true) throw new Error('PRE_MOVE_QUALIFICATION_FLAGS:'+String(row.symbol));
+            for (const [key,value] of Object.entries({one_hour_return_pct:p.one_hour_return_pct,volume_acceleration:p.volume_acceleration,trade_acceleration:p.trade_acceleration,taker_buy_ratio:p.taker_buy_ratio,taker_buy_acceleration:p.taker_buy_acceleration,mean_close_location:p.mean_close_location,compression:p.components?.squeeze,structure:p.components?.structure,buying_pressure:p.components?.buying_pressure})) {
               if (!Number.isFinite(value)) throw new Error('PRE_MOVE_REQUIRED_EVIDENCE:'+String(row.symbol)+':'+key);
             }
-            if (p.session_return_pct>9 || row.price_change_24h>20) throw new Error('PRE_MOVE_CHASE_FILTER:'+String(row.symbol));
+            if (p.volume_acceleration<1.12 || p.trade_acceleration<1.05 || p.taker_buy_ratio<0.53 ||
+                p.taker_buy_acceleration<0.01 || p.mean_close_location<0.54 ||
+                p.one_hour_return_pct<0.15 || p.one_hour_return_pct>4.5 ||
+                p.session_return_pct<0 || p.session_return_pct>6 ||
+                p.components?.squeeze<55 || p.components?.structure<60 || p.components?.buying_pressure<60 ||
+                row.price_change_24h>20)
+              throw new Error('PRE_MOVE_QUALIFICATION_THRESHOLD:'+String(row.symbol));
           }
-          console.log(JSON.stringify({radar:body.meta.radar,live:body.meta.live,session:body.session,universe:{scanned:u.scanned,valid_data:u.valid_data,returned:u.returned,actionable:u.actionable,evidence_incomplete_excluded:u.evidence_incomplete_excluded,extended_excluded:u.extended_excluded,no_setup_excluded:u.no_setup_excluded},candidates:body.candidates.map(x=>({symbol:x.symbol,score:x.pre_move_context.score,stage:x.pre_move_context.stage,session_return_pct:x.pre_move_context.session_return_pct,volume_acceleration:x.pre_move_context.volume_acceleration,taker_buy_ratio:x.pre_move_context.taker_buy_ratio,liquidity_quality:x.liquidity_quality,data_quality:x.data_quality})),paper_trading:body.meta.paper_trading,real_order_execution:body.meta.real_order_execution}));
+          console.log(JSON.stringify({radar:body.meta.radar,live:body.meta.live,session:body.session,universe:{scanned:u.scanned,valid_data:u.valid_data,returned:u.returned,actionable:u.actionable,evidence_incomplete_excluded:u.evidence_incomplete_excluded,extended_excluded:u.extended_excluded,no_setup_excluded:u.no_setup_excluded},candidates:body.candidates.map(x=>({symbol:x.symbol,score:x.pre_move_context.score,stage:x.pre_move_context.stage,session_return_pct:x.pre_move_context.session_return_pct,one_hour_return_pct:x.pre_move_context.one_hour_return_pct,volume_acceleration:x.pre_move_context.volume_acceleration,trade_acceleration:x.pre_move_context.trade_acceleration,taker_buy_ratio:x.pre_move_context.taker_buy_ratio,taker_buy_acceleration:x.pre_move_context.taker_buy_acceleration,mean_close_location:x.pre_move_context.mean_close_location,flow_transition_confirmed:x.pre_move_context.flow_transition_confirmed,price_window_valid:x.pre_move_context.price_window_valid,structure_confirmed:x.pre_move_context.structure_confirmed,liquidity_quality:x.liquidity_quality,data_quality:x.data_quality})),paper_trading:body.meta.paper_trading,real_order_execution:body.meta.real_order_execution}));
           NODE
       - name: Verify Coin Hunter public contract
         timeout-minutes: 3
