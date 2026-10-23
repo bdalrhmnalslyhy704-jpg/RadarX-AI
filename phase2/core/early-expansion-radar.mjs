@@ -1926,7 +1926,7 @@ export class EarlyExpansionRadar{
         // Long Retry-After windows must not keep busy=true for hours.
         // Defer another cycle until the cooldown expires, capped to an hourly recheck.
         if(retryInMs>0)nextDelayMs=Math.max(nextDelayMs,Math.min(retryInMs+250,60*60*1000));
-        if(retryInMs>MAX_INLINE_RATE_LIMIT_WAIT_MS&&completed!==true){
+        if(retryInMs>1500&&completed!==true){
           this.logger.warn?.('[RADARX_RATE_LIMIT_BACKOFF] '+JSON.stringify({
             radar:'RADAR_8',retry_in_ms:Math.ceil(retryInMs),scheduled_delay_ms:Math.ceil(nextDelayMs),
             source:'BINANCE_PUBLIC_REST',scan_busy_released:true
