@@ -2123,6 +2123,9 @@ export class MarketUniverseScanner {
         add(x.data_status?.data_valid===true,'DATA_OR_LIQUIDITY_GATE_NOT_PASSED');
         return {
           symbol:String(x.symbol||'UNKNOWN'),
+          diagnostic_only:true,
+          watch_only:true,
+          alert_eligible:false,
           stage:String(p.stage||'NO_SETUP'),
           score:Number.isFinite(Number(p.score))?Number(p.score):null,
           price_change_24h:Number.isFinite(Number(x.price_change_24h))?Number(x.price_change_24h):null,
