@@ -57,7 +57,7 @@ function meter(label,v){const x=Math.max(0,Math.min(100,Number(v)||0));return '<
 function render(rows,meta){
  if(!rows.length){
    const validData=Number(meta?.universe?.valid_data??meta?.universe?.scanned??0)>0;
-   cards.innerHTML='<div class="empty">'+(validData?'لا توجد الآن عملات مؤهلة لمرحلة ما قبل الحركة. تم استبعاد العملات المتمددة بدل مطاردتها؛ أعد الفحص بعد وصول شموع مغلقة جديدة.':'لم تصل بيانات سوق صالحة كافية من Backend.')+'</div>';
+   cards.innerHTML='<div class="empty">'+(validData?'لا توجد الآن إعدادات مبكرة تستوفي الشروط. استُبعدت العملات المتمددة والضعيفة بدل عرض توصيات غير مؤهلة؛ أعد الفحص بعد وصول شموع مغلقة جديدة.':'لم تصل بيانات سوق صالحة كافية من Backend.')+'</div>';
    return;
  }
  cards.innerHTML=rows.map((x,i)=>{
