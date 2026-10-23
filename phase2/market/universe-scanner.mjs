@@ -1753,13 +1753,17 @@ export class MarketUniverseScanner {
         reasons:[...new Set(reasons)]
       }};
     }).sort((a,b)=>Number(b.pre_move_context.score)-Number(a.pre_move_context.score)||Number(a.pre_move_context.session_return_pct)-Number(b.pre_move_context.session_return_pct));
-    const returned=enriched.slice(0,Math.min(10,normalizedLimit));
+    // Exclude overextended symbols before applying the final result limit. Filtering only
+    // in the client can otherwise allow the backend's top-N list to be filled with late movers.
+    const actionable=enriched.filter(x=>x.pre_move_context.already_moved!==true&&x.pre_move_context.stage!=='ALREADY_MOVED');
+    const extendedExcluded=enriched.length-actionable.length;
+    const returned=actionable.slice(0,Math.min(10,normalizedLimit));
     return {
-      meta:{live:returned.length>0,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PRE_MOVE'},
+      meta:{live:valid.length>0,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PRE_MOVE'},
       as_of:new Date(this.clock()).toISOString(),
       source:'Binance Public REST',
       session:{timezone:'Asia/Aden',window:'04:00–12:00 local',market_median_return_pct:marketMedianReturn,btc_return_pct:Number.isFinite(btcReturn)?btcReturn:null,positive_breadth_pct:returns.length?positiveCount/returns.length*100:null},
-      universe:{requested:normalizedLimit,discovered:discovery.length,scanned:valid.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,elapsed_ms:Math.max(0,this.clock()-startedAt)},
+      universe:{requested:normalizedLimit,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,extended_excluded:extendedExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,elapsed_ms:Math.max(0,this.clock()-startedAt)},
       candidates:returned
     };
   }
