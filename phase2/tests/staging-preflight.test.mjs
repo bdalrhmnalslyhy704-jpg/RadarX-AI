@@ -1,10 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync} from 'node:crypto';
-import {mkdtemp,writeFile} from 'node:fs/promises';
+import {mkdtemp,readFile,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {assertDeploymentEnvironment,assertReadOnlyStagingConfig} from '../deploy/preflight.mjs';
+import {resolveRadarAutostart} from '../config.mjs';
+
+test('TEST_FIXTURE: DHDTech entrypoint explicitly starts read-only radars even when environment is labeled staging',async()=>{
+  const entrypoint=await readFile(new URL('../deploy/dhdtech-entrypoint.sh',import.meta.url),'utf8');
+  const dockerfile=await readFile(new URL('../../Dockerfile',import.meta.url),'utf8');
+  assert.match(entrypoint,/export RADARX_RADARS_AUTOSTART=true/);
+  assert.match(dockerfile,/ENV RADARX_RADARS_AUTOSTART=true/);
+  assert.equal(resolveRadarAutostart({RADARX_RADARS_AUTOSTART:'true',RADARX_ENV:'staging',NODE_ENV:'production'}),true);
+  const stillReadOnly={paper:{paperTrading:true,realOrderExecution:false},confidenceMode:'UNKNOWN'};
+  assert.equal(assertReadOnlyStagingConfig(stillReadOnly),true);
+});
 
 const base={
   RADARX_ENV:'staging',

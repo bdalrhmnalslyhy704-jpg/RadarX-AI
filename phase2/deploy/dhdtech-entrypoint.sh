@@ -9,6 +9,10 @@ set -eu
 export PORT=8787
 export RADARX_PORT=8787
 export RADARX_ENV="${RADARX_ENV:-production}"
+# DHDTech is a live public-market monitoring service. Start the 12 market-data
+# radars even when a panel variable labels the deployment "staging"; staging here
+# must never silently leave every radar idle. This does not enable order execution.
+export RADARX_RADARS_AUTOSTART=true
 export RADARX_STAGING_TEST_PUSH_ENABLED="${RADARX_STAGING_TEST_PUSH_ENABLED:-false}"
 export RADARX_ALLOWED_ORIGINS="${RADARX_ALLOWED_ORIGINS:-https://appassets.androidplatform.net,https://radarx-backend.dhdtech.site}"
 export RADARX_HOST="${RADARX_HOST:-0.0.0.0}"
@@ -47,5 +51,5 @@ if [ -z "${RADARX_AUTH_SECRET:-}" ]; then
   export RADARX_AUTH_SECRET
 fi
 
-echo "[RADARX_DHDTECH_BOOT] build=224 host=$RADARX_HOST port=$PORT paper_trading=$RADARX_PAPER_TRADING real_order_execution=$RADARX_REAL_ORDER_EXECUTION push_provider=$RADARX_PUSH_PROVIDER"
+echo "[RADARX_DHDTECH_BOOT] build=224 host=$RADARX_HOST port=$PORT radar_autostart=$RADARX_RADARS_AUTOSTART paper_trading=$RADARX_PAPER_TRADING real_order_execution=$RADARX_REAL_ORDER_EXECUTION push_provider=$RADARX_PUSH_PROVIDER"
 exec npm start
