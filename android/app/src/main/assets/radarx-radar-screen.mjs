@@ -161,7 +161,7 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
 
     async function refresh(force=false){
       if(dead||busy)return;
-      if(!force&&id!=='FALCON_EYE_RADAR'){
+      if(!force&&id!=='FALCON_EYE_RADAR'&&id!=='ROTATION_LAG_RADAR'){
         const cached=readRadarCache();
         if(cached){
           const body=cached.body||{};
@@ -179,12 +179,17 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
         if(s.ok)setStatus((s.body && s.body.radars||[]).find(x=>x.radar===id));
         else stn.textContent='تعذر قراءة حالة الرادار — HTTP_'+(s.status||0);
         let a;
-        if(id==='ROTATION_LAG_RADAR') a=await getRotationRadar({limit:20,scan:true});
+        if(id==='ROTATION_LAG_RADAR') a=await getRotationRadar({limit:20,scan:Boolean(force)});
         else if(id==='FALCON_EYE_RADAR') a=await getFalconEyeRadar({limit:20,scan:Boolean(force)});
         else a=await getRadarAlerts({radar:id,limit:50});
         if(a.ok){
           writeRadarCache(a.body||{});
-          if(id==='ROTATION_LAG_RADAR')show([].concat(a.body&&a.body.candidates||[],a.body&&a.body.alerts||[]));
+          if(id==='ROTATION_LAG_RADAR'){
+            show([].concat(a.body&&a.body.candidates||[],a.body&&a.body.alerts||[]));
+            const scan=a.body&&a.body.scan,h=a.body&&a.body.monitoring,d=a.body&&a.body.diagnostics||{};
+            if(scan&&scan.error&&scan.error!=='SCAN_IN_PROGRESS')stn.textContent='فشل فحص الجوكر: '+e(scan.error);
+            else if(h){const x=h.decision_diagnostics||d;stn.textContent='الجوكر • '+(h.running?'LIVE':'OFFLINE')+' • فُحص '+q(x.evaluated||0)+' • مراقبة مبكرة '+q(x.watch_candidates||0)+' • تنبيهات مراقبة '+q(h.watch_alerts_emitted||0)+' • آخر خطأ '+e(h.last_error||'لا يوجد');}
+          }
           else if(id==='FALCON_EYE_RADAR')show([].concat(a.body&&a.body.candidates||[],a.body&&a.body.alerts||[]),a.body&&a.body.market_movers||[]);
           else show(a.body&&a.body.alerts||[]);
         }else if(a.status===404)box.innerHTML='<div class="muted">لا يوجد مسار بيانات لهذا الرادار في الخادم الحالي.</div>';

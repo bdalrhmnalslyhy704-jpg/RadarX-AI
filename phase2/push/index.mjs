@@ -392,7 +392,8 @@ export class PushManager{
     // A qualified early-track gate is a monitoring notification, not an entry alert.
     // Route it through the stricter watch-only validator rather than silently dropping it
     // or allowing it to bypass the watch-only metadata and anti-chase checks.
-    if(gate?.eligible===true&&gate?.watch_only===true&&alert?.eligible!==false){
+    const explicitlyQualifiedJokerWatch=String(alert?.radar||'').toUpperCase()==='ROTATION_LAG_RADAR'&&alert?.watch_only===true&&alert?.entry_eligible===false&&alert?.rotation?.watch_eligible===true;
+    if(gate?.eligible===true&&gate?.watch_only===true&&(alert?.eligible!==false||explicitlyQualifiedJokerWatch)){
       const timeCandidates=[
         alert?.detected_candle_close_time,alert?.candle?.close_time,alert?.candle?.closeTime,
         alert?.data_status?.close_time,alert?.data_status?.source_time,alert?.source_time,

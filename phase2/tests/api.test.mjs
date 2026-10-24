@@ -754,3 +754,21 @@ test('TEST_FIXTURE: multi-analyst forced scan launches in background and progres
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+
+test('TEST_FIXTURE: Joker scan endpoint honors scan=1 and returns live candidate diagnostics',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-joker-live-api-')),store=await new DurableStore({dir}).init();let tickCalls=0;
+  const joker={busy:false,health:()=>({running:true,busy:false,last_scan_at:Date.now(),last_error:null,alerts_emitted:0,watch_alerts_emitted:1,
+      decision_diagnostics:{evaluated:12,core_eligible:0,watch_candidates:3,notification_gate_rejected:1,top_rejection_reasons:[{reason:'ANTI_CHASE_PRICE_WINDOW_BLOCKED',count:8}]},algorithms:['BUYER_TRADE_ACCELERATION']}),
+    tick:async()=>{tickCalls++;return true;},snapshot:()=>[{symbol:'TESTUSDT',watch_only:true,entry_eligible:false,eligible:false,opportunity_score:74,watch_reason_codes:['WATCH_ONLY']}]};
+  const config={auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100},rotationRadar:{minScore:78,minConfirmations:4}};
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),rotationLagRadar:joker});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const base='http://127.0.0.1:'+server.address().port,response=await fetch(base+'/api/rotation-lag-radar?limit=10&scan=1');
+    assert.equal(response.status,200);const body=await response.json();assert.equal(tickCalls,1);assert.equal(body.scan.completed,true);
+    assert.equal(body.meta.radar,'ROTATION_LAG_RADAR');assert.equal(body.meta.paper_trading,true);assert.equal(body.meta.real_order_execution,false);
+    assert.equal(body.candidates[0].symbol,'TESTUSDT');assert.equal(body.diagnostics.evaluated,12);assert.equal(body.monitoring.watch_alerts_emitted,1);
+    const second=await fetch(base+'/api/rotation-lag-radar?limit=10');assert.equal(second.status,200);assert.equal(tickCalls,1);
+  }finally{await new Promise(resolve=>server.close(resolve));await rm(dir,{recursive:true,force:true});}
+});

@@ -492,3 +492,18 @@ test('a rejected shared gate keeps a PRE_EXPANSION-labelled candidate in MONITOR
   assert.ok(result.reason_codes.includes('SHARED_NOTIFICATION_GATE_REJECTED'));
   assert.equal(result.terminal,false);
 });
+
+
+test('Joker early watch enters a separate non-entry corridor only with live flow and closed candles',()=>{
+  resetRadarNotificationGateForTests();
+  const alert=baseline('ROTATION_LAG_RADAR',{eligible:false,watch_only:true,entry_eligible:false,direction:'UP_ROTATION',opportunity_score:75,radar_power_score:undefined,
+    data_quality:100,liquidity_quality:82,price:1,price_change_24h:1.2,closed_candles_only:true,source:'Binance Public REST',source_time:NOW,detected_candle_close_time:NOW,
+    candle:{closed:true,close_time:NOW},data_status:{source:'BINANCE_PUBLIC_REST',data_valid:true,stale:false,future_data_detected:false,candle_closed:true,close_time:NOW,data_quality:100},
+    rotation:{eligible:false,watch_eligible:true,score:75,activation_score:64,confirmations:3,data_quality:100,liquidity_quality:82,
+      metrics:{volume_ratio:1.3,trade_ratio:1.2,taker_buy_ratio:.56,taker_buy_delta:.02,relative_30m_pct:.2,vwap_reclaim_score:70,vwap_distance_pct:.1,close_location_pct:75},
+      component_scores:{lag:56,resilience:60,compression:72,reclaim_or_reject:75,value_acceptance:78,rsi_turn:72,mfi_turn:74,stochastic_turn:70,persistence:72}},
+    components:{data_quality:100,liquidity:82,momentum:80,volume:85,volume_ratio:1.3,trades:82,trade_ratio:1.2,taker:75,taker_buy_ratio:.56,range:72,compression:72,breakout:78,ema:75,vwap:75,bollinger:72,efficiency:70,relative_strength:75,structure:78}});
+  const result=evaluateRadarNotificationGate(alert,{now:NOW,commit:false});
+  assert.equal(result.eligible,true);assert.equal(result.watch_only,true);
+  assert.equal(result.mode,'RADAR_WATCH_ONLY_EARLY_TRACK');assert.ok(!result.failures.includes('BASE_ALERT_NOT_ELIGIBLE'));
+});

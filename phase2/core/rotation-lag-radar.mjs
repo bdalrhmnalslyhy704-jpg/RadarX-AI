@@ -1,6 +1,7 @@
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
+import {evaluateRadarNotificationGate,rememberRadarAlert} from './radar-notification-gate.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
 const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
@@ -43,11 +44,13 @@ function candleWindowIssue(rows, now, intervalMs, required, label) {
 }
 
 function invalidWindowResult(issue, counts) {
-  return {
-    eligible:false, stage:issue.stage, score:null, activation_score:null,
-    closed_candles_only:true, data_stale:issue.stage==='DATA_STALE',
-    data_quality:0, data_quality_reasons:[issue.reason], counts
-  };
+  return {eligible:false,watch_eligible:false,watch_blockers:[issue.reason],stage:issue.stage,score:null,activation_score:null,
+    closed_candles_only:true,data_stale:issue.stage==='DATA_STALE',data_quality:0,data_quality_reasons:[issue.reason],counts};
+}
+function liquidityQualityFor(quoteVolume,minQuoteVolume=750000){
+  const volume=quoteVolume===null||quoteVolume===undefined?null:Number(quoteVolume);
+  if(!Number.isFinite(volume)||volume<=0)return 0;
+  return clamp(70+Math.log10(Math.max(1,volume/Math.max(1,Number(minQuoteVolume)||750000)))*30);
 }
 
 function rollingVwap(candles,n){
@@ -136,7 +139,7 @@ function benchmarkReturn(series,n){
 
 function makeRelativeComponent(symbolRet,marketRet,dir){
   if(!Number.isFinite(symbolRet)||!Number.isFinite(marketRet))return 45;
-  const spread=dir==='UP'?marketRet-symbolRet:symbolRet-marketRet;
+  const spread=dir==='UP'?symbolRet-marketRet:marketRet-symbolRet;
   return clamp(50+spread*32);
 }
 
@@ -147,16 +150,16 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
   const btc1h=closedCandles(benchmarks?.BTCUSDT?.one_hour,now);
   const eth1h=closedCandles(benchmarks?.ETHUSDT?.one_hour,now);
 
-  const counts={fifteen_min:m15.length,one_hour:h1.length,btc15:btc15.length,eth15:eth15.length};
-  if(m15.length<60||h1.length<30||btc15.length<12||eth15.length<12){
-    return {eligible:false,stage:'INSUFFICIENT_DATA',score:null,closed_candles_only:true,counts};
+  const counts={fifteen_min:m15.length,one_hour:h1.length,btc15:btc15.length,eth15:eth15.length,btc1h:btc1h.length,eth1h:eth1h.length};
+  if(m15.length<60||h1.length<30||btc15.length<12||eth15.length<12||btc1h.length<2||eth1h.length<2){
+    return {eligible:false,watch_eligible:false,stage:'INSUFFICIENT_DATA',score:null,data_quality:0,data_quality_reasons:['INSUFFICIENT_CLOSED_CANDLES'],watch_blockers:['INSUFFICIENT_CLOSED_CANDLES'],closed_candles_only:true,counts};
   }
 
   const windows=[
     [m15,now,15*60_000,60,'SYMBOL_15M'],
     [h1,now,60*60_000,30,'SYMBOL_1H'],
-    [btc15,now,15*60_000,12,'BTC_15M'],
-    [eth15,now,15*60_000,12,'ETH_15M']
+    [btc15,now,15*60_000,12,'BTC_15M'],[eth15,now,15*60_000,12,'ETH_15M'],
+    [btc1h,now,60*60_000,2,'BTC_1H'],[eth1h,now,60*60_000,2,'ETH_1H']
   ];
   for(const [rows,clock,interval,required,label] of windows){
     const issue=candleWindowIssue(rows,clock,interval,required,label);
@@ -181,14 +184,21 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
   ].filter(Number.isFinite));
 
   const upBias=mean([market30,market60,market2h,marketHour].filter(x=>Number.isFinite(x)))??0;
-  const direction=upBias>=0?'UP_ROTATION':'DOWN_ROTATION';
+  let direction=upBias>=0?'UP_ROTATION':'DOWN_ROTATION';
 
   const range6=avgRange(m15,6),range24=avgRange(m15,24);
   const rangeRatio=Number.isFinite(range6)&&Number.isFinite(range24)&&range24>0?range6/range24:null;
 
-  const recentVol=mean(m15.slice(-3).map(c=>Number(c.volume)));
-  const baseVol=mean(m15.slice(-27,-3).map(c=>Number(c.volume)));
+  const recentWindow=m15.slice(-3),baselineWindow=m15.slice(-27,-3);
+  const recentVol=mean(recentWindow.map(c=>Number(c.volume))),baseVol=mean(baselineWindow.map(c=>Number(c.volume)));
   const volumeRatio=Number.isFinite(recentVol)&&Number.isFinite(baseVol)&&baseVol>0?recentVol/baseVol:null;
+  const recentTrades=mean(recentWindow.map(c=>c?.tradeCount==null?NaN:Number(c.tradeCount)));
+  const baselineTrades=mean(baselineWindow.map(c=>c?.tradeCount==null?NaN:Number(c.tradeCount)));
+  const tradeRatio=Number.isFinite(recentTrades)&&Number.isFinite(baselineTrades)&&baselineTrades>0?recentTrades/baselineTrades:null;
+  const takerShare=rows=>{const valid=(Array.isArray(rows)?rows:[]).filter(c=>Number.isFinite(Number(c?.takerBuyBaseVolume))&&Number.isFinite(Number(c?.volume))&&Number(c.volume)>0);
+    if(!valid.length)return null;const total=valid.reduce((sum,c)=>sum+Number(c.volume),0);return total>0?valid.reduce((sum,c)=>sum+Number(c.takerBuyBaseVolume),0)/total:null;};
+  const takerBuyRatio=takerShare(recentWindow),baselineTakerBuyRatio=takerShare(baselineWindow);
+  const takerBuyDelta=Number.isFinite(takerBuyRatio)&&Number.isFinite(baselineTakerBuyRatio)?takerBuyRatio-baselineTakerBuyRatio:null;
 
   const vwap=rollingVwap(m15,40);
   const vwapDistance=Number.isFinite(vwap)&&vwap>0?(Number(m15.at(-1).close)-vwap)/vwap*100:null;
@@ -201,9 +211,13 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
   const last=Number(m15.at(-1).close);
   const mid20=(hi20+lo20)/2;
   const valueAcceptance=hi20>lo20?clamp(50+(last-mid20)/(hi20-lo20)*90):50;
-
-  const rs30=direction==='UP_ROTATION'?market30-r30:r30-market30;
-  const rs2h=direction==='UP_ROTATION'?market2h-r2h:r2h-market2h;
+  const loc=closeLocation(m15,20),dayMoveRaw=ticker?.priceChange24h??ticker?.price_change_24h;
+  const dayMove=dayMoveRaw==null?null:finite(dayMoveRaw,null);
+  const candleCoverageQuality=Math.round(clamp(Math.min(m15.length/80,1)*25+Math.min(h1.length/30,1)*20+Math.min(btc15.length/12,1)*15+Math.min(eth15.length/12,1)*15+Math.min(btc1h.length/2,1)*12.5+Math.min(eth1h.length/2,1)*12.5));
+  const ownUpturn=Number.isFinite(volumeRatio)&&volumeRatio>=1.12&&((Number.isFinite(r15)&&r15>=0.03)||(Number.isFinite(r30)&&r30>=0.06))&&Number.isFinite(r60)&&r60>=-0.10&&loc>=52&&(vwapDistance===null||vwapDistance>=-0.15)&&(dayMove===null||Math.abs(dayMove)<=8);
+  if(ownUpturn)direction='UP_ROTATION';
+  const rs30=direction==='UP_ROTATION'?r30-market30:market30-r30;
+  const rs2h=direction==='UP_ROTATION'?r2h-market2h:market2h-r2h;
   const lagScore=clamp(50+(Number.isFinite(rs30)?rs30*34:0)+(Number.isFinite(rs2h)?rs2h*11:0));
 
   const silentDislocation=Number.isFinite(volumeRatio)
@@ -233,7 +247,6 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
       :clamp(50+(stochPrev-stochNow)*2+(stochNow>=35&&stochNow<=80?18:0)))
     :45;
 
-  const loc=closeLocation(m15,20);
   const pathPersistence=persistence(m15,8);
   const persistenceScore=clamp(35+pathPersistence*80+(direction==='UP_ROTATION'&&loc>=65?8:direction==='DOWN'&&loc<=35?8:0));
 
@@ -299,25 +312,27 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
     push(persistenceScore>=68,'PRICE_PERSISTENCE');
   }
 
-  const rotationTrigger=score>=78&&confirmations.length>=4&&(
-    (direction==='UP_ROTATION'&&Number.isFinite(market30)&&market30>=0.25&&Number.isFinite(rs30)&&rs30>=0.20&&activation>=64) ||
-    (direction==='DOWN_ROTATION'&&Number.isFinite(market30)&&market30<=-0.25&&Number.isFinite(rs30)&&rs30>=0.20&&activation>=64)
-  );
-
-  const stage=rotationTrigger
-    ?(score>=90?'ROTATION_BREAKOUT_READY':'ROTATION_READY')
-    :score>=70?'BUILDING_ROTATION'
-    :'WATCH';
+  const rotationTrigger=candleCoverageQuality>=85&&score>=78&&confirmations.length>=4&&((direction==='UP_ROTATION'&&Number.isFinite(market30)&&market30>=0.25&&Number.isFinite(rs30)&&rs30>=0.20&&activation>=64)||(direction==='DOWN_ROTATION'&&Number.isFinite(market30)&&market30<=-0.25&&Number.isFinite(rs30)&&rs30>=0.20&&activation>=64));
+  const priceWindowOk=dayMove!==null&&Math.abs(dayMove)<=8&&Number.isFinite(r30)&&r30>=-0.15&&r30<=1.6&&Number.isFinite(r60)&&r60<=2.8&&Number.isFinite(r2h)&&r2h<=5.5;
+  const flowOk=Number.isFinite(tradeRatio)&&tradeRatio>=1.05&&((Number.isFinite(takerBuyRatio)&&takerBuyRatio>=0.52)||(Number.isFinite(takerBuyDelta)&&takerBuyDelta>=0.01));
+  const earlyChecks=[Number.isFinite(volumeRatio)&&volumeRatio>=1.12,Number.isFinite(tradeRatio)&&tradeRatio>=1.05,(Number.isFinite(takerBuyRatio)&&takerBuyRatio>=0.52)||(Number.isFinite(takerBuyDelta)&&takerBuyDelta>=0.01),loc>=52,vwapReclaim>=60,rsiTurn>=56||mfiTurn>=56,stochTurn>=55,valueAcceptance>=56,persistenceScore>=58,lagScore>=52||resilience>=55];
+  const earlyEvidenceCount=earlyChecks.filter(Boolean).length;
+  const watchEligible=candleCoverageQuality>=85&&direction==='UP_ROTATION'&&score>=72&&activation>=60&&confirmations.length>=3&&Number.isFinite(volumeRatio)&&volumeRatio>=1.12&&flowOk&&loc>=52&&(vwapReclaim>=60||(Number.isFinite(vwapDistance)&&vwapDistance>=-0.15))&&priceWindowOk&&earlyEvidenceCount>=5&&(lagScore>=50||resilience>=55);
+  const watchBlockers=[];
+  if(candleCoverageQuality<85)watchBlockers.push('CLOSED_CANDLE_COVERAGE_LOW');if(direction!=='UP_ROTATION')watchBlockers.push('UPWARD_ROTATION_NOT_CONFIRMED');
+  if(score<72)watchBlockers.push('EARLY_SCORE_BELOW_72');if(activation<60)watchBlockers.push('EARLY_ACTIVATION_BELOW_60');if(confirmations.length<3)watchBlockers.push('EARLY_CONFIRMATIONS_BELOW_3');
+  if(!Number.isFinite(volumeRatio)||volumeRatio<1.12)watchBlockers.push('VOLUME_ACCELERATION_NOT_CONFIRMED');if(!Number.isFinite(tradeRatio)||tradeRatio<1.05)watchBlockers.push('TRADE_ACCELERATION_NOT_CONFIRMED');
+  if(!((Number.isFinite(takerBuyRatio)&&takerBuyRatio>=0.52)||(Number.isFinite(takerBuyDelta)&&takerBuyDelta>=0.01)))watchBlockers.push('BUY_FLOW_NOT_CONFIRMED');
+  if(loc<52)watchBlockers.push('PRICE_ACCEPTANCE_NOT_CONFIRMED');if(!(vwapReclaim>=60||(Number.isFinite(vwapDistance)&&vwapDistance>=-0.15)))watchBlockers.push('VWAP_RECLAIM_NOT_CONFIRMED');
+  if(!priceWindowOk)watchBlockers.push('ANTI_CHASE_PRICE_WINDOW_BLOCKED');if(earlyEvidenceCount<5)watchBlockers.push('EARLY_EVIDENCE_BREADTH_LOW');if(lagScore<50&&resilience<55)watchBlockers.push('RELATIVE_SUPPORT_NOT_CONFIRMED');
+  const stage=rotationTrigger?(score>=90?'ROTATION_BREAKOUT_READY':'ROTATION_READY'):watchEligible?'WATCH_EARLY':score>=70?'BUILDING_ROTATION':'WATCH';
 
   const reasons=confirmations.slice(0,10).map(x=>x.replaceAll('_',' '));
   const marketRegime=upBias>=0.4?'RISK_ON_SHIFT':upBias<=-0.4?'RISK_OFF_SHIFT':'MIXED';
 
   return {
-    eligible:rotationTrigger,
-    closed_candles_only:true,
-    stage,
-    direction,
-    score:Math.round(score*10)/10,
+    eligible:rotationTrigger,watch_eligible:watchEligible,watch_blockers:watchEligible?[]:watchBlockers,
+    closed_candles_only:true,data_quality:candleCoverageQuality,data_quality_reasons:[],stage,direction,score:Math.round(score*10)/10,
     activation_score:Math.round(activation*10)/10,
     confirmations:confirmations.length,
     market_regime:marketRegime,
@@ -330,9 +345,8 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
     metrics:{
       return_15m:r15,return_30m:r30,return_60m:r60,return_2h:r2h,return_1h:hr,
       market_return_15m:market15,market_return_30m:market30,market_return_60m:market60,
-      market_return_2h:market2h,market_return_1h:marketHour,
-      relative_30m_pct:rs30,relative_2h_pct:rs2h,volume_ratio:volumeRatio,
-      range_ratio:rangeRatio,vwap,vwap_distance_pct:vwapDistance,
+      market_return_2h:market2h,market_return_1h:marketHour,relative_30m_pct:rs30,relative_2h_pct:rs2h,volume_ratio:volumeRatio,trade_ratio:tradeRatio,
+      taker_buy_ratio:takerBuyRatio,baseline_taker_buy_ratio:baselineTakerBuyRatio,taker_buy_delta:takerBuyDelta,range_ratio:rangeRatio,vwap,vwap_distance_pct:vwapDistance,vwap_reclaim_score:vwapReclaim,
       close_location_pct:loc,value_acceptance_score:valueAcceptance,
       rsi:rsiNow,rsi_slope:rsiSlope,mfi:mfiNow,mfi_slope:mfiSlope,
       stochastic:stochNow,stochastic_delta:Number.isFinite(stochNow)&&Number.isFinite(stochPrev)?stochNow-stochPrev:null,
@@ -344,9 +358,9 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
       stochastic_turn:stochTurn,persistence:persistenceScore,compression:compressionScore
     },
     trigger:{
-      min_score:78,min_confirmations:4,min_market_shift_pct:0.25,min_relative_edge_pct:0.20,min_activation_score:64
+      min_score:78,min_confirmations:4,min_market_shift_pct:0.25,min_relative_edge_pct:0.20,min_activation_score:64,watch_min_score:72,watch_min_activation_score:60,watch_min_confirmations:3,watch_min_volume_ratio:1.12,watch_min_trade_ratio:1.05
     },
-    confirmations,
+    confirmations,watch_evidence_count:earlyEvidenceCount,
     reasons,
     source:'Binance Public REST',
     detected_at:now,
@@ -358,36 +372,25 @@ export function buildRotationAnalysis(fifteenMin,oneHour,benchmarks,ticker,now=D
 }
 
 export function buildRotationAlert(candidate,now=Date.now()){
-  const a=buildRotationAnalysis(candidate.fifteen_min,candidate.one_hour,candidate.benchmarks,candidate.ticker,now);
-  const ticker=candidate.ticker||{};
-  const symbol=String(ticker.symbol||'UNKNOWN').toUpperCase();
-  return {
-    id:'ROTATION:'+symbol+':'+a.direction+':'+now,
-    event:'ROTATION_LAG_ALERT',
-    radar:'ROTATION_LAG_RADAR',
-    symbol,
-    market:'SPOT',
-    direction:a.direction,
-    price:finite(ticker.lastPrice),
-    price_change_24h:finite(ticker.priceChange24h),
-    opportunity_score:a.score,
-    potential_label:a.stage,
-    rotation:a,
-    reasons:a.reasons,
-    risk_flags:[
-      Math.abs(finite(ticker.priceChange24h,0))>=10?'24H_ALREADY_EXTENDED':null,
-      Number.isFinite(a.metrics?.volume_ratio)&&a.metrics.volume_ratio<0.8?'LOW_ACTIVITY':null,
-      Number.isFinite(a.metrics?.range_ratio)&&a.metrics.range_ratio>1.8?'VOLATILITY_ELEVATED':null
-    ].filter(Boolean),
-    source:a.source,
-    detected_at:now,
-    processed_at:now,
-    paper_trading:true,
-    real_order_execution:false,
-    confidence_score:'UNKNOWN',
-    eligible:a.eligible,
-    disclaimer:'رادار Rotation/Lag يبحث عن دوران/لحاق نسبي وتحول سلوكي قبل اتساع الحركة؛ لا يضمن اتجاه الحركة أو استمرارها.'
-  };
+  const ticker=candidate.ticker||{},a=buildRotationAnalysis(candidate.fifteen_min,candidate.one_hour,candidate.benchmarks,ticker,now);
+  const symbol=String(ticker.symbol||'UNKNOWN').toUpperCase(),qv=ticker.quoteVolume24h??ticker.quote_volume_24h;
+  const quoteVolume=qv==null?null:finite(qv,null),liquidityQuality=liquidityQualityFor(quoteVolume,Number(candidate.minQuoteVolume24h)||750000);
+  const dataQuality=finite(a.data_quality,0),last=closedCandles(candidate.fifteen_min,now).at(-1)||null,closeTime=last?finite(last.closeTime,null):null;
+  const watchOnly=a.eligible!==true&&a.watch_eligible===true,vr=finite(a.metrics?.volume_ratio,0),tr=finite(a.metrics?.trade_ratio,0),taker=finite(a.metrics?.taker_buy_ratio,0.5);
+  const components={data_quality:dataQuality,liquidity:liquidityQuality,momentum:Math.max(finite(a.component_scores?.rsi_turn,50),finite(a.component_scores?.mfi_turn,50),finite(a.component_scores?.stochastic_turn,50)),
+    volume:clamp(50+(vr-1)*40),volume_ratio:vr,trades:clamp(50+(tr-1)*40),trade_ratio:tr,taker:clamp(50+(taker-0.5)*300),taker_buy_ratio:taker,
+    range:finite(a.component_scores?.compression,50),compression:finite(a.component_scores?.compression,50),breakout:finite(a.component_scores?.value_acceptance,50),
+    ema:finite(a.component_scores?.reclaim_or_reject,50),vwap:finite(a.metrics?.vwap_reclaim_score,50),efficiency:finite(a.component_scores?.persistence,50),
+    relative_strength:Math.max(finite(a.component_scores?.lag,50),finite(a.component_scores?.resilience,50)),structure:finite(a.component_scores?.value_acceptance,50)};
+  return {id:'ROTATION:'+symbol+':'+a.direction+':'+now,event:a.eligible?'ROTATION_LAG_ALERT':watchOnly?'ROTATION_WATCH_ONLY_EARLY_TRACK':'ROTATION_OBSERVATION',
+    radar:'ROTATION_LAG_RADAR',symbol,market:'SPOT',direction:a.direction,price:finite(ticker.lastPrice),price_change_24h:finite(ticker.priceChange24h),
+    quote_volume_24h:quoteVolume,opportunity_score:a.score,potential_label:watchOnly?'WATCH_EARLY_ROTATION':a.stage,rotation:{...a,data_quality:dataQuality,liquidity_quality:liquidityQuality},
+    reasons:a.reasons,watch_reason_codes:a.watch_blockers||[],risk_flags:[Math.abs(finite(ticker.priceChange24h,0))>8?'24H_ALREADY_EXTENDED':null,Number.isFinite(a.metrics?.volume_ratio)&&a.metrics.volume_ratio<0.8?'LOW_ACTIVITY':null,Number.isFinite(a.metrics?.range_ratio)&&a.metrics.range_ratio>1.8?'VOLATILITY_ELEVATED':null].filter(Boolean),
+    components,volume_ratio:vr,trade_ratio:tr,taker_buy_ratio:taker,source:a.source,source_time:closeTime,detected_candle_close_time:closeTime,candle:{closed:true,close_time:closeTime,closeTime},
+    data_status:{source:'BINANCE_PUBLIC_REST',data_valid:dataQuality>=85,stale:false,data_stale:false,future_data_detected:false,candle_closed:Boolean(closeTime!==null&&closeTime<=now),close_time:closeTime,source_time:closeTime,data_quality:dataQuality},
+    data_quality:dataQuality,liquidity_quality:liquidityQuality,closed_candles_only:true,detected_at:now,processed_at:now,paper_trading:true,real_order_execution:false,
+    confidence_score:'UNKNOWN',eligible:a.eligible,entry_eligible:a.eligible,watch_only:watchOnly,
+    disclaimer:'الجوكر يرصد دوران السيولة والانعطاف النسبي المبكر. حالات WATCH_EARLY للمراقبة فقط وليست إشارة دخول أو ضمانًا للارتفاع.'};
 }
 
 const STABLE_BASES=new Set(['USDC','BUSD','FDUSD','TUSD','USDP','DAI','USDE','USD1']);
@@ -398,13 +401,11 @@ export class RotationLagRadar {
     if(!store)throw new Error('STORE_REQUIRED');
     this.rest=rest;this.store=store;this.pushManager=pushManager;this.clock=clock;this.logger=logger;
     this.config={
-      quote:'USDT',pollMs:45000,universeRefreshMs:5*60*1000,minQuoteVolume24h:1000000,
-      rotationBatchSize:5,topLaggers:2,rotationConcurrency:4,maxAbs24hMovePct:6,alertCooldownMs:15*60*1000,
-      minScore:82,minConfirmations:5,...config
+      quote:'USDT',pollMs:20000,universeRefreshMs:5*60*1000,minQuoteVolume24h:750000,rotationBatchSize:12,topLaggers:3,rotationConcurrency:4,maxAbs24hMovePct:8,alertCooldownMs:10*60*1000,minScore:78,minConfirmations:4,...config
     };
-    this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
-    this.lastScanAt=new Map();this.lastAlertAt=new Map();
-    this.alertCount=0;this.scans=0;this.lastError=null;this.lastScanAtMs=null;this.busy=false;this.latestCandidates=new Map();
+    this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;this.lastScanAt=new Map();this.lastAlertAt=new Map();
+    this.alertCount=0;this.watchAlertCount=0;this.scans=0;this.cycles=0;this.lastError=null;this.lastScanAtMs=null;this.busy=false;this.busySinceAt=null;this.latestCandidates=new Map();
+    this.lastDecisionDiagnostics={evaluated:0,core_eligible:0,elite_gate_rejected:0,notification_gate_checked:0,notification_gate_rejected:0,notification_gate_accepted:0,watch_candidates:0,watch_notifications:0,alerts_stored:0,notifications_sent:0,cooldown_blocked:0,row_errors:0,duration_ms:0};this.decisionRejectionCounts={};
   }
 
   start(){
@@ -429,7 +430,7 @@ export class RotationLagRadar {
       const base=s.endsWith(this.config.quote)?s.slice(0,-this.config.quote.length):s;
       return !STABLE_BASES.has(base);
     });
-    this.universeAt=this.clock();this.cursor=0;
+    this.universeAt=this.clock();this.cursor=this.universe.length?this.cursor%this.universe.length:0;
   }
 
   async tickerRows(){
@@ -455,113 +456,73 @@ export class RotationLagRadar {
 
   selectBatch(rows){
     if(!Array.isArray(rows)||!rows.length)return [];
-    const active=[...rows].sort((a,b)=>{
-      // Rank quiet/lagging movement first, but among similar moves prefer the
-      // deeper quote-volume pool. Deep scans then verify relative strength vs BTC/ETH.
+    const active=[...new Map(rows.filter(x=>x?.symbol).map(x=>[String(x.symbol).toUpperCase(),x])).values()].sort((a,b)=>{
       const sa=Math.abs(Number(a.priceChange24h)||0)*4-Math.log10(Math.max(1,Number(a.quoteVolume24h)||1))*1.5;
-      const sb=Math.abs(Number(b.priceChange24h)||0)*4-Math.log10(Math.max(1,Number(b.quoteVolume24h)||1))*1.5;
-      return sa-sb||Number(b.quoteVolume24h||0)-Number(a.quoteVolume24h||0);
+      const sb=Math.abs(Number(b.priceChange24h)||0)*4-Math.log10(Math.max(1,Number(b.quoteVolume24h)||1))*1.5;return sa-sb||Number(b.quoteVolume24h||0)-Number(a.quoteVolume24h||0);
     });
-    const selected=[],seen=new Set();
-    const take=row=>{if(row?.symbol&&!seen.has(row.symbol)){selected.push(row);seen.add(row.symbol);return true;}return false;};
-    const topCount=Math.max(0,Math.trunc(Number(this.config.topLaggers)||0));
-    const rotationCount=Math.max(0,Math.trunc(Number(this.config.rotationBatchSize)||0));
-    for(const row of active.slice(0,topCount))take(row);
-    const target=Math.min(new Set(active.map(x=>x.symbol)).size,topCount+rotationCount);
-    let visited=0;
-    while(selected.length<target&&visited<this.universe.length){
-      const symbol=this.universe[this.cursor%this.universe.length];this.cursor=(this.cursor+1)%this.universe.length;visited++;
-      take(active.find(x=>x.symbol===symbol));
-    }
-    return selected;
+    if(!active.length)return [];const selected=[],seen=new Set(),take=row=>{const id=String(row?.symbol||'').toUpperCase();if(id&&!seen.has(id)){selected.push(row);seen.add(id);}};
+    const topCount=Math.min(active.length,Math.max(0,Math.trunc(Number(this.config.topLaggers)||0))),n=Math.max(0,Math.trunc(Number(this.config.rotationBatchSize)||0));
+    for(const row of active.slice(0,topCount))take(row);const pool=active.slice(topCount),count=Math.min(n,pool.length),start=pool.length?((Math.trunc(Number(this.cursor)||0)%pool.length)+pool.length)%pool.length:0;
+    for(let i=0;i<count;i++)take(pool[(start+i)%pool.length]);this.cursor=pool.length?(start+Math.max(1,count))%pool.length:0;return selected;
+  }
+  recordDecisionRejections(reasons=[]){for(const reason of Array.isArray(reasons)?reasons:[]){const key=String(reason||'UNKNOWN_REJECTION').slice(0,120);this.decisionRejectionCounts[key]=(this.decisionRejectionCounts[key]||0)+1;}}
+  analysisRejectionReasons(alert,eliteGate=null){const a=alert?.rotation||{},reasons=[];
+    if(Number(a.data_quality)<85)reasons.push(...(Array.isArray(a.data_quality_reasons)?a.data_quality_reasons:['DATA_QUALITY_NOT_VALID']));
+    if(alert?.eligible!==true&&a.watch_eligible!==true)reasons.push(...(Array.isArray(a.watch_blockers)&&a.watch_blockers.length?a.watch_blockers:['ROTATION_TRIGGER_NOT_CONFIRMED']));
+    if(alert?.eligible===true&&eliteGate?.eligible!==true)reasons.push(...(Array.isArray(eliteGate?.risk_flags)&&eliteGate.risk_flags.length?eliteGate.risk_flags:['ELITE_GATE_NOT_ELIGIBLE']));
+    return [...new Set(reasons)];
   }
 
   async scanRow(row,benchmarks){
-    const last=this.lastScanAt.get(row.symbol)||0;
-    if(this.clock()-last<Math.max(10000,this.config.pollMs*0.75))return null;
-    this.lastScanAt.set(row.symbol,this.clock());
-    const [f,h]=await Promise.all([
-      this.rest.klines(row.symbol,'15m',{limit:120}),
-      this.rest.klines(row.symbol,'1h',{limit:60})
-    ]);
-    const alert=buildRotationAlert({
-      ticker:row,fifteen_min:f.candles,one_hour:h.candles,benchmarks
-    },this.clock());
-    this.scans++;
-    this.latestCandidates.set(row.symbol,alert);
-    while(this.latestCandidates.size>60){
-      const first=this.latestCandidates.keys().next().value;
-      this.latestCandidates.delete(first);
-    }
-    const a=alert.rotation||{};
-    const cs=a.component_scores||{};
-    const m=a.metrics||{};
-    const gate=evaluateEliteGate({
-      radar:'ROTATION_LAG_RADAR',
-      direction:a.direction,
-      baseScore:a.score,
-      priceChange24h:row.priceChange24h,
-      liquidityScore:clamp(70+Math.log10(Math.max(1,row.quoteVolume24h/this.config.minQuoteVolume24h))*30),
-      dataQualityScore:90,
-      triggerScore:a.activation_score||50,
-      structureScore:Math.max(Number(cs.reclaim_or_reject)||0,Number(cs.value_acceptance)||0),
-      participationScore:Number(cs.silent_volume)||50,
-      flowScore:Math.max(Number(cs.mfi_turn)||0,Number(cs.rsi_turn)||0),
-      relativeScore:Math.max(Number(cs.lag)||0,Number(cs.resilience)||0),
-      momentumScore:Number(cs.stochastic_turn)||Number(cs.persistence)||50,
-      compressionScore:Number(cs.compression)||50,
-      confirmations:a.confirmations,
-      minConfirmations:6,minScore:86,max24hMovePct:5,requireTrigger:true,minCategoryHits:5
-    });
-    alert.elite_gate=gate;
-    if(!alert.eligible||a.score<this.config.minScore||a.confirmations<this.config.minConfirmations||!gate.eligible)return alert;
-    const lastAlert=this.lastAlertAt.get(row.symbol)||0;
-    if(this.clock()-lastAlert<this.config.alertCooldownMs)return alert;
-    this.lastAlertAt.set(row.symbol,this.clock());
-    const decorated=decorateRadarAlert(alert,'Radar 3 — Rotation/Lag');
-    await this.store.appendRotationAlert(decorated);
-    if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
-    this.alertCount++;
-    return alert;
+    const symbol=String(row?.symbol||'').toUpperCase(),last=this.lastScanAt.get(symbol)||0;
+    if(this.clock()-last<Math.max(10000,this.config.pollMs*0.75)){this.lastDecisionDiagnostics.cooldown_blocked++;this.recordDecisionRejections(['SYMBOL_SCAN_COOLDOWN']);return null;}
+    this.lastScanAt.set(symbol,this.clock());const [f,h]=await Promise.all([this.rest.klines(symbol,'15m',{limit:120}),this.rest.klines(symbol,'1h',{limit:60})]);
+    const alert=buildRotationAlert({ticker:row,fifteen_min:f.candles,one_hour:h.candles,benchmarks,minQuoteVolume24h:this.config.minQuoteVolume24h},this.clock());
+    this.scans++;this.lastDecisionDiagnostics.evaluated++;const a=alert.rotation||{},cs=a.component_scores||{};
+    const eliteGate=evaluateEliteGate({radar:'ROTATION_LAG_RADAR',direction:a.direction,baseScore:a.score,priceChange24h:row.priceChange24h,liquidityScore:alert.liquidity_quality,
+      dataQualityScore:alert.data_quality,triggerScore:a.activation_score||50,structureScore:Math.max(Number(cs.reclaim_or_reject)||0,Number(cs.value_acceptance)||0),
+      participationScore:Number(cs.silent_volume)||50,flowScore:Math.max(Number(cs.mfi_turn)||0,Number(cs.rsi_turn)||0),relativeScore:Math.max(Number(cs.lag)||0,Number(cs.resilience)||0),
+      momentumScore:Math.max(Number(cs.stochastic_turn)||0,Number(cs.persistence)||0),compressionScore:Number(cs.compression)||50,confirmations:a.confirmations,minConfirmations:6,minScore:86,max24hMovePct:5,requireTrigger:true,minCategoryHits:5});
+    alert.elite_gate=eliteGate;const strictCandidate=alert.eligible===true&&a.score>=this.config.minScore&&a.confirmations>=this.config.minConfirmations&&eliteGate.eligible===true;
+    if(strictCandidate)this.lastDecisionDiagnostics.core_eligible++;else if(alert.eligible===true&&!eliteGate.eligible)this.lastDecisionDiagnostics.elite_gate_rejected++;
+    if(!strictCandidate&&!a.watch_eligible)this.recordDecisionRejections(this.analysisRejectionReasons(alert,eliteGate));
+    const now=this.clock(),lastAlert=this.lastAlertAt.get(symbol)||0,onCooldown=now-lastAlert<this.config.alertCooldownMs;
+    const saveAndNotify=async(candidate,{watchOnly=false,gate}={})=>{
+      if(onCooldown){this.lastDecisionDiagnostics.cooldown_blocked++;this.recordDecisionRejections(['ALERT_COOLDOWN_ACTIVE']);return false;}
+      candidate.notification_gate=gate;candidate.notification_gate_mode=gate.mode;candidate.entry_eligible=!watchOnly;candidate.watch_only=watchOnly;
+      if(watchOnly){candidate.event='ROTATION_WATCH_ONLY_EARLY_TRACK';candidate.potential_label='WATCH_EARLY_ROTATION';}
+      rememberRadarAlert(candidate,now);this.lastAlertAt.set(symbol,now);await this.store.appendRotationAlert(candidate);this.lastDecisionDiagnostics.alerts_stored++;
+      if(watchOnly){this.watchAlertCount++;this.lastDecisionDiagnostics.watch_notifications++;}else this.alertCount++;
+      if(this.pushManager?.notifyRadarAlert){const notifications=await this.pushManager.notifyRadarAlert(candidate);if(Array.isArray(notifications)&&notifications.some(x=>x?.status==='SENT'||x?.status==='SENT_OR_ATTEMPTED'))this.lastDecisionDiagnostics.notifications_sent++;}
+      return true;
+    };
+    if(strictCandidate){const decorated=decorateRadarAlert(alert,'Radar 3 — الجوكر');this.lastDecisionDiagnostics.notification_gate_checked++;const gate=evaluateRadarNotificationGate(decorated,{now,commit:false});
+      if(gate.eligible&&gate.watch_only!==true){this.lastDecisionDiagnostics.notification_gate_accepted++;await saveAndNotify(decorated,{watchOnly:false,gate});this.latestCandidates.set(symbol,decorated);return decorated;}
+      this.lastDecisionDiagnostics.notification_gate_rejected++;this.recordDecisionRejections(gate.failures.length?gate.failures:['NOTIFICATION_GATE_REJECTED']);}
+    if(a.watch_eligible===true){this.lastDecisionDiagnostics.watch_candidates++;const watchAlert={...alert};delete watchAlert.elite_gate;
+      watchAlert.eligible=false;watchAlert.entry_eligible=false;watchAlert.watch_only=true;watchAlert.event='ROTATION_WATCH_ONLY_EARLY_TRACK';watchAlert.potential_label='WATCH_EARLY_ROTATION';
+      const decorated=decorateRadarAlert(watchAlert,'Radar 3 — الجوكر');this.lastDecisionDiagnostics.notification_gate_checked++;const gate=evaluateRadarNotificationGate(decorated,{now,commit:false});
+      if(gate.eligible&&gate.watch_only===true){this.lastDecisionDiagnostics.notification_gate_accepted++;await saveAndNotify(decorated,{watchOnly:true,gate});this.latestCandidates.set(symbol,decorated);return decorated;}
+      this.lastDecisionDiagnostics.notification_gate_rejected++;this.recordDecisionRejections(gate.failures.length?gate.failures:['EARLY_WATCH_GATE_NOT_QUALIFIED']);watchAlert.notification_gate=gate;this.latestCandidates.set(symbol,watchAlert);return watchAlert;}
+    this.latestCandidates.set(symbol,alert);while(this.latestCandidates.size>60)this.latestCandidates.delete(this.latestCandidates.keys().next().value);return alert;
   }
 
   async tick(){
-    if(!this.running||this.busy)return;
-    this.busy=true;
-    try{
-      if(this.clock()-this.universeAt>this.config.universeRefreshMs)await this.refreshUniverse();
-      const [rows,benchmarks]=await Promise.all([this.tickerRows(),this.benchmarkData()]);
-      const selected=this.selectBatch(rows);
-      this.lastScanAtMs=this.clock();
-      // Keep a bounded worker pool: symbols are independent, but a full fan-out
-      // would compete with the other eleven radars for the process-wide REST budget.
-      await mapLimit(selected,Math.max(1,Math.min(6,this.config.rotationConcurrency)),async row=>{
-        if(!this.running)return null;
-        try{return await this.scanRow(row,benchmarks);}catch(e){this.noteError(e);return null;}
-      });
-    }finally{this.busy=false;}
+    if(!this.running||this.busy)return false;this.busy=true;this.busySinceAt=this.clock();const startedAt=this.clock();
+    this.lastDecisionDiagnostics={evaluated:0,core_eligible:0,elite_gate_rejected:0,notification_gate_checked:0,notification_gate_rejected:0,notification_gate_accepted:0,watch_candidates:0,watch_notifications:0,alerts_stored:0,notifications_sent:0,cooldown_blocked:0,row_errors:0,duration_ms:0};
+    this.decisionRejectionCounts={};this.lastError=null;
+    try{if(this.clock()-this.universeAt>this.config.universeRefreshMs)await this.refreshUniverse();const [rows,benchmarks]=await Promise.all([this.tickerRows(),this.benchmarkData()]),selected=this.selectBatch(rows);
+      await mapLimit(selected,Math.max(1,Math.min(6,this.config.rotationConcurrency)),async row=>{if(!this.running)return null;try{return await this.scanRow(row,benchmarks);}catch(e){this.lastDecisionDiagnostics.row_errors++;this.noteError(e);this.recordDecisionRejections(['SYMBOL_SCAN_FAILED']);return null;}});
+      this.cycles++;this.lastScanAtMs=this.clock();this.lastDecisionDiagnostics.duration_ms=Math.max(0,this.lastScanAtMs-startedAt);return true;
+    }catch(e){this.lastScanAtMs=this.clock();this.lastDecisionDiagnostics.duration_ms=Math.max(0,this.lastScanAtMs-startedAt);this.noteError(e);this.recordDecisionRejections(['RADAR_CYCLE_FAILED']);return false;}
+    finally{this.busy=false;this.busySinceAt=null;}
   }
 
-  snapshot(limit=20){
-    const safeLimit=Math.max(1,Math.min(50,Math.trunc(Number(limit)||20)));
-    return [...this.latestCandidates.values()]
-      .sort((a,b)=>Number(b.processed_at||b.detected_at||0)-Number(a.processed_at||a.detected_at||0)||Number(b.opportunity_score||0)-Number(a.opportunity_score||0))
-      .slice(0,safeLimit);
-  }
-
-  health(){
-    return {
-      running:this.running,radar:'ROTATION_LAG_RADAR',universe:this.universe.length,
-      last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,
-      scans:this.scans,alerts_emitted:this.alertCount,candidate_count:this.latestCandidates.size,last_error:this.lastError,busy:this.busy,
-      rest:this.rest?.health?.()||null,
-      algorithms:[
-        'CROSS_MARKET_LEAD_LAG','RELATIVE_STRENGTH_SPREAD','SILENT_VOLUME_PRICE_DISLOCATION',
-        'VWAP_RECLAIM_REJECTION','VALUE_ACCEPTANCE','RSI_TURN','MFI_TURN',
-        'STOCHASTIC_TURN','PRICE_PERSISTENCE','RANGE_COMPRESSION'
-      ],
-      source:'Binance Public REST',closed_candles_only:true,
-      paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
-    };
-  }
+  snapshot(limit=20){const safeLimit=Math.max(1,Math.min(50,Math.trunc(Number(limit)||20)));return [...this.latestCandidates.values()].sort((a,b)=>Number(b.opportunity_score||b.rotation?.score||0)-Number(a.opportunity_score||a.rotation?.score||0)||Number(b.processed_at||b.detected_at||0)-Number(a.processed_at||a.detected_at||0)).slice(0,safeLimit);}
+  health(){return {running:this.running,radar:'ROTATION_LAG_RADAR',universe:this.universe.length,last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,
+    scans:this.scans,cycles:this.cycles,alerts_emitted:this.alertCount,watch_alerts_emitted:this.watchAlertCount,candidate_count:this.latestCandidates.size,last_error:this.lastError,busy:this.busy,busy_since_at:this.busySinceAt,
+    poll_ms:this.config.pollMs,min_quote_volume_24h:this.config.minQuoteVolume24h,rotation_cursor:this.cursor,batch_size:Number(this.config.topLaggers||0)+Number(this.config.rotationBatchSize||0),
+    decision_diagnostics:{...this.lastDecisionDiagnostics,top_rejection_reasons:Object.entries(this.decisionRejectionCounts).sort((a,b)=>b[1]-a[1]).slice(0,15).map(([reason,count])=>({reason,count}))},rest:this.rest?.health?.()||null,
+    algorithms:['CROSS_MARKET_LEAD_LAG','RELATIVE_STRENGTH_SPREAD','SILENT_VOLUME_PRICE_DISLOCATION','BUYER_TRADE_ACCELERATION','TAKER_BUY_PRESSURE','VWAP_RECLAIM_REJECTION','VALUE_ACCEPTANCE','RSI_MFI_TURN','STOCHASTIC_TURN','PRICE_PERSISTENCE','RANGE_COMPRESSION','ROTATING_UNIVERSE_COVERAGE'],
+    source:'Binance Public REST',closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'};}
 }

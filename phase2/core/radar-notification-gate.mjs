@@ -278,11 +278,19 @@ function radarSpecificChecks(alert,p,now){
   }
 
   if(r==='ROTATION_LAG_RADAR'){
-    const a=alert?.rotation||{};
-    const lag=num(a.component_scores?.lag??a.metrics?.lag_score??a.metrics?.lag,null);
-    const resilience=num(a.component_scores?.resilience??a.metrics?.resilience_score??a.metrics?.resilience,null);
-    if((lag===null||lag<58)&&(resilience===null||resilience<65))failures.push('RELATIVE_STRENGTH_NOT_CONFIRMED');
-    if(num(a.activation_score,0)<72)failures.push('ROTATION_ACTIVATION_WEAK');
+    const a=alert?.rotation||{},jokerWatch=alert?.watch_only===true&&alert?.entry_eligible===false&&a.watch_eligible===true;
+    const lag=num(a.component_scores?.lag??a.metrics?.lag_score??a.metrics?.lag,null),resilience=num(a.component_scores?.resilience??a.metrics?.resilience_score??a.metrics?.resilience,null),edge=num(a.metrics?.relative_30m_pct,null);
+    if(jokerWatch){
+      if((lag===null||lag<50)&&(resilience===null||resilience<55)&&(edge===null||edge< -0.35))failures.push('RELATIVE_STRENGTH_NOT_CONFIRMED');
+      if(num(a.activation_score,0)<60)failures.push('ROTATION_ACTIVATION_WEAK');
+      if(num(a.metrics?.volume_ratio,0)<1.12)failures.push('JOKER_WATCH_VOLUME_ACCELERATION_WEAK');
+      if(num(a.metrics?.trade_ratio,0)<1.05)failures.push('JOKER_WATCH_TRADE_ACCELERATION_WEAK');
+      if(!(num(a.metrics?.taker_buy_ratio,-1)>=0.52||num(a.metrics?.taker_buy_delta,-1)>=0.01))failures.push('JOKER_WATCH_BUY_FLOW_WEAK');
+      if(alert?.closed_candles_only!==true||alert?.data_status?.candle_closed!==true)failures.push('JOKER_WATCH_CLOSED_CANDLE_MISSING');
+    }else{
+      if((lag===null||lag<58)&&(resilience===null||resilience<65))failures.push('RELATIVE_STRENGTH_NOT_CONFIRMED');
+      if(num(a.activation_score,0)<72)failures.push('ROTATION_ACTIVATION_WEAK');
+    }
   }
 
   if(r==='LIQUIDITY_ABSORPTION_RADAR'){
@@ -553,7 +561,8 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
   if(trajectory.regime==='DETERIORATING'&&r!=='PROFESSOR_RADAR')failures.push('EVIDENCE_TRAJECTORY_DETERIORATING');
   if(Number(trajectory.persistence)>=3&&Number(trajectory.convergence)<48&&r!=='PROFESSOR_RADAR')failures.push('EVIDENCE_TRAJECTORY_DISJOINTED');
 
-  if(alert?.eligible===false)failures.push('BASE_ALERT_NOT_ELIGIBLE');
+  const explicitRotationWatch=r==='ROTATION_LAG_RADAR'&&alert?.watch_only===true&&alert?.entry_eligible===false&&alert?.rotation?.watch_eligible===true;
+  if(alert?.eligible===false&&!explicitRotationWatch)failures.push('BASE_ALERT_NOT_ELIGIBLE');
   if(alert?.elite_gate&&alert.elite_gate.eligible===false)failures.push('ELITE_GATE_NOT_ELIGIBLE');
 
   const symbol=String(alert?.symbol||'').toUpperCase();
@@ -594,6 +603,33 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
     (!p.minLiquidity||liquidity>=p.minLiquidity) &&
     (Number(trajectoryBonus(trajectory))>=5 || trajectoryPersistence<3 || trajectoryConvergence>=62);
 
+  const jokerHardFailures=earlyHardFailures.filter(x=>![
+    'FALCON_HARD_FAIL','FALCON_QUALITY_TOO_LOW','FALCON_EVIDENCE_TOO_NARROW',
+    'MOVER_FORENSICS_HARD_FAIL','MOVER_FORENSICS_QUALITY_LOW'
+  ].includes(String(x)));
+  const jokerWatchCorridor=
+    explicitRotationWatch &&
+    jokerHardFailures.length===0 &&
+    Number(alert?.rotation?.score)>=72 &&
+    Number(alert?.rotation?.activation_score)>=60 &&
+    data>=p.minData &&
+    (!p.minLiquidity||liquidity>=p.minLiquidity) &&
+    num(alert?.rotation?.metrics?.volume_ratio,0)>=1.12 &&
+    num(alert?.rotation?.metrics?.trade_ratio,0)>=1.05 &&
+    (num(alert?.rotation?.metrics?.taker_buy_ratio,-1)>=0.52||num(alert?.rotation?.metrics?.taker_buy_delta,-1)>=0.01) &&
+    alert?.closed_candles_only===true &&
+    alert?.data_status?.candle_closed===true &&
+    alert?.data_status?.stale!==true &&
+    alert?.data_status?.future_data_detected!==true &&
+    Number.isFinite(Number(alert?.detected_candle_close_time)) &&
+    Number(alert.detected_candle_close_time)<=Number(now)+5000 &&
+    Number(now)-Number(alert.detected_candle_close_time)<=20*60*1000 &&
+    Math.abs(num(alert?.price_change_24h,99))<=8 &&
+    !/(ALREADY_EXTENDED|LATE_SETUP_CHASE_GUARD|FAILED_BREAKOUT|TRAP_RISK|DATA_STALE|DATA_GAP|CLOSED_CANDLE)/i.test([
+      ...(Array.isArray(alert?.risk_flags)?alert.risk_flags:[]),
+      ...(Array.isArray(alert?.riskFlags)?alert.riskFlags:[])
+    ].join(' '));
+
   const persistentEarlyCorridor=
     EARLY_RADARS.has(r) &&
     earlyDirectionAllowed &&
@@ -608,7 +644,7 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
     (!p.minLiquidity||liquidity>=p.minLiquidity);
 
   const strictEligible=
-    failures.length===0 &&
+    !explicitRotationWatch && failures.length===0 &&
     score>=p.minScore &&
     data>=p.minData &&
     (!p.minLiquidity||liquidity>=p.minLiquidity) &&
@@ -616,8 +652,8 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
     falcon.capture>=66 &&
     falcon.independent_domains>=4;
 
-  const eligible=Boolean(strictEligible||earlyCorridor||persistentEarlyCorridor);
-  const mode=persistentEarlyCorridor
+  const eligible=Boolean(strictEligible||earlyCorridor||persistentEarlyCorridor||jokerWatchCorridor);
+  const mode=jokerWatchCorridor?'RADAR_WATCH_ONLY_EARLY_TRACK':persistentEarlyCorridor
     ?(LEGACY_EARLY_TRACK_RADARS.has(r)?'PERSISTENT_EARLY_TRACK':'RADAR_WATCH_ONLY_PERSISTENT_EARLY_TRACK')
     :earlyCorridor&&!strictEligible
       ?(LEGACY_EARLY_TRACK_RADARS.has(r)?'FALCON_EARLY_TRACK':'RADAR_WATCH_ONLY_EARLY_TRACK')
