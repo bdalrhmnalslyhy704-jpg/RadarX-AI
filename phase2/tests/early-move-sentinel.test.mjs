@@ -111,6 +111,18 @@ assert.ok(preAlert.pre_explosion.confirmation_count>=6);
 assert.ok(preAlert.opportunity_score>=78);
 assert.equal(preAlert.eligible,true);
 
+// Missing feature values must use neutral fallback evidence, not become numeric zero.
+{
+  const missingScoreAlert = buildMoveAlert({
+    ...earlyCandidate,
+    pre_move_context:{...earlyCandidate.pre_move_context,score:null},
+    strategies:[{id:'MISSING',accepted:true,score:{value:null}}]
+  },{movePct:0.4,previousMovePct:0.1},{now:1710000001500});
+  assert.equal(missingScoreAlert.components.pre_move,45);
+  assert.equal(missingScoreAlert.strategy_confluence.accepted_count,0);
+  assert.equal(missingScoreAlert.strategy_confluence.best_score,0);
+}
+
 const pumped={...earlyCandidate,price_change_24h:40,pre_move_context:{...earlyCandidate.pre_move_context,session_return_pct:25,already_moved:true}};
 const pumpedAlert=buildPreExplosionAlert(pumped,{movePct:40,discoveryScore:10},{now:1710000002000});
 assert.equal(pumpedAlert.eligible,false);
