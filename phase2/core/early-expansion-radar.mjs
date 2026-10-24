@@ -1819,7 +1819,7 @@ function radar8RestPressureRatios(restHealth = {}) {
   return {weightRatio,requestRatio};
 }
 
-export function adaptiveRadar8MicroConcurrency(configuredConcurrency, cacheHealth = {}, restHealth = {}, candidateCount = 18) {
+export function adaptiveRadar8MicroConcurrency(configuredConcurrency, cacheHealth = {}, restHealth = {}, candidateCount = 18, previousCycleDurationMs = null) {
   const base = Math.max(1, Math.min(12, Math.trunc(Number(configuredConcurrency) || 6)));
   const candidates = Math.max(0, Math.trunc(Number(candidateCount) || 0));
   if (!candidates) return 1;
@@ -1847,6 +1847,11 @@ export function adaptiveRadar8MicroConcurrency(configuredConcurrency, cacheHealt
     // six workers while half the selected symbols were falling back to REST.
     target = Math.min(8, base + 2);
   }
+  // A slow previous cycle is a stronger signal than warm-cache headroom: cap
+  // the next Micro workers until a later completed cycle returns within budget.
+  const previousDuration=previousCycleDurationMs===null||previousCycleDurationMs===undefined
+    ?null:Number(previousCycleDurationMs);
+  if(Number.isFinite(previousDuration)&&previousDuration>60_000)target=Math.min(target,4);
   return Math.max(1, Math.min(candidates, target));
 }
 
@@ -3035,8 +3040,10 @@ export class EarlyExpansionRadar{
         shared_inflight_requests:numericMetric(restHealthForConcurrency.shared_queue_depth),
         shared_cache_entries:numericMetric(restHealthForConcurrency.shared_cache_entries)
       };
+      const priorCycleDuration=Number(this.lastCoverage?.scan_duration_ms);
       const microConcurrency=adaptiveRadar8MicroConcurrency(
-        this.config.microConcurrency,cacheHealthForConcurrency,restHealthForConcurrency,selected.length
+        this.config.microConcurrency,cacheHealthForConcurrency,restHealthForConcurrency,selected.length,
+        Number.isFinite(priorCycleDuration)?priorCycleDuration:null
       );
       const microScanPromise=boundedMap(selected,microConcurrency,async row=>{
         const entry=journeyEntries.get(row.symbol),startedAt=this.clock(),lane=row._selection_lane||'score';
