@@ -157,6 +157,7 @@ export function runHistoricalReplay({
   symbol, oneMinuteCandles, aggTrades = [], startTime, endTime, evaluate,
   tradeCoverageComplete = false, tradeCoverage = null, allowCandleOnlyFallback = false,
   alertCooldownMs = 12 * 60 * 1000, candidateCooldownMs = 12 * 60 * 1000,
+  candidateResetMs = 5 * 60 * 1000,
   outcomeHorizonMs = 24 * 60 * 60 * 1000, outcomeEndTime = null, timeframeCandles = {}
 } = {}) {
   const start = finite(startTime), end = finite(endTime);
@@ -230,7 +231,11 @@ export function runHistoricalReplay({
   let priorAcceptedAt = -Infinity;
   let priorCandidateAt = -Infinity;
   let candidateCooldownBlockedCount = 0;
+  let candidateDuplicateObservationCount = 0;
+  let candidateEpisodeActive = false;
+  let candidateFalseSince = null;
   const candidateCooldown = Math.max(0, finite(candidateCooldownMs) ?? cooldown);
+  const candidateReset = Math.max(0, finite(candidateResetMs) ?? 5 * MINUTE_MS);
   let fiveIndex = 0;
   let tradeIndex = 0;
   let acceptedCount = 0, rejectedCount = 0;
@@ -288,14 +293,33 @@ export function runHistoricalReplay({
     if (accepted) { priorAcceptedAt = at; acceptedCount++; }
     else rejectedCount++;
 
-    // Candidate telemetry is episode-deduplicated independently of real alert decisions.
-    // Repeated one-minute observations of the same live setup must not inflate the
-    // historical candidate denominator or masquerade as many independent signals.
+    // Candidate telemetry counts setup episodes, not periodic refreshes. A setup
+    // must be absent for candidateResetMs before a later true can begin a new
+    // episode; candidateCooldownMs additionally prevents rapid re-entry after one.
     const rawCandidateDetected = raw?.candidate_detected === true;
-    const candidateCooldownBlocked = rawCandidateDetected && at - priorCandidateAt < candidateCooldown;
-    const candidateDetected = rawCandidateDetected && !candidateCooldownBlocked;
-    if (candidateDetected) priorCandidateAt = at;
-    if (candidateCooldownBlocked) candidateCooldownBlockedCount++;
+    let candidateCooldownBlocked = false;
+    let candidateDuplicateObservation = false;
+    let candidateDetected = false;
+    if (rawCandidateDetected) {
+      candidateFalseSince = null;
+      if (candidateEpisodeActive) {
+        candidateDuplicateObservation = true;
+        candidateDuplicateObservationCount++;
+      } else if (at - priorCandidateAt < candidateCooldown) {
+        candidateCooldownBlocked = true;
+        candidateCooldownBlockedCount++;
+      } else {
+        candidateDetected = true;
+        priorCandidateAt = at;
+      }
+      candidateEpisodeActive = true;
+    } else if (candidateEpisodeActive) {
+      if (candidateFalseSince === null) candidateFalseSince = at;
+      if (at - candidateFalseSince >= candidateReset) {
+        candidateEpisodeActive = false;
+        candidateFalseSince = null;
+      }
+    }
 
     // Outcome-only fields are calculated separately, after evaluate() has finished.
     const horizonEndAt = at + horizon;
@@ -336,9 +360,11 @@ export function runHistoricalReplay({
       candidate_detected:candidateDetected,
       candidate_raw_detected:rawCandidateDetected,
       candidate_suppressed_by_cooldown:candidateCooldownBlocked,
+      candidate_duplicate_observation:candidateDuplicateObservation,
       candidate_mode:String(raw?.candidate_mode??'NONE'),
       candidate_reasons:[...(Array.isArray(raw?.candidate_reasons)?raw.candidate_reasons:[]),
-        ...(candidateCooldownBlocked?['CANDIDATE_EPISODE_COOLDOWN']:[])].slice(0,24),
+        ...(candidateCooldownBlocked?['CANDIDATE_EPISODE_COOLDOWN']:[]),
+        ...(candidateDuplicateObservation?['CANDIDATE_EPISODE_ALREADY_ACTIVE']:[])].slice(0,24),
       replay_data_mode:tradeCoverageComplete?'FULL_TRADE':(candleOnlyFallback?'CANDLE_ONLY_FALLBACK':'BLOCKED_INCOMPLETE'),
       rejection_group: rejectionGroup, reason_codes: reasons,
       strict_gate_failures:Array.isArray(raw?.strict_gate_failures)?raw.strict_gate_failures.slice(0,20):[],
@@ -496,7 +522,9 @@ export function runHistoricalReplay({
       candidate_detections:rows.filter(x=>x.candidate_detected===true).length,
       candidate_shadow_detections:rows.filter(x=>x.candidate_detected===true&&x.decision!=='ACCEPTED').length,
       candidate_suppressed_by_cooldown:candidateCooldownBlockedCount,
+      candidate_duplicate_observations:candidateDuplicateObservationCount,
       candidate_cooldown_ms:candidateCooldown,
+      candidate_reset_ms:candidateReset,
       premove_50_status: premove50Status,
       first_accepted_at: firstAcceptedAt,
       first_early_warning_accepted_at:firstEarlyWarningAcceptedAt,
