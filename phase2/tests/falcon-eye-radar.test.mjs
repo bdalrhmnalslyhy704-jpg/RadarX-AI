@@ -1,7 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildFalconEyeAnalysis,FalconEyeRadar} from '../core/falcon-eye-radar.mjs';
+import {buildFalconEyeAnalysis,FalconEyeRadar,buildFalconEyeMarketMoverObservations} from '../core/falcon-eye-radar.mjs';
 import {evaluateRadarNotificationGate} from '../core/radar-notification-gate.mjs';
+
+test('Falcon Eye exposes 24h movers as ticker-only anti-chase observations, never as entry signals',()=>{
+  const rows=[
+    {symbol:'BMTUSDT',lastPrice:0.04163,priceChange24h:46.33,quoteVolume24h:36_550_000,tradeCount24h:20000},
+    {symbol:'ERAUSDT',lastPrice:0.0960,priceChange24h:40.97,quoteVolume24h:20_400_000,tradeCount24h:18000},
+    {symbol:'LAUSDT',lastPrice:0.0673,priceChange24h:22.14,quoteVolume24h:4_530_000,tradeCount24h:6000},
+    {symbol:'KATUSDT',lastPrice:0.00459,priceChange24h:15.04,quoteVolume24h:4_840_000,tradeCount24h:5000},
+    {symbol:'QUIETUSDT',lastPrice:1,priceChange24h:1.0,quoteVolume24h:2_000_000,tradeCount24h:2000}
+  ];
+  const result=buildFalconEyeMarketMoverObservations(rows,{
+    minQuoteVolume24h:750000,maxExtended24hMovePct:18,selectedSymbols:['KATUSDT'],limit:10,now:1_900_000_000_000
+  });
+  assert.deepEqual(result.map(x=>x.symbol),['BMTUSDT','ERAUSDT','LAUSDT','KATUSDT']);
+  assert.equal(result[0].stage,'ALREADY_EXTENDED');
+  assert.equal(result[0].analysis_status,'ANTI_CHASE_NOT_DEEP_SELECTED');
+  assert.equal(result[0].entry_eligible,false);
+  assert.equal(result[3].analysis_status,'SELECTED_FOR_DEEP_SCAN_THIS_CYCLE');
+  assert.equal(result[3].deep_analysis_completed,false);
+  assert.ok(result.every(x=>x.diagnostic_only===true&&x.watch_only===true&&x.actionable===false));
+});
 
 function candle(openTime,close,{open=close-0.02,high=close+0.06,low=close-0.06,volume=900,tradeCount=80,taker=0.50}={}) {
   return {openTime,closeTime:openTime+59_999,open,high,low,close,volume,quoteVolume:close*volume,tradeCount,takerBuyBaseVolume:volume*taker,closed:true};
