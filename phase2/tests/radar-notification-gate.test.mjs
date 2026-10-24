@@ -95,6 +95,7 @@ test('null or blank component values do not inflate evidence count',()=>{
 test('Radar 8 alert carries the actual pre-expansion fingerprint and metrics into the notification gate',()=>{
   const candidate={
     symbol:'XYZUSDT',last_price:1.23,price_change_24h:2.0,early_expansion_score:84,
+    detected_candle_close_time:NOW-60_000,closed_candles_only:true,
     decision_band:'PRE_EXPANSION',pre_expansion_stage:'PRE_EXPANSION',
     pre_expansion_fingerprint:{stage:'PRE_EXPANSION',ready:true,late:false,micro_move:false,score:82},
     metrics:{rvol_1m:1.4,rvol_5m:2.1,trade_ratio:1.7,taker_buy_ratio:0.58,price_change_5m_pct:0.8},
@@ -106,6 +107,8 @@ test('Radar 8 alert carries the actual pre-expansion fingerprint and metrics int
   assert.equal(alert.pre_expansion_fingerprint.late,false);
   assert.deepEqual(alert.metrics,candidate.metrics);
   assert.deepEqual(alert.price_change_windows,candidate.metrics);
+  assert.equal(alert.detected_candle_close_time,NOW-60_000);
+  assert.equal(alert.closed_candles_only,true);
 });
 
 test('Radar 8 rejects missing live liquidity evidence rather than defaulting it to perfect quality',()=>{

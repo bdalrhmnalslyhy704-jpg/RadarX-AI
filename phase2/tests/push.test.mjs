@@ -39,25 +39,37 @@ test('TEST_FIXTURE: low data quality prevents push attempt',async()=>{
 });
 
 
-test('TEST_FIXTURE: generic Radar push rejects watch-only and gate-rejected alerts',async()=>{
+test('TEST_FIXTURE: qualified early-track gates send a labelled watch-only push, while unqualified alerts stay blocked',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-early-watch-push-')),store=await new DurableStore({dir}).init();
   await store.putUserSettings('u1',{...defaultSettings(),enabled:true});
   await store.upsertSubscription('u1',pushSubscription());
   const sent=[];
   const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){sent.push(payload);return{ok:true,status:'SENT'};}};
   const manager=new PushManager({provider,store});
+  const now=Date.now();
   const out=await manager.notifyRadarAlert({
-    radar:'STRONG_MOVE_RADAR',radar_name:'Radar 2',symbol:'EARLYUSDT',data_quality:95,
-    notification_gate:{eligible:true,watch_only:true,requires_follow_up_confirmation:true,mode:'RADAR_WATCH_ONLY_EARLY_TRACK'},
+    radar:'STRONG_MOVE_RADAR',radar_name:'Radar 2 — Strong-Move',symbol:'EARLYUSDT',market:'SPOT',direction:'UP',
+    price:1.23,price_change_24h:2.1,data_quality:88,liquidity_quality:78,source:'BINANCE_PUBLIC_REST',
+    closed_candles_only:true,detected_candle_close_time:now-1000,risk_flags:[],
+    notification_gate:{eligible:true,watch_only:true,requires_follow_up_confirmation:true,mode:'RADAR_WATCH_ONLY_EARLY_TRACK',
+      score:76,data_quality:88,liquidity_quality:78,failures:['SCORE_BELOW_STRICT_THRESHOLD'],
+      falcon_eye:{quality:70,capture:76,independent_domains:3,early_window:true}},
     signal_lifecycle:{state:'EARLY_SETUP',label:'إعداد مبكر',transition:'EARLY_EVIDENCE_CONVERGED',reason_codes:['RELATED_EARLY_EVIDENCE']}
   });
-  assert.deepEqual(out,[]);
+  assert.equal(out.length,1);
+  assert.equal(sent.length,1);
+  assert.equal(sent[0].symbol,'EARLYUSDT');
+  assert.equal(sent[0].watch_only,true);
+  assert.equal(sent[0].entry_eligible,false);
+  assert.equal(sent[0].notification_mode,'WATCH_ONLY_EARLY_TRACK');
+  assert.equal(sent[0].paper_trading,true);
+  assert.equal(sent[0].real_order_execution,false);
   const rejected=await manager.notifyRadarAlert({
     radar:'FALCON_EYE_RADAR',symbol:'NOENTRYUSDT',data_quality:95,
     eligible:true,entry_eligible:false
   });
   assert.deepEqual(rejected,[]);
-  assert.equal(sent.length,0,'watch-only and entry-ineligible alerts must never reach a phone');
+  assert.equal(sent.length,1,'entry-ineligible alerts without an approved watch gate must remain blocked');
 });
 
 test('TEST_FIXTURE: Radar 8 early-flow watch stays feed-only even with valid evidence',async()=>{
