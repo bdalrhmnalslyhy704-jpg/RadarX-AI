@@ -206,8 +206,11 @@ export function buildCandidateShadowResult(profile,analysis,input,{eligible,scor
  */
 export function historicalProfileRequirements(profile, config = CONFIG) {
   const early = config?.earlyExpansionRadar || {};
-  const base = {oneMinute: 50, fiveMinute: 12};
+  let base = {oneMinute: 50, fiveMinute: 12};
   const frames = {};
+  const externalEvidence = [];
+  const unavailableEvidence = [];
+  let tradeHistoryRequired = false;
   switch (String(profile || '').toUpperCase()) {
     case 'STRONG_MOVE_RADAR':
       break;
@@ -218,6 +221,7 @@ export function historicalProfileRequirements(profile, config = CONFIG) {
         '4h': Math.max(1, Math.trunc(Number(early.fourHourKlines) || 220)),
         'BTCUSDT:5m': 60
       });
+      unavailableEvidence.push('HISTORICAL_ORDERBOOK_UNAVAILABLE');
       break;
     case 'ALMUQAWIM_RADAR':
       Object.assign(frames, {
@@ -228,9 +232,11 @@ export function historicalProfileRequirements(profile, config = CONFIG) {
       break;
     case 'DOOMSDAY_RADAR':
       frames['BTCUSDT:5m'] = 60;
+      unavailableEvidence.push('HISTORICAL_ORDERBOOK_UNAVAILABLE');
       break;
     case 'KAHIR_RADAR':
       frames['BTCUSDT:1m'] = 120;
+      unavailableEvidence.push('HISTORICAL_ORDERBOOK_UNAVAILABLE');
       break;
     case 'ROTATION_LAG_RADAR':
       Object.assign(frames, {
@@ -238,13 +244,40 @@ export function historicalProfileRequirements(profile, config = CONFIG) {
         'BTCUSDT:15m': 60, 'BTCUSDT:1h': 30,
         'ETHUSDT:15m': 60, 'ETHUSDT:1h': 30
       });
+      unavailableEvidence.push('HISTORICAL_ORDERBOOK_UNAVAILABLE');
+      break;
+    case 'EARLY_MOVE_RADAR':
+      Object.assign(frames, {'15m': 240, 'BTCUSDT:15m': 240});
+      unavailableEvidence.push('HISTORICAL_ORDERBOOK_UNAVAILABLE','HISTORICAL_LIVE_PUSH_NOT_SIMULATED');
+      break;
+    case 'LIQUIDITY_ABSORPTION_RADAR':
+      base = {oneMinute: 60, fiveMinute: 24};
+      unavailableEvidence.push('HISTORICAL_ORDERBOOK_UNAVAILABLE','HISTORICAL_LIVE_PUSH_NOT_SIMULATED');
+      break;
+    case 'FALCON_EYE_RADAR':
+      base = {oneMinute: 70, fiveMinute: 30};
+      Object.assign(frames, {'BTCUSDT:1m': 70, 'BTCUSDT:5m': 30});
+      unavailableEvidence.push('HISTORICAL_FUTURES_SNAPSHOTS_UNAVAILABLE','HISTORICAL_LIQUIDATIONS_UNAVAILABLE','HISTORICAL_ORDERBOOK_UNAVAILABLE');
+      break;
+    case 'COIN_HUNTER_RADAR':
+      Object.assign(frames, {'15m': 24, '1h': 50, 'BTCUSDT:1h': 25});
+      unavailableEvidence.push('HISTORICAL_LEADER_COHORT_UNAVAILABLE');
+      break;
+    case 'WHALE_ACCUMULATION_RADAR':
+      tradeHistoryRequired = true;
+      unavailableEvidence.push('HISTORICAL_ORDERBOOK_UNAVAILABLE');
+      break;
+    case 'PROFESSOR_RADAR':
+      // Professor is driven by time-stamped YouTube/GDELT archives and deep scans.
+      // No historical feed archive adapter exists in this replay tool; block scoring
+      // rather than inventing news or treating current search results as historical.
+      externalEvidence.push('PROFESSOR_NEWS_ARCHIVE','PROFESSOR_STREAM_TRANSCRIPT_ARCHIVE');
       break;
     default:
       throw new Error('UNSUPPORTED_HISTORICAL_DETECTOR_PROFILE:' + profile);
   }
-  return {base, frames};
+  return {base, frames, externalEvidence, unavailableEvidence, tradeHistoryRequired};
 }
-
 export function assessHistoricalFrameFetchCoverage(profile, timeframeCoverage = {}, config = CONFIG) {
   const {frames} = historicalProfileRequirements(profile, config);
   const failures = [];
@@ -257,12 +290,21 @@ export function assessHistoricalFrameFetchCoverage(profile, timeframeCoverage = 
       failures.push('HISTORICAL_TIMEFRAME_ROWS_BELOW_MINIMUM:' + key);
     }
   }
+  for (const key of requirements.externalEvidence || []) {
+    const coverage = timeframeCoverage?.['EXTERNAL:' + key];
+    if (!coverage || coverage.complete !== true) {
+      failures.push('HISTORICAL_EXTERNAL_EVIDENCE_UNAVAILABLE:' + key);
+    }
+  }
   return [...new Set(failures)];
 }
 
 export function assessHistoricalProfileCoverage(profile, input = {}, timeframeCoverage = {}, config = CONFIG) {
   const requirements = historicalProfileRequirements(profile, config);
   const failures = assessHistoricalFrameFetchCoverage(profile, timeframeCoverage, config);
+  if (requirements.tradeHistoryRequired && input?.dataPolicy?.tradeCoverageComplete !== true) {
+    failures.push('HISTORICAL_AGG_TRADE_COVERAGE_INCOMPLETE');
+  }
   const series = {
     oneMinute: Array.isArray(input.oneMinute) ? input.oneMinute : [],
     fiveMinute: Array.isArray(input.fiveMinute) ? input.fiveMinute : [],
@@ -288,13 +330,19 @@ function profileSnapshot(profile){
     ALMUQAWIM_RADAR:{mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requires:['closed 15m/1h/4h candles'],historical_book_required:false},
     DOOMSDAY_RADAR:{mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requires:['closed 1m/5m candles','BTC 5m closed candles'],historical_book_required:true},
     KAHIR_RADAR:{mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requires:['closed 1m/5m candles','BTC 1m market-velocity benchmark'],historical_book_required:true},
-    ROTATION_LAG_RADAR:{mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requires:['closed symbol/BTC/ETH 15m and 1h candles'],historical_book_required:true}
+    ROTATION_LAG_RADAR:{mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requires:['closed symbol/BTC/ETH 15m and 1h candles'],historical_book_required:true},
+    EARLY_MOVE_RADAR:{mode:'PRE_MOVE_CONTEXT_CANDLE_SHADOW',requires:['closed 15m candles','BTC 15m benchmark','derived closed hourly context'],historical_book_required:true},
+    LIQUIDITY_ABSORPTION_RADAR:{mode:'MICROSTRUCTURE_CANDLE_SHADOW',requires:['at least 60 closed 1m and 24 closed 5m candles','historical order book for full alert gating'],historical_book_required:true},
+    FALCON_EYE_RADAR:{mode:'FALCON_CANDLE_SHADOW',requires:['closed 1m/5m and BTC 1m/5m candles','historical futures snapshots and liquidations for full alert gating'],historical_book_required:false},
+    COIN_HUNTER_RADAR:{mode:'COIN_HUNTER_PATTERN_SHADOW',requires:['closed 15m/1h candles','historical leader cohort for production-equivalent similarity'],historical_book_required:false},
+    WHALE_ACCUMULATION_RADAR:{mode:'WHALE_MICROSTRUCTURE_SHADOW',requires:['closed 1m/5m candles','complete aggregate trade history','historical order-book snapshots'],historical_book_required:true},
+    PROFESSOR_RADAR:{mode:'EXTERNAL_FEED_ARCHIVE_REQUIRED',requires:['time-stamped historical news archive','time-stamped historical public stream/transcript archive','historical deep-scan outcomes'],historical_book_required:false}
   };
   const result=profiles[profile];
   if(!result)throw new Error('UNSUPPORTED_HISTORICAL_DETECTOR_PROFILE:'+profile);
-  return {profile,...result,required_history:historicalProfileRequirements(profile,CONFIG)};
+  const required=historicalProfileRequirements(profile,CONFIG);
+  return {profile,...result,required_history:required};
 }
-
 async function fetchOneMinute(client, symbol, start, end) {
   const rows = [];
   let cursor = start;
