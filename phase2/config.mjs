@@ -152,10 +152,10 @@ export const CONFIG = Object.freeze({
   },
   rotationRadar: {
     quote: 'USDT',
-    pollMs: int(process.env.RADARX_ROTATION_RADAR_POLL_MS, 30000),
+    pollMs: int(process.env.RADARX_ROTATION_RADAR_POLL_MS, 20000),
     universeRefreshMs: int(process.env.RADARX_ROTATION_RADAR_UNIVERSE_REFRESH_MS, 5 * 60 * 1000),
     minQuoteVolume24h: int(process.env.RADARX_ROTATION_RADAR_MIN_QUOTE_VOLUME_24H, 750000),
-    rotationBatchSize: int(process.env.RADARX_ROTATION_RADAR_BATCH, 7),
+    rotationBatchSize: int(process.env.RADARX_ROTATION_RADAR_BATCH, 12),
     topLaggers: int(process.env.RADARX_ROTATION_RADAR_TOP_LAGGERS, 3),
     maxAbs24hMovePct: float(process.env.RADARX_ROTATION_RADAR_MAX_24H_MOVE_PCT, 8),
     alertCooldownMs: int(process.env.RADARX_ROTATION_RADAR_ALERT_COOLDOWN_MS, 10 * 60 * 1000),
