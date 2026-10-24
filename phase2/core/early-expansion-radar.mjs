@@ -1546,6 +1546,14 @@ export function buildMicroFingerprint({oneMinute=[],fiveMinute=[],btcFiveMinute=
   if(issues.length)return {eligible:false,stage:'DATA_INSUFFICIENT',score:null,confirmation_count:0,confirmation_total:10,mode:'DATA_INSUFFICIENT',closed_candles_only:true,reason_codes:[...new Set(issues)].slice(0,30),risk_flags:[],metrics:{},category_scores:{}};
   const m1=i1.rows,m5=i5.rows,btc=ib.rows;
   if(m1.length<80||m5.length<40||btc.length<20)return {eligible:false,stage:'WARMING_UP',score:null,confirmation_count:0,confirmation_total:10,mode:'WARMING_UP',closed_candles_only:true,reason_codes:['MICRO_FINGERPRINT_WARMING_UP'],risk_flags:[],metrics:{},category_scores:{}};
+  // Daily movement is required for anti-chase classification. Unknown must
+  // stay unknown; treating it as 0% can make an extended/missing-data symbol
+  // look like an untouched quiet base.
+  if(!hasFiniteNumber(ticker?.priceChange24h))return {
+    eligible:false,stage:'DATA_INSUFFICIENT',score:null,confirmation_count:0,confirmation_total:10,
+    mode:'DATA_INSUFFICIENT',closed_candles_only:true,
+    reason_codes:['TICKER_24H_CHANGE_UNKNOWN'],risk_flags:[],metrics:{},category_scores:{}
+  };
   const r1=returns(m1,1),r3=returns(m1,3),r5=returns(m5,1),r15=returns(m5,3);
   const prev5=returns(m5.slice(0,-3),3),prev1=returns(m1.slice(0,-3),3);
   const accel5=Number.isFinite(r15)&&Number.isFinite(prev5)?r15-prev5:null;
@@ -1564,7 +1572,7 @@ export function buildMicroFingerprint({oneMinute=[],fiveMinute=[],btcFiveMinute=
   const rsiNow=rsi(m5,14),rsiPrev=rsi(m5.slice(0,-3),14),rsiSlope=Number.isFinite(rsiNow)&&Number.isFinite(rsiPrev)?rsiNow-rsiPrev:null;
   const adxObj=adx(m5,14),adxNow=adxObj?.adx??null;
   const hl=higherLowScore(m5.slice(-48)),br=breakoutInfo(m5,20),location=closePosition(m5,30);
-  const price24Abs=Math.abs(Number(ticker.priceChange24h)||0);
+  const price24Abs=Math.abs(Number(ticker.priceChange24h));
   const m={rv1,rv5,tr1,tr5,takerRatio:taker.ratio,takerDelta:taker.delta,bbRatio,rangeRatio,atrRatio,emaStack,emaReclaim,relativeStrength:rs,r1,r5,r15,accel5,accel1,rsi:rsiNow,rsiSlope,macSlope,adx:adxNow,hlScore:hl.score,resistanceDistance:br.distance_pct,breakoutBroken:br.broken,location,vwapDistance:vwDist,priceChange24hAbs:price24Abs};
   const activityShock=assessQuietBaseActivityShock({fiveMinute:m5,ticker,now,config:cfg});
   const prof=scoreMicroProfile(m);
