@@ -66,7 +66,7 @@ export class FcmPushProvider extends PushProvider{
       const title=String(payload?.title||((payload?.radar_name||'RadarX')+' • '+(payload?.symbol||'تنبيه'))).slice(0,120);
       const body=String(payload?.message||[payload?.symbol,payload?.event||payload?.potential_label||payload?.type].filter(Boolean).join(' • ')||'تنبيه جديد من RadarX').slice(0,220);
       const data={};
-      for(const key of ['type','event_class','event','radar','radar_name','symbol','market','direction','price','opportunity_score','potential_label','signal_lifecycle_state','signal_lifecycle_label','signal_lifecycle_transition','signal_lifecycle_reason_codes','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id']){
+      for(const key of ['type','event_class','event','notification_mode','watch_only','entry_eligible','requires_follow_up_confirmation','radar','radar_name','symbol','market','direction','price','price_change_24h','opportunity_score','potential_label','risk_flags','reason_codes','early_flow_watch_evidence','signal_lifecycle_state','signal_lifecycle_label','signal_lifecycle_transition','signal_lifecycle_reason_codes','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id','paper_trading','real_order_execution','confidence_score']){
         const value=payload?.[key];
         if(value!==undefined&&value!==null)data[key]=String(value).slice(0,500);
       }
@@ -202,17 +202,157 @@ export class PushManager{
   }
 
   async notifyRadarWatchOnlyAlert(alert){
-    // WATCH_EARLY is an observational state, not a push-worthy signal.
-    // Fail closed even if a future radar accidentally calls this method directly.
+    const now=Date.now();
+    const rejected=(reason)=>({status:'REJECTED_WATCH_ONLY',reason,attempted:false,notifications:[],sent_count:0,attempted_count:0});
+    const symbol=String(alert?.symbol||'').trim().toUpperCase();
+    const event=String(alert?.event||alert?.potential_label||alert?.decision_band||'').trim().toUpperCase();
+    const risks=(Array.isArray(alert?.risk_flags)?alert.risk_flags:[]).map(x=>String(x).toUpperCase());
+    const firstFinite=(values)=>{
+      for(const value of values){
+        if(value===null||value===undefined||value===''||typeof value==='boolean')continue;
+        const n=Number(value);if(Number.isFinite(n))return n;
+      }
+      return null;
+    };
+
+    // This route is only for explicitly non-actionable observations. It can never
+    // turn a watch into an entry signal or invoke an exchange order.
+    if(!/^[A-Z0-9]{5,30}$/.test(symbol))return rejected('INVALID_SYMBOL');
+    if(alert?.watch_only!==true||alert?.entry_eligible!==false)return rejected('WATCH_ONLY_MARKER_REQUIRED');
+    if(!/WATCH_ONLY|WATCH_EARLY/.test(event))return rejected('WATCH_ONLY_EVENT_REQUIRED');
+    if(alert?.market&&String(alert.market).toUpperCase()!=='SPOT')return rejected('SPOT_ONLY');
+    if(alert?.real_order_execution===true||alert?.paper_trading===false)return rejected('READ_ONLY_POLICY_REQUIRED');
+    if(alert?.closed_candles_only!==true)return rejected('CLOSED_CANDLE_EVIDENCE_REQUIRED');
+    if(alert?.data_stale===true||alert?.data_status?.stale===true||alert?.data_status?.data_stale===true||
+       alert?.data_status?.data_valid===false||alert?.data_status?.future_data_detected===true)
+      return rejected('STALE_OR_INVALID_DATA');
+
+    const source=String(alert?.source||alert?.data_status?.source||'').trim().toUpperCase().replace(/\\s+/g,'_');
+    if(!['BINANCE_PUBLIC_REST','BINANCE_PUBLIC_WS','BINANCE_PUBLIC_WEBSOCKET','BINANCE_SPOT_PUBLIC_REST'].includes(source))
+      return rejected('UNTRUSTED_OR_UNKNOWN_MARKET_SOURCE');
+
+    const dataQuality=firstFinite([
+      alert?.data_quality,alert?.data_status?.data_quality,alert?.components?.data_quality,
+      alert?.early_expansion?.data_quality,alert?.early_flow_watch_evidence?.data_quality
+    ]);
+    const liquidityQuality=firstFinite([
+      alert?.liquidity_quality_live,alert?.liquidity_quality,alert?.liquidity_metrics?.liquidity_quality,
+      alert?.early_expansion?.liquidity_quality,alert?.activity_shock?.liquidity_quality,
+      alert?.early_flow_watch_evidence?.liquidity_quality
+    ]);
+    if(dataQuality===null||dataQuality<70||dataQuality>100)return rejected('DATA_QUALITY_MISSING_OR_LOW');
+    if(liquidityQuality===null||liquidityQuality<60||liquidityQuality>100)return rejected('LIQUIDITY_QUALITY_MISSING_OR_LOW');
+    if(alert?.low_liquidity_burst_bypass===true||risks.includes('LOW_LIQUIDITY_WATCH_ONLY'))
+      return rejected('LOW_LIQUIDITY_WATCH_ONLY');
+    if(risks.some(x=>/ALREADY_EXTENDED|EXTENDED_CHASE|HIGH_RISK|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK/.test(x)))
+      return rejected('RISK_OR_ANTI_CHASE_GUARD');
+
+    const evidence=alert?.early_flow_watch_evidence||{};
+    const quiet=alert?.quiet_base_pre_expansion||{};
+    const shock=alert?.activity_shock||{};
+    const closeTime=firstFinite([
+      alert?.detected_candle_close_time,evidence?.closed_candle_close_time,
+      quiet?.candle_close_time_ms,quiet?.metrics?.buy_pressure_transition?.closed_candle_close_time,
+      shock?.detected_candle_close_time
+    ]);
+    if(closeTime===null||closeTime>now+5000)return rejected('CLOSED_CANDLE_TIMESTAMP_INVALID');
+    if(now-closeTime>20*60*1000)return rejected('CLOSED_CANDLE_EVIDENCE_TOO_OLD');
+    const price=firstFinite([alert?.price,alert?.last_price,alert?.lastPrice]);
+    if(price===null||price<=0)return rejected('LIVE_PRICE_MISSING');
+
+    if(event==='EARLY_FLOW_WATCH_ONLY'){
+      const micro=firstFinite([evidence?.micro_score,alert?.micro_fingerprint_score]);
+      const confirmations=firstFinite([evidence?.confirmation_count]);
+      const volumeRatio=Math.max(...[evidence?.rvol_1m,evidence?.rvol_5m].map(Number).filter(Number.isFinite),-Infinity);
+      const tradeRatio=Math.max(...[evidence?.trade_rvol_1m,evidence?.trade_rvol_5m].map(Number).filter(Number.isFinite),-Infinity);
+      const taker=firstFinite([evidence?.taker_buy_ratio]);
+      if(evidence?.closed_candles_only!==true||micro===null||micro<68||
+         confirmations===null||confirmations<4||volumeRatio<1.10||tradeRatio<1.05||
+         taker===null||taker<0.52)return rejected('EARLY_FLOW_EVIDENCE_INCOMPLETE');
+    }else if(event==='QUIET_BASE_PRE_EXPANSION_WATCH_ONLY'){
+      const flow=quiet?.metrics?.buy_pressure_transition||{};
+      const proof=Array.isArray(quiet?.evidence)?quiet.evidence:[];
+      const passed=(key)=>proof.some(x=>String(x?.key||'').toLowerCase()===key&&x?.passed===true);
+      if(quiet?.watch_only!==true||quiet?.reason!=='QUIET_BASE_NEAR_MISS_BUY_FLOW_TRANSITION'||
+         flow?.available!==true||flow?.watch_only_qualified!==true||
+         firstFinite([flow?.near_miss_signal_count])===null||Number(flow.near_miss_signal_count)<3||
+         !passed('anti_chase')||
+         !(passed('higher_lows_or_stable_support')||passed('stable_support'))||
+         !passed('narrow_price_base_range_pct'))
+        return rejected('QUIET_BASE_EVIDENCE_INCOMPLETE');
+    }else if(event==='ACTIVITY_SHOCK_WATCH_ONLY'){
+      if(shock?.detected!==true||shock?.watch_only!==true||
+         firstFinite([shock?.score])===null||Number(shock.score)<76||shock?.extended===true)
+        return rejected('ACTIVITY_SHOCK_EVIDENCE_INCOMPLETE');
+    }else{
+      return rejected('WATCH_ONLY_EVENT_UNSUPPORTED');
+    }
+
+    const providerStatus=this.provider.status();
+    if(providerStatus?.enabled!==true)return {
+      status:'PUSH_PROVIDER_DISABLED',reason:'PUSH_PROVIDER_DISABLED',
+      attempted:false,notifications:[],sent_count:0,attempted_count:0
+    };
+
+    const rows=this.providerSubscriptions(await this.store.getSubscriptions());
+    const recipients=[];
+    for(const sub of rows){
+      const settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();
+      if(!settings.enabled)continue;
+      if(dataQuality<Number(settings.minDataQuality??70)||
+         liquidityQuality<Number(settings.minLiquidityQuality??60))continue;
+      recipients.push(sub);
+    }
+    if(!recipients.length)return {
+      status:rows.length?'NO_ELIGIBLE_SUBSCRIPTIONS':'NO_SUBSCRIPTIONS',
+      reason:rows.length?'USER_SETTINGS_OR_QUALITY_FILTER':'NO_PUSH_SUBSCRIPTIONS',
+      attempted:false,notifications:[],sent_count:0,attempted_count:0
+    };
+
+    if(this.deduplicator){
+      const dedupSignal={
+        symbol,direction:'NONE',candle:{timeframe:'WATCH_ONLY'},
+        reason_codes:['RADAR_WATCH_ONLY',String(alert?.radar||'UNKNOWN_RADAR'),event]
+      };
+      const check=await this.deduplicator.canEmit(dedupSignal,now);
+      if(!check.allowed)return {
+        status:'DUPLICATE_SUPPRESSED',reason:check.reason||'DUPLICATE_SIGNAL',
+        attempted:false,notifications:[],sent_count:0,attempted_count:0
+      };
+      await this.deduplicator.markEmitted(dedupSignal,now);
+    }
+
+    const out=[];
+    for(const sub of recipients){
+      let response;
+      try{response=await this.provider.send(sub,radarPayload({
+        ...alert,market:'SPOT',price,watch_only:true,entry_eligible:false,
+        paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+      },Date.now()));}
+      catch(error){response={ok:false,status:'FAILED',reason:String(error?.message??error).slice(0,160)};}
+      const audit={
+        event:'RADAR_WATCH_ONLY_NOTIFICATION',event_class:'RADAR_ALERT',
+        radar:String(alert?.radar||'EARLY_EXPANSION_RADAR'),radar_name:radarTitle(alert),
+        symbol,alert_id:alert?.id||null,subscription_id:sub.id,user_id:sub.user_id,
+        status:response?.status||'FAILED',provider:providerStatus.provider||'unknown',
+        attempted_at:Date.now(),reason:response?.reason??null,http_status:response?.httpStatus??null,
+        watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false,
+        confidence_score:'UNKNOWN',data_quality:dataQuality,liquidity_quality:liquidityQuality,
+        event_type:event,source
+      };
+      try{await this.store.appendNotificationAudit(audit);}catch{}
+      out.push(audit);
+      if(response?.status==='GONE'){
+        try{await this.store.disableSubscription(sub.id);}catch{}
+      }
+    }
+    const sent=out.filter(x=>x.status==='SENT').length;
     return {
-      status:'WATCH_ONLY_PUSH_DISABLED_BY_POLICY',
-      attempted:false,
-      notifications:[],
-      sent_count:0,
-      attempted_count:0
+      status:sent?'SENT':out.length?'FAILED':'NO_ELIGIBLE_SUBSCRIPTIONS',
+      attempted:out.length>0,notifications:out,sent_count:sent,attempted_count:out.length,
+      watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false
     };
   }
-
   async notifyRadarAlert(alert){
     // Never allow explicit watch-only / rejected candidates to bypass the strict gate
     // through a radar's generic push route.
