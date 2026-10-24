@@ -87,15 +87,28 @@ jobs:
             !expectedSymbols.every(symbol=>(profile.results||[]).some(row=>row.symbol===symbol)) ||
             (profile.results||[]).some(row=>row.real_notification_delivery_simulated!==false)
           );
+          const evidenceProfiles=new Set(['WHALE_ACCUMULATION_RADAR','PROFESSOR_RADAR']);
+          const badCoverage=(report.profiles||[]).filter(profile=>
+            !evidenceProfiles.has(profile.profile) &&
+            (profile.results||[]).some(row=>row.profile_coverage_complete!==true)
+          );
+          const immatureOutcomes=(report.profiles||[]).filter(profile=>
+            (profile.results||[]).some(row=>row.outcome_horizon_complete!==true)
+          );
           const pass=report.profile_count===12 &&
             report.profiles?.length===12 &&
             missing.length===0 && invalid.length===0 &&
+            badCoverage.length===0 && immatureOutcomes.length===0 &&
             report.policy?.paper_trading===true &&
             report.policy?.real_order_execution===false &&
             report.policy?.real_notifications_simulated===false;
           if(!pass){
             console.error(JSON.stringify({profile_count:report.profile_count,missing_profiles:missing,
               invalid_profiles:invalid.map(x=>({profile:x.profile,status:x.status,symbol_count:x.symbol_count})),
+              profiles_with_unexpected_coverage_gaps:badCoverage.map(x=>({profile:x.profile,
+                rows:(x.results||[]).filter(r=>r.profile_coverage_complete!==true).map(r=>({symbol:r.symbol,blockers:r.evidence_blockers}))})),
+              profiles_with_immature_outcomes:immatureOutcomes.map(x=>({profile:x.profile,
+                rows:(x.results||[]).filter(r=>r.outcome_horizon_complete!==true).map(r=>r.symbol)})),
               policy:report.policy},null,2));
             process.exit(1);
           }
