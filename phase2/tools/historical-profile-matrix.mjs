@@ -62,11 +62,21 @@ function serializeResult(row,profile){
   ]);
   const coverage=q.profile_coverage_complete===true&&q.candle_fetch_complete===true;
   const completeOutcomes=q.outcome_candle_fetch_complete===true&&ev.observation?.outcomes_matured_for_all_steps===true;
-  const status=!coverage?'BLOCKED_INCOMPLETE_HISTORY':
-    (requirements.externalEvidence||[]).length?'BLOCKED_MISSING_EXTERNAL_ARCHIVES':
-    (requirements.unavailableEvidence||[]).length?'CANDIDATE_ONLY_MISSING_HISTORICAL_EVIDENCE':
-    !completeOutcomes?'PARTIAL_OUTCOME_HORIZON':
-    'HISTORICAL_REPLAY_COMPLETE';
+  const externalRequired=requirements.externalEvidence||[];
+  const missingExternal=externalRequired.some(key=>
+    blockers.includes('HISTORICAL_EXTERNAL_EVIDENCE_REQUIRED:'+key)||
+    blockers.includes('HISTORICAL_EXTERNAL_EVIDENCE_UNAVAILABLE:'+key)
+  );
+  const nonExternalCoverageFailures=(q.profile_coverage_failures||[]).filter(code=>
+    !String(code).startsWith('HISTORICAL_EXTERNAL_EVIDENCE_UNAVAILABLE:')
+  );
+  const status=missingExternal&&nonExternalCoverageFailures.length
+    ?'BLOCKED_MISSING_EXTERNAL_ARCHIVES_AND_INCOMPLETE_HISTORY'
+    :missingExternal?'BLOCKED_MISSING_EXTERNAL_ARCHIVES'
+    :!coverage?'BLOCKED_INCOMPLETE_HISTORY'
+    :(requirements.unavailableEvidence||[]).length?'CANDIDATE_ONLY_MISSING_HISTORICAL_EVIDENCE'
+    :!completeOutcomes?'PARTIAL_OUTCOME_HORIZON'
+    :'HISTORICAL_REPLAY_COMPLETE';
   return {
     profile,status,
     symbol:String(row?.symbol||'UNKNOWN'),
