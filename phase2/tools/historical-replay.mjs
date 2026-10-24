@@ -193,11 +193,27 @@ async function main() {
     process.stdout.write([
       'RadarX historical replay (public Binance Spot data; read-only)',
       'Usage: node phase2/tools/historical-replay.mjs [--symbols GTCUSDT,WUSDT] [--start ISO|ms] [--end ISO|ms]',
-      '       [--lookback-hours 24] [--outcome-horizon-hours 24] [--max-trade-pages 500] [--max-trades 500000] [--output path]',
+      '       [--detector-profile STRONG_MOVE_RADAR|RADAR8_PREMOVE_SHADOW|ALMUQAWIM_RADAR|DOOMSDAY_RADAR]',
+      '       [--lookback-hours 24] [--outcome-horizon-hours 24] [--max-trade-pages 500] [--max-trades 500000] [--output path] [--dry-run]',
       'Default window: last completed minute minus 24 hours. Maximum window: 7 days.',
-      'Trade-history pagination that reaches a cap is flagged incomplete and fails closed.',
-      'No orders are created, no keys are read, and no Railway deploy is performed.'
+      'Candle-only profiles are labeled candidate shadows; missing historical order-book/news data is never synthesized.',
+      'Trade-history pagination that reaches a cap is flagged incomplete and fails closed. No orders or credentials are used.'
     ].join('\n') + '\n');
+    return;
+  }
+  const detectorProfile=String(flag(args,'--detector-profile','STRONG_MOVE_RADAR')).trim().toUpperCase();
+  const detectorSpec=profileSnapshot(detectorProfile);
+  if(args.includes('--dry-run')){
+    const startRaw=timeArg(flag(args,'--start'),'start');
+    const endRaw=timeArg(flag(args,'--end'),'end');
+    process.stdout.write(JSON.stringify({
+      status:'DRY_RUN_NO_NETWORK',
+      detector:detectorSpec,
+      symbols:String(flag(args,'--symbols','GTCUSDT,WUSDT')).split(',').map(x=>x.trim().toUpperCase()).filter(Boolean),
+      window:{start:startRaw,end:endRaw,lookback_hours:integerArg(flag(args,'--lookback-hours','24'),24,1,168,'lookback-hours'),
+        outcome_horizon_hours:integerArg(flag(args,'--outcome-horizon-hours','24'),24,1,168,'outcome-horizon-hours')},
+      policy:{market:'BINANCE_SPOT_USDT',paper_trading:true,real_order_execution:false,credentials_used:false}
+    },null,2)+'\\n');
     return;
   }
   const symbols = String(flag(args, '--symbols', 'GTCUSDT,WUSDT')).split(',')
@@ -224,7 +240,8 @@ async function main() {
     window: {start, start_iso: new Date(start).toISOString(), end, end_iso: new Date(end).toISOString(),
       outcome_horizon_hours:outcomeHorizonHours,observation_end:observationEnd,observation_end_iso:new Date(observationEnd).toISOString()},
     symbol_count: symbols.length,
-    note: 'The evaluator receives only history available by each candle close. Outcome labels use later candles only after a decision has been recorded.',
+    detector_profile:detectorSpec,
+    note: 'The evaluator receives only history available by each candle close. Outcome labels use later candles only after a decision has been recorded. Candidate-shadow profiles do not simulate real notifications.',
     results: [],
     policy: {market: 'SPOT', paper_trading: true, real_order_execution: false, confidence_score: 'UNKNOWN'}
   };
