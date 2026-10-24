@@ -257,6 +257,12 @@ test('Radar 8 adaptive Micro concurrency respects cache readiness, shared REST r
   const highWeightPressure={shared_requests_last_minute:100,shared_max_requests_per_minute:420,
     shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000};
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},lowPressure,18),10);
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},lowPressure,18,60000),10,
+    'the 60-second boundary does not trigger the slow-cycle cap');
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},lowPressure,18,60001),4,
+    'previous slow cycle caps even a warm cache with REST headroom');
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},lowPressure,18,null),10,
+    'no previous duration preserves normal adaptive behavior');
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:10},highWeightPressure,18),4);
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},highWeightPressure,18),4,
     'high REST weight pressure caps workers even when the WebSocket cache is warm');
