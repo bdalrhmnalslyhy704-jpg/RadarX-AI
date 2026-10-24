@@ -233,10 +233,10 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   minDataQuality:70,
   // Smaller fair-rotating batches increase opportunities per minute and limit tail latency.
   microScanCandidates:18,
-  rotationReserve:8,
+  rotationReserve:5,
   deepCandidates:8,
-  quietReserve:8,
-  microConcurrency:8,
+  quietReserve:4,
+  microConcurrency:6,
   deepConcurrency:4,
   oneMinuteKlines:120,
   fiveMinuteKlines:60,
@@ -1850,6 +1850,19 @@ export function adaptiveRadar8MicroConcurrency(configuredConcurrency, cacheHealt
   return Math.max(1, Math.min(candidates, target));
 }
 
+/**
+ * Reduce the next deep batch only after an over-budget completed cycle. Keep
+ * the configured batch when timings are healthy, so fair rotation still advances.
+ */
+export function adaptiveRadar8DeepCandidateTarget(configuredCandidateCount, previousCycleDurationMs = null) {
+  const configured = Math.max(1, Math.min(12, Math.trunc(Number(configuredCandidateCount) || 8)));
+  const duration = previousCycleDurationMs === null || previousCycleDurationMs === undefined
+    ? null : Number(previousCycleDurationMs);
+  return Number.isFinite(duration) && duration > 60_000
+    ? Math.max(1, Math.floor(configured * 0.75))
+    : configured;
+}
+
 export function adaptiveRadar8DeepConcurrency(configuredConcurrency, cacheHealth = {}, restHealth = {}, candidateCount = 5) {
   const base = Math.max(1, Math.min(6, Math.trunc(Number(configuredConcurrency) || 4)));
   const candidates = Math.max(0, Math.trunc(Number(candidateCount) || 0));
@@ -2240,7 +2253,10 @@ export class EarlyExpansionRadar{
       .slice(0,1).map(selectionSymbol));
     const valid=observedValid.filter(x=>x?.row?._low_liquidity_burst_bypass!==true||
       underfloorDeepWatchSymbols.has(selectionSymbol(x)));
-    const n=Math.max(1,Math.trunc(this.config.deepCandidates||10));
+    const configuredTarget=Math.max(1,Math.trunc(this.config.deepCandidates||8));
+    const previousCycleDuration=Number(this.lastCoverage?.scan_duration_ms);
+    const n=adaptiveRadar8DeepCandidateTarget(configuredTarget,Number.isFinite(previousCycleDuration)?previousCycleDuration:null);
+    this.lastDeepCandidateTarget={configured:configuredTarget,effective:n,previous_cycle_duration_ms:Number.isFinite(previousCycleDuration)?previousCycleDuration:null};
     const target=Math.min(n,new Set(valid.map(selectionSymbol)).size);
     if(!target)return [];
     // Cap quiet slots, preserve explicit rotation, and keep score/event capacity.
@@ -3360,7 +3376,9 @@ export class EarlyExpansionRadar{
         if(Number.isFinite(stamp))this.lastDeepAtBySymbol.set(symbol,stamp);
       }
       coverage.deep_candidate_pool_total=new Set(deepPool.map(selectionSymbol)).size;
-      coverage.deep_candidate_target=Math.min(Math.max(1,Math.trunc(this.config.deepCandidates||10)),coverage.deep_candidate_pool_total);
+      coverage.deep_candidate_target=Math.min(Number(this.lastDeepCandidateTarget?.effective)||Math.max(1,Math.trunc(this.config.deepCandidates||8)),coverage.deep_candidate_pool_total);
+      coverage.deep_candidate_target_configured=Math.max(1,Math.trunc(this.config.deepCandidates||8));
+      coverage.deep_candidate_target_previous_cycle_ms=this.lastDeepCandidateTarget?.previous_cycle_duration_ms??null;
       coverage.deep_candidates_requested=deepTargets.length;coverage.deep_candidate_shortfall=Math.max(0,coverage.deep_candidate_target-deepTargets.length);
       coverage.deep_quiet_selected_total=deepTargets.filter(x=>x._selection_lane==='quiet'||x._selection_lane==='fill_quiet').length;
       coverage.deep_rotation_selected_total=deepTargets.filter(x=>x._selection_lane==='rotation'||x._selection_lane==='fill_rotation').length;
@@ -3390,7 +3408,10 @@ export class EarlyExpansionRadar{
         expected_total:coverage.expected_total,received_total:coverage.received_total,
         missing_ticker_total:coverage.missing_ticker_total,eligible_total:coverage.eligible_total,
         fast_scanned_total:coverage.fast_scanned_total,micro_scan_candidates:coverage.micro_scan_candidates,
-        micro_scanned_total:coverage.micro_scanned_total,deep_candidates_requested:coverage.deep_candidates_requested,
+        micro_scanned_total:coverage.micro_scanned_total,deep_candidate_target:coverage.deep_candidate_target,
+        deep_candidate_target_configured:coverage.deep_candidate_target_configured,
+        deep_candidate_target_previous_cycle_ms:coverage.deep_candidate_target_previous_cycle_ms,
+        deep_candidates_requested:coverage.deep_candidates_requested,
         deep_scanned_total:coverage.deep_scanned_total,skipped_total:coverage.skipped_total,
         failed_total:coverage.failed_total,coverage_ratio:coverage.coverage_ratio,
         deep_coverage_ratio:coverage.deep_coverage_ratio,
