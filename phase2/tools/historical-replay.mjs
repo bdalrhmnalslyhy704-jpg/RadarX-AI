@@ -308,6 +308,31 @@ async function main() {
     try {
     process.stderr.write('[REPLAY] ' + symbol + ' fetching closed 1m candles…\n');
     const candleFetch = await fetchOneMinute(client, symbol, start - 24 * HOUR_MS - 125 * MINUTE_MS, observationEnd);
+    const timeframeCandles={},timeframeCoverage={},timeframeFetchErrors=[];
+    const fetchFrame=async(key,frameSymbol,interval,bars)=>{
+      try{
+        const fetched=await fetchHistoricalTimeframe(client,frameSymbol,interval,start,observationEnd,bars);
+        timeframeCandles[key]=fetched.candles;
+        timeframeCoverage[key]={symbol:frameSymbol,interval,rows:fetched.rows,required_history_bars:fetched.required_history_bars,
+          complete:fetched.complete,source:fetched.source,requested_start:fetched.requested_start,requested_end:fetched.requested_end};
+        if(!fetched.complete)timeframeFetchErrors.push('TIMEFRAME_COVERAGE_INCOMPLETE:'+key);
+      }catch(error){
+        timeframeCandles[key]=[];
+        timeframeCoverage[key]={symbol:frameSymbol,interval,rows:0,required_history_bars:bars,complete:false,
+          error:String(error?.message??error).slice(0,180)};
+        timeframeFetchErrors.push('TIMEFRAME_FETCH_FAILED:'+key);
+      }
+    };
+    if(['RADAR8_PREMOVE_SHADOW','ALMUQAWIM_RADAR'].includes(detectorProfile)){
+      await fetchFrame('15m',symbol,'15m',Number(config.earlyExpansionRadar?.fifteenMinuteKlines)||160);
+      await fetchFrame('1h',symbol,'1h',Number(config.earlyExpansionRadar?.oneHourKlines)||260);
+      await fetchFrame('4h',symbol,'4h',Number(config.earlyExpansionRadar?.fourHourKlines)||220);
+    }
+    if(detectorProfile==='RADAR8_PREMOVE_SHADOW'){
+      await fetchFrame('BTCUSDT:5m','BTCUSDT','5m',60);
+    }else if(detectorProfile==='DOOMSDAY_RADAR'){
+      await fetchFrame('BTCUSDT:5m','BTCUSDT','5m',60);
+    }
     let tradeFetch;
     try {
       tradeFetch = await fetchAggregateTrades(client, symbol, start - 65_000, end, {maxPages, maxTrades});
@@ -341,7 +366,9 @@ async function main() {
       outcomeHorizonMs:outcomeHorizonHours*HOUR_MS,
       tradeCoverageComplete: tradeFetch.complete,
       allowCandleOnlyFallback: true,
-      tradeCoverage: {...tradeFetch.coverage, candle_pages: candleFetch.pages, candles_complete: candleFetch.complete},
+      timeframeCandles,
+      tradeCoverage: {...tradeFetch.coverage, candle_pages: candleFetch.pages, candles_complete: candleFetch.complete,
+        detector_profile:detectorProfile,additional_timeframes:timeframeCoverage,additional_timeframe_errors:timeframeFetchErrors},
       alertCooldownMs: Number(tickerConfig.alertCooldownMs ?? 12 * MINUTE_MS),
       evaluate: input => {
         const alert = buildStrongMoveAlert({
