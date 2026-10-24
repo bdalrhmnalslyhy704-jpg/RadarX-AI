@@ -5,6 +5,9 @@ import {fileURLToPath} from 'node:url';
 import {CONFIG} from '../config.mjs';
 import {RestClient} from '../market/binance-rest.mjs';
 import {buildStrongMoveAlert} from '../core/strong-move-radar.mjs';
+import {buildEarlyExpansionEvidence} from '../core/early-expansion-radar.mjs';
+import {buildAlMuqawimAnalysis} from '../core/al-muqawim-radar.mjs';
+import {buildDoomsdayAnalysis} from '../core/doomsday-radar.mjs';
 import {evaluateEliteGate} from '../core/elite-confluence-gate.mjs';
 import {evaluateRadarNotificationGate} from '../core/radar-notification-gate.mjs';
 import {evaluateDynamicEarlyWarningGate} from '../core/dynamic-early-warning-gate.mjs';
@@ -76,6 +79,41 @@ function normalizedTrades(rows) {
     q: String(x?.q ?? ''),
     m: x?.m
   })).filter(x => Number.isFinite(x.a) && Number.isFinite(x.T));
+}
+
+const HISTORICAL_INTERVAL_MS=Object.freeze({
+  '1m':MINUTE_MS,'5m':5*MINUTE_MS,'15m':15*MINUTE_MS,'1h':HOUR_MS,'4h':4*HOUR_MS
+});
+async function fetchHistoricalTimeframe(client,symbol,interval,start,end,lookbackBars){
+  const intervalMs=HISTORICAL_INTERVAL_MS[interval];
+  if(!intervalMs)throw new Error('UNSUPPORTED_HISTORICAL_INTERVAL');
+  const bars=Math.max(1,Math.trunc(Number(lookbackBars)||1));
+  const requestedStart=Math.floor((start-bars*intervalMs)/intervalMs)*intervalMs;
+  const expected=Math.ceil((end-requestedStart+1)/intervalMs)+2;
+  const limit=Math.min(1000,Math.max(bars,expected));
+  const response=await withHistoricalRateLimitRetry(
+    ()=>client.klines(symbol,interval,{limit,startTime:requestedStart,endTime:end}),
+    {label:'klines:'+symbol+':'+interval}
+  );
+  const candles=Array.isArray(response?.candles)?response.candles:[];
+  const latest=candles.filter(c=>Number(c?.closeTime)<=end&&Number(c?.closeTime)<=Date.now())
+    .sort((a,b)=>Number(a.openTime)-Number(b.openTime));
+  const complete=latest.length>=bars&&latest.every((c,i)=>i===0||
+    Number(c.openTime)===Number(latest[i-1].openTime)+intervalMs);
+  return {candles:latest,complete,interval,symbol,requested_start:requestedStart,requested_end:end,
+    rows:latest.length,required_history_bars:bars,source:response?.source??'BINANCE_PUBLIC_REST'};
+}
+
+function profileSnapshot(profile){
+  const profiles={
+    STRONG_MOVE_RADAR:{mode:'ACTIONABLE_GATE_REPLAY',requires:['closed 1m/5m candles','aggregate trade history or explicitly marked candle-only fallback'],historical_book_required:false},
+    RADAR8_PREMOVE_SHADOW:{mode:'PRE_MOVE_CANDLE_ONLY_SHADOW',requires:['closed 1m/5m/15m/1h/4h candles','BTC 5m closed candles for relative strength'],historical_book_required:true},
+    ALMUQAWIM_RADAR:{mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requires:['closed 15m/1h/4h candles'],historical_book_required:false},
+    DOOMSDAY_RADAR:{mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requires:['closed 1m/5m candles','BTC 5m closed candles'],historical_book_required:true}
+  };
+  const result=profiles[profile];
+  if(!result)throw new Error('UNSUPPORTED_HISTORICAL_DETECTOR_PROFILE:'+profile);
+  return {profile,...result};
 }
 
 async function fetchOneMinute(client, symbol, start, end) {
