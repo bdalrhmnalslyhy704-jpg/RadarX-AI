@@ -73,6 +73,7 @@ test('TEST_FIXTURE: Radar 8 early-flow watch stays feed-only even with valid evi
     event:'EARLY_FLOW_WATCH_ONLY',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',
     symbol:'TESTUSDT',market:'SPOT',direction:'UP_BIAS',price:1.01,price_change_24h:1.2,
     source:'Binance Public REST',watch_only:true,entry_eligible:false,data_stale:false,
+    closed_candles_only:true,data_quality:88,liquidity_quality:82,detected_candle_close_time:now-1000,
     early_flow_watch_evidence:{
       closed_candles_only:true,closed_candle_close_time:now-1000,
       micro_score:68,confirmation_count:4,rvol_1m:1.6,rvol_5m:1.3,
