@@ -234,6 +234,11 @@ export function runHistoricalReplay({
   let candidateDuplicateObservationCount = 0;
   let candidateEpisodeActive = false;
   let candidateFalseSince = null;
+  let priorCoreTriggerCandidateAt = -Infinity;
+  let coreTriggerCandidateCooldownBlockedCount = 0;
+  let coreTriggerCandidateDuplicateObservationCount = 0;
+  let coreTriggerCandidateEpisodeActive = false;
+  let coreTriggerCandidateFalseSince = null;
   const candidateCooldown = Math.max(0, finite(candidateCooldownMs) ?? cooldown);
   const candidateReset = Math.max(0, finite(candidateResetMs) ?? 5 * MINUTE_MS);
   let fiveIndex = 0;
@@ -321,6 +326,31 @@ export function runHistoricalReplay({
       }
     }
 
+    const rawCoreTriggerCandidateDetected=raw?.core_trigger_candidate_detected===true;
+    let coreTriggerCandidateCooldownBlocked=false;
+    let coreTriggerCandidateDuplicateObservation=false;
+    let coreTriggerCandidateDetected=false;
+    if(rawCoreTriggerCandidateDetected){
+      coreTriggerCandidateFalseSince=null;
+      if(coreTriggerCandidateEpisodeActive){
+        coreTriggerCandidateDuplicateObservation=true;
+        coreTriggerCandidateDuplicateObservationCount++;
+      }else if(at-priorCoreTriggerCandidateAt<candidateCooldown){
+        coreTriggerCandidateCooldownBlocked=true;
+        coreTriggerCandidateCooldownBlockedCount++;
+      }else{
+        coreTriggerCandidateDetected=true;
+        priorCoreTriggerCandidateAt=at;
+      }
+      coreTriggerCandidateEpisodeActive=true;
+    }else if(coreTriggerCandidateEpisodeActive){
+      if(coreTriggerCandidateFalseSince===null)coreTriggerCandidateFalseSince=at;
+      if(at-coreTriggerCandidateFalseSince>=candidateReset){
+        coreTriggerCandidateEpisodeActive=false;
+        coreTriggerCandidateFalseSince=null;
+      }
+    }
+
     // Outcome-only fields are calculated separately, after evaluate() has finished.
     const horizonEndAt = at + horizon;
     const forwardRows = candles.slice(index + 1).filter(x => x.closeTime <= Math.min(horizonEndAt,observationEnd));
@@ -365,6 +395,14 @@ export function runHistoricalReplay({
       candidate_reasons:[...(Array.isArray(raw?.candidate_reasons)?raw.candidate_reasons:[]),
         ...(candidateCooldownBlocked?['CANDIDATE_EPISODE_COOLDOWN']:[]),
         ...(candidateDuplicateObservation?['CANDIDATE_EPISODE_ALREADY_ACTIVE']:[])].slice(0,24),
+      core_trigger_candidate_detected:coreTriggerCandidateDetected,
+      core_trigger_candidate_raw_detected:rawCoreTriggerCandidateDetected,
+      core_trigger_candidate_suppressed_by_cooldown:coreTriggerCandidateCooldownBlocked,
+      core_trigger_candidate_duplicate_observation:coreTriggerCandidateDuplicateObservation,
+      core_trigger_candidate_mode:String(raw?.core_trigger_candidate_mode??'NONE'),
+      core_trigger_candidate_reasons:[...(Array.isArray(raw?.core_trigger_candidate_reasons)?raw.core_trigger_candidate_reasons:[]),
+        ...(coreTriggerCandidateCooldownBlocked?['CORE_TRIGGER_CANDIDATE_EPISODE_COOLDOWN']:[]),
+        ...(coreTriggerCandidateDuplicateObservation?['CORE_TRIGGER_CANDIDATE_EPISODE_ALREADY_ACTIVE']:[])].slice(0,24),
       replay_data_mode:tradeCoverageComplete?'FULL_TRADE':(candleOnlyFallback?'CANDLE_ONLY_FALLBACK':'BLOCKED_INCOMPLETE'),
       rejection_group: rejectionGroup, reason_codes: reasons,
       strict_gate_failures:Array.isArray(raw?.strict_gate_failures)?raw.strict_gate_failures.slice(0,20):[],
@@ -525,6 +563,11 @@ export function runHistoricalReplay({
       candidate_duplicate_observations:candidateDuplicateObservationCount,
       candidate_cooldown_ms:candidateCooldown,
       candidate_reset_ms:candidateReset,
+      core_trigger_candidate_raw_detections:rows.filter(x=>x.core_trigger_candidate_raw_detected===true).length,
+      core_trigger_candidate_detections:rows.filter(x=>x.core_trigger_candidate_detected===true).length,
+      core_trigger_candidate_shadow_detections:rows.filter(x=>x.core_trigger_candidate_detected===true&&x.decision!=='ACCEPTED').length,
+      core_trigger_candidate_suppressed_by_cooldown:coreTriggerCandidateCooldownBlockedCount,
+      core_trigger_candidate_duplicate_observations:coreTriggerCandidateDuplicateObservationCount,
       premove_50_status: premove50Status,
       first_accepted_at: firstAcceptedAt,
       first_early_warning_accepted_at:firstEarlyWarningAcceptedAt,
