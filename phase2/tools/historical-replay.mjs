@@ -373,7 +373,16 @@ async function main() {
       first_window_5pct_at:x.summary.first_actual_window_5pct_at,
       first_window_15pct_at:x.summary.first_actual_window_15pct_at,
       first_window_50pct_at: x.summary.first_actual_window_50pct_at,
-      first_window_70pct_at: x.summary.first_actual_window_70pct_at
+      first_window_70pct_at: x.summary.first_actual_window_70pct_at,
+      move_outcomes: x.evaluation ? {
+        moderate_move: x.evaluation.moderate_move?.classification ?? 'UNAVAILABLE',
+        minutes_before_5pct: x.evaluation.moderate_move?.minutes_before_move ?? null,
+        strong_move: x.evaluation.strong_move?.classification ?? 'UNAVAILABLE',
+        minutes_before_15pct: x.evaluation.strong_move?.minutes_before_move ?? null,
+        accepted_with_matured_outcomes: x.evaluation.observation?.accepted_with_matured_outcomes ?? 0,
+        low_follow_through_count: x.evaluation.summary?.low_follow_through_count ?? 0,
+        missed_move_failure_codes: x.evaluation.missed_move_failure_codes ?? []
+      } : null
     })),
     policy: report.policy
   }, null, 2) + '\n');
