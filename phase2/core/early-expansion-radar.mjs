@@ -550,6 +550,8 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,live
   const activityShock=assessQuietBaseActivityShock({fiveMinute:s['5m'],ticker,now,config:cfg});
   const quietBasePreExpansion=assessQuietBasePreExpansion({fiveMinute:series['5m']||[],ticker,now,dataReady:gate.valid,dataIssues:gate.issues,config:cfg});
   const p=finite(ticker.lastPrice,null);
+  // Unknown daily movement must never be treated as a quiet 0% move.
+  const dailyMovePct=hasFiniteNumber(ticker.priceChange24h)?Number(ticker.priceChange24h):null;
   if(!(p>0))return {score:null,decision_band:'DATA_INSUFFICIENT',pre_expansion_stage:'DATA_INSUFFICIENT',pre_expansion_fingerprint:{stage:'DATA_INSUFFICIENT',reason:'INVALID_PRICE'},activity_shock:activityShock,data_quality:0,liquidity_quality:null,data_stale:true,risk_flags:['INVALID_PRICE'],reason_codes:['INVALID_PRICE'],gates:gate};
   const r1=returns(s['1m'],1),r10=returns(s['1m'],10),r5=returns(s['5m'],1),r15=returns(s['15m'],1),r1h=returns(s['1h'],1),r4h=returns(s['4h'],1);
   const r5_3=returns(s['5m'],3),r15_3=returns(s['15m'],3);
@@ -612,7 +614,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,live
   const orderbookScore=liq.available?liq.score:50;
   const liquidityScore=historicalReplay?50:(liqQuality??0);
   const dataScore=gate.quality;
-  const quiet24=clamp(100-Math.max(0,Math.abs(Number(ticker.priceChange24h)||0))*5);
+  const quiet24=dailyMovePct===null?45:clamp(100-Math.abs(dailyMovePct)*5);
   const instant=finite(fastContext.price_change_pct,0);
   const accel=finite(fastContext.price_acceleration_pct,0);
   const pumpRisk=(
@@ -621,7 +623,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,live
     Number(r15_3||0)>=8
   )&&(
     historicalReplay?false:
-    (liquidityScore<cfg.minLiquidityQuality || Number(ticker.priceChange24h||0)>=cfg.hardExtended24hMovePct)
+    (liquidityScore<cfg.minLiquidityQuality || (dailyMovePct!==null&&dailyMovePct>=cfg.hardExtended24hMovePct))
   );
   const dumpRisk=(
     instant<=-2.5||
@@ -629,13 +631,13 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,live
     Number(r15_3||0)<=-8
   )&&(
     historicalReplay?false:
-    (liquidityScore<cfg.minLiquidityQuality || Number(ticker.priceChange24h||0)<=-cfg.hardExtended24hMovePct)
+    (liquidityScore<cfg.minLiquidityQuality || (dailyMovePct!==null&&dailyMovePct<=-cfg.hardExtended24hMovePct))
   );
   const highRisk=pumpRisk;
   // Anti-chase is directional: a mature upward move is extended, while a prior selloff
   // is handled by dump-risk and market/liquidity gates rather than mislabeled as a late pump.
   const extended=(
-    (Number(ticker.priceChange24h)||0)>=cfg.hardExtended24hMovePct||
+    (dailyMovePct!==null&&dailyMovePct>=cfg.hardExtended24hMovePct)||
     (Number(r1h)||0)>=cfg.hardExtended1hMovePct||
     (Number(r15)||0)>=cfg.hardExtended15mMovePct||
     unifiedFeatureEngine.stage==='ALREADY_EXTENDED'
@@ -666,12 +668,13 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,live
   const usable=weighted.filter(([k])=>Number.isFinite(scoreParts[k]));
   const rawScore=usable.reduce((sum,[k,w])=>sum+scoreParts[k]*w,0)/usable.reduce((sum,[,w])=>sum+w,0);
   const gateIssues=[...gate.issues];
+  if(dailyMovePct===null)gateIssues.push('TICKER_24H_CHANGE_UNKNOWN');
   if(!historicalReplay&&(!liq.available||liquidityScore<cfg.minLiquidityQuality))gateIssues.push('LIQUIDITY_INSUFFICIENT');
   if(!historicalReplay&&liq.available&&Number(liq.spread_bps)>cfg.maxSpreadBps)gateIssues.push('WIDE_SPREAD');
   if(extended)gateIssues.push('ALREADY_EXTENDED');
   if(fakeoutFlag(s['5m']).flag||roleEvidence.failed_breakout.detected)gateIssues.push('RECENT_FAKEOUT');
   if(historicalWeak)gateIssues.push('HISTORICAL_FOLLOWTHROUGH_WEAK');
-  const earlyScore=gate.valid&&gateIssues.every(x=>!['ALREADY_EXTENDED','LIQUIDITY_INSUFFICIENT','WIDE_SPREAD','RECENT_FAKEOUT','HISTORICAL_FOLLOWTHROUGH_WEAK'].includes(x))&&!highRisk&&!dumpRisk&&!historicalReplay
+  const earlyScore=dailyMovePct!==null&&gate.valid&&gateIssues.every(x=>!['ALREADY_EXTENDED','TICKER_24H_CHANGE_UNKNOWN','LIQUIDITY_INSUFFICIENT','WIDE_SPREAD','RECENT_FAKEOUT','HISTORICAL_FOLLOWTHROUGH_WEAK'].includes(x))&&!highRisk&&!dumpRisk&&!historicalReplay
     ? Number(clamp(rawScore).toFixed(1)):null;
   const policyIssues=gateIssues.filter(x=>!gate.issues.includes(x));
   const legacyDecisionBand=decideEarlyExpansionBand({
@@ -689,7 +692,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,live
   const resistanceDistanceAtr=Number.isFinite(br5.distance_pct)&&Number.isFinite(atrPct)&&atrPct>0?-br5.distance_pct/atrPct:null;
   const falseBreakout=fakeoutFlag(s['5m']).flag||fakeoutFlag(s['15m']).flag||roleEvidence.failed_breakout.detected;
   const preExpansion=assessPreExpansionFingerprint({
-    dataReady:gate.valid&&p>0,dailyChangePct:ticker.priceChange24h,lastPrice:p,
+    dataReady:gate.valid&&p>0&&dailyMovePct!==null,dailyChangePct:ticker.priceChange24h,lastPrice:p,
     maxMove24hPct:Math.min(8,Number(cfg.maxQuiet24hMovePct??8)),
     maxMove5mPct:2.5,maxMove10mPct:3.8,maxMove15mPct:6,
     baseScore:hl.score*.42+compressionExpansion*.35+quiet24*.23,
@@ -861,13 +864,14 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,live
       score_allowed:Boolean(earlyScore!=null),
       data_gate:gate,
       liquidity_gate:historicalReplay?{allowed:null,reason:'HISTORICAL_ORDERBOOK_UNAVAILABLE'}:{allowed:liq.available&&Number(liqQuality)>=cfg.minLiquidityQuality&&Number(liq.spread_bps)<=cfg.maxSpreadBps,reason:liq.available?'OK':'ORDERBOOK_UNAVAILABLE'},
-      anti_chase:{allowed:!extended&&!highRisk,extended,hard_extended_24h:Math.abs(Number(ticker.priceChange24h)||0)>=cfg.hardExtended24hMovePct},
+      anti_chase:{allowed:!extended&&!highRisk&&dailyMovePct!==null,extended,hard_extended_24h:dailyMovePct===null?null:Math.abs(dailyMovePct)>=cfg.hardExtended24hMovePct},
       freshness_data_quality:gate.valid
     },
     risk_flags:[...new Set(riskFlags)],
     reason_codes:[...new Set([
       ...reasons,
       ...gate.issues,
+      dailyMovePct===null?'TICKER_24H_CHANGE_UNKNOWN':null,
       extended?'ALREADY_EXTENDED':null,
       highRisk?'HIGH_RISK_PUMP':null,
       dumpRisk?'HIGH_RISK_DUMP':null,
