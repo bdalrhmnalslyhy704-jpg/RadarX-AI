@@ -680,6 +680,55 @@ jobs:
           }));
           NODE
 
+      - name: Require live readiness for twelve radars, twenty analysts, and push prerequisites
+        timeout-minutes: 3
+        env:
+          BASE: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
+        run: |
+          set -euo pipefail
+          if [[ "${RADARX_FIREBASE_CLIENT_CONFIGURED:-false}" != "true" ]]; then
+            echo "::error::Firebase Android client configuration is required before publishing a notification-ready Build 224 APK."
+            exit 1
+          fi
+          if [[ "${RADARX_SERVER_FCM_STATUS:-UNVERIFIED}" != "ENABLED" ]]; then
+            echo "::error::DHDTech does not report an enabled FCM provider; refusing to label the APK notification-ready."
+            exit 1
+          fi
+          VERIFIED=false
+          for attempt in {1..12}; do
+            CODE="$(curl --location --silent --show-error --connect-timeout 8 --max-time 15 \
+              --output "$RUNNER_TEMP/radar-readiness-audit.json" --write-out "%{http_code}" \
+              "$BASE/api/radar-readiness-audit" || true)"
+            if [[ "$CODE" == "200" ]] && node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const body=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/radar-readiness-audit.json','utf8'));
+          const s=body.summary||{};
+          const failures=[];
+          if(body.audit!=='RADARX_LIVE_READINESS_AUDIT_V1')failures.push('READINESS_AUDIT_CONTRACT_INVALID');
+          if(body.status!=='READY')failures.push('LIVE_READINESS_STATUS_NOT_READY:'+String(body.status||'UNKNOWN'));
+          if(s.expected_radars!==12||s.registered_radars!==12||s.running_radars!==12||s.failed_radars!==0)failures.push('RADAR_WORKER_COUNTS_NOT_12_OF_12');
+          if(s.radar_role_coverage_ready!==true)failures.push('RADAR_ROLE_COVERAGE_INCOMPLETE');
+          if(s.radars_with_stale_cycles!==0||s.radars_without_cycle_telemetry!==0)failures.push('RADAR_CYCLE_HEALTH_NOT_READY');
+          if(s.full_market_candle_coverage_ready!==true||s.websocket_live!==true||s.websocket_sync_ready!==true)failures.push('FULL_MARKET_CLOSED_CANDLE_FEED_NOT_READY');
+          if(s.analyst_status!=='READY'||s.analyst_worker_running!==true||Number(s.analyst_complete_fresh_assessments)<1||Number(s.analyst_incomplete_fresh_assessments)!==0)failures.push('TWENTY_ANALYST_RUNTIME_NOT_READY');
+          if(failures.length){console.log(JSON.stringify({failures,status:body.status,summary:s,readiness_reasons:body.readiness_reasons}));process.exit(1);}
+          console.log(JSON.stringify({audit:body.audit,status:body.status,summary:s,
+            fresh_complete_analyst_assessments:s.analyst_complete_fresh_assessments,
+            policy:body.policy,physical_device_delivery_verified:false},null,2));
+          NODE
+            then
+              VERIFIED=true
+              break
+            fi
+            echo "Live readiness not yet complete (attempt $attempt/12; HTTP ${CODE:-unknown}); retrying."
+            sleep 5
+          done
+          if [[ "$VERIFIED" != "true" ]]; then
+            echo "::error::DHDTech has not demonstrated 12 healthy radars, current full-market data, complete fresh 20-analyst assessments, and FCM configuration."
+            if [[ -s "$RUNNER_TEMP/radar-readiness-audit.json" ]]; then cat "$RUNNER_TEMP/radar-readiness-audit.json"; fi
+            exit 1
+          fi
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
