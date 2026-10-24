@@ -1,0 +1,116 @@
+name: RadarX 12-Radar Historical Profile Audit
+
+on:
+  pull_request:
+    branches:
+      - build224-multi-analyst-20261007
+    paths:
+      - phase2/core/historical-replay.mjs
+      - phase2/core/historical-profile-adapters.mjs
+      - phase2/core/move-outcome-analysis.mjs
+      - phase2/tools/historical-replay.mjs
+      - phase2/tools/historical-profile-matrix.mjs
+      - phase2/tests/historical-profile-matrix.test.mjs
+      - .github/workflows/radarx-12-radar-profile-audit.yml
+  workflow_dispatch:
+
+concurrency:
+  group: radarx-12-radar-profile-audit-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  public-spot-profile-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout Build 224 profile-audit branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Check all-radar audit CLI syntax
+        run: |
+          node --check phase2/tools/historical-replay.mjs
+          node --check phase2/tools/historical-profile-matrix.mjs
+          node --check phase2/core/historical-profile-adapters.mjs
+          node --check phase2/core/move-outcome-analysis.mjs
+      - name: Verify complete 12-profile contract without network
+        run: |
+          node phase2/tools/historical-profile-matrix.mjs --dry-run --symbols GTCUSDT
+          node --test --test-timeout=60000 phase2/tests/historical-profile-matrix.test.mjs
+      - name: Run all 12 radars on real public Spot history
+        id: profile-matrix
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p reports/radarx-12-radar-profile-audit
+          node phase2/tools/historical-profile-matrix.mjs \
+            --symbols GTCUSDT,WUSDT \
+            --lookback-hours 6 \
+            --outcome-horizon-hours 24 \
+            --max-trade-pages 2 \
+            --max-trades 2000 \
+            --output reports/radarx-12-radar-profile-audit/profile-matrix.json
+          result=$?
+          printf 'exit_code=%s\n' "$result" > reports/radarx-12-radar-profile-audit/process-status.txt
+          echo "12-profile audit process exit code: $result"
+          exit 0
+      - name: Upload per-radar historical evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-12-radar-profile-audit
+          path: reports/radarx-12-radar-profile-audit/**
+          if-no-files-found: error
+          retention-days: 14
+      - name: Require each of the 12 profiles to produce an explicit auditable result
+        if: always()
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFile} from 'node:fs/promises';
+          import {HISTORICAL_DETECTOR_PROFILES} from './phase2/tools/historical-replay.mjs';
+          const path='reports/radarx-12-radar-profile-audit/profile-matrix.json';
+          const report=JSON.parse(await readFile(path,'utf8'));
+          const expectedSymbols=['GTCUSDT','WUSDT'];
+          const got=new Set((report.profiles||[]).map(x=>x.profile));
+          const missing=HISTORICAL_DETECTOR_PROFILES.filter(x=>!got.has(x));
+          const invalid=(report.profiles||[]).filter(profile=>
+            profile.status==='EXECUTION_FAILED' ||
+            profile.symbol_count!==expectedSymbols.length ||
+            !expectedSymbols.every(symbol=>(profile.results||[]).some(row=>row.symbol===symbol)) ||
+            (profile.results||[]).some(row=>row.real_notification_delivery_simulated!==false)
+          );
+          const pass=report.profile_count===12 &&
+            report.profiles?.length===12 &&
+            missing.length===0 && invalid.length===0 &&
+            report.policy?.paper_trading===true &&
+            report.policy?.real_order_execution===false &&
+            report.policy?.real_notifications_simulated===false;
+          if(!pass){
+            console.error(JSON.stringify({profile_count:report.profile_count,missing_profiles:missing,
+              invalid_profiles:invalid.map(x=>({profile:x.profile,status:x.status,symbol_count:x.symbol_count})),
+              policy:report.policy},null,2));
+            process.exit(1);
+          }
+          console.log(JSON.stringify({
+            status:report.summary?.status,
+            profiles_checked:report.profile_count,
+            symbols:expectedSymbols,
+            profiles_with_all_symbol_coverage:report.summary?.profiles_with_all_symbol_coverage,
+            profiles_with_mature_outcomes:report.summary?.profiles_with_mature_outcomes,
+            candidate_episodes:report.summary?.candidate_episodes,
+            low_follow_through_candidate_count:report.summary?.low_follow_through_candidate_count,
+            blockers:report.profiles.map(x=>({profile:x.profile,status:x.status,
+              blockers:[...new Set((x.results||[]).flatMap(r=>r.evidence_blockers||[]))].slice(0,12)})),
+            real_notifications_simulated:false,
+            paper_trading:report.policy.paper_trading,
+            real_order_execution:report.policy.real_order_execution
+          },null,2));
+          NODE
