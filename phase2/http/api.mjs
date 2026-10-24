@@ -812,6 +812,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             radar:'FALCON_EYE_RADAR',
             radar_name:radarName,
             candidates:Array.isArray(health.latest_candidates)?health.latest_candidates.slice(0,limit):[],
+            market_movers:Array.isArray(health.latest_movers)?health.latest_movers.slice(0,20):[],
             alerts,
             monitoring:health,
             scan:{requested:runNow,completed:scanError===null&&health.last_scan_at!=null,error:scanError||health.last_error||null},
@@ -828,7 +829,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           let historyError=null;
           try{alerts=await readHistory();}catch(historyFailure){historyError=String(historyFailure?.message??historyFailure);}
           const body={
-            radar:'FALCON_EYE_RADAR',radar_name:radarName,candidates:[],alerts,
+            radar:'FALCON_EYE_RADAR',radar_name:radarName,candidates:[],market_movers:[],alerts,
             monitoring:safeHealth('FALCON_EYE_RADAR',radarName,falconEyeRadar),
             scan:{requested:runNow,completed:false,error:message},
             thresholds,algorithms:[],
