@@ -83,6 +83,7 @@ export function buildMoveOutcomeAnalysis(replay = {}, {
   const moderate = actualMove(replay, moderateTargetPct);
   const strong = actualMove(replay, strongTargetPct);
   const accepted = steps.filter(x => x.decision === 'ACCEPTED');
+  const candidates = steps.filter(x => x.candidate_detected === true);
   const maturedAccepted = accepted.filter(x => x.outcome?.horizon_observed === true &&
     finite(x.outcome?.forward_max_upside_pct_from_decision) !== null &&
     finite(x.outcome?.forward_max_drawdown_pct_from_decision) !== null &&
@@ -92,6 +93,14 @@ export function buildMoveOutcomeAnalysis(replay = {}, {
     accepted.find(x => Number(x.timestamp) < moveAt) || null;
   const moderateFirst = firstAcceptedBefore(moderate.at);
   const strongFirst = firstAcceptedBefore(strong.at);
+  const firstCandidateBefore = moveAt => moveAt === null ? null :
+    candidates.find(x => Number(x.timestamp) < moveAt) || null;
+  const firstCandidateAtOrAfter = moveAt => moveAt === null ? null :
+    candidates.find(x => Number(x.timestamp) >= moveAt) || null;
+  const candidate5 = firstCandidateBefore(moderate.at);
+  const candidate15 = firstCandidateBefore(strong.at);
+  const lateCandidate5 = firstCandidateAtOrAfter(moderate.at);
+  const lateCandidate15 = firstCandidateAtOrAfter(strong.at);
   const moderateWasObserved = moderate.at !== null && completeCandles;
   const strongWasObserved = strong.at !== null && completeCandles;
   const moderateStatus = !completeCandles
@@ -179,6 +188,32 @@ export function buildMoveOutcomeAnalysis(replay = {}, {
   const earlyStrong = describeHit(strongFirst, strong, strongStatus);
   const horizonObserved = completeCandles && steps.length > 0 &&
     steps.every(x => x.outcome?.horizon_observed === true);
+  const candidateStatus=(move,first,late,target)=>!completeCandles
+    ?'INCOMPLETE_MARKET_DATA'
+    :move.at===null?'NO_PLUS_'+target+'_PERCENT_MOVE_OBSERVED'
+    :first?'EARLY_CANDIDATE_BEFORE_PLUS_'+target+'_PERCENT'
+    :late?'LATE_CANDIDATE_AFTER_PLUS_'+target+'_PERCENT'
+    :'MISSED_PLUS_'+target+'_PERCENT_CANDIDATE';
+  const candidate5Status=candidateStatus(moderate,candidate5,lateCandidate5,5);
+  const candidate15Status=candidateStatus(strong,candidate15,lateCandidate15,15);
+  const describeCandidate=(hit,move,status)=>hit?{
+    at:finite(hit.timestamp),
+    at_iso:hit.timestamp_iso||new Date(Number(hit.timestamp)).toISOString(),
+    mode:hit.candidate_mode||'CANDIDATE_SHADOW',
+    score:finite(hit.score),
+    minutes_before_move:move.at===null?null:Number(((move.at-Number(hit.timestamp))/60_000).toFixed(2)),
+    source_move_timestamp:move.source,
+    forward_max_upside_pct:finite(hit.outcome?.forward_max_upside_pct_from_decision),
+    forward_max_drawdown_pct:finite(hit.outcome?.forward_max_drawdown_pct_from_decision),
+    forward_return_pct_at_horizon:finite(hit.outcome?.forward_return_pct_at_horizon),
+    outcome_horizon_observed:hit.outcome?.horizon_observed===true,
+    classification:status,
+    not_a_notification:true
+  }:null;
+  const candidateFailures=unique([
+    ...(moderateWasObserved&&!candidate5?lastRejectedBefore(steps,moderate.at)?.failed_checks||[]:[]),
+    ...(strongWasObserved&&!candidate15?lastRejectedBefore(steps,strong.at)?.failed_checks||[]:[])
+  ]).slice(0,24);
   return {
     version: 'RADARX_MOVE_OUTCOME_ANALYSIS_V1',
     symbol: String(replay?.symbol || '').toUpperCase(),
@@ -214,11 +249,44 @@ export function buildMoveOutcomeAnalysis(replay = {}, {
       first_early_detection: earlyStrong,
       missed_move: missedStrong
     },
+    candidate_detection: {
+      mode:'CANDIDATE_SHADOW_NOT_NOTIFICATION',
+      candidate_count:candidates.length,
+      candidate_with_matured_outcomes:candidates.filter(x=>x.outcome?.horizon_observed===true).length,
+      moderate_move:{
+        target_pct:moderateTargetPct,
+        observed_at:moderate.at,
+        timestamp_source:moderate.source,
+        classification:candidate5Status,
+        detected_early:Boolean(candidate5),
+        minutes_before_move:describeCandidate(candidate5,moderate,candidate5Status)?.minutes_before_move??null,
+        first_candidate_before_move:describeCandidate(candidate5,moderate,candidate5Status),
+        first_candidate_after_move:describeCandidate(lateCandidate5,moderate,'LATE_CANDIDATE'),
+        last_rejection_before_move:moderateWasObserved&&!candidate5?lastRejectedBefore(steps,moderate.at):null
+      },
+      strong_move:{
+        target_pct:strongTargetPct,
+        observed_at:strong.at,
+        timestamp_source:strong.source,
+        classification:candidate15Status,
+        detected_early:Boolean(candidate15),
+        minutes_before_move:describeCandidate(candidate15,strong,candidate15Status)?.minutes_before_move??null,
+        first_candidate_before_move:describeCandidate(candidate15,strong,candidate15Status),
+        first_candidate_after_move:describeCandidate(lateCandidate15,strong,'LATE_CANDIDATE'),
+        last_rejection_before_move:strongWasObserved&&!candidate15?lastRejectedBefore(steps,strong.at):null
+      },
+      missed_move_failure_codes:candidateFailures
+    },
     low_follow_through_acceptances: lowFollowThrough,
     missed_move_failure_codes: missedMoveFailures,
     summary: {
       accepted_count: accepted.length,
       mature_accepted_count: maturedAccepted.length,
+      candidate_detection_count:candidates.length,
+      candidate_early_5pct_detection:Boolean(candidate5),
+      candidate_early_15pct_detection:Boolean(candidate15),
+      candidate_missed_5pct_move:Boolean(moderateWasObserved&&!candidate5),
+      candidate_missed_15pct_move:Boolean(strongWasObserved&&!candidate15),
       early_5pct_detection: Boolean(moderateFirst),
       early_15pct_detection: Boolean(strongFirst),
       missed_5pct_move: Boolean(missedModerate),
@@ -240,7 +308,17 @@ export function summarizeMoveOutcomeAnalyses(replays = []) {
   const strongObserved = complete.filter(x => x.strong_move?.observed_at !== null && x.strong_move?.observed_at !== undefined);
   const early5 = moderateObserved.filter(x => x.moderate_move?.detected_early === true);
   const early15 = strongObserved.filter(x => x.strong_move?.detected_early === true);
+  const candidate5Observed=complete.filter(x=>x.moderate_move?.observed_at!==null&&x.moderate_move?.observed_at!==undefined);
+  const candidate15Observed=complete.filter(x=>x.strong_move?.observed_at!==null&&x.strong_move?.observed_at!==undefined);
+  const candidateEarly5=candidate5Observed.filter(x=>x.candidate_detection?.moderate_move?.detected_early===true);
+  const candidateEarly15=candidate15Observed.filter(x=>x.candidate_detection?.strong_move?.detected_early===true);
   const lowFollowRows = complete.flatMap(x => Array.isArray(x.low_follow_through_acceptances) ? x.low_follow_through_acceptances : []);
+  const candidateFailureCounts = new Map();
+  for(const row of complete){
+    for(const code of Array.isArray(row.candidate_detection?.missed_move_failure_codes)?row.candidate_detection.missed_move_failure_codes:[]){
+      candidateFailureCounts.set(code,(candidateFailureCounts.get(code)||0)+1);
+    }
+  }
   const failureCounts = new Map();
   for (const row of complete) {
     for (const code of Array.isArray(row.missed_move_failure_codes) ? row.missed_move_failure_codes : []) {
@@ -268,6 +346,16 @@ export function summarizeMoveOutcomeAnalyses(replays = []) {
     missed_or_late_15pct_moves: strongObserved.length - early15.length,
     early_15pct_detection_rate_pct: strongObserved.length ? Number((early15.length/strongObserved.length*100).toFixed(2)) : null,
     median_minutes_before_15pct: median(early15.map(x=>x.strong_move.minutes_before_move)),
+    candidate_detections:complete.reduce((n,x)=>n+(Number(x.candidate_detection?.candidate_count)||0),0),
+    candidate_early_detections_before_5pct:candidateEarly5.length,
+    candidate_missed_or_late_5pct_moves:candidate5Observed.length-candidateEarly5.length,
+    candidate_early_5pct_detection_rate_pct:candidate5Observed.length?Number((candidateEarly5.length/candidate5Observed.length*100).toFixed(2)):null,
+    candidate_median_minutes_before_5pct:median(candidateEarly5.map(x=>x.candidate_detection?.moderate_move?.minutes_before_move)),
+    candidate_early_detections_before_15pct:candidateEarly15.length,
+    candidate_missed_or_late_15pct_moves:candidate15Observed.length-candidateEarly15.length,
+    candidate_early_15pct_detection_rate_pct:candidate15Observed.length?Number((candidateEarly15.length/candidate15Observed.length*100).toFixed(2)):null,
+    candidate_median_minutes_before_15pct:median(candidateEarly15.map(x=>x.candidate_detection?.strong_move?.minutes_before_move)),
+    most_common_candidate_miss_reasons:[...candidateFailureCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,15).map(([code,count])=>({code,count})),
     accepted_with_matured_outcomes: complete.reduce((n,x)=>n+(Number(x.observation?.accepted_with_matured_outcomes)||0),0),
     low_follow_through_count: lowFollowRows.length,
     low_follow_through_share_pct: complete.reduce((n,x)=>n+(Number(x.summary?.mature_accepted_count)||0),0)
