@@ -248,7 +248,7 @@ export const CONFIG = Object.freeze({
   multiAnalyst: {
     quote: 'USDT',
     discoveryPool: int(process.env.RADARX_MULTI_ANALYST_DISCOVERY_POOL, 24),
-    deepScanPool: int(process.env.RADARX_MULTI_ANALYST_DEEP_SCAN_POOL, 16),
+    deepScanPool: int(process.env.RADARX_MULTI_ANALYST_DEEP_SCAN_POOL, 12),
     returnLimit: int(process.env.RADARX_MULTI_ANALYST_RETURN_LIMIT, 10),
     deepConcurrency: int(process.env.RADARX_MULTI_ANALYST_DEEP_CONCURRENCY, 3),
     deepKlines: int(process.env.RADARX_MULTI_ANALYST_DEEP_KLINES, 220),
