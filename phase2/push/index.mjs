@@ -68,7 +68,7 @@ export class FcmPushProvider extends PushProvider{
       const data={};
       for(const key of ['type','event_class','event','notification_mode','watch_only','entry_eligible','requires_follow_up_confirmation','radar','radar_name','symbol','market','direction','price','price_change_24h','opportunity_score','potential_label','risk_flags','reason_codes','early_flow_watch_evidence','signal_lifecycle_state','signal_lifecycle_label','signal_lifecycle_transition','signal_lifecycle_reason_codes','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id','paper_trading','real_order_execution','confidence_score']){
         const value=payload?.[key];
-        if(value!==undefined&&value!==null)data[key]=(typeof value==='object'?JSON.stringify(value):String(value)).slice(0,500);
+        if(value!==undefined&&value!==null)data[key]=(Array.isArray(value)?value.map(String).join(','):typeof value==='object'?JSON.stringify(value):String(value)).slice(0,500);
       }
       // Send data-only HIGH priority messages so Android's native service can post
       // one notification, set a deterministic tap target, and record device receipt
