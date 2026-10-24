@@ -120,9 +120,10 @@ export function evaluateHistoricalProfileAdapter(profile,input,{config=CONFIG}={
       Number(prints.largeNotionalRatio)>=0.12&&Number(flow.volumeRatio)>=1.15&&
       Number(flow.takerBuyRatio)>=0.515&&Number(flow.absorptionScore)>=67&&
       priceContext.not_extended===true;
-    const eligible=analysis.eligible===true||candleProxy;
+    const eligible=tradeCovered&&(analysis.eligible===true||candleProxy);
     return {analysis,eligible,score:analysis.score,stage:analysis.stage,
       reasonCodes:[...(analysis.reasons||[]),...(analysis.data_quality_reasons||[]),
+        ...(!tradeCovered?['HISTORICAL_AGG_TRADE_COVERAGE_INCOMPLETE']:[]),
         ...(candleProxy&&analysis.eligible!==true?['TRADE_AND_CANDLE_PROXY_ORDERBOOK_UNAVAILABLE']:[])],
       extraGateFailures:['HISTORICAL_ORDERBOOK_UNAVAILABLE','LIVE_PUSH_GATE_NOT_SIMULATED']};
   }
