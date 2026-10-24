@@ -86,6 +86,9 @@ function serializeResult(row,profile){
     candidate_only:status==='CANDIDATE_ONLY_MISSING_HISTORICAL_EVIDENCE',
     accepted_historical_notifications:Number(row?.summary?.accepted)||0,
     candidate_episodes:Number(ev.candidate_detection?.candidate_count??row?.summary?.candidate_detections)||0,
+    candidate_raw_observations:Number(row?.summary?.candidate_raw_detections)||0,
+    candidate_duplicate_observations:Number(row?.summary?.candidate_duplicate_observations)||0,
+    candidate_suppressed_by_cooldown:Number(row?.summary?.candidate_suppressed_by_cooldown)||0,
     low_follow_through_candidate_count:Number(ev.candidate_detection?.low_follow_through_candidate_count)||0,
     low_follow_through_candidate_rate_pct:ev.candidate_detection?.low_follow_through_candidate_rate_pct??null,
     early_5pct_candidate:ev.candidate_detection?.moderate_move?.detected_early===true,
@@ -200,6 +203,9 @@ async function main(){
       symbol_count:rows.length,coverage_complete_symbols:rows.filter(x=>x.profile_coverage_complete).length,
       mature_outcome_symbols:rows.filter(x=>x.outcome_horizon_complete).length,
       candidate_episodes:rows.reduce((n,x)=>n+x.candidate_episodes,0),
+      candidate_raw_observations:rows.reduce((n,x)=>n+x.candidate_raw_observations,0),
+      candidate_duplicate_observations:rows.reduce((n,x)=>n+x.candidate_duplicate_observations,0),
+      candidate_suppressed_by_cooldown:rows.reduce((n,x)=>n+x.candidate_suppressed_by_cooldown,0),
       low_follow_through_candidate_count:rows.reduce((n,x)=>n+x.low_follow_through_candidate_count,0),
       results:rows
     });
@@ -213,12 +219,18 @@ async function main(){
     profiles_with_all_symbol_coverage:summary.profiles.filter(x=>x.coverage_complete_symbols===symbols.length).length,
     profiles_with_mature_outcomes:summary.profiles.filter(x=>x.mature_outcome_symbols===symbols.length).length,
     candidate_episodes:summary.profiles.reduce((n,x)=>n+x.candidate_episodes,0),
+    candidate_raw_observations:summary.profiles.reduce((n,x)=>n+x.candidate_raw_observations,0),
+    candidate_duplicate_observations:summary.profiles.reduce((n,x)=>n+x.candidate_duplicate_observations,0),
+    candidate_suppressed_by_cooldown:summary.profiles.reduce((n,x)=>n+x.candidate_suppressed_by_cooldown,0),
     low_follow_through_candidate_count:summary.profiles.reduce((n,x)=>n+x.low_follow_through_candidate_count,0),
     scope_note:'Candidate-shadow metrics are historical research only. They do not simulate push delivery or prove profitability. Profiles with missing historical evidence are not considered production-ready.'};
   await atomicJson(output,summary);
   process.stdout.write(JSON.stringify({output:summary?output:null,generated_at:summary.generated_at,summary:summary.summary,
     profiles:summary.profiles.map(x=>({profile:x.profile,status:x.status,coverage_complete_symbols:x.coverage_complete_symbols,
       mature_outcome_symbols:x.mature_outcome_symbols,candidate_episodes:x.candidate_episodes,
+      candidate_raw_observations:x.candidate_raw_observations,
+      candidate_duplicate_observations:x.candidate_duplicate_observations,
+      candidate_suppressed_by_cooldown:x.candidate_suppressed_by_cooldown,
       low_follow_through_candidate_count:x.low_follow_through_candidate_count,output:x.output,error:x.error})),
     policy:summary.policy},null,2)+'\n');
   if(summary.summary.status==='EXECUTION_FAILED')process.exitCode=2;
