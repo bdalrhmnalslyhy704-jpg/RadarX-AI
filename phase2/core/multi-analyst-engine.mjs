@@ -7,12 +7,14 @@ import {
   MarketUniverseScanner
 } from '../market/universe-scanner.mjs';
 
+import {finiteNumberOr} from './finite-number.mjs';
 const clamp=(x,lo=0,hi=100)=>{
-  const n=Number(x);
-  return Number.isFinite(n)?Math.max(lo,Math.min(hi,n)):50;
+  // Null/blank/boolean inputs are missing evidence, not numeric zero.
+  const n=finiteNumberOr(x,null);
+  return n!==null?Math.max(lo,Math.min(hi,n)):50;
 };
 const avg=(xs)=>{
-  const a=xs.map(Number).filter(Number.isFinite);
+  const a=(Array.isArray(xs)?xs:[]).map(x=>finiteNumberOr(x,null)).filter(x=>x!==null);
   return a.length?a.reduce((s,x)=>s+x,0)/a.length:null;
 };
 
@@ -68,21 +70,23 @@ export function selectDiscoveryWithRadarReviewPriority(priorityRows,buckets,limi
   return selected;
 }
 const mean=(xs)=>avg(xs);
-const safe=(x,d=null)=>Number.isFinite(Number(x))?Number(x):d;
-const pct=(a,b)=>Number.isFinite(Number(a))&&Number.isFinite(Number(b))&&Number(b)>0?(Number(a)-Number(b))/Number(b)*100:null;
+const numericValue=value=>finiteNumberOr(value,null);
+const isNumericValue=value=>numericValue(value)!==null;
+const safe=(x,d=null)=>finiteNumberOr(x,d);
+const pct=(a,b)=>isNumericValue(a)&&isNumericValue(b)&&Number(b)>0?(Number(a)-Number(b))/Number(b)*100:null;
 const closed=(rows,now)=>{
   return (Array.isArray(rows)?rows:[]).filter(c=>
     c && c.closed!==false &&
-    Number.isFinite(Number(c.closeTime)) &&
+    isNumericValue(c.closeTime) &&
     Number(c.closeTime)<=now &&
-    Number.isFinite(Number(c.open)) &&
-    Number.isFinite(Number(c.high)) &&
-    Number.isFinite(Number(c.low)) &&
-    Number.isFinite(Number(c.close)) &&
+    isNumericValue(c.open) &&
+    isNumericValue(c.high) &&
+    isNumericValue(c.low) &&
+    isNumericValue(c.close) &&
     Number(c.high)>=Number(c.low)
   );
 };
-const values=(rows,key)=>rows.map(x=>Number(x?.[key])).filter(Number.isFinite);
+const values=(rows,key)=>(Array.isArray(rows)?rows:[]).map(x=>numericValue(x?.[key])).filter(Number.isFinite);
 const closes=rows=>values(rows,'close');
 const emaLast=(xs,period)=>{
   const a=xs.map(Number).filter(Number.isFinite);
@@ -405,7 +409,7 @@ const analyst=(id,name,score,direction='NEUTRAL',evidence={},risks=[])=>{
 };
 
 const median=(xs)=>{
-  const a=xs.map(Number).filter(Number.isFinite).sort((x,y)=>x-y);
+  const a=(Array.isArray(xs)?xs:[]).map(numericValue).filter(Number.isFinite).sort((x,y)=>x-y);
   if(!a.length)return null;
   const m=Math.floor(a.length/2);
   return a.length%2?a[m]:(a[m-1]+a[m])/2;
@@ -549,7 +553,8 @@ function specialistAnalysis(candidate, market={}, calibration=null){
   const rs15=Number.isFinite(ret15)&&Number.isFinite(roc(btc15,8))?ret15-roc(btc15,8):null;
   const rs1=Number.isFinite(ret1)&&Number.isFinite(roc(btc1,4))?ret1-roc(btc1,4):null;
   const median24=safe(market.marketMedian24h,null);
-  const rel24=Number.isFinite(median24)&&Number.isFinite(Number(candidate?.price_change_24h))?Number(candidate.price_change_24h)-median24:null;
+  const dailyMovePct=safe(candidate?.price_change_24h,null);
+  const rel24=Number.isFinite(median24)&&Number.isFinite(dailyMovePct)?dailyMovePct-median24:null;
 
   const htfBias=avg([
     Number.isFinite(trend4)?clamp(50+trend4*6):null,
@@ -611,12 +616,13 @@ function specialistAnalysis(candidate, market={}, calibration=null){
   }));
 
   const compressionScore=avg([Number.isFinite(bb)?clamp(105-bb*95):null,Number.isFinite(ar)?clamp(105-ar*90):null,Number.isFinite(rangeBurst15)?clamp(92-(rangeBurst15-1)*70):null])||50;
-  const dailyMoveAbs=Math.abs(Number(candidate?.price_change_24h)||0);
-  const quietnessScore=clamp(100-Math.max(0,dailyMoveAbs-1.5)*10-Math.max(0,dailyMoveAbs-4)*8);
+  // Missing daily movement is unknown, not a zero-percent quiet base.
+  const dailyMoveAbs=Number.isFinite(dailyMovePct)?Math.abs(dailyMovePct):null;
+  const quietnessScore=dailyMoveAbs===null?45:clamp(100-Math.max(0,dailyMoveAbs-1.5)*10-Math.max(0,dailyMoveAbs-4)*8);
   const squeezeScore=clamp(compressionScore*.62+quietnessScore*.38);
-  a.push(analyst('VOLATILITY_COMPRESSION','محلل القاعدة الهادئة',squeezeScore,squeezeScore>=70&&dailyMoveAbs<=6?'LONG':squeezeScore<38?'BEARISH':'NEUTRAL',{
-    compression_score:compressionScore,quietness_score:quietnessScore,bb_width_ratio:bb,atr_ratio:ar,range_burst:rangeBurst15,abs_move_24h_pct:dailyMoveAbs,anti_chase_compatible:dailyMoveAbs<=6,own_volume_baseline_ratio:rv,own_trade_baseline_ratio:tradeAccelerationRatio
-  },dailyMoveAbs>6?['QUIET_BASE_ALREADY_MOVED_TOO_FAR']:[]));
+  a.push(analyst('VOLATILITY_COMPRESSION','محلل القاعدة الهادئة',squeezeScore,squeezeScore>=70&&dailyMoveAbs!==null&&dailyMoveAbs<=6?'LONG':squeezeScore<38?'BEARISH':'NEUTRAL',{
+    compression_score:compressionScore,quietness_score:quietnessScore,bb_width_ratio:bb,atr_ratio:ar,range_burst:rangeBurst15,abs_move_24h_pct:dailyMoveAbs,anti_chase_compatible:dailyMoveAbs!==null&&dailyMoveAbs<=6,own_volume_baseline_ratio:rv,own_trade_baseline_ratio:tradeAccelerationRatio
+  },dailyMoveAbs===null?['DAILY_MOVE_UNKNOWN']:dailyMoveAbs>6?['QUIET_BASE_ALREADY_MOVED_TOO_FAR']:[]));
 
   const resistanceGap=Number.isFinite(price)&&Number.isFinite(sm.recentHigh)&&price>0?(sm.recentHigh-price)/price*100:null;
   const supportGap=Number.isFinite(price)&&Number.isFinite(sm.recentLow)&&price>0?(price-sm.recentLow)/price*100:null;
@@ -633,7 +639,7 @@ function specialistAnalysis(candidate, market={}, calibration=null){
   },breakoutConfirmed?[]:['BREAKOUT_CONTINUATION_NOT_CONFIRMED']));
 
   const atrValue=atrLast(s15,14),atrPct=Number.isFinite(atrValue)&&price>0?atrValue/price*100:null;
-  const volatilityRiskPenalty=Math.max(0,(Number(ar)||1)-1)*22+Math.max(0,(Number(candidate?.price_change_24h)||0)-5)*3.5+Math.max(0,(Number(atrPct)||0)-1.4)*12;
+  const volatilityRiskPenalty=Math.max(0,(Number(ar)||1)-1)*22+Math.max(0,(Number.isFinite(dailyMovePct)?dailyMovePct:0)-5)*3.5+Math.max(0,(Number(atrPct)||0)-1.4)*12+(dailyMovePct===null?25:0);
   const volatilityRiskScore=clamp(100-volatilityRiskPenalty);
   a.push(analyst('SUPPORT_RESISTANCE','محلل التقلب والمخاطر',volatilityRiskScore,volatilityRiskScore>=66?'LONG':volatilityRiskScore<38?'BEARISH':'NEUTRAL',{
     atr_14:atrValue,atr_pct:atrPct,atr_regime_ratio:ar,range_burst_ratio:rangeBurst15,price_change_24h_pct:candidate?.price_change_24h,normalized_risk_penalty:volatilityRiskPenalty
@@ -691,7 +697,7 @@ function specialistAnalysis(candidate, market={}, calibration=null){
   }));
 
   const extensionScore=clamp(
-    82-Math.max(0,Number(distanceEma||0))*7-Math.max(0,(Number(candidate?.price_change_24h)||0)-4)*3.3+
+    82-Math.max(0,Number(distanceEma||0))*7-Math.max(0,(Number.isFinite(dailyMovePct)?dailyMovePct:0)-4)*3.3-(dailyMovePct===null?20:0)+
     (Number.isFinite(closeLocation)&&closeLocation<.82?4:0)
     -(100-Number(sniperFreshness.freshness||50))*.32
   );
@@ -715,13 +721,13 @@ function specialistAnalysis(candidate, market={}, calibration=null){
   },conflictRatio>=.65?['SPECIALIST_DIRECTION_CONFLICT_HIGH']:[]));
 
   const spreadAvailable=Number.isFinite(book.spreadBps),spreadAcceptable=spreadAvailable&&book.spreadBps<=35;
-  const primaryEvidenceComplete=Boolean(rowDataValid&&symbolValid&&coverageReady&&quoteVolume24h>=300000&&liq>=60&&spreadAcceptable&&Number.isFinite(rv)&&Number.isFinite(tradeAccelerationRatio)&&Number.isFinite(buyShare));
+  const primaryEvidenceComplete=Boolean(rowDataValid&&symbolValid&&coverageReady&&quoteVolume24h>=300000&&liq>=60&&spreadAcceptable&&Number.isFinite(dailyMovePct)&&Number.isFinite(rv)&&Number.isFinite(tradeAccelerationRatio)&&Number.isFinite(buyShare));
   const dataScoreRaw=clamp(avg([dq,liq,coverageScore,spreadAvailable?clamp(94-book.spreadBps*2.5):null])||Math.min(dq,liq));
   const dataScore=primaryEvidenceComplete?dataScoreRaw:Math.min(45,dataScoreRaw);
   const dataRisks=[
     !rowDataValid?'DATA_STATUS_NOT_VALID':null,!symbolValid?'INVALID_SPOT_SYMBOL':null,!coverageReady?'CLOSED_CANDLE_COVERAGE_NOT_READY':null,
     quoteVolume24h<300000?'QUOTE_VOLUME_BELOW_MINIMUM':null,!spreadAvailable?'SPREAD_UNAVAILABLE':null,spreadAvailable&&!spreadAcceptable?'SPREAD_TOO_WIDE':null,
-    !Number.isFinite(rv)?'VOLUME_BASELINE_UNAVAILABLE':null,!Number.isFinite(tradeAccelerationRatio)?'TRADE_COUNT_BASELINE_UNAVAILABLE':null,!Number.isFinite(buyShare)?'BUY_PRESSURE_UNAVAILABLE':null
+    !Number.isFinite(dailyMovePct)?'DAILY_MOVE_UNKNOWN':null,!Number.isFinite(rv)?'VOLUME_BASELINE_UNAVAILABLE':null,!Number.isFinite(tradeAccelerationRatio)?'TRADE_COUNT_BASELINE_UNAVAILABLE':null,!Number.isFinite(buyShare)?'BUY_PRESSURE_UNAVAILABLE':null
   ].filter(Boolean);
   a.push(analyst('DATA_INTEGRITY','حارس سلامة البيانات',dataScore,primaryEvidenceComplete&&dq>=85&&liq>=70?'LONG':!primaryEvidenceComplete?'BEARISH':'NEUTRAL',{
     data_quality:dq,liquidity_quality:liq,quote_volume_24h:quoteVolume24h,spread_bps:book.spreadBps,spread_available:spreadAvailable,symbol_valid:symbolValid,source_status:candidate?.data_status||null,
@@ -763,7 +769,7 @@ function specialistAnalysis(candidate, market={}, calibration=null){
   );
 
   const features={
-    price,priceChange24h:safe(candidate?.price_change_24h,0),
+    price,priceChange24h:safe(candidate?.price_change_24h,null),
     quoteVolume24h:quoteVolume24h,
     symbol_valid:symbolValid,
     coverage_report:{ready:coverageReady,by_timeframe:coverageReport},
@@ -934,7 +940,8 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   if(!dataValid)hardReasons.push('DATA_GATE_FAILED');
   if(features?.symbol_valid!==true)hardReasons.push('SPOT_SYMBOL_INVALID');
   if(features?.coverage_report?.ready!==true)hardReasons.push('CANDLE_COVERAGE_INCOMPLETE');
-  if(Number(features?.quoteVolume24h)<300000)hardReasons.push('LIQUIDITY_NOTIONAL_TOO_LOW');
+  if(!Number.isFinite(safe(features?.quoteVolume24h,null))||Number(features.quoteVolume24h)<300000)hardReasons.push('LIQUIDITY_NOTIONAL_TOO_LOW');
+  if(!Number.isFinite(safe(features?.priceChange24h,null)))hardReasons.push('DAILY_MOVE_UNKNOWN');
   if(!Number.isFinite(features?.book?.spreadBps))hardReasons.push('SPREAD_EVIDENCE_UNAVAILABLE');
   else if(Number(features.book.spreadBps)>35)hardReasons.push('SPREAD_TOO_WIDE');
   if(features?.primary_evidence_complete!==true)hardReasons.push('PRIMARY_EVIDENCE_INCOMPLETE');
@@ -1102,6 +1109,31 @@ export function buildMultiAnalystMarketMoverObservations(rows,analysedRows=[],{
     });
 }
 
+/**
+ * Report whether the real 19 named specialists and final judge completed.
+ * Placeholder records from an exception path must never masquerade as analysis.
+ */
+export function buildAnalystExecutionStatus({specialists=[],final=null,analysisFailed=false}={}){
+  const rows=Array.isArray(specialists)?specialists:[];
+  const ids=rows.map(item=>String(item?.id||'')).filter(Boolean);
+  const roles=rows.map(item=>String(item?.role||'')).filter(Boolean);
+  const uniqueIds=new Set(ids),uniqueRoles=new Set(roles);
+  const placeholderIds=ids.filter(id=>/^ANALYST_\d+$/i.test(id));
+  const failed=analysisFailed===true;
+  const specialistsComplete=!failed&&rows.length===19&&uniqueIds.size===19&&
+    uniqueRoles.size===19&&placeholderIds.length===0;
+  return {
+    expected_analysts:20,
+    specialist_count:rows.length,
+    unique_specialists:uniqueIds.size,
+    unique_roles:uniqueRoles.size,
+    specialists_complete:specialistsComplete,
+    final_analyst_complete:Boolean(!failed&&specialistsComplete&&final&&
+      Number(final.totalAnalysts)===19&&typeof final.verdict==='string'),
+    analysis_failed:failed
+  };
+}
+
 export class MultiAnalystEngine {
   constructor({rest,config={},clock=()=>Date.now(),store=null}={}){
     this.store=store;
@@ -1248,6 +1280,8 @@ export class MultiAnalystEngine {
     const analysts=Array.isArray(item?.analysts)?item.analysts:[];
     const ids=analysts.map(x=>String(x?.id||'')).filter(Boolean);
     const uniqueIds=new Set(ids);
+    const roles=analysts.map(x=>String(x?.role||'')).filter(Boolean);
+    const uniqueRoles=new Set(roles);
     const placeholderIds=ids.filter(id=>/^ANALYST_\d+$/i.test(id));
     const analysisFailed=(Array.isArray(item?.reason_codes)?item.reason_codes:[]).includes('MULTI_ANALYST_ANALYSIS_FAILED');
     const execution=item?.analyst_execution||{};
@@ -1266,9 +1300,9 @@ export class MultiAnalystEngine {
       analyst_agreement:Number.isFinite(Number(item?.intelligence?.analyst_agreement))?Number(item.intelligence.analyst_agreement):null,
       specialist_count:analysts.length,
       unique_specialists:uniqueIds.size,
-      unique_roles:new Set(analysts.map(x=>String(x?.role||'')).filter(Boolean)).size,
-      specialists_complete:execution.specialists_complete===true&&!analysisFailed&&placeholderIds.length===0,
-      final_analyst_complete:execution.final_analyst_complete===true,
+      unique_roles:uniqueRoles.size,
+      specialists_complete:execution.specialists_complete===true&&!analysisFailed&&placeholderIds.length===0&&analysts.length===19&&uniqueIds.size===19&&uniqueRoles.size===19,
+      final_analyst_complete:execution.final_analyst_complete===true&&!analysisFailed&&placeholderIds.length===0&&analysts.length===19&&uniqueIds.size===19&&uniqueRoles.size===19,
       analysis_failed:analysisFailed,
       data_valid:item?.data_status?.data_valid===true,
       hard_reasons:(item?.final_judge?.hardReasons||item?.final_judge?.hard_reasons||[]).slice(0,12)
@@ -1499,21 +1533,10 @@ export class MultiAnalystEngine {
           const specialist=analysis.specialist;
           const final=analysis.final;
           const publicAnalysts=specialist.a.map(x=>({...x}));
-          const specialistIds=publicAnalysts.map(x=>String(x?.id||'')).filter(Boolean);
-          const uniqueSpecialistIds=new Set(specialistIds);
-          const specialistRoles=publicAnalysts.map(x=>String(x?.role||'')).filter(Boolean);
-          const uniqueSpecialistRoles=new Set(specialistRoles);
-          const specialistPlaceholders=specialistIds.filter(id=>/^ANALYST_\\d+$/i.test(id));
           const analystFailed=(Array.isArray(row.reason_codes)?row.reason_codes:[]).includes('MULTI_ANALYST_ANALYSIS_FAILED');
-          const analystExecution={
-            expected_analysts:20,
-            specialist_count:publicAnalysts.length,
-            unique_specialists:uniqueSpecialistIds.size,
-            unique_roles:uniqueSpecialistRoles.size,
-            specialists_complete:publicAnalysts.length===19&&uniqueSpecialistIds.size===19&&uniqueSpecialistRoles.size===19&&specialistPlaceholders.length===0&&!analystFailed,
-            final_analyst_complete:Boolean(final&&Number(final.totalAnalysts)===19&&typeof final.verdict==='string'),
-            analysis_failed:analystFailed
-          };
+          const analystExecution=buildAnalystExecutionStatus({
+            specialists:publicAnalysts,final,analysisFailed:analystFailed
+          });
           delete row._analysis;
           this._registerOutcome({
             symbol:row.symbol,entryPrice:row.last_price,direction:final.direction,

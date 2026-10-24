@@ -1,6 +1,34 @@
 import assert from 'node:assert/strict';
-import {MULTI_ANALYST_NAMES,MULTI_ANALYST_ROLE_CONTRACT,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible,selectWithPriorityRotation,selectDiscoveryWithRadarReviewPriority,countAnalystEvidenceCoverage,buildMultiAnalystMarketMoverObservations} from '../core/multi-analyst-engine.mjs';
+import {MULTI_ANALYST_NAMES,MULTI_ANALYST_ROLE_CONTRACT,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible,selectWithPriorityRotation,selectDiscoveryWithRadarReviewPriority,countAnalystEvidenceCoverage,buildMultiAnalystMarketMoverObservations,buildAnalystExecutionStatus} from '../core/multi-analyst-engine.mjs';
 
+// Execution telemetry must never report a failed/fallback assessment as complete.
+{
+  const named = Array.from({length:19},(_,i)=>({
+    id:'SPECIALIST_'+String(i+1).padStart(2,'0'),
+    role:'ROLE_'+String(i+1).padStart(2,'0')
+  }));
+  const valid = buildAnalystExecutionStatus({
+    specialists:named,final:{totalAnalysts:19,verdict:'REJECT'},analysisFailed:false
+  });
+  assert.equal(valid.specialists_complete,true);
+  assert.equal(valid.final_analyst_complete,true);
+  assert.equal(valid.expected_analysts,20);
+
+  const placeholders = Array.from({length:19},(_,i)=>({
+    id:'ANALYST_'+String(i+1).padStart(2,'0'),
+    role:'ROLE_'+String(i+1).padStart(2,'0')
+  }));
+  const failed = buildAnalystExecutionStatus({
+    specialists:placeholders,final:{totalAnalysts:19,verdict:'REJECT'},analysisFailed:true
+  });
+  assert.equal(failed.specialists_complete,false);
+  assert.equal(failed.final_analyst_complete,false);
+  assert.equal(failed.analysis_failed,true);
+
+  const noJudge = buildAnalystExecutionStatus({specialists:named,final:null,analysisFailed:false});
+  assert.equal(noJudge.specialists_complete,true);
+  assert.equal(noJudge.final_analyst_complete,false);
+}
 // Continuous analyst cycles target one minute start-to-start, subtracting the
 // time spent scanning and never scheduling a negative delay after a slow cycle.
 assert.equal(nextContinuousScanDelayMs(60000,0),60000);
@@ -94,6 +122,18 @@ assert.equal(good.final.totalAnalysts, 19);
 assert.equal(good.specialist.a.length, 19);
 assert.ok(good.specialist.a.every(function(a){return typeof a.group==='string'&&Number.isFinite(Number(a.score))&&Number.isFinite(Number(a.coverage));}));
 
+
+// A missing 24h ticker percentage must stay unknown and hard-block the final analyst.
+{
+  const missingDaily = analyzeMultiAnalystCandidate({
+    ...rawFor(),
+    price_change_24h:null
+  },sharedTestMarket);
+  assert.equal(missingDaily.specialist.features.priceChange24h,null);
+  assert.equal(missingDaily.specialist.dataValid,false);
+  assert.equal(missingDaily.final.verdict,'REJECT');
+  assert.ok(missingDaily.final.hardReasons.includes('DAILY_MOVE_UNKNOWN'));
+}
 
 const badData=analyzeMultiAnalystCandidate(rawFor({valid:false,dq:40}),{});
 assert.equal(badData.final.verdict,'REJECT');
@@ -326,7 +366,11 @@ console.log('multi-analyst radar-review queue bounds/dedupe/expiry: PASS');
     rest:{request:async()=>({data:[]})},clock:()=>now,
     config:{radarReviewAssessmentTtlMs:60000}
   });
-  const analysts=Array.from({length:19},(_,i)=>({id:'SPECIALIST_'+String(i+1).padStart(2,'0'),score:75,direction:'LONG'}));
+  const analysts=Array.from({length:19},(_,i)=>({
+    id:'SPECIALIST_'+String(i+1).padStart(2,'0'),
+    role:'ROLE_'+String(i+1).padStart(2,'0'),
+    score:75,direction:'LONG'
+  }));
   engine._recordLatestAssessment({
     symbol:'TESTUSDT',verdict:'WATCH',direction:'LONG',final_score:76,
     analysts,analyst_execution:{specialists_complete:true,final_analyst_complete:true,analysis_failed:false},
@@ -339,6 +383,23 @@ console.log('multi-analyst radar-review queue bounds/dedupe/expiry: PASS');
   assert.equal(result.final_analyst_complete,true);
   assert.equal(result.unique_specialists,19);
   assert.equal(result.data_valid,true);
+  const failedAnalysts=Array.from({length:19},(_,i)=>({
+    id:'ANALYST_'+String(i+1).padStart(2,'0'),
+    role:'FALLBACK_ROLE_'+String(i+1).padStart(2,'0'),
+    score:0,direction:'NEUTRAL'
+  }));
+  engine._recordLatestAssessment({
+    symbol:'FAILEDUSDT',verdict:'REJECT',direction:'NEUTRAL',final_score:0,
+    analysts:failedAnalysts,
+    analyst_execution:{specialists_complete:false,final_analyst_complete:true,analysis_failed:true},
+    final_judge:{totalAnalysts:19,verdict:'REJECT',sniper_score:0,hardReasons:['MULTI_ANALYST_ANALYSIS_FAILED']},
+    intelligence:{early_score:0,analyst_agreement:0},data_status:{data_valid:false},
+    reason_codes:['MULTI_ANALYST_ANALYSIS_FAILED']
+  },now);
+  const failedResult=engine.latestAssessments({symbols:['FAILEDUSDT']})[0];
+  assert.equal(failedResult.specialists_complete,false);
+  assert.equal(failedResult.final_analyst_complete,false);
+  assert.equal(failedResult.analysis_failed,true);
   now+=61000;
   assert.equal(engine.getLatestAssessment('TESTUSDT'),null);
 }

@@ -9,6 +9,8 @@ const phase1=[
 ];
 
 const phase2=[
+  'phase2/tests/early-expansion-missing-daily.test.mjs',
+  'phase2/tests/finite-number.test.mjs',
   'phase2/tests/market-data-endpoint-defaults.test.mjs',
   'phase2/tests/radar-autostart.test.mjs',
   'phase2/tests/api.test.mjs',

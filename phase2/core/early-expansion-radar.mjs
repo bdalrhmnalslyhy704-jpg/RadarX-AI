@@ -12,32 +12,34 @@ import {ScanSchedulerJournal, schedulerLaneReason} from './scan-scheduler.mjs';
 import {MarketWideLightScan, isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
 import {buildUnifiedFeatureSnapshot} from './unified-feature-engine.mjs';
 import {performance} from 'node:perf_hooks';
+import {finiteNumberOr} from './finite-number.mjs';
 
 function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
   if(normalized)return normalized;
   if(!row||typeof row.symbol!=='string'||!/^[A-Z0-9]{5,30}$/i.test(row.symbol))return null;
-  const lastPrice=Number(row.lastPrice),quoteVolume=Number(row.quoteVolume),count=Number(row.count);
-  if(!Number.isFinite(lastPrice)||lastPrice<=0||!Number.isFinite(quoteVolume)||quoteVolume<0||!Number.isFinite(count)||count<0)return null;
-  const rawChange=row.priceChangePercent;
-  const dailyKnown=rawChange!==null&&rawChange!==undefined&&!(typeof rawChange==='string'&&rawChange.trim()==='')&&Number.isFinite(Number(rawChange));
-  const high=Number(row.highPrice),low=Number(row.lowPrice);
-  const tickerTime=['closeTime','eventTime','openTime'].map(key=>Number(row[key])).find(Number.isFinite)??null;
+  // Do not let absent Binance fields become valid zero measurements.
+  const lastPrice=finiteNumberOr(row.lastPrice,null),quoteVolume=finiteNumberOr(row.quoteVolume,null),count=finiteNumberOr(row.count,null);
+  if(lastPrice===null||lastPrice<=0||quoteVolume===null||quoteVolume<0||count===null||count<0)return null;
+  const dailyChange=finiteNumberOr(row.priceChangePercent,null);
+  const dailyKnown=dailyChange!==null;
+  const high=finiteNumberOr(row.highPrice,null),low=finiteNumberOr(row.lowPrice,null);
+  const tickerTime=['closeTime','eventTime','openTime'].map(key=>finiteNumberOr(row[key],null)).find(Number.isFinite)??null;
   return {
     symbol:String(row.symbol).toUpperCase(),quoteAsset:String(quote).toUpperCase(),
     lastPrice,quoteVolume24h:quoteVolume,tradeCount24h:count,
-    priceChange24h:dailyKnown?Number(rawChange):null,
+    priceChange24h:dailyKnown?dailyChange:null,
     highPrice24h:Number.isFinite(high)&&high>0?high:null,
     lowPrice24h:Number.isFinite(low)&&low>0?low:null,tickerTime
   };
 }
 const clamp=(v,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number.isFinite(Number(v))?Number(v):0));
-const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
-function hasFiniteNumber(v){return v!==null&&v!==undefined&&!(typeof v==='string'&&v.trim()==='')&&Number.isFinite(Number(v));}
+const finite=(v,d=null)=>finiteNumberOr(v,d);
+function hasFiniteNumber(v){return finiteNumberOr(v,null)!==null;}
 function absolute24hMove(row){return hasFiniteNumber(row?.priceChange24h)?Math.abs(Number(row.priceChange24h)):null;}
-const mean=a=>{const x=(Array.isArray(a)?a:[]).map(Number).filter(Number.isFinite);return x.length?x.reduce((s,v)=>s+v,0)/x.length:null;};
-const median=a=>{const x=(Array.isArray(a)?a:[]).map(Number).filter(Number.isFinite).sort((p,q)=>p-q);if(!x.length)return null;const m=Math.floor(x.length/2);return x.length%2?x[m]:(x[m-1]+x[m])/2;};
-const pct=(a,b)=>Number.isFinite(Number(a))&&Number.isFinite(Number(b))&&Number(b)!==0?(Number(a)/Number(b)-1)*100:null;
+const mean=a=>{const x=(Array.isArray(a)?a:[]).map(v=>finiteNumberOr(v,null)).filter(Number.isFinite);return x.length?x.reduce((s,v)=>s+v,0)/x.length:null;};
+const median=a=>{const x=(Array.isArray(a)?a:[]).map(v=>finiteNumberOr(v,null)).filter(Number.isFinite).sort((p,q)=>p-q);if(!x.length)return null;const m=Math.floor(x.length/2);return x.length%2?x[m]:(x[m-1]+x[m])/2;};
+const pct=(a,b)=>finiteNumberOr(a,null)!==null&&finiteNumberOr(b,null)!==null&&Number(b)!==0?(Number(a)/Number(b)-1)*100:null;
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function withRetry(fn,{attempts=1,baseMs=150,maxBackoffMs=1500,sleepFn=sleep}={}){
   let last;
@@ -289,14 +291,19 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
 function closed(rows,now=Date.now()){
   return (Array.isArray(rows)?rows:[]).filter(c=>
     c?.closed!==false &&
-    Number.isFinite(Number(c?.openTime)) &&
-    Number.isFinite(Number(c?.closeTime)) &&
+    finiteNumberOr(c?.openTime,null)!==null &&
+    finiteNumberOr(c?.closeTime,null)!==null &&
     Number(c.closeTime)<=now &&
+    finiteNumberOr(c?.open,null)!==null &&
+    finiteNumberOr(c?.high,null)!==null &&
+    finiteNumberOr(c?.low,null)!==null &&
+    finiteNumberOr(c?.close,null)!==null &&
     Number(c.open)>0 &&
     Number(c.high)>=Math.max(Number(c.open),Number(c.close)) &&
     Number(c.low)<=Math.min(Number(c.open),Number(c.close)) &&
     Number(c.low)>0 &&
     Number(c.close)>0 &&
+    finiteNumberOr(c?.volume,null)!==null &&
     Number(c.volume)>=0
   ).sort((a,b)=>Number(a.openTime)-Number(b.openTime));
 }
@@ -547,8 +554,10 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,live
   // the closed-candle filter removes them.
   const gate=dataGate(series,now,cfg,{historicalReplay,allowMissingDepth:historicalReplay});
   const activityShock=assessQuietBaseActivityShock({fiveMinute:s['5m'],ticker,now,config:cfg});
-  const quietBasePreExpansion=assessQuietBasePreExpansion({fiveMinute:series['5m']||[],ticker,now,dataReady:gate.valid,dataIssues:gate.issues,config:cfg});
+  const quietBasePreExpansion=assessQuietBasePreExpansion({fiveMinute:series['5m']||[],ticker,now,dataReady:gate.valid&&finiteNumberOr(ticker.priceChange24h,null)!==null,dataIssues:gate.valid&&finiteNumberOr(ticker.priceChange24h,null)!==null?gate.issues:[...gate.issues,'TICKER_24H_CHANGE_UNKNOWN'],config:cfg});
   const p=finite(ticker.lastPrice,null);
+  // Unknown daily movement must never be treated as a quiet 0% move.
+  const dailyMovePct=hasFiniteNumber(ticker.priceChange24h)?Number(ticker.priceChange24h):null;
   if(!(p>0))return {score:null,decision_band:'DATA_INSUFFICIENT',pre_expansion_stage:'DATA_INSUFFICIENT',pre_expansion_fingerprint:{stage:'DATA_INSUFFICIENT',reason:'INVALID_PRICE'},activity_shock:activityShock,data_quality:0,liquidity_quality:null,data_stale:true,risk_flags:['INVALID_PRICE'],reason_codes:['INVALID_PRICE'],gates:gate};
   const r1=returns(s['1m'],1),r10=returns(s['1m'],10),r5=returns(s['5m'],1),r15=returns(s['15m'],1),r1h=returns(s['1h'],1),r4h=returns(s['4h'],1);
   const r5_3=returns(s['5m'],3),r15_3=returns(s['15m'],3);
@@ -611,7 +620,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,live
   const orderbookScore=liq.available?liq.score:50;
   const liquidityScore=historicalReplay?50:(liqQuality??0);
   const dataScore=gate.quality;
-  const quiet24=clamp(100-Math.max(0,Math.abs(Number(ticker.priceChange24h)||0))*5);
+  const quiet24=dailyMovePct===null?45:clamp(100-Math.abs(dailyMovePct)*5);
   const instant=finite(fastContext.price_change_pct,0);
   const accel=finite(fastContext.price_acceleration_pct,0);
   const pumpRisk=(
@@ -620,7 +629,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,live
     Number(r15_3||0)>=8
   )&&(
     historicalReplay?false:
-    (liquidityScore<cfg.minLiquidityQuality || Number(ticker.priceChange24h||0)>=cfg.hardExtended24hMovePct)
+    (liquidityScore<cfg.minLiquidityQuality || (dailyMovePct!==null&&dailyMovePct>=cfg.hardExtended24hMovePct))
   );
   const dumpRisk=(
     instant<=-2.5||
@@ -628,13 +637,13 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,live
     Number(r15_3||0)<=-8
   )&&(
     historicalReplay?false:
-    (liquidityScore<cfg.minLiquidityQuality || Number(ticker.priceChange24h||0)<=-cfg.hardExtended24hMovePct)
+    (liquidityScore<cfg.minLiquidityQuality || (dailyMovePct!==null&&dailyMovePct<=-cfg.hardExtended24hMovePct))
   );
   const highRisk=pumpRisk;
   // Anti-chase is directional: a mature upward move is extended, while a prior selloff
   // is handled by dump-risk and market/liquidity gates rather than mislabeled as a late pump.
   const extended=(
-    (Number(ticker.priceChange24h)||0)>=cfg.hardExtended24hMovePct||
+    (dailyMovePct!==null&&dailyMovePct>=cfg.hardExtended24hMovePct)||
     (Number(r1h)||0)>=cfg.hardExtended1hMovePct||
     (Number(r15)||0)>=cfg.hardExtended15mMovePct||
     unifiedFeatureEngine.stage==='ALREADY_EXTENDED'
@@ -665,12 +674,13 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,live
   const usable=weighted.filter(([k])=>Number.isFinite(scoreParts[k]));
   const rawScore=usable.reduce((sum,[k,w])=>sum+scoreParts[k]*w,0)/usable.reduce((sum,[,w])=>sum+w,0);
   const gateIssues=[...gate.issues];
+  if(dailyMovePct===null)gateIssues.push('TICKER_24H_CHANGE_UNKNOWN');
   if(!historicalReplay&&(!liq.available||liquidityScore<cfg.minLiquidityQuality))gateIssues.push('LIQUIDITY_INSUFFICIENT');
   if(!historicalReplay&&liq.available&&Number(liq.spread_bps)>cfg.maxSpreadBps)gateIssues.push('WIDE_SPREAD');
   if(extended)gateIssues.push('ALREADY_EXTENDED');
   if(fakeoutFlag(s['5m']).flag||roleEvidence.failed_breakout.detected)gateIssues.push('RECENT_FAKEOUT');
   if(historicalWeak)gateIssues.push('HISTORICAL_FOLLOWTHROUGH_WEAK');
-  const earlyScore=gate.valid&&gateIssues.every(x=>!['ALREADY_EXTENDED','LIQUIDITY_INSUFFICIENT','WIDE_SPREAD','RECENT_FAKEOUT','HISTORICAL_FOLLOWTHROUGH_WEAK'].includes(x))&&!highRisk&&!dumpRisk&&!historicalReplay
+  const earlyScore=dailyMovePct!==null&&gate.valid&&gateIssues.every(x=>!['ALREADY_EXTENDED','TICKER_24H_CHANGE_UNKNOWN','LIQUIDITY_INSUFFICIENT','WIDE_SPREAD','RECENT_FAKEOUT','HISTORICAL_FOLLOWTHROUGH_WEAK'].includes(x))&&!highRisk&&!dumpRisk&&!historicalReplay
     ? Number(clamp(rawScore).toFixed(1)):null;
   const policyIssues=gateIssues.filter(x=>!gate.issues.includes(x));
   const legacyDecisionBand=decideEarlyExpansionBand({
@@ -688,7 +698,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,live
   const resistanceDistanceAtr=Number.isFinite(br5.distance_pct)&&Number.isFinite(atrPct)&&atrPct>0?-br5.distance_pct/atrPct:null;
   const falseBreakout=fakeoutFlag(s['5m']).flag||fakeoutFlag(s['15m']).flag||roleEvidence.failed_breakout.detected;
   const preExpansion=assessPreExpansionFingerprint({
-    dataReady:gate.valid&&p>0,dailyChangePct:ticker.priceChange24h,lastPrice:p,
+    dataReady:gate.valid&&p>0&&dailyMovePct!==null,dailyChangePct:ticker.priceChange24h,lastPrice:p,
     maxMove24hPct:Math.min(8,Number(cfg.maxQuiet24hMovePct??8)),
     maxMove5mPct:2.5,maxMove10mPct:3.8,maxMove15mPct:6,
     baseScore:hl.score*.42+compressionExpansion*.35+quiet24*.23,
@@ -860,13 +870,14 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,live
       score_allowed:Boolean(earlyScore!=null),
       data_gate:gate,
       liquidity_gate:historicalReplay?{allowed:null,reason:'HISTORICAL_ORDERBOOK_UNAVAILABLE'}:{allowed:liq.available&&Number(liqQuality)>=cfg.minLiquidityQuality&&Number(liq.spread_bps)<=cfg.maxSpreadBps,reason:liq.available?'OK':'ORDERBOOK_UNAVAILABLE'},
-      anti_chase:{allowed:!extended&&!highRisk,extended,hard_extended_24h:Math.abs(Number(ticker.priceChange24h)||0)>=cfg.hardExtended24hMovePct},
+      anti_chase:{allowed:!extended&&!highRisk&&dailyMovePct!==null,extended,hard_extended_24h:dailyMovePct===null?null:Math.abs(dailyMovePct)>=cfg.hardExtended24hMovePct},
       freshness_data_quality:gate.valid
     },
     risk_flags:[...new Set(riskFlags)],
     reason_codes:[...new Set([
       ...reasons,
       ...gate.issues,
+      dailyMovePct===null?'TICKER_24H_CHANGE_UNKNOWN':null,
       extended?'ALREADY_EXTENDED':null,
       highRisk?'HIGH_RISK_PUMP':null,
       dumpRisk?'HIGH_RISK_DUMP':null,
@@ -1541,6 +1552,14 @@ export function buildMicroFingerprint({oneMinute=[],fiveMinute=[],btcFiveMinute=
   if(issues.length)return {eligible:false,stage:'DATA_INSUFFICIENT',score:null,confirmation_count:0,confirmation_total:10,mode:'DATA_INSUFFICIENT',closed_candles_only:true,reason_codes:[...new Set(issues)].slice(0,30),risk_flags:[],metrics:{},category_scores:{}};
   const m1=i1.rows,m5=i5.rows,btc=ib.rows;
   if(m1.length<80||m5.length<40||btc.length<20)return {eligible:false,stage:'WARMING_UP',score:null,confirmation_count:0,confirmation_total:10,mode:'WARMING_UP',closed_candles_only:true,reason_codes:['MICRO_FINGERPRINT_WARMING_UP'],risk_flags:[],metrics:{},category_scores:{}};
+  // Daily movement is required for anti-chase classification. Unknown must
+  // stay unknown; treating it as 0% can make an extended/missing-data symbol
+  // look like an untouched quiet base.
+  if(!hasFiniteNumber(ticker?.priceChange24h))return {
+    eligible:false,stage:'DATA_INSUFFICIENT',score:null,confirmation_count:0,confirmation_total:10,
+    mode:'DATA_INSUFFICIENT',closed_candles_only:true,
+    reason_codes:['TICKER_24H_CHANGE_UNKNOWN'],risk_flags:[],metrics:{},category_scores:{}
+  };
   const r1=returns(m1,1),r3=returns(m1,3),r5=returns(m5,1),r15=returns(m5,3);
   const prev5=returns(m5.slice(0,-3),3),prev1=returns(m1.slice(0,-3),3);
   const accel5=Number.isFinite(r15)&&Number.isFinite(prev5)?r15-prev5:null;
@@ -1559,7 +1578,7 @@ export function buildMicroFingerprint({oneMinute=[],fiveMinute=[],btcFiveMinute=
   const rsiNow=rsi(m5,14),rsiPrev=rsi(m5.slice(0,-3),14),rsiSlope=Number.isFinite(rsiNow)&&Number.isFinite(rsiPrev)?rsiNow-rsiPrev:null;
   const adxObj=adx(m5,14),adxNow=adxObj?.adx??null;
   const hl=higherLowScore(m5.slice(-48)),br=breakoutInfo(m5,20),location=closePosition(m5,30);
-  const price24Abs=Math.abs(Number(ticker.priceChange24h)||0);
+  const price24Abs=Math.abs(Number(ticker.priceChange24h));
   const m={rv1,rv5,tr1,tr5,takerRatio:taker.ratio,takerDelta:taker.delta,bbRatio,rangeRatio,atrRatio,emaStack,emaReclaim,relativeStrength:rs,r1,r5,r15,accel5,accel1,rsi:rsiNow,rsiSlope,macSlope,adx:adxNow,hlScore:hl.score,resistanceDistance:br.distance_pct,breakoutBroken:br.broken,location,vwapDistance:vwDist,priceChange24hAbs:price24Abs};
   const activityShock=assessQuietBaseActivityShock({fiveMinute:m5,ticker,now,config:cfg});
   const prof=scoreMicroProfile(m);

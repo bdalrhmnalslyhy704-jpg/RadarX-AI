@@ -1,10 +1,11 @@
 import {MarketUniverseScanner,buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
+import {finiteNumberOr} from './finite-number.mjs';
 import {BinanceAllMarketTickerClient} from '../market/binance-market-ticker-ws.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 
 const clamp=(n,min=0,max=100)=>Math.max(min,Math.min(max,Number(n)||0));
-const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
+const finite=(v,d=null)=>finiteNumberOr(v,d);
 const avg=xs=>{const a=xs.filter(Number.isFinite);return a.length?a.reduce((s,x)=>s+x,0)/a.length:null};
 
 export const MOVE_RADAR_DEFAULTS=Object.freeze({
@@ -43,9 +44,10 @@ export const MOVE_RADAR_DEFAULTS=Object.freeze({
 
 function strategyScore(candidate) {
   const rows=Array.isArray(candidate?.strategies)?candidate.strategies:[];
-  const accepted=rows.filter(x=>x?.accepted&&Number.isFinite(Number(x?.score?.value)));
-  const best=rows.map(x=>Number(x?.score?.value)).filter(Number.isFinite).reduce((m,x)=>Math.max(m,x),0);
-  const acceptedMean=avg(accepted.map(x=>Number(x.score.value)))??0;
+  const scoreOf=row=>finite(row?.score?.value,null);
+  const accepted=rows.filter(x=>x?.accepted&&scoreOf(x)!==null);
+  const best=rows.map(scoreOf).filter(Number.isFinite).reduce((m,x)=>Math.max(m,x),0);
+  const acceptedMean=avg(accepted.map(scoreOf))??0;
   return {acceptedCount:accepted.length,bestScore:best,acceptedMean};
 }
 
@@ -53,8 +55,8 @@ function component(candidate,keyPaths,fallback=50){
   for(const path of keyPaths){
     let node=candidate;
     for(const key of path.split('.')) node=node?.[key];
-    const n=Number(node);
-    if(Number.isFinite(n)) return clamp(n);
+    const n=finite(node,null);
+    if(n!==null) return clamp(n);
   }
   return fallback;
 }

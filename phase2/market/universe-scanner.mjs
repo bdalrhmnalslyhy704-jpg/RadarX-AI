@@ -5,6 +5,7 @@ import {
 } from '../../phase1/radarx-phase1-engine.mjs';
 import {listActiveStrategies, normalizeStrategyResult} from '../../phase1/strategy-registry.mjs';
 import {FUTURE_DATA_CLOCK_SKEW_MS, futureIssues, normalizeEpochMs, timestampUnit} from '../core/data-quality.mjs';
+import {finiteNumberOr} from '../core/finite-number.mjs';
 
 export const MARKET_RADAR_DEFAULTS = Object.freeze({
   quote: 'USDT',
@@ -81,13 +82,15 @@ function logNorm(value, lo, hi) {
 export function normalizeTickerRow(ticker, quote) {
   if (!ticker || !validSymbolName(ticker.symbol)) return null;
   const symbol = String(ticker.symbol).toUpperCase();
-  const lastPrice = Number(ticker.lastPrice);
-  const quoteVolume = Number(ticker.quoteVolume);
-  const count = Number(ticker.count);
-  const change = Number(ticker.priceChangePercent);
-  const highPrice24h = Number(ticker.highPrice);
-  const lowPrice24h = Number(ticker.lowPrice);
-  const tickerTime = ['closeTime','eventTime','openTime'].map(key => Number(ticker[key])).find(Number.isFinite) ?? null;
+  // Preserve missing/blank fields as unknown: Number(null) and Number('') both become 0.
+  const lastPrice = finiteNumberOr(ticker.lastPrice,null);
+  const quoteVolume = finiteNumberOr(ticker.quoteVolume,null);
+  const count = finiteNumberOr(ticker.count,null);
+  const change = finiteNumberOr(ticker.priceChangePercent,null);
+  const highPrice24h = finiteNumberOr(ticker.highPrice,null);
+  const lowPrice24h = finiteNumberOr(ticker.lowPrice,null);
+  const tickerTime = ['closeTime','eventTime','openTime']
+    .map(key => finiteNumberOr(ticker[key],null)).find(Number.isFinite) ?? null;
   if (!Number.isFinite(lastPrice) || lastPrice <= 0) return null;
   if (!Number.isFinite(quoteVolume) || quoteVolume < 0) return null;
   if (!Number.isFinite(count) || count < 0) return null;
