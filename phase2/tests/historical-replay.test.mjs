@@ -349,21 +349,21 @@ test('a candidate episode resets only after a sustained absence and respects epi
     oneMinuteCandles: rows,
     aggTrades: syntheticTrades(rows),
     startTime: rows[180].openTime,
-    endTime: rows[193].closeTime,
+    endTime: rows[192].closeTime,
     tradeCoverageComplete: true,
-    candidateCooldownMs: 4 * MINUTE,
+    candidateCooldownMs: 8 * MINUTE,
     candidateResetMs: 2 * MINUTE,
     evaluate() {
       const candidate_detected = flags[i++] === true;
       return {accepted:false,candidate_detected,reason_codes:['TEST_EPISODE_RESET']};
     }
   });
-  assert.equal(replay.summary.candidate_raw_detections,10);
-  assert.equal(replay.summary.candidate_detections,3);
-  assert.equal(replay.summary.candidate_duplicate_observations,5);
-  assert.equal(replay.summary.candidate_suppressed_by_cooldown,2);
+  assert.equal(replay.summary.candidate_raw_detections,7);
+  assert.equal(replay.summary.candidate_detections,2);
+  assert.equal(replay.summary.candidate_duplicate_observations,4);
+  assert.equal(replay.summary.candidate_suppressed_by_cooldown,1);
   assert.deepEqual(replay.steps.filter(row => row.candidate_detected).map(row=>row.timestamp),[
-    replay.steps[0].timestamp,replay.steps[6].timestamp,replay.steps[12].timestamp
+    replay.steps[0].timestamp,replay.steps[12].timestamp
   ]);
 });
 
