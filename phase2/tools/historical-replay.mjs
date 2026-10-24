@@ -132,7 +132,7 @@ function numericOrNull(value){
 function uniqueReasonCodes(...groups){
   return [...new Set(groups.flatMap(x=>Array.isArray(x)?x:[]).map(x=>String(x??'').trim()).filter(Boolean))].slice(0,30);
 }
-function buildCandidateShadowResult(profile,analysis,input,{eligible,score,stage,reasonCodes=[],extraGateFailures=[]}={}){
+export function buildCandidateShadowResult(profile,analysis,input,{eligible,score,stage,reasonCodes=[],extraGateFailures=[]}={}){
   const reasons=uniqueReasonCodes(
     reasonCodes,analysis?.reason_codes,analysis?.data_quality_reasons,analysis?.watch_blockers,
     analysis?.risk_flags
@@ -166,20 +166,28 @@ function buildCandidateShadowResult(profile,analysis,input,{eligible,score,stage
   const outcomeReasonCodes=eligible
     ?uniqueReasonCodes(reasons,['HISTORICAL_CANDIDATE_DETECTED','CANDIDATE_SHADOW_NOT_A_PUSH'])
     :uniqueReasonCodes(reasons,['DETECTOR_CANDIDATE_NOT_CONFIRMED']);
+  const candidate=Boolean(eligible);
   return {
-    accepted:Boolean(eligible),
-    accepted_mode:eligible?profile+'_CANDIDATE_SHADOW':'NONE',
+    // A candle-only shadow is not an executed notification. Keeping this false
+    // prevents candidate-only evidence from inflating alert hit-rate statistics.
+    accepted:false,
+    accepted_mode:'NONE_HISTORICAL_CANDIDATE_SHADOW',
+    candidate_detected:candidate,
+    candidate_mode:candidate?profile+'_CANDIDATE_SHADOW':'NONE',
+    candidate_reasons:uniqueReasonCodes(
+      reasons,candidate?['HISTORICAL_CANDIDATE_DETECTED']:['CANDIDATE_GATE_NOT_MET'],blocked
+    ),
     alert,
     score:numericOrNull(score),
     stage:alert.stage,
-    candidate_eligible:Boolean(eligible),
+    candidate_eligible:candidate,
     core_trigger_eligible:Boolean(analysis?.eligible===true),
     notificationGate:{eligible:null,failures:blocked},
     notification_gate:{eligible:null,failures:blocked},
     strict_gate_failures:uniqueReasonCodes(reasons,blocked),
     reason_codes:outcomeReasonCodes,
     shadow_evaluation:{
-      profile,detector_candidate:Boolean(eligible),live_notification_simulated:false,
+      profile,detector_candidate:candidate,live_notification_simulated:false,
       unavailable_historical_evidence:blocked
     }
   };
