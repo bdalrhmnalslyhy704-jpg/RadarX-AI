@@ -214,6 +214,9 @@ export function historicalProfileRequirements(profile, config = CONFIG) {
   let tradeHistoryRequired = false;
   switch (String(profile || '').toUpperCase()) {
     case 'STRONG_MOVE_RADAR':
+      // Candle and trade history can replay the detector, but not the historical
+      // order-book depth/spread or a real push delivery. Keep that limitation explicit.
+      unavailableEvidence.push('HISTORICAL_ORDERBOOK_UNAVAILABLE');
       break;
     case 'RADAR8_PREMOVE_SHADOW':
     case 'EARLY_EXPANSION_RADAR':
