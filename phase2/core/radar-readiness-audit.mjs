@@ -32,7 +32,9 @@ function percentile(values, p) {
 }
 function buildAnalystReadiness(runtime, now) {
   if (runtime === null || runtime === undefined) {
-    return {required:false,configured:null,status:'NOT_PROVIDED',expected_analysts:20,specialists_per_assessment:19,
+    // The 20-analyst layer is a required part of readiness, not optional telemetry.
+    // Missing runtime evidence must never let the twelve-radar system claim READY.
+    return {required:true,configured:false,status:'DEGRADED',expected_analysts:20,specialists_per_assessment:19,
       final_analyst_per_assessment:1,worker_running:null,assessments_observed:0,fresh_assessments:0,
       complete_fresh_assessments:0,incomplete_fresh_assessments:0,stale_assessments:0,
       queue_pending_count:null,queue_oldest_pending_age_ms:null,last_scan_at:null,last_scan_error:null,
@@ -195,14 +197,12 @@ export function buildRadarReadinessAudit({
   if (!fullCacheReady) readinessReasons.push('CLOSED_CANDLE_CACHE_' + cacheStatus);
   if (candleCache?.websocket_live !== true) readinessReasons.push('CANDLE_WEBSOCKET_NOT_LIVE');
   if (candleCache?.websocket_sync_ready !== true) readinessReasons.push('CANDLE_WEBSOCKET_NOT_SYNC_READY');
-  if (analystRuntime !== null && analystRuntime !== undefined) {
-    if (!analystReadiness.configured) readinessReasons.push('MULTI_ANALYST_ENGINE_UNAVAILABLE');
-    else if (!analystReadiness.worker_running) readinessReasons.push('MULTI_ANALYST_WORKER_NOT_RUNNING');
-    if (analystReadiness.last_scan_error) readinessReasons.push('MULTI_ANALYST_LAST_SCAN_ERROR');
-    if (analystReadiness.incomplete_fresh_assessments > 0) readinessReasons.push('MULTI_ANALYST_ASSESSMENT_INCOMPLETE');
-    else if (analystReadiness.complete_fresh_assessments === 0 && analystReadiness.status !== 'DEGRADED')
-      readinessReasons.push('MULTI_ANALYST_ASSESSMENTS_NOT_READY');
-  }
+  if (!analystReadiness.configured) readinessReasons.push('MULTI_ANALYST_ENGINE_UNAVAILABLE');
+  else if (!analystReadiness.worker_running) readinessReasons.push('MULTI_ANALYST_WORKER_NOT_RUNNING');
+  if (analystReadiness.last_scan_error) readinessReasons.push('MULTI_ANALYST_LAST_SCAN_ERROR');
+  if (analystReadiness.incomplete_fresh_assessments > 0) readinessReasons.push('MULTI_ANALYST_ASSESSMENT_INCOMPLETE');
+  else if (analystReadiness.complete_fresh_assessments === 0 && analystReadiness.status !== 'DEGRADED')
+    readinessReasons.push('MULTI_ANALYST_ASSESSMENTS_NOT_READY');
 
   const allWorkersRunning = registered === expected && radarRoleCoverageReady && running === expected &&
     failed === 0 && (!swarm?.status || swarm.status === 'RUNNING');
@@ -211,8 +211,8 @@ export function buildRadarReadinessAudit({
   const noLatestCycleErrors = !perRadar.some(radar => radar.cycle_state === 'LAST_CYCLE_ERROR');
   const websocketHealthy = candleCache?.websocket_live === true && candleCache?.websocket_sync_ready === true;
   const infrastructureReady = allWorkersRunning && allCyclesObserved && fullCacheReady && noStaleCycles && noLatestCycleErrors;
-  const analystRequired = analystRuntime !== null && analystRuntime !== undefined;
-  const analystReady = !analystRequired || analystReadiness.status === 'READY';
+  const analystRequired = analystReadiness.required !== false;
+  const analystReady = analystReadiness.status === 'READY';
   const analystWarming = analystRequired && analystReadiness.status === 'WARMING';
   const status = infrastructureReady && analystReady ? 'READY'
     : analystRequired && analystReadiness.status === 'DEGRADED' ? 'DEGRADED'
