@@ -1391,7 +1391,7 @@ test('Radar 8 confirmed early-flow observations create a separate monitor-only a
 });
 
 
-test('Radar 8 keeps watch-only traces feed-only and never calls a push route',async()=>{
+test('Radar 8 uses the dedicated watch route but leaves delivery disabled when no provider exists',async()=>{
   const storedAlerts=[],storedEvents=[],pushCalls=[];
   const store={
     async appendEarlyExpansionAlert(alert){storedAlerts.push({...alert});},
@@ -1406,7 +1406,7 @@ test('Radar 8 keeps watch-only traces feed-only and never calls a push route',as
       assert.equal(alert.event,'EARLY_FLOW_WATCH_ONLY');
       assert.equal(alert.watch_only,true);
       assert.equal(alert.entry_eligible,false);
-      return {status:'PROVIDER_DISABLED',attempted:false,notifications:[]};
+      return {status:'PUSH_PROVIDER_DISABLED',attempted:false,notifications:[]};
     }
   };
   const radar=new EarlyExpansionRadar({
@@ -1427,14 +1427,14 @@ test('Radar 8 keeps watch-only traces feed-only and never calls a push route',as
   },now);
   const result=await radar.recordWatchOnlyAlert(alert,'EARLY_FLOW_WATCH_TRACE');
   assert.equal(result.stored,true);
-  assert.equal(result.pushStatus,'REJECTED_WATCH_ONLY');
+  assert.equal(result.pushStatus,'PUSH_PROVIDER_DISABLED');
   assert.equal(result.pushAttempted,false);
   assert.equal(storedAlerts.length,0,'watch-only observations must not enter the actionable-alert feed polled by Android');
   assert.equal(storedEvents.length,1,'diagnostic events remain available for outcome analysis');
   assert.equal(storedEvents[0].event_type,'EARLY_FLOW_WATCH_TRACE');
   assert.equal(storedEvents[0].feed_status,'TRACE_ONLY');
-  assert.equal(storedEvents[0].notification_status,'REJECTED_WATCH_ONLY');
-  assert.equal(watchPushCalls,1,'the dedicated watch-only policy validates every candidate');
+  assert.equal(storedEvents[0].notification_status,'PUSH_PROVIDER_DISABLED');
+  assert.equal(watchPushCalls,1,'the Radar 8 trace delegates to the dedicated watch route');
   assert.equal(pushCalls.length,0,'the standard actionable-alert path must not be called');
 });
 
