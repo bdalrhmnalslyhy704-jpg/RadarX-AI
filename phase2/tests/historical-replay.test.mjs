@@ -31,6 +31,27 @@ test('historical replay passes only timeframe candles closed by the current deci
   assert.ok(replay.steps.every(row=>row.input_max_candle_close_at<=row.timestamp));
 });
 
+test('replay coverage counts closed candles correctly when end is the next candle open boundary',()=>{
+  const rows=candles(260);
+  const start=rows[180].openTime;
+  const end=rows[186].openTime;
+  const replay=runHistoricalReplay({
+    symbol:'BOUNDARYUSDT',
+    oneMinuteCandles:rows,
+    aggTrades:syntheticTrades(rows),
+    startTime:start,
+    endTime:end,
+    outcomeHorizonMs:0,
+    tradeCoverageComplete:true,
+    evaluate(){return {accepted:false,reason_codes:['BOUNDARY_COVERAGE_TEST']};}
+  });
+  assert.equal(replay.steps.length,6);
+  assert.equal(replay.data_quality.window_candles_expected,6);
+  assert.equal(replay.data_quality.window_candles_observed,6);
+  assert.equal(replay.data_quality.candle_fetch_complete,true,
+    'a fully contiguous six-candle window must not fail by expecting the excluded next candle');
+});
+
 test('historical replay lists every canonical radar without network access',()=>{
   const script=resolve(dirname(fileURLToPath(import.meta.url)),'../tools/historical-replay.mjs');
   const run=spawnSync(process.execPath,[script,'--list-profiles'],{encoding:'utf8',timeout:10_000});
