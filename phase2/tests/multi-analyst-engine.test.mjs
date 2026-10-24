@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {MULTI_ANALYST_NAMES,MULTI_ANALYST_ROLE_CONTRACT,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible,selectWithPriorityRotation,selectDiscoveryWithRadarReviewPriority,countAnalystEvidenceCoverage} from '../core/multi-analyst-engine.mjs';
+import {MULTI_ANALYST_NAMES,MULTI_ANALYST_ROLE_CONTRACT,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible,selectWithPriorityRotation,selectDiscoveryWithRadarReviewPriority,countAnalystEvidenceCoverage,buildMultiAnalystMarketMoverObservations} from '../core/multi-analyst-engine.mjs';
 
 // Continuous analyst cycles target one minute start-to-start, subtracting the
 // time spent scanning and never scheduling a negative delay after a slow cycle.
@@ -360,6 +360,35 @@ console.log('multi-analyst queued radar priority/capacity preservation: PASS');
   assert.deepEqual(allMissing,{used:0,total:3});
 }
 console.log('analyst evidence integrity regression: PASS');
+
+// High 24h movement remains visible even if a symbol did not enter the deep analyst pool.
+{
+  const rows=[
+    {symbol:'BMTUSDT',lastPrice:.04163,priceChange24h:46.33,quoteVolume24h:36550000,count:20000},
+    {symbol:'ERAUSDT',lastPrice:.096,priceChange24h:40.97,quoteVolume24h:20400000,count:18000},
+    {symbol:'KATUSDT',lastPrice:.00459,priceChange24h:15.04,quoteVolume24h:4840000,count:5000},
+    {symbol:'FLATUSDT',lastPrice:1,priceChange24h:2,quoteVolume24h:1000000,count:1000}
+  ];
+  const analysed=[{
+    symbol:'KATUSDT',verdict:'REJECT',final_score:42,
+    data_quality:95,liquidity_quality:90,
+    analyst_execution:{specialist_count:19,analysis_failed:false},
+    reason_codes:['NO_EARLY_SETUP'],
+    final_judge:{hardReasons:['BUY_FLOW_NOT_CONFIRMED']}
+  }];
+  const out=buildMultiAnalystMarketMoverObservations(rows,analysed,{limit:10,minQuoteVolume24h:300000});
+  assert.deepEqual(out.map(x=>x.symbol),['BMTUSDT','ERAUSDT','KATUSDT']);
+  assert.equal(out[0].price_change_24h,46.33);
+  assert.equal(out[0].stage,'ALREADY_EXTENDED');
+  assert.equal(out[0].analysis_status,'NOT_DEEP_SCANNED_THIS_CYCLE');
+  assert.equal(out[1].entry_eligible,false);
+  assert.equal(out[2].analysis_status,'ANALYZED_THIS_CYCLE');
+  assert.equal(out[2].analyst_verdict,'REJECT');
+  assert.ok(out.every(x=>x.diagnostic_only===true&&x.watch_only===true&&x.entry_eligible===false));
+}
+console.log('multi-analyst ticker-mover visibility regression: PASS');
+
+
 
 // Per-horizon calibration must use its own closed candle, not a much later ticker price.
 {
