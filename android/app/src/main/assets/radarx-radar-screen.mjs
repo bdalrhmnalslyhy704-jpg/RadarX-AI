@@ -1,4 +1,4 @@
-import {getRadarStatus,getRadarAlerts,getFalconEyeRadar,getRotationRadar,setRadarState} from './radarx-backend-client.mjs';
+import {getRadarStatus,getRadarAlerts,getFalconEyeRadar,getRotationRadar,getMoveRadar,getStrongMoveRadar,setRadarState} from './radarx-backend-client.mjs';
 
 const P = {
   EARLY_MOVE_RADAR:{n:'المدمر',i:'☠️',c:'#ff3b30',m:'ما قبل الانفجار',s:'Pre-Breakout Fingerprint + Relative Strength + Compression',t:'1m • 5m • 15m',a:['Fast Impulse','RVOL','Taker Flow','EMA Reclaim','S/R','RSI','OBV','Wyckoff','MTF'],g:['يمنع مطاردة الحركة','جودة وسيولة لازمتان','شموع مغلقة فقط']},
@@ -161,7 +161,7 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
 
     async function refresh(force=false){
       if(dead||busy)return;
-      if(!force&&id!=='FALCON_EYE_RADAR'&&id!=='ROTATION_LAG_RADAR'){
+      if(!force&&id!=='FALCON_EYE_RADAR'&&id!=='ROTATION_LAG_RADAR'&&id!=='EARLY_MOVE_RADAR'&&id!=='STRONG_MOVE_RADAR'){
         const cached=readRadarCache();
         if(cached){
           const body=cached.body||{};
@@ -181,6 +181,8 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
         let a;
         if(id==='ROTATION_LAG_RADAR') a=await getRotationRadar({limit:20,scan:Boolean(force)});
         else if(id==='FALCON_EYE_RADAR') a=await getFalconEyeRadar({limit:20,scan:Boolean(force)});
+        else if(id==='EARLY_MOVE_RADAR') a=await getMoveRadar({limit:50});
+        else if(id==='STRONG_MOVE_RADAR') a=await getStrongMoveRadar({limit:50});
         else a=await getRadarAlerts({radar:id,limit:50});
         if(a.ok){
           writeRadarCache(a.body||{});
@@ -191,6 +193,16 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
             else if(h){const x=h.decision_diagnostics||d;stn.textContent='الجوكر • '+(h.running?'LIVE':'OFFLINE')+' • فُحص '+q(x.evaluated||0)+' • مراقبة مبكرة '+q(x.watch_candidates||0)+' • تنبيهات مراقبة '+q(h.watch_alerts_emitted||0)+' • آخر خطأ '+e(h.last_error||'لا يوجد');}
           }
           else if(id==='FALCON_EYE_RADAR')show([].concat(a.body&&a.body.candidates||[],a.body&&a.body.alerts||[]),a.body&&a.body.market_movers||[]);
+          else if(id==='EARLY_MOVE_RADAR'||id==='STRONG_MOVE_RADAR'){
+            const body=a.body||{},h=body.monitoring||{};
+            show(Array.isArray(body.alerts)?body.alerts:[]);
+            const last=h.last_scan_completed_at||h.last_scan_at||h.last_reconcile_at||h.last_tick_at;
+            const when=Number(last)>0?new Date(Number(last)).toLocaleString('ar-YE',{timeZone:'Asia/Aden',hour:'2-digit',minute:'2-digit',second:'2-digit'}):'لم تكتمل دورة بعد';
+            const counts=id==='STRONG_MOVE_RADAR'
+              ?' • تحليل '+q(h.scans||0)+' عملة • تنبيهات '+q(h.alerts_emitted||0)+' • طوارئ '+q(h.emergency_alerts_emitted||0)
+              :' • تحليل عميق جارٍ '+q(h.active_deep_scans||0)+' • في الانتظار '+q(h.queued_deep_scans||0)+' • تنبيهات '+q(h.alerts_emitted||0);
+            stn.textContent=(h.running?'● LIVE':'○ غير مشغّل')+(h.busy?' • الفحص جارٍ':'')+counts+' • آخر نشاط '+when+(h.last_error?' • خطأ: '+String(h.last_error):'');
+          }
           else show(a.body&&a.body.alerts||[]);
         }else if(a.status===404)box.innerHTML='<div class="muted">لا يوجد مسار بيانات لهذا الرادار في الخادم الحالي.</div>';
       }catch(x){

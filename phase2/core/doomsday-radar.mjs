@@ -439,6 +439,7 @@ export class DoomsdayRadar{
     this.running=false;this.busy=false;this.timer=null;this.universe=[];this.universeAt=0;
     this.lastPrices=new Map();this.lastAlertAt=new Map();this.latestCandidates=[];this.alertTimestamps=[];
     this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;this.busySinceAt=null;
+    this.latestResults=[];this.lastCycleAttempts=0;this.lastCycleAnalyses=0;this.lastCycleFailures=0;this.lastCycleCompletedAtMs=null;
   }
   start(){
     if(this.running)return;
@@ -547,11 +548,15 @@ export class DoomsdayRadar{
         btcFive=r.candles;
       }
       const out=new Array(merged.length);let next=0;
+      this.lastCycleAttempts=merged.length;
       const width=Math.max(1,Math.min(12,Number(this.config.deepConcurrency)||4));
       const worker=async()=>{while(true){const i=next++;if(i>=merged.length)return;try{out[i]=await this.deepScan(merged[i],btcFive||[]);}catch(e){this.noteError(e,'row');}}};
       await Promise.all(Array.from({length:Math.min(width,merged.length||1)},worker));
-      this.latestCandidates=out.filter(x=>x?.eligible&&x?.analysis?.elite_gate?.eligible).sort((a,b)=>Number(b.analysis?.elite_gate?.score||0)-Number(a.analysis?.elite_gate?.score||0)).slice(0,3);
-      this.lastScanAtMs=this.clock();this.lastError=null;
+      this.latestResults=out.filter(Boolean).sort((a,b)=>Number(b.analysis?.score||0)-Number(a.analysis?.score||0));
+      this.lastCycleAnalyses=this.latestResults.length;
+      this.lastCycleFailures=Math.max(0,this.lastCycleAttempts-this.lastCycleAnalyses);
+      this.latestCandidates=this.latestResults.filter(x=>x?.eligible&&x?.analysis?.elite_gate?.eligible).sort((a,b)=>Number(b.analysis?.elite_gate?.score||0)-Number(a.analysis?.elite_gate?.score||0)).slice(0,3);
+      this.lastScanAtMs=this.clock();this.lastCycleCompletedAtMs=this.lastScanAtMs;this.lastError=null;
       return true;
     }finally{this.busy=false;this.busySinceAt=null;}
   }
@@ -564,14 +569,17 @@ export class DoomsdayRadar{
   }
   snapshot(limit=20){
     return {radar:'DOOMSDAY_RADAR',radar_name:'Radar 6 — يوم القيامة',as_of:this.lastScanAtMs?new Date(this.lastScanAtMs).toISOString():null,
-      universe:{eligible_spot_symbols:this.universe.length,scanned:this.latestCandidates.length,deep_scanned:this.scans},
+      universe:{eligible_spot_symbols:this.universe.length,scanned:this.lastCycleAnalyses,attempted:this.lastCycleAttempts,failed:this.lastCycleFailures,deep_scanned:this.scans},
       candidates:(this.latestCandidates||[]).slice(0,Math.max(1,Math.min(50,Number(limit)||20))),
+      observations:(this.latestResults||[]).slice(0,Math.max(1,Math.min(50,Number(limit)||20))),
       monitoring:this.health(),meta:{live:this.running,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
       watchlist:this.config.watchlist||[]};
   }
   health(){
     return {running:this.running,busy:this.busy,busy_since_at:this.busySinceAt,poll_ms:this.config.pollMs,radar:'DOOMSDAY_RADAR',radar_name:'Radar 6 — يوم القيامة',universe:this.universe.length,
-      last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,
+      last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,last_scan_completed_at:this.lastCycleCompletedAtMs,
+      scans:this.scans,last_cycle_attempts:this.lastCycleAttempts,last_cycle_analyses:this.lastCycleAnalyses,last_cycle_failures:this.lastCycleFailures,
+      alerts_emitted:this.alertCount,last_error:this.lastError,
       algorithms:['1m/3m/5m Momentum','Acceleration vs Self Baseline','Relative Volume','Trade Count Surge','Taker Flow','Squeeze Release','Donchian Breakout','EMA9/21 Burst','VWAP Reclaim','ATR Expansion','Relative Strength vs BTC','Range Acceptance','Closed-Candle Confirmation Streak','Sniper Freshness / Anti-Chase','Hourly Alert Budget'],
       source:'Binance Public REST',closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'};
   }

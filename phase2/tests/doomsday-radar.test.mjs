@@ -105,6 +105,9 @@ test('Doomsday class is paper-only and can select forced watchlist rows',async()
   assert.equal(radar.health().real_order_execution,false);
   assert.ok(radar.scans>=1);
   assert.equal(radar.health().alerts_emitted<=1,true);
+  assert.ok(radar.snapshot().universe.attempted>=1);
+  assert.ok(radar.snapshot().universe.scanned>=1,'completed deep analyses must be counted independently of alert eligibility');
+  assert.ok(radar.snapshot().observations.some(x=>x.symbol==='FETUSDT'),'non-eligible but valid deep scans must remain visible for diagnosis');
 });
 
 
