@@ -232,12 +232,23 @@ export class PushManager{
       return rejected('UNTRUSTED_OR_UNKNOWN_MARKET_SOURCE');
 
     const dataQuality=firstFinite([
-      alert?.data_quality,alert?.data_status?.data_quality,alert?.components?.data_quality,
-      alert?.early_expansion?.data_quality,alert?.early_flow_watch_evidence?.data_quality
+      alert?.data_quality,alert?.data_status?.data_quality,
+      alert?.notification_gate?.data_quality,alert?.elite_gate?.data_quality,
+      alert?.components?.data_quality,alert?.early_expansion?.data_quality,
+      alert?.early_move?.data_quality,alert?.early_wake?.data_quality,alert?.pre_explosion?.data_quality,
+      alert?.strong_move?.data_quality,alert?.rotation?.data_quality,alert?.kahir_analysis?.data_quality,
+      alert?.doomsday?.data_quality,alert?.professor_opinion?.data_quality,alert?.almuqawim?.data_quality,
+      alert?.coin_hunter?.data_quality,alert?.factors?.data_quality,alert?.whale_accumulation?.data_quality,
+      alert?.falcon_eye?.data_quality,alert?.components?.dataQuality,alert?.early_flow_watch_evidence?.data_quality
     ]);
     const liquidityQuality=firstFinite([
-      alert?.liquidity_quality_live,alert?.liquidity_quality,alert?.liquidity_metrics?.liquidity_quality,
-      alert?.early_expansion?.liquidity_quality,alert?.activity_shock?.liquidity_quality,
+      alert?.liquidity_quality_live,alert?.liquidity_quality,
+      alert?.notification_gate?.liquidity_quality,alert?.elite_gate?.liquidity_quality,
+      alert?.liquidity_metrics?.liquidity_quality,alert?.early_expansion?.liquidity_quality,
+      alert?.early_move?.liquidity_quality,alert?.early_wake?.liquidity_quality,alert?.pre_explosion?.liquidity_quality,
+      alert?.strong_move?.liquidity_quality,alert?.rotation?.liquidity_quality,alert?.kahir_analysis?.liquidity_quality,
+      alert?.doomsday?.liquidity_quality,alert?.professor_opinion?.liquidity_quality,alert?.almuqawim?.liquidity_quality,
+      alert?.coin_hunter?.liquidity_quality,alert?.whale_accumulation?.liquidity_quality,alert?.falcon_eye?.liquidity_quality,
       alert?.early_flow_watch_evidence?.liquidity_quality
     ]);
     if(dataQuality===null||dataQuality<70||dataQuality>100)return rejected('DATA_QUALITY_MISSING_OR_LOW');
@@ -251,7 +262,10 @@ export class PushManager{
     const quiet=alert?.quiet_base_pre_expansion||{};
     const shock=alert?.activity_shock||{};
     const closeTime=firstFinite([
-      alert?.detected_candle_close_time,evidence?.closed_candle_close_time,
+      alert?.detected_candle_close_time,alert?.candle?.close_time,alert?.candle?.closeTime,
+      alert?.data_status?.close_time,alert?.data_status?.source_time,alert?.source_time,
+      alert?.early_expansion?.detected_candle_close_time,alert?.early_expansion?.metrics?.closed_candle_close_time,
+      alert?.metrics?.closed_candle_close_time,evidence?.closed_candle_close_time,
       quiet?.candle_close_time_ms,quiet?.metrics?.buy_pressure_transition?.closed_candle_close_time,
       shock?.detected_candle_close_time
     ]);
@@ -284,6 +298,26 @@ export class PushManager{
       if(shock?.detected!==true||shock?.watch_only!==true||
          firstFinite([shock?.score])===null||Number(shock.score)<76||shock?.extended===true)
         return rejected('ACTIVITY_SHOCK_EVIDENCE_INCOMPLETE');
+    }else if(event==='RADAR_WATCH_ONLY_EARLY_TRACK'){
+      const gate=alert?.notification_gate||alert?.elite_gate||{};
+      const mode=String(gate?.mode||'').toUpperCase();
+      const earlyMode=['FALCON_EARLY_TRACK','RADAR_WATCH_ONLY_EARLY_TRACK'].includes(mode);
+      const persistentMode=['PERSISTENT_EARLY_TRACK','RADAR_WATCH_ONLY_PERSISTENT_EARLY_TRACK'].includes(mode);
+      const allowedModes=earlyMode||persistentMode;
+      const softFailures=new Set(['SCORE_BELOW_STRICT_THRESHOLD','CONFIRMATION_BREADTH_LOW','CATEGORY_DIVERSITY_LOW']);
+      const failures=(Array.isArray(gate?.failures)?gate.failures:[]).map(x=>String(x||''));
+      const eye=gate?.falcon_eye||{};
+      const gateScore=firstFinite([gate?.score,alert?.opportunity_score,alert?.early_expansion_score]);
+      const capture=firstFinite([eye?.capture]);
+      const eyeQuality=firstFinite([eye?.quality]);
+      const domains=firstFinite([eye?.independent_domains]);
+      const captureFloor=persistentMode?80:74;
+      const qualityFloor=persistentMode?60:68;
+      if(gate?.eligible!==true||gate?.watch_only!==true||!allowedModes||
+         failures.some(x=>!softFailures.has(x))||gateScore===null||gateScore<70||
+         capture===null||capture<captureFloor||eyeQuality===null||eyeQuality<qualityFloor||
+         domains===null||domains<3)
+        return rejected('EARLY_TRACK_GATE_NOT_QUALIFIED');
     }else{
       return rejected('WATCH_ONLY_EVENT_UNSUPPORTED');
     }
@@ -354,8 +388,37 @@ export class PushManager{
     };
   }
   async notifyRadarAlert(alert){
-    // Never allow explicit watch-only / rejected candidates to bypass the strict gate
-    // through a radar's generic push route.
+    const gate=alert?.notification_gate||alert?.elite_gate||{};
+    // A qualified early-track gate is a monitoring notification, not an entry alert.
+    // Route it through the stricter watch-only validator rather than silently dropping it
+    // or allowing it to bypass the watch-only metadata and anti-chase checks.
+    if(gate?.eligible===true&&gate?.watch_only===true&&alert?.eligible!==false){
+      const timeCandidates=[
+        alert?.detected_candle_close_time,alert?.candle?.close_time,alert?.candle?.closeTime,
+        alert?.data_status?.close_time,alert?.data_status?.source_time,alert?.source_time,
+        alert?.early_expansion?.detected_candle_close_time,alert?.early_expansion?.metrics?.closed_candle_close_time,
+        alert?.metrics?.closed_candle_close_time
+      ];
+      const closeValue=timeCandidates.find(value=>value!==null&&value!==undefined&&value!==''&&
+        typeof value!=='boolean'&&Number.isFinite(Number(value)));
+      const rawPrice=alert?.price?.reference??alert?.price??alert?.last_price??alert?.lastPrice??alert?.entry_price;
+      const result=await this.notifyRadarWatchOnlyAlert({
+        ...alert,
+        event:'RADAR_WATCH_ONLY_EARLY_TRACK',
+        potential_label:alert?.potential_label||alert?.pre_expansion_stage||alert?.decision_band||'EARLY_SETUP',
+        price:rawPrice,
+        detected_candle_close_time:closeValue===undefined?null:Number(closeValue),
+        closed_candles_only:alert?.closed_candles_only===true||alert?.candle?.closed===true||
+          alert?.data_status?.candle_closed===true||alert?.early_expansion?.closed_candles_only===true,
+        watch_only:true,entry_eligible:false,market:'SPOT',
+        data_quality:alert?.data_quality??gate?.data_quality,
+        liquidity_quality:alert?.liquidity_quality??gate?.liquidity_quality,
+        source:alert?.source??alert?.data_status?.source,
+        paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+      });
+      return Array.isArray(result?.notifications)?result.notifications:[];
+    }
+    // Unqualified watch/rejected candidates still cannot use the generic entry route.
     const watchLabel=[alert?.event,alert?.decision_band,alert?.potential_label].filter(Boolean).join(' ').toUpperCase();
     if(alert?.watch_only===true||alert?.entry_eligible===false||
        alert?.notification_gate?.watch_only===true||alert?.notification_gate?.eligible===false||
