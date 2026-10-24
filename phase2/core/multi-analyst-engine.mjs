@@ -1275,6 +1275,8 @@ export class MultiAnalystEngine {
     const analysts=Array.isArray(item?.analysts)?item.analysts:[];
     const ids=analysts.map(x=>String(x?.id||'')).filter(Boolean);
     const uniqueIds=new Set(ids);
+    const roles=analysts.map(x=>String(x?.role||'')).filter(Boolean);
+    const uniqueRoles=new Set(roles);
     const placeholderIds=ids.filter(id=>/^ANALYST_\d+$/i.test(id));
     const analysisFailed=(Array.isArray(item?.reason_codes)?item.reason_codes:[]).includes('MULTI_ANALYST_ANALYSIS_FAILED');
     const execution=item?.analyst_execution||{};
@@ -1293,9 +1295,9 @@ export class MultiAnalystEngine {
       analyst_agreement:Number.isFinite(Number(item?.intelligence?.analyst_agreement))?Number(item.intelligence.analyst_agreement):null,
       specialist_count:analysts.length,
       unique_specialists:uniqueIds.size,
-      unique_roles:new Set(analysts.map(x=>String(x?.role||'')).filter(Boolean)).size,
-      specialists_complete:execution.specialists_complete===true&&!analysisFailed&&placeholderIds.length===0,
-      final_analyst_complete:execution.final_analyst_complete===true,
+      unique_roles:uniqueRoles.size,
+      specialists_complete:execution.specialists_complete===true&&!analysisFailed&&placeholderIds.length===0&&analysts.length===19&&uniqueIds.size===19&&uniqueRoles.size===19,
+      final_analyst_complete:execution.final_analyst_complete===true&&!analysisFailed&&placeholderIds.length===0&&analysts.length===19&&uniqueIds.size===19&&uniqueRoles.size===19,
       analysis_failed:analysisFailed,
       data_valid:item?.data_status?.data_valid===true,
       hard_reasons:(item?.final_judge?.hardReasons||item?.final_judge?.hard_reasons||[]).slice(0,12)
