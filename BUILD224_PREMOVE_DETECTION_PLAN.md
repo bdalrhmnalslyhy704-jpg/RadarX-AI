@@ -56,6 +56,8 @@ Evaluate independent, interpretable features rather than one opaque score:
 - “Missed mover” audit: after a move crosses a configurable threshold, inspect earlier available snapshots and report whether the symbol was absent from the universe, missing from ticker data, starved from Micro/Deep, rejected by a feature, blocked by data quality, or rejected as extended.
 - “False-positive” audit: distinguish a failed setup, a signal that arrived late, a push-delivery failure, a bad/stale data event, and a move that simply did not follow through.
 - Adjust thresholds only from replay/forward evidence; do not lower all thresholds at once just to increase alert volume.
+
+**Build 224 implementation note (missed-mover audit):** The GET /api/radar-missed-movers endpoint reads retained, completed Radar 8 full-market Scan Journey snapshots and cross-checks them against a bounded recent tail of each of the 12 radar alert archives. It reports sampled threshold crossings, whether a recorded alert preceded the observed crossing, and the scan-stage/defer reason actually stored. Missing/unreadable archives or a saturated 2,000-row archive tail force PARTIAL_ARCHIVE_COVERAGE and set the miss counts invalid. Because the full-universe baseline currently uses sampled ticker prices, not a continuous trade tape or complete closed-OHLC history for every symbol, extrema are explicitly OBSERVED_SNAPSHOT_PROXY_NOT_CLOSED_OHLC; this endpoint is a first feedback-loop instrument, not proof of full-market recall, exact highs/lows, or profitability.
 - Report precision, recall on the *defined labeled sample*, lead time, missed-mover causes, alert volume, and follow-through by radar. Never imply these sample metrics guarantee future detection.
 
 ### 6. Notifications and Android integration
@@ -82,5 +84,7 @@ Evaluate independent, interpretable features rather than one opaque score:
 ## Current work / status
 - The DHDTech entrypoint autostart fix exists on the Build 224 branch lineage and explicitly keeps paper trading on and real order execution off.
 - This plan is now checked into the repository to keep the target and acceptance criteria durable.
+- A first missed-mover audit endpoint and regression suite are implemented on PR #335: GET /api/radar-missed-movers. The exact-head Phase 1/2 test suite passed on commit 84d3d8c9596629b64eb11c20ce664dedf50ff1b5, including the endpoint integration test and five audit-unit tests. This proves the code/test contract only; the production-aligned replay gate for the latest head is not yet confirmed, and the retained Radar 8 sample proxy is not equivalent to independent full-market closed-OHLC recall.
+- The overall plan remains NOT_LIVE_VERIFIED until the 12-radar periodic health/cycle evidence, 20-analyst role execution evidence, live DHDTech commit/health and fresh-data smoke, and real physical-device push receipt are separately verified. Do not interpret a green CI result as proof of those runtime conditions.
 - The numeric-input normalization change in this change set prevents null/blank values from becoming zero in the early-move/radar-8 paths.
 - Repository tests and CI must pass before this change is merged. After deployment, live DHDTech and real-device push still require separate verification; CI alone is not proof of either.

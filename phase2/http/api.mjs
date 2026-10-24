@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {stat as statFile} from 'node:fs/promises';
 import {verifySessionToken} from '../core/auth.mjs';
 import {defaultSettings} from '../core/signal-service.mjs';
 import {DurableStore} from '../core/store.mjs';
@@ -9,7 +10,8 @@ import {buildKingVerdict,rankKingMarket} from '../core/king-intelligence.mjs';
 import {MultiAnalystEngine} from '../core/multi-analyst-engine.mjs';
 import {radarTelemetry,renderRadarTelemetryDashboard} from '../core/radar-telemetry.mjs';
 import {buildRadarReadinessAudit} from '../core/radar-readiness-audit.mjs';
-import {buildRadarSignalOutcomeReport,emptyRadarSignalOutcomeState} from '../core/radar-signal-outcomes.mjs';
+import {RADAR_OUTCOME_ARCHIVES,buildRadarSignalOutcomeReport,emptyRadarSignalOutcomeState} from '../core/radar-signal-outcomes.mjs';
+import {buildRadarMissedMoverAuditReport} from '../core/radar-missed-mover-audit.mjs';
 
 function send(res,status,body,extra={}){
   const data=JSON.stringify(body);
@@ -215,6 +217,7 @@ export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
 
 export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,marketRadarRest=null,radarSwarm=null,radarSignalOutcomeWorker=null}= {}){
   const counters=new Map();
+  let missedMoverAuditCache={at:0,cycles:0,report:null};
   function recordMultiAnalystApiFailure(error){
     const message=String(error?.message??error??'MULTI_ANALYST_SCAN_FAILED').slice(0,240);
     const stats=multiAnalystRadar?.monitorStats;
@@ -617,6 +620,71 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           return send(res,200,{...buildRadarSignalOutcomeReport(state,Date.now()),worker});
         }catch(error){
           return send(res,503,{error:String(error?.message??error),scope:'EMITTED_ARCHIVED_ALERTS_ONLY',
+            policy:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+        }
+      }
+      if(u.pathname==='/api/radar-missed-movers'&&req.method==='GET'){
+        try{
+          if(typeof store?.readScanJourneyCycles!=='function'||typeof store?.readRecent!=='function')
+            return send(res,503,{error:'MISSED_MOVER_AUDIT_STORE_UNAVAILABLE',scope:'RADAR8_SCAN_JOURNEY_CROSS_RADAR_ALERT_AUDIT',
+              policy:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+          const requested=Math.trunc(Number(u.searchParams.get('cycles')||150));
+          const cycleLimit=Math.max(20,Math.min(300,Number.isFinite(requested)?requested:150));
+          const now=Date.now();
+          if(missedMoverAuditCache.report&&missedMoverAuditCache.cycles===cycleLimit&&now-missedMoverAuditCache.at<60_000)
+            return send(res,200,missedMoverAuditCache.report);
+          const cycles=await store.readScanJourneyCycles({limit:cycleLimit});
+          const toMs=value=>{
+            if(value===null||value===undefined||value===''||value==='.INCOMPLETE')return null;
+            const numeric=Number(value);
+            if(Number.isFinite(numeric)&&numeric>0)return Math.trunc(numeric<1e12?numeric*1000:numeric);
+            if(typeof value==='string'){const parsed=Date.parse(value);if(Number.isFinite(parsed)&&parsed>0)return parsed;}
+            return null;
+          };
+          const cycleTimes=cycles.map(cycle=>toMs(cycle?.started_at)).filter(value=>value!==null&&value<=now);
+          const latestCycleTime=cycles.map(cycle=>toMs(cycle?.completed_at)).filter(value=>value!==null&&value<=now)
+            .reduce((latest,value)=>Math.max(latest,value),0);
+          const sinceMs=cycleTimes.length?Math.max(0,Math.min(...cycleTimes)-15*60_000):Math.max(0,now-45*24*60*60*1000);
+          const alertTailLimit=2000;
+          const alertsByRadar={};
+          const archiveReadFailures=[];
+          const archiveTruncatedRadars=[];
+          const archiveResults=await Promise.all(RADAR_OUTCOME_ARCHIVES.map(async radar=>{
+            try{
+              const archivePath=store.files?.[radar.archive];
+              if(typeof archivePath!=='string'||!archivePath)throw new Error('ALERT_ARCHIVE_PATH_UNAVAILABLE');
+              try{await statFile(archivePath);}catch(error){throw new Error('ALERT_ARCHIVE_FILE_UNAVAILABLE:'+String(error?.code||error?.message||'UNKNOWN'));}
+              const recent=await store.readRecent(radar.archive,alertTailLimit);
+              const rows=(Array.isArray(recent)?recent:[]).filter(row=>{
+                const at=[row?.detected_at,row?.detectedAt,row?.signal_at,row?.created_at,row?.event_at,row?.timestamp,row?.processed_at]
+                  .map(toMs).find(value=>value!==null)??null;
+                return at!==null&&at>=sinceMs&&at<=Math.max(now,latestCycleTime);
+              });
+              return {radar:radar.id,rows,tail_count:Array.isArray(recent)?recent.length:0,failed:false};
+            }catch(error){
+              return {radar:radar.id,rows:[],tail_count:0,failed:true,reason:String(error?.message??error).slice(0,160)};
+            }
+          }));
+          for(const result of archiveResults){
+            alertsByRadar[result.radar]=result.rows;
+            if(result.failed)archiveReadFailures.push({radar:result.radar,reason:result.reason});
+            if(result.tail_count>=alertTailLimit)archiveTruncatedRadars.push(result.radar);
+          }
+          const report=buildRadarMissedMoverAuditReport({cycles,alertsByRadar,now});
+          report.archive_read_failures=archiveReadFailures;
+          report.archive_tail_limit_per_radar=alertTailLimit;
+          report.archive_truncated_radars=archiveTruncatedRadars;
+          report.alert_archive_reads_complete=archiveReadFailures.length===0&&archiveTruncatedRadars.length===0;
+          if(!report.alert_archive_reads_complete){
+            report.status='PARTIAL_ARCHIVE_COVERAGE';
+            report.interpretation.missed_mover_counts_valid=false;
+          }else{
+            report.interpretation.missed_mover_counts_valid=true;
+          }
+          missedMoverAuditCache={at:now,cycles:cycleLimit,report};
+          return send(res,200,report);
+        }catch(error){
+          return send(res,503,{error:String(error?.message??error),scope:'RADAR8_SCAN_JOURNEY_CROSS_RADAR_ALERT_AUDIT',
             policy:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
         }
       }
