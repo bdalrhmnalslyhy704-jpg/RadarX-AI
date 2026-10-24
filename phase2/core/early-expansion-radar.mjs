@@ -12,6 +12,7 @@ import {ScanSchedulerJournal, schedulerLaneReason} from './scan-scheduler.mjs';
 import {MarketWideLightScan, isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
 import {buildUnifiedFeatureSnapshot} from './unified-feature-engine.mjs';
 import {performance} from 'node:perf_hooks';
+import {finiteNumberOr} from './finite-number.mjs';
 
 function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
@@ -32,7 +33,7 @@ function normalizeRadarTickerRow(row,quote){
   };
 }
 const clamp=(v,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number.isFinite(Number(v))?Number(v):0));
-const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
+const finite=(v,d=null)=>finiteNumberOr(v,d);
 function hasFiniteNumber(v){return v!==null&&v!==undefined&&!(typeof v==='string'&&v.trim()==='')&&Number.isFinite(Number(v));}
 function absolute24hMove(row){return hasFiniteNumber(row?.priceChange24h)?Math.abs(Number(row.priceChange24h)):null;}
 const mean=a=>{const x=(Array.isArray(a)?a:[]).map(Number).filter(Number.isFinite);return x.length?x.reduce((s,v)=>s+v,0)/x.length:null;};
