@@ -187,7 +187,7 @@ function buildCandidateShadowResult(profile,analysis,input,{eligible,score,stage
 
 function profileSnapshot(profile){
   const profiles={
-    STRONG_MOVE_RADAR:{mode:'ACTIONABLE_GATE_REPLAY',requires:['closed 1m/5m candles','aggregate trade history or explicitly marked candle-only fallback'],historical_book_required:false},
+    STRONG_MOVE_RADAR:{mode:'STRICT_GATE_CANDLE_SHADOW',requires:['closed 1m/5m candles','aggregate trade history or explicitly marked candle-only fallback'],historical_book_required:true},
     RADAR8_PREMOVE_SHADOW:{mode:'PRE_MOVE_CANDLE_ONLY_SHADOW',requires:['closed 1m/5m/15m/1h/4h candles','BTC 5m closed candles for relative strength'],historical_book_required:true},
     ALMUQAWIM_RADAR:{mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requires:['closed 15m/1h/4h candles'],historical_book_required:false},
     DOOMSDAY_RADAR:{mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requires:['closed 1m/5m candles','BTC 5m closed candles'],historical_book_required:true},
@@ -504,8 +504,9 @@ async function main() {
         const cs = a.component_scores || {};
         const m = a.metrics || {};
         const alertScore = Math.max(Number(a.score) || 0, Number(cs.flash) || 0);
-        const volumeQuote = Math.max(1, Number(input.ticker.quoteVolume24h) || 0);
-        const liquidityScore = Math.max(0, Math.min(100, 70 + Math.log10(Math.max(1, volumeQuote / minQuoteVolume24h)) * 30));
+        // Historical 24h quote volume does not reveal historical order-book depth or spread.
+        // Keep liquidity unknown instead of manufacturing a high quality score from turnover.
+        const liquidityScore = null;
         const participationValues = [Number(cs.volume), Number(cs.trades)].filter(Number.isFinite);
         const participationScore = participationValues.length
           ? participationValues.reduce((sum, value) => sum + value, 0) / participationValues.length : 50;
@@ -530,9 +531,11 @@ async function main() {
         });
         alert.elite_gate = eliteGate;
         alert.data_quality = Number(a.data_quality) || 0;
-        alert.liquidity_quality = liquidityScore;
-        alert.data_status = {status:a.data_stale?'DATA_STALE':'LIVE_DATA',stale:Boolean(a.data_stale),future_data_detected:false,source:'Binance Public REST'};
-        const strictFailures = [];
+        alert.liquidity_quality = null;
+        alert.data_status = {status:a.data_stale?'DATA_STALE':'HISTORICAL_CLOSED_CANDLES',stale:Boolean(a.data_stale),
+          future_data_detected:false,source:'Binance Public historical closed candles',
+          live_notification_gate_replayable:false,historical_orderbook_available:false};
+        const strictFailures = ['HISTORICAL_LIQUIDITY_UNVERIFIED','LIVE_PUSH_DELIVERY_NOT_SIMULATED'];
         if (!alert.eligible) strictFailures.push('STRONG_MOVE_CORE_GATE_FAILED');
         if (alertScore < Number(tickerConfig.minScore ?? 76)) strictFailures.push('SCORE_BELOW_STRICT_THRESHOLD');
         if (!eliteGate.eligible) strictFailures.push(...(Array.isArray(eliteGate.failures)?eliteGate.failures:['ELITE_GATE_NOT_ELIGIBLE']));
@@ -543,33 +546,52 @@ async function main() {
         }
         if (!notificationGate.eligible) strictFailures.push(...(Array.isArray(notificationGate.failures)?notificationGate.failures:[]));
         if (cooldownBlocked) strictFailures.push('LOCAL_ALERT_COOLDOWN');
+        // A separate candidate-only lane measures detector sensitivity. It deliberately
+        // cannot be reported as an accepted notification because historical depth/spread
+        // and real handset delivery are not available in this replay.
+        const candidateStrictFailures=strictFailures.filter(code=>
+          !['HISTORICAL_LIQUIDITY_UNVERIFIED','LIVE_PUSH_DELIVERY_NOT_SIMULATED',
+            'LIQUIDITY_TOO_WEAK','LIQUIDITY_BELOW_STRICT_THRESHOLD','ELITE_GATE_NOT_ELIGIBLE'].includes(String(code))&&
+          !String(code).startsWith('ELITE_GATE:'));
         const earlyGate = evaluateDynamicEarlyWarningGate(alert, input.ticker, {
-          now:input.now,
-          alertScore,
-          minQuoteVolume24h,
-          strictFailures,
-          coreTriggerFailures: Array.isArray(eliteGate.failures)?eliteGate.failures:[],
+          now:input.now,alertScore,minQuoteVolume24h,
+          strictFailures:candidateStrictFailures,
+          coreTriggerFailures: Array.isArray(a.trigger_diagnostics?.failed_checks)?a.trigger_diagnostics.failed_checks:
+            (Array.isArray(eliteGate.failures)?eliteGate.failures:[]),
           lastAlertAt:lastAlertAt.value,
           earlyCooldownMs:Number(tickerConfig.alertCooldownMs ?? 12 * MINUTE_MS)
         });
-        const strictAccepted = Boolean(alert.eligible && alertScore >= Number(tickerConfig.minScore ?? 76) &&
-          eliteGate.eligible && notificationGate.eligible && !cooldownBlocked);
-        // Historical replay records early warnings as their own accepted lane without
-        // pretending that they passed the strict entry gate.
-        const earlyWarningAccepted = Boolean(!strictAccepted && earlyGate.eligible && !cooldownBlocked);
-        const accepted = strictAccepted || earlyWarningAccepted;
-        if (accepted) lastAlertAt.value = input.now;
+        const strictAccepted = false;
+        const candidateDetected = Boolean(!cooldownBlocked && (
+          earlyGate.eligible ||
+          (alert.eligible===true&&alertScore>=Number(tickerConfig.minScore??76)&&
+            Number(a.data_quality)>=80&&!a.data_stale&&Math.abs(Number(input.ticker.priceChange24h)||0)<=8)
+        ));
+        const accepted = false;
         return {
-          accepted,
-          accepted_mode: strictAccepted ? 'STRICT' : (earlyWarningAccepted ? 'EARLY_WARNING' : 'NONE'),
-          early_warning: earlyGate,
-          strict_gate_failures: notificationGate.standard_gate_failures ?? notificationGate.failures ?? strictFailures,
+          accepted:false,
+          accepted_mode:'NONE_HISTORICAL_LIQUIDITY_UNVERIFIED',
+          candidate_detected:candidateDetected,
+          candidate_mode:candidateDetected?(earlyGate.eligible?'DYNAMIC_EARLY_WARNING_CANDIDATE_SHADOW':'CORE_TRIGGER_CANDIDATE_SHADOW'):'NONE',
+          candidate_reasons:[...new Set([
+            ...(candidateDetected?['HISTORICAL_DETECTOR_CANDIDATE']:[]),
+            ...(candidateStrictFailures||[]),
+            ...(!candidateDetected?['CANDIDATE_GATE_NOT_MET']:[])
+          ])].slice(0,30),
+          early_warning:earlyGate,
+          strict_gate_failures:[...new Set([
+            ...(notificationGate.standard_gate_failures??notificationGate.failures??strictFailures),
+            'HISTORICAL_LIQUIDITY_UNVERIFIED','LIVE_PUSH_DELIVERY_NOT_SIMULATED'
+          ])].slice(0,30),
           alert,
-          score: alertScore,
-          stage: alert.potential_label ?? a.stage,
-          notificationGate,
-          reason_codes: notificationGate.failures ?? strictFailures,
-          liquidity_acceleration: a.metrics?.liquidity_acceleration?.three_minute_acceleration ?? null
+          score:alertScore,
+          stage:alert.potential_label??a.stage,
+          notificationGate:{eligible:null,failures:['HISTORICAL_LIQUIDITY_UNVERIFIED','LIVE_PUSH_DELIVERY_NOT_SIMULATED',
+            ...(notificationGate.failures||[])]},
+          reason_codes:[...new Set([
+            ...(notificationGate.failures||[]),'HISTORICAL_LIQUIDITY_UNVERIFIED','LIVE_PUSH_DELIVERY_NOT_SIMULATED'
+          ])].slice(0,30),
+          liquidity_acceleration:a.metrics?.liquidity_acceleration?.three_minute_acceleration??null
         };
       }
     });
