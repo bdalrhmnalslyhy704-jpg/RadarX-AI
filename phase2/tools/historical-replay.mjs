@@ -90,18 +90,37 @@ async function fetchHistoricalTimeframe(client,symbol,interval,start,end,lookbac
   const bars=Math.max(1,Math.trunc(Number(lookbackBars)||1));
   const requestedStart=Math.floor((start-bars*intervalMs)/intervalMs)*intervalMs;
   const expected=Math.ceil((end-requestedStart+1)/intervalMs)+2;
-  const limit=Math.min(1000,Math.max(bars,expected));
-  const response=await withHistoricalRateLimitRetry(
-    ()=>client.klines(symbol,interval,{limit,startTime:requestedStart,endTime:end}),
-    {label:'klines:'+symbol+':'+interval}
-  );
-  const candles=Array.isArray(response?.candles)?response.candles:[];
-  const latest=candles.filter(c=>Number(c?.closeTime)<=end&&Number(c?.closeTime)<=Date.now())
-    .sort((a,b)=>Number(a.openTime)-Number(b.openTime));
-  const complete=latest.length>=bars&&latest.every((c,i)=>i===0||
-    Number(c.openTime)===Number(latest[i-1].openTime)+intervalMs);
-  return {candles:latest,complete,interval,symbol,requested_start:requestedStart,requested_end:end,
-    rows:latest.length,required_history_bars:bars,source:response?.source??'BINANCE_PUBLIC_REST'};
+  const maxPages=Math.min(40,Math.max(1,Math.ceil(expected/1000)+1));
+  const seen=new Map();
+  let cursor=requestedStart,pages=0,complete=false;
+  while(cursor<=end&&pages<maxPages){
+    const result=await withHistoricalRateLimitRetry(
+      ()=>client.klines(symbol,interval,{limit:1000,startTime:cursor,endTime:end}),
+      {label:'klines:'+symbol+':'+interval}
+    );
+    const page=Array.isArray(result?.candles)?result.candles:[];
+    pages++;
+    if(!page.length){complete=true;break;}
+    for(const candle of page){
+      const open=Number(candle?.openTime);
+      if(Number.isFinite(open))seen.set(open,candle);
+    }
+    const lastOpen=Number(page.at(-1)?.openTime);
+    if(!Number.isFinite(lastOpen)||lastOpen<cursor)throw new Error('HISTORICAL_TIMEFRAME_PAGINATION_STALLED');
+    cursor=lastOpen+intervalMs;
+    if(page.length<1000){complete=true;break;}
+  }
+  const candles=[...seen.values()].sort((a,b)=>Number(a.openTime)-Number(b.openTime))
+    .filter(c=>Number(c?.closeTime)<=end&&Number(c?.closeTime)<=Date.now());
+  const historyBeforeStart=candles.filter(c=>Number(c.closeTime)<start).slice(-bars);
+  const tailContiguous=historyBeforeStart.length>=bars&&historyBeforeStart.every((c,i)=>
+    i===0||Number(c.openTime)===Number(historyBeforeStart[i-1].openTime)+intervalMs);
+  const fullSeriesContiguous=candles.length>0&&candles.every((c,i)=>
+    i===0||Number(c.openTime)===Number(candles[i-1].openTime)+intervalMs);
+  return {candles,complete:Boolean(complete&&tailContiguous&&fullSeriesContiguous),interval,symbol,
+    requested_start:requestedStart,requested_end:end,rows:candles.length,
+    required_history_bars:bars,pages,tail_history_contiguous:tailContiguous,
+    full_series_contiguous:fullSeriesContiguous,source:'BINANCE_PUBLIC_REST'};
 }
 
 function numericOrNull(value){
