@@ -4,7 +4,7 @@ import {spawnSync} from 'node:child_process';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {aggregateFiveMinuteCandles, normalizeHistoricalCandles, runHistoricalReplay} from '../core/historical-replay.mjs';
-import {fetchAggregateTrades, withHistoricalRateLimitRetry, historicalProfileRequirements, assessHistoricalProfileCoverage, buildCandidateShadowResult, HISTORICAL_DETECTOR_PROFILES} from '../tools/historical-replay.mjs';
+import {fetchAggregateTrades, withHistoricalRateLimitRetry, historicalProfileRequirements, assessHistoricalProfileCoverage, buildCandidateShadowResult, attachHistoricalMoveOutcomeAnalysis, HISTORICAL_DETECTOR_PROFILES} from '../tools/historical-replay.mjs';
 
 
 const MINUTE = 60_000;
@@ -70,6 +70,24 @@ test('Whale replay requires complete aggregate-trade coverage and never assumes 
     ...base,dataPolicy:{tradeCoverageComplete:true}
   },{});
   assert.ok(!complete.includes('HISTORICAL_AGG_TRADE_COVERAGE_INCOMPLETE'));
+});
+
+test('historical report attachment includes measured early/missed move outcome analysis',()=>{
+  const replay={
+    symbol:'TESTUSDT',
+    data_quality:{
+      candle_fetch_complete:true,replay_mode:'CANDLE_ONLY_FALLBACK',
+      trade_coverage_complete:false,synthetic_data_used:false
+    },
+    summary:{replay_steps:0,accepted:0,rejected:0},
+    steps:[]
+  };
+  const attached=attachHistoricalMoveOutcomeAnalysis(replay);
+  assert.equal(attached.evaluation.version,'RADARX_MOVE_OUTCOME_ANALYSIS_V1');
+  assert.equal(attached.evaluation.symbol,'TESTUSDT');
+  assert.equal(attached.evaluation.candidate_detection.mode,'CANDIDATE_SHADOW_NOT_NOTIFICATION');
+  assert.equal(attached.evaluation.observation.accepted,0);
+  assert.equal(attached.evaluation.observation.trade_coverage_complete,false);
 });
 
 test('historical replay CLI profile dry-run performs no network access and identifies candle-only shadow limitations',()=>{
