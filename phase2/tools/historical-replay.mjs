@@ -799,6 +799,10 @@ async function main() {
         strong_move: x.evaluation.strong_move?.classification ?? 'UNAVAILABLE',
         minutes_before_15pct: x.evaluation.strong_move?.minutes_before_move ?? null,
         accepted_with_matured_outcomes: x.evaluation.observation?.accepted_with_matured_outcomes ?? 0,
+        candidate_detections: x.evaluation.candidate_detection?.candidate_count ?? 0,
+        matured_candidate_detections: x.evaluation.candidate_detection?.candidate_with_matured_outcomes ?? 0,
+        low_follow_through_candidate_count: x.evaluation.candidate_detection?.low_follow_through_candidate_count ?? 0,
+        low_follow_through_candidate_rate_pct: x.evaluation.candidate_detection?.low_follow_through_candidate_rate_pct ?? null,
         low_follow_through_count: x.evaluation.summary?.low_follow_through_count ?? 0,
         missed_move_failure_codes: x.evaluation.missed_move_failure_codes ?? []
       } : null
