@@ -86,3 +86,67 @@ test('Pre-Move watch notification sends only as WATCH_ONLY and suppresses repeat
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+test('failed Pre-Move watch delivery is retried with the same stable event ID and remains watch-only',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-watch-retry-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    const sent=[];
+    let calls=0;
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
+      sent.push(payload);calls++;
+      return calls===1?{ok:false,status:'FAILED',reason:'TEMPORARY_TEST_FAILURE'}:{ok:true,status:'SENT',httpStatus:201};
+    }};
+    const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000}),retryBaseMs:1});
+    const {candidate,snapshot,now}=fixture();
+    const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
+    assert.ok(alert);
+    const first=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(first.status,'FAILED');
+    assert.equal(first.sent_count,0);
+    assert.equal(manager.retryQueue.size,1);
+    await manager.flushRetries(Date.now()+100);
+    assert.equal(calls,2);
+    assert.equal(manager.retryQueue.size,0);
+    assert.equal(sent[0].event_id,alert.id);
+    assert.equal(sent[1].event_id,alert.id);
+    for(const payload of sent){
+      assert.equal(payload.watch_only,true);
+      assert.equal(payload.entry_eligible,false);
+      assert.equal(payload.paper_trading,true);
+      assert.equal(payload.real_order_execution,false);
+    }
+    const audits=await store.readRecent('notifications',10);
+    assert.ok(audits.some(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION_RETRY'&&x.status==='SENT'&&x.alert_id===alert.id));
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+test('failed Pre-Move watch delivery expires instead of sending stale evidence',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-watch-expire-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    let calls=0;
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(){
+      calls++;return{ok:false,status:'FAILED',reason:'TEMPORARY_TEST_FAILURE'};
+    }};
+    const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000}),retryBaseMs:1});
+    const {candidate,snapshot,now}=fixture();
+    const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
+    assert.ok(alert);
+    const first=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(first.status,'FAILED');
+    await manager.flushRetries(Date.now()+22*60*1000);
+    assert.equal(calls,1);
+    assert.equal(manager.retryQueue.size,0);
+    const audits=await store.readRecent('notifications',10);
+    assert.ok(audits.some(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION_RETRY'&&x.status==='EXPIRED'&&x.alert_id===alert.id));
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
