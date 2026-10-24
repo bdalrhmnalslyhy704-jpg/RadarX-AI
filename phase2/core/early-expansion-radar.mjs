@@ -35,11 +35,11 @@ function normalizeRadarTickerRow(row,quote){
 }
 const clamp=(v,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number.isFinite(Number(v))?Number(v):0));
 const finite=(v,d=null)=>finiteNumberOr(v,d);
-function hasFiniteNumber(v){return v!==null&&v!==undefined&&!(typeof v==='string'&&v.trim()==='')&&Number.isFinite(Number(v));}
+function hasFiniteNumber(v){return finiteNumberOr(v,null)!==null;}
 function absolute24hMove(row){return hasFiniteNumber(row?.priceChange24h)?Math.abs(Number(row.priceChange24h)):null;}
-const mean=a=>{const x=(Array.isArray(a)?a:[]).map(Number).filter(Number.isFinite);return x.length?x.reduce((s,v)=>s+v,0)/x.length:null;};
-const median=a=>{const x=(Array.isArray(a)?a:[]).map(Number).filter(Number.isFinite).sort((p,q)=>p-q);if(!x.length)return null;const m=Math.floor(x.length/2);return x.length%2?x[m]:(x[m-1]+x[m])/2;};
-const pct=(a,b)=>Number.isFinite(Number(a))&&Number.isFinite(Number(b))&&Number(b)!==0?(Number(a)/Number(b)-1)*100:null;
+const mean=a=>{const x=(Array.isArray(a)?a:[]).map(v=>finiteNumberOr(v,null)).filter(Number.isFinite);return x.length?x.reduce((s,v)=>s+v,0)/x.length:null;};
+const median=a=>{const x=(Array.isArray(a)?a:[]).map(v=>finiteNumberOr(v,null)).filter(Number.isFinite).sort((p,q)=>p-q);if(!x.length)return null;const m=Math.floor(x.length/2);return x.length%2?x[m]:(x[m-1]+x[m])/2;};
+const pct=(a,b)=>finiteNumberOr(a,null)!==null&&finiteNumberOr(b,null)!==null&&Number(b)!==0?(Number(a)/Number(b)-1)*100:null;
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function withRetry(fn,{attempts=1,baseMs=150,maxBackoffMs=1500,sleepFn=sleep}={}){
   let last;
@@ -549,7 +549,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,live
   // the closed-candle filter removes them.
   const gate=dataGate(series,now,cfg,{historicalReplay,allowMissingDepth:historicalReplay});
   const activityShock=assessQuietBaseActivityShock({fiveMinute:s['5m'],ticker,now,config:cfg});
-  const quietBasePreExpansion=assessQuietBasePreExpansion({fiveMinute:series['5m']||[],ticker,now,dataReady:gate.valid&&dailyMovePctKnown(ticker.priceChange24h),dataIssues:gate.valid&&dailyMovePctKnown(ticker.priceChange24h)?gate.issues:[...gate.issues,'TICKER_24H_CHANGE_UNKNOWN'],config:cfg});
+  const quietBasePreExpansion=assessQuietBasePreExpansion({fiveMinute:series['5m']||[],ticker,now,dataReady:gate.valid&&finiteNumberOr(ticker.priceChange24h,null)!==null,dataIssues:gate.valid&&finiteNumberOr(ticker.priceChange24h,null)!==null?gate.issues:[...gate.issues,'TICKER_24H_CHANGE_UNKNOWN'],config:cfg});
   const p=finite(ticker.lastPrice,null);
   // Unknown daily movement must never be treated as a quiet 0% move.
   const dailyMovePct=hasFiniteNumber(ticker.priceChange24h)?Number(ticker.priceChange24h):null;
