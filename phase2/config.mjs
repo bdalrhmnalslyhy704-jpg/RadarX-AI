@@ -290,10 +290,10 @@ export const CONFIG = Object.freeze({
     minDataQuality: int(process.env.RADARX_EARLY_EXPANSION_MIN_DATA_QUALITY, 70),
     microScanCandidates: int(process.env.RADARX_EARLY_EXPANSION_MICRO_SCAN_CANDIDATES, 18),
     exceptionalRotationBypassSlots: 5,
-    rotationReserve: int(process.env.RADARX_EARLY_EXPANSION_ROTATION_RESERVE, 8),
-    // Increase deep-stage throughput to reduce starvation of older eligible symbols.
+    rotationReserve: int(process.env.RADARX_EARLY_EXPANSION_ROTATION_RESERVE, 5),
+    // Bound the deep-stage workload to protect the 512 MB service while fair rotation continues.
     deepCandidates: int(process.env.RADARX_EARLY_EXPANSION_DEEP_CANDIDATES, 8),
-    quietReserve: int(process.env.RADARX_EARLY_EXPANSION_QUIET_RESERVE, 8),
+    quietReserve: int(process.env.RADARX_EARLY_EXPANSION_QUIET_RESERVE, 4),
     microConcurrency: int(process.env.RADARX_EARLY_EXPANSION_MICRO_CONCURRENCY, 6),
     deepConcurrency: int(process.env.RADARX_EARLY_EXPANSION_DEEP_CONCURRENCY, 4),
     oneMinuteKlines: int(process.env.RADARX_EARLY_EXPANSION_1M_KLINES, 120),
