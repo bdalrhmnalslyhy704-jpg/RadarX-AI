@@ -794,7 +794,9 @@ async function main() {
     });
     const expectedWindowCandles = Math.floor((end - start) / MINUTE_MS) + 1;
     const observedWindowCandles = replay.steps.length;
-    const windowCandlesComplete = observedWindowCandles >= expectedWindowCandles;
+    const windowCandlesComplete = candleFetch.complete === true &&
+      replay.data_quality.candle_fetch_complete === true &&
+      observedWindowCandles >= expectedWindowCandles;
     const outcomeObservationComplete = observationEnd >= end + outcomeHorizonHours * HOUR_MS && candleFetch.complete &&
       replay.steps.length>0 && replay.steps.every(step=>step?.outcome?.horizon_observed===true);
     const profileFrameCoverageFailures = assessHistoricalFrameFetchCoverage(
