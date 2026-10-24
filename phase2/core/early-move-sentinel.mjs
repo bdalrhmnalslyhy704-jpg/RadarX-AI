@@ -44,9 +44,10 @@ export const MOVE_RADAR_DEFAULTS=Object.freeze({
 
 function strategyScore(candidate) {
   const rows=Array.isArray(candidate?.strategies)?candidate.strategies:[];
-  const accepted=rows.filter(x=>x?.accepted&&Number.isFinite(Number(x?.score?.value)));
-  const best=rows.map(x=>Number(x?.score?.value)).filter(Number.isFinite).reduce((m,x)=>Math.max(m,x),0);
-  const acceptedMean=avg(accepted.map(x=>Number(x.score.value)))??0;
+  const scoreOf=row=>finite(row?.score?.value,null);
+  const accepted=rows.filter(x=>x?.accepted&&scoreOf(x)!==null);
+  const best=rows.map(scoreOf).filter(Number.isFinite).reduce((m,x)=>Math.max(m,x),0);
+  const acceptedMean=avg(accepted.map(scoreOf))??0;
   return {acceptedCount:accepted.length,bestScore:best,acceptedMean};
 }
 
@@ -54,8 +55,8 @@ function component(candidate,keyPaths,fallback=50){
   for(const path of keyPaths){
     let node=candidate;
     for(const key of path.split('.')) node=node?.[key];
-    const n=Number(node);
-    if(Number.isFinite(n)) return clamp(n);
+    const n=finite(node,null);
+    if(n!==null) return clamp(n);
   }
   return fallback;
 }
