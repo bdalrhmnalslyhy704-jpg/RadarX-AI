@@ -70,21 +70,23 @@ export function selectDiscoveryWithRadarReviewPriority(priorityRows,buckets,limi
   return selected;
 }
 const mean=(xs)=>avg(xs);
-const safe=(x,d=null)=>Number.isFinite(Number(x))?Number(x):d;
-const pct=(a,b)=>Number.isFinite(Number(a))&&Number.isFinite(Number(b))&&Number(b)>0?(Number(a)-Number(b))/Number(b)*100:null;
+const numericValue=value=>finiteNumberOr(value,null);
+const isNumericValue=value=>numericValue(value)!==null;
+const safe=(x,d=null)=>finiteNumberOr(x,d);
+const pct=(a,b)=>isNumericValue(a)&&isNumericValue(b)&&Number(b)>0?(Number(a)-Number(b))/Number(b)*100:null;
 const closed=(rows,now)=>{
   return (Array.isArray(rows)?rows:[]).filter(c=>
     c && c.closed!==false &&
-    Number.isFinite(Number(c.closeTime)) &&
+    isNumericValue(c.closeTime) &&
     Number(c.closeTime)<=now &&
-    Number.isFinite(Number(c.open)) &&
-    Number.isFinite(Number(c.high)) &&
-    Number.isFinite(Number(c.low)) &&
-    Number.isFinite(Number(c.close)) &&
+    isNumericValue(c.open) &&
+    isNumericValue(c.high) &&
+    isNumericValue(c.low) &&
+    isNumericValue(c.close) &&
     Number(c.high)>=Number(c.low)
   );
 };
-const values=(rows,key)=>rows.map(x=>Number(x?.[key])).filter(Number.isFinite);
+const values=(rows,key)=>(Array.isArray(rows)?rows:[]).map(x=>numericValue(x?.[key])).filter(Number.isFinite);
 const closes=rows=>values(rows,'close');
 const emaLast=(xs,period)=>{
   const a=xs.map(Number).filter(Number.isFinite);
@@ -407,7 +409,7 @@ const analyst=(id,name,score,direction='NEUTRAL',evidence={},risks=[])=>{
 };
 
 const median=(xs)=>{
-  const a=xs.map(Number).filter(Number.isFinite).sort((x,y)=>x-y);
+  const a=(Array.isArray(xs)?xs:[]).map(numericValue).filter(Number.isFinite).sort((x,y)=>x-y);
   if(!a.length)return null;
   const m=Math.floor(a.length/2);
   return a.length%2?a[m]:(a[m-1]+a[m])/2;
