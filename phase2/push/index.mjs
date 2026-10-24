@@ -260,12 +260,12 @@ export class PushManager{
       alert?.micro_data_validated===true&&alert?.closed_candles_only===true&&
       alert?.low_liquidity_burst_bypass!==true&&quoteVolume24h!==null&&quoteVolume24h>=750000&&
       dataQuality===null&&liquidityQuality===null;
+    if(alert?.low_liquidity_burst_bypass===true||risks.includes('LOW_LIQUIDITY_WATCH_ONLY'))
+      return rejected('LOW_LIQUIDITY_WATCH_ONLY');
     if(!microValidatedEarlyFlow&&(dataQuality===null||dataQuality<70||dataQuality>100))
       return rejected('DATA_QUALITY_MISSING_OR_LOW');
     if(!microValidatedEarlyFlow&&(liquidityQuality===null||liquidityQuality<60||liquidityQuality>100))
       return rejected('LIQUIDITY_QUALITY_MISSING_OR_LOW');
-    if(alert?.low_liquidity_burst_bypass===true||risks.includes('LOW_LIQUIDITY_WATCH_ONLY'))
-      return rejected('LOW_LIQUIDITY_WATCH_ONLY');
     if(risks.some(x=>/ALREADY_EXTENDED|EXTENDED_CHASE|HIGH_RISK|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK/.test(x)))
       return rejected('RISK_OR_ANTI_CHASE_GUARD');
 
@@ -286,6 +286,9 @@ export class PushManager{
     if(price===null||price<=0)return rejected('LIVE_PRICE_MISSING');
 
     if(event==='EARLY_FLOW_WATCH_ONLY'){
+      const dailyMove=firstFinite([alert?.price_change_24h]);
+      if(dailyMove===null||Math.abs(dailyMove)>=18)
+        return rejected('EARLY_FLOW_ANTI_CHASE_OR_MOVE_UNKNOWN');
       const micro=firstFinite([evidence?.micro_score,alert?.micro_fingerprint_score]);
       const confirmations=firstFinite([evidence?.confirmation_count]);
       const volumeRatio=Math.max(...[evidence?.rvol_1m,evidence?.rvol_5m].map(Number).filter(Number.isFinite),-Infinity);
