@@ -145,7 +145,7 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
             const selected=x.deep_scan_selected===true;
             return '<article class="alert">'+
               '<div class="top"><b>'+e(x.symbol||'—')+'</b><span class="score">'+(Number.isFinite(Number(x.price_change_24h))?(Number(x.price_change_24h)>0?'+':'')+Number(x.price_change_24h).toFixed(2)+'%':'—')+'</span></div>'+
-              '<div class="muted">السعر '+e(x.last_price??'—')+' • حجم 24h '+e(x.quote_volume_24h==null?'—':Math.round(Number(x.quote_volume_24h)).toLocaleString('en-US'))+'</div>'+
+              '<div class="muted">السعر '+e(x.last_price==null?'—':x.last_price)+' • حجم 24h '+e(x.quote_volume_24h==null?'—':Math.round(Number(x.quote_volume_24h)).toLocaleString('en-US'))+'</div>'+
               '<div class="shock-note" style="'+(extended?'border-color:#8c5045;color:#ffc0b5;background:#24120f':'')+'">'+
                 (extended?'⛔ حركة ممتدة — لا تطارد السعر':'🔎 رصد تغيّر التكر')+' • '+e(x.analysis_status||'NOT_DEEP_SCANNED_THIS_CYCLE')+
                 (selected?' • اختير للفحص العميق في هذه الدورة':'')+
