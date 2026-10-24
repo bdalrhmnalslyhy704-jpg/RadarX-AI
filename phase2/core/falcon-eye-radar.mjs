@@ -30,6 +30,59 @@ const clamp=(v,min=0,max=100)=>Math.max(min,Math.min(max,Number.isFinite(Number(
 const finite=(v,d=null)=>v!==null&&v!==undefined&&!(typeof v==='string'&&v.trim()==='')&&typeof v!=='boolean'&&Number.isFinite(Number(v))?Number(v):d;
 const hasFiniteValue=v=>v!==null&&v!==undefined&&!(typeof v==='string'&&v.trim()==='')&&Number.isFinite(Number(v));
 const dailyMoveAbs=row=>hasFiniteValue(row?.priceChange24h)?Math.abs(Number(row.priceChange24h)):null;
+
+/**
+ * Live 24h mover ledger for visibility only. It is intentionally not an alert,
+ * signal, or substitute for a candle/order-book analysis. Extended movers remain
+ * labelled anti-chase and cannot be promoted to entry eligibility by this list.
+ */
+export function buildFalconEyeMarketMoverObservations(rows,{
+  minQuoteVolume24h=750000,minMovePct=8,maxExtended24hMovePct=18,limit=10,selectedSymbols=[],now=Date.now()
+}={}){
+  const selected=new Set((Array.isArray(selectedSymbols)?selectedSymbols:[])
+    .map(x=>String(x||'').trim().toUpperCase()).filter(Boolean));
+  const take=Math.max(1,Math.min(25,Math.trunc(Number(limit)||10)));
+  return (Array.isArray(rows)?rows:[])
+    .map(row=>{
+      const symbol=String(row?.symbol||'').trim().toUpperCase();
+      const price=finite(row?.lastPrice??row?.last_price,null);
+      const change=finite(row?.priceChange24h??row?.price_change_24h,null);
+      const volume=finite(row?.quoteVolume24h??row?.quote_volume_24h,null);
+      const trades=finite(row?.tradeCount24h??row?.trade_count_24h,null);
+      return {symbol,price,change,volume,trades,row};
+    })
+    .filter(x=>/^[A-Z0-9]{5,30}$/.test(x.symbol)&&isDirectionalCandidateSymbol(x.symbol)&&
+      x.price!==null&&x.price>0&&x.change!==null&&x.change>=minMovePct&&
+      x.volume!==null&&x.volume>=Math.max(1,Number(minQuoteVolume24h)||1))
+    .sort((a,b)=>b.change-a.change||b.volume-a.volume||a.symbol.localeCompare(b.symbol))
+    .slice(0,take)
+    .map(x=>{
+      const extended=x.change>Number(maxExtended24hMovePct);
+      const deepSelected=selected.has(x.symbol);
+      return {
+        radar:'FALCON_EYE_RADAR',radar_name:'Radar 9 — عين الصقر',
+        symbol:x.symbol,last_price:x.price,price_change_24h:x.change,
+        quote_volume_24h:x.volume,trade_count_24h:x.trades,
+        stage:extended?'ALREADY_EXTENDED':'MOMENTUM_OBSERVATION',
+        analysis_status:extended?'ANTI_CHASE_NOT_DEEP_SELECTED':deepSelected?'SELECTED_FOR_DEEP_SCAN_THIS_CYCLE':'NOT_DEEP_SCANNED_THIS_CYCLE',
+        deep_scan_selected:deepSelected,deep_analysis_completed:false,
+        eligible:false,entry_eligible:false,watch_only:true,actionable:false,diagnostic_only:true,
+        opportunity_score:null,confidence_score:'UNKNOWN',
+        observed_at:new Date(Number(now)||Date.now()).toISOString(),
+        reason_codes:extended
+          ?['ANTI_CHASE_24H_MOVE_EXCEEDED','TICKER_ONLY_NOT_DEEP_ANALYZED']
+          :deepSelected
+            ?['TICKER_MOVE_OBSERVED','DEEP_SCAN_SELECTED_NOT_YET_CONFIRMED']
+            :['TICKER_MOVE_OBSERVED','NOT_DEEP_SCANNED_THIS_CYCLE'],
+        reasons:extended
+          ?['الحركة اليومية ممتدة؛ لا تطارد السعر. هذه ملاحظة من بيانات التكر فقط وليست تحليل شموع.']
+          :['تم رصد تغير يومي من بيانات التكر فقط؛ يلزم فحص الشموع والسيولة قبل أي قرار.'],
+        data_status:{data_valid:false,data_stale:false,source:'BINANCE_PUBLIC_REST_TICKER_ONLY',
+          last_error:'DEEP_CANDLE_ANALYSIS_NOT_COMPLETED'},
+        paper_trading:true,real_order_execution:false
+      };
+    });
+}
 const avg=xs=>{const a=xs.map(Number).filter(Number.isFinite);return a.length?a.reduce((s,x)=>s+x,0)/a.length:null;};
 const median=xs=>{const a=xs.map(Number).filter(Number.isFinite).sort((a,b)=>a-b);if(!a.length)return null;const m=Math.floor(a.length/2);return a.length%2?a[m]:(a[m-1]+a[m])/2;};
 const pct=(a,b)=>Number.isFinite(Number(a))&&Number.isFinite(Number(b))&&Number(b)!==0?(Number(a)-Number(b))/Math.abs(Number(b))*100:null;
@@ -455,7 +508,7 @@ export class FalconEyeRadar {
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
     this.lastScanAt=new Map();this.lastSelectedAt=new Map();this.lastSelectionCycleBySymbol=new Map();this.selectionCycle=0;
     this.lastAlertAt=new Map();this.lastFutures=new Map();this.alertTimestamps=[];
-    this.scans=0;this.alertCount=0;this.lastScanAtMs=null;this.lastError=null;this.busy=false;this.latestCandidates=[];this.lastBatchSymbols=[];this.lastBatchAt=null;this.lastPatrolVisits=0;
+    this.scans=0;this.alertCount=0;this.lastScanAtMs=null;this.lastError=null;this.busy=false;this.latestCandidates=[];this.lastBatchSymbols=[];this.lastBatchAt=null;this.lastPatrolVisits=0;this.latestMoverObservations=[];
     this.pulseHistory=new Map();this.marketCoverage=0;this.pulseReadyCount=0;this.marketBreadthPct=0;this.fastCandidates=0;
     this.lastSelectionStats={cycle:0,input_rows:0,eligible_total:0,target:0,selected_total:0,quiet_selected:0,patrol_selected:0,exceptional_bypass_selected:0,incomplete_selected:0,shortfall:0,selected_symbols:[]};
     this.lastDecisionDiagnostics={cycle_started_at:null,evaluated:0,analysis_rejected:0,score_rejected:0,notification_gate_rejected:0,notification_gate_accepted:0,rate_limited:0,alerts_stored:0};
@@ -626,6 +679,11 @@ export class FalconEyeRadar {
       }
     }
     this.lastBatchSymbols=selected.map(row=>row.symbol);
+    this.latestMoverObservations=buildFalconEyeMarketMoverObservations(deduplicated,{
+      minQuoteVolume24h:this.config.fastMinQuoteVolume24h,
+      maxExtended24hMovePct:this.config.maxExtended24hMovePct,
+      selectedSymbols:this.lastBatchSymbols,limit:10,now
+    });
     this.lastBatchAt=now;
     this.lastPatrolVisits=Math.min(this.universe.length,selected.filter(x=>x._selection_lane==='patrol'||x._selection_lane==='patrol_fill').length);
     this.lastSelectionStats={cycle:this.selectionCycle,input_rows:input.length,unique_rows:deduplicated.length,
@@ -748,7 +806,7 @@ export class FalconEyeRadar {
       running:this.running,radar:'FALCON_EYE_RADAR',radar_name:'Radar 9 — عين الصقر',universe:this.universe.length,last_batch_symbols:this.lastBatchSymbols.slice(),last_batch_count:this.lastBatchSymbols.length,last_batch_at:this.lastBatchAt,last_patrol_visits:this.lastPatrolVisits,deep_scan_min_interval_ms:Math.max(90_000,Number(this.config.deepScanMinIntervalMs)||0,Number(this.config.pollMs||30_000)*2),
       market_coverage:this.marketCoverage,pulse_ready_count:this.pulseReadyCount,market_breadth_pct:this.marketBreadthPct,fast_candidates:this.fastCandidates,
       last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,scans:this.scans,alerts:this.alertCount,
-      last_error:this.lastError,latest_candidates:this.latestCandidates.slice(0,10),selection:this.lastSelectionStats,
+      last_error:this.lastError,latest_candidates:this.latestCandidates.slice(0,10),latest_movers:this.latestMoverObservations.slice(0,10),selection:this.lastSelectionStats,
       decision_diagnostics:{...this.lastDecisionDiagnostics,top_gate_failures:Object.entries(this.gateFailureCounts).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([reason,count])=>({reason,count}))},
       active_alerts_last_hour:this.alertTimestamps.filter(t=>now-t<60*60*1000).length,
       alert_budget_per_hour:this.config.maxAlertsPerHour,features:['OGN pre-explosion fingerprint','Quiet-base activity shock (taker buy is not mandatory)','Spot/Futures volume ratio','Open Interest','Funding squeeze context','Forced-liquidation context','Higher-Lows','Compression→Expansion','Relative Strength vs BTC','Anti-chase']
