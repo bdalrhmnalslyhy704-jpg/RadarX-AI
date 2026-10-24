@@ -441,7 +441,7 @@ async function main() {
     process.stdout.write(JSON.stringify({
       profiles:HISTORICAL_DETECTOR_PROFILES.map(profile=>profileSnapshot(profile)),
       policy:{market:'BINANCE_SPOT_USDT',paper_trading:true,real_order_execution:false,network_access:false}
-    },null,2)+'\\n');
+    },null,2)+'\n');
     return;
   }
   const detectorProfile=String(flag(args,'--detector-profile','STRONG_MOVE_RADAR')).trim().toUpperCase();
@@ -907,6 +907,8 @@ async function main() {
       detectorProfile, timeframeCoverage, config
     );
     const profileRequirements = historicalProfileRequirements(detectorProfile, config);
+    const profileTradeCoverageFailures = profileRequirements.tradeHistoryRequired===true&&!tradeFetch.complete
+      ? ['HISTORICAL_AGG_TRADE_COVERAGE_INCOMPLETE'] : [];
     const profileBaseCoverageFailures = [];
     if (candleFetch.candles.length < profileRequirements.base.oneMinute) {
       profileBaseCoverageFailures.push('HISTORICAL_BASE_SERIES_ROWS_BELOW_MINIMUM:oneMinute');
@@ -915,9 +917,10 @@ async function main() {
       profileBaseCoverageFailures.push('HISTORICAL_BASE_SERIES_ROWS_BELOW_MINIMUM:fiveMinute');
     }
     replay.data_quality.profile_coverage_complete = windowCandlesComplete &&
-      profileFrameCoverageFailures.length === 0 && profileBaseCoverageFailures.length === 0;
+      profileFrameCoverageFailures.length === 0 && profileBaseCoverageFailures.length === 0 &&
+      profileTradeCoverageFailures.length === 0;
     replay.data_quality.profile_coverage_failures = [...new Set([
-      ...profileFrameCoverageFailures, ...profileBaseCoverageFailures,
+      ...profileFrameCoverageFailures, ...profileBaseCoverageFailures, ...profileTradeCoverageFailures,
       ...(!windowCandlesComplete ? ['PRIMARY_1M_WINDOW_COVERAGE_INCOMPLETE'] : [])
     ])];
     replay.data_quality.required_history = profileRequirements;
