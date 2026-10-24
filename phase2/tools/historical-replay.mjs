@@ -782,22 +782,33 @@ async function main() {
           lastAlertAt:lastAlertAt.value,
           earlyCooldownMs:Number(tickerConfig.alertCooldownMs ?? 12 * MINUTE_MS)
         });
+        // Keep two different research events separate. A core trigger that misses
+        // the dynamic early-warning gate is NOT counted as an early warning candidate;
+        // it is logged in its own shadow lane so low follow-through cannot inflate the
+        // measured early-warning hit rate.
         const strictAccepted = false;
-        const candidateDetected = Boolean(!cooldownBlocked && (
-          earlyGate.eligible ||
-          (alert.eligible===true&&alertScore>=Number(tickerConfig.minScore??76)&&
-            Number(a.data_quality)>=80&&!a.data_stale&&Math.abs(Number(input.ticker.priceChange24h)||0)<=8)
-        ));
+        const candidateDetected=Boolean(!cooldownBlocked&&earlyGate.eligible);
+        const coreTriggerCandidateDetected=Boolean(!cooldownBlocked&&
+          alert.eligible===true&&alertScore>=Number(tickerConfig.minScore??76)&&
+          Number(a.data_quality)>=80&&!a.data_stale&&Math.abs(Number(input.ticker.priceChange24h)||0)<=8);
         const accepted = false;
         return {
           accepted:false,
           accepted_mode:'NONE_HISTORICAL_LIQUIDITY_UNVERIFIED',
           candidate_detected:candidateDetected,
-          candidate_mode:candidateDetected?(earlyGate.eligible?'DYNAMIC_EARLY_WARNING_CANDIDATE_SHADOW':'CORE_TRIGGER_CANDIDATE_SHADOW'):'NONE',
+          candidate_mode:candidateDetected?'DYNAMIC_EARLY_WARNING_CANDIDATE_SHADOW':'NONE',
           candidate_reasons:[...new Set([
-            ...(candidateDetected?['HISTORICAL_DETECTOR_CANDIDATE']:[]),
-            ...(candidateStrictFailures||[]),
-            ...(!candidateDetected?['CANDIDATE_GATE_NOT_MET']:[])
+            ...(candidateDetected?['HISTORICAL_EARLY_WARNING_CANDIDATE']:[]),
+            ...(candidateDetected?candidateStrictFailures:[]),
+            ...(!candidateDetected?['DYNAMIC_EARLY_WARNING_GATE_NOT_MET']:[])
+          ])].slice(0,30),
+          core_trigger_candidate_detected:coreTriggerCandidateDetected,
+          core_trigger_candidate_mode:coreTriggerCandidateDetected?'CORE_TRIGGER_CANDIDATE_SHADOW':'NONE',
+          core_trigger_candidate_reasons:[...new Set([
+            ...(coreTriggerCandidateDetected?['HISTORICAL_CORE_TRIGGER_CANDIDATE']:[]),
+            ...(coreTriggerCandidateDetected?candidateStrictFailures:[]),
+            ...(coreTriggerCandidateDetected&&!earlyGate.eligible?['EARLY_WARNING_CONFLUENCE_NOT_MET']:[]),
+            ...(!coreTriggerCandidateDetected?['CORE_TRIGGER_CANDIDATE_GATE_NOT_MET']:[])
           ])].slice(0,30),
           early_warning:earlyGate,
           strict_gate_failures:[...new Set([
