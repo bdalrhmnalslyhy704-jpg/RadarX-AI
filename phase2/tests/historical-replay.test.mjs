@@ -4,11 +4,22 @@ import {spawnSync} from 'node:child_process';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {aggregateFiveMinuteCandles, normalizeHistoricalCandles, runHistoricalReplay} from '../core/historical-replay.mjs';
-import {fetchAggregateTrades, withHistoricalRateLimitRetry, historicalProfileRequirements, assessHistoricalProfileCoverage, buildCandidateShadowResult, attachHistoricalMoveOutcomeAnalysis, HISTORICAL_DETECTOR_PROFILES} from '../tools/historical-replay.mjs';
+import {fetchAggregateTrades, withHistoricalRateLimitRetry, historicalProfileRequirements, assessHistoricalProfileCoverage, buildCandidateShadowResult, attachHistoricalMoveOutcomeAnalysis, countExpectedClosedMinuteCandles, HISTORICAL_DETECTOR_PROFILES} from '../tools/historical-replay.mjs';
 
 
 const MINUTE = 60_000;
 const ORIGIN = Math.floor((Date.now() - 400 * MINUTE) / (5 * MINUTE)) * (5 * MINUTE);
+
+test('CLI replay window count excludes the next candle that has not closed',()=>{
+  const start=Date.UTC(2024,10,6,0,0,0,0);
+  const nextOpen=Date.UTC(2024,10,6,6,0,0,0);
+  const lastClose=nextOpen-1;
+  assert.equal(countExpectedClosedMinuteCandles(start,nextOpen),360);
+  assert.equal(countExpectedClosedMinuteCandles(start,lastClose),360);
+  assert.equal(countExpectedClosedMinuteCandles(start,start),0);
+  assert.equal(countExpectedClosedMinuteCandles(start+MINUTE-1,start+MINUTE-1),1);
+  assert.throws(()=>countExpectedClosedMinuteCandles(nextOpen,start),/INVALID_CLOSED_CANDLE_WINDOW/);
+});
 
 test('historical replay passes only timeframe candles closed by the current decision timestamp',()=>{
   const rows=candles(240);
