@@ -104,6 +104,64 @@ async function fetchHistoricalTimeframe(client,symbol,interval,start,end,lookbac
     rows:latest.length,required_history_bars:bars,source:response?.source??'BINANCE_PUBLIC_REST'};
 }
 
+function numericOrNull(value){
+  if(value===null||value===undefined||value===''||typeof value==='boolean')return null;
+  const n=Number(value);return Number.isFinite(n)?n:null;
+}
+function uniqueReasonCodes(...groups){
+  return [...new Set(groups.flatMap(x=>Array.isArray(x)?x:[]).map(x=>String(x??'').trim()).filter(Boolean))].slice(0,30);
+}
+function buildCandidateShadowResult(profile,analysis,input,{eligible,score,stage,reasonCodes=[],extraGateFailures=[]}={}){
+  const reasons=uniqueReasonCodes(
+    reasonCodes,analysis?.reason_codes,analysis?.data_quality_reasons,analysis?.watch_blockers,
+    analysis?.risk_flags
+  );
+  const canonical=profile==='RADAR8_PREMOVE_SHADOW'?'EARLY_EXPANSION_RADAR':profile;
+  const nested=profile==='RADAR8_PREMOVE_SHADOW'?'early_expansion':
+    profile==='ALMUQAWIM_RADAR'?'almuqawim':
+    profile==='DOOMSDAY_RADAR'?'doomsday':'analysis';
+  const dataQuality=numericOrNull(analysis?.data_quality ?? analysis?.gates?.data_gate?.quality);
+  const isStale=analysis?.data_stale===true || analysis?.data_stale===false?analysis.data_stale:
+    analysis?.gates?.data_gate?.valid===false&&reasons.some(x=>/STALE/i.test(x));
+  const blocked=['HISTORICAL_PUSH_DELIVERY_NOT_SIMULATED',...extraGateFailures];
+  const alert={
+    symbol:input.symbol,radar:canonical,direction:analysis?.direction??'UP',
+    eligible:Boolean(eligible),score:numericOrNull(score),opportunity_score:numericOrNull(score),
+    stage:stage||analysis?.stage||analysis?.decision_band||analysis?.pre_expansion_stage||'NO_SETUP',
+    data_quality:dataQuality,liquidity_quality:null,data_stale:Boolean(isStale),
+    closed_candles_only:true,source:'BINANCE_PUBLIC_HISTORICAL_CANDLES',
+    reason_codes:reasons,risk_flags:Array.isArray(analysis?.risk_flags)?analysis.risk_flags:[],
+    [nested]:analysis,
+    ...(profile==='RADAR8_PREMOVE_SHADOW'?{
+      early_expansion_score:numericOrNull(analysis?.early_expansion_score),
+      pre_expansion_fingerprint:analysis?.pre_expansion_fingerprint??null,
+      metrics:analysis?.metrics||{},
+      quote_volume_24h:numericOrNull(input.ticker?.quoteVolume24h)
+    }:{}),
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+  };
+  const outcomeReasonCodes=eligible
+    ?uniqueReasonCodes(reasons,['HISTORICAL_CANDIDATE_DETECTED','CANDIDATE_SHADOW_NOT_A_PUSH'])
+    :uniqueReasonCodes(reasons,['DETECTOR_CANDIDATE_NOT_CONFIRMED']);
+  return {
+    accepted:Boolean(eligible),
+    accepted_mode:eligible?profile+'_CANDIDATE_SHADOW':'NONE',
+    alert,
+    score:numericOrNull(score),
+    stage:alert.stage,
+    candidate_eligible:Boolean(eligible),
+    core_trigger_eligible:Boolean(analysis?.eligible===true),
+    notificationGate:{eligible:null,failures:blocked},
+    notification_gate:{eligible:null,failures:blocked},
+    strict_gate_failures:uniqueReasonCodes(reasons,blocked),
+    reason_codes:outcomeReasonCodes,
+    shadow_evaluation:{
+      profile,detector_candidate:Boolean(eligible),live_notification_simulated:false,
+      unavailable_historical_evidence:blocked
+    }
+  };
+}
+
 function profileSnapshot(profile){
   const profiles={
     STRONG_MOVE_RADAR:{mode:'ACTIONABLE_GATE_REPLAY',requires:['closed 1m/5m candles','aggregate trade history or explicitly marked candle-only fallback'],historical_book_required:false},
