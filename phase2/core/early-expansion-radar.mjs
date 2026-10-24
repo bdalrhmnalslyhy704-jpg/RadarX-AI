@@ -18,16 +18,17 @@ function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
   if(normalized)return normalized;
   if(!row||typeof row.symbol!=='string'||!/^[A-Z0-9]{5,30}$/i.test(row.symbol))return null;
-  const lastPrice=Number(row.lastPrice),quoteVolume=Number(row.quoteVolume),count=Number(row.count);
-  if(!Number.isFinite(lastPrice)||lastPrice<=0||!Number.isFinite(quoteVolume)||quoteVolume<0||!Number.isFinite(count)||count<0)return null;
-  const rawChange=row.priceChangePercent;
-  const dailyKnown=rawChange!==null&&rawChange!==undefined&&!(typeof rawChange==='string'&&rawChange.trim()==='')&&Number.isFinite(Number(rawChange));
-  const high=Number(row.highPrice),low=Number(row.lowPrice);
-  const tickerTime=['closeTime','eventTime','openTime'].map(key=>Number(row[key])).find(Number.isFinite)??null;
+  // Do not let absent Binance fields become valid zero measurements.
+  const lastPrice=finiteNumberOr(row.lastPrice,null),quoteVolume=finiteNumberOr(row.quoteVolume,null),count=finiteNumberOr(row.count,null);
+  if(lastPrice===null||lastPrice<=0||quoteVolume===null||quoteVolume<0||count===null||count<0)return null;
+  const dailyChange=finiteNumberOr(row.priceChangePercent,null);
+  const dailyKnown=dailyChange!==null;
+  const high=finiteNumberOr(row.highPrice,null),low=finiteNumberOr(row.lowPrice,null);
+  const tickerTime=['closeTime','eventTime','openTime'].map(key=>finiteNumberOr(row[key],null)).find(Number.isFinite)??null;
   return {
     symbol:String(row.symbol).toUpperCase(),quoteAsset:String(quote).toUpperCase(),
     lastPrice,quoteVolume24h:quoteVolume,tradeCount24h:count,
-    priceChange24h:dailyKnown?Number(rawChange):null,
+    priceChange24h:dailyKnown?dailyChange:null,
     highPrice24h:Number.isFinite(high)&&high>0?high:null,
     lowPrice24h:Number.isFinite(low)&&low>0?low:null,tickerTime
   };
@@ -548,7 +549,7 @@ export function buildEarlyExpansionEvidence({series={},ticker={},depth=null,live
   // the closed-candle filter removes them.
   const gate=dataGate(series,now,cfg,{historicalReplay,allowMissingDepth:historicalReplay});
   const activityShock=assessQuietBaseActivityShock({fiveMinute:s['5m'],ticker,now,config:cfg});
-  const quietBasePreExpansion=assessQuietBasePreExpansion({fiveMinute:series['5m']||[],ticker,now,dataReady:gate.valid,dataIssues:gate.issues,config:cfg});
+  const quietBasePreExpansion=assessQuietBasePreExpansion({fiveMinute:series['5m']||[],ticker,now,dataReady:gate.valid&&dailyMovePctKnown(ticker.priceChange24h),dataIssues:gate.valid&&dailyMovePctKnown(ticker.priceChange24h)?gate.issues:[...gate.issues,'TICKER_24H_CHANGE_UNKNOWN'],config:cfg});
   const p=finite(ticker.lastPrice,null);
   // Unknown daily movement must never be treated as a quiet 0% move.
   const dailyMovePct=hasFiniteNumber(ticker.priceChange24h)?Number(ticker.priceChange24h):null;
