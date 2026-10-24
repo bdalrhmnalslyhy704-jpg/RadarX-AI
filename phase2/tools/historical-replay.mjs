@@ -323,6 +323,12 @@ export function assessHistoricalProfileCoverage(profile, input = {}, timeframeCo
   return [...new Set(failures)];
 }
 
+export const HISTORICAL_DETECTOR_PROFILES=Object.freeze([
+  'EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR','LIQUIDITY_ABSORPTION_RADAR',
+  'KAHIR_RADAR','DOOMSDAY_RADAR','ALMUQAWIM_RADAR','RADAR8_PREMOVE_SHADOW',
+  'FALCON_EYE_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','PROFESSOR_RADAR'
+]);
+
 function profileSnapshot(profile){
   const profiles={
     STRONG_MOVE_RADAR:{mode:'STRICT_GATE_CANDLE_SHADOW',requires:['closed 1m/5m candles','aggregate trade history or explicitly marked candle-only fallback'],historical_book_required:true},
@@ -341,7 +347,10 @@ function profileSnapshot(profile){
   const result=profiles[profile];
   if(!result)throw new Error('UNSUPPORTED_HISTORICAL_DETECTOR_PROFILE:'+profile);
   const required=historicalProfileRequirements(profile,CONFIG);
-  return {profile,...result,required_history:required};
+  return {profile,...result,required_history:required,
+    unavailable_historical_evidence:required.unavailableEvidence||[],
+    external_evidence_required:required.externalEvidence||[],
+    trade_history_required:required.tradeHistoryRequired===true};
 }
 async function fetchOneMinute(client, symbol, start, end) {
   const rows = [];
@@ -420,12 +429,19 @@ async function main() {
     process.stdout.write([
       'RadarX historical replay (public Binance Spot data; read-only)',
       'Usage: node phase2/tools/historical-replay.mjs [--symbols GTCUSDT,WUSDT] [--start ISO|ms] [--end ISO|ms]',
-      '       [--detector-profile STRONG_MOVE_RADAR|RADAR8_PREMOVE_SHADOW|ALMUQAWIM_RADAR|DOOMSDAY_RADAR|KAHIR_RADAR|ROTATION_LAG_RADAR]',
+      '       [--detector-profile one of 12 canonical radars; use --list-profiles]',
       '       [--lookback-hours 24] [--outcome-horizon-hours 24] [--max-trade-pages 500] [--max-trades 500000] [--output path] [--dry-run]',
       'Default window: last completed minute minus 24 hours. Maximum window: 7 days.',
       'Candle-only profiles are labeled candidate shadows; missing historical order-book/news data is never synthesized.',
       'Trade-history pagination that reaches a cap is flagged incomplete and fails closed. No orders or credentials are used.'
     ].join('\n') + '\n');
+    return;
+  }
+  if(args.includes('--list-profiles')){
+    process.stdout.write(JSON.stringify({
+      profiles:HISTORICAL_DETECTOR_PROFILES.map(profile=>profileSnapshot(profile)),
+      policy:{market:'BINANCE_SPOT_USDT',paper_trading:true,real_order_execution:false,network_access:false}
+    },null,2)+'\\n');
     return;
   }
   const detectorProfile=String(flag(args,'--detector-profile','STRONG_MOVE_RADAR')).trim().toUpperCase();
@@ -508,6 +524,16 @@ async function main() {
       await fetchFrame('BTCUSDT:5m','BTCUSDT','5m',60);
     }else if(detectorProfile==='KAHIR_RADAR'){
       await fetchFrame('BTCUSDT:1m','BTCUSDT','1m',120);
+    }else if(detectorProfile==='EARLY_MOVE_RADAR'){
+      await fetchFrame('15m',symbol,'15m',240);
+      await fetchFrame('BTCUSDT:15m','BTCUSDT','15m',240);
+    }else if(detectorProfile==='FALCON_EYE_RADAR'){
+      await fetchFrame('BTCUSDT:1m','BTCUSDT','1m',70);
+      await fetchFrame('BTCUSDT:5m','BTCUSDT','5m',30);
+    }else if(detectorProfile==='COIN_HUNTER_RADAR'){
+      await fetchFrame('15m',symbol,'15m',24);
+      await fetchFrame('1h',symbol,'1h',50);
+      await fetchFrame('BTCUSDT:1h','BTCUSDT','1h',25);
     }
     let tradeFetch;
     try {
