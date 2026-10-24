@@ -12,6 +12,45 @@ import {runHistoricalReplay} from '../core/historical-replay.mjs';
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Historical replay is an offline evaluation tool and may wait for a bounded
+ * public-API cooldown. The live radar path intentionally defers work instead:
+ * this retry policy must not be copied into latency-sensitive production scans.
+ */
+export async function withHistoricalRateLimitRetry(operation, {
+  label = 'historical public-data request',
+  maxAttempts = 5,
+  maxWaitMs = 120_000,
+  sleepFn = sleep,
+  onRetry = ({attempt, waitMs}) => process.stderr.write(
+    '[HISTORICAL_RATE_LIMIT_RETRY] ' + label + ' attempt=' + attempt + ' wait_ms=' + waitMs + '\n'
+  )
+} = {}) {
+  const attempts = Math.max(1, Math.trunc(Number(maxAttempts) || 1));
+  const waitLimit = Math.max(0, Number(maxWaitMs) || 0);
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      const rateLimited = error?.name === 'RestRateLimitError' ||
+        String(error?.message || '') === 'BINANCE_RATE_LIMIT';
+      if (!rateLimited || attempt >= attempts) throw error;
+      const retryValue = Number(error?.retryMs);
+      const waitMs = Number.isFinite(retryValue) && retryValue > 0
+        ? Math.ceil(retryValue) : Math.min(60_000, 1_000 * (2 ** (attempt - 1)));
+      if (waitMs > waitLimit) {
+        error.message = String(error.message || 'BINANCE_RATE_LIMIT') +
+          ' HISTORICAL_RETRY_WAIT_EXCEEDS_LIMIT retry_ms=' + waitMs;
+        throw error;
+      }
+      onRetry({attempt, waitMs, label});
+      await sleepFn(waitMs);
+    }
+  }
+  throw new Error('HISTORICAL_RATE_LIMIT_RETRY_UNREACHABLE');
+}
 function flag(args, name, fallback = null) {
   const index = args.indexOf(name);
   return index >= 0 ? (args[index + 1] ?? fallback) : fallback;
@@ -45,7 +84,10 @@ async function fetchOneMinute(client, symbol, start, end) {
   let pages = 0;
   const maxPages=Math.min(40,Math.max(1,Math.ceil((end-start+1)/(1000*MINUTE_MS))+1));
   while (cursor <= end && pages < maxPages) {
-    const result = await client.klines(symbol, '1m', {limit: 1000, startTime: cursor, endTime: end});
+    const result = await withHistoricalRateLimitRetry(
+      () => client.klines(symbol, '1m', {limit: 1000, startTime: cursor, endTime: end}),
+      {label: 'klines:' + symbol}
+    );
     const page = Array.isArray(result.candles) ? result.candles : [];
     pages++;
     if (!page.length) break;
@@ -77,7 +119,10 @@ export async function fetchAggregateTrades(client, symbol, start, end, {maxPages
       : {symbol, fromId, limit: Math.min(1000, remaining)};
     // Production RestClient intentionally exposes a generic allowlisted request()
     // rather than endpoint-specific aggTrades(); keep replay compatible with it.
-    const result = await client.request('/api/v3/aggTrades', query);
+    const result = await withHistoricalRateLimitRetry(
+      () => client.request('/api/v3/aggTrades', query),
+      {label: 'aggTrades:' + symbol}
+    );
     const page = normalizedTrades(result.trades ?? result.data ?? []);
     pages++;
     if (!page.length) { complete = true; break; }

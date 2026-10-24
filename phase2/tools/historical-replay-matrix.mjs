@@ -5,6 +5,7 @@ import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {CONFIG} from '../config.mjs';
 import {RestClient} from '../market/binance-rest.mjs';
+import {withHistoricalRateLimitRetry} from './historical-replay.mjs';
 import {HISTORICAL_MATRIX_DEFAULT_SYMBOLS,HISTORICAL_MATRIX_DEFAULT_WINDOWS,HISTORICAL_MATRIX_REQUIRED_REGIMES,normalizeMatrixSymbols,normalizeMatrixWindows,classifyBtcMarketRegime,summarizeHistoricalWindowReport} from '../core/historical-replay-matrix.mjs';
 
 const HOUR_MS=60*60*1000;
@@ -16,7 +17,10 @@ function isoArg(value){const n=Date.parse(String(value??''));if(!Number.isFinite
 async function loadWindows(path){if(!path)return HISTORICAL_MATRIX_DEFAULT_WINDOWS;const raw=JSON.parse(await readFile(resolve(path),'utf8'));if(!Array.isArray(raw))throw new Error('WINDOWS_JSON_MUST_BE_ARRAY');return raw;}
 async function classifyWindow(client,window){
   try{
-    const result=await client.klines('BTCUSDT','1h',{limit:Math.max(4,Math.min(1000,Math.ceil((window.endMs-window.startMs)/HOUR_MS)+2)),startTime:window.startMs,endTime:window.endMs-1});
+    const result=await withHistoricalRateLimitRetry(
+      ()=>client.klines('BTCUSDT','1h',{limit:Math.max(4,Math.min(1000,Math.ceil((window.endMs-window.startMs)/HOUR_MS)+2)),startTime:window.startMs,endTime:window.endMs-1}),
+      {label:'btc-regime:'+window.id}
+    );
     const rows=(Array.isArray(result?.candles)?result.candles:[]).filter(c=>Number(c?.closeTime??c?.close_time)<=window.endMs-1&&Number(c?.openTime??c?.open_time)>=window.startMs);
     return classifyBtcMarketRegime(rows);
   }catch(error){return {regime:'UNKNOWN',sample_count:0,net_return_pct:null,range_pct:null,reason:'BTC_REGIME_FETCH_FAILED: '+String(error?.message??error).slice(0,240)};}

@@ -996,7 +996,16 @@ export function buildMicroEarlyFlowWatchCandidate(micro,now=Date.now(),config=EA
     symbol,last_price:hasFiniteNumber(row.lastPrice)?Number(row.lastPrice):null,
     price_change_24h:hasFiniteNumber(row.priceChange24h)?Number(row.priceChange24h):null,
     data_quality:null,data_stale:false,
-    source:micro.source||row.source||'Binance Public REST',
+    // microScan exposes a source list for its 1m and 5m series. Push validation
+    // expects one canonical trusted source, so do not stringify the array (which
+    // would make a valid Binance source fail the trust check).
+    source:(Array.isArray(micro?.source)?micro.source:[micro?.source])
+      .map(value=>String(value||'').trim().toUpperCase().replace(/\s+/g,'_'))
+      .find(value=>['BINANCE_PUBLIC_REST','BINANCE_PUBLIC_WS','BINANCE_PUBLIC_WEBSOCKET','BINANCE_SPOT_PUBLIC_REST'].includes(value))
+      || 'UNKNOWN_MARKET_SOURCE',
+    quote_volume_24h:hasFiniteNumber(row?.quoteVolume24h)?Number(row.quoteVolume24h):null,
+    // Micro candle data has been validated, but actual order-book depth is not queried at this stage.
+    micro_data_validated:true,
     low_liquidity_burst_bypass:row._low_liquidity_burst_bypass===true,
     micro_fingerprint_score:hasFiniteNumber(fp.score)?Number(fp.score):null,
     risk_flags:[...(fp.risk_flags||[])],
@@ -1389,6 +1398,9 @@ export function buildEarlyFlowWatchAlert(candidate,now=Date.now()){
     early_flow_watch_evidence:evidence,
     micro_fingerprint_score:hasFiniteNumber(candidate?.micro_fingerprint_score)?Number(candidate.micro_fingerprint_score):null,
     low_liquidity_burst_bypass:lowLiquidity,
+    quote_volume_24h:hasFiniteNumber(candidate?.quote_volume_24h)?Number(candidate.quote_volume_24h):null,
+    micro_data_validated:candidate?.micro_data_validated===true,
+    liquidity_evidence_status:candidate?.micro_data_validated===true?'ORDER_BOOK_NOT_CHECKED_AT_MICRO_STAGE':'NOT_AVAILABLE',
     risk_flags:[...new Set([...(candidate?.risk_flags||[]),'EARLY_FLOW_WATCH_ONLY',lowLiquidity?'LOW_LIQUIDITY_WATCH_ONLY':null].filter(Boolean))],
     reason_codes:[...new Set([...(candidate?.reason_codes||[]),'FAST_RELATIVE_FLOW_EXPANSION','MICRO_CLOSED_CANDLE_CONFIRMATION','MONITOR_ONLY_NOT_ENTRY'])],
     data_quality:hasFiniteNumber(candidate?.data_quality)?Number(candidate.data_quality):null,
@@ -1977,6 +1989,7 @@ export class EarlyExpansionRadar{
     const trace={...alert,event_type:eventType,feed_status:'TRACE_ONLY',
       notification_status:pushStatus,push_attempted:pushAttempted,
       push_result_status:pushResult?.status??null,
+      push_result_reason:pushResult?.reason??null,
       push_sent_count:Number(pushResult?.sent_count)||0,
       push_attempted_count:Number(pushResult?.attempted_count)||0,
       trace_at:traceAt};
@@ -1991,7 +2004,11 @@ export class EarlyExpansionRadar{
     this.logger.info?.('[RADAR8_WATCH_ONLY_ALERT]',JSON.stringify({
       id:alert?.id||null,symbol,event:alert?.event||null,feed_status:stored?'TRACE_ONLY':'TRACE_STORE_FAILED',
       notification_status:pushStatus,push_attempted:pushAttempted,
-      push_result_status:pushResult?.status??null,push_sent_count:Number(pushResult?.sent_count)||0,
+      push_result_status:pushResult?.status??null,push_result_reason:pushResult?.reason??null,
+      push_sent_count:Number(pushResult?.sent_count)||0,
+      quote_volume_24h:hasFiniteNumber(alert?.quote_volume_24h)?Number(alert.quote_volume_24h):null,
+      micro_data_validated:alert?.micro_data_validated===true,
+      liquidity_evidence_status:alert?.liquidity_evidence_status??null,
       source:alert?.source||'UNKNOWN',price:Number(alert?.price)||null,
       price_change_24h:Number.isFinite(Number(alert?.price_change_24h))?Number(alert.price_change_24h):null,
       closed_candles_only:evidence.closed_candles_only===true,
