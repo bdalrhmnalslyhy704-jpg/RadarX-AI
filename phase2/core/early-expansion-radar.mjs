@@ -996,7 +996,13 @@ export function buildMicroEarlyFlowWatchCandidate(micro,now=Date.now(),config=EA
     symbol,last_price:hasFiniteNumber(row.lastPrice)?Number(row.lastPrice):null,
     price_change_24h:hasFiniteNumber(row.priceChange24h)?Number(row.priceChange24h):null,
     data_quality:null,data_stale:false,
-    source:micro.source||row.source||'Binance Public REST',
+    // microScan exposes a source list for its 1m and 5m series. Push validation
+    // expects one canonical trusted source, so do not stringify the array (which
+    // would make a valid Binance source fail the trust check).
+    source:(Array.isArray(micro?.source)?micro.source:[micro?.source])
+      .map(value=>String(value||'').trim().toUpperCase().replace(/\\s+/g,'_'))
+      .find(value=>['BINANCE_PUBLIC_REST','BINANCE_PUBLIC_WS','BINANCE_PUBLIC_WEBSOCKET','BINANCE_SPOT_PUBLIC_REST'].includes(value))
+      || 'UNKNOWN_MARKET_SOURCE',
     quote_volume_24h:hasFiniteNumber(row?.quoteVolume24h)?Number(row.quoteVolume24h):null,
     // Micro candle data has been validated, but actual order-book depth is not queried at this stage.
     micro_data_validated:true,
