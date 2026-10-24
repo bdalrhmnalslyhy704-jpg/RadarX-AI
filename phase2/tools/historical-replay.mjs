@@ -22,6 +22,22 @@ const HOUR_MS = 60 * MINUTE_MS;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
+ * Count the one-minute candle closes that can exist inside an inclusive time
+ * window. For example, [00:00:00.000, 06:00:00.000] contains 360 completed
+ * candles ending 00:00:59.999 through 05:59:59.999, not 361 candles; the
+ * candle opened at 06:00:00 has not closed at the window end.
+ */
+export function countExpectedClosedMinuteCandles(startTime, endTime) {
+  const start=Number(startTime), end=Number(endTime);
+  if(!Number.isFinite(start)||!Number.isFinite(end)||start>end) {
+    throw new Error('INVALID_CLOSED_CANDLE_WINDOW');
+  }
+  const firstClose=Math.ceil((start+1)/MINUTE_MS)*MINUTE_MS-1;
+  const lastClose=Math.floor((end+1)/MINUTE_MS)*MINUTE_MS-1;
+  return lastClose<firstClose?0:Math.floor((lastClose-firstClose)/MINUTE_MS)+1;
+}
+
+/**
  * Historical replay is an offline evaluation tool and may wait for a bounded
  * public-API cooldown. The live radar path intentionally defers work instead:
  * this retry policy must not be copied into latency-sensitive production scans.
@@ -800,7 +816,7 @@ async function main() {
         };
       }
     });
-    const expectedWindowCandles = Math.floor((end - start) / MINUTE_MS) + 1;
+    const expectedWindowCandles = countExpectedClosedMinuteCandles(start, end);
     const observedWindowCandles = replay.steps.length;
     const windowCandlesComplete = candleFetch.complete === true &&
       replay.data_quality.candle_fetch_complete === true &&
