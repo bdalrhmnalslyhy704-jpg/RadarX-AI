@@ -25,7 +25,7 @@ export async function withHistoricalRateLimitRetry(operation, {
   maxWaitMs = 120_000,
   sleepFn = sleep,
   onRetry = ({attempt, waitMs}) => process.stderr.write(
-    '[HISTORICAL_RATE_LIMIT_RETRY] ' + label + ' attempt=' + attempt + ' wait_ms=' + waitMs + '\\n'
+    '[HISTORICAL_RATE_LIMIT_RETRY] ' + label + ' attempt=' + attempt + ' wait_ms=' + waitMs + '\n'
   )
 } = {}) {
   const attempts = Math.max(1, Math.trunc(Number(maxAttempts) || 1));
