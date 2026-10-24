@@ -618,9 +618,9 @@ function specialistAnalysis(candidate, market={}, calibration=null){
   const dailyMoveAbs=Number.isFinite(dailyMovePct)?Math.abs(dailyMovePct):null;
   const quietnessScore=dailyMoveAbs===null?45:clamp(100-Math.max(0,dailyMoveAbs-1.5)*10-Math.max(0,dailyMoveAbs-4)*8);
   const squeezeScore=clamp(compressionScore*.62+quietnessScore*.38);
-  a.push(analyst('VOLATILITY_COMPRESSION','محلل القاعدة الهادئة',squeezeScore,squeezeScore>=70&&dailyMoveAbs<=6?'LONG':squeezeScore<38?'BEARISH':'NEUTRAL',{
-    compression_score:compressionScore,quietness_score:quietnessScore,bb_width_ratio:bb,atr_ratio:ar,range_burst:rangeBurst15,abs_move_24h_pct:dailyMoveAbs,anti_chase_compatible:dailyMoveAbs<=6,own_volume_baseline_ratio:rv,own_trade_baseline_ratio:tradeAccelerationRatio
-  },dailyMoveAbs>6?['QUIET_BASE_ALREADY_MOVED_TOO_FAR']:[]));
+  a.push(analyst('VOLATILITY_COMPRESSION','محلل القاعدة الهادئة',squeezeScore,squeezeScore>=70&&dailyMoveAbs!==null&&dailyMoveAbs<=6?'LONG':squeezeScore<38?'BEARISH':'NEUTRAL',{
+    compression_score:compressionScore,quietness_score:quietnessScore,bb_width_ratio:bb,atr_ratio:ar,range_burst:rangeBurst15,abs_move_24h_pct:dailyMoveAbs,anti_chase_compatible:dailyMoveAbs!==null&&dailyMoveAbs<=6,own_volume_baseline_ratio:rv,own_trade_baseline_ratio:tradeAccelerationRatio
+  },dailyMoveAbs===null?['DAILY_MOVE_UNKNOWN']:dailyMoveAbs>6?['QUIET_BASE_ALREADY_MOVED_TOO_FAR']:[]));
 
   const resistanceGap=Number.isFinite(price)&&Number.isFinite(sm.recentHigh)&&price>0?(sm.recentHigh-price)/price*100:null;
   const supportGap=Number.isFinite(price)&&Number.isFinite(sm.recentLow)&&price>0?(price-sm.recentLow)/price*100:null;
