@@ -551,7 +551,8 @@ function specialistAnalysis(candidate, market={}, calibration=null){
   const rs15=Number.isFinite(ret15)&&Number.isFinite(roc(btc15,8))?ret15-roc(btc15,8):null;
   const rs1=Number.isFinite(ret1)&&Number.isFinite(roc(btc1,4))?ret1-roc(btc1,4):null;
   const median24=safe(market.marketMedian24h,null);
-  const rel24=Number.isFinite(median24)&&Number.isFinite(Number(candidate?.price_change_24h))?Number(candidate.price_change_24h)-median24:null;
+  const dailyMovePct=safe(candidate?.price_change_24h,null);
+  const rel24=Number.isFinite(median24)&&Number.isFinite(dailyMovePct)?dailyMovePct-median24:null;
 
   const htfBias=avg([
     Number.isFinite(trend4)?clamp(50+trend4*6):null,
@@ -613,8 +614,9 @@ function specialistAnalysis(candidate, market={}, calibration=null){
   }));
 
   const compressionScore=avg([Number.isFinite(bb)?clamp(105-bb*95):null,Number.isFinite(ar)?clamp(105-ar*90):null,Number.isFinite(rangeBurst15)?clamp(92-(rangeBurst15-1)*70):null])||50;
-  const dailyMoveAbs=Math.abs(Number(candidate?.price_change_24h)||0);
-  const quietnessScore=clamp(100-Math.max(0,dailyMoveAbs-1.5)*10-Math.max(0,dailyMoveAbs-4)*8);
+  // Missing daily movement is unknown, not a zero-percent quiet base.
+  const dailyMoveAbs=Number.isFinite(dailyMovePct)?Math.abs(dailyMovePct):null;
+  const quietnessScore=dailyMoveAbs===null?45:clamp(100-Math.max(0,dailyMoveAbs-1.5)*10-Math.max(0,dailyMoveAbs-4)*8);
   const squeezeScore=clamp(compressionScore*.62+quietnessScore*.38);
   a.push(analyst('VOLATILITY_COMPRESSION','محلل القاعدة الهادئة',squeezeScore,squeezeScore>=70&&dailyMoveAbs<=6?'LONG':squeezeScore<38?'BEARISH':'NEUTRAL',{
     compression_score:compressionScore,quietness_score:quietnessScore,bb_width_ratio:bb,atr_ratio:ar,range_burst:rangeBurst15,abs_move_24h_pct:dailyMoveAbs,anti_chase_compatible:dailyMoveAbs<=6,own_volume_baseline_ratio:rv,own_trade_baseline_ratio:tradeAccelerationRatio
@@ -635,7 +637,7 @@ function specialistAnalysis(candidate, market={}, calibration=null){
   },breakoutConfirmed?[]:['BREAKOUT_CONTINUATION_NOT_CONFIRMED']));
 
   const atrValue=atrLast(s15,14),atrPct=Number.isFinite(atrValue)&&price>0?atrValue/price*100:null;
-  const volatilityRiskPenalty=Math.max(0,(Number(ar)||1)-1)*22+Math.max(0,(Number(candidate?.price_change_24h)||0)-5)*3.5+Math.max(0,(Number(atrPct)||0)-1.4)*12;
+  const volatilityRiskPenalty=Math.max(0,(Number(ar)||1)-1)*22+Math.max(0,(Number.isFinite(dailyMovePct)?dailyMovePct:0)-5)*3.5+Math.max(0,(Number(atrPct)||0)-1.4)*12;
   const volatilityRiskScore=clamp(100-volatilityRiskPenalty);
   a.push(analyst('SUPPORT_RESISTANCE','محلل التقلب والمخاطر',volatilityRiskScore,volatilityRiskScore>=66?'LONG':volatilityRiskScore<38?'BEARISH':'NEUTRAL',{
     atr_14:atrValue,atr_pct:atrPct,atr_regime_ratio:ar,range_burst_ratio:rangeBurst15,price_change_24h_pct:candidate?.price_change_24h,normalized_risk_penalty:volatilityRiskPenalty
@@ -936,7 +938,8 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
   if(!dataValid)hardReasons.push('DATA_GATE_FAILED');
   if(features?.symbol_valid!==true)hardReasons.push('SPOT_SYMBOL_INVALID');
   if(features?.coverage_report?.ready!==true)hardReasons.push('CANDLE_COVERAGE_INCOMPLETE');
-  if(Number(features?.quoteVolume24h)<300000)hardReasons.push('LIQUIDITY_NOTIONAL_TOO_LOW');
+  if(!Number.isFinite(safe(features?.quoteVolume24h,null))||Number(features.quoteVolume24h)<300000)hardReasons.push('LIQUIDITY_NOTIONAL_TOO_LOW');
+  if(!Number.isFinite(dailyMovePct))hardReasons.push('DAILY_MOVE_UNKNOWN');
   if(!Number.isFinite(features?.book?.spreadBps))hardReasons.push('SPREAD_EVIDENCE_UNAVAILABLE');
   else if(Number(features.book.spreadBps)>35)hardReasons.push('SPREAD_TOO_WIDE');
   if(features?.primary_evidence_complete!==true)hardReasons.push('PRIMARY_EVIDENCE_INCOMPLETE');
