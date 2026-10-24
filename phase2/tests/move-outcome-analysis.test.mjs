@@ -73,6 +73,30 @@ test('accepted alert after the move is marked late, not early',()=>{
   assert.equal(x.moderate_move.missed_move.classification,'LATE_DETECTION_AFTER_PLUS_5_PERCENT');
 });
 
+test('matured candidate shadows report weak follow-through separately from actual alert outcomes',()=>{
+  const decision=step(60*MIN,{decision:'REJECTED',failures:['CANDIDATE_SHADOW_NOT_A_PUSH']});
+  decision.candidate_detected=true;
+  decision.candidate_mode='RADAR8_PREMOVE_SHADOW_CANDIDATE_SHADOW';
+  decision.outcome={
+    horizon_observed:true,horizon_ms:24*60*MIN,
+    forward_max_upside_pct_from_decision:3.2,
+    forward_max_drawdown_pct_from_decision:-1.8,
+    forward_return_pct_at_horizon:-1.1
+  };
+  const x=buildMoveOutcomeAnalysis(replay({move5:null,move15:null,steps:[decision]}));
+  assert.equal(x.observation.accepted,0);
+  assert.equal(x.candidate_detection.candidate_count,1);
+  assert.equal(x.candidate_detection.candidate_with_matured_outcomes,1);
+  assert.equal(x.candidate_detection.low_follow_through_candidate_count,1);
+  assert.equal(x.candidate_detection.low_follow_through_candidate_rate_pct,100);
+  assert.equal(x.candidate_detection.low_follow_through_candidates[0].not_a_notification,true);
+  assert.equal(x.summary.low_follow_through_candidate_count,1);
+  const summary=summarizeMoveOutcomeAnalyses([x]);
+  assert.equal(summary.matured_candidate_detections,1);
+  assert.equal(summary.low_follow_through_candidate_count,1);
+  assert.equal(summary.low_follow_through_candidate_rate_pct,100);
+});
+
 test('low-follow-through accepted decisions are called out only after the outcome horizon matures',()=>{
   const mature=replay({move5:null,move15:null,steps:[
     step(60*MIN,{decision:'ACCEPTED',mode:'STRICT',upside:3.2,drawdown:-1.8,terminal:-1.1})
