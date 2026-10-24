@@ -4,7 +4,7 @@ import {spawnSync} from 'node:child_process';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {aggregateFiveMinuteCandles, normalizeHistoricalCandles, runHistoricalReplay} from '../core/historical-replay.mjs';
-import {fetchAggregateTrades, withHistoricalRateLimitRetry} from '../tools/historical-replay.mjs';
+import {fetchAggregateTrades, withHistoricalRateLimitRetry, historicalProfileRequirements, assessHistoricalProfileCoverage} from '../tools/historical-replay.mjs';
 
 
 const MINUTE = 60_000;
@@ -41,6 +41,37 @@ test('historical replay CLI profile dry-run performs no network access and ident
   assert.equal(report.detector.mode,'PRE_MOVE_CANDLE_ONLY_SHADOW');
   assert.equal(report.detector.historical_book_required,true);
   assert.equal(report.policy.real_order_execution,false);
+});
+
+test('historical detector profiles fail closed when required closed timeframe coverage is missing',()=>{
+  const profile='RADAR8_PREMOVE_SHADOW';
+  const requirements=historicalProfileRequirements(profile,{
+    earlyExpansionRadar:{fifteenMinuteKlines:160,oneHourKlines:260,fourHourKlines:220}
+  });
+  assert.deepEqual(requirements.frames,{'15m':160,'1h':260,'4h':220,'BTCUSDT:5m':60});
+  const coverage=Object.fromEntries(Object.entries(requirements.frames).map(([key,bars])=>[
+    key,{complete:true,rows:bars,interval:key.includes(':')?'5m':key}
+  ]));
+  const input={
+    oneMinute:Array.from({length:50},()=>({closed:true})),
+    fiveMinute:Array.from({length:12},()=>({closed:true})),
+    timeframes:Object.fromEntries(Object.entries(requirements.frames).map(([key,bars])=>[
+      key,Array.from({length:bars},()=>({closed:true}))
+    ]))
+  };
+  assert.deepEqual(assessHistoricalProfileCoverage(profile,input,coverage,{
+    earlyExpansionRadar:{fifteenMinuteKlines:160,oneHourKlines:260,fourHourKlines:220}
+  }),[]);
+  const missing={...coverage,'4h':{...coverage['4h'],complete:false}};
+  const blocked=assessHistoricalProfileCoverage(profile,input,missing,{
+    earlyExpansionRadar:{fifteenMinuteKlines:160,oneHourKlines:260,fourHourKlines:220}
+  });
+  assert.ok(blocked.includes('HISTORICAL_TIMEFRAME_COVERAGE_INCOMPLETE:4h'));
+  const thinInput={...input,timeframes:{...input.timeframes,'BTCUSDT:5m':input.timeframes['BTCUSDT:5m'].slice(1)}};
+  const thin=assessHistoricalProfileCoverage(profile,thinInput,coverage,{
+    earlyExpansionRadar:{fifteenMinuteKlines:160,oneHourKlines:260,fourHourKlines:220}
+  });
+  assert.ok(thin.includes('HISTORICAL_TIMEFRAME_ROWS_BELOW_MINIMUM:BTCUSDT:5m'));
 });
 
 test('historical public-data replay retries a bounded 429 cooldown without synthesizing data', async () => {
