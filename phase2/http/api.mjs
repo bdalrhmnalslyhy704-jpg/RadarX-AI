@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {stat as statFile} from 'node:fs/promises';
 import {verifySessionToken} from '../core/auth.mjs';
 import {defaultSettings} from '../core/signal-service.mjs';
 import {DurableStore} from '../core/store.mjs';
@@ -650,6 +651,9 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           const archiveTruncatedRadars=[];
           const archiveResults=await Promise.all(RADAR_OUTCOME_ARCHIVES.map(async radar=>{
             try{
+              const archivePath=store.files?.[radar.archive];
+              if(typeof archivePath!=='string'||!archivePath)throw new Error('ALERT_ARCHIVE_PATH_UNAVAILABLE');
+              try{await statFile(archivePath);}catch(error){throw new Error('ALERT_ARCHIVE_FILE_UNAVAILABLE:'+String(error?.code||error?.message||'UNKNOWN'));}
               const recent=await store.readRecent(radar.archive,alertTailLimit);
               const rows=(Array.isArray(recent)?recent:[]).filter(row=>{
                 const at=toMs(row?.detected_at??row?.detectedAt??row?.signal_at??row?.created_at??row?.event_at??row?.timestamp??row?.processed_at);
