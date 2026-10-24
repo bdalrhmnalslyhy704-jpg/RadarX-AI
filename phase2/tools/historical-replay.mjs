@@ -695,6 +695,7 @@ async function main() {
           const prints=analysis.large_prints||{},flow=analysis.candle_flow||{},priceContext=analysis.price_context||{};
           const tradeCovered=input.dataPolicy?.tradeCoverageComplete===true;
           const candleProxy=tradeCovered&&analysis.closed_candles_only===true&&!analysis.data_stale&&
+            Number(analysis.data_quality)>0&&!(Array.isArray(analysis.data_quality_reasons)&&analysis.data_quality_reasons.length)&&
             Number(prints.largeCount)>=4&&Number(prints.largeBuyRatio)>=0.60&&
             Number(prints.largeNotionalRatio)>=0.12&&Number(flow.volumeRatio)>=1.15&&
             Number(flow.takerBuyRatio)>=0.515&&Number(flow.absorptionScore)>=67&&
