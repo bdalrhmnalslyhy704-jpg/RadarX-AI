@@ -163,8 +163,46 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       last_scan_successful:stats.last_scan_successful===true,
       last_error:stats.last_error||null,
       last_failed_at:stats.last_failed_at||null,
-      next_scan_at:stats.next_scan_at||null
+      next_scan_at:stats.next_scan_at||null,
+      active_scan_started_at:stats.active_scan_started_at||null
     };
+  }
+  function multiAnalystWarmingBody({quote,requestId,reason='SCAN_IN_PROGRESS'}={}){
+    const monitoring=multiAnalystMonitoringSnapshot();
+    let reviewQueue={pending_count:0};
+    try{if(typeof multiAnalystRadar?.radarReviewQueueSnapshot==='function')reviewQueue=multiAnalystRadar.radarReviewQueueSnapshot();}catch{}
+    const startedAt=Date.parse(String(monitoring.active_scan_started_at||''));
+    return {
+      status:'warming',radar:'MULTI_ANALYST',as_of:new Date().toISOString(),source:'Binance Public REST',
+      universe:{quote,eligible_spot_symbols:0,discovery_pool:0,deep_scan_pool:0,scanned:0,returned:0,
+        min_quote_volume_24h:Number(multiAnalystRadar?.config?.minQuoteVolume24h)||300000,
+        universe_refreshed_at:null,
+        universe_refresh_interval_ms:Math.max(60000,Number(multiAnalystRadar?.config?.universeRefreshMs)||1800000),
+        surge_lane_candidates:0},
+      market_context:{regime:'UNKNOWN',median_24h_change_pct:null,positive_breadth_pct:null},
+      summary:{strong_candidates:0,candidates:0,qualified:0,watch:0,rejected:0},
+      candidates:[],watchlist:[],
+      pipeline:['Broad Discovery','Early-Opportunity Gate','Data Gate','19 Specialist Analysts','Chief Analyst','Sniper Freshness Gate'],
+      diagnostics:{duration_ms:Number.isFinite(startedAt)?Math.max(0,Date.now()-startedAt):0,
+        deep_concurrency:Math.max(1,Number(multiAnalystRadar?.config?.deepConcurrency)||3),
+        deep_klines:Math.max(1,Number(multiAnalystRadar?.config?.deepKlines)||220),
+        attempted_analyses:0,successful_analyses:0,gate_rejected:0,failed_analyses:0,scan_errors:[],
+        scan_failure_count:monitoring.last_error?1:0,last_scan_error:monitoring.last_error,radar_review_queue:reviewQueue},
+      monitoring,
+      scan:{requested:reason==='SCAN_STARTED',completed:false,error:reason,last_error:monitoring.last_error,request_id:requestId},
+      meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',
+        analyst_count:20,specialist_count:19,engine_revision:'ELITE_SNIPER_V1',analysis_mode:'WARMING',
+        force_refresh_requested:true,request_id:requestId,served_from_cache_while_scan:false,analyst_readiness:'WARMING'}
+    };
+  }
+  function multiAnalystFailureBody({quote,requestId,error}={}){
+    const message=String(error||'MULTI_ANALYST_SCAN_FAILED').slice(0,240);
+    const base=multiAnalystWarmingBody({quote,requestId,reason:'SCAN_FAILED'});
+    return {...base,status:'not_ready',error:message,
+      diagnostics:{...base.diagnostics,scan_failure_count:Math.max(1,Number(base.diagnostics.scan_failure_count)||0),
+        last_scan_error:message,scan_errors:[{stage:'MULTI_ANALYST_SCAN',error:message}]},
+      scan:{...base.scan,requested:true,completed:false,error:message,last_error:message},
+      meta:{...base.meta,analysis_mode:'SCAN_FAILED',analyst_readiness:'FAILED'}};
   }
   const moveConfig=config.moveRadar||{thresholdPct:1};
   const originList=config.auth.allowedOrigins;
@@ -894,7 +932,54 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         const runNow=String(u.searchParams.get('scan')||'').trim()==='1';
         const rawRequestId=String(u.searchParams.get('_ts')||'').trim();
         const requestId=/^[A-Za-z0-9_-]{1,64}$/.test(rawRequestId)?rawRequestId:null;
+        const backgroundRequested=String(u.searchParams.get('background')||'')==='1';
+        const progressRequested=String(u.searchParams.get('progress')||'')==='1';
         try{
+          if(backgroundRequested){
+            if(multiAnalystRadar.busy){
+              return send(res,202,multiAnalystWarmingBody({quote,requestId,reason:'SCAN_IN_PROGRESS'}));
+            }
+            try{
+              const scanFlight=multiAnalystRadar.scan({quote,limit,forceRefresh:true,requestId});
+              Promise.resolve(scanFlight).catch(error=>{
+                const message=recordMultiAnalystApiFailure(error);
+                console.error('[MULTI_ANALYST_API] background forced scan failed:',message);
+              });
+              return send(res,202,multiAnalystWarmingBody({quote,requestId,reason:'SCAN_STARTED'}));
+            }catch(error){
+              const message=recordMultiAnalystApiFailure(error);
+              return send(res,200,multiAnalystFailureBody({quote,requestId,error:message}));
+            }
+          }
+          if(progressRequested){
+            if(multiAnalystRadar.busy){
+              return send(res,202,multiAnalystWarmingBody({quote,requestId,reason:'SCAN_IN_PROGRESS'}));
+            }
+            const completedSnapshot=multiAnalystRadar.getCached({quote});
+            if(completedSnapshot){
+              const forced=u.searchParams.get('scan')==='1';
+              return send(res,200,{...completedSnapshot,radar:'MULTI_ANALYST',
+                scan:{requested:forced,completed:true,error:null,request_id:requestId},
+                monitoring:multiAnalystMonitoringSnapshot(),
+                meta:{...(completedSnapshot.meta||{}),analysis_mode:forced?'FORCED_SCAN':'CACHE',
+                  force_refresh_requested:forced,request_id:requestId,served_from_cache_while_scan:false}});
+            }
+            const monitor=multiAnalystMonitoringSnapshot();
+            if(monitor.last_error&&!monitor.last_scan_successful){
+              return send(res,200,multiAnalystFailureBody({quote,requestId,error:monitor.last_error}));
+            }
+            try{
+              const scanFlight=multiAnalystRadar.scan({quote,limit,forceRefresh:false,requestId});
+              Promise.resolve(scanFlight).catch(error=>{
+                const message=recordMultiAnalystApiFailure(error);
+                console.error('[MULTI_ANALYST_API] background progress scan failed:',message);
+              });
+              return send(res,202,multiAnalystWarmingBody({quote,requestId,reason:'SCAN_STARTED'}));
+            }catch(error){
+              const message=recordMultiAnalystApiFailure(error);
+              return send(res,200,multiAnalystFailureBody({quote,requestId,error:message}));
+            }
+          }
           let snapshot=multiAnalystRadar.getCached({quote});
           if(runNow){
             snapshot=await multiAnalystRadar.scan({quote,limit,forceRefresh:true,requestId});

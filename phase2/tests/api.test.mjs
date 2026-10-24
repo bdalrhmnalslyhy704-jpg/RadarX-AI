@@ -675,3 +675,82 @@ test('TEST_FIXTURE: Pre-Move Radar reuses an active radar REST client when the d
     await new Promise(resolve=>server.close(resolve));
   }
 });
+
+
+test('TEST_FIXTURE: multi-analyst forced scan launches in background and progress polling resolves to the completed result',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-multi-analyst-background-')),store=await new DurableStore({dir}).init();
+  let releaseScan=null,scanFlight=null,scanCalls=0,cached=null;
+  const completed={
+    status:'complete',radar:'MULTI_ANALYST',as_of:'2026-10-24T12:00:00.000Z',source:'BINANCE_PUBLIC_REST',
+    universe:{quote:'USDT',eligible_spot_symbols:500,discovery_pool:24,deep_scan_pool:12,scanned:12,returned:2},
+    market_context:{regime:'MIXED',median_24h_change_pct:0.8,positive_breadth_pct:53},
+    summary:{strong_candidates:1,candidates:2,qualified:1,watch:1,rejected:9},
+    candidates:[{symbol:'TESTUSDT',verdict:'CANDIDATE'}],watchlist:[],
+    diagnostics:{duration_ms:18000,attempted_analyses:12,successful_analyses:12,gate_rejected:2,failed_analyses:0,scan_failure_count:0,scan_errors:[]},
+    meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',analysis_mode:'FORCED_SCAN',analyst_count:20,specialist_count:19}
+  };
+  const multiAnalystRadar={
+    config:{quote:'USDT',returnLimit:1,minQuoteVolume24h:300000,universeRefreshMs:1800000,deepConcurrency:3,deepKlines:220,continuousIntervalMs:60000},
+    running:true,busy:null,
+    monitorStats:{scan_count:0,last_scan_at:null,last_error:null,last_failed_at:null,next_scan_at:null,last_scan_successful:false,active_scan_started_at:null},
+    getCached(){return cached;},
+    scan(){
+      scanCalls++;
+      this.monitorStats.active_scan_started_at=new Date().toISOString();
+      scanFlight=new Promise(resolve=>{
+        releaseScan=()=>resolve(completed);
+      }).then(value=>{
+        cached=value;
+        this.monitorStats.scan_count++;
+        this.monitorStats.last_scan_at=value.as_of;
+        this.monitorStats.last_scan_successful=true;
+        this.monitorStats.last_error=null;
+        this.monitorStats.active_scan_started_at=null;
+        this.busy=null;
+        return value;
+      });
+      this.busy=scanFlight;
+      return scanFlight;
+    },
+    radarReviewQueueSnapshot(){return{pending_count:0,max_queue:200};}
+  };
+  const config={auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}};
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),multiAnalystRadar});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const base='http://127.0.0.1:'+server.address().port;
+  try{
+    const started=Date.now();
+    const first=await fetch(base+'/api/multi-analyst?quote=USDT&limit=1&scan=1&background=1&_ts=background-test');
+    assert.ok(Date.now()-started<1000,'background scan request must return before the full scan completes');
+    assert.equal(first.status,202);
+    const warming=await first.json();
+    assert.equal(warming.status,'warming');
+    assert.equal(warming.scan.error,'SCAN_STARTED');
+    assert.equal(warming.meta.live,false);
+    assert.equal(scanCalls,1);
+
+    const inProgress=await fetch(base+'/api/multi-analyst?quote=USDT&limit=1&scan=1&progress=1&_ts=progress-test');
+    assert.equal(inProgress.status,202);
+    const progressBody=await inProgress.json();
+    assert.equal(progressBody.status,'warming');
+    assert.equal(progressBody.scan.error,'SCAN_IN_PROGRESS');
+    assert.ok(progressBody.diagnostics.duration_ms>=0);
+    assert.equal(scanCalls,1,'progress polling must not duplicate the active scan');
+
+    releaseScan();
+    await scanFlight;
+    const finalResponse=await fetch(base+'/api/multi-analyst?quote=USDT&limit=1&scan=1&progress=1&_ts=completed-test');
+    assert.equal(finalResponse.status,200);
+    const finalBody=await finalResponse.json();
+    assert.equal(finalBody.meta.live,true);
+    assert.equal(finalBody.meta.analysis_mode,'FORCED_SCAN');
+    assert.equal(finalBody.scan.completed,true);
+    assert.equal(finalBody.universe.scanned,12);
+    assert.equal(finalBody.candidates[0].symbol,'TESTUSDT');
+  }finally{
+    releaseScan?.();
+    await new Promise(resolve=>server.close(resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+});

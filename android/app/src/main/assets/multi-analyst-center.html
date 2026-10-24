@@ -137,6 +137,8 @@ const dEls={
   gauge:document.getElementById('gauge')
 };
 let busy=false;
+let scanRunning=false;
+let scanPollTimer=null;
 let latest=null;
 let lastLiveAt=0;
 const cacheKey='radarx.multiAnalyst.v4';
@@ -155,10 +157,13 @@ function tagClass(v){return v==='STRONG_CANDIDATE'||v==='CANDIDATE'?'good':v==='
 function cacheLoad(){
   try{
     const x=JSON.parse(sessionStorage.getItem(cacheKey)||'null');
-    return x&&Date.now()-num(x.at,0)<cacheTtl?x.body:null;
+    const body=x&&x.body;
+    if(!x||Date.now()-num(x.at,0)>=cacheTtl||!body||body.status==='warming'||body.status==='not_ready'||!body.meta||body.meta.live!==true)return null;
+    return body;
   }catch(e){return null;}
 }
 function cacheSave(body){
+  if(!body||body.status==='warming'||body.status==='not_ready'||!body.meta||body.meta.live!==true)return;
   try{sessionStorage.setItem(cacheKey,JSON.stringify({at:Date.now(),body:body}));}catch(e){}
 }
 function setBar(el,v){if(el)el.style.width=cap(v)+'%';}
@@ -403,49 +408,79 @@ function render(body){
   }
   cards.innerHTML=sections.join('');
 }
+function stopScanPolling(){
+  if(scanPollTimer!==null){clearTimeout(scanPollTimer);scanPollTimer=null;}
+}
+function scheduleScanPoll(){
+  if(!scanRunning||scanPollTimer!==null)return;
+  scanPollTimer=setTimeout(function(){
+    scanPollTimer=null;
+    if(!document.hidden)run(false);
+  },5000);
+}
 async function run(force){
   if(busy)return;
-  const cached=!force?cacheLoad():null;
+  const cached=!force&&!scanRunning?cacheLoad():null;
   if(cached){
     render(cached);
-    status.textContent='◌ لقطة محفوظة للعرض فقط — يجري الآن التحقق من لقطة السوق الجديدة عبر الخادم.';
+    status.textContent='◌ لقطة مكتملة سابقة — يجري التحقق من حالة السوق الجديدة عبر الخادم.';
   }
   busy=true;
+  if(force)scanRunning=true;
   const requestId=String(Date.now());
+  const progressRequest=!force&&scanRunning;
   status.textContent=force
-    ?'⚡ فحص حي إجباري من Binance… يجري تجاوز كاش نتائج التحليل.'
-    :'🧠 يجري جلب أحدث لقطة من الخادم وفحص صلاحيتها…';
+    ?'⚡ بدأ طلب فحص حي من Binance في الخلفية؛ ستظهر النتيجة أو رسالة الخطأ عند اكتماله.'
+    :'🧠 يجري التحقق من حالة فحص السوق ونتيجته من الخادم…';
   try{
-    const r=await getMultiAnalyst({quote:'USDT',limit:10,scan:Boolean(force),requestId:requestId});
+    const r=await getMultiAnalyst({
+      quote:'USDT',limit:10,scan:Boolean(force||progressRequest),
+      background:Boolean(force),progress:Boolean(progressRequest),requestId:requestId
+    });
     if(!r||!r.ok||!r.body)throw new Error((r&&r.error)||('HTTP_'+num(r&&r.status,0)));
-    cacheSave(r.body);
-    render(r.body);
     const d=r.body.diagnostics||{},u=r.body.universe||{},s=r.body.summary||{},meta=r.body.meta||{};
     const scan=r.body.scan||{},monitoring=r.body.monitoring||{};
     const mode=String(meta.analysis_mode||'UNKNOWN');
-    const asOf=String(r.body.as_of||'');
     const noErrorCodes=['SCAN_STARTED','SCAN_IN_PROGRESS'];
     const cleanError=function(value){const text=String(value||'').trim();return text&&!noErrorCodes.includes(text)?text:'';};
     const scanErrors=Array.isArray(d.scan_errors)?d.scan_errors:[];
     const scanError=cleanError(r.body.error)||cleanError(scan.last_error)||cleanError(monitoring.last_error)||cleanError(d.last_scan_error)||cleanError(scan.error)||cleanError(scanErrors[0]&&scanErrors[0].error);
     const warming=r.body.status==='warming'||mode==='WARMING'||(scan.completed===false&&!scanError);
+    scanRunning=Boolean(warming);
+    if(scanRunning)scheduleScanPoll();else stopScanPolling();
     if(meta.live===true&&mode!=='CACHE')lastLiveAt=Date.now();
-    status.textContent=meta.live
-      ? (mode==='FORCED_SCAN'
-          ? '⚡ فحص حي إجباري مكتمل • الطلب '+esc(meta.request_id||requestId)+' • '+num(u.scanned,0)+' عملة فُحصت • '+num(s.strong_candidates,0)+' مرشح قوي • '+num(d.failed_analyses,0)+' أخطاء عملات'
-          : mode==='CACHE'
-            ? '◉ لقطة صالحة من الخادم • وضع '+mode+' • وقت البيانات '+esc(asOf)+' • '+num(u.scanned,0)+' عملة فُحصت'
-            : '● فحص الخادم اكتمل • وضع '+mode+' • '+num(u.scanned,0)+' عملة فُحصت • '+num(s.strong_candidates,0)+' مرشح قوي • '+num(d.failed_analyses,0)+' أخطاء عملات')
-      : warming
-        ? '◌ الفحص لم يكتمل بعد — حالة مؤقتة وليست نتيجة نهائية • '+num(u.scanned,0)+' عملة مسجلة حتى الآن'+(scanError?' • آخر خطأ: '+esc(scanError):' • بانتظار اكتمال المسح')
-        : (mode==='SCAN_FAILED'||r.body.status==='not_ready'||r.body.error)
-          ? '⛔ فشل الفحص الحي • '+esc(scanError||'الخادم لم يرسل سببًا واضحًا')+' • لا تُعرض هذه الحالة كنتيجة سوق'
-          : (num(u.scanned,0)>0||num(d.attempted_analyses,0)>0)
-            ? '⚠ اكتمل الفحص دون مرشحين مؤهلين • '+num(u.scanned,0)+' عملة فُحصت • '+num(d.gate_rejected,0)+' رفض عند بوابة البيانات • '+num((r.body.watchlist||[]).length,0)+' مراقبة مبكرة'+(scanError?' • سبب/آخر خطأ: '+esc(scanError):'')
-            : '⚠ لم تكتمل دورة فحص للسوق بعد؛ الأصفار ليست نتيجة تحليل'+(scanError?' • السبب: '+esc(scanError):'');
+    if(!warming||!latest||!latest.meta||latest.meta.live!==true)render(r.body);
+    if(meta.live===true){
+      status.textContent=mode==='FORCED_SCAN'
+        ?'⚡ اكتمل الفحص الحي الإجباري • '+num(u.scanned,0)+' عملة فُحصت • '+num(s.strong_candidates,0)+' مرشح قوي • '+num(d.failed_analyses,0)+' أخطاء عملات'
+        :mode==='CACHE'
+          ?'◉ عُرضت لقطة مكتملة من الخادم • وقت البيانات '+esc(String(r.body.as_of||''))+' • '+num(u.scanned,0)+' عملة فُحصت'
+          :'● اكتمل فحص الخادم • '+num(u.scanned,0)+' عملة فُحصت • '+num(s.strong_candidates,0)+' مرشح قوي • '+num(d.failed_analyses,0)+' أخطاء عملات';
+      cacheSave(r.body);
+    }else if(warming){
+      const elapsed=Math.ceil(num(d.duration_ms,0)/1000);
+      status.textContent='◌ الفحص ما زال جاريًا — ليست نتيجة نهائية • '+num(u.scanned,0)+' عملة سُجّلت في اللقطة الحالية'+
+        (elapsed>0?' • مضى '+elapsed+' ثانية':'')+
+        (scanError?' • آخر خطأ: '+esc(scanError):' • يجري الاستعلام عن اكتمال الدورة كل 5 ثوانٍ');
+    }else if(mode==='SCAN_FAILED'||r.body.status==='not_ready'||r.body.error){
+      status.textContent='⛔ فشل الفحص الحي • '+esc(scanError||'الخادم لم يرسل سببًا واضحًا')+
+        (monitoring.last_scan_at?' • آخر فحص مكتمل: '+esc(String(monitoring.last_scan_at)):'')+
+        ' • لن تُعرض الأصفار كأنها نتيجة سوق.';
+    }else if(num(u.scanned,0)>0||num(d.attempted_analyses,0)>0){
+      status.textContent='⚠ اكتمل الفحص دون مرشحين مؤهلين • '+num(u.scanned,0)+' عملة فُحصت • '+
+        num(d.gate_rejected,0)+' رفض عند بوابة البيانات • '+num((r.body.watchlist||[]).length,0)+' مراقبة مبكرة'+
+        (scanError?' • سبب/آخر خطأ: '+esc(scanError):'');
+    }else{
+      status.textContent='⚠ لم تكتمل دورة فحص للسوق بعد؛ لا يمكن اعتبار الأصفار نتيجة تحليل'+
+        (scanError?' • السبب: '+esc(scanError):'');
+    }
   }catch(e){
-    status.textContent='تعذر التحقق من لقطة جديدة — '+String(e&&e.message||e);
-  }finally{busy=false;}
+    status.textContent='تعذر جلب حالة فحص جديدة — '+String(e&&e.message||e)+
+      (scanRunning?' • ستتم إعادة محاولة التحقق':'');
+  }finally{
+    busy=false;
+    if(scanRunning)scheduleScanPoll();
+  }
 }
 document.getElementById('scanBtn').addEventListener('click',function(){run(true);});
 document.getElementById('refreshBtn').addEventListener('click',function(){run(false);});

@@ -1137,7 +1137,7 @@ export class MultiAnalystEngine {
     this.running=false;
     this.monitorTimer=null;
     this.monitorStartedAt=null;
-    this.monitorStats={scan_count:0,last_scan_at:null,last_error:null,next_scan_at:null,last_scan_successful:false};
+    this.monitorStats={scan_count:0,last_scan_at:null,last_error:null,next_scan_at:null,last_scan_successful:false,active_scan_started_at:null};
     this.pendingRadarReviews=new Map();
     this.latestAnalystAssessments=new Map();
     this.lastRadarReviewSelection=[];
@@ -1331,8 +1331,11 @@ export class MultiAnalystEngine {
         ?{...value,meta:{...(value.meta||{}),analysis_mode:'FORCED_SCAN',force_refresh_requested:true,forced_scan_coalesced:true,request_id:safeRequestId,served_from_cache_while_scan:false}}
         :value);
     }
+    const scanStartedAt=this.clock();
+    this.monitorStats.active_scan_started_at=new Date(scanStartedAt).toISOString();
+    this.monitorStats.last_error=null;
     this.busy=(async()=>{
-      const startedAt=this.clock();
+      const startedAt=scanStartedAt;
       this.scanner._requests=new Map();
       const universeRefreshMs=Math.max(60_000,Number(this.config.universeRefreshMs)||30*60*1000);
       let universeEntry=this.universeCacheByQuote.get(q);
@@ -1662,7 +1665,7 @@ export class MultiAnalystEngine {
       this.cache={quote:q,expiresAt:this.clock()+this.config.ttlMs,value};
       return value;
     })();
-    try{return await this.busy}finally{this.busy=null;}
+    try{return await this.busy}finally{this.busy=null;this.monitorStats.active_scan_started_at=null;}
   }
   getCached({quote=this.config.quote}={}){
     const key=String(quote||this.config.quote).toUpperCase();

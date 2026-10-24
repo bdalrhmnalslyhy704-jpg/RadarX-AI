@@ -107,3 +107,16 @@ test('TEST_FIXTURE: service worker does not intercept cross-origin backend or Bi
   assert.ok(sw.includes("if (url.origin !== self.location.origin) return;"));
   assert.ok(sw.includes('Never cache backend, Binance, or other API responses.'));
 });
+
+
+test('TEST_FIXTURE: multi-analyst UI polls background scans and never caches temporary empty snapshots',async()=>{
+  const ui=await readFile(new URL('../../android/app/src/main/assets/multi-analyst-center.html',import.meta.url),'utf8');
+  const client=await readFile(new URL('../../android/app/src/main/assets/radarx-backend-client.mjs',import.meta.url),'utf8');
+  assert.match(ui,/background:Boolean\(force\)/);
+  assert.match(ui,/progress:Boolean\(progressRequest\)/);
+  assert.match(ui,/},5000\)/);
+  assert.match(ui,/body\.meta\.live!==true/);
+  assert.match(client,/backgroundParam=background\?'&background=1'/);
+  assert.match(client,/progressParam=progress\?'&progress=1'/);
+  assert.match(client,/timeoutMs=background\|\|progress\?15000:240000/);
+});
