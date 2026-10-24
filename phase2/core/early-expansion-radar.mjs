@@ -291,14 +291,19 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
 function closed(rows,now=Date.now()){
   return (Array.isArray(rows)?rows:[]).filter(c=>
     c?.closed!==false &&
-    Number.isFinite(Number(c?.openTime)) &&
-    Number.isFinite(Number(c?.closeTime)) &&
+    finiteNumberOr(c?.openTime,null)!==null &&
+    finiteNumberOr(c?.closeTime,null)!==null &&
     Number(c.closeTime)<=now &&
+    finiteNumberOr(c?.open,null)!==null &&
+    finiteNumberOr(c?.high,null)!==null &&
+    finiteNumberOr(c?.low,null)!==null &&
+    finiteNumberOr(c?.close,null)!==null &&
     Number(c.open)>0 &&
     Number(c.high)>=Math.max(Number(c.open),Number(c.close)) &&
     Number(c.low)<=Math.min(Number(c.open),Number(c.close)) &&
     Number(c.low)>0 &&
     Number(c.close)>0 &&
+    finiteNumberOr(c?.volume,null)!==null &&
     Number(c.volume)>=0
   ).sort((a,b)=>Number(a.openTime)-Number(b.openTime));
 }
