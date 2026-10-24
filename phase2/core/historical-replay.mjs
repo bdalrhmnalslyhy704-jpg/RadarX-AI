@@ -1,3 +1,5 @@
+import {buildMoveOutcomeAnalysis} from './move-outcome-analysis.mjs';
+
 const MINUTE_MS = 60_000;
 const FIVE_MINUTES_MS = 5 * MINUTE_MS;
 
@@ -400,7 +402,7 @@ export function runHistoricalReplay({
             : firstCoreTriggerAt!==null
               ? "CORE_TRIGGER_AFTER_PLUS_50_PERCENT"
               : "NO_CORE_TRIGGER_BEFORE_PLUS_50_PERCENT";
-  return {
+  const replay = {
     engine: "RADARX_HISTORICAL_REPLAY_V1",
     symbol: sym,
     range: {start_time: start, start_time_iso: new Date(start).toISOString(), end_time: end, end_time_iso: new Date(end).toISOString()},
@@ -454,6 +456,8 @@ export function runHistoricalReplay({
     steps: rows,
     policy: {market: "SPOT", paper_trading: true, real_order_execution: false, confidence_score: "UNKNOWN"}
   };
+  replay.evaluation = buildMoveOutcomeAnalysis(replay);
+  return replay;
 }
 function awaitlessEvaluate(evaluate, input) {
   const result = evaluate(input);
