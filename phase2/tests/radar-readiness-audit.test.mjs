@@ -7,7 +7,7 @@ const IDS = [
   'KAHIR_RADAR','DOOMSDAY_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR',
   'FALCON_EYE_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','PROFESSOR_RADAR'
 ];
-function fixture({missingCache = false, stopped = null, staleCycle = false, missingCycleTelemetry = false, cycleError = false, websocketDown = false, analystRuntime = null, radarIds = IDS} = {}) {
+function fixture({missingCache = false, stopped = null, staleCycle = false, missingCycleTelemetry = false, cycleError = false, websocketDown = false, analystRuntime = 'healthy', radarIds = IDS} = {}) {
   const now = 1_000_000;
   const radars = radarIds.map(radar => ({
     radar, radar_name: radar, running: radar !== stopped,
@@ -32,9 +32,19 @@ function fixture({missingCache = false, stopped = null, staleCycle = false, miss
     websocket_subscribed_symbols:websocketDown?0:282,websocket_sync_ready:!websocketDown,websocket_advanced_symbols:websocketDown?0:282,
     full_market_coverage_ready:!missingCache&&!websocketDown,last_error:websocketDown?'WS_DISCONNECTED':null
   };
-  const audit=buildRadarReadinessAudit({radars,swarm,telemetry:{events,total_recorded:events.length},candleCache,analystRuntime,now});
+  const observedAnalystRuntime=analystRuntime==='healthy'?healthyAnalystRuntime(now):analystRuntime;
+  const audit=buildRadarReadinessAudit({radars,swarm,telemetry:{events,total_recorded:events.length},candleCache,analystRuntime:observedAnalystRuntime,now});
   return {audit, now};
 }
+
+test('missing twenty-analyst runtime evidence blocks READY instead of being treated as optional',()=>{
+  const {audit}=fixture({analystRuntime:null});
+  assert.equal(audit.status,'DEGRADED');
+  assert.equal(audit.analysts.required,true);
+  assert.equal(audit.analysts.configured,false);
+  assert.equal(audit.analysts.expected_analysts,20);
+  assert.ok(audit.readiness_reasons.includes('MULTI_ANALYST_ENGINE_UNAVAILABLE'));
+});
 
 test('live audit reports READY only when all 12 workers and the full fresh candle cache are ready',()=>{
   const {audit}=fixture();

@@ -149,7 +149,7 @@ export function featureSet(candles, ticker, btcChange = null, now = Date.now()) 
   };
 }
 
-function earlyTimingFingerprint(candles, now = Date.now()) {
+export function earlyTimingFingerprint(candles, now = Date.now()) {
   const c=closedCandles(candles,now);
   // The 15m fingerprint has its own freshness and continuity gate.
   if(c.length<24 || !hasFreshContinuousTail(c, now, FIFTEEN_MINUTES_MS, {minRows: 24, maxRows: 24}))return null;
@@ -263,7 +263,7 @@ function patternLesson(leaderRows) {
   };
 }
 
-function scoreHunter({ticker, features, micro, lesson, todayPct, dayHigh, dayLow, btcTodayPct}) {
+export function scoreHunter({ticker, features, micro, lesson, todayPct, dayHigh, dayLow, btcTodayPct}) {
   const maxMove = Number(lesson.max_accepted_24h_move_pct ?? 8);
   const move = finite(todayPct);
   const oneHour = finite(features?.roc1h);
