@@ -15,6 +15,7 @@ const phase2=[
   'phase2/tests/radar-autostart.test.mjs',
   'phase2/tests/api.test.mjs',
   'phase2/tests/radar-swarm-coordinator.test.mjs',
+  'phase2/tests/move-outcome-analysis.test.mjs',
   'phase2/tests/historical-replay-matrix.test.mjs',
   'phase2/tests/historical-learning-lab.test.mjs',
   'phase2/tests/historical-learning-lab-cli.test.mjs',
