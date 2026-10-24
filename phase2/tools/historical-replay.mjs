@@ -371,6 +371,61 @@ async function main() {
         detector_profile:detectorProfile,additional_timeframes:timeframeCoverage,additional_timeframe_errors:timeframeFetchErrors},
       alertCooldownMs: Number(tickerConfig.alertCooldownMs ?? 12 * MINUTE_MS),
       evaluate: input => {
+        if(detectorProfile==='RADAR8_PREMOVE_SHADOW'){
+          const evidence=buildEarlyExpansionEvidence({
+            series:{
+              '1m':input.oneMinute,'5m':input.fiveMinute,
+              '15m':input.timeframes?.['15m']||[],
+              '1h':input.timeframes?.['1h']||[],
+              '4h':input.timeframes?.['4h']||[]
+            },
+            ticker:input.ticker,
+            marketContext:{fiveMinute:input.timeframes?.['BTCUSDT:5m']||[]},
+            now:input.now,config:config.earlyExpansionRadar||{},historicalReplay:true,
+            liveAggTrades:input.aggTrades
+          });
+          const fp=evidence.pre_expansion_fingerprint||{};
+          const stage=String(fp.stage||evidence.pre_expansion_stage||'DATA_INSUFFICIENT');
+          const valid=evidence.gates?.data_gate?.valid===true&&Number(evidence.data_quality)>=Number(config.earlyExpansionRadar?.minDataQuality??70)&&
+            evidence.data_stale!==true&&evidence.closed_candles_only===true&&numericOrNull(input.ticker.priceChange24h)!==null;
+          const forbidden=new Set(['ALREADY_EXTENDED','HIGH_RISK_PUMP','HIGH_RISK_DUMP','RECENT_FAKEOUT','CONTINUATION_NOT_CONFIRMED']);
+          const risk=(Array.isArray(evidence.risk_flags)?evidence.risk_flags:[]).some(x=>forbidden.has(String(x).toUpperCase()));
+          const eligible=valid&&!risk&&['PRE_EXPANSION','WATCH_EARLY'].includes(stage);
+          return buildCandidateShadowResult(detectorProfile,evidence,input,{
+            eligible,score:evidence.forensic_evidence_score??evidence.early_expansion_score,stage,
+            reasonCodes:[...(evidence.reason_codes||[]),...(!valid?['HISTORICAL_DATA_OR_FRESHNESS_GATE_FAILED']:[]),
+              ...(risk?['ANTI_CHASE_OR_FAKEOUT_GATE_FAILED']:[])],
+            extraGateFailures:['HISTORICAL_ORDERBOOK_UNAVAILABLE','LIVE_PUSH_GATE_NOT_SIMULATED']
+          });
+        }
+        if(detectorProfile==='ALMUQAWIM_RADAR'){
+          const series={
+            '15m':input.timeframes?.['15m']||[],
+            '1h':input.timeframes?.['1h']||[],
+            '4h':input.timeframes?.['4h']||[]
+          };
+          const analysis=buildAlMuqawimAnalysis(series,input.ticker,input.now,config.alMuqawimRadar||{});
+          const eligible=analysis.eligible===true&&analysis.direction==='UP'&&analysis.closed_candles_only===true;
+          return buildCandidateShadowResult(detectorProfile,analysis,input,{
+            eligible,score:analysis.score,stage:analysis.stage,
+            reasonCodes:analysis.reason_codes||analysis.data_quality_reasons||[],
+            extraGateFailures:['HISTORICAL_PUSH_DELIVERY_NOT_SIMULATED']
+          });
+        }
+        if(detectorProfile==='DOOMSDAY_RADAR'){
+          const analysis=buildDoomsdayAnalysis({
+            oneMinute:input.oneMinute,fiveMinute:input.fiveMinute,
+            btcFiveMinute:input.timeframes?.['BTCUSDT:5m']||[],
+            ticker:input.ticker,instantChangePct:input.ticker.priceChange24h,
+            now:input.now,max24hMovePct:Number(config.doomsdayRadar?.max24hMovePct)||18
+          });
+          const eligible=analysis.eligible===true&&analysis.direction==='UP'&&analysis.closed_candles_only===true&&analysis.data_stale!==true;
+          return buildCandidateShadowResult(detectorProfile,analysis,input,{
+            eligible,score:analysis.early_score??analysis.score,stage:analysis.stage,
+            reasonCodes:analysis.reason_codes||analysis.data_quality_reasons||[],
+            extraGateFailures:['HISTORICAL_ORDERBOOK_UNAVAILABLE','LIVE_PUSH_GATE_NOT_SIMULATED']
+          });
+        }
         const alert = buildStrongMoveAlert({
           one_minute: input.oneMinute,
           five_minute: input.fiveMinute,
