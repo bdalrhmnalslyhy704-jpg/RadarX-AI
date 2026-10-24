@@ -314,6 +314,9 @@ export function runHistoricalReplay({
       core_trigger_diagnostics: strong?.trigger_diagnostics ?? null,
       decision: accepted ? "ACCEPTED" : "REJECTED",
       accepted_mode:String(raw?.accepted_mode ?? alert?.notification_mode ?? (accepted ? "STRICT" : "NONE")),
+      candidate_detected:raw?.candidate_detected===true,
+      candidate_mode:String(raw?.candidate_mode??'NONE'),
+      candidate_reasons:Array.isArray(raw?.candidate_reasons)?raw.candidate_reasons.slice(0,24):[],
       replay_data_mode:tradeCoverageComplete?'FULL_TRADE':(candleOnlyFallback?'CANDLE_ONLY_FALLBACK':'BLOCKED_INCOMPLETE'),
       rejection_group: rejectionGroup, reason_codes: reasons,
       strict_gate_failures:Array.isArray(raw?.strict_gate_failures)?raw.strict_gate_failures.slice(0,20):[],
@@ -467,6 +470,8 @@ export function runHistoricalReplay({
     },
     summary: {
       replay_steps: rows.length, accepted: acceptedCount, rejected: rejectedCount,
+      candidate_detections:rows.filter(x=>x.candidate_detected===true).length,
+      candidate_shadow_detections:rows.filter(x=>x.candidate_detected===true&&x.decision!=='ACCEPTED').length,
       premove_50_status: premove50Status,
       first_accepted_at: firstAcceptedAt,
       first_early_warning_accepted_at:firstEarlyWarningAcceptedAt,
