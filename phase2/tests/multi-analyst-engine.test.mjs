@@ -21,6 +21,24 @@ assert.equal(isMomentumLiquidityEligible(999_999,3.2),false);
 assert.equal(isMomentumLiquidityEligible(4_060_000,2.49),false);
 assert.equal(isMomentumLiquidityEligible('N/A',4.0),false);
 
+// A stalled initial market-data request must fail the cycle, release the busy
+// latch, and clear its REST deadline instead of leaving the UI polling forever.
+{
+  const rest={requestDeadlineAtMs:null,request:async()=>{
+    await new Promise(resolve=>setTimeout(resolve,180));
+    return {data:{symbols:[]},source:'TEST'};
+  }};
+  const engine=new MultiAnalystEngine({rest,config:{scanTimeoutMs:100}});
+  await assert.rejects(()=>engine.scan({forceRefresh:true}),/MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED/);
+  assert.equal(engine.busy,null);
+  assert.equal(rest.requestDeadlineAtMs,null);
+  assert.equal(engine.monitorStats.active_scan_started_at,null);
+  assert.equal(engine.monitorStats.active_scan_deadline_at,null);
+  assert.equal(engine.monitorStats.last_scan_successful,false);
+  assert.match(engine.monitorStats.last_error,/MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED/);
+}
+console.log('multi-analyst scan deadline/stuck-latch regression: PASS');
+
 function candle(i,{tf='15m',base=100,trend=0.001,volume=1000}={}){
   const openTime=i*900000,close=base*(1+trend*i);
   const open=base*(1+trend*Math.max(0,i-1));
