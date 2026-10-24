@@ -185,6 +185,89 @@ function buildCandidateShadowResult(profile,analysis,input,{eligible,score,stage
   };
 }
 
+
+/**
+ * Required historical evidence per production detector profile. The number of
+ * bars is explicit so a replay with a missing benchmark or thin timeframe is
+ * blocked instead of silently turning an unavailable input into an empty array.
+ */
+export function historicalProfileRequirements(profile, config = CONFIG) {
+  const early = config?.earlyExpansionRadar || {};
+  const base = {oneMinute: 50, fiveMinute: 12};
+  const frames = {};
+  switch (String(profile || '').toUpperCase()) {
+    case 'STRONG_MOVE_RADAR':
+      break;
+    case 'RADAR8_PREMOVE_SHADOW':
+      Object.assign(frames, {
+        '15m': Math.max(1, Math.trunc(Number(early.fifteenMinuteKlines) || 160)),
+        '1h': Math.max(1, Math.trunc(Number(early.oneHourKlines) || 260)),
+        '4h': Math.max(1, Math.trunc(Number(early.fourHourKlines) || 220)),
+        'BTCUSDT:5m': 60
+      });
+      break;
+    case 'ALMUQAWIM_RADAR':
+      Object.assign(frames, {
+        '15m': Math.max(1, Math.trunc(Number(early.fifteenMinuteKlines) || 160)),
+        '1h': Math.max(1, Math.trunc(Number(early.oneHourKlines) || 260)),
+        '4h': Math.max(1, Math.trunc(Number(early.fourHourKlines) || 220))
+      });
+      break;
+    case 'DOOMSDAY_RADAR':
+      frames['BTCUSDT:5m'] = 60;
+      break;
+    case 'KAHIR_RADAR':
+      frames['BTCUSDT:1m'] = 120;
+      break;
+    case 'ROTATION_LAG_RADAR':
+      Object.assign(frames, {
+        '15m': 60, '1h': 30,
+        'BTCUSDT:15m': 60, 'BTCUSDT:1h': 30,
+        'ETHUSDT:15m': 60, 'ETHUSDT:1h': 30
+      });
+      break;
+    default:
+      throw new Error('UNSUPPORTED_HISTORICAL_DETECTOR_PROFILE:' + profile);
+  }
+  return {base, frames};
+}
+
+export function assessHistoricalFrameFetchCoverage(profile, timeframeCoverage = {}, config = CONFIG) {
+  const {frames} = historicalProfileRequirements(profile, config);
+  const failures = [];
+  for (const [key, minimumBars] of Object.entries(frames)) {
+    const coverage = timeframeCoverage?.[key];
+    if (!coverage || coverage.complete !== true) {
+      failures.push('HISTORICAL_TIMEFRAME_COVERAGE_INCOMPLETE:' + key);
+    }
+    if (coverage && Number(coverage.rows) < minimumBars) {
+      failures.push('HISTORICAL_TIMEFRAME_ROWS_BELOW_MINIMUM:' + key);
+    }
+  }
+  return [...new Set(failures)];
+}
+
+export function assessHistoricalProfileCoverage(profile, input = {}, timeframeCoverage = {}, config = CONFIG) {
+  const requirements = historicalProfileRequirements(profile, config);
+  const failures = assessHistoricalFrameFetchCoverage(profile, timeframeCoverage, config);
+  const series = {
+    oneMinute: Array.isArray(input.oneMinute) ? input.oneMinute : [],
+    fiveMinute: Array.isArray(input.fiveMinute) ? input.fiveMinute : [],
+    ...(input.timeframes && typeof input.timeframes === 'object' ? input.timeframes : {})
+  };
+  for (const [key, minimumBars] of Object.entries(requirements.base)) {
+    if (series[key].length < minimumBars) {
+      failures.push('HISTORICAL_BASE_SERIES_ROWS_BELOW_MINIMUM:' + key);
+    }
+  }
+  for (const [key, minimumBars] of Object.entries(requirements.frames)) {
+    if (!Array.isArray(series[key]) || series[key].length < minimumBars) {
+      failures.push('HISTORICAL_TIMEFRAME_ROWS_BELOW_MINIMUM:' + key);
+    }
+  }
+  return [...new Set(failures)];
+}
+
 function profileSnapshot(profile){
   const profiles={
     STRONG_MOVE_RADAR:{mode:'STRICT_GATE_CANDLE_SHADOW',requires:['closed 1m/5m candles','aggregate trade history or explicitly marked candle-only fallback'],historical_book_required:true},
@@ -196,7 +279,7 @@ function profileSnapshot(profile){
   };
   const result=profiles[profile];
   if(!result)throw new Error('UNSUPPORTED_HISTORICAL_DETECTOR_PROFILE:'+profile);
-  return {profile,...result};
+  return {profile,...result,required_history:historicalProfileRequirements(profile,CONFIG)};
 }
 
 async function fetchOneMinute(client, symbol, start, end) {
@@ -403,6 +486,23 @@ async function main() {
         detector_profile:detectorProfile,additional_timeframes:timeframeCoverage,additional_timeframe_errors:timeframeFetchErrors},
       alertCooldownMs: Number(tickerConfig.alertCooldownMs ?? 12 * MINUTE_MS),
       evaluate: input => {
+        const profileCoverageFailures = assessHistoricalProfileCoverage(
+          detectorProfile, input, timeframeCoverage, config
+        );
+        if (profileCoverageFailures.length) {
+          const blocked = {
+            eligible:false, direction:'UNKNOWN', stage:'DATA_INSUFFICIENT',
+            data_quality:0, closed_candles_only:true,
+            reason_codes:profileCoverageFailures,
+            data_quality_reasons:profileCoverageFailures,
+            coverage:{profile:detectorProfile,failures:profileCoverageFailures}
+          };
+          return buildCandidateShadowResult(detectorProfile,blocked,input,{
+            eligible:false,score:null,stage:'DATA_INSUFFICIENT',
+            reasonCodes:profileCoverageFailures,
+            extraGateFailures:['HISTORICAL_PROFILE_COVERAGE_GATE_FAILED']
+          });
+        }
         if(detectorProfile==='RADAR8_PREMOVE_SHADOW'){
           const evidence=buildEarlyExpansionEvidence({
             series:{
@@ -600,6 +700,24 @@ async function main() {
     const windowCandlesComplete = observedWindowCandles >= expectedWindowCandles;
     const outcomeObservationComplete = observationEnd >= end + outcomeHorizonHours * HOUR_MS && candleFetch.complete &&
       replay.steps.length>0 && replay.steps.every(step=>step?.outcome?.horizon_observed===true);
+    const profileFrameCoverageFailures = assessHistoricalFrameFetchCoverage(
+      detectorProfile, timeframeCoverage, config
+    );
+    const profileRequirements = historicalProfileRequirements(detectorProfile, config);
+    const profileBaseCoverageFailures = [];
+    if (candleFetch.candles.length < profileRequirements.base.oneMinute) {
+      profileBaseCoverageFailures.push('HISTORICAL_BASE_SERIES_ROWS_BELOW_MINIMUM:oneMinute');
+    }
+    if (Number(replay.data_quality.complete_5m_candles) < profileRequirements.base.fiveMinute) {
+      profileBaseCoverageFailures.push('HISTORICAL_BASE_SERIES_ROWS_BELOW_MINIMUM:fiveMinute');
+    }
+    replay.data_quality.profile_coverage_complete = windowCandlesComplete &&
+      profileFrameCoverageFailures.length === 0 && profileBaseCoverageFailures.length === 0;
+    replay.data_quality.profile_coverage_failures = [...new Set([
+      ...profileFrameCoverageFailures, ...profileBaseCoverageFailures,
+      ...(!windowCandlesComplete ? ['PRIMARY_1M_WINDOW_COVERAGE_INCOMPLETE'] : [])
+    ])];
+    replay.data_quality.required_history = profileRequirements;
     replay.detector_profile=detectorSpec;
     replay.detector_evaluation_mode=detectorSpec.mode;
     replay.data_quality.detector_profile=detectorProfile;
@@ -679,6 +797,7 @@ async function main() {
   // Incomplete aggregate-trade history remains visible in each row and cannot be
   // mistaken for precise trade-crossing timestamps; missing candle coverage still fails.
   if (report.results.some(x => x.data_quality.candle_fetch_complete !== true ||
+      x.data_quality.profile_coverage_complete !== true ||
       !(Number(x.summary.replay_steps) > 0) ||
       !['FULL_TRADE', 'CANDLE_ONLY_FALLBACK'].includes(x.data_quality.replay_mode))) {
     process.exitCode = 2;
