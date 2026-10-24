@@ -249,10 +249,18 @@ async function main(){
     source_monthly_forensics:loaded.path,
     source_schema:source.schema_version,
     source_window:source.window,
+    detector_profile:detectorSpec,
     detector_replay_scope:{
-      replayed_profiles:['STRONG_MOVE_RADAR'],
-      not_replayed_profiles:['KING_INTELLIGENCE_RADAR','JOKER_RADAR','LIQUIDITY_ABSORPTION_RADAR','AL_MUQAWIM_RADAR','DOOMSDAY_RADAR','RADAR8_EARLY_EXPANSION','FALCON_EYE_RADAR','COIN_HUNTER_RADAR','KAHIR_RADAR','ROTATION_LAG_RADAR','WHALE_ACCUMULATION_RADAR','PROFESSOR_RADAR'],
-      note:'Do not generalize these metrics to radars without an implemented historical evaluator adapter and required historical input coverage.'
+      replayed_profiles:[detectorSpec.canonical],
+      evaluation_mode:detectorSpec.mode,
+      live_notification_simulated:detectorSpec.live_notification_simulated,
+      supported_historical_profiles:Object.keys(HISTORICAL_PROFILE_INFO).map(key=>HISTORICAL_PROFILE_INFO[key].canonical),
+      not_replayed_profiles:['EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR','LIQUIDITY_ABSORPTION_RADAR','KAHIR_RADAR','DOOMSDAY_RADAR','PROFESSOR_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','FALCON_EYE_RADAR']
+        .filter(profile=>profile!==detectorSpec.canonical),
+      profiles_without_historical_adapters:['EARLY_MOVE_RADAR','LIQUIDITY_ABSORPTION_RADAR','PROFESSOR_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','FALCON_EYE_RADAR'],
+      note:detectorSpec.live_notification_simulated
+        ?'This profile runs its strict/dynamic replay gate, but exact historical exchange depth and device push delivery are still not reproduced.'
+        :'This report measures detector-candidate timing only. It must not be interpreted as a replay of actual accepted push notifications or as validation of unavailable historical order-book/news/futures evidence.'
     },
     label_definitions:{
       moderate_move_pct:5,strong_move_pct:15,outcome_horizon_hours:outcomeHorizonHours,
@@ -296,19 +304,28 @@ async function main(){
     '- Rolling monthly source cases: '+allCases.length,
     '- Complete detector replays: '+coverageComplete,
     '- Failed or skipped cases: '+replayFailures,
-    '- Replayed detector profile: STRONG_MOVE_RADAR only',
+    '- Detector profile: '+detectorSpec.canonical+' (requested '+detectorProfile+')',
+    '- Evaluation mode: '+detectorSpec.mode,
+    '- Live notification delivery simulated: '+detectorSpec.live_notification_simulated,
     '- Confirmed positive ex-post anchors: '+positiveAnchors,
-    '- Positive anchors with at least one accepted signal before anchor: '+positiveAnchorsCaptured,
-    '- Accepted decisions: '+metrics.accepted_decisions,
-    '- Successful alerts on fully matured 5%/15% target labels: '+metrics.successful_alerts,
-    '- False alerts on fully observed horizons: '+metrics.false_alerts,
+    '- Positive anchors with an accepted detector decision before anchor: '+positiveAnchorsCaptured,
+    '- Accepted decisions / candidate detections: '+metrics.accepted_decisions,
+    detectorSpec.live_notification_simulated
+      ?'- Successful alerts on fully matured 5%/15% target labels: '+metrics.successful_alerts
+      :'- Candidate matches on fully matured 5%/15% target labels (not push alerts): '+metrics.successful_alerts,
+    detectorSpec.live_notification_simulated
+      ?'- False alerts on fully observed horizons: '+metrics.false_alerts
+      :'- Candidate classifications without follow-through (not measured false pushes): '+metrics.false_alerts,
     '- Missed-move decisions: '+metrics.missed_move_decisions,
     '- Unique missed positive event anchors: '+metrics.missed_move_events,
     '- Median lead time before confirmed event anchor (minutes): '+(metrics.median_lead_time_minutes??'not estimable'),
     '- Explicit-probability calibration: '+metrics.calibration.status,
     '- Walk-forward split: '+split.status+' (train '+split.train.length+', validation '+split.validation.length+', test '+split.test.length+').',
     '', 'The ex-post event anchor is only used for lead-time labels after replay. It is never passed into the evaluator.',
-    'A complete report covers only the Strong Move detector; other radars are named as unsupported rather than simulated.',
+    detectorSpec.live_notification_simulated
+      ?'This report replays the selected profile gate; it still does not simulate FCM delivery on a real handset.'
+      :'Candidate-shadow results are not actionable push alerts. Historical order-book snapshots and any unavailable external inputs are not synthesized.',
+    'Only the selected detector profile is evaluated in this report; the remaining radars must be tested in separate runs with their own required historical inputs.',
     ''
   ].join('\n');
   await writeFile(markdownPath,markdown,{encoding:'utf8'});
