@@ -4,7 +4,7 @@ import {spawnSync} from 'node:child_process';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {aggregateFiveMinuteCandles, normalizeHistoricalCandles, runHistoricalReplay} from '../core/historical-replay.mjs';
-import {fetchAggregateTrades, withHistoricalRateLimitRetry, historicalProfileRequirements, assessHistoricalProfileCoverage, buildCandidateShadowResult} from '../tools/historical-replay.mjs';
+import {fetchAggregateTrades, withHistoricalRateLimitRetry, historicalProfileRequirements, assessHistoricalProfileCoverage, buildCandidateShadowResult, HISTORICAL_DETECTOR_PROFILES} from '../tools/historical-replay.mjs';
 
 
 const MINUTE = 60_000;
@@ -29,6 +29,47 @@ test('historical replay passes only timeframe candles closed by the current deci
   });
   assert.ok(replay.steps.length>0);
   assert.ok(replay.steps.every(row=>row.input_max_candle_close_at<=row.timestamp));
+});
+
+test('historical replay lists every canonical radar without network access',()=>{
+  const script=resolve(dirname(fileURLToPath(import.meta.url)),'../tools/historical-replay.mjs');
+  const run=spawnSync(process.execPath,[script,'--list-profiles'],{encoding:'utf8',timeout:10_000});
+  assert.equal(run.status,0,run.stderr||run.stdout);
+  const report=JSON.parse(run.stdout);
+  assert.equal(report.profiles.length,12);
+  assert.deepEqual(report.profiles.map(x=>x.profile),HISTORICAL_DETECTOR_PROFILES);
+  assert.equal(new Set(report.profiles.map(x=>x.profile)).size,12);
+  assert.ok(report.profiles.every(x=>x.required_history&&x.required_history.base&&x.required_history.frames));
+  const professor=report.profiles.find(x=>x.profile==='PROFESSOR_RADAR');
+  assert.equal(professor.mode,'EXTERNAL_FEED_ARCHIVE_REQUIRED');
+  assert.ok(professor.external_evidence_required.includes('PROFESSOR_NEWS_ARCHIVE'));
+  assert.equal(report.policy.network_access,false);
+});
+
+test('replay refuses to score Professor without historical news and stream archives',()=>{
+  const requirements=historicalProfileRequirements('PROFESSOR_RADAR');
+  const baseRows=Array.from({length:120},()=>({}));
+  const fiveRows=Array.from({length:60},()=>({}));
+  const failures=assessHistoricalProfileCoverage('PROFESSOR_RADAR',{
+    oneMinute:baseRows,fiveMinute:fiveRows,timeframes:{},dataPolicy:{tradeCoverageComplete:true}
+  },{});
+  assert.ok(failures.includes('HISTORICAL_EXTERNAL_EVIDENCE_UNAVAILABLE:PROFESSOR_NEWS_ARCHIVE'));
+  assert.ok(failures.includes('HISTORICAL_EXTERNAL_EVIDENCE_UNAVAILABLE:PROFESSOR_STREAM_TRANSCRIPT_ARCHIVE'));
+  assert.deepEqual(requirements.frames,{});
+});
+
+test('Whale replay requires complete aggregate-trade coverage and never assumes book history exists',()=>{
+  const requirements=historicalProfileRequirements('WHALE_ACCUMULATION_RADAR');
+  const baseRows=Array.from({length:120},()=>({}));
+  const fiveRows=Array.from({length:60},()=>({}));
+  const base={oneMinute:baseRows,fiveMinute:fiveRows,timeframes:{},dataPolicy:{tradeCoverageComplete:false}};
+  const failures=assessHistoricalProfileCoverage('WHALE_ACCUMULATION_RADAR',base,{});
+  assert.ok(failures.includes('HISTORICAL_AGG_TRADE_COVERAGE_INCOMPLETE'));
+  assert.ok(requirements.unavailableEvidence.includes('HISTORICAL_ORDERBOOK_UNAVAILABLE'));
+  const complete=assessHistoricalProfileCoverage('WHALE_ACCUMULATION_RADAR',{
+    ...base,dataPolicy:{tradeCoverageComplete:true}
+  },{});
+  assert.ok(!complete.includes('HISTORICAL_AGG_TRADE_COVERAGE_INCOMPLETE'));
 });
 
 test('historical replay CLI profile dry-run performs no network access and identifies candle-only shadow limitations',()=>{
