@@ -1,10 +1,47 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
+import {dirname,resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {aggregateFiveMinuteCandles, normalizeHistoricalCandles, runHistoricalReplay} from '../core/historical-replay.mjs';
 import {fetchAggregateTrades, withHistoricalRateLimitRetry} from '../tools/historical-replay.mjs';
 
+
 const MINUTE = 60_000;
 const ORIGIN = Math.floor((Date.now() - 400 * MINUTE) / (5 * MINUTE)) * (5 * MINUTE);
+
+test('historical replay passes only timeframe candles closed by the current decision timestamp',()=>{
+  const rows=candles(240);
+  const start=rows[180].openTime,end=rows[184].closeTime,observationEnd=rows[190].closeTime;
+  const benchmark=[
+    {openTime:rows[170].openTime,closeTime:rows[170].closeTime,open:1,high:1.1,low:.9,close:1.05,volume:10,closed:true},
+    {openTime:rows[190].openTime,closeTime:rows[190].closeTime,open:1,high:1.2,low:.9,close:1.1,volume:10,closed:true}
+  ];
+  const replay=runHistoricalReplay({
+    symbol:'TIMEUSDT',oneMinuteCandles:rows,aggTrades:syntheticTrades(rows),
+    startTime:start,endTime:end,outcomeEndTime:observationEnd,outcomeHorizonMs:6*MINUTE,
+    tradeCoverageComplete:true,timeframeCandles:{'15m':benchmark},
+    evaluate(input){
+      assert.ok(Object.values(input.timeframes).flat().every(c=>c.closeTime<=input.now),
+        'future closed candles must be filtered before an evaluator receives the snapshot');
+      return {accepted:false,reason_codes:['TIMEFRAME_SNAPSHOT_CHECK']};
+    }
+  });
+  assert.ok(replay.steps.length>0);
+  assert.ok(replay.steps.every(row=>row.input_max_candle_close_at<=row.timestamp));
+});
+
+test('historical replay CLI profile dry-run performs no network access and identifies candle-only shadow limitations',()=>{
+  const script=resolve(dirname(fileURLToPath(import.meta.url)),'../tools/historical-replay.mjs');
+  const run=spawnSync(process.execPath,[script,'--dry-run','--detector-profile','RADAR8_PREMOVE_SHADOW','--symbols','GTCUSDT'],{encoding:'utf8',timeout:10_000});
+  assert.equal(run.status,0,run.stderr||run.stdout);
+  const report=JSON.parse(run.stdout);
+  assert.equal(report.status,'DRY_RUN_NO_NETWORK');
+  assert.equal(report.detector.profile,'RADAR8_PREMOVE_SHADOW');
+  assert.equal(report.detector.mode,'PRE_MOVE_CANDLE_ONLY_SHADOW');
+  assert.equal(report.detector.historical_book_required,true);
+  assert.equal(report.policy.real_order_execution,false);
+});
 
 test('historical public-data replay retries a bounded 429 cooldown without synthesizing data', async () => {
   let calls=0;
