@@ -8,6 +8,8 @@ import {buildStrongMoveAlert} from '../core/strong-move-radar.mjs';
 import {buildEarlyExpansionEvidence} from '../core/early-expansion-radar.mjs';
 import {buildAlMuqawimAnalysis} from '../core/al-muqawim-radar.mjs';
 import {buildDoomsdayAnalysis} from '../core/doomsday-radar.mjs';
+import {buildKahirAnalysis} from '../core/kahir-radar.mjs';
+import {buildRotationAnalysis} from '../core/rotation-lag-radar.mjs';
 import {evaluateEliteGate} from '../core/elite-confluence-gate.mjs';
 import {evaluateRadarNotificationGate} from '../core/radar-notification-gate.mjs';
 import {evaluateDynamicEarlyWarningGate} from '../core/dynamic-early-warning-gate.mjs';
@@ -186,7 +188,9 @@ function profileSnapshot(profile){
     STRONG_MOVE_RADAR:{mode:'ACTIONABLE_GATE_REPLAY',requires:['closed 1m/5m candles','aggregate trade history or explicitly marked candle-only fallback'],historical_book_required:false},
     RADAR8_PREMOVE_SHADOW:{mode:'PRE_MOVE_CANDLE_ONLY_SHADOW',requires:['closed 1m/5m/15m/1h/4h candles','BTC 5m closed candles for relative strength'],historical_book_required:true},
     ALMUQAWIM_RADAR:{mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requires:['closed 15m/1h/4h candles'],historical_book_required:false},
-    DOOMSDAY_RADAR:{mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requires:['closed 1m/5m candles','BTC 5m closed candles'],historical_book_required:true}
+    DOOMSDAY_RADAR:{mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requires:['closed 1m/5m candles','BTC 5m closed candles'],historical_book_required:true},
+    KAHIR_RADAR:{mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requires:['closed 1m/5m candles','BTC 1m market-velocity benchmark'],historical_book_required:true},
+    ROTATION_LAG_RADAR:{mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requires:['closed symbol/BTC/ETH 15m and 1h candles'],historical_book_required:true}
   };
   const result=profiles[profile];
   if(!result)throw new Error('UNSUPPORTED_HISTORICAL_DETECTOR_PROFILE:'+profile);
@@ -346,11 +350,18 @@ async function main() {
       await fetchFrame('15m',symbol,'15m',Number(config.earlyExpansionRadar?.fifteenMinuteKlines)||160);
       await fetchFrame('1h',symbol,'1h',Number(config.earlyExpansionRadar?.oneHourKlines)||260);
       await fetchFrame('4h',symbol,'4h',Number(config.earlyExpansionRadar?.fourHourKlines)||220);
+    }else if(detectorProfile==='ROTATION_LAG_RADAR'){
+      await fetchFrame('15m',symbol,'15m',60);
+      await fetchFrame('1h',symbol,'1h',30);
+      for(const benchmark of ['BTCUSDT','ETHUSDT']){
+        await fetchFrame(benchmark+':15m',benchmark,'15m',60);
+        await fetchFrame(benchmark+':1h',benchmark,'1h',30);
+      }
     }
-    if(detectorProfile==='RADAR8_PREMOVE_SHADOW'){
+    if(['RADAR8_PREMOVE_SHADOW','DOOMSDAY_RADAR'].includes(detectorProfile)){
       await fetchFrame('BTCUSDT:5m','BTCUSDT','5m',60);
-    }else if(detectorProfile==='DOOMSDAY_RADAR'){
-      await fetchFrame('BTCUSDT:5m','BTCUSDT','5m',60);
+    }else if(detectorProfile==='KAHIR_RADAR'){
+      await fetchFrame('BTCUSDT:1m','BTCUSDT','1m',120);
     }
     let tradeFetch;
     try {
