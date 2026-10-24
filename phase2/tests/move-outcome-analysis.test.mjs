@@ -18,12 +18,12 @@ function step(timestamp,{decision='REJECTED',mode='NONE',upside=0,drawdown=-0.2,
       forward_return_pct_at_horizon:terminal}
   };
 }
-function replay({symbol='TESTUSDT',steps,move5=120*MIN,move15=180*MIN,complete=true}={}){
+function replay({symbol='TESTUSDT',steps,move5=120*MIN,move15=180*MIN,complete=true,tradeCoverage=true}={}){
   return {
     symbol,steps,
     data_quality:{candle_fetch_complete:complete,outcome_candle_fetch_complete:complete,
-      synthetic_data_used:false,trade_coverage_complete:false,
-      replay_mode:complete?'CANDLE_ONLY_FALLBACK':'BLOCKED_INCOMPLETE'},
+      synthetic_data_used:false,trade_coverage_complete:tradeCoverage,
+      replay_mode:complete?(tradeCoverage?'FULL_TRADE':'CANDLE_ONLY_FALLBACK'):'BLOCKED_INCOMPLETE'},
     summary:{first_actual_window_5pct_at:move5,first_actual_window_15pct_at:move15,
       first_actual_window_5pct_candle_close_at:move5,first_actual_window_15pct_candle_close_at:move15}
   };
@@ -38,8 +38,8 @@ test('labels early detections and reports lead time, run-up, and adverse excursi
   assert.equal(x.strong_move.minutes_before_move,120);
   assert.equal(x.moderate_move.first_early_detection.forward_max_upside_pct,12.5);
   assert.equal(x.moderate_move.first_early_detection.forward_max_drawdown_pct,-2.1);
-  assert.equal(x.observation.trade_coverage_complete,false);
-  assert.equal(x.observation.replay_mode,'CANDLE_ONLY_FALLBACK');
+  assert.equal(x.observation.trade_coverage_complete,true);
+  assert.equal(x.observation.replay_mode,'FULL_TRADE');
 });
 
 test('labels a missed move and retains the last rejection reasons before the move',()=>{
@@ -80,7 +80,7 @@ test('low-follow-through accepted decisions are called out only after the outcom
 });
 
 test('incomplete or synthetic replay coverage is not counted as a missed move or hit-rate denominator',()=>{
-  const bad=replay({symbol:'BADUSDT',complete:false,steps:[step(60*MIN)]});
+  const bad=replay({symbol:'BADUSDT',complete:false,tradeCoverage:false,steps:[step(60*MIN)]});
   const x=buildMoveOutcomeAnalysis(bad);
   assert.equal(x.observation.candle_coverage_complete,false);
   assert.equal(x.moderate_move.classification,'INCOMPLETE_MARKET_DATA');
