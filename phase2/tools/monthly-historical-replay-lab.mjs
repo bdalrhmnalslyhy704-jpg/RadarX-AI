@@ -20,6 +20,22 @@ function integer(raw,fallback,min,max,label){
   return n;
 }
 async function readJson(path){const absolute=resolve(path);return{path:absolute,value:JSON.parse(await readFile(absolute,'utf8'))};}
+const HISTORICAL_PROFILE_INFO=Object.freeze({
+  STRONG_MOVE_RADAR:{canonical:'STRONG_MOVE_RADAR',mode:'ACTIONABLE_GATE_REPLAY',requiredTimeframes:[]},
+  RADAR8_PREMOVE_SHADOW:{canonical:'EARLY_EXPANSION_RADAR',mode:'PRE_MOVE_CANDLE_ONLY_SHADOW',requiredTimeframes:['15m','1h','4h','BTCUSDT:5m']},
+  ALMUQAWIM_RADAR:{canonical:'ALMUQAWIM_RADAR',mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requiredTimeframes:['15m','1h','4h']},
+  DOOMSDAY_RADAR:{canonical:'DOOMSDAY_RADAR',mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requiredTimeframes:['BTCUSDT:5m']},
+  KAHIR_RADAR:{canonical:'KAHIR_RADAR',mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requiredTimeframes:['BTCUSDT:1m']},
+  ROTATION_LAG_RADAR:{canonical:'ROTATION_LAG_RADAR',mode:'CANDLE_ONLY_CANDIDATE_SHADOW',
+    requiredTimeframes:['15m','1h','BTCUSDT:15m','BTCUSDT:1h','ETHUSDT:15m','ETHUSDT:1h']}
+});
+function historicalProfileInfo(profile){
+  const item=HISTORICAL_PROFILE_INFO[String(profile||'').trim().toUpperCase()];
+  if(!item)throw new Error('UNSUPPORTED_HISTORICAL_DETECTOR_PROFILE:'+profile);
+  return {requested_profile:String(profile).trim().toUpperCase(),...item,
+    live_notification_simulated:item.mode==='ACTIONABLE_GATE_REPLAY'};
+}
+
 function safeId(value){return String(value??'case').trim().toLowerCase().replace(/[^a-z0-9_-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,90)||'case';}
 function validSymbol(value){return /^[A-Z0-9]{5,20}$/.test(String(value??'').toUpperCase());}
 function isConfirmedAnchor(caseRow){
@@ -61,13 +77,16 @@ async function main(){
     process.stdout.write([
       'RadarX monthly historical replay lab — replays the existing detector before event markers.',
       'Usage: node phase2/tools/monthly-historical-replay-lab.mjs --input monthly-move-forensics.json',
+      '       [--detector-profile STRONG_MOVE_RADAR|RADAR8_PREMOVE_SHADOW|ALMUQAWIM_RADAR|DOOMSDAY_RADAR|KAHIR_RADAR|ROTATION_LAG_RADAR]',
       '       [--output-dir reports/monthly-historical-learning-lab] [--max-trade-pages 20]',
       '       [--max-trades 20000] [--outcome-horizon-hours 24] [--case-timeout-ms 1800000] [--dry-run]',
       'Only closed public Binance Spot inputs are used. Event markers/cohorts are post-decision labels and never enter evaluator inputs.',
-      'Current replay adapter: STRONG_MOVE_RADAR (strict and dynamic-early-warning lanes); unsupported radar profiles are not fabricated.'
+      'Candidate-shadow profiles measure detector candidates, not actual delivered notifications; unavailable historical book/news evidence is not synthesized.'
     ].join('\n')+'\n');return;
   }
   const input=flag(args,'--input');
+  const detectorProfile=String(flag(args,'--detector-profile','STRONG_MOVE_RADAR')).trim().toUpperCase();
+  const detectorSpec=historicalProfileInfo(detectorProfile);
   const outputDir=resolve(flag(args,'--output-dir','reports/monthly-historical-learning-lab'));
   const maxTradePages=integer(flag(args,'--max-trade-pages','20'),20,1,1000,'max-trade-pages');
   const maxTrades=integer(flag(args,'--max-trades','20000'),20000,1000,1000000,'max-trades');
@@ -81,8 +100,9 @@ async function main(){
       per_case_decision_window_hours:24,outcome_horizon_hours:outcomeHorizonHours,
       max_trade_pages_per_case:maxTradePages,max_trades_per_case:maxTrades,
       max_cases:maxCases,case_timeout_ms:caseTimeoutMs,
-      detector_profile:'STRONG_MOVE_RADAR',
-      policy:{market:'BINANCE_SPOT',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',event_marker_is_evaluator_input:false}
+      detector_profile:detectorSpec,
+      policy:{market:'BINANCE_SPOT',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+        event_marker_is_evaluator_input:false,live_notification_simulated:detectorSpec.live_notification_simulated}
     },null,2)+'\n');return;
   }
   if(!input)throw new Error('MONTHLY_FORENSICS_INPUT_REQUIRED');
@@ -151,6 +171,7 @@ async function main(){
     const child=await childRun([
       replayScript,'--symbols',symbol,'--start',String(start),'--end',String(end),
       '--outcome-horizon-hours',String(outcomeHorizonHours),
+      '--detector-profile',detectorProfile,
       '--max-trade-pages',String(maxTradePages),'--max-trades',String(maxTrades),
       '--output',replayPath
     ],{timeoutMs:caseTimeoutMs});
@@ -182,11 +203,13 @@ async function main(){
     report.window={id,start,end,start_time:start,end_time:end,start_iso:new Date(start).toISOString(),end_iso:new Date(end).toISOString()};
     report.market_regime=regime.regime;
     report.market_event=event;
-    report.detector_replay={profile:'STRONG_MOVE_RADAR',event_anchor_as_evaluator_input:false,replay_data_mode:coverage.mode};
+    report.detector_replay={...detectorSpec,event_anchor_as_evaluator_input:false,replay_data_mode:coverage.mode};
     for(const result of (Array.isArray(report.results)?report.results:[])){
       for(const step of (Array.isArray(result.steps)?result.steps:[])){
         step.window_id=id;
-        step.radar='STRONG_MOVE_RADAR';
+        step.radar=detectorSpec.canonical;
+        step.detector_profile=detectorProfile;
+        step.detector_evaluation_mode=detectorSpec.mode;
         step.market_regime=regime.regime;
         step.market_event_at=anchorAt;
         step.market_event_cohort=cohort;
