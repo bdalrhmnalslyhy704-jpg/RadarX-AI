@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,isMarketWideCacheFallbackPoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible,ensureRadar8ScoreContainer,isConfirmedEarlyFlowWatchCandidate,buildEarlyFlowWatchAlert,buildMicroEarlyFlowWatchCandidate} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,isMarketWideCacheFallbackPoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,adaptiveRadar8DeepCandidateTarget,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible,ensureRadar8ScoreContainer,isConfirmedEarlyFlowWatchCandidate,buildEarlyFlowWatchAlert,buildMicroEarlyFlowWatchCandidate} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -64,8 +64,19 @@ test('Radar 8 uses a 20-second target with bounded fair-rotating work batches',(
   assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.pollMs,20000);
   assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.microScanCandidates,18);
   assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.deepCandidates,8);
-  assert.ok(EARLY_EXPANSION_RADAR_DEFAULTS.microConcurrency>=8);
+  assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.rotationReserve,5);
+  assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.quietReserve,4);
+  assert.ok(EARLY_EXPANSION_RADAR_DEFAULTS.microConcurrency>=6);
   assert.ok(EARLY_EXPANSION_RADAR_DEFAULTS.deepConcurrency>=4);
+});
+
+test('Radar 8 shrinks only the next deep batch after a slow completed scan',()=>{
+  assert.equal(adaptiveRadar8DeepCandidateTarget(8,null),8);
+  assert.equal(adaptiveRadar8DeepCandidateTarget(8,60000),8);
+  assert.equal(adaptiveRadar8DeepCandidateTarget(8,60001),6);
+  assert.equal(adaptiveRadar8DeepCandidateTarget(10,80000),7);
+  assert.equal(adaptiveRadar8DeepCandidateTarget(6,90000),4);
+  assert.equal(adaptiveRadar8DeepCandidateTarget(1,120000),1);
 });
 
 test('Radar 8 Activity Shock watch observations are explicitly non-entry signals',()=>{
