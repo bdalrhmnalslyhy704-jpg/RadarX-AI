@@ -1,10 +1,11 @@
 import {MarketUniverseScanner,buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
+import {finiteNumberOr} from './finite-number.mjs';
 import {BinanceAllMarketTickerClient} from '../market/binance-market-ticker-ws.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 
 const clamp=(n,min=0,max=100)=>Math.max(min,Math.min(max,Number(n)||0));
-const finite=(v,d=null)=>Number.isFinite(Number(v))?Number(v):d;
+const finite=(v,d=null)=>finiteNumberOr(v,d);
 const avg=xs=>{const a=xs.filter(Number.isFinite);return a.length?a.reduce((s,x)=>s+x,0)/a.length:null};
 
 export const MOVE_RADAR_DEFAULTS=Object.freeze({
