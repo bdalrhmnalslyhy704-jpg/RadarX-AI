@@ -324,6 +324,7 @@ export function runHistoricalReplay({
         eligible: typeof elite?.eligible === "boolean" ? elite.eligible : null,
         score: finite(elite?.score), confirmations: finite(elite?.confirmations),
         category_hits: finite(elite?.category_hits),
+        failures:Array.isArray(elite?.failures)?elite.failures.slice(0,20):[],
         risk_flags: Array.isArray(elite?.risk_flags) ? elite.risk_flags.slice(0, 16) : []
       },
       notification_gate: {
@@ -333,18 +334,47 @@ export function runHistoricalReplay({
       signal_metrics: {
         return_1m_pct: finite(metrics?.return_1m),
         return_3m_pct: finite(metrics?.return_3m),
+        return_5m_pct: finite(metrics?.return_5m),
+        return_10m_pct: finite(metrics?.return_10m),
+        return_15m_pct: finite(metrics?.return_15m),
+        return_20m_pct: finite(metrics?.return_20m),
         acceleration: finite(metrics?.acceleration),
         volume_ratio: finite(metrics?.volume_ratio),
         trade_ratio: finite(metrics?.trade_ratio),
         taker_buy_ratio_1m_3m: finite(metrics?.taker_buy_ratio),
         taker_buy_ratio_3s: finite(metrics?.three_second_taker_buy_ratio),
+        taker_buy_delta: finite(metrics?.taker_buy_delta),
         taker_buy_pressure_confirmed: typeof metrics?.taker_buy_pressure_confirmed === "boolean" ? metrics.taker_buy_pressure_confirmed : null,
         independent_confirmations: finite(metrics?.independent_confirmations),
         flash_score: finite(metrics?.flash_score),
         flash_confirmations: finite(metrics?.flash_confirmations),
-        liquidity_acceleration_3m: finite(metrics?.liquidity_acceleration?.three_minute_acceleration),
-        liquidity_acceleration_score: finite(metrics?.liquidity_acceleration?.score),
-        breakout_up: typeof metrics?.breakout_up === "boolean" ? metrics.breakout_up : null
+        range_ratio: finite(metrics?.range_ratio),
+        bb_width: finite(metrics?.bb_width),
+        bb_expansion_ratio: finite(metrics?.bb_expansion_ratio),
+        atr_ratio: finite(metrics?.atr_ratio),
+        efficiency_ratio: finite(metrics?.efficiency_ratio),
+        vwap_distance_pct: finite(metrics?.vwap_distance_pct),
+        five_min_trend: finite(metrics?.five_min_trend),
+        breakout_distance_up_pct: finite(metrics?.breakout_distance_up_pct),
+        micro_breakout: typeof metrics?.micro_breakout === "boolean" ? metrics.micro_breakout : null,
+        breakout_up: typeof metrics?.breakout_up === "boolean" ? metrics.breakout_up : null,
+        component_scores: Object.fromEntries(['velocity','volume','trades','taker','range','flash','breakout','ema','vwap','bollinger','efficiency','atr']
+          .map(key=>[key,finite((strong?.component_scores||alert?.component_scores)?.[key])]))
+      },
+      market_evidence: {
+        data_quality:finite(alert?.data_quality ?? strong?.data_quality),
+        liquidity_quality:finite(alert?.liquidity_quality ?? strong?.liquidity_quality),
+        spread_bps:finite(alert?.spread_bps ?? alert?.liquidity_metrics?.spread_bps ?? metrics?.spread_bps),
+        quote_volume_24h:finite(ticker.quoteVolume24h ?? alert?.quote_volume_24h),
+        relative_strength_vs_market_pct:finite(alert?.pre_move_context?.relative_strength_vs_market_pct ??
+          alert?.pre_expansion_fingerprint?.relative_strength_vs_market_pct ?? metrics?.relative_strength_vs_market_pct),
+        relative_strength_vs_btc_pct:finite(alert?.pre_move_context?.relative_strength_vs_btc_pct ??
+          alert?.pre_expansion_fingerprint?.relative_strength_vs_btc_pct ?? metrics?.relative_strength_vs_btc_pct),
+        volatility_compression_score:finite(alert?.pre_expansion_fingerprint?.compression_score ??
+          alert?.pre_expansion_fingerprint?.compression ?? metrics?.compression_score),
+        pre_expansion_stage:alert?.pre_expansion_stage ?? alert?.pre_expansion_fingerprint?.stage ?? null,
+        source_data_stale:alert?.data_stale===true || alert?.data_status?.data_stale===true,
+        closed_candles_only:alert?.closed_candles_only===true || strong?.closed_candles_only===true
       },
       observed_price_change_24h_pct: finite(ticker.priceChange24h),
       liquidity_acceleration: finite(raw?.liquidity_acceleration ??
