@@ -110,6 +110,11 @@ test('replay never passes future candles or unfinished 3-second trade windows to
   assert.ok(replay.steps.every(x => x.reason_codes.includes('TEST_REJECT')));
   assert.ok(replay.steps.every(x => x.input_max_candle_close_at <= x.timestamp));
   assert.equal(replay.steps[0].outcome.is_future_data_for_scoring, false);
+  assert.equal(replay.data_quality.candle_fetch_complete,true);
+  assert.equal(replay.data_quality.window_candles_expected,replay.data_quality.window_candles_observed);
+  assert.equal(replay.evaluation.version,'RADARX_MOVE_OUTCOME_ANALYSIS_V1');
+  assert.equal(replay.evaluation.observation.candle_coverage_complete,true);
+  assert.equal(replay.evaluation.policy.real_order_execution,false);
 });
 
 test('replay applies alert cooldown deterministically per symbol', () => {
@@ -137,6 +142,9 @@ test('incomplete aggregate-trade coverage fails closed without scoring', () => {
   assert.equal(called, false);
   assert.equal(replay.summary.premove_50_status, 'TRADE_COVERAGE_INCOMPLETE');
   assert.equal(replay.summary.first_actual_window_50pct_at, null);
+  assert.equal(replay.data_quality.replay_mode,'BLOCKED_INCOMPLETE');
+  assert.equal(replay.evaluation.observation.candle_coverage_complete,false);
+  assert.equal(replay.evaluation.moderate_move.classification,'INCOMPLETE_MARKET_DATA');
   assert.ok(replay.steps.length > 0);
   assert.ok(replay.steps.every(x => x.decision === 'REJECTED' &&
     x.reason_codes.includes('AGG_TRADES_HISTORY_INCOMPLETE')));
