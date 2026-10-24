@@ -584,10 +584,12 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
     earlyHardFailures.length===0 &&
     !falcon.hard_fail &&
     falcon.early_window &&
-    falcon.capture>=78 &&
-    falcon.quality>=72 &&
-    falcon.independent_domains>=4 &&
-    score>=Math.max(72,p.minScore-6) &&
+    // Broaden only the separately-labelled watch corridor. Data quality, liquidity,
+    // freshness, anti-chase and every hard risk veto remain mandatory.
+    falcon.capture>=74 &&
+    falcon.quality>=68 &&
+    falcon.independent_domains>=3 &&
+    score>=Math.max(70,p.minScore-10) &&
     data>=p.minData &&
     (!p.minLiquidity||liquidity>=p.minLiquidity) &&
     (Number(trajectoryBonus(trajectory))>=5 || trajectoryPersistence<3 || trajectoryConvergence>=62);
