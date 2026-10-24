@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,isMarketWideCacheFallbackPoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible,ensureRadar8ScoreContainer,isConfirmedEarlyFlowWatchCandidate,buildEarlyFlowWatchAlert,buildMicroEarlyFlowWatchCandidate} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,isMarketWideCacheFallbackPoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,adaptiveRadar8DeepCandidateTarget,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible,ensureRadar8ScoreContainer,isConfirmedEarlyFlowWatchCandidate,buildEarlyFlowWatchAlert,buildMicroEarlyFlowWatchCandidate} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
   return new EarlyExpansionRadar({
     rest:{request:async()=>({data:[]}),klines:async()=>({candles:[]}),depth:async()=>({data:{bids:[],asks:[]}})},
     store:{},
-    config:{minQuoteVolume24h:100000,microScanCandidates:36,deepCandidates:10,quietReserve:8,rotationReserve:8,...config},
+    config:{minQuoteVolume24h:100000,microScanCandidates:18,deepCandidates:8,quietReserve:4,rotationReserve:5,...config},
     clock:()=>now,logger:{warn(){}}
   });
 }
@@ -63,9 +63,17 @@ function makeClosedCandles(symbol, intervalMs, count, at=now, source='BINANCE_PU
 test('Radar 8 uses a 20-second target with bounded fair-rotating work batches',()=>{
   assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.pollMs,20000);
   assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.microScanCandidates,18);
-  assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.deepCandidates,10);
-  assert.ok(EARLY_EXPANSION_RADAR_DEFAULTS.microConcurrency>=8);
-  assert.ok(EARLY_EXPANSION_RADAR_DEFAULTS.deepConcurrency>=6);
+  assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.deepCandidates,8);
+  assert.ok(EARLY_EXPANSION_RADAR_DEFAULTS.microConcurrency>=6);
+  assert.ok(EARLY_EXPANSION_RADAR_DEFAULTS.deepConcurrency>=4);
+});
+
+test('Radar 8 scales the next deep batch down after a slow cycle and restores full capacity when healthy',()=>{
+  assert.equal(adaptiveRadar8DeepCandidateTarget(8,null),8);
+  assert.equal(adaptiveRadar8DeepCandidateTarget(8,60000),8);
+  assert.equal(adaptiveRadar8DeepCandidateTarget(8,60001),6);
+  assert.equal(adaptiveRadar8DeepCandidateTarget(10,80000),7);
+  assert.equal(adaptiveRadar8DeepCandidateTarget(6,90000),4);
 });
 
 test('Radar 8 Activity Shock watch observations are explicitly non-entry signals',()=>{
