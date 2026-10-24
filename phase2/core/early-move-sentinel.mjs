@@ -563,7 +563,7 @@ export class EarlyMoveSentinel {
     this.ws=null;
     this.lastTickAt=null;
     this.lastReconcileAt=null;
-    this.reconciling=false;this.reconcileSkippedCount=0;
+    this.reconciling=false;this.reconcileStartedAt=null;this.reconcileSkippedCount=0;
     this.alertCount=0;
     this.lastError=null;
   }
@@ -623,6 +623,9 @@ export class EarlyMoveSentinel {
       last_tick_at:this.lastTickAt,
       last_reconcile_at:this.lastReconcileAt,
       last_error:this.lastError,
+      busy:this.reconciling,
+      busy_since_at:this.reconcileStartedAt,
+      poll_ms:Math.max(10000,Number(this.config.reconcileMs)||15000),
       reconcile_in_flight:this.reconciling,
       reconcile_skipped_count:this.reconcileSkippedCount,
       queued_deep_scans:this.deepQueue.length,
@@ -644,6 +647,7 @@ export class EarlyMoveSentinel {
     // timeout aborts and race the shared ticker snapshot/candidate queue.
     if(this.reconciling){this.reconcileSkippedCount++;return;}
     this.reconciling=true;
+    this.reconcileStartedAt=this.clock();
     try{
       const info=await this.rest.request('/api/v3/exchangeInfo');
       const universe=buildSpotUniverse(info.data,this.config.quote);
@@ -658,6 +662,7 @@ export class EarlyMoveSentinel {
       this.queuePreExplosionDiscovery(rows);
     }finally{
       this.reconciling=false;
+      this.reconcileStartedAt=null;
     }
   }
 

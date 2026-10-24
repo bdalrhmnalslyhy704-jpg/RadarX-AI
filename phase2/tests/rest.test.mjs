@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {RestClient,RestRateLimitError,retryAfterMs,estimateBinanceRequestWeight,sharedResponseCacheTtlMs,sharedResponseCacheExpiresAt} from '../market/binance-rest.mjs';
+import {RestClient,RestRateLimitError,retryAfterMs,estimateBinanceRequestWeight,sharedResponseCacheTtlMs,sharedResponseCacheExpiresAt,assertSharedBudgetWaitBound} from '../market/binance-rest.mjs';
 import {CONFIG} from '../config.mjs';
 
 
@@ -21,6 +21,12 @@ test('TEST_FIXTURE: REST weight estimator is conservative for shared market-data
   assert.equal(estimateBinanceRequestWeight('/api/v3/ticker/bookTicker',{symbol:'BTCUSDT'}),2);
   assert.equal(estimateBinanceRequestWeight('/api/v3/depth',{symbol:'BTCUSDT',limit:100}),5);
   assert.equal(estimateBinanceRequestWeight('/api/v3/depth',{symbol:'BTCUSDT',limit:500}),25);
+});
+
+test('TEST_FIXTURE: crowded shared request budget defers long waits instead of pinning scans',()=>{
+  assert.equal(assertSharedBudgetWaitBound(0),0);
+  assert.equal(assertSharedBudgetWaitBound(2500),2500);
+  assert.throws(()=>assertSharedBudgetWaitBound(2501),error=>error instanceof RestRateLimitError&&error.retryMs===2501);
 });
 
 test('TEST_FIXTURE: concurrent distinct REST requests reserve the shared budget serially and record exchange usage',async()=>{

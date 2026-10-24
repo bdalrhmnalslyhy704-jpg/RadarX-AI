@@ -48,6 +48,16 @@ const SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE = 4000;
 const SHARED_MIN_INTERVAL_MS = 100;
 // Long exchange cooldowns must defer a scan, not block its busy latch for hours.
 const MAX_INLINE_RATE_LIMIT_WAIT_MS = 1500;
+// Do not let a radar scan wait for several seconds on a crowded process-wide
+// request budget. Defer that request to the next cycle instead of pinning the
+// caller's busy latch while other radars keep consuming the same budget.
+const MAX_SHARED_BUDGET_WAIT_MS = 2500;
+export function assertSharedBudgetWaitBound(waitMs) {
+  const wait = Number(waitMs);
+  if (!Number.isFinite(wait) || wait < 0) throw new TypeError('INVALID_SHARED_BUDGET_WAIT_MS');
+  if (wait > MAX_SHARED_BUDGET_WAIT_MS) throw new RestRateLimitError(wait);
+  return wait;
+}
 // Cache recent public Klines long enough for overlapping radars to reuse them,
 // but keep a strict entry cap so cross-radar reuse cannot grow process RSS without bound.
 const SHARED_MAX_CACHE_ENTRIES = 256;
@@ -135,10 +145,14 @@ async function waitSharedBudget(path, query = {}) {
       release();
     }
     if (reservedAt !== null) return reservedAt;
+    // Long weight/count waits are deferred, just like exchange Retry-After bans.
+    // Otherwise a continuous crowd of background radars can hold one scan open
+    // for many minutes without producing a final result.
+    const boundedWaitMs = assertSharedBudgetWaitBound(waitMs);
     // Re-enter the atomic reservation path after sleeping. The budget may have
     // changed while this request was waiting, so never assume the old reservation
     // is still valid.
-    await sleep(Math.max(1, waitMs));
+    await sleep(Math.max(1, boundedWaitMs));
   }
 }
 

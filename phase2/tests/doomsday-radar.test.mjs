@@ -108,6 +108,21 @@ test('Doomsday class is paper-only and can select forced watchlist rows',async()
 });
 
 
+test('Doomsday reports scan start time while a cycle is awaiting market data',async()=>{
+  const radar=new DoomsdayRadar({rest:{},store:{},config:{pollMs:15_000},clock:()=>TEST_NOW});
+  radar.running=true;radar.universeAt=TEST_NOW;
+  let releaseRows;
+  radar.tickerRows=()=>new Promise(resolve=>{releaseRows=resolve;});
+  const active=radar.tick();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(radar.health().busy,true);
+  assert.equal(radar.health().busy_since_at,TEST_NOW);
+  releaseRows([]);
+  await active;
+  assert.equal(radar.health().busy,false);
+  assert.equal(radar.health().busy_since_at,null);
+});
+
 test('Doomsday rejects a fresh-looking setup after a short-term pump',()=>{
   const now=TEST_NOW;
   const one=[];

@@ -446,7 +446,7 @@ export class StrongMoveRadar {
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
     this.lastTickerMap=new Map();this.lastScanAt=new Map();this.lastAlertAt=new Map();
     this.lastEmergencyCandleAt=new Map();this.lastEmergencyAlertAt=new Map();
-    this.emergencyAlertCount=0;this.alertCount=0;this.lastError=null;this.scans=0;this.lastScanAtMs=null;this.busy=false;
+    this.emergencyAlertCount=0;this.alertCount=0;this.lastError=null;this.scans=0;this.lastScanAtMs=null;this.busy=false;this.busySinceAt=null;
   }
   start(){
     if(this.running)return;
@@ -619,6 +619,7 @@ export class StrongMoveRadar {
   async tick(){
     if(!this.running||this.busy)return;
     this.busy=true;
+    this.busySinceAt=this.clock();
     try{
       if(this.clock()-this.universeAt>this.config.universeRefreshMs)await this.refreshUniverse();
       const rows=await this.tickerRows();
@@ -630,6 +631,7 @@ export class StrongMoveRadar {
       }
     }finally{
       this.busy=false;
+      this.busySinceAt=null;
     }
   }
   health(){
@@ -645,6 +647,8 @@ export class StrongMoveRadar {
       emergency_trigger:'CLOSED_5M_MOVE_GTE_7_PERCENT_OR_POSITIVE_MOVE_GTE_1_5_PERCENT_WITH_3X_VOLUME_SPIKE; NO_24H_QUOTE_VOLUME_FLOOR',
       last_error:this.lastError,
       busy:this.busy,
+      busy_since_at:this.busySinceAt,
+      poll_ms:this.config.pollMs,
       rest:this.rest?.health?.()||null,
       algorithms:['MOMENTUM_BURST','FLASH_ACCELERATION','VOLUME_CLIMAX','TRADE_COUNT_SURGE','TAKER_FLOW_ACCELERATION','DONCHIAN_BREAKOUT','MICRO_BREAKOUT','EMA_BURST','VWAP_DISPLACEMENT','BOLLINGER_EXPANSION','EFFICIENCY_RATIO','ATR_EXPANSION'],
       source:'Binance Public REST',

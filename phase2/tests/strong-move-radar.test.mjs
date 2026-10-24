@@ -144,6 +144,21 @@ await radar.stop();
 assert.equal(radar.running,false);
 radar.tick=originalTick;
 
+// A real in-flight cycle exposes its start time so the swarm watchdog can
+// distinguish a responsive radar from one stuck behind shared REST traffic.
+const busyRadar=new StrongMoveRadar({rest:{},store:{},config:{pollMs:60_000},clock:()=>NOW});
+busyRadar.running=true;busyRadar.universeAt=NOW;
+let releaseTickRows;
+busyRadar.tickerRows=()=>new Promise(resolve=>{releaseTickRows=resolve;});
+const busyTick=busyRadar.tick();
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(busyRadar.health().busy,true);
+assert.equal(busyRadar.health().busy_since_at,NOW);
+releaseTickRows([]);
+await busyTick;
+assert.equal(busyRadar.health().busy,false);
+assert.equal(busyRadar.health().busy_since_at,null);
+
 // CI trigger: independent radar regression coverage stays on this branch.
 const batchRadar = new StrongMoveRadar({rest:{},store:{},config:{topMoverCount:3,rotationBatchSize:4},clock:()=>NOW});
 batchRadar.universe=Array.from({length:16},(_,i)=>`B${String(i).padStart(2,'0')}USDT`);

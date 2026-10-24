@@ -438,7 +438,7 @@ export class DoomsdayRadar{
     this.clock=clock;this.sleepFn=sleepFn;this.logger=logger;
     this.running=false;this.busy=false;this.timer=null;this.universe=[];this.universeAt=0;
     this.lastPrices=new Map();this.lastAlertAt=new Map();this.latestCandidates=[];this.alertTimestamps=[];
-    this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;
+    this.lastScanAtMs=null;this.lastError=null;this.scans=0;this.alertCount=0;this.busySinceAt=null;
   }
   start(){
     if(this.running)return;
@@ -531,6 +531,7 @@ export class DoomsdayRadar{
   async tick({forcedSymbols=[]}={}){
     if(!this.running||this.busy)return false;
     this.busy=true;
+    this.busySinceAt=this.clock();
     try{
       if(this.clock()-this.universeAt>this.config.universeRefreshMs)await this.refreshUniverse();
       const rows=await this.tickerRows();
@@ -552,7 +553,7 @@ export class DoomsdayRadar{
       this.latestCandidates=out.filter(x=>x?.eligible&&x?.analysis?.elite_gate?.eligible).sort((a,b)=>Number(b.analysis?.elite_gate?.score||0)-Number(a.analysis?.elite_gate?.score||0)).slice(0,3);
       this.lastScanAtMs=this.clock();this.lastError=null;
       return true;
-    }finally{this.busy=false;}
+    }finally{this.busy=false;this.busySinceAt=null;}
   }
   async scanSymbols(symbols=[]){
     const forced=(Array.isArray(symbols)?symbols:[]).map(s=>safeSymbol(s)).filter(Boolean);
@@ -569,7 +570,7 @@ export class DoomsdayRadar{
       watchlist:this.config.watchlist||[]};
   }
   health(){
-    return {running:this.running,busy:this.busy,radar:'DOOMSDAY_RADAR',radar_name:'Radar 6 — يوم القيامة',universe:this.universe.length,
+    return {running:this.running,busy:this.busy,busy_since_at:this.busySinceAt,poll_ms:this.config.pollMs,radar:'DOOMSDAY_RADAR',radar_name:'Radar 6 — يوم القيامة',universe:this.universe.length,
       last_universe_refresh_at:this.universeAt||null,last_scan_at:this.lastScanAtMs,scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,
       algorithms:['1m/3m/5m Momentum','Acceleration vs Self Baseline','Relative Volume','Trade Count Surge','Taker Flow','Squeeze Release','Donchian Breakout','EMA9/21 Burst','VWAP Reclaim','ATR Expansion','Relative Strength vs BTC','Range Acceptance','Closed-Candle Confirmation Streak','Sniper Freshness / Anti-Chase','Hourly Alert Budget'],
       source:'Binance Public REST',closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'};
