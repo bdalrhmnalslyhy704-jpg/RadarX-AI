@@ -326,6 +326,20 @@ test('newer ticker refreshes a queued snapshot without downgrading a stronger tr
 
 
 
+test('Move Sentinel exposes deep-scan busy timing to the radar watchdog',()=>{
+  const now=1710002000000;
+  const sentinel=new EarlyMoveSentinel({rest:{request:async()=>({data:[]})},store:{},config:{},clock:()=>now,
+    tickerWsFactory:()=>({start(){},stop(){},health(){return{state:'STOPPED'}}})});
+  assert.equal(sentinel.health().busy,false);
+  assert.equal(sentinel.health().busy_since_at,null);
+  sentinel.deepActive=1;sentinel.deepActiveStartedAt=now-130_000;
+  assert.equal(sentinel.health().busy,true);
+  assert.equal(sentinel.health().busy_since_at,now-130_000);
+  sentinel.reconciling=true;sentinel.reconcileStartedAt=now-140_000;
+  assert.equal(sentinel.health().busy_since_at,now-140_000,'report the oldest active operation for reliable timeout detection');
+  sentinel.deepActive=0;sentinel.deepActiveStartedAt=null;sentinel.reconciling=false;sentinel.reconcileStartedAt=null;
+});
+
 test('Move Sentinel skips overlapping REST reconciliations while a previous run is in flight',async()=>{
   let exchangeCalls=0,tickerCalls=0,releaseTicker;
   const tickerGate=new Promise(resolve=>{releaseTicker=resolve;});

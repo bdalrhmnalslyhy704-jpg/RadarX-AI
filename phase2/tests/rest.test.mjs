@@ -221,17 +221,6 @@ test('TEST_FIXTURE: REST timeout errors identify the timed-out endpoint and fall
   assert.match(client.health().last_error,/REST_REQUEST_TIMEOUT/);
 });
 
-test('TEST_FIXTURE: expired analyst scan deadline blocks outbound REST requests immediately',async()=>{
-  let calls=0;
-  const client=new RestClient({baseUrls:['https://scan-deadline.test'],timeoutMs:100,minIntervalMs:0,
-    fetchImpl:async()=>{calls++;return{status:200,ok:true,headers:new Map(),json:async()=>({})};}});
-  client.requestDeadlineAtMs=Date.now()-1;
-  await assert.rejects(()=>client.request('/api/v3/exchangeInfo'),/MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED/);
-  assert.equal(calls,0,'expired scan deadlines must not start a network request');
-  assert.equal(client.health().state,'ERROR');
-  assert.match(client.health().last_error,/MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED/);
-});
-
 test('TEST_FIXTURE: a long Retry-After never blocks a radar request for hours',async()=>{
   let calls=0;
   const fetchImpl=async()=>{

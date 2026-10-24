@@ -560,6 +560,7 @@ export class EarlyMoveSentinel {
     this.preExplosionCursor=0;this.preExplosionRotationTotal=0;
     this.deepQueue=[];
     this.deepActive=0;
+    this.deepActiveStartedAt=null;
     this.ws=null;
     this.lastTickAt=null;
     this.lastReconcileAt=null;
@@ -623,8 +624,10 @@ export class EarlyMoveSentinel {
       last_tick_at:this.lastTickAt,
       last_reconcile_at:this.lastReconcileAt,
       last_error:this.lastError,
-      busy:this.reconciling,
-      busy_since_at:this.reconcileStartedAt,
+      // Include deep analysis, not only the REST ticker reconciliation, so the
+      // swarm watchdog can detect a worker stuck while analyzing a symbol.
+      busy:this.reconciling||this.deepActive>0,
+      busy_since_at:[this.reconcileStartedAt,this.deepActiveStartedAt].filter(x=>Number.isFinite(Number(x))&&Number(x)>0).map(Number).sort((a,b)=>a-b)[0]||null,
       poll_ms:Math.max(10000,Number(this.config.reconcileMs)||15000),
       reconcile_in_flight:this.reconciling,
       reconcile_skipped_count:this.reconcileSkippedCount,
@@ -808,6 +811,7 @@ export class EarlyMoveSentinel {
     while(this.running&&this.deepActive<this.config.maxDeepPerCycle&&this.deepQueue.length){
       const job=this.deepQueue.shift();
       this.deepActive++;
+      if(this.deepActiveStartedAt==null)this.deepActiveStartedAt=this.clock();
       try{
         const candidate=await this.scanner.scanSymbol(job.row,1,{exchangeInfo:'Binance Public REST',ticker:'Binance Public REST'},{klinesLimit:this.config.deepKlines,fastInterval:this.config.fastInterval,fastKlines:this.config.fastKlines});
         const wakeAlert=buildEarlyWakeAlert(candidate,job.trigger,{now:this.clock()});
@@ -851,6 +855,7 @@ export class EarlyMoveSentinel {
         if(job.mode==='PRE_EXPLOSION'&&this.lastEarlyScanAt.get(job.symbol)===job.queuedAt)this.lastEarlyScanAt.delete(job.symbol);
       }finally{
         this.deepActive--;
+        if(this.deepActive<=0){this.deepActive=0;this.deepActiveStartedAt=null;}
       }
     }
   }

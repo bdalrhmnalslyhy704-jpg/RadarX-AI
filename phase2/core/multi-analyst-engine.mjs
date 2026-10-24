@@ -1111,7 +1111,6 @@ export class MultiAnalystEngine {
       quote:'USDT',discoveryPool:28,deepScanPool:12,returnLimit:8,deepConcurrency:3,deepKlines:220,
       minQuoteVolume24h:300000,minDataQuality:70,minLiquidityQuality:60,
       ttlMs:45000,universeRefreshMs:30*60*1000,continuousIntervalMs:60000,continuousWarmupMs:8000,
-      scanTimeoutMs:60000,
       radarReviewMaxQueue:200,radarReviewSlotsPerCycle:4,radarReviewQueueTtlMs:300000,
       radarReviewRetryCooldownMs:60000,radarReviewAssessmentTtlMs:180000,...config
     };
@@ -1138,7 +1137,7 @@ export class MultiAnalystEngine {
     this.running=false;
     this.monitorTimer=null;
     this.monitorStartedAt=null;
-    this.monitorStats={scan_count:0,last_scan_at:null,last_error:null,next_scan_at:null,last_scan_successful:false,active_scan_started_at:null,active_scan_deadline_at:null};
+    this.monitorStats={scan_count:0,last_scan_at:null,last_error:null,next_scan_at:null,last_scan_successful:false,active_scan_started_at:null};
     this.pendingRadarReviews=new Map();
     this.latestAnalystAssessments=new Map();
     this.lastRadarReviewSelection=[];
@@ -1333,20 +1332,7 @@ export class MultiAnalystEngine {
         :value);
     }
     const scanStartedAt=this.clock();
-    const scanTimeoutMs=Math.max(100,Math.trunc(Number(this.config.scanTimeoutMs)||60000));
-    const scanWallStartedAt=Date.now();
-    const scanDeadlineAtMs=scanWallStartedAt+scanTimeoutMs;
-    const scannerRest=this.scanner?.rest;
-    const previousRequestDeadlineAtMs=scannerRest?.requestDeadlineAtMs??null;
-    if(scannerRest)scannerRest.requestDeadlineAtMs=scanDeadlineAtMs;
-    const assertScanDeadline=()=>{
-      if(Date.now()<scanDeadlineAtMs)return;
-      const elapsedMs=Math.max(0,Date.now()-scanWallStartedAt);
-      throw new Error('MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED:elapsed_ms='+elapsedMs+':limit_ms='+scanTimeoutMs);
-    };
     this.monitorStats.active_scan_started_at=new Date(scanStartedAt).toISOString();
-    this.monitorStats.active_scan_deadline_at=new Date(scanDeadlineAtMs).toISOString();
-    this.monitorStats.last_scan_successful=false;
     this.monitorStats.last_error=null;
     this.busy=(async()=>{
       const startedAt=scanStartedAt;
@@ -1355,7 +1341,6 @@ export class MultiAnalystEngine {
       let universeEntry=this.universeCacheByQuote.get(q);
       if(!universeEntry||this.clock()-universeEntry.fetchedAt>=universeRefreshMs){
         const info=await this.scanner.exchangeInfo();
-        assertScanDeadline();
         const symbols=buildSpotUniverse(info.data,q);
         if(!symbols.length)throw new Error('EMPTY_SPOT_UNIVERSE');
         universeEntry={symbols,fetchedAt:this.clock(),source:info.source||'Binance Public REST'};
@@ -1365,7 +1350,6 @@ export class MultiAnalystEngine {
       const universeRefreshedAt=universeEntry.fetchedAt;
       const exchangeInfoSource=universeEntry.source;
       const tickers=await this.scanner.ticker24h();
-      assertScanDeadline();
       const normalized=tickers.data.map(x=>({
         symbol:String(x.symbol||'').toUpperCase(),lastPrice:Number(x.lastPrice),quoteVolume24h:Number(x.quoteVolume),
         tradeCount24h:Number(x.count),priceChange24h:Number(x.priceChangePercent),
@@ -1453,7 +1437,6 @@ export class MultiAnalystEngine {
         ]);
         btc15=Array.isArray(b15.candles)?b15.candles:[]; btc1=Array.isArray(b1.candles)?b1.candles:[];
       }catch{}
-      assertScanDeadline();
       const validTickerReturns=selected.map(x=>Number(x.priceChange24h)).filter(Number.isFinite).sort((a,b)=>a-b);
       const marketMedian24h=validTickerReturns.length?validTickerReturns[Math.floor(validTickerReturns.length/2)]:null;
       const breadthPct=validTickerReturns.length?validTickerReturns.filter(x=>x>0).length/validTickerReturns.length*100:null;
@@ -1463,7 +1446,6 @@ export class MultiAnalystEngine {
       const scanned=await boundedMap(deepSelected,Math.max(1,Math.min(4,this.config.deepConcurrency)),async(ticker,index)=>{
         try{
           const row=await this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:exchangeInfoSource,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'',includeAnalysisPayload:true});
-          assertScanDeadline();
           if(!row)throw new Error('SYMBOL_SCAN_RETURNED_EMPTY');
           // A candidate must reach the 19 specialist analysts even when the data gate fails.
           // The final judge remains fail-closed: invalid/stale/future/incomplete data is rejected there.
@@ -1472,7 +1454,6 @@ export class MultiAnalystEngine {
           row._analyst_context={snapshot_id:sharedMarketSnapshot.snapshot_id,snapshot_as_of:sharedMarketSnapshot.as_of,source_radars:Array.isArray(reviewContext?.source_radars)?reviewContext.source_radars.slice(0,8):[],radar_review_priority:ticker?._radar_review_priority===true,duplicate_alert_suppressed:false};
           let prior=null;
           try{ prior=await this.store?.getIntelligenceMemory?.(ticker.symbol) || null; }catch{ prior=null; }
-          assertScanDeadline();
           let analysis;
           try{
             analysis=analyzeMultiAnalystCandidate(row,sharedMarketSnapshot,prior,this.calibration);
@@ -1546,7 +1527,6 @@ export class MultiAnalystEngine {
           return null;
         }
       });
-      assertScanDeadline();
       const live=scanned.filter(Boolean);
       const failedRadarReviewSymbols=new Set(scanErrors.map(x=>String(x?.symbol||'').toUpperCase()));
       for(const ticker of deepSelected){
@@ -1597,7 +1577,6 @@ export class MultiAnalystEngine {
           });
         }catch{}
       }
-      assertScanDeadline();
       live.sort((a,b)=>(b.final_judge?.sniper_score??-1)-(a.final_judge?.sniper_score??-1)||b.final_score-a.final_score||b.consensus.ratio-a.consensus.ratio||b.liquidity_quality-a.liquidity_quality);
       const qualified=live.filter(x=>x.verdict==='STRONG_CANDIDATE'||x.verdict==='CANDIDATE');
       const candidates=qualified.slice(0,Math.min(requested,5)).map((x,i)=>({...x,rank:i+1}));
@@ -1683,22 +1662,10 @@ export class MultiAnalystEngine {
         last_error:null,
         next_scan_at:this.monitorStats.next_scan_at
       };
-      assertScanDeadline();
       this.cache={quote:q,expiresAt:this.clock()+this.config.ttlMs,value};
       return value;
     })();
-    try{return await this.busy}
-    catch(error){
-      this.monitorStats.last_error=String(error?.message??error);
-      this.monitorStats.last_scan_successful=false;
-      throw error;
-    }
-    finally{
-      if(scannerRest&&scannerRest.requestDeadlineAtMs===scanDeadlineAtMs)scannerRest.requestDeadlineAtMs=previousRequestDeadlineAtMs;
-      this.busy=null;
-      this.monitorStats.active_scan_started_at=null;
-      this.monitorStats.active_scan_deadline_at=null;
-    }
+    try{return await this.busy}finally{this.busy=null;this.monitorStats.active_scan_started_at=null;}
   }
   getCached({quote=this.config.quote}={}){
     const key=String(quote||this.config.quote).toUpperCase();
