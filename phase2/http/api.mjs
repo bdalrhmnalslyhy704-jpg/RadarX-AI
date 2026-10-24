@@ -624,26 +624,23 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         }
       }
       if((u.pathname==='/api/rotation-radar'||u.pathname==='/api/rotation-lag-radar')&&req.method==='GET'){
-        if(!rotationLagRadar)return send(res,503,{error:'ROTATION_LAG_RADAR_UNAVAILABLE'});
-        const sinceRaw=Number(u.searchParams.get('since')||0);
-        const limit=Math.max(1,Math.min(100,Math.trunc(Number(u.searchParams.get('limit')||50))));
+        if(!rotationLagRadar)return send(res,503,{error:'ROTATION_LAG_RADAR_UNAVAILABLE',alerts:[],candidates:[]});
+        const sinceRaw=Number(u.searchParams.get('since')||0),limit=Math.max(1,Math.min(100,Math.trunc(Number(u.searchParams.get('limit')||50))));
+        const runNow=String(u.searchParams.get('scan')||'')==='1';
         try{
-          const alerts=typeof store.readRotationAlerts==='function'
-            ? await store.readRotationAlerts({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit})
-            : [];
-          const health=rotationLagRadar.health();
-          return send(res,200,{
-            meta:{live:health.running===true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'ROTATION_LAG_RADAR'},
-            source:'Binance Public REST',
-            as_of:new Date(Date.now()).toISOString(),
-            monitoring:health,
-            thresholds:{min_score:Number(config.rotationRadar?.minScore??78),min_confirmations:Number(config.rotationRadar?.minConfirmations??4),market:'SPOT',primary_timeframe:'15m',confirmation_timeframe:'1h'},
-            algorithms:health.algorithms||[],
-            alerts
-          });
-        }catch(e){
-          return send(res,503,{error:String(e?.message??e),alerts:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'ROTATION_LAG_RADAR'}});
-        }
+          let scanResult={requested:runNow,completed:!runNow,error:null};
+          if(runNow){const before=rotationLagRadar.health?.()||{};
+            if(before.running!==true)scanResult={requested:true,completed:false,error:'RADAR_NOT_RUNNING'};
+            else if(before.busy===true)scanResult={requested:true,completed:false,error:'SCAN_IN_PROGRESS'};
+            else{const result=await rotationLagRadar.tick(),after=rotationLagRadar.health?.()||{};
+              scanResult={requested:true,completed:result===true,error:result===true?null:(after.last_error||'SCAN_FAILED')};}}
+          const alerts=typeof store.readRotationAlerts==='function'?await store.readRotationAlerts({sinceMs:Number.isFinite(sinceRaw)?Math.max(0,sinceRaw):0,limit}):[];
+          const health=rotationLagRadar.health(),candidates=typeof rotationLagRadar.snapshot==='function'?rotationLagRadar.snapshot(limit):[];
+          return send(res,200,{meta:{live:health.running===true&&health.last_scan_at!=null,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'ROTATION_LAG_RADAR'},
+            source:'Binance Public REST',as_of:new Date(Date.now()).toISOString(),monitoring:health,scan:scanResult,candidates,diagnostics:health.decision_diagnostics||{},
+            thresholds:{min_score:Number(config.rotationRadar?.minScore??78),min_confirmations:Number(config.rotationRadar?.minConfirmations??4),watch_min_score:72,watch_min_volume_ratio:1.12,watch_min_trade_ratio:1.05,market:'SPOT',primary_timeframe:'15m',confirmation_timeframe:'1h'},
+            algorithms:health.algorithms||[],alerts});
+        }catch(e){return send(res,503,{error:String(e?.message??e),alerts:[],candidates:[],meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'ROTATION_LAG_RADAR'}});}
       }
       if(u.pathname==='/api/liquidity-absorption-radar'&&req.method==='GET'){
         if(!liquidityAbsorptionRadar)return send(res,503,{error:'LIQUIDITY_ABSORPTION_RADAR_UNAVAILABLE'});
