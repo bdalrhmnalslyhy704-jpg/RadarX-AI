@@ -24,6 +24,8 @@ function rejectionEvidence(step) {
     ...(Array.isArray(step.strict_gate_failures) ? step.strict_gate_failures : []),
     ...(Array.isArray(step.core_trigger_diagnostics?.failed_checks) ? step.core_trigger_diagnostics.failed_checks : []),
     ...(Array.isArray(step.notification_gate?.failures) ? step.notification_gate.failures : []),
+    ...(Array.isArray(step.early_warning?.failures) ? step.early_warning.failures : []),
+    ...(Array.isArray(step.elite_gate?.failures) ? step.elite_gate.failures : []),
     ...(Array.isArray(step.risk_flags) ? step.risk_flags : []),
     ...(Array.isArray(step.elite_gate?.risk_flags) ? step.elite_gate.risk_flags : [])
   ];
@@ -44,6 +46,19 @@ function lastRejectedBefore(steps, at) {
     score: finite(row.score),
     core_trigger_eligible: typeof row.core_trigger_eligible === 'boolean' ? row.core_trigger_eligible : null,
     candidate_eligible: typeof row.candidate_eligible === 'boolean' ? row.candidate_eligible : null,
+    market_evidence:row.market_evidence&&typeof row.market_evidence==='object'?row.market_evidence:null,
+    signal_metrics:row.signal_metrics&&typeof row.signal_metrics==='object'?row.signal_metrics:null,
+    gate_failure_layers:{
+      core_trigger:{eligible:typeof row.core_trigger_eligible==='boolean'?row.core_trigger_eligible:null,
+        failures:unique(row.core_trigger_diagnostics?.failed_checks||[]).slice(0,16)},
+      elite_confluence:{eligible:typeof row.elite_gate?.eligible==='boolean'?row.elite_gate.eligible:null,
+        score:finite(row.elite_gate?.score),failures:unique(row.elite_gate?.failures||[]).slice(0,16),
+        risk_flags:unique(row.elite_gate?.risk_flags||[]).slice(0,12)},
+      notification:{eligible:typeof row.notification_gate?.eligible==='boolean'?row.notification_gate.eligible:null,
+        failures:unique(row.notification_gate?.failures||[]).slice(0,16)},
+      dynamic_early_warning:{eligible:typeof row.early_warning?.eligible==='boolean'?row.early_warning.eligible:null,
+        score:finite(row.early_warning?.score),failures:unique(row.early_warning?.failures||[]).slice(0,16)}
+    },
     failed_checks: rejectionEvidence(row)
   };
 }
