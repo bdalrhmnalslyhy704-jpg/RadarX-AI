@@ -25,19 +25,21 @@ test('12-radar historical profile matrix lists every canonical profile without n
 
 test('profile-matrix dry-run surfaces unavailable evidence rather than treating it as ready',()=>{
   const run=spawnSync(process.execPath,[script,'--dry-run','--profiles',
-    'EARLY_EXPANSION_RADAR,WHALE_ACCUMULATION_RADAR,PROFESSOR_RADAR','--symbols','GTCUSDT'],{
+    'STRONG_MOVE_RADAR,EARLY_EXPANSION_RADAR,WHALE_ACCUMULATION_RADAR,PROFESSOR_RADAR','--symbols','GTCUSDT'],{
     encoding:'utf8',timeout:10_000
   });
   assert.equal(run.status,0,run.stderr||run.stdout);
   const report=JSON.parse(run.stdout);
   assert.deepEqual(report.profiles.map(x=>x.profile),[
-    'EARLY_EXPANSION_RADAR','WHALE_ACCUMULATION_RADAR','PROFESSOR_RADAR'
+    'STRONG_MOVE_RADAR','EARLY_EXPANSION_RADAR','WHALE_ACCUMULATION_RADAR','PROFESSOR_RADAR'
   ]);
-  const early=report.profiles[0];
+  const strong=report.profiles[0];
+  assert.ok(strong.unavailable_historical_evidence.includes('HISTORICAL_ORDERBOOK_UNAVAILABLE'));
+  const early=report.profiles[1];
   assert.ok(early.unavailable_historical_evidence.includes('HISTORICAL_ORDERBOOK_UNAVAILABLE'));
-  const whale=report.profiles[1];
+  const whale=report.profiles[2];
   assert.equal(whale.trade_history_required,true);
-  const professor=report.profiles[2];
+  const professor=report.profiles[3];
   assert.ok(professor.external_evidence_required.includes('PROFESSOR_NEWS_ARCHIVE'));
   assert.ok(professor.external_evidence_required.includes('PROFESSOR_STREAM_TRANSCRIPT_ARCHIVE'));
 });
