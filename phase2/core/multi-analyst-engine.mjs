@@ -1049,6 +1049,59 @@ export function nextContinuousScanDelayMs(intervalMs, elapsedMs=0){
   return Math.max(0,interval-(Number.isFinite(elapsed)?Math.max(0,elapsed):0));
 }
 
+/**
+ * Read-only visibility lane for positive 24h Spot movers. It is deliberately
+ * separate from analyst verdicts: ticker-only rows never become candidates,
+ * recommendations, or push alerts. If a mover did enter this cycle's deep scan,
+ * include the actual verdict and reasons; otherwise say it was not analyzed.
+ */
+export function buildMultiAnalystMarketMoverObservations(rows,analysedRows=[],{
+  minMovePct=8,maxExtended24hMovePct=18,minQuoteVolume24h=300000,limit=15
+}={}){
+  const bySymbol=new Map((Array.isArray(analysedRows)?analysedRows:[])
+    .filter(x=>x&&typeof x.symbol==='string')
+    .map(x=>[String(x.symbol).trim().toUpperCase(),x]));
+  const take=Math.max(1,Math.min(25,Math.trunc(Number(limit)||15)));
+  return (Array.isArray(rows)?rows:[])
+    .map(row=>({
+      row,
+      symbol:String(row?.symbol||'').trim().toUpperCase(),
+      price:Number(row?.lastPrice??row?.last_price),
+      change:Number(row?.priceChange24h??row?.price_change_24h),
+      volume:Number(row?.quoteVolume24h??row?.quote_volume_24h),
+      trades:Number(row?.tradeCount24h??row?.trade_count_24h)
+    }))
+    .filter(x=>/^[A-Z0-9]{1,26}USDT$/.test(x.symbol)&&Number.isFinite(x.price)&&x.price>0&&
+      Number.isFinite(x.change)&&x.change>=Number(minMovePct)&&
+      Number.isFinite(x.volume)&&x.volume>=Math.max(1,Number(minQuoteVolume24h)||1))
+    .sort((a,b)=>b.change-a.change||b.volume-a.volume||a.symbol.localeCompare(b.symbol))
+    .slice(0,take)
+    .map(x=>{
+      const analysed=bySymbol.get(x.symbol)||null;
+      const extended=x.change>Number(maxExtended24hMovePct);
+      const analysisFailed=analysed?.analyst_execution?.analysis_failed===true;
+      return {
+        symbol:x.symbol,last_price:x.price,price_change_24h:x.change,
+        quote_volume_24h:x.volume,trade_count_24h:Number.isFinite(x.trades)?x.trades:null,
+        stage:extended?'ALREADY_EXTENDED':analysed?String(analysed.verdict||'ANALYZED_THIS_CYCLE'):'TICKER_MOVER_ONLY',
+        analysis_status:analysed?(analysisFailed?'ANALYSIS_FAILED':'ANALYZED_THIS_CYCLE'):'NOT_DEEP_SCANNED_THIS_CYCLE',
+        analyst_verdict:analysed?(analysisFailed?'ANALYSIS_FAILED':String(analysed.verdict||'UNKNOWN')):null,
+        final_score:analysed&&!analysisFailed&&Number.isFinite(Number(analysed.final_score))?Number(analysed.final_score):null,
+        analyst_count:Number(analysed?.analyst_execution?.specialist_count)||0,
+        reason_codes:analysed
+          ?[...(Array.isArray(analysed.reason_codes)?analysed.reason_codes:[]),
+             ...(Array.isArray(analysed.final_judge?.hardReasons)?analysed.final_judge.hardReasons:[])].slice(0,8)
+          :extended?['ANTI_CHASE_24H_MOVE_EXCEEDED','ANALYSTS_NOT_RUN_FOR_THIS_SYMBOL']:['NOT_DEEP_SCANNED_THIS_CYCLE'],
+        hard_reasons:analysed&&Array.isArray(analysed.final_judge?.hardReasons)?analysed.final_judge.hardReasons.slice(0,8):[],
+        data_quality:analysed&&Number.isFinite(Number(analysed.data_quality))?Number(analysed.data_quality):null,
+        liquidity_quality:analysed&&Number.isFinite(Number(analysed.liquidity_quality))?Number(analysed.liquidity_quality):null,
+        diagnostic_only:true,watch_only:true,entry_eligible:false,actionable:false,
+        paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+        source:analysed?'Binance Public REST + 19 specialists + final analyst':'Binance Public REST ticker only'
+      };
+    });
+}
+
 export class MultiAnalystEngine {
   constructor({rest,config={},clock=()=>Date.now(),store=null}={}){
     this.store=store;
@@ -1526,17 +1579,21 @@ export class MultiAnalystEngine {
       const candidates=qualified.slice(0,Math.min(requested,5)).map((x,i)=>({...x,rank:i+1}));
       const watchlist=live.filter(x=>x.verdict==='WATCH').slice(0,Math.min(requested,3)).map((x,i)=>({...x,rank:i+1}));
       const strongCount=live.filter(x=>x.verdict==='STRONG_CANDIDATE').length;
+      const marketMovers=buildMultiAnalystMarketMoverObservations(normalized,live,{
+        minMovePct:8,maxExtended24hMovePct:18,minQuoteVolume24h:this.config.minQuoteVolume24h,limit:15
+      });
       const value={
         meta:{live:live.some(x=>x.data_status?.data_valid===true),paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analyst_count:20,specialist_count:19,engine_revision:'ELITE_SNIPER_V1',analysis_mode:refreshRequested?'FORCED_SCAN':'LIVE_SCAN',force_refresh_requested:refreshRequested,request_id:safeRequestId},
         as_of:new Date(this.clock()).toISOString(),
         source:'Binance Public REST',
         universe:{quote:q,eligible_spot_symbols:universe.length,discovery_pool:selected.length,deep_scan_pool:deepSelected.length,scanned:live.length,returned:candidates.length,min_quote_volume_24h:this.config.minQuoteVolume24h,universe_refreshed_at:new Date(universeRefreshedAt).toISOString(),universe_refresh_interval_ms:universeRefreshMs,surge_lane_candidates:surge.length},
         market_context:{regime:marketRegime({marketMedian24h,breadthPct}),median_24h_change_pct:marketMedian24h,positive_breadth_pct:breadthPct},
+        market_movers:marketMovers,
         summary:{strong_candidates:strongCount,candidates:live.filter(x=>x.verdict==='CANDIDATE').length,qualified:qualified.length,watch:live.filter(x=>x.verdict==='WATCH').length,rejected:live.filter(x=>x.verdict==='REJECT').length},
         candidates,watchlist,
         // Keep rejected deep-scan rows visible for audit so a zero-candidate cycle
         // still explains what was actually tested and why each row failed to qualify.
-        lab_results:live.filter(x=>x.verdict==='REJECT').slice(0,8).map(x=>({
+        lab_results:live.filter(x=>x.verdict==='REJECT').slice(0,Math.max(8,Math.min(15,requested))).map(x=>({
           symbol:x.symbol,
           rank:x.rank,
           last_price:x.last_price,
@@ -1553,6 +1610,12 @@ export class MultiAnalystEngine {
           evidence_coverage:x.final_judge?.evidence_coverage??null,
           hard_reasons:Array.isArray(x.final_judge?.hardReasons)?x.final_judge.hardReasons.slice(0,8):[],
           reason_codes:Array.isArray(x.reason_codes)?x.reason_codes.slice(0,8):[],
+          analysts:Array.isArray(x.analysts)?x.analysts.slice(0,19):[],
+          analyst_execution:x.analyst_execution||null,
+          consensus:x.consensus||null,
+          highlights:Array.isArray(x.highlights)?x.highlights.slice(0,6):[],
+          risk_flags:Array.isArray(x.risk_flags)?x.risk_flags.slice(0,8):[],
+          final_judge:x.final_judge||null,
           data_status:{
             data_valid:x.data_status?.data_valid===true,
             data_stale:x.data_status?.data_stale===true,

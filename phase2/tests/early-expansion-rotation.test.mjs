@@ -62,8 +62,8 @@ function makeClosedCandles(symbol, intervalMs, count, at=now, source='BINANCE_PU
 
 test('Radar 8 uses a 20-second target with bounded fair-rotating work batches',()=>{
   assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.pollMs,20000);
-  assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.microScanCandidates,12);
-  assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.deepCandidates,3);
+  assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.microScanCandidates,18);
+  assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.deepCandidates,10);
   assert.ok(EARLY_EXPANSION_RADAR_DEFAULTS.microConcurrency>=8);
   assert.ok(EARLY_EXPANSION_RADAR_DEFAULTS.deepConcurrency>=6);
 });

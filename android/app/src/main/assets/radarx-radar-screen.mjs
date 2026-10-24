@@ -1,4 +1,4 @@
-import {getRadarStatus,getRadarAlerts,getRotationRadar,setRadarState} from './radarx-backend-client.mjs';
+import {getRadarStatus,getRadarAlerts,getFalconEyeRadar,getRotationRadar,setRadarState} from './radarx-backend-client.mjs';
 
 const P = {
   EARLY_MOVE_RADAR:{n:'المدمر',i:'☠️',c:'#ff3b30',m:'ما قبل الانفجار',s:'Pre-Breakout Fingerprint + Relative Strength + Compression',t:'1m • 5m • 15m',a:['Fast Impulse','RVOL','Taker Flow','EMA Reclaim','S/R','RSI','OBV','Wyckoff','MTF'],g:['يمنع مطاردة الحركة','جودة وسيولة لازمتان','شموع مغلقة فقط']},
@@ -117,29 +117,46 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
       on.disabled=live;off.disabled=!live;
     };
 
-    const show=(rows)=>{
-      if(!Array.isArray(rows)||!rows.length){
-        box.innerHTML=diagnosticsHtml+'<div class="muted">لا يوجد مرشح أو اكتشاف محفوظ حاليًا.</div>';
-        return;
-      }
-      const sorted=[...rows].sort((a,b)=>Number(b.radar_power_score||b.opportunity_score||b.score||0)-Number(a.radar_power_score||a.opportunity_score||a.score||0));
-      box.innerHTML=diagnosticsHtml+sorted.slice(0,20).map(x=>{
+    const show=(rows,marketMovers=[])=>{
+      const validRows=Array.isArray(rows)?rows:[];
+      const movers=Array.isArray(marketMovers)?marketMovers:[];
+      const sorted=[...validRows].sort((a,b)=>Number(b.radar_power_score||b.opportunity_score||b.score||0)-Number(a.radar_power_score||a.opportunity_score||a.score||0));
+      const alertHtml=sorted.slice(0,20).map(x=>{
         const rotation=x.rotation||{};
         const isJoker=id==='ROTATION_LAG_RADAR';
-        const score=q(x.radar_power_score||x.radar_v2 && x.radar_v2.score||x.opportunity_score||x.score);
+        const score=q(x.radar_power_score||x.radar_v2&&x.radar_v2.score||x.opportunity_score||x.score);
         const label=isJoker?(x.eligible===true?'جاهز للدوران':(x.potential_label||rotation.stage||'مراقبة')):(x.potential_label||x.event||'اكتشاف');
         const shock=x.activity_shock||(x.falcon_eye&&x.falcon_eye.activity_shock)||{};
         const sm=shock.metrics||{};
         const volumeShock=sm.volume_shock_ratio===null||sm.volume_shock_ratio===undefined?'—':sm.volume_shock_ratio;
         const tradeShock=sm.trade_shock_ratio===null||sm.trade_shock_ratio===undefined?'—':sm.trade_shock_ratio;
         const shockNote=shock.detected===true?'<div class="shock-note">⚡ '+e(shock.stage||'ACTIVITY_SHOCK')+' • حجم '+e(volumeShock)+'x • صفقات '+e(tradeShock)+'x<br>مراقبة فقط • '+(shock.extended?'الحركة ممتدة — لا تطارد السعر':'تأكيد شمعة مغلقة')+'</div>':'';
-        const extra=isJoker?' • تأكيدات '+String((x.rotation && x.rotation.confirmations) || x.confirmations || 0):'';
+        const extra=isJoker?' • تأكيدات '+String((x.rotation&&x.rotation.confirmations)||x.confirmations||0):'';
         return '<article class="alert">'+
           '<div class="top"><b>'+e(x.symbol||'—')+'</b><span class="score">'+score+'/100</span></div>'+
           '<div class="muted">'+e(label)+' • '+e(x.direction||rotation.direction||'—')+' • '+e(x.detected_time_12h||'—')+extra+'</div>'+
           '<div class="muted">'+e(Array.isArray(x.reasons)?x.reasons.slice(0,4).join(' • '):Array.isArray(rotation.reasons)?rotation.reasons.slice(0,4).join(' • '):'')+'</div>'+shockNote+
         '</article>';
       }).join('');
+      const moverHtml=id==='FALCON_EYE_RADAR'&&movers.length
+        ?'<section style="margin:10px 0"><h2 style="font-size:13px;margin:8px 2px;color:#f6c453">📈 رصد العملات الصاعدة من بيانات التكر — ليس تحليلًا عميقًا ولا إشارة شراء</h2>'+
+          movers.slice(0,20).map(x=>{
+            const extended=String(x.stage||'')==='ALREADY_EXTENDED';
+            const selected=x.deep_scan_selected===true;
+            return '<article class="alert">'+
+              '<div class="top"><b>'+e(x.symbol||'—')+'</b><span class="score">'+(Number.isFinite(Number(x.price_change_24h))?(Number(x.price_change_24h)>0?'+':'')+Number(x.price_change_24h).toFixed(2)+'%':'—')+'</span></div>'+
+              '<div class="muted">السعر '+e(x.last_price??'—')+' • حجم 24h '+e(x.quote_volume_24h==null?'—':Math.round(Number(x.quote_volume_24h)).toLocaleString('en-US'))+'</div>'+
+              '<div class="shock-note" style="'+(extended?'border-color:#8c5045;color:#ffc0b5;background:#24120f':'')+'">'+
+                (extended?'⛔ حركة ممتدة — لا تطارد السعر':'🔎 رصد تغيّر التكر')+' • '+e(x.analysis_status||'NOT_DEEP_SCANNED_THIS_CYCLE')+
+                (selected?' • اختير للفحص العميق في هذه الدورة':'')+
+                '<br>لم يكتمل التحليل العميق لهذه الملاحظة؛ لا توجد أهلية دخول أو تنبيه مؤكّد.</div>'+
+            '</article>';
+          }).join('')+'</section>':'';
+      if(!alertHtml&&!moverHtml){
+        box.innerHTML=diagnosticsHtml+'<div class="muted">لم تظهر نتائج أو عملات صاعدة في آخر لقطة متاحة. لا يعني هذا أن كل السوق فُحص بعمق.</div>';
+        return;
+      }
+      box.innerHTML=diagnosticsHtml+moverHtml+alertHtml;
     };
 
     async function refresh(force=false){
@@ -163,10 +180,12 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
         else stn.textContent='تعذر قراءة حالة الرادار — HTTP_'+(s.status||0);
         let a;
         if(id==='ROTATION_LAG_RADAR') a=await getRotationRadar({limit:20,scan:true});
+        else if(id==='FALCON_EYE_RADAR') a=await getFalconEyeRadar({limit:20,scan:Boolean(force)});
         else a=await getRadarAlerts({radar:id,limit:50});
         if(a.ok){
           writeRadarCache(a.body||{});
           if(id==='ROTATION_LAG_RADAR')show([].concat(a.body&&a.body.candidates||[],a.body&&a.body.alerts||[]));
+          else if(id==='FALCON_EYE_RADAR')show([].concat(a.body&&a.body.candidates||[],a.body&&a.body.alerts||[]),a.body&&a.body.market_movers||[]);
           else show(a.body&&a.body.alerts||[]);
         }else if(a.status===404)box.innerHTML='<div class="muted">لا يوجد مسار بيانات لهذا الرادار في الخادم الحالي.</div>';
       }catch(x){
