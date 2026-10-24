@@ -1323,6 +1323,10 @@ export function buildEarlyExpansionAlert(candidate,now=Date.now()){
     data_quality:candidate.data_quality,
     liquidity_quality:candidate.liquidity_quality,
     data_stale:candidate.data_stale,
+    // The deep evidence was built from validated closed candles. Keep the exact
+    // 1m/5m close timestamp from the micro scan for the watch-only push freshness gate.
+    detected_candle_close_time:hasFiniteNumber(candidate.detected_candle_close_time)?Number(candidate.detected_candle_close_time):null,
+    closed_candles_only:candidate.closed_candles_only===true,
     source:candidate.source,
     coverage:candidate.coverage,
     paper_trading:true,
@@ -3204,6 +3208,8 @@ export class EarlyExpansionRadar{
               micro_scan_wait_ms:Number(micro.scheduler_wait_ms)||0,deep_scan_wait_ms:deepSchedulerStarted.wait_ms}});
           return {
             symbol:row.symbol,last_price:row.lastPrice,price_change_24h:row.priceChange24h,
+            detected_candle_close_time:watchCloseTime,
+            closed_candles_only:fp?.closed_candles_only===true&&hasFiniteNumber(watchCloseTime),
             low_liquidity_burst_bypass:micro.row?._low_liquidity_burst_bypass===true,
             early_flow_watch:earlyFlowWatch,early_flow_watch_evidence:earlyFlowWatchEvidence,
             quiet_base_scan_latency_ms:hasFiniteNumber(entry?.fast_scan_at)?Math.max(0,deepStarted-Number(entry.fast_scan_at)):null,
