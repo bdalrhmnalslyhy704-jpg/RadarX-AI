@@ -56,19 +56,27 @@ function childRun(args,{timeoutMs}) {
     const timer=setTimeout(()=>{timedOut=true;try{child.kill('SIGTERM');}catch{}setTimeout(()=>{try{child.kill('SIGKILL');}catch{}},5000).unref?.();},timeoutMs);
   });
 }
-function candleCoverage(report,horizonHours){
+function candleCoverage(report,horizonHours,detectorSpec={}){
   const rows=Array.isArray(report?.results)?report.results:[];
   if(rows.length!==1)return {complete:false,reason:'EXPECTED_EXACTLY_ONE_SYMBOL_RESULT'};
   const row=rows[0],quality=row?.data_quality??{};
   const mode=String(quality.replay_mode??'BLOCKED_INCOMPLETE');
-  const complete=quality.candle_fetch_complete===true&&quality.outcome_candle_fetch_complete===true&&
+  const requiredTimeframes=Array.isArray(detectorSpec.requiredTimeframes)?detectorSpec.requiredTimeframes:[];
+  const additional=quality.additional_timeframes&&typeof quality.additional_timeframes==='object'?quality.additional_timeframes:{};
+  const missingRequiredTimeframes=requiredTimeframes.filter(key=>additional[key]?.complete!==true);
+  const baseComplete=quality.candle_fetch_complete===true&&quality.outcome_candle_fetch_complete===true&&
     quality.synthetic_data_used===false&&Number(row?.summary?.replay_steps)>0&&
     ['FULL_TRADE','CANDLE_ONLY_FALLBACK'].includes(mode)&&Number(quality.outcome_horizon_hours)===horizonHours;
+  const complete=baseComplete&&missingRequiredTimeframes.length===0;
+  const reason=complete?null:missingRequiredTimeframes.length
+    ?'REQUIRED_DETECTOR_TIMEFRAME_COVERAGE_INCOMPLETE'
+    :(quality.failure??'HISTORICAL_REPLAY_COVERAGE_INCOMPLETE');
   return {complete,mode,decision_candles_complete:quality.candle_fetch_complete===true,
     outcome_horizon_complete:quality.outcome_candle_fetch_complete===true,
     trade_coverage_complete:quality.trade_coverage_complete===true,
-    replay_steps:Number(row?.summary?.replay_steps)||0,
-    reason:complete?null:(quality.failure??'HISTORICAL_REPLAY_COVERAGE_INCOMPLETE')};
+    required_timeframes:requiredTimeframes,missing_required_timeframes:missingRequiredTimeframes,
+    additional_timeframe_coverage:additional,
+    replay_steps:Number(row?.summary?.replay_steps)||0,reason};
 }
 
 async function main(){
@@ -181,7 +189,7 @@ async function main(){
       baseRecord.error=(child.error??String(error?.message??error)).slice(0,240);
       replayFailures++;continue;
     }
-    const coverage=candleCoverage(report,outcomeHorizonHours);
+    const coverage=candleCoverage(report,outcomeHorizonHours,detectorSpec);
     baseRecord.coverage={...coverage,process_exit_code:child.exitCode,timed_out:child.timedOut};
     if(!coverage.complete||child.exitCode!==0||child.timedOut){
       baseRecord.status='INCOMPLETE_REPLAY';
