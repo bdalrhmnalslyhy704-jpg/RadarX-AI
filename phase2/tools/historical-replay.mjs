@@ -140,7 +140,9 @@ function buildCandidateShadowResult(profile,analysis,input,{eligible,score,stage
   const canonical=profile==='RADAR8_PREMOVE_SHADOW'?'EARLY_EXPANSION_RADAR':profile;
   const nested=profile==='RADAR8_PREMOVE_SHADOW'?'early_expansion':
     profile==='ALMUQAWIM_RADAR'?'almuqawim':
-    profile==='DOOMSDAY_RADAR'?'doomsday':'analysis';
+    profile==='DOOMSDAY_RADAR'?'doomsday':
+    profile==='KAHIR_RADAR'?'kahir_analysis':
+    profile==='ROTATION_LAG_RADAR'?'rotation':'analysis';
   const dataQuality=numericOrNull(analysis?.data_quality ?? analysis?.gates?.data_gate?.quality);
   const isStale=analysis?.data_stale===true || analysis?.data_stale===false?analysis.data_stale:
     analysis?.gates?.data_gate?.valid===false&&reasons.some(x=>/STALE/i.test(x));
@@ -274,7 +276,7 @@ async function main() {
     process.stdout.write([
       'RadarX historical replay (public Binance Spot data; read-only)',
       'Usage: node phase2/tools/historical-replay.mjs [--symbols GTCUSDT,WUSDT] [--start ISO|ms] [--end ISO|ms]',
-      '       [--detector-profile STRONG_MOVE_RADAR|RADAR8_PREMOVE_SHADOW|ALMUQAWIM_RADAR|DOOMSDAY_RADAR]',
+      '       [--detector-profile STRONG_MOVE_RADAR|RADAR8_PREMOVE_SHADOW|ALMUQAWIM_RADAR|DOOMSDAY_RADAR|KAHIR_RADAR|ROTATION_LAG_RADAR]',
       '       [--lookback-hours 24] [--outcome-horizon-hours 24] [--max-trade-pages 500] [--max-trades 500000] [--output path] [--dry-run]',
       'Default window: last completed minute minus 24 hours. Maximum window: 7 days.',
       'Candle-only profiles are labeled candidate shadows; missing historical order-book/news data is never synthesized.',
@@ -294,7 +296,7 @@ async function main() {
       window:{start:startRaw,end:endRaw,lookback_hours:integerArg(flag(args,'--lookback-hours','24'),24,1,168,'lookback-hours'),
         outcome_horizon_hours:integerArg(flag(args,'--outcome-horizon-hours','24'),24,1,168,'outcome-horizon-hours')},
       policy:{market:'BINANCE_SPOT_USDT',paper_trading:true,real_order_execution:false,credentials_used:false}
-    },null,2)+'\\n');
+    },null,2)+'\n');
     return;
   }
   const symbols = String(flag(args, '--symbols', 'GTCUSDT,WUSDT')).split(',')
