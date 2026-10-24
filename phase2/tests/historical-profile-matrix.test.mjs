@@ -8,7 +8,8 @@ import {HISTORICAL_DETECTOR_PROFILES} from '../tools/historical-replay.mjs';
 const script=resolve(dirname(fileURLToPath(import.meta.url)),'../tools/historical-profile-matrix.mjs');
 
 test('12-radar historical profile matrix lists every canonical profile without network access',()=>{
-  const run=spawnSync(process.execPath,[script,'--dry-run','--symbols','GTCUSDT'],{
+  const run=spawnSync(process.execPath,[script,'--dry-run','--symbols','GTCUSDT',
+    '--lookback-hours','6','--outcome-horizon-hours','24'],{
     encoding:'utf8',timeout:10_000
   });
   assert.equal(run.status,0,run.stderr||run.stdout);
@@ -18,6 +19,12 @@ test('12-radar historical profile matrix lists every canonical profile without n
   assert.equal(report.profiles.length,12);
   assert.equal(new Set(report.profiles.map(x=>x.profile)).size,12);
   assert.equal(report.policy.network_access,false);
+  assert.equal(report.window.lookback_hours,6);
+  assert.equal(report.window.outcome_horizon_hours,24);
+  assert.equal(report.window.end%60_000,59_999,
+    'replay end must align to the last millisecond of a closed one-minute candle');
+  assert.equal(report.window.outcome_end%60_000,59_999,
+    'the forward outcome horizon must also end at a closed-candle close');
   assert.equal(report.policy.paper_trading,true);
   assert.equal(report.policy.real_order_execution,false);
   assert.ok(report.profiles.every(x=>x.actual_push_simulated===false));
