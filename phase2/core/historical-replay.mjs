@@ -156,8 +156,8 @@ function stageFrom(result) {
 export function runHistoricalReplay({
   symbol, oneMinuteCandles, aggTrades = [], startTime, endTime, evaluate,
   tradeCoverageComplete = false, tradeCoverage = null, allowCandleOnlyFallback = false,
-  alertCooldownMs = 12 * 60 * 1000, outcomeHorizonMs = 24 * 60 * 60 * 1000,
-  outcomeEndTime = null, timeframeCandles = {}
+  alertCooldownMs = 12 * 60 * 1000, candidateCooldownMs = 12 * 60 * 1000,
+  outcomeHorizonMs = 24 * 60 * 60 * 1000, outcomeEndTime = null, timeframeCandles = {}
 } = {}) {
   const start = finite(startTime), end = finite(endTime);
   if (!/^[A-Z0-9]{5,20}$/.test(String(symbol ?? "").toUpperCase())) throw new Error("INVALID_SYMBOL");
@@ -221,6 +221,9 @@ export function runHistoricalReplay({
   const horizon = Math.max(0, finite(outcomeHorizonMs) ?? 0);
   const rows = [];
   let priorAcceptedAt = -Infinity;
+  let priorCandidateAt = -Infinity;
+  let candidateCooldownBlockedCount = 0;
+  const candidateCooldown = Math.max(0, finite(candidateCooldownMs) ?? cooldown);
   let fiveIndex = 0;
   let tradeIndex = 0;
   let acceptedCount = 0, rejectedCount = 0;
@@ -278,6 +281,15 @@ export function runHistoricalReplay({
     if (accepted) { priorAcceptedAt = at; acceptedCount++; }
     else rejectedCount++;
 
+    // Candidate telemetry is episode-deduplicated independently of real alert decisions.
+    // Repeated one-minute observations of the same live setup must not inflate the
+    // historical candidate denominator or masquerade as many independent signals.
+    const rawCandidateDetected = raw?.candidate_detected === true;
+    const candidateCooldownBlocked = rawCandidateDetected && at - priorCandidateAt < candidateCooldown;
+    const candidateDetected = rawCandidateDetected && !candidateCooldownBlocked;
+    if (candidateDetected) priorCandidateAt = at;
+    if (candidateCooldownBlocked) candidateCooldownBlockedCount++;
+
     // Outcome-only fields are calculated separately, after evaluate() has finished.
     const horizonEndAt = at + horizon;
     const forwardRows = candles.slice(index + 1).filter(x => x.closeTime <= Math.min(horizonEndAt,observationEnd));
@@ -314,9 +326,12 @@ export function runHistoricalReplay({
       core_trigger_diagnostics: strong?.trigger_diagnostics ?? null,
       decision: accepted ? "ACCEPTED" : "REJECTED",
       accepted_mode:String(raw?.accepted_mode ?? alert?.notification_mode ?? (accepted ? "STRICT" : "NONE")),
-      candidate_detected:raw?.candidate_detected===true,
+      candidate_detected:candidateDetected,
+      candidate_raw_detected:rawCandidateDetected,
+      candidate_suppressed_by_cooldown:candidateCooldownBlocked,
       candidate_mode:String(raw?.candidate_mode??'NONE'),
-      candidate_reasons:Array.isArray(raw?.candidate_reasons)?raw.candidate_reasons.slice(0,24):[],
+      candidate_reasons:[...(Array.isArray(raw?.candidate_reasons)?raw.candidate_reasons:[]),
+        ...(candidateCooldownBlocked?['CANDIDATE_EPISODE_COOLDOWN']:[])].slice(0,24),
       replay_data_mode:tradeCoverageComplete?'FULL_TRADE':(candleOnlyFallback?'CANDLE_ONLY_FALLBACK':'BLOCKED_INCOMPLETE'),
       rejection_group: rejectionGroup, reason_codes: reasons,
       strict_gate_failures:Array.isArray(raw?.strict_gate_failures)?raw.strict_gate_failures.slice(0,20):[],
@@ -470,8 +485,11 @@ export function runHistoricalReplay({
     },
     summary: {
       replay_steps: rows.length, accepted: acceptedCount, rejected: rejectedCount,
+      candidate_raw_detections:rows.filter(x=>x.candidate_raw_detected===true).length,
       candidate_detections:rows.filter(x=>x.candidate_detected===true).length,
       candidate_shadow_detections:rows.filter(x=>x.candidate_detected===true&&x.decision!=='ACCEPTED').length,
+      candidate_suppressed_by_cooldown:candidateCooldownBlockedCount,
+      candidate_cooldown_ms:candidateCooldown,
       premove_50_status: premove50Status,
       first_accepted_at: firstAcceptedAt,
       first_early_warning_accepted_at:firstEarlyWarningAcceptedAt,
