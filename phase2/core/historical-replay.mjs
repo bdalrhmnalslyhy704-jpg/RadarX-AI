@@ -179,7 +179,14 @@ export function runHistoricalReplay({
   for (let i = 0; i < candles.length; i++) {
     if (candles[i].closeTime >= start && candles[i].closeTime <= end) activeIndices.push(i);
   }
-  const windowCandlesExpected=Math.floor((end-start)/MINUTE_MS)+1;
+  // The evaluator consumes candles by closeTime, while CLI boundaries may be
+  // either candle closes (:59.999) or the next candle's open (:00.000).
+  // Count actual one-minute close timestamps inside the inclusive [start,end]
+  // interval so an open-boundary end does not falsely require one extra candle.
+  const firstExpectedClose=Math.ceil((start+1)/MINUTE_MS)*MINUTE_MS-1;
+  const lastExpectedClose=Math.floor((end+1)/MINUTE_MS)*MINUTE_MS-1;
+  const windowCandlesExpected=lastExpectedClose<firstExpectedClose?0:
+    Math.floor((lastExpectedClose-firstExpectedClose)/MINUTE_MS)+1;
   const windowCandlesObserved=activeIndices.length;
   const windowCandlesContiguous=activeIndices.length>0&&activeIndices.every((index,position)=>{
     if(position===0)return true;
