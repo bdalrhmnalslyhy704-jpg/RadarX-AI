@@ -68,7 +68,7 @@ export class FcmPushProvider extends PushProvider{
       const data={};
       for(const key of ['type','event_class','event','notification_mode','watch_only','entry_eligible','requires_follow_up_confirmation','radar','radar_name','symbol','market','direction','price','price_change_24h','opportunity_score','potential_label','risk_flags','reason_codes','early_flow_watch_evidence','signal_lifecycle_state','signal_lifecycle_label','signal_lifecycle_transition','signal_lifecycle_reason_codes','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id','paper_trading','real_order_execution','confidence_score']){
         const value=payload?.[key];
-        if(value!==undefined&&value!==null)data[key]=String(value).slice(0,500);
+        if(value!==undefined&&value!==null)data[key]=(typeof value==='object'?JSON.stringify(value):String(value)).slice(0,500);
       }
       // Send data-only HIGH priority messages so Android's native service can post
       // one notification, set a deterministic tap target, and record device receipt
@@ -227,7 +227,7 @@ export class PushManager{
        alert?.data_status?.data_valid===false||alert?.data_status?.future_data_detected===true)
       return rejected('STALE_OR_INVALID_DATA');
 
-    const source=String(alert?.source||alert?.data_status?.source||'').trim().toUpperCase().replace(/\\s+/g,'_');
+    const source=String(alert?.source||alert?.data_status?.source||'').trim().toUpperCase().replace(/\s+/g,'_');
     if(!['BINANCE_PUBLIC_REST','BINANCE_PUBLIC_WS','BINANCE_PUBLIC_WEBSOCKET','BINANCE_SPOT_PUBLIC_REST'].includes(source))
       return rejected('UNTRUSTED_OR_UNKNOWN_MARKET_SOURCE');
 
