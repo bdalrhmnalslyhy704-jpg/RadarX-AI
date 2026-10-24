@@ -299,7 +299,7 @@ test('replay applies alert cooldown deterministically per symbol', () => {
   assert.equal(replay.steps[2].decision, 'ACCEPTED');
 });
 
-test('historical candidate telemetry counts distinct setup episodes instead of every repeated minute', () => {
+test('historical candidate telemetry counts one continuous setup as one episode', () => {
   const rows = candles(260);
   const replay = runHistoricalReplay({
     symbol: 'WUSDT',
@@ -309,6 +309,7 @@ test('historical candidate telemetry counts distinct setup episodes instead of e
     endTime: rows[186].closeTime,
     tradeCoverageComplete: true,
     candidateCooldownMs: 3 * MINUTE,
+    candidateResetMs: 2 * MINUTE,
     evaluate() {
       return {
         accepted: false,
@@ -322,16 +323,47 @@ test('historical candidate telemetry counts distinct setup episodes instead of e
   assert.equal(replay.steps.length, 7);
   assert.equal(replay.summary.accepted, 0, 'candidate shadow must never become an accepted alert');
   assert.equal(replay.summary.candidate_raw_detections, 7);
-  assert.equal(replay.summary.candidate_detections, 3);
-  assert.equal(replay.summary.candidate_shadow_detections, 3);
-  assert.equal(replay.summary.candidate_suppressed_by_cooldown, 4);
-  const suppressed = replay.steps.filter(row => row.candidate_suppressed_by_cooldown);
-  assert.equal(suppressed.length, 4);
-  assert.ok(suppressed.every(row => row.candidate_detected === false &&
+  assert.equal(replay.summary.candidate_detections, 1);
+  assert.equal(replay.summary.candidate_shadow_detections, 1);
+  assert.equal(replay.summary.candidate_suppressed_by_cooldown, 0,
+    'continuous true observations are duplicates within the active episode, not cooldown-rejected new episodes');
+  assert.equal(replay.summary.candidate_duplicate_observations, 6);
+  const duplicates = replay.steps.filter(row => row.candidate_duplicate_observation);
+  assert.equal(duplicates.length, 6);
+  assert.ok(duplicates.every(row => row.candidate_detected === false &&
     row.candidate_raw_detected === true &&
-    row.candidate_reasons.includes('CANDIDATE_EPISODE_COOLDOWN')));
+    row.candidate_reasons.includes('CANDIDATE_EPISODE_ALREADY_ACTIVE')));
   assert.deepEqual(replay.steps.filter(row => row.candidate_detected).map(row => row.timestamp), [
-    replay.steps[0].timestamp, replay.steps[3].timestamp, replay.steps[6].timestamp
+    replay.steps[0].timestamp
+  ]);
+});
+
+test('a candidate episode resets only after a sustained absence and respects episode cooldown', () => {
+  const rows = candles(280);
+  const flags = [
+    true, true, true, false, false, false, true, true, true, false, false, false, true
+  ];
+  let i = 0;
+  const replay = runHistoricalReplay({
+    symbol: 'EPISODEUSDT',
+    oneMinuteCandles: rows,
+    aggTrades: syntheticTrades(rows),
+    startTime: rows[180].openTime,
+    endTime: rows[193].closeTime,
+    tradeCoverageComplete: true,
+    candidateCooldownMs: 4 * MINUTE,
+    candidateResetMs: 2 * MINUTE,
+    evaluate() {
+      const candidate_detected = flags[i++] === true;
+      return {accepted:false,candidate_detected,reason_codes:['TEST_EPISODE_RESET']};
+    }
+  });
+  assert.equal(replay.summary.candidate_raw_detections,10);
+  assert.equal(replay.summary.candidate_detections,3);
+  assert.equal(replay.summary.candidate_duplicate_observations,5);
+  assert.equal(replay.summary.candidate_suppressed_by_cooldown,2);
+  assert.deepEqual(replay.steps.filter(row => row.candidate_detected).map(row=>row.timestamp),[
+    replay.steps[0].timestamp,replay.steps[6].timestamp,replay.steps[12].timestamp
   ]);
 });
 
