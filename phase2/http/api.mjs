@@ -656,7 +656,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
               try{await statFile(archivePath);}catch(error){throw new Error('ALERT_ARCHIVE_FILE_UNAVAILABLE:'+String(error?.code||error?.message||'UNKNOWN'));}
               const recent=await store.readRecent(radar.archive,alertTailLimit);
               const rows=(Array.isArray(recent)?recent:[]).filter(row=>{
-                const at=toMs(row?.detected_at??row?.detectedAt??row?.signal_at??row?.created_at??row?.event_at??row?.timestamp??row?.processed_at);
+                const at=[row?.detected_at,row?.detectedAt,row?.signal_at,row?.created_at,row?.event_at,row?.timestamp,row?.processed_at]
+                  .map(toMs).find(value=>value!==null)??null;
                 return at!==null&&at>=sinceMs&&at<=Math.max(now,latestCycleTime);
               });
               return {radar:radar.id,rows,tail_count:Array.isArray(recent)?recent.length:0,failed:false};
