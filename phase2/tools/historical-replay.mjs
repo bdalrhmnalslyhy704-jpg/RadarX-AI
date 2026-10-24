@@ -279,7 +279,8 @@ export function historicalProfileRequirements(profile, config = CONFIG) {
   return {base, frames, externalEvidence, unavailableEvidence, tradeHistoryRequired};
 }
 export function assessHistoricalFrameFetchCoverage(profile, timeframeCoverage = {}, config = CONFIG) {
-  const {frames} = historicalProfileRequirements(profile, config);
+  const requirements = historicalProfileRequirements(profile, config);
+  const frames = requirements.frames;
   const failures = [];
   for (const [key, minimumBars] of Object.entries(frames)) {
     const coverage = timeframeCoverage?.[key];
