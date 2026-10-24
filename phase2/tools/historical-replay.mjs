@@ -215,6 +215,7 @@ export function historicalProfileRequirements(profile, config = CONFIG) {
     case 'STRONG_MOVE_RADAR':
       break;
     case 'RADAR8_PREMOVE_SHADOW':
+    case 'EARLY_EXPANSION_RADAR':
       Object.assign(frames, {
         '15m': Math.max(1, Math.trunc(Number(early.fifteenMinuteKlines) || 160)),
         '1h': Math.max(1, Math.trunc(Number(early.oneHourKlines) || 260)),
@@ -326,11 +327,12 @@ export function assessHistoricalProfileCoverage(profile, input = {}, timeframeCo
 
 export const HISTORICAL_DETECTOR_PROFILES=Object.freeze([
   'EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR','LIQUIDITY_ABSORPTION_RADAR',
-  'KAHIR_RADAR','DOOMSDAY_RADAR','ALMUQAWIM_RADAR','RADAR8_PREMOVE_SHADOW',
+  'KAHIR_RADAR','DOOMSDAY_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR',
   'FALCON_EYE_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','PROFESSOR_RADAR'
 ]);
 
 function profileSnapshot(profile){
+  const lookupProfile=profile==='EARLY_EXPANSION_RADAR'?'RADAR8_PREMOVE_SHADOW':profile;
   const profiles={
     STRONG_MOVE_RADAR:{mode:'STRICT_GATE_CANDLE_SHADOW',requires:['closed 1m/5m candles','aggregate trade history or explicitly marked candle-only fallback'],historical_book_required:true},
     RADAR8_PREMOVE_SHADOW:{mode:'PRE_MOVE_CANDLE_ONLY_SHADOW',requires:['closed 1m/5m/15m/1h/4h candles','BTC 5m closed candles for relative strength'],historical_book_required:true},
@@ -345,9 +347,9 @@ function profileSnapshot(profile){
     WHALE_ACCUMULATION_RADAR:{mode:'WHALE_MICROSTRUCTURE_SHADOW',requires:['closed 1m/5m candles','complete aggregate trade history','historical order-book snapshots'],historical_book_required:true},
     PROFESSOR_RADAR:{mode:'EXTERNAL_FEED_ARCHIVE_REQUIRED',requires:['time-stamped historical news archive','time-stamped historical public stream/transcript archive','historical deep-scan outcomes'],historical_book_required:false}
   };
-  const result=profiles[profile];
+  const result=profiles[lookupProfile];
   if(!result)throw new Error('UNSUPPORTED_HISTORICAL_DETECTOR_PROFILE:'+profile);
-  const required=historicalProfileRequirements(profile,CONFIG);
+  const required=historicalProfileRequirements(lookupProfile,CONFIG);
   return {profile,...result,required_history:required,
     unavailable_historical_evidence:required.unavailableEvidence||[],
     external_evidence_required:required.externalEvidence||[],
@@ -445,8 +447,9 @@ async function main() {
     },null,2)+'\n');
     return;
   }
-  const detectorProfile=String(flag(args,'--detector-profile','STRONG_MOVE_RADAR')).trim().toUpperCase();
-  const detectorSpec=profileSnapshot(detectorProfile);
+  const requestedDetectorProfile=String(flag(args,'--detector-profile','STRONG_MOVE_RADAR')).trim().toUpperCase();
+  const detectorProfile=requestedDetectorProfile==='EARLY_EXPANSION_RADAR'?'RADAR8_PREMOVE_SHADOW':requestedDetectorProfile;
+  const detectorSpec=profileSnapshot(requestedDetectorProfile);
   if(args.includes('--dry-run')){
     const startRaw=timeArg(flag(args,'--start'),'start');
     const endRaw=timeArg(flag(args,'--end'),'end');
