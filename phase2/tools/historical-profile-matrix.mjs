@@ -152,10 +152,14 @@ async function main(){
   const now=Date.now();
   const explicitStart=parseTime(arg(args,'--start'),'start');
   const explicitEnd=parseTime(arg(args,'--end'),'end');
-  const end=explicitEnd??(explicitStart!==null?explicitStart+lookbackHours*HOUR_MS:Math.floor(now/MINUTE_MS)*MINUTE_MS-outcomeHorizonHours*HOUR_MS-MINUTE_MS);
+  // End at a completed candle's close timestamp (:59.999), not at the next
+  // minute's open boundary. Treating the open boundary as an inclusive close
+  // creates a one-candle expected/observed mismatch in every profile replay.
+  const latestClosedMinuteEnd=Math.floor(now/MINUTE_MS)*MINUTE_MS-1;
+  const end=explicitEnd??(explicitStart!==null?explicitStart+lookbackHours*HOUR_MS:latestClosedMinuteEnd-outcomeHorizonHours*HOUR_MS);
   const start=explicitStart??(end-lookbackHours*HOUR_MS);
   if(start>=end||end>now+MINUTE_MS||end-start>7*24*HOUR_MS)throw new Error('INVALID_REPLAY_WINDOW');
-  if(end+outcomeHorizonHours*HOUR_MS>now-MINUTE_MS)throw new Error('OUTCOME_HORIZON_NOT_MATURED_CHOOSE_OLDER_END');
+  if(end+outcomeHorizonHours*HOUR_MS>latestClosedMinuteEnd)throw new Error('OUTCOME_HORIZON_NOT_MATURED_CHOOSE_OLDER_END');
   if(args.includes('--list-profiles')||args.includes('--dry-run')){
     process.stdout.write(JSON.stringify({
       status:'DRY_RUN_NO_NETWORK',
