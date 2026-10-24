@@ -45,22 +45,48 @@ jobs:
         run: |
           node phase2/tools/historical-profile-matrix.mjs --dry-run --symbols GTCUSDT
           node --test --test-timeout=60000 phase2/tests/historical-profile-matrix.test.mjs
-      - name: Run all 12 radars on real public Spot history
+      - name: Run all 12 radars on current and three historical market regimes
         id: profile-matrix
         continue-on-error: true
         run: |
           set +e
-          mkdir -p reports/radarx-12-radar-profile-audit
+          OUT="reports/radarx-12-radar-profile-audit"
+          mkdir -p "$OUT"
+          failures=0
           node phase2/tools/historical-profile-matrix.mjs \
             --symbols GTCUSDT,WUSDT,RLCUSDT,RADUSDT,ORCAUSDT,API3USDT,DIAUSDT,OGNUSDT,CTSIUSDT,IOSTUSDT,ALTUSDT,CVXUSDT,ENAUSDT \
             --lookback-hours 6 \
             --outcome-horizon-hours 24 \
             --max-trade-pages 2 \
             --max-trades 2000 \
-            --output reports/radarx-12-radar-profile-audit/profile-matrix.json
+            --output "$OUT/profile-matrix-current.json"
           result=$?
-          printf 'exit_code=%s\n' "$result" > reports/radarx-12-radar-profile-audit/process-status.txt
-          echo "12-profile audit process exit code: $result"
+          printf 'current=%s\n' "$result" >> "$OUT/process-status.txt"
+          if [ "$result" -ne 0 ]; then failures=$((failures+1)); fi
+
+          HISTORICAL_SYMBOLS="IOSTUSDT,ALTUSDT,WUSDT,CVXUSDT,ENAUSDT"
+          while IFS='|' read -r label start end; do
+            echo "Starting twelve-radar historical regime: $label ($start .. $end)"
+            node phase2/tools/historical-profile-matrix.mjs \
+              --symbols "$HISTORICAL_SYMBOLS" \
+              --start "$start" \
+              --end "$end" \
+              --lookback-hours 6 \
+              --outcome-horizon-hours 24 \
+              --max-trade-pages 2 \
+              --max-trades 2000 \
+              --output "$OUT/profile-matrix-$label.json"
+            result=$?
+            printf '%s=%s\n' "$label" "$result" >> "$OUT/process-status.txt"
+            if [ "$result" -ne 0 ]; then failures=$((failures+1)); fi
+          done <<'WINDOWS'
+          late-2024-rally|2024-11-06T00:00:00.000Z|2024-11-06T06:00:00.000Z
+          early-2025-selloff|2025-02-25T06:00:00.000Z|2025-02-25T12:00:00.000Z
+          late-2024-range|2024-09-10T00:00:00.000Z|2024-09-10T06:00:00.000Z
+          WINDOWS
+          printf 'failed_matrix_runs=%s\n' "$failures" >> "$OUT/process-status.txt"
+          echo "Twelve-radar matrix windows failed to execute: $failures"
+          # The validator below decides pass/fail using actual per-radar results.
           exit 0
       - name: Upload per-radar historical evidence
         if: always()
@@ -70,60 +96,74 @@ jobs:
           path: reports/radarx-12-radar-profile-audit/**
           if-no-files-found: error
           retention-days: 14
-      - name: Require each of the 12 profiles to produce an explicit auditable result
+      - name: Require complete auditable outcomes for all 12 radars across every regime
         if: always()
         run: |
           node --input-type=module <<'NODE'
           import {readFile} from 'node:fs/promises';
           import {HISTORICAL_DETECTOR_PROFILES} from './phase2/tools/historical-replay.mjs';
-          const path='reports/radarx-12-radar-profile-audit/profile-matrix.json';
-          const report=JSON.parse(await readFile(path,'utf8'));
-          const expectedSymbols=['GTCUSDT','WUSDT','RLCUSDT','RADUSDT','ORCAUSDT','API3USDT','DIAUSDT','OGNUSDT','CTSIUSDT','IOSTUSDT','ALTUSDT','CVXUSDT','ENAUSDT'];
-          const got=new Set((report.profiles||[]).map(x=>x.profile));
-          const missing=HISTORICAL_DETECTOR_PROFILES.filter(x=>!got.has(x));
-          const invalid=(report.profiles||[]).filter(profile=>
-            profile.status==='EXECUTION_FAILED' ||
-            profile.symbol_count!==expectedSymbols.length ||
-            !expectedSymbols.every(symbol=>(profile.results||[]).some(row=>row.symbol===symbol)) ||
-            (profile.results||[]).some(row=>row.real_notification_delivery_simulated!==false)
-          );
+          const root='reports/radarx-12-radar-profile-audit';
+          const specs=[
+            {file:'profile-matrix-current.json',symbols:['GTCUSDT','WUSDT','RLCUSDT','RADUSDT','ORCAUSDT','API3USDT','DIAUSDT','OGNUSDT','CTSIUSDT','IOSTUSDT','ALTUSDT','CVXUSDT','ENAUSDT']},
+            {file:'profile-matrix-late-2024-rally.json',symbols:['IOSTUSDT','ALTUSDT','WUSDT','CVXUSDT','ENAUSDT']},
+            {file:'profile-matrix-early-2025-selloff.json',symbols:['IOSTUSDT','ALTUSDT','WUSDT','CVXUSDT','ENAUSDT']},
+            {file:'profile-matrix-late-2024-range.json',symbols:['IOSTUSDT','ALTUSDT','WUSDT','CVXUSDT','ENAUSDT']}
+          ];
           const evidenceProfiles=new Set(['WHALE_ACCUMULATION_RADAR','PROFESSOR_RADAR']);
-          const badCoverage=(report.profiles||[]).filter(profile=>
-            !evidenceProfiles.has(profile.profile) &&
-            (profile.results||[]).some(row=>row.profile_coverage_complete!==true)
-          );
-          const immatureOutcomes=(report.profiles||[]).filter(profile=>
-            (profile.results||[]).some(row=>row.outcome_horizon_complete!==true)
-          );
-          const pass=report.profile_count===12 &&
-            report.profiles?.length===12 &&
-            missing.length===0 && invalid.length===0 &&
-            badCoverage.length===0 && immatureOutcomes.length===0 &&
-            report.policy?.paper_trading===true &&
-            report.policy?.real_order_execution===false &&
-            report.policy?.real_notifications_simulated===false;
-          if(!pass){
-            console.error(JSON.stringify({profile_count:report.profile_count,missing_profiles:missing,
-              invalid_profiles:invalid.map(x=>({profile:x.profile,status:x.status,symbol_count:x.symbol_count})),
-              profiles_with_unexpected_coverage_gaps:badCoverage.map(x=>({profile:x.profile,
-                rows:(x.results||[]).filter(r=>r.profile_coverage_complete!==true).map(r=>({symbol:r.symbol,blockers:r.evidence_blockers}))})),
-              profiles_with_immature_outcomes:immatureOutcomes.map(x=>({profile:x.profile,
-                rows:(x.results||[]).filter(r=>r.outcome_horizon_complete!==true).map(r=>r.symbol)})),
-              policy:report.policy},null,2));
-            process.exit(1);
+          const reports=[];
+          const failures=[];
+          for(const spec of specs){
+            let report;
+            try{report=JSON.parse(await readFile(root+'/'+spec.file,'utf8'));}
+            catch(error){failures.push({file:spec.file,error:String(error?.message||error)});continue;}
+            const got=new Set((report.profiles||[]).map(x=>x.profile));
+            const missing=HISTORICAL_DETECTOR_PROFILES.filter(x=>!got.has(x));
+            const invalid=(report.profiles||[]).filter(profile=>
+              profile.status==='EXECUTION_FAILED' ||
+              profile.symbol_count!==spec.symbols.length ||
+              !spec.symbols.every(symbol=>(profile.results||[]).some(row=>row.symbol===symbol)) ||
+              (profile.results||[]).some(row=>row.real_notification_delivery_simulated!==false)
+            );
+            const badCoverage=(report.profiles||[]).filter(profile=>
+              !evidenceProfiles.has(profile.profile) &&
+              (profile.results||[]).some(row=>row.profile_coverage_complete!==true)
+            );
+            const immatureOutcomes=(report.profiles||[]).filter(profile=>
+              (profile.results||[]).some(row=>row.outcome_horizon_complete!==true)
+            );
+            const policyOk=report.policy?.paper_trading===true&&report.policy?.real_order_execution===false&&
+              report.policy?.real_notifications_simulated===false;
+            const pass=report.profile_count===12&&report.profiles?.length===12&&
+              missing.length===0&&invalid.length===0&&badCoverage.length===0&&
+              immatureOutcomes.length===0&&policyOk;
+            const entry={
+              file:spec.file,status:report.summary?.status,pass,
+              requested_symbols:spec.symbols.length,profiles_checked:report.profile_count,
+              profiles_with_all_symbol_coverage:report.summary?.profiles_with_all_symbol_coverage,
+              profiles_with_mature_outcomes:report.summary?.profiles_with_mature_outcomes,
+              candidate_episodes:report.summary?.candidate_episodes,
+              candidate_raw_observations:report.summary?.candidate_raw_observations,
+              candidate_duplicate_observations:report.summary?.candidate_duplicate_observations,
+              candidate_suppressed_by_cooldown:report.summary?.candidate_suppressed_by_cooldown,
+              low_follow_through_candidate_count:report.summary?.low_follow_through_candidate_count,
+              low_follow_through_candidate_rate_pct:report.summary?.candidate_episodes
+                ?Number((report.summary.low_follow_through_candidate_count/report.summary.candidate_episodes*100).toFixed(2)):null,
+              profile_statuses:report.summary?.statuses,
+              blockers:(report.profiles||[]).map(x=>({profile:x.profile,status:x.status,
+                blockers:[...new Set((x.results||[]).flatMap(r=>r.evidence_blockers||[]))].slice(0,12)})),
+              failures:{missing_profiles:missing,
+                invalid_profiles:invalid.map(x=>({profile:x.profile,status:x.status,symbol_count:x.symbol_count})),
+                profiles_with_unexpected_coverage_gaps:badCoverage.map(x=>({profile:x.profile,
+                  rows:(x.results||[]).filter(r=>r.profile_coverage_complete!==true).map(r=>({symbol:r.symbol,blockers:r.evidence_blockers}))})),
+                profiles_with_immature_outcomes:immatureOutcomes.map(x=>({profile:x.profile,
+                  rows:(x.results||[]).filter(r=>r.outcome_horizon_complete!==true).map(r=>r.symbol)}))}
+            };
+            reports.push(entry);
+            if(!pass)failures.push(entry);
           }
-          console.log(JSON.stringify({
-            status:report.summary?.status,
-            profiles_checked:report.profile_count,
-            symbols:expectedSymbols,
-            profiles_with_all_symbol_coverage:report.summary?.profiles_with_all_symbol_coverage,
-            profiles_with_mature_outcomes:report.summary?.profiles_with_mature_outcomes,
-            candidate_episodes:report.summary?.candidate_episodes,
-            low_follow_through_candidate_count:report.summary?.low_follow_through_candidate_count,
-            blockers:report.profiles.map(x=>({profile:x.profile,status:x.status,
-              blockers:[...new Set((x.results||[]).flatMap(r=>r.evidence_blockers||[]))].slice(0,12)})),
-            real_notifications_simulated:false,
-            paper_trading:report.policy.paper_trading,
-            real_order_execution:report.policy.real_order_execution
-          },null,2));
+          const result={audit:'RADARX_12_RADAR_4_WINDOW_AUDIT_V1',pass:failures.length===0,
+            windows:reports,policy:{market:'BINANCE_SPOT_USDT',paper_trading:true,
+              real_order_execution:false,real_notifications_simulated:false}};
+          console.log(JSON.stringify(result,null,2));
+          if(failures.length)process.exit(1);
           NODE
