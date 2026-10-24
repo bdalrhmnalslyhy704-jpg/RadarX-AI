@@ -4,7 +4,7 @@ import {spawnSync} from 'node:child_process';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {aggregateFiveMinuteCandles, normalizeHistoricalCandles, runHistoricalReplay} from '../core/historical-replay.mjs';
-import {fetchAggregateTrades, withHistoricalRateLimitRetry, historicalProfileRequirements, assessHistoricalProfileCoverage} from '../tools/historical-replay.mjs';
+import {fetchAggregateTrades, withHistoricalRateLimitRetry, historicalProfileRequirements, assessHistoricalProfileCoverage, buildCandidateShadowResult} from '../tools/historical-replay.mjs';
 
 
 const MINUTE = 60_000;
@@ -43,6 +43,24 @@ test('historical replay CLI profile dry-run performs no network access and ident
   assert.equal(report.detector.required_history.frames['4h'],220);
   assert.equal(report.detector.required_history.frames['BTCUSDT:5m'],60);
   assert.equal(report.policy.real_order_execution,false);
+});
+
+test('historical candidate shadow never counts as an alert acceptance',()=>{
+  const result=buildCandidateShadowResult('RADAR8_PREMOVE_SHADOW',{
+    eligible:true,stage:'PRE_EXPANSION',data_quality:92,closed_candles_only:true,
+    reason_codes:['BUY_FLOW_TRANSITION_CONFIRMED'],risk_flags:[]
+  },{symbol:'TESTUSDT',now:1_700_000_000_000,ticker:{quoteVolume24h:9000000,priceChange24h:1.4}},{
+    eligible:true,score:84,stage:'PRE_EXPANSION',
+    reasonCodes:['BUY_FLOW_TRANSITION_CONFIRMED'],
+    extraGateFailures:['HISTORICAL_ORDERBOOK_UNAVAILABLE','LIVE_PUSH_GATE_NOT_SIMULATED']
+  });
+  assert.equal(result.accepted,false);
+  assert.equal(result.candidate_detected,true);
+  assert.equal(result.candidate_eligible,true);
+  assert.equal(result.candidate_mode,'RADAR8_PREMOVE_SHADOW_CANDIDATE_SHADOW');
+  assert.ok(result.candidate_reasons.includes('HISTORICAL_CANDIDATE_DETECTED'));
+  assert.ok(result.notification_gate.failures.includes('HISTORICAL_ORDERBOOK_UNAVAILABLE'));
+  assert.equal(result.shadow_evaluation.live_notification_simulated,false);
 });
 
 test('historical detector profiles fail closed when required closed timeframe coverage is missing',()=>{
