@@ -157,7 +157,7 @@ export function runHistoricalReplay({
   symbol, oneMinuteCandles, aggTrades = [], startTime, endTime, evaluate,
   tradeCoverageComplete = false, tradeCoverage = null, allowCandleOnlyFallback = false,
   alertCooldownMs = 12 * 60 * 1000, outcomeHorizonMs = 24 * 60 * 60 * 1000,
-  outcomeEndTime = null
+  outcomeEndTime = null, timeframeCandles = {}
 } = {}) {
   const start = finite(startTime), end = finite(endTime);
   if (!/^[A-Z0-9]{5,20}$/.test(String(symbol ?? "").toUpperCase())) throw new Error("INVALID_SYMBOL");
@@ -247,9 +247,13 @@ export function runHistoricalReplay({
       failure = "AGG_TRADES_HISTORY_INCOMPLETE";
     } else {
       try {
+        const timeframes=Object.fromEntries(Object.entries(timeframeCandles&&typeof timeframeCandles==='object'?timeframeCandles:{})
+          .map(([key,series])=>[key,normalizeHistoricalCandles(Array.isArray(series)?series:[],{endTime:at})
+            .filter(row=>row.closed===true&&row.closeTime<=at)]));
         raw = awaitlessEvaluate(evaluate, {
           symbol: sym, now: at, oneMinute: available1m, fiveMinute: fiveEnd,
           ticker, aggTrades: tradeCoverageComplete ? tradeWindow : [], currentCandle: candle,
+          timeframes,
           source: "BINANCE_PUBLIC_HISTORICAL_REPLAY",
           dataPolicy: {
             closedCandlesOnly: true, allowFutureData: false, currentCloseTime: at,
