@@ -312,6 +312,19 @@ export async function getRadarAlerts({radar='ALL',limit=20,since=0}={}, fetchImp
   return requestJson(base,'/api/radar-alerts?radar='+encodeURIComponent(safeRadar)+'&limit='+encodeURIComponent(String(safeLimit))+sinceParam,fetchImpl);
 }
 
+export async function getFalconEyeRadar({limit=20,scan=false,since=0}={},fetchImpl=globalThis.fetch) {
+  const safeLimit=Number(limit);
+  if(!Number.isInteger(safeLimit)||safeLimit<1||safeLimit>50)throw new Error('INVALID_LIMIT');
+  const safeSince=Number(since);
+  const sinceParam=Number.isFinite(safeSince)&&safeSince>0?'&since='+encodeURIComponent(String(Math.trunc(safeSince))):'';
+  const base=normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  // Manual scan can exceed a minute on a cold cache, so give the bounded request
+  // 90 seconds; regular polling only reads the most recent completed batch.
+  const timeoutMs=scan?90000:20000;
+  return requestJson(base,'/api/falcon-eye-radar?limit='+encodeURIComponent(String(safeLimit))+
+    '&scan='+(scan?'1':'0')+sinceParam,fetchImpl,timeoutMs);
+}
+
 export async function setRadarState(radar, action, fetchImpl = globalThis.fetch) {
   if (PAGE_HIDDEN) return {status:0,ok:false,body:null,error:'PAGE_HIDDEN',base:normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL)};
   const safeRadar=String(radar||'').trim().toUpperCase();
