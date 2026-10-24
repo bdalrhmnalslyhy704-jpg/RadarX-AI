@@ -1427,14 +1427,14 @@ test('Radar 8 keeps watch-only traces feed-only and never calls a push route',as
   },now);
   const result=await radar.recordWatchOnlyAlert(alert,'EARLY_FLOW_WATCH_TRACE');
   assert.equal(result.stored,true);
-  assert.equal(result.pushStatus,'WATCH_ONLY_PUSH_DISABLED_BY_POLICY');
+  assert.equal(result.pushStatus,'REJECTED_WATCH_ONLY');
   assert.equal(result.pushAttempted,false);
-  assert.equal(storedAlerts.length,0,'watch-only observations must not enter the feed polled by Android');
+  assert.equal(storedAlerts.length,0,'watch-only observations must not enter the actionable-alert feed polled by Android');
   assert.equal(storedEvents.length,1,'diagnostic events remain available for outcome analysis');
   assert.equal(storedEvents[0].event_type,'EARLY_FLOW_WATCH_TRACE');
   assert.equal(storedEvents[0].feed_status,'TRACE_ONLY');
-  assert.equal(storedEvents[0].notification_status,'WATCH_ONLY_PUSH_DISABLED_BY_POLICY');
-  assert.equal(watchPushCalls,0,'watch-only candidates never call the push provider');
+  assert.equal(storedEvents[0].notification_status,'REJECTED_WATCH_ONLY');
+  assert.equal(watchPushCalls,1,'the dedicated watch-only policy validates every candidate');
   assert.equal(pushCalls.length,0,'the standard actionable-alert path must not be called');
 });
 
