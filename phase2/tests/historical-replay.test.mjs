@@ -278,6 +278,42 @@ test('replay applies alert cooldown deterministically per symbol', () => {
   assert.equal(replay.steps[2].decision, 'ACCEPTED');
 });
 
+test('historical candidate telemetry counts distinct setup episodes instead of every repeated minute', () => {
+  const rows = candles(260);
+  const replay = runHistoricalReplay({
+    symbol: 'WUSDT',
+    oneMinuteCandles: rows,
+    aggTrades: syntheticTrades(rows),
+    startTime: rows[180].openTime,
+    endTime: rows[186].closeTime,
+    tradeCoverageComplete: true,
+    candidateCooldownMs: 3 * MINUTE,
+    evaluate() {
+      return {
+        accepted: false,
+        candidate_detected: true,
+        candidate_mode: 'TEST_CANDIDATE_SHADOW',
+        candidate_reasons: ['CANDIDATE_TEST'],
+        reason_codes: ['STRICT_GATE_BLOCKED']
+      };
+    }
+  });
+  assert.equal(replay.steps.length, 7);
+  assert.equal(replay.summary.accepted, 0, 'candidate shadow must never become an accepted alert');
+  assert.equal(replay.summary.candidate_raw_detections, 7);
+  assert.equal(replay.summary.candidate_detections, 3);
+  assert.equal(replay.summary.candidate_shadow_detections, 3);
+  assert.equal(replay.summary.candidate_suppressed_by_cooldown, 4);
+  const suppressed = replay.steps.filter(row => row.candidate_suppressed_by_cooldown);
+  assert.equal(suppressed.length, 4);
+  assert.ok(suppressed.every(row => row.candidate_detected === false &&
+    row.candidate_raw_detected === true &&
+    row.candidate_reasons.includes('CANDIDATE_EPISODE_COOLDOWN')));
+  assert.deepEqual(replay.steps.filter(row => row.candidate_detected).map(row => row.timestamp), [
+    replay.steps[0].timestamp, replay.steps[3].timestamp, replay.steps[6].timestamp
+  ]);
+});
+
 test('incomplete aggregate-trade coverage fails closed without scoring', () => {
   const rows = candles(250);
   let called = false;
