@@ -232,10 +232,10 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   // Smaller fair-rotating batches increase opportunities per minute and limit tail latency.
   microScanCandidates:18,
   rotationReserve:8,
-  deepCandidates:10,
+  deepCandidates:8,
   quietReserve:8,
   microConcurrency:8,
-  deepConcurrency:6,
+  deepConcurrency:4,
   oneMinuteKlines:120,
   fiveMinuteKlines:60,
   fifteenMinuteKlines:160,
