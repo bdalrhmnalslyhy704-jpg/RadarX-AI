@@ -801,7 +801,7 @@ test('GET /api/radar-missed-movers correlates sampled rises with the twelve arch
     }
     await store.appendRotationAlert({
       id:'CAPTURE-BBB',radar:'RADAR_3',symbol:'BBBUSDT',
-      detected_at:startAt+2*minute,processed_at:startAt+2*minute,price:100,stage:'WATCH_EARLY'
+      detected_at:null,processed_at:startAt+2*minute,price:100,stage:'WATCH_EARLY'
     });
     for(let i=0;i<=20;i++){
       const at=startAt+i*minute;
