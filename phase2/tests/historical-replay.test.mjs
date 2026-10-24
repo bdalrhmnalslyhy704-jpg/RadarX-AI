@@ -1,10 +1,54 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {aggregateFiveMinuteCandles, normalizeHistoricalCandles, runHistoricalReplay} from '../core/historical-replay.mjs';
-import {fetchAggregateTrades} from '../tools/historical-replay.mjs';
+import {fetchAggregateTrades, withHistoricalRateLimitRetry} from '../tools/historical-replay.mjs';
 
 const MINUTE = 60_000;
 const ORIGIN = Math.floor((Date.now() - 400 * MINUTE) / (5 * MINUTE)) * (5 * MINUTE);
+
+test('historical public-data replay retries a bounded 429 cooldown without synthesizing data', async () => {
+  let calls=0;
+  const waits=[];
+  const retryLog=[];
+  const value=await withHistoricalRateLimitRetry(async()=>{
+    calls++;
+    if(calls<3){
+      const error=new Error('BINANCE_RATE_LIMIT');
+      error.name='RestRateLimitError';
+      error.retryMs=1250;
+      throw error;
+    }
+    return {source:'BINANCE_PUBLIC_REST',data:[1,2,3]};
+  },{
+    label:'test-kline',
+    maxAttempts:4,
+    maxWaitMs:5000,
+    sleepFn:async ms=>waits.push(ms),
+    onRetry:row=>retryLog.push(row)
+  });
+  assert.equal(calls,3);
+  assert.deepEqual(waits,[1250,1250]);
+  assert.equal(retryLog.length,2);
+  assert.deepEqual(value.data,[1,2,3]);
+});
+
+test('historical replay stops rather than retrying unbounded rate-limit waits', async () => {
+  let calls=0;
+  const waits=[];
+  await assert.rejects(withHistoricalRateLimitRetry(async()=>{
+    calls++;
+    const error=new Error('BINANCE_RATE_LIMIT');
+    error.name='RestRateLimitError';
+    error.retryMs=120001;
+    throw error;
+  },{
+    maxAttempts:5,maxWaitMs:120000,
+    sleepFn:async ms=>waits.push(ms),
+    onRetry:()=>{}
+  }),/HISTORICAL_RETRY_WAIT_EXCEEDS_LIMIT/);
+  assert.equal(calls,1);
+  assert.deepEqual(waits,[]);
+});
 
 function candles(count = 300) {
   const rows = [];
