@@ -40,6 +40,8 @@ test('historical replay CLI profile dry-run performs no network access and ident
   assert.equal(report.detector.profile,'RADAR8_PREMOVE_SHADOW');
   assert.equal(report.detector.mode,'PRE_MOVE_CANDLE_ONLY_SHADOW');
   assert.equal(report.detector.historical_book_required,true);
+  assert.equal(report.detector.required_history.frames['4h'],220);
+  assert.equal(report.detector.required_history.frames['BTCUSDT:5m'],60);
   assert.equal(report.policy.real_order_execution,false);
 });
 
