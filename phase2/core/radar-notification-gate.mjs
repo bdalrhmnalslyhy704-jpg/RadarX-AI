@@ -606,13 +606,13 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
   const jokerWatchCorridor=
     explicitRotationWatch &&
     earlyHardFailures.length===0 &&
-    Number(a.score)>=72 &&
-    Number(a.activation_score)>=60 &&
+    Number(alert?.rotation?.score)>=72 &&
+    Number(alert?.rotation?.activation_score)>=60 &&
     data>=p.minData &&
     (!p.minLiquidity||liquidity>=p.minLiquidity) &&
-    num(a.metrics?.volume_ratio,0)>=1.12 &&
-    num(a.metrics?.trade_ratio,0)>=1.05 &&
-    (num(a.metrics?.taker_buy_ratio,-1)>=0.52||num(a.metrics?.taker_buy_delta,-1)>=0.01) &&
+    num(alert?.rotation?.metrics?.volume_ratio,0)>=1.12 &&
+    num(alert?.rotation?.metrics?.trade_ratio,0)>=1.05 &&
+    (num(alert?.rotation?.metrics?.taker_buy_ratio,-1)>=0.52||num(alert?.rotation?.metrics?.taker_buy_delta,-1)>=0.01) &&
     alert?.closed_candles_only===true &&
     alert?.data_status?.candle_closed===true &&
     Number.isFinite(Number(alert?.detected_candle_close_time)) &&
