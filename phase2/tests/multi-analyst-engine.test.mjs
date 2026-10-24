@@ -354,7 +354,11 @@ console.log('multi-analyst radar-review queue bounds/dedupe/expiry: PASS');
     rest:{request:async()=>({data:[]})},clock:()=>now,
     config:{radarReviewAssessmentTtlMs:60000}
   });
-  const analysts=Array.from({length:19},(_,i)=>({id:'SPECIALIST_'+String(i+1).padStart(2,'0'),score:75,direction:'LONG'}));
+  const analysts=Array.from({length:19},(_,i)=>({
+    id:'SPECIALIST_'+String(i+1).padStart(2,'0'),
+    role:'ROLE_'+String(i+1).padStart(2,'0'),
+    score:75,direction:'LONG'
+  }));
   engine._recordLatestAssessment({
     symbol:'TESTUSDT',verdict:'WATCH',direction:'LONG',final_score:76,
     analysts,analyst_execution:{specialists_complete:true,final_analyst_complete:true,analysis_failed:false},
@@ -367,6 +371,23 @@ console.log('multi-analyst radar-review queue bounds/dedupe/expiry: PASS');
   assert.equal(result.final_analyst_complete,true);
   assert.equal(result.unique_specialists,19);
   assert.equal(result.data_valid,true);
+  const failedAnalysts=Array.from({length:19},(_,i)=>({
+    id:'ANALYST_'+String(i+1).padStart(2,'0'),
+    role:'FALLBACK_ROLE_'+String(i+1).padStart(2,'0'),
+    score:0,direction:'NEUTRAL'
+  }));
+  engine._recordLatestAssessment({
+    symbol:'FAILEDUSDT',verdict:'REJECT',direction:'NEUTRAL',final_score:0,
+    analysts:failedAnalysts,
+    analyst_execution:{specialists_complete:false,final_analyst_complete:true,analysis_failed:true},
+    final_judge:{totalAnalysts:19,verdict:'REJECT',sniper_score:0,hardReasons:['MULTI_ANALYST_ANALYSIS_FAILED']},
+    intelligence:{early_score:0,analyst_agreement:0},data_status:{data_valid:false},
+    reason_codes:['MULTI_ANALYST_ANALYSIS_FAILED']
+  },now);
+  const failedResult=engine.latestAssessments({symbols:['FAILEDUSDT']})[0];
+  assert.equal(failedResult.specialists_complete,false);
+  assert.equal(failedResult.final_analyst_complete,false);
+  assert.equal(failedResult.analysis_failed,true);
   now+=61000;
   assert.equal(engine.getLatestAssessment('TESTUSDT'),null);
 }
