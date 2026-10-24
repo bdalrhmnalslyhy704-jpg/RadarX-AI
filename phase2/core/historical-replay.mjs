@@ -348,6 +348,8 @@ export function runHistoricalReplay({
         independent_confirmations: finite(metrics?.independent_confirmations),
         flash_score: finite(metrics?.flash_score),
         flash_confirmations: finite(metrics?.flash_confirmations),
+        liquidity_acceleration_3m: finite(metrics?.liquidity_acceleration?.three_minute_acceleration),
+        liquidity_acceleration_score: finite(metrics?.liquidity_acceleration?.score),
         range_ratio: finite(metrics?.range_ratio),
         bb_width: finite(metrics?.bb_width),
         bb_expansion_ratio: finite(metrics?.bb_expansion_ratio),
