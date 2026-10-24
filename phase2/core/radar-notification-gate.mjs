@@ -603,6 +603,27 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
     (!p.minLiquidity||liquidity>=p.minLiquidity) &&
     (Number(trajectoryBonus(trajectory))>=5 || trajectoryPersistence<3 || trajectoryConvergence>=62);
 
+  const jokerWatchCorridor=
+    explicitRotationWatch &&
+    earlyHardFailures.length===0 &&
+    Number(a.score)>=72 &&
+    Number(a.activation_score)>=60 &&
+    data>=p.minData &&
+    (!p.minLiquidity||liquidity>=p.minLiquidity) &&
+    num(a.metrics?.volume_ratio,0)>=1.12 &&
+    num(a.metrics?.trade_ratio,0)>=1.05 &&
+    (num(a.metrics?.taker_buy_ratio,-1)>=0.52||num(a.metrics?.taker_buy_delta,-1)>=0.01) &&
+    alert?.closed_candles_only===true &&
+    alert?.data_status?.candle_closed===true &&
+    Number.isFinite(Number(alert?.detected_candle_close_time)) &&
+    Number(alert.detected_candle_close_time)<=Number(now)+5000 &&
+    Number(now)-Number(alert.detected_candle_close_time)<=20*60*1000 &&
+    Math.abs(num(alert?.price_change_24h,99))<=8 &&
+    !/(ALREADY_EXTENDED|LATE_SETUP_CHASE_GUARD|FAILED_BREAKOUT|TRAP_RISK|DATA_STALE|DATA_GAP|CLOSED_CANDLE)/i.test([
+      ...(Array.isArray(alert?.risk_flags)?alert.risk_flags:[]),
+      ...(Array.isArray(alert?.riskFlags)?alert.riskFlags:[])
+    ].join(' '));
+
   const persistentEarlyCorridor=
     EARLY_RADARS.has(r) &&
     earlyDirectionAllowed &&
@@ -625,8 +646,8 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
     falcon.capture>=66 &&
     falcon.independent_domains>=4;
 
-  const eligible=Boolean(strictEligible||earlyCorridor||persistentEarlyCorridor);
-  const mode=persistentEarlyCorridor
+  const eligible=Boolean(strictEligible||earlyCorridor||persistentEarlyCorridor||jokerWatchCorridor);
+  const mode=jokerWatchCorridor?'RADAR_WATCH_ONLY_EARLY_TRACK':persistentEarlyCorridor
     ?(LEGACY_EARLY_TRACK_RADARS.has(r)?'PERSISTENT_EARLY_TRACK':'RADAR_WATCH_ONLY_PERSISTENT_EARLY_TRACK')
     :earlyCorridor&&!strictEligible
       ?(LEGACY_EARLY_TRACK_RADARS.has(r)?'FALCON_EARLY_TRACK':'RADAR_WATCH_ONLY_EARLY_TRACK')
