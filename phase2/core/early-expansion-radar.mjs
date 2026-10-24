@@ -1354,6 +1354,7 @@ export function buildActivityShockWatchAlert(candidate,now=Date.now()){
     risk_flags:[...new Set([...(candidate?.risk_flags||[]),'ACTIVITY_SHOCK_WATCH_ONLY',shock.extended?'ALREADY_EXTENDED':null].filter(Boolean))],
     reason_codes:[...(shock.reasons||[]),'MONITOR_ONLY_NOT_ENTRY'],
     data_quality:finite(candidate?.data_quality,0),
+    liquidity_quality:finite(candidate?.liquidity_quality_live??candidate?.liquidity_quality,null),
     data_stale:Boolean(candidate?.data_stale),
     source:candidate?.source||'Binance Public REST',
     detected_at:now,processed_at:now,detected_candle_close_time:closeTime,
@@ -1387,6 +1388,8 @@ export function buildEarlyFlowWatchAlert(candidate,now=Date.now()){
     risk_flags:[...new Set([...(candidate?.risk_flags||[]),'EARLY_FLOW_WATCH_ONLY',lowLiquidity?'LOW_LIQUIDITY_WATCH_ONLY':null].filter(Boolean))],
     reason_codes:[...new Set([...(candidate?.reason_codes||[]),'FAST_RELATIVE_FLOW_EXPANSION','MICRO_CLOSED_CANDLE_CONFIRMATION','MONITOR_ONLY_NOT_ENTRY'])],
     data_quality:hasFiniteNumber(candidate?.data_quality)?Number(candidate.data_quality):null,
+    liquidity_quality:hasFiniteNumber(candidate?.liquidity_quality_live??candidate?.liquidity_quality)
+      ?Number(candidate.liquidity_quality_live??candidate.liquidity_quality):null,
     data_stale:Boolean(candidate?.data_stale),
     source:candidate?.source||'Binance Public REST',
     detected_at:now,processed_at:now,detected_candle_close_time:closeTime,
@@ -1945,13 +1948,27 @@ export class EarlyExpansionRadar{
     const evidence=alert?.early_flow_watch_evidence||
       alert?.quiet_base_pre_expansion?.metrics?.buy_pressure_transition||{};
     const traceAt=this.clock();
-    // WATCH_EARLY observations belong in the radar's trace feed, not the phone's
-    // notification channel. Only the separate strict eligible-alert path below
-    // may send a Radar 8 push after evaluateRadarNotificationGate passes.
-    const pushStatus='WATCH_ONLY_PUSH_DISABLED_BY_POLICY';
-    const pushAttempted=false,pushResult=null;
+    // Keep watch observations out of the actionable-alert feed, but allow validated,
+    // fresh, liquid WATCH_EARLY evidence to use the dedicated non-entry push route.
     alert.watch_only=true;
     alert.entry_eligible=false;
+    alert.market='SPOT';
+    alert.paper_trading=true;
+    alert.real_order_execution=false;
+    alert.confidence_score='UNKNOWN';
+    let pushResult=null;
+    let pushStatus='PUSH_PROVIDER_NOT_CONFIGURED';
+    let pushAttempted=false;
+    if(typeof this.pushManager?.notifyRadarWatchOnlyAlert==='function'){
+      try{
+        pushResult=await this.pushManager.notifyRadarWatchOnlyAlert(alert);
+        pushStatus=String(pushResult?.status||'WATCH_ONLY_PUSH_UNKNOWN');
+        pushAttempted=pushResult?.attempted===true||Number(pushResult?.attempted_count)>0;
+      }catch(error){
+        pushStatus='WATCH_ONLY_PUSH_FAILED';
+        this.noteError(error,'watch-only-push');
+      }
+    }
     alert.notification_status=pushStatus;
     const trace={...alert,event_type:eventType,feed_status:'TRACE_ONLY',
       notification_status:pushStatus,push_attempted:pushAttempted,

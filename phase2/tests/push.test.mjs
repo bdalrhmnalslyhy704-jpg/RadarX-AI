@@ -73,6 +73,7 @@ test('TEST_FIXTURE: Radar 8 early-flow watch stays feed-only even with valid evi
     event:'EARLY_FLOW_WATCH_ONLY',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',
     symbol:'TESTUSDT',market:'SPOT',direction:'UP_BIAS',price:1.01,price_change_24h:1.2,
     source:'Binance Public REST',watch_only:true,entry_eligible:false,data_stale:false,
+    closed_candles_only:true,data_quality:88,liquidity_quality:82,detected_candle_close_time:now-1000,
     early_flow_watch_evidence:{
       closed_candles_only:true,closed_candle_close_time:now-1000,
       micro_score:68,confirmation_count:4,rvol_1m:1.6,rvol_5m:1.3,
@@ -82,10 +83,11 @@ test('TEST_FIXTURE: Radar 8 early-flow watch stays feed-only even with valid evi
     risk_flags:['LOW_LIQUIDITY_WATCH_ONLY'],reason_codes:['MICRO_EARLY_FLOW']
   };
   const out=await manager.notifyRadarWatchOnlyAlert(alert);
-  assert.equal(out.status,'WATCH_ONLY_PUSH_DISABLED_BY_POLICY');
+  assert.equal(out.status,'REJECTED_WATCH_ONLY');
+  assert.equal(out.reason,'LOW_LIQUIDITY_WATCH_ONLY');
   assert.equal(out.attempted,false);
   assert.equal(out.sent_count,0);
-  assert.equal(sent.length,0,'valid watch-only evidence still must not trigger a push');
+  assert.equal(sent.length,0,'low-liquidity watch-only candidates must not trigger a push');
   const audits=await store.readRecent('notifications',10);
   assert.equal(audits.filter(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION').length,0);
 });
@@ -103,8 +105,40 @@ test('TEST_FIXTURE: Radar 8 watch push fails closed on stale or incomplete evide
     early_flow_watch_evidence:{closed_candles_only:true,closed_candle_close_time:Date.now()-300_000,
       micro_score:90,confirmation_count:6,rvol_1m:2.5,trade_rvol_1m:2.0,acceleration_1m_pct:.3}
   });
-  assert.equal(out.status,'WATCH_ONLY_PUSH_DISABLED_BY_POLICY');
+  assert.equal(out.status,'REJECTED_WATCH_ONLY');
+  assert.ok(['CLOSED_CANDLE_EVIDENCE_REQUIRED','STALE_OR_INVALID_DATA','DATA_QUALITY_MISSING_OR_LOW','LIQUIDITY_QUALITY_MISSING_OR_LOW','CLOSED_CANDLE_EVIDENCE_TOO_OLD'].includes(out.reason));
   assert.equal(calls,0);
+});
+
+
+test('TEST_FIXTURE: validated early-flow watch sends once with non-entry metadata',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-earlyflow-watch-send-')),store=await new DurableStore({dir}).init();
+  await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+  await store.upsertSubscription('u1',pushSubscription());
+  const sent=[];
+  const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};}};
+  const manager=new PushManager({provider,store});
+  const now=Date.now();
+  const out=await manager.notifyRadarWatchOnlyAlert({
+    event:'EARLY_FLOW_WATCH_ONLY',potential_label:'EARLY_FLOW_WATCH_ONLY',decision_band:'WATCH_EARLY',
+    radar:'EARLY_EXPANSION_RADAR',symbol:'EARLYFLOWUSDT',market:'SPOT',direction:'UP_BIAS',
+    price:1.02,price_change_24h:1.2,data_quality:88,liquidity_quality:82,data_stale:false,
+    source:'BINANCE_PUBLIC_REST',detected_at:now,detected_candle_close_time:now-1000,
+    closed_candles_only:true,watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false,
+    early_flow_watch_evidence:{closed_candles_only:true,closed_candle_close_time:now-1000,
+      micro_score:70,confirmation_count:5,rvol_1m:1.5,rvol_5m:1.3,
+      trade_rvol_1m:1.4,trade_rvol_5m:1.2,taker_buy_ratio:.56,acceleration_1m_pct:.08}
+  });
+  assert.equal(out.status,'SENT',JSON.stringify(out));
+  assert.equal(out.sent_count,1);
+  assert.equal(sent.length,1);
+  assert.equal(sent[0].symbol,'EARLYFLOWUSDT');
+  assert.equal(sent[0].watch_only,true);
+  assert.equal(sent[0].entry_eligible,false);
+  assert.equal(sent[0].paper_trading,true);
+  assert.equal(sent[0].real_order_execution,false);
+  const audits=await store.readRecent('notifications',10);
+  assert.equal(audits.filter(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION').length,1);
 });
 
 test('TEST_FIXTURE: missing radar data quality fails closed instead of inheriting 100',async()=>{
@@ -152,7 +186,7 @@ test('TEST_FIXTURE: radar notifications forward lifecycle labels and reasons to 
 
 
 
-test('TEST_FIXTURE: quiet-base near-miss stays feed-only despite passing watch evidence checks',async()=>{
+test('TEST_FIXTURE: validated quiet-base watch sends a labelled non-entry notification',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-quiet-base-watch-push-')),store=await new DurableStore({dir}).init();
   await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70});
   await store.upsertSubscription('u1',pushSubscription());
@@ -183,13 +217,18 @@ test('TEST_FIXTURE: quiet-base near-miss stays feed-only despite passing watch e
     quiet_base_pre_expansion:fingerprint,risk_flags:['QUIET_BASE_WATCH_ONLY'],
     reason_codes:['QUIET_BASE_NEAR_MISS_BUY_FLOW_TRANSITION']
   };
+  alert.paper_trading=true;alert.real_order_execution=false;
   const out=await manager.notifyRadarWatchOnlyAlert(alert);
-  assert.equal(out.status,'WATCH_ONLY_PUSH_DISABLED_BY_POLICY',JSON.stringify(out));
-  assert.equal(out.attempted,false);
-  assert.equal(out.sent_count,0);
-  assert.equal(sent.length,0,'quiet-base watch observations must remain in the trace feed');
+  assert.equal(out.status,'SENT',JSON.stringify(out));
+  assert.equal(out.attempted,true);
+  assert.equal(out.sent_count,1);
+  assert.equal(sent.length,1,'validated watch-only evidence must reach the opted-in notification provider');
+  assert.equal(sent[0].watch_only,true);
+  assert.equal(sent[0].entry_eligible,false);
+  assert.equal(sent[0].notification_mode,'WATCH_ONLY_EARLY_TRACK');
+  assert.equal(sent[0].real_order_execution,false);
   const audits=await store.readRecent('notifications',10);
-  assert.equal(audits.filter(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION').length,0);
+  assert.equal(audits.filter(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION').length,1);
 });
 
 test('TEST_FIXTURE: quiet-base near-miss push fails closed for incomplete flow or missing anti-chase evidence',async()=>{
@@ -220,6 +259,7 @@ test('TEST_FIXTURE: quiet-base near-miss push fails closed for incomplete flow o
     closed_candles_only:true,detected_candle_close_time:now-1000,
     watch_only:true,entry_eligible:false,quiet_base_pre_expansion:fingerprint,risk_flags:[]
   });
-  assert.equal(out.status,'WATCH_ONLY_PUSH_DISABLED_BY_POLICY');
+  assert.equal(out.status,'REJECTED_WATCH_ONLY');
+  assert.equal(out.reason,'QUIET_BASE_EVIDENCE_INCOMPLETE');
   assert.equal(calls,0);
 });
