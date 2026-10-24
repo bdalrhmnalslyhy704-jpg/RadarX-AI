@@ -1102,6 +1102,31 @@ export function buildMultiAnalystMarketMoverObservations(rows,analysedRows=[],{
     });
 }
 
+/**
+ * Report whether the real 19 named specialists and final judge completed.
+ * Placeholder records from an exception path must never masquerade as analysis.
+ */
+export function buildAnalystExecutionStatus({specialists=[],final=null,analysisFailed=false}={}){
+  const rows=Array.isArray(specialists)?specialists:[];
+  const ids=rows.map(item=>String(item?.id||'')).filter(Boolean);
+  const roles=rows.map(item=>String(item?.role||'')).filter(Boolean);
+  const uniqueIds=new Set(ids),uniqueRoles=new Set(roles);
+  const placeholderIds=ids.filter(id=>/^ANALYST_\d+$/i.test(id));
+  const failed=analysisFailed===true;
+  const specialistsComplete=!failed&&rows.length===19&&uniqueIds.size===19&&
+    uniqueRoles.size===19&&placeholderIds.length===0;
+  return {
+    expected_analysts:20,
+    specialist_count:rows.length,
+    unique_specialists:uniqueIds.size,
+    unique_roles:uniqueRoles.size,
+    specialists_complete:specialistsComplete,
+    final_analyst_complete:Boolean(!failed&&specialistsComplete&&final&&
+      Number(final.totalAnalysts)===19&&typeof final.verdict==='string'),
+    analysis_failed:failed
+  };
+}
+
 export class MultiAnalystEngine {
   constructor({rest,config={},clock=()=>Date.now(),store=null}={}){
     this.store=store;
@@ -1499,21 +1524,10 @@ export class MultiAnalystEngine {
           const specialist=analysis.specialist;
           const final=analysis.final;
           const publicAnalysts=specialist.a.map(x=>({...x}));
-          const specialistIds=publicAnalysts.map(x=>String(x?.id||'')).filter(Boolean);
-          const uniqueSpecialistIds=new Set(specialistIds);
-          const specialistRoles=publicAnalysts.map(x=>String(x?.role||'')).filter(Boolean);
-          const uniqueSpecialistRoles=new Set(specialistRoles);
-          const specialistPlaceholders=specialistIds.filter(id=>/^ANALYST_\\d+$/i.test(id));
           const analystFailed=(Array.isArray(row.reason_codes)?row.reason_codes:[]).includes('MULTI_ANALYST_ANALYSIS_FAILED');
-          const analystExecution={
-            expected_analysts:20,
-            specialist_count:publicAnalysts.length,
-            unique_specialists:uniqueSpecialistIds.size,
-            unique_roles:uniqueSpecialistRoles.size,
-            specialists_complete:publicAnalysts.length===19&&uniqueSpecialistIds.size===19&&uniqueSpecialistRoles.size===19&&specialistPlaceholders.length===0&&!analystFailed,
-            final_analyst_complete:Boolean(final&&Number(final.totalAnalysts)===19&&typeof final.verdict==='string'),
-            analysis_failed:analystFailed
-          };
+          const analystExecution=buildAnalystExecutionStatus({
+            specialists:publicAnalysts,final,analysisFailed:analystFailed
+          });
           delete row._analysis;
           this._registerOutcome({
             symbol:row.symbol,entryPrice:row.last_price,direction:final.direction,
