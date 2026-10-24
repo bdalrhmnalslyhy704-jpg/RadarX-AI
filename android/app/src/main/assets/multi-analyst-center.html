@@ -138,6 +138,7 @@ const dEls={
 };
 let busy=false;
 let scanRunning=false;
+let scanForced=false;
 let scanPollTimer=null;
 let latest=null;
 let lastLiveAt=0;
@@ -426,15 +427,16 @@ async function run(force){
     status.textContent='◌ لقطة مكتملة سابقة — يجري التحقق من حالة السوق الجديدة عبر الخادم.';
   }
   busy=true;
-  if(force)scanRunning=true;
+  if(force){scanRunning=true;scanForced=true;}
   const requestId=String(Date.now());
   const progressRequest=!force&&scanRunning;
+  const forcedScan=Boolean(force||scanForced);
   status.textContent=force
     ?'⚡ بدأ طلب فحص حي من Binance في الخلفية؛ ستظهر النتيجة أو رسالة الخطأ عند اكتماله.'
     :'🧠 يجري التحقق من حالة فحص السوق ونتيجته من الخادم…';
   try{
     const r=await getMultiAnalyst({
-      quote:'USDT',limit:10,scan:Boolean(force||progressRequest),
+      quote:'USDT',limit:10,scan:forcedScan,
       background:Boolean(force),progress:Boolean(progressRequest),requestId:requestId
     });
     if(!r||!r.ok||!r.body)throw new Error((r&&r.error)||('HTTP_'+num(r&&r.status,0)));
@@ -447,7 +449,7 @@ async function run(force){
     const scanError=cleanError(r.body.error)||cleanError(scan.last_error)||cleanError(monitoring.last_error)||cleanError(d.last_scan_error)||cleanError(scan.error)||cleanError(scanErrors[0]&&scanErrors[0].error);
     const warming=r.body.status==='warming'||mode==='WARMING'||(scan.completed===false&&!scanError);
     scanRunning=Boolean(warming);
-    if(scanRunning)scheduleScanPoll();else stopScanPolling();
+    if(scanRunning)scheduleScanPoll();else{scanForced=false;stopScanPolling();}
     if(meta.live===true&&mode!=='CACHE')lastLiveAt=Date.now();
     if(!warming||!latest||!latest.meta||latest.meta.live!==true)render(r.body);
     if(meta.live===true){
