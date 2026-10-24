@@ -123,6 +123,18 @@ assert.equal(good.specialist.a.length, 19);
 assert.ok(good.specialist.a.every(function(a){return typeof a.group==='string'&&Number.isFinite(Number(a.score))&&Number.isFinite(Number(a.coverage));}));
 
 
+// A missing 24h ticker percentage must stay unknown and hard-block the final analyst.
+{
+  const missingDaily = analyzeMultiAnalystCandidate({
+    ...rawFor(),
+    price_change_24h:null
+  },sharedTestMarket);
+  assert.equal(missingDaily.specialist.features.priceChange24h,null);
+  assert.equal(missingDaily.specialist.dataValid,false);
+  assert.equal(missingDaily.final.verdict,'REJECT');
+  assert.ok(missingDaily.final.hardReasons.includes('DAILY_MOVE_UNKNOWN'));
+}
+
 const badData=analyzeMultiAnalystCandidate(rawFor({valid:false,dq:40}),{});
 assert.equal(badData.final.verdict,'REJECT');
 assert.ok(badData.final.hardReasons.includes('DATA_GATE_FAILED'));
