@@ -11,6 +11,10 @@ function step(timestamp,{decision='REJECTED',mode='NONE',upside=0,drawdown=-0.2,
     strict_gate_failures:decision==='REJECTED'?failures:[],
     core_trigger_diagnostics:{failed_checks:decision==='REJECTED'?failures:[]},
     notification_gate:{eligible:decision==='ACCEPTED',failures:decision==='REJECTED'?failures:[]},
+    elite_gate:{eligible:decision==='ACCEPTED',score:decision==='ACCEPTED'?86:70,
+      failures:decision==='REJECTED'?['CATEGORY_DIVERSITY_LOW']:[],risk_flags:[]},
+    market_evidence:{data_quality:82,liquidity_quality:74,spread_bps:4.5,relative_strength_vs_market_pct:0.6},
+    signal_metrics:{volume_ratio:1.4,trade_ratio:1.3,taker_buy_ratio_1m_3m:0.56,acceleration:0.12,micro_breakout:false},
     risk_flags:[],
     outcome:{horizon_observed:true,horizon_ms:24*60*MIN,
       forward_max_upside_pct_from_decision:upside,
@@ -51,6 +55,9 @@ test('labels a missed move and retains the last rejection reasons before the mov
   assert.equal(x.moderate_move.classification,'MISSED_PLUS_5_PERCENT_MOVE');
   assert.equal(x.moderate_move.missed_move.last_rejection_before_move.at,119*MIN);
   assert.ok(x.moderate_move.missed_move.last_rejection_before_move.failed_checks.includes('RESISTANCE_RECLAIM_NOT_CONFIRMED'));
+  assert.equal(x.moderate_move.missed_move.last_rejection_before_move.market_evidence.liquidity_quality,74);
+  assert.equal(x.moderate_move.missed_move.last_rejection_before_move.signal_metrics.taker_buy_ratio_1m_3m,0.56);
+  assert.ok(x.moderate_move.missed_move.last_rejection_before_move.gate_failure_layers.elite_confluence.failures.includes('CATEGORY_DIVERSITY_LOW'));
   assert.ok(x.missed_move_failure_codes.includes('RESISTANCE_RECLAIM_NOT_CONFIRMED'));
   assert.equal(x.strong_move.classification,'MISSED_PLUS_15_PERCENT_MOVE');
 });
