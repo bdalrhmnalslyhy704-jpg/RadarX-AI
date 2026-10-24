@@ -175,11 +175,18 @@ export function runHistoricalReplay({
   const trades = normalizeTrades(aggTrades, observationEnd);
   // Missing aggregate-trade history must remain explicitly partial. In the opt-in
   // fallback mode, evaluate only verified closed candles and never substitute fake trades.
-  const candleOnlyFallback = !tradeCoverageComplete && allowCandleOnlyFallback === true && candles.length > 0;
   const activeIndices = [];
   for (let i = 0; i < candles.length; i++) {
     if (candles[i].closeTime >= start && candles[i].closeTime <= end) activeIndices.push(i);
   }
+  const windowCandlesExpected=Math.floor((end-start)/MINUTE_MS)+1;
+  const windowCandlesObserved=activeIndices.length;
+  const windowCandlesContiguous=activeIndices.length>0&&activeIndices.every((index,position)=>{
+    if(position===0)return true;
+    return candles[index].openTime===candles[activeIndices[position-1]].openTime+MINUTE_MS;
+  });
+  const windowCandlesComplete=windowCandlesExpected>0&&windowCandlesObserved>=windowCandlesExpected&&windowCandlesContiguous;
+  const candleOnlyFallback = !tradeCoverageComplete && allowCandleOnlyFallback === true && windowCandlesComplete;
   const windowStartRow = candles.find(x => x.openTime >= start && x.closeTime <= end) ?? null;
   const windowBaseline = finite(windowStartRow?.open);
   const actual50CandleCloseAt = windowBaseline === null ? null : candles.find(x =>
@@ -408,9 +415,13 @@ export function runHistoricalReplay({
     range: {start_time: start, start_time_iso: new Date(start).toISOString(), end_time: end, end_time_iso: new Date(end).toISOString()},
     data_quality: {
       source: "BINANCE_PUBLIC_REST", real_market_data_required: true, synthetic_data_used: false,
-      replay_mode: tradeCoverageComplete ? "FULL_TRADE" : (candleOnlyFallback ? "CANDLE_ONLY_FALLBACK" : "BLOCKED_INCOMPLETE"),
+      replay_mode: !windowCandlesComplete ? "BLOCKED_INCOMPLETE" :
+        (tradeCoverageComplete ? "FULL_TRADE" : (candleOnlyFallback ? "CANDLE_ONLY_FALLBACK" : "BLOCKED_INCOMPLETE")),
       candle_only_fallback_used: Boolean(candleOnlyFallback),
       closed_1m_candles: candles.length, complete_5m_candles: five.length,
+      window_candles_expected:windowCandlesExpected,window_candles_observed:windowCandlesObserved,
+      candle_fetch_complete:windowCandlesComplete,
+      outcome_candle_fetch_complete:observationEnd>=end+horizon&&rows.length>0&&rows.every(x=>x.outcome?.horizon_observed===true),
       aggregate_trades: tradeCoverageComplete ? trades.length : 0, trade_coverage_complete: Boolean(tradeCoverageComplete),
       target_crossing_timestamp_source: targetCrossingSource,
       target_crossing_alignment: {plus_50:actual50Alignment,plus_70:actual70Alignment},
