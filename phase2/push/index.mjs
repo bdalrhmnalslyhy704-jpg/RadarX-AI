@@ -251,8 +251,19 @@ export class PushManager{
       alert?.coin_hunter?.liquidity_quality,alert?.whale_accumulation?.liquidity_quality,alert?.falcon_eye?.liquidity_quality,
       alert?.early_flow_watch_evidence?.liquidity_quality
     ]);
-    if(dataQuality===null||dataQuality<70||dataQuality>100)return rejected('DATA_QUALITY_MISSING_OR_LOW');
-    if(liquidityQuality===null||liquidityQuality<60||liquidityQuality>100)return rejected('LIQUIDITY_QUALITY_MISSING_OR_LOW');
+    // The Micro watch lane has validated closed public Spot candles but deliberately
+    // has not queried order-book depth yet. Permit that lane to notify as WATCH ONLY
+    // only when both scores are genuinely unavailable and 24h quote volume clears
+    // the established floor; never synthesize a data-quality or liquidity score.
+    const quoteVolume24h=firstFinite([alert?.quote_volume_24h]);
+    const microValidatedEarlyFlow=event==='EARLY_FLOW_WATCH_ONLY'&&
+      alert?.micro_data_validated===true&&alert?.closed_candles_only===true&&
+      alert?.low_liquidity_burst_bypass!==true&&quoteVolume24h!==null&&quoteVolume24h>=750000&&
+      dataQuality===null&&liquidityQuality===null;
+    if(!microValidatedEarlyFlow&&(dataQuality===null||dataQuality<70||dataQuality>100))
+      return rejected('DATA_QUALITY_MISSING_OR_LOW');
+    if(!microValidatedEarlyFlow&&(liquidityQuality===null||liquidityQuality<60||liquidityQuality>100))
+      return rejected('LIQUIDITY_QUALITY_MISSING_OR_LOW');
     if(alert?.low_liquidity_burst_bypass===true||risks.includes('LOW_LIQUIDITY_WATCH_ONLY'))
       return rejected('LOW_LIQUIDITY_WATCH_ONLY');
     if(risks.some(x=>/ALREADY_EXTENDED|EXTENDED_CHASE|HIGH_RISK|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK/.test(x)))
@@ -280,9 +291,17 @@ export class PushManager{
       const volumeRatio=Math.max(...[evidence?.rvol_1m,evidence?.rvol_5m].map(Number).filter(Number.isFinite),-Infinity);
       const tradeRatio=Math.max(...[evidence?.trade_rvol_1m,evidence?.trade_rvol_5m].map(Number).filter(Number.isFinite),-Infinity);
       const taker=firstFinite([evidence?.taker_buy_ratio]);
-      if(evidence?.closed_candles_only!==true||micro===null||micro<68||
-         confirmations===null||confirmations<4||volumeRatio<1.10||tradeRatio<1.05||
-         taker===null||taker<0.52)return rejected('EARLY_FLOW_EVIDENCE_INCOMPLETE');
+      const acceleration=Math.max(...[evidence?.acceleration_1m_pct,evidence?.acceleration_5m_pct].map(Number).filter(Number.isFinite),-Infinity);
+      const recentReturn=Math.max(...[evidence?.return_1m,evidence?.return_5m].map(Number).filter(Number.isFinite),-Infinity);
+      const participationConfirmed=microValidatedEarlyFlow
+        ?volumeRatio>=1.20||tradeRatio>=1.15||(taker!==null&&taker>=0.54&&(volumeRatio>=1||tradeRatio>=1))
+        :volumeRatio>=1.10&&tradeRatio>=1.05&&taker!==null&&taker>=0.52;
+      const minimumMicroScore=microValidatedEarlyFlow?58:68;
+      const minimumConfirmations=microValidatedEarlyFlow?3:4;
+      if(evidence?.closed_candles_only!==true||micro===null||micro<minimumMicroScore||
+         confirmations===null||confirmations<minimumConfirmations||!participationConfirmed||
+         !(acceleration>0||recentReturn>0))
+        return rejected('EARLY_FLOW_EVIDENCE_INCOMPLETE');
     }else if(event==='QUIET_BASE_PRE_EXPANSION_WATCH_ONLY'){
       const flow=quiet?.metrics?.buy_pressure_transition||{};
       const proof=Array.isArray(quiet?.evidence)?quiet.evidence:[];
@@ -333,7 +352,11 @@ export class PushManager{
     for(const sub of rows){
       const settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();
       if(!settings.enabled)continue;
-      if(dataQuality<Number(settings.minDataQuality??70)||
+      if(microValidatedEarlyFlow){
+        // If a user raised quality floors above the defaults, do not guess at scores
+        // that do not exist for this Micro-only, depth-unchecked observation.
+        if(Number(settings.minDataQuality??70)>70||Number(settings.minLiquidityQuality??60)>60)continue;
+      }else if(dataQuality<Number(settings.minDataQuality??70)||
          liquidityQuality<Number(settings.minLiquidityQuality??60))continue;
       recipients.push(sub);
     }
@@ -372,6 +395,9 @@ export class PushManager{
         attempted_at:Date.now(),reason:response?.reason??null,http_status:response?.httpStatus??null,
         watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false,
         confidence_score:'UNKNOWN',data_quality:dataQuality,liquidity_quality:liquidityQuality,
+        micro_data_validated:microValidatedEarlyFlow,
+        liquidity_evidence_status:microValidatedEarlyFlow?'ORDER_BOOK_NOT_CHECKED_AT_MICRO_STAGE':null,
+        quote_volume_24h:microValidatedEarlyFlow?quoteVolume24h:null,
         event_type:event,source
       };
       try{await this.store.appendNotificationAudit(audit);}catch{}
