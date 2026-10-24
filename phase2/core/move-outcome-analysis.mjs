@@ -84,6 +84,10 @@ export function buildMoveOutcomeAnalysis(replay = {}, {
   const strong = actualMove(replay, strongTargetPct);
   const accepted = steps.filter(x => x.decision === 'ACCEPTED');
   const candidates = steps.filter(x => x.candidate_detected === true);
+  const maturedCandidates = candidates.filter(x => x.outcome?.horizon_observed === true &&
+    finite(x.outcome?.forward_max_upside_pct_from_decision) !== null &&
+    finite(x.outcome?.forward_max_drawdown_pct_from_decision) !== null &&
+    finite(x.outcome?.forward_return_pct_at_horizon) !== null);
   const maturedAccepted = accepted.filter(x => x.outcome?.horizon_observed === true &&
     finite(x.outcome?.forward_max_upside_pct_from_decision) !== null &&
     finite(x.outcome?.forward_max_drawdown_pct_from_decision) !== null &&
@@ -162,6 +166,24 @@ export function buildMoveOutcomeAnalysis(replay = {}, {
       : null,
     last_rejection_before_move: lastRejectedBefore(steps, strong.at)
   } : null;
+
+  const lowFollowThroughCandidates = maturedCandidates.filter(x => {
+    const upside = Number(x.outcome.forward_max_upside_pct_from_decision);
+    const terminal = Number(x.outcome.forward_return_pct_at_horizon);
+    const drawdown = Number(x.outcome.forward_max_drawdown_pct_from_decision);
+    return upside < maxAcceptedFollowThroughPct && terminal <= 0 && drawdown <= -1;
+  }).map(x => ({
+    at: finite(x.timestamp),
+    at_iso: x.timestamp_iso || new Date(Number(x.timestamp)).toISOString(),
+    candidate_mode: x.candidate_mode || 'CANDIDATE_SHADOW',
+    score: finite(x.score),
+    forward_max_upside_pct: finite(x.outcome.forward_max_upside_pct_from_decision),
+    forward_max_drawdown_pct: finite(x.outcome.forward_max_drawdown_pct_from_decision),
+    forward_return_pct_at_horizon: finite(x.outcome.forward_return_pct_at_horizon),
+    horizon_ms: finite(x.outcome.horizon_ms),
+    classification: 'LOW_FOLLOW_THROUGH_CANDIDATE',
+    not_a_notification: true
+  }));
 
   const lowFollowThrough = maturedAccepted.filter(x => {
     const upside = Number(x.outcome.forward_max_upside_pct_from_decision);
@@ -252,7 +274,11 @@ export function buildMoveOutcomeAnalysis(replay = {}, {
     candidate_detection: {
       mode:'CANDIDATE_SHADOW_NOT_NOTIFICATION',
       candidate_count:candidates.length,
-      candidate_with_matured_outcomes:candidates.filter(x=>x.outcome?.horizon_observed===true).length,
+      candidate_with_matured_outcomes:maturedCandidates.length,
+      low_follow_through_candidates:lowFollowThroughCandidates,
+      low_follow_through_candidate_count:lowFollowThroughCandidates.length,
+      low_follow_through_candidate_rate_pct:maturedCandidates.length
+        ? Number((lowFollowThroughCandidates.length/maturedCandidates.length*100).toFixed(2)) : null,
       moderate_move:{
         target_pct:moderateTargetPct,
         observed_at:moderate.at,
@@ -283,6 +309,10 @@ export function buildMoveOutcomeAnalysis(replay = {}, {
       accepted_count: accepted.length,
       mature_accepted_count: maturedAccepted.length,
       candidate_detection_count:candidates.length,
+      matured_candidate_count:maturedCandidates.length,
+      low_follow_through_candidate_count:lowFollowThroughCandidates.length,
+      low_follow_through_candidate_rate_pct:maturedCandidates.length
+        ? Number((lowFollowThroughCandidates.length/maturedCandidates.length*100).toFixed(2)) : null,
       candidate_early_5pct_detection:Boolean(candidate5),
       candidate_early_15pct_detection:Boolean(candidate15),
       candidate_missed_5pct_move:Boolean(moderateWasObserved&&!candidate5),
@@ -313,6 +343,9 @@ export function summarizeMoveOutcomeAnalyses(replays = []) {
   const candidateEarly5=candidate5Observed.filter(x=>x.candidate_detection?.moderate_move?.detected_early===true);
   const candidateEarly15=candidate15Observed.filter(x=>x.candidate_detection?.strong_move?.detected_early===true);
   const lowFollowRows = complete.flatMap(x => Array.isArray(x.low_follow_through_acceptances) ? x.low_follow_through_acceptances : []);
+  const lowFollowCandidateRows = complete.flatMap(x => Array.isArray(x.candidate_detection?.low_follow_through_candidates)
+    ? x.candidate_detection.low_follow_through_candidates : []);
+  const maturedCandidateCount = complete.reduce((n,x)=>n+(Number(x.candidate_detection?.candidate_with_matured_outcomes)||0),0);
   const candidateFailureCounts = new Map();
   for(const row of complete){
     for(const code of Array.isArray(row.candidate_detection?.missed_move_failure_codes)?row.candidate_detection.missed_move_failure_codes:[]){
@@ -347,6 +380,10 @@ export function summarizeMoveOutcomeAnalyses(replays = []) {
     early_15pct_detection_rate_pct: strongObserved.length ? Number((early15.length/strongObserved.length*100).toFixed(2)) : null,
     median_minutes_before_15pct: median(early15.map(x=>x.strong_move.minutes_before_move)),
     candidate_detections:complete.reduce((n,x)=>n+(Number(x.candidate_detection?.candidate_count)||0),0),
+    matured_candidate_detections:maturedCandidateCount,
+    low_follow_through_candidate_count:lowFollowCandidateRows.length,
+    low_follow_through_candidate_rate_pct:maturedCandidateCount
+      ? Number((lowFollowCandidateRows.length/maturedCandidateCount*100).toFixed(2)) : null,
     candidate_early_detections_before_5pct:candidateEarly5.length,
     candidate_missed_or_late_5pct_moves:candidate5Observed.length-candidateEarly5.length,
     candidate_early_5pct_detection_rate_pct:candidate5Observed.length?Number((candidateEarly5.length/candidate5Observed.length*100).toFixed(2)):null,
@@ -366,6 +403,7 @@ export function summarizeMoveOutcomeAnalyses(replays = []) {
       strong_move: 'Observed +15% intrawindow high from the first in-window candle baseline.',
       early_detection: 'At least one accepted replay decision strictly before the observed threshold crossing.',
       low_follow_through: 'Matured accepted decision with <5% future maximum upside, non-positive horizon return, and at least 1% adverse excursion.',
+      low_follow_through_candidate: 'Proxy false-positive candidate, not an actual alert: matured shadow candidate with <5% future maximum upside, non-positive horizon return, and at least 1% adverse excursion.',
       incomplete_coverage: 'Excluded from hit/miss rates when closed-candle coverage or replay mode is incomplete.'
     },
     policy: {market:'BINANCE_SPOT_USDT',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}
