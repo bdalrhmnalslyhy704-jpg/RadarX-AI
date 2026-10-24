@@ -456,6 +456,40 @@ async function main() {
             extraGateFailures:['HISTORICAL_ORDERBOOK_UNAVAILABLE','LIVE_PUSH_GATE_NOT_SIMULATED']
           });
         }
+        if(detectorProfile==='KAHIR_RADAR'){
+          const btc=input.timeframes?.['BTCUSDT:1m']||[];
+          const btcLast=btc.at(-1),btcPrev=btc.at(-2);
+          const marketVelocityBps=Number(btcPrev?.close)>0&&Number(btcLast?.close)>0
+            ?(Number(btcLast.close)/Number(btcPrev.close)-1)*10000:null;
+          const selfHistory=input.oneMinute.slice(-3,-1).map(c=>({price:Number(c.close),at:Number(c.closeTime)}));
+          const analysis=buildKahirAnalysis({
+            oneMinute:input.oneMinute,fiveMinute:input.fiveMinute,ticker:input.ticker,
+            selfHistory,marketVelocityBps:Number.isFinite(marketVelocityBps)?marketVelocityBps:0,now:input.now
+          });
+          const eligible=analysis.eligible===true&&analysis.direction==='UP'&&analysis.closed_candles_only===true&&analysis.data_stale!==true&&
+            Number.isFinite(marketVelocityBps);
+          return buildCandidateShadowResult(detectorProfile,analysis,input,{
+            eligible,score:analysis.score,stage:analysis.stage,
+            reasonCodes:analysis.reason_codes||analysis.data_quality_reasons||[],
+            extraGateFailures:['HISTORICAL_ORDERBOOK_UNAVAILABLE','LIVE_PUSH_GATE_NOT_SIMULATED',
+              ...(!Number.isFinite(marketVelocityBps)?['BTC_MARKET_VELOCITY_UNKNOWN']:[])]
+          });
+        }
+        if(detectorProfile==='ROTATION_LAG_RADAR'){
+          const benchmarks={
+            BTCUSDT:{fifteen_min:input.timeframes?.['BTCUSDT:15m']||[],one_hour:input.timeframes?.['BTCUSDT:1h']||[]},
+            ETHUSDT:{fifteen_min:input.timeframes?.['ETHUSDT:15m']||[],one_hour:input.timeframes?.['ETHUSDT:1h']||[]}
+          };
+          const analysis=buildRotationAnalysis(
+            input.timeframes?.['15m']||[],input.timeframes?.['1h']||[],benchmarks,input.ticker,input.now
+          );
+          const eligible=(analysis.eligible===true||analysis.watch_eligible===true)&&analysis.direction==='UP_ROTATION'&&analysis.closed_candles_only===true;
+          return buildCandidateShadowResult(detectorProfile,analysis,input,{
+            eligible,score:analysis.score,stage:analysis.stage,
+            reasonCodes:analysis.reason_codes||analysis.data_quality_reasons||analysis.watch_blockers||[],
+            extraGateFailures:['HISTORICAL_ORDERBOOK_UNAVAILABLE','LIVE_PUSH_GATE_NOT_SIMULATED']
+          });
+        }
         const alert = buildStrongMoveAlert({
           one_minute: input.oneMinute,
           five_minute: input.fiveMinute,
