@@ -134,6 +134,10 @@ function numericOrNull(value){
 function uniqueReasonCodes(...groups){
   return [...new Set(groups.flatMap(x=>Array.isArray(x)?x:[]).map(x=>String(x??'').trim()).filter(Boolean))].slice(0,30);
 }
+export function attachHistoricalMoveOutcomeAnalysis(replay={}){
+  return {...replay,evaluation:buildMoveOutcomeAnalysis(replay)};
+}
+
 export function buildCandidateShadowResult(profile,analysis,input,{eligible,score,stage,reasonCodes=[],extraGateFailures=[]}={}){
   const reasons=uniqueReasonCodes(
     reasonCodes,analysis?.reason_codes,analysis?.data_quality_reasons,analysis?.watch_blockers,
@@ -845,7 +849,7 @@ async function main() {
     replay.data_quality.synthetic_data_used = false;
     // Attach the requested missed/early/weak-follow-through metrics to each
     // symbol report, after all data-coverage flags have been finalized.
-    replay.evaluation = buildMoveOutcomeAnalysis(replay);
+    Object.assign(replay,attachHistoricalMoveOutcomeAnalysis(replay));
     report.results.push(replay);
     process.stderr.write('[REPLAY] ' + symbol + ' steps=' + replay.summary.replay_steps +
       ' accepted=' + replay.summary.accepted + ' rejected=' + replay.summary.rejected +
