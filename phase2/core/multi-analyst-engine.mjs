@@ -7,12 +7,14 @@ import {
   MarketUniverseScanner
 } from '../market/universe-scanner.mjs';
 
+import {finiteNumberOr} from './finite-number.mjs';
 const clamp=(x,lo=0,hi=100)=>{
-  const n=Number(x);
-  return Number.isFinite(n)?Math.max(lo,Math.min(hi,n)):50;
+  // Null/blank/boolean inputs are missing evidence, not numeric zero.
+  const n=finiteNumberOr(x,null);
+  return n!==null?Math.max(lo,Math.min(hi,n)):50;
 };
 const avg=(xs)=>{
-  const a=xs.map(Number).filter(Number.isFinite);
+  const a=(Array.isArray(xs)?xs:[]).map(x=>finiteNumberOr(x,null)).filter(x=>x!==null);
   return a.length?a.reduce((s,x)=>s+x,0)/a.length:null;
 };
 
