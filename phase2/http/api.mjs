@@ -6,7 +6,7 @@ import {MarketUniverseScanner} from '../market/universe-scanner.mjs';
 import {RADAR_NAMES,RADAR_PROFILES,formatRadarTime12h,decorateRadarAlert} from '../core/radar-alert-meta.mjs';
 import {SymbolDeepAnalyzer,normalizeDeepScanSymbol} from '../core/symbol-deep-analyzer.mjs';
 import {buildKingVerdict,rankKingMarket} from '../core/king-intelligence.mjs';
-import {MultiAnalystEngine} from '../core/multi-analyst-engine.mjs';
+import {MULTI_ANALYST_NAMES,MultiAnalystEngine} from '../core/multi-analyst-engine.mjs';
 import {radarTelemetry,renderRadarTelemetryDashboard} from '../core/radar-telemetry.mjs';
 import {buildRadarReadinessAudit} from '../core/radar-readiness-audit.mjs';
 import {buildRadarSignalOutcomeReport,emptyRadarSignalOutcomeState} from '../core/radar-signal-outcomes.mjs';
@@ -438,11 +438,23 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         service:'RADARX_BACKEND',build_version:'Build 224',deployment_contract:'BUILD224_DHDTECH_V1',
         paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
       });
-      if(u.pathname==='/api/deployment-info'&&req.method==='GET')return send(res,200,{
-        service:'RADARX_BACKEND',build_version:'Build 224',deployment_contract:'BUILD224_DHDTECH_V1',
-        expected_radars:12,market:'BINANCE_SPOT_USDT',paper_trading:true,real_order_execution:false,
-        confidence_score:'UNKNOWN',push:{provider:pushProvider?.status?.().provider??'unknown',enabled:pushProvider?.status?.().enabled===true}
-      });
+      if(u.pathname==='/api/deployment-info'&&req.method==='GET'){
+        let swarm=null;
+        try{swarm=typeof radarSwarm?.snapshot==='function'?radarSwarm.snapshot():null;}catch{}
+        return send(res,200,{
+          service:'RADARX_BACKEND',build_version:'Build 224',deployment_contract:'BUILD224_DHDTECH_V1',
+          expected_radars:12,registered_radars:Number(swarm?.registered_count)||0,
+          radar_swarm_status:String(swarm?.status||'UNAVAILABLE'),
+          pre_move_scanner_ready:Boolean(preMoveRadarScanner),
+          market:'BINANCE_SPOT_USDT',paper_trading:true,real_order_execution:false,
+          analyst_system:{
+            expected_analysts:MULTI_ANALYST_NAMES.length,
+            engine_configured:Boolean(multiAnalystRadar),
+            review_bridge_installed:pushManager?.__radarAnalystReviewBridgeInstalled===true
+          },
+          confidence_score:'UNKNOWN',push:{provider:pushProvider?.status?.().provider??'unknown',enabled:pushProvider?.status?.().enabled===true}
+        });
+      }
       if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{
         ...safeHealth('MONITOR','MONITOR',monitor),
         move_radar:safeHealth('RADAR1',RADAR_NAMES.MOVE_RADAR,moveSentinel),
