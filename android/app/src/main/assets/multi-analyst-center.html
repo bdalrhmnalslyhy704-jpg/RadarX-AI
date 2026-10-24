@@ -308,6 +308,13 @@ function renderLabRow(x,idx){
   const blockers=Array.isArray(x.hard_reasons)&&x.hard_reasons.length
     ?x.hard_reasons
     :(Array.isArray(x.reason_codes)&&x.reason_codes.length?x.reason_codes:(status.last_error?[status.last_error]:[]));
+  const analysts=Array.isArray(x.analysts)?x.analysts.slice(0,19):[];
+  const analystHtml=analysts.map(function(a){
+    const risks=Array.isArray(a.risks)?a.risks.slice(0,3).join(' • '):'';
+    return '<div class="a"><div class="aTop"><b>'+esc(a.name||a.id||'محلل')+'</b><span class="num">'+num(a.score,0).toFixed(0)+'</span></div><small>'+esc(a.group||a.role||'')+' • '+esc(a.decision||'')+' • '+esc(a.direction||'')+'<br>تغطية الدليل: '+Math.round(num(a.coverage,0)*100)+'%'+(risks?'<br>مخاطر/ملاحظات: '+esc(risks):'')+'</small></div>';
+  }).join('');
+  const final=x.final_judge||{};
+  const finalReasons=Array.isArray(final.hardReasons)?final.hardReasons:(Array.isArray(x.hard_reasons)?x.hard_reasons:[]);
   return '<article class="card">'+
     '<div class="cardHead"><div class="sym">🧪 '+(idx+1)+'. '+esc(x.symbol||'UNKNOWN')+' • غير مؤهل</div><div class="score">'+num(x.final_score,0).toFixed(1)+'/100</div></div>'+
     '<div class="meta"><span class="tag bad">مرفوض</span>'+
@@ -326,7 +333,12 @@ function renderLabRow(x,idx){
       '<br><b>سلامة البيانات:</b> '+(status.data_valid===true?'صالحة':'غير صالحة')+
       (status.data_stale?' • قديمة':'')+
       (status.last_error?' • '+esc(status.last_error):'')+
-    '</div></article>';
+    '</div>'+
+    '<details><summary>تقرير المحللين الـ19 والمحلل النهائي لهذه العملة</summary>'+
+      '<div class="riskBox"><b>النتيجة النهائية:</b> '+esc(verdict(x.verdict||'REJECT'))+' • الاتجاه '+esc(final.direction||x.direction||'NEUTRAL')+' • التوقيت '+esc(final.timing||x.timing||'NO_SETUP')+
+      '<br><b>أسباب المحلل النهائي:</b> '+esc(finalReasons.length?finalReasons.join(' • '):'لا توجد أسباب محفوظة')+'</div>'+
+      (analysts.length?'<div class="analysts">'+analystHtml+'</div>':'<div class="empty">لم يرسل الخادم تفاصيل المحللين لهذه العينة.</div>')+
+    '</details></article>';
 }
 function render(body){
   latest=body;
@@ -335,6 +347,7 @@ function render(body){
   const watchlist=(Array.isArray(body&&body.watchlist)?body.watchlist:[])
     .filter(x=>!candidateSymbols.has(String(x&&x.symbol||'').toUpperCase()));
   const labResults=Array.isArray(body&&body.lab_results)?body.lab_results:[];
+  const marketMovers=Array.isArray(body&&body.market_movers)?body.market_movers:[];
   renderHeader(body);
   renderBest(body,[...candidates,...watchlist]);
 
@@ -347,10 +360,28 @@ function render(body){
     sections.push('<h3 style="font-size:12px;margin:12px 2px;color:#ffd166">مراقبة مبكرة — ليست إشارة دخول أو تنبيهًا مؤكدًا</h3>'+
       watchlist.map(renderCard).join(''));
   }
+  if(marketMovers.length){
+    sections.push('<h3 style="font-size:12px;margin:12px 2px;color:#f6c453">رصد سريع للعملات الصاعدة — لا يعني أن المحللين فحصوها بعمق</h3>'+
+      '<div class="empty">هذه بيانات تكر السوق. كل عملة موسومة هل دخلت التحليل العميق أم لا؛ الملاحظة ليست إشارة شراء أو تنبيهًا مؤكدًا.</div>'+
+      marketMovers.slice(0,15).map(function(x){
+        const extended=x.stage==='ALREADY_EXTENDED';
+        const reviewed=x.analysis_status==='ANALYZED_THIS_CYCLE';
+        const statusText=reviewed?('تحليل مكتمل: '+(x.analyst_verdict||'UNKNOWN')):'لم تدخل المختبر العميق في هذه الدورة';
+        return '<article class="card">'+
+          '<div class="cardHead"><div class="sym">📈 '+esc(x.symbol||'UNKNOWN')+'</div><div class="score">'+pct(x.price_change_24h)+'</div></div>'+
+          '<div class="grid4"><div class="fact"><b>'+esc(x.last_price==null?'—':x.last_price)+'</b><span>السعر</span></div>'+
+          '<div class="fact"><b>'+num(x.quote_volume_24h,0).toLocaleString('en-US',{maximumFractionDigits:0})+'</b><span>حجم 24h</span></div>'+
+          '<div class="fact"><b>'+num(x.analyst_count,0)+'/19</b><span>محللون متخصصون</span></div>'+
+          '<div class="fact"><b>'+esc(x.final_score==null?'—':num(x.final_score,0).toFixed(1))+'</b><span>نتيجة المختبر</span></div></div>'+
+          '<div class="riskBox"><b>الحالة:</b> '+esc(statusText)+'<br><b>سبب:</b> '+esc(extended?'تغير يومي ممتد — لا تطارد السعر':(Array.isArray(x.reason_codes)?x.reason_codes.join(' • '):'يلزم تحليل عميق'))+
+          '<br><b>تنبيه:</b> هذه الملاحظة غير مؤهلة للدخول.</div></article>';
+      }).join(''));
+  }
   if(!candidates.length&&!watchlist.length&&labResults.length){
-    sections.push('<div class="empty">لم يتأهل أي مرشح في هذه اللقطة. هذه عينات حقيقية من العملات التي دخلت المختبر وأسباب رفضها — لا تُعامل كفرص تداول.</div>'+
-      '<h3 style="font-size:12px;margin:12px 2px;color:#ff9ba8">عينات المختبر المرفوضة وأسبابها</h3>'+
-      labResults.map(renderLabRow).join(''));
+    sections.push('<div class="empty">لم يتأهل أي مرشح في هذه اللقطة. هذه عينات حقيقية من العملات التي دخلت المختبر وأسباب رفضها — لا تُعامل كفرص تداول.</div>');
+  }
+  if(labResults.length){
+    sections.push('<h3 style="font-size:12px;margin:12px 2px;color:#ff9ba8">عينات المختبر المرفوضة وأسبابها — تفاصيل المحللين لكل عملة</h3>'+labResults.map(renderLabRow).join(''));
   }
   if(!sections.length){
     const u=body&&body.universe||{},d=body&&body.diagnostics||{},meta=body&&body.meta||{};
