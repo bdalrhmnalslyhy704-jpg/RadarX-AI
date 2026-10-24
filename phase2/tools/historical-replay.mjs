@@ -14,6 +14,7 @@ import {evaluateEliteGate} from '../core/elite-confluence-gate.mjs';
 import {evaluateRadarNotificationGate} from '../core/radar-notification-gate.mjs';
 import {evaluateDynamicEarlyWarningGate} from '../core/dynamic-early-warning-gate.mjs';
 import {runHistoricalReplay} from '../core/historical-replay.mjs';
+import {buildMoveOutcomeAnalysis} from '../core/move-outcome-analysis.mjs';
 import {evaluateHistoricalProfileAdapter} from '../core/historical-profile-adapters.mjs';
 
 const MINUTE_MS = 60_000;
@@ -842,6 +843,9 @@ async function main() {
     replay.data_quality.coverage_status = replay.data_quality.replay_mode === 'BLOCKED_INCOMPLETE'
       ? 'INCOMPLETE' : (tradeFetch.complete ? 'COMPLETE' : 'COMPLETE_WITH_CANDLE_FALLBACK');
     replay.data_quality.synthetic_data_used = false;
+    // Attach the requested missed/early/weak-follow-through metrics to each
+    // symbol report, after all data-coverage flags have been finalized.
+    replay.evaluation = buildMoveOutcomeAnalysis(replay);
     report.results.push(replay);
     process.stderr.write('[REPLAY] ' + symbol + ' steps=' + replay.summary.replay_steps +
       ' accepted=' + replay.summary.accepted + ' rejected=' + replay.summary.rejected +
