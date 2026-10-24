@@ -624,11 +624,11 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       }
       if(u.pathname==='/api/radar-missed-movers'&&req.method==='GET'){
         try{
-          if(typeof store?.readScanJourneyCycles!=='function'||typeof store?.readAlertPage!=='function')
+          if(typeof store?.readScanJourneyCycles!=='function'||typeof store?.readRecent!=='function')
             return send(res,503,{error:'MISSED_MOVER_AUDIT_STORE_UNAVAILABLE',scope:'RADAR8_SCAN_JOURNEY_CROSS_RADAR_ALERT_AUDIT',
               policy:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
-          const requested=Math.trunc(Number(u.searchParams.get('cycles')||300));
-          const cycleLimit=Math.max(20,Math.min(500,Number.isFinite(requested)?requested:300));
+          const requested=Math.trunc(Number(u.searchParams.get('cycles')||150));
+          const cycleLimit=Math.max(20,Math.min(300,Number.isFinite(requested)?requested:150));
           const now=Date.now();
           if(missedMoverAuditCache.report&&missedMoverAuditCache.cycles===cycleLimit&&now-missedMoverAuditCache.at<60_000)
             return send(res,200,missedMoverAuditCache.report);
@@ -641,25 +641,36 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             return null;
           };
           const cycleTimes=cycles.map(cycle=>toMs(cycle?.started_at)).filter(value=>value!==null&&value<=now);
-          const sinceMs=cycleTimes.length?Math.max(0,Math.min(...cycleTimes)-1):Math.max(0,now-45*24*60*60*1000);
+          const latestCycleTime=cycles.map(cycle=>toMs(cycle?.completed_at)).filter(value=>value!==null&&value<=now)
+            .reduce((latest,value)=>Math.max(latest,value),0);
+          const sinceMs=cycleTimes.length?Math.max(0,Math.min(...cycleTimes)-15*60_000):Math.max(0,now-45*24*60*60*1000);
+          const alertTailLimit=2000;
           const alertsByRadar={};
           const archiveReadFailures=[];
+          const archiveTruncatedRadars=[];
           const archiveResults=await Promise.all(RADAR_OUTCOME_ARCHIVES.map(async radar=>{
             try{
-              const rows=await store.readAlertPage(radar.archive,{sinceMs,sinceId:'',radar:radar.id,limit:500});
-              return {radar:radar.id,rows:Array.isArray(rows)?rows:[],failed:false};
+              const recent=await store.readRecent(radar.archive,alertTailLimit);
+              const rows=(Array.isArray(recent)?recent:[]).filter(row=>{
+                const at=toMs(row?.detected_at??row?.detectedAt??row?.signal_at??row?.created_at??row?.event_at??row?.timestamp??row?.processed_at);
+                return at!==null&&at>=sinceMs&&at<=Math.max(now,latestCycleTime);
+              });
+              return {radar:radar.id,rows,tail_count:Array.isArray(recent)?recent.length:0,failed:false};
             }catch(error){
-              return {radar:radar.id,rows:[],failed:true,reason:String(error?.message??error).slice(0,160)};
+              return {radar:radar.id,rows:[],tail_count:0,failed:true,reason:String(error?.message??error).slice(0,160)};
             }
           }));
           for(const result of archiveResults){
             alertsByRadar[result.radar]=result.rows;
             if(result.failed)archiveReadFailures.push({radar:result.radar,reason:result.reason});
+            if(result.tail_count>=alertTailLimit)archiveTruncatedRadars.push(result.radar);
           }
           const report=buildRadarMissedMoverAuditReport({cycles,alertsByRadar,now});
           report.archive_read_failures=archiveReadFailures;
-          report.alert_archive_reads_complete=archiveReadFailures.length===0;
-          if(archiveReadFailures.length){
+          report.archive_tail_limit_per_radar=alertTailLimit;
+          report.archive_truncated_radars=archiveTruncatedRadars;
+          report.alert_archive_reads_complete=archiveReadFailures.length===0&&archiveTruncatedRadars.length===0;
+          if(!report.alert_archive_reads_complete){
             report.status='PARTIAL_ARCHIVE_COVERAGE';
             report.interpretation.missed_mover_counts_valid=false;
           }else{
