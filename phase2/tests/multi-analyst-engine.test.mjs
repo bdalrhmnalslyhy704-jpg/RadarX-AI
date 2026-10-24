@@ -1,6 +1,34 @@
 import assert from 'node:assert/strict';
-import {MULTI_ANALYST_NAMES,MULTI_ANALYST_ROLE_CONTRACT,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible,selectWithPriorityRotation,selectDiscoveryWithRadarReviewPriority,countAnalystEvidenceCoverage,buildMultiAnalystMarketMoverObservations} from '../core/multi-analyst-engine.mjs';
+import {MULTI_ANALYST_NAMES,MULTI_ANALYST_ROLE_CONTRACT,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible,selectWithPriorityRotation,selectDiscoveryWithRadarReviewPriority,countAnalystEvidenceCoverage,buildMultiAnalystMarketMoverObservations,buildAnalystExecutionStatus} from '../core/multi-analyst-engine.mjs';
 
+// Execution telemetry must never report a failed/fallback assessment as complete.
+{
+  const named = Array.from({length:19},(_,i)=>({
+    id:'SPECIALIST_'+String(i+1).padStart(2,'0'),
+    role:'ROLE_'+String(i+1).padStart(2,'0')
+  }));
+  const valid = buildAnalystExecutionStatus({
+    specialists:named,final:{totalAnalysts:19,verdict:'REJECT'},analysisFailed:false
+  });
+  assert.equal(valid.specialists_complete,true);
+  assert.equal(valid.final_analyst_complete,true);
+  assert.equal(valid.expected_analysts,20);
+
+  const placeholders = Array.from({length:19},(_,i)=>({
+    id:'ANALYST_'+String(i+1).padStart(2,'0'),
+    role:'ROLE_'+String(i+1).padStart(2,'0')
+  }));
+  const failed = buildAnalystExecutionStatus({
+    specialists:placeholders,final:{totalAnalysts:19,verdict:'REJECT'},analysisFailed:true
+  });
+  assert.equal(failed.specialists_complete,false);
+  assert.equal(failed.final_analyst_complete,false);
+  assert.equal(failed.analysis_failed,true);
+
+  const noJudge = buildAnalystExecutionStatus({specialists:named,final:null,analysisFailed:false});
+  assert.equal(noJudge.specialists_complete,true);
+  assert.equal(noJudge.final_analyst_complete,false);
+}
 // Continuous analyst cycles target one minute start-to-start, subtracting the
 // time spent scanning and never scheduling a negative delay after a slow cycle.
 assert.equal(nextContinuousScanDelayMs(60000,0),60000);
