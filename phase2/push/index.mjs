@@ -121,6 +121,8 @@ const radarPayload=(alert,processedAt=Date.now())=>{
   type:'RADARX_RADAR_ALERT',
   event_class:EVENT_CLASS.RADAR_ALERT??'RADAR_ALERT',
   event:alert.event||'RADAR_ALERT',
+  event_id:alert.event_id||alert.id||null,
+  signal_id:alert.signal_id||alert.id||null,
   notification_mode:watchOnly?'WATCH_ONLY_EARLY_TRACK':'STANDARD_RADAR_ALERT',
   watch_only:watchOnly,
   entry_eligible:watchOnly?false:(alert?.entry_eligible??null),
@@ -439,6 +441,15 @@ export class PushManager{
       out.push(audit);
       if(response?.status==='GONE'){
         try{await this.store.disableSubscription(sub.id);}catch{}
+      } else if(response?.status==='FAILED'){
+        // Keep retries tied to this exact, stable watch event and subscription.
+        // Retried pushes remain WATCH_ONLY and expire if their closed-candle evidence ages out.
+        const retryKey=String(sub.id)+'|RADAR_WATCH_ONLY|'+String(alert?.id||symbol+'|'+event);
+        this.retryQueue.set(retryKey,{
+          kind:'RADAR_WATCH_ONLY',subscription:sub,
+          alert:{...alert,market:'SPOT',watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
+          nextAt:Date.now()+this.retryBaseMs,attempt:1
+        });
       }
     }
     const sent=out.filter(x=>x.status==='SENT').length;
@@ -567,11 +578,45 @@ export class PushManager{
   }
   async flushRetries(now=Date.now()){
     for(const [k,j] of [...this.retryQueue.entries()]){
-      if(j.nextAt>now)continue;const r=await this.provider.send(j.subscription,payload(j.signal,now));
-      await this.store.appendNotificationAudit({event:'NOTIFICATION_RETRY',event_class:marketEventClass(j.signal.data_status?.source??j.signal.source),
-        signal_id:j.signal.signal_id,subscription_id:j.subscription.id,user_id:j.subscription.user_id,status:r.status,
-        provider:this.provider.status().provider,attempted_at:now,reason:r.reason??null,http_status:r.httpStatus??null,retry_attempt:j.attempt});
-      if(r.ok||r.status==='GONE')this.retryQueue.delete(k);else{j.attempt++;j.nextAt=now+Math.min(this.retryBaseMs*(2**j.attempt),10*60*1000);}
+      if(j.nextAt>now)continue;
+      const watchOnly=j.kind==='RADAR_WATCH_ONLY';
+      if(watchOnly){
+        const rawCloseAt=j.alert?.detected_candle_close_time??j.alert?.data_status?.close_time;
+        const closeAt=rawCloseAt===null||rawCloseAt===undefined||rawCloseAt===''?NaN:Number(rawCloseAt);
+        // Do not deliver a late notification after its live early-move evidence expired.
+        if(!Number.isFinite(closeAt)||closeAt>now+5000||now-closeAt>20*60_000){
+          await this.store.appendNotificationAudit({event:'RADAR_WATCH_ONLY_NOTIFICATION_RETRY',event_class:'RADAR_ALERT',
+            radar:String(j.alert?.radar||'PRE_MOVE'),radar_name:radarTitle(j.alert),symbol:String(j.alert?.symbol||''),
+            alert_id:j.alert?.id||null,subscription_id:j.subscription.id,user_id:j.subscription.user_id,
+            status:'EXPIRED',provider:this.provider.status().provider,attempted_at:now,
+            reason:'WATCH_ONLY_ALERT_EXPIRED_BEFORE_RETRY',watch_only:true,entry_eligible:false,
+            paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',retry_attempt:j.attempt});
+          this.retryQueue.delete(k);
+          continue;
+        }
+      }
+      let r;
+      try{
+        r=watchOnly
+          ?await this.provider.send(j.subscription,radarPayload({...j.alert,market:'SPOT',watch_only:true,entry_eligible:false,
+            paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},now))
+          :await this.provider.send(j.subscription,payload(j.signal,now));
+      }catch(error){r={ok:false,status:'FAILED',reason:String(error?.message??error).slice(0,160)};}
+      const audit=watchOnly?{
+        event:'RADAR_WATCH_ONLY_NOTIFICATION_RETRY',event_class:'RADAR_ALERT',radar:String(j.alert?.radar||'PRE_MOVE'),
+        radar_name:radarTitle(j.alert),symbol:String(j.alert?.symbol||''),alert_id:j.alert?.id||null,
+        subscription_id:j.subscription.id,user_id:j.subscription.user_id,status:r?.status||'FAILED',
+        provider:this.provider.status().provider,attempted_at:now,reason:r?.reason??null,http_status:r?.httpStatus??null,
+        retry_attempt:j.attempt,watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+      }:{
+        event:'NOTIFICATION_RETRY',event_class:marketEventClass(j.signal.data_status?.source??j.signal.source),
+        signal_id:j.signal.signal_id,subscription_id:j.subscription.id,user_id:j.subscription.user_id,status:r?.status||'FAILED',
+        provider:this.provider.status().provider,attempted_at:now,reason:r?.reason??null,http_status:r?.httpStatus??null,retry_attempt:j.attempt
+      };
+      await this.store.appendNotificationAudit(audit);
+      if(r?.status==='GONE')await this.store.disableSubscription(j.subscription.id);
+      if(r?.ok||r?.status==='GONE'||(watchOnly&&j.attempt>=5))this.retryQueue.delete(k);
+      else{j.attempt++;j.nextAt=now+Math.min(this.retryBaseMs*(2**j.attempt),10*60*1000);}
     }
   }
 }
