@@ -52,7 +52,7 @@ jobs:
           set +e
           mkdir -p reports/radarx-12-radar-profile-audit
           node phase2/tools/historical-profile-matrix.mjs \
-            --symbols GTCUSDT,WUSDT \
+            --symbols GTCUSDT,WUSDT,RLCUSDT,RADUSDT,ORCAUSDT,API3USDT,DIAUSDT,OGNUSDT,CTSIUSDT,IOSTUSDT,ALTUSDT,CVXUSDT,ENAUSDT \
             --lookback-hours 6 \
             --outcome-horizon-hours 24 \
             --max-trade-pages 2 \
@@ -78,7 +78,7 @@ jobs:
           import {HISTORICAL_DETECTOR_PROFILES} from './phase2/tools/historical-replay.mjs';
           const path='reports/radarx-12-radar-profile-audit/profile-matrix.json';
           const report=JSON.parse(await readFile(path,'utf8'));
-          const expectedSymbols=['GTCUSDT','WUSDT'];
+          const expectedSymbols=['GTCUSDT','WUSDT','RLCUSDT','RADUSDT','ORCAUSDT','API3USDT','DIAUSDT','OGNUSDT','CTSIUSDT','IOSTUSDT','ALTUSDT','CVXUSDT','ENAUSDT'];
           const got=new Set((report.profiles||[]).map(x=>x.profile));
           const missing=HISTORICAL_DETECTOR_PROFILES.filter(x=>!got.has(x));
           const invalid=(report.profiles||[]).filter(profile=>
