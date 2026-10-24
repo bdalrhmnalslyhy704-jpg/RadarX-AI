@@ -603,9 +603,13 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
     (!p.minLiquidity||liquidity>=p.minLiquidity) &&
     (Number(trajectoryBonus(trajectory))>=5 || trajectoryPersistence<3 || trajectoryConvergence>=62);
 
+  const jokerHardFailures=earlyHardFailures.filter(x=>![
+    'FALCON_HARD_FAIL','FALCON_QUALITY_TOO_LOW','FALCON_EVIDENCE_TOO_NARROW',
+    'MOVER_FORENSICS_HARD_FAIL','MOVER_FORENSICS_QUALITY_LOW'
+  ].includes(String(x)));
   const jokerWatchCorridor=
     explicitRotationWatch &&
-    earlyHardFailures.length===0 &&
+    jokerHardFailures.length===0 &&
     Number(alert?.rotation?.score)>=72 &&
     Number(alert?.rotation?.activation_score)>=60 &&
     data>=p.minData &&
@@ -615,6 +619,8 @@ export function evaluateRadarNotificationGate(alert,{now=Date.now(),commit=false
     (num(alert?.rotation?.metrics?.taker_buy_ratio,-1)>=0.52||num(alert?.rotation?.metrics?.taker_buy_delta,-1)>=0.01) &&
     alert?.closed_candles_only===true &&
     alert?.data_status?.candle_closed===true &&
+    alert?.data_status?.stale!==true &&
+    alert?.data_status?.future_data_detected!==true &&
     Number.isFinite(Number(alert?.detected_candle_close_time)) &&
     Number(alert.detected_candle_close_time)<=Number(now)+5000 &&
     Number(now)-Number(alert.detected_candle_close_time)<=20*60*1000 &&
