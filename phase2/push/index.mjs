@@ -105,6 +105,8 @@ export function createPushProvider(c){
 
 
 const radarTitle=s=>s?.radar_name||({
+  PRE_MOVE:'رادار ما قبل الحركة',
+  PRE_MOVE_RADAR:'رادار ما قبل الحركة',
   EARLY_MOVE_RADAR:'Radar 1 — Early-Wake',
   STRONG_MOVE_RADAR:'Radar 2 — Strong-Move',
   ROTATION_LAG_RADAR:'Radar 3 — Rotation/Lag',
@@ -285,7 +287,37 @@ export class PushManager{
     const price=firstFinite([alert?.price,alert?.last_price,alert?.lastPrice]);
     if(price===null||price<=0)return rejected('LIVE_PRICE_MISSING');
 
-    if(event==='EARLY_FLOW_WATCH_ONLY'){
+    if(event==='PRE_MOVE_RADAR_WATCH_ONLY'){
+      const p=alert?.pre_move_context||{};
+      const dailyMove=firstFinite([alert?.price_change_24h]);
+      const score=firstFinite([p?.score]);
+      const session=firstFinite([p?.session_return_pct]);
+      const hour=firstFinite([p?.one_hour_return_pct]);
+      const volumeRatio=firstFinite([p?.volume_acceleration]);
+      const tradeRatio=firstFinite([p?.trade_acceleration]);
+      const taker=firstFinite([p?.taker_buy_ratio]);
+      const takerDelta=firstFinite([p?.taker_buy_acceleration]);
+      const closeLocation=firstFinite([p?.mean_close_location]);
+      const relative=firstFinite([p?.relative_strength_vs_market_pct]);
+      const structure=firstFinite([p?.components?.structure]);
+      const independentEvidence=[
+        volumeRatio!==null&&volumeRatio>=1.0,
+        tradeRatio!==null&&tradeRatio>=1.05,
+        taker!==null&&taker>=0.54,
+        takerDelta!==null&&takerDelta>=0.01,
+        closeLocation!==null&&closeLocation>=0.54,
+        relative!==null&&relative>=0.5
+      ].filter(Boolean).length;
+      if(alert?.radar!=='PRE_MOVE'||alert?.data_status?.data_valid!==true||
+         p?.stage!=='WATCH_EARLY'||p?.watch_only!==true||p?.actionable!==false||
+         p?.evidence_complete!==true||p?.closed_candles_only!==true||p?.already_moved===true)
+        return rejected('PRE_MOVE_WATCH_EVIDENCE_INVALID');
+      if(dailyMove===null||Math.abs(dailyMove)>=12||score===null||score<68||
+         session===null||session<0||session>6||hour===null||hour<0.15||hour>4.5)
+        return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
+      if(structure===null||structure<60||independentEvidence<3)
+        return rejected('PRE_MOVE_WATCH_CONFLUENCE_INSUFFICIENT');
+    }else if(event==='EARLY_FLOW_WATCH_ONLY'){
       const dailyMove=firstFinite([alert?.price_change_24h]);
       if(dailyMove===null||Math.abs(dailyMove)>=18)
         return rejected('EARLY_FLOW_ANTI_CHASE_OR_MOVE_UNKNOWN');

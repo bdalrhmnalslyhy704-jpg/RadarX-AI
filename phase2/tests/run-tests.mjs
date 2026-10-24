@@ -58,6 +58,7 @@ const phase2=[
   'phase2/tests/monitor.test.mjs',
   'phase2/tests/policy.test.mjs',
   'phase2/tests/push.test.mjs',
+  'phase2/tests/pre-move-watch-notification.test.mjs',
   'phase2/tests/fcm-push.test.mjs',
   'phase2/tests/real-push-staging.test.mjs',
   'phase2/tests/rest.test.mjs',

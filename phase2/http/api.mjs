@@ -139,6 +139,80 @@ function subscriptionValid(x){
   if(typeof x?.keys?.p256dh!=='string'||typeof x?.keys?.auth!=='string')throw new Error('INVALID_PUSH_KEYS');
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
+
+export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
+  const finite=(...values)=>{
+    for(const value of values){
+      if(value===null||value===undefined||value===''||typeof value==='boolean')continue;
+      const n=Number(value);if(Number.isFinite(n))return n;
+    }
+    return null;
+  };
+  const symbol=String(candidate?.symbol||'').trim().toUpperCase();
+  const p=candidate?.pre_move_context||{};
+  const status=candidate?.data_status||{};
+  const quality=finite(candidate?.data_quality);
+  const liquidity=finite(candidate?.liquidity_quality);
+  const score=finite(p?.score);
+  const daily=finite(candidate?.price_change_24h);
+  const session=finite(p?.session_return_pct);
+  const hour=finite(p?.one_hour_return_pct);
+  const price=finite(candidate?.last_price,candidate?.price,p?.current_price);
+  const closeAt=finite(p?.session_close,p?.closed_candle_close_time,candidate?.detected_candle_close_time);
+  const volume=finite(p?.volume_acceleration);
+  const trades=finite(p?.trade_acceleration);
+  const buy=finite(p?.taker_buy_ratio);
+  const buyDelta=finite(p?.taker_buy_acceleration);
+  const closeLocation=finite(p?.mean_close_location);
+  const relative=finite(p?.relative_strength_vs_market_pct);
+  const structure=finite(p?.components?.structure);
+  const qualityOk=quality!==null&&quality>=70&&quality<=100&&liquidity!==null&&liquidity>=60&&liquidity<=100;
+  const source=String(snapshot?.source||'').trim();
+  const participation=[
+    volume!==null&&volume>=1.0,
+    trades!==null&&trades>=1.05,
+    buy!==null&&buy>=0.54,
+    buyDelta!==null&&buyDelta>=0.01,
+    closeLocation!==null&&closeLocation>=0.54,
+    relative!==null&&relative>=0.5
+  ].filter(Boolean).length;
+  const risks=Array.isArray(candidate?.risk_flags)?candidate.risk_flags.map(x=>String(x).toUpperCase()):[];
+  if(!/^[A-Z0-9]{5,30}$/.test(symbol))return null;
+  if(snapshot?.meta?.radar!=='PRE_MOVE'||snapshot?.meta?.live!==true||
+     snapshot?.meta?.paper_trading!==true||snapshot?.meta?.real_order_execution!==false)return null;
+  if(source!=='Binance Public REST')return null;
+  if(candidate?.watch_only!==true||candidate?.alert_eligible!==false||
+     p?.stage!=='WATCH_EARLY'||p?.watch_only!==true||p?.actionable!==false||
+     p?.evidence_complete!==true||p?.closed_candles_only!==true||p?.already_moved===true)return null;
+  if(status?.data_valid!==true||status?.data_stale===true||status?.stale===true||
+     status?.future_data_detected===true||candidate?.data_stale===true||!qualityOk)return null;
+  if(!Number.isFinite(price)||price<=0||daily===null||Math.abs(daily)>=12||
+     score===null||score<68||session===null||session<0||session>6||
+     hour===null||hour<0.15||hour>4.5||structure===null||structure<60)return null;
+  if(closeAt===null||closeAt>Number(now)+5000||Number(now)-closeAt>20*60*1000)return null;
+  if(risks.some(x=>/ALREADY_EXTENDED|EXTENDED_CHASE|HIGH_RISK|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK|LOW_LIQUIDITY/.test(x)))return null;
+  if(participation<3)return null;
+  return {
+    id:'PRE_MOVE_WATCH:'+symbol+':'+String(closeAt),
+    event:'PRE_MOVE_RADAR_WATCH_ONLY',
+    potential_label:'WATCH_EARLY',
+    decision_band:'WATCH_EARLY',
+    radar:'PRE_MOVE',
+    radar_name:'رادار ما قبل الحركة',
+    symbol,market:'SPOT',direction:'UP_BIAS',price,price_change_24h:daily,
+    data_quality:quality,liquidity_quality:liquidity,
+    source:'Binance Public REST',data_stale:false,
+    data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false,source:'Binance Public REST',close_time:closeAt},
+    detected_at:Number(now),detected_candle_close_time:closeAt,closed_candles_only:true,
+    pre_move_context:p,
+    watch_only:true,entry_eligible:false,
+    reason_codes:[...(Array.isArray(candidate?.watch_reason_codes)?candidate.watch_reason_codes:
+      Array.isArray(p?.reasons)?p.reasons:[])].map(x=>String(x).slice(0,100)).slice(0,12),
+    risk_flags:risks,
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+  };
+}
+
 export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,marketRadarRest=null,radarSwarm=null,radarSignalOutcomeWorker=null}= {}){
   const counters=new Map();
   function recordMultiAnalystApiFailure(error){
@@ -347,6 +421,34 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         if(oldest)preMoveRadarResponseCache.delete(oldest[0]);
       }
       preMoveRadarResponseCache.set(key,{snapshot,savedAt:Date.now()});
+      // Route only independently qualified early-watch observations to push.
+      // They are explicitly watch-only, never entry-eligible, and PushManager
+      // revalidates data freshness, quality, liquidity, anti-chase, and evidence.
+      if(typeof pushManager?.notifyRadarWatchOnlyAlert==='function'){
+        const rows=Array.isArray(snapshot.watch_candidates)?snapshot.watch_candidates:[];
+        const seenSymbols=new Set();
+        const watchAlerts=rows.map(row=>buildPreMoveWatchOnlyAlert(row,snapshot,Date.now()))
+          .filter(alert=>{
+            if(!alert||seenSymbols.has(alert.symbol))return false;
+            seenSymbols.add(alert.symbol);return true;
+          })
+          .sort((a,b)=>Number(b.pre_move_context?.score||0)-Number(a.pre_move_context?.score||0))
+          .slice(0,3);
+        for(const alert of watchAlerts){
+          Promise.resolve().then(()=>pushManager.notifyRadarWatchOnlyAlert(alert)).then(result=>{
+            console.info?.('[PRE_MOVE_WATCH_NOTIFICATION_RESULT] '+JSON.stringify({
+              symbol:alert.symbol,status:String(result?.status||'UNKNOWN'),
+              attempted:result?.attempted===true,sent_count:Number(result?.sent_count)||0,
+              reason:result?.reason||null,watch_only:true,entry_eligible:false
+            }));
+          }).catch(error=>{
+            console.warn?.('[PRE_MOVE_WATCH_NOTIFICATION_FAILED] '+JSON.stringify({
+              symbol:alert.symbol,error:String(error?.message??error).slice(0,160),
+              watch_only:true,entry_eligible:false
+            }));
+          });
+        }
+      }
       preMoveRadarRefreshRetryAfter.delete(key);
       preMoveRadarLastError.delete(key);
       return snapshot;
