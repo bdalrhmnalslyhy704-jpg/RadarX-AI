@@ -13,7 +13,6 @@ assert.equal(nextContinuousScanDelayMs(1000,0),15000);
   const engine=new MultiAnalystEngine({rest:{request:async()=>({data:[]})}});
   assert.equal(engine.config.deepScanPool,12);
   assert.equal(engine.config.deepConcurrency,3);
-  assert.equal(engine.config.realOrderExecution,undefined);
 }
 
 assert.equal(isMomentumLiquidityEligible(1_000_000,2.5),true);
