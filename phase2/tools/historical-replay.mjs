@@ -449,7 +449,8 @@ async function main() {
           baseScore: alertScore,
           priceChange24h: input.ticker.priceChange24h,
           liquidityScore,
-          dataQualityScore: 90,
+          // Use the analyzer's observed closed-candle quality; never seed a perfect historical score.
+          dataQualityScore: Number(a.data_quality) || 0,
           triggerScore: Math.max(Number(cs.flash) || 0, Number(cs.breakout) || 0),
           structureScore: Math.max(Number(cs.breakout) || 0, Number(cs.ema) || 0),
           participationScore,
@@ -511,6 +512,11 @@ async function main() {
     const windowCandlesComplete = observedWindowCandles >= expectedWindowCandles;
     const outcomeObservationComplete = observationEnd >= end + outcomeHorizonHours * HOUR_MS && candleFetch.complete &&
       replay.steps.length>0 && replay.steps.every(step=>step?.outcome?.horizon_observed===true);
+    replay.detector_profile=detectorSpec;
+    replay.detector_evaluation_mode=detectorSpec.mode;
+    replay.data_quality.detector_profile=detectorProfile;
+    replay.data_quality.additional_timeframes=timeframeCoverage;
+    replay.data_quality.additional_timeframe_errors=timeframeFetchErrors;
     replay.data_quality.candle_pages = candleFetch.pages;
     replay.data_quality.candle_fetch_complete = windowCandlesComplete;
     replay.data_quality.outcome_candle_fetch_complete = outcomeObservationComplete;
