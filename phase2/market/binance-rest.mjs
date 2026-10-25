@@ -273,7 +273,13 @@ function annotateClientSuccess(client, result, sourceIndex = null) {
 
 export class RestClient {
   constructor({baseUrls,fetchImpl=globalThis.fetch,timeoutMs=9000,minIntervalMs=100,maxRequestsPerMinute=240}) {
-    this.baseUrls=[...baseUrls]; this.fetchImpl=fetchImpl; this.timeoutMs=timeoutMs;
+    this.baseUrls=[...baseUrls]; this.fetchImpl=fetchImpl;
+    // A deployment override must not turn one public REST request into a 60s+
+    // blocking wait. Bound each host attempt so the scanner can fail over to the
+    // next official Binance Spot endpoint within its absolute scan deadline.
+    const requestedTimeoutMs=Number(timeoutMs);
+    this.timeoutMs=Number.isFinite(requestedTimeoutMs)&&requestedTimeoutMs>0
+      ?Math.min(9000,requestedTimeoutMs):9000;
     this.minIntervalMs=minIntervalMs; this.maxRequestsPerMinute=maxRequestsPerMinute;
     this.usedAt=[]; this.lastRequestAt=0; this.currentBaseIndex=0;
     this.lastSuccessAt=null; this.lastError=null; this.rateLimitedUntil=0; this.state='INIT';
