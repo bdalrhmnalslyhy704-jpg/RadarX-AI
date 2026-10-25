@@ -1479,3 +1479,41 @@ test('Radar 8 refuses Micro-only flow watches without validated candles or a qua
   };
   assert.equal(buildMicroEarlyFlowWatchCandidate(micro,now,{}),null);
 });
+
+
+test('Radar 8 releases its busy latch when a scan stage never settles', async()=>{
+  const radar=makeRadar({scanTimeoutMs:100});
+  radar.running=true;
+  radar.scheduler.hydrate=()=>new Promise(()=>{});
+  const startedAt=Date.now();
+  const completed=await Promise.race([
+    radar.tick().then(value=>({done:true,value})),
+    new Promise(resolve=>setTimeout(()=>resolve({done:false}),800))
+  ]);
+  assert.equal(completed.done,true,'Radar 8 must enforce its scan deadline');
+  assert.equal(completed.value,false,'an expired scan is not a successful scan');
+  assert.ok(Date.now()-startedAt<800);
+  assert.equal(radar.busy,false);
+  assert.equal(radar.busySinceAtMs,null);
+  assert.match(radar.lastError,/RADAR8_SCAN_DEADLINE_EXCEEDED/);
+  await radar.stop();
+});
+
+test('Radar 8 stop cancels a pending scan and clears the latch before watchdog restart', async()=>{
+  const radar=makeRadar({scanTimeoutMs:60000});
+  radar.running=true;
+  radar.scheduler.hydrate=()=>new Promise(()=>{});
+  const pending=radar.tick();
+  await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(radar.busy,true);
+  await radar.stop();
+  const result=await Promise.race([
+    pending.then(value=>({done:true,value})),
+    new Promise(resolve=>setTimeout(()=>resolve({done:false}),250))
+  ]);
+  assert.equal(result.done,true,'stop must release a blocked tick immediately');
+  assert.equal(result.value,false);
+  assert.equal(radar.busy,false);
+  assert.equal(radar.busySinceAtMs,null);
+  assert.equal(radar.running,false);
+});
