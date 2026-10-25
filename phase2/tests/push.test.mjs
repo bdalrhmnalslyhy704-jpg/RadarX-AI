@@ -408,10 +408,10 @@ test('TEST_FIXTURE: high-activity Pre-Move alerts pass the push validator with s
       paper_trading:true,real_order_execution:false,risk_flags:[],
       pre_move_context:{
         stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,
-        closed_candles_only:true,already_moved:false,score:70.6,
+        closed_candles_only:true,already_moved:false,score:75.6,
         session_return_pct:2.6675,one_hour_return_pct:1.9399,
         volume_acceleration:23.4119,trade_acceleration:15.3842,
-        taker_buy_ratio:0.5436,taker_buy_acceleration:0.0032,
+        taker_buy_ratio:0.71,taker_buy_acceleration:0.08,
         mean_close_location:0.3545,relative_strength_vs_market_pct:4.1490,
         components:{structure:54.0185,squeeze:0,buying_pressure:70.8968}
       }
@@ -444,6 +444,65 @@ test('TEST_FIXTURE: high-activity Pre-Move alerts pass the push validator with s
     assert.equal(rejectedActivity.status,'REJECTED_WATCH_ONLY');
     assert.equal(rejectedActivity.reason,'PRE_MOVE_HIGH_ACTIVITY_TIER_UNVERIFIED');
     assert.equal(sent.length,1,'only the validated watch-only event may reach the provider');
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+
+test('TEST_FIXTURE: high buyer flow before positive return can send only a monitor notification',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-neutral-flow-watch-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    const sent=[];
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
+      sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};
+    }};
+    const manager=new PushManager({provider,store});
+    const now=Date.now(),closeAt=now-800_000;
+    const alert={
+      id:'PRE_MOVE_WATCH:ASTRUSDT:'+String(closeAt),
+      event:'PRE_MOVE_RADAR_WATCH_ONLY',potential_label:'WATCH_EARLY',decision_band:'WATCH_EARLY',
+      radar:'PRE_MOVE',radar_name:'رادار ما قبل الحركة',
+      symbol:'ASTRUSDT',market:'SPOT',direction:'UP_BIAS',price:0.035,price_change_24h:1.1,
+      data_quality:100,liquidity_quality:84.94,source:'Binance Public REST',data_stale:false,
+      data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false,
+        source:'Binance Public REST',close_time:closeAt},
+      detected_at:now,detected_candle_close_time:closeAt,closed_candles_only:true,
+      watch_only:true,entry_eligible:false,watch_notification_tier:'HIGH_ACTIVITY_STRUCTURE_PENDING',
+      watch_review_reason:'STRONG_BUYER_FLOW_BEFORE_PRICE_TURN',
+      paper_trading:true,real_order_execution:false,risk_flags:[],
+      pre_move_context:{
+        stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,
+        closed_candles_only:true,already_moved:false,score:77.7,
+        session_return_pct:-0.176366843,one_hour_return_pct:-0.0160771704,
+        volume_acceleration:4.2677557,trade_acceleration:2.4360902,
+        taker_buy_ratio:0.7292044,taker_buy_acceleration:0.3771112,
+        mean_close_location:0.5048246,relative_strength_vs_market_pct:0.8874629,
+        components:{structure:60.4391,squeeze:55,buying_pressure:80}
+      }
+    };
+    const out=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(out.status,'SENT',JSON.stringify(out));
+    assert.equal(out.sent_count,1);
+    assert.equal(sent.length,1);
+    assert.equal(sent[0].symbol,'ASTRUSDT');
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].watch_notification_tier,'HIGH_ACTIVITY_STRUCTURE_PENDING');
+    assert.match(sent[0].message,/نشاط مبكر قوي/);
+    assert.equal(sent[0].paper_trading,true);
+    assert.equal(sent[0].real_order_execution,false);
+    assert.equal(sent.length,1,'only one watch-only notification is delivered');
+
+    const tooNegative={...alert,id:'PRE_MOVE_WATCH:DEEPNEGUSDT:'+String(closeAt),symbol:'DEEPNEGUSDT',
+      pre_move_context:{...alert.pre_move_context,session_return_pct:-0.751}};
+    const rejected=await manager.notifyRadarWatchOnlyAlert(tooNegative);
+    assert.equal(rejected.status,'REJECTED_WATCH_ONLY');
+    assert.equal(rejected.reason,'PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
+    assert.equal(sent.length,1,'out-of-band negative move remains blocked');
   }finally{
     await rm(dir,{recursive:true,force:true});
   }
