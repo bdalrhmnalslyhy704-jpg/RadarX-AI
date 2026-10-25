@@ -102,12 +102,33 @@ jobs:
         run: sleep 60
 
       - name: Check DHDTech deployment contract
+        timeout-minutes: 6
         run: |
           set -euo pipefail
-          CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 30 -o "$RUNNER_TEMP/deployment-info.json" -w "%{http_code}" "$BASE/api/deployment-info")"
+          CODE=""
+          # A push can briefly remove the old container before the new DHDTech
+          # container is healthy. Retry only transport/gateway errors; never
+          # treat a 502 as a successful health check or accept a non-200 result.
+          for attempt in 1 2 3 4 5 6 7 8; do
+            CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 25 -o "$RUNNER_TEMP/deployment-info.json" -w "%{http_code}" "$BASE/api/deployment-info" || true)"
+            if [ "$CODE" = "200" ]; then
+              break
+            fi
+            case "$CODE" in
+              502|503|504|000)
+                echo "::warning::DHDTech deployment-info transient HTTP $CODE on attempt $attempt/8."
+                if [ "$attempt" -lt 8 ]; then sleep 15; fi
+                ;;
+              *)
+                echo "::error::DHDTech deployment-info returned non-retryable HTTP $CODE"
+                cat "$RUNNER_TEMP/deployment-info.json" 2>/dev/null || true
+                exit 1
+                ;;
+            esac
+          done
           if [ "$CODE" != "200" ]; then
-            echo "::error::DHDTech deployment-info returned HTTP $CODE"
-            cat "$RUNNER_TEMP/deployment-info.json"
+            echo "::error::DHDTech deployment-info stayed unavailable after 8 bounded attempts (last HTTP $CODE)."
+            cat "$RUNNER_TEMP/deployment-info.json" 2>/dev/null || true
             exit 1
           fi
           node --input-type=module <<'NODE'
