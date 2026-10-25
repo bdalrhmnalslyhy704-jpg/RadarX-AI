@@ -16,7 +16,7 @@ export function normalizeBinanceSpotArchiveTimestamp(value) {
   if (!Number.isFinite(n) || n <= 0) return null;
   // Binance public-data archives changed Spot timestamps to microseconds from 2025-01-01.
   // REST responses used by RadarX are milliseconds, so normalize archive rows before replay.
-  return Math.trunc(n >= 100_000_000_000_000 ? n / 1000 : n);
+  return n >= 100_000_000_000_000 ? n / 1000 : Math.trunc(n);
 }
 
 function parseBoolean(value) {
