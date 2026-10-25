@@ -216,10 +216,10 @@ test('exceptional live-like activity creates a labelled watch-only heads-up whil
     ],risk_flags:[],
     pre_move_context:{
       stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,closed_candles_only:true,
-      already_moved:false,session_close:now-129_000,score:70.6,
+      already_moved:false,session_close:now-129_000,score:75.6,
       session_return_pct:2.6675,one_hour_return_pct:1.9399,
       volume_acceleration:23.4119,trade_acceleration:15.3842,
-      taker_buy_ratio:0.5436,taker_buy_acceleration:0.0032,
+      taker_buy_ratio:0.71,taker_buy_acceleration:0.08,
       mean_close_location:0.3545,relative_strength_vs_market_pct:4.1490,
       components:{structure:54.0185,squeeze:0,buying_pressure:70.8968},
       reasons:['VOLUME_ACCELERATION_STRONG','TRADE_ACCELERATION_STRONG','RELATIVE_STRENGTH']
@@ -238,14 +238,43 @@ test('exceptional live-like activity creates a labelled watch-only heads-up whil
   assert.ok(alert.reason_codes.includes('HIGH_ACTIVITY_STRUCTURE_PENDING'));
 });
 
+test('exceptional buyer flow qualifies for monitor-only before session and hourly returns turn positive',()=>{
+  const {snapshot,now}=fixture();
+  const candidate={
+    symbol:'ASTRUSDT',last_price:0.035,price_change_24h:1.1,data_quality:100,liquidity_quality:84.94,
+    data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false,candle_data_valid:true},
+    watch_only:true,alert_eligible:false,watch_reason_codes:['BUYER_FLOW_STRONG','PRICE_WINDOW_NOT_CONFIRMED'],
+    risk_flags:[],
+    pre_move_context:{
+      stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,closed_candles_only:true,
+      already_moved:false,session_close:now-800_000,score:77.7,
+      session_return_pct:-0.176366843,one_hour_return_pct:-0.0160771704,
+      volume_acceleration:4.2677557,trade_acceleration:2.4360902,
+      taker_buy_ratio:0.7292044,taker_buy_acceleration:0.3771112,
+      mean_close_location:0.5048246,relative_strength_vs_market_pct:0.8874629,
+      components:{structure:60.4391,squeeze:55.0,buying_pressure:80.0}
+    }
+  };
+  const diagnostics=diagnosePreMoveWatchOnlyCandidates([candidate],snapshot,now,12);
+  assert.equal(diagnostics.eligible,1,JSON.stringify(diagnostics));
+  assert.equal(diagnostics.samples[0].watch_notification_tier,'HIGH_ACTIVITY_STRUCTURE_PENDING');
+  const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
+  assert.ok(alert);
+  assert.equal(alert.symbol,'ASTRUSDT');
+  assert.equal(alert.watch_notification_tier,'HIGH_ACTIVITY_STRUCTURE_PENDING');
+  assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+  assert.equal(alert.real_order_execution,false);
+});
+
 test('high-activity watch override still fails closed on weak data, low participation, extended risk, or very weak structure',()=>{
   const {candidate,snapshot,now}=fixture();
   const strong={
     ...candidate,symbol:'MEGAUSDT',price_change_24h:3.702,data_quality:100,liquidity_quality:92.36,
     pre_move_context:{
-      ...candidate.pre_move_context,score:70.6,session_return_pct:2.6675,one_hour_return_pct:1.9399,
-      volume_acceleration:23.4119,trade_acceleration:15.3842,taker_buy_ratio:0.5436,
-      taker_buy_acceleration:0.0032,mean_close_location:0.3545,relative_strength_vs_market_pct:4.149,
+      ...candidate.pre_move_context,score:75.6,session_return_pct:2.6675,one_hour_return_pct:1.9399,
+      volume_acceleration:23.4119,trade_acceleration:15.3842,taker_buy_ratio:0.71,
+      taker_buy_acceleration:0.08,mean_close_location:0.3545,relative_strength_vs_market_pct:4.149,
       session_close:now-129_000,components:{...candidate.pre_move_context.components,structure:54.0185}
     }
   };
