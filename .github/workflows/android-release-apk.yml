@@ -511,9 +511,8 @@ jobs:
         run: |
           set -euo pipefail
           READY=false
-          # A scheduled deep-analyst scan may be active immediately after the public
-          # contract checks. Allow that bounded scan to finish; still require READY,
-          # all twelve healthy workers, complete market data, and a fresh 19+1 result.
+          # Cold starts can stagger worker initialization. Require all twelve workers
+          # to report RUNNING; do not treat registration alone as readiness.
           for attempt in {1..24}; do
             CODE="$(curl --location --silent --show-error --connect-timeout 8 --max-time 15 --output "$RUNNER_TEMP/radar-swarm-status.json" --write-out "%{http_code}" "$BASE/api/radar-swarm-status" || true)"
             if [[ "$CODE" == "200" ]] && node --input-type=module <<'NODE'
@@ -539,7 +538,7 @@ jobs:
               READY=true
               break
             fi
-            echo "DHDTech radar swarm not ready on attempt $attempt/12 (HTTP ${CODE:-unknown}); retrying."
+            echo "DHDTech radar swarm not ready on attempt $attempt/24 (HTTP ${CODE:-unknown}); retrying."
             sleep 5
           done
           if [[ "$READY" != "true" ]]; then
@@ -794,7 +793,10 @@ jobs:
             exit 1
           fi
           VERIFIED=false
-          for attempt in {1..12}; do
+          # Allow production cold-start cache warmup and initial telemetry cycles to finish.
+          # READY still requires all 12 radar cycles, full closed-candle market coverage,
+          # an active WebSocket, and fresh complete 19-specialist + final-analyst evidence.
+          for attempt in {1..48}; do
             CODE="$(curl --location --silent --show-error --connect-timeout 8 --max-time 15 \
               --output "$RUNNER_TEMP/radar-readiness-audit.json" --write-out "%{http_code}" \
               "$BASE/api/radar-readiness-audit" || true)"
@@ -819,7 +821,7 @@ jobs:
               VERIFIED=true
               break
             fi
-            echo "Live readiness not yet complete (attempt $attempt/12; HTTP ${CODE:-unknown}); retrying."
+            echo "Live readiness not yet complete (attempt $attempt/48; HTTP ${CODE:-unknown}); retrying."
             sleep 5
           done
           if [[ "$VERIFIED" != "true" ]]; then
