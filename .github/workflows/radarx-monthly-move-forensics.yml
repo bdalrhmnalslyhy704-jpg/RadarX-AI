@@ -1,0 +1,86 @@
+name: RadarX Build 224 monthly move forensics
+
+on:
+  push:
+    branches:
+      - research/build224-monthly-move-forensics-20261019
+    paths:
+      - '.github/workflows/radarx-monthly-move-forensics.yml'
+      - 'phase2/tools/monthly-move-forensics.mjs'
+  pull_request:
+    branches:
+      - build224-multi-analyst-20261007
+    paths:
+      - '.github/workflows/radarx-monthly-move-forensics.yml'
+      - 'phase2/tools/monthly-move-forensics.mjs'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: radarx-monthly-move-forensics-pr
+  cancel-in-progress: false
+
+jobs:
+  forensics:
+    name: Closed-candle Binance Spot USDT retrospective
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      FORENSICS_DAYS: '30'
+      FORENSICS_JSON_PATH: reports/monthly-move-forensics.json
+      FORENSICS_MARKDOWN_PATH: reports/monthly-move-forensics.md
+    steps:
+      - name: Check out Build 224 research head
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          check-latest: true
+
+      - name: Run read-only 30-day market forensics
+        run: node phase2/tools/monthly-move-forensics.mjs
+
+      - name: Validate generated report
+        run: |
+          node --input-type=module -e "
+            import { readFile } from 'node:fs/promises';
+            const r = JSON.parse(await readFile('reports/monthly-move-forensics.json', 'utf8'));
+            if (!String(r.schema_version || '').startsWith('radarx.monthly-move-forensics.')) throw new Error('REPORT_SCHEMA_INVALID');
+            if (r.policy?.quote !== 'USDT' || r.policy?.market_data !== 'BINANCE_SPOT_PUBLIC_READ_ONLY') throw new Error('MARKET_POLICY_INVALID');
+            if (r.policy?.real_order_execution !== false || r.policy?.paper_trading !== true) throw new Error('PAPER_ONLY_POLICY_INVALID');
+            if (!Array.isArray(r.cases) || !Array.isArray(r.top_20) || !Array.isArray(r.cohort_summary)) throw new Error('REPORT_SECTIONS_MISSING');
+            if (r.cases.length === 0) throw new Error('NO_FORENSIC_CASES');
+            const deep = r.cases.filter(x => x.forensics);
+            const errors = r.cases.filter(x => x.error);
+            console.log(JSON.stringify({schema:r.schema_version,generated_at_utc:r.generated_at_utc,eligible_symbols:r.universe?.eligible_symbols,completed_daily_histories:r.universe?.completed_daily_histories,deep_cases:deep.length,case_errors:errors.length,top_20:r.top_20.slice(0,10).map(x=>({symbol:x.symbol,return_pct:x.return_pct,quote_volume_24h:x.quote_volume_24h})),cohorts:r.cohort_summary}, null, 2));
+            if (deep.length === 0) throw new Error('NO_DEEP_FORENSIC_CASES');
+          "
+
+      - name: Persist compact Markdown result to research branch
+        if: success() && github.event_name == 'push'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add reports/monthly-move-forensics.md
+          if ! git diff --cached --quiet; then
+            git commit -m 'research(build224): record rolling monthly mover forensics'
+            git push origin HEAD:refs/heads/research/build224-monthly-move-forensics-20261019
+          else
+            echo 'Markdown report unchanged; no report commit needed.'
+          fi
+
+      - name: Upload full JSON and Markdown reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-monthly-move-forensics
+          path: |
+            reports/monthly-move-forensics.json
+            reports/monthly-move-forensics.md
+          if-no-files-found: warn
+          retention-days: 7

@@ -43,7 +43,52 @@ function stdev(xs){
   const m=mean(a);return Math.sqrt(mean(a.map(x=>(x-m)**2)));
 }
 
-export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
+function normalizeBuyerMaker(value){
+  if(value===true||value===1||value==='1'||value==='true')return true;
+  if(value===false||value===0||value==='0'||value==='false')return false;
+  return null;
+}
+
+// A 3-second flow ratio is usable only when the caller confirms aggregate-trade
+// coverage for the requested bucket. Missing/limited history stays unavailable.
+export function calculateThreeSecondTakerFlow(trades,now,{coverageComplete=false}={}){
+  const boundary=Math.floor(Number(now)/3000)*3000;
+  const start=boundary-3000;
+  const unavailable=(reason,rows=[])=>({
+    available:false,reason,bucket_start_time:start,bucket_end_time:boundary,
+    aggregate_trade_count:rows.length,total_quote_volume:null,
+    taker_buy_quote_volume:null,taker_sell_quote_volume:null,taker_buy_ratio:null
+  });
+  if(coverageComplete!==true)return unavailable('AGG_TRADE_COVERAGE_INCOMPLETE');
+  if(!Array.isArray(trades))return unavailable('AGG_TRADES_MISSING');
+  const bucket=trades.filter(row=>{
+    const at=Number(row?.T);
+    return Number.isFinite(at)&&at>=start&&at<boundary;
+  });
+  if(!bucket.length)return unavailable('NO_AGG_TRADES_IN_3S_BUCKET');
+  let total=0,buy=0,sell=0;
+  for(const row of bucket){
+    const at=Number(row?.T),price=Number(row?.p),quantity=Number(row?.q);
+    const buyerIsMaker=normalizeBuyerMaker(row?.m);
+    if(!Number.isFinite(at)||at<start||at>=boundary||!Number.isFinite(price)||price<=0||
+       !Number.isFinite(quantity)||quantity<=0||buyerIsMaker===null){
+      return unavailable('INVALID_AGG_TRADE_ROW',bucket);
+    }
+    const quote=price*quantity;
+    total+=quote;
+    if(buyerIsMaker===false)buy+=quote;
+    else sell+=quote;
+  }
+  if(!(total>0))return unavailable('EMPTY_AGG_TRADE_NOTIONAL',bucket);
+  return {
+    available:true,reason:null,bucket_start_time:start,bucket_end_time:boundary,
+    aggregate_trade_count:bucket.length,total_quote_volume:total,
+    taker_buy_quote_volume:buy,taker_sell_quote_volume:sell,
+    taker_buy_ratio:buy/total
+  };
+}
+
+export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now,{aggTrades=[],aggTradesComplete=false}={}){
   const a=closedCandles(oneM,now),b=closedCandles(fiveM,now);
   if(a.length<40||b.length<20){
     return {eligible:false,stage:'INSUFFICIENT_DATA',direction:'NONE',score:null,closed_candles_only:true,one_minute_count:a.length,five_minute_count:b.length,data_quality:0,data_stale:true};
@@ -91,6 +136,7 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
   const buyRatio=recentVolSum>0?recentBuy/recentVolSum:null;
   const prevBuyRatio=prevVolSum>0?prevBuy/prevVolSum:null;
   const buyDelta=Number.isFinite(buyRatio)&&Number.isFinite(prevBuyRatio)?buyRatio-prevBuyRatio:null;
+  const threeSecondLiquidity=calculateThreeSecondTakerFlow(aggTrades,now,{coverageComplete:aggTradesComplete});
 
   const rangeRecent=mean(recent5.map(x=>Number(x.high)-Number(x.low)));
   const rangeBase=median(base30.map(x=>Number(x.high)-Number(x.low)));
@@ -237,6 +283,8 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
       flash_score:flashScore,flash_trigger:flashTrigger,flash_confirmations:flashConfirmations,
       micro_breakout:microBreak,close_location_pct:closeLocation,
       volume_ratio:volumeRatio,trade_ratio:tradeRatio,taker_buy_ratio:buyRatio,taker_buy_delta:buyDelta,
+      three_second_taker_buy_ratio:threeSecondLiquidity.taker_buy_ratio,
+      three_second_liquidity:threeSecondLiquidity,
       range_ratio:rangeRatio,breakout_up:breakUp,breakout_down:breakDown,breakout_distance_up_pct:breakoutDistanceUp,
       breakout_distance_down_pct:breakoutDistanceDown,ema9,ema21,ema55,vwap,vwap_distance_pct:vwapDistance,
       bb_width:bbWidth,bb_expansion_ratio:bbExpansion,efficiency_ratio:efficiency,atr_ratio:atrRatio,
@@ -268,7 +316,10 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
 }
 
 export function buildStrongMoveAlert(candidate,now=Date.now()){
-  const a=buildStrongMoveAnalysis(candidate.one_minute,candidate.five_minute,candidate.ticker,now);
+  const a=buildStrongMoveAnalysis(candidate.one_minute,candidate.five_minute,candidate.ticker,now,{
+    aggTrades:candidate.agg_trades,
+    aggTradesComplete:candidate.agg_trades_complete===true
+  });
   const ticker=candidate.ticker||{};
   return {
     id:'STRONG:'+String(ticker.symbol||'UNKNOWN').toUpperCase()+':'+a.direction+':'+now,
