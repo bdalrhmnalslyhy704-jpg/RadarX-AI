@@ -505,7 +505,9 @@ jobs:
           fi
 
       - name: Verify all twelve live radar workers on DHDTech
-        timeout-minutes: 2
+        # 24 bounded polls may take up to 8 minutes (15s request + 5s sleep each).
+        # Allow a small margin for process startup/parsing while keeping failure bounded.
+        timeout-minutes: 9
         env:
           BASE: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
         run: |
@@ -779,7 +781,9 @@ jobs:
           NODE
 
       - name: Require live readiness for twelve radars, twenty analysts, and push prerequisites
-        timeout-minutes: 5
+        # 48 bounded polls can take up to 16 minutes (15s request + 5s sleep each).
+        # Preserve strict READY checks while allowing that existing retry budget to finish.
+        timeout-minutes: 17
         env:
           BASE: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
         run: |
