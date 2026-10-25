@@ -196,10 +196,15 @@ assert.match(backgroundServiceSourceForMove,/notifyNewRadarAlerts/);
 // The server, push manager, and Android fallback must all understand the exceptional
 // high-activity watch tier without turning it into an actionable entry.
 assert.ok(backgroundServiceSourceForMove.includes('"HIGH_ACTIVITY_STRUCTURE_PENDING"'));
+assert.ok(backgroundServiceSourceForMove.includes('score >= 75.0'));
 assert.ok(backgroundServiceSourceForMove.includes('volume >= 3.0'));
 assert.ok(backgroundServiceSourceForMove.includes('trades >= 2.0'));
-assert.ok(backgroundServiceSourceForMove.includes('relative >= 1.5'));
+assert.ok(backgroundServiceSourceForMove.includes('buy >= 0.65'));
+assert.ok(backgroundServiceSourceForMove.includes('buyDelta >= 0.05'));
+assert.ok(backgroundServiceSourceForMove.includes('relative >= 0.5'));
 assert.ok(backgroundServiceSourceForMove.includes('participation >= 4'));
+assert.ok(backgroundServiceSourceForMove.includes('session < (highActivityStructurePending ? -0.75 : 0.0)'));
+assert.ok(backgroundServiceSourceForMove.includes('hour < (highActivityStructurePending ? -0.5 : 0.15)'));
 assert.ok(backgroundServiceSourceForMove.includes('(structure < 60.0 && !highActivityStructurePending)'));
 assert.match(backgroundServiceSourceForMove,/pendingStructure/);
 assert.match(backgroundServiceSourceForMove,/api\/radar-alerts\?radar=ALL/);
