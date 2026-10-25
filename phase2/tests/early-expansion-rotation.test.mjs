@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,isMarketWideCacheFallbackPoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible,ensureRadar8ScoreContainer,isConfirmedEarlyFlowWatchCandidate,buildEarlyFlowWatchAlert,buildMicroEarlyFlowWatchCandidate} from '../core/early-expansion-radar.mjs';
+import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,isMarketWideCacheFallbackPoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,adaptiveRadar8DeepCandidateTarget,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible,ensureRadar8ScoreContainer,isConfirmedEarlyFlowWatchCandidate,buildEarlyFlowWatchAlert,buildMicroEarlyFlowWatchCandidate} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
 function makeRadar(config={}){
@@ -64,8 +64,19 @@ test('Radar 8 uses a 20-second target with bounded fair-rotating work batches',(
   assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.pollMs,20000);
   assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.microScanCandidates,18);
   assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.deepCandidates,8);
-  assert.ok(EARLY_EXPANSION_RADAR_DEFAULTS.microConcurrency>=8);
+  assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.rotationReserve,5);
+  assert.equal(EARLY_EXPANSION_RADAR_DEFAULTS.quietReserve,4);
+  assert.ok(EARLY_EXPANSION_RADAR_DEFAULTS.microConcurrency>=6);
   assert.ok(EARLY_EXPANSION_RADAR_DEFAULTS.deepConcurrency>=4);
+});
+
+test('Radar 8 shrinks only the next deep batch after a slow completed scan',()=>{
+  assert.equal(adaptiveRadar8DeepCandidateTarget(8,null),8);
+  assert.equal(adaptiveRadar8DeepCandidateTarget(8,60000),8);
+  assert.equal(adaptiveRadar8DeepCandidateTarget(8,60001),6);
+  assert.equal(adaptiveRadar8DeepCandidateTarget(10,80000),7);
+  assert.equal(adaptiveRadar8DeepCandidateTarget(6,90000),4);
+  assert.equal(adaptiveRadar8DeepCandidateTarget(1,120000),1);
 });
 
 test('Radar 8 Activity Shock watch observations are explicitly non-entry signals',()=>{
@@ -246,6 +257,12 @@ test('Radar 8 adaptive Micro concurrency respects cache readiness, shared REST r
   const highWeightPressure={shared_requests_last_minute:100,shared_max_requests_per_minute:420,
     shared_estimated_weight_last_minute:3200,shared_max_weight_per_minute:4000};
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},lowPressure,18),10);
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},lowPressure,18,60000),10,
+    'the 60-second boundary does not trigger the slow-cycle cap');
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},lowPressure,18,60001),4,
+    'previous slow cycle caps even a warm cache with REST headroom');
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},lowPressure,18,null),10,
+    'no previous duration preserves normal adaptive behavior');
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:10},highWeightPressure,18),4);
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},highWeightPressure,18),4,
     'high REST weight pressure caps workers even when the WebSocket cache is warm');
