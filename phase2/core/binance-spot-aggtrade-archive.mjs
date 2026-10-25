@@ -153,7 +153,7 @@ async function findArchive(symbol, dayStart, cacheDir, fetchImpl) {
 }
 
 async function readTradesFromArchive(archivePath, startTime, endTime, maxTrades) {
-  const child = spawn('unzip', ['-p', archivePath, '*.csv'], {stdio: ['ignore', 'pipe', 'pipe']});
+  const child = spawn('unzip', ['-p', archivePath], {stdio: ['ignore', 'pipe', 'pipe']});
   let stderr = '';
   let spawnError = null;
   child.stderr.on('data', chunk => {
@@ -255,7 +255,7 @@ export async function fetchBinanceSpotAggTradesArchive(symbol, startTime, endTim
       continue;
     }
     archiveFiles.push({
-      day: archive.day, granularity: archive.granularity,
+      day: archive.day, day_start_ms: dayStart, granularity: archive.granularity,
       url: archive.url, sha256: archive.sha256, cache_hit: archive.cache_hit === true,
       path: archive.path
     });
@@ -271,7 +271,9 @@ export async function fetchBinanceSpotAggTradesArchive(symbol, startTime, endTim
   const tradesById = new Map();
   let matchingRows = 0;
   for (const archive of archiveFiles) {
-    const parsed = await readTradesFromArchive(archive.path, start, end, cap);
+    const dayStart = Number(archive.day_start_ms);
+    const dayEnd = dayStart + DAY_MS - 1;
+    const parsed = await readTradesFromArchive(archive.path, Math.max(start, dayStart), Math.min(end, dayEnd), cap);
     matchingRows += parsed.totalMatching;
     for (const trade of parsed.trades) {
       if (!tradesById.has(trade.a)) tradesById.set(trade.a, trade);
