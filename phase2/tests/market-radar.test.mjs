@@ -714,3 +714,28 @@ test('Pre-Move scan removes already-extended coins before limiting actionable re
   assert.deepEqual([...new Set(scannedTimeframes)],['15m'],'Pre-Move fetches 15m candles once and aggregates closed hourly bars locally');
   assert.ok(!scannedTimeframes.includes('4h'),'Pre-Move must not pay for the unrelated 4h strategy timeframe');
 });
+
+
+test('Pre-Move scans at different limits are serialized per quote and identical requests coalesce',async()=>{
+  const scanner=new MarketUniverseScanner({rest:makeRest()});
+  let active=0,maxActive=0;
+  const starts=[];
+  scanner._scanPreMove=async({quote,limit})=>{
+    active++;
+    maxActive=Math.max(maxActive,active);
+    starts.push({quote,limit,at:'start'});
+    await new Promise(resolve=>setTimeout(resolve,20));
+    starts.push({quote,limit,at:'end'});
+    active--;
+    return {quote,limit};
+  };
+  const small=scanner.scanPreMove({quote:'USDT',limit:10});
+  const largeA=scanner.scanPreMove({quote:'usdt',limit:50});
+  const largeB=scanner.scanPreMove({quote:'USDT',limit:50});
+  const [smallResult,largeResultA,largeResultB]=await Promise.all([small,largeA,largeB]);
+  assert.equal(maxActive,1,'different Pre-Move scopes may not scan the shared REST request cache concurrently');
+  assert.deepEqual(starts.filter(x=>x.at==='start').map(x=>x.limit),[10,50]);
+  assert.equal(smallResult.limit,10);
+  assert.equal(largeResultA.limit,50);
+  assert.strictEqual(largeResultA,largeResultB,'identical quote/limit requests share one in-flight scan');
+});

@@ -1620,6 +1620,9 @@ export class MarketUniverseScanner {
     this.strategyEvaluator = strategyEvaluator;
     this._requests = new Map();
     this._scanFlights = new Map();
+    // Serialize Pre-Move scans across limits: the same REST client/request map is shared,
+    // so different concurrent limits must not reset its in-flight request cache mid-scan.
+    this._preMoveScanTails = new Map();
   }
 
   async requestOnce(path, query = {}) {
@@ -2135,7 +2138,22 @@ export class MarketUniverseScanner {
     };
   }
 
-  async scanPreMove({ quote = this.config.quote, limit = 30 } = {}) {
+  scanPreMove({ quote = this.config.quote, limit = 30 } = {}) {
+    const normalizedQuote=String(quote||this.config.quote).trim().toUpperCase();
+    const normalizedLimit=Math.min(50,Math.max(10,normalizeRadarLimit(limit,{...this.config,maxScanLimit:50,scanLimit:30})));
+    const key=`pre-move:${normalizedQuote}:${normalizedLimit}`;
+    return this._coalesceScan(key,()=>{
+      const previous=this._preMoveScanTails.get(normalizedQuote)||Promise.resolve();
+      const flight=previous.catch(()=>{}).then(()=>this._scanPreMove({quote:normalizedQuote,limit:normalizedLimit}));
+      const tail=flight.then(()=>undefined,()=>undefined);
+      this._preMoveScanTails.set(normalizedQuote,tail);
+      return flight.finally(()=>{
+        if(this._preMoveScanTails.get(normalizedQuote)===tail)this._preMoveScanTails.delete(normalizedQuote);
+      });
+    });
+  }
+
+  async _scanPreMove({ quote = this.config.quote, limit = 30 } = {}) {
     const startedAt=this.clock();
     const normalizedQuote=String(quote||this.config.quote).trim().toUpperCase();
     if(!/^[A-Z]{2,10}$/.test(normalizedQuote)) throw new Error('INVALID_QUOTE');

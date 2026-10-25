@@ -302,13 +302,41 @@ jobs:
           echo "RADARX_FIREBASE_CLIENT_CONFIGURED=true" >> "$GITHUB_ENV"
 
       - name: Verify DHDTech backend and Radar 8 public contract
-        timeout-minutes: 5
+        timeout-minutes: 10
         env:
           RADAR8_JSON: ${{ runner.temp }}/radar8.json
         run: |
           set -euo pipefail
           BASE="$RADARX_BACKEND_BASE_URL"
-          INFO_STATUS="$(curl --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/deployment-info.json" -w "%{http_code}" "$BASE/api/deployment-info")"
+          # Release workflows may begin before DHDTech has rolled out the just-merged
+          # backend commit. Do not exercise the market scanners against an old container.
+          INFO_STATUS="000"
+          NEW_RUNTIME_CONTRACT=false
+          for attempt in $(seq 1 36); do
+            INFO_STATUS="$(curl --location --silent --show-error --connect-timeout 8 --max-time 15 -o "$RUNNER_TEMP/deployment-info.json" -w "%{http_code}" "$BASE/api/deployment-info" || true)"
+            if [ "$INFO_STATUS" = "200" ] && node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          try {
+            const info=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/deployment-info.json','utf8'));
+            if (info.deployment_contract==='BUILD224_DHDTECH_V1' &&
+                typeof info.runtime_environment==='string' && info.runtime_environment.length>0 &&
+                typeof info.radar_autostart_enabled==='boolean' &&
+                info.staging_live_workers_require_explicit_opt_in===true) process.exit(0);
+          } catch {}
+          process.exit(1);
+          NODE
+            then
+              NEW_RUNTIME_CONTRACT=true
+              break
+            fi
+            echo "Waiting for DHDTech to roll out the current Build 224 runtime contract (attempt $attempt/36; HTTP ${INFO_STATUS:-unknown})."
+            sleep 5
+          done
+          if [ "$INFO_STATUS" = "200" ] && [ "$NEW_RUNTIME_CONTRACT" != "true" ]; then
+            echo "::error::DHDTech is still serving an older container; the current Build 224 runtime contract (runtime_environment/radar_autostart_enabled) did not appear after the rollout window."
+            cat "$RUNNER_TEMP/deployment-info.json" || true
+            exit 1
+          fi
           if [ "$INFO_STATUS" != "200" ]; then
             echo "::warning::Deployment-info returned HTTP $INFO_STATUS; probing root and independent API paths to distinguish stale container from domain/ingress routing."
             for PROBE_PATH in "/" "/healthz" "/api/radar-status" "/api/early-expansion-radar?quote=USDT&limit=1"; do
@@ -330,7 +358,11 @@ jobs:
           const info=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/deployment-info.json','utf8'));
           if(info.service!=='RADARX_BACKEND'||info.build_version!=='Build 224'||info.deployment_contract!=='BUILD224_DHDTECH_V1') throw new Error('DHDTECH_BUILD224_CONTRACT_INVALID');
           if(info.paper_trading!==true||info.real_order_execution!==false||info.confidence_score!=='UNKNOWN') throw new Error('DHDTECH_READ_ONLY_POLICY_INVALID');
-          console.log(JSON.stringify({service:info.service,build_version:info.build_version,deployment_contract:info.deployment_contract,expected_radars:info.expected_radars,runtime_environment:info.runtime_environment??'unknown',radar_autostart_enabled:info.radar_autostart_enabled??null,staging_live_workers_require_explicit_opt_in:info.staging_live_workers_require_explicit_opt_in??null,push:info.push}));
+          if(typeof info.runtime_environment!=='string'||!info.runtime_environment||typeof info.radar_autostart_enabled!=='boolean'||info.staging_live_workers_require_explicit_opt_in!==true)
+            throw new Error('DHDTECH_BACKEND_DEPLOYMENT_STALE: waiting for the current Build 224 runtime contract did not succeed');
+          if(info.radar_autostart_enabled!==true)
+            throw new Error('DHDTECH_RADAR_AUTOSTART_DISABLED: enable RADARX_RADARS_AUTOSTART=true on DHDTech only when this is the intended live production runtime; staging remains opt-in');
+          console.log(JSON.stringify({service:info.service,build_version:info.build_version,deployment_contract:info.deployment_contract,expected_radars:info.expected_radars,runtime_environment:info.runtime_environment,radar_autostart_enabled:info.radar_autostart_enabled,staging_live_workers_require_explicit_opt_in:info.staging_live_workers_require_explicit_opt_in,push:info.push}));
           NODE
           HEALTH="$(curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/healthz.json" -w "%{http_code}" "$BASE/healthz")"
           READY="$(curl --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/readyz.json" -w "%{http_code}" "$BASE/readyz")"
