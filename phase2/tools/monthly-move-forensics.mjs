@@ -7,6 +7,7 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { orderedHostIndexes } from '../core/binance-host-order.mjs';
 
 const HOSTS = ['https://data-api.binance.vision', 'https://api.binance.com'];
 const DAY = 86400000, HOUR = 3600000, M5 = 300000;
@@ -32,8 +33,8 @@ async function getJson(route, params={}) {
   const urlSuffix = qs.toString() ? '?' + qs.toString() : '';
   let last = null;
   for(let attempt=0;attempt<4;attempt++){
-    for(let off=0;off<HOSTS.length;off++){
-      const hi=(requests+attempt+off)%HOSTS.length, controller=new AbortController();
+    for(const hi of orderedHostIndexes(requests, HOSTS.length)){
+      const controller=new AbortController();
       const timer=setTimeout(()=>controller.abort(),18000);
       try{
         requests++;

@@ -19,6 +19,7 @@ const phase2=[
   'phase2/tests/historical-learning-lab.test.mjs',
   'phase2/tests/historical-learning-lab-cli.test.mjs',
   'phase2/tests/monthly-historical-replay-lab.test.mjs',
+  'phase2/tests/monthly-move-forensics-host-failover.test.mjs',
   'phase2/tests/dynamic-early-warning-gate.test.mjs',
   'phase2/tests/radar-notification-gate.test.mjs',
   'phase2/tests/radar-role-evidence.test.mjs',
