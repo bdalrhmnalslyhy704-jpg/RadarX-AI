@@ -239,7 +239,7 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
   if(hour===null||hour<(highActivityStructurePending?-0.5:earlyFlowMonitor?-0.75:0.15)||
      hour>(earlyFlowMonitor?2.5:4.5))
     return fail('ONE_HOUR_RETURN_OUT_OF_RANGE');
-  if(structure===null||(structure<(highActivityStructurePending?50:earlyFlowMonitor?55:60)))
+  if(structure===null||(structure<(highActivityStructurePending?50:earlyFlowMonitor?50:60)))
     return fail('STRUCTURE_SCORE_BELOW_MINIMUM');
   if(closeAt===null||closeAt>Number(now)+5000||Number(now)-closeAt>20*60*1000)
     return fail('CLOSED_CANDLE_STALE_OR_FUTURE');
