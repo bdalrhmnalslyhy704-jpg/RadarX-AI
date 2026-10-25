@@ -1,10 +1,189 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
+import {dirname,resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {aggregateFiveMinuteCandles, normalizeHistoricalCandles, runHistoricalReplay} from '../core/historical-replay.mjs';
-import {fetchAggregateTrades, withHistoricalRateLimitRetry} from '../tools/historical-replay.mjs';
+import {fetchAggregateTrades, withHistoricalRateLimitRetry, historicalProfileRequirements, assessHistoricalProfileCoverage, buildCandidateShadowResult, attachHistoricalMoveOutcomeAnalysis, countExpectedClosedMinuteCandles, HISTORICAL_DETECTOR_PROFILES} from '../tools/historical-replay.mjs';
+
 
 const MINUTE = 60_000;
 const ORIGIN = Math.floor((Date.now() - 400 * MINUTE) / (5 * MINUTE)) * (5 * MINUTE);
+
+test('CLI replay window count excludes the next candle that has not closed',()=>{
+  const start=Date.UTC(2024,10,6,0,0,0,0);
+  const nextOpen=Date.UTC(2024,10,6,6,0,0,0);
+  const lastClose=nextOpen-1;
+  assert.equal(countExpectedClosedMinuteCandles(start,nextOpen),360);
+  assert.equal(countExpectedClosedMinuteCandles(start,lastClose),360);
+  assert.equal(countExpectedClosedMinuteCandles(start,start),0);
+  assert.equal(countExpectedClosedMinuteCandles(start+MINUTE-1,start+MINUTE-1),1);
+  assert.throws(()=>countExpectedClosedMinuteCandles(nextOpen,start),/INVALID_CLOSED_CANDLE_WINDOW/);
+});
+
+test('historical replay passes only timeframe candles closed by the current decision timestamp',()=>{
+  const rows=candles(240);
+  const start=rows[180].openTime,end=rows[184].closeTime,observationEnd=rows[190].closeTime;
+  const benchmark=[
+    {openTime:rows[170].openTime,closeTime:rows[170].closeTime,open:1,high:1.1,low:.9,close:1.05,volume:10,closed:true},
+    {openTime:rows[190].openTime,closeTime:rows[190].closeTime,open:1,high:1.2,low:.9,close:1.1,volume:10,closed:true}
+  ];
+  const replay=runHistoricalReplay({
+    symbol:'TIMEUSDT',oneMinuteCandles:rows,aggTrades:syntheticTrades(rows),
+    startTime:start,endTime:end,outcomeEndTime:observationEnd,outcomeHorizonMs:6*MINUTE,
+    tradeCoverageComplete:true,timeframeCandles:{'15m':benchmark},
+    evaluate(input){
+      assert.ok(Object.values(input.timeframes).flat().every(c=>c.closeTime<=input.now),
+        'future closed candles must be filtered before an evaluator receives the snapshot');
+      return {accepted:false,reason_codes:['TIMEFRAME_SNAPSHOT_CHECK']};
+    }
+  });
+  assert.ok(replay.steps.length>0);
+  assert.ok(replay.steps.every(row=>row.input_max_candle_close_at<=row.timestamp));
+});
+
+test('replay coverage counts closed candles correctly when end is the next candle open boundary',()=>{
+  const rows=candles(260);
+  const start=rows[180].openTime;
+  const end=rows[186].openTime;
+  const replay=runHistoricalReplay({
+    symbol:'BOUNDARYUSDT',
+    oneMinuteCandles:rows,
+    aggTrades:syntheticTrades(rows),
+    startTime:start,
+    endTime:end,
+    outcomeHorizonMs:0,
+    tradeCoverageComplete:true,
+    evaluate(){return {accepted:false,reason_codes:['BOUNDARY_COVERAGE_TEST']};}
+  });
+  assert.equal(replay.steps.length,6);
+  assert.equal(replay.data_quality.window_candles_expected,6);
+  assert.equal(replay.data_quality.window_candles_observed,6);
+  assert.equal(replay.data_quality.candle_fetch_complete,true,
+    'a fully contiguous six-candle window must not fail by expecting the excluded next candle');
+});
+
+test('historical replay lists every canonical radar without network access',()=>{
+  const script=resolve(dirname(fileURLToPath(import.meta.url)),'../tools/historical-replay.mjs');
+  const run=spawnSync(process.execPath,[script,'--list-profiles'],{encoding:'utf8',timeout:10_000});
+  assert.equal(run.status,0,run.stderr||run.stdout);
+  const report=JSON.parse(run.stdout);
+  assert.equal(report.profiles.length,12);
+  assert.deepEqual(report.profiles.map(x=>x.profile),HISTORICAL_DETECTOR_PROFILES);
+  assert.equal(new Set(report.profiles.map(x=>x.profile)).size,12);
+  assert.ok(report.profiles.every(x=>x.required_history&&x.required_history.base&&x.required_history.frames));
+  const professor=report.profiles.find(x=>x.profile==='PROFESSOR_RADAR');
+  assert.equal(professor.mode,'EXTERNAL_FEED_ARCHIVE_REQUIRED');
+  assert.ok(professor.external_evidence_required.includes('PROFESSOR_NEWS_ARCHIVE'));
+  assert.equal(report.policy.network_access,false);
+});
+
+test('replay refuses to score Professor without historical news and stream archives',()=>{
+  const requirements=historicalProfileRequirements('PROFESSOR_RADAR');
+  const baseRows=Array.from({length:120},()=>({}));
+  const fiveRows=Array.from({length:60},()=>({}));
+  const failures=assessHistoricalProfileCoverage('PROFESSOR_RADAR',{
+    oneMinute:baseRows,fiveMinute:fiveRows,timeframes:{},dataPolicy:{tradeCoverageComplete:true}
+  },{});
+  assert.ok(failures.includes('HISTORICAL_EXTERNAL_EVIDENCE_UNAVAILABLE:PROFESSOR_NEWS_ARCHIVE'));
+  assert.ok(failures.includes('HISTORICAL_EXTERNAL_EVIDENCE_UNAVAILABLE:PROFESSOR_STREAM_TRANSCRIPT_ARCHIVE'));
+  assert.deepEqual(requirements.frames,{});
+});
+
+test('Whale replay requires complete aggregate-trade coverage and never assumes book history exists',()=>{
+  const requirements=historicalProfileRequirements('WHALE_ACCUMULATION_RADAR');
+  const baseRows=Array.from({length:120},()=>({}));
+  const fiveRows=Array.from({length:60},()=>({}));
+  const base={oneMinute:baseRows,fiveMinute:fiveRows,timeframes:{},dataPolicy:{tradeCoverageComplete:false}};
+  const failures=assessHistoricalProfileCoverage('WHALE_ACCUMULATION_RADAR',base,{});
+  assert.ok(failures.includes('HISTORICAL_AGG_TRADE_COVERAGE_INCOMPLETE'));
+  assert.ok(requirements.unavailableEvidence.includes('HISTORICAL_ORDERBOOK_UNAVAILABLE'));
+  const complete=assessHistoricalProfileCoverage('WHALE_ACCUMULATION_RADAR',{
+    ...base,dataPolicy:{tradeCoverageComplete:true}
+  },{});
+  assert.ok(!complete.includes('HISTORICAL_AGG_TRADE_COVERAGE_INCOMPLETE'));
+});
+
+test('historical report attachment includes measured early/missed move outcome analysis',()=>{
+  const replay={
+    symbol:'TESTUSDT',
+    data_quality:{
+      candle_fetch_complete:true,replay_mode:'CANDLE_ONLY_FALLBACK',
+      trade_coverage_complete:false,synthetic_data_used:false
+    },
+    summary:{replay_steps:0,accepted:0,rejected:0},
+    steps:[]
+  };
+  const attached=attachHistoricalMoveOutcomeAnalysis(replay);
+  assert.equal(attached.evaluation.version,'RADARX_MOVE_OUTCOME_ANALYSIS_V1');
+  assert.equal(attached.evaluation.symbol,'TESTUSDT');
+  assert.equal(attached.evaluation.candidate_detection.mode,'CANDIDATE_SHADOW_NOT_NOTIFICATION');
+  assert.equal(attached.evaluation.observation.accepted,0);
+  assert.equal(attached.evaluation.observation.trade_coverage_complete,false);
+});
+
+test('historical replay CLI profile dry-run performs no network access and identifies candle-only shadow limitations',()=>{
+  const script=resolve(dirname(fileURLToPath(import.meta.url)),'../tools/historical-replay.mjs');
+  const run=spawnSync(process.execPath,[script,'--dry-run','--detector-profile','RADAR8_PREMOVE_SHADOW','--symbols','GTCUSDT'],{encoding:'utf8',timeout:10_000});
+  assert.equal(run.status,0,run.stderr||run.stdout);
+  const report=JSON.parse(run.stdout);
+  assert.equal(report.status,'DRY_RUN_NO_NETWORK');
+  assert.equal(report.detector.profile,'RADAR8_PREMOVE_SHADOW');
+  assert.equal(report.detector.mode,'PRE_MOVE_CANDLE_ONLY_SHADOW');
+  assert.equal(report.detector.historical_book_required,true);
+  assert.equal(report.detector.required_history.frames['4h'],220);
+  assert.equal(report.detector.required_history.frames['BTCUSDT:5m'],60);
+  assert.equal(report.policy.real_order_execution,false);
+});
+
+test('historical candidate shadow never counts as an alert acceptance',()=>{
+  const result=buildCandidateShadowResult('RADAR8_PREMOVE_SHADOW',{
+    eligible:true,stage:'PRE_EXPANSION',data_quality:92,closed_candles_only:true,
+    reason_codes:['BUY_FLOW_TRANSITION_CONFIRMED'],risk_flags:[]
+  },{symbol:'TESTUSDT',now:1_700_000_000_000,ticker:{quoteVolume24h:9000000,priceChange24h:1.4}},{
+    eligible:true,score:84,stage:'PRE_EXPANSION',
+    reasonCodes:['BUY_FLOW_TRANSITION_CONFIRMED'],
+    extraGateFailures:['HISTORICAL_ORDERBOOK_UNAVAILABLE','LIVE_PUSH_GATE_NOT_SIMULATED']
+  });
+  assert.equal(result.accepted,false);
+  assert.equal(result.candidate_detected,true);
+  assert.equal(result.candidate_eligible,true);
+  assert.equal(result.candidate_mode,'RADAR8_PREMOVE_SHADOW_CANDIDATE_SHADOW');
+  assert.ok(result.candidate_reasons.includes('HISTORICAL_CANDIDATE_DETECTED'));
+  assert.ok(result.notification_gate.failures.includes('HISTORICAL_ORDERBOOK_UNAVAILABLE'));
+  assert.equal(result.shadow_evaluation.live_notification_simulated,false);
+});
+
+test('historical detector profiles fail closed when required closed timeframe coverage is missing',()=>{
+  const profile='RADAR8_PREMOVE_SHADOW';
+  const requirements=historicalProfileRequirements(profile,{
+    earlyExpansionRadar:{fifteenMinuteKlines:160,oneHourKlines:260,fourHourKlines:220}
+  });
+  assert.deepEqual(requirements.frames,{'15m':160,'1h':260,'4h':220,'BTCUSDT:5m':60});
+  const coverage=Object.fromEntries(Object.entries(requirements.frames).map(([key,bars])=>[
+    key,{complete:true,rows:bars,interval:key.includes(':')?'5m':key}
+  ]));
+  const input={
+    oneMinute:Array.from({length:50},()=>({closed:true})),
+    fiveMinute:Array.from({length:12},()=>({closed:true})),
+    timeframes:Object.fromEntries(Object.entries(requirements.frames).map(([key,bars])=>[
+      key,Array.from({length:bars},()=>({closed:true}))
+    ]))
+  };
+  assert.deepEqual(assessHistoricalProfileCoverage(profile,input,coverage,{
+    earlyExpansionRadar:{fifteenMinuteKlines:160,oneHourKlines:260,fourHourKlines:220}
+  }),[]);
+  const missing={...coverage,'4h':{...coverage['4h'],complete:false}};
+  const blocked=assessHistoricalProfileCoverage(profile,input,missing,{
+    earlyExpansionRadar:{fifteenMinuteKlines:160,oneHourKlines:260,fourHourKlines:220}
+  });
+  assert.ok(blocked.includes('HISTORICAL_TIMEFRAME_COVERAGE_INCOMPLETE:4h'));
+  const thinInput={...input,timeframes:{...input.timeframes,'BTCUSDT:5m':input.timeframes['BTCUSDT:5m'].slice(1)}};
+  const thin=assessHistoricalProfileCoverage(profile,thinInput,coverage,{
+    earlyExpansionRadar:{fifteenMinuteKlines:160,oneHourKlines:260,fourHourKlines:220}
+  });
+  assert.ok(thin.includes('HISTORICAL_TIMEFRAME_ROWS_BELOW_MINIMUM:BTCUSDT:5m'));
+});
 
 test('historical public-data replay retries a bounded 429 cooldown without synthesizing data', async () => {
   let calls=0;
@@ -110,6 +289,11 @@ test('replay never passes future candles or unfinished 3-second trade windows to
   assert.ok(replay.steps.every(x => x.reason_codes.includes('TEST_REJECT')));
   assert.ok(replay.steps.every(x => x.input_max_candle_close_at <= x.timestamp));
   assert.equal(replay.steps[0].outcome.is_future_data_for_scoring, false);
+  assert.equal(replay.data_quality.candle_fetch_complete,true);
+  assert.equal(replay.data_quality.window_candles_expected,replay.data_quality.window_candles_observed);
+  assert.equal(replay.evaluation.version,'RADARX_MOVE_OUTCOME_ANALYSIS_V1');
+  assert.equal(replay.evaluation.observation.candle_coverage_complete,true);
+  assert.equal(replay.evaluation.policy.real_order_execution,false);
 });
 
 test('replay applies alert cooldown deterministically per symbol', () => {
@@ -126,6 +310,74 @@ test('replay applies alert cooldown deterministically per symbol', () => {
   assert.equal(replay.steps[2].decision, 'ACCEPTED');
 });
 
+test('historical candidate telemetry counts one continuous setup as one episode', () => {
+  const rows = candles(260);
+  const replay = runHistoricalReplay({
+    symbol: 'WUSDT',
+    oneMinuteCandles: rows,
+    aggTrades: syntheticTrades(rows),
+    startTime: rows[180].openTime,
+    endTime: rows[186].closeTime,
+    tradeCoverageComplete: true,
+    candidateCooldownMs: 3 * MINUTE,
+    candidateResetMs: 2 * MINUTE,
+    evaluate() {
+      return {
+        accepted: false,
+        candidate_detected: true,
+        candidate_mode: 'TEST_CANDIDATE_SHADOW',
+        candidate_reasons: ['CANDIDATE_TEST'],
+        reason_codes: ['STRICT_GATE_BLOCKED']
+      };
+    }
+  });
+  assert.equal(replay.steps.length, 7);
+  assert.equal(replay.summary.accepted, 0, 'candidate shadow must never become an accepted alert');
+  assert.equal(replay.summary.candidate_raw_detections, 7);
+  assert.equal(replay.summary.candidate_detections, 1);
+  assert.equal(replay.summary.candidate_shadow_detections, 1);
+  assert.equal(replay.summary.candidate_suppressed_by_cooldown, 0,
+    'continuous true observations are duplicates within the active episode, not cooldown-rejected new episodes');
+  assert.equal(replay.summary.candidate_duplicate_observations, 6);
+  const duplicates = replay.steps.filter(row => row.candidate_duplicate_observation);
+  assert.equal(duplicates.length, 6);
+  assert.ok(duplicates.every(row => row.candidate_detected === false &&
+    row.candidate_raw_detected === true &&
+    row.candidate_reasons.includes('CANDIDATE_EPISODE_ALREADY_ACTIVE')));
+  assert.deepEqual(replay.steps.filter(row => row.candidate_detected).map(row => row.timestamp), [
+    replay.steps[0].timestamp
+  ]);
+});
+
+test('a candidate episode resets only after a sustained absence and respects episode cooldown', () => {
+  const rows = candles(280);
+  const flags = [
+    true, true, true, false, false, false, true, true, true, false, false, false, true
+  ];
+  let i = 0;
+  const replay = runHistoricalReplay({
+    symbol: 'EPISODEUSDT',
+    oneMinuteCandles: rows,
+    aggTrades: syntheticTrades(rows),
+    startTime: rows[180].openTime,
+    endTime: rows[192].closeTime,
+    tradeCoverageComplete: true,
+    candidateCooldownMs: 8 * MINUTE,
+    candidateResetMs: 2 * MINUTE,
+    evaluate() {
+      const candidate_detected = flags[i++] === true;
+      return {accepted:false,candidate_detected,reason_codes:['TEST_EPISODE_RESET']};
+    }
+  });
+  assert.equal(replay.summary.candidate_raw_detections,7);
+  assert.equal(replay.summary.candidate_detections,2);
+  assert.equal(replay.summary.candidate_duplicate_observations,4);
+  assert.equal(replay.summary.candidate_suppressed_by_cooldown,1);
+  assert.deepEqual(replay.steps.filter(row => row.candidate_detected).map(row=>row.timestamp),[
+    replay.steps[0].timestamp,replay.steps[12].timestamp
+  ]);
+});
+
 test('incomplete aggregate-trade coverage fails closed without scoring', () => {
   const rows = candles(250);
   let called = false;
@@ -137,6 +389,9 @@ test('incomplete aggregate-trade coverage fails closed without scoring', () => {
   assert.equal(called, false);
   assert.equal(replay.summary.premove_50_status, 'TRADE_COVERAGE_INCOMPLETE');
   assert.equal(replay.summary.first_actual_window_50pct_at, null);
+  assert.equal(replay.data_quality.replay_mode,'BLOCKED_INCOMPLETE');
+  assert.equal(replay.evaluation.observation.candle_coverage_complete,false);
+  assert.equal(replay.evaluation.moderate_move.classification,'INCOMPLETE_MARKET_DATA');
   assert.ok(replay.steps.length > 0);
   assert.ok(replay.steps.every(x => x.decision === 'REJECTED' &&
     x.reason_codes.includes('AGG_TRADES_HISTORY_INCOMPLETE')));
