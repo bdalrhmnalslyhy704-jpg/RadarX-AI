@@ -28,7 +28,7 @@ function parseBoolean(value) {
 
 export function parseBinanceSpotAggTradeArchiveLine(line) {
   const fields = String(line ?? '').trim().split(',');
-  if (fields.length < 7) return null;
+  if (fields.length !== 8) return null;
   const a = Number(fields[0]);
   const p = String(fields[1] ?? '').trim();
   const q = String(fields[2] ?? '').trim();
@@ -42,7 +42,7 @@ export function parseBinanceSpotAggTradeArchiveLine(line) {
       !Number.isFinite(Number(q)) || Number(q) <= 0 ||
       !Number.isSafeInteger(f) || f < 0 ||
       !Number.isSafeInteger(l) || l < f ||
-      T === null || m === null) return null;
+      T === null || m === null || M === null) return null;
   return {a, p, q, f, l, T, m, M};
 }
 
@@ -164,10 +164,13 @@ async function readTradesFromArchive(archivePath, startTime, endTime, maxTrades)
   const closed = new Promise(resolve => child.once('close', resolve));
   const trades = [];
   let totalMatching = 0;
+  let invalidRows = 0;
   let pending = '';
   const visitLine = line => {
+    if (!String(line ?? '').trim()) return;
     const trade = parseBinanceSpotAggTradeArchiveLine(line);
-    if (!trade || trade.T < startTime || trade.T > endTime) return;
+    if (!trade) { invalidRows++; return; }
+    if (trade.T < startTime || trade.T > endTime) return;
     totalMatching++;
     if (trades.length < maxTrades) trades.push(trade);
   };
@@ -190,7 +193,7 @@ async function readTradesFromArchive(archivePath, startTime, endTime, maxTrades)
   const exitCode = await closed;
   if (spawnError) throw spawnError;
   if (exitCode !== 0) throw new Error('BINANCE_ARCHIVE_UNZIP_FAILED:' + stderr.slice(-500));
-  return {trades, totalMatching, limitReached: totalMatching > maxTrades};
+  return {trades, totalMatching, invalidRows, limitReached: totalMatching > maxTrades};
 }
 
 function cacheKey(symbol, startTime, endTime, maxTrades) {
@@ -275,6 +278,14 @@ export async function fetchBinanceSpotAggTradesArchive(symbol, startTime, endTim
     const dayEnd = dayStart + DAY_MS - 1;
     const parsed = await readTradesFromArchive(archive.path, Math.max(start, dayStart), Math.min(end, dayEnd), cap);
     matchingRows += parsed.totalMatching;
+    if (parsed.invalidRows > 0) {
+      return {trades: [], complete: false, coverage: {
+        source: 'BINANCE_DATA_VISION_SPOT_AGGTRADES', reason: 'ARCHIVE_ROW_PARSE_FAILURE',
+        requested_start_time: start, requested_end_time: end, invalid_archive_rows: parsed.invalidRows,
+        archives_verified: archiveFiles.length, checksum_verified: true,
+        archive_files: archiveFiles.map(({path, ...item}) => item)
+      }};
+    }
     for (const trade of parsed.trades) {
       if (!tradesById.has(trade.a)) tradesById.set(trade.a, trade);
       if (tradesById.size >= cap) break;
@@ -297,6 +308,7 @@ export async function fetchBinanceSpotAggTradesArchive(symbol, startTime, endTim
     await writeFile(temporaryTradesPath, trades.map(trade => JSON.stringify(trade)).join('\n') + (trades.length ? '\n' : ''), 'utf8');
     const coverage = {
       source: 'BINANCE_DATA_VISION_SPOT_AGGTRADES', complete: true, rows: trades.length,
+      trades_sha256: createHash('sha256').update(serializedTrades).digest('hex'),
       requested_start_time: start, requested_end_time: end,
       first_trade_time: trades[0]?.T ?? null, last_trade_time: trades.at(-1)?.T ?? null,
       archives_verified: archiveFiles.length, checksum_verified: true,
