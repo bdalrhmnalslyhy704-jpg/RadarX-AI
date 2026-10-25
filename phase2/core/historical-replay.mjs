@@ -1,3 +1,5 @@
+import {buildMoveOutcomeAnalysis} from './move-outcome-analysis.mjs';
+
 const MINUTE_MS = 60_000;
 const FIVE_MINUTES_MS = 5 * MINUTE_MS;
 
@@ -154,8 +156,9 @@ function stageFrom(result) {
 export function runHistoricalReplay({
   symbol, oneMinuteCandles, aggTrades = [], startTime, endTime, evaluate,
   tradeCoverageComplete = false, tradeCoverage = null, allowCandleOnlyFallback = false,
-  alertCooldownMs = 12 * 60 * 1000, outcomeHorizonMs = 24 * 60 * 60 * 1000,
-  outcomeEndTime = null
+  alertCooldownMs = 12 * 60 * 1000, candidateCooldownMs = 12 * 60 * 1000,
+  candidateResetMs = 5 * 60 * 1000,
+  outcomeHorizonMs = 24 * 60 * 60 * 1000, outcomeEndTime = null, timeframeCandles = {}
 } = {}) {
   const start = finite(startTime), end = finite(endTime);
   if (!/^[A-Z0-9]{5,20}$/.test(String(symbol ?? "").toUpperCase())) throw new Error("INVALID_SYMBOL");
@@ -173,11 +176,25 @@ export function runHistoricalReplay({
   const trades = normalizeTrades(aggTrades, observationEnd);
   // Missing aggregate-trade history must remain explicitly partial. In the opt-in
   // fallback mode, evaluate only verified closed candles and never substitute fake trades.
-  const candleOnlyFallback = !tradeCoverageComplete && allowCandleOnlyFallback === true && candles.length > 0;
   const activeIndices = [];
   for (let i = 0; i < candles.length; i++) {
     if (candles[i].closeTime >= start && candles[i].closeTime <= end) activeIndices.push(i);
   }
+  // The evaluator consumes candles by closeTime, while CLI boundaries may be
+  // either candle closes (:59.999) or the next candle's open (:00.000).
+  // Count actual one-minute close timestamps inside the inclusive [start,end]
+  // interval so an open-boundary end does not falsely require one extra candle.
+  const firstExpectedClose=Math.ceil((start+1)/MINUTE_MS)*MINUTE_MS-1;
+  const lastExpectedClose=Math.floor((end+1)/MINUTE_MS)*MINUTE_MS-1;
+  const windowCandlesExpected=lastExpectedClose<firstExpectedClose?0:
+    Math.floor((lastExpectedClose-firstExpectedClose)/MINUTE_MS)+1;
+  const windowCandlesObserved=activeIndices.length;
+  const windowCandlesContiguous=activeIndices.length>0&&activeIndices.every((index,position)=>{
+    if(position===0)return true;
+    return candles[index].openTime===candles[activeIndices[position-1]].openTime+MINUTE_MS;
+  });
+  const windowCandlesComplete=windowCandlesExpected>0&&windowCandlesObserved>=windowCandlesExpected&&windowCandlesContiguous;
+  const candleOnlyFallback = !tradeCoverageComplete && allowCandleOnlyFallback === true && windowCandlesComplete;
   const windowStartRow = candles.find(x => x.openTime >= start && x.closeTime <= end) ?? null;
   const windowBaseline = finite(windowStartRow?.open);
   const actual50CandleCloseAt = windowBaseline === null ? null : candles.find(x =>
@@ -212,6 +229,18 @@ export function runHistoricalReplay({
   const horizon = Math.max(0, finite(outcomeHorizonMs) ?? 0);
   const rows = [];
   let priorAcceptedAt = -Infinity;
+  let priorCandidateAt = -Infinity;
+  let candidateCooldownBlockedCount = 0;
+  let candidateDuplicateObservationCount = 0;
+  let candidateEpisodeActive = false;
+  let candidateFalseSince = null;
+  let priorCoreTriggerCandidateAt = -Infinity;
+  let coreTriggerCandidateCooldownBlockedCount = 0;
+  let coreTriggerCandidateDuplicateObservationCount = 0;
+  let coreTriggerCandidateEpisodeActive = false;
+  let coreTriggerCandidateFalseSince = null;
+  const candidateCooldown = Math.max(0, finite(candidateCooldownMs) ?? cooldown);
+  const candidateReset = Math.max(0, finite(candidateResetMs) ?? 5 * MINUTE_MS);
   let fiveIndex = 0;
   let tradeIndex = 0;
   let acceptedCount = 0, rejectedCount = 0;
@@ -238,9 +267,13 @@ export function runHistoricalReplay({
       failure = "AGG_TRADES_HISTORY_INCOMPLETE";
     } else {
       try {
+        const timeframes=Object.fromEntries(Object.entries(timeframeCandles&&typeof timeframeCandles==='object'?timeframeCandles:{})
+          .map(([key,series])=>[key,normalizeHistoricalCandles(Array.isArray(series)?series:[],{endTime:at})
+            .filter(row=>row.closed===true&&row.closeTime<=at)]));
         raw = awaitlessEvaluate(evaluate, {
           symbol: sym, now: at, oneMinute: available1m, fiveMinute: fiveEnd,
           ticker, aggTrades: tradeCoverageComplete ? tradeWindow : [], currentCandle: candle,
+          timeframes,
           source: "BINANCE_PUBLIC_HISTORICAL_REPLAY",
           dataPolicy: {
             closedCandlesOnly: true, allowFutureData: false, currentCloseTime: at,
@@ -264,6 +297,59 @@ export function runHistoricalReplay({
     }
     if (accepted) { priorAcceptedAt = at; acceptedCount++; }
     else rejectedCount++;
+
+    // Candidate telemetry counts setup episodes, not periodic refreshes. A setup
+    // must be absent for candidateResetMs before a later true can begin a new
+    // episode; candidateCooldownMs additionally prevents rapid re-entry after one.
+    const rawCandidateDetected = raw?.candidate_detected === true;
+    let candidateCooldownBlocked = false;
+    let candidateDuplicateObservation = false;
+    let candidateDetected = false;
+    if (rawCandidateDetected) {
+      candidateFalseSince = null;
+      if (candidateEpisodeActive) {
+        candidateDuplicateObservation = true;
+        candidateDuplicateObservationCount++;
+      } else if (at - priorCandidateAt < candidateCooldown) {
+        candidateCooldownBlocked = true;
+        candidateCooldownBlockedCount++;
+      } else {
+        candidateDetected = true;
+        priorCandidateAt = at;
+      }
+      candidateEpisodeActive = true;
+    } else if (candidateEpisodeActive) {
+      if (candidateFalseSince === null) candidateFalseSince = at;
+      if (at - candidateFalseSince >= candidateReset) {
+        candidateEpisodeActive = false;
+        candidateFalseSince = null;
+      }
+    }
+
+    const rawCoreTriggerCandidateDetected=raw?.core_trigger_candidate_detected===true;
+    let coreTriggerCandidateCooldownBlocked=false;
+    let coreTriggerCandidateDuplicateObservation=false;
+    let coreTriggerCandidateDetected=false;
+    if(rawCoreTriggerCandidateDetected){
+      coreTriggerCandidateFalseSince=null;
+      if(coreTriggerCandidateEpisodeActive){
+        coreTriggerCandidateDuplicateObservation=true;
+        coreTriggerCandidateDuplicateObservationCount++;
+      }else if(at-priorCoreTriggerCandidateAt<candidateCooldown){
+        coreTriggerCandidateCooldownBlocked=true;
+        coreTriggerCandidateCooldownBlockedCount++;
+      }else{
+        coreTriggerCandidateDetected=true;
+        priorCoreTriggerCandidateAt=at;
+      }
+      coreTriggerCandidateEpisodeActive=true;
+    }else if(coreTriggerCandidateEpisodeActive){
+      if(coreTriggerCandidateFalseSince===null)coreTriggerCandidateFalseSince=at;
+      if(at-coreTriggerCandidateFalseSince>=candidateReset){
+        coreTriggerCandidateEpisodeActive=false;
+        coreTriggerCandidateFalseSince=null;
+      }
+    }
 
     // Outcome-only fields are calculated separately, after evaluate() has finished.
     const horizonEndAt = at + horizon;
@@ -301,6 +387,22 @@ export function runHistoricalReplay({
       core_trigger_diagnostics: strong?.trigger_diagnostics ?? null,
       decision: accepted ? "ACCEPTED" : "REJECTED",
       accepted_mode:String(raw?.accepted_mode ?? alert?.notification_mode ?? (accepted ? "STRICT" : "NONE")),
+      candidate_detected:candidateDetected,
+      candidate_raw_detected:rawCandidateDetected,
+      candidate_suppressed_by_cooldown:candidateCooldownBlocked,
+      candidate_duplicate_observation:candidateDuplicateObservation,
+      candidate_mode:String(raw?.candidate_mode??'NONE'),
+      candidate_reasons:[...(Array.isArray(raw?.candidate_reasons)?raw.candidate_reasons:[]),
+        ...(candidateCooldownBlocked?['CANDIDATE_EPISODE_COOLDOWN']:[]),
+        ...(candidateDuplicateObservation?['CANDIDATE_EPISODE_ALREADY_ACTIVE']:[])].slice(0,24),
+      core_trigger_candidate_detected:coreTriggerCandidateDetected,
+      core_trigger_candidate_raw_detected:rawCoreTriggerCandidateDetected,
+      core_trigger_candidate_suppressed_by_cooldown:coreTriggerCandidateCooldownBlocked,
+      core_trigger_candidate_duplicate_observation:coreTriggerCandidateDuplicateObservation,
+      core_trigger_candidate_mode:String(raw?.core_trigger_candidate_mode??'NONE'),
+      core_trigger_candidate_reasons:[...(Array.isArray(raw?.core_trigger_candidate_reasons)?raw.core_trigger_candidate_reasons:[]),
+        ...(coreTriggerCandidateCooldownBlocked?['CORE_TRIGGER_CANDIDATE_EPISODE_COOLDOWN']:[]),
+        ...(coreTriggerCandidateDuplicateObservation?['CORE_TRIGGER_CANDIDATE_EPISODE_ALREADY_ACTIVE']:[])].slice(0,24),
       replay_data_mode:tradeCoverageComplete?'FULL_TRADE':(candleOnlyFallback?'CANDLE_ONLY_FALLBACK':'BLOCKED_INCOMPLETE'),
       rejection_group: rejectionGroup, reason_codes: reasons,
       strict_gate_failures:Array.isArray(raw?.strict_gate_failures)?raw.strict_gate_failures.slice(0,20):[],
@@ -315,6 +417,7 @@ export function runHistoricalReplay({
         eligible: typeof elite?.eligible === "boolean" ? elite.eligible : null,
         score: finite(elite?.score), confirmations: finite(elite?.confirmations),
         category_hits: finite(elite?.category_hits),
+        failures:Array.isArray(elite?.failures)?elite.failures.slice(0,20):[],
         risk_flags: Array.isArray(elite?.risk_flags) ? elite.risk_flags.slice(0, 16) : []
       },
       notification_gate: {
@@ -324,18 +427,49 @@ export function runHistoricalReplay({
       signal_metrics: {
         return_1m_pct: finite(metrics?.return_1m),
         return_3m_pct: finite(metrics?.return_3m),
+        return_5m_pct: finite(metrics?.return_5m),
+        return_10m_pct: finite(metrics?.return_10m),
+        return_15m_pct: finite(metrics?.return_15m),
+        return_20m_pct: finite(metrics?.return_20m),
         acceleration: finite(metrics?.acceleration),
         volume_ratio: finite(metrics?.volume_ratio),
         trade_ratio: finite(metrics?.trade_ratio),
         taker_buy_ratio_1m_3m: finite(metrics?.taker_buy_ratio),
         taker_buy_ratio_3s: finite(metrics?.three_second_taker_buy_ratio),
+        taker_buy_delta: finite(metrics?.taker_buy_delta),
         taker_buy_pressure_confirmed: typeof metrics?.taker_buy_pressure_confirmed === "boolean" ? metrics.taker_buy_pressure_confirmed : null,
         independent_confirmations: finite(metrics?.independent_confirmations),
         flash_score: finite(metrics?.flash_score),
         flash_confirmations: finite(metrics?.flash_confirmations),
         liquidity_acceleration_3m: finite(metrics?.liquidity_acceleration?.three_minute_acceleration),
         liquidity_acceleration_score: finite(metrics?.liquidity_acceleration?.score),
-        breakout_up: typeof metrics?.breakout_up === "boolean" ? metrics.breakout_up : null
+        range_ratio: finite(metrics?.range_ratio),
+        bb_width: finite(metrics?.bb_width),
+        bb_expansion_ratio: finite(metrics?.bb_expansion_ratio),
+        atr_ratio: finite(metrics?.atr_ratio),
+        efficiency_ratio: finite(metrics?.efficiency_ratio),
+        vwap_distance_pct: finite(metrics?.vwap_distance_pct),
+        five_min_trend: finite(metrics?.five_min_trend),
+        breakout_distance_up_pct: finite(metrics?.breakout_distance_up_pct),
+        micro_breakout: typeof metrics?.micro_breakout === "boolean" ? metrics.micro_breakout : null,
+        breakout_up: typeof metrics?.breakout_up === "boolean" ? metrics.breakout_up : null,
+        component_scores: Object.fromEntries(['velocity','volume','trades','taker','range','flash','breakout','ema','vwap','bollinger','efficiency','atr']
+          .map(key=>[key,finite((strong?.component_scores||alert?.component_scores)?.[key])]))
+      },
+      market_evidence: {
+        data_quality:finite(alert?.data_quality ?? strong?.data_quality),
+        liquidity_quality:finite(alert?.liquidity_quality ?? strong?.liquidity_quality),
+        spread_bps:finite(alert?.spread_bps ?? alert?.liquidity_metrics?.spread_bps ?? metrics?.spread_bps),
+        quote_volume_24h:finite(ticker.quoteVolume24h ?? alert?.quote_volume_24h),
+        relative_strength_vs_market_pct:finite(alert?.pre_move_context?.relative_strength_vs_market_pct ??
+          alert?.pre_expansion_fingerprint?.relative_strength_vs_market_pct ?? metrics?.relative_strength_vs_market_pct),
+        relative_strength_vs_btc_pct:finite(alert?.pre_move_context?.relative_strength_vs_btc_pct ??
+          alert?.pre_expansion_fingerprint?.relative_strength_vs_btc_pct ?? metrics?.relative_strength_vs_btc_pct),
+        volatility_compression_score:finite(alert?.pre_expansion_fingerprint?.compression_score ??
+          alert?.pre_expansion_fingerprint?.compression ?? metrics?.compression_score),
+        pre_expansion_stage:alert?.pre_expansion_stage ?? alert?.pre_expansion_fingerprint?.stage ?? null,
+        source_data_stale:alert?.data_stale===true || alert?.data_status?.data_stale===true,
+        closed_candles_only:alert?.closed_candles_only===true || strong?.closed_candles_only===true
       },
       observed_price_change_24h_pct: finite(ticker.priceChange24h),
       liquidity_acceleration: finite(raw?.liquidity_acceleration ??
@@ -400,15 +534,19 @@ export function runHistoricalReplay({
             : firstCoreTriggerAt!==null
               ? "CORE_TRIGGER_AFTER_PLUS_50_PERCENT"
               : "NO_CORE_TRIGGER_BEFORE_PLUS_50_PERCENT";
-  return {
+  const replay = {
     engine: "RADARX_HISTORICAL_REPLAY_V1",
     symbol: sym,
     range: {start_time: start, start_time_iso: new Date(start).toISOString(), end_time: end, end_time_iso: new Date(end).toISOString()},
     data_quality: {
       source: "BINANCE_PUBLIC_REST", real_market_data_required: true, synthetic_data_used: false,
-      replay_mode: tradeCoverageComplete ? "FULL_TRADE" : (candleOnlyFallback ? "CANDLE_ONLY_FALLBACK" : "BLOCKED_INCOMPLETE"),
+      replay_mode: !windowCandlesComplete ? "BLOCKED_INCOMPLETE" :
+        (tradeCoverageComplete ? "FULL_TRADE" : (candleOnlyFallback ? "CANDLE_ONLY_FALLBACK" : "BLOCKED_INCOMPLETE")),
       candle_only_fallback_used: Boolean(candleOnlyFallback),
       closed_1m_candles: candles.length, complete_5m_candles: five.length,
+      window_candles_expected:windowCandlesExpected,window_candles_observed:windowCandlesObserved,
+      candle_fetch_complete:windowCandlesComplete,
+      outcome_candle_fetch_complete:observationEnd>=end+horizon&&rows.length>0&&rows.every(x=>x.outcome?.horizon_observed===true),
       aggregate_trades: tradeCoverageComplete ? trades.length : 0, trade_coverage_complete: Boolean(tradeCoverageComplete),
       target_crossing_timestamp_source: targetCrossingSource,
       target_crossing_alignment: {plus_50:actual50Alignment,plus_70:actual70Alignment},
@@ -418,6 +556,18 @@ export function runHistoricalReplay({
     },
     summary: {
       replay_steps: rows.length, accepted: acceptedCount, rejected: rejectedCount,
+      candidate_raw_detections:rows.filter(x=>x.candidate_raw_detected===true).length,
+      candidate_detections:rows.filter(x=>x.candidate_detected===true).length,
+      candidate_shadow_detections:rows.filter(x=>x.candidate_detected===true&&x.decision!=='ACCEPTED').length,
+      candidate_suppressed_by_cooldown:candidateCooldownBlockedCount,
+      candidate_duplicate_observations:candidateDuplicateObservationCount,
+      candidate_cooldown_ms:candidateCooldown,
+      candidate_reset_ms:candidateReset,
+      core_trigger_candidate_raw_detections:rows.filter(x=>x.core_trigger_candidate_raw_detected===true).length,
+      core_trigger_candidate_detections:rows.filter(x=>x.core_trigger_candidate_detected===true).length,
+      core_trigger_candidate_shadow_detections:rows.filter(x=>x.core_trigger_candidate_detected===true&&x.decision!=='ACCEPTED').length,
+      core_trigger_candidate_suppressed_by_cooldown:coreTriggerCandidateCooldownBlockedCount,
+      core_trigger_candidate_duplicate_observations:coreTriggerCandidateDuplicateObservationCount,
       premove_50_status: premove50Status,
       first_accepted_at: firstAcceptedAt,
       first_early_warning_accepted_at:firstEarlyWarningAcceptedAt,
@@ -454,6 +604,8 @@ export function runHistoricalReplay({
     steps: rows,
     policy: {market: "SPOT", paper_trading: true, real_order_execution: false, confidence_score: "UNKNOWN"}
   };
+  replay.evaluation = buildMoveOutcomeAnalysis(replay);
+  return replay;
 }
 function awaitlessEvaluate(evaluate, input) {
   const result = evaluate(input);
