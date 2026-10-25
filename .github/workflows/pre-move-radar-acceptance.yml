@@ -103,13 +103,32 @@ jobs:
           NODE
 
       - name: Verify one live scan from the 20-analyst center on DHDTech
-        timeout-minutes: 4
+        timeout-minutes: 6
         run: |
           set -euo pipefail
           URL="$BASE/api/multi-analyst?quote=USDT&limit=10&scan=1&_ts=gha-${GITHUB_SHA}"
-          CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 180 -o "$RUNNER_TEMP/multi-analyst.json" -w "%{http_code}" "$URL" || true)"
+          CODE=""
+          # Retry only transient gateway/connection failures during DHDTech rollout.
+          # A response must still be HTTP 200 and pass every live-data/analysis gate below.
+          for attempt in 1 2 3; do
+            CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 75 -o "$RUNNER_TEMP/multi-analyst.json" -w "%{http_code}" "$URL" || true)"
+            if [ "$CODE" = "200" ]; then
+              break
+            fi
+            case "$CODE" in
+              502|503|504|000)
+                echo "::warning::DHDTech 20-analyst endpoint transient HTTP $CODE on attempt $attempt/3; retrying."
+                if [ "$attempt" -lt 3 ]; then sleep 10; fi
+                ;;
+              *)
+                echo "::error::DHDTech 20-analyst scan returned non-retryable HTTP $CODE"
+                cat "$RUNNER_TEMP/multi-analyst.json" 2>/dev/null || true
+                exit 1
+                ;;
+            esac
+          done
           if [ "$CODE" != "200" ]; then
-            echo "::error::DHDTech 20-analyst scan returned HTTP $CODE"
+            echo "::error::DHDTech 20-analyst scan unavailable after bounded transient retries (HTTP $CODE)"
             cat "$RUNNER_TEMP/multi-analyst.json" 2>/dev/null || true
             exit 1
           fi
