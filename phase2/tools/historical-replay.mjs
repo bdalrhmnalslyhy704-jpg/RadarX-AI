@@ -16,6 +16,7 @@ import {evaluateDynamicEarlyWarningGate} from '../core/dynamic-early-warning-gat
 import {runHistoricalReplay} from '../core/historical-replay.mjs';
 import {buildMoveOutcomeAnalysis} from '../core/move-outcome-analysis.mjs';
 import {evaluateHistoricalProfileAdapter} from '../core/historical-profile-adapters.mjs';
+import {fetchBinanceSpotAggTradesArchive} from '../core/binance-spot-aggtrade-archive.mjs';
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -560,21 +561,49 @@ async function main() {
       await fetchFrame('BTCUSDT:1h','BTCUSDT','1h',25);
     }
     let tradeFetch;
+    let archiveAttempt = null;
     try {
-      tradeFetch = await fetchAggregateTrades(client, symbol, start - 65_000, end, {maxPages, maxTrades});
+      // Prefer full, checksum-verified official historical Spot archives for completed
+      // UTC days. REST remains the fallback for current/incomplete days and unavailable archives.
+      archiveAttempt = await fetchBinanceSpotAggTradesArchive(
+        symbol, start - 65_000, end, {maxTrades: Math.max(maxTrades, 500_000)}
+      );
+      if (archiveAttempt.complete === true) tradeFetch = archiveAttempt;
     } catch (error) {
-      // Public aggTrade history can be unavailable or capped even when closed klines
-      // are complete. Keep the failure explicit and continue with candle-only replay.
-      tradeFetch = {
+      archiveAttempt = {
         trades: [], complete: false,
         coverage: {
-          complete: false, pages: 0, rows: 0,
-          requested_start_time: start - 65_000, requested_end_time: end,
-          last_trade_time: null, limit_reached: false,
-          pagination: 'aggTrade ID cursor; unique aggregate trade IDs',
+          source: 'BINANCE_DATA_VISION_SPOT_AGGTRADES', reason: 'ARCHIVE_READER_FAILED',
           fallback_reason: String(error?.message ?? error).slice(0, 240)
         }
       };
+    }
+    if (!tradeFetch) {
+      try {
+        const restTradeFetch = await fetchAggregateTrades(
+          client, symbol, start - 65_000, end, {maxPages, maxTrades}
+        );
+        tradeFetch = restTradeFetch.complete === true
+          ? restTradeFetch
+          : {...restTradeFetch, coverage: {
+              ...(restTradeFetch.coverage || {}),
+              archive_attempt: archiveAttempt?.coverage || null
+            }};
+      } catch (error) {
+        // Neither verified archive nor complete REST coverage is evidence of full
+        // trade history. Preserve both errors and continue in explicitly partial candle-only mode.
+        tradeFetch = {
+          trades: [], complete: false,
+          coverage: {
+            complete: false, pages: 0, rows: 0,
+            requested_start_time: start - 65_000, requested_end_time: end,
+            last_trade_time: null, limit_reached: false,
+            pagination: 'aggTrade ID cursor; unique aggregate trade IDs',
+            fallback_reason: String(error?.message ?? error).slice(0, 240),
+            archive_attempt: archiveAttempt?.coverage || null
+          }
+        };
+      }
     }
     const tickerConfig = config.strongMoveRadar || {};
     const minQuoteVolume24h = Number(tickerConfig.minQuoteVolume24h ?? 1_000_000);
