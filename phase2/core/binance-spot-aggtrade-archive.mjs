@@ -224,7 +224,8 @@ async function readCachedWindow(metaPath, tradesPath) {
 export async function fetchBinanceSpotAggTradesArchive(symbol, startTime, endTime, {
   maxTrades = 500_000,
   cacheDir = process.env.RADARX_HISTORICAL_ARCHIVE_CACHE || DEFAULT_CACHE_DIR,
-  fetchImpl = globalThis.fetch
+  fetchImpl = globalThis.fetch,
+  spawnImpl = spawn
 } = {}) {
   const normalizedSymbol = String(symbol || '').trim().toUpperCase();
   const start = Number(startTime);
@@ -292,7 +293,7 @@ export async function fetchBinanceSpotAggTradesArchive(symbol, startTime, endTim
     const ranges = archive.covered_day_starts.map(dayStart => ({
       start: Math.max(start, dayStart), end: Math.min(end, dayStart + DAY_MS - 1)
     }));
-    const parsed = await readTradesFromArchive(archive.path, ranges, cap);
+    const parsed = await readTradesFromArchive(archive.path, ranges, cap, spawnImpl);
     matchingRows += parsed.totalMatching;
     if (parsed.invalidRows > 0) {
       return {trades: [], complete: false, coverage: {
