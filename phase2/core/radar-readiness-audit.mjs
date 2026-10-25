@@ -65,7 +65,19 @@ function buildAnalystReadiness(runtime, now) {
   const queue = runtime.queue && typeof runtime.queue === 'object' ? runtime.queue : {};
   const scanCount = Math.max(0, Math.trunc(numeric(stats.scan_count) ?? 0));
   const rawScanError = String(stats.last_error || '').slice(0, 200) || null;
-  const scanError = rawScanError || (scanCount > 0 && stats.last_scan_successful === false ? 'LAST_SCAN_NOT_SUCCESSFUL' : null);
+  // Starting a new scan deliberately sets last_scan_successful=false and clears
+  // last_error. That is in-flight work, not proof that the preceding scan failed.
+  // Use the explicit active-scan deadline to distinguish WARMING from a real failure.
+  const activeScanStartedAt = timestamp(stats.active_scan_started_at);
+  const activeScanDeadlineAt = timestamp(stats.active_scan_deadline_at);
+  const activeScanInProgress = activeScanStartedAt !== null &&
+    (activeScanDeadlineAt === null || Number(now) < activeScanDeadlineAt);
+  const activeScanExpired = activeScanStartedAt !== null &&
+    activeScanDeadlineAt !== null && Number(now) >= activeScanDeadlineAt;
+  const scanError = rawScanError ||
+    (activeScanExpired ? 'ACTIVE_SCAN_DEADLINE_EXCEEDED' :
+      (!activeScanInProgress && scanCount > 0 && stats.last_scan_successful === false
+        ? 'LAST_SCAN_NOT_SUCCESSFUL' : null));
   let status;
   if (!configured || !running || scanError || incompleteFresh.length) status = 'DEGRADED';
   else if (completeFresh.length) status = 'READY';
@@ -76,6 +88,10 @@ function buildAnalystReadiness(runtime, now) {
     last_scan_at:typeof stats.last_scan_at === 'string' ? stats.last_scan_at : null,
     next_scan_at:typeof stats.next_scan_at === 'string' ? stats.next_scan_at : null,
     last_scan_successful:stats.last_scan_successful === true,last_scan_error:scanError,
+    scan_in_progress:activeScanInProgress,
+    active_scan_started_at:typeof stats.active_scan_started_at === 'string' ? stats.active_scan_started_at : null,
+    active_scan_deadline_at:typeof stats.active_scan_deadline_at === 'string' ? stats.active_scan_deadline_at : null,
+    active_scan_age_ms:activeScanInProgress ? Math.max(0, Number(now) - activeScanStartedAt) : null,
     assessments_observed:rows.length,fresh_assessments:fresh.length,
     complete_fresh_assessments:completeFresh.length,incomplete_fresh_assessments:incompleteFresh.length,
     stale_assessments:stale,
@@ -200,6 +216,7 @@ export function buildRadarReadinessAudit({
   if (!analystReadiness.configured) readinessReasons.push('MULTI_ANALYST_ENGINE_UNAVAILABLE');
   else if (!analystReadiness.worker_running) readinessReasons.push('MULTI_ANALYST_WORKER_NOT_RUNNING');
   if (analystReadiness.last_scan_error) readinessReasons.push('MULTI_ANALYST_LAST_SCAN_ERROR');
+  if (analystReadiness.scan_in_progress) readinessReasons.push('MULTI_ANALYST_SCAN_IN_PROGRESS');
   if (analystReadiness.incomplete_fresh_assessments > 0) readinessReasons.push('MULTI_ANALYST_ASSESSMENT_INCOMPLETE');
   else if (analystReadiness.complete_fresh_assessments === 0 && analystReadiness.status !== 'DEGRADED')
     readinessReasons.push('MULTI_ANALYST_ASSESSMENTS_NOT_READY');

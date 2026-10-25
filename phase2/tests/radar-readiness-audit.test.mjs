@@ -230,6 +230,57 @@ test('readiness detects a missing canonical radar role even when twelve workers 
 });
 
 
+test('readiness reports an in-flight analyst scan as WARMING, not a scan failure', () => {
+  const now = 1_000_000;
+  const runtime = healthyAnalystRuntime(now, {
+    monitorStats: {
+      scan_count: 3,
+      last_scan_at: new Date(now - 200_000).toISOString(),
+      next_scan_at: new Date(now + 10_000).toISOString(),
+      last_scan_successful: false,
+      last_error: null,
+      active_scan_started_at: new Date(now - 15_000).toISOString(),
+      active_scan_deadline_at: new Date(now + 45_000).toISOString()
+    },
+    assessments: [{
+      symbol: 'BTCUSDT', age_ms: 240000, fresh: false,
+      specialist_count: 19, unique_specialists: 19, unique_roles: 19,
+      specialists_complete: true, final_analyst_complete: true, analysis_failed: false,
+      data_valid: true
+    }]
+  });
+  const {audit} = fixture({analystRuntime: runtime});
+  assert.equal(audit.status, 'WARMING');
+  assert.equal(audit.analysts.status, 'WARMING');
+  assert.equal(audit.analysts.last_scan_error, null);
+  assert.equal(audit.analysts.scan_in_progress, true);
+  assert.equal(audit.analysts.active_scan_age_ms, 15000);
+  assert.equal(audit.analysts.stale_assessments, 1);
+  assert.ok(audit.readiness_reasons.includes('MULTI_ANALYST_SCAN_IN_PROGRESS'));
+  assert.ok(audit.readiness_reasons.includes('MULTI_ANALYST_ASSESSMENTS_NOT_READY'));
+});
+
+test('readiness remains DEGRADED if an advertised active scan passes its deadline', () => {
+  const now = 1_000_000;
+  const runtime = healthyAnalystRuntime(now, {
+    monitorStats: {
+      scan_count: 3,
+      last_scan_at: new Date(now - 200_000).toISOString(),
+      last_scan_successful: false,
+      last_error: null,
+      active_scan_started_at: new Date(now - 90_000).toISOString(),
+      active_scan_deadline_at: new Date(now - 30_000).toISOString()
+    },
+    assessments: []
+  });
+  const {audit} = fixture({analystRuntime: runtime});
+  assert.equal(audit.status, 'DEGRADED');
+  assert.equal(audit.analysts.status, 'DEGRADED');
+  assert.equal(audit.analysts.scan_in_progress, false);
+  assert.equal(audit.analysts.last_scan_error, 'ACTIVE_SCAN_DEADLINE_EXCEEDED');
+  assert.ok(audit.readiness_reasons.includes('MULTI_ANALYST_LAST_SCAN_ERROR'));
+});
+
 test('readiness is DEGRADED when the latest analyst scan failed even if no error string was retained', () => {
   const now = 1_000_000;
   const runtime = healthyAnalystRuntime(now, {
