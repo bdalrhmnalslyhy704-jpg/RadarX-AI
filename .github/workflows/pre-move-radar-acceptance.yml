@@ -168,7 +168,7 @@ jobs:
             CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 25 -o "$RUNNER_TEMP/multi-analyst.json" -w "%{http_code}" "$POLL_URL" || true)"
             case "$CODE" in
               200)
-                STATE="$(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/multi-analyst.json','utf8'));console.log(b.status||'unknown')")"
+                STATE="$(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/multi-analyst.json','utf8'));console.log(b.status||(b.scan?.completed===true?'ready':'unknown'))")"
                 COMPLETED="$(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/multi-analyst.json','utf8'));console.log(b.scan?.completed===true?'true':'false')")"
                 SCAN_ERROR="$(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/multi-analyst.json','utf8'));console.log(String(b.error||b.scan?.error||b.monitoring?.last_error||b.diagnostics?.last_scan_error||'').replace(/[^A-Za-z0-9_:.-]/g,''))")"
                 if [ "$STATE" = "ready" ] && [ "$COMPLETED" = "true" ]; then
