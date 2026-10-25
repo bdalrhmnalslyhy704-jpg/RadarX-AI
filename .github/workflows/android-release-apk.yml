@@ -332,6 +332,11 @@ jobs:
             echo "Waiting for DHDTech to roll out the current Build 224 runtime contract (attempt $attempt/36; HTTP ${INFO_STATUS:-unknown})."
             sleep 5
           done
+          if [ "$INFO_STATUS" = "200" ] && [ "$NEW_RUNTIME_CONTRACT" != "true" ]; then
+            echo "::error::DHDTech is still serving an older container; the current Build 224 runtime contract (runtime_environment/radar_autostart_enabled) did not appear after the rollout window."
+            cat "$RUNNER_TEMP/deployment-info.json" || true
+            exit 1
+          fi
           if [ "$INFO_STATUS" != "200" ]; then
             echo "::warning::Deployment-info returned HTTP $INFO_STATUS; probing root and independent API paths to distinguish stale container from domain/ingress routing."
             for PROBE_PATH in "/" "/healthz" "/api/radar-status" "/api/early-expansion-radar?quote=USDT&limit=1"; do
