@@ -511,7 +511,10 @@ jobs:
         run: |
           set -euo pipefail
           READY=false
-          for attempt in {1..12}; do
+          # A scheduled deep-analyst scan may be active immediately after the public
+          # contract checks. Allow that bounded scan to finish; still require READY,
+          # all twelve healthy workers, complete market data, and a fresh 19+1 result.
+          for attempt in {1..36}; do
             CODE="$(curl --location --silent --show-error --connect-timeout 8 --max-time 15 --output "$RUNNER_TEMP/radar-swarm-status.json" --write-out "%{http_code}" "$BASE/api/radar-swarm-status" || true)"
             if [[ "$CODE" == "200" ]] && node --input-type=module <<'NODE'
           import fs from 'node:fs';
@@ -777,7 +780,7 @@ jobs:
           NODE
 
       - name: Require live readiness for twelve radars, twenty analysts, and push prerequisites
-        timeout-minutes: 3
+        timeout-minutes: 5
         env:
           BASE: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
         run: |
