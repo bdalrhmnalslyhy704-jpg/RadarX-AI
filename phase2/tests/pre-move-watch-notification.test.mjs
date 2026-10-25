@@ -252,5 +252,5 @@ test('high-activity watch override still fails closed on weak data, low particip
   assert.equal(buildPreMoveWatchOnlyAlert({...strong,data_quality:65},{...snapshot},now),null);
   assert.equal(buildPreMoveWatchOnlyAlert({...strong,pre_move_context:{...strong.pre_move_context,taker_buy_ratio:0.49,volume_acceleration:1.2,trade_acceleration:1.1,relative_strength_vs_market_pct:0.2}},snapshot,now),null);
   assert.equal(buildPreMoveWatchOnlyAlert({...strong,risk_flags:['ALREADY_EXTENDED']},snapshot,now),null);
-  assert.equal(buildPreMoveWatchOnlyAlert({...strong,pre_move_context:{...strong.pre_move_context,components:{...strong.pre_move_context.components,structure:49.9}},snapshot,now),null);
+  assert.equal(buildPreMoveWatchOnlyAlert({...strong,pre_move_context:{...strong.pre_move_context,components:{...strong.pre_move_context.components,structure:49.9}}},snapshot,now),null);
 });
