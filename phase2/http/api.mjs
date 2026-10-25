@@ -213,6 +213,25 @@ export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
   };
 }
 
+export function buildPreMoveWatchOnlyAlerts(candidates,snapshot,now=Date.now(),limit=3){
+  const cap=Math.max(0,Math.min(10,Math.trunc(Number(limit)||3)));
+  if(cap===0||!Array.isArray(candidates))return [];
+  const qualified=candidates
+    .map(candidate=>buildPreMoveWatchOnlyAlert(candidate,snapshot,now))
+    .filter(Boolean)
+    .sort((a,b)=>Number(b.pre_move_context?.score||0)-Number(a.pre_move_context?.score||0)||
+      Number(a.pre_move_context?.session_return_pct||0)-Number(b.pre_move_context?.session_return_pct||0)||
+      String(a.symbol).localeCompare(String(b.symbol)));
+  const seenSymbols=new Set(),out=[];
+  for(const alert of qualified){
+    if(seenSymbols.has(alert.symbol))continue;
+    seenSymbols.add(alert.symbol);
+    out.push(alert);
+    if(out.length>=cap)break;
+  }
+  return out;
+}
+
 export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,marketRadarRest=null,radarSwarm=null,radarSignalOutcomeWorker=null}= {}){
   const counters=new Map();
   function recordMultiAnalystApiFailure(error){
@@ -394,6 +413,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         min_quote_volume_24h:Number(config.marketRadar?.minQuoteVolume24h)||750000
       },
       candidates:[],
+      watch_candidates:[],
+      watch_notification_candidates:[],
       meta:{
         live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PRE_MOVE',
         response_cache:{mode,age_ms:Number.isFinite(Number(ageMs))?Number(ageMs):null,retry_after_ms:retryAfterMs}
@@ -416,24 +437,19 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         throw new Error('PRE_MOVE_SCANNER_SCHEMA_OUTDATED');
       if(snapshot.meta.live!==true||snapshot.universe.valid_data<1)
         throw new Error('PRE_MOVE_NO_VALID_LIVE_DATA');
+      // The same strict watch-only validator feeds FCM and the app's local-polling
+      // fallback. The fallback must not promote any row to an actionable entry signal.
+      const watchAlerts=buildPreMoveWatchOnlyAlerts(
+        Array.isArray(snapshot.watch_candidates)?snapshot.watch_candidates:[],snapshot,Date.now(),3
+      );
+      snapshot.watch_notification_candidates=watchAlerts;
       if(!preMoveRadarResponseCache.has(key)&&preMoveRadarResponseCache.size>=6){
         const oldest=[...preMoveRadarResponseCache.entries()].sort((a,b)=>a[1].savedAt-b[1].savedAt)[0];
         if(oldest)preMoveRadarResponseCache.delete(oldest[0]);
       }
       preMoveRadarResponseCache.set(key,{snapshot,savedAt:Date.now()});
-      // Route only independently qualified early-watch observations to push.
-      // They are explicitly watch-only, never entry-eligible, and PushManager
-      // revalidates data freshness, quality, liquidity, anti-chase, and evidence.
+      // Only validated observations enter this separate watch lane. Entry gates stay unchanged.
       if(typeof pushManager?.notifyRadarWatchOnlyAlert==='function'){
-        const rows=Array.isArray(snapshot.watch_candidates)?snapshot.watch_candidates:[];
-        const seenSymbols=new Set();
-        const watchAlerts=rows.map(row=>buildPreMoveWatchOnlyAlert(row,snapshot,Date.now()))
-          .filter(alert=>{
-            if(!alert||seenSymbols.has(alert.symbol))return false;
-            seenSymbols.add(alert.symbol);return true;
-          })
-          .sort((a,b)=>Number(b.pre_move_context?.score||0)-Number(a.pre_move_context?.score||0))
-          .slice(0,3);
         for(const alert of watchAlerts){
           Promise.resolve().then(()=>pushManager.notifyRadarWatchOnlyAlert(alert)).then(result=>{
             console.info?.('[PRE_MOVE_WATCH_NOTIFICATION_RESULT] '+JSON.stringify({
