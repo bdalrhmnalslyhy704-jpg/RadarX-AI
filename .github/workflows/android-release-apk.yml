@@ -1009,6 +1009,14 @@ jobs:
 
           sha256sum "${RUNNER_TEMP}/radarx-release/radarx-release.apk"
 
+      - name: Build Debug APK for test-only notification replay
+        working-directory: android
+        run: |
+          set -euo pipefail
+          gradle --no-daemon --no-parallel :app:assembleDebug
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          echo "Built separate Debug APK for the debug-only 623-alert replay fixture."
+
       - name: Enable KVM for Android Emulator
         run: |
           set -euo pipefail
@@ -1017,9 +1025,11 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
 
-      - name: Android Emulator online/offline smoke test (best effort)
-        timeout-minutes: 6
-        continue-on-error: true
+      - name: Required Release UI/service smoke + Debug durable replay acceptance
+        timeout-minutes: 10
+        env:
+          RADARX_APK_PATH: ${{ runner.temp }}/radarx-release/radarx-release.apk
+          RADARX_REPLAY_APK_PATH: android/app/build/outputs/apk/debug/app-debug.apk
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30

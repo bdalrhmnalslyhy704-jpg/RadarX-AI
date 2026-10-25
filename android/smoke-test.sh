@@ -16,6 +16,8 @@ debug_on_error() {
 trap debug_on_error ERR
 
 APK="${RADARX_APK_PATH:-android/app/build/outputs/apk/release/app-release.apk}"
+# The signed Release package is smoke-tested first; debug-only replay fixtures use a separate APK.
+REPLAY_APK="${RADARX_REPLAY_APK_PATH:-$APK}"
 START_ACTION="com.radarx.app.action.START_BACKGROUND_MONITOR"
 
 cleanup() {
@@ -309,6 +311,21 @@ if [[ "${fixture_ready}" -ne 1 ]]; then
   exit 1
 fi
 curl -fsS --max-time 3 "http://127.0.0.1:${REPLAY_TEST_PORT}/test/empty" >/dev/null
+
+# The test feed override is deliberately debug-only. First test the signed Release APK
+# against its real backend above, then uninstall it and install a separate Debug APK
+# only for deterministic 623-alert replay/reconnect testing.
+if [[ "$REPLAY_APK" != "$APK" ]]; then
+  PHASE="validate separate Debug APK for deterministic replay"
+  if [[ ! -s "$REPLAY_APK" ]]; then
+    echo "::error::RADARX_REPLAY_APK_PATH does not point to a built Debug APK: $REPLAY_APK"
+    exit 1
+  fi
+  timeout 15s adb shell am force-stop com.radarx.app >/dev/null 2>&1 || true
+  timeout 20s adb uninstall com.radarx.app
+  timeout 60s adb install "$REPLAY_APK"
+  echo "Signed Release APK passed the UI/offline/service phase; installed Debug APK for test-only replay."
+fi
 
 fixture_stats() {
   curl -fsS --max-time 3 "http://127.0.0.1:${REPLAY_TEST_PORT}/test/stats"
