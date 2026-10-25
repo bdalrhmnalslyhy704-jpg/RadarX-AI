@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - build224-multi-analyst-20261007
+      - fix/build224-binance-spot-archive-audit-20261025
     paths:
       - phase2/core/historical-replay.mjs
       - phase2/core/historical-profile-adapters.mjs
