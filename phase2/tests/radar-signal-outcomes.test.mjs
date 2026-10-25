@@ -234,3 +234,36 @@ test('archive pagination advances beyond 200 same-timestamp alerts without dupli
     assert.equal(new Set(state.records.map(row=>row.source_alert_id)).size,205);
   }finally{await rm(dir,{recursive:true,force:true});}
 });
+
+
+test('watch-only diagnostic observations are excluded from emitted-alert outcome calibration',async()=>{
+  let state=emptyRadarSignalOutcomeState();
+  const watchOnly={
+    id:'STRONG_MOVE_WATCH_ONLY:ABCUSDT:'+String(BASE),
+    event:'STRONG_MOVE_WATCH_ONLY',radar:'STRONG_MOVE_RADAR',
+    symbol:'ABCUSDT',price:100,detected_at:BASE,processed_at:BASE+1000,
+    watch_only:true,entry_eligible:false,potential_label:'WATCH_EARLY'
+  };
+  const strictAlert={
+    id:'STRONG:ABCUSDT:UP_SURGE:'+String(BASE+2000),
+    event:'STRONG_MOVE_ALERT',radar:'STRONG_MOVE_RADAR',
+    symbol:'ABCUSDT',price:100,detected_at:BASE+2000,processed_at:BASE+3000,
+    eligible:true,entry_eligible:true,potential_label:'STRONG_MOVE'
+  };
+  const store={
+    async getRadarSignalOutcomes(){return structuredClone(state);},
+    async updateRadarSignalOutcomes(mutator){state=mutator(structuredClone(state));return state;},
+    async readAlertPage(archive){return archive==='strongMoveAlerts'?[watchOnly,strictAlert]:[];}
+  };
+  const result=await runRadarSignalOutcomePass({
+    store,rest:{klines:async()=>({candles:[],source:'BINANCE_PUBLIC_REST'})},
+    now:BASE+30*minute,maxRestCalls:0,logger:{warn(){}}
+  });
+  assert.equal(result.ok,true);
+  assert.equal(state.records.length,1);
+  assert.equal(state.records[0].source_alert_id,strictAlert.id);
+  assert.equal(state.records[0].baseline_status,'COMPLETE');
+  assert.equal(state.last_import_counts.RADAR_2.watch_only_excluded,1);
+  assert.equal(state.last_import_counts.RADAR_2.scanned,2);
+  assert.equal(state.last_import_counts.RADAR_2.normalized,1);
+});

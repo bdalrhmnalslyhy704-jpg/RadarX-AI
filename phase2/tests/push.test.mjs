@@ -313,3 +313,70 @@ test('TEST_FIXTURE: quiet-base near-miss push fails closed for incomplete flow o
   assert.equal(out.reason,'QUIET_BASE_EVIDENCE_INCOMPLETE');
   assert.equal(calls,0);
 });
+
+
+test('TEST_FIXTURE: evidence-gated Strong Move near miss sends only a WATCH_ONLY notification',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-strong-move-watch-')),store=await new DurableStore({dir}).init();
+  await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70});
+  await store.upsertSubscription('u1',pushSubscription());
+  const sent=[];
+  const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};}};
+  const manager=new PushManager({provider,store});
+  const now=Date.now(),closeAt=now-15_000;
+  const alert={
+    id:'STRONG_MOVE_WATCH_ONLY:NEARUSDT:'+String(closeAt),
+    event:'STRONG_MOVE_WATCH_ONLY',radar:'STRONG_MOVE_RADAR',radar_name:'Radar 2 — Strong-Move',
+    symbol:'NEARUSDT',market:'SPOT',direction:'UP_SURGE',price:1.25,price_change_24h:3.2,
+    data_quality:90,liquidity_quality:86,quote_volume_24h:3_500_000,
+    source:'Binance Public REST',data_stale:false,data_status:{
+      status:'LIVE_DATA',stale:false,data_stale:false,data_valid:true,future_data_detected:false,
+      data_quality:90,source:'Binance Public REST',close_time:closeAt,candle_closed:true
+    },
+    detected_at:now,processed_at:now,detected_candle_close_time:closeAt,closed_candles_only:true,
+    watch_only:true,entry_eligible:false,eligible:false,paper_trading:true,real_order_execution:false,
+    confidence_score:'UNKNOWN',risk_flags:[],watch_reason_codes:['ELITE_GATE_NOT_ELIGIBLE'],
+    strong_move:{eligible:false,watch_only:true,entry_eligible:false,closed_candles_only:true,
+      score:71.4,data_quality:90,data_stale:false,metrics:{
+        closed_5m_candle_close_time_ms:closeAt,return_1m:0.14,return_3m:0.28,
+        volume_ratio:1.28,trade_ratio:1.17,taker_buy_ratio:0.555,taker_buy_delta:0.018,
+        close_location_pct:61,breakout_up:false,micro_breakout:true
+      }}
+  };
+  const out=await manager.notifyRadarWatchOnlyAlert(alert);
+  assert.equal(out.status,'SENT',JSON.stringify(out));
+  assert.equal(out.watch_only,true);
+  assert.equal(out.entry_eligible,false);
+  assert.equal(out.sent_count,1);
+  assert.equal(sent.length,1);
+  assert.equal(sent[0].watch_only,true);
+  assert.equal(sent[0].entry_eligible,false);
+  assert.equal(sent[0].real_order_execution,false);
+  assert.match(sent[0].notification_mode,/WATCH_ONLY/);
+});
+
+test('TEST_FIXTURE: Strong Move watch-only validator rejects missing buyer-flow evidence',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-strong-move-watch-invalid-')),store=await new DurableStore({dir}).init();
+  await store.putUserSettings('u1',{...defaultSettings(),enabled:true});
+  await store.upsertSubscription('u1',pushSubscription());
+  let calls=0;
+  const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(){calls++;return{ok:true,status:'SENT'};}};
+  const manager=new PushManager({provider,store});
+  const now=Date.now(),closeAt=now-15_000;
+  const alert={
+    event:'STRONG_MOVE_WATCH_ONLY',radar:'STRONG_MOVE_RADAR',symbol:'NEARUSDT',price:1,
+    price_change_24h:3,data_quality:90,liquidity_quality:85,source:'Binance Public REST',
+    data_status:{status:'LIVE_DATA',stale:false,data_stale:false,data_valid:true,future_data_detected:false,
+      source:'Binance Public REST',close_time:closeAt,candle_closed:true},
+    detected_candle_close_time:closeAt,closed_candles_only:true,watch_only:true,entry_eligible:false,
+    eligible:false,paper_trading:true,real_order_execution:false,risk_flags:[],
+    strong_move:{eligible:false,watch_only:true,closed_candles_only:true,score:71,metrics:{
+      closed_5m_candle_close_time_ms:closeAt,return_1m:0.14,return_3m:0.28,
+      volume_ratio:1.28,trade_ratio:1.17,taker_buy_ratio:0.49,taker_buy_delta:0.002,
+      close_location_pct:61,breakout_up:false,micro_breakout:true
+    }}
+  };
+  const out=await manager.notifyRadarWatchOnlyAlert(alert);
+  assert.equal(out.status,'REJECTED_WATCH_ONLY');
+  assert.equal(out.reason,'STRONG_MOVE_WATCH_CONFLUENCE_INSUFFICIENT');
+  assert.equal(calls,0);
+});

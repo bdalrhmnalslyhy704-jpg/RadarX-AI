@@ -433,6 +433,103 @@ export function buildEmergencyBreakoutAlert({five_minute,ticker}={},now=Date.now
   };
 }
 
+/**
+ * Build a non-actionable early-watch observation from a fresh, closed-candle near miss.
+ * This does not relax the strict/elite entry gate: it captures evidence for review only,
+ * and requires flow, participation, structure, freshness, and anti-chase to agree.
+ */
+export function buildStrongMoveWatchOnlyAlert(alert,row,now=Date.now(),{
+  minQuoteVolume24h=750_000,strictFailures=[]
+}={}){
+  const a=alert?.strong_move||{},m=a.metrics||{};
+  const numeric=value=>{
+    if(value===null||value===undefined||value===''||typeof value==='boolean')return null;
+    const n=Number(value);return Number.isFinite(n)?n:null;
+  };
+  const symbol=String(alert?.symbol||row?.symbol||'').trim().toUpperCase();
+  const score=numeric(a.score);
+  const price=numeric(alert?.price??row?.lastPrice);
+  const dailyMove=numeric(row?.priceChange24h??alert?.price_change_24h);
+  const quoteVolume=numeric(row?.quoteVolume24h);
+  const dataQuality=numeric(alert?.data_quality??a.data_quality);
+  const liquidityQuality=numeric(alert?.liquidity_quality);
+  const closeAt=numeric(m.closed_5m_candle_close_time_ms);
+  const ageMs=closeAt===null?null:Number(now)-closeAt;
+  const r1=numeric(m.return_1m),r3=numeric(m.return_3m);
+  const volumeRatio=numeric(m.volume_ratio),tradeRatio=numeric(m.trade_ratio);
+  const taker=numeric(m.taker_buy_ratio),takerDelta=numeric(m.taker_buy_delta);
+  const closeLocation=numeric(m.close_location_pct);
+  const breakout=m.breakout_up===true||m.micro_breakout===true;
+  const flowConfirmed=(taker!==null&&taker>=0.53)||(takerDelta!==null&&takerDelta>=0.01);
+  const activityConfirmed=(volumeRatio!==null&&volumeRatio>=1.15)||(tradeRatio!==null&&tradeRatio>=1.10);
+  const positiveStructure=breakout||(
+    r1!==null&&r1>=0.10&&r3!==null&&r3>=0.20&&closeLocation!==null&&closeLocation>=55
+  );
+  const confluence=[
+    r1!==null&&r1>=0.10,
+    r3!==null&&r3>=0.20,
+    volumeRatio!==null&&volumeRatio>=1.15,
+    tradeRatio!==null&&tradeRatio>=1.10,
+    taker!==null&&taker>=0.53,
+    takerDelta!==null&&takerDelta>=0.01,
+    breakout,
+    closeLocation!==null&&closeLocation>=55
+  ].filter(Boolean).length;
+  const hardRisks=(Array.isArray(alert?.risk_flags)?alert.risk_flags:[])
+    .map(x=>String(x).toUpperCase())
+    .filter(x=>/SELLING_PRESSURE_HIGH|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK|LOW_LIQUIDITY/.test(x));
+  if(!/^[A-Z0-9]{5,30}$/.test(symbol)||!String(symbol).endsWith('USDT'))return null;
+  if(String(a.direction||alert?.direction||'').toUpperCase()!=='UP_SURGE')return null;
+  if(a.closed_candles_only!==true||a.data_stale===true||alert?.data_status?.stale===true)return null;
+  if(closeAt===null||ageMs===null||ageMs<0||ageMs>6*60*1000)return null;
+  if(price===null||price<=0||dailyMove===null||dailyMove < -8||dailyMove > 12)return null;
+  if(quoteVolume===null||quoteVolume<Math.max(750_000,Number(minQuoteVolume24h)||0))return null;
+  if(dataQuality===null||dataQuality<70||dataQuality>100||liquidityQuality===null||liquidityQuality<60||liquidityQuality>100)return null;
+  if(score===null||score<68||!flowConfirmed||!activityConfirmed||!positiveStructure||confluence<4||hardRisks.length)return null;
+
+  const blockers=[...new Set([
+    ...(Array.isArray(strictFailures)?strictFailures.map(String):[]),
+    ...(!a.eligible?['STRONG_MOVE_CORE_TRIGGER_NOT_CONFIRMED']:[]),
+    'EARLY_WATCH_ONLY_NOT_ENTRY_ELIGIBLE'
+  ])].slice(0,24);
+  const watchEvidence={
+    score,confluence_count:confluence,volume_ratio:volumeRatio,trade_ratio:tradeRatio,
+    taker_buy_ratio:taker,taker_buy_delta:takerDelta,return_1m:r1,return_3m:r3,
+    breakout_up:m.breakout_up===true,micro_breakout:m.micro_breakout===true,
+    close_location_pct:closeLocation,source_candle_close_at:closeAt,source_data_age_ms:ageMs
+  };
+  return {
+    ...alert,
+    id:'STRONG_MOVE_WATCH_ONLY:'+symbol+':'+String(closeAt),
+    event:'STRONG_MOVE_WATCH_ONLY',
+    event_class:'RADAR_WATCH_ONLY',
+    radar:'STRONG_MOVE_RADAR',
+    radar_name:'Radar 2 — Strong-Move',
+    symbol,market:'SPOT',direction:'UP_SURGE',price,
+    potential_label:'WATCH_EARLY',decision_band:'WATCH_EARLY',
+    source:'Binance Public REST',
+    data_quality:dataQuality,liquidity_quality:liquidityQuality,
+    data_stale:false,
+    data_status:{
+      status:'LIVE_DATA',stale:false,data_stale:false,data_valid:true,future_data_detected:false,
+      data_quality:dataQuality,source:'Binance Public REST',close_time:closeAt,candle_closed:true
+    },
+    detected_at:Number(now),processed_at:Number(now),source_event_at:closeAt,detected_candle_close_time:closeAt,
+    closed_candles_only:true,watch_only:true,entry_eligible:false,eligible:false,
+    watch_reason_codes:blockers,reason_codes:blockers,
+    watch_evidence:watchEvidence,
+    strong_move:{
+      ...a,watch_only:true,entry_eligible:false,
+      watch_evidence:watchEvidence,
+      data_status:{status:'LIVE_DATA',data_valid:true,stale:false,future_data_detected:false,source:'Binance Public REST',close_time:closeAt}
+    },
+    risk_flags:Array.isArray(alert?.risk_flags)?alert.risk_flags:[],
+    reasons:[...(Array.isArray(alert?.reasons)?alert.reasons:[]),'Fresh near-miss evidence retained for watch-only review; not entry eligible.'],
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+    disclaimer:'مراقبة مبكرة فقط: لم تجتز بوابة التنبيه/الدخول الصارمة؛ لا تُعامل كإشارة دخول أو ضمان صعود.'
+  };
+}
+
 export class StrongMoveRadar {
   constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console}={}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
@@ -441,11 +538,12 @@ export class StrongMoveRadar {
     this.config={
       quote:'USDT',pollMs:30000,universeRefreshMs:30*60*1000,minQuoteVolume24h:0,
       rotationBatchSize:4,topMoverCount:3,alertCooldownMs:12*60*1000,
-      emergencyAlertCooldownMs:5*60*1000,minScore:76, ...config
+      emergencyAlertCooldownMs:5*60*1000,watchOnlyCooldownMs:10*60*1000,minScore:76, ...config
     };
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
     this.lastTickerMap=new Map();this.lastScanAt=new Map();this.lastAlertAt=new Map();
     this.lastEmergencyCandleAt=new Map();this.lastEmergencyAlertAt=new Map();
+    this.lastWatchOnlyCandleAt=new Map();this.lastWatchOnlyAt=new Map();this.watchOnlyAlertCount=0;
     this.emergencyAlertCount=0;this.alertCount=0;this.lastError=null;this.scans=0;this.lastScanAtMs=null;this.busy=false;this.busySinceAt=null;
   }
   start(){
@@ -603,18 +701,64 @@ export class StrongMoveRadar {
     alert.data_quality=finite(a.data_quality,0);
     alert.liquidity_quality=clamp(70+Math.log10(Math.max(1,Number(row.quoteVolume24h)/this.config.minQuoteVolume24h))*30);
     alert.data_status={status:a.data_stale?'DATA_STALE':'LIVE_DATA',stale:Boolean(a.data_stale),future_data_detected:false,source:'Binance Public REST'};
-    if(!alert.eligible||alertScore<this.config.minScore||!gate.eligible)return alert;
-    const notificationGate=evaluateRadarNotificationGate(alert,{now:this.clock(),commit:true});
-    alert.notification_gate=notificationGate;
-    if(!notificationGate.eligible)return alert;
-    const lastAlert=this.lastAlertAt.get(row.symbol)||0;
-    if(this.clock()-lastAlert<this.config.alertCooldownMs)return alert;
-    this.lastAlertAt.set(row.symbol,this.clock());
-    const decorated=decorateRadarAlert(alert,'Radar 2 — Strong-Move');
-    await this.store.appendStrongMoveAlert(decorated);
-    if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
-    this.alertCount++;
-    return alert;
+    const strictBlockers=[
+      ...(!alert.eligible?['STRONG_MOVE_CORE_TRIGGER_NOT_CONFIRMED']:[]),
+      ...(alertScore<this.config.minScore?['SCORE_BELOW_STRICT_THRESHOLD']:[]),
+      ...(!gate.eligible?(Array.isArray(gate.failures)?gate.failures:['ELITE_GATE_NOT_ELIGIBLE']):[])
+    ];
+    if(alert.eligible&&alertScore>=this.config.minScore&&gate.eligible){
+      const notificationGate=evaluateRadarNotificationGate(alert,{now:this.clock(),commit:true});
+      alert.notification_gate=notificationGate;
+      if(notificationGate.eligible){
+        const lastAlert=this.lastAlertAt.get(row.symbol)||0;
+        if(this.clock()-lastAlert<this.config.alertCooldownMs)return alert;
+        this.lastAlertAt.set(row.symbol,this.clock());
+        const decorated=decorateRadarAlert(alert,'Radar 2 — Strong-Move');
+        await this.store.appendStrongMoveAlert(decorated);
+        if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
+        this.alertCount++;
+        return alert;
+      }
+      strictBlockers.push(...(Array.isArray(notificationGate.failures)?notificationGate.failures:['SHARED_NOTIFICATION_GATE_REJECTED']));
+    }
+
+    // A separate watch-only lane preserves validated near misses without lowering
+    // the strict alert/entry threshold. It is bounded by source-candle identity and
+    // a per-symbol cooldown, and the push validator rechecks the underlying evidence.
+    const watchOnly=buildStrongMoveWatchOnlyAlert(alert,row,now,{
+      minQuoteVolume24h:Math.max(750_000,Number(this.config.minQuoteVolume24h)||0),
+      strictFailures:strictBlockers
+    });
+    if(!watchOnly)return alert;
+    const closeAt=Number(watchOnly.detected_candle_close_time);
+    if(Number(this.lastWatchOnlyCandleAt.get(row.symbol)||0)===closeAt)
+      return {...watchOnly,watch_only_deduplicated:true};
+    const lastWatch=this.lastWatchOnlyAt.get(row.symbol)||0;
+    if(now-lastWatch<Math.max(60_000,Number(this.config.watchOnlyCooldownMs)||10*60*1000))
+      return {...watchOnly,watch_only_suppressed_by_cooldown:true};
+    const lastStrict=this.lastAlertAt.get(row.symbol)||0;
+    if(now-lastStrict<Math.max(60_000,Number(this.config.alertCooldownMs)||12*60*1000))
+      return {...watchOnly,watch_only_suppressed_by_recent_strict_alert:true};
+
+    const decoratedWatch=decorateRadarAlert(watchOnly,'Radar 2 — Strong-Move / WATCH ONLY');
+    await this.store.appendStrongMoveAlert(decoratedWatch);
+    this.lastWatchOnlyCandleAt.set(row.symbol,closeAt);
+    this.lastWatchOnlyAt.set(row.symbol,now);
+    this.watchOnlyAlertCount++;
+    if(this.pushManager?.notifyRadarWatchOnlyAlert){
+      try{
+        const result=await this.pushManager.notifyRadarWatchOnlyAlert(decoratedWatch);
+        this.logger.info?.('[STRONG_MOVE_WATCH_ONLY_RESULT] '+JSON.stringify({
+          symbol:row.symbol,status:String(result?.status||'UNKNOWN'),
+          attempted:result?.attempted===true,sent_count:Number(result?.sent_count)||0,
+          reason:result?.reason||null,watch_only:true,entry_eligible:false
+        }));
+      }catch(error){
+        this.lastError=String(error?.message??error);
+        this.logger.warn?.('STRONG_MOVE_WATCH_ONLY_PUSH',this.lastError);
+      }
+    }
+    return decoratedWatch;
   }
   async tick(){
     if(!this.running||this.busy)return;
@@ -644,6 +788,7 @@ export class StrongMoveRadar {
       scans:this.scans,
       alerts_emitted:this.alertCount,
       emergency_alerts_emitted:this.emergencyAlertCount,
+      watch_only_alerts_emitted:this.watchOnlyAlertCount,
       emergency_trigger:'CLOSED_5M_MOVE_GTE_7_PERCENT_OR_POSITIVE_MOVE_GTE_1_5_PERCENT_WITH_3X_VOLUME_SPIKE; NO_24H_QUOTE_VOLUME_FLOOR',
       last_error:this.lastError,
       busy:this.busy,
