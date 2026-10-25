@@ -89,7 +89,7 @@ test('historical pre-move proxy records strong buyer flow before positive price 
     relative_strength_vs_market_pct:null,relative_strength_vs_btc_pct:0.7,
     components:{structure:54,squeeze:62,buying_pressure:63}
   };
-  const ticker={priceChange24h:1.1,quoteVolume24h:1_200_000,lastPrice:1.02};
+  const ticker={priceChange24h:1.1,quoteVolume24h:1_200_000,lastPrice:1.02,ticker_24h_coverage_complete:true};
   const result=assessHistoricalPreMoveWatchProxy(context,ticker,now);
   assert.equal(result.eligible,true,JSON.stringify(result));
   assert.equal(result.tier,'EARLY_FLOW_MONITOR');
