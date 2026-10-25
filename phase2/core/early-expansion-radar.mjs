@@ -202,6 +202,8 @@ export const EARLY_EXPANSION_RADAR_DEFAULTS=Object.freeze({
   // Target a 20-second launch cadence; telemetry remains authoritative because REST
   // latency can still make an individual complete cycle exceed the target.
   pollMs:20000,
+  // Hard deadline keeps a blocked REST/storage await from freezing Radar 8.
+  scanTimeoutMs:90000,
   universeRefreshMs:15*60*1000,
   minQuoteVolume24h:750000,
   // A very small, capped Micro-only lane watches strong short-term bursts below
@@ -1889,7 +1891,7 @@ export class EarlyExpansionRadar{
       minClosedCandles:this.config.marketWideLightScanMinClosedCandles,
       maxClosedCandles:this.config.marketWideLightScanMaxClosedCandles
     },clock});
-    this.running=false;this.busy=false;this.busySinceAtMs=null;this.lastScanCompletedAtMs=null;this.lastScanDurationMs=null;this.timer=null;this.universe=[];this.universeAt=0;
+    this.running=false;this.busy=false;this.busySinceAtMs=null;this.scanGeneration=0;this.activeCycleCancel=null;this.lastScanCompletedAtMs=null;this.lastScanDurationMs=null;this.timer=null;this.universe=[];this.universeAt=0;
     this.fastState=new Map();this.lastAlertAt=new Map();this.lastAlertScore=new Map();this.lastBand=new Map();
     this.lastActivityShockAt=new Map();this.lastActivityShockKeyBySymbol=new Map();this.activityShockTimestamps=[];this.fastShockPendingUntil=new Map();
     this.lastEarlyFlowWatchAt=new Map();this.lastEarlyFlowWatchKeyBySymbol=new Map();
@@ -1977,7 +1979,19 @@ export class EarlyExpansionRadar{
     // avoids a separate bootstrap scan racing the scheduler's first timer.
     scheduleNext(0);
   }
-  async stop(){this.running=false;if(this.timer)clearTimeout(this.timer);this.timer=null;this.marketWideKlineCache?.stop?.();}
+  async stop(){
+    this.running=false;
+    // Invalidate this generation before a watchdog restart can begin a new cycle.
+    this.scanGeneration++;
+    const cancel=this.activeCycleCancel;
+    this.activeCycleCancel=null;
+    this.busy=false;
+    this.busySinceAtMs=null;
+    try{cancel?.();}catch{}
+    if(this.timer)clearTimeout(this.timer);
+    this.timer=null;
+    this.marketWideKlineCache?.stop?.();
+  }
   async recordWatchOnlyAlert(alert,eventType='RADAR8_WATCH_ONLY_TRACE'){
     const symbol=String(alert?.symbol||'').trim().toUpperCase();
     const evidence=alert?.early_flow_watch_evidence||
@@ -2688,7 +2702,49 @@ export class EarlyExpansionRadar{
   }
   async tick({quote=this.config.quote}={}){
     if(!this.running||this.busy)return false;
+    const cycleGeneration=++this.scanGeneration;
     this.busy=true;const scanStartedAt=this.clock();this.busySinceAtMs=scanStartedAt;
+    const scanWallStartedAt=Date.now();
+    const scanTimeoutMs=Math.max(100,Math.trunc(Number(this.config.scanTimeoutMs)||90000));
+    const scanDeadlineAtMs=scanWallStartedAt+scanTimeoutMs;
+    let cycleTimedOut=false;
+    const cycleError=(code,stage)=>{
+      const elapsedMs=Math.max(0,Date.now()-scanWallStartedAt);
+      const error=new Error(code+':stage='+stage+':elapsed_ms='+elapsedMs+':limit_ms='+scanTimeoutMs);
+      error.code=code;
+      return error;
+    };
+    let cancelCycle;
+    const cancelled=new Promise((_,reject)=>{
+      cancelCycle=()=>reject(cycleError('RADAR8_SCAN_CANCELLED','STOP_OR_RESTART'));
+    });
+    void cancelled.catch(()=>{});
+    this.activeCycleCancel=cancelCycle;
+    const assertCycleActive=stage=>{
+      if(cycleGeneration!==this.scanGeneration||!this.running)throw cycleError('RADAR8_SCAN_CANCELLED',stage);
+      if(Date.now()>=scanDeadlineAtMs){
+        cycleTimedOut=true;
+        throw cycleError('RADAR8_SCAN_DEADLINE_EXCEEDED',stage);
+      }
+    };
+    const awaitCycleStep=(pending,stage)=>{
+      assertCycleActive(stage);
+      let timer=null;
+      const deadline=new Promise((_,reject)=>{
+        timer=setTimeout(()=>{
+          cycleTimedOut=true;
+          reject(cycleError('RADAR8_SCAN_DEADLINE_EXCEEDED',stage));
+        },Math.max(1,scanDeadlineAtMs-Date.now()));
+      });
+      return Promise.race([Promise.resolve(pending),deadline,cancelled])
+        .then(value=>{assertCycleActive(stage);return value;})
+        .finally(()=>{if(timer!==null)clearTimeout(timer);});
+    };
+    const noteOptionalCycleError=(error,stage)=>{
+      if(error?.code==='RADAR8_SCAN_CANCELLED'||error?.code==='RADAR8_SCAN_DEADLINE_EXCEEDED'||
+         cycleTimedOut||Date.now()>=scanDeadlineAtMs||cycleGeneration!==this.scanGeneration||!this.running)throw error;
+      this.noteError(error,stage);
+    };
     const deepCacheHitStart=this.deepCandleCacheHitTotal,deepCacheMissStart=this.deepCandleCacheMissTotal;
     const journeyEntries=new Map(),journeyMicroBySymbol=new Map(),journeyDeepBySymbol=new Map(),journeyDeepCandlesBySymbol=new Map();
     const journey={cycle_id:null,cycle_number:null,quote:INCOMPLETE,source:INCOMPLETE,expected_symbols:[],received_symbols:[],eligible_symbols:[],status:'RUNNING'};
@@ -2716,18 +2772,18 @@ export class EarlyExpansionRadar{
       cacheCleanupSummary=this.pruneCandleWindowCaches(cacheCleanupStartedAt);
       phaseTimings.cache_cleanup_ms=Math.max(0,this.clock()-cacheCleanupStartedAt);
       // Hydration must be protected by the same lifecycle guard as the scan.
-      await this.scheduler.hydrate();
+      await awaitCycleStep(this.scheduler.hydrate(),'SCHEDULER_HYDRATE');
       const q=this.normalizeQuote(quote);
-      await this.hydrateScanJourneyState();
+      await awaitCycleStep(this.hydrateScanJourneyState(),'JOURNEY_STATE_HYDRATE');
       const now=this.clock();
       journey.quote=q;journey.cycle_id=makeScanJourneyCycleId(q,scanStartedAt);
       const universeRefreshStartedAt=this.clock();
-      if(now-this.universeAt>this.config.universeRefreshMs||!this.universe.length)await this.refreshUniverse(q);
+      if(now-this.universeAt>this.config.universeRefreshMs||!this.universe.length)await awaitCycleStep(this.refreshUniverse(q),'UNIVERSE_REFRESH');
       phaseTimings.universe_refresh_ms=Math.max(0,this.clock()-universeRefreshStartedAt);
       journey.expected_symbols=[...this.universe];
       for(const symbol of journey.expected_symbols)if(!journeyEntries.has(symbol))journeyEntries.set(symbol,makeJourneyEntry(symbol));
       const tickerFastStartedAt=this.clock();
-      const {rows:rawRows,source:tickerSource}=await this.tickerRows(q);
+      const {rows:rawRows,source:tickerSource}=await awaitCycleStep(this.tickerRows(q),'TICKER_ROWS');
       const expected=[...this.universe],set=new Set(expected);
       const receivedSymbols=[...new Set(rawRows.map(x=>x.symbol).filter(x=>set.has(x)))];
       const rawBySymbol=new Map(rawRows.filter(x=>set.has(x.symbol)).map(x=>[x.symbol,x]));
@@ -2791,7 +2847,7 @@ export class EarlyExpansionRadar{
       const marketWideLightStartedAt=this.clock();
       let bookTickerBySymbol=new Map();
       if(this.config.marketWideLightScanEnabled!==false&&this.marketWideKlineCache){
-        bookTickerBySymbol=await this.refreshMarketWideBookTickerSnapshot();
+        bookTickerBySymbol=await awaitCycleStep(this.refreshMarketWideBookTickerSnapshot(),'BOOK_TICKER_SNAPSHOT');
         try{
           this.marketWideKlineCache.setSymbols(eligible.map(row=>row.symbol));
           if(!this.marketWideKlineCache.running)this.marketWideKlineCache.start();
@@ -2968,12 +3024,12 @@ export class EarlyExpansionRadar{
       let marketContextCompletedAt=marketContextStartedAt;
       const marketContextPromise=(async()=>{
         try{
-          const result=await fetchRadar8MarketContext({
+          const result=await awaitCycleStep(fetchRadar8MarketContext({
             rest:this.rest,marketWideKlineCache:this.marketWideKlineCache,
             cachedFiveMinuteContext:this.cachedBtcFiveMinuteContext,
             cachedOneHourContext:this.cachedBtcOneHourContext,config:this.config,
             eligible,now:this.clock()
-          });
+          }),'MARKET_CONTEXT');
           btcFive=result.btcFive;
           marketContext=result.marketContext;
           this.cachedBtcFiveMinuteContext=result.fiveMinuteContextCache;
@@ -2981,7 +3037,7 @@ export class EarlyExpansionRadar{
           btcFiveMinuteCacheHit=result.fiveMinuteCacheHit;
           btcFiveMinuteContextCacheHit=result.fiveMinuteContextCacheHit;
           btcOneHourContextCacheHit=result.oneHourCacheHit;
-        }catch(e){this.noteError(e,'market-context');}
+        }catch(e){noteOptionalCycleError(e,'market-context');}
         finally{marketContextCompletedAt=this.clock();}
         return {btcFive,marketContext};
       })();
@@ -2989,12 +3045,12 @@ export class EarlyExpansionRadar{
       const historyAlerts=[];
       try{
         const historyReadStartedAt=this.clock();
-        if(typeof this.store.readEarlyExpansionAlerts==='function')historyAlerts.push(...await this.store.readEarlyExpansionAlerts({sinceMs:now-45*24*60*60*1000,limit:100}));
-        if(typeof this.store.readFalconEyeAlerts==='function')historyAlerts.push(...await this.store.readFalconEyeAlerts({sinceMs:now-45*24*60*60*1000,limit:100}));
+        if(typeof this.store.readEarlyExpansionAlerts==='function')historyAlerts.push(...await awaitCycleStep(this.store.readEarlyExpansionAlerts({sinceMs:now-45*24*60*60*1000,limit:100}),'EARLY_ALERT_HISTORY'));
+        if(typeof this.store.readFalconEyeAlerts==='function')historyAlerts.push(...await awaitCycleStep(this.store.readFalconEyeAlerts({sinceMs:now-45*24*60*60*1000,limit:100}),'FALCON_ALERT_HISTORY'));
         outcomeMaintenanceWorkMs+=Math.max(0,this.clock()-historyReadStartedAt);
       }catch(e){this.noteError(e,'outcome-history-read');}
       const importStartedAt=this.clock();
-      await importHistoricalPreExpansionSignals(this.store,historyAlerts,{now,logger:this.logger}).catch(e=>this.noteError(e,'outcome-history-import'));
+      await awaitCycleStep(importHistoricalPreExpansionSignals(this.store,historyAlerts,{now,logger:this.logger}).catch(e=>noteOptionalCycleError(e,'outcome-history-import')),'OUTCOME_HISTORY_IMPORT');
       outcomeMaintenanceWorkMs+=Math.max(0,this.clock()-importStartedAt);
 
       // Candle fetches run concurrently with the independent BTC context fetch.
@@ -3028,7 +3084,7 @@ export class EarlyExpansionRadar{
           reasonCode:schedulerLaneReason(lane,'MICRO'),fastSeenAt});
         if(entry)entry.micro_scan_started_at=startedAt;
         try{
-          const result=await this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFivePromise);
+          const result=await awaitCycleStep(this.microScan(row,fastBySymbol.get(row.symbol)||{},btcFivePromise),'MICRO_SCAN:'+row.symbol);
           const completed=this.clock();
           if(entry){
             entry.micro_scan_completed_at=completed;
@@ -3064,15 +3120,15 @@ export class EarlyExpansionRadar{
         }
       }).then(result=>{microScanCompletedAt=this.clock();return result;});
 
-      const marketContextResult=await marketContextPromise;
+      const marketContextResult=await awaitCycleStep(marketContextPromise,'MARKET_CONTEXT_RESULT');
       btcFive=marketContextResult.btcFive;
       marketContext=marketContextResult.marketContext;
       phaseTimings.market_context_ms=Math.max(0,marketContextCompletedAt-marketContextStartedAt);
       const markoutStartedAt=this.clock();
-      await updatePreExpansionMarkouts(this.store,rawRows,{now,marketContext,logger:this.logger}).catch(e=>this.noteError(e,'outcome-markout'));
+      await awaitCycleStep(updatePreExpansionMarkouts(this.store,rawRows,{now,marketContext,logger:this.logger}).catch(e=>noteOptionalCycleError(e,'outcome-markout')),'OUTCOME_MARKOUT');
       outcomeMaintenanceWorkMs+=Math.max(0,this.clock()-markoutStartedAt);
       const reportStartedAt=this.clock();
-      await maybeLogPreExpansionOutcomeReport(this.store,{logger:this.logger,now}).catch(e=>this.noteError(e,'outcome-report'));
+      await awaitCycleStep(maybeLogPreExpansionOutcomeReport(this.store,{logger:this.logger,now}).catch(e=>noteOptionalCycleError(e,'outcome-report')),'OUTCOME_REPORT');
       outcomeMaintenanceWorkMs+=Math.max(0,this.clock()-reportStartedAt);
 
       // Historical closed-candle backfill is lower priority than live detection.
@@ -3115,7 +3171,7 @@ export class EarlyExpansionRadar{
       }
       phaseTimings.outcome_maintenance_ms=outcomeMaintenanceWorkMs;
 
-      const microScanned=await microScanPromise;
+      const microScanned=await awaitCycleStep(microScanPromise,'MICRO_SCAN_POOL');
       const microFlowWatchCandidates=microScanned.map(item=>buildMicroEarlyFlowWatchCandidate(item,this.clock(),this.config)).filter(Boolean);
       let watchAlertsThisCycle=0;
       const previousEarlyFlowWatchKeys=new Set(historyAlerts.filter(x=>x?.event==='EARLY_FLOW_WATCH_ONLY').map(x=>String(x?.id||'')));
@@ -3130,7 +3186,7 @@ export class EarlyExpansionRadar{
         const lastAt=Number(this.lastEarlyFlowWatchAt.get(symbol)||0);
         const cooldown=Math.max(0,Number(this.config.earlyFlowWatchCooldownMs??10*60*1000));
         if(previousEarlyFlowWatchKeys.has(watchKey)||this.lastEarlyFlowWatchKeyBySymbol.get(symbol)===watchKey||now-lastAt<cooldown)continue;
-        const watchStatus=await this.recordWatchOnlyAlert(watchAlert,'MICRO_EARLY_FLOW_WATCH_TRACE');
+        const watchStatus=await awaitCycleStep(this.recordWatchOnlyAlert(watchAlert,'MICRO_EARLY_FLOW_WATCH_TRACE'),'MICRO_WATCH_NOTIFICATION:'+symbol);
         if(!watchStatus.stored&&!watchStatus.pushAttempted)continue;
         this.lastEarlyFlowWatchAt.set(symbol,now);
         this.lastEarlyFlowWatchKeyBySymbol.set(symbol,watchKey);
@@ -3181,10 +3237,10 @@ export class EarlyExpansionRadar{
         deepWaitBySymbol.set(row.symbol,deepSchedulerStarted.wait_ms);
         if(entry)entry.deep_scan_started_at=deepStarted;
         try{
-          const evidence=await this.deepScan(row,fast,marketContext,micro,candles=>{
+          const evidence=await awaitCycleStep(this.deepScan(row,fast,marketContext,micro,candles=>{
             journeyDeepCandlesBySymbol.set(row.symbol,candles);
             if(entry)for(const tf of ['1m','5m','15m','1h','4h'])entry.candles_used[tf]=candles[tf]??INCOMPLETE;
-          }),fp=micro.micro_fingerprint;
+          }),'DEEP_SCAN:'+row.symbol),fp=micro.micro_fingerprint;
           const deepCompleted=this.clock();
           if(entry){entry.deep_scan_completed_at=deepCompleted;entry.deep_scan_status='COMPLETED';}
           journeyDeepBySymbol.set(row.symbol,{evidence,micro,deep_started_at:deepStarted,deep_completed_at:deepCompleted});
@@ -3441,7 +3497,7 @@ export class EarlyExpansionRadar{
         market_regime:candidate.market_regime,source:candidate.source,detected_at:now
       }));
       const signalArchiveStartedAt=this.clock();
-      await recordPreExpansionSignals(this.store,evaluationObservations,{now,marketContext,logger:this.logger}).catch(e=>this.noteError(e,'outcome-record'));
+      await awaitCycleStep(recordPreExpansionSignals(this.store,evaluationObservations,{now,marketContext,logger:this.logger}).catch(e=>noteOptionalCycleError(e,'outcome-record')),'OUTCOME_RECORD');
       phaseTimings.signal_archive_ms=Math.max(0,this.clock()-signalArchiveStartedAt);
       const notificationStartedAt=this.clock();
       let alertsThisCycle=0;
@@ -3464,7 +3520,7 @@ export class EarlyExpansionRadar{
             const watchAlert=buildActivityShockWatchAlert(candidate,now);
              // This stays monitor-only but is visible in the alert feed; push is attempted
              // only when a notification provider is explicitly enabled.
-             const watchStatus=await this.recordWatchOnlyAlert(watchAlert,'ACTIVITY_SHOCK_WATCH_TRACE');
+             const watchStatus=await awaitCycleStep(this.recordWatchOnlyAlert(watchAlert,'ACTIVITY_SHOCK_WATCH_TRACE'),'ACTIVITY_SHOCK_NOTIFICATION:'+symbol);
              if(watchStatus.stored)watchAlertsThisCycle++;
              const journeyEntry=journeyEntries.get(symbol);
             if(journeyEntry){
@@ -3499,7 +3555,7 @@ export class EarlyExpansionRadar{
           if(!previousQuietBaseWatchKeys.has(watchKey)&&
              this.lastQuietBaseWatchKeyBySymbol.get(symbol)!==watchKey&&
              now-lastAt>=cooldown){
-            const watchStatus=await this.recordWatchOnlyAlert(watchAlert,'QUIET_BASE_PRE_EXPANSION_TRACE');
+            const watchStatus=await awaitCycleStep(this.recordWatchOnlyAlert(watchAlert,'QUIET_BASE_PRE_EXPANSION_TRACE'),'QUIET_BASE_NOTIFICATION:'+symbol);
             if(watchStatus.stored||watchStatus.pushAttempted){
               this.lastQuietBaseWatchAt.set(symbol,now);
               this.lastQuietBaseWatchKeyBySymbol.set(symbol,watchKey);
@@ -3523,7 +3579,7 @@ export class EarlyExpansionRadar{
           const cooldown=Math.max(0,Number(this.config.earlyFlowWatchCooldownMs??10*60*1000));
           if(!previousEarlyFlowWatchKeys.has(watchKey)&&this.lastEarlyFlowWatchKeyBySymbol.get(symbol)!==watchKey&&
              now-lastAt>=cooldown){
-            const watchStatus=await this.recordWatchOnlyAlert(watchAlert,'EARLY_FLOW_WATCH_TRACE');
+            const watchStatus=await awaitCycleStep(this.recordWatchOnlyAlert(watchAlert,'EARLY_FLOW_WATCH_TRACE'),'EARLY_FLOW_NOTIFICATION:'+symbol);
             if(watchStatus.stored){
               this.lastEarlyFlowWatchAt.set(symbol,now);
               this.lastEarlyFlowWatchKeyBySymbol.set(symbol,watchKey);
@@ -3556,15 +3612,15 @@ export class EarlyExpansionRadar{
             }
             if(ng.eligible){
               this.lastAlertAt.set(candidate.symbol,now);this.lastAlertScore.set(candidate.symbol,candidate.early_expansion_score);this.lastBand.set(candidate.symbol,candidate.decision_band);
-              await this.store.appendEarlyExpansionAlert(alert);
-              if(typeof this.store.appendEarlyExpansionEvent==='function')await this.store.appendEarlyExpansionEvent({...alert,event_type:'EARLY_EXPANSION_ALERT_TRACE'});
+              await awaitCycleStep(this.store.appendEarlyExpansionAlert(alert),'ALERT_ARCHIVE:'+candidate.symbol);
+              if(typeof this.store.appendEarlyExpansionEvent==='function')await awaitCycleStep(this.store.appendEarlyExpansionEvent({...alert,event_type:'EARLY_EXPANSION_ALERT_TRACE'}),'ALERT_EVENT_ARCHIVE:'+candidate.symbol);
               const journeyEntry=journeyEntries.get(candidate.symbol);
               if(journeyEntry){
                 journeyEntry.notification_attempted_at=this.clock();journeyEntry.notification_status='PUSH_REQUEST_PENDING';
                 journeyEntry.alert_id=String(alert.id||INCOMPLETE);journeyEntry.alert_stage=String(alert.pre_expansion_stage||alert.decision_band||INCOMPLETE);
               }
               if(this.pushManager?.notifyRadarAlert){
-                await this.pushManager.notifyRadarAlert(alert);
+                await awaitCycleStep(this.pushManager.notifyRadarAlert(alert),'PUSH_NOTIFICATION:'+candidate.symbol);
                 if(journeyEntry){journeyEntry.notification_request_resolved_at=this.clock();journeyEntry.notification_status='PUSH_REQUEST_RESOLVED_DELIVERY_UNCONFIRMED';}
               }
               rememberRadarAlert(alert,now);this.alertCount++;alertsThisCycle++;
@@ -3574,6 +3630,7 @@ export class EarlyExpansionRadar{
         if(!this.lastBand.has(candidate.symbol)||bandChanged)this.lastBand.set(candidate.symbol,candidate.decision_band);
       }
       phaseTimings.notification_ms=Math.max(0,this.clock()-notificationStartedAt);
+      assertCycleActive('CYCLE_COMPLETION');
       this.scans++;this.lastScanAtMs=now;this.lastError=null;
       this.lastResult={schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',as_of:new Date(now).toISOString(),quote:q,universe:coverage,candidates:this.latestCandidates,alerts_emitted_this_cycle:alertsThisCycle,watch_alerts_recorded_this_cycle:watchAlertsThisCycle,meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',source:sourceList([tickerSource]),closed_candles_only:true,fast_scan:'ALL_ELIGIBLE_TICKERS_EVERY_CYCLE',micro_scan:'ROTATING_1M_5M_ACROSS_ELIGIBLE_UNIVERSE',deep_scan:'TOP_MICRO_FINGERPRINT_PLUS_QUIET_PLUS_ROTATION',universe_scope:'ALL_ELIGIBLE_SPOT_USDT',burst_priority_mode:'CLOSED_1M_5M_ACTIVITY_BURST',burst_priority_slots:Math.max(0,Math.trunc(Number(this.config.exceptionalRotationBypassSlots??5)))}};
       const scanCompletedAt=this.clock(),scanDurationMs=Math.max(0,scanCompletedAt-scanStartedAt);
@@ -3637,13 +3694,13 @@ export class EarlyExpansionRadar{
         try{
           const completedAt=this.clock();
           let outcomeState={records:[]};
-          try{outcomeState=await this.store.getPreExpansionOutcomes();}catch(e){this.noteError(e,'journey-outcome-read');}
+          try{outcomeState=await awaitCycleStep(this.store.getPreExpansionOutcomes(),'JOURNEY_OUTCOME_READ');}catch(e){noteOptionalCycleError(e,'journey-outcome-read');}
           const outcomeRecords=Array.isArray(outcomeState?.records)?outcomeState.records:[];
           if(typeof this.store.refreshScanJourneyOutcomes==='function'){
             try{
               // Bound post-scan archive work: a 24-cycle refresh reads/decompresses thousands of rows synchronously.
               // Six-cycle batches catch up over successive scans without stalling live micro/deep scheduling.
-              const refreshed=await this.store.refreshScanJourneyOutcomes(outcomeRecords,{limit:6,now:completedAt});
+              const refreshed=await awaitCycleStep(this.store.refreshScanJourneyOutcomes(outcomeRecords,{limit:6,now:completedAt}),'JOURNEY_OUTCOME_REFRESH');
               if(refreshed.updated_cycles>0||refreshed.corrupt_files>0||refreshed.missing_files>0)
                 this.logger.info?.('[RADARX_SCAN_JOURNEY_OUTCOME_REFRESH] '+JSON.stringify(refreshed));
             }catch(e){this.noteError(e,'journey-outcome-refresh');}
@@ -3739,7 +3796,7 @@ export class EarlyExpansionRadar{
             data_policy:{closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
             counters,phase_timings_ms:normalizeMissing(phaseTimings),coins
           };
-          const archive=await this.store.appendScanJourneyCycle(record);
+          const archive=await awaitCycleStep(this.store.appendScanJourneyCycle(record),'JOURNEY_ARCHIVE_COMPLETE');
           this.lastJourneyArchive=archive;this.lastJourneyError=null;
           this.logger.info?.('[RADARX_SCAN_JOURNEY_ARCHIVE] '+JSON.stringify({
             cycle_id:record.cycle_id,cycle_sequence:archive.cycle_sequence,status:'COMPLETE',
@@ -3748,6 +3805,7 @@ export class EarlyExpansionRadar{
             pruned_cycle_count:archive.pruned_cycle_count,counters
           }));
         }catch(archiveError){
+          noteOptionalCycleError(archiveError,'journey-archive');
           this.lastJourneyError=String(archiveError?.message??archiveError);
           this.noteError(archiveError,'journey-archive');
         }
@@ -3756,6 +3814,7 @@ export class EarlyExpansionRadar{
       this.lastScanDurationMs=Math.max(0,this.lastScanCompletedAtMs-scanStartedAt);
       return true;
     }catch(e){
+      if(e?.code==='RADAR8_SCAN_CANCELLED'||cycleGeneration!==this.scanGeneration||!this.running)return false;
       this.lastError=String(e?.message??e);this.lastScanAtMs=scanStartedAt;
       this.logger.error?.('[RADARX_SCAN_JOURNEY_CYCLE_FAILED] '+JSON.stringify({
         cycle_id:journey.cycle_id||INCOMPLETE,stage:journey.status||'RUNNING',
@@ -3781,7 +3840,7 @@ export class EarlyExpansionRadar{
               failed_stage:'SCAN_CYCLE_FAILED',error:this.lastError},
             coins
           };
-          const archive=await this.store.appendScanJourneyCycle(failedRecord);
+          const archive=await awaitCycleStep(this.store.appendScanJourneyCycle(failedRecord),'JOURNEY_ARCHIVE_FAILED');
           this.scans=Math.max(this.scans,Number(archive.cycle_sequence)||0);
           this.lastJourneyArchive=archive;this.lastJourneyError=null;
           this.logger.info?.('[RADARX_SCAN_JOURNEY_ARCHIVE] '+JSON.stringify({cycle_id:failedRecord.cycle_id,cycle_sequence:archive.cycle_sequence,status:'FAILED',error:this.lastError,coin_rows:archive.cycle_coin_rows,retained_cycles:archive.retained_cycles,retained_coin_rows:archive.retained_coin_rows}));
@@ -3795,7 +3854,8 @@ export class EarlyExpansionRadar{
     }finally{
       // Release the cycle latch before scheduling archive writes. A slow queued
       // durable-store append must never prevent future background scan cycles.
-      this.busy=false;this.busySinceAtMs=null;
+      if(cycleGeneration===this.scanGeneration){this.busy=false;this.busySinceAtMs=null;}
+      if(this.activeCycleCancel===cancelCycle)this.activeCycleCancel=null;
       try{
         const flushing=this.scheduler.flush();
         Promise.resolve(flushing).catch(error=>this.noteError(error,'scheduler-flush'));
