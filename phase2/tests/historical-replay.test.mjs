@@ -313,8 +313,8 @@ test('historical 24h ticker values require 1,440 contiguous closed minutes and k
     });
     price=close;
   }
-  const start=rows[24*60].openTime;
-  const end=rows[24*60+2].closeTime;
+  const start=rows.at(-1).openTime;
+  const end=rows.at(-1).closeTime;
   const evaluateTicker=series=>{
     const observed=[];
     runHistoricalReplay({
