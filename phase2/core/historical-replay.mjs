@@ -106,7 +106,7 @@ function derivedTicker(history, symbol, at) {
   const current=closed.at(-1);
   const cutoff=at-24*60*MINUTE_MS;
   const baseline=closed.filter(x=>x.closeTime<=cutoff).at(-1)||null;
-  const day=closed.filter(x=>x.openTime>cutoff&&x.closeTime<=at);
+  const day=closed.filter(x=>x.openTime>=cutoff&&x.closeTime<=at);
   const expected=24*60;
   // Evaluator time is one millisecond after the latest candle close, so the final
   // observed closed candle must end at at - 1 (not at).
