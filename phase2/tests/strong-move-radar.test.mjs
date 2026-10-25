@@ -265,7 +265,7 @@ test('near-miss watch lane rejects stale, extended, low-flow and thin-liquidity 
         close_location_pct:61,breakout_up:false,micro_breakout:true}}
   };
   const row={symbol:'NEARUSDT',lastPrice:1,priceChange24h:3,quoteVolume24h:3_000_000};
-  assert.equal(buildStrongMoveWatchOnlyAlert(base,row,now),null);
+  assert.ok(buildStrongMoveWatchOnlyAlert(base,row,now),'the control case should qualify as watch-only');
   const stale={...base,strong_move:{...base.strong_move,metrics:{...base.strong_move.metrics,closed_5m_candle_close_time_ms:now-7*60_000}}};
   assert.equal(buildStrongMoveWatchOnlyAlert(stale,row,now),null);
   assert.equal(buildStrongMoveWatchOnlyAlert(base,{...row,priceChange24h:14},now),null);
