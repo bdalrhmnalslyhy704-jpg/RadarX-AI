@@ -179,12 +179,14 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     relative!==null&&relative>=0.5
   ].filter(Boolean).length;
   const risks=Array.isArray(candidate?.risk_flags)?candidate.risk_flags.map(x=>String(x).toUpperCase()):[];
-  // A separate, explicitly non-entry corridor for exceptional real activity:
-  // it allows an early heads-up while structure is still forming, but never
-  // bypasses freshness, liquidity, anti-chase, session, price-window, or risk gates.
-  const highActivityStructurePending=score!==null&&score>=70&&
+  // A separate, explicitly non-entry corridor for exceptional real activity.
+  // Allow a narrow neutral/slightly-negative window only when independent closed-candle
+  // flow is unusually strong; this catches accumulation before price turns positive.
+  // It never bypasses freshness, liquidity, daily anti-chase, or hard-risk gates.
+  const highActivityStructurePending=score!==null&&score>=75&&
     volume!==null&&volume>=3&&trades!==null&&trades>=2&&
-    buy!==null&&buy>=0.52&&relative!==null&&relative>=1.5&&
+    buy!==null&&buy>=0.65&&buyDelta!==null&&buyDelta>=0.05&&
+    relative!==null&&relative>=0.5&&
     quality!==null&&quality>=80&&liquidity!==null&&liquidity>=70&&
     structure!==null&&structure>=50&&participation>=4;
   const watchTier=highActivityStructurePending?'HIGH_ACTIVITY_STRUCTURE_PENDING':'STANDARD_WATCH_EARLY';
@@ -214,8 +216,10 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
   if(!Number.isFinite(price)||price<=0||daily===null||Math.abs(daily)>=12)
     return fail('PRICE_OR_DAILY_CHANGE_INVALID');
   if(score===null||score<68)return fail('SCORE_BELOW_WATCH_FLOOR');
-  if(session===null||session<0||session>6)return fail('SESSION_RETURN_OUT_OF_RANGE');
-  if(hour===null||hour<0.15||hour>4.5)return fail('ONE_HOUR_RETURN_OUT_OF_RANGE');
+  if(session===null||session<(highActivityStructurePending?-0.75:0)||session>6)
+    return fail('SESSION_RETURN_OUT_OF_RANGE');
+  if(hour===null||hour<(highActivityStructurePending?-0.5:0.15)||hour>4.5)
+    return fail('ONE_HOUR_RETURN_OUT_OF_RANGE');
   if(structure===null||(structure<60&&!highActivityStructurePending))return fail('STRUCTURE_SCORE_BELOW_MINIMUM');
   if(closeAt===null||closeAt>Number(now)+5000||Number(now)-closeAt>20*60*1000)
     return fail('CLOSED_CANDLE_STALE_OR_FUTURE');
