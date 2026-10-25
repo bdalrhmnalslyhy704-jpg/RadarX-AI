@@ -100,6 +100,60 @@ test('Pre-Move watch notification sends only as WATCH_ONLY and suppresses repeat
   }
 });
 
+test('live-scan DOGE-like early flow becomes a bounded monitor alert when price is still negative',async()=>{
+  const now=Date.now();
+  const candidate={
+    symbol:'DOGEUSDT',last_price:0.07691,price_change_24h:-0.298,
+    data_quality:100,liquidity_quality:98.37,
+    data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false,source:'Binance Public REST'},
+    watch_only:true,alert_eligible:false,watch_reason_codes:[
+      'BUY_FLOW_NOT_CONFIRMED','PRICE_WINDOW_NOT_CONFIRMED','COMPRESSION_NOT_CONFIRMED'
+    ],
+    risk_flags:[],
+    pre_move_context:{
+      stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,
+      closed_candles_only:true,already_moved:false,session_close:now-60_000,
+      score:70.5,session_return_pct:-1.2455,one_hour_return_pct:-0.2719,
+      volume_acceleration:1.6229,trade_acceleration:1.0977,
+      taker_buy_ratio:0.5024,taker_buy_acceleration:0.1332,
+      mean_close_location:0.5978,relative_strength_vs_market_pct:0.3293,
+      components:{squeeze:49.97,structure:65.48,buying_pressure:56.59},
+      reasons:['VOLUME_ACCELERATING','TRADE_COUNT_ACCELERATING','TAKER_BUY_ACCELERATING']
+    }
+  };
+  const snapshot={source:'Binance Public REST',meta:{
+    radar:'PRE_MOVE',live:true,paper_trading:true,real_order_execution:false
+  }};
+  const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
+  assert.ok(alert,'qualified early-flow monitoring should not require positive price return');
+  assert.equal(alert.watch_notification_tier,'EARLY_FLOW_MONITOR');
+  assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+
+  const dir=await mkdtemp(join(tmpdir(),'radarx-live-scan-early-flow-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    const sent=[];
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
+      sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};
+    }};
+    const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000})});
+    const result=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(result.status,'SENT',JSON.stringify(result));
+    assert.equal(result.sent_count,1);
+    assert.equal(sent[0].symbol,'DOGEUSDT');
+    assert.equal(sent[0].watch_notification_tier,'EARLY_FLOW_MONITOR');
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].paper_trading,true);
+    assert.equal(sent[0].real_order_execution,false);
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('EARLY_FLOW_MONITOR survives the final push gate before price confirmation, as monitor-only',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-early-flow-monitor-'));
   const store=await new DurableStore({dir}).init();
