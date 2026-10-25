@@ -144,6 +144,24 @@ test('Pre-Move rotation remains fair when non-pinned market scores change betwee
   assert.equal(new Set(later.map(x=>x.symbol)).size,24);
 });
 
+test('Pre-Move discovery excludes stablecoin and tokenized-equity pairs while retaining BTC context',()=>{
+  const symbols=[
+    ['RLUSDUSDT','RLUSD'],['AAPLBUSDT','AAPLB'],['BTCUSDT','BTC'],
+    ['EARLYUSDT','EARLY'],['MIDUSDT','MID']
+  ].map(([symbol,baseAsset])=>({symbol,baseAsset,quoteAsset:'USDT',status:'TRADING'}));
+  const rows=symbols.map((x,i)=>({
+    symbol:x.symbol,lastPrice:'10',highPrice:'12',lowPrice:'8',
+    quoteVolume:String(5_000_000+i*1000),count:50000+i*100,priceChangePercent:'2'
+  }));
+  const picked=rankPreMoveTickerRows(rows,symbols,{minQuoteVolume24h:750000,limit:10,rotationOffset:0});
+  const pickedSymbols=new Set(picked.map(x=>x.symbol));
+  assert.equal(pickedSymbols.has('BTCUSDT'),true,'BTC remains available for market-relative context');
+  assert.equal(pickedSymbols.has('EARLYUSDT'),true);
+  assert.equal(pickedSymbols.has('MIDUSDT'),true);
+  assert.equal(pickedSymbols.has('RLUSDUSDT'),false,'stablecoins must not consume deep-scan slots');
+  assert.equal(pickedSymbols.has('AAPLBUSDT'),false,'tokenized equity pairs must not consume deep-scan slots');
+});
+
 test('Pre-Move discovery includes active low-volume Spot pairs for rotating screening',()=>{
   const symbols=[{symbol:'EARLYUSDT',baseAsset:'EARLY',quoteAsset:'USDT',status:'TRADING'}];
   const rows=[{symbol:'EARLYUSDT',lastPrice:'1.02',highPrice:'1.05',lowPrice:'0.95',quoteVolume:'18000',count:420,priceChangePercent:'1.6'}];

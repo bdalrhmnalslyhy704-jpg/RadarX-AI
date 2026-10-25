@@ -6,6 +6,7 @@ import {
 import {listActiveStrategies, normalizeStrategyResult} from '../../phase1/strategy-registry.mjs';
 import {FUTURE_DATA_CLOCK_SKEW_MS, futureIssues, normalizeEpochMs, timestampUnit} from '../core/data-quality.mjs';
 import {finiteNumberOr} from '../core/finite-number.mjs';
+import {isDirectionalCandidateSymbol} from '../core/market-wide-light-scan.mjs';
 
 export const MARKET_RADAR_DEFAULTS = Object.freeze({
   quote: 'USDT',
@@ -1066,7 +1067,7 @@ export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_
   const ranked=(Array.isArray(tickers)?tickers:[])
     .map(x=>normalizeTickerRow(x,symbols[0]?.quoteAsset||'USDT'))
     .filter(Boolean)
-    .filter(x=>allowed.has(x.symbol)&&(x.quoteVolume24h>0||x.tradeCount24h>0))
+    .filter(x=>allowed.has(x.symbol)&&(x.symbol==='BTCUSDT'||isDirectionalCandidateSymbol(x.symbol))&&(x.quoteVolume24h>0||x.tradeCount24h>0))
     .map(x=>{
       const change=Math.abs(x.priceChange24h);
       // A modestly active coin is more useful than a dead flat coin, but late movers
