@@ -231,7 +231,7 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     return fail('DATA_FRESHNESS_QUALITY_OR_LIQUIDITY_GATE');
   if(!Number.isFinite(price)||price<=0||daily===null||Math.abs(daily)>=12)
     return fail('PRICE_OR_DAILY_CHANGE_INVALID');
-  if(score===null||score<(earlyFlowMonitor?72:highActivityStructurePending?75:68))
+  if(score===null||score<(earlyFlowMonitor?68:highActivityStructurePending?75:68))
     return fail('SCORE_BELOW_WATCH_FLOOR');
   if(session===null||session<(highActivityStructurePending?-0.75:earlyFlowMonitor?-1.25:0)||
      session>(earlyFlowMonitor?4.5:6))
