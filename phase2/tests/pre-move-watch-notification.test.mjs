@@ -145,10 +145,16 @@ test('EARLY_FLOW_MONITOR survives the final push gate before price confirmation,
     assert.equal(sent[0].real_order_execution,false);
 
     const unsafe={
-      ...candidate,symbol:'WEAKFLOWUSDT',
-      pre_move_context:{...candidate.pre_move_context,taker_buy_ratio:0.49,volume_acceleration:1.1}
+      ...alert,
+      symbol:'WEAKFLOWUSDT',
+      id:'PRE_MOVE_WATCH:WEAKFLOWUSDT:'+String(now-60_000),
+      pre_move_context:{
+        ...alert.pre_move_context,session_return_pct:0.1,one_hour_return_pct:0.2,
+        taker_buy_ratio:0.49,volume_acceleration:1.1,
+        components:{...alert.pre_move_context.components,structure:60}
+      }
     };
-    const rejected=await manager.notifyRadarWatchOnlyAlert(buildPreMoveWatchOnlyAlert(unsafe,snapshot,now));
+    const rejected=await manager.notifyRadarWatchOnlyAlert(unsafe);
     assert.equal(rejected.status,'REJECTED_WATCH_ONLY');
     assert.equal(rejected.reason,'PRE_MOVE_EARLY_FLOW_TIER_UNVERIFIED');
     assert.equal(sent.length,1,'weak flow must not get around the final notification gate');
