@@ -108,7 +108,9 @@ function derivedTicker(history, symbol, at) {
   const baseline=closed.filter(x=>x.closeTime<=cutoff).at(-1)||null;
   const day=closed.filter(x=>x.openTime>cutoff&&x.closeTime<=at);
   const expected=24*60;
-  let complete=Boolean(baseline&&day.length===expected&&day.at(-1)?.closeTime===at&&
+  // Evaluator time is one millisecond after the latest candle close, so the final
+  // observed closed candle must end at at - 1 (not at).
+  let complete=Boolean(baseline&&day.length===expected&&day.at(-1)?.closeTime===Number(at)-1&&
     day[0]?.openTime===Number(baseline.closeTime)+1);
   if(complete){
     for(let i=0;i<day.length;i++){
