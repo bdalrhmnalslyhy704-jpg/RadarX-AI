@@ -26,6 +26,20 @@ function parseBoolean(value) {
   return null;
 }
 
+/**
+ * Serialize normalized aggregate trades exactly once so the archived JSONL bytes
+ * and their SHA-256 metadata are guaranteed to match (including the final newline).
+ */
+export function serializeBinanceSpotAggTrades(trades) {
+  const rows = Array.isArray(trades) ? trades : [];
+  const content = rows.map(trade => JSON.stringify(trade)).join('\n') + (rows.length ? '\n' : '');
+  return {
+    content,
+    rowCount: rows.length,
+    sha256: createHash('sha256').update(content).digest('hex')
+  };
+}
+
 export function parseBinanceSpotAggTradeArchiveLine(line) {
   const fields = String(line ?? '').trim().split(',');
   if (fields.length !== 8) return null;
@@ -304,13 +318,14 @@ export async function fetchBinanceSpotAggTradesArchive(symbol, startTime, endTim
   }
 
   const trades = [...tradesById.values()].sort((a, b) => a.T - b.T || a.a - b.a);
+  const serialized = serializeBinanceSpotAggTrades(trades);
   const temporaryTradesPath = tradesPath + '.part-' + process.pid;
   const temporaryMetaPath = metaPath + '.part-' + process.pid;
   try {
-    await writeFile(temporaryTradesPath, trades.map(trade => JSON.stringify(trade)).join('\n') + (trades.length ? '\n' : ''), 'utf8');
+    await writeFile(temporaryTradesPath, serialized.content, 'utf8');
     const coverage = {
-      source: 'BINANCE_DATA_VISION_SPOT_AGGTRADES', complete: true, rows: trades.length,
-      trades_sha256: createHash('sha256').update(serializedTrades).digest('hex'),
+      source: 'BINANCE_DATA_VISION_SPOT_AGGTRADES', complete: true, rows: serialized.rowCount,
+      trades_sha256: serialized.sha256,
       requested_start_time: start, requested_end_time: end,
       first_trade_time: trades[0]?.T ?? null, last_trade_time: trades.at(-1)?.T ?? null,
       archives_verified: archiveFiles.length, checksum_verified: true,
