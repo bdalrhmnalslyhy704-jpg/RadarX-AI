@@ -188,7 +188,8 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     buy!==null&&buy>=0.65&&buyDelta!==null&&buyDelta>=0.05&&
     relative!==null&&relative>=0.5&&
     quality!==null&&quality>=80&&liquidity!==null&&liquidity>=70&&
-    structure!==null&&structure>=50&&participation>=4;
+    structure!==null&&structure>=50&&participation>=4&&
+    session!==null&&session>=-0.75&&hour!==null&&hour>=-0.5;
   // Second, still non-entry-only path for pre-move accumulation. It relaxes only the
   // small price-return gate; independent buyer-flow, activity, structure, freshness,
   // data-quality, liquidity, and anti-chase requirements remain explicit and stricter
