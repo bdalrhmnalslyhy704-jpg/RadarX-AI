@@ -193,6 +193,15 @@ const tradliActivity=await readFile(new URL('../../java/com/radarx/app/TradliAct
 const backgroundServiceSourceForMove=await readFile(new URL('../../java/com/radarx/app/RadarXBackgroundMonitorService.java',import.meta.url),'utf8');
 assert.match(backgroundServiceSourceForMove,/fetchRadarAlertsFeed/);
 assert.match(backgroundServiceSourceForMove,/notifyNewRadarAlerts/);
+// The server, push manager, and Android fallback must all understand the exceptional
+// high-activity watch tier without turning it into an actionable entry.
+assert.ok(backgroundServiceSourceForMove.includes('"HIGH_ACTIVITY_STRUCTURE_PENDING"'));
+assert.ok(backgroundServiceSourceForMove.includes('volume >= 3.0'));
+assert.ok(backgroundServiceSourceForMove.includes('trades >= 2.0'));
+assert.ok(backgroundServiceSourceForMove.includes('relative >= 1.5'));
+assert.ok(backgroundServiceSourceForMove.includes('participation >= 4'));
+assert.ok(backgroundServiceSourceForMove.includes('(structure < 60.0 && !highActivityStructurePending)'));
+assert.match(backgroundServiceSourceForMove,/pendingStructure/);
 assert.match(backgroundServiceSourceForMove,/api\/radar-alerts\?radar=ALL/);
 assert.match(backgroundServiceSourceForMove,/LIQUIDITY_ABSORPTION_RADAR/);
 assert.match(backgroundServiceSourceForMove,/KAHIR_RADAR/);
