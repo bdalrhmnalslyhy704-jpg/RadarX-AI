@@ -179,11 +179,21 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     relative!==null&&relative>=0.5
   ].filter(Boolean).length;
   const risks=Array.isArray(candidate?.risk_flags)?candidate.risk_flags.map(x=>String(x).toUpperCase()):[];
+  // A separate, explicitly non-entry corridor for exceptional real activity:
+  // it allows an early heads-up while structure is still forming, but never
+  // bypasses freshness, liquidity, anti-chase, session, price-window, or risk gates.
+  const highActivityStructurePending=score!==null&&score>=70&&
+    volume!==null&&volume>=3&&trades!==null&&trades>=2&&
+    buy!==null&&buy>=0.52&&relative!==null&&relative>=1.5&&
+    quality!==null&&quality>=80&&liquidity!==null&&liquidity>=70&&
+    structure!==null&&structure>=50&&participation>=4;
+  const watchTier=highActivityStructurePending?'HIGH_ACTIVITY_STRUCTURE_PENDING':'STANDARD_WATCH_EARLY';
   const fields={
     symbol,score,session_return_pct:session,one_hour_return_pct:hour,
     volume_acceleration:volume,trade_acceleration:trades,taker_buy_ratio:buy,
     taker_buy_acceleration:buyDelta,mean_close_location:closeLocation,
     relative_strength_vs_market_pct:relative,structure_score:structure,
+    watch_notification_tier:watchTier,
     data_valid:status?.data_valid===true,data_stale:status?.data_stale===true||status?.stale===true,
     data_quality:quality,liquidity_quality:liquidity,closed_candle_close_time:closeAt,
     candle_age_ms:closeAt===null?null:Number(now)-closeAt,participation,risks
@@ -206,7 +216,7 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
   if(score===null||score<68)return fail('SCORE_BELOW_WATCH_FLOOR');
   if(session===null||session<0||session>6)return fail('SESSION_RETURN_OUT_OF_RANGE');
   if(hour===null||hour<0.15||hour>4.5)return fail('ONE_HOUR_RETURN_OUT_OF_RANGE');
-  if(structure===null||structure<60)return fail('STRUCTURE_SCORE_BELOW_MINIMUM');
+  if(structure===null||(structure<60&&!highActivityStructurePending))return fail('STRUCTURE_SCORE_BELOW_MINIMUM');
   if(closeAt===null||closeAt>Number(now)+5000||Number(now)-closeAt>20*60*1000)
     return fail('CLOSED_CANDLE_STALE_OR_FUTURE');
   if(risks.some(x=>/ALREADY_EXTENDED|EXTENDED_CHASE|HIGH_RISK|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK|LOW_LIQUIDITY/.test(x)))
@@ -233,8 +243,16 @@ export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
     detected_at:Number(now),detected_candle_close_time:closeAt,closed_candles_only:true,
     pre_move_context:p,
     watch_only:true,entry_eligible:false,
-    reason_codes:[...(Array.isArray(candidate?.watch_reason_codes)?candidate.watch_reason_codes:
-      Array.isArray(p?.reasons)?p.reasons:[])].map(x=>String(x).slice(0,100)).slice(0,12),
+    watch_notification_tier:assessment.values.watch_notification_tier,
+    watch_review_reason:assessment.values.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'
+      ?'STRONG_VOLUME_AND_TRADE_ACCELERATION_WITH_PRICE_STRUCTURE_PENDING'
+      :'CONFLUENCE_BASED_EARLY_WATCH',
+    reason_codes:[
+      ...(assessment.values.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'
+        ?['HIGH_ACTIVITY_STRUCTURE_PENDING']:[]),
+      ...(Array.isArray(candidate?.watch_reason_codes)?candidate.watch_reason_codes:
+        Array.isArray(p?.reasons)?p.reasons:[])
+    ].map(x=>String(x).slice(0,100)).slice(0,12),
     risk_flags:risks,
     paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
   };
