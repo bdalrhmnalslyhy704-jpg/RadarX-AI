@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {buildPreMoveWatchOnlyAlert,buildPreMoveWatchOnlyAlerts} from '../http/api.mjs';
+import {buildPreMoveWatchOnlyAlert,buildPreMoveWatchOnlyAlerts,diagnosePreMoveWatchOnlyCandidates} from '../http/api.mjs';
 import {PushManager} from '../push/index.mjs';
 import {DurableStore} from '../core/store.mjs';
 import {SignalDeduplicator} from '../core/dedup.mjs';
@@ -162,4 +162,45 @@ test('failed Pre-Move watch delivery expires instead of sending stale evidence',
   }finally{
     await rm(dir,{recursive:true,force:true});
   }
+});
+
+
+test('Pre-Move live watch diagnostics identify the precise gate that blocks notifications',()=>{
+  const {candidate,snapshot,now}=fixture();
+  const blocked={...candidate,symbol:'BLOCKEDUSDT',data_status:{data_valid:false,data_stale:true}};
+  const report=diagnosePreMoveWatchOnlyCandidates([candidate,blocked],snapshot,now,12);
+  assert.equal(report.evaluated,2);
+  assert.equal(report.eligible,1);
+  assert.equal(report.rejected,1);
+  assert.equal(report.rejection_counts.DATA_FRESHNESS_QUALITY_OR_LIQUIDITY_GATE,1);
+  assert.equal(report.samples.find(x=>x.symbol==='DASHUSDT')?.eligible,true);
+  assert.equal(report.samples.find(x=>x.symbol==='BLOCKEDUSDT')?.reason,'DATA_FRESHNESS_QUALITY_OR_LIQUIDITY_GATE');
+});
+
+test('live-like GTC early-watch sample qualifies for a watch-only heads-up when its full evidence is fresh',()=>{
+  const {snapshot,now}=fixture();
+  const candidate={
+    symbol:'GTCUSDT',last_price:0.245,price_change_24h:1.87,data_quality:100,liquidity_quality:86.82,
+    data_status:{data_valid:true,data_stale:false,candle_data_valid:true,volume_gate_pass:true},
+    watch_only:true,alert_eligible:false,watch_reason_codes:[
+      'BUY_FLOW_NOT_CONFIRMED','BUYER_CANDLE_CLOSES_NOT_CONFIRMED','COMPRESSION_NOT_CONFIRMED'
+    ],risk_flags:[],
+    pre_move_context:{
+      stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,
+      closed_candles_only:true,already_moved:false,session_close:now-164_000,score:70.4,
+      session_return_pct:1.2308651112,one_hour_return_pct:2.7285557472,
+      volume_acceleration:3.5803363318,trade_acceleration:2.5414376321,
+      taker_buy_ratio:0.4973520241,taker_buy_acceleration:0.0518422258,
+      mean_close_location:0.4741007895,relative_strength_vs_market_pct:2.8217298389,
+      components:{structure:77.6620484763,squeeze:42.5578369311,buying_pressure:55.4780308022}
+    }
+  };
+  const report=diagnosePreMoveWatchOnlyCandidates([candidate],snapshot,now,12);
+  assert.equal(report.eligible,1,JSON.stringify(report));
+  assert.equal(report.samples[0].participation,4);
+  const alerts=buildPreMoveWatchOnlyAlerts([candidate],snapshot,now,3);
+  assert.equal(alerts.length,1);
+  assert.equal(alerts[0].symbol,'GTCUSDT');
+  assert.equal(alerts[0].watch_only,true);
+  assert.equal(alerts[0].entry_eligible,false);
 });
