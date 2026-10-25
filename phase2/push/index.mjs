@@ -126,13 +126,19 @@ const radarPayload=(alert,processedAt=Date.now())=>{
   notification_mode:watchOnly?'WATCH_ONLY_EARLY_TRACK':'STANDARD_RADAR_ALERT',
   watch_only:watchOnly,
   entry_eligible:watchOnly?false:(alert?.entry_eligible??null),
+  watch_notification_tier:alert?.watch_notification_tier??null,
+  watch_review_reason:alert?.watch_review_reason??null,
   requires_follow_up_confirmation:needsFollowUp,
   signal_lifecycle_state:alert?.signal_lifecycle?.state??null,
   signal_lifecycle_label:alert?.signal_lifecycle?.label??null,
   signal_lifecycle_transition:alert?.signal_lifecycle?.transition??null,
   signal_lifecycle_reason_codes:Array.isArray(alert?.signal_lifecycle?.reason_codes)?alert.signal_lifecycle.reason_codes.slice(0,8):[],
   message:watchOnly
-    ?[alert.symbol,lowLiquidityWatch?'مراقبة مبكرة فقط — سيولة ضعيفة — تحتاج تأكيدًا':'مراقبة مبكرة فقط — تحتاج تأكيدًا'].filter(Boolean).join(' • ')
+    ?[alert.symbol,lowLiquidityWatch
+      ?'مراقبة مبكرة فقط — سيولة ضعيفة — تحتاج تأكيدًا'
+      :alert?.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'
+        ?'نشاط مبكر قوي — البنية السعرية قيد التشكّل — مراقبة فقط، ليس دخولًا'
+        :'مراقبة مبكرة فقط — تحتاج تأكيدًا'].filter(Boolean).join(' • ')
     :alert?.signal_lifecycle?.state&&alert.signal_lifecycle.state!=='MONITOR'&&alert?.signal_lifecycle?.label
       ?[alert.symbol,alert.signal_lifecycle.label].filter(Boolean).join(' • ')
       :undefined,
@@ -317,7 +323,24 @@ export class PushManager{
       if(dailyMove===null||Math.abs(dailyMove)>=12||score===null||score<68||
          session===null||session<0||session>6||hour===null||hour<0.15||hour>4.5)
         return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
-      if(structure===null||structure<60||independentEvidence<3)
+      // Keep the exceptional early-watch tier aligned with the API's validator.
+      // It may pass with structure 50-59 only when independent evidence proves
+      // unusually strong real activity; it never upgrades the watch into an entry.
+      const highActivityStructurePending =
+        alert?.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING' &&
+        score!==null&&score>=70&&
+        volumeRatio!==null&&volumeRatio>=3&&
+        tradeRatio!==null&&tradeRatio>=2&&
+        taker!==null&&taker>=0.52&&
+        relative!==null&&relative>=1.5&&
+        dataQuality!==null&&dataQuality>=80&&
+        liquidityQuality!==null&&liquidityQuality>=70&&
+        structure!==null&&structure>=50&&
+        independentEvidence>=4;
+      if(alert?.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'&&!highActivityStructurePending)
+        return rejected('PRE_MOVE_HIGH_ACTIVITY_TIER_UNVERIFIED');
+      if(structure===null||(structure<60&&!highActivityStructurePending)||
+         independentEvidence<(highActivityStructurePending?4:3))
         return rejected('PRE_MOVE_WATCH_CONFLUENCE_INSUFFICIENT');
     }else if(event==='STRONG_MOVE_WATCH_ONLY'){
       const sm=alert?.strong_move||{},m=sm?.metrics||{};

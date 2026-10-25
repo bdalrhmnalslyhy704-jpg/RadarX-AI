@@ -4,11 +4,49 @@ import {spawnSync} from 'node:child_process';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {aggregateFiveMinuteCandles, normalizeHistoricalCandles, runHistoricalReplay} from '../core/historical-replay.mjs';
-import {fetchAggregateTrades, withHistoricalRateLimitRetry, historicalProfileRequirements, assessHistoricalProfileCoverage, buildCandidateShadowResult, attachHistoricalMoveOutcomeAnalysis, countExpectedClosedMinuteCandles, HISTORICAL_DETECTOR_PROFILES} from '../tools/historical-replay.mjs';
+import {fetchAggregateTrades, withHistoricalRateLimitRetry, historicalProfileRequirements, assessHistoricalProfileCoverage, buildCandidateShadowResult, attachHistoricalMoveOutcomeAnalysis, countExpectedClosedMinuteCandles, HISTORICAL_DETECTOR_PROFILES, qualifiesHighActivityStructurePendingShadow} from '../tools/historical-replay.mjs';
 
 
 const MINUTE = 60_000;
 const ORIGIN = Math.floor((Date.now() - 400 * MINUTE) / (5 * MINUTE)) * (5 * MINUTE);
+
+test('high-activity historical watch shadow recognizes verified buyer flow while keeping liquidity and push explicitly unverified',()=>{
+  const alert={
+    // Deliberately a strict-trigger near-miss: the watch lane must preserve this
+    // early setup when activity evidence is exceptional, without promoting entry.
+    symbol:'GTCUSDT',eligible:false,data_stale:false,risk_flags:[],
+    strong_move:{
+      eligible:false,direction:'UP_SURGE',closed_candles_only:true,data_stale:false,
+      score:95.9,data_quality:90,component_scores:{flash:95.9},risk_flags:[],
+      metrics:{
+        volume_ratio:6.05,trade_ratio:2.08,taker_buy_ratio:0.897,taker_buy_delta:0.371,
+        flash_confirmations:4,return_1m:0.17,return_3m:0.35,micro_breakout:true,breakout_up:true
+      }
+    }
+  };
+  const ticker={priceChange24h:3.83,quoteVolume24h:1_926_000};
+  assert.equal(qualifiesHighActivityStructurePendingShadow({
+    alert,ticker,dataPolicy:{tradeCoverageComplete:true},minQuoteVolume24h:1_000_000
+  }),true,'complete closed-candle + aggTrade evidence should produce a WATCH_ONLY shadow');
+  assert.equal(alert.liquidity_quality,undefined,'no historical book/depth value is fabricated');
+  assert.equal(qualifiesHighActivityStructurePendingShadow({
+    alert,ticker,dataPolicy:{tradeCoverageComplete:false},minQuoteVolume24h:1_000_000
+  }),false,'partial aggregate-trade coverage must not qualify');
+  assert.equal(qualifiesHighActivityStructurePendingShadow({
+    alert,ticker:{...ticker,priceChange24h:12.1},dataPolicy:{tradeCoverageComplete:true},minQuoteVolume24h:1_000_000
+  }),false,'extended daily movement stays blocked');
+  assert.equal(qualifiesHighActivityStructurePendingShadow({
+    alert:{...alert,risk_flags:['TRAP_RISK']},ticker,dataPolicy:{tradeCoverageComplete:true},minQuoteVolume24h:1_000_000
+  }),false,'explicit hard risk still blocks the early watch');
+  assert.equal(qualifiesHighActivityStructurePendingShadow({
+    alert:{...alert,strong_move:{...alert.strong_move,metrics:{...alert.strong_move.metrics,volume_ratio:2.99}}},
+    ticker,dataPolicy:{tradeCoverageComplete:true},minQuoteVolume24h:1_000_000
+  }),false,'weak volume must not pass through the high-activity exception');
+  assert.equal(qualifiesHighActivityStructurePendingShadow({
+    alert:{...alert,strong_move:{...alert.strong_move,metrics:{...alert.strong_move.metrics,breakout_up:false,micro_breakout:false,return_1m:0,return_3m:0}}},
+    ticker,dataPolicy:{tradeCoverageComplete:true},minQuoteVolume24h:1_000_000
+  }),false,'strong flow without emerging price structure remains blocked');
+});
 
 test('CLI replay window count excludes the next candle that has not closed',()=>{
   const start=Date.UTC(2024,10,6,0,0,0,0);

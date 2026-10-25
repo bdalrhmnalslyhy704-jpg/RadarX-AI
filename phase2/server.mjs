@@ -123,6 +123,10 @@ export async function startServer({
   // endpoints as fallbacks rather than letting one blocked host disable most radars.
   const publicSpotRestUrls=[
     'https://data-api.binance.vision',
+    'https://api.binance.com',
+    'https://api1.binance.com',
+    'https://api2.binance.com',
+    'https://api3.binance.com',
     ...(config.rest.baseUrls??config.rest.urls??[])
   ].filter((url,index,arr)=>arr.indexOf(url)===index);
   const rest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
@@ -159,18 +163,12 @@ export async function startServer({
   // The deep symbol scanner gets its own REST client so background radar traffic cannot
   // race its endpoint selection. Prefer Binance's market-data-only mirror first; it is
   // explicitly documented to serve depth, klines and 24h ticker without authentication.
-  const deepRestUrls=[
-    'https://data-api.binance.vision',
-    ...(config.rest.baseUrls??config.rest.urls??[])
-  ].filter((url,index,arr)=>arr.indexOf(url)===index);
+  const deepRestUrls=[...publicSpotRestUrls];
   const deepScanRest=new RestClient({...config.rest,baseUrls:deepRestUrls});
   const symbolDeepAnalyzer=new SymbolDeepAnalyzer({rest:deepScanRest,config:config.symbolDeepScan||{}});
   const professorRadar=new ProfessorRadar({rest,store,pushManager:push,deepAnalyzer:symbolDeepAnalyzer,config:config.professorRadar||{},logger});
   const doomsdayRadar=new DoomsdayRadar({rest,store,pushManager:push,config:config.doomsdayRadar||{},logger});
-  const multiAnalystRestUrls=[
-    'https://data-api.binance.vision',
-    ...(config.rest.baseUrls??config.rest.urls??[])
-  ].filter((url,index,arr)=>arr.indexOf(url)===index);
+  const multiAnalystRestUrls=[...publicSpotRestUrls];
   const multiAnalystRest=new RestClient({...config.rest,baseUrls:multiAnalystRestUrls});
   const multiAnalystRadar=new MultiAnalystEngine({rest:multiAnalystRest,store,config:config.multiAnalyst||{}});
   const alMuqawimRadar=new AlMuqawimRadar({rest,store,pushManager:push,config:config.alMuqawimRadar||{},logger});
@@ -186,10 +184,10 @@ export async function startServer({
     logger
   });
   const earlyExpansionRadar=new EarlyExpansionRadar({rest,store,pushManager:push,marketWideKlineCache,config:config.earlyExpansionRadar||{},logger});
-  const coinHunterUrls=['https://data-api.binance.vision',...(config.rest.baseUrls??config.rest.urls??[])].filter((url,index,arr)=>arr.indexOf(url)===index);
+  const coinHunterUrls=[...publicSpotRestUrls];
   const coinHunterRest=new RestClient({...config.rest,baseUrls:coinHunterUrls});
   const coinHunterRadar=new CoinHunterRadar({rest:coinHunterRest,store,pushManager:push,config:config.coinHunterRadar||{},logger});
-  const whaleAccumulationUrls=['https://data-api.binance.vision',...(config.rest.baseUrls??config.rest.urls??[])].filter((url,index,arr)=>arr.indexOf(url)===index);
+  const whaleAccumulationUrls=[...publicSpotRestUrls];
   const whaleAccumulationRest=new RestClient({...config.rest,baseUrls:whaleAccumulationUrls});
   const whaleAccumulationRadar=new WhaleAccumulationRadar({rest:whaleAccumulationRest,store,pushManager:push,config:config.whaleAccumulationRadar||{},logger});
   // Falcon Eye uses public Binance Spot + public Futures market data. No API keys are required.

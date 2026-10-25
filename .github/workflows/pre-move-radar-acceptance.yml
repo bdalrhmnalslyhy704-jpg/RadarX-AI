@@ -4,6 +4,18 @@ on:
   push:
     branches:
       - build224-multi-analyst-20261007
+  pull_request:
+    branches:
+      - build224-multi-analyst-20261007
+    paths:
+      - '.github/workflows/pre-move-radar-acceptance.yml'
+      - 'phase2/http/api.mjs'
+      - 'phase2/market/binance-rest.mjs'
+      - 'phase2/server.mjs'
+      - 'phase2/push/index.mjs'
+      - 'phase2/tests/push.test.mjs'
+      - 'phase2/tests/rest.test.mjs'
+      - 'phase2/tests/pre-move-watch-notification.test.mjs'
   workflow_dispatch:
 
 concurrency:
@@ -77,6 +89,9 @@ jobs:
             });
 
   live_backend:
+    # Live DHDTech is a production check, not a PR preview. It runs after a
+    # push to Build 224 (or manual dispatch), when the service can pick up code.
+    if: github.event_name != 'pull_request'
     name: Live DHDTech Pre-Move market-data acceptance
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -100,6 +115,11 @@ jobs:
           const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/deployment-info.json','utf8'));
           if (b.build_version !== 'Build 224') throw new Error('BUILD_VERSION_NOT_224');
           if (b.paper_trading !== true || b.real_order_execution !== false) throw new Error('READ_ONLY_POLICY_INVALID');
+          const push=b.push||{};
+          console.log('DHDTECH_PUSH_PROVIDER_STATUS '+JSON.stringify({
+            provider:String(push.provider||'unknown'),enabled:push.enabled===true,
+            physical_device_receipt:'NOT_VERIFIED_BY_SERVER_HEALTH'
+          }));
           NODE
 
       - name: Verify one live scan from the 20-analyst center on DHDTech

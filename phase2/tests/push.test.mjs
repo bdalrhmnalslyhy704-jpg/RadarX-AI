@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp} from 'node:fs/promises';
+import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DurableStore} from '../core/store.mjs';
@@ -379,4 +379,72 @@ test('TEST_FIXTURE: Strong Move watch-only validator rejects missing buyer-flow 
   assert.equal(out.status,'REJECTED_WATCH_ONLY');
   assert.equal(out.reason,'STRONG_MOVE_WATCH_CONFLUENCE_INSUFFICIENT');
   assert.equal(calls,0);
+});
+
+
+test('TEST_FIXTURE: high-activity Pre-Move alerts pass the push validator with structure pending, but weak evidence fails closed',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-pre-move-high-activity-push-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    const sent=[];
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
+      sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};
+    }};
+    const manager=new PushManager({provider,store});
+    const now=Date.now(),closeAt=now-129_000;
+    const alert={
+      id:'PRE_MOVE_WATCH:MEGAUSDT:'+String(closeAt),
+      event:'PRE_MOVE_RADAR_WATCH_ONLY',potential_label:'WATCH_EARLY',decision_band:'WATCH_EARLY',
+      radar:'PRE_MOVE',radar_name:'رادار ما قبل الحركة',
+      symbol:'MEGAUSDT',market:'SPOT',direction:'UP_BIAS',price:0.1977,price_change_24h:3.702,
+      data_quality:100,liquidity_quality:92.36,source:'Binance Public REST',data_stale:false,
+      data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false,
+        source:'Binance Public REST',close_time:closeAt},
+      detected_at:now,detected_candle_close_time:closeAt,closed_candles_only:true,
+      watch_only:true,entry_eligible:false,watch_notification_tier:'HIGH_ACTIVITY_STRUCTURE_PENDING',
+      watch_review_reason:'STRONG_VOLUME_AND_TRADE_ACCELERATION_WITH_PRICE_STRUCTURE_PENDING',
+      paper_trading:true,real_order_execution:false,risk_flags:[],
+      pre_move_context:{
+        stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,
+        closed_candles_only:true,already_moved:false,score:70.6,
+        session_return_pct:2.6675,one_hour_return_pct:1.9399,
+        volume_acceleration:23.4119,trade_acceleration:15.3842,
+        taker_buy_ratio:0.5436,taker_buy_acceleration:0.0032,
+        mean_close_location:0.3545,relative_strength_vs_market_pct:4.1490,
+        components:{structure:54.0185,squeeze:0,buying_pressure:70.8968}
+      }
+    };
+    const out=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(out.status,'SENT',JSON.stringify(out));
+    assert.equal(out.sent_count,1);
+    assert.equal(sent.length,1);
+    assert.equal(sent[0].symbol,'MEGAUSDT');
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].watch_notification_tier,'HIGH_ACTIVITY_STRUCTURE_PENDING');
+    assert.match(sent[0].message,/نشاط مبكر قوي/);
+    assert.equal(sent[0].paper_trading,true);
+    assert.equal(sent[0].real_order_execution,false);
+
+    const weakStructure={
+      ...alert,id:'PRE_MOVE_WATCH:WEAKUSDT:'+String(closeAt),symbol:'WEAKUSDT',
+      pre_move_context:{...alert.pre_move_context,components:{...alert.pre_move_context.components,structure:49.9}}
+    };
+    const rejectedStructure=await manager.notifyRadarWatchOnlyAlert(weakStructure);
+    assert.equal(rejectedStructure.status,'REJECTED_WATCH_ONLY');
+    assert.equal(rejectedStructure.reason,'PRE_MOVE_HIGH_ACTIVITY_TIER_UNVERIFIED');
+
+    const weakActivity={
+      ...alert,id:'PRE_MOVE_WATCH:LOWACTIVITYUSDT:'+String(closeAt),symbol:'LOWACTIVITYUSDT',
+      pre_move_context:{...alert.pre_move_context,volume_acceleration:2.99}
+    };
+    const rejectedActivity=await manager.notifyRadarWatchOnlyAlert(weakActivity);
+    assert.equal(rejectedActivity.status,'REJECTED_WATCH_ONLY');
+    assert.equal(rejectedActivity.reason,'PRE_MOVE_HIGH_ACTIVITY_TIER_UNVERIFIED');
+    assert.equal(sent.length,1,'only the validated watch-only event may reach the provider');
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
 });

@@ -148,6 +148,56 @@ function numericOrNull(value){
   if(value===null||value===undefined||value===''||typeof value==='boolean')return null;
   const n=Number(value);return Number.isFinite(n)?n:null;
 }
+
+/**
+ * Historical watch-only sensitivity lane for unusually strong real Spot flow.
+ * This is deliberately NOT a strict alert or entry decision: historical
+ * order-book depth/spread and real phone delivery cannot be reconstructed.
+ * It is available only with complete verified aggTrades coverage, good data,
+ * adequate 24h turnover, strong volume/trade/taker participation, price
+ * structure beginning to form, and no explicit hard-risk flags.
+ */
+export function qualifiesHighActivityStructurePendingShadow({
+  alert={},ticker={},dataPolicy={},minQuoteVolume24h=750_000
+}={}){
+  if(dataPolicy?.tradeCoverageComplete!==true)return false;
+  const a=alert?.strong_move||{},m=a?.metrics||{},components=a?.component_scores||{};
+  const num=numericOrNull;
+  const score=Math.max(num(a?.score)??0,num(components?.flash)??0);
+  const dataQuality=num(a?.data_quality??alert?.data_quality);
+  const volumeRatio=num(m?.volume_ratio),tradeRatio=num(m?.trade_ratio);
+  const takerRatio=num(m?.taker_buy_ratio),takerDelta=num(m?.taker_buy_delta);
+  const confirmations=num(m?.flash_confirmations);
+  const dailyMove=num(ticker?.priceChange24h);
+  const quoteVolume=num(ticker?.quoteVolume24h);
+  const return1m=num(m?.return_1m),return3m=num(m?.return_3m);
+  const breakout=m?.breakout_up===true||m?.micro_breakout===true;
+  const structureBeginning=breakout||
+    (return1m!==null&&return1m>=0.10&&return3m!==null&&return3m>=0.20);
+  const hardRisks=[
+    ...(Array.isArray(alert?.risk_flags)?alert.risk_flags:[]),
+    ...(Array.isArray(a?.risk_flags)?a.risk_flags:[])
+  ].map(x=>String(x).toUpperCase());
+  if(!/^[A-Z0-9]{5,30}$/.test(String(alert?.symbol||''))||
+     !String(alert?.symbol||'').toUpperCase().endsWith('USDT')||
+     String(a?.direction||alert?.direction||'').toUpperCase()!=='UP_SURGE'||
+     // This is explicitly a near-miss watch lane, so a strict core trigger may
+     // still be false. The independent activity/flow/structure checks below
+     // carry the burden of proof; never convert this result into an entry.
+     a?.closed_candles_only!==true||a?.data_stale===true||alert?.data_stale===true||
+     dataQuality===null||dataQuality<80||dataQuality>100||
+     score<70||volumeRatio===null||volumeRatio<3||
+     tradeRatio===null||tradeRatio<2||
+     takerRatio===null||takerRatio<0.54||
+     takerDelta===null||takerDelta<0.01||
+     confirmations===null||confirmations<4||
+     dailyMove===null||dailyMove < -8||dailyMove>8||
+     quoteVolume===null||quoteVolume<Math.max(750_000,num(minQuoteVolume24h)??0)||
+     !structureBeginning||
+     hardRisks.some(x=>/ALREADY_EXTENDED|EXTENDED_CHASE|HIGH_RISK|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK|SELLING_PRESSURE_HIGH|LOW_LIQUIDITY/.test(x)))
+    return false;
+  return true;
+}
 function uniqueReasonCodes(...groups){
   return [...new Set(groups.flatMap(x=>Array.isArray(x)?x:[]).map(x=>String(x??'').trim()).filter(Boolean))].slice(0,30);
 }
@@ -816,7 +866,28 @@ async function main() {
         // it is logged in its own shadow lane so low follow-through cannot inflate the
         // measured early-warning hit rate.
         const strictAccepted = false;
-        const candidateDetected=Boolean(!cooldownBlocked&&earlyGate.eligible);
+        const highActivityStructurePendingCandidate=qualifiesHighActivityStructurePendingShadow({
+          alert,ticker:input.ticker,dataPolicy:input.dataPolicy,minQuoteVolume24h
+        });
+        // Separate early sensitivity from strict entry notification. This lane
+        // remains a historical shadow and only fires on complete aggTrade data;
+        // it can record an early monitor-worthy candidate when 3-second/orderbook
+        // evidence is unavailable, without claiming an actual push or entry.
+        const candidateDetected=Boolean(!cooldownBlocked&&
+          (earlyGate.eligible||highActivityStructurePendingCandidate));
+        const candidateMode=highActivityStructurePendingCandidate
+          ?'HIGH_ACTIVITY_STRUCTURE_PENDING_CANDIDATE_SHADOW'
+          :candidateDetected?'DYNAMIC_EARLY_WARNING_CANDIDATE_SHADOW':'NONE';
+        const candidateReasons=highActivityStructurePendingCandidate
+          ?['HISTORICAL_HIGH_ACTIVITY_STRUCTURE_PENDING_CANDIDATE',
+            'CANDIDATE_SHADOW_NOT_A_PUSH','HISTORICAL_ORDERBOOK_UNAVAILABLE',
+            'HISTORICAL_LIQUIDITY_UNVERIFIED','LIVE_PUSH_DELIVERY_NOT_SIMULATED',
+            ...(!earlyGate.eligible?['EARLY_WARNING_GATE_NOT_MET_BUT_HIGH_ACTIVITY_EVIDENCE_PASSED']:[])]
+          :[
+            ...(candidateDetected?['HISTORICAL_EARLY_WARNING_CANDIDATE']:[]),
+            ...(candidateDetected?candidateStrictFailures:[]),
+            ...(!candidateDetected?['DYNAMIC_EARLY_WARNING_GATE_NOT_MET']:[])
+          ];
         const coreTriggerCandidateDetected=Boolean(!cooldownBlocked&&
           alert.eligible===true&&alertScore>=Number(tickerConfig.minScore??76)&&
           Number(a.data_quality)>=80&&!a.data_stale&&Math.abs(Number(input.ticker.priceChange24h)||0)<=8);
@@ -825,12 +896,10 @@ async function main() {
           accepted:false,
           accepted_mode:'NONE_HISTORICAL_LIQUIDITY_UNVERIFIED',
           candidate_detected:candidateDetected,
-          candidate_mode:candidateDetected?'DYNAMIC_EARLY_WARNING_CANDIDATE_SHADOW':'NONE',
-          candidate_reasons:[...new Set([
-            ...(candidateDetected?['HISTORICAL_EARLY_WARNING_CANDIDATE']:[]),
-            ...(candidateDetected?candidateStrictFailures:[]),
-            ...(!candidateDetected?['DYNAMIC_EARLY_WARNING_GATE_NOT_MET']:[])
-          ])].slice(0,30),
+          candidate_mode:candidateMode,
+          high_activity_structure_pending_candidate:highActivityStructurePendingCandidate,
+          watch_candidate_tier:highActivityStructurePendingCandidate?'HIGH_ACTIVITY_STRUCTURE_PENDING':null,
+          candidate_reasons:[...new Set(candidateReasons)].slice(0,30),
           core_trigger_candidate_detected:coreTriggerCandidateDetected,
           core_trigger_candidate_mode:coreTriggerCandidateDetected?'CORE_TRIGGER_CANDIDATE_SHADOW':'NONE',
           core_trigger_candidate_reasons:[...new Set([
