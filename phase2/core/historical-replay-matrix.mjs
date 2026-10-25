@@ -1,3 +1,5 @@
+import {summarizeMoveOutcomeAnalyses} from './move-outcome-analysis.mjs';
+
 export const HISTORICAL_MATRIX_MOVER_FOCUS_SYMBOLS=Object.freeze([
   'IOSTUSDT','ALTUSDT','WUSDT','CVXUSDT','ENAUSDT'
 ]);
@@ -93,6 +95,7 @@ export function summarizeHistoricalWindowReport(report={}) {
     candle_fallback_symbols:fallbackCount,
     accepted_decisions:accepted,
     rejected_decisions:rejected,
+    move_outcomes:summarizeMoveOutcomeAnalyses(rows),
     first_accepted_at:firstAccepted,
     first_actual_window_50pct_at:first50,
     first_actual_window_70pct_at:first70,
