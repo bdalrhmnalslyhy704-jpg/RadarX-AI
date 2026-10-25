@@ -86,8 +86,8 @@ jobs:
             --symbols GTCUSDT,WUSDT,RLCUSDT,RADUSDT,ORCAUSDT,API3USDT,DIAUSDT,OGNUSDT,CTSIUSDT \
             --start 2026-10-11T21:27:59.999Z \
             --end 2026-10-12T21:27:59.999Z \
-            --max-trade-pages 10 \
-            --max-trades 10000 \
+            --max-trade-pages 100 \
+            --max-trades 100000 \
             --output reports/historical-replay-gtc-w.json
           replay_status=$?
           printf 'exit_code=%s\n' "$replay_status" > reports/historical-replay-status.txt
@@ -102,8 +102,8 @@ jobs:
           set +e
           mkdir -p reports
           node phase2/tools/historical-replay-matrix.mjs \
-            --max-trade-pages 20 \
-            --max-trades 20000 \
+            --max-trade-pages 100 \
+            --max-trades 100000 \
             --timeout-ms 1800000 \
             --output reports/radarx-historical-matrix
           matrix_status=$?
