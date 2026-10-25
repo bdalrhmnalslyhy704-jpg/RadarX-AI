@@ -352,7 +352,7 @@ export class PushManager{
         relative!==null&&relative>=0.25&&
         dataQuality!==null&&dataQuality>=85&&
         liquidityQuality!==null&&liquidityQuality>=70&&
-        structure!==null&&structure>=55&&
+        structure!==null&&structure>=50&&
         independentEvidence>=4;
       const preMoveMonitorCorridor=highActivityStructurePending||earlyFlowMonitor;
       if(session<(highActivityStructurePending?-0.75:earlyFlowMonitor?-1.25:0)||
