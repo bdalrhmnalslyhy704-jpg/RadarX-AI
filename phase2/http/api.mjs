@@ -196,14 +196,14 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
   // than the ordinary visual WATCH_EARLY lane.
   const earlyFlowMonitor=(session!==null&&(session<0||session>4.5)||
       hour!==null&&(hour<0.15||hour>2.5)||structure!==null&&structure<60)&&
-    score!==null&&score>=72&&
+    score!==null&&score>=68&&
     session!==null&&session>=-1.25&&session<=4.5&&
     hour!==null&&hour>=-0.75&&hour<=2.5&&
-    volume!==null&&volume>=1.6&&trades!==null&&trades>=1.15&&
-    buy!==null&&buy>=0.56&&buyDelta!==null&&buyDelta>=0.025&&
-    relative!==null&&relative>=0.4&&
+    volume!==null&&volume>=1.4&&trades!==null&&trades>=1.05&&
+    buy!==null&&buy>=0.50&&buyDelta!==null&&buyDelta>=0.03&&
+    relative!==null&&relative>=0.25&&
     quality!==null&&quality>=85&&liquidity!==null&&liquidity>=70&&
-    structure!==null&&structure>=50&&participation>=4;
+    structure!==null&&structure>=55&&participation>=4;
   const watchTier=highActivityStructurePending?'HIGH_ACTIVITY_STRUCTURE_PENDING':
     earlyFlowMonitor?'EARLY_FLOW_MONITOR':'STANDARD_WATCH_EARLY';
   const fields={
