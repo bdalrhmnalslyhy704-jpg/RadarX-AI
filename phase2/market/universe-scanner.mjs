@@ -2140,7 +2140,7 @@ export class MarketUniverseScanner {
 
   scanPreMove({ quote = this.config.quote, limit = 30 } = {}) {
     const normalizedQuote=String(quote||this.config.quote).trim().toUpperCase();
-    const normalizedLimit=Math.min(50,Math.max(10,normalizeRadarLimit(limit,{...this.config,maxScanLimit:50,scanLimit:30}));
+    const normalizedLimit=Math.min(50,Math.max(10,normalizeRadarLimit(limit,{...this.config,maxScanLimit:50,scanLimit:30})));
     const key=`pre-move:${normalizedQuote}:${normalizedLimit}`;
     return this._coalesceScan(key,()=>{
       const previous=this._preMoveScanTails.get(normalizedQuote)||Promise.resolve();
