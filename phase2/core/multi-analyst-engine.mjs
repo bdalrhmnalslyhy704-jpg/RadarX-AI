@@ -1514,7 +1514,7 @@ export class MultiAnalystEngine {
       const marketSnapshotAt=this.clock();
       const sharedMarketSnapshot={snapshot_id:'SPOT-'+Math.trunc(marketSnapshotAt)+'-'+selected.length+'-'+btc15.length+'-'+btc1.length,as_of:marketSnapshotAt,snapshot_source:String(tickers?.source||'BINANCE_PUBLIC_REST'),btc15,btc1,marketMedian24h,breadthPct};
       const scanErrors=[];
-      const scanned=await awaitScanStep(boundedMap(deepSelected,Math.max(1,Math.min(4,this.config.deepConcurrency)),async(ticker,index)=>{
+      const scanned=await boundedMap(deepSelected,Math.max(1,Math.min(4,this.config.deepConcurrency)),async(ticker,index)=>{
         try{
           const row=await awaitScanStep(this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:exchangeInfoSource,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'',includeAnalysisPayload:true}),'SYMBOL_SCAN:'+String(ticker?.symbol||'UNKNOWN'));
           assertScanDeadline();
@@ -1588,7 +1588,7 @@ export class MultiAnalystEngine {
           scanErrors.push({symbol:String(ticker?.symbol||'').toUpperCase(),rank:index+1,error:message});
           return null;
         }
-      }),'DEEP_ANALYSIS_POOL');
+      });
       assertScanDeadline();
       const live=scanned.filter(Boolean);
       const failedRadarReviewSymbols=new Set(scanErrors.map(x=>String(x?.symbol||'').toUpperCase()));
