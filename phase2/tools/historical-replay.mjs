@@ -148,6 +148,54 @@ function numericOrNull(value){
   if(value===null||value===undefined||value===''||typeof value==='boolean')return null;
   const n=Number(value);return Number.isFinite(n)?n:null;
 }
+
+/**
+ * Historical watch-only sensitivity lane for unusually strong real Spot flow.
+ * This is deliberately NOT a strict alert or entry decision: historical
+ * order-book depth/spread and real phone delivery cannot be reconstructed.
+ * It is available only with complete verified aggTrades coverage, good data,
+ * adequate 24h turnover, strong volume/trade/taker participation, price
+ * structure beginning to form, and no explicit hard-risk flags.
+ */
+export function qualifiesHighActivityStructurePendingShadow({
+  alert={},ticker={},dataPolicy={},minQuoteVolume24h=750_000
+}={}){
+  if(dataPolicy?.tradeCoverageComplete!==true)return false;
+  const a=alert?.strong_move||{},m=a?.metrics||{},components=a?.component_scores||{};
+  const num=numericOrNull;
+  const score=Math.max(num(a?.score)??0,num(components?.flash)??0);
+  const dataQuality=num(a?.data_quality??alert?.data_quality);
+  const volumeRatio=num(m?.volume_ratio),tradeRatio=num(m?.trade_ratio);
+  const takerRatio=num(m?.taker_buy_ratio),takerDelta=num(m?.taker_buy_delta);
+  const confirmations=num(m?.flash_confirmations);
+  const dailyMove=num(ticker?.priceChange24h);
+  const quoteVolume=num(ticker?.quoteVolume24h);
+  const return1m=num(m?.return_1m),return3m=num(m?.return_3m);
+  const breakout=m?.breakout_up===true||m?.micro_breakout===true;
+  const structureBeginning=breakout||
+    (return1m!==null&&return1m>=0.10&&return3m!==null&&return3m>=0.20);
+  const hardRisks=[
+    ...(Array.isArray(alert?.risk_flags)?alert.risk_flags:[]),
+    ...(Array.isArray(a?.risk_flags)?a.risk_flags:[])
+  ].map(x=>String(x).toUpperCase());
+  if(!/^[A-Z0-9]{5,30}$/.test(String(alert?.symbol||''))||
+     !String(alert?.symbol||'').toUpperCase().endsWith('USDT')||
+     String(a?.direction||alert?.direction||'').toUpperCase()!=='UP_SURGE'||
+     alert?.eligible!==true||a?.eligible!==true||
+     a?.closed_candles_only!==true||a?.data_stale===true||alert?.data_stale===true||
+     dataQuality===null||dataQuality<80||dataQuality>100||
+     score<70||volumeRatio===null||volumeRatio<3||
+     tradeRatio===null||tradeRatio<2||
+     takerRatio===null||takerRatio<0.54||
+     takerDelta===null||takerDelta<0.01||
+     confirmations===null||confirmations<4||
+     dailyMove===null||dailyMove < -8||dailyMove>8||
+     quoteVolume===null||quoteVolume<Math.max(750_000,num(minQuoteVolume24h)??0)||
+     !structureBeginning||
+     hardRisks.some(x=>/ALREADY_EXTENDED|EXTENDED_CHASE|HIGH_RISK|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK|SELLING_PRESSURE_HIGH|LOW_LIQUIDITY/.test(x)))
+    return false;
+  return true;
+}
 function uniqueReasonCodes(...groups){
   return [...new Set(groups.flatMap(x=>Array.isArray(x)?x:[]).map(x=>String(x??'').trim()).filter(Boolean))].slice(0,30);
 }
