@@ -263,5 +263,7 @@ test('watch-only diagnostic observations are excluded from emitted-alert outcome
   assert.equal(state.records.length,1);
   assert.equal(state.records[0].source_alert_id,strictAlert.id);
   assert.equal(state.records[0].baseline_status,'COMPLETE');
-  assert.equal(result.last_pass.import_counts.RADAR_2.watch_only_excluded,1);
+  assert.equal(state.last_import_counts.RADAR_2.watch_only_excluded,1);
+  assert.equal(state.last_import_counts.RADAR_2.scanned,2);
+  assert.equal(state.last_import_counts.RADAR_2.normalized,1);
 });
