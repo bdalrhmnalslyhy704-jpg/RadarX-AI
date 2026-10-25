@@ -480,9 +480,17 @@ export async function runRadarSignalOutcomePass({
         }
         rows = await reader.call(store, { sinceMs: cursorAt, limit: pageLimit });
       }
-      const normalized = (Array.isArray(rows) ? rows : []).map(row => normalizeArchivedRadarSignal(row, radar.id, now));
+      const archiveRows=Array.isArray(rows)?rows:[];
+      // Diagnostic watch-only candidates belong in the near-miss ledger, not the
+      // emitted-alert outcome denominator. Counting them as failed entry alerts
+      // would corrupt false-alert rates and analyst calibration.
+      const isWatchOnly=row=>row?.watch_only===true||
+        String(row?.event||row?.potential_label||'').toUpperCase()==='STRONG_MOVE_WATCH_ONLY';
+      const watchOnlyExcluded=radar.id==='RADAR_2'?archiveRows.filter(isWatchOnly).length:0;
+      const scoredRows=radar.id==='RADAR_2'?archiveRows.filter(row=>!isWatchOnly(row)):archiveRows;
+      const normalized = scoredRows.map(row => normalizeArchivedRadarSignal(row, radar.id, now));
       incoming.push(...normalized);
-      const finalRow = Array.isArray(rows) ? rows.at(-1) : null;
+      const finalRow = archiveRows.at(-1) ?? null;
       const finalAt = timestamp(finalRow?.replay_cursor_at, finalRow?.processed_at, finalRow?.detected_at, finalRow?.detectedAt, finalRow?.event_at, finalRow?.timestamp);
       const finalId = String(finalRow?.replay_cursor_id || '');
       if (finalAt !== null) {
@@ -492,9 +500,11 @@ export async function runRadarSignalOutcomePass({
         }
       }
       importCounts[radar.id] = {
-        scanned: normalized.length, status: 'OK',
+        scanned: archiveRows.length, normalized:normalized.length,
+        watch_only_excluded:watchOnlyExcluded,
+        status: 'OK',
         page_cursor_at: nextCursors[radar.id]?.at ?? null,
-        has_more_possible: normalized.length >= pageLimit
+        has_more_possible: archiveRows.length >= pageLimit
       };
     } catch (error) {
       importCounts[radar.id] = { scanned: 0, imported: 0, status: 'READ_FAILED', reason: safeError(error) };
