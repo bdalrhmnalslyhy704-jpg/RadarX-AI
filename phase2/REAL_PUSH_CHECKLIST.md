@@ -80,8 +80,8 @@ Use this checklist for staging only. Mark an item complete only after it is obse
 
 - [ ] Firebase project has Android app ID `com.radarx.app` and FCM HTTP v1 enabled.
 - [ ] `android/app/google-services.json` was supplied privately for the configured APK build and was not committed.
-- [ ] Railway uses the existing `RadarX-AI-Triple` service and existing `/data` volume only.
-- [ ] `RADARX_PUSH_PROVIDER=fcm`, `FCM_PROJECT_ID`, and valid `FCM_SERVICE_ACCOUNT_JSON` are present as Railway secrets.
+- [ ] DHDTech.io Cloud uses the existing `RadarX Backend Build 224` service (`radarx-backend.dhdtech.site`) and its existing persistent storage only.
+- [ ] `RADARX_PUSH_PROVIDER=fcm`, `FCM_PROJECT_ID`, and valid `FCM_SERVICE_ACCOUNT_JSON` are configured as DHDTech service environment variables.
 - [ ] Runtime guardrails pass: `RADARX_ENV=production`, `RADARX_STAGING_TEST_PUSH_ENABLED=false`, `RADARX_AUTH_SECRET` is at least 32 characters, `RADARX_ALLOWED_ORIGINS` is exact, `paper_trading=true`, `real_order_execution=false`, and `confidence_score=UNKNOWN`.
 - [ ] APK notification permission is granted and the device registration API returned HTTP 201.
 - [ ] FCM registration token is stored on the server but absent from API responses and logs.
