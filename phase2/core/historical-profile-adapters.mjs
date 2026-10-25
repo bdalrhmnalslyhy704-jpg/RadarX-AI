@@ -64,6 +64,8 @@ export function assessHistoricalPreMoveWatchProxy(context,ticker,now=Date.now(),
   if(context?.evidence_complete!==true||context?.closed_candles_only!==true||
      context?.already_moved===true||!Number.isFinite(Number(context?.current_price))||
      Number(context.current_price)<=0) return reject('CLOSED_CANDLE_EVIDENCE_INCOMPLETE');
+  if(ticker?.ticker_24h_coverage_complete!==true)
+    return reject('HISTORICAL_24H_TICKER_COVERAGE_INCOMPLETE');
   if(daily===null||Math.abs(daily)>=12) return reject('DAILY_ANTI_CHASE_GATE');
   if(quoteVolume===null||quoteVolume<Number(minQuoteVolume24h))
     return reject('HISTORICAL_QUOTE_VOLUME_GATE');
