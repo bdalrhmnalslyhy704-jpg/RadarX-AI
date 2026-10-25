@@ -210,6 +210,10 @@ jobs:
           if (u.elapsed_ms>45000) throw new Error('PRE_MOVE_SCAN_LATENCY_OVER_45_SECONDS:'+u.elapsed_ms);
           if (!Array.isArray(b.candidates)) throw new Error('PRE_MOVE_CANDIDATES_MISSING');
           if (!Array.isArray(b.watch_candidates)) throw new Error('PRE_MOVE_WATCH_CANDIDATES_MISSING');
+          if (!Array.isArray(b.watch_notification_candidates) || b.watch_notification_candidates.length > 3) throw new Error('PRE_MOVE_WATCH_NOTIFICATION_CANDIDATES_INVALID');
+          for (const x of b.watch_notification_candidates) {
+            if (x?.event !== 'PRE_MOVE_RADAR_WATCH_ONLY' || x?.watch_only !== true || x?.entry_eligible !== false || x?.potential_label !== 'WATCH_EARLY' || x?.market !== 'SPOT' || x?.closed_candles_only !== true || x?.paper_trading !== true || x?.real_order_execution !== false || x?.source !== 'Binance Public REST' || x?.data_status?.data_valid !== true || x?.data_status?.data_stale !== false || !Number.isFinite(x?.data_quality) || x.data_quality < 70 || !Number.isFinite(x?.liquidity_quality) || x.liquidity_quality < 60) throw new Error('PRE_MOVE_WATCH_NOTIFICATION_GATE:'+String(x?.symbol||'UNKNOWN'));
+          }
           if (!Array.isArray(b.near_miss_audit)) throw new Error('PRE_MOVE_NEAR_MISS_AUDIT_MISSING');
           for (const x of b.near_miss_audit) {
             if (x?.diagnostic_only !== true || x?.watch_only !== true || x?.alert_eligible !== false || !Array.isArray(x.blocker_codes) || x.blocker_codes.length < 1)
