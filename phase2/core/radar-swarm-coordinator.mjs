@@ -71,7 +71,12 @@ export class RadarSwarmCoordinator {
       }
       const busySince=Number(health.busy_since_at);
       const pollMs=Number(health.poll_ms)||20000;
-      const stuckScanLimitMs=Math.max(120000,Math.min(240000,pollMs*6));
+      // Real Spot sweeps over a broad symbol universe can exceed two minutes on
+      // the 512 MB runtime. Don't restart a healthy worker merely for a long,
+      // bounded cycle: allow five minutes by default, scaling to at most six
+      // minutes when the worker advertises a slower polling interval. A cycle
+      // that remains busy beyond this finite deadline is still restarted.
+      const stuckScanLimitMs=Math.max(300000,Math.min(360000,pollMs*12));
       const busyForMs=this.clock()-busySince;
       const stuckScan=health.running===true&&health.busy===true&&Number.isFinite(busySince)&&busySince>0&&busyForMs>stuckScanLimitMs;
       if(stuckScan&&state.status==='RUNNING'){
