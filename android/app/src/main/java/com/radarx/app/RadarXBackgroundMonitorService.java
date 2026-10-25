@@ -542,14 +542,6 @@ public final class RadarXBackgroundMonitorService extends Service {
         double structure = components == null ? Double.NaN : components.optDouble("structure", Double.NaN);
         long closeAt = alert.optLong("detected_candle_close_time", status.optLong("close_time", 0L));
 
-        if (!Double.isFinite(quality) || quality < 70.0 || quality > 100.0 ||
-                !Double.isFinite(liquidity) || liquidity < 60.0 || liquidity > 100.0 ||
-                !Double.isFinite(price) || price <= 0.0 || !Double.isFinite(daily) || Math.abs(daily) >= 12.0 ||
-                !Double.isFinite(score) || score < 68.0 || !Double.isFinite(session) || session < 0.0 || session > 6.0 ||
-                !Double.isFinite(hour) || hour < 0.15 || hour > 4.5 ||
-                !Double.isFinite(structure) || structure < 60.0 ||
-                closeAt <= 0L || closeAt > now + 5000L || now - closeAt > 20 * 60_000L) return false;
-
         int participation = 0;
         if (Double.isFinite(volume) && volume >= 1.0) participation++;
         if (Double.isFinite(trades) && trades >= 1.05) participation++;
@@ -557,7 +549,33 @@ public final class RadarXBackgroundMonitorService extends Service {
         if (Double.isFinite(buyDelta) && buyDelta >= 0.01) participation++;
         if (Double.isFinite(closeLocation) && closeLocation >= 0.54) participation++;
         if (Double.isFinite(relative) && relative >= 0.5) participation++;
-        if (participation < 3) return false;
+
+        // Match the server's separately-labelled exceptional watch tier. It may
+        // pass with structure 50-59 only when live participation, volume/trade
+        // acceleration, relative strength, data quality and liquidity all agree.
+        // It remains a local monitor notification, never an entry signal.
+        boolean highActivityStructurePending =
+                "HIGH_ACTIVITY_STRUCTURE_PENDING".equals(alert.optString("watch_notification_tier", "")) &&
+                Double.isFinite(score) && score >= 70.0 &&
+                Double.isFinite(volume) && volume >= 3.0 &&
+                Double.isFinite(trades) && trades >= 2.0 &&
+                Double.isFinite(buy) && buy >= 0.52 &&
+                Double.isFinite(relative) && relative >= 1.5 &&
+                Double.isFinite(quality) && quality >= 80.0 && quality <= 100.0 &&
+                Double.isFinite(liquidity) && liquidity >= 70.0 && liquidity <= 100.0 &&
+                Double.isFinite(structure) && structure >= 50.0 &&
+                participation >= 4;
+        if ("HIGH_ACTIVITY_STRUCTURE_PENDING".equals(alert.optString("watch_notification_tier", "")) &&
+                !highActivityStructurePending) return false;
+
+        if (!Double.isFinite(quality) || quality < 70.0 || quality > 100.0 ||
+                !Double.isFinite(liquidity) || liquidity < 60.0 || liquidity > 100.0 ||
+                !Double.isFinite(price) || price <= 0.0 || !Double.isFinite(daily) || Math.abs(daily) >= 12.0 ||
+                !Double.isFinite(score) || score < 68.0 || !Double.isFinite(session) || session < 0.0 || session > 6.0 ||
+                !Double.isFinite(hour) || hour < 0.15 || hour > 4.5 ||
+                !Double.isFinite(structure) || (structure < 60.0 && !highActivityStructurePending) ||
+                participation < (highActivityStructurePending ? 4 : 3) ||
+                closeAt <= 0L || closeAt > now + 5000L || now - closeAt > 20 * 60_000L) return false;
 
         JSONArray risks = alert.optJSONArray("risk_flags");
         if (risks != null) {
@@ -589,8 +607,13 @@ public final class RadarXBackgroundMonitorService extends Service {
         String priceText = Double.isFinite(price) && price > 0.0 ? formatPrice(price) : "غير متوفر";
         String scoreText = Double.isFinite(score) ? scoreFmt.format(score) : "غير متوفر";
         String title = "RadarX • مراقبة مبكرة • " + symbol;
-        String body = "مراقبة فقط — ليست إشارة دخول • السعر: " + priceText +
-            " • Score: " + scoreText + " • انتظر التأكيد • شموع مغلقة • تداول ورقي فقط";
+        boolean pendingStructure = "HIGH_ACTIVITY_STRUCTURE_PENDING".equals(
+            alert.optString("watch_notification_tier", ""));
+        String body = (pendingStructure
+            ? "نشاط مبكر قوي — البنية السعرية لم تكتمل — مراقبة فقط، ليست إشارة دخول"
+            : "مراقبة فقط — ليست إشارة دخول — انتظر التأكيد") +
+            " • السعر: " + priceText + " • Score: " + scoreText +
+            " • شموع مغلقة • تداول ورقي فقط";
         Intent open = new Intent(this, MainActivity.class);
         open.putExtra("radarx_push_open", true);
         open.putExtra("radarx_alert_symbol", symbol);
