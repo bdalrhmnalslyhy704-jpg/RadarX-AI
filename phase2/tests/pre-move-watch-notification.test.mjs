@@ -204,3 +204,53 @@ test('live-like GTC early-watch sample qualifies for a watch-only heads-up when 
   assert.equal(alerts[0].watch_only,true);
   assert.equal(alerts[0].entry_eligible,false);
 });
+
+
+test('exceptional live-like activity creates a labelled watch-only heads-up while structure is pending',()=>{
+  const {snapshot,now}=fixture();
+  const candidate={
+    symbol:'MEGAUSDT',last_price:0.1977,price_change_24h:3.702,data_quality:100,liquidity_quality:92.36,
+    data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false,candle_data_valid:true},
+    watch_only:true,alert_eligible:false,watch_reason_codes:[
+      'BUY_FLOW_NOT_CONFIRMED','BUYER_CANDLE_CLOSES_NOT_CONFIRMED','STRUCTURE_NOT_CONFIRMED'
+    ],risk_flags:[],
+    pre_move_context:{
+      stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,closed_candles_only:true,
+      already_moved:false,session_close:now-129_000,score:70.6,
+      session_return_pct:2.6675,one_hour_return_pct:1.9399,
+      volume_acceleration:23.4119,trade_acceleration:15.3842,
+      taker_buy_ratio:0.5436,taker_buy_acceleration:0.0032,
+      mean_close_location:0.3545,relative_strength_vs_market_pct:4.1490,
+      components:{structure:54.0185,squeeze:0,buying_pressure:70.8968},
+      reasons:['VOLUME_ACCELERATION_STRONG','TRADE_ACCELERATION_STRONG','RELATIVE_STRENGTH']
+    }
+  };
+  const report=diagnosePreMoveWatchOnlyCandidates([candidate],snapshot,now,12);
+  assert.equal(report.eligible,1,JSON.stringify(report));
+  assert.equal(report.samples[0].watch_notification_tier,'HIGH_ACTIVITY_STRUCTURE_PENDING');
+  const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
+  assert.ok(alert);
+  assert.equal(alert.watch_notification_tier,'HIGH_ACTIVITY_STRUCTURE_PENDING');
+  assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+  assert.equal(alert.paper_trading,true);
+  assert.equal(alert.real_order_execution,false);
+  assert.ok(alert.reason_codes.includes('HIGH_ACTIVITY_STRUCTURE_PENDING'));
+});
+
+test('high-activity watch override still fails closed on weak data, low participation, extended risk, or very weak structure',()=>{
+  const {candidate,snapshot,now}=fixture();
+  const strong={
+    ...candidate,symbol:'MEGAUSDT',price_change_24h:3.702,data_quality:100,liquidity_quality:92.36,
+    pre_move_context:{
+      ...candidate.pre_move_context,score:70.6,session_return_pct:2.6675,one_hour_return_pct:1.9399,
+      volume_acceleration:23.4119,trade_acceleration:15.3842,taker_buy_ratio:0.5436,
+      taker_buy_acceleration:0.0032,mean_close_location:0.3545,relative_strength_vs_market_pct:4.149,
+      session_close:now-129_000,components:{...candidate.pre_move_context.components,structure:54.0185}
+    }
+  };
+  assert.equal(buildPreMoveWatchOnlyAlert({...strong,data_quality:65},{...snapshot},now),null);
+  assert.equal(buildPreMoveWatchOnlyAlert({...strong,pre_move_context:{...strong.pre_move_context,taker_buy_ratio:0.49,volume_acceleration:1.2,trade_acceleration:1.1,relative_strength_vs_market_pct:0.2}},snapshot,now),null);
+  assert.equal(buildPreMoveWatchOnlyAlert({...strong,risk_flags:['ALREADY_EXTENDED']},snapshot,now),null);
+  assert.equal(buildPreMoveWatchOnlyAlert({...strong,pre_move_context:{...strong.pre_move_context,components:{...strong.pre_move_context.components,structure:49.9}},snapshot,now),null);
+});
