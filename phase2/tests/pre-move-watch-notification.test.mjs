@@ -304,6 +304,31 @@ test('early buyer-flow monitor can notify before price confirmation without beco
   assert.equal(buildPreMoveWatchOnlyAlert({...early,risk_flags:['WIDE_SPREAD']},snapshot,now),null);
 });
 
+test('strong flow just outside the exceptional corridor falls back to the pre-price monitor tier',()=>{
+  const {candidate,snapshot,now}=fixture();
+  const early={
+    ...candidate,price_change_24h:1.1,data_quality:92,liquidity_quality:82,
+    pre_move_context:{
+      ...candidate.pre_move_context,
+      stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,
+      closed_candles_only:true,already_moved:false,session_close:now-60_000,
+      score:76,session_return_pct:-1,one_hour_return_pct:-0.7,
+      volume_acceleration:3,trade_acceleration:2,taker_buy_ratio:0.65,
+      taker_buy_acceleration:0.05,mean_close_location:0.56,
+      relative_strength_vs_market_pct:0.7,
+      components:{...candidate.pre_move_context.components,structure:54,squeeze:62,buying_pressure:63}
+    }
+  };
+  const report=diagnosePreMoveWatchOnlyCandidates([early],snapshot,now,12);
+  assert.equal(report.eligible,1,JSON.stringify(report));
+  assert.equal(report.samples[0].watch_notification_tier,'EARLY_FLOW_MONITOR');
+  const alert=buildPreMoveWatchOnlyAlert(early,snapshot,now);
+  assert.ok(alert);
+  assert.equal(alert.watch_notification_tier,'EARLY_FLOW_MONITOR');
+  assert.equal(alert.entry_eligible,false);
+  assert.equal(alert.real_order_execution,false);
+});
+
 test('high-activity watch override still fails closed on weak data, low participation, extended risk, or very weak structure',()=>{
   const {candidate,snapshot,now}=fixture();
   const strong={
