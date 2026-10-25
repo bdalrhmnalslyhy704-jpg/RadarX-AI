@@ -215,7 +215,7 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
   return {eligible:true,reason:null,...fields,values:{symbol,p,price,daily,quality,liquidity,closeAt,risks}};
 }
 
-function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
+export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
   const assessment=assessPreMoveWatchOnlyCandidate(candidate,snapshot,now);
   if(!assessment.eligible)return null;
   const {symbol,p,price,daily,quality,liquidity,closeAt,risks}=assessment.values;
