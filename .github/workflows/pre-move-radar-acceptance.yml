@@ -170,12 +170,13 @@ jobs:
               200)
                 STATE="$(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/multi-analyst.json','utf8'));console.log(b.status||'unknown')")"
                 COMPLETED="$(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/multi-analyst.json','utf8'));console.log(b.scan?.completed===true?'true':'false')")"
+                SCAN_ERROR="$(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/multi-analyst.json','utf8'));console.log(String(b.error||b.scan?.error||b.monitoring?.last_error||b.diagnostics?.last_scan_error||'').replace(/[^A-Za-z0-9_:.-]/g,''))")"
                 if [ "$STATE" = "ready" ] && [ "$COMPLETED" = "true" ]; then
                   READY=true
                   break
                 fi
-                if [ "$STATE" = "error" ]; then
-                  echo "::error::DHDTech 20-analyst background scan failed: $(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/multi-analyst.json','utf8'));console.log(String(b.error||b.scan?.error||b.monitoring?.last_error||'unknown').replace(/[^A-Za-z0-9_:.-]/g,''))")"
+                if [ "$STATE" = "error" ] || { [ "$STATE" = "not_ready" ] && [ -n "$SCAN_ERROR" ]; }; then
+                  echo "::error::DHDTech 20-analyst background scan failed: ${SCAN_ERROR:-unknown}"
                   cat "$RUNNER_TEMP/multi-analyst.json"
                   exit 1
                 fi
