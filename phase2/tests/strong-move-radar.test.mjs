@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {buildStrongMoveAnalysis,buildStrongMoveAlert,buildEmergencyBreakoutAlert,StrongMoveRadar} from '../core/strong-move-radar.mjs';
+import {buildStrongMoveAnalysis,buildStrongMoveAlert,buildStrongMoveWatchOnlyAlert,buildEmergencyBreakoutAlert,StrongMoveRadar} from '../core/strong-move-radar.mjs';
 
 const NOW=10_000_000_000;
 
@@ -213,3 +213,62 @@ assert.ok(fiveMinuteGap.reason_codes.includes('FIVE_MINUTE_CLOSED_CANDLE_GAP'));
   assert.equal(repeated,null,'per-symbol scan pacing prevents duplicate work inside one poll interval');
 }
 console.log('Strong Move Radar tests passed');
+
+
+test('near-miss strong-move observations use the separate watch-only lane without lowering strict eligibility',()=>{
+  const now=Date.now(),closeAt=now-15_000;
+  const alert={
+    event:'STRONG_MOVE_ALERT',radar:'STRONG_MOVE_RADAR',symbol:'NEARUSDT',market:'SPOT',
+    direction:'UP_SURGE',price:1.25,price_change_24h:3.2,opportunity_score:71.4,
+    source:'Binance Public REST',detected_at:now,processed_at:now,
+    eligible:false,data_quality:90,liquidity_quality:86,
+    risk_flags:[],paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+    data_status:{status:'LIVE_DATA',stale:false,data_stale:false,future_data_detected:false,source:'Binance Public REST'},
+    strong_move:{
+      eligible:false,direction:'UP_SURGE',score:71.4,data_quality:90,data_stale:false,closed_candles_only:true,
+      metrics:{
+        closed_5m_candle_close_time_ms:closeAt,
+        return_1m:0.14,return_3m:0.28,volume_ratio:1.28,trade_ratio:1.17,
+        taker_buy_ratio:0.555,taker_buy_delta:0.018,close_location_pct:61,
+        breakout_up:false,micro_breakout:true
+      }
+    }
+  };
+  const row={symbol:'NEARUSDT',lastPrice:1.25,priceChange24h:3.2,quoteVolume24h:3_500_000};
+  const result=buildStrongMoveWatchOnlyAlert(alert,row,now,{
+    minQuoteVolume24h:750_000,
+    strictFailures:['STRONG_MOVE_CORE_TRIGGER_NOT_CONFIRMED','ELITE_GATE_NOT_ELIGIBLE']
+  });
+  assert.ok(result);
+  assert.equal(result.event,'STRONG_MOVE_WATCH_ONLY');
+  assert.equal(result.watch_only,true);
+  assert.equal(result.entry_eligible,false);
+  assert.equal(result.eligible,false);
+  assert.equal(result.data_status.data_valid,true);
+  assert.equal(result.detected_candle_close_time,closeAt);
+  assert.ok(result.watch_evidence.confluence_count>=4);
+  assert.ok(result.reason_codes.includes('ELITE_GATE_NOT_ELIGIBLE'));
+  assert.equal(result.real_order_execution,false);
+});
+
+test('near-miss watch lane rejects stale, extended, low-flow and thin-liquidity cases',()=>{
+  const now=Date.now();
+  const base={
+    event:'STRONG_MOVE_ALERT',radar:'STRONG_MOVE_RADAR',symbol:'NEARUSDT',direction:'UP_SURGE',price:1,
+    price_change_24h:3,opportunity_score:71,eligible:false,data_quality:90,liquidity_quality:85,
+    data_status:{status:'LIVE_DATA',stale:false,data_stale:false,future_data_detected:false,source:'Binance Public REST'},
+    risk_flags:[],paper_trading:true,real_order_execution:false,
+    strong_move:{eligible:false,direction:'UP_SURGE',score:71,data_quality:90,data_stale:false,closed_candles_only:true,
+      metrics:{closed_5m_candle_close_time_ms:now-10_000,return_1m:0.14,return_3m:0.28,
+        volume_ratio:1.28,trade_ratio:1.17,taker_buy_ratio:0.555,taker_buy_delta:0.018,
+        close_location_pct:61,breakout_up:false,micro_breakout:true}}
+  };
+  const row={symbol:'NEARUSDT',lastPrice:1,priceChange24h:3,quoteVolume24h:3_000_000};
+  assert.equal(buildStrongMoveWatchOnlyAlert(base,row,now),null);
+  const stale={...base,strong_move:{...base.strong_move,metrics:{...base.strong_move.metrics,closed_5m_candle_close_time_ms:now-7*60_000}}};
+  assert.equal(buildStrongMoveWatchOnlyAlert(stale,row,now),null);
+  assert.equal(buildStrongMoveWatchOnlyAlert(base,{...row,priceChange24h:14},now),null);
+  const noFlow={...base,strong_move:{...base.strong_move,metrics:{...base.strong_move.metrics,taker_buy_ratio:0.49,taker_buy_delta:0.002}}};
+  assert.equal(buildStrongMoveWatchOnlyAlert(noFlow,row,now),null);
+  assert.equal(buildStrongMoveWatchOnlyAlert(base,{...row,quoteVolume24h:100_000},now),null);
+});
