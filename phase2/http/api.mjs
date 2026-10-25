@@ -142,7 +142,7 @@ function subscriptionValid(x){
   return {endpoint:x.endpoint,expirationTime:x.expirationTime??null,keys:{p256dh:x.keys.p256dh,auth:x.keys.auth}};
 }
 
-export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
+export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now()){
   const finite=(...values)=>{
     for(const value of values){
       if(value===null||value===undefined||value===''||typeof value==='boolean')continue;
@@ -179,21 +179,46 @@ export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
     relative!==null&&relative>=0.5
   ].filter(Boolean).length;
   const risks=Array.isArray(candidate?.risk_flags)?candidate.risk_flags.map(x=>String(x).toUpperCase()):[];
-  if(!/^[A-Z0-9]{5,30}$/.test(symbol))return null;
+  const fields={
+    symbol,score,session_return_pct:session,one_hour_return_pct:hour,
+    volume_acceleration:volume,trade_acceleration:trades,taker_buy_ratio:buy,
+    taker_buy_acceleration:buyDelta,mean_close_location:closeLocation,
+    relative_strength_vs_market_pct:relative,structure_score:structure,
+    data_valid:status?.data_valid===true,data_stale:status?.data_stale===true||status?.stale===true,
+    data_quality:quality,liquidity_quality:liquidity,closed_candle_close_time:closeAt,
+    candle_age_ms:closeAt===null?null:Number(now)-closeAt,participation,risks
+  };
+  const fail=reason=>({eligible:false,reason,...fields});
+  if(!/^[A-Z0-9]{5,30}$/.test(symbol))return fail('SYMBOL_INVALID');
   if(snapshot?.meta?.radar!=='PRE_MOVE'||snapshot?.meta?.live!==true||
-     snapshot?.meta?.paper_trading!==true||snapshot?.meta?.real_order_execution!==false)return null;
-  if(source!=='Binance Public REST')return null;
+     snapshot?.meta?.paper_trading!==true||snapshot?.meta?.real_order_execution!==false)
+    return fail('SNAPSHOT_POLICY_INVALID');
+  if(source!=='Binance Public REST')return fail('MARKET_SOURCE_NOT_PUBLIC_REST');
   if(candidate?.watch_only!==true||candidate?.alert_eligible!==false||
      p?.stage!=='WATCH_EARLY'||p?.watch_only!==true||p?.actionable!==false||
-     p?.evidence_complete!==true||p?.closed_candles_only!==true||p?.already_moved===true)return null;
+     p?.evidence_complete!==true||p?.closed_candles_only!==true||p?.already_moved===true)
+    return fail('NOT_QUALIFIED_WATCH_EARLY_STAGE');
   if(status?.data_valid!==true||status?.data_stale===true||status?.stale===true||
-     status?.future_data_detected===true||candidate?.data_stale===true||!qualityOk)return null;
-  if(!Number.isFinite(price)||price<=0||daily===null||Math.abs(daily)>=12||
-     score===null||score<68||session===null||session<0||session>6||
-     hour===null||hour<0.15||hour>4.5||structure===null||structure<60)return null;
-  if(closeAt===null||closeAt>Number(now)+5000||Number(now)-closeAt>20*60*1000)return null;
-  if(risks.some(x=>/ALREADY_EXTENDED|EXTENDED_CHASE|HIGH_RISK|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK|LOW_LIQUIDITY/.test(x)))return null;
-  if(participation<3)return null;
+     status?.future_data_detected===true||candidate?.data_stale===true||!qualityOk)
+    return fail('DATA_FRESHNESS_QUALITY_OR_LIQUIDITY_GATE');
+  if(!Number.isFinite(price)||price<=0||daily===null||Math.abs(daily)>=12)
+    return fail('PRICE_OR_DAILY_CHANGE_INVALID');
+  if(score===null||score<68)return fail('SCORE_BELOW_WATCH_FLOOR');
+  if(session===null||session<0||session>6)return fail('SESSION_RETURN_OUT_OF_RANGE');
+  if(hour===null||hour<0.15||hour>4.5)return fail('ONE_HOUR_RETURN_OUT_OF_RANGE');
+  if(structure===null||structure<60)return fail('STRUCTURE_SCORE_BELOW_MINIMUM');
+  if(closeAt===null||closeAt>Number(now)+5000||Number(now)-closeAt>20*60*1000)
+    return fail('CLOSED_CANDLE_STALE_OR_FUTURE');
+  if(risks.some(x=>/ALREADY_EXTENDED|EXTENDED_CHASE|HIGH_RISK|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK|LOW_LIQUIDITY/.test(x)))
+    return fail('RISK_FLAG_BLOCK');
+  if(participation<3)return fail('INDEPENDENT_PARTICIPATION_BELOW_3');
+  return {eligible:true,reason:null,...fields,values:{symbol,p,price,daily,quality,liquidity,closeAt,risks}};
+}
+
+function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
+  const assessment=assessPreMoveWatchOnlyCandidate(candidate,snapshot,now);
+  if(!assessment.eligible)return null;
+  const {symbol,p,price,daily,quality,liquidity,closeAt,risks}=assessment.values;
   return {
     id:'PRE_MOVE_WATCH:'+symbol+':'+String(closeAt),
     event:'PRE_MOVE_RADAR_WATCH_ONLY',
@@ -212,6 +237,37 @@ export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
       Array.isArray(p?.reasons)?p.reasons:[])].map(x=>String(x).slice(0,100)).slice(0,12),
     risk_flags:risks,
     paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+  };
+}
+
+export function diagnosePreMoveWatchOnlyCandidates(candidates,snapshot,now=Date.now(),sampleLimit=12){
+  const rows=(Array.isArray(candidates)?candidates:[]).map(candidate=>({
+    candidate,assessment:assessPreMoveWatchOnlyCandidate(candidate,snapshot,now)
+  }));
+  const counts={};
+  for(const {assessment} of rows){
+    if(!assessment.eligible)counts[assessment.reason]=(counts[assessment.reason]||0)+1;
+  }
+  const samples=rows.map(({assessment})=>({
+    symbol:assessment.symbol,eligible:assessment.eligible,reason:assessment.reason,
+    score:assessment.score,session_return_pct:assessment.session_return_pct,
+    one_hour_return_pct:assessment.one_hour_return_pct,
+    volume_acceleration:assessment.volume_acceleration,
+    trade_acceleration:assessment.trade_acceleration,
+    taker_buy_ratio:assessment.taker_buy_ratio,
+    taker_buy_acceleration:assessment.taker_buy_acceleration,
+    mean_close_location:assessment.mean_close_location,
+    relative_strength_vs_market_pct:assessment.relative_strength_vs_market_pct,
+    structure_score:assessment.structure_score,participation:assessment.participation,
+    data_valid:assessment.data_valid,data_stale:assessment.data_stale,
+    data_quality:assessment.data_quality,liquidity_quality:assessment.liquidity_quality,
+    closed_candle_close_time:assessment.closed_candle_close_time,candle_age_ms:assessment.candle_age_ms
+  })).sort((a,b)=>(Number(b.score)||0)-(Number(a.score)||0)||String(a.symbol).localeCompare(String(b.symbol)))
+    .slice(0,Math.max(0,Math.min(30,Math.trunc(Number(sampleLimit)||12))));
+  return {
+    evaluated:rows.length,eligible:rows.filter(x=>x.assessment.eligible).length,
+    rejected:rows.filter(x=>!x.assessment.eligible).length,
+    rejection_counts:counts,samples
   };
 }
 
@@ -442,10 +498,15 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         throw new Error('PRE_MOVE_NO_VALID_LIVE_DATA');
       // The same strict watch-only validator feeds FCM and the app's local-polling
       // fallback. The fallback must not promote any row to an actionable entry signal.
-      const watchAlerts=buildPreMoveWatchOnlyAlerts(
-        Array.isArray(snapshot.watch_candidates)?snapshot.watch_candidates:[],snapshot,Date.now(),3
-      );
+      const watchCandidates=Array.isArray(snapshot.watch_candidates)?snapshot.watch_candidates:[];
+      const watchEvaluationAt=Date.now();
+      const watchAlerts=buildPreMoveWatchOnlyAlerts(watchCandidates,snapshot,watchEvaluationAt,3);
       snapshot.watch_notification_candidates=watchAlerts;
+      snapshot.watch_notification_diagnostics={
+        ...diagnosePreMoveWatchOnlyCandidates(watchCandidates,snapshot,watchEvaluationAt,12),
+        evaluated_at:new Date(watchEvaluationAt).toISOString(),
+        policy:'STRICT_WATCH_ONLY_NO_ENTRY'
+      };
       if(!preMoveRadarResponseCache.has(key)&&preMoveRadarResponseCache.size>=6){
         const oldest=[...preMoveRadarResponseCache.entries()].sort((a,b)=>a[1].savedAt-b[1].savedAt)[0];
         if(oldest)preMoveRadarResponseCache.delete(oldest[0]);
