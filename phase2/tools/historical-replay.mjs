@@ -566,7 +566,7 @@ async function main() {
       // Prefer full, checksum-verified official historical Spot archives for completed
       // UTC days. REST remains the fallback for current/incomplete days and unavailable archives.
       archiveAttempt = await fetchBinanceSpotAggTradesArchive(
-        symbol, start - 65_000, end, {maxTrades: Math.max(maxTrades, 500_000)}
+        symbol, start - 65_000, end, {maxTrades}
       );
       if (archiveAttempt.complete === true) tradeFetch = archiveAttempt;
     } catch (error) {
