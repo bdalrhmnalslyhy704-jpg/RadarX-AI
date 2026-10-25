@@ -678,7 +678,7 @@ test('TEST_FIXTURE: Pre-Move Radar reuses an active radar REST client when the d
 });
 
 
-test('TEST_FIXTURE: multi-analyst forced scan launches in background and progress polling resolves to the completed result',async()=>{
+test('TEST_FIXTURE: forced analyst polling returns only the matching request scan, never an older cache entry',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-multi-analyst-background-')),store=await new DurableStore({dir}).init();
   let releaseScan=null,scanFlight=null,scanCalls=0,cached=null;
   const completed={
@@ -695,11 +695,12 @@ test('TEST_FIXTURE: multi-analyst forced scan launches in background and progres
     running:true,busy:null,
     monitorStats:{scan_count:0,last_scan_at:null,last_error:null,last_failed_at:null,next_scan_at:null,last_scan_successful:false,active_scan_started_at:null},
     getCached(){return cached;},
-    scan(){
+    scan({requestId}={}){
       scanCalls++;
       this.monitorStats.active_scan_started_at=new Date().toISOString();
+      const scanResult={...completed,meta:{...completed.meta,request_id:requestId||null}};
       scanFlight=new Promise(resolve=>{
-        releaseScan=()=>resolve(completed);
+        releaseScan=()=>resolve(scanResult);
       }).then(value=>{
         cached=value;
         this.monitorStats.scan_count++;
@@ -731,7 +732,7 @@ test('TEST_FIXTURE: multi-analyst forced scan launches in background and progres
     assert.equal(warming.meta.live,false);
     assert.equal(scanCalls,1);
 
-    const inProgress=await fetch(base+'/api/multi-analyst?quote=USDT&limit=1&scan=1&progress=1&_ts=progress-test');
+    const inProgress=await fetch(base+'/api/multi-analyst?quote=USDT&limit=1&scan=1&progress=1&_ts=background-test');
     assert.equal(inProgress.status,202);
     const progressBody=await inProgress.json();
     assert.equal(progressBody.status,'warming');
@@ -741,7 +742,7 @@ test('TEST_FIXTURE: multi-analyst forced scan launches in background and progres
 
     releaseScan();
     await scanFlight;
-    const finalResponse=await fetch(base+'/api/multi-analyst?quote=USDT&limit=1&scan=1&progress=1&_ts=completed-test');
+    const finalResponse=await fetch(base+'/api/multi-analyst?quote=USDT&limit=1&scan=1&progress=1&_ts=background-test');
     assert.equal(finalResponse.status,200);
     const finalBody=await finalResponse.json();
     assert.equal(finalBody.meta.live,true);
@@ -749,6 +750,23 @@ test('TEST_FIXTURE: multi-analyst forced scan launches in background and progres
     assert.equal(finalBody.scan.completed,true);
     assert.equal(finalBody.universe.scanned,12);
     assert.equal(finalBody.candidates[0].symbol,'TESTUSDT');
+    assert.equal(finalBody.meta.request_id,'background-test');
+
+    // A fresh poll with another ID must not relabel the old cache as FORCED_SCAN.
+    cached={...completed,meta:{...completed.meta,request_id:'previous-request'}};
+    const nextStart=await fetch(base+'/api/multi-analyst?quote=USDT&limit=1&scan=1&progress=1&_ts=fresh-request');
+    assert.equal(nextStart.status,202);
+    const nextWarming=await nextStart.json();
+    assert.equal(nextWarming.scan.error,'SCAN_STARTED');
+    assert.equal(scanCalls,2,'an unrelated cached scan cannot satisfy a new forced-scan request');
+    releaseScan();
+    await scanFlight;
+    const freshResponse=await fetch(base+'/api/multi-analyst?quote=USDT&limit=1&scan=1&progress=1&_ts=fresh-request');
+    assert.equal(freshResponse.status,200);
+    const freshBody=await freshResponse.json();
+    assert.equal(freshBody.scan.completed,true);
+    assert.equal(freshBody.meta.request_id,'fresh-request');
+    assert.equal(scanCalls,2);
   }finally{
     releaseScan?.();
     await new Promise(resolve=>server.close(resolve));
