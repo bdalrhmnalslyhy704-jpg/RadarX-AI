@@ -267,6 +267,43 @@ test('exceptional buyer flow qualifies for monitor-only before session and hourl
   assert.equal(alert.real_order_execution,false);
 });
 
+test('early buyer-flow monitor can notify before price confirmation without becoming an entry signal',()=>{
+  const {candidate,snapshot,now}=fixture();
+  const early={
+    ...candidate,
+    price_change_24h:1.1,
+    data_quality:92,
+    liquidity_quality:82,
+    pre_move_context:{
+      ...candidate.pre_move_context,
+      stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,
+      closed_candles_only:true,already_moved:false,session_close:now-60_000,
+      score:73,session_return_pct:-0.4,one_hour_return_pct:-0.25,
+      volume_acceleration:1.8,trade_acceleration:1.3,
+      taker_buy_ratio:0.58,taker_buy_acceleration:0.035,
+      mean_close_location:0.56,relative_strength_vs_market_pct:0.45,
+      components:{...candidate.pre_move_context.components,structure:57,squeeze:62,buying_pressure:63}
+    }
+  };
+  const report=diagnosePreMoveWatchOnlyCandidates([early],snapshot,now,12);
+  assert.equal(report.eligible,1,JSON.stringify(report));
+  assert.equal(report.samples[0].watch_notification_tier,'EARLY_FLOW_MONITOR');
+  const alert=buildPreMoveWatchOnlyAlert(early,snapshot,now);
+  assert.ok(alert);
+  assert.equal(alert.watch_notification_tier,'EARLY_FLOW_MONITOR');
+  assert.equal(alert.watch_review_reason,'BUY_FLOW_AND_ACTIVITY_BEFORE_PRICE_CONFIRMATION');
+  assert.ok(alert.reason_codes.includes('EARLY_FLOW_MONITOR'));
+  assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+  assert.equal(alert.paper_trading,true);
+  assert.equal(alert.real_order_execution,false);
+
+  // The relaxed monitor lane must still reject overextended or unsafe market data.
+  assert.equal(buildPreMoveWatchOnlyAlert({...early,price_change_24h:12},snapshot,now),null);
+  assert.equal(buildPreMoveWatchOnlyAlert({...early,data_quality:84},snapshot,now),null);
+  assert.equal(buildPreMoveWatchOnlyAlert({...early,risk_flags:['WIDE_SPREAD']},snapshot,now),null);
+});
+
 test('high-activity watch override still fails closed on weak data, low participation, extended risk, or very weak structure',()=>{
   const {candidate,snapshot,now}=fixture();
   const strong={
