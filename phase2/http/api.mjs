@@ -277,6 +277,7 @@ export function diagnosePreMoveWatchOnlyCandidates(candidates,snapshot,now=Date.
     mean_close_location:assessment.mean_close_location,
     relative_strength_vs_market_pct:assessment.relative_strength_vs_market_pct,
     structure_score:assessment.structure_score,participation:assessment.participation,
+    watch_notification_tier:assessment.watch_notification_tier,
     data_valid:assessment.data_valid,data_stale:assessment.data_stale,
     data_quality:assessment.data_quality,liquidity_quality:assessment.liquidity_quality,
     closed_candle_close_time:assessment.closed_candle_close_time,candle_age_ms:assessment.candle_age_ms
