@@ -189,7 +189,22 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     relative!==null&&relative>=0.5&&
     quality!==null&&quality>=80&&liquidity!==null&&liquidity>=70&&
     structure!==null&&structure>=50&&participation>=4;
-  const watchTier=highActivityStructurePending?'HIGH_ACTIVITY_STRUCTURE_PENDING':'STANDARD_WATCH_EARLY';
+  // Second, still non-entry-only path for pre-move accumulation. It relaxes only the
+  // small price-return gate; independent buyer-flow, activity, structure, freshness,
+  // data-quality, liquidity, and anti-chase requirements remain explicit and stricter
+  // than the ordinary visual WATCH_EARLY lane.
+  const earlyFlowMonitor=(session!==null&&(session<0||session>4.5)||
+      hour!==null&&(hour<0.15||hour>2.5)||structure!==null&&structure<60)&&
+    score!==null&&score>=72&&
+    session!==null&&session>=-1.25&&session<=4.5&&
+    hour!==null&&hour>=-0.75&&hour<=2.5&&
+    volume!==null&&volume>=1.6&&trades!==null&&trades>=1.15&&
+    buy!==null&&buy>=0.56&&buyDelta!==null&&buyDelta>=0.025&&
+    relative!==null&&relative>=0.4&&
+    quality!==null&&quality>=85&&liquidity!==null&&liquidity>=70&&
+    structure!==null&&structure>=55&&participation>=4;
+  const watchTier=highActivityStructurePending?'HIGH_ACTIVITY_STRUCTURE_PENDING':
+    earlyFlowMonitor?'EARLY_FLOW_MONITOR':'STANDARD_WATCH_EARLY';
   const fields={
     symbol,score,session_return_pct:session,one_hour_return_pct:hour,
     volume_acceleration:volume,trade_acceleration:trades,taker_buy_ratio:buy,
@@ -215,12 +230,16 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     return fail('DATA_FRESHNESS_QUALITY_OR_LIQUIDITY_GATE');
   if(!Number.isFinite(price)||price<=0||daily===null||Math.abs(daily)>=12)
     return fail('PRICE_OR_DAILY_CHANGE_INVALID');
-  if(score===null||score<68)return fail('SCORE_BELOW_WATCH_FLOOR');
-  if(session===null||session<(highActivityStructurePending?-0.75:0)||session>6)
+  if(score===null||score<(earlyFlowMonitor?72:highActivityStructurePending?75:68))
+    return fail('SCORE_BELOW_WATCH_FLOOR');
+  if(session===null||session<(highActivityStructurePending?-0.75:earlyFlowMonitor?-1.25:0)||
+     session>(earlyFlowMonitor?4.5:6))
     return fail('SESSION_RETURN_OUT_OF_RANGE');
-  if(hour===null||hour<(highActivityStructurePending?-0.5:0.15)||hour>4.5)
+  if(hour===null||hour<(highActivityStructurePending?-0.5:earlyFlowMonitor?-0.75:0.15)||
+     hour>(earlyFlowMonitor?2.5:4.5))
     return fail('ONE_HOUR_RETURN_OUT_OF_RANGE');
-  if(structure===null||(structure<60&&!highActivityStructurePending))return fail('STRUCTURE_SCORE_BELOW_MINIMUM');
+  if(structure===null||(structure<(highActivityStructurePending?50:earlyFlowMonitor?55:60)))
+    return fail('STRUCTURE_SCORE_BELOW_MINIMUM');
   if(closeAt===null||closeAt>Number(now)+5000||Number(now)-closeAt>20*60*1000)
     return fail('CLOSED_CANDLE_STALE_OR_FUTURE');
   if(risks.some(x=>/ALREADY_EXTENDED|EXTENDED_CHASE|HIGH_RISK|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK|LOW_LIQUIDITY/.test(x)))
@@ -250,10 +269,14 @@ export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
     watch_notification_tier:assessment.values.watch_notification_tier,
     watch_review_reason:assessment.values.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'
       ?'STRONG_VOLUME_AND_TRADE_ACCELERATION_WITH_PRICE_STRUCTURE_PENDING'
-      :'CONFLUENCE_BASED_EARLY_WATCH',
+      :assessment.values.watch_notification_tier==='EARLY_FLOW_MONITOR'
+        ?'BUY_FLOW_AND_ACTIVITY_BEFORE_PRICE_CONFIRMATION'
+        :'CONFLUENCE_BASED_EARLY_WATCH',
     reason_codes:[
       ...(assessment.values.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'
         ?['HIGH_ACTIVITY_STRUCTURE_PENDING']:[]),
+      ...(assessment.values.watch_notification_tier==='EARLY_FLOW_MONITOR'
+        ?['EARLY_FLOW_MONITOR','BUY_FLOW_BEFORE_PRICE_CONFIRMATION']:[]),
       ...(Array.isArray(candidate?.watch_reason_codes)?candidate.watch_reason_codes:
         Array.isArray(p?.reasons)?p.reasons:[])
     ].map(x=>String(x).slice(0,100)).slice(0,12),
