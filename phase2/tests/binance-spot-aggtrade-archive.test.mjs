@@ -6,7 +6,7 @@ import {
 } from '../core/binance-spot-aggtrade-archive.mjs';
 
 test('normalizes Binance Spot archive microseconds to RadarX milliseconds', () => {
-  assert.equal(normalizeBinanceSpotArchiveTimestamp('1735689600010866'), 1735689600010);
+  assert.equal(normalizeBinanceSpotArchiveTimestamp('1735689600010866'), 1735689600010.866);
 });
 
 test('keeps legacy Binance Spot archive millisecond timestamps unchanged', () => {
@@ -16,7 +16,7 @@ test('keeps legacy Binance Spot archive millisecond timestamps unchanged', () =>
 test('parses the eight-column official Spot aggTrades CSV row', () => {
   assert.deepEqual(
     parseBinanceSpotAggTradeArchiveLine('123,0.00250000,10.00000000,120,123,1735689600010866,False,True'),
-    {a:123,p:'0.00250000',q:'10.00000000',f:120,l:123,T:1735689600010,m:false,M:true}
+    {a:123,p:'0.00250000',q:'10.00000000',f:120,l:123,T:1735689600010.866,m:false,M:true}
   );
 });
 
