@@ -100,6 +100,26 @@ test('historical pre-move proxy records strong buyer flow before positive price 
   assert.ok(result.limitations.includes('BTC_RELATIVE_STRENGTH_USED_AS_PROXY'));
 });
 
+test('historical watch proxy stays aligned with the lower live monitor corridor without claiming delivery',()=>{
+  const now=Date.parse('2026-10-25T12:00:00Z');
+  const context={
+    evidence_complete:true,closed_candles_only:true,already_moved:false,current_price:1.02,
+    session_close:now-60_000,score:69,session_return_pct:-0.6,one_hour_return_pct:-0.2,
+    volume_acceleration:1.4,trade_acceleration:1.1,taker_buy_ratio:0.54,
+    taker_buy_acceleration:0.03,mean_close_location:0.56,
+    relative_strength_vs_market_pct:null,relative_strength_vs_btc_pct:0.3,
+    components:{structure:52,squeeze:44,buying_pressure:61}
+  };
+  const ticker={priceChange24h:1.1,quoteVolume24h:1_200_000,lastPrice:1.02,ticker_24h_coverage_complete:true};
+  const result=assessHistoricalPreMoveWatchProxy(context,ticker,now);
+  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.tier,'EARLY_FLOW_MONITOR');
+  assert.equal(result.proxy_only,true);
+  assert.equal(result.entry_eligible,false);
+  assert.ok(result.limitations.includes('HISTORICAL_ORDERBOOK_UNAVAILABLE'));
+  assert.ok(result.limitations.includes('LIVE_PUSH_GATE_NOT_SIMULATED'));
+});
+
 test('historical pre-move proxy fails closed on missing evidence, stale candles, low volume, and extended price',()=>{
   const now=Date.parse('2026-10-25T12:00:00Z');
   const context={
