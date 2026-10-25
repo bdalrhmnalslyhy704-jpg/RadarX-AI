@@ -181,7 +181,9 @@ export function qualifiesHighActivityStructurePendingShadow({
   if(!/^[A-Z0-9]{5,30}$/.test(String(alert?.symbol||''))||
      !String(alert?.symbol||'').toUpperCase().endsWith('USDT')||
      String(a?.direction||alert?.direction||'').toUpperCase()!=='UP_SURGE'||
-     alert?.eligible!==true||a?.eligible!==true||
+     // This is explicitly a near-miss watch lane, so a strict core trigger may
+     // still be false. The independent activity/flow/structure checks below
+     // carry the burden of proof; never convert this result into an entry.
      a?.closed_candles_only!==true||a?.data_stale===true||alert?.data_stale===true||
      dataQuality===null||dataQuality<80||dataQuality>100||
      score<70||volumeRatio===null||volumeRatio<3||
