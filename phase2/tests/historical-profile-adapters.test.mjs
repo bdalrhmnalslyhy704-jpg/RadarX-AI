@@ -116,6 +116,15 @@ test('historical pre-move proxy fails closed on missing evidence, stale candles,
   assert.equal(assessHistoricalPreMoveWatchProxy(context,{...ticker,priceChange24h:12},now).eligible,false);
 });
 
+test('historical adapters never invent a numeric data-quality score when it was not measured',()=>{
+  const input=fixture();
+  const early=evaluateHistoricalProfileAdapter('EARLY_MOVE_RADAR',input);
+  const hunter=evaluateHistoricalProfileAdapter('COIN_HUNTER_RADAR',input);
+  assert.equal(early.analysis.data_quality,undefined);
+  assert.equal(hunter.analysis.data_quality,undefined);
+  assert.ok(early.extraGateFailures.includes('HISTORICAL_MARKET_MEDIAN_UNAVAILABLE'));
+});
+
 test('Whale adapter cannot form a candidate when aggregate-trade history is incomplete',()=>{
   const input=fixture();
   input.dataPolicy={tradeCoverageComplete:false};
