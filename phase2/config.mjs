@@ -45,6 +45,8 @@ export function resolvePushProvider(env=process.env){
 
 export const CONFIG = Object.freeze({
   environment: resolveRadarEnvironment(process.env),
+  // Null preserves the historical default: autostart outside staging; true explicitly opts staging into live radar workers; false disables them.
+  radarControl: { autostart: process.env.RADARX_RADARS_AUTOSTART == null || String(process.env.RADARX_RADARS_AUTOSTART).trim() === '' ? null : String(process.env.RADARX_RADARS_AUTOSTART).trim().toLowerCase() === 'true' },
   confidenceMode: String(process.env.RADARX_CONFIDENCE_MODE ?? 'UNKNOWN').toUpperCase(),
   host: resolveHost(process.env),
   port: resolvePort(process.env),

@@ -352,7 +352,15 @@ timeout 10s adb shell svc wifi enable >/dev/null 2>&1 || true
 timeout 10s adb shell settings put global airplane_mode_on 0 >/dev/null 2>&1 || true
 timeout 10s adb shell cmd connectivity airplane-mode disable >/dev/null 2>&1 || true
 timeout 15s adb shell am force-stop com.radarx.app >/dev/null 2>&1 || true
-timeout 20s adb shell pm clear com.radarx.app
+# The emulator can report UI_READY while Package Manager is still stalled after
+# software-rendered boot. Wait longer and reconnect once before treating this as an app defect.
+if ! timeout 45s adb shell pm clear com.radarx.app; then
+  echo "Package Manager clear timed out; reconnecting adb and retrying once."
+  timeout 10s adb reconnect offline >/dev/null 2>&1 || true
+  timeout 20s adb wait-for-device
+  timeout 15s adb shell am force-stop com.radarx.app >/dev/null 2>&1 || true
+  timeout 45s adb shell pm clear com.radarx.app
+fi
 timeout 10s adb logcat -c
 adb logcat -v brief -s RadarXBackground:I RadarXSmoke:I AndroidRuntime:E '*:S' >> "${REPLAY_LOG_FILE}" 2>&1 &
 REPLAY_LOGCAT_PID=$!

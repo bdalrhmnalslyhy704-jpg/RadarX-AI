@@ -330,7 +330,7 @@ jobs:
           const info=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/deployment-info.json','utf8'));
           if(info.service!=='RADARX_BACKEND'||info.build_version!=='Build 224'||info.deployment_contract!=='BUILD224_DHDTECH_V1') throw new Error('DHDTECH_BUILD224_CONTRACT_INVALID');
           if(info.paper_trading!==true||info.real_order_execution!==false||info.confidence_score!=='UNKNOWN') throw new Error('DHDTECH_READ_ONLY_POLICY_INVALID');
-          console.log(JSON.stringify({service:info.service,build_version:info.build_version,deployment_contract:info.deployment_contract,expected_radars:info.expected_radars,push:info.push}));
+          console.log(JSON.stringify({service:info.service,build_version:info.build_version,deployment_contract:info.deployment_contract,expected_radars:info.expected_radars,runtime_environment:info.runtime_environment??'unknown',radar_autostart_enabled:info.radar_autostart_enabled??null,staging_live_workers_require_explicit_opt_in:info.staging_live_workers_require_explicit_opt_in??null,push:info.push}));
           NODE
           HEALTH="$(curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/healthz.json" -w "%{http_code}" "$BASE/healthz")"
           READY="$(curl --location --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 --silent --show-error -o "$RUNNER_TEMP/readyz.json" -w "%{http_code}" "$BASE/readyz")"
@@ -412,6 +412,20 @@ jobs:
           done
           if [ "$VERIFIED" != "true" ]; then
             echo "::error::Radar 8 did not pass the live market-coverage check; refusing to publish this APK."
+            if [ -s "$RADAR8_JSON" ]; then
+              node --input-type=module - "$RADAR8_JSON" <<'NODE'
+          import fs from 'node:fs';
+          try {
+            const body=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+            console.log('RADAR8_FAILURE_DIAGNOSTICS '+JSON.stringify({
+              schema_version:body.schema_version,radar:body.radar,meta_live:body.meta?.live,
+              monitoring:body.monitoring,scan:body.scan,universe:body.universe,error:body.error||null
+            }));
+          } catch (error) {
+            console.log('RADAR8_FAILURE_DIAGNOSTICS_PARSE_ERROR '+String(error?.message||error));
+          }
+          NODE
+            fi
             exit 1
           fi
 

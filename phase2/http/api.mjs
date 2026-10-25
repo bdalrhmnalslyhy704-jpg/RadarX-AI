@@ -558,6 +558,10 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       });
       if(u.pathname==='/api/deployment-info'&&req.method==='GET')return send(res,200,{
         service:'RADARX_BACKEND',build_version:'Build 224',deployment_contract:'BUILD224_DHDTECH_V1',
+        runtime_environment:String(config.environment||'unknown'),
+        radar_autostart_enabled:config.radarControl?.autostart===true||
+          (config.radarControl?.autostart!==false&&String(config.environment||'').toLowerCase()!=='staging'),
+        staging_live_workers_require_explicit_opt_in:true,
         expected_radars:12,market:'BINANCE_SPOT_USDT',paper_trading:true,real_order_execution:false,
         confidence_score:'UNKNOWN',push:{provider:pushProvider?.status?.().provider??'unknown',enabled:pushProvider?.status?.().enabled===true}
       });
@@ -1000,8 +1004,51 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         const limit=Math.max(1,Math.min(100,Math.trunc(Number(u.searchParams.get('limit')||100))));
         const runNow=String(u.searchParams.get('scan')||'')==='1';
         try{
-          const before=earlyExpansionRadar.health?.()||{};
-          if(runNow&&before.busy!==true&&typeof earlyExpansionRadar.tick==='function')await earlyExpansionRadar.tick();
+          let before=earlyExpansionRadar.health?.()||{};
+          if(runNow&&before.running!==true){
+            const stagingBlocked=String(config.environment||'').toLowerCase()==='staging'&&config.radarControl?.autostart!==true;
+            const explicitlyDisabled=config.radarControl?.autostart===false;
+            if(stagingBlocked||explicitlyDisabled||typeof earlyExpansionRadar.start!=='function'){
+              const reason=stagingBlocked?'RADAR8_AUTOSTART_DISABLED_IN_STAGING':
+                explicitlyDisabled?'RADAR8_AUTOSTART_EXPLICITLY_DISABLED':'RADAR8_MONITOR_NOT_RUNNING';
+              return send(res,503,{
+                schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',
+                error:reason,source:'Binance Public REST',candidates:[],
+                monitoring:before,scan:{requested:true,completed:false,error:reason},
+                meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}
+              });
+            }
+            try{earlyExpansionRadar.start();}
+            catch(startError){
+              const reason='RADAR8_START_FAILED:'+String(startError?.message??startError).slice(0,120);
+              return send(res,503,{schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',
+                error:reason,source:'Binance Public REST',candidates:[],monitoring:before,
+                scan:{requested:true,completed:false,error:reason},
+                meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+            }
+            before=earlyExpansionRadar.health?.()||{};
+            if(before.running!==true){
+              const reason='RADAR8_START_DID_NOT_ACTIVATE';
+              return send(res,503,{schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',
+                error:reason,source:'Binance Public REST',candidates:[],monitoring:before,
+                scan:{requested:true,completed:false,error:reason},
+                meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+            }
+          }
+          if(runNow&&before.busy!==true&&typeof earlyExpansionRadar.tick==='function'){
+            const completed=await earlyExpansionRadar.tick();
+            if(completed!==true){
+              const current=earlyExpansionRadar.health?.()||{};
+              if(current.running!==true||current.last_scan_completed_at==null||current.last_error){
+                const reason=String(current.last_error||(!current.running?'RADAR8_MONITOR_NOT_RUNNING':'RADAR8_SCAN_NOT_COMPLETED'));
+                const snapshot=earlyExpansionRadar.snapshot?.(limit,quote)||{schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',candidates:[]};
+                return send(res,503,{...snapshot,status:'not_ready',error:reason,monitoring:current,
+                  scan:{requested:true,completed:false,error:reason},
+                  meta:{...(snapshot.meta||{}),live:current.running===true,radar:'EARLY_EXPANSION_RADAR',
+                    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+              }
+            }
+          }
           const snapshot=earlyExpansionRadar.snapshot?.(limit,quote)||{schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',candidates:[]};
           const health=earlyExpansionRadar.health?.()||{running:false};
           return send(res,200,{...snapshot,monitoring:health,scan:{requested:runNow,completed:health.last_scan_completed_at!=null,last_completed_at:health.last_scan_completed_at,error:health.last_error||null},meta:{...(snapshot.meta||{}),live:health.running===true,radar:'EARLY_EXPANSION_RADAR',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',source:'Binance Public REST'}});

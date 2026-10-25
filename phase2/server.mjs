@@ -242,7 +242,7 @@ export async function startServer({
   safeStart('MONITOR',monitor);
   // Staging smoke tests must never start live market polling unless explicitly opted in.
   // Production retains the continuous analyst worker and all twelve coordinated radars.
-  const explicitStagingRadarStart=process.env.RADARX_RADARS_AUTOSTART==='true';
+  const explicitStagingRadarStart=config.radarControl?.autostart===true;
   const stagingSmokeMode=config.environment==='staging'&&!explicitStagingRadarStart;
   if(!stagingSmokeMode){
     // Keep the 20-analyst intelligence cache warm continuously in real runtime environments.
