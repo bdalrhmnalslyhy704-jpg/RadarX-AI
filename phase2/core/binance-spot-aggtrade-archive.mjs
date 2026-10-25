@@ -152,8 +152,8 @@ async function findArchive(symbol, dayStart, cacheDir, fetchImpl) {
   return {...monthly, granularity: 'monthly', day};
 }
 
-async function readTradesFromArchive(archivePath, startTime, endTime, maxTrades) {
-  const child = spawn('unzip', ['-p', archivePath], {stdio: ['ignore', 'pipe', 'pipe']});
+async function readTradesFromArchive(archivePath, ranges, maxTrades, spawnImpl = spawn) {
+  const child = spawnImpl('unzip', ['-p', archivePath], {stdio: ['ignore', 'pipe', 'pipe']});
   let stderr = '';
   let spawnError = null;
   child.stderr.on('data', chunk => {
@@ -170,7 +170,7 @@ async function readTradesFromArchive(archivePath, startTime, endTime, maxTrades)
     if (!String(line ?? '').trim()) return;
     const trade = parseBinanceSpotAggTradeArchiveLine(line);
     if (!trade) { invalidRows++; return; }
-    if (trade.T < startTime || trade.T > endTime) return;
+    if (!ranges.some(range => trade.T >= range.start && trade.T <= range.end)) return;
     totalMatching++;
     if (trades.length < maxTrades) trades.push(trade);
   };
@@ -193,7 +193,7 @@ async function readTradesFromArchive(archivePath, startTime, endTime, maxTrades)
   const exitCode = await closed;
   if (spawnError) throw spawnError;
   if (exitCode !== 0) throw new Error('BINANCE_ARCHIVE_UNZIP_FAILED:' + stderr.slice(-500));
-  return {trades, totalMatching, invalidRows, limitReached: totalMatching > maxTrades};
+  return {trades, totalMatching, invalidRows, limitReached: totalMatching >= maxTrades};
 }
 
 function cacheKey(symbol, startTime, endTime, maxTrades) {
@@ -273,19 +273,33 @@ export async function fetchBinanceSpotAggTradesArchive(symbol, startTime, endTim
     }};
   }
 
+  // A monthly archive can cover several requested UTC days. Read each verified ZIP once
+  // and restrict rows to the days for which that ZIP was selected; overlapping daily and
+  // monthly sources must not inflate trade counts or consume the configured cap twice.
+  const archivesByPath = new Map();
+  for (const archive of archiveFiles) {
+    let grouped = archivesByPath.get(archive.path);
+    if (!grouped) {
+      grouped = {...archive, covered_day_starts: []};
+      archivesByPath.set(archive.path, grouped);
+    }
+    grouped.covered_day_starts.push(Number(archive.day_start_ms));
+  }
+  const uniqueArchives = [...archivesByPath.values()];
   const tradesById = new Map();
   let matchingRows = 0;
-  for (const archive of archiveFiles) {
-    const dayStart = Number(archive.day_start_ms);
-    const dayEnd = dayStart + DAY_MS - 1;
-    const parsed = await readTradesFromArchive(archive.path, Math.max(start, dayStart), Math.min(end, dayEnd), cap);
+  for (const archive of uniqueArchives) {
+    const ranges = archive.covered_day_starts.map(dayStart => ({
+      start: Math.max(start, dayStart), end: Math.min(end, dayStart + DAY_MS - 1)
+    }));
+    const parsed = await readTradesFromArchive(archive.path, ranges, cap);
     matchingRows += parsed.totalMatching;
     if (parsed.invalidRows > 0) {
       return {trades: [], complete: false, coverage: {
         source: 'BINANCE_DATA_VISION_SPOT_AGGTRADES', reason: 'ARCHIVE_ROW_PARSE_FAILURE',
         requested_start_time: start, requested_end_time: end, invalid_archive_rows: parsed.invalidRows,
-        archives_verified: archiveFiles.length, checksum_verified: true,
-        archive_files: archiveFiles.map(({path, ...item}) => item)
+        archives_verified: uniqueArchives.length, checksum_verified: true,
+        archive_files: uniqueArchives.map(({path, covered_day_starts, ...item}) => item)
       }};
     }
     for (const trade of parsed.trades) {
@@ -298,8 +312,8 @@ export async function fetchBinanceSpotAggTradesArchive(symbol, startTime, endTim
     return {trades: [], complete: false, coverage: {
       source: 'BINANCE_DATA_VISION_SPOT_AGGTRADES', reason: 'ARCHIVE_TRADE_CAP_REACHED',
       requested_start_time: start, requested_end_time: end, trade_cap: cap,
-      rows_observed_at_least: Math.max(matchingRows, tradesById.size), archives_verified: archiveFiles.length,
-      archive_files: archiveFiles.map(({path, ...item}) => item), checksum_verified: true
+      rows_observed_at_least: Math.max(matchingRows, tradesById.size), archives_verified: uniqueArchives.length,
+      archive_files: uniqueArchives.map(({path, covered_day_starts, ...item}) => item), checksum_verified: true
     }};
   }
 
@@ -307,15 +321,16 @@ export async function fetchBinanceSpotAggTradesArchive(symbol, startTime, endTim
   const temporaryTradesPath = tradesPath + '.part-' + process.pid;
   const temporaryMetaPath = metaPath + '.part-' + process.pid;
   try {
-    await writeFile(temporaryTradesPath, trades.map(trade => JSON.stringify(trade)).join('\n') + (trades.length ? '\n' : ''), 'utf8');
+    const serializedTrades = trades.map(trade => JSON.stringify(trade)).join('\n') + (trades.length ? '\n' : '');
+    await writeFile(temporaryTradesPath, serializedTrades, 'utf8');
     const coverage = {
       source: 'BINANCE_DATA_VISION_SPOT_AGGTRADES', complete: true, rows: trades.length,
       trades_sha256: createHash('sha256').update(serializedTrades).digest('hex'),
       requested_start_time: start, requested_end_time: end,
       first_trade_time: trades[0]?.T ?? null, last_trade_time: trades.at(-1)?.T ?? null,
-      archives_verified: archiveFiles.length, checksum_verified: true,
+      archives_verified: uniqueArchives.length, checksum_verified: true,
       timestamp_normalization: 'SPOT_ARCHIVE_MICROSECONDS_TO_MILLISECONDS_FROM_2025',
-      archive_files: archiveFiles.map(({path, ...item}) => item)
+      archive_files: uniqueArchives.map(({path, covered_day_starts, ...item}) => item)
     };
     await writeFile(temporaryMetaPath, JSON.stringify(coverage), 'utf8');
     await rename(temporaryTradesPath, tradesPath);
