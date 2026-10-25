@@ -205,6 +205,8 @@ async function readCachedWindow(metaPath, tradesPath) {
     const meta = JSON.parse(await readFile(metaPath, 'utf8'));
     if (meta?.complete !== true || meta?.source !== 'BINANCE_DATA_VISION_SPOT_AGGTRADES') return null;
     const contents = await readFile(tradesPath, 'utf8');
+    const tradesHash = createHash('sha256').update(contents).digest('hex');
+    if (meta.trades_sha256 !== tradesHash) return null;
     const trades = contents.split('\n').filter(Boolean).map(line => JSON.parse(line));
     if (trades.length !== Number(meta.rows)) return null;
     return {trades, complete: true, coverage: {...meta, cache_hit: true}};
