@@ -199,6 +199,8 @@ jobs:
             valid_data:u.valid_data,observed_candle_data:u.observed_candle_data,
             actionable:u.actionable,returned:u.returned,watch_only:u.watch_only,
             candidates:b.candidates||[],watch_candidates:b.watch_candidates||[],
+            watch_notification_candidates:b.watch_notification_candidates||[],
+            watch_notification_diagnostics:b.watch_notification_diagnostics||null,
             near_miss_audit:b.near_miss_audit||[]
           }));
           for (const k of ['scanned','deep_scanned','valid_data','observed_candle_data','watch_only','evidence_incomplete_excluded','extended_excluded','no_setup_excluded','eligible_spot_symbols','discovered','actionable','returned','elapsed_ms','rotation_cycle','rotation_offset','rotation_width']) {
@@ -211,6 +213,9 @@ jobs:
           if (!Array.isArray(b.candidates)) throw new Error('PRE_MOVE_CANDIDATES_MISSING');
           if (!Array.isArray(b.watch_candidates)) throw new Error('PRE_MOVE_WATCH_CANDIDATES_MISSING');
           if (!Array.isArray(b.watch_notification_candidates) || b.watch_notification_candidates.length > 3) throw new Error('PRE_MOVE_WATCH_NOTIFICATION_CANDIDATES_INVALID');
+          const wd=b.watch_notification_diagnostics;
+          if (!wd || !Number.isFinite(wd.evaluated) || !Number.isFinite(wd.eligible) || !Number.isFinite(wd.rejected) || !wd.rejection_counts || !Array.isArray(wd.samples)) throw new Error('PRE_MOVE_WATCH_NOTIFICATION_DIAGNOSTICS_MISSING');
+          if (wd.evaluated !== (Array.isArray(b.watch_candidates)?b.watch_candidates.length:0) || wd.eligible < b.watch_notification_candidates.length || wd.rejected + wd.eligible !== wd.evaluated) throw new Error('PRE_MOVE_WATCH_NOTIFICATION_DIAGNOSTICS_INCONSISTENT');
           for (const x of b.watch_notification_candidates) {
             if (x?.event !== 'PRE_MOVE_RADAR_WATCH_ONLY' || x?.watch_only !== true || x?.entry_eligible !== false || x?.potential_label !== 'WATCH_EARLY' || x?.market !== 'SPOT' || x?.closed_candles_only !== true || x?.paper_trading !== true || x?.real_order_execution !== false || x?.source !== 'Binance Public REST' || x?.data_status?.data_valid !== true || x?.data_status?.data_stale !== false || !Number.isFinite(x?.data_quality) || x.data_quality < 70 || !Number.isFinite(x?.liquidity_quality) || x.liquidity_quality < 60) throw new Error('PRE_MOVE_WATCH_NOTIFICATION_GATE:'+String(x?.symbol||'UNKNOWN'));
           }
