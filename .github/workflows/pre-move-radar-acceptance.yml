@@ -10,6 +10,8 @@ on:
     paths:
       - '.github/workflows/pre-move-radar-acceptance.yml'
       - 'phase2/http/api.mjs'
+      - 'phase2/config.mjs'
+      - 'phase2/core/multi-analyst-engine.mjs'
       - 'phase2/market/binance-rest.mjs'
       - 'phase2/server.mjs'
       - 'phase2/push/index.mjs'
@@ -147,29 +149,52 @@ jobs:
         timeout-minutes: 6
         run: |
           set -euo pipefail
-          URL="$BASE/api/multi-analyst?quote=USDT&limit=10&scan=1&_ts=gha-${GITHUB_SHA}"
-          CODE=""
-          # Retry only transient gateway/connection failures during DHDTech rollout.
-          # A response must still be HTTP 200 and pass every live-data/analysis gate below.
-          for attempt in 1 2 3; do
-            CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 75 -o "$RUNNER_TEMP/multi-analyst.json" -w "%{http_code}" "$URL" || true)"
-            if [ "$CODE" = "200" ]; then
-              break
-            fi
+          BASE_URL="$BASE/api/multi-analyst?quote=USDT&limit=10"
+          REQUEST_ID="gha-${GITHUB_SHA}"
+          START_URL="${BASE_URL}&background=1&scan=1&_ts=${REQUEST_ID}"
+          START_CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$RUNNER_TEMP/multi-analyst-start.json" -w "%{http_code}" "$START_URL" || true)"
+          if [ "$START_CODE" != "202" ]; then
+            echo "::error::Could not enqueue the bounded background 20-analyst scan (HTTP $START_CODE)."
+            cat "$RUNNER_TEMP/multi-analyst-start.json" 2>/dev/null || true
+            exit 1
+          fi
+
+          # The whole 19-specialist + final-judge pass can outlast one HTTP request
+          # on the small DHDTech container. Poll explicit progress; never treat a
+          # WARMING response as completed analysis or use cached output as live proof.
+          POLL_URL="${BASE_URL}&progress=1&scan=1&_ts=${REQUEST_ID}"
+          READY=false
+          for attempt in $(seq 1 48); do
+            CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 25 -o "$RUNNER_TEMP/multi-analyst.json" -w "%{http_code}" "$POLL_URL" || true)"
             case "$CODE" in
+              200)
+                STATE="$(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/multi-analyst.json','utf8'));console.log(b.status||'unknown')")"
+                COMPLETED="$(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/multi-analyst.json','utf8'));console.log(b.scan?.completed===true?'true':'false')")"
+                if [ "$STATE" = "ready" ] && [ "$COMPLETED" = "true" ]; then
+                  READY=true
+                  break
+                fi
+                if [ "$STATE" = "error" ]; then
+                  echo "::error::DHDTech 20-analyst background scan failed: $(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/multi-analyst.json','utf8'));console.log(String(b.error||b.scan?.error||b.monitoring?.last_error||'unknown').replace(/[^A-Za-z0-9_:.-]/g,''))")"
+                  cat "$RUNNER_TEMP/multi-analyst.json"
+                  exit 1
+                fi
+                ;;
+              202)
+                ;;
               502|503|504|000)
-                echo "::warning::DHDTech 20-analyst endpoint transient HTTP $CODE on attempt $attempt/3; retrying."
-                if [ "$attempt" -lt 3 ]; then sleep 10; fi
+                echo "::warning::DHDTech analyst progress poll transient HTTP $CODE on attempt $attempt/48."
                 ;;
               *)
-                echo "::error::DHDTech 20-analyst scan returned non-retryable HTTP $CODE"
+                echo "::error::DHDTech analyst progress returned non-retryable HTTP $CODE."
                 cat "$RUNNER_TEMP/multi-analyst.json" 2>/dev/null || true
                 exit 1
                 ;;
             esac
+            sleep 5
           done
-          if [ "$CODE" != "200" ]; then
-            echo "::error::DHDTech 20-analyst scan unavailable after bounded transient retries (HTTP $CODE)"
+          if [ "$READY" != "true" ]; then
+            echo "::error::DHDTech 20-analyst background scan did not complete within the bounded polling window."
             cat "$RUNNER_TEMP/multi-analyst.json" 2>/dev/null || true
             exit 1
           fi
