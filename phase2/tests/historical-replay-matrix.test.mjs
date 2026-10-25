@@ -36,6 +36,29 @@ test('matrix CLI dry-run validates the 30-symbol by three-window plan without ne
   assert.equal(plan.limits.outcome_horizon_hours,48);
   assert.equal(plan.policy.real_order_execution,false);
 });
+test('matrix reports measured early detections, missed movers, and weak follow-through together',()=>{
+  const evaluation={
+    version:'RADARX_MOVE_OUTCOME_ANALYSIS_V1',
+    observation:{candle_coverage_complete:true,accepted_with_matured_outcomes:4},
+    moderate_move:{observed_at:100,detected_early:true,minutes_before_move:12},
+    strong_move:{observed_at:200,detected_early:false,minutes_before_move:null},
+    low_follow_through_acceptances:[{classification:'LOW_FOLLOW_THROUGH_OR_ADVERSE_MOVE'}],
+    missed_move_failure_codes:['BUY_FLOW_NOT_CONFIRMED','RESISTANCE_RECLAIM_NOT_CONFIRMED'],
+    summary:{mature_accepted_count:4,low_follow_through_count:1}
+  };
+  const summary=summarizeHistoricalWindowReport({symbol_count:1,results:[{
+    evaluation,
+    data_quality:{trade_coverage_complete:true,candle_fetch_complete:true,outcome_candle_fetch_complete:true,replay_mode:'FULL_TRADE',synthetic_data_used:false},
+    summary:{replay_steps:20,accepted:4,rejected:16}
+  }]});
+  assert.equal(summary.move_outcomes.symbols_requested,1);
+  assert.equal(summary.move_outcomes.candle_coverage_complete_symbols,1);
+  assert.equal(summary.move_outcomes.early_detections_before_5pct,1);
+  assert.equal(summary.move_outcomes.missed_or_late_15pct_moves,1);
+  assert.equal(summary.move_outcomes.low_follow_through_count,1);
+  assert.ok(summary.move_outcomes.most_common_missed_move_failures.some(x=>x.code==='BUY_FLOW_NOT_CONFIRMED'));
+});
+
 test('matrix counts explicit closed-candle fallback without mislabeling exact trade coverage',()=>{
   const summary=summarizeHistoricalWindowReport({symbol_count:2,results:[
     {data_quality:{trade_coverage_complete:true,candle_fetch_complete:true,outcome_candle_fetch_complete:true,replay_mode:'FULL_TRADE',synthetic_data_used:false},summary:{replay_steps:10,accepted:1,rejected:9}},
