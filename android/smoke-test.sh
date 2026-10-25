@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Avoid grep -q on producers under set -o pipefail: grep may exit early and SIGPIPE a long printf stream.
+
 PHASE="initialization"
 
 debug_on_error() {
@@ -109,11 +111,11 @@ start_app_and_wait_ready() {
        { [[ -z "${pause_line}" ]] || (( resume_line > pause_line )); }; then
       activity_resumed=1
     fi
-    if printf '%s\n' "${activity_state}" | grep -Eq '(^|[[:space:]])(mResumedActivity|ResumedActivity):[[:space:]]*.*com\.radarx\.app/\.MainActivity'; then
+    if printf '%s\n' "${activity_state}" | grep -E '(^|[[:space:]])(mResumedActivity|ResumedActivity):[[:space:]]*.*com\.radarx\.app/\.MainActivity' >/dev/null; then
       activity_resumed=1
     fi
     if [[ -n "${pid}" && "${activity_resumed}" -eq 1 ]] &&
-       printf '%s\n' "${logs}" | grep -Fq 'UI_READY'; then
+       printf '%s\n' "${logs}" | grep -F 'UI_READY' >/dev/null; then
       ready=1
       break
     fi
@@ -137,19 +139,19 @@ start_app_and_wait_ready() {
     # live service record and isolated process below. Some Android lifecycle paths
     # can start the monitor before the delayed UI auto-start callback, so requiring
     # the request log here creates a false negative despite a running service.
-    if printf '%s\n' "${logs}" | grep -Fq "BACKGROUND_SERVICE_READY"; then
+    if printf '%s\n' "${logs}" | grep -F "BACKGROUND_SERVICE_READY" >/dev/null; then
       service_ready=1
       break
     fi
     sleep 2
   done
 
-  if printf '%s\n' "${logs}" | grep -Eqi 'RadarXWeb: ERROR:Uncaught (ReferenceError|SyntaxError|TypeError)'; then
+  if printf '%s\n' "${logs}" | grep -Ei 'RadarXWeb: ERROR:Uncaught (ReferenceError|SyntaxError|TypeError)' >/dev/null; then
     echo "::error::RadarX WebView runtime JavaScript error detected"
     printf '%s\n' "${logs}" | tail -n 180
     return 1
   fi
-  if printf '%s\n' "${logs}" | grep -Fq 'RadarX Dashboard boot error:'; then
+  if printf '%s\n' "${logs}" | grep -F 'RadarX Dashboard boot error:' >/dev/null; then
     echo "::error::RadarX dashboard boot error detected"
     printf '%s\n' "${logs}" | tail -n 180
     return 1
@@ -189,17 +191,17 @@ assert_background_service_declared() {
   manifest_tree="$("$aapt" dump xmltree "$APK" AndroidManifest.xml)"
   permissions="$("$aapt" dump permissions "$APK")"
 
-  if ! printf '%s\n' "$manifest_tree" | grep -Fq 'com.radarx.app.RadarXBackgroundMonitorService'; then
+  if ! printf '%s\n' "$manifest_tree" | grep -F 'com.radarx.app.RadarXBackgroundMonitorService' >/dev/null; then
     echo "::error::Packaged APK does not declare RadarXBackgroundMonitorService"
     printf '%s\n' "$manifest_tree" | grep -Ei 'service|RadarXBackgroundMonitorService' | tail -n 80 || true
     return 1
   fi
-  if ! printf '%s\n' "$manifest_tree" | grep -Fq 'radar_background'; then
+  if ! printf '%s\n' "$manifest_tree" | grep -F 'radar_background' >/dev/null; then
     echo "::error::Background service is not isolated into the expected process"
     printf '%s\n' "$manifest_tree" | grep -Ei 'RadarXBackgroundMonitorService|process' | tail -n 80 || true
     return 1
   fi
-  if ! printf '%s\n' "$permissions" | grep -Fq 'android.permission.FOREGROUND_SERVICE_DATA_SYNC'; then
+  if ! printf '%s\n' "$permissions" | grep -F 'android.permission.FOREGROUND_SERVICE_DATA_SYNC' >/dev/null; then
     echo "::error::Packaged APK lacks FOREGROUND_SERVICE_DATA_SYNC permission"
     printf '%s\n' "$permissions"
     return 1
@@ -224,15 +226,15 @@ assert_background_service_declared() {
       service_pid="$(printf '%s\n' "$runtime_state" | sed -nE 's/.*ProcessRecord\{[^}]* ([0-9]+):com\.radarx\.app:radar_background\/.*/\1/p' | head -n 1 | tr -d '\r')"
       if [[ -n "$service_pid" ]]; then service_pid_source="dumpsys"; fi
     fi
-    if printf '%s\n' "$runtime_state" | grep -Fq 'RadarXBackgroundMonitorService' && [[ -n "$service_pid" ]]; then
+    if printf '%s\n' "$runtime_state" | grep -F 'RadarXBackgroundMonitorService' >/dev/null && [[ -n "$service_pid" ]]; then
       break
     fi
     sleep 1
   done
-  if ! printf '%s\n' "$runtime_state" | grep -Fq 'RadarXBackgroundMonitorService' || [[ -z "$service_pid" ]]; then
+  if ! printf '%s\n' "$runtime_state" | grep -F 'RadarXBackgroundMonitorService' >/dev/null || [[ -z "$service_pid" ]]; then
     echo "::error::Manifest is valid but Android does not show a live background-monitor service process"
     echo "BACKGROUND_SERVICE_PID=${service_pid:-NONE} PID_SOURCE=$service_pid_source"
-    if printf '%s\n' "$logs" | grep -Fq 'BACKGROUND_SERVICE_READY'; then
+    if printf '%s\n' "$logs" | grep -F 'BACKGROUND_SERVICE_READY' >/dev/null; then
       echo "BACKGROUND_READY_MARKER=present"
     else
       echo "BACKGROUND_READY_MARKER=absent_or_rotated"
@@ -241,7 +243,7 @@ assert_background_service_declared() {
     printf '%s\n' "$logs" | tail -n 100
     return 1
   fi
-  if printf '%s\n' "$logs" | grep -Fq 'BACKGROUND_SERVICE_READY'; then
+  if printf '%s\n' "$logs" | grep -F 'BACKGROUND_SERVICE_READY' >/dev/null; then
     echo "Android background service confirmed live: pid=$service_pid source=$service_pid_source; ready-marker=present"
   else
     echo "Android background service confirmed live: pid=$service_pid source=$service_pid_source; ready-marker=rotated-after-runtime-confirmation"
@@ -390,9 +392,9 @@ launch_replay_test_app
 replay_ready=0
 for attempt in $(seq 1 35); do
   logs="$(replay_logs)"
-  if printf '%s\n' "${logs}" | grep -Fq 'REPLAY_TEST_OVERRIDE_CONFIGURED' &&
+  if printf '%s\n' "${logs}" | grep -F 'REPLAY_TEST_OVERRIDE_CONFIGURED' >/dev/null &&
      printf '%s\n' "${logs}" | grep -Fq 'BACKGROUND_SERVICE_READY' &&
-     printf '%s\n' "${logs}" | grep -Fq 'DEBUG_REPLAY_TEST_FEED_ACTIVE'; then
+     printf '%s\n' "${logs}" | grep -F 'DEBUG_REPLAY_TEST_FEED_ACTIVE' >/dev/null; then
     replay_ready=1
     break
   fi
@@ -470,15 +472,15 @@ for attempt in $(seq 1 120); do
     for stop_attempt in $(seq 1 20); do
       current_service_pid="$(background_service_pid)"
       logs="$(replay_logs)"
-      if printf '%s\\n' "${logs}" | grep -Fq 'TEST_STOP_BACKGROUND_MONITOR_REQUEST'; then
+      if printf '%s\\n' "${logs}" | grep -F 'TEST_STOP_BACKGROUND_MONITOR_REQUEST' >/dev/null; then
         stop_request_seen=1
       fi
-      if printf '%s\\n' "${logs}" | grep -Fq 'BACKGROUND_STOP_ACTION_RECEIVED'; then
+      if printf '%s\\n' "${logs}" | grep -F 'BACKGROUND_STOP_ACTION_RECEIVED' >/dev/null; then
         stop_action_seen=1
       fi
       service_state="$(timeout 4s adb shell dumpsys activity services com.radarx.app 2>/dev/null || true)"
       service_registered=1
-      if ! printf '%s\\n' "${service_state}" | grep -Fq 'RadarXBackgroundMonitorService'; then
+      if ! printf '%s\\n' "${service_state}" | grep -F 'RadarXBackgroundMonitorService' >/dev/null; then
         service_registered=0
       fi
       # Android may keep an empty process cached after its ServiceRecord is removed.
@@ -567,7 +569,7 @@ if ! grep -Fq 'FALCON_EYE_RADAR|REPLAY:0623' "${handled_file}"; then
   exit 1
 fi
 prefs_xml="$(timeout 8s adb shell run-as com.radarx.app cat shared_prefs/radarx_background.xml 2>/dev/null || true)"
-if ! printf '%s\n' "${prefs_xml}" | grep -Fq 'FALCON_EYE_RADAR|REPLAY:0623'; then
+if ! printf '%s\n' "${prefs_xml}" | grep -F 'FALCON_EYE_RADAR|REPLAY:0623' >/dev/null; then
   echo "::error::The persisted compound cursor did not reach the final event"
   printf '%s\n' "${prefs_xml}" | grep -E 'radar_alert_cursor_(at|id)|cursor_initialized' || true
   exit 1
