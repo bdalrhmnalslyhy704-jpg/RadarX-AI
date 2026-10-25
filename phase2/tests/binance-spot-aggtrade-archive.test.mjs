@@ -34,7 +34,7 @@ test('serializes verified archive JSONL and checksum from the exact same bytes',
     {a:124,p:'0.00260000',q:'5.00000000',f:124,l:124,T:1735689600011.200,m:true,M:true}
   ];
   const serialized = serializeBinanceSpotAggTrades(trades);
-  assert.equal(serialized.content, trades.map(row => JSON.stringify(row)).join('\\n') + '\\n');
+  assert.equal(serialized.content, trades.map(row => JSON.stringify(row)).join('\n') + '\n');
   assert.equal(serialized.rowCount, 2);
   assert.equal(serialized.sha256, createHash('sha256').update(serialized.content).digest('hex'));
   assert.doesNotMatch(serialized.sha256, /undefined/);
