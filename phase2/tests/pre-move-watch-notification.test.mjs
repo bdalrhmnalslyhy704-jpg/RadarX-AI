@@ -100,6 +100,69 @@ test('Pre-Move watch notification sends only as WATCH_ONLY and suppresses repeat
   }
 });
 
+test('EARLY_FLOW_MONITOR survives the final push gate before price confirmation, as monitor-only',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-early-flow-monitor-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    const sent=[];
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
+      sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};
+    }};
+    const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000})});
+    const now=Date.now();
+    const candidate={
+      symbol:'EARLYMONITORUSDT',last_price:1.02,price_change_24h:1.1,
+      data_quality:92,liquidity_quality:82,
+      data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false,source:'Binance Public REST'},
+      watch_only:true,alert_eligible:false,watch_reason_codes:['BUY_FLOW_NOT_CONFIRMED','PRICE_WINDOW_NOT_CONFIRMED'],
+      risk_flags:[],
+      pre_move_context:{
+        stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,
+        closed_candles_only:true,already_moved:false,session_close:now-60_000,
+        score:73,session_return_pct:-0.4,one_hour_return_pct:-0.25,
+        volume_acceleration:1.8,trade_acceleration:1.3,
+        taker_buy_ratio:0.58,taker_buy_acceleration:0.035,
+        mean_close_location:0.56,relative_strength_vs_market_pct:0.45,
+        components:{structure:57,squeeze:62,buying_pressure:63},
+        reasons:['VOLUME_ACCELERATING','TRADE_COUNT_ACCELERATING','EARLY_FLOW_MONITOR']
+      }
+    };
+    const snapshot={source:'Binance Public REST',meta:{radar:'PRE_MOVE',live:true,paper_trading:true,real_order_execution:false}};
+    const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
+    assert.ok(alert);
+    assert.equal(alert.watch_notification_tier,'EARLY_FLOW_MONITOR');
+    const result=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(result.status,'SENT',JSON.stringify(result));
+    assert.equal(result.sent_count,1);
+    assert.equal(sent.length,1);
+    assert.equal(sent[0].symbol,'EARLYMONITORUSDT');
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].watch_notification_tier,'EARLY_FLOW_MONITOR');
+    assert.equal(sent[0].paper_trading,true);
+    assert.equal(sent[0].real_order_execution,false);
+
+    const unsafe={
+      ...alert,
+      symbol:'WEAKFLOWUSDT',
+      id:'PRE_MOVE_WATCH:WEAKFLOWUSDT:'+String(now-60_000),
+      pre_move_context:{
+        ...alert.pre_move_context,session_return_pct:0.1,one_hour_return_pct:0.2,
+        taker_buy_ratio:0.49,volume_acceleration:1.1,
+        components:{...alert.pre_move_context.components,structure:60}
+      }
+    };
+    const rejected=await manager.notifyRadarWatchOnlyAlert(unsafe);
+    assert.equal(rejected.status,'REJECTED_WATCH_ONLY');
+    assert.equal(rejected.reason,'PRE_MOVE_EARLY_FLOW_TIER_UNVERIFIED');
+    assert.equal(sent.length,1,'weak flow must not get around the final notification gate');
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('failed Pre-Move watch delivery is retried with the same stable event ID and remains watch-only',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-watch-retry-'));
   const store=await new DurableStore({dir}).init();
@@ -263,6 +326,68 @@ test('exceptional buyer flow qualifies for monitor-only before session and hourl
   assert.equal(alert.symbol,'ASTRUSDT');
   assert.equal(alert.watch_notification_tier,'HIGH_ACTIVITY_STRUCTURE_PENDING');
   assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+  assert.equal(alert.real_order_execution,false);
+});
+
+test('early buyer-flow monitor can notify before price confirmation without becoming an entry signal',()=>{
+  const {candidate,snapshot,now}=fixture();
+  const early={
+    ...candidate,
+    price_change_24h:1.1,
+    data_quality:92,
+    liquidity_quality:82,
+    pre_move_context:{
+      ...candidate.pre_move_context,
+      stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,
+      closed_candles_only:true,already_moved:false,session_close:now-60_000,
+      score:73,session_return_pct:-0.4,one_hour_return_pct:-0.25,
+      volume_acceleration:1.8,trade_acceleration:1.3,
+      taker_buy_ratio:0.58,taker_buy_acceleration:0.035,
+      mean_close_location:0.56,relative_strength_vs_market_pct:0.45,
+      components:{...candidate.pre_move_context.components,structure:57,squeeze:62,buying_pressure:63}
+    }
+  };
+  const report=diagnosePreMoveWatchOnlyCandidates([early],snapshot,now,12);
+  assert.equal(report.eligible,1,JSON.stringify(report));
+  assert.equal(report.samples[0].watch_notification_tier,'EARLY_FLOW_MONITOR');
+  const alert=buildPreMoveWatchOnlyAlert(early,snapshot,now);
+  assert.ok(alert);
+  assert.equal(alert.watch_notification_tier,'EARLY_FLOW_MONITOR');
+  assert.equal(alert.watch_review_reason,'BUY_FLOW_AND_ACTIVITY_BEFORE_PRICE_CONFIRMATION');
+  assert.ok(alert.reason_codes.includes('EARLY_FLOW_MONITOR'));
+  assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+  assert.equal(alert.paper_trading,true);
+  assert.equal(alert.real_order_execution,false);
+
+  // The relaxed monitor lane must still reject overextended or unsafe market data.
+  assert.equal(buildPreMoveWatchOnlyAlert({...early,price_change_24h:12},snapshot,now),null);
+  assert.equal(buildPreMoveWatchOnlyAlert({...early,data_quality:84},snapshot,now),null);
+  assert.equal(buildPreMoveWatchOnlyAlert({...early,risk_flags:['WIDE_SPREAD']},snapshot,now),null);
+});
+
+test('strong flow just outside the exceptional corridor falls back to the pre-price monitor tier',()=>{
+  const {candidate,snapshot,now}=fixture();
+  const early={
+    ...candidate,price_change_24h:1.1,data_quality:92,liquidity_quality:82,
+    pre_move_context:{
+      ...candidate.pre_move_context,
+      stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,
+      closed_candles_only:true,already_moved:false,session_close:now-60_000,
+      score:76,session_return_pct:-1,one_hour_return_pct:-0.7,
+      volume_acceleration:3,trade_acceleration:2,taker_buy_ratio:0.65,
+      taker_buy_acceleration:0.05,mean_close_location:0.56,
+      relative_strength_vs_market_pct:0.7,
+      components:{...candidate.pre_move_context.components,structure:54,squeeze:62,buying_pressure:63}
+    }
+  };
+  const report=diagnosePreMoveWatchOnlyCandidates([early],snapshot,now,12);
+  assert.equal(report.eligible,1,JSON.stringify(report));
+  assert.equal(report.samples[0].watch_notification_tier,'EARLY_FLOW_MONITOR');
+  const alert=buildPreMoveWatchOnlyAlert(early,snapshot,now);
+  assert.ok(alert);
+  assert.equal(alert.watch_notification_tier,'EARLY_FLOW_MONITOR');
   assert.equal(alert.entry_eligible,false);
   assert.equal(alert.real_order_execution,false);
 });

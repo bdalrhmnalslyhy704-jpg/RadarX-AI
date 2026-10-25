@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {evaluateHistoricalProfileAdapter,HISTORICAL_PROFILE_ADAPTERS} from '../core/historical-profile-adapters.mjs';
+import {evaluateHistoricalProfileAdapter,HISTORICAL_PROFILE_ADAPTERS,assessHistoricalPreMoveWatchProxy} from '../core/historical-profile-adapters.mjs';
 
 const MINUTE=60_000;
 function candles(interval,count,now=Date.now(),seed=10){
@@ -77,6 +77,52 @@ test('partial-evidence historical adapters return explicit limitations without c
     assert.ok(result.extraGateFailures.includes('LIVE_PUSH_GATE_NOT_SIMULATED'),profile+' does not claim push delivery');
     assert.notEqual(result.analysis.real_order_execution,true,profile+' never enables live execution');
   }
+});
+
+test('historical pre-move proxy records strong buyer flow before positive price confirmation without claiming an entry',()=>{
+  const now=Date.parse('2026-10-25T12:00:00Z');
+  const context={
+    evidence_complete:true,closed_candles_only:true,already_moved:false,current_price:1.02,
+    session_close:now-60_000,score:76,session_return_pct:-1,one_hour_return_pct:-0.7,
+    volume_acceleration:3,trade_acceleration:2,taker_buy_ratio:0.65,
+    taker_buy_acceleration:0.05,mean_close_location:0.56,
+    relative_strength_vs_market_pct:null,relative_strength_vs_btc_pct:0.7,
+    components:{structure:54,squeeze:62,buying_pressure:63}
+  };
+  const ticker={priceChange24h:1.1,quoteVolume24h:1_200_000,lastPrice:1.02,ticker_24h_coverage_complete:true};
+  const result=assessHistoricalPreMoveWatchProxy(context,ticker,now);
+  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.tier,'EARLY_FLOW_MONITOR');
+  assert.equal(result.proxy_only,true);
+  assert.equal(result.entry_eligible,false);
+  assert.equal(result.relative_strength_source,'BTC_PROXY');
+  assert.ok(result.limitations.includes('HISTORICAL_LIQUIDITY_QUALITY_UNAVAILABLE'));
+  assert.ok(result.limitations.includes('BTC_RELATIVE_STRENGTH_USED_AS_PROXY'));
+});
+
+test('historical pre-move proxy fails closed on missing evidence, stale candles, low volume, and extended price',()=>{
+  const now=Date.parse('2026-10-25T12:00:00Z');
+  const context={
+    evidence_complete:true,closed_candles_only:true,already_moved:false,current_price:1.02,
+    session_close:now-60_000,score:76,session_return_pct:-1,one_hour_return_pct:-0.7,
+    volume_acceleration:3,trade_acceleration:2,taker_buy_ratio:0.65,
+    taker_buy_acceleration:0.05,mean_close_location:0.56,
+    relative_strength_vs_btc_pct:0.7,components:{structure:54}
+  };
+  const ticker={priceChange24h:1.1,quoteVolume24h:1_200_000,lastPrice:1.02};
+  assert.equal(assessHistoricalPreMoveWatchProxy({...context,evidence_complete:false},ticker,now).eligible,false);
+  assert.equal(assessHistoricalPreMoveWatchProxy({...context,session_close:now-21*60_000},ticker,now).eligible,false);
+  assert.equal(assessHistoricalPreMoveWatchProxy(context,{...ticker,quoteVolume24h:749_999},now).eligible,false);
+  assert.equal(assessHistoricalPreMoveWatchProxy(context,{...ticker,priceChange24h:12},now).eligible,false);
+});
+
+test('historical adapters never invent a numeric data-quality score when it was not measured',()=>{
+  const input=fixture();
+  const early=evaluateHistoricalProfileAdapter('EARLY_MOVE_RADAR',input);
+  const hunter=evaluateHistoricalProfileAdapter('COIN_HUNTER_RADAR',input);
+  assert.equal(early.analysis.data_quality,undefined);
+  assert.equal(hunter.analysis.data_quality,undefined);
+  assert.ok(early.extraGateFailures.includes('HISTORICAL_MARKET_MEDIAN_UNAVAILABLE'));
 });
 
 test('Whale adapter cannot form a candidate when aggregate-trade history is incomplete',()=>{

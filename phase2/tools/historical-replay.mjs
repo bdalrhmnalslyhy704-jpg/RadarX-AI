@@ -320,7 +320,8 @@ export function historicalProfileRequirements(profile, config = CONFIG) {
       break;
     case 'EARLY_MOVE_RADAR':
       Object.assign(frames, {'15m': 240, 'BTCUSDT:15m': 240});
-      unavailableEvidence.push('HISTORICAL_ORDERBOOK_UNAVAILABLE','HISTORICAL_LIVE_PUSH_NOT_SIMULATED');
+      unavailableEvidence.push('HISTORICAL_ORDERBOOK_UNAVAILABLE','HISTORICAL_LIQUIDITY_QUALITY_UNAVAILABLE',
+        'HISTORICAL_MARKET_MEDIAN_UNAVAILABLE','HISTORICAL_LIVE_PUSH_NOT_SIMULATED');
       break;
     case 'LIQUIDITY_ABSORPTION_RADAR':
       base = {oneMinute: 60, fiveMinute: 24};
