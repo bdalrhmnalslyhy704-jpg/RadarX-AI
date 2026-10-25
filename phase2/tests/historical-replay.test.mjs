@@ -12,9 +12,11 @@ const ORIGIN = Math.floor((Date.now() - 400 * MINUTE) / (5 * MINUTE)) * (5 * MIN
 
 test('high-activity historical watch shadow recognizes verified buyer flow while keeping liquidity and push explicitly unverified',()=>{
   const alert={
-    symbol:'GTCUSDT',eligible:true,data_stale:false,risk_flags:[],
+    // Deliberately a strict-trigger near-miss: the watch lane must preserve this
+    // early setup when activity evidence is exceptional, without promoting entry.
+    symbol:'GTCUSDT',eligible:false,data_stale:false,risk_flags:[],
     strong_move:{
-      eligible:true,direction:'UP_SURGE',closed_candles_only:true,data_stale:false,
+      eligible:false,direction:'UP_SURGE',closed_candles_only:true,data_stale:false,
       score:95.9,data_quality:90,component_scores:{flash:95.9},risk_flags:[],
       metrics:{
         volume_ratio:6.05,trade_ratio:2.08,taker_buy_ratio:0.897,taker_buy_delta:0.371,
