@@ -222,7 +222,7 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
   if(risks.some(x=>/ALREADY_EXTENDED|EXTENDED_CHASE|HIGH_RISK|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK|LOW_LIQUIDITY/.test(x)))
     return fail('RISK_FLAG_BLOCK');
   if(participation<3)return fail('INDEPENDENT_PARTICIPATION_BELOW_3');
-  return {eligible:true,reason:null,...fields,values:{symbol,p,price,daily,quality,liquidity,closeAt,risks}};
+  return {eligible:true,reason:null,...fields,values:{symbol,p,price,daily,quality,liquidity,closeAt,risks,watch_notification_tier:watchTier}};
 }
 
 export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
