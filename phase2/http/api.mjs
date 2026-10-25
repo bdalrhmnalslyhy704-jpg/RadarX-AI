@@ -1308,6 +1308,23 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             const completedSnapshot=multiAnalystRadar.getCached({quote});
             if(completedSnapshot){
               const forced=u.searchParams.get('scan')==='1';
+              const cachedRequestId=String(completedSnapshot.meta?.request_id||'');
+              // A live-acceptance poll may arrive just after an unrelated periodic
+              // scan finishes. Never relabel that older snapshot as the requested
+              // forced scan: request IDs must match or we launch the exact scan now.
+              if(forced&&requestId&&cachedRequestId!==requestId){
+                try{
+                  const scanFlight=multiAnalystRadar.scan({quote,limit,forceRefresh:true,requestId});
+                  Promise.resolve(scanFlight).catch(error=>{
+                    const message=recordMultiAnalystApiFailure(error);
+                    console.error('[MULTI_ANALYST_API] request-matched forced scan failed:',message);
+                  });
+                  return send(res,202,multiAnalystWarmingBody({quote,requestId,reason:'SCAN_STARTED'}));
+                }catch(error){
+                  const message=recordMultiAnalystApiFailure(error);
+                  return send(res,200,multiAnalystFailureBody({quote,requestId,error:message}));
+                }
+              }
               return send(res,200,{...completedSnapshot,radar:'MULTI_ANALYST',
                 scan:{requested:forced,completed:true,error:null,request_id:requestId},
                 monitoring:multiAnalystMonitoringSnapshot(),
