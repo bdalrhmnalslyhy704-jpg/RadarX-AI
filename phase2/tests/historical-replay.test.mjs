@@ -297,6 +297,49 @@ function syntheticTrades(rows) {
   return out;
 }
 
+test('historical 24h ticker values require 1,440 contiguous closed minutes and keep gaps unknown',()=>{
+  const nowClose=Math.floor(Date.now()/MINUTE)*MINUTE-1;
+  const count=24*60+6;
+  const lastOpen=nowClose-MINUTE+1;
+  const firstOpen=lastOpen-(count-1)*MINUTE;
+  const rows=[];
+  let price=1;
+  for(let i=0;i<count;i++){
+    const openTime=firstOpen+i*MINUTE;
+    const open=price,close=open*(1.0001);
+    rows.push({
+      openTime,closeTime:openTime+MINUTE-1,open,high:close*1.001,low:open*.999,close,
+      volume:10,quoteVolume:1000,tradeCount:20,closed:true
+    });
+    price=close;
+  }
+  const start=rows[24*60].openTime;
+  const end=rows[24*60+2].closeTime;
+  const evaluateTicker=series=>{
+    const observed=[];
+    runHistoricalReplay({
+      symbol:'COVERAGEUSDT',oneMinuteCandles:series,startTime:start,endTime:end,
+      tradeCoverageComplete:false,allowCandleOnlyFallback:true,outcomeHorizonMs:0,
+      evaluate(input){observed.push(input.ticker);return {accepted:false,reason_codes:['TICKER_24H_COVERAGE_TEST']};}
+    });
+    return observed[0];
+  };
+  const complete=evaluateTicker(rows);
+  assert.equal(complete.ticker_24h_coverage_complete,true);
+  assert.equal(complete.ticker_24h_candle_count,1440);
+  assert.equal(complete.ticker_24h_expected_candle_count,1440);
+  assert.equal(complete.quoteVolume24h,1_440_000);
+  assert.equal(complete.tradeCount24h,28_800);
+  assert.ok(Number.isFinite(complete.priceChange24h));
+
+  const gapAt=rows[24*60-10].openTime;
+  const gapped=evaluateTicker(rows.filter(row=>row.openTime!==gapAt));
+  assert.equal(gapped.ticker_24h_coverage_complete,false);
+  assert.equal(gapped.priceChange24h,null);
+  assert.equal(gapped.quoteVolume24h,null);
+  assert.equal(gapped.tradeCount24h,null);
+});
+
 test('five-minute aggregate requires five contiguous closed one-minute candles', () => {
   const rows = candles(10);
   assert.equal(aggregateFiveMinuteCandles(rows).length, 2);
