@@ -79,9 +79,9 @@ FCM is implemented in the native Android client and in the Phase 2 backend provi
 4. For the signed Build 224 APK workflow, add a GitHub Actions repository secret named `FIREBASE_GOOGLE_SERVICES_JSON_BASE64` containing the single-line Base64 encoding of that JSON file (on Linux, create it with `base64 -w0 google-services.json`). The release workflow validates project/app IDs and refuses to publish an APK if this secret is absent.
 5. Build/install the APK from that configured workspace. Without the file, development/debug APKs deliberately log `FCM_NOT_CONFIGURED_LOCAL_NOTIFICATION_FALLBACK_ACTIVE` and continue the existing local polling path.
 
-### 2. Railway backend secrets
+### 2. DHDTech.io Cloud backend settings
 
-On the existing `RadarX-AI-Triple` service, set the runtime guardrails and the FCM variables through Railway's secret-variable UI. Do not create another service or volume:
+On the existing DHDTech service `RadarX Backend Build 224` (`radarx-backend.dhdtech.site`), set the runtime guardrails and FCM variables through the DHDTech environment-variable UI. Reuse the existing persistent storage; do not create a second backend service or storage volume:
 
 ```text
 RADARX_ENV=production

@@ -1,6 +1,17 @@
 name: RadarX 12-Radar Historical Profile Audit
 
 on:
+  push:
+    branches:
+      - build224-multi-analyst-20261007
+    paths:
+      - phase2/core/historical-replay.mjs
+      - phase2/core/historical-profile-adapters.mjs
+      - phase2/core/move-outcome-analysis.mjs
+      - phase2/tools/historical-replay.mjs
+      - phase2/tools/historical-profile-matrix.mjs
+      - phase2/tests/historical-profile-matrix.test.mjs
+      - .github/workflows/radarx-12-radar-profile-audit.yml
   pull_request:
     branches:
       - build224-multi-analyst-20261007
@@ -57,8 +68,8 @@ jobs:
             --symbols GTCUSDT,WUSDT,RLCUSDT,RADUSDT,ORCAUSDT,API3USDT,DIAUSDT,OGNUSDT,CTSIUSDT,IOSTUSDT,ALTUSDT,CVXUSDT,ENAUSDT \
             --lookback-hours 6 \
             --outcome-horizon-hours 24 \
-            --max-trade-pages 2 \
-            --max-trades 2000 \
+            --max-trade-pages 20 \
+            --max-trades 20000 \
             --output "$OUT/profile-matrix-current.json"
           result=$?
           printf 'current=%s\n' "$result" >> "$OUT/process-status.txt"
@@ -73,8 +84,8 @@ jobs:
               --end "$end" \
               --lookback-hours 6 \
               --outcome-horizon-hours 24 \
-              --max-trade-pages 2 \
-              --max-trades 2000 \
+              --max-trade-pages 20 \
+              --max-trades 20000 \
               --output "$OUT/profile-matrix-$label.json"
             result=$?
             printf '%s=%s\n' "$label" "$result" >> "$OUT/process-status.txt"
@@ -133,11 +144,27 @@ jobs:
             );
             const policyOk=report.policy?.paper_trading===true&&report.policy?.real_order_execution===false&&
               report.policy?.real_notifications_simulated===false;
+            // Execution success is deliberately different from full evidence verification.
+            // A replay may execute every profile yet remain partial if historical book,
+            // aggregate-trade, futures/liquidation, or external-source archives are missing.
             const pass=report.profile_count===12&&report.profiles?.length===12&&
               missing.length===0&&invalid.length===0&&badCoverage.length===0&&
               immatureOutcomes.length===0&&policyOk;
+            const unresolvedEvidence=[...new Set((report.profiles||[]).flatMap(profile=>
+              (profile.results||[]).flatMap(row=>Array.isArray(row.evidence_blockers)?row.evidence_blockers:[])
+            ))].sort();
+            const allProfilesFullyVerified=report.profile_count===12&&report.profiles?.length===12&&
+              report.profiles.every(profile=>profile.status==='HISTORICAL_REPLAY_COMPLETE'&&
+                (profile.results||[]).every(row=>row.profile_coverage_complete===true&&
+                  row.outcome_horizon_complete===true&&
+                  (!Array.isArray(row.evidence_blockers)||row.evidence_blockers.length===0)));
+            const fully_verified=pass&&allProfilesFullyVerified&&
+              report.summary?.profiles_with_all_symbol_coverage===12&&
+              report.summary?.profiles_with_mature_outcomes===12;
             const entry={
-              file:spec.file,status:report.summary?.status,pass,
+              file:spec.file,status:report.summary?.status,pass,fully_verified,
+              unresolved_evidence_blocker_count:unresolvedEvidence.length,
+              unresolved_evidence_blockers:unresolvedEvidence.slice(0,100),
               requested_symbols:spec.symbols.length,profiles_checked:report.profile_count,
               profiles_with_all_symbol_coverage:report.summary?.profiles_with_all_symbol_coverage,
               profiles_with_mature_outcomes:report.summary?.profiles_with_mature_outcomes,
@@ -161,9 +188,15 @@ jobs:
             reports.push(entry);
             if(!pass)failures.push(entry);
           }
-          const result={audit:'RADARX_12_RADAR_4_WINDOW_AUDIT_V1',pass:failures.length===0,
+          const fullyVerified=failures.length===0&&reports.length===specs.length&&reports.every(row=>row.fully_verified===true);
+          const result={audit:'RADARX_12_RADAR_4_WINDOW_AUDIT_V1',
+            execution_pass:failures.length===0,
+            fully_verified:fullyVerified,
+            verification_status:failures.length?'EXECUTION_OR_COVERAGE_FAILED':
+              fullyVerified?'FULLY_VERIFIED':'EXECUTED_WITH_EVIDENCE_GAPS',
             windows:reports,policy:{market:'BINANCE_SPOT_USDT',paper_trading:true,
               real_order_execution:false,real_notifications_simulated:false}};
           console.log(JSON.stringify(result,null,2));
           if(failures.length)process.exit(1);
+          if(!fullyVerified)console.log('::warning::Historical replay executed, but full 12-radar evidence verification is incomplete. Inspect unresolved_evidence_blockers and per-radar blockers; do not treat execution_pass as full plan completion.');
           NODE

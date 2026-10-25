@@ -88,3 +88,24 @@ Evaluate independent, interpretable features rather than one opaque score:
 - The overall plan remains NOT_LIVE_VERIFIED until the 12-radar periodic health/cycle evidence, 20-analyst role execution evidence, live DHDTech commit/health and fresh-data smoke, and real physical-device push receipt are separately verified. Do not interpret a green CI result as proof of those runtime conditions.
 - The numeric-input normalization change in this change set prevents null/blank values from becoming zero in the early-move/radar-8 paths.
 - Repository tests and CI must pass before this change is merged. After deployment, live DHDTech and real-device push still require separate verification; CI alone is not proof of either.
+
+
+## Acceptance evidence update — 2026-10-25 (Build 224 release 958)
+
+This section supersedes the earlier preliminary live-verification note above. The checks below ran on the released source commit `68c9a7d2560c44660b580c55a85196830ed971d8`; they establish observed acceptance at that time, not a guarantee about every future market event.
+
+- **Build and release:** the signed universal Android APK was published as release `radarx-native-build224-radar8-v2-hawkeye-958-attempt-1`. APK signature/package validation, published HTTPS download verification, and the release workflow completed successfully.
+- **Live runtime readiness:** the release gate eventually reached `READY` after the candle cache warmed to **212 / 212** expected symbols; WebSocket and sync gates were live; all 12 radar workers were registered and running with no failed workers; the readiness audit observed 10 complete fresh analyst assessments, each satisfying the 19-specialist plus final-analyst contract.
+- **Live Pre-Move observation:** one live scan took about **29.4 seconds**, discovered and deep-scanned 50 symbols, reported 48 with valid data, 11 watch-only rows and zero actionable/entry alerts. `DASHUSDT` appeared as a watch-only early candidate, score 75; its blocker was `COMPRESSION_NOT_CONFIRMED`. This is evidence that the watch path can surface a candidate, not evidence that every mover will be found or that this candidate later rose.
+- **Multi-analyst forced scan:** 10 symbols were scanned; 10 analyses were attempted, 8 succeeded, 2 were rejected by gates, and 0 analyses failed. This scan is not a claim that every symbol in the market was individually assessed by all 20 analysts during that request.
+- **Android lifecycle/replay smoke:** emulator online/offline and background-service registration passed. Durable replay reported 623 unique alerts handled, zero missing, zero duplicate post requests, and successful offline reconnect / force-stop restart coverage. These are emulator results, not a physical-user-phone push receipt.
+- **FCM:** the release embedded Firebase client configuration and DHDTech reported the FCM provider enabled. The release log explicitly records that **physical-device notification delivery was not verified**. Local polling remains available as a fallback.
+- **Historical evidence quality:** the missed-mover endpoint is a diagnostic proxy based on retained Radar 8 scan-journey ticker snapshots cross-checked against 12 alert archives; it is not continuous trade data nor a full closed-OHLC history for every eligible pair. Historical profile replays can also be partial when historical order-book, aggregate-trade, futures/liquidation, news or stream archives were never retained. Missing inputs must remain unknown; they must not be fabricated or silently counted as a complete replay.
+
+### Current acceptance disposition
+
+- `LIVE_RUNTIME_READINESS_AT_RELEASE`: **PASSED at the observed run**.
+- `UNIT_API_UI_AND_EMULATOR_REGRESSION`: **PASSED** on the released source commit.
+- `FULL_12_RADAR_HISTORICAL_EVIDENCE`: **NOT YET FULLY VERIFIED** on the exact release source. The historical audit workflow now separates replay execution success from `fully_verified`, increases the bounded aggregate-trade collection limit, and runs on relevant Build 224 branch updates. A successful run with unresolved historical-evidence blockers must not be described as full historical verification.
+- `PHYSICAL_ANDROID_FCM_RECEIPT`: **NOT VERIFIED**; this requires the installed app to register on the real phone and an actual FCM message to be observed by that device.
+- Overall: **PARTIALLY VERIFIED, NOT A 100% completion claim.** The product must stay Spot/read-only and paper-only; `paper_trading=true`, `real_order_execution=false`, and unknown confidence remain mandatory.
