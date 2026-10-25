@@ -203,7 +203,7 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     buy!==null&&buy>=0.56&&buyDelta!==null&&buyDelta>=0.025&&
     relative!==null&&relative>=0.4&&
     quality!==null&&quality>=85&&liquidity!==null&&liquidity>=70&&
-    structure!==null&&structure>=55&&participation>=4;
+    structure!==null&&structure>=50&&participation>=4;
   const watchTier=highActivityStructurePending?'HIGH_ACTIVITY_STRUCTURE_PENDING':
     earlyFlowMonitor?'EARLY_FLOW_MONITOR':'STANDARD_WATCH_EARLY';
   const fields={
