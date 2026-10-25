@@ -254,6 +254,9 @@ export const CONFIG = Object.freeze({
     returnLimit: int(process.env.RADARX_MULTI_ANALYST_RETURN_LIMIT, 10),
     deepConcurrency: int(process.env.RADARX_MULTI_ANALYST_DEEP_CONCURRENCY, 3),
     deepKlines: int(process.env.RADARX_MULTI_ANALYST_DEEP_KLINES, 220),
+    // A full 19-specialist + final-judge pass must be allowed to finish on the
+    // 512 MB DHDTech container; the API returns background progress while it runs.
+    scanTimeoutMs: int(process.env.RADARX_MULTI_ANALYST_SCAN_TIMEOUT_MS, 120000),
     minQuoteVolume24h: int(process.env.RADARX_MULTI_ANALYST_MIN_QUOTE_VOLUME_24H, 300000),
     universeRefreshMs: int(process.env.RADARX_MULTI_ANALYST_UNIVERSE_REFRESH_MS, 30 * 60 * 1000),
     minDataQuality: int(process.env.RADARX_MIN_DATA_QUALITY, 70),

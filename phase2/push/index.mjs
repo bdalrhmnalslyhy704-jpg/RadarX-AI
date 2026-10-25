@@ -342,14 +342,14 @@ export class PushManager{
       // before positive price confirmation. It never qualifies an entry signal.
       const earlyFlowMonitor =
         alert?.watch_notification_tier==='EARLY_FLOW_MONITOR' &&
-        score!==null&&score>=72&&
+        score!==null&&score>=68&&
         session!==null&&session>=-1.25&&session<=4.5&&
         hour!==null&&hour>=-0.75&&hour<=2.5&&
-        volumeRatio!==null&&volumeRatio>=1.6&&
-        tradeRatio!==null&&tradeRatio>=1.15&&
-        taker!==null&&taker>=0.56&&
-        takerDelta!==null&&takerDelta>=0.025&&
-        relative!==null&&relative>=0.4&&
+        volumeRatio!==null&&volumeRatio>=1.4&&
+        tradeRatio!==null&&tradeRatio>=1.05&&
+        taker!==null&&taker>=0.50&&
+        takerDelta!==null&&takerDelta>=0.03&&
+        relative!==null&&relative>=0.25&&
         dataQuality!==null&&dataQuality>=85&&
         liquidityQuality!==null&&liquidityQuality>=70&&
         structure!==null&&structure>=50&&

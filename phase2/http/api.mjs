@@ -196,12 +196,12 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
   // than the ordinary visual WATCH_EARLY lane.
   const earlyFlowMonitor=(session!==null&&(session<0||session>4.5)||
       hour!==null&&(hour<0.15||hour>2.5)||structure!==null&&structure<60)&&
-    score!==null&&score>=72&&
+    score!==null&&score>=68&&
     session!==null&&session>=-1.25&&session<=4.5&&
     hour!==null&&hour>=-0.75&&hour<=2.5&&
-    volume!==null&&volume>=1.6&&trades!==null&&trades>=1.15&&
-    buy!==null&&buy>=0.56&&buyDelta!==null&&buyDelta>=0.025&&
-    relative!==null&&relative>=0.4&&
+    volume!==null&&volume>=1.4&&trades!==null&&trades>=1.05&&
+    buy!==null&&buy>=0.50&&buyDelta!==null&&buyDelta>=0.03&&
+    relative!==null&&relative>=0.25&&
     quality!==null&&quality>=85&&liquidity!==null&&liquidity>=70&&
     structure!==null&&structure>=50&&participation>=4;
   const watchTier=highActivityStructurePending?'HIGH_ACTIVITY_STRUCTURE_PENDING':
@@ -231,7 +231,7 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     return fail('DATA_FRESHNESS_QUALITY_OR_LIQUIDITY_GATE');
   if(!Number.isFinite(price)||price<=0||daily===null||Math.abs(daily)>=12)
     return fail('PRICE_OR_DAILY_CHANGE_INVALID');
-  if(score===null||score<(earlyFlowMonitor?72:highActivityStructurePending?75:68))
+  if(score===null||score<(earlyFlowMonitor?68:highActivityStructurePending?75:68))
     return fail('SCORE_BELOW_WATCH_FLOOR');
   if(session===null||session<(highActivityStructurePending?-0.75:earlyFlowMonitor?-1.25:0)||
      session>(earlyFlowMonitor?4.5:6))
@@ -1308,6 +1308,23 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             const completedSnapshot=multiAnalystRadar.getCached({quote});
             if(completedSnapshot){
               const forced=u.searchParams.get('scan')==='1';
+              const cachedRequestId=String(completedSnapshot.meta?.request_id||'');
+              // A live-acceptance poll may arrive just after an unrelated periodic
+              // scan finishes. Never relabel that older snapshot as the requested
+              // forced scan: request IDs must match or we launch the exact scan now.
+              if(forced&&requestId&&cachedRequestId!==requestId){
+                try{
+                  const scanFlight=multiAnalystRadar.scan({quote,limit,forceRefresh:true,requestId});
+                  Promise.resolve(scanFlight).catch(error=>{
+                    const message=recordMultiAnalystApiFailure(error);
+                    console.error('[MULTI_ANALYST_API] request-matched forced scan failed:',message);
+                  });
+                  return send(res,202,multiAnalystWarmingBody({quote,requestId,reason:'SCAN_STARTED'}));
+                }catch(error){
+                  const message=recordMultiAnalystApiFailure(error);
+                  return send(res,200,multiAnalystFailureBody({quote,requestId,error:message}));
+                }
+              }
               return send(res,200,{...completedSnapshot,radar:'MULTI_ANALYST',
                 scan:{requested:forced,completed:true,error:null,request_id:requestId},
                 monitoring:multiAnalystMonitoringSnapshot(),
