@@ -864,7 +864,28 @@ async function main() {
         // it is logged in its own shadow lane so low follow-through cannot inflate the
         // measured early-warning hit rate.
         const strictAccepted = false;
-        const candidateDetected=Boolean(!cooldownBlocked&&earlyGate.eligible);
+        const highActivityStructurePendingCandidate=qualifiesHighActivityStructurePendingShadow({
+          alert,ticker:input.ticker,dataPolicy:input.dataPolicy,minQuoteVolume24h
+        });
+        // Separate early sensitivity from strict entry notification. This lane
+        // remains a historical shadow and only fires on complete aggTrade data;
+        // it can record an early monitor-worthy candidate when 3-second/orderbook
+        // evidence is unavailable, without claiming an actual push or entry.
+        const candidateDetected=Boolean(!cooldownBlocked&&
+          (earlyGate.eligible||highActivityStructurePendingCandidate));
+        const candidateMode=highActivityStructurePendingCandidate
+          ?'HIGH_ACTIVITY_STRUCTURE_PENDING_CANDIDATE_SHADOW'
+          :candidateDetected?'DYNAMIC_EARLY_WARNING_CANDIDATE_SHADOW':'NONE';
+        const candidateReasons=highActivityStructurePendingCandidate
+          ?['HISTORICAL_HIGH_ACTIVITY_STRUCTURE_PENDING_CANDIDATE',
+            'CANDIDATE_SHADOW_NOT_A_PUSH','HISTORICAL_ORDERBOOK_UNAVAILABLE',
+            'HISTORICAL_LIQUIDITY_UNVERIFIED','LIVE_PUSH_DELIVERY_NOT_SIMULATED',
+            ...(!earlyGate.eligible?['EARLY_WARNING_GATE_NOT_MET_BUT_HIGH_ACTIVITY_EVIDENCE_PASSED']:[])]
+          :[
+            ...(candidateDetected?['HISTORICAL_EARLY_WARNING_CANDIDATE']:[]),
+            ...(candidateDetected?candidateStrictFailures:[]),
+            ...(!candidateDetected?['DYNAMIC_EARLY_WARNING_GATE_NOT_MET']:[])
+          ];
         const coreTriggerCandidateDetected=Boolean(!cooldownBlocked&&
           alert.eligible===true&&alertScore>=Number(tickerConfig.minScore??76)&&
           Number(a.data_quality)>=80&&!a.data_stale&&Math.abs(Number(input.ticker.priceChange24h)||0)<=8);
@@ -873,12 +894,10 @@ async function main() {
           accepted:false,
           accepted_mode:'NONE_HISTORICAL_LIQUIDITY_UNVERIFIED',
           candidate_detected:candidateDetected,
-          candidate_mode:candidateDetected?'DYNAMIC_EARLY_WARNING_CANDIDATE_SHADOW':'NONE',
-          candidate_reasons:[...new Set([
-            ...(candidateDetected?['HISTORICAL_EARLY_WARNING_CANDIDATE']:[]),
-            ...(candidateDetected?candidateStrictFailures:[]),
-            ...(!candidateDetected?['DYNAMIC_EARLY_WARNING_GATE_NOT_MET']:[])
-          ])].slice(0,30),
+          candidate_mode:candidateMode,
+          high_activity_structure_pending_candidate:highActivityStructurePendingCandidate,
+          watch_candidate_tier:highActivityStructurePendingCandidate?'HIGH_ACTIVITY_STRUCTURE_PENDING':null,
+          candidate_reasons:[...new Set(candidateReasons)].slice(0,30),
           core_trigger_candidate_detected:coreTriggerCandidateDetected,
           core_trigger_candidate_mode:coreTriggerCandidateDetected?'CORE_TRIGGER_CANDIDATE_SHADOW':'NONE',
           core_trigger_candidate_reasons:[...new Set([
