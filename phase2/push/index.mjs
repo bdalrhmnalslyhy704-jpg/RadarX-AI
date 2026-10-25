@@ -338,13 +338,34 @@ export class PushManager{
         liquidityQuality!==null&&liquidityQuality>=70&&
         structure!==null&&structure>=50&&
         independentEvidence>=4;
-      if(session<(highActivityStructurePending?-0.75:0)||session>6||
-         hour<(highActivityStructurePending?-0.5:0.15)||hour>4.5)
+      // A second bounded monitor-only corridor can surface strong improving flow
+      // before positive price confirmation. It never qualifies an entry signal.
+      const earlyFlowMonitor =
+        alert?.watch_notification_tier==='EARLY_FLOW_MONITOR' &&
+        score!==null&&score>=72&&
+        session!==null&&session>=-1.25&&session<=4.5&&
+        hour!==null&&hour>=-0.75&&hour<=2.5&&
+        volumeRatio!==null&&volumeRatio>=1.6&&
+        tradeRatio!==null&&tradeRatio>=1.15&&
+        taker!==null&&taker>=0.56&&
+        takerDelta!==null&&takerDelta>=0.025&&
+        relative!==null&&relative>=0.4&&
+        dataQuality!==null&&dataQuality>=85&&
+        liquidityQuality!==null&&liquidityQuality>=70&&
+        structure!==null&&structure>=50&&
+        independentEvidence>=4;
+      const preMoveMonitorCorridor=highActivityStructurePending||earlyFlowMonitor;
+      if(session<(highActivityStructurePending?-0.75:earlyFlowMonitor?-1.25:0)||
+         session>(earlyFlowMonitor?4.5:6)||
+         hour<(highActivityStructurePending?-0.5:earlyFlowMonitor?-0.75:0.15)||
+         hour>(earlyFlowMonitor?2.5:4.5))
         return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
       if(alert?.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'&&!highActivityStructurePending)
         return rejected('PRE_MOVE_HIGH_ACTIVITY_TIER_UNVERIFIED');
-      if(structure===null||(structure<60&&!highActivityStructurePending)||
-         independentEvidence<(highActivityStructurePending?4:3))
+      if(alert?.watch_notification_tier==='EARLY_FLOW_MONITOR'&&!earlyFlowMonitor)
+        return rejected('PRE_MOVE_EARLY_FLOW_TIER_UNVERIFIED');
+      if(structure===null||(structure<(preMoveMonitorCorridor?50:60))||
+         independentEvidence<(preMoveMonitorCorridor?4:3))
         return rejected('PRE_MOVE_WATCH_CONFLUENCE_INSUFFICIENT');
     }else if(event==='STRONG_MOVE_WATCH_ONLY'){
       const sm=alert?.strong_move||{},m=sm?.metrics||{};
