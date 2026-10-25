@@ -772,3 +772,72 @@ test('TEST_FIXTURE: Joker scan endpoint honors scan=1 and returns live candidate
     const second=await fetch(base+'/api/rotation-lag-radar?limit=10');assert.equal(second.status,200);assert.equal(tickCalls,1);
   }finally{await new Promise(resolve=>server.close(resolve));await rm(dir,{recursive:true,force:true});}
 });
+
+
+test('TEST_FIXTURE: forced Radar 8 scan self-recovers a stopped production worker before scanning',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-radar8-self-recovery-')),store=await new DurableStore({dir}).init();
+  let running=false,starts=0,ticks=0,lastCompletedAt=null;
+  const radar={
+    health:()=>({running,busy:false,last_scan_at:lastCompletedAt,last_scan_completed_at:lastCompletedAt,
+      last_scan_duration_ms:lastCompletedAt?10:null,scans:ticks,last_error:null,universe_total:506,
+      coverage:{expected_total:506,received_total:506,coverage_ratio:1}}),
+    start(){starts++;running=true;},
+    async tick(){if(!running)return false;ticks++;lastCompletedAt=Date.now();return true;},
+    snapshot(){return{schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',
+      as_of:new Date().toISOString(),quote:'USDT',
+      universe:{expected_total:506,received_total:506,coverage_ratio:1,eligible_total:225},
+      candidates:[],meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};}
+  };
+  const config={environment:'production',radarControl:{autostart:null},
+    auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},
+    api:{maxBodyBytes:65536,rateLimitPerMinute:100}};
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),earlyExpansionRadar:radar});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/early-expansion-radar?quote=USDT&limit=100&scan=1');
+    assert.equal(response.status,200);
+    const body=await response.json();
+    assert.equal(starts,1);
+    assert.equal(ticks,1);
+    assert.equal(body.monitoring.running,true);
+    assert.equal(body.scan.requested,true);
+    assert.equal(body.scan.completed,true);
+    assert.equal(body.meta.live,true);
+    assert.equal(body.meta.paper_trading,true);
+    assert.equal(body.meta.real_order_execution,false);
+  }finally{
+    await new Promise(resolve=>server.close(resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+test('TEST_FIXTURE: a stopped Radar 8 in staging fails closed unless live workers were explicitly opted in',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-radar8-staging-guard-')),store=await new DurableStore({dir}).init();
+  let starts=0,ticks=0;
+  const radar={
+    health:()=>({running:false,busy:false,last_scan_at:null,last_scan_completed_at:null,last_error:null}),
+    start(){starts++;},
+    async tick(){ticks++;return false;},
+    snapshot(){return{schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',candidates:[],meta:{live:false}};}
+  };
+  const config={environment:'staging',radarControl:{autostart:null},
+    auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},
+    api:{maxBodyBytes:65536,rateLimitPerMinute:100}};
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),earlyExpansionRadar:radar});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/early-expansion-radar?quote=USDT&limit=100&scan=1');
+    assert.equal(response.status,503);
+    const body=await response.json();
+    assert.equal(body.error,'RADAR8_AUTOSTART_DISABLED_IN_STAGING');
+    assert.equal(starts,0);
+    assert.equal(ticks,0);
+    assert.equal(body.meta.paper_trading,true);
+    assert.equal(body.meta.real_order_execution,false);
+  }finally{
+    await new Promise(resolve=>server.close(resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+});
