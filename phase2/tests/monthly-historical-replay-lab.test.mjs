@@ -12,7 +12,10 @@ test('monthly historical replay lab dry-run declares the actual replay scope and
   assert.equal(run.status,0,run.stderr||run.stdout);
   const plan=JSON.parse(run.stdout);
   assert.equal(plan.status,'DRY_RUN_NO_NETWORK');
-  assert.equal(plan.detector_profile,'STRONG_MOVE_RADAR');
+  assert.equal(plan.detector_profile.requested_profile,'STRONG_MOVE_RADAR');
+  assert.equal(plan.detector_profile.canonical,'STRONG_MOVE_RADAR');
+  assert.equal(plan.detector_profile.mode,'ACTIONABLE_GATE_REPLAY');
+  assert.equal(plan.detector_profile.live_notification_simulated,true);
   assert.equal(plan.outcome_horizon_hours,24);
   assert.equal(plan.policy.event_marker_is_evaluator_input,false);
 });

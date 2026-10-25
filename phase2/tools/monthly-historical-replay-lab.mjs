@@ -20,6 +20,22 @@ function integer(raw,fallback,min,max,label){
   return n;
 }
 async function readJson(path){const absolute=resolve(path);return{path:absolute,value:JSON.parse(await readFile(absolute,'utf8'))};}
+const HISTORICAL_PROFILE_INFO=Object.freeze({
+  STRONG_MOVE_RADAR:{canonical:'STRONG_MOVE_RADAR',mode:'ACTIONABLE_GATE_REPLAY',requiredTimeframes:[]},
+  RADAR8_PREMOVE_SHADOW:{canonical:'EARLY_EXPANSION_RADAR',mode:'PRE_MOVE_CANDLE_ONLY_SHADOW',requiredTimeframes:['15m','1h','4h','BTCUSDT:5m']},
+  ALMUQAWIM_RADAR:{canonical:'ALMUQAWIM_RADAR',mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requiredTimeframes:['15m','1h','4h']},
+  DOOMSDAY_RADAR:{canonical:'DOOMSDAY_RADAR',mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requiredTimeframes:['BTCUSDT:5m']},
+  KAHIR_RADAR:{canonical:'KAHIR_RADAR',mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requiredTimeframes:['BTCUSDT:1m']},
+  ROTATION_LAG_RADAR:{canonical:'ROTATION_LAG_RADAR',mode:'CANDLE_ONLY_CANDIDATE_SHADOW',
+    requiredTimeframes:['15m','1h','BTCUSDT:15m','BTCUSDT:1h','ETHUSDT:15m','ETHUSDT:1h']}
+});
+function historicalProfileInfo(profile){
+  const item=HISTORICAL_PROFILE_INFO[String(profile||'').trim().toUpperCase()];
+  if(!item)throw new Error('UNSUPPORTED_HISTORICAL_DETECTOR_PROFILE:'+profile);
+  return {requested_profile:String(profile).trim().toUpperCase(),...item,
+    live_notification_simulated:item.mode==='ACTIONABLE_GATE_REPLAY'};
+}
+
 function safeId(value){return String(value??'case').trim().toLowerCase().replace(/[^a-z0-9_-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,90)||'case';}
 function validSymbol(value){return /^[A-Z0-9]{5,20}$/.test(String(value??'').toUpperCase());}
 function isConfirmedAnchor(caseRow){
@@ -40,19 +56,27 @@ function childRun(args,{timeoutMs}) {
     const timer=setTimeout(()=>{timedOut=true;try{child.kill('SIGTERM');}catch{}setTimeout(()=>{try{child.kill('SIGKILL');}catch{}},5000).unref?.();},timeoutMs);
   });
 }
-function candleCoverage(report,horizonHours){
+function candleCoverage(report,horizonHours,detectorSpec={}){
   const rows=Array.isArray(report?.results)?report.results:[];
   if(rows.length!==1)return {complete:false,reason:'EXPECTED_EXACTLY_ONE_SYMBOL_RESULT'};
   const row=rows[0],quality=row?.data_quality??{};
   const mode=String(quality.replay_mode??'BLOCKED_INCOMPLETE');
-  const complete=quality.candle_fetch_complete===true&&quality.outcome_candle_fetch_complete===true&&
+  const requiredTimeframes=Array.isArray(detectorSpec.requiredTimeframes)?detectorSpec.requiredTimeframes:[];
+  const additional=quality.additional_timeframes&&typeof quality.additional_timeframes==='object'?quality.additional_timeframes:{};
+  const missingRequiredTimeframes=requiredTimeframes.filter(key=>additional[key]?.complete!==true);
+  const baseComplete=quality.candle_fetch_complete===true&&quality.outcome_candle_fetch_complete===true&&
     quality.synthetic_data_used===false&&Number(row?.summary?.replay_steps)>0&&
     ['FULL_TRADE','CANDLE_ONLY_FALLBACK'].includes(mode)&&Number(quality.outcome_horizon_hours)===horizonHours;
+  const complete=baseComplete&&missingRequiredTimeframes.length===0;
+  const reason=complete?null:missingRequiredTimeframes.length
+    ?'REQUIRED_DETECTOR_TIMEFRAME_COVERAGE_INCOMPLETE'
+    :(quality.failure??'HISTORICAL_REPLAY_COVERAGE_INCOMPLETE');
   return {complete,mode,decision_candles_complete:quality.candle_fetch_complete===true,
     outcome_horizon_complete:quality.outcome_candle_fetch_complete===true,
     trade_coverage_complete:quality.trade_coverage_complete===true,
-    replay_steps:Number(row?.summary?.replay_steps)||0,
-    reason:complete?null:(quality.failure??'HISTORICAL_REPLAY_COVERAGE_INCOMPLETE')};
+    required_timeframes:requiredTimeframes,missing_required_timeframes:missingRequiredTimeframes,
+    additional_timeframe_coverage:additional,
+    replay_steps:Number(row?.summary?.replay_steps)||0,reason};
 }
 
 async function main(){
@@ -61,13 +85,16 @@ async function main(){
     process.stdout.write([
       'RadarX monthly historical replay lab — replays the existing detector before event markers.',
       'Usage: node phase2/tools/monthly-historical-replay-lab.mjs --input monthly-move-forensics.json',
+      '       [--detector-profile STRONG_MOVE_RADAR|RADAR8_PREMOVE_SHADOW|ALMUQAWIM_RADAR|DOOMSDAY_RADAR|KAHIR_RADAR|ROTATION_LAG_RADAR]',
       '       [--output-dir reports/monthly-historical-learning-lab] [--max-trade-pages 20]',
       '       [--max-trades 20000] [--outcome-horizon-hours 24] [--case-timeout-ms 1800000] [--dry-run]',
       'Only closed public Binance Spot inputs are used. Event markers/cohorts are post-decision labels and never enter evaluator inputs.',
-      'Current replay adapter: STRONG_MOVE_RADAR (strict and dynamic-early-warning lanes); unsupported radar profiles are not fabricated.'
+      'Candidate-shadow profiles measure detector candidates, not actual delivered notifications; unavailable historical book/news evidence is not synthesized.'
     ].join('\n')+'\n');return;
   }
   const input=flag(args,'--input');
+  const detectorProfile=String(flag(args,'--detector-profile','STRONG_MOVE_RADAR')).trim().toUpperCase();
+  const detectorSpec=historicalProfileInfo(detectorProfile);
   const outputDir=resolve(flag(args,'--output-dir','reports/monthly-historical-learning-lab'));
   const maxTradePages=integer(flag(args,'--max-trade-pages','20'),20,1,1000,'max-trade-pages');
   const maxTrades=integer(flag(args,'--max-trades','20000'),20000,1000,1000000,'max-trades');
@@ -81,8 +108,9 @@ async function main(){
       per_case_decision_window_hours:24,outcome_horizon_hours:outcomeHorizonHours,
       max_trade_pages_per_case:maxTradePages,max_trades_per_case:maxTrades,
       max_cases:maxCases,case_timeout_ms:caseTimeoutMs,
-      detector_profile:'STRONG_MOVE_RADAR',
-      policy:{market:'BINANCE_SPOT',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',event_marker_is_evaluator_input:false}
+      detector_profile:detectorSpec,
+      policy:{market:'BINANCE_SPOT',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+        event_marker_is_evaluator_input:false,live_notification_simulated:detectorSpec.live_notification_simulated}
     },null,2)+'\n');return;
   }
   if(!input)throw new Error('MONTHLY_FORENSICS_INPUT_REQUIRED');
@@ -151,6 +179,7 @@ async function main(){
     const child=await childRun([
       replayScript,'--symbols',symbol,'--start',String(start),'--end',String(end),
       '--outcome-horizon-hours',String(outcomeHorizonHours),
+      '--detector-profile',detectorProfile,
       '--max-trade-pages',String(maxTradePages),'--max-trades',String(maxTrades),
       '--output',replayPath
     ],{timeoutMs:caseTimeoutMs});
@@ -160,7 +189,7 @@ async function main(){
       baseRecord.error=(child.error??String(error?.message??error)).slice(0,240);
       replayFailures++;continue;
     }
-    const coverage=candleCoverage(report,outcomeHorizonHours);
+    const coverage=candleCoverage(report,outcomeHorizonHours,detectorSpec);
     baseRecord.coverage={...coverage,process_exit_code:child.exitCode,timed_out:child.timedOut};
     if(!coverage.complete||child.exitCode!==0||child.timedOut){
       baseRecord.status='INCOMPLETE_REPLAY';
@@ -182,11 +211,13 @@ async function main(){
     report.window={id,start,end,start_time:start,end_time:end,start_iso:new Date(start).toISOString(),end_iso:new Date(end).toISOString()};
     report.market_regime=regime.regime;
     report.market_event=event;
-    report.detector_replay={profile:'STRONG_MOVE_RADAR',event_anchor_as_evaluator_input:false,replay_data_mode:coverage.mode};
+    report.detector_replay={...detectorSpec,event_anchor_as_evaluator_input:false,replay_data_mode:coverage.mode};
     for(const result of (Array.isArray(report.results)?report.results:[])){
       for(const step of (Array.isArray(result.steps)?result.steps:[])){
         step.window_id=id;
-        step.radar='STRONG_MOVE_RADAR';
+        step.radar=detectorSpec.canonical;
+        step.detector_profile=detectorProfile;
+        step.detector_evaluation_mode=detectorSpec.mode;
         step.market_regime=regime.regime;
         step.market_event_at=anchorAt;
         step.market_event_cohort=cohort;
@@ -218,10 +249,18 @@ async function main(){
     source_monthly_forensics:loaded.path,
     source_schema:source.schema_version,
     source_window:source.window,
+    detector_profile:detectorSpec,
     detector_replay_scope:{
-      replayed_profiles:['STRONG_MOVE_RADAR'],
-      not_replayed_profiles:['KING_INTELLIGENCE_RADAR','JOKER_RADAR','LIQUIDITY_ABSORPTION_RADAR','AL_MUQAWIM_RADAR','DOOMSDAY_RADAR','RADAR8_EARLY_EXPANSION','FALCON_EYE_RADAR','COIN_HUNTER_RADAR','KAHIR_RADAR','ROTATION_LAG_RADAR','WHALE_ACCUMULATION_RADAR','PROFESSOR_RADAR'],
-      note:'Do not generalize these metrics to radars without an implemented historical evaluator adapter and required historical input coverage.'
+      replayed_profiles:[detectorSpec.canonical],
+      evaluation_mode:detectorSpec.mode,
+      live_notification_simulated:detectorSpec.live_notification_simulated,
+      supported_historical_profiles:Object.keys(HISTORICAL_PROFILE_INFO).map(key=>HISTORICAL_PROFILE_INFO[key].canonical),
+      not_replayed_profiles:['EARLY_MOVE_RADAR','STRONG_MOVE_RADAR','ROTATION_LAG_RADAR','LIQUIDITY_ABSORPTION_RADAR','KAHIR_RADAR','DOOMSDAY_RADAR','PROFESSOR_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','FALCON_EYE_RADAR']
+        .filter(profile=>profile!==detectorSpec.canonical),
+      profiles_without_historical_adapters:['EARLY_MOVE_RADAR','LIQUIDITY_ABSORPTION_RADAR','PROFESSOR_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','FALCON_EYE_RADAR'],
+      note:detectorSpec.live_notification_simulated
+        ?'This profile runs its strict/dynamic replay gate, but exact historical exchange depth and device push delivery are still not reproduced.'
+        :'This report measures detector-candidate timing only. It must not be interpreted as a replay of actual accepted push notifications or as validation of unavailable historical order-book/news/futures evidence.'
     },
     label_definitions:{
       moderate_move_pct:5,strong_move_pct:15,outcome_horizon_hours:outcomeHorizonHours,
@@ -265,19 +304,28 @@ async function main(){
     '- Rolling monthly source cases: '+allCases.length,
     '- Complete detector replays: '+coverageComplete,
     '- Failed or skipped cases: '+replayFailures,
-    '- Replayed detector profile: STRONG_MOVE_RADAR only',
+    '- Detector profile: '+detectorSpec.canonical+' (requested '+detectorProfile+')',
+    '- Evaluation mode: '+detectorSpec.mode,
+    '- Live notification delivery simulated: '+detectorSpec.live_notification_simulated,
     '- Confirmed positive ex-post anchors: '+positiveAnchors,
-    '- Positive anchors with at least one accepted signal before anchor: '+positiveAnchorsCaptured,
-    '- Accepted decisions: '+metrics.accepted_decisions,
-    '- Successful alerts on fully matured 5%/15% target labels: '+metrics.successful_alerts,
-    '- False alerts on fully observed horizons: '+metrics.false_alerts,
+    '- Positive anchors with an accepted detector decision before anchor: '+positiveAnchorsCaptured,
+    '- Accepted decisions / candidate detections: '+metrics.accepted_decisions,
+    detectorSpec.live_notification_simulated
+      ?'- Successful alerts on fully matured 5%/15% target labels: '+metrics.successful_alerts
+      :'- Candidate matches on fully matured 5%/15% target labels (not push alerts): '+metrics.successful_alerts,
+    detectorSpec.live_notification_simulated
+      ?'- False alerts on fully observed horizons: '+metrics.false_alerts
+      :'- Candidate classifications without follow-through (not measured false pushes): '+metrics.false_alerts,
     '- Missed-move decisions: '+metrics.missed_move_decisions,
     '- Unique missed positive event anchors: '+metrics.missed_move_events,
     '- Median lead time before confirmed event anchor (minutes): '+(metrics.median_lead_time_minutes??'not estimable'),
     '- Explicit-probability calibration: '+metrics.calibration.status,
     '- Walk-forward split: '+split.status+' (train '+split.train.length+', validation '+split.validation.length+', test '+split.test.length+').',
     '', 'The ex-post event anchor is only used for lead-time labels after replay. It is never passed into the evaluator.',
-    'A complete report covers only the Strong Move detector; other radars are named as unsupported rather than simulated.',
+    detectorSpec.live_notification_simulated
+      ?'This report replays the selected profile gate; it still does not simulate FCM delivery on a real handset.'
+      :'Candidate-shadow results are not actionable push alerts. Historical order-book snapshots and any unavailable external inputs are not synthesized.',
+    'Only the selected detector profile is evaluated in this report; the remaining radars must be tested in separate runs with their own required historical inputs.',
     ''
   ].join('\n');
   await writeFile(markdownPath,markdown,{encoding:'utf8'});

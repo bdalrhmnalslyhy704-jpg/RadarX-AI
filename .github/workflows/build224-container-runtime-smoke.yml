@@ -60,10 +60,26 @@ jobs:
           if (x.paper_trading !== true || x.real_order_execution !== false || x.confidence_score !== 'UNKNOWN') {
             throw new Error('CONTAINER_READ_ONLY_POLICY_INVALID');
           }
+          if (x.expected_radars !== 12 || x.registered_radars !== 12 || x.pre_move_scanner_ready !== true) {
+            throw new Error('CONTAINER_RADAR_INTEGRATION_INVALID ' + JSON.stringify({
+              expected_radars: x.expected_radars,
+              registered_radars: x.registered_radars,
+              pre_move_scanner_ready: x.pre_move_scanner_ready
+            }));
+          }
+          if (x.analyst_system?.expected_analysts !== 20 ||
+              x.analyst_system?.engine_configured !== true ||
+              x.analyst_system?.review_bridge_installed !== true) {
+            throw new Error('CONTAINER_ANALYST_INTEGRATION_INVALID ' + JSON.stringify(x.analyst_system));
+          }
           console.log('CONTAINER_API_CONTRACT_OK ' + JSON.stringify({
             service: x.service,
             build_version: x.build_version,
             deployment_contract: x.deployment_contract,
+            expected_radars: x.expected_radars,
+            registered_radars: x.registered_radars,
+            pre_move_scanner_ready: x.pre_move_scanner_ready,
+            analyst_system: x.analyst_system,
             paper_trading: x.paper_trading,
             real_order_execution: x.real_order_execution
           }));
