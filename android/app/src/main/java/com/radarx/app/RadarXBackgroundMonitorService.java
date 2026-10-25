@@ -63,6 +63,9 @@ public final class RadarXBackgroundMonitorService extends Service {
     private static final String CHANNEL_STRONG_ALERTS = "radarx_strong_move_alerts";
     private static final String CHANNEL_ROTATION_ALERTS = "radarx_rotation_alerts";
     private static final String CHANNEL_RADAR_ALERTS = "radarx_radar_alerts_v2";
+    private static final String CHANNEL_PRE_MOVE_WATCH = "radarx_premove_watch";
+    private static final long PRE_MOVE_WATCH_POLL_MS = 30_000L;
+    private static final long PRE_MOVE_WATCH_SYMBOL_COOLDOWN_MS = 10 * 60_000L;
     private static final int STATUS_NOTIFICATION_ID = 41001;
     private static final int ALERT_NOTIFICATION_BASE = 42000;
     private static final int STRONG_ALERT_NOTIFICATION_BASE = 43000;
@@ -76,6 +79,7 @@ public final class RadarXBackgroundMonitorService extends Service {
     private volatile boolean stopping;
     private volatile boolean loggedFirstScan;
     private final DecimalFormat scoreFmt = new DecimalFormat("0.0");
+    private volatile long lastPreMoveWatchPollAtMs = 0L;
 
     @Override
     public void onCreate() {
@@ -167,6 +171,7 @@ public final class RadarXBackgroundMonitorService extends Service {
                 JSONArray radars = root.optJSONArray("radars");
                 updateStatus("رادارات مستقلة • " + (radars == null ? 6 : radars.length()) +
                     " • اكتشافات جديدة: " + count);
+                pollPreMoveWatchOnlyAlertsSafely();
             } else {
                 updateStatus("الرادارات المستقلة غير متاحة حاليًا؛ لا يتم توليد بيانات صناعية");
             }
@@ -434,6 +439,183 @@ public final class RadarXBackgroundMonitorService extends Service {
         JSONArray sorted = new JSONArray();
         for (JSONObject row : ordered) sorted.put(row);
         root.put("alerts", sorted);
+    }
+
+    private void pollPreMoveWatchOnlyAlertsSafely() {
+        final long now = System.currentTimeMillis();
+        if (stopping || now - lastPreMoveWatchPollAtMs < PRE_MOVE_WATCH_POLL_MS) return;
+        lastPreMoveWatchPollAtMs = now;
+        HttpURLConnection connection = null;
+        try {
+            URL url = new URL(BACKEND_ORIGIN + "/api/pre-move-radar?quote=USDT&limit=50&scan=0");
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(3500);
+            connection.setReadTimeout(7500);
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("Accept-Encoding", "identity");
+            int status = connection.getResponseCode();
+            if (status != 200) {
+                Log.i(TAG, "PRE_MOVE_WATCH_POLL_HTTP_" + status);
+                return;
+            }
+            JSONObject root = new JSONObject(new String(readAll(connection.getInputStream()), StandardCharsets.UTF_8));
+            JSONObject meta = root.optJSONObject("meta");
+            if (meta == null || !meta.optBoolean("live", false) ||
+                    !meta.optBoolean("paper_trading", false) || meta.optBoolean("real_order_execution", true) ||
+                    !"PRE_MOVE".equalsIgnoreCase(meta.optString("radar", "")) ||
+                    !"Binance Public REST".equals(root.optString("source", ""))) {
+                Log.i(TAG, "PRE_MOVE_WATCH_POLL_SKIPPED_NON_LIVE_OR_WRONG_POLICY");
+                return;
+            }
+            JSONArray rows = root.optJSONArray("watch_notification_candidates");
+            if (rows == null || rows.length() == 0) return;
+
+            SharedPreferences preferences = prefs();
+            Set<String> seen = new HashSet<>(
+                preferences.getStringSet("premove_watch_seen_ids", new HashSet<>()));
+            int delivered = 0;
+            final long pollTime = System.currentTimeMillis();
+            for (int i = 0; i < rows.length() && delivered < 3; i++) {
+                JSONObject alert = rows.optJSONObject(i);
+                if (!isValidPreMoveWatchOnlyAlert(alert, pollTime)) continue;
+                String symbol = alert.optString("symbol", "").trim().toUpperCase(Locale.ROOT);
+                String eventId = alert.optString("id", "").trim();
+                if (symbol.isEmpty() || eventId.isEmpty() || seen.contains(eventId)) continue;
+                long lastSymbolAt = preferences.getLong("premove_watch_last_at_" + symbol, 0L);
+                if (lastSymbolAt > 0L && pollTime - lastSymbolAt < PRE_MOVE_WATCH_SYMBOL_COOLDOWN_MS) {
+                    seen.add(eventId);
+                    continue;
+                }
+                if (!notifyPreMoveWatchOnlyAlert(alert, eventId)) continue;
+                seen.add(eventId);
+                preferences.edit().putLong("premove_watch_last_at_" + symbol, pollTime).apply();
+                delivered++;
+            }
+            while (seen.size() > 300) seen.remove(seen.iterator().next());
+            preferences.edit().putStringSet("premove_watch_seen_ids", seen).apply();
+            if (delivered > 0) Log.i(TAG, "PRE_MOVE_WATCH_LOCAL_NOTIFICATIONS_SENT=" + delivered);
+        } catch (Exception error) {
+            Log.i(TAG, "PRE_MOVE_WATCH_POLL_FAILED; standard radar polling remains active");
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
+    private boolean isValidPreMoveWatchOnlyAlert(JSONObject alert, long now) {
+        if (alert == null || !alert.optBoolean("watch_only", false) ||
+                alert.optBoolean("entry_eligible", true) ||
+                !"PRE_MOVE_RADAR_WATCH_ONLY".equalsIgnoreCase(alert.optString("event", "")) ||
+                !"WATCH_EARLY".equalsIgnoreCase(alert.optString("potential_label", "")) ||
+                !"SPOT".equalsIgnoreCase(alert.optString("market", "")) ||
+                !alert.optBoolean("closed_candles_only", false) ||
+                !alert.optBoolean("paper_trading", false) || alert.optBoolean("real_order_execution", true) ||
+                !"Binance Public REST".equals(alert.optString("source", "")) ||
+                alert.optBoolean("data_stale", true)) return false;
+
+        JSONObject status = alert.optJSONObject("data_status");
+        JSONObject context = alert.optJSONObject("pre_move_context");
+        if (status == null || context == null ||
+                !status.optBoolean("data_valid", false) || status.optBoolean("data_stale", true) ||
+                status.optBoolean("stale", true) || status.optBoolean("future_data_detected", true) ||
+                !"Binance Public REST".equals(status.optString("source", "")) ||
+                !"WATCH_EARLY".equalsIgnoreCase(context.optString("stage", "")) ||
+                !context.optBoolean("watch_only", false) || context.optBoolean("actionable", true) ||
+                !context.optBoolean("evidence_complete", false) ||
+                !context.optBoolean("closed_candles_only", false) || context.optBoolean("already_moved", true)) return false;
+
+        double quality = alert.optDouble("data_quality", Double.NaN);
+        double liquidity = alert.optDouble("liquidity_quality", Double.NaN);
+        double price = alert.optDouble("price", Double.NaN);
+        double daily = alert.optDouble("price_change_24h", Double.NaN);
+        double score = context.optDouble("score", Double.NaN);
+        double session = context.optDouble("session_return_pct", Double.NaN);
+        double hour = context.optDouble("one_hour_return_pct", Double.NaN);
+        double volume = context.optDouble("volume_acceleration", Double.NaN);
+        double trades = context.optDouble("trade_acceleration", Double.NaN);
+        double buy = context.optDouble("taker_buy_ratio", Double.NaN);
+        double buyDelta = context.optDouble("taker_buy_acceleration", Double.NaN);
+        double closeLocation = context.optDouble("mean_close_location", Double.NaN);
+        double relative = context.optDouble("relative_strength_vs_market_pct", Double.NaN);
+        JSONObject components = context.optJSONObject("components");
+        double structure = components == null ? Double.NaN : components.optDouble("structure", Double.NaN);
+        long closeAt = alert.optLong("detected_candle_close_time", status.optLong("close_time", 0L));
+
+        if (!Double.isFinite(quality) || quality < 70.0 || quality > 100.0 ||
+                !Double.isFinite(liquidity) || liquidity < 60.0 || liquidity > 100.0 ||
+                !Double.isFinite(price) || price <= 0.0 || !Double.isFinite(daily) || Math.abs(daily) >= 12.0 ||
+                !Double.isFinite(score) || score < 68.0 || !Double.isFinite(session) || session < 0.0 || session > 6.0 ||
+                !Double.isFinite(hour) || hour < 0.15 || hour > 4.5 ||
+                !Double.isFinite(structure) || structure < 60.0 ||
+                closeAt <= 0L || closeAt > now + 5000L || now - closeAt > 20 * 60_000L) return false;
+
+        int participation = 0;
+        if (Double.isFinite(volume) && volume >= 1.0) participation++;
+        if (Double.isFinite(trades) && trades >= 1.05) participation++;
+        if (Double.isFinite(buy) && buy >= 0.54) participation++;
+        if (Double.isFinite(buyDelta) && buyDelta >= 0.01) participation++;
+        if (Double.isFinite(closeLocation) && closeLocation >= 0.54) participation++;
+        if (Double.isFinite(relative) && relative >= 0.5) participation++;
+        if (participation < 3) return false;
+
+        JSONArray risks = alert.optJSONArray("risk_flags");
+        if (risks != null) {
+            for (int i = 0; i < risks.length(); i++) {
+                String risk = risks.optString(i, "").toUpperCase(Locale.ROOT);
+                if (risk.matches(".*(ALREADY_EXTENDED|EXTENDED_CHASE|HIGH_RISK|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK|LOW_LIQUIDITY).*")) return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean notifyPreMoveWatchOnlyAlert(JSONObject alert, String eventId) {
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (manager == null || !manager.areNotificationsEnabled()) {
+            Log.i(TAG, "PRE_MOVE_WATCH_LOCAL_NOTIFICATION_BLOCKED");
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= 26) {
+            NotificationChannel channel = manager.getNotificationChannel(CHANNEL_PRE_MOVE_WATCH);
+            if (channel == null || channel.getImportance() == NotificationManager.IMPORTANCE_NONE) {
+                Log.i(TAG, "PRE_MOVE_WATCH_CHANNEL_DISABLED");
+                return false;
+            }
+        }
+        String symbol = alert.optString("symbol", "UNKNOWN").toUpperCase(Locale.ROOT);
+        double price = alert.optDouble("price", Double.NaN);
+        JSONObject context = alert.optJSONObject("pre_move_context");
+        double score = context == null ? Double.NaN : context.optDouble("score", Double.NaN);
+        String priceText = Double.isFinite(price) && price > 0.0 ? formatPrice(price) : "غير متوفر";
+        String scoreText = Double.isFinite(score) ? scoreFmt.format(score) : "غير متوفر";
+        String title = "RadarX • مراقبة مبكرة • " + symbol;
+        String body = "مراقبة فقط — ليست إشارة دخول • السعر: " + priceText +
+            " • Score: " + scoreText + " • انتظر التأكيد • شموع مغلقة • تداول ورقي فقط";
+        Intent open = new Intent(this, MainActivity.class);
+        open.putExtra("radarx_push_open", true);
+        open.putExtra("radarx_alert_symbol", symbol);
+        open.putExtra("radarx_alert_radar", "PRE_MOVE");
+        int notificationId = 55_000 + Math.floorMod(eventId.hashCode(), 1_000_000_000);
+        PendingIntent pending = PendingIntent.getActivity(
+            this, notificationId, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        Notification.Builder builder = notificationBuilder(CHANNEL_PRE_MOVE_WATCH)
+            .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(new Notification.BigTextStyle().bigText(body))
+            .setContentIntent(pending)
+            .setAutoCancel(true)
+            .setCategory(Notification.CATEGORY_EVENT)
+            .setColor(Color.rgb(53, 201, 255))
+            .setDefaults(Notification.DEFAULT_SOUND | Notification.DEFAULT_VIBRATE)
+            .setWhen(alert.optLong("detected_at", System.currentTimeMillis()));
+        try {
+            manager.notify("radarx_premove_watch", notificationId, builder.build());
+            return true;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "PRE_MOVE_WATCH_LOCAL_NOTIFICATION_POST_FAILED", error);
+            return false;
+        }
     }
 
     /**
@@ -866,6 +1048,12 @@ public final class RadarXBackgroundMonitorService extends Service {
         );
         radarAlerts.setDescription("تنبيهات موحدة للرادارات المستقلة، بما فيها صائد العملات");
         manager.createNotificationChannel(radarAlerts);
+
+        NotificationChannel preMoveWatch = new NotificationChannel(
+            CHANNEL_PRE_MOVE_WATCH, "RadarX • مراقبة مبكرة (ليست دخولًا)", NotificationManager.IMPORTANCE_HIGH
+        );
+        preMoveWatch.setDescription("تنبيهات مراقبة مبكرة فقط؛ لا تعني توصية دخول أو تنفيذ صفقة");
+        manager.createNotificationChannel(preMoveWatch);
     }
 
     private void stopMonitoring() {
