@@ -9,6 +9,7 @@ import {createSessionToken} from '../core/auth.mjs';
 import {NoopPushProvider} from '../push/index.mjs';
 import {pushSubscription} from './fixtures.mjs';
 import {emptyRadarSignalOutcomeState} from '../core/radar-signal-outcomes.mjs';
+import {SCAN_JOURNEY_SCHEMA} from '../core/scan-journey-ledger.mjs';
 
 test('TEST_FIXTURE: subscription/settings API requires auth and never returns push keys',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-api-')),store=await new DurableStore({dir}).init();
@@ -771,6 +772,71 @@ test('TEST_FIXTURE: Joker scan endpoint honors scan=1 and returns live candidate
     assert.equal(body.candidates[0].symbol,'TESTUSDT');assert.equal(body.diagnostics.evaluated,12);assert.equal(body.monitoring.watch_alerts_emitted,1);
     const second=await fetch(base+'/api/rotation-lag-radar?limit=10');assert.equal(second.status,200);assert.equal(tickCalls,1);
   }finally{await new Promise(resolve=>server.close(resolve));await rm(dir,{recursive:true,force:true});}
+});
+
+
+test('GET /api/radar-missed-movers correlates sampled rises with the twelve archived radar sources',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-missed-mover-api-'));
+  const store=await new DurableStore({dir}).init();
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({
+    config:{auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}},
+    store,monitor,pushProvider:new NoopPushProvider()
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  server.unref();
+  const minute=60_000,now=Date.now(),startAt=now-25*minute;
+  try{
+    const archiveSeed={symbol:'ZZZUSDT',detected_at:startAt-10*minute,processed_at:startAt-10*minute,price:1,stage:'ARCHIVE_COVERAGE_FIXTURE'};
+    const archiveWriters=[
+      ['RADAR_1','appendMoveAlert'],['RADAR_2','appendStrongMoveAlert'],['RADAR_3','appendRotationAlert'],
+      ['RADAR_4','appendLiquidityAbsorptionAlert'],['RADAR_5','appendKahirAlert'],['RADAR_6','appendDoomsdayAlert'],
+      ['RADAR_7','appendAlMuqawimAlert'],['RADAR_8','appendEarlyExpansionAlert'],['RADAR_9','appendFalconEyeAlert'],
+      ['RADAR_10','appendCoinHunterAlert'],['RADAR_11','appendWhaleAccumulationAlert'],['RADAR_12','appendProfessorAlert']
+    ];
+    for(const [radar,method] of archiveWriters){
+      const writer=store[method];
+      assert.equal(typeof writer,'function',method+' must exist');
+      await writer.call(store,{...archiveSeed,id:'SEED-'+radar,radar});
+    }
+    await store.appendRotationAlert({
+      id:'CAPTURE-BBB',radar:'RADAR_3',symbol:'BBBUSDT',
+      detected_at:null,processed_at:startAt+2*minute,price:100,stage:'WATCH_EARLY'
+    });
+    for(let i=0;i<=20;i++){
+      const at=startAt+i*minute;
+      const coins=['AAAUSDT','BBBUSDT'].map(symbol=>({
+        symbol,eligible:true,fast_scan_at:at,eligibility_at:at,
+        ticker:{price:i>=3?106:100,quote_volume_24h:2_000_000},
+        market_wide_light_scan:{evaluated:true,reason:'LIGHT_FEATURES_RANK_ONLY'},
+        micro_selected_at:at+10,micro_scan_completed_at:at+20,deep_scan_status:'COMPLETED',
+        rejection_reason:'.INCOMPLETE',notification_gate_rejection_reason:'.INCOMPLETE',notification_status:'.INCOMPLETE'
+      }));
+      await store.appendScanJourneyCycle({
+        schema_version:SCAN_JOURNEY_SCHEMA,cycle_id:'RADAR8:USDT:MISS-AUDIT:'+i,cycle_number:i+1,
+        radar:'RADAR_8',quote:'USDT',status:'COMPLETE',started_at:at-10,completed_at:at+30,
+        source:'TEST_FIXTURE_PUBLIC_TICKER',
+        data_policy:{closed_candles_only:true,paper_trading:true,real_order_execution:false},
+        counters:{expected_total:2,received_total:2,eligible_total:2},coins
+      });
+    }
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/radar-missed-movers?cycles=150');
+    assert.equal(response.status,200);
+    const body=await response.json();
+    assert.equal(body.version,'RADAR_MISSED_MOVER_AUDIT_V1');
+    assert.equal(Object.keys(body.radar_alert_archive_coverage).length,12);
+    assert.equal(body.alert_archive_reads_complete,true);
+    assert.equal(body.interpretation.missed_mover_counts_valid,true);
+    assert.ok(body.summary.missed_mover_samples_5m>0,'AAA must be reported as a missed sampled mover');
+    assert.ok(body.missed_examples.some(row=>row.symbol==='AAAUSDT'&&row.reason==='NO_RADAR_ALERT_BEFORE_OBSERVED_MOVE'));
+    assert.ok(body.summary.captured_mover_samples>0,'BBB must count as alerted before its observed crossing');
+    assert.equal(body.interpretation.closed_ohlc_validation_for_missed_movers,false);
+    assert.equal(body.policy.paper_trading,true);
+    assert.equal(body.policy.real_order_execution,false);
+  }finally{
+    await new Promise(resolve=>server.close(resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
 });
 
 
