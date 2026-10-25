@@ -62,6 +62,32 @@ test('snapshot immediately reports a stopped worker as DEGRADED even before watc
 });
 
 
+test('watchdog does not restart a healthy radar sweep that lasts about four minutes', async () => {
+  let now = 1_000_000;
+  const state = {running: false, busy: false, busy_since_at: null, starts: 0, stops: 0};
+  const instance = {
+    start() { state.starts++; state.running = true; },
+    stop() { state.stops++; state.running = false; state.busy = false; state.busy_since_at = null; },
+    health() { return {running: state.running, busy: state.busy, busy_since_at: state.busy_since_at, poll_ms: 20_000}; }
+  };
+  const swarm = new RadarSwarmCoordinator({
+    runners: [{id: 'COIN_HUNTER_RADAR', name: 'Coin Hunter', instance}], expectedCount: 1,
+    startupSpacingMs: 0, watchdogIntervalMs: 10_000, restartCooldownMs: 0,
+    maxRestarts: 1, clock: () => now, logger: {warn() {}, error() {}}
+  });
+  await swarm.start();
+  state.busy = true; state.busy_since_at = now - 241_610;
+  await swarm._runWatchdog(swarm.generation);
+  const observed = swarm.snapshot();
+  assert.equal(state.starts, 1);
+  assert.equal(state.stops, 0);
+  assert.equal(observed.status, 'RUNNING');
+  assert.equal(observed.running_count, 1);
+  assert.equal(observed.failed_count, 0);
+  assert.equal(observed.radars[0].status, 'RUNNING');
+  await swarm.stop();
+});
+
 test('watchdog restarts a radar whose scan latch stays busy beyond its deadline', async () => {
   let now = 1_000_000;
   const state = {running: false, busy: false, busy_since_at: null, starts: 0, stops: 0};
@@ -76,7 +102,7 @@ test('watchdog restarts a radar whose scan latch stays busy beyond its deadline'
     maxRestarts: 1, clock: () => now, logger: {warn() {}, error() {}}
   });
   await swarm.start();
-  state.busy = true; state.busy_since_at = now - 130_000;
+  state.busy = true; state.busy_since_at = now - 310_000;
   await swarm._runWatchdog(swarm.generation);
   const recovered = swarm.snapshot();
   assert.equal(state.starts, 2); assert.equal(state.stops, 1);
