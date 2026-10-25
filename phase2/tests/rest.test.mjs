@@ -4,6 +4,13 @@ import {RestClient,RestRateLimitError,retryAfterMs,estimateBinanceRequestWeight,
 import {CONFIG} from '../config.mjs';
 
 
+test('TEST_FIXTURE: configured REST timeouts cannot hold a live scan for a minute',()=>{
+  const client=new RestClient({baseUrls:['https://bounded-timeout.test'],timeoutMs:60_000});
+  assert.equal(client.timeoutMs,9_000,'one REST host attempt must be bounded to nine seconds');
+  const shortClient=new RestClient({baseUrls:['https://short-timeout.test'],timeoutMs:25});
+  assert.equal(shortClient.timeoutMs,25,'smaller caller-defined timeouts remain effective');
+});
+
 test('TEST_FIXTURE: each REST client keeps its independent conservative request cap',async()=>{
   const client=new RestClient({baseUrls:['https://rest-default-budget.test'],fetchImpl:async()=>({status:200,ok:true,headers:new Map(),json:async()=>({})})});
   assert.equal(client.maxRequestsPerMinute,240);
