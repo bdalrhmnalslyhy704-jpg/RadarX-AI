@@ -95,18 +95,43 @@ function normalizeTrades(rows, endTime) {
   return [...byId.values()].sort((a, b) => a.T - b.T || (finite(a.a) ?? 0) - (finite(b.a) ?? 0));
 }
 function derivedTicker(history, symbol, at) {
-  if (!history.length) return {symbol, lastPrice: null, priceChange24h: null, quoteVolume24h: null, tradeCount24h: null};
-  const nowPrice = history[history.length - 1].close;
-  const cutoff = at - 24 * 60 * MINUTE_MS;
-  const day = history.filter(x => x.openTime >= cutoff && x.closeTime <= at);
-  const first = day[0] ?? history[0];
-  const q = day.map(x => x.quoteVolume);
+  const empty={
+    symbol,lastPrice:null,priceChange24h:null,quoteVolume24h:null,tradeCount24h:null,
+    ticker_24h_coverage_complete:false,ticker_24h_candle_count:0,
+    ticker_24h_expected_candle_count:24*60,ticker_is_derived_from_closed_candles:true
+  };
+  const closed=normalizeHistoricalCandles(history,{endTime:at})
+    .filter(x=>x.closed===true&&x.closeTime<=at);
+  if(!closed.length)return empty;
+  const current=closed.at(-1);
+  const cutoff=at-24*60*MINUTE_MS;
+  const baseline=closed.filter(x=>x.closeTime<=cutoff).at(-1)||null;
+  const day=closed.filter(x=>x.openTime>cutoff&&x.closeTime<=at);
+  const expected=24*60;
+  let complete=Boolean(baseline&&day.length===expected&&day.at(-1)?.closeTime===at&&
+    day[0]?.openTime===Number(baseline.closeTime)+1);
+  if(complete){
+    for(let i=0;i<day.length;i++){
+      const candle=day[i];
+      if(candle.openTime!==Number(baseline.closeTime)+1+i*MINUTE_MS||
+         candle.closeTime!==candle.openTime+MINUTE_MS-1||
+         (i>0&&candle.openTime!==day[i-1].openTime+MINUTE_MS)){
+        complete=false;break;
+      }
+    }
+  }
+  const quoteComplete=complete&&day.every(x=>Number.isFinite(x.quoteVolume)&&x.quoteVolume>=0);
+  const tradesComplete=complete&&day.every(x=>Number.isFinite(x.tradeCount)&&x.tradeCount>=0);
   return {
-    symbol, lastPrice: nowPrice,
-    priceChange24h: first.open > 0 ? (nowPrice - first.open) / first.open * 100 : null,
-    quoteVolume24h: q.length && q.every(Number.isFinite) ? q.reduce((s, x) => s + x, 0) : null,
-    tradeCount24h: day.every(x => Number.isFinite(x.tradeCount)) ? day.reduce((s, x) => s + x.tradeCount, 0) : null,
-    ticker_is_derived_from_closed_candles: true
+    symbol,lastPrice:Number.isFinite(Number(current?.close))?Number(current.close):null,
+    priceChange24h:complete&&Number(baseline?.close)>0&&Number.isFinite(Number(current?.close))
+      ?(Number(current.close)/Number(baseline.close)-1)*100:null,
+    quoteVolume24h:quoteComplete?day.reduce((sum,x)=>sum+Number(x.quoteVolume),0):null,
+    tradeCount24h:tradesComplete?day.reduce((sum,x)=>sum+Number(x.tradeCount),0):null,
+    ticker_24h_coverage_complete:complete,
+    ticker_24h_candle_count:day.length,
+    ticker_24h_expected_candle_count:expected,
+    ticker_is_derived_from_closed_candles:true
   };
 }
 function outcomeAtPrice(futureRows, target, until) {
