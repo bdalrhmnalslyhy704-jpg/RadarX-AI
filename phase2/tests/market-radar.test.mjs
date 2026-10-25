@@ -118,6 +118,32 @@ test('Pre-Move discovery rotates half of its deep-scan shortlist across the elig
   assert.notDeepEqual(first.slice(12).map(x=>x.symbol),second.slice(12).map(x=>x.symbol),'the second half must rotate rather than scan the same static list forever');
 });
 
+test('Pre-Move rotation remains fair when non-pinned market scores change between cycles',()=>{
+  const symbols=Array.from({length:80},(_,i)=>({
+    symbol:'C'+String(i).padStart(3,'0')+'USDT',
+    baseAsset:'C'+String(i).padStart(3,'0'),
+    quoteAsset:'USDT',
+    status:'TRADING'
+  }));
+  const rows=symbols.map((x,i)=>({
+    symbol:x.symbol,lastPrice:'10',highPrice:'12',lowPrice:'8',
+    quoteVolume:String(5_000_000+i*1000),count:50000+i*100,
+    priceChangePercent:'4'
+  }));
+  const changed=rows.map((x,i)=>({
+    ...x,
+    count:i<68?String((68-i)*700+1):x.count,
+    priceChangePercent:i<68?(i%2===0?'1.2':'7.8'):x.priceChangePercent
+  }));
+  const first=rankPreMoveTickerRows(rows,symbols,{limit:24,rotationOffset:0});
+  const later=rankPreMoveTickerRows(changed,symbols,{limit:24,rotationOffset:0});
+  assert.deepEqual(first.slice(0,12).map(x=>x.symbol),later.slice(0,12).map(x=>x.symbol),
+    'the pinned high-ranking cohort remains stable in this fixture');
+  assert.deepEqual(first.slice(12).map(x=>x.symbol),later.slice(12).map(x=>x.symbol),
+    'rotation must not be reshuffled by score changes among unpinned symbols');
+  assert.equal(new Set(later.map(x=>x.symbol)).size,24);
+});
+
 test('Pre-Move discovery includes active low-volume Spot pairs for rotating screening',()=>{
   const symbols=[{symbol:'EARLYUSDT',baseAsset:'EARLY',quoteAsset:'USDT',status:'TRADING'}];
   const rows=[{symbol:'EARLYUSDT',lastPrice:'1.02',highPrice:'1.05',lowPrice:'0.95',quoteVolume:'18000',count:420,priceChangePercent:'1.6'}];

@@ -1091,7 +1091,11 @@ export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_
   // group that ever receives the deeper closed-candle/flow examination.
   const pinnedCount=Math.min(Math.ceil(take/2),ranked.length);
   const pinned=ranked.slice(0,pinnedCount);
-  const rotating=ranked.slice(pinnedCount);
+  // Keep rotation order independent of constantly changing volume/trade rankings.
+  // Top-ranked symbols stay pinned; every other active Spot pair takes a deterministic
+  // alphabetical turn so market-score churn cannot repeatedly skip the same candidates.
+  const pinnedSymbols=new Set(pinned.map(x=>x.symbol));
+  const rotating=ranked.filter(x=>!pinnedSymbols.has(x.symbol)).sort((a,b)=>a.symbol.localeCompare(b.symbol));
   const rotateCount=Math.min(take-pinnedCount,rotating.length);
   if(rotateCount<=0)return pinned.slice(0,take);
   const offset=((Math.trunc(Number(rotationOffset)||0)%rotating.length)+rotating.length)%rotating.length;
