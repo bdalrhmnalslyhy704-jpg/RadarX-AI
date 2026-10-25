@@ -1378,6 +1378,26 @@ export class MultiAnalystEngine {
       const elapsedMs=Math.max(0,Date.now()-scanWallStartedAt);
       throw new Error('MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED:elapsed_ms='+elapsedMs+':limit_ms='+scanTimeoutMs);
     };
+    // A deadline check after an await is insufficient: a never-settling REST or
+    // storage promise would keep this scan marked busy forever. Race every major
+    // asynchronous stage against the same absolute deadline. The rejection then
+    // unwinds scan() through its finally block, clears the active-scan markers,
+    // and lets the API report an explicit failure instead of WARMING indefinitely.
+    const awaitScanStep=(pending,stage)=>{
+      assertScanDeadline();
+      const remainingMs=Math.max(1,scanDeadlineAtMs-Date.now());
+      let timer=null;
+      const deadline=new Promise((_,reject)=>{
+        timer=setTimeout(()=>{
+          const elapsedMs=Math.max(0,Date.now()-scanWallStartedAt);
+          const error=new Error('MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED:stage='+stage+
+            ':elapsed_ms='+elapsedMs+':limit_ms='+scanTimeoutMs);
+          error.name='ScanDeadlineError';
+          reject(error);
+        },remainingMs);
+      });
+      return Promise.race([Promise.resolve(pending),deadline]).finally(()=>clearTimeout(timer));
+    };
     this.monitorStats.active_scan_started_at=new Date(scanStartedAt).toISOString();
     this.monitorStats.active_scan_deadline_at=new Date(scanDeadlineAtMs).toISOString();
     this.monitorStats.last_scan_successful=false;
@@ -1388,7 +1408,7 @@ export class MultiAnalystEngine {
       const universeRefreshMs=Math.max(60_000,Number(this.config.universeRefreshMs)||30*60*1000);
       let universeEntry=this.universeCacheByQuote.get(q);
       if(!universeEntry||this.clock()-universeEntry.fetchedAt>=universeRefreshMs){
-        const info=await this.scanner.exchangeInfo();
+        const info=await awaitScanStep(this.scanner.exchangeInfo(),'EXCHANGE_INFO');
         assertScanDeadline();
         const symbols=buildSpotUniverse(info.data,q);
         if(!symbols.length)throw new Error('EMPTY_SPOT_UNIVERSE');
@@ -1398,7 +1418,7 @@ export class MultiAnalystEngine {
       const universe=universeEntry.symbols;
       const universeRefreshedAt=universeEntry.fetchedAt;
       const exchangeInfoSource=universeEntry.source;
-      const tickers=await this.scanner.ticker24h();
+      const tickers=await awaitScanStep(this.scanner.ticker24h(),'TICKER_24H');
       assertScanDeadline();
       const normalized=tickers.data.map(x=>({
         symbol:String(x.symbol||'').toUpperCase(),lastPrice:Number(x.lastPrice),quoteVolume24h:Number(x.quoteVolume),
@@ -1481,10 +1501,10 @@ export class MultiAnalystEngine {
       for(const review of attemptedRadarReviews){review.last_attempt_at=reviewAttemptAt;review.attempts=Number(review.attempts||0)+1;}
       let btc15=[],btc1=[];
       try{
-        const [b15,b1]=await Promise.all([
+        const [b15,b1]=await awaitScanStep(Promise.all([
           this.scanner.fetchSeries('BTCUSDT','15m',Math.min(this.config.deepKlines,220)),
           this.scanner.fetchSeries('BTCUSDT','1h',Math.min(this.config.deepKlines,220))
-        ]);
+        ]),'BTC_BASELINE');
         btc15=Array.isArray(b15.candles)?b15.candles:[]; btc1=Array.isArray(b1.candles)?b1.candles:[];
       }catch{}
       assertScanDeadline();
@@ -1496,7 +1516,7 @@ export class MultiAnalystEngine {
       const scanErrors=[];
       const scanned=await boundedMap(deepSelected,Math.max(1,Math.min(4,this.config.deepConcurrency)),async(ticker,index)=>{
         try{
-          const row=await this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:exchangeInfoSource,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'',includeAnalysisPayload:true});
+          const row=await awaitScanStep(this.scanner.scanSymbol(ticker,index+1,{exchangeInfo:exchangeInfoSource,ticker:tickers.source},{klinesLimit:this.config.deepKlines,fastInterval:'',includeAnalysisPayload:true}),'SYMBOL_SCAN:'+String(ticker?.symbol||'UNKNOWN'));
           assertScanDeadline();
           if(!row)throw new Error('SYMBOL_SCAN_RETURNED_EMPTY');
           // A candidate must reach the 19 specialist analysts even when the data gate fails.
@@ -1505,7 +1525,7 @@ export class MultiAnalystEngine {
           const reviewContext=this.pendingRadarReviews.get(String(ticker?.symbol||'').toUpperCase());
           row._analyst_context={snapshot_id:sharedMarketSnapshot.snapshot_id,snapshot_as_of:sharedMarketSnapshot.as_of,source_radars:Array.isArray(reviewContext?.source_radars)?reviewContext.source_radars.slice(0,8):[],radar_review_priority:ticker?._radar_review_priority===true,duplicate_alert_suppressed:false};
           let prior=null;
-          try{ prior=await this.store?.getIntelligenceMemory?.(ticker.symbol) || null; }catch{ prior=null; }
+          try{ prior=await awaitScanStep(this.store?.getIntelligenceMemory?.(ticker.symbol),'MEMORY_READ:'+ticker.symbol) || null; }catch{ prior=null; }
           assertScanDeadline();
           let analysis;
           try{
@@ -1597,7 +1617,7 @@ export class MultiAnalystEngine {
       for(const item of live){
         try{
           let previous=null;
-          try{previous=await this.store?.getIntelligenceMemory?.(item.symbol)||null;}catch{}
+          try{previous=await awaitScanStep(this.store?.getIntelligenceMemory?.(item.symbol),'MEMORY_READ:'+item.symbol)||null;}catch{}
           const previousHistory=Array.isArray(previous?.history)?previous.history:[];
           const history=[...previousHistory,{
             as_of:this.clock(),
@@ -1608,7 +1628,7 @@ export class MultiAnalystEngine {
             timing:item.intelligence?.timing ?? null,
             agreement:item.intelligence?.analyst_agreement ?? null
           }].slice(-12);
-          await this.store?.putIntelligenceMemory?.(item.symbol,{
+          await awaitScanStep(this.store?.putIntelligenceMemory?.(item.symbol,{
             as_of:this.clock(),
             verdict:item.verdict,
             direction:item.direction,
@@ -1617,7 +1637,7 @@ export class MultiAnalystEngine {
             timing:item.intelligence?.timing ?? null,
             agreement:item.intelligence?.analyst_agreement ?? null,
             history
-          });
+          }),'MEMORY_WRITE:'+item.symbol);
         }catch{}
       }
       assertScanDeadline();

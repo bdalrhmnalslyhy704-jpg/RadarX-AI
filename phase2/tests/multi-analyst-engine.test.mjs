@@ -52,12 +52,13 @@ assert.equal(isMomentumLiquidityEligible('N/A',4.0),false);
 // A stalled initial market-data request must fail the cycle, release the busy
 // latch, and clear its REST deadline instead of leaving the UI polling forever.
 {
-  const rest={requestDeadlineAtMs:null,request:async()=>{
-    await new Promise(resolve=>setTimeout(resolve,180));
-    return {data:{symbols:[]},source:'TEST'};
-  }};
+  // This promise never settles. The deadline must reject scan() itself rather
+  // than merely checking elapsed time after the pending operation finally ends.
+  const startedAt=Date.now();
+  const rest={requestDeadlineAtMs:null,request:async()=>new Promise(()=>{})};
   const engine=new MultiAnalystEngine({rest,config:{scanTimeoutMs:100}});
   await assert.rejects(()=>engine.scan({forceRefresh:true}),/MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED/);
+  assert.ok(Date.now()-startedAt<1000,'never-settling work must be bounded by the configured scan deadline');
   assert.equal(engine.busy,null);
   assert.equal(rest.requestDeadlineAtMs,null);
   assert.equal(engine.monitorStats.active_scan_started_at,null);
