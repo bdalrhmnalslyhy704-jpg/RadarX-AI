@@ -25,6 +25,7 @@ on:
 
 permissions:
   contents: write
+  statuses: read
 
 concurrency:
   group: radarx-android-release-${{ github.ref }}
@@ -34,7 +35,7 @@ jobs:
   # Publish only from the official Build 224 branch after its backend and Android checks pass.
   release-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       RADARX_BACKEND_BASE_URL: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
 
@@ -54,6 +55,48 @@ jobs:
             echo "::error::Refusing to publish an APK from obsolete commit $GITHUB_SHA; current branch tip is $remote_tip."
             exit 1
           fi
+      - name: Require successful Pre-Move acceptance statuses for this exact commit
+        timeout-minutes: 18
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const required = ['pre-move-radar-tests', 'pre-move-radar-live-api'];
+            const deadline = Date.now() + 17 * 60 * 1000;
+            while (Date.now() < deadline) {
+              const { data } = await github.rest.repos.listCommitStatusesForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: context.sha,
+                per_page: 100
+              });
+              const latest = new Map();
+              for (const status of data) {
+                const previous = latest.get(status.context);
+                if (!previous || Date.parse(status.updated_at) > Date.parse(previous.updated_at)) {
+                  latest.set(status.context, status);
+                }
+              }
+              const waiting = [];
+              for (const name of required) {
+                const status = latest.get(name);
+                if (!status || status.state === 'pending') {
+                  waiting.push(name);
+                  continue;
+                }
+                if (status.state !== 'success') {
+                  core.setFailed(`Required live acceptance ${name}=${status.state}; refusing to publish APK. Details: ${status.target_url || 'no run URL'}`);
+                  return;
+                }
+              }
+              if (waiting.length === 0) {
+                core.info(`Required exact-commit acceptance passed: ${required.join(', ')}`);
+                return;
+              }
+              core.info(`Waiting for exact-commit acceptance status: ${waiting.join(', ')}`);
+              await new Promise(resolve => setTimeout(resolve, 10000));
+            }
+            core.setFailed('Timed out waiting for exact-commit Pre-Move unit and live DHDTech acceptance statuses; refusing to publish APK.');
+
       - name: Configure Build 224 APK for DHDTech backend
         env:
           RADARX_BACKEND_BASE_URL: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
@@ -655,11 +698,14 @@ jobs:
           CURL_EXIT=0
           CODE="$(curl --location --silent --show-error --max-time 20 -o "$RUNNER_TEMP/multi-analyst.json" -w "%{http_code}" "$BASE/api/multi-analyst?quote=USDT&limit=1" 2>"$RUNNER_TEMP/multi-analyst-curl.err")" || CURL_EXIT=$?
           if (( CURL_EXIT != 0 )) || [[ "$CODE" == "000" ]]; then
-            echo "::warning::Live Multi-Analyst smoke request did not return within 20 seconds (curl exit $CURL_EXIT). Local engine/unit tests run in the next step; APK packaging will continue, but this is not proof of healthy live multi-analyst latency."
+            echo "::error::Live Multi-Analyst smoke request failed or timed out (curl exit $CURL_EXIT); refusing to publish APK without a healthy live analyst endpoint."
             if [[ -s "$RUNNER_TEMP/multi-analyst-curl.err" ]]; then cat "$RUNNER_TEMP/multi-analyst-curl.err"; fi
-            exit 0
+            exit 1
           fi
-          case "$CODE" in 200|502|503) ;; *) echo "::error::Multi-Analyst returned HTTP $CODE"; cat "$RUNNER_TEMP/multi-analyst.json"; exit 1 ;; esac
+          case "$CODE" in
+            200) ;;
+            *) echo "::error::Multi-Analyst returned HTTP $CODE; refusing to publish APK."; cat "$RUNNER_TEMP/multi-analyst.json"; exit 1 ;;
+          esac
           export CODE
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
