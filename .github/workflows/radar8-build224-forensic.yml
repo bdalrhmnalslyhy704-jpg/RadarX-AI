@@ -102,8 +102,8 @@ jobs:
           set +e
           mkdir -p reports
           node phase2/tools/historical-replay-matrix.mjs \
-            --max-trade-pages 5 \
-            --max-trades 5000 \
+            --max-trade-pages 20 \
+            --max-trades 20000 \
             --timeout-ms 1800000 \
             --output reports/radarx-historical-matrix
           matrix_status=$?
