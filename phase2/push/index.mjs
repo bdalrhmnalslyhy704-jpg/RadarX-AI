@@ -319,6 +319,35 @@ export class PushManager{
         return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
       if(structure===null||structure<60||independentEvidence<3)
         return rejected('PRE_MOVE_WATCH_CONFLUENCE_INSUFFICIENT');
+    }else if(event==='STRONG_MOVE_WATCH_ONLY'){
+      const sm=alert?.strong_move||{},m=sm?.metrics||{};
+      const daily=firstFinite([alert?.price_change_24h]);
+      const score=firstFinite([alert?.opportunity_score,sm?.score,sm?.metrics?.flash_score]);
+      const volume=firstFinite([m?.volume_ratio]);
+      const trades=firstFinite([m?.trade_ratio]);
+      const taker=firstFinite([m?.taker_buy_ratio]);
+      const delta=firstFinite([m?.taker_buy_delta]);
+      const r1=firstFinite([m?.return_1m]);
+      const r3=firstFinite([m?.return_3m]);
+      const closeLocation=firstFinite([m?.close_location_pct]);
+      const breakout=m?.breakout_up===true||m?.micro_breakout===true;
+      const flow=(taker!==null&&taker>=0.53)||(delta!==null&&delta>=0.01);
+      const activity=(volume!==null&&volume>=1.15)||(trades!==null&&trades>=1.10);
+      const structure=breakout||(r1!==null&&r1>=0.10&&r3!==null&&r3>=0.20&&closeLocation!==null&&closeLocation>=55);
+      const confirmations=[
+        r1!==null&&r1>=0.10,r3!==null&&r3>=0.20,
+        volume!==null&&volume>=1.15,trades!==null&&trades>=1.10,
+        taker!==null&&taker>=0.53,delta!==null&&delta>=0.01,
+        breakout,closeLocation!==null&&closeLocation>=55
+      ].filter(Boolean).length;
+      if(alert?.radar!=='STRONG_MOVE_RADAR'||sm?.watch_only!==true||
+         alert?.eligible!==false||alert?.watch_only!==true||alert?.entry_eligible!==false||
+         alert?.data_status?.data_valid!==true||sm?.closed_candles_only!==true)
+        return rejected('STRONG_MOVE_WATCH_EVIDENCE_INVALID');
+      if(daily===null||daily < -8||daily > 12||score===null||score<68)
+        return rejected('STRONG_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
+      if(!flow||!activity||!structure||confirmations<4)
+        return rejected('STRONG_MOVE_WATCH_CONFLUENCE_INSUFFICIENT');
     }else if(event==='EARLY_FLOW_WATCH_ONLY'){
       const dailyMove=firstFinite([alert?.price_change_24h]);
       if(dailyMove===null||Math.abs(dailyMove)>=18)
