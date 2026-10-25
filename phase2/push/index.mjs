@@ -321,22 +321,26 @@ export class PushManager{
          p?.evidence_complete!==true||p?.closed_candles_only!==true||p?.already_moved===true)
         return rejected('PRE_MOVE_WATCH_EVIDENCE_INVALID');
       if(dailyMove===null||Math.abs(dailyMove)>=12||score===null||score<68||
-         session===null||session<0||session>6||hour===null||hour<0.15||hour>4.5)
+         session===null||hour===null)
         return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
-      // Keep the exceptional early-watch tier aligned with the API's validator.
-      // It may pass with structure 50-59 only when independent evidence proves
-      // unusually strong real activity; it never upgrades the watch into an entry.
+      // This exception is for unusually strong, real early flow while price is
+      // still flat or slightly negative. It is never an entry and never bypasses
+      // daily anti-chase, freshness, data/liquidity quality, or hard-risk guards.
       const highActivityStructurePending =
         alert?.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING' &&
-        score!==null&&score>=70&&
+        score!==null&&score>=75&&
         volumeRatio!==null&&volumeRatio>=3&&
         tradeRatio!==null&&tradeRatio>=2&&
-        taker!==null&&taker>=0.52&&
-        relative!==null&&relative>=1.5&&
+        taker!==null&&taker>=0.65&&
+        takerDelta!==null&&takerDelta>=0.05&&
+        relative!==null&&relative>=0.5&&
         dataQuality!==null&&dataQuality>=80&&
         liquidityQuality!==null&&liquidityQuality>=70&&
         structure!==null&&structure>=50&&
         independentEvidence>=4;
+      if(session<(highActivityStructurePending?-0.75:0)||session>6||
+         hour<(highActivityStructurePending?-0.5:0.15)||hour>4.5)
+        return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
       if(alert?.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'&&!highActivityStructurePending)
         return rejected('PRE_MOVE_HIGH_ACTIVITY_TIER_UNVERIFIED');
       if(structure===null||(structure<60&&!highActivityStructurePending)||
