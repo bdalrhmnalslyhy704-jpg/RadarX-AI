@@ -107,7 +107,7 @@ export function evaluateHistoricalProfileAdapter(profile,input,{config=CONFIG}={
     const fifteen=input.timeframes?.['15m']||[];
     const hourly=aggregateClosed15mIntoHourly(fifteen,input.now);
     const series={'15m':fifteen,'1h':hourly};
-    const ticker={...input.ticker,dataQuality:90};
+    const ticker={...input.ticker};
     const bottom=buildBottomMarketContext(series,ticker,input.now,{book:null,liquidity:null});
     const dateParts=new Intl.DateTimeFormat('en-CA',{
       timeZone:'Asia/Aden',year:'numeric',month:'2-digit',day:'2-digit'
@@ -197,7 +197,7 @@ export function evaluateHistoricalProfileAdapter(profile,input,{config=CONFIG}={
     }):null;
     const eligible=Boolean(score&&['قنص','ترقّب'].includes(String(score.decision||'')));
     const analysis={...(score||{}),eligible,direction:'UP',stage:score?.decision||'DATA_INSUFFICIENT',
-      closed_candles_only:true,data_quality:features&&micro?90:0,data_stale:false,
+      closed_candles_only:true,data_stale:false,
       reason_codes:score?.reasons||[],risk_flags:score?.risk_flags||[],
       missing_historical_context:['HISTORICAL_LEADER_COHORT_UNAVAILABLE']};
     return {analysis,eligible,score:score?.score,stage:analysis.stage,
