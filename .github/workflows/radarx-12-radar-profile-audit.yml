@@ -7,10 +7,12 @@ on:
     paths:
       - phase2/core/historical-replay.mjs
       - phase2/core/historical-profile-adapters.mjs
+      - phase2/core/binance-spot-aggtrade-archive.mjs
       - phase2/core/move-outcome-analysis.mjs
       - phase2/tools/historical-replay.mjs
       - phase2/tools/historical-profile-matrix.mjs
       - phase2/tests/historical-profile-matrix.test.mjs
+      - phase2/tests/binance-spot-aggtrade-archive.test.mjs
       - .github/workflows/radarx-12-radar-profile-audit.yml
   pull_request:
     branches:
@@ -18,10 +20,12 @@ on:
     paths:
       - phase2/core/historical-replay.mjs
       - phase2/core/historical-profile-adapters.mjs
+      - phase2/core/binance-spot-aggtrade-archive.mjs
       - phase2/core/move-outcome-analysis.mjs
       - phase2/tools/historical-replay.mjs
       - phase2/tools/historical-profile-matrix.mjs
       - phase2/tests/historical-profile-matrix.test.mjs
+      - phase2/tests/binance-spot-aggtrade-archive.test.mjs
       - .github/workflows/radarx-12-radar-profile-audit.yml
   workflow_dispatch:
 
@@ -56,6 +60,7 @@ jobs:
         run: |
           node phase2/tools/historical-profile-matrix.mjs --dry-run --symbols GTCUSDT
           node --test --test-timeout=60000 phase2/tests/historical-profile-matrix.test.mjs
+          node --test --test-timeout=60000 phase2/tests/binance-spot-aggtrade-archive.test.mjs
       - name: Run all 12 radars on current and three historical market regimes
         id: profile-matrix
         continue-on-error: true
@@ -69,7 +74,7 @@ jobs:
             --lookback-hours 6 \
             --outcome-horizon-hours 24 \
             --max-trade-pages 20 \
-            --max-trades 20000 \
+            --max-trades 500000 \
             --output "$OUT/profile-matrix-current.json"
           result=$?
           printf 'current=%s\n' "$result" >> "$OUT/process-status.txt"
@@ -85,7 +90,7 @@ jobs:
               --lookback-hours 6 \
               --outcome-horizon-hours 24 \
               --max-trade-pages 20 \
-              --max-trades 20000 \
+              --max-trades 500000 \
               --output "$OUT/profile-matrix-$label.json"
             result=$?
             printf '%s=%s\n' "$label" "$result" >> "$OUT/process-status.txt"
