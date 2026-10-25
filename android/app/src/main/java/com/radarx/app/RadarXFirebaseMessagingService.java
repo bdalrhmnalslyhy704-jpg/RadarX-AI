@@ -72,7 +72,12 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
         openApp.putExtra("radarx_alert_symbol", symbol);
         openApp.putExtra("radarx_alert_radar", radar);
         openApp.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        int requestCode = Math.abs((symbol + "|" + radar + "|" + message.getMessageId()).hashCode());
+        String event = dataValue(message.getData(), "event", "");
+        String eventId = dataValue(message.getData(), "event_id", dataValue(message.getData(), "signal_id", ""));
+        boolean preMoveWatchOnly = "PRE_MOVE_RADAR_WATCH_ONLY".equalsIgnoreCase(event) && !eventId.isEmpty();
+        int requestCode = preMoveWatchOnly
+                ? 55_000 + Math.floorMod(eventId.hashCode(), 1_000_000_000)
+                : Math.abs((symbol + "|" + radar + "|" + message.getMessageId()).hashCode());
         PendingIntent pendingIntent = PendingIntent.getActivity(
                 this, requestCode, openApp,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
@@ -92,8 +97,12 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
 
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) {
-            manager.notify(requestCode == 0 ? 42099 : requestCode, builder.build());
-            Log.i(TAG, "FCM_NOTIFICATION_POSTED");
+            if (preMoveWatchOnly) {
+                manager.notify("radarx_premove_watch", requestCode, builder.build());
+            } else {
+                manager.notify(requestCode == 0 ? 42099 : requestCode, builder.build());
+            }
+            Log.i(TAG, preMoveWatchOnly ? "PRE_MOVE_WATCH_FCM_NOTIFICATION_POSTED" : "FCM_NOTIFICATION_POSTED");
         }
     }
 

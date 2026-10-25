@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {buildPreMoveWatchOnlyAlert} from '../http/api.mjs';
+import {buildPreMoveWatchOnlyAlert,buildPreMoveWatchOnlyAlerts} from '../http/api.mjs';
 import {PushManager} from '../push/index.mjs';
 import {DurableStore} from '../core/store.mjs';
 import {SignalDeduplicator} from '../core/dedup.mjs';
@@ -42,6 +42,19 @@ test('Build 224 converts qualified Pre-Move WATCH_EARLY into a non-entry watch a
   assert.equal(alert.paper_trading,true);
   assert.equal(alert.real_order_execution,false);
   assert.equal(alert.detected_candle_close_time,now-60_000);
+});
+
+test('Pre-Move local fallback exposes only the top three unique, strictly validated WATCH_EARLY rows',()=>{
+  const {candidate,snapshot,now}=fixture();
+  const low={...candidate,symbol:'LOWUSDT',pre_move_context:{...candidate.pre_move_context,score:69}};
+  const strong={...candidate,symbol:'STRONGUSDT',pre_move_context:{...candidate.pre_move_context,score:81}};
+  const sameSymbolBetter={...candidate,pre_move_context:{...candidate.pre_move_context,score:76}};
+  const invalid={...candidate,symbol:'STALEUSDT',data_status:{data_valid:false,data_stale:true}};
+  const alerts=buildPreMoveWatchOnlyAlerts([candidate,low,strong,sameSymbolBetter,invalid],snapshot,now,3);
+  assert.deepEqual(alerts.map(x=>x.symbol),['STRONGUSDT','DASHUSDT','LOWUSDT']);
+  assert.equal(alerts.length,3);
+  assert.ok(alerts.every(x=>x.watch_only===true&&x.entry_eligible===false&&x.event==='PRE_MOVE_RADAR_WATCH_ONLY'));
+  assert.ok(alerts.every(x=>x.paper_trading===true&&x.real_order_execution===false&&x.closed_candles_only===true));
 });
 
 test('Pre-Move watch creation fails closed for stale, incomplete, extended, or low-confluence observations',()=>{
