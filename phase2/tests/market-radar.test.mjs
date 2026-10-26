@@ -97,7 +97,7 @@ test('ticker ranking prioritizes liquid rows and enforces minimum volume',()=>{
   assert.deepEqual(rows.map(x=>x.symbol),['BTCUSDT','ETHUSDT']);
 });
 
-test('Pre-Move discovery rotates half of its deep-scan shortlist across the eligible market',()=>{
+test('Pre-Move discovery pins the strongest 30% and rotates the other 70% across the eligible market',()=>{
   const symbols=Array.from({length:80},(_,i)=>({
     symbol:'C'+String(i).padStart(3,'0')+'USDT',
     baseAsset:'C'+String(i).padStart(3,'0'),
@@ -110,12 +110,16 @@ test('Pre-Move discovery rotates half of its deep-scan shortlist across the elig
     priceChangePercent:'4'
   }));
   const first=rankPreMoveTickerRows(rows,symbols,{minQuoteVolume24h:750000,limit:24,rotationOffset:0});
-  const second=rankPreMoveTickerRows(rows,symbols,{minQuoteVolume24h:750000,limit:24,rotationOffset:12});
+  const second=rankPreMoveTickerRows(rows,symbols,{minQuoteVolume24h:750000,limit:24,rotationOffset:19});
   assert.equal(first.length,24);
   assert.equal(second.length,24);
   assert.equal(new Set(first.map(x=>x.symbol)).size,24);
-  assert.deepEqual(first.slice(0,12).map(x=>x.symbol),second.slice(0,12).map(x=>x.symbol),'the top half stays pinned for stable core coverage');
-  assert.notDeepEqual(first.slice(12).map(x=>x.symbol),second.slice(12).map(x=>x.symbol),'the second half must rotate rather than scan the same static list forever');
+  assert.deepEqual(first.slice(0,8).map(x=>x.symbol),second.slice(0,8).map(x=>x.symbol),'the top 30% stays pinned for stable core coverage');
+  assert.notDeepEqual(first.slice(8).map(x=>x.symbol),second.slice(8).map(x=>x.symbol),'the rotating 70% must not scan the same static list forever');
+
+  const third=rankPreMoveTickerRows(rows,symbols,{minQuoteVolume24h:750000,limit:24,rotationOffset:38});
+  const union=new Set([...first,...second,...third].map(x=>x.symbol));
+  assert.ok(union.size>=62,'three cycles should cover substantially more pairs than a 50/50 rotation');
 });
 
 test('Pre-Move rotation remains fair when non-pinned market scores change between cycles',()=>{
@@ -137,9 +141,9 @@ test('Pre-Move rotation remains fair when non-pinned market scores change betwee
   }));
   const first=rankPreMoveTickerRows(rows,symbols,{limit:24,rotationOffset:0});
   const later=rankPreMoveTickerRows(changed,symbols,{limit:24,rotationOffset:0});
-  assert.deepEqual(first.slice(0,12).map(x=>x.symbol),later.slice(0,12).map(x=>x.symbol),
-    'the pinned high-ranking cohort remains stable in this fixture');
-  assert.deepEqual(first.slice(12).map(x=>x.symbol),later.slice(12).map(x=>x.symbol),
+  assert.deepEqual(first.slice(0,8).map(x=>x.symbol),later.slice(0,8).map(x=>x.symbol),
+    'the pinned 30% high-ranking cohort remains stable in this fixture');
+  assert.deepEqual(first.slice(8).map(x=>x.symbol),later.slice(8).map(x=>x.symbol),
     'rotation must not be reshuffled by score changes among unpinned symbols');
   assert.equal(new Set(later.map(x=>x.symbol)).size,24);
 });

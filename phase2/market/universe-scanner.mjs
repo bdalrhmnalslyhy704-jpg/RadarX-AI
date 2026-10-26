@@ -1087,10 +1087,10 @@ export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_
     .sort((a,b)=>b.pre_move_discovery_score-a.pre_move_discovery_score||b.quoteVolume24h-a.quoteVolume24h||a.symbol.localeCompare(b.symbol));
   const take=Math.max(1,Math.trunc(Number(limit)||30));
   if(ranked.length<=take)return ranked;
-  // Keep the highest-ranked half in every pass and rotate the other half through
-  // the eligible universe. This prevents a fixed top-N list from being the only
-  // group that ever receives the deeper closed-candle/flow examination.
-  const pinnedCount=Math.min(Math.ceil(take/2),ranked.length);
+  // Keep only the highest-ranked 30% pinned for stable market anchors, and rotate
+  // the remaining 70% through the eligible universe. This shortens worst-case time
+  // until a newly qualifying pair receives a deep closed-candle/flow examination.
+  const pinnedCount=Math.min(Math.ceil(take*0.30),ranked.length);
   const pinned=ranked.slice(0,pinnedCount);
   // Keep rotation order independent of constantly changing volume/trade rankings.
   // Top-ranked symbols stay pinned; every other active Spot pair takes a deterministic
@@ -2196,7 +2196,7 @@ export class MarketUniverseScanner {
       rotationCycle=Math.max(0,Math.trunc(Number(this._preMoveRotationCycle)||0));
       this._preMoveRotationCycle=rotationCycle+1;
     }
-    const rotatingWidth=Math.max(1,discoveryLimit-Math.ceil(discoveryLimit/2));
+    const rotatingWidth=Math.max(1,discoveryLimit-Math.ceil(discoveryLimit*0.30));
     const rotationOffset=(rotationCycle*rotatingWidth);
     const discovery=rankPreMoveTickerRows(tickerResponse.data,universe,{
       minQuoteVolume24h:this.config.minQuoteVolume24h,
