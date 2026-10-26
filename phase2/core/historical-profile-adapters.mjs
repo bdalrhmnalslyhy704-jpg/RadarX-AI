@@ -122,8 +122,10 @@ export function evaluateHistoricalProfileAdapter(profile,input,{config=CONFIG}={
     );
     const btcReturn=btcRows.length&&Number(btcRows[0]?.open)>0
       ?(Number(btcRows.at(-1)?.close)/Number(btcRows[0]?.open)-1)*100:null;
-    const medianValue=n(input.marketMedianReturnPct);
-    const medianSampleCount=n(input.marketMedianSampleCount);
+    const finiteOrNull=value=>value===null||value===undefined||value===''||typeof value==='boolean'
+      ?null:Number.isFinite(Number(value))?Number(value):null;
+    const medianValue=finiteOrNull(input.marketMedianReturnPct);
+    const medianSampleCount=finiteOrNull(input.marketMedianSampleCount);
     const marketMedianAvailable=input.marketMedianSource==='HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN' &&
       medianValue!==null && medianSampleCount!==null && medianSampleCount>=5;
     const context=buildPreMoveContext(series,ticker,input.now,bottom,{
