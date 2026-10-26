@@ -416,7 +416,19 @@ function observedNumber(value, fallback = null) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 }
-const publicRestSource = value => /BINANCE[ _-]*PUBLIC[ _-]*REST/i.test(String(value || '').replace(/[^A-Za-z0-9 _-]/g, ''));
+const publicRestSource = value => {
+  const raw=String(value||'').trim();
+  if(/BINANCE[ _-]*PUBLIC[ _-]*REST/i.test(raw.replace(/[^A-Za-z0-9 _-]/g,'')))return true;
+  try{
+    const url=new URL(raw);
+    const allowedHosts=new Set([
+      'data-api.binance.vision','api.binance.com','api1.binance.com','api2.binance.com','api3.binance.com'
+    ]);
+    return url.protocol==='https:'&&allowedHosts.has(url.hostname.toLowerCase())&&
+      !url.username&&!url.password&&!url.port&&!url.search&&!url.hash&&
+      (url.pathname===''||url.pathname==='/');
+  }catch{return false;}
+};
 
 /**
  * Build a notification payload only from validated closed Spot candles plus a
@@ -805,7 +817,7 @@ export class CoinHunterRadar {
         // bounded 1h/15m feature scan. Quote volume alone is not a liquidity score.
         let liquidity,notificationAlert;
         try {
-          const depth=await this.rest.request('/api/v3/depth?symbol='+encodeURIComponent(row.symbol)+'&limit=20');
+          const depth=await this.rest.request('/api/v3/depth',{symbol:row.symbol,limit:20});
           liquidity=assessLiquidity({
             book:depth?.data,
             ticker24h:{quoteVolume:row.quote_volume_24h,count:row.trade_count_24h},

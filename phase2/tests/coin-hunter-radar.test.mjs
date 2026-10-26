@@ -229,6 +229,20 @@ test('Coin Hunter notification payload requires validated Binance candle history
   const liquidity={allowed:true,quality:91,spreadBps:4.2,totalDepth:240000,bidDepth:150000,askDepth:90000,reasons:[]};
   const alert=buildCoinHunterNotificationAlert(row,liquidity,now);
   assert.ok(alert);
+  const urlSourcedAlert=buildCoinHunterNotificationAlert({
+    ...row,market_data_validation:{
+      ...row.market_data_validation,
+      one_hour_source:'https://data-api.binance.vision',
+      fifteen_minute_source:'https://api1.binance.com'
+    }
+  },liquidity,now);
+  assert.ok(urlSourcedAlert,'actual public Binance REST base URLs must pass the live-source gate');
+  assert.equal(buildCoinHunterNotificationAlert({
+    ...row,market_data_validation:{
+      ...row.market_data_validation,
+      one_hour_source:'https://api.fake-binance.vision'
+    }
+  },liquidity,now),null,'a lookalike host must not pass the live-source gate');
   assert.equal(alert.data_quality,100);
   assert.equal(alert.liquidity_quality,91);
   assert.equal(alert.data_status.data_valid,true);
