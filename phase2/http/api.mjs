@@ -282,7 +282,7 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
 export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
   const assessment=assessPreMoveWatchOnlyCandidate(candidate,snapshot,now);
   if(!assessment.eligible)return null;
-  const {symbol,p,price,daily,quality,liquidity,closeAt,risks}=assessment.values;
+  const {symbol,p,price,daily,quality,liquidity,quoteVolume,closeAt,risks}=assessment.values;
   return {
     id:'PRE_MOVE_WATCH:'+symbol+':'+String(closeAt),
     event:'PRE_MOVE_RADAR_WATCH_ONLY',
