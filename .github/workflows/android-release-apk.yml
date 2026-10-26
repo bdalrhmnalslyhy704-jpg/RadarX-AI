@@ -249,8 +249,8 @@ jobs:
             echo "::error::Legacy GitHub Pages dependency found in Android source; refusing to release."
             exit 1
           fi
-          grep -Fq 'versionCode 16' android/app/build.gradle
-          grep -Fq 'versionName "1.5.0"' android/app/build.gradle
+          grep -Fq 'versionCode 17' android/app/build.gradle
+          grep -Fq 'versionName "1.6.0"' android/app/build.gradle
           test -s android/app/src/main/assets/falcon-eye-radar.html
           grep -Fq 'falcon-eye-radar.html' android/app/src/main/assets/index.html
 
@@ -1094,8 +1094,8 @@ jobs:
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "RadarX Native — Build 224 + Radar 8 V2 + عين الصقر Hawkeye V2 1.5.0 ${GITHUB_RUN_NUMBER} attempt ${GITHUB_RUN_ATTEMPT}" \
-            --notes "Signed universal APK built on Build 224 lineage. Version 1.5.0. Push mode: $PUSH_MODE. Includes Radar 8 V2 + Whale Accumulation + X-Factor 20-Analyst Command Center + Radar 9 — عين الصقر Hawkeye V2 + OGN-inspired Move Forensics + Evidence Trajectory Memory, continuous independent background monitoring (auto-start enabled by default), redesigned premium main dashboard, embedded Android UI, Spot/Paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
+            --title "RadarX Native — Build 224 + Radar 8 V2 + عين الصقر Hawkeye V2 1.6.0 ${GITHUB_RUN_NUMBER} attempt ${GITHUB_RUN_ATTEMPT}" \
+            --notes "Signed universal APK built on Build 224 lineage. Version 1.6.0. Push mode: $PUSH_MODE. Includes Radar 8 V2 + Whale Accumulation + X-Factor 20-Analyst Command Center + Radar 9 — عين الصقر Hawkeye V2 + OGN-inspired Move Forensics + Evidence Trajectory Memory, continuous independent background monitoring (auto-start enabled by default), redesigned premium main dashboard, embedded Android UI, Spot/Paper/read-only only; real_order_execution=false; confidence_score=UNKNOWN."
 
       - name: Verify published HTTPS download
         run: |

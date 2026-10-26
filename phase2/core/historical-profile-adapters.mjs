@@ -78,10 +78,13 @@ export function assessHistoricalPreMoveWatchProxy(context,ticker,now=Date.now(),
   const highActivity=score>=75&&session>=-0.75&&session<=4.5&&hour>=-0.5&&hour<=2.5&&
     volume>=3&&trades>=2&&buy>=0.65&&buyDelta>=0.05&&relative>=0.5&&
     structure>=50&&participation>=4;
+  // Keep the historical watch proxy threshold-aligned with the live
+  // EARLY_FLOW_MONITOR lane. It remains proxy-only because historical
+  // order-book/liquidity and actual push delivery cannot be replayed.
   const earlyFlow=(session<0||hour<0.15||structure<60)&&
-    score>=72&&session>=-1.25&&session<=4.5&&hour>=-0.75&&hour<=2.5&&
-    volume>=1.6&&trades>=1.15&&buy>=0.56&&buyDelta>=0.025&&
-    relative>=0.4&&structure>=50&&participation>=4;
+    score>=68&&session>=-1.25&&session<=4.5&&hour>=-0.75&&hour<=2.5&&
+    volume>=1.4&&trades>=1.05&&buy>=0.50&&buyDelta>=0.03&&
+    relative>=0.25&&structure>=50&&participation>=4;
   if(!highActivity&&!earlyFlow)return reject('EARLY_FLOW_MONITOR_THRESHOLD_NOT_MET');
   const tier=highActivity?'HIGH_ACTIVITY_STRUCTURE_PENDING':'EARLY_FLOW_MONITOR';
   return {
