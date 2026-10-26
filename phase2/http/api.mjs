@@ -180,6 +180,28 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     relative!==null&&relative>=0.5
   ].filter(Boolean).length;
   const risks=Array.isArray(candidate?.risk_flags)?candidate.risk_flags.map(x=>String(x).toUpperCase()):[];
+  const tickerActivity=candidate?.ticker_activity&&typeof candidate.ticker_activity==='object'?candidate.ticker_activity:null;
+  const tickerActivityScore=finite(tickerActivity?.score);
+  const tickerActivityVolumeRatio=finite(tickerActivity?.volume_acceleration_ratio);
+  const tickerActivityTradeRatio=finite(tickerActivity?.trade_acceleration_ratio);
+  const tickerActivityObservedAt=finite(tickerActivity?.observed_at);
+  const tickerActivityBaselineAge=finite(tickerActivity?.baseline_age_ms);
+  const tickerActivityFlowChecks=[
+    buy!==null&&buy>=0.52,
+    buyDelta!==null&&buyDelta>=0.02,
+    closeLocation!==null&&closeLocation>=0.52,
+    relative!==null&&relative>=0.25
+  ].filter(Boolean).length;
+  const tickerActivityMonitor=tickerActivityScore!==null&&tickerActivityScore>=12&&
+    tickerActivityVolumeRatio!==null&&tickerActivityVolumeRatio>=1.35&&
+    tickerActivityTradeRatio!==null&&tickerActivityTradeRatio>=1.30&&
+    tickerActivityObservedAt!==null&&tickerActivityObservedAt<=Number(now)+5000&&
+    Number(now)-tickerActivityObservedAt>=-5000&&Number(now)-tickerActivityObservedAt<=4*60*1000&&
+    tickerActivityBaselineAge!==null&&tickerActivityBaselineAge>=0&&tickerActivityBaselineAge<=5*60*1000&&
+    quality!==null&&quality>=85&&liquidity!==null&&liquidity>=75&&
+    Number(candidate?.quote_volume_24h)>=750000&&daily!==null&&daily>=-5&&daily<=4.5&&
+    session!==null&&session>=-1.25&&session<=4.5&&hour!==null&&hour>=-0.75&&hour<=2.5&&
+    score!==null&&score>=68&&structure!==null&&structure>=50&&tickerActivityFlowChecks>=2;
   // A separate, explicitly non-entry corridor for exceptional real activity.
   // Allow a narrow neutral/slightly-negative window only when independent closed-candle
   // flow is unusually strong; this catches accumulation before price turns positive.
@@ -205,7 +227,8 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     relative!==null&&relative>=0.25&&
     quality!==null&&quality>=85&&liquidity!==null&&liquidity>=70&&
     structure!==null&&structure>=50&&participation>=4;
-  const watchTier=highActivityStructurePending?'HIGH_ACTIVITY_STRUCTURE_PENDING':
+  const watchTier=tickerActivityMonitor?'TICKER_ACTIVITY_ACCELERATION_MONITOR':
+    highActivityStructurePending?'HIGH_ACTIVITY_STRUCTURE_PENDING':
     earlyFlowMonitor?'EARLY_FLOW_MONITOR':'STANDARD_WATCH_EARLY';
   const fields={
     symbol,score,session_return_pct:session,one_hour_return_pct:hour,
@@ -232,22 +255,27 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     return fail('DATA_FRESHNESS_QUALITY_OR_LIQUIDITY_GATE');
   if(!Number.isFinite(price)||price<=0||daily===null||Math.abs(daily)>=12)
     return fail('PRICE_OR_DAILY_CHANGE_INVALID');
-  if(score===null||score<(earlyFlowMonitor?68:highActivityStructurePending?75:68))
+  if(score===null||score<((tickerActivityMonitor||earlyFlowMonitor)?68:highActivityStructurePending?75:68))
     return fail('SCORE_BELOW_WATCH_FLOOR');
-  if(session===null||session<(highActivityStructurePending?-0.75:earlyFlowMonitor?-1.25:0)||
-     session>(earlyFlowMonitor?4.5:6))
+  if(session===null||session<(highActivityStructurePending?-0.75:(tickerActivityMonitor||earlyFlowMonitor)?-1.25:0)||
+     session>((tickerActivityMonitor||earlyFlowMonitor)?4.5:6))
     return fail('SESSION_RETURN_OUT_OF_RANGE');
-  if(hour===null||hour<(highActivityStructurePending?-0.5:earlyFlowMonitor?-0.75:0.15)||
-     hour>(earlyFlowMonitor?2.5:4.5))
+  if(hour===null||hour<(highActivityStructurePending?-0.5:(tickerActivityMonitor||earlyFlowMonitor)?-0.75:0.15)||
+     hour>((tickerActivityMonitor||earlyFlowMonitor)?2.5:4.5))
     return fail('ONE_HOUR_RETURN_OUT_OF_RANGE');
-  if(structure===null||(structure<(highActivityStructurePending?50:earlyFlowMonitor?50:60)))
+  if(structure===null||(structure<(tickerActivityMonitor?50:highActivityStructurePending?50:earlyFlowMonitor?50:60)))
     return fail('STRUCTURE_SCORE_BELOW_MINIMUM');
   if(closeAt===null||closeAt>Number(now)+5000||Number(now)-closeAt>20*60*1000)
     return fail('CLOSED_CANDLE_STALE_OR_FUTURE');
   if(risks.some(x=>/ALREADY_EXTENDED|EXTENDED_CHASE|HIGH_RISK|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK|LOW_LIQUIDITY/.test(x)))
     return fail('RISK_FLAG_BLOCK');
   if(participation<3)return fail('INDEPENDENT_PARTICIPATION_BELOW_3');
-  return {eligible:true,reason:null,...fields,values:{symbol,p,price,daily,quality,liquidity,closeAt,risks,watch_notification_tier:watchTier}};
+  return {eligible:true,reason:null,...fields,values:{symbol,p,price,daily,quality,liquidity,closeAt,risks,watch_notification_tier:watchTier,
+    ticker_activity_watch_evidence:tickerActivityMonitor?{
+      score:tickerActivityScore,volume_acceleration_ratio:tickerActivityVolumeRatio,
+      trade_acceleration_ratio:tickerActivityTradeRatio,observed_at:tickerActivityObservedAt,
+      baseline_age_ms:tickerActivityBaselineAge
+    }:null}};
 }
 
 export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
@@ -269,12 +297,17 @@ export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
     pre_move_context:p,
     watch_only:true,entry_eligible:false,
     watch_notification_tier:assessment.values.watch_notification_tier,
-    watch_review_reason:assessment.values.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'
-      ?'STRONG_VOLUME_AND_TRADE_ACCELERATION_WITH_PRICE_STRUCTURE_PENDING'
-      :assessment.values.watch_notification_tier==='EARLY_FLOW_MONITOR'
-        ?'BUY_FLOW_AND_ACTIVITY_BEFORE_PRICE_CONFIRMATION'
-        :'CONFLUENCE_BASED_EARLY_WATCH',
+    watch_review_reason:assessment.values.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'
+      ?'FRESH_MARKET_WIDE_VOLUME_AND_TRADE_ACCELERATION_WITH_PRICE_STRUCTURE_PENDING'
+      :assessment.values.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'
+        ?'STRONG_VOLUME_AND_TRADE_ACCELERATION_WITH_PRICE_STRUCTURE_PENDING'
+        :assessment.values.watch_notification_tier==='EARLY_FLOW_MONITOR'
+          ?'BUY_FLOW_AND_ACTIVITY_BEFORE_PRICE_CONFIRMATION'
+          :'CONFLUENCE_BASED_EARLY_WATCH',
+    ticker_activity_watch_evidence:assessment.values.ticker_activity_watch_evidence,
     reason_codes:[
+      ...(assessment.values.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'
+        ?['TICKER_ACTIVITY_ACCELERATION_MONITOR','MARKET_WIDE_VOLUME_AND_TRADE_ACCELERATION']:[]),
       ...(assessment.values.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'
         ?['HIGH_ACTIVITY_STRUCTURE_PENDING']:[]),
       ...(assessment.values.watch_notification_tier==='EARLY_FLOW_MONITOR'

@@ -1207,6 +1207,30 @@ export function buildPreMoveWatchCandidates(rows,{
     const taker=Number(p.taker_buy_ratio);
     const takerDelta=Number(p.taker_buy_acceleration);
     const closeLocation=Number(p.mean_close_location);
+    const tickerActivity=x?.ticker_activity&&typeof x.ticker_activity==='object'?x.ticker_activity:null;
+    const tickerActivityScore=Number(tickerActivity?.score);
+    const tickerActivityVolumeRatio=Number(tickerActivity?.volume_acceleration_ratio);
+    const tickerActivityTradeRatio=Number(tickerActivity?.trade_acceleration_ratio);
+    const tickerActivityFlowChecks=[
+      taker>=0.52,
+      takerDelta>=0.02,
+      closeLocation>=0.52,
+      Number(p.relative_strength_vs_market_pct)>=0.25
+    ].filter(Boolean).length;
+    const tickerActivityEarly=tickerActivityScore>=12&&
+      tickerActivityVolumeRatio>=1.35&&tickerActivityTradeRatio>=1.30&&
+      ds.data_valid===true&&ds.data_stale!==true&&ds.stale!==true&&
+      quality>=85&&Number(x?.liquidity_quality)>=75&&
+      Number(x?.quote_volume_24h)>=minQuoteVolume24h&&
+      Number.isFinite(dailyChange)&&dailyChange>=-5&&dailyChange<=4.5&&
+      Number.isFinite(sessionReturn)&&sessionReturn>=-1.25&&sessionReturn<=4.5&&
+      Number.isFinite(oneHourReturn)&&oneHourReturn>=-0.75&&oneHourReturn<=2.5&&
+      score>=68&&structure>=50&&tickerActivityFlowChecks>=2&&
+      Number.isFinite(Number(tickerActivity?.observed_at))&&
+      Number(tickerActivity.observed_at)<=Date.now()+5000&&
+      Date.now()-Number(tickerActivity.observed_at)<=4*60*1000&&
+      Number.isFinite(Number(tickerActivity?.baseline_age_ms))&&
+      Number(tickerActivity.baseline_age_ms)>=0&&Number(tickerActivity.baseline_age_ms)<=5*60*1000;
     const squeeze=Number(p.components?.squeeze);
     const structure=Number(p.components?.structure);
     const buying=Number(p.components?.buying_pressure);
@@ -1227,8 +1251,8 @@ export function buildPreMoveWatchCandidates(rows,{
        !Number.isFinite(sessionReturn)||sessionReturn< -1.5||sessionReturn>8||
        !Number.isFinite(oneHourReturn)||oneHourReturn< -1.25||oneHourReturn>4.5||
        !Number.isFinite(dailyChange)||Math.abs(dailyChange)>=20||
-       coreChecks.filter(Boolean).length<2||
-       structureChecks.filter(Boolean).length<1||
+       (coreChecks.filter(Boolean).length<2&&!tickerActivityEarly)||
+       (structureChecks.filter(Boolean).length<1&&!tickerActivityEarly)||
        riskFlags.some(flag=>hardRisks.has(flag))) continue;
 
     const blockers=[];
@@ -1255,6 +1279,7 @@ export function buildPreMoveWatchCandidates(rows,{
     }
     if(sessionReturn<0||sessionReturn>6)blockers.push('SESSION_MOVE_NOT_CONFIRMED');
     if(score<62)blockers.push('SCORE_BELOW_ACTIONABLE_THRESHOLD');
+    if(tickerActivityEarly)blockers.push('TICKER_ACTIVITY_ACCELERATION_MONITOR_ONLY');
     const watchReasons=[...new Set(blockers.length?blockers:['ACTIONABLE_GATE_NOT_MET'])];
     const cleanSymbol=String(x?.symbol||'').trim().toUpperCase();
     if(!cleanSymbol)continue;
@@ -1262,6 +1287,8 @@ export function buildPreMoveWatchCandidates(rows,{
       ...x,
       pre_move_context:{
         ...p,
+        ticker_activity_monitor_only:tickerActivityEarly,
+        ticker_activity_score:tickerActivityEarly?tickerActivityScore:null,
         original_stage:p.stage||'NO_SETUP',
         stage:'WATCH_EARLY',
         watch_only:true,
@@ -2184,6 +2211,15 @@ export class MarketUniverseScanner {
       high_price_24h:Number.isFinite(Number(ticker?.highPrice24h))?Number(ticker.highPrice24h):null,
       low_price_24h:Number.isFinite(Number(ticker?.lowPrice24h))?Number(ticker.lowPrice24h):null,
       quote_volume_24h:Number(ticker?.quoteVolume24h)||0,
+      ticker_activity:options.tickerActivity&&typeof options.tickerActivity==='object'?{
+        score:Number(options.tickerActivity.score)||0,
+        volume_delta_per_minute:Number(options.tickerActivity.volume_delta_per_minute)||0,
+        trade_delta_per_minute:Number(options.tickerActivity.trade_delta_per_minute)||0,
+        volume_acceleration_ratio:Number(options.tickerActivity.volume_acceleration_ratio)||0,
+        trade_acceleration_ratio:Number(options.tickerActivity.trade_acceleration_ratio)||0,
+        observed_at:Number(options.tickerActivity.observed_at)||null,
+        baseline_age_ms:Number(options.tickerActivity.baseline_age_ms)||null
+      }:null,
       bottom_context:bottomContext,pre_move_context:preMoveContext,
       target_plan:buildPreMoveTargetPlan(series['15m'],ticker,completedAt),
       liquidity_quality:Math.round((Number(liquidity?.quality)||0)*100)/100,
@@ -2296,7 +2332,8 @@ export class MarketUniverseScanner {
       (ticker,i)=>this.scanPreMoveSymbol(
         ticker,
         i+1,
-        {exchangeInfo:info.source,ticker:tickerResponse.source}
+        {exchangeInfo:info.source,ticker:tickerResponse.source},
+        {tickerActivity:tickerActivitySignals.get(String(ticker?.symbol||'').toUpperCase())||null}
       )
     );
     // Use every fresh, valid candle set for market context, including low-volume

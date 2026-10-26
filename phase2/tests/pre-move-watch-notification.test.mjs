@@ -57,6 +57,60 @@ test('Pre-Move local fallback exposes only the top three unique, strictly valida
   assert.ok(alerts.every(x=>x.paper_trading===true&&x.real_order_execution===false&&x.closed_candles_only===true));
 });
 
+test('fresh market-wide ticker activity acceleration can produce a separate non-entry watch tier before hourly price confirmation',()=>{
+  const {candidate,snapshot,now}=fixture();
+  const early={
+    ...candidate,
+    symbol:'CFGUSDT',
+    price_change_24h:0.59,
+    quote_volume_24h:5_000_000,
+    data_quality:100,
+    liquidity_quality:85,
+    ticker_activity:{
+      score:14,volume_delta_per_minute:1200,trade_delta_per_minute:65,
+      volume_acceleration_ratio:2.4,trade_acceleration_ratio:1.7,
+      observed_at:now-45_000,baseline_age_ms:90_000
+    },
+    pre_move_context:{
+      ...candidate.pre_move_context,
+      score:77.5,session_return_pct:0.59,one_hour_return_pct:0,
+      volume_acceleration:1.30,trade_acceleration:1.02,
+      taker_buy_ratio:0.535,taker_buy_acceleration:0.084,
+      mean_close_location:0.375,relative_strength_vs_market_pct:1.32,
+      components:{squeeze:55,structure:60.1,buying_pressure:64},
+      reasons:['VOLUME_ACCELERATING','TICKER_ACTIVITY_ACCELERATING']
+    },
+    data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false,candle_data_valid:true,volume_gate_pass:true}
+  };
+  const alert=buildPreMoveWatchOnlyAlert(early,snapshot,now);
+  assert.ok(alert,'a high-quality, recent volume/trade surge with independent buy evidence should be monitored even when one-hour return is zero');
+  assert.equal(alert.symbol,'CFGUSDT');
+  assert.equal(alert.watch_notification_tier,'TICKER_ACTIVITY_ACCELERATION_MONITOR');
+  assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+  assert.equal(alert.paper_trading,true);
+  assert.equal(alert.real_order_execution,false);
+  assert.equal(alert.ticker_activity_watch_evidence.score,14);
+});
+
+test('ticker-activity watch tier rejects weak, stale, low-liquidity and extended setups',()=>{
+  const {candidate,snapshot,now}=fixture();
+  const base={
+    ...candidate,symbol:'EARLYACTUSDT',price_change_24h:1.1,quote_volume_24h:2_000_000,
+    ticker_activity:{score:14,volume_acceleration_ratio:2.2,trade_acceleration_ratio:1.5,observed_at:now-30_000,baseline_age_ms:90_000},
+    data_quality:96,liquidity_quality:82,
+    pre_move_context:{...candidate.pre_move_context,score:72,session_return_pct:1,one_hour_return_pct:0.05,
+      volume_acceleration:1.1,trade_acceleration:0.9,taker_buy_ratio:0.53,taker_buy_acceleration:0.04,
+      mean_close_location:0.55,relative_strength_vs_market_pct:0.8,components:{...candidate.pre_move_context.components,structure:55}},
+    data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false,candle_data_valid:true,volume_gate_pass:true}
+  };
+  assert.ok(buildPreMoveWatchOnlyAlert(base,snapshot,now));
+  assert.equal(buildPreMoveWatchOnlyAlert({...base,ticker_activity:{...base.ticker_activity,score:8}},snapshot,now),null);
+  assert.equal(buildPreMoveWatchOnlyAlert({...base,ticker_activity:{...base.ticker_activity,observed_at:now-6*60_000}},snapshot,now),null);
+  assert.equal(buildPreMoveWatchOnlyAlert({...base,liquidity_quality:65},snapshot,now),null);
+  assert.equal(buildPreMoveWatchOnlyAlert({...base,price_change_24h:6},snapshot,now),null);
+});
+
 test('Pre-Move watch creation fails closed for stale, incomplete, extended, or low-confluence observations',()=>{
   const base=fixture();
   assert.equal(buildPreMoveWatchOnlyAlert({...base.candidate,data_status:{data_valid:false}},base.snapshot,base.now),null);

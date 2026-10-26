@@ -726,6 +726,39 @@ test('Pre-Move surfaces partial early-flow candidates with slightly negative one
   assert.ok(rows[0].watch_reason_codes.includes('TRADE_ACCELERATION_NOT_CONFIRMED'));
 });
 
+test('Pre-Move watch builder admits a fresh ticker-activity burst only through the separate monitor-only lane',()=>{
+  const base={
+    symbol:'CFGUSDT',last_price:1.01,price_change_24h:.59,quote_volume_24h:5_000_000,
+    liquidity_quality:85,data_quality:100,ticker_activity:{
+      score:14,volume_delta_per_minute:1200,trade_delta_per_minute:65,
+      volume_acceleration_ratio:2.4,trade_acceleration_ratio:1.7,
+      observed_at:Date.now()-45_000,baseline_age_ms:90_000
+    },
+    data_status:{candle_data_valid:true,data_stale:false,data_valid:true,volume_gate_pass:true,last_error:null},
+    risk_flags:[],
+    pre_move_context:{
+      stage:'NO_SETUP',score:77.5,evidence_complete:true,closed_candles_only:true,
+      already_moved:false,session_return_pct:.59,one_hour_return_pct:0,
+      volume_acceleration:1.30,trade_acceleration:1.02,taker_buy_ratio:.535,taker_buy_acceleration:.084,
+      mean_close_location:.375,relative_strength_vs_market_pct:1.32,
+      components:{squeeze:55,structure:60.1,buying_pressure:64},
+      flow_transition_confirmed:false,price_window_valid:false,structure_confirmed:false,
+      reasons:['VOLUME_ACCELERATING']
+    }
+  };
+  const rows=buildPreMoveWatchCandidates([base]);
+  assert.equal(rows.length,1,'strong current market-activity data can enter the early-watch lane');
+  assert.equal(rows[0].watch_only,true);
+  assert.equal(rows[0].alert_eligible,false);
+  assert.equal(rows[0].pre_move_context.stage,'WATCH_EARLY');
+  assert.equal(rows[0].pre_move_context.ticker_activity_monitor_only,true);
+  assert.ok(rows[0].watch_reason_codes.includes('TICKER_ACTIVITY_ACCELERATION_MONITOR_ONLY'));
+  assert.equal(rows[0].pre_move_context.actionable,false);
+
+  const weak=buildPreMoveWatchCandidates([{...base,ticker_activity:{...base.ticker_activity,score:6}}]);
+  assert.equal(weak.length,0,'weak acceleration must not bypass candle confirmation');
+});
+
 test('Pre-Move near misses are surfaced as watch-only rows but never promoted to actionable signals',()=>{
   const base={
     symbol:'EARLYUSDT',last_price:1.01,price_change_24h:1.2,quote_volume_24h:1_200_000,
