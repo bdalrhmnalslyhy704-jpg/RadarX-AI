@@ -16,6 +16,40 @@ test('an asynchronously failed bootstrap stays failed and is stopped even if it 
 });
 
 
+test('watchdog clears transient degradation when a worker recovers before restart cooldown expires', async () => {
+  let now = 1_000_000;
+  const worker = makeRunner();
+  const swarm = new RadarSwarmCoordinator({
+    runners: [{id: 'RADAR_1', instance: worker.instance}],
+    expectedCount: 1,
+    startupSpacingMs: 0,
+    watchdogIntervalMs: 10_000,
+    restartCooldownMs: 15_000,
+    maxRestarts: 2,
+    clock: () => now,
+    logger: {warn() {}, error() {}}
+  });
+  await swarm.start();
+  // Model a recent restart so the watchdog defers restarting on this tick.
+  swarm.states.get('RADAR_1').last_restart_attempt_at = now;
+  worker.state.running = false;
+  await swarm._runWatchdog(swarm.generation);
+  assert.equal(swarm.snapshot().radars[0].status, 'DEGRADED');
+
+  // The worker comes back by itself before the cooldown expires.
+  worker.state.running = true;
+  now += 1_000;
+  await swarm._runWatchdog(swarm.generation);
+  const recovered = swarm.snapshot();
+  assert.equal(recovered.status, 'RUNNING');
+  assert.equal(recovered.running_count, 1);
+  assert.equal(recovered.failed_count, 0);
+  assert.equal(recovered.radars[0].last_error, null);
+  assert.equal(worker.state.starts, 1);
+  assert.equal(worker.state.stops, 0);
+  await swarm.stop();
+});
+
 test('watchdog detects a running radar that stops after startup and restarts it within budget', async () => {
   const worker = makeRunner();
   const swarm = new RadarSwarmCoordinator({

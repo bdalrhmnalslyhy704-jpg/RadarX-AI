@@ -85,8 +85,17 @@ export class RadarSwarmCoordinator {
         state.last_error_at=this.clock();
         try{this.logger.warn?.('[RADAR_SWARM_SCAN_STUCK] '+JSON.stringify({id:runner.id,busy_ms:Math.max(0,Math.trunc(busyForMs)),timeout_ms:stuckScanLimitMs,action:'BOUNDED_WORKER_RESTART',paper_trading:true,real_order_execution:false}));}catch{}
       }
-      if(!['FAILED','DEGRADED'].includes(state.status))continue;
       const stuckRestart=String(state.last_error||'').startsWith('WORKER_SCAN_STUCK:');
+      const cleanupFailed=String(state.last_error||'').startsWith('WATCHDOG_CLEANUP_FAILED:');
+      // A worker can recover between watchdog ticks after a transient health dip.
+      // Do not leave a healthy instance permanently marked DEGRADED just because
+      // restart cooldown prevented the previous recovery attempt.
+      if(state.status==='DEGRADED'&&health.running===true&&!stuckRestart&&!cleanupFailed){
+        state.status='RUNNING';
+        state.last_error=null;
+        state.last_error_at=null;
+      }
+      if(!['FAILED','DEGRADED'].includes(state.status))continue;
       if(health.running===true&&state.status!=='FAILED'&&!stuckRestart)continue;
       if(Number(state.restart_attempts||0)>=this.maxRestarts)continue;
       const now=this.clock();
