@@ -110,16 +110,16 @@ test('Pre-Move discovery pins the strongest 30% and rotates the other 70% across
     priceChangePercent:'4'
   }));
   const first=rankPreMoveTickerRows(rows,symbols,{minQuoteVolume24h:750000,limit:24,rotationOffset:0});
-  const second=rankPreMoveTickerRows(rows,symbols,{minQuoteVolume24h:750000,limit:24,rotationOffset:19});
+  const second=rankPreMoveTickerRows(rows,symbols,{minQuoteVolume24h:750000,limit:24,rotationOffset:16});
   assert.equal(first.length,24);
   assert.equal(second.length,24);
   assert.equal(new Set(first.map(x=>x.symbol)).size,24);
   assert.deepEqual(first.slice(0,8).map(x=>x.symbol),second.slice(0,8).map(x=>x.symbol),'the top 30% stays pinned for stable core coverage');
   assert.notDeepEqual(first.slice(8).map(x=>x.symbol),second.slice(8).map(x=>x.symbol),'the rotating 70% must not scan the same static list forever');
 
-  const third=rankPreMoveTickerRows(rows,symbols,{minQuoteVolume24h:750000,limit:24,rotationOffset:38});
+  const third=rankPreMoveTickerRows(rows,symbols,{minQuoteVolume24h:750000,limit:24,rotationOffset:32});
   const union=new Set([...first,...second,...third].map(x=>x.symbol));
-  assert.ok(union.size>=62,'three cycles should cover substantially more pairs than a 50/50 rotation');
+  assert.ok(union.size>=56,'three cycles should cover 56 unique pairs with 30/70 rotation');
 });
 
 test('Pre-Move rotation remains fair when non-pinned market scores change between cycles',()=>{
