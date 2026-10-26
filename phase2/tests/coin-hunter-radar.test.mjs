@@ -128,6 +128,76 @@ test('Coin Hunter records the first confirmed pre-move checkpoint, not a later c
   assert.equal(findPreMoveCheckpoint(rows.slice(0, 2), dayStart, 2), null);
 });
 
+test('Coin Hunter rotates bounded candidate scans across the eligible universe and persists its cursor', async () => {
+  const now=Date.now();
+  const symbols=[];
+  const tickerData=[];
+  for(let i=0;i<24;i++){
+    const base='LEAD'+String(i).padStart(2,'0');
+    symbols.push(marketSymbol(base+'USDT',base));
+    tickerData.push({symbol:base+'USDT',lastPrice:'10',priceChangePercent:String(12+i/10),
+      quoteVolume:'5000000',count:'50000',highPrice:'11',lowPrice:'9'});
+  }
+  for(let i=0;i<48;i++){
+    const base='CAND'+String(i).padStart(2,'0');
+    symbols.push(marketSymbol(base+'USDT',base));
+    tickerData.push({symbol:base+'USDT',lastPrice:'10',priceChangePercent:'-2',
+      quoteVolume:String(3000000+i*1000),count:String(30000+i),highPrice:'11',lowPrice:'9'});
+  }
+  const rest={
+    async request(path){
+      if(path==='/api/v3/exchangeInfo')return{data:{symbols},source:'TEST_FIXTURE'};
+      if(path==='/api/v3/ticker/24hr')return{data:tickerData,source:'TEST_FIXTURE'};
+      throw new Error('UNEXPECTED_REQUEST:'+path);
+    },
+    async klines(symbol,tf){
+      const data=tf==='1h'?hourlyCandles(72,now):Array.from({length:96},(_,i)=>{
+        const step=15*60*1000,start=now-96*step-1000,close=10+i*.001;
+        return{openTime:start+i*step,closeTime:start+(i+1)*step-1,open:close-.001,high:close+.005,low:close-.005,close,volume:i>90?200:100,quoteVolume:close*(i>90?200:100),tradeCount:i>90?200:100,takerBuyBaseVolume:i>90?120:55,closed:true};
+      });
+      return{candles:data,source:'TEST_FIXTURE',receivedAt:now};
+    }
+  };
+  const saved=new Map();
+  const store={
+    async getDedupKey(key){return saved.get(key)||null;},
+    async putDedupKey(key,value){saved.set(key,value);}
+  };
+  const config={leaderCount:8,leaderConcurrency:6,candidatePool:16,deepCount:8,deepConcurrency:4,
+    minQuoteVolume24h:750000,minCandidateMovePct:-3,maxCandidateMovePct:8,minHunterScore:101};
+  const firstSymbols=[];
+  const originalKlines=rest.klines;
+  const firstRadar=new CoinHunterRadar({rest,store,logger:noLog,config});
+  rest.klines=async(symbol,tf,options)=>{
+    if(symbol.startsWith('CAND')&&tf==='1h')firstSymbols.push(symbol);
+    return originalKlines(symbol,tf,options);
+  };
+  assert.equal(await firstRadar.scan('USDT'),true);
+  const first=[...new Set(firstSymbols)];
+  assert.equal(first.length,16);
+  assert.equal(firstRadar.lastCoverage.candidate_rotation_cycle,0);
+  assert.equal(firstRadar.lastCoverage.candidate_rotation_width,48);
+  assert.equal(firstRadar.lastCoverage.candidate_rotation_cursor_source,'DURABLE_STORE');
+  assert.equal(firstRadar.lastCoverage.candidate_rotation_cursor_persisted,true);
+  assert.equal(saved.get('RADARX:COIN_HUNTER_ROTATION_CURSOR:V1:USDT').next_cycle,1);
+
+  const secondSymbols=[];
+  const secondRadar=new CoinHunterRadar({rest,store,logger:noLog,config});
+  rest.klines=async(symbol,tf,options)=>{
+    if(symbol.startsWith('CAND')&&tf==='1h')secondSymbols.push(symbol);
+    return originalKlines(symbol,tf,options);
+  };
+  assert.equal(await secondRadar.scan('USDT'),true);
+  const second=[...new Set(secondSymbols)];
+  assert.equal(second.length,16);
+  assert.equal(secondRadar.lastCoverage.candidate_rotation_cycle,1);
+  assert.equal(secondRadar.lastCoverage.candidate_rotation_cursor_source,'DURABLE_STORE');
+  assert.equal(secondRadar.lastCoverage.candidate_rotation_cursor_persisted,true);
+  assert.equal(saved.get('RADARX:COIN_HUNTER_ROTATION_CURSOR:V1:USDT').next_cycle,2);
+  assert.ok(second.some(symbol=>!first.includes(symbol)),'a fresh process must include candidates omitted by the prior cycle');
+  assert.ok(secondRadar.lastCoverage.candidate_rotation_tier_offsets.recovery>=0);
+});
+
 test('Coin Hunter health keeps Spot paper-only and reports unknown confidence honestly', () => {
   const radar = new CoinHunterRadar({ rest: {}, logger: noLog });
   const health = radar.health();

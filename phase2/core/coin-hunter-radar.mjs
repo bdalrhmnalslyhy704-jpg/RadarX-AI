@@ -415,12 +415,12 @@ export const COIN_HUNTER_DEFAULTS = Object.freeze({
   pollMs: 60000,
   universeRefreshMs: 10 * 60 * 1000,
   minQuoteVolume24h: 750000,
-  leaderCount: 12,
-  // Leader learning is I/O-bound. Bounded parallel sampling prevents 24–36
-  // sequential Kline waits from holding this worker busy beyond the watchdog.
+  // Keep each cycle bounded; the durable candidate cursor rotates across the
+  // full eligible market so reducing per-cycle calls does not permanently omit pairs.
+  leaderCount: 8,
   leaderConcurrency: 8,
-  candidatePool: 48,
-  deepCount: 20,
+  candidatePool: 24,
+  deepCount: 16,
   deepConcurrency: 4,
   minLeaderMovePct: 6,
   maxCandidateMovePct: 4.5,
@@ -559,19 +559,49 @@ export class CoinHunterRadar {
         .filter(x => Number(x.priceChangePercent) >= Number(this.config.minCandidateMovePct))
         .filter(x => Number(x.priceChangePercent) <= Number(this.config.maxCandidateMovePct))
         .filter(x => x.symbol !== 'BTCUSDT' && x.symbol !== 'ETHUSDT');
+      const candidateRotationKey=`RADARX:COIN_HUNTER_ROTATION_CURSOR:V1:${q}`;
+      let candidateRotationCycle=Math.max(0,Math.trunc(Number(this._candidateRotationCycle)||0));
+      let candidateRotationCursorSource='PROCESS_MEMORY_FALLBACK';
+      let candidateRotationCursorError=null;
+      const durableRotationAvailable=typeof this.store?.getDedupKey==='function'&&
+        typeof this.store?.putDedupKey==='function';
+      if(durableRotationAvailable){
+        try{
+          const saved=await this.store.getDedupKey(candidateRotationKey);
+          const next=Number(saved?.next_cycle);
+          candidateRotationCycle=Number.isSafeInteger(next)&&next>=0?next:0;
+          candidateRotationCursorSource='DURABLE_STORE';
+        }catch(error){
+          candidateRotationCursorError=String(error?.message??error).slice(0,160);
+        }
+      }
       const rankQuiet=(a,b)=>Number(b.quoteVolume)-Number(a.quoteVolume)||Number(b.count)-Number(a.count);
       const quiet=eligiblePool.filter(x=>Number(x.priceChangePercent)>=-1&&Number(x.priceChangePercent)<2).sort(rankQuiet);
       const waking=eligiblePool.filter(x=>Number(x.priceChangePercent)>=2&&Number(x.priceChangePercent)<5).sort(rankQuiet);
       const recovery=eligiblePool.filter(x=>Number(x.priceChangePercent)>=-3&&Number(x.priceChangePercent)<-1).sort(rankQuiet);
-      const wanted=Math.max(1,Number(this.config.candidatePool));
+      const wanted=Math.max(1,Math.min(100,Math.trunc(Number(this.config.candidatePool)||COIN_HUNTER_DEFAULTS.candidatePool)));
       const pool=[];
-      const appendTier=(rows,count)=>{
-        for(const row of rows){if(pool.length>=wanted||count<=0)break;if(!pool.some(x=>x.symbol===row.symbol)){pool.push(row);count--;}}
+      const candidateRotationTierOffsets={};
+      const appendRotatingTier=(rows,count,tier)=>{
+        const amount=Math.max(0,Math.min(wanted-pool.length,Math.trunc(Number(count)||0),rows.length));
+        if(!rows.length||amount<=0){candidateRotationTierOffsets[tier]=0;return;}
+        const offset=((candidateRotationCycle*amount)%rows.length+rows.length)%rows.length;
+        candidateRotationTierOffsets[tier]=offset;
+        let added=0;
+        for(let i=0;i<rows.length&&added<amount&&pool.length<wanted;i++){
+          const row=rows[(offset+i)%rows.length];
+          if(pool.some(x=>x.symbol===row.symbol))continue;
+          pool.push(row);added++;
+        }
       };
-      appendTier(quiet,Math.ceil(wanted*0.55));
-      appendTier(waking,Math.ceil(wanted*0.30));
-      appendTier(recovery,Math.ceil(wanted*0.10));
-      appendTier(eligiblePool.filter(x=>!pool.some(y=>y.symbol===x.symbol)).sort(rankQuiet),wanted-pool.length);
+      // Rotate independently within activity tiers, then rotate the remainder.
+      // This keeps quiet bases, waking pairs, and recovery setups represented while
+      // giving lower-ranked eligible symbols a fair path into subsequent cycles.
+      appendRotatingTier(quiet,Math.ceil(wanted*0.55),'quiet');
+      appendRotatingTier(waking,Math.ceil(wanted*0.30),'waking');
+      appendRotatingTier(recovery,Math.ceil(wanted*0.10),'recovery');
+      const remainder=eligiblePool.filter(x=>!pool.some(y=>y.symbol===x.symbol)).sort(rankQuiet);
+      appendRotatingTier(remainder,wanted-pool.length,'remainder');
 
       const ranked = [];
       let scanned = 0;
@@ -638,6 +668,18 @@ export class CoinHunterRadar {
         }
       }
 
+      let candidateRotationCursorPersisted=false;
+      if(candidateRotationCursorSource==='DURABLE_STORE'){
+        try{
+          await this.store.putDedupKey(candidateRotationKey,{
+            next_cycle:candidateRotationCycle+1,version:1,updated_at:Date.now()
+          });
+          candidateRotationCursorPersisted=true;
+        }catch(error){
+          candidateRotationCursorError=String(error?.message??error).slice(0,160);
+        }
+      }
+      this._candidateRotationCycle=candidateRotationCycle+1;
       this.lastCoverage = {
         universe_total: tickers.length,
         leader_sample_requested:leaderCandidates.length,
@@ -645,6 +687,12 @@ export class CoinHunterRadar {
         leader_sampled:leaderRows.length,
         qualifying_leaders: leaderRows.filter(x=>Number(x.todayPct)>=Number(this.config.minLeaderMovePct)).length,
         candidate_pool: pool.length,
+        candidate_rotation_cycle:candidateRotationCycle,
+        candidate_rotation_width:eligiblePool.length,
+        candidate_rotation_cursor_source:candidateRotationCursorSource,
+        candidate_rotation_cursor_persisted:candidateRotationCursorPersisted,
+        candidate_rotation_tier_offsets:candidateRotationTierOffsets,
+        candidate_rotation_cursor_error:candidateRotationCursorError,
         deep_scanned_total: scanned,
         hunter_hits: this.latestCandidates.filter(x => x.decision === 'قنص').length,
         learned_samples: leaderRows.length,
