@@ -2036,8 +2036,8 @@ export class MarketUniverseScanner {
     const klinesSources=[];
     let depthRaw=null,depthSource=null;
     let scanError=null;
-    // 240 closed 15m candles provide 48+ complete hourly bars; replacing separate 1h and 15m requests with one 15m request preserves request weight and reduces network calls.
-    const limit15m=Math.max(200,Math.min(300,Math.trunc(Number(options.fifteenMinuteKlines)||240)));
+    // 200 closed 15m candles provide 50 hours for the required 48-hour aggregate while reducing payload and JSON work for every rotated pair.
+    const limit15m=Math.max(200,Math.min(300,Math.trunc(Number(options.fifteenMinuteKlines)||200)));
     const requests=await Promise.allSettled([
       this.fetchSeries(symbol,'15m',limit15m),
       this.fetchDepth(symbol)
