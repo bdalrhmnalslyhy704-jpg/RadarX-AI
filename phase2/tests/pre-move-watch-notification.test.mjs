@@ -271,6 +271,55 @@ test('EARLY_FLOW_MONITOR survives the final push gate before price confirmation,
   }
 });
 
+test('final push gate accepts only a fresh, high-confluence ticker-activity monitor alert',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-ticker-activity-watch-push-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    const sent=[];
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
+      sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};
+    }};
+    const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000})});
+    const {candidate,snapshot,now}=fixture();
+    const early={
+      ...candidate,symbol:'CFGUSDT',price_change_24h:.59,quote_volume_24h:5_000_000,
+      data_quality:100,liquidity_quality:85,
+      ticker_activity:{score:14,volume_delta_per_minute:1200,trade_delta_per_minute:65,
+        volume_acceleration_ratio:2.4,trade_acceleration_ratio:1.7,observed_at:now-45_000,baseline_age_ms:90_000},
+      pre_move_context:{...candidate.pre_move_context,score:77.5,session_return_pct:.59,one_hour_return_pct:0,
+        volume_acceleration:1.05,trade_acceleration:.92,taker_buy_ratio:.52,taker_buy_acceleration:.084,
+        mean_close_location:.48,relative_strength_vs_market_pct:1.32,
+        components:{squeeze:45,structure:55,buying_pressure:54}},
+      data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false,close_time:now-60_000}
+    };
+    const alert=buildPreMoveWatchOnlyAlert(early,snapshot,now);
+    assert.ok(alert);
+    assert.equal(alert.watch_notification_tier,'TICKER_ACTIVITY_ACCELERATION_MONITOR');
+    const result=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(result.status,'SENT',JSON.stringify(result));
+    assert.equal(result.sent_count,1);
+    assert.equal(sent.length,1);
+    assert.equal(sent[0].symbol,'CFGUSDT');
+    assert.equal(sent[0].watch_notification_tier,'TICKER_ACTIVITY_ACCELERATION_MONITOR');
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].paper_trading,true);
+    assert.equal(sent[0].real_order_execution,false);
+    assert.ok(sent[0].ticker_activity_watch_evidence);
+
+    const weakAlert={...alert,id:alert.id.replace('CFGUSDT','WEAKUSDT'),symbol:'WEAKUSDT',
+      ticker_activity_watch_evidence:{...alert.ticker_activity_watch_evidence,score:8}};
+    const rejected=await manager.notifyRadarWatchOnlyAlert(weakAlert);
+    assert.equal(rejected.status,'REJECTED_WATCH_ONLY');
+    assert.equal(rejected.reason,'PRE_MOVE_TICKER_ACTIVITY_TIER_UNVERIFIED');
+    assert.equal(sent.length,1,'weak activity evidence must never be delivered');
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('failed Pre-Move watch delivery is retried with the same stable event ID and remains watch-only',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-watch-retry-'));
   const store=await new DurableStore({dir}).init();

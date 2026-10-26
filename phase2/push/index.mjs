@@ -136,9 +136,11 @@ const radarPayload=(alert,processedAt=Date.now())=>{
   message:watchOnly
     ?[alert.symbol,lowLiquidityWatch
       ?'مراقبة مبكرة فقط — سيولة ضعيفة — تحتاج تأكيدًا'
-      :alert?.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'
-        ?'نشاط مبكر قوي — البنية السعرية قيد التشكّل — مراقبة فقط، ليس دخولًا'
-        :'مراقبة مبكرة فقط — تحتاج تأكيدًا'].filter(Boolean).join(' • ')
+      :alert?.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'
+        ?'تسارع قوي في حجم التداول والصفقات — مراقبة مبكرة فقط، ليس دخولًا'
+        :alert?.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'
+          ?'نشاط مبكر قوي — البنية السعرية قيد التشكّل — مراقبة فقط، ليس دخولًا'
+          :'مراقبة مبكرة فقط — تحتاج تأكيدًا'].filter(Boolean).join(' • ')
     :alert?.signal_lifecycle?.state&&alert.signal_lifecycle.state!=='MONITOR'&&alert?.signal_lifecycle?.label
       ?[alert.symbol,alert.signal_lifecycle.label].filter(Boolean).join(' • ')
       :undefined,
@@ -356,18 +358,50 @@ export class PushManager{
         liquidityQuality!==null&&liquidityQuality>=70&&
         structure!==null&&structure>=50&&
         independentEvidence>=4;
-      const preMoveMonitorCorridor=highActivityStructurePending||earlyFlowMonitor;
-      if(session<(highActivityStructurePending?-0.75:earlyFlowMonitor?-1.25:0)||
-         session>(earlyFlowMonitor?4.5:6)||
-         hour<(highActivityStructurePending?-0.5:earlyFlowMonitor?-0.75:0.15)||
-         hour>(earlyFlowMonitor?2.5:4.5))
+      // Separate high-quality corridor for market-wide ticker acceleration. This
+      // can prompt a non-entry watch before the next closed-candle return is positive,
+      // but it still requires fresh closed candles, measured liquidity, buyer-flow
+      // confluence, recent durable activity baselines, and strict anti-chase limits.
+      const tickerActivityEvidence=alert?.ticker_activity_watch_evidence||{};
+      const tickerActivityScore=firstFinite([tickerActivityEvidence?.score]);
+      const tickerActivityVolumeRatio=firstFinite([tickerActivityEvidence?.volume_acceleration_ratio]);
+      const tickerActivityTradeRatio=firstFinite([tickerActivityEvidence?.trade_acceleration_ratio]);
+      const tickerActivityObservedAt=firstFinite([tickerActivityEvidence?.observed_at]);
+      const tickerActivityBaselineAge=firstFinite([tickerActivityEvidence?.baseline_age_ms]);
+      const tickerActivityFlowChecks=[
+        taker!==null&&taker>=0.52,
+        takerDelta!==null&&takerDelta>=0.02,
+        closeLocation!==null&&closeLocation>=0.52,
+        relative!==null&&relative>=0.25
+      ].filter(Boolean).length;
+      const tickerActivityMonitor=
+        alert?.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'&&
+        tickerActivityScore!==null&&tickerActivityScore>=12&&
+        tickerActivityVolumeRatio!==null&&tickerActivityVolumeRatio>=1.35&&
+        tickerActivityTradeRatio!==null&&tickerActivityTradeRatio>=1.30&&
+        tickerActivityObservedAt!==null&&tickerActivityObservedAt<=now+5000&&
+        now-tickerActivityObservedAt>=-5000&&now-tickerActivityObservedAt<=4*60*1000&&
+        tickerActivityBaselineAge!==null&&tickerActivityBaselineAge>=0&&tickerActivityBaselineAge<=5*60*1000&&
+        quoteVolume24h!==null&&quoteVolume24h>=750000&&dailyMove!==null&&dailyMove>=-5&&dailyMove<=4.5&&
+        score!==null&&score>=68&&session!==null&&session>=-1.25&&session<=4.5&&
+        hour!==null&&hour>=-0.75&&hour<=2.5&&
+        dataQuality!==null&&dataQuality>=85&&liquidityQuality!==null&&liquidityQuality>=75&&
+        structure!==null&&structure>=50&&tickerActivityFlowChecks>=2;
+      const preMoveMonitorCorridor=highActivityStructurePending||earlyFlowMonitor||tickerActivityMonitor;
+      if(session<(highActivityStructurePending?-0.75:(earlyFlowMonitor||tickerActivityMonitor)?-1.25:0)||
+         session>((earlyFlowMonitor||tickerActivityMonitor)?4.5:6)||
+         hour<(highActivityStructurePending?-0.5:(earlyFlowMonitor||tickerActivityMonitor)?-0.75:0.15)||
+         hour>((earlyFlowMonitor||tickerActivityMonitor)?2.5:4.5))
         return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
       if(alert?.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'&&!highActivityStructurePending)
         return rejected('PRE_MOVE_HIGH_ACTIVITY_TIER_UNVERIFIED');
       if(alert?.watch_notification_tier==='EARLY_FLOW_MONITOR'&&!earlyFlowMonitor)
         return rejected('PRE_MOVE_EARLY_FLOW_TIER_UNVERIFIED');
+      if(alert?.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'&&!tickerActivityMonitor)
+        return rejected('PRE_MOVE_TICKER_ACTIVITY_TIER_UNVERIFIED');
+      const independentEvidenceFloor=tickerActivityMonitor?3:preMoveMonitorCorridor?4:3;
       if(structure===null||(structure<(preMoveMonitorCorridor?50:60))||
-         independentEvidence<(preMoveMonitorCorridor?4:3))
+         independentEvidence<independentEvidenceFloor)
         return rejected('PRE_MOVE_WATCH_CONFLUENCE_INSUFFICIENT');
     }else if(event==='STRONG_MOVE_WATCH_ONLY'){
       const sm=alert?.strong_move||{},m=sm?.metrics||{};
