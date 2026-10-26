@@ -1704,7 +1704,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         const eventId=String(input.event_id||'').trim();
         if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(installationId))
           return send(res,400,{error:'INVALID_INSTALLATION_ID'});
-        if(eventId.length<1||eventId.length>256||/[\\u0000-\\u001f\\u007f]/.test(eventId))
+        if(eventId.length<1||eventId.length>256||/[\x00-\x1F\x7F]/.test(eventId))
           return send(res,400,{error:'INVALID_FCM_EVENT_ID'});
         const device=await store.getFcmDevice?.(installationId);
         if(!device||device.provider!=='fcm'||device.disabled===true)
