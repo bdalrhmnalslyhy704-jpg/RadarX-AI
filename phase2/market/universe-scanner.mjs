@@ -1614,7 +1614,8 @@ export class MarketUniverseScanner {
     config = {},
     clock = () => Date.now(),
     sleepFn = sleepDefault,
-    strategyEvaluator = null
+    strategyEvaluator = null,
+    rotationStateStore = null
   } = {}) {
     if (!rest || typeof rest.request !== 'function') throw new Error('REST_CLIENT_REQUIRED');
     this.rest = rest;
@@ -1623,6 +1624,9 @@ export class MarketUniverseScanner {
     this.clock = clock;
     this.sleepFn = sleepFn;
     this.strategyEvaluator = strategyEvaluator;
+    // The Pre-Move rotation cursor is kept in DurableStore so process restarts
+    // continue coverage rather than returning to the same alphabetic slice.
+    this.rotationStateStore = rotationStateStore;
     this._requests = new Map();
     this._scanFlights = new Map();
     // Serialize Pre-Move scans across limits: the same REST client/request map is shared,
@@ -2172,8 +2176,26 @@ export class MarketUniverseScanner {
     // and the order book; it does not run the unrelated general 20-strategy pipeline.
     // A rotating second half broadens coverage without repeatedly deep-scanning only the same top symbols.
     const discoveryLimit=Math.max(20,normalizedLimit);
-    const rotationCycle=Math.max(0,Math.trunc(Number(this._preMoveRotationCycle)||0));
-    this._preMoveRotationCycle=rotationCycle+1;
+    const rotationKey=`RADARX:PRE_MOVE_ROTATION_CURSOR:V1:${normalizedQuote}`;
+    let rotationCycle=0;
+    let rotationCursorSource='PROCESS_MEMORY_FALLBACK';
+    const rotationStoreReady=typeof this.rotationStateStore?.getDedupKey==='function' &&
+      typeof this.rotationStateStore?.putDedupKey==='function';
+    if(rotationStoreReady){
+      try{
+        const saved=await this.rotationStateStore.getDedupKey(rotationKey);
+        const next=Number(saved?.next_cycle);
+        rotationCycle=Number.isSafeInteger(next)&&next>=0?next:0;
+        rotationCursorSource='DURABLE_STORE';
+      }catch{
+        rotationCycle=Math.max(0,Math.trunc(Number(this._preMoveRotationCycle)||0));
+        this._preMoveRotationCycle=rotationCycle+1;
+        rotationCursorSource='PROCESS_MEMORY_FALLBACK';
+      }
+    }else{
+      rotationCycle=Math.max(0,Math.trunc(Number(this._preMoveRotationCycle)||0));
+      this._preMoveRotationCycle=rotationCycle+1;
+    }
     const rotatingWidth=Math.max(1,discoveryLimit-Math.ceil(discoveryLimit/2));
     const rotationOffset=(rotationCycle*rotatingWidth);
     const discovery=rankPreMoveTickerRows(tickerResponse.data,universe,{
@@ -2303,12 +2325,25 @@ export class MarketUniverseScanner {
     const extendedExcluded=enriched.filter(x=>x.pre_move_context.already_moved===true||x.pre_move_context.stage==='ALREADY_MOVED').length;
     const noSetupExcluded=enriched.filter(x=>x.pre_move_context.stage==='NO_SETUP').length;
     const returned=actionable.slice(0,Math.min(10,normalizedLimit));
+    let rotationCursorPersisted=false;
+    if(rotationCursorSource==='DURABLE_STORE'){
+      try{
+        // Advance only after a completed scan. An interrupted scan retries the same
+        // slice instead of silently skipping coverage on the next worker start.
+        await this.rotationStateStore.putDedupKey(rotationKey,{
+          next_cycle:rotationCycle+1,version:1,updated_at:this.clock()
+        });
+        rotationCursorPersisted=true;
+      }catch(error){
+        throw new Error('PRE_MOVE_ROTATION_CURSOR_PERSIST_FAILED:'+String(error?.message||error).slice(0,160));
+      }
+    }
     return {
       meta:{live:observed.length>0,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PRE_MOVE'},
       as_of:new Date(this.clock()).toISOString(),
       source:'Binance Public REST',
       session:{timezone:'Asia/Aden',window:'04:00 local → latest closed candle',market_median_return_pct:marketMedianReturn,btc_return_pct:Number.isFinite(btcReturn)?btcReturn:null,positive_breadth_pct:returns.length?positiveCount/returns.length*100:null},
-      universe:{requested:normalizedLimit,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,observed_candle_data:observed.length,watch_only:watchCandidates.length,evidence_incomplete_excluded:evidenceIncompleteExcluded,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,discovery_volume_floor:0,rotation_cycle:rotationCycle,rotation_offset:rotationOffset,rotation_width:rotatingWidth,coverage_mode:'PINNED_PLUS_ROTATING_V1',elapsed_ms:Math.max(0,this.clock()-startedAt)},
+      universe:{requested:normalizedLimit,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,observed_candle_data:observed.length,watch_only:watchCandidates.length,evidence_incomplete_excluded:evidenceIncompleteExcluded,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,discovery_volume_floor:0,rotation_cycle:rotationCycle,rotation_offset:rotationOffset,rotation_width:rotatingWidth,rotation_cursor_source:rotationCursorSource,rotation_cursor_persisted:rotationCursorPersisted,rotation_sequence:'COMPLETED_SCAN_CURSOR_V1',coverage_mode:'PINNED_PLUS_ROTATING_V1',elapsed_ms:Math.max(0,this.clock()-startedAt)},
       candidates:returned,
       watch_candidates:watchCandidates.slice().sort((a,b)=>Number(b.pre_move_context.score)-Number(a.pre_move_context.score)||Number(a.pre_move_context.session_return_pct)-Number(b.pre_move_context.session_return_pct)).slice(0,10),
       near_miss_audit:nearMissAudit

@@ -728,6 +728,12 @@ test('Pre-Move diagnostic audit exposes blocker evidence but never promotes audi
 
 
 test('Pre-Move scan removes already-extended coins before limiting actionable results',async()=>{
+  const scanNow=Date.now();
+  const cursorRows=new Map();
+  const rotationStateStore={
+    async getDedupKey(key){return cursorRows.get(key)||null;},
+    async putDedupKey(key,value){cursorRows.set(key,value);}
+  };
   const rest=makeRest();
   const originalRequest=rest.request;
   rest.request=async path=>{
@@ -738,7 +744,7 @@ test('Pre-Move scan removes already-extended coins before limiting actionable re
     return response;
   };
   const scanner=new MarketUniverseScanner({
-    rest,
+    rest,clock:()=>scanNow,rotationStateStore,
     config:{minQuoteVolume24h:750000,scanLimit:2,returnLimit:2,deepConcurrency:2,deepKlines:160},
     strategyEvaluator:evaluator
   });
@@ -750,7 +756,21 @@ test('Pre-Move scan removes already-extended coins before limiting actionable re
   assert.ok(result.universe.valid_data>0);
   assert.equal(result.universe.extended_excluded,result.universe.observed_candle_data,'extended_exclusion counts all fresh observed symbols, including those below the alert-liquidity gate');
   assert.equal(result.universe.coverage_mode,'PINNED_PLUS_ROTATING_V1');
+  assert.equal(result.universe.rotation_cursor_source,'DURABLE_STORE');
+  assert.equal(result.universe.rotation_cursor_persisted,true);
+  assert.equal(result.universe.rotation_sequence,'COMPLETED_SCAN_CURSOR_V1');
   assert.equal(result.universe.rotation_cycle,0);
+  assert.equal(cursorRows.size,1,'a completed scan must persist the next rotation cursor');
+  const restartedScanner=new MarketUniverseScanner({
+    rest:makeRest(),clock:()=>scanNow,rotationStateStore,
+    config:{minQuoteVolume24h:750000,scanLimit:2,returnLimit:2,deepConcurrency:2,deepKlines:160},
+    strategyEvaluator:evaluator
+  });
+  const afterRestart=await restartedScanner.scanPreMove({quote:'USDT',limit:10});
+  assert.equal(afterRestart.universe.rotation_cursor_source,'DURABLE_STORE');
+  assert.equal(afterRestart.universe.rotation_cursor_persisted,true);
+  assert.equal(afterRestart.universe.rotation_cycle,1,
+    'a new scanner instance must continue from persisted progress instead of repeating cycle zero');
   assert.equal(result.candidates.length,0,'no already-extended symbol should be promoted as a Pre-Move candidate');
   assert.equal(result.watch_candidates.length,0,'already-extended symbols must not leak into the watch-only list');
   const scannedTimeframes=rest.calls.filter(x=>x.type==='klines').map(x=>x.tf);

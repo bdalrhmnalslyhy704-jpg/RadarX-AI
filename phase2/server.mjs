@@ -140,7 +140,7 @@ export async function startServer({
   const monitor=monitorFactory({config,rest,signalService:service,store,pushManager:push,logger});
   const marketRadarRest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
   const moveConfig={...(config.moveRadar||{})};
-  const moveScanner=new MarketUniverseScanner({rest,config:{
+  const moveScanner=new MarketUniverseScanner({rest,rotationStateStore:store,config:{
     minQuoteVolume24h:moveConfig.minQuoteVolume24h,
     minDataQuality:moveConfig.minDataQuality,
     minLiquidityQuality:moveConfig.minLiquidityQuality,
