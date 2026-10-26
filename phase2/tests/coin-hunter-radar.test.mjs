@@ -152,7 +152,7 @@ test('Coin Hunter samples leader history concurrently within its configured cap'
   for(let i=0;i<16;i++){
     const base='CAND'+String(i).padStart(2,'0');
     symbols.push(marketSymbol(base+'USDT',base));
-    tickerData.push({symbol:base+'USDT',lastPrice:'10',priceChangePercent:String(i%4),
+    tickerData.push({symbol:base+'USDT',lastPrice:'10',priceChangePercent:'-2',
       quoteVolume:'3000000',count:'30000',highPrice:'11',lowPrice:'9'});
   }
   let activeLeader=0,maxActiveLeader=0,leaderCalls=0;
