@@ -350,6 +350,63 @@ jobs:
           }));
           NODE
 
+      - name: Verify independent Pre-Move background worker completed a fresh DHDTech scan
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          STATUS_URL="$BASE/api/pre-move-radar-status"
+          READY=false
+          for attempt in $(seq 1 12); do
+            CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$RUNNER_TEMP/pre-move-worker-status.json" -w "%{http_code}" "$STATUS_URL" || true)"
+            if [ "$CODE" != "200" ]; then
+              case "$CODE" in
+                502|503|504|000)
+                  echo "::warning::Pre-Move worker status temporarily unavailable (HTTP $CODE), attempt $attempt/12."
+                  ;;
+                *)
+                  echo "::error::DHDTech Pre-Move worker status endpoint returned HTTP $CODE; continuous worker cannot be proven."
+                  cat "$RUNNER_TEMP/pre-move-worker-status.json" 2>/dev/null || true
+                  exit 1
+                  ;;
+              esac
+            else
+              if node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          let x;
+          try { x=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/pre-move-worker-status.json','utf8')); }
+          catch { process.exit(10); }
+          const w=x.worker||{},s=x.last_background_scan||w.last_summary||{};
+          console.log('PRE_MOVE_BACKGROUND_LIVE_STATUS '+JSON.stringify({
+            status:x.status,scanner_ready:x.scanner_ready,worker_enabled:w.enabled,
+            worker_running:w.running,successful_scans:w.successful_scans,
+            last_scan_status:w.last_scan_status,last_scan_at:w.last_scan_at,
+            elapsed_ms:s.elapsed_ms,discovered:s.discovered,scanned:s.scanned,
+            valid_data:s.valid_data,actionable:s.actionable,watch_only:s.watch_only,
+            paper_trading:x.paper_trading,real_order_execution:x.real_order_execution
+          }));
+          const ready=x.scanner_ready===true && w.enabled===true &&
+            Number(w.successful_scans)>=1 && w.last_scan_status==='READY' &&
+            Number(s.scanned)>0 && Number(s.valid_data)>0 &&
+            Number(s.discovered)>0 && Number(s.elapsed_ms)>0 &&
+            Number(s.elapsed_ms)<=45000 && x.paper_trading===true &&
+            x.real_order_execution===false;
+          process.exit(ready?0:10);
+          NODE
+              then
+                READY=true
+                break
+              else
+                echo "Pre-Move background worker has not yet demonstrated a complete fresh scan (attempt $attempt/12)."
+              fi
+            fi
+            if [ "$attempt" -lt 12 ]; then sleep 10; fi
+          done
+          if [ "$READY" != "true" ]; then
+            echo "::error::Pre-Move worker did not prove one successful live scan on DHDTech within the bounded verification window."
+            cat "$RUNNER_TEMP/pre-move-worker-status.json" 2>/dev/null || true
+            exit 1
+          fi
+
       - name: Publish live API result as a commit status
         if: always()
         uses: actions/github-script@v7
