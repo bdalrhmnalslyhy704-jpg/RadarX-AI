@@ -4,6 +4,7 @@ import {verifySessionToken} from '../core/auth.mjs';
 import {defaultSettings} from '../core/signal-service.mjs';
 import {DurableStore} from '../core/store.mjs';
 import {MarketUniverseScanner} from '../market/universe-scanner.mjs';
+import {RestClient} from '../market/binance-rest.mjs';
 import {RADAR_NAMES,RADAR_PROFILES,formatRadarTime12h,decorateRadarAlert} from '../core/radar-alert-meta.mjs';
 import {SymbolDeepAnalyzer,normalizeDeepScanSymbol} from '../core/symbol-deep-analyzer.mjs';
 import {buildKingVerdict,rankKingMarket} from '../core/king-intelligence.mjs';
@@ -419,10 +420,30 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     rest: marketRadarRestClient,
     config: config.marketRadar ?? {}
   }) : null;
-  // Keep the long-running Pre-Move scan's per-scan request bookkeeping isolated from
-  // the interactive Market Radar scanner; both still share the REST client's global budget/cache.
-  const preMoveRadarScanner = marketRadarRestClient ? new MarketUniverseScanner({
-    rest: marketRadarRestClient,
+  // Keep Pre-Move independent from other radar REST endpoint failover waterfalls.
+  // Use the known public market-data mirror first and one official Binance fallback,
+  // with a bounded per-host timeout. Failed sources remain fail-closed; live candle
+  // freshness, order-book liquidity, and the alert gate are not weakened.
+  const preMoveBaseUrls = Array.isArray(marketRadarRestClient?.baseUrls)
+    ? [...new Set([
+        marketRadarRestClient.baseUrls.find(url => /data-api\.binance\.vision/i.test(String(url))),
+        marketRadarRestClient.baseUrls.find(url => /api1?\.binance\.com/i.test(String(url)) && !/api\.binance\.com\//i.test(String(url)))
+      ].filter(Boolean))]
+    : [];
+  if (!preMoveBaseUrls.length && marketRadarRestClient?.baseUrls?.[0]) {
+    preMoveBaseUrls.push(marketRadarRestClient.baseUrls[0]);
+  }
+  const preMoveRestClient = marketRadarRestClient && preMoveBaseUrls.length
+    ? new RestClient({
+        baseUrls: preMoveBaseUrls,
+        fetchImpl: marketRadarRestClient.fetchImpl,
+        timeoutMs: Math.min(4500, Number(marketRadarRestClient.timeoutMs) || 4500),
+        minIntervalMs: Number(marketRadarRestClient.minIntervalMs) || 100,
+        maxRequestsPerMinute: Math.max(1, Number(marketRadarRestClient.maxRequestsPerMinute) || 240)
+      })
+    : marketRadarRestClient;
+  const preMoveRadarScanner = preMoveRestClient ? new MarketUniverseScanner({
+    rest: preMoveRestClient,
     config: config.marketRadar ?? {}
   }) : null;
   const marketRadarResponseCache=new Map();
