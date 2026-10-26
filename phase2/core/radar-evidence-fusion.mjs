@@ -77,7 +77,7 @@ export class RadarEvidenceFusion{
   const mean=xs=>xs.length?xs.reduce((s,x)=>s+x,0)/xs.length:null;
   const meanScore=mean(rows.map(x=>x.score).filter(Number.isFinite)),dataValues=rows.map(x=>x.data_quality).filter(Number.isFinite),liqValues=rows.map(x=>x.liquidity_quality).filter(Number.isFinite);
   const newest=[...rows].sort((a,b)=>b.detected_at-a.detected_at)[0],latestMove=newest?.price_change_24h??null;
-  const bullRatio=rows.length?bullish.length/rows.length:0,conflict=bullish.length>0&&bearish.length>0,antiChase=latestMove===null||latestMove<=this.maxDailyExtensionPct;
+  const bullRatio=rows.length?bullish.length/rows.length:0,conflict=bullish.length>0&&bearish.length>0,antiChase=latestMove!==null&&latestMove<=this.maxDailyExtensionPct;
   let classification='NO_QUALIFIED_EVIDENCE';
   if(rows.length===1)classification='SINGLE_RADAR_OBSERVATION';
   if(rows.length>=2)classification='CROSS_RADAR_REVIEW';
