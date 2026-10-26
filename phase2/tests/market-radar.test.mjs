@@ -739,9 +739,9 @@ test('Pre-Move watch builder admits a fresh ticker-activity burst only through t
     pre_move_context:{
       stage:'NO_SETUP',score:77.5,evidence_complete:true,closed_candles_only:true,
       already_moved:false,session_return_pct:.59,one_hour_return_pct:0,
-      volume_acceleration:1.30,trade_acceleration:1.02,taker_buy_ratio:.535,taker_buy_acceleration:.084,
-      mean_close_location:.375,relative_strength_vs_market_pct:1.32,
-      components:{squeeze:55,structure:60.1,buying_pressure:64},
+      volume_acceleration:1.05,trade_acceleration:.92,taker_buy_ratio:.52,taker_buy_acceleration:.084,
+      mean_close_location:.48,relative_strength_vs_market_pct:1.32,
+      components:{squeeze:45,structure:55,buying_pressure:54},
       flow_transition_confirmed:false,price_window_valid:false,structure_confirmed:false,
       reasons:['VOLUME_ACCELERATING']
     }

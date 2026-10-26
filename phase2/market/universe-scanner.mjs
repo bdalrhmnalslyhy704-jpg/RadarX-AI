@@ -1207,6 +1207,9 @@ export function buildPreMoveWatchCandidates(rows,{
     const taker=Number(p.taker_buy_ratio);
     const takerDelta=Number(p.taker_buy_acceleration);
     const closeLocation=Number(p.mean_close_location);
+    const squeeze=Number(p.components?.squeeze);
+    const structure=Number(p.components?.structure);
+    const buying=Number(p.components?.buying_pressure);
     const tickerActivity=x?.ticker_activity&&typeof x.ticker_activity==='object'?x.ticker_activity:null;
     const tickerActivityScore=Number(tickerActivity?.score);
     const tickerActivityVolumeRatio=Number(tickerActivity?.volume_acceleration_ratio);
@@ -1231,9 +1234,6 @@ export function buildPreMoveWatchCandidates(rows,{
       Date.now()-Number(tickerActivity.observed_at)<=4*60*1000&&
       Number.isFinite(Number(tickerActivity?.baseline_age_ms))&&
       Number(tickerActivity.baseline_age_ms)>=0&&Number(tickerActivity.baseline_age_ms)<=5*60*1000;
-    const squeeze=Number(p.components?.squeeze);
-    const structure=Number(p.components?.structure);
-    const buying=Number(p.components?.buying_pressure);
     const coreChecks=[
       volume>=1.12,
       trades>=1.05,
@@ -1302,6 +1302,8 @@ export function buildPreMoveWatchCandidates(rows,{
     });
   }
   return out.sort((a,b)=>
+    Number(b.pre_move_context?.ticker_activity_monitor_only===true)-Number(a.pre_move_context?.ticker_activity_monitor_only===true)||
+    Number(b.ticker_activity?.score||0)-Number(a.ticker_activity?.score||0)||
     Number(b.pre_move_context?.score)-Number(a.pre_move_context?.score)||
     Number(a.pre_move_context?.session_return_pct)-Number(b.pre_move_context?.session_return_pct)||
     String(a.symbol).localeCompare(String(b.symbol))
