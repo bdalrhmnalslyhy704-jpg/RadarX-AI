@@ -1393,6 +1393,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         const requestId=/^[A-Za-z0-9_-]{1,64}$/.test(rawRequestId)?rawRequestId:null;
         const backgroundRequested=String(u.searchParams.get('background')||'')==='1';
         const progressRequested=String(u.searchParams.get('progress')||'')==='1';
+        const summaryRequested=String(u.searchParams.get('summary')||'')==='1';
         try{
           if(backgroundRequested){
             if(multiAnalystRadar.busy){
@@ -1434,11 +1435,33 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
                   return send(res,200,multiAnalystFailureBody({quote,requestId,error:message}));
                 }
               }
-              return send(res,200,{...completedSnapshot,radar:'MULTI_ANALYST',
-                scan:{requested:forced,completed:true,error:null,request_id:requestId},
-                monitoring:multiAnalystMonitoringSnapshot(),
-                meta:{...(completedSnapshot.meta||{}),analysis_mode:forced?'FORCED_SCAN':'CACHE',
-                  force_refresh_requested:forced,request_id:requestId,served_from_cache_while_scan:false}});
+              const completedScan={requested:forced,completed:true,error:null,request_id:requestId};
+              const completedMeta={...(completedSnapshot.meta||{}),analysis_mode:forced?'FORCED_SCAN':'CACHE',
+                force_refresh_requested:forced,request_id:requestId,served_from_cache_while_scan:false};
+              const monitoring=multiAnalystMonitoringSnapshot();
+              if(summaryRequested){
+                const snapshotUniverse=completedSnapshot.universe||{},snapshotDiagnostics=completedSnapshot.diagnostics||{};
+                return send(res,200,{
+                  status:'ready',radar:'MULTI_ANALYST',as_of:completedSnapshot.as_of||new Date().toISOString(),
+                  source:completedSnapshot.source||'Binance Public REST',universe:snapshotUniverse,
+                  summary:completedSnapshot.summary||{},
+                  diagnostics:{duration_ms:Number(snapshotDiagnostics.duration_ms)||0,
+                    attempted_analyses:Number(snapshotDiagnostics.attempted_analyses)||0,
+                    successful_analyses:Number(snapshotDiagnostics.successful_analyses)||0,
+                    gate_rejected:Number(snapshotDiagnostics.gate_rejected)||0,
+                    failed_analyses:Number(snapshotDiagnostics.failed_analyses)||0,
+                    scan_failure_count:Number(snapshotDiagnostics.scan_failure_count)||0,
+                    last_scan_error:snapshotDiagnostics.last_scan_error||null},
+                  result_counts:{
+                    candidates:Array.isArray(completedSnapshot.candidates)?completedSnapshot.candidates.length:0,
+                    watchlist:Array.isArray(completedSnapshot.watchlist)?completedSnapshot.watchlist.length:0,
+                    lab_results:Array.isArray(completedSnapshot.lab_results)?completedSnapshot.lab_results.length:0},
+                  scan:completedScan,monitoring,
+                  meta:{...completedMeta,analyst_count:Number(completedMeta.analyst_count)||20,
+                    specialist_count:Number(completedMeta.specialist_count)||19}
+                });
+              }
+              return send(res,200,{...completedSnapshot,radar:'MULTI_ANALYST',scan:completedScan,monitoring,meta:completedMeta});
             }
             const monitor=multiAnalystMonitoringSnapshot();
             if(monitor.last_error&&!monitor.last_scan_successful){

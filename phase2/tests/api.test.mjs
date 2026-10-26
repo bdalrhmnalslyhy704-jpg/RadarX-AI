@@ -774,6 +774,17 @@ test('TEST_FIXTURE: forced analyst polling returns only the matching request sca
     assert.equal(finalBody.candidates[0].symbol,'TESTUSDT');
     assert.equal(finalBody.meta.request_id,'background-test');
 
+    const compactResponse=await fetch(base+'/api/multi-analyst?quote=USDT&limit=1&scan=1&progress=1&summary=1&_ts=background-test');
+    assert.equal(compactResponse.status,200);
+    const compactBody=await compactResponse.json();
+    assert.equal(compactBody.status,'ready');
+    assert.equal(compactBody.meta.analysis_mode,'FORCED_SCAN');
+    assert.equal(compactBody.scan.completed,true);
+    assert.equal(compactBody.meta.request_id,'background-test');
+    assert.deepEqual(compactBody.result_counts,{candidates:1,watchlist:0,lab_results:0});
+    assert.equal(Object.hasOwn(compactBody,'lab_results'),false);
+    assert.ok(JSON.stringify(compactBody).length<JSON.stringify(finalBody).length);
+
     // A fresh poll with another ID must not relabel the old cache as FORCED_SCAN.
     cached={...completed,meta:{...completed.meta,request_id:'previous-request'}};
     const nextStart=await fetch(base+'/api/multi-analyst?quote=USDT&limit=1&scan=1&progress=1&_ts=fresh-request');

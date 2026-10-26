@@ -165,7 +165,7 @@ jobs:
           # One request may be reset after the application has completed a large
           # JSON response. Treat transport failures and truncated JSON as transient
           # polling errors; only a parsed, completed live scan can satisfy this gate.
-          POLL_URL="${BASE_URL}&progress=1&scan=1&_ts=${REQUEST_ID}"
+          POLL_URL="${BASE_URL}&progress=1&summary=1&scan=1&_ts=${REQUEST_ID}"
           POLL_TMP="$RUNNER_TEMP/multi-analyst.poll.tmp.json"
           POLL_JSON="$RUNNER_TEMP/multi-analyst.json"
           READY=false
@@ -245,9 +245,9 @@ jobs:
             gate_rejected:d.gate_rejected,
             failed_analyses:d.failed_analyses,
             scan_failure_count:d.scan_failure_count||0,
-            candidates:Array.isArray(b.candidates)?b.candidates.length:null,
-            watchlist:Array.isArray(b.watchlist)?b.watchlist.length:null,
-            lab_results:Array.isArray(b.lab_results)?b.lab_results.length:null,
+            candidates:Number(b.result_counts?.candidates),
+            watchlist:Number(b.result_counts?.watchlist),
+            lab_results:Number(b.result_counts?.lab_results),
             error:b.error||d.last_scan_error||monitor.last_error||scan.error||null,
             last_error:monitor.last_error||null
           };
@@ -260,7 +260,8 @@ jobs:
           if(!(Number(u.scanned)>0))problems.push('MULTI_ANALYST_ZERO_ROWS_SCANNED');
           if(!(Number(d.attempted_analyses)>0))problems.push('MULTI_ANALYST_LAB_NOT_ENTERED');
           if(!(Number(d.successful_analyses)>0))problems.push('MULTI_ANALYST_DATA_GATE_HAS_NO_VALID_ROWS');
-          for(const key of ['candidates','watchlist','lab_results'])if(!Array.isArray(b[key]))problems.push('MULTI_ANALYST_RESPONSE_FIELD_MISSING:'+key);
+          if(!b.result_counts||!['candidates','watchlist','lab_results'].every(key=>Number.isFinite(Number(b.result_counts[key]))))
+            problems.push('MULTI_ANALYST_SUMMARY_COUNTS_MISSING');
           if(problems.length)throw new Error(JSON.stringify({problems,summary}));
           NODE
 
