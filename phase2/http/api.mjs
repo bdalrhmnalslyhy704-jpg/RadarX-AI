@@ -427,7 +427,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
   const preMoveBaseUrls = Array.isArray(marketRadarRestClient?.baseUrls)
     ? [...new Set([
         marketRadarRestClient.baseUrls.find(url => /data-api\.binance\.vision/i.test(String(url))),
-        marketRadarRestClient.baseUrls.find(url => /api1?\.binance\.com/i.test(String(url)) && !/api\.binance\.com\//i.test(String(url)))
+        marketRadarRestClient.baseUrls.find(url => /^https:\/\/api1\.binance\.com(?:\/|$)/i.test(String(url)))
       ].filter(Boolean))]
     : [];
   if (!preMoveBaseUrls.length && marketRadarRestClient?.baseUrls?.[0]) {
