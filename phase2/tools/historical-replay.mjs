@@ -321,7 +321,7 @@ export function historicalProfileRequirements(profile, config = CONFIG) {
     case 'EARLY_MOVE_RADAR':
       Object.assign(frames, {'15m': 240, 'BTCUSDT:15m': 240});
       unavailableEvidence.push('HISTORICAL_ORDERBOOK_UNAVAILABLE','HISTORICAL_LIQUIDITY_QUALITY_UNAVAILABLE',
-        'HISTORICAL_MARKET_MEDIAN_UNAVAILABLE','HISTORICAL_LIVE_PUSH_NOT_SIMULATED');
+        'HISTORICAL_LIVE_PUSH_NOT_SIMULATED');
       break;
     case 'LIQUIDITY_ABSORPTION_RADAR':
       base = {oneMinute: 60, fiveMinute: 24};
@@ -378,6 +378,11 @@ export function assessHistoricalProfileCoverage(profile, input = {}, timeframeCo
   const failures = assessHistoricalFrameFetchCoverage(profile, timeframeCoverage, config);
   if (requirements.tradeHistoryRequired && input?.dataPolicy?.tradeCoverageComplete !== true) {
     failures.push('HISTORICAL_AGG_TRADE_COVERAGE_INCOMPLETE');
+  }
+  if (String(profile).trim().toUpperCase() === 'EARLY_MOVE_RADAR' &&
+      (input?.marketMedianSource !== 'HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN' ||
+       !Number.isFinite(Number(input?.marketMedianReturnPct)) || Number(input?.marketMedianSampleCount) < 5)) {
+    failures.push('HISTORICAL_MARKET_MEDIAN_UNAVAILABLE');
   }
   const series = {
     oneMinute: Array.isArray(input.oneMinute) ? input.oneMinute : [],
@@ -565,10 +570,26 @@ async function main() {
     policy: {market: 'SPOT', paper_trading: true, real_order_execution: false, confidence_score: 'UNKNOWN'}
   };
 
+  // Real same-time peer candles are required to calculate a historical market median.
+  const marketCohortFetches = new Map();
+  if (detectorProfile === 'EARLY_MOVE_RADAR') {
+    for (const peerSymbol of symbols) {
+      try {
+        process.stderr.write('[REPLAY] preloading historical market-median peer ' + peerSymbol + '\\n');
+        const peerFetch = await fetchOneMinute(client, peerSymbol, start - 24 * HOUR_MS - 125 * MINUTE_MS, observationEnd);
+        marketCohortFetches.set(peerSymbol, peerFetch);
+        if (!peerFetch.complete) process.stderr.write('[REPLAY] market-median peer fetch incomplete for ' + peerSymbol + '\\n');
+      } catch (error) {
+        process.stderr.write('[REPLAY] market-median peer fetch failed for ' + peerSymbol + ': ' + String(error?.message ?? error).slice(0, 180) + '\\n');
+      }
+    }
+  }
+  const marketCohortCandles = Object.fromEntries([...marketCohortFetches.entries()].map(([symbol, fetched]) => [symbol, fetched.candles]));
+
   for (const symbol of symbols) {
     try {
     process.stderr.write('[REPLAY] ' + symbol + ' fetching closed 1m candles…\n');
-    const candleFetch = await fetchOneMinute(client, symbol, start - 24 * HOUR_MS - 125 * MINUTE_MS, observationEnd);
+    const candleFetch = marketCohortFetches.get(symbol) || await fetchOneMinute(client, symbol, start - 24 * HOUR_MS - 125 * MINUTE_MS, observationEnd);
     const timeframeCandles={},timeframeCoverage={},timeframeFetchErrors=[];
     const fetchFrame=async(key,frameSymbol,interval,bars)=>{
       try{
@@ -673,6 +694,7 @@ async function main() {
       tradeCoverageComplete: tradeFetch.complete,
       allowCandleOnlyFallback: true,
       timeframeCandles,
+      marketCohortCandles: detectorProfile === 'EARLY_MOVE_RADAR' ? marketCohortCandles : null,
       tradeCoverage: {...tradeFetch.coverage, candle_pages: candleFetch.pages, candles_complete: candleFetch.complete,
         detector_profile:detectorProfile,additional_timeframes:timeframeCoverage,additional_timeframe_errors:timeframeFetchErrors},
       alertCooldownMs: Number(tickerConfig.alertCooldownMs ?? 12 * MINUTE_MS),
@@ -939,6 +961,13 @@ async function main() {
     const profileRequirements = historicalProfileRequirements(detectorProfile, config);
     const profileTradeCoverageFailures = profileRequirements.tradeHistoryRequired===true&&!tradeFetch.complete
       ? ['HISTORICAL_AGG_TRADE_COVERAGE_INCOMPLETE'] : [];
+    const marketMedianMissingSteps = detectorProfile === 'EARLY_MOVE_RADAR'
+      ? replay.steps.filter(step => step.market_median_source !== 'HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN' ||
+          Number(step.market_median_sample_count) < 5).length
+      : 0;
+    const marketMedianCoverageFailures = detectorProfile === 'EARLY_MOVE_RADAR' &&
+      (replay.steps.length === 0 || marketMedianMissingSteps > 0)
+      ? ['HISTORICAL_MARKET_MEDIAN_UNAVAILABLE'] : [];
     const profileBaseCoverageFailures = [];
     if (candleFetch.candles.length < profileRequirements.base.oneMinute) {
       profileBaseCoverageFailures.push('HISTORICAL_BASE_SERIES_ROWS_BELOW_MINIMUM:oneMinute');
@@ -948,9 +977,10 @@ async function main() {
     }
     replay.data_quality.profile_coverage_complete = windowCandlesComplete &&
       profileFrameCoverageFailures.length === 0 && profileBaseCoverageFailures.length === 0 &&
-      profileTradeCoverageFailures.length === 0;
+      profileTradeCoverageFailures.length === 0 && marketMedianCoverageFailures.length === 0;
     replay.data_quality.profile_coverage_failures = [...new Set([
       ...profileFrameCoverageFailures, ...profileBaseCoverageFailures, ...profileTradeCoverageFailures,
+      ...marketMedianCoverageFailures,
       ...(!windowCandlesComplete ? ['PRIMARY_1M_WINDOW_COVERAGE_INCOMPLETE'] : [])
     ])];
     replay.data_quality.required_history = profileRequirements;
@@ -966,6 +996,11 @@ async function main() {
     replay.data_quality.outcome_horizon_hours = outcomeHorizonHours;
     replay.data_quality.window_candles_expected = expectedWindowCandles;
     replay.data_quality.window_candles_observed = observedWindowCandles;
+    replay.data_quality.market_median_source = detectorProfile === 'EARLY_MOVE_RADAR'
+      ? (marketMedianMissingSteps === 0 && replay.steps.length > 0 ? 'HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN' : 'INCOMPLETE_HISTORICAL_COHORT')
+      : null;
+    replay.data_quality.market_median_missing_steps = marketMedianMissingSteps;
+    replay.data_quality.market_median_minimum_peer_count = 5;
     replay.data_quality.trade_coverage_complete = tradeFetch.complete;
     replay.data_quality.trade_coverage = tradeFetch.coverage;
     replay.data_quality.trade_coverage_window_end = end;

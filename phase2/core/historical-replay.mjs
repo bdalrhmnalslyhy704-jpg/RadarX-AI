@@ -2,6 +2,61 @@ import {buildMoveOutcomeAnalysis} from './move-outcome-analysis.mjs';
 
 const MINUTE_MS = 60_000;
 const FIVE_MINUTES_MS = 5 * MINUTE_MS;
+const HOUR_MS = 60 * MINUTE_MS;
+
+function adenSessionStartMs(at) {
+  // Asia/Aden is UTC+03:00 year-round; monitoring starts at 04:00 local.
+  const local = new Date(Number(at) + 3 * HOUR_MS);
+  let start = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate(), 1, 0, 0, 0);
+  if (Number(at) < start) start -= 24 * HOUR_MS;
+  return start;
+}
+
+function indexMarketCohort(series, observationEnd) {
+  const result = new Map();
+  const entries = series instanceof Map ? [...series.entries()] : Object.entries(series && typeof series === 'object' ? series : {});
+  for (const [rawSymbol, rawCandles] of entries) {
+    const symbol = String(rawSymbol ?? '').trim().toUpperCase();
+    if (!/^[A-Z0-9]{5,20}$/.test(symbol)) continue;
+    const candles = normalizeHistoricalCandles(Array.isArray(rawCandles) ? rawCandles : [], { endTime: observationEnd });
+    result.set(symbol, { candles, byOpenTime: new Map(candles.map((candle, index) => [candle.openTime, index])) });
+  }
+  return result;
+}
+
+/** Same-time historical median of a peer Spot cohort; the target coin is excluded. */
+function historicalMarketMedianAt(cohortIndex, targetSymbol, at, minimumPeers = 5) {
+  if (!(cohortIndex instanceof Map) || cohortIndex.size < minimumPeers + 1) {
+    return { returnPct: null, sampleCount: 0, source: 'UNAVAILABLE_INSUFFICIENT_HISTORICAL_COHORT' };
+  }
+  const sessionStart = adenSessionStartMs(at);
+  const latestOpen = Math.floor((Number(at) - 1) / MINUTE_MS) * MINUTE_MS;
+  const expectedCount = (latestOpen - sessionStart) / MINUTE_MS + 1;
+  if (!Number.isInteger(expectedCount) || expectedCount < 1) {
+    return { returnPct: null, sampleCount: 0, source: 'UNAVAILABLE_SESSION_WINDOW' };
+  }
+  const returns = [];
+  for (const [symbol, entry] of cohortIndex) {
+    if (symbol === String(targetSymbol).toUpperCase()) continue;
+    const baseIndex = entry.byOpenTime.get(sessionStart);
+    const lastIndex = entry.byOpenTime.get(latestOpen);
+    if (!Number.isInteger(baseIndex) || !Number.isInteger(lastIndex) || lastIndex < baseIndex ||
+        lastIndex - baseIndex + 1 !== expectedCount) continue;
+    const baseline = entry.candles[baseIndex], last = entry.candles[lastIndex];
+    if (baseline?.openTime !== sessionStart || baseline?.closeTime !== sessionStart + MINUTE_MS - 1 ||
+        last?.openTime !== latestOpen || last?.closeTime !== latestOpen + MINUTE_MS - 1 ||
+        !(Number(baseline?.open) > 0) || !(Number(last?.close) > 0)) continue;
+    const value = (Number(last.close) / Number(baseline.open) - 1) * 100;
+    if (Number.isFinite(value)) returns.push(value);
+  }
+  if (returns.length < minimumPeers) {
+    return { returnPct: null, sampleCount: returns.length, source: 'UNAVAILABLE_INSUFFICIENT_CONTIGUOUS_PEERS' };
+  }
+  returns.sort((a, b) => a - b);
+  const middle = Math.floor(returns.length / 2);
+  const median = returns.length % 2 ? returns[middle] : (returns[middle - 1] + returns[middle]) / 2;
+  return { returnPct: Number(median.toFixed(6)), sampleCount: returns.length, source: 'HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN' };
+}
 
 function finite(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -185,7 +240,7 @@ export function runHistoricalReplay({
   tradeCoverageComplete = false, tradeCoverage = null, allowCandleOnlyFallback = false,
   alertCooldownMs = 12 * 60 * 1000, candidateCooldownMs = 12 * 60 * 1000,
   candidateResetMs = 5 * 60 * 1000,
-  outcomeHorizonMs = 24 * 60 * 60 * 1000, outcomeEndTime = null, timeframeCandles = {}
+  outcomeHorizonMs = 24 * 60 * 60 * 1000, outcomeEndTime = null, timeframeCandles = {}, marketCohortCandles = null
 } = {}) {
   const start = finite(startTime), end = finite(endTime);
   if (!/^[A-Z0-9]{5,20}$/.test(String(symbol ?? "").toUpperCase())) throw new Error("INVALID_SYMBOL");
@@ -200,6 +255,7 @@ export function runHistoricalReplay({
   const sym = String(symbol).toUpperCase();
   const candles = normalizeHistoricalCandles(oneMinuteCandles, {endTime: observationEnd});
   const five = aggregateFiveMinuteCandles(candles).filter(x => x.closeTime <= observationEnd);
+  const marketCohortIndex = indexMarketCohort(marketCohortCandles, observationEnd);
   const trades = normalizeTrades(aggTrades, observationEnd);
   // Missing aggregate-trade history must remain explicitly partial. In the opt-in
   // fallback mode, evaluate only verified closed candles and never substitute fake trades.
@@ -289,6 +345,7 @@ export function runHistoricalReplay({
     let reasons = [];
     let accepted = false;
     let failure = null;
+    let marketMedian = {returnPct:null,sampleCount:0,source:'UNAVAILABLE_COHORT_NOT_PROVIDED'};
     if (!tradeCoverageComplete && !candleOnlyFallback) {
       reasons = ["AGG_TRADES_HISTORY_INCOMPLETE"];
       failure = "AGG_TRADES_HISTORY_INCOMPLETE";
@@ -297,10 +354,16 @@ export function runHistoricalReplay({
         const timeframes=Object.fromEntries(Object.entries(timeframeCandles&&typeof timeframeCandles==='object'?timeframeCandles:{})
           .map(([key,series])=>[key,normalizeHistoricalCandles(Array.isArray(series)?series:[],{endTime:at})
             .filter(row=>row.closed===true&&row.closeTime<=at)]));
+        marketMedian = marketCohortIndex.size
+          ? historicalMarketMedianAt(marketCohortIndex, sym, at)
+          : {returnPct:null,sampleCount:0,source:'UNAVAILABLE_COHORT_NOT_PROVIDED'};
         raw = awaitlessEvaluate(evaluate, {
           symbol: sym, now: at, oneMinute: available1m, fiveMinute: fiveEnd,
           ticker, aggTrades: tradeCoverageComplete ? tradeWindow : [], currentCandle: candle,
           timeframes,
+          marketMedianReturnPct:marketMedian.returnPct,
+          marketMedianSampleCount:marketMedian.sampleCount,
+          marketMedianSource:marketMedian.source,
           source: "BINANCE_PUBLIC_HISTORICAL_REPLAY",
           dataPolicy: {
             closedCandlesOnly: true, allowFutureData: false, currentCloseTime: at,
@@ -406,6 +469,9 @@ export function runHistoricalReplay({
       failure ? "REPLAY_EVALUATOR_ERROR" : "REJECTED_OTHER";
     rows.push({
       symbol: sym, timestamp: at, timestamp_iso: new Date(at).toISOString(),
+      market_median_return_pct:marketMedian.returnPct,
+      market_median_sample_count:marketMedian.sampleCount,
+      market_median_source:marketMedian.source,
       source_candle_open_time: candle.openTime, source_candle_close_at: candle.closeTime,
       price_at_decision: close, last_price_at_observation: ticker.lastPrice,
       price_change_24h_pct: finite(ticker.priceChange24h),

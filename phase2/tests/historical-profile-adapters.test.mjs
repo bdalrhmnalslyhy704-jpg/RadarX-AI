@@ -123,6 +123,13 @@ test('historical adapters never invent a numeric data-quality score when it was 
   assert.equal(early.analysis.data_quality,undefined);
   assert.equal(hunter.analysis.data_quality,undefined);
   assert.ok(early.extraGateFailures.includes('HISTORICAL_MARKET_MEDIAN_UNAVAILABLE'));
+  const measured=evaluateHistoricalProfileAdapter('EARLY_MOVE_RADAR',{
+    ...input,marketMedianReturnPct:1.25,marketMedianSampleCount:8,
+    marketMedianSource:'HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN'
+  });
+  assert.ok(!measured.extraGateFailures.includes('HISTORICAL_MARKET_MEDIAN_UNAVAILABLE'));
+  assert.equal(measured.analysis.market_median_source,'HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN');
+  assert.equal(measured.analysis.market_median_sample_count,8);
 });
 
 test('Whale adapter cannot form a candidate when aggregate-trade history is incomplete',()=>{

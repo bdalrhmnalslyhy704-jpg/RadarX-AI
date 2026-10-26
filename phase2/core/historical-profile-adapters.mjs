@@ -122,7 +122,15 @@ export function evaluateHistoricalProfileAdapter(profile,input,{config=CONFIG}={
     );
     const btcReturn=btcRows.length&&Number(btcRows[0]?.open)>0
       ?(Number(btcRows.at(-1)?.close)/Number(btcRows[0]?.open)-1)*100:null;
-    const context=buildPreMoveContext(series,ticker,input.now,bottom,{btcReturn});
+    const medianValue=n(input.marketMedianReturnPct);
+    const medianSampleCount=n(input.marketMedianSampleCount);
+    const marketMedianAvailable=input.marketMedianSource==='HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN' &&
+      medianValue!==null && medianSampleCount!==null && medianSampleCount>=5;
+    const context=buildPreMoveContext(series,ticker,input.now,bottom,{
+      btcReturn,marketMedianReturn:marketMedianAvailable?medianValue:null
+    });
+    context.market_median_source=marketMedianAvailable?input.marketMedianSource:'UNAVAILABLE';
+    context.market_median_sample_count=medianSampleCount??0;
     const strictEligible=context.evidence_complete===true&&context.flow_transition_confirmed===true&&
       context.price_window_valid===true&&context.structure_confirmed===true&&context.already_moved!==true&&
       ['READY','EARLY_WAKE','QUIET_BUILD'].includes(String(context.stage||''));
@@ -143,7 +151,7 @@ export function evaluateHistoricalProfileAdapter(profile,input,{config=CONFIG}={
         ...(watchProxy.eligible?['HISTORICAL_PRE_MOVE_WATCH_CANDIDATE']:[]),
         ...(watchProxy.reason?[watchProxy.reason]:[])],
       extraGateFailures:['HISTORICAL_ORDERBOOK_UNAVAILABLE','HISTORICAL_LIQUIDITY_QUALITY_UNAVAILABLE',
-        'HISTORICAL_MARKET_MEDIAN_UNAVAILABLE','LIVE_PUSH_GATE_NOT_SIMULATED']};
+        ...(!marketMedianAvailable?['HISTORICAL_MARKET_MEDIAN_UNAVAILABLE']:[]),'LIVE_PUSH_GATE_NOT_SIMULATED']};
   }
 
   if(detectorProfile==='LIQUIDITY_ABSORPTION_RADAR'){

@@ -59,6 +59,41 @@ test('CLI replay window count excludes the next candle that has not closed',()=>
   assert.throws(()=>countExpectedClosedMinuteCandles(nextOpen,start),/INVALID_CLOSED_CANDLE_WINDOW/);
 });
 
+test('historical market median uses only contiguous closed peer candles and excludes the target coin',()=>{
+  const sessionStart=Date.UTC(2024,10,6,1,0,0,0);
+  const makeSeries=movePct=>{
+    const out=[];let last=100;
+    for(let i=0;i<20;i++){
+      const open=i===0?100:last;
+      const close=i===0?100*(1+movePct/100):open;
+      out.push({openTime:sessionStart+i*MINUTE,closeTime:sessionStart+(i+1)*MINUTE-1,
+        open,high:Math.max(open,close)*1.001,low:Math.min(open,close)*0.999,close,
+        volume:100,quoteVolume:1000,tradeCount:10,takerBuyBaseVolume:55,closed:true});
+      last=close;
+    }
+    return out;
+  };
+  const target=makeSeries(50);
+  const cohort={TARGETUSDT:target,PEER1USDT:makeSeries(1),PEER2USDT:makeSeries(2),PEER3USDT:makeSeries(3),
+    PEER4USDT:makeSeries(4),PEER5USDT:makeSeries(5),PEER6USDT:makeSeries(6)};
+  // Three peers spike only after the first decision; future prices must not leak backward.
+  for(const peer of ['PEER4USDT','PEER5USDT','PEER6USDT']){
+    for(const row of cohort[peer].filter(x=>x.openTime>=sessionStart+6*MINUTE)){
+      row.open=1000;row.high=1001;row.low=999;row.close=1000;
+    }
+  }
+  const seen=[];
+  runHistoricalReplay({symbol:'TARGETUSDT',oneMinuteCandles:target,marketCohortCandles:cohort,
+    startTime:sessionStart+5*MINUTE,endTime:sessionStart+8*MINUTE,
+    outcomeEndTime:sessionStart+15*MINUTE,outcomeHorizonMs:0,allowCandleOnlyFallback:true,
+    evaluate(input){seen.push({median:input.marketMedianReturnPct,count:input.marketMedianSampleCount,source:input.marketMedianSource});return {accepted:false,reason_codes:['MEDIAN_TEST']};}
+  });
+  assert.ok(seen.length>0);
+  assert.equal(seen[0].source,'HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN');
+  assert.equal(seen[0].count,6);
+  assert.ok(Math.abs(seen[0].median-3.5)<0.00001,'target movement and future peer data must not leak into the historical median');
+});
+
 test('historical replay passes only timeframe candles closed by the current decision timestamp',()=>{
   const rows=candles(240);
   const start=rows[180].openTime,end=rows[184].closeTime,observationEnd=rows[190].closeTime;
