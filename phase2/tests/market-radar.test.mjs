@@ -1,7 +1,7 @@
 /* Bottom Radar v2 regression coverage: live flow, squeeze, structure, whale heuristic. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {MarketUniverseScanner, buildSpotUniverse, rankTickerRows, rankBottomTickerRows, boundedMap, normalizeRadarLimit, normalizeTickerRow, buildBottomMarketContext, buildPreMoveContext, rankPreMoveTickerRows, buildPreMoveWatchCandidates, aggregateClosed15mIntoHourly, buildPreMoveTargetPlan, scorePreMoveComponents} from '../market/universe-scanner.mjs';
+import {MarketUniverseScanner, buildSpotUniverse, rankTickerRows, rankBottomTickerRows, boundedMap, normalizeRadarLimit, normalizeTickerRow, buildBottomMarketContext, buildPreMoveContext, rankPreMoveTickerRows, buildPreMoveTickerActivitySignals, buildPreMoveWatchCandidates, aggregateClosed15mIntoHourly, buildPreMoveTargetPlan, scorePreMoveComponents} from '../market/universe-scanner.mjs';
 
 function candle(t, close=100, tfMs=900000) {
   return {
@@ -95,6 +95,60 @@ test('ticker ranking prioritizes liquid rows and enforces minimum volume',()=>{
   const symbols=buildSpotUniverse(exchangeInfo(),'USDT');
   const rows=rankTickerRows(tickers(),symbols,{minQuoteVolume24h:750000,limit:2});
   assert.deepEqual(rows.map(x=>x.symbol),['BTCUSDT','ETHUSDT']);
+});
+
+test('Pre-Move discovery promotes accelerating ticker volume and trades before candle confirmation',()=>{
+  const symbols=[
+    {symbol:'ABASEUSDT',baseAsset:'ABASE',quoteAsset:'USDT',status:'TRADING'},
+    {symbol:'ZFASTUSDT',baseAsset:'ZFAST',quoteAsset:'USDT',status:'TRADING'}
+  ];
+  const baseline={
+    version:1,
+    snapshots:[
+      {captured_at:120000,rows:{
+        ABASEUSDT:{quote_volume_24h:4900000,trade_count_24h:490000},
+        ZFASTUSDT:{quote_volume_24h:1100000,trade_count_24h:110000}
+      }},
+      {captured_at:60000,rows:{
+        ABASEUSDT:{quote_volume_24h:4800000,trade_count_24h:480000},
+        ZFASTUSDT:{quote_volume_24h:1000000,trade_count_24h:100000}
+      }}
+    ]
+  };
+  const current=[
+    {symbol:'ABASEUSDT',lastPrice:'10',highPrice:'12',lowPrice:'8',quoteVolume:'5000000',count:500000,priceChangePercent:'1'},
+    {symbol:'ZFASTUSDT',lastPrice:'10',highPrice:'12',lowPrice:'8',quoteVolume:'1500000',count:150000,priceChangePercent:'1'}
+  ].map(x=>normalizeTickerRow(x,'USDT'));
+  const signals=buildPreMoveTickerActivitySignals(current,baseline,180000);
+  assert.equal(signals.has('ABASEUSDT'),false,'steady high-volume pair should not receive an acceleration boost');
+  assert.ok(signals.get('ZFASTUSDT')?.score>=10,'rapidly accelerating volume and trades should be prioritized');
+  assert.ok(signals.get('ZFASTUSDT')?.volume_acceleration_ratio>=3);
+  assert.ok(signals.get('ZFASTUSDT')?.trade_acceleration_ratio>=3);
+
+  const raw=current.map(x=>({
+    symbol:x.symbol,lastPrice:String(x.lastPrice),highPrice:String(x.highPrice24h),lowPrice:String(x.lowPrice24h),
+    quoteVolume:String(x.quoteVolume24h),count:x.tradeCount24h,priceChangePercent:String(x.priceChange24h)
+  }));
+  const ordinary=rankPreMoveTickerRows(raw,symbols,{minQuoteVolume24h:750000,limit:2});
+  const accelerated=rankPreMoveTickerRows(raw,symbols,{minQuoteVolume24h:750000,limit:2,activitySignals:signals});
+  assert.equal(ordinary[0].symbol,'ABASEUSDT','ordinary liquidity ranking should prefer the larger steady pair');
+  assert.equal(accelerated[0].symbol,'ZFASTUSDT','market-wide activity acceleration should promote the early mover');
+  assert.ok(accelerated[0].pre_move_activity_score>=10);
+});
+
+test('Pre-Move ticker activity acceleration ignores absent, stale, or future baselines',()=>{
+  const current=[normalizeTickerRow({symbol:'FASTUSDT',lastPrice:'10',highPrice:'12',lowPrice:'8',quoteVolume:'1500000',count:150000,priceChangePercent:'1'},'USDT')];
+  const good={
+    version:1,
+    snapshots:[
+      {captured_at:120000,rows:{FASTUSDT:{quote_volume_24h:1100000,trade_count_24h:110000}}},
+      {captured_at:60000,rows:{FASTUSDT:{quote_volume_24h:1000000,trade_count_24h:100000}}}
+    ]
+  };
+  assert.equal(buildPreMoveTickerActivitySignals(current,null,180000).size,0);
+  assert.equal(buildPreMoveTickerActivitySignals(current,good,600001).size,0,'stale samples must not influence discovery ranking');
+  const future={version:1,snapshots:[{captured_at:200000,rows:{}},{captured_at:100000,rows:{}}]};
+  assert.equal(buildPreMoveTickerActivitySignals(current,future,180000).size,0,'future baseline timestamps must fail closed');
 });
 
 test('Pre-Move discovery pins the strongest 30% and rotates the other 70% across the eligible market',()=>{

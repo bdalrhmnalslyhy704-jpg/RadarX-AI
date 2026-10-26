@@ -109,6 +109,68 @@ export function normalizeTickerRow(ticker, quote) {
   };
 }
 
+/**
+ * Compare two recent Binance 24h-ticker snapshots against current cumulative
+ * volume/trade counters. Deltas affect discovery priority only, never signal
+ * qualification; closed-candle, liquidity, anti-chase and analyst gates still decide
+ * whether a candidate can be shown or notified.
+ *
+ * Baseline shape: {version:1,snapshots:[{captured_at,rows:{SYMBOL:{
+ * quote_volume_24h,trade_count_24h}}}, ...]} with newest snapshot first.
+ */
+export function buildPreMoveTickerActivitySignals(tickerRows, baselineState, now = Date.now()) {
+  const out=new Map();
+  const snapshots=Array.isArray(baselineState?.snapshots)?baselineState.snapshots:[];
+  if(baselineState?.version!==1||snapshots.length<2||!Number.isFinite(Number(now)))return out;
+  const latest=snapshots[0],older=snapshots[1];
+  const latestAt=Number(latest?.captured_at),olderAt=Number(older?.captured_at),currentAt=Number(now);
+  const currentWindowMs=currentAt-latestAt,previousWindowMs=latestAt-olderAt;
+  if(!Number.isFinite(latestAt)||!Number.isFinite(olderAt)||
+     currentWindowMs<20_000||currentWindowMs>5*60_000||
+     previousWindowMs<20_000||previousWindowMs>10*60_000)return out;
+  const currentMinutes=currentWindowMs/60_000,previousMinutes=previousWindowMs/60_000;
+  const recentRows=latest?.rows&&typeof latest.rows==='object'?latest.rows:{};
+  const priorRows=older?.rows&&typeof older.rows==='object'?older.rows:{};
+  for(const row of (Array.isArray(tickerRows)?tickerRows:[])){
+    const symbol=String(row?.symbol||'').trim().toUpperCase();
+    const quoteVolume=Number(row?.quoteVolume24h),tradeCount=Number(row?.tradeCount24h);
+    const recent=recentRows[symbol],prior=priorRows[symbol];
+    const recentQuote=Number(recent?.quote_volume_24h),priorQuote=Number(prior?.quote_volume_24h);
+    const recentTrades=Number(recent?.trade_count_24h),priorTrades=Number(prior?.trade_count_24h);
+    if(!symbol||![quoteVolume,tradeCount,recentQuote,priorQuote,recentTrades,priorTrades].every(Number.isFinite)||
+       quoteVolume<0||tradeCount<0||recentQuote<0||priorQuote<0||recentTrades<0||priorTrades<0)continue;
+    const volumeRate=Math.max(0,quoteVolume-recentQuote)/currentMinutes;
+    const previousVolumeRate=Math.max(0,recentQuote-priorQuote)/previousMinutes;
+    const tradeRate=Math.max(0,tradeCount-recentTrades)/currentMinutes;
+    const previousTradeRate=Math.max(0,recentTrades-priorTrades)/previousMinutes;
+    const averageVolumeRate=Math.max(1,quoteVolume/1440);
+    const averageTradeRate=Math.max(0.1,tradeCount/1440);
+    const volumeFloor=Math.max(20,averageVolumeRate*0.20);
+    const tradeFloor=Math.max(0.5,averageTradeRate*0.20);
+    const volumeRatio=volumeRate/Math.max(previousVolumeRate,volumeFloor);
+    const tradeRatio=tradeRate/Math.max(previousTradeRate,tradeFloor);
+    const volumeActive=volumeRate>=Math.max(100,averageVolumeRate*0.30);
+    const tradesActive=tradeRate>=Math.max(2,averageTradeRate*0.30);
+    const volumeScore=volumeActive&&volumeRatio>=1.35
+      ?Math.min(10,Math.max(0,Math.log2(volumeRatio/1.1)*4.5)):0;
+    const tradeScore=tradesActive&&tradeRatio>=1.30
+      ?Math.min(7,Math.max(0,Math.log2(tradeRatio/1.1)*3.5)):0;
+    const confluenceBonus=volumeScore>0&&tradeScore>0?3:0;
+    const score=Math.round(Math.min(20,volumeScore+tradeScore+confluenceBonus)*100)/100;
+    if(score<3)continue;
+    out.set(symbol,{
+      score,
+      volume_delta_per_minute:Math.round(volumeRate*100)/100,
+      trade_delta_per_minute:Math.round(tradeRate*100)/100,
+      volume_acceleration_ratio:Math.round(volumeRatio*100)/100,
+      trade_acceleration_ratio:Math.round(tradeRatio*100)/100,
+      observed_at:currentAt,
+      baseline_age_ms:currentAt-latestAt
+    });
+  }
+  return out;
+}
+
 export function rankTickerRows(tickers, symbols, {
   minQuoteVolume24h = MARKET_RADAR_DEFAULTS.minQuoteVolume24h,
   limit = MARKET_RADAR_DEFAULTS.scanLimit
@@ -1058,7 +1120,7 @@ export function buildPreMoveTargetPlan(candles,ticker={},now=Date.now()){
     reason_codes:[...new Set(reasons)],price_basis:'LAST_TICKER_PRICE_AT_SCAN',closed_candles_used:rows.length,
     closed_candles_only:true,paper_only:true,not_guaranteed:true};
 }
-export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_RADAR_DEFAULTS.minQuoteVolume24h,limit=30,rotationOffset=0}={}){
+export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_RADAR_DEFAULTS.minQuoteVolume24h,limit=30,rotationOffset=0,activitySignals=null}={}){
   const allowed=new Set(symbols.map(x=>x.symbol));
   // Discovery is intentionally broader than the final alert liquidity gate. A
   // live, active Spot pair below the alert volume floor must still get a turn in
@@ -1077,11 +1139,18 @@ export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_
       const rangePosition=Number.isFinite(high)&&Number.isFinite(low)&&high>low&&Number.isFinite(price)
         ?Math.max(0,Math.min(100,(price-low)/(high-low)*100)):50;
       const basePosition=rangePosition<=75?100-Math.abs(rangePosition-48)*0.65:Math.max(15,70-(rangePosition-75)*2.2);
-      return {...x,pre_move_discovery_score:
+      const activity=activitySignals?.get?.(x.symbol)??activitySignals?.[x.symbol]??null;
+      const activityScore=clamp(Number(activity?.score)||0,0,20);
+      const baseScore=
         logNorm(x.quoteVolume24h,discoveryVolumeFloor,Math.max(discoveryVolumeFloor*1000,x.quoteVolume24h))*0.35+
         logNorm(x.tradeCount24h,100,Math.max(1000000,x.tradeCount24h))*0.20+
         calm*0.25+
-        clamp(basePosition)*0.20,
+        clamp(basePosition)*0.20;
+      return {...x,
+        pre_move_discovery_score:baseScore+activityScore,
+        pre_move_base_discovery_score:baseScore,
+        pre_move_activity_score:activityScore,
+        ticker_activity:activityScore>0?activity:null,
         pre_move_range_position_pct:Math.round(rangePosition*10)/10};
     })
     .sort((a,b)=>b.pre_move_discovery_score-a.pre_move_discovery_score||b.quoteVolume24h-a.quoteVolume24h||a.symbol.localeCompare(b.symbol));
@@ -2171,6 +2240,22 @@ export class MarketUniverseScanner {
     const info=await this.exchangeInfo(normalizedQuote);
     const universe=buildSpotUniverse(info.data,normalizedQuote);
     const tickerResponse=await this.ticker24h();
+    const tickerCapturedAt=this.clock();
+    const eligibleTickerSymbols=new Set(universe.map(x=>x.symbol));
+    const tickerActivityRows=(Array.isArray(tickerResponse.data)?tickerResponse.data:[])
+      .map(x=>normalizeTickerRow(x,normalizedQuote))
+      .filter(x=>x&&eligibleTickerSymbols.has(x.symbol)&&
+        (x.symbol==='BTCUSDT'||isDirectionalCandidateSymbol(x.symbol)));
+    const tickerActivityBaselineKey=`RADARX:PRE_MOVE_TICKER_ACTIVITY_BASELINE:V1:${normalizedQuote}`;
+    let tickerActivityBaseline=null;
+    const tickerActivityStoreReady=typeof this.rotationStateStore?.getDedupKey==='function'&&
+      typeof this.rotationStateStore?.putDedupKey==='function';
+    if(tickerActivityStoreReady){
+      try{tickerActivityBaseline=await this.rotationStateStore.getDedupKey(tickerActivityBaselineKey);}catch{}
+    }
+    const tickerActivitySignals=buildPreMoveTickerActivitySignals(
+      tickerActivityRows,tickerActivityBaseline,tickerCapturedAt
+    );
     const normalizedLimit=Math.min(50,Math.max(10,normalizeRadarLimit(limit,{...this.config,maxScanLimit:50,scanLimit:30})));
     // This screen uses only the timeframes needed for early-flow evidence (1h + 15m)
     // and the order book; it does not run the unrelated general 20-strategy pipeline.
@@ -2201,7 +2286,8 @@ export class MarketUniverseScanner {
     const discovery=rankPreMoveTickerRows(tickerResponse.data,universe,{
       minQuoteVolume24h:this.config.minQuoteVolume24h,
       limit:discoveryLimit,
-      rotationOffset
+      rotationOffset,
+      activitySignals:tickerActivitySignals
     });
     const preMoveConcurrency=32; // I/O-bound candle/depth fetches are bounded at 32 to keep the 50-symbol pass inside 45s.
     const scanned=await boundedMap(
@@ -2260,6 +2346,28 @@ export class MarketUniverseScanner {
     }).sort((a,b)=>Number(b.pre_move_context.score)-Number(a.pre_move_context.score)||Number(a.pre_move_context.session_return_pct)-Number(b.pre_move_context.session_return_pct));
     // Exclude overextended symbols before applying the final result limit. Filtering only
     // in the client can otherwise allow the backend's top-N list to be filled with late movers.
+    let tickerActivityBaselinePersisted=false;
+    let tickerActivityBaselineError=null;
+    if(tickerActivityStoreReady&&tickerActivityRows.length){
+      try{
+        const rows={};
+        for(const row of tickerActivityRows){
+          rows[row.symbol]={quote_volume_24h:row.quoteVolume24h,trade_count_24h:row.tradeCount24h};
+        }
+        const previousSnapshots=Array.isArray(tickerActivityBaseline?.snapshots)?tickerActivityBaseline.snapshots:[];
+        const previous=previousSnapshots
+          .filter(x=>Number.isFinite(Number(x?.captured_at))&&Number(x.captured_at)<tickerCapturedAt&&
+            tickerCapturedAt-Number(x.captured_at)<=10*60_000&&x?.rows&&typeof x.rows==='object')
+          .sort((a,b)=>Number(b.captured_at)-Number(a.captured_at))[0]||null;
+        await this.rotationStateStore.putDedupKey(tickerActivityBaselineKey,{
+          version:1,
+          snapshots:[{captured_at:tickerCapturedAt,rows},...(previous?[previous]:[])]
+        });
+        tickerActivityBaselinePersisted=true;
+      }catch(error){
+        tickerActivityBaselineError=String(error?.message??error).slice(0,160);
+      }
+    }
     const actionable=enriched.filter(x=>x.data_status?.data_valid===true&&
       x.pre_move_context.evidence_complete===true&&
       x.pre_move_context.flow_transition_confirmed===true&&x.pre_move_context.price_window_valid===true&&
@@ -2343,7 +2451,7 @@ export class MarketUniverseScanner {
       as_of:new Date(this.clock()).toISOString(),
       source:'Binance Public REST',
       session:{timezone:'Asia/Aden',window:'04:00 local → latest closed candle',market_median_return_pct:marketMedianReturn,btc_return_pct:Number.isFinite(btcReturn)?btcReturn:null,positive_breadth_pct:returns.length?positiveCount/returns.length*100:null},
-      universe:{requested:normalizedLimit,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,observed_candle_data:observed.length,watch_only:watchCandidates.length,evidence_incomplete_excluded:evidenceIncompleteExcluded,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,discovery_volume_floor:0,rotation_cycle:rotationCycle,rotation_offset:rotationOffset,rotation_width:rotatingWidth,rotation_cursor_source:rotationCursorSource,rotation_cursor_persisted:rotationCursorPersisted,rotation_sequence:'COMPLETED_SCAN_CURSOR_V1',coverage_mode:'PINNED_PLUS_ROTATING_V1',elapsed_ms:Math.max(0,this.clock()-startedAt)},
+      universe:{requested:normalizedLimit,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,observed_candle_data:observed.length,watch_only:watchCandidates.length,evidence_incomplete_excluded:evidenceIncompleteExcluded,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,discovery_volume_floor:0,rotation_cycle:rotationCycle,rotation_offset:rotationOffset,rotation_width:rotatingWidth,rotation_cursor_source:rotationCursorSource,rotation_cursor_persisted:rotationCursorPersisted,rotation_sequence:'COMPLETED_SCAN_CURSOR_V1',coverage_mode:'PINNED_PLUS_ROTATING_V1',ticker_activity_signal_count:tickerActivitySignals.size,ticker_activity_baseline_source:tickerActivityStoreReady?'DURABLE_STORE':'UNAVAILABLE',ticker_activity_baseline_persisted:tickerActivityBaselinePersisted,ticker_activity_baseline_error:tickerActivityBaselineError,elapsed_ms:Math.max(0,this.clock()-startedAt)},
       candidates:returned,
       watch_candidates:watchCandidates.slice().sort((a,b)=>Number(b.pre_move_context.score)-Number(a.pre_move_context.score)||Number(a.pre_move_context.session_return_pct)-Number(b.pre_move_context.session_return_pct)).slice(0,10),
       near_miss_audit:nearMissAudit
