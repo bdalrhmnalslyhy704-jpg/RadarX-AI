@@ -444,6 +444,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     : marketRadarRestClient;
   const preMoveRadarScanner = preMoveRestClient ? new MarketUniverseScanner({
     rest: preMoveRestClient,
+    rotationStateStore: store,
     config: config.marketRadar ?? {}
   }) : null;
   const marketRadarResponseCache=new Map();
