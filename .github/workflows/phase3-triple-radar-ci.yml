@@ -153,6 +153,44 @@ jobs:
           ls -lh "${APK}"
           sha256sum "${APK}"
 
+      - name: Preinstall Android Emulator SDK packages with bounded retries
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          sdk_package_valid() {
+            local package="$1"
+            local path="$2"
+            case "$package" in
+              "platforms;android-29") [[ -s "$path/android.jar" ]] ;;
+              "build-tools;37.0.0") [[ -x "$path/aapt" && -x "$path/apksigner" && -x "$path/zipalign" ]] ;;
+              *) return 1 ;;
+            esac
+          }
+          install_sdk_package() {
+            local package="$1"
+            local path="$2"
+            for attempt in 1 2 3; do
+              if sdk_package_valid "$package" "$path"; then
+                echo "SDK package already verified: $package"
+                return 0
+              fi
+              echo "Installing $package (attempt $attempt/3)."
+              if timeout 180s sdkmanager --sdk_root="$ANDROID_SDK_ROOT" "$package"; then
+                if sdk_package_valid "$package" "$path"; then
+                  echo "SDK package verified: $package"
+                  return 0
+                fi
+              fi
+              echo "::warning::SDK package $package was incomplete or corrupt; cleaning only its partial install before retry."
+              rm -rf "$path"
+              if [[ "$attempt" -lt 3 ]]; then sleep "$((attempt * 5))"; fi
+            done
+            echo "::error::Could not install and verify Android Emulator package $package after three attempts."
+            return 1
+          }
+          install_sdk_package "platforms;android-29" "$ANDROID_SDK_ROOT/platforms/android-29"
+          install_sdk_package "build-tools;37.0.0" "$ANDROID_SDK_ROOT/build-tools/37.0.0"
+
       - name: Android emulator online/offline background smoke
         uses: reactivecircus/android-emulator-runner@v2
         timeout-minutes: 25
