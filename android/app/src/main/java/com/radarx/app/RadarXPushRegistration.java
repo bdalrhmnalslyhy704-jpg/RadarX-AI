@@ -87,6 +87,61 @@ final class RadarXPushRegistration {
         }
     }
 
+    static void acknowledgeReceipt(Context rawContext, String eventId, String event, String symbol, String radar) {
+        Context context = rawContext.getApplicationContext();
+        if (eventId == null || eventId.trim().isEmpty() || FirebaseApp.getApps(context).isEmpty()) return;
+        final String safeEventId = eventId.trim();
+        if (safeEventId.length() > 256) return;
+        NETWORK.execute(() -> {
+            for (int attempt = 1; attempt <= 3; attempt++) {
+                HttpURLConnection connection = null;
+                try {
+                    JSONObject body = new JSONObject();
+                    body.put("installation_id", installationId(context));
+                    body.put("event_id", safeEventId);
+                    body.put("device_received_at_ms", System.currentTimeMillis());
+                    if (event != null && !event.isEmpty()) body.put("event", event.substring(0, Math.min(120, event.length())));
+                    if (symbol != null && !symbol.isEmpty()) body.put("symbol", symbol.substring(0, Math.min(40, symbol.length())));
+                    if (radar != null && !radar.isEmpty()) body.put("radar", radar.substring(0, Math.min(120, radar.length())));
+                    connection = (HttpURLConnection) new URL(BACKEND + "/api/push/device/receipt").openConnection();
+                    connection.setRequestMethod("POST");
+                    connection.setConnectTimeout(3500);
+                    connection.setReadTimeout(4500);
+                    connection.setInstanceFollowRedirects(false);
+                    connection.setDoOutput(true);
+                    connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+                    connection.setRequestProperty("Accept", "application/json");
+                    byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
+                    connection.setFixedLengthStreamingMode(bytes.length);
+                    try (OutputStream output = connection.getOutputStream()) {
+                        output.write(bytes);
+                    }
+                    int status = connection.getResponseCode();
+                    if (status == 200 || status == 201) {
+                        Log.i(TAG, "FCM_DEVICE_RECEIPT_ACKNOWLEDGED");
+                        return;
+                    }
+                    // A very fast FCM delivery can race the server's notification-audit write.
+                    // Retry transient/unmatched responses briefly while the FCM message is fresh.
+                    if (status != 404 && status != 429 && status < 500) {
+                        Log.w(TAG, "FCM_DEVICE_RECEIPT_REJECTED_HTTP_" + status);
+                        return;
+                    }
+                } catch (Exception error) {
+                    // Never log the event payload or the device's FCM credential.
+                    Log.w(TAG, "FCM_DEVICE_RECEIPT_ATTEMPT_FAILED");
+                } finally {
+                    if (connection != null) connection.disconnect();
+                }
+                if (attempt < 3) {
+                    try { Thread.sleep(500L * attempt); }
+                    catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return; }
+                }
+            }
+            Log.w(TAG, "FCM_DEVICE_RECEIPT_ACK_FAILED");
+        });
+    }
+
     static void registerToken(Context rawContext, String token) {
         Context context = rawContext.getApplicationContext();
         if (token == null || token.isEmpty() || !notificationsAllowed(context)

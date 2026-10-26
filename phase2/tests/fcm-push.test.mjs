@@ -185,3 +185,41 @@ test('FCM data-only payload carries shared lifecycle state and uses the lifecycl
   assert.equal(sent.message.data.real_order_execution,'false');
 });
 
+
+
+test('FCM device receipt acknowledges only a recent SENT event for the registered device and is idempotent',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-fcm-receipt-'));
+  const store=await new DurableStore({dir}).init();
+  const config={environment:'production',push:{provider:'fcm'},auth:{secret:'',allowedOrigins:[]},
+    api:{maxBodyBytes:65536,rateLimitPerMinute:100}};
+  const provider={status:()=>({provider:'fcm',enabled:true})};
+  const monitor={health:()=>({running:true})};
+  const server=createApiServer({config,store,monitor,pushProvider:provider});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const base='http://127.0.0.1:'+server.address().port;
+  try{
+    const device=await store.upsertFcmDevice(INSTALLATION_ID,TOKEN);
+    const eventId='PREMOVE-EVENT-224';
+    await store.appendNotificationAudit({event:'RADAR_WATCH_ONLY_NOTIFICATION',event_class:'RADAR_ALERT',
+      subscription_id:device.id,status:'SENT',provider:'fcm',attempted_at:Date.now(),
+      event_id:eventId,alert_id:eventId,symbol:'BTCUSDT',radar:'EARLY_EXPANSION_RADAR',paper_trading:true,real_order_execution:false});
+    const request=()=>fetch(base+'/api/push/device/receipt',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({installation_id:INSTALLATION_ID,event_id:eventId,device_received_at_ms:Date.now()})});
+    const first=await request();assert.equal(first.status,200);const firstBody=await first.json();
+    assert.equal(firstBody.acknowledged,true);assert.equal(firstBody.duplicate,false);
+    const second=await request();assert.equal(second.status,200);assert.equal((await second.json()).duplicate,true);
+    const rows=await store.readRecent('notifications',30);
+    const receipts=rows.filter(x=>x.event==='FCM_DEVICE_RECEIPT'&&x.subscription_id===device.id&&x.event_id===eventId);
+    assert.equal(receipts.length,1);assert.equal(receipts[0].status,'RECEIVED');
+    assert.equal(receipts[0].device_clock_trusted,false);assert.equal(receipts[0].symbol,'BTCUSDT');
+    assert.equal(JSON.stringify(receipts).includes(TOKEN),false,'receipt audit must never store the FCM token');
+    const unknown=await fetch(base+'/api/push/device/receipt',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({installation_id:INSTALLATION_ID,event_id:'UNSENT-EVENT',device_received_at_ms:Date.now()})});
+    assert.equal(unknown.status,404);
+    const unregistered=await fetch(base+'/api/push/device/receipt',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({installation_id:'5ce8df33-b6fb-45fd-86b9-30ca8ff8deef',event_id:eventId,device_received_at_ms:Date.now()})});
+    assert.equal(unregistered.status,403);
+  }finally{
+    await new Promise(resolve=>server.close(resolve));
+  }
+});

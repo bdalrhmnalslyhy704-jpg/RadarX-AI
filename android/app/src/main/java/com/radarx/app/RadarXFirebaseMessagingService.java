@@ -103,6 +103,9 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
                 manager.notify(requestCode == 0 ? 42099 : requestCode, builder.build());
             }
             Log.i(TAG, preMoveWatchOnly ? "PRE_MOVE_WATCH_FCM_NOTIFICATION_POSTED" : "FCM_NOTIFICATION_POSTED");
+            if (!eventId.isEmpty()) {
+                RadarXPushRegistration.acknowledgeReceipt(getApplicationContext(), eventId, event, symbol, radar);
+            }
         }
     }
 
