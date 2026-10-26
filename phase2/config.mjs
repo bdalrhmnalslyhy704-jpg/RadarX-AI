@@ -355,6 +355,7 @@ export const CONFIG = Object.freeze({
     universeRefreshMs: int(process.env.RADARX_COIN_HUNTER_UNIVERSE_REFRESH_MS, 10 * 60 * 1000),
     minQuoteVolume24h: int(process.env.RADARX_COIN_HUNTER_MIN_QUOTE_VOLUME_24H, 750000),
     leaderCount: int(process.env.RADARX_COIN_HUNTER_LEADER_COUNT, 12),
+    leaderConcurrency: int(process.env.RADARX_COIN_HUNTER_LEADER_CONCURRENCY, 8),
     candidatePool: int(process.env.RADARX_COIN_HUNTER_CANDIDATE_POOL, 36),
     deepCount: int(process.env.RADARX_COIN_HUNTER_DEEP_COUNT, 16),
     deepConcurrency: int(process.env.RADARX_COIN_HUNTER_DEEP_CONCURRENCY, 4),

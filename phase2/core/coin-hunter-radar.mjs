@@ -3,6 +3,20 @@ import {isSpotTradableSymbol} from '../market/universe-scanner.mjs';
 import {isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function boundedMap(items, concurrency, worker) {
+  const rows=Array.isArray(items)?items:[];
+  const out=new Array(rows.length);
+  let cursor=0;
+  const width=Math.max(1,Math.min(rows.length||1,Math.trunc(Number(concurrency)||1)));
+  await Promise.all(Array.from({length:width},async()=>{
+    while(true){
+      const index=cursor++;
+      if(index>=rows.length)return;
+      out[index]=await worker(rows[index],index);
+    }
+  }));
+  return out;
+}
 const HOUR_MS = 60 * 60 * 1000;
 const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
 const CANDLE_TIME_TOLERANCE_MS = 1000;
@@ -402,6 +416,9 @@ export const COIN_HUNTER_DEFAULTS = Object.freeze({
   universeRefreshMs: 10 * 60 * 1000,
   minQuoteVolume24h: 750000,
   leaderCount: 12,
+  // Leader learning is I/O-bound. Bounded parallel sampling prevents 24–36
+  // sequential Kline waits from holding this worker busy beyond the watchdog.
+  leaderConcurrency: 8,
   candidatePool: 48,
   deepCount: 20,
   deepConcurrency: 4,
@@ -504,30 +521,35 @@ export class CoinHunterRadar {
       const positive = tickers
         .filter(x => Number(x.priceChangePercent) > 0)
         .sort((a,b) => Number(b.priceChangePercent) - Number(a.priceChangePercent));
-      const leaderCandidates = positive
-        .filter((x,i) => i < Math.max(Number(this.config.leaderCount) * 3, 24))
-        .slice(0, Math.max(Number(this.config.leaderCount) * 3, 24));
+      const leaderSampleLimit=Math.max(24,Math.min(36,Math.trunc(Number(this.config.leaderCount)||12)*3));
+      const leaderCandidates=positive.slice(0,leaderSampleLimit);
+      const leaderConcurrency=Math.max(1,Math.min(8,Math.trunc(Number(this.config.leaderConcurrency)||8)));
 
-      const leaderRows = [];
-      for (const t of leaderCandidates) {
+      // The former serial loop could make 36 Kline calls one after another.
+      // On the shared public-Spot REST budget that made Coin Hunter busy for
+      // 6+ minutes and tripped the swarm watchdog. Use bounded I/O concurrency,
+      // preserve candidate order, and keep each symbol's history/freshness gates.
+      const leaderRowsByIndex=await boundedMap(leaderCandidates,leaderConcurrency,async t=>{
         try {
-          const k = await this.rest.klines(t.symbol, '1h', {limit: 72});
-          const closed = closedCandles(k.candles, Date.now());
-          const day = closed.filter(x=>Number(x.openTime)>=Number(dayStart));
-          const dayPct = day.length >= 1 ? pct(Number(day.at(-1).close), Number(day[0].open)) : null;
-          const checkpoint = findPreMoveCheckpoint(closed, dayStart, 2);
-          const sourceIndex = checkpoint ? closed.findIndex(x=>Number(x.closeTime)===checkpoint.time) : -1;
-          const source = checkpoint ? closed.slice(0, Math.max(0,sourceIndex)) : [];
-          const refPrice = checkpoint ? checkpoint.price : null;
-          const historicalFeatureNow = Number(source.at(-1)?.closeTime) + 1;
-          const features = source.length>=16 && Number.isFinite(refPrice) && Number.isFinite(historicalFeatureNow)
-            ? featureSet(source, {...t,referencePrice:refPrice}, null, historicalFeatureNow)
-            : null;
-          if (features) leaderRows.push({symbol:t.symbol,todayPct:dayPct ?? Number(t.priceChangePercent),features,checkpoint});
-        } catch (error) {
-          this.logger.warn?.('COIN_HUNTER_LEADER '+t.symbol+': '+String(error?.message ?? error));
+          const k=await this.rest.klines(t.symbol,'1h',{limit:72});
+          const closed=closedCandles(k.candles,Date.now());
+          const day=closed.filter(x=>Number(x.openTime)>=Number(dayStart));
+          const dayPct=day.length>=1?pct(Number(day.at(-1).close),Number(day[0].open)):null;
+          const checkpoint=findPreMoveCheckpoint(closed,dayStart,2);
+          const sourceIndex=checkpoint?closed.findIndex(x=>Number(x.closeTime)===checkpoint.time):-1;
+          const source=checkpoint?closed.slice(0,Math.max(0,sourceIndex)):[];
+          const refPrice=checkpoint?checkpoint.price:null;
+          const historicalFeatureNow=Number(source.at(-1)?.closeTime)+1;
+          const features=source.length>=16&&Number.isFinite(refPrice)&&Number.isFinite(historicalFeatureNow)
+            ?featureSet(source,{...t,referencePrice:refPrice},null,historicalFeatureNow)
+            :null;
+          return features?{symbol:t.symbol,todayPct:dayPct??Number(t.priceChangePercent),features,checkpoint}:null;
+        } catch(error) {
+          this.logger.warn?.('COIN_HUNTER_LEADER '+t.symbol+': '+String(error?.message??error));
+          return null;
         }
-      }
+      });
+      const leaderRows=leaderRowsByIndex.filter(Boolean);
       const qualifyingLeaders=leaderRows.filter(x=>Number(x.todayPct)>=Number(this.config.minLeaderMovePct));
       const trainingLeaders=qualifyingLeaders.length>=3?qualifyingLeaders:leaderRows;
       this.lesson = {...patternLesson(trainingLeaders), qualifying_leaders:qualifyingLeaders.length, training_samples:trainingLeaders.length, learned_at:new Date(started).toISOString(), max_accepted_24h_move_pct:Number(this.config.maxHunter24hMovePct)};
@@ -618,12 +640,16 @@ export class CoinHunterRadar {
 
       this.lastCoverage = {
         universe_total: tickers.length,
-        leader_sampled: leaderRows.length,
+        leader_sample_requested:leaderCandidates.length,
+        leader_scan_concurrency:leaderConcurrency,
+        leader_sampled:leaderRows.length,
         qualifying_leaders: leaderRows.filter(x=>Number(x.todayPct)>=Number(this.config.minLeaderMovePct)).length,
         candidate_pool: pool.length,
         deep_scanned_total: scanned,
         hunter_hits: this.latestCandidates.filter(x => x.decision === 'قنص').length,
-        learned_samples: leaderRows.length
+        learned_samples: leaderRows.length,
+        scan_duration_ms:Math.max(0,Date.now()-started),
+        scan_over_watchdog_budget:Date.now()-started>=240000
       };
       this.scans += 1;
       this.lastScanAtMs = Date.now();

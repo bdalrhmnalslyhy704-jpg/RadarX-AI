@@ -138,3 +138,60 @@ test('Coin Hunter health keeps Spot paper-only and reports unknown confidence ho
   assert.equal(health.confidence_score, 'UNKNOWN');
   assert.equal(health.source, 'Binance Public REST');
 });
+
+test('Coin Hunter samples leader history concurrently within its configured cap', async () => {
+  const now=Date.now();
+  const symbols=[];
+  const tickerData=[];
+  for(let i=0;i<36;i++){
+    const base='LEAD'+String(i).padStart(2,'0');
+    symbols.push(marketSymbol(base+'USDT',base));
+    tickerData.push({symbol:base+'USDT',lastPrice:'10',priceChangePercent:String(8+i/10),
+      quoteVolume:'5000000',count:'50000',highPrice:'11',lowPrice:'9'});
+  }
+  for(let i=0;i<16;i++){
+    const base='CAND'+String(i).padStart(2,'0');
+    symbols.push(marketSymbol(base+'USDT',base));
+    tickerData.push({symbol:base+'USDT',lastPrice:'10',priceChangePercent:String(i%4),
+      quoteVolume:'3000000',count:'30000',highPrice:'11',lowPrice:'9'});
+  }
+  let activeLeader=0,maxActiveLeader=0,leaderCalls=0;
+  const rest={
+    async request(path){
+      if(path==='/api/v3/exchangeInfo')return{data:{symbols},source:'TEST_FIXTURE'};
+      if(path==='/api/v3/ticker/24hr')return{data:tickerData,source:'TEST_FIXTURE'};
+      throw new Error('UNEXPECTED_REQUEST:'+path);
+    },
+    async klines(symbol,tf){
+      if(symbol.startsWith('LEAD')&&tf==='1h'){
+        activeLeader++;leaderCalls++;maxActiveLeader=Math.max(maxActiveLeader,activeLeader);
+        try{await new Promise(resolve=>setTimeout(resolve,15));}
+        finally{activeLeader--;}
+      }else{
+        await new Promise(resolve=>setTimeout(resolve,2));
+      }
+      const data=tf==='1h'?hourlyCandles(72,now):Array.from({length:96},(_,i)=>{
+        const step=15*60*1000,start=now-96*step-1000,close=10+i*.001;
+        return{openTime:start+i*step,closeTime:start+(i+1)*step-1,open:close-.001,high:close+.005,low:close-.005,close,volume:i>90?200:100,quoteVolume:close*(i>90?200:100),tradeCount:i>90?200:100,takerBuyBaseVolume:i>90?120:55,closed:true};
+      });
+      return{candles:data,source:'TEST_FIXTURE',receivedAt:now};
+    }
+  };
+  const radar=new CoinHunterRadar({
+    rest,logger:noLog,
+    config:{leaderCount:12,leaderConcurrency:6,candidatePool:16,deepCount:8,deepConcurrency:4,
+      minQuoteVolume24h:750000,minCandidateMovePct:-3,maxCandidateMovePct:8,minHunterScore:101}
+  });
+  const started=Date.now();
+  const ok=await radar.scan('USDT');
+  const elapsed=Date.now()-started;
+  assert.equal(ok,true,'Coin Hunter scan should complete with fixture market data');
+  assert.equal(leaderCalls,36,'leader history sample should remain broad');
+  assert.ok(maxActiveLeader>1,'leader Kline history must be fetched concurrently, not one-by-one');
+  assert.ok(maxActiveLeader<=6,'leader Kline concurrency must respect its bounded configured cap');
+  assert.equal(radar.lastCoverage.leader_sample_requested,36);
+  assert.equal(radar.lastCoverage.leader_scan_concurrency,6);
+  assert.ok(radar.lastCoverage.scan_duration_ms>0);
+  assert.equal(radar.lastCoverage.scan_over_watchdog_budget,false);
+  assert.ok(elapsed<2500,'bounded fake-market scan should complete promptly');
+});
