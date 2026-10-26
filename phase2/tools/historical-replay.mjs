@@ -572,9 +572,17 @@ async function main() {
   };
 
   // Real same-time peer candles are required to calculate a historical market median.
+  // The target list can be small (for example, five historical examples). Include a
+  // fixed, long-lived liquid Spot reference cohort so removing the target coin still
+  // leaves enough independent peers, while every peer must pass exact-time candle checks.
+  const HISTORICAL_MARKET_MEDIAN_REFERENCE_SYMBOLS = [
+    'BTCUSDT','ETHUSDT','BNBUSDT','SOLUSDT','XRPUSDT','ADAUSDT',
+    'DOGEUSDT','LINKUSDT','LTCUSDT','TRXUSDT','AVAXUSDT','DOTUSDT'
+  ];
   const marketCohortFetches = new Map();
   if (detectorProfile === 'EARLY_MOVE_RADAR') {
-    for (const peerSymbol of symbols) {
+    const marketCohortSymbols = [...new Set([...symbols, ...HISTORICAL_MARKET_MEDIAN_REFERENCE_SYMBOLS])];
+    for (const peerSymbol of marketCohortSymbols) {
       try {
         process.stderr.write('[REPLAY] preloading historical market-median peer ' + peerSymbol + '\\n');
         const peerFetch = await fetchOneMinute(client, peerSymbol, start - 24 * HOUR_MS - 125 * MINUTE_MS, observationEnd);
