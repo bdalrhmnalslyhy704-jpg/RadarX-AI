@@ -155,9 +155,29 @@ jobs:
           START_TMP="$RUNNER_TEMP/multi-analyst-start.tmp.json"
           START_CODE="000"
           START_CURL_EXIT=0
-          START_CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$START_TMP" -w "%{http_code}" "$START_URL")" || START_CURL_EXIT=$?
-          if [ "$START_CURL_EXIT" -ne 0 ] || [ "$START_CODE" != "202" ]; then
-            echo "::error::Could not enqueue the bounded background 20-analyst scan (curl=$START_CURL_EXIT HTTP=$START_CODE)."
+          STARTED=false
+          for attempt in $(seq 1 8); do
+            rm -f "$START_TMP"
+            START_CURL_EXIT=0
+            START_CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$START_TMP" -w "%{http_code}" "$START_URL")" || START_CURL_EXIT=$?
+            if [ "$START_CURL_EXIT" -eq 0 ] && [ "$START_CODE" = "202" ]; then
+              STARTED=true
+              break
+            fi
+            case "$START_CODE" in
+              502|503|504|000)
+                echo "::warning::DHDTech analyst scan enqueue transient failure (curl=$START_CURL_EXIT HTTP=$START_CODE) on attempt $attempt/8."
+                sleep 5
+                ;;
+              *)
+                echo "::error::DHDTech rejected the analyst scan enqueue (curl=$START_CURL_EXIT HTTP=$START_CODE)."
+                cat "$START_TMP" 2>/dev/null | head -c 2000 || true
+                exit 1
+                ;;
+            esac
+          done
+          if [ "$STARTED" != "true" ]; then
+            echo "::error::Could not enqueue the bounded background 20-analyst scan after 8 attempts (curl=$START_CURL_EXIT HTTP=$START_CODE)."
             cat "$START_TMP" 2>/dev/null | head -c 2000 || true
             exit 1
           fi
