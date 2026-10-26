@@ -126,8 +126,9 @@ export function evaluateHistoricalProfileAdapter(profile,input,{config=CONFIG}={
       ?null:Number.isFinite(Number(value))?Number(value):null;
     const medianValue=finiteOrNull(input.marketMedianReturnPct);
     const medianSampleCount=finiteOrNull(input.marketMedianSampleCount);
+    const minimumMedianPeers=finiteOrNull(input.marketMedianMinimumPeerCount)??5;
     const marketMedianAvailable=input.marketMedianSource==='HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN' &&
-      medianValue!==null && medianSampleCount!==null && medianSampleCount>=5;
+      medianValue!==null && medianSampleCount!==null && medianSampleCount>=minimumMedianPeers;
     const context=buildPreMoveContext(series,ticker,input.now,bottom,{
       btcReturn,marketMedianReturn:marketMedianAvailable?medianValue:null
     });

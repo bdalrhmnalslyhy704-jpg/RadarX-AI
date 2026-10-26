@@ -381,7 +381,8 @@ export function assessHistoricalProfileCoverage(profile, input = {}, timeframeCo
   }
   if (String(profile).trim().toUpperCase() === 'EARLY_MOVE_RADAR' &&
       (input?.marketMedianSource !== 'HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN' ||
-       !Number.isFinite(Number(input?.marketMedianReturnPct)) || Number(input?.marketMedianSampleCount) < 5)) {
+       !Number.isFinite(Number(input?.marketMedianReturnPct)) ||
+       Number(input?.marketMedianSampleCount) < Number(input?.marketMedianMinimumPeerCount ?? 5))) {
     failures.push('HISTORICAL_MARKET_MEDIAN_UNAVAILABLE');
   }
   const series = {
@@ -961,9 +962,10 @@ async function main() {
     const profileRequirements = historicalProfileRequirements(detectorProfile, config);
     const profileTradeCoverageFailures = profileRequirements.tradeHistoryRequired===true&&!tradeFetch.complete
       ? ['HISTORICAL_AGG_TRADE_COVERAGE_INCOMPLETE'] : [];
+    const requiredMarketMedianPeers = Math.min(5, Math.max(4, Object.keys(marketCohortCandles).length - 1));
     const marketMedianMissingSteps = detectorProfile === 'EARLY_MOVE_RADAR'
       ? replay.steps.filter(step => step.market_median_source !== 'HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN' ||
-          Number(step.market_median_sample_count) < 5).length
+          Number(step.market_median_sample_count) < requiredMarketMedianPeers).length
       : 0;
     const marketMedianCoverageFailures = detectorProfile === 'EARLY_MOVE_RADAR' &&
       (replay.steps.length === 0 || marketMedianMissingSteps > 0)
@@ -1000,7 +1002,7 @@ async function main() {
       ? (marketMedianMissingSteps === 0 && replay.steps.length > 0 ? 'HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN' : 'INCOMPLETE_HISTORICAL_COHORT')
       : null;
     replay.data_quality.market_median_missing_steps = marketMedianMissingSteps;
-    replay.data_quality.market_median_minimum_peer_count = 5;
+    replay.data_quality.market_median_minimum_peer_count = requiredMarketMedianPeers;
     replay.data_quality.trade_coverage_complete = tradeFetch.complete;
     replay.data_quality.trade_coverage = tradeFetch.coverage;
     replay.data_quality.trade_coverage_window_end = end;

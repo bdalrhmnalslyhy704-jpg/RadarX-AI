@@ -354,8 +354,9 @@ export function runHistoricalReplay({
         const timeframes=Object.fromEntries(Object.entries(timeframeCandles&&typeof timeframeCandles==='object'?timeframeCandles:{})
           .map(([key,series])=>[key,normalizeHistoricalCandles(Array.isArray(series)?series:[],{endTime:at})
             .filter(row=>row.closed===true&&row.closeTime<=at)]));
+        const requiredMarketMedianPeers = Math.min(5, Math.max(4, marketCohortIndex.size - 1));
         marketMedian = marketCohortIndex.size
-          ? historicalMarketMedianAt(marketCohortIndex, sym, at)
+          ? historicalMarketMedianAt(marketCohortIndex, sym, at, requiredMarketMedianPeers)
           : {returnPct:null,sampleCount:0,source:'UNAVAILABLE_COHORT_NOT_PROVIDED'};
         raw = awaitlessEvaluate(evaluate, {
           symbol: sym, now: at, oneMinute: available1m, fiveMinute: fiveEnd,
@@ -363,6 +364,7 @@ export function runHistoricalReplay({
           timeframes,
           marketMedianReturnPct:marketMedian.returnPct,
           marketMedianSampleCount:marketMedian.sampleCount,
+          marketMedianMinimumPeerCount:requiredMarketMedianPeers,
           marketMedianSource:marketMedian.source,
           source: "BINANCE_PUBLIC_HISTORICAL_REPLAY",
           dataPolicy: {
@@ -471,6 +473,7 @@ export function runHistoricalReplay({
       symbol: sym, timestamp: at, timestamp_iso: new Date(at).toISOString(),
       market_median_return_pct:marketMedian.returnPct,
       market_median_sample_count:marketMedian.sampleCount,
+      market_median_minimum_peer_count:Math.min(5, Math.max(4, marketCohortIndex.size - 1)),
       market_median_source:marketMedian.source,
       source_candle_open_time: candle.openTime, source_candle_close_at: candle.closeTime,
       price_at_decision: close, last_price_at_observation: ticker.lastPrice,

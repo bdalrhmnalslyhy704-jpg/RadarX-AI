@@ -94,6 +94,36 @@ test('historical market median uses only contiguous closed peer candles and excl
   assert.ok(Math.abs(seen[0].median-3.5)<0.00001,'target movement and future peer data must not leak into the historical median');
 });
 
+test('historical median accepts four contiguous peers when the requested replay cohort has five symbols',()=>{
+  const sessionStart=Date.UTC(2024,10,6,1,0,0,0);
+  const makeSeries=movePct=>{
+    const out=[];let last=100;
+    for(let i=0;i<20;i++){
+      const open=i===0?100:last;
+      const close=i===0?100*(1+movePct/100):open;
+      out.push({openTime:sessionStart+i*MINUTE,closeTime:sessionStart+(i+1)*MINUTE-1,
+        open,high:Math.max(open,close)*1.001,low:Math.min(open,close)*0.999,close,
+        volume:100,quoteVolume:1000,tradeCount:10,takerBuyBaseVolume:55,closed:true});
+      last=close;
+    }
+    return out;
+  };
+  const cohort={TARGETUSDT:makeSeries(25),PEER1USDT:makeSeries(1),PEER2USDT:makeSeries(2),
+    PEER3USDT:makeSeries(3),PEER4USDT:makeSeries(4)};
+  const seen=[];
+  runHistoricalReplay({symbol:'TARGETUSDT',oneMinuteCandles:cohort.TARGETUSDT,marketCohortCandles:cohort,
+    startTime:sessionStart+5*MINUTE,endTime:sessionStart+6*MINUTE,
+    outcomeEndTime:sessionStart+12*MINUTE,outcomeHorizonMs:0,allowCandleOnlyFallback:true,
+    evaluate(input){seen.push({median:input.marketMedianReturnPct,count:input.marketMedianSampleCount,
+      minimum:input.marketMedianMinimumPeerCount,source:input.marketMedianSource});return {accepted:false,reason_codes:['MEDIAN_TEST']};}
+  });
+  assert.ok(seen.length>0);
+  assert.equal(seen[0].source,'HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN');
+  assert.equal(seen[0].count,4);
+  assert.equal(seen[0].minimum,4);
+  assert.ok(Math.abs(seen[0].median-2.5)<0.00001);
+});
+
 test('historical replay passes only timeframe candles closed by the current decision timestamp',()=>{
   const rows=candles(240);
   const start=rows[180].openTime,end=rows[184].closeTime,observationEnd=rows[190].closeTime;
