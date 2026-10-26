@@ -105,6 +105,8 @@ test('ticker-activity watch tier rejects weak, stale, low-liquidity and extended
     data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false,candle_data_valid:true,volume_gate_pass:true}
   };
   assert.ok(buildPreMoveWatchOnlyAlert(base,snapshot,now));
+  assert.ok(buildPreMoveWatchOnlyAlert({...base,ticker_activity:{...base.ticker_activity,score:10.32}},snapshot,now),
+    'moderate but sustained activity is eligible only for the stricter monitor-only lane');
   assert.equal(buildPreMoveWatchOnlyAlert({...base,ticker_activity:{...base.ticker_activity,score:8}},snapshot,now),null);
   assert.equal(buildPreMoveWatchOnlyAlert({...base,ticker_activity:{...base.ticker_activity,observed_at:now-6*60_000}},snapshot,now),null);
   assert.equal(buildPreMoveWatchOnlyAlert({...base,liquidity_quality:65},snapshot,now),null);
@@ -286,8 +288,8 @@ test('final push gate accepts only a fresh, high-confluence ticker-activity moni
     const early={
       ...candidate,symbol:'CFGUSDT',price_change_24h:.59,quote_volume_24h:5_000_000,
       data_quality:100,liquidity_quality:85,
-      ticker_activity:{score:14,volume_delta_per_minute:1200,trade_delta_per_minute:65,
-        volume_acceleration_ratio:2.4,trade_acceleration_ratio:1.7,observed_at:now-45_000,baseline_age_ms:90_000},
+      ticker_activity:{score:10.32,volume_delta_per_minute:29104.16,trade_delta_per_minute:143,
+        volume_acceleration_ratio:2.74,trade_acceleration_ratio:1.45,observed_at:now-45_000,baseline_age_ms:60_000},
       pre_move_context:{...candidate.pre_move_context,score:77.5,session_return_pct:.59,one_hour_return_pct:0,
         volume_acceleration:1.05,trade_acceleration:.92,taker_buy_ratio:.52,taker_buy_acceleration:.084,
         mean_close_location:.48,relative_strength_vs_market_pct:1.32,

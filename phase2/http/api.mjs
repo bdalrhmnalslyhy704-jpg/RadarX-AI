@@ -193,7 +193,7 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     closeLocation!==null&&closeLocation>=0.52,
     relative!==null&&relative>=0.25
   ].filter(Boolean).length;
-  const tickerActivityMonitor=tickerActivityScore!==null&&tickerActivityScore>=12&&
+  const tickerActivityMonitor=tickerActivityScore!==null&&tickerActivityScore>=10&&
     tickerActivityVolumeRatio!==null&&tickerActivityVolumeRatio>=1.35&&
     tickerActivityTradeRatio!==null&&tickerActivityTradeRatio>=1.30&&
     tickerActivityObservedAt!==null&&tickerActivityObservedAt<=Number(now)+5000&&

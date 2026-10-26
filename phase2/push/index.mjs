@@ -376,7 +376,7 @@ export class PushManager{
       ].filter(Boolean).length;
       const tickerActivityMonitor=
         alert?.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'&&
-        tickerActivityScore!==null&&tickerActivityScore>=12&&
+        tickerActivityScore!==null&&tickerActivityScore>=10&&
         tickerActivityVolumeRatio!==null&&tickerActivityVolumeRatio>=1.35&&
         tickerActivityTradeRatio!==null&&tickerActivityTradeRatio>=1.30&&
         tickerActivityObservedAt!==null&&tickerActivityObservedAt<=now+5000&&
