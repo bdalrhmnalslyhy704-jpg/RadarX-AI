@@ -161,6 +161,7 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
   const session=finite(p?.session_return_pct);
   const hour=finite(p?.one_hour_return_pct);
   const price=finite(candidate?.last_price,candidate?.price,p?.current_price);
+  const quoteVolume=finite(candidate?.quote_volume_24h);
   const closeAt=finite(p?.session_close,p?.closed_candle_close_time,candidate?.detected_candle_close_time);
   const volume=finite(p?.volume_acceleration);
   const trades=finite(p?.trade_acceleration);
@@ -270,7 +271,7 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
   if(risks.some(x=>/ALREADY_EXTENDED|EXTENDED_CHASE|HIGH_RISK|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK|LOW_LIQUIDITY/.test(x)))
     return fail('RISK_FLAG_BLOCK');
   if(participation<3)return fail('INDEPENDENT_PARTICIPATION_BELOW_3');
-  return {eligible:true,reason:null,...fields,values:{symbol,p,price,daily,quality,liquidity,closeAt,risks,watch_notification_tier:watchTier,
+  return {eligible:true,reason:null,...fields,values:{symbol,p,price,daily,quality,liquidity,quoteVolume,closeAt,risks,watch_notification_tier:watchTier,
     ticker_activity_watch_evidence:tickerActivityMonitor?{
       score:tickerActivityScore,volume_acceleration_ratio:tickerActivityVolumeRatio,
       trade_acceleration_ratio:tickerActivityTradeRatio,observed_at:tickerActivityObservedAt,
@@ -290,6 +291,7 @@ export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
     radar:'PRE_MOVE',
     radar_name:'رادار ما قبل الحركة',
     symbol,market:'SPOT',direction:'UP_BIAS',price,price_change_24h:daily,
+    quote_volume_24h:quoteVolume,
     data_quality:quality,liquidity_quality:liquidity,
     source:'Binance Public REST',data_stale:false,
     data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false,source:'Binance Public REST',close_time:closeAt},
