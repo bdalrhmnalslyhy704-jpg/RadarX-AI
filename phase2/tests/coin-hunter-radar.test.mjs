@@ -4,8 +4,10 @@ import {
   CoinHunterRadar,
   COIN_HUNTER_DEFAULTS,
   featureSet,
-  findPreMoveCheckpoint
+  findPreMoveCheckpoint,
+  buildCoinHunterNotificationAlert
 } from '../core/coin-hunter-radar.mjs';
+import {evaluateRadarNotificationGate,resetRadarNotificationGateForTests} from '../core/radar-notification-gate.mjs';
 
 const HOUR = 60 * 60 * 1000;
 
@@ -196,6 +198,59 @@ test('Coin Hunter rotates bounded candidate scans across the eligible universe a
   assert.equal(saved.get('RADARX:COIN_HUNTER_ROTATION_CURSOR:V1:USDT').next_cycle,2);
   assert.ok(second.some(symbol=>!first.includes(symbol)),'a fresh process must include candidates omitted by the prior cycle');
   assert.ok(secondRadar.lastCoverage.candidate_rotation_tier_offsets.recovery>=0);
+});
+
+test('Coin Hunter notification payload requires validated Binance candle history and measured order-book liquidity', () => {
+  const now=Date.now(),closeTime=now-60_000;
+  const row={
+    radar:'COIN_HUNTER_RADAR',symbol:'ALPHAUSDT',score:91,decision:'قنص',similarity:82,
+    price:1.025,quote_volume_24h:5_000_000,trade_count_24h:55_000,
+    today_pct:1.7,change_24h_pct:2.1,opportunity_score:91,
+    market_data_validation:{
+      one_hour_valid:true,fifteen_minute_valid:true,
+      one_hour_source:'Binance Public REST',fifteen_minute_source:'Binance Public REST',
+      one_hour_closed_count:72,fifteen_minute_closed_count:96
+    },
+    factors:{
+      today_pct:1.7,one_hour_pct:.3,four_hour_pct:.8,relative_vs_btc_pct:1.5,
+      higher_low_count:5,ema20:1.02,ema50:1.01,
+      micro_volume_acceleration:2.0,micro_trade_acceleration:1.6,micro_taker_buy_ratio:.62,
+      micro_compression_ratio:.55,micro_higher_low_count:5,micro_momentum3:.4,
+      micro_resistance_distance_pct:1.7,early_setup_score:87,
+      early_timing_fingerprint:{
+        closeTime,earlySetupScore:87,volumeAcceleration:2.0,tradeAcceleration:1.6,
+        takerRatio:.62,compressionRatio:.55,higherLowCount:5,momentum3:.4,breakoutRoom:1.7
+      }
+    },
+    reasons:['micro volume acceleration','taker-buy pressure'],
+    risk_flags:[],detected_at:now,source:'Binance Public REST',
+    paper_trading:true,real_order_execution:false,closed_candles_only:true
+  };
+  const liquidity={allowed:true,quality:91,spreadBps:4.2,totalDepth:240000,bidDepth:150000,askDepth:90000,reasons:[]};
+  const alert=buildCoinHunterNotificationAlert(row,liquidity,now);
+  assert.ok(alert);
+  assert.equal(alert.data_quality,100);
+  assert.equal(alert.liquidity_quality,91);
+  assert.equal(alert.data_status.data_valid,true);
+  assert.equal(alert.data_status.stale,false);
+  assert.equal(alert.data_status.candle_closed,true);
+  assert.equal(alert.detected_candle_close_time,closeTime);
+  assert.equal(alert.market,'SPOT');
+  assert.equal(alert.paper_trading,true);
+  assert.equal(alert.real_order_execution,false);
+  resetRadarNotificationGateForTests();
+  const gate=evaluateRadarNotificationGate(alert,{now,commit:false});
+  assert.equal(gate.eligible,true,JSON.stringify({mode:gate.mode,score:gate.score,failures:gate.failures,falcon:gate.falcon_eye}));
+  assert.equal(gate.mode,'STRICT_NOTIFICATION');
+
+  assert.equal(buildCoinHunterNotificationAlert({
+    ...row,market_data_validation:{...row.market_data_validation,one_hour_valid:false}
+  },liquidity,now),null,'invalid candle continuity cannot be converted into a notification');
+  assert.equal(buildCoinHunterNotificationAlert(row,{...liquidity,allowed:false,quality:0},now),null,
+    'unqualified order-book liquidity must block notification');
+  assert.equal(buildCoinHunterNotificationAlert({
+    ...row,market_data_validation:{...row.market_data_validation,one_hour_source:'TEST_FIXTURE'}
+  },liquidity,now),null,'test/mock market history cannot be treated as live alert evidence');
 });
 
 test('Coin Hunter health keeps Spot paper-only and reports unknown confidence honestly', () => {

@@ -1,4 +1,5 @@
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
+import {assessLiquidity, validateSeries} from './data-quality.mjs';
 import {isSpotTradableSymbol} from '../market/universe-scanner.mjs';
 import {isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
 
@@ -210,7 +211,7 @@ export function earlyTimingFingerprint(candles, now = Date.now()) {
     volumeAcceleration:Number.isFinite(recentVol)&&Number.isFinite(baseVol)&&baseVol>0?recentVol/baseVol:null,
     tradeAcceleration:Number.isFinite(recentTrades)&&Number.isFinite(baseTrades)&&baseTrades>0?recentTrades/baseTrades:null,
     takerRatio,compressionRatio,higherLowCount:higherLows,emaSlope,
-    momentum3,breakoutRoom,closeLocation,earlySetupScore:clamp(earlySetupScore)
+    momentum3,breakoutRoom,closeLocation,closeTime:Number(last.closeTime),earlySetupScore:clamp(earlySetupScore)
   };
 }
 
@@ -410,6 +411,107 @@ export function scoreHunter({ticker, features, micro, lesson, todayPct, dayHigh,
   };
 }
 
+function observedNumber(value, fallback = null) {
+  if (value === null || value === undefined || value === '' || typeof value === 'boolean') return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+const publicRestSource = value => /BINANCE[ _-]*PUBLIC[ _-]*REST/i.test(String(value || '').replace(/[^A-Za-z0-9 _-]/g, ''));
+
+/**
+ * Build a notification payload only from validated closed Spot candles plus a
+ * measured live book. Missing depth, stale candles, or an untrusted source fail
+ * closed; no liquidity/data score is inferred from trading volume alone.
+ */
+export function buildCoinHunterNotificationAlert(row, liquidity, now = Date.now()) {
+  if (!row || row.radar !== 'COIN_HUNTER_RADAR') return null;
+  const validation = row.market_data_validation || {};
+  if (validation.one_hour_valid !== true || validation.fifteen_minute_valid !== true ||
+      !publicRestSource(validation.one_hour_source) || !publicRestSource(validation.fifteen_minute_source)) return null;
+  const m = row.factors || {};
+  const micro = m.early_timing_fingerprint || {};
+  const closeTime = observedNumber(micro.closeTime);
+  const ts = observedNumber(now, Date.now());
+  if (closeTime === null || closeTime > ts || ts - closeTime > 20 * 60 * 1000) return null;
+
+  const liqQuality = observedNumber(liquidity?.quality);
+  if (liquidity?.allowed !== true || liqQuality === null || liqQuality < 65 ||
+      observedNumber(liquidity?.spreadBps) === null ||
+      observedNumber(liquidity?.totalDepth) === null) return null;
+
+  const early = observedNumber(m.early_setup_score ?? micro.earlySetupScore);
+  const microVolume = observedNumber(m.micro_volume_acceleration ?? micro.volumeAcceleration);
+  const microTrades = observedNumber(m.micro_trade_acceleration ?? micro.tradeAcceleration);
+  const microTaker = observedNumber(m.micro_taker_buy_ratio ?? micro.takerRatio);
+  const microRoom = observedNumber(m.micro_resistance_distance_pct ?? micro.breakoutRoom);
+  const oneHour = observedNumber(m.one_hour_pct);
+  const fourHour = observedNumber(m.four_hour_pct);
+  const today = observedNumber(m.today_pct ?? row.today_pct);
+  const day24h = observedNumber(row.change_24h_pct);
+  if ([early, microVolume, microTrades, microTaker, microRoom, oneHour, fourHour, today, day24h].some(v => v === null)) return null;
+  if (Math.abs(day24h) > 8 || today < -2.5 || today > 4.5 ||
+      oneHour > 1.8 || fourHour > 3.5 || early < 68 ||
+      microVolume < 1.05 || microTrades < 1.02 || microTaker < 0.505 ||
+      microRoom < 0.35 || microRoom > 4.5) return null;
+
+  const ema20 = observedNumber(m.ema20), ema50 = observedNumber(m.ema50);
+  const emaScore = ema20 !== null && ema50 !== null
+    ? (ema20 >= ema50 ? (Number(row.price) >= ema20 ? 92 : 68) : (Number(row.price) >= ema20 ? 52 : 28))
+    : 45;
+  const volumeScore = clamp((microVolume - 0.8) * 120);
+  const tradeScore = clamp((microTrades - 0.85) * 115);
+  const flowScore = clamp(50 + (microTaker - 0.5) * 500);
+  const compression = observedNumber(m.micro_compression_ratio ?? micro.compressionRatio);
+  const compressionScore = compression === null ? 45 : clamp(100 - compression * 110);
+  const higherLows = observedNumber(m.micro_higher_low_count ?? micro.higherLowCount, 0);
+  const structureScore = clamp(higherLows * 13 * 0.55 + emaScore * 0.45);
+  const relative = observedNumber(m.relative_vs_btc_pct);
+  const relativeScore = relative === null ? 45 : clamp(50 + relative * 8);
+  const triggerScore = clamp(100 - Math.abs(microRoom - 1.8) * 28);
+  const momentumScore = clamp(72 + oneHour * 6 + fourHour * 2);
+  const participationScore = clamp((volumeScore + tradeScore) / 2);
+  const qualityComponents = {
+    structure_score: structureScore, market_structure_score: structureScore,
+    flow_score: flowScore, buying_pressure: flowScore,
+    momentum_score: momentumScore, momentum: momentumScore,
+    relative_score: relativeScore, relative_strength: relativeScore,
+    compression_score: compressionScore, compression: compressionScore, squeeze: compressionScore,
+    trigger_score: triggerScore, breakout_score: triggerScore, breakout: triggerScore,
+    participation_score: participationScore, volume_score: volumeScore, volume: volumeScore,
+    trade_score: tradeScore, trades: tradeScore, taker: flowScore, ema: emaScore, bollinger: compressionScore,
+    data_quality: 100, liquidity: liqQuality
+  };
+  const source = 'Binance Public REST';
+  return decorateRadarAlert({
+    ...row,
+    id: 'COIN_HUNTER:' + String(row.symbol) + ':' + String(closeTime),
+    market: 'SPOT', direction: 'UP',
+    price: Number(row.price), price_change_24h: day24h, price_change_aden_day_pct: today,
+    opportunity_score: Number(row.score), data_quality: 100, liquidity_quality: liqQuality,
+    liquidity_metrics: {
+      liquidity_quality: liqQuality, spread_bps: Number(liquidity.spreadBps),
+      depth_usdt: Number(liquidity.totalDepth), bid_depth_usdt: observedNumber(liquidity.bidDepth),
+      ask_depth_usdt: observedNumber(liquidity.askDepth), source: 'BINANCE_SPOT_ORDER_BOOK'
+    },
+    data_status: {
+      data_valid: true, data_quality: 100, data_stale: false, stale: false,
+      future_data_detected: false, candle_closed: true, source,
+      close_time: closeTime, age_ms: Math.max(0, ts - closeTime)
+    },
+    detected_at: ts, detected_candle_close_time: closeTime, closed_candles_only: true,
+    components: qualityComponents,
+    factors: {...m, today_pct: today, one_hour_pct: oneHour, four_hour_pct: fourHour,
+      micro_volume_acceleration: microVolume, micro_trade_acceleration: microTrades,
+      micro_taker_buy_ratio: microTaker, micro_resistance_distance_pct: microRoom,
+      volume_ratio: microVolume, trade_ratio: microTrades, taker_buy_ratio: microTaker,
+      compression_score: compressionScore, breakout_score: triggerScore,
+      relative_strength: relativeScore, momentum_score: momentumScore,
+      data_quality: 100, liquidity_quality: liqQuality},
+    market_data_validation: {...validation, data_quality: 100, liquidity_source: 'BINANCE_SPOT_ORDER_BOOK'},
+    source, paper_trading: true, real_order_execution: false, confidence_score: 'UNKNOWN'
+  }, '🎯 صائد العملات');
+}
+
 export const COIN_HUNTER_DEFAULTS = Object.freeze({
   quote: 'USDT',
   pollMs: 60000,
@@ -431,9 +533,10 @@ export const COIN_HUNTER_DEFAULTS = Object.freeze({
 });
 
 export class CoinHunterRadar {
-  constructor({rest, store, config = {}, logger = console} = {}) {
+  constructor({rest, store, pushManager = null, config = {}, logger = console} = {}) {
     this.rest = rest;
     this.store = store;
+    this.pushManager = pushManager;
     this.config = {...COIN_HUNTER_DEFAULTS, ...config};
     this.logger = logger;
     this.running = false;
@@ -614,10 +717,14 @@ export class CoinHunterRadar {
               this.rest.klines(t.symbol, '1h', {limit: 72}),
               this.rest.klines(t.symbol, '15m', {limit: 96})
             ]);
-            const closed = closedCandles(k1h.candles, Date.now());
-            const micro = earlyTimingFingerprint(k15m.candles);
-            const features = featureSet(closed, t, btcToday);
-            if (!features || !micro) return null;
+            const validationNow = Date.now();
+            const closed = closedCandles(k1h.candles, validationNow);
+            const closed15m = closedCandles(k15m.candles, validationNow);
+            const micro = earlyTimingFingerprint(closed15m, validationNow);
+            const oneHourValidation = validateSeries(closed.slice(-50), '1h');
+            const fifteenMinuteValidation = validateSeries(closed15m.slice(-24), '15m');
+            const features = featureSet(closed, t, btcToday, validationNow);
+            if (!features || !micro || !oneHourValidation.valid || !fifteenMinuteValidation.valid) return null;
             scanned += 1;
             const day = closed.filter(x=>Number(x.openTime)>=Number(dayStart));
             const dayPct = day.length >= 1 ? pct(Number(day.at(-1).close), Number(day[0].open)) : Number(t.priceChangePercent);
@@ -632,10 +739,23 @@ export class CoinHunterRadar {
               decision:score.decision,
               similarity:score.similarity,
               today_pct:dayPct,
+              change_24h_pct:Number(t.priceChangePercent),
               price:Number(t.lastPrice),
               quote_volume_24h:Number(t.quoteVolume),
               trade_count_24h:Number(t.count),
               factors:{...score.metrics,early_timing_fingerprint:micro},
+              market_data_validation:{
+                one_hour_valid:oneHourValidation.valid,
+                fifteen_minute_valid:fifteenMinuteValidation.valid,
+                one_hour_issues:oneHourValidation.issues.slice(0,5),
+                fifteen_minute_issues:fifteenMinuteValidation.issues.slice(0,5),
+                one_hour_closed_count:closed.length,
+                fifteen_minute_closed_count:closed15m.length,
+                one_hour_source:String(k1h.source||'UNKNOWN'),
+                fifteen_minute_source:String(k15m.source||'UNKNOWN'),
+                latest_one_hour_close_time:Number(closed.at(-1)?.closeTime)||null,
+                latest_fifteen_minute_close_time:Number(closed15m.at(-1)?.closeTime)||null
+              },
               reasons:score.reasons,
               risk_flags:score.risk_flags,
               detected_at:Date.now(),
@@ -659,12 +779,92 @@ export class CoinHunterRadar {
       ranked.sort((a,b) => Number(b.score) - Number(a.score) || Number(b.similarity) - Number(a.similarity));
       this.latestCandidates = ranked.slice(0, Number(this.config.deepCount));
 
-      for (const row of this.latestCandidates.filter(x => x.decision === 'قنص' && Number(x.score) >= Number(this.config.minHunterScore))) {
+      const strongHunterHits=this.latestCandidates.filter(x =>
+        x.decision === 'قنص' && Number(x.score) >= Number(this.config.minHunterScore));
+      const earlyWatchHits=this.latestCandidates.filter(x=>{
+        if(x.decision!=='ترقّب'||Number(x.score)<80)return false;
+        const m=x.factors||{};
+        const early=observedNumber(m.early_setup_score),volume=observedNumber(m.micro_volume_acceleration);
+        const trades=observedNumber(m.micro_trade_acceleration),taker=observedNumber(m.micro_taker_buy_ratio);
+        const room=observedNumber(m.micro_resistance_distance_pct),today=observedNumber(m.today_pct);
+        const oneHour=observedNumber(m.one_hour_pct),fourHour=observedNumber(m.four_hour_pct);
+        const day24h=observedNumber(x.change_24h_pct);
+        return early!==null&&early>=70&&volume!==null&&volume>=1.4&&trades!==null&&trades>=1.15&&
+          taker!==null&&taker>=0.54&&room!==null&&room>=0.5&&room<=4.5&&
+          today!==null&&today>=-1.25&&today<=4.5&&oneHour!==null&&oneHour>=-0.75&&oneHour<=2.5&&
+          fourHour!==null&&fourHour<=3.5&&day24h!==null&&Math.abs(day24h)<=8;
+      });
+      let pushAttempts=0,pushGateBlocked=0,pushSent=0,liquidityRejected=0,pushErrors=0;
+      const notificationRows=[...new Map([...strongHunterHits,...earlyWatchHits].map(row=>[row.symbol,row])).values()];
+      for (const row of notificationRows) {
         const last = this.lastAlertsBySymbol.get(row.symbol) || 0;
-        if (Date.now() - last >= Number(this.config.alertCooldownMs)) {
-          this.lastAlertsBySymbol.set(row.symbol, Date.now());
-          this.alertCount += 1;
-          try { await this.store?.appendCoinHunterAlert?.(row); } catch {}
+        const now = Date.now();
+        if (now - last < Number(this.config.alertCooldownMs)) continue;
+
+        // Only fetch live order-book depth for signals that already passed the
+        // bounded 1h/15m feature scan. Quote volume alone is not a liquidity score.
+        let liquidity,notificationAlert;
+        try {
+          const depth=await this.rest.request('/api/v3/depth?symbol='+encodeURIComponent(row.symbol)+'&limit=20');
+          liquidity=assessLiquidity({
+            book:depth?.data,
+            ticker24h:{quoteVolume:row.quote_volume_24h,count:row.trade_count_24h},
+            minQuality:65
+          });
+        } catch (error) {
+          liquidity=null;
+          this.logger.warn?.('[COIN_HUNTER_LIQUIDITY_UNAVAILABLE] '+JSON.stringify({
+            symbol:row.symbol,error:String(error?.message??error).replace(/[^a-z0-9_.:-]/gi,'_').slice(0,120)
+          }));
+        }
+        if(!liquidity||liquidity.allowed!==true){
+          liquidityRejected++;
+          this.lastAlertsBySymbol.set(row.symbol,now);
+          try{await this.store?.appendCoinHunterAlert?.({...row,notification_status:'BLOCKED_LIQUIDITY_GATE',
+            liquidity_quality:observedNumber(liquidity?.quality),
+            liquidity_gate_reasons:Array.isArray(liquidity?.reasons)?liquidity.reasons:['ORDER_BOOK_UNAVAILABLE'],
+            liquidity_metrics:liquidity?{spread_bps:liquidity.spreadBps,depth_usdt:liquidity.totalDepth}:null,
+            paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'});}catch{}
+          continue;
+        }
+        notificationAlert=buildCoinHunterNotificationAlert(row,liquidity,Date.now());
+        if(!notificationAlert){
+          liquidityRejected++;
+          this.lastAlertsBySymbol.set(row.symbol,now);
+          try{await this.store?.appendCoinHunterAlert?.({...row,notification_status:'BLOCKED_EVIDENCE_VALIDATION'});}catch{}
+          continue;
+        }
+        if(typeof this.pushManager?.notifyRadarAlert==='function'){
+          pushAttempts++;
+          try{
+            const delivery=await this.pushManager.notifyRadarAlert(notificationAlert);
+            const blocked=delivery?.status==='BLOCKED_SHARED_NOTIFICATION_GATE';
+            if(blocked)pushGateBlocked++;
+            else{
+              this.alertCount++;
+              if(Array.isArray(delivery))pushSent+=delivery.filter(item=>item?.status==='SENT').length;
+              else pushSent+=Math.max(0,Math.trunc(Number(delivery?.sent_count)||0));
+            }
+            this.lastAlertsBySymbol.set(row.symbol,Date.now());
+            try{await this.store?.appendCoinHunterAlert?.({...notificationAlert,
+              notification_status:blocked?'BLOCKED_SHARED_NOTIFICATION_GATE':'SHARED_GATE_ACCEPTED',
+              notification_delivery_count:Array.isArray(delivery)?delivery.length:Number(delivery?.attempted_count)||0});}catch{}
+            this.logger.info?.('[COIN_HUNTER_PUSH_RESULT] '+JSON.stringify({
+              symbol:row.symbol,decision:row.decision,score:row.score,
+              notification_status:blocked?'BLOCKED_SHARED_NOTIFICATION_GATE':String(delivery?.status||'SHARED_GATE_ACCEPTED'),
+              delivered:Number(Array.isArray(delivery)?delivery.filter(item=>item?.status==='SENT').length:delivery?.sent_count)||0,
+              paper_trading:true,real_order_execution:false
+            }));
+          }catch(error){
+            pushErrors++;
+            this.lastAlertsBySymbol.set(row.symbol,Date.now());
+            this.logger.warn?.('[COIN_HUNTER_PUSH_FAILED] '+JSON.stringify({
+              symbol:row.symbol,error:String(error?.message??error).replace(/[^a-z0-9_.:-]/gi,'_').slice(0,140)
+            }));
+            try{await this.store?.appendCoinHunterAlert?.({...notificationAlert,notification_status:'PUSH_ATTEMPT_FAILED'});}catch{}
+          }
+        }else{
+          try{await this.store?.appendCoinHunterAlert?.({...notificationAlert,notification_status:'PUSH_MANAGER_UNAVAILABLE'});}catch{}
         }
       }
 
@@ -695,6 +895,13 @@ export class CoinHunterRadar {
         candidate_rotation_cursor_error:candidateRotationCursorError,
         deep_scanned_total: scanned,
         hunter_hits: this.latestCandidates.filter(x => x.decision === 'قنص').length,
+        hunter_strong_hits:strongHunterHits.length,
+        hunter_early_watch_hits:earlyWatchHits.length,
+        hunter_push_attempts:pushAttempts,
+        hunter_push_gate_blocked:pushGateBlocked,
+        hunter_push_sent:pushSent,
+        hunter_liquidity_rejected:liquidityRejected,
+        hunter_push_errors:pushErrors,
         learned_samples: leaderRows.length,
         scan_duration_ms:Math.max(0,Date.now()-started),
         scan_over_watchdog_budget:Date.now()-started>=240000
