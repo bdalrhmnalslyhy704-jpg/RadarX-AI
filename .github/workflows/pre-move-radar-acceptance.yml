@@ -152,22 +152,50 @@ jobs:
           BASE_URL="$BASE/api/multi-analyst?quote=USDT&limit=10"
           REQUEST_ID="gha-${GITHUB_SHA}"
           START_URL="${BASE_URL}&background=1&scan=1&_ts=${REQUEST_ID}"
-          START_CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$RUNNER_TEMP/multi-analyst-start.json" -w "%{http_code}" "$START_URL" || true)"
-          if [ "$START_CODE" != "202" ]; then
-            echo "::error::Could not enqueue the bounded background 20-analyst scan (HTTP $START_CODE)."
-            cat "$RUNNER_TEMP/multi-analyst-start.json" 2>/dev/null || true
+          START_TMP="$RUNNER_TEMP/multi-analyst-start.tmp.json"
+          START_CODE="000"
+          START_CURL_EXIT=0
+          START_CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$START_TMP" -w "%{http_code}" "$START_URL")" || START_CURL_EXIT=$?
+          if [ "$START_CURL_EXIT" -ne 0 ] || [ "$START_CODE" != "202" ]; then
+            echo "::error::Could not enqueue the bounded background 20-analyst scan (curl=$START_CURL_EXIT HTTP=$START_CODE)."
+            cat "$START_TMP" 2>/dev/null | head -c 2000 || true
             exit 1
           fi
 
-          # The whole 19-specialist + final-judge pass can outlast one HTTP request
-          # on the small DHDTech container. Poll explicit progress; never treat a
-          # WARMING response as completed analysis or use cached output as live proof.
+          # One request may be reset after the application has completed a large
+          # JSON response. Treat transport failures and truncated JSON as transient
+          # polling errors; only a parsed, completed live scan can satisfy this gate.
           POLL_URL="${BASE_URL}&progress=1&scan=1&_ts=${REQUEST_ID}"
+          POLL_TMP="$RUNNER_TEMP/multi-analyst.poll.tmp.json"
+          POLL_JSON="$RUNNER_TEMP/multi-analyst.json"
           READY=false
           for attempt in $(seq 1 48); do
-            CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 25 -o "$RUNNER_TEMP/multi-analyst.json" -w "%{http_code}" "$POLL_URL" || true)"
+            rm -f "$POLL_TMP"
+            CURL_EXIT=0
+            CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 25 -o "$POLL_TMP" -w "%{http_code}" "$POLL_URL")" || CURL_EXIT=$?
+            if [ "$CURL_EXIT" -ne 0 ]; then
+              echo "::warning::DHDTech analyst poll transport failed (curl=$CURL_EXIT HTTP=${CODE:-unknown}) on attempt $attempt/48."
+              rm -f "$POLL_TMP"
+              sleep 5
+              continue
+            fi
             case "$CODE" in
               200)
+                if ! node --input-type=module - "$POLL_TMP" <<'NODE'
+          import fs from 'node:fs';
+          try {
+            const body=fs.readFileSync(process.argv[2],'utf8');
+            const parsed=JSON.parse(body);
+            if(!parsed || typeof parsed!=='object' || Array.isArray(parsed)) process.exit(1);
+          } catch { process.exit(1); }
+          NODE
+                then
+                  echo "::warning::DHDTech analyst poll returned incomplete JSON on attempt $attempt/48; retrying without treating it as completed."
+                  rm -f "$POLL_TMP"
+                  sleep 5
+                  continue
+                fi
+                mv "$POLL_TMP" "$POLL_JSON"
                 STATE="$(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/multi-analyst.json','utf8'));console.log(b.status||(b.scan?.completed===true?'ready':'unknown'))")"
                 COMPLETED="$(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/multi-analyst.json','utf8'));console.log(b.scan?.completed===true?'true':'false')")"
                 SCAN_ERROR="$(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/multi-analyst.json','utf8'));console.log(String(b.error||b.scan?.error||b.monitoring?.last_error||b.diagnostics?.last_scan_error||'').replace(/[^A-Za-z0-9_:.-]/g,''))")"
@@ -177,18 +205,20 @@ jobs:
                 fi
                 if [ "$STATE" = "error" ] || { [ "$STATE" = "not_ready" ] && [ -n "$SCAN_ERROR" ]; }; then
                   echo "::error::DHDTech 20-analyst background scan failed: ${SCAN_ERROR:-unknown}"
-                  cat "$RUNNER_TEMP/multi-analyst.json"
+                  cat "$POLL_JSON" | head -c 8000
                   exit 1
                 fi
                 ;;
               202)
+                rm -f "$POLL_TMP"
                 ;;
               502|503|504|000)
                 echo "::warning::DHDTech analyst progress poll transient HTTP $CODE on attempt $attempt/48."
+                rm -f "$POLL_TMP"
                 ;;
               *)
                 echo "::error::DHDTech analyst progress returned non-retryable HTTP $CODE."
-                cat "$RUNNER_TEMP/multi-analyst.json" 2>/dev/null || true
+                cat "$POLL_TMP" 2>/dev/null | head -c 2000 || true
                 exit 1
                 ;;
             esac
@@ -196,7 +226,7 @@ jobs:
           done
           if [ "$READY" != "true" ]; then
             echo "::error::DHDTech 20-analyst background scan did not complete within the bounded polling window."
-            cat "$RUNNER_TEMP/multi-analyst.json" 2>/dev/null || true
+            cat "$POLL_JSON" 2>/dev/null | head -c 8000 || true
             exit 1
           fi
           node --input-type=module <<'NODE'
@@ -238,37 +268,72 @@ jobs:
         run: |
           set -euo pipefail
           URL="$BASE/api/pre-move-radar?quote=USDT&limit=50"
+          PRE_TMP="$RUNNER_TEMP/pre-move-radar.poll.tmp.json"
+          PRE_JSON="$RUNNER_TEMP/pre-move-radar.json"
           READY=false
           for cycle in 1 2; do
-            START_CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$RUNNER_TEMP/pre-move-start.json" -w "%{http_code}" "$URL&scan=1" || true)"
-            if [ "$START_CODE" != "200" ]; then
-              echo "::error::Could not start DHDTech Pre-Move scan (HTTP $START_CODE)"
-              cat "$RUNNER_TEMP/pre-move-start.json" 2>/dev/null || true
+            START_TMP="$RUNNER_TEMP/pre-move-start.tmp.json"
+            START_CURL_EXIT=0
+            START_CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$START_TMP" -w "%{http_code}" "$URL&scan=1")" || START_CURL_EXIT=$?
+            if [ "$START_CURL_EXIT" -ne 0 ] || [ "$START_CODE" != "200" ]; then
+              echo "::error::Could not start DHDTech Pre-Move scan (curl=$START_CURL_EXIT HTTP=$START_CODE)"
+              cat "$START_TMP" 2>/dev/null | head -c 2000 || true
               exit 1
             fi
             for attempt in $(seq 1 36); do
-              CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$RUNNER_TEMP/pre-move-radar.json" -w "%{http_code}" "$URL" || true)"
-              if [ "$CODE" != "200" ]; then
-                echo "::error::DHDTech Pre-Move polling returned HTTP $CODE"
-                cat "$RUNNER_TEMP/pre-move-radar.json" 2>/dev/null || true
-                break
+              rm -f "$PRE_TMP"
+              CURL_EXIT=0
+              CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$PRE_TMP" -w "%{http_code}" "$URL")" || CURL_EXIT=$?
+              if [ "$CURL_EXIT" -ne 0 ]; then
+                echo "::warning::DHDTech Pre-Move poll transport failed (curl=$CURL_EXIT HTTP=${CODE:-unknown}) on cycle $cycle attempt $attempt/36."
+                rm -f "$PRE_TMP"
+                sleep 5
+                continue
               fi
-              STATE="$(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/pre-move-radar.json','utf8'));console.log(b.status||'unknown')")"
-              if [ "$STATE" = "ready" ]; then
-                READY=true
-                break 2
-              fi
-              if [ "$STATE" = "error" ]; then
-                echo "::warning::Pre-Move scan attempt failed: $(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/pre-move-radar.json','utf8'));console.log((b.reason||b.error||'unknown').replace(/[^A-Za-z0-9_:.-]/g,''))")"
-                break
-              fi
-              sleep 10
+              case "$CODE" in
+                200)
+                  if ! node --input-type=module - "$PRE_TMP" <<'NODE'
+          import fs from 'node:fs';
+          try {
+            const body=fs.readFileSync(process.argv[2],'utf8');
+            const parsed=JSON.parse(body);
+            if(!parsed || typeof parsed!=='object' || Array.isArray(parsed)) process.exit(1);
+          } catch { process.exit(1); }
+          NODE
+                  then
+                    echo "::warning::DHDTech Pre-Move poll returned incomplete JSON on cycle $cycle attempt $attempt/36; retrying."
+                    rm -f "$PRE_TMP"
+                    sleep 5
+                    continue
+                  fi
+                  mv "$PRE_TMP" "$PRE_JSON"
+                  STATE="$(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/pre-move-radar.json','utf8'));console.log(b.status||'unknown')")"
+                  if [ "$STATE" = "ready" ]; then
+                    READY=true
+                    break 2
+                  fi
+                  if [ "$STATE" = "error" ]; then
+                    echo "::warning::Pre-Move scan attempt failed: $(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/pre-move-radar.json','utf8'));console.log((b.reason||b.error||'unknown').replace(/[^A-Za-z0-9_:.-]/g,''))")"
+                    break
+                  fi
+                  ;;
+                202|429|502|503|504)
+                  echo "::warning::DHDTech Pre-Move poll transient HTTP $CODE on cycle $cycle attempt $attempt/36."
+                  rm -f "$PRE_TMP"
+                  ;;
+                *)
+                  echo "::error::DHDTech Pre-Move poll returned non-retryable HTTP $CODE."
+                  cat "$PRE_TMP" 2>/dev/null | head -c 2000 || true
+                  exit 1
+                  ;;
+              esac
+              sleep 5
             done
-            if [ "$cycle" -lt 2 ]; then sleep 20; fi
+            if [ "$cycle" -lt 2 ] && [ "$READY" != "true" ]; then sleep 10; fi
           done
           if [ "$READY" != "true" ]; then
-            echo "::error::DHDTech did not complete a live Pre-Move scan within the acceptance window"
-            cat "$RUNNER_TEMP/pre-move-radar.json" 2>/dev/null || true
+            echo "::error::DHDTech did not complete a live Pre-Move scan within the acceptance window."
+            cat "$PRE_JSON" 2>/dev/null | head -c 8000 || true
             exit 1
           fi
           node --input-type=module <<'NODE'
