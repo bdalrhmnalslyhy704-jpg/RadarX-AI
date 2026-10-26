@@ -431,7 +431,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
   const preMoveRadarRefreshFlights=new Map();
   const preMoveRadarRefreshRetryAfter=new Map();
   const preMoveRadarLastError=new Map();
-  const preMoveBackgroundIntervalDefaultMs=90000;
+  const preMoveBackgroundIntervalDefaultMs=60000;
   const preMoveBackgroundWorkerState={
     enabled:false,running:false,interval_ms:Math.max(60000,Math.min(600000,
       Math.trunc(Number(config.marketRadar?.preMoveBackgroundIntervalMs)||preMoveBackgroundIntervalDefaultMs))),

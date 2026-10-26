@@ -255,7 +255,7 @@ export async function startServer({
     // Keep Pre-Move surveillance independent of whether the Android screen is open.
     // Its existing strict candidate and notification gates remain authoritative.
     const preMoveWorker=api.startPreMoveWatchWorker?.({
-      intervalMs:config.marketRadar?.preMoveBackgroundIntervalMs??90000,initialDelayMs:10000
+      intervalMs:config.marketRadar?.preMoveBackgroundIntervalMs??60000,initialDelayMs:10000
     });
     logger.info('[PRE_MOVE_BACKGROUND_WORKER_STATUS] '+JSON.stringify(preMoveWorker||{status:'UNAVAILABLE'}));
   } else if(stagingSmokeMode){

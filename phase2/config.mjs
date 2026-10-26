@@ -148,7 +148,7 @@ export const CONFIG = Object.freeze({
     maxTriggerAgeMs: 30 * 60 * 1000,
     retryAttempts: 1,
     // Pre-Move background surveillance continues when no Android page is open.
-    preMoveBackgroundIntervalMs: int(process.env.RADARX_PREMOVE_BACKGROUND_INTERVAL_MS, 90000)
+    preMoveBackgroundIntervalMs: int(process.env.RADARX_PREMOVE_BACKGROUND_INTERVAL_MS, 60000)
   },
   symbolDeepScan: {
     quote: 'USDT',
