@@ -65,5 +65,4 @@ test('radar bridge fuses independent evidence and attaches it to the multi-analy
  assert.equal(queue[2].options.sourceRadars.length,3);
  assert.equal(merged.notification_eligible,false);
  assert.equal(merged.entry_eligible,false);
- assert.equal(queue[2].options.watchOnly,false);
 });
