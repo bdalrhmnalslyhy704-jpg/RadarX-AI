@@ -388,17 +388,19 @@ export class PushManager{
         dataQuality!==null&&dataQuality>=85&&liquidityQuality!==null&&liquidityQuality>=75&&
         structure!==null&&structure>=50&&tickerActivityFlowChecks>=2;
       const preMoveMonitorCorridor=highActivityStructurePending||earlyFlowMonitor||tickerActivityMonitor;
-      if(session<(highActivityStructurePending?-0.75:(earlyFlowMonitor||tickerActivityMonitor)?-1.25:0)||
-         session>((earlyFlowMonitor||tickerActivityMonitor)?4.5:6)||
-         hour<(highActivityStructurePending?-0.5:(earlyFlowMonitor||tickerActivityMonitor)?-0.75:0.15)||
-         hour>((earlyFlowMonitor||tickerActivityMonitor)?2.5:4.5))
-        return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
+      // Validate the claimed special tier before generic price-window checks so bad
+      // or stale tier evidence is rejected for the right reason at the final gate.
       if(alert?.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'&&!highActivityStructurePending)
         return rejected('PRE_MOVE_HIGH_ACTIVITY_TIER_UNVERIFIED');
       if(alert?.watch_notification_tier==='EARLY_FLOW_MONITOR'&&!earlyFlowMonitor)
         return rejected('PRE_MOVE_EARLY_FLOW_TIER_UNVERIFIED');
       if(alert?.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'&&!tickerActivityMonitor)
         return rejected('PRE_MOVE_TICKER_ACTIVITY_TIER_UNVERIFIED');
+      if(session<(highActivityStructurePending?-0.75:(earlyFlowMonitor||tickerActivityMonitor)?-1.25:0)||
+         session>((earlyFlowMonitor||tickerActivityMonitor)?4.5:6)||
+         hour<(highActivityStructurePending?-0.5:(earlyFlowMonitor||tickerActivityMonitor)?-0.75:0.15)||
+         hour>((earlyFlowMonitor||tickerActivityMonitor)?2.5:4.5))
+        return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
       const independentEvidenceFloor=tickerActivityMonitor?3:preMoveMonitorCorridor?4:3;
       if(structure===null||(structure<(preMoveMonitorCorridor?50:60))||
          independentEvidence<independentEvidenceFloor)
