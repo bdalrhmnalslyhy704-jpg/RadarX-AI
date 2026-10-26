@@ -11,6 +11,28 @@ import {pushSubscription} from './fixtures.mjs';
 import {emptyRadarSignalOutcomeState} from '../core/radar-signal-outcomes.mjs';
 import {SCAN_JOURNEY_SCHEMA} from '../core/scan-journey-ledger.mjs';
 
+test('Pre-Move background worker fails explicitly when its market-data scanner is not wired',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-worker-status-')),store=await new DurableStore({dir}).init();
+  const config={auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}};
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider()});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    assert.equal(typeof server.startPreMoveWatchWorker,'function');
+    const started=server.startPreMoveWatchWorker({initialDelayMs:0});
+    assert.equal(started.status,'UNAVAILABLE');assert.equal(started.scanner_ready,false);
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/pre-move-radar-status');
+    assert.equal(response.status,200);
+    const status=await response.json();
+    assert.equal(status.status,'UNAVAILABLE');assert.equal(status.scanner_ready,false);
+    assert.equal(status.worker.enabled,false);assert.equal(status.paper_trading,true);
+    assert.equal(status.real_order_execution,false);
+  }finally{
+    server.stopPreMoveWatchWorker?.();await new Promise(resolve=>server.close(resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('TEST_FIXTURE: subscription/settings API requires auth and never returns push keys',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-api-')),store=await new DurableStore({dir}).init();
   const secret='TEST_FIXTURE_AUTH_SECRET';

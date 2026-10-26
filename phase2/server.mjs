@@ -252,6 +252,12 @@ export async function startServer({
   if(autoStart){
     const swarmStatus=await radarSwarm.start();
     logger.info('[RADAR_SWARM_START] '+JSON.stringify({status:swarmStatus.status,expected:swarmStatus.expected_count,registered:swarmStatus.registered_count,spacing_ms:swarmStatus.startup_spacing_ms}));
+    // Keep Pre-Move surveillance independent of whether the Android screen is open.
+    // Its existing strict candidate and notification gates remain authoritative.
+    const preMoveWorker=api.startPreMoveWatchWorker?.({
+      intervalMs:config.marketRadar?.preMoveBackgroundIntervalMs??90000,initialDelayMs:10000
+    });
+    logger.info('[PRE_MOVE_BACKGROUND_WORKER_STATUS] '+JSON.stringify(preMoveWorker||{status:'UNAVAILABLE'}));
   } else if(stagingSmokeMode){
     logger.info('[RADAR_SWARM_START] '+JSON.stringify({status:'DISABLED_FOR_STAGING_SMOKE',expected:12,registered:12,spacing_ms:config.radarSwarm?.startupSpacingMs??700}));
   } else {
@@ -261,7 +267,7 @@ export async function startServer({
   }
   if(!stagingSmokeMode)safeStart('RADAR_SIGNAL_OUTCOME_WORKER',radarSignalOutcomeWorker);
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
-  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,marketWideKlineCache,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,radarSwarm,multiAnalystRadar,symbolDeepAnalyzer,store,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,multiAnalystRest,coinHunterRest,whaleAccumulationRest,marketRadarRest,radarSignalOutcomeWorker,push,close:async()=>{radarSignalOutcomeWorker.stop();await radarSwarm.stop();multiAnalystRadar.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
+  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,marketWideKlineCache,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,radarSwarm,multiAnalystRadar,symbolDeepAnalyzer,store,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,multiAnalystRest,coinHunterRest,whaleAccumulationRest,marketRadarRest,radarSignalOutcomeWorker,push,close:async()=>{api.stopPreMoveWatchWorker?.();radarSignalOutcomeWorker.stop();await radarSwarm.stop();multiAnalystRadar.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
 }
 
 if(process.argv[1]&&resolve(fileURLToPath(import.meta.url))===resolve(process.argv[1])){

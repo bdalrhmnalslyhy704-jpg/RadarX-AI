@@ -431,6 +431,92 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
   const preMoveRadarRefreshFlights=new Map();
   const preMoveRadarRefreshRetryAfter=new Map();
   const preMoveRadarLastError=new Map();
+  const preMoveBackgroundIntervalDefaultMs=90000;
+  const preMoveBackgroundWorkerState={
+    enabled:false,running:false,interval_ms:Math.max(60000,Math.min(600000,
+      Math.trunc(Number(config.marketRadar?.preMoveBackgroundIntervalMs)||preMoveBackgroundIntervalDefaultMs))),
+    scan_attempts:0,successful_scans:0,last_started_at:null,last_scan_at:null,last_scan_status:'NOT_STARTED',
+    last_duration_ms:null,last_error:null,last_summary:null
+  };
+  let preMoveBackgroundInterval=null,preMoveBackgroundInitialTimer=null,preMoveBackgroundInFlight=false;
+  function preMoveBackgroundWorkerSnapshot(){
+    const state=preMoveBackgroundWorkerState,enabled=state.enabled===true;
+    const status=!preMoveRadarScanner?'UNAVAILABLE':
+      state.running?'SCANNING':!enabled?'IDLE':state.last_error?'DEGRADED':state.last_scan_at?'RUNNING':'STARTING';
+    return {status,scanner_ready:Boolean(preMoveRadarScanner),worker:{
+      enabled,running:state.running===true,in_flight:preMoveBackgroundInFlight||preMoveRadarRefreshFlights.has('USDT:50'),
+      interval_ms:state.interval_ms,scan_attempts:state.scan_attempts,successful_scans:state.successful_scans,
+      last_started_at:state.last_started_at,last_scan_at:state.last_scan_at,last_scan_status:state.last_scan_status,
+      last_duration_ms:state.last_duration_ms,last_error:state.last_error,last_summary:state.last_summary
+    },paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'};
+  }
+  async function runPreMoveBackgroundScan(){
+    if(!preMoveRadarScanner||preMoveBackgroundInFlight)return null;
+    preMoveBackgroundInFlight=true;preMoveBackgroundWorkerState.running=true;
+    preMoveBackgroundWorkerState.scan_attempts+=1;preMoveBackgroundWorkerState.last_started_at=new Date().toISOString();
+    preMoveBackgroundWorkerState.last_error=null;
+    const startedAt=Date.now();
+    try{
+      const task=refreshPreMoveRadarSnapshot('USDT:50','USDT',50);
+      if(!task)throw new Error('PRE_MOVE_SCAN_RETRY_COOLDOWN');
+      const snapshot=await task,universe=snapshot?.universe||{},diagnostics=snapshot?.watch_notification_diagnostics||{};
+      const watchAlerts=Array.isArray(snapshot?.watch_notification_candidates)?snapshot.watch_notification_candidates:[];
+      const summary={
+        discovered:Number(universe.discovered)||0,deep_scanned:Number(universe.deep_scanned)||0,
+        scanned:Number(universe.scanned)||0,valid_data:Number(universe.valid_data)||0,
+        observed_candle_data:Number(universe.observed_candle_data)||0,watch_only:Number(universe.watch_only)||0,
+        actionable:Number(universe.actionable)||0,returned:Number(universe.returned)||0,
+        elapsed_ms:Number(universe.elapsed_ms)||Math.max(0,Date.now()-startedAt),
+        eligible_spot_symbols:Number(universe.eligible_spot_symbols)||0,coverage_mode:String(universe.coverage_mode||'UNKNOWN'),
+        rotation_cycle:Number(universe.rotation_cycle)||0,rotation_offset:Number(universe.rotation_offset)||0,
+        watch_notification_evaluated:Number(diagnostics.evaluated)||0,
+        watch_notification_eligible:Number(diagnostics.eligible)||watchAlerts.length,
+        watch_notification_rejected:Number(diagnostics.rejected)||0,
+        watch_notification_symbols:watchAlerts.map(x=>String(x.symbol||'')).filter(Boolean).slice(0,3)
+      };
+      preMoveBackgroundWorkerState.successful_scans+=1;
+      preMoveBackgroundWorkerState.last_scan_at=new Date().toISOString();
+      preMoveBackgroundWorkerState.last_scan_status='READY';
+      preMoveBackgroundWorkerState.last_duration_ms=Math.max(0,Date.now()-startedAt);
+      preMoveBackgroundWorkerState.last_error=null;preMoveBackgroundWorkerState.last_summary=summary;
+      console.info?.('[PRE_MOVE_BACKGROUND_SCAN_COMPLETE] '+JSON.stringify({
+        at:preMoveBackgroundWorkerState.last_scan_at,duration_ms:preMoveBackgroundWorkerState.last_duration_ms,
+        ...summary,paper_trading:true,real_order_execution:false
+      }));
+      return snapshot;
+    }catch(error){
+      const message=String(error?.message??error??'PRE_MOVE_BACKGROUND_SCAN_FAILED').slice(0,180);
+      preMoveBackgroundWorkerState.last_scan_at=new Date().toISOString();preMoveBackgroundWorkerState.last_scan_status='FAILED';
+      preMoveBackgroundWorkerState.last_duration_ms=Math.max(0,Date.now()-startedAt);preMoveBackgroundWorkerState.last_error=message;
+      console.warn?.('[PRE_MOVE_BACKGROUND_SCAN_FAILED] '+JSON.stringify({
+        at:preMoveBackgroundWorkerState.last_scan_at,error:message,
+        duration_ms:preMoveBackgroundWorkerState.last_duration_ms,paper_trading:true,real_order_execution:false
+      }));
+      return null;
+    }finally{preMoveBackgroundWorkerState.running=false;preMoveBackgroundInFlight=false;}
+  }
+  function startPreMoveWatchWorker({intervalMs,initialDelayMs=10000}={}){
+    if(!preMoveRadarScanner)return {status:'UNAVAILABLE',scanner_ready:false,reason:'MARKET_DATA_CLIENT_NOT_INITIALIZED'};
+    if(preMoveBackgroundInterval)return preMoveBackgroundWorkerSnapshot();
+    const requestedInterval=Number(intervalMs??config.marketRadar?.preMoveBackgroundIntervalMs)||preMoveBackgroundIntervalDefaultMs;
+    const safeInterval=Math.max(60000,Math.min(600000,Math.trunc(requestedInterval)));
+    const delay=Math.max(0,Math.min(safeInterval,Math.trunc(Number(initialDelayMs)||0)));
+    preMoveBackgroundWorkerState.interval_ms=safeInterval;preMoveBackgroundWorkerState.enabled=true;preMoveBackgroundWorkerState.last_error=null;
+    preMoveBackgroundInterval=setInterval(()=>{void runPreMoveBackgroundScan();},safeInterval);preMoveBackgroundInterval.unref?.();
+    preMoveBackgroundInitialTimer=setTimeout(()=>{preMoveBackgroundInitialTimer=null;void runPreMoveBackgroundScan();},delay);
+    preMoveBackgroundInitialTimer.unref?.();
+    console.info?.('[PRE_MOVE_BACKGROUND_WORKER_STARTED] '+JSON.stringify({
+      interval_ms:safeInterval,initial_delay_ms:delay,quote:'USDT',limit:50,scanner_ready:true,paper_trading:true,real_order_execution:false
+    }));
+    return preMoveBackgroundWorkerSnapshot();
+  }
+  function stopPreMoveWatchWorker(){
+    if(preMoveBackgroundInterval)clearInterval(preMoveBackgroundInterval);
+    if(preMoveBackgroundInitialTimer)clearTimeout(preMoveBackgroundInitialTimer);
+    preMoveBackgroundInterval=null;preMoveBackgroundInitialTimer=null;
+    preMoveBackgroundWorkerState.enabled=false;preMoveBackgroundWorkerState.running=false;preMoveBackgroundInFlight=false;
+    return preMoveBackgroundWorkerSnapshot();
+  }
   const preMoveRadarCacheTtlMs=Math.max(10000,Math.min(120000,Number(config.marketRadar?.preMoveResponseCacheTtlMs)||30000));
   const preMoveRadarRetryCooldownMs=Math.max(5000,Math.min(60000,Number(config.marketRadar?.preMoveResponseCacheRetryMs)||15000));
   const marketRadarCacheTtlMs=Math.max(5000,Math.min(120000,Number(config.marketRadar?.responseCacheTtlMs)||30000));
@@ -655,7 +741,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(a.length>=limit){counters.set(key,a);return false;}
     a.push(now);counters.set(key,a);return true;
   }
-  return http.createServer(async(req,res)=>{
+  const apiServer=http.createServer(async(req,res)=>{
     const cors=allowedOrigin(req);if(cors)res.setHeader('access-control-allow-origin',cors);
     res.setHeader('vary','Origin');res.setHeader('referrer-policy','no-referrer');res.setHeader('x-frame-options','DENY');
     if(req.method==='OPTIONS'){res.writeHead(204,{'access-control-allow-origin':cors||'null','access-control-allow-methods':'GET,PUT,POST,DELETE,OPTIONS','access-control-allow-headers':'authorization,content-type'});return res.end();}
@@ -1448,6 +1534,10 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           });
         }
       }
+      if(u.pathname==='/api/pre-move-radar-status'&&req.method==='GET'){
+        return send(res,200,{...preMoveBackgroundWorkerSnapshot(),as_of:new Date().toISOString(),
+          last_background_scan:preMoveBackgroundWorkerState.last_summary});
+      }
       if(u.pathname==='/api/pre-move-radar'&&req.method==='GET'){
         if(!preMoveRadarScanner){
           console.error?.('[PRE_MOVE_RADAR_DEPENDENCY_MISSING] '+JSON.stringify({
@@ -1702,4 +1792,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       return send(res,status,{error:m});
     }
   });
+  apiServer.startPreMoveWatchWorker=startPreMoveWatchWorker;
+  apiServer.stopPreMoveWatchWorker=stopPreMoveWatchWorker;
+  apiServer.preMoveWatchWorkerStatus=preMoveBackgroundWorkerSnapshot;
+  return apiServer;
 }
