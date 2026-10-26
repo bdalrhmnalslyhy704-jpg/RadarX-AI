@@ -818,7 +818,9 @@ test('Pre-Move scan removes already-extended coins before limiting actionable re
   assert.equal(result.universe.rotation_cursor_persisted,true);
   assert.equal(result.universe.rotation_sequence,'COMPLETED_SCAN_CURSOR_V1');
   assert.equal(result.universe.rotation_cycle,0);
-  assert.equal(cursorRows.size,1,'a completed scan must persist the next rotation cursor');
+  assert.equal(cursorRows.size,2,'a completed scan persists both the rotation cursor and ticker activity baseline');
+  assert.ok(cursorRows.has('RADARX:PRE_MOVE_ROTATION_CURSOR:V1:USDT'));
+  assert.ok(cursorRows.has('RADARX:PRE_MOVE_TICKER_ACTIVITY_BASELINE:V1:USDT'));
   const restartedScanner=new MarketUniverseScanner({
     rest:makeRest(),clock:()=>scanNow,rotationStateStore,
     config:{minQuoteVolume24h:750000,scanLimit:2,returnLimit:2,deepConcurrency:2,deepKlines:160},
