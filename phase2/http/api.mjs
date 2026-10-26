@@ -339,6 +339,7 @@ export function buildPreMoveWatchOnlyAlerts(candidates,snapshot,now=Date.now(),l
 
 export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,marketRadarRest=null,radarSwarm=null,radarSignalOutcomeWorker=null}= {}){
   const counters=new Map();
+  const nativePushTestLastAt=new Map();
   let missedMoverAuditCache={at:0,cycles:0,report:null};
   function recordMultiAnalystApiFailure(error){
     const message=String(error?.message??error??'MULTI_ANALYST_SCAN_FAILED').slice(0,240);
@@ -1636,19 +1637,49 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         return send(res,200,{ok:true,deleted});
       }
       if(u.pathname==='/api/push/device/test'&&req.method==='POST'){
-        if(config.environment!=='staging'||config.staging?.testPushEnabled!==true)
-          return send(res,404,{error:'STAGING_TEST_PUSH_DISABLED'});
+        const stagingTestEnabled=config.environment==='staging'&&config.staging?.testPushEnabled===true;
+        const productionNativeTestEnabled=config.environment==='production'&&config.push?.provider==='fcm';
+        if(!stagingTestEnabled&&!productionNativeTestEnabled)
+          return send(res,404,{error:'PUSH_SELF_TEST_DISABLED'});
         if(config.push?.provider!=='fcm'||!pushProvider?.status?.().enabled)
           return send(res,503,{error:'FCM_PUSH_NOT_ENABLED'});
         if(!pushManager)return send(res,503,{error:'PUSH_MANAGER_UNAVAILABLE'});
+        if(!rateOk('fcm-native-test-ip|'+(req.socket.remoteAddress||'unknown'),3))
+          return send(res,429,{error:'FCM_TEST_IP_RATE_LIMITED'});
         const input=await body(req,config.api.maxBodyBytes);
         const installationId=String(input.installation_id||'').trim();
+        const testId=String(input.test_id||'').trim();
         if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(installationId))
           return send(res,400,{error:'INVALID_INSTALLATION_ID'});
-        const result=await pushManager.notifyTestPush({userId:'android:'+installationId,testId:input.test_id});
-        if(result.status==='DUPLICATE')return send(res,409,{error:'DUPLICATE_TEST_PUSH',...result});
-        if(result.status==='NO_SUBSCRIPTIONS')return send(res,409,{error:'NO_ACTIVE_FCM_DEVICE',...result});
-        return send(res,result.status==='SENT'?202:502,{ok:result.status==='SENT',...result});
+        if(!/^[A-Za-z0-9_-]{16,64}$/.test(testId))
+          return send(res,400,{error:'INVALID_TEST_ID'});
+        if(typeof store?.getFcmDevice!=='function')
+          return send(res,503,{error:'FCM_DEVICE_STORE_UNAVAILABLE'});
+        const device=await store.getFcmDevice(installationId);
+        if(!device||device.disabled||device.user_id!=='android:'+installationId)
+          return send(res,409,{error:'NO_ACTIVE_FCM_DEVICE'});
+        const now=Date.now();
+        const last=Number(nativePushTestLastAt.get(installationId)||0);
+        if(last>0&&now-last<5*60_000)
+          return send(res,429,{error:'FCM_TEST_DEVICE_COOLDOWN',retry_after_ms:5*60_000-(now-last)});
+        nativePushTestLastAt.set(installationId,now);
+        if(nativePushTestLastAt.size>2000){
+          const oldest=nativePushTestLastAt.keys().next().value;
+          if(oldest!==undefined&&oldest!==installationId)nativePushTestLastAt.delete(oldest);
+        }
+        let result;
+        try{
+          result=await pushManager.notifyTestPush({userId:'android:'+installationId,testId});
+        }catch(error){
+          if(nativePushTestLastAt.get(installationId)===now)nativePushTestLastAt.delete(installationId);
+          throw error;
+        }
+        if(result.status!=='SENT')nativePushTestLastAt.delete(installationId);
+        if(result.status==='DUPLICATE')return send(res,409,{error:'DUPLICATE_TEST_PUSH',status:result.status});
+        if(result.status==='NO_SUBSCRIPTIONS')return send(res,409,{error:'NO_ACTIVE_FCM_DEVICE'});
+        if(result.status!=='SENT')return send(res,502,{ok:false,status:'FAILED',error:'FCM_TEST_SEND_FAILED'});
+        return send(res,202,{ok:true,status:'SENT',provider:'fcm',installation_id:installationId,
+          test_id:testId,event_id:result.event_id||null,paper_trading:true,real_order_execution:false});
       }
       if(!u.pathname.startsWith('/v1/'))return send(res,404,{error:'NOT_FOUND'});
       const user=authUser(req);if(!user)return send(res,401,{error:'UNAUTHORIZED'});
