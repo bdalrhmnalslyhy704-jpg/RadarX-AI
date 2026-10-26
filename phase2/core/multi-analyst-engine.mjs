@@ -8,6 +8,7 @@ import {
 } from '../market/universe-scanner.mjs';
 
 import {finiteNumberOr} from './finite-number.mjs';
+import {canonicalRadarId} from './radar-evidence-fusion.mjs';
 const clamp=(x,lo=0,hi=100)=>{
   // Null/blank/boolean inputs are missing evidence, not numeric zero.
   const n=finiteNumberOr(x,null);
@@ -714,7 +715,15 @@ function specialistAnalysis(candidate, market={}, calibration=null){
   const priorDirectional=a.filter(x=>x.id!=='DATA_INTEGRITY'&&x.direction!=='NEUTRAL'&&x.score>=60);
   const bullishVotes=priorDirectional.filter(x=>x.direction==='LONG').length,bearishVotes=priorDirectional.filter(x=>x.direction==='BEARISH').length,directionalVotes=bullishVotes+bearishVotes;
   const conflictRatio=directionalVotes?2*Math.min(bullishVotes,bearishVotes)/directionalVotes:0;
-  const sourceRadars=[...new Set((Array.isArray(candidate?._analyst_context?.source_radars)?candidate._analyst_context.source_radars:[]).map(x=>String(x||'').trim().toUpperCase()).filter(Boolean))].slice(0,8);
+  const sourceRows=Array.isArray(candidate?._analyst_context?.source_radars)?candidate._analyst_context.source_radars:[];
+  const sourceRadars=[],sourceIdentities=new Set();
+  for(const value of sourceRows){
+    const label=String(value||'').trim().toUpperCase();if(!label)continue;
+    const identity=canonicalRadarId(label);
+    if(sourceIdentities.has(identity))continue;
+    sourceIdentities.add(identity);sourceRadars.push(label);
+    if(sourceRadars.length>=13)break;
+  }
   const duplicateSourceCount=Math.max(0,sourceRadars.length-1),priorReview=Boolean(candidate?._analyst_context?.radar_review_priority),conflictScore=clamp(100-conflictRatio*100);
   a.push(analyst('MARKET_BREADTH','محلل تعارض الإشارات والتكرار',conflictScore,conflictScore>=68?'LONG':conflictScore<35?'BEARISH':'NEUTRAL',{
     directional_specialists:directionalVotes,bullish_specialists:bullishVotes,bearish_specialists:bearishVotes,directional_conflict_ratio:Math.round(conflictRatio*1000)/1000,source_radars:sourceRadars,unique_source_radar_count:sourceRadars.length,duplicate_source_count:duplicateSourceCount,one_symbol_one_review:true,radar_review_priority:priorReview,duplicate_notification_policy:'CONSOLIDATE_BY_SYMBOL_AND_USE_NOTIFICATION_GATE'
@@ -1198,28 +1207,56 @@ export class MultiAnalystEngine {
     }
   }
 
-  enqueueRadarReview(symbol,{sourceRadar='UNKNOWN_RADAR'}={}){
+  enqueueRadarReview(symbol,{sourceRadar='UNKNOWN_RADAR',sourceRadars=[],fusion=null,watchOnly=false,stage=null}={}){
     const clean=String(symbol||'').trim().toUpperCase();
     if(!/^[A-Z0-9]{2,30}$/.test(clean))return {queued:false,reason:'INVALID_SYMBOL',pending_count:this.pendingRadarReviews.size};
     const now=this.clock();
     this._pruneRadarReviewState(now);
     const source=String(sourceRadar||'UNKNOWN_RADAR').trim().toUpperCase().slice(0,80)||'UNKNOWN_RADAR';
+    const incoming=[source,...(Array.isArray(sourceRadars)?sourceRadars:[])]
+      .map(x=>String(x||'').trim().toUpperCase().slice(0,80)).filter(Boolean);
+    const addSources=item=>{
+      const identities=new Set((item.source_radars||[]).map(canonicalRadarId));
+      for(const label of incoming){
+        const identity=canonicalRadarId(label);
+        if(!identity||identity==='UNKNOWN_RADAR'||identities.has(identity))continue;
+        if(item.source_radars.length>=13)break;
+        item.source_radars.push(label);identities.add(identity);
+      }
+    };
+    const addFusion=item=>{
+      if(!fusion||typeof fusion!=='object')return;
+      const priority=Math.max(0,Math.min(100,Number(fusion.priority_score)||0));
+      if(!item.cross_radar_fusion||priority>=Number(item.review_priority_score||0)){
+        const safeRadars=(Array.isArray(fusion.qualified_radars)?fusion.qualified_radars:[])
+          .map(x=>String(x||'').trim().toUpperCase()).filter(Boolean).slice(0,13);
+        item.cross_radar_fusion={method:'UNIQUE_FRESH_RADAR_EVIDENCE_V1',
+          distinct_radars:Math.max(0,Math.min(13,Math.trunc(Number(fusion.distinct_radars)||safeRadars.length))),
+          qualified_radars:safeRadars,
+          bullish_radars:(Array.isArray(fusion.bullish_radars)?fusion.bullish_radars:[]).map(x=>String(x||'').trim().toUpperCase()).filter(Boolean).slice(0,13),
+          classification:String(fusion.classification||'UNKNOWN').slice(0,80),
+          mean_radar_score:Number.isFinite(Number(fusion.mean_radar_score))?Number(fusion.mean_radar_score):null,
+          priority_score:priority,review_only:true,notification_eligible:false,entry_eligible:false};
+        item.review_priority_score=priority;
+      }
+    };
     const existing=this.pendingRadarReviews.get(clean);
     if(existing){
-      existing.last_queued_at=now;
-      if(!existing.source_radars.includes(source)&&existing.source_radars.length<8)existing.source_radars.push(source);
-      return {queued:true,already_queued:true,symbol:clean,pending_count:this.pendingRadarReviews.size};
+      existing.last_queued_at=now;addSources(existing);addFusion(existing);
+      existing.watch_only=existing.watch_only===true&&watchOnly===true;
+      if(stage)existing.last_stage=String(stage).slice(0,80);
+      return {queued:true,already_queued:true,symbol:clean,pending_count:this.pendingRadarReviews.size,source_radar_count:existing.source_radars.length};
     }
     const capacity=Math.max(1,Math.min(1000,Math.trunc(Number(this.config.radarReviewMaxQueue)||200)));
     if(this.pendingRadarReviews.size>=capacity){
       const oldest=[...this.pendingRadarReviews.values()].sort((a,b)=>a.first_queued_at-b.first_queued_at)[0];
       if(oldest)this.pendingRadarReviews.delete(oldest.symbol);
     }
-    this.pendingRadarReviews.set(clean,{
-      symbol:clean,first_queued_at:now,last_queued_at:now,last_attempt_at:null,
-      attempts:0,last_error:null,source_radars:[source]
-    });
-    return {queued:true,already_queued:false,symbol:clean,pending_count:this.pendingRadarReviews.size};
+    const item={symbol:clean,first_queued_at:now,last_queued_at:now,last_attempt_at:null,
+      attempts:0,last_error:null,source_radars:[],watch_only:watchOnly===true,last_stage:stage?String(stage).slice(0,80):null,
+      cross_radar_fusion:null,review_priority_score:0};
+    addSources(item);addFusion(item);this.pendingRadarReviews.set(clean,item);
+    return {queued:true,already_queued:false,symbol:clean,pending_count:this.pendingRadarReviews.size,source_radar_count:item.source_radars.length};
   }
 
   getLatestAssessment(symbol,{maxAgeMs=Number(this.config.radarReviewAssessmentTtlMs)||180000}={}){
@@ -1441,7 +1478,7 @@ export class MultiAnalystEngine {
       const dueRadarReviews=[...this.pendingRadarReviews.values()]
         .filter(item=>this.clock()-Number(item.last_queued_at||item.first_queued_at||0)<=Math.max(10000,Number(this.config.radarReviewQueueTtlMs)||300000))
         .filter(item=>item.last_attempt_at==null||this.clock()-Number(item.last_attempt_at)>=Math.max(15000,Number(this.config.radarReviewRetryCooldownMs)||60000))
-        .sort((a,b)=>a.first_queued_at-b.first_queued_at)
+        .sort((a,b)=>(Number(b.review_priority_score)||0)-(Number(a.review_priority_score)||0)||a.first_queued_at-b.first_queued_at)
         .map(item=>({item,normalized:normalizedBySymbol.get(item.symbol),raw:rawTickerBySymbol.get(item.symbol)}))
         .filter(row=>row.normalized&&row.raw)
         .slice(0,reviewSlots);
@@ -1523,7 +1560,7 @@ export class MultiAnalystEngine {
           // The final judge remains fail-closed: invalid/stale/future/incomplete data is rejected there.
           this._settleOutcome(ticker.symbol,this.clock(),row?._analysis?.series?.['15m']||[]);
           const reviewContext=this.pendingRadarReviews.get(String(ticker?.symbol||'').toUpperCase());
-          row._analyst_context={snapshot_id:sharedMarketSnapshot.snapshot_id,snapshot_as_of:sharedMarketSnapshot.as_of,source_radars:Array.isArray(reviewContext?.source_radars)?reviewContext.source_radars.slice(0,8):[],radar_review_priority:ticker?._radar_review_priority===true,duplicate_alert_suppressed:false};
+          row._analyst_context={snapshot_id:sharedMarketSnapshot.snapshot_id,snapshot_as_of:sharedMarketSnapshot.as_of,source_radars:Array.isArray(reviewContext?.source_radars)?reviewContext.source_radars.slice(0,13):[],cross_radar_fusion:reviewContext?.cross_radar_fusion||null,radar_review_priority:ticker?._radar_review_priority===true||Number(reviewContext?.review_priority_score)>=70,duplicate_alert_suppressed:false};
           let prior=null;
           try{ prior=await awaitScanStep(this.store?.getIntelligenceMemory?.(ticker.symbol),'MEMORY_READ:'+ticker.symbol) || null; }catch{ prior=null; }
           assertScanDeadline();
@@ -1567,6 +1604,7 @@ export class MultiAnalystEngine {
             quote_volume_24h:row.quote_volume_24h,liquidity_quality:row.liquidity_quality,data_quality:row.data_quality,
             direction:final.direction,verdict:final.verdict,decision:final.decision,final_score:final.score,
             shared_snapshot:specialist.sharedSnapshot,source_radars:row._analyst_context.source_radars,
+            cross_radar_fusion:row._analyst_context.cross_radar_fusion||null,
             consensus:{positive:final.positiveAnalysts,strong:final.strongAnalysts,total:final.totalAnalysts,ratio:final.totalAnalysts>0?final.positiveAnalysts/final.totalAnalysts:0,bearish_strong:Number(final.bearishStrongAnalysts||0)},
             analysts:publicAnalysts,analyst_execution:analystExecution,final_judge:final,
             highlights:specialist.a.filter(x=>x.score>=72).sort((a,b)=>b.score-a.score).slice(0,6),

@@ -1,5 +1,6 @@
 import {recordRadarDecision} from './radar-telemetry.mjs';
 import {advanceSignalLifecycle,evaluateRadarNotificationGate,rememberRadarAlert} from './radar-notification-gate.mjs';
+import {RadarEvidenceFusion} from './radar-evidence-fusion.mjs';
 
 function safeMessage(error){
   return String(error?.message??error??'UNKNOWN_ERROR').replace(/[^a-z0-9_.:-]/gi,'_').slice(0,160);
@@ -16,7 +17,8 @@ export function connectRadarAlertsToAnalysts({
   multiAnalystRadar,
   logger=console,
   clock=()=>Date.now(),
-  decisionRecorder=recordRadarDecision
+  decisionRecorder=recordRadarDecision,
+  evidenceFusion=new RadarEvidenceFusion({clock})
 }={}){
   if(!pushManager||typeof pushManager.notifyRadarAlert!=='function'){
     return {installed:false,reason:'PUSH_MANAGER_NOTIFY_REQUIRED'};
@@ -74,8 +76,20 @@ export function connectRadarAlertsToAnalysts({
           failures:Array.isArray(embeddedGate?.failures)?embeddedGate.failures:[]
         },{now});
       try{alert.signal_lifecycle=lifecycle;}catch{}
+      let fusionDecision=null;
       try{
-        const queued=multiAnalystRadar.enqueueRadarReview(symbol,{sourceRadar});
+        fusionDecision=evidenceFusion.observe({...alert,radar:sourceRadar},{now});
+        if(fusionDecision)try{alert.cross_radar_fusion=fusionDecision;}catch{}
+      }catch(error){
+        try{logger.warn?.('[RADAR_EVIDENCE_FUSION_FAILED] '+JSON.stringify({symbol,radar:sourceRadar,error:safeMessage(error)}));}catch{}
+      }
+      const reviewOptions=fusionDecision&&fusionDecision.qualified_radars?.length>=2
+        ?{sourceRadar,sourceRadars:fusionDecision.qualified_radars,fusion:fusionDecision,
+          watchOnly:alert?.watch_only===true||alert?.entry_eligible===false||embeddedGate?.watch_only===true,
+          stage:String(alert?.potential_label??alert?.stage??alert?.signal_type??'RADAR_ALERT').slice(0,80)}
+        :{sourceRadar};
+      try{
+        const queued=multiAnalystRadar.enqueueRadarReview(symbol,reviewOptions);
         if(queued?.queued&&queued?.already_queued!==true){
           try{
             logger.info?.('[RADAR_ANALYST_REVIEW_QUEUED] '+JSON.stringify({
@@ -171,11 +185,23 @@ export function connectRadarAlertsToAnalysts({
       const sourceRadar=String(alert?.radar??alert?.radar_id??alert?.radar_name??'RADAR_WATCH_ONLY')
         .trim().toUpperCase().slice(0,80)||'RADAR_WATCH_ONLY';
       if(/^[A-Z0-9]{2,30}$/.test(symbol)){
+        let fusionDecision=null;
         try{
-          const queued=multiAnalystRadar.enqueueRadarReview(symbol,{
-            sourceRadar,watchOnly:true,
-            stage:String(alert?.decision_band??alert?.potential_label??alert?.signal_type??'WATCH_EARLY')
-          });
+          fusionDecision=evidenceFusion.observe({...alert,radar:sourceRadar},{now});
+          if(fusionDecision)try{alert.cross_radar_fusion=fusionDecision;}catch{}
+        }catch(error){
+          try{logger.warn?.('[RADAR_WATCH_EVIDENCE_FUSION_FAILED] '+JSON.stringify({symbol,radar:sourceRadar,error:safeMessage(error)}));}catch{}
+        }
+        const watchReviewOptions={
+          sourceRadar,watchOnly:true,
+          stage:String(alert?.decision_band??alert?.potential_label??alert?.signal_type??'WATCH_EARLY')
+        };
+        if(fusionDecision&&fusionDecision.qualified_radars?.length>=2){
+          watchReviewOptions.sourceRadars=fusionDecision.qualified_radars;
+          watchReviewOptions.fusion=fusionDecision;
+        }
+        try{
+          const queued=multiAnalystRadar.enqueueRadarReview(symbol,watchReviewOptions);
           if(queued?.queued&&queued?.already_queued!==true){
             try{
               logger.info?.('[RADAR_ANALYST_WATCH_REVIEW_QUEUED] '+JSON.stringify({
