@@ -93,7 +93,8 @@ const phase2=[
   'phase2/tests/unified-feature-engine.test.mjs',
   'phase2/tests/adaptive-trader-engine.test.mjs',
   'phase2/tests/adaptive-trader-api.test.mjs',
-  'phase2/tests/adaptive-trader-worker.test.mjs'
+  'phase2/tests/adaptive-trader-worker.test.mjs',
+  'phase2/tests/adaptive-trader-execution.test.mjs'
 ];
 
 const scope=process.argv[2]||'all';

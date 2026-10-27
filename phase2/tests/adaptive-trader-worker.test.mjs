@@ -6,6 +6,49 @@ import {join} from 'node:path';
 import {DurableStore} from '../core/store.mjs';
 import {AdaptiveTraderWorker} from '../core/adaptive-trader-worker.mjs';
 
+test('server paper portfolio records isolated trades and persists evidence without live orders',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-trader-paper-'));
+  const store=await new DurableStore({dir}).init();
+  const now=Date.now();
+  const paperCandidate={
+    symbol:'PAPERUSDT',price:1,quote_volume_24h:5_000_000,change_24h_pct:2,score:76,
+    tier:'EARLY_SETUP',data_valid:true,data_stale:false,closed_candles_only:true,
+    paper_candidate:true,entry_eligible:false,paper_trading:true,real_order_execution:false,
+    candle_close_time:now-60_000,as_of:new Date(now).toISOString(),thresholds:{no_chase:true},
+    features:{volume_ratio:2.1,trade_ratio:1.7,taker_buy_ratio:0.59,close_location:0.72,
+      higher_low:true,breakout_above_prior_high:false,compression_ratio:0.7,
+      hourly_return_pct:1.1,relative_strength_vs_btc_pct:0.8}
+  };
+  const snapshotProvider=async()=>({
+    status:'LIVE_DATA',source:'Binance Public REST',as_of:new Date().toISOString(),
+    universe:{eligible_spot_symbols:1,analyzed_symbols:1,valid_symbols:1,requested_limit:40,coverage_pct:100,scan_complete:true},
+    candidates:[paperCandidate],
+    latest_prices:[{symbol:'PAPERUSDT',price:1,quote_volume_24h:5_000_000,change_24h_pct:2}],
+    meta:{live:true,paper_trading:true,real_order_execution:false,closed_candles_only:true,
+      confidence_score:'UNKNOWN',engine:'ADAPTIVE_TRADER_SIDECAR_V1'}
+  });
+  const worker=new AdaptiveTraderWorker({store,snapshotProvider,intervalMs:60_000,scanLimit:40,logger:{info(){},warn(){}}});
+  try{
+    await worker.start({initialDelayMs:60_000});
+    const result=await worker.runOnce();
+    assert.equal(result.status,'SUCCESS');
+    const status=worker.snapshot();
+    assert.equal(status.server_paper_portfolio.open_positions,1);
+    assert.equal(status.server_paper_portfolio.starting_balance,10000);
+    assert.equal(status.paper_validation_profile.ready,false);
+    assert.equal(status.paper_validation_profile.resolved_paper_trades,0);
+    assert.equal(status.real_order_execution,false);
+    const saved=await store.getAdaptiveTraderState();
+    assert.equal(saved.paper_portfolio.mode,'PAPER_ONLY');
+    assert.equal(saved.paper_portfolio.real_order_execution,false);
+    assert.equal(saved.paper_portfolio.open_positions.length,1);
+    assert.equal(saved.paper_portfolio.open_positions[0].symbol,'PAPERUSDT');
+  }finally{
+    await worker.stop();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('background sidecar restores its own memory, resolves outcomes and records possible misses without touching radar stores',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-trader-worker-'));
   const store=await new DurableStore({dir}).init();

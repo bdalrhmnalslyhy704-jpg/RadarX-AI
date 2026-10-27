@@ -9,9 +9,13 @@ on:
       - build224-multi-analyst-20261007
     paths:
       - "phase2/core/adaptive-trader-engine.mjs"
+      - "phase2/core/adaptive-trader-worker.mjs"
+      - "phase2/core/adaptive-trader-execution.mjs"
+      - "phase2/core/store.mjs"
       - "phase2/http/api.mjs"
       - "phase2/server.mjs"
       - "phase2/tests/adaptive-trader-*.test.mjs"
+      - "phase2/tests/run-tests.mjs"
       - "android/app/src/main/assets/adaptive-trader*"
       - "android/app/src/main/assets/index.html"
       - ".github/workflows/adaptive-trader-sidecar.yml"
@@ -34,6 +38,10 @@ jobs:
       - name: Syntax-check isolated sidecar modules
         run: |
           node --check phase2/core/adaptive-trader-engine.mjs
+          node --check phase2/core/adaptive-trader-worker.mjs
+          node --check phase2/core/adaptive-trader-execution.mjs
+          node --check phase2/core/store.mjs
+          node --check phase2/server.mjs
           node --check android/app/src/main/assets/adaptive-trader-client.js
       - name: Unit-test scoring, missed movers, calibration and paper risk
         run: node --test --test-timeout=60000 phase2/tests/adaptive-trader-engine.test.mjs
@@ -41,6 +49,8 @@ jobs:
         run: node --test --test-timeout=60000 phase2/tests/adaptive-trader-api.test.mjs
       - name: Test durable background learning worker
         run: node --test --test-timeout=60000 phase2/tests/adaptive-trader-worker.test.mjs
+      - name: Test guarded Binance Spot execution, risk caps, and OCO protection
+        run: node --test --test-timeout=60000 phase2/tests/adaptive-trader-execution.test.mjs
       - name: Test Android dashboard integration and paper-only guards
         run: |
           node --test --test-timeout=60000 android/app/src/main/assets/tests/adaptive-trader-ui.test.mjs
