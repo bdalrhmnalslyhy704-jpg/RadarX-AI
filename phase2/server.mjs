@@ -27,6 +27,8 @@ import {FalconEyeRadar} from './core/falcon-eye-radar.mjs';
 import {SymbolDeepAnalyzer} from './core/symbol-deep-analyzer.mjs';
 import {MarketUniverseScanner} from './market/universe-scanner.mjs';
 import {createApiServer} from './http/api.mjs';
+import {createAdaptiveTraderSnapshotService} from './core/adaptive-trader-engine.mjs';
+import {AdaptiveTraderWorker} from './core/adaptive-trader-worker.mjs';
 import {assertDeploymentEnvironment,assertReadOnlyStagingConfig} from './deploy/preflight.mjs';
 import {sanitizeLogMessage} from './runtime.mjs';
 import {MultiAnalystEngine} from './core/multi-analyst-engine.mjs';
@@ -139,6 +141,14 @@ export async function startServer({
   const service=new SignalService({deduplicator:dedup,store,pushManager:push,config});
   const monitor=monitorFactory({config,rest,signalService:service,store,pushManager:push,logger});
   const marketRadarRest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
+  // The Adaptive Trader uses an independent read-only scanner and its own short-lived snapshot cache.
+  // It does not feed, configure, or modify any of the twelve existing radar decisions.
+  const adaptiveTraderRest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
+  const adaptiveTraderSnapshotProvider=createAdaptiveTraderSnapshotService({rest:adaptiveTraderRest});
+  const adaptiveTraderWorker=new AdaptiveTraderWorker({
+    store,snapshotProvider:adaptiveTraderSnapshotProvider,logger,
+    intervalMs:300000,scanLimit:40
+  });
   const moveConfig={...(config.moveRadar||{})};
   const moveScanner=new MarketUniverseScanner({rest,rotationStateStore:store,config:{
     minQuoteVolume24h:moveConfig.minQuoteVolume24h,
@@ -226,7 +236,7 @@ export async function startServer({
     ...analystReviewBridge,expected_specialists:19,expected_final_analyst:1,
     mode:'NON_BLOCKING_REVIEW_ONLY',paper_trading:true,real_order_execution:false
   }));
-  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,multiAnalystRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,marketRadarRest,radarSwarm,radarSignalOutcomeWorker});
+  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,multiAnalystRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,marketRadarRest,radarSwarm,radarSignalOutcomeWorker,adaptiveTraderSnapshotProvider,adaptiveTraderWorker});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
   const safeStart=(name,instance)=>{
@@ -242,6 +252,10 @@ export async function startServer({
   // Production retains the continuous analyst worker and all twelve coordinated radars.
   const explicitStagingRadarStart=config.radarControl?.autostart===true;
   const stagingSmokeMode=config.environment==='staging'&&!explicitStagingRadarStart;
+  // Follow Build 224's shared worker-start policy: keep staging smoke isolated; run beside RadarX otherwise.
+  if(!stagingSmokeMode&&config.radarControl?.autostart!==false){
+    safeStart('ADAPTIVE_TRADER_SIDECAR',adaptiveTraderWorker);
+  }
   if(!stagingSmokeMode){
     // Keep the 20-analyst intelligence cache warm continuously in real runtime environments.
     safeStart('MULTI_ANALYST_XFACTOR',multiAnalystRadar);
@@ -267,7 +281,7 @@ export async function startServer({
   }
   if(!stagingSmokeMode)safeStart('RADAR_SIGNAL_OUTCOME_WORKER',radarSignalOutcomeWorker);
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
-  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,marketWideKlineCache,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,radarSwarm,multiAnalystRadar,symbolDeepAnalyzer,store,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,multiAnalystRest,coinHunterRest,whaleAccumulationRest,marketRadarRest,radarSignalOutcomeWorker,push,close:async()=>{api.stopPreMoveWatchWorker?.();radarSignalOutcomeWorker.stop();await radarSwarm.stop();multiAnalystRadar.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
+  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,marketWideKlineCache,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,radarSwarm,multiAnalystRadar,symbolDeepAnalyzer,store,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,multiAnalystRest,coinHunterRest,whaleAccumulationRest,marketRadarRest,radarSignalOutcomeWorker,adaptiveTraderWorker,adaptiveTraderSnapshotProvider,push,close:async()=>{api.stopPreMoveWatchWorker?.();api.stopAdaptiveTraderWorker?.();radarSignalOutcomeWorker.stop();await radarSwarm.stop();multiAnalystRadar.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
 }
 
 if(process.argv[1]&&resolve(fileURLToPath(import.meta.url))===resolve(process.argv[1])){

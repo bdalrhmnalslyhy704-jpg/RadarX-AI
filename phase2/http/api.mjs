@@ -381,7 +381,7 @@ export function buildPreMoveWatchOnlyAlerts(candidates,snapshot,now=Date.now(),l
   return out;
 }
 
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,marketRadarRest=null,radarSwarm=null,radarSignalOutcomeWorker=null}= {}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,marketRadarRest=null,radarSwarm=null,radarSignalOutcomeWorker=null,adaptiveTraderSnapshotProvider=null,adaptiveTraderWorker=null}= {}){
   const counters=new Map();
   const nativePushTestLastAt=new Map();
   let missedMoverAuditCache={at:0,cycles:0,report:null};
@@ -849,6 +849,37 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           market:'BINANCE_SPOT_USDT',paper_trading:true,real_order_execution:false,
           confidence_score:'UNKNOWN',push:{provider:pushProvider?.status?.().provider??'unknown',enabled:pushProvider?.status?.().enabled===true}
         });
+      }
+      if(u.pathname==='/api/adaptive-trader/status'&&req.method==='GET'){
+        if(!adaptiveTraderWorker||typeof adaptiveTraderWorker.snapshot!=='function')return send(res,503,{
+          status:'UNAVAILABLE',enabled:false,running:false,in_flight:false,
+          error:'ADAPTIVE_TRADER_WORKER_UNAVAILABLE',missed_movers:[],
+          memory:{resolved_samples:0,unresolved_samples:0,history_rows:0,potential_missed_movers:0},
+          paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+        });
+        return send(res,200,{service:'RADARX_ADAPTIVE_TRADER_SIDECAR',...adaptiveTraderWorker.snapshot()});
+      }
+      if(u.pathname==='/api/adaptive-trader/market-snapshot'&&req.method==='GET'){
+        if(typeof adaptiveTraderSnapshotProvider!=='function')return send(res,503,{
+          status:'DATA_UNAVAILABLE',error:'ADAPTIVE_TRADER_MARKET_DATA_UNAVAILABLE',candidates:[],latest_prices:[],
+          meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',engine:'ADAPTIVE_TRADER_SIDECAR_V1'}
+        });
+        const rawLimit=Number(u.searchParams.get('limit')||40);
+        const requested=Math.max(40,Math.min(120,Math.trunc(Number.isFinite(rawLimit)?rawLimit:40)));
+        const limit=requested<=60?40:requested<=100?80:120;
+        try{
+          const snapshot=await adaptiveTraderSnapshotProvider({limit});
+          if(!snapshot||!Array.isArray(snapshot.candidates)||snapshot.meta?.paper_trading!==true||
+             snapshot.meta?.real_order_execution!==false||snapshot.meta?.engine!=='ADAPTIVE_TRADER_SIDECAR_V1'){
+            return send(res,503,{status:'DATA_UNAVAILABLE',error:'ADAPTIVE_TRADER_CONTRACT_INVALID',candidates:[],latest_prices:[],
+              meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',engine:'ADAPTIVE_TRADER_SIDECAR_V1'}});
+          }
+          return send(res,snapshot.meta?.live===true?200:503,snapshot);
+        }catch(error){
+          return send(res,502,{status:'DATA_UNAVAILABLE',error:'ADAPTIVE_TRADER_MARKET_DATA_FETCH_FAILED',
+            reason:String(error?.message??error).slice(0,140),candidates:[],latest_prices:[],
+            meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',engine:'ADAPTIVE_TRADER_SIDECAR_V1'}});
+        }
       }
       if(u.pathname==='/healthz'&&req.method==='GET')return send(res,200,{
         ...safeHealth('MONITOR','MONITOR',monitor),
@@ -2037,6 +2068,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     }
   });
   apiServer.startPreMoveWatchWorker=startPreMoveWatchWorker;
+  apiServer.stopAdaptiveTraderWorker=()=>adaptiveTraderWorker?.stop?.()??null;
   apiServer.stopPreMoveWatchWorker=stopPreMoveWatchWorker;
   apiServer.preMoveWatchWorkerStatus=preMoveBackgroundWorkerSnapshot;
   return apiServer;
