@@ -1,3 +1,5 @@
+import { buildBottomMarketContext, buildPreMoveContext } from '../market/universe-scanner.mjs';
+
 const MIN_HISTORY_BARS = 300;
 const INTERVAL_MS = 5 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -42,6 +44,181 @@ function normalizedCandles(input, now) {
     else deduped.push(row);
   }
   return deduped;
+}
+
+function aggregateClosedFiveMinuteCandles(rows, targetIntervalMs, asOf) {
+  const count = targetIntervalMs / INTERVAL_MS;
+  if (!Number.isInteger(count) || count < 1) return [];
+  const buckets = new Map();
+  for (const row of (Array.isArray(rows) ? rows : [])) {
+    const openTime = Number(row?.openTime), closeTime = Number(row?.closeTime);
+    if (!Number.isFinite(openTime) || !Number.isFinite(closeTime) ||
+        closeTime > asOf || closeTime !== openTime + INTERVAL_MS - 1) continue;
+    const bucketStart = Math.floor(openTime / targetIntervalMs) * targetIntervalMs;
+    if (!buckets.has(bucketStart)) buckets.set(bucketStart, []);
+    buckets.get(bucketStart).push(row);
+  }
+  const out = [];
+  for (const [bucketStart, group] of [...buckets.entries()].sort((a,b)=>a[0]-b[0])) {
+    group.sort((a,b)=>Number(a.openTime)-Number(b.openTime));
+    if (group.length !== count) continue;
+    let contiguous = true;
+    for (let i=0;i<count;i++) {
+      const expectedOpen = bucketStart + i * INTERVAL_MS;
+      if (Number(group[i]?.openTime) !== expectedOpen ||
+          Number(group[i]?.closeTime) !== expectedOpen + INTERVAL_MS - 1) {
+        contiguous = false;
+        break;
+      }
+    }
+    if (!contiguous || bucketStart + targetIntervalMs - 1 > asOf) continue;
+    const sumField = field => group.every(row => finite(row?.[field]))
+      ? group.reduce((sum,row)=>sum+Number(row[field]),0) : null;
+    out.push({
+      openTime:bucketStart,
+      closeTime:bucketStart + targetIntervalMs - 1,
+      open:Number(group[0].open),
+      high:Math.max(...group.map(row=>Number(row.high))),
+      low:Math.min(...group.map(row=>Number(row.low))),
+      close:Number(group.at(-1).close),
+      volume:group.reduce((sum,row)=>sum+Number(row.volume),0),
+      quoteVolume:sumField('quoteVolume'),
+      tradeCount:sumField('tradeCount'),
+      takerBuyBaseVolume:sumField('takerBuyBaseVolume'),
+      takerBuyQuoteVolume:sumField('takerBuyQuoteVolume'),
+      closed:true,
+      source:'BINANCE_SPOT_CLOSED_5M_AGGREGATED'
+    });
+  }
+  return out;
+}
+
+function adenMorningStartMs(now) {
+  const offsetMs = 3 * 60 * 60 * 1000;
+  const local = new Date(now + offsetMs);
+  local.setUTCHours(4,0,0,0);
+  let start = local.getTime() - offsetMs;
+  if (start > now) start -= DAY_MS;
+  return start;
+}
+
+/**
+ * Replays the production Pre-Move core against only candles that had closed by
+ * the requested historical timestamp. It deliberately does not claim to replay
+ * historical order-book liquidity, persisted 24h-ticker activity baselines,
+ * scan-rotation timing, or phone push delivery.
+ */
+function replayProductionPreMoveCore(symbol, candles, benchmarkRows, asOf) {
+  const available = (Array.isArray(candles)?candles:[])
+    .filter(row=>Number(row?.closeTime)<=asOf)
+    .sort((a,b)=>Number(a.closeTime)-Number(b.closeTime));
+  const latest = available.at(-1) || null;
+  const empty = (status, reason) => ({
+    status, symbol, as_of:new Date(asOf).toISOString(),
+    source:'BINANCE_SPOT_CLOSED_5M_CANDLES',
+    no_future_data_used:true,
+    latest_closed_candle_at:latest?new Date(latest.closeTime).toISOString():null,
+    history:{closed_5m_candles:available.length,continuous_trailing_24h:false},
+    core_setup_gate_passed:false,
+    full_alert_reconstruction:'UNKNOWN_HISTORICAL_ORDERBOOK_AND_TICKER_ACTIVITY_BASELINE_UNAVAILABLE',
+    reason
+  });
+  if (!latest || available.length < MIN_HISTORY_BARS) {
+    return empty('INSUFFICIENT_HISTORY','NEED_AT_LEAST_300_CLOSED_5M_CANDLES');
+  }
+  const endIndex = available.length - 1;
+  const dailyReturnWindow = available.slice(endIndex-288,endIndex+1);
+  const trailingVolumeWindow = available.slice(endIndex-287,endIndex+1);
+  const continuousTrailing24h = dailyReturnWindow.length===289 &&
+    dailyReturnWindow.every((row,i)=>i===0||
+      Number(row.closeTime)-Number(dailyReturnWindow[i-1].closeTime)===INTERVAL_MS);
+  const priceChange24h = continuousTrailing24h
+    ? pct(Number(dailyReturnWindow[0].close),Number(latest.close)) : null;
+  const quoteVolume24h = continuousTrailing24h &&
+    trailingVolumeWindow.every(row=>finite(row.quoteVolume))
+    ? trailingVolumeWindow.reduce((sum,row)=>sum+Number(row.quoteVolume),0) : null;
+  const tradeCount24h = continuousTrailing24h &&
+    trailingVolumeWindow.every(row=>finite(row.tradeCount))
+    ? trailingVolumeWindow.reduce((sum,row)=>sum+Number(row.tradeCount),0) : null;
+  const highPrice24h = continuousTrailing24h
+    ? Math.max(...trailingVolumeWindow.map(row=>Number(row.high))) : null;
+  const lowPrice24h = continuousTrailing24h
+    ? Math.min(...trailingVolumeWindow.map(row=>Number(row.low))) : null;
+  const ticker = {
+    symbol, lastPrice:Number(latest.close),
+    priceChange24h, quoteVolume24h, tradeCount24h,
+    highPrice24h, lowPrice24h,
+    dataQuality:continuousTrailing24h?100:null,
+    tickerTime:Number(latest.closeTime)
+  };
+  const series = {
+    '15m':aggregateClosedFiveMinuteCandles(available,15*60*1000,asOf),
+    '1h':aggregateClosedFiveMinuteCandles(available,60*60*1000,asOf),
+    '4h':aggregateClosedFiveMinuteCandles(available,4*60*60*1000,asOf)
+  };
+  const contextCandleCount = series['15m'].length;
+  if (contextCandleCount < 16) {
+    return {
+      ...empty('INSUFFICIENT_AGGREGATED_HISTORY','NEED_AT_LEAST_16_COMPLETE_CLOSED_15M_CANDLES'),
+      history:{closed_5m_candles:available.length,closed_15m_candles:contextCandleCount,
+        closed_1h_candles:series['1h'].length,closed_4h_candles:series['4h'].length,
+        continuous_trailing_24h:continuousTrailing24h}
+    };
+  }
+  const sessionStart = adenMorningStartMs(asOf);
+  const btc15 = aggregateClosedFiveMinuteCandles(
+    (Array.isArray(benchmarkRows)?benchmarkRows:[]).filter(row=>Number(row?.closeTime)<=asOf),
+    15*60*1000,asOf
+  );
+  const btcSession = btc15.filter(row=>Number(row.closeTime)>=sessionStart&&Number(row.closeTime)<=asOf);
+  const btcOpen = Number(btcSession[0]?.open);
+  const btcClose = Number(btcSession.at(-1)?.close);
+  const btcReturn = Number.isFinite(btcOpen)&&btcOpen>0&&Number.isFinite(btcClose)
+    ? (btcClose-btcOpen)/btcOpen*100 : null;
+  try {
+    const bottom = buildBottomMarketContext(series,ticker,asOf);
+    const context = buildPreMoveContext(series,ticker,asOf,bottom,{btcReturn});
+    const coreReady = continuousTrailing24h &&
+      ['READY','EARLY_WAKE'].includes(context.stage) &&
+      context.evidence_complete===true &&
+      context.flow_transition_confirmed===true &&
+      context.price_window_valid===true &&
+      context.structure_confirmed===true &&
+      context.already_moved!==true;
+    return {
+      status:continuousTrailing24h?'CORE_CONTEXT_REPLAYED':'INCOMPLETE_TRAILING_24H_HISTORY',
+      symbol,as_of:new Date(asOf).toISOString(),
+      source:'BINANCE_SPOT_CLOSED_5M_AGGREGATED_TO_15M',
+      no_future_data_used:available.every(row=>Number(row.closeTime)<=asOf),
+      latest_closed_candle_at:new Date(latest.closeTime).toISOString(),
+      history:{
+        closed_5m_candles:available.length,closed_15m_candles:series['15m'].length,
+        closed_1h_candles:series['1h'].length,closed_4h_candles:series['4h'].length,
+        continuous_trailing_24h:continuousTrailing24h,
+        reconstructed_24h_return_pct:priceChange24h,
+        reconstructed_quote_volume_24h:quoteVolume24h,
+        historical_ticker_fields_reconstructed_from_candles:true
+      },
+      market_context:{btc_session_return_pct:Number.isFinite(btcReturn)?btcReturn:null},
+      core:{
+        stage:context.stage,score:context.score,evidence_complete:context.evidence_complete,
+        flow_transition_confirmed:context.flow_transition_confirmed,
+        price_window_valid:context.price_window_valid,structure_confirmed:context.structure_confirmed,
+        already_moved:context.already_moved,session_return_pct:context.session_return_pct,
+        one_hour_return_pct:context.one_hour_return_pct,
+        volume_acceleration:context.volume_acceleration,trade_acceleration:context.trade_acceleration,
+        taker_buy_ratio:context.taker_buy_ratio,taker_buy_acceleration:context.taker_buy_acceleration,
+        mean_close_location:context.mean_close_location,
+        relative_strength_vs_btc_pct:context.relative_strength_vs_btc_pct,
+        components:context.components,missing_evidence:context.missing_evidence,reasons:context.reasons
+      },
+      core_setup_gate_passed:coreReady,
+      full_alert_reconstruction:'UNKNOWN_HISTORICAL_ORDERBOOK_AND_TICKER_ACTIVITY_BASELINE_UNAVAILABLE',
+      limitation:'CORE_STAGE_REPLAY_ONLY_NOT_PROOF_THAT_A_LIVE_ALERT_OR_PHONE_PUSH_WOULD_HAVE_OCCURRED'
+    };
+  } catch (error) {
+    return empty('CORE_REPLAY_ERROR',String(error?.message??error??'CORE_REPLAY_ERROR').slice(0,160));
+  }
 }
 
 function indexAtOrBefore(rows, time) {
@@ -334,6 +511,14 @@ export function buildEarlyMoverCaseStudy(symbol, inputCandles, {
   summary.intraday_runup = buildFirstIntradayRunup(candles, benchmark, {
     now: asOf, searchWindowHours: window, runupWindowHours: 4, thresholdPct: threshold
   });
+  if (Array.isArray(summary.intraday_runup?.lead_snapshots_before_runup)) {
+    summary.intraday_runup.lead_snapshots_before_runup =
+      summary.intraday_runup.lead_snapshots_before_runup.map(row=>({
+        ...row,
+        production_pre_move_replay:row.status==='CLOSED_CANDLE_SNAPSHOT'&&row.observed_at
+          ?replayProductionPreMoveCore(cleanSymbol,candles,benchmark,Date.parse(row.observed_at)):null
+      }));
+  }
   if (candles.length < MIN_HISTORY_BARS) {
     summary.reason = 'NEED_AT_LEAST_300_CLOSED_5M_CANDLES_FOR_A_24H_BASELINE_AND_LEAD_UP';
     return summary;
@@ -399,7 +584,8 @@ export function buildEarlyMoverCaseStudy(symbol, inputCandles, {
     minutes_before_crossing: Number(((crossing.closeTime - preMove.closeTime) / 60000).toFixed(2)),
     price_change_from_pre_move_to_crossing_pct: postMovePct,
     features: preFeatures,
-    early_evidence: preFeatures.early_evidence
+    early_evidence: preFeatures.early_evidence,
+    production_pre_move_replay:replayProductionPreMoveCore(cleanSymbol,candles,benchmark,preMove.closeTime)
   } : {
     observed_at: null,
     price: null,
@@ -410,7 +596,8 @@ export function buildEarlyMoverCaseStudy(symbol, inputCandles, {
   summary.at_crossing = {
     observed_at: new Date(crossing.closeTime).toISOString(),
     features: crossingFeatures,
-    early_evidence: crossingFeatures.early_evidence
+    early_evidence: crossingFeatures.early_evidence,
+    production_pre_move_replay:replayProductionPreMoveCore(cleanSymbol,candles,benchmark,crossing.closeTime)
   };
 
   // Compare fixed closed-candle snapshots instead of relying on one lead time.
@@ -442,7 +629,8 @@ export function buildEarlyMoverCaseStudy(symbol, inputCandles, {
       price: row.close,
       minutes_before_crossing: Number(((crossing.closeTime - row.closeTime) / 60000).toFixed(2)),
       price_change_to_crossing_pct: pct(row.close, crossing.close),
-      features
+      features,
+      production_pre_move_replay:replayProductionPreMoveCore(cleanSymbol,candles,benchmark,row.closeTime)
     };
   });
 
