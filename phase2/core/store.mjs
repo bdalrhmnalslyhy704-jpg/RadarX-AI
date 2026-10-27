@@ -180,7 +180,7 @@ export class DurableStore {
     this.scanJourneyDir=join(dir,'scan-journeys');
     this.files={scanJourneyManifest:join(dir,'scan-journey-manifest.json'),subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
       signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),radarSignalOutcomes:join(dir,'radar-signal-outcomes.json'),
-      intelligenceMemory:join(dir,'intelligence-memory.json'),strongMoveAlerts:join(dir,'strong-move-alerts.jsonl'),predictionCalibration:join(dir,'prediction-calibration.json'),rotationAlerts:join(dir,'rotation-alerts.jsonl'),liquidityAbsorptionAlerts:join(dir,'liquidity-absorption-alerts.jsonl'),kahirAlerts:join(dir,'kahir-alerts.jsonl'),doomsdayAlerts:join(dir,'doomsday-alerts.jsonl'),professorAlerts:join(dir,'professor-alerts.jsonl'),alMuqawimAlerts:join(dir,'al-muqawim-alerts.jsonl'),coinHunterAlerts:join(dir,'coin-hunter-alerts.jsonl'),whaleAccumulationAlerts:join(dir,'whale-accumulation-alerts.jsonl'),falconEyeAlerts:join(dir,'falcon-eye-alerts.jsonl'),schedulerEvents:join(dir,'scan-scheduler-events.jsonl'),earlyExpansionEvents:join(dir,'early-expansion-events.jsonl')};}
+      intelligenceMemory:join(dir,'intelligence-memory.json'),adaptiveTraderState:join(dir,'adaptive-trader-state.json'),strongMoveAlerts:join(dir,'strong-move-alerts.jsonl'),predictionCalibration:join(dir,'prediction-calibration.json'),rotationAlerts:join(dir,'rotation-alerts.jsonl'),liquidityAbsorptionAlerts:join(dir,'liquidity-absorption-alerts.jsonl'),kahirAlerts:join(dir,'kahir-alerts.jsonl'),doomsdayAlerts:join(dir,'doomsday-alerts.jsonl'),professorAlerts:join(dir,'professor-alerts.jsonl'),alMuqawimAlerts:join(dir,'al-muqawim-alerts.jsonl'),coinHunterAlerts:join(dir,'coin-hunter-alerts.jsonl'),whaleAccumulationAlerts:join(dir,'whale-accumulation-alerts.jsonl'),falconEyeAlerts:join(dir,'falcon-eye-alerts.jsonl'),schedulerEvents:join(dir,'scan-scheduler-events.jsonl'),earlyExpansionEvents:join(dir,'early-expansion-events.jsonl')};}
   async init({legacyDir=null}={}){
     await mkdir(this.dir,{recursive:true});
     await mkdir(this.scanJourneyDir,{recursive:true});
@@ -376,6 +376,32 @@ export class DurableStore {
   async putPredictionCalibration(symbol,value){
     const key=String(symbol||'').trim().toUpperCase();if(!key)throw new Error('INVALID_PREDICTION_CALIBRATION_SYMBOL');
     return this.lock(async()=>{const a=await this.readJson(this.files.predictionCalibration);a[key]={...value,symbol:key,updated_at:Date.now()};await this.writeJson(this.files.predictionCalibration,a);return a[key];});
+  }
+  async getAdaptiveTraderState(){
+    return this.readJson(this.files.adaptiveTraderState);
+  }
+  async putAdaptiveTraderState(value){
+    if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('ADAPTIVE_TRADER_STATE_INVALID');
+    const safe={
+      version:1,
+      updated_at:Date.now(),
+      enabled:value.enabled===true,
+      scan_count:Math.max(0,Math.trunc(Number(value.scan_count)||0)),
+      successful_scans:Math.max(0,Math.trunc(Number(value.successful_scans)||0)),
+      last_started_at:Number.isFinite(Number(value.last_started_at))?Number(value.last_started_at):null,
+      last_scan_at:Number.isFinite(Number(value.last_scan_at))?Number(value.last_scan_at):null,
+      last_duration_ms:Number.isFinite(Number(value.last_duration_ms))?Math.max(0,Number(value.last_duration_ms)):null,
+      last_error:value.last_error==null?null:String(value.last_error).slice(0,240),
+      last_summary:value.last_summary&&typeof value.last_summary==='object'?value.last_summary:null,
+      learning_profile:value.learning_profile&&typeof value.learning_profile==='object'?value.learning_profile:null,
+      samples:Array.isArray(value.samples)?value.samples.filter(x=>x&&typeof x==='object').slice(-1000):[],
+      price_history:Array.isArray(value.price_history)?value.price_history.filter(x=>x&&typeof x==='object').slice(-5000):[],
+      missed_movers:Array.isArray(value.missed_movers)?value.missed_movers.filter(x=>x&&typeof x==='object').slice(-500):[]
+    };
+    return this.lock(async()=>{
+      await this.writeJson(this.files.adaptiveTraderState,safe);
+      return safe;
+    });
   }
   // Compact the high-churn outcome ledger once at process startup. The ledger is
   // intentionally smaller than the immutable Scan Journey archive: completed scan
