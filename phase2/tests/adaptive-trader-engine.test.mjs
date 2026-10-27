@@ -273,6 +273,46 @@ test('BTC benchmark failure does not disable otherwise valid Spot candidate anal
   assert.equal(rest.requestDeadlineAtMs,null);
 });
 
+test('universe rotation continues after the last successful pair and retries the failed tail',async()=>{
+  const f=marketFixture();
+  const symbols=Array.from({length:100},(_,i)=>'ROT'+String(i).padStart(3,'0')+'USDT');
+  let failTail=true;
+  const symbolRequests=[];
+  const rest={async request(path,query={}) {
+    if(path==='/api/v3/exchangeInfo')return {data:{symbols:symbols.map(symbol=>({
+      symbol,status:'TRADING',quoteAsset:'USDT',isSpotTradingAllowed:true,permissions:['SPOT']
+    }))},source:'https://data-api.binance.vision',receivedAt:Date.now()};
+    if(path==='/api/v3/ticker/24hr')return {data:symbols.map((symbol,i)=>({
+      symbol,lastPrice:'10',quoteVolume:String(5_000_000-i*10_000),priceChangePercent:'2'
+    })),source:'https://data-api.binance.vision',receivedAt:Date.now()};
+    if(path==='/api/v3/klines'&&query.symbol==='BTCUSDT')return f.klines;
+    if(path==='/api/v3/klines'){
+      symbolRequests.push(query.symbol);
+      const index=Number(String(query.symbol).slice(3,6));
+      if(failTail&&index>=28)throw new Error('TEST_TEMPORARY_KLINE_FAILURE');
+      return f.klines;
+    }
+    throw new Error('UNEXPECTED_REQUEST '+path);
+  }};
+  const service=createAdaptiveTraderSnapshotService({rest,ttlMs:0,scanTimeoutMs:60_000});
+  const first=await service({limit:40,now:f.now});
+  assert.equal(first.universe.eligible_spot_symbols,100);
+  assert.equal(first.universe.scan_offset,0);
+  assert.equal(first.universe.scan_advance_count,28);
+  assert.equal(first.universe.valid_symbols,28);
+  assert.equal(symbolRequests[0],'ROT000USDT');
+  assert.equal(symbolRequests[28],'ROT028USDT');
+
+  failTail=false;
+  const countBeforeSecond=symbolRequests.length;
+  const second=await service({limit:40,now:Date.now()+1000});
+  assert.equal(second.universe.scan_offset,28);
+  assert.equal(second.universe.scan_advance_count,40);
+  assert.equal(second.universe.valid_symbols,40);
+  assert.equal(symbolRequests[countBeforeSecond],'ROT028USDT');
+  assert.equal(second.candidates[0].real_order_execution,false);
+});
+
 test('concurrent universe sizes keep distinct server-cache entries',async()=>{
   const f=marketFixture();
   const rest={async request(path,query={}) {
