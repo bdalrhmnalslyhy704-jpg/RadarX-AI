@@ -44,7 +44,7 @@ function snapshot(now=Date.now(),rows=[candidate(now)]){
 }
 const learningProfile={ready:true,resolved_samples:120,positive_outcome_rate_pct:56.2,
   adjustments:{volume:1,buyer_flow:1,structure:1,compression:1}};
-function fakeExchange({ocoError=null,ocoResponse=null}={}){
+function fakeExchange({ocoError=null,ocoResponse=null,closedOco=null,exitOrder=null}={}){
   const calls={buys:0,sells:0,ocos:0};
   return {
     calls,
@@ -70,8 +70,8 @@ function fakeExchange({ocoError=null,ocoResponse=null}={}){
         executedQty:args.quantity,cummulativeQuoteQty:'9.7',fills:[]};
     },
     async getOrder(){throw new Error('ORDER_NOT_FOUND');},
-    async getOrderList(){throw new Error('ORDER_LIST_NOT_FOUND');},
-    async getOrderById(){throw new Error('ORDER_NOT_FOUND');}
+    async getOrderList(){if(closedOco)return closedOco;throw new Error('ORDER_LIST_NOT_FOUND');},
+    async getOrderById(){if(exitOrder)return exitOrder;throw new Error('ORDER_NOT_FOUND');}
   };
 }
 
@@ -200,6 +200,8 @@ test('explicit testnet config can place one tiny market buy only after 100 resol
   assert.equal(controller.snapshot().real_order_execution,false);
   assert.equal(store.state.daily_trade_count,1);
   assert.equal(store.state.open_position.oco_order_list_id,99);
+  assert.equal(store.state.open_position.entry_features.volume_ratio,2.1);
+  assert.equal(store.state.open_position.entry_score,82);
 });
 test('a definitive OCO rejection triggers an emergency market sell and halts new entries',async()=>{
   const store=fakeStore();const exchange=fakeExchange({ocoError:new Error('BINANCE_HTTP_400_-1013')});
@@ -212,6 +214,30 @@ test('a definitive OCO rejection triggers an emergency market sell and halts new
   assert.equal(exchange.calls.sells,1);
   assert.equal(controller.snapshot().halted,true);
   assert.equal(controller.snapshot().open_position,null);
+});
+test('confirmed OCO close saves net outcome plus entry features for later trade learning',async()=>{
+  const features={volume_ratio:2.1,trade_ratio:1.7,taker_buy_ratio:0.59,close_location:0.72,
+    higher_low:true,breakout_above_prior_high:false,compression_ratio:0.7,hourly_return_pct:1.1,
+    relative_strength_vs_btc_pct:0.8};
+  const store=fakeStore({version:1,utc_day:new Date().toISOString().slice(0,10),daily_trade_count:1,
+    daily_realized_pnl_usdt:0,halted:false,halt_reason:null,trade_history:[],pending_buy:null,
+    open_position:{symbol:'TESTUSDT',base_asset:'TEST',quantity:10,entry_price:1,entry_quote_usdt:10,
+      entry_score:82,entry_features:features,entry_order_id:123,entry_client_order_id:'ATB:TEST',
+      oco_client_order_id:'ATX:TEST',opened_at:Date.now()-60_000,stop_loss_price:0.98,take_profit_price:1.03,
+      stop_loss_pct:2,take_profit_pct:3,protection_status:'ACTIVE',oco_status:'EXECUTING'}});
+  const exchange=fakeExchange({
+    closedOco:{listOrderStatus:'ALL_DONE',listStatusType:'ALL_DONE',orders:[{orderId:456}]},
+    exitOrder:{side:'SELL',status:'FILLED',orderId:456,cummulativeQuoteQty:'10.2'}
+  });
+  const controller=new AdaptiveTraderExecutionController({store,env:goodEnv,clientFactory:()=>exchange,logger:{warn(){},error(){}}});
+  await controller.initialize();
+  await controller.reconcilePosition();
+  assert.equal(store.state.open_position,null);
+  const sell=store.state.trade_history.find(row=>row.side==='SELL');
+  assert.equal(sell.outcome,'UP');
+  assert.equal(sell.entry_features.volume_ratio,2.1);
+  assert.ok(sell.realized_pnl_usdt>0);
+  assert.equal(controller.snapshot().resolved_trade_outcomes,1);
 });
 test('an unverified OCO response halts the bot without assuming protection or blindly selling',async()=>{
   const store=fakeStore();
