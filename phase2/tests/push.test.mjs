@@ -506,6 +506,25 @@ test('TEST_FIXTURE: strict mode cannot override a conflicting early lifecycle st
   }finally{await rm(dir,{recursive:true,force:true});}
 });
 
+test('TEST_FIXTURE: strict generic radar gate still fails closed when measured liquidity quality is missing',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-radar-missing-liquidity-')),store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    let calls=0;
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(){calls++;return{ok:true,status:'SENT'};}};
+    const manager=new PushManager({provider,store});
+    const result=await manager.notifyRadarAlert({
+      radar:'EARLY_EXPANSION_RADAR',symbol:'NOLIQUSDT',market:'SPOT',direction:'UP_BIAS',
+      eligible:true,entry_eligible:true,data_quality:95,closed_candles_only:true,
+      notification_gate:{mode:'STRICT_NOTIFICATION',eligible:true,watch_only:false,requires_follow_up_confirmation:false},
+      signal_lifecycle:{state:'CONFIRMED',label:'تأكيد نهائي'}
+    });
+    assert.deepEqual(result,[]);
+    assert.equal(calls,0,'a strict-looking gate cannot compensate for missing measured liquidity quality');
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
 test('TEST_FIXTURE: persistent push guard allows at most one confirmed market push per minute per device',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-push-rate-'));
   try{
