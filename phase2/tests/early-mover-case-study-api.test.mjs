@@ -59,6 +59,16 @@ test('GET /api/early-mover-case-study returns bounded closed-candle diagnostics 
     assert.deepEqual(report.options.symbols,['HUMAUSDT','SYNUSDT','REZUSDT','ANIMEUSDT','PARTIUSDT','HAEDALUSDT']);
     assert.ok(report.results.every(row=>row.no_future_data_used===true));
     assert.ok(report.results.every(row=>row.status==='THRESHOLD_CROSSING_FOUND'));
+    assert.ok(report.results.every(row=>
+      row.intraday_runup && typeof row.intraday_runup.status==='string' &&
+      Array.isArray(row.intraday_runup.lead_snapshots_before_runup)
+    ));
+    assert.ok(report.results.every(row=>
+      Array.isArray(row.lead_snapshots_before_crossing)&&row.lead_snapshots_before_crossing.length===4
+    ));
+    assert.ok(report.results.every(row=>
+      ['5m','15m','30m','60m','4h','24h'].every(horizon=>row.post_crossing_outcomes?.[horizon])
+    ));
     assert.ok(calls.some(call=>call.symbol==='BTCUSDT'));
     assert.ok(calls.every(call=>call.interval==='5m'&&call.options.limit===1000&&Number.isFinite(call.options.endTime)));
     assert.equal(report.policy.real_order_execution,false);

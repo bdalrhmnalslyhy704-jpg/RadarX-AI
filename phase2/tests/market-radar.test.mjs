@@ -163,7 +163,7 @@ test('Pre-Move ticker activity acceleration ignores absent, stale, or future bas
   assert.equal(buildPreMoveTickerActivitySignals(current,future,180000).size,0,'future baseline timestamps must fail closed');
 });
 
-test('Pre-Move discovery pins the strongest 30% and rotates the other 70% across the eligible market',()=>{
+test('Pre-Move discovery pins 20%, reserves activity-priority slots, and rotates the rest across the eligible market',()=>{
   const symbols=Array.from({length:80},(_,i)=>({
     symbol:'C'+String(i).padStart(3,'0')+'USDT',
     baseAsset:'C'+String(i).padStart(3,'0'),
@@ -180,12 +180,38 @@ test('Pre-Move discovery pins the strongest 30% and rotates the other 70% across
   assert.equal(first.length,24);
   assert.equal(second.length,24);
   assert.equal(new Set(first.map(x=>x.symbol)).size,24);
-  assert.deepEqual(first.slice(0,8).map(x=>x.symbol),second.slice(0,8).map(x=>x.symbol),'the top 30% stays pinned for stable core coverage');
-  assert.notDeepEqual(first.slice(8).map(x=>x.symbol),second.slice(8).map(x=>x.symbol),'the rotating 70% must not scan the same static list forever');
+  assert.deepEqual(first.slice(0,5).map(x=>x.symbol),second.slice(0,5).map(x=>x.symbol),'the top 20% stays pinned for stable core coverage');
+  assert.notDeepEqual(first.slice(5).map(x=>x.symbol),second.slice(5).map(x=>x.symbol),'the rotating lane must not scan the same static list forever');
 
   const third=rankPreMoveTickerRows(rows,symbols,{minQuoteVolume24h:750000,limit:24,rotationOffset:32});
   const union=new Set([...first,...second,...third].map(x=>x.symbol));
-  assert.ok(union.size>=56,'three cycles should cover 56 unique pairs with 30/70 rotation');
+  assert.ok(union.size>=56,'three cycles should cover 56 unique pairs when no burst consumes a priority slot');
+});
+
+test('Pre-Move discovery pulls a measured ticker-activity burst ahead of the alphabetical rotation',()=>{
+  const symbols=Array.from({length:80},(_,i)=>({
+    symbol:'C'+String(i).padStart(3,'0')+'USDT',
+    baseAsset:'C'+String(i).padStart(3,'0'),quoteAsset:'USDT',status:'TRADING'
+  }));
+  symbols.push({symbol:'ZFASTUSDT',baseAsset:'ZFAST',quoteAsset:'USDT',status:'TRADING'});
+  const rows=symbols.map((x,i)=>({
+    symbol:x.symbol,lastPrice:'10',highPrice:'12',lowPrice:'8',
+    quoteVolume:String(x.symbol==='ZFASTUSDT'?180000:5_000_000+i*1000),
+    count:x.symbol==='ZFASTUSDT'?1000:50000+i*100,
+    priceChangePercent:'2'
+  }));
+  const activitySignals=new Map([['ZFASTUSDT',{
+    score:15,volume_acceleration_ratio:3.5,trade_acceleration_ratio:2.2,
+    observed_at:180000,baseline_age_ms:60000
+  }]]);
+  const picked=rankPreMoveTickerRows(rows,symbols,{
+    minQuoteVolume24h:750000,limit:24,rotationOffset:0,activitySignals
+  });
+  assert.equal(picked.length,24);
+  assert.equal(new Set(picked.map(x=>x.symbol)).size,24);
+  assert.equal(picked[5].symbol,'ZFASTUSDT',
+    'a measured volume/trade burst must be deep-scanned immediately after the pinned core');
+  assert.equal(picked[5].pre_move_activity_score,15);
 });
 
 test('Pre-Move rotation remains fair when non-pinned market scores change between cycles',()=>{
@@ -207,9 +233,9 @@ test('Pre-Move rotation remains fair when non-pinned market scores change betwee
   }));
   const first=rankPreMoveTickerRows(rows,symbols,{limit:24,rotationOffset:0});
   const later=rankPreMoveTickerRows(changed,symbols,{limit:24,rotationOffset:0});
-  assert.deepEqual(first.slice(0,8).map(x=>x.symbol),later.slice(0,8).map(x=>x.symbol),
-    'the pinned 30% high-ranking cohort remains stable in this fixture');
-  assert.deepEqual(first.slice(8).map(x=>x.symbol),later.slice(8).map(x=>x.symbol),
+  assert.deepEqual(first.slice(0,5).map(x=>x.symbol),later.slice(0,5).map(x=>x.symbol),
+    'the pinned 20% high-ranking cohort remains stable in this fixture');
+  assert.deepEqual(first.slice(5).map(x=>x.symbol),later.slice(5).map(x=>x.symbol),
     'rotation must not be reshuffled by score changes among unpinned symbols');
   assert.equal(new Set(later.map(x=>x.symbol)).size,24);
 });

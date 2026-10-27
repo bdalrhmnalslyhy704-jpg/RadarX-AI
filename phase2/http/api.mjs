@@ -14,6 +14,8 @@ import {buildRadarReadinessAudit} from '../core/radar-readiness-audit.mjs';
 import {RADAR_OUTCOME_ARCHIVES,buildRadarSignalOutcomeReport,emptyRadarSignalOutcomeState} from '../core/radar-signal-outcomes.mjs';
 import {buildRadarMissedMoverAuditReport} from '../core/radar-missed-mover-audit.mjs';
 import {buildEarlyMoverCaseStudy} from '../core/missed-mover-case-study.mjs';
+import {buildPreMoveBackgroundScanSummary} from '../core/pre-move-background-summary.mjs';
+import {buildPreMoveNotificationDeliveryState} from '../core/pre-move-background-summary.mjs';
 
 function send(res,status,body,extra={}){
   const data=JSON.stringify(body);
@@ -495,7 +497,12 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     enabled:false,running:false,interval_ms:Math.max(60000,Math.min(600000,
       Math.trunc(Number(config.marketRadar?.preMoveBackgroundIntervalMs)||preMoveBackgroundIntervalDefaultMs))),
     scan_attempts:0,successful_scans:0,last_started_at:null,last_scan_at:null,last_scan_status:'NOT_STARTED',
-    last_duration_ms:null,last_error:null,last_summary:null
+    last_duration_ms:null,last_error:null,last_summary:null,
+    notification_delivery:{
+      results:0,send_calls:0,recipients_attempted:0,notifications_sent:0,
+      current_status:'NOT_YET_ATTEMPTED',current_reason:null,last_result_at:null,
+      status_counts:{},reason_counts:{},last_results:[]
+    }
   };
   let preMoveBackgroundInterval=null,preMoveBackgroundInitialTimer=null,preMoveBackgroundInFlight=false;
   function preMoveBackgroundWorkerSnapshot(){
@@ -506,7 +513,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       enabled,running:state.running===true,in_flight:preMoveBackgroundInFlight||preMoveRadarRefreshFlights.has('USDT:50'),
       interval_ms:state.interval_ms,scan_attempts:state.scan_attempts,successful_scans:state.successful_scans,
       last_started_at:state.last_started_at,last_scan_at:state.last_scan_at,last_scan_status:state.last_scan_status,
-      last_duration_ms:state.last_duration_ms,last_error:state.last_error,last_summary:state.last_summary
+      last_duration_ms:state.last_duration_ms,last_error:state.last_error,last_summary:state.last_summary,
+      notification_delivery:state.notification_delivery
     },paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'};
   }
   async function runPreMoveBackgroundScan(){
@@ -520,19 +528,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       if(!task)throw new Error('PRE_MOVE_SCAN_RETRY_COOLDOWN');
       const snapshot=await task,universe=snapshot?.universe||{},diagnostics=snapshot?.watch_notification_diagnostics||{};
       const watchAlerts=Array.isArray(snapshot?.watch_notification_candidates)?snapshot.watch_notification_candidates:[];
-      const summary={
-        discovered:Number(universe.discovered)||0,deep_scanned:Number(universe.deep_scanned)||0,
-        scanned:Number(universe.scanned)||0,valid_data:Number(universe.valid_data)||0,
-        observed_candle_data:Number(universe.observed_candle_data)||0,watch_only:Number(universe.watch_only)||0,
-        actionable:Number(universe.actionable)||0,returned:Number(universe.returned)||0,
-        elapsed_ms:Number(universe.elapsed_ms)||Math.max(0,Date.now()-startedAt),
-        eligible_spot_symbols:Number(universe.eligible_spot_symbols)||0,coverage_mode:String(universe.coverage_mode||'UNKNOWN'),
-        rotation_cycle:Number(universe.rotation_cycle)||0,rotation_offset:Number(universe.rotation_offset)||0,
-        watch_notification_evaluated:Number(diagnostics.evaluated)||0,
-        watch_notification_eligible:Number(diagnostics.eligible)||watchAlerts.length,
-        watch_notification_rejected:Number(diagnostics.rejected)||0,
-        watch_notification_symbols:watchAlerts.map(x=>String(x.symbol||'')).filter(Boolean).slice(0,3)
-      };
+      const summary=buildPreMoveBackgroundScanSummary({snapshot,watchAlerts,elapsedMs:Date.now()-startedAt});
       preMoveBackgroundWorkerState.successful_scans+=1;
       preMoveBackgroundWorkerState.last_scan_at=new Date().toISOString();
       preMoveBackgroundWorkerState.last_scan_status='READY';
@@ -708,14 +704,30 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       if(typeof pushManager?.notifyRadarWatchOnlyAlert==='function'){
         for(const alert of watchAlerts){
           Promise.resolve().then(()=>pushManager.notifyRadarWatchOnlyAlert(alert)).then(result=>{
+            const outcome={
+              ...result,symbol:String(alert?.symbol||'').toUpperCase(),
+              status:String(result?.status||'UNKNOWN'),
+              reason:result?.reason||null
+            };
+            preMoveBackgroundWorkerState.notification_delivery=
+              buildPreMoveNotificationDeliveryState(preMoveBackgroundWorkerState.notification_delivery,outcome,Date.now());
             console.info?.('[PRE_MOVE_WATCH_NOTIFICATION_RESULT] '+JSON.stringify({
-              symbol:alert.symbol,status:String(result?.status||'UNKNOWN'),
-              attempted:result?.attempted===true,sent_count:Number(result?.sent_count)||0,
-              reason:result?.reason||null,watch_only:true,entry_eligible:false
+              symbol:outcome.symbol,status:outcome.status,
+              attempted:outcome.attempted===true,sent_count:Number(outcome.sent_count)||0,
+              attempted_count:Number(outcome.attempted_count)||0,reason:outcome.reason,
+              delivery_totals:preMoveBackgroundWorkerState.notification_delivery,
+              watch_only:true,entry_eligible:false
             }));
           }).catch(error=>{
+            const message=String(error?.message??error).slice(0,160);
+            preMoveBackgroundWorkerState.notification_delivery=
+              buildPreMoveNotificationDeliveryState(preMoveBackgroundWorkerState.notification_delivery,{
+                symbol:String(alert?.symbol||'').toUpperCase(),status:'DELIVERY_PROMISE_REJECTED',
+                attempted:false,sent_count:0,attempted_count:0,reason:'PUSH_RESULT_PROMISE_REJECTED',error:message
+              },Date.now());
             console.warn?.('[PRE_MOVE_WATCH_NOTIFICATION_FAILED] '+JSON.stringify({
-              symbol:alert.symbol,error:String(error?.message??error).slice(0,160),
+              symbol:alert.symbol,error:message,
+              delivery_totals:preMoveBackgroundWorkerState.notification_delivery,
               watch_only:true,entry_eligible:false
             }));
           });

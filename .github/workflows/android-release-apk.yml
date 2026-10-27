@@ -35,7 +35,7 @@ jobs:
   # Publish only from the official Build 224 branch after its backend and Android checks pass.
   release-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       RADARX_BACKEND_BASE_URL: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
 
@@ -956,6 +956,7 @@ jobs:
           grep -Fq 'falcon-eye-radar.html' android/app/src/main/assets/index.html
           grep -Fq 'coin-hunter-radar.html' android/app/src/main/assets/index.html
           node --check android/app/src/main/assets/radarx-radar-screen.mjs
+          bash -n android/run-emulator-smoke.sh
           grep -Fq 'radar8-lightning.html' android/app/src/main/assets/index.html
           test -s android/app/src/main/assets/whale-accumulation-radar.html
           grep -Fq 'whale-accumulation-radar.html' android/app/src/main/assets/index.html
@@ -1064,16 +1065,13 @@ jobs:
           ls -l /dev/kvm
 
       - name: Required Release UI/service smoke + Debug durable replay acceptance
-        timeout-minutes: 10
+        # The test boots API 30, validates online/offline service behavior, and replays 623 archived alerts.
+        timeout-minutes: 55
         env:
+          RADARX_EMULATOR_API_LEVEL: "30"
           RADARX_APK_PATH: ${{ runner.temp }}/radarx-release/radarx-release.apk
           RADARX_REPLAY_APK_PATH: android/app/build/outputs/apk/debug/app-debug.apk
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 30
-          target: default
-          arch: x86_64
-          script: bash android/smoke-test.sh
+        run: bash android/run-emulator-smoke.sh
 
       - name: Publish signed APK GitHub Release
         env:

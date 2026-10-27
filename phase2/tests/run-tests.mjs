@@ -41,6 +41,7 @@ const phase2=[
   'phase2/tests/radar-signal-outcomes.test.mjs',
   'phase2/tests/radar-missed-mover-audit.test.mjs',
   'phase2/tests/missed-mover-case-study.test.mjs',
+  'phase2/tests/pre-move-background-summary.test.mjs',
   'phase2/tests/early-mover-case-study-api.test.mjs',
   'phase2/tests/early-expansion-rotation.test.mjs',
   'phase2/tests/falcon-radar-core.test.mjs',

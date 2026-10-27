@@ -1156,22 +1156,35 @@ export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_
     .sort((a,b)=>b.pre_move_discovery_score-a.pre_move_discovery_score||b.quoteVolume24h-a.quoteVolume24h||a.symbol.localeCompare(b.symbol));
   const take=Math.max(1,Math.trunc(Number(limit)||30));
   if(ranked.length<=take)return ranked;
-  // Keep only the highest-ranked 30% pinned for stable market anchors, and rotate
-  // the remaining 70% through the eligible universe. This shortens worst-case time
-  // until a newly qualifying pair receives a deep closed-candle/flow examination.
-  const pinnedCount=Math.min(Math.ceil(take*0.30),ranked.length);
+  // Keep only the highest-ranked 20% pinned. Reserve a second, bounded lane
+  // for unusually strong live ticker-activity bursts so alphabetical rotation
+  // cannot delay every fast-emerging pair until its next full-market turn.
+  const pinnedCount=Math.min(Math.ceil(take*0.20),ranked.length);
   const pinned=ranked.slice(0,pinnedCount);
-  // Keep rotation order independent of constantly changing volume/trade rankings.
-  // Top-ranked symbols stay pinned; every other active Spot pair takes a deterministic
-  // alphabetical turn so market-score churn cannot repeatedly skip the same candidates.
   const pinnedSymbols=new Set(pinned.map(x=>x.symbol));
-  const rotating=ranked.filter(x=>!pinnedSymbols.has(x.symbol)).sort((a,b)=>a.symbol.localeCompare(b.symbol));
-  const rotateCount=Math.min(take-pinnedCount,rotating.length);
-  if(rotateCount<=0)return pinned.slice(0,take);
+  const activityPrioritySlots=Math.min(5,Math.floor(take*0.20));
+  const activityPriority=ranked
+    .filter(x=>!pinnedSymbols.has(x.symbol)&&
+      Number(x.pre_move_activity_score)>=3&&
+      Number(x.ticker_activity?.volume_acceleration_ratio)>=1.35&&
+      Number(x.ticker_activity?.trade_acceleration_ratio)>=1.30)
+    .sort((a,b)=>Number(b.pre_move_activity_score)-Number(a.pre_move_activity_score)||
+      Number(b.ticker_activity?.volume_acceleration_ratio)-Number(a.ticker_activity?.volume_acceleration_ratio)||
+      Number(b.ticker_activity?.trade_acceleration_ratio)-Number(a.ticker_activity?.trade_acceleration_ratio)||
+      a.symbol.localeCompare(b.symbol))
+    .slice(0,activityPrioritySlots);
+  const activitySymbols=new Set(activityPriority.map(x=>x.symbol));
+  // Rotation order stays independent of changing volume/trade ranks. Activity
+  // priority rows temporarily borrow slots from the rotated lane; when their burst
+  // fades, the normal deterministic alphabetic coverage resumes automatically.
+  const rotating=ranked.filter(x=>!pinnedSymbols.has(x.symbol)&&!activitySymbols.has(x.symbol))
+    .sort((a,b)=>a.symbol.localeCompare(b.symbol));
+  const rotateCount=Math.min(take-pinned.length-activityPriority.length,rotating.length);
+  if(rotateCount<=0)return [...pinned,...activityPriority].slice(0,take);
   const offset=((Math.trunc(Number(rotationOffset)||0)%rotating.length)+rotating.length)%rotating.length;
   const rotatingRows=[];
   for(let i=0;i<rotateCount;i++)rotatingRows.push(rotating[(offset+i)%rotating.length]);
-  return [...pinned,...rotatingRows].slice(0,take);
+  return [...pinned,...activityPriority,...rotatingRows].slice(0,take);
 }
 
 /**
@@ -2319,7 +2332,7 @@ export class MarketUniverseScanner {
       rotationCycle=Math.max(0,Math.trunc(Number(this._preMoveRotationCycle)||0));
       this._preMoveRotationCycle=rotationCycle+1;
     }
-    const rotatingWidth=Math.max(1,discoveryLimit-Math.ceil(discoveryLimit*0.30));
+    const rotatingWidth=Math.max(1,discoveryLimit-Math.ceil(discoveryLimit*0.20)-Math.min(5,Math.floor(discoveryLimit*0.20)));
     const rotationOffset=(rotationCycle*rotatingWidth);
     const discovery=rankPreMoveTickerRows(tickerResponse.data,universe,{
       minQuoteVolume24h:this.config.minQuoteVolume24h,
