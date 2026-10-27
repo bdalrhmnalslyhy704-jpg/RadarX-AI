@@ -1,0 +1,102 @@
+name: RadarX Build 224 Android notification fix
+
+on:
+  push:
+    branches:
+      - fix/build224-dhdtech-notification-routing-20261027
+    paths:
+      - "android/**"
+      - ".github/workflows/radarx-build224-android.yml"
+  pull_request:
+    branches:
+      - build224-multi-analyst-20261007
+    paths:
+      - "android/**"
+      - ".github/workflows/radarx-build224-android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle compatible with Android Gradle Plugin 8.7.3
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Provision private Firebase configuration without printing it
+        env:
+          FIREBASE_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON_BASE64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${FIREBASE_GOOGLE_SERVICES_JSON_BASE64:-}" ]]; then
+            echo "Missing required secret: FIREBASE_GOOGLE_SERVICES_JSON_BASE64"
+            exit 1
+          fi
+          mkdir -p android/app
+          printf '%s' "$FIREBASE_GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > android/app/google-services.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const config = JSON.parse(fs.readFileSync('android/app/google-services.json', 'utf8'));
+          if (config.project_info?.project_id !== 'radarx-ai') {
+            throw new Error('Firebase project must be radarx-ai');
+          }
+          const clients = Array.isArray(config.client) ? config.client : [];
+          const match = clients.some(client =>
+            client.client_info?.android_client_info?.package_name === 'com.radarx.app');
+          if (!match) throw new Error('Firebase config does not contain Android package com.radarx.app');
+          console.log('Firebase configuration validated for RadarX Android; secret content was not printed.');
+          NODE
+
+      - name: Guard against placeholder backend URLs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R -n "dhdtech-url-required.invalid" android/app/src/main; then
+            echo "Unconfigured backend URL placeholder remains in Android source."
+            exit 1
+          fi
+          grep -R -n "https://radarx-backend.dhdtech.site" \
+            android/app/src/main/assets/radarx-backend-client.mjs \
+            android/app/src/main/java/com/radarx/app/MainActivity.java \
+            android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java \
+            android/app/src/main/java/com/radarx/app/RadarXPushRegistration.java
+
+      - name: Validate bundled backend-client JavaScript
+        run: node --check android/app/src/main/assets/radarx-backend-client.mjs
+
+      - name: Build Android debug APK
+        run: gradle -p android :app:assembleDebug --stacktrace
+
+      - name: Verify APK archive
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          unzip -t "$APK" >/dev/null
+          echo "Build 224 Android debug APK archive verified."
+
+      - name: Publish test APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RadarX-Build224-Android-Debug-Notification-Fix
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
