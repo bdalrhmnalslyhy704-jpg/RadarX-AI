@@ -531,6 +531,18 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         watch_notification_evaluated:Number(diagnostics.evaluated)||0,
         watch_notification_eligible:Number(diagnostics.eligible)||watchAlerts.length,
         watch_notification_rejected:Number(diagnostics.rejected)||0,
+        watch_notification_rejection_counts:diagnostics.rejection_counts&&typeof diagnostics.rejection_counts==='object'
+          ?Object.fromEntries(Object.entries(diagnostics.rejection_counts).slice(0,12)): {},
+        watch_notification_top_rejections:(Array.isArray(diagnostics.samples)?diagnostics.samples:[])
+          .filter(row=>row?.eligible!==true).slice(0,5).map(row=>({
+            symbol:String(row?.symbol||'').slice(0,30),reason:String(row?.reason||'UNKNOWN').slice(0,100),
+            score:Number.isFinite(Number(row?.score))?Number(row.score):null,
+            session_return_pct:Number.isFinite(Number(row?.session_return_pct))?Number(row.session_return_pct):null,
+            one_hour_return_pct:Number.isFinite(Number(row?.one_hour_return_pct))?Number(row.one_hour_return_pct):null,
+            data_valid:row?.data_valid===true,data_stale:row?.data_stale===true,
+            data_quality:Number.isFinite(Number(row?.data_quality))?Number(row.data_quality):null,
+            liquidity_quality:Number.isFinite(Number(row?.liquidity_quality))?Number(row.liquidity_quality):null
+          })),
         watch_notification_symbols:watchAlerts.map(x=>String(x.symbol||'')).filter(Boolean).slice(0,3)
       };
       preMoveBackgroundWorkerState.successful_scans+=1;
