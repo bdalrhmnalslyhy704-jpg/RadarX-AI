@@ -13,7 +13,7 @@ function makeCandles({length=1000,now=NOW,moveStart=810,moveEnd=830,base=100}={}
       const fraction=(i-moveStart+1)/(moveEnd-moveStart+1);
       close=base*(1+0.12*fraction);
     } else if(i>moveEnd) close=base*1.12;
-    const priorMove = i>=moveStart-18;
+    const priorMove = i>=moveStart-6;
     const volume=priorMove?220:100;
     const tradeCount=priorMove?32:20;
     const takerShare=priorMove?0.61:0.48;
