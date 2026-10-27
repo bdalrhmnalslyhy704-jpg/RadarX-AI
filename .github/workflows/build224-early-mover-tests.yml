@@ -1,0 +1,52 @@
+name: Build 224 Early-Mover Regression Tests
+
+on:
+  push:
+    branches:
+      - feature/build224-missed-mover-multi-snapshot-20261027
+  pull_request:
+    branches:
+      - build224-multi-analyst-20261007
+    paths:
+      - "phase2/core/missed-mover-case-study.mjs"
+      - "phase2/http/api.mjs"
+      - "phase2/tests/missed-mover-case-study.test.mjs"
+      - "phase2/tests/early-mover-case-study-api.test.mjs"
+      - "phase2/tests/pre-move-watch-notification.test.mjs"
+      - "phase2/tests/radar-missed-mover-audit.test.mjs"
+      - ".github/workflows/build224-early-mover-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  focused-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Check out Build 224
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run historical early-mover and watch-notification tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in \
+            phase2/tests/missed-mover-case-study.test.mjs \
+            phase2/tests/early-mover-case-study-api.test.mjs \
+            phase2/tests/pre-move-watch-notification.test.mjs \
+            phase2/tests/radar-missed-mover-audit.test.mjs \
+            phase2/tests/api.test.mjs \
+            phase2/tests/radar-analyst-bridge.test.mjs \
+            phase2/tests/fcm-push.test.mjs
+          do
+            echo "::group::Testing ${file}"
+            node --test --test-timeout=60000 "${file}"
+            echo "::endgroup::"
+          done
