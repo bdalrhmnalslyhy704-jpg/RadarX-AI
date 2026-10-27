@@ -381,32 +381,46 @@ export function applyAdaptiveLearning(baseScore, features = {}, profile = {}) {
 export function findMissedMoverEvents({ history = [], currentPrices = [], now = Date.now(), thresholdPct = 5, maxAgeMs = 6 * 60 * 60 * 1000 } = {}) {
   const current = new Map((Array.isArray(currentPrices) ? currentPrices : [])
     .map(row => [String(row?.symbol || '').toUpperCase(), finite(row?.price ?? row?.lastPrice)]));
-  const latestBySymbol = new Map();
+  const newestQualifying = new Map();
+  const newestEvaluatedQualifying = new Map();
   for (const row of (Array.isArray(history) ? history : [])) {
     const symbol = String(row?.symbol || '').toUpperCase();
     const at = finite(row?.at);
     const price = finite(row?.price);
-    if (!symbol || at === null || price === null || price <= 0 || at >= Number(now) || Number(now) - at < 15 * 60 * 1000 || Number(now) - at > maxAgeMs) continue;
-    if (!latestBySymbol.has(symbol) || at > latestBySymbol.get(symbol).at) latestBySymbol.set(symbol, { ...row, symbol, at, price });
+    if (!symbol || at === null || price === null || price <= 0 || at >= Number(now) ||
+        Number(now) - at < 15 * 60 * 1000 || Number(now) - at > maxAgeMs) continue;
+    const livePrice = current.get(symbol);
+    if (!(livePrice > 0)) continue;
+    const move = (livePrice / price - 1) * 100;
+    if (move < thresholdPct) continue;
+    const candidate = { ...row, symbol, at, price, move };
+    const prior = newestQualifying.get(symbol);
+    if (!prior || at > prior.at) newestQualifying.set(symbol, candidate);
+    if (row.evaluated === true) {
+      const evaluatedPrior = newestEvaluatedQualifying.get(symbol);
+      if (!evaluatedPrior || at > evaluatedPrior.at) newestEvaluatedQualifying.set(symbol, candidate);
+    }
   }
   const events = [];
-  for (const [symbol, previous] of latestBySymbol) {
+  for (const [symbol, fallback] of newestQualifying) {
+    // Prefer the latest snapshot the detector truly analyzed. A later unassessed
+    // snapshot must not erase evidence that a previously analyzed setup was missed.
+    const previous = newestEvaluatedQualifying.get(symbol) || fallback;
     const price = current.get(symbol);
-    if (price === undefined || price === null || price <= 0) continue;
     const move = (price / previous.price - 1) * 100;
-    if (move < thresholdPct) continue;
     const previousTier = String(previous.tier || 'NOT_EVALUATED');
     const wasEvaluated = previous.evaluated === true;
     const wasOnRadar = wasEvaluated && ['EARLY_SETUP', 'WATCH'].includes(previousTier);
     events.push({
+      id: symbol + ':' + String(previous.at),
       symbol,
       baseline_at: new Date(previous.at).toISOString(),
       baseline_price: previous.price,
       current_price: price,
       move_pct: Number(move.toFixed(2)),
       baseline_tier: previousTier,
-      classification: !wasEvaluated ? 'UNASSESSED_MOVE' : wasOnRadar ? 'FOLLOW_UP_MOVE' : 'POTENTIAL_MISSED_MOVER',
       baseline_was_evaluated: wasEvaluated,
+      classification: !wasEvaluated ? 'UNASSESSED_MOVE' : wasOnRadar ? 'FOLLOW_UP_MOVE' : 'POTENTIAL_MISSED_MOVER',
       diagnostic_only: true,
       reason: 'OBSERVED_PRICE_MOVED_AFTER_PRIOR_SNAPSHOT',
       no_future_data_used_for_baseline: true
