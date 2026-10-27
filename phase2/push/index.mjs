@@ -194,6 +194,9 @@ export class PushManager{
   constructor({provider,store,deduplicator=null,retryBaseMs=15000}){this.provider=provider;this.store=store;this.deduplicator=deduplicator;this.retryBaseMs=retryBaseMs;this.retryQueue=new Map();this.pushGuardQueues=new Map();this.pushGuardMemory=new Map();}
   status(){return this.provider.status();}
   async sendMarketPush(subscription,notification,kind='MARKET',requestedAt=Date.now(),isRetry=false){
+    const requestedCategory=String(kind||'MARKET').toUpperCase()==='WATCH_ONLY'?'WATCH_ONLY':'MARKET';
+    if(requestedCategory==='WATCH_ONLY'||notification?.watch_only===true||notification?.entry_eligible===false||/WATCH_ONLY/.test(String(notification?.notification_mode||'')))
+      return{ok:false,status:'WATCH_ONLY_FEED_ONLY',reason:'FINAL_CONFIRMATION_REQUIRED'};
     const subscriptionId=String(subscription?.id||subscription?.installation_id||subscription?.user_id||'unknown');
     const queueKey=subscriptionId;
     const previous=this.pushGuardQueues.get(queueKey)||Promise.resolve();
@@ -214,6 +217,8 @@ export class PushManager{
       // regular market attempts conservatively so deployment cannot reset the cap.
       const marketAttempts=rollingAttempts(saved.market_attempts??saved.attempts);
       const watchAttempts=rollingAttempts(saved.watch_attempts);
+      const marketAttempts15m=(Array.isArray(saved.market_attempts_15m)?saved.market_attempts_15m:[]).map(Number)
+        .filter(at=>Number.isFinite(at)&&at<=now&&now-at<15*60_000);
       const retryAttempts=rollingAttempts(saved.retry_attempts);
       const eventId=String(notification?.event_id||notification?.alert_id||notification?.signal_id||notification?.id||'').trim();
       const recentEvents=(Array.isArray(saved.recent_events)?saved.recent_events:[]).filter(row=>row&&typeof row.id==='string'&&Number.isFinite(Number(row.at))&&Number(row.at)<=now&&now-Number(row.at)<20*60_000);
@@ -230,10 +235,12 @@ export class PushManager{
       const lastSent=symbolKey?Number(sentBySymbol[symbolKey]):NaN;
       if(Number.isFinite(lastSent)&&lastSent<=now&&now-lastSent<cooldownMs)
         return{ok:false,status:'DUPLICATE_SUPPRESSED',reason:'CROSS_RADAR_SYMBOL_COOLDOWN',retryAfterMs:cooldownMs-(now-lastSent)};
-      // Keep early monitoring separate so watch-only notices cannot consume
-      // the three-slot allowance reserved for stronger market alerts.
+      // Confirmed alerts are deliberately sparse: one per minute and at most three per rolling 15 minutes.
+      // Watch-only observations are handled as feed-only above and never reach the provider.
       const categoryAttempts=category==='WATCH_ONLY'?watchAttempts:marketAttempts;
-      const maxPerMinute=category==='WATCH_ONLY'?1:3;
+      const maxPerMinute=category==='WATCH_ONLY'?0:1;
+      if(!isRetry&&category==='MARKET'&&marketAttempts15m.length>=3)
+        return{ok:false,status:'RATE_LIMITED',reason:'MAX_3_CONFIRMED_MARKET_PUSHES_PER_15_MINUTES',retryAfterMs:Math.max(1000,15*60_000-(now-marketAttempts15m[0]))};
       if(isRetry&&!hasRetryReservation)
         return{ok:false,status:'RETRY_BLOCKED',reason:'RETRY_EVENT_NOT_PREVIOUSLY_RESERVED'};
       if(isRetry&&retryAttempts.length>=3)
@@ -246,6 +253,7 @@ export class PushManager{
       const nextState={
         version:1,attempts:[...attempts,now],
         market_attempts:category==='MARKET'?[...marketAttempts,now]:marketAttempts,
+        market_attempts_15m:category==='MARKET'?[...marketAttempts15m,now]:marketAttempts15m,
         watch_attempts:category==='WATCH_ONLY'?[...watchAttempts,now]:watchAttempts,
         retry_attempts:isRetry?[...retryAttempts,now]:retryAttempts,
         recent_events:nextRecentEvents,
@@ -284,10 +292,19 @@ export class PushManager{
     return rows;
   }
   async notifySignal(signal){
+    const signalType=String(signal?.signal_type||'').trim().toUpperCase();
+    const confirmed=signalType==='CONFIRMED'&&signal?.watch_only!==true&&signal?.entry_eligible!==false&&
+      signal?.notification_gate?.eligible!==false&&signal?.notification_gate?.watch_only!==true;
     const rows=this.providerSubscriptions(await this.store.getSubscriptions()),cache=new Map(),out=[];
     for(const sub of rows){
       let settings=cache.get(sub.user_id);if(!settings){settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();cache.set(sub.user_id,settings);}
       if(!settings.enabled||!settings.symbols.includes(signal.symbol)||!settings.timeframes.includes(signal.candle?.timeframe)||!settings.signalTypes.includes(signal.signal_type))continue;
+      if(!confirmed){
+        const audit={event:'NOTIFICATION_ATTEMPT',event_class:marketEventClass(signal.data_status?.source??signal.source),signal_id:signal.signal_id,
+          subscription_id:sub.id,user_id:sub.user_id,status:'SUPPRESSED_UNCONFIRMED',provider:this.provider.status().provider,
+          attempted_at:Date.now(),reason:'FINAL_CONFIRMATION_REQUIRED',http_status:null,attempted:false};
+        await this.store.appendNotificationAudit(audit);out.push(audit);continue;
+      }
       if(Number(signal.scores?.data_quality)<settings.minDataQuality||Number(signal.scores?.liquidity_quality)<settings.minLiquidityQuality)continue;
       const r=await this.sendMarketPush(sub,payload(signal,Date.now()),'MARKET'),audit={event:'NOTIFICATION_ATTEMPT',event_class:marketEventClass(signal.data_status?.source??signal.source),
         signal_id:signal.signal_id,subscription_id:sub.id,user_id:sub.user_id,status:r.status,
@@ -602,66 +619,30 @@ export class PushManager{
       attempted:false,notifications:[],sent_count:0,attempted_count:0
     };
 
-    if(this.deduplicator){
-      const dedupSignal={
-        symbol,direction:'NONE',candle:{timeframe:'WATCH_ONLY'},
-        reason_codes:['RADAR_WATCH_ONLY']
-      };
-      const check=await this.deduplicator.canEmit(dedupSignal,now);
-      if(!check.allowed)return {
-        status:'DUPLICATE_SUPPRESSED',reason:check.reason||'DUPLICATE_SIGNAL',
-        attempted:false,notifications:[],sent_count:0,attempted_count:0
-      };
-          }
-
-    const out=[];
+    const notifications=[];
     for(const sub of recipients){
-      let response;
-      try{response=await this.sendMarketPush(sub,radarPayload({
-        ...alert,market:'SPOT',price,watch_only:true,entry_eligible:false,
-        paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
-      },Date.now()),'WATCH_ONLY');}
-      catch(error){response={ok:false,status:'FAILED',reason:String(error?.message??error).slice(0,160)};}
       const audit={
         event:'RADAR_WATCH_ONLY_NOTIFICATION',event_class:'RADAR_ALERT',
         radar:String(alert?.radar||'EARLY_EXPANSION_RADAR'),radar_name:radarTitle(alert),
         symbol,alert_id:alert?.id||null,subscription_id:sub.id,user_id:sub.user_id,
-        status:response?.status||'FAILED',provider:providerStatus.provider||'unknown',
-        attempted_at:Date.now(),reason:response?.reason??null,http_status:response?.httpStatus??null,
-        watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false,
+        status:'WATCH_ONLY_FEED_ONLY',provider:providerStatus.provider||'unknown',
+        attempted_at:Date.now(),reason:'FINAL_CONFIRMATION_REQUIRED',http_status:null,
+        attempted:false,watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false,
         confidence_score:'UNKNOWN',data_quality:dataQuality,liquidity_quality:liquidityQuality,
         micro_data_validated:microValidatedEarlyFlow,
         liquidity_evidence_status:microValidatedEarlyFlow?'ORDER_BOOK_NOT_CHECKED_AT_MICRO_STAGE':null,
-        quote_volume_24h:microValidatedEarlyFlow?quoteVolume24h:null,
-        event_type:event,source
+        quote_volume_24h:microValidatedEarlyFlow?quoteVolume24h:null,event_type:event,source
       };
       try{await this.store.appendNotificationAudit(audit);}catch{}
-      out.push(audit);
-      if(response?.status==='GONE'){
-        try{await this.store.disableSubscription(sub.id);}catch{}
-      } else if(response?.status==='FAILED'){
-        // Keep retries tied to this exact, stable watch event and subscription.
-        // Retried pushes remain WATCH_ONLY and expire if their closed-candle evidence ages out.
-        const retryKey=String(sub.id)+'|RADAR_WATCH_ONLY|'+String(alert?.id||symbol+'|'+event);
-        this.retryQueue.set(retryKey,{
-          kind:'RADAR_WATCH_ONLY',subscription:sub,
-          alert:{...alert,market:'SPOT',watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
-          nextAt:Date.now()+this.retryBaseMs,attempt:1
-        });
-      }
+      notifications.push(audit);
     }
-    const sent=out.filter(x=>x.status==='SENT').length;
-    if(sent>0&&this.deduplicator){
-      const dedupSignal={symbol,direction:'NONE',candle:{timeframe:'WATCH_ONLY'},reason_codes:['RADAR_WATCH_ONLY']};
-      await this.deduplicator.markEmitted(dedupSignal,now).catch(()=>{});
-    }
-    const suppressedOnly=out.length>0&&out.every(x=>['RATE_LIMITED','DUPLICATE_SUPPRESSED','PUSH_GUARD_UNAVAILABLE'].includes(x.status));
     return {
-      status:sent?'SENT':suppressedOnly?'SUPPRESSED':out.length?'FAILED':'NO_ELIGIBLE_SUBSCRIPTIONS',
-      attempted:out.some(x=>!['RATE_LIMITED','DUPLICATE_SUPPRESSED','PUSH_GUARD_UNAVAILABLE'].includes(x.status)),notifications:out,sent_count:sent,attempted_count:out.filter(x=>!['RATE_LIMITED','DUPLICATE_SUPPRESSED','PUSH_GUARD_UNAVAILABLE'].includes(x.status)).length,
-      watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false
+      status:'WATCH_ONLY_FEED_ONLY',reason:'FINAL_CONFIRMATION_REQUIRED',attempted:false,
+      notifications,sent_count:0,attempted_count:0,watch_only:true,entry_eligible:false,
+      paper_trading:true,real_order_execution:false
     };
   }
+
   async notifyRadarAlert(alert){
     const gate=alert?.notification_gate||alert?.elite_gate||{};
     // A qualified early-track gate is a monitoring notification, not an entry alert.
@@ -701,6 +682,10 @@ export class PushManager{
        alert?.eligible===false||/WATCH_ONLY|WATCH_EARLY/.test(watchLabel)){
       return [];
     }
+    // A generic radar alert can push only after an explicit final, non-watch gate passes.
+    // Missing a gate, requesting follow-up confirmation, or retaining a watch-only state keeps it in-app.
+    if(gate?.eligible!==true||gate?.watch_only===true||gate?.requires_follow_up_confirmation===true||
+       alert?.entry_eligible===false||alert?.watch_only===true||alert?.eligible===false)return [];
     const rows=this.providerSubscriptions(await this.store.getSubscriptions()),out=[];
     for(const sub of rows){
       const settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();
