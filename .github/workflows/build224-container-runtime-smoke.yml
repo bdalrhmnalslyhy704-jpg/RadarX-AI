@@ -31,6 +31,15 @@ jobs:
     steps:
       - name: Checkout Build 224 source
         uses: actions/checkout@v4
+      - name: Install locked dependencies for behavioral tests
+        run: npm ci
+      - name: Run adaptive trader regression tests
+        run: |
+          node --check phase2/core/adaptive-trader-engine.mjs
+          node --check phase2/core/adaptive-trader-worker.mjs
+          node --check phase2/core/store.mjs
+          node --test --test-timeout=60000 phase2/tests/adaptive-trader-engine.test.mjs phase2/tests/adaptive-trader-api.test.mjs phase2/tests/adaptive-trader-worker.test.mjs phase2/tests/adaptive-trader-execution.test.mjs
+          node --test --test-timeout=60000 android/app/src/main/assets/tests/adaptive-trader-ui.test.mjs
       - name: Build exact container image
         run: docker build --pull -t radarx-build224-smoke .
       - name: Start exact container image
@@ -99,6 +108,66 @@ jobs:
           console.log('CONTAINER_ROOT_AND_HEALTH_ROUTES_OK');
           NODE
           docker logs radarx-build224-smoke
+      - name: Verify live Spot scan and background learning worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="http://127.0.0.1:18787"
+          code="$(curl --connect-timeout 5 --max-time 240 --silent --show-error -o "$RUNNER_TEMP/adaptive-snapshot.json" -w "%{http_code}" "$BASE/api/adaptive-trader/market-snapshot?limit=40" || true)"
+          if [[ "$code" != "200" ]]; then
+            echo "::error::Live adaptive trader market snapshot failed with HTTP ${code:-none}."
+            cat "$RUNNER_TEMP/adaptive-snapshot.json" 2>/dev/null || true
+            docker logs radarx-build224-smoke || true
+            exit 1
+          fi
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const x=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/adaptive-snapshot.json','utf8'));
+          if (x.status!=='LIVE_DATA' || x.meta?.live!==true || x.meta?.paper_trading!==true ||
+              x.meta?.real_order_execution!==false || x.meta?.closed_candles_only!==true ||
+              x.meta?.engine!=='ADAPTIVE_TRADER_SIDECAR_V1') {
+            throw new Error('ADAPTIVE_TRADER_LIVE_DATA_CONTRACT_FAILED '+JSON.stringify({
+              status:x.status,universe:x.universe,meta:x.meta,error:x.error,reason:x.reason
+            }));
+          }
+          if (!(Number(x.universe?.eligible_spot_symbols)>0) ||
+              !(Number(x.universe?.analyzed_symbols)>0) ||
+              !(Number(x.universe?.valid_symbols)>0) ||
+              !Array.isArray(x.candidates) || !x.candidates.some(row=>row.data_valid===true&&Number.isFinite(Number(row.score)))) {
+            throw new Error('ADAPTIVE_TRADER_ZERO_VALID_ANALYSIS '+JSON.stringify(x.universe));
+          }
+          console.log('ADAPTIVE_TRADER_LIVE_SCAN_OK '+JSON.stringify({
+            source:x.source,eligible:x.universe.eligible_spot_symbols,
+            analyzed:x.universe.analyzed_symbols,valid:x.universe.valid_symbols,
+            coverage_pct:x.universe.coverage_pct,scan_complete:x.universe.scan_complete,
+            real_order_execution:x.meta.real_order_execution
+          }));
+          NODE
+          worker_ok=0
+          for attempt in $(seq 1 50); do
+            curl --connect-timeout 3 --max-time 8 --silent --show-error "$BASE/api/adaptive-trader/status" -o "$RUNNER_TEMP/adaptive-status.json" || true
+            if node --input-type=module -e "import fs from 'node:fs';const x=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/adaptive-status.json','utf8'));process.exit(Number(x.successful_scans)>0&&!!x.last_scan_at&&x.last_error===null&&Number(x.memory?.history_rows)>0&&x.real_order_execution===false&&x.paper_trading===true?0:1)" 2>/dev/null; then
+              worker_ok=1
+              break
+            fi
+            sleep 2
+          done
+          if [[ "$worker_ok" != "1" ]]; then
+            echo "::error::Adaptive trader worker did not finish a successful background scan and persist learning history."
+            cat "$RUNNER_TEMP/adaptive-status.json" 2>/dev/null || true
+            docker logs radarx-build224-smoke || true
+            exit 1
+          fi
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const x=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/adaptive-status.json','utf8'));
+          console.log('ADAPTIVE_TRADER_WORKER_AND_MEMORY_OK '+JSON.stringify({
+            status:x.status,scan_count:x.scan_count,successful_scans:x.successful_scans,
+            last_scan_at:x.last_scan_at,last_error:x.last_error,
+            unresolved_samples:x.memory?.unresolved_samples,history_rows:x.memory?.history_rows,
+            resolved_samples:x.memory?.resolved_samples,real_order_execution:x.real_order_execution
+          }));
+          NODE
       - name: Stop container
         if: always()
         run: docker rm --force radarx-build224-smoke || true
