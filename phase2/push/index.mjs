@@ -124,6 +124,7 @@ const radarPayload=(alert,processedAt=Date.now())=>{
   event_id:alert.event_id||alert.id||null,
   signal_id:alert.signal_id||alert.id||null,
   notification_mode:watchOnly?'WATCH_ONLY_EARLY_TRACK':'STANDARD_RADAR_ALERT',
+  notification_gate_mode:alert?.notification_gate?.mode??alert?.elite_gate?.mode??null,
   watch_only:watchOnly,
   entry_eligible:watchOnly?false:(alert?.entry_eligible??null),
   watch_notification_tier:alert?.watch_notification_tier??null,
@@ -178,7 +179,9 @@ const radarPayload=(alert,processedAt=Date.now())=>{
 };
 
 const payload=(s,processedAt=Date.now())=>({type:'RADARX_SIGNAL',event_class:marketEventClass(s.data_status?.source??s.source),signal_id:s.signal_id,symbol:s.symbol,market:s.market,strategy:s.strategy,direction:s.direction,
-  signal_type:s.signal_type,timeframe:s.candle?.timeframe,candle_open_time:s.candle?.open_time,candle_close_time:s.candle?.close_time,
+  signal_type:s.signal_type,entry_eligible:true,watch_only:false,notification_mode:'STRICT_NOTIFICATION',
+  notification_gate_mode:'STRICT_NOTIFICATION',requires_follow_up_confirmation:false,signal_lifecycle_state:'CONFIRMED',
+  timeframe:s.candle?.timeframe,candle_open_time:s.candle?.open_time,candle_close_time:s.candle?.close_time,
   price:s.price?.reference??null,data_quality:s.scores?.data_quality,liquidity_quality:s.scores?.liquidity_quality,
   risk_filter:s.risk_filter,risk_reasons:s.risk_reasons,reason_codes:s.reason_codes,source:s.data_status?.source??'UNKNOWN',
   source_time:s.candle?.close_time??null,server_processed_at:processedAt,confidence_score:'UNKNOWN',paper_trading:true,real_order_execution:false});
