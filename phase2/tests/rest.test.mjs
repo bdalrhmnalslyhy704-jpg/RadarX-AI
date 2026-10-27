@@ -228,6 +228,29 @@ test('TEST_FIXTURE: REST timeout errors identify the timed-out endpoint and fall
   assert.match(client.health().last_error,/REST_REQUEST_TIMEOUT/);
 });
 
+test('TEST_FIXTURE: caller deadline also bounds waiting on another client in-flight request',async()=>{
+  const baseUrl='https://bounded-shared-inflight-deadline.test';
+  let releaseFirst;
+  let markStarted;
+  const started=new Promise(resolve=>{markStarted=resolve;});
+  const slowFetch=()=>new Promise(resolve=>{
+    releaseFirst=()=>resolve({status:200,ok:true,headers:new Map(),json:async()=>({ok:true})});
+    markStarted();
+  });
+  const owner=new RestClient({baseUrls:[baseUrl],fetchImpl:slowFetch,timeoutMs:1000,minIntervalMs:0});
+  const bounded=new RestClient({baseUrls:[baseUrl],fetchImpl:async()=>{throw new Error('SHARED_REQUEST_SHOULD_NOT_START_TWICE');},timeoutMs:1000,minIntervalMs:0});
+  const ownerRequest=owner.request('/api/v3/exchangeInfo');
+  await started;
+  bounded.requestDeadlineAtMs=Date.now()+40;
+  await assert.rejects(
+    ()=>bounded.request('/api/v3/exchangeInfo'),
+    error=>error?.name==='ScanDeadlineError'&&/MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED/.test(error.message)
+  );
+  assert.equal(bounded.state,'ERROR');
+  releaseFirst();
+  await ownerRequest;
+});
+
 test('TEST_FIXTURE: expired analyst scan deadline blocks outbound REST requests immediately',async()=>{
   let calls=0;
   const client=new RestClient({baseUrls:['https://scan-deadline.test'],timeoutMs:100,minIntervalMs:0,
