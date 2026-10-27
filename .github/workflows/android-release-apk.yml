@@ -164,18 +164,19 @@ jobs:
           let javaSource=fs.readFileSync(javaPath,'utf8');
           const originalJava=javaSource;
           const oldPrimary='private static final String PRIMARY_BACKEND_ORIGIN = "https://dhdtech-url-required.invalid";';
-          if(!javaSource.includes(oldPrimary)){
-            console.error('::error::TradliActivity.java does not contain the expected DHDTech placeholder.');
+          const configuredPrimary=`private static final String PRIMARY_BACKEND_ORIGIN = "${origin}";`;
+          if(!javaSource.includes(oldPrimary)&&!javaSource.includes(configuredPrimary)){
+            console.error('::error::TradliActivity.java is neither the known placeholder nor the configured DHDTech origin.');
             process.exit(1);
           }
-          javaSource=javaSource.replace(oldPrimary,`private static final String PRIMARY_BACKEND_ORIGIN = "${origin}";`);
+          javaSource=javaSource.replace(oldPrimary,configuredPrimary);
           const oldFallback='private static final String FALLBACK_BACKEND_ORIGIN = "";';
           if(!javaSource.includes(oldFallback)){
             console.error('::error::TradliActivity.java does not contain the expected empty fallback.');
             process.exit(1);
           }
           javaSource=javaSource.replace(oldFallback,'private static final String FALLBACK_BACKEND_ORIGIN = "";');
-          if(javaSource===originalJava||!javaSource.includes(`PRIMARY_BACKEND_ORIGIN = "${origin}"`)||!javaSource.includes('FALLBACK_BACKEND_ORIGIN = ""')||javaSource.includes('railway.app')){
+          if(!javaSource.includes(`PRIMARY_BACKEND_ORIGIN = "${origin}"`)||!javaSource.includes('FALLBACK_BACKEND_ORIGIN = ""')||javaSource.includes('railway.app')){
             console.error('::error::Could not safely apply the DHDTech origin to TradliActivity.java');
             process.exit(1);
           }
@@ -188,21 +189,18 @@ jobs:
           ];
           for(const path of extraJavaPaths){
             let source=fs.readFileSync(path,'utf8');
-            if(path.endsWith('RadarXPushRegistration.java')){
-              const placeholder='private static final String BACKEND = "https://dhdtech-url-required.invalid";';
-              if(!source.includes(placeholder)){
-                console.error('::error::Missing DHDTech placeholder in '+path);
-                process.exit(1);
-              }
-              source=source.replace(placeholder,`private static final String BACKEND = "${origin}";`);
-            }else{
-              const placeholder='private static final String BACKEND_ORIGIN = "https://dhdtech-url-required.invalid";';
-              if(!source.includes(placeholder)){
-                console.error('::error::Missing DHDTech placeholder in '+path);
-                process.exit(1);
-              }
-              source=source.replace(placeholder,`private static final String BACKEND_ORIGIN = "${origin}";`);
+            const isPushRegistration=path.endsWith('RadarXPushRegistration.java');
+            const placeholder=isPushRegistration
+              ? 'private static final String BACKEND = "https://dhdtech-url-required.invalid";'
+              : 'private static final String BACKEND_ORIGIN = "https://dhdtech-url-required.invalid";';
+            const configuredDeclaration=isPushRegistration
+              ? `private static final String BACKEND = "${origin}";`
+              : `private static final String BACKEND_ORIGIN = "${origin}";`;
+            if(!source.includes(placeholder)&&!source.includes(configuredDeclaration)){
+              console.error('::error::Missing known placeholder or configured DHDTech declaration in '+path);
+              process.exit(1);
             }
+            source=source.replace(placeholder,configuredDeclaration);
             if((path.endsWith('MainActivity.java')||path.endsWith('BottomRadarActivity.java'))&&!source.includes('BACKEND_FALLBACK_ORIGIN = "";')){
               console.error('::error::Native WebView activity must have an empty backend fallback: '+path);
               process.exit(1);
