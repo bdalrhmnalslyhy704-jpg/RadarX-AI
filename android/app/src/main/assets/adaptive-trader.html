@@ -148,6 +148,19 @@ main{width:min(1180px,100%);margin:auto;padding:0 15px 38px;position:relative;z-
     </div>
   </div>
   <div class="adjustments" id="learnAdjustments"></div>
+  <div class="section-title"><h2>بوابة الجاهزية قبل الأموال الحقيقية</h2><span id="paperValidationStatus" class="tag watch">المحاكاة قيد التجميع</span></div>
+  <div class="learning-grid">
+    <div class="learning-card">
+      <h3>محاكاة خادمية مستمرة</h3>
+      <p id="serverPaperValidationText">لا تُفتح أوامر حقيقية حتى تسجل المحاكاة الخادمية 100 صفقة مغلقة على الأقل، بنسبة ربح 55% أو أكثر، وصافي ربح موجب، وتراجع محقق ضمن الحد.</p>
+      <div class="learning-progress"><i id="paperValidationProgress" style="width:0%"></i></div>
+      <p id="serverPaperPortfolioSummary">الصفقات الورقية الخادمية: 0 من 100</p>
+    </div>
+    <div class="learning-card">
+      <h3>شروط الفتح الحي</h3>
+      <p>يلزم تحقق سجل المحاكاة ومعايرة بيانات السوق والشموع الحديثة، ثم إعدادات خادم آمنة وفحص صلاحيات Binance. لا تكفي الإشارات أو نتيجة اختبار برمجي لإثبات الربحية.</p>
+    </div>
+  </div>
   <div class="section-title"><h2>التعلّم من الصفقات المغلقة فعليًا</h2><span id="tradeLearningStatus" class="tag watch">تنتظر العينة</span></div>
   <p class="tiny" id="tradeLearningCount">لم تُسجّل نتائج صفقات حقيقية مكتملة بعد. التعلم من سجل التداول منفصل عن المحفظة الورقية المحلية.</p>
   <div class="adjustments" id="tradeLearnAdjustments"></div>
@@ -475,6 +488,14 @@ function renderLearning(){
     :'المنظومة تحفظ النتائج وتنتظر أمثلة حقيقية مرصودة لمدة أربع ساعات على الأقل. لن تدّعي أنها تعلمت قبل اكتمال العينة.';
   el('learnProgress').style.width=Math.min(100,rows.length/30*100)+'%';
   el('learnCount').textContent=resolvedCount+' من 30 نتيجة مكتملة · معدل النتائج الإيجابية '+fmt(model.positive_outcome_rate_pct,1)+'% (تقديري)'+(state.serverStatus?' · ذاكرة خادمية منفصلة':'');
+  const validation=(state.serverStatus && state.serverStatus.paper_validation_profile)||{};
+  const serverPaper=(state.serverStatus && state.serverStatus.server_paper_portfolio)||{};
+  const paperCount=Math.max(0,Number(validation.resolved_paper_trades)||0);
+  el('paperValidationStatus').textContent=validation.ready?'اجتازت البوابة الورقية':'التداول الحي مقفل';
+  el('paperValidationStatus').className='tag '+(validation.ready?'early':'watch');
+  el('paperValidationProgress').style.width=Math.min(100,paperCount/100*100)+'%';
+  el('serverPaperValidationText').textContent='الصفقات المغلقة: '+paperCount+'/100 · معدل الربح '+fmt(validation.win_rate_pct,1)+'% · صافي الربح '+money(validation.net_pnl_usdt)+' · أقصى تراجع محقق '+fmt(validation.max_drawdown_pct,2)+'%.';
+  el('serverPaperPortfolioSummary').textContent='رصيد افتراضي '+money(serverPaper.starting_balance)+' · قيمة حالية '+money(serverPaper.equity)+' · مراكز مفتوحة '+fmt(serverPaper.open_positions,0)+' · كل النتائج خادمية ومنفصلة عن المحفظة المحلية.';
   const labels={volume:'تسارع الحجم',buyer_flow:'ضغط الشراء',structure:'البنية السعرية',compression:'انكماش التذبذب'};
   el('learnAdjustments').innerHTML=Object.keys(labels).map(function(key){
     const value=num(model.adjustments[key])||0;
@@ -508,6 +529,7 @@ function renderExecutionStatus(){
     if(execution.mode==='HALTED'||execution.halted===true){mode='halt';badgeText='HALTED · متوقف للحماية';statusText='التنفيذ موقوف: '+String(execution.halt_reason||'حالة حماية تحتاج مراجعة');}
     else if(execution.mode==='LIVE_SPOT_GATED'){mode='live';badgeText='LIVE SPOT · تنفيذ حي مقيّد';statusText='تنفيذ Spot الحقيقي مهيأ على الخادم مع حدود مخاطرة';}
     else if(execution.mode==='SPOT_TESTNET'){mode='testnet';badgeText='SPOT TESTNET · اختبار';statusText='بيئة الاختبار مفعّلة؛ لا تعتبرها أموالًا حقيقية';}
+    else if(execution.mode==='WAITING_FOR_PAPER_VALIDATION'){mode='testnet';badgeText='PAPER VALIDATION · التداول الحي مقفل';statusText='الأوامر الحقيقية مقفلة حتى تنجح المحاكاة الخادمية في اختبار الأداء';}
     else if(execution.mode==='WAITING_FOR_PREFLIGHT'){mode='testnet';badgeText='WAITING · فحص الحساب';statusText='ينتظر التحقق من صلاحيات حساب Binance قبل أي أمر';}
     else if(execution.mode==='BLOCKED_CONFIGURATION'){mode='off';badgeText='BLOCKED · غير مهيأ';statusText='التنفيذ الحقيقي محجوب حتى تكتمل إعدادات الخادم الآمنة';}
     else {mode='off';badgeText='PAPER ONLY · التداول الحقيقي معطّل';statusText='التداول الحقيقي غير مفعّل؛ الماسح يعمل للقراءة والتقييم فقط';}
@@ -525,7 +547,10 @@ function renderExecutionStatus(){
   const dailyPnl=Number(execution && execution.daily_realized_pnl_usdt)||0;
   const trades=Number(execution && execution.daily_trade_count)||0;
   const maximum=Number(execution && execution.max_trades_per_utc_day)||2;
-  learningText.textContent='نتائج صفقات مغلقة: '+resolved+' · اليوم: '+trades+'/'+maximum+' صفقات · صافي محقق: '+money(dailyPnl);
+  const validation=(state.serverStatus && state.serverStatus.paper_validation_profile)||{};
+  const paperCount=Math.max(0,Number(validation.resolved_paper_trades)||0);
+  const paperNet=Number(validation.net_pnl_usdt)||0;
+  learningText.textContent='محاكاة الخادم: '+paperCount+'/100 · صافي '+money(paperNet)+' · نتائج بيع حقيقية مغلقة: '+resolved+' · اليوم '+trades+'/'+maximum+' · صافي حي '+money(dailyPnl);
 }
 function render(){
   const snapshot=state.lastSnapshot;
