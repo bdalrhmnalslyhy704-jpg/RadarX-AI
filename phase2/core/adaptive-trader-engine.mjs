@@ -351,10 +351,12 @@ export function createAdaptiveTraderSnapshotService({
     // One sidecar scan at a time; the REST client uses a process-shared budget
     // with the other radars. Coalescing different universe requests avoids a
     // burst of overlapping 40/80/120-pair scans on that shared budget.
-    const active = flights.values().next().value;
-    if (active) {
-      // Preserve the requested universe size, but wait until the current scan
-      // releases the shared REST budget before starting another scan.
+    const activeEntry = flights.entries().next().value;
+    if (activeEntry) {
+      const [activeLimit, active] = activeEntry;
+      // Identical requests should share one scan. A different universe size
+      // waits, then gets its own scan rather than consuming the wrong result.
+      if (activeLimit === safeLimit) return active;
       try { await active; } catch {}
       return getSnapshot({ limit: safeLimit, now: Date.now() });
     }
