@@ -10,6 +10,8 @@ on:
     paths:
       - "phase2/core/missed-mover-case-study.mjs"
       - "phase2/core/pre-move-background-summary.mjs"
+      - "phase2/market/universe-scanner.mjs"
+      - "phase2/tests/market-radar.test.mjs"
       - "phase2/http/api.mjs"
       - "phase2/tests/missed-mover-case-study.test.mjs"
       - "phase2/tests/pre-move-background-summary.test.mjs"
@@ -42,6 +44,7 @@ jobs:
           for file in \
             phase2/tests/missed-mover-case-study.test.mjs \
             phase2/tests/pre-move-background-summary.test.mjs \
+            phase2/tests/market-radar.test.mjs \
             phase2/tests/early-mover-case-study-api.test.mjs \
             phase2/tests/pre-move-watch-notification.test.mjs \
             phase2/tests/radar-missed-mover-audit.test.mjs \
