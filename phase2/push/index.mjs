@@ -200,6 +200,13 @@ export class PushManager{
     const requestedCategory=String(kind||'MARKET').toUpperCase()==='WATCH_ONLY'?'WATCH_ONLY':'MARKET';
     if(requestedCategory==='WATCH_ONLY'||notification?.watch_only===true||notification?.entry_eligible===false||/WATCH_ONLY/.test(String(notification?.notification_mode||'')))
       return{ok:false,status:'WATCH_ONLY_FEED_ONLY',reason:'FINAL_CONFIRMATION_REQUIRED'};
+    const direction=String(notification?.direction??notification?.bias??'').trim().toUpperCase();
+    const risingDirection=/^(UP|LONG|BULL)/.test(direction);
+    const finalConfirmation=String(notification?.signal_type||'').toUpperCase()==='CONFIRMED'||
+      String(notification?.signal_lifecycle_state||'').toUpperCase()==='CONFIRMED'||
+      String(notification?.notification_gate_mode||'').toUpperCase()==='STRICT_NOTIFICATION';
+    if(notification?.entry_eligible!==true||!risingDirection||!finalConfirmation)
+      return{ok:false,status:'SUPPRESSED_UNCONFIRMED',reason:!risingDirection?'RISING_DIRECTION_REQUIRED':'FINAL_CONFIRMATION_REQUIRED'};
     const subscriptionId=String(subscription?.id||subscription?.installation_id||subscription?.user_id||'unknown');
     const queueKey=subscriptionId;
     const previous=this.pushGuardQueues.get(queueKey)||Promise.resolve();
@@ -312,7 +319,15 @@ export class PushManager{
           reason:risingDenied?'RISING_DIRECTION_REQUIRED':'FINAL_CONFIRMATION_REQUIRED',http_status:null,attempted:false};
         await this.store.appendNotificationAudit(audit);out.push(audit);continue;
       }
-      if(Number(signal.scores?.data_quality)<settings.minDataQuality||Number(signal.scores?.liquidity_quality)<settings.minLiquidityQuality)continue;
+      const dataQuality=Number(signal.scores?.data_quality),liquidityQuality=Number(signal.scores?.liquidity_quality);
+      if(!Number.isFinite(dataQuality)||!Number.isFinite(liquidityQuality)||
+         dataQuality<settings.minDataQuality||liquidityQuality<settings.minLiquidityQuality){
+        const audit={event:'NOTIFICATION_ATTEMPT',event_class:marketEventClass(signal.data_status?.source??signal.source),
+          signal_id:signal.signal_id,subscription_id:sub.id,user_id:sub.user_id,status:'SUPPRESSED_QUALITY',
+          provider:this.provider.status().provider,attempted_at:Date.now(),reason:'DATA_AND_LIQUIDITY_QUALITY_REQUIRED',
+          http_status:null,attempted:false};
+        await this.store.appendNotificationAudit(audit);out.push(audit);continue;
+      }
       const r=await this.sendMarketPush(sub,payload(signal,Date.now()),'MARKET'),audit={event:'NOTIFICATION_ATTEMPT',event_class:marketEventClass(signal.data_status?.source??signal.source),
         signal_id:signal.signal_id,subscription_id:sub.id,user_id:sub.user_id,status:r.status,
         provider:this.provider.status().provider,attempted_at:Date.now(),reason:r.reason??null,http_status:r.httpStatus??null};
