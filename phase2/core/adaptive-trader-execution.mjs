@@ -102,7 +102,7 @@ function parseSymbolFilters(info,symbol){
   const minQty=FINITE(lot?.minQty);
   const marketMinQty=FINITE(marketLot?.minQty);
   const minNotional=FINITE(minNotionalFilter?.minNotional)??MIN_ORDER_USDT;
-  if(!(stepSize>0)||!(marketStepSize>0)||!(tickSize>0)||!(minQty>=0)||!(minNotional>0))
+  if(!(stepSize>0)||!(marketStepSize>0)||!(tickSize>0)||minQty===null||minQty<0||!(minNotional>0))
     throw new Error('SPOT_SYMBOL_FILTERS_INVALID');
   return {symbol,baseAsset:String(row.baseAsset||''),quoteAsset:'USDT',stepSize,marketStepSize,tickSize,
     minQty,minMarketQty:marketMinQty!==null?marketMinQty:minQty,
@@ -422,7 +422,10 @@ export class AdaptiveTraderExecutionController{
     if(!filters.quoteOrderQtyMarketAllowed)throw new Error('SYMBOL_MARKET_QUOTE_ORDER_QTY_UNAVAILABLE');
     const account=await this.client.account();
     const freeUsdt=Number((account?.balances||[]).find(row=>row.asset==='USDT')?.free||0);
-    const quoteAmount=Math.min(Number(this.config.max_order_quote_usdt),Math.max(0,freeUsdt-2));
+    let quoteAmount=Math.min(Number(this.config.max_order_quote_usdt),Math.max(0,freeUsdt-2));
+    const referencePrice=FINITE(candidate.price);
+    if(filters.maxQty!==null&&filters.maxQty>0&&referencePrice>0&&quoteAmount/referencePrice>filters.maxQty)
+      quoteAmount=Math.min(quoteAmount,filters.maxQty*referencePrice*0.98);
     const minOrder=Math.max(MIN_ORDER_USDT,filters.minNotional);
     if(!(quoteAmount>=minOrder))throw new Error('INSUFFICIENT_FREE_USDT_OR_MIN_NOTIONAL');
     const positionIntent={symbol,client_order_id:buyId,requested_quote_usdt:Number(quoteAmount.toFixed(2)),
@@ -446,8 +449,8 @@ export class AdaptiveTraderExecutionController{
     const baseAsset=filters.baseAsset;
     const baseFees=(Array.isArray(buy.fills)?buy.fills:[]).filter(fill=>String(fill.commissionAsset||'')===baseAsset)
       .reduce((sum,fill)=>sum+(FINITE(fill.commission)||0),0);
-    const netQty=roundDownToStep(filledQty-baseFees,filters.marketStepSize);
-    if(!(netQty>=filters.minMarketQty)){
+    const netQty=roundDownToStep(filledQty-baseFees,filters.stepSize);
+    if(!(netQty>=filters.minQty)|| (filters.maxQty!==null&&netQty>filters.maxQty)){
       this.state.pending_buy={...intent,status:'FILLED_QUANTITY_BELOW_MARKET_MINIMUM'};
       await this.persist();return {status:'BUY_FILLED_NEEDS_MANUAL_RECONCILIATION',error:'FILLED_QUANTITY_BELOW_MARKET_MINIMUM'};
     }
@@ -470,7 +473,7 @@ export class AdaptiveTraderExecutionController{
       order_id:buy.orderId,price:entryPrice,quote_usdt:quoteSpent,at:this.clock(),real_order_execution:this.config.network==='LIVE'});
     this.state.trade_history=this.state.trade_history.slice(0,500);await this.persist();
     try{
-      const oco=await this.client.placeProtectiveOco({symbol:intent.symbol,quantity:formatNumber(netQty,filters.marketStepSize),
+      const oco=await this.client.placeProtectiveOco({symbol:intent.symbol,quantity:formatNumber(netQty,filters.stepSize),
         stopPrice:formatNumber(stop,filters.tickSize),takeProfitPrice:formatNumber(target,filters.tickSize),listClientOrderId:ocoId});
       this.state.open_position.protection_status='ACTIVE';
       this.state.open_position.oco_status=String(oco?.listOrderStatus||oco?.listStatusType||'EXECUTING');
@@ -486,7 +489,7 @@ export class AdaptiveTraderExecutionController{
       if(!error?.indeterminate){
         try{
           const liquidation=await this.client.placeMarketSell({symbol:intent.symbol,
-            quantity:formatNumber(netQty,filters.marketStepSize),clientOrderId:clientId('ATS',intent.client_order_id)});
+            quantity:formatNumber(roundDownToStep(netQty,filters.marketStepSize),filters.marketStepSize),clientOrderId:clientId('ATS',intent.client_order_id)});
           if(liquidation?.status==='FILLED'&&Number(liquidation?.executedQty)>0&&Number(liquidation?.cummulativeQuoteQty)>0){
             const proceeds=Number(liquidation.cummulativeQuoteQty),fees=(quoteSpent+proceeds)*FEE_ESTIMATE_RATE;
             const pnl=proceeds-quoteSpent-fees;
