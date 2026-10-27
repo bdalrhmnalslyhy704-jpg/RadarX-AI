@@ -60,8 +60,8 @@ assert.match(service, /!alert\.has\("entry_eligible"\) \|\| !alert\.optBoolean\(
   'phone alerts must require explicit entry eligibility; missing fields do not count as approval');
 assert.match(service, /boolean finalConfirmation = "CONFIRMED"\.equals\(lifecycleState\)/,
   'phone alerts must require an explicit CONFIRMED lifecycle/signal or strict notification gate');
-assert.match(service, /if \(!finalConfirmation\) return false;/,
-  'early setup/monitor states must fail closed at Android last-mile');
+assert.match(service, /if \(!risingDirection \|\| !finalConfirmation\) return false;/,
+  'only confirmed rising opportunities may pass Android last-mile');
 assert.match(service, /boolean risingDirection = direction\.startsWith\("UP"\)/,
   'Android phone alerts must be for upward/rising opportunities only');
 assert.match(firebase, /FCM_MESSAGE_SUPPRESSED_WATCH_OR_UNCONFIRMED/,
@@ -70,8 +70,8 @@ assert.match(firebase, /boolean entryEligible = Boolean\.parseBoolean/,
   'Firebase must require entry_eligible=true before posting a phone notification');
 assert.match(firebase, /boolean finalConfirmation = "CONFIRMED"\.equals\(lifecycleState\)/,
   'Firebase must require a final confirmed state or strict final gate');
-assert.match(firebase, /if \(watchOnly \|\| watchEvent \|\| !entryEligible \|\| followUpRequired \|\| !finalConfirmation\)/,
-  'Firebase must not render early watch, follow-up or unconfirmed data messages');
+assert.match(firebase, /if \(!explicitTest && \(watchOnly \|\| watchEvent \|\| !risingDirection \|\| !entryEligible \|\| followUpRequired \|\| !finalConfirmation\)\)/,
+  'Firebase must not render early watches or unconfirmed/non-rising data messages, except an explicit test push');
 assert.match(firebase, /boolean risingDirection = direction\.startsWith\("UP"\)/,
   'Firebase must suppress non-rising directions even when a stale message is otherwise marked confirmed');
 assert.match(service, /RadarXNotificationPolicy\.reserve/,
