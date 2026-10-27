@@ -43,7 +43,7 @@ export function readAdaptiveTraderExecutionConfig(env=process.env){
   if(requested&&network==='LIVE'&&confirmation!==LIVE_CONFIRMATION)issues.push('EXPLICIT_LIVE_CONFIRMATION_MISSING');
   if(requested&&network==='TESTNET'&&confirmation&&confirmation!==LIVE_CONFIRMATION)issues.push('LIVE_CONFIRMATION_VALUE_INVALID');
   const enabled=requested&&issues.length===0;
-  return Object.freeze({
+  const result={
     requested,enabled,network:network==='LIVE'||network==='TESTNET'?network:'NOT_CONFIGURED',
     mode:!requested?'PAPER_ONLY':enabled?(network==='LIVE'?'LIVE_SPOT_GATED':'SPOT_TESTNET'):'BLOCKED_CONFIGURATION',
     block_reasons:issues,
@@ -52,9 +52,10 @@ export function readAdaptiveTraderExecutionConfig(env=process.env){
     min_resolved_outcomes:MIN_LIVE_OUTCOMES,
     max_open_positions:MAX_OPEN_POSITIONS,
     max_trades_per_utc_day:MAX_TRADES_PER_UTC_DAY,
-    withdraw_permission_required:false,margin_required:false,futures_required:false,
-    _credentials:enabled?{apiKey,apiSecret}:null
-  });
+    withdraw_permission_required:false,margin_required:false,futures_required:false
+  };
+  Object.defineProperty(result,'_credentials',{value:enabled?{apiKey,apiSecret}:null,enumerable:false,writable:false});
+  return Object.freeze(result);
 }
 
 export function roundDownToStep(value,step){
