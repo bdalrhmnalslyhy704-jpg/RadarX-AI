@@ -416,7 +416,7 @@ export class AdaptiveTraderExecutionController{
     }
     this.state.paper_validation_ready=paperValidationProfile?.ready===true;
     this.state.paper_validation_profile=paperValidationProfile&&typeof paperValidationProfile==='object'?paperValidationProfile:null;
-    if(this.config.network==='LIVE'&&this.state.paper_validation_ready!==true){
+    if(this.config.network==='LIVE'&&this.state.paper_validation_ready!==true&&!this.state.pending_buy&&!this.state.open_position){
       this.state.last_event='WAITING_FOR_PAPER_VALIDATION';
       this.state.last_error=null;await this.persist();
       return {status:'WAITING_FOR_PAPER_VALIDATION',execution:this.snapshot()};
