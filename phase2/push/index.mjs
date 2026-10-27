@@ -757,7 +757,35 @@ export class PushManager{
         alert?.falcon_eye?.data_quality ??
         0
       );
-      if(!Number.isFinite(dq)||dq<Number(settings.minDataQuality))continue;
+      const lq=Number(
+        alert?.liquidity_quality ??
+        alert?.data_status?.liquidity_quality ??
+        alert?.liquidity_metrics?.liquidity_quality ??
+        alert?.components?.liquidity_quality ??
+        alert?.components?.liquidity ??
+        alert?.early_move?.liquidity_quality ??
+        alert?.early_wake?.liquidity_quality ??
+        alert?.pre_explosion?.liquidity_quality ??
+        alert?.strong_move?.liquidity_quality ??
+        alert?.rotation?.liquidity_quality ??
+        alert?.liquidity_absorption?.liquidity_quality ??
+        alert?.kahir_analysis?.liquidity_quality ??
+        alert?.analysis?.liquidity_quality ??
+        alert?.analysis?.liquidity_score ??
+        alert?.doomsday?.liquidity_quality ??
+        alert?.professor_opinion?.liquidity_quality ??
+        alert?.deep_scan?.assessment?.liquidity_quality ??
+        alert?.deep_scan?.assessment?.liquidity_score ??
+        alert?.almuqawim?.liquidity_quality ??
+        alert?.early_expansion?.liquidity_quality ??
+        alert?.coin_hunter?.liquidity_quality ??
+        alert?.factors?.liquidity_quality ??
+        alert?.whale_accumulation?.liquidity_quality ??
+        alert?.falcon_eye?.liquidity_quality ??
+        Number.NaN
+      );
+      if(!Number.isFinite(dq)||dq<Number(settings.minDataQuality)||
+         !Number.isFinite(lq)||lq<Number(settings.minLiquidityQuality))continue;
       const r=await this.sendMarketPush(sub,radarPayload(alert,Date.now()),'MARKET');
       const audit={event:'RADAR_ALERT_NOTIFICATION',event_class:'RADAR_ALERT',radar:alert.radar||'UNKNOWN_RADAR',radar_name:radarTitle(alert),
         symbol:alert.symbol,alert_id:alert.id||null,subscription_id:sub.id,user_id:sub.user_id,status:r.status,
