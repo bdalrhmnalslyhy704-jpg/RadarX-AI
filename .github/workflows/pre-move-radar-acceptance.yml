@@ -18,7 +18,6 @@ on:
       - 'phase2/tests/push.test.mjs'
       - 'phase2/tests/rest.test.mjs'
       - 'phase2/tests/pre-move-watch-notification.test.mjs'
-      - 'phase2/push/index.mjs'
       - 'android/app/src/main/java/com/radarx/app/RadarXFirebaseMessagingService.java'
       - 'android/fcm-watch-notification-regression.mjs'
   workflow_dispatch:
