@@ -48,7 +48,9 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
         boolean lifecycleConflicts = !lifecycleState.isEmpty() && !"CONFIRMED".equals(lifecycleState);
         boolean finalConfirmation = !lifecycleConflicts && ("CONFIRMED".equals(lifecycleState) ||
                 "CONFIRMED".equals(signalType) || "STRICT_NOTIFICATION".equals(notificationGateMode));
-        if (!explicitTest && (watchOnly || watchEvent || !risingDirection || !entryEligible ||
+        boolean approvedPreMoveWatch = isApprovedPreMoveWatch(message.getData());
+        if (!explicitTest && !approvedPreMoveWatch &&
+                (watchOnly || watchEvent || !risingDirection || !entryEligible ||
                 !notificationGateEligible || followUpRequired || lifecycleConflicts || !finalConfirmation)) {
             Log.i(TAG, "FCM_MESSAGE_SUPPRESSED_WATCH_OR_UNCONFIRMED");
             return;
@@ -132,7 +134,8 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
             }
             try {
                 manager.notify(requestCode == 0 ? 42099 : requestCode, builder.build());
-                Log.i(TAG, explicitTest ? "FCM_TEST_NOTIFICATION_POSTED" : "FCM_CONFIRMED_NOTIFICATION_POSTED");
+                Log.i(TAG, explicitTest ? "FCM_TEST_NOTIFICATION_POSTED" :
+                        (approvedPreMoveWatch ? "FCM_PRE_MOVE_WATCH_NOTIFICATION_POSTED" : "FCM_CONFIRMED_NOTIFICATION_POSTED"));
                 if (!eventId.isEmpty()) {
                     RadarXPushRegistration.acknowledgeReceipt(getApplicationContext(), eventId, event, symbol, radar);
                 }
@@ -140,6 +143,66 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
                 RadarXNotificationPolicy.release(this, reservation);
                 Log.w(TAG, "FCM_NOTIFICATION_POST_FAILED", error);
             }
+        }
+    }
+
+    /**
+     * Permit exactly the backend's bounded Pre-Move observation tier to reach the
+     * phone as a watch-only heads-up. This is not a confirmation or entry signal.
+     * Every other watch/unconfirmed payload still fails the strict gate above.
+     */
+    private static boolean isApprovedPreMoveWatch(java.util.Map<String, String> data) {
+        if (data == null) return false;
+        String event = dataValue(data, "event", "").toUpperCase(java.util.Locale.ROOT);
+        String eventClass = dataValue(data, "event_class", "").toUpperCase(java.util.Locale.ROOT);
+        String type = dataValue(data, "type", "").toUpperCase(java.util.Locale.ROOT);
+        String mode = dataValue(data, "notification_mode", "").toUpperCase(java.util.Locale.ROOT);
+        String gateMode = dataValue(data, "notification_gate_mode", "").toUpperCase(java.util.Locale.ROOT);
+        String radar = dataValue(data, "radar", "").toUpperCase(java.util.Locale.ROOT);
+        String tier = dataValue(data, "watch_notification_tier", "").toUpperCase(java.util.Locale.ROOT);
+        String symbol = dataValue(data, "symbol", "").toUpperCase(java.util.Locale.ROOT);
+        String source = dataValue(data, "source", "").trim();
+        String direction = dataValue(data, "direction", "").toUpperCase(java.util.Locale.ROOT);
+        String lifecycle = dataValue(data, "signal_lifecycle_state", "").toUpperCase(java.util.Locale.ROOT);
+        String riskFlags = dataValue(data, "risk_flags", "").toUpperCase(java.util.Locale.ROOT);
+        double dataQuality = numericValue(data, "data_quality");
+        double liquidityQuality = numericValue(data, "liquidity_quality");
+        double price = numericValue(data, "price");
+        boolean lifecycleOkay = lifecycle.isEmpty() ||
+                "WATCH_EARLY".equals(lifecycle) || "MONITOR".equals(lifecycle) ||
+                "MONITOR_ONLY".equals(lifecycle) || "PRE_MOVE_WATCH_ONLY".equals(lifecycle);
+        boolean tierOkay = "HIGH_ACTIVITY_STRUCTURE_PENDING".equals(tier) ||
+                "EARLY_FLOW_MONITOR".equals(tier) ||
+                "TICKER_ACTIVITY_ACCELERATION_MONITOR".equals(tier);
+        boolean sourceOkay = "Binance Public REST".equals(source) || "BINANCE_PUBLIC_REST".equals(source);
+        boolean unsafeRisk = riskFlags.matches("(?s).*?(ALREADY_EXTENDED|WIDE_SPREAD|LOW_LIQUIDITY|STALE_DATA|DATA_STALE|FUTURE_DATA|BREAKOUT_TRAP|SELLING_TRAP).*");
+        return "PRE_MOVE_RADAR_WATCH_ONLY".equals(event) &&
+                "RADAR_ALERT".equals(eventClass) && "RADARX_RADAR_ALERT".equals(type) &&
+                "PRE_MOVE".equals(radar) && "PRE_MOVE_WATCH_ONLY".equals(mode) &&
+                "PRE_MOVE_WATCH_ONLY".equals(gateMode) && "WATCH_ONLY".equals(
+                        dataValue(data, "signal_type", "").toUpperCase(java.util.Locale.ROOT)) &&
+                "SPOT".equals(dataValue(data, "market", "").toUpperCase(java.util.Locale.ROOT)) &&
+                "NONE".equals(direction) && "true".equalsIgnoreCase(dataValue(data, "watch_only", "false")) &&
+                "false".equalsIgnoreCase(dataValue(data, "entry_eligible", "true")) &&
+                "false".equalsIgnoreCase(dataValue(data, "notification_gate_eligible", "true")) &&
+                "true".equalsIgnoreCase(dataValue(data, "requires_follow_up_confirmation", "false")) &&
+                "true".equalsIgnoreCase(dataValue(data, "closed_candles_only", "false")) &&
+                "true".equalsIgnoreCase(dataValue(data, "data_valid", "false")) &&
+                "false".equalsIgnoreCase(dataValue(data, "data_stale", "true")) &&
+                "false".equalsIgnoreCase(dataValue(data, "future_data_detected", "true")) &&
+                "true".equalsIgnoreCase(dataValue(data, "paper_trading", "false")) &&
+                "false".equalsIgnoreCase(dataValue(data, "real_order_execution", "true")) &&
+                symbol.matches("[A-Z0-9]{2,20}USDT") && sourceOkay && tierOkay &&
+                dataQuality >= 70.0 && liquidityQuality >= 60.0 && price > 0.0 &&
+                lifecycleOkay && !unsafeRisk;
+    }
+
+    private static double numericValue(java.util.Map<String, String> data, String key) {
+        try {
+            double value = Double.parseDouble(dataValue(data, key, ""));
+            return Double.isFinite(value) ? value : Double.NaN;
+        } catch (NumberFormatException ignored) {
+            return Double.NaN;
         }
     }
 
