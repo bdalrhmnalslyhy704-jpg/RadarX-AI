@@ -46,6 +46,21 @@ assert.doesNotMatch(service, /candidates = body\.optJSONArray\("candidates"\)/,
   'unqualified radar analysis candidates must never be promoted into Android notifications');
 assert.match(service, /private static boolean isActionableRadarAlert\(JSONObject alert\)/,
   'Android must enforce a shared last-mile notification eligibility gate');
+assert.doesNotMatch(service, /pollPreMoveWatchOnlyAlertsSafely\(\);/,
+  'the active background loop must not turn every early watch into a local phone notification');
+assert.match(service, /PRE_MOVE_WATCH_FEED_ONLY_LOCAL_PUSH_DISABLED/,
+  'early pre-move monitoring must stay inside the app, not post local Android notifications');
+assert.match(service, /PRE_MOVE_WATCH_LOCAL_PUSH_BLOCKED_FINAL_CONFIRMATION_REQUIRED/,
+  'the obsolete local watch notifier must fail closed if called by any future code');
+assert.doesNotMatch(service, /manager\.notify\("radarx_premove_watch"/,
+  'no Android local notification path may post a watch-only candidate');
+assert.match(service, /!alert\.has\("entry_eligible"\) \|\| !alert\.optBoolean\("entry_eligible", false\)/,
+  'phone alerts must require explicit entry eligibility; missing fields do not count as approval');
+assert.match(service, /boolean finalConfirmation = "CONFIRMED"\.equals\(lifecycleState\)/,
+  'phone alerts must require an explicit CONFIRMED lifecycle/signal or strict notification gate');
+assert.match(service, /if \(!finalConfirmation\) return false;/,
+  'early setup/monitor states must fail closed at Android last-mile');
+
 assert.match(service, /boolean eligible = isActionableRadarAlert\(alert\)/,
   'durable and fallback feeds must use the shared notification gate');
 assert.match(service, /alert\.optBoolean\("watch_only", false\)/);
