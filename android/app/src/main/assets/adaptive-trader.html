@@ -257,7 +257,7 @@ function updateLabels(snapshot){
   el('kpiPnl').textContent=closed.length?('صافي محاكاة مغلقة: '+money(net)):'لا توجد صفقات مغلقة';
   const wins=closed.filter(x=>(num(x.net_pnl)||0)>0).length;
   el('kpiWinRate').textContent=closed.length?fmt(wins/closed.length*100,1)+'%':'—';
-  el('kpiMissed').textContent=String(state.missedMovers.length);
+  el('kpiMissed').textContent=String(state.missedMovers.filter(row=>row.classification==='POTENTIAL_MISSED_MOVER').length);
   el('candidateCaption').textContent='الترتيب لا يمثل احتمال ربح · '+(universe.scan_complete?'تغطية كاملة لهذه العينة':'لم تُحلّل كل الأزواج المؤهلة');
 }
 function resolveLearningSamples(snapshot,now){
@@ -406,7 +406,7 @@ function renderMissed(){
   const root=el('missedList');
   if(!state.missedMovers.length){root.innerHTML='<div class="empty"><b>لا توجد حركات محتملة مسجلة حتى الآن</b>تحتاج المقارنة إلى لقطة قديمة عمرها 15 دقيقة على الأقل. لا يمكن استرجاع ما فات قبل تشغيل الذاكرة.</div>';return;}
   root.innerHTML='<div class="table-wrap"><table><thead><tr><th>العملة</th><th>التصنيف</th><th>السعر السابق</th><th>السعر الحالي</th><th>التغير</th><th>وقت خط الأساس</th></tr></thead><tbody>'+
-    state.missedMovers.slice(0,200).map(function(row){return '<tr><td><b>'+esc(row.symbol)+'</b></td><td>'+esc(row.classification==='POTENTIAL_MISSED_MOVER'?'احتمال فرصة فائتة':'حركة بعد مراقبة')+'</td><td>'+esc(fmt(row.baseline_price,6))+'</td><td>'+esc(fmt(row.current_price,6))+'</td><td class="pos">'+esc(percent(row.move_pct))+'</td><td>'+esc(timeText(row.baseline_at))+'</td></tr>';}).join('')+
+    state.missedMovers.slice(0,200).map(function(row){return '<tr><td><b>'+esc(row.symbol)+'</b></td><td>'+esc(row.classification==='POTENTIAL_MISSED_MOVER'?'إشارة محتملة فاتتنا':row.classification==='UNASSESSED_MOVE'?'حركة لم تُحلّل':'حركة بعد مراقبة')+'</td><td>'+esc(fmt(row.baseline_price,6))+'</td><td>'+esc(fmt(row.current_price,6))+'</td><td class="pos">'+esc(percent(row.move_pct))+'</td><td>'+esc(timeText(row.baseline_at))+'</td></tr>';}).join('')+
     '</tbody></table></div>';
 }
 function renderPortfolio(){
@@ -493,6 +493,9 @@ document.querySelectorAll('[data-tab]').forEach(function(button){button.addEvent
 render();
 setStatus(state.lastSnapshot?'آخر عرض محفوظ محليًا — نفّذ فحصًا جديدًا للتأكد من الحالة الحية':'جاهز لفحص السوق الحقيقي','idle');
 if(!state.lastSnapshot)addJournal('تهيئة المتداول الجانبي: التنفيذ الحقيقي معطل، والذاكرة محلية.');
+// Poll only while this page is visible; this sidecar never changes the original radar workers.
+setInterval(function(){if(document.visibilityState==='visible'&&!scanBusy)void scanMarket();},5*60*1000);
+if(!state.lastSnapshot)setTimeout(function(){if(document.visibilityState==='visible')void scanMarket();},500);
 </script>
 </body>
 </html>
