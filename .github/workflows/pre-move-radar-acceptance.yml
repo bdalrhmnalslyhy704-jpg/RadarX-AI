@@ -153,7 +153,7 @@ jobs:
         timeout-minutes: 3
         run: |
           set -euo pipefail
-          URL="$BASE/api/early-mover-case-study?threshold_pct=5&window_hours=24&lead_minutes=60"
+          URL="$BASE/api/early-mover-case-study?threshold_pct=5&window_hours=24&lead_minutes=60&as_of=2026-10-27T11:07:00.000Z"
           TMP="$RUNNER_TEMP/early-mover-case-study.tmp.json"
           OUT="$RUNNER_TEMP/early-mover-case-study.json"
           CODE="000"
