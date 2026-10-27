@@ -7,7 +7,7 @@ import {createApiServer} from '../http/api.mjs';
 import {DurableStore} from '../core/store.mjs';
 import {NoopPushProvider} from '../push/index.mjs';
 
-async function start({provider}={}) {
+async function start({provider,worker}={}) {
   const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-trader-api-'));
   const store=await new DurableStore({dir}).init();
   const config={auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}};
