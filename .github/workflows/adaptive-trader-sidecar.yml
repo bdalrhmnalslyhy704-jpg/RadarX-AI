@@ -39,6 +39,8 @@ jobs:
         run: node --test --test-timeout=60000 phase2/tests/adaptive-trader-engine.test.mjs
       - name: Test read-only market API and fail-closed behavior
         run: node --test --test-timeout=60000 phase2/tests/adaptive-trader-api.test.mjs
+      - name: Test durable background learning worker
+        run: node --test --test-timeout=60000 phase2/tests/adaptive-trader-worker.test.mjs
       - name: Test Android dashboard integration and paper-only guards
         run: |
           node --test --test-timeout=60000 android/app/src/main/assets/tests/adaptive-trader-ui.test.mjs
