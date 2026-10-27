@@ -221,7 +221,7 @@ function persist(){
     localStorage.setItem(STORAGE_KEY,JSON.stringify(state));
     const worker=state.serverStatus;
     el('memoryText').textContent=worker
-      ?'ذاكرة الخادم المنفصلة: '+(Number(worker.memory?.resolved_samples)||0)+' نتائج مكتملة · '+String(worker.status||'غير معروف')
+      ?'ذاكرة الخادم المنفصلة: '+(Number((worker.memory && worker.memory.resolved_samples))||0)+' نتائج مكتملة · '+String(worker.status||'غير معروف')
       :'ذاكرة محلية احتياطية: '+state.samples.filter(x=>x.outcome).length+' نتائج مكتملة';
   }catch(error){
     el('memoryText').textContent='تعذر حفظ الذاكرة المحلية؛ صدّر البيانات للاحتفاظ بها.';
@@ -236,7 +236,7 @@ function money(value){const n=num(value);return n===null?'—':'$'+n.toLocaleStr
 function percent(value){const n=num(value);return n===null?'—':(n>0?'+':'')+fmt(n,2)+'%';}
 function timeText(value){const d=new Date(value);return Number.isNaN(d.getTime())?'—':d.toLocaleString('ar',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'});}
 function profile(){
-  const remote=state.serverStatus?.learning_profile;
+  const remote=(state.serverStatus && state.serverStatus.learning_profile);
   if(remote&&(remote.ready===true||(Number(remote.resolved_samples)||0)>0))return remote;
   return buildAdaptiveLearningProfile(state.samples);
 }
@@ -265,7 +265,7 @@ function updateLabels(snapshot){
   el('kpiPnl').textContent=closed.length?('صافي محاكاة مغلقة: '+money(net)):'لا توجد صفقات مغلقة';
   const wins=closed.filter(x=>(num(x.net_pnl)||0)>0).length;
   el('kpiWinRate').textContent=closed.length?fmt(wins/closed.length*100,1)+'%':'—';
-  const remoteMissed=Array.isArray(state.serverStatus?.missed_movers)?state.serverStatus.missed_movers:[];
+  const remoteMissed=Array.isArray((state.serverStatus && state.serverStatus.missed_movers))?state.serverStatus.missed_movers:[];
   const missedMap=new Map([...remoteMissed,...state.missedMovers].map(row=>[row.id||String(row.symbol)+':'+String(row.baseline_at),row]));
   el('kpiMissed').textContent=String([...missedMap.values()].filter(row=>row.classification==='POTENTIAL_MISSED_MOVER').length);
   el('candidateCaption').textContent='الترتيب لا يمثل احتمال ربح · '+(universe.scan_complete?'تغطية كاملة لهذه العينة':'لم تُحلّل كل الأزواج المؤهلة');
@@ -365,13 +365,13 @@ async function refreshWorkerStatus(){
     const response=await fetch(API_BASE+'/api/adaptive-trader/status',{method:'GET',cache:'no-store',headers:{Accept:'application/json'}});
     const value=await response.json();
     if(!response.ok||value.real_order_execution!==false||value.paper_trading!==true)throw new Error(value.error||'WORKER_STATUS_NOT_VERIFIED');
-    const previous=state.serverStatus?.status;
+    const previous=(state.serverStatus && state.serverStatus.status);
     state.serverStatus=value;
     if(previous&&previous!==value.status)addJournal('تغيّرت حالة المتداول الخادمي إلى '+String(value.status)+'.',value.status==='DEGRADED'?'warning':'info');
     persist();render();
     return true;
   }catch(error){
-    if(!state.serverStatus)addJournal('حالة ذاكرة الخادم غير متاحة حاليًا؛ لم تُختلق بيانات. '+String(error?.message||error),'warning');
+    if(!state.serverStatus)addJournal('حالة ذاكرة الخادم غير متاحة حاليًا؛ لم تُختلق بيانات. '+String((error && error.message)||error),'warning');
     return false;
   }
 }
@@ -386,9 +386,9 @@ async function scanMarket(){
     const limit=Number(el('universeLimit').value)||80;
     const response=await fetch(API_BASE+'/api/adaptive-trader/market-snapshot?limit='+encodeURIComponent(limit),{method:'GET',cache:'no-store',headers:{Accept:'application/json'}});
     const snapshot=await response.json();
-    if(!response.ok||snapshot.status!=='LIVE_DATA'||snapshot.meta?.live!==true||
-       snapshot.meta?.paper_trading!==true||snapshot.meta?.real_order_execution!==false||
-       snapshot.meta?.closed_candles_only!==true||snapshot.meta?.engine!=='ADAPTIVE_TRADER_SIDECAR_V1'){
+    if(!response.ok||snapshot.status!=='LIVE_DATA'||(snapshot.meta && snapshot.meta.live)!==true||
+       (snapshot.meta && snapshot.meta.paper_trading)!==true||(snapshot.meta && snapshot.meta.real_order_execution)!==false||
+       (snapshot.meta && snapshot.meta.closed_candles_only)!==true||(snapshot.meta && snapshot.meta.engine)!=='ADAPTIVE_TRADER_SIDECAR_V1'){
       throw new Error(snapshot.reason||snapshot.error||'LIVE_MARKET_DATA_NOT_VERIFIED');
     }
     applySnapshot(snapshot);
@@ -397,9 +397,9 @@ async function scanMarket(){
     setStatus(snapshot.universe.scan_complete?'اكتمل المسح الحي':'بيانات حية — تغطية جزئية ظاهرة', 'good');
   }catch(error){
     setStatus('تعذر التحقق من بيانات السوق الحية', 'bad');
-    addJournal('فشل الفحص الحي: '+String(error?.message||error)+'؛ لم تُنشأ بيانات بديلة.','error');
+    addJournal('فشل الفحص الحي: '+String((error && error.message)||error)+'؛ لم تُنشأ بيانات بديلة.','error');
     persist();renderJournal();
-    el('candidateList').innerHTML='<div class="empty"><b>لم تصل بيانات حية صالحة</b>لم تُستخدم بيانات وهمية. تحقق من اتصال الخادم ثم أعد الفحص.<br><span class="tiny">'+esc(String(error?.message||error))+'</span></div>';
+    el('candidateList').innerHTML='<div class="empty"><b>لم تصل بيانات حية صالحة</b>لم تُستخدم بيانات وهمية. تحقق من اتصال الخادم ثم أعد الفحص.<br><span class="tiny">'+esc(String((error && error.message)||error))+'</span></div>';
   }finally{
     scanBusy=false;button.disabled=false;button.textContent='◉ فحص السوق الحقيقي';
   }
@@ -435,7 +435,7 @@ function renderCandidates(snapshot){
 }
 function renderMissed(){
   const root=el('missedList');
-  const serverRows=Array.isArray(state.serverStatus?.missed_movers)?state.serverStatus.missed_movers:[];
+  const serverRows=Array.isArray((state.serverStatus && state.serverStatus.missed_movers))?state.serverStatus.missed_movers:[];
   const merged=new Map([...serverRows,...state.missedMovers].map(row=>[row.id||String(row.symbol)+':'+String(row.baseline_at),row]));
   const rows=[...merged.values()].sort((a,b)=>Number(b.recorded_at||Date.parse(b.baseline_at)||0)-Number(a.recorded_at||Date.parse(a.baseline_at)||0));
   if(!rows.length){root.innerHTML='<div class="empty"><b>لا توجد حركات محتملة مسجلة حتى الآن</b>تحتاج المقارنة إلى لقطة قديمة عمرها 15 دقيقة على الأقل. لا يمكن استرجاع ما فات قبل تشغيل الذاكرة.</div>';return;}
