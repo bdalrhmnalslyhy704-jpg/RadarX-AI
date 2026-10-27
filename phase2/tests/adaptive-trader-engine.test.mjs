@@ -210,3 +210,23 @@ test('market snapshot service obtains exchange universe, tickers and candles fro
   assert.equal(cached.meta.cache_mode,'FRESH_SERVER_CACHE');
   assert.equal(requests.filter(x=>x.path==='/api/v3/klines').length,2);
 });
+
+
+test('concurrent universe sizes keep distinct server-cache entries',async()=>{
+  const f=marketFixture();
+  const rest={async request(path,query={}) {
+    if(path==='/api/v3/exchangeInfo')return {data:{symbols:[
+      {symbol:'TESTUSDT',status:'TRADING',quoteAsset:'USDT',isSpotTradingAllowed:true,permissions:['SPOT']}
+    ]},source:'https://data-api.binance.vision',receivedAt:f.now};
+    if(path==='/api/v3/ticker/24hr')return {data:[{...f.ticker,quoteVolume:'5000000'}],source:'https://data-api.binance.vision',receivedAt:f.now};
+    if(path==='/api/v3/klines')return {data:f.klines.data,source:'https://data-api.binance.vision',receivedAt:f.now};
+    throw new Error('UNEXPECTED_REQUEST');
+  }};
+  const service=createAdaptiveTraderSnapshotService({rest,ttlMs:90000});
+  const [small,large]=await Promise.all([service({limit:40,now:f.now}),service({limit:80,now:f.now})]);
+  assert.equal(small.universe.requested_limit,40);
+  assert.equal(large.universe.requested_limit,80);
+  const cached=await service({limit:40,now:f.now+1000});
+  assert.equal(cached.universe.requested_limit,40);
+  assert.equal(cached.meta.cache_mode,'FRESH_SERVER_CACHE');
+});
