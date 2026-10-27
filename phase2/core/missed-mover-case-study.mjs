@@ -53,7 +53,7 @@ function aggregateClosedFiveMinuteCandles(rows, targetIntervalMs, asOf) {
   for (const row of (Array.isArray(rows) ? rows : [])) {
     const openTime = Number(row?.openTime), closeTime = Number(row?.closeTime);
     if (!Number.isFinite(openTime) || !Number.isFinite(closeTime) ||
-        closeTime > asOf || closeTime !== openTime + INTERVAL_MS - 1) continue;
+        closeTime > asOf || Math.abs(closeTime - (openTime + INTERVAL_MS - 1)) > 1) continue;
     const bucketStart = Math.floor(openTime / targetIntervalMs) * targetIntervalMs;
     if (!buckets.has(bucketStart)) buckets.set(bucketStart, []);
     buckets.get(bucketStart).push(row);
@@ -66,7 +66,7 @@ function aggregateClosedFiveMinuteCandles(rows, targetIntervalMs, asOf) {
     for (let i=0;i<count;i++) {
       const expectedOpen = bucketStart + i * INTERVAL_MS;
       if (Number(group[i]?.openTime) !== expectedOpen ||
-          Number(group[i]?.closeTime) !== expectedOpen + INTERVAL_MS - 1) {
+          Math.abs(Number(group[i]?.closeTime) - (expectedOpen + INTERVAL_MS - 1)) > 1) {
         contiguous = false;
         break;
       }
