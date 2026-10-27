@@ -395,7 +395,7 @@ export class DurableStore {
       last_summary:value.last_summary&&typeof value.last_summary==='object'?value.last_summary:null,
       learning_profile:value.learning_profile&&typeof value.learning_profile==='object'?value.learning_profile:null,
       samples:Array.isArray(value.samples)?value.samples.filter(x=>x&&typeof x==='object').slice(-1000):[],
-      price_history:Array.isArray(value.price_history)?value.price_history.filter(x=>x&&typeof x==='object').slice(-5000):[],
+      price_history:Array.isArray(value.price_history)?value.price_history.filter(x=>x&&typeof x==='object').slice(-15000):[],
       missed_movers:Array.isArray(value.missed_movers)?value.missed_movers.filter(x=>x&&typeof x==='object').slice(-500):[]
     };
     return this.lock(async()=>{
