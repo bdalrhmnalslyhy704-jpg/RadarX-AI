@@ -8,7 +8,7 @@ The Adaptive Trader is a sidecar beside the existing RadarX system. Its scanner,
 - Analysis uses contiguous closed 15-minute candles, relative volume and trade-count acceleration, taker-buy flow, close location, higher-low/local breakout structure, volatility compression, one-hour movement, and relative strength versus BTC.
 - The scanner ranks 40/80/120 highest-volume eligible symbols per requested scan. It does not claim full-market coverage unless the response says the scan is complete.
 - A separate five-minute worker stores observed price/feature samples and labels them after four hours: UP at +2% or more, DOWN at -2% or less, otherwise FLAT.
-- Calibration waits for at least 30 resolved observations and sufficient feature buckets, then adjusts ranking scores by at most four points. The execution gate additionally requires at least 100 resolved market outcomes before considering live orders. This is bounded calibration, not self-rewriting code and not proof of profitability.
+- Market-sample calibration waits for at least 30 resolved observations and sufficient feature buckets, then adjusts ranking scores by at most four points. Separately, the execution controller stores entry features and uses confirmed net realized SELL outcomes for a second, independent trade-calibration profile; that activates only after at least 30 closed trades and adequate feature-bucket coverage. The execution gate additionally requires at least 100 resolved market outcomes before considering live orders. This is bounded feature-bucket calibration, not a neural model, not self-rewriting code, and not proof of profitability.
 
 ## Execution modes
 
