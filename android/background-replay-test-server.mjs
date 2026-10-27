@@ -22,6 +22,7 @@ function buildEvents() {
       radar: 'FALCON_EYE_RADAR',
       radar_name: 'عين الصقر',
       symbol: 'TESTUSDT',
+      direction: 'UP_BIAS',
       event,
       potential_label: event,
       processed_at: at,
