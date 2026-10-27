@@ -1,4 +1,4 @@
-import {buildAdaptiveLearningProfile,findMissedMoverEvents} from './adaptive-trader-engine.mjs';
+import {buildAdaptiveLearningProfile,findMissedMoverEvents,applyAdaptiveLearning} from './adaptive-trader-engine.mjs';
 
 const finite=value=>{
   if(value===null||value===undefined||value==='')return null;
@@ -115,7 +115,16 @@ export class AdaptiveTraderWorker{
       this.lastExecutionResult=null;
       if(this.executionController){
         try{
-          this.lastExecutionResult=await this.executionController.processSnapshot(snapshot,{learningProfile:this.state.learning_profile});
+          const adaptiveCandidates=snapshot.candidates.map(candidate=>{
+            const baseScore=finite(candidate?.score);
+            const learnedScore=applyAdaptiveLearning(baseScore,candidate?.features||{},this.state.learning_profile);
+            return baseScore===null||learnedScore===null?candidate:{
+              ...candidate,base_score:baseScore,score:learnedScore,
+              learning_adjustment:Number((learnedScore-baseScore).toFixed(2))
+            };
+          }).sort((a,b)=>(Number(b.score)||0)-(Number(a.score)||0));
+          const executionSnapshot={...snapshot,candidates:adaptiveCandidates};
+          this.lastExecutionResult=await this.executionController.processSnapshot(executionSnapshot,{learningProfile:this.state.learning_profile});
         }catch(error){
           this.lastExecutionResult={status:'EXECUTION_CONTROLLER_ERROR',error:String(error?.message??error).slice(0,180)};
           this.logger.warn?.('[ADAPTIVE_TRADER_EXECUTION_CONTROLLER_FAILED] '+this.lastExecutionResult.error);
