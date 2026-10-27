@@ -232,11 +232,16 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
   minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
   if (!rest || typeof rest.request !== 'function') throw new Error('ADAPTIVE_TRADER_REST_UNAVAILABLE');
   const safeLimit = clamp(Math.trunc(Number(limit) || POLICY.defaultUniverseLimit), 20, POLICY.maxUniverseLimit);
-  const [exchangeInfo, tickerResult, btcKlines] = await Promise.all([
+  // BTC is only a comparative benchmark. A failure to fetch it must not block
+  // the entire Spot universe when valid per-symbol closed candles are available.
+  const [exchangeInfo, tickerResult, btcResult] = await Promise.all([
     rest.request('/api/v3/exchangeInfo'),
     rest.request('/api/v3/ticker/24hr'),
     rest.request('/api/v3/klines', { symbol: 'BTCUSDT', interval: '15m', limit: 20 })
+      .then(value => ({value,error:null}))
+      .catch(error => ({value:null,error:String(error?.message??error).slice(0,160)}))
   ]);
+  const btcKlines = btcResult.value;
   const symbolInfo = Array.isArray(exchangeInfo?.data?.symbols) ? exchangeInfo.data.symbols : [];
   const activeSpot = new Set(symbolInfo.filter(item =>
     item && item.status === 'TRADING' && item.quoteAsset === 'USDT' &&
@@ -307,12 +312,16 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       execution: 'DISABLED',
       learning_scope: 'LOCAL_DEVICE_PAPER_OUTCOMES_ONLY',
       source_host: source,
+      btc_benchmark_available: Boolean(btcKlines?.data),
+      btc_benchmark_error: btcResult.error,
       cache_policy: 'SERVER_PUBLIC_REST_CACHE'
     }
   };
 }
 
-export function createAdaptiveTraderSnapshotService({ rest, ttlMs = 90000, minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
+export function createAdaptiveTraderSnapshotService({
+  rest, ttlMs = 90000, minQuoteVolume24h = POLICY.minQuoteVolume24h, scanTimeoutMs = 45_000
+} = {}) {
   const cache = new Map();
   const flights = new Map();
   return async ({ limit = POLICY.defaultUniverseLimit, now = Date.now() } = {}) => {
@@ -324,8 +333,15 @@ export function createAdaptiveTraderSnapshotService({ rest, ttlMs = 90000, minQu
         meta: { ...hit.snapshot.meta, cache_mode: 'FRESH_SERVER_CACHE', cache_age_ms: Math.max(0, Number(now) - hit.cachedAt) }
       };
     }
-    const active = flights.get(safeLimit);
+    // One sidecar scan at a time; the REST client uses a process-shared budget
+    // with the other radars. Coalescing different universe requests avoids a
+    // burst of overlapping 40/80/120-pair scans on that shared budget.
+    const active = flights.values().next().value;
     if (active) return active;
+    const previousDeadline = Number(rest.requestDeadlineAtMs) > 0 ? Number(rest.requestDeadlineAtMs) : null;
+    const deadline = Date.now() + Math.max(5_000, Math.min(60_000, Math.trunc(Number(scanTimeoutMs) || 45_000)));
+    rest.requestDeadlineAtMs = previousDeadline === null ? deadline : Math.min(previousDeadline, deadline);
+    const effectiveDeadline = rest.requestDeadlineAtMs;
     const task = buildAdaptiveTraderMarketSnapshot({ rest, limit: safeLimit, now, minQuoteVolume24h }).then(snapshot => {
       const cachedAt = Date.now();
       cache.set(safeLimit, { snapshot, cachedAt });
@@ -333,7 +349,8 @@ export function createAdaptiveTraderSnapshotService({ rest, ttlMs = 90000, minQu
       while (cache.size > 4) cache.delete(cache.keys().next().value);
       return { ...snapshot, meta: { ...snapshot.meta, cache_mode: 'FRESH_SCAN', cache_age_ms: 0 } };
     }).finally(() => {
-      if (flights.get(safeLimit) === task) flights.delete(safeLimit);
+      if (rest.requestDeadlineAtMs === effectiveDeadline) rest.requestDeadlineAtMs = previousDeadline;
+      for (const [key, activeTask] of flights) if (activeTask === task) flights.delete(key);
     });
     flights.set(safeLimit, task);
     return task;
