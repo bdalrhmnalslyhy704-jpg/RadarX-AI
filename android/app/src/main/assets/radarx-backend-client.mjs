@@ -1,4 +1,4 @@
-export const DEFAULT_BACKEND_BASE_URL = 'https://dhdtech-url-required.invalid';
+export const DEFAULT_BACKEND_BASE_URL = 'https://radarx-backend.dhdtech.site';
 export const BACKEND_FALLBACK_URLS = Object.freeze([]);
 
 function assertAllowedBackend(url) {
