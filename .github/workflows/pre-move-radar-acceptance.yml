@@ -227,6 +227,15 @@ jobs:
                 taker_buy_ratio:replay.core.taker_buy_ratio,
                 taker_buy_acceleration:replay.core.taker_buy_acceleration,
                 mean_close_location:replay.core.mean_close_location,
+                relative_strength_vs_market_pct:replay.core.relative_strength_vs_market_pct,
+                relative_strength_vs_btc_pct:replay.core.relative_strength_vs_btc_pct,
+                components:replay.core.components?{
+                  squeeze:replay.core.components.squeeze,
+                  structure:replay.core.components.structure,
+                  buying_pressure:replay.core.components.buying_pressure,
+                  acceleration:replay.core.components.acceleration,
+                  relative_strength:replay.core.components.relative_strength
+                }:null,
                 missing_evidence:replay.core.missing_evidence
               }:null,
               core_setup_gate_passed:replay.core_setup_gate_passed,

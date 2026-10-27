@@ -477,20 +477,26 @@ export class PushManager{
       // daily anti-chase, freshness, data/liquidity quality, or hard-risk guards.
       const highActivityStructurePending =
         alert?.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING' &&
+        dailyMove!==null&&dailyMove>=-5&&dailyMove<=6&&
         score!==null&&score>=75&&
         volumeRatio!==null&&volumeRatio>=3&&
         tradeRatio!==null&&tradeRatio>=2&&
-        taker!==null&&taker>=0.65&&
+        // Keep the same strong flow delta, activity ratios and independent evidence,
+        // while allowing a measured 55% buyer share instead of demanding 65%.
+        taker!==null&&taker>=0.55&&
         takerDelta!==null&&takerDelta>=0.05&&
         relative!==null&&relative>=0.5&&
         dataQuality!==null&&dataQuality>=80&&
         liquidityQuality!==null&&liquidityQuality>=70&&
         structure!==null&&structure>=50&&
+        session!==null&&session>=-0.75&&session<=5&&
+        hour!==null&&hour>=-0.5&&hour<=3.5&&
         independentEvidence>=4;
       // A second bounded monitor-only corridor can surface strong improving flow
       // before positive price confirmation. It never qualifies an entry signal.
       const earlyFlowMonitor =
         alert?.watch_notification_tier==='EARLY_FLOW_MONITOR' &&
+        dailyMove!==null&&dailyMove>=-5&&dailyMove<=4.5&&
         score!==null&&score>=68&&
         session!==null&&session>=-1.25&&session<=4.5&&
         hour!==null&&hour>=-0.75&&hour<=2.5&&
@@ -542,9 +548,9 @@ export class PushManager{
       if(alert?.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'&&!tickerActivityMonitor)
         return rejected('PRE_MOVE_TICKER_ACTIVITY_TIER_UNVERIFIED');
       if(session<(highActivityStructurePending?-0.75:(earlyFlowMonitor||tickerActivityMonitor)?-1.25:0)||
-         session>((earlyFlowMonitor||tickerActivityMonitor)?4.5:6)||
+         session>(highActivityStructurePending?5:(earlyFlowMonitor||tickerActivityMonitor)?4.5:6)||
          hour<(highActivityStructurePending?-0.5:(earlyFlowMonitor||tickerActivityMonitor)?-0.75:0.15)||
-         hour>((earlyFlowMonitor||tickerActivityMonitor)?2.5:4.5))
+         hour>(highActivityStructurePending?3.5:(earlyFlowMonitor||tickerActivityMonitor)?2.5:4.5))
         return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
       const independentEvidenceFloor=tickerActivityMonitor?3:preMoveMonitorCorridor?4:3;
       if(structure===null||(structure<(preMoveMonitorCorridor?50:60))||

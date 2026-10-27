@@ -210,19 +210,24 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
   // Allow a narrow neutral/slightly-negative window only when independent closed-candle
   // flow is unusually strong; this catches accumulation before price turns positive.
   // It never bypasses freshness, liquidity, daily anti-chase, or hard-risk gates.
-  const highActivityStructurePending=score!==null&&score>=75&&
+  const highActivityStructurePending=daily!==null&&daily>=-5&&daily<=6&&
+    score!==null&&score>=75&&
     volume!==null&&volume>=3&&trades!==null&&trades>=2&&
-    buy!==null&&buy>=0.65&&buyDelta!==null&&buyDelta>=0.05&&
+    // A 55% buyer share is accepted only alongside an exceptional buy-share delta,
+    // >3x volume acceleration, >2x trade acceleration, independent evidence,
+    // measured liquidity, and a non-actionable structure-pending tier.
+    buy!==null&&buy>=0.55&&buyDelta!==null&&buyDelta>=0.05&&
     relative!==null&&relative>=0.5&&
     quality!==null&&quality>=80&&liquidity!==null&&liquidity>=70&&
     structure!==null&&structure>=50&&participation>=4&&
-    session!==null&&session>=-0.75&&hour!==null&&hour>=-0.5;
+    session!==null&&session>=-0.75&&session<=5&&hour!==null&&hour>=-0.5&&hour<=3.5;
   // Second, still non-entry-only path for pre-move accumulation. It relaxes only the
   // small price-return gate; independent buyer-flow, activity, structure, freshness,
   // data-quality, liquidity, and anti-chase requirements remain explicit and stricter
   // than the ordinary visual WATCH_EARLY lane.
   const earlyFlowMonitor=(session!==null&&(session<0||session>4.5)||
       hour!==null&&(hour<0.15||hour>2.5)||structure!==null&&structure<60)&&
+    daily!==null&&daily>=-5&&daily<=4.5&&
     score!==null&&score>=68&&
     session!==null&&session>=-1.25&&session<=4.5&&
     hour!==null&&hour>=-0.75&&hour<=2.5&&
@@ -262,10 +267,10 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
   if(score===null||score<((tickerActivityMonitor||earlyFlowMonitor)?68:highActivityStructurePending?75:68))
     return fail('SCORE_BELOW_WATCH_FLOOR');
   if(session===null||session<(highActivityStructurePending?-0.75:(tickerActivityMonitor||earlyFlowMonitor)?-1.25:0)||
-     session>((tickerActivityMonitor||earlyFlowMonitor)?4.5:6))
+     session>(highActivityStructurePending?5:(tickerActivityMonitor||earlyFlowMonitor)?4.5:6))
     return fail('SESSION_RETURN_OUT_OF_RANGE');
   if(hour===null||hour<(highActivityStructurePending?-0.5:(tickerActivityMonitor||earlyFlowMonitor)?-0.75:0.15)||
-     hour>((tickerActivityMonitor||earlyFlowMonitor)?2.5:4.5))
+     hour>(highActivityStructurePending?3.5:(tickerActivityMonitor||earlyFlowMonitor)?2.5:4.5))
     return fail('ONE_HOUR_RETURN_OUT_OF_RANGE');
   if(structure===null||(structure<(tickerActivityMonitor?50:highActivityStructurePending?50:earlyFlowMonitor?50:60)))
     return fail('STRUCTURE_SCORE_BELOW_MINIMUM');

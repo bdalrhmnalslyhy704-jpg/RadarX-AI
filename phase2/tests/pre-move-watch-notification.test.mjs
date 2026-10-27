@@ -396,7 +396,7 @@ test('live-like GTC early-watch sample qualifies for a watch-only heads-up when 
 });
 
 
-test('exceptional live-like activity creates a labelled watch-only heads-up while structure is pending',()=>{
+test('exceptional live-like activity creates a labelled watch-only heads-up at 57% buy share when independent flow acceleration is exceptional',async()=>{
   const {snapshot,now}=fixture();
   const candidate={
     symbol:'MEGAUSDT',last_price:0.1977,price_change_24h:3.702,data_quality:100,liquidity_quality:92.36,
@@ -409,7 +409,7 @@ test('exceptional live-like activity creates a labelled watch-only heads-up whil
       already_moved:false,session_close:now-129_000,score:75.6,
       session_return_pct:2.6675,one_hour_return_pct:1.9399,
       volume_acceleration:23.4119,trade_acceleration:15.3842,
-      taker_buy_ratio:0.71,taker_buy_acceleration:0.08,
+      taker_buy_ratio:0.57,taker_buy_acceleration:0.08,
       mean_close_location:0.3545,relative_strength_vs_market_pct:4.1490,
       components:{structure:54.0185,squeeze:0,buying_pressure:70.8968},
       reasons:['VOLUME_ACCELERATION_STRONG','TRADE_ACCELERATION_STRONG','RELATIVE_STRENGTH']
@@ -426,6 +426,28 @@ test('exceptional live-like activity creates a labelled watch-only heads-up whil
   assert.equal(alert.paper_trading,true);
   assert.equal(alert.real_order_execution,false);
   assert.ok(alert.reason_codes.includes('HIGH_ACTIVITY_STRUCTURE_PENDING'));
+
+  // Verify that the second, independent push gate accepts this same strict tier,
+  // without converting it to an entry signal or creating an exchange order.
+  const dir=await mkdtemp(join(tmpdir(),'radarx-high-activity-57pct-push-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    const sent=[];
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
+      sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};
+    }};
+    const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000})});
+    const result=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(result.status,'SENT',JSON.stringify(result));
+    assert.equal(result.sent_count,1);
+    assert.equal(sent.length,1);
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].paper_trading,true);
+    assert.equal(sent[0].real_order_execution,false);
+  }finally{await rm(dir,{recursive:true,force:true});}
 });
 
 test('exceptional buyer flow qualifies for monitor-only before session and hourly returns turn positive',()=>{
