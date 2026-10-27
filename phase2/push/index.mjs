@@ -691,7 +691,7 @@ export class PushManager{
     const lifecycleConfirmed=alert?.signal_lifecycle?.state==='CONFIRMED'||alert?.signal_lifecycle_state==='CONFIRMED';
     const strictConfirmation=gate?.mode==='STRICT_NOTIFICATION'||(!alert?.notification_gate&&eliteGateConfirmed)||lifecycleConfirmed;
     if(gate?.eligible!==true||gate?.watch_only===true||gate?.requires_follow_up_confirmation===true||
-       alert?.entry_eligible===false||alert?.watch_only===true||alert?.eligible===false||!strictConfirmation)return [];
+       alert?.entry_eligible!==true||alert?.watch_only===true||alert?.eligible===false||!strictConfirmation)return [];
     const rows=this.providerSubscriptions(await this.store.getSubscriptions()),out=[];
     for(const sub of rows){
       const settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();
