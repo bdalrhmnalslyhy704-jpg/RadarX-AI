@@ -38,7 +38,7 @@ concurrency:
 jobs:
   backend:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -193,7 +193,8 @@ jobs:
 
       - name: Android emulator online/offline background smoke
         uses: reactivecircus/android-emulator-runner@v2
-        timeout-minutes: 25
+        # The API 29 software-rendered runner plus offline/reconnect replay can exceed 25 minutes.
+        timeout-minutes: 40
         with:
           api-level: 29
           target: default
