@@ -141,7 +141,7 @@ jobs:
               process.exit(1);
             }
             source=source.slice(0,fallbackStartIndex)+'export const BACKEND_FALLBACK_URLS = Object.freeze([]);'+source.slice(fallbackEndIndex+3);
-            if(source===original||!source.includes(`DEFAULT_BACKEND_BASE_URL = '${origin}'`)||source.includes('railway.app')){
+            if(!source.includes(`DEFAULT_BACKEND_BASE_URL = '${origin}'`)||source.includes('railway.app')){
               console.error('::error::Could not safely apply DHDTech backend configuration to '+path);
               process.exit(1);
             }
