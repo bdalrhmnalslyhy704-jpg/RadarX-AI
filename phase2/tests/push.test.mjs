@@ -215,7 +215,8 @@ test('TEST_FIXTURE: radar alerts without an explicit final gate never push',asyn
     const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){sent.push(payload);return{ok:true,status:'SENT'};}};
     const m=new PushManager({provider,store});
     await m.notifyRadarAlert({
-      radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8',symbol:'CONFIRMEDUSDT',direction:'UP_BIAS',eligible:true,entry_eligible:true,
+      radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8',symbol:'CONFIRMEDUSDT',direction:'UP_BIAS',market:'SPOT',
+      eligible:true,entry_eligible:true,paper_trading:true,real_order_execution:false,closed_candles_only:true,
       data_quality:95,liquidity_quality:85,
       notification_gate:{eligible:true,watch_only:false,requires_follow_up_confirmation:false,mode:'STRICT_NOTIFICATION',score:90,confirmations:7},
       signal_lifecycle:{state:'CONFIRMED',label:'تأكيد نهائي',transition:'CONFIRMED_BREAKOUT',reason_codes:['CLOSED_CANDLE_BREAKOUT']}
@@ -515,7 +516,7 @@ test('TEST_FIXTURE: strict mode cannot override a conflicting early lifecycle st
     const manager=new PushManager({provider,store});
     const result=await manager.notifyRadarAlert({
       radar:'EARLY_EXPANSION_RADAR',symbol:'CONFLICTUSDT',direction:'UP_BIAS',market:'SPOT',
-      eligible:true,entry_eligible:true,data_quality:95,liquidity_quality:90,
+      eligible:true,entry_eligible:true,paper_trading:true,real_order_execution:false,data_quality:95,liquidity_quality:90,
       closed_candles_only:true,
       notification_gate:{mode:'STRICT_NOTIFICATION',eligible:true,watch_only:false,requires_follow_up_confirmation:false},
       signal_lifecycle:{state:'EARLY_SETUP',label:'إعداد مبكر'}
@@ -535,7 +536,7 @@ test('TEST_FIXTURE: strict generic radar gate still fails closed when measured l
     const manager=new PushManager({provider,store});
     const result=await manager.notifyRadarAlert({
       radar:'EARLY_EXPANSION_RADAR',symbol:'NOLIQUSDT',market:'SPOT',direction:'UP_BIAS',
-      eligible:true,entry_eligible:true,data_quality:95,closed_candles_only:true,
+      eligible:true,entry_eligible:true,paper_trading:true,real_order_execution:false,data_quality:95,closed_candles_only:true,
       notification_gate:{mode:'STRICT_NOTIFICATION',eligible:true,watch_only:false,requires_follow_up_confirmation:false},
       signal_lifecycle:{state:'CONFIRMED',label:'تأكيد نهائي'}
     });
