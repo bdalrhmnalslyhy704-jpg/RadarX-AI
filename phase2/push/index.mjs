@@ -204,11 +204,17 @@ export class PushManager{
       return{ok:false,status:'WATCH_ONLY_FEED_ONLY',reason:'FINAL_CONFIRMATION_REQUIRED'};
     const direction=String(notification?.direction??notification?.bias??'').trim().toUpperCase();
     const risingDirection=/^(UP|LONG|BULL)/.test(direction);
+    const lifecycleState=String(notification?.signal_lifecycle_state||'').trim().toUpperCase();
+    const lifecycleConflicts=Boolean(lifecycleState&&lifecycleState!=='CONFIRMED');
     const finalConfirmation=String(notification?.signal_type||'').toUpperCase()==='CONFIRMED'||
-      String(notification?.signal_lifecycle_state||'').toUpperCase()==='CONFIRMED'||
+      lifecycleState==='CONFIRMED'||
       String(notification?.notification_gate_mode||'').toUpperCase()==='STRICT_NOTIFICATION';
-    if(notification?.entry_eligible!==true||!risingDirection||!finalConfirmation)
-      return{ok:false,status:'SUPPRESSED_UNCONFIRMED',reason:!risingDirection?'RISING_DIRECTION_REQUIRED':'FINAL_CONFIRMATION_REQUIRED'};
+    if(notification?.entry_eligible!==true||notification?.notification_gate_eligible!==true||
+       !risingDirection||lifecycleConflicts||!finalConfirmation)
+      return{ok:false,status:'SUPPRESSED_UNCONFIRMED',
+        reason:!risingDirection?'RISING_DIRECTION_REQUIRED':
+          lifecycleConflicts?'CONFLICTING_LIFECYCLE_STATE':
+          notification?.notification_gate_eligible!==true?'FINAL_GATE_ELIGIBILITY_REQUIRED':'FINAL_CONFIRMATION_REQUIRED'};
     const subscriptionId=String(subscription?.id||subscription?.installation_id||subscription?.user_id||'unknown');
     const queueKey=subscriptionId;
     const previous=this.pushGuardQueues.get(queueKey)||Promise.resolve();
@@ -712,10 +718,13 @@ export class PushManager{
     const eliteGateConfirmed=!alert?.notification_gate&&elite?.eligible===true&&
       Number.isFinite(Number(elite.confirmations))&&Number(elite.confirmations)>=Number(elite.min_confirmations??6)&&
       Number.isFinite(Number(elite.category_hits))&&Number(elite.category_hits)>=Number(elite.min_category_hits??1);
-    const lifecycleConfirmed=alert?.signal_lifecycle?.state==='CONFIRMED'||alert?.signal_lifecycle_state==='CONFIRMED';
+    const lifecycleState=String(alert?.signal_lifecycle?.state??alert?.signal_lifecycle_state??'').trim().toUpperCase();
+    const lifecycleConfirmed=lifecycleState==='CONFIRMED';
+    const lifecycleConflicts=Boolean(lifecycleState&&lifecycleState!=='CONFIRMED');
     const strictConfirmation=gate?.mode==='STRICT_NOTIFICATION'||(!alert?.notification_gate&&eliteGateConfirmed)||lifecycleConfirmed;
     if(gate?.eligible!==true||gate?.watch_only===true||gate?.requires_follow_up_confirmation===true||
-       alert?.entry_eligible!==true||alert?.watch_only===true||alert?.eligible===false||!strictConfirmation)return [];
+       alert?.entry_eligible!==true||alert?.watch_only===true||alert?.eligible===false||
+       lifecycleConflicts||!strictConfirmation)return [];
     const direction=String(alert?.direction??alert?.bias??'').trim().toUpperCase();
     if(!/^(UP|LONG|BULL)/.test(direction))return [];
     const rows=this.providerSubscriptions(await this.store.getSubscriptions()),out=[];
