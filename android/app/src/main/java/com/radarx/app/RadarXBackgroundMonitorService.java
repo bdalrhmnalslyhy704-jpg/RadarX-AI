@@ -171,7 +171,7 @@ public final class RadarXBackgroundMonitorService extends Service {
                 JSONArray radars = root.optJSONArray("radars");
                 updateStatus("رادارات مستقلة • " + (radars == null ? 6 : radars.length()) +
                     " • اكتشافات جديدة: " + count);
-                pollPreMoveWatchOnlyAlertsSafely();
+                // Early watch candidates stay in the in-app radar feed; they must never trigger phone notifications.
             } else {
                 updateStatus("الرادارات المستقلة غير متاحة حاليًا؛ لا يتم توليد بيانات صناعية");
             }
@@ -442,65 +442,9 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     private void pollPreMoveWatchOnlyAlertsSafely() {
-        final long now = System.currentTimeMillis();
-        if (stopping || now - lastPreMoveWatchPollAtMs < PRE_MOVE_WATCH_POLL_MS) return;
-        lastPreMoveWatchPollAtMs = now;
-        HttpURLConnection connection = null;
-        try {
-            URL url = new URL(BACKEND_ORIGIN + "/api/pre-move-radar?quote=USDT&limit=50&scan=0");
-            connection = (HttpURLConnection) url.openConnection();
-            connection.setRequestMethod("GET");
-            connection.setConnectTimeout(3500);
-            connection.setReadTimeout(7500);
-            connection.setInstanceFollowRedirects(false);
-            connection.setRequestProperty("Accept", "application/json");
-            connection.setRequestProperty("Accept-Encoding", "identity");
-            int status = connection.getResponseCode();
-            if (status != 200) {
-                Log.i(TAG, "PRE_MOVE_WATCH_POLL_HTTP_" + status);
-                return;
-            }
-            JSONObject root = new JSONObject(new String(readAll(connection.getInputStream()), StandardCharsets.UTF_8));
-            JSONObject meta = root.optJSONObject("meta");
-            if (meta == null || !meta.optBoolean("live", false) ||
-                    !meta.optBoolean("paper_trading", false) || meta.optBoolean("real_order_execution", true) ||
-                    !"PRE_MOVE".equalsIgnoreCase(meta.optString("radar", "")) ||
-                    !"Binance Public REST".equals(root.optString("source", ""))) {
-                Log.i(TAG, "PRE_MOVE_WATCH_POLL_SKIPPED_NON_LIVE_OR_WRONG_POLICY");
-                return;
-            }
-            JSONArray rows = root.optJSONArray("watch_notification_candidates");
-            if (rows == null || rows.length() == 0) return;
-
-            SharedPreferences preferences = prefs();
-            Set<String> seen = new HashSet<>(
-                preferences.getStringSet("premove_watch_seen_ids", new HashSet<>()));
-            int delivered = 0;
-            final long pollTime = System.currentTimeMillis();
-            for (int i = 0; i < rows.length() && delivered < 3; i++) {
-                JSONObject alert = rows.optJSONObject(i);
-                if (!isValidPreMoveWatchOnlyAlert(alert, pollTime)) continue;
-                String symbol = alert.optString("symbol", "").trim().toUpperCase(Locale.ROOT);
-                String eventId = alert.optString("id", "").trim();
-                if (symbol.isEmpty() || eventId.isEmpty() || seen.contains(eventId)) continue;
-                long lastSymbolAt = preferences.getLong("premove_watch_last_at_" + symbol, 0L);
-                if (lastSymbolAt > 0L && pollTime - lastSymbolAt < PRE_MOVE_WATCH_SYMBOL_COOLDOWN_MS) {
-                    seen.add(eventId);
-                    continue;
-                }
-                if (!notifyPreMoveWatchOnlyAlert(alert, eventId)) continue;
-                seen.add(eventId);
-                preferences.edit().putLong("premove_watch_last_at_" + symbol, pollTime).apply();
-                delivered++;
-            }
-            while (seen.size() > 300) seen.remove(seen.iterator().next());
-            preferences.edit().putStringSet("premove_watch_seen_ids", seen).apply();
-            if (delivered > 0) Log.i(TAG, "PRE_MOVE_WATCH_LOCAL_NOTIFICATIONS_SENT=" + delivered);
-        } catch (Exception error) {
-            Log.i(TAG, "PRE_MOVE_WATCH_POLL_FAILED; standard radar polling remains active");
-        } finally {
-            if (connection != null) connection.disconnect();
-        }
+        // Watch-only/pre-expansion rows are for in-app review only. No local Android
+        // notification is allowed before a separate final-confirmation signal exists.
+        if (!stopping) Log.d(TAG, "PRE_MOVE_WATCH_FEED_ONLY_LOCAL_PUSH_DISABLED");
     }
 
     private boolean isValidPreMoveWatchOnlyAlert(JSONObject alert, long now) {
@@ -590,57 +534,9 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     private boolean notifyPreMoveWatchOnlyAlert(JSONObject alert, String eventId) {
-        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        if (manager == null || !manager.areNotificationsEnabled()) {
-            Log.i(TAG, "PRE_MOVE_WATCH_LOCAL_NOTIFICATION_BLOCKED");
-            return false;
-        }
-        if (Build.VERSION.SDK_INT >= 26) {
-            NotificationChannel channel = manager.getNotificationChannel(CHANNEL_PRE_MOVE_WATCH);
-            if (channel == null || channel.getImportance() == NotificationManager.IMPORTANCE_NONE) {
-                Log.i(TAG, "PRE_MOVE_WATCH_CHANNEL_DISABLED");
-                return false;
-            }
-        }
-        String symbol = alert.optString("symbol", "UNKNOWN").toUpperCase(Locale.ROOT);
-        double price = alert.optDouble("price", Double.NaN);
-        JSONObject context = alert.optJSONObject("pre_move_context");
-        double score = context == null ? Double.NaN : context.optDouble("score", Double.NaN);
-        String priceText = Double.isFinite(price) && price > 0.0 ? formatPrice(price) : "غير متوفر";
-        String scoreText = Double.isFinite(score) ? scoreFmt.format(score) : "غير متوفر";
-        String title = "RadarX • مراقبة مبكرة • " + symbol;
-        boolean pendingStructure = "HIGH_ACTIVITY_STRUCTURE_PENDING".equals(
-            alert.optString("watch_notification_tier", ""));
-        String body = (pendingStructure
-            ? "نشاط مبكر قوي — البنية السعرية لم تكتمل — مراقبة فقط، ليست إشارة دخول"
-            : "مراقبة فقط — ليست إشارة دخول — انتظر التأكيد") +
-            " • السعر: " + priceText + " • Score: " + scoreText +
-            " • شموع مغلقة • تداول ورقي فقط";
-        Intent open = new Intent(this, MainActivity.class);
-        open.putExtra("radarx_push_open", true);
-        open.putExtra("radarx_alert_symbol", symbol);
-        open.putExtra("radarx_alert_radar", "PRE_MOVE");
-        int notificationId = 55_000 + Math.floorMod(eventId.hashCode(), 1_000_000_000);
-        PendingIntent pending = PendingIntent.getActivity(
-            this, notificationId, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        Notification.Builder builder = notificationBuilder(CHANNEL_PRE_MOVE_WATCH)
-            .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setStyle(new Notification.BigTextStyle().bigText(body))
-            .setContentIntent(pending)
-            .setAutoCancel(true)
-            .setCategory(Notification.CATEGORY_EVENT)
-            .setColor(Color.rgb(53, 201, 255))
-            .setDefaults(Notification.DEFAULT_SOUND | Notification.DEFAULT_VIBRATE)
-            .setWhen(alert.optLong("detected_at", System.currentTimeMillis()));
-        try {
-            manager.notify("radarx_premove_watch", notificationId, builder.build());
-            return true;
-        } catch (RuntimeException error) {
-            Log.w(TAG, "PRE_MOVE_WATCH_LOCAL_NOTIFICATION_POST_FAILED", error);
-            return false;
-        }
+        // Intentionally feed-only: early monitoring is not a phone notification.
+        Log.d(TAG, "PRE_MOVE_WATCH_LOCAL_PUSH_BLOCKED_FINAL_CONFIRMATION_REQUIRED");
+        return false;
     }
 
     /**
@@ -652,7 +548,17 @@ public final class RadarXBackgroundMonitorService extends Service {
         if (alert == null) return false;
         if (alert.optBoolean("watch_only", false) || alert.optBoolean("monitor_only", false)) return false;
         if (alert.has("eligible") && !alert.optBoolean("eligible", false)) return false;
-        if (alert.has("entry_eligible") && !alert.optBoolean("entry_eligible", false)) return false;
+        // Missing entry eligibility is not permission to notify.
+        if (!alert.has("entry_eligible") || !alert.optBoolean("entry_eligible", false)) return false;
+        if (alert.optBoolean("requires_follow_up_confirmation", false)) return false;
+        String lifecycleState = alert.optString("signal_lifecycle_state", "").toUpperCase(Locale.ROOT);
+        String signalType = alert.optString("signal_type", "").toUpperCase(Locale.ROOT);
+        JSONObject notificationGate = alert.optJSONObject("notification_gate");
+        boolean strictGate = notificationGate != null &&
+            "STRICT_NOTIFICATION".equalsIgnoreCase(notificationGate.optString("mode", ""));
+        boolean finalConfirmation = "CONFIRMED".equals(lifecycleState) ||
+            "CONFIRMED".equals(signalType) || strictGate;
+        if (!finalConfirmation) return false;
         if (alert.optBoolean("data_stale", false)) return false;
         JSONObject dataStatus = alert.optJSONObject("data_status");
         if (dataStatus != null && (dataStatus.optBoolean("stale", false) ||
@@ -661,7 +567,6 @@ public final class RadarXBackgroundMonitorService extends Service {
                 "DATA_UNAVAILABLE".equalsIgnoreCase(dataStatus.optString("status", "")))) return false;
         JSONObject eliteGate = alert.optJSONObject("elite_gate");
         if (eliteGate != null && eliteGate.has("eligible") && !eliteGate.optBoolean("eligible", false)) return false;
-        JSONObject notificationGate = alert.optJSONObject("notification_gate");
         if (notificationGate != null && notificationGate.has("eligible") &&
                 !notificationGate.optBoolean("eligible", false)) return false;
         if (alert.has("data_quality") && alert.optDouble("data_quality", 0.0) < 70.0) return false;
