@@ -312,9 +312,12 @@ export class PushManager{
   async notifySignal(signal){
     const signalType=String(signal?.signal_type||'').trim().toUpperCase();
     const direction=String(signal?.direction||signal?.bias||'').trim().toUpperCase();
+    const lifecycleState=String(signal?.signal_lifecycle_state??signal?.signal_lifecycle?.state??'').trim().toUpperCase();
+    const lifecycleConflicts=Boolean(lifecycleState&&lifecycleState!=='CONFIRMED');
     const risingDirection=/^(UP|LONG|BULL)/.test(direction);
-    const confirmed=signalType==='CONFIRMED'&&risingDirection&&signal?.watch_only!==true&&signal?.entry_eligible!==false&&
-      signal?.notification_gate?.eligible!==false&&signal?.notification_gate?.watch_only!==true;
+    const confirmed=signalType==='CONFIRMED'&&risingDirection&&!lifecycleConflicts&&signal?.watch_only!==true&&signal?.entry_eligible!==false&&
+      signal?.notification_gate?.eligible!==false&&signal?.notification_gate?.watch_only!==true&&
+      signal?.notification_gate?.requires_follow_up_confirmation!==true;
     const rows=this.providerSubscriptions(await this.store.getSubscriptions()),cache=new Map(),out=[];
     for(const sub of rows){
       let settings=cache.get(sub.user_id);if(!settings){settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();cache.set(sub.user_id,settings);}
@@ -324,7 +327,9 @@ export class PushManager{
         const audit={event:'NOTIFICATION_ATTEMPT',event_class:marketEventClass(signal.data_status?.source??signal.source),signal_id:signal.signal_id,
           subscription_id:sub.id,user_id:sub.user_id,status:risingDenied?'SUPPRESSED_NON_RISING':'SUPPRESSED_UNCONFIRMED',
           provider:this.provider.status().provider,attempted_at:Date.now(),
-          reason:risingDenied?'RISING_DIRECTION_REQUIRED':'FINAL_CONFIRMATION_REQUIRED',http_status:null,attempted:false};
+          reason:risingDenied?'RISING_DIRECTION_REQUIRED':lifecycleConflicts?'CONFLICTING_LIFECYCLE_STATE':
+            signal?.notification_gate?.requires_follow_up_confirmation===true?'FINAL_CONFIRMATION_REQUIRED':'FINAL_CONFIRMATION_REQUIRED',
+          http_status:null,attempted:false};
         await this.store.appendNotificationAudit(audit);out.push(audit);continue;
       }
       const dataQuality=Number(signal.scores?.data_quality),liquidityQuality=Number(signal.scores?.liquidity_quality);
