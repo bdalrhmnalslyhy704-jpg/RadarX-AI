@@ -585,12 +585,27 @@ jobs:
           try { x=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/pre-move-worker-status.json','utf8')); }
           catch { process.exit(10); }
           const w=x.worker||{},s=x.last_background_scan||w.last_summary||{};
+          const delivery=w.notification_delivery||{};
           console.log('PRE_MOVE_BACKGROUND_LIVE_STATUS '+JSON.stringify({
             status:x.status,scanner_ready:x.scanner_ready,worker_enabled:w.enabled,
             worker_running:w.running,successful_scans:w.successful_scans,
             last_scan_status:w.last_scan_status,last_scan_at:w.last_scan_at,
-            elapsed_ms:s.elapsed_ms,discovered:s.discovered,scanned:s.scanned,
-            valid_data:s.valid_data,actionable:s.actionable,watch_only:s.watch_only,
+            elapsed_ms:s.elapsed_ms,discovered:s.discovered,deep_scanned:s.deep_scanned,
+            scanned:s.scanned,valid_data:s.valid_data,actionable:s.actionable,watch_only:s.watch_only,
+            watch_notification_evaluated:s.watch_notification_evaluated,
+            watch_notification_eligible:s.watch_notification_eligible,
+            watch_notification_rejected:s.watch_notification_rejected,
+            watch_notification_rejection_counts:s.watch_notification_rejection_counts||{},
+            near_miss_review_count:s.near_miss_review_count,
+            near_miss_blocker_counts:s.near_miss_blocker_counts||{},
+            notification_delivery:{
+              results:delivery.results??0,send_calls:delivery.send_calls??0,
+              recipients_attempted:delivery.recipients_attempted??0,notifications_sent:delivery.notifications_sent??0,
+              current_status:delivery.current_status||'NOT_YET_ATTEMPTED',
+              current_reason:delivery.current_reason||null,last_result_at:delivery.last_result_at||null,
+              status_counts:delivery.status_counts||{},reason_counts:delivery.reason_counts||{},
+              last_results:Array.isArray(delivery.last_results)?delivery.last_results.slice(0,5):[]
+            },
             paper_trading:x.paper_trading,real_order_execution:x.real_order_execution
           }));
           const ready=x.scanner_ready===true && w.enabled===true &&
