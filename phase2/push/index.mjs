@@ -193,7 +193,7 @@ const testPayload=(eventId,testId,processedAt=Date.now())=>({
 export class PushManager{
   constructor({provider,store,deduplicator=null,retryBaseMs=15000}){this.provider=provider;this.store=store;this.deduplicator=deduplicator;this.retryBaseMs=retryBaseMs;this.retryQueue=new Map();this.pushGuardQueues=new Map();this.pushGuardMemory=new Map();}
   status(){return this.provider.status();}
-  async sendMarketPush(subscription,notification,kind='MARKET',requestedAt=Date.now()){
+  async sendMarketPush(subscription,notification,kind='MARKET',requestedAt=Date.now(),isRetry=false){
     const subscriptionId=String(subscription?.id||subscription?.installation_id||subscription?.user_id||'unknown');
     const queueKey=subscriptionId;
     const previous=this.pushGuardQueues.get(queueKey)||Promise.resolve();
@@ -214,6 +214,10 @@ export class PushManager{
       // regular market attempts conservatively so deployment cannot reset the cap.
       const marketAttempts=rollingAttempts(saved.market_attempts??saved.attempts);
       const watchAttempts=rollingAttempts(saved.watch_attempts);
+      const retryAttempts=rollingAttempts(saved.retry_attempts);
+      const eventId=String(notification?.event_id||notification?.alert_id||notification?.signal_id||notification?.id||'').trim();
+      const recentEvents=(Array.isArray(saved.recent_events)?saved.recent_events:[]).filter(row=>row&&typeof row.id==='string'&&Number.isFinite(Number(row.at))&&Number(row.at)<=now&&now-Number(row.at)<20*60_000);
+      const hasRetryReservation=Boolean(eventId&&recentEvents.some(row=>row.id===eventId&&row.category===category));
       const sentBySymbol=saved.sent_by_symbol&&typeof saved.sent_by_symbol==='object'&&!Array.isArray(saved.sent_by_symbol)
         ?{...saved.sent_by_symbol}:{};
       for(const [key,value] of Object.entries(sentBySymbol)){
@@ -230,14 +234,21 @@ export class PushManager{
       // the three-slot allowance reserved for stronger market alerts.
       const categoryAttempts=category==='WATCH_ONLY'?watchAttempts:marketAttempts;
       const maxPerMinute=category==='WATCH_ONLY'?1:3;
-      if(categoryAttempts.length>=maxPerMinute)
+      if(isRetry&&!hasRetryReservation)
+        return{ok:false,status:'RETRY_BLOCKED',reason:'RETRY_EVENT_NOT_PREVIOUSLY_RESERVED'};
+      if(isRetry&&retryAttempts.length>=3)
+        return{ok:false,status:'RATE_LIMITED',reason:'MAX_3_RETRIES_PER_MINUTE',retryAfterMs:Math.max(1000,60_000-(now-retryAttempts[0]))};
+      if(!isRetry&&categoryAttempts.length>=maxPerMinute)
         return{ok:false,status:'RATE_LIMITED',
           reason:category==='WATCH_ONLY'?'MAX_1_WATCH_ONLY_PUSH_PER_MINUTE':'MAX_3_MARKET_PUSHES_PER_MINUTE',
           retryAfterMs:Math.max(1000,60_000-(now-categoryAttempts[0]))};
+      const nextRecentEvents=eventId?[...recentEvents.filter(row=>row.id!==eventId||row.category!==category),{id:eventId,category,at:now}].slice(-100):recentEvents;
       const nextState={
         version:1,attempts:[...attempts,now],
         market_attempts:category==='MARKET'?[...marketAttempts,now]:marketAttempts,
         watch_attempts:category==='WATCH_ONLY'?[...watchAttempts,now]:watchAttempts,
+        retry_attempts:isRetry?[...retryAttempts,now]:retryAttempts,
+        recent_events:nextRecentEvents,
         sent_by_symbol:sentBySymbol,updated_at:now
       };
       try{
@@ -791,8 +802,8 @@ export class PushManager{
       try{
         r=watchOnly
           ?await this.sendMarketPush(j.subscription,radarPayload({...j.alert,market:'SPOT',watch_only:true,entry_eligible:false,
-            paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},now),'WATCH_ONLY',now)
-          :await this.sendMarketPush(j.subscription,payload(j.signal,now),'MARKET',now);
+            paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},now),'WATCH_ONLY',now,true)
+          :await this.sendMarketPush(j.subscription,payload(j.signal,now),'MARKET',now,true);
       }catch(error){r={ok:false,status:'FAILED',reason:String(error?.message??error).slice(0,160)};}
       const audit=watchOnly?{
         event:'RADAR_WATCH_ONLY_NOTIFICATION_RETRY',event_class:'RADAR_ALERT',radar:String(j.alert?.radar||'PRE_MOVE'),
