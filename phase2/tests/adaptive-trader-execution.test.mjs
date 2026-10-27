@@ -44,7 +44,7 @@ function snapshot(now=Date.now(),rows=[candidate(now)]){
 }
 const learningProfile={ready:true,resolved_samples:120,positive_outcome_rate_pct:56.2,
   adjustments:{volume:1,buyer_flow:1,structure:1,compression:1}};
-function fakeExchange({ocoError=null}={}){
+function fakeExchange({ocoError=null,ocoResponse=null}={}){
   const calls={buys:0,sells:0,ocos:0};
   return {
     calls,
@@ -61,6 +61,7 @@ function fakeExchange({ocoError=null}={}){
     async placeProtectiveOco(args){
       calls.ocos++;
       if(ocoError)throw ocoError;
+      if(ocoResponse)return ocoResponse;
       return {orderListId:99,listOrderStatus:'EXECUTING',listStatusType:'EXEC_STARTED',orders:[]};
     },
     async placeMarketSell(args){
@@ -191,6 +192,19 @@ test('a definitive OCO rejection triggers an emergency market sell and halts new
   assert.equal(exchange.calls.sells,1);
   assert.equal(controller.snapshot().halted,true);
   assert.equal(controller.snapshot().open_position,null);
+});
+test('an unverified OCO response halts the bot without assuming protection or blindly selling',async()=>{
+  const store=fakeStore();
+  const exchange=fakeExchange({ocoResponse:{orderListId:0,listOrderStatus:'REJECT',listStatusType:'RESPONSE'}});
+  const controller=new AdaptiveTraderExecutionController({store,env:goodEnv,clientFactory:()=>exchange,logger:{warn(){},error(){}}});
+  const now=Date.now();
+  const result=await controller.processSnapshot(snapshot(now),{learningProfile});
+  assert.equal(result.status,'BUY_FILLED_PROTECTION_REQUIRES_RECONCILIATION');
+  assert.equal(exchange.calls.buys,1);
+  assert.equal(exchange.calls.ocos,1);
+  assert.equal(exchange.calls.sells,0);
+  assert.equal(controller.snapshot().halted,true);
+  assert.equal(controller.snapshot().open_position.protection_status,'UNKNOWN');
 });
 test('kill switch does not submit buys',async()=>{
   const store=fakeStore();const exchange=fakeExchange();
