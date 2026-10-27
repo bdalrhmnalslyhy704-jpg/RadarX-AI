@@ -66,7 +66,7 @@ export class FcmPushProvider extends PushProvider{
       const title=String(payload?.title||((payload?.radar_name||'RadarX')+' • '+(payload?.symbol||'تنبيه'))).slice(0,120);
       const body=String(payload?.message||[payload?.symbol,payload?.event||payload?.potential_label||payload?.type].filter(Boolean).join(' • ')||'تنبيه جديد من RadarX').slice(0,220);
       const data={};
-      for(const key of ['type','event_class','event','notification_mode','notification_gate_mode','signal_type','watch_only','entry_eligible','requires_follow_up_confirmation','radar','radar_name','symbol','market','direction','price','price_change_24h','opportunity_score','potential_label','risk_flags','reason_codes','early_flow_watch_evidence','ticker_activity_watch_evidence','signal_lifecycle_state','signal_lifecycle_label','signal_lifecycle_transition','signal_lifecycle_reason_codes','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id','paper_trading','real_order_execution','confidence_score']){
+      for(const key of ['type','event_class','event','notification_mode','notification_gate_mode','notification_gate_eligible','signal_type','watch_only','entry_eligible','requires_follow_up_confirmation','radar','radar_name','symbol','market','direction','price','price_change_24h','opportunity_score','potential_label','risk_flags','reason_codes','early_flow_watch_evidence','ticker_activity_watch_evidence','signal_lifecycle_state','signal_lifecycle_label','signal_lifecycle_transition','signal_lifecycle_reason_codes','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id','paper_trading','real_order_execution','confidence_score']){
         const value=payload?.[key];
         if(value!==undefined&&value!==null)data[key]=(Array.isArray(value)?value.map(String).join(','):typeof value==='object'?JSON.stringify(value):String(value)).slice(0,500);
       }
@@ -125,6 +125,7 @@ const radarPayload=(alert,processedAt=Date.now())=>{
   signal_id:alert.signal_id||alert.id||null,
   notification_mode:watchOnly?'WATCH_ONLY_EARLY_TRACK':'STANDARD_RADAR_ALERT',
   notification_gate_mode:alert?.notification_gate?.mode??alert?.elite_gate?.mode??null,
+  notification_gate_eligible:alert?.notification_gate?.eligible===true||alert?.elite_gate?.eligible===true,
   watch_only:watchOnly,
   entry_eligible:watchOnly?false:(alert?.entry_eligible??null),
   watch_notification_tier:alert?.watch_notification_tier??null,
@@ -180,7 +181,8 @@ const radarPayload=(alert,processedAt=Date.now())=>{
 
 const payload=(s,processedAt=Date.now())=>({type:'RADARX_SIGNAL',event_class:marketEventClass(s.data_status?.source??s.source),signal_id:s.signal_id,symbol:s.symbol,market:s.market,strategy:s.strategy,direction:s.direction,
   signal_type:s.signal_type,entry_eligible:true,watch_only:false,notification_mode:'STRICT_NOTIFICATION',
-  notification_gate_mode:'STRICT_NOTIFICATION',requires_follow_up_confirmation:false,signal_lifecycle_state:'CONFIRMED',
+  notification_gate_mode:'STRICT_NOTIFICATION',notification_gate_eligible:true,
+  requires_follow_up_confirmation:false,signal_lifecycle_state:'CONFIRMED',
   timeframe:s.candle?.timeframe,candle_open_time:s.candle?.open_time,candle_close_time:s.candle?.close_time,
   price:s.price?.reference??null,data_quality:s.scores?.data_quality,liquidity_quality:s.scores?.liquidity_quality,
   risk_filter:s.risk_filter,risk_reasons:s.risk_reasons,reason_codes:s.reason_codes,source:s.data_status?.source??'UNKNOWN',
