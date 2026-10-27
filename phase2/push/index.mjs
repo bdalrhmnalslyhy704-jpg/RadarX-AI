@@ -296,16 +296,20 @@ export class PushManager{
   }
   async notifySignal(signal){
     const signalType=String(signal?.signal_type||'').trim().toUpperCase();
-    const confirmed=signalType==='CONFIRMED'&&signal?.watch_only!==true&&signal?.entry_eligible!==false&&
+    const direction=String(signal?.direction||signal?.bias||'').trim().toUpperCase();
+    const risingDirection=/^(UP|LONG|BULL)/.test(direction);
+    const confirmed=signalType==='CONFIRMED'&&risingDirection&&signal?.watch_only!==true&&signal?.entry_eligible!==false&&
       signal?.notification_gate?.eligible!==false&&signal?.notification_gate?.watch_only!==true;
     const rows=this.providerSubscriptions(await this.store.getSubscriptions()),cache=new Map(),out=[];
     for(const sub of rows){
       let settings=cache.get(sub.user_id);if(!settings){settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();cache.set(sub.user_id,settings);}
       if(!settings.enabled||!settings.symbols.includes(signal.symbol)||!settings.timeframes.includes(signal.candle?.timeframe)||!settings.signalTypes.includes(signal.signal_type))continue;
       if(!confirmed){
+        const risingDenied=!risingDirection;
         const audit={event:'NOTIFICATION_ATTEMPT',event_class:marketEventClass(signal.data_status?.source??signal.source),signal_id:signal.signal_id,
-          subscription_id:sub.id,user_id:sub.user_id,status:'SUPPRESSED_UNCONFIRMED',provider:this.provider.status().provider,
-          attempted_at:Date.now(),reason:'FINAL_CONFIRMATION_REQUIRED',http_status:null,attempted:false};
+          subscription_id:sub.id,user_id:sub.user_id,status:risingDenied?'SUPPRESSED_NON_RISING':'SUPPRESSED_UNCONFIRMED',
+          provider:this.provider.status().provider,attempted_at:Date.now(),
+          reason:risingDenied?'RISING_DIRECTION_REQUIRED':'FINAL_CONFIRMATION_REQUIRED',http_status:null,attempted:false};
         await this.store.appendNotificationAudit(audit);out.push(audit);continue;
       }
       if(Number(signal.scores?.data_quality)<settings.minDataQuality||Number(signal.scores?.liquidity_quality)<settings.minLiquidityQuality)continue;
@@ -695,6 +699,8 @@ export class PushManager{
     const strictConfirmation=gate?.mode==='STRICT_NOTIFICATION'||(!alert?.notification_gate&&eliteGateConfirmed)||lifecycleConfirmed;
     if(gate?.eligible!==true||gate?.watch_only===true||gate?.requires_follow_up_confirmation===true||
        alert?.entry_eligible!==true||alert?.watch_only===true||alert?.eligible===false||!strictConfirmation)return [];
+    const direction=String(alert?.direction??alert?.bias??'').trim().toUpperCase();
+    if(!/^(UP|LONG|BULL)/.test(direction))return [];
     const rows=this.providerSubscriptions(await this.store.getSubscriptions()),out=[];
     for(const sub of rows){
       const settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();
