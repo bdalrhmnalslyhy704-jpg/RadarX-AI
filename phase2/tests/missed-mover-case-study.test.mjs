@@ -48,6 +48,19 @@ test('case study finds first trailing-24h threshold crossing and snapshots only 
   assert.ok(report.pre_move.features.taker_buy_share_15m>0.55);
   assert.equal(report.at_crossing.features.price,report.crossing.price);
   assert.equal(report.pre_move.features.historical_orderbook_spread,null);
+
+  assert.deepEqual(report.lead_snapshots_before_crossing.map(row=>row.requested_lead_minutes),[60,30,15,5]);
+  assert.ok(report.lead_snapshots_before_crossing.every(row=>
+    row.status==='CLOSED_CANDLE_SNAPSHOT' &&
+    row.observed_at < report.crossing.observed_at &&
+    row.price > 0 &&
+    Number.isFinite(row.price_change_to_crossing_pct)
+  ));
+  assert.equal(report.post_crossing_outcomes['5m'].status,'COMPLETE');
+  assert.ok(Number.isFinite(report.post_crossing_outcomes['5m'].close_return_pct));
+  assert.ok(Number.isFinite(report.post_crossing_outcomes['5m'].max_favorable_pct));
+  assert.ok(Number.isFinite(report.post_crossing_outcomes['5m'].max_adverse_pct));
+  assert.equal(report.post_crossing_outcomes['24h'].status,'PENDING_HORIZON');
 });
 
 test('missing numeric features remain null rather than silently becoming zero',()=>{
