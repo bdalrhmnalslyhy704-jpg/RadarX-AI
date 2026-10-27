@@ -1,4 +1,5 @@
 import {createHash,createHmac} from 'node:crypto';
+import {buildAdaptiveLearningProfile,applyAdaptiveLearning} from './adaptive-trader-engine.mjs';
 
 const LIVE_CONFIRMATION='RADARX_SPOT_LIVE_TRADING_CONFIRMED';
 const MIN_ORDER_USDT=6;
@@ -282,7 +283,15 @@ export class AdaptiveTraderExecutionController{
     return {...safe,live_key_configured:Boolean(this.config._credentials),real_order_execution:this.config.mode==='LIVE_SPOT_GATED'&&this.config.enabled,
       paper_trading:!(this.config.mode==='LIVE_SPOT_GATED'&&this.config.enabled)};
   }
+  tradeLearningProfile(){
+    const rows=(Array.isArray(this.state.trade_history)?this.state.trade_history:[])
+      .filter(row=>row&&row.side==='SELL'&&row.status==='FILLED'&&
+        ['UP','DOWN','FLAT'].includes(row.outcome)&&row.entry_features&&typeof row.entry_features==='object')
+      .map(row=>({outcome:row.outcome,features:row.entry_features}));
+    return buildAdaptiveLearningProfile(rows);
+  }
   snapshot(){
+    const tradeLearningProfile=this.tradeLearningProfile();
     return {
       mode:this.currentMode(),enabled:this.config.enabled,requested:this.config.requested,
       network:this.config.network,block_reasons:[...this.config.block_reasons],
@@ -291,6 +300,8 @@ export class AdaptiveTraderExecutionController{
       halted:this.state.halted===true,halt_reason:this.state.halt_reason,
       preflight_status:this.state.preflight_status,last_preflight_at:this.state.last_preflight_at||null,
       pending_order_reconciliation:Boolean(this.state.pending_buy),
+      resolved_trade_outcomes:tradeLearningProfile.resolved_samples,
+      trade_learning_profile:tradeLearningProfile,
       open_position:this.state.open_position?{symbol:this.state.open_position.symbol,opened_at:this.state.open_position.opened_at,
         entry_price:this.state.open_position.entry_price,quantity:this.state.open_position.quantity,
         protection_status:this.state.open_position.protection_status,oco_status:this.state.open_position.oco_status}:null,
@@ -391,7 +402,13 @@ export class AdaptiveTraderExecutionController{
         this.state.last_event='WAITING_FOR_LEARNING_EVIDENCE';await this.persist();
         return {status:'WAITING_FOR_LEARNING',execution:this.snapshot()};
       }
-      const latestCandidates=[...(snapshot.candidates||[])].sort((a,b)=>(Number(b.score)||0)-(Number(a.score)||0));
+      const tradeLearningProfile=this.tradeLearningProfile();
+      const latestCandidates=[...(snapshot.candidates||[])].map(candidate=>{
+        const baseScore=FINITE(candidate?.score);
+        const learnedScore=applyAdaptiveLearning(baseScore,candidate?.features||{},tradeLearningProfile);
+        return baseScore===null||learnedScore===null?candidate:{...candidate,execution_base_score:baseScore,
+          score:learnedScore,trade_learning_adjustment:Number((learnedScore-baseScore).toFixed(2))};
+      }).sort((a,b)=>(Number(b.score)||0)-(Number(a.score)||0));
       let selected=null;
       for(const candidate of latestCandidates){
         const result=evaluateAdaptiveTraderLiveCandidate(candidate,{learningProfile,now:this.clock(),snapshotAsOf:snapshot.as_of});
@@ -430,7 +447,8 @@ export class AdaptiveTraderExecutionController{
     const minOrder=Math.max(MIN_ORDER_USDT,filters.minNotional);
     if(!(quoteAmount>=minOrder))throw new Error('INSUFFICIENT_FREE_USDT_OR_MIN_NOTIONAL');
     const positionIntent={symbol,client_order_id:buyId,requested_quote_usdt:Number(quoteAmount.toFixed(2)),
-      created_at:this.clock(),status:'PENDING_BUY_RECONCILIATION',candle_close_time:closeAt};
+      created_at:this.clock(),status:'PENDING_BUY_RECONCILIATION',candle_close_time:closeAt,
+      candidate_features:{...(candidate.features||{})},entry_score:FINITE(candidate.score)};
     this.state.pending_buy=positionIntent;await this.persist();
     let buy;
     try{
@@ -464,7 +482,9 @@ export class AdaptiveTraderExecutionController{
     const ocoId=clientId('ATX',intent.client_order_id);
     this.state.open_position={
       symbol:intent.symbol,base_asset:baseAsset,quantity:netQty,entry_price:entryPrice,
-      entry_quote_usdt:quoteSpent,entry_order_id:buy.orderId,entry_client_order_id:intent.client_order_id,
+      entry_quote_usdt:quoteSpent,entry_score:FINITE(candidate?.score)??FINITE(intent.entry_score),
+      entry_features:{...(candidate?.features||intent.candidate_features||{})},
+      entry_order_id:buy.orderId,entry_client_order_id:intent.client_order_id,
       oco_client_order_id:ocoId,opened_at:this.clock(),stop_loss_price:stop,take_profit_price:target,
       stop_loss_pct:DEFAULT_STOP_LOSS_PCT,take_profit_pct:DEFAULT_TAKE_PROFIT_PCT,
       protection_status:'PENDING',oco_status:'PENDING'
@@ -569,6 +589,9 @@ export class AdaptiveTraderExecutionController{
         this.state.daily_realized_pnl_usdt=Number((Number(this.state.daily_realized_pnl_usdt||0)+pnl).toFixed(4));
         this.state.trade_history.unshift({id:position.oco_client_order_id,symbol:position.symbol,side:'SELL',
           status:'FILLED',order_id:exit.orderId,quote_usdt:proceeds,realized_pnl_usdt:Number(pnl.toFixed(4)),
+          net_return_pct:entryCost>0?Number((pnl/entryCost*100).toFixed(3)):null,
+          outcome:pnl>0?'UP':'DOWN',entry_score:FINITE(position.entry_score),
+          entry_features:{...(position.entry_features||{})},
           at:this.clock(),exit_source:'EXCHANGE_OCO',real_order_execution:this.config.network==='LIVE'});
         this.state.trade_history=this.state.trade_history.slice(0,500);
         this.state.open_position=null;this.state.last_event='OCO_EXIT_RECONCILED';this.state.last_error=null;
