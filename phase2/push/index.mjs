@@ -209,10 +209,13 @@ export class PushManager{
     const finalConfirmation=String(notification?.signal_type||'').toUpperCase()==='CONFIRMED'||
       lifecycleState==='CONFIRMED'||
       String(notification?.notification_gate_mode||'').toUpperCase()==='STRICT_NOTIFICATION';
-    if(notification?.entry_eligible!==true||notification?.notification_gate_eligible!==true||
+    const spotPaperPolicy=String(notification?.market||'').trim().toUpperCase()==='SPOT'&&
+      notification?.paper_trading===true&&notification?.real_order_execution===false;
+    if(!spotPaperPolicy||notification?.entry_eligible!==true||notification?.notification_gate_eligible!==true||
        !risingDirection||lifecycleConflicts||!finalConfirmation)
       return{ok:false,status:'SUPPRESSED_UNCONFIRMED',
-        reason:!risingDirection?'RISING_DIRECTION_REQUIRED':
+        reason:!spotPaperPolicy?'SPOT_PAPER_POLICY_REQUIRED':
+          !risingDirection?'RISING_DIRECTION_REQUIRED':
           lifecycleConflicts?'CONFLICTING_LIFECYCLE_STATE':
           notification?.notification_gate_eligible!==true?'FINAL_GATE_ELIGIBILITY_REQUIRED':'FINAL_CONFIRMATION_REQUIRED'};
     const subscriptionId=String(subscription?.id||subscription?.installation_id||subscription?.user_id||'unknown');
@@ -717,6 +720,9 @@ export class PushManager{
        alert?.eligible===false||/WATCH_ONLY|WATCH_EARLY/.test(watchLabel)){
       return [];
     }
+    // Alert delivery is public Spot/paper-only. Missing policy fields fail closed.
+    if(String(alert?.market||'').trim().toUpperCase()!=='SPOT'||
+       alert?.paper_trading!==true||alert?.real_order_execution!==false)return [];
     // An "eligible" bit alone is not confirmation. Require the shared gate's strict mode,
     // an explicit confirmed lifecycle, or a fully measured Elite gate when no shared gate exists.
     const elite=alert?.elite_gate;
