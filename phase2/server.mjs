@@ -239,11 +239,6 @@ export async function startServer({
   const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,multiAnalystRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,marketRadarRest,radarSwarm,radarSignalOutcomeWorker,adaptiveTraderSnapshotProvider,adaptiveTraderWorker});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
-  // The sidecar has its own durable file and read-only scanner; it never writes into radar signal stores.
-  // Like the other market workers, it remains off in the protected staging smoke mode.
-  if(config.environment==='production'||config.radarControl?.autostart===true){
-    safeStart('ADAPTIVE_TRADER_SIDECAR',adaptiveTraderWorker);
-  }
   const safeStart=(name,instance)=>{
     try{
       const result=instance.start();
@@ -252,6 +247,11 @@ export async function startServer({
       logger.warn?.(name+' start failed: '+String(error?.message??error));
     }
   };
+  // The sidecar has its own durable file and read-only scanner; it never writes into radar signal stores.
+  // Like the other market workers, it remains off in the protected staging smoke mode.
+  if(config.environment==='production'||config.radarControl?.autostart===true){
+    safeStart('ADAPTIVE_TRADER_SIDECAR',adaptiveTraderWorker);
+  }
   safeStart('MONITOR',monitor);
   // Staging smoke tests must never start live market polling unless explicitly opted in.
   // Production retains the continuous analyst worker and all twelve coordinated radars.
