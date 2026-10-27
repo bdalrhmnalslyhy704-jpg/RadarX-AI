@@ -520,6 +520,26 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       if(!task)throw new Error('PRE_MOVE_SCAN_RETRY_COOLDOWN');
       const snapshot=await task,universe=snapshot?.universe||{},diagnostics=snapshot?.watch_notification_diagnostics||{};
       const watchAlerts=Array.isArray(snapshot?.watch_notification_candidates)?snapshot.watch_notification_candidates:[];
+      const nearMissRows=Array.isArray(snapshot?.near_miss_audit)?snapshot.near_miss_audit:[];
+      const nearMissBlockers={};
+      for(const row of nearMissRows){
+        for(const code of (Array.isArray(row?.blocker_codes)?row.blocker_codes:[])){
+          const key=String(code||'UNKNOWN').slice(0,80);
+          nearMissBlockers[key]=(nearMissBlockers[key]||0)+1;
+        }
+      }
+      const nearMissSamples=nearMissRows.slice(0,5).map(row=>({
+        symbol:String(row?.symbol||'').slice(0,30),
+        stage:String(row?.stage||'UNKNOWN').slice(0,40),
+        score:row?.score!==null&&row?.score!==undefined&&Number.isFinite(Number(row.score))?Number(row.score):null,
+        session_return_pct:row?.session_return_pct!==null&&row?.session_return_pct!==undefined&&Number.isFinite(Number(row.session_return_pct))?Number(row.session_return_pct):null,
+        one_hour_return_pct:row?.one_hour_return_pct!==null&&row?.one_hour_return_pct!==undefined&&Number.isFinite(Number(row.one_hour_return_pct))?Number(row.one_hour_return_pct):null,
+        volume_acceleration:row?.volume_acceleration!==null&&row?.volume_acceleration!==undefined&&Number.isFinite(Number(row.volume_acceleration))?Number(row.volume_acceleration):null,
+        trade_acceleration:row?.trade_acceleration!==null&&row?.trade_acceleration!==undefined&&Number.isFinite(Number(row.trade_acceleration))?Number(row.trade_acceleration):null,
+        data_valid:row?.data_valid===true,
+        liquidity_quality:row?.liquidity_quality!==null&&row?.liquidity_quality!==undefined&&Number.isFinite(Number(row.liquidity_quality))?Number(row.liquidity_quality):null,
+        blocker_codes:(Array.isArray(row?.blocker_codes)?row.blocker_codes:[]).slice(0,8).map(code=>String(code).slice(0,80))
+      }));
       const summary={
         discovered:Number(universe.discovered)||0,deep_scanned:Number(universe.deep_scanned)||0,
         scanned:Number(universe.scanned)||0,valid_data:Number(universe.valid_data)||0,
@@ -543,7 +563,10 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             data_quality:row?.data_quality!==null&&row?.data_quality!==undefined&&Number.isFinite(Number(row.data_quality))?Number(row.data_quality):null,
             liquidity_quality:row?.liquidity_quality!==null&&row?.liquidity_quality!==undefined&&Number.isFinite(Number(row.liquidity_quality))?Number(row.liquidity_quality):null
           })),
-        watch_notification_symbols:watchAlerts.map(x=>String(x.symbol||'')).filter(Boolean).slice(0,3)
+        watch_notification_symbols:watchAlerts.map(x=>String(x.symbol||'')).filter(Boolean).slice(0,3),
+        near_miss_review_count:nearMissRows.length,
+        near_miss_blocker_counts:Object.fromEntries(Object.entries(nearMissBlockers).sort((a,b)=>b[1]-a[1]).slice(0,12)),
+        near_miss_samples:nearMissSamples
       };
       preMoveBackgroundWorkerState.successful_scans+=1;
       preMoveBackgroundWorkerState.last_scan_at=new Date().toISOString();
