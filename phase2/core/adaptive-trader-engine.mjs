@@ -115,7 +115,9 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, btcKlines
   const btcCandles = (Array.isArray(btcKlines?.data) ? btcKlines.data : Array.isArray(btcKlines) ? btcKlines : [])
     .map(normalizeCandle).filter(Boolean).filter(candle => candle.closeTime < Number(now)).sort((a,b)=>a.closeTime-b.closeTime);
   const btcLast = btcCandles[btcCandles.length-1];
-  const btcOneHourReturnPct = btcCandles.length>=5 && btcLast && Number(now)-btcLast.closeTime<=POLICY.maxCandleAgeMs
+  const btcRecent = btcCandles.slice(-5);
+  const btcContiguous = btcRecent.length===5 && btcRecent.every((candle,index)=>index===0||candle.openTime-btcRecent[index-1].openTime===15*60*1000);
+  const btcOneHourReturnPct = btcContiguous && btcLast && Number(now)-btcLast.closeTime<=POLICY.maxCandleAgeMs
     ? pct(btcLast.close,btcCandles[btcCandles.length-5].close) : null;
   const relativeStrengthVsBtcPct = oneHourReturnPct!==null&&btcOneHourReturnPct!==null
     ? Number((oneHourReturnPct-btcOneHourReturnPct).toFixed(3)) : null;
