@@ -385,15 +385,27 @@ export class DurableStore {
     const text=(input,max=180)=>String(input??'').replace(/[\r\n\t]/g,' ').slice(0,max);
     const number=(input)=>input!==null&&input!==undefined&&input!==''&&Number.isFinite(Number(input))?Number(input):null;
     const symbol=input=>/^[A-Z0-9]{5,30}$/.test(String(input||'').toUpperCase())?String(input).toUpperCase():'';
+    const features=input=>{
+      if(!input||typeof input!=='object'||Array.isArray(input))return null;
+      return {
+        volume_ratio:number(input.volume_ratio),trade_ratio:number(input.trade_ratio),
+        taker_buy_ratio:number(input.taker_buy_ratio),close_location:number(input.close_location),
+        higher_low:input.higher_low===true,breakout_above_prior_high:input.breakout_above_prior_high===true,
+        compression_ratio:number(input.compression_ratio),hourly_return_pct:number(input.hourly_return_pct),
+        relative_strength_vs_btc_pct:number(input.relative_strength_vs_btc_pct)
+      };
+    };
     const pending=value.pending_buy&&typeof value.pending_buy==='object'?{
       symbol:symbol(value.pending_buy.symbol),client_order_id:text(value.pending_buy.client_order_id,36),
       requested_quote_usdt:number(value.pending_buy.requested_quote_usdt),created_at:number(value.pending_buy.created_at),
-      status:text(value.pending_buy.status,80),candle_close_time:number(value.pending_buy.candle_close_time)
+      status:text(value.pending_buy.status,80),candle_close_time:number(value.pending_buy.candle_close_time),
+      entry_score:number(value.pending_buy.entry_score),candidate_features:features(value.pending_buy.candidate_features)
     }:null;
     const position=value.open_position&&typeof value.open_position==='object'?{
       symbol:symbol(value.open_position.symbol),base_asset:text(value.open_position.base_asset,20),
       quantity:number(value.open_position.quantity),entry_price:number(value.open_position.entry_price),
-      entry_quote_usdt:number(value.open_position.entry_quote_usdt),entry_order_id:number(value.open_position.entry_order_id),
+      entry_quote_usdt:number(value.open_position.entry_quote_usdt),entry_score:number(value.open_position.entry_score),
+      entry_features:features(value.open_position.entry_features),entry_order_id:number(value.open_position.entry_order_id),
       entry_client_order_id:text(value.open_position.entry_client_order_id,36),
       oco_client_order_id:text(value.open_position.oco_client_order_id,36),
       oco_order_list_id:number(value.open_position.oco_order_list_id),opened_at:number(value.open_position.opened_at),
@@ -405,6 +417,8 @@ export class DurableStore {
       id:text(row.id,80),symbol:symbol(row.symbol),side:row.side==='BUY'?'BUY':row.side==='SELL'?'SELL':'UNKNOWN',
       status:text(row.status,40),order_id:number(row.order_id),price:number(row.price),
       quote_usdt:number(row.quote_usdt),realized_pnl_usdt:number(row.realized_pnl_usdt),
+      net_return_pct:number(row.net_return_pct),outcome:['UP','DOWN','FLAT'].includes(row.outcome)?row.outcome:null,
+      entry_score:number(row.entry_score),entry_features:features(row.entry_features),
       at:number(row.at),exit_source:text(row.exit_source,40),real_order_execution:row.real_order_execution===true
     }));
     const safe={
