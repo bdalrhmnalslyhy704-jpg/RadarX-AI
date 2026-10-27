@@ -61,6 +61,8 @@ assert.match(service, /boolean finalConfirmation = "CONFIRMED"\.equals\(lifecycl
   'phone alerts must require an explicit CONFIRMED lifecycle/signal or strict notification gate');
 assert.match(service, /if \(!finalConfirmation\) return false;/,
   'early setup/monitor states must fail closed at Android last-mile');
+assert.match(service, /boolean risingDirection = direction\.startsWith\("UP"\)/,
+  'Android phone alerts must be for upward/rising opportunities only');
 assert.match(firebase, /FCM_MESSAGE_SUPPRESSED_WATCH_OR_UNCONFIRMED/,
   'Firebase must suppress queued or legacy monitor-only pushes at the device boundary');
 assert.match(firebase, /boolean entryEligible = Boolean\.parseBoolean/,
@@ -69,6 +71,8 @@ assert.match(firebase, /boolean finalConfirmation = "CONFIRMED"\.equals\(lifecyc
   'Firebase must require a final confirmed state or strict final gate');
 assert.match(firebase, /if \(watchOnly \|\| watchEvent \|\| !entryEligible \|\| followUpRequired \|\| !finalConfirmation\)/,
   'Firebase must not render early watch, follow-up or unconfirmed data messages');
+assert.match(firebase, /boolean risingDirection = direction\.startsWith\("UP"\)/,
+  'Firebase must suppress non-rising directions even when a stale message is otherwise marked confirmed');
 assert.doesNotMatch(firebase, /manager\.notify\("radarx_premove_watch"/,
   'the FCM client must have no separate local notification lane for pre-move watches');
 
