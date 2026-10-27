@@ -76,22 +76,30 @@ assert.match(service, /notificationGate\.optBoolean\("requires_follow_up_confirm
 assert.match(service, /boolean risingDirection = direction\.startsWith\("UP"\)/,
   'Android phone alerts must be for upward/rising opportunities only');
 assert.match(firebase, /FCM_MESSAGE_SUPPRESSED_WATCH_OR_UNCONFIRMED/,
-  'Firebase must suppress queued or legacy monitor-only pushes at the device boundary');
+  'Firebase must suppress generic or legacy watch payloads that do not meet the narrow Pre-Move allow-list');
 assert.ok(firebase.includes('matches(".*(WATCH_ONLY|WATCH_EARLY|MONITOR_ONLY).*")'),
   'a final confirmed Pre-Move signal must not be suppressed merely because its radar name contains PRE_MOVE');
 
 assert.match(firebase, /boolean entryEligible = Boolean\.parseBoolean/,
-  'Firebase must require entry_eligible=true before posting a phone notification');
+  'Firebase evaluates explicit entry eligibility; only the separate non-entry Pre-Move allow-list may bypass it');
 assert.match(firebase, /boolean notificationGateEligible = Boolean\.parseBoolean/,
-  'Firebase must require explicit notification gate eligibility before posting');
+  'Firebase reads explicit gate eligibility and only permits the separately whitelisted monitor-only mode to bypass it');
 assert.match(firebase, /boolean lifecycleConflicts = !lifecycleState\.isEmpty\(\) && !"CONFIRMED"\.equals\(lifecycleState\)/,
   'Firebase must reject a lifecycle that conflicts with a strict-looking gate');
 assert.match(firebase, /boolean finalConfirmation = !lifecycleConflicts && \(/,
   'Firebase must require an internally consistent final confirmation state');
-assert.match(firebase, /if \(!explicitTest && \(watchOnly \|\| watchEvent \|\| !risingDirection \|\| !entryEligible \|\|/,
-  'Firebase must put the watch, rising-direction and entry gates before posting');
+assert.match(firebase, /if \(!explicitTest && !approvedPreMoveWatch &&\s*\(watchOnly \|\| watchEvent \|\| !risingDirection \|\| !entryEligible \|\|/,
+  'Firebase keeps the original strict last-mile gate for every message outside the explicit Pre-Move allow-list');
+assert.match(firebase, /private static boolean isApprovedPreMoveWatch\(/,
+  'Firebase permits monitor-only delivery only through a dedicated allow-list helper');
+assert.match(firebase, /"PRE_MOVE_RADAR_WATCH_ONLY".equals\(event\)/,
+  'the monitor bypass is bound to the exact Pre-Move event rather than generic watch events');
+assert.match(firebase, /"PRE_MOVE_WATCH_ONLY".equals\(mode\)/,
+  'the monitor bypass requires an explicit Pre-Move watch notification mode');
+assert.match(firebase, /dataQuality >= 70\.0 && liquidityQuality >= 60\.0 && price > 0\.0/,
+  'the monitor bypass requires measured minimum data/liquidity quality and a positive price');
 assert.match(firebase, /!notificationGateEligible \|\| followUpRequired \|\| lifecycleConflicts \|\| !finalConfirmation/,
-  'Firebase must not render messages without eligible gate and internally consistent final confirmation');
+  'messages outside the bounded Pre-Move allow-list still require eligible gate and internally consistent final confirmation');
 assert.match(firebase, /boolean risingDirection = direction\.startsWith\("UP"\)/,
   'Firebase must suppress non-rising directions even when a stale message is otherwise marked confirmed');
 assert.match(service, /RadarXNotificationPolicy\.reserve/,
