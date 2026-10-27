@@ -17,7 +17,7 @@ main{width:min(1180px,100%);margin:auto;padding:0 15px 38px;position:relative;z-
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:0;z-index:20;margin:0 -15px 16px;padding:calc(10px + env(safe-area-inset-top)) 16px 11px;background:rgba(5,9,21,.86);backdrop-filter:blur(22px);border-bottom:1px solid rgba(125,151,255,.15)}
 .brand{display:flex;align-items:center;gap:11px;min-width:0}.logo{width:46px;height:46px;display:grid;place-items:center;border-radius:16px;font-size:14px;font-weight:1000;letter-spacing:.5px;color:#080b18;background:conic-gradient(from 210deg,#5ff1ff,#9d86ff,#7affc8,#ffd47c,#5ff1ff);box-shadow:0 0 30px rgba(98,231,255,.22)}
 .brand b{font-size:15px;letter-spacing:.2px}.brand small{display:block;font-size:10px;color:var(--muted);margin-top:3px}
-.top-right{display:flex;align-items:center;gap:8px}.mode{display:flex;align-items:center;gap:7px;border:1px solid rgba(93,240,183,.25);background:rgba(15,113,87,.13);padding:8px 11px;border-radius:99px;color:#c6ffe9;font-size:10px;font-weight:900;white-space:nowrap}.pulse{width:7px;height:7px;border-radius:50%;background:var(--mint);box-shadow:0 0 12px var(--mint)}
+.top-right{display:flex;align-items:center;gap:8px}.mode{display:flex;align-items:center;gap:7px;border:1px solid rgba(93,240,183,.25);background:rgba(15,113,87,.13);padding:8px 11px;border-radius:99px;color:#c6ffe9;font-size:10px;font-weight:900;white-space:nowrap}.mode.off{border-color:rgba(255,212,124,.25);background:rgba(80,60,14,.14);color:#ffe7ad}.mode.halt{border-color:rgba(255,113,142,.3);background:rgba(80,14,32,.2);color:#ffc0cc}.mode.testnet{border-color:rgba(155,130,255,.32);background:rgba(64,40,120,.22);color:#d8cbff}.mode.live{border-color:rgba(93,240,183,.35);background:rgba(15,113,87,.16);color:#c6ffe9}.mode.off .pulse{background:var(--gold);box-shadow:0 0 8px var(--gold)}.mode.halt .pulse{background:var(--red);box-shadow:0 0 8px var(--red)}.mode.testnet .pulse{background:var(--purple);box-shadow:0 0 8px var(--purple)}.pulse{width:7px;height:7px;border-radius:50%;background:var(--mint);box-shadow:0 0 12px var(--mint)}
 .small-btn,.btn{border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.045);color:#eaf1ff;border-radius:13px;padding:10px 13px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:7px;font-size:11px;font-weight:900;min-height:40px;transition:transform .15s ease,border-color .15s ease}.btn:active,.small-btn:active{transform:scale(.98)}button:disabled{opacity:.55;cursor:wait}
 .hero{position:relative;overflow:hidden;padding:21px;border:1px solid rgba(126,150,255,.22);border-radius:26px;background:linear-gradient(145deg,rgba(24,34,69,.89),rgba(10,16,34,.94) 55%,rgba(12,25,44,.89));box-shadow:0 26px 70px rgba(0,0,0,.26),inset 0 1px rgba(255,255,255,.05)}
 .hero:after{content:"";position:absolute;width:300px;height:300px;left:-100px;top:-175px;border-radius:50%;background:radial-gradient(circle,rgba(98,231,255,.21),transparent 70%);pointer-events:none}
@@ -55,13 +55,13 @@ main{width:min(1180px,100%);margin:auto;padding:0 15px 38px;position:relative;z-
 <main>
 <header class="top">
   <a class="brand" href="./index.html" aria-label="العودة إلى RadarX"><span class="logo">AT·AI</span><span><b>ADAPTIVE TRADER</b><small>متداول متعلّم مستقل · Build 224 Sidecar</small></span></a>
-  <div class="top-right"><span class="mode"><i class="pulse"></i> PAPER ONLY · لا أوامر حقيقية</span><a class="small-btn" href="./index.html">↩ RadarX</a></div>
+  <div class="top-right"><span id="executionModeBadge" class="mode off"><i id="executionModeDot" class="pulse"></i><span id="executionModeLabel">PAPER ONLY · متوقف افتراضيًا</span></span><a class="small-btn" href="./index.html">↩ RadarX</a></div>
 </header>
 
 <section class="hero">
   <div class="kicker">LIVE SPOT DATA • ADAPTIVE MEMORY • RISK-FIRST SIMULATION</div>
   <h1>يتعلّم من الفرص التي رآها… ومن الفرص التي فاتته.</h1>
-  <p>متداول تجريبي مستقل يقرأ شموع Binance Spot المغلقة، ويرتب الفرص بقواعد واضحة، ويسجل نتائجها بمرور الوقت. الذاكرة في هذه النسخة محفوظة محليًا على هذا الجهاز، والتعلم يعاير ترتيب الإشارات فقط؛ ولا يغيّر رادارات RadarX الأصلية أو يرسل أي أمر تداول حقيقي.</p>
+  <p>محرك مستقل يقرأ بيانات Binance Spot المغلقة، ويرتّب الفرص ويتعلم من نتائج السوق ومن الصفقات المغلقة المسجلة بالخادم. التنفيذ الحقيقي يظل متوقفًا افتراضيًا، ولا يُتاح إلا بإعدادات آمنة على الخادم؛ والمحفظة المحلية في هذه الصفحة محاكاة منفصلة لا تمثل رصيد Binance الحقيقي.</p>
   <div class="actions">
     <button id="scanBtn" class="btn primary" type="button">◉ فحص السوق الحقيقي</button>
     <button id="exportBtn" class="btn subtle" type="button">⇩ تصدير ذاكرة الخبرة</button>
@@ -69,7 +69,7 @@ main{width:min(1180px,100%);margin:auto;padding:0 15px 38px;position:relative;z-
   </div>
 </section>
 
-<div class="note-line"><span>◆</span><span><b>حدود صريحة:</b> درجة التحليل ترتيب تجريبي وليست احتمال ربح. هذه النسخة لا تملك صلاحيات شراء أو بيع حقيقي، وتغطي عدد الأزواج الموضح في التغطية فقط. لا يجوز اعتبار إشارة أو نتيجة ورقية ضمانًا للأرباح.</span></div>
+<div class="note-line"><span>◆</span><span><b>حدود صريحة:</b> درجة التحليل ترتيب تجريبي وليست احتمال ربح. حالة التنفيذ الفعلية معروضة من الخادم أدناه؛ أما المحفظة في هذا الجهاز فهي محاكاة فقط. التغطية محدودة بعدد الأزواج المبين، ولا توجد ضمانات للأرباح أو عدم تفويت الفرص.</span></div>
 
 <section class="kpis">
   <div class="kpi"><span>أزواج مؤهلة في السوق</span><b id="kpiEligible">—</b><small>حجم تداول 24 ساعة ≥ 750 ألف USDT</small></div>
@@ -84,6 +84,11 @@ main{width:min(1180px,100%);margin:auto;padding:0 15px 38px;position:relative;z-
   <span class="state"><i id="statusDot" class="state-dot"></i><strong id="statusText">لم يُفحص السوق بعد</strong></span>
   <span id="asOfText">لا توجد بيانات حية حالية</span>
   <span id="sourceText">المصدر: ينتظر أول فحص</span>
+</div>
+<div class="status" id="executionStatusPanel" aria-live="polite">
+  <span class="state"><i id="executionStatusDot" class="state-dot"></i><strong id="executionStatusText">التنفيذ الحقيقي متوقف افتراضيًا</strong></span>
+  <span id="executionPositionText">لا توجد صفقة حيّة مفتوحة</span>
+  <span id="executionLearningText">نتائج الصفقات الحقيقية المكتملة: 0</span>
 </div>
 
 <section class="controls">
@@ -143,7 +148,10 @@ main{width:min(1180px,100%);margin:auto;padding:0 15px 38px;position:relative;z-
     </div>
   </div>
   <div class="adjustments" id="learnAdjustments"></div>
-  <div class="note-line"><span>ⓘ</span><span>تظل المعايرة ضمن ±4 نقاط، ولا تبدأ قبل 30 نتيجة مكتملة وثمانية أمثلة على الأقل لثلاثة عوامل. إن لم تتوفر العينة، تبقى الدرجة الأساسية دون تغيير.</span></div>
+  <div class="section-title"><h2>التعلّم من الصفقات المغلقة فعليًا</h2><span id="tradeLearningStatus" class="tag watch">تنتظر العينة</span></div>
+  <p class="tiny" id="tradeLearningCount">لم تُسجّل نتائج صفقات حقيقية مكتملة بعد. التعلم من سجل التداول منفصل عن المحفظة الورقية المحلية.</p>
+  <div class="adjustments" id="tradeLearnAdjustments"></div>
+  <div class="note-line"><span>ⓘ</span><span>تظل معايرة السوق ضمن ±4 نقاط، ولا تُفعّل قبل 30 نتيجة مكتملة وثمانية أمثلة على الأقل لثلاثة عوامل. ومعايرة الصفقات تحتاج سجلًا كافيًا من عمليات البيع المغلقة؛ ولا تعد أي منهما ضمانًا للربح.</span></div>
 </section>
 
 <section id="tab-journal" class="panel" hidden>
@@ -171,7 +179,7 @@ main{width:min(1180px,100%);margin:auto;padding:0 15px 38px;position:relative;z-
     </div>
   </div>
 </section>
-<footer class="foot">RADARX ADAPTIVE TRADER · SIDE-CAR V1 · DATA FROM BINANCE PUBLIC SPOT REST VIA DHDTech · PAPER ONLY<br>هذا محاكي بحث وتعلّم، لا يضمن الأرباح ولا يقدم وعدًا بعدم تفويت أي عملة.</footer>
+<footer class="foot">RADARX ADAPTIVE TRADER · SIDE-CAR V1 · BINANCE PUBLIC SPOT DATA VIA DHDTech<br>التنفيذ الحقيقي متوقف افتراضيًا؛ راجع حالة الخادم قبل اعتبار أي عملية صفقة فعلية. لا توجد ضمانات للربح أو عدم تفويت العملات.</footer>
 </main>
 
 <script type="module">
@@ -473,11 +481,51 @@ function renderLearning(){
     const bucket=model.buckets[key]||{samples:0,positive_rate_pct:0};
     return '<div class="adj"><span>'+labels[key]+' <small class="tiny">('+bucket.samples+' عينات)</small></span><b class="'+(value>0?'green':value<0?'red':'')+'">'+(value>0?'+':'')+fmt(value,2)+' نقطة</b></div>';
   }).join('');
+  const execution=(state.serverStatus && state.serverStatus.execution)||{};
+  const tradeModel=execution.trade_learning_profile||{};
+  const tradeCount=Math.max(0,Number(execution.resolved_trade_outcomes)||Number(tradeModel.resolved_samples)||0);
+  el('tradeLearningStatus').textContent=tradeModel.ready?'معايرة الصفقات مفعّلة':'تنتظر عينة كافية';
+  el('tradeLearningStatus').className='tag '+(tradeModel.ready?'early':'watch');
+  el('tradeLearningCount').textContent=tradeCount+' صفقة مغلقة ذات نتيجة مسجلة · يلزم 30 على الأقل مع تغطية كافية للخصائص. هذه العينة منفصلة عن أرباح المحفظة الورقية المحلية.';
+  el('tradeLearnAdjustments').innerHTML=Object.keys(labels).map(function(key){
+    const value=num(tradeModel.adjustments && tradeModel.adjustments[key])||0;
+    const bucket=(tradeModel.buckets && tradeModel.buckets[key])||{samples:0};
+    return '<div class="adj"><span>'+labels[key]+' <small class="tiny">('+bucket.samples+' صفقات)</small></span><b class="'+(value>0?'green':value<0?'red':'')+'">'+(value>0?'+':'')+fmt(value,2)+' نقطة</b></div>';
+  }).join('');
 }
 function renderJournal(){
   const root=el('journalList');
   if(!state.journal.length){root.innerHTML='<div class="empty">لا توجد أحداث بعد.</div>';return;}
   root.innerHTML=state.journal.slice().reverse().map(function(row){return '<div class="log"><time>'+esc(timeText(row.at))+'</time><span class="'+(row.kind==='success'?'pos':row.kind==='error'||row.kind==='warning'?'neg':'')+'">'+esc(row.message)+'</span></div>';}).join('');
+}
+function renderExecutionStatus(){
+  const badge=el('executionModeBadge'),label=el('executionModeLabel'),badgeDot=el('executionModeDot');
+  const statusDot=el('executionStatusDot'),title=el('executionStatusText');
+  const positionText=el('executionPositionText'),learningText=el('executionLearningText');
+  const execution=(state.serverStatus && state.serverStatus.execution)||null;
+  let mode='off',badgeText='PAPER ONLY · متوقف افتراضيًا',statusText='التنفيذ الحقيقي متوقف افتراضيًا';
+  if(execution){
+    if(execution.mode==='HALTED'||execution.halted===true){mode='halt';badgeText='HALTED · متوقف للحماية';statusText='التنفيذ موقوف: '+String(execution.halt_reason||'حالة حماية تحتاج مراجعة');}
+    else if(execution.mode==='LIVE_SPOT_GATED'){mode='live';badgeText='LIVE SPOT · تنفيذ حي مقيّد';statusText='تنفيذ Spot الحقيقي مهيأ على الخادم مع حدود مخاطرة';}
+    else if(execution.mode==='SPOT_TESTNET'){mode='testnet';badgeText='SPOT TESTNET · اختبار';statusText='بيئة الاختبار مفعّلة؛ لا تعتبرها أموالًا حقيقية';}
+    else if(execution.mode==='WAITING_FOR_PREFLIGHT'){mode='testnet';badgeText='WAITING · فحص الحساب';statusText='ينتظر التحقق من صلاحيات حساب Binance قبل أي أمر';}
+    else if(execution.mode==='BLOCKED_CONFIGURATION'){mode='off';badgeText='BLOCKED · غير مهيأ';statusText='التنفيذ الحقيقي محجوب حتى تكتمل إعدادات الخادم الآمنة';}
+    else {mode='off';badgeText='PAPER ONLY · التداول الحقيقي معطّل';statusText='التداول الحقيقي غير مفعّل؛ الماسح يعمل للقراءة والتقييم فقط';}
+  }
+  badge.className='mode '+mode;label.textContent=badgeText;badgeDot.className='pulse';
+  statusDot.className='state-dot'+(mode==='live'?' good':mode==='halt'?' bad':'');
+  title.textContent=statusText;
+  const position=execution && execution.open_position;
+  positionText.textContent=position
+    ?'مركز حي: '+String(position.symbol||'غير معروف')+' · الحماية: '+String(position.protection_status||'غير معروفة')
+    :execution && execution.pending_order_reconciliation
+      ?'أمر شراء قيد المطابقة؛ لا يُعاد إرساله تلقائيًا'
+      :'لا يوجد مركز حي مسجل';
+  const resolved=Math.max(0,Number(execution && execution.resolved_trade_outcomes)||0);
+  const dailyPnl=Number(execution && execution.daily_realized_pnl_usdt)||0;
+  const trades=Number(execution && execution.daily_trade_count)||0;
+  const maximum=Number(execution && execution.max_trades_per_utc_day)||2;
+  learningText.textContent='نتائج صفقات مغلقة: '+resolved+' · اليوم: '+trades+'/'+maximum+' صفقات · صافي محقق: '+money(dailyPnl);
 }
 function render(){
   const snapshot=state.lastSnapshot;
@@ -488,6 +536,7 @@ function render(){
     el('kpiEquity').textContent=money(estimatePaperEquity(state.portfolio));
   }
   el('paperToggle').checked=state.paperEnabled===true;
+  renderExecutionStatus();
   if(snapshot)renderCandidates(snapshot);
   else renderCandidates(null);
   renderMissed();renderPortfolio();renderLearning();renderJournal();
