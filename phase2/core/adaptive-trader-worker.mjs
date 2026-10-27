@@ -28,11 +28,11 @@ function mapCurrentPrices(rows){
 }
 
 export class AdaptiveTraderWorker{
-  constructor({store,snapshotProvider,logger=console,intervalMs=DEFAULT_INTERVAL_MS,scanLimit=SNAPSHOT_LIMIT}={}){
+  constructor({store,snapshotProvider,logger=console,intervalMs=DEFAULT_INTERVAL_MS,scanLimit=SNAPSHOT_LIMIT,executionController=null}={}){
     if(!store||typeof store.getAdaptiveTraderState!=='function'||typeof store.putAdaptiveTraderState!=='function')
       throw new Error('ADAPTIVE_TRADER_DURABLE_STORE_UNAVAILABLE');
     if(typeof snapshotProvider!=='function')throw new Error('ADAPTIVE_TRADER_SNAPSHOT_PROVIDER_UNAVAILABLE');
-    this.store=store;this.snapshotProvider=snapshotProvider;this.logger=logger;
+    this.store=store;this.snapshotProvider=snapshotProvider;this.logger=logger;this.executionController=executionController;this.lastExecutionResult=null;
     this.intervalMs=Math.max(60_000,Math.min(10*60_000,Math.trunc(Number(intervalMs)||DEFAULT_INTERVAL_MS)));
     this.scanLimit=Math.max(40,Math.min(120,Math.trunc(Number(scanLimit)||SNAPSHOT_LIMIT)));
     this.state=emptyState();this.enabled=false;this.inFlight=false;
@@ -112,6 +112,15 @@ export class AdaptiveTraderWorker{
       this.state.last_error=null;
       this.state.last_duration_ms=Math.max(0,Date.now()-started);
       this.state.learning_profile=buildAdaptiveLearningProfile(this.state.samples);
+      this.lastExecutionResult=null;
+      if(this.executionController){
+        try{
+          this.lastExecutionResult=await this.executionController.processSnapshot(snapshot,{learningProfile:this.state.learning_profile});
+        }catch(error){
+          this.lastExecutionResult={status:'EXECUTION_CONTROLLER_ERROR',error:String(error?.message??error).slice(0,180)};
+          this.logger.warn?.('[ADAPTIVE_TRADER_EXECUTION_CONTROLLER_FAILED] '+this.lastExecutionResult.error);
+        }
+      }
       this.state.last_summary=this.buildSummary(snapshot);
       await this.persist();
       this.logger.info?.('[ADAPTIVE_TRADER_SCAN_COMPLETE] '+JSON.stringify({
@@ -245,6 +254,11 @@ export class AdaptiveTraderWorker{
       learning_profile:this.state.learning_profile||buildAdaptiveLearningProfile(this.state.samples),
       missed_movers:(this.state.missed_movers||[]).slice(0,100),
       paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+      execution:this.executionController?.snapshot?.()||{
+        mode:'PAPER_ONLY',enabled:false,requested:false,paper_trading:true,real_order_execution:false,
+        block_reasons:['LIVE_EXECUTION_CONTROLLER_NOT_CONFIGURED']
+      },
+      last_execution_result:this.lastExecutionResult,
       memory:{resolved_samples:(this.state.samples||[]).filter(row=>row.outcome).length,
         unresolved_samples:(this.state.samples||[]).filter(row=>!row.outcome).length,
         history_rows:(this.state.price_history||[]).length,
