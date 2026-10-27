@@ -81,8 +81,8 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
             body = dataValue(message.getData(), "body", "");
             if (body.trim().isEmpty()) {
                 String symbol = dataValue(message.getData(), "symbol", "");
-                String event = dataValue(message.getData(), "event", "اكتشاف جديد");
-                body = (symbol.isEmpty() ? event : symbol + " • " + event)
+                String fallbackEvent = dataValue(message.getData(), "event", "اكتشاف جديد");
+                body = (symbol.isEmpty() ? fallbackEvent : symbol + " • " + fallbackEvent)
                         + " | تداول ورقي فقط";
             }
         }
