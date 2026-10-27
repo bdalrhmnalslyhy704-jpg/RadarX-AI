@@ -33,7 +33,7 @@ function normalizeCandle(row) {
     takerBuyBaseVolume: finite(row[9]), takerBuyQuoteVolume: finite(row[10])
   };
   if (Object.values(values).some(v => v === null) ||
-      values.openTime <= 0 || values.closeTime <= values.openTime ||
+      values.openTime <= 0 || values.closeTime !== values.openTime + 15 * 60 * 1000 - 1 ||
       values.low <= 0 || values.high < values.low || values.close <= 0 ||
       values.quoteVolume < 0 || values.trades < 0) return null;
   return values;
@@ -78,6 +78,12 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, now = Dat
   }
 
   const current = candles[candles.length - 1];
+  const recentWindow = candles.slice(-12);
+  const hasCandleGaps = recentWindow.some((candle, index) => index > 0 &&
+    candle.openTime - recentWindow[index - 1].openTime !== 15 * 60 * 1000);
+  if (hasCandleGaps) {
+    return { ...base, tier: 'DATA_REJECTED', score: null, reason_codes: ['CLOSED_CANDLE_GAPS'] };
+  }
   const candleAgeMs = Number(now) - current.closeTime;
   if (candleAgeMs < 0 || candleAgeMs > POLICY.maxCandleAgeMs) {
     return { ...base, data_stale: true, tier: 'DATA_REJECTED', score: null, candle_age_ms: candleAgeMs,
@@ -355,7 +361,7 @@ export function findMissedMoverEvents({ history = [], currentPrices = [], now = 
     const at = finite(row?.at);
     const price = finite(row?.price);
     if (!symbol || at === null || price === null || price <= 0 || at >= Number(now) || Number(now) - at < 15 * 60 * 1000 || Number(now) - at > maxAgeMs) continue;
-    if (!latestBySymbol.has(symbol) || at < latestBySymbol.get(symbol).at) latestBySymbol.set(symbol, { ...row, symbol, at, price });
+    if (!latestBySymbol.has(symbol) || at > latestBySymbol.get(symbol).at) latestBySymbol.set(symbol, { ...row, symbol, at, price });
   }
   const events = [];
   for (const [symbol, previous] of latestBySymbol) {
