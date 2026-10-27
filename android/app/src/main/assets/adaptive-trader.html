@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#070b17">
+<title>RadarX Adaptive Trader — المتداول المتعلّم</title>
+<style>
+:root{color-scheme:dark;--bg:#070b17;--panel:rgba(17,24,45,.86);--line:rgba(143,164,255,.16);--cyan:#62e7ff;--purple:#9b82ff;--mint:#5df0b7;--gold:#ffd47c;--red:#ff718e;--text:#f5f7ff;--muted:#96a4c4}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{scroll-behavior:smooth}
+body{margin:0;background:radial-gradient(ellipse at 0% 0%,rgba(66,85,255,.21),transparent 36%),radial-gradient(ellipse at 100% 10%,rgba(0,226,209,.12),transparent 32%),radial-gradient(ellipse at 70% 80%,rgba(132,69,255,.11),transparent 36%),linear-gradient(180deg,#080d1c,#060916 68%,#040711);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,Tahoma,sans-serif;min-height:100vh}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.15;background-image:linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);background-size:32px 32px}
+button,select{font:inherit}
+a{color:inherit;text-decoration:none}
+main{width:min(1180px,100%);margin:auto;padding:0 15px 38px;position:relative;z-index:1}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:0;z-index:20;margin:0 -15px 16px;padding:calc(10px + env(safe-area-inset-top)) 16px 11px;background:rgba(5,9,21,.86);backdrop-filter:blur(22px);border-bottom:1px solid rgba(125,151,255,.15)}
+.brand{display:flex;align-items:center;gap:11px;min-width:0}.logo{width:46px;height:46px;display:grid;place-items:center;border-radius:16px;font-size:14px;font-weight:1000;letter-spacing:.5px;color:#080b18;background:conic-gradient(from 210deg,#5ff1ff,#9d86ff,#7affc8,#ffd47c,#5ff1ff);box-shadow:0 0 30px rgba(98,231,255,.22)}
+.brand b{font-size:15px;letter-spacing:.2px}.brand small{display:block;font-size:10px;color:var(--muted);margin-top:3px}
+.top-right{display:flex;align-items:center;gap:8px}.mode{display:flex;align-items:center;gap:7px;border:1px solid rgba(93,240,183,.25);background:rgba(15,113,87,.13);padding:8px 11px;border-radius:99px;color:#c6ffe9;font-size:10px;font-weight:900;white-space:nowrap}.pulse{width:7px;height:7px;border-radius:50%;background:var(--mint);box-shadow:0 0 12px var(--mint)}
+.small-btn,.btn{border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.045);color:#eaf1ff;border-radius:13px;padding:10px 13px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:7px;font-size:11px;font-weight:900;min-height:40px;transition:transform .15s ease,border-color .15s ease}.btn:active,.small-btn:active{transform:scale(.98)}button:disabled{opacity:.55;cursor:wait}
+.hero{position:relative;overflow:hidden;padding:21px;border:1px solid rgba(126,150,255,.22);border-radius:26px;background:linear-gradient(145deg,rgba(24,34,69,.89),rgba(10,16,34,.94) 55%,rgba(12,25,44,.89));box-shadow:0 26px 70px rgba(0,0,0,.26),inset 0 1px rgba(255,255,255,.05)}
+.hero:after{content:"";position:absolute;width:300px;height:300px;left:-100px;top:-175px;border-radius:50%;background:radial-gradient(circle,rgba(98,231,255,.21),transparent 70%);pointer-events:none}
+.kicker{font-size:10px;letter-spacing:1.6px;color:var(--cyan);font-weight:1000}.hero h1{font-size:clamp(24px,4vw,35px);line-height:1.18;letter-spacing:-.7px;margin:10px 0 8px}.hero p{font-size:12px;line-height:1.9;color:#aeb9d5;max-width:800px;margin:0}.hero strong{color:#f8fbff}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:17px}.btn.primary{background:linear-gradient(120deg,#61e7ff,#a48aff);color:#080b1c;border:0;box-shadow:0 8px 25px rgba(98,231,255,.13)}.btn.paper{background:linear-gradient(125deg,rgba(93,240,183,.18),rgba(98,231,255,.09));border-color:rgba(93,240,183,.32);color:#caffeb}.btn.danger{background:rgba(255,113,142,.09);border-color:rgba(255,113,142,.18);color:#ffb4c3}.btn.subtle{background:rgba(255,255,255,.04)}
+.note-line{display:flex;align-items:flex-start;gap:8px;padding:11px 13px;margin:12px 0 15px;border:1px solid rgba(255,212,124,.2);border-radius:14px;background:rgba(80,60,14,.14);color:#e7d7ae;font-size:10px;line-height:1.8}
+.kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:9px;margin:12px 0}
+.kpi{position:relative;overflow:hidden;padding:13px 12px;border:1px solid var(--line);border-radius:17px;background:linear-gradient(145deg,rgba(18,27,49,.88),rgba(11,17,33,.8));min-width:0}
+.kpi:before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:linear-gradient(var(--cyan),transparent);opacity:.65}
+.kpi:nth-child(2):before{background:linear-gradient(var(--purple),transparent)}.kpi:nth-child(3):before{background:linear-gradient(var(--mint),transparent)}.kpi:nth-child(4):before{background:linear-gradient(var(--gold),transparent)}.kpi:nth-child(5):before{background:linear-gradient(var(--red),transparent)}.kpi:nth-child(6):before{background:linear-gradient(#7cb4ff,transparent)}
+.kpi span{display:block;color:var(--muted);font-size:10px}.kpi b{display:block;font-size:23px;margin-top:7px;letter-spacing:-.6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.kpi small{display:block;color:#7385aa;font-size:9px;margin-top:3px}
+.status{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:10px 1px;padding:10px 12px;border:1px solid rgba(123,149,255,.12);border-radius:13px;background:rgba(8,14,30,.56);font-size:10px;color:var(--muted);flex-wrap:wrap}.status strong{color:var(--cyan)}.status .state{display:flex;align-items:center;gap:7px}.state-dot{width:7px;height:7px;border-radius:50%;background:#7183a8}.state-dot.good{background:var(--mint);box-shadow:0 0 10px var(--mint)}.state-dot.bad{background:var(--red);box-shadow:0 0 10px var(--red)}
+.controls{display:flex;justify-content:space-between;align-items:center;gap:9px;flex-wrap:wrap;margin:14px 0}.control-group{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.select{color:#edf3ff;background:#111a30;border:1px solid rgba(143,164,255,.2);border-radius:12px;padding:10px 11px;min-height:40px;font-size:11px}.toggle{display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid rgba(93,240,183,.19);border-radius:12px;background:rgba(10,50,41,.24);font-size:10px;color:#c7e7dd;cursor:pointer}.toggle input{accent-color:#5df0b7;width:16px;height:16px}
+.section-title{display:flex;align-items:end;justify-content:space-between;gap:12px;margin:23px 2px 10px}.section-title h2{margin:0;font-size:15px}.section-title span{font-size:10px;color:var(--muted)}
+.tabs{display:flex;gap:7px;overflow-x:auto;padding-bottom:4px;margin:13px 0 10px}.tab{flex:0 0 auto;border:1px solid rgba(132,155,255,.16);border-radius:12px;padding:10px 13px;color:#aab7d5;background:rgba(14,21,42,.7);font-size:10px;font-weight:900;cursor:pointer}.tab.active{background:linear-gradient(120deg,rgba(98,231,255,.19),rgba(155,130,255,.18));border-color:rgba(98,231,255,.38);color:#f3fbff}
+.panel{border:1px solid var(--line);border-radius:20px;background:linear-gradient(150deg,rgba(16,24,46,.92),rgba(8,14,29,.9));padding:14px;min-height:180px;box-shadow:0 16px 38px rgba(0,0,0,.12)}
+.panel-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}.panel-head b{font-size:12px}.muted{color:var(--muted)}.tiny{font-size:9px;color:#7586a9}
+.candidates{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.candidate{padding:13px;border:1px solid rgba(121,151,255,.16);border-radius:16px;background:linear-gradient(145deg,rgba(20,30,55,.77),rgba(10,16,32,.83));min-width:0}
+.candidate.early{border-color:rgba(93,240,183,.34);background:linear-gradient(145deg,rgba(15,66,57,.22),rgba(10,16,32,.9))}.candidate.late{border-color:rgba(255,113,142,.23)}
+.candidate-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.symbol{font-size:15px;letter-spacing:.4px;font-weight:1000}.price{font-size:12px;color:#dfe9ff;margin-top:3px}.tag{display:inline-flex;align-items:center;gap:5px;border-radius:99px;padding:6px 8px;font-size:9px;font-weight:1000;white-space:nowrap;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.045);color:#c6d2ed}.tag.early{background:rgba(93,240,183,.1);border-color:rgba(93,240,183,.26);color:#aaffd9}.tag.watch{background:rgba(98,231,255,.09);border-color:rgba(98,231,255,.2);color:#a8f5ff}.tag.late{background:rgba(255,113,142,.1);border-color:rgba(255,113,142,.22);color:#ffb3c2}
+.score-row{display:flex;align-items:center;gap:10px;margin:13px 0 10px}.score{font-size:24px;font-weight:1000;letter-spacing:-1px;min-width:42px}.score small{font-size:9px;color:var(--muted);display:block;letter-spacing:0;font-weight:700}.bar{height:7px;border-radius:99px;background:#222c49;overflow:hidden;flex:1}.bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#60e8ff,#a087ff,#62f0b6)}
+.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.metric{padding:7px 6px;text-align:center;border:1px solid rgba(134,155,220,.1);border-radius:10px;background:rgba(4,9,22,.34)}.metric b{display:block;font-size:11px}.metric span{display:block;color:#8495b8;font-size:8px;margin-top:3px}
+.reasons{display:flex;flex-wrap:wrap;gap:5px;margin-top:10px}.reason{padding:5px 7px;border-radius:8px;background:rgba(125,145,200,.09);font-size:8px;color:#aab9d5}.card-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:11px;padding-top:9px;border-top:1px solid rgba(134,155,220,.1);font-size:9px;color:var(--muted)}
+.empty{padding:28px 14px;text-align:center;color:#99a9cc;font-size:11px;line-height:1.9}.empty b{display:block;color:#e8efff;font-size:13px;margin-bottom:5px}
+.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:10px;min-width:600px}th,td{text-align:right;padding:11px 9px;border-bottom:1px solid rgba(135,155,218,.12);white-space:nowrap}th{font-size:9px;color:#93a6cf;font-weight:900;background:rgba(10,16,32,.46)}td{color:#d8e3fa}.pos{color:var(--mint)!important}.neg{color:var(--red)!important}
+.learning-grid{display:grid;grid-template-columns:1.15fr 1fr;gap:10px}.learning-card{border:1px solid rgba(143,164,255,.15);border-radius:15px;padding:13px;background:rgba(13,20,40,.65)}.learning-card h3{margin:0 0 6px;font-size:12px}.learning-card p{margin:0;color:var(--muted);font-size:10px;line-height:1.9}.learning-progress{height:9px;border-radius:99px;background:#222d4c;overflow:hidden;margin:12px 0 6px}.learning-progress i{height:100%;display:block;background:linear-gradient(90deg,#63e8ff,#9c85ff,#5df0b7);border-radius:99px}.adjustments{display:grid;gap:8px;margin-top:11px}.adj{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 10px;border:1px solid rgba(137,155,210,.1);border-radius:11px;background:rgba(7,13,27,.4);font-size:10px}.adj b{font-size:11px}.green{color:var(--mint)}.red{color:var(--red)}
+.log-list{display:grid;gap:8px}.log{padding:11px;border:1px solid rgba(129,153,222,.13);border-radius:13px;background:rgba(9,15,30,.53);font-size:10px;line-height:1.8}.log time{color:#7183a8;font-size:9px;display:block;margin-bottom:3px}
+.lower{display:grid;grid-template-columns:1fr 1fr;gap:10px}.lower .panel{min-height:150px}
+.foot{padding:18px 2px;text-align:center;color:#6f80a6;font-size:9px;line-height:1.8}
+@media(max-width:980px){.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:640px){main{padding-inline:11px}.top{margin-inline:-11px;padding-inline:12px}.top .mode{display:none}.hero{padding:17px}.candidates{grid-template-columns:1fr}.learning-grid,.lower{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.controls{align-items:stretch}.control-group{width:100%}.control-group .btn{flex:1}.select{flex:1;min-width:110px}.brand small{font-size:9px}.brand b{font-size:13px}.kpi b{font-size:21px}}
+</style>
+</head>
+<body>
+<main>
+<header class="top">
+  <a class="brand" href="./index.html" aria-label="العودة إلى RadarX"><span class="logo">AT·AI</span><span><b>ADAPTIVE TRADER</b><small>متداول متعلّم مستقل · Build 224 Sidecar</small></span></a>
+  <div class="top-right"><span class="mode"><i class="pulse"></i> PAPER ONLY · لا أوامر حقيقية</span><a class="small-btn" href="./index.html">↩ RadarX</a></div>
+</header>
+
+<section class="hero">
+  <div class="kicker">LIVE SPOT DATA • ADAPTIVE MEMORY • RISK-FIRST SIMULATION</div>
+  <h1>يتعلّم من الفرص التي رآها… ومن الفرص التي فاتته.</h1>
+  <p>متداول تجريبي مستقل يقرأ شموع Binance Spot المغلقة، ويرتب الفرص بقواعد واضحة، ويسجل نتائجها بمرور الوقت. الذاكرة في هذه النسخة محفوظة محليًا على هذا الجهاز، والتعلم يعاير ترتيب الإشارات فقط؛ ولا يغيّر رادارات RadarX الأصلية أو يرسل أي أمر تداول حقيقي.</p>
+  <div class="actions">
+    <button id="scanBtn" class="btn primary" type="button">◉ فحص السوق الحقيقي</button>
+    <button id="exportBtn" class="btn subtle" type="button">⇩ تصدير ذاكرة الخبرة</button>
+    <button id="resetBtn" class="btn danger" type="button">إعادة ضبط ذاكرة هذا الجهاز</button>
+  </div>
+</section>
+
+<div class="note-line"><span>◆</span><span><b>حدود صريحة:</b> درجة التحليل ترتيب تجريبي وليست احتمال ربح. هذه النسخة لا تملك صلاحيات شراء أو بيع حقيقي، وتغطي عدد الأزواج الموضح في التغطية فقط. لا يجوز اعتبار إشارة أو نتيجة ورقية ضمانًا للأرباح.</span></div>
+
+<section class="kpis">
+  <div class="kpi"><span>أزواج مؤهلة في السوق</span><b id="kpiEligible">—</b><small>حجم تداول 24 ساعة ≥ 750 ألف USDT</small></div>
+  <div class="kpi"><span>أزواج تم تحليلها</span><b id="kpiScanned">—</b><small id="kpiCoverage">لم يبدأ المسح</small></div>
+  <div class="kpi"><span>إعدادات مبكرة</span><b id="kpiEarly">—</b><small>مراقبة ورقية فقط</small></div>
+  <div class="kpi"><span>رصيد المحفظة الورقية</span><b id="kpiEquity">$10,000</b><small id="kpiPnl">لا توجد صفقات مغلقة</small></div>
+  <div class="kpi"><span>معدل الصفقات الورقية الرابحة</span><b id="kpiWinRate">—</b><small>بعد تقدير التكاليف</small></div>
+  <div class="kpi"><span>حركات محتملة فائتة</span><b id="kpiMissed">0</b><small>تدقيق تشخيصي من لقطات محفوظة</small></div>
+</section>
+
+<div class="status">
+  <span class="state"><i id="statusDot" class="state-dot"></i><strong id="statusText">لم يُفحص السوق بعد</strong></span>
+  <span id="asOfText">لا توجد بيانات حية حالية</span>
+  <span id="sourceText">المصدر: ينتظر أول فحص</span>
+</div>
+
+<section class="controls">
+  <div class="control-group">
+    <label class="muted" for="universeLimit" style="font-size:10px">حجم فحص السوق</label>
+    <select id="universeLimit" class="select">
+      <option value="40">40 زوجًا</option>
+      <option value="80" selected>80 زوجًا</option>
+      <option value="120">120 زوجًا</option>
+    </select>
+    <label class="toggle"><input type="checkbox" id="paperToggle"> تشغيل محاكاة الصفقات تلقائيًا</label>
+  </div>
+  <span class="tiny" id="memoryText">ذاكرة محلية غير متصلة بحسابات أخرى</span>
+</section>
+
+<div class="section-title"><h2>لوحة التداول والتعلّم</h2><span>قراءة فقط · بلا مفاتيح تداول</span></div>
+<nav class="tabs" aria-label="أقسام المتداول">
+  <button class="tab active" type="button" data-tab="opportunities">الفرص الحالية</button>
+  <button class="tab" type="button" data-tab="missed">الفرص التي فاتتنا</button>
+  <button class="tab" type="button" data-tab="portfolio">الصفقات الورقية</button>
+  <button class="tab" type="button" data-tab="learning">ذاكرة التعلّم</button>
+  <button class="tab" type="button" data-tab="journal">سجل النظام</button>
+</nav>
+
+<section id="tab-opportunities" class="panel">
+  <div class="panel-head"><b>الفرص التي حللها المتداول المستقل</b><span id="candidateCaption" class="tiny">تظهر النتائج بعد فحص بيانات حقيقية</span></div>
+  <div id="candidateList" class="candidates"><div class="empty"><b>جاهز لأول فحص</b>اضغط «فحص السوق الحقيقي» لقراءة البيانات وتحليل الشموع المغلقة.</div></div>
+</section>
+
+<section id="tab-missed" class="panel" hidden>
+  <div class="panel-head"><b>مراجعة الحركات المحتملة التي فاتت الرصد</b><span class="tiny">فرق سعر مرصود من لقطات محلية فقط</span></div>
+  <p class="muted" style="font-size:10px;line-height:1.8;margin-top:0">لا يمكن معرفة ما فات قبل بدء حفظ اللقطات. تسجل هذه القائمة فقط الحركات التي يمكن مقارنتها بسعر ودرجة سابقين من ذاكرة هذا الجهاز؛ وهي تدقيق لاحق لا ادعاء باكتشاف تاريخي.</p>
+  <div id="missedList"><div class="empty"><b>لا توجد لقطات كافية</b>سنبدأ بناء سجل المراقبة من أول فحص حي.</div></div>
+</section>
+
+<section id="tab-portfolio" class="panel" hidden>
+  <div class="panel-head"><b>محفظة محاكاة فقط</b><span class="tag watch">لا توجد أوامر Binance</span></div>
+  <div id="portfolioSummary" class="learning-grid"></div>
+  <div class="section-title"><h2>المراكز المفتوحة</h2><span>وقف افتراضي −2% · هدف +3% · خروج بعد 4 ساعات</span></div>
+  <div id="openPositions"><div class="empty">لا توجد مراكز ورقية مفتوحة.</div></div>
+  <div class="section-title"><h2>آخر الصفقات المغلقة</h2><span>خصم تقديري للرسوم والانزلاق: 0.30% لكل دورة</span></div>
+  <div id="closedPositions"><div class="empty">تظهر نتائج الصفقات بعد فتح وإغلاق مراكز محاكاة.</div></div>
+</section>
+
+<section id="tab-learning" class="panel" hidden>
+  <div class="panel-head"><b>ما الذي تعلّمه المتداول من النتائج؟</b><span id="learnStatus" class="tag">لا توجد نتائج كافية</span></div>
+  <div class="learning-grid">
+    <div class="learning-card">
+      <h3>معايرة الترتيب</h3>
+      <p id="learnDescription">تُسجَّل لقطة السعر والخصائص عند الرصد ثم تُراجع بعد مرور أربع ساعات على الأقل. لا يغيّر النظام قواعد الدخول ولا يتعلم من نتائج مستقبلية قبل ظهورها.</p>
+      <div class="learning-progress"><i id="learnProgress" style="width:0%"></i></div>
+      <p id="learnCount">0 من 30 نتيجة موسومة</p>
+    </div>
+    <div class="learning-card">
+      <h3>ماذا تعني نتائج التعلم؟</h3>
+      <p>النتيجة الإيجابية تعني ارتفاعًا مرصودًا ≥ 2% من سعر العينة عند المراجعة. السلبية تعني هبوطًا ≤ −2%، وما بينهما حيادي. هذا تبسيط تجريبي، وليس توقعًا مضمونًا أو نموذجًا مدربًا على سجل تاريخي كامل.</p>
+    </div>
+  </div>
+  <div class="adjustments" id="learnAdjustments"></div>
+  <div class="note-line"><span>ⓘ</span><span>تظل المعايرة ضمن ±4 نقاط، ولا تبدأ قبل 30 نتيجة مكتملة وثمانية أمثلة على الأقل لثلاثة عوامل. إن لم تتوفر العينة، تبقى الدرجة الأساسية دون تغيير.</span></div>
+</section>
+
+<section id="tab-journal" class="panel" hidden>
+  <div class="panel-head"><b>سجل الإجراءات والبيانات</b><span class="tiny">آخر 150 حدثًا محفوظًا محليًا</span></div>
+  <div id="journalList" class="log-list"><div class="empty">لا توجد أحداث حتى الآن.</div></div>
+</section>
+
+<section class="lower" style="margin-top:12px">
+  <div class="panel">
+    <div class="panel-head"><b>قواعد الحماية الفعالة</b><span class="tag early">قيد التشغيل</span></div>
+    <div class="reasons">
+      <span class="reason">شموع مغلقة فقط</span><span class="reason">حد سيولة</span>
+      <span class="reason">منع المطاردة</span><span class="reason">3 مراكز ورقية كحد أقصى</span>
+      <span class="reason">وقف −2%</span><span class="reason">هدف +3%</span>
+      <span class="reason">لا مفاتيح API</span><span class="reason">التنفيذ الحقيقي معطل</span>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><b>حدود النسخة الحالية</b><span class="tag watch">صراحة تقنية</span></div>
+    <div class="log">
+      <div>• الذاكرة محلية على هذا الجهاز ولا تُزامَن بعد مع الخادم.</div>
+      <div>• المسح يفحص العدد المحدد من أعلى الأزواج المؤهلة بالسيولة؛ إن لم تكتمل التغطية، تظهر النسبة بوضوح.</div>
+      <div>• المعايرة تتعلم من نتائج العينات التي شاهدها هذا الجهاز، ولا تغيّر كود الرادارات الأصلية.</div>
+      <div>• لا يتم إرسال شراء/بيع حقيقي، مهما كانت درجة المرشح.</div>
+    </div>
+  </div>
+</section>
+<footer class="foot">RADARX ADAPTIVE TRADER · SIDE-CAR V1 · DATA FROM BINANCE PUBLIC SPOT REST VIA DHDTech · PAPER ONLY<br>هذا محاكي بحث وتعلّم، لا يضمن الأرباح ولا يقدم وعدًا بعدم تفويت أي عملة.</footer>
+</main>
+
+<script type="module">
+import {
+  createPaperPortfolio, buildAdaptiveLearningProfile, applyAdaptiveLearning,
+  findMissedMoverEvents, openPaperPosition, advancePaperPortfolio, estimatePaperEquity
+} from './adaptive-trader-client.js';
+
+const API_BASE='https://radarx-backend.dhdtech.site';
+const STORAGE_KEY='radarx_adaptive_trader_v1';
+const MAX_HISTORY=7000;
+const MAX_SAMPLES=1800;
+const MAX_MISSED=500;
+const state=loadState();
+let currentTab='opportunities';
+let scanBusy=false;
+
+function freshState(){
+  return {version:1,lastSnapshot:null,lastScanAt:null,samples:[],priceHistory:[],missedMovers:[],journal:[],portfolio:createPaperPortfolio(10000),paperEnabled:false};
+}
+function loadState(){
+  try{
+    const saved=JSON.parse(localStorage.getItem(STORAGE_KEY)||'null');
+    if(!saved||saved.version!==1) return freshState();
+    const next={...freshState(),...saved};
+    if(!next.portfolio||next.portfolio.mode!=='PAPER_ONLY'||next.portfolio.real_order_execution!==false)next.portfolio=createPaperPortfolio(10000);
+    next.portfolio.enabled=next.paperEnabled===true;
+    next.portfolio.real_order_execution=false;
+    next.portfolio.paper_trading=true;
+    next.samples=Array.isArray(next.samples)?next.samples:[];
+    next.priceHistory=Array.isArray(next.priceHistory)?next.priceHistory:[];
+    next.missedMovers=Array.isArray(next.missedMovers)?next.missedMovers:[];
+    next.journal=Array.isArray(next.journal)?next.journal:[];
+    return next;
+  }catch{return freshState();}
+}
+function persist(){
+  try{
+    state.version=1;
+    state.portfolio.real_order_execution=false;
+    state.portfolio.paper_trading=true;
+    state.portfolio.enabled=state.paperEnabled===true;
+    state.samples=state.samples.slice(-MAX_SAMPLES);
+    state.priceHistory=state.priceHistory.slice(-MAX_HISTORY);
+    state.missedMovers=state.missedMovers.slice(-MAX_MISSED);
+    state.journal=state.journal.slice(-150);
+    localStorage.setItem(STORAGE_KEY,JSON.stringify(state));
+    el('memoryText').textContent='الذاكرة المحلية: '+state.samples.filter(x=>x.outcome).length+' نتائج مكتملة';
+  }catch(error){
+    el('memoryText').textContent='تعذر حفظ الذاكرة المحلية؛ صدّر البيانات للاحتفاظ بها.';
+    addJournal('تحذير: مساحة التخزين المحلية غير كافية أو غير متاحة.', 'warning');
+  }
+}
+function el(id){return document.getElementById(id);}
+function esc(value){return String(value===null||value===undefined?'':value).replace(/[&<>"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];});}
+function num(value){const n=Number(value);return Number.isFinite(n)?n:null;}
+function fmt(value,d=2){const n=num(value);return n===null?'—':n.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});}
+function money(value){const n=num(value);return n===null?'—':'$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function percent(value){const n=num(value);return n===null?'—':(n>0?'+':'')+fmt(n,2)+'%';}
+function timeText(value){const d=new Date(value);return Number.isNaN(d.getTime())?'—':d.toLocaleString('ar',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'});}
+function profile(){return buildAdaptiveLearningProfile(state.samples);}
+function displayScore(candidate){return applyAdaptiveLearning(candidate.score,candidate.features||{},profile());}
+function addJournal(message,kind='info',at=Date.now()){
+  state.journal.push({at:Number(at),message:String(message),kind});
+  state.journal=state.journal.slice(-150);
+}
+function setStatus(message,kind='idle'){
+  el('statusText').textContent=message;
+  el('statusDot').className='state-dot'+(kind==='good'?' good':kind==='bad'?' bad':'');
+}
+function priceMap(snapshot){return new Map((snapshot.latest_prices||[]).map(row=>[String(row.symbol||'').toUpperCase(),num(row.price)]));}
+function updateLabels(snapshot){
+  const universe=snapshot.universe||{};
+  el('kpiEligible').textContent=fmt(universe.eligible_spot_symbols,0);
+  el('kpiScanned').textContent=fmt(universe.analyzed_symbols,0);
+  el('kpiCoverage').textContent=fmt(universe.coverage_pct,1)+'% من الأزواج المؤهلة'+(universe.scan_complete?' · كاملة':' · تغطية جزئية');
+  el('kpiEarly').textContent=(snapshot.candidates||[]).filter(x=>x.data_valid&&x.tier==='EARLY_SETUP').length;
+  el('asOfText').textContent='وقت قراءة البيانات: '+timeText(snapshot.as_of);
+  el('sourceText').textContent='المصدر: '+String(snapshot.source||'غير متاح')+' · شموع مغلقة فقط';
+  el('kpiEquity').textContent=money(estimatePaperEquity(state.portfolio));
+  const closed=state.portfolio.closed_trades||[];
+  const net=closed.reduce((sum,row)=>sum+(num(row.net_pnl)||0),0);
+  el('kpiPnl').textContent=closed.length?('صافي محاكاة مغلقة: '+money(net)):'لا توجد صفقات مغلقة';
+  const wins=closed.filter(x=>(num(x.net_pnl)||0)>0).length;
+  el('kpiWinRate').textContent=closed.length?fmt(wins/closed.length*100,1)+'%':'—';
+  el('kpiMissed').textContent=String(state.missedMovers.length);
+  el('candidateCaption').textContent='الترتيب لا يمثل احتمال ربح · '+(universe.scan_complete?'تغطية كاملة لهذه العينة':'لم تُحلّل كل الأزواج المؤهلة');
+}
+function resolveLearningSamples(snapshot,now){
+  const prices=priceMap(snapshot);
+  for(const sample of state.samples){
+    if(sample.outcome||now-Number(sample.at)<4*60*60*1000)continue;
+    const price=prices.get(String(sample.symbol||'').toUpperCase());
+    if(!(price>0)||!(sample.price>0))continue;
+    const move=(price/sample.price-1)*100;
+    sample.outcome=move>=2?'UP':move<=-2?'DOWN':'FLAT';
+    sample.mark_price=price;
+    sample.return_pct=Number(move.toFixed(3));
+    sample.resolved_at=now;
+    sample.horizon_ms=now-Number(sample.at);
+  }
+  const latest=new Map();
+  for(const sample of state.samples){
+    const prev=latest.get(sample.symbol);
+    if(!prev||Number(sample.at)>Number(prev.at))latest.set(sample.symbol,sample);
+  }
+  for(const candidate of snapshot.candidates||[]){
+    if(!candidate.data_valid||!(candidate.price>0)||candidate.score===null)continue;
+    const old=latest.get(candidate.symbol);
+    if(old&&now-Number(old.at)<4*60*60*1000)continue;
+    const item={
+      id:candidate.symbol+':'+String(now),
+      symbol:candidate.symbol,price:candidate.price,at:now,
+      base_score:candidate.score,tier:candidate.tier,
+      features:{...(candidate.features||{})},
+      outcome:null,mark_price:null,return_pct:null
+    };
+    state.samples.push(item);
+    latest.set(candidate.symbol,item);
+  }
+}
+function collectPriceHistory(snapshot,now){
+  const candidates=new Map((snapshot.candidates||[]).map(x=>[x.symbol,x]));
+  const lastAt=new Map();
+  for(const row of state.priceHistory){
+    const previous=lastAt.get(row.symbol);
+    if(!previous||Number(row.at)>Number(previous.at))lastAt.set(row.symbol,row);
+  }
+  for(const row of snapshot.latest_prices||[]){
+    const symbol=String(row.symbol||'').toUpperCase(),price=num(row.price);
+    if(!symbol||!(price>0))continue;
+    const previous=lastAt.get(symbol);
+    if(previous&&now-Number(previous.at)<15*60*1000)continue;
+    const candidate=candidates.get(symbol);
+    state.priceHistory.push({
+      symbol,price,at:now,
+      tier:candidate?candidate.tier:'NOT_EVALUATED',
+      score:candidate&&candidate.data_valid?candidate.score:null,
+      evaluated:Boolean(candidate&&candidate.data_valid)
+    });
+  }
+  state.priceHistory=state.priceHistory.slice(-MAX_HISTORY);
+}
+function recordMissedMovers(snapshot,now){
+  const events=findMissedMoverEvents({history:state.priceHistory,currentPrices:snapshot.latest_prices||[],now,thresholdPct:5});
+  const existing=new Set(state.missedMovers.map(row=>row.id));
+  for(const event of events){
+    if(existing.has(event.id))continue;
+    state.missedMovers.unshift(event);
+    addJournal('حركة مرصودة بعد لقطة سابقة: '+event.symbol+' '+percent(event.move_pct)+'؛ التصنيف '+event.classification+'.','warning',now);
+    existing.add(event.id);
+  }
+  state.missedMovers=state.missedMovers.slice(0,MAX_MISSED);
+}
+function runPaperPortfolio(snapshot,now){
+  advancePaperPortfolio(state.portfolio,snapshot.latest_prices||[],now);
+  if(!state.paperEnabled)return;
+  const sorted=(snapshot.candidates||[]).filter(row=>row.data_valid).slice().sort((a,b)=>displayScore(b)-displayScore(a));
+  for(const candidate of sorted){
+    const result=openPaperPosition(state.portfolio,candidate,now);
+    if(result.opened)addJournal('فتح مركز ورقي فقط: '+candidate.symbol+' بسعر '+fmt(candidate.price,6)+' ودرجة '+fmt(candidate.score,1)+'.','paper',now);
+    if((state.portfolio.open_positions||[]).length>=3)break;
+  }
+}
+function applySnapshot(snapshot){
+  const now=Date.parse(snapshot.as_of)||Date.now();
+  state.lastSnapshot=snapshot;
+  state.lastScanAt=now;
+  resolveLearningSamples(snapshot,now);
+  collectPriceHistory(snapshot,now);
+  recordMissedMovers(snapshot,now);
+  runPaperPortfolio(snapshot,now);
+  addJournal('اكتمل فحص حي: '+snapshot.universe.analyzed_symbols+' من '+snapshot.universe.eligible_spot_symbols+' زوجًا مؤهلًا؛ '+(snapshot.candidates||[]).filter(x=>x.tier==='EARLY_SETUP'&&x.data_valid).length+' إعداد مبكر ورقي.','success',now);
+  persist();
+  render();
+}
+async function scanMarket(){
+  if(scanBusy)return;
+  scanBusy=true;
+  const button=el('scanBtn');button.disabled=true;button.textContent='◌ جارٍ فحص السوق…';
+  setStatus('جارٍ جلب بيانات Spot وتحليل الشموع المغلقة','idle');
+  addJournal('بدأ فحص جديد من نقطة بيانات السوق المستقلة.');
+  try{
+    const limit=Number(el('universeLimit').value)||80;
+    const response=await fetch(API_BASE+'/api/adaptive-trader/market-snapshot?limit='+encodeURIComponent(limit),{method:'GET',cache:'no-store',headers:{Accept:'application/json'}});
+    const snapshot=await response.json();
+    if(!response.ok||snapshot.status!=='LIVE_DATA'||snapshot.meta?.live!==true||
+       snapshot.meta?.paper_trading!==true||snapshot.meta?.real_order_execution!==false||
+       snapshot.meta?.closed_candles_only!==true||snapshot.meta?.engine!=='ADAPTIVE_TRADER_SIDECAR_V1'){
+      throw new Error(snapshot.reason||snapshot.error||'LIVE_MARKET_DATA_NOT_VERIFIED');
+    }
+    applySnapshot(snapshot);
+    setStatus(snapshot.universe.scan_complete?'اكتمل المسح الحي':'بيانات حية — تغطية جزئية ظاهرة', 'good');
+  }catch(error){
+    setStatus('تعذر التحقق من بيانات السوق الحية', 'bad');
+    addJournal('فشل الفحص الحي: '+String(error?.message||error)+'؛ لم تُنشأ بيانات بديلة.','error');
+    persist();renderJournal();
+    el('candidateList').innerHTML='<div class="empty"><b>لم تصل بيانات حية صالحة</b>لم تُستخدم بيانات وهمية. تحقق من اتصال الخادم ثم أعد الفحص.<br><span class="tiny">'+esc(String(error?.message||error))+'</span></div>';
+  }finally{
+    scanBusy=false;button.disabled=false;button.textContent='◉ فحص السوق الحقيقي';
+  }
+}
+
+function renderCandidates(snapshot){
+  const root=el('candidateList');
+  if(!snapshot||!Array.isArray(snapshot.candidates)){root.innerHTML='<div class="empty"><b>لا توجد بيانات</b>ابدأ فحص السوق.</div>';return;}
+  const rows=snapshot.candidates.filter(row=>row.data_valid&&row.score!==null).slice().sort((a,b)=>displayScore(b)-displayScore(a));
+  if(!rows.length){root.innerHTML='<div class="empty"><b>لم تظهر إعدادات صالحة في هذا الفحص</b>هذه نتيجة حقيقية وليست نقصًا مخفيًا؛ لا نرفع الدرجات لتوليد فرص مصطنعة.</div>';return;}
+  root.innerHTML=rows.slice(0,60).map(function(candidate){
+    const learned=displayScore(candidate),tier=candidate.tier;
+    const tierText=tier==='EARLY_SETUP'?'إعداد مبكر — ورقي فقط':tier==='WATCH'?'مراقبة':tier==='LATE_MOVE'?'حركة ممتدة — لا مطاردة':'لا إعداد كافٍ';
+    const cls=tier==='EARLY_SETUP'?'early':tier==='LATE_MOVE'?'late':'';
+    const tag=tier==='EARLY_SETUP'?'early':tier==='LATE_MOVE'?'late':'watch';
+    const features=candidate.features||{};
+    const reasons=(candidate.reason_codes||[]).slice(0,4).map(function(code){return '<span class="reason">'+esc(code)+'</span>';}).join('');
+    return '<article class="candidate '+cls+'">'+
+      '<div class="candidate-top"><div><div class="symbol">'+esc(candidate.symbol)+'</div><div class="price">'+esc(fmt(candidate.price,6))+' USDT</div></div>'+
+      '<span class="tag '+tag+'">'+esc(tierText)+'</span></div>'+
+      '<div class="score-row"><div class="score">'+esc(fmt(learned,1))+'<small>درجة ترتيب</small></div><div class="bar"><i style="width:'+esc(Math.max(0,Math.min(100,learned)))+'%"></i></div></div>'+
+      '<div class="metrics">'+
+        '<div class="metric"><b>'+esc(fmt(features.volume_ratio,2))+'×</b><span>تسارع الحجم</span></div>'+
+        '<div class="metric"><b>'+esc(fmt(features.trade_ratio,2))+'×</b><span>عدد الصفقات</span></div>'+
+        '<div class="metric"><b>'+esc(fmt((num(features.taker_buy_ratio)||0)*100,1))+'%</b><span>ضغط الشراء</span></div>'+
+        '<div class="metric"><b>'+esc(percent(features.hourly_return_pct))+'</b><span>تغير ساعة</span></div></div>'+
+      '<div class="reasons">'+reasons+'</div>'+
+      '<div class="card-foot"><span>حجم 24س: '+esc(money(candidate.quote_volume_24h))+'</span><span>شمعة: '+esc(timeText(candidate.candle_close_time))+'</span></div>'+
+      '<div class="tiny" style="margin-top:8px">الدرجة الأساسية '+esc(fmt(candidate.score,1))+' · التعديل التعلمي '+esc(fmt(learned-(num(candidate.score)||0),1))+' نقطة · لا توصية دخول</div>'+
+      '</article>';
+  }).join('');
+}
+function renderMissed(){
+  const root=el('missedList');
+  if(!state.missedMovers.length){root.innerHTML='<div class="empty"><b>لا توجد حركات محتملة مسجلة حتى الآن</b>تحتاج المقارنة إلى لقطة قديمة عمرها 15 دقيقة على الأقل. لا يمكن استرجاع ما فات قبل تشغيل الذاكرة.</div>';return;}
+  root.innerHTML='<div class="table-wrap"><table><thead><tr><th>العملة</th><th>التصنيف</th><th>السعر السابق</th><th>السعر الحالي</th><th>التغير</th><th>وقت خط الأساس</th></tr></thead><tbody>'+
+    state.missedMovers.slice(0,200).map(function(row){return '<tr><td><b>'+esc(row.symbol)+'</b></td><td>'+esc(row.classification==='POTENTIAL_MISSED_MOVER'?'احتمال فرصة فائتة':'حركة بعد مراقبة')+'</td><td>'+esc(fmt(row.baseline_price,6))+'</td><td>'+esc(fmt(row.current_price,6))+'</td><td class="pos">'+esc(percent(row.move_pct))+'</td><td>'+esc(timeText(row.baseline_at))+'</td></tr>';}).join('')+
+    '</tbody></table></div>';
+}
+function renderPortfolio(){
+  const portfolio=state.portfolio,closed=portfolio.closed_trades||[],open=portfolio.open_positions||[];
+  const net=closed.reduce((sum,row)=>sum+(num(row.net_pnl)||0),0);
+  el('portfolioSummary').innerHTML=
+    '<div class="learning-card"><h3>قيمة رأس المال الوهمي</h3><p>'+esc(money(portfolio.starting_balance))+'</p><div class="tiny">رصيد نقدي: '+esc(money(portfolio.cash))+'</div></div>'+
+    '<div class="learning-card"><h3>الصافي المحقق بعد التكاليف المقدرة</h3><p class="'+(net>=0?'pos':'neg')+'">'+esc(money(net))+'</p><div class="tiny">المراكز المفتوحة '+esc(open.length)+' / 3 · صفقات مغلقة '+esc(closed.length)+'</div></div>';
+  el('openPositions').innerHTML=open.length?'<div class="table-wrap"><table><thead><tr><th>العملة</th><th>سعر الفتح</th><th>آخر سعر مرصود</th><th>العائد الإجمالي</th><th>العمر</th></tr></thead><tbody>'+
+    open.map(function(row){return '<tr><td><b>'+esc(row.symbol)+'</b></td><td>'+esc(fmt(row.entry_price,6))+'</td><td>'+esc(fmt(row.mark_price,6))+'</td><td class="'+((num(row.gross_return_pct)||0)>=0?'pos':'neg')+'">'+esc(percent(row.gross_return_pct))+'</td><td>'+esc(Math.floor((Date.now()-row.opened_at)/60000))+' دقيقة</td></tr>';}).join('')+
+    '</tbody></table></div>':'<div class="empty">لا توجد مراكز ورقية مفتوحة.</div>';
+  el('closedPositions').innerHTML=closed.length?'<div class="table-wrap"><table><thead><tr><th>العملة</th><th>العائد الصافي</th><th>الربح/الخسارة</th><th>سبب الإغلاق</th><th>وقت الإغلاق</th></tr></thead><tbody>'+
+    closed.slice(-100).reverse().map(function(row){return '<tr><td><b>'+esc(row.symbol)+'</b></td><td class="'+((num(row.net_return_pct)||0)>=0?'pos':'neg')+'">'+esc(percent(row.net_return_pct))+'</td><td class="'+((num(row.net_pnl)||0)>=0?'pos':'neg')+'">'+esc(money(row.net_pnl))+'</td><td>'+esc(row.exit_reason)+'</td><td>'+esc(timeText(row.closed_at))+'</td></tr>';}).join('')+
+    '</tbody></table></div>':'<div class="empty">تظهر نتائج الصفقات بعد فتح وإغلاق مراكز محاكاة.</div>';
+}
+function renderLearning(){
+  const rows=state.samples.filter(row=>row.outcome);
+  const model=profile();
+  el('learnStatus').textContent=model.ready?'المعايرة مفعّلة على الترتيب فقط':'الانتظار حتى اكتمال العينة';
+  el('learnStatus').className='tag '+(model.ready?'early':'watch');
+  el('learnDescription').textContent=model.ready
+    ?'اكتمل عدد النتائج المطلوب؛ تُطبّق تعديلات محدودة على ترتيب المرشحين فقط. قواعد الدخول والرادارات الأصلية والتنفيذ الحقيقي لا تتغير.'
+    :'المنظومة تحفظ النتائج وتنتظر أمثلة حقيقية مرصودة لمدة أربع ساعات على الأقل. لن تدّعي أنها تعلمت قبل اكتمال العينة.';
+  el('learnProgress').style.width=Math.min(100,rows.length/30*100)+'%';
+  el('learnCount').textContent=rows.length+' من 30 نتيجة مكتملة · معدل النتائج الإيجابية '+fmt(model.positive_outcome_rate_pct,1)+'% (تقديري)';
+  const labels={volume:'تسارع الحجم',buyer_flow:'ضغط الشراء',structure:'البنية السعرية',compression:'انكماش التذبذب'};
+  el('learnAdjustments').innerHTML=Object.keys(labels).map(function(key){
+    const value=num(model.adjustments[key])||0;
+    const bucket=model.buckets[key]||{samples:0,positive_rate_pct:0};
+    return '<div class="adj"><span>'+labels[key]+' <small class="tiny">('+bucket.samples+' عينات)</small></span><b class="'+(value>0?'green':value<0?'red':'')+'">'+(value>0?'+':'')+fmt(value,2)+' نقطة</b></div>';
+  }).join('');
+}
+function renderJournal(){
+  const root=el('journalList');
+  if(!state.journal.length){root.innerHTML='<div class="empty">لا توجد أحداث بعد.</div>';return;}
+  root.innerHTML=state.journal.slice().reverse().map(function(row){return '<div class="log"><time>'+esc(timeText(row.at))+'</time><span class="'+(row.kind==='success'?'pos':row.kind==='error'||row.kind==='warning'?'neg':'')+'">'+esc(row.message)+'</span></div>';}).join('');
+}
+function render(){
+  const snapshot=state.lastSnapshot;
+  if(snapshot)updateLabels(snapshot);
+  else{
+    el('kpiEligible').textContent='—';el('kpiScanned').textContent='—';el('kpiCoverage').textContent='لم يبدأ المسح';
+    el('kpiEarly').textContent='—';el('kpiMissed').textContent=String(state.missedMovers.length);
+    el('kpiEquity').textContent=money(estimatePaperEquity(state.portfolio));
+  }
+  el('paperToggle').checked=state.paperEnabled===true;
+  if(snapshot)renderCandidates(snapshot);
+  else renderCandidates(null);
+  renderMissed();renderPortfolio();renderLearning();renderJournal();
+  if(state.lastScanAt&&!scanBusy)el('asOfText').textContent='آخر مسح حقيقي: '+timeText(state.lastScanAt)+' · هذه الذاكرة محلية';
+}
+function showTab(name){
+  currentTab=name;
+  document.querySelectorAll('[data-tab]').forEach(function(button){button.classList.toggle('active',button.getAttribute('data-tab')===name);});
+  ['opportunities','missed','portfolio','learning','journal'].forEach(function(tab){el('tab-'+tab).hidden=tab!==name;});
+}
+function exportMemory(){
+  const payload={exported_at:new Date().toISOString(),product:'RadarX Adaptive Trader',mode:'PAPER_ONLY',
+    paper_trading:true,real_order_execution:false,local_only:true,state:state};
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=url;a.download='radarx-adaptive-trader-memory.json';document.body.appendChild(a);a.click();a.remove();
+  setTimeout(function(){URL.revokeObjectURL(url);},1000);
+  addJournal('تم تجهيز تصدير محلي لذاكرة المتداول.','success');persist();renderJournal();
+}
+function resetMemory(){
+  if(!window.confirm('هل تريد حذف ذاكرة المتداول الورقية والفرص المسجلة على هذا الجهاز؟ لن يؤثر ذلك في رادارات RadarX الأصلية.'))return;
+  localStorage.removeItem(STORAGE_KEY);
+  Object.keys(state).forEach(function(key){delete state[key];});
+  Object.assign(state,freshState());
+  addJournal('تمت إعادة ضبط ذاكرة المتداول المنفصلة.','warning');
+  persist();render();setStatus('تمت إعادة ضبط الذاكرة؛ أجرِ فحصًا جديدًا','idle');
+}
+el('scanBtn').addEventListener('click',scanMarket);
+el('exportBtn').addEventListener('click',exportMemory);
+el('resetBtn').addEventListener('click',resetMemory);
+el('paperToggle').addEventListener('change',function(){
+  state.paperEnabled=el('paperToggle').checked===true;
+  state.portfolio.enabled=state.paperEnabled;
+  addJournal(state.paperEnabled?'تم تشغيل المحاكاة الورقية التلقائية فقط.':'تم إيقاف فتح صفقات ورقية جديدة.','info');
+  persist();render();
+});
+document.querySelectorAll('[data-tab]').forEach(function(button){button.addEventListener('click',function(){showTab(button.getAttribute('data-tab'));});});
+render();
+setStatus(state.lastSnapshot?'آخر عرض محفوظ محليًا — نفّذ فحصًا جديدًا للتأكد من الحالة الحية':'جاهز لفحص السوق الحقيقي','idle');
+if(!state.lastSnapshot)addJournal('تهيئة المتداول الجانبي: التنفيذ الحقيقي معطل، والذاكرة محلية.');
+</script>
+</body>
+</html>
