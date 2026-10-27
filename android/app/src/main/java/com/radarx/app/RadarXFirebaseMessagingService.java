@@ -193,6 +193,9 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
                 "true".equalsIgnoreCase(dataValue(data, "paper_trading", "false")) &&
                 "false".equalsIgnoreCase(dataValue(data, "real_order_execution", "true")) &&
                 symbol.matches("[A-Z0-9]{2,20}USDT") && sourceOkay && tierOkay &&
+                !Double.isNaN(dataQuality) && !Double.isInfinite(dataQuality) &&
+                !Double.isNaN(liquidityQuality) && !Double.isInfinite(liquidityQuality) &&
+                !Double.isNaN(price) && !Double.isInfinite(price) &&
                 dataQuality >= 70.0 && liquidityQuality >= 60.0 && price > 0.0 &&
                 lifecycleOkay && !unsafeRisk;
     }
@@ -200,7 +203,7 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
     private static double numericValue(java.util.Map<String, String> data, String key) {
         try {
             double value = Double.parseDouble(dataValue(data, key, ""));
-            return Double.isFinite(value) ? value : Double.NaN;
+            return (!Double.isNaN(value) && !Double.isInfinite(value)) ? value : Double.NaN;
         } catch (NumberFormatException ignored) {
             return Double.NaN;
         }
