@@ -102,7 +102,7 @@ test('live entry gates reject weak setups and require mature resolved observatio
   assert.equal(evaluateAdaptiveTraderLiveCandidate(candidate(now),{learningProfile:{ready:true,resolved_samples:99},now,snapshotAsOf:new Date(now).toISOString()}).reason,
     'INSUFFICIENT_OUT_OF_SAMPLE_LEARNING_RECORD');
   assert.equal(evaluateAdaptiveTraderLiveCandidate(candidate(now,{change_24h_pct:12}),
-    {learningProfile,now,snapshotAsOf:new Date(now).toISOString()}).reason,'STRICT_EARLY_SETUP_GATE_FAILED');
+    {learningProfile,now,snapshotAsOf:new Date(now).toISOString()}).reason,'DAILY_MOVE_OUTSIDE_ENTRY_WINDOW');
   const valid=evaluateAdaptiveTraderLiveCandidate(candidate(now),
     {learningProfile,now,snapshotAsOf:new Date(now).toISOString()});
   assert.equal(valid.eligible,true);
