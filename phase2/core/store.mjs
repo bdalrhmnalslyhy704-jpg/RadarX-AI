@@ -496,7 +496,7 @@ export class DurableStore {
         return {
           version:1,mode:'PAPER_ONLY',enabled:true,
           starting_balance:number(source.starting_balance)>0?number(source.starting_balance):10000,
-          cash:number(source.cash)>=0?number(source.cash):10000,
+          cash:number(source.cash)!==null&&number(source.cash)>=0?number(source.cash):10000,
           created_at:number(source.created_at)||Date.now(),updated_at:Date.now(),
           open_positions:open,closed_trades:closed,paper_trading:true,real_order_execution:false
         };
