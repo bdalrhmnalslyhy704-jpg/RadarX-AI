@@ -86,3 +86,50 @@ export function buildPreMoveBackgroundScanSummary({snapshot={}, watchAlerts=[], 
     near_miss_samples: nearMissSamples
   };
 }
+
+
+/**
+ * Track outcomes of the actual watch-only push call separately from candidate
+ * eligibility. This makes provider-disabled, no-subscription, gate-rejected, and
+ * delivery-failed states distinguishable without exposing user/subscription IDs.
+ */
+export function buildPreMoveNotificationDeliveryState(previous, outcome, now = Date.now()) {
+  const base = previous && typeof previous === 'object' ? previous : {};
+  const counts = base.status_counts && typeof base.status_counts === 'object' && !Array.isArray(base.status_counts)
+    ? { ...base.status_counts } : {};
+  const reasons = base.reason_counts && typeof base.reason_counts === 'object' && !Array.isArray(base.reason_counts)
+    ? { ...base.reason_counts } : {};
+  const lastResults = Array.isArray(base.last_results) ? base.last_results.slice() : [];
+  const status = boundedString(outcome?.status, 'UNKNOWN', 80);
+  const reason = outcome?.reason ? boundedString(outcome.reason, 'UNKNOWN', 120) : null;
+  const sentCount = Math.max(0, Math.min(100, Math.trunc(finiteOrNull(outcome?.sent_count) ?? 0)));
+  const attemptedCount = Math.max(0, Math.min(100, Math.trunc(finiteOrNull(outcome?.attempted_count) ?? 0)));
+  const attempted = outcome?.attempted === true;
+  const symbol = boundedString(outcome?.symbol, '', 30);
+  const atMs = Number.isFinite(Number(now)) && Number(now) > 0 ? Number(now) : Date.now();
+  const item = {
+    at: new Date(atMs).toISOString(),
+    symbol,
+    status,
+    reason,
+    attempted,
+    attempted_count: attemptedCount,
+    sent_count: sentCount,
+    error: outcome?.error ? boundedString(outcome.error, 'PUSH_DELIVERY_ERROR', 160) : null
+  };
+  counts[status] = (Number(counts[status]) || 0) + 1;
+  if (reason) reasons[reason] = (Number(reasons[reason]) || 0) + 1;
+  lastResults.unshift(item);
+  return {
+    results: Math.max(0, Math.trunc(Number(base.results) || 0)) + 1,
+    send_calls: Math.max(0, Math.trunc(Number(base.send_calls) || 0)) + (attempted ? 1 : 0),
+    recipients_attempted: Math.max(0, Math.trunc(Number(base.recipients_attempted) || 0)) + attemptedCount,
+    notifications_sent: Math.max(0, Math.trunc(Number(base.notifications_sent) || 0)) + sentCount,
+    current_status: status,
+    current_reason: reason,
+    last_result_at: item.at,
+    status_counts: Object.fromEntries(Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 12)),
+    reason_counts: Object.fromEntries(Object.entries(reasons).sort((a, b) => b[1] - a[1]).slice(0, 12)),
+    last_results: lastResults.slice(0, 10)
+  };
+}
