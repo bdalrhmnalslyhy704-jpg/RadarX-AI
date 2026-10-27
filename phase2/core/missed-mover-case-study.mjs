@@ -181,6 +181,118 @@ function featuresAt(rows, index, benchmarkRows) {
   return features;
 }
 
+function buildFirstIntradayRunup(rows, benchmarkRows, {
+  now = Date.now(), searchWindowHours = 24, runupWindowHours = 4, thresholdPct = 5
+} = {}) {
+  const asOf = Number(now);
+  const lookbackHours = Number(searchWindowHours);
+  const localWindowHours = Number(runupWindowHours);
+  const threshold = Number(thresholdPct);
+  const base = {
+    status: 'NO_RUNUP_THRESHOLD_CROSSING_IN_WINDOW',
+    source: 'BINANCE_SPOT_CLOSED_5M_CANDLES',
+    definition: 'FIRST_CLOSED_5M_CLOSE_AT_LEAST_THRESHOLD_PCT_ABOVE_THE_LOWEST_LOW_IN_THE_PRIOR_4H',
+    search_window_hours: lookbackHours,
+    runup_window_hours: localWindowHours,
+    threshold_pct: threshold,
+    no_future_data_used_for_features: true,
+    baseline_reference_is_intrabar_low_not_guaranteed_executable_price: true
+  };
+  if (!Array.isArray(rows) || rows.length < 300) {
+    return {...base, status:'INSUFFICIENT_CLOSED_CANDLES', reason:'NEED_AT_LEAST_300_CLOSED_5M_CANDLES'};
+  }
+  if (!Number.isFinite(asOf) || !Number.isFinite(lookbackHours) ||
+      lookbackHours < 6 || lookbackHours > 48 ||
+      !Number.isFinite(localWindowHours) || localWindowHours < 1 || localWindowHours > 12 ||
+      !Number.isFinite(threshold) || threshold < 1 || threshold > 30) {
+    return {...base, status:'INVALID_RUNUP_OPTIONS'};
+  }
+  const firstSearchTime = asOf - lookbackHours * 60 * 60 * 1000;
+  const firstSearchIndex = rows.findIndex(row => row.closeTime >= firstSearchTime);
+  if (firstSearchIndex < 0) return {...base, reason:'NO_CANDLE_IN_SEARCH_WINDOW'};
+  const windowBars = Math.round(localWindowHours * 60 / 5);
+  for (let index = Math.max(windowBars, firstSearchIndex); index < rows.length; index++) {
+    const event = rows[index];
+    if (event.closeTime > asOf) continue;
+    const start = index - windowBars;
+    const windowRows = rows.slice(start, index);
+    if (windowRows.length !== windowBars) continue;
+    let gap = false;
+    for (let j = start + 1; j <= index; j++) {
+      if (rows[j].closeTime - rows[j - 1].closeTime > 10 * 60 * 1000) {
+        gap = true;
+        break;
+      }
+    }
+    if (gap) continue;
+    let lowIndex = start;
+    for (let j = start + 1; j < index; j++) {
+      if (rows[j].low < rows[lowIndex].low) lowIndex = j;
+    }
+    const lowRow = rows[lowIndex];
+    if (!(lowRow.low > 0) || event.close < lowRow.low * (1 + threshold / 100)) continue;
+
+    const snapshotLeads = [60, 30, 15, 5];
+    const snapshots = snapshotLeads.map(lead => {
+      const targetAt = event.closeTime - lead * 60 * 1000;
+      const snapshotIndex = indexAtOrBefore(rows, targetAt);
+      const row = snapshotIndex >= 0 ? rows[snapshotIndex] : null;
+      if (!row || snapshotIndex >= index || targetAt - row.closeTime > 10 * 60 * 1000) {
+        return {
+          requested_lead_minutes: lead, status:'NO_CLOSED_CANDLE_NEAR_TARGET',
+          target_at:new Date(targetAt).toISOString(), observed_at:null, price:null,
+          minutes_before_runup:null, price_change_to_runup_pct:null, features:null
+        };
+      }
+      return {
+        requested_lead_minutes: lead, status:'CLOSED_CANDLE_SNAPSHOT',
+        target_at:new Date(targetAt).toISOString(),
+        observed_at:new Date(row.closeTime).toISOString(),
+        price:row.close,
+        minutes_before_runup:Number(((event.closeTime-row.closeTime)/60000).toFixed(2)),
+        price_change_to_runup_pct:pct(row.close,event.close),
+        features:featuresAt(rows,snapshotIndex,benchmarkRows)
+      };
+    });
+    const forward = rows.slice(index + 1).filter(row => row.closeTime <= asOf);
+    const latest = forward.at(-1) || null;
+    const highAfter = forward.length ? Math.max(...forward.map(row=>row.high)) : null;
+    const lowAfter = forward.length ? Math.min(...forward.map(row=>row.low)) : null;
+    return {
+      ...base,
+      status:'RUNUP_THRESHOLD_CROSSING_FOUND',
+      runup_window_bars:windowBars,
+      baseline:{
+        observed_at:new Date(lowRow.closeTime).toISOString(),
+        candle_close:lowRow.close,
+        reference_low:lowRow.low,
+        close_to_close_return_to_runup_pct:pct(lowRow.close,event.close),
+        reference_low_to_runup_close_pct:pct(lowRow.low,event.close),
+        minutes_from_reference_candle_to_runup:Number(((event.closeTime-lowRow.closeTime)/60000).toFixed(2))
+      },
+      runup:{
+        observed_at:new Date(event.closeTime).toISOString(),
+        price:event.close,
+        reference_low:lowRow.low,
+        return_from_reference_low_pct:pct(lowRow.low,event.close),
+        return_from_baseline_close_pct:pct(lowRow.close,event.close)
+      },
+      lead_snapshots_before_runup:snapshots,
+      retrospective_outcome:{
+        as_of:new Date(asOf).toISOString(),
+        latest_observed_at:latest?new Date(latest.closeTime).toISOString():null,
+        latest_price:latest?.close??null,
+        return_from_runup_to_latest_pct:latest?pct(event.close,latest.close):null,
+        max_favorable_pct_since_runup:highAfter!==null?pct(event.close,highAfter):null,
+        max_adverse_pct_since_runup:lowAfter!==null?pct(event.close,lowAfter):null,
+        forward_candles:forward.length,
+        basis:'RETROSPECTIVE_ONLY_NOT_AVAILABLE_AT_RUNUP_TIME'
+      }
+    };
+  }
+  return {...base, reason:'NO_4H_ROLLING_LOW_TO_CLOSE_THRESHOLD_CROSSING_FOUND'};
+}
+
 /**
  * Retrospectively reconstructs the first sampled close at which the trailing
  * 24-hour return crossed a threshold. Every feature snapshot is computed from
@@ -219,6 +331,9 @@ export function buildEarlyMoverCaseStudy(symbol, inputCandles, {
     orderbook_history_status: 'NOT_AVAILABLE_FROM_KLINES',
     findings: []
   };
+  summary.intraday_runup = buildFirstIntradayRunup(candles, benchmark, {
+    now: asOf, searchWindowHours: window, runupWindowHours: 4, thresholdPct: threshold
+  });
   if (candles.length < MIN_HISTORY_BARS) {
     summary.reason = 'NEED_AT_LEAST_300_CLOSED_5M_CANDLES_FOR_A_24H_BASELINE_AND_LEAD_UP';
     return summary;
