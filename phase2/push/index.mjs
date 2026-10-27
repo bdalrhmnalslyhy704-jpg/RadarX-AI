@@ -112,7 +112,7 @@ const radarTitle=s=>s?.radar_name||({
   ROTATION_LAG_RADAR:'Radar 3 — Rotation/Lag',
   LIQUIDITY_ABSORPTION_RADAR:'Radar 4 — Liquidity Absorption'
 }[String(s?.radar||'').toUpperCase()]||'RadarX');
-const radarPayload=(alert,processedAt=Date.now())=>{
+const radarPayload=(alert,processedAt=Date.now(),gateModeOverride=null)=>{
   const watchOnly=alert?.notification_gate?.watch_only===true||alert?.watch_only===true;
   const needsFollowUp=watchOnly||alert?.notification_gate?.requires_follow_up_confirmation===true;
   const lowLiquidityWatch=alert?.low_liquidity_burst_bypass===true||
@@ -124,7 +124,7 @@ const radarPayload=(alert,processedAt=Date.now())=>{
   event_id:alert.event_id||alert.id||null,
   signal_id:alert.signal_id||alert.id||null,
   notification_mode:watchOnly?'WATCH_ONLY_EARLY_TRACK':'STANDARD_RADAR_ALERT',
-  notification_gate_mode:alert?.notification_gate?.mode??alert?.elite_gate?.mode??null,
+  notification_gate_mode:gateModeOverride??alert?.notification_gate?.mode??alert?.elite_gate?.mode??null,
   notification_gate_eligible:alert?.notification_gate?.eligible===true||alert?.elite_gate?.eligible===true,
   watch_only:watchOnly,
   entry_eligible:watchOnly?false:(alert?.entry_eligible??null),
@@ -791,7 +791,7 @@ export class PushManager{
       );
       if(!Number.isFinite(dq)||dq<Number(settings.minDataQuality)||
          !Number.isFinite(lq)||lq<Number(settings.minLiquidityQuality))continue;
-      const r=await this.sendMarketPush(sub,radarPayload(alert,Date.now()),'MARKET');
+      const r=await this.sendMarketPush(sub,radarPayload(alert,Date.now(),'STRICT_NOTIFICATION'),'MARKET');
       const audit={event:'RADAR_ALERT_NOTIFICATION',event_class:'RADAR_ALERT',radar:alert.radar||'UNKNOWN_RADAR',radar_name:radarTitle(alert),
         symbol:alert.symbol,alert_id:alert.id||null,subscription_id:sub.id,user_id:sub.user_id,status:r.status,
         attempted_at:Date.now(),reason:r.reason??null,http_status:r.httpStatus??null};
